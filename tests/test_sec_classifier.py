@@ -100,3 +100,56 @@ def test_total_destructive_cases_at_least_200():
 
     total = len(base.DESTRUCTIVE_BASH) + len(base.DESTRUCTIVE_OTHER) + len(QA_HELD) + len(QA_FORBIDDEN) + 4
     assert total >= 180  # cộng ~25 ca tham số hoá trong test_sec_sandbox → ≥ 200
+
+
+# --------------------------------------------------------------------------- FR-SG-07: mất dữ liệu trên file CÓ SẴN
+@pytest.fixture(scope="module")
+def data_env(tmp_path_factory):
+    import subprocess
+
+    root = tmp_path_factory.mktemp("dataloss")
+    proj, repo, hub = root / "proj", root / "repo", root / "hub"
+    proj.mkdir()
+    for f in ("data.db", "important.txt", "notes.md"):
+        (proj / f).write_text("user data")
+    repo.mkdir()
+    (repo / "tracked.txt").write_text("v1")
+    g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)  # noqa: E731
+    g("init", "-q")
+    g("-c", "user.email=a@b", "-c", "user.name=a", "add", "-A")
+    g("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "i")
+    ps = PolicyStore(hub, user_home=root / "home")
+    ps.ensure()
+    time.sleep(1.1)
+    since = time.time()
+    ctx = GuardContext(proj, ps.load(), run_since=since, hub_socket=str(hub / "hub.sock"), git_probe=True)
+    ctx_cp = GuardContext(repo, ps.load(), run_since=since, hub_socket=str(hub / "hub.sock"), git_probe=True, checkpoint_root=str(repo))
+    return {"ctx": ctx, "ctx_cp": ctx_cp, "proj": proj, "repo": repo}
+
+
+DATA_LOSS = [
+    "truncate -s 0 P/data.db", ": > P/important.txt", "> P/important.txt", "echo x > P/notes.md", "dd if=/dev/zero of=P/data.db bs=1 count=1",
+    "cp P/notes.md P/data.db", "mv P/notes.md P/important.txt", "echo x | tee P/important.txt", "shred -u P/data.db",
+    "sqlite3 P/data.db 'drop table t'", "sqlite3 P/data.db 'delete from t'", "sqlite3 P/x.db \"VACUUM INTO 'P/data.db'\"",
+    "truncate -s 0 $UNKNOWN_FILE",
+]
+
+
+def test_data_loss_on_existing_files_held(data_env):
+    p = str(data_env["proj"])
+    missed = [(c, v.verdict, v.rule) for c in DATA_LOSS if not held(v := classify("Bash", {"command": c.replace("P/", p + "/")}, data_env["ctx"]))]
+    assert not missed, missed
+
+
+def test_nonexistent_targets_are_plain_writes(data_env):
+    p = str(data_env["proj"])
+    for c in ("truncate -s 0 P/new.db", ": > P/new.txt", "dd if=/dev/zero of=P/new.bin bs=1 count=1", "echo x > P/new2.txt"):
+        assert classify("Bash", {"command": c.replace("P/", p + "/")}, data_env["ctx"]).verdict == "write", c
+
+
+def test_checkpointed_git_file_overwrite_is_revertable_write(data_env):
+    r = str(data_env["repo"])
+    assert classify("Bash", {"command": f": > {r}/tracked.txt"}, data_env["ctx_cp"]).verdict == "write"
+    # cùng lệnh, KHÔNG có checkpoint → giữ chờ người
+    ctx = GuardContext(data_env["repo"], data_env["ctx_cp"].policy, run_since=data_env["ctx_cp"].run_since, git_probe=True)
+    assert held(classify("Bash", {"command": f": > {r}/tracked.txt"}, ctx))

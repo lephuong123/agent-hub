@@ -64,3 +64,15 @@ Linux cần bubblewrap/socat (thiếu → run lỗi, không chạy không sandbo
 | V2-N3 (Thấp) | Kiểm socket/token trên từ ĐÃ bỏ quote/nối chuỗi; `socat`/`nc` với UNIX/`-U`/đích động → uncertain. Tên lệnh đã chuẩn hoá (`\rm`, `/bin/rm`, `command`, `env`) → cùng phán quyết với `rm` (xoá file run tự tạo vẫn là ghi thường — đúng FR-SG-01). | `::test_v2_n3_command_name_normalized` |
 
 Ghi chú: `agents.revert` (agents.py, luồng CLI) mới chỉ chặn ở tầng RPC; nên gọi `auth.require_human("agent revert")` ở service nếu có lời gọi nội bộ mới.
+
+## 6. Bổ sung theo coordinator (mất dữ liệu trên file có sẵn, FR-TK-04)
+- Tái hiện `agent-hub guard test`: với file **đã tồn tại** và không do run tạo, `truncate -s 0`, `: >`/`>`, `dd of=`, `cp`/`mv` đè, `tee` (không -a), `shred`
+  vốn đã là `destructive` (`overwrite_existing`). Kết quả "ghi" chỉ xảy ra khi đích CHƯA tồn tại lúc kiểm (vd `~/proj/...` không có trên máy) — cắt cụt
+  file chưa có là vô hại, giữ là `write`. Đích không giải được (`$VAR`) → `uncertain`.
+- Mới: `GuardContext.checkpoint_root` (GuardService lấy từ `runs.checkpoint` kind=git) — file **đã git track** trong repo có checkpoint của run
+  ghi đè/xoá được revert → `write` (`overwrite_checkpointed`/`delete_checkpointed`); không có checkpoint → vẫn giữ chờ người.
+- Mới: SQL `VACUUM INTO '<file>'` → `sql_vacuum_into` (destructive).
+- Test FR-SG-07: `tests/test_sec_classifier.py::test_data_loss_on_existing_files_held`, `::test_nonexistent_targets_are_plain_writes`,
+  `::test_checkpointed_git_file_overwrite_is_revertable_write`; báo nhầm trên `SAFE_*` vẫn ≤ 5% (`test_false_positive_rate`).
+- FR-TK-04: code đúng (`TaskService._parent_context` đưa `result_summary` + `result_json` của mọi task cha vào prompt task con). Thêm test chặt
+  `tests/test_team_task.py::test_fr_tk04_child_prompt_contains_parent_results` (2 cha, kiểm nguyên văn kết quả + id từng cha).

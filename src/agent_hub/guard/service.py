@@ -117,6 +117,7 @@ class GuardService:
             hub_socket=str(self.hub.paths.socket),
             git_probe=bool(self.hub.config.get("guard.git_probe")),
             hub_mcp_servers=self.hub_mcp_servers(),
+            checkpoint_root=((run or {}).get("checkpoint") or {}).get("root") if ((run or {}).get("checkpoint") or {}).get("kind") == "git" else None,
         )
 
     def hub_mcp_servers(self) -> frozenset[str]:

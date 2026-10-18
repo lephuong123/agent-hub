@@ -455,3 +455,20 @@ async def test_routing_prefers_description_and_load():
     assert choose_worker({"title": "x", "body": "", "role": "viết"}, members, lambda a: load[a]) == "w1"
     load["w1"] = 3
     assert choose_worker({"title": "zzz", "body": ""}, members, lambda a: load[a]) == "w2"  # không khớp → ít tải nhất
+
+
+async def test_fr_tk04_child_prompt_contains_parent_results(make_hub):
+    """FR-TK-04 (assert chặt, thay `a and b or c` thiếu ngoặc): prompt của task con chứa NGUYÊN VĂN kết quả mọi task cha."""
+    def script(spec):
+        return {"text": "PARENT-RESULT-ALPHA-42" if "## Task: A" in spec.prompt else ("PARENT-RESULT-BETA-7" if "## Task: C" in spec.prompt else "child done")}
+
+    hub, rt = make_hub(script)
+    mk_team(hub, lead=False)
+    a = hub.tasks.create({"team": "docs", "assignee": "researcher", "title": "A", "body": "a"})
+    c = hub.tasks.create({"team": "docs", "assignee": "researcher", "title": "C", "body": "c"})
+    b = hub.tasks.create({"team": "docs", "assignee": "writer", "title": "B", "body": "b", "parents": [a["id"], c["id"]]})
+    await settle(lambda: hub.tasks.row(b["id"])["status"] == "done")
+    spec_b = next(s for s in rt.specs.values() if s.prompt.startswith(f"[agent-hub task {b['id']}"))
+    assert "Results of prerequisite tasks" in spec_b.prompt
+    assert "PARENT-RESULT-ALPHA-42" in spec_b.prompt and "PARENT-RESULT-BETA-7" in spec_b.prompt
+    assert f"({a['id']}," in spec_b.prompt and f"({c['id']}," in spec_b.prompt

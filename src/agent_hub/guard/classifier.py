@@ -154,6 +154,7 @@ class GuardContext:
     git_probe: bool = True  # gọi `git` để biết thay đổi chưa commit/nhánh đã push (tắt trong test thuần)
     max_walk: int = 3000
     hub_mcp_servers: frozenset[str] = frozenset()  # H-18: tên đăng ký của MCP server trỏ về chính hub (theo lệnh/URL)
+    checkpoint_root: str | None = None  # gốc repo git có checkpoint của run (FR-RT-12) → file đã track ghi đè/xoá được revert
 
     @property
     def home(self) -> str:
@@ -406,6 +407,8 @@ def sql_destructive(text: str) -> str | None:
         return "sql_drop"
     if re.search(r"\bTRUNCATE\b", up):
         return "sql_truncate"
+    if re.search(r"\bVACUUM\b[^;]*\bINTO\b", up):
+        return "sql_vacuum_into"  # ghi đè file đích
     if re.search(r"\bALTER\s+TABLE\b[^;]*\bDROP\b", up):
         return "sql_alter_drop"
     for stmt in re.split(r";", up):
@@ -500,6 +503,9 @@ class BashAnalyzer:
             self.hit("destructive", "protected_delete", "file", f"{what} chạm tài nguyên được bảo vệ {r.selector}", [p], r)
             return
         if not created_by_run(p, self.ctx):
+            if self.checkpointed(p):
+                self.hit("write", "delete_checkpointed", "file", f"{what} {p} — có checkpoint của run (revert được)", [p])
+                return
             self.hit("destructive", "delete_not_run_created", "file", f"{what} {p} — không phải file run tự tạo", [p])
         else:
             self.hit("write", "delete_run_created", "file", f"{what} file run tự tạo", [p])
@@ -519,9 +525,20 @@ class BashAnalyzer:
             self.hit("write", "write_file", "file", what, [p])
             return
         if not created_by_run(p, self.ctx):
+            if self.checkpointed(p):
+                self.hit("write", "overwrite_checkpointed", "file", f"{what} {p} — có checkpoint của run (revert được)", [p])
+                return
             self.hit("destructive", "overwrite_existing", "file", f"{what} ghi đè file có sẵn {p} (không phải file run tự tạo)", [p])
         else:
             self.hit("write", "overwrite_run_created", "file", what, [p])
+
+    def checkpointed(self, p: str) -> bool:
+        """File THƯỜNG đã được git track trong repo có checkpoint của run → `agent-hub run revert` khôi phục được."""
+        root = self.ctx.checkpoint_root
+        if not root or os.path.isdir(p) or not _under(_real(p), os.path.realpath(root)):
+            return False
+        r = self._git(root, "ls-files", "--error-unmatch", "--", os.path.relpath(_real(p), os.path.realpath(root)))
+        return r is not None and r.returncode == 0
 
     def check_write_target(self, p: str, what: str, op: str = "write") -> None:
         r = self.protected(p, op)
