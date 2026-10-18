@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-hub.local/schema/event.v1.json",
+  "title": "HubEvent",
+  "description": "Envelope event của agent-hub (BRD §9.1). Loại event không có trong x-event-types vẫn hợp lệ (mở rộng).",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Agent Id"
+    },
+    "epoch": {
+      "default": "",
+      "title": "Epoch",
+      "type": "string"
+    },
+    "level": {
+      "enum": [
+        "summary",
+        "detail",
+        "debug"
+      ],
+      "title": "Level",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Run Id"
+    },
+    "seq": {
+      "default": 0,
+      "title": "Seq",
+      "type": "integer",
+      "minimum": 0
+    },
+    "session_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Session Id"
+    },
+    "source": {
+      "enum": [
+        "cli",
+        "hub",
+        "tui",
+        "mcp",
+        "hook"
+      ],
+      "title": "Source",
+      "type": "string"
+    },
+    "subagent_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Subagent Id"
+    },
+    "task_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Task Id"
+    },
+    "team_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Team Id"
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$",
+      "title": "Ts",
+      "description": "UTC ISO-8601 mili giây, hậu tố Z"
+    },
+    "type": {
+      "title": "Type",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)*$"
+    },
+    "v": {
+      "const": 1,
+      "title": "V",
+      "description": "phiên bản schema envelope"
+    }
+  },
+  "required": [
+    "epoch",
+    "level",
+    "payload",
+    "seq",
+    "source",
+    "ts",
+    "type",
+    "v"
+  ],
+  "additionalProperties": false,
+  "x-event-types": {
+    "agent.archived": "summary",
+    "agent.cloned": "summary",
+    "agent.created": "summary",
+    "agent.deleted": "summary",
+    "agent.imported": "summary",
+    "agent.purged": "summary",
+    "agent.restored": "summary",
+    "agent.status": "summary",
+    "agent.updated": "summary",
+    "approval.open": "summary",
+    "approval.reminder": "summary",
+    "approval.resolved": "summary",
+    "approval.waiting_human": "summary",
+    "auth.blocked": "summary",
+    "auth.denied": "summary",
+    "budget.exceeded": "summary",
+    "budget.warning": "summary",
+    "cache.warning": "summary",
+    "cli.unknown_rate_alert": "summary",
+    "cli.version_warning": "summary",
+    "control.response": "debug",
+    "curation.completed": "summary",
+    "curation.members_archived": "summary",
+    "curation.promotion": "summary",
+    "curation.report": "summary",
+    "curation.rolled_back": "summary",
+    "curation.started": "summary",
+    "curator.report": "summary",
+    "error": "summary",
+    "eval.completed": "summary",
+    "eval.started": "summary",
+    "golden.added": "summary",
+    "golden.removed": "summary",
+    "golden.suggested": "summary",
+    "golden.updated": "summary",
+    "guard.blocked": "summary",
+    "guard.decision": "debug",
+    "guard.tamper_detected": "summary",
+    "hook.event": "debug",
+    "hook.observed": "debug",
+    "hook.timeout": "summary",
+    "hub.config_changed": "summary",
+    "hub.estop": "summary",
+    "hub.started": "summary",
+    "hub.stopping": "summary",
+    "isolation.violation": "summary",
+    "learning.applied": "summary",
+    "learning.canary": "summary",
+    "learning.deferred": "summary",
+    "learning.digest": "summary",
+    "learning.eval_failed": "summary",
+    "learning.promoted": "summary",
+    "learning.proposal": "summary",
+    "learning.rolled_back": "summary",
+    "learning.signal": "summary",
+    "mcp.changed": "summary",
+    "message.complete": "summary",
+    "message.delta": "detail",
+    "notify.failed": "summary",
+    "notify.sent": "debug",
+    "permission.denied": "summary",
+    "policy.changed": "summary",
+    "ratelimit.throttle": "summary",
+    "ratelimit.update": "summary",
+    "raw.invalid": "debug",
+    "raw.unknown": "debug",
+    "reasoning.delta": "detail",
+    "reasoning.progress": "detail",
+    "recovery.reconciled": "summary",
+    "regression.detected": "summary",
+    "review.completed": "summary",
+    "review.started": "summary",
+    "run.cancelled": "summary",
+    "run.completed": "summary",
+    "run.failed": "summary",
+    "run.interrupted": "summary",
+    "run.protocol_violation": "summary",
+    "run.queued": "summary",
+    "run.repeated_failure": "summary",
+    "run.resumed": "summary",
+    "run.reverted": "summary",
+    "run.started": "summary",
+    "run.takeover": "summary",
+    "run.waiting_human": "summary",
+    "runtime.stderr": "debug",
+    "status.update": "detail",
+    "steer.ack": "summary",
+    "subagent.spawn": "summary",
+    "task.background": "detail",
+    "task.circuit_open": "summary",
+    "task.comment": "summary",
+    "task.created": "summary",
+    "task.decomposed": "summary",
+    "task.linked": "summary",
+    "task.signal": "summary",
+    "task.status": "summary",
+    "team.archived": "summary",
+    "team.created": "summary",
+    "team.estop": "summary",
+    "team.member": "summary",
+    "team.restored": "summary",
+    "team.updated": "summary",
+    "tool.complete": "summary",
+    "tool.generating": "detail",
+    "tool.start": "summary",
+    "tool.write": "summary",
+    "turn.start": "detail",
+    "usage.tick": "summary",
+    "user.message": "summary",
+    "workspace.checkpoint": "debug",
+    "workspace.diff": "summary"
+  },
+  "x-not-persisted": [
+    "message.delta",
+    "reasoning.delta"
+  ]
+}

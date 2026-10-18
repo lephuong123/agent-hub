@@ -1,0 +1,16 @@
+{
+  "autoMemoryEnabled": false,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/phuonglq/Workspace/agent-hub/docs/spikes/m0/hooks/pretool.py"
+          }
+        ]
+      }
+    ]
+  }
+}

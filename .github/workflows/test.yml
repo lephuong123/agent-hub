@@ -1,0 +1,21 @@
+name: test
+on:
+  push:
+  pull_request:
+jobs:
+  pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync
+      - name: Bộ phân loại guard + an toàn (SEC)
+        run: uv run pytest -q tests/test_guard_classifier.py tests/test_sec_classifier.py tests/test_sec_sandbox.py
+      - name: Toàn bộ test (không gọi claude thật)
+        run: uv run pytest -q

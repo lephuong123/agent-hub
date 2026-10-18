@@ -1,0 +1,1 @@
+{"mcpServers": {"hubperm": {"type": "stdio", "command": "uv", "args": ["run", "--no-project", "--quiet", "--with", "mcp<2", "python", "/Users/phuonglq/Workspace/agent-hub/docs/spikes/m0/mcp/hubperm.py"]}}}
