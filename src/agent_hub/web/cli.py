@@ -15,7 +15,7 @@ import sys
 import webbrowser
 from typing import Any
 
-from .security import NotLoopback, WebAuth, clear_state, login_url, mint_login_token, read_state, require_loopback, write_state
+from .security import WEB_HOST, NotLoopback, WebAuth, clear_state, login_url, mint_login_token, read_state, require_loopback, valid_web_name, write_state
 
 DEFAULT_PORT = 8765
 
@@ -41,9 +41,16 @@ def cmd_web(ctx: Any) -> int:
     except NotLoopback as e:
         print(f"lỗi: {e}", file=sys.stderr)
         return 1
+    name = (a.host_name or WEB_HOST).strip().lower()
+    if not valid_web_name(name):
+        print(f"lỗi: --host-name phải là *.localhost (mặc định {WEB_HOST}) hoặc loopback", file=sys.stderr)
+        return 1
+    if name != WEB_HOST and not name.endswith(".localhost"):
+        print("CẢNH BÁO: dùng host loopback trực tiếp → cookie phiên cũng được gửi tới mọi app khác trên host đó (WT-1); "
+              "khoá phiên ngoài cookie vẫn bảo vệ thao tác ghi.", file=sys.stderr)
     st = read_state(ctx.paths)
     if st is not None:
-        url = login_url(st["host"], int(st["port"]), mint_login_token(bytes.fromhex(st["key"])))
+        url = login_url(st.get("name") or st["host"], int(st["port"]), mint_login_token(bytes.fromhex(st["key"])))
         print(f"Giao diện web đang chạy (pid {st['pid']}). Link đăng nhập một lần (hết hạn sau 5 phút):\n  {url}")
         if a.open and not a.url:
             _open(url)
@@ -60,10 +67,10 @@ def cmd_web(ctx: Any) -> int:
     from .app import create_app
 
     auth = WebAuth()
-    app = create_app(ctx.paths, auth=auth, host=host, port=a.port)
-    write_state(ctx.paths, host=host, port=a.port, key=auth.key)
-    url = login_url(host, a.port, auth.mint())
-    print(f"agent-hub web: http://{host}:{a.port}/  (chỉ máy này; Ctrl+C để dừng)")
+    app = create_app(ctx.paths, auth=auth, host=host, port=a.port, name=name)
+    write_state(ctx.paths, host=host, port=a.port, key=auth.key, name=name)
+    url = login_url(name, a.port, auth.mint())
+    print(f"agent-hub web: http://{name}:{a.port}/  (nghe trên {host}:{a.port}, chỉ máy này; Ctrl+C để dừng)")
     print(f"Link đăng nhập một lần (hết hạn sau 5 phút; lấy link mới: agent-hub web --open):\n  {url}", flush=True)
     if a.open:
         _open(url)
@@ -78,6 +85,7 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     w = sub.add_parser("web", help="giao diện web (trình duyệt) — chỉ localhost, đăng nhập bằng link một lần", parents=[common])
     w.add_argument("--host", default="127.0.0.1", help="địa chỉ bind — CHỈ loopback (127.0.0.1 / ::1 / localhost)")
     w.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"cổng (mặc định {DEFAULT_PORT})")
+    w.add_argument("--host-name", default=None, help=f"tên host trên trình duyệt (mặc định {WEB_HOST} — cookie tách khỏi app khác ở 127.0.0.1)")
     w.add_argument("--open", action="store_true", help="mở trình duyệt và đăng nhập tự động")
     w.add_argument("--url", action="store_true", help="chỉ in link đăng nhập mới của server đang chạy")
     w.set_defaults(fn=cmd_web)

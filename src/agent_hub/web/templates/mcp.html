@@ -14,7 +14,7 @@
     <td data-label="Tool">{{ (s.annotations_cache or {})|length or '—' }}</td>
     <td data-label="Agent dùng">{% for a in used.get(s.name, []) %}<span class="chip">{{ a }}</span>{% else %}—{% endfor %}</td>
     <td data-label="Kiểm gần nhất">{% if s.probe_error %}<span class="pill danger" title="{{ s.probe_error }}">lỗi</span>{% elif s.last_probe_at %}<span class="pill ok">ok</span> <span class="muted small">{{ s.last_probe_at|ts }}</span>{% else %}—{% endif %}</td>
-    <td class="actions">{% if s.deleted_at %}{{ m.act("mcp_restore", "Khôi phục", {"name": s.name}, "btn sm") }}{% else %}
+    <td class="actions">{% if s.deleted_at %}{{ m.act("mcp_restore", "Khôi phục", {"name": s.name}, "btn sm", confirm="Khôi phục MCP server " ~ s.name ~ "? Server MCP chạy NGOÀI sandbox của agent.") }}{% else %}
       {{ m.act("mcp_probe", "Kiểm tra", {"name": s.name}, "btn sm") }}
       {{ m.act("mcp_remove", "Xoá", {"name": s.name, "force": "1" if used.get(s.name) else ""}, "btn sm ghost", confirm="Xoá MCP " ~ s.name ~ "?" ~ (" Đang được dùng bởi: " ~ used.get(s.name)|join(", ") if used.get(s.name) else "")) }}{% endif %}</td>
   </tr>{% endfor %}

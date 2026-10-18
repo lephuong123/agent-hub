@@ -36,7 +36,7 @@ from ..rpc import DaemonUnavailable, RpcError
 from ..tui.client import AsyncHubClient, subscribe
 from ..tui.model import STATUS_ORDER
 from . import present as P
-from .security import COOKIE, Session, WebAuth, allowed_hosts
+from .security import COOKIE, KEY_FIELD, KEY_HEADER, WEB_HOST, Session, WebAuth, allowed_hosts, is_loopback
 
 log = logging.getLogger("agent_hub.web")
 HERE = Path(__file__).parent
@@ -64,7 +64,7 @@ SECURITY_HEADERS = [
     (b"content-security-policy", CSP.encode()),
     (b"x-frame-options", b"DENY"),
     (b"x-content-type-options", b"nosniff"),
-    (b"referrer-policy", b"no-referrer"),
+    (b"referrer-policy", b"same-origin"),  # no-referrer làm Chrome gửi `Origin: null` cho form POST
     (b"cross-origin-opener-policy", b"same-origin"),
     (b"cross-origin-resource-policy", b"same-origin"),
     (b"permissions-policy", b"camera=(), microphone=(), geolocation=()"),
@@ -80,10 +80,16 @@ class WebState:
     port: int
     client: AsyncHubClient
     templates: Jinja2Templates
+    name: str = WEB_HOST  # host công khai (Host header + cookie host-only) — khác bind host (WT-1)
 
     @property
     def hosts(self) -> set[str]:
-        return allowed_hosts(self.host, self.port)
+        return allowed_hosts(self.name, self.port)
+
+    @property
+    def base_url(self) -> str:
+        n = f"[{self.name}]" if ":" in self.name and not self.name.startswith("[") else self.name
+        return f"http://{n}:{self.port}"
 
     @property
     def origins(self) -> set[str]:
@@ -116,12 +122,21 @@ class GuardMiddleware:
                 msg = {**msg, "headers": h}
             await send(msg)
 
-        if headers.get("host", "").lower() not in self.state.hosts:
-            # chống DNS rebinding: chỉ phục vụ khi trình duyệt gọi đúng loopback:port
-            await PlainTextResponse("Host không hợp lệ — chỉ truy cập qua 127.0.0.1/localhost.", status_code=421)(scope, receive, send_headers)
+        host = headers.get("host", "").lower()
+        if host not in self.state.hosts:
+            hn, _, hp = host.rpartition(":")
+            if scope.get("method") == "GET" and hp == str(self.state.port) and is_loopback(hn):
+                # 127.0.0.1/localhost:port → chuyển sang host riêng (không bao giờ đặt cookie trên 127.0.0.1 — WT-1)
+                qs = scope.get("query_string") or b""
+                loc = self.state.base_url + path + (("?" + qs.decode("latin-1")) if qs else "")
+                await RedirectResponse(loc, status_code=303)(scope, receive, send_headers)
+                return
+            # chống DNS rebinding: chỉ phục vụ đúng Host đã định
+            await PlainTextResponse(f"Host không hợp lệ — mở {self.state.base_url}/", status_code=421)(scope, receive, send_headers)
             return
         sid = cookie_parser(headers.get("cookie", "")).get(COOKIE)
-        sess = self.state.auth.get(sid)
+        # polling/SSE không gia hạn phiên — chỉ thao tác của người (trang, POST) mới gia hạn
+        sess = self.state.auth.get(sid, touch=not path.startswith(("/sse/", "/partials/")))
         scope.setdefault("state", {})["session"] = sess
         public = path in self.PUBLIC or path.startswith("/static/")
         if sess is None and not public:
@@ -155,15 +170,23 @@ def session_of(request: Request) -> Session | None:
     return request.scope.get("state", {}).get("session")
 
 
+_NEXT_RE = re.compile(r"^/(?![/\\])[A-Za-z0-9/_\-.~?=&%#+,:]*$")
+
+
 def safe_next(v: Any, default: str = "/") -> str:
+    """Chỉ đường dẫn nội bộ: bắt đầu `/`, không `//`, `/\\`, không ký tự điều khiển/khoảng trắng (WT-7)."""
     s = str(v or "")
-    if not s.startswith("/") or s.startswith("//") or "\\" in s or "\n" in s or "\r" in s:
+    if any(ord(ch) < 0x21 or ord(ch) == 0x7F for ch in s) or not _NEXT_RE.match(s):
         return default
     return s
 
 
-async def post_guard(request: Request) -> tuple[Session, FormData]:
-    """CSRF + cùng nguồn cho mọi POST đã đăng nhập."""
+async def post_guard(request: Request, *, need_key: bool = True) -> tuple[Session, FormData]:
+    """CSRF + cùng nguồn + bí mật phiên NGOÀI cookie (WT-1) cho mọi POST đã đăng nhập.
+
+    `k` (form) / `X-Ahub-Key` (header) = `Session.key`: chỉ trao cho trình duyệt MỘT lần qua fragment `#k=` lúc đăng nhập, JS giữ trong
+    localStorage của origin web và gắn vào mọi form POST. HTML không bao giờ chứa nó → kẻ có cookie (vd dev server ở cổng khác cùng
+    host nhận cookie) đọc HTML lấy CSRF vẫn không POST được."""
     st = ws(request)
     sess = session_of(request)
     if sess is None:
@@ -181,6 +204,9 @@ async def post_guard(request: Request) -> tuple[Session, FormData]:
     form = await request.form()
     if not WebAuth.csrf_ok(sess, form.get("csrf") or request.headers.get("x-csrf-token")):
         raise HTTPException(403, "Token CSRF sai hoặc thiếu — tải lại trang rồi thử lại")
+    if need_key and not WebAuth.key_ok(sess, form.get(KEY_FIELD) or request.headers.get(KEY_HEADER)):
+        raise HTTPException(403, "Trình duyệt này thiếu khoá phiên (cần JavaScript; hoặc phiên mở ở tab/trình duyệt khác) — "
+                                 "chạy `agent-hub web --open` để đăng nhập lại")
     return sess, form
 
 
@@ -256,7 +282,8 @@ def _token_from(v: str) -> str:
 
 
 def _login_ok(request: Request, sess: Session) -> Response:
-    resp = RedirectResponse("/", status_code=303)
+    # khoá phiên đi trong FRAGMENT (không gửi lên server, không vào log/Referer); app.js lưu vào localStorage rồi xoá khỏi URL
+    resp = RedirectResponse(f"/#{KEY_FIELD}={sess.key}", status_code=303)
     resp.set_cookie(COOKIE, sess.sid, httponly=True, samesite="strict", path="/", secure=False)
     return resp
 
@@ -284,7 +311,7 @@ async def login(request: Request) -> Response:
 
 
 async def logout(request: Request) -> Response:
-    await post_guard(request)
+    await post_guard(request, need_key=False)
     ws(request).auth.logout(request.cookies.get(COOKIE))
     resp = RedirectResponse("/login", status_code=303)
     resp.delete_cookie(COOKIE, path="/")
@@ -384,6 +411,8 @@ def agent_changes(form: FormData, *, creating: bool, from_template: bool) -> dic
         ch["effort"] = eff or None
     tp: dict[str, Any] = {}
     pm = str(form.get("permission_mode") or "").strip()
+    if pm and pm not in PERMISSION_MODES:
+        raise ValueError(f"chế độ quyền '{pm}' không được phép từ web (chỉ {', '.join(PERMISSION_MODES)})")
     if pm or not sparse:
         tp["permission_mode"] = pm or None
     tools = [t.strip() for t in re.split(r"[,\s]+", str(form.get("tools") or "")) if t.strip()]
@@ -412,6 +441,13 @@ async def agent_create(request: Request) -> Response:
     try:
         ch = agent_changes(form, creating=True, from_template=bool(tpl))
         soul = str(form.get("soul") or "").strip() or None
+        if form.get("confirm") != "yes":
+            tp = ch.get("tool_policy") or {}
+            msg = (f"Tạo agent {aid or '?'}" + (f" từ mẫu {tpl}" if tpl else "") + "?"
+                   + f"\nChế độ quyền: {tp.get('permission_mode') or '(theo mẫu)'} · Tool: {', '.join(tp.get('tools') or []) or '(theo mẫu)'}"
+                   + f"\nMCP: {', '.join(ch.get('mcp_servers') or []) or '(không)'}")
+            return await render(request, "confirm.html", {"message": msg, "fields": carry(form), "action": "/agents/create", "danger": False,
+                                                          "back": "/agents/new", "note": None})
         if tpl:
             await rpc(request, "agent.create_from_template", {"id": aid, "template": tpl, "overrides": ch, **({"soul": soul} if soul else {})}, audit=True)
         else:
@@ -429,6 +465,18 @@ async def agent_update(request: Request) -> Response:
     try:
         cur = await rpc(request, "agent.get", {"id": aid})
         ch = agent_changes(form, creating=False, from_template=False)
+        tp_old = cur.get("tool_policy") or {}
+        tp_new = ch.get("tool_policy") or {}
+        risky = []
+        if (tp_new.get("permission_mode") or None) != (tp_old.get("permission_mode") or None):
+            risky.append(f"chế độ quyền: {tp_old.get('permission_mode') or 'mặc định'} → {tp_new.get('permission_mode') or 'mặc định'}")
+        if (tp_new.get("tools") or None) != (tp_old.get("tools") or None):
+            risky.append(f"tool: {', '.join(tp_old.get('tools') or []) or 'mặc định'} → {', '.join(tp_new.get('tools') or []) or 'mặc định'}")
+        if sorted(ch.get("mcp_servers") or []) != sorted(cur.get("mcp_servers") or []):
+            risky.append(f"MCP: {', '.join(cur.get('mcp_servers') or []) or '(không)'} → {', '.join(ch.get('mcp_servers') or []) or '(không)'}")
+        if risky and form.get("confirm") != "yes":
+            return await render(request, "confirm.html", {"message": f"Đổi quyền của agent {aid}?\n" + "\n".join(risky), "fields": carry(form),
+                                                          "action": f"/agents/{aid}/save", "danger": True, "back": f"/agents/{aid}/edit", "note": None})
         soul = str(form.get("soul") or "")
         params: dict[str, Any] = {"id": aid, "changes": ch}
         if soul.strip() and soul.replace("\r\n", "\n").strip() != (cur.get("soul") or "").strip():
@@ -703,11 +751,13 @@ ACTIONS: dict[str, Action] = {
     # ---- agent
     "agent_pause": Action("agent.pause", lambda f: {"id": _req(f, "id")}, "Đã tạm dừng agent (không nhận việc mới)",
                           confirm=lambda f: f"Tạm dừng agent {f.get('id')}?"),
-    "agent_resume": Action("agent.resume", lambda f: {"id": _req(f, "id")}, "Agent đã hoạt động lại"),
+    "agent_resume": Action("agent.resume", lambda f: {"id": _req(f, "id")}, "Agent đã hoạt động lại",
+                           confirm=lambda f: f"Cho agent {f.get('id')} hoạt động lại (nhận việc mới)?"),
     "agent_delete": Action("agent.delete", lambda f: {"id": _req(f, "id")}, lambda r, f: f"Đã chuyển agent {f.get('id')} vào thùng rác (khôi phục được)",
                            confirm=lambda f: f"Xoá agent {f.get('id')}? (xoá mềm — vào thùng rác, khôi phục được trong thời hạn giữ)", danger=True,
                            goto=lambda r, f: "/agents"),
     "agent_restore": Action("trash.restore", lambda f: {"id": _req(f, "id"), "kind": "agent"}, lambda r, f: f"Đã khôi phục agent {f.get('id')}",
+                            confirm=lambda f: f"Khôi phục agent {f.get('id')} từ thùng rác (kèm cấu hình, quyền, MCP cũ)?",
                             goto=lambda r, f: f"/agents/{f.get('id')}"),
     "agent_revert": Action("agent.revert", lambda f: {"id": _req(f, "id"), "to": int(_req(f, "to", "revision"))},
                            lambda r, f: f"Đã đưa agent về cấu hình revision {f.get('to')}", confirm=lambda f: f"Đưa agent {f.get('id')} về cấu hình revision {f.get('to')}?"),
@@ -730,7 +780,8 @@ ACTIONS: dict[str, Action] = {
     "team_create": Action("team.create", lambda f: {"config": {"id": _req(f, "id", "id team"), "name": str(f.get("name") or "").strip() or None,
                                                                "charter": str(f.get("charter") or "")}}, lambda r, f: f"Đã tạo team {f.get('id')}"),
     "team_member": Action("team.member_set", lambda f: {"team": _req(f, "team"), "agent": _req(f, "agent"), "role": f.get("role") or "worker"},
-                          lambda r, f: f"Đã thêm {f.get('agent')} vào team {f.get('team')}"),
+                          lambda r, f: f"Đã thêm {f.get('agent')} vào team {f.get('team')}",
+                          confirm=lambda f: f"Thêm {f.get('agent')} vào team {f.get('team')} với vai trò {f.get('role') or 'worker'}?"),
     "team_member_rm": Action("team.member_rm", lambda f: {"team": _req(f, "team"), "agent": _req(f, "agent")}, "Đã gỡ thành viên",
                              confirm=lambda f: f"Gỡ {f.get('agent')} khỏi team {f.get('team')}?", danger=True),
     "team_archive": Action("team.archive", lambda f: {"id": _req(f, "id")}, "Đã lưu trữ team", confirm=lambda f: f"Lưu trữ team {f.get('id')}?", danger=True),
@@ -746,16 +797,19 @@ ACTIONS: dict[str, Action] = {
     "pin": Action("knowledge.pin", lambda f: {"agent": _req(f, "agent"), "target": _req(f, "target"), "ref": _req(f, "ref"), "on": f.get("on") == "1"},
                   lambda r, f: f"Đã {'ghim' if f.get('on') == '1' else 'bỏ ghim'} {f.get('target')}:{f.get('ref')}"),
     "golden_rm": Action("golden.rm", lambda f: {"id": _req(f, "id")}, "Đã xoá golden task (xoá mềm)", confirm=lambda f: f"Xoá golden task {f.get('id')}?", danger=True),
-    "golden_restore": Action("golden.restore", lambda f: {"id": _req(f, "id")}, "Đã khôi phục golden task"),
+    "golden_restore": Action("golden.restore", lambda f: {"id": _req(f, "id")}, "Đã khôi phục golden task",
+                             confirm=lambda f: f"Khôi phục golden task {f.get('id')}?"),
     "golden_from_run": Action("golden.from_run", lambda f: {"run_id": _req(f, "run_id")}, lambda r, f: f"Đã tạo golden task {(r or {}).get('id')} từ run",
                               confirm="Lấy run này làm golden task (bài kiểm tra chuẩn cho agent)?"),
     "digest_run": Action("digest.run", lambda f: {"no_send": True}, "Đã tạo bản tin học"),
     # ---- MCP
-    "mcp_add": Action("mcp.add", lambda f: {"config": _mcp_config(f), "probe": True}, lambda r, f: _mcp_ok(r), goto=lambda r, f: "/mcp"),
+    "mcp_add": Action("mcp.add", lambda f: {"config": _mcp_config(f), "probe": True}, lambda r, f: _mcp_ok(r), goto=lambda r, f: "/mcp", danger=True,
+                      confirm=lambda f: _mcp_confirm(f)),
     "mcp_probe": Action("mcp.probe", lambda f: {"name": _req(f, "name")}, lambda r, f: _probe_msg(r)),
     "mcp_remove": Action("mcp.remove", lambda f: {"name": _req(f, "name"), "force": f.get("force") == "1"}, lambda r, f: f"Đã xoá MCP {f.get('name')} (khôi phục được)",
                          confirm=lambda f: f"Xoá MCP server {f.get('name')}? Agent đang dùng sẽ mất các tool này.", danger=True, goto=lambda r, f: "/mcp"),
-    "mcp_restore": Action("mcp.restore", lambda f: {"name": _req(f, "name")}, lambda r, f: f"Đã khôi phục MCP {f.get('name')}"),
+    "mcp_restore": Action("mcp.restore", lambda f: {"name": _req(f, "name")}, lambda r, f: f"Đã khôi phục MCP {f.get('name')}",
+                          confirm=lambda f: f"Khôi phục MCP server {f.get('name')}? Server MCP chạy NGOÀI sandbox của agent."),
     "mcp_import": Action("mcp.import", lambda f: {"path": str(f.get("path") or "~/.claude.json").strip() or "~/.claude.json", "probe": True,
                                                   "overwrite": f.get("overwrite") == "1", **({"select": sel} if (sel := [str(x) for x in f.getlist("select")]) else {})},
                          lambda r, f: "Đã nhập: " + (", ".join(f"{i.get('name')} ({i.get('status')})" for i in (r or {}).get("items") or []) or "không có gì"),
@@ -769,7 +823,8 @@ ACTIONS: dict[str, Action] = {
                          lambda r, f: f"Đã đặt {f.get('key')} = {json.dumps((r or {}).get(f.get('key')), ensure_ascii=False)}",
                          confirm=lambda f: f"Đổi cấu hình {f.get('key')} thành '{f.get('value')}'?"),
     "secret_set": Action("secret.set", lambda f: {"name": _req(f, "name", "tên secret"), "value": _req(f, "value", "giá trị")},
-                         lambda r, f: f"Đã lưu secret {r.get('name')} (giá trị không bao giờ hiển thị lại)"),
+                         lambda r, f: f"Đã lưu secret {r.get('name')} (giá trị không bao giờ hiển thị lại)",
+                         confirm=lambda f: f"Lưu secret {f.get('name')}? Nếu đã có secret cùng tên, giá trị cũ bị GHI ĐÈ.", danger=True),
     "secret_rm": Action("secret.rm", lambda f: {"name": _req(f, "name")}, lambda r, f: f"Đã xoá secret {f.get('name')}", confirm=lambda f: f"Xoá secret {f.get('name')}?",
                         danger=True),
     "notify_test": Action("notify.test", lambda f: {"text": "agent-hub: thử thông báo từ giao diện web"}, lambda r, f: f"Đã gửi thử: {json.dumps(r, ensure_ascii=False)[:200]}"),
@@ -806,6 +861,31 @@ def _mcp_config(f: FormData) -> dict[str, Any]:
     return cfg
 
 
+def _mcp_confirm(f: FormData) -> str:
+    try:
+        cfg = _mcp_config(f)
+    except ValueError as e:
+        return f"Thêm MCP server? ({e})"
+    what = (cfg.get("command", "") + " " + " ".join(cfg.get("args") or [])).strip() if cfg["transport"] == "stdio" else cfg.get("url", "")
+    trust = "TIN CẬY (tool ghi chạy không cần duyệt)" if cfg["trust"] == "trusted" else "cần duyệt"
+    return (f"Thêm MCP server {cfg['name']} ({trust})?\nHub sẽ CHẠY NGAY để kiểm tra, ngoài sandbox, dưới quyền của bạn:\n{what}"
+            + (f"\nBiến môi trường: {', '.join(cfg['env'])}" if cfg.get("env") else ""))
+
+
+def carry(form: FormData) -> list[tuple[str, str]]:
+    """Trường form mang sang trang xác nhận — KHÔNG BAO GIỜ gồm csrf/khoá phiên (khoá không được nằm trong HTML)."""
+    return [(k, v) for k, v in form.multi_items() if k not in ("csrf", "confirm", "confirm2", KEY_FIELD) and isinstance(v, str)]
+
+
+HEAVY_EXTRA = ("file",)
+
+
+def heavy_approval(ap: dict[str, Any], classes: list[str] | tuple[str, ...]) -> bool:
+    from ..notify.telegram import is_heavy
+
+    return is_heavy(ap, tuple(classes or ()) + HEAVY_EXTRA)
+
+
 def _probe_msg(r: Any) -> str:
     r = r or {}
     if r.get("ok"):
@@ -831,9 +911,19 @@ async def do_action(request: Request) -> Response:
         return flash_redirect(request, back, "error", f"Chưa đủ thông tin: {e}")
     if act.confirm and form.get("confirm") != "yes":
         msg = act.confirm(form) if callable(act.confirm) else act.confirm
-        fields = [(k, v) for k, v in form.multi_items() if k not in ("csrf", "confirm") and isinstance(v, str)]
-        return await render(request, "confirm.html", {"message": msg, "fields": fields, "action": f"/do/{name}", "danger": act.danger, "back": back,
+        fields = [(k, v) for k, v in carry(form) if not (name == "secret_set" and k == "value")]  # giá trị secret không vào HTML
+        return await render(request, "confirm.html", {"message": msg + ("\n(Nhập lại giá trị ở trang Cài đặt và tích ô xác nhận.)" if name == "secret_set" else ""),
+                                                      "fields": fields, "action": f"/do/{name}", "danger": act.danger, "back": back,
                                                       "note": act.note})
+    if name in ("approve", "approve_fp") and form.get("confirm2") != "yes":
+        # thao tác phá huỷ NẶNG (tài nguyên bảo vệ / lớp trong notify.telegram.confirm_classes + file) → bước 2, như Telegram (WT-5/6)
+        try:
+            ap = await rpc(request, "approval.get", {"id": params["id"]})
+            classes = await rpc(request, "config.get", {"key": "notify.telegram.confirm_classes"}) or []
+        except RpcError as e:
+            return flash_redirect(request, back, "error", err_text(e))
+        if heavy_approval(ap, classes):
+            return await render(request, "approve2.html", {"a": ap, "view": P.action_view(ap), "fields": carry(form), "action": f"/do/{name}", "back": back})
     try:
         res = await rpc(request, act.method, params, audit=act.audit)
     except RpcError as e:
@@ -971,16 +1061,16 @@ def make_templates() -> Jinja2Templates:
     env = t.env
     env.autoescape = True
     env.globals.update({"agent_status": P.agent_status, "run_status": P.run_status, "task_status": lambda s: P.TASK_STATUS.get(s or "", (s or "—", "muted")),
-                        "is_live_run": P.is_live_run, "wait_reason": P.wait_reason, "tokens_of": P.tokens_of, "TASK_COLUMNS": P.TASK_COLUMNS})
+                        "is_live_run": P.is_live_run, "action_view": P.action_view, "wait_reason": P.wait_reason, "tokens_of": P.tokens_of, "TASK_COLUMNS": P.TASK_COLUMNS})
     env.filters.update({"cost": P.fmt_cost, "tok": P.fmt_tokens, "dur": P.fmt_dur, "ts": P.fmt_ts, "ago": P.ago, "first": P.first_line,
                         "tool": P.short_tool, "md": lambda s: Markup(P.md(s)), "usd": lambda v: "—" if v is None else f"${float(v):.4f}",
                         "j": lambda v: json.dumps(v, ensure_ascii=False, indent=2, default=str)})
     return t
 
 
-def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127.0.0.1", port: int = 8765) -> Starlette:
+def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127.0.0.1", port: int = 8765, name: str = WEB_HOST) -> Starlette:
     state = WebState(paths=paths, auth=auth or WebAuth(), host=host, port=port, client=AsyncHubClient(paths.socket, channel=CHANNEL, timeout=60.0),
-                     templates=make_templates())
+                     templates=make_templates(), name=name)
     routes = [
         Route("/", overview),
         Route("/login", login, methods=["GET", "POST"]),

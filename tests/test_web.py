@@ -29,7 +29,7 @@ from agent_hub.web.security import (
 
 ISOLATED = Path(__file__).parent / "fixtures" / "claude-hub-isolated-run.jsonl"
 PORT = 8765
-BASE = f"http://127.0.0.1:{PORT}"
+BASE = f"http://agent-hub.localhost:{PORT}"
 
 
 class Env:
@@ -40,16 +40,21 @@ class Env:
         self.app = create_app(paths, auth=self.auth, port=PORT)
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url=BASE)
         self.csrf = ""
+        self.key = ""
 
     async def login(self) -> str:
         r = await self.client.get("/login?t=" + self.auth.mint())
         assert r.status_code == 303, r.text
         sid = r.cookies.get(COOKIE) or self.client.cookies.get(COOKIE)
         self.csrf = self.auth.sessions[sid].csrf
+        loc = r.headers["location"]
+        assert loc.startswith("/#k=")  # khoá phiên chỉ đi trong fragment (trình duyệt không gửi lên server)
+        self.key = loc.split("#k=", 1)[1]
+        assert self.key == self.auth.sessions[sid].key
         return self.csrf
 
     async def post(self, path: str, data: dict, **kw):
-        return await self.client.post(path, data={"csrf": self.csrf, **data}, **kw)
+        return await self.client.post(path, data={"csrf": self.csrf, "k": self.key, **data}, **kw)
 
     def audit(self, kind: str | None = None) -> list[dict]:
         rows = self.hub.audit.list(limit=500) if hasattr(self.hub.audit, "list") else []
@@ -142,7 +147,7 @@ async def test_unauthenticated_requests_are_blocked(env):
 async def test_one_time_login_link_sets_strict_httponly_cookie(env):
     tok = env.auth.mint()
     r = await env.client.get("/login?t=" + tok)
-    assert r.status_code == 303 and r.headers["location"] == "/"
+    assert r.status_code == 303 and r.headers["location"].startswith("/#k=")
     sc = r.headers["set-cookie"].lower()
     assert "httponly" in sc and "samesite=strict" in sc and "path=/" in sc
     assert tok not in r.headers.get("location", "")
@@ -158,7 +163,7 @@ async def test_one_time_login_link_sets_strict_httponly_cookie(env):
     old = mint_login_token(env.auth.key, ttl_s=-5)
     assert check_login_token(env.auth.key, old) is None
     # dán link vào form đăng nhập
-    r = await c2.post("/login", data={"link": login_url("127.0.0.1", PORT, env.auth.mint())})
+    r = await c2.post("/login", data={"link": login_url("agent-hub.localhost", PORT, env.auth.mint())})
     assert r.status_code == 303
     await c2.aclose()
     # đăng xuất: phiên bị huỷ
@@ -168,12 +173,22 @@ async def test_one_time_login_link_sets_strict_httponly_cookie(env):
     assert r.status_code == 303 and sid not in env.auth.sessions
 
 
-async def test_host_header_must_be_loopback(env):
+async def test_host_header_must_be_web_host(env):
+    """WT-1(a): chỉ phục vụ Host `agent-hub.localhost:port` (cookie host-only); 127.0.0.1/localhost → chuyển hướng, không đặt cookie."""
     await env.login()
     r = await env.client.get("/", headers={"Host": "evil.example:8765"})
     assert r.status_code == 421
-    r = await env.client.get("/", headers={"Host": f"localhost:{PORT}"})
-    assert r.status_code == 200
+    for h in (f"localhost:{PORT}", f"127.0.0.1:{PORT}", f"[::1]:{PORT}"):
+        r = await env.client.get("/agents?x=1", headers={"Host": h})
+        assert r.status_code == 303 and r.headers["location"] == f"{BASE}/agents?x=1", h
+        assert "set-cookie" not in r.headers
+    raw = httpx.AsyncClient(transport=httpx.ASGITransport(app=env.app), base_url=f"http://127.0.0.1:{PORT}")
+    tok = env.auth.mint()
+    r = await raw.get("/login?t=" + tok)
+    assert r.status_code == 303 and r.headers["location"] == f"{BASE}/login?t={tok}" and "set-cookie" not in r.headers
+    r = await raw.post("/do/estop", data={"on": "1", "confirm": "yes"})
+    assert r.status_code == 421 and not env.hub.runs.estop.get("on")
+    await raw.aclose()
 
 
 async def test_csrf_and_origin_required_for_writes(env):
@@ -201,7 +216,7 @@ async def test_security_headers_and_no_cors(env):
     h = r.headers
     assert "default-src 'self'" in h["content-security-policy"] and "script-src 'self'" in h["content-security-policy"]
     assert "frame-ancestors 'none'" in h["content-security-policy"]
-    assert h["x-frame-options"] == "DENY" and h["referrer-policy"] == "no-referrer" and h["x-content-type-options"] == "nosniff"
+    assert h["x-frame-options"] == "DENY" and h["referrer-policy"] == "same-origin" and h["x-content-type-options"] == "nosniff"
     assert h["cache-control"] == "no-store"
     assert not any(k.lower().startswith("access-control-") for k in h)
     # không script inline / CDN
@@ -240,17 +255,17 @@ async def test_daily_flow_create_agent_with_mcp_assign_task_see_result_and_cost(
     env.hub.mcp.add({"name": "other", "transport": "stdio", "command": "true"})
     r = await env.client.get("/agents/new")
     assert "docs-mcp" in r.text and 'name="mcp"' in r.text and "researcher" in r.text
-    r = await env.post("/agents/create", {"id": "nc", "template": "researcher", "name": "Nghiên cứu", "mcp": ["docs-mcp"], "max_budget_usd_per_run": "0.3"})
+    r = await env.post("/agents/create", {"id": "nc", "template": "researcher", "name": "Nghiên cứu", "mcp": ["docs-mcp"], "max_budget_usd_per_run": "0.3", "confirm": "yes"})
     assert r.status_code == 303 and r.headers["location"] == "/agents/nc", r.text[:400]
     a = env.hub.agents.show("nc")
     assert a["mcp_servers"] == ["docs-mcp"] and a["name"] == "Nghiên cứu"
     assert a["tool_policy"]["tools"] == ["Read", "Grep", "Glob", "WebSearch", "WebFetch"]  # ô trống = theo template
     assert a["limits"]["max_budget_usd_per_run"] == 0.3
     # lỗi nhập → form hiện lại kèm lỗi, không tạo
-    r = await env.post("/agents/create", {"id": "Sai Id", "template": "researcher"})
+    r = await env.post("/agents/create", {"id": "Sai Id", "template": "researcher", "confirm": "yes"})
     assert r.status_code == 400 and "id" in r.text
     # sửa: bỏ docs-mcp, thêm other
-    r = await env.post("/agents/nc/save", {"name": "Nghiên cứu 2", "mcp": ["other"], "model": "haiku", "role": "r", "description": "", "soul": a["soul"]})
+    r = await env.post("/agents/nc/save", {"name": "Nghiên cứu 2", "mcp": ["other"], "model": "haiku", "role": "r", "description": "", "soul": a["soul"], "confirm": "yes"})
     assert r.status_code == 303
     assert env.hub.agents.show("nc")["mcp_servers"] == ["other"]
     # giao việc
@@ -340,7 +355,7 @@ async def test_human_only_admin_actions_audited_as_web(env):
     r = await env.post("/do/config_set", {"key": "guard.enabled", "value": "false", "confirm": "yes", "next": "/settings"})
     assert r.status_code == 303 and env.hub.config.get("guard.enabled") is True
     # secret: giá trị không bao giờ hiện lại
-    await env.post("/do/secret_set", {"name": "MY_TOKEN", "value": "sieu-bi-mat-123"})
+    await env.post("/do/secret_set", {"name": "MY_TOKEN", "value": "sieu-bi-mat-123", "confirm": "yes"})
     r = await env.client.get("/settings")
     assert "MY_TOKEN" in r.text and "sieu-bi-mat-123" not in r.text
     # xoá mềm + khôi phục + revert
@@ -348,11 +363,11 @@ async def test_human_only_admin_actions_audited_as_web(env):
     assert "ag0" not in [a["id"] for a in env.hub.agents.list()]
     r = await env.client.get("/agents")
     assert "Thùng rác" in r.text
-    await env.post("/do/agent_restore", {"id": "ag0"})
+    await env.post("/do/agent_restore", {"id": "ag0", "confirm": "yes"})
     assert "ag0" in [a["id"] for a in env.hub.agents.list()]
     await env.post("/do/agent_pause", {"id": "ag0", "confirm": "yes"})
     assert env.hub.agents.show("ag0")["status"] == "paused"
-    await env.post("/do/agent_resume", {"id": "ag0"})
+    await env.post("/do/agent_resume", {"id": "ag0", "confirm": "yes"})
     await env.post("/do/learn_toggle", {"agent": "ag0", "on": "0", "confirm": "yes"})
     for kind in ("estop.set", "config.set", "secret.set", "agent.delete", "trash.restore", "agent.pause", "agent.resume", "learn.policy_set"):
         rows = audit_rows(env, kind)
@@ -366,7 +381,7 @@ async def test_tasks_and_teams_from_web(env):
         env.hub.agents.create({"id": a, "name": a, "model": "haiku"})
     r = await env.post("/do/team_create", {"id": "docs", "name": "Docs", "charter": "Viết tài liệu"})
     assert r.status_code == 303 and env.hub.teams.show("docs")["name"] == "Docs"
-    await env.post("/do/team_member", {"team": "docs", "agent": "w1", "role": "worker"})
+    await env.post("/do/team_member", {"team": "docs", "agent": "w1", "role": "worker", "confirm": "yes"})
     r = await env.post("/do/task_create", {"title": "Cha", "assignee": "w1", "body": "x"})
     t1 = r.headers["location"].rsplit("/", 1)[1]
     r = await env.post("/do/task_create", {"title": "Con", "assignee": "rv", "parents": [t1]})
@@ -446,7 +461,7 @@ def test_cli_web_url_mints_link_from_running_server_state(hub_home, capsys):
     assert read_state(hub_home)["port"] == 8790
     assert main(["web", "--url"]) == 0
     out = capsys.readouterr().out
-    m = re.search(r"http://127\.0\.0\.1:8790/login\?t=(\S+)", out)
+    m = re.search(r"http://agent-hub\.localhost:8790/login\?t=(\S+)", out)
     assert m and check_login_token(key, m.group(1))
     state_path(hub_home).unlink()
 
@@ -529,3 +544,142 @@ def test_agent_form_parsing_sparse_for_template_full_for_edit():
     assert ch["limits"]["budget_usd_per_day"] is None and "model" not in ch
     with pytest.raises(ValueError):
         agent_changes(FormData([("max_runtime_s", "abc")]), creating=True, from_template=True)
+
+
+# =========================================================================== kiểm toán WT-1/2/6/7 + BUG waiting_human
+async def test_wt1_stolen_cookie_and_csrf_cannot_write(held):
+    """Tái hiện QA (evil_devserver): có cookie + CSRF đọc từ HTML + Origin giả đúng, KHÔNG có khoá phiên → 403, approval vẫn chờ."""
+    env = held
+    await env.login()
+    run = await running_run(env)
+    ap = open_approval(env.hub, run["id"])
+    env.hub.approvals.to_waiting_human(ap["id"])
+    html = (await env.client.get("/approvals")).text
+    csrf = re.search(r'name="csrf" value="([^"]+)"', html).group(1)
+    ids = sorted(set(re.findall(r'name="id" value="(ap_[0-9a-f]+)"', html)))
+    assert ids == [ap["id"]]
+    # khoá phiên không có trong bất kỳ HTML nào (kể cả trang xác nhận mang trường form sang)
+    assert env.key not in html
+    r = await env.post("/do/stop", {"id": run["id"]})
+    assert "Xác nhận" in r.text and env.key not in r.text
+    evil = httpx.AsyncClient(transport=httpx.ASGITransport(app=env.app), base_url=BASE, cookies={COOKIE: env.client.cookies.get(COOKIE)})
+    for path, data in (("/do/approve", {"csrf": csrf, "id": ap["id"], "confirm": "yes", "confirm2": "yes"}),
+                       ("/do/estop", {"csrf": csrf, "on": "1", "confirm": "yes"}),
+                       ("/do/mcp_add", {"csrf": csrf, "name": "x", "command": "touch /tmp/pwn", "confirm": "yes"}),
+                       ("/agents/ag0/save", {"csrf": csrf, "permission_mode": "acceptEdits", "confirm": "yes"}),
+                       ("/do/approve", {"csrf": csrf, "id": ap["id"], "confirm": "yes", "k": "doan-bừa"})):
+        r = await evil.post(path, data=data, headers={"Origin": BASE})
+        assert r.status_code == 403, (path, r.status_code)
+    await evil.aclose()
+    assert env.hub.approvals.get(ap["id"])["status"] == "waiting_human"
+    assert not env.hub.runs.estop.get("on") and not env.hub.mcp.list()
+    # người thật (có khoá trong localStorage, gửi kèm form) vẫn duyệt được
+    r = await env.post("/do/approve", {"id": ap["id"], "confirm": "yes"})
+    assert env.hub.approvals.get(ap["id"])["status"] == "allowed"
+
+
+async def test_wt1_short_session_polling_does_not_extend(env):
+    import agent_hub.web.security as S
+
+    await env.login()
+    sid = env.client.cookies.get(COOKIE)
+    sess = env.auth.sessions[sid]
+    assert S.SESSION_IDLE_S <= 3600 and S.SESSION_MAX_S <= 12 * 3600
+    sess.last -= 100
+    before = sess.last
+    await env.client.get("/partials/overview")
+    assert sess.last == before  # polling không gia hạn
+    await env.client.get("/agents")
+    assert sess.last > before  # thao tác của người gia hạn
+    sess.last -= S.SESSION_IDLE_S + 1
+    assert (await env.client.get("/")).status_code == 303  # hết hạn → đăng nhập lại
+    assert sid not in env.auth.sessions
+
+
+def test_wt7_safe_next_rejects_open_redirects():
+    from agent_hub.web.app import safe_next
+
+    for bad in ("/\t/evil.com", "//evil.com", "/\\evil.com", "http://evil.com", "/\n/x", "/\x7f/x", "/ /x", "javascript:alert(1)", "/%0a"[:0] + "\x00"):
+        assert safe_next(bad) == "/", repr(bad)
+    for ok in ("/", "/runs/r_1", "/settings#secrets", "/tasks?team=docs&all=1"):
+        assert safe_next(ok) == ok
+
+
+async def test_wt2_full_action_shown_and_dangerous_part_marked(held):
+    env = held
+    await env.login()
+    run = await running_run(env)
+    pad = "echo '" + "an toan " * 60 + "' >/dev/null; "
+    long_cmd = pad + "rm -rf ~/Documents‮"
+    ap = env.hub.approvals.open(env.hub.store.get_run(run["id"]), tool_name="Bash", tool_input={"command": long_cmd}, tool_use_id="t1", fingerprint="fp-long",
+                                verdict={"klass": "file", "rule": "rm_recursive", "verdict": "destructive", "reason": "xoá thư mục"}, channel="hook")
+    mcp = env.hub.approvals.open(env.hub.store.get_run(run["id"]), tool_name="mcp__crm__xoa_khach_hang", tool_input={"bang": "khach_hang", "where": "id > 0"},
+                                 tool_use_id="t2", fingerprint="fp-mcp", verdict={"klass": "mcp", "rule": "mcp_delete", "verdict": "destructive"}, channel="mcp")
+    html = (await env.client.get("/approvals")).text
+    assert "<mark>rm</mark> <mark>-rf</mark> ~/Documents" in html  # phần cuối nguy hiểm KHÔNG bị cắt, được tô
+    i = html.find("~/Documents"); assert "⟦U+202E⟧" in html and "có ký tự ẩn" in html and "lệnh dài" in html, html[i - 200:i + 200]
+    assert "&#34;where&#34;: &#34;id &gt; 0&#34;" in html or "&quot;where&quot;: &quot;id &gt; 0&quot;" in html  # MCP: đủ tham số
+    assert "khach_hang" in html
+    # hộp xác nhận mang toàn bộ lệnh
+    assert html.count("rm -rf ~/Documents") >= 1
+    assert ap["id"] in html and mcp["id"] in html
+
+
+async def test_heavy_approval_needs_second_step(held):
+    """Lớp file/db/… (như Telegram, + file) → sau hộp xác nhận còn bước 2 có toàn bộ lệnh + ô tích; lớp nhẹ → 1 bước."""
+    env = held
+    await env.login()
+    run = await running_run(env)
+    ap = env.hub.approvals.open(env.hub.store.get_run(run["id"]), tool_name="Bash", tool_input={"command": "rm -rf ~/projects"}, tool_use_id="t",
+                                fingerprint="fp-h", verdict={"klass": "file", "rule": "rm_recursive_outside_run", "verdict": "destructive"}, channel="hook")
+    r = await env.post("/do/approve", {"id": ap["id"], "confirm": "yes"})
+    assert r.status_code == 200 and "Xác nhận lần 2" in r.text and 'name="confirm2" value="yes"' in r.text and "~/projects" in r.text
+    assert env.key not in r.text
+    assert env.hub.approvals.get(ap["id"])["status"] == "open"
+    await env.post("/do/approve", {"id": ap["id"], "confirm": "yes", "confirm2": "yes"})
+    assert env.hub.approvals.get(ap["id"])["status"] == "allowed"
+    light = open_approval(env.hub, run["id"])  # fs_delete: không thuộc lớp nặng
+    r = await env.post("/do/approve", {"id": light["id"], "confirm": "yes"})
+    assert r.status_code == 303 and env.hub.approvals.get(light["id"])["status"] == "allowed"
+
+
+async def test_wt6_sensitive_forms_need_confirmation(env):
+    await env.login()
+    env.hub.mcp.add({"name": "docs-mcp", "transport": "stdio", "command": "true"})
+    r = await env.post("/do/mcp_add", {"name": "x", "transport": "stdio", "command": "touch /tmp/should-not-run", "next": "/mcp"})
+    assert r.status_code == 200 and "CHẠY NGAY" in r.text and "touch /tmp/should-not-run" in r.text
+    assert [m["name"] for m in env.hub.mcp.list()] == ["docs-mcp"]
+    r = await env.post("/do/secret_set", {"name": "TELEGRAM_BOT_TOKEN", "value": "ghi-de"})
+    assert r.status_code == 200 and "GHI ĐÈ" in r.text and "ghi-de" not in r.text  # giá trị không vào trang xác nhận
+    assert "TELEGRAM_BOT_TOKEN" not in [x["name"] for x in env.hub.secrets.list()]
+    # tạo agent → xác nhận (trang server) rồi mới tạo
+    r = await env.post("/agents/create", {"id": "nc", "template": "researcher", "mcp": ["docs-mcp"]})
+    assert r.status_code == 200 and "Tạo agent nc" in r.text and "docs-mcp" in r.text
+    assert "nc" not in [a["id"] for a in env.hub.agents.list()]
+    r = await env.post("/agents/create", {"id": "nc", "template": "researcher", "mcp": ["docs-mcp"], "confirm": "yes"})
+    assert r.status_code == 303
+    a = env.hub.agents.show("nc")
+    base = {"name": "nc", "role": a["role"], "description": a["description"], "tools": ", ".join(a["tool_policy"]["tools"]), "mcp": ["docs-mcp"],
+            "model": a["model"], "max_budget_usd_per_run": "0.5", "max_runtime_s": "1200", "max_concurrent_runs": "1", "soul": a["soul"]}
+    # sửa không đụng quyền → lưu thẳng; đổi permission_mode → xác nhận; bypassPermissions → từ chối
+    r = await env.post("/agents/nc/save", {**base, "permission_mode": "default"})
+    assert r.status_code == 303
+    r = await env.post("/agents/nc/save", {**base, "permission_mode": "acceptEdits"})
+    assert r.status_code == 200 and "Đổi quyền của agent nc" in r.text and env.key not in r.text
+    assert env.hub.agents.show("nc")["tool_policy"]["permission_mode"] == "default"
+    r = await env.post("/agents/nc/save", {**base, "permission_mode": "acceptEdits", "confirm": "yes"})
+    assert r.status_code == 303 and env.hub.agents.show("nc")["tool_policy"]["permission_mode"] == "acceptEdits"
+    r = await env.post("/agents/nc/save", {**base, "permission_mode": "bypassPermissions", "confirm": "yes"})
+    assert r.status_code == 400 and env.hub.agents.show("nc")["tool_policy"]["permission_mode"] == "acceptEdits"
+
+
+async def test_waiting_human_event_carries_rule_and_page_has_no_dangling_colon(held):
+    env = held
+    await env.login()
+    run = await running_run(env)
+    ap = open_approval(env.hub, run["id"])
+    env.hub.approvals.to_waiting_human(ap["id"])
+    ev = [e for e in env.hub.store.query_events(run_id=run["id"]) if e.type == "approval.waiting_human"][-1]
+    assert ev.payload["tool"] == "Bash" and ev.payload["matched_rule"] == "rm_recursive_outside_run" and ev.payload["reason"]
+    html = (await env.client.get(f"/runs/{run['id']}")).text
+    assert "luật ?" not in html and "</b> : <code>" not in html and "luật rm_recursive_outside_run" in html

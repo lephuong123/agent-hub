@@ -23,8 +23,8 @@ Thao tác ghi: form POST (không cần JS). `ACTIONS[name]` = method RPC + dựn
 `until_run_end`) gửi JSON `{t: item|delta|stats|refresh|end}`; mục đã vẽ sẵn HTML phía server (cùng macro với phần phát lại từ DB);
 heartbeat 15 s; client đóng tab → subscription đóng (run không ảnh hưởng). Tổng quan + thanh run làm mới bằng htmx `every 2s`.
 
-## 2. Bảo mật — đã làm + test (`tests/test_web.py`, 19 test)
-- Bind chỉ loopback (`test_bind_loopback_only`, CLI trả 1). Host header phải là loopback:port → chống DNS rebinding (`test_host_header_must_be_loopback`).
+## 2. Bảo mật — đã làm + test (`tests/test_web.py`, 26 test)
+- Bind chỉ loopback (`test_bind_loopback_only`, CLI trả 1). Host header phải là `agent-hub.localhost:port` → chống DNS rebinding; 127.0.0.1/localhost → 303 sang host riêng, không đặt cookie (`test_host_header_must_be_web_host`).
 - Không phiên → 303 /login (trang) / 401 (partials, SSE, POST); cookie giả vô hiệu (`test_unauthenticated_requests_are_blocked`).
 - Link một lần: dùng lại / chữ ký sai / hết hạn → 401; cookie HttpOnly + SameSite=Strict; đăng xuất huỷ phiên (`test_one_time_login_link…`).
 - CSRF + Origin/Referer/Sec-Fetch-Site cho mọi POST (`test_csrf_and_origin_required_for_writes`); CSP `script-src 'self'` (không inline,
@@ -54,14 +54,48 @@ lệnh `agent-hub web …` từ agent bị classifier `forbidden` (`HUB_HUMAN_ON
 Giới hạn còn lại: không sandbox + agent đọc được `auth/web.json` (phải lách classifier) → tự ký link → có phiên web = quyền người;
 tương đương rủi ro token người đã ghi ở `hardening-SEC.md` §3.
 
+## 3b. Sửa theo kiểm toán `docs/acceptance/security-web-telegram.md` (WT-1, WT-2/6/7 phần web, BUG waiting_human)
+**WT-1 (cookie không tách theo cổng → app localhost duyệt thay người).** Nhiều lớp:
+1. Host riêng `agent-hub.localhost:<port>` (mặc định; `--host-name` đổi). Cookie host-only → KHÔNG gửi tới `127.0.0.1:*`/`localhost:*`.
+   Chrome/Firefox/Safari tự phân giải `*.localhost`; resolver macOS cũng vậy (`getaddrinfo` → ::1, 127.0.0.1 — đã kiểm). Server vẫn bind 127.0.0.1.
+2. Khoá phiên NGOÀI cookie (`Session.key`, 256 bit): trao MỘT lần qua fragment `/#k=…` của redirect đăng nhập (fragment không lên server,
+   không vào log/Referer), `app.js` cất vào `localStorage` của origin web (origin khác — kể cả `agent-hub.localhost:<cổng khác>` — không
+   đọc được) và gắn `k` vào MỌI form POST; server từ chối 403 nếu thiếu/sai (`post_guard`). HTML không bao giờ chứa khoá (trang xác nhận
+   mang trường form qua `carry()` đã loại `k`/`csrf`). Hệ quả: thao tác ghi cần JavaScript; tab/trình duyệt khác chưa có khoá → đăng nhập lại.
+3. Phiên ngắn: idle 1 h, tối đa 12 h; polling `/partials/*` và SSE KHÔNG gia hạn (`test_wt1_short_session_polling_does_not_extend`).
+4. `__Host-` prefix: không dùng — bắt buộc `Secure` (chỉ HTTPS; trình duyệt không nhất quán với http://*.localhost).
+5. Tái hiện QA chạy lại (Chromium thật + `evil_devserver.py` nguyên bản ở :8800, và biến thể mạnh nhất ở `agent-hub.localhost:8801`):
+   bản gốc nhận cookie RỖNG (host-only); biến thể cùng tên host (trình duyệt gửi cookie vì không tách cổng) đọc được CSRF nhưng
+   `POST /do/approve` → **403**, approval vẫn `waiting_human`; người bấm trong trình duyệt → `allowed`. Test hồi quy: `test_wt1_stolen_cookie_and_csrf_cannot_write`.
+6. Sửa kèm: `Referrer-Policy: same-origin` (với `no-referrer` Chrome gửi `Origin: null` cho form POST → 403 với người thật — phát hiện khi chạy trình duyệt thật).
+
+**Mô hình đe doạ còn lại.** (a) Tiến trình ngoài sandbox cùng user đọc được profile trình duyệt (cookie + localStorage trên đĩa) hoặc
+gắn debugger vào trình duyệt → có phiên; cũng đọc được token người — ngang mức đã chấp nhận ở hardening-SEC §3. (b) XSS trên origin web
+lộ khoá trong localStorage — giảm bằng CSP `script-src 'self'`, autoescape, markdown không HTML. (c) Trang độc gửi người tới
+`agent-hub.localhost:<cổng khác>` để thu cookie: cookie đó vô dụng khi thiếu khoá; còn GET đọc được (xem trạng thái, prompt, kết quả run).
+(d) `--host-name 127.0.0.1` (dự phòng cho trình duyệt không phân giải `*.localhost`) mất lớp 1, còn lớp 2.
+
+**WT-2.** `present.action_view`: hiện TOÀN BỘ thao tác (Bash: cả lệnh + tham số khác; tool khác/MCP: mọi tham số JSON), không cắt; khung
+cuộn, nhãn "lệnh dài N ký tự", tô `<mark>` phần nguy hiểm (rm/-rf/dd/git push --force/DROP/>…), ký tự ẩn/bidi/điều khiển hiện `⟦U+202E⟧`
++ cảnh báo; hộp xác nhận chứa toàn bộ lệnh (`test_wt2_full_action_shown_and_dangerous_part_marked`).
+**Bước 2 cho thao tác nặng** (nhất quán Telegram): `notify.telegram.is_heavy` với `confirm_classes` + `file`, hoặc tài nguyên bảo vệ →
+sau hộp xác nhận còn trang `approve2.html` (toàn bộ lệnh + ô tích "đã đọc") (`test_heavy_approval_needs_second_step`).
+**WT-6.** Xác nhận cho `mcp_add` (hiện lệnh sẽ CHẠY ngay ngoài sandbox), `mcp_restore`, `secret_set` (ô tích "ghi đè"; trang xác nhận không
+mang giá trị secret), `agent_resume`, `agent_restore`, `team_member`, `golden_restore`; tạo agent luôn xác nhận; lưu agent xác nhận khi đổi
+permission_mode/tools/MCP; `permission_mode` ∉ `PERMISSION_MODES` (vd bypassPermissions) → 400 (`test_wt6_sensitive_forms_need_confirmation`).
+**WT-7.** `safe_next`: chỉ `^/` + bảng ký tự an toàn, cấm `//`, `/\`, ký tự điều khiển/khoảng trắng (`test_wt7_safe_next_rejects_open_redirects`).
+**BUG "luật ?".** `approvals.to_waiting_human` thêm `tool, matched_rule, destructive_class, reason, protected_resource_id` vào payload; template bỏ ":" khi không có tool
+(`test_waiting_human_event_carries_rule_and_page_has_no_dangling_colon`). Ảnh chụp lại: `03-run-cho-duyet.png`, `07-duyet.png`, `15-hop-xac-nhan.png`.
+
 ## 4. File dùng chung đã chạm (chỉ THÊM)
 - `pyproject.toml`/`uv.lock`: `jinja2>=3.1`, khai báo rõ `starlette>=0.40`, `uvicorn>=0.30` (đã có gián tiếp qua `mcp`).
 - `cli.py`: đăng ký `web.cli.add_parsers` cuối `build_parser`.
 - `guard/runtime.py` (`secret_read_deny_rules`): thêm `HUB_HOME/auth/**`. `guard/classifier.py`: `HUB_HUMAN_ONLY_CLI["web"] = None`.
+- `approvals.py` (`to_waiting_human`): thêm khoá vào payload `approval.waiting_human` (BUG kiểm toán).
 - Không đổi `auth.py`/`daemon.py`: tiến trình web là tiến trình của NGƯỜI, đọc token như CLI — kênh `web` đi qua `_audit.channel`.
 
 ## 5. Kiểm chứng
-- `uv run pytest -q`: 460 passed (gồm 19 test web, ~3 s).
+- `uv run pytest -q`: xanh (gồm 26 test web, ~4 s).
 - Server thật (`web.demo`, daemon trên socket + FakeRuntime) + Playwright Chromium headless: 22 ảnh desktop 1280 (sáng + tối) và
   mobile 390 px; đã xem lại từng ảnh; trên 390 px `scrollWidth == clientWidth` (không tràn ngang); console không lỗi CSP/JS.
   Tạo lại: chạy `web.demo`, rồi script Playwright (đăng nhập bằng link ký từ `auth/web.json`, chụp các trang).

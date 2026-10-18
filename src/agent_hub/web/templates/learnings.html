@@ -62,7 +62,7 @@
   <table class="tbl stack"><thead><tr><th>Id</th><th>Agent</th><th>Bài</th><th>Cách chấm</th><th></th></tr></thead><tbody>
   {% for g in golden %}<tr class="{{ 'archived' if g.deleted_at }}"><td data-label="Id"><code>{{ g.id }}</code></td><td data-label="Agent">{{ g.agent_id }}</td>
     <td data-label="Bài">{{ (g.title or g.prompt)|first(80) }}</td><td data-label="Cách chấm"><code>{{ (g.checker.kind if g.checker is mapping else g.checker)|string|first(40) }}</code></td>
-    <td class="actions">{% if g.deleted_at %}{{ m.act("golden_restore", "Khôi phục", {"id": g.id}, "btn sm") }}{% else %}{{ m.act("golden_rm", "Xoá", {"id": g.id}, "btn sm ghost", confirm="Xoá golden task " ~ g.id ~ "?") }}{% endif %}</td></tr>{% endfor %}
+    <td class="actions">{% if g.deleted_at %}{{ m.act("golden_restore", "Khôi phục", {"id": g.id}, "btn sm", confirm="Khôi phục golden task " ~ g.id ~ "?") }}{% else %}{{ m.act("golden_rm", "Xoá", {"id": g.id}, "btn sm ghost", confirm="Xoá golden task " ~ g.id ~ "?") }}{% endif %}</td></tr>{% endfor %}
   </tbody></table>{% endif %}
 </section>
 {% endblock %}

@@ -265,3 +265,10 @@ progress.bar::-moz-progress-bar { background: var(--accent); border-radius: 99px
 .checks .check .pill { display: inline-flex; }
 .kv.one { grid-template-columns: minmax(0, 1fr); }
 @media (min-width: 701px) { .kanban { grid-auto-columns: minmax(150px, 1fr); } }
+.card.narrow.wide { max-width: 820px; }
+.action-full { margin: .3rem 0; }
+.cmd-full { max-height: 14rem; overflow: auto; margin: .25rem 0; font-size: .84rem; white-space: pre-wrap; word-break: break-all; border: 1px solid var(--line); }
+.cmd-full.long { max-height: 20rem; }
+.cmd-full mark { background: var(--warn-bg); color: var(--warn); font-weight: 700; border-radius: 3px; padding: 0 .1em; outline: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); }
+.cmd-full mark.ctl { background: var(--danger); color: #fff; }
+.dlg-msg { max-height: 50vh; overflow: auto; font-family: var(--mono); font-size: .86rem; }

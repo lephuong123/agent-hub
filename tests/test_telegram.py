@@ -171,10 +171,12 @@ async def test_human_only_gate_for_telegram_channel(make, tg, hub_home):
     d = await make()
     for m in ("telegram.setup", "telegram.allow", "telegram.revoke", "telegram.disable", "telegram.test", "telegram.pending"):
         assert m in auth.HUMAN_ONLY
-    assert auth.telegram_caller(d.hub, BOSS).human is True
-    assert auth.telegram_caller(d.hub, STRANGER).human is False
+    assert auth.telegram_caller(d.hub, BOSS, BOSS).human is True
+    assert auth.telegram_caller(d.hub, BOSS, None).human is False  # thiếu from.id
+    assert auth.telegram_caller(d.hub, BOSS, 777).human is False  # chat riêng: người gửi phải là chủ chat
+    assert auth.telegram_caller(d.hub, STRANGER, STRANGER).human is False
     # chat lạ (dù bằng cách nào tới được dispatch) không qua cổng HUMAN_ONLY
-    resp = await d.call_as(auth.telegram_caller(d.hub, STRANGER), "estop.set", {"on": True})
+    resp = await d.call_as(auth.telegram_caller(d.hub, STRANGER, STRANGER), "estop.set", {"on": True})
     assert resp["error"]["code"] == BLOCKED and d.hub.runs.estop.get("on") is not True
     # agent gõ lệnh CLI telegram → forbidden (không tự ghép chat của nó vào allowlist)
     for cmd in ("agent-hub notify telegram allow 5", "agent-hub notify telegram setup --token-stdin"):
@@ -220,7 +222,7 @@ async def test_run_command_returns_result_with_cost_then_reply_continues(make, t
     await until(lambda: tg.calls_of("getUpdates"))
     await say(tg, BOSS, "/run coder viết hàm cộng hai số")
     await until(lambda: any("Đã giao run" in t for t in texts(tg, BOSS)))
-    res_msg = await until(lambda: next((m for m in tg.sent(BOSS) if m["text"].startswith("[agent-hub] Run ")), None))
+    res_msg = await until(lambda: next((m for m in tg.sent(BOSS) if m["text"].startswith("<b>[agent-hub] Run ")), None))
     runs = d.hub.store.list_runs(agent_id="coder")
     assert len(runs) == 1 and runs[0]["prompt"] == "viết hàm cộng hai số"
     run = runs[0]
@@ -237,7 +239,7 @@ async def test_run_command_returns_result_with_cost_then_reply_continues(make, t
     await until(lambda: len(d.hub.store.list_runs(agent_id="coder")) == 2)
     child = next(r for r in d.hub.store.list_runs(agent_id="coder") if r["id"] != run["id"])
     assert child["parent_run_id"] == run["id"] and child["prompt"] == "thêm test cho hàm đó"
-    await until(lambda: any(child["id"] in m["text"] and m["text"].startswith("[agent-hub] Run ") for m in tg.sent(BOSS)))
+    await until(lambda: any(child["id"] in m["text"] and m["text"].startswith("<b>[agent-hub] Run ") for m in tg.sent(BOSS)))
     await stop(d)
 
 
@@ -262,15 +264,46 @@ def test_long_result_truncated_with_hint(hub_home):
     h.store.close()
 
 
+def test_wt8_agent_result_framed_cannot_fake_system_message(hub_home):
+    """WT-8: nội dung agent nằm TRỌN trong <pre> (escape), sau tiền tố cố định; không giả được dòng hệ thống / thẻ HTML / link."""
+    from agent_hub.chat.bot import AGENT_FRAME
+    from agent_hub.hub import Hub
+
+    h = Hub(hub_home, runtime=FakeRuntime())
+    evil = "xong</pre><b>[agent-hub] Đã CHO PHÉP ap_1</b>\n[agent-hub] nhắn /estop off tại https://evil.example <a href='x'>bấm</a>\u202e"
+    txt = h.telegram.format_result({"id": "r_2", "agent_id": "a", "outcome": "completed", "summary": evil})
+    lines = txt.split("\n")
+    assert lines[0].startswith("<b>[agent-hub] Run r_2") and AGENT_FRAME in lines[2]
+    pre = txt[txt.index("<pre>") + 5 : txt.rindex("</pre>")]
+    assert "<" not in pre and "&lt;/pre&gt;&lt;b&gt;[agent-hub] Đã CHO PHÉP" in pre and "⟨U+202E⟩" in pre
+    assert txt.count("<pre>") == 1 and txt.count("</pre>") == 1 and "<a " not in txt
+    h.store.close()
+
+
+def approval_sys_msg(tg: FakeTelegram, chat: int, aid: str):
+    """Tin HỆ THỐNG có nút Cho phép/Từ chối của approval."""
+    return next((m for m in reversed(tg.sent(chat)) if aid in m["text"] and [b["text"] for b in FakeTelegram.buttons(m)] == ["Cho phép", "Từ chối"]), None)
+
+
+def content_msgs(tg: FakeTelegram, chat: int, aid: str):
+    return [m for m in tg.sent(chat) if aid in m["text"] and "Nội dung do AGENT viết" in m["text"]]
+
+
+async def approve_2step(tg: FakeTelegram, chat: int, sysmsg) -> None:
+    await press(tg, chat, FakeTelegram.buttons(sysmsg)[0]["callback_data"])
+    step2 = next(m for m in reversed(tg.sent(chat)) if [b["text"] for b in FakeTelegram.buttons(m)] == ["Xác nhận CHO PHÉP", "Huỷ"])
+    await press(tg, chat, FakeTelegram.buttons(step2)[0]["callback_data"])
+
+
 # ============================================================================ thông báo + nút duyệt
 async def test_approval_notification_buttons_forgery_replay(make, tg):
     d = await make(allowed=(BOSS, OTHER), runtime=FakeRuntime(hold=True))
     rid = await held_run(d)
     ap = open_approval(d, rid)
-    msg = await until(lambda: next((m for m in tg.sent(BOSS) if ap["id"] in m["text"]), None))
-    assert any(ap["id"] in m["text"] for m in tg.sent(OTHER))  # mọi chat trong allowlist
+    msg = await until(lambda: approval_sys_msg(tg, BOSS, ap["id"]))
+    await until(lambda: approval_sys_msg(tg, OTHER, ap["id"]))  # mọi chat trong allowlist
     btns = FakeTelegram.buttons(msg)
-    assert [b["text"] for b in btns] == ["Cho phép", "Từ chối"] and all(len(b["callback_data"]) <= 64 for b in btns)
+    assert all(len(b["callback_data"]) <= 64 for b in btns)
     approve, deny = btns[0]["callback_data"], btns[1]["callback_data"]
     await until(lambda: any(e.type == "notify.sent" and e.payload.get("channel") == "telegram" for e in d.hub.store.query_events(run_id=rid)))
     # giả mạo: dữ liệu bịa, chữ ký sai (nonce thật), nút của BOSS bấm từ chat OTHER, chat lạ
@@ -281,8 +314,8 @@ async def test_approval_notification_buttons_forgery_replay(make, tg):
     assert d.hub.approvals.get(ap["id"])["status"] == "open"
     rej = d.hub.audit.query(kind="telegram.callback_rejected")
     assert {a["data"]["reason"] for a in rej} >= {"unknown_or_used", "bad_signature", "wrong_chat", "malformed"}
-    # bấm thật → cho phép, audit kênh telegram:<chat>
-    await press(tg, BOSS, approve)
+    # bấm thật (2 bước) → cho phép, audit kênh telegram:<chat> + from_id
+    await approve_2step(tg, BOSS, msg)
     got = d.hub.approvals.get(ap["id"])
     assert got["status"] == "allowed" and got["resolved_channel"] == f"telegram:{BOSS}"
     # bấm lại (replay) + nút từ chối cùng nhóm → bị từ chối, không quyết lần 2
@@ -291,6 +324,8 @@ async def test_approval_notification_buttons_forgery_replay(make, tg):
     assert d.hub.approvals.get(ap["id"])["status"] == "allowed"
     resolved = d.hub.audit.query(kind="approval.resolved")
     assert len(resolved) == 1 and resolved[0]["channel"] == f"telegram:{BOSS}"
+    cmd = [a for a in d.hub.audit.query(kind="telegram.command") if a["data"]["method"] == "approval.approve"]
+    assert cmd and cmd[0]["data"]["from_id"] == str(BOSS)
     ans = [b["text"] for b in tg.calls_of("answerCallbackQuery")]
     assert any("đã dùng" in t for t in ans) and any("Đã CHO PHÉP" in t for t in ans)
     # nút trên chat OTHER bị gỡ sau khi quyết (approval.resolved)
@@ -302,22 +337,112 @@ async def test_heavy_destructive_needs_two_step_confirm_and_cancel(make, tg):
     d = await make(runtime=FakeRuntime(hold=True))
     rid = await held_run(d)
     ap = open_approval(d, rid, klass="git", cmd="git push --force origin main")
-    msg = await until(lambda: next((m for m in tg.sent(BOSS) if ap["id"] in m["text"]), None))
-    assert "NẶNG" in msg["text"]
+    msg = await until(lambda: approval_sys_msg(tg, BOSS, ap["id"]))
+    assert "NẶNG" in msg["text"] and any("git push --force" in m["text"] for m in content_msgs(tg, BOSS, ap["id"]))
     await press(tg, BOSS, FakeTelegram.buttons(msg)[0]["callback_data"])
     assert d.hub.approvals.get(ap["id"])["status"] == "open"  # bước 1 chưa cho phép
-    step2 = tg.sent(BOSS)[-2]  # tin xác nhận (sau đó là tin trả lời bấm nút)
+    step2 = next(m for m in reversed(tg.sent(BOSS)) if FakeTelegram.buttons(m))
     b2 = FakeTelegram.buttons(step2)
-    assert [b["text"] for b in b2] == ["Xác nhận CHO PHÉP", "Huỷ"] and "git push --force" in step2["text"]
+    assert [b["text"] for b in b2] == ["Xác nhận CHO PHÉP", "Huỷ"] and step2.get("reply_to_message_id")
     # Huỷ → vẫn chờ, có tin duyệt mới với nút mới
     await press(tg, BOSS, b2[1]["callback_data"])
     assert d.hub.approvals.get(ap["id"])["status"] == "open"
-    again = next(m for m in reversed(tg.sent(BOSS)) if FakeTelegram.buttons(m) and FakeTelegram.buttons(m)[0]["text"] == "Cho phép")
-    await press(tg, BOSS, FakeTelegram.buttons(again)[0]["callback_data"])
-    step2b = next(m for m in reversed(tg.sent(BOSS)) if FakeTelegram.buttons(m) and FakeTelegram.buttons(m)[0]["text"] == "Xác nhận CHO PHÉP")
-    await press(tg, BOSS, FakeTelegram.buttons(step2b)[0]["callback_data"])
+    again = approval_sys_msg(tg, BOSS, ap["id"])
+    assert again is not msg
+    await approve_2step(tg, BOSS, again)
     assert d.hub.approvals.get(ap["id"])["status"] == "allowed"
     await stop(d)
+
+
+async def test_wt5_file_class_rm_rf_needs_two_steps(make, tg):
+    """WT-5 (tái hiện audit: trước đây 1 chạm → allowed). Nay mọi cho phép cần bước 2, như hộp xác nhận của web."""
+    d = await make(runtime=FakeRuntime(hold=True))
+    rid = await held_run(d)
+    ap = open_approval(d, rid, klass="file", cmd="rm -rf ~/projects", fp="fp-f")
+    msg = await until(lambda: approval_sys_msg(tg, BOSS, ap["id"]))
+    await press(tg, BOSS, FakeTelegram.buttons(msg)[0]["callback_data"])
+    assert d.hub.approvals.get(ap["id"])["status"] == "open"
+    step2 = next(m for m in reversed(tg.sent(BOSS)) if FakeTelegram.buttons(m))
+    await press(tg, BOSS, FakeTelegram.buttons(step2)[0]["callback_data"])
+    assert d.hub.approvals.get(ap["id"])["status"] == "allowed"
+    await stop(d)
+
+
+async def test_wt2_full_command_not_truncated_and_targets_shown(make, tg):
+    """WT-2 (tái hiện audit: lệnh đệm ~340 ký tự giấu `rm -rf` ở cuối). Nay tin nội dung chứa lệnh ĐẦY ĐỦ + đích khớp luật."""
+    d = await make(runtime=FakeRuntime(hold=True))
+    rid = await held_run(d)
+    cmd = "echo '" + "chuan bi don dep thu muc tam an toan " * 9 + "' >/dev/null; rm -rf ~/Documents"
+    run = d.hub.store.get_run(rid)
+    ap = d.hub.approvals.open(run, tool_name="Bash", tool_input={"command": cmd}, tool_use_id="t", fingerprint="fp-trunc",
+                              verdict={"klass": "file", "rule": "delete_not_run_created", "verdict": "destructive", "reason": "rm -r",
+                                       "targets": ["~/Documents"]}, channel="hook")
+    await until(lambda: approval_sys_msg(tg, BOSS, ap["id"]))
+    body = "\n".join(m["text"] for m in content_msgs(tg, BOSS, ap["id"]))
+    assert "rm -rf ~/Documents" in body and "Phần khớp luật (đích): ~/Documents" in body
+    sysm = approval_sys_msg(tg, BOSS, ap["id"])
+    assert "rm -rf" not in sysm["text"] and sysm.get("reply_to_message_id")  # nút KHÔNG nằm cùng nội dung agent (WT-8)
+    for m in content_msgs(tg, BOSS, ap["id"]):
+        assert not FakeTelegram.buttons(m) and m.get("parse_mode") == "HTML"
+    # rất dài → nhiều tin / tệp đính kèm, vẫn đủ phần cuối
+    long_cmd = "echo " + "A" * 9000 + " ; rm -rf ~/x"
+    ap2 = d.hub.approvals.open(run, tool_name="Bash", tool_input={"command": long_cmd}, tool_use_id="t2", fingerprint="fp-l",
+                               verdict={"klass": "file", "rule": "r", "verdict": "destructive", "reason": "x"}, channel="hook")
+    await until(lambda: approval_sys_msg(tg, BOSS, ap2["id"]))
+    parts = content_msgs(tg, BOSS, ap2["id"])
+    assert len(parts) == 3 and "rm -rf ~/x" in parts[-1]["text"] and all(len(m["text"]) < 4096 for m in parts)
+    huge = "echo " + "B" * 30000 + " ; rm -rf ~/y"
+    ap3 = d.hub.approvals.open(run, tool_name="Bash", tool_input={"command": huge}, tool_use_id="t3", fingerprint="fp-h",
+                               verdict={"klass": "file", "rule": "r", "verdict": "destructive", "reason": "x"}, channel="hook")
+    await until(lambda: approval_sys_msg(tg, BOSS, ap3["id"]))
+    docs = tg.calls_of("sendDocument")
+    assert docs and b"rm -rf ~/y" in docs[-1]["_raw"] and "rm -rf ~/y" in content_msgs(tg, BOSS, ap3["id"])[-1]["text"]
+    # MCP: đủ tham số
+    ap4 = d.hub.approvals.open(run, tool_name="mcp__db__delete_rows", tool_input={"table": "customers", "where": "id > 0"}, tool_use_id="t4",
+                               fingerprint="fp-m", verdict={"klass": "mcp", "rule": "mcp_destructive", "verdict": "destructive", "reason": "x"}, channel="hook")
+    await until(lambda: approval_sys_msg(tg, BOSS, ap4["id"]))
+    mtxt = "\n".join(m["text"] for m in content_msgs(tg, BOSS, ap4["id"]))
+    assert "mcp__db__delete_rows" in mtxt and "customers" in mtxt and "id &gt; 0" in mtxt
+    await stop(d)
+
+
+async def test_wt4_group_requires_allowed_user_and_explicit_opt_in(make, tg):
+    """WT-4 (tái hiện audit: người lạ trong nhóm bấm Cho phép → allowed). Nay chỉ from.id thuộc allowed_user_ids."""
+    GROUP = -1001234
+    d = await make(allowed=(GROUP,), runtime=FakeRuntime(hold=True), tg_cfg={"allow_groups": True, "allowed_user_ids": [str(BOSS)]})
+    rid = await held_run(d)
+    ap = open_approval(d, rid)
+    msg = await until(lambda: approval_sys_msg(tg, GROUP, ap["id"]))
+    approve = FakeTelegram.buttons(msg)[0]["callback_data"]
+    await press(tg, GROUP, approve, from_id=777777)  # người lạ trong nhóm
+    assert d.hub.approvals.get(ap["id"])["status"] == "open"
+    ign = d.hub.audit.query(kind="telegram.ignored")
+    assert ign and ign[0]["data"]["from_id"] == "777777"
+    n = len(tg.sent(GROUP))
+    tg.user_message(GROUP, "/estop on", chat_type="supergroup")  # from.id = GROUP (không phải người được phép)
+    await say(tg, GROUP, "/status", chat_type="supergroup")
+    assert len(tg.sent(GROUP)) == n and d.hub.runs.estop.get("on") is not True
+    # chủ (BOSS) bấm trong nhóm → được (nút chưa bị người lạ làm tiêu)
+    await approve_2step_from(tg, GROUP, msg, BOSS)
+    assert d.hub.approvals.get(ap["id"])["status"] == "allowed"
+    assert auth.telegram_caller(d.hub, GROUP, BOSS).human and not auth.telegram_caller(d.hub, GROUP, 777777).human
+    await stop(d)
+
+
+async def test_wt4_groups_off_by_default(make, tg):
+    """Mặc định allow_groups=false: nhóm trong allowlist vẫn không phải người, không nhận thông báo, không thêm được."""
+    GROUP = -1001234
+    d2 = await make(allowed=(GROUP,), tg_cfg={"allowed_user_ids": [str(BOSS)]})
+    assert not auth.telegram_caller(d2.hub, GROUP, BOSS).human and d2.hub.telegram.notify_chats() == set()
+    with pytest.raises(AssertionError, match="allow_groups"):
+        await rpc(d2, "telegram.allow", {"chat_id": str(GROUP), "user_id": str(BOSS)})
+    await stop(d2)
+
+
+async def approve_2step_from(tg: FakeTelegram, chat: int, sysmsg, from_id: int) -> None:
+    await press(tg, chat, FakeTelegram.buttons(sysmsg)[0]["callback_data"], from_id=from_id)
+    step2 = next(m for m in reversed(tg.sent(chat)) if [b["text"] for b in FakeTelegram.buttons(m)] == ["Xác nhận CHO PHÉP", "Huỷ"])
+    await press(tg, chat, FakeTelegram.buttons(step2)[0]["callback_data"], from_id=from_id)
 
 
 async def test_approvals_command_and_deny_button(make, tg):
@@ -326,7 +451,7 @@ async def test_approvals_command_and_deny_button(make, tg):
     ap = open_approval(d, rid)
     await until(lambda: tg.calls_of("getUpdates"))
     await say(tg, BOSS, "/approvals")
-    msg = next(m for m in tg.sent(BOSS) if ap["id"] in m["text"])
+    msg = approval_sys_msg(tg, BOSS, ap["id"])
     await press(tg, BOSS, FakeTelegram.buttons(msg)[1]["callback_data"])
     got = d.hub.approvals.get(ap["id"])
     assert got["status"] == "denied" and got["resolved_channel"] == f"telegram:{BOSS}" and "Telegram" in (got["note"] or "")
@@ -350,8 +475,9 @@ async def test_secrets_never_sent_or_stored(make, tg, hub_home):
     d.hub.secrets.set("DB_PASSWORD", "hunter2-SUPER-secret-value")
     rid = await held_run(d)
     ap = open_approval(d, rid, cmd="psql postgres://u:hunter2-SUPER-secret-value@db/x -c 'drop table t'")
-    msg = await until(lambda: next((m for m in tg.sent(BOSS) if ap["id"] in m["text"]), None))
-    assert "hunter2-SUPER-secret-value" not in msg["text"] and "***" in msg["text"]
+    await until(lambda: approval_sys_msg(tg, BOSS, ap["id"]))
+    txt = "\n".join(m["text"] for m in content_msgs(tg, BOSS, ap["id"]))
+    assert "hunter2-SUPER-secret-value" not in txt and "***" in txt
     # format_event cắt dữ liệu dài (vd kết quả MCP thô trong preview)
     long = format_event(make_event("approval.open", "a", {"request_id": "ap_l", "preview": "mcp__vb__dump " + "d" * 5000}, run_id="r"))
     assert len(long) < 1000

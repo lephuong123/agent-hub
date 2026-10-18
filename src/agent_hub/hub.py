@@ -115,6 +115,7 @@ class Hub:
         except Exception:  # pragma: no cover
             log.exception("không dọn được runtime/")
         self.integrity.start()  # SEC: so policy/ với bản chuẩn + vòng kiểm nền
+        self._warn_if_sandbox_disabled()
         self.publish(make_event("hub.started", None, {"epoch": self.bus.epoch, "version": __version__, "reconciled_runs": n}))
         self.dispatcher.start()  # M3: vòng tick dispatcher (cần event loop đang chạy)
         self.compat.check_on_start()  # hardening H-10: phiên bản CLI → hub_state.cli_compat (header TUI)
@@ -136,6 +137,27 @@ class Hub:
         self.bus.close_all()
         self.store.close()
 
+    def _warn_if_sandbox_disabled(self) -> None:
+        """SEC/WT-3: nhiều bất biến dựa vào sandbox OS — nếu guard bật mà sandbox TẮT bằng cấu hình, cảnh báo đỏ + audit."""
+        try:
+            if not self.config.get("guard.enabled"):
+                return
+            sb = self.config.get("guard.sandbox") or {}
+        except KeyError:
+            return
+        if sb.get("enabled", True):
+            return
+        self.publish(make_event("guard.sandbox_disabled", None, {
+            "message": "Sandbox OS cho Bash đang TẮT (guard.sandbox.enabled=false). Chỉ còn classifier làm lớp chặn đọc token/secret và ghi policy — rủi ro cao hơn.",
+            "fail_closed": False,
+        }, source="hub"))
+        try:
+            from .approvals import audit_record
+
+            audit_record("guard.sandbox_disabled", agent_id=None, run_id=None, data={"enabled": False})
+        except Exception:  # pragma: no cover
+            pass
+
     def status(self) -> dict[str, Any]:
         cfg = self.config.data
         return {
@@ -155,4 +177,5 @@ class Hub:
             "cost_today_usd": round(self.store.cost_today(), 8),
             "epoch_usage": self.aggregator.snapshot(),
             "subscribers": self.bus.subscriber_count,
+            "sandbox_enabled": bool((self.config.get("guard.sandbox") or {}).get("enabled", True)) if self.config.get("guard.enabled") else None,
         }

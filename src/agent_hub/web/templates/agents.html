@@ -29,7 +29,7 @@
   <p class="muted small">Agent đã xoá mềm — khôi phục được tới khi hết hạn giữ.</p>
   <table class="tbl stack"><thead><tr><th>Agent</th><th>Xoá lúc</th><th>Xoá hẳn sau</th><th></th></tr></thead><tbody>
   {% for t in trash %}<tr><td data-label="Agent">{{ t.id or t.name }}</td><td data-label="Xoá lúc">{{ t.deleted_at|ts }}</td><td data-label="Xoá hẳn sau">{{ t.purge_after|ts }}</td>
-  <td class="actions">{{ m.act("agent_restore", "↺ Khôi phục", {"id": t.id or t.name}, "btn sm") }}</td></tr>{% endfor %}
+  <td class="actions">{{ m.act("agent_restore", "↺ Khôi phục", {"id": t.id or t.name}, "btn sm", confirm="Khôi phục agent " ~ (t.id or t.name) ~ " từ thùng rác (kèm cấu hình, quyền, MCP cũ)?") }}</td></tr>{% endfor %}
   </tbody></table>
 </section>
 {% endif %}

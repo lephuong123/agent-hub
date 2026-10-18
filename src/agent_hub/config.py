@@ -103,10 +103,11 @@ DEFAULTS: dict[str, Any] = {
             "callback_key_secret": "TELEGRAM_CALLBACK_KEY",  # khoá HMAC ký callback nút inline (tự sinh)
             "api_base": "https://api.telegram.org",
             "allowed_chat_ids": [],  # CHỈ các chat này được nhận thông báo + điều khiển hub
-            "allow_groups": False,  # nhóm: mọi thành viên bấm được nút → mặc định chỉ chat riêng
+            "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
+            "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
                        "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied"],
-            "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp"],  # + tài nguyên bảo vệ → duyệt 2 bước
+            "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp", "file"],  # nhãn "THAO TÁC NẶNG" (mọi cho phép đều 2 bước — WT-5)
             "callback_ttl_s": 604800,  # nút duyệt còn hiệu lực 7 ngày (waiting_human có thể chờ lâu)
             "pair_ttl_s": 600,
             "poll_timeout_s": 25,

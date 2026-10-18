@@ -76,3 +76,14 @@ Ghi chú: `agents.revert` (agents.py, luồng CLI) mới chỉ chặn ở tầng
   `::test_checkpointed_git_file_overwrite_is_revertable_write`; báo nhầm trên `SAFE_*` vẫn ≤ 5% (`test_false_positive_rate`).
 - FR-TK-04: code đúng (`TaskService._parent_context` đưa `result_summary` + `result_json` của mọi task cha vào prompt task con). Thêm test chặt
   `tests/test_team_task.py::test_fr_tk04_child_prompt_contains_parent_results` (2 cha, kiểm nguyên văn kết quả + id từng cha).
+
+## 7. Kiểm toán web/Telegram — WT-3 (đọc vùng nhạy cảm HUB_HOME khi sandbox tắt)
+- `BashAnalyzer.sensitive_sweep` (chạy cho MỌI lệnh con): giải `cd` trong chuỗi (cwd kế thừa), mở glob, mở rộng biến đã biết +
+  `$AGENT_HUB_HOME`/`$HOME` cho cả nhánh ĐỌC, rồi so mọi đối số/đích với vùng nhạy cảm (`auth/`, `secrets/`, `mcp_server/tokens.json`,
+  `hub.db`, `hub.sock*`). Trong vùng → `hub_secret_read` forbidden; lệnh duyệt cây (`find/grep -r/cp -r/rsync/tar/zip/chmod -R/rm -r…`)
+  có TỔ TIÊN của vùng → uncertain; đích động/glob không giải được mà có dấu hiệu (`SENSITIVE_HINT`: `auth/`, `secrets/`, `web.json`,
+  `tokens.json`, `.sock`, `hub.db`, `AGENT_HUB_HOME`) → uncertain. `cd`/`pushd` vào hub home là vô hại (kiểm ở lệnh sau theo cwd mới);
+  policy KHÔNG đưa vào vùng này (để `protected_write` giữ `protected_id`, và đọc policy vốn vô hại).
+- Cảnh báo sandbox tắt: `Hub._warn_if_sandbox_disabled` — guard bật mà `guard.sandbox.enabled=false` → event đỏ `guard.sandbox_disabled`
+  (summary) + audit; `hub.status()` trả `sandbox_enabled` để TUI/web/Telegram hiển thị.
+- Test: `tests/test_sec_v2.py::test_wt3_*`, `::test_sandbox_disabled_emits_red_warning`. Toàn bộ pytest xanh (476).

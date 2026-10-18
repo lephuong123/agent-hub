@@ -106,6 +106,8 @@ JS_TEMPLATE = re.compile(r"`([^`$\\]*)`")
 HUB_SOCKET_RE = re.compile(r"hub\.sock|agent-hub-[^/\s'\"]*\.sock|\bAGENT_HUB_SOCKET\b|\.sock\.auth\b|human\.token|mcp_server/tokens\.json", re.I)
 HUB_MODULE_RE = re.compile(r"(\bimport\s+agent_hub\b|\bfrom\s+agent_hub\b|\bagent_hub\.(rpc|cli|daemon|auth|approvals|guard|mcp_server|learning|evals|hub)\b|__import__\(\s*['\"]agent_hub|import_module\(\s*['\"]agent_hub|require\(['\"][^'\"]*agent[-_]hub)")
 HUB_HOME_REF_RE = re.compile(r"\bAGENT_HUB_HOME\b|\.agent-hub\b")
+# WT-3: dấu hiệu đường dẫn trỏ vào vùng nhạy cảm của HUB_HOME (dùng cho đích động không giải được)
+SENSITIVE_HINT = re.compile(r"(^|/)(auth|secrets)(/|$)|/(web|tokens)\.json$|\.sock(\.auth)?$|/hub\.db|AGENT_HUB_HOME|\.agent-hub")
 UNIX_SOCKET_RE = re.compile(r"\bAF_UNIX\b|UNIX-CONNECT|UNIX-CLIENT|\bcreateConnection\s*\(\s*\{?\s*path|\bnet\.connect\s*\(\s*\{?\s*path|\bnet\.connect\s*\(\s*['\"]/|UNIXSocket|socket\.AF_UNIX|IO::Socket::UNIX|\bunix:/", re.I)
 LIST_ARGV_RE = re.compile(r"""\[\s*((?:(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*,\s*)*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'))\s*,?\s*\]""")
 JS_SPAWN_RE = re.compile(r"""\b(?:spawn|spawnSync|execFile|execFileSync|Deno\.Command|Bun\.spawn)\s*\(\s*(["'])([^"']+)\1\s*,\s*\[([^\]]*)\]""")
@@ -590,6 +592,7 @@ class BashAnalyzer:
         if sc.words and os.path.basename(sc.words[0].text.lstrip("\\")) in ("socat", "nc", "ncat", "netcat") and any(
             "UNIX" in w.text.upper() or w.text == "-U" or w.dynamic for w in sc.words[1:]):
             self.hit("uncertain", "unix_socket_cmd", "hub", "kết nối Unix socket / đích động — không xác định được")
+        self.sensitive_sweep(sc)
         for op, w in sc.redirects:
             if op in ("<", "<>", "<&"):
                 continue
@@ -613,6 +616,75 @@ class BashAnalyzer:
                 self.check_overwrite_target(p, f"chuyển hướng {op}")
         words = list(sc.words)
         self.words(words, sc)
+
+    def sensitive_regions(self) -> list[str]:
+        """Vùng NHẠY CẢM của HUB_HOME: đọc được = tự duyệt/ký link/lộ secret (WT-3). Không phụ thuộc cách viết lệnh."""
+        # chỉ vùng mà ĐỌC ĐƯỢC = lộ secret/token/tự duyệt (policy đã do protected_write bắt — không đưa vào đây để không che protected_id)
+        out: list[str] = []
+        for h in {_hub_home(self.ctx), os.path.realpath(_hub_home(self.ctx))}:
+            out += [f"{h}/auth", f"{h}/secrets", f"{h}/mcp_server/tokens.json", f"{h}/hub.db"]
+        if self.ctx.hub_socket:
+            out += [self.ctx.hub_socket, self.ctx.hub_socket + ".auth"]
+        return list(dict.fromkeys(out))
+
+    def _in_region(self, p: str, region: str) -> bool:
+        p, region = p.rstrip("/"), region.rstrip("/")
+        return p == region or p.startswith(region + "/")
+
+    def _ancestor_of_region(self, p: str, region: str) -> bool:
+        p = p.rstrip("*").rstrip("/")
+        return bool(p) and region.rstrip("/").startswith(p + "/")
+
+    _RECURSIVE = {"find", "grep", "egrep", "fgrep", "rg", "ag", "cp", "scp", "rsync", "tar", "gtar", "bsdtar", "zip",
+                  "chmod", "chown", "chgrp", "rm", "shred", "ditto"}
+
+    def sensitive_sweep(self, sc: shell.SimpleCommand) -> None:
+        """WT-3: mọi đối số/đích có thể chạm vùng nhạy cảm (sau khi giải cd/biến/glob) → đọc secret forbidden;
+        không giải được chắc chắn mà có dấu hiệu trỏ vào vùng đó → uncertain (giữ chờ người)."""
+        if not sc.words:
+            return
+        base = os.path.basename(sc.words[0].text.lstrip("\\"))
+        if base in ("cd", "pushd", "popd"):  # đổi thư mục (kiểm ở lệnh sau theo cwd mới); vào hub home là vô hại
+            return
+        recursive = base in self._RECURSIVE
+        regions = self.sensitive_regions()
+        words = list(sc.words[1:]) + [w for op, w in sc.redirects if op not in ("<&",)]
+        for w in words:
+            t = w.text
+            if not t or (t.startswith("-") and "=" not in t):
+                continue
+            if "=" in t and t.startswith("-"):
+                t = t.split("=", 1)[1]
+            if w.dynamic:
+                # đích động: phần literal (đã bỏ $..) trỏ vào/kết thúc bằng tên nhạy cảm → uncertain (giữ chờ người)
+                lit = w.literal
+                if any(region in lit for region in regions) or SENSITIVE_HINT.search(lit):
+                    self.hit("uncertain", "sensitive_dynamic", "hub", "đường dẫn động có thể chạm vùng nhạy cảm hub", [lit])
+                    return
+                continue
+            exp = self.expand(w)
+            cands = exp if exp else ([p] if (p := self.path(w)) else [])
+            for cand in cands:
+                for r in {cand, _real(cand)}:
+                    for region in regions:
+                        if self._in_region(r, region):
+                            if sensitive_read(r, self.ctx) or region.rstrip("/").endswith(("/auth", "/secrets")) or region.endswith((".sock", ".sock.auth", "hub.db")):
+                                self.hit("destructive", "hub_secret_read", "hub", f"lệnh chạm vùng nhạy cảm hub ({region})", [cand], forbidden=True)
+                            else:
+                                self.hit("destructive", "hub_sensitive", "hub", f"lệnh chạm vùng nhạy cảm hub ({region})", [cand])
+                            return
+                        if recursive and self._ancestor_of_region(r, region):  # duyệt cây có thể chạm vùng nhạy cảm
+                            self.hit("uncertain", "sensitive_recursive", "hub", f"lệnh duyệt cây có thể chạm vùng nhạy cảm hub ({region})", [cand])
+                            return
+            if exp == [] and w.glob:  # glob không khớp gì NHƯNG tiền tố cố định trỏ vào/chứa vùng nhạy cảm
+                fixed = self.path(shell.Word(re.split(r"[*?\[]", t)[0]))
+                for region in regions:
+                    if fixed and (self._in_region(fixed, region) or self._ancestor_of_region(fixed, region)):
+                        self.hit("uncertain", "sensitive_glob", "hub", f"glob có thể chạm vùng nhạy cảm hub ({region})", [t])
+                        return
+
+    def _expand_marker(self, lit: str, region: str) -> str:
+        return lit
 
     def words(self, words: list[shell.Word], sc: shell.SimpleCommand, unknown_targets: bool = False) -> None:
         # bỏ từ khoá + wrapper

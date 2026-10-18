@@ -2,6 +2,10 @@
 
 Mô hình:
 - Server CHỈ bind loopback (`127.0.0.1`, `::1`, `localhost`); host khác → từ chối khi khởi động (`require_loopback`).
+- WT-1: trình duyệt dùng host riêng `agent-hub.localhost:<port>` (cookie host-only, không gửi tới 127.0.0.1:*/localhost:* nơi dev
+  server agent viết chạy); 127.0.0.1/localhost → 303 sang host riêng, không đặt cookie. Cookie KHÔNG tách theo cổng nên còn lớp 2:
+  mọi POST cần `Session.key` (bí mật ngoài cookie, trao qua fragment `#k=` lúc đăng nhập, JS giữ trong localStorage, không bao giờ
+  nằm trong HTML). Phiên ngắn: idle 1 h (polling/SSE không gia hạn), tối đa 12 h.
 - Đăng nhập: `agent-hub web` in/mở URL `/login?t=<link một lần>`. Link = HMAC(khoá phiên server, nonce|hạn) — dùng
   ĐÚNG MỘT lần, hết hạn sau `LOGIN_TTL_S`. Đổi sang cookie phiên ngẫu nhiên (HttpOnly, SameSite=Strict, Path=/) rồi
   chuyển hướng về `/` (link không ở lại thanh địa chỉ; `Referrer-Policy: no-referrer`).
@@ -20,6 +24,7 @@ import base64
 import hashlib
 import hmac
 import ipaddress
+import re
 import json
 import os
 import secrets
@@ -31,10 +36,15 @@ from typing import Any
 from ..paths import HubPaths
 
 COOKIE = "ahub_web"
+KEY_FIELD = "k"  # bí mật phiên NGOÀI cookie (WT-1): form field / header X-Ahub-Key, trình duyệt giữ trong localStorage của origin web
+KEY_HEADER = "x-ahub-key"
 LOGIN_TTL_S = 300
-SESSION_IDLE_S = 12 * 3600
-SESSION_MAX_S = 7 * 24 * 3600
+SESSION_IDLE_S = 3600  # WT-1: phiên ngắn, gia hạn khi người dùng thao tác (không gia hạn bởi polling/SSE)
+SESSION_MAX_S = 12 * 3600
 LOOPBACK_NAMES = ("localhost",)
+# WT-1: tên host riêng → cookie host-only KHÔNG được gửi tới 127.0.0.1:* / localhost:* (dev server agent viết).
+# Chrome/Firefox/Safari + resolver macOS/glibc phân giải *.localhost về loopback (RFC 6761).
+WEB_HOST = "agent-hub.localhost"
 
 
 class NotLoopback(ValueError):
@@ -60,14 +70,17 @@ def require_loopback(host: str) -> str:
     return host
 
 
-def allowed_hosts(host: str, port: int) -> set[str]:
-    names = {"127.0.0.1", "localhost", "[::1]"}
-    h = host.strip("[]")
-    names.add(f"[{h}]" if ":" in h else h)
-    out = {f"{n}:{port}" for n in names}
-    if port == 80:
-        out |= names
-    return out
+def valid_web_name(name: str) -> bool:
+    """Tên host công khai của web: `*.localhost` hoặc loopback (chế độ dự phòng kém an toàn hơn — xem web.md)."""
+    n = (name or "").strip().lower()
+    return n.endswith(".localhost") and re.fullmatch(r"[a-z0-9.-]+", n) is not None or is_loopback(n)
+
+
+def allowed_hosts(name: str, port: int) -> set[str]:
+    """Host header DUY NHẤT được phục vụ (chống DNS rebinding + không đặt cookie trên 127.0.0.1)."""
+    n = name.strip("[]").lower()
+    n = f"[{n}]" if ":" in n else n
+    return {f"{n}:{port}"} | ({n} if port == 80 else set())
 
 
 # ============================================================================ link đăng nhập một lần
@@ -105,6 +118,7 @@ class Session:
     csrf: str
     created: float
     last: float
+    key: str = ""  # bí mật NGOÀI cookie, không bao giờ nằm trong HTML (WT-1)
     flashes: list[tuple[str, str]] = field(default_factory=list)
 
     def flash(self, kind: str, text: str) -> None:
@@ -143,11 +157,11 @@ class WebAuth:
 
     def new_session(self, now: float | None = None) -> Session:
         now = now or time.time()
-        s = Session(sid=secrets.token_urlsafe(32), csrf=secrets.token_urlsafe(24), created=now, last=now)
+        s = Session(sid=secrets.token_urlsafe(32), csrf=secrets.token_urlsafe(24), created=now, last=now, key=secrets.token_urlsafe(32))
         self.sessions[s.sid] = s
         return s
 
-    def get(self, sid: str | None, now: float | None = None) -> Session | None:
+    def get(self, sid: str | None, now: float | None = None, *, touch: bool = True) -> Session | None:
         if not sid:
             return None
         s = self.sessions.get(sid)
@@ -157,12 +171,17 @@ class WebAuth:
         if now - s.last > SESSION_IDLE_S or now - s.created > SESSION_MAX_S:
             self.sessions.pop(sid, None)
             return None
-        s.last = now
+        if touch:
+            s.last = now
         return s
 
     def logout(self, sid: str | None) -> None:
         if sid:
             self.sessions.pop(sid, None)
+
+    @staticmethod
+    def key_ok(session: Session, given: Any) -> bool:
+        return isinstance(given, str) and bool(given) and bool(session.key) and hmac.compare_digest(given.encode(), session.key.encode())
 
     @staticmethod
     def csrf_ok(session: Session, given: Any) -> bool:
@@ -174,7 +193,7 @@ def state_path(paths: HubPaths) -> Path:
     return paths.home / "auth" / "web.json"
 
 
-def write_state(paths: HubPaths, *, host: str, port: int, key: bytes) -> Path:
+def write_state(paths: HubPaths, *, host: str, port: int, key: bytes, name: str = WEB_HOST) -> Path:
     d = paths.home / "auth"
     d.mkdir(parents=True, exist_ok=True)
     os.chmod(d, 0o700)
@@ -183,7 +202,7 @@ def write_state(paths: HubPaths, *, host: str, port: int, key: bytes) -> Path:
     tmp.unlink(missing_ok=True)
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump({"v": 1, "pid": os.getpid(), "host": host, "port": port, "key": key.hex(), "started_at": time.time()}, f)
+        json.dump({"v": 1, "pid": os.getpid(), "host": host, "name": name, "port": port, "key": key.hex(), "started_at": time.time()}, f)
     os.replace(tmp, p)
     return p
 

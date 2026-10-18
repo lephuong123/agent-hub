@@ -86,9 +86,11 @@ async def main_async(a: argparse.Namespace) -> None:
     info = await seed(d.hub)
     auth = WebAuth()
     app = create_app(paths, auth=auth, port=a.port)
-    write_state(paths, host="127.0.0.1", port=a.port, key=auth.key)
+    write_state(paths, host="127.0.0.1", port=a.port, key=auth.key)  # name mặc định agent-hub.localhost
     print(f"SEED {info}", flush=True)
-    print(f"LOGIN {login_url('127.0.0.1', a.port, auth.mint())}", flush=True)
+    from .security import WEB_HOST
+
+    print(f"LOGIN {login_url(WEB_HOST, a.port, auth.mint())}", flush=True)
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=a.port, log_level="warning", access_log=False))
     try:
         await server.serve()

@@ -86,13 +86,23 @@ def register_rpc(d: "Daemon") -> None:
         info = next((x for x in bot.pending(None) if x["chat_id"] == cid), None)
         if info and info.get("type") != "private" and not bot.cfg().get("allow_groups"):
             raise HubError("chat nhóm: bật notify.telegram.allow_groups trước (mọi thành viên nhóm sẽ bấm được nút duyệt)")
+        if cid.startswith("-") and not bot.cfg().get("allow_groups"):
+            raise HubError("chat nhóm: bật notify.telegram.allow_groups trước (chỉ người trong allowed_user_ids mới điều khiển được)")
+        # WT-4: người được phép = from.id lúc ghép nối; chat riêng = chính chat_id; nhóm thêm thẳng cần --user-id
+        uid = str(p.get("user_id") or (info or {}).get("user_id") or (cid if not cid.startswith("-") else "")).strip()
+        if cid.startswith("-") and not CHAT_RE.match(uid or "x"):
+            raise HubError("chat nhóm cần user_id của người được phép (ghép nối bằng /start <mã> trong nhóm, hoặc --user-id)")
+        users = [str(x) for x in (bot.cfg().get("allowed_user_ids") or [])]
+        if uid and uid not in users:
+            users.append(uid)
+            hub.config.set("notify.telegram.allowed_user_ids", users)
         cur = [str(x) for x in (bot.cfg().get("allowed_chat_ids") or [])]
         if cid not in cur:
             cur.append(cid)
             hub.config.set("notify.telegram.allowed_chat_ids", cur)
         if bot.pairing is not None:
             bot.pairing = None  # mã ghép nối dùng một lần
-        _audit("telegram.allow", p, {"chat_id": cid, "paired": bool(info)})
+        _audit("telegram.allow", p, {"chat_id": cid, "user_id": uid, "paired": bool(info)})
         welcome = None
         api = bot.api()
         if api is not None:
@@ -101,7 +111,7 @@ def register_rpc(d: "Daemon") -> None:
                 welcome = True
             except Exception as e:
                 welcome = clip(e, 200)
-        return {"allowed_chat_ids": cur, "welcome_sent": welcome}
+        return {"allowed_chat_ids": cur, "allowed_user_ids": users, "welcome_sent": welcome}
 
     def revoke(p: dict[str, Any]) -> dict[str, Any]:
         cid = _chat(p)

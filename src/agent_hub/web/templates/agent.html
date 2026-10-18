@@ -7,7 +7,7 @@
   <h1>{{ a.name or a.id }} {{ m.agent_pill((live or {}).status or a.status) }}</h1>
   <div class="row gap wrap-row">
     <a class="btn" href="/agents/{{ a.id }}/edit">✎ Sửa</a>
-    {% if a.status == 'paused' %}{{ m.act("agent_resume", "▶ Hoạt động lại", {"id": a.id}, "btn") }}
+    {% if a.status == 'paused' %}{{ m.act("agent_resume", "▶ Hoạt động lại", {"id": a.id}, "btn", confirm="Cho agent " ~ a.id ~ " hoạt động lại?") }}
     {% else %}{{ m.act("agent_pause", "‖ Tạm dừng", {"id": a.id}, "btn", confirm="Tạm dừng agent " ~ a.id ~ "? Agent sẽ không nhận việc mới.") }}{% endif %}
     {{ m.act("agent_delete", "🗑 Xoá", {"id": a.id}, "btn danger", confirm="Xoá agent " ~ a.id ~ "? (xoá mềm — vào thùng rác, khôi phục được)") }}
   </div>

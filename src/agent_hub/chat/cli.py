@@ -29,6 +29,7 @@ def add_notify_parsers(ns: Any, common: argparse.ArgumentParser) -> None:
     dd.add_argument("--forget-token", action="store_true", help="xoá luôn token khỏi secret store")
     a = ts.add_parser("allow", help="thêm chat_id vào allowlist", parents=[common])
     a.add_argument("chat_id")
+    a.add_argument("--user-id", help="from.id người được phép (bắt buộc với nhóm)")
     r = ts.add_parser("revoke", help="gỡ chat_id khỏi allowlist", parents=[common])
     r.add_argument("chat_id")
     tg.set_defaults(fn=cmd_telegram)
@@ -68,7 +69,7 @@ def cmd_telegram(ctx: Any) -> int:
         ctx.out(r, "đã tắt Telegram" + (" và xoá token" if r.get("token_removed") else ""))
         return 0
     if act in ("allow", "revoke"):
-        r = ctx.call(f"telegram.{act}", {"chat_id": a.chat_id})
+        r = ctx.call(f"telegram.{act}", {"chat_id": a.chat_id, **({"user_id": a.user_id} if getattr(a, "user_id", None) else {})})
         ctx.out(r, f"allowlist: {', '.join(r['allowed_chat_ids']) or '(trống)'}")
         return 0
     # ------------------------------------------------------------------ setup

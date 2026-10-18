@@ -139,3 +139,74 @@ def test_v2_n3_command_name_normalized(ctx):
     sock = c.hub_socket
     split = sock[:-2] + "''" + sock[-2:]
     assert classify("Bash", {"command": f"socat - UNIX-CONNECT:{split}"}, c).forbidden
+
+
+# ============================================================================ WT-3 (web/telegram audit): đọc vùng nhạy cảm HUB_HOME
+@pytest.fixture(scope="module")
+def wt_ctx(tmp_path_factory):
+    root = tmp_path_factory.mktemp("wt3")
+    hub, ws = root / "hub", root / "ws"
+    for d in (hub / "auth", hub / "secrets", hub / "mcp_server", ws):
+        d.mkdir(parents=True)
+    (hub / "auth" / "web.json").write_text("{\"key\": \"signing\"}")
+    (hub / "secrets" / "TELEGRAM_BOT_TOKEN").write_text("123:abc")
+    (hub / "mcp_server" / "tokens.json").write_text("{}")
+    (ws / "README.md").write_text("x")
+    ps = PolicyStore(hub, user_home=root / "home")
+    ps.ensure()
+    return GuardContext(ws, ps.load(), run_since=time.time(), hub_socket=str(hub / "hub.sock"), git_probe=False), str(hub)
+
+
+def _v(ctx, cmd):
+    return classify("Bash", {"command": cmd}, ctx)
+
+
+def test_wt3_sensitive_read_variants_blocked(wt_ctx):
+    import os as _os
+
+    c, H = wt_ctx
+    env = {**_os.environ, "AGENT_HUB_HOME": H}
+    forbidden = [
+        f"cd {H} && cat auth/web.json",
+        f"cat {H}/aut*/web.json",
+        f"D={H}; cat $D/auth/web.json",
+        f"cat $AGENT_HUB_HOME/auth/web.json",
+        f"cat $AGENT_HUB_HOME/secrets/TELEGRAM_BOT_TOKEN",
+        f"cat {H}/mcp_server/tokens.json",
+        f"grep -r key {H}/auth",
+        f"cp -r {H}/secrets /tmp/x",
+    ]
+    # $AGENT_HUB_HOME phải được giải — đặt vào policy.hub_home đã đúng; lexer lấy từ env của classifier.run
+    for cmd in forbidden:
+        v = _v(c, cmd)
+        assert v.forbidden, (cmd, v.verdict, v.rule)
+
+
+def test_wt3_find_exec_and_unresolved_held(wt_ctx):
+    c, H = wt_ctx
+    assert _v(c, f"find {H} -name web.json -exec cat {{}} +").verdict in ("destructive", "uncertain") or _v(c, f"find {H} -name web.json -exec cat {{}} +").forbidden
+    assert _v(c, "cat $UNKNOWN/auth/web.json").verdict == "uncertain"
+    assert _v(c, "cat $UNKNOWN/secrets/x").verdict == "uncertain"
+
+
+def test_wt3_benign_hub_home_access_not_flagged(wt_ctx):
+    c, H = wt_ctx
+    assert _v(c, "cat README.md").verdict == "safe"
+    assert _v(c, f"cd {H} && cat README.md").verdict in ("safe", "write")
+    assert _v(c, f"cat {H}/README.md").verdict in ("safe", "write")
+
+
+def test_sandbox_disabled_emits_red_warning(tmp_path):
+    from agent_hub.hub import Hub
+
+    p = HubPaths.resolve(tmp_path / "hub")
+    p.ensure()
+    p.config.write_text("guard:\n  git_probe: false\n  sandbox:\n    enabled: false\n")
+    h = Hub(p, runtime=FakeRuntime())
+    h.start()
+    evs = [e for e in h.store.query_events() if e.type == "guard.sandbox_disabled"]
+    assert evs and evs[0].level == "summary"
+    assert h.status()["sandbox_enabled"] is False
+    rows = [dict(r) for r in h.store.conn.execute("SELECT * FROM audit_log")]
+    assert any("sandbox_disabled" in str(r.get("kind") or r.get("action") or "") for r in rows)
+    h.store.close()

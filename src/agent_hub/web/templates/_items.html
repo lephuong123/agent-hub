@@ -16,7 +16,7 @@
 {%- if it.result %}<details class="tool-res"><summary>{{ it.result|first(140) }}</summary><pre>{{ it.result }}</pre></details>{% endif %}
 </div>
 {%- elif it.kind == 'approval' -%}
-<div class="ti approval-ti{{ ' human' if it.human }}" data-seq="{{ it.seq }}"><b>{{ '⏸ Chờ bạn duyệt' if it.human else '◐ Xin duyệt' }}</b> {{ it.tool }}: <code>{{ it.preview }}</code>
+<div class="ti approval-ti{{ ' human' if it.human }}" data-seq="{{ it.seq }}"><b>{{ '⏸ Chờ bạn duyệt' if it.human else '◐ Xin duyệt' }}</b>{% if it.tool %} {{ it.tool }}:{% endif %} <code>{{ it.preview }}</code>
 <div class="muted small">{% if it.rule %}luật {{ it.rule }}{% if it.reason %} · {{ it.reason }}{% endif %} — {% endif %}duyệt ở khung phía trên</div></div>
 {%- elif it.kind == 'steer' -%}
 <div class="ti steer" data-seq="{{ it.seq }}"><div class="ti-label">Bạn chỉ đạo <span class="muted small">{{ it.meta }} · {{ it.ts }}</span></div><div class="pre">{{ it.text }}</div></div>

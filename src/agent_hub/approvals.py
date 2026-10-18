@@ -231,6 +231,12 @@ class ApprovalService:
                     "run_id": row["run_id"],
                     "since": row["opened_at"],
                     "preview": row["preview"],
+                    # tool/luật/lý do: client (web/TUI/Telegram) hiện "vì sao cần duyệt" mà không phải tra lại approval
+                    "tool": row.get("tool_name"),
+                    "matched_rule": row.get("matched_rule"),
+                    "destructive_class": row.get("destructive_class"),
+                    "reason": row.get("reason"),
+                    "protected_resource_id": row.get("protected_resource_id"),
                     "lease_held": True,
                     "repo_lock_held": True,
                     "approve_cmd": f"agent-hub approve {approval_id}",

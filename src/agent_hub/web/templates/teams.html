@@ -21,7 +21,7 @@
   <td class="actions">{{ m.act("team_member_rm", "Gỡ", {"team": t.id, "agent": mb.agent_id}, "btn sm ghost", confirm="Gỡ " ~ mb.agent_id ~ " khỏi team " ~ t.id ~ "?") }}</td></tr>{% endfor %}
   </tbody></table>
   {% if not t.archived_at %}
-  <form method="post" action="/do/team_member" class="row gap wrap-row">
+  <form method="post" action="/do/team_member" class="row gap wrap-row" data-confirm="Thêm agent đã chọn vào team {{ t.id }}?">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="team" value="{{ t.id }}"><input type="hidden" name="next" value="/teams">
     <select name="agent" aria-label="Agent">{% for a in agents %}<option value="{{ a }}">{{ a }}</option>{% endfor %}</select>
     <select name="role" aria-label="Vai trò"><option value="worker">worker</option><option value="lead">lead</option><option value="reviewer">reviewer</option><option value="verifier">verifier</option></select>

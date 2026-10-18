@@ -277,7 +277,7 @@ Chi tiết, lý do chọn `httpx2`, test chứng minh, việc dở: `docs/dev-no
 | `chat/rpc.py`, `chat/cli.py` | RPC `telegram.*` (trừ `status` đều HUMAN_ONLY, tự audit); CLI `notify telegram setup|status|test|disable|allow|revoke` |
 
 Bất biến: lệnh/nút từ chat CHỈ đi qua `Daemon.call_as(auth.telegram_caller(hub, chat_id), …)` (cổng HUMAN_ONLY + audit kênh `telegram:<chat_id>`);
-`telegram_caller` là người chỉ khi bot bật VÀ chat ∈ `notify.telegram.allowed_chat_ids` (chỉ người sửa, nhánh config được kiểm toàn vẹn). Chat
+`telegram_caller(hub, chat_id, from_id)` là người chỉ khi bot bật VÀ chat ∈ `allowed_chat_ids` VÀ người gửi/bấm được phép (chat riêng: from.id = chat; nhóm: `allow_groups` + from.id ∈ `allowed_user_ids`). Nội dung agent (lệnh, kết quả) chỉ trong `<pre>` sau tiền tố cố định, KHÔNG BAO GIỜ cùng tin với nút; mọi "Cho phép" 2 bước. Chat
 ngoài allowlist: không trả lời, audit `telegram.ignored`. Nonce nút bị tiêu (cả nhóm) TRƯỚC khi gọi RPC; offset `getUpdates` lưu TRƯỚC khi xử lý.
 Token bot chỉ ở secret store (không đọc env, không in, không trả qua RPC). Thêm lệnh chat ghi trạng thái → gọi qua `self.call(...)` (không gọi
 service trực tiếp). Test: `tests/test_telegram.py` (daemon in-process), `tests/test_telegram_e2e.py` (daemon thật + hook guard thật),
@@ -288,12 +288,13 @@ Chi tiết, kiểm chứng sandbox thật, việc dở: `docs/dev-notes/web.md`.
 
 | Module | Vai trò |
 |---|---|
-| `web/security.py` | Chỉ loopback; link đăng nhập MỘT LẦN (HMAC, khoá ở RAM + `HUB_HOME/auth/web.json` 0600) → cookie phiên HttpOnly/SameSite=Strict; CSRF; Host hợp lệ |
+| `web/security.py` | Chỉ loopback; host riêng `agent-hub.localhost` (WT-1); link đăng nhập MỘT LẦN (HMAC, khoá ở RAM + `HUB_HOME/auth/web.json` 0600) → cookie phiên HttpOnly/SameSite=Strict + khoá phiên NGOÀI cookie (`k`, localStorage) bắt buộc cho mọi POST; CSRF; Host hợp lệ |
 | `web/app.py` | Starlette + Jinja2 + htmx vendored + SSE. `GuardMiddleware` ASGI thuần (không dùng BaseHTTPMiddleware — làm hỏng SSE). Ghi = `POST /do/<action>` (bảng `ACTIONS`) hoặc form agent |
 | `web/present.py` | Thuần: nhãn tiếng Việt, `transcript_item`, `activity_item`, `md()` an toàn |
 | `web/cli.py`, `web/demo.py` | `agent-hub web [--port] [--open] [--url]`; hub demo FakeRuntime để chụp ảnh |
 
 Quy tắc: web là CLIENT thuần (RPC qua `AsyncHubClient(channel="web")`), không đụng `hub.db`. Thao tác ghi mới → thêm vào `ACTIONS`
 (nhạy cảm: đặt `confirm`), gửi `audit=True` (approval: `channel="web"`). Không script/style inline (CSP `'self'`), không CDN; tài nguyên
-tĩnh mới đặt trong `web/static/`. Không bao giờ đưa token người/khoá `auth/` vào template, cookie, log. `config.set` chỉ khoá trong `SAFE_CONFIG`.
+tĩnh mới đặt trong `web/static/`. Không bao giờ đưa token người/khoá `auth/`/`Session.key` vào template, cookie, log (trang xác nhận mang trường form qua `carry()` — đã loại `k`).
+Duyệt: hiện TOÀN BỘ thao tác (`present.action_view`, không cắt); lớp nặng (`notify.telegram.confirm_classes` + `file`, tài nguyên bảo vệ) cần bước 2. `config.set` chỉ khoá trong `SAFE_CONFIG`.
 Agent trong run: sandbox chặn TCP localhost (đã kiểm thật) + denyRead `HUB_HOME/auth` + `agent-hub web` forbidden trong classifier.

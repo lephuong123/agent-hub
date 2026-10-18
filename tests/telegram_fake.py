@@ -7,6 +7,7 @@ editMessageReplyMarkup. Token sai → 401. Test bơm update bằng `user_message
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,7 +31,13 @@ class FakeTelegram:
         class H(BaseHTTPRequestHandler):
             def do_POST(self):  # noqa: N802
                 n = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(n) or b"{}")
+                raw = self.rfile.read(n) or b"{}"
+                if "multipart/form-data" in (self.headers.get("Content-Type") or ""):
+                    body = {"_raw": raw}  # sendDocument: giữ nguyên thân multipart để test tìm nội dung tệp
+                    m = re.search(rb'name="chat_id"\r\n\r\n([^\r]*)', raw)
+                    body["chat_id"] = m.group(1).decode() if m else None
+                else:
+                    body = json.loads(raw)
                 outer.paths.append(self.path)
                 code, res = outer.handle(self.path, body)
                 data = json.dumps(res).encode()
@@ -72,6 +79,11 @@ class FakeTelegram:
                     if ups or time.monotonic() >= deadline:
                         return 200, {"ok": True, "result": ups}
                     self.cond.wait(timeout=max(0.01, deadline - time.monotonic()))
+        if method == "sendDocument":
+            with self.cond:
+                mid = self.next_msg
+                self.next_msg += 1
+            return 200, {"ok": True, "result": {"message_id": mid, "chat": {"id": int(body.get("chat_id") or 0)}}}
         if method == "sendMessage":
             if self.fail_send > 0:
                 self.fail_send -= 1

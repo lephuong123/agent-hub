@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html as _html
+import json
 import logging
 import re
 import secrets as _secrets
@@ -61,11 +63,17 @@ class TelegramApi:
             t = t.replace(self.token, "***")
         return redact_str(t)
 
-    async def call(self, method: str, params: dict[str, Any] | None = None, *, timeout: float | None = None) -> Any:
+    async def call(self, method: str, params: dict[str, Any] | None = None, *, timeout: float | None = None,
+                   files: dict[str, tuple[str, bytes, str]] | None = None) -> Any:
+        """`files` (vd sendDocument) → multipart: các tham số khác gửi dạng form (reply_markup… phải là chuỗi JSON)."""
         url = f"{self.base}/bot{self.token}/{method}"
         try:
             async with _httpx.AsyncClient(timeout=timeout or self.timeout) as c:
-                r = await c.post(url, json=params or {})
+                if files:
+                    form = {k: (v if isinstance(v, str) else json.dumps(v)) for k, v in (params or {}).items()}
+                    r = await c.post(url, data=form, files=files)
+                else:
+                    r = await c.post(url, json=params or {})
             try:
                 data = r.json()
             except ValueError:
@@ -122,6 +130,41 @@ def is_heavy(row: dict[str, Any], confirm_classes: list[str] | tuple[str, ...]) 
     """Thao tác phá huỷ "nặng" (duyệt 2 bước): chạm tài nguyên được bảo vệ hoặc thuộc lớp trong `confirm_classes`."""
     klass = row.get("destructive_class")
     return bool(row.get("protected_resource_id")) or (klass is not None and klass in set(confirm_classes or ()))
+
+
+# ---------------------------------------------------------------- WT-2 / WT-8: thao tác đầy đủ, khung nội dung agent
+_INVISIBLE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]")
+CHUNK = 3500  # ký tự nội dung/tin (Telegram ≤ 4096 sau khi bỏ thẻ HTML)
+MAX_CHUNKS = 4  # dài hơn → gửi kèm tệp .txt (đầy đủ) + đầu/cuối trong tin
+
+
+def visible(text: str) -> str:
+    """Ký tự điều khiển / bidi / zero-width → ký hiệu nhìn thấy được (không giấu được phần lệnh)."""
+    return _INVISIBLE.sub(lambda m: "\n" if m.group(0) == "\n" else f"⟨U+{ord(m.group(0)):04X}⟩", text)
+
+
+def esc(v: Any) -> str:
+    return _html.escape(str(v if v is not None else ""), quote=False)
+
+
+def full_action(tool_name: str, tool_input: Any) -> str:
+    """Thao tác ĐẦY ĐỦ (đã che secret) — không cắt: Bash = toàn bộ lệnh; MCP/tool khác = tên + MỌI tham số."""
+    from ..redact import redact
+
+    ti = tool_input if isinstance(tool_input, dict) else {"input": tool_input}
+    ti = redact(ti)
+    if tool_name == "Bash":
+        body = str(ti.get("command") or "")
+        extra = {k: v for k, v in ti.items() if k not in ("command", "description")}
+        if extra:
+            body += "\n# tham số khác: " + json.dumps(extra, ensure_ascii=False, default=str)
+    else:
+        body = f"{tool_name}\n" + json.dumps(ti, ensure_ascii=False, indent=2, default=str)
+    return visible(redact_str(body))
+
+
+def split_chunks(text: str, n: int = CHUNK) -> list[str]:
+    return [text[i : i + n] for i in range(0, len(text), n)] or [""]
 
 
 def format_event(ev: HubEvent, *, heavy: bool = False) -> str | None:
@@ -256,7 +299,7 @@ class TelegramNotifier(QueuedNotifier):
 
     def target(self) -> dict[str, Any] | None:
         api = self.bot.api()
-        chats = self.bot.allowed()
+        chats = self.bot.notify_chats()
         if api is None or not chats:
             return None
         return {"api": api, "chats": sorted(chats)}
@@ -273,10 +316,12 @@ class TelegramNotifier(QueuedNotifier):
                 heavy = is_heavy(row, self.cfg().get("confirm_classes") or [])
             except Exception:
                 heavy = bool(p.get("protected_resource_id")) or p.get("destructive_class") in set(self.cfg().get("confirm_classes") or [])
+        if aid:
+            return {"approval_id": aid, "kind": ev.type, "payload": dict(p), "done": set()}
         text = format_event(ev, heavy=heavy)
         if not text:
             return None
-        return {"text": text, "approval_id": aid, "done": set()}
+        return {"text": text, "approval_id": None, "done": set()}
 
     async def _send(self, target: dict[str, Any], ev: HubEvent, msg: Any) -> dict[str, Any]:
         api: TelegramApi = target["api"]
@@ -284,13 +329,14 @@ class TelegramNotifier(QueuedNotifier):
         for chat in target["chats"]:
             if chat in msg["done"]:
                 continue
-            body: dict[str, Any] = {"chat_id": chat, "text": msg["text"], "disable_web_page_preview": True}
             aid = msg.get("approval_id")
             if aid:
-                body["reply_markup"] = self.bot.approval_markup(aid, chat)
-            res = await api.call("sendMessage", body)
+                row = self.hub.approvals.get(aid)
+                if row.get("status") not in ("open", "waiting_human"):
+                    return {"chats": n, "skipped": "resolved"}
+                await self.bot.send_approval(api, chat, row, kind=msg["kind"], payload=msg.get("payload"))
+            else:
+                await api.call("sendMessage", {"chat_id": chat, "text": msg["text"], "disable_web_page_preview": True})
             msg["done"].add(chat)
             n += 1
-            if aid and isinstance(res, dict):
-                self.bot.callbacks.add_message(aid, chat, res.get("message_id"))
         return {"chats": n}

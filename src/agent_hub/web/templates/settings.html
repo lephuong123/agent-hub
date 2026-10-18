@@ -44,6 +44,7 @@
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#secrets">
     <div class="fgrid"><label>Tên <input name="name" required placeholder="VD: GITHUB_TOKEN" autocomplete="off"></label>
     <label>Giá trị <input name="value" type="password" required autocomplete="new-password"></label></div>
+    <label class="check small"><input type="checkbox" name="confirm" value="yes" required> Tôi hiểu: nếu đã có secret cùng tên, giá trị cũ bị GHI ĐÈ</label>
     <div class="row end"><button class="btn" type="submit">Lưu secret</button></div>
   </form>
 </section>

@@ -239,3 +239,63 @@ def activity_item(ev: dict[str, Any]) -> dict[str, Any] | None:
     t = ev.get("type", "")
     tone = _TONE.get(t, "danger" if t in ("isolation.violation", "permission.denied", "auth.blocked", "budget.exceeded", "notify.failed") else "")
     return {"ts": plain[:8].strip(), "agent": ev.get("agent_id") or "hub", "text": plain[24:].strip(), "tone": tone, "run_id": ev.get("run_id")}
+
+
+# ============================================================================ xem đầy đủ thao tác chờ duyệt (WT-2)
+import re as _re
+
+_DANGER = _re.compile(
+    r"(?<![\w-])(rm|rmdir|unlink|shred|truncate|dd|mkfs[\w.]*|mv|cp|rsync|chmod|chown|kill|pkill|killall|sudo|crontab|launchctl|systemctl|"
+    r"curl|wget|tee|find|xargs|sqlite3|psql|mysql)(?![\w-])"
+    r"|git\s+(push|reset|clean|checkout|restore|branch\s+-D|filter-branch|rebase)|--force(?:-with-lease)?\b|--delete\b|--hard\b|-(?:rf|fr|r|f)\b"
+    r"|\b(DROP|DELETE|TRUNCATE|ALTER|UPDATE|INSERT)\b|>>?|\|\s*(?:sh|bash|zsh)\b",
+    _re.IGNORECASE,
+)
+_INVISIBLE = _re.compile("[\u0000-\u0008\u000b\u000c\u000d\u000e-\u001f\u007f​-‏‪-‮⁠-⁤⁦-⁩﻿]")
+LONG_ACTION = 400
+
+
+def _visible(ch: str) -> str:
+    return {"\r": "␍"}.get(ch, f"⟦U+{ord(ch):04X}⟧")
+
+
+def highlight(text: str) -> list[tuple[str, str]]:
+    """Văn bản → các đoạn (loại, chữ): `''` thường, `'hit'` phần nguy hiểm (mark), `'ctl'` ký tự ẩn/điều khiển/bidi hiện thành ký hiệu."""
+    out: list[tuple[str, str]] = []
+    pos = 0
+    marks = sorted([(m.start(), m.end(), "hit") for m in _DANGER.finditer(text)] + [(m.start(), m.end(), "ctl") for m in _INVISIBLE.finditer(text)])
+    for s, e, k in marks:
+        if s < pos:
+            continue
+        if s > pos:
+            out.append(("", text[pos:s]))
+        seg = text[s:e]
+        out.append((k, "".join(_visible(c) for c in seg) if k == "ctl" else seg))
+        pos = e
+    if pos < len(text):
+        out.append(("", text[pos:]))
+    return out
+
+
+def action_view(ap: dict[str, Any]) -> dict[str, Any]:
+    """Toàn bộ thao tác (KHÔNG cắt): Bash → lệnh đầy đủ; tool khác (kể cả `mcp__*`) → mọi tham số dạng JSON."""
+    inp = ap.get("tool_input")
+    if isinstance(inp, str):
+        try:
+            inp = json.loads(inp)
+        except json.JSONDecodeError:
+            inp = {"input": inp}
+    tool = ap.get("tool_name") or ""
+    if tool == "Bash" and isinstance(inp, dict) and isinstance(inp.get("command"), str):
+        text = inp["command"]
+        extra = {k: v for k, v in inp.items() if k not in ("command", "description")}
+        if extra:
+            text += "\n\n# tham số khác: " + json.dumps(extra, ensure_ascii=False)
+    elif isinstance(inp, dict) and inp:
+        text = json.dumps(inp, ensure_ascii=False, indent=2, default=str)
+    else:
+        text = ap.get("preview") or ""
+    lines = text.count("\n") + 1
+    return {"tool": short_tool(tool) if tool.startswith("mcp__") else tool, "tool_full": tool, "text": text, "segments": highlight(text),
+            "length": len(text), "lines": lines, "long": len(text) > LONG_ACTION or lines > 8,
+            "hidden_chars": bool(_INVISIBLE.search(text))}

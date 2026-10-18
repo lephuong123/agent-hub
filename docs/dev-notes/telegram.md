@@ -41,7 +41,7 @@ Logger `httpx*`/`httpcore*` hạ xuống WARNING (log INFO của thư viện có
   gọi RPC. Sai chat/chữ ký không tiêu (kẻ lạ không làm hỏng được nút thật). Mọi lần bị từ chối → audit `telegram.callback_rejected{reason}`.
   Lớp dưới vẫn còn: `approvals.resolve` báo `Conflict` nếu đã quyết; vé một lần theo `action_fingerprint`.
 - **Chống chạy lại**: offset `getUpdates` lưu `hub_state` TRƯỚC khi xử lý → update không xử lý hai lần (kể cả restart giữa chừng).
-- **Duyệt 2 bước**: `is_heavy` = có `protected_resource_id` hoặc `destructive_class ∈ notify.telegram.confirm_classes`
+- **Duyệt 2 bước** (đã đổi: xem mục kiểm toán — nay MỌI cho phép 2 bước): `is_heavy` = có `protected_resource_id` hoặc `destructive_class ∈ notify.telegram.confirm_classes`
   (mặc định db, git, system, hub, policy, mcp). "Cho phép" → tin xác nhận (nút mới, TTL ≤ 1 h) → "Xác nhận CHO PHÉP" mới gọi approve;
   "Huỷ" → gửi lại tin duyệt với nút mới. `/estop off` cũng cần xác nhận.
 - Approval quyết ở kênh khác (CLI/TUI/web) → `approval.resolved` → vô hiệu nonce + gỡ nút trên các tin đã gửi.
@@ -70,3 +70,17 @@ Logger `httpx*`/`httpcore*` hạ xuống WARNING (log INFO của thư viện có
 - `/stop` không xác nhận (dừng run không phá dữ liệu). `/run` không có cờ cwd/budget (dùng mặc định agent).
 - Chưa kiểm với Telegram thật (chỉ server giả). Nên thử tay: setup → /start → duyệt một `rm -rf` thật trên repo tạm.
 - Web (luồng WEB) nên hiển thị `telegram.status` ở trang Cài đặt; RPC sẵn sàng.
+
+## Sửa theo kiểm toán bảo mật (`docs/acceptance/security-web-telegram.md`)
+Script tái hiện của kiểm toán (`scratchpad/audit-web/test_audit_tg.py`) nay ĐỎ ở mọi khẳng định lỗ hổng; ca tương ứng đã thành test xanh trong
+`tests/test_telegram.py` (`test_wt2_*`, `test_wt4_*`, `test_wt5_*`, `test_wt8_*`).
+
+| Mã | Đã sửa |
+|---|---|
+| WT-2 | Tin duyệt KHÔNG dùng `preview` 300 ký tự nữa: `full_action(tool_name, tool_input)` = toàn bộ lệnh Bash / tên tool MCP + MỌI tham số (JSON, đã che secret), ký tự điều khiển/bidi/zero-width hiện thành `⟨U+XXXX⟩`. Dài > 3500 ký tự → tách tối đa 4 tin "phần i/n"; dài hơn → `sendDocument` tệp `.txt` đầy đủ + tin có ĐẦU và CUỐI. Kèm "Phần khớp luật (đích)" (`targets` của verdict: payload hoặc audit `approval.open`) và lý do giữ |
+| WT-4 | `auth.telegram_caller(hub, chat_id, user_id)`: chat riêng → `from.id` phải = chat_id (hoặc ∈ `allowed_user_ids`); nhóm (chat_id âm) → CHỈ khi `allow_groups: true` VÀ `from.id ∈ notify.telegram.allowed_user_ids`. Ghép nối lưu `from.id` người gửi `/start <mã>` vào `allowed_user_ids`; `telegram.allow` cho nhóm bắt buộc có người (`--user-id`). Nút bị người không được phép bấm: không tiêu nonce, audit `telegram.ignored{from_id}`. Mọi thao tác ghi qua chat → audit `telegram.command{method, chat_id, from_id}`; ghi chú approval có `user <from_id>`. Nhóm mặc định không nhận thông báo (`notify_chats`) |
+| WT-5 | MỌI "Cho phép" cần xác nhận bước 2 (nhất quán với hộp xác nhận của web), không chỉ lớp nặng; `confirm_classes` (thêm `file`) giờ chỉ gắn nhãn "THAO TÁC NẶNG" |
+| WT-8 | Kết quả run gửi `parse_mode=HTML`: dòng hệ thống in đậm, rồi tiền tố cố định "▼ Nội dung do AGENT viết — không phải thông báo hệ thống:", nội dung agent TRỌN trong một `<pre>` (escape `& < >`, Telegram không tạo link/`/lệnh` bấm được trong `<pre>`). Tin duyệt tách: (1) tin NỘI DUNG (lệnh/lý do/đích — chữ có nguồn từ agent) trong `<pre>`, KHÔNG nút; (2) tin HỆ THỐNG có nút, chỉ chữ do hub sinh (id, agent, run, luật, lớp, độ dài), trả lời (reply) vào tin nội dung; tin xác nhận bước 2 cũng vậy. Không tin nào chứa nội dung agent có nút |
+
+Ghi chú: các thông báo khác (guard.blocked, lỗi lặp…) vẫn văn bản thuần không nút như trước. `approval.waiting_human` thiếu luật là BUG của
+`approvals.py` (luồng khác sửa); tin Telegram tự lấy luật/lớp/lý do từ hàng approval nên không phụ thuộc payload.

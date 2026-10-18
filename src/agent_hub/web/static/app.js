@@ -5,6 +5,28 @@
 (function () {
   "use strict";
 
+  // ------------------------------------------------------------ khoá phiên ngoài cookie (WT-1)
+  // Server trao khoá MỘT lần qua fragment `#k=…` lúc đăng nhập (fragment không gửi lên server). Giữ trong localStorage của origin
+  // web (origin khác — kể cả cổng khác cùng host — không đọc được) và gắn vào mọi form POST. HTML không bao giờ chứa khoá.
+  var KEY = "ahub_k";
+  function getKey() { try { return localStorage.getItem(KEY) || ""; } catch (_) { return ""; } }
+  (function takeKey() {
+    var m = /^#k=([A-Za-z0-9_\-]+)$/.exec(location.hash || "");
+    if (!m) return;
+    try { localStorage.setItem(KEY, m[1]); } catch (_) {}
+    history.replaceState(null, "", location.pathname + location.search);
+  })();
+  document.addEventListener("submit", function (e) {
+    var form = e.target;
+    if (!(form instanceof HTMLFormElement) || (form.method || "").toLowerCase() !== "post") return;
+    var action = form.getAttribute("action") || "";
+    if (action === "/login") return;
+    if (action === "/logout") { try { localStorage.removeItem(KEY); } catch (_) {} return; }
+    var inp = form.querySelector('input[name="k"]');
+    if (!inp) { inp = document.createElement("input"); inp.type = "hidden"; inp.name = "k"; form.appendChild(inp); }
+    inp.value = getKey();
+  }, true);
+
   // ------------------------------------------------------------ hộp xác nhận
   var dlg = document.getElementById("confirm-dlg");
   function openConfirm(form) {

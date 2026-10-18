@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Xác nhận lần 2{% endblock %}
+{% block content %}
+<section class="card narrow wide attention">
+  <h1>Xác nhận lần 2 — thao tác phá huỷ nặng</h1>
+  <p>Agent <b>{{ a.agent_id }}</b> muốn chạy thao tác dưới đây{% if a.protected_resource_id %}, chạm <b>tài nguyên được bảo vệ</b>{% endif %}
+    (lớp <b>{{ a.destructive_class or '?' }}</b>, luật <b>{{ a.matched_rule or '?' }}</b>{% if a.reason %} — {{ a.reason }}{% endif %}).
+    Đọc <b>toàn bộ</b> lệnh trước khi cho phép — phần tô vàng là phần có thể gây mất dữ liệu.</p>
+  {{ m.action_block(view) }}
+  <form method="post" action="{{ action }}" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="confirm" value="yes"><input type="hidden" name="confirm2" value="yes">
+    {% for k, v in fields %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <label class="check"><input type="checkbox" required> Tôi đã đọc toàn bộ lệnh và cho phép chạy đúng MỘT lần</label>
+    <div class="row end gap"><a class="btn ghost" href="{{ back }}">Huỷ</a><button class="btn danger" type="submit">Cho phép (bước 2)</button></div>
+  </form>
+</section>
+{% endblock %}

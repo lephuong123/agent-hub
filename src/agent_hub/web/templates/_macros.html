@@ -19,18 +19,26 @@
 {% set s = task_status(status) %}<span class="pill {{ s[1] }}">{{ s[0] }}</span>
 {%- endmacro %}
 
+{% macro action_block(v) -%}
+<div class="action-full">
+  <div class="small muted">{{ v.tool_full }}{% if v.long %} · <span class="pill warn">lệnh dài {{ v.length }} ký tự, {{ v.lines }} dòng — cuộn để đọc hết</span>{% endif %}{% if v.hidden_chars %} <span class="pill danger">có ký tự ẩn/điều khiển</span>{% endif %}</div>
+  <pre class="cmd-full{{ ' long' if v.long }}" tabindex="0">{% for k, t in v.segments %}{% if k == 'hit' %}<mark>{{ t }}</mark>{% elif k == 'ctl' %}<mark class="ctl">{{ t }}</mark>{% else %}{{ t }}{% endif %}{% endfor %}</pre>
+</div>
+{%- endmacro %}
+
 {% macro approval_card(a, next) -%}
+{% set v = action_view(a) %}
 <div class="approval {{ 'human' if a.status == 'waiting_human' }}">
   <div class="approval-head">
     <span class="pill {{ 'danger' if a.status == 'waiting_human' else 'warn' }} strong">{{ '⏸ Chờ bạn duyệt' if a.status == 'waiting_human' else '◐ Xin duyệt' }}</span>
     <a href="/agents/{{ a.agent_id }}"><b>{{ a.agent_id }}</b></a>
     <span class="muted">· chờ {{ (a.wait_s or 0)|dur }} · <a href="/runs/{{ a.run_id }}">xem run</a></span>
   </div>
-  <div class="approval-what"><span class="muted">{{ a.tool_name }}:</span> <code>{{ a.preview or '' }}</code></div>
-  <div class="muted small">Vì sao cần duyệt: luật <b>{{ a.matched_rule or a.destructive_class or '?' }}</b>{% if a.reason %} — {{ a.reason }}{% endif %}</div>
+  {{ action_block(v) }}
+  <div class="muted small">Vì sao cần duyệt: {% if a.matched_rule or a.destructive_class %}luật <b>{{ a.matched_rule or a.destructive_class }}</b>{% if a.destructive_class %} (lớp {{ a.destructive_class }}){% endif %}{% endif %}{% if a.reason %} — {{ a.reason }}{% endif %}{% if a.protected_resource_id %} · <b>tài nguyên được bảo vệ</b>{% endif %}</div>
   <div class="row gap wrap-row">
-    {{ act("approve", "✓ Cho phép một lần", {"id": a.id, "preview": a.preview or ''}, "btn ok", confirm="Cho phép agent " ~ a.agent_id ~ " thực hiện: " ~ (a.preview or a.tool_name) ~ " ?", next=next) }}
-    {{ act("deny", "✖ Từ chối", {"id": a.id, "preview": a.preview or ''}, "btn danger", confirm="Từ chối thao tác: " ~ (a.preview or a.tool_name) ~ " ?", note="Ghi chú cho agent (tuỳ chọn)", next=next) }}
+    {{ act("approve", "✓ Cho phép một lần", {"id": a.id}, "btn ok", confirm="Cho phép agent " ~ a.agent_id ~ " thực hiện MỘT lần (" ~ v.length ~ " ký tự):\n\n" ~ v.text, next=next) }}
+    {{ act("deny", "✖ Từ chối", {"id": a.id}, "btn danger", confirm="Từ chối thao tác của " ~ a.agent_id ~ ":\n\n" ~ v.text, note="Ghi chú cho agent (tuỳ chọn)", next=next) }}
     {{ act("approve_fp", "Báo nhầm & cho phép", {"id": a.id}, "btn ghost sm", confirm="Cho phép và đánh dấu đây là BÁO NHẦM của bộ phân loại?", next=next, title="Thao tác này thật ra an toàn — giúp hub phân loại tốt hơn") }}
   </div>
 </div>

@@ -308,19 +308,29 @@ class Caller:
                 "evidence": self.evidence[:5], "human": self.human}
 
 
-def telegram_caller(hub: "Hub", chat_id: Any) -> Caller:
+def telegram_caller(hub: "Hub", chat_id: Any, user_id: Any = None) -> Caller:
     """Người gọi qua bot Telegram (chat/bot.py, chạy TRONG daemon — không qua socket nên không có pid ngang hàng).
 
-    Là NGƯỜI chỉ khi bot đang bật và `chat_id` nằm trong allowlist `notify.telegram.allowed_chat_ids` — allowlist chỉ
-    người sửa được (`telegram.allow` ∈ HUMAN_ONLY; config.yaml nhánh `notify` được kiểm toàn vẹn). Chat ngoài allowlist
-    → không phải người (HUMAN_ONLY bị từ chối như thiếu token). Kênh audit: `telegram:<chat_id>`.
+    Là NGƯỜI chỉ khi bot đang bật, `chat_id` nằm trong allowlist `notify.telegram.allowed_chat_ids` VÀ người gửi/bấm
+    (`from.id` = `user_id`) được phép (WT-4):
+    - chat riêng (chat_id dương): `user_id` == chat_id hoặc ∈ `allowed_user_ids`;
+    - nhóm (chat_id âm): chỉ khi `allow_groups` bật rõ ràng VÀ `user_id` ∈ `allowed_user_ids` (thành viên khác của nhóm không phải người).
+    Allowlist chỉ người sửa được (`telegram.allow` ∈ HUMAN_ONLY; config.yaml nhánh `notify` được kiểm toàn vẹn). Kênh audit: `telegram:<chat_id>`.
     """
     try:
         cfg = hub.config.get("notify.telegram") or {}
     except Exception:  # pragma: no cover
         cfg = {}
+    cid = str(chat_id)
+    uid = str(user_id) if user_id is not None else None
     allowed = {str(x) for x in (cfg.get("allowed_chat_ids") or [])}
-    ok = bool(cfg.get("enabled", True)) and str(chat_id) in allowed
+    users = {str(x) for x in (cfg.get("allowed_user_ids") or [])}
+    ok = bool(cfg.get("enabled", True)) and cid in allowed and uid is not None
+    if ok:
+        if cid.startswith("-"):
+            ok = bool(cfg.get("allow_groups")) and uid in users
+        else:
+            ok = uid == cid or uid in users
     return Caller(via=f"telegram:{chat_id}", token_ok=ok)
 
 

@@ -6,7 +6,7 @@
 |---|---|
 | Tên sản phẩm | agent-hub |
 | Loại tài liệu | Business Requirements Document (BRD) — bản chi tiết |
-| Phiên bản | 0.7 (cập nhật theo kết quả xây dựng thực tế + hardening an toàn; xem mục 15 "Trạng thái hiện thực") |
+| Phiên bản | 0.8 (thêm Web UI và Telegram — mốc M6; xem mục 15 "Trạng thái hiện thực") |
 | Ngày | 2026-10-18 |
 | Chủ sản phẩm | phuonglq |
 | Người soạn | Business Analyst (agent) |
@@ -25,6 +25,7 @@
 | 0.5 | 2026-10-18 | phuonglq | Chốt Q-07 (golden task và cách chấm do người dùng quyết định; agent không tự tạo/sửa golden task), Q-09 (dừng-và-resume tự động mọi run đang chạy khi daemon khởi động lại), Q-11 (ai cài hub thì người đó dùng — một người dùng/một máy, HTTP chỉ localhost) |
 | 0.6 | 2026-10-18 | phuonglq | Chốt Q-10 (event/transcript giữ 30 ngày), Q-12 (xác nhận KPI mục 2), Q-13 (mượn nguyên văn prompt Hermes, kèm NOTICE MIT), Q-15 (chỉ `takeover`, không tích hợp `claude --bg`) — không còn câu hỏi mở |
 | 0.7 | 2026-10-18 | BA (theo nghiệm thu `docs/acceptance/traceability-v2.md` §4, `traceability.md` §5, quyết định trong `docs/plan/hardening.md`) | Áp các lệch được đánh giá "cập nhật BRD": FR-AG-01/04, FR-TK-05/06/14, FR-RT-06/09/10/12/15/17, FR-LN-03/09/12/13/17/18, FR-MS-02/08, FR-MC-01/05, FR-OB-01/08, FR-SG-02/03/05, FR-UI-08/10, NFR-15/18, §8, §9. **Quyết định**: canary/eval gate/regression monitor **không bao giờ** rollback thay đổi `actor=user`; thay đổi tầng team/global/USER của người áp ngay, chỉ theo dõi + cảnh báo (FR-LN-06/10/16/17, bất biến 4). **Thêm FR-SG-10** (sandbox OS bắt buộc), **FR-SG-11** (xác thực người gọi RPC nhạy cảm), **FR-SG-12** (toàn vẹn chính sách); thêm danh sách bất biến an toàn ở §6.10. **NFR-19** chốt định nghĩa (học / làm việc), ghi trạng thái chưa đạt. Thêm **mục 15 "Trạng thái hiện thực"**. Lệch phải sửa code (birthtime thay checkpoint, V2-N1 RPC admin thiếu xác thực, V2-N2 lập lịch hoãn, recall classifier) **không** đưa vào BRD — giữ yêu cầu |
+| 0.8 | 2026-10-18 | BA (theo yêu cầu phuonglq: "qua terminal khó dùng quá — hỗ trợ qua website; giao tiếp ngoài Slack thêm Telegram"; nguồn `docs/plan/web-telegram.md`, `docs/dev-notes/web.md`, `docs/dev-notes/telegram.md`, README) | Đưa **Web UI** và **Telegram** vào phạm vi (mục 3, O4, O8, persona P1/P2, stakeholder); thêm nhóm **FR-WEB-01..11** (§6.11) và **FR-TG-01..08** (§6.12) theo đúng phần đã hiện thực, mốc mới **M6 "Web & Telegram"**; NFR-33 (bảo mật web), NFR-34 (bảo mật Telegram), NFR-35 (khả dụng web); FR-SG-09 thành **thông báo đa kênh Slack + Telegram** (duyệt bằng nút Telegram qua long polling); FR-UI-08 thêm lệnh `web`, `notify telegram`; KPI G-1, US-19..21, R-20/R-21, §8.2, §9, lộ trình M6, mục 15.2, Phụ lục A |
 
 ### 0.2 Quy ước trong tài liệu
 
@@ -32,7 +33,7 @@
 - **[GIẢ ĐỊNH-CẦN-XÁC-MINH]**: năng lực của `claude` CLI hoặc hành vi chưa được kiểm bằng chạy thật hay bằng `claude --help`. Mỗi giả định có mã `A-xx` (mục 4.1) và phải được xác minh bằng spike trước khi làm FR phụ thuộc.
 - **[ĐỀ XUẤT]**: số liệu mục tiêu hoặc giá trị mặc định do BA đề xuất, chưa có baseline đo đạc, cần chủ sản phẩm xác nhận.
 - Mã yêu cầu: `FR-<NHÓM>-<số>` (chức năng), `NFR-<số>` (phi chức năng), `US-<số>` (user story), `R-<số>` (rủi ro), `A-<số>` (giả định), `C-<số>` (ràng buộc), `Q-<số>` (câu hỏi mở), `G-<số>` (mục tiêu).
-- Cột mốc M0–M5 theo mục 13.
+- Cột mốc M0–M6 theo mục 13 (M6 thêm ở 0.8).
 
 ### 0.3 Bảng thuật ngữ
 
@@ -77,6 +78,9 @@
 | **hub-self MCP** | MCP server nội bộ do hub cung cấp *cho chính agent* (xem task, bình luận, hoàn tất, đọc skill, đề xuất học). |
 | **Trust tier** | Mức tin cậy MCP server do người đặt: `trusted` (tool ghi chạy có kiểm toán) hoặc `untrusted`/`require_approval` (tool không `readOnlyHint` phải được duyệt). Tool có ý nghĩa xoá luôn là thao tác phá huỷ bất kể trust (FR-SG-01). |
 | **HUB_HOME** | Thư mục gốc dữ liệu của hub, mặc định `~/.agent-hub/`. |
+| **Web UI** | Giao diện trình duyệt chạy trên chính máy (`agent-hub web`, chỉ loopback), là client của daemon như CLI/TUI (FR-WEB, thêm ở 0.8). |
+| **Bot Telegram** | Bot chạy trong daemon bằng long polling: gửi thông báo, nhận nút duyệt và lệnh chat từ các chat trong allowlist (FR-TG, thêm ở 0.8). |
+| **Allowlist chat** | Danh sách `chat_id` Telegram do người xác nhận khi ghép nối; chỉ các chat này nhận tin và điều khiển được hub. |
 
 ---
 
@@ -110,6 +114,7 @@
 |---|---|---|---|---|
 | G-1 | Quản lý đội agent nhanh, không cần sửa file tay | Thời gian từ lệnh tạo tới khi agent chạy được run đầu tiên | ≤ 5 phút (agent từ template ≤ 1 phút) | Đo thủ công khi nghiệm thu M0 |
 | G-1 | | Tỷ lệ thao tác quản trị (CRUD agent/team/MCP) làm được qua CLI/MCP mà không sửa file | 100% thao tác trong FR-AG/TM/MC | Checklist nghiệm thu |
+| G-1 | | Thao tác thường dùng làm được **không cần terminal** (sau bước khởi động `agent-hub web` / ghép nối Telegram): tạo/sửa agent, giao việc, xem live, duyệt, rollback | 100% trên web; giao việc + duyệt + xem trạng thái trên Telegram (thêm ở 0.8) | Checklist nghiệm thu M6 |
 | G-2 | Quan sát & điều khiển live nhiều agent | Độ trễ p95 từ khi CLI in một dòng event tới khi hiện trên TUI | ≤ 1 giây | Timestamp nhận stdout vs render (NFR-01) |
 | G-2 | | Số agent chạy đồng thời ổn định trên 1 máy | ≥ 5 (mục tiêu mở rộng 10), giới hạn thực tế phụ thuộc rate limit tài khoản | Bài test tải M2 (NFR-02) |
 | G-2 | | Tỷ lệ Run vẫn chạy bình thường khi đóng/mở lại TUI | 100% | Test tự động (NFR-05) |
@@ -132,7 +137,7 @@
 
 ## 3. Phạm vi
 
-### 3.1 Trong phạm vi (bản này, M0–M5)
+### 3.1 Trong phạm vi (bản này, M0–M6)
 1. Hub daemon chạy trên **một máy**, lưu trạng thái SQLite, event bus có replay.
 2. Quản lý **Agent** (CRUD, archive, clone/export, phiên bản cấu hình), **Team** (thành viên, vai trò, chính sách, ESTOP), **Task** (DAG, lease/heartbeat, định tuyến theo vai trò, giới hạn đồng thời), **Run**.
 3. **Runtime adapter cho `claude` CLI**: dựng lệnh, cô lập cấu hình, đọc `stream-json`, steer qua stdin, resume/fork, ngân sách, phê duyệt.
@@ -141,6 +146,8 @@
 6. **CLI + TUI kiểu htop**: bảng agent live, attach/detach, approve/steer/stop, tab learnings, lệnh CLI đầy đủ.
 7. Quan sát & chi phí: event store, usage/cost theo run/agent/team/ngày, ngân sách, audit.
 8. **Bảo vệ thao tác phá huỷ**: danh mục thao tác phá huỷ, tài nguyên được bảo vệ, phân loại tại PreToolUse/permission tool, phê duyệt chờ người (`waiting_human`), chính sách an toàn bất biến với agent, xoá mềm cho mọi dữ liệu trong hub.
+9. **Web UI** (thêm ở 0.8, M6): giao diện trình duyệt tiếng Việt trên chính máy (chỉ loopback) cho mọi thao tác thường dùng — tổng quan live, xem run live, duyệt, quản lý agent/task/team, tự học, MCP, chi phí, audit, cài đặt (FR-WEB).
+10. **Telegram** (thêm ở 0.8, M6): bot chạy trong daemon bằng long polling — thông báo như Slack, **duyệt bằng nút**, lệnh chat để xem trạng thái và giao việc (FR-TG).
 
 ### 3.2 Ngoài phạm vi (Won't trong bản này)
 | # | Hạng mục | Lý do |
@@ -148,11 +155,11 @@
 | O1 | **Tự viết vòng lặp agent** (agent loop, tool registry, nén context, provider adapter) | Quyết định chốt #1: runtime = `claude` CLI |
 | O2 | **Gọi Anthropic API trực tiếp** để chạy agent, review hoặc eval | Quyết định chốt #1: mọi lượt LLM đi qua `claude` CLI |
 | O3 | **Đa nhà cung cấp model** (OpenAI, Gemini, model local…) | Phụ thuộc runtime; chỉ chừa interface `AgentRuntime` (NFR-22) |
-| O4 | **Gateway nền tảng chat** (Telegram, Slack, Zalo…) | Không phục vụ mục tiêu G-1..G-5; Hermes có nhưng không mượn |
+| O4 | **Gateway nền tảng chat tổng quát** (Zalo, Discord, nút duyệt tương tác trong Slack…) — **thu hẹp ở 0.8**: Slack thông báo (FR-SG-09) và **Telegram** (FR-TG) nay **trong phạm vi** | Chỉ làm kênh chủ sản phẩm yêu cầu; nút trong Slack cần endpoint công khai (trái O6) |
 | O5 | Chạy phân tán nhiều máy, nhiều hub, HA | Ràng buộc C-04 (1 máy) |
 | O6 | Đa người dùng, chia sẻ hub cho đồng nghiệp, truy cập qua mạng | Đã chốt Q-11: ai cài thì người đó dùng; HTTP chỉ localhost; client chỉ phân biệt read/control (FR-MS-06) |
 | O7 | Giao thức A2A, ACP | Thứ tự ưu tiên: MCP trước (04-integration §9.3); để sau M5 |
-| O8 | Web dashboard đầy đủ | Có thể dùng `textual serve` nếu cần; không là mục tiêu |
+| O8 | ~~Web dashboard đầy đủ~~ — **đưa vào phạm vi ở 0.8** (FR-WEB, M6) theo yêu cầu chủ sản phẩm (terminal khó dùng). Vẫn ngoài phạm vi: truy cập web từ máy khác qua mạng (chỉ loopback; dùng `ssh -L` nếu cần) | — |
 | O9 | Fine-tune/huấn luyện model, sinh dữ liệu huấn luyện | Tự cải thiện chỉ ở tầng prompt/memory/skill/config |
 | O10 | Sandbox container cho lệnh của agent | Agent ghi thẳng vào repo thật (đã chốt Q-06); an toàn dựa vào quyền tool của CLI + khoá theo repo + checkpoint git (FR-RT-12) |
 | O11 | Marketplace/phân phối skill công khai | Ngoài nhu cầu hiện tại |
@@ -169,6 +176,7 @@
 | Người dùng cuối giao việc | Có thể là chính chủ hệ thống hoặc đồng nghiệp dùng chung máy/hub | Giao việc nhanh, nhận kết quả đúng, ít phải sửa lại |
 | Client tích hợp | Claude Code (qua MCP), script/CI (qua CLI `--json`), MCP client khác | Giao diện ổn định, bất đồng bộ, không timeout |
 | Chủ các MCP nội bộ | Đội vận hành hệ nội bộ | Agent được dùng tool ghi (đã chốt Q-05) nhưng mọi lần ghi phải có nhật ký kiểm toán; không rò dữ liệu ra ngoài |
+| Telegram (Bot API — phụ thuộc bên ngoài, thêm ở 0.8) | Kênh thông báo/duyệt/giao việc trên điện thoại | Bot token, long polling, giới hạn 64 byte `callback_data`, khả dụng dịch vụ |
 | Anthropic / Claude Code (phụ thuộc bên ngoài) | Nhà cung cấp runtime | Định dạng `stream-json`, cờ CLI, rate limit, điều khoản sử dụng tài khoản |
 
 ### 4.2 Persona
@@ -176,11 +184,12 @@
 **P1 — Người vận hành (Chủ hệ thống)**, ví dụ phuonglq
 - Kỹ sư, dùng terminal + Claude Code + Serena hằng ngày; quen MCP.
 - Cần: định nghĩa agent/team bằng lệnh; xem cả đội đang làm gì trong một màn; **chỉ** duyệt thao tác phá huỷ (được nhắc khi có agent chờ); khai báo tài nguyên được bảo vệ; đọc digest những gì agent tự học/tự sửa; rollback một chạm khi agent "học hỏng"; xem chi phí.
-- Nỗi đau: phải lặp lại cùng một chỉ dẫn sửa lỗi; bị hỏi duyệt những việc vụn vặt; không biết agent nào đang ngốn tiền; cấu hình máy rò vào agent; sợ agent xoá nhầm dữ liệu thật.
+- Kênh dùng (0.8): terminal (CLI/TUI) khi ngồi máy; **web** khi muốn thao tác bằng chuột; **Telegram** để duyệt/giao việc khi không ở máy.
+- Nỗi đau: **dùng qua terminal khó** (phản hồi 2026-10-18); phải lặp lại cùng một chỉ dẫn sửa lỗi; bị hỏi duyệt những việc vụn vặt; không biết agent nào đang ngốn tiền; cấu hình máy rò vào agent; sợ agent xoá nhầm dữ liệu thật.
 
 **P2 — Người dùng cuối giao việc**
 - Có thể không biết chi tiết cấu hình agent. Giao việc bằng câu tự nhiên cho một team ("tóm tắt các văn bản mới tuần này và đối chiếu với nhiệm vụ đang mở").
-- Cần: giao việc 1 lệnh; biết tiến độ; trả lời câu hỏi làm rõ; phản hồi "đúng/sai" dễ dàng (thành Signal).
+- Cần: giao việc 1 lệnh; biết tiến độ; trả lời câu hỏi làm rõ; phản hồi "đúng/sai" dễ dàng (thành Signal). Từ 0.8 làm được toàn bộ **không cần terminal**: ô *Giao việc* + nút 👍/👎 trên web, `/run` và reply trên Telegram.
 
 **P3 — Client tích hợp (Claude Code / MCP client / script)**
 - Gọi hub như gọi Serena: `hub_list_agents`, `hub_run(team, task)`, `hub_events(run_id, after_seq)`.
@@ -791,6 +800,7 @@ Mô tả: Mọi lệnh có `--json`; mã thoát chuẩn (0 ok, 1 lỗi người 
 | Eval | Nhóm chính `golden add\|from-run\|list\|show\|rm\|restore\|edit\|candidates`; `eval run <agent>`, `eval list\|show` (alias `eval golden …`, `eval results`) | M4 |
 | Chi phí & quan sát | `cost [--by agent\|team\|day] [--since]`, `report`, `telemetry`, `daemon logs [-n] [--run] [--agent]` (đọc `logs/hub.log` + `daemon.out`) | M0 (cơ bản) / M3 |
 | Cấu hình & hook | `config get\|set`, `hook <Event>` (cùng thân với `observe_hook`, cho người/script) | M1 |
+| Web & Telegram (0.8) | `web [--host] [--port 8765] [--open] [--url]`; `notify telegram setup\|status\|test\|disable\|allow\|revoke` | M6 |
 - Given `agent-hub agent list --json`, Then stdout là JSON hợp lệ, không có dòng log lẫn vào (log ra stderr).
 
 **FR-UI-09 — Firehose tổng quan** · Must · M2
@@ -908,10 +918,13 @@ Mô tả: Bộ test hồi quy gồm ≥ 200 **[ĐỀ XUẤT]** ca: lệnh phá h
 Mô tả: Ghi `audit_log`/`guard_decisions` cho: mọi tool ghi (FR-MC-03), mọi thao tác phá huỷ (được giữ, được cho phép, bị từ chối, ai quyết, kênh, thời gian chờ), mọi thay đổi chính sách an toàn. Audit là append-only, nằm trong tài nguyên được bảo vệ; purge = phá huỷ.
 - Given người cho phép một thao tác phá huỷ qua MCP, Then audit có `channel=mcp:<client>`, `wait_s`, `action_fingerprint`.
 
-**FR-SG-09 — Thông báo Slack** · Must · M1
-Mô tả: Hub gửi thông báo Slack (đã chốt Q-16) cho: `approval.open` và mỗi lần nhắc lại khi `waiting_human`; run lỗi/crash lặp; `learning.rolled_back`, `guard.blocked`; digest hằng ngày (FR-LN-13). Cấu hình `notify.slack`: `webhook_url` (Incoming Webhook, lưu trong secret store) hoặc `bot_token` + `channel`/DM; mức lọc theo loại event; tần suất nhắc lại `notify.reminder_interval_s` (mặc định 900 s). Tin nhắn chứa agent, run, thao tác, lý do phân loại phá huỷ và lệnh duyệt (`agent-hub approve <id>` / TUI / MCP `hub_approve`). Duyệt trực tiếp bằng nút trong Slack cần endpoint công khai → **Could, sau M5**. Không gửi nội dung dữ liệu MCP nội bộ hay secret, chỉ tóm tắt đã che.
-- Given một lệnh `git push --force` bị giữ, When `approval.open`, Then trong ≤ 10 s kênh Slack cấu hình nhận một tin có agent, lệnh, lý do và lệnh duyệt; When chưa ai duyệt sau `reminder_interval_s`, Then có tin nhắc lại.
-- Given Slack không gửi được (lỗi mạng/token), Then request vẫn chờ, lỗi ghi log + hiển thị trên TUI, hub thử lại có backoff.
+**FR-SG-09 — Thông báo đa kênh (Slack + Telegram)** · Must · M1 (Slack) / M6 (Telegram) — mở rộng ở 0.8
+Mô tả: Hub gửi thông báo (đã chốt Q-16, mở rộng 0.8) qua một khung chung (hàng đợi, lọc theo `notify.<kênh>.events`, gửi có backoff, event `notify.sent`/`notify.failed{channel}`) tới **Slack** và **Telegram** (FR-TG-03), cho: `approval.open` và mỗi lần nhắc lại khi `waiting_human`; run lỗi/crash lặp; `learning.rolled_back`, `guard.blocked`; digest hằng ngày (FR-LN-13). Cấu hình `notify.slack` (`webhook_url` trong secret store hoặc `bot_token` + `channel`/DM) và `notify.telegram` (FR-TG-01); tần suất nhắc lại `notify.reminder_interval_s` (mặc định 900 s). Tin chứa agent, run, thao tác, lý do phân loại phá huỷ và cách duyệt. Không gửi nội dung dữ liệu MCP nội bộ hay secret, chỉ tóm tắt đã che.
+- **Slack**: chỉ thông báo; duyệt bằng lệnh (`agent-hub approve <id>`), TUI, web hoặc MCP `hub_approve`. Duyệt bằng nút trong Slack cần endpoint công khai nhận callback (trái O6/Q-11) → **Could, sau M6**.
+- **Telegram**: **duyệt bằng nút inline ngay trong tin** (FR-TG-04/05) vì bot nhận callback qua **long polling** từ chính daemon — **không cần endpoint công khai**, không mở cổng.
+- Given một lệnh `git push --force` bị giữ, When `approval.open`, Then trong ≤ 10 s mỗi kênh đã cấu hình (Slack, Telegram) nhận một tin có agent, lệnh, lý do và cách duyệt (Telegram có nút); When chưa ai duyệt sau `reminder_interval_s`, Then có tin nhắc lại.
+- Given một kênh không gửi được (lỗi mạng/token), Then request vẫn chờ, `notify.failed{channel}` + log + hiển thị trên TUI/web, hub thử lại có backoff; kênh còn lại không bị ảnh hưởng.
+- Given approval đã được quyết ở kênh khác (CLI/TUI/web/Telegram), Then nút trên các tin Telegram đã gửi bị gỡ/vô hiệu.
 
 **FR-SG-10 — Sandbox OS bắt buộc cho mọi run** · Must · M1 (thêm ở 0.7, hardening)
 Mô tả: Hub sinh khoá `sandbox` (Seatbelt trên macOS, bubblewrap trên Linux — năng lực của `claude` CLI 2.1.302, có trong schema settings dù `--help` không liệt kê; đã kiểm chứng bằng spike) trong `settings.json` của **mọi** run khi guard bật (`guard.sandbox.*`, **mặc định bật**, `failIfUnavailable: true` = fail-closed: thiếu sandbox thì run lỗi, **không** chạy không sandbox):
@@ -935,6 +948,96 @@ Mô tả: Mọi method RPC/MCP **chỉ dành cho người** (`HUMAN_ONLY`) chỉ
 Mô tả: Hub lưu bản chuẩn của `policy/` và nhánh an toàn của `config.yaml` (`guard`, `approval`, `runtime`, `secrets`, `telemetry`, `notify`) trong bảng `integrity_baseline`. Vòng kiểm định kỳ (`guard.integrity.tick_s`, mặc định 2 s) và lúc khởi động: phát hiện ghi ngoài RPC → **khôi phục** bản chuẩn, bản bị sửa chuyển vào `trash/tamper/`, event `guard.tamper_detected` + Slack. `hub.db` bị kết nối khác ghi (`PRAGMA data_version`) hoặc bị thay file (inode) → phát hiện và cảnh báo (không tự khôi phục). Ghi hợp lệ của daemon tự cập nhật bản chuẩn; người sửa tay xác nhận bằng `agent-hub guard integrity accept <path>` (chỉ người, FR-SG-11). Đây là lớp hậu kiểm (cửa sổ ≤ `tick_s`).
 - Given một tiến trình ngoài RPC sửa `policy/destructive.yaml`, Then trong ≤ 2 s file được khôi phục, bản sửa nằm trong `trash/tamper/`, có `guard.tamper_detected`.
 - Given người sửa `policy/` bằng tay rồi `guard integrity accept`, Then bản mới thành bản chuẩn, không bị khôi phục.
+
+### 6.11 Web UI (FR-WEB) — thêm ở 0.8, mốc M6
+
+> Web là **client** của daemon qua RPC (như CLI/TUI, `channel=web`), không đọc/ghi `hub.db` trực tiếp, không thêm RPC mới. Starlette + Jinja2 + htmx (vendored, không CDN, không cần build) + SSE. Một người dùng / một máy (Q-11).
+
+**FR-WEB-01 — Khởi động và đăng nhập** · Must · M6
+Mô tả: `agent-hub web [--host] [--port 8765] [--open] [--url]` chạy server **chỉ trên loopback** (127.0.0.1/::1/localhost; host khác → từ chối, mã thoát 1). Lệnh in/mở **link đăng nhập một lần** (ký HMAC bằng khoá trong `HUB_HOME/auth/web.json` 0600, hết hạn 5 phút) → đổi thành **cookie phiên** `ahub_web` (HttpOnly, SameSite=Strict, Path=/; hết hạn khi rảnh 12 h, tối đa 7 ngày; phiên lưu RAM). Server đã chạy thì lệnh chỉ cấp link mới; `--url` chỉ in link. Đăng xuất huỷ phiên. Truy cập từ máy khác chỉ qua `ssh -L` (O8).
+- Given `agent-hub web --host 0.0.0.0`, Then lệnh từ chối, mã thoát 1.
+- Given link đăng nhập đã dùng / sai chữ ký / quá 5 phút, Then 401; Given link hợp lệ, Then đặt cookie HttpOnly + SameSite=Strict và chuyển tới Tổng quan.
+- Given không có phiên, When mở trang, Then 303 về `/login`; When gọi partial/SSE/POST, Then 401.
+
+**FR-WEB-02 — Tổng quan live** · Must · M6
+Mô tả: Bảng agent như `top` (trạng thái, việc, tool gần nhất, thời gian, token, chi phí — làm mới mỗi 2 s), chi phí hôm nay, khung đỏ **Cần bạn duyệt** (gồm `waiting_human`), ô **Giao việc nhanh**.
+- Given 3 agent đang chạy, When mở Tổng quan, Then cả 3 dòng cập nhật trong ≤ 2 s; Given có approval đang chờ, Then khung "Cần bạn duyệt" hiện thao tác, lý do, thời gian chờ.
+
+**FR-WEB-03 — Xem run live** · Must · M6
+Mô tả: Trang run phát lại lịch sử từ DB rồi stream live qua SSE (`GET /sse/run/<id>?since=&epoch=`, từ `events.subscribe` mức detail, heartbeat 15 s): lời agent, reasoning (chỉ khi xem live), tool call, diff; ô **Chỉ đạo** (steer), nút **Dừng run**; khi xong: kết quả, chi phí, nút 👍/👎 (Signal, FR-LN-01), ô **Nói tiếp** (`run.continue`). Takeover chỉ hiển thị lệnh `agent-hub takeover <run>` (cần terminal tương tác). Đóng tab không ảnh hưởng run.
+- Given run đang chạy, When mở trang run, Then thấy phần đã chạy và các event mới xuất hiện liên tục, không mất event (seq liên tục).
+- Given người gửi chỉ đạo, Then có `user.message` + `steer.ack` như TUI; Given đóng tab, Then run vẫn hoàn tất.
+
+**FR-WEB-04 — Duyệt thao tác phá huỷ trên web** · Must · M6
+Mô tả: Nút *Cho phép một lần* / *Từ chối* (kèm ô ghi chú) trên Tổng quan và trang run, có hộp xác nhận; đi qua RPC `approval.*` (HUMAN_ONLY, FR-SG-11), audit `channel=web, actor=user`.
+- Given approval `waiting_human`, When bấm *Cho phép một lần* và xác nhận, Then thao tác chạy đúng một lần, audit có `channel=web`; When bấm lại, Then báo đã quyết (Conflict).
+
+**FR-WEB-05 — Quản lý agent** · Must · M6
+Mô tả: Tạo agent từ template (researcher/coder/reviewer/ops), tích MCP từ registry, đặt ngân sách; trang agent: giao việc, sửa, lịch sử cấu hình + quay về bản cũ (revert), tạm dừng, xoá mềm; *Thùng rác* để khôi phục. Thao tác nhạy cảm cần xác nhận.
+- Given form tạo agent hợp lệ, Then agent được tạo như FR-AG-01 và audit `channel=web`; Given xoá mềm rồi khôi phục trong Thùng rác, Then cấu hình trở lại nguyên vẹn.
+
+**FR-WEB-06 — Công việc và team** · Should · M6
+Mô tả: Kanban task theo trạng thái + phụ thuộc, tạo task cho agent/team; trang team (thành viên, vai trò).
+- Given tạo task cho team qua web, Then task xuất hiện ở cột đúng và dispatcher xử lý như FR-TK-02.
+
+**FR-WEB-07 — Tự học** · Should · M6
+Mô tả: Feed thay đổi đã tự áp dụng, ledger với diff, rollback, pin, bật/tắt học, golden task (thao tác ghi là HUMAN_ONLY).
+- Given một thay đổi trong feed, When bấm rollback và xác nhận, Then ledger có entry rollback `actor=user`, audit `channel=web`.
+
+**FR-WEB-08 — MCP, chi phí, nhật ký, cài đặt** · Should · M6
+Mô tả: Trang MCP (registry, kiểm tra kết nối, nhập từ Claude Code), Chi phí, Nhật ký (audit), Cài đặt: ESTOP, cấu hình thường dùng (chỉ khoá trong danh sách an toàn `SAFE_CONFIG`; khoá guard/sandbox phải dùng CLI), secret (giá trị đặt qua web **không bao giờ hiển thị lại**, không vào audit), thử thông báo Slack/Telegram.
+- Given đặt secret qua web, Then trang và audit không chứa giá trị; Given cố đặt khoá `guard.*` qua web, Then bị từ chối.
+
+**FR-WEB-09 — Khả dụng** · Should · M6
+Mô tả: Tiếng Việt; dùng được trên màn 390 px (không tràn ngang); sáng/tối theo hệ thống; mọi thao tác ghi là form POST chạy được **không cần JS** (không JS → server trả trang xác nhận).
+- Given trình duyệt rộng 390 px, Then `scrollWidth == clientWidth` ở mọi trang chính; Given tắt JS, When bấm một thao tác cần xác nhận, Then nhận trang xác nhận và thao tác chạy sau khi xác nhận.
+
+**FR-WEB-10 — Web là kênh của người, agent không tới được** · Must · M6
+Mô tả: Thao tác nhạy cảm qua web đi cổng HUMAN_ONLY như CLI (token người do tiến trình web đọc, không bao giờ xuất hiện trong HTML/header/cookie/log/audit), audit `channel=web`. Agent trong run không truy cập được web: sandbox chặn kết nối localhost và đọc `HUB_HOME/auth/**`; `permissions.deny` Read/Grep/Glob `auth/**`; lệnh `agent-hub web` từ agent bị phân loại `forbidden`.
+- Given Bash của agent (sandbox bật) `curl http://127.0.0.1:<port>/login` hoặc mở socket TCP tới cổng web, Then thất bại (`Operation not permitted`/không kết nối); Given agent đọc `HUB_HOME/auth/web.json`, Then bị chặn.
+
+**FR-WEB-11 — Trang bổ sung** · Could · sau M6
+Mô tả: Trang guard policy/protect, purge vĩnh viễn, journey học, canary chi tiết, xem trước khi nhập MCP, takeover chạy ngay từ web (hiện dùng CLI).
+- Given trang guard policy có trên web, Then mọi thao tác ghi đi qua HUMAN_ONLY và có audit `channel=web`.
+
+### 6.12 Telegram (FR-TG) — thêm ở 0.8, mốc M6
+
+> Bot chạy **trong daemon** (task asyncio) bằng **long polling** — không cần endpoint công khai, không mở cổng. Mọi lệnh từ chat đi qua `Daemon.call_as(telegram_caller)` → cổng HUMAN_ONLY như socket, audit `channel=telegram:<chat_id>, actor=user`.
+
+**FR-TG-01 — Thiết lập và ghép nối** · Must · M6
+Mô tả: `agent-hub notify telegram setup`: nhập bot token (ẩn khi gõ / `--token-stdin`) → RPC `telegram.setup` (HUMAN_ONLY) kiểm `getMe`, lưu token vào **secret store** (chỉ secret store, không lấy env), sinh `TELEGRAM_CALLBACK_KEY`, sinh **mã ghép nối** 8 hex dùng một lần (TTL 10 phút). Người gửi `/start <mã>` cho bot → CLI hiện tên/username/chat_id và hỏi y/N → chỉ chat được xác nhận vào **allowlist** `notify.telegram.allowed_chat_ids`. Lệnh khác: `status`, `test`, `disable [--forget-token]`, `allow`, `revoke`. Chưa cấu hình hoặc `enabled: false` → bot **tắt êm** (không gọi mạng, không event).
+- Given token hợp lệ, When setup và gửi `/start <mã đúng>` rồi xác nhận y, Then chat vào allowlist; Given mã sai/đã dùng/quá 10 phút, Then không ghi nhận.
+- Given chưa có token, Then daemon không gọi Telegram, không lỗi.
+
+**FR-TG-02 — Long polling bền** · Must · M6
+Mô tả: `getUpdates` long poll (≤ 25 s), huỷ được ngay khi daemon dừng hoặc `setup/disable` (kick). Offset lưu (`hub_state`) **trước** khi xử lý → không xử lý một update hai lần, kể cả restart giữa chừng. Lỗi mạng → backoff, không lộ token trong lỗi/log.
+- Given daemon khởi động lại giữa lúc xử lý update, Then update đó không được xử lý lần hai.
+
+**FR-TG-03 — Thông báo** · Must · M6
+Mô tả: Theo FR-SG-09: `approval.open` + nhắc lại, `waiting_human`, lỗi lặp, `guard.blocked`, `learning.rolled_back`, digest 08:00. Văn bản thuần (không parse_mode), mọi chuỗi qua bộ che secret, approval chỉ có preview đã che, tool MCP chỉ tên, tin ≤ 3.900 ký tự (dài → hướng dẫn xem trên TUI/web).
+- Given preview approval chứa giá trị secret, Then tin Telegram có giá trị đã che.
+
+**FR-TG-04 — Duyệt bằng nút inline** · Must · M6
+Mô tả: Tin approval có nút *Cho phép* / *Từ chối*. `callback_data = v1.<nonce 96 bit>.<HMAC-SHA256[:16]>` (≤ 64 byte); bản ghi phía hub gắn hành động, approval, chat_id, nhóm nút, hạn (`callback_ttl_s` 7 ngày). Kiểm: tồn tại → đúng chat → đúng chữ ký → còn hạn; hợp lệ thì **tiêu cả nhóm nút** trước khi gọi RPC (vé một lần theo `action_fingerprint` vẫn áp dụng). Sai chat/chữ ký không tiêu nút thật; mọi lần từ chối audit `telegram.callback_rejected{reason}`. Approval quyết ở kênh khác → nút bị gỡ.
+- Given lệnh `rm -rf dummy` bị giữ, When bấm *Cho phép* trên chat allowlist, Then lệnh chạy **đúng một lần**, audit `channel=telegram:<id>`; When bấm lại hoặc bấm nút cùng nhóm, Then bị từ chối.
+- Given `callback_data` bịa / chữ ký sai / từ chat khác, Then bị từ chối, không có `approval.resolved`.
+
+**FR-TG-05 — Xác nhận 2 bước cho thao tác nặng** · Must · M6
+Mô tả: Approval "nặng" (có `protected_resource_id` hoặc `destructive_class ∈ notify.telegram.confirm_classes`, mặc định db, git, system, hub, policy, mcp) và `/estop off`: *Cho phép* → tin xác nhận với nút mới (TTL ≤ 1 h) → *Xác nhận CHO PHÉP* mới gọi approve; *Huỷ* → gửi lại tin duyệt với nút mới.
+- Given approval `git push --force`, When bấm *Cho phép*, Then chưa approve mà nhận tin xác nhận; When bấm *Xác nhận CHO PHÉP*, Then approve.
+
+**FR-TG-06 — Lệnh xem và điều khiển** · Must · M6
+Mô tả: `/status`, `/agents`, `/runs [agent]`, `/approvals` (kèm nút), `/stop <run>`, `/estop on|off` (off cần 2 bước), `/digest` (dựng tại chỗ 24 h qua, chỉ đọc — không dời mốc digest 08:00), `/help`.
+- Given `/estop on` từ chat allowlist, Then ESTOP bật, audit `estop.set` kênh `telegram:<id>`.
+
+**FR-TG-07 — Giao việc và tiếp hội thoại** · Should · M6
+Mô tả: `/run <agent> <yêu cầu>` → `run.start`; bot theo dõi run (kể cả run con sau duyệt/gián đoạn) và gửi kết quả khi xong (outcome, chi phí, lượt, thời gian, tóm tắt cắt ngắn + chỗ xem đầy đủ); **reply** vào tin kết quả → `run.continue`. Chưa hỗ trợ cờ cwd/budget (dùng mặc định agent).
+- Given `/run researcher tóm tắt README`, Then khi run xong chat nhận kết quả + chi phí; When reply "thêm phần rủi ro", Then có run con (`parent_run_id`) và kết quả lần 2.
+
+**FR-TG-08 — Allowlist và cổng người** · Must · M6
+Mô tả: Chỉ chat trong allowlist nhận tin và điều khiển; tin/nút từ chat lạ **không được trả lời**, audit `telegram.ignored` (tối đa 1 dòng/phút/chat). Mặc định chỉ chat riêng (`allow_groups: false`). Allowlist nằm trong nhánh `notify` của `config.yaml` → được kiểm toàn vẹn (FR-SG-12); chỉ sửa qua `telegram.allow|revoke` (HUMAN_ONLY). Agent không đọc được bot token (secret store + sandbox denyRead + `permissions.deny`), lệnh `agent-hub notify telegram …` từ agent bị `forbidden`.
+- Given `/run` hoặc `/estop on` từ chat ngoài allowlist, Then không tạo run/không đổi ESTOP, có audit `telegram.ignored`.
+- Given grep toàn `HUB_HOME` ngoài `secrets/` (gồm hub.db/WAL/log), Then không thấy bot token.
 
 ---
 
@@ -962,6 +1065,9 @@ Mô tả: Hub lưu bản chuẩn của `policy/` và nhánh an toàn của `conf
 | US-16 | P1 | Là người vận hành, tôi muốn chắc rằng agent không thể tự nới chính sách an toàn hay tự cấp quyền phá huỷ cho mình, kể cả qua vòng tự học. | FR-SG-05, FR-LN-19 |
 | US-17 | P1 | Là người vận hành, tôi muốn agent tự chỉnh model/SOUL/tool của nó khi có bằng chứng là tốt hơn, trong giới hạn tần suất và biên tôi đặt. | FR-LN-18, FR-LN-19 |
 | US-18 | P1/P2 | Là người dùng, tôi muốn mọi thứ trong hub bị xoá đều khôi phục được trong thời gian giữ. | FR-SG-06 |
+| US-19 | P1/P2 | Là người không quen terminal, tôi muốn làm mọi việc thường ngày (tạo agent, giao việc, xem live, duyệt, rollback) trên trình duyệt của máy mình. | FR-WEB-01..10 |
+| US-20 | P1 | Là người vận hành không ngồi ở máy, tôi muốn nhận yêu cầu duyệt trên Telegram và bấm nút cho phép/từ chối; thao tác nặng phải xác nhận lại. | FR-SG-09, FR-TG-03..05 |
+| US-21 | P1/P2 | Là người dùng, tôi muốn giao việc cho agent bằng `/run` trên Telegram và nhận kết quả, trả lời để hỏi tiếp. | FR-TG-06/07 |
 
 ### 7.2 Luồng 1 — Tạo agent
 
@@ -1126,6 +1232,7 @@ flowchart TD
 | **eval_results** | `id`, `ledger_entry_id?`, `agent_id`, `golden_task_id`, `variant` (before/after), `score`, `run_id`, `cost_usd`, `created_at` | |
 | **budgets** | `scope` (global/team/agent), `owner_id`, `usd_per_day`, `warn_pct` | Tiêu thụ tính từ `runs` |
 | **audit_log** | `id`, `ts`, `actor`, `channel`, `action`, `target`, `summary` | |
+| **hub_state** (khoá Telegram, 0.8) | `telegram.offset`, `telegram.callbacks` (nonce, hành động, approval, chat, nhóm, hạn), `telegram.approval_msgs`, `telegram.watch`, `telegram.msgmap` | FR-TG-02/04/07; không có migration |
 | **settings_hub** | `concurrency_global`, `digest_schedule`, … (công tắc an toàn đã chuyển sang `safety_policy`) | |
 
 ### 8.2 Bố cục `HUB_HOME`
@@ -1150,6 +1257,7 @@ flowchart TD
   snapshots/                     # trước MỖI thay đổi học (FR-LN-06)
   logs/
   trash/                         # xoá mềm agent/team/task (FR-SG-06)
+  auth/web.json                  # khoá ký link đăng nhập web, 0600 (FR-WEB-01) — agent bị denyRead
 ```
 
 ---
@@ -1224,6 +1332,7 @@ flowchart TD
 | | ~~`learning.blocked`~~ (đổi thành `guard.blocked` ở 0.3) | | |
 | | `curator.report` | summary | stale, archived, proposals |
 | Xoá mềm | `agent.purged` / `trash.restored` / `trash.purged` | summary | đối tượng, by, theo retention hay thủ công |
+| Thông báo (0.8) | `notify.sent` / `notify.failed` | summary | channel (slack/telegram), event gốc, lỗi đã che |
 | Hệ thống | `hub.started` / `hub.stopping` | summary | epoch, version |
 | | `cli.version_warning` | summary | version, matrix |
 | | `hook.event` / `hook.timeout` | debug | hook_name, outcome |
@@ -1268,6 +1377,9 @@ flowchart TD
 | NFR-30 | Tin cậy | Hoàn tác được | 100% thay đổi do vòng học và 100% xoá trong hub khôi phục được trong thời gian giữ (snapshot/ledger/trash) | M4 |
 | NFR-31 | Khả dụng | Ít làm phiền người | Bộ phân loại: recall 100% trên bộ test phá huỷ (FR-SG-07); báo nhầm ≤ 5% số approval **[ĐỀ XUẤT]**; độ trễ phân loại tĩnh p95 ≤ 50 ms, có LLM phụ p95 ≤ 5 s | M1 |
 | NFR-32 | Tin cậy | Ổn định hành vi khi tự sửa | Không quá `learning.rate.*` thay đổi/agent; mọi thay đổi L3 có eval trước; thời gian từ hồi quy phát hiện được tới tự rollback ≤ 1 cửa sổ theo dõi | M4 |
+| NFR-33 | Bảo mật | Web (0.8) | Chỉ bind loopback; Host header phải là loopback:port (khác → 421, chống DNS rebinding); link đăng nhập một lần ký HMAC, hết hạn 5 phút; cookie HttpOnly + SameSite=Strict, idle 12 h, tối đa 7 ngày; **CSRF theo phiên + kiểm Origin/Referer/Sec-Fetch-Site** cho mọi POST; CSP `script-src 'self'` (không inline/eval), X-Frame-Options, no-referrer, no-store; không CORS, không CDN; token người và khoá ký không bao giờ ở HTML/header/cookie/log/audit; agent trong run không tới được web (FR-WEB-10) | M6 |
+| NFR-34 | Bảo mật | Telegram (0.8) | Chỉ chat trong **allowlist** do người xác nhận (ghép nối mã một lần TTL 10 phút); `callback_data` = nonce 96 bit + **HMAC-SHA256**, ràng chat + hạn, tiêu một lần cả nhóm nút; **xác nhận 2 bước** cho thao tác nặng và `/estop off`; offset lưu trước xử lý; token chỉ trong secret store, không lộ ở tin/log/lỗi (logger HTTP hạ WARNING + che theo giá trị); mọi lệnh qua HUMAN_ONLY, audit `telegram:<chat_id>` | M6 |
+| NFR-35 | Khả dụng | Web (0.8) | Tiếng Việt; không tràn ngang ở 390 px; sáng/tối; trang tổng quan cập nhật ≤ 2 s; thao tác ghi chạy được không cần JS | M6 |
 
 ---
 
@@ -1294,6 +1406,8 @@ flowchart TD
 | R-17 | **Lách bộ phân loại phá huỷ** (lệnh obfuscate, script trung gian, tool MCP đặt tên vô hại, xoá qua ghi đè, prompt injection khiến agent tự viết script xoá) | Trung bình | Rất cao | Chuẩn hoá lệnh + phân tích đích so với tập file run tự tạo/protected; deny-by-default khi không chắc; LLM phụ có chống injection; `--disallowedTools` lớp dự phòng; checkpoint + `run revert` cho repo thật; bộ test lách ≥ 200 ca, recall 100%; người khai báo protected | FR-SG-01..03/07, FR-RT-12 |
 | R-18 | **Run treo lâu ở `waiting_human`** giữ lease/khoá repo, chặn việc khác | Trung bình | Trung bình | Nhắc lại có giãn cách, header TUI đỏ, digest; nhả slot đồng thời (Q-21); agent khác vẫn làm việc khác; người có thể deny/huỷ hàng loạt | FR-SG-04 |
 | R-19 | **Người không đọc digest** → thay đổi xấu nhưng chưa vượt ngưỡng tích luỹ dần | Trung bình | Trung bình | Digest gộp khi mở TUI, cảnh báo khi số thay đổi chưa đọc lớn, KPI rollback thủ công, so sánh với baseline gốc (R-16) | FR-LN-13 |
+| R-20 | **Chiếm phiên web** (CSRF, DNS rebinding, link đăng nhập lộ, tiến trình cục bộ khác) → thao tác như người | Thấp | Cao | Loopback + kiểm Host, link một lần 5 phút, cookie HttpOnly/SameSite=Strict, CSRF + Origin, CSP; agent bị sandbox chặn localhost và `auth/**`; giới hạn còn lại khi sandbox tắt ghi ở dev-notes web §3 | NFR-33, FR-WEB-01/10 |
+| R-21 | **Mất điện thoại/tài khoản Telegram** hoặc lộ bot token → kẻ khác duyệt thao tác phá huỷ | Thấp–TB | Cao | Allowlist chat, nút ký HMAC ràng chat, 2 bước cho thao tác nặng, `revoke`/`disable --forget-token`, audit `telegram:<id>`, ESTOP từ CLI/web | NFR-34, FR-TG-04/05/08 |
 
 ---
 
@@ -1313,7 +1427,7 @@ flowchart TD
 
 ---
 
-## 13. Lộ trình M0–M5
+## 13. Lộ trình M0–M6
 
 | Mốc | Thời lượng **[ĐỀ XUẤT, theo 00 §5]** | Nội dung (FR chính) | Tiêu chí hoàn thành (Definition of Done) |
 |---|---|---|---|
@@ -1323,6 +1437,7 @@ flowchart TD
 | **M3** — Team & điều phối | 2 tuần | Team (FR-TM-01..04); Task, DAG, dispatcher, lease/heartbeat, routing, lead decompose, circuit breaker, review step, timeout (FR-TK-02..13); workspace, subagent, json-schema (FR-RT-12..14); rate limit (FR-RT-16); hub-self MCP task tools (FR-MS-08); ngân sách ngày (FR-OB-03); tab Tasks (FR-UI-07); clone/export (FR-AG-06); report (FR-OB-06) | Giao 1 việc cho team qua MCP, lead tách ≥2 task con có phụ thuộc, worker hoàn tất, kết quả tổng hợp trả về client; crash một worker → retry có resume; ngân sách team chặn đúng |
 | **M4** — Vòng học tự chủ | 3–4 tuần **[ĐỀ XUẤT, tăng do thêm eval gate + tự sửa cấu hình]** | Signal (FR-LN-01), trigger (02), review fork (03), proposal (04), pipeline tự áp dụng L1/L2/L3-cấu-hình (05), ledger/snapshot/rollback (06), guard (07), curator pha 1 (08), **eval gate (10, dời từ M5)**, tầng agent (11), digest (13), công tắc (15), theo dõi hồi quy (17), giới hạn tần suất (18), tự sửa cấu hình (19), **FR-SG-05 phần học**, FR-SG-06 skill/memory; memory snapshot (FR-RT-10), hooks hub (FR-RT-17); tab Learnings (FR-UI-06); tool MCP learning; cache metric (FR-OB-04) | Người sửa cùng lỗi 2 lần → review fork → skill patch tự áp dụng → run mới không lặp lỗi, người chỉ thấy trong digest; một đề xuất đổi model/effort qua eval rồi tự áp dụng, một đề xuất làm tụt eval bị `eval_failed`; một thay đổi gây correction tăng bị tự rollback; đề xuất chạm chính sách an toàn bị `guard.blocked`; không có hàng chờ duyệt nào; review không chạm session gốc |
 | **M5** — Tri thức chung tự chủ | 2–3 tuần **[ĐỀ XUẤT]** | Tầng team/global (FR-LN-11), **canary/shadow (FR-LN-16)**, curator liên agent (FR-LN-12), USER profile (FR-LN-14), curator pha 2 (FR-LN-09); OTel (FR-OB-07) | Một thay đổi tầng team qua eval → canary → promoted mà không hỏi người; một thay đổi tầng team gây hồi quy ở canary bị tự rollback trước khi lan; skill trùng giữa 2 agent tự được gom lên team; overhead học ≤ 15% (NFR-19); đo KPI G-4 sau 4 tuần |
+| **M6** — Web & Telegram (thêm ở 0.8) | **[ĐÃ HIỆN THỰC 2026-10-18]** | Web UI (FR-WEB-01..10), bot Telegram (FR-TG-01..08), thông báo đa kênh (FR-SG-09 phần Telegram), NFR-33..35; lệnh `web`, `notify telegram` (FR-UI-08) | Mọi thao tác thường dùng làm được trên web không cần terminal; một `rm -rf` bị giữ được duyệt bằng nút Telegram và chạy đúng một lần; chat lạ không điều khiển được; agent trong run không tới được web và không đọc được token bot; **qua kiểm toán bảo mật web/Telegram**; đã thử với Telegram thật |
 
 ---
 
@@ -1389,7 +1504,9 @@ Không còn câu hỏi mở (0.6). Các bảng dưới giữ lại để truy v�
 
 ---
 
-## 15. Trạng thái hiện thực (thêm ở 0.7)
+## 15. Trạng thái hiện thực (thêm ở 0.7, bổ sung 0.8)
+
+### 15.1 Nghiệm thu v2 (M0–M5, sau hardening)
 
 > Nguồn: `docs/acceptance/traceability-v2.md` (QA độc lập, vòng 2 sau hardening, 2026-10-18), đối chiếu BRD 0.6 với mã nguồn và `uv run pytest -q` (416 test xanh). Tỉ lệ đếm trên bộ yêu cầu 0.6; FR-SG-10..12 mới đưa vào ở 0.7 đã được hiện thực trong hardening (bằng chứng `docs/dev-notes/hardening-SEC.md`).
 
@@ -1412,15 +1529,22 @@ Không còn câu hỏi mở (0.6). Các bảng dưới giữ lại để truy v�
 
 **Việc trước phát hành**: sửa V2-N1 (+ test), sửa V2-N2; chạy kiểm chứng thật bằng agent haiku được yêu cầu tự duyệt (3 cách) và ghi `policy/` bằng python (theo khuyến nghị hardening-SEC §3); đo NFR-19 trên khối lượng thật.
 
+### 15.2 Web & Telegram (M6, thêm ở 0.8)
+
+- **Đã hiện thực** theo `docs/plan/web-telegram.md`: Web UI (`src/agent_hub/web/`, FR-WEB-01..10) và bot Telegram (`notify/telegram.py`, `chat/`, FR-TG-01..08, FR-SG-09 phần Telegram). `uv run pytest -q`: 460 test xanh (gồm 19 test bảo mật web và bộ test Telegram dùng server Bot API giả + e2e với daemon và hook guard thật). Kiểm chứng thật với `claude` 2.1.302 + sandbox: agent trong run **không** kết nối được tới web cục bộ và không đọc được `auth/web.json`. Ảnh màn web desktop/mobile: `docs/screenshots/web/`.
+- **Đang chờ kiểm toán bảo mật** web/Telegram (`docs/acceptance/security-web-telegram.md` đang được viết) — DoD M6 chưa đóng.
+- **Chưa thử với Telegram thật** (chỉ server giả). Việc tiếp: setup bot thật → `/start` → duyệt một `rm -rf` trên repo tạm.
+- Phần chưa làm (FR-WEB-11, Could): trang guard policy/protect, purge, journey, canary chi tiết, xem trước khi nhập MCP, takeover từ web. Phiên web lưu RAM (khởi động lại web → đăng nhập lại). Telegram: chỉ văn bản thuần; `/stop` không xác nhận; `/run` chưa có cờ cwd/budget.
+
 ## Phụ lục A — Truy vết FR ↔ Mục tiêu
 
 | Mục tiêu | Nhóm FR / FR chính | NFR |
 |---|---|---|
-| **G-1** Quản lý đội agent nhanh, không sửa file tay | FR-AG-01..08, FR-TM-01..04, FR-TK-01..05, FR-MC-01..06, FR-UI-08 | NFR-25, NFR-27 |
-| **G-2** Quan sát & điều khiển live | FR-UI-01..07, 09, 10, FR-RT-04, 06, 07, 09, FR-OB-01, 05, FR-TK-10 | NFR-01..05, NFR-08, NFR-26 |
+| **G-1** Quản lý đội agent nhanh, không sửa file tay, không bắt buộc terminal | FR-AG-01..08, FR-TM-01..04, FR-TK-01..05, FR-MC-01..06, FR-UI-08, FR-WEB-01..09, 11, FR-TG-01, 06, 07 | NFR-25, NFR-27, NFR-35 |
+| **G-2** Quan sát & điều khiển live | FR-WEB-02..04, FR-TG-03..06, FR-UI-01..07, 09, 10, FR-RT-04, 06, 07, 09, FR-OB-01, 05, FR-TK-10 | NFR-01..05, NFR-08, NFR-26, NFR-35 |
 | **G-3** Cắm vào hệ thống đang vận hành qua MCP | FR-MS-01..08, FR-MC-01..06, FR-TK-08, FR-RT-03 | NFR-10, 11, 14 |
 | **G-4** Tự cải thiện tối đa, người tham gia ít nhất | FR-LN-01..19, FR-SG-05 (phần học), FR-RT-05 (fork), FR-RT-10, FR-RT-17, FR-UI-06, FR-MS-02 (tool learning) | NFR-16, 18, 30, 32 |
-| **G-5** Chi phí & an toàn vận hành | FR-SG-01..12, FR-RT-08, 09, 15, 16, 18, 19, FR-TK-06, 07, 09, 10, 13, FR-OB-02..04, 06..08 | NFR-06, 07, 09, 12, 13, 15, 17, 19..24, 29, 31 |
+| **G-5** Chi phí & an toàn vận hành | FR-SG-01..12, FR-WEB-10, FR-TG-08, FR-RT-08, 09, 15, 16, 18, 19, FR-TK-06, 07, 09, 10, 13, FR-OB-02..04, 06..08 | NFR-06, 07, 09, 12, 13, 15, 17, 19..24, 29, 31 |
 
 Ma trận chi tiết (FR → mục tiêu chính):
 
@@ -1437,6 +1561,9 @@ Ma trận chi tiết (FR → mục tiêu chính):
 | FR-RT-17 | | | | ● | ○ |
 | FR-LN-01..19 | | | | ● | ○ |
 | FR-SG-01..04, 06..12 | | ○ | ○ | | ● |
+| FR-WEB-01..09, 11 | ● | ● | | ○ | |
+| FR-WEB-10, FR-TG-08 | | ○ | | | ● |
+| FR-TG-01..07 | ○ | ● | ○ | | ○ |
 | FR-SG-05 | | | | ● | ● |
 | FR-MS-01..08 | ○ | ○ | ● | | |
 | FR-MC-01..06 | ○ | | ● | | ○ |

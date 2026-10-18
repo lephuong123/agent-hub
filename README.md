@@ -41,7 +41,7 @@ Chạy thử không tốn tiền: `agent-hub config set runtime.kind fake` (phá
 Không quen terminal? Mở giao diện web trên chính máy này:
 
 ```bash
-uv run agent-hub web --open        # khởi động web (127.0.0.1:8765), mở trình duyệt và tự đăng nhập
+uv run agent-hub web --open        # khởi động web (http://agent-hub.localhost:8765), mở trình duyệt và tự đăng nhập
 ```
 
 - **Tổng quan**: agent nào đang làm gì (cập nhật mỗi 2 giây), chi phí hôm nay, khung đỏ **Cần bạn duyệt** khi agent định làm
@@ -55,7 +55,9 @@ uv run agent-hub web --open        # khởi động web (127.0.0.1:8765), mở t
 
 Dùng được trên điện thoại/màn nhỏ; sáng/tối theo hệ thống. Ảnh màn: `docs/screenshots/web/`.
 
-Đăng nhập & an toàn: link in ra/mở bởi lệnh trên chỉ dùng **một lần** (hết hạn sau 5 phút) rồi đổi thành cookie phiên. Mất phiên
+Đăng nhập & an toàn: web dùng tên riêng `agent-hub.localhost` (trình duyệt tự trỏ về máy này) để cookie không lọt sang app khác
+bạn chạy ở `127.0.0.1`/`localhost`; cần bật JavaScript cho thao tác ghi. Link in ra/mở bởi lệnh trên chỉ dùng **một lần** (hết hạn sau
+5 phút) rồi đổi thành phiên (tự hết sau 1 giờ không thao tác). Mất phiên
 hoặc mở trình duyệt khác → chạy lại `agent-hub web --open` (nếu web đang chạy, lệnh chỉ cấp link mới); `agent-hub web --url`
 chỉ in link. Web **chỉ** nghe trên loopback (`--host` khác 127.0.0.1/::1/localhost bị từ chối) — xem từ máy khác thì dùng
 `ssh -L 8765:127.0.0.1:8765 <máy>`. Mọi thao tác ghi có chống CSRF, ghi nhật ký kênh `web`; agent trong run không truy cập được web.
@@ -79,7 +81,7 @@ Lệnh trong chat: `/status`, `/agents`, `/runs [agent]`, `/approvals`, `/run <a
 khi xong; **trả lời (reply)** vào tin kết quả để tiếp tục hội thoại), `/stop <run>`, `/estop on|off`, `/digest`, `/help`.
 
 An toàn: chỉ chat trong allowlist được nhận tin và điều khiển (tin từ chat khác bị bỏ qua và ghi audit); nút duyệt dùng một lần,
-có chữ ký, chống bấm lại; thao tác phá huỷ nặng (git/db/hệ thống/tài nguyên bảo vệ…) cần xác nhận 2 bước; mọi thao tác ghi audit
+có chữ ký, chống bấm lại, chỉ người đã ghép nối bấm được; mọi "Cho phép" cần xác nhận 2 bước; tin duyệt hiện lệnh ĐẦY ĐỦ; mọi thao tác ghi audit
 kênh `telegram:<chat_id>`. Bot không gửi secret và cắt dữ liệu dài (xem đầy đủ trên TUI/web). Agent trong run không đọc được token bot.
 
 ## Bố cục `HUB_HOME`
