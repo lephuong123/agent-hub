@@ -85,6 +85,7 @@ EVENT_LEVELS: dict[str, str] = {
     "guard.blocked": "summary",
     "guard.tamper_detected": "summary",  # hardening SEC: policy/config/hub.db bị ghi NGOÀI RPC (guard/integrity.py) → khôi phục + Slack
     "auth.denied": "summary",  # hardening SEC: method chỉ-người bị gọi từ tiến trình run/thiếu token (auth.py)
+    "guard.sandbox_override": "summary",  # hardening SEC: người đặt/gỡ ngoại lệ sandbox theo agent (vd loopback)
     "guard.sandbox_disabled": "summary",  # hardening SEC/WT-3: sandbox OS tắt bằng cấu hình (nhiều bất biến dựa vào sandbox)
     "policy.changed": "summary",
     "run.waiting_human": "summary",  # tiến trình đã dừng, chờ người duyệt (slot nhả, khoá giữ)

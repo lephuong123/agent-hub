@@ -498,6 +498,10 @@ async def agent_page(request: Request) -> Response:
     revs = await rpc(request, "agent.revisions", {"id": aid})
     pend = with_wait(await rpc(request, "approval.list", {"agent_id": aid}))
     try:
+        sandbox = await rpc(request, "guard.sandbox.get", {"id": aid}) or {}
+    except RpcError:
+        sandbox = {}
+    try:
         pol = (await rpc(request, "learn.policy_get", {}) or {}).get("agents") or {}
         learn_on = (pol.get(aid) or {}).get("enabled") if isinstance(pol.get(aid), dict) else None
     except RpcError:
@@ -505,7 +509,7 @@ async def agent_page(request: Request) -> Response:
     snap = await rpc(request, "tui.snapshot")
     live = next((r for r in snap.get("agents") or [] if r["id"] == aid), None)
     return await render(request, "agent.html", {"nav": "agents", "a": agent, "runs": runs, "revs": list(reversed(revs or []))[:15], "pend": pend,
-                                                "learn_on": learn_on, "live": live})
+                                                "learn_on": learn_on, "live": live, "sandbox": sandbox})
 
 
 async def runs_page(request: Request) -> Response:
@@ -761,6 +765,12 @@ ACTIONS: dict[str, Action] = {
                             goto=lambda r, f: f"/agents/{f.get('id')}"),
     "agent_revert": Action("agent.revert", lambda f: {"id": _req(f, "id"), "to": int(_req(f, "to", "revision"))},
                            lambda r, f: f"Đã đưa agent về cấu hình revision {f.get('to')}", confirm=lambda f: f"Đưa agent {f.get('id')} về cấu hình revision {f.get('to')}?"),
+    # SEC §8: ngoại lệ sandbox localhost theo agent — HUMAN_ONLY, service tự ghi audit `guard.sandbox_override` theo `channel`
+    "sandbox_localhost": Action("guard.sandbox.set", lambda f: {"id": _req(f, "id"), "allow_localhost": f.get("on") == "1", "by": "user", "channel": CHANNEL},
+                                lambda r, f: f"Đã {'BẬT' if f.get('on') == '1' else 'tắt'} ngoại lệ localhost cho {f.get('id')} (áp dụng từ run kế tiếp)",
+                                confirm=lambda f: (f"BẬT ngoại lệ sandbox cho agent {f.get('id')}?\nAgent sẽ được MỞ CỔNG và GỌI MỌI DỊCH VỤ trên máy này "
+                                                   "(127.0.0.1/::1): DB/dev server cục bộ, cổng debug Chrome nếu đang mở… Chỉ người tắt được.")
+                                if f.get("on") == "1" else f"Tắt ngoại lệ localhost cho agent {f.get('id')}?", danger=True, audit=False),
     "learn_toggle": Action("learn.policy_set", lambda f: {"key": f"agents.{_req(f, 'agent')}.enabled", "value": f.get("on") == "1", "parse": False},
                            lambda r, f: f"Đã {'bật' if f.get('on') == '1' else 'tắt'} tự học cho {f.get('agent')}",
                            confirm=lambda f: f"{'Bật' if f.get('on') == '1' else 'Tắt'} tự học cho agent {f.get('agent')}?"),

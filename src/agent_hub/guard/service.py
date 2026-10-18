@@ -120,6 +120,33 @@ class GuardService:
             checkpoint_root=((run or {}).get("checkpoint") or {}).get("root") if ((run or {}).get("checkpoint") or {}).get("kind") == "git" else None,
         )
 
+    # ------------------------------------------------------------------ ngoại lệ sandbox THEO AGENT (chỉ người đặt)
+    SANDBOX_OVERRIDE_KEYS = ("allow_localhost",)
+
+    def sandbox_overrides(self, agent_id: str | None = None) -> dict[str, Any]:
+        """`hub_state.sandbox_overrides` = {agent_id: {allow_localhost: bool, by, at}}. Lưu NGOÀI cấu hình agent nên vòng học/ledger,
+        export/clone/revert không chạm được; chỉ RPC `guard.sandbox.set` (HUMAN_ONLY) đổi."""
+        allv = self.hub.store.state_get("sandbox_overrides") or {}
+        if agent_id is None:
+            return {k: v for k, v in allv.items() if any(v.get(x) for x in self.SANDBOX_OVERRIDE_KEYS)}
+        return dict(allv.get(agent_id) or {})
+
+    def sandbox_set(self, agent_id: str, *, allow_localhost: bool, by: str = "user", channel: str = "cli") -> dict[str, Any]:
+        from ..auth import require_human
+
+        require_human("đặt ngoại lệ sandbox")  # cổng tầng service (ngoài cổng RPC)
+        self.hub.agents.get_row(agent_id)  # NotFound nếu không có
+        allv = dict(self.hub.store.state_get("sandbox_overrides") or {})
+        before = dict(allv.get(agent_id) or {})
+        cur = {"allow_localhost": bool(allow_localhost), "by": by, "channel": channel, "at": now_iso()}
+        allv[agent_id] = cur
+        self.hub.store.state_set("sandbox_overrides", allv)
+        info = {"agent_id": agent_id, "before": {k: before.get(k) for k in self.SANDBOX_OVERRIDE_KEYS}, "after": {"allow_localhost": cur["allow_localhost"]},
+                "by": by, "channel": channel}
+        audit_record("guard.sandbox_override", agent_id=agent_id, run_id=None, data=info)
+        self.hub.publish(make_event("guard.sandbox_override", agent_id, info, source="hub"))
+        return {"agent_id": agent_id, **cur}
+
     def hub_mcp_servers(self) -> frozenset[str]:
         """H-18: tên đăng ký của MCP server trỏ về CHÍNH hub — nhận theo lệnh (`agent-hub mcp serve`, `-m agent_hub.mcp_server`)
         hoặc URL loopback cổng `mcp_server.http_port`, không theo tên."""

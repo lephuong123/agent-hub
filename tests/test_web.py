@@ -683,3 +683,31 @@ async def test_waiting_human_event_carries_rule_and_page_has_no_dangling_colon(h
     assert ev.payload["tool"] == "Bash" and ev.payload["matched_rule"] == "rm_recursive_outside_run" and ev.payload["reason"]
     html = (await env.client.get(f"/runs/{run['id']}")).text
     assert "luật ?" not in html and "</b> : <code>" not in html and "luật rm_recursive_outside_run" in html
+
+
+async def test_sandbox_localhost_badge_and_toggle(env):
+    """SEC §8: nhãn '⚠ localhost' ở Tổng quan / Agent / chi tiết; bật/tắt qua `guard.sandbox.set` (HUMAN_ONLY, xác nhận, audit kênh web)."""
+    await env.login()
+    for a in ("ag0", "ag1"):
+        env.hub.agents.create({"id": a, "name": a, "model": "haiku"})
+    assert "⚠ localhost" not in (await env.client.get("/agents")).text
+    r = await env.post("/do/sandbox_localhost", {"id": "ag0", "on": "1", "next": "/agents/ag0"})
+    assert r.status_code == 200 and "MỞ CỔNG" in r.text and env.key not in r.text  # chưa xác nhận → chưa bật
+    assert not env.hub.guard.sandbox_overrides("ag0").get("allow_localhost")
+    r = await env.post("/do/sandbox_localhost", {"id": "ag0", "on": "1", "confirm": "yes", "next": "/agents/ag0"})
+    assert r.status_code == 303
+    ov = env.hub.guard.sandbox_overrides("ag0")
+    assert ov["allow_localhost"] and ov["channel"] == "web" and ov["by"] == "user"
+    for path in ("/", "/agents", "/agents/ag0"):
+        html = (await env.client.get(path)).text
+        assert html.count("⚠ localhost") >= 1, path
+        assert "chỉ người tắt được" in html.lower(), path
+    assert "⚠ localhost" not in (await env.client.get("/agents/ag1")).text
+    rows = env.hub.store.conn.execute("SELECT channel, actor FROM audit_log WHERE kind='guard.sandbox_override'").fetchall()
+    assert rows and rows[-1]["channel"] == "web"
+    # không có khoá phiên → 403 (WT-1)
+    r = await env.client.post("/do/sandbox_localhost", data={"csrf": env.csrf, "id": "ag0", "on": "0", "confirm": "yes"})
+    assert r.status_code == 403 and env.hub.guard.sandbox_overrides("ag0")["allow_localhost"]
+    await env.post("/do/sandbox_localhost", {"id": "ag0", "on": "0", "confirm": "yes"})
+    assert not env.hub.guard.sandbox_overrides("ag0")["allow_localhost"]
+    assert "⚠ localhost" not in (await env.client.get("/agents")).text

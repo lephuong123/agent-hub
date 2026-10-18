@@ -86,6 +86,17 @@ def cmd_guard(ctx: Any) -> int:
         rows = ctx.call("guard.decisions", {"run_id": a.run, "limit": a.limit})
         ctx.out(rows, _table([[r["ts"], r["run_id"], r["tool_name"], r["verdict"], r["action"], r["matched_rule"], r.get("approval_request_id") or ""] for r in rows], ["TS", "RUN", "TOOL", "VERDICT", "ACTION", "RULE", "APPROVAL"]) if rows else "(chưa có)")
         return 0
+    if a.action == "sandbox":
+        if a.op == "list":
+            rows = ctx.call("guard.sandbox.list")
+            ctx.out(rows, _table([[k, "localhost/loopback" if v.get("allow_localhost") else "-", v.get("by") or "", v.get("at") or ""] for k, v in rows.items()],
+                                 ["AGENT", "NGOẠI LỆ", "BỞI", "LÚC"]) if rows else "(không agent nào có ngoại lệ sandbox)")
+        else:
+            on = a.state == "on"
+            r = ctx.call("guard.sandbox.set", {"id": a.agent, "allow_localhost": on})
+            ctx.out(r, (f"⚠ agent {a.agent}: CHO PHÉP bind cổng local + kết nối loopback trong sandbox (filesystem/Unix socket vẫn chặn)"
+                        if on else f"agent {a.agent}: đã gỡ ngoại lệ loopback"))
+        return 0
     if a.action == "protect":
         if a.op == "list":
             rows = ctx.call("guard.protect.list")
@@ -163,6 +174,12 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     dd = gs.add_parser("decisions", help="nhật ký quyết định guard", parents=[common])
     dd.add_argument("--run")
     dd.add_argument("--limit", type=int, default=50)
+    sbx = gs.add_parser("sandbox", help="ngoại lệ sandbox theo agent (chỉ người): localhost/loopback", parents=[common])
+    sbs = sbx.add_subparsers(dest="op", required=True)
+    sbs.add_parser("list", parents=[common])
+    sal = sbs.add_parser("allow-localhost", help="cho agent bind cổng local + gọi http://127.0.0.1 (npm run dev, Playwright/CDP)", parents=[common])
+    sal.add_argument("agent")
+    sal.add_argument("state", choices=["on", "off"])
     pr = gs.add_parser("protect", help="tài nguyên được bảo vệ (chỉ người sửa)", parents=[common])
     ps = pr.add_subparsers(dest="op", required=True)
     ps.add_parser("list", parents=[common])

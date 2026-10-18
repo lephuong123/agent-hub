@@ -77,7 +77,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "learn": {"propose", "rollback", "retry", "refine", "policy", "pin", "unpin", "review-cancel", "review_cancel", "cancel"},
     "knowledge": {"pin", "unpin"},
     "golden": {"add", "rm", "remove", "edit", "update", "from-run", "from_run", "restore", "dismiss"},
-    "guard": {"protect", "integrity"},
+    "guard": {"protect", "integrity", "sandbox"},
     "config": {"set", "unset"},
     "secret": {"set", "rm", "remove", "delete"},
     "secrets": {"set", "rm", "remove", "delete"},
@@ -1787,7 +1787,7 @@ class BashAnalyzer:
             v1 = t[1] if len(t) > 1 else ""
             if sub == "learn" and v1 == "policy" and len(t) > 2 and t[2] in ("get", "show"):
                 verbs = set()
-            if sub == "guard" and v1 in ("protect", "integrity") and len(t) > 2 and t[2] in ("list", "ls", "status", "show"):
+            if sub == "guard" and v1 in ("protect", "integrity", "sandbox") and len(t) > 2 and t[2] in ("list", "ls", "status", "show"):
                 verbs = set()
             if sub == "team" and v1 == "member" and len(t) > 2 and t[2] in ("list", "ls"):
                 verbs = set()

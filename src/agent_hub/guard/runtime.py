@@ -85,7 +85,8 @@ HUB_WRITE_DENY_NAMES = (
 AGENT_WRITE_DENY_NAMES = ("config.yaml", "SOUL.md", "MEMORY.md", "USER.md", "skills", ".archive", "runtime", "home", ".tier_overlay")
 
 
-def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cwd: Path | None = None) -> dict[str, Any]:
+def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cwd: Path | None = None,
+                     overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     """Khoá `sandbox` cho settings.json của run (Claude Code ≥ 2.1.302). Thuần ngoài việc liệt kê thư mục HUB_HOME."""
     from ..auth import token_path
     from .policy import package_dir
@@ -152,11 +153,15 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
         sb["filesystem"]["allowWrite"] = aw
     if socks:
         sb["network"]["allowUnixSockets"] = socks
+    if (overrides or {}).get("allow_localhost"):
+        # ngoại lệ THEO AGENT do người đặt (spike 2.1.302): `allowLocalBinding` cho bind/listen cổng local VÀ kết nối loopback
+        # (127.0.0.1/::1, kể cả curl qua proxy). KHÔNG nới filesystem, KHÔNG mở Unix socket (hub.sock vẫn bị chặn — đã kiểm thật).
+        sb["network"]["allowLocalBinding"] = True
     return sb
 
 
 def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_dir: Path, guard_cfg: dict[str, Any], approval_timeout_s: float,
-                   cwd: Path | None = None) -> dict[str, Any]:
+                   cwd: Path | None = None, sandbox_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     s = dict(base)
     cli_t, rpc_t = hook_timeouts(guard_cfg, approval_timeout_s)
     hooks = dict(s.get("hooks") or {})
@@ -172,7 +177,7 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
     if sb_cfg.get("enabled", True):
         user_sb = dict(s.get("sandbox") or {}) if isinstance(s.get("sandbox"), dict) else {}
         user_sb.pop("excludedCommands", None)  # lệnh loại khỏi sandbox = lỗ — không nhận từ cấu hình
-        ours = sandbox_settings(hub_home, Path(socket), sb_cfg, cwd=cwd)
+        ours = sandbox_settings(hub_home, Path(socket), sb_cfg, cwd=cwd, overrides=sandbox_overrides)
         fs = dict(user_sb.get("filesystem") or {})
         for k in ("denyWrite", "denyRead"):
             ours["filesystem"][k] = list(dict.fromkeys(list(fs.get(k) or []) + ours["filesystem"][k]))

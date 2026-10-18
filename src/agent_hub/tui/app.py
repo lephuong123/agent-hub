@@ -154,7 +154,7 @@ class HtopScreen(Screen):
     def _cells(self, r: Row, now: float) -> list[Any]:
         return [
             Text(r.id, style="grey62"),
-            Text(r["name"] or r.id, style="bold"),
+            Text.assemble((r["name"] or r.id, "bold"), (" ⚠lo" if r["sandbox_localhost"] else "", "bold red")),  # SEC: ngoại lệ sandbox loopback
             Text(r["team"] or "—", style="grey70"),
             status_text(r["status"]),
             task_cell(r),

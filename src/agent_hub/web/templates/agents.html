@@ -10,7 +10,7 @@
     <tbody>
     {% for a in rows %}{% set lv = live.get(a.id) or {} %}
       <tr>
-        <td data-label="Agent"><a href="/agents/{{ a.id }}"><b>{{ a.name or a.id }}</b></a> <span class="muted small">{{ a.id }}</span></td>
+        <td data-label="Agent"><a href="/agents/{{ a.id }}"><b>{{ a.name or a.id }}</b></a> <span class="muted small">{{ a.id }}</span>{% if (a.sandbox_overrides or {}).allow_localhost %} {{ m.localhost_badge() }}{% endif %}</td>
         <td data-label="Trạng thái">{{ m.agent_pill(lv.status or a.status) }}</td>
         <td data-label="Vai trò">{{ a.role or '—' }}</td>
         <td data-label="Model"><code>{{ a.model }}</code></td>

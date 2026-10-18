@@ -119,6 +119,9 @@ class Daemon:
             live = self.hub.aggregator.agents.get(r["id"])
             r["last_tool"] = live.last_tool if live else None
             r["cost_today_usd"] = round(self.hub.store.cost_today(r["id"]), 8)
+        ov = self.hub.guard.sandbox_overrides()  # SEC: nhãn cảnh báo ngoại lệ sandbox cho TUI/web
+        for r in rows:
+            r["sandbox_overrides"] = ov.get(r["id"]) or {}
         return rows
 
     def _pause(self, p: dict[str, Any], paused: bool) -> dict[str, Any]:

@@ -87,6 +87,13 @@ permission_mode/tools/MCP; `permission_mode` ∉ `PERMISSION_MODES` (vd bypassPe
 **BUG "luật ?".** `approvals.to_waiting_human` thêm `tool, matched_rule, destructive_class, reason, protected_resource_id` vào payload; template bỏ ":" khi không có tool
 (`test_waiting_human_event_carries_rule_and_page_has_no_dangling_colon`). Ảnh chụp lại: `03-run-cho-duyet.png`, `07-duyet.png`, `15-hop-xac-nhan.png`.
 
+## 3c. Ngoại lệ sandbox localhost theo agent (SEC §8)
+Nhãn đỏ `⚠ localhost` (tooltip: agent được mở cổng và gọi dịch vụ trên máy này; chỉ người tắt được) cạnh tên agent ở Tổng quan
+(`tui.snapshot` → `sandbox_localhost`), danh sách Agent (`agent.list` → `sandbox_overrides`) và trang chi tiết (`guard.sandbox.get`).
+Trang chi tiết có khung "Sandbox: truy cập localhost" + nút bật/tắt → action `sandbox_localhost` = RPC `guard.sandbox.set`
+(HUMAN_ONLY, hộp xác nhận nêu rủi ro, cần khoá phiên WT-1; service tự audit `guard.sandbox_override` với `channel=web`).
+Test: `test_sandbox_localhost_badge_and_toggle`.
+
 ## 4. File dùng chung đã chạm (chỉ THÊM)
 - `pyproject.toml`/`uv.lock`: `jinja2>=3.1`, khai báo rõ `starlette>=0.40`, `uvicorn>=0.30` (đã có gián tiếp qua `mcp`).
 - `cli.py`: đăng ký `web.cli.add_parsers` cuối `build_parser`.
@@ -95,7 +102,7 @@ permission_mode/tools/MCP; `permission_mode` ∉ `PERMISSION_MODES` (vd bypassPe
 - Không đổi `auth.py`/`daemon.py`: tiến trình web là tiến trình của NGƯỜI, đọc token như CLI — kênh `web` đi qua `_audit.channel`.
 
 ## 5. Kiểm chứng
-- `uv run pytest -q`: xanh (gồm 26 test web, ~4 s).
+- `uv run pytest -q`: xanh (gồm 27 test web, ~4 s).
 - Server thật (`web.demo`, daemon trên socket + FakeRuntime) + Playwright Chromium headless: 22 ảnh desktop 1280 (sáng + tối) và
   mobile 390 px; đã xem lại từng ảnh; trên 390 px `scrollWidth == clientWidth` (không tràn ngang); console không lỗi CSP/JS.
   Tạo lại: chạy `web.demo`, rồi script Playwright (đăng nhập bằng link ký từ `auth/web.json`, chụp các trang).

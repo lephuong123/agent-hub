@@ -51,7 +51,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
     {
         # phê duyệt / chính sách an toàn
         "approval.approve", "approval.deny",
-        "guard.protect.add", "guard.protect.rm", "guard.integrity.accept",
+        "guard.protect.add", "guard.protect.rm", "guard.integrity.accept", "guard.sandbox.set",
         "config.set", "auth.reset", "hub.shutdown", "estop.set", "team.estop",
         # vòng đời / cấu hình agent (tool_policy, permission_mode, mcp_servers… là bề mặt nâng quyền)
         "agent.create", "agent.update", "agent.delete", "agent.restore", "agent.purge", "agent.clone", "agent.import",

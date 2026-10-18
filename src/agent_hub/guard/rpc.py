@@ -99,5 +99,10 @@ def register_rpc(d: "Daemon") -> None:
             "run.continue": run_continue,
             "run.resume": run_resume,
             "agent.purge": agent_purge,
+            # SEC: ngoại lệ sandbox theo agent — set chỉ người (auth.HUMAN_ONLY + cổng service), đọc tự do
+            "guard.sandbox.list": lambda p: hub.guard.sandbox_overrides(),
+            "guard.sandbox.get": lambda p: hub.guard.sandbox_overrides(_id(p)),
+            "guard.sandbox.set": lambda p: hub.guard.sandbox_set(
+                _id(p), allow_localhost=bool(p.get("allow_localhost")), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
         }
     )

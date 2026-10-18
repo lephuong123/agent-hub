@@ -27,7 +27,7 @@
     {% for r in rows %}
       {% set rid = r.current_run_id or r.waiting_human or r.last_run_id %}
       <tr class="st-{{ r.status }}">
-        <td data-label="Agent"><div><a href="/agents/{{ r.id }}"><b>{{ r.name }}</b></a>{% if r.name != r.id %} <span class="muted small">{{ r.id }}</span>{% endif %}{% if r.team %}<div class="muted small">team {{ r.team }}</div>{% endif %}</div></td>
+        <td data-label="Agent"><div><a href="/agents/{{ r.id }}"><b>{{ r.name }}</b></a>{% if r.name != r.id %} <span class="muted small">{{ r.id }}</span>{% endif %}{% if r.sandbox_localhost %} {{ m.localhost_badge() }}{% endif %}{% if r.team %}<div class="muted small">team {{ r.team }}</div>{% endif %}</div></td>
         <td data-label="Trạng thái">{{ m.agent_pill(r.status) }}</td>
         <td data-label="Đang làm" class="task-cell">{{ (r.task or '—')|first(90) }}</td>
         <td data-label="Công cụ"><div>{% if r.last_tool %}<code>{{ r.last_tool|tool }}</code>{% if r.last_tool_preview %} <span class="muted small">{{ r.last_tool_preview|first(50) }}</span>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</div></td>

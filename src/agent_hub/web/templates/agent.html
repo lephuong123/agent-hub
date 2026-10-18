@@ -4,7 +4,7 @@
 {% block content %}
 <nav class="crumbs"><a href="/agents">Agent</a> › <span>{{ a.id }}</span></nav>
 <div class="page-head">
-  <h1>{{ a.name or a.id }} {{ m.agent_pill((live or {}).status or a.status) }}</h1>
+  <h1>{{ a.name or a.id }} {{ m.agent_pill((live or {}).status or a.status) }}{% if sandbox.allow_localhost %} {{ m.localhost_badge() }}{% endif %}</h1>
   <div class="row gap wrap-row">
     <a class="btn" href="/agents/{{ a.id }}/edit">✎ Sửa</a>
     {% if a.status == 'paused' %}{{ m.act("agent_resume", "▶ Hoạt động lại", {"id": a.id}, "btn", confirm="Cho agent " ~ a.id ~ " hoạt động lại?") }}
@@ -56,6 +56,17 @@
     <td data-label="Run"><a href="/runs/{{ r.id }}"><code>{{ r.id }}</code></a></td><td data-label="Trạng thái">{{ m.run_pill(r.status) }}</td>
     <td data-label="Yêu cầu">{{ r.prompt|first(80) }}</td><td data-label="Bắt đầu">{{ (r.started_at or r.queued_at)|ts }}</td><td data-label="Chi phí" class="num">{{ r.cost_usd|usd }}</td></tr>{% endfor %}
   </tbody></table>{% endif %}
+</section>
+
+<section class="card {{ 'attention' if sandbox.allow_localhost }}" id="sandbox">
+  <div class="card-head"><h2>Sandbox: truy cập localhost</h2>
+  {% if sandbox.allow_localhost %}{{ m.act("sandbox_localhost", "Tắt ngoại lệ", {"id": a.id, "on": "0"}, "btn", confirm="Tắt ngoại lệ localhost cho agent " ~ a.id ~ "?") }}
+  {% else %}{{ m.act("sandbox_localhost", "Cho phép localhost…", {"id": a.id, "on": "1"}, "btn sm danger", confirm="BẬT ngoại lệ sandbox cho agent " ~ a.id ~ "? Agent sẽ được MỞ CỔNG và GỌI MỌI DỊCH VỤ trên máy này (127.0.0.1/::1): DB/dev server cục bộ, cổng debug Chrome nếu đang mở… Chỉ người tắt được.") }}{% endif %}</div>
+  {% if sandbox.allow_localhost %}
+  <p>{{ m.localhost_badge() }} Agent này được <b>mở cổng và gọi dịch vụ trên máy này</b> (127.0.0.1/::1) — DB, dev server cục bộ, cổng
+    remote-debugging của Chrome nếu đang mở. File hub, secret, socket hub vẫn bị chặn. Bật bởi {{ sandbox.by or '?' }} qua {{ sandbox.channel or '?' }} lúc {{ sandbox.at|ts }}.
+    Chỉ người tắt được; agent không tự bật/tắt.</p>
+  {% else %}<p class="muted small">Mặc định: sandbox chặn mọi kết nối tới localhost. Chỉ bật cho agent cần chạy/thử dịch vụ cục bộ (vd dev server, trình duyệt kiểm thử).</p>{% endif %}
 </section>
 
 <details class="card">

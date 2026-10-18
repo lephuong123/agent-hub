@@ -384,6 +384,7 @@ class RunManager:
                 guard_cfg=guard_cfg,
                 approval_timeout_s=float(hub.config.get("approval.timeout_s")),
                 cwd=cwd,  # hardening SEC: sandbox không chặn ghi workspace của run
+                sandbox_overrides=hub.guard.sandbox_overrides(agent["id"]),  # SEC: ngoại lệ loopback theo agent (chỉ người đặt)
             )
         # hardening H-11 (FR-RT-17): hook QUAN SÁT fail-OPEN (PostToolUse/UserPromptSubmit/Stop) — hàm riêng, không đụng
         # phần guard (fail-closed) của settings; tắt bằng runtime.claude.observe_hooks.enabled=false

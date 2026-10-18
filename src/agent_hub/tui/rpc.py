@@ -120,6 +120,7 @@ def snapshot(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
 
     rows = []
     running_tokens = 0
+    sbx = hub.guard.sandbox_overrides()  # SEC: nhãn cảnh báo ngoại lệ sandbox theo agent
     for a in agents:
         aid = a["id"]
         live = hub.aggregator.agents.get(aid)
@@ -151,6 +152,7 @@ def snapshot(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
             {
                 "id": aid,
                 "name": a.get("name") or aid,
+                "sandbox_localhost": bool((sbx.get(aid) or {}).get("allow_localhost")),
                 "role": a.get("role") or "",
                 "model": a.get("model"),
                 "team": teams.get(aid),

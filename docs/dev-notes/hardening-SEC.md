@@ -87,3 +87,33 @@ Ghi chú: `agents.revert` (agents.py, luồng CLI) mới chỉ chặn ở tầng
 - Cảnh báo sandbox tắt: `Hub._warn_if_sandbox_disabled` — guard bật mà `guard.sandbox.enabled=false` → event đỏ `guard.sandbox_disabled`
   (summary) + audit; `hub.status()` trả `sandbox_enabled` để TUI/web/Telegram hiển thị.
 - Test: `tests/test_sec_v2.py::test_wt3_*`, `::test_sandbox_disabled_emits_red_warning`. Toàn bộ pytest xanh (476).
+
+## 8. Ngoại lệ sandbox theo agent: localhost/loopback (chủ sản phẩm quyết — team toa-soan-ia)
+**Spike thật** (claude 2.1.302, haiku, tổng ≈ $0.013, `scratchpad/sbx2/`), server thật LISTEN 127.0.0.1:8221:
+
+| Cấu hình `sandbox.network` | curl 127.0.0.1 | curl --noproxy | python connect | bind+tự kết nối | node listen | mạng ngoài |
+|---|---|---|---|---|---|---|
+| `allowedDomains:["*"]` (mặc định hub) | exit 7 | exit 7 | EPERM | EPERM | EPERM | 200 |
+| + `allowLocalBinding: true` | **OK** | **OK** | **OK** | **OK** | **OK** | 200 |
+| + thêm `localhost`/`127.0.0.1` vào allowedDomains | OK | OK | OK | OK | OK | 200 (không cần thêm) |
+
+Kết luận: **chỉ `allowLocalBinding: true`** là có tác dụng (bind/listen + kết nối loopback, cả qua proxy lẫn thẳng). Cùng cấu hình đó, đã kiểm
+thật: kết nối **Unix socket vẫn EPERM**, `denyRead`/`denyWrite` vẫn chặn (đọc/ghi `auth/` → Operation not permitted).
+
+**Cài đặt:** `GuardService.sandbox_overrides/sandbox_set` lưu ở `hub_state.sandbox_overrides` = `{agent: {allow_localhost, by, channel, at}}` —
+NGOÀI cấu hình agent nên vòng học/ledger/proposal, `agent update` (khoá lạ bị từ chối), revert/clone/export không đặt/giữ được. Chỉ người:
+RPC `guard.sandbox.set` ∈ `auth.HUMAN_ONLY` + cổng tầng service `auth.require_human`; classifier `agent-hub guard sandbox …` (trừ `list`) forbidden.
+Audit + event `guard.sandbox_override`. `guard/runtime.sandbox_settings(overrides=…)` chỉ thêm `network.allowLocalBinding` — filesystem,
+Unix socket, `allowUnsandboxedCommands=false` giữ nguyên. CLI: `agent-hub guard sandbox list | allow-localhost <agent> on|off`
+(tương đương `agent edit --sandbox-allow-localhost` coordinator gợi ý). Nhãn: TUI cột tên `⚠lo` (đỏ); `agent.list` trả `sandbox_overrides`
+(luồng WEB hiển thị nhãn từ trường này — chưa sửa template web vì là file của luồng WEB).
+Test: `tests/test_sec_sandbox_localhost.py`.
+
+**Rủi ro (agent có loopback):** chạm mọi dịch vụ trên 127.0.0.1/::1 của máy: web hub (`agent-hub.localhost:8765`, cần phiên — khoá ký ở
+`auth/` agent không đọc được), HTTP MCP của hub (cần bearer — `mcp_server/tokens.json` bị denyRead), cổng CDP/remote-debugging của Chrome
+CỦA NGƯỜI nếu đang mở (điều khiển trình duyệt đã đăng nhập!), DB/Redis/dev server cục bộ không xác thực, và có thể mở cổng lắng nghe.
+Khuyến nghị: Chrome cho agent dùng profile riêng + cổng ngẫu nhiên; không bật remote-debugging trên Chrome cá nhân; DB cục bộ có mật khẩu.
+
+**Đã bật thật** (~/.agent-hub, daemon khởi động lại, không run nào đang chạy): toa-lead, dev-soan-thao, dev-du-lieu, dev-giao-dien-quyen,
+phep-thu-nguoc, nghiem-thu-chrome. Thăm dò lại `agent-hub run nghiem-thu-chrome … --model haiku --budget 0.2 --follow` (run r_7273ecaad352,
+$0.0014): `curl http://127.0.0.1:8221/` → 404 rc=0 (trước: exit 7), `net.createServer().listen(0,'127.0.0.1')` → `listen ok 53761` (trước: EPERM).

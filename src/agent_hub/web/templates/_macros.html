@@ -44,4 +44,8 @@
 </div>
 {%- endmacro %}
 
+{% macro localhost_badge() -%}
+<span class="pill danger strong" title="Ngoại lệ sandbox: agent được mở cổng và gọi dịch vụ trên máy này (127.0.0.1/::1). Chỉ người tắt được.">⚠ localhost</span>
+{%- endmacro %}
+
 {% macro empty(text) -%}<div class="empty">{{ text }}</div>{%- endmacro %}
