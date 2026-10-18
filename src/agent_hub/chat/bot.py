@@ -60,7 +60,10 @@ HELP = """agent-hub qua Telegram — lệnh:
 /stop <run> — dừng run
 /estop on [lý do] | /estop off — dừng khẩn cấp toàn hub (tắt cần xác nhận)
 /digest — tóm tắt học 24 giờ qua
+/moi — mở cuộc trò chuyện mới với điều phối viên
 /help — trợ giúp
+Tin nhắn thường (không bắt đầu bằng /) → gửi cho ĐIỀU PHỐI VIÊN (agent quản lý cả đội); reply vào tin của
+  điều phối viên để tiếp tục đúng cuộc trò chuyện đó.
 Xem đầy đủ (log, diff, dữ liệu MCP): agent-hub top / web."""
 
 
@@ -79,6 +82,9 @@ class TelegramBot:
         self.callbacks = CallbackStore(hub, self._callback_key)
         self.notifier = TelegramNotifier(hub, self)
         hub.bus.add_listener(self.notifier)
+        from .manager_chat import ManagerChat
+
+        self.manager = ManagerChat(self)  # M7 MGR-UI: tin thường ↔ điều phối viên
         hub.bus.add_listener(self._on_event)
         self._task: asyncio.Task | None = None
         self._wake: asyncio.Event | None = None
@@ -159,6 +165,8 @@ class TelegramBot:
     # ------------------------------------------------------------------ vòng đời
     def _on_event(self, ev: HubEvent) -> None:
         t = ev.type
+        if t.startswith("manager.") or (t in TERMINAL_RUN_EVENTS and ev.source == "hub"):
+            self.manager.on_event(ev)
         if t == "hub.started":
             self.start()
         elif t == "hub.stopping":
@@ -323,7 +331,7 @@ class TelegramBot:
         if not caller.human:
             raise ChatError("chat/người dùng này không có quyền")
         p = dict(params or {})
-        from ..mcp_server.rpc import MUTATING
+        MUTATING = self.daemon._mutating or _auth.all_mutating()  # mọi luồng (gồm manager.* của M7) — audit đúng kênh telegram
 
         if method in MUTATING:
             p["_audit"] = {"channel": f"telegram:{chat_id}", "actor": "user"}
@@ -363,10 +371,17 @@ class TelegramBot:
             if rid:
                 await self._continue(cid, rid, text, api)
                 return
+            conv = self.manager.conv_of_message(cid, reply.get("message_id"))
+            if conv:  # reply vào tin của điều phối viên → đúng cuộc trò chuyện đó
+                await self.manager.handle_text(cid, text, api, message_id=m.get("message_id"), conv=conv)
+                return
         if text.startswith("/"):
             await self._command(cid, text, api)
             return
-        await self._send(api, cid, "Gõ /help để xem lệnh. Trả lời (reply) vào tin kết quả run để tiếp tục hội thoại.")
+        if text:  # M7: tin thường → điều phối viên (chưa có → hướng dẫn)
+            await self.manager.handle_text(cid, text, api, message_id=m.get("message_id"))
+            return
+        await self._send(api, cid, "Gõ /help để xem lệnh. Tin nhắn chữ thường được gửi cho điều phối viên.")
 
     def _audit_ignored(self, chat_id: str, chat_type: Any, kind: str, from_id: Any = None) -> None:
         now = time.monotonic()
@@ -425,6 +440,7 @@ class TelegramBot:
         handlers = {
             "/start": self._c_help, "/help": self._c_help, "/status": self._c_status, "/agents": self._c_agents, "/runs": self._c_runs,
             "/approvals": self._c_approvals, "/run": self._c_run, "/stop": self._c_stop, "/estop": self._c_estop, "/digest": self._c_digest,
+            "/moi": self._c_new, "/new": self._c_new,
         }
         fn = handlers.get(cmd)
         if fn is None:
@@ -503,6 +519,14 @@ class TelegramBot:
             return None
         st = await self.call(cid, "estop.get")
         return f"ESTOP: {'BẬT' if (st or {}).get('on') else 'tắt'}. Cú pháp: /estop on [lý do] | /estop off"
+
+    async def _c_new(self, cid: str, rest: str, api: TelegramApi) -> str | None:
+        msg = await self.manager.new_conversation(cid, api)
+        if not rest:
+            return msg
+        await self._send(api, cid, msg)  # `/moi <nội dung>` = mở cuộc mới rồi gửi luôn nội dung
+        await self.manager.handle_text(cid, rest, api)
+        return None
 
     async def _c_digest(self, cid: str, rest: str, api: TelegramApi) -> str:
         ops = getattr(self.hub, "learning_ops", None)

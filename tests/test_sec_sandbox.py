@@ -51,8 +51,13 @@ def test_sandbox_blocks_hub_writes_reads_and_socket(tmp_path, monkeypatch):
     assert str(token_path(sock)) in dr and str(hub / "secrets") in dr and f"{hub}/agents/*/runtime" in dr
     # Unix socket: hub.sock không bao giờ được phép; ssh-agent được (git push)
     socks = sb["network"].get("allowUnixSockets") or []
-    assert str(sock) not in socks and "/tmp/ssh-agent.sock" in socks
-    assert sb["network"]["allowedDomains"] == ["*"]
+    # R2-2: ssh-agent mặc định TẮT (agent không push được); người bật bằng guard.sandbox.allow_ssh_agent
+    assert str(sock) not in socks and "/tmp/ssh-agent.sock" not in socks
+    _, _, s_on = _settings(tmp_path / "on", sandbox={"allow_ssh_agent": True})
+    assert "/tmp/ssh-agent.sock" in (s_on["sandbox"]["network"].get("allowUnixSockets") or [])
+    from agent_hub.guard.runtime import DEFAULT_ALLOWED_DOMAINS  # R3-1: mặc định hẹp, không "*"
+    assert sb["network"]["allowedDomains"] == DEFAULT_ALLOWED_DOMAINS
+    assert not any("github" in d for d in sb["network"]["allowedDomains"])
     # tool Read/Grep/Glob của agent cũng không đọc được token/secret/mcp.json
     deny = s["permissions"]["deny"]
     assert f"Read(/{token_path(sock)})" in deny and f"Read(/{hub}/secrets/**)" in deny and f"Read(/{hub}/agents/*/runtime/**)" in deny

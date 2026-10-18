@@ -238,6 +238,56 @@ class PolicyStore:
     def catalog_file(self) -> Path:
         return self.dir / "catalog.yaml"
 
+    @property
+    def repo_deny_file(self) -> Path:
+        return self.dir / "repo_deny.yaml"
+
+    # ------------------------------------------------------------------ MGR-2: mẫu chặn theo repo (người đặt)
+    def _repo_deny_data(self) -> dict[str, Any]:
+        return self._read(self.repo_deny_file)
+
+    def repo_deny_list(self) -> dict[str, list[str]]:
+        d = self._repo_deny_data().get("repos") or {}
+        return {str(k): [str(x) for x in (v or [])] for k, v in d.items()} if isinstance(d, dict) else {}
+
+    def repo_deny_add(self, repo: str, pattern: str) -> dict[str, list[str]]:
+        repo = os.path.realpath(os.path.expanduser(repo))
+        if not pattern.strip():
+            raise ValueError("pattern rỗng")
+        self.ensure()
+        self._snapshot()
+        data = self._repo_deny_data()
+        repos = data.get("repos") if isinstance(data.get("repos"), dict) else {}
+        pats = list(repos.get(repo) or [])
+        if pattern not in pats:
+            pats.append(pattern)
+        repos[repo] = pats
+        data["repos"] = repos
+        data["version"] = int(data.get("version") or 1) + 1
+        self._write(self.repo_deny_file, data)
+        self._cache = None
+        return self.repo_deny_list()
+
+    def repo_deny_rm(self, repo: str, pattern: str | None = None) -> dict[str, list[str]]:
+        repo = os.path.realpath(os.path.expanduser(repo))
+        self.ensure()
+        data = self._repo_deny_data()
+        repos = data.get("repos") if isinstance(data.get("repos"), dict) else {}
+        if repo not in repos:
+            raise KeyError(repo)
+        self._snapshot()
+        if pattern is None:
+            repos.pop(repo, None)
+        else:
+            repos[repo] = [p for p in repos.get(repo) or [] if p != pattern]
+            if not repos[repo]:
+                repos.pop(repo, None)
+        data["repos"] = repos
+        data["version"] = int(data.get("version") or 1) + 1
+        self._write(self.repo_deny_file, data)
+        self._cache = None
+        return self.repo_deny_list()
+
     def ensure(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / "history").mkdir(exist_ok=True)
@@ -358,3 +408,51 @@ class PolicyStore:
 
 def policy_json(pol: Policy) -> str:
     return json.dumps(pol.to_dict(), ensure_ascii=False)
+
+
+def repo_deny_for(store: "PolicyStore", cwd: str) -> list[str]:
+    """Mẫu chặn (disallowedTools kiểu Claude) áp cho run có `cwd` nằm TRONG repo người đã đặt (MGR-2)."""
+    try:
+        from ..workspace import git_root
+    except Exception:  # pragma: no cover
+        git_root = lambda _p: None  # type: ignore
+    repos = store.repo_deny_list()
+    if not repos:
+        return []
+    cwd_real = os.path.realpath(os.path.expanduser(cwd))
+    root = git_root(cwd_real)
+    out: list[str] = []
+    my_urls: set[str] | None = None
+    for repo, pats in repos.items():
+        r = os.path.realpath(os.path.expanduser(repo))
+        if cwd_real == r or cwd_real.startswith(r + "/") or (root and (root == r or root.startswith(r + "/"))):
+            out.extend(pats)
+            continue
+        # R2-2: clone / `git worktree` đặt NGOÀI repo nhưng cùng remote → coi là cùng repo
+        if root:
+            if my_urls is None:
+                my_urls = _remote_urls(root)
+            if my_urls and my_urls & _remote_urls(r):
+                out.extend(pats)
+    return list(dict.fromkeys(out))
+
+
+def _norm_url(u: str) -> str:
+    u = u.strip().rstrip("/")
+    if u.endswith(".git"):
+        u = u[:-4]
+    u = re.sub(r"^[a-z+]+://([^@/]*@)?", "", u)  # bỏ scheme + user@
+    u = re.sub(r"^[^@]+@", "", u).replace(":", "/", 1) if "://" not in u and "@" in u else u
+    return u.lower()
+
+
+def _remote_urls(repo: str) -> set[str]:
+    try:
+        from ..workspace import _git
+
+        r = _git(repo, "remote", "-v")
+    except Exception:
+        return set()
+    if r.returncode != 0:
+        return set()
+    return {_norm_url(line.split()[1]) for line in r.stdout.splitlines() if len(line.split()) >= 2}

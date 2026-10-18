@@ -1,0 +1,20 @@
+{#- Mục của trang Điều phối. Chữ của điều phối viên là DỮ LIỆU: autoescape + pre-wrap, không |safe, không markdown. -#}
+{% macro item(it) -%}
+{%- if it.kind == 'user' -%}
+<div class="mm user"{% if it.run_id %} data-run="{{ it.run_id }}"{% endif %}><div class="mm-who">Bạn{% if it.ts %} · {{ it.ts|ts }}{% endif %}</div><div class="mm-text">{{ it.text }}</div></div>
+{%- elif it.kind == 'manager' -%}
+<div class="mm mgr{{ ' notify' if it.notify }}"{% if it.run_id %} data-run="{{ it.run_id }}"{% endif %}><div class="mm-who">{{ '📣 Điều phối viên báo' if it.notify else ('Điều phối viên · nhịp' if it.tick else 'Điều phối viên') }}{% if it.ts %} · {{ it.ts|ts }}{% endif %}{% if it.run_id %} · <a href="/runs/{{ it.run_id }}">xem lượt chạy</a>{% endif %}</div><div class="mm-text">{{ it.text or '(không có nội dung)' }}</div></div>
+{%- elif it.kind == 'action' -%}
+<div class="mm-act{{ ' err' if not it.ok }}"{% if it.run_id %} data-run="{{ it.run_id }}"{% endif %}><span class="mm-act-ic" aria-hidden="true">{{ '✓' if it.ok else '✖' }}</span><div class="mm-act-body"><div class="mm-act-sum">{{ it.summary }}</div><div class="mm-act-meta">{% if it.target.href %}<a href="{{ it.target.href }}">{{ it.target.label }} →</a>{% elif it.target.label %}<span>{{ it.target.label }}</span>{% endif %}{% if it.tool %} <code>{{ it.tool }}</code>{% endif %}{% if it.ts %} <span class="muted">{{ it.ts|ts }}</span>{% endif %}{% if it.error %} <span class="danger-t">{{ it.error }}</span>{% endif %}</div></div></div>
+{%- elif it.kind == 'note' -%}
+<div class="mm-note {{ it.tone }}"{% if it.run_id %} data-run="{{ it.run_id }}"{% endif %}>{{ it.text }}{% if it.run_id %} · <a href="/runs/{{ it.run_id }}">xem lượt chạy</a>{% endif %}</div>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro pending(run_id) -%}
+<div class="mm mgr pending" data-pending="{{ run_id }}"><div class="mm-who">Điều phối viên · <span class="spin">đang trả lời…</span> · <a href="/runs/{{ run_id }}">xem lượt chạy</a></div><div class="mm-text"></div></div>
+{%- endmacro %}
+
+{% macro side_action(it) -%}
+<li class="fl {{ 'ok' if it.ok else 'danger' }}"><span class="fl-ts">{{ it.ts|ts }}</span> <span class="fl-text">{{ it.summary }}{% if it.target.href %} · <a href="{{ it.target.href }}">{{ it.target.label }}</a>{% endif %}</span></li>
+{%- endmacro %}

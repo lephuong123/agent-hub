@@ -35,7 +35,8 @@ AUTO_ROLLBACK_ACTORS = frozenset({"learning", "review", "agent", "curator"})
 
 
 def is_auto_change(entry: dict[str, Any]) -> bool:
-    return str(entry.get("actor") or "") in AUTO_ROLLBACK_ACTORS
+    a = str(entry.get("actor") or "")
+    return a in AUTO_ROLLBACK_ACTORS or a.startswith("manager:")  # M7: thay đổi của điều phối viên = tự động
 
 
 def ledger(hub: "Hub") -> Any | None:

@@ -62,9 +62,16 @@ DEFAULTS: dict[str, Any] = {
         "sandbox": {
             "enabled": True,
             "fail_if_unavailable": True,  # không khởi động được sandbox → run lỗi (fail-closed), KHÔNG chạy không sandbox
-            "allowed_domains": ["*"],  # mạng ra ngoài như trước (sandbox vẫn chặn Unix socket)
+            # R3-1: mạng của Bash mặc định HẸP (sandbox không chặn được keychain qua Mach IPC → chặn ĐƯỜNG RA của token):
+            # registry gói + Anthropic; KHÔNG gồm github/gitlab/bitbucket. Host của MCP server gán cho agent tự thêm. Người mở thêm theo agent:
+            # `agent-hub guard sandbox allow-domain <agent> <domain>`; đặt ["*"] để quay về như cũ.
+            "allowed_domains": ["registry.npmjs.org", "*.npmjs.org", "registry.yarnpkg.com", "pypi.org", "files.pythonhosted.org",
+                                "*.pythonhosted.org", "api.anthropic.com", "*.anthropic.com"],
             "allow_unix_sockets": [],  # macOS: socket được phép (KHÔNG bao giờ gồm hub.sock)
-            "allow_ssh_agent": True,  # cho `git push` qua ssh-agent ($SSH_AUTH_SOCK)
+            # R2-2: mặc định TẮT — agent không có thông tin xác thực git (ssh-agent, ~/.ssh, gh token, keychain helper) nên không
+            # `git push` được bất kể viết lệnh kiểu gì; người push. Bật lại (chỉ người) nếu agent cần push repo riêng.
+            "allow_ssh_agent": False,
+            "deny_git_credentials": True,
             "protect_hub_code": True,  # chặn ghi mã nguồn gói agent_hub (hook/guard chạy từ đó)
             "extra_deny_write": [],
             "extra_deny_read": [],
@@ -90,7 +97,7 @@ DEFAULTS: dict[str, Any] = {
             "channel": None,
             "api_base": "https://slack.com/api",
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
-                       "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied"],  # M4-B: digest + nhắc chọn golden task (Q-23)
+                       "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,
             "backoff_base_s": 2,
             "timeout_s": 10,
@@ -106,7 +113,7 @@ DEFAULTS: dict[str, Any] = {
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
-                       "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied"],
+                       "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],
             "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp", "file"],  # nhãn "THAO TÁC NẶNG" (mọi cho phép đều 2 bước — WT-5)
             "callback_ttl_s": 604800,  # nút duyệt còn hiệu lực 7 ngày (waiting_human có thể chờ lâu)
             "pair_ttl_s": 600,
@@ -137,6 +144,23 @@ DEFAULTS: dict[str, Any] = {
         "http_port": 8765,  # Streamable HTTP chỉ bind 127.0.0.1 (Q-11, NFR-14)
         "max_wait_s": 25,  # FR-MS-03: không giữ kết nối quá 25 s
         "max_events_per_call": 200,
+    },
+    # M7 MGR-CORE — điều phối viên (manager/): hội thoại liên tục + nhịp heartbeat
+    "manager": {
+        "heartbeat": True,  # tắt = chỉ chạy khi người nhắn / `manager tick`
+        "tick_interval_s": 1800,  # tick định kỳ dự phòng (chỉ chạy khi có việc đáng xử lý)
+        "check_s": 10,  # chu kỳ vòng nền kiểm sự kiện gom được
+        "event_debounce_s": 45,  # gom sự kiện trong cửa sổ này rồi mới tick (một tick cho nhiều sự kiện)
+        "approval_wait_min": 15,  # approval chờ người lâu hơn N phút → sự kiện cho tick
+        "crash_repeat": 2,  # run crashed/failed lặp ≥ N lần/giờ cùng agent → sự kiện
+        "max_pending_events": 40,  # trần sự kiện đưa vào một prompt tick (cũ hơn bị gộp đếm)
+        "tick_budget_usd": 0.5,  # trần chi phí mỗi run tick
+        "chat_budget_usd": None,  # trần mỗi run hội thoại (null = theo limits của agent)
+        "rotate_after_turns": 80,  # sau N lượt cùng session → session mới (mang theo tóm tắt), ngoài autocompact của CLI
+        # MGR-6: trần tần suất thao tác của manager (nhánh config được kiểm toàn vẹn; ngân sách/model/effort kẹp theo learn policy config_bounds)
+        "max_agents_created_per_day": 5,
+        "max_tasks_per_hour": 20,
+        "max_runs_per_hour": 10,
     },
     # M3 — team & điều phối (FR-TK-*, FR-RT-12/16, FR-OB-03)
     "tasks": {
@@ -272,6 +296,8 @@ DEFAULTS: dict[str, Any] = {
         },
     },
     "workspace": {
+        # MGR-1: gốc người cho phép đặt workspace `dir`. Ngoài ra luôn cho vùng scratch/worktree/eval của hub. Người thêm gốc tại đây (chỉ người).
+        "allowed_roots": ["~/Workspace"],
         "checkpoint": True,  # FR-RT-12: checkpoint + diff cho run ghi vào workspace dir
         "max_file_bytes": 5_000_000,  # file lớn hơn: chỉ lưu hash (không revert được)
         "max_files": 20_000,

@@ -93,7 +93,7 @@ class FakeTelegram:
                 self.next_msg += 1
             return 200, {"ok": True, "result": {"message_id": mid, "chat": {"id": int(body["chat_id"])}, "text": body.get("text"),
                                                  "reply_markup": body.get("reply_markup")}}
-        if method in ("answerCallbackQuery", "editMessageReplyMarkup", "deleteWebhook"):
+        if method in ("answerCallbackQuery", "editMessageReplyMarkup", "deleteWebhook", "sendChatAction"):
             return 200, {"ok": True, "result": True}
         return 404, {"ok": False, "error_code": 404, "description": "Not Found"}
 

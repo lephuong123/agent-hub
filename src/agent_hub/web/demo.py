@@ -67,6 +67,61 @@ async def seed(hub) -> dict:
     return {"done": done, "live": live["id"], "risky": risky["id"], "approval": ap["id"]}
 
 
+async def seed_manager(d) -> dict:
+    """Trang Điều phối (M7): chỉ định điều phối viên + một cuộc trò chuyện web có thẻ hành động. Daemon chưa có `manager.*` thật → stub."""
+    from datetime import datetime, timedelta, timezone
+
+    from .. import templates
+    from ..events import iso, make_event
+    from . import manager_stub
+
+    hub = d.hub
+    stub = manager_stub.install(d)
+    tpl = "manager" if "manager" in templates.names() else "researcher"
+    cfg, soul = templates.render(tpl, "dieu-phoi", {"name": "Điều phối viên"})
+    hub.agents.create(cfg, soul)
+
+    async def call(method: str, params: dict) -> dict:
+        resp = await d._dispatch({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        if "error" in resp:
+            raise RuntimeError(resp["error"])
+        return resp["result"]
+
+    await call("manager.set", {"agent_id": "dieu-phoi"})
+    r1 = await call("manager.chat", {"channel": "web", "text": "Tạo một agent nghiên cứu để tóm tắt README của repo agent-hub, rồi giao việc đó cho nó. Xong thì báo tôi."})
+    await hub.runs.wait(r1["run_id"], 30)
+    now = datetime.now(timezone.utc)
+    for k, (tool, target, summary) in enumerate((("agent_create", "agent:nghien-cuu", "Đã tạo agent nghien-cuu (mẫu researcher, model haiku, MCP tai-lieu)"),
+                                  ("task_create", "task:" + (hub.tasks.list()[0]["id"] if hub.tasks.list() else "t_1"),
+                                   "Đã giao task “Tóm tắt README” cho team docs"),
+                                  ("run_start", "run:" + r1["run_id"], "Đã chạy thử agent nghien-cuu với README.md"))):
+        hub.publish(make_event("manager.action", "dieu-phoi", {"tool": tool, "target": target, "summary": summary, "audit_id": 1}, run_id=r1["run_id"],
+                               ts=now - timedelta(minutes=11, seconds=-10 * k)))
+    r2 = await call("manager.chat", {"channel": "web", "conversation_id": r1["conversation_id"], "text": "Có việc gì đang kẹt cần tôi không?"})
+    await hub.runs.wait(r2["run_id"], 30)
+    # nội dung mẫu dễ đọc (FakeRuntime chỉ phát lại fixture tiếng Anh) + mốc thời gian quanh các thẻ hành động
+    texts = {1: ("Xong. Tôi đã tạo agent nghien-cuu (mẫu researcher) và giao task “Tóm tắt README” cho team docs.\n"
+                 "Bản tóm tắt 5 ý đã có trong task — tôi sẽ báo lại khi reviewer duyệt xong."),
+             3: ("Có 1 việc cần anh: run của agent van-hanh đang chờ duyệt lệnh\n  rm -rf /srv/data/tmp-2025\n"
+                 "Tôi không được phép duyệt thao tác phá huỷ — anh xem ở trang Duyệt. Ngoài ra 2 task đang chạy bình thường, chi phí hôm nay $0.42.")}
+    offs = (12, 10, 4, 3)
+    if stub is not None:
+        msgs = stub.convs[r1["conversation_id"]]["messages"]
+        for i, m in enumerate(msgs[:4]):
+            m["ts"] = iso(now - timedelta(minutes=offs[i]))
+            m["text"] = texts.get(i, m["text"])
+        stub.last_tick = iso(now - timedelta(minutes=7))
+        stub.next_tick = iso(now + timedelta(minutes=23))
+    else:  # MGR-CORE thật: bảng manager_messages (chỉ trong demo — daemon demo chạy cùng tiến trình)
+        conn = hub.store.conn
+        ids = [r[0] for r in conn.execute("SELECT id FROM manager_messages WHERE conversation_id=? ORDER BY id", (r1["conversation_id"],))]
+        for i, mid in enumerate(ids[:4]):
+            conn.execute("UPDATE manager_messages SET ts=? WHERE id=?", (iso(now - timedelta(minutes=offs[i])), mid))
+            if i in texts:
+                conn.execute("UPDATE manager_messages SET text=? WHERE id=?", (texts[i], mid))
+    return {"conversation": r1["conversation_id"]}
+
+
 async def main_async(a: argparse.Namespace) -> None:
     import uvicorn
 
@@ -84,6 +139,7 @@ async def main_async(a: argparse.Namespace) -> None:
     while not paths.socket.exists():
         await asyncio.sleep(0.05)
     info = await seed(d.hub)
+    info["manager"] = await seed_manager(d)
     auth = WebAuth()
     app = create_app(paths, auth=auth, port=a.port)
     write_state(paths, host="127.0.0.1", port=a.port, key=auth.key)  # name mặc định agent-hub.localhost

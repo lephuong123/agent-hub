@@ -333,7 +333,15 @@ async def overview_data(request: Request) -> dict[str, Any]:
 async def overview(request: Request) -> Response:
     data = await overview_data(request)
     agents = [r["id"] for r in data["rows"]]
-    return await render(request, "overview.html", {**data, "nav": "overview", "agents": agents})
+    from .manager import _web_convs, mgr_state
+
+    try:
+        mgr = await mgr_state(request)
+        if mgr.get("agent_id"):
+            mgr["web_conv"] = next((c["id"] for c in await _web_convs(request)), None)
+    except RpcError:
+        mgr = {"available": False, "agent_id": None}
+    return await render(request, "overview.html", {**data, "nav": "overview", "agents": agents, "mgr": mgr})
 
 
 async def partial_overview(request: Request) -> Response:
@@ -1066,6 +1074,12 @@ async def favicon(request: Request) -> Response:
 
 
 # ============================================================================ dựng app
+def _manager_routes() -> list[Any]:
+    from .manager import routes as _r
+
+    return _r()
+
+
 def make_templates() -> Jinja2Templates:
     t = Jinja2Templates(directory=str(HERE / "templates"))
     env = t.env
@@ -1110,6 +1124,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/do/{name}", do_action, methods=["POST"]),
         Route("/sse/run/{id}", sse_run),
         Route("/sse/firehose", sse_firehose),
+        *_manager_routes(),
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
     app = Starlette(routes=routes, exception_handlers={HTTPException: http_error, RpcError: rpc_error, DaemonUnavailable: rpc_error})
@@ -1117,5 +1132,10 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
     app.add_middleware(GuardMiddleware, state=state)
     return app
 
+
+# M7 MGR-UI: thao tác ghi của trang Điều phối (manager_set / manager_unset) — module manager dùng lại helper của app
+from . import manager as _mgr  # noqa: E402
+
+_mgr.register_actions(ACTIONS, Action, _req)
 
 __all__ = ["create_app", "ACTIONS", "agent_changes", "replay_items", "WebState", "urlencode"]

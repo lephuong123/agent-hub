@@ -84,6 +84,26 @@ An toàn: chỉ chat trong allowlist được nhận tin và điều khiển (ti
 có chữ ký, chống bấm lại, chỉ người đã ghép nối bấm được; mọi "Cho phép" cần xác nhận 2 bước; tin duyệt hiện lệnh ĐẦY ĐỦ; mọi thao tác ghi audit
 kênh `telegram:<chat_id>`. Bot không gửi secret và cắt dữ liệu dài (xem đầy đủ trên TUI/web). Agent trong run không đọc được token bot.
 
+## Điều phối viên
+
+Điều phối viên là **một agent bạn chỉ định** để quản lý cả đội: bạn nói mục tiêu bằng lời ("tạo agent nghiên cứu tóm tắt README
+của repo X rồi giao việc đó"), nó tự tạo/sửa agent và team, giao task, theo dõi tới khi xong và báo lại. Nó KHÔNG được duyệt thao tác
+phá huỷ, sửa chính sách/guard/golden task, mở ngoại lệ sandbox, xoá vĩnh viễn, tắt ESTOP hay sửa cấu hình của chính nó; mọi thao tác
+ghi nhật ký `manager:<agent>` và rollback được.
+
+- **Chỉ định** (chỉ người): `agent-hub manager set <agent>` (huỷ: `--none`), hoặc web → trang **Điều phối** → *Chỉ định…* (có hộp xác nhận).
+- **Web — trang Điều phối** (đầu menu): khung chat theo cuộc trò chuyện (*+ Cuộc trò chuyện mới* để mở ngữ cảnh mới), trả lời chạy
+  chữ trực tiếp, **thẻ hành động** của điều phối viên ("Đã tạo agent X", "Đã giao task Y cho team Z") có link tới đối tượng, cột bên:
+  trạng thái + nhịp (lần gần nhất / kế tiếp), hành động gần đây, danh sách cuộc trò chuyện. Trang **Tổng quan** có khung nhỏ
+  *Điều phối viên* với ô gửi nhanh. Chữ của điều phối viên luôn hiện như văn bản thuần (không HTML, không link do agent đặt).
+- **Telegram**: mọi tin nhắn **không** bắt đầu bằng `/` được gửi cho điều phối viên; trả lời về trong khung "nội dung do AGENT viết"
+  (không có nút). Nhắn tiếp là cùng cuộc trò chuyện; **reply** vào một tin cũ của điều phối viên để quay lại đúng cuộc đó; `/moi` (hoặc
+  `/moi <nội dung>`) mở cuộc trò chuyện mới. Tin điều phối viên chủ động báo (`notify_owner`) cũng đến đây. Chưa có điều phối viên → bot
+  trả hướng dẫn. Các lệnh cũ (`/run`, reply vào tin kết quả run…) giữ nguyên.
+- **Terminal**: `agent-hub manager chat "<nội dung>"`, `manager get|conversations|history|tick`.
+
+Ảnh: `docs/screenshots/web/16-dieu-phoi*.png`, `17-…`, `18-…`.
+
 ## Bố cục `HUB_HOME`
 
 ```

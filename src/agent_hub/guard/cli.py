@@ -89,13 +89,29 @@ def cmd_guard(ctx: Any) -> int:
     if a.action == "sandbox":
         if a.op == "list":
             rows = ctx.call("guard.sandbox.list")
-            ctx.out(rows, _table([[k, "localhost/loopback" if v.get("allow_localhost") else "-", v.get("by") or "", v.get("at") or ""] for k, v in rows.items()],
-                                 ["AGENT", "NGOẠI LỆ", "BỞI", "LÚC"]) if rows else "(không agent nào có ngoại lệ sandbox)")
+            ctx.out(rows, _table([[k, "localhost/loopback" if v.get("allow_localhost") else "-", ",".join(v.get("allow_domains") or []) or "-",
+                                   v.get("by") or "", v.get("at") or ""] for k, v in rows.items()],
+                                 ["AGENT", "LOOPBACK", "DOMAIN MỞ THÊM", "BỞI", "LÚC"]) if rows else "(không agent nào có ngoại lệ sandbox)")
+        elif a.op == "allow-domain":
+            r = ctx.call("guard.sandbox.allow_domain", {"id": a.agent, "domain": a.domain, "remove": bool(a.remove)})
+            ctx.out(r, (f"agent {a.agent}: đã gỡ domain {a.domain}" if a.remove else
+                        f"⚠ agent {a.agent}: Bash được ra mạng tới {a.domain} (domain hiện mở: {', '.join(r.get('allow_domains') or [])})"))
         else:
             on = a.state == "on"
             r = ctx.call("guard.sandbox.set", {"id": a.agent, "allow_localhost": on})
             ctx.out(r, (f"⚠ agent {a.agent}: CHO PHÉP bind cổng local + kết nối loopback trong sandbox (filesystem/Unix socket vẫn chặn)"
                         if on else f"agent {a.agent}: đã gỡ ngoại lệ loopback"))
+        return 0
+    if a.action == "repo-deny":
+        if a.op == "list":
+            d = ctx.call("guard.repo_deny.list")
+            ctx.out(d, _table([[repo, p] for repo, pats in d.items() for p in pats], ["REPO", "PATTERN"]) if d else "(chưa có mẫu chặn theo repo)")
+        elif a.op == "add":
+            r = ctx.call("guard.repo_deny.add", {"repo": a.repo, "pattern": a.pattern})
+            ctx.out(r, f"đã thêm mẫu chặn '{a.pattern}' cho repo {a.repo} (áp cho MỌI agent chạy trong repo)")
+        else:
+            r = ctx.call("guard.repo_deny.rm", {"repo": a.repo, "pattern": a.pattern})
+            ctx.out(r, f"đã gỡ mẫu chặn repo {a.repo}")
         return 0
     if a.action == "protect":
         if a.op == "list":
@@ -180,6 +196,19 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     sal = sbs.add_parser("allow-localhost", help="cho agent bind cổng local + gọi http://127.0.0.1 (npm run dev, Playwright/CDP)", parents=[common])
     sal.add_argument("agent")
     sal.add_argument("state", choices=["on", "off"])
+    sad = sbs.add_parser("allow-domain", help="mở domain mạng cho Bash của agent (chỉ người, R3-1); --remove để gỡ", parents=[common])
+    sad.add_argument("agent")
+    sad.add_argument("domain", help="vd github.com, *.cchchn.com, api.example.com:8443")
+    sad.add_argument("--remove", action="store_true")
+    rd = gs.add_parser("repo-deny", help="mẫu chặn theo repo (chỉ người): áp cho MỌI agent chạy trong repo (MGR-2)", parents=[common])
+    rds = rd.add_subparsers(dest="op", required=True)
+    rds.add_parser("list", parents=[common])
+    rda = rds.add_parser("add", help='vd: guard repo-deny add /path/repo "Bash(npm run deploy:*)"', parents=[common])
+    rda.add_argument("repo")
+    rda.add_argument("pattern")
+    rdr = rds.add_parser("rm", parents=[common])
+    rdr.add_argument("repo")
+    rdr.add_argument("pattern", nargs="?")
     pr = gs.add_parser("protect", help="tài nguyên được bảo vệ (chỉ người sửa)", parents=[common])
     ps = pr.add_subparsers(dest="op", required=True)
     ps.add_parser("list", parents=[common])

@@ -189,10 +189,14 @@ class RunManager:
         team_id: str | None = None,
         run_opts: dict[str, Any] | None = None,
         max_runtime_s: float | None = None,
+        manager_issue: bool = False,
     ) -> dict[str, Any]:
         if not prompt or not prompt.strip():
             raise HubError("prompt rỗng")
         agent = self.hub.agents.get_row(agent_id)
+        if cwd:  # MGR-1: workspace ad-hoc phải trong gốc cho phép, không trong vùng bảo vệ
+            from .workspace import validate_workspace
+            validate_workspace(self.hub, cwd, "cwd của run")
         if parent_run_id:  # M3: chuỗi resume/continue giữ nguyên task/team/tuỳ chọn run
             parent = self.store.get_run(parent_run_id) or {}
             if parent.get("agent_id") == agent_id:
@@ -200,10 +204,26 @@ class RunManager:
                 team_id = team_id or parent.get("team_id")
                 run_opts = run_opts if run_opts is not None else parent.get("run_opts")
                 max_runtime_s = max_runtime_s or parent.get("max_runtime_s")
+        # M7 MGR-3: vai trò manager (hub-self `manager`, hội thoại) CHỈ cho run do ManagerService tạo (`manager_issue`) hoặc chuỗi tiếp
+        # nối NỘI BỘ của hub (sau approval / daemon restart) từ một run như vậy — continue/resume/steer từ nơi khác KHÔNG thừa kế.
+        mgr_keep = False
+        if run_opts and (run_opts.get("hub_self") == "manager" or any(k in run_opts for k in MANAGER_OPT_KEYS)):
+            mgr = getattr(self.hub, "manager", None)
+            mgr_keep = manager_issue or bool(parent_run_id and resume_reason in MANAGER_INTERNAL_RESUME and mgr is not None and mgr.is_issued(parent_run_id))
+            if not mgr_keep:
+                run_opts = {k: v for k, v in run_opts.items() if k not in MANAGER_OPT_KEYS and not (k == "hub_self" and v == "manager")} or None
         if team_id:
             team = self.hub.teams.find(team_id)
             if team is not None and team.get("estop"):
                 raise Blocked(f"ESTOP của team '{team_id}' đang bật — không khởi chạy run mới. Lý do: {team.get('estop_reason') or '(không ghi)'}")
+        # M7 MGR-4: ESTOP team chặn MỌI run của agent thành viên, bất kể đường vào (ad-hoc, task không team, team khác)
+        est = self.store.conn.execute(
+            "SELECT t.id, t.estop_reason FROM team_members m JOIN teams t ON t.id = m.team_id WHERE m.agent_id=? AND t.estop=1 AND t.archived_at IS NULL LIMIT 1",
+            (agent_id,),
+        ).fetchone()
+        if est is not None:
+            raise Blocked(f"agent '{agent_id}' thuộc team '{est[0]}' đang ESTOP — không khởi chạy run nào của agent này. Lý do: {est[1] or '(không ghi)'}",
+                          data={"team_estop": est[0]})
         es = self.estop
         if es.get("on"):
             raise Blocked(f"ESTOP đang bật — không khởi chạy run mới. Lý do: {es.get('reason') or '(không ghi)'}", data={"estop": es})
@@ -246,6 +266,8 @@ class RunManager:
             "max_runtime_s": max_runtime_s,
         }
         self.store.insert_run(row)
+        if mgr_keep:
+            self.hub.manager.mark_issued(run_id, (run_opts or {}).get("manager_conversation"))
         if task_id:
             self.hub.dispatcher.on_run_submitted(task_id, run_id, parent_run_id)
         seq_before = self.hub.bus.last_seq
@@ -357,10 +379,16 @@ class RunManager:
         opts = dict(run.get("run_opts") or {})
         if run.get("cwd"):
             cwd, wkind = Path(run["cwd"]), ("worktree" if opts.get("workspace_kind") == "worktree" else "dir")
+            if _in_agent_workspaces(cwd, home):  # M7: thư mục cố định trong workspaces/ của agent (hội thoại manager) = scratch
+                wkind = "scratch"
         elif agent.get("workspace_default"):
             cwd, wkind = Path(agent["workspace_default"]).expanduser(), "dir"
         else:
             cwd, wkind = home / "workspaces" / run_id, "scratch"
+        if wkind in ("dir", "worktree") and cwd.exists():  # R2-5 (SEC): kiểm lại lúc spawn — chống TOCTOU (đổi thành symlink sau khi đặt)
+            from .workspace import validate_workspace
+
+            validate_workspace(hub, str(cwd.resolve()), "cwd của run (kiểm lại lúc spawn)")
         if opts.get("eval_overlay"):  # M4-B: seed file của golden task vào workspace scratch của bản sao
             from .evals.overlay import seed_workspace
 
@@ -384,7 +412,7 @@ class RunManager:
                 guard_cfg=guard_cfg,
                 approval_timeout_s=float(hub.config.get("approval.timeout_s")),
                 cwd=cwd,  # hardening SEC: sandbox không chặn ghi workspace của run
-                sandbox_overrides=hub.guard.sandbox_overrides(agent["id"]),  # SEC: ngoại lệ loopback theo agent (chỉ người đặt)
+                sandbox_overrides=hub.guard.run_sandbox_overrides(agent["id"]),  # SEC: ngoại lệ theo agent (chỉ người) + host MCP của agent
             )
         # hardening H-11 (FR-RT-17): hook QUAN SÁT fail-OPEN (PostToolUse/UserPromptSubmit/Stop) — hàm riêng, không đụng
         # phần guard (fail-closed) của settings; tắt bằng runtime.claude.observe_hooks.enabled=false
@@ -422,14 +450,20 @@ class RunManager:
             env_extra = {"AGENT_HUB_RUN_ID": run_id}
             # lớp tĩnh: mẫu luôn-phá-huỷ; bỏ ĐÚNG mẫu khớp thao tác đã được người duyệt (vé chưa dùng)
             tickets = hub.approvals.unused_tickets(run.get("session_id")) if run.get("resumed_from_session") else []
-            all_deny = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + gr.static_disallowed(guard_cfg)))
+            repo_deny = hub.guard.repo_deny_patterns(str(cwd))  # MGR-2: mẫu chặn theo repo (người đặt), áp cho mọi agent
+            all_deny = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + gr.static_disallowed(guard_cfg) + repo_deny))
             keep, removed = gr.strip_for_tickets(all_deny, tickets)
             tp["disallowed_tools"] = keep
             static = keep
             if removed:
                 self.hub.publish(make_event("guard.decision", agent["id"], {"tool": "(argv)", "action": "static_rules_lifted_once", "removed": removed, "tickets": [t["id"] for t in tickets]}, run_id=run_id))
         # M3 — hub-self MCP (FR-MS-08): tool task_* theo vai trò, ràng với run_id
-        if run.get("task_id") and opts.get("hub_self"):
+        # M7: run của điều phối viên (không có task) dùng hub-self vai trò `manager` — chỉ khi agent đúng là manager được chỉ định
+        is_mgr = (opts.get("hub_self") == "manager" and getattr(hub, "manager", None) is not None and hub.manager.is_manager(agent["id"])
+                  and hub.manager.is_issued(run_id))  # MGR-3: chỉ run do hội thoại/tick tạo
+        if opts.get("hub_self") == "manager" and not is_mgr:
+            opts["hub_self"] = None
+        if (run.get("task_id") or is_mgr) and opts.get("hub_self"):
             from .mcp_server.hub_self import SERVER_NAME, server_entry
 
             servers[SERVER_NAME] = server_entry(run_id, hub.paths.socket, hub.paths.home, str(opts["hub_self"]), guard_cfg)
@@ -450,10 +484,13 @@ class RunManager:
         ar = self.active.get(run_id)
         if ar is not None:
             ar.static_deny = static
+        prompt = run["prompt"]
+        if is_mgr:  # R2-3: khoá tiêu đề tin thật chỉ đưa vào stdin của run manager, không bao giờ vào DB
+            prompt = hub.manager.render_prompt(run_id, prompt)
         return RunSpec(
             run_id=run_id,
             agent_id=agent["id"],
-            prompt=run["prompt"],
+            prompt=prompt,
             cwd=cwd,
             session_id=run["session_id"],
             raw_log_path=hub.paths.runs_dir / f"{run_id}.jsonl",
@@ -530,6 +567,8 @@ class RunManager:
         if (run.get("run_opts") or {}).get("read_only") or _agent_read_only(agent):
             return None  # FR-RT-12: run chỉ đọc không bị khoá
         if run.get("cwd"):
+            if _in_agent_workspaces(Path(run["cwd"]), Path(agent["home_path"])):
+                return None  # M7: scratch cố định của agent (hội thoại manager) — không phải repo người
             return self.locks.key_for(run["cwd"], "dir")
         if agent.get("workspace_default"):
             return self.locks.key_for(agent["workspace_default"], "dir")
@@ -1066,6 +1105,18 @@ class RunManager:
             run["agent_id"], prompt, cwd=run.get("cwd"), budget_usd=budget_usd, model=run.get("model"), kind=run.get("kind") or "adhoc",
             resume_session_id=run["session_id"], parent_run_id=run["id"], resume_reason=reason,
         )
+
+
+# M7 MGR-3: khoá run_opts của vai trò manager + lý do tiếp nối NỘI BỘ của hub được giữ vai trò
+MANAGER_OPT_KEYS = ("manager_conversation", "manager_kind")
+MANAGER_INTERNAL_RESUME = ("approval", "daemon_restart")
+
+
+def _in_agent_workspaces(cwd: Path, home: Path) -> bool:
+    try:
+        return Path(cwd).resolve().is_relative_to((Path(home) / "workspaces").resolve())
+    except OSError:  # pragma: no cover
+        return False
 
 
 def _agent_read_only(agent: dict[str, Any]) -> bool:

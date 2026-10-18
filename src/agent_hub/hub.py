@@ -34,6 +34,7 @@ class Hub:
         self.bus.add_listener(self.aggregator.apply)
         self.runs = RunManager(self, runtime)
         self.agents = AgentService(self.store, paths, self.config, self.publish, active_runs=self.runs.active_runs)
+        self.agents.hub = self  # MGR-1: validate_workspace cần config/guard/paths của hub
         # M1 luồng A: self.secrets, self.audit, self.mcp + watcher tool.write (mcp_client/wiring.py)
         from .mcp_client.wiring import attach as _attach_integration
 
@@ -76,6 +77,10 @@ class Hub:
         from .runtime.compat import attach as _attach_compat
 
         _attach_compat(self)
+        # M7 MGR-CORE: điều phối viên (`hub.manager`: chỉ định, hội thoại, heartbeat, kiểm quyền) — manager/service.py
+        from .manager import attach as _attach_manager
+
+        _attach_manager(self)
         self._bg: list[Any] = []
         # hardening SEC (H-02 lớp 3): toàn vẹn policy/ + config.yaml + hub.db (`hub.integrity`) — guard/integrity.py. GIỮ CUỐI __init__
         from .guard.integrity import attach as _attach_integrity
@@ -116,8 +121,15 @@ class Hub:
             log.exception("không dọn được runtime/")
         self.integrity.start()  # SEC: so policy/ với bản chuẩn + vòng kiểm nền
         self._warn_if_sandbox_disabled()
+        try:  # R2-1(c): .pth/sitecustomize lạ trong venv của hub → cảnh báo đỏ
+            from .guard.integrity import check_python_env
+
+            check_python_env(self)
+        except Exception:  # pragma: no cover
+            log.exception("không kiểm được môi trường Python")
         self.publish(make_event("hub.started", None, {"epoch": self.bus.epoch, "version": __version__, "reconciled_runs": n}))
         self.dispatcher.start()  # M3: vòng tick dispatcher (cần event loop đang chạy)
+        self.manager.start()  # M7: vòng nhịp điều phối viên (chỉ tick khi có việc)
         self.compat.check_on_start()  # hardening H-10: phiên bản CLI → hub_state.cli_compat (header TUI)
         try:  # vòng nhắc approval + purge retention (cần event loop đang chạy)
             import asyncio
@@ -129,6 +141,7 @@ class Hub:
     async def stop(self) -> None:
         self.publish(make_event("hub.stopping", None, {"epoch": self.bus.epoch}))
         await self.dispatcher.stop()  # M3
+        await self.manager.stop()  # M7
         await self.runs.shutdown()
         self.integrity.stop()
         for t in self._bg:

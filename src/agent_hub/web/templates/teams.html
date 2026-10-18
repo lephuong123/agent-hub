@@ -4,7 +4,7 @@
 {% block content %}
 <div class="page-head"><h1>Team</h1></div>
 {% for t in teams %}
-<section class="card {{ 'archived' if t.archived_at }}">
+<section class="card {{ 'archived' if t.archived_at }}" id="team-{{ t.id }}">
   <div class="card-head"><h2>{{ t.name }} <span class="muted small">{{ t.id }}</span>{% if t.estop %} <span class="pill danger">ESTOP</span>{% endif %}{% if t.archived_at %} <span class="pill muted">đã lưu trữ</span>{% endif %}</h2>
     <div class="row gap wrap-row">
       <a class="btn sm" href="/tasks?team={{ t.id }}">Công việc</a>

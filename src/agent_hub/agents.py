@@ -161,6 +161,7 @@ class AgentService:
         self.config = config
         self.publish = publish
         self.active_runs = active_runs
+        self.hub: Any = None  # gắn sau trong Hub.__init__ (validate_workspace cần config/guard)
 
     # ------------------------------------------------------------------ helpers
     def _check_mcp(self, cfg: AgentConfig) -> None:
@@ -210,6 +211,9 @@ class AgentService:
             extra = " (đang trong thùng rác — dùng `agent restore`)" if existing.get("deleted_at") else ""
             raise Conflict(f"agent đã tồn tại: {cfg.id}{extra}")
         self._check_mcp(cfg)
+        if cfg.workspace_default:
+            from .workspace import validate_workspace
+            validate_workspace(self.hub, cfg.workspace_default, "workspace_default")
         home = self.paths.agent_home(cfg.id)
         if home.exists():
             raise Conflict(f"agent đã tồn tại: thư mục {home} đã có")
@@ -283,6 +287,9 @@ class AgentService:
             msg, fields = _validation_message(e)
             raise HubError(msg, data={"fields": fields}) from None
         self._check_mcp(cfg)
+        if cfg.workspace_default and cfg.workspace_default != current.get("workspace_default"):
+            from .workspace import validate_workspace
+            validate_workspace(self.hub, cfg.workspace_default, "workspace_default")
         home = Path(row["home_path"])
         changed = {k: v for k, v in cfg.model_dump().items() if current.get(k) != v}
         if not changed and soul is None:

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% import "_macros.html" as mc with context %}
+{% import "_manager.html" as mg with context %}
+{% block title %}Điều phối{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Điều phối</h1></div>
+{% if not m.available %}
+<section class="card"><h2>Chưa sẵn sàng</h2>
+<p>Daemon đang chạy chưa có chức năng điều phối viên (<code>manager.*</code>). Cập nhật agent-hub rồi khởi động lại daemon: <code class="cmd">agent-hub daemon restart</code>.</p></section>
+{% elif not m.agent_id %}
+<section class="card mgr-intro">
+  <h2>Chưa có điều phối viên</h2>
+  <p>Điều phối viên là <b>một agent bạn chỉ định</b> để quản lý cả đội: bạn nói mục tiêu bằng lời, nó tự tạo agent/team, giao task, theo dõi tới khi xong và báo lại ở đây hoặc qua Telegram.</p>
+  <ul class="small">
+    <li>Được tự làm: tạo/sửa/xoá mềm agent và team, đổi tool/MCP/model, giao task, chạy/dừng run, bật ESTOP.</li>
+    <li>Không bao giờ được: duyệt thao tác phá huỷ, sửa chính sách/guard/golden task, ngoại lệ sandbox, xoá vĩnh viễn, tắt ESTOP, sửa cấu hình của chính nó.</li>
+    <li>Mọi thao tác của nó ghi nhật ký với tên <code>manager:&lt;agent&gt;</code> và rollback được.</li>
+  </ul>
+  {% if agents %}
+  <form method="post" action="/do/manager_set" class="row gap wrap-row" data-confirm="Chỉ định agent đã chọn làm ĐIỀU PHỐI VIÊN? Nó sẽ được tự tạo/sửa agent, team và giao việc cho cả đội (không được duyệt thao tác phá huỷ hay sửa chính sách).">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/manager">
+    <label class="grow">Agent làm điều phối viên<select name="agent_id" required>{% for a in agents %}<option value="{{ a.id }}">{{ a.name or a.id }}{% if a.name and a.name != a.id %} ({{ a.id }}){% endif %}</option>{% endfor %}</select></label>
+    <button class="btn primary" type="submit">Chỉ định…</button>
+  </form>
+  {% else %}<p class="muted">Chưa có agent nào.</p>{% endif %}
+  <p class="small muted">Nên dùng một agent riêng cho vai trò này{% if templates %} — <a href="/agents/new?template={{ templates[0].name }}">tạo từ mẫu {{ templates[0].name }}</a>{% else %} (model mạnh, mô tả rõ vai trò){% endif %}. Trong terminal: <code class="cmd">agent-hub manager set &lt;agent&gt;</code>.</p>
+</section>
+{% else %}
+<div class="mgr-grid">
+  <section class="card mgr-chat">
+    <div class="card-head">
+      <h2>Trò chuyện với điều phối viên</h2>
+      <div class="row gap"><span class="pill muted" id="mgr-live">đang kết nối…</span><a class="btn sm" href="/manager?new=1">+ Cuộc trò chuyện mới</a></div>
+    </div>
+    <div class="mgr-log" id="mgr-log" data-sse-manager="/sse/manager?since={{ since }}&amp;epoch={{ epoch }}" data-conv="{{ conv or '' }}" data-runs="{{ (conv_runs or [])|join(' ') }}" aria-live="polite">
+      {% for it in items %}{{ mg.item(it) }}{% else %}<div class="empty" id="mgr-empty">{{ 'Cuộc trò chuyện mới. ' if not conv }}Nói mục tiêu bằng lời — ví dụ: “Tạo agent nghiên cứu để tóm tắt README của repo X rồi giao việc đó”.</div>{% endfor %}
+      {% if pending %}{{ mg.pending(pending) }}{% endif %}
+    </div>
+    <form method="post" action="/manager/send" class="mgr-form" id="mgr-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="c" value="{{ conv or '' }}">
+      <label class="sr-only" for="mgr-text">Tin nhắn cho điều phối viên</label>
+      <textarea id="mgr-text" name="text" rows="2" required maxlength="8000" placeholder="Nhắn điều phối viên… (Ctrl/⌘ + Enter để gửi)"></textarea>
+      <button class="btn primary" type="submit">Gửi</button>
+    </form>
+    <p class="mgr-err flash error" id="mgr-err" role="alert" hidden></p>
+  </section>
+  <aside class="mgr-side">
+    <section class="card">
+      <div class="card-head"><h2>Điều phối viên</h2></div>
+      <div id="mgr-status" hx-get="/partials/manager" hx-trigger="every 10s, mgr-tick from:body" hx-swap="innerHTML">{% include "_manager_status.html" %}</div>
+      <div class="row gap wrap-row mgr-ctl">
+        {{ mc.act("manager_unset", "Huỷ chỉ định", {"current": m.agent_id}, "btn sm danger", confirm="Huỷ chỉ định điều phối viên " ~ m.agent_id ~ "? Agent vẫn còn, chỉ mất vai trò.", next="/manager") }}
+      </div>
+    </section>
+    <section class="card">
+      <h2>Hành động gần đây</h2>
+      <ol class="feed" id="mgr-actions">{% for it in side_actions %}{{ mg.side_action(it) }}{% else %}<li class="empty" id="mgr-actions-empty">Chưa có hành động nào.</li>{% endfor %}</ol>
+    </section>
+    {% if convs %}
+    <section class="card">
+      <h2>Cuộc trò chuyện (web)</h2>
+      <ul class="mgr-convs">{% for c in convs[:15] %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}">{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}</a> <span class="muted small">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></li>{% endfor %}</ul>
+    </section>
+    {% endif %}
+  </aside>
+</div>
+{% endif %}
+{% endblock %}

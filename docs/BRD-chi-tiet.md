@@ -6,8 +6,8 @@
 |---|---|
 | Tên sản phẩm | agent-hub |
 | Loại tài liệu | Business Requirements Document (BRD) — bản chi tiết |
-| Phiên bản | 0.8 (thêm Web UI và Telegram — mốc M6; xem mục 15 "Trạng thái hiện thực") |
-| Ngày | 2026-10-18 |
+| Phiên bản | 0.9 (thêm Điều phối viên — mốc M7; ngoại lệ sandbox localhost theo agent; xem mục 15) |
+| Ngày | 2026-10-19 (bản đầu 2026-10-18) |
 | Chủ sản phẩm | phuonglq |
 | Người soạn | Business Analyst (agent) |
 | Tài liệu đi kèm | `docs/BRD-tom-tat.md` (bản tóm tắt, cùng mã FR và mốc) |
@@ -26,6 +26,7 @@
 | 0.6 | 2026-10-18 | phuonglq | Chốt Q-10 (event/transcript giữ 30 ngày), Q-12 (xác nhận KPI mục 2), Q-13 (mượn nguyên văn prompt Hermes, kèm NOTICE MIT), Q-15 (chỉ `takeover`, không tích hợp `claude --bg`) — không còn câu hỏi mở |
 | 0.7 | 2026-10-18 | BA (theo nghiệm thu `docs/acceptance/traceability-v2.md` §4, `traceability.md` §5, quyết định trong `docs/plan/hardening.md`) | Áp các lệch được đánh giá "cập nhật BRD": FR-AG-01/04, FR-TK-05/06/14, FR-RT-06/09/10/12/15/17, FR-LN-03/09/12/13/17/18, FR-MS-02/08, FR-MC-01/05, FR-OB-01/08, FR-SG-02/03/05, FR-UI-08/10, NFR-15/18, §8, §9. **Quyết định**: canary/eval gate/regression monitor **không bao giờ** rollback thay đổi `actor=user`; thay đổi tầng team/global/USER của người áp ngay, chỉ theo dõi + cảnh báo (FR-LN-06/10/16/17, bất biến 4). **Thêm FR-SG-10** (sandbox OS bắt buộc), **FR-SG-11** (xác thực người gọi RPC nhạy cảm), **FR-SG-12** (toàn vẹn chính sách); thêm danh sách bất biến an toàn ở §6.10. **NFR-19** chốt định nghĩa (học / làm việc), ghi trạng thái chưa đạt. Thêm **mục 15 "Trạng thái hiện thực"**. Lệch phải sửa code (birthtime thay checkpoint, V2-N1 RPC admin thiếu xác thực, V2-N2 lập lịch hoãn, recall classifier) **không** đưa vào BRD — giữ yêu cầu |
 | 0.8 | 2026-10-18 | BA (theo yêu cầu phuonglq: "qua terminal khó dùng quá — hỗ trợ qua website; giao tiếp ngoài Slack thêm Telegram"; nguồn `docs/plan/web-telegram.md`, `docs/dev-notes/web.md`, `docs/dev-notes/telegram.md`, README) | Đưa **Web UI** và **Telegram** vào phạm vi (mục 3, O4, O8, persona P1/P2, stakeholder); thêm nhóm **FR-WEB-01..11** (§6.11) và **FR-TG-01..08** (§6.12) theo đúng phần đã hiện thực, mốc mới **M6 "Web & Telegram"**; NFR-33 (bảo mật web), NFR-34 (bảo mật Telegram), NFR-35 (khả dụng web); FR-SG-09 thành **thông báo đa kênh Slack + Telegram** (duyệt bằng nút Telegram qua long polling); FR-UI-08 thêm lệnh `web`, `notify telegram`; KPI G-1, US-19..21, R-20/R-21, §8.2, §9, lộ trình M6, mục 15.2, Phụ lục A |
+| 0.9 | 2026-10-19 | BA (theo yêu cầu phuonglq: "muốn có 1 con agent như harness để quản lý và tạo nhiệm vụ cho các con agent còn lại", quyết định quyền "Toàn quyền trừ an toàn"; nguồn `docs/plan/M7-manager.md`, `docs/dev-notes/M7-core.md`, `M7-ui.md`, `hardening-SEC.md` §8) | Thêm **Điều phối viên** (agent manager do người chỉ định): nhóm **FR-MGR-01..08** (§6.13), mốc **M7**; bất biến an toàn **7** (manager không vượt ranh giới an toàn); **FR-SG-13** ngoại lệ sandbox localhost theo agent (chỉ người đặt, audit, nhãn cảnh báo; đã bật cho team toa-soan-ia); NFR-36, R-22/R-23, persona P5, US-22..25, FR-UI-08, §8, §9, lộ trình M7, mục 15.3, Phụ lục A |
 
 ### 0.2 Quy ước trong tài liệu
 
@@ -33,7 +34,7 @@
 - **[GIẢ ĐỊNH-CẦN-XÁC-MINH]**: năng lực của `claude` CLI hoặc hành vi chưa được kiểm bằng chạy thật hay bằng `claude --help`. Mỗi giả định có mã `A-xx` (mục 4.1) và phải được xác minh bằng spike trước khi làm FR phụ thuộc.
 - **[ĐỀ XUẤT]**: số liệu mục tiêu hoặc giá trị mặc định do BA đề xuất, chưa có baseline đo đạc, cần chủ sản phẩm xác nhận.
 - Mã yêu cầu: `FR-<NHÓM>-<số>` (chức năng), `NFR-<số>` (phi chức năng), `US-<số>` (user story), `R-<số>` (rủi ro), `A-<số>` (giả định), `C-<số>` (ràng buộc), `Q-<số>` (câu hỏi mở), `G-<số>` (mục tiêu).
-- Cột mốc M0–M6 theo mục 13 (M6 thêm ở 0.8).
+- Cột mốc M0–M7 theo mục 13 (M6 thêm ở 0.8, M7 ở 0.9).
 
 ### 0.3 Bảng thuật ngữ
 
@@ -80,6 +81,9 @@
 | **HUB_HOME** | Thư mục gốc dữ liệu của hub, mặc định `~/.agent-hub/`. |
 | **Web UI** | Giao diện trình duyệt chạy trên chính máy (`agent-hub web`, chỉ loopback), là client của daemon như CLI/TUI (FR-WEB, thêm ở 0.8). |
 | **Bot Telegram** | Bot chạy trong daemon bằng long polling: gửi thông báo, nhận nút duyệt và lệnh chat từ các chat trong allowlist (FR-TG, thêm ở 0.8). |
+| **Điều phối viên (manager)** | Một agent được **người** chỉ định làm đầu mối: nhận yêu cầu của người, tự tạo/sửa/xoá mềm agent và team, giao task, theo dõi tới xong, báo cáo. Quyền "toàn quyền trừ an toàn", kiểm ở daemon (FR-MGR, thêm ở 0.9). |
+| **Hội thoại (conversation)** | Chuỗi trao đổi liên tục giữa người và điều phối viên trên một kênh (web, `telegram:<chat_id>`, cli); mỗi tin của người là một run `kind=manager` tiếp tục (`--resume`) cùng session. |
+| **Nhịp (heartbeat/tick)** | Lượt chạy của điều phối viên do sự kiện (task kẹt/xong, run lỗi lặp, approval chờ lâu, digest) hoặc định kỳ dự phòng kích hoạt, chỉ khi có việc. |
 | **Allowlist chat** | Danh sách `chat_id` Telegram do người xác nhận khi ghép nối; chỉ các chat này nhận tin và điều khiển được hub. |
 
 ---
@@ -137,7 +141,7 @@
 
 ## 3. Phạm vi
 
-### 3.1 Trong phạm vi (bản này, M0–M6)
+### 3.1 Trong phạm vi (bản này, M0–M7)
 1. Hub daemon chạy trên **một máy**, lưu trạng thái SQLite, event bus có replay.
 2. Quản lý **Agent** (CRUD, archive, clone/export, phiên bản cấu hình), **Team** (thành viên, vai trò, chính sách, ESTOP), **Task** (DAG, lease/heartbeat, định tuyến theo vai trò, giới hạn đồng thời), **Run**.
 3. **Runtime adapter cho `claude` CLI**: dựng lệnh, cô lập cấu hình, đọc `stream-json`, steer qua stdin, resume/fork, ngân sách, phê duyệt.
@@ -148,6 +152,7 @@
 8. **Bảo vệ thao tác phá huỷ**: danh mục thao tác phá huỷ, tài nguyên được bảo vệ, phân loại tại PreToolUse/permission tool, phê duyệt chờ người (`waiting_human`), chính sách an toàn bất biến với agent, xoá mềm cho mọi dữ liệu trong hub.
 9. **Web UI** (thêm ở 0.8, M6): giao diện trình duyệt tiếng Việt trên chính máy (chỉ loopback) cho mọi thao tác thường dùng — tổng quan live, xem run live, duyệt, quản lý agent/task/team, tự học, MCP, chi phí, audit, cài đặt (FR-WEB).
 10. **Telegram** (thêm ở 0.8, M6): bot chạy trong daemon bằng long polling — thông báo như Slack, **duyệt bằng nút**, lệnh chat để xem trạng thái và giao việc (FR-TG).
+11. **Điều phối viên** (thêm ở 0.9, M7): một agent do người chỉ định quản lý các agent còn lại — tạo/sửa agent và team, giao task, theo dõi, báo cáo — qua hội thoại liên tục trên web/Telegram/CLI và nhịp tự động; quyền "toàn quyền trừ an toàn" kiểm ở daemon (FR-MGR).
 
 ### 3.2 Ngoài phạm vi (Won't trong bản này)
 | # | Hạng mục | Lý do |
@@ -194,6 +199,11 @@
 **P3 — Client tích hợp (Claude Code / MCP client / script)**
 - Gọi hub như gọi Serena: `hub_list_agents`, `hub_run(team, task)`, `hub_events(run_id, after_seq)`.
 - Cần: tool có schema rõ, chú thích `readOnlyHint` đúng, run bất đồng bộ (không giữ tool call quá lâu), idempotency, thông điệp lỗi có hướng dẫn, `instructions` + resource hướng dẫn tiếng Việt.
+
+**P5 — Điều phối viên (agent manager, tác nhân hệ thống — thêm ở 0.9)**
+- Một agent (vd. `dieu-phoi`, template `manager`, model opus) được người chỉ định. Cần: thấy toàn cảnh hub (agent/team/task/run/approval/chi phí), tạo/sửa agent và team, giao task, theo dõi tới xong, báo cáo ngắn tiếng Việt cho người, chỉ hỏi người việc ngoài quyền.
+- **Không được** ("toàn quyền trừ an toàn"): duyệt thao tác phá huỷ; sửa policy/protected/guard, golden task & rubric, ngoại lệ sandbox; purge; tắt ESTOP; đụng prod; sửa cấu hình của chính mình hay của bất kỳ agent manager nào; đặt `bypassPermissions`/`allow_bypass`/`extra_args`; cấp vai trò manager cho agent khác.
+- P1 từ 0.9 có thể chỉ nói chuyện với một đầu mối (điều phối viên) thay vì điều khiển từng agent.
 
 **P4 — Agent trong hub (tác nhân hệ thống)**
 - Một tiến trình `claude` do hub spawn. Cần: biết task của mình, bình luận/hoàn tất/báo kẹt qua hub-self MCP; đọc skill theo nhu cầu; không thấy cấu hình máy. Được tự cải thiện tri thức và cấu hình của mình; **không** được tự sửa chính sách an toàn hay tự nâng quyền lên mức phá huỷ.
@@ -348,7 +358,7 @@ Mô tả: Lỗi liên tiếp của một task vượt `failure_limit` → `block
 - Given `failure_limit=2`, When task crash 2 lần liên tiếp, Then task `blocked`, event `task.circuit_open`.
 
 **FR-TK-10 — ESTOP** · Must · M0 (toàn cục) / M3 (team)
-Mô tả: `agent-hub estop on [--team X] [--stop-running] [--reason]` / `estop off`. Khi bật: dispatcher và `run` ad-hoc không khởi chạy run mới trong phạm vi; `--stop-running` gửi dừng (FR-RT-07) tới mọi run trong phạm vi. Trạng thái ESTOP hiển thị đỏ trên header TUI. Bề mặt: CLI, TUI (phím tắt), MCP (`hub_estop`, quyền control).
+Mô tả: `agent-hub estop on [--team X] [--stop-running] [--reason]` / `estop off`. Khi bật: dispatcher và `run` ad-hoc không khởi chạy run mới trong phạm vi; `--stop-running` gửi dừng (FR-RT-07) tới mọi run trong phạm vi. Trạng thái ESTOP hiển thị đỏ trên header TUI. Bề mặt: CLI, TUI (phím tắt), MCP (`hub_estop`, quyền control). Điều phối viên (0.9) chỉ được **bật** ESTOP, không tắt (FR-MGR-03).
 - Given ESTOP toàn cục bật, When `run researcher "..."`, Then từ chối với thông báo ESTOP và lý do.
 - Given ESTOP team bật không `--stop-running`, Then run đang chạy của team tiếp tục tới khi xong, không run mới nào được tạo.
 
@@ -801,6 +811,7 @@ Mô tả: Mọi lệnh có `--json`; mã thoát chuẩn (0 ok, 1 lỗi người 
 | Chi phí & quan sát | `cost [--by agent\|team\|day] [--since]`, `report`, `telemetry`, `daemon logs [-n] [--run] [--agent]` (đọc `logs/hub.log` + `daemon.out`) | M0 (cơ bản) / M3 |
 | Cấu hình & hook | `config get\|set`, `hook <Event>` (cùng thân với `observe_hook`, cho người/script) | M1 |
 | Web & Telegram (0.8) | `web [--host] [--port 8765] [--open] [--url]`; `notify telegram setup\|status\|test\|disable\|allow\|revoke` | M6 |
+| Điều phối viên & sandbox (0.9) | `manager set <agent>\|--none`, `manager get\|conversations\|history <conv>`, `manager chat "<tin>" [-c <conv>\|--new] [--no-wait]`, `manager tick [--if-due]`; `guard sandbox list\|allow-localhost <agent> on\|off` | M7 |
 - Given `agent-hub agent list --json`, Then stdout là JSON hợp lệ, không có dòng log lẫn vào (log ra stderr).
 
 **FR-UI-09 — Firehose tổng quan** · Must · M2
@@ -856,6 +867,7 @@ Mô tả: Mọi thao tác thay đổi (CRUD, approve/deny thao tác phá huỷ, 
 4. Cơ chế tự rollback (eval gate, canary, regression monitor) **không bao giờ** chạm thay đổi của người (`actor=user`); thay đổi của người tầng team/global/USER áp ngay, chỉ theo dõi + cảnh báo (FR-LN-06/16/17).
 5. Secret không lộ ở argv, log, DB, event, OTel (FR-MC-05).
 6. HTTP MCP chỉ bind localhost (FR-MS-06).
+7. **Điều phối viên không vượt ranh giới an toàn** (thêm ở 0.9): mọi thao tác của manager bị daemon kiểm (không tin danh sách tool); manager không duyệt thao tác phá huỷ, không sửa chính sách an toàn/golden/ngoại lệ sandbox, không purge, không tắt ESTOP, không tự sửa mình hay manager khác, không cấp quyền bypass/manager (FR-MGR-03, FR-SG-13).
 Phòng thủ nhiều lớp; ba lớp **không phụ thuộc cách viết lệnh**: sandbox OS (FR-SG-10), xác thực người gọi (FR-SG-11), kiểm toàn vẹn chính sách (FR-SG-12).
 
 **FR-SG-01 — Danh mục thao tác phá huỷ** · Must · M1
@@ -949,6 +961,17 @@ Mô tả: Hub lưu bản chuẩn của `policy/` và nhánh an toàn của `conf
 - Given một tiến trình ngoài RPC sửa `policy/destructive.yaml`, Then trong ≤ 2 s file được khôi phục, bản sửa nằm trong `trash/tamper/`, có `guard.tamper_detected`.
 - Given người sửa `policy/` bằng tay rồi `guard integrity accept`, Then bản mới thành bản chuẩn, không bị khôi phục.
 
+**FR-SG-13 — Ngoại lệ sandbox theo agent: cho phép localhost/loopback** · Must · M7 (thêm ở 0.9, hardening)
+Mô tả: Người có thể cho **từng agent** kết nối/lắng nghe trên loopback (cần cho agent kiểm thử web/dev server cục bộ, vd. Chrome headless). Ngoại lệ **chỉ** thêm `sandbox.network.allowLocalBinding: true` vào settings của run (đã kiểm thật: đây là khoá duy nhất có tác dụng); mọi phần khác giữ nguyên: Unix socket vẫn bị chặn, `denyRead`/`denyWrite` vẫn áp dụng, `allowUnsandboxedCommands=false`.
+- **Chỉ người đặt**: RPC `guard.sandbox.set` ∈ HUMAN_ONLY + cổng `require_human` tầng service; CLI `agent-hub guard sandbox list | allow-localhost <agent> on|off`; lệnh này từ agent bị `forbidden` (trừ `list`). Lưu ở `hub_state.sandbox_overrides = {agent: {allow_localhost, by, channel, at}}` — **ngoài cấu hình agent**, nên vòng học/proposal/ledger, `agent update` (khoá lạ bị từ chối), điều phối viên, revert/clone/export đều **không** đặt hay mang theo được.
+- **Audit + event** `guard.sandbox_override` (ai, kênh, agent, on/off).
+- **Nhãn cảnh báo**: TUI cột tên `⚠lo` (đỏ); `agent.list` trả `sandbox_overrides` để web/CLI hiển thị nhãn.
+- Rủi ro được chấp nhận khi bật: agent chạm mọi dịch vụ trên 127.0.0.1/::1 của máy (web hub và HTTP MCP vẫn cần phiên/bearer mà agent không đọc được; **cổng remote-debugging của Chrome cá nhân**, DB/Redis/dev server không xác thực) và mở được cổng lắng nghe. Khuyến nghị: Chrome cho agent dùng profile riêng + cổng ngẫu nhiên; không bật remote-debugging trên Chrome cá nhân; DB cục bộ có mật khẩu.
+- Quyết định chủ sản phẩm: **bật cho cả team `toa-soan-ia`** (toa-lead, dev-soan-thao, dev-du-lieu, dev-giao-dien-quyen, phep-thu-nguoc, nghiem-thu-chrome).
+- Given người chạy `agent-hub guard sandbox allow-localhost nghiem-thu-chrome on`, Then run kế tiếp của agent đó `curl http://127.0.0.1:<port>/` và `listen(0,'127.0.0.1')` thành công, còn kết nối Unix socket hub và đọc `HUB_HOME/auth/` vẫn `Operation not permitted`; có audit + event `guard.sandbox_override`; TUI hiện `⚠lo`.
+- Given agent khác chưa bật, Then kết nối loopback vẫn bị chặn (exit 7 / EPERM).
+- Given điều phối viên, vòng học, hoặc `agent update` cố đặt khoá sandbox, Then bị từ chối và audit; Given `agent clone` một agent có ngoại lệ, Then bản clone **không** có ngoại lệ.
+
 ### 6.11 Web UI (FR-WEB) — thêm ở 0.8, mốc M6
 
 > Web là **client** của daemon qua RPC (như CLI/TUI, `channel=web`), không đọc/ghi `hub.db` trực tiếp, không thêm RPC mới. Starlette + Jinja2 + htmx (vendored, không CDN, không cần build) + SSE. Một người dùng / một máy (Q-11).
@@ -1039,6 +1062,59 @@ Mô tả: Chỉ chat trong allowlist nhận tin và điều khiển; tin/nút t�
 - Given `/run` hoặc `/estop on` từ chat ngoài allowlist, Then không tạo run/không đổi ESTOP, có audit `telegram.ignored`.
 - Given grep toàn `HUB_HOME` ngoài `secrets/` (gồm hub.db/WAL/log), Then không thấy bot token.
 
+### 6.13 Điều phối viên (FR-MGR) — thêm ở 0.9, mốc M7
+
+> Yêu cầu chủ sản phẩm 2026-10-19: một agent như harness quản lý và tạo nhiệm vụ cho các agent còn lại. Quyết định quyền: **"Toàn quyền trừ an toàn"**. Quyền được kiểm ở **daemon** (hai lớp), không tin danh sách tool.
+
+**FR-MGR-01 — Chỉ định điều phối viên** · Must · M7
+Mô tả: Người chỉ định một agent làm manager: `agent-hub manager set <agent>|--none`, nút chỉ định/huỷ trên web (luôn qua hộp xác nhận nêu rõ quyền). RPC `manager.set` HUMAN_ONLY + `require_human`; audit `manager.set` (actor user, kênh), event `manager.designated`. Lưu ở `hub_state.manager = {agent_id, set_at, by, channel, history}` (không ở `config.yaml`); mọi agent **từng** là manager vẫn được coi là "agent manager" (manager mới không sửa được). Có template `manager` (persona tiếng Anh, opus, tools Read/Grep/Glob, `max_concurrent_runs` 3); tạo từ template **không** cấp quyền — quyền chỉ đến từ chỉ định. Tại một thời điểm có tối đa một manager.
+- Given người chạy `manager set dieu-phoi`, Then `manager get` trả `agent_id=dieu-phoi`, có audit actor user.
+- Given agent (kể cả manager) gọi `manager.set` hoặc chạy `agent-hub manager set`, Then bị từ chối (`auth.denied` / `forbidden`).
+
+**FR-MGR-02 — Bộ tool điều phối** · Must · M7
+Mô tả: Hub-self MCP của run thuộc manager được chỉ định có vai trò `manager` (gắn chỉ khi agent của run đúng là manager hiện tại):
+- Đọc: `hub_overview`, `agent_get`, `team_get`, `task_list|get`, `run_list|get|events` (tóm tắt, cắt), `learn_feed`, `digest_get`, `cost_report`, `templates`, `mcp_registry_list` (không secret), `skills_list`, `skill_view`, `memory_search`.
+- Ghi (trong quyền): `agent_create` (từ template hoặc spec), `agent_update`, `agent_archive|restore`, `team_create|edit|member_add|member_rm|archive|restore`, `task_create` (bất kỳ team/agent, DAG), `task_cancel|retry|comment`, `run_start` (ad-hoc), `run_steer`, `run_stop`, `learn_propose` (đi pipeline đầy đủ), `learn_refine`, `estop_on`, `notify_owner`.
+Bộ phân loại coi tool đọc là `safe`, ghi là `write` (không approval — quyền nằm ở daemon, FR-MGR-03).
+- Given người nói "tạo agent researcher tóm tắt README của repo X rồi giao việc", Then manager tạo agent, tạo task, theo dõi tới `done` và trả tóm tắt (đã nghiệm thu thật).
+
+**FR-MGR-03 — Ranh giới quyền kiểm ở daemon** · Must · M7
+Mô tả: Lời gọi từ run của manager mang `manager_caller` (chỉ dựng trong daemon). Hai lớp kiểm độc lập: (1) lớp tool hub-self trước khi gọi; (2) `Daemon._dispatch`: method phải ∈ `MANAGER_ALLOWED` **và** qua luật `check_rpc`. Luật:
+- Không đụng agent manager (hiện tại + lịch sử): sửa, xoá mềm, khôi phục, chạy, steer, dừng, đưa vào team, giao task, học.
+- `agent_update`/`agent_create` chỉ trường `name role description model effort fallback_model tool_policy{permission_mode,tools,allowed_tools,disallowed_tools} mcp_servers limits workspace_default`; cấm `bypassPermissions`, `allow_bypass`, `permission_prompts`, `extra_args` (mọi độ sâu), khoá `sandbox*`, `subagents`, `result_schema`; không bỏ mẫu `disallowed_tools` do người đặt (chỉ bỏ được mẫu manager tự thêm); không tạo agent từ template `manager`.
+- MCP phải có trong registry và không phải MCP của chính hub; workspace/cwd không trong `HUB_HOME` (trừ `agents/*/workspaces`), không `/`, `$HOME` hay tài nguyên bảo vệ; team không chạm `policies.learning`; `estop.set` chỉ `on=true`.
+- Không có trong `MANAGER_ALLOWED`: duyệt approval, policy/protected/integrity/`config.set`, công tắc học, golden, `guard.sandbox.set`, purge/trash/`run.revert`, `manager.*` ghi. Cổng `require_human` tầng service vẫn chặn.
+- `managerself.call` chỉ hợp lệ từ đúng tiến trình của run manager (kiểm pid ngang hàng/cây tiến trình như FR-SG-11).
+Từ chối → lý do trả về cho manager, audit (`manager.denied` lớp 1 / `auth.denied` lớp 2) actor `manager:<agent>`, event `manager.action{ok:false}`.
+- Given manager gọi `agent_update` đặt `permission_mode=bypassPermissions`, đổi model của chính mình, hoặc đặt sandbox localhost, Then daemon từ chối kèm lý do, cấu hình không đổi, có đúng 1 dòng audit actor `manager:<agent>`.
+- Given lớp 1 bị vô hiệu (giả lập), When gọi thẳng method với `manager_caller`, Then lớp 2 vẫn chặn.
+- Given manager chạy `agent-hub approve <id>` trong Bash, Then hook guard trả `forbidden`; Given manager ghi `policy/` trong Bash, Then bị giữ chờ người (FR-SG-04).
+
+**FR-MGR-04 — Audit, ledger và rollback thao tác của manager** · Must · M7
+Mô tả: Mọi thao tác ghi của manager được daemon gắn `_audit = {actor: manager:<agent>, channel: manager}` (không tin client) và phát `manager.action{tool, target, summary, audit_id, ok, error?}`. `agent_update` đi qua `Ledger.apply` với `actor=manager:<agent>` (revision agent cũng ghi actor này) → rollback tay bằng `agent-hub learn rollback <entry>`. Thay đổi của manager là **thay đổi tự động** (không phải của người): eval gate / canary / regression monitor **được** tự rollback nếu hồi quy (khác bất biến 4 chỉ bảo vệ `actor=user`). `learn_propose` của manager đi pipeline học đầy đủ (guard, eval, canary) với `created_by=agent`. `agent_create` không có ledger entry (hoàn tác = `agent_archive`); thay đổi team/task chỉ có audit.
+- Given manager đổi `effort` của agent coder, Then ledger có entry `actor=manager:dieu-phoi`; When regression monitor phát hiện hồi quy, Then entry được tự rollback; When người `learn rollback <entry>`, Then cấu hình trở lại.
+
+**FR-MGR-05 — Hội thoại liên tục theo kênh** · Must · M7
+Mô tả: `manager.chat{channel, text, conversation_id?, reuse_latest?}` (HUMAN_ONLY — agent khác không "ra lệnh" được cho manager) → mỗi tin người = một run `kind=manager` dùng `--resume` session của hội thoại; cwd cố định `agents/<manager>/workspaces/conv-<id>` (coi là scratch: không khoá repo). Kênh: `web`, `telegram:<chat_id>`, `cli` (`heartbeat` dành cho nhịp). Không có `conversation_id` → hội thoại mới; `reuse_latest` → hội thoại gần nhất của kênh (CLI mặc định, Telegram nhớ theo chat, `/moi` mở mới). Hội thoại đang có run `running` → tin được **steer** vào run đó; run `queued`/`waiting_human` → `Conflict`. Ngữ cảnh dài: autocompact của `claude` CLI trong một session + trần `manager.rotate_after_turns` = 80 lượt/session → session mới mang 6 tin gần nhất; run lỗi → lần sau mở session mới. Lưu `manager_conversations`, `manager_messages` (role `user|manager|notify|tick`); `manager.conversations`, `manager.history`.
+- Given người gửi 2 tin liên tiếp trong cùng hội thoại web, Then run thứ hai `--resume` cùng session và manager nhớ ngữ cảnh tin đầu.
+- Given hội thoại đang có run chạy, When người gửi tin mới, Then `steered=true`, cùng `run_id`.
+- Given chưa chỉ định manager, Then `manager.chat` trả `Conflict` "chưa có điều phối viên" và kênh hiển thị hướng dẫn.
+
+**FR-MGR-06 — Nhịp theo sự kiện và định kỳ** · Must · M7
+Mô tả: Listener gom sự kiện: task → `blocked`, task do manager giao → `done`, `task.circuit_open`, run failed/crashed/timed_out lặp ≥ `crash_repeat`/giờ cùng agent, run do manager khởi chạy hoàn tất, `learning.digest`, approval chờ người > `approval_wait_min` (bỏ sự kiện của chính manager; bỏ sự kiện "xong" manager đã thấy). Tick khi sự kiện đã chờ `event_debounce_s` = 45 s (gom vào một prompt, trần `max_pending_events`) hoặc tới hạn `manager.tick_interval_s` = 1800 s **mà có việc** (task manager giao chưa xong) — không thì bỏ qua, không tốn run. Không tick khi ESTOP, manager tạm dừng/lưu trữ, `heartbeat=false`, hoặc đang có run manager (khoá chống chồng); trần chi phí `tick_budget_usd`. `manager tick [--if-due]` (HUMAN_ONLY) chạy tay. Event `manager.tick{status: started|skipped|failed, reason}`.
+- Given 3 task bị `blocked` trong 30 s, Then đúng một run nhịp được tạo sau debounce, prompt chứa cả 3 sự kiện.
+- Given tới hạn 1800 s nhưng không có việc dở, Then `manager.tick{skipped, nothing_to_do}`, không có run.
+- Given ESTOP bật, Then không tick.
+
+**FR-MGR-07 — Báo cáo cho người** · Must · M7
+Mô tả: Kết thúc run hội thoại → event `manager.reply{conversation_id, run_id, text, channel, kind: reply|tick|notify, ok}` gửi về đúng kênh; run nhịp chỉ báo người khi có việc cần người hoặc hoàn thành mục tiêu, qua `notify_owner` (đích = hội thoại của run, với nhịp là hội thoại người hoạt động gần nhất; Telegram: mọi chat allowlist nếu không xác định được). Báo cáo ngắn tiếng Việt. Lỗi run → `ok=false` kèm mô tả.
+- Given manager hoàn tất việc giao từ Telegram, Then chat đó nhận trả lời trong khung hệ thống (FR-MGR-08); Given run nhịp phát hiện task kẹt cần người, Then người nhận `notify`.
+
+**FR-MGR-08 — Giao diện điều phối trên web và Telegram** · Must · M7
+Mô tả: **Web**: trang **Điều phối** (đầu menu): chat theo hội thoại kênh `web` (gửi bằng form/fetch có CSRF + khoá phiên, trả lời chạy chữ qua SSE, thẻ hành động `manager.action` có link nội bộ đã kiểm), cột "Hành động gần đây", khung trạng thái (manager, nhịp gần nhất/kế tiếp) cả ở Tổng quan, nút chỉ định/huỷ (xác nhận). Nội dung manager **không** render markdown (escape, `pre-wrap`); đích link chỉ loại nội bộ đã biết. **Telegram**: tin thường (không phải lệnh `/`) từ chat allowlist → `manager.chat(channel=telegram:<id>)`; reply giữ hội thoại; `/moi` mở hội thoại mới; trả lời đóng khung hệ thống (tiền tố cố định + nội dung trọn trong `<pre>` đã escape, không bao giờ có nút), dài → tối đa 4 phần. Chat lạ bị bỏ qua (FR-TG-08); `/run` cũ vẫn giao thẳng cho agent, không qua manager.
+- Given trả lời của manager chứa `<script>`, link `javascript:` hoặc `</pre><b>[agent-hub]…`, Then web chỉ hiện bản escape, không có link nguy hiểm; Telegram không thoát được khung `<pre>` và không có `reply_markup`.
+- Given tin thường từ chat ngoài allowlist, Then không có `manager.chat`, không trả lời.
+
 ---
 
 ## 7. User stories & luồng nghiệp vụ
@@ -1068,6 +1144,10 @@ Mô tả: Chỉ chat trong allowlist nhận tin và điều khiển; tin/nút t�
 | US-19 | P1/P2 | Là người không quen terminal, tôi muốn làm mọi việc thường ngày (tạo agent, giao việc, xem live, duyệt, rollback) trên trình duyệt của máy mình. | FR-WEB-01..10 |
 | US-20 | P1 | Là người vận hành không ngồi ở máy, tôi muốn nhận yêu cầu duyệt trên Telegram và bấm nút cho phép/từ chối; thao tác nặng phải xác nhận lại. | FR-SG-09, FR-TG-03..05 |
 | US-21 | P1/P2 | Là người dùng, tôi muốn giao việc cho agent bằng `/run` trên Telegram và nhận kết quả, trả lời để hỏi tiếp. | FR-TG-06/07 |
+| US-22 | P1 | Là người vận hành, tôi muốn chỉ nói chuyện với một điều phối viên (web/Telegram/CLI) để nó tự tạo agent, lập team, giao việc và báo lại kết quả. | FR-MGR-01/02/05/07/08 |
+| US-23 | P1 | Là người vận hành, tôi muốn điều phối viên tự để ý task kẹt/run lỗi và xử lý hoặc báo tôi, mà không tốn tiền khi không có việc. | FR-MGR-06/07 |
+| US-24 | P1 | Là người vận hành, tôi muốn chắc rằng điều phối viên dù "toàn quyền" vẫn không thể duyệt thao tác phá huỷ, sửa chính sách an toàn hay tự nâng quyền cho mình, và mọi việc nó làm đều có audit + rollback được. | FR-MGR-03/04 |
+| US-25 | P1 | Là người vận hành, tôi muốn cho riêng vài agent (team kiểm thử web) dùng localhost trong sandbox, có nhãn cảnh báo, mà agent không tự bật được. | FR-SG-13 |
 
 ### 7.2 Luồng 1 — Tạo agent
 
@@ -1233,6 +1313,9 @@ flowchart TD
 | **budgets** | `scope` (global/team/agent), `owner_id`, `usd_per_day`, `warn_pct` | Tiêu thụ tính từ `runs` |
 | **audit_log** | `id`, `ts`, `actor`, `channel`, `action`, `target`, `summary` | |
 | **hub_state** (khoá Telegram, 0.8) | `telegram.offset`, `telegram.callbacks` (nonce, hành động, approval, chat, nhóm, hạn), `telegram.approval_msgs`, `telegram.watch`, `telegram.msgmap` | FR-TG-02/04/07; không có migration |
+| **manager_conversations** (v13, 0.9) | `id`, `channel`, `agent_id`, `session_id`, `turns`, `title`, `last_run_id`, `created_at`, `updated_at` | 1–n `manager_messages`; FR-MGR-05 |
+| **manager_messages** (v13, 0.9) | `id`, `conversation_id`, `role` (user/manager/notify/tick), `text`, `run_id`, `ts` | |
+| **hub_state** (khoá 0.9) | `manager` (`agent_id, set_at, by, channel, history`), `manager_disallowed_added`, `sandbox_overrides` (`{agent: {allow_localhost, by, channel, at}}`) | Ngoài cấu hình agent; chỉ người ghi (FR-MGR-01, FR-SG-13) |
 | **settings_hub** | `concurrency_global`, `digest_schedule`, … (công tắc an toàn đã chuyển sang `safety_policy`) | |
 
 ### 8.2 Bố cục `HUB_HOME`
@@ -1332,6 +1415,10 @@ flowchart TD
 | | ~~`learning.blocked`~~ (đổi thành `guard.blocked` ở 0.3) | | |
 | | `curator.report` | summary | stale, archived, proposals |
 | Xoá mềm | `agent.purged` / `trash.restored` / `trash.purged` | summary | đối tượng, by, theo retention hay thủ công |
+| Điều phối (0.9) | `manager.reply` | summary | conversation_id, run_id, text, channel, kind (reply/tick/notify), ok |
+| | `manager.action` | summary | tool, target, summary, audit_id, ok, error |
+| | `manager.tick` / `manager.designated` | summary | status, reason, events / agent_id, previous, by, channel |
+| | `guard.sandbox_override` | summary | agent, allow_localhost, by, channel |
 | Thông báo (0.8) | `notify.sent` / `notify.failed` | summary | channel (slack/telegram), event gốc, lỗi đã che |
 | Hệ thống | `hub.started` / `hub.stopping` | summary | epoch, version |
 | | `cli.version_warning` | summary | version, matrix |
@@ -1380,6 +1467,7 @@ flowchart TD
 | NFR-33 | Bảo mật | Web (0.8) | Chỉ bind loopback; Host header phải là loopback:port (khác → 421, chống DNS rebinding); link đăng nhập một lần ký HMAC, hết hạn 5 phút; cookie HttpOnly + SameSite=Strict, idle 12 h, tối đa 7 ngày; **CSRF theo phiên + kiểm Origin/Referer/Sec-Fetch-Site** cho mọi POST; CSP `script-src 'self'` (không inline/eval), X-Frame-Options, no-referrer, no-store; không CORS, không CDN; token người và khoá ký không bao giờ ở HTML/header/cookie/log/audit; agent trong run không tới được web (FR-WEB-10) | M6 |
 | NFR-34 | Bảo mật | Telegram (0.8) | Chỉ chat trong **allowlist** do người xác nhận (ghép nối mã một lần TTL 10 phút); `callback_data` = nonce 96 bit + **HMAC-SHA256**, ràng chat + hạn, tiêu một lần cả nhóm nút; **xác nhận 2 bước** cho thao tác nặng và `/estop off`; offset lưu trước xử lý; token chỉ trong secret store, không lộ ở tin/log/lỗi (logger HTTP hạ WARNING + che theo giá trị); mọi lệnh qua HUMAN_ONLY, audit `telegram:<chat_id>` | M6 |
 | NFR-35 | Khả dụng | Web (0.8) | Tiếng Việt; không tràn ngang ở 390 px; sáng/tối; trang tổng quan cập nhật ≤ 2 s; thao tác ghi chạy được không cần JS | M6 |
+| NFR-36 | Bảo mật | Ranh giới điều phối viên (0.9) | Quyền manager kiểm ở daemon hai lớp độc lập; bộ test an toàn phủ mọi mục cấm (duyệt, policy, golden, sandbox, purge, ESTOP off, tự sửa, cấp manager, bypass/extra_args/subagents, MCP ngoài registry/của hub, workspace vào HUB_HOME/$HOME) ở cả hai lớp, mỗi ca đúng 1 dòng audit; vô hiệu hoá luật kiểm phải làm test đỏ; nhịp không tạo run khi không có việc | M7 |
 
 ---
 
@@ -1408,6 +1496,8 @@ flowchart TD
 | R-19 | **Người không đọc digest** → thay đổi xấu nhưng chưa vượt ngưỡng tích luỹ dần | Trung bình | Trung bình | Digest gộp khi mở TUI, cảnh báo khi số thay đổi chưa đọc lớn, KPI rollback thủ công, so sánh với baseline gốc (R-16) | FR-LN-13 |
 | R-20 | **Chiếm phiên web** (CSRF, DNS rebinding, link đăng nhập lộ, tiến trình cục bộ khác) → thao tác như người | Thấp | Cao | Loopback + kiểm Host, link một lần 5 phút, cookie HttpOnly/SameSite=Strict, CSRF + Origin, CSP; agent bị sandbox chặn localhost và `auth/**`; giới hạn còn lại khi sandbox tắt ghi ở dev-notes web §3 | NFR-33, FR-WEB-01/10 |
 | R-21 | **Mất điện thoại/tài khoản Telegram** hoặc lộ bot token → kẻ khác duyệt thao tác phá huỷ | Thấp–TB | Cao | Allowlist chat, nút ký HMAC ràng chat, 2 bước cho thao tác nặng, `revoke`/`disable --forget-token`, audit `telegram:<id>`, ESTOP từ CLI/web | NFR-34, FR-TG-04/05/08 |
+| R-22 | **Điều phối viên lạm quyền hoặc bị prompt injection** (từ kết quả run/MCP) → tạo/sửa hàng loạt agent, đổi model tốn tiền, giao việc sai | Trung bình | Cao | Ranh giới kiểm ở daemon (FR-MGR-03), `config_bounds` + giới hạn tần suất, ledger + regression monitor tự rollback, audit + feed `manager.action` trên web, ngân sách agent manager, ESTOP; người huỷ chỉ định một lệnh | FR-MGR-03/04, NFR-36 |
+| R-23 | **Agent có ngoại lệ localhost** chạm dịch vụ cục bộ không xác thực (Chrome remote-debugging cá nhân, DB/Redis dev) hoặc mở cổng | Trung bình | Cao | Chỉ người bật theo từng agent, nhãn `⚠lo`, audit; khuyến nghị profile Chrome riêng, không bật remote-debugging trên Chrome cá nhân, DB cục bộ có mật khẩu; Unix socket/denyRead vẫn chặn | FR-SG-13 |
 
 ---
 
@@ -1427,7 +1517,7 @@ flowchart TD
 
 ---
 
-## 13. Lộ trình M0–M6
+## 13. Lộ trình M0–M7
 
 | Mốc | Thời lượng **[ĐỀ XUẤT, theo 00 §5]** | Nội dung (FR chính) | Tiêu chí hoàn thành (Definition of Done) |
 |---|---|---|---|
@@ -1438,6 +1528,7 @@ flowchart TD
 | **M4** — Vòng học tự chủ | 3–4 tuần **[ĐỀ XUẤT, tăng do thêm eval gate + tự sửa cấu hình]** | Signal (FR-LN-01), trigger (02), review fork (03), proposal (04), pipeline tự áp dụng L1/L2/L3-cấu-hình (05), ledger/snapshot/rollback (06), guard (07), curator pha 1 (08), **eval gate (10, dời từ M5)**, tầng agent (11), digest (13), công tắc (15), theo dõi hồi quy (17), giới hạn tần suất (18), tự sửa cấu hình (19), **FR-SG-05 phần học**, FR-SG-06 skill/memory; memory snapshot (FR-RT-10), hooks hub (FR-RT-17); tab Learnings (FR-UI-06); tool MCP learning; cache metric (FR-OB-04) | Người sửa cùng lỗi 2 lần → review fork → skill patch tự áp dụng → run mới không lặp lỗi, người chỉ thấy trong digest; một đề xuất đổi model/effort qua eval rồi tự áp dụng, một đề xuất làm tụt eval bị `eval_failed`; một thay đổi gây correction tăng bị tự rollback; đề xuất chạm chính sách an toàn bị `guard.blocked`; không có hàng chờ duyệt nào; review không chạm session gốc |
 | **M5** — Tri thức chung tự chủ | 2–3 tuần **[ĐỀ XUẤT]** | Tầng team/global (FR-LN-11), **canary/shadow (FR-LN-16)**, curator liên agent (FR-LN-12), USER profile (FR-LN-14), curator pha 2 (FR-LN-09); OTel (FR-OB-07) | Một thay đổi tầng team qua eval → canary → promoted mà không hỏi người; một thay đổi tầng team gây hồi quy ở canary bị tự rollback trước khi lan; skill trùng giữa 2 agent tự được gom lên team; overhead học ≤ 15% (NFR-19); đo KPI G-4 sau 4 tuần |
 | **M6** — Web & Telegram (thêm ở 0.8) | **[ĐÃ HIỆN THỰC 2026-10-18]** | Web UI (FR-WEB-01..10), bot Telegram (FR-TG-01..08), thông báo đa kênh (FR-SG-09 phần Telegram), NFR-33..35; lệnh `web`, `notify telegram` (FR-UI-08) | Mọi thao tác thường dùng làm được trên web không cần terminal; một `rm -rf` bị giữ được duyệt bằng nút Telegram và chạy đúng một lần; chat lạ không điều khiển được; agent trong run không tới được web và không đọc được token bot; **qua kiểm toán bảo mật web/Telegram**; đã thử với Telegram thật |
+| **M7** — Điều phối viên (thêm ở 0.9) | **[ĐÃ HIỆN THỰC 2026-10-19]** | FR-MGR-01..08, FR-SG-13, NFR-36; lệnh `manager`, `guard sandbox` (FR-UI-08); trang Điều phối (web) + chat Telegram | Người nói một yêu cầu → manager tạo agent + task, theo dõi tới xong, trả tóm tắt; manager cố duyệt approval / sửa policy / bật sandbox / sửa chính mình / đặt bypass → daemon từ chối + audit; nhịp chỉ chạy khi có việc; **qua kiểm toán bảo mật điều phối viên** |
 
 ---
 
@@ -1504,7 +1595,7 @@ Không còn câu hỏi mở (0.6). Các bảng dưới giữ lại để truy v�
 
 ---
 
-## 15. Trạng thái hiện thực (thêm ở 0.7, bổ sung 0.8)
+## 15. Trạng thái hiện thực (thêm ở 0.7, bổ sung 0.8, 0.9)
 
 ### 15.1 Nghiệm thu v2 (M0–M5, sau hardening)
 
@@ -1536,15 +1627,22 @@ Không còn câu hỏi mở (0.6). Các bảng dưới giữ lại để truy v�
 - **Chưa thử với Telegram thật** (chỉ server giả). Việc tiếp: setup bot thật → `/start` → duyệt một `rm -rf` trên repo tạm.
 - Phần chưa làm (FR-WEB-11, Could): trang guard policy/protect, purge, journey, canary chi tiết, xem trước khi nhập MCP, takeover từ web. Phiên web lưu RAM (khởi động lại web → đăng nhập lại). Telegram: chỉ văn bản thuần; `/stop` không xác nhận; `/run` chưa có cờ cwd/budget.
 
+### 15.3 Điều phối viên và ngoại lệ sandbox (M7, thêm ở 0.9)
+
+- **Đã hiện thực**: FR-MGR-01..08 (`src/agent_hub/manager/`, vai trò `manager` trong hub-self, kiểm quyền hai lớp ở daemon, migration v13; trang Điều phối web, chat Telegram) và FR-SG-13. `uv run pytest -q`: 537 passed, 1 skipped (gồm `test_manager*.py`, `test_web_manager.py`, `test_telegram_manager.py`, `test_sec_sandbox_localhost.py`); vô hiệu luật kiểm quyền làm 18/22 test an toàn đỏ. **Nghiệm thu thật** (claude 2.1.302 + haiku, HUB_HOME tạm, $0.025): (1) tạo agent + task tóm tắt README, theo dõi tới xong, trả lời đúng; (2) manager cố duyệt approval, ghi `policy/`, bật sandbox, đổi model chính mình, đặt `bypassPermissions` → đều bị chặn + audit.
+- **Đã triển khai** trên `~/.agent-hub` (hub.db v13): agent `dieu-phoi` (template `manager`) được chỉ định; ngoại lệ localhost bật cho 6 agent team `toa-soan-ia`, đã thăm dò thật (curl loopback 404 rc=0, `listen` OK).
+- **Đang chờ kiểm toán bảo mật điều phối viên** (`docs/acceptance/security-manager.md` đang được viết) — DoD M7 chưa đóng.
+- Việc dở: notifier Slack cho `manager.reply{notify}`; lưu trữ/xoá hội thoại; ngân sách ngày riêng cho manager; sự kiện nhịp gom trong RAM (mất khi daemon khởi động lại, tick định kỳ bù); web chưa có nút "chạy nhịp ngay"; nhãn `⚠lo` trên web cần xác nhận hiển thị (dữ liệu `sandbox_overrides` đã có).
+
 ## Phụ lục A — Truy vết FR ↔ Mục tiêu
 
 | Mục tiêu | Nhóm FR / FR chính | NFR |
 |---|---|---|
-| **G-1** Quản lý đội agent nhanh, không sửa file tay, không bắt buộc terminal | FR-AG-01..08, FR-TM-01..04, FR-TK-01..05, FR-MC-01..06, FR-UI-08, FR-WEB-01..09, 11, FR-TG-01, 06, 07 | NFR-25, NFR-27, NFR-35 |
+| **G-1** Quản lý đội agent nhanh, không sửa file tay, không bắt buộc terminal | FR-MGR-01, 02, 05..08, FR-AG-01..08, FR-TM-01..04, FR-TK-01..05, FR-MC-01..06, FR-UI-08, FR-WEB-01..09, 11, FR-TG-01, 06, 07 | NFR-25, NFR-27, NFR-35 |
 | **G-2** Quan sát & điều khiển live | FR-WEB-02..04, FR-TG-03..06, FR-UI-01..07, 09, 10, FR-RT-04, 06, 07, 09, FR-OB-01, 05, FR-TK-10 | NFR-01..05, NFR-08, NFR-26, NFR-35 |
 | **G-3** Cắm vào hệ thống đang vận hành qua MCP | FR-MS-01..08, FR-MC-01..06, FR-TK-08, FR-RT-03 | NFR-10, 11, 14 |
 | **G-4** Tự cải thiện tối đa, người tham gia ít nhất | FR-LN-01..19, FR-SG-05 (phần học), FR-RT-05 (fork), FR-RT-10, FR-RT-17, FR-UI-06, FR-MS-02 (tool learning) | NFR-16, 18, 30, 32 |
-| **G-5** Chi phí & an toàn vận hành | FR-SG-01..12, FR-WEB-10, FR-TG-08, FR-RT-08, 09, 15, 16, 18, 19, FR-TK-06, 07, 09, 10, 13, FR-OB-02..04, 06..08 | NFR-06, 07, 09, 12, 13, 15, 17, 19..24, 29, 31 |
+| **G-5** Chi phí & an toàn vận hành | FR-SG-01..13, FR-MGR-03, 04, FR-WEB-10, FR-TG-08, FR-RT-08, 09, 15, 16, 18, 19, FR-TK-06, 07, 09, 10, 13, FR-OB-02..04, 06..08 | NFR-06, 07, 09, 12, 13, 15, 17, 19..24, 29, 31 |
 
 Ma trận chi tiết (FR → mục tiêu chính):
 
@@ -1564,6 +1662,8 @@ Ma trận chi tiết (FR → mục tiêu chính):
 | FR-WEB-01..09, 11 | ● | ● | | ○ | |
 | FR-WEB-10, FR-TG-08 | | ○ | | | ● |
 | FR-TG-01..07 | ○ | ● | ○ | | ○ |
+| FR-MGR-01, 02, 05..08 | ● | ● | ○ | | |
+| FR-MGR-03, 04, FR-SG-13 | | | | ○ | ● |
 | FR-SG-05 | | | | ● | ● |
 | FR-MS-01..08 | ○ | ○ | ● | | |
 | FR-MC-01..06 | ○ | | ● | | ○ |

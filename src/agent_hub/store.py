@@ -656,6 +656,33 @@ MIGRATIONS: list[str] = [
         WHEN OLD.ts >= COALESCE((SELECT cutoff FROM retention_cutoff WHERE name='events'), '')
         BEGIN SELECT RAISE(ABORT, 'events là append-only (chỉ job retention xoá được event quá hạn)'); END;
     """,
+    # v13 — M7 MGR-CORE: hội thoại liên tục với điều phối viên (manager) theo kênh (session claude `--resume`) + tin nhắn.
+    # Chỉ định manager nằm ở `hub_state.manager` (agent không ghi được hub.db) — không có bảng riêng.
+    """
+    CREATE TABLE IF NOT EXISTS manager_conversations (
+        id TEXT PRIMARY KEY,
+        channel TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        session_id TEXT,
+        turns INTEGER NOT NULL DEFAULT 0,
+        session_turns INTEGER NOT NULL DEFAULT 0,
+        last_run_id TEXT,
+        title TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS manager_conv_channel ON manager_conversations(channel, updated_at);
+    CREATE TABLE IF NOT EXISTS manager_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT NOT NULL REFERENCES manager_conversations(id),
+        role TEXT NOT NULL,
+        text TEXT NOT NULL,
+        run_id TEXT,
+        ts TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS manager_msg_conv ON manager_messages(conversation_id, id);
+    """,
 ]
 
 JSON_COLS = {

@@ -311,9 +311,9 @@ class CanaryManager:
     # ------------------------------------------------------------------ 4. kết thúc
     def _rollback(self, c: dict[str, Any], viol: list[dict[str, Any]], win: dict[str, Any], base: dict[str, Any]) -> dict[str, Any]:
         e = self.svc.ledger.get(c["ledger_entry_id"]) if c.get("ledger_entry_id") else {}
-        from .ledger import AUTO_CHANGE_ACTORS
+        from .ledger import is_auto_change_actor
 
-        if c["mode"] == "watch" or c.get("created_by") == "user" or (e and str(e.get("actor") or "") not in AUTO_CHANGE_ACTORS):
+        if c["mode"] == "watch" or c.get("created_by") == "user" or (e and not is_auto_change_actor(e.get("actor"))):
             return self._warn_human(c, viol, win, e)
         where = f"canary {c['canary_agent_id']}" if c["mode"] == "canary" else "shadow"
         reason = f"hồi quy ở {where}: {self._describe(viol)} — rollback trước khi lan"

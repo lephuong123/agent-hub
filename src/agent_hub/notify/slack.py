@@ -56,6 +56,10 @@ def format_message(ev: HubEvent) -> str | None:
             f":no_entry: *agent-hub* — guard chặn agent `{agent}` (run `{run}`): {_clip(p.get('detail') or p.get('reason'), 200)}\n"
             f"• thao tác: `{_clip(p.get('preview'))}`"
         )
+    if ev.type == "guard.env_tamper":
+        files = (p.get("added") or []) + (p.get("changed") or [])
+        return (f":rotating_light: *agent-hub* — file chạy-khi-khởi-động (.pth/sitecustomize) trong môi trường Python của hub bị thêm/sửa:\n"
+                f"• `{_clip(', '.join(files), 400)}`\n• nếu do bạn cài gói: `agent-hub guard integrity accept`")
     if ev.type == "guard.tamper_detected":
         what = p.get("target")
         files = (p.get("changed") or []) + [m.get("path") for m in (p.get("moved") or []) if isinstance(m, dict)] + (p.get("keys") or [])

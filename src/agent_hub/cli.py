@@ -749,6 +749,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .web.cli import add_parsers as _add_web_parsers
 
     _add_web_parsers(sub, common)
+
+    # M7 MGR-CORE: agent-hub manager set|get|chat|tick|conversations|history (manager/cli.py)
+    from .manager.cli import add_parsers as _add_manager_parsers
+
+    _add_manager_parsers(sub, common)
     return p
 
 

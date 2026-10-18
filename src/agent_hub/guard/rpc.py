@@ -27,6 +27,34 @@ def _id(p: dict[str, Any]) -> str:
     return str(v)
 
 
+def _repo_deny_add(hub, p: dict[str, Any]) -> dict[str, Any]:
+    repo = p.get("repo")
+    pattern = p.get("pattern")
+    if not repo or not pattern:
+        raise HubError("cần 'repo' và 'pattern'")
+    try:
+        res = hub.guard.policy_store.repo_deny_add(str(repo), str(pattern))
+    except ValueError as e:
+        raise HubError(str(e)) from None
+    try:
+        from ..approvals import audit_record
+
+        audit_record("guard.repo_deny_add", agent_id=None, run_id=None, data={"repo": repo, "pattern": pattern})
+    except Exception:  # pragma: no cover
+        pass
+    return res
+
+
+def _repo_deny_rm(hub, p: dict[str, Any]) -> dict[str, Any]:
+    repo = p.get("repo")
+    if not repo:
+        raise HubError("cần 'repo'")
+    try:
+        return hub.guard.policy_store.repo_deny_rm(str(repo), p.get("pattern"))
+    except KeyError:
+        raise HubError(f"không có mẫu chặn cho repo '{repo}'", code=-32004) from None
+
+
 def register_rpc(d: "Daemon") -> None:
     hub = d.hub
 
@@ -104,5 +132,11 @@ def register_rpc(d: "Daemon") -> None:
             "guard.sandbox.get": lambda p: hub.guard.sandbox_overrides(_id(p)),
             "guard.sandbox.set": lambda p: hub.guard.sandbox_set(
                 _id(p), allow_localhost=bool(p.get("allow_localhost")), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+            "guard.sandbox.allow_domain": lambda p: hub.guard.sandbox_allow_domain(
+                _id(p), str(p.get("domain") or ""), remove=bool(p.get("remove")), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+            # MGR-2: mẫu chặn theo repo (người đặt, áp cho mọi agent) — set chỉ người, đọc tự do
+            "guard.repo_deny.list": lambda p: hub.guard.policy_store.repo_deny_list(),
+            "guard.repo_deny.add": lambda p: _repo_deny_add(hub, p),
+            "guard.repo_deny.rm": lambda p: _repo_deny_rm(hub, p),
         }
     )

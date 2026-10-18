@@ -176,4 +176,108 @@
       while (fh.children.length > 120) fh.removeChild(fh.lastChild);
     };
   }
+  // ------------------------------------------------------------ Điều phối (trò chuyện với điều phối viên)
+  // Mục HTML do server vẽ sẵn (autoescape) — chữ chạy (delta) chỉ gán bằng textContent. Không bao giờ dựng HTML từ chữ của agent.
+  var ml = document.querySelector("[data-sse-manager]");
+  if (ml) {
+    var mform = document.getElementById("mgr-form");
+    var mtext = document.getElementById("mgr-text");
+    var merr = document.getElementById("mgr-err");
+    var mlive = document.getElementById("mgr-live");
+    var conv = ml.getAttribute("data-conv") || "";
+    var runs = {};
+    (ml.getAttribute("data-runs") || "").split(" ").forEach(function (r) { if (r) runs[r] = true; });
+    var pend = {};       // run → phần tử "đang trả lời"
+    var early = {};      // run → [tin SSE tới trước khi fetch trả run id]
+    var replied = {};
+    var p0 = ml.querySelector("[data-pending]");
+    if (p0) pend[p0.getAttribute("data-pending")] = p0;
+    ml.scrollTop = ml.scrollHeight;
+    function dropEmpty() { var e = document.getElementById("mgr-empty"); if (e) e.remove(); }
+    function stick() { return nearBottom(ml); }
+    function put(node, atBottom) { if (!node) return; dropEmpty(); ml.appendChild(node); if (atBottom) ml.scrollTop = ml.scrollHeight; }
+    function handle(m) {
+      var r = m.run, s = stick();
+      if (m.t === "tick") { document.body.dispatchEvent(new Event("mgr-tick")); return; }
+      if (m.t === "action") {
+        var side = document.getElementById("mgr-actions");
+        if (side && m.side && !m.sideDone) {
+          m.sideDone = true;
+          var e0 = document.getElementById("mgr-actions-empty"); if (e0) e0.remove();
+          var li = fromHTML(m.side); if (li) side.insertBefore(li, side.firstChild);
+        }
+      }
+      var mine = m.t === "reply" && m.conv && conv && m.conv === conv;  // tin của đúng cuộc trò chuyện này (vd notify từ lượt nhịp)
+      if (r && !runs[r] && !mine) { (early[r] = early[r] || []).push(m); if (early[r].length > 400) early[r].shift(); return; }
+      if (m.t === "delta") {
+        var p = pend[r];
+        if (p) { p.querySelector(".mm-text").textContent += m.text; if (s) ml.scrollTop = ml.scrollHeight; }
+      } else if (m.t === "reply" && m.notify) {
+        var nn = fromHTML(m.html);  // báo chủ động giữa lượt: chèn trước khung "đang trả lời", không thay nó
+        if (pend[r]) { dropEmpty(); ml.insertBefore(nn, pend[r]); } else put(nn, s);
+        if (s) ml.scrollTop = ml.scrollHeight;
+      } else if (m.t === "reply") {
+        replied[r] = true;
+        var node = fromHTML(m.html);
+        if (pend[r]) { pend[r].replaceWith(node); delete pend[r]; if (s) ml.scrollTop = ml.scrollHeight; }
+        else put(node, s);
+      } else if (m.t === "action") {
+        var a = fromHTML(m.html);
+        if (pend[r]) { dropEmpty(); ml.insertBefore(a, pend[r]); } else put(a, s);
+        if (s) ml.scrollTop = ml.scrollHeight;
+      } else if (m.t === "run_end") {
+        setTimeout(function () {
+          if (replied[r]) return;
+          var n = fromHTML(m.html);
+          if (pend[r]) {
+            if (m.ok) { pend[r].querySelector(".mm-who").textContent = "Điều phối viên · đã xong — tải lại trang nếu chưa thấy trả lời"; }
+            else { pend[r].replaceWith(n); delete pend[r]; }
+          } else if (!m.ok) put(n, stick());
+        }, 2500);
+      }
+    }
+    function track(r) {
+      runs[r] = true;
+      var q = early[r] || []; delete early[r];
+      for (var i = 0; i < q.length; i++) handle(q[i]);
+    }
+    if (window.EventSource) {
+      var mes = new EventSource(ml.getAttribute("data-sse-manager"));
+      mes.onopen = function () { if (mlive) { mlive.textContent = "● trực tiếp"; mlive.className = "pill ok live-dot"; } };
+      mes.onerror = function () { if (mlive) { mlive.textContent = "↻ đang nối lại…"; mlive.className = "pill warn"; } };
+      mes.onmessage = function (ev) { var m; try { m = JSON.parse(ev.data); } catch (_) { return; } if (m.t === "end") { mes.close(); return; } handle(m); };
+    }
+    if (mform && window.fetch && window.FormData) {
+      if (mtext) mtext.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (mform.requestSubmit) mform.requestSubmit(); else mform.submit(); }
+      });
+      mform.addEventListener("submit", function (e) {
+        e.preventDefault();  // khoá phiên `k` đã được gắn ở pha capture (trên)
+        if (!mtext.value.trim()) return;
+        var btn = mform.querySelector("button[type=submit]");
+        if (btn) btn.disabled = true;
+        if (merr) merr.hidden = true;
+        fetch(mform.getAttribute("action"), { method: "POST", body: new FormData(mform), credentials: "same-origin", headers: { "X-Ahub-Fetch": "1" } })
+          .then(function (resp) { return resp.json().catch(function () { return { error: "Lỗi " + resp.status }; }); })
+          .then(function (j) {
+            if (j.error) { if (merr) { merr.textContent = j.error; merr.hidden = false; } return; }
+            if (j.conversation_id && j.conversation_id !== conv) {
+              conv = j.conversation_id;
+              var ci = mform.querySelector('input[name="c"]'); if (ci) ci.value = conv;
+              try { history.replaceState(null, "", "/manager?c=" + encodeURIComponent(conv)); } catch (_) {}
+            }
+            put(fromHTML(j.html_user), true);
+            if (j.run_id && pend[j.run_id]) { track(j.run_id); }  // tin được steer vào lượt đang chạy
+            else if (j.run_id) {
+              var pn = fromHTML(j.html_pending);
+              if (pn) { put(pn, true); pend[j.run_id] = pn; }
+              track(j.run_id);
+            }
+            mtext.value = "";
+          })
+          .catch(function () { if (merr) { merr.textContent = "Không gửi được — kiểm tra kết nối rồi thử lại."; merr.hidden = false; } })
+          .then(function () { if (btn) btn.disabled = false; mtext.focus(); });
+      });
+    }
+  }
 })();

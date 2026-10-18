@@ -298,3 +298,37 @@ Quy tắc: web là CLIENT thuần (RPC qua `AsyncHubClient(channel="web")`), kh�
 tĩnh mới đặt trong `web/static/`. Không bao giờ đưa token người/khoá `auth/`/`Session.key` vào template, cookie, log (trang xác nhận mang trường form qua `carry()` — đã loại `k`).
 Duyệt: hiện TOÀN BỘ thao tác (`present.action_view`, không cắt); lớp nặng (`notify.telegram.confirm_classes` + `file`, tài nguyên bảo vệ) cần bước 2. `config.set` chỉ khoá trong `SAFE_CONFIG`.
 Agent trong run: sandbox chặn TCP localhost (đã kiểm thật) + denyRead `HUB_HOME/auth` + `agent-hub web` forbidden trong classifier.
+
+## M7 luồng MGR-UI — Điều phối viên trên web + Telegram
+Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes/M7-ui.md`. Ảnh: `docs/screenshots/web/16-…18-*.png`. Không migration, không RPC mới.
+
+| Module | Vai trò |
+|---|---|
+| `web/manager.py` | Trang "Điều phối" (`/manager`, đầu menu): chat theo conversation kênh `web` (`manager.chat/history/conversations`), SSE `/sse/manager` (agent = điều phối viên: delta/reply/action/run_end/tick), `/partials/manager`, `POST /manager/send`; `ACTIONS` `manager_set`/`manager_unset` (xác nhận) |
+| `web/present.py` (`mgr_*`) | Thuần: đích `manager.action` → link NỘI BỘ (loại đã biết + id an toàn), chuẩn hoá history/conversation |
+| `chat/manager_chat.py` | `hub.telegram.manager`: tin không `/` → `manager.chat(channel=telegram:<chat>)`, reply → đúng conversation (`hub_state telegram.mgr_*`), `/moi`, `manager.reply` (theo `channel`) → khung WT-8 |
+| `web/manager_stub.py` | Stub `manager.*` cùng chữ ký — CHỈ test/demo (`install(daemon, force=)`) |
+
+Bất biến: chữ của điều phối viên (trả lời, tóm tắt/đích hành động) là DỮ LIỆU — web vẽ bằng autoescape + `pre-wrap` (không markdown, không `|safe`,
+không link do agent đặt; HTML qua SSE vẽ phía server, delta gán `textContent`); Telegram chỉ trong `<pre>` sau tiền tố cố định, không bao giờ kèm nút.
+Mọi ghi từ web qua `post_guard` (CSRF + khoá phiên WT-1) với `_audit.channel=web`; từ Telegram qua `bot.call` (cổng người + allowlist from.id, audit
+`telegram:<id>`). Test: `tests/test_web_manager.py`, `tests/test_telegram_manager.py` (thêm ca XSS mới vào đây).
+
+## M7 MGR-CORE — Điều phối viên (manager: agent harness quản lý + giao việc)
+Chi tiết, **chữ ký RPC cho MGR-UI**, nghiệm thu thật: `docs/dev-notes/M7-core.md`. Migration **v13** (`manager_conversations`, `manager_messages`).
+
+| Module | Vai trò |
+|---|---|
+| `manager/service.py` | `hub.manager`: chỉ định (`hub_state.manager`, `require_human`), hội thoại theo kênh (run `kind=manager`, `--resume`, cwd cố định `workspaces/conv-<id>`), `manager.reply`, nhịp heartbeat (gom sự kiện + định kỳ, khoá chống chồng, không chạy khi ESTOP), `self_call` |
+| `manager/permissions.py` | Luật "toàn quyền trừ an toàn" — `check_rpc` chạy ở CẢ `ManagerOps` (lớp 1) và `Daemon._dispatch` cho `Caller.manager` (lớp 2) |
+| `manager/ops.py` | Tool hub-self `manager` (đọc toàn hub; ghi qua `Daemon.call_as(auth.manager_caller)` hoặc `Ledger.apply` actor `manager:<agent>`) → event `manager.action` |
+| `manager/rpc.py`, `cli.py`, `prompts.py` | RPC `manager.get|set|chat|conversations|history|tick`, `managerself.call`; CLI `agent-hub manager …`; prompt chat/tick (tiếng Anh) |
+| `templates/manager.yaml` | Persona điều phối viên (tiếng Anh, báo cáo tiếng Việt). Tạo từ template KHÔNG cấp quyền — chỉ `manager set` |
+
+Bất biến: chỉ NGƯỜI chỉ định manager (`manager.set|chat|tick` ∈ HUMAN_ONLY). Quyền của manager kiểm ở DAEMON, không tin tool list:
+method ngoài `auth.MANAGER_ALLOWED` hoặc vi phạm `check_rpc` → từ chối + audit actor `manager:<agent>`. Thêm tool ghi cho manager → thêm method
+vào `MANAGER_ALLOWED` (kèm lý do), luật vào `permissions.check_rpc`, ca đỏ→xanh vào `tests/test_manager_security.py` (cả lớp 1 lẫn lớp 2).
+Thay đổi cấu hình agent do manager = actor `manager:<agent>` = thay đổi TỰ ĐỘNG (`ledger.is_auto_change_actor`) → được tự rollback.
+Không bao giờ: manager duyệt approval, sửa policy/guard/golden/sandbox, purge, tắt ESTOP, sửa agent manager (kể cả chính mình/manager cũ),
+`bypassPermissions`/`allow_bypass`/`extra_args`/`subagents`, bỏ mẫu disallowed người đặt, MCP ngoài registry. Test: `tests/test_manager*.py`
+(helper `tests/m7_fake.py`, ScriptedRuntime giữ run manager ở `running`).

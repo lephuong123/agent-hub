@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..approvals import action_preview, audit_record
+from ..errors import HubError
 from ..events import make_event
 from ..redact import redact
 from ..store import now_iso
@@ -118,10 +119,25 @@ class GuardService:
             git_probe=bool(self.hub.config.get("guard.git_probe")),
             hub_mcp_servers=self.hub_mcp_servers(),
             checkpoint_root=((run or {}).get("checkpoint") or {}).get("root") if ((run or {}).get("checkpoint") or {}).get("kind") == "git" else None,
+            manager_run=str(((run or {}).get("run_opts") or {}).get("hub_self") or "") == "manager",
+            repo_deny=tuple(self.repo_deny_patterns(c)),
+            repo_deny_lookup=self.repo_deny_patterns,
+            extra_write_roots=tuple(os.path.realpath(os.path.expanduser(str(x))) for x in ((self.hub.config.get("guard.sandbox") or {}).get("extra_allow_write") or [])),
         )
 
+    def repo_deny_patterns(self, cwd: str | None) -> list[str]:
+        """MGR-2: mẫu chặn theo repo do NGƯỜI đặt (policy/repo_deny.yaml) áp cho mọi run có cwd trong repo."""
+        if not cwd:
+            return []
+        try:
+            from .policy import repo_deny_for
+
+            return repo_deny_for(self.policy_store, cwd)
+        except Exception:  # pragma: no cover
+            return []
+
     # ------------------------------------------------------------------ ngoại lệ sandbox THEO AGENT (chỉ người đặt)
-    SANDBOX_OVERRIDE_KEYS = ("allow_localhost",)
+    SANDBOX_OVERRIDE_KEYS = ("allow_localhost", "allow_domains")
 
     def sandbox_overrides(self, agent_id: str | None = None) -> dict[str, Any]:
         """`hub_state.sandbox_overrides` = {agent_id: {allow_localhost: bool, by, at}}. Lưu NGOÀI cấu hình agent nên vòng học/ledger,
@@ -131,6 +147,58 @@ class GuardService:
             return {k: v for k, v in allv.items() if any(v.get(x) for x in self.SANDBOX_OVERRIDE_KEYS)}
         return dict(allv.get(agent_id) or {})
 
+    def run_sandbox_overrides(self, agent_id: str) -> dict[str, Any]:
+        """Ngoại lệ dùng khi dựng settings của run: ngoại lệ người đặt + host của MCP server gán cho agent (R3-1)."""
+        out = self.sandbox_overrides(agent_id)
+        out["mcp_domains"] = self.agent_mcp_domains(agent_id)
+        return out
+
+    def agent_mcp_domains(self, agent_id: str) -> list[str]:
+        from urllib.parse import urlparse
+
+        try:
+            agent = self.hub.store.get_agent(agent_id) or {}
+            names = list(agent.get("mcp_servers") or [])
+        except Exception:  # pragma: no cover
+            return []
+        out: list[str] = []
+        reg = getattr(self.hub, "mcp", None)
+        for n in names:
+            try:
+                row = reg.get_row(n) if reg is not None else None
+            except Exception:
+                row = None
+            url = str(((row or {}).get("config") or {}).get("url") or "")
+            if url:
+                h = (urlparse(url).hostname or "").lower()
+                if h:
+                    out.append(h)
+        return list(dict.fromkeys(out))
+
+    def sandbox_allow_domain(self, agent_id: str, domain: str, *, remove: bool = False, by: str = "user", channel: str = "cli") -> dict[str, Any]:
+        """CHỈ người: mở/gỡ một domain mạng cho Bash của agent (R3-1). Audit + event, như ngoại lệ localhost."""
+        import re as _re
+
+        from ..auth import require_human
+
+        require_human("mở domain mạng cho agent")
+        self.hub.agents.get_row(agent_id)
+        d = domain.strip().lower()
+        if not _re.fullmatch(r"(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*(:\d+)?|\*", d):
+            raise HubError(f"domain không hợp lệ: {domain!r}")
+        allv = dict(self.hub.store.state_get("sandbox_overrides") or {})
+        cur = dict(allv.get(agent_id) or {})
+        doms = [x for x in (cur.get("allow_domains") or []) if x != d]
+        if not remove:
+            doms.append(d)
+        cur.update({"allow_domains": doms, "by": by, "channel": channel, "at": now_iso()})
+        allv[agent_id] = cur
+        self.hub.store.state_set("sandbox_overrides", allv)
+        info = {"agent_id": agent_id, "domain": d, "action": "remove" if remove else "allow", "allow_domains": doms, "by": by, "channel": channel}
+        audit_record("guard.sandbox_override", agent_id=agent_id, run_id=None, data=info)
+        self.hub.publish(make_event("guard.sandbox_override", agent_id, info, source="hub"))
+        return {"agent_id": agent_id, **cur}
+
     def sandbox_set(self, agent_id: str, *, allow_localhost: bool, by: str = "user", channel: str = "cli") -> dict[str, Any]:
         from ..auth import require_human
 
@@ -138,7 +206,7 @@ class GuardService:
         self.hub.agents.get_row(agent_id)  # NotFound nếu không có
         allv = dict(self.hub.store.state_get("sandbox_overrides") or {})
         before = dict(allv.get(agent_id) or {})
-        cur = {"allow_localhost": bool(allow_localhost), "by": by, "channel": channel, "at": now_iso()}
+        cur = {**before, "allow_localhost": bool(allow_localhost), "by": by, "channel": channel, "at": now_iso()}
         allv[agent_id] = cur
         self.hub.store.state_set("sandbox_overrides", allv)
         info = {"agent_id": agent_id, "before": {k: before.get(k) for k in self.SANDBOX_OVERRIDE_KEYS}, "after": {"allow_localhost": cur["allow_localhost"]},

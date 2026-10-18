@@ -77,7 +77,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "learn": {"propose", "rollback", "retry", "refine", "policy", "pin", "unpin", "review-cancel", "review_cancel", "cancel"},
     "knowledge": {"pin", "unpin"},
     "golden": {"add", "rm", "remove", "edit", "update", "from-run", "from_run", "restore", "dismiss"},
-    "guard": {"protect", "integrity", "sandbox"},
+    "guard": {"protect", "integrity", "sandbox", "repo-deny", "repo_deny"},
     "config": {"set", "unset"},
     "secret": {"set", "rm", "remove", "delete"},
     "secrets": {"set", "rm", "remove", "delete"},
@@ -91,6 +91,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "auth": None,
     "notify": {"telegram"},  # token bot / allowlist chat / gửi tin thay người (chat/rpc.py)
     "web": None,  # WEB: `agent-hub web` sinh link đăng nhập = phiên NGƯỜI trên giao diện web
+    "manager": {"set", "chat", "tick"},  # M7: chỉ định/ra lệnh điều phối viên = quyền người (manager.* ∈ HUMAN_ONLY)
 }
 
 # H-03: API dạng phương thức (`Path(..).unlink()`) đứng sau `)`/`]` nên KHÔNG dùng `\b` trước dấu chấm
@@ -106,6 +107,13 @@ JS_TEMPLATE = re.compile(r"`([^`$\\]*)`")
 HUB_SOCKET_RE = re.compile(r"hub\.sock|agent-hub-[^/\s'\"]*\.sock|\bAGENT_HUB_SOCKET\b|\.sock\.auth\b|human\.token|mcp_server/tokens\.json", re.I)
 HUB_MODULE_RE = re.compile(r"(\bimport\s+agent_hub\b|\bfrom\s+agent_hub\b|\bagent_hub\.(rpc|cli|daemon|auth|approvals|guard|mcp_server|learning|evals|hub)\b|__import__\(\s*['\"]agent_hub|import_module\(\s*['\"]agent_hub|require\(['\"][^'\"]*agent[-_]hub)")
 HUB_HOME_REF_RE = re.compile(r"\bAGENT_HUB_HOME\b|\.agent-hub\b")
+# R3-1: đọc thông tin xác thực từ keychain / credential helper / gh (sandbox KHÔNG chặn Mach IPC tới SecurityServer)
+KEYCHAIN_CODE_RE = re.compile(r"SecKeychain\w*|SecItemCopyMatching|SecItemCopy|kSecClass|Security\.framework|/System/Library/Frameworks/Security|"
+                              r"\bkeyring\.get_password|\bkeytar\b|find-(generic|internet)-password|dump-keychain|credential-osxkeychain|"
+                              r"\bgit\s+credential\b|gh\s+auth\s+token", re.I)
+SECURITY_READ_SUBS = re.compile(r"^(find-(generic|internet)-password|find-certificate|find-identity|find-key|dump-keychain|export|"
+                                r"export-key|unlock-keychain|set-keychain-settings|show-keychain-info|dump-trust-settings|authorizationdb|"
+                                r"set-generic-password-partition-list|set-key-partition-list|add-(generic|internet)-password)$")
 # WT-3: dấu hiệu đường dẫn trỏ vào vùng nhạy cảm của HUB_HOME (dùng cho đích động không giải được)
 SENSITIVE_HINT = re.compile(r"(^|/)(auth|secrets)(/|$)|/(web|tokens)\.json$|\.sock(\.auth)?$|/hub\.db|AGENT_HUB_HOME|\.agent-hub")
 UNIX_SOCKET_RE = re.compile(r"\bAF_UNIX\b|UNIX-CONNECT|UNIX-CLIENT|\bcreateConnection\s*\(\s*\{?\s*path|\bnet\.connect\s*\(\s*\{?\s*path|\bnet\.connect\s*\(\s*['\"]/|UNIXSocket|socket\.AF_UNIX|IO::Socket::UNIX|\bunix:/", re.I)
@@ -159,6 +167,10 @@ class GuardContext:
     max_walk: int = 3000
     hub_mcp_servers: frozenset[str] = frozenset()  # H-18: tên đăng ký của MCP server trỏ về chính hub (theo lệnh/URL)
     checkpoint_root: str | None = None  # gốc repo git có checkpoint của run (FR-RT-12) → file đã track ghi đè/xoá được revert
+    manager_run: bool = False  # MGR-8: run của agent điều phối → mọi verdict policy/hub/guard = forbidden (không phải approval)
+    repo_deny: tuple[str, ...] = ()  # MGR-2: mẫu disallowedTools theo repo (người đặt) áp cho run có cwd trong repo
+    extra_write_roots: tuple[str, ...] = ()  # R2-1: thư mục người cấp thêm cho tool ghi (guard.sandbox.extra_allow_write, add-dir)
+    repo_deny_lookup: Callable[[str], list[str]] | None = None  # R2-2: mẫu chặn của repo ĐÍCH (git -C, npm --prefix, cd …)
 
     @property
     def home(self) -> str:
@@ -213,6 +225,15 @@ def created_by_run(path: str, ctx: GuardContext) -> bool:
 
 # ============================================================================ entry
 def classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardContext) -> Verdict:
+    v = _classify(tool_name, tool_input, ctx)
+    # MGR-8: run của agent điều phối (manager) — thao tác chính sách/hub/guard là CẤM thẳng, không phải approval chờ người
+    if ctx.manager_run and not v.forbidden and (v.klass in ("policy", "hub", "guard") or v.rule in ("policy_write", "protected_write") and v.protected_id == "hub-policy"):
+        return Verdict("destructive", v.rule, v.klass, f"điều phối viên không được chạm chính sách/hub an toàn ({v.reason})",
+                       v.targets, v.protected_id, forbidden=True)
+    return v
+
+
+def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardContext) -> Verdict:
     ti = tool_input if isinstance(tool_input, dict) else {}
     try:
         if tool_name == "Bash":
@@ -265,6 +286,11 @@ def sensitive_read(p: str, ctx: GuardContext) -> bool:
     """Đường dẫn mà agent KHÔNG được đọc: token người cạnh socket, secrets/, mcp.json đã resolve, token MCP HTTP."""
     homes = {_hub_home(ctx), os.path.realpath(_hub_home(ctx))}
     cands = {p, _real(p)}
+    uh = str(ctx.policy.user_home).rstrip("/")
+    for c in cands:  # R3-1: thông tin xác thực git/forge/keychain của người
+        for x in (".config/gh", ".git-credentials", ".config/git/credentials", "Library/Keychains", ".netrc", ".ssh"):
+            if _under(c, f"{uh}/{x}"):
+                return True
     for c in cands:
         if c.endswith(".sock.auth") or os.path.basename(c) == "human.token":
             return True
@@ -294,10 +320,17 @@ def _python_env_dirs() -> tuple[str, ...]:
 
 
 def _persistence_dirs(home: str) -> tuple[str, ...]:
-    """V2-N2: nơi đặt thứ CHẠY TRỄ như người, ngoài run/sandbox (cron/launchd/git hooks/autostart)."""
-    return (f"{home}/Library/LaunchAgents", f"{home}/Library/LaunchDaemons", "/Library/LaunchAgents", "/Library/LaunchDaemons",
+    """V2-N2: nơi đặt thứ CHẠY TRỄ như người, ngoài run/sandbox (cron/launchd/git hooks/autostart);
+    MGR-1: + thư mục bin trên $PATH thuộc $HOME (người/daemon THỰC THI binary ngoài sandbox → giả lệnh = thoát sandbox)."""
+    base = (f"{home}/Library/LaunchAgents", f"{home}/Library/LaunchDaemons", "/Library/LaunchAgents", "/Library/LaunchDaemons",
             f"{home}/.config/git", f"{home}/.config/systemd", f"{home}/.config/autostart", f"{home}/.git-templates",
             "/etc/cron.d", "/var/spool/cron", "/usr/lib/cron/tabs")
+    try:
+        from .runtime import path_bin_dirs
+
+        return base + tuple(path_bin_dirs())
+    except Exception:  # pragma: no cover
+        return base
 
 
 def protected_path(ctx: GuardContext, p: str, op: str) -> ProtectedResource | None:
@@ -317,6 +350,9 @@ def protected_path(ctx: GuardContext, p: str, op: str) -> ProtectedResource | No
         for d in _python_env_dirs():
             if _under(cand, d):
                 return ProtectedResource("hub-python-env", "path", d, note="môi trường Python chạy hub/hook", builtin=True)
+        z = exec_zone(cand)
+        if z is not None:  # R2-1: vùng thực thi ngoài sandbox (PATH, venv, /opt/homebrew, repo hub, dotfile)
+            return ProtectedResource("exec-zone", "path", z, note="vùng thực thi ngoài sandbox (R2-1)", builtin=True)
         for d in _persistence_dirs(str(pol.user_home)):
             if _under(cand, d):
                 return ProtectedResource("persistence", "path", d, note="cơ chế chạy trễ ngoài sandbox (V2-N2)", builtin=True)
@@ -328,19 +364,54 @@ def protected_path(ctx: GuardContext, p: str, op: str) -> ProtectedResource | No
     return None
 
 
+def exec_zone(p: str) -> str | None:
+    """R2-1: đường dẫn nằm trong vùng THỰC THI ngoài sandbox (PATH, venv/site-packages của hub, /opt/homebrew, repo hub, dotfile)."""
+    try:
+        from .runtime import executable_zones
+
+        zones = executable_zones()
+    except Exception:  # pragma: no cover
+        return None
+    for c in {p, _real(p)}:
+        for z in zones:
+            if _under(c, z):
+                return z
+    return None
+
+
+def write_roots(ctx: GuardContext) -> list[str]:
+    """R2-1: nơi tool ghi file ĐƯỢC ghi không cần người — workspace của run + thư mục tạm (+ extra_allow_write/add-dir do người cấp)."""
+    import tempfile
+
+    roots = [str(ctx.cwd), os.path.realpath(str(ctx.cwd)), "/tmp", "/private/tmp", os.path.realpath(tempfile.gettempdir())]
+    roots += list(ctx.extra_write_roots)
+    return [r.rstrip("/") for r in dict.fromkeys(roots) if r]
+
+
 def classify_file_write(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdict:
     key = FILE_WRITE_TOOLS[tool_name]
     p = ti.get(key)
     if not isinstance(p, str) or not p:
         return Verdict("uncertain", "file_tool_no_path", "file", f"{tool_name} thiếu {key}")
     ap = _abs(p, ctx.cwd)
+    rp = _real(ap)
     op = "overwrite" if tool_name == "Write" and os.path.exists(ap) else "write"
-    for cand in {ap, _real(ap)}:
+    for cand in {ap, rp}:
         if cand.startswith(str(ctx.policy.policy_dir) + "/") or cand == str(ctx.policy.policy_dir):
             return Verdict("destructive", "policy_write", "policy", "agent không được ghi chính sách an toàn (FR-SG-05)", [ap], "hub-policy")
+    # R2-1: tool ghi file KHÔNG chịu sandbox OS → vùng thực thi ngoài sandbox = CẤM thẳng
+    z = exec_zone(ap)
+    if z is not None:
+        return Verdict("destructive", "exec_zone_write", "system", f"{tool_name} vào vùng thực thi ngoài sandbox ({z}) — chạy như người khi nạp/khởi động",
+                       [ap], "exec-zone", forbidden=True)
+    for cand in {ap, rp}:
         r = protected_path(ctx, cand, op)
         if r:
             return Verdict("destructive", "protected_path", "file", f"{tool_name} vào tài nguyên được bảo vệ {r.selector} ({op})", [ap], r.id)
+    # R2-1: ngoài workspace của run (+ tmp/add-dir) → chờ người (cùng mô hình sandbox Bash)
+    roots = write_roots(ctx)
+    if not any(_under(c, r) for c in {ap, rp} for r in roots):
+        return Verdict("destructive", "write_outside_workspace", "file", f"{tool_name} ngoài workspace của run ({ap}) — cần người duyệt", [ap])
     return Verdict("write", "file_write", "file", targets=[ap])
 
 
@@ -365,7 +436,10 @@ def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdi
         # H-18: MCP server của hub (kể cả đăng ký dưới tên khác) — tool ứng với method chỉ-người
         return Verdict("destructive", "hub_mcp_human_only", "hub", f"{tool_name}: thao tác chỉ dành cho người (agent không được gọi)", forbidden=True)
     if server == "hub-self":  # M3 FR-MS-08: tool task_* của hub, ràng với run — không phá huỷ
-        return Verdict("safe" if tool in ("task_show", "team_roster", "skills_list", "skill_view", "memory_view") else "write", "hub_self_tool")  # M4-A: tool đọc tri thức
+        from ..mcp_server.hub_self import MANAGER_READ_TOOLS  # M7: tool đọc của điều phối viên (quyền ghi kiểm ở daemon)
+
+        safe = tool in ("task_show", "team_roster", "skills_list", "skill_view", "memory_view", "memory_search") or tool in MANAGER_READ_TOOLS
+        return Verdict("safe" if safe else "write", "hub_self_tool")  # M4-A: tool đọc tri thức
     ann = None
     if ctx.mcp_annotations is not None:
         try:
@@ -580,7 +654,36 @@ class BashAnalyzer:
             self.merge(self.sub(s), "trong $(..)")
         for sc in res.commands:
             self.command(sc)
+            self._repo_deny(sc)
         return self.v
+
+    def _repo_deny(self, sc: shell.SimpleCommand) -> None:
+        """MGR-2: mẫu chặn theo repo do NGƯỜI đặt (vd `Bash(npm run deploy:*)`) → destructive cho MỌI run có cwd trong repo."""
+        if not sc.words:
+            return
+        self.apply_repo_deny(" ".join(w.literal for w in sc.words), self.cwd)  # cwd hiện tại (sau `cd X &&`) = repo đích
+
+    def apply_repo_deny(self, cmd: str, target_dir: str | None) -> bool:
+        """R2-2: khớp mẫu chặn của repo ĐÍCH (`target_dir`: -C/--prefix/cd …; None = cwd của run) trên lệnh ĐÃ CHUẨN HOÁ.
+        Mẫu `forbid:<rule>` → forbidden (từ chối thẳng, không mở approval)."""
+        from .runtime import pattern_matches
+
+        pats: list[str] = list(self.ctx.repo_deny)
+        if target_dir and self.ctx.repo_deny_lookup is not None:
+            try:
+                pats = list(dict.fromkeys(pats + list(self.ctx.repo_deny_lookup(target_dir))))
+            except Exception:  # pragma: no cover
+                pass
+        if not pats:
+            return False
+        ti = {"command": re.sub(r"\s+", " ", cmd).strip()}
+        for pat in pats:
+            forbid = pat.startswith("forbid:")
+            rule = pat[len("forbid:"):] if forbid else pat
+            if pattern_matches(rule, "Bash", ti):
+                self.hit("destructive", "repo_deny", "policy", f"mẫu chặn theo repo (người đặt): {rule}", forbidden=forbid)
+                return True
+        return False
 
     # -------------------------------------------------------------- simple command
     def command(self, sc: shell.SimpleCommand) -> None:
@@ -625,6 +728,8 @@ class BashAnalyzer:
             out += [f"{h}/auth", f"{h}/secrets", f"{h}/mcp_server/tokens.json", f"{h}/hub.db"]
         if self.ctx.hub_socket:
             out += [self.ctx.hub_socket, self.ctx.hub_socket + ".auth"]
+        uh = str(self.ctx.policy.user_home).rstrip("/")  # R3-1: thông tin xác thực của người
+        out += [f"{uh}/{x}" for x in (".config/gh", ".git-credentials", ".config/git/credentials", "Library/Keychains", ".netrc", ".ssh")]
         return list(dict.fromkeys(out))
 
     def _in_region(self, p: str, region: str) -> bool:
@@ -668,7 +773,7 @@ class BashAnalyzer:
                 for r in {cand, _real(cand)}:
                     for region in regions:
                         if self._in_region(r, region):
-                            if sensitive_read(r, self.ctx) or region.rstrip("/").endswith(("/auth", "/secrets")) or region.endswith((".sock", ".sock.auth", "hub.db")):
+                            if sensitive_read(r, self.ctx) or region.rstrip("/").endswith(("/auth", "/secrets", "/.config/gh", "/Keychains", "/.ssh")) or region.endswith((".sock", ".sock.auth", "hub.db", ".git-credentials", ".netrc")):
                                 self.hit("destructive", "hub_secret_read", "hub", f"lệnh chạm vùng nhạy cảm hub ({region})", [cand], forbidden=True)
                             else:
                                 self.hit("destructive", "hub_sensitive", "hub", f"lệnh chạm vùng nhạy cảm hub ({region})", [cand])
@@ -954,14 +1059,24 @@ class BashAnalyzer:
         if base in ("at", "batch") and not (texts and texts[0] in ("-l", "-q", "-V")):
             self.hit("destructive", "schedule_persistence", "system", f"{base}: hẹn giờ chạy lệnh ngoài sandbox")
             return
-        if base == "launchctl" and any(t in ("load", "bootstrap", "submit", "enable", "kickstart", "start", "setenv", "asuser") for t in texts):
+        if base == "launchctl" and any(t in ("load", "bootstrap", "submit", "enable", "kickstart", "start", "setenv", "asuser", "bootout", "unload",
+                                             "kill", "stop", "remove", "disable", "reboot") for t in texts):
             self.hit("destructive", "schedule_persistence", "system", "launchctl nạp/chạy job launchd (ngoài sandbox)")
             return
         if base == "systemctl" and "--user" in texts and any(t in ("enable", "start", "link", "edit") for t in texts):
             self.hit("destructive", "schedule_persistence", "system", "systemctl --user enable/start")
             return
+        if base == "security" and any(SECURITY_READ_SUBS.match(t) for t in texts):
+            self.hit("destructive", "keychain_access", "system", "agent không được đọc/xuất keychain (thông tin xác thực của người — R3-1)", forbidden=True)
+            return
         if base == "security" and any(t.startswith("delete-") for t in texts):
             self.hit("destructive", "keychain_delete", "system", "xoá mục keychain")
+            return
+        if base == "gh" and len(texts) >= 2 and texts[0] == "auth" and (texts[1] in ("token", "refresh", "login", "setup-git") or "--show-token" in texts or "-t" in texts):
+            self.hit("destructive", "forge_token_access", "system", "agent không được đọc/đặt token GitHub (R3-1)", forbidden=True)
+            return
+        if base.startswith("git-credential") or base in ("git-credential-osxkeychain", "git-credential-manager", "git-credential-store"):
+            self.hit("destructive", "git_credential", "git", "agent không được gọi credential helper của git (R3-1)", forbidden=True)
             return
         if base == "tmutil" and any(t.startswith("delete") for t in texts):
             self.hit("destructive", "backup_delete", "system", "xoá bản sao lưu Time Machine")
@@ -998,6 +1113,21 @@ class BashAnalyzer:
         if base in ("npm", "yarn", "pnpm") and "unpublish" in texts:
             self.hit("destructive", "package_unpublish", "system", "unpublish gói")
             return
+        if base in ("npm", "pnpm", "yarn", "bun"):
+            if self.pkg_run(base, args):
+                return
+        # R2-2: chạy file theo ĐƯỜNG DẪN (`./scripts/deploy.sh`, `scripts/x`) → đọc nội dung như `bash x`
+        name0 = words[0].text.lstrip("\\")
+        if "/" in name0 and not words[0].dynamic:
+            sp = self.path(words[0])
+            if sp and os.path.isfile(sp) and not sp.startswith(("/usr/", "/bin/", "/sbin/", "/opt/homebrew/", "/System/")):
+                try:
+                    head = Path(sp).read_bytes()[:4]
+                except OSError:
+                    head = b""
+                if head[:2] == b"#!" or sp.endswith((".sh", ".bash", ".zsh")):
+                    self.script_file(words[0], "chạy script")
+                    return
         if base in ("curl", "wget", "http", "xh"):
             outs = [texts[i + 1] for i, t in enumerate(texts[:-1]) if t in ("-o", "--output", "-O", "--output-document")]
             for o in outs:
@@ -1015,6 +1145,71 @@ class BashAnalyzer:
             return
         # lệnh chung: kiểm đối số đường dẫn chạm tài nguyên được bảo vệ
         self.generic(base, args, unknown_targets)
+
+    _PKG_RUN_SUB = {"npm": ("run", "run-script", "rum", "urn"), "pnpm": ("run", "run-script"), "yarn": ("run",), "bun": ("run",)}
+    _PKG_VAL_FLAGS = ("--prefix", "-C", "--dir", "--cwd", "--workspace", "-w", "--filter", "-F", "--loglevel")
+
+    def pkg_run(self, base: str, args: list[shell.Word]) -> bool:
+        """R2-2: `npm|pnpm|yarn|bun [cờ] run|run-script|rum <script>` (và `pnpm/yarn/bun <script>`) → giải script trong
+        package.json của thư mục ĐÍCH (--prefix/-C/--cwd) rồi (1) khớp mẫu chặn repo trên dạng chuẩn `npm run <script>`,
+        (2) phân loại THÂN script như lệnh shell (kể cả script agent mới thêm). Trả True nếu đã xử lý."""
+        import json as _json
+
+        texts = [a.text for a in args]
+        target = self.cwd
+        i = 0
+        rest: list[str] = []
+        while i < len(texts):
+            t = texts[i]
+            if t in self._PKG_VAL_FLAGS and i + 1 < len(texts):
+                if t in ("--prefix", "-C", "--dir", "--cwd"):
+                    target = self.path(args[i + 1]) or target
+                i += 2
+                continue
+            if t.startswith(("--prefix=", "--dir=", "--cwd=")):
+                target = self.path(t.split("=", 1)[1]) or target
+                i += 1
+                continue
+            if t.startswith("-"):
+                i += 1
+                continue
+            rest = texts[i:]
+            break
+        if not rest:
+            return False
+        sub = rest[0]
+        script = None
+        if sub in ("exec", "x", "dlx") and base in ("npm", "pnpm", "bun"):  # `npm exec -- tsx …` → phân loại lệnh bên trong
+            inner = [x for x in rest[1:] if x != "--"]
+            while inner and inner[0].startswith("-"):
+                inner = inner[1:]
+            if inner:
+                self.merge(self.sub(" ".join(_q(x) for x in inner), cwd=target), f"{base} {sub}")
+                return True
+            return False
+        if sub in self._PKG_RUN_SUB.get(base, ()):
+            names = [x for x in rest[1:] if not x.startswith("-")]
+            if not names or any(shell.DYN in x for x in names):
+                # `echo deploy | xargs npm run`, `npm run "$(…)"` — không biết script nào
+                self.hit("uncertain", "pkg_run_dynamic", None, f"{base} run với tên script động/không rõ")
+                return True
+            script = names[0]
+        elif base in ("pnpm", "yarn", "bun") and sub not in ("install", "add", "remove", "i", "x", "dlx", "exec", "create", "init", "test", "build", "why", "info", "list", "ls", "outdated", "upgrade", "update"):
+            script = sub
+        if script is None:
+            return False
+        self.apply_repo_deny(f"npm run {script}", target)
+        body = None
+        try:
+            pj = os.path.join(target or ".", "package.json")
+            if os.path.isfile(pj):
+                body = (_json.loads(Path(pj).read_text(encoding="utf-8")).get("scripts") or {}).get(script)
+        except (OSError, ValueError):
+            body = None
+        if isinstance(body, str) and body.strip():
+            self.merge(self.sub(body, cwd=target), f"{base} run {script}")
+        self.hit("write", "pkg_run", None, f"{base} run {script}")
+        return True
 
     def generic(self, base: str, args: list[shell.Word], unknown_targets: bool) -> None:
         for a in args:
@@ -1519,6 +1714,8 @@ class BashAnalyzer:
         """Quét mã trình thông dịch (H-01/H-02/H-03). `inline` = mã nằm ngay trong lệnh (-c/-e/stdin) — đích ghi không
         giải được thì `uncertain`; với file script của run, ghi đích động coi là ghi thường."""
         # --- mặt điều khiển hub (H-01): socket/token/module nội bộ → forbidden; HUB_HOME → giữ chờ người
+        if KEYCHAIN_CODE_RE.search(code):
+            self.hit("destructive", "keychain_access", "system", f"mã {base} truy cập keychain/credential helper (R3-1)", forbidden=True)
         if HUB_SOCKET_RE.search(code) or (self.ctx.hub_socket and self.ctx.hub_socket in code):
             self.hit("destructive", "hub_socket", "hub", f"mã {base} đụng socket/token điều khiển hub", forbidden=True)
         if HUB_MODULE_RE.search(code):
@@ -1532,6 +1729,8 @@ class BashAnalyzer:
             rx = PL_DESTRUCTIVE if base.startswith(("perl", "ruby", "osascript", "php")) else PY_DESTRUCTIVE
         if rx.search(code) or (rx is not PY_DESTRUCTIVE and PY_DESTRUCTIVE.search(code) and base.startswith("python")):
             self.hit("destructive", "code_delete_api", "file", f"mã {base} gọi API xoá file")
+        if base == "osascript" and re.search(r"(?i)keychain|security\s+find|password", code):
+            self.hit("destructive", "keychain_access", "system", "AppleScript truy cập keychain/mật khẩu (R3-1)", forbidden=True)
         if base == "osascript" and re.search(r"(?i)\b(delete|empty\s+(the\s+)?trash|move\b.*\bto\s+(the\s+)?trash)\b", code):
             self.hit("destructive", "applescript_delete", "file", "AppleScript xoá/chuyển vào thùng rác")
         s = sql_destructive(code) if re.search(r"(?i)\b(drop|truncate|delete|update|flushall|flushdb)\b", code) else None
@@ -1567,7 +1766,7 @@ class BashAnalyzer:
                 if not lit or len(lit) > 4000:
                     continue
                 if re.match(r"^\s*(rm|git|find|dd|mkfs|shred|truncate|chmod|chown|psql|mysql|sqlite3|sh|bash|zsh|curl|sudo|mv|cp|ln|tee|install|rsync|"
-                            r"unlink|agent-hub|python[\d.]*|node|perl|ruby|nc|socat|xargs|kill|pkill|docker|kubectl|terraform|aws|gh)\b", lit):
+                            r"unlink|agent-hub|python[\d.]*|node|perl|ruby|nc|socat|xargs|kill|pkill|docker|kubectl|terraform|aws|gh|npm|pnpm|yarn|bun|npx|tsx|launchctl|make)\b", lit):
                     found = True
                     self.merge(self.sub(lit), f"lệnh trong mã {base}")
             for m in LIST_ARGV_RE.finditer(code):
@@ -1787,7 +1986,7 @@ class BashAnalyzer:
             v1 = t[1] if len(t) > 1 else ""
             if sub == "learn" and v1 == "policy" and len(t) > 2 and t[2] in ("get", "show"):
                 verbs = set()
-            if sub == "guard" and v1 in ("protect", "integrity", "sandbox") and len(t) > 2 and t[2] in ("list", "ls", "status", "show"):
+            if sub == "guard" and v1 in ("protect", "integrity", "sandbox", "repo-deny", "repo_deny") and len(t) > 2 and t[2] in ("list", "ls", "status", "show"):
                 verbs = set()
             if sub == "team" and v1 == "member" and len(t) > 2 and t[2] in ("list", "ls"):
                 verbs = set()
@@ -1820,6 +2019,8 @@ class BashAnalyzer:
         sub, rest = texts[i], texts[i + 1 :]
         flags = [t for t in rest if t.startswith("-")]
         pos = [t for t in rest if not t.startswith("-")]
+        # R2-2: chuẩn hoá (bỏ -C/-c/--no-pager/--git-dir, đường dẫn tuyệt đối tới git) rồi khớp mẫu chặn của REPO ĐÍCH
+        self.apply_repo_deny(" ".join(["git", "push" if sub == "send-pack" else sub, *rest]), cwd)
 
         def short(ch: str) -> bool:
             return any(t.startswith("-") and not t.startswith("--") and ch in t[1:] for t in rest)
@@ -1926,6 +2127,24 @@ class BashAnalyzer:
                 if p:
                     self.check_delete_target(p, "git rm", "-r" in flags)
             return
+        if sub == "credential" or sub.startswith("credential-"):
+            self.hit("destructive", "git_credential", "git", "agent không được lấy/đặt thông tin xác thực git (R3-1)", forbidden=True)
+            return
+        if sub == "config" and any(re.match(r"^credential(\..*)?(helper|username|usehttppath)?$", t.lower()) or t.lower().startswith("credential.") for t in pos):
+            self.hit("destructive", "git_credential", "git", "agent không được sửa cấu hình credential của git (R3-1)", forbidden=True)
+            return
+        if sub == "config":
+            # R2-4: khoá git CHẠY LỆNH (fsmonitor/hooksPath/sshCommand/alias !…/filter/pager/editor…) — daemon/người chạy git ngoài sandbox
+            keys = [t.lower() for t in pos]
+            exec_key = any(re.match(r"^(core\.(fsmonitor|hookspath|sshcommand|pager|editor|askpass|gitproxy)|alias\..+|filter\..+\.(clean|smudge|process)|"
+                                    r"diff\..+\.(textconv|command)|merge\..+\.driver|credential\..*helper|credential\.helper|"
+                                    r"sequence\.editor|gpg\..*program|uploadpack\..+|receive\..+|includeif\..+|include\.path|init\.templatedir)$", k) for k in keys)
+            writes = len(pos) >= 2 or any(t in ("--add", "--replace-all", "--unset", "--unset-all", "--remove-section", "--rename-section", "-e", "--edit") for t in flags)
+            if exec_key and writes:
+                self.hit("destructive", "git_config_exec", "git", "git config đặt khoá CHẠY LỆNH (chạy ngoài sandbox khi người/daemon dùng git)")
+            elif writes:
+                self.hit("write", "git_config", "git", "")
+            return
         if sub in ("status", "log", "diff", "show", "blame", "rev-parse", "describe", "ls-files", "ls-tree", "remote", "config", "fetch", "grep", "shortlog", "cat-file", "for-each-ref", "reflog", "help", "version", "whatchanged", "name-rev", "merge-base", "ls-remote", "count-objects", "check-ignore"):
             if sub == "config" and any(t in ("--unset", "--unset-all", "--remove-section") for t in flags):
                 self.hit("write", "git_config", "git", "")
@@ -1939,7 +2158,9 @@ class BashAnalyzer:
         if not self.ctx.git_probe or cwd is None:
             return None
         try:
-            return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=3)
+            from ..workspace import GIT_ENV, GIT_SAFE_ARGS  # R2-4: probe git của guard chạy NGOÀI sandbox → tắt khoá chạy lệnh
+
+            return subprocess.run(["git", *GIT_SAFE_ARGS, "-C", cwd, *args], capture_output=True, text=True, timeout=3, env={**os.environ, **GIT_ENV})
         except (OSError, subprocess.TimeoutExpired):
             return None
 

@@ -85,6 +85,7 @@ EVENT_LEVELS: dict[str, str] = {
     "guard.blocked": "summary",
     "guard.tamper_detected": "summary",  # hardening SEC: policy/config/hub.db bị ghi NGOÀI RPC (guard/integrity.py) → khôi phục + Slack
     "auth.denied": "summary",  # hardening SEC: method chỉ-người bị gọi từ tiến trình run/thiếu token (auth.py)
+    "guard.env_tamper": "summary",  # hardening SEC R2-1: .pth/sitecustomize trong venv của hub bị thêm/sửa (chạy ngoài sandbox)
     "guard.sandbox_override": "summary",  # hardening SEC: người đặt/gỡ ngoại lệ sandbox theo agent (vd loopback)
     "guard.sandbox_disabled": "summary",  # hardening SEC/WT-3: sandbox OS tắt bằng cấu hình (nhiều bất biến dựa vào sandbox)
     "policy.changed": "summary",
@@ -148,6 +149,11 @@ EVENT_LEVELS: dict[str, str] = {
     "curation.started": "summary",  # curator pha 2 bắt đầu (snapshot_id)
     "curation.completed": "summary",  # curator pha 2 xong: archived[], rollback_cmd, cost
     "curation.rolled_back": "summary",  # người hoàn tác cả lượt curation
+    # M7 MGR-CORE — điều phối viên (manager/): hành động ghi, trả lời hội thoại, nhịp, chỉ định
+    "manager.action": "summary",  # mọi thao tác ghi của manager (tool, target, summary, audit_id, ok, error?)
+    "manager.reply": "summary",  # trả lời/ thông báo của manager tới kênh người (conversation_id, run_id, text, kind)
+    "manager.tick": "summary",  # nhịp heartbeat: started|skipped (reason, events)
+    "manager.designated": "summary",  # người chỉ định/huỷ chỉ định manager (agent_id, previous)
 }
 
 # Không ghi vào bảng `events` (chỉ ring buffer + stdout thô) — FR-OB-01.

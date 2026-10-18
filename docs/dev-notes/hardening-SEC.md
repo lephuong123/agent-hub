@@ -117,3 +117,123 @@ Khuyến nghị: Chrome cho agent dùng profile riêng + cổng ngẫu nhiên; k
 **Đã bật thật** (~/.agent-hub, daemon khởi động lại, không run nào đang chạy): toa-lead, dev-soan-thao, dev-du-lieu, dev-giao-dien-quyen,
 phep-thu-nguoc, nghiem-thu-chrome. Thăm dò lại `agent-hub run nghiem-thu-chrome … --model haiku --budget 0.2 --follow` (run r_7273ecaad352,
 $0.0014): `curl http://127.0.0.1:8221/` → 404 rc=0 (trước: exit 7), `net.createServer().listen(0,'127.0.0.1')` → `listen ok 53761` (trước: EPERM).
+
+## 9. Kiểm toán vai trò manager — MGR-1, MGR-2, MGR-8 (phần SEC)
+**MGR-1 (thoát sandbox qua PATH).** (a) `workspace.validate_workspace` — dùng ở TẦNG SERVICE khi tạo/sửa agent (`workspace_default`),
+tạo task (`workspace.dir`), chạy ad-hoc (`--cwd`), cho CẢ người lẫn manager: workspace `dir` phải nằm trong `workspace.allowed_roots`
+(mặc định `~/Workspace` + vùng scratch/worktree/eval/checkpoint của hub) VÀ không trùng/chứa/nằm trong bất kỳ `fixed_protected_dirs`
+hoặc protected path nào. (b) `sandbox_settings`: nhánh gỡ denyWrite theo cwd KHÔNG bao giờ gỡ mục thuộc `fixed_protected_dirs`
+(HUB_HOME nội bộ, mã agent-hub, token/socket, `home_persistence_dirs`, `path_bin_dirs`). (c) `path_bin_dirs()` (mọi thư mục `$PATH`
+thuộc `$HOME` + `~/.local/bin`, `~/.cargo/bin`…) thêm vào denyWrite sandbox VÀ `classifier.protected_path` (chặn cả Write tool, không chỉ Bash).
+Test: `tests/test_sec_manager.py::test_fixed_protected_dirs_never_dropped_by_cwd`, `::test_path_bin_dirs_*`, `::test_workspace_in_sensitive_dir_rejected_*`, `::test_agent_create_rejects_*`, `::test_run_adhoc_cwd_*`.
+
+**MGR-2 (lách mẫu chặn bằng agent khác trên cùng repo).** Chính sách theo repo do NGƯỜI đặt: `policy/repo_deny.yaml`
+(`PolicyStore.repo_deny_*`, bọc integrity — chụp lại bản chuẩn khi ghi hợp lệ, nếu không sẽ bị khôi phục như tamper). RPC
+`guard.repo_deny.list|add|rm` (add/rm ∈ `auth.HUMAN_ONLY`, audit); CLI `agent-hub guard repo-deny list|add <repo> "<pattern>"|rm`.
+Áp cho MỌI run có cwd trong repo (qua `git_root`), bất kể agent: vào `disallowedTools` tĩnh (`runs.py`) VÀ classifier (`GuardContext.repo_deny`
+→ `repo_deny` destructive). Manager/agent đặt mẫu → forbidden. Classifier forbidden cho `agent-hub guard repo-deny add|rm` từ agent.
+Đã chuyển 7 mẫu của toa-soan-ia (`npm run deploy|setup-db|seed-prompt|chuyen-kho*`, `git push`) sang repo `/Users/phuonglq/Workspace/toa-soan-ia`
+trong HUB_HOME thật (mẫu trên 5 agent giữ nguyên). Test: `::test_repo_deny_applies_to_any_agent_in_repo`, `::test_repo_deny_set_is_human_only`, `::test_repo_deny_cli_forbidden_from_agent`.
+
+**MGR-8 (manager sửa policy → approval thay vì cấm).** `GuardContext.manager_run` (run có `run_opts.hub_self=manager`): mọi verdict
+lớp `policy|hub|guard` (kể cả ghi `policy/`) → `forbidden` thẳng, không mở approval (người không bị ép bấm duyệt thay đổi chính sách).
+Test: `::test_manager_run_policy_edit_is_forbidden_not_approval`.
+
+**Fixture test.** `conftest._allow_pytest_tmp_workspaces` (autouse, session): cho phép gốc tạm của pytest qua `workspace._EXTRA_ALLOWED_ROOTS`
+(cùng tiến trình) + biến môi trường `AGENT_HUB_EXTRA_WORKSPACE_ROOTS` (daemon tiến trình con `spawn_background` kế thừa) — CHỈ test, sản
+phẩm không bao giờ đặt. Toàn bộ pytest xanh (554, 1 skip), chạy 2 lần. Hub thật: 6 agent toa-soan-ia (`~/Workspace/toa-soan-ia`) và
+`dieu-phoi` (scratch) hợp lệ với `allowed_roots` mặc định `~/Workspace`.
+
+**Rủi ro tồn dư.** `agents.revert` (luồng CLI) đã HUMAN_ONLY; `validate_workspace` phụ thuộc `git_root` cho repo-deny (symlink/bind-mount ra
+ngoài repo có thể lệch — sandbox denyWrite vẫn là lớp chặn ghi). `_EXTRA_ALLOWED_ROOTS` là lối mở rộng chỉ-test; không đọc ở đường sản phẩm.
+
+## 10. Kiểm toán manager vòng 2 — R2-1, R2-2, R2-4, R2-5 (phần SEC; ESTOP do coordinator bật, KHÔNG tắt)
+**R2-1 (Nghiêm trọng — tool Write/Edit không chịu sandbox).** Nhiều lớp:
+- `guard/runtime.executable_zones()`: mọi thư mục `$PATH` (tuyệt đối), `sys.prefix`/`base_prefix` + `sysconfig` purelib/platlib/scripts/data của
+  interpreter chạy hub, `.venv` + TOÀN BỘ repo mã agent-hub (`hub_repo_root()`), `~/.local/share/uv`, `/opt/homebrew`, `/usr/local`, dotfile công cụ
+  (`~/.npmrc`, `~/.yarnrc*`, `~/.config/uv|pip|npm|gh`, `~/.pythonrc*`, `~/.tmux.conf`, `~/.netrc`, `~/.docker`…). Dùng ở 4 chỗ:
+  (1) classifier `classify_file_write`: đích (đã realpath) trong vùng này → `exec_zone_write` **forbidden**; ngoài `write_roots` (cwd run ∪ /tmp ∪
+  $TMPDIR ∪ `guard.sandbox.extra_allow_write`) → `write_outside_workspace` destructive (chờ người); `protected_path` cũng trả `exec-zone` (Bash).
+  (2) `permissions.deny` tĩnh của Claude Code `Write|Edit|MultiEdit|NotebookEdit(//zone/**)` — **kiểm thật** (haiku, $0.005): Write vào thư mục bị
+  deny → "denied by your permission settings" kể cả `--permission-mode acceptEdits`; Write qua SYMLINK trong workspace trỏ vào thư mục deny →
+  cũng bị chặn (Claude giải symlink). (3) sandbox denyWrite cho Bash (gồm venv của hub). (4) `fixed_protected_dirs` → `validate_workspace`
+  từ chối workspace trong repo hub (`tests/`, `docs/`, `.git`).
+- R2-1(c): `guard.integrity.check_python_env` lúc hub khởi động: bản chuẩn `{*.pth, sitecustomize.py, usercustomize.py}` của site-packages
+  (`hub_state.pyenv_baseline`); thêm/sửa → event đỏ `guard.env_tamper` + audit + Slack (Telegram: luồng TG thêm định dạng nếu muốn). Người cài gói
+  hợp lệ: `agent-hub guard integrity accept` (nhận cả bản chuẩn Python env). Không tự xoá file.
+Test: `tests/test_sec_r2.py::test_write_tool_into_exec_zones_forbidden`, `::test_write_tool_outside_workspace_needs_human`,
+`::test_write_tool_symlink_into_exec_zone_resolved`, `::test_static_deny_and_sandbox_cover_exec_zones`, `::test_workspace_cannot_be_inside_hub_repo`,
+`::test_python_env_tamper_detected`.
+
+**R2-2 (Cao — lách repo_deny).** Chuyển trọng tâm sang TÀI NGUYÊN, repo_deny thành lớp phụ:
+- Đọc `toa-soan-ia`: `deploy` = `scripts/deploy.sh` → build `.next-build`, HOÁN ĐỔI vào `.next` (prod, chạy bởi launchd) + `.next-old`,
+  `launchctl kickstart`; `setup-db|seed-prompt|chuyen-kho*|…` = `tsx --env-file=.env.local scripts/*` → NocoDB `127.0.0.1:8080` bằng token trong
+  `.env.local`. Bản `:dev` thêm `--env-file=.env.development.local` chỉ đổi `NOCODB_BASE_TITLE` (CÙNG host + token).
+- Đã đặt trên HUB_HOME thật (người, qua CLI): `guard protect add path <repo>/.next` và `<repo>/.next-old` (overwrite,write) — tài nguyên người khai
+  báo nay vào cả sandbox denyWrite (không gỡ theo cwd) VÀ `permissions.deny` tĩnh cho tool ghi (`protected_write_paths`); `validate_workspace`
+  cho phép tài nguyên người khai báo NẰM TRONG workspace. `launchctl bootout|unload|kill|stop|remove|disable` → destructive (thêm vào V2-N2).
+  Thêm repo_deny `Bash(tsx --env-file=.env.local scripts/:*)` (chỉ khớp bản prod; `:dev` có `--env-file` thứ hai trước `scripts/`).
+- `git push`: sandbox `denyRead` `~/.ssh`, `~/.git-credentials`, `~/.config/gh`, `~/.netrc`, `~/.npmrc`, `~/.pypirc`, `~/.docker/config.json`…;
+  `guard.sandbox.allow_ssh_agent` mặc định **False**. Kiểm thật: trong sandbox `ssh-add -l` → "Error connecting to agent: Operation not permitted",
+  `ls ~/.ssh`/`~/.config/gh` → Operation not permitted; `git credential-osxkeychain get` trả rỗng (chưa xác nhận được là bị chặn hay chưa lưu);
+  `git ls-remote` repo công khai vẫn được (không cần xác thực).
+- repo_deny (lớp phụ) khớp theo REPO ĐÍCH trên lệnh ĐÃ CHUẨN HOÁ: git bỏ `-C/-c/--no-pager/--git-dir`, đường dẫn tuyệt đối, `command`; `send-pack`=push;
+  `npm|pnpm|yarn|bun` bỏ cờ toàn cục, `run|run-script|rum|urn`, `--prefix/-C/--cwd`, `pnpm/yarn/bun <script>`, `npm exec --` → phân loại lệnh bên trong;
+  **giải script trong package.json và phân loại THÂN script** (cả script agent mới thêm); chạy file theo đường dẫn (`./x.sh`) → đọc nội dung; tên script
+  động/qua xargs → uncertain; literal `npm|tsx|launchctl|make…` trong mã node/python → phân tích; `cd X &&` → repo X; clone/worktree NGOÀI repo cùng
+  remote `origin` → cùng chính sách; tiền tố mẫu `forbid:` → forbidden (không mở approval). Test: `::test_repo_deny_variants_in_repo_held` (31 dạng QA),
+  `::test_repo_deny_from_outside_cwd_and_clones_held`, `::test_repo_deny_benign_dev_still_allowed`, `::test_repo_deny_forbid_prefix_is_forbidden`,
+  `::test_git_credentials_not_readable_in_sandbox`, `::test_human_protected_resource_enters_sandbox_and_static_deny`.
+- **Giới hạn còn lại:** NocoDB prod/dev dùng CÙNG host + token (`127.0.0.1:8080`) — không tách được bằng tài nguyên; agent có ngoại lệ loopback
+  + đọc được `.env.local` (Next cần cho `npm run dev`) có thể tự gọi API NocoDB prod bằng `curl`/script mới. Khuyến nghị chủ sản phẩm: token NocoDB
+  RIÊNG cho dev (quyền chỉ trên base dev) đặt trong `.env.development.local`, bỏ token prod khỏi máy agent dùng (hoặc NocoDB dev riêng cổng) — khi đó
+  denyRead `.env.local` + chặn cổng prod được. `make <target>` chưa giải Makefile. Mẫu `:*` là tiền tố: `Bash(npm run setup-db:*)` cũng khớp
+  `setup-db:dev` (người có thể đổi sang mẫu chính xác). Keychain helper: chưa chứng minh được bị chặn.
+
+**R2-4.** Classifier: `git config` ghi khoá CHẠY LỆNH (`core.fsmonitor|hooksPath|sshCommand|pager|editor`, `alias.*`, `filter.*.clean|smudge`,
+`diff.*.textconv`, `credential.*helper`, `include*`…) → destructive; ghi `.git/hooks` đã là protected (V2-N2). Daemon/guard chạy git với
+`-c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.sshCommand= …` + `GIT_CONFIG_NOSYSTEM=1` (`workspace.GIT_SAFE_ARGS`) —
+kiểm thật: fsmonitor cài trong `.git/config` KHÔNG chạy khi daemon `git status`. Test: `::test_git_config_exec_keys_destructive`, `::test_daemon_git_disables_exec_config`.
+
+**R2-5.** `_prepare_spec` kiểm lại `validate_workspace(realpath(cwd))` lúc spawn (dir/worktree) — workspace đổi thành symlink ra ngoài gốc sau khi đặt
+→ run lỗi. Test: `::test_workspace_rechecked_at_spawn`.
+
+Toàn bộ pytest xanh 2 lần (574, 1 skip). Hub thật: daemon đã khởi động lại (không run nào chạy, ESTOP giữ BẬT); toa-soan-ia + dieu-phoi hợp lệ;
+`guard test` thật: `npm run-script deploy`, `git -C . push`, `npm run setup-db`, `tsx --env-file=.env.local scripts/…` → destructive; `npm run dev` → write;
+Write `.pth`/`~/.npmrc`/`tests/conftest.py` của hub/`/opt/homebrew/bin` → forbidden.
+
+## 11. Kiểm toán manager vòng 3 — R3-1 (CAO): token forge trong keychain đọc được trong sandbox
+**Bản chất.** Hồ sơ Seatbelt của Claude Code cài CỨNG `(allow mach-lookup (global-name "com.apple.SecurityServer"))` (thấy trong binary);
+khoá `sandbox.network.allowMachLookup` chỉ THÊM dịch vụ, không gỡ được SecurityServer. Nên `security find-generic-password … -w` chạy rc=0
+trong sandbox → đọc token GitHub → `git push` mã độc. Không có settings nào tắt mach-lookup này.
+
+**Sửa nhiều lớp.**
+1. Classifier + deny tĩnh (phụ thuộc chuỗi lệnh nhưng là lớp đầu): `security find-*-password|dump-keychain|export|find-certificate|find-identity|
+   unlock-keychain|…` → forbidden; `git credential (fill|approve|…)`, `git-credential-*`, `git config credential.*` → forbidden; `gh auth
+   token|status --show-token|refresh|login|setup-git` → forbidden; `osascript` chạm keychain/password → forbidden; mã python/node gọi
+   `Security.framework`/`SecKeychain*`/`SecItemCopyMatching`/`keytar`/`keyring.get_password`/`git credential`/`gh auth token` → forbidden
+   (`KEYCHAIN_CODE_RE`); đọc `~/.config/gh`, `~/.git-credentials`, `~/Library/Keychains`, `~/.netrc`, `~/.ssh` qua Read/Bash → forbidden
+   (`sensitive_read` + `sensitive_regions` + `permissions.deny` tĩnh `Read|Grep|Glob(…)`). Sandbox `denyRead` cũng thêm `~/Library/Keychains`.
+2. Lớp KHÔNG phụ thuộc chuỗi lệnh — **giới hạn MẠNG**: `sandbox.network.allowedDomains` mặc định HẸP (`DEFAULT_ALLOWED_DOMAINS`:
+   registry npm/pypi/yarn + `*.anthropic.com`), **không** github/gitlab/bitbucket. `network_domains()` cộng thêm: domain người mở theo agent
+   (`guard.sandbox.allow_domain`, HUMAN_ONLY, audit + event, nhãn TUI `⚠net`) + HOST của mọi MCP server gán cho agent (tự lấy từ URL —
+   `agent_mcp_domains`) + loopback nếu agent có ngoại lệ localhost. **Kiểm thật** (haiku, $0.003): cùng cấu hình, `security find-generic-password`
+   vẫn rc=0 (đọc được token — xác nhận sandbox KHÔNG chặn keychain), NHƯNG `curl https://github.com`/`api.github.com` và `git ls-remote github`
+   → `deny network-outbound github.com:443 (user denied)` (block); `registry.npmjs.org` → 200; loopback → 404 (vẫn chạy). Vậy token đọc được
+   cũng không đẩy ra forge được.
+CLI: `agent-hub guard sandbox allow-domain <agent> <domain> [--remove]`; `guard sandbox list` hiện cột "DOMAIN MỞ THÊM".
+Test: `tests/test_sec_r3.py` (lệnh/mã keychain forbidden, đọc file xác thực forbidden, default domains loại forge, allow-domain HUMAN_ONLY +
+audit + CLI forbidden từ agent, host MCP của agent tự vào domain).
+
+**Giới hạn còn lại (§11).**
+- Keychain VẪN đọc được trong sandbox (giới hạn của Claude Code); phòng thủ là chặn lệnh (lách được nếu có cách gọi SecurityServer mà
+  `KEYCHAIN_CODE_RE`/deny không bắt — vd binary biên dịch sẵn người để trong workspace) + chặn ĐƯỜNG RA mạng. Khi `allowedDomains` chứa `*`
+  (người đặt lại) hoặc agent được mở `github.com`, lớp mạng mất tác dụng cho agent đó.
+- `allowed_domains` theo HUB (một danh sách), per-agent chỉ CỘNG THÊM — không thu hẹp dưới mặc định.
+- Agent dùng MCP forge-like hoặc proxy nội bộ có thể gián tiếp ra ngoài; wildcard domain của MCP không được (chỉ host chính xác từ URL).
+- `curl https://github.com` vẫn phân loại `write` ở classifier (lớp chặn là sandbox mạng, không phải classifier) — khi sandbox tắt thì không còn chặn.
+- Mạng hẹp có thể chặn agent lấy nguồn tin ngoài web: người mở domain cần dùng cho từng agent. toa-soan-ia: MCP `toasoan.cchchn.com` tự được thêm;
+  các host khác (*.trungtamdhs.com, phuongthuongcat.com…) chỉ vào nếu là URL MCP gán cho agent, nếu không người mở bằng `allow-domain`.
+
+Toàn bộ pytest xanh 2 lần (583, 1 skip). Daemon thật khởi động lại (không run nào chạy, ESTOP giữ BẬT); `guard test` thật:
+`security find-generic-password`/`gh auth token`/`git credential fill` → forbidden; MCP domain của toa agent (`toasoan.cchchn.com`) tự vào allowlist.

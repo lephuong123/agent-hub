@@ -299,3 +299,79 @@ def action_view(ap: dict[str, Any]) -> dict[str, Any]:
     return {"tool": short_tool(tool) if tool.startswith("mcp__") else tool, "tool_full": tool, "text": text, "segments": highlight(text),
             "length": len(text), "lines": lines, "long": len(text) > LONG_ACTION or lines > 8,
             "hidden_chars": bool(_INVISIBLE.search(text))}
+
+
+# ============================================================================ Điều phối viên (M7 — MGR-UI)
+# Mọi chữ do điều phối viên viết (trả lời, tóm tắt hành động, đích) là DỮ LIỆU: template vẽ bằng autoescape, CSS pre-wrap —
+# không markdown, không HTML thô, không link do agent tự đặt (link duy nhất là link nội bộ dựng từ loại + id đích).
+MGR_TARGET_KINDS: dict[str, tuple[str, str]] = {
+    # loại đích → (nhãn, tiền tố URL nội bộ)
+    "agent": ("agent", "/agents/"),
+    "task": ("task", "/tasks/"),
+    "run": ("run", "/runs/"),
+    "team": ("team", "/teams#team-"),
+    "approval": ("yêu cầu duyệt", "/approvals#"),
+    "learning": ("thay đổi học", "/learnings/"),
+    "mcp": ("MCP", "/mcp/"),
+}
+_TOOL_KIND = (("agent_", "agent"), ("team_", "team"), ("task_", "task"), ("run_", "run"), ("learn_", "learning"))
+_ID_SAFE = __import__("re").compile(r"^[A-Za-z0-9_.:\-]{1,128}$")
+
+
+def mgr_target(target: Any, tool: str | None = None) -> dict[str, Any]:
+    """Đích của `manager.action` → {kind, id, label, href|None}. Nhận "agent:x", {"kind": "agent", "id": "x"} hoặc id trần
+    (đoán loại theo tên tool, vd `agent_create`). Chỉ dựng link NỘI BỘ cho loại đã biết + id an toàn — không bao giờ dùng URL do agent đưa."""
+    from urllib.parse import quote
+
+    kind: str | None = None
+    ident: str | None = None
+    if isinstance(target, dict):
+        kind = str(target.get("kind") or target.get("type") or "") or None
+        ident = str(target.get("id") or target.get("name") or "") or None
+    elif target is not None:
+        s = str(target)
+        k, sep, rest = s.partition(":")
+        if sep and k in MGR_TARGET_KINDS:
+            kind, ident = k, rest
+        else:
+            ident = s
+    if kind is None and tool:
+        t = str(tool).rsplit("__", 1)[-1].removeprefix("hub_").removeprefix("manager_")
+        kind = next((v for p, v in _TOOL_KIND if t.startswith(p)), None)
+    label_kind, prefix = MGR_TARGET_KINDS.get(kind or "", (kind or "", ""))
+    href = (prefix + quote(ident, safe="")) if prefix and ident and _ID_SAFE.match(ident) else None
+    label = (f"{label_kind} {ident}" if label_kind else str(ident or "")).strip()
+    return {"kind": kind, "id": ident, "label": label, "href": href}
+
+
+def mgr_action_item(ev: dict[str, Any]) -> dict[str, Any]:
+    """Event `manager.action` (dict wire) → mục thẻ hành động."""
+    p = ev.get("payload") or {}
+    tool = str(p.get("tool") or "")
+    tgt = mgr_target(p.get("target"), tool)
+    ok = p.get("ok", True) is not False and not p.get("error")
+    return {"kind": "action", "tool": short_tool(tool) if tool else "", "summary": str(p.get("summary") or tool or "hành động"),
+            "target": tgt, "run_id": ev.get("run_id"), "ts": ev.get("ts"), "audit_id": p.get("audit_id"), "ok": ok,
+            "error": str(p.get("error") or "") or None}
+
+
+def mgr_message(m: dict[str, Any]) -> dict[str, Any] | None:
+    """Mục `manager.history` → {kind: user|manager, text, ts, run_id}. Chấp nhận vài tên khoá (role/author, text/content)."""
+    role = str(m.get("role") or m.get("author") or m.get("kind") or "").lower()
+    text = m.get("text") if m.get("text") is not None else m.get("content")
+    if role in ("user", "human", "owner"):
+        kind = "user"
+    elif role in ("manager", "assistant", "agent", "notify", "reply", "tick"):
+        kind = "manager"
+    else:
+        return None
+    return {"kind": kind, "text": str(text or ""), "ts": m.get("ts") or m.get("created_at"), "run_id": m.get("run_id"),
+            "notify": role == "notify" or bool(m.get("notify")), "tick": role == "tick"}
+
+
+def mgr_conv(c: dict[str, Any]) -> dict[str, Any]:
+    cid = c.get("id") or c.get("conversation_id")
+    n = c.get("messages")
+    return {"id": cid, "channel": c.get("channel"), "updated_at": c.get("updated_at") or c.get("last_at") or c.get("created_at"),
+            "created_at": c.get("created_at"), "count": n if isinstance(n, int) else (len(n) if isinstance(n, list) else c.get("message_count")),
+            "title": first_line(str(c.get("title") or c.get("preview") or ""), 60)}

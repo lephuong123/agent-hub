@@ -153,6 +153,7 @@ def snapshot(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
                 "id": aid,
                 "name": a.get("name") or aid,
                 "sandbox_localhost": bool((sbx.get(aid) or {}).get("allow_localhost")),
+                "sandbox_domains": list((sbx.get(aid) or {}).get("allow_domains") or []),
                 "role": a.get("role") or "",
                 "model": a.get("model"),
                 "team": teams.get(aid),

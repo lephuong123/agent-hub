@@ -110,6 +110,10 @@ class Daemon:
         from .chat.rpc import register_rpc as _register_tg
 
         _register_tg(self)
+        # M7 MGR-CORE: manager.* + managerself.call (tool hub-self của run manager) — manager/rpc.py (tự bọc audit method ghi)
+        from .manager.rpc import register_rpc as _register_manager
+
+        _register_manager(self)
         self._mutating = _auth.all_mutating()
 
     # ------------------------------------------------------------------ handlers
@@ -189,12 +193,25 @@ class Daemon:
             return _auth.Caller(via="socket", pid=peer, token_ok=_auth.token_ok(token, self.auth_token))  # đường nóng: guard.check, đọc
         return self.callers.resolve(peer, token, self.auth_token)
 
-    def _deny_caller(self, method: str, caller: _auth.Caller) -> HubError:
+    def _deny_caller(self, method: str, caller: _auth.Caller, why: str | None = None) -> HubError:
         from .approvals import audit_record
         from .events import make_event
 
+        if caller.manager:  # M7: điều phối viên vượt quyền — audit actor manager:<agent>, lỗi nêu lý do cụ thể
+            info = {"method": method, "reason": why, **caller.to_dict()}
+            try:
+                self.hub.publish(make_event("auth.denied", caller.agent_id, info, run_id=caller.run_id, source="hub"))
+                self.hub.audit.record("auth.denied", caller.agent_id, caller.run_id, info, actor=f"manager:{caller.manager}", channel="manager",
+                                      target=method, summary=f"manager bị từ chối: {method} — {why}")
+            except Exception:  # pragma: no cover
+                log.exception("không ghi được auth.denied (manager)")
+            return HubError(f"'{method}' bị từ chối cho điều phối viên: {why}. Đây là giới hạn an toàn do người đặt — báo người nếu cần.",
+                            code=BLOCKED, data={"reason": "manager_forbidden", "detail": why, "caller": caller.to_dict()})
+        detail = why
         why = "lời gọi đến từ tiến trình của một run agent" if caller.is_agent else "thiếu token người"
-        info = {"method": method, **caller.to_dict()}
+        if detail:
+            why = f"{detail} ({why})"
+        info = {"method": method, **caller.to_dict(), **({"reason": detail} if detail else {})}
         try:
             self.hub.publish(make_event("auth.denied", caller.agent_id, info, run_id=caller.run_id, source="hub"))
             audit_record("auth.denied", agent_id=caller.agent_id, run_id=caller.run_id, data=info)
@@ -244,14 +261,27 @@ class Daemon:
                 if isinstance(params, dict):
                     params.pop(_auth.AUTH_PARAM, None)
                 caller = as_caller
-                if not caller.human and isinstance(params, dict):
+                if caller.manager and isinstance(params, dict):
+                    # M7: thao tác của điều phối viên — audit actor `manager:<agent>` (không tin `_audit` từ đâu khác)
+                    params["_audit"] = {"channel": "manager", "actor": f"manager:{caller.manager}", "run_id": caller.run_id}
+                elif not caller.human and isinstance(params, dict):
                     params["_audit"] = {"channel": caller.via, "actor": "unknown"}
             else:
                 caller = self._caller_for(method, params, peer, via_socket)
             if not caller.human and caller.via == "socket" and isinstance(params, dict) and (method in _auth.HUMAN_ONLY or "_audit" in params or caller.is_agent):
                 # mọi lời gọi không phải người: audit ghi đúng là agent (không tin `_audit.actor` do client tự khai)
                 params["_audit"] = {"channel": "agent" if caller.is_agent else "socket", "actor": "agent", "run_id": caller.run_id}
-            if method in _auth.HUMAN_ONLY and not caller.human:
+            if caller.manager:
+                # M7: người gọi = điều phối viên (chỉ dựng trong daemon). Chỉ MANAGER_ALLOWED + kiểm trường cấm theo method.
+                if method not in _auth.MANAGER_ALLOWED:
+                    raise self._deny_caller(method, caller, why="method ngoài quyền điều phối viên (MANAGER_ALLOWED)")
+                why = self.hub.manager.check_rpc(caller, method, params if isinstance(params, dict) else {})
+                if why:
+                    raise self._deny_caller(method, caller, why=why)
+            elif not caller.human and (why := self.hub.manager.agent_target_block(method, params if isinstance(params, dict) else {})):
+                # M7 MGR-3: agent/tiến trình không phải người không điều khiển được run/agent điều phối viên
+                raise self._deny_caller(method, caller, why=why)
+            elif method in _auth.HUMAN_ONLY and not caller.human:
                 if method in _auth.DOWNGRADE:
                     params.pop("_audit", None)
                     return {"jsonrpc": "2.0", "id": rid, "result": self._agent_propose(params, caller)}

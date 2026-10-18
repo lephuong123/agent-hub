@@ -51,7 +51,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
     {
         # phê duyệt / chính sách an toàn
         "approval.approve", "approval.deny",
-        "guard.protect.add", "guard.protect.rm", "guard.integrity.accept", "guard.sandbox.set",
+        "guard.protect.add", "guard.protect.rm", "guard.integrity.accept", "guard.sandbox.set", "guard.sandbox.allow_domain", "guard.repo_deny.add", "guard.repo_deny.rm",
         "config.set", "auth.reset", "hub.shutdown", "estop.set", "team.estop",
         # vòng đời / cấu hình agent (tool_policy, permission_mode, mcp_servers… là bề mặt nâng quyền)
         "agent.create", "agent.update", "agent.delete", "agent.restore", "agent.purge", "agent.clone", "agent.import",
@@ -70,6 +70,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "agent.archive", "agent.revert", "agent.pause", "agent.resume", "trash.restore", "trash.purge", "task.archive",
         # Telegram (chat/rpc.py): token bot, allowlist chat, gửi tin — agent không được tự ghép chat của nó vào allowlist
         "telegram.setup", "telegram.pending", "telegram.allow", "telegram.revoke", "telegram.disable", "telegram.test",
+        # M7: chỉ định điều phối viên (cấp quyền manager), nhắn/tick manager (agent khác không được "ra lệnh" cho manager)
+        "manager.set", "manager.chat", "manager.tick",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})
@@ -104,6 +106,34 @@ AGENT_ALLOWED_MUTATING: dict[str, str] = {
     "curation.phase2": "như curation.run",
     "curation.tick": "như curation.run",
     "agent.export": "xuất cấu hình (secret chỉ là tham chiếu ${NAME})",
+    "managerself.call": "tool hub-self của run MANAGER — daemon ràng run_id với người gọi + kiểm MANAGER_ALLOWED/trường cấm (manager/permissions.py)",
+}
+
+# M7 — điều phối viên: method RPC mà người gọi `Caller.manager` (do ManagerService dựng TRONG daemon cho tool hub-self của run
+# manager, không bao giờ từ socket) được gọi. Ngoài tập này → từ chối + audit. Method HUMAN_ONLY trong tập vẫn bị daemon kiểm
+# trường cấm theo từng method (`manager.permissions.check_rpc`) — "toàn quyền trừ an toàn" (docs/plan/M7-manager.md).
+# CỐ Ý KHÔNG có: approval.*, guard.*, golden.*, config.set, secret.*, mcp ghi, trash.purge/agent.purge, agent.revert, run.revert,
+# estop tắt (estop.set chỉ on=true), manager.*, telegram.*, learn.rollback/policy_set, run.takeover.
+MANAGER_ALLOWED: dict[str, str] = {
+    "agent.create": "tạo agent (MCP chỉ trong registry, không bypass/allow_bypass/extra_args/sandbox)",
+    "agent.update": "sửa agent khác (trường cho phép; không bỏ mẫu chặn người đặt) — đi ledger",
+    "agent.archive": "xoá mềm agent khác (khôi phục được)",
+    "agent.restore": "khôi phục agent đã xoá mềm",
+    "team.create": "tạo team (không chạm policies.learning)",
+    "team.update": "sửa team (không chạm policies.learning)",
+    "team.member_set": "thêm/sửa thành viên (không phải agent manager)",
+    "team.member_rm": "gỡ thành viên",
+    "team.archive": "xoá mềm team",
+    "team.restore": "khôi phục team",
+    "task.create": "giao việc (created_by=manager:<id>)",
+    "task.comment": "bình luận task",
+    "task.retry": "thử lại task",
+    "mcp.cancel_task": "huỷ task (dừng run của task)",
+    "run.start": "run ad-hoc cho agent khác",
+    "run.steer": "gửi tin vào run của agent khác",
+    "run.stop": "dừng run của agent khác",
+    "learn.refine": "yêu cầu review/tinh chỉnh tri thức của agent khác (qua pipeline)",
+    "estop.set": "CHỈ bật ESTOP (on=true)",
 }
 
 
@@ -112,7 +142,8 @@ def all_mutating() -> frozenset[str]:
     out: set[str] = set()
     for mod, name in (("agent_hub.mcp_server.rpc", "MUTATING"), ("agent_hub.mcp_server.surface_rpc", "MUTATING_SURFACE"),
                       ("agent_hub.learning.rpc", "MUTATING_M4A"), ("agent_hub.learning_ops.rpc", "MUTATING_B"),
-                      ("agent_hub.curation.rpc", "MUTATING_CURATION"), ("agent_hub.chat.rpc", "MUTATING_TELEGRAM")):
+                      ("agent_hub.curation.rpc", "MUTATING_CURATION"), ("agent_hub.chat.rpc", "MUTATING_TELEGRAM"),
+                      ("agent_hub.manager.rpc", "MUTATING_MANAGER")):
         try:
             import importlib
 
@@ -290,6 +321,8 @@ class Caller:
     run_id: str | None = None
     agent_id: str | None = None
     evidence: list[str] = field(default_factory=list)
+    # M7: id agent manager khi lời gọi do ManagerService thực hiện THAY run manager (chỉ dựng trong daemon, `manager_caller`)
+    manager: str | None = None
 
     @property
     def internal(self) -> bool:
@@ -304,8 +337,17 @@ class Caller:
         return self.internal or (self.token_ok and not self.is_agent)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"via": self.via, "pid": self.pid, "token_ok": self.token_ok, "run_id": self.run_id, "agent_id": self.agent_id,
-                "evidence": self.evidence[:5], "human": self.human}
+        out = {"via": self.via, "pid": self.pid, "token_ok": self.token_ok, "run_id": self.run_id, "agent_id": self.agent_id,
+               "evidence": self.evidence[:5], "human": self.human}
+        if self.manager:
+            out["manager"] = self.manager
+        return out
+
+
+def manager_caller(agent_id: str, run_id: str | None) -> Caller:
+    """Người gọi = điều phối viên `agent_id` (qua tool hub-self của run `run_id`). KHÔNG phải người (`human=False`): cổng
+    `require_human` ở tầng service (purge, sandbox…) vẫn chặn; daemon chỉ cho method trong `MANAGER_ALLOWED` sau khi kiểm trường cấm."""
+    return Caller(via=f"manager:{agent_id}", token_ok=False, run_id=run_id, agent_id=agent_id, evidence=["manager"], manager=agent_id)
 
 
 def telegram_caller(hub: "Hub", chat_id: Any, user_id: Any = None) -> Caller:

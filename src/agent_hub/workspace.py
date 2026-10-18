@@ -28,13 +28,89 @@ from .errors import Conflict, HubError
 from .guard.locks import RepoLocks
 
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache", ".tox", "dist", "build"}
-GIT_ENV = {"LC_ALL": "C", "LANG": "C", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
+GIT_ENV = {"LC_ALL": "C", "LANG": "C", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"}
+# R2-4 (SEC): daemon chạy git NGOÀI sandbox trên repo agent ghi được → vô hiệu khoá chạy lệnh trong .git/config
+GIT_SAFE_ARGS = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.sshCommand=", "-c", "core.pager=cat",
+                 "-c", "diff.external=", "-c", "core.untrackedCache=false")
+
+
+_EXTRA_ALLOWED_ROOTS: list[str] = []  # CHỈ test (conftest) đặt; sản phẩm luôn rỗng
+
+
+def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
+    """MGR-1(a): workspace `dir` phải nằm TRONG một gốc người cho phép (`workspace.allowed_roots`, mặc định ~/Workspace +
+    vùng scratch của hub) VÀ không trùng/chứa/nằm trong bất kỳ vùng bảo vệ cố định hoặc protected path nào. Cho CẢ người lẫn
+    manager (người muốn ngoại lệ thì thêm root qua config). Chỉ áp cho workspace kiểu thư mục thật."""
+    if path in (None, "", "scratch", "worktree"):
+        return
+    if isinstance(path, dict):
+        if path.get("kind") in ("scratch", "worktree") and not path.get("path"):
+            return
+        path = path.get("path")
+    if not path:
+        return
+    from .guard.runtime import fixed_protected_dirs
+
+    try:
+        p = Path(str(path)).expanduser().resolve()
+    except (OSError, RuntimeError):
+        raise HubError(f"{what}: đường dẫn không hợp lệ: {path!r}")
+    hh = hub.paths.home.resolve()
+    uh = Path(os.path.expanduser("~")).resolve()
+    # gốc cho phép: cấu hình + vùng scratch/workspace của hub + worktree của hub
+    roots: list[Path] = []
+    try:
+        for r in hub.config.get("workspace.allowed_roots") or []:
+            roots.append(Path(str(r)).expanduser().resolve())
+    except KeyError:
+        pass
+    if not roots:
+        roots = [uh / "Workspace"]
+    roots += [hh / "agents", hh / "worktrees", hh / "evals", hh / "checkpoints"]
+    roots += [Path(r) for r in _EXTRA_ALLOWED_ROOTS]  # test-only (conftest, cùng tiến trình); rỗng trong sản phẩm
+    env_extra = os.environ.get("AGENT_HUB_EXTRA_WORKSPACE_ROOTS")  # test-only (daemon tiến trình con kế thừa env)
+    if env_extra:
+        roots += [Path(r).expanduser().resolve() for r in env_extra.split(os.pathsep) if r]
+    if not any(p == r or p.is_relative_to(r) for r in roots):
+        raise HubError(f"{what} '{p}' không nằm trong gốc workspace cho phép ({', '.join(str(r) for r in roots)}). "
+                       f"Người có thể thêm gốc: `agent-hub config set workspace.allowed_roots '[...]'`", code=-32003)
+    # không trùng/chứa/nằm trong vùng bảo vệ cố định
+    socket = hub.paths.socket
+    sb_cfg = {}
+    try:
+        sb_cfg = (hub.config.get("guard") or {}).get("sandbox") or {}
+    except KeyError:
+        pass
+    for region in fixed_protected_dirs(hh, socket, sb_cfg):
+        if "*" in region:
+            import fnmatch
+
+            if fnmatch.fnmatchcase(str(p), region) or fnmatch.fnmatchcase(str(p), region + "/*"):
+                raise HubError(f"{what} '{p}' là/nằm trong vùng bảo vệ ({region})", code=-32003)
+            continue
+        rp = Path(region)
+        if p == rp or p.is_relative_to(rp) or rp.is_relative_to(p):
+            raise HubError(f"{what} '{p}' trùng/chứa/nằm trong vùng bảo vệ ({region})", code=-32003)
+    # protected path do người khai báo (dotenv, ssh, repo nhánh…)
+    try:
+        from .guard.classifier import protected_path
+
+        ctx = hub.guard.context_for(None, cwd=str(p) if p.is_dir() else None)
+        under = ctx.policy.protected_under(str(p))
+        # tài nguyên NGƯỜI khai báo nằm BÊN TRONG workspace (vd `<repo>/.next` prod) là hợp lệ — đã được chặn riêng
+        r = protected_path(ctx, str(p), "write") or (under if under is not None and under.builtin else None)
+        if r is not None:
+            raise HubError(f"{what} '{p}' là/chứa tài nguyên được bảo vệ ({r.selector})", code=-32003)
+    except HubError:
+        raise
+    except Exception:  # pragma: no cover
+        pass
 
 
 # ============================================================================ git helpers
 def _git(cwd: str | Path, *args: str, check: bool = False, binary: bool = False) -> subprocess.CompletedProcess:
     env = {**os.environ, **GIT_ENV}
-    return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=not binary, timeout=60, env=env, check=check)
+    return subprocess.run(["git", *GIT_SAFE_ARGS, "-C", str(cwd), *args], capture_output=True, text=not binary, timeout=60, env=env, check=check)
 
 
 def git_root(path: str | Path) -> str | None:

@@ -15,6 +15,7 @@
     <a class="brand" href="/"><span class="logo" aria-hidden="true">◆</span> agent-hub</a>
     {% if csrf %}
     <nav class="nav" aria-label="Điều hướng chính">
+      <a href="/manager" class="{{ 'on' if nav == 'manager' }}">Điều phối</a>
       <a href="/" class="{{ 'on' if nav == 'overview' }}">Tổng quan</a>
       <a href="/agents" class="{{ 'on' if nav == 'agents' }}">Agent</a>
       <a href="/runs" class="{{ 'on' if nav == 'runs' }}">Lượt chạy</a>

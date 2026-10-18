@@ -58,6 +58,43 @@ def _abs_rule(p: str | Path) -> str:
     return "/" + str(p).rstrip("/")
 
 
+def protected_write_paths(hub_home: Path) -> list[str]:
+    """Tài nguyên `path` do NGƯỜI khai báo (policy/protected.yaml) bảo vệ ghi/ghi đè — đường dẫn tuyệt đối không glob."""
+    try:
+        from .policy import PolicyStore
+
+        pol = PolicyStore(hub_home).load()
+    except Exception:  # pragma: no cover
+        return []
+    out = []
+    for r in pol.resources:
+        if r.kind == "path" and not r.builtin and r.guards("overwrite") and r.selector.startswith("/") and not any(c in r.selector for c in "*?["):
+            out.append(os.path.realpath(r.selector))
+    return list(dict.fromkeys(out))
+
+
+def credential_deny_rules() -> list[str]:
+    """R3-1 lớp tĩnh: lệnh đọc keychain/credential helper/token forge + đọc file xác thực (Read/Grep/Glob)."""
+    uh = os.path.expanduser("~")
+    bash = ["security find-generic-password", "security find-internet-password", "security dump-keychain", "security export",
+            "security find-certificate", "security find-identity", "security unlock-keychain", "git credential", "git credential-osxkeychain",
+            "git-credential-osxkeychain", "git config credential", "gh auth token", "gh auth status --show-token", "gh auth status -t"]
+    out = [f"Bash({c}:*)" for c in bash]
+    for x in (".config/gh", ".git-credentials", ".config/git/credentials", "Library/Keychains", ".netrc", ".ssh"):
+        for t in ("Read", "Grep", "Glob"):
+            out += [f"{t}(/{uh}/{x}/**)", f"{t}(/{uh}/{x})"]
+    return out
+
+
+def exec_zone_deny_rules() -> list[str]:
+    """R2-1 lớp tĩnh (Claude Code `permissions.deny`, không phụ thuộc hook): tool ghi file KHÔNG được vào vùng thực thi ngoài sandbox."""
+    out: list[str] = []
+    for z in executable_zones():
+        for t in FILE_TOOLS:
+            out += [f"{t}(/{z.rstrip('/')}/**)", f"{t}(/{z.rstrip('/')})"]
+    return list(dict.fromkeys(out))
+
+
 def secret_read_deny_rules(hub_home: Path, socket: Path) -> list[str]:
     """`permissions.deny` cho tool Read/Grep/Glob: token người, secret, mcp.json đã resolve, token MCP HTTP."""
     from ..auth import token_path
@@ -83,6 +120,114 @@ HUB_WRITE_DENY_NAMES = (
     "snapshots", "audit", "trash", "runs", "logs", "prompts", "checkpoints", "global", "teams", "hub.pid", "hub.sock", "auth",
 )
 AGENT_WRITE_DENY_NAMES = ("config.yaml", "SOUL.md", "MEMORY.md", "USER.md", "skills", ".archive", "runtime", "home", ".tier_overlay")
+
+
+def path_bin_dirs() -> list[str]:
+    """Thư mục trong $PATH thuộc $HOME + bin quen thuộc — nơi người/daemon THỰC THI binary ngoài sandbox (MGR-1)."""
+    uh = os.path.realpath(os.path.expanduser("~"))
+    out: list[str] = []
+    for d in (os.environ.get("PATH") or "").split(os.pathsep):
+        if not d:
+            continue
+        rd = os.path.realpath(os.path.expanduser(d))
+        if rd == uh or rd.startswith(uh + os.sep):
+            out.append(rd)
+    out += [f"{uh}/.local/bin", f"{uh}/bin", f"{uh}/.local/share/claude", f"{uh}/.hermes/node/bin", f"{uh}/.cargo/bin", f"{uh}/go/bin", f"{uh}/.npm-global/bin"]
+    return list(dict.fromkeys(out))
+
+
+EXEC_DOTFILES = (".npmrc", ".yarnrc", ".yarnrc.yml", ".pypirc", ".pythonrc", ".pythonrc.py", ".tmux.conf", ".inputrc", ".curlrc", ".wgetrc",
+                 ".config/uv", ".config/pip", ".config/npm", ".config/yarn", ".config/gh", ".config/hub", ".netrc", ".docker", ".kube",
+                 ".aws", ".gnupg", ".local/share/uv", ".bun", ".deno", ".nvm", ".pyenv", ".rbenv", ".vimrc", ".config/nvim", ".editorconfig")
+
+
+def hub_repo_root() -> str | None:
+    """Gốc repo chứa mã agent-hub (cài editable) — `tests/conftest.py`, `pyproject.toml`… chạy ngoài sandbox khi người chạy pytest/uv."""
+    from .policy import package_dir
+
+    pkg = os.path.realpath(package_dir())
+    d = pkg
+    for _ in range(6):
+        if os.path.isdir(os.path.join(d, ".git")) or os.path.isfile(os.path.join(d, "pyproject.toml")):
+            return d
+        nd = os.path.dirname(d)
+        if nd == d:
+            break
+        d = nd
+    return None
+
+
+def executable_zones() -> list[str]:
+    """R2-1: nơi mà thứ được ghi vào sẽ CHẠY ngoài sandbox như người (khi nạp/khởi động/gõ lệnh): mọi thư mục `$PATH`
+    (tuyệt đối), site-packages/scripts của interpreter chạy hub (`sys.prefix`, `base_prefix`, venv `.venv` của repo hub,
+    `~/.local/share/uv`), `/opt/homebrew`, `/usr/local`, toàn bộ repo mã agent-hub, dotfile cấu hình công cụ. Giải realpath."""
+    import sys
+    import sysconfig
+
+    uh = os.path.realpath(os.path.expanduser("~"))
+    out: list[str] = []
+    for d in (os.environ.get("PATH") or "").split(os.pathsep):
+        if d and os.path.isabs(os.path.expanduser(d)):
+            out.append(os.path.realpath(os.path.expanduser(d)))
+    for pref in {sys.prefix, sys.base_prefix, getattr(sys, "exec_prefix", sys.prefix)}:
+        out.append(os.path.realpath(pref))
+    for k in ("purelib", "platlib", "scripts", "data"):
+        try:
+            out.append(os.path.realpath(sysconfig.get_paths()[k]))
+        except KeyError:  # pragma: no cover
+            pass
+    root = hub_repo_root()
+    if root:
+        out += [root, os.path.join(root, ".venv")]
+    out += ["/opt/homebrew", "/usr/local", f"{uh}/.local/share/uv", f"{uh}/.local/bin", f"{uh}/.local/lib"]
+    out += [f"{uh}/{x}" for x in EXEC_DOTFILES]
+    # bỏ thư mục quá rộng/vô nghĩa (không bao giờ khoá cả $HOME hay /)
+    bad = {"/", uh, os.path.dirname(uh)}
+    return [x for x in dict.fromkeys(out) if x and x not in bad]
+
+
+def home_persistence_dirs() -> list[str]:
+    uh = os.path.expanduser("~")
+    return [f"{uh}/{x}" for x in (".ssh", ".gitconfig", ".config/git", ".config/systemd", ".config/autostart", ".config/fish", ".git-templates",
+                                  "Library/LaunchAgents", "Library/LaunchDaemons", ".bashrc", ".bash_profile", ".profile", ".zshrc",
+                                  ".zprofile", ".zshenv", ".zlogin", ".claude", ".claude.json", ".local/bin")]
+
+
+def fixed_protected_dirs(hub_home: Path, socket: Path, sb_cfg: dict[str, Any] | None = None) -> list[str]:
+    """Vùng LUÔN cấm ghi (không bao giờ gỡ theo cwd; workspace không được trùng/chứa/nằm trong — MGR-1).
+    Tách riêng với tên phát hiện động trong HUB_HOME (vd `evals/` bản sao eval vẫn ghi được)."""
+    from ..auth import token_path
+    from .policy import package_dir
+
+    sb_cfg = sb_cfg or {}
+    out: list[str] = []
+    for h in dict.fromkeys([str(hub_home), os.path.realpath(hub_home)]):
+        hp = Path(h)
+        out += [str(hp / n) for n in HUB_WRITE_DENY_NAMES]
+        out += [f"{hp}/agents/*/{n}" for n in AGENT_WRITE_DENY_NAMES]
+    out += [str(socket), str(token_path(socket))]
+    if sb_cfg.get("protect_hub_code", True):
+        out.append(os.path.realpath(package_dir()))
+    out += home_persistence_dirs() + path_bin_dirs() + executable_zones()
+    out += [str(x) for x in sb_cfg.get("extra_deny_write") or []]
+    return list(dict.fromkeys(out))
+
+
+DEFAULT_ALLOWED_DOMAINS = ["registry.npmjs.org", "*.npmjs.org", "registry.yarnpkg.com", "pypi.org", "files.pythonhosted.org",
+                           "*.pythonhosted.org", "api.anthropic.com", "*.anthropic.com"]
+
+
+def network_domains(sb_cfg: dict[str, Any], overrides: dict[str, Any] | None) -> list[str]:
+    """R3-1: domain Bash được ra mạng = cấu hình hub (mặc định hẹp) + domain người mở cho agent + host MCP gán cho agent
+    (+ loopback nếu agent có ngoại lệ localhost)."""
+    base = sb_cfg.get("allowed_domains")
+    out = [str(x) for x in (base if base is not None else DEFAULT_ALLOWED_DOMAINS)]
+    ov = overrides or {}
+    out += [str(x) for x in ov.get("allow_domains") or []]
+    out += [str(x) for x in ov.get("mcp_domains") or []]
+    if ov.get("allow_localhost"):
+        out += ["localhost", "127.0.0.1", "[::1]"]
+    return list(dict.fromkeys(x for x in out if x))
 
 
 def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cwd: Path | None = None,
@@ -122,6 +267,8 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
     deny_w += [f"{uh}/{x}" for x in (".ssh", ".gitconfig", ".config/git", ".config/systemd", ".config/autostart", ".config/fish", ".git-templates",
                                      "Library/LaunchAgents", "Library/LaunchDaemons", ".bashrc", ".bash_profile", ".profile", ".zshrc",
                                      ".zprofile", ".zshenv", ".zlogin", ".claude", ".claude.json", ".local/bin")]
+    deny_w += path_bin_dirs()  # MGR-1: mọi thư mục bin trên PATH thuộc $HOME (người/daemon thực thi ngoài sandbox)
+    deny_w += executable_zones()  # R2-1: venv/site-packages của hub, mọi PATH, /opt/homebrew, repo hub, dotfile công cụ
     deny_w += [str(x) for x in sb_cfg.get("extra_deny_write") or []]
     deny_r: list[str] = [str(tok)]
     for h in homes:
@@ -131,22 +278,27 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
                 deny_r.append(str(a / "runtime"))
         except OSError:
             pass
+    if sb_cfg.get("deny_git_credentials", True):  # R2-2: không cho đọc thông tin xác thực git/forge → không push được
+        uh = os.path.expanduser("~")
+        deny_r += [f"{uh}/{x}" for x in (".ssh", ".git-credentials", ".config/git/credentials", ".config/gh", ".config/hub", ".netrc",
+                                         ".docker/config.json", ".config/glab-cli", ".npmrc", ".pypirc", "Library/Keychains")]
     deny_r += [str(x) for x in sb_cfg.get("extra_deny_read") or []]
     socks = [str(x) for x in sb_cfg.get("allow_unix_sockets") or []]
-    if sb_cfg.get("allow_ssh_agent", True) and os.environ.get("SSH_AUTH_SOCK"):
+    if sb_cfg.get("allow_ssh_agent", False) and os.environ.get("SSH_AUTH_SOCK"):
         socks.append(os.environ["SSH_AUTH_SOCK"])
     bad = {str(socket), os.path.realpath(socket)}
     socks = [x for x in dict.fromkeys(socks) if x not in bad and os.path.realpath(x) not in bad]
-    if cwd is not None:  # không bao giờ chặn ghi workspace của chính run (vd eval chạy trên bản sao home)
+    if cwd is not None:  # gỡ chặn ghi workspace của chính run (vd bản sao home của eval) — NHƯNG không gỡ vùng bảo vệ cố định (MGR-1b)
         cw = {str(cwd).rstrip("/"), os.path.realpath(cwd).rstrip("/")}
-        deny_w = [p for p in deny_w if not any(c == p.rstrip("/") or c.startswith(p.rstrip("/") + "/") for c in cw)]
+        fixed = {p.rstrip("/") for p in fixed_protected_dirs(home, Path(socket), sb_cfg)}
+        deny_w = [p for p in deny_w if p.rstrip("/") in fixed or not any(c == p.rstrip("/") or c.startswith(p.rstrip("/") + "/") for c in cw)]
     sb: dict[str, Any] = {
         "enabled": True,
         "failIfUnavailable": bool(sb_cfg.get("fail_if_unavailable", True)),
         "autoAllowBashIfSandboxed": False,  # giữ nguyên luồng quyền: hook guard vẫn quyết từng lệnh
         "allowUnsandboxedCommands": False,  # bỏ qua `dangerouslyDisableSandbox` của model
         "filesystem": {"denyWrite": list(dict.fromkeys(deny_w)), "denyRead": list(dict.fromkeys(deny_r))},
-        "network": {"allowedDomains": [str(x) for x in (sb_cfg.get("allowed_domains") if sb_cfg.get("allowed_domains") is not None else ["*"])]},
+        "network": {"allowedDomains": network_domains(sb_cfg, overrides)},
     }
     aw = [str(x) for x in sb_cfg.get("extra_allow_write") or []]
     if aw:
@@ -171,12 +323,16 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
     s["hooks"] = hooks
     perms = dict(s.get("permissions") or {})
     hub_home = Path(policy_dir).parent
-    perms["deny"] = list(perms.get("deny") or []) + policy_deny_rules(policy_dir) + secret_read_deny_rules(hub_home, Path(socket))
+    user_prot = protected_write_paths(hub_home)  # R2-2: tài nguyên NGƯỜI khai báo (vd `.next` prod) → chặn tĩnh tool ghi + sandbox
+    perms["deny"] = (list(perms.get("deny") or []) + policy_deny_rules(policy_dir) + secret_read_deny_rules(hub_home, Path(socket))
+                     + exec_zone_deny_rules() + [f"{t}(/{p.rstrip('/')}{suf})" for p in user_prot for t in FILE_TOOLS for suf in ("/**", "")]
+                     + credential_deny_rules())
     s["permissions"] = perms
     sb_cfg = dict(guard_cfg.get("sandbox") or {})
     if sb_cfg.get("enabled", True):
         user_sb = dict(s.get("sandbox") or {}) if isinstance(s.get("sandbox"), dict) else {}
         user_sb.pop("excludedCommands", None)  # lệnh loại khỏi sandbox = lỗ — không nhận từ cấu hình
+        sb_cfg = {**sb_cfg, "extra_deny_write": list(sb_cfg.get("extra_deny_write") or []) + user_prot}
         ours = sandbox_settings(hub_home, Path(socket), sb_cfg, cwd=cwd, overrides=sandbox_overrides)
         fs = dict(user_sb.get("filesystem") or {})
         for k in ("denyWrite", "denyRead"):

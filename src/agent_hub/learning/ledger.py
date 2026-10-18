@@ -36,11 +36,20 @@ from ..store import now_iso
 if TYPE_CHECKING:
     from ..hub import Hub
 
-CONFIG_FIELDS = ("model", "effort", "fallback_model", "tool_policy", "mcp_servers", "limits")
+CONFIG_FIELDS = ("model", "effort", "fallback_model", "tool_policy", "mcp_servers", "limits",
+                 # M7: điều phối viên sửa cả các trường mô tả/workspace qua ledger (rollback được); entry cũ không có khoá → không đổi
+                 "name", "role", "description", "workspace_default")
 # Bên gọi rollback TỰ ĐỘNG (không phải người).
 AUTO_ROLLBACK_CALLERS = frozenset({"regression_monitor", "eval_gate", "canary"})
 # Actor của entry mà cơ chế tự động được phép rollback (= learning_ops.ports.AUTO_ROLLBACK_ACTORS).
 AUTO_CHANGE_ACTORS = frozenset({"learning", "review", "agent", "curator"})
+# M7: thay đổi do điều phối viên (actor `manager:<agent>`) là thay đổi TỰ ĐỘNG (không phải của người) → được tự rollback.
+MANAGER_ACTOR_PREFIX = "manager:"
+
+
+def is_auto_change_actor(actor: Any) -> bool:
+    a = str(actor or "")
+    return a in AUTO_CHANGE_ACTORS or a.startswith(MANAGER_ACTOR_PREFIX)
 
 
 def config_keys(e: dict[str, Any], before: dict[str, Any] | None = None, after: dict[str, Any] | None = None) -> tuple[list[str], bool]:
@@ -219,7 +228,8 @@ class Ledger:
                             p.write_bytes(data)
                 self._register_tree(ch)
         elif ch.kind == "config":
-            res = self.hub.agents.update(ch.agent_id or "", dict(ch.config_changes or {}), soul=ch.soul, actor="rollback" if ch.op == "rollback" else "learning")
+            rev_actor = "rollback" if ch.op == "rollback" else (ch.actor if str(ch.actor).startswith(MANAGER_ACTOR_PREFIX) else "learning")
+            res = self.hub.agents.update(ch.agent_id or "", dict(ch.config_changes or {}), soul=ch.soul, actor=rev_actor)
             revision = res.get("config_revision")
         else:
             raise HubError(f"kind thay đổi không hợp lệ: {ch.kind}")
@@ -349,7 +359,7 @@ class Ledger:
                 data={"chain": [x["id"] for x in later] + [e["id"]]},
             )
         if actor in AUTO_ROLLBACK_CALLERS:
-            human = [x for x in [*later, e] if str(x.get("actor") or "") not in AUTO_CHANGE_ACTORS]
+            human = [x for x in [*later, e] if not is_auto_change_actor(x.get("actor"))]
             if human:
                 h = human[0]
                 self._human_conflict(e, actor, reason, change_actor=str(h.get("actor") or "?"), change_entry=h["id"],

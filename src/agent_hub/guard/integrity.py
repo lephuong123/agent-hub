@@ -40,7 +40,7 @@ log = logging.getLogger("agent_hub.guard.integrity")
 
 POLICY = "policy"
 CONFIG = "config.yaml"
-SECURITY_KEYS = ("guard", "approval", "runtime", "secrets", "telemetry", "notify", "learning_guard")
+SECURITY_KEYS = ("guard", "approval", "runtime", "secrets", "telemetry", "notify", "learning_guard", "manager")  # M7 MGR-6: trần của điều phối viên
 MAX_FILE = 2_000_000
 
 
@@ -402,7 +402,7 @@ def attach(hub: "Hub") -> IntegrityMonitor:
 
     guard = getattr(hub, "guard", None)
     if guard is not None:
-        for n in ("add", "remove", "ensure"):
+        for n in ("add", "remove", "ensure", "repo_deny_add", "repo_deny_rm"):  # MGR-2: ghi repo_deny.yaml hợp lệ → chụp lại bản chuẩn
             _after(guard.policy_store, n, rb)
     learning = getattr(hub, "learning", None)
     if learning is not None and getattr(learning, "policy", None) is not None:
@@ -470,9 +470,76 @@ def register_rpc(d: "Daemon") -> None:
                 raise HubError("thiếu 'content' cho path")
             m._write(rel, str(p["content"]).encode("utf-8"))
         n = m.rebaseline("human_accept")
+        check_python_env(hub, adopt=True)  # R2-1(c): người xác nhận → nhận luôn trạng thái .pth/sitecustomize hiện tại
         from ..approvals import audit_record
 
         audit_record("guard.integrity_accept", agent_id=None, run_id=None, data={"path": rel, "entries": n})
         return {"ok": True, "entries": n, "path": rel}
 
     d.methods.update({"guard.integrity.status": status, "guard.integrity.check": check, "guard.integrity.accept": accept})
+
+
+# ============================================================================ R2-1(c): môi trường Python của hub (.pth / sitecustomize)
+def python_env_files() -> dict[str, str]:
+    """{đường dẫn: sha256} của mọi `*.pth`, `sitecustomize.py`, `usercustomize.py` trong site-packages của interpreter chạy hub —
+    những file Python CHẠY khi khởi động (ngoài sandbox, trước mọi kiểm tra)."""
+    import site
+    import sysconfig
+
+    dirs: set[str] = set()
+    for k in ("purelib", "platlib"):
+        try:
+            dirs.add(os.path.realpath(sysconfig.get_paths()[k]))
+        except KeyError:  # pragma: no cover
+            pass
+    try:
+        dirs |= {os.path.realpath(d) for d in site.getsitepackages()}
+    except Exception:  # pragma: no cover
+        pass
+    try:
+        dirs.add(os.path.realpath(site.getusersitepackages()))
+    except Exception:  # pragma: no cover
+        pass
+    out: dict[str, str] = {}
+    for d in dirs:
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for n in names:
+            if n.endswith(".pth") or n in ("sitecustomize.py", "usercustomize.py"):
+                f = os.path.join(d, n)
+                try:
+                    out[f] = _sha(Path(f).read_bytes())
+                except OSError:
+                    continue
+    return out
+
+
+def check_python_env(hub: "Hub", *, adopt: bool = False) -> dict[str, Any] | None:
+    """So .pth/sitecustomize với bản chuẩn (`hub_state.pyenv_baseline`). Lần đầu / `adopt` → nhận. Lệch → event đỏ
+    `guard.env_tamper` + audit (+ Slack/Telegram qua listener). KHÔNG tự xoá (có thể là cài gói hợp lệ của người)."""
+    cur = python_env_files()
+    base = hub.store.state_get("pyenv_baseline")
+    if base is None or adopt:
+        hub.store.state_set("pyenv_baseline", cur)
+        return None
+    added = sorted(set(cur) - set(base))
+    changed = sorted(k for k in set(cur) & set(base) if cur[k] != base[k])
+    removed = sorted(set(base) - set(cur))
+    if not (added or changed):
+        if removed:
+            hub.store.state_set("pyenv_baseline", cur)
+        return None
+    info = {"added": added, "changed": changed, "removed": removed,
+            "message": "File chạy-khi-khởi-động (.pth/sitecustomize) trong môi trường Python của hub bị thêm/sửa — kiểm tra; nếu do bạn cài gói: "
+                       "`agent-hub guard integrity accept`"}
+    try:
+        hub.publish(make_event("guard.env_tamper", None, info, source="hub"))
+        from ..approvals import audit_record
+
+        audit_record("guard.env_tamper", agent_id=None, run_id=None, data=info)
+    except Exception:  # pragma: no cover
+        log.exception("không phát được guard.env_tamper")
+    log.warning("môi trường Python của hub bị thay đổi: %s", info)
+    return info

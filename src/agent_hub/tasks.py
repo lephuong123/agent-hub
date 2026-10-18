@@ -191,6 +191,8 @@ class TaskService:
                 p = Path(str(ws.get("path") or "")).expanduser()
                 if not p.is_dir():
                     raise HubError(f"workspace dir không tồn tại: {ws.get('path')}")
+                from .workspace import validate_workspace
+                validate_workspace(self.hub, {"kind": "dir", "path": str(p)}, "workspace của task")
                 ws = {**ws, "path": str(p.resolve())}
                 if git_root(p) is None:
                     warnings.append("thư mục không phải repo git: hub chỉ khoá + ghi danh sách file bị sửa, KHÔNG hoàn tác được (run revert)")
