@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}MCP {{ s.name }}{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="/mcp">MCP</a> › <span>{{ s.name }}</span></nav>
+<div class="page-head"><h1>{{ s.name }}</h1>{{ m.act("mcp_probe", "Kiểm tra kết nối", {"name": s.name}, "btn") }}</div>
+<section class="card">
+  <dl class="kv cols">
+    <div><dt>Kiểu</dt><dd>{{ s.transport }}</dd></div><div><dt>Tin cậy</dt><dd>{{ s.trust }}</dd></div>
+    <div><dt>Nguồn</dt><dd>{{ s.source }}</dd></div><div><dt>Agent dùng</dt><dd>{{ (s.agents or [])|join(', ') or '—' }}</dd></div>
+    {% if s.missing_secrets %}<div class="span2"><dt>Thiếu secret</dt><dd class="danger-t">{{ s.missing_secrets|join(', ') }} — đặt ở <a href="/settings#secrets">Cài đặt</a></dd></div>{% endif %}
+    {% if s.probe_error %}<div class="span2"><dt>Lỗi kiểm</dt><dd class="danger-t">{{ s.probe_error }}</dd></div>{% endif %}
+  </dl>
+  <h3>Cấu hình</h3><pre>{{ s.config|j }}</pre>
+  <h3>Tool ({{ (s.annotations_cache or {})|length }})</h3>
+  <table class="tbl stack"><thead><tr><th>Tool</th><th>Chỉ đọc</th><th>Phá huỷ</th><th>Mô tả</th></tr></thead><tbody>
+  {% for name, t in (s.annotations_cache or {}).items() %}<tr><td data-label="Tool"><code>{{ name }}</code></td>
+    <td data-label="Chỉ đọc">{{ '✓' if (t.annotations or t).readOnlyHint }}</td><td data-label="Phá huỷ">{{ '⚠' if (t.annotations or t).destructiveHint }}</td>
+    <td data-label="Mô tả" class="small">{{ (t.description or '')|first(140) }}</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endblock %}

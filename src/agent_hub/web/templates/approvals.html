@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Duyệt{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Duyệt thao tác phá huỷ</h1></div>
+<p class="muted">Agent chỉ hỏi khi định làm thao tác có thể làm mất dữ liệu (xoá, ghi đè, đẩy git ép…). Bạn vắng thì agent <b>chờ</b> — không bao giờ tự quyết. Cho phép = <b>một lần</b>, đúng thao tác đó.</p>
+<section class="card {{ 'attention' if pend }}">
+  <h2>Đang chờ ({{ pend|length }})</h2>
+  {% for a in pend %}{{ m.approval_card(a, "/approvals") }}{% else %}{{ m.empty("Không có gì chờ duyệt. 🎉") }}{% endfor %}
+</section>
+<section class="card">
+  <h2>Đã xử lý gần đây</h2>
+  {% if not hist %}{{ m.empty("Chưa có.") }}{% else %}
+  <table class="tbl stack"><thead><tr><th>Lúc</th><th>Agent</th><th>Thao tác</th><th>Kết quả</th><th>Bởi</th></tr></thead><tbody>
+  {% for a in hist %}<tr>
+    <td data-label="Lúc">{{ (a.resolved_at or a.opened_at)|ts }}</td>
+    <td data-label="Agent"><a href="/runs/{{ a.run_id }}">{{ a.agent_id }}</a></td>
+    <td data-label="Thao tác"><code>{{ (a.preview or a.tool_name)|first(80) }}</code></td>
+    <td data-label="Kết quả"><span class="pill {{ 'ok' if a.status == 'allowed' else 'warn' if a.status == 'denied' else 'muted' }}">{{ {'allowed': 'cho phép', 'denied': 'từ chối', 'cancelled': 'huỷ'}.get(a.status, a.status) }}</span>{% if a.false_positive %} <span class="pill muted">báo nhầm</span>{% endif %}</td>
+    <td data-label="Bởi">{{ a.resolved_by or '—' }}{% if a.resolved_channel %} <span class="muted small">qua {{ a.resolved_channel }}</span>{% endif %}</td>
+  </tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+{% endblock %}

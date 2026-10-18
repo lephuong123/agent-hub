@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Team{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Team</h1></div>
+{% for t in teams %}
+<section class="card {{ 'archived' if t.archived_at }}">
+  <div class="card-head"><h2>{{ t.name }} <span class="muted small">{{ t.id }}</span>{% if t.estop %} <span class="pill danger">ESTOP</span>{% endif %}{% if t.archived_at %} <span class="pill muted">đã lưu trữ</span>{% endif %}</h2>
+    <div class="row gap wrap-row">
+      <a class="btn sm" href="/tasks?team={{ t.id }}">Công việc</a>
+      {% if t.archived_at %}{{ m.act("team_restore", "Khôi phục", {"id": t.id}, "btn sm") }}{% else %}
+      {% if t.estop %}{{ m.act("team_estop", "Tắt ESTOP", {"id": t.id, "on": "0"}, "btn sm", confirm="Tắt dừng khẩn cấp cho team " ~ t.id ~ "?") }}
+      {% else %}{{ m.act("team_estop", "■ ESTOP team", {"id": t.id, "on": "1", "stop_running": "1"}, "btn sm danger", confirm="BẬT dừng khẩn cấp cho team " ~ t.id ~ " và dừng mọi run đang chạy của team?") }}{% endif %}
+      {{ m.act("team_archive", "Lưu trữ", {"id": t.id}, "btn sm ghost", confirm="Lưu trữ team " ~ t.id ~ "?") }}{% endif %}
+    </div>
+  </div>
+  {% if t.charter %}<div class="md small">{{ t.charter|md }}</div>{% endif %}
+  <p class="small muted">Task: {% for k, v in (t.counts or {}).items() %}{{ task_status(k)[0] }} {{ v }}{{ ' · ' if not loop.last }}{% else %}chưa có{% endfor %} · chi phí hôm nay {{ t.cost_today_usd|cost }}</p>
+  <table class="tbl stack"><thead><tr><th>Thành viên</th><th>Vai trò</th><th></th></tr></thead><tbody>
+  {% for mb in t.members %}<tr><td data-label="Thành viên"><a href="/agents/{{ mb.agent_id }}">{{ mb.agent_id }}</a></td><td data-label="Vai trò">{{ mb.role }}</td>
+  <td class="actions">{{ m.act("team_member_rm", "Gỡ", {"team": t.id, "agent": mb.agent_id}, "btn sm ghost", confirm="Gỡ " ~ mb.agent_id ~ " khỏi team " ~ t.id ~ "?") }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% if not t.archived_at %}
+  <form method="post" action="/do/team_member" class="row gap wrap-row">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="team" value="{{ t.id }}"><input type="hidden" name="next" value="/teams">
+    <select name="agent" aria-label="Agent">{% for a in agents %}<option value="{{ a }}">{{ a }}</option>{% endfor %}</select>
+    <select name="role" aria-label="Vai trò"><option value="worker">worker</option><option value="lead">lead</option><option value="reviewer">reviewer</option><option value="verifier">verifier</option></select>
+    <button class="btn sm" type="submit">+ Thêm thành viên</button>
+  </form>{% endif %}
+</section>
+{% else %}<section class="card">{{ m.empty("Chưa có team nào.") }}</section>{% endfor %}
+<section class="card">
+  <h2>+ Tạo team</h2>
+  <form method="post" action="/do/team_create" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/teams">
+    <div class="fgrid">
+      <label>Mã team (id) <input name="id" required pattern="[a-z0-9][a-z0-9_\-]{0,62}" placeholder="vd: docs"></label>
+      <label>Tên <input name="name" placeholder="vd: Nhóm tài liệu"></label>
+      <label class="span2">Điều lệ (charter) — mục tiêu & quy tắc chung của team <textarea name="charter" rows="3"></textarea></label>
+    </div>
+    <div class="row end"><button class="btn primary" type="submit">Tạo team</button></div>
+  </form>
+</section>
+{% endblock %}

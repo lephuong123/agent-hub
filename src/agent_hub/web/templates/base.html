@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="htmx-config" content='{"includeIndicatorStyles": false, "allowEval": false, "allowScriptTags": false, "historyCacheSize": 0}'>
+<title>{% block title %}agent-hub{% endblock %} · agent-hub</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-in">
+    <a class="brand" href="/"><span class="logo" aria-hidden="true">◆</span> agent-hub</a>
+    {% if csrf %}
+    <nav class="nav" aria-label="Điều hướng chính">
+      <a href="/" class="{{ 'on' if nav == 'overview' }}">Tổng quan</a>
+      <a href="/agents" class="{{ 'on' if nav == 'agents' }}">Agent</a>
+      <a href="/runs" class="{{ 'on' if nav == 'runs' }}">Lượt chạy</a>
+      <a href="/approvals" class="{{ 'on' if nav == 'approvals' }}">Duyệt{% if badge.approvals %} <span class="badge {{ 'danger' if badge.waiting_human else 'warn' }}">{{ badge.approvals }}</span>{% endif %}</a>
+      <a href="/tasks" class="{{ 'on' if nav == 'tasks' }}">Công việc</a>
+      <a href="/teams" class="{{ 'on' if nav == 'teams' }}">Team</a>
+      <a href="/learnings" class="{{ 'on' if nav == 'learnings' }}">Tự học</a>
+      <a href="/mcp" class="{{ 'on' if nav == 'mcp' }}">MCP</a>
+      <a href="/costs" class="{{ 'on' if nav == 'costs' }}">Chi phí</a>
+      <a href="/audit" class="{{ 'on' if nav == 'audit' }}">Nhật ký</a>
+      <a href="/settings" class="{{ 'on' if nav == 'settings' }}">Cài đặt</a>
+    </nav>
+    <div class="topbar-right">
+      {% if badge.estop %}<a href="/settings#estop" class="pill danger strong" title="Dừng khẩn cấp đang bật">■ ESTOP</a>{% endif %}
+      {% if badge.down %}<span class="pill danger" title="Không kết nối được daemon">daemon tắt</span>{% endif %}
+      <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn ghost sm" type="submit">Thoát</button></form>
+    </div>
+    {% endif %}
+  </div>
+</header>
+<main class="wrap">
+  {% for kind, text in flashes %}<div class="flash {{ kind }}" role="status">{{ text }}</div>{% endfor %}
+  {% block content %}{% endblock %}
+</main>
+<dialog id="confirm-dlg" class="dlg">
+  <form method="post" id="confirm-form">
+    <p id="confirm-msg" class="dlg-msg"></p>
+    <div id="confirm-note-wrap" hidden><label for="confirm-note" id="confirm-note-label">Ghi chú</label><textarea id="confirm-note" rows="2"></textarea></div>
+    <div id="confirm-fields"></div>
+    <div class="row end gap">
+      <button type="button" class="btn ghost" id="confirm-cancel">Huỷ</button>
+      <button type="submit" class="btn primary" id="confirm-ok">Đồng ý</button>
+    </div>
+  </form>
+</dialog>
+<script src="/static/{{ htmx }}"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

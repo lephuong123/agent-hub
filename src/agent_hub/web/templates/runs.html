@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Lượt chạy{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Lượt chạy</h1></div>
+<form method="get" action="/runs" class="filters">
+  <label>Agent <select name="agent"><option value="">tất cả</option>{% for a in agents %}<option value="{{ a }}" {{ 'selected' if q.agent == a }}>{{ a }}</option>{% endfor %}</select></label>
+  <label>Trạng thái <select name="status"><option value="">tất cả</option>{% for k, v in statuses.items() %}<option value="{{ k }}" {{ 'selected' if q.status == k }}>{{ v[0] }}</option>{% endfor %}</select></label>
+  <button class="btn sm" type="submit">Lọc</button>
+</form>
+<section class="card">
+  {% if not runs %}{{ m.empty("Không có lượt chạy nào.") }}{% else %}
+  <table class="tbl stack">
+    <thead><tr><th>Run</th><th>Agent</th><th>Trạng thái</th><th>Yêu cầu</th><th>Bắt đầu</th><th>Thời gian</th><th class="num">Chi phí</th></tr></thead>
+    <tbody>
+    {% for r in runs %}<tr>
+      <td data-label="Run"><a href="/runs/{{ r.id }}"><code>{{ r.id }}</code></a>{% if r.kind and r.kind != 'adhoc' %} <span class="pill muted">{{ r.kind }}</span>{% endif %}</td>
+      <td data-label="Agent"><a href="/agents/{{ r.agent_id }}">{{ r.agent_id }}</a></td>
+      <td data-label="Trạng thái">{{ m.run_pill(r.status) }}</td>
+      <td data-label="Yêu cầu">{{ r.prompt|first(90) }}</td>
+      <td data-label="Bắt đầu">{{ (r.started_at or r.queued_at)|ts }}</td>
+      <td data-label="Thời gian">{{ (r.duration_ms / 1000)|dur if r.duration_ms else '—' }}</td>
+      <td data-label="Chi phí" class="num">{{ r.cost_usd|usd }}</td>
+    </tr>{% endfor %}
+    </tbody>
+  </table>{% endif %}
+</section>
+{% endblock %}

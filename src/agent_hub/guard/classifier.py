@@ -89,6 +89,8 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "curation": {"rollback"},
     "daemon": {"stop", "restart"},
     "auth": None,
+    "notify": {"telegram"},  # token bot / allowlist chat / gửi tin thay người (chat/rpc.py)
+    "web": None,  # WEB: `agent-hub web` sinh link đăng nhập = phiên NGƯỜI trên giao diện web
 }
 
 # H-03: API dạng phương thức (`Path(..).unlink()`) đứng sau `)`/`]` nên KHÔNG dùng `\b` trước dấu chấm

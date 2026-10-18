@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Nhật ký{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Nhật ký kiểm toán</h1></div>
+<form method="get" action="/audit" class="filters">
+  <label>Kênh <select name="channel"><option value="">tất cả</option>{% for c in ('web', 'cli', 'tui', 'telegram', 'agent', 'hook', 'mcp') %}<option value="{{ c }}" {{ 'selected' if q.channel == c }}>{{ c }}</option>{% endfor %}</select></label>
+  <label>Agent <input name="agent_id" value="{{ q.agent_id or '' }}" size="10"></label>
+  <label>Loại <input name="kind" value="{{ q.kind or '' }}" size="14" placeholder="vd approval.resolved"></label>
+  <button class="btn sm" type="submit">Lọc</button>
+</form>
+<section class="card">
+  {% if not rows %}{{ m.empty("Không có bản ghi.") }}{% else %}
+  <table class="tbl stack"><thead><tr><th>Lúc</th><th>Thao tác</th><th>Ai</th><th>Kênh</th><th>Agent / run</th><th>Chi tiết</th></tr></thead><tbody>
+  {% for r in rows %}<tr>
+    <td data-label="Lúc">{{ r.ts|ts }}</td><td data-label="Thao tác"><code>{{ r.kind }}</code></td>
+    <td data-label="Ai"><span class="pill {{ 'warn' if r.actor == 'agent' else 'muted' }}">{{ r.actor }}</span></td><td data-label="Kênh">{{ r.channel }}</td>
+    <td data-label="Agent / run">{{ r.agent_id or '' }}{% if r.run_id %} <a href="/runs/{{ r.run_id }}"><code>{{ r.run_id }}</code></a>{% endif %}</td>
+    <td data-label="Chi tiết" class="small"><details><summary>{{ r.target or r.summary or '' }}</summary><pre>{{ r.data|j }}</pre></details></td>
+  </tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Lỗi{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>{{ 'Không tìm thấy' if code == 404 else 'Có lỗi' }}</h1>
+  <p>{{ message }}</p>
+  <p><a class="btn" href="/">← Về tổng quan</a></p>
+</section>
+{% endblock %}

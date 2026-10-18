@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}MCP{% endblock %}
+{% block content %}
+<div class="page-head"><h1>MCP server</h1></div>
+<p class="muted">Kho công cụ MCP của hub. Gán cho agent bằng ô tích ở trang sửa agent.</p>
+<section class="card">
+  {% if not servers %}{{ m.empty("Chưa có MCP server nào. Thêm mới hoặc nhập từ Claude Code bên dưới.") }}{% else %}
+  <table class="tbl stack"><thead><tr><th>Tên</th><th>Kiểu</th><th>Tin cậy</th><th>Tool</th><th>Agent dùng</th><th>Kiểm gần nhất</th><th></th></tr></thead><tbody>
+  {% for s in servers %}<tr class="{{ 'archived' if s.deleted_at }}">
+    <td data-label="Tên"><a href="/mcp/{{ s.name }}"><b>{{ s.name }}</b></a>{% if s.deleted_at %} <span class="pill muted">đã xoá</span>{% endif %}</td>
+    <td data-label="Kiểu">{{ s.transport }}</td>
+    <td data-label="Tin cậy"><span class="pill {{ 'ok' if s.trust == 'trusted' else 'muted' }}">{{ 'tin cậy' if s.trust == 'trusted' else 'cần duyệt' }}</span></td>
+    <td data-label="Tool">{{ (s.annotations_cache or {})|length or '—' }}</td>
+    <td data-label="Agent dùng">{% for a in used.get(s.name, []) %}<span class="chip">{{ a }}</span>{% else %}—{% endfor %}</td>
+    <td data-label="Kiểm gần nhất">{% if s.probe_error %}<span class="pill danger" title="{{ s.probe_error }}">lỗi</span>{% elif s.last_probe_at %}<span class="pill ok">ok</span> <span class="muted small">{{ s.last_probe_at|ts }}</span>{% else %}—{% endif %}</td>
+    <td class="actions">{% if s.deleted_at %}{{ m.act("mcp_restore", "Khôi phục", {"name": s.name}, "btn sm") }}{% else %}
+      {{ m.act("mcp_probe", "Kiểm tra", {"name": s.name}, "btn sm") }}
+      {{ m.act("mcp_remove", "Xoá", {"name": s.name, "force": "1" if used.get(s.name) else ""}, "btn sm ghost", confirm="Xoá MCP " ~ s.name ~ "?" ~ (" Đang được dùng bởi: " ~ used.get(s.name)|join(", ") if used.get(s.name) else "")) }}{% endif %}</td>
+  </tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+<div class="grid2">
+<section class="card">
+  <h2>+ Thêm MCP server</h2>
+  <form method="post" action="/do/mcp_add" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/mcp">
+    <label>Tên <input name="name" required placeholder="vd: github"></label>
+    <label>Kiểu kết nối <select name="transport"><option value="stdio">stdio (chạy lệnh trên máy)</option><option value="http">http</option><option value="sse">sse</option></select></label>
+    <label>Lệnh chạy (stdio) <input name="command" placeholder="vd: npx -y @modelcontextprotocol/server-github"></label>
+    <label>URL (http/sse) <input name="url" placeholder="https://…"></label>
+    <label>Biến môi trường (mỗi dòng TÊN=giá trị; dùng ${SECRET} để lấy từ secret) <textarea name="env" rows="2" placeholder="GITHUB_TOKEN=${GITHUB_TOKEN}"></textarea></label>
+    <label>Mô tả <input name="description"></label>
+    <label class="check"><input type="checkbox" name="trust" value="trusted"> Tin cậy (tool ghi chạy không cần duyệt; tool xoá vẫn luôn cần duyệt)</label>
+    <div class="row end"><button class="btn primary" type="submit">Thêm & kiểm tra</button></div>
+  </form>
+</section>
+<section class="card">
+  <h2>Nhập từ Claude Code</h2>
+  <p class="muted small">Đọc danh sách MCP trong cấu hình Claude Code của bạn (mặc định <code>~/.claude.json</code>) và thêm vào hub.</p>
+  <form method="post" action="/do/mcp_import" class="form" data-confirm="Nhập MCP server từ cấu hình Claude Code vào hub?">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/mcp">
+    <label>Đường dẫn <input name="path" value="~/.claude.json"></label>
+    <label class="check"><input type="checkbox" name="overwrite" value="1"> Ghi đè server trùng tên</label>
+    <div class="row end"><button class="btn" type="submit">Nhập</button></div>
+  </form>
+</section>
+</div>
+{% endblock %}

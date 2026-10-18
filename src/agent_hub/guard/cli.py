@@ -101,6 +101,10 @@ def cmd_guard(ctx: Any) -> int:
 
 
 def cmd_notify(ctx: Any) -> int:
+    if getattr(ctx.args, "action", None) == "telegram":  # chat/cli.py
+        from ..chat.cli import cmd_telegram
+
+        return cmd_telegram(ctx)
     r = ctx.call("notify.test", {"text": ctx.args.text})
     ctx.out(r, "đã gửi Slack" if r.get("sent") else f"không gửi: {r.get('reason')}")
     return 0 if r.get("sent") else 1
@@ -171,10 +175,13 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     prm.add_argument("id")
     g.set_defaults(fn=cmd_guard)
 
-    n = sub.add_parser("notify", help="thông báo Slack", parents=[common])
+    n = sub.add_parser("notify", help="thông báo Slack / Telegram", parents=[common])
     ns = n.add_subparsers(dest="action", required=True)
     nt = ns.add_parser("test", parents=[common])
     nt.add_argument("--text")
+    from ..chat.cli import add_notify_parsers as _add_telegram
+
+    _add_telegram(ns, common)  # notify telegram setup|status|test|disable|allow|revoke
     n.set_defaults(fn=cmd_notify)
 
     rc = sub.add_parser("run-continue", help='(= run continue) tiếp tục hội thoại: agent-hub run continue <run|session> "<tin>"', parents=[common])

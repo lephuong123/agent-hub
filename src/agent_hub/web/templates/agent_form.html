@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Sửa ' ~ agent.id if agent else 'Tạo agent' }}{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="/agents">Agent</a> › <span>{{ 'Sửa ' ~ agent.id if agent else 'Tạo agent mới' }}</span></nav>
+<h1>{{ 'Sửa agent ' ~ agent.id if agent else 'Tạo agent mới' }}</h1>
+{% if error %}<div class="flash error" role="alert">{{ error }}</div>{% endif %}
+<form method="post" action="{{ '/agents/' ~ agent.id ~ '/save' if agent else '/agents/create' }}" class="form card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% if not agent %}
+  <fieldset>
+    <legend>1. Chọn mẫu</legend>
+    <div class="tpl-grid">
+      {% for t in templates %}
+      <label class="tpl"><input type="radio" name="template" value="{{ t.name }}" {{ 'checked' if v.template == t.name }}>
+        <span class="tpl-body"><b>{{ t.name }}</b><span class="small">{{ t.title }}</span><span class="muted small">model {{ t.model }} · quyền {{ t.permission_mode }}{% if t.tools %} · {{ t.tools|join(', ') }}{% endif %}</span></span></label>
+      {% endfor %}
+      <label class="tpl"><input type="radio" name="template" value="" {{ 'checked' if not v.template }}><span class="tpl-body"><b>Trống</b><span class="small">Tự cấu hình từ đầu</span></span></label>
+    </div>
+    <p class="muted small">Ô để trống bên dưới = dùng giá trị của mẫu.</p>
+  </fieldset>
+  {% endif %}
+  <fieldset>
+    <legend>{{ '' if agent else '2. ' }}Thông tin</legend>
+    <div class="fgrid">
+      {% if not agent %}<label>Mã agent (id) <input name="id" required pattern="[a-z0-9][a-z0-9_\-]{0,62}" value="{{ v.id or '' }}" placeholder="vd: nghien-cuu" autocomplete="off"><span class="hint">chữ thường, số, “-” hoặc “_”</span></label>{% endif %}
+      <label>Tên hiển thị <input name="name" value="{{ v.name or '' }}" placeholder="vd: Trợ lý nghiên cứu"></label>
+      <label>Vai trò <input name="role" value="{{ v.role or '' }}" placeholder="vd: Research analyst"></label>
+      <label class="span2">Mô tả <input name="description" value="{{ v.description or '' }}" placeholder="Agent này làm gì — giúp hub giao việc đúng người"></label>
+    </div>
+  </fieldset>
+  <fieldset>
+    <legend>{{ '' if agent else '3. ' }}Công cụ MCP được dùng</legend>
+    {% if mcp %}
+    <div class="checks">
+      {% for s in mcp %}{% if not s.deleted_at %}
+      <label class="check"><input type="checkbox" name="mcp" value="{{ s.name }}" {{ 'checked' if s.name in v.mcp }}>
+        <span><b>{{ s.name }}</b> <span class="pill {{ 'ok' if s.trust == 'trusted' else 'muted' }}">{{ 'tin cậy' if s.trust == 'trusted' else 'cần duyệt' }}</span>
+        {% if s.description or (s.config and s.config.description) %}<span class="muted small">{{ s.description or s.config.description }}</span>{% endif %}</span></label>
+      {% endif %}{% endfor %}
+    </div>
+    {% else %}<p class="muted small">Chưa có MCP server nào trong registry — <a href="/mcp">thêm ở trang MCP</a>.</p>{% endif %}
+  </fieldset>
+  <fieldset>
+    <legend>{{ '' if agent else '4. ' }}Giới hạn & ngân sách</legend>
+    <div class="fgrid">
+      <label>Ngân sách mỗi run ($) <input name="max_budget_usd_per_run" inputmode="decimal" value="{{ v.max_budget_usd_per_run or '' }}" placeholder="vd 0.5"></label>
+      <label>Ngân sách mỗi ngày ($) <input name="budget_usd_per_day" inputmode="decimal" value="{{ v.budget_usd_per_day or '' }}" placeholder="không giới hạn"></label>
+      <label>Thời gian chạy tối đa (giây) <input name="max_runtime_s" inputmode="numeric" value="{{ v.max_runtime_s or '' }}" placeholder="vd 1200"></label>
+      <label>Số run đồng thời <input name="max_concurrent_runs" inputmode="numeric" value="{{ v.max_concurrent_runs or '' }}" placeholder="1"></label>
+    </div>
+  </fieldset>
+  <details {{ 'open' if agent }}>
+    <summary>Nâng cao</summary>
+    <div class="fgrid">
+      <label>Model <select name="model"><option value="">{{ '(theo mẫu)' if not agent else '' }}</option>{% for x in models %}<option value="{{ x }}" {{ 'selected' if v.model == x }}>{{ x }}</option>{% endfor %}
+        {% if v.model and v.model not in models %}<option value="{{ v.model }}" selected>{{ v.model }}</option>{% endif %}</select></label>
+      <label>Mức suy nghĩ (effort) <select name="effort"><option value="">(mặc định)</option>{% for x in efforts %}<option value="{{ x }}" {{ 'selected' if v.effort == x }}>{{ x }}</option>{% endfor %}</select></label>
+      <label>Chế độ quyền <select name="permission_mode"><option value="">{{ '(theo mẫu)' if not agent else '(mặc định)' }}</option>{% for x in modes %}<option value="{{ x }}" {{ 'selected' if v.permission_mode == x }}>{{ x }}</option>{% endfor %}</select></label>
+      <label>Tool cho phép <input name="tools" value="{{ v.tools or '' }}" placeholder="vd: Read, Grep, Glob — trống = mặc định"></label>
+      <label class="span2">Thư mục làm việc mặc định <input name="workspace_default" value="{{ v.workspace_default or '' }}" placeholder="trống = thư mục tạm riêng cho mỗi run"></label>
+      <label class="span2">SOUL — tính cách & cách làm việc (tiếng Anh) <textarea name="soul" rows="8" placeholder="{{ 'Để trống = SOUL của mẫu' if not agent else '' }}">{{ v.soul or '' }}</textarea></label>
+    </div>
+  </details>
+  <div class="row end gap">
+    <a class="btn ghost" href="{{ '/agents/' ~ agent.id if agent else '/agents' }}">Huỷ</a>
+    <button class="btn primary" type="submit">{{ 'Lưu thay đổi' if agent else 'Tạo agent' }}</button>
+  </div>
+</form>
+{% endblock %}

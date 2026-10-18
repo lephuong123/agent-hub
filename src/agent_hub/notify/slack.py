@@ -17,23 +17,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 import urllib.error
 import urllib.request
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from ..events import HubEvent, make_event
+from ..events import HubEvent
 from ..redact import redact_str
-
-if TYPE_CHECKING:
-    from ..hub import Hub
+from .base import QueuedNotifier, clip as _clip
 
 log = logging.getLogger("agent_hub.notify")
-
-
-def _clip(s: Any, n: int = 300) -> str:
-    t = redact_str(str(s or ""))
-    return t if len(t) <= n else t[:n] + "…"
 
 
 def format_message(ev: HubEvent) -> str | None:
@@ -110,28 +102,10 @@ def format_message(ev: HubEvent) -> str | None:
     return None
 
 
-class SlackNotifier:
-    def __init__(self, hub: "Hub") -> None:
-        self.hub = hub
-        self.queue: asyncio.Queue[tuple[HubEvent, str]] | None = None
-        self._task: asyncio.Task | None = None
-        self.sent: int = 0
-        self.failed: int = 0
+class SlackNotifier(QueuedNotifier):
+    """Kênh Slack: hàng đợi/backoff/`notify.sent|failed` ở `QueuedNotifier` (notify/base.py)."""
 
-    # ------------------------------------------------------------------ config
-    def cfg(self) -> dict[str, Any]:
-        return dict(self.hub.config.get("notify.slack") or {})
-
-    def _secret(self, name: str | None) -> str | None:
-        if not name:
-            return None
-        sec = getattr(self.hub, "secrets", None)
-        if sec is not None and hasattr(sec, "lookup"):
-            try:
-                return sec.lookup(name)
-            except Exception:
-                return None
-        return None
+    channel = "slack"
 
     def target(self) -> dict[str, str] | None:
         c = self.cfg()
@@ -145,43 +119,8 @@ class SlackNotifier:
             return {"kind": "bot", "token": token, "channel": str(c["channel"]), "api": str(c.get("api_base") or "https://slack.com/api")}
         return None
 
-    # ------------------------------------------------------------------ bus
-    def __call__(self, ev: HubEvent) -> None:
-        if ev.type not in (self.cfg().get("events") or []):
-            return
-        if self.target() is None:
-            return
-        text = format_message(ev)
-        if not text:
-            return
-        if self.queue is None:
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                log.warning("không có event loop — bỏ thông báo Slack %s", ev.type)
-                return
-            self.queue = asyncio.Queue()
-        self.queue.put_nowait((ev, text))
-        self.ensure_worker()
-
-    def ensure_worker(self) -> None:
-        if self._task is None or self._task.done():
-            try:
-                self._task = asyncio.get_running_loop().create_task(self._worker())
-            except RuntimeError:
-                pass
-
-    async def stop(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
-
-    async def drain(self, timeout: float = 10) -> None:
-        if self.queue is not None:
-            await asyncio.wait_for(self.queue.join(), timeout)
+    def render(self, ev: HubEvent) -> str | None:
+        return format_message(ev)
 
     # ------------------------------------------------------------------ send
     def _post(self, target: dict[str, str], text: str) -> None:
@@ -204,6 +143,10 @@ class SlackNotifier:
             if not data.get("ok"):
                 raise RuntimeError(f"chat.postMessage lỗi: {data.get('error')}")
 
+    async def _send(self, target: dict[str, Any], ev: HubEvent, msg: Any) -> dict[str, Any]:
+        await asyncio.to_thread(self._post, target, msg)
+        return {"kind": target["kind"]}
+
     async def send_now(self, text: str) -> dict[str, Any]:
         """Gửi một tin (cho `agent-hub notify test`) — không thử lại."""
         t = self.target()
@@ -214,43 +157,3 @@ class SlackNotifier:
             return {"sent": True, "kind": t["kind"]}
         except Exception as e:
             return {"sent": False, "reason": _clip(e, 300)}
-
-    async def _worker(self) -> None:
-        assert self.queue is not None
-        while True:
-            ev, text = await self.queue.get()
-            try:
-                await self._deliver(ev, text)
-            finally:
-                self.queue.task_done()
-
-    async def _deliver(self, ev: HubEvent, text: str) -> None:
-        c = self.cfg()
-        attempts = int(c.get("max_attempts") or 5)
-        base = float(c.get("backoff_base_s") or 2)
-        for i in range(attempts):
-            t = self.target()
-            if t is None:
-                return
-            t0 = time.monotonic()
-            try:
-                await asyncio.to_thread(self._post, t, text)
-                self.sent += 1
-                self.hub.publish(make_event("notify.sent", ev.agent_id, {"channel": "slack", "kind": t["kind"], "for": ev.type, "request_id": ev.payload.get("request_id"), "digest_id": ev.payload.get("digest_id")}, run_id=ev.run_id))
-                return
-            except Exception as e:
-                self.failed += 1
-                err = _clip(e, 300)
-                log.warning("gửi Slack lỗi (lần %d/%d, %s): %s", i + 1, attempts, ev.type, err)
-                retry_in = base * (2**i) if i + 1 < attempts else None
-                self.hub.publish(
-                    make_event(
-                        "notify.failed",
-                        ev.agent_id,
-                        {"channel": "slack", "for": ev.type, "request_id": ev.payload.get("request_id"), "digest_id": ev.payload.get("digest_id"), "attempt": i + 1, "error": err, "retry_in_s": retry_in, "elapsed_s": round(time.monotonic() - t0, 3)},
-                        run_id=ev.run_id,
-                    )
-                )
-                if retry_in is None:
-                    return
-                await asyncio.sleep(retry_in)

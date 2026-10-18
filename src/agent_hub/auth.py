@@ -68,6 +68,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "team.create", "team.update", "team.archive", "team.restore", "team.member_set", "team.member_rm",
         # V2-N1: bề mặt quản trị luồng CLI thêm sau (revert về revision cũ = nâng quyền; purge = xoá vĩnh viễn; archive/pause = DoS)
         "agent.archive", "agent.revert", "agent.pause", "agent.resume", "trash.restore", "trash.purge", "task.archive",
+        # Telegram (chat/rpc.py): token bot, allowlist chat, gửi tin — agent không được tự ghép chat của nó vào allowlist
+        "telegram.setup", "telegram.pending", "telegram.allow", "telegram.revoke", "telegram.disable", "telegram.test",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})
@@ -110,7 +112,7 @@ def all_mutating() -> frozenset[str]:
     out: set[str] = set()
     for mod, name in (("agent_hub.mcp_server.rpc", "MUTATING"), ("agent_hub.mcp_server.surface_rpc", "MUTATING_SURFACE"),
                       ("agent_hub.learning.rpc", "MUTATING_M4A"), ("agent_hub.learning_ops.rpc", "MUTATING_B"),
-                      ("agent_hub.curation.rpc", "MUTATING_CURATION")):
+                      ("agent_hub.curation.rpc", "MUTATING_CURATION"), ("agent_hub.chat.rpc", "MUTATING_TELEGRAM")):
         try:
             import importlib
 
@@ -304,6 +306,22 @@ class Caller:
     def to_dict(self) -> dict[str, Any]:
         return {"via": self.via, "pid": self.pid, "token_ok": self.token_ok, "run_id": self.run_id, "agent_id": self.agent_id,
                 "evidence": self.evidence[:5], "human": self.human}
+
+
+def telegram_caller(hub: "Hub", chat_id: Any) -> Caller:
+    """Người gọi qua bot Telegram (chat/bot.py, chạy TRONG daemon — không qua socket nên không có pid ngang hàng).
+
+    Là NGƯỜI chỉ khi bot đang bật và `chat_id` nằm trong allowlist `notify.telegram.allowed_chat_ids` — allowlist chỉ
+    người sửa được (`telegram.allow` ∈ HUMAN_ONLY; config.yaml nhánh `notify` được kiểm toàn vẹn). Chat ngoài allowlist
+    → không phải người (HUMAN_ONLY bị từ chối như thiếu token). Kênh audit: `telegram:<chat_id>`.
+    """
+    try:
+        cfg = hub.config.get("notify.telegram") or {}
+    except Exception:  # pragma: no cover
+        cfg = {}
+    allowed = {str(x) for x in (cfg.get("allowed_chat_ids") or [])}
+    ok = bool(cfg.get("enabled", True)) and str(chat_id) in allowed
+    return Caller(via=f"telegram:{chat_id}", token_ok=ok)
 
 
 CURRENT_CALLER: contextvars.ContextVar[Caller | None] = contextvars.ContextVar("agent_hub_caller", default=None)

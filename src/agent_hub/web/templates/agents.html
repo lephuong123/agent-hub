@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Agent{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Agent</h1><a class="btn primary" href="/agents/new">+ Tạo agent</a></div>
+<section class="card">
+  {% if not rows %}{{ m.empty("Chưa có agent nào.") }}{% else %}
+  <table class="tbl stack">
+    <thead><tr><th>Agent</th><th>Trạng thái</th><th>Vai trò</th><th>Model</th><th>MCP</th><th class="num">$ hôm nay</th><th></th></tr></thead>
+    <tbody>
+    {% for a in rows %}{% set lv = live.get(a.id) or {} %}
+      <tr>
+        <td data-label="Agent"><a href="/agents/{{ a.id }}"><b>{{ a.name or a.id }}</b></a> <span class="muted small">{{ a.id }}</span></td>
+        <td data-label="Trạng thái">{{ m.agent_pill(lv.status or a.status) }}</td>
+        <td data-label="Vai trò">{{ a.role or '—' }}</td>
+        <td data-label="Model"><code>{{ a.model }}</code></td>
+        <td data-label="MCP">{% for s in a.mcp_servers or [] %}<span class="chip">{{ s }}</span>{% else %}<span class="muted">—</span>{% endfor %}</td>
+        <td data-label="$ hôm nay" class="num">{{ a.cost_today_usd|cost }}</td>
+        <td class="actions"><a class="btn sm" href="/agents/{{ a.id }}">Mở</a> <a class="btn sm ghost" href="/agents/{{ a.id }}/edit">Sửa</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% if trash %}
+<section class="card">
+  <h2>Thùng rác</h2>
+  <p class="muted small">Agent đã xoá mềm — khôi phục được tới khi hết hạn giữ.</p>
+  <table class="tbl stack"><thead><tr><th>Agent</th><th>Xoá lúc</th><th>Xoá hẳn sau</th><th></th></tr></thead><tbody>
+  {% for t in trash %}<tr><td data-label="Agent">{{ t.id or t.name }}</td><td data-label="Xoá lúc">{{ t.deleted_at|ts }}</td><td data-label="Xoá hẳn sau">{{ t.purge_after|ts }}</td>
+  <td class="actions">{{ m.act("agent_restore", "↺ Khôi phục", {"id": t.id or t.name}, "btn sm") }}</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+{% endblock %}

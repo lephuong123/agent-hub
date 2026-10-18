@@ -1,0 +1,42 @@
+{% import "_macros.html" as m with context %}
+<section class="stats">
+  <div class="stat"><div class="stat-n">{{ hub.agents or 0 }}</div><div class="stat-l">agent</div></div>
+  <div class="stat"><div class="stat-n ok-t">{{ hub.running or 0 }}</div><div class="stat-l">đang chạy{% if hub.queued %} · {{ hub.queued }} chờ slot{% endif %}</div></div>
+  <div class="stat {{ 'alert' if hub.approvals_pending }}"><div class="stat-n">{{ hub.approvals_pending or 0 }}</div><div class="stat-l">chờ duyệt{% if hub.approvals_pending %} · lâu nhất {{ hub.approvals_longest_wait_s|dur }}{% endif %}</div></div>
+  <div class="stat"><div class="stat-n">{{ hub.cost_today_usd|cost }}</div><div class="stat-l">chi phí hôm nay · {{ hub.tokens_today|tok }} token</div></div>
+  <div class="stat"><div class="stat-n">{{ hub.learnings_today or 0 }}</div><div class="stat-l">thay đổi tự học hôm nay</div></div>
+</section>
+{% if hub.estop and hub.estop.on %}<div class="banner danger">■ Dừng khẩn cấp (ESTOP) đang BẬT{% if hub.estop.reason %} — {{ hub.estop.reason }}{% endif %}. Không run mới nào được chạy. <a href="/settings#estop">Tắt ở Cài đặt</a></div>{% endif %}
+{% if hub.auth_block %}<div class="banner danger">✖ <code>claude</code> chưa đăng nhập — chạy <code>claude</code> trong terminal để đăng nhập, rồi bấm {{ m.act("auth_reset", "Thử lại", {}, "btn sm", next="/") }}</div>{% endif %}
+{% if hub.cli_untested %}<div class="banner warn">⚠ Phiên bản Claude Code {{ hub.cli_version }} chưa được kiểm với hub.</div>{% endif %}
+
+{% if approvals %}
+<section class="card attention">
+  <h2>⚠ Cần bạn duyệt ({{ approvals|length }})</h2>
+  <p class="muted small">Agent chỉ hỏi khi định làm thao tác phá huỷ. Nếu bạn vắng, agent chờ — không bao giờ tự quyết.</p>
+  {% for a in approvals %}{{ m.approval_card(a, "/") }}{% endfor %}
+</section>
+{% endif %}
+
+<section class="card">
+  <div class="card-head"><h2>Agent đang làm gì</h2><a class="btn sm" href="/agents/new">+ Tạo agent</a></div>
+  {% if not rows %}{{ m.empty("Chưa có agent nào. Bấm “Tạo agent” để bắt đầu từ một mẫu có sẵn.") }}{% else %}
+  <table class="tbl stack">
+    <thead><tr><th>Agent</th><th>Trạng thái</th><th>Đang làm</th><th>Công cụ gần nhất</th><th class="num">Token</th><th class="num">$ hôm nay</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      {% set rid = r.current_run_id or r.waiting_human or r.last_run_id %}
+      <tr class="st-{{ r.status }}">
+        <td data-label="Agent"><div><a href="/agents/{{ r.id }}"><b>{{ r.name }}</b></a>{% if r.name != r.id %} <span class="muted small">{{ r.id }}</span>{% endif %}{% if r.team %}<div class="muted small">team {{ r.team }}</div>{% endif %}</div></td>
+        <td data-label="Trạng thái">{{ m.agent_pill(r.status) }}</td>
+        <td data-label="Đang làm" class="task-cell">{{ (r.task or '—')|first(90) }}</td>
+        <td data-label="Công cụ"><div>{% if r.last_tool %}<code>{{ r.last_tool|tool }}</code>{% if r.last_tool_preview %} <span class="muted small">{{ r.last_tool_preview|first(50) }}</span>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</div></td>
+        <td data-label="Token" class="num">{{ (r.run_tokens if r.status in ('working','waiting') else r.tokens_today)|tok }}</td>
+        <td data-label="$ hôm nay" class="num">{{ ((r.cost_today_usd or 0) + ((r.run_cost_usd or 0) if r.status in ('working','waiting') else 0))|cost }}</td>
+        <td class="actions">{% if rid %}<a class="btn sm {{ 'primary' if r.current_run_id or r.waiting_human }}" href="/runs/{{ rid }}">{{ 'Xem live' if r.current_run_id else 'Xem run' }}</a>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>

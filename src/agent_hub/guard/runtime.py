@@ -63,10 +63,11 @@ def secret_read_deny_rules(hub_home: Path, socket: Path) -> list[str]:
     from ..auth import token_path
 
     out: list[str] = []
-    targets = [str(token_path(socket)), f"{hub_home}/secrets/**", f"{hub_home}/agents/*/runtime/**", f"{hub_home}/mcp_server/tokens.json"]
+    # WEB: `auth/` giữ khoá ký link đăng nhập web (auth/web.json) — sandbox đã denyRead cả thư mục, đây là lớp Read/Grep/Glob
+    targets = [str(token_path(socket)), f"{hub_home}/secrets/**", f"{hub_home}/agents/*/runtime/**", f"{hub_home}/mcp_server/tokens.json", f"{hub_home}/auth/**"]
     real = os.path.realpath(hub_home)
     if real != str(hub_home):
-        targets += [f"{real}/secrets/**", f"{real}/agents/*/runtime/**", f"{real}/mcp_server/tokens.json"]
+        targets += [f"{real}/secrets/**", f"{real}/agents/*/runtime/**", f"{real}/mcp_server/tokens.json", f"{real}/auth/**"]
     for t in dict.fromkeys(targets):
         for tool in ("Read", "Grep", "Glob"):
             out.append(f"{tool}({_abs_rule(t)})")

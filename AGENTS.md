@@ -265,3 +265,35 @@ Chi tiết, spike sandbox thật, giới hạn: `docs/dev-notes/hardening-SEC.md
 Quy tắc: method RPC nhạy cảm mới → thêm vào `auth.HUMAN_ONLY` + lệnh CLI tương ứng vào `HUB_HUMAN_ONLY_CLI` (classifier) + test trong
 `tests/test_sec_auth.py`. Writer hợp lệ mới ghi vào `policy/` → bọc trong `guard/integrity.attach` (không thì bị khôi phục). Không đưa token
 người vào env của run. Test: `tests/test_sec_*.py`.
+
+## Telegram — bot thông báo, duyệt bằng nút, lệnh chat (luồng TG)
+Chi tiết, lý do chọn `httpx2`, test chứng minh, việc dở: `docs/dev-notes/telegram.md`. Không có migration (trạng thái ở `hub_state`).
+
+| Module | Vai trò |
+|---|---|
+| `notify/base.py` | `QueuedNotifier`: khung chung các kênh (lọc `notify.<kênh>.events`, hàng đợi, backoff, `notify.sent|failed{channel}`); `SlackNotifier` là lớp con |
+| `notify/telegram.py` | `TelegramApi` (httpx2 async, gỡ token khỏi lỗi), định dạng văn bản thuần đã che, `CallbackStore` (nonce dùng một lần + HMAC, theo chat), `TelegramNotifier` |
+| `chat/bot.py` | `hub.telegram`: long polling trong daemon (start ở `hub.started`, tắt êm khi chưa có token), ghép nối `/start <mã>`, lệnh chat, nút duyệt (2 bước cho thao tác nặng), theo dõi run → gửi kết quả, reply → `run.continue` |
+| `chat/rpc.py`, `chat/cli.py` | RPC `telegram.*` (trừ `status` đều HUMAN_ONLY, tự audit); CLI `notify telegram setup|status|test|disable|allow|revoke` |
+
+Bất biến: lệnh/nút từ chat CHỈ đi qua `Daemon.call_as(auth.telegram_caller(hub, chat_id), …)` (cổng HUMAN_ONLY + audit kênh `telegram:<chat_id>`);
+`telegram_caller` là người chỉ khi bot bật VÀ chat ∈ `notify.telegram.allowed_chat_ids` (chỉ người sửa, nhánh config được kiểm toàn vẹn). Chat
+ngoài allowlist: không trả lời, audit `telegram.ignored`. Nonce nút bị tiêu (cả nhóm) TRƯỚC khi gọi RPC; offset `getUpdates` lưu TRƯỚC khi xử lý.
+Token bot chỉ ở secret store (không đọc env, không in, không trả qua RPC). Thêm lệnh chat ghi trạng thái → gọi qua `self.call(...)` (không gọi
+service trực tiếp). Test: `tests/test_telegram.py` (daemon in-process), `tests/test_telegram_e2e.py` (daemon thật + hook guard thật),
+server Bot API giả `tests/telegram_fake.py` — không gọi Telegram thật.
+
+## WEB — giao diện trình duyệt (`agent-hub web`)
+Chi tiết, kiểm chứng sandbox thật, việc dở: `docs/dev-notes/web.md`. Ảnh: `docs/screenshots/web/`. Test: `tests/test_web.py`.
+
+| Module | Vai trò |
+|---|---|
+| `web/security.py` | Chỉ loopback; link đăng nhập MỘT LẦN (HMAC, khoá ở RAM + `HUB_HOME/auth/web.json` 0600) → cookie phiên HttpOnly/SameSite=Strict; CSRF; Host hợp lệ |
+| `web/app.py` | Starlette + Jinja2 + htmx vendored + SSE. `GuardMiddleware` ASGI thuần (không dùng BaseHTTPMiddleware — làm hỏng SSE). Ghi = `POST /do/<action>` (bảng `ACTIONS`) hoặc form agent |
+| `web/present.py` | Thuần: nhãn tiếng Việt, `transcript_item`, `activity_item`, `md()` an toàn |
+| `web/cli.py`, `web/demo.py` | `agent-hub web [--port] [--open] [--url]`; hub demo FakeRuntime để chụp ảnh |
+
+Quy tắc: web là CLIENT thuần (RPC qua `AsyncHubClient(channel="web")`), không đụng `hub.db`. Thao tác ghi mới → thêm vào `ACTIONS`
+(nhạy cảm: đặt `confirm`), gửi `audit=True` (approval: `channel="web"`). Không script/style inline (CSP `'self'`), không CDN; tài nguyên
+tĩnh mới đặt trong `web/static/`. Không bao giờ đưa token người/khoá `auth/` vào template, cookie, log. `config.set` chỉ khoá trong `SAFE_CONFIG`.
+Agent trong run: sandbox chặn TCP localhost (đã kiểm thật) + denyRead `HUB_HOME/auth` + `agent-hub web` forbidden trong classifier.

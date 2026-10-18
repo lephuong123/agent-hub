@@ -246,7 +246,8 @@ class DigestService:
 
     def on_notify(self, ev) -> None:
         """Listener: cập nhật trạng thái gửi Slack của digest (notify.sent / notify.failed của M1-B)."""
-        if ev.type in ("notify.sent", "notify.failed") and (ev.payload or {}).get("for") == "learning.digest":
+        if ev.type in ("notify.sent", "notify.failed") and (ev.payload or {}).get("for") == "learning.digest" \
+                and (ev.payload or {}).get("channel", "slack") == "slack":  # Telegram (chat/) không đổi slack_status
             did = ev.payload.get("digest_id")
             status = "sent" if ev.type == "notify.sent" else ("failed" if ev.payload.get("retry_in_s") is None else "retrying")
             if did:

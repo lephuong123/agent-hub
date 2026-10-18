@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Task {{ t.id }}{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="/tasks">Công việc</a> › <span>{{ t.id }}</span></nav>
+<div class="page-head"><h1>{{ t.title }} {{ m.task_pill(t.status) }}</h1>
+  <div class="row gap wrap-row">
+    {% if t.status == 'blocked' %}{{ m.act("task_unblock", "Gỡ chặn", {"id": t.id}, "btn") }}{% elif t.status not in ('done','archived') %}{{ m.act("task_block", "Chặn", {"id": t.id}, "btn", confirm="Chặn task " ~ t.id ~ "?", note="Lý do") }}{% endif %}
+    {% if t.status in ('blocked','done') or t.consecutive_failures %}{{ m.act("task_retry", "↻ Chạy lại", {"id": t.id}, "btn") }}{% endif %}
+    {% if t.status != 'archived' %}{{ m.act("task_archive", "Lưu trữ", {"id": t.id}, "btn ghost", confirm="Lưu trữ task " ~ t.id ~ "?") }}{% endif %}
+  </div>
+</div>
+<div class="grid2">
+<section class="card">
+  <dl class="kv cols">
+    <div><dt>Giao cho</dt><dd>{% if t.assignee_agent_id %}<a href="/agents/{{ t.assignee_agent_id }}">{{ t.assignee_agent_id }}</a>{% else %}—{% endif %}</dd></div>
+    <div><dt>Team</dt><dd>{{ t.team_id or '—' }}</dd></div>
+    <div><dt>Tạo bởi</dt><dd>{{ t.created_by }} · {{ t.created_at|ts }}</dd></div>
+    <div><dt>Chi phí</dt><dd>{{ t.cost_usd|cost }}</dd></div>
+    <div><dt>Số lần thử</dt><dd>{{ t.attempts or 0 }}</dd></div>
+    {% if t.wait_reason %}<div><dt>Đang chờ</dt><dd>{{ wait_reason(t.wait_reason) }}</dd></div>{% endif %}
+  </dl>
+  {% if t.body %}<h3>Mô tả</h3><div class="md">{{ t.body|md }}</div>{% endif %}
+  {% if t.result_summary %}<h3>Kết quả</h3><div class="md result">{{ t.result_summary|md }}</div>{% endif %}
+</section>
+<section class="card">
+  <h3>Phụ thuộc (DAG)</h3>
+  <div class="dag">
+    {% for p in t.parents %}<a class="dag-node" href="/tasks/{{ p.id }}">{{ p.title|first(40) }} {{ m.task_pill(p.status) }}</a>{% else %}<span class="muted small">không có task cha</span>{% endfor %}
+    <div class="dag-arrow">↓</div>
+    <div class="dag-node self"><b>{{ t.title|first(40) }}</b></div>
+    <div class="dag-arrow">↓</div>
+    {% for c in t.children %}<a class="dag-node" href="/tasks/{{ c.id }}">{{ c.title|first(40) }} {{ m.task_pill(c.status) }}</a>{% else %}<span class="muted small">không có task con</span>{% endfor %}
+  </div>
+  {% if t.subtasks %}<h3>Việc con (do lead tách)</h3><ul>{% for s in t.subtasks %}<li><a href="/tasks/{{ s.id }}">{{ s.title }}</a> {{ m.task_pill(s.status) }} <span class="muted small">{{ s.assignee_agent_id }}</span></li>{% endfor %}</ul>{% endif %}
+</section>
+</div>
+<section class="card">
+  <h2>Lượt chạy</h2>
+  {% if not t.runs %}{{ m.empty("Chưa chạy.") }}{% else %}
+  <table class="tbl stack"><thead><tr><th>Run</th><th>Agent</th><th>Trạng thái</th><th>Bắt đầu</th><th class="num">Chi phí</th></tr></thead><tbody>
+  {% for r in t.runs %}<tr><td data-label="Run"><a href="/runs/{{ r.id }}"><code>{{ r.id }}</code></a> <span class="muted small">{{ r.kind }}</span></td><td data-label="Agent">{{ r.agent_id }}</td><td data-label="Trạng thái">{{ m.run_pill(r.status) }}</td><td data-label="Bắt đầu">{{ (r.started_at or r.queued_at)|ts }}</td><td data-label="Chi phí" class="num">{{ r.cost_usd|usd }}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+<section class="card">
+  <h2>Bình luận</h2>
+  {% for c in t.comments %}<div class="comment"><b>{{ c.author }}</b> <span class="muted small">{{ c.kind }} · {{ c.created_at|ts }}</span><div class="md">{{ c.text|md }}</div></div>{% else %}<p class="muted small">Chưa có bình luận.</p>{% endfor %}
+  <form method="post" action="/do/task_comment" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ t.id }}"><input type="hidden" name="next" value="/tasks/{{ t.id }}">
+    <textarea name="text" rows="2" required placeholder="Viết bình luận…"></textarea>
+    <div class="row between wrap-row"><label class="check small"><input type="checkbox" name="steer" value="1"> Gửi luôn vào run đang chạy (steer)</label><button class="btn primary" type="submit">Gửi</button></div>
+  </form>
+</section>
+{% endblock %}

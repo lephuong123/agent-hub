@@ -95,6 +95,27 @@ DEFAULTS: dict[str, Any] = {
             "backoff_base_s": 2,
             "timeout_s": 10,
         },
+        # Telegram (docs/dev-notes/telegram.md): bot long polling trong daemon; tắt êm khi chưa có token.
+        # `agent-hub notify telegram setup` ghi token vào secret store + allowlist chat_id (chỉ người).
+        "telegram": {
+            "enabled": True,
+            "bot_token_secret": "TELEGRAM_BOT_TOKEN",
+            "callback_key_secret": "TELEGRAM_CALLBACK_KEY",  # khoá HMAC ký callback nút inline (tự sinh)
+            "api_base": "https://api.telegram.org",
+            "allowed_chat_ids": [],  # CHỈ các chat này được nhận thông báo + điều khiển hub
+            "allow_groups": False,  # nhóm: mọi thành viên bấm được nút → mặc định chỉ chat riêng
+            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
+                       "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied"],
+            "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp"],  # + tài nguyên bảo vệ → duyệt 2 bước
+            "callback_ttl_s": 604800,  # nút duyệt còn hiệu lực 7 ngày (waiting_human có thể chờ lâu)
+            "pair_ttl_s": 600,
+            "poll_timeout_s": 25,
+            "idle_check_s": 15,  # chưa cấu hình → kiểm lại sau mỗi chừng này giây
+            "result_max_chars": 1500,
+            "max_attempts": 5,
+            "backoff_base_s": 2,
+            "timeout_s": 15,
+        },
     },
     "recovery": {
         "auto_resume": True,  # Q-09: daemon restart → dừng-và-resume tự động (trừ waiting_human)

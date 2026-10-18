@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}{{ a.name or a.id }}{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="/agents">Agent</a> › <span>{{ a.id }}</span></nav>
+<div class="page-head">
+  <h1>{{ a.name or a.id }} {{ m.agent_pill((live or {}).status or a.status) }}</h1>
+  <div class="row gap wrap-row">
+    <a class="btn" href="/agents/{{ a.id }}/edit">✎ Sửa</a>
+    {% if a.status == 'paused' %}{{ m.act("agent_resume", "▶ Hoạt động lại", {"id": a.id}, "btn") }}
+    {% else %}{{ m.act("agent_pause", "‖ Tạm dừng", {"id": a.id}, "btn", confirm="Tạm dừng agent " ~ a.id ~ "? Agent sẽ không nhận việc mới.") }}{% endif %}
+    {{ m.act("agent_delete", "🗑 Xoá", {"id": a.id}, "btn danger", confirm="Xoá agent " ~ a.id ~ "? (xoá mềm — vào thùng rác, khôi phục được)") }}
+  </div>
+</div>
+{% if a.role or a.description %}<p class="lead">{{ a.role }}{% if a.description %} — <span class="muted">{{ a.description }}</span>{% endif %}</p>{% endif %}
+
+{% for ap in pend %}{{ m.approval_card(ap, "/agents/" ~ a.id) }}{% endfor %}
+{% if live and live.current_run_id %}<div class="banner info">● Đang làm: {{ (live.task or '')|first(100) }} — <a href="/runs/{{ live.current_run_id }}">xem trực tiếp</a></div>{% endif %}
+
+<div class="grid2">
+<section class="card">
+  <h2>Giao việc</h2>
+  <form method="post" action="/do/run_start" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="agent" value="{{ a.id }}"><input type="hidden" name="next" value="/agents/{{ a.id }}">
+    <label>Việc cần làm<textarea name="prompt" rows="4" required placeholder="Mô tả việc bằng lời thường. Ví dụ: Đọc thư mục docs/ và liệt kê các phần còn thiếu"></textarea></label>
+    <details><summary class="small">Tuỳ chọn</summary>
+      <label>Thư mục làm việc <input name="cwd" placeholder="để trống = thư mục tạm riêng của run{% if a.workspace_default %} / {{ a.workspace_default }}{% endif %}"></label>
+      <label>Ngân sách cho lần này ($) <input name="budget_usd" inputmode="decimal" placeholder="{{ a.limits.max_budget_usd_per_run or 'theo agent' }}"></label>
+    </details>
+    <div class="row end"><button class="btn primary" type="submit">Giao việc ▶</button></div>
+  </form>
+</section>
+<section class="card">
+  <h2>Cấu hình</h2>
+  <dl class="kv cols">
+    <div><dt>Model</dt><dd><code>{{ a.model }}</code>{% if a.effort %} · {{ a.effort }}{% endif %}</dd></div>
+    <div><dt>Quyền</dt><dd>{{ (a.tool_policy or {}).permission_mode or 'default' }}</dd></div>
+    <div><dt>Tool</dt><dd>{{ ((a.tool_policy or {}).tools or ['(mặc định)'])|join(', ') }}</dd></div>
+    <div><dt>MCP</dt><dd>{% for s in a.mcp_servers or [] %}<span class="chip">{{ s }}</span>{% else %}—{% endfor %}</dd></div>
+    <div><dt>Ngân sách / run</dt><dd>{{ (a.limits or {}).max_budget_usd_per_run and ('$' ~ a.limits.max_budget_usd_per_run) or '—' }}</dd></div>
+    <div><dt>Ngân sách / ngày</dt><dd>{{ (a.limits or {}).budget_usd_per_day and ('$' ~ a.limits.budget_usd_per_day) or '—' }}</dd></div>
+    <div><dt>Chạy tối đa</dt><dd>{{ (a.limits or {}).max_runtime_s and (a.limits.max_runtime_s|dur) or '—' }}</dd></div>
+    <div><dt>Chi phí hôm nay</dt><dd>{{ a.cost_today_usd|cost }}</dd></div>
+    <div><dt>Tự học</dt><dd>{% if learn_on is sameas false %}<span class="pill muted">tắt</span> {{ m.act("learn_toggle", "Bật", {"agent": a.id, "on": "1"}, "btn sm", confirm="Bật tự học cho " ~ a.id ~ "?") }}{% else %}<span class="pill ok">bật</span> {{ m.act("learn_toggle", "Tắt", {"agent": a.id, "on": "0"}, "btn sm ghost", confirm="Tắt tự học cho " ~ a.id ~ "?") }}{% endif %}</dd></div>
+    <div><dt>Revision</dt><dd>{{ a.config_revision }}</dd></div>
+  </dl>
+  {% if a.skills %}<p class="small"><b>Skill:</b> {% for s in a.skills %}<span class="chip">{{ s.name if s is mapping else s }}</span>{% endfor %}</p>{% endif %}
+</section>
+</div>
+
+<section class="card">
+  <h2>Lượt chạy gần đây</h2>
+  {% if not runs %}{{ m.empty("Chưa có lượt chạy nào — giao việc ở trên.") }}{% else %}
+  <table class="tbl stack"><thead><tr><th>Run</th><th>Trạng thái</th><th>Yêu cầu</th><th>Bắt đầu</th><th class="num">Chi phí</th></tr></thead><tbody>
+  {% for r in runs %}<tr>
+    <td data-label="Run"><a href="/runs/{{ r.id }}"><code>{{ r.id }}</code></a></td><td data-label="Trạng thái">{{ m.run_pill(r.status) }}</td>
+    <td data-label="Yêu cầu">{{ r.prompt|first(80) }}</td><td data-label="Bắt đầu">{{ (r.started_at or r.queued_at)|ts }}</td><td data-label="Chi phí" class="num">{{ r.cost_usd|usd }}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+
+<details class="card">
+  <summary><h2 class="inline-h">Lịch sử cấu hình ({{ revs|length }})</h2></summary>
+  <table class="tbl stack"><thead><tr><th>Revision</th><th>Lúc</th><th>Bởi</th><th>Thay đổi</th><th></th></tr></thead><tbody>
+  {% for r in revs %}<tr><td data-label="Revision">{{ r.revision }}</td><td data-label="Lúc">{{ r.created_at|ts }}</td><td data-label="Bởi">{{ r.actor or r.changed_by or '—' }}</td>
+    <td data-label="Thay đổi" class="small">{{ (r.changes or r.diff or '')|string|first(100) }}</td>
+    <td class="actions">{% if r.revision != a.config_revision %}{{ m.act("agent_revert", "↺ Về bản này", {"id": a.id, "to": r.revision}, "btn sm ghost", confirm="Đưa agent " ~ a.id ~ " về cấu hình revision " ~ r.revision ~ "?") }}{% else %}<span class="muted small">hiện tại</span>{% endif %}</td></tr>{% endfor %}
+  </tbody></table>
+</details>
+<details class="card"><summary><h2 class="inline-h">SOUL (tính cách & cách làm việc)</h2></summary><pre class="soul">{{ a.soul }}</pre></details>
+{% endblock %}

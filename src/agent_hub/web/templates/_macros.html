@@ -1,0 +1,39 @@
+{% macro act(name, label, fields={}, cls="btn", confirm=None, note=None, next=None, title=None) -%}
+<form method="post" action="/do/{{ name }}" class="inline"{% if confirm %} data-confirm="{{ confirm }}"{% endif %}{% if note %} data-note="{{ note }}"{% endif %}>
+<input type="hidden" name="csrf" value="{{ csrf }}">
+{%- for k, v in fields.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor -%}
+<input type="hidden" name="next" value="{{ next or (path if path is defined and path else '/') }}">
+<button type="submit" class="{{ cls }}"{% if title %} title="{{ title }}"{% endif %}>{{ label }}</button>
+</form>
+{%- endmacro %}
+
+{% macro agent_pill(status) -%}
+{% set s = agent_status(status) %}<span class="pill {{ s[2] }}"><span aria-hidden="true">{{ s[0] }}</span> {{ s[1] }}</span>
+{%- endmacro %}
+
+{% macro run_pill(status) -%}
+{% set s = run_status(status) %}<span class="pill {{ s[1] }}">{{ s[0] }}</span>
+{%- endmacro %}
+
+{% macro task_pill(status) -%}
+{% set s = task_status(status) %}<span class="pill {{ s[1] }}">{{ s[0] }}</span>
+{%- endmacro %}
+
+{% macro approval_card(a, next) -%}
+<div class="approval {{ 'human' if a.status == 'waiting_human' }}">
+  <div class="approval-head">
+    <span class="pill {{ 'danger' if a.status == 'waiting_human' else 'warn' }} strong">{{ '⏸ Chờ bạn duyệt' if a.status == 'waiting_human' else '◐ Xin duyệt' }}</span>
+    <a href="/agents/{{ a.agent_id }}"><b>{{ a.agent_id }}</b></a>
+    <span class="muted">· chờ {{ (a.wait_s or 0)|dur }} · <a href="/runs/{{ a.run_id }}">xem run</a></span>
+  </div>
+  <div class="approval-what"><span class="muted">{{ a.tool_name }}:</span> <code>{{ a.preview or '' }}</code></div>
+  <div class="muted small">Vì sao cần duyệt: luật <b>{{ a.matched_rule or a.destructive_class or '?' }}</b>{% if a.reason %} — {{ a.reason }}{% endif %}</div>
+  <div class="row gap wrap-row">
+    {{ act("approve", "✓ Cho phép một lần", {"id": a.id, "preview": a.preview or ''}, "btn ok", confirm="Cho phép agent " ~ a.agent_id ~ " thực hiện: " ~ (a.preview or a.tool_name) ~ " ?", next=next) }}
+    {{ act("deny", "✖ Từ chối", {"id": a.id, "preview": a.preview or ''}, "btn danger", confirm="Từ chối thao tác: " ~ (a.preview or a.tool_name) ~ " ?", note="Ghi chú cho agent (tuỳ chọn)", next=next) }}
+    {{ act("approve_fp", "Báo nhầm & cho phép", {"id": a.id}, "btn ghost sm", confirm="Cho phép và đánh dấu đây là BÁO NHẦM của bộ phân loại?", next=next, title="Thao tác này thật ra an toàn — giúp hub phân loại tốt hơn") }}
+  </div>
+</div>
+{%- endmacro %}
+
+{% macro empty(text) -%}<div class="empty">{{ text }}</div>{%- endmacro %}

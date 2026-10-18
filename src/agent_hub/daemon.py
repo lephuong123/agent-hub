@@ -106,6 +106,10 @@ class Daemon:
         from .guard.integrity import register_rpc as _register_integrity
 
         _register_integrity(self)
+        # Telegram: telegram.* (setup/allow/…) + gắn daemon cho bot (lệnh chat đi qua `call_as`) — chat/rpc.py
+        from .chat.rpc import register_rpc as _register_tg
+
+        _register_tg(self)
         self._mutating = _auth.all_mutating()
 
     # ------------------------------------------------------------------ handlers
@@ -214,7 +218,13 @@ class Daemon:
         )
         return res
 
-    async def _dispatch(self, req: Any, *, peer: int | None = None, via_socket: bool = False) -> dict[str, Any] | None:
+    async def call_as(self, caller: _auth.Caller, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Gọi method thay mặt một kênh của người KHÔNG qua socket (bot Telegram trong daemon — chat/bot.py).
+        Vẫn đi qua `_dispatch`: cổng HUMAN_ONLY theo `caller`, CURRENT_CALLER, bọc audit. Trả phản hồi JSON-RPC."""
+        req = {"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params or {})}
+        return await self._dispatch(req, as_caller=caller)  # type: ignore[return-value]
+
+    async def _dispatch(self, req: Any, *, peer: int | None = None, via_socket: bool = False, as_caller: _auth.Caller | None = None) -> dict[str, Any] | None:
         if not isinstance(req, dict) or req.get("jsonrpc") != "2.0" or not isinstance(req.get("method"), str):
             return {"jsonrpc": "2.0", "id": None, "error": {"code": INVALID_REQUEST, "message": "Invalid Request"}}
         rid = req.get("id")
@@ -227,7 +237,14 @@ class Daemon:
             return {"jsonrpc": "2.0", "id": rid, "error": {"code": METHOD_NOT_FOUND, "message": f"không có method {method}"}}
         ctx_token = None
         try:
-            caller = self._caller_for(method, params, peer, via_socket)
+            if as_caller is not None:  # kênh người trong daemon (Telegram): danh tính do kênh xác lập, không tin `_auth`
+                if isinstance(params, dict):
+                    params.pop(_auth.AUTH_PARAM, None)
+                caller = as_caller
+                if not caller.human and isinstance(params, dict):
+                    params["_audit"] = {"channel": caller.via, "actor": "unknown"}
+            else:
+                caller = self._caller_for(method, params, peer, via_socket)
             if not caller.human and caller.via == "socket" and isinstance(params, dict) and (method in _auth.HUMAN_ONLY or "_audit" in params or caller.is_agent):
                 # mọi lời gọi không phải người: audit ghi đúng là agent (không tin `_audit.actor` do client tự khai)
                 params["_audit"] = {"channel": "agent" if caller.is_agent else "socket", "actor": "agent", "run_id": caller.run_id}

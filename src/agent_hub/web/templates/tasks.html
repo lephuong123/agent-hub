@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Công việc{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Công việc (task)</h1>
+  <form method="get" action="/tasks" class="filters inline-f">
+    <select name="team" aria-label="Lọc theo team"><option value="">mọi team</option>{% for t in teams %}<option value="{{ t.id }}" {{ 'selected' if q.team == t.id }}>{{ t.name }}</option>{% endfor %}</select>
+    <button class="btn sm" type="submit">Lọc</button>
+  </form>
+</div>
+<details class="card" {{ 'open' if not cols.values()|sum(start=[]) }}>
+  <summary><h2 class="inline-h">+ Tạo công việc</h2></summary>
+  <form method="post" action="/do/task_create" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/tasks">
+    <div class="fgrid">
+      <label class="span2">Tiêu đề <input name="title" required placeholder="vd: Viết tài liệu cài đặt"></label>
+      <label class="span2">Mô tả chi tiết <textarea name="body" rows="4" placeholder="Yêu cầu, tiêu chí xong, đường dẫn liên quan…"></textarea></label>
+      <label>Giao cho agent <select name="assignee"><option value="">(để team tự phân)</option>{% for a in agents %}<option value="{{ a }}">{{ a }}</option>{% endfor %}</select></label>
+      <label>Hoặc giao cho team <select name="team"><option value="">(không)</option>{% for t in teams if not t.archived_at %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}</select></label>
+      <label class="span2">Phụ thuộc (chạy sau khi các task này xong) <select name="parents" multiple size="{{ [open_tasks|length, 5]|min or 1 }}">{% for t in open_tasks %}<option value="{{ t.id }}">{{ t.id }} — {{ t.title|first(60) }}</option>{% endfor %}</select><span class="hint">Giữ Ctrl/⌘ để chọn nhiều</span></label>
+      <label>Ưu tiên <input name="priority" type="number" value="0" min="-10" max="10"></label>
+    </div>
+    <div class="row end"><button class="btn primary" type="submit">Tạo công việc</button></div>
+  </form>
+</details>
+<div class="kanban">
+  {% for c in TASK_COLUMNS %}{% set ts = task_status(c) %}
+  <section class="col">
+    <h3><span class="pill {{ ts[1] }}">{{ ts[0] }}</span> <span class="muted small">{{ cols[c]|length }}</span></h3>
+    {% for t in cols[c] %}
+      <a class="tcard" href="/tasks/{{ t.id }}">
+        <span class="tcard-title">{{ t.title|first(80) }}</span>
+        <span class="muted small">{{ t.assignee_agent_id or t.team_id or '—' }}{% if t.parents %} · sau {{ t.parents|length }} task{% endif %}{% if t.cost_usd %} · {{ t.cost_usd|cost }}{% endif %}</span>
+        {% if t.wait_reason %}<span class="small warn-t">chờ: {{ wait_reason(t.wait_reason) }}</span>{% endif %}
+        {% if t.block_reason %}<span class="small danger-t">{{ t.block_reason|first(60) }}</span>{% endif %}
+      </a>
+    {% else %}<div class="muted small empty-col">—</div>{% endfor %}
+    {% if c == 'done' and not q.all and cols[c]|length >= 15 %}<a class="small" href="/tasks?all=1">xem tất cả…</a>{% endif %}
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

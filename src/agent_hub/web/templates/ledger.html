@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Ledger {{ e.id }}{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="/learnings">Tự học</a> › <span>{{ e.id }}</span></nav>
+<div class="page-head"><h1><code>{{ e.op }} {{ e.target }}{{ ':' ~ e.target_ref if e.target_ref }}</code></h1>
+  {% if not (e.rolled_back_by or e.rolled_back_at) %}{{ m.act("learn_rollback", "↺ Rollback", {"id": e.id}, "btn danger", confirm="Rollback thay đổi " ~ e.id ~ "?", note="Lý do (tuỳ chọn)", next="/learnings/" ~ e.id) }}{% else %}<span class="pill muted">đã rollback</span>{% endif %}
+</div>
+<section class="card">
+  <dl class="kv cols">
+    <div><dt>Agent</dt><dd>{{ e.agent_id or '—' }}</dd></div><div><dt>Phạm vi</dt><dd>{{ e.scope or 'agent' }}</dd></div>
+    <div><dt>Bởi</dt><dd>{{ e.actor }}</dd></div><div><dt>Lúc</dt><dd>{{ (e.ts or e.created_at)|ts(date=true) }}</dd></div>
+    {% if e.reason or e.rationale %}<div class="span2"><dt>Lý do</dt><dd>{{ e.reason or e.rationale }}</dd></div>{% endif %}
+  </dl>
+  <h3>Khác biệt</h3>
+  {% if e.diff %}<pre class="diff">{% for ln in e.diff.splitlines() %}<span class="{{ 'add' if ln.startswith('+') and not ln.startswith('+++') else 'del' if ln.startswith('-') and not ln.startswith('---') else '' }}">{{ ln }}</span>
+{% endfor %}</pre>{% else %}<p class="muted">Không có diff.</p>{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Tự học{% endblock %}
+{% set KIND = {"learning.applied": ("Đã áp dụng", "ok"), "learning.rolled_back": ("Đã rollback", "warn"), "learning.eval_failed": ("Eval không đạt", "danger"),
+               "learning.deferred": ("Hoãn", "info"), "guard.blocked": ("Bị chặn", "danger"), "learning.canary": ("Đang thử (canary)", "info"),
+               "learning.promoted": ("Đã chốt", "ok")} %}
+{% block content %}
+<div class="page-head"><h1>Tự học</h1>
+  <form method="get" action="/learnings" class="filters inline-f">
+    <select name="agent" aria-label="Agent"><option value="">mọi agent</option>{% for a in agents %}<option value="{{ a }}" {{ 'selected' if q.agent == a }}>{{ a }}</option>{% endfor %}</select>
+    <select name="days" aria-label="Khoảng thời gian">{% for d in (1, 7, 30) %}<option value="{{ d }}" {{ 'selected' if (q.days or '7')|int == d }}>{{ d }} ngày</option>{% endfor %}</select>
+    <button class="btn sm" type="submit">Lọc</button>
+  </form>
+</div>
+<p class="muted">Agent tự áp dụng bài học (bộ nhớ, skill, cấu hình) — <b>báo chứ không hỏi</b>. Bạn xem ở đây và rollback một chạm nếu không hợp.</p>
+<section class="card">
+  <div class="card-head"><h2>Bản tin</h2>{{ m.act("digest_run", "Tạo bản tin ngay", {}, "btn sm ghost") }}</div>
+  {% if digest.id %}{% set c = digest.counts or {} %}
+  <p>{{ digest.created_at|ts }}: áp dụng <b>{{ c.applied or 0 }}</b> · rollback <b>{{ c.rolled_back or 0 }}</b> · eval không đạt <b>{{ c.eval_failed or 0 }}</b> · hoãn <b>{{ c.deferred or 0 }}</b> · bị chặn <b>{{ c.blocked or 0 }}</b></p>
+  {% if digest.text %}<details><summary class="small">Xem nội dung</summary><div class="md small">{{ digest.text|md }}</div></details>{% endif %}
+  {% else %}<p class="muted small">Chưa có bản tin hôm nay (tự tạo lúc 08:00 giờ máy).</p>{% endif %}
+</section>
+<section class="card">
+  <h2>Thay đổi gần đây</h2>
+  {% if not feed %}{{ m.empty("Chưa có thay đổi học nào trong khoảng này.") }}{% else %}
+  <table class="tbl stack"><thead><tr><th>Lúc</th><th>Agent</th><th>Loại</th><th>Đích</th><th>Chi tiết</th><th></th></tr></thead><tbody>
+  {% for x in feed %}{% set p = x.payload or {} %}{% set k = KIND.get(x.type, (x.type, '')) %}<tr>
+    <td data-label="Lúc">{{ x.ts|ts }}</td>
+    <td data-label="Agent">{{ x.agent_id or '—' }}</td>
+    <td data-label="Loại"><span class="pill {{ k[1] }}">{{ k[0] }}</span> <span class="muted small">{{ p.scope or 'agent' }} {{ p.risk_class or '' }}</span></td>
+    <td data-label="Đích"><code>{{ p.op or '' }} {{ p.target or '' }}{{ ':' ~ p.target_ref if p.target_ref }}</code></td>
+    <td data-label="Chi tiết" class="small">{{ (p.reason or p.summary or p.detail or p.block_detail or '')|string|first(120) }}{% if p.scores %} <span class="muted">eval {{ p.scores.before }} → {{ p.scores.after }}</span>{% endif %}</td>
+    <td class="actions">{% if p.ledger_entry_id %}<a class="btn sm ghost" href="/learnings/{{ p.ledger_entry_id }}">Xem diff</a>
+      {% if x.type == 'learning.applied' %}{{ m.act("learn_rollback", "↺ Rollback", {"id": p.ledger_entry_id}, "btn sm danger", confirm="Rollback thay đổi " ~ p.ledger_entry_id ~ "?", note="Lý do (tuỳ chọn)") }}{% endif %}{% endif %}</td>
+  </tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+<div class="grid2">
+<section class="card">
+  <h2>Sổ cái (ledger)</h2>
+  {% if not ledger %}{{ m.empty("Trống.") }}{% else %}
+  <table class="tbl stack"><thead><tr><th>Mục</th><th>Agent</th><th>Thay đổi</th><th>Bởi</th><th></th></tr></thead><tbody>
+  {% for e in ledger %}<tr><td data-label="Mục"><a href="/learnings/{{ e.id }}"><code>{{ e.id }}</code></a><div class="muted small">{{ (e.ts or e.created_at)|ts }}</div></td>
+    <td data-label="Agent">{{ e.agent_id or e.scope or '—' }}</td><td data-label="Thay đổi"><code>{{ e.op }} {{ e.target }}{{ ':' ~ e.target_ref if e.target_ref }}</code>{% if e.rolled_back_by or e.rolled_back_at %} <span class="pill muted">đã rollback</span>{% endif %}</td>
+    <td data-label="Bởi">{{ e.actor }}</td>
+    <td class="actions">{% if e.agent_id and e.target in ('skill','memory','config') and e.target_ref %}{{ m.act("pin", "📌 Ghim", {"agent": e.agent_id, "target": e.target, "ref": e.target_ref, "on": "1"}, "btn sm ghost", title="Ghim: vòng học không được sửa/xoá đích này") }}{% endif %}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+<section class="card">
+  <h2>Tự học theo agent</h2>
+  <p class="muted small">Công tắc chung: {{ 'bật' if policy.enabled else 'tắt' }} · tự áp dụng: {{ 'bật' if policy.auto_apply else 'tắt' }}</p>
+  <table class="tbl"><tbody>
+  {% for a in learn %}<tr><td>{{ a.id }}</td><td>{% if a.enabled %}<span class="pill ok">bật</span>{% else %}<span class="pill muted">tắt</span>{% endif %}</td>
+  <td class="actions">{{ m.act("learn_toggle", "Tắt" if a.enabled else "Bật", {"agent": a.id, "on": "0" if a.enabled else "1"}, "btn sm ghost", confirm=("Tắt" if a.enabled else "Bật") ~ " tự học cho " ~ a.id ~ "?") }}</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+</div>
+<section class="card">
+  <h2>Golden task (bài kiểm tra chuẩn)</h2>
+  <p class="muted small">Do bạn chọn (agent không tự tạo/sửa). Mỗi thay đổi học phải không làm tụt điểm trên các bài này. Thêm từ trang kết quả của một run (“Lấy làm golden task”).</p>
+  {% if not golden %}{{ m.empty("Chưa có golden task.") }}{% else %}
+  <table class="tbl stack"><thead><tr><th>Id</th><th>Agent</th><th>Bài</th><th>Cách chấm</th><th></th></tr></thead><tbody>
+  {% for g in golden %}<tr class="{{ 'archived' if g.deleted_at }}"><td data-label="Id"><code>{{ g.id }}</code></td><td data-label="Agent">{{ g.agent_id }}</td>
+    <td data-label="Bài">{{ (g.title or g.prompt)|first(80) }}</td><td data-label="Cách chấm"><code>{{ (g.checker.kind if g.checker is mapping else g.checker)|string|first(40) }}</code></td>
+    <td class="actions">{% if g.deleted_at %}{{ m.act("golden_restore", "Khôi phục", {"id": g.id}, "btn sm") }}{% else %}{{ m.act("golden_rm", "Xoá", {"id": g.id}, "btn sm ghost", confirm="Xoá golden task " ~ g.id ~ "?") }}{% endif %}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+{% endblock %}

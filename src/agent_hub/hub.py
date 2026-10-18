@@ -47,6 +47,10 @@ class Hub:
         self.guard = GuardService(self)
         self.notifier = SlackNotifier(self)
         self.bus.add_listener(self.notifier)
+        # Telegram: `hub.telegram` (bot long polling + kênh thông báo cùng luồng sự kiện) — chat/bot.py, notify/telegram.py
+        from .chat import attach as _attach_telegram
+
+        _attach_telegram(self)
         # M3: team (FR-TM), task + DAG (FR-TK), dispatcher (claim/lease/retry/tách việc/review)
         from .dispatch import TaskDispatcher
         from .tasks import TaskService

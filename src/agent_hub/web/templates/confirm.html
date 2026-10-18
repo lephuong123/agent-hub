@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Xác nhận{% endblock %}
+{% block content %}
+<section class="card narrow {{ 'attention' if danger }}">
+  <h1>Xác nhận</h1>
+  <p class="confirm-msg">{{ message }}</p>
+  <form method="post" action="{{ action }}" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="confirm" value="yes">
+    {% for k, v in fields %}{% if not (note and k == 'note') %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
+    {% if note %}<label>{{ note }}<textarea name="note" rows="2"></textarea></label>{% endif %}
+    <div class="row end gap"><a class="btn ghost" href="{{ back }}">Huỷ</a><button class="btn {{ 'danger' if danger else 'primary' }}" type="submit">Đồng ý</button></div>
+  </form>
+</section>
+{% endblock %}

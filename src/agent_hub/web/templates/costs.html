@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Chi phí{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Chi phí</h1>
+  <form method="get" action="/costs" class="filters inline-f"><select name="days" aria-label="Khoảng">{% for d in (1, 7, 30, 90) %}<option value="{{ d }}" {{ 'selected' if days == d }}>{{ d }} ngày qua</option>{% endfor %}</select><button class="btn sm" type="submit">Xem</button></form>
+</div>
+<section class="stats">
+  <div class="stat"><div class="stat-n">{{ hub.cost_today_usd|cost }}</div><div class="stat-l">hôm nay</div></div>
+  <div class="stat"><div class="stat-n">{{ by_agent.total_usd|cost }}</div><div class="stat-l">{{ days }} ngày qua</div></div>
+  <div class="stat"><div class="stat-n">{{ rep.runs_total or 0 }}</div><div class="stat-l">lượt chạy</div></div>
+  <div class="stat"><div class="stat-n">{{ ((((rep.cache or {}).hit_ratio or 0) * 100)|round)|int }}%</div><div class="stat-l">tỉ lệ cache prompt</div></div>
+</section>
+<div class="grid2">
+<section class="card">
+  <h2>Theo ngày</h2>
+  {% set mx = (by_day.rows or [])|map(attribute='cost_usd')|max if by_day.rows else 0 %}
+  {% if not by_day.rows %}{{ m.empty("Chưa có chi phí.") }}{% else %}
+  <div class="bars" role="list">
+  {% for r in by_day.rows %}<div class="bar-row" role="listitem"><span class="bar-l">{{ r.day }}</span><progress class="bar" max="100" value="{{ ((r.cost_usd or 0) / (mx or 1) * 100)|round(1) }}"></progress><span class="bar-v">{{ r.cost_usd|cost }}</span></div>{% endfor %}
+  </div>{% endif %}
+</section>
+<section class="card">
+  <h2>Theo agent</h2>
+  {% if not by_agent.rows %}{{ m.empty("Chưa có.") }}{% else %}
+  <table class="tbl"><thead><tr><th>Agent</th><th class="num">Lượt</th><th class="num">Chi phí</th></tr></thead><tbody>
+  {% for r in by_agent.rows %}<tr><td><a href="/agents/{{ r.agent }}">{{ r.agent }}</a></td><td class="num">{{ r.runs }}</td><td class="num">{{ r.cost_usd|cost }}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+  {% if by_team.rows %}<h3>Theo team</h3><table class="tbl"><tbody>{% for r in by_team.rows %}<tr><td>{{ '(không thuộc team)' if r.team == '(adhoc)' else r.team }}</td><td class="num">{{ r.runs }}</td><td class="num">{{ r.cost_usd|cost }}</td></tr>{% endfor %}</tbody></table>{% endif %}
+</section>
+</div>
+<div class="grid2">
+<section class="card"><h2>Kết quả các lượt chạy</h2>
+  <table class="tbl"><tbody>{% for k, v in (rep.runs_by_outcome or {}).items() %}<tr><td>{{ run_status(k)[0] }}</td><td class="num">{{ v }}</td></tr>{% else %}<tr><td class="muted">—</td></tr>{% endfor %}</tbody></table></section>
+<section class="card"><h2>Tool dùng nhiều</h2>
+  <table class="tbl"><thead><tr><th>Tool</th><th class="num">Lần</th><th class="num">Lỗi</th></tr></thead><tbody>{% for t in rep.top_tools or [] %}<tr><td><code>{{ t.tool|tool }}</code></td><td class="num">{{ t.calls }}</td><td class="num">{{ t.errors }}</td></tr>{% else %}<tr><td class="muted">—</td></tr>{% endfor %}</tbody></table></section>
+</div>
+{% endblock %}

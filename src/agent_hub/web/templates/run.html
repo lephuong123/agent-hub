@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% import "_items.html" as ti %}
+{% block title %}Run {{ run.id }}{% endblock %}
+{% block content %}
+{% set live_run = is_live_run(run) %}
+<nav class="crumbs"><a href="/runs">Lượt chạy</a> › <span>{{ run.id }}</span>{% if run.parent_run_id %} · tiếp nối <a href="/runs/{{ run.parent_run_id }}">{{ run.parent_run_id }}</a>{% endif %}</nav>
+<section class="card" id="runbar"{% if live_run %} hx-get="/partials/run/{{ run.id }}" hx-trigger="every 2s" hx-swap="innerHTML"{% endif %}>
+{% include "_run_bar.html" %}
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Diễn biến</h2>{% if live_run %}<span class="pill ok live-dot" id="live-state">● trực tiếp</span>{% endif %}</div>
+  <div id="transcript" class="transcript"{% if live_run %} data-sse-run="/sse/run/{{ run.id }}?since={{ since }}&amp;epoch={{ epoch }}"{% endif %}>
+    {% for it in items %}{{ ti.item(it) }}{% endfor %}
+    {% if not items %}<div class="empty">Chưa có diễn biến nào{% if run.status == 'queued' %} — run đang chờ slot{% endif %}.</div>{% endif %}
+  </div>
+</section>
+
+{% if live_run %}
+<section class="card">
+  <h2>Chỉ đạo agent (steer)</h2>
+  <p class="muted small">Tin nhắn được đưa vào ngữ cảnh của agent ở lượt kế tiếp — không phải chạy lại từ đầu.</p>
+  <form method="post" action="/do/steer" class="form" id="steer-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ run.id }}"><input type="hidden" name="next" value="/runs/{{ run.id }}">
+    <textarea name="text" rows="2" required placeholder="Ví dụ: Chỉ xem thư mục src/, bỏ qua tests/"></textarea>
+    <div class="row end"><button class="btn primary" type="submit">Gửi chỉ đạo</button></div>
+  </form>
+</section>
+{% else %}
+<section class="card">
+  <h2>Kết quả</h2>
+  {% if run.error and run.status != 'completed' %}<div class="banner danger">{{ run.error }}</div>{% endif %}
+  {% if run.summary %}<div class="md result">{{ run.summary|md }}</div>{% else %}<p class="muted">Không có tóm tắt kết quả.</p>{% endif %}
+  <div class="row gap wrap-row">
+    <span class="muted small">Phản hồi giúp agent tự học:</span>
+    {{ m.act("feedback", "👍 Tốt", {"run_id": run.id, "kind": "good"}, "btn sm ok") }}
+    {{ m.act("feedback", "👎 Sai", {"run_id": run.id, "kind": "wrong"}, "btn sm danger", confirm="Đánh dấu kết quả này là SAI?", note="Sai ở đâu? (giúp agent sửa lần sau)") }}
+    {{ m.act("feedback", "≈ Một phần", {"run_id": run.id, "kind": "partial"}, "btn sm", confirm="Kết quả đúng một phần?", note="Còn thiếu gì?") }}
+    {% if run.status == 'completed' %}{{ m.act("golden_from_run", "★ Lấy làm golden task", {"run_id": run.id}, "btn sm ghost", confirm="Lấy run này làm golden task (bài kiểm tra chuẩn)?") }}{% endif %}
+  </div>
+</section>
+{% if run.session_id %}
+<section class="card">
+  <h2>Nói tiếp với agent</h2>
+  <form method="post" action="/do/run_continue" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ run.id }}"><input type="hidden" name="next" value="/runs/{{ run.id }}">
+    <textarea name="prompt" rows="2" required placeholder="Agent nhớ toàn bộ hội thoại này. Ví dụ: Giờ viết lại ngắn hơn"></textarea>
+    <div class="row end"><button class="btn primary" type="submit">Gửi tiếp ▶</button></div>
+  </form>
+  <details class="small"><summary>Tự làm tiếp bằng Claude Code (takeover)</summary>
+    <p>Chạy trong terminal để mở đúng hội thoại này trong Claude Code tương tác (cùng cấu hình agent):</p>
+    <pre class="cmd">agent-hub takeover {{ run.id }}</pre>
+  </details>
+</section>
+{% endif %}
+{% endif %}
+{% if children %}
+<section class="card"><h2>Run tiếp nối</h2><ul>{% for c in children %}<li><a href="/runs/{{ c.id }}">{{ c.id }}</a> {{ m.run_pill(c.status) }} <span class="muted small">{{ c.prompt|first(80) }}</span></li>{% endfor %}</ul></section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Tổng quan{% endblock %}
+{% block content %}
+<div id="overview" hx-get="/partials/overview" hx-trigger="every 2s" hx-swap="innerHTML">
+{% include "_overview.html" %}
+</div>
+<div class="grid2">
+  <section class="card">
+    <h2>Giao việc nhanh</h2>
+    {% if agents %}
+    <form method="post" action="/do/run_start" class="form">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/">
+      <label>Agent<select name="agent" required>{% for a in agents %}<option value="{{ a }}">{{ a }}</option>{% endfor %}</select></label>
+      <label>Việc cần làm<textarea name="prompt" rows="3" required placeholder="Ví dụ: Tóm tắt README.md thành 5 gạch đầu dòng"></textarea></label>
+      <div class="row end"><button class="btn primary" type="submit">Giao việc ▶</button></div>
+    </form>
+    {% else %}<p class="muted">Tạo agent trước, rồi giao việc ở đây.</p>{% endif %}
+  </section>
+  <section class="card">
+    <div class="card-head"><h2>Hoạt động gần đây</h2><span class="muted small" id="fh-state">đang kết nối…</span></div>
+    <ol class="feed" id="firehose" data-sse-firehose="/sse/firehose"></ol>
+  </section>
+</div>
+{% endblock %}

@@ -744,6 +744,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .cli_surface import add_parsers as _add_surface_parsers
 
     _add_surface_parsers(sub, common)
+
+    # WEB: agent-hub web (giao diện trình duyệt, chỉ localhost — web/cli.py)
+    from .web.cli import add_parsers as _add_web_parsers
+
+    _add_web_parsers(sub, common)
     return p
 
 
