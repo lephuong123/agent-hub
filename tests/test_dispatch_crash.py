@@ -12,6 +12,7 @@ import pytest
 from cfharness.config import DEFAULTS
 from cfharness.hub import Hub
 from cfharness.runtime import ClaudeCliRuntime
+from conftest import fake_cli
 
 FAKE = Path(__file__).parent / "fake_claude_team.py"
 
@@ -28,9 +29,7 @@ async def settle(cond, timeout=15.0):
 
 @pytest.fixture
 def hub(hub_home, tmp_path, monkeypatch):
-    p = tmp_path / "claude"
-    p.write_text(f"#!/bin/sh\nexec {sys.executable} {FAKE} \"$@\"\n")
-    p.chmod(0o755)
+    p = fake_cli(tmp_path, FAKE)
     monkeypatch.setenv("FAKE_PID_FILE", str(tmp_path / "pid"))
     cfg = {**DEFAULTS["runtime"]["claude"], "binary": str(p)}
     h = Hub(hub_home, runtime=ClaudeCliRuntime(cfg))
@@ -52,7 +51,7 @@ async def test_kill_worker_mid_run_retries_with_resume(hub):
     t = h.tasks.create({"assignee": "w", "title": "long job", "body": "HANG until killed"})
     await settle(lambda: (tmp / "pid").exists() and (tmp / "pid").read_text().strip())
     first = h.tasks.row(t["id"])["current_run_id"]
-    os.kill(int((tmp / "pid").read_text()), signal.SIGKILL)  # giết worker từ ngoài
+    os.kill(int((tmp / "pid").read_text()), getattr(signal, "SIGKILL", signal.SIGTERM))  # giết worker từ ngoài (Windows: SIGTERM = TerminateProcess)
     await settle(lambda: h.tasks.row(t["id"])["status"] == "done")
     runs = sorted((r for r in h.store.list_runs() if r["task_id"] == t["id"]), key=lambda r: r["queued_at"])
     assert [r["outcome"] for r in runs] == ["crashed", "completed"]

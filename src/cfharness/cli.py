@@ -20,6 +20,7 @@ from typing import Any
 from . import __version__
 from .config import parse_value
 from .errors import exit_code_for
+from .oscompat import exec_argv
 from .paths import HubPaths
 from .rpc import DaemonUnavailable, RpcClient, RpcError
 
@@ -121,7 +122,7 @@ def cmd_daemon(ctx: Ctx) -> int:
             time.sleep(0.1)
         if ctx.paths.socket.exists() and ctx.paths.pidfile.exists():
             try:
-                os.kill(int(ctx.paths.pidfile.read_text()), signal.SIGTERM)
+                os.kill(int(ctx.paths.pidfile.read_text()), signal.SIGTERM)  # Windows: SIGTERM = TerminateProcess
             except (OSError, ValueError):
                 pass
         ctx.out({"running": False}, "daemon đã dừng")
@@ -223,7 +224,7 @@ def cmd_doctor(ctx: Ctx) -> int:
         tested = ccfg.get("tested_versions") or []
         add("phiên bản claude", bool(v) and v in tested, f"{v} (đã kiểm: {', '.join(tested)})" + ("" if v in tested else " — phiên bản chưa kiểm"), "warning")
         try:
-            r = subprocess.run([binary, "auth", "status"], capture_output=True, text=True, timeout=30)
+            r = subprocess.run(exec_argv([binary, "auth", "status"]), capture_output=True, text=True, timeout=30)
             try:
                 info = json.loads(r.stdout)
                 logged = bool(info.get("loggedIn", r.returncode == 0))
@@ -238,6 +239,10 @@ def cmd_doctor(ctx: Ctx) -> int:
             auth_ok = False
     else:
         auth_ok = False
+    from .guard.runtime import SANDBOX_UNAVAILABLE_NOTE, sandbox_supported
+
+    if not sandbox_supported():
+        add("sandbox OS cho Bash", False, SANDBOX_UNAVAILABLE_NOTE, "warning")
     add("HUB_HOME ghi được", os.access(ctx.paths.home, os.W_OK) if ctx.paths.home.exists() else os.access(ctx.paths.home.parent, os.W_OK), str(ctx.paths.home))
     client = RpcClient(ctx.paths.socket, timeout=10)
     daemon_up = True
@@ -778,6 +783,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):  # Windows: console mặc định cp1252 không in được tiếng Việt
+        if (getattr(stream, "encoding", "") or "").lower().replace("-", "") != "utf8" and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
     parser = build_parser()
     from .dispatch.cli import rewrite_argv as _rewrite_m3
     from .guard.cli import rewrite_argv

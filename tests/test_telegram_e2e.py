@@ -19,6 +19,7 @@ from cfharness.daemon import spawn_background
 from cfharness.rpc import RpcClient
 
 from telegram_fake import TOKEN, FakeTelegram
+from conftest import fake_cli
 
 FAKE = Path(__file__).parent / "fake_claude_guard.py"
 BOSS = 111
@@ -37,9 +38,7 @@ def wait_for(fn, timeout=30.0, step=0.1):
 @pytest.fixture
 def env(hub_home, tmp_path):
     tg = FakeTelegram()
-    fake_bin = tmp_path / "claude"
-    fake_bin.write_text(f"#!/bin/sh\nexec {sys.executable} {FAKE} \"$@\"\n")
-    fake_bin.chmod(0o755)
+    fake_bin = fake_cli(tmp_path, FAKE)
     state = tmp_path / "state"
     state.mkdir()
     exec_log = tmp_path / "exec.log"

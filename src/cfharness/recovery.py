@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 
 from .errors import HubError
 from .events import make_event
+from .oscompat import IS_WINDOWS, kill_tree, pid_alive, win_start_time
 from .store import now_iso
 
 if TYPE_CHECKING:
@@ -47,13 +48,12 @@ log = logging.getLogger("cfharness.recovery")
 
 
 def pid_start_time(pid: int) -> float | None:
-    """Thời điểm tiến trình bắt đầu (epoch giây, độ phân giải 1 s) theo `ps -o lstart=`; None nếu không còn."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+    """Thời điểm tiến trình bắt đầu (epoch giây, độ phân giải 1 s) theo `ps -o lstart=`; None nếu không còn.
+    Windows: `GetProcessTimes`."""
+    if IS_WINDOWS:
+        return win_start_time(pid)
+    if not pid_alive(pid):
         return None
-    except PermissionError:
-        pass
     try:
         out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=5, env={**os.environ, "LC_ALL": "C", "LANG": "C"})
     except (OSError, subprocess.TimeoutExpired):
@@ -75,7 +75,14 @@ def process_matches(pid: int | None, recorded_start: float | None, tolerance_s: 
 
 
 def kill_group(pid: int, grace_s: float = 3.0) -> bool:
-    """Dừng cả process group của tiến trình mồ côi. Trả True nếu đã gửi tín hiệu."""
+    """Dừng cả process group của tiến trình mồ côi. Trả True nếu đã gửi tín hiệu.
+    Windows: Job Object của run đã mất cùng daemon cũ → giết cả cây theo ppid. KHÔNG gửi CTRL_BREAK: với pid không
+    chắc là gốc process group, GenerateConsoleCtrlEvent phát cho MỌI tiến trình chung console (kể cả chính hub)."""
+    if IS_WINDOWS:
+        if not pid_alive(pid):
+            return False
+        kill_tree(pid)
+        return True
     sent = False
     for sig, wait in ((signal.SIGINT, grace_s), (signal.SIGTERM, grace_s), (signal.SIGKILL, 1.0)):
         try:
@@ -91,9 +98,7 @@ def kill_group(pid: int, grace_s: float = 3.0) -> bool:
                 return sent
         deadline = time.monotonic() + wait
         while time.monotonic() < deadline:
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
+            if not pid_alive(pid):
                 return sent
             time.sleep(0.05)
     return sent

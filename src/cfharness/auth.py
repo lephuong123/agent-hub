@@ -14,6 +14,9 @@ xác định ai đang gọi, theo hai bằng chứng độc lập:
    - session id (`getsid`): run được spawn với `start_new_session` nên mọi hậu duệ (kể cả `nohup`, `&`, double-fork
      đã mồ côi về launchd/init) giữ session = pid của run, trừ khi tự gọi `setsid()`;
    - biến môi trường `CFHARNESS_RUN_ID` của tiến trình gọi (đọc qua `KERN_PROCARGS2` / `/proc/<pid>/environ`).
+   Windows (`oscompat.py`, `transport.py`): pid ngang hàng từ bảng TCP của kernel (kênh là TCP loopback), daemon từ chối
+   kết nối khác user; ppid qua Toolhelp32; thay session bằng **Job Object** của run (hậu duệ không thoát được trừ khi
+   tiến trình được tạo NGOÀI cây, vd WMI/Task Scheduler — bộ phân loại coi là phá huỷ); env đọc qua PEB.
 
 Phương thức NHẠY CẢM (`HUMAN_ONLY`) chỉ chạy khi: có token đúng VÀ không có dấu hiệu nào là agent. Agent gọi
 `learn.propose` không bị từ chối mà bị hạ xuống `created_by="agent"` (đi qua guard học đầy đủ — H-05). Lời gọi
@@ -41,6 +44,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import names as _names
+from .oscompat import IS_WINDOWS, JOBS, owned_by_me, win_environ, win_parent_pids, win_start_time
 
 if TYPE_CHECKING:
     from .hub import Hub
@@ -77,7 +81,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # UX: trả lời/chuyển/huỷ câu hỏi của agent — agent không tự trả lời câu hỏi (của mình hay agent khác). Điều phối viên trả lời/
         # chuyển lên người qua MANAGER_ALLOWED, chỉ khi câu hỏi đang `with_manager` (manager/permissions.check_rpc)
         "question.answer", "question.escalate", "question.cancel",
-        # Hệ thống ngoài hub (systems/): launchctl chạy NGOÀI sandbox trong daemon — đăng ký/khoá chỉ người; thao tác job: người hoặc
+        # Hệ thống ngoài hub (systems/): launchctl/schtasks chạy NGOÀI sandbox trong daemon — đăng ký/khoá chỉ người; thao tác job: người hoặc
         # điều phối viên (MANAGER_ALLOWED, chỉ job đã đăng ký + không khoá)
         "system.scan", "system.add", "system.rm", "system.lock", "system.job",
         # Lịch chạy tự động (schedules/): lịch = việc chạy lặp NGOÀI phiên người (tốn tiền, gửi tin) — chỉ người; điều phối viên qua
@@ -147,7 +151,7 @@ MANAGER_ALLOWED: dict[str, str] = {
     "estop.set": "CHỈ bật ESTOP (on=true)",
     "question.answer": "trả lời câu hỏi của agent trong task khi câu hỏi đang chờ điều phối viên (with_manager) — không phải câu hỏi đã lên người",
     "question.escalate": "chuyển câu hỏi đang chờ điều phối viên lên người",
-    "system.job": "tạm dừng/bật lại/khởi động lại job launchd của hệ thống NGƯỜI đã đăng ký, job không bị khoá (đảo ngược được; trần/giờ)",
+    "system.job": "tạm dừng/bật lại/khởi động lại job launchd/Task Scheduler của hệ thống NGƯỜI đã đăng ký, job không bị khoá (đảo ngược được; trần/giờ)",
     # Lịch chạy tự động (schedules/service.manager_check, chạy ở cả 2 lớp): chỉ lịch do điều phối viên tạo; lịch của người = chỉ đọc
     "schedule.create": "tạo lịch theo yêu cầu người (≤ schedules.manager_max_active đang bật, khoảng ≥ schedules.min_interval_s, budget ≤ config_bounds, "
                        "ước tính $/ngày ≤ trần; đích agent/task theo luật run.start/task.create; không tạo từ chính lượt của lịch)",
@@ -215,7 +219,7 @@ def load_token(sock_path: str | os.PathLike[str] | None) -> str | None:
     try:
         p = token_path(sock_path)
         st = os.lstat(p)
-        if not os.path.isfile(p) or os.path.islink(p) or st.st_uid != os.getuid():
+        if not os.path.isfile(p) or os.path.islink(p) or not owned_by_me(st):
             return None
         return p.read_text(encoding="utf-8").strip() or None
     except OSError:
@@ -261,6 +265,9 @@ class ProcInfo:
 def proc_info(pid: int) -> ProcInfo | None:
     if pid <= 0:
         return None
+    if IS_WINDOWS:
+        ppid = win_parent_pids().get(pid)
+        return None if ppid is None else ProcInfo(pid=pid, ppid=ppid, start=win_start_time(pid))
     if sys.platform == "darwin":
         try:
             buf = ctypes.create_string_buffer(136)
@@ -290,9 +297,20 @@ def ancestors(pid: int, limit: int = 128) -> list[int]:
     out: list[int] = []
     cur = pid
     seen: set[int] = set()
+    # Windows: một snapshot cho cả chuỗi; ppid có thể trỏ tới pid đã chết rồi bị tái dùng → dừng khi cha "trẻ" hơn con
+    parents = win_parent_pids() if IS_WINDOWS else None
     while cur > 1 and cur not in seen and len(out) < limit:
         seen.add(cur)
         out.append(cur)
+        if parents is not None:
+            nxt = parents.get(cur)
+            if nxt is None:
+                break
+            child_start, parent_start = win_start_time(cur), win_start_time(nxt)
+            if child_start is not None and parent_start is not None and parent_start > child_start:
+                break
+            cur = nxt
+            continue
         info = proc_info(cur)
         if info is None:
             break
@@ -301,7 +319,10 @@ def ancestors(pid: int, limit: int = 128) -> list[int]:
 
 
 def proc_environ(pid: int) -> dict[str, str] | None:
-    """Biến môi trường của tiến trình cùng user (macOS: sysctl KERN_PROCARGS2; Linux: /proc/<pid>/environ)."""
+    """Biến môi trường của tiến trình cùng user (macOS: sysctl KERN_PROCARGS2; Linux: /proc/<pid>/environ).
+    Windows: đọc khối env qua PEB (`oscompat.win_environ`, tiến trình 64-bit cùng user)."""
+    if IS_WINDOWS:
+        return win_environ(pid)
     try:
         if sys.platform == "darwin":
             libc = _darwin_libc()
@@ -442,7 +463,7 @@ class CallerResolver:
     def resolve(self, pid: int | None, token: Any, expected_token: str | None) -> Caller:
         c = Caller(via="socket", pid=pid, token_ok=token_ok(token, expected_token))
         if pid is None:
-            if sys.platform in ("darwin", "linux"):  # nền tảng hỗ trợ mà không lấy được pid → không tin là người
+            if sys.platform in ("darwin", "linux", "win32"):  # nền tảng hỗ trợ mà không lấy được pid → không tin là người
                 c.evidence.append("peer_pid_unknown")
             return c
         if pid == os.getpid():
@@ -454,8 +475,15 @@ class CallerResolver:
                 c.run_id, c.agent_id = live[p]
                 c.evidence.append(f"descendant_of_run_pid:{p}")
                 break
+        if IS_WINDOWS:
+            # Windows không có session: run nằm trong Job Object riêng (oscompat.JOBS) — hậu duệ không thoát được
+            job_run = JOBS.run_of(pid)
+            if job_run:
+                c.run_id = c.run_id or job_run
+                c.agent_id = c.agent_id or next((a for r, a in live.values() if r == job_run), None)
+                c.evidence.append(f"in_run_job:{job_run}")
         try:
-            sid = os.getsid(pid)
+            sid = os.getsid(pid) if hasattr(os, "getsid") else None
         except OSError:
             sid = None
         if sid and sid not in chain:

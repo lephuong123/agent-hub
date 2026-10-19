@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import names as _names
+from .oscompat import IS_WINDOWS, uid_tag
 
 ENV_HOME = "CFHARNESS_HOME"
 ENV_SOCKET = "CFHARNESS_SOCKET"
@@ -84,10 +85,10 @@ class HubPaths:
             if env:
                 return Path(env)
         p = self.home / "hub.sock"
-        if len(str(p)) <= _MAX_SOCK_PATH:
+        if IS_WINDOWS or len(str(p)) <= _MAX_SOCK_PATH:  # Windows: file endpoint TCP (transport.py), không giới hạn độ dài
             return p
         digest = hashlib.sha256(str(self.home).encode()).hexdigest()[:12]
-        return Path("/tmp") / f"{SOCKET_PREFIX}{os.getuid()}-{digest}.sock"
+        return Path("/tmp") / f"{SOCKET_PREFIX}{uid_tag()}-{digest}.sock"
 
     @property
     def agents_dir(self) -> Path:

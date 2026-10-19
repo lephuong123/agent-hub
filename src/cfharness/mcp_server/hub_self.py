@@ -187,7 +187,7 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
     "cost_report": _t("Cost breakdown since a time (by agent|team|day|kind|model).", {"by": _S, "since": _S}, ro=True),
     "templates": _t("Agent templates you can create agents from (name, role, model, tools).", ro=True),
     "mcp_registry_list": _t("MCP servers registered by the human (names you may assign to agents). No secrets.", ro=True),
-    "system_list": _t("Systems OUTSIDE the hub that the owner registered (apps in ~/Workspace) and their launchd jobs: label, kind "
+    "system_list": _t("Systems OUTSIDE the hub that the owner registered (apps in ~/Workspace) and their launchd (macOS) / Task Scheduler (Windows) jobs: label, kind "
                       "(service = always running, e.g. a web server or bot; scheduled = timed, e.g. daily Telegram reports), schedule, status "
                       "(running|idle|paused|not_loaded|error), locked. A system's `path` is a valid task workspace when its code must change.", ro=True),
     "system_get": _t("One registered system with its jobs; log=true adds the tail of each job's stdout/stderr (redacted, agent-grade DATA).",
@@ -227,7 +227,7 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                         "target memory|user|skill|config, op add|patch|remove|create|merge|archive, payload as for the learning tools." + _DENIED,
                         {"agent": _S, "target": _S, "op": _S, "payload": _O, "scope": _S, "rationale": _S}, ["agent", "target", "op"]),
     "learn_refine": _t("Ask the learning loop to review/refine another agent (optional focus, run).", {"agent": _S, "focus": _S, "run": _S}, ["agent"]),
-    "system_job": _t("Operate a launchd job of a REGISTERED system (see system_list): pause (stop + keep it off across reboots), resume, "
+    "system_job": _t("Operate a launchd (macOS) / Task Scheduler (Windows) job of a REGISTERED system (see system_list): pause (stop + keep it off across reboots), resume, "
                      "restart. Pick the exact job: e.g. to stop a system's daily notifications, pause its scheduled report job, not its web "
                      "service. Locked jobs are refused. Tell the owner what you paused and how to resume." + _DENIED,
                      {"label": _S, "action": {"type": "string", "enum": ["pause", "resume", "restart"]}, "reason": _S}, ["label", "action"]),
@@ -372,6 +372,9 @@ def handle(msg: dict, run_id: str, sock: str, role: str) -> None:
 
 def main() -> int:
     from ..guard.hook import _args
+    from ..oscompat import utf8_stdio
+
+    utf8_stdio()  # Windows: `python -I` → stdout cp1252, kết quả tool tiếng Việt không mã hoá được
 
     a = _args(sys.argv[1:])
     run_id, sock, role = a.get("run", ""), a.get("socket", ""), a.get("role", "worker")

@@ -1,8 +1,11 @@
-"""`hub.systems` — hệ thống NGOÀI hub (app trong `~/Workspace`) và job launchd của chúng.
+"""`hub.systems` — hệ thống NGOÀI hub (app trong `~/Workspace`) và job launchd (macOS) / task Task Scheduler (Windows) của chúng.
 
 - Nhận diện: mỗi thư mục con trực tiếp của gốc (`systems.roots`, mặc định `workspace.allowed_roots`) có dấu hiệu dự án (.git,
   package.json, pyproject.toml, README/AGENTS) hoặc có job launchd trỏ vào = một hệ thống. Job gán theo `WorkingDirectory` / đường dẫn
   trong `ProgramArguments`. Plist là nguồn sự thật của job (đọc lại mỗi lần), registry chỉ giữ hệ thống NGƯỜI đã đăng ký + khoá.
+- Backend job chọn theo hệ điều hành (`make_backend`): `launchd.Launchctl` (macOS) hoặc `taskscheduler.TaskScheduler` (Windows), cùng
+  giao diện `jobs/state/disabled/pause/resume/restart/label_ok`. Đường dẫn so sánh theo `os.path.normcase` + `os.sep` (Windows: không
+  phân biệt hoa/thường, dấu `\`).
 - Registry `hub_state["systems.registry"]` = {id: {path, title, added_at, added_by, locked: [label]}}; tạm dừng do hub ở
   `hub_state["systems.paused"]` = {label: {by, at, reason}}. Không có migration.
 - Ghi registry (scan --apply / add / rm / lock) = CHỈ NGƯỜI. Thao tác job (pause|resume|restart) = người hoặc điều phối viên (qua
@@ -23,7 +26,8 @@ from .. import names as _names
 from ..errors import Blocked, HubError, NotFound
 from ..events import make_event
 from ..store import now_iso
-from .launchd import LABEL_RE, Launchctl, job_paths, load_jobs
+from ..oscompat import IS_WINDOWS
+from .launchd import Launchctl, is_abs_token, job_paths
 
 if TYPE_CHECKING:
     from ..hub import Hub
@@ -58,20 +62,32 @@ def _title(d: Path) -> str | None:
 
 
 def _under(p: str, root: str) -> bool:
-    return p == root or p.startswith(root.rstrip("/") + "/")
+    p, root = os.path.normcase(p), os.path.normcase(root)
+    return p == root or p.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def make_backend(config: Any) -> Any:
+    """Backend job theo hệ điều hành: Task Scheduler trên Windows, launchd trên macOS (và mặc định)."""
+    timeout = float(config.get("systems.timeout_s"))
+    if IS_WINDOWS:
+        from .taskscheduler import TaskScheduler
+
+        return TaskScheduler(str(config.get("systems.schtasks") or "schtasks"), str(config.get("systems.powershell") or "powershell"),
+                             timeout=timeout)
+    return Launchctl(str(config.get("systems.launchctl")), timeout=timeout)
 
 
 class SystemService:
-    def __init__(self, hub: "Hub", launchctl: Launchctl | None = None) -> None:
+    def __init__(self, hub: "Hub", launchctl: Any = None) -> None:
         self.hub = hub
         self._lc = launchctl
 
     # ------------------------------------------------------------------ cấu hình
     @property
-    def launchctl(self) -> Launchctl:
+    def launchctl(self) -> Any:
+        """Backend job (tên giữ từ bản chỉ-macOS): `Launchctl` hoặc `TaskScheduler` — xem `make_backend`."""
         if self._lc is None:
-            c = self.hub.config
-            self._lc = Launchctl(str(c.get("systems.launchctl")), timeout=float(c.get("systems.timeout_s")))
+            self._lc = make_backend(self.hub.config)
         return self._lc
 
     def roots(self) -> list[str]:
@@ -99,7 +115,7 @@ class SystemService:
 
     @staticmethod
     def _is_hub_job(job: dict[str, Any]) -> bool:
-        return any(_HUB_TOKEN.search(os.path.basename(a) if a.startswith("/") else a) for a in job.get("program") or [])
+        return any(_HUB_TOKEN.search(os.path.basename(a) if is_abs_token(a) else a) for a in job.get("program") or [])
 
     # ------------------------------------------------------------------ registry
     def registry(self) -> dict[str, dict[str, Any]]:
@@ -116,20 +132,21 @@ class SystemService:
         """Thư mục hệ thống (con trực tiếp của một gốc) chứa `path`."""
         p = os.path.normpath(path)
         for r in self.roots():
-            if _under(p, r) and p != r:
-                first = p[len(r.rstrip("/")) + 1:].split("/", 1)[0]
+            if _under(p, r) and os.path.normcase(p) != os.path.normcase(r):
+                first = p[len(r.rstrip(os.sep)) + 1:].split(os.sep, 1)[0]
                 return os.path.join(r, first)
         return None
 
     def _jobs_by_dir(self) -> dict[str, list[dict[str, Any]]]:
+        """Thư mục hệ thống (khoá `normcase`) → job trỏ vào."""
         out: dict[str, list[dict[str, Any]]] = {}
-        for j in load_jobs(self._agents_dir()):
+        for j in self.launchctl.jobs(self._agents_dir()):
             if self._is_hub_job(j):
                 continue
             for p in job_paths(j):
                 d = self._system_of(p)
                 if d:
-                    out.setdefault(d, []).append(j)
+                    out.setdefault(os.path.normcase(d), []).append(j)
                     break
         return out
 
@@ -144,7 +161,7 @@ class SystemService:
             for d in kids:
                 if d.name.startswith((".", "_")) or not d.is_dir() or self._is_hub_path(str(d)):
                     continue
-                js = jobs.get(str(d), [])
+                js = jobs.get(os.path.normcase(str(d)), [])
                 if not js and not any((d / m).exists() for m in MARKERS):
                     continue
                 sid = slug(d.name)
@@ -180,7 +197,7 @@ class SystemService:
         p = os.path.normpath(os.path.realpath(os.path.expanduser(path)))
         if not Path(p).is_dir():
             raise NotFound(f"không có thư mục {p}")
-        if self._is_hub_path(p) or p in ("/", os.path.expanduser("~")):
+        if self._is_hub_path(p) or os.path.dirname(p) == p or os.path.normcase(p) == os.path.normcase(os.path.expanduser("~")):
             raise Blocked(f"{p} là thư mục của chính hub / quá rộng — không đăng ký làm hệ thống")
         reg = self.registry()
         for k, v in reg.items():
@@ -219,11 +236,11 @@ class SystemService:
 
     # ------------------------------------------------------------------ đọc
     def _jobs_for(self, path: str) -> list[dict[str, Any]]:
-        return self._jobs_by_dir().get(path, [])
+        return self._jobs_by_dir().get(os.path.normcase(path), [])
 
     def _status(self, job: dict[str, Any], st: dict[str, dict[str, Any]], dis: set[str], paused: dict[str, Any]) -> dict[str, Any]:
         s = st.get(job["label"])
-        if s and s.get("pid"):
+        if s and (s.get("pid") or s.get("running")):  # Task Scheduler: biết đang chạy nhưng không có pid
             status = "running"
         elif s:
             status = "error" if s.get("last_exit") not in (None, 0) else "idle"
@@ -283,7 +300,7 @@ class SystemService:
 
     # ------------------------------------------------------------------ thao tác job
     def _find_job(self, label: str) -> tuple[str, dict[str, Any]]:
-        if not LABEL_RE.match(str(label or "")):
+        if not self.launchctl.label_ok(str(label or "")):
             raise HubError(f"label job không hợp lệ: {label!r}", code=-32602)
         for sid, v in self.registry().items():
             for j in self._jobs_for(v["path"]):

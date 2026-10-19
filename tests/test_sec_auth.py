@@ -9,22 +9,28 @@ Daemon THẬT trên Unix socket THẬT; "tiến trình run" là một tiến tr�
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 from pathlib import Path
 
 import pytest
 
-from cfharness import auth
+from cfharness import auth, oscompat
+from cfharness.evals.checkers import _shell_argv
+from cfharness.oscompat import IS_WINDOWS
 from cfharness.daemon import Daemon
 from cfharness.paths import HubPaths
 from cfharness.rpc import RpcClient, RpcError
 from cfharness.runtime.fake import FakeRuntime
+from cfharness import transport
 
 CFHARNESS_BIN = shutil.which("cfharness") or str(Path(sys.executable).parent / "cfharness")
 
@@ -32,7 +38,8 @@ CFHARNESS_BIN = shutil.which("cfharness") or str(Path(sys.executable).parent / "
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     # đường dẫn ngắn để socket nằm trong HUB_HOME (và test cả nhánh /tmp ở test khác)
-    h = Path(os.path.realpath("/tmp")) / f"ahsec-{os.getpid()}-{time.time_ns() % 10**6}"
+    base = Path(tempfile.gettempdir()) if IS_WINDOWS else Path(os.path.realpath("/tmp"))
+    h = base / f"ahsec-{os.getpid()}-{time.time_ns() % 10**6}"
     monkeypatch.setenv("CFHARNESS_HOME", str(h))
     monkeypatch.delenv("CFHARNESS_SOCKET", raising=False)
     p = HubPaths.resolve(h)
@@ -45,13 +52,14 @@ def home(tmp_path, monkeypatch):
 async def _start(p: HubPaths) -> tuple[Daemon, asyncio.base_events.Server]:
     d = Daemon(p, runtime=FakeRuntime(hold=True))
     d.hub.start()
-    srv = await asyncio.start_unix_server(d._handle_conn, path=str(p.socket))
+    srv = await transport.start_server(d._handle_conn, p.socket, limit=16 * 1024 * 1024)
     os.chmod(p.socket, 0o600)
     return d, srv
 
 
 async def _stop(d: Daemon, srv) -> None:
     srv.close()
+    oscompat.JOBS.close_all()
     d.hub.runs._runtime.release()
     await d.hub.stop()
 
@@ -85,12 +93,16 @@ async def _start_run(d: Daemon) -> tuple[dict, "subprocess.Popen[bytes]", Path]:
         env = dict(os.environ); env.update(spec.get("env") or {{}})
         for k in spec.get("unset") or []:
             env.pop(k, None)
-        p = subprocess.run(spec["cmd"], shell=True, capture_output=True, text=True, env=env, timeout=60)
+        argv = {(_shell_argv("")[:-1] if IS_WINDOWS else None)!r}  # Windows: Git Bash như Bash tool của claude
+        p = subprocess.run(argv + [spec["cmd"]] if argv else spec["cmd"], shell=not argv, capture_output=True, text=True, env=env, timeout=60)
         json.dump({{"rc": p.returncode, "out": p.stdout, "err": p.stderr}}, open(out + ".tmp", "w")); os.replace(out + ".tmp", out)
         time.sleep(spec.get("linger", 0))
     """)
-    proc = subprocess.Popen([sys.executable, "-c", helper], start_new_session=True,
+    # Windows: như runtime thật — spawn treo, gán Job Object của run rồi mới chạy (thay session)
+    proc = subprocess.Popen([sys.executable, "-c", helper], **oscompat.new_group_kwargs(suspended=IS_WINDOWS),
                             env={**os.environ, "CFHARNESS_RUN_ID": r["id"], "CFHARNESS_HOME": str(d.paths.home)})
+    if IS_WINDOWS:
+        oscompat.JOBS.create(r["id"]).adopt(proc.pid, resume=True)
     ar.handle.pid = proc.pid  # = pid tiến trình `claude` của run
     info = auth.proc_info(proc.pid)
     h.store.update_run(r["id"], {"pid": proc.pid, "pid_start_time": info.start if info else time.time()})
@@ -98,40 +110,69 @@ async def _start_run(d: Daemon) -> tuple[dict, "subprocess.Popen[bytes]", Path]:
 
 
 async def _in_run(go: Path, cmd: str, *, env: dict | None = None, unset: list[str] | None = None, linger: float = 0) -> dict:
-    out = Path(str(go).replace("/go-", "/out-") + ".json")
+    out = go.with_name(go.name.replace("go-", "out-", 1) + ".json")
     go.write_text(json.dumps({"cmd": cmd, "env": env or {}, "unset": unset or [], "linger": linger}))
     for _ in range(3000):
         await asyncio.sleep(0.02)
         if out.exists():
-            return json.loads(out.read_text())
+            try:
+                return json.loads(out.read_text())
+            except PermissionError:  # Windows: helper đang os.replace (chia sẻ file) — thử lại vòng sau
+                continue
     raise AssertionError("lệnh trong run không xong")
 
 
+def _fwd(p: Path | str) -> str:
+    """Đường dẫn nhúng vào lệnh chạy qua Git Bash: dùng `/` (MSYS đổi/nuốt dấu gạch ngược trong đối số)."""
+    return str(p).replace(chr(92), "/")
+
+
 def _client_py(home: HubPaths, method: str, params: dict, *, steal_token: bool, setsid: bool = False, double_fork: bool = False, result: Path | None = None) -> str:
-    """Client socket tự viết (QA): kết nối thẳng hub.sock, tuỳ chọn đọc trộm token người, setsid/double-fork."""
+    """Client socket tự viết (QA): kết nối thẳng hub.sock, tuỳ chọn đọc trộm token người, setsid/double-fork.
+    Windows (không có fork/setsid): "double-fork" = spawn cháu TÁCH RỜI (DETACHED_PROCESS, group mới) rồi cha thoát ngay
+    → cháu mồ côi; "setsid" = thử thêm CREATE_BREAKAWAY_FROM_JOB (job của run không cho → lùi về spawn thường)."""
     code = textwrap.dedent(f"""
-        import json, os, socket, sys, time
+        import json, os, subprocess, sys, time
+        from cfharness import transport
         def go():
             p = dict({params!r})
             if {steal_token!r}:
-                try: p["_auth"] = open({str(auth.token_path(home.socket))!r}).read().strip()
+                try: p["_auth"] = open({_fwd(auth.token_path(home.socket))!r}).read().strip()
                 except OSError: pass
-            s = socket.socket(socket.AF_UNIX); s.connect({str(home.socket)!r})
+            s = transport.connect({_fwd(home.socket)!r}, 30)
             s.sendall((json.dumps({{"jsonrpc": "2.0", "id": 1, "method": {method!r}, "params": p}}) + "\\n").encode())
             r = s.makefile().readline()
-            out = {str(result) if result else ''!r}
+            out = {_fwd(result) if result else ''!r}
             if out:
                 open(out + ".tmp", "w").write(r); os.replace(out + ".tmp", out)
             print(r)
-        if {double_fork!r}:
+        if {double_fork!r} and sys.platform == "win32":
+            if "--grandchild" not in sys.argv:
+                flags = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+                argv = [sys.executable, "-c", __CODE__, "--grandchild"]
+                try:
+                    subprocess.Popen(argv, creationflags=flags | (0x01000000 if {setsid!r} else 0), close_fds=True)
+                except OSError:
+                    subprocess.Popen(argv, creationflags=flags, close_fds=True)
+                sys.exit(0)
+            time.sleep(0.5)
+        elif {double_fork!r}:
             if os.fork() > 0: sys.exit(0)
             if {setsid!r}: os.setsid()
             if os.fork() > 0: sys.exit(0)
             time.sleep(0.5)
-        elif {setsid!r}:
+        elif {setsid!r} and sys.platform != "win32":
             os.setsid()
-        go()
+        try:
+            go()
+        except Exception as e:  # cháu mồ côi không có stderr — ghi lỗi vào file kết quả để test thấy
+            out = {_fwd(result) if result else ''!r}
+            if out:
+                open(out, "w").write(json.dumps({{"client_exc": repr(e)}}))
+            raise
     """)
+    # code của cháu đi qua base64: đối số qua Git Bash/MSYS bị đổi `\\` → `\` nên repr(code) hỏng
+    code = code.replace("__CODE__", f"__import__('base64').b64decode({base64.b64encode(code.encode()).decode()!r}).decode()")
     import shlex
 
     return f"{shlex.quote(sys.executable)} -c {shlex.quote(code)}"
@@ -144,7 +185,7 @@ async def test_human_cli_and_client_can_approve_without_manual_step(home):
         run, proc, go = await _start_run(d)
         # token tự sinh cạnh socket, 0600, không nằm trong env của run
         tp = auth.token_path(home.socket)
-        assert tp.exists() and oct(tp.stat().st_mode & 0o777) == "0o600"
+        assert tp.exists() and (IS_WINDOWS or oct(tp.stat().st_mode & 0o777) == "0o600")  # Windows: ACL hồ sơ người dùng
         aid = _open_approval(d, run)
         # (1) client của người trong tiến trình test
         res = await asyncio.to_thread(RpcClient(home.socket).call, "approval.approve", {"id": aid})
@@ -167,13 +208,13 @@ async def test_agent_cannot_self_approve_python_m_xargs_or_raw_socket(home):
         run, proc, go = await _start_run(d)
         aid = _open_approval(d, run)
         # QA #1: python3 -m cfharness.cli approve <id>
-        r1 = await _in_run(go, f"{sys.executable} -m cfharness.cli approve {aid}")
+        r1 = await _in_run(go, f"{shlex.quote(sys.executable)} -m cfharness.cli approve {aid}")
         assert r1["rc"] != 0 and "chỉ dành cho NGƯỜI" in (r1["err"] + r1["out"]), r1
         assert d.hub.approvals.get(aid)["status"] in ("open", "waiting_human")
         proc.wait(5)
         # QA #2: echo approve <id> | xargs cfharness
         run2, proc2, go2 = await _start_run(d)
-        r2 = await _in_run(go2, f"echo approve {aid} | xargs {CFHARNESS_BIN}")
+        r2 = await _in_run(go2, f"echo approve {aid} | xargs {shlex.quote(CFHARNESS_BIN)}")
         assert r2["rc"] != 0 and "chỉ dành cho NGƯỜI" in (r2["err"] + r2["out"]), r2
         proc2.wait(5)
         # QA #3: client socket Python tự viết — kể cả khi ĐÃ đọc trộm được token người
@@ -206,7 +247,8 @@ async def test_orphaned_double_fork_and_env_escape_still_detected(home):
             if res_file.exists():
                 break
         resp = json.loads(res_file.read_text())
-        assert "error" in resp and any("session" in e for e in resp["error"]["data"]["caller"]["evidence"]), resp
+        # POSIX: session của run gần đây; Windows: Job Object của run (cháu mồ côi vẫn ở trong job)
+        assert "error" in resp and any(("session" in e) or e.startswith("in_run_job:") for e in resp["error"]["data"]["caller"]["evidence"]), resp
         # setsid + double-fork, env còn CFHARNESS_RUN_ID
         run2, proc2, go2 = await _start_run(d)
         res2 = Path(home.home) / "setsid.json"
@@ -240,7 +282,7 @@ async def test_agent_learn_propose_downgraded_and_agent_update_denied(home):
     try:
         run, proc, go = await _start_run(d)
         # learn propose từ trong run (CLI thật) → KHÔNG là created_by=user; đi qua guard học
-        r = await _in_run(go, f"{CFHARNESS_BIN} --json learn propose a1 --target memory --op add --payload '{{\"text\": \"x\"}}'")
+        r = await _in_run(go, f"{shlex.quote(CFHARNESS_BIN)} --json learn propose a1 --target memory --op add --payload '{{\"text\": \"x\"}}'")
         props = d.hub.learning.pipeline.list("a1", None, 50)
         assert props, r
         assert all(p["created_by"] != "user" for p in props) and props[0]["created_by"] == "agent"
@@ -283,14 +325,13 @@ async def test_socket_caller_without_token_denied_even_if_not_in_run(home):
         def raw() -> dict:
             import socket
 
-            s = socket.socket(socket.AF_UNIX)
-            s.connect(str(home.socket))
+            s = transport.connect(home.socket, 30)
             s.sendall((json.dumps({"jsonrpc": "2.0", "id": 1, "method": "config.set", "params": {"key": "approval.timeout_s", "value": 2}}) + "\n").encode())
             return json.loads(s.makefile().readline())
 
         # tiến trình con (không token) — không phải hậu duệ run nhưng thiếu token → từ chối
         cp = await asyncio.to_thread(subprocess.run, [sys.executable, "-c",
-            "import json,socket,sys;s=socket.socket(socket.AF_UNIX);s.connect(sys.argv[1]);"
+            "import json,socket,sys;from cfharness import transport;s=transport.connect(sys.argv[1],30);"
             "s.sendall((json.dumps({'jsonrpc':'2.0','id':1,'method':'config.set','params':{'key':'approval.timeout_s','value':2}})+'\\n').encode());"
             "print(s.makefile().readline())", str(home.socket)], capture_output=True, text=True, timeout=30)
         assert json.loads(cp.stdout)["error"]["code"] == -32003

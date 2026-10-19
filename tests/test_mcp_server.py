@@ -19,6 +19,8 @@ from cfharness.daemon import spawn_background
 from cfharness.mcp_server.server import READ_ONLY_TOOLS, build_server
 from cfharness.rpc import RpcClient
 
+WIN = sys.platform == "win32"  # Windows: quyền POSIX (0600/0700) không áp dụng — hồ sơ người dùng bảo vệ bằng ACL
+
 
 @pytest.fixture
 def daemon(hub_home):
@@ -208,7 +210,7 @@ async def test_http_transport_tokens(daemon):
     with pytest.raises(ValueError, match="loopback"):
         build_http_app(caller_for(daemon), {"read": "a", "control": "b"}, host="0.0.0.0")
     toks = ensure_tokens(daemon)
-    assert oct(os.stat(daemon.home / "mcp_server" / "tokens.json").st_mode & 0o777) == "0o600"
+    assert WIN or oct(os.stat(daemon.home / "mcp_server" / "tokens.json").st_mode & 0o777) == "0o600"
     assert ensure_tokens(daemon) == toks
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(build_http_app(caller_for(daemon), toks), host="127.0.0.1", port=port, log_level="error"))
@@ -248,6 +250,7 @@ def test_snippet_does_not_touch_claude_config(hub_home, tmp_path, monkeypatch, c
     cj = fake_home / ".claude.json"
     cj.write_text('{"mcpServers": {}}')
     monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))  # Windows: `~` = USERPROFILE, không phải HOME
     assert main(["mcp", "snippet", "--json"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["command"].startswith("claude mcp add") and out["json"]["mcpServers"]["cfharness"]["args"][-2:] == ["mcp", "serve"]

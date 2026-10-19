@@ -22,6 +22,7 @@ import functools
 import hashlib
 import logging
 import os
+import posixpath
 import shutil
 import time
 from pathlib import Path
@@ -42,6 +43,12 @@ POLICY = "policy"
 CONFIG = "config.yaml"
 SECURITY_KEYS = ("guard", "approval", "runtime", "secrets", "telemetry", "notify", "learning_guard", "manager", "schedules")  # M7 MGR-6: trần của điều phối viên
 MAX_FILE = 2_000_000
+
+
+def _islink(p: str | os.PathLike[str]) -> bool:
+    """symlink HOẶC directory junction (Windows: agent tạo junction không cần quyền admin — `mklink /J` — tương đương
+    symlink thư mục trên POSIX; `os.path.islink` không nhận junction)."""
+    return os.path.islink(p) or os.path.isjunction(p)
 
 
 def _sha(b: bytes) -> str:
@@ -75,23 +82,25 @@ class IntegrityMonitor:
         """{rel: {kind: file|dir|symlink|other, sha, content}} cho cây policy/ (KHÔNG theo symlink)."""
         out: dict[str, dict[str, Any]] = {}
         root = self.home / POLICY
-        if os.path.islink(root):
+        if _islink(root):
             out[POLICY] = {"kind": "symlink", "target": os.readlink(root)}
             return out
         if not root.exists():
             return out
         out[POLICY] = {"kind": "dir"}
         for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-            for name in list(dirnames) + filenames:
+            names = list(dirnames) + filenames
+            dirnames[:] = [d for d in dirnames if not _islink(Path(dirpath) / d)]  # ghi nhận junction nhưng KHÔNG đi vào
+            for name in names:
                 full = Path(dirpath) / name
-                rel = str(full.relative_to(self.home))
+                rel = full.relative_to(self.home).as_posix()  # khoá luôn dùng `/` (Windows: không thì mọi file thành 'lạ')
                 try:
                     st = os.lstat(full)
                 except OSError:
                     continue
                 import stat as _st
 
-                if _st.S_ISLNK(st.st_mode):
+                if _st.S_ISLNK(st.st_mode) or _islink(full):
                     out[rel] = {"kind": "symlink", "target": os.readlink(full)}
                 elif _st.S_ISDIR(st.st_mode):
                     out[rel] = {"kind": "dir"}
@@ -122,7 +131,7 @@ class IntegrityMonitor:
     def _read_config(self) -> bytes | None:
         p = self.home / CONFIG
         try:
-            if os.path.islink(p):
+            if _islink(p):
                 return b"__symlink__"
             return p.read_bytes()
         except OSError:
@@ -167,7 +176,9 @@ class IntegrityMonitor:
                 return str(dst)
         except OSError:
             try:
-                if os.path.islink(src) or src.is_file():
+                if os.path.isjunction(src):
+                    os.rmdir(src)  # chỉ gỡ junction, không đụng thư mục đích
+                elif _islink(src) or src.is_file():
                     src.unlink()
                 elif src.is_dir():
                     shutil.rmtree(src)
@@ -181,8 +192,8 @@ class IntegrityMonitor:
         parts = Path(rel).parts
         for i in range(1, len(parts)):
             anc = self.home.joinpath(*parts[:i])
-            if os.path.islink(anc) or (anc.exists() and not anc.is_dir()):
-                self._aside(str(Path(*parts[:i])), "parent-" + str(int(time.time())))
+            if _islink(anc) or (anc.exists() and not anc.is_dir()):
+                self._aside(Path(*parts[:i]).as_posix(), "parent-" + str(int(time.time())))
             anc.mkdir(exist_ok=True)
         tmp = p.with_name(f".{p.name}.integrity.tmp")
         tmp.write_bytes(content)
@@ -281,7 +292,7 @@ class IntegrityMonitor:
         src = self.home / rel
         dst = self.home / "trash" / "tamper" / stamp / rel
         try:
-            if os.path.islink(src):
+            if _islink(src):
                 self._aside(rel, stamp)
                 return
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -434,7 +445,7 @@ def cleanup_runtime_dirs(hub: "Hub", keep: set[str] | None = None) -> list[str]:
                     shutil.rmtree(d)
                 else:
                     d.unlink()
-                removed.append(str(d.relative_to(hub.paths.home)))
+                removed.append(d.relative_to(hub.paths.home).as_posix())
             except OSError:  # pragma: no cover
                 log.exception("không xoá được %s", d)
     return removed
@@ -463,8 +474,9 @@ def register_rpc(d: "Daemon") -> None:
         m = mon()
         rel = p.get("path")
         if rel:
-            rel = os.path.normpath(str(rel))
-            if not (rel == CONFIG or rel.startswith(POLICY + "/")) or ".." in Path(rel).parts:
+            # khoá dạng POSIX trên mọi OS (os.path.normpath trên Windows đổi sang `\` → không bao giờ khớp `policy/`)
+            rel = posixpath.normpath(str(rel).replace(chr(92), "/"))
+            if not (rel == CONFIG or rel.startswith(POLICY + "/")) or ".." in rel.split("/") or ":" in rel:
                 raise HubError("path phải nằm trong policy/ hoặc là config.yaml")
             if p.get("content") is None:
                 raise HubError("thiếu 'content' cho path")

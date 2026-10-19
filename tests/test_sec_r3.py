@@ -89,7 +89,9 @@ def test_static_deny_covers_keychain(tmp_path):
     deny = set(build_settings({}, run_id="r", socket=hub / "hub.sock", policy_dir=hub / "policy", guard_cfg={}, approval_timeout_s=300)["permissions"]["deny"])
     assert "Bash(security find-generic-password:*)" in deny and "Bash(gh auth token:*)" in deny
     uh = os.path.expanduser("~")
-    assert f"Read(/{uh}/.config/gh/**)" in deny
+    from cfharness.guard.runtime import rule_path
+
+    assert f"Read(/{rule_path(uh)}/.config/gh/**)" in deny
 
 
 def test_allow_domain_human_only_and_audited(tmp_path):

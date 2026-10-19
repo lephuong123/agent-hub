@@ -64,7 +64,7 @@ async def test_check_passes_model_change_and_does_not_touch_real_home(make_hub):
     specs = list(rt.specs.values())
     assert len(specs) == 8  # 2 task × N=2 × (baseline + candidate)
     assert all(s.no_session_persistence for s in specs)
-    assert all("evals/tmp" in str(s.cwd) for s in specs)
+    assert all("evals/tmp" in Path(s.cwd).as_posix() for s in specs)
     assert sorted(s.model for s in specs).count("haiku") == 4
     assert sorted(p.name for p in home.iterdir()) == before_files and not (home / "workspaces").exists() or not any((home / "workspaces").iterdir())
     assert not (h.paths.home / "evals" / "tmp" / v.eval_id).exists()  # dọn bản sao

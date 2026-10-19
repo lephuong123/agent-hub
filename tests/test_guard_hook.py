@@ -6,7 +6,7 @@ import json
 import subprocess
 import sys
 
-from cfharness.guard.runtime import build_settings, guard_mcp_entry, hook_command, pattern_matches, policy_deny_rules, strip_for_tickets
+from cfharness.guard.runtime import build_settings, guard_mcp_entry, hook_command, pattern_matches, policy_deny_rules, rule_path, strip_for_tickets
 
 HOOK_IN = {"session_id": "s", "cwd": "/tmp", "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"}, "tool_use_id": "t1"}
 
@@ -38,10 +38,17 @@ def test_hook_daemon_silent_times_out_denies(tmp_path):
 
     import tempfile
 
-    path = tempfile.mkdtemp(prefix="ahg", dir="/tmp") + "/h.sock"
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(path)
-    srv.listen(1)
+    from cfharness import oscompat, transport
+
+    if oscompat.IS_WINDOWS:  # Windows: TCP loopback + file endpoint (transport.py)
+        path = str(tmp_path / "h.sock")
+        srv = socket.create_server((transport.LOOPBACK, 0))
+        transport.write_endpoint(path, srv.getsockname()[1])
+    else:
+        path = tempfile.mkdtemp(prefix="ahg", dir="/tmp") + "/h.sock"
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(path)
+        srv.listen(1)
     conns = []
     threading.Thread(target=lambda: conns.append(srv.accept()), daemon=True).start()
     rc, out, _ = run_hook(["--run", "r_x", "--socket", path, "--timeout", "1"], json.dumps(HOOK_IN))
@@ -61,7 +68,7 @@ def test_settings_and_mcp_entry(tmp_path):
     h = s["hooks"]["PreToolUse"][0]
     assert h["matcher"] == "*" and h["hooks"][0]["timeout"] >= 420 and "--timeout 870" in h["hooks"][0]["command"]
     assert s["autoMemoryEnabled"] is False
-    assert f"Write(/{tmp_path}/policy/**)" in s["permissions"]["deny"] and any(r.startswith("Edit(//") for r in s["permissions"]["deny"])
+    assert f"Write(/{rule_path(tmp_path)}/policy/**)" in s["permissions"]["deny"] and any(r.startswith("Edit(//") for r in s["permissions"]["deny"])
     # approval.timeout lớn hơn → timeout hook tự nâng
     s2 = build_settings({}, run_id="r", socket=tmp_path / "s", policy_dir=tmp_path, guard_cfg={"hook_timeout_s": 100}, approval_timeout_s=600)
     assert s2["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"] == 720

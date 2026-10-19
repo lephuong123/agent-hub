@@ -6,6 +6,7 @@ Không gọi `claude`.
 
 from __future__ import annotations
 
+import sys
 import asyncio
 import io
 import json
@@ -21,6 +22,8 @@ from cfharness.termsafe import clean, one_line
 from cfharness.tui.client import AsyncHubClient
 from m3_fake import ScriptedRuntime
 from m7_fake import MgrScript, wait_status
+
+WIN = sys.platform == "win32"  # Windows: quyền POSIX (0600/0700) không áp dụng — hồ sơ người dùng bảo vệ bằng ACL
 
 EVIL = ("A\x1b]8;;http://evil.example\x07bấm\x1b]8;;\x07 \x1b[31mĐỎ\x1b[0m \x1b]0;pwned\x07 ‮gnp.exe ​ẩn "
         "[link=http://x]y[/link] [bold]B[/bold] \x9b2J\rghi đè\x07\x08")
@@ -271,7 +274,7 @@ async def test_tty_prompt_loop_with_pipe_input(env, hub_home):
     assert code == 0
     assert "chào từ tty" in buf.getvalue()
     hist = hub_home.home / "cli_history"
-    assert hist.exists() and (hist.stat().st_mode & 0o777) == 0o600 and "chào từ tty" in hist.read_text()
+    assert hist.exists() and (WIN or (hist.stat().st_mode & 0o777) == 0o600) and "chào từ tty" in hist.read_text()
 
 
 async def test_oneshot_cli_waits_via_events(env, hub_home, capsys):
@@ -294,6 +297,11 @@ async def test_oneshot_cli_waits_via_events(env, hub_home, capsys):
 
 
 # =========================================================================== kéo–thả đường dẫn + ảnh
+def drag(p) -> str:
+    """Chuỗi terminal dán khi kéo–thả `p`: macOS Terminal.app/iTerm escape dấu cách; Windows Terminal bọc nháy kép."""
+    return f'"{p}"' if WIN else str(p).replace(" ", "\\ ")
+
+
 PNG_1PX = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010806000000"
                         "1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082")
 
@@ -306,7 +314,7 @@ def test_dragged_path_is_text_not_command(tmp_path):
     cmds = repl.COMMANDS
     assert A.is_command("/new", cmds) and A.is_command("/open mc_1", cmds)
     assert A.is_command("/neww", cmds)  # gõ nhầm lệnh → vẫn báo "lệnh không rõ"
-    dragged = str(folder).replace(" ", "\\ ")  # Terminal.app/iTerm escape dấu cách khi kéo vào
+    dragged = drag(folder)
     assert not A.is_command(dragged + " ", cmds)
     assert not A.is_command(f"'{folder}' xem giúp", cmds)
     assert not A.is_command("/khong/ton/tai/a", cmds)  # có `/` bên trong → chữ
@@ -319,7 +327,7 @@ def test_parse_input_images_from_drag_and_clipboard(tmp_path):
 
     img = tmp_path / "ảnh chụp.png"
     img.write_bytes(PNG_1PX)
-    p = A.parse_input(f"{str(img).replace(' ', chr(92) + ' ')} lỗi gì đây? [Ảnh #1] [Ảnh #9]", {1: A.Attachment("clipboard-1.png", PNG_1PX)})
+    p = A.parse_input(f"{drag(img)} lỗi gì đây? [Ảnh #1] [Ảnh #9]", {1: A.Attachment("clipboard-1.png", PNG_1PX)})
     assert [a.name for a in p.images] == ["ảnh chụp.png", "clipboard-1.png"]
     assert p.text == "[ảnh: ảnh chụp.png] lỗi gì đây? [ảnh: clipboard-1.png] [Ảnh #9]"
     big = tmp_path / "big.png"
@@ -338,7 +346,7 @@ async def test_send_folder_and_image_saved_for_manager(env, hub_home, tmp_path):
     s, buf = session(hub_home, new=True)
     assert await s.open()
     try:
-        assert await s.handle(str(folder).replace(" ", "\\ ") + " làm việc ở đây")
+        assert await s.handle(drag(folder) + " làm việc ở đây")
         assert "lệnh không rõ" not in buf.getvalue()
         rid = s.state.active_run
         await wait_status(d, rid)
@@ -351,7 +359,7 @@ async def test_send_folder_and_image_saved_for_manager(env, hub_home, tmp_path):
         await wait_status(d, rid2)
         run = d.hub.store.get_run(rid2)
         files = sorted((d.hub.store.get_run(rid2)["cwd"] and __import__("pathlib").Path(run["cwd"]) / "attachments").iterdir())
-        assert len(files) == 2 and all(f.read_bytes() == PNG_1PX and (f.stat().st_mode & 0o777) == 0o600 for f in files)
+        assert len(files) == 2 and all(f.read_bytes() == PNG_1PX and (WIN or (f.stat().st_mode & 0o777) == 0o600) for f in files)
         assert "Read tool" in run["prompt"] and all(f"attachments/{f.name}" in run["prompt"] for f in files)
         assert "📎 loi.png" in buf.getvalue()
         hist = await s.client.call("manager.history", {"conversation_id": s.state.conversation_id})

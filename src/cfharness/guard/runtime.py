@@ -12,6 +12,10 @@
   chặn ĐỌC token người, secret, `mcp.json` đã resolve, token MCP HTTP; mọi Unix socket (gồm `hub.sock`) bị chặn trừ
   danh sách cho phép. Không phụ thuộc cách agent viết lệnh (python/node/symlink…).
 - `check_extra_args` (H-18): chặn cờ bypass/ghi đè settings trong `runtime.claude.isolation.extra_args`.
+- **Windows** (`docs/dev-notes/windows.md`, kiểm thật claude 2.1.303): luật quyền so khớp đường dẫn dạng POSIX (`C:\\Users\\x` →
+  `//c/Users/x`, `rule_path`); hook chạy qua Git Bash (`MSYSTEM=MINGW64`) nên đường dẫn python dùng `/`; sandbox OS chưa có
+  ("feature gate off") — `failIfUnavailable: true` làm CLI TỪ CHỐI chạy, nên trên Windows mặc định `false` (CLI cảnh báo và chạy
+  không sandbox) — `sandbox_supported()` cho doctor/status cảnh báo.
 """
 
 from __future__ import annotations
@@ -23,6 +27,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ..oscompat import IS_WINDOWS
+
 GUARD_SERVER = "hub-guard"
 PERMISSION_TOOL = f"mcp__{GUARD_SERVER}__approve"
 FILE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
@@ -32,6 +38,37 @@ def python_bin(cfg: dict[str, Any]) -> str:
     return str(cfg.get("python") or sys.executable)
 
 
+def sandbox_supported() -> bool:
+    """Sandbox OS của Claude Code (Seatbelt/bubblewrap) có trên nền tảng này? Windows: chưa (CLI báo "Windows sandbox is not
+    active on this session (feature gate off)") — còn lại: hook guard + bộ phân loại, `permissions.deny` tĩnh, Job Object nhận
+    diện hậu duệ run, token người."""
+    return not IS_WINDOWS
+
+
+SANDBOX_UNAVAILABLE_NOTE = ("Windows: Claude Code chưa có sandbox OS — Bash của agent chạy KHÔNG sandbox; lớp còn lại: hook guard + bộ phân loại, "
+                            "permissions.deny tĩnh, Job Object nhận diện hậu duệ run, token người (docs/dev-notes/windows.md)")
+
+
+def _posix_form(p: str | Path) -> str:
+    """Đường dẫn → dạng POSIX mà Claude Code so khớp trong luật quyền. POSIX: giữ nguyên. Windows: `\\` → `/`, ổ `C:` → `/c`."""
+    s = str(p)
+    if not IS_WINDOWS:
+        return s
+    s = s.replace("\\", "/")
+    m = re.match(r"^([A-Za-z]):(?=/|$)", s)
+    return "/" + m.group(1).lower() + s[2:] if m else s
+
+
+def rule_path(p: str | Path) -> str:
+    """Đường dẫn tuyệt đối cho luật quyền, không `/` cuối; luật viết `"/" + rule_path(p)` (`//` = tuyệt đối)."""
+    return _posix_form(p).rstrip("/")
+
+
+def sb_path(p: str | Path) -> str:
+    """Đường dẫn cho khoá `sandbox.filesystem` / lệnh hook. POSIX: giữ nguyên. Windows: chỉ đổi `\\` → `/`."""
+    return str(p).replace("\\", "/") if IS_WINDOWS else str(p)
+
+
 def hook_timeouts(cfg: dict[str, Any], approval_timeout_s: float) -> tuple[int, int]:
     """(timeout hook cho CLI, timeout RPC của hook). CLI hết giờ hook = fail-OPEN nên hook phải tự xong trước."""
     cli_t = int(max(float(cfg.get("hook_timeout_s") or 900), approval_timeout_s + 120))
@@ -39,14 +76,15 @@ def hook_timeouts(cfg: dict[str, Any], approval_timeout_s: float) -> tuple[int, 
 
 
 def hook_command(run_id: str, socket: Path, rpc_timeout: int, cfg: dict[str, Any]) -> str:
-    py = shlex.quote(python_bin(cfg))
-    return f"{py} -I -m cfharness.guard.hook --run {shlex.quote(run_id)} --socket {shlex.quote(str(socket))} --timeout {rpc_timeout} || exit 2"
+    # Windows: CLI chạy hook qua Git Bash — `\` trong đường dẫn thành ký tự thoát, nên đổi sang `/` (python/Windows đều hiểu)
+    py = shlex.quote(sb_path(python_bin(cfg)))
+    return f"{py} -I -m cfharness.guard.hook --run {shlex.quote(run_id)} --socket {shlex.quote(sb_path(socket))} --timeout {rpc_timeout} || exit 2"
 
 
 def policy_deny_rules(policy_dir: Path) -> list[str]:
     # `//` = đường dẫn tuyệt đối trong luật quyền của Claude Code
-    p = "/" + str(policy_dir).rstrip("/")
-    real = "/" + os.path.realpath(policy_dir).rstrip("/")
+    p = "/" + rule_path(policy_dir)
+    real = "/" + rule_path(os.path.realpath(policy_dir))
     out = []
     for base in dict.fromkeys((p, real)):
         for t in FILE_TOOLS:
@@ -55,7 +93,7 @@ def policy_deny_rules(policy_dir: Path) -> list[str]:
 
 
 def _abs_rule(p: str | Path) -> str:
-    return "/" + str(p).rstrip("/")
+    return "/" + rule_path(p)
 
 
 def protected_write_paths(hub_home: Path) -> list[str]:
@@ -68,7 +106,7 @@ def protected_write_paths(hub_home: Path) -> list[str]:
         return []
     out = []
     for r in pol.resources:
-        if r.kind == "path" and not r.builtin and r.guards("overwrite") and r.selector.startswith("/") and not any(c in r.selector for c in "*?["):
+        if r.kind == "path" and not r.builtin and r.guards("overwrite") and os.path.isabs(r.selector) and not any(c in r.selector for c in "*?["):
             out.append(os.path.realpath(r.selector))
     return list(dict.fromkeys(out))
 
@@ -79,10 +117,15 @@ def credential_deny_rules() -> list[str]:
     bash = ["security find-generic-password", "security find-internet-password", "security dump-keychain", "security export",
             "security find-certificate", "security find-identity", "security unlock-keychain", "git credential", "git credential-osxkeychain",
             "git-credential-osxkeychain", "git config credential", "gh auth token", "gh auth status --show-token", "gh auth status -t"]
+    files = [".config/gh", ".git-credentials", ".config/git/credentials", "Library/Keychains", ".netrc", ".ssh"]
+    if IS_WINDOWS:  # gh lưu token ở %APPDATA%/GitHub CLI; Credential Manager đọc qua cmdkey / git-credential-manager
+        bash += ["cmdkey", "git credential-manager", "git-credential-manager"]
+        files += ["AppData/Roaming/GitHub CLI", "AppData/Roaming/gh"]
     out = [f"Bash({c}:*)" for c in bash]
-    for x in (".config/gh", ".git-credentials", ".config/git/credentials", "Library/Keychains", ".netrc", ".ssh"):
+    for x in files:
+        r = rule_path(f"{uh}/{x}")
         for t in ("Read", "Grep", "Glob"):
-            out += [f"{t}(/{uh}/{x}/**)", f"{t}(/{uh}/{x})"]
+            out += [f"{t}(/{r}/**)", f"{t}(/{r})"]
     return out
 
 
@@ -91,7 +134,7 @@ def exec_zone_deny_rules() -> list[str]:
     out: list[str] = []
     for z in executable_zones():
         for t in FILE_TOOLS:
-            out += [f"{t}(/{z.rstrip('/')}/**)", f"{t}(/{z.rstrip('/')})"]
+            out += [f"{t}(/{rule_path(z)}/**)", f"{t}(/{rule_path(z)})"]
     return list(dict.fromkeys(out))
 
 
@@ -105,10 +148,14 @@ def secret_read_deny_rules(hub_home: Path, socket: Path) -> list[str]:
     real = os.path.realpath(hub_home)
     if real != str(hub_home):
         targets += [f"{real}/secrets/**", f"{real}/agents/*/runtime/**", f"{real}/mcp_server/tokens.json", f"{real}/auth/**"]
+    toks = [str(token_path(socket))]
+    if IS_WINDOWS:  # CLI báo file_path dạng tên dài — thêm biến thể realpath (vd `LEQUYP~1` → tên thật)
+        toks.append(os.path.realpath(toks[0]))
+        targets += toks[1:]
     for t in dict.fromkeys(targets):
         for tool in ("Read", "Grep", "Glob"):
             out.append(f"{tool}({_abs_rule(t)})")
-    for t in (str(token_path(socket)),):
+    for t in dict.fromkeys(toks):
         for tool in FILE_TOOLS:
             out.append(f"{tool}({_abs_rule(t)})")
     return out
@@ -181,29 +228,44 @@ def executable_zones() -> list[str]:
         out += [root, os.path.join(root, ".venv")]
     out += ["/opt/homebrew", "/usr/local", f"{uh}/.local/share/uv", f"{uh}/.local/bin", f"{uh}/.local/lib"]
     out += [f"{uh}/{x}" for x in EXEC_DOTFILES]
-    # bỏ thư mục quá rộng/vô nghĩa (không bao giờ khoá cả $HOME hay /)
+    out += windows_autorun_dirs()
+    # bỏ thư mục quá rộng/vô nghĩa (không bao giờ khoá cả $HOME hay / — Windows: cả gốc ổ)
     bad = {"/", uh, os.path.dirname(uh)}
+    if IS_WINDOWS:
+        bad.add(os.path.splitdrive(uh)[0] + os.sep)
     return [x for x in dict.fromkeys(out) if x and x not in bad]
+
+
+def windows_autorun_dirs() -> list[str]:
+    """Windows: nơi thứ được ghi vào sẽ tự CHẠY như người — thư mục Startup, profile PowerShell, `~/.local/bin`. POSIX: rỗng."""
+    if not IS_WINDOWS:
+        return []
+    uh = os.path.realpath(os.path.expanduser("~"))
+    appdata = os.environ.get("APPDATA") or os.path.join(uh, "AppData", "Roaming")
+    out = [os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup"), os.path.join(uh, ".local", "bin")]
+    for d in (os.path.join(uh, "Documents"), os.path.join(uh, "OneDrive", "Documents")):
+        out += [os.path.join(d, "WindowsPowerShell"), os.path.join(d, "PowerShell")]
+    return out
 
 
 def home_persistence_dirs() -> list[str]:
     uh = os.path.expanduser("~")
     return [f"{uh}/{x}" for x in (".ssh", ".gitconfig", ".config/git", ".config/systemd", ".config/autostart", ".config/fish", ".git-templates",
                                   "Library/LaunchAgents", "Library/LaunchDaemons", ".bashrc", ".bash_profile", ".profile", ".zshrc",
-                                  ".zprofile", ".zshenv", ".zlogin", ".claude", ".claude.json", ".local/bin")]
+                                  ".zprofile", ".zshenv", ".zlogin", ".claude", ".claude.json", ".local/bin")] + windows_autorun_dirs()
 
 
 def other_default_homes(hub_home: Path) -> list[str]:
     """Home mặc định dưới ~ (tên mới `.cfharness` + tên cũ `.cfharness`) KHÔNG phải/không chứa/không nằm trong home đang dùng."""
     from ..paths import default_homes
 
-    cur = {str(hub_home).rstrip("/"), os.path.realpath(hub_home).rstrip("/")}
+    cur = {_posix_form(hub_home).rstrip("/"), _posix_form(os.path.realpath(hub_home)).rstrip("/")}
     out: list[str] = []
     for other in default_homes():
-        o = str(other).rstrip("/")
-        if o in cur or os.path.realpath(o) in cur or any(c.startswith(o + "/") or o.startswith(c + "/") for c in cur):
+        o = _posix_form(other).rstrip("/")
+        if o in cur or _posix_form(os.path.realpath(other)).rstrip("/") in cur or any(c.startswith(o + "/") or o.startswith(c + "/") for c in cur):
             continue
-        out.append(o)
+        out.append(str(other).rstrip("/"))
     return out
 
 
@@ -307,13 +369,18 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
         socks.append(os.environ["SSH_AUTH_SOCK"])
     bad = {str(socket), os.path.realpath(socket)}
     socks = [x for x in dict.fromkeys(socks) if x not in bad and os.path.realpath(x) not in bad]
+    if IS_WINDOWS:  # Windows: thống nhất `/` trước khi so tiền tố với cwd (POSIX: không đổi gì)
+        deny_w, deny_r, socks = [sb_path(x) for x in deny_w], [sb_path(x) for x in deny_r], [sb_path(x) for x in socks]
     if cwd is not None:  # gỡ chặn ghi workspace của chính run (vd bản sao home của eval) — NHƯNG không gỡ vùng bảo vệ cố định (MGR-1b)
-        cw = {str(cwd).rstrip("/"), os.path.realpath(cwd).rstrip("/")}
-        fixed = {p.rstrip("/") for p in fixed_protected_dirs(home, Path(socket), sb_cfg)}
+        cw = {sb_path(cwd).rstrip("/"), sb_path(os.path.realpath(cwd)).rstrip("/")}
+        fixed = {sb_path(p).rstrip("/") for p in fixed_protected_dirs(home, Path(socket), sb_cfg)}
         deny_w = [p for p in deny_w if p.rstrip("/") in fixed or not any(c == p.rstrip("/") or c.startswith(p.rstrip("/") + "/") for c in cw)]
+    # Windows: sandbox chưa có (gate tắt) — `failIfUnavailable: true` làm CLI từ chối MỌI run; chỉ bật khi người đặt rõ
+    # `guard.sandbox.fail_if_unavailable_windows: true` (khi Claude Code mở sandbox Windows)
+    fail = bool(sb_cfg.get("fail_if_unavailable_windows", False)) if IS_WINDOWS else bool(sb_cfg.get("fail_if_unavailable", True))
     sb: dict[str, Any] = {
         "enabled": True,
-        "failIfUnavailable": bool(sb_cfg.get("fail_if_unavailable", True)),
+        "failIfUnavailable": fail,
         "autoAllowBashIfSandboxed": False,  # giữ nguyên luồng quyền: hook guard vẫn quyết từng lệnh
         "allowUnsandboxedCommands": False,  # bỏ qua `dangerouslyDisableSandbox` của model
         "filesystem": {"denyWrite": list(dict.fromkeys(deny_w)), "denyRead": list(dict.fromkeys(deny_r))},
@@ -346,7 +413,7 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
     hub_home = Path(policy_dir).parent
     user_prot = protected_write_paths(hub_home)  # R2-2: tài nguyên NGƯỜI khai báo (vd `.next` prod) → chặn tĩnh tool ghi + sandbox
     perms["deny"] = (list(perms.get("deny") or []) + policy_deny_rules(policy_dir) + secret_read_deny_rules(hub_home, Path(socket))
-                     + exec_zone_deny_rules() + [f"{t}(/{p.rstrip('/')}{suf})" for p in user_prot for t in FILE_TOOLS for suf in ("/**", "")]
+                     + exec_zone_deny_rules() + [f"{t}(/{rule_path(p)}{suf})" for p in user_prot for t in FILE_TOOLS for suf in ("/**", "")]
                      + credential_deny_rules())
     s["permissions"] = perms
     sb_cfg = dict(guard_cfg.get("sandbox") or {})
@@ -423,7 +490,7 @@ def pattern_matches(pattern: str, tool_name: str, tool_input: dict[str, Any] | N
             pre = spec[:-2]
             return any(p == pre or p.startswith(pre + " ") or p.startswith(pre) for p in parts)
         return any(p == spec for p in parts)
-    target = str(ti.get("file_path") or ti.get("notebook_path") or ti.get("path") or "")
+    target = _posix_form(str(ti.get("file_path") or ti.get("notebook_path") or ti.get("path") or ""))
     if spec.startswith("//"):
         spec = spec[1:]
     if spec.endswith("/**"):

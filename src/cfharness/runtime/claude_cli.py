@@ -16,8 +16,11 @@ import time
 from typing import Any, AsyncIterator
 
 from ..events import HubEvent, make_event
+from ..oscompat import IS_WINDOWS, JOBS, exec_argv, interrupt_group, kill_tree, new_group_kwargs
 from ..redact import redact_argv
 from .base import AgentRuntime, OneShotRequest, OneShotResult, RawLog, RunHandle, RunSpec, RuntimeError_, make_adapter
+
+SIGKILL = getattr(signal, "SIGKILL", 9)  # Windows không có SIGKILL — chỉ dùng làm nhãn bước cuối của `stop`
 
 STREAM_LIMIT = 64 * 1024 * 1024  # một dòng stream-json có thể rất dài (init, tool_result lớn)
 
@@ -263,7 +266,7 @@ def claude_version(binary: str = "claude", cache_s: float = 600) -> str | None:
     if hit and now - hit[0] < cache_s:
         return hit[1]
     try:
-        out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=20)
+        out = subprocess.run(exec_argv([binary, "--version"]), capture_output=True, text=True, timeout=20)
         v = out.stdout.strip().split()[0] if out.returncode == 0 and out.stdout.strip() else None
     except (OSError, subprocess.TimeoutExpired):
         v = None
@@ -306,7 +309,7 @@ class ClaudeCliRuntime(AgentRuntime):
             binary = str(self.cfg.get("binary") or "claude")
             # binary khác `claude` mặc định (judge/curator giả trong test) → không có phiên bản trong ma trận → không kiểm cờ
             version = self.version() if binary == "claude" else None
-            argv = oneshot_argv(req, self.cfg, mcp_path=mcp_path, settings_path=settings_path, cli_version=version)
+            argv = exec_argv(oneshot_argv(req, self.cfg, mcp_path=mcp_path, settings_path=settings_path, cli_version=version))
             proc = None
             try:
                 proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
@@ -335,6 +338,7 @@ class ClaudeCliRuntime(AgentRuntime):
     async def start(self, spec: RunSpec) -> RunHandle:
         cli_version = self.version()
         argv, stdin_bytes = build_argv(spec, self.cfg, cli_version)  # H-10: kiểm ma trận cờ theo phiên bản
+        argv = exec_argv(argv)
         spec.cwd.mkdir(parents=True, exist_ok=True)
         spec.stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
         stderr_f = open(spec.stderr_log_path, "ab")
@@ -346,12 +350,20 @@ class ClaudeCliRuntime(AgentRuntime):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=stderr_f,
                 env={**child_env(self.cfg), **(spec.env_extra or {})},
-                start_new_session=True,  # process group riêng → dừng cả tiến trình con (MCP stdio)
+                # process group riêng → dừng cả tiến trình con (MCP stdio). Windows: spawn treo, gán Job Object rồi mới chạy
+                **new_group_kwargs(suspended=IS_WINDOWS),
                 limit=STREAM_LIMIT,
             )
         except OSError as e:
             stderr_f.close()
             raise RuntimeError_(f"không spawn được `{argv[0]}`: {e}") from e
+        if IS_WINDOWS:
+            try:
+                JOBS.create(spec.run_id).adopt(proc.pid, resume=True)
+            except OSError as e:  # không có job = không nhận ra hậu duệ của run → không cho chạy (fail-closed)
+                proc.kill()
+                stderr_f.close()
+                raise RuntimeError_(f"không gán được Job Object cho `{argv[0]}`: {e}") from e
         stream_input = self.cfg.get("input_format", "text") == "stream-json"
         if stdin_bytes is not None and proc.stdin is not None:
             proc.stdin.write(stdin_bytes)
@@ -431,6 +443,7 @@ class ClaudeCliRuntime(AgentRuntime):
                     )
             handle.exit_code = await proc.wait()
         finally:
+            JOBS.finished(handle.run_id)
             handle.raw_log_final = raw.close()
             f = handle.internal.get("stderr_f")
             if f:
@@ -441,6 +454,12 @@ class ClaudeCliRuntime(AgentRuntime):
         proc = handle.internal.get("proc")
         if proc is None or proc.returncode is not None:
             return False
+        if IS_WINDOWS:
+            # SIGINT/SIGTERM → CTRL_BREAK cho process group; SIGKILL → TerminateJobObject (cả hậu duệ, như killpg)
+            if sig == SIGKILL:
+                job = JOBS.get(handle.run_id)
+                return job.terminate() if job is not None else kill_tree(proc.pid)
+            return interrupt_group(proc.pid)
         try:
             os.killpg(proc.pid, sig)
         except ProcessLookupError:
@@ -476,7 +495,7 @@ class ClaudeCliRuntime(AgentRuntime):
                 await asyncio.wait_for(proc.wait(), timeout=min(grace_s, 5.0))
             except asyncio.TimeoutError:
                 pass
-        for sig, wait_s in ((signal.SIGINT, grace_s), (signal.SIGTERM, 5.0), (signal.SIGKILL, 5.0)):
+        for sig, wait_s in ((signal.SIGINT, grace_s), (signal.SIGTERM, 5.0), (SIGKILL, 5.0)):
             if not self._signal(handle, sig):
                 break
             try:
@@ -484,11 +503,17 @@ class ClaudeCliRuntime(AgentRuntime):
                 break
             except asyncio.TimeoutError:
                 continue
-        # dọn tiến trình con còn sót trong group
+        # dọn tiến trình con còn sót trong group (Windows: trong Job Object của run)
+        if IS_WINDOWS:
+            job = JOBS.get(handle.run_id)
+            if job is not None:
+                job.terminate()
+            return
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
+            os.killpg(proc.pid, SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass
+
 
 
 def _redact_for_storage(argv: list[str], spec: RunSpec) -> list[str]:

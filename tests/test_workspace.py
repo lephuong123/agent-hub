@@ -193,6 +193,8 @@ async def test_two_tasks_same_repo_serialized_and_readonly_not_locked(make_hub, 
     assert hub.store.conn.execute("SELECT count(*) FROM runs WHERE task_id=?", (t2["id"],)).fetchone()[0] == 0
     assert int(row2.get("consecutive_failures") or 0) == 0 and int(row2.get("attempts") or 0) == 0
     assert list(hub.runs.locks.list()) == [str(repo.resolve())]
+    # task "running" có trước khi runtime start xong (checkpoint git chậm trên Windows) — chờ gate có thật rồi mới thả
+    await settle(lambda: hub.tasks.row(t1["id"])["current_run_id"] in rt.gates)
     rt.release(hub.tasks.row(t1["id"])["current_run_id"])
     await settle(lambda: hub.tasks.row(t2["id"])["status"] == "running")
     rt.release()

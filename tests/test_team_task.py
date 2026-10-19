@@ -428,6 +428,7 @@ async def test_team_estop(make_hub):
     assert hub.tasks.row(t1["id"])["status"] == "running"  # không --stop-running → run cũ chạy tiếp
     with pytest.raises(Blocked):
         hub.runs.submit("writer", "x", team_id="docs")
+    await settle(lambda: hub.tasks.row(t1["id"])["current_run_id"] in rt.gates)
     rt.release()
     await settle(lambda: hub.tasks.row(t1["id"])["status"] == "done")
     await hub.teams.set_estop("docs", False)
@@ -438,6 +439,7 @@ async def test_team_estop(make_hub):
     assert hub.tasks.row(t2["id"])["consecutive_failures"] == 0
     await hub.teams.set_estop("docs", False)
     await settle(lambda: hub.tasks.row(t2["id"])["status"] == "running")
+    await settle(lambda: hub.tasks.row(t2["id"])["current_run_id"] in rt.gates)  # runtime start xong (checkpoint chậm trên Windows)
     rt.release()
     await settle(lambda: hub.tasks.row(t2["id"])["status"] == "done")
 

@@ -9,9 +9,9 @@ ICON = {"running": "●", "idle": "○", "paused": "⏸", "not_loaded": "·", "e
 
 
 def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
-    s = sub.add_parser("system", help="hệ thống ngoài hub (app trong ~/Workspace + job launchd): đăng ký, xem, tạm dừng/bật lại job", parents=[common])
+    s = sub.add_parser("system", help="hệ thống ngoài hub (app trong ~/Workspace + job launchd/Task Scheduler): đăng ký, xem, tạm dừng/bật lại job", parents=[common])
     ss = s.add_subparsers(dest="sys_action")
-    sc = ss.add_parser("scan", help="quét thư mục gốc tìm hệ thống + job launchd (--apply để đăng ký hệ thống mới; chỉ người)", parents=[common])
+    sc = ss.add_parser("scan", help="quét thư mục gốc tìm hệ thống + job launchd/Task Scheduler (--apply để đăng ký hệ thống mới; chỉ người)", parents=[common])
     sc.add_argument("--apply", action="store_true")
     ss.add_parser("list", help="hệ thống đã đăng ký + trạng thái job", parents=[common])
     sh = ss.add_parser("show", help="chi tiết một hệ thống (--log: đuôi log mỗi job)", parents=[common])
@@ -25,8 +25,8 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     for name, hlp in (("lock", "khoá job: điều phối viên không thao tác được (chỉ người)"), ("unlock", "bỏ khoá job (chỉ người)")):
         p = ss.add_parser(name, help=hlp, parents=[common])
         p.add_argument("label")
-    for name, hlp in (("pause", "tạm dừng job (bootout + disable, giữ qua khởi động lại máy)"), ("resume", "bật lại job đã tạm dừng"),
-                      ("restart", "khởi động lại job (kickstart -k)")):
+    for name, hlp in (("pause", "tạm dừng job (launchd: bootout + disable; Windows: /End + /DISABLE — giữ qua khởi động lại máy)"), ("resume", "bật lại job đã tạm dừng"),
+                      ("restart", "khởi động lại job (launchd: kickstart -k; Windows: /End + /Run)")):
         p = ss.add_parser(name, help=hlp, parents=[common])
         p.add_argument("label")
         p.add_argument("--reason", default="")
@@ -36,7 +36,7 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
 def _print_system(s: dict[str, Any], *, logs: bool = False) -> None:
     print(f"{s['id']}  —  {s.get('title') or ''}\n  {s['path']}")
     if not s["jobs"]:
-        print("  (không có job launchd)")
+        print("  (không có job launchd/Task Scheduler)")
     for j in s["jobs"]:
         extra = f" pid {j['pid']}" if j.get("pid") else (f" exit {j['last_exit']}" if j.get("last_exit") not in (None, 0) else "")
         pb = j.get("paused_by")
@@ -56,7 +56,7 @@ def cmd_system(ctx: Any) -> int:
         if ctx.json:
             ctx.out(r)
             return 0
-        print(f"Gốc: {', '.join(r['roots'])} — tìm thấy {len(r['found'])} hệ thống, {sum(len(s['jobs']) for s in r['found'])} job launchd")
+        print(f"Gốc: {', '.join(r['roots'])} — tìm thấy {len(r['found'])} hệ thống, {sum(len(s['jobs']) for s in r['found'])} job")
         new = set(r["new"])
         for s in r["found"]:
             print(f"  {'+' if s['id'] in new else ' '} {s['id']:<34} {len(s['jobs']):>2} job  {s['title'][:60]}")
@@ -85,7 +85,7 @@ def cmd_system(ctx: Any) -> int:
         return 0
     if act == "rm":
         r = ctx.call("system.rm", {"id": a.id})
-        ctx.out(r) if ctx.json else print(f"Đã gỡ {r['id']} ({r['path']}) khỏi hub — file và job launchd giữ nguyên.")
+        ctx.out(r) if ctx.json else print(f"Đã gỡ {r['id']} ({r['path']}) khỏi hub — file và job giữ nguyên.")
         return 0
     if act in ("lock", "unlock"):
         r = ctx.call("system.lock", {"label": a.label, "on": act == "lock"})

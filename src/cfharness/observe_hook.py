@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import sys
 import time
+
+from cfharness import transport
+from cfharness.oscompat import utf8_stdio
 
 EVENTS = ("PostToolUse", "UserPromptSubmit", "Stop")
 MAX_STDIN = 4 * 1024 * 1024
@@ -41,10 +43,8 @@ def _args(argv: list[str]) -> dict[str, str]:
 
 
 def _send(sock_path: str, msg: dict, timeout: float, *, wait_reply: bool) -> dict | None:
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(timeout)
+    s = transport.connect(sock_path, timeout)
     try:
-        s.connect(sock_path)
         s.sendall((json.dumps(msg, ensure_ascii=False) + "\n").encode("utf-8"))
         if not wait_reply:
             return None
@@ -101,7 +101,7 @@ def observe(argv: list[str], stdin_text: str | None = None) -> dict:
     try:
         msg = _send(sock, {"jsonrpc": "2.0", "id": 1, "method": "hook.observe", "params": {"run_id": run_id, "event": event, "data": meta}}, timeout, wait_reply=True)
         return {"ok": True, "reply": msg}
-    except (socket.timeout, TimeoutError):
+    except TimeoutError:
         reason = "timeout"
     except Exception:
         reason = "unreachable"
@@ -118,6 +118,7 @@ def observe(argv: list[str], stdin_text: str | None = None) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    utf8_stdio()
     try:
         observe(sys.argv[1:] if argv is None else argv)
     except BaseException:  # pragma: no cover - fail-open tuyệt đối

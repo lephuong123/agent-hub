@@ -30,6 +30,8 @@ from typing import Any
 
 import yaml
 
+from ..oscompat import IS_WINDOWS
+
 KINDS = ("path", "repo", "db", "mcp_tool", "hub")
 OPS = ("delete", "overwrite", "write")
 OP_LEVEL = {"delete": 1, "overwrite": 2, "write": 3}
@@ -53,6 +55,37 @@ class ProtectedResource:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+_MSYS_DRIVE = re.compile(r"^/{1,2}([A-Za-z])(?=/|$)")
+_DRIVE = re.compile(r"^([A-Za-z]):/*")
+
+
+def canon_path(p: str) -> str:
+    """Dạng so sánh DUY NHẤT của một đường dẫn. POSIX: giữ nguyên (không đổi hành vi). Windows (Git Bash chạy lệnh của agent):
+    `C:\a\b`, `C:/a/b`, `/c/a/b` (MSYS), `//c/a/b` (luật Claude Code) → `C:/a/b`; ổ đĩa viết hoa, gộp `//`, `.`/`..`;
+    `C:x` (tương đối theo ổ) coi như `C:/x` (bảo thủ). Đường dẫn gốc không ổ đĩa (`/data/x`, `/dev/null`) giữ dạng POSIX.
+    KHÔNG gập chữ hoa/thường — so sánh dùng `fold_path`."""
+    if not IS_WINDOWS or not p:
+        return p
+    import posixpath
+
+    s = p.replace("\\", "/")
+    m = _MSYS_DRIVE.match(s)
+    if m:
+        s = m.group(1) + ":/" + s[m.end():].lstrip("/")
+    m = _DRIVE.match(s)
+    if m:
+        rest = posixpath.normpath("/" + s[m.end():])
+        return m.group(1).upper() + ":" + rest
+    if s.startswith("/"):
+        return "/" + posixpath.normpath(s).lstrip("/")  # posixpath giữ `//x` — gốc MSYS chỉ một `/`
+    return posixpath.normpath(s) if s not in ("", ".") else s
+
+
+def fold_path(p: str) -> str:
+    """Khoá so sánh: Windows không phân biệt hoa/thường (NTFS) → `canon_path` + lower; POSIX: giữ nguyên."""
+    return canon_path(p).lower() if IS_WINDOWS else p
 
 
 def _glob_regex(pat: str) -> re.Pattern[str]:
@@ -82,7 +115,7 @@ def _glob_regex(pat: str) -> re.Pattern[str]:
         else:
             out.append(re.escape(c))
             i += 1
-    return re.compile("^" + "".join(out) + "$")
+    return re.compile("^" + "".join(out) + "$", re.I if IS_WINDOWS else 0)
 
 
 def _has_glob(s: str) -> bool:
@@ -90,7 +123,12 @@ def _has_glob(s: str) -> bool:
 
 
 def path_selector_matches(selector: str, path: str) -> bool:
-    """`path` (tuyệt đối, đã chuẩn hoá) nằm trong tài nguyên `selector` (glob hoặc tiền tố thư mục)."""
+    """`path` (tuyệt đối, đã chuẩn hoá) nằm trong tài nguyên `selector` (glob hoặc tiền tố thư mục).
+    Windows: so trên `canon_path` (selector có thể là `C:\…`, `/c/…`), không phân biệt hoa/thường."""
+    if IS_WINDOWS:
+        selector, path = canon_path(selector), fold_path(path)
+        if not _has_glob(selector):
+            selector = selector.lower()
     if not _has_glob(selector):
         sel = selector.rstrip("/") or "/"
         return path == sel or path.startswith(sel + "/") or sel == "/"
@@ -110,6 +148,7 @@ def path_selector_matches(selector: str, path: str) -> bool:
 
 def selector_root(selector: str) -> str | None:
     """Phần tiền tố cố định (trước ký tự glob đầu tiên) — dùng để biết xoá thư mục cha có chạm tài nguyên không."""
+    selector = canon_path(selector)
     if selector.startswith("**"):
         return None
     if not _has_glob(selector):
@@ -137,11 +176,13 @@ class Policy:
 
     def protected_under(self, directory: str) -> ProtectedResource | None:
         """Có tài nguyên được bảo vệ (theo đường dẫn) nằm BÊN TRONG `directory` (xoá đệ quy sẽ chạm)."""
-        d = directory.rstrip("/") or "/"
+        d = fold_path(directory).rstrip("/") or "/"
         for r in self.resources:
             if r.kind not in ("path", "hub") or not r.guards("delete"):
                 continue
             root = selector_root(r.selector)
+            if root and IS_WINDOWS:
+                root = root.lower()
             if root and (d == "/" or root == d or root.startswith(d + "/")):
                 return r
         return None
@@ -365,8 +406,9 @@ class PolicyStore:
             raise ValueError("selector rỗng")
         if kind == "path":
             selector = os.path.expanduser(selector)
-            if not selector.startswith("/") and not selector.startswith("**"):
+            if not selector.startswith("/") and not selector.startswith("**") and not (IS_WINDOWS and re.match(r"^[A-Za-z]:[\\/]", selector)):
                 selector = os.path.abspath(selector)
+            selector = canon_path(selector)
         if kind == "hub":
             if selector not in HUB_KINDS:
                 raise ValueError(f"hub selector phải là một trong {HUB_KINDS}")
@@ -421,11 +463,13 @@ def repo_deny_for(store: "PolicyStore", cwd: str) -> list[str]:
         return []
     cwd_real = os.path.realpath(os.path.expanduser(cwd))
     root = git_root(cwd_real)
+    fc, fr = fold_path(cwd_real), fold_path(root) if root else None
     out: list[str] = []
     my_urls: set[str] | None = None
     for repo, pats in repos.items():
         r = os.path.realpath(os.path.expanduser(repo))
-        if cwd_real == r or cwd_real.startswith(r + "/") or (root and (root == r or root.startswith(r + "/"))):
+        f = fold_path(r)
+        if fc == f or fc.startswith(f + "/") or (fr and (fr == f or fr.startswith(f + "/"))):
             out.extend(pats)
             continue
         # R2-2: clone / `git worktree` đặt NGOÀI repo nhưng cùng remote → coi là cùng repo

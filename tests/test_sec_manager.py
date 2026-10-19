@@ -31,7 +31,9 @@ def test_fixed_protected_dirs_never_dropped_by_cwd(tmp_path):
         s = build_settings({}, run_id="r", socket=hub / "hub.sock", policy_dir=hub / "policy",
                            guard_cfg={}, approval_timeout_s=300, cwd=Path(evil))
         dw = s["sandbox"]["filesystem"]["denyWrite"]
-        assert evil.rstrip("/") in [p.rstrip("/") for p in dw], (evil, "bị gỡ khỏi denyWrite")
+        from cfharness.guard.runtime import sb_path
+
+        assert sb_path(evil).rstrip("/") in [p.rstrip("/") for p in dw], (evil, "bị gỡ khỏi denyWrite")
 
 
 def test_path_bin_dirs_in_denywrite_and_protected(tmp_path):
@@ -41,9 +43,11 @@ def test_path_bin_dirs_in_denywrite_and_protected(tmp_path):
     s = build_settings({}, run_id="r", socket=hub / "hub.sock", policy_dir=hub / "policy", guard_cfg={}, approval_timeout_s=300)
     dw = s["sandbox"]["filesystem"]["denyWrite"]
     uh = os.path.realpath(os.path.expanduser("~"))
-    assert f"{uh}/.local/bin" in dw
+    from cfharness.guard.runtime import sb_path
+
+    assert sb_path(f"{uh}/.local/bin") in dw
     for d in path_bin_dirs():
-        assert d in dw, d
+        assert sb_path(d) in dw, d
     ps = PolicyStore(hub, user_home=Path(uh))
     ctx = GuardContext(Path(uh) / ".local" / "bin", ps.load(), git_probe=False)
     assert protected_path(ctx, f"{uh}/.local/bin/git", "write") is not None

@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Any, AsyncIterator
 
+from .. import transport
 from ..errors import SYSTEM_ERROR
 from ..rpc import DaemonUnavailable, RpcError, encode, with_auth
 
@@ -28,7 +29,7 @@ class AsyncHubClient:
 
     async def _open(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         try:
-            return await asyncio.open_unix_connection(self.sock_path, limit=LIMIT)
+            return await transport.open_connection(self.sock_path, limit=LIMIT)
         except (FileNotFoundError, ConnectionRefusedError, OSError) as e:
             raise DaemonUnavailable(f"daemon không chạy (socket {self.sock_path}): {e}") from None
 

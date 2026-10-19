@@ -359,6 +359,7 @@ import re as _re
 
 _DANGER = _re.compile(
     r"(?<![\w-])(rm|rmdir|unlink|shred|truncate|dd|mkfs[\w.]*|mv|cp|rsync|chmod|chown|kill|pkill|killall|sudo|crontab|launchctl|systemctl|"
+    r"schtasks|sc|reg|wmic|Register-ScheduledTask|Set-ScheduledTask|Start-ScheduledTask|New-Service|Invoke-WmiMethod|Invoke-CimMethod|"
     r"curl|wget|tee|find|xargs|sqlite3|psql|mysql)(?![\w-])"
     r"|git\s+(push|reset|clean|checkout|restore|branch\s+-D|filter-branch|rebase)|--force(?:-with-lease)?\b|--delete\b|--hard\b|-(?:rf|fr|r|f)\b"
     r"|\b(DROP|DELETE|TRUNCATE|ALTER|UPDATE|INSERT)\b|>>?|\|\s*(?:sh|bash|zsh)\b",

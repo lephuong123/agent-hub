@@ -7,6 +7,7 @@ agent trong run không chạm được bí mật của web.
 
 from __future__ import annotations
 
+import sys
 import asyncio
 import json
 import logging
@@ -26,6 +27,8 @@ from cfharness.web.app import agent_changes, create_app, replay_items
 from cfharness.web.security import (
     COOKIE, NotLoopback, WebAuth, check_login_token, login_url, mint_login_token, read_state, require_loopback, state_path, write_state,
 )
+
+WIN = sys.platform == "win32"  # Windows: quyền POSIX (0600/0700) không áp dụng — hồ sơ người dùng bảo vệ bằng ACL
 
 ISOLATED = Path(__file__).parent / "fixtures" / "claude-hub-isolated-run.jsonl"
 PORT = 8765
@@ -457,7 +460,7 @@ def test_cli_web_url_mints_link_from_running_server_state(hub_home, capsys):
     assert main(["web", "--url"]) == 1  # chưa có server
     key = os.urandom(32)
     p = write_state(hub_home, host="127.0.0.1", port=8790, key=key)
-    assert (p.stat().st_mode & 0o777) == 0o600 and (p.parent.stat().st_mode & 0o777) == 0o700
+    assert WIN or ((p.stat().st_mode & 0o777) == 0o600 and (p.parent.stat().st_mode & 0o777) == 0o700)
     assert read_state(hub_home)["port"] == 8790
     assert main(["web", "--url"]) == 0
     out = capsys.readouterr().out

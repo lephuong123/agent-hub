@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import sys
 import asyncio
 import os
 from pathlib import Path
@@ -18,6 +19,8 @@ from cfharness.runtime import FakeRuntime
 from cfharness.tui.app import AgentFormScreen, AttachScreen, ConfirmScreen, InfoScreen, LearningsScreen, PromptScreen, TasksScreen, TopApp, Transcript
 from cfharness.tui.model import TopModel, activity_line
 from cfharness.tui.takeover import build_takeover_argv
+
+WIN = sys.platform == "win32"  # Windows: quyền POSIX (0600/0700) không áp dụng — hồ sơ người dùng bảo vệ bằng ACL
 
 SHOTS = os.environ.get("CFHARNESS_SCREENSHOTS")
 ISOLATED = Path(__file__).parent / "fixtures" / "claude-hub-isolated-run.jsonl"  # run thật đã cô lập (không vi phạm)
@@ -420,7 +423,7 @@ async def test_takeover_print_and_record(daemon, hub_home):
 
     c = AsyncHubClient(hub_home.socket)
     info = await c.call("run.takeover", {"id": run["id"]})
-    assert Path(info["runtime_dir"], "mcp.json").exists() and oct(Path(info["runtime_dir"], "mcp.json").stat().st_mode)[-3:] == "600"
+    assert Path(info["runtime_dir"], "mcp.json").exists() and (WIN or oct(Path(info["runtime_dir"], "mcp.json").stat().st_mode)[-3:] == "600")
     rec = await c.call("run.takeover_record", {"id": run["id"], "exit_code": 0})
     assert rec["kind"] == "human_takeover" and rec["takeover_of_run_id"] == run["id"] and rec["session_id"] == run["session_id"]
     assert not Path(info["runtime_dir"]).exists()

@@ -184,6 +184,7 @@ def test_legacy_default_home_fallback(monkeypatch, tmp_path):
     for n in names.env_names("HOME"):
         monkeypatch.delenv(n, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows: Path.home() đọc USERPROFILE
     monkeypatch.setattr(paths, "DEFAULT_HOME_DIRNAME", ".cfharness")
     legacy = tmp_path / names.LEGACY_HOME_DIRNAME
     assert paths.resolve_home() == (tmp_path / ".cfharness").resolve()  # chưa có gì → home mới
@@ -196,16 +197,17 @@ def test_legacy_default_home_fallback(monkeypatch, tmp_path):
 
 
 def test_sandbox_denies_other_default_home(monkeypatch, tmp_path):
-    from cfharness.guard.runtime import sandbox_settings
+    from cfharness.guard.runtime import sandbox_settings, sb_path
 
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows: Path.home() đọc USERPROFILE
     monkeypatch.setattr(paths, "DEFAULT_HOME_DIRNAME", ".cfharness")
     hub = tmp_path / names.LEGACY_HOME_DIRNAME  # đang chạy trên home cũ
     hub.mkdir()
     sb = sandbox_settings(hub, hub / "hub.sock", {})
-    other = str(tmp_path / ".cfharness")
+    other = sb_path(tmp_path / ".cfharness")  # Windows: sandbox dùng `/`
     assert other in sb["filesystem"]["denyWrite"] and other in sb["filesystem"]["denyRead"]
-    assert str(hub) not in sb["filesystem"]["denyRead"]
+    assert sb_path(hub) not in sb["filesystem"]["denyRead"]
 
 
 # ============================================================================ home migrate
@@ -244,11 +246,11 @@ def test_home_migrate_dry_run_and_apply(tmp_path):
     assert not src.exists() and (dst / "hub.db").exists()
     conn = sqlite3.connect(str(dst / "hub.db"))
     home_path = conn.execute("SELECT home_path FROM agents WHERE id='a1'").fetchone()[0]
-    assert home_path == f"{dst}/agents/a1"
+    assert Path(home_path) == dst / "agents" / "a1"  # Windows: home_path lưu dạng `\`
     st = json.loads(conn.execute("SELECT value FROM hub_state WHERE key='demo_paths'").fetchone()[0])
     assert st == {"p": f"{dst}/agents/a1", "other": f"{src}2/x"}  # không khớp nhầm tiền tố `<cũ>2`
     payload = conn.execute("SELECT payload FROM events WHERE type='x'").fetchone()[0]
-    assert str(src) in payload  # bảng append-only giữ nguyên lịch sử
+    assert str(src) in json.loads(payload)["cwd"]  # bảng append-only giữ nguyên lịch sử (giải JSON: Windows escape `\`)
     conn.close()
     assert str(dst) in (dst / "config.yaml").read_text() and str(src) not in (dst / "config.yaml").read_text()
     assert "config.yaml" in pl.baseline
@@ -266,7 +268,7 @@ def test_home_migrate_dry_run_and_apply(tmp_path):
     try:
         res = h.integrity.check(restore=False)
         assert not res.get("policy") and not res.get("config") and not res.get("first_baseline"), res
-        assert h.store.get_agent("a1")["home_path"] == f"{dst}/agents/a1"
+        assert Path(h.store.get_agent("a1")["home_path"]) == dst / "agents" / "a1"
     finally:
         h.store.close()
 

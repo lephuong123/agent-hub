@@ -79,6 +79,7 @@ async def test_sandbox_localhost_granted_by_owner_button(env):
     await settle(lambda: d.hub.questions.get(q["id"])["resumed_run_id"])
     assert d.hub.guard.sandbox_overrides("w1")["allow_localhost"] is True
     assert d.hub.questions.get(q["id"])["answer"]["action_result"] == {"ok": True}
+    await settle(lambda: len(_manager_prompts(s)) >= 2)  # lượt tiếp của điều phối viên có thể còn trong hàng đợi
     assert "[hub] Đã thực hiện sandbox_localhost cho agent:w1" in _manager_prompts(s)[-1]
     acts = [e.payload for e in d.hub.store.query_events(types=["question.action"])]
     assert acts and acts[-1]["ok"] is True and acts[-1]["target"] == "agent:w1"
@@ -94,6 +95,7 @@ async def test_owner_denies_nothing_happens(env):
     await rpc(d, "question.answer", {"id": out["question_id"], "keys": ["2"]})
     await settle(lambda: d.hub.questions.get(out["question_id"])["resumed_run_id"])
     assert "api.github.com" not in (d.hub.guard.sandbox_overrides("w1").get("allow_domains") or [])
+    await settle(lambda: len(_manager_prompts(s)) >= 2)  # lượt tiếp của điều phối viên có thể còn trong hàng đợi
     assert "KHÔNG cho phép" in _manager_prompts(s)[-1]
 
 

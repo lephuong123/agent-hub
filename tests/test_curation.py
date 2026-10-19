@@ -17,6 +17,7 @@ from cfharness.errors import HubError
 from cfharness.hub import Hub
 from cfharness.learning.prompts import hermes_curator
 from m3_fake import ScriptedRuntime
+from conftest import fake_cli
 
 WEEKLY_A = """# Weekly report
 1. Collect merged pull requests from the last 7 days.
@@ -190,9 +191,7 @@ async def test_cross_agent_llm_merge_with_fake_binary(team_hub, tmp_path):
         "assert '--json-schema' in argv and argv[argv.index('--tools')+1]=='' and '--no-session-persistence' in argv\n"
         "print(json.dumps({'type':'result','is_error':False,'total_cost_usd':0.0042,'structured_output':{'name':'weekly-engineering-report',"
         "'description':'Weekly engineering report for the team','body':'# Weekly\\n1. Collect merged PRs.\\n','same_class':True,'reason':'same task'}}))\n")
-    binp = tmp_path / "claude"
-    binp.write_text(f"#!/bin/sh\nexec {sys.executable} {fake} \"$@\"\n")
-    binp.chmod(0o755)
+    binp = fake_cli(tmp_path, fake)
     hub.config.set("curation.binary", str(binp))
     rec = await hub.curation.cross_agent(llm=True)
     c = rec["clusters"][0]

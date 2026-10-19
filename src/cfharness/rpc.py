@@ -1,4 +1,4 @@
-"""JSON-RPC 2.0 qua Unix socket, mỗi thông điệp một dòng JSON (newline-delimited).
+"""JSON-RPC 2.0 qua Unix socket (Windows: TCP loopback — `transport.py`), mỗi thông điệp một dòng JSON (newline-delimited).
 
 Vì sao Unix socket (không phải WebSocket localhost):
 - Không mở cổng mạng nào (NFR-14); quyền truy cập = quyền file socket (0600, chỉ user hiện tại) → không cần token.
@@ -20,6 +20,7 @@ import socket
 from pathlib import Path
 from typing import Any, Iterator
 
+from . import transport
 from .errors import SYSTEM_ERROR
 
 PARSE_ERROR = -32700
@@ -62,12 +63,9 @@ class RpcClient:
         self._id = 0
 
     def _connect(self) -> socket.socket:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.settimeout(self.timeout)
         try:
-            s.connect(str(self.sock_path))
+            s = transport.connect(self.sock_path, self.timeout)
         except (FileNotFoundError, ConnectionRefusedError, OSError) as e:
-            s.close()
             raise DaemonUnavailable(f"daemon không chạy (socket {self.sock_path}): {e}") from None
         return s
 

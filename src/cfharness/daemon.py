@@ -17,11 +17,13 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from . import auth as _auth
+from . import transport
 from .errors import BLOCKED, HubError, SYSTEM_ERROR
 from .events import TERMINAL_RUN_EVENTS
 from .hub import Hub
 from .logs import setup_logging
 from .paths import HubPaths
+from .oscompat import IS_WINDOWS, JOBS, detached_kwargs, same_user
 from .rpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, DaemonUnavailable, RpcClient, encode
 from .runtime import AgentRuntime
 
@@ -316,7 +318,12 @@ class Daemon:
                 _auth.CURRENT_CALLER.reset(ctx_token)
 
     async def _handle_conn(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        peer = _auth.peer_pid(writer.get_extra_info("socket"))
+        peer = transport.peer_pid(writer.get_extra_info("socket"))
+        if IS_WINDOWS and (peer is None or not same_user(peer)):
+            # TCP loopback: mọi user trên máy nối được — chỉ nhận tiến trình CÙNG user (file socket 0600 trên POSIX)
+            log.warning("từ chối kết nối từ pid %s (không xác định được / khác user)", peer)
+            writer.close()
+            return
         try:
             while not reader.at_eof():
                 line = await reader.readline()
@@ -423,12 +430,7 @@ class Daemon:
             except Exception:
                 sock.unlink(missing_ok=True)
         self.hub.start()
-        old_umask = os.umask(0o177)
-        try:
-            self.server = await asyncio.start_unix_server(self._handle_conn, path=str(sock), limit=16 * 1024 * 1024)
-        finally:
-            os.umask(old_umask)
-        os.chmod(sock, 0o600)
+        self.server = await transport.start_server(self._handle_conn, sock, limit=16 * 1024 * 1024)
         self.paths.pidfile.write_text(str(os.getpid()), encoding="utf-8")
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
@@ -443,6 +445,7 @@ class Daemon:
             log.info("daemon đang dừng")
             self.server.close()
             await self.hub.stop()
+            JOBS.close_all()
             sock.unlink(missing_ok=True)
             self.paths.pidfile.unlink(missing_ok=True)
 
@@ -479,7 +482,7 @@ def spawn_background(paths: HubPaths, wait_s: float = 15.0) -> int:
         stdin=subprocess.DEVNULL,
         stdout=out,
         stderr=out,
-        start_new_session=True,
+        **detached_kwargs(),
         env=env,
         close_fds=True,
     )

@@ -101,6 +101,7 @@ def test_import_cli_via_daemon_and_home_isolated(hub_home, tmp_path, monkeypatch
     src = fake_claude_json(fake_home)
     before = sha(src)
     monkeypatch.setenv("HOME", str(fake_home))  # mặc định đọc ~/.claude.json GIẢ
+    monkeypatch.setenv("USERPROFILE", str(fake_home))  # Windows: `~` = USERPROFILE, không phải HOME
     spawn_background(hub_home)
     try:
         assert main(["mcp", "import", "--from", "claude", "--all", "--json"]) == 0

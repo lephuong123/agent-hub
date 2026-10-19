@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..errors import Blocked, HubError
 from ..events import HubEvent, make_event
+from ..oscompat import pid_alive
 from ..store import now_iso
 from . import routing
 from .plan import PLAN_SCHEMA, REVIEW_SCHEMA, PlanError, validate_plan, validate_review
@@ -307,12 +308,9 @@ class TaskDispatcher:
         if proc.returncode is not None:
             return False
         try:
-            os.kill(int(ar.handle.pid), 0)
-        except ProcessLookupError:
-            return False
-        except (PermissionError, TypeError, ValueError):
+            return pid_alive(int(ar.handle.pid))
+        except (TypeError, ValueError):
             return True
-        return True
 
     def _promote(self) -> None:
         for t in self._rows("SELECT * FROM tasks WHERE status='todo' AND deleted_at IS NULL"):

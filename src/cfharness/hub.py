@@ -85,7 +85,7 @@ class Hub:
         from .questions import attach as _attach_questions
 
         _attach_questions(self)
-        # Hệ thống ngoài hub (`hub.systems`: app trong ~/Workspace + job launchd) — systems/service.py
+        # Hệ thống ngoài hub (`hub.systems`: app trong ~/Workspace + job launchd/Task Scheduler) — systems/service.py
         from .systems import attach as _attach_systems
 
         _attach_systems(self)

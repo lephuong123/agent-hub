@@ -26,6 +26,7 @@ from typing import Any
 
 from .errors import Conflict, HubError
 from .guard.locks import RepoLocks
+from .oscompat import IS_WINDOWS
 
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache", ".tox", "dist", "build"}
 GIT_ENV = {"LC_ALL": "C", "LANG": "C", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"}
@@ -174,7 +175,12 @@ def _git_blob(root: str, head: str | None, rel: str) -> bytes | None:
     r = _git(root, "cat-file", "-e", f"{head}:{rel}")
     if r.returncode != 0:
         return None
-    b = _git(root, "show", f"{head}:{rel}", binary=True)
+    if IS_WINDOWS:
+        # Windows thường bật core.autocrlf: bản trong HEAD là LF nhưng file trong worktree là CRLF — lấy đúng byte mà
+        # checkout ghi ra (`--filters` áp eol/smudge), không thì revert ghi LF và git báo file "M" dù nội dung y hệt
+        b = _git(root, "cat-file", "--filters", f"{head}:{rel}", binary=True)
+    else:
+        b = _git(root, "show", f"{head}:{rel}", binary=True)
     return b.stdout if b.returncode == 0 else None
 
 

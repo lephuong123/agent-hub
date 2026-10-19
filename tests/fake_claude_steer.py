@@ -38,12 +38,34 @@ def result(text):
          "result": text, "terminal_reason": "completed", "duration_ms": 5, "num_turns": turns})
 
 
-def readline(timeout):
-    r, _, _ = select.select([sys.stdin], [], [], timeout)
-    return sys.stdin.readline() if r else None
-
-
 first = json.loads(sys.stdin.readline())
+
+if sys.platform == "win32":  # select() chỉ dùng được với socket trên Windows → luồng đọc stdin + hàng đợi
+    import queue
+    import threading
+
+    _q = queue.Queue()
+    threading.Thread(target=lambda: ([_q.put(ln) for ln in sys.stdin], _q.put("")), daemon=True).start()
+
+    def readline(timeout):
+        try:
+            return _q.get(timeout=timeout) or None
+        except queue.Empty:
+            return None
+
+    def rest_lines():
+        while True:
+            ln = _q.get()
+            if not ln:
+                return
+            yield ln
+else:
+    def readline(timeout):
+        r, _, _ = select.select([sys.stdin], [], [], timeout)
+        return sys.stdin.readline() if r else None
+
+    def rest_lines():
+        return sys.stdin
 prompt = first["message"]["content"]
 out({"type": "system", "subtype": "init", "model": "claude-haiku-5-5", "cwd": ".", "tools": ["Bash"], "mcp_servers": [],
      "plugins": [], "memory_paths": None, "claude_code_version": "2.1.302"})
@@ -69,7 +91,7 @@ else:
     out({"type": "assistant", "message": {"id": "m1", "content": [{"type": "text", "text": f"echo: {prompt}"}]}})
     result("ok")
 # như CLI thật: tin tới sau `result` → lượt mới; thoát khi stdin đóng
-for line in sys.stdin:
+for line in rest_lines():
     msg = json.loads(line)
     if msg.get("type") != "user":
         continue

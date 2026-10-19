@@ -91,6 +91,48 @@ def decode_images(images: Any) -> list[tuple[str, bytes]]:
             raise HubError(f"ảnh #{i}: chỉ nhận PNG/JPEG/GIF/WebP ≤ {IMAGE_MAX_BYTES // 1024 // 1024} MB")
         out.append((ext, data))
     return out
+FILE_MAX_BYTES = 10 * 1024 * 1024  # trần CỨNG tệp văn bản đính kèm (kênh có thể đặt trần nhỏ hơn, vd notify.telegram.document_max_bytes)
+FILE_MAX_COUNT = 4
+_SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_file_name(name: Any, default: str = "file.txt") -> str:
+    """Tên tệp do người/kênh gửi → tên an toàn (không thư mục, không `..`, ASCII, ≤ 60 ký tự)."""
+    base = re.split(r"[\\/]", str(name or ""))[-1]
+    s = _SAFE_NAME.sub("_", base).strip("._-")[:60].strip("._-")
+    return s or default
+
+
+def decode_files(files: Any, max_bytes: int = FILE_MAX_BYTES) -> list[tuple[str, bytes]]:
+    """`[{name, data_b64}]` (tệp VĂN BẢN: UTF-8, không byte NUL) → `[(tên an toàn, bytes)]`. Sai → HubError, không ghi gì."""
+    if not files:
+        return []
+    if not isinstance(files, list):
+        raise HubError("'files' phải là danh sách")
+    if len(files) > FILE_MAX_COUNT:
+        raise HubError(f"tối đa {FILE_MAX_COUNT} tệp mỗi tin")
+    cap = min(int(max_bytes), FILE_MAX_BYTES)
+    out = []
+    for i, fl in enumerate(files, 1):
+        raw = fl.get("data_b64") if isinstance(fl, dict) else None
+        if not isinstance(raw, str) or len(raw) > cap * 4 // 3 + 8:
+            raise HubError(f"tệp #{i}: thiếu dữ liệu hoặc quá {cap // 1024} KB")
+        try:
+            data = base64.b64decode(raw, validate=True)
+        except (binascii.Error, ValueError):
+            raise HubError(f"tệp #{i}: base64 không hợp lệ") from None
+        if len(data) > cap:
+            raise HubError(f"tệp #{i}: quá {cap // 1024} KB")
+        if b"\x00" in data:
+            raise HubError(f"tệp #{i}: chỉ nhận tệp văn bản (UTF-8)")
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HubError(f"tệp #{i}: chỉ nhận tệp văn bản (UTF-8)") from None
+        out.append((safe_file_name(fl.get("name")), data))
+    return out
+
+
 LIVE = ("queued", "running", "waiting_human")
 TEXT_MAX = 4000
 
@@ -306,6 +348,20 @@ class ManagerService:
         out = []
         for i, (ext, data) in enumerate(imgs, 1):
             name = f"img-{stamp}-{secrets.token_hex(3)}-{i}.{ext}"
+            fd = os.open(d / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            out.append(f"attachments/{name}")
+        return out
+
+    def _save_files(self, agent_id: str, cid: str, docs: list[tuple[str, bytes]]) -> list[str]:
+        """Tệp văn bản người gửi → `<cwd hội thoại>/attachments/doc-<thời điểm>-<ngẫu nhiên>-<tên an toàn>` (0600, O_EXCL)."""
+        d = Path(self._conv_cwd(agent_id, cid)) / "attachments"
+        d.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        out = []
+        for safe, data in docs:
+            name = f"doc-{stamp}-{secrets.token_hex(3)}-{safe}"
             fd = os.open(d / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as f:
                 f.write(data)

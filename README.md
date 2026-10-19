@@ -16,6 +16,11 @@ uv run cfharness --help
 
 Yêu cầu: `claude` trong PATH và đã `claude auth login` (đã kiểm với 2.1.302). `cfharness doctor` kiểm các điều này mà không tốn tiền.
 
+**Windows** (native, không cần WSL): cần Git for Windows (Claude Code chạy Bash/hook qua Git Bash). Daemon nghe TCP
+`127.0.0.1` (file endpoint `hub.sock`), run chạy trong Job Object, hệ thống ngoài hub dùng Task Scheduler thay launchd.
+Gốc workspace mặc định là `~/Workspace` — thư mục khác thì thêm: `cfharness config set workspace.allowed_roots '["C:/WorkSpace"]'`.
+Claude Code chưa có sandbox OS trên Windows (`doctor` cảnh báo) — khác biệt bảo mật và lỗ còn hở: `docs/dev-notes/windows.md`.
+
 ## Dùng nhanh
 
 ```bash

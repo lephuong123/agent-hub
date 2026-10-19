@@ -11,9 +11,12 @@ from __future__ import annotations
 import json
 import os
 import signal
-import socket
 import sys
+import threading
 import time
+
+from cfharness import transport
+from cfharness.oscompat import utf8_stdio
 
 _done = False
 
@@ -36,11 +39,21 @@ def _deny_and_exit(reason: str) -> None:
     os._exit(0)
 
 
+def _arm_alarm(seconds: int) -> None:
+    """Hẹn giờ fail-closed. Windows không có SIGALRM → luồng nền (daemon) gọi `_deny_and_exit` (os._exit giết cả tiến trình)."""
+    reason = "hub guard: hết thời gian chờ quyết định (fail-closed)"
+    if hasattr(signal, "SIGALRM"):
+        signal.signal(signal.SIGALRM, lambda *_: _deny_and_exit(reason))
+        signal.alarm(seconds)
+        return
+    t = threading.Timer(seconds, _deny_and_exit, args=(reason,))
+    t.daemon = True
+    t.start()
+
+
 def rpc_call(sock_path: str, method: str, params: dict, timeout: float) -> dict:
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(timeout)
+    s = transport.connect(sock_path, timeout)
     try:
-        s.connect(sock_path)
         s.sendall((json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, ensure_ascii=False) + "\n").encode("utf-8"))
         buf = b""
         while not buf.endswith(b"\n"):
@@ -71,6 +84,7 @@ def _args(argv: list[str]) -> dict[str, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    utf8_stdio()
     t0 = time.monotonic()
     try:
         a = _args(sys.argv[1:] if argv is None else argv)
@@ -78,8 +92,7 @@ def main(argv: list[str] | None = None) -> int:
         sock = a.get("socket") or os.environ.get("CFHARNESS_SOCKET") or ""
         timeout = float(a.get("timeout") or 300)
         # tự kết thúc TRƯỚC timeout của CLI (CLI hết giờ = fail-open)
-        signal.signal(signal.SIGALRM, lambda *_: _deny_and_exit("hub guard: hết thời gian chờ quyết định (fail-closed)"))
-        signal.alarm(max(1, int(timeout) + 5))
+        _arm_alarm(max(1, int(timeout) + 5))
         raw = sys.stdin.read()
         data = json.loads(raw)
         if not isinstance(data, dict) or not data.get("tool_name"):

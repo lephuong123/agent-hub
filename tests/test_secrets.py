@@ -2,6 +2,7 @@
 
 import os
 import stat
+import sys
 
 import pytest
 
@@ -14,8 +15,9 @@ def test_set_get_permissions(tmp_path):
     name = s.set("internal-mcp token", "sk-very-secret-value-123")
     assert name == "INTERNAL_MCP_TOKEN"
     p = tmp_path / "secrets" / name
-    assert stat.S_IMODE(p.stat().st_mode) == 0o600
-    assert stat.S_IMODE((tmp_path / "secrets").stat().st_mode) == 0o700
+    if sys.platform != "win32":  # Windows không có bit quyền POSIX — file nằm trong hồ sơ user (ACL), xem docs/dev-notes/windows.md
+        assert stat.S_IMODE(p.stat().st_mode) == 0o600
+        assert stat.S_IMODE((tmp_path / "secrets").stat().st_mode) == 0o700
     assert s.get("internal_mcp_token") == "sk-very-secret-value-123"
     listed = s.list()
     assert [x["name"] for x in listed] == [name]

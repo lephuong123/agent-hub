@@ -323,7 +323,7 @@ class KnowledgeStore:
         f = root / rel
         if not f.exists():
             raise NotFound(f"skill '{name}' không có file '{rel}'")
-        files = sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file() and p.name != SKILL_FILE)
+        files = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file() and p.name != SKILL_FILE)  # "/" mọi OS
         if touch and rel == SKILL_FILE and home is None:
             self.touch_skill(s["scope"], s["owner"], name)
         return {"name": name, "scope": s["scope"], "file_path": rel, "content": f.read_text(encoding="utf-8", errors="replace"), "support_files": files}

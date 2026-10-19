@@ -15,6 +15,8 @@ from cfharness.daemon import Daemon
 from cfharness.errors import HubError
 from cfharness.events import make_event
 from cfharness.runs import ActiveRun
+from cfharness import transport
+from conftest import fake_cli
 
 FAKE = Path(__file__).parent / "fake_claude_learn.py"
 BODY = "# Daily status\n\n1. Reply with one line: `Status <date>: OK`.\n"
@@ -39,9 +41,7 @@ async def until(fn, timeout=30.0):
 
 @pytest.fixture
 async def env(hub_home, tmp_path, monkeypatch):
-    fake_bin = tmp_path / "claude"
-    fake_bin.write_text(f"#!/bin/sh\nexec {sys.executable} {FAKE} \"$@\"\n")
-    fake_bin.chmod(0o755)
+    fake_bin = fake_cli(tmp_path, FAKE)
     proj = tmp_path / "projects"
     cfg = {
         "runtime": {"kind": "claude", "claude": {"binary": str(fake_bin), "env_extra": {"FAKE_CLAUDE_PROJECTS": str(proj)}}},
@@ -50,7 +50,7 @@ async def env(hub_home, tmp_path, monkeypatch):
     }
     hub_home.config.write_text(yaml.safe_dump(cfg))
     d = Daemon(hub_home)
-    server = await asyncio.start_unix_server(d._handle_conn, path=str(hub_home.socket))
+    server = await transport.start_server(d._handle_conn, hub_home.socket, limit=16 * 1024 * 1024)
     d.hub.start()
     await rpc(d, "agent.create", {"config": {"id": "r1", "name": "R1", "model": "haiku"}})
     r = await rpc(d, "learn.propose", {"agent": "r1", "target": "skill", "op": "add", "payload": {"name": "daily-status", "description": "Write the daily status line", "body": BODY}})

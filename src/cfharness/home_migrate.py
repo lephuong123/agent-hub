@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .oscompat import IS_WINDOWS
 from .paths import HubPaths, legacy_default_home, legacy_home_in_use, resolve_home
 
 APPEND_ONLY = frozenset({"events", "audit_log", "guard_decisions", "snapshots", "ledger_entries", "integrity_baseline", "sqlite_sequence"})
@@ -53,12 +54,29 @@ class Plan:
 
 def _pattern(old: str) -> re.Pattern[str]:
     # đúng đường dẫn cũ (không khớp `<cũ>2`): theo sau là hết chuỗi, `/`, dấu nháy, khoảng trắng, phân cách JSON
-    return re.compile(re.escape(old) + r"(?=$|[/\"'\s,}\]:;)])")
+    # (Windows: thêm cả dấu gạch ngược — phân cách đường dẫn)
+    sep = r"/\\" if IS_WINDOWS else "/"
+    return re.compile(re.escape(old) + r"(?=$|[" + sep + r"\"'\s,}\]:;)])")
+
+
+def _variants(old: str, new: str) -> list[tuple[str, str]]:
+    """Cặp (cũ, mới) cần thay. Windows: thêm dạng JSON-escape (`\\` trong cột JSON của DB) và dạng `/`."""
+    out = [(old, new)]
+    if IS_WINDOWS:
+        bs = chr(92)
+        out += [(old.replace(bs, bs * 2), new.replace(bs, bs * 2)), (old.replace(bs, "/"), new.replace(bs, "/"))]
+    return list(dict.fromkeys(out))
+
+
+def _needles(olds: list[str]) -> list[str]:
+    """Mọi dạng đường dẫn cũ cần tìm (LIKE trong DB, bytes trong file)."""
+    return list(dict.fromkeys(vo for o in olds for vo, _ in _variants(o, "")))
 
 
 def rewrite_text(s: str, olds: list[str], new: str) -> str:
     for o in olds:
-        s = _pattern(o).sub(new, s)
+        for vo, vn in _variants(o, new):
+            s = _pattern(vo).sub(lambda _m, vn=vn: vn, s)  # hàm thay: `new` có `\U…` (Windows) không bị hiểu là escape regex
     return s
 
 
@@ -93,8 +111,9 @@ def _db_rewrite(db: Path, olds: list[str], new: str, *, apply: bool) -> dict[str
         if apply:
             conn.execute("BEGIN IMMEDIATE")
         for t, c in _db_targets(conn):
-            like = " OR ".join(f'"{c}" LIKE ?' for _ in olds)
-            rows = conn.execute(f'SELECT rowid, "{c}" FROM "{t}" WHERE typeof("{c}")=\'text\' AND ({like})', [f"%{o}%" for o in olds]).fetchall()
+            needles = _needles(olds)
+            like = " OR ".join(f'"{c}" LIKE ?' for _ in needles)
+            rows = conn.execute(f'SELECT rowid, "{c}" FROM "{t}" WHERE typeof("{c}")=\'text\' AND ({like})', [f"%{o}%" for o in needles]).fetchall()
             n = 0
             for rowid, val in rows:
                 nv = rewrite_text(val, olds, new)
@@ -124,9 +143,9 @@ def _scan_files(home: Path, olds: list[str]) -> tuple[list[str], list[str]]:
     """(file cấp hub sẽ viết lại, file khác chứa đường dẫn cũ) — tương đối với `home`."""
     rewrite: list[str] = []
     review: list[str] = []
-    needles = [o.encode() for o in olds]
+    needles = [o.encode() for o in _needles(olds)]
     for dirpath, dirnames, filenames in os.walk(home, followlinks=False):
-        rel_dir = os.path.relpath(dirpath, home)
+        rel_dir = os.path.relpath(dirpath, home).replace(os.sep, "/")  # rel luôn dạng `/` (khớp REWRITE_FILES, baseline)
         rel_dir = "" if rel_dir == "." else rel_dir
         for fn in filenames:
             rel = f"{rel_dir}/{fn}" if rel_dir else fn
@@ -221,7 +240,7 @@ def plan(src: Path, dst: Path) -> Plan:
     elif dst.exists() and any(dst.iterdir()):
         raise ValueError(f"đích {dst} đã tồn tại và không rỗng — chuyển tay hoặc xoá trước")
     s_abs, d_abs = src.resolve() if src.exists() else src, dst.resolve() if dst.exists() else dst
-    if str(d_abs).startswith(str(s_abs) + "/") or str(s_abs).startswith(str(d_abs) + "/") or s_abs == d_abs:
+    if d_abs.is_relative_to(s_abs) or s_abs.is_relative_to(d_abs):  # trùng/lồng — so theo thành phần (đúng cả Windows)
         raise ValueError("thư mục cũ và mới không được trùng/lồng nhau")
     home = dst if pl.moved else src
     olds = _olds(src) if src.exists() else [str(src).rstrip("/")]
