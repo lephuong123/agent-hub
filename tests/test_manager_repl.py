@@ -291,3 +291,89 @@ async def test_oneshot_cli_waits_via_events(env, hub_home, capsys):
     assert len(convs) == 1 and convs[0]["messages"] == 4
     # REPL không hỗ trợ --json
     assert await asyncio.to_thread(cli.main, ["chat", "--json"]) == 1
+
+
+# =========================================================================== kéo–thả đường dẫn + ảnh
+PNG_1PX = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+                        "1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082")
+
+
+def test_dragged_path_is_text_not_command(tmp_path):
+    from cfharness.manager import attachments as A
+
+    folder = tmp_path / "Dự án X"
+    folder.mkdir()
+    cmds = repl.COMMANDS
+    assert A.is_command("/new", cmds) and A.is_command("/open mc_1", cmds)
+    assert A.is_command("/neww", cmds)  # gõ nhầm lệnh → vẫn báo "lệnh không rõ"
+    dragged = str(folder).replace(" ", "\\ ")  # Terminal.app/iTerm escape dấu cách khi kéo vào
+    assert not A.is_command(dragged + " ", cmds)
+    assert not A.is_command(f"'{folder}' xem giúp", cmds)
+    assert not A.is_command("/khong/ton/tai/a", cmds)  # có `/` bên trong → chữ
+    p = A.parse_input(f"{dragged} xem thư mục này")
+    assert p.text == f'"{folder}" xem thư mục này' and p.paths == [str(folder)] and not p.images
+
+
+def test_parse_input_images_from_drag_and_clipboard(tmp_path):
+    from cfharness.manager import attachments as A
+
+    img = tmp_path / "ảnh chụp.png"
+    img.write_bytes(PNG_1PX)
+    p = A.parse_input(f"{str(img).replace(' ', chr(92) + ' ')} lỗi gì đây? [Ảnh #1] [Ảnh #9]", {1: A.Attachment("clipboard-1.png", PNG_1PX)})
+    assert [a.name for a in p.images] == ["ảnh chụp.png", "clipboard-1.png"]
+    assert p.text == "[ảnh: ảnh chụp.png] lỗi gì đây? [ảnh: clipboard-1.png] [Ảnh #9]"
+    big = tmp_path / "big.png"
+    big.write_bytes(PNG_1PX + b"\0" * (A.MAX_IMAGE_BYTES + 1))
+    p = A.parse_input(str(big))
+    assert not p.images and p.errors and "quá lớn" in p.errors[0]
+
+
+async def test_send_folder_and_image_saved_for_manager(env, hub_home, tmp_path):
+    d = env
+    await designate(d)
+    folder = tmp_path / "repo A"
+    folder.mkdir()
+    img = tmp_path / "loi.png"
+    img.write_bytes(PNG_1PX)
+    s, buf = session(hub_home, new=True)
+    assert await s.open()
+    try:
+        assert await s.handle(str(folder).replace(" ", "\\ ") + " làm việc ở đây")
+        assert "lệnh không rõ" not in buf.getvalue()
+        rid = s.state.active_run
+        await wait_status(d, rid)
+        assert f'"{folder}" làm việc ở đây' in d.hub.store.get_run(rid)["prompt"]
+        d.hub.runs.runtime().release(rid)  # type: ignore[attr-defined]
+        assert await s.wait_idle(10)
+        s.pasted = {1: repl.A.Attachment("clipboard-1.png", PNG_1PX)}
+        assert await s.handle(f"{img} và [Ảnh #1] — lỗi gì?")
+        rid2 = s.state.active_run
+        await wait_status(d, rid2)
+        run = d.hub.store.get_run(rid2)
+        files = sorted((d.hub.store.get_run(rid2)["cwd"] and __import__("pathlib").Path(run["cwd"]) / "attachments").iterdir())
+        assert len(files) == 2 and all(f.read_bytes() == PNG_1PX and (f.stat().st_mode & 0o777) == 0o600 for f in files)
+        assert "Read tool" in run["prompt"] and all(f"attachments/{f.name}" in run["prompt"] for f in files)
+        assert "📎 loi.png" in buf.getvalue()
+        hist = await s.client.call("manager.history", {"conversation_id": s.state.conversation_id})
+        assert "📎 2 ảnh" in [m for m in hist if m["role"] == "user"][-1]["text"]
+        row = d.hub.store.conn.execute("SELECT data FROM audit_log WHERE kind='manager.chat' ORDER BY id DESC LIMIT 1").fetchone()
+        data = json.loads(row["data"])
+        assert data["params"]["images"][0]["b64_chars"] > 0 and "data_b64" not in row["data"]
+        d.hub.runs.runtime().release(rid2)  # type: ignore[attr-defined]
+        assert await s.wait_idle(10)
+    finally:
+        await s.close()
+
+
+async def test_daemon_rejects_non_image_payload(env, hub_home):
+    import base64
+
+    d = env
+    await designate(d)
+    c = AsyncHubClient(hub_home.socket, channel="cli")
+    for bad in ([{"name": "x.png", "data_b64": base64.b64encode(b"#!/bin/sh\nrm -rf ~").decode()}],
+                [{"name": "x.png", "data_b64": "!!!"}],
+                [{"name": "a", "data_b64": base64.b64encode(PNG_1PX).decode()}] * 5):
+        with pytest.raises(Exception):
+            await c.call("manager.chat", {"channel": "cli", "text": "x", "images": bad}, audit=True)
+    assert d.hub.store.conn.execute("SELECT COUNT(*) FROM manager_messages").fetchone()[0] == 0

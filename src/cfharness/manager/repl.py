@@ -27,6 +27,7 @@ from rich.text import Text
 from ..rpc import DaemonUnavailable, RpcError
 from ..termsafe import one_line
 from ..tui.client import AsyncHubClient, subscribe
+from . import attachments as A
 from . import chatview as V
 
 NO_MANAGER = (
@@ -36,6 +37,7 @@ NO_MANAGER = (
     "    cfharness manager set dieu-phoi\n"
 )
 REPLAY = 6  # số tin in lại khi mở hội thoại cũ
+COMMANDS = set(V.COMMANDS) | {"/ls", "/q", "/h", "/?", "/exit"}
 
 
 def _err(e: Exception) -> str:
@@ -75,6 +77,7 @@ class ChatSession:
         self.want_conv = conversation_id
         self.new = new
         self.replay = replay
+        self.pasted: dict[int, A.Attachment] = {}  # ảnh dán bằng Ctrl-V, theo số `[Ảnh #n]` trong dòng đang gõ
         self.state: V.ChatState | None = None
         self.changed = asyncio.Event()
         self._pump_task: asyncio.Task | None = None
@@ -195,11 +198,19 @@ class ChatSession:
     async def send(self, text: str) -> dict[str, Any] | None:
         st = self.state
         assert st is not None
-        text = text.strip()
-        if not text:
+        parsed = A.parse_input(text.strip(), self.pasted)
+        self.pasted = {}
+        for err in parsed.errors:
+            self.out.write(V.render({"kind": "note", "text": err, "tone": "warn"}))
+        text = parsed.text
+        if not text and not parsed.images:
             return None
-        self.out.write(V.render({"kind": "user", "text": text}))
+        self.out.write(V.render({"kind": "user", "text": text or "(ảnh)"}))
+        if parsed.images:
+            self.out.write(V.render({"kind": "note", "text": "📎 " + ", ".join(f"{a.name} ({len(a.data) // 1024} KB)" for a in parsed.images)}))
         params: dict[str, Any] = {"channel": V.CHANNEL, "text": text}
+        if parsed.images:
+            params["images"] = [a.wire() for a in parsed.images]
         if st.conversation_id:
             params["conversation_id"] = st.conversation_id
         self._inflight += 1
@@ -253,7 +264,7 @@ class ChatSession:
         s = line.strip()
         if not s:
             return True
-        if not s.startswith("/") or s.startswith("//"):
+        if not A.is_command(s, COMMANDS):  # đường dẫn kéo vào (`/Users/…`) là chữ, không phải lệnh
             await self.send(s[1:] if s.startswith("//") else s)
             return True
         cmd, _, arg = s.partition(" ")
@@ -341,6 +352,22 @@ async def run_tty(session: ChatSession, home: Path) -> int:
     @kb.add("escape", "enter")
     def _newline(event: Any) -> None:
         event.current_buffer.insert_text("\n")
+
+    @kb.add("c-v")
+    def _paste(event: Any) -> None:
+        """Ctrl-V: ảnh trong clipboard → `[Ảnh #n]` (gửi kèm tin); không có ảnh → dán chữ trong clipboard."""
+        img = A.clipboard_image()
+        if img:
+            if len(img) > A.MAX_IMAGE_BYTES:
+                session.out.write(V.render({"kind": "note", "text": f"ảnh trong clipboard quá lớn ({len(img) // 1024} KB)", "tone": "warn"}))
+                return
+            n = max(session.pasted, default=0) + 1
+            session.pasted[n] = A.Attachment(f"clipboard-{n}.png", img)
+            event.current_buffer.insert_text(A.MARKER.format(n=n) + " ")
+            return
+        txt = A.clipboard_text()
+        if txt:
+            event.current_buffer.insert_text(txt)
 
     def toolbar() -> Any:
         st = session.state

@@ -24,6 +24,7 @@ from textual.screen import Screen
 from textual.widgets import Footer, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
+from ..manager import attachments as A
 from ..manager import chatview as V
 from ..rpc import DaemonUnavailable, RpcError
 from ..termsafe import one_line
@@ -55,6 +56,7 @@ class ManagerScreen(Screen):
         Binding("ctrl+n", "new_conv", "Hội thoại mới"),
         Binding("n", "new_conv", "Hội thoại mới", show=False),
         Binding("ctrl+t", "stop_turn", "Dừng lượt"),
+        Binding("ctrl+v", "paste_image", "Dán ảnh", priority=True),
         Binding("ctrl+r", "reload", "Tải lại", show=False),
     ]
 
@@ -66,6 +68,7 @@ class ManagerScreen(Screen):
         self._sub: Any = None
         self._sending = False
         self._held: list[dict[str, Any]] = []
+        self.pasted: dict[int, A.Attachment] = {}  # ảnh dán bằng Ctrl-V (`[Ảnh #n]`)
 
     @property
     def client(self) -> Any:
@@ -273,12 +276,40 @@ class ManagerScreen(Screen):
         ev.input.value = ""
         await self.send(text)
 
+    def action_paste_image(self) -> None:
+        """Ctrl-V: ảnh trong clipboard → `[Ảnh #n]` trong ô nhập (gửi kèm tin); không có ảnh → dán chữ."""
+        inp = self.query_one("#mgr-input", Input)
+        img = A.clipboard_image()
+        if img:
+            if len(img) > A.MAX_IMAGE_BYTES:
+                self.log_item({"kind": "note", "text": f"ảnh trong clipboard quá lớn ({len(img) // 1024} KB)", "tone": "warn"})
+                return
+            n = max(self.pasted, default=0) + 1
+            self.pasted[n] = A.Attachment(f"clipboard-{n}.png", img)
+            inp.insert_text_at_cursor(A.MARKER.format(n=n) + " ")
+        else:
+            txt = A.clipboard_text()
+            if txt:
+                inp.insert_text_at_cursor(txt)
+        inp.focus()
+
     async def send(self, text: str) -> None:
         st = self.state
         if st is None:
             return
-        self.log_item({"kind": "user", "text": text})
+        parsed = A.parse_input(text, self.pasted)
+        self.pasted = {}
+        for err in parsed.errors:
+            self.log_item({"kind": "note", "text": err, "tone": "warn"})
+        text = parsed.text
+        if not text and not parsed.images:
+            return
+        self.log_item({"kind": "user", "text": text or "(ảnh)"})
+        if parsed.images:
+            self.log_item({"kind": "note", "text": "📎 " + ", ".join(f"{a.name} ({len(a.data) // 1024} KB)" for a in parsed.images)})
         params: dict[str, Any] = {"channel": V.CHANNEL, "text": text}
+        if parsed.images:
+            params["images"] = [a.wire() for a in parsed.images]
         new_conv = st.conversation_id is None
         if st.conversation_id:
             params["conversation_id"] = st.conversation_id

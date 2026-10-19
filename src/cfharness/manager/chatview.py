@@ -277,8 +277,8 @@ def render(item: dict[str, Any], *, manager_name: str = "Điều phối viên") 
     return Text(f"  • {clean(item.get('text'))}", style=f"italic {tone}")
 
 
-REPL_KEYS = (("Enter", "gửi"), ("/help", "lệnh"), ("Ctrl-C", "dừng lượt"), ("Ctrl-D", "thoát"))
-TUI_KEYS = (("Enter", "gửi"), ("Ctrl-T", "dừng lượt"), ("Ctrl-N", "hội thoại mới"), ("Esc", "về bảng"))
+REPL_KEYS = (("Enter", "gửi"), ("Ctrl-V", "dán ảnh"), ("/help", "lệnh"), ("Ctrl-C", "dừng lượt"), ("Ctrl-D", "thoát"))
+TUI_KEYS = (("Enter", "gửi"), ("Ctrl-V", "dán ảnh"), ("Ctrl-T", "dừng lượt"), ("Ctrl-N", "hội thoại mới"), ("Esc", "về bảng"))
 
 
 def banner(manager_id: str, conversation_id: str | None, *, title: str | None = None, resumed: int = 0,
@@ -324,6 +324,8 @@ def help_text() -> Text:
         t.append(f"  {c:<14}", style="bold")
         t.append(f"{d}\n", style="grey62")
     t.append("  Gõ khi điều phối viên đang làm = chèn thêm ý vào lượt đó (steer).\n", style="grey50")
+    t.append("  Kéo thư mục/file vào = gửi đường dẫn; kéo file ảnh vào hoặc Ctrl-V (ảnh trong clipboard) = gửi kèm ảnh (≤ 4, ≤ 5 MB).\n", style="grey50")
+    t.append("  Muốn gửi chữ bắt đầu bằng `/` mà trùng tên lệnh: gõ `//…`.\n", style="grey50")
     t.append("  Duyệt thao tác phá huỷ KHÔNG làm ở đây: cfharness approvals · cfharness approve <id>\n", style="grey50")
     return t
 

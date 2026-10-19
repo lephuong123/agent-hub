@@ -76,6 +76,12 @@ def chat_prompt(channel: str, conversation_id: str, text: str, *, key: str = KEY
     )
 
 
+def images_note(files: list[str]) -> str:
+    """Ảnh người gửi kèm tin (đã lưu trong cwd hội thoại) — điều phối viên xem bằng Read."""
+    return ("\n\n[The owner attached " + str(len(files)) + " image(s), saved in your working directory. Look at each with the Read tool "
+            "before replying: " + ", ".join(files) + "]")
+
+
 def carry_over(history: list[dict[str, Any]], *, key: str = KEY_PLACEHOLDER) -> str:
     """Session mới của một hội thoại cũ (xoay session / run lỗi): mang theo vài tin gần nhất — như DỮ LIỆU tham khảo."""
     if not history:

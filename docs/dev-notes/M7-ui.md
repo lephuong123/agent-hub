@@ -84,3 +84,12 @@ steer + Ctrl-T + Ctrl-N + chèn markup + chọn lại hội thoại). Ảnh: `do
 
 Việc dở: REPL không có nút/lệnh duyệt trong phiên (cố ý); chữ chạy chỉ hiện đuôi ở thanh trạng thái (bản cuối in khi có `manager.reply`); hành động của
 nhịp (heartbeat) không hiện trong chat terminal (xem web).
+
+### 6.1 Kéo–thả đường dẫn + ảnh (2026-10-19)
+- Dòng bắt đầu bằng `/` CHỈ là lệnh khi token đầu là tên lệnh đã biết (`repl.COMMANDS`); đường dẫn kéo vào terminal (`/Users/a/My\ Folder`,
+  `'…'`, `file://…`) là chữ — đường dẫn có thật được bỏ escape (`manager/attachments.parse_input`). Gõ nhầm `/neww` vẫn báo "lệnh không rõ".
+- Ảnh: kéo file ảnh vào (png/jpg/gif/webp) hoặc **Ctrl-V** (ảnh trong clipboard: macOS `osascript`, Linux `wl-paste`/`xclip`; Cmd-V của
+  terminal không mang ảnh) → `[Ảnh #n]`; cả REPL lẫn TUI. `manager chat "<tin>" ảnh.png` cũng gửi kèm.
+- RPC `manager.chat{images:[{name, data_b64}]}` (≤ 4 ảnh, ≤ 5 MB; định dạng theo magic bytes, sai → lỗi trước mọi ghi) → daemon lưu
+  `<cwd hội thoại>/attachments/img-<ts>-<rand>-<i>.<ext>` (0600, tên do hub đặt) và thêm vào prompt: xem bằng tool Read. Tin lưu lịch sử
+  ghi "📎 n ảnh". Audit KHÔNG chứa base64 (`wrap_with_audit` thay bằng `{name, b64_chars}`). Web/Telegram chưa dùng tham số này.

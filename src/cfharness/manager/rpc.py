@@ -3,7 +3,8 @@
 - `manager.get {}` → `{agent_id|null, conversations:[Conv], last_tick, next_tick, tick:{heartbeat, interval_s, pending_events,
   last_tick_run_id, last_reason, last_skip, running}, designated_at}`
 - `manager.set {agent_id|null}` (HUMAN_ONLY) → như `manager.get`
-- `manager.chat {channel, text, conversation_id?, reuse_latest?}` (HUMAN_ONLY) → `{conversation_id, run_id, session_id?, resumed?, steered?}`.
+- `manager.chat {channel, text, conversation_id?, reuse_latest?, images?:[{name, data_b64}]}` (HUMAN_ONLY; ảnh PNG/JPEG/GIF/WebP ≤ 5 MB, ≤ 4 → lưu
+  `<cwd hội thoại>/attachments/`, prompt bảo điều phối viên xem bằng Read; `text` được rỗng khi có ảnh) → `{conversation_id, run_id, session_id?, resumed?, steered?}`.
   Không có `conversation_id` → hội thoại MỚI (trừ `reuse_latest=true`: hội thoại gần nhất của đúng kênh). Hội thoại đang có run
   chạy → tin được steer vào run đó (`steered=true`). `conversation_id` phải cùng `channel` (khác → Conflict); hội thoại của manager CŨ →
   tự chuyển sang hội thoại gần nhất/mới của manager hiện tại trên kênh đó (`switched_from`).
@@ -50,8 +51,8 @@ def register_rpc(daemon: "Daemon") -> None:
         return m.set(p.get("agent_id") or None, by="user", channel=ch)
 
     async def _chat(p: dict[str, Any]) -> dict[str, Any]:
-        return await m.chat(str(_req(p, "channel")), str(_req(p, "text")), conversation_id=p.get("conversation_id"),
-                            reuse_latest=bool(p.get("reuse_latest")))
+        return await m.chat(str(_req(p, "channel")), str(p.get("text") or ""), conversation_id=p.get("conversation_id"),
+                            reuse_latest=bool(p.get("reuse_latest")), images=p.get("images"))
 
     methods: dict[str, Callable[[dict[str, Any]], Any]] = {
         "manager.get": lambda p: m.get(),

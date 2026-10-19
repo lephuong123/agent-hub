@@ -463,6 +463,9 @@ def wrap_with_audit(hub: "Hub", method: str, fn: Callable[[dict[str, Any]], Any]
                 params["soul"] = "(updated)" if p.get("soul") else None
             if "prompt" in params:
                 params["prompt"] = _trunc(params["prompt"], 500)
+            if isinstance(params.get("images"), list):  # manager.chat: không ghi dữ liệu ảnh (base64) vào audit append-only
+                params["images"] = [{"name": str((i or {}).get("name") or "")[:80], "b64_chars": len(str((i or {}).get("data_b64") or ""))}
+                                    for i in params["images"][:10] if isinstance(i, dict)]
             hub.audit.record(
                 method,
                 p.get("agent") or p.get("agent_id") or (_target_of(p) if method.startswith("agent.") or method == "mcp.agent_create" else None),

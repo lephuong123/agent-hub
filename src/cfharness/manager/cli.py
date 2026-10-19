@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from pathlib import Path
 from typing import Any
 
 
@@ -112,8 +113,24 @@ def cmd_chat(ctx: Any) -> int:
             eprint("lỗi: chat qua lại chỉ dùng kênh cli")
             return 1
         return asyncio.run(repl.repl(ctx.paths.socket, ctx.paths.home, conversation_id=a.conversation, new=a.new, timeout=a.timeout))
-    text = " ".join(a.text)
+    from . import attachments as attach
+
+    words, images = [], []
+    for w in a.text:  # shell đã bỏ escape: mỗi đối số là một token; file ảnh có thật → gửi kèm
+        p = Path(w).expanduser()
+        if p.suffix.lower() in attach.IMAGE_SUFFIXES and p.is_file():
+            att, err = attach.read_image(p)
+            if err:
+                eprint(f"lỗi: {err}")
+                return 1
+            images.append(att)
+            words.append(f"[ảnh: {p.name}]")
+        else:
+            words.append(w)
+    text = " ".join(words)
     params: dict[str, Any] = {"channel": a.channel, "text": text}
+    if images:
+        params["images"] = [x.wire() for x in images]
     if a.conversation:
         params["conversation_id"] = a.conversation
     elif not a.new:

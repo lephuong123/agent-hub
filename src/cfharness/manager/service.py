@@ -18,8 +18,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
+import os
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -40,6 +43,42 @@ if TYPE_CHECKING:
 log = logging.getLogger("cfharness.manager")
 
 HEARTBEAT_CHANNEL = "heartbeat"
+IMAGE_MAX_BYTES = 5 * 1024 * 1024
+IMAGE_MAX_COUNT = 4
+_IMAGE_MAGIC = ((b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpg"), (b"GIF87a", "gif"), (b"GIF89a", "gif"))
+
+
+def _image_ext(data: bytes) -> str | None:
+    for magic, ext in _IMAGE_MAGIC:
+        if data.startswith(magic):
+            return ext
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def decode_images(images: Any) -> list[tuple[str, bytes]]:
+    """`[{name, data_b64}]` → `[(ext, bytes)]`. Định dạng theo magic bytes (không tin tên/đuôi người gửi); sai → HubError, không ghi gì."""
+    if not images:
+        return []
+    if not isinstance(images, list):
+        raise HubError("'images' phải là danh sách")
+    if len(images) > IMAGE_MAX_COUNT:
+        raise HubError(f"tối đa {IMAGE_MAX_COUNT} ảnh mỗi tin")
+    out = []
+    for i, im in enumerate(images, 1):
+        raw = im.get("data_b64") if isinstance(im, dict) else None
+        if not isinstance(raw, str) or len(raw) > IMAGE_MAX_BYTES * 4 // 3 + 8:
+            raise HubError(f"ảnh #{i}: thiếu dữ liệu hoặc quá {IMAGE_MAX_BYTES // 1024 // 1024} MB")
+        try:
+            data = base64.b64decode(raw, validate=True)
+        except (binascii.Error, ValueError):
+            raise HubError(f"ảnh #{i}: base64 không hợp lệ") from None
+        ext = _image_ext(data)
+        if ext is None or len(data) > IMAGE_MAX_BYTES:
+            raise HubError(f"ảnh #{i}: chỉ nhận PNG/JPEG/GIF/WebP ≤ {IMAGE_MAX_BYTES // 1024 // 1024} MB")
+        out.append((ext, data))
+    return out
 LIVE = ("queued", "running", "waiting_human")
 TEXT_MAX = 4000
 
@@ -232,6 +271,20 @@ class ManagerService:
                           (cid, role, text[:20000], run_id, now_iso()))
         self.conn.execute("UPDATE manager_conversations SET updated_at=? WHERE id=?", (now_iso(), cid))
 
+    def _save_images(self, agent_id: str, cid: str, imgs: list[tuple[str, bytes]]) -> list[str]:
+        """Ảnh người gửi → `<cwd hội thoại>/attachments/` (0600, tên do hub đặt). Trả đường dẫn tương đối theo cwd."""
+        d = Path(self._conv_cwd(agent_id, cid)) / "attachments"
+        d.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        out = []
+        for i, (ext, data) in enumerate(imgs, 1):
+            name = f"img-{stamp}-{secrets.token_hex(3)}-{i}.{ext}"
+            fd = os.open(d / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            out.append(f"attachments/{name}")
+        return out
+
     def _conv_cwd(self, agent_id: str, cid: str) -> str:
         home = Path(self.hub.agents.get_row(agent_id)["home_path"])
         d = home / "workspaces" / f"conv-{cid}"
@@ -270,12 +323,16 @@ class ManagerService:
                           (run["session_id"], run["id"], st, now_iso(), conv["id"]))
         return run
 
-    async def chat(self, channel: str, text: str, *, conversation_id: str | None = None, reuse_latest: bool = False) -> dict[str, Any]:
+    async def chat(self, channel: str, text: str, *, conversation_id: str | None = None, reuse_latest: bool = False,
+                   images: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         aid = self.agent_id()
         if not aid:
             raise Conflict("chưa có điều phối viên — chỉ định bằng `cfharness manager set <agent>`")
         text = str(text or "").strip()
         channel = str(channel or "cli")
+        imgs = decode_images(images)  # kiểm TRƯỚC mọi ghi (định dạng theo magic bytes, kích thước, số lượng)
+        if not text and imgs:
+            text = "(xem ảnh đính kèm)"
         if not text:
             raise HubError("thiếu 'text'")
         if channel == HEARTBEAT_CHANNEL:
@@ -295,6 +352,10 @@ class ManagerService:
             conv = self._conv_row(r[0]) if r else None
         if conv is None:
             conv = self._new_conv(channel, aid, text.splitlines()[0])
+        files = self._save_images(aid, conv["id"], imgs) if imgs else []
+        prompt_text = text + prompts.images_note(files) if files else text
+        if files:
+            text = f"{text}\n📎 {len(files)} ảnh: " + ", ".join(f.rsplit("/", 1)[-1] for f in files)
         busy = self._active_runs(aid, conv["id"])
         if busy:
             # run của hội thoại đang chạy → gửi tin vào run đó (steer) thay vì chồng run thứ hai cùng session
@@ -304,12 +365,12 @@ class ManagerService:
             if r["status"] != "running":
                 raise Conflict(f"điều phối viên đang xử lý tin trước của hội thoại này (run {r['id']}, {r['status']}) — thử lại sau")
             try:
-                res = await steer(self.hub, r["id"], self.render_prompt(r["id"], prompts.chat_prompt(channel, conv["id"], text)), by="user", channel=channel)
+                res = await steer(self.hub, r["id"], self.render_prompt(r["id"], prompts.chat_prompt(channel, conv["id"], prompt_text)), by="user", channel=channel)
             except Conflict:
                 raise Conflict(f"điều phối viên đang kết thúc lượt trả lời trước (run {r['id']}) — gửi lại sau giây lát") from None
             self._add_msg(conv["id"], "user", text, r["id"])
             return {"conversation_id": conv["id"], "run_id": r["id"], "steered": True, "seq": (res or {}).get("seq")}
-        run = self._submit(conv, prompts.chat_prompt(channel, conv["id"], text), kind="chat", budget=self.cfg("chat_budget_usd"))
+        run = self._submit(conv, prompts.chat_prompt(channel, conv["id"], prompt_text), kind="chat", budget=self.cfg("chat_budget_usd"))
         self._add_msg(conv["id"], "user", text, run["id"])
         self.conn.execute("UPDATE manager_conversations SET turns=turns+1 WHERE id=?", (conv["id"],))
         out = {"conversation_id": conv["id"], "run_id": run["id"], "session_id": run["session_id"], "resumed": bool(run.get("resumed_from_session"))}

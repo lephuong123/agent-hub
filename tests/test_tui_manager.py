@@ -144,3 +144,31 @@ async def test_new_conversation_stop_turn_and_injection(env, hub_home):
         await pilot.press("enter")
         assert await until(lambda: scr.state.conversation_id == c1 and "thêm ý" in log_text(scr), pilot=pilot)
 
+
+
+async def test_ctrl_v_pastes_clipboard_image_and_sends(env, hub_home, monkeypatch):
+    from pathlib import Path
+
+    from cfharness.manager import attachments as A
+    from test_manager_repl import PNG_1PX
+
+    d = env
+    await designate(d)
+    monkeypatch.setattr(A, "clipboard_image", lambda: PNG_1PX)
+    app = TopApp(hub_home.socket, refresh_s=0.5)
+    async with app.run_test(size=SIZE) as pilot:
+        scr = await open_manager(app, pilot)
+        await pilot.press("ctrl+v")
+        inp = scr.query_one("#mgr-input", Input)
+        assert await until(lambda: "[Ảnh #1]" in inp.value, pilot=pilot)
+        for ch in "lỗi gì?":
+            await pilot.press(ch) if ch != " " else await pilot.press("space")
+        await pilot.press("enter")
+        assert await until(lambda: scr.state.active_run is not None, pilot=pilot)
+        rid = scr.state.active_run
+        await wait_status(d, rid)
+        run = d.hub.store.get_run(rid)
+        files = list((Path(run["cwd"]) / "attachments").iterdir())
+        assert len(files) == 1 and files[0].read_bytes() == PNG_1PX and f"attachments/{files[0].name}" in run["prompt"]
+        assert "clipboard-1.png" in log_text(scr) and scr.pasted == {}
+        d.hub.runs.runtime().release(rid)  # type: ignore[attr-defined]
