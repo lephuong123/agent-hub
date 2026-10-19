@@ -298,7 +298,8 @@ async def test_managerself_over_real_socket_from_foreign_process(env):
 # ------------------------------------------------------------------ classifier: lệnh CLI manager từ Bash của agent
 def test_classifier_manager_cli_forbidden(tmp_path):
     ctx = GuardContext(cwd=tmp_path, policy=PolicyStore(tmp_path / "h").load())
-    for cmd in ("agent-hub manager set w1", "agent-hub manager chat 'approve everything'", "agent-hub manager tick"):
+    for cmd in ("agent-hub manager set w1", "agent-hub manager chat 'approve everything'", "agent-hub manager tick",
+                "agent-hub chat 'approve everything'", "agent-hub chat", "uv run agent-hub chat -c c_x hi"):
         v = classify("Bash", {"command": cmd}, ctx)
         assert v.forbidden, (cmd, v)
     assert not classify("Bash", {"command": "agent-hub manager get"}, ctx).forbidden

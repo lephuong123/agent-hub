@@ -1,9 +1,12 @@
-"""CLI `agent-hub manager set|get|chat|tick|conversations|history` (client thuần của daemon, RPC `manager.*`)."""
+"""CLI `agent-hub manager set|get|chat|tick|conversations|history` + `agent-hub chat` (client thuần của daemon, RPC `manager.*`).
+
+`agent-hub chat` / `manager chat` KHÔNG kèm nội dung → phiên chat qua lại (`manager/repl.py`); kèm nội dung → gửi một tin và chờ
+trả lời qua luồng sự kiện (`repl.oneshot`)."""
 
 from __future__ import annotations
 
 import argparse
-import time
+import asyncio
 from typing import Any
 
 
@@ -14,13 +17,8 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     s.add_argument("agent", nargs="?")
     s.add_argument("--none", action="store_true", help="huỷ chỉ định")
     ms.add_parser("get", help="điều phối viên hiện tại, hội thoại, nhịp", parents=[common])
-    c = ms.add_parser("chat", help='nhắn điều phối viên: agent-hub manager chat "<nội dung>"', parents=[common])
-    c.add_argument("text", nargs="+")
-    c.add_argument("--conversation", "-c", help="id hội thoại (mặc định: hội thoại gần nhất của kênh cli)")
-    c.add_argument("--new", action="store_true", help="mở hội thoại mới")
-    c.add_argument("--channel", default="cli")
-    c.add_argument("--no-wait", action="store_true", help="không chờ trả lời")
-    c.add_argument("--timeout", type=float, default=900)
+    c = ms.add_parser("chat", help='nhắn điều phối viên: agent-hub manager chat "<nội dung>" (không nội dung = chat qua lại)', parents=[common])
+    _chat_args(c)
     t = ms.add_parser("tick", help="chạy một nhịp ngay (gom sự kiện đang chờ)", parents=[common])
     t.add_argument("--if-due", action="store_true", help="chỉ chạy nếu tới hạn/có sự kiện (như vòng nền)")
     cv = ms.add_parser("conversations", help="liệt kê hội thoại", parents=[common])
@@ -29,6 +27,18 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     h.add_argument("conversation")
     h.add_argument("--limit", type=int, default=30)
     mg.set_defaults(fn=cmd_manager)
+    ch = sub.add_parser("chat", help="chat qua lại với điều phối viên trên terminal (kênh cli, dùng chung với TUI `top` → m)", parents=[common])
+    _chat_args(ch)
+    ch.set_defaults(fn=cmd_chat)
+
+
+def _chat_args(c: argparse.ArgumentParser) -> None:
+    c.add_argument("text", nargs="*", help="nội dung; bỏ trống = vào phiên chat qua lại")
+    c.add_argument("--conversation", "-c", help="id hội thoại (mặc định: hội thoại gần nhất của kênh cli)")
+    c.add_argument("--new", action="store_true", help="mở hội thoại mới")
+    c.add_argument("--channel", default="cli", help=argparse.SUPPRESS)
+    c.add_argument("--no-wait", action="store_true", help="không chờ trả lời (chỉ khi có nội dung)")
+    c.add_argument("--timeout", type=float, default=900, help="giây chờ mỗi câu trả lời")
 
 
 def _print_get(g: dict[str, Any]) -> None:
@@ -85,37 +95,45 @@ def cmd_manager(ctx: Any) -> int:
         else:
             print(f"tick: run {res['run_id']} ({res.get('reason')}, {res.get('events', 0)} sự kiện)" if res.get("run_id") else f"tick bỏ qua: {res.get('skipped')}")
         return 0
-    # chat
+    return cmd_chat(ctx)
+
+
+def cmd_chat(ctx: Any) -> int:
+    from ..cli import eprint
+    from . import repl
+
+    a = ctx.args
+    ctx.client()  # tự khởi động daemon nếu chưa chạy
+    if not a.text:
+        if ctx.json:
+            eprint("lỗi: chat qua lại không hỗ trợ --json — dùng `agent-hub manager chat \"<nội dung>\" --json`")
+            return 1
+        if a.channel != "cli":
+            eprint("lỗi: chat qua lại chỉ dùng kênh cli")
+            return 1
+        return asyncio.run(repl.repl(ctx.paths.socket, ctx.paths.home, conversation_id=a.conversation, new=a.new, timeout=a.timeout))
     text = " ".join(a.text)
     params: dict[str, Any] = {"channel": a.channel, "text": text}
     if a.conversation:
         params["conversation_id"] = a.conversation
     elif not a.new:
         params["reuse_latest"] = True
-    res = ctx.call("manager.chat", params)
+    notes: list[str] = []
+    if not a.no_wait and not ctx.json:
+        eprint("(đang chờ điều phối viên trả lời… Ctrl-C để thôi chờ — tin vẫn được xử lý)")
+    res, reply = asyncio.run(repl.oneshot(ctx.paths.socket, params, wait=not a.no_wait, timeout=a.timeout, on_notify=notes.append))
     if a.no_wait or res.get("steered"):
         ctx.out(res, f"đã gửi (hội thoại {res['conversation_id']}, run {res['run_id']}{', steer vào run đang chạy' if res.get('steered') else ''})")
         return 0
-    eprint(f"(hội thoại {res['conversation_id']} · run {res['run_id']} — đang chờ điều phối viên trả lời…)")
-    deadline = time.monotonic() + a.timeout
-    run_id = res["run_id"]
-    while time.monotonic() < deadline:
-        hist = ctx.call("manager.history", {"conversation_id": res["conversation_id"], "limit": 20})
-        got = [m for m in hist if m["role"] == "manager" and m.get("run_id") and m["id"] > 0 and _after_user(hist, run_id, m)]
-        if got:
-            if ctx.json:
-                ctx.out({**res, "reply": got[-1]["text"]})
-            else:
-                for m in [x for x in hist if x["role"] == "notify" and _after_user(hist, run_id, x)]:
-                    print(f"[thông báo] {m['text']}")
-                print(got[-1]["text"])
-            return 0
-        time.sleep(1.0)
-    eprint("hết thời gian chờ — xem sau bằng `agent-hub manager history " + res["conversation_id"] + "`")
-    return 2
+    if reply is None:
+        eprint("hết thời gian chờ — xem sau bằng `agent-hub manager history " + str(res.get("conversation_id")) + "`")
+        return 2
+    if ctx.json:
+        ctx.out({**res, "reply": reply.get("text"), "ok": reply.get("ok", True)})
+    else:
+        from ..termsafe import clean
 
-
-def _after_user(hist: list[dict[str, Any]], run_id: str, m: dict[str, Any]) -> bool:
-    """Tin `m` đến SAU tin người của run `run_id` (run có thể được tiếp nối bởi run khác sau approval)."""
-    uid = next((x["id"] for x in hist if x["role"] == "user" and x.get("run_id") == run_id), None)
-    return uid is not None and m["id"] > uid
+        for n in notes:
+            print(f"[thông báo] {clean(n)}")
+        print(clean(reply.get("text")))
+    return 0

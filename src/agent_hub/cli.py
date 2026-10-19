@@ -759,6 +759,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .questions.cli import add_parsers as _add_question_parsers
 
     _add_question_parsers(sub, common)
+
+    # đổi tên cfharness: home status|migrate (home_migrate.py)
+    from .home_migrate import add_parsers as _add_home_parsers
+
+    _add_home_parsers(sub, common)
     return p
 
 
@@ -776,6 +781,12 @@ def main(argv: list[str] | None = None) -> int:
     raw = _rewrite_surface(sys.argv[1:] if argv is None else list(argv), parser)
     args = parser.parse_args(_rewrite_m5b(_rewrite_m4b(_rewrite_m3(rewrite_argv(raw)))))
     ctx = Ctx(args)
+    if getattr(args, "cmd", None) != "home":
+        from .home_migrate import legacy_notice
+
+        notice = legacy_notice(ctx.paths.home)
+        if notice:
+            eprint(notice)
     try:
         return int(args.fn(ctx) or 0)
     except RpcError as e:

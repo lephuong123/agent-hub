@@ -13,6 +13,8 @@ import unicodedata
 import unicodedata
 from typing import List, Optional, Tuple
 
+from .. import names as _names
+
 # Hard cap on scanned text: scanners are advisory, so bound worst-case runtime.
 MAX_SCAN_CHARS = 65_536
 # Bounded filler between key attack words (unbounded ``(?:\w+\s+)*`` backtracks badly).
@@ -126,14 +128,15 @@ def _compile() -> dict[str, list[tuple[re.Pattern, str]]]:
 _COMPILED = _compile()
 
 # Nội dung tri thức dặn agent sửa chính sách an toàn của hub (FR-SG-05, FR-LN-07 mục 8).
-_HUB = r"(?:\.agent-hub|agent[_-]hub|hub_home|HUB_HOME)"
+_CLI_NAMES = _names.alt(_names.HUB_CLI_NAMES)  # tên mới + tên cũ (đổi tên cfharness)
+_HUB = rf"(?:{_names.alt(_names.HUB_HOME_DIRNAMES)}|{_CLI_NAMES}|hub_home|HUB_HOME)"
 POLICY_TOUCH_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(rf"{_MODIFY}(?:{_HUB}[^\n]{{0,200}})?\b(?:policy|evals?|golden)/", re.I), "policy_touch"),
     (re.compile(rf"{_MODIFY}[^\n]{{0,200}}\b(?:protected|catalog|learning)\.ya?ml\b", re.I), "policy_touch"),
     (re.compile(r"\b(?:remove|delete|drop|disable|bypass|turn\s+off|skip)\s+(?:\S+\s+){0,8}(?:guard|hook|audit|approval|golden\s+task|eval(?:uation)?\s+gate|destructive\s+(?:catalog|list|rules?))", re.I), "policy_touch"),
     (re.compile(r"\blearning\.(?:enabled|auto_apply|config_bounds|rate)\b", re.I), "policy_touch"),
     (re.compile(r"--dangerously-skip-permissions|bypassPermissions|permission[_-]mode\s*[=:]\s*[\"']?(?:bypassPermissions|dontAsk)", re.I), "self_escalation"),
-    (re.compile(r"\bagent-hub\s+(?:approve|deny|guard\s+protect|learn\s+policy|config\s+set)\b", re.I), "policy_touch"),
+    (re.compile(rf"\b{_CLI_NAMES}\s+(?:approve|deny|guard\s+protect|learn\s+policy|config\s+set|home\s+migrate)\b", re.I), "policy_touch"),
 ]
 
 
