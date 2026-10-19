@@ -16,6 +16,7 @@ from typing import Any, Callable
 import yaml
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from . import names as _names
 from .config import VALID_PERMISSION_MODES, HubConfig
 from .errors import Blocked, Conflict, HubError, NotFound
 from .events import HubEvent, make_event
@@ -549,7 +550,7 @@ def import_agent(svc: AgentService, path: str | Path, *, new_id: str | None = No
         tar.extractall(tmp, filter="data")
         root = Path(tmp) / "agent"
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-        if manifest.get("format") != EXPORT_FORMAT:
+        if manifest.get("format") != EXPORT_FORMAT and manifest.get("format") not in _names.LEGACY_EXPORT_FORMATS:  # gói xuất từ bản tên cũ
             raise HubError(f"định dạng export không hỗ trợ: {manifest.get('format')}")
         cfg = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8")) or {}
         cfg["id"] = new_id or manifest["agent_id"]

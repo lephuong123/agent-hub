@@ -332,3 +332,15 @@ Thay đổi cấu hình agent do manager = actor `manager:<agent>` = thay đổi
 Không bao giờ: manager duyệt approval, sửa policy/guard/golden/sandbox, purge, tắt ESTOP, sửa agent manager (kể cả chính mình/manager cũ),
 `bypassPermissions`/`allow_bypass`/`extra_args`/`subagents`, bỏ mẫu disallowed người đặt, MCP ngoài registry. Test: `tests/test_manager*.py`
 (helper `tests/m7_fake.py`, ScriptedRuntime giữ run manager ở `running`).
+
+## Đổi tên cfharness — tên mới + tên cũ, `home migrate`
+Chi tiết, cách áp, việc người dùng phải làm, lệch BRD: `docs/dev-notes/rename-cfharness.md`. Test: `tests/test_rename_cfharness.py`.
+
+| Module | Vai trò |
+|---|---|
+| `names.py` | Nguồn DUY NHẤT của tên lệnh/module/env/thư mục home/socket/MCP server — tên mới VÀ tên cũ. Guard (classifier, `is_hub_mcp_config`, threats, `neutralize`, auth, sandbox) dựng mẫu từ đây |
+| `home_migrate.py` | `home status|migrate [--dry-run] [--stop]`: chuyển home tên cũ → home mới, viết lại đường dẫn ở bảng không append-only + file cấu hình, cập nhật bản chuẩn toàn vẹn |
+| `scripts/rename_cfharness.py` | Đổi tên máy móc toàn repo (idempotent, `--dry-run`); bỏ qua dòng `rename:keep` |
+
+Bất biến: guard nhận diện tên cũ VĨNH VIỄN (binary/module cũ có thể còn trong venv). Thêm tên/biến thể → sửa `names.py` + ca hai chiều trong
+`tests/test_rename_cfharness.py`. Literal tên cũ chỉ được nằm trên dòng có `rename:keep`. `home migrate` là lệnh chỉ người (`HUB_HUMAN_ONLY_CLI`).

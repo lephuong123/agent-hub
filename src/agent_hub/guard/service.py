@@ -61,7 +61,10 @@ def is_hub_mcp_config(cfg: dict[str, Any], port: int = 8765) -> bool:
     from urllib.parse import urlparse
 
     cmd = " ".join([str(cfg.get("command") or "")] + [str(a) for a in (cfg.get("args") or [])])
-    if _re.search(r"agent[-_]hub(\.exe)?\b.*\bmcp\b.*\bserve\b", cmd) or "agent_hub.mcp_server" in cmd and "hub_self" not in cmd:
+    from .. import names as _names
+
+    cli, mod = _names.alt(_names.HUB_CLI_NAMES), _names.alt(_names.HUB_MODULE_NAMES)  # tên mới + tên cũ
+    if _re.search(rf"{cli}(\.exe)?\b.*\bmcp\b.*\bserve\b", cmd) or (_re.search(rf"{mod}\.mcp_server", cmd) and "hub_self" not in cmd):
         return True
     url = str(cfg.get("url") or "")
     if url:

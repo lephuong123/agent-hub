@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from . import names as _names
+
 if TYPE_CHECKING:
     from .hub import Hub
 
@@ -448,8 +450,9 @@ class CallerResolver:
                         c.run_id, c.agent_id = c.run_id or recent[0], c.agent_id or recent[1]
                         c.evidence.append(f"session_of_recent_run:{sid}")
         env = proc_environ(pid)
-        if env and env.get(ENV_RUN_ID):
-            c.run_id = c.run_id or env[ENV_RUN_ID]
+        rid = next((env[n] for n in (ENV_RUN_ID, _names.LEGACY_ENV_RUN_ID) if env and env.get(n)), None)  # cả tên cũ
+        if rid:
+            c.run_id = c.run_id or rid
             c.evidence.append("env_run_id")
         if c.run_id and not c.agent_id:
             try:
