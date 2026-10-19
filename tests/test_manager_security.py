@@ -230,6 +230,20 @@ async def test_manager_cannot_point_workspace_into_hub_home(env):
     await _deny_tool(d, rid, "task_create", {"title": "x", "body": "y", "assignee": "w1", "workspace": str(d.hub.paths.home / "policy")})
 
 
+async def test_manager_workspace_repo_containing_user_protected_dir(env, tmp_path):
+    """Như workspace.validate_workspace: repo chứa tài nguyên NGƯỜI khai báo (vd `<repo>/.next` prod) vẫn là workspace hợp lệ —
+    guard chặn ghi vào chính nó theo từng tool call. Bản thân thư mục được bảo vệ thì vẫn bị từ chối."""
+    d, rid = env
+    repo = tmp_path / "repo"
+    (repo / ".next").mkdir(parents=True)
+    d.hub.guard.policy_store.add("path", str(repo / ".next"), ["overwrite", "write"], note="build prod")
+    assert d.hub.manager.perms.check_path(str(repo), "workspace", agent_id="w1") is None
+    assert "được bảo vệ" in (d.hub.manager.perms.check_path(str(repo / ".next"), "workspace", agent_id="w1") or "")
+    ctx = d.hub.guard.context_for(None, cwd=str(repo))
+    v = classify("Write", {"file_path": str(repo / ".next" / "x.js"), "content": "x"}, ctx)
+    assert v.verdict in ("destructive", "uncertain") or v.forbidden, v
+
+
 # ------------------------------------------------------------------ lớp 2 đứng được khi lớp 1 bị vô hiệu
 async def test_layer2_daemon_blocks_even_if_layer1_disabled(env, monkeypatch):
     d, rid = env

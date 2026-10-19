@@ -100,7 +100,9 @@ class ManagerPermissions:
             if r is not None:
                 return f"{what} là tài nguyên được bảo vệ ({r.selector}: {r.note or r.id})"
             under = ctx.policy.protected_under(str(p))
-            if under is not None:
+            # như workspace.validate_workspace: tài nguyên NGƯỜI khai báo nằm BÊN TRONG (vd `<repo>/.next` prod) là hợp lệ —
+            # guard vẫn chặn ghi vào nó theo từng tool call; chỉ tài nguyên builtin bên trong mới làm cả thư mục bị từ chối
+            if under is not None and under.builtin:
                 return f"{what} chứa tài nguyên được bảo vệ ({under.selector})"
         except Exception:  # pragma: no cover — kiểm phụ, không làm hỏng luật chính
             pass
