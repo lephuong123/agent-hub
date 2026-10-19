@@ -157,10 +157,8 @@ class Hub:
         self.store.close()
 
     def _warn_if_sandbox_disabled(self) -> None:
-        """SEC/WT-3: nhiều bất biến dựa vào sandbox OS — nếu guard bật mà sandbox TẮT bằng cấu hình, cảnh báo đỏ + audit."""
+        """SEC/WT-3: nhiều bất biến dựa vào sandbox OS — nếu sandbox TẮT bằng cấu hình (kể cả khi guard.enabled=false), cảnh báo đỏ + audit."""
         try:
-            if not self.config.get("guard.enabled"):
-                return
             sb = self.config.get("guard.sandbox") or {}
         except KeyError:
             return
@@ -196,5 +194,5 @@ class Hub:
             "cost_today_usd": round(self.store.cost_today(), 8),
             "epoch_usage": self.aggregator.snapshot(),
             "subscribers": self.bus.subscriber_count,
-            "sandbox_enabled": bool((self.config.get("guard.sandbox") or {}).get("enabled", True)) if self.config.get("guard.enabled") else None,
+            "sandbox_enabled": bool((self.config.get("guard.sandbox") or {}).get("enabled", True)),
         }

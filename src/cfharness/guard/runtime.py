@@ -332,14 +332,16 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
 
 
 def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_dir: Path, guard_cfg: dict[str, Any], approval_timeout_s: float,
-                   cwd: Path | None = None, sandbox_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+                   cwd: Path | None = None, sandbox_overrides: dict[str, Any] | None = None, hook: bool = True) -> dict[str, Any]:
+    """`hook=False` (guard.enabled=false): bỏ hook PreToolUse (không phân loại/hỏi duyệt) nhưng GIỮ `permissions.deny` tĩnh + sandbox OS."""
     s = dict(base)
-    cli_t, rpc_t = hook_timeouts(guard_cfg, approval_timeout_s)
-    hooks = dict(s.get("hooks") or {})
-    pre = list(hooks.get("PreToolUse") or [])
-    pre.append({"matcher": "*", "hooks": [{"type": "command", "command": hook_command(run_id, socket, rpc_t, guard_cfg), "timeout": cli_t}]})
-    hooks["PreToolUse"] = pre
-    s["hooks"] = hooks
+    if hook:
+        cli_t, rpc_t = hook_timeouts(guard_cfg, approval_timeout_s)
+        hooks = dict(s.get("hooks") or {})
+        pre = list(hooks.get("PreToolUse") or [])
+        pre.append({"matcher": "*", "hooks": [{"type": "command", "command": hook_command(run_id, socket, rpc_t, guard_cfg), "timeout": cli_t}]})
+        hooks["PreToolUse"] = pre
+        s["hooks"] = hooks
     perms = dict(s.get("permissions") or {})
     hub_home = Path(policy_dir).parent
     user_prot = protected_write_paths(hub_home)  # R2-2: tài nguyên NGƯỜI khai báo (vd `.next` prod) → chặn tĩnh tool ghi + sandbox

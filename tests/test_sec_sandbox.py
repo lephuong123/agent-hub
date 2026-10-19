@@ -135,3 +135,16 @@ def test_hub_mcp_human_only_tools_forbidden_under_any_name(tmp_path):
         assert v.forbidden, (tool, v)
     assert not classify("mcp__ops__hub_status", {}, ctx).forbidden
     assert not classify("mcp__other__agent_update", {}, ctx).forbidden  # server khác, không phải hub
+
+
+def test_guard_off_drops_hook_but_keeps_sandbox_and_static_deny(tmp_path):
+    """guard.enabled=false: không hook PreToolUse (không hỏi duyệt) nhưng sandbox OS + permissions.deny tĩnh vẫn áp."""
+    hub = tmp_path / "hub"
+    (hub / "policy").mkdir(parents=True)
+    sock = hub / "hub.sock"
+    s = build_settings({}, run_id="r", socket=sock, policy_dir=hub / "policy", guard_cfg={"hook_timeout_s": 900},
+                       approval_timeout_s=300, cwd=hub / "ws", hook=False)
+    assert "PreToolUse" not in (s.get("hooks") or {})
+    assert s["sandbox"]["enabled"] and str(hub / "policy") in s["sandbox"]["filesystem"]["denyWrite"]
+    assert str(token_path(sock)) in s["sandbox"]["filesystem"]["denyRead"]
+    assert f"Read(/{hub}/secrets/**)" in s["permissions"]["deny"]

@@ -401,19 +401,20 @@ class RunManager:
             raise RuntimeError_("runtime.claude.settings phải là mapping JSON")
         guard_cfg = dict(cfg.get("guard") or {})
         guard_on = bool(guard_cfg.get("enabled"))
-        if guard_on:
-            from .guard import runtime as gr
+        # guard.enabled=false chỉ tắt hook phân loại/hỏi duyệt; permissions.deny tĩnh + sandbox OS vẫn áp (tắt riêng: guard.sandbox.enabled)
+        from .guard import runtime as gr
 
-            settings = gr.build_settings(
-                settings,
-                run_id=run_id,
-                socket=hub.paths.socket,
-                policy_dir=hub.paths.home / "policy",
-                guard_cfg=guard_cfg,
-                approval_timeout_s=float(hub.config.get("approval.timeout_s")),
-                cwd=cwd,  # hardening SEC: sandbox không chặn ghi workspace của run
-                sandbox_overrides=hub.guard.run_sandbox_overrides(agent["id"]),  # SEC: ngoại lệ theo agent (chỉ người) + host MCP của agent
-            )
+        settings = gr.build_settings(
+            settings,
+            run_id=run_id,
+            socket=hub.paths.socket,
+            policy_dir=hub.paths.home / "policy",
+            guard_cfg=guard_cfg,
+            approval_timeout_s=float(hub.config.get("approval.timeout_s")),
+            cwd=cwd,  # hardening SEC: sandbox không chặn ghi workspace của run
+            sandbox_overrides=hub.guard.run_sandbox_overrides(agent["id"]),  # SEC: ngoại lệ theo agent (chỉ người) + host MCP của agent
+            hook=guard_on,
+        )
         # hardening H-11 (FR-RT-17): hook QUAN SÁT fail-OPEN (PostToolUse/UserPromptSubmit/Stop) — hàm riêng, không đụng
         # phần guard (fail-closed) của settings; tắt bằng runtime.claude.observe_hooks.enabled=false
         from .observe_hook import add_observe_hooks
