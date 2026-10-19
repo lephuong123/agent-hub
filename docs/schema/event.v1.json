@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agent-hub.local/schema/event.v1.json",
+  "$id": "https://cfharness.local/schema/event.v1.json",
   "title": "HubEvent",
-  "description": "Envelope event của agent-hub (BRD §9.1). Loại event không có trong x-event-types vẫn hợp lệ (mở rộng).",
+  "description": "Envelope event của cfharness (BRD §9.1). Loại event không có trong x-event-types vẫn hợp lệ (mở rộng).",
   "type": "object",
   "properties": {
     "agent_id": {

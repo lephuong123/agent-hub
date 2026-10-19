@@ -1,4 +1,4 @@
-# agent-hub
+# cfharness
 
 Hub điều phối đội agent AI chạy trên `claude` CLI (Claude Code) đã đăng nhập trên máy.
 Bản hiện tại: **mốc M0 — lõi chạy 1 agent** (daemon + SQLite + event bus, CRUD agent, run ad-hoc,
@@ -11,37 +11,37 @@ Kết quả spike cô lập/phê duyệt/steer/ngắt: `docs/spikes/M0-spike-rep
 
 ```bash
 uv sync                 # Python ≥ 3.12 (ghim 3.13 trong .python-version)
-uv run agent-hub --help
+uv run cfharness --help
 ```
 
-Yêu cầu: `claude` trong PATH và đã `claude auth login` (đã kiểm với 2.1.302). `agent-hub doctor` kiểm các điều này mà không tốn tiền.
+Yêu cầu: `claude` trong PATH và đã `claude auth login` (đã kiểm với 2.1.302). `cfharness doctor` kiểm các điều này mà không tốn tiền.
 
 ## Dùng nhanh
 
 ```bash
-export AGENT_HUB_HOME=~/.agent-hub          # mặc định; đổi sang thư mục khác để thử nghiệm
-uv run agent-hub daemon start               # CLI cũng tự khởi động daemon khi cần
-uv run agent-hub agent create researcher --role "Nghiên cứu" --model haiku --budget-per-run 0.2
-uv run agent-hub run researcher "Tóm tắt README trong thư mục này" --cwd . --follow
-uv run agent-hub runs list
-uv run agent-hub runs show <run_id> --events
-uv run agent-hub agent edit researcher --model sonnet --set limits.budget_usd_per_day=2
-uv run agent-hub agent rm researcher && uv run agent-hub agent restore researcher   # xoá mềm / khôi phục
-uv run agent-hub config set hub.max_concurrent_runs 2
-uv run agent-hub estop on --reason "bảo trì" --stop-running ; uv run agent-hub estop off
-uv run agent-hub daemon stop
+export CFHARNESS_HOME=~/.cfharness          # mặc định; đổi sang thư mục khác để thử nghiệm
+uv run cfharness daemon start               # CLI cũng tự khởi động daemon khi cần
+uv run cfharness agent create researcher --role "Nghiên cứu" --model haiku --budget-per-run 0.2
+uv run cfharness run researcher "Tóm tắt README trong thư mục này" --cwd . --follow
+uv run cfharness runs list
+uv run cfharness runs show <run_id> --events
+uv run cfharness agent edit researcher --model sonnet --set limits.budget_usd_per_day=2
+uv run cfharness agent rm researcher && uv run cfharness agent restore researcher   # xoá mềm / khôi phục
+uv run cfharness config set hub.max_concurrent_runs 2
+uv run cfharness estop on --reason "bảo trì" --stop-running ; uv run cfharness estop off
+uv run cfharness daemon stop
 ```
 
 Mọi lệnh có `--json`. Mã thoát: 0 ok · 1 lỗi người dùng · 2 lỗi hệ thống · 3 bị chặn (ESTOP/ngân sách/chưa đăng nhập).
 
-Chạy thử không tốn tiền: `agent-hub config set runtime.kind fake` (phát lại stdout `claude` đã ghi).
+Chạy thử không tốn tiền: `cfharness config set runtime.kind fake` (phát lại stdout `claude` đã ghi).
 
 ## Dùng qua web
 
 Không quen terminal? Mở giao diện web trên chính máy này:
 
 ```bash
-uv run agent-hub web --open        # khởi động web (http://agent-hub.localhost:8765), mở trình duyệt và tự đăng nhập
+uv run cfharness web --open        # khởi động web (http://cfharness.localhost:8765), mở trình duyệt và tự đăng nhập
 ```
 
 - **Tổng quan**: agent nào đang làm gì (cập nhật mỗi 2 giây), chi phí hôm nay, khung đỏ **Cần bạn duyệt** khi agent định làm
@@ -55,13 +55,13 @@ uv run agent-hub web --open        # khởi động web (http://agent-hub.localh
 
 Dùng được trên điện thoại/màn nhỏ; sáng/tối theo hệ thống. Ảnh màn: `docs/screenshots/web/`.
 
-Đăng nhập & an toàn: web dùng tên riêng `agent-hub.localhost` (trình duyệt tự trỏ về máy này) để cookie không lọt sang app khác
+Đăng nhập & an toàn: web dùng tên riêng `cfharness.localhost` (trình duyệt tự trỏ về máy này) để cookie không lọt sang app khác
 bạn chạy ở `127.0.0.1`/`localhost`; cần bật JavaScript cho thao tác ghi. Link in ra/mở bởi lệnh trên chỉ dùng **một lần** (hết hạn sau
 5 phút) rồi đổi thành phiên (tự hết sau 1 giờ không thao tác). Mất phiên
-hoặc mở trình duyệt khác → chạy lại `agent-hub web --open` (nếu web đang chạy, lệnh chỉ cấp link mới); `agent-hub web --url`
+hoặc mở trình duyệt khác → chạy lại `cfharness web --open` (nếu web đang chạy, lệnh chỉ cấp link mới); `cfharness web --url`
 chỉ in link. Web **chỉ** nghe trên loopback (`--host` khác 127.0.0.1/::1/localhost bị từ chối) — xem từ máy khác thì dùng
 `ssh -L 8765:127.0.0.1:8765 <máy>`. Mọi thao tác ghi có chống CSRF, ghi nhật ký kênh `web`; agent trong run không truy cập được web.
-Đổi cổng: `agent-hub web --port 8800`. Dừng: Ctrl+C ở terminal chạy web.
+Đổi cổng: `cfharness web --port 8800`. Dừng: Ctrl+C ở terminal chạy web.
 
 ## Dùng qua Telegram
 
@@ -71,11 +71,11 @@ Bot chạy trong daemon bằng long polling — không cần mở cổng hay end
 1. **Tạo bot**: trên Telegram nhắn [@BotFather](https://t.me/BotFather) → `/newbot` → đặt tên → chép token (dạng `123456789:AA…`).
 2. **Kết nối**:
    ```bash
-   uv run agent-hub notify telegram setup      # nhập token (ẩn khi gõ) → lưu secret store, không in ra
+   uv run cfharness notify telegram setup      # nhập token (ẩn khi gõ) → lưu secret store, không in ra
    ```
    Lệnh in một **mã ghép nối** dùng một lần: mở chat với bot và gửi `/start <mã>` (hoặc mở link lệnh in ra rồi bấm Start).
    Terminal hiện chat vừa nhắn và hỏi xác nhận — chỉ chat bạn xác nhận mới vào allowlist.
-3. **Kiểm tra**: `agent-hub notify telegram test` · `agent-hub notify telegram status` · tắt: `agent-hub notify telegram disable [--forget-token]`.
+3. **Kiểm tra**: `cfharness notify telegram test` · `cfharness notify telegram status` · tắt: `cfharness notify telegram disable [--forget-token]`.
 
 Lệnh trong chat: `/status`, `/agents`, `/runs [agent]`, `/approvals`, `/run <agent> <yêu cầu>` (bot gửi kết quả tóm tắt + chi phí
 khi xong; **trả lời (reply)** vào tin kết quả để tiếp tục hội thoại), `/stop <run>`, `/estop on|off`, `/digest`, `/help`.
@@ -91,7 +91,7 @@ của repo X rồi giao việc đó"), nó tự tạo/sửa agent và team, giao
 phá huỷ, sửa chính sách/guard/golden task, mở ngoại lệ sandbox, xoá vĩnh viễn, tắt ESTOP hay sửa cấu hình của chính nó; mọi thao tác
 ghi nhật ký `manager:<agent>` và rollback được.
 
-- **Chỉ định** (chỉ người): `agent-hub manager set <agent>` (huỷ: `--none`), hoặc web → trang **Điều phối** → *Chỉ định…* (có hộp xác nhận).
+- **Chỉ định** (chỉ người): `cfharness manager set <agent>` (huỷ: `--none`), hoặc web → trang **Điều phối** → *Chỉ định…* (có hộp xác nhận).
 - **Web — trang Điều phối** (đầu menu): khung chat theo cuộc trò chuyện (*+ Cuộc trò chuyện mới* để mở ngữ cảnh mới), trả lời chạy
   chữ trực tiếp, **thẻ hành động** của điều phối viên ("Đã tạo agent X", "Đã giao task Y cho team Z") có link tới đối tượng, cột bên:
   trạng thái + nhịp (lần gần nhất / kế tiếp), hành động gần đây, danh sách cuộc trò chuyện. Trang **Tổng quan** có khung nhỏ
@@ -100,7 +100,7 @@ ghi nhật ký `manager:<agent>` và rollback được.
   (không có nút). Nhắn tiếp là cùng cuộc trò chuyện; **reply** vào một tin cũ của điều phối viên để quay lại đúng cuộc đó; `/moi` (hoặc
   `/moi <nội dung>`) mở cuộc trò chuyện mới. Tin điều phối viên chủ động báo (`notify_owner`) cũng đến đây. Chưa có điều phối viên → bot
   trả hướng dẫn. Các lệnh cũ (`/run`, reply vào tin kết quả run…) giữ nguyên.
-- **Terminal**: `agent-hub manager chat "<nội dung>"`, `manager get|conversations|history|tick`.
+- **Terminal**: `cfharness manager chat "<nội dung>"`, `manager get|conversations|history|tick`.
 
 Ảnh: `docs/screenshots/web/16-dieu-phoi*.png`, `17-…`, `18-…`.
 

@@ -13,14 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub import auth
-from agent_hub.errors import Blocked, HubError
-from agent_hub.guard.classifier import GuardContext, classify
-from agent_hub.guard.policy import PolicyStore
-from agent_hub.guard.runtime import DEFAULT_ALLOWED_DOMAINS, build_settings, network_domains
-from agent_hub.hub import Hub
-from agent_hub.paths import HubPaths
-from agent_hub.runtime.fake import FakeRuntime
+from cfharness import auth
+from cfharness.errors import Blocked, HubError
+from cfharness.guard.classifier import GuardContext, classify
+from cfharness.guard.policy import PolicyStore
+from cfharness.guard.runtime import DEFAULT_ALLOWED_DOMAINS, build_settings, network_domains
+from cfharness.hub import Hub
+from cfharness.paths import HubPaths
+from cfharness.runtime.fake import FakeRuntime
 
 
 @pytest.fixture
@@ -111,8 +111,8 @@ def test_allow_domain_human_only_and_audited(tmp_path):
 
 
 def test_allow_domain_cli_forbidden_from_agent(ctx):
-    assert classify("Bash", {"command": "agent-hub guard sandbox allow-domain a github.com"}, ctx).forbidden
-    assert not classify("Bash", {"command": "agent-hub guard sandbox list"}, ctx).forbidden
+    assert classify("Bash", {"command": "cfharness guard sandbox allow-domain a github.com"}, ctx).forbidden
+    assert not classify("Bash", {"command": "cfharness guard sandbox list"}, ctx).forbidden
 
 
 def test_agent_mcp_domains_feed_sandbox(tmp_path):

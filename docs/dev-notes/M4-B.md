@@ -7,7 +7,7 @@ FR-UI-06 (tab Learnings) — làm SAU khi M2 xong (`tui/learnings.py`, xem mục
 | File | Vai trò |
 |---|---|
 | `evals/golden.py` | `GoldenStore` (`hub.evals.golden`): CRUD golden task (chỉ người — actor agent/learning/review/curator/eval_gate/regression_monitor bị từ chối), xoá mềm, bản sao chỉ đọc `policy/golden/<agent>.yaml`, `candidates()` + `suggest()` → `golden.suggested` |
-| `evals/checkers.py` | Bộ chấm tất định: `regex`, `contains`, `json_schema`, `command` (stdin = output, env `AGENT_HUB_OUTPUT_FILE`, cwd = workspace run eval), tổ hợp `all` |
+| `evals/checkers.py` | Bộ chấm tất định: `regex`, `contains`, `json_schema`, `command` (stdin = output, env `CFHARNESS_OUTPUT_FILE`, cwd = workspace run eval), tổ hợp `all` |
 | `evals/judge.py` | LLM judge: `claude -p --output-format json --json-schema --no-session-persistence --system-prompt … --setting-sources "" --strict-mcp-config --tools ""`, rubric người viết; ghi dòng `runs` kind=`eval_judge` (vào ngân sách ngày) |
 | `evals/overlay.py` | Bản sao tạm `HUB_HOME/evals/tmp/<eval>/<variant>/` của agent home; `materialize` (ưu tiên `hub.learning.materialize` của A, NotFound → tự dựng từ dict), `materialize_before` (ưu tiên ledger của A), `apply_overlay`/`seed_workspace` (hook trong `RunManager`), `fingerprint` (cache baseline) |
 | `evals/gate.py` | `EvalGate` (`hub.evals.gate`): `check`, `post_apply`, `post_apply_batch`, `run_batch_l1`, `run_manual`; khoá theo agent; ngân sách; bảng `eval_runs`/`eval_results`/`eval_entry_log` |
@@ -37,8 +37,8 @@ Config: `eval.*` (gồm `eval.judge.*`, `eval.regression.*`, `eval.ops_tick_s`),
 `runtime/base.py` + `claude_cli.py` (`RunSpec.no_session_persistence` → `--no-session-persistence`),
 `runs.py` (overlay trong `tick` + seed workspace + cờ trong `_prepare_spec`), `recovery.py` (không resume/requeue run eval),
 `hub.py`/`daemon.py`/`cli.py`/`mcp_server/server.py` (gắn), `notify/slack.py` (format digest + nhắc golden Q-23; `digest_id` trong notify.*),
-`guard/classifier.py`: `agent-hub golden <ghi>` và `mcp__*__hub_golden_(add|rm|edit|…)` = `policy_change` forbidden;
-**vá lỗ hổng có sẵn**: `uv run|uvx|npx|poetry run … agent-hub approve` trước đây lọt (generic write) → nay bóc trình chạy gói.
+`guard/classifier.py`: `cfharness golden <ghi>` và `mcp__*__hub_golden_(add|rm|edit|…)` = `policy_change` forbidden;
+**vá lỗ hổng có sẵn**: `uv run|uvx|npx|poetry run … cfharness approve` trước đây lọt (generic write) → nay bóc trình chạy gói.
 
 ## Tab Learnings (FR-UI-06) + màn golden task — `tui/learnings.py`
 - `LearningsScreen` (phím `l`, thay chỗ trống M2): header đếm hôm nay (áp dụng/rollback/eval_failed/hoãn/bị chặn),
@@ -52,7 +52,7 @@ Config: `eval.*` (gồm `eval.judge.*`, `eval.regression.*`, `eval.ops_tick_s`),
   đây), `e` sửa cách chấm/rubric (prefill), Del xoá mềm, `A` hiện đã xoá, `u` khôi phục. Mọi gọi gửi `_audit.channel=tui`
   → `created_by=user:tui`.
 - Digest khi mở TUI lần đầu trong ngày: `TopApp.on_mount` → `maybe_show_digest` (`digest.tui_open`); digest rỗng không bật.
-- Ảnh: `docs/screenshots/m4/01..07-*.svg` (`AGENT_HUB_SCREENSHOTS=docs/screenshots/m4 uv run pytest tests/test_tui_learnings.py`).
+- Ảnh: `docs/screenshots/m4/01..07-*.svg` (`CFHARNESS_SCREENSHOTS=docs/screenshots/m4 uv run pytest tests/test_tui_learnings.py`).
 - Tool MCP `hub_steer(run_id, text)` → RPC `run.steer` (M2), annotations readOnly=false/destructive=false/idempotent=false,
   cần token control, audit `run.steer`.
 
@@ -60,7 +60,7 @@ Config: `eval.*` (gồm `eval.judge.*`, `eval.regression.*`, `eval.ops_tick_s`),
 Nghiệm thu lần 1 của A: regression monitor tự rollback một skill do NGƯỜI tạo (`learn propose`, ledger actor=user).
 Nay: `ports.AUTO_ROLLBACK_ACTORS = {learning, review, agent, curator}`; regression monitor chọn thay đổi mới nhất CÓ actor
 thuộc tập này để rollback; nếu chỉ có thay đổi của người → `regression_watch.status=warned` + event
-`regression.detected{human_change: true, hint: "agent-hub learn rollback <id>"}` → digest (dòng ⚠️) + Slack (thêm vào
+`regression.detected{human_change: true, hint: "cfharness learn rollback <id>"}` → digest (dòng ⚠️) + Slack (thêm vào
 `notify.slack.events`). Eval gate `post_apply` cũng vậy (cờ `human_change`, không rollback). Migration **v9**:
 `regression_watch.actor`. Test: `test_human_change_is_never_auto_rolled_back`, `test_human_change_skipped_but_learning_change_rolled_back`,
 `test_post_apply_never_rolls_back_human_change`. (Ở nghiệm thu thật của B, thay đổi effort tạo bằng `learn propose` — actor

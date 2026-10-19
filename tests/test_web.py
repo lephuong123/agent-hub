@@ -1,4 +1,4 @@
-"""Giao diện web (`agent-hub web`) — daemon IN-PROCESS trên Unix socket thật + FakeRuntime, app Starlette qua ASGITransport.
+"""Giao diện web (`cfharness web`) — daemon IN-PROCESS trên Unix socket thật + FakeRuntime, app Starlette qua ASGITransport.
 
 Không gọi `claude`. Kiểm: đăng nhập link một lần → cookie, chặn khi chưa đăng nhập, Host/Origin/CSRF, header bảo mật,
 token người không lọt vào HTML/log, thao tác HUMAN_ONLY ghi audit kênh `web`, luồng hằng ngày, SSE, chỉ bind loopback,
@@ -18,18 +18,18 @@ from pathlib import Path
 import httpx2 as httpx
 import pytest
 
-from agent_hub.auth import load_token
-from agent_hub.daemon import Daemon
-from agent_hub.runtime import FakeRuntime
-from agent_hub.web import present as P
-from agent_hub.web.app import agent_changes, create_app, replay_items
-from agent_hub.web.security import (
+from cfharness.auth import load_token
+from cfharness.daemon import Daemon
+from cfharness.runtime import FakeRuntime
+from cfharness.web import present as P
+from cfharness.web.app import agent_changes, create_app, replay_items
+from cfharness.web.security import (
     COOKIE, NotLoopback, WebAuth, check_login_token, login_url, mint_login_token, read_state, require_loopback, state_path, write_state,
 )
 
 ISOLATED = Path(__file__).parent / "fixtures" / "claude-hub-isolated-run.jsonl"
 PORT = 8765
-BASE = f"http://agent-hub.localhost:{PORT}"
+BASE = f"http://cfharness.localhost:{PORT}"
 
 
 class Env:
@@ -138,7 +138,7 @@ async def test_unauthenticated_requests_are_blocked(env):
     assert not env.hub.runs.estop.get("on")
     assert (await c.get("/static/app.css")).status_code == 200
     r = await c.get("/login")
-    assert r.status_code == 200 and "agent-hub web --open" in r.text
+    assert r.status_code == 200 and "cfharness web --open" in r.text
     # cookie giả không có tác dụng
     c.cookies.set(COOKIE, "khong-hop-le")
     assert (await c.get("/")).status_code == 303
@@ -163,7 +163,7 @@ async def test_one_time_login_link_sets_strict_httponly_cookie(env):
     old = mint_login_token(env.auth.key, ttl_s=-5)
     assert check_login_token(env.auth.key, old) is None
     # dán link vào form đăng nhập
-    r = await c2.post("/login", data={"link": login_url("agent-hub.localhost", PORT, env.auth.mint())})
+    r = await c2.post("/login", data={"link": login_url("cfharness.localhost", PORT, env.auth.mint())})
     assert r.status_code == 303
     await c2.aclose()
     # đăng xuất: phiên bị huỷ
@@ -174,7 +174,7 @@ async def test_one_time_login_link_sets_strict_httponly_cookie(env):
 
 
 async def test_host_header_must_be_web_host(env):
-    """WT-1(a): chỉ phục vụ Host `agent-hub.localhost:port` (cookie host-only); 127.0.0.1/localhost → chuyển hướng, không đặt cookie."""
+    """WT-1(a): chỉ phục vụ Host `cfharness.localhost:port` (cookie host-only); 127.0.0.1/localhost → chuyển hướng, không đặt cookie."""
     await env.login()
     r = await env.client.get("/", headers={"Host": "evil.example:8765"})
     assert r.status_code == 421
@@ -278,7 +278,7 @@ async def test_daily_flow_create_agent_with_mcp_assign_task_see_result_and_cost(
     assert r.status_code == 200
     assert "Kết quả" in r.text and "Xong" in r.text and "Nói tiếp với agent" in r.text
     assert "&lt;b&gt;đậm&lt;/b&gt;" in r.text and "<b>đậm</b>" not in r.text  # escape
-    assert f"agent-hub takeover {rid}" in r.text
+    assert f"cfharness takeover {rid}" in r.text
     r = await env.client.get("/costs")
     assert "nc" in r.text and "$0.00" in r.text
     r = await env.client.get("/")
@@ -417,7 +417,7 @@ async def test_sse_run_live_items_and_deltas(held):
     run = await running_run(env)
     from starlette.requests import Request
 
-    from agent_hub.web.app import _run_converter, _stream
+    from cfharness.web.app import _run_converter, _stream
 
     scope = {"type": "http", "app": env.app, "path": "/", "headers": [], "query_string": b""}
     req = Request(scope)
@@ -445,14 +445,14 @@ def test_bind_loopback_only(hub_home, capsys):
     for bad in ("0.0.0.0", "192.168.1.5", "::", "example.com", ""):
         with pytest.raises(NotLoopback):
             require_loopback(bad)
-    from agent_hub.cli import main
+    from cfharness.cli import main
 
     assert main(["web", "--host", "0.0.0.0"]) == 1
     assert "chỉ được bind loopback" in capsys.readouterr().err
 
 
 def test_cli_web_url_mints_link_from_running_server_state(hub_home, capsys):
-    from agent_hub.cli import main
+    from cfharness.cli import main
 
     assert main(["web", "--url"]) == 1  # chưa có server
     key = os.urandom(32)
@@ -461,16 +461,16 @@ def test_cli_web_url_mints_link_from_running_server_state(hub_home, capsys):
     assert read_state(hub_home)["port"] == 8790
     assert main(["web", "--url"]) == 0
     out = capsys.readouterr().out
-    m = re.search(r"http://agent-hub\.localhost:8790/login\?t=(\S+)", out)
+    m = re.search(r"http://cfharness\.localhost:8790/login\?t=(\S+)", out)
     assert m and check_login_token(key, m.group(1))
     state_path(hub_home).unlink()
 
 
 def test_agent_in_run_cannot_reach_web_secrets(hub_home):
-    """Agent trong run: sandbox chặn đọc HUB_HOME/auth (khoá ký link web), tool Read bị deny, lệnh `agent-hub web` bị cấm."""
-    from agent_hub.guard.classifier import GuardContext, classify
-    from agent_hub.guard.policy import PolicyStore
-    from agent_hub.guard.runtime import sandbox_settings, secret_read_deny_rules
+    """Agent trong run: sandbox chặn đọc HUB_HOME/auth (khoá ký link web), tool Read bị deny, lệnh `cfharness web` bị cấm."""
+    from cfharness.guard.classifier import GuardContext, classify
+    from cfharness.guard.policy import PolicyStore
+    from cfharness.guard.runtime import sandbox_settings, secret_read_deny_rules
 
     sb = sandbox_settings(hub_home.home, hub_home.socket, {})
     assert any(x.rstrip("/").endswith("/auth") for x in sb["filesystem"]["denyRead"])
@@ -480,13 +480,13 @@ def test_agent_in_run_cannot_reach_web_secrets(hub_home):
     ps = PolicyStore(hub_home.home)
     ps.ensure()
     ctx = GuardContext(hub_home.home / "agents", ps.load(), run_since=time.time(), hub_socket=str(hub_home.socket), git_probe=False)
-    for cmd in ("agent-hub web --url", "agent-hub web --open", "agent-hub web"):
+    for cmd in ("cfharness web --url", "cfharness web --open", "cfharness web"):
         assert classify("Bash", {"command": cmd}, ctx).forbidden, cmd
 
 
 async def test_web_process_is_human_but_socket_without_token_is_not(env, tmp_path):
     """Web gọi daemon với token người (đọc file như CLI). Không có token (vd agent không đọc được file) → HUMAN_ONLY bị chặn."""
-    from agent_hub.rpc import RpcClient, RpcError
+    from cfharness.rpc import RpcClient, RpcError
 
     await env.login()
     r = await env.post("/do/estop", {"on": "1", "confirm": "yes"})
@@ -585,7 +585,7 @@ async def test_wt1_stolen_cookie_and_csrf_cannot_write(held):
 
 
 async def test_wt1_short_session_polling_does_not_extend(env):
-    import agent_hub.web.security as S
+    import cfharness.web.security as S
 
     await env.login()
     sid = env.client.cookies.get(COOKIE)
@@ -603,7 +603,7 @@ async def test_wt1_short_session_polling_does_not_extend(env):
 
 
 def test_wt7_safe_next_rejects_open_redirects():
-    from agent_hub.web.app import safe_next
+    from cfharness.web.app import safe_next
 
     for bad in ("/\t/evil.com", "//evil.com", "/\\evil.com", "http://evil.com", "/\n/x", "/\x7f/x", "/ /x", "javascript:alert(1)", "/%0a"[:0] + "\x00"):
         assert safe_next(bad) == "/", repr(bad)

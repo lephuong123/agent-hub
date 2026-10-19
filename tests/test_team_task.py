@@ -7,8 +7,8 @@ import threading
 
 import pytest
 
-from agent_hub.errors import Blocked, Conflict, HubError
-from agent_hub.hub import Hub
+from cfharness.errors import Blocked, Conflict, HubError
+from cfharness.hub import Hub
 from m3_fake import ScriptedRuntime, kind_of
 
 
@@ -115,7 +115,7 @@ async def test_task_idempotency_dag_cycle_and_promotion(make_hub):
         hub.tasks.create({"team": "docs", "assignee": "outsider", "title": "z"})
     await settle(lambda: hub.tasks.row(b["id"])["status"] == "done")
     # prompt của B có tóm tắt kết quả A (FR-TK-04)
-    spec_b = next(s for s in rt.specs.values() if s.prompt.startswith(f"[agent-hub task {b['id']}"))
+    spec_b = next(s for s in rt.specs.values() if s.prompt.startswith(f"[cfharness task {b['id']}"))
     assert "Results of prerequisite tasks" in spec_b.prompt and "Research" in spec_b.prompt or "A (" in spec_b.prompt
     runs = hub.store.list_runs()
     assert all(r["task_id"] in (a["id"], b["id"]) and r["team_id"] == "docs" and r["kind"] == "task" for r in runs)
@@ -134,7 +134,7 @@ async def test_comments_in_prompt(make_hub):
     for i in range(3):
         hub.tasks.comment(t2["id"], f"note {i}", author="human")
     await settle(lambda: hub.tasks.row(t2["id"])["status"] == "done")
-    p = next(s.prompt for s in rt.specs.values() if s.prompt.startswith(f"[agent-hub task {t2['id']}"))
+    p = next(s.prompt for s in rt.specs.values() if s.prompt.startswith(f"[cfharness task {t2['id']}"))
     assert p.index("note 0") < p.index("note 1") < p.index("note 2")
     assert hub.tasks.row(t["id"])["status"] == "done"
 
@@ -161,7 +161,7 @@ async def test_lead_decomposes_routes_by_role_and_aggregates(make_hub):
     assert by_title["Research topic"]["assignee_agent_id"] == "researcher"
     assert by_title["Write report"]["assignee_agent_id"] == "writer"
     assert hub.tasks.parents(by_title["Write report"]["id"]) == [by_title["Research topic"]["id"]]
-    write_prompt = next(s.prompt for s in rt.specs.values() if "Write report" in s.prompt and s.prompt.startswith("[agent-hub task"))
+    write_prompt = next(s.prompt for s in rt.specs.values() if "Write report" in s.prompt and s.prompt.startswith("[cfharness task"))
     assert "FACT: water boils" in write_prompt  # kết quả cha vào ngữ cảnh con
     r = hub.tasks.row(root["id"])
     assert "REPORT based on research" in r["result_json"]["final"] and len(r["result_json"]["subtasks"]) == 2
@@ -320,7 +320,7 @@ async def test_review_request_changes_then_approve(make_hub):
     assert kinds == ["task", "review", "task", "review"]
     cs = hub.tasks.comments(t["id"])
     assert [c["kind"] for c in cs] == ["review:request_changes", "review:approve"]
-    second_worker = [s for s in rt.specs.values() if s.prompt.startswith(f"[agent-hub task {t['id']}")][-1]
+    second_worker = [s for s in rt.specs.values() if s.prompt.startswith(f"[cfharness task {t['id']}")][-1]
     assert "add sources" in second_worker.prompt  # worker mới đọc comment yêu cầu sửa
     sig = hub.store.conn.execute("SELECT agent_id, kind FROM signals").fetchall()
     assert [tuple(x) for x in sig] == [("writer", "reject")]
@@ -443,7 +443,7 @@ async def test_team_estop(make_hub):
 
 
 async def test_routing_prefers_description_and_load():
-    from agent_hub.dispatch.routing import choose_worker
+    from cfharness.dispatch.routing import choose_worker
 
     members = [
         {"agent_id": "w1", "role": "worker", "agent_role": "writer", "agent_description": "Viết báo cáo, tài liệu"},
@@ -468,7 +468,7 @@ async def test_fr_tk04_child_prompt_contains_parent_results(make_hub):
     c = hub.tasks.create({"team": "docs", "assignee": "researcher", "title": "C", "body": "c"})
     b = hub.tasks.create({"team": "docs", "assignee": "writer", "title": "B", "body": "b", "parents": [a["id"], c["id"]]})
     await settle(lambda: hub.tasks.row(b["id"])["status"] == "done")
-    spec_b = next(s for s in rt.specs.values() if s.prompt.startswith(f"[agent-hub task {b['id']}"))
+    spec_b = next(s for s in rt.specs.values() if s.prompt.startswith(f"[cfharness task {b['id']}"))
     assert "Results of prerequisite tasks" in spec_b.prompt
     assert "PARENT-RESULT-ALPHA-42" in spec_b.prompt and "PARENT-RESULT-BETA-7" in spec_b.prompt
     assert f"({a['id']}," in spec_b.prompt and f"({c['id']}," in spec_b.prompt

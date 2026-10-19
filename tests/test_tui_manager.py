@@ -1,7 +1,7 @@
 """TUI `top` → phím `m`: màn "Điều phối" (tui/manager.py) — Textual Pilot + daemon IN-PROCESS (socket thật, ScriptedRuntime).
 
-Dùng chung hội thoại kênh `cli` với `agent-hub chat`; audit kênh `tui`. Chữ của điều phối viên là DỮ LIỆU (không markup/ANSI/link).
-Không gọi `claude`. Ảnh SVG: đặt `AGENT_HUB_SCREENSHOTS=docs/screenshots/m2`.
+Dùng chung hội thoại kênh `cli` với `cfharness chat`; audit kênh `tui`. Chữ của điều phối viên là DỮ LIỆU (không markup/ANSI/link).
+Không gọi `claude`. Ảnh SVG: đặt `CFHARNESS_SCREENSHOTS=docs/screenshots/m2`.
 """
 
 from __future__ import annotations
@@ -10,9 +10,9 @@ import asyncio
 
 from textual.widgets import Input, OptionList, RichLog
 
-from agent_hub.events import make_event
-from agent_hub.tui.app import AttachScreen, TasksScreen, TopApp
-from agent_hub.tui.manager import ManagerScreen
+from cfharness.events import make_event
+from cfharness.tui.app import AttachScreen, TasksScreen, TopApp
+from cfharness.tui.manager import ManagerScreen
 from m7_fake import wait_status
 from test_manager_repl import EVIL, designate, env, session  # noqa: F401  (fixture daemon + điều phối viên)
 from test_tui import SIZE, shot, until
@@ -42,7 +42,7 @@ async def test_no_manager_shows_guidance_and_disables_input(env, hub_home):
     app = TopApp(hub_home.socket, refresh_s=0.5)
     async with app.run_test(size=SIZE) as pilot:
         scr = await open_manager(app, pilot)
-        assert "Chưa có điều phối viên" in log_text(scr) and "agent-hub manager set" in log_text(scr)
+        assert "Chưa có điều phối viên" in log_text(scr) and "cfharness manager set" in log_text(scr)
         assert scr.query_one("#mgr-input", Input).disabled
         await pilot.press("escape")
         assert await until(lambda: not isinstance(app.screen, ManagerScreen), pilot=pilot)
@@ -99,7 +99,7 @@ async def test_chat_stream_actions_open_targets_and_shared_with_repl(env, hub_ho
         assert await until(lambda: isinstance(app.screen, TasksScreen) and app.screen._selected_id() == task["id"], pilot=pilot)
         await pilot.press("escape")
         assert await until(lambda: isinstance(app.screen, ManagerScreen), pilot=pilot)
-    # audit kênh tui, hội thoại kênh cli → `agent-hub chat` mở lại đúng hội thoại
+    # audit kênh tui, hội thoại kênh cli → `cfharness chat` mở lại đúng hội thoại
     row = d.hub.store.conn.execute("SELECT actor, channel FROM audit_log WHERE kind='manager.chat' ORDER BY id DESC LIMIT 1").fetchone()
     assert row["channel"] == "tui" and row["actor"] == "user"
     s, buf = session(hub_home)

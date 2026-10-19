@@ -18,7 +18,7 @@ WT-1/WT-4/WT-5/WT-8, cổng HUMAN_ONLY, audit theo kênh).
 | W5 | Thứ bậc thị giác yếu: mọi thứ là cùng một `.card` trắng; không phân biệt "việc của bạn" vs "thông tin" | `app.css` |
 | W6 | Icon lẫn lộn (✓ ✖ 🗑️ ✎ ‖ ▶ ◐ ⚡ ✎) — emoji hiển thị khác nhau theo OS, chỗ có chỗ không | toàn bộ template |
 | W7 | Nút không nhất quán: `btn` xanh đặc, viền đỏ nhạt, "Báo nhầm & cho phép" nút xám — không rõ nút chính | approvals, agent |
-| W8 | Id kỹ thuật lộ khắp nơi (`r_41bb8ebdd819`, `[agent-hub task t_…] You have been assigned…`) thay vì tiêu đề người đọc được | runs, agent |
+| W8 | Id kỹ thuật lộ khắp nơi (`r_41bb8ebdd819`, `[cfharness task t_…] You have been assigned…`) thay vì tiêu đề người đọc được | runs, agent |
 | W9 | Trang Điều phối: hộp chat bị cắt đầu (thẻ hành động mất nửa), thẻ hành động chen giữa tin nhắn, danh sách cuộc trò chuyện ở cột phải dưới cùng, ô nhập không dính đáy | `16-dieu-phoi.png` |
 | W10 | Không có trạng thái tải/gửi (bấm "Giao việc" không có phản hồi tức thì), flash cuối trang dễ bỏ qua, thời gian tuyệt đối `22:58:36` thay vì "2 phút trước" | `app.js`, flash |
 | W11 | Form agent dài, gom hết một trang; "Tuỳ chọn" giấu trong `<details>` không nhãn rõ | `agent_form.html` |
@@ -66,7 +66,7 @@ Không có `expired` (cùng tinh thần approval: không tự quyết thay ngư�
   `question.answered`, rồi **nối tiếp công việc** (1.4). Idempotent: trả lời lần 2 → `Conflict` (như approval).
 - `cancel(id, reason)`; `list(status, agent, run)`; `get(id)`.
 - RPC: `question.list|get` (đọc), `question.answer|cancel` (**HUMAN_ONLY**, ∈ `MUTATING`, audit). Agent KHÔNG được tự trả lời câu
-  hỏi của mình: thêm `agent-hub question answer` vào `HUB_HUMAN_ONLY_CLI` + `mcp__*__hub_question_answer` forbidden (cùng kiểu
+  hỏi của mình: thêm `cfharness question answer` vào `HUB_HUMAN_ONLY_CLI` + `mcp__*__hub_question_answer` forbidden (cùng kiểu
   `hub_approve`). Manager: KHÔNG có trong `MANAGER_ALLOWED` (manager hỏi người, không trả lời thay người) — ca đỏ→xanh trong
   `tests/test_manager_security.py` cả 2 lớp.
 - Event mới: `question.open` (level warn), `question.answered`, `question.cancelled` → `EVENT_LEVELS`, docstring adapter, sinh lại
@@ -80,7 +80,7 @@ Không có `expired` (cùng tinh thần approval: không tự quyết thay ngư�
    `notify_owner(kind=need_human)` của manager: thêm `options?` → question `source=manager` gắn `conversation_id`.
 3. **Tool gốc `AskUserQuestion` của Claude** (đang nằm trong `READ_ONLY_TOOLS` và chạy được nhưng vô nghĩa ở `-p`): hook PreToolUse
    (`guard/hook.py`, đã chạy mọi tool) bắt `AskUserQuestion` → gọi RPC `question.open` với `questions[0].question/options/multiSelect`
-   (đúng schema gốc) → **deny** kèm lý do "Asked the human via agent-hub (question q_…). End your turn; you will be resumed with
+   (đúng schema gốc) → **deny** kèm lý do "Asked the human via cfharness (question q_…). End your turn; you will be resumed with
    the answer." Ưu điểm: model đã quen tool này, không cần dạy. Fail-closed vẫn giữ (lỗi → deny như cũ, chỉ khác là không tạo câu hỏi).
    Cần spike nhỏ với `claude` thật để xác nhận input schema của phiên bản trong `tested_versions` + ghi fixture.
 - Sửa prompt (tiếng Anh): `prompt.py:16`, `tasks.py:394` từ "Do not ask questions" thành "Prefer reasonable assumptions. If a
@@ -94,7 +94,7 @@ Không có `expired` (cùng tinh thần approval: không tự quyết thay ngư�
 | `manager` | `manager.chat(conversation_id, text=<khung trả lời>)` |
 
 Khung trả lời gửi cho agent (tiếng Anh, do HUB sinh):
-`[agent-hub] The human answered question q_…: selected "2. Xoá cả thư mục cache" ; note: "<free text>"`.
+`[cfharness] The human answered question q_…: selected "2. Xoá cả thư mục cache" ; note: "<free text>"`.
 Phần chữ tự do của người được đánh dấu rõ là của người.
 
 Run hỏi xong và kết thúc → outcome giữ `completed` nhưng run gắn cờ `awaiting_answer` (trường trong `runs.result_json`, không thêm
@@ -140,7 +140,7 @@ Tin 2 (HỆ THỐNG, trả lời vào tin 1, có nút — chỉ chữ hub sinh):
 - Badge menu "Cần bạn" = approvals + questions đang mở.
 
 ### 1.7 CLI/TUI (tối thiểu, để đủ kênh)
-`agent-hub questions [--all]`, `agent-hub answer <q> [--pick 2[,3]] [--text "…"]`; TUI: thêm cột/biểu tượng ❓ ở `HtopScreen`
+`cfharness questions [--all]`, `cfharness answer <q> [--pick 2[,3]] [--text "…"]`; TUI: thêm cột/biểu tượng ❓ ở `HtopScreen`
 và phím `a` mở hộp trả lời (dùng `ConfirmScreen`/`InputScreen` có sẵn). Có thể để pha sau.
 
 ---
@@ -183,7 +183,7 @@ Nguyên tắc: **"Việc của bạn trước, thông tin sau"**; ít chữ kỹ
 |---|---|
 | **Tổng quan** | (1) Dải "Cần bạn" trên cùng: tối đa 3 thẻ gọn (duyệt/câu hỏi) với nút hành động ngay + "xem tất cả". Trống → dòng xanh "Không có gì cần bạn". (2) 4 số liệu (đang chạy, chờ bạn, chi phí hôm nay so với ngân sách có thanh %, thay đổi tự học). (3) **Lưới thẻ agent** thay bảng: tên + vai trò, pill trạng thái, "đang làm" 1 dòng (tiêu đề task, không phải prompt thô), chi phí hôm nay, nút "Xem trực tiếp" khi đang chạy. Bỏ cột "Công cụ gần nhất". (4) "Hoạt động" chỉ sự kiện có nghĩa (bắt đầu/xong/lỗi/duyệt/hỏi/học), gộp các dòng liên tiếp cùng agent, câu chữ tiếng Việt do hub sinh ("Trợ lý nghiên cứu đã xong *Tóm tắt README* · $0.004"), id ẩn vào link. Giao việc nhanh chuyển thành nút "+ Giao việc" mở drawer |
 | **Lượt chạy (chi tiết)** | Header dính: agent, pill, chi phí/token/thời gian dạng chip, nút Dừng. Khung duyệt/câu hỏi **một chỗ duy nhất** ngay dưới header; trong diễn biến chỉ còn 1 dòng mốc "⏸ Xin duyệt — xem phía trên" (sửa `replay_items` gộp `approval.request`+`waiting_human`). Diễn biến dạng **timeline**: tin của người (phải), lời agent (trái, `md()` an toàn có sẵn), nhóm tool liên tiếp gộp thành một dòng "5 công cụ · Bash ×3, Read ×2" bấm để mở. Ô chỉ đạo (steer) dính đáy như chat |
-| **Danh sách lượt chạy** | Cột "Yêu cầu" hiển thị tiêu đề task nếu có, nếu không thì 80 ký tự đầu prompt; bỏ tiền tố `[agent-hub task …] You have been assigned…` (lấy `task.title`). Lọc nhanh dạng chip (Đang chạy · Chờ bạn · Lỗi · Xong) |
+| **Danh sách lượt chạy** | Cột "Yêu cầu" hiển thị tiêu đề task nếu có, nếu không thì 80 ký tự đầu prompt; bỏ tiền tố `[cfharness task …] You have been assigned…` (lấy `task.title`). Lọc nhanh dạng chip (Đang chạy · Chờ bạn · Lỗi · Xong) |
 | **Agent** | Header: tên, vai trò, pill; hành động chính "Giao việc"; Sửa/Tạm dừng/Xoá vào menu "⋯". Tab: Tổng quan · Lượt chạy · Cấu hình · Tri thức · Lịch sử. Thẻ cấu hình thành danh sách định nghĩa gọn có icon |
 | **Form agent** | Chia 3 bước (Cơ bản → Công cụ & quyền → Ngân sách & nâng cao) trên cùng một form (chỉ ẩn/hiện bằng CSS `:target`/JS nhẹ, không JS vẫn hiện hết); chọn template dạng thẻ có mô tả; giải thích ngắn dưới từng trường |
 | **Điều phối** | Bố cục kiểu app chat: cột trái danh sách cuộc trò chuyện (mobile: drawer), giữa là luồng tin, phải là panel điều phối viên (mobile: ẩn sau nút ⓘ). Luồng tin cuộn tới cuối khi mở, không cắt thẻ. Thẻ hành động gom thành MỘT khối "Đã làm 3 việc ▸" dưới tin trả lời tương ứng (mở ra từng việc + link). Thẻ câu hỏi (1.6) inline. Trạng thái "đang trả lời…" có chấm động + delta stream. Ô nhập dính đáy, Enter gửi / Shift+Enter xuống dòng, gợi ý nhanh (chip: "Có gì cần tôi?", "Chi phí tuần này", "Giao việc mới") |
@@ -238,7 +238,7 @@ Nguyên tắc: **ít tin hơn, sửa tại chỗ, bấm thay vì gõ**. Giữ WT
 
 ### 3.4 Kết quả run & điều phối viên (pha T-D)
 - Kết quả run: dòng hệ thống 1 dòng `✅ <b>nghien-cuu xong</b> · $0.004 · 12 s` + `▼ Agent viết:` + `<pre>`; cắt ở `result_max_chars`
-  kèm "xem đầy đủ trên web: /runs/<id>" (link web chỉ in dạng chữ, `agent-hub.localhost` không mở được trên điện thoại → nói rõ).
+  kèm "xem đầy đủ trên web: /runs/<id>" (link web chỉ in dạng chữ, `cfharness.localhost` không mở được trên điện thoại → nói rõ).
   Thêm **một** tin hệ thống nhỏ có nút chỉ khi có bước tiếp hợp lý: lỗi/vượt ngân sách → `[🔁 Chạy lại]`; xong → không nút (reply
   để tiếp tục như nay — ghi rõ "↩ Trả lời tin này để giao tiếp").
 - Run đang chạy lâu (> 30 s, run do chat này giao): một tin tiến độ **sửa tại chỗ** mỗi ≥ 10 s ("▶️ đang làm · 7 công cụ · $0.002"),
@@ -296,7 +296,7 @@ Tổng ≈ 14 ngày công. Có thể chia 3 luồng song song: **Q** (lõi câu 
 ## 7. Tiến độ thi công
 | Pha | Trạng thái |
 |---|---|
-| Q-1 lõi câu hỏi | ✅ migration v14 `questions`; `questions/service.py` (`hub.questions`); RPC `question.list|get|answer|escalate|cancel` (`questions/rpc.py`, tự audit); HUMAN_ONLY + MANAGER_ALLOWED (`answer`/`escalate`); classifier chặn `agent-hub answer`/`questions answer|escalate|cancel`; event `question.open|escalated|answered|cancelled|reminder` + schema; CLI `agent-hub questions`, `agent-hub answer <id> --pick 2 --text …`; test `tests/test_questions.py` (15 ca) |
+| Q-1 lõi câu hỏi | ✅ migration v14 `questions`; `questions/service.py` (`hub.questions`); RPC `question.list|get|answer|escalate|cancel` (`questions/rpc.py`, tự audit); HUMAN_ONLY + MANAGER_ALLOWED (`answer`/`escalate`); classifier chặn `cfharness answer`/`questions answer|escalate|cancel`; event `question.open|escalated|answered|cancelled|reminder` + schema; CLI `cfharness questions`, `cfharness answer <id> --pick 2 --text …`; test `tests/test_questions.py` (15 ca) |
 | Q-2 đường vào | ✅ hub-self `ask_human` (worker/lead); manager `question_list|question_answer|question_escalate|ask_owner`; prompt worker + prompt nhịp manager; nối tiếp: task → bình luận `answer` + gỡ chặn; hội thoại manager → `manager.chat`; run thường → `run.continue`. ⏳ còn: hook bắt `AskUserQuestion` (cần spike `claude` thật), `task_block`/`notify_owner` có `options` (đã có `ask_human`/`ask_owner` thay thế) |
 | T-Q, T-A … T-D | ✅ `chat/questions_tg.py` (câu hỏi: tin nội dung `<pre>` + tin nút số, ☐/☑ chọn nhiều, ✍️ trả lời chữ qua force_reply/reply, sửa tin khi trả lời ở mọi kênh, `/hoi`, `/canban`), `chat/flows.py` (`/giaoviec` chọn agent bằng nút, `/agent`, `/luotchay`, `/stop` chọn run, tin tiến độ sửa tại chỗ), duyệt còn 2 tin (bước 2 sửa tại chỗ), menu lệnh tiếng Việt + bàn phím nhanh. Test `tests/test_telegram_questions.py`. Chi tiết: `docs/dev-notes/telegram.md` mục "UX v2" |
 | W-Q, W-A, W-B, W-C | ✅ thẻ câu hỏi + `ACTIONS` `question_answer|question_take|question_cancel`, trang `/inbox` "Cần bạn", sidebar nhóm + tab đáy mobile, icon SVG, toast, thời gian tương đối, làm lại Tổng quan/Run/Điều phối/danh sách. Ảnh `docs/screenshots/web/v2/`. Test `tests/test_web_questions.py`. Chi tiết: `docs/dev-notes/web.md` mục "UX v2". ⏳ còn: gom tool liên tiếp trên trang run, form agent nhiều bước, tab trang agent, bố cục riêng cho Tự học/MCP/Chi phí/Nhật ký |

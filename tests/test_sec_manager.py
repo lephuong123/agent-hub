@@ -11,14 +11,14 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.errors import HubError
-from agent_hub.guard.classifier import GuardContext, classify, protected_path
-from agent_hub.guard.policy import PolicyStore, repo_deny_for
-from agent_hub.guard.runtime import build_settings, fixed_protected_dirs, path_bin_dirs, sandbox_settings
-from agent_hub.hub import Hub
-from agent_hub.paths import HubPaths
-from agent_hub.runtime.fake import FakeRuntime
-from agent_hub.workspace import validate_workspace
+from cfharness.errors import HubError
+from cfharness.guard.classifier import GuardContext, classify, protected_path
+from cfharness.guard.policy import PolicyStore, repo_deny_for
+from cfharness.guard.runtime import build_settings, fixed_protected_dirs, path_bin_dirs, sandbox_settings
+from cfharness.hub import Hub
+from cfharness.paths import HubPaths
+from cfharness.runtime.fake import FakeRuntime
+from cfharness.workspace import validate_workspace
 
 
 # ============================================================================ MGR-1
@@ -55,7 +55,7 @@ def test_path_bin_dirs_in_denywrite_and_protected(tmp_path):
 
 
 def test_workspace_in_sensitive_dir_rejected_for_human_and_manager(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_HUB_HOME", str(tmp_path / "hub"))
+    monkeypatch.setenv("CFHARNESS_HOME", str(tmp_path / "hub"))
     h = Hub(HubPaths.resolve(tmp_path / "hub"), runtime=FakeRuntime())
     ws_ok = tmp_path / "Workspace" / "proj"
     ws_ok.mkdir(parents=True)
@@ -64,11 +64,11 @@ def test_workspace_in_sensitive_dir_rejected_for_human_and_manager(tmp_path, mon
     for bad in (f"{uh}/.local/bin", str(h.paths.home / "policy"), str(h.paths.home), "/", uh, f"{uh}/.ssh"):
         with pytest.raises(HubError):
             validate_workspace(h, {"kind": "dir", "path": bad}, "workspace_default")
-    import agent_hub.workspace as _ws
+    import cfharness.workspace as _ws
 
     (tmp_path / "elsewhere").mkdir()
     saved_extra = list(_ws._EXTRA_ALLOWED_ROOTS)
-    saved_env = os.environ.pop("AGENT_HUB_EXTRA_WORKSPACE_ROOTS", None)
+    saved_env = os.environ.pop("CFHARNESS_EXTRA_WORKSPACE_ROOTS", None)
     _ws._EXTRA_ALLOWED_ROOTS.clear()
     try:
         with pytest.raises(HubError):  # ngoài gốc cho phép (tắt nới test)
@@ -76,14 +76,14 @@ def test_workspace_in_sensitive_dir_rejected_for_human_and_manager(tmp_path, mon
     finally:
         _ws._EXTRA_ALLOWED_ROOTS.extend(saved_extra)
         if saved_env is not None:
-            os.environ["AGENT_HUB_EXTRA_WORKSPACE_ROOTS"] = saved_env
+            os.environ["CFHARNESS_EXTRA_WORKSPACE_ROOTS"] = saved_env
     validate_workspace(h, {"kind": "dir", "path": str(ws_ok)}, "ws")  # trong gốc → ok
     validate_workspace(h, "scratch", "ws")  # scratch luôn ok
     h.store.close()
 
 
 def test_agent_create_rejects_sensitive_workspace(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_HUB_HOME", str(tmp_path / "hub"))
+    monkeypatch.setenv("CFHARNESS_HOME", str(tmp_path / "hub"))
     h = Hub(HubPaths.resolve(tmp_path / "hub"), runtime=FakeRuntime())
     uh = os.path.expanduser("~")
     with pytest.raises(HubError):
@@ -93,7 +93,7 @@ def test_agent_create_rejects_sensitive_workspace(tmp_path, monkeypatch):
 
 
 def test_run_adhoc_cwd_in_sensitive_dir_rejected(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENT_HUB_HOME", str(tmp_path / "hub"))
+    monkeypatch.setenv("CFHARNESS_HOME", str(tmp_path / "hub"))
     h = Hub(HubPaths.resolve(tmp_path / "hub"), runtime=FakeRuntime())
     h.agents.create({"id": "a", "name": "A"})
     with pytest.raises(HubError):
@@ -124,7 +124,7 @@ def test_repo_deny_applies_to_any_agent_in_repo(tmp_path):
 
 
 def test_repo_deny_set_is_human_only():
-    from agent_hub import auth
+    from cfharness import auth
 
     assert "guard.repo_deny.add" in auth.HUMAN_ONLY and "guard.repo_deny.rm" in auth.HUMAN_ONLY
 
@@ -132,8 +132,8 @@ def test_repo_deny_set_is_human_only():
 def test_repo_deny_cli_forbidden_from_agent(tmp_path):
     ps = PolicyStore(tmp_path / "hub", user_home=tmp_path)
     ctx = GuardContext(tmp_path, ps.load(), git_probe=False)
-    assert classify("Bash", {"command": "agent-hub guard repo-deny add /x 'Bash(git push:*)'"}, ctx).forbidden
-    assert not classify("Bash", {"command": "agent-hub guard repo-deny list"}, ctx).forbidden
+    assert classify("Bash", {"command": "cfharness guard repo-deny add /x 'Bash(git push:*)'"}, ctx).forbidden
+    assert not classify("Bash", {"command": "cfharness guard repo-deny list"}, ctx).forbidden
 
 
 # ============================================================================ MGR-8
@@ -147,6 +147,6 @@ def test_manager_run_policy_edit_is_forbidden_not_approval(tmp_path):
     w = {"file_path": f"{hub}/policy/protected.yaml", "content": "x"}
     assert classify("Write", w, normal).verdict == "destructive" and not classify("Write", w, normal).forbidden
     assert classify("Write", w, mgr).forbidden
-    # agent-hub guard/config/approve từ manager → forbidden (vốn forbidden cho mọi agent; đảm bảo manager không "approval")
+    # cfharness guard/config/approve từ manager → forbidden (vốn forbidden cho mọi agent; đảm bảo manager không "approval")
     assert classify("Bash", {"command": f"echo x > {hub}/policy/catalog.yaml"}, mgr).forbidden
-    assert classify("Bash", {"command": "agent-hub config set approval.timeout_s 1"}, mgr).forbidden
+    assert classify("Bash", {"command": "cfharness config set approval.timeout_s 1"}, mgr).forbidden

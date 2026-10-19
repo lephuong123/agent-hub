@@ -4,7 +4,7 @@ Ngày 2026-10-18. Phạm vi: FR-MS-01..07 (trừ tool team/learning), FR-MC-01..
 
 ## Đã làm
 - **MCP server của hub** (`mcp_server/`), SDK `mcp` 2.3 (`MCPServer`):
-  - `agent-hub mcp serve` (stdio, quyền `control`) và `--http` (Streamable HTTP, CHỈ loopback — host khác bị từ chối; token `read`/`control`
+  - `cfharness mcp serve` (stdio, quyền `control`) và `--http` (Streamable HTTP, CHỈ loopback — host khác bị từ chối; token `read`/`control`
     sinh lần đầu ở `HUB_HOME/mcp_server/tokens.json` 0600; thiếu/sai token → 401; token `read` gọi tool ghi → lỗi quyền).
   - Tool: `hub_status`, `hub_list_agents`, `hub_agent_get`, `hub_agent_create` (idempotency_key), `hub_agent_update`, `hub_agent_archive`
     (destructive, có `restore`), `hub_run` (trả ngay, idempotency_key), `hub_run_status`, `hub_events` (long-poll ≤ 25 s, `after_seq`+`epoch`,
@@ -13,7 +13,7 @@ Ngày 2026-10-18. Phạm vi: FR-MS-01..07 (trừ tool team/learning), FR-MC-01..
   - `instructions` + resource `hub://huong-dan` (Markdown) + `hub://agents` (snapshot).
   - Client mỏng: mọi thao tác là RPC tới daemon (`DaemonCaller` tự khởi động daemon). Long-poll chạy TRONG daemon (`mcp.events`), đánh thức
     bằng listener bus theo run_id.
-  - `agent-hub mcp snippet [--http]` CHỈ in lệnh `claude mcp add …` + JSON; không đụng `~/.claude.json` (có test).
+  - `cfharness mcp snippet [--http]` CHỈ in lệnh `claude mcp add …` + JSON; không đụng `~/.claude.json` (có test).
 - **MCP client registry** (`mcp_client/`): schema mượn Hermes (command/args/env | url/headers, `tools.include/exclude/require_approval` glob,
   `trust` trusted|untrusted — giá trị lạ/thiếu = untrusted + cảnh báo, `full` = trusted; `lazy`, `supports_parallel_tool_calls`, `timeout_s`).
   CLI `mcp add|edit|list|show|rm|restore|probe(test)|import|assign|unassign|agent-config`. Xoá mềm (`deleted_at` + `trash/mcp/*.yaml`); đang
@@ -33,11 +33,11 @@ Ngày 2026-10-18. Phạm vi: FR-MS-01..07 (trừ tool team/learning), FR-MC-01..
   (getpass|--value-stdin|--from-env)|list|rm` — `list` báo secret còn thiếu mà registry đang tham chiếu.
 - **Audit** (`audit.py`, bảng `audit_log` append-only bằng trigger): `audit.record(kind, agent_id, run_id, data)`; che secret (redact +
   giá trị trong secret store). `register_rpc` bọc audit MỌI method thay đổi trạng thái của daemon (agent.*, run.start/stop/resume/continue,
-  estop, config.set, mcp.*, secret.*, feedback.record…) với `channel` = `cli` hoặc `mcp:<tên client>[:http]`. `agent-hub audit list`.
+  estop, config.set, mcp.*, secret.*, feedback.record…) với `channel` = `cli` hoặc `mcp:<tên client>[:http]`. `cfharness audit list`.
 - **tool.write**: `ToolWriteWatcher` (listener bus) — `tool.start` của tool `mcp__…` không `readOnlyHint: true` (kể cả chưa probe) → audit
   `tool.write` (agent, run, server, tool, input đã che) + event `tool.write` (phát qua `call_soon` để không lồng publish); `tool.complete`
   tương ứng → audit `tool.write.result`. Bỏ qua server trong `mcp.audit_ignore_servers` (mặc định `hub-guard`).
-- **Signals**: bảng `signals`; `hub_feedback`/`agent-hub feedback`: good→`good`, wrong/partial→`correction`, có `corrected_output` → thêm
+- **Signals**: bảng `signals`; `hub_feedback`/`cfharness feedback`: good→`good`, wrong/partial→`correction`, có `corrected_output` → thêm
   `edit_output`; phát `learning.signal`.
 - Migration v3 (`mcp_servers`, `audit_log`, `signals`, `idempotency_keys`); config `mcp.*`, `secrets.*`, `mcp_server.*`; event `tool.write`,
   `mcp.changed`, `learning.signal`.
@@ -49,7 +49,7 @@ Ngày 2026-10-18. Phạm vi: FR-MS-01..07 (trừ tool team/learning), FR-MC-01..
 ## Kiểm chứng thật (một lần, tiêu chí M1 phần A)
 HUB_HOME tạm trong scratch, daemon runtime `claude` thật, agent `haiku-helper` (model haiku, `--tools ""`, budget 0.1/run). Lệnh:
 `claude -p "<yêu cầu dùng hub_run giao việc đếm từ cho haiku-helper rồi hub_events tới done>" --model haiku --max-budget-usd 0.3
---setting-sources "" --strict-mcp-config --mcp-config <file từ agent-hub mcp snippet> --allowedTools mcp__agent-hub --output-format json`
+--setting-sources "" --strict-mcp-config --mcp-config <file từ cfharness mcp snippet> --allowedTools mcp__cfharness --output-format json`
 (bỏ biến môi trường CLAUDECODE/CLAUDE_CODE_* của phiên bao ngoài).
 Kết quả: chạy thông. Claude Code gọi `hub_run` → `r_34dc90edd676`, lặp `hub_events` tới `done=true`, trả `status=completed`, `summary=5`
 (đúng). Audit có `mcp.run` channel `mcp:claude-code`. **Chi phí: phiên ngoài $0.00445707 + run agent $0.00049708 = $0.00495415.**

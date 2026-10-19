@@ -18,8 +18,8 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from agent_hub.runtime import FakeRuntime
-from agent_hub.runtime.base import RunHandle, RunSpec
+from cfharness.runtime import FakeRuntime
+from cfharness.runtime.base import RunHandle, RunSpec
 
 
 class ScriptedRuntime(FakeRuntime):
@@ -78,8 +78,8 @@ class ScriptedRuntime(FakeRuntime):
 
 def kind_of(spec: RunSpec) -> str:
     p = spec.prompt
-    if p.startswith("[agent-hub plan"):
+    if p.startswith("[cfharness plan"):
         return "lead"
-    if p.startswith("[agent-hub review"):
+    if p.startswith("[cfharness review"):
         return "review"
     return "task"

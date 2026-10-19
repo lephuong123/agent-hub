@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.config import DEFAULTS
-from agent_hub.runtime import ArgvError, RunSpec, build_argv
-from agent_hub.runtime.claude_cli import _redact_for_storage, child_env
+from cfharness.config import DEFAULTS
+from cfharness.runtime import ArgvError, RunSpec, build_argv
+from cfharness.runtime.claude_cli import _redact_for_storage, child_env
 
 
 def spec(**kw):

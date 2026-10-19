@@ -1,4 +1,4 @@
-# Luồng WEB — giao diện trình duyệt (`agent-hub web`)
+# Luồng WEB — giao diện trình duyệt (`cfharness web`)
 
 Nguồn: `docs/plan/web-telegram.md` (quyền sở hữu, nguyên tắc), BRD FR-UI-01..10, FR-SG-04/11, Q-11. Ảnh: `docs/screenshots/web/`.
 
@@ -8,8 +8,8 @@ Nguồn: `docs/plan/web-telegram.md` (quyền sở hữu, nguyên tắc), BRD FR
 | `web/security.py` | Chỉ loopback (`require_loopback`), link đăng nhập một lần (HMAC khoá RAM + `HUB_HOME/auth/web.json` 0600, dir 0700), phiên RAM (cookie `ahub_web` HttpOnly/SameSite=Strict/Path=/, idle 12 h, tối đa 7 ngày), CSRF theo phiên, `allowed_hosts` |
 | `web/app.py` | Starlette: `GuardMiddleware` ASGI thuần (Host → 421, chưa đăng nhập → 303 /login hoặc 401, header CSP/XFO/no-referrer/no-store; không đệm nên SSE chạy); trang; `POST /do/<action>` bảng `ACTIONS`; SSE |
 | `web/present.py` | Thuần: nhãn tiếng Việt (agent/run/task/lý do chờ), `transcript_item(ev)` (event → mục), `activity_item` (dùng lại `tui.model.activity_line`), `md()` an toàn (markdown-it, HTML thô bị escape, link chỉ http/https/mailto) |
-| `web/cli.py` | `agent-hub web [--host] [--port 8765] [--open] [--url]` — đã có server chạy thì chỉ cấp link mới |
-| `web/demo.py` | `python -m agent_hub.web.demo --home <tmp> --port 8799`: daemon thật + FakeRuntime + dữ liệu mẫu (run giữ, approval waiting_human) — dùng chụp ảnh |
+| `web/cli.py` | `cfharness web [--host] [--port 8765] [--open] [--url]` — đã có server chạy thì chỉ cấp link mới |
+| `web/demo.py` | `python -m cfharness.web.demo --home <tmp> --port 8799`: daemon thật + FakeRuntime + dữ liệu mẫu (run giữ, approval waiting_human) — dùng chụp ảnh |
 | `web/templates/`, `web/static/` | Jinja2; `htmx-2.0.4.min.js` vendored (sha384 `HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+`, 0BSD), `app.css`, `app.js` (hộp xác nhận, EventSource) |
 
 Web là CLIENT thuần của daemon (`tui.client.AsyncHubClient(channel="web")`), không đọc/ghi `hub.db`. Không thêm RPC, không migration.
@@ -24,7 +24,7 @@ Thao tác ghi: form POST (không cần JS). `ACTIONS[name]` = method RPC + dựn
 heartbeat 15 s; client đóng tab → subscription đóng (run không ảnh hưởng). Tổng quan + thanh run làm mới bằng htmx `every 2s`.
 
 ## 2. Bảo mật — đã làm + test (`tests/test_web.py`, 26 test)
-- Bind chỉ loopback (`test_bind_loopback_only`, CLI trả 1). Host header phải là `agent-hub.localhost:port` → chống DNS rebinding; 127.0.0.1/localhost → 303 sang host riêng, không đặt cookie (`test_host_header_must_be_web_host`).
+- Bind chỉ loopback (`test_bind_loopback_only`, CLI trả 1). Host header phải là `cfharness.localhost:port` → chống DNS rebinding; 127.0.0.1/localhost → 303 sang host riêng, không đặt cookie (`test_host_header_must_be_web_host`).
 - Không phiên → 303 /login (trang) / 401 (partials, SSE, POST); cookie giả vô hiệu (`test_unauthenticated_requests_are_blocked`).
 - Link một lần: dùng lại / chữ ký sai / hết hạn → 401; cookie HttpOnly + SameSite=Strict; đăng xuất huỷ phiên (`test_one_time_login_link…`).
 - CSRF + Origin/Referer/Sec-Fetch-Site cho mọi POST (`test_csrf_and_origin_required_for_writes`); CSP `script-src 'self'` (không inline,
@@ -50,21 +50,21 @@ Spike `claude` 2.1.302 + haiku (~$0.02), settings = `guard.runtime.sandbox_setti
 Kết luận: sandbox Seatbelt chặn mọi kết nối localhost từ Bash/hậu duệ. Lớp tối thiểu khi không có sandbox (tắt, Linux thiếu bwrap
 mà `fail_if_unavailable: false`) hoặc tool không sandbox (WebFetch chạy trong tiến trình `claude`, MCP server): không có cookie/link →
 mọi request bị 303/401; link chỉ ký bằng khoá trong `HUB_HOME/auth` (sandbox denyRead + `permissions.deny` Read/Grep/Glob `auth/**`);
-lệnh `agent-hub web …` từ agent bị classifier `forbidden` (`HUB_HUMAN_ONLY_CLI["web"]`) (`test_agent_in_run_cannot_reach_web_secrets`).
+lệnh `cfharness web …` từ agent bị classifier `forbidden` (`HUB_HUMAN_ONLY_CLI["web"]`) (`test_agent_in_run_cannot_reach_web_secrets`).
 Giới hạn còn lại: không sandbox + agent đọc được `auth/web.json` (phải lách classifier) → tự ký link → có phiên web = quyền người;
 tương đương rủi ro token người đã ghi ở `hardening-SEC.md` §3.
 
 ## 3b. Sửa theo kiểm toán `docs/acceptance/security-web-telegram.md` (WT-1, WT-2/6/7 phần web, BUG waiting_human)
 **WT-1 (cookie không tách theo cổng → app localhost duyệt thay người).** Nhiều lớp:
-1. Host riêng `agent-hub.localhost:<port>` (mặc định; `--host-name` đổi). Cookie host-only → KHÔNG gửi tới `127.0.0.1:*`/`localhost:*`.
+1. Host riêng `cfharness.localhost:<port>` (mặc định; `--host-name` đổi). Cookie host-only → KHÔNG gửi tới `127.0.0.1:*`/`localhost:*`.
    Chrome/Firefox/Safari tự phân giải `*.localhost`; resolver macOS cũng vậy (`getaddrinfo` → ::1, 127.0.0.1 — đã kiểm). Server vẫn bind 127.0.0.1.
 2. Khoá phiên NGOÀI cookie (`Session.key`, 256 bit): trao MỘT lần qua fragment `/#k=…` của redirect đăng nhập (fragment không lên server,
-   không vào log/Referer), `app.js` cất vào `localStorage` của origin web (origin khác — kể cả `agent-hub.localhost:<cổng khác>` — không
+   không vào log/Referer), `app.js` cất vào `localStorage` của origin web (origin khác — kể cả `cfharness.localhost:<cổng khác>` — không
    đọc được) và gắn `k` vào MỌI form POST; server từ chối 403 nếu thiếu/sai (`post_guard`). HTML không bao giờ chứa khoá (trang xác nhận
    mang trường form qua `carry()` đã loại `k`/`csrf`). Hệ quả: thao tác ghi cần JavaScript; tab/trình duyệt khác chưa có khoá → đăng nhập lại.
 3. Phiên ngắn: idle 1 h, tối đa 12 h; polling `/partials/*` và SSE KHÔNG gia hạn (`test_wt1_short_session_polling_does_not_extend`).
 4. `__Host-` prefix: không dùng — bắt buộc `Secure` (chỉ HTTPS; trình duyệt không nhất quán với http://*.localhost).
-5. Tái hiện QA chạy lại (Chromium thật + `evil_devserver.py` nguyên bản ở :8800, và biến thể mạnh nhất ở `agent-hub.localhost:8801`):
+5. Tái hiện QA chạy lại (Chromium thật + `evil_devserver.py` nguyên bản ở :8800, và biến thể mạnh nhất ở `cfharness.localhost:8801`):
    bản gốc nhận cookie RỖNG (host-only); biến thể cùng tên host (trình duyệt gửi cookie vì không tách cổng) đọc được CSRF nhưng
    `POST /do/approve` → **403**, approval vẫn `waiting_human`; người bấm trong trình duyệt → `allowed`. Test hồi quy: `test_wt1_stolen_cookie_and_csrf_cannot_write`.
 6. Sửa kèm: `Referrer-Policy: same-origin` (với `no-referrer` Chrome gửi `Origin: null` cho form POST → 403 với người thật — phát hiện khi chạy trình duyệt thật).
@@ -72,7 +72,7 @@ tương đương rủi ro token người đã ghi ở `hardening-SEC.md` §3.
 **Mô hình đe doạ còn lại.** (a) Tiến trình ngoài sandbox cùng user đọc được profile trình duyệt (cookie + localStorage trên đĩa) hoặc
 gắn debugger vào trình duyệt → có phiên; cũng đọc được token người — ngang mức đã chấp nhận ở hardening-SEC §3. (b) XSS trên origin web
 lộ khoá trong localStorage — giảm bằng CSP `script-src 'self'`, autoescape, markdown không HTML. (c) Trang độc gửi người tới
-`agent-hub.localhost:<cổng khác>` để thu cookie: cookie đó vô dụng khi thiếu khoá; còn GET đọc được (xem trạng thái, prompt, kết quả run).
+`cfharness.localhost:<cổng khác>` để thu cookie: cookie đó vô dụng khi thiếu khoá; còn GET đọc được (xem trạng thái, prompt, kết quả run).
 (d) `--host-name 127.0.0.1` (dự phòng cho trình duyệt không phân giải `*.localhost`) mất lớp 1, còn lớp 2.
 
 **WT-2.** `present.action_view`: hiện TOÀN BỘ thao tác (Bash: cả lệnh + tham số khác; tool khác/MCP: mọi tham số JSON), không cắt; khung
@@ -108,8 +108,8 @@ Test: `test_sandbox_localhost_badge_and_toggle`.
   Tạo lại: chạy `web.demo`, rồi script Playwright (đăng nhập bằng link ký từ `auth/web.json`, chụp các trang).
 
 ## 6. Lệch / việc dở
-- Chưa có: trang guard policy/protect (dùng CLI `agent-hub guard`), purge vĩnh viễn, sửa golden checker, journey học, canary chi tiết,
-  takeover chạy từ web (chỉ hiện lệnh `agent-hub takeover <run>` — cần terminal tương tác), nhập MCP có bước xem trước (hiện nhập thẳng sau xác nhận).
+- Chưa có: trang guard policy/protect (dùng CLI `cfharness guard`), purge vĩnh viễn, sửa golden checker, journey học, canary chi tiết,
+  takeover chạy từ web (chỉ hiện lệnh `cfharness takeover <run>` — cần terminal tương tác), nhập MCP có bước xem trước (hiện nhập thẳng sau xác nhận).
 - Phiên lưu RAM: khởi động lại web → đăng nhập lại. Một server web/HUB_HOME (`auth/web.json`).
 - Reasoning chỉ hiện khi xem live (delta không lưu DB) — giống TUI.
 

@@ -1,7 +1,7 @@
-"""TUI `agent-hub top` (FR-UI-01..05, 09, 10; NFR-05/08) — Textual Pilot (`run_test`) với daemon IN-PROCESS
+"""TUI `cfharness top` (FR-UI-01..05, 09, 10; NFR-05/08) — Textual Pilot (`run_test`) với daemon IN-PROCESS
 (Unix socket thật, FakeRuntime). Không gọi `claude`.
 
-Ảnh SVG các màn: đặt `AGENT_HUB_SCREENSHOTS=docs/screenshots/m2` khi chạy pytest để ghi lại.
+Ảnh SVG các màn: đặt `CFHARNESS_SCREENSHOTS=docs/screenshots/m2` khi chạy pytest để ghi lại.
 """
 
 from __future__ import annotations
@@ -13,13 +13,13 @@ from pathlib import Path
 import pytest
 from textual.widgets import DataTable, Input, Select, Static
 
-from agent_hub.daemon import Daemon
-from agent_hub.runtime import FakeRuntime
-from agent_hub.tui.app import AgentFormScreen, AttachScreen, ConfirmScreen, InfoScreen, LearningsScreen, PromptScreen, TasksScreen, TopApp, Transcript
-from agent_hub.tui.model import TopModel, activity_line
-from agent_hub.tui.takeover import build_takeover_argv
+from cfharness.daemon import Daemon
+from cfharness.runtime import FakeRuntime
+from cfharness.tui.app import AgentFormScreen, AttachScreen, ConfirmScreen, InfoScreen, LearningsScreen, PromptScreen, TasksScreen, TopApp, Transcript
+from cfharness.tui.model import TopModel, activity_line
+from cfharness.tui.takeover import build_takeover_argv
 
-SHOTS = os.environ.get("AGENT_HUB_SCREENSHOTS")
+SHOTS = os.environ.get("CFHARNESS_SCREENSHOTS")
 ISOLATED = Path(__file__).parent / "fixtures" / "claude-hub-isolated-run.jsonl"  # run thật đã cô lập (không vi phạm)
 SIZE = (170, 46)
 
@@ -309,7 +309,7 @@ async def test_approve_from_tui_and_second_viewer_conflict(held_daemon, hub_home
         row = hub.approvals.get(ap["id"])
         assert row["resolved_channel"] == "tui"
         # viewer thứ hai (cùng approval) → Conflict, không quyết lại (request đã đóng)
-        from agent_hub.tui.client import AsyncHubClient
+        from cfharness.tui.client import AsyncHubClient
 
         with pytest.raises(Exception, match="đã allowed"):
             await AsyncHubClient(hub_home.socket).call("approval.approve", {"id": ap["id"], "channel": "tui"})
@@ -416,7 +416,7 @@ async def test_takeover_print_and_record(daemon, hub_home):
         txt = str(app.screen.text)
         assert f"--resume {run['session_id']}" in txt and "--strict-mcp-config" in txt
         shot(app, "08-takeover.svg")
-    from agent_hub.tui.client import AsyncHubClient
+    from cfharness.tui.client import AsyncHubClient
 
     c = AsyncHubClient(hub_home.socket)
     info = await c.call("run.takeover", {"id": run["id"]})

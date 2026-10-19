@@ -7,11 +7,11 @@ import textwrap
 import pytest
 import yaml
 
-from agent_hub.errors import Conflict, HubError
-from agent_hub.hub import Hub
-from agent_hub.mcp_client import agent_mcp_tool_rules, build_agent_mcp_servers, tool_annotations
-from agent_hub.mcp_client.scan import scan_description
-from agent_hub.mcp_client.wiring import parse_mcp_tool
+from cfharness.errors import Conflict, HubError
+from cfharness.hub import Hub
+from cfharness.mcp_client import agent_mcp_tool_rules, build_agent_mcp_servers, tool_annotations
+from cfharness.mcp_client.scan import scan_description
+from cfharness.mcp_client.wiring import parse_mcp_tool
 
 FAKE_SERVER = textwrap.dedent(
     '''

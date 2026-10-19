@@ -14,9 +14,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agent_hub.cli import main
-from agent_hub.daemon import spawn_background
-from agent_hub.rpc import RpcClient
+from cfharness.cli import main
+from cfharness.daemon import spawn_background
+from cfharness.rpc import RpcClient
 
 from telegram_fake import TOKEN, FakeTelegram
 
@@ -106,7 +106,7 @@ def test_run_via_telegram_and_stranger_ignored(env):
     wait_for(lambda: tg.calls_of("getUpdates"))
     tg.user_message(999, "/run coder BASH: touch hacked.txt")
     tg.user_message(BOSS, "/run coder BASH: ls")
-    res = wait_for(lambda: next((m for m in tg.sent(BOSS) if m["text"].startswith("<b>[agent-hub] Run ")), None))
+    res = wait_for(lambda: next((m for m in tg.sent(BOSS) if m["text"].startswith("<b>[cfharness] Run ")), None))
     assert "hoàn thành" in res["text"] and "Chi phí: $" in res["text"]
     runs = rpc.call("run.list", {"agent": "coder"})
     assert len(runs) == 1 and "touch hacked.txt" not in executed(env)

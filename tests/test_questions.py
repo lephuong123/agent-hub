@@ -10,10 +10,10 @@ import time
 
 import pytest
 
-from agent_hub import auth
-from agent_hub.errors import BLOCKED, HubError
-from agent_hub.guard.classifier import GuardContext, classify
-from agent_hub.guard.policy import PolicyStore
+from cfharness import auth
+from cfharness.errors import BLOCKED, HubError
+from cfharness.guard.classifier import GuardContext, classify
+from cfharness.guard.policy import PolicyStore
 from m7_fake import MgrScript, close, make_daemon, manager_run, rpc, tool, wait_status
 
 OPTS = [{"label": "Chỉ xoá file > 30 ngày"}, {"label": "Xoá cả thư mục cache", "description": "3 GB"}, "Không xoá, chỉ báo cáo"]
@@ -29,7 +29,7 @@ class Script(MgrScript):
 
     def __call__(self, spec):
         out = super().__call__(spec)
-        if spec.prompt.startswith("[agent-hub task"):
+        if spec.prompt.startswith("[cfharness task"):
             self.worker_prompts.append(spec.prompt)
             tid = spec.prompt.split()[2].rstrip("]")
             if tid not in self.seen:
@@ -199,7 +199,7 @@ async def test_manager_ask_owner_answer_returns_to_conversation(env):
 async def test_agent_caller_cannot_answer_escalate_or_cancel(env):
     d, s = env
     _, rid, res = await _ask(d)
-    agent = auth.Caller(via="socket", run_id=rid, agent_id="w1", evidence=["env:AGENT_HUB_RUN_ID"])
+    agent = auth.Caller(via="socket", run_id=rid, agent_id="w1", evidence=["env:CFHARNESS_RUN_ID"])
     for method in ("question.answer", "question.escalate", "question.cancel"):
         with pytest.raises(HubError) as ei:
             await rpc(d, method, {"id": res["question_id"], "keys": ["1"]}, as_caller=agent)
@@ -213,9 +213,9 @@ async def test_agent_caller_cannot_answer_escalate_or_cancel(env):
 
 def test_classifier_forbids_agent_answer_cli(tmp_path):
     ctx = GuardContext(cwd=tmp_path, policy=PolicyStore(tmp_path / "h").load())
-    for cmd in ("agent-hub answer q_1 --pick 1", "agent-hub questions answer q_1", "agent-hub questions cancel q_1", "agent-hub questions escalate q_1"):
+    for cmd in ("cfharness answer q_1 --pick 1", "cfharness questions answer q_1", "cfharness questions cancel q_1", "cfharness questions escalate q_1"):
         assert classify("Bash", {"command": cmd}, ctx).forbidden, cmd
-    assert not classify("Bash", {"command": "agent-hub questions list"}, ctx).forbidden
+    assert not classify("Bash", {"command": "cfharness questions list"}, ctx).forbidden
 
 
 # ============================================================================ hợp lệ hoá
@@ -269,10 +269,10 @@ async def test_reminder_backoff(env):
 
 
 async def test_cli_answer_roundtrip(env, capsys):
-    from agent_hub.questions.cli import print_question
+    from cfharness.questions.cli import print_question
 
     d, s = env
     _, _, res = await _ask(d)
     print_question(d.hub.questions.get(res["question_id"]), full=True)
     out = capsys.readouterr().out
-    assert "chờ bạn" in out and "1. Chỉ xoá file > 30 ngày" in out and f"agent-hub answer {res['question_id']} --pick" in out
+    assert "chờ bạn" in out and "1. Chỉ xoá file > 30 ngày" in out and f"cfharness answer {res['question_id']} --pick" in out

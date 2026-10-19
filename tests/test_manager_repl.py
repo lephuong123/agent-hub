@@ -1,4 +1,4 @@
-"""`agent-hub chat` — chat qua lại với điều phối viên trên terminal (manager/repl.py + chatview.py + termsafe.py).
+"""`cfharness chat` — chat qua lại với điều phối viên trên terminal (manager/repl.py + chatview.py + termsafe.py).
 
 Daemon IN-PROCESS trên Unix socket thật + ScriptedRuntime (giữ run điều phối viên ở `running` để kiểm chữ chạy/steer/stop).
 Không gọi `claude`.
@@ -12,13 +12,13 @@ import json
 
 import pytest
 
-from agent_hub import cli
-from agent_hub.daemon import Daemon
-from agent_hub.events import make_event
-from agent_hub.manager import chatview as V
-from agent_hub.manager import repl
-from agent_hub.termsafe import clean, one_line
-from agent_hub.tui.client import AsyncHubClient
+from cfharness import cli
+from cfharness.daemon import Daemon
+from cfharness.events import make_event
+from cfharness.manager import chatview as V
+from cfharness.manager import repl
+from cfharness.termsafe import clean, one_line
+from cfharness.tui.client import AsyncHubClient
 from m3_fake import ScriptedRuntime
 from m7_fake import MgrScript, wait_status
 
@@ -114,7 +114,7 @@ def test_chatstate_tracks_continuation_and_filters_other_conversations():
 async def test_no_manager_friendly_guidance(env, hub_home):
     s, buf = session(hub_home)
     assert await s.open() is False
-    assert "Chưa có điều phối viên" in buf.getvalue() and "agent-hub manager set" in buf.getvalue()
+    assert "Chưa có điều phối viên" in buf.getvalue() and "cfharness manager set" in buf.getvalue()
 
 
 async def test_stream_actions_reply_and_audit_channel_cli(env, hub_home):
@@ -282,7 +282,7 @@ async def test_oneshot_cli_waits_via_events(env, hub_home, capsys):
     assert code == 0
     out = json.loads(capsys.readouterr().out)
     assert out["reply"] == "Đã giao việc." and out["conversation_id"] and out["run_id"]
-    # `agent-hub chat "<tin>"` = cùng hành vi, nối vào hội thoại cli gần nhất
+    # `cfharness chat "<tin>"` = cùng hành vi, nối vào hội thoại cli gần nhất
     code = await asyncio.to_thread(cli.main, ["chat", "tiếp", "nhé"])
     assert code == 0
     cap = capsys.readouterr()

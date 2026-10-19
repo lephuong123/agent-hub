@@ -13,13 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.auth import token_path
-from agent_hub.guard.classifier import GuardContext, classify
-from agent_hub.guard.policy import PolicyStore, package_dir
-from agent_hub.guard.runtime import build_settings, check_extra_args, sandbox_settings
-from agent_hub.guard.service import is_hub_mcp_config
-from agent_hub.runtime.base import RunSpec
-from agent_hub.runtime.claude_cli import ArgvError, build_argv
+from cfharness.auth import token_path
+from cfharness.guard.classifier import GuardContext, classify
+from cfharness.guard.policy import PolicyStore, package_dir
+from cfharness.guard.runtime import build_settings, check_extra_args, sandbox_settings
+from cfharness.guard.service import is_hub_mcp_config
+from cfharness.runtime.base import RunSpec
+from cfharness.runtime.claude_cli import ArgvError, build_argv
 
 
 def _settings(tmp_path, **kw):
@@ -55,7 +55,7 @@ def test_sandbox_blocks_hub_writes_reads_and_socket(tmp_path, monkeypatch):
     assert str(sock) not in socks and "/tmp/ssh-agent.sock" not in socks
     _, _, s_on = _settings(tmp_path / "on", sandbox={"allow_ssh_agent": True})
     assert "/tmp/ssh-agent.sock" in (s_on["sandbox"]["network"].get("allowUnixSockets") or [])
-    from agent_hub.guard.runtime import DEFAULT_ALLOWED_DOMAINS  # R3-1: mặc định hẹp, không "*"
+    from cfharness.guard.runtime import DEFAULT_ALLOWED_DOMAINS  # R3-1: mặc định hẹp, không "*"
     assert sb["network"]["allowedDomains"] == DEFAULT_ALLOWED_DOMAINS
     assert not any("github" in d for d in sb["network"]["allowedDomains"])
     # tool Read/Grep/Glob của agent cũng không đọc được token/secret/mcp.json
@@ -117,12 +117,12 @@ def test_extra_args_legit_allowed_and_build_argv_enforces(tmp_path):
 
 # ------------------------------------------------------------------------------------------- H-18 MCP hub dưới tên khác
 def test_hub_mcp_detected_by_command_or_url():
-    assert is_hub_mcp_config({"command": "agent-hub", "args": ["mcp", "serve"]})
-    assert is_hub_mcp_config({"command": "/usr/local/bin/agent-hub", "args": ["--home", "/x", "mcp", "serve", "--http"]})
-    assert is_hub_mcp_config({"command": "python3", "args": ["-m", "agent_hub.mcp_server.server"]})
+    assert is_hub_mcp_config({"command": "cfharness", "args": ["mcp", "serve"]})
+    assert is_hub_mcp_config({"command": "/usr/local/bin/cfharness", "args": ["--home", "/x", "mcp", "serve", "--http"]})
+    assert is_hub_mcp_config({"command": "python3", "args": ["-m", "cfharness.mcp_server.server"]})
     assert is_hub_mcp_config({"url": "http://127.0.0.1:8765/mcp"})
     assert is_hub_mcp_config({"url": "http://localhost:9999/mcp"}, port=9999)
-    assert not is_hub_mcp_config({"command": "python3", "args": ["-m", "agent_hub.mcp_server.hub_self"]})
+    assert not is_hub_mcp_config({"command": "python3", "args": ["-m", "cfharness.mcp_server.hub_self"]})
     assert not is_hub_mcp_config({"url": "https://api.example.com/mcp"})
 
 

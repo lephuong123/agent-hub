@@ -1,7 +1,7 @@
 # M4-A — Lõi học (ghi chú phát triển)
 
 Phạm vi: FR-LN-01..07, 11 (tầng agent), 15, 18, 19; FR-SG-05 (phần học), FR-SG-06 (skill/memory); FR-RT-10, FR-RT-17 (M4); FR-OB-04.
-Bản đồ module: `src/agent_hub/learning/__init__.py` (docstring), `src/agent_hub/knowledge/`.
+Bản đồ module: `src/cfharness/learning/__init__.py` (docstring), `src/cfharness/knowledge/`.
 
 ## Đã làm
 - **Kho tri thức** (`knowledge/store.py`): `agents/<id>/MEMORY.md|USER.md` (mục ngăn `\n§\n`, hạn mức `learning.limits` 2.200/1.375),
@@ -34,10 +34,10 @@ Bản đồ module: `src/agent_hub/learning/__init__.py` (docstring), `src/agent
   đích bị sửa ngoài ledger (`--force`), cấu hình → revision mới `actor=rollback`.
 - **Guard học** (`learning/guard.py`): category `policy_touch | self_escalation | bounds | guard_rule` (+ `rule` chi tiết) → `guard.blocked`.
 - **Chính sách học** `policy/learning.yaml` (`learning/policy.py`): `enabled/auto_apply` toàn cục + `agents.<id>` (+ team policies),
-  `config_bounds` (Q-20), `rate` (Q-19). CLI `learn policy set` (audit + `policy/history/`); classifier coi `agent-hub learn policy set`
+  `config_bounds` (Q-20), `rate` (Q-19). CLI `learn policy set` (audit + `policy/history/`); classifier coi `cfharness learn policy set`
   / `knowledge pin` từ agent là `policy_change` (forbidden).
 - **FR-OB-04** `learning/cache.py`: tỉ lệ cache theo run/agent, `cache.warning` khi hash prompt của session mới đổi > 3 lần/ngày.
-- **Bề mặt**: RPC `learn.*`, `knowledge.*`, `learnself.call`; CLI `agent-hub learn …`, `agent-hub knowledge …`; MCP `hub_learn_feed|status|ledger|rollback|refine`,
+- **Bề mặt**: RPC `learn.*`, `knowledge.*`, `learnself.call`; CLI `cfharness learn …`, `cfharness knowledge …`; MCP `hub_learn_feed|status|ledger|rollback|refine`,
   `hub_knowledge_get` (`mcp_server/learning_tools.py`).
 - Migration **v7** (B = v8).
 

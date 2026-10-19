@@ -2,9 +2,9 @@ import asyncio
 
 import pytest
 
-from agent_hub.bus import Aggregator, EventBus
-from agent_hub.claude_adapter import adapt_lines
-from agent_hub.events import make_event
+from cfharness.bus import Aggregator, EventBus
+from cfharness.claude_adapter import adapt_lines
+from cfharness.events import make_event
 
 
 def ev(agent, type_="tool.start", **p):

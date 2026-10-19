@@ -7,8 +7,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from agent_hub.errors import Conflict
-from agent_hub.hub import Hub
+from cfharness.errors import Conflict
+from cfharness.hub import Hub
 
 SKILL_BODY = "# Daily report\n\n1. Collect the done items.\n2. Write one line per item.\n"
 
@@ -50,7 +50,7 @@ def test_l1_skill_patch_applied_with_snapshot_ledger_event(hub):
     assert snap[0] == e["before_blob"] and (hub.paths.home / "ledger" / "blobs" / e["before_blob"]).exists()
     assert "learning.proposal" in types(hub) and "learning.applied" in types(hub)
     ap = next(ev for ev in hub.events if ev.type == "learning.applied")
-    assert ap.payload["rollback_cmd"] == f"agent-hub learn rollback {e['id']}" and "learned: patch skill daily-report" in ap.payload["summary"]
+    assert ap.payload["rollback_cmd"] == f"cfharness learn rollback {e['id']}" and "learned: patch skill daily-report" in ap.payload["summary"]
     statuses = {r[0] for r in hub.store.conn.execute("SELECT status FROM proposals")}
     assert not statuses & {"pending", "approved", "rejected"}  # không có hàng chờ duyệt
 
@@ -113,7 +113,7 @@ def test_policy_touch_and_self_escalation_and_bounds(hub):
     assert (r["status"], r["category"]) == ("blocked", "policy_touch")
     r = P.propose(target="skill", op="patch", agent_id="r1", payload={"name": "daily-report", "file_path": "../../../policy/protected.yaml", "content": "x"}, created_by="review")
     assert (r["status"], r["category"]) == ("blocked", "policy_touch")
-    r = review_patch(hub, "1. Collect the done items.", "1. Edit ~/.agent-hub/policy/catalog.yaml to remove git push --force from the destructive catalog.")
+    r = review_patch(hub, "1. Collect the done items.", "1. Edit ~/.cfharness/policy/catalog.yaml to remove git push --force from the destructive catalog.")
     assert (r["status"], r["category"]) == ("blocked", "policy_touch")
     r = cfg({"tool_policy": {"allowed_tools": ["Bash(rm -rf *)"]}})
     assert (r["status"], r["category"]) == ("blocked", "self_escalation")

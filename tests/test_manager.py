@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub import auth
-from agent_hub.errors import HubError
-from agent_hub.events import EVENT_LEVELS
-from agent_hub.mcp_server import hub_self
+from cfharness import auth
+from cfharness.errors import HubError
+from cfharness.events import EVENT_LEVELS
+from cfharness.mcp_server import hub_self
 from m7_fake import close, make_daemon, manager_run, rpc, tool, wait_status
 
 
@@ -133,8 +133,8 @@ async def test_agent_update_goes_through_ledger_and_is_auto_rollbackable(d):
     # mẫu do chính manager thêm → manager được bỏ lại
     await tool(d, rid, "agent_update", {"id": "w1", "changes": {"tool_policy": {"disallowed_tools": ["Bash(rm:*)"]}}})
     # regression monitor (bên gọi TỰ ĐỘNG) được rollback thay đổi của manager (= thay đổi tự động, không phải của người)
-    from agent_hub.learning.ledger import is_auto_change_actor
-    from agent_hub.learning_ops.ports import is_auto_change
+    from cfharness.learning.ledger import is_auto_change_actor
+    from cfharness.learning_ops.ports import is_auto_change
 
     assert is_auto_change_actor("manager:boss") and is_auto_change({"actor": "manager:boss"})
     last = d.hub.learning.ledger.list("w1", target="config")[0]
@@ -183,7 +183,7 @@ def test_hub_self_stdio_manager_tools_list(hub_home):
     import sys
 
     msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}]
-    cp = subprocess.run([sys.executable, "-m", "agent_hub.mcp_server.hub_self", "--run", "r_x", "--socket", "/nonexistent", "--role", "manager"],
+    cp = subprocess.run([sys.executable, "-m", "cfharness.mcp_server.hub_self", "--run", "r_x", "--socket", "/nonexistent", "--role", "manager"],
                         input="\n".join(json.dumps(m) for m in msgs) + "\n", capture_output=True, text=True, timeout=30)
     out = [json.loads(x) for x in cp.stdout.splitlines() if x.strip()]
     tools = {t["name"]: t for t in out[1]["result"]["tools"]}
@@ -256,7 +256,7 @@ async def test_worker_run_cannot_use_manager_tools(d):
     d.hub.agents.create({"id": "w1", "name": "w1"})
     d.script.hold_manager = True
     res = await manager_run(d)
-    r = d.hub.runs.submit("w1", "[agent-hub · OWNER x", run_opts={"hub_self": "manager"})
+    r = d.hub.runs.submit("w1", "[cfharness · OWNER x", run_opts={"hub_self": "manager"})
     await wait_status(d, r["id"])
     with pytest.raises(HubError, match="không còn là điều phối viên|không phải run điều phối viên"):
         await tool(d, r["id"], "hub_overview")
@@ -267,7 +267,7 @@ async def test_worker_run_cannot_use_manager_tools(d):
 
 
 def test_cli_parser_manager():
-    from agent_hub.cli import build_parser
+    from cfharness.cli import build_parser
 
     p = build_parser()
     a = p.parse_args(["manager", "chat", "tạo", "agent", "--new"])

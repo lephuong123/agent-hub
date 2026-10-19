@@ -3,8 +3,8 @@ che khuất theo tầng, pin, xoá mềm skill, prompt frozen theo session. Khô
 
 import pytest
 
-from agent_hub.hub import Hub
-from agent_hub.knowledge import (
+from cfharness.hub import Hub
+from cfharness.knowledge import (
     KnowledgeError,
     apply_memory_op,
     check_skill_name,
@@ -13,8 +13,8 @@ from agent_hub.knowledge import (
     render_memory,
     render_skill,
 )
-from agent_hub.learning.runtime import system_prompt_for
-from agent_hub.prompt import prompt_hash
+from cfharness.learning.runtime import system_prompt_for
+from cfharness.prompt import prompt_hash
 
 
 @pytest.fixture

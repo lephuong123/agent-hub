@@ -1,6 +1,6 @@
 """Trang "Điều phối" (M7 MGR-UI) — daemon IN-PROCESS + FakeRuntime, app Starlette qua ASGITransport (như tests/test_web.py).
 
-Daemon chưa có `manager.*` của MGR-CORE → cài stub cùng chữ ký (`agent_hub.web.manager_stub`). Test cần điều khiển nội dung
+Daemon chưa có `manager.*` của MGR-CORE → cài stub cùng chữ ký (`cfharness.web.manager_stub`). Test cần điều khiển nội dung
 trả lời (XSS) cài stub bắt buộc (`force=True`). Không gọi `claude`.
 """
 
@@ -12,12 +12,12 @@ import re
 
 import pytest
 
-from agent_hub.events import make_event
-from agent_hub.web import manager_stub
-from agent_hub.web import present as P
+from cfharness.events import make_event
+from cfharness.web import manager_stub
+from cfharness.web import present as P
 
 from test_web import ISOLATED, _start, _stop, audit_rows, until  # noqa: F401  (dùng lại hạ tầng test web)
-from agent_hub.runtime import FakeRuntime
+from cfharness.runtime import FakeRuntime
 
 XSS = '<script>alert("x")</script><img src=x onerror=alert(1)>[bấm](javascript:alert(2)) <a href="http://evil">duyệt</a>'
 
@@ -69,7 +69,7 @@ async def test_menu_first_and_guidance_when_no_manager(menv):
     nav = re.search(r'<nav class="nav".*?</nav>', r.text, re.S).group(0)
     assert nav.index('href="/manager"') < nav.index('href="/"')  # "Điều phối" đứng đầu menu
     assert "Chưa có điều phối viên" in r.text and 'action="/do/manager_set"' in r.text
-    assert "agent-hub manager set" in r.text
+    assert "cfharness manager set" in r.text
     assert 'data-confirm=' in r.text.split('action="/do/manager_set"', 1)[1][:400]  # có hộp xác nhận
     # Tổng quan: khung nhỏ hướng dẫn chỉ định
     r = await menv.client.get("/")
@@ -193,8 +193,8 @@ async def test_sse_streams_reply_action_and_escapes(stubbed):
     got: list[dict] = []
     from starlette.requests import Request
 
-    from agent_hub.web.app import _stream
-    from agent_hub.web.manager import _converter
+    from cfharness.web.app import _stream
+    from cfharness.web.manager import _converter
 
     req = Request({"type": "http", "app": e.app, "path": "/", "headers": [], "query_string": b""})
     params = {"agent_id": "boss", "since_seq": st["last_seq"], "epoch": st["epoch"], "level": "detail"}

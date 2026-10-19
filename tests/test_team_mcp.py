@@ -11,9 +11,9 @@ import tarfile
 import pytest
 from mcp import Client
 
-from agent_hub.daemon import Daemon
-from agent_hub.errors import HubError
-from agent_hub.mcp_server.server import READ_ONLY_TOOLS, build_server
+from cfharness.daemon import Daemon
+from cfharness.errors import HubError
+from cfharness.mcp_server.server import READ_ONLY_TOOLS, build_server
 from m3_fake import ScriptedRuntime, kind_of
 
 PLAN = {"summary": "two steps", "subtasks": [
@@ -41,7 +41,7 @@ async def daemon(hub_home):
         fut = asyncio.run_coroutine_threadsafe(d._dispatch({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}), loop)
         resp = fut.result(60)
         if "error" in resp:
-            from agent_hub.rpc import RpcError
+            from cfharness.rpc import RpcError
 
             e = resp["error"]
             raise RpcError(e["code"], e["message"], e.get("data"))
@@ -198,7 +198,7 @@ async def test_subagents_and_schema_reach_runspec(daemon):
     assert spec.agents_json == {"checker": {"description": "c", "prompt": "p"}} and spec.json_schema["required"] == ["summary"]
     run = h.store.get_run(r["id"])
     assert run["result_json"] == {"summary": "hi"} and run["schema_valid"] == 1
-    from agent_hub.runtime import build_argv
+    from cfharness.runtime import build_argv
 
     argv, _ = build_argv(spec, {"binary": "claude"})
     assert json.loads(argv[argv.index("--json-schema") + 1])["required"] == ["summary"]
@@ -224,7 +224,7 @@ async def test_hub_self_stdio_server_roundtrip(daemon, tmp_path):
             {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "task_complete", "arguments": {"summary": "via mcp"}}},
             {"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "task_create", "arguments": {"title": "x", "body": "y"}}},
         ]
-        proc = await asyncio.create_subprocess_exec(sys.executable, "-I", "-m", "agent_hub.mcp_server.hub_self", "--run", rid, "--socket", str(h.paths.socket), "--role", "worker",
+        proc = await asyncio.create_subprocess_exec(sys.executable, "-I", "-m", "cfharness.mcp_server.hub_self", "--run", rid, "--socket", str(h.paths.socket), "--role", "worker",
                                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         out, _ = await asyncio.wait_for(proc.communicate("".join(json.dumps(m) + "\n" for m in msgs).encode()), 30)
         resp = {r["id"]: r for r in map(json.loads, out.decode().splitlines())}
@@ -246,7 +246,7 @@ async def test_hub_self_stdio_server_roundtrip(daemon, tmp_path):
 def test_guard_classifies_hub_self_tools():
     from pathlib import Path
 
-    from agent_hub.guard.classifier import GuardContext, classify
+    from cfharness.guard.classifier import GuardContext, classify
 
     ctx = GuardContext.__new__(GuardContext)
     for attr, v in (("cwd", Path("/tmp")), ("mcp_annotations", lambda s, t: None)):

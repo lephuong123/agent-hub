@@ -13,14 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub import auth
-from agent_hub.daemon import Daemon
-from agent_hub.errors import Blocked
-from agent_hub.guard.classifier import GuardContext, classify, protected_path
-from agent_hub.guard.policy import PolicyStore
-from agent_hub.guard.runtime import sandbox_settings
-from agent_hub.paths import HubPaths
-from agent_hub.runtime.fake import FakeRuntime
+from cfharness import auth
+from cfharness.daemon import Daemon
+from cfharness.errors import Blocked
+from cfharness.guard.classifier import GuardContext, classify, protected_path
+from cfharness.guard.policy import PolicyStore
+from cfharness.guard.runtime import sandbox_settings
+from cfharness.paths import HubPaths
+from cfharness.runtime.fake import FakeRuntime
 
 
 # ============================================================================ V2-N1
@@ -36,8 +36,8 @@ def test_every_mutating_method_is_classified():
 @pytest.fixture
 def home(monkeypatch):
     h = Path(os.path.realpath("/tmp")) / f"ahv2-{os.getpid()}-{time.time_ns() % 10**6}"
-    monkeypatch.setenv("AGENT_HUB_HOME", str(h))
-    monkeypatch.delenv("AGENT_HUB_SOCKET", raising=False)
+    monkeypatch.setenv("CFHARNESS_HOME", str(h))
+    monkeypatch.delenv("CFHARNESS_SOCKET", raising=False)
     p = HubPaths.resolve(h)
     p.ensure()
     p.config.write_text("guard:\n  git_probe: false\n")
@@ -68,8 +68,8 @@ async def test_admin_surface_requires_human_token_over_socket(home):
 
 def test_purge_gate_at_service_layer(tmp_path):
     """trash.purge gọi agent.purge qua lời gọi NỘI BỘ → cổng ở tầng service chặn khi người gọi không phải người."""
-    from agent_hub.hub import Hub
-    from agent_hub.recovery import purge_agent
+    from cfharness.hub import Hub
+    from cfharness.recovery import purge_agent
 
     h = Hub(HubPaths.resolve(tmp_path / "hub"), runtime=FakeRuntime())
     h.agents.create({"id": "a3", "name": "A3"})
@@ -106,7 +106,7 @@ def _held(v):
 
 def test_v2_n1_cli_admin_forbidden(ctx):
     c, _ = ctx
-    for cmd in ("agent-hub agent revert a2 --to 1", "agent-hub agent archive a2", "agent-hub trash restore a2", "agent-hub trash purge a2"):
+    for cmd in ("cfharness agent revert a2 --to 1", "cfharness agent archive a2", "cfharness trash restore a2", "cfharness trash purge a2"):
         assert classify("Bash", {"command": cmd}, c).forbidden, cmd
 
 
@@ -165,18 +165,18 @@ def test_wt3_sensitive_read_variants_blocked(wt_ctx):
     import os as _os
 
     c, H = wt_ctx
-    env = {**_os.environ, "AGENT_HUB_HOME": H}
+    env = {**_os.environ, "CFHARNESS_HOME": H}
     forbidden = [
         f"cd {H} && cat auth/web.json",
         f"cat {H}/aut*/web.json",
         f"D={H}; cat $D/auth/web.json",
-        f"cat $AGENT_HUB_HOME/auth/web.json",
-        f"cat $AGENT_HUB_HOME/secrets/TELEGRAM_BOT_TOKEN",
+        f"cat $CFHARNESS_HOME/auth/web.json",
+        f"cat $CFHARNESS_HOME/secrets/TELEGRAM_BOT_TOKEN",
         f"cat {H}/mcp_server/tokens.json",
         f"grep -r key {H}/auth",
         f"cp -r {H}/secrets /tmp/x",
     ]
-    # $AGENT_HUB_HOME phải được giải — đặt vào policy.hub_home đã đúng; lexer lấy từ env của classifier.run
+    # $CFHARNESS_HOME phải được giải — đặt vào policy.hub_home đã đúng; lexer lấy từ env của classifier.run
     for cmd in forbidden:
         v = _v(c, cmd)
         assert v.forbidden, (cmd, v.verdict, v.rule)
@@ -197,7 +197,7 @@ def test_wt3_benign_hub_home_access_not_flagged(wt_ctx):
 
 
 def test_sandbox_disabled_emits_red_warning(tmp_path):
-    from agent_hub.hub import Hub
+    from cfharness.hub import Hub
 
     p = HubPaths.resolve(tmp_path / "hub")
     p.ensure()

@@ -6,13 +6,13 @@ import json
 import subprocess
 import sys
 
-from agent_hub.guard.runtime import build_settings, guard_mcp_entry, hook_command, pattern_matches, policy_deny_rules, strip_for_tickets
+from cfharness.guard.runtime import build_settings, guard_mcp_entry, hook_command, pattern_matches, policy_deny_rules, strip_for_tickets
 
 HOOK_IN = {"session_id": "s", "cwd": "/tmp", "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"}, "tool_use_id": "t1"}
 
 
 def run_hook(args, stdin):
-    p = subprocess.run([sys.executable, "-I", "-m", "agent_hub.guard.hook", *args], input=stdin, capture_output=True, text=True, timeout=30)
+    p = subprocess.run([sys.executable, "-I", "-m", "cfharness.guard.hook", *args], input=stdin, capture_output=True, text=True, timeout=30)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -51,7 +51,7 @@ def test_hook_daemon_silent_times_out_denies(tmp_path):
 
 def test_hook_command_wraps_exit2(tmp_path):
     cmd = hook_command("r_1", tmp_path / "x.sock", 60, {"python": "/nonexistent/python"})
-    assert cmd.endswith("|| exit 2") and "-I -m agent_hub.guard.hook" in cmd
+    assert cmd.endswith("|| exit 2") and "-I -m cfharness.guard.hook" in cmd
     p = subprocess.run(cmd, shell=True, input=json.dumps(HOOK_IN), capture_output=True, text=True)
     assert p.returncode == 2  # python hỏng → exit 2 = CLI chặn (không fail-open)
 
@@ -66,7 +66,7 @@ def test_settings_and_mcp_entry(tmp_path):
     s2 = build_settings({}, run_id="r", socket=tmp_path / "s", policy_dir=tmp_path, guard_cfg={"hook_timeout_s": 100}, approval_timeout_s=600)
     assert s2["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"] == 720
     e = guard_mcp_entry("r_1", tmp_path / "s.sock", tmp_path, {}, 900000)
-    assert e["args"][:3] == ["-I", "-m", "agent_hub.guard.mcp_guard"] and "870" in e["args"]
+    assert e["args"][:3] == ["-I", "-m", "cfharness.guard.mcp_guard"] and "870" in e["args"]
     assert policy_deny_rules(tmp_path / "p")[0].startswith("Edit(//")
 
 
@@ -83,7 +83,7 @@ def test_pattern_matching_and_ticket_strip():
 
 def _mcp(lines, sock):
     p = subprocess.run(
-        [sys.executable, "-I", "-m", "agent_hub.guard.mcp_guard", "--run", "r_x", "--socket", sock, "--timeout", "5"],
+        [sys.executable, "-I", "-m", "cfharness.guard.mcp_guard", "--run", "r_x", "--socket", sock, "--timeout", "5"],
         input="".join(json.dumps(m) + "\n" for m in lines),
         capture_output=True,
         text=True,

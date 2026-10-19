@@ -4,9 +4,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agent_hub.errors import Blocked, Conflict, HubError, NotFound
-from agent_hub.hub import Hub
-from agent_hub.runtime import FakeRuntime
+from cfharness.errors import Blocked, Conflict, HubError, NotFound
+from cfharness.hub import Hub
+from cfharness.runtime import FakeRuntime
 
 
 @pytest.fixture

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.hub import Hub
+from cfharness.hub import Hub
 from m3_fake import ScriptedRuntime
 from m4b_fake import attach_fake_ledger, settle, write_fake_judge
 
@@ -191,7 +191,7 @@ async def test_eval_runs_blocked_by_estop_are_handled(make_hub):
 
 
 async def test_rpc_eval_check_and_list(hub_home):
-    from agent_hub.daemon import Daemon
+    from cfharness.daemon import Daemon
 
     d = Daemon(hub_home, runtime=ScriptedRuntime(model_script))
     d.hub.start()
@@ -249,7 +249,7 @@ async def test_baseline_cache_invalidated_by_team_and_global_knowledge(make_hub)
 
 
 def test_fingerprint_tracks_prompt_inputs(make_hub, tmp_path):
-    from agent_hub.evals import overlay as ov
+    from cfharness.evals import overlay as ov
 
     h, rt = make_hub()
     home = ov.make_home(Path(h.agents.get_row("a")["home_path"]), tmp_path / "copy")

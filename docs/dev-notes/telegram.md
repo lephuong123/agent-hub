@@ -9,7 +9,7 @@ Nguồn: `docs/plan/web-telegram.md` (luồng TG), BRD FR-SG-04/09/11, FR-LN-13;
 | `notify/telegram.py` | `TelegramApi` (Bot API qua `httpx2.AsyncClient`, gỡ token khỏi mọi thông báo lỗi), định dạng văn bản thuần (không parse_mode), `CallbackStore` (nonce + HMAC), `TelegramNotifier` |
 | `chat/bot.py` | `TelegramBot` (`hub.telegram`): vòng long polling, ghép nối, lệnh chat, nút inline, theo dõi run → gửi kết quả, reply → continue |
 | `chat/rpc.py` | RPC `telegram.status|setup|pending|allow|revoke|disable|test` (đăng ký SAU bước bọc audit → tự audit) |
-| `chat/cli.py` | `agent-hub notify telegram setup|status|test|disable|allow|revoke` (gắn vào parser `notify` của `guard/cli.py`) |
+| `chat/cli.py` | `cfharness notify telegram setup|status|test|disable|allow|revoke` (gắn vào parser `notify` của `guard/cli.py`) |
 
 File dùng chung đã chạm (chỉ thêm): `hub.py` (attach), `daemon.py` (`call_as` + tham số `as_caller` của `_dispatch`, đăng ký RPC),
 `auth.py` (`telegram_caller`, `telegram.*` ∈ HUMAN_ONLY, `MUTATING_TELEGRAM` trong `all_mutating`), `config.py` (`notify.telegram`).
@@ -31,7 +31,7 @@ Logger `httpx*`/`httpcore*` hạ xuống WARNING (log INFO của thư viện có
   → bot chỉ ghi nhận "chờ xác nhận" (chat riêng; nhóm cần `allow_groups`) → CLI poll `telegram.pending`, hiện tên/username/chat_id, hỏi
   y/N → `telegram.allow`. Mã dùng một lần. `--chat-id` thêm thẳng, `--keep-token` ghép thêm chat.
 - **Allowlist** `notify.telegram.allowed_chat_ids` nằm trong nhánh `notify` của config.yaml → được `guard/integrity` kiểm (ghi ngoài RPC bị khôi
-  phục); sửa chỉ qua `telegram.allow|revoke` (HUMAN_ONLY). Classifier: `agent-hub notify telegram …` từ agent → forbidden.
+  phục); sửa chỉ qua `telegram.allow|revoke` (HUMAN_ONLY). Classifier: `cfharness notify telegram …` từ agent → forbidden.
 - **Cổng người**: mọi lệnh chat → `Daemon.call_as(auth.telegram_caller(hub, chat_id), method, params)` → `_dispatch` như socket: HUMAN_ONLY theo
   `caller.human` (= bot bật + chat trong allowlist), `CURRENT_CALLER` (cổng tầng service), bọc audit với `_audit={channel:"telegram:<id>",
   actor:"user"}`; approve/deny truyền `channel=telegram:<id>`. Chat ngoài allowlist không bao giờ tới dispatch; nếu tới, HUMAN_ONLY từ chối.
@@ -46,7 +46,7 @@ Logger `httpx*`/`httpcore*` hạ xuống WARNING (log INFO của thư viện có
   "Huỷ" → gửi lại tin duyệt với nút mới. `/estop off` cũng cần xác nhận.
 - Approval quyết ở kênh khác (CLI/TUI/web) → `approval.resolved` → vô hiệu nonce + gỡ nút trên các tin đã gửi.
 - **/run**: `run.start` → ghi `telegram.watch[run]=chat`; run con (`run.queued.parent_run_id`, resume sau duyệt/gián đoạn) kế thừa. Event kết thúc
-  `source=hub` → gửi kết quả (outcome, chi phí, lượt, thời gian, `summary`/`error` cắt `result_max_chars` + "xem đầy đủ: agent-hub runs show …,
+  `source=hub` → gửi kết quả (outcome, chi phí, lượt, thời gian, `summary`/`error` cắt `result_max_chars` + "xem đầy đủ: cfharness runs show …,
   TUI hoặc web"); `waiting_human` chỉ báo ngắn, chờ run con. Tin kết quả → `telegram.msgmap`; reply (không phải lệnh) → `run.continue`.
 - **/digest**: dựng tại chỗ 24 h qua bằng `DigestService.collect/render` (CHỈ đọc — không dời mốc digest 08:00). Digest 08:00 đi qua
   thông báo (`learning.digest`), như Slack.

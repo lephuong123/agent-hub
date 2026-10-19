@@ -10,11 +10,11 @@ import uuid
 
 import pytest
 
-from agent_hub.errors import HubError
-from agent_hub.hub import Hub
-from agent_hub.recovery import process_matches, purge_expired
-from agent_hub.runtime import FakeRuntime
-from agent_hub.store import now_iso
+from cfharness.errors import HubError
+from cfharness.hub import Hub
+from cfharness.recovery import process_matches, purge_expired
+from cfharness.runtime import FakeRuntime
+from cfharness.store import now_iso
 
 
 async def settle(n=30):
@@ -124,7 +124,7 @@ async def test_no_auto_resume_when_disabled_or_estop(hub_home, sleeper):
 def test_purge_requires_soft_delete_and_retention(hub_home):
     h = Hub(hub_home, runtime=FakeRuntime())
     h.agents.create({"id": "a", "name": "A"})
-    from agent_hub.recovery import purge_agent
+    from cfharness.recovery import purge_agent
 
     with pytest.raises(HubError):
         purge_agent(h, "a", by="user", channel="cli")  # chưa xoá mềm

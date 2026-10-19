@@ -6,9 +6,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from agent_hub.events import iso
-from agent_hub.hub import Hub
-from agent_hub.learning_ops.regression import evaluate
+from cfharness.events import iso
+from cfharness.hub import Hub
+from cfharness.learning_ops.regression import evaluate
 from m3_fake import ScriptedRuntime
 from m4b_fake import attach_fake_ledger
 
@@ -122,7 +122,7 @@ async def test_tick_runs_regression_on_pending(hub):
     lg.apply_config("a", {"model": "haiku"}, applied_at=iso(now - timedelta(hours=1)))
     add_run(hub, "r_w0", now - timedelta(minutes=20), status="failed")
     add_run(hub, "r_w1", now - timedelta(minutes=10), status="failed")
-    from agent_hub.events import make_event
+    from cfharness.events import make_event
 
     hub.publish(make_event("run.failed", "a", {}, run_id="r_w1"))
     out = await hub.learning_ops.tick()
@@ -143,9 +143,9 @@ async def test_human_change_is_never_auto_rolled_back(hub):
     assert acts[0]["action"] == "warned_human" and not lg.rollbacks and hub.agents.get_row("a")["model"] == "haiku"
     assert hub.learning_ops.regression.list("a")[0]["status"] == "warned"
     det = [x for x in evs if x.type == "regression.detected"][0]
-    assert det.payload["human_change"] and not det.payload["rolled_back"] and det.payload["hint"] == f"agent-hub learn rollback {e['id']}"
+    assert det.payload["human_change"] and not det.payload["rolled_back"] and det.payload["hint"] == f"cfharness learn rollback {e['id']}"
     assert await hub.learning_ops.regression.check_agent("a") == []  # cảnh báo một lần
-    from agent_hub.notify import format_message
+    from cfharness.notify import format_message
 
     assert "KHÔNG tự rollback" in format_message(det) or "không tự rollback" in format_message(det)
     d = hub.learning_ops.digest.run(since="2000-01-01T00:00:00Z", send=False)

@@ -2,8 +2,8 @@ import sqlite3
 
 import pytest
 
-from agent_hub.events import make_event
-from agent_hub.store import MIGRATIONS, Store
+from cfharness.events import make_event
+from cfharness.store import MIGRATIONS, Store
 
 
 def test_migrate_wal_and_idempotent(tmp_path):

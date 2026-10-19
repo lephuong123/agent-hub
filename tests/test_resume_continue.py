@@ -6,10 +6,10 @@ import json
 
 import pytest
 
-from agent_hub.errors import HubError, NotFound
-from agent_hub.guard.cli import rewrite_argv
-from agent_hub.hub import Hub
-from agent_hub.runtime import FakeRuntime, build_argv, default_fixture
+from cfharness.errors import HubError, NotFound
+from cfharness.guard.cli import rewrite_argv
+from cfharness.hub import Hub
+from cfharness.runtime import FakeRuntime, build_argv, default_fixture
 
 
 def fixture_with_cost(tmp_path, name: str, total: float):

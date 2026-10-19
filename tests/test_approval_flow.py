@@ -1,5 +1,5 @@
 """FR-RT-09 / FR-SG-04 end-to-end: daemon thật (tiến trình con) + `claude` giả có guard (tests/fake_claude_guard.py)
-chạy hook PreToolUse THẬT của hub (python -I -m agent_hub.guard.hook) qua socket. Không gọi model.
+chạy hook PreToolUse THẬT của hub (python -I -m cfharness.guard.hook) qua socket. Không gọi model.
 
 Ca: lệnh thường không hỏi; thao tác phá huỷ bị giữ → duyệt trong lúc giữ → chạy đúng 1 lần; quá thời gian giữ →
 waiting_human (nhả slot, KHÔNG tự từ chối) → duyệt → resume `--resume` với vé một lần; vé không dùng lại; deny;
@@ -15,9 +15,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agent_hub.cli import main
-from agent_hub.daemon import spawn_background
-from agent_hub.rpc import RpcClient
+from cfharness.cli import main
+from cfharness.daemon import spawn_background
+from cfharness.rpc import RpcClient
 
 FAKE = Path(__file__).parent / "fake_claude_guard.py"
 
@@ -155,7 +155,7 @@ def test_static_deny_beats_hook_allow_restart_with_rule_lifted(env):
 
 def test_forbidden_self_approval_blocked(env):
     rpc = env["rpc"]
-    r = rpc.call("run.start", {"agent": "coder", "prompt": "BASH: agent-hub approve ap_123", "cwd": str(env["work"])})
+    r = rpc.call("run.start", {"agent": "coder", "prompt": "BASH: cfharness approve ap_123", "cwd": str(env["work"])})
     assert rpc.call("run.wait", {"id": r["id"], "timeout": 30})["outcome"] == "completed"
     assert executed(env) == [] and rpc.call("approval.list", {"status": "all"}) == []
     types = [e["type"] for e in rpc.call("events.query", {"run_id": r["id"]})]
@@ -166,7 +166,7 @@ async def test_mcp_hub_approve_resolves_approval(env):
     """Hợp đồng A↔B mục 4: hub_open_requests/hub_approve của MCP server gọi approval.list|approve của B."""
     from mcp import Client
 
-    from agent_hub.mcp_server.server import build_server
+    from cfharness.mcp_server.server import build_server
 
     rpc = env["rpc"]
     paths = env["paths"]

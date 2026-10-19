@@ -4,8 +4,8 @@ prompt giữ thứ tự ổn định (FR-LN-11, FR-RT-10). Không gọi claude."
 import pytest
 from m5a_fake import make_hub, phash, prompt_of, team_memory
 
-from agent_hub.evals.overlay import make_home
-from agent_hub.knowledge import build_knowledge_blocks, render_skill
+from cfharness.evals.overlay import make_home
+from cfharness.knowledge import build_knowledge_blocks, render_skill
 
 FACT = "The team release train leaves every Thursday at 15:00 Hanoi time."
 
@@ -93,7 +93,7 @@ def test_global_memory_canary_pins_every_other_agent(hub):
 def test_review_scope_team_resolves_team_and_rejects_ambiguous(hub):
     hub.teams.create({"id": "t2", "name": "T2"})
     hub.teams.member_set("t2", "a1", "worker")
-    from agent_hub.errors import HubError
+    from cfharness.errors import HubError
 
     with pytest.raises(HubError):
         team_memory(hub, FACT, agent="a1")

@@ -5,10 +5,10 @@ import json
 
 import pytest
 
-from agent_hub.cli import main
-from agent_hub.daemon import spawn_background
-from agent_hub.hub import Hub
-from agent_hub.mcp_client.importer import convert_entry, looks_secret_value
+from cfharness.cli import main
+from cfharness.daemon import spawn_background
+from cfharness.hub import Hub
+from cfharness.mcp_client.importer import convert_entry, looks_secret_value
 
 SECRETS = [
     "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
@@ -92,7 +92,7 @@ def test_import_all_in_process(hub_home, tmp_path):
 
 
 def test_import_cli_via_daemon_and_home_isolated(hub_home, tmp_path, monkeypatch, capsys):
-    """Đường CLI thật: `agent-hub mcp import --from claude --file <giả> --all` qua daemon."""
+    """Đường CLI thật: `cfharness mcp import --from claude --file <giả> --all` qua daemon."""
     import yaml
 
     hub_home.config.write_text(yaml.safe_dump({"runtime": {"kind": "fake"}}))

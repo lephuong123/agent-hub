@@ -36,7 +36,7 @@ res = {"type": "result", "subtype": "success", "is_error": False, "total_cost_us
        "usage": {"input_tokens": 1, "output_tokens": 2}, "modelUsage": {"claude-haiku-5-5": {"costBasis": "list"}},
        "result": ("resumed and finished" if resume else "finished"), "terminal_reason": "completed", "duration_ms": 5, "num_turns": 1}
 if "--json-schema" in args:
-    if prompt.startswith("[agent-hub plan"):
+    if prompt.startswith("[cfharness plan"):
         res["structured_output"] = json.loads(os.environ.get("FAKE_PLAN") or '{"subtasks":[{"key":"a","title":"A","body":"do A"}]}')
     else:
         res["structured_output"] = {"verdict": "approve", "comment": "ok"}

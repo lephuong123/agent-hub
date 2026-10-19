@@ -17,10 +17,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agent_hub.hub import Hub
-from agent_hub.paths import HubPaths
-from agent_hub.redact import mask_bytes, mask_values, redact, redact_str, register_secret_values
-from agent_hub.runtime.fake import FakeRuntime, default_fixture
+from cfharness.hub import Hub
+from cfharness.paths import HubPaths
+from cfharness.redact import mask_bytes, mask_values, redact, redact_str, register_secret_values
+from cfharness.runtime.fake import FakeRuntime, default_fixture
 
 STORE_SECRET = "Zq9xINTERNALmcpTOKENvalue7781"
 ENV_SECRET = "EnvFallbackTOKEN55aa77bb99"
@@ -70,7 +70,7 @@ def test_value_masker_unit():
 
 def test_e2e_run_with_mcp_secret_never_leaks(tmp_path, monkeypatch):
     """QA secret_e2e + H-12: run thật (FakeRuntime phát lại stream-json có secret) → không file nào trong HUB_HOME chứa secret."""
-    monkeypatch.setenv("AGENT_HUB_HOME", str(tmp_path / "hub"))
+    monkeypatch.setenv("CFHARNESS_HOME", str(tmp_path / "hub"))
     monkeypatch.setenv("QA_ENV_TOKEN", ENV_SECRET)
     p = HubPaths.resolve(tmp_path / "hub")
     p.ensure()
@@ -102,15 +102,15 @@ def test_e2e_run_with_mcp_secret_never_leaks(tmp_path, monkeypatch):
         await hub.runs.wait(rid, 10)
         assert not mp.exists()
         hub.telemetry.flush(2.0)
-        logging.getLogger("agent_hub.test").warning("log có secret %s và %s", STORE_SECRET, ENV_SECRET)
+        logging.getLogger("cfharness.test").warning("log có secret %s và %s", STORE_SECRET, ENV_SECRET)
         await hub.stop()
 
-    from agent_hub.redact import install_log_filter
+    from cfharness.redact import install_log_filter
 
-    from agent_hub.logs import setup_logging
+    from cfharness.logs import setup_logging
 
     setup_logging(p.logs_dir)
-    install_log_filter(logging.getLogger("agent_hub"))
+    install_log_filter(logging.getLogger("cfharness"))
     asyncio.run(main())
     hits = _grep_home(p.home, STORE_SECRET, ENV_SECRET)
     assert not hits, f"secret lộ ở: {hits}"
@@ -147,7 +147,7 @@ def test_otel_include_payloads_masks_secret(tmp_path):
     p.ensure()
     S = "sk-live-SUPERSECRET-123456"
     p.config.write_text(yaml.safe_dump({"guard": {"git_probe": False}, "telemetry": {"otel": {"enabled": True, "exporter": "memory", "include_payloads": True}}}))
-    from agent_hub.events import make_event
+    from cfharness.events import make_event
 
     h = Hub(p, runtime=FakeRuntime())
     h.secrets.set("OTEL_T", "StoredOtelSecret998877")
@@ -172,8 +172,8 @@ def test_probe_stderr_masked_not_in_daemon_out(tmp_path):
     script = tmp_path / "probe_child.py"
     script.write_text(
         "import asyncio, json, sys\n"
-        "from agent_hub.paths import HubPaths\nfrom agent_hub.hub import Hub\n"
-        "from agent_hub.redact import install_stderr_masking\n"
+        "from cfharness.paths import HubPaths\nfrom cfharness.hub import Hub\n"
+        "from cfharness.redact import install_stderr_masking\n"
         "install_stderr_masking()\n"
         f"p=HubPaths.resolve({str(home)!r}); p.ensure(); hub=Hub(p)\n"
         "S='QkeyLEAK8812abcXYZ99'\nhub.secrets.set('QK', S)\n"
@@ -183,7 +183,7 @@ def test_probe_stderr_masked_not_in_daemon_out(tmp_path):
         "print('RESULT', json.dumps(r, default=str))\n"
         "hub.store.close()\n"
     )
-    out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60, env={**os.environ, "AGENT_HUB_HOME": str(home)})
+    out = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=60, env={**os.environ, "CFHARNESS_HOME": str(home)})
     assert "RESULT" in out.stdout, out.stderr[-2000:]
     assert "QkeyLEAK8812abcXYZ99" not in out.stdout + out.stderr
     assert not _grep_home(home, "QkeyLEAK8812abcXYZ99")

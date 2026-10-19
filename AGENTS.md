@@ -8,10 +8,10 @@
 - Mốc hiện tại: M0 xong phần lõi. Tiếp theo là M1 (MCP server hub-self, phê duyệt thao tác phá huỷ, resume, khôi phục restart).
 - Không sửa `research/`, `docs/` (trừ ghi chú nhỏ trong `docs/dev-notes/`), `demo/`.
 
-## Kiến trúc (`src/agent_hub/`)
+## Kiến trúc (`src/cfharness/`)
 | Module | Vai trò |
 |---|---|
-| `paths.py` | Bố cục `HUB_HOME` (env `AGENT_HUB_HOME`), đường dẫn socket (rút về `/tmp/agent-hub-<uid>-<hash>.sock` nếu quá dài cho AF_UNIX) |
+| `paths.py` | Bố cục `HUB_HOME` (env `CFHARNESS_HOME`), đường dẫn socket (rút về `/tmp/cfharness-<uid>-<hash>.sock` nếu quá dài cho AF_UNIX) |
 | `config.py` | `HUB_HOME/config.yaml` + `DEFAULTS`. Mọi giới hạn là setting; đọc lại theo mtime nên `config set` có hiệu lực ngay. Cờ cô lập `claude` ở `runtime.claude.isolation.*` |
 | `events.py` | Envelope `HubEvent` (v, epoch, seq, ts, type, level, source, agent/run/session/subagent id, payload), bảng level, loại không ghi DB |
 | `claude_adapter.py` | stream-json → event hub (FR-RT-04). Có trạng thái theo run. Kiểm cô lập hậu nghiệm (hook/MCP/plugin/auto-memory lạ → `isolation.violation`) |
@@ -23,7 +23,7 @@
 | `prompt.py` | Khối system prompt: quy ước hub + SOUL (tiếng Anh), hash lưu vào run |
 | `hub.py` | Nối Store + Bus + services; dùng chung cho daemon và test in-process |
 | `daemon.py` / `rpc.py` | JSON-RPC 2.0 newline-delimited qua Unix socket (0600). `events.subscribe` biến kết nối thành luồng notification |
-| `cli.py` | `agent-hub` (argparse). Client thuần của daemon; tự khởi động daemon nếu chưa chạy |
+| `cli.py` | `cfharness` (argparse). Client thuần của daemon; tự khởi động daemon nếu chưa chạy |
 
 Nguyên tắc: daemon là writer DUY NHẤT của `hub.db`; CLI/TUI/MCP chỉ gọi RPC. Mọi tương tác runtime qua `AgentRuntime`.
 Trạng thái agent do `RunManager` tính (bỏ `agent.status` từ adapter). Event kết thúc run chính thức là event `source="hub"`
@@ -42,10 +42,10 @@ phát trong `RunManager._finalize` sau khi ghi DB (event `run.completed` của a
 uv sync
 uv run pytest -q                      # toàn bộ test, ~4 s, KHÔNG gọi claude thật
 uv run pytest tests/test_argv.py -q   # bộ dựng argv
-uv run agent-hub --help
+uv run cfharness --help
 ```
 Test KHÔNG được gọi `claude` thật hay tốn tiền: dùng `FakeRuntime` (fixture JSONL) hoặc `tests/fake_claude.py` (binary giả cho `ClaudeCliRuntime`).
-Fixture stream-json thật ở `src/agent_hub/fixtures/` (mặc định của FakeRuntime) và `tests/fixtures/` (chép từ `docs/spikes/m0/fixtures/` + lần chạy thật M0).
+Fixture stream-json thật ở `src/cfharness/fixtures/` (mặc định của FakeRuntime) và `tests/fixtures/` (chép từ `docs/spikes/m0/fixtures/` + lần chạy thật M0).
 Khi nâng phiên bản CLI: ghi fixture mới, thêm contract test, rồi thêm phiên bản vào `runtime.claude.tested_versions`.
 
 ## Quy ước
@@ -65,7 +65,7 @@ Chi tiết, lệch BRD, việc dở: `docs/dev-notes/M1-A.md`.
 | `mcp_server/server.py` | MCP server `hub_*` (SDK `mcp` 2.x, `MCPServer`). Client MỎNG của daemon (RPC qua `DaemonCaller`, tự khởi động daemon). Output = model Pydantic; annotations readOnly/destructive. Quyền: stdio=`control`, HTTP theo token |
 | `mcp_server/http.py` | Streamable HTTP CHỈ loopback + `BearerAuth` (401). Token `read`/`control` ở `HUB_HOME/mcp_server/tokens.json` (0600) |
 | `mcp_server/rpc.py` | RPC `mcp.*`/`secret.*`/`audit.*`/`feedback.*`; `register_rpc(daemon)` ở CUỐI `Daemon.__init__` còn **bọc audit mọi method thay đổi trạng thái** (`MUTATING`; `channel` lấy từ `params._audit`, mặc định `cli`). `mcp.events` = long-poll ≤ 25 s theo run |
-| `mcp_server/cli.py` | `agent-hub mcp serve|snippet|token|add|edit|list|show|rm|restore|probe|import|assign|unassign|agent-config`, `secret`, `audit list`, `feedback` |
+| `mcp_server/cli.py` | `cfharness mcp serve|snippet|token|add|edit|list|show|rm|restore|probe|import|assign|unassign|agent-config`, `secret`, `audit list`, `feedback` |
 | `mcp_client/` | Registry MCP (DB `mcp_servers` là nguồn sự thật; `mcp/registry.yaml` là BẢN SAO chỉ đọc). Hợp đồng cho B: `build_agent_mcp_servers(agent)`, `tool_annotations(server, tool)`, thêm `agent_mcp_tool_rules(agent)` |
 | `mcp_client/wiring.py` | `attach(hub)` (gọi trong `Hub.__init__`): `hub.secrets`, `hub.audit`, `hub.mcp`, listener `ToolWriteWatcher` → audit + event `tool.write` |
 | `secrets.py` | Secret store file 0600 `HUB_HOME/secrets/<NAME>`; `${NAME}` trong cấu hình, `resolve()` fail-closed |
@@ -74,7 +74,7 @@ Chi tiết, lệch BRD, việc dở: `docs/dev-notes/M1-A.md`.
 Quy tắc thêm: method RPC mới thay đổi trạng thái → thêm tên vào `MUTATING` (rpc.py) và khai báo TRƯỚC dòng `register_rpc(self)`.
 Tool `hub_*` mới: kiểm `hub.require_control(ctx, …)` nếu không readOnly; mô tả tiếng Việt; output là model Pydantic.
 Test MCP: `tests/test_mcp_server.py` (in-process `Client(srv)`, stdio thật, HTTP uvicorn cục bộ), không gọi `claude`.
-Kết nối Claude Code: `agent-hub mcp snippet` (CHỈ in lệnh/JSON, không sửa `~/.claude.json`).
+Kết nối Claude Code: `cfharness mcp snippet` (CHỈ in lệnh/JSON, không sửa `~/.claude.json`).
 
 ## M1 luồng B — An toàn & vòng đời (guard, approval, Slack, resume, khôi phục)
 Chi tiết, lệch BRD, việc dở, kết quả kiểm chứng `claude` thật: `docs/dev-notes/M1-B.md`.
@@ -83,7 +83,7 @@ Chi tiết, lệch BRD, việc dở, kết quả kiểm chứng `claude` thật:
 |---|---|
 | `guard/shell.py` | Lexer shell: NFKC + chữ đồng hình, `${IFS}`, bỏ quote, `$'\x..'`, biến đã gán, `~`, heredoc/here-string, tách `;&&||\|&`, thu `$(..)`/`` `..` ``/`<(..)` |
 | `guard/classifier.py` | `classify(tool, input, GuardContext) -> Verdict` (safe/write/destructive/uncertain + `forbidden`), THUẦN. "File run tự tạo" = birthtime ≥ lúc run đầu của session vào hàng đợi. `action_fingerprint` cho vé một lần |
-| `guard/policy.py` | `HUB_HOME/policy/{protected,catalog}.yaml` + `history/`; tài nguyên bảo vệ mặc định (BRD FR-SG-02 + mã nguồn `agent_hub`) |
+| `guard/policy.py` | `HUB_HOME/policy/{protected,catalog}.yaml` + `history/`; tài nguyên bảo vệ mặc định (BRD FR-SG-02 + mã nguồn `cfharness`) |
 | `guard/service.py` | `GuardService.check` (RPC `guard.check`): phân loại → allow / mở approval + GIỮ ≤ `approval.timeout_s` → allow/deny/waiting_human |
 | `guard/hook.py`, `guard/mcp_guard.py` | Hook PreToolUse + MCP `hub-guard` (permission-prompt-tool). Chỉ stdlib, FAIL-CLOSED (`|| exit 2`, alarm, mọi lỗi → deny) |
 | `guard/runtime.py` | Sinh phần guard của settings.json/mcp.json; mẫu `--disallowedTools` tĩnh và bỏ đúng mẫu cho run resume có vé |
@@ -94,7 +94,7 @@ Chi tiết, lệch BRD, việc dở, kết quả kiểm chứng `claude` thật:
 | `recovery.py` | Đối soát `(pid, start_time)` khi daemon khởi động, dừng mồ côi, `interrupted` → tự resume (trừ waiting_human); purge retention |
 
 Bất biến: thao tác phá huỷ KHÔNG BAO GIỜ tự từ chối do hết giờ; hook/hub-guard lỗi = deny; agent không ghi được `policy/`
-(settings `permissions.deny` + classifier) và không tự duyệt (`agent-hub approve`, socket hub, `mcp__*__hub_approve` = forbidden).
+(settings `permissions.deny` + classifier) và không tự duyệt (`cfharness approve`, socket hub, `mcp__*__hub_approve` = forbidden).
 Thêm luật phân loại: thêm ca vào `tests/test_guard_classifier.py` (recall 100% trên `DESTRUCTIVE_*`, báo nhầm ≤ 5% trên `SAFE_*`).
 Test e2e guard dùng `tests/fake_claude_guard.py` (chạy hook thật từ `--settings`, tôn trọng `--disallowedTools`, cost luỹ kế).
 
@@ -132,7 +132,7 @@ Chi tiết, số đo NFR/KPI, lệch BRD, việc dở: `docs/dev-notes/M2.md`. �
 | `tui/rpc.py` | RPC daemon: `tui.snapshot`, `run.steer`, `template.list|get`, `agent.create_from_template`, `run.takeover|takeover_record` |
 | `tui/takeover.py` | `claude --resume <session>` tương tác cùng cờ cô lập/mcp/SOUL của agent (không hook guard); ghi Run `kind=human_takeover` |
 | `tui/cli.py` | `top`, `attach`, `steer` / `run steer` (viết lại `run-steer` qua `guard.cli.HIDDEN`), `takeover [--print|--record]`, `template list|show` |
-| `tui/bench.py` | `python -m agent_hub.tui.bench --home <tmp>`: đo NFR-01..05/08 bằng daemon thật + FakeRuntime + TUI headless |
+| `tui/bench.py` | `python -m cfharness.tui.bench --home <tmp>`: đo NFR-01..05/08 bằng daemon thật + FakeRuntime + TUI headless |
 | `steer.py` | `steer(hub, ref, text)`: ghi stdin stream-json của tiến trình đang chạy, phát `user.message`; `Conflict` khi run đã qua `result` |
 | `templates/` | `researcher|coder|reviewer|ops.yaml` (config + SOUL tiếng Anh); `agent create <id> --template <tên>` |
 
@@ -140,7 +140,7 @@ Steer: adapter phát `steer.ack` cho tin user `isReplay` thứ 2 trở đi (tin 
 sau `result` như M0, TRỪ khi còn tin steer chưa được phát lại (`handle.internal["steer_pending"]`; phòng hờ
 `runtime.claude.steer_ack_grace_s`, mặc định 30 s). `FakeRuntime` hỗ trợ steer (chèn dòng replay; sau `result` từ chối).
 Migration v5 (M2): `runs.steer_count`, `runs.takeover_of_run_id`, index `events(type, ts)`.
-Test M2: `tests/test_tui.py` (Pilot + daemon IN-PROCESS trên socket thật; `AGENT_HUB_SCREENSHOTS=docs/screenshots/m2`
+Test M2: `tests/test_tui.py` (Pilot + daemon IN-PROCESS trên socket thật; `CFHARNESS_SCREENSHOTS=docs/screenshots/m2`
 để ghi lại SVG), `tests/test_steer.py` (+ `tests/fake_claude_steer.py`: claude giả mô phỏng spike A-02), `tests/test_templates.py`.
 Event mới: `user.message`, `steer.ack`, `run.takeover`. Mọi thao tác thay đổi từ TUI gửi `_audit.channel=tui`.
 
@@ -159,7 +159,7 @@ Chi tiết, hợp đồng với A, lệch BRD, nghiệm thu thật: `docs/dev-no
 | `tui/learnings.py` | Tab Learnings (FR-UI-06: feed, eval trước/sau, rollback `r`, pin `p`, digest `D`, journey `j`, canary placeholder M5) + `GoldenScreen` (`G`); digest khi mở TUI lần đầu trong ngày |
 
 Bất biến: regression monitor/eval gate CHỈ tự rollback entry actor ∈ {learning, review, agent, curator}; thay đổi của NGƯỜI chỉ
-cảnh báo (`regression.detected{human_change}`). Golden task/rubric thuộc chính sách an toàn — guard coi `agent-hub golden <ghi>` và `mcp__*__hub_golden_(add|rm|…)` từ agent
+cảnh báo (`regression.detected{human_change}`). Golden task/rubric thuộc chính sách an toàn — guard coi `cfharness golden <ghi>` và `mcp__*__hub_golden_(add|rm|…)` từ agent
 là `policy_change` (forbidden). Eval KHÔNG đụng home thật; run eval không resume sau restart. Test: `tests/test_eval*.py`,
 `test_regress*.py`, `test_curator*.py`, `test_digest*.py`, `test_tui_learnings.py`, helper `tests/m4b_fake.py`. Migration v8, v9.
 Ảnh: `docs/screenshots/m4/`. Tool MCP `hub_steer` (→ `run.steer`) ở `mcp_server/server.py`.
@@ -244,7 +244,7 @@ Chi tiết, việc cần luồng khác, **danh sách lệch BRD cần cập nh�
 | `mcp_server/surface_rpc.py` | RPC `agent.delete{detach_teams}\|archive\|revert`, `trash.*`, `memory.search(_self)`, `hook.observe\|timeout`, `mcp.agent_run\|cancel_task`, `hub.compat` — đăng ký trong `mcp_server/rpc.register_rpc` trước bước bọc audit |
 | `runtime/compat.py` | `hub.compat`: phiên bản CLI lúc `Hub.start` → `hub_state.cli_compat`; `raw.unknown` > 5 %/giờ → `cli.unknown_rate_alert`; nạp spool hook quá giờ |
 | `observe_hook.py` | Hook quan sát PostToolUse/UserPromptSubmit/Stop, FAIL-OPEN (2 s, luôn exit 0, chỉ metadata); `add_observe_hooks()` gọi trong `_prepare_spec` sau phần guard |
-| `event_schema.py` | Sinh `docs/schema/event.v1.json` (`python -m agent_hub.event_schema --write docs/schema/event.v1.json`) |
+| `event_schema.py` | Sinh `docs/schema/event.v1.json` (`python -m cfharness.event_schema --write docs/schema/event.v1.json`) |
 
 Quy tắc: id agent trùng `agents.RESERVED_IDS` bị từ chối khi tạo. Lệnh con mới của `run` → thêm vào `RUN_SUBCOMMANDS` + `RESERVED_IDS`.
 Cờ `claude` mới trong `build_argv`/`extra_args` → thêm vào `runtime.claude.flag_matrix[<phiên bản>]` (phiên bản trong bảng mà thiếu cờ → `ArgvError`,
@@ -283,21 +283,21 @@ Token bot chỉ ở secret store (không đọc env, không in, không trả qua
 service trực tiếp). Test: `tests/test_telegram.py` (daemon in-process), `tests/test_telegram_e2e.py` (daemon thật + hook guard thật),
 server Bot API giả `tests/telegram_fake.py` — không gọi Telegram thật.
 
-## WEB — giao diện trình duyệt (`agent-hub web`)
+## WEB — giao diện trình duyệt (`cfharness web`)
 Chi tiết, kiểm chứng sandbox thật, việc dở: `docs/dev-notes/web.md`. Ảnh: `docs/screenshots/web/`. Test: `tests/test_web.py`.
 
 | Module | Vai trò |
 |---|---|
-| `web/security.py` | Chỉ loopback; host riêng `agent-hub.localhost` (WT-1); link đăng nhập MỘT LẦN (HMAC, khoá ở RAM + `HUB_HOME/auth/web.json` 0600) → cookie phiên HttpOnly/SameSite=Strict + khoá phiên NGOÀI cookie (`k`, localStorage) bắt buộc cho mọi POST; CSRF; Host hợp lệ |
+| `web/security.py` | Chỉ loopback; host riêng `cfharness.localhost` (WT-1); link đăng nhập MỘT LẦN (HMAC, khoá ở RAM + `HUB_HOME/auth/web.json` 0600) → cookie phiên HttpOnly/SameSite=Strict + khoá phiên NGOÀI cookie (`k`, localStorage) bắt buộc cho mọi POST; CSRF; Host hợp lệ |
 | `web/app.py` | Starlette + Jinja2 + htmx vendored + SSE. `GuardMiddleware` ASGI thuần (không dùng BaseHTTPMiddleware — làm hỏng SSE). Ghi = `POST /do/<action>` (bảng `ACTIONS`) hoặc form agent |
 | `web/present.py` | Thuần: nhãn tiếng Việt, `transcript_item`, `activity_item`, `md()` an toàn |
-| `web/cli.py`, `web/demo.py` | `agent-hub web [--port] [--open] [--url]`; hub demo FakeRuntime để chụp ảnh |
+| `web/cli.py`, `web/demo.py` | `cfharness web [--port] [--open] [--url]`; hub demo FakeRuntime để chụp ảnh |
 
 Quy tắc: web là CLIENT thuần (RPC qua `AsyncHubClient(channel="web")`), không đụng `hub.db`. Thao tác ghi mới → thêm vào `ACTIONS`
 (nhạy cảm: đặt `confirm`), gửi `audit=True` (approval: `channel="web"`). Không script/style inline (CSP `'self'`), không CDN; tài nguyên
 tĩnh mới đặt trong `web/static/`. Không bao giờ đưa token người/khoá `auth/`/`Session.key` vào template, cookie, log (trang xác nhận mang trường form qua `carry()` — đã loại `k`).
 Duyệt: hiện TOÀN BỘ thao tác (`present.action_view`, không cắt); lớp nặng (`notify.telegram.confirm_classes` + `file`, tài nguyên bảo vệ) cần bước 2. `config.set` chỉ khoá trong `SAFE_CONFIG`.
-Agent trong run: sandbox chặn TCP localhost (đã kiểm thật) + denyRead `HUB_HOME/auth` + `agent-hub web` forbidden trong classifier.
+Agent trong run: sandbox chặn TCP localhost (đã kiểm thật) + denyRead `HUB_HOME/auth` + `cfharness web` forbidden trong classifier.
 
 ## M7 luồng MGR-UI — Điều phối viên trên web + Telegram + terminal
 Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes/M7-ui.md`. Ảnh: `docs/screenshots/web/16-…18-*.png`, `docs/screenshots/m2/10-11-dieu-phoi*.svg`. Không migration, không RPC mới.
@@ -308,14 +308,14 @@ Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes
 | `web/present.py` (`mgr_*`) | Thuần: đích `manager.action` → link NỘI BỘ (loại đã biết + id an toàn), chuẩn hoá history/conversation |
 | `chat/manager_chat.py` | `hub.telegram.manager`: tin không `/` → `manager.chat(channel=telegram:<chat>)`, reply → đúng conversation (`hub_state telegram.mgr_*`), `/moi`, `manager.reply` (theo `channel`) → khung WT-8 |
 | `web/manager_stub.py` | Stub `manager.*` cùng chữ ký — CHỈ test/demo (`install(daemon, force=)`) |
-| `manager/repl.py`, `manager/chatview.py` | `agent-hub chat` (= `manager chat` không nội dung): REPL `prompt_toolkit` (nhập dính đáy, thanh trạng thái spinner/tool/chữ chạy, `/new /list /open /history /stop`, steer khi đang làm, Ctrl-C dừng lượt, lịch sử `HUB_HOME/cli_history` 0600); không TTY → từng dòng stdin. `ChatState`/`render` thuần dùng chung với TUI. `manager chat "<tin>"` chờ qua `events.subscribe` (`repl.oneshot`) |
-| `tui/manager.py` | `ManagerScreen` (phím `m` ở `top`): hội thoại + "Hành động" (Enter → Attach/Tasks, chỉ đích hợp lệ) + transcript `RichLog(markup=False)` + ô nhập; Ctrl-N mới, Ctrl-T dừng lượt. Hội thoại kênh `cli` DÙNG CHUNG với `agent-hub chat`; audit kênh `tui` |
+| `manager/repl.py`, `manager/chatview.py` | `cfharness chat` (= `manager chat` không nội dung): REPL `prompt_toolkit` (nhập dính đáy, thanh trạng thái spinner/tool/chữ chạy, `/new /list /open /history /stop`, steer khi đang làm, Ctrl-C dừng lượt, lịch sử `HUB_HOME/cli_history` 0600); không TTY → từng dòng stdin. `ChatState`/`render` thuần dùng chung với TUI. `manager chat "<tin>"` chờ qua `events.subscribe` (`repl.oneshot`) |
+| `tui/manager.py` | `ManagerScreen` (phím `m` ở `top`): hội thoại + "Hành động" (Enter → Attach/Tasks, chỉ đích hợp lệ) + transcript `RichLog(markup=False)` + ô nhập; Ctrl-N mới, Ctrl-T dừng lượt. Hội thoại kênh `cli` DÙNG CHUNG với `cfharness chat`; audit kênh `tui` |
 | `termsafe.py` | `clean()`/`one_line()`: bỏ ANSI/OSC/C1, điều khiển, bidi, zero-width trước khi in chữ agent ra terminal |
 
 Bất biến: chữ của điều phối viên (trả lời, tóm tắt/đích hành động) là DỮ LIỆU — web vẽ bằng autoescape + `pre-wrap` (không markdown, không `|safe`,
 không link do agent đặt; HTML qua SSE vẽ phía server, delta gán `textContent`); Telegram chỉ trong `<pre>` sau tiền tố cố định, không bao giờ kèm nút.
 Mọi ghi từ web qua `post_guard` (CSRF + khoá phiên WT-1) với `_audit.channel=web`; từ Telegram qua `bot.call` (cổng người + allowlist from.id, audit
-`telegram:<id>`). Terminal (REPL/TUI): chữ agent qua `termsafe.clean` + `rich.Text` (không markup, không OSC 8 link); `agent-hub chat` ∈ `HUB_HUMAN_ONLY_CLI`.
+`telegram:<id>`). Terminal (REPL/TUI): chữ agent qua `termsafe.clean` + `rich.Text` (không markup, không OSC 8 link); `cfharness chat` ∈ `HUB_HUMAN_ONLY_CLI`.
 Test: `tests/test_web_manager.py`, `tests/test_telegram_manager.py`, `tests/test_manager_repl.py`, `tests/test_tui_manager.py` (thêm ca XSS/chèn ANSI mới vào đây).
 
 ## M7 MGR-CORE — Điều phối viên (manager: agent harness quản lý + giao việc)
@@ -326,7 +326,7 @@ Chi tiết, **chữ ký RPC cho MGR-UI**, nghiệm thu thật: `docs/dev-notes/M
 | `manager/service.py` | `hub.manager`: chỉ định (`hub_state.manager`, `require_human`), hội thoại theo kênh (run `kind=manager`, `--resume`, cwd cố định `workspaces/conv-<id>`), `manager.reply`, nhịp heartbeat (gom sự kiện + định kỳ, khoá chống chồng, không chạy khi ESTOP), `self_call` |
 | `manager/permissions.py` | Luật "toàn quyền trừ an toàn" — `check_rpc` chạy ở CẢ `ManagerOps` (lớp 1) và `Daemon._dispatch` cho `Caller.manager` (lớp 2) |
 | `manager/ops.py` | Tool hub-self `manager` (đọc toàn hub; ghi qua `Daemon.call_as(auth.manager_caller)` hoặc `Ledger.apply` actor `manager:<agent>`) → event `manager.action` |
-| `manager/rpc.py`, `cli.py`, `prompts.py` | RPC `manager.get|set|chat|conversations|history|tick`, `managerself.call`; CLI `agent-hub manager …`; prompt chat/tick (tiếng Anh) |
+| `manager/rpc.py`, `cli.py`, `prompts.py` | RPC `manager.get|set|chat|conversations|history|tick`, `managerself.call`; CLI `cfharness manager …`; prompt chat/tick (tiếng Anh) |
 | `templates/manager.yaml` | Persona điều phối viên (tiếng Anh, báo cáo tiếng Việt). Tạo từ template KHÔNG cấp quyền — chỉ `manager set` |
 
 Bất biến: chỉ NGƯỜI chỉ định manager (`manager.set|chat|tick` ∈ HUMAN_ONLY). Quyền của manager kiểm ở DAEMON, không tin tool list:

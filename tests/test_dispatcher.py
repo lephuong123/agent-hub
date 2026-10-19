@@ -4,9 +4,9 @@ import asyncio
 
 import pytest
 
-from agent_hub.errors import Blocked
-from agent_hub.hub import Hub
-from agent_hub.runtime import FakeRuntime
+from cfharness.errors import Blocked
+from cfharness.hub import Hub
+from cfharness.runtime import FakeRuntime
 
 
 async def settle(n=20):
@@ -164,7 +164,7 @@ async def test_stop_queued_run(make_hub):
 async def test_spawn_failure_marks_run_failed(make_hub, hub_home):
     hub, rt = make_hub()
     hub.agents.create({"id": "a", "name": "A", "tool_policy": {"permission_mode": "bypassPermissions"}})
-    from agent_hub.runtime import ClaudeCliRuntime
+    from cfharness.runtime import ClaudeCliRuntime
 
     hub.runs._runtime = ClaudeCliRuntime({"binary": "/nonexistent/claude"})
     run = hub.runs.submit("a", "x")

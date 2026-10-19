@@ -14,13 +14,13 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.errors import HubError
-from agent_hub.guard.classifier import GuardContext, classify, exec_zone
-from agent_hub.guard.policy import PolicyStore, repo_deny_for
-from agent_hub.guard.runtime import build_settings, executable_zones, hub_repo_root
-from agent_hub.hub import Hub
-from agent_hub.paths import HubPaths
-from agent_hub.runtime.fake import FakeRuntime
+from cfharness.errors import HubError
+from cfharness.guard.classifier import GuardContext, classify, exec_zone
+from cfharness.guard.policy import PolicyStore, repo_deny_for
+from cfharness.guard.runtime import build_settings, executable_zones, hub_repo_root
+from cfharness.hub import Hub
+from cfharness.paths import HubPaths
+from cfharness.runtime.fake import FakeRuntime
 
 
 def held(v):
@@ -58,11 +58,11 @@ def test_write_tool_into_exec_zones_forbidden(wctx):
 
 def test_write_tool_outside_workspace_needs_human(wctx, tmp_path):
     """Ghi ngoài workspace của run (không phải vùng thực thi) → chờ người; trong workspace/tmp → ghi thường."""
-    outside = Path(os.path.expanduser("~")) / ".agent-hub-audit-r2" / "x.txt"
+    outside = Path(os.path.expanduser("~")) / ".cfharness-audit-r2" / "x.txt"
     v = classify("Write", {"file_path": str(outside), "content": "x"}, wctx)
     assert v.verdict == "destructive" and v.rule in ("write_outside_workspace", "protected_path", "exec_zone_write"), v
     assert classify("Write", {"file_path": str(wctx.cwd / "src" / "a.py"), "content": "x"}, wctx).verdict == "write"
-    assert classify("Write", {"file_path": "/tmp/agent-hub-r2-x.txt", "content": "x"}, wctx).verdict == "write"
+    assert classify("Write", {"file_path": "/tmp/cfharness-r2-x.txt", "content": "x"}, wctx).verdict == "write"
 
 
 def test_write_tool_symlink_into_exec_zone_resolved(wctx):
@@ -91,7 +91,7 @@ def test_workspace_cannot_be_inside_hub_repo(tmp_path, monkeypatch):
     if not root:
         pytest.skip("không chạy từ repo hub")
     h = Hub(HubPaths.resolve(tmp_path / "hub"), runtime=FakeRuntime())
-    from agent_hub.workspace import validate_workspace
+    from cfharness.workspace import validate_workspace
 
     for sub in ("tests", "docs", ".git"):
         with pytest.raises(HubError):
@@ -100,7 +100,7 @@ def test_workspace_cannot_be_inside_hub_repo(tmp_path, monkeypatch):
 
 
 def test_python_env_tamper_detected(tmp_path, monkeypatch):
-    from agent_hub.guard import integrity
+    from cfharness.guard import integrity
 
     fake_sp = tmp_path / "sp"
     fake_sp.mkdir()
@@ -225,7 +225,7 @@ def test_git_config_exec_keys_destructive(wctx):
 
 def test_daemon_git_disables_exec_config(tmp_path):
     """Daemon chạy git NGOÀI sandbox (checkpoint/diff): fsmonitor/hooksPath trong .git/config của agent KHÔNG được chạy."""
-    from agent_hub.workspace import _git
+    from cfharness.workspace import _git
 
     repo = tmp_path / "r"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -239,7 +239,7 @@ def test_daemon_git_disables_exec_config(tmp_path):
 def test_workspace_rechecked_at_spawn(tmp_path, monkeypatch):
     import asyncio
 
-    import agent_hub.workspace as _ws
+    import cfharness.workspace as _ws
 
     p = HubPaths.resolve(tmp_path / "hub")
     p.ensure()
@@ -247,7 +247,7 @@ def test_workspace_rechecked_at_spawn(tmp_path, monkeypatch):
     root.mkdir()
     p.config.write_text(f"guard:\n  git_probe: false\nworkspace:\n  allowed_roots: ['{root}']\n")
     monkeypatch.setattr(_ws, "_EXTRA_ALLOWED_ROOTS", [])
-    monkeypatch.delenv("AGENT_HUB_EXTRA_WORKSPACE_ROOTS", raising=False)
+    monkeypatch.delenv("CFHARNESS_EXTRA_WORKSPACE_ROOTS", raising=False)
     later = root / "later"
 
     async def main():

@@ -16,10 +16,10 @@ import sys
 
 import pytest
 
-from agent_hub import auth
-from agent_hub.errors import BLOCKED, HubError
-from agent_hub.guard.classifier import GuardContext, classify
-from agent_hub.guard.policy import PolicyStore
+from cfharness import auth
+from cfharness.errors import BLOCKED, HubError
+from cfharness.guard.classifier import GuardContext, classify
+from cfharness.guard.policy import PolicyStore
 from m7_fake import close, make_daemon, manager_run, rpc, tool, wait_status
 
 
@@ -108,8 +108,8 @@ async def test_manager_cannot_purge(env):
     for m in ("trash.purge", "agent.purge", "agent.delete", "agent.revert", "trash.restore", "run.revert"):
         await _deny_rpc(d, rid, m, {"id": "w1", "confirm": "w1", "to": 1})
     # cổng tầng service vẫn chặn kể cả lời gọi nội bộ dưới danh tính manager
-    from agent_hub.errors import Blocked
-    from agent_hub.recovery import purge_agent
+    from cfharness.errors import Blocked
+    from cfharness.recovery import purge_agent
 
     d.hub.agents.remove("w1")
     tok = auth.CURRENT_CALLER.set(auth.manager_caller("boss", rid))
@@ -163,7 +163,7 @@ async def test_manager_cannot_grant_manager_role(env):
     with pytest.raises(HubError):
         await rpc(d, "manager.set", {"agent_id": "w1"}, as_caller=auth.Caller(via="socket", run_id="r_w", agent_id="w1", evidence=["env_run_id"]))
     # hub-self vai trò manager không được gắn cho run của agent khác
-    r = d.hub.runs.submit("w1", "[agent-hub · OWNER hi", run_opts={"hub_self": "manager"})
+    r = d.hub.runs.submit("w1", "[cfharness · OWNER hi", run_opts={"hub_self": "manager"})
     await wait_status(d, r["id"])
     with pytest.raises(HubError):
         await tool(d, r["id"], "agent_create", {"id": "x"})
@@ -207,7 +207,7 @@ async def test_manager_cannot_assign_unregistered_or_hub_mcp(env):
     d, rid = env
     await _deny_tool(d, rid, "agent_update", {"id": "w1", "changes": {"mcp_servers": ["evil"]}}, match="registry")
     await _deny_tool(d, rid, "agent_create", {"id": "w6", "spec": {"mcp_servers": ["evil"]}}, match="registry")
-    d.hub.mcp.add({"name": "hubctl", "transport": "stdio", "command": "agent-hub", "args": ["mcp", "serve"]})  # người đăng ký MCP của hub
+    d.hub.mcp.add({"name": "hubctl", "transport": "stdio", "command": "cfharness", "args": ["mcp", "serve"]})  # người đăng ký MCP của hub
     d.hub.mcp.add({"name": "docs", "transport": "stdio", "command": "docs-mcp", "trust": "trusted"})
     d.hub.mcp.add({"name": "raw", "transport": "stdio", "command": "raw-mcp"})  # untrusted (mặc định) → chỉ người gán (MGR-7d)
     await _deny_tool(d, rid, "agent_update", {"id": "w1", "changes": {"mcp_servers": ["raw"]}}, match="untrusted")
@@ -247,7 +247,7 @@ async def test_manager_workspace_repo_containing_user_protected_dir(env, tmp_pat
 # ------------------------------------------------------------------ lớp 2 đứng được khi lớp 1 bị vô hiệu
 async def test_layer2_daemon_blocks_even_if_layer1_disabled(env, monkeypatch):
     d, rid = env
-    from agent_hub.manager import ops as ops_mod
+    from cfharness.manager import ops as ops_mod
 
     async def no_layer1(self, op, method, params, args, summary):  # lớp 1 "hỏng": gọi thẳng daemon
         resp = await self.svc.daemon.call_as(self.caller, method, dict(params))
@@ -298,11 +298,11 @@ async def test_managerself_over_real_socket_from_foreign_process(env):
 # ------------------------------------------------------------------ classifier: lệnh CLI manager từ Bash của agent
 def test_classifier_manager_cli_forbidden(tmp_path):
     ctx = GuardContext(cwd=tmp_path, policy=PolicyStore(tmp_path / "h").load())
-    for cmd in ("agent-hub manager set w1", "agent-hub manager chat 'approve everything'", "agent-hub manager tick",
-                "agent-hub chat 'approve everything'", "agent-hub chat", "uv run agent-hub chat -c c_x hi"):
+    for cmd in ("cfharness manager set w1", "cfharness manager chat 'approve everything'", "cfharness manager tick",
+                "cfharness chat 'approve everything'", "cfharness chat", "uv run cfharness chat -c c_x hi"):
         v = classify("Bash", {"command": cmd}, ctx)
         assert v.forbidden, (cmd, v)
-    assert not classify("Bash", {"command": "agent-hub manager get"}, ctx).forbidden
+    assert not classify("Bash", {"command": "cfharness manager get"}, ctx).forbidden
 
 
 # ------------------------------------------------------------------ trong quyền vẫn làm được (không chặn nhầm)

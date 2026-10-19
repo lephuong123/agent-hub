@@ -2,7 +2,7 @@
 
 Daemon THẬT trên Unix socket THẬT; "tiến trình run" là một tiến trình Python thật được đăng ký làm pid của run
 (giống pid `claude`), client là tiến trình con/cháu của nó — đúng kịch bản QA:
-`python -m agent_hub.cli approve`, `echo approve <id> | xargs agent-hub`, client socket Python tự viết (kể cả đã đọc
+`python -m cfharness.cli approve`, `echo approve <id> | xargs cfharness`, client socket Python tự viết (kể cả đã đọc
 được token người), nohup/double-fork mồ côi. Người (test process / CLI con của test) vẫn duyệt được, không bước tay.
 """
 
@@ -20,21 +20,21 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub import auth
-from agent_hub.daemon import Daemon
-from agent_hub.paths import HubPaths
-from agent_hub.rpc import RpcClient, RpcError
-from agent_hub.runtime.fake import FakeRuntime
+from cfharness import auth
+from cfharness.daemon import Daemon
+from cfharness.paths import HubPaths
+from cfharness.rpc import RpcClient, RpcError
+from cfharness.runtime.fake import FakeRuntime
 
-AGENT_HUB_BIN = shutil.which("agent-hub") or str(Path(sys.executable).parent / "agent-hub")
+CFHARNESS_BIN = shutil.which("cfharness") or str(Path(sys.executable).parent / "cfharness")
 
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     # đường dẫn ngắn để socket nằm trong HUB_HOME (và test cả nhánh /tmp ở test khác)
     h = Path(os.path.realpath("/tmp")) / f"ahsec-{os.getpid()}-{time.time_ns() % 10**6}"
-    monkeypatch.setenv("AGENT_HUB_HOME", str(h))
-    monkeypatch.delenv("AGENT_HUB_SOCKET", raising=False)
+    monkeypatch.setenv("CFHARNESS_HOME", str(h))
+    monkeypatch.delenv("CFHARNESS_SOCKET", raising=False)
     p = HubPaths.resolve(h)
     p.ensure()
     p.config.write_text("guard:\n  git_probe: false\nhub:\n  max_concurrent_runs: 20\n")
@@ -90,7 +90,7 @@ async def _start_run(d: Daemon) -> tuple[dict, "subprocess.Popen[bytes]", Path]:
         time.sleep(spec.get("linger", 0))
     """)
     proc = subprocess.Popen([sys.executable, "-c", helper], start_new_session=True,
-                            env={**os.environ, "AGENT_HUB_RUN_ID": r["id"], "AGENT_HUB_HOME": str(d.paths.home)})
+                            env={**os.environ, "CFHARNESS_RUN_ID": r["id"], "CFHARNESS_HOME": str(d.paths.home)})
     ar.handle.pid = proc.pid  # = pid tiến trình `claude` của run
     info = auth.proc_info(proc.pid)
     h.store.update_run(r["id"], {"pid": proc.pid, "pid_start_time": info.start if info else time.time()})
@@ -151,8 +151,8 @@ async def test_human_cli_and_client_can_approve_without_manual_step(home):
         assert res["status"] == "allowed"
         # (2) CLI thật của người (tiến trình con của test, KHÔNG thuộc run) — tự đọc token
         aid2 = _open_approval(d, run)
-        cp = await asyncio.to_thread(subprocess.run, [AGENT_HUB_BIN, "approve", aid2], capture_output=True, text=True, timeout=60,
-                                     env={**os.environ, "AGENT_HUB_HOME": str(home.home)})
+        cp = await asyncio.to_thread(subprocess.run, [CFHARNESS_BIN, "approve", aid2], capture_output=True, text=True, timeout=60,
+                                     env={**os.environ, "CFHARNESS_HOME": str(home.home)})
         assert cp.returncode == 0, cp.stderr
         assert d.hub.approvals.get(aid2)["status"] == "allowed"
         proc.kill()
@@ -166,14 +166,14 @@ async def test_agent_cannot_self_approve_python_m_xargs_or_raw_socket(home):
     try:
         run, proc, go = await _start_run(d)
         aid = _open_approval(d, run)
-        # QA #1: python3 -m agent_hub.cli approve <id>
-        r1 = await _in_run(go, f"{sys.executable} -m agent_hub.cli approve {aid}")
+        # QA #1: python3 -m cfharness.cli approve <id>
+        r1 = await _in_run(go, f"{sys.executable} -m cfharness.cli approve {aid}")
         assert r1["rc"] != 0 and "chỉ dành cho NGƯỜI" in (r1["err"] + r1["out"]), r1
         assert d.hub.approvals.get(aid)["status"] in ("open", "waiting_human")
         proc.wait(5)
-        # QA #2: echo approve <id> | xargs agent-hub
+        # QA #2: echo approve <id> | xargs cfharness
         run2, proc2, go2 = await _start_run(d)
-        r2 = await _in_run(go2, f"echo approve {aid} | xargs {AGENT_HUB_BIN}")
+        r2 = await _in_run(go2, f"echo approve {aid} | xargs {CFHARNESS_BIN}")
         assert r2["rc"] != 0 and "chỉ dành cho NGƯỜI" in (r2["err"] + r2["out"]), r2
         proc2.wait(5)
         # QA #3: client socket Python tự viết — kể cả khi ĐÃ đọc trộm được token người
@@ -193,13 +193,13 @@ async def test_agent_cannot_self_approve_python_m_xargs_or_raw_socket(home):
 
 async def test_orphaned_double_fork_and_env_escape_still_detected(home):
     """nohup/double-fork (mồ côi về launchd SAU khi tiến trình run đã thoát) → vẫn nhận ra qua session id của run gần đây;
-    setsid + double-fork nhưng còn AGENT_HUB_RUN_ID trong env → nhận ra qua env."""
+    setsid + double-fork nhưng còn CFHARNESS_RUN_ID trong env → nhận ra qua env."""
     d, srv = await _start(home)
     try:
         run, proc, go = await _start_run(d)
         aid = _open_approval(d, run)
         res_file = Path(home.home) / "orphan.json"
-        await _in_run(go, _client_py(home, "approval.approve", {"id": aid}, steal_token=True, double_fork=True, result=res_file), unset=["AGENT_HUB_RUN_ID"])
+        await _in_run(go, _client_py(home, "approval.approve", {"id": aid}, steal_token=True, double_fork=True, result=res_file), unset=["CFHARNESS_RUN_ID"])
         proc.wait(5)  # tiến trình 'claude' đã thoát — cháu mồ côi kết nối sau đó
         for _ in range(300):
             await asyncio.sleep(0.02)
@@ -207,7 +207,7 @@ async def test_orphaned_double_fork_and_env_escape_still_detected(home):
                 break
         resp = json.loads(res_file.read_text())
         assert "error" in resp and any("session" in e for e in resp["error"]["data"]["caller"]["evidence"]), resp
-        # setsid + double-fork, env còn AGENT_HUB_RUN_ID
+        # setsid + double-fork, env còn CFHARNESS_RUN_ID
         run2, proc2, go2 = await _start_run(d)
         res2 = Path(home.home) / "setsid.json"
         await _in_run(go2, _client_py(home, "approval.approve", {"id": aid}, steal_token=True, setsid=True, double_fork=True, result=res2))
@@ -221,7 +221,7 @@ async def test_orphaned_double_fork_and_env_escape_still_detected(home):
         run3, proc3, go3 = await _start_run(d)
         res3 = Path(home.home) / "notoken.json"
         await _in_run(go3, _client_py(home, "approval.approve", {"id": aid}, steal_token=False, setsid=True, double_fork=True, result=res3),
-                      unset=["AGENT_HUB_RUN_ID"])
+                      unset=["CFHARNESS_RUN_ID"])
         for _ in range(300):
             await asyncio.sleep(0.02)
             if res3.exists():
@@ -240,7 +240,7 @@ async def test_agent_learn_propose_downgraded_and_agent_update_denied(home):
     try:
         run, proc, go = await _start_run(d)
         # learn propose từ trong run (CLI thật) → KHÔNG là created_by=user; đi qua guard học
-        r = await _in_run(go, f"{AGENT_HUB_BIN} --json learn propose a1 --target memory --op add --payload '{{\"text\": \"x\"}}'")
+        r = await _in_run(go, f"{CFHARNESS_BIN} --json learn propose a1 --target memory --op add --payload '{{\"text\": \"x\"}}'")
         props = d.hub.learning.pipeline.list("a1", None, 50)
         assert props, r
         assert all(p["created_by"] != "user" for p in props) and props[0]["created_by"] == "agent"

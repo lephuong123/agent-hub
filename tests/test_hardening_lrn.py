@@ -14,10 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.errors import Blocked, Conflict
-from agent_hub.events import iso
-from agent_hub.hub import Hub
-from agent_hub.learning.ledger import Change
+from cfharness.errors import Blocked, Conflict
+from cfharness.events import iso
+from cfharness.hub import Hub
+from cfharness.learning.ledger import Change
 from m3_fake import ScriptedRuntime
 from m4b_fake import settle
 
@@ -96,7 +96,7 @@ def test_h04_auto_rollback_conflicts_when_human_edited_same_key(hub):
     assert hub.store.conn.execute("SELECT count(*) FROM ledger_entries").fetchone()[0] == n
     w = human_warnings(hub)
     assert w and w[-1].payload["source"] == "regression_monitor" and w[-1].payload["ledger_entry_id"] == e["id"]
-    from agent_hub.notify import format_message
+    from cfharness.notify import format_message
 
     assert "không tự rollback" in format_message(w[-1]).lower()
     # người vẫn rollback được bằng --force
@@ -373,7 +373,7 @@ async def test_h17_flag_set_even_if_watch_exists(hub_home):
 
 # ============================================================================ H-15: charter team trong system prompt
 def test_h15_charter_in_system_prompt_ordered_and_stable(hub):
-    from agent_hub.learning.runtime import system_prompt_for
+    from cfharness.learning.runtime import system_prompt_for
 
     hub.teams.create({"id": "docs", "name": "Docs", "charter": "Write accurate docs. Cite sources.", "members": [{"agent_id": "r1", "role": "worker"}]})
     soul_p = Path(hub.store.get_agent("r1")["home_path"]) / "SOUL.md"
@@ -383,7 +383,7 @@ def test_h15_charter_in_system_prompt_ordered_and_stable(hub):
     agent = hub.store.get_agent("r1")
     text, _ = system_prompt_for(hub, {"id": "r_1", "team_id": "docs"}, agent)
     i_soul, i_ch, i_mem = text.index("I am R1 persona."), text.index("Write accurate docs."), text.index("Repo uses pnpm.")
-    assert text.index("agent-hub conventions") < i_soul < i_ch < i_mem
+    assert text.index("cfharness conventions") < i_soul < i_ch < i_mem
     text2, _ = system_prompt_for(hub, {"id": "r_2", "team_id": "docs"}, agent)
     assert text2 == text  # ổn định → giữ prompt cache
     solo, _ = system_prompt_for(hub, {"id": "r_3"}, agent)
@@ -393,7 +393,7 @@ def test_h15_charter_in_system_prompt_ordered_and_stable(hub):
 
 
 async def test_h15_system_prompt_snapshot_on_by_default(hub):
-    from agent_hub.runtime.claude_cli import build_argv
+    from cfharness.runtime.claude_cli import build_argv
 
     assert hub.config.get("runtime.claude.system_prompt_snapshot") == "on"
     spec = hub.runs._prepare_spec(hub.store.get_run(hub.runs.submit("r1", "hi")["id"]) or {}, hub.store.get_agent("r1"))
@@ -403,13 +403,13 @@ async def test_h15_system_prompt_snapshot_on_by_default(hub):
 
 # ============================================================================ H-09: retention 30 ngày (giả thời gian)
 def test_h09_retention_purges_old_data_keeps_aggregates(hub):
-    from agent_hub.approvals import audit_record
-    from agent_hub.recovery import purge_retention
+    from cfharness.approvals import audit_record
+    from cfharness.recovery import purge_retention
 
     store = hub.store
     store.insert_run({"id": "r_old", "agent_id": "r1", "kind": "adhoc", "prompt": "x", "status": "completed", "outcome": "completed",
                       "queued_at": iso(datetime.now(timezone.utc)), "cost_usd": 0.5})
-    from agent_hub.events import make_event
+    from cfharness.events import make_event
 
     hub.publish(make_event("text", "r1", {"text": "old transcript"}, run_id="r_old"))
     e = cfg_change(hub, {"effort": "low"})
@@ -425,7 +425,7 @@ def test_h09_retention_purges_old_data_keeps_aggregates(hub):
     with pytest.raises(Exception):
         store.conn.execute("DELETE FROM events")
     # skill xoá mềm + team xoá mềm (purge_after = +30 ngày, Q-17)
-    from agent_hub.store import purge_after
+    from cfharness.store import purge_after
 
     arch = hub.paths.home / "agents" / "r1" / "skills" / ".archive" / "s1__x"
     arch.mkdir(parents=True)
@@ -469,7 +469,7 @@ def test_h09_retention_purges_old_data_keeps_aggregates(hub):
 
 
 def test_h09_purge_expired_runs_retention_throttled(hub, monkeypatch):
-    from agent_hub import recovery
+    from cfharness import recovery
 
     calls = []
     monkeypatch.setattr(recovery, "purge_retention", lambda h, now=None: calls.append(now) or {})
@@ -480,9 +480,9 @@ def test_h09_purge_expired_runs_retention_throttled(hub, monkeypatch):
 
 # ============================================================================ NFR-22 (yêu cầu coordinator): LLM judge qua AgentRuntime.oneshot
 async def test_judge_goes_through_runtime_oneshot(hub, monkeypatch):
-    from agent_hub.evals import judge as judge_mod
-    from agent_hub.evals.judge import JUDGE_SCHEMA, JUDGE_SYSTEM
-    from agent_hub.runtime import ClaudeCliRuntime, OneShotResult
+    from cfharness.evals import judge as judge_mod
+    from cfharness.evals.judge import JUDGE_SCHEMA, JUDGE_SYSTEM
+    from cfharness.runtime import ClaudeCliRuntime, OneShotResult
 
     calls = []
 
@@ -509,7 +509,7 @@ async def test_judge_goes_through_runtime_oneshot(hub, monkeypatch):
 
 # ============================================================================ retention checkpoints/ (yêu cầu coordinator)
 def test_checkpoints_retention_keeps_live_and_recent(hub):
-    from agent_hub.recovery import purge_retention
+    from cfharness.recovery import purge_retention
 
     now = datetime.now(timezone.utc)
     base = hub.paths.home / "checkpoints"
@@ -526,8 +526,8 @@ def test_checkpoints_retention_keeps_live_and_recent(hub):
     assert (base / "r_wait").exists() and (base / "r_int").exists()  # run còn có thể resume/đối soát → giữ
     d = hub.store.get_run("r_done")["diff"]
     assert d["revertible"] is False and d.get("checkpoint_purged_at")
-    from agent_hub.dispatch.rpc import OrchestrationRpc
-    from agent_hub.errors import HubError
+    from cfharness.dispatch.rpc import OrchestrationRpc
+    from cfharness.errors import HubError
 
     class _D:
         pass

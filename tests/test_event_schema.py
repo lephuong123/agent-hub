@@ -1,6 +1,6 @@
 """Hợp đồng event (NFR-23, hardening H-20): `docs/schema/event.v1.json` là snapshot của envelope `HubEvent`.
 
-- envelope sinh từ code phải KHỚP file đã commit (đổi envelope = sinh lại bằng `python -m agent_hub.event_schema --write`
+- envelope sinh từ code phải KHỚP file đã commit (đổi envelope = sinh lại bằng `python -m cfharness.event_schema --write`
   và cân nhắc tăng `SCHEMA_VERSION`);
 - danh mục loại event chỉ được THÊM (loại đã công bố không được biến mất/đổi level);
 - mọi event phát ra từ fixture stream-json thật + event hub hợp lệ theo schema.
@@ -14,9 +14,9 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from agent_hub.claude_adapter import ClaudeStreamAdapter
-from agent_hub.event_schema import envelope_schema
-from agent_hub.events import EVENT_LEVELS, make_event
+from cfharness.claude_adapter import ClaudeStreamAdapter
+from cfharness.event_schema import envelope_schema
+from cfharness.events import EVENT_LEVELS, make_event
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_FILE = ROOT / "docs" / "schema" / "event.v1.json"
@@ -31,7 +31,7 @@ def committed():
 def test_envelope_matches_snapshot(committed):
     gen = envelope_schema()
     for k in ("properties", "required", "additionalProperties", "type", "$id"):
-        assert gen[k] == committed[k], f"envelope đổi ở '{k}' — chạy `python -m agent_hub.event_schema --write docs/schema/event.v1.json`"
+        assert gen[k] == committed[k], f"envelope đổi ở '{k}' — chạy `python -m cfharness.event_schema --write docs/schema/event.v1.json`"
 
 
 def test_event_types_additive_only(committed):

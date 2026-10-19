@@ -6,9 +6,9 @@ import sqlite3
 import pytest
 import yaml
 
-from agent_hub.cli import main
-from agent_hub.daemon import spawn_background
-from agent_hub.rpc import RpcClient
+from cfharness.cli import main
+from cfharness.daemon import spawn_background
+from cfharness.rpc import RpcClient
 
 
 @pytest.fixture

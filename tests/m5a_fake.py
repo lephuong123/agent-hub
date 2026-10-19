@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from agent_hub.events import iso
-from agent_hub.hub import Hub
-from agent_hub.learning.runtime import system_prompt_for
-from agent_hub.prompt import prompt_hash
+from cfharness.events import iso
+from cfharness.hub import Hub
+from cfharness.learning.runtime import system_prompt_for
+from cfharness.prompt import prompt_hash
 
 
 class FakeGate:

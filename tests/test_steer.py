@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.claude_adapter import ClaudeStreamAdapter
-from agent_hub.config import DEFAULTS
-from agent_hub.errors import Conflict, NotFound
-from agent_hub.hub import Hub
-from agent_hub.runtime import ClaudeCliRuntime, FakeRuntime
-from agent_hub.steer import steer
+from cfharness.claude_adapter import ClaudeStreamAdapter
+from cfharness.config import DEFAULTS
+from cfharness.errors import Conflict, NotFound
+from cfharness.hub import Hub
+from cfharness.runtime import ClaudeCliRuntime, FakeRuntime
+from cfharness.steer import steer
 
 FIX = Path(__file__).parent / "fixtures"
 FAKE_STEER = Path(__file__).parent / "fake_claude_steer.py"
@@ -85,7 +85,7 @@ async def test_steer_rejected_after_result_and_unknown(fake_hub):
 
 
 async def test_fake_runtime_send_after_result_raises(tmp_path):
-    from agent_hub.runtime import RunSpec, RuntimeError_
+    from cfharness.runtime import RunSpec, RuntimeError_
 
     rt = FakeRuntime()
     spec = RunSpec(run_id="r1", agent_id="a", prompt="p", cwd=tmp_path / "w", session_id="s", raw_log_path=tmp_path / "r.jsonl", stderr_log_path=tmp_path / "e.log")
@@ -157,8 +157,8 @@ async def test_claude_cli_no_steer_still_closes_stdin_after_result(cli_hub):
 
 
 def test_cli_run_steer_is_rewritten():
-    from agent_hub.cli import build_parser
-    from agent_hub.guard.cli import rewrite_argv
+    from cfharness.cli import build_parser
+    from cfharness.guard.cli import rewrite_argv
 
     p = build_parser()
     a = p.parse_args(rewrite_argv(["run", "steer", "r_abc", "focus please"]))

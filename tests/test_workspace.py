@@ -5,9 +5,9 @@ import subprocess
 
 import pytest
 
-from agent_hub.errors import Conflict, HubError
-from agent_hub.hub import Hub
-from agent_hub.workspace import WorkspaceLocks, compute_diff, git_root, revert, take_checkpoint
+from cfharness.errors import Conflict, HubError
+from cfharness.hub import Hub
+from cfharness.workspace import WorkspaceLocks, compute_diff, git_root, revert, take_checkpoint
 from m3_fake import ScriptedRuntime
 
 
@@ -158,7 +158,7 @@ async def test_task_run_checkpoint_diff_and_rpc_revert(make_hub, repo):
     assert run["workspace_key"] == str(repo.resolve()) and run["checkpoint"]["head"] and run["checkpoint"]["branch"] == "main"
     assert {f["path"] for f in run["diff"]["files"]} == {"b.txt", "new.txt", "d.txt"}
     assert hub.runs.locks.list() == {}  # khoá đã nhả
-    from agent_hub.dispatch.rpc import OrchestrationRpc
+    from cfharness.dispatch.rpc import OrchestrationRpc
 
     class _D:
         pass
@@ -244,7 +244,7 @@ async def test_interrupted_run_not_resumed_when_human_edited_files(make_hub, rep
     await settle(lambda: hub.store.get_run(rid)["status"] == "interrupted" and hub.store.get_run(rid).get("diff"))
     (repo / "b.txt").write_text("human edit after interruption\n")
     hub.runs.shutting_down = False
-    from agent_hub.recovery import resume_interrupted
+    from cfharness.recovery import resume_interrupted
 
     assert resume_interrupted(hub, hub.store.get_run(rid)) is None  # recovery không tự resume
     hub.dispatcher.on_run_terminal(rid)

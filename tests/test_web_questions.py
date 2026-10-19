@@ -10,14 +10,14 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.web import present as P
-from agent_hub.web.app import replay_items
-from agent_hub.web.manager import _timeline, question_from_event
+from cfharness.web import present as P
+from cfharness.web.app import replay_items
+from cfharness.web.manager import _timeline, question_from_event
 
 from test_web import ISOLATED, _start, _stop, audit_rows, until  # noqa: F401
-from agent_hub.runtime import FakeRuntime
+from cfharness.runtime import FakeRuntime
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "agent_hub" / "web" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "cfharness" / "web" / "templates"
 XSS = '<script>alert("x")</script><img src=x onerror=alert(1)> <a href="javascript:alert(2)">bấm</a>'
 
 
@@ -42,7 +42,7 @@ def test_templates_have_no_inline_style_script_or_handlers():
     for f in sorted(TEMPLATES.glob("*.html")):
         s = f.read_text(encoding="utf-8")
         for pat, why in ((r"\sstyle\s*=", "style="), (r"<script(?![^>]*\ssrc=)[^>]*>", "<script> inline"), (r"\son[a-z]+\s*=", "on*= handler"),
-                         (r"javascript:", "javascript: URL"), (r"https?://(?!127\.0\.0\.1|agent-hub\.localhost)[a-z]", "URL ngoài (CDN)")):
+                         (r"javascript:", "javascript: URL"), (r"https?://(?!127\.0\.0\.1|cfharness\.localhost)[a-z]", "URL ngoài (CDN)")):
             for m in re.finditer(pat, s, re.I):
                 bad.append(f"{f.name}: {why}: {s[max(0, m.start() - 30):m.end() + 30]!r}")
     assert not bad, "\n".join(bad)
@@ -179,9 +179,9 @@ def test_replay_merges_approval_open_waiting_and_resolved_into_one_item():
 
 
 def test_run_title_question_view_and_activity():
-    assert P.run_title({"prompt": "[agent-hub task t_1] You have been assigned a task"}) == "You have been assigned a task"
-    assert P.run_title({"task_id": "t_1", "prompt": "[agent-hub task t_1] x"}, {"t_1": "Viết docs"}) == "Viết docs"
-    assert P.run_title({"kind": "manager", "prompt": "[agent-hub heartbeat · key x]\nEvents"}) == "Điều phối viên · nhịp kiểm tra"
+    assert P.run_title({"prompt": "[cfharness task t_1] You have been assigned a task"}) == "You have been assigned a task"
+    assert P.run_title({"task_id": "t_1", "prompt": "[cfharness task t_1] x"}, {"t_1": "Viết docs"}) == "Viết docs"
+    assert P.run_title({"kind": "manager", "prompt": "[cfharness heartbeat · key x]\nEvents"}) == "Điều phối viên · nhịp kiểm tra"
     v = P.question_view({"status": "answered", "answer": {"keys": ["1"], "labels": ["A"], "text": "ok"}, "answered_by": "manager:boss", "options": []})
     assert v["pick"] == ["1. A"] and v["answered_by"] == "Điều phối viên" and not v["pending"]
     assert P.question_view({"status": "open", "options": [{"key": "1"}], "multi": False})["single_quick"]

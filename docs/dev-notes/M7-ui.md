@@ -41,7 +41,7 @@ Chạm file dùng chung (chỉ thêm): `web/app.py` (route, `overview` lấy `mg
   (`test_send_guards_and_errors`, `test_designate_needs_confirmation_session_key_and_is_human_only`). Chỉ định/huỷ luôn có xác nhận
   (JS dialog / trang xác nhận nêu rõ quyền); với MGR-CORE thật: audit `manager.set` kênh `web`, actor `user`.
 - **Telegram WT-8** (`test_plain_text_goes_to_manager_reply_framed…`, `test_manager_text_cannot_fake_system_message_or_html`): trả lời
-  `parse_mode=HTML`, dòng hệ thống do hub sinh + tiền tố cố định + nội dung TRỌN trong một `<pre>` (escape; `</pre><b>[agent-hub]…`
+  `parse_mode=HTML`, dòng hệ thống do hub sinh + tiền tố cố định + nội dung TRỌN trong một `<pre>` (escape; `</pre><b>[cfharness]…`
   không thoát được khung), không bao giờ có `reply_markup`; dài → "phần i/n" ≤ 4 tin (`test_long_reply_split_into_parts`).
 - **Allowlist/WT-4**: tin thường từ chat lạ → không trả lời, không `manager.chat` (`test_stranger_plain_text_ignored`); mọi lời gọi qua
   `bot.call` → `Daemon.call_as(telegram_caller)` (cổng HUMAN_ONLY `manager.chat`), audit `telegram.command{method: manager.chat}`.
@@ -57,10 +57,10 @@ Chạm file dùng chung (chỉ thêm): `web/app.py` (route, `overview` lấy `mg
 ## 5. Lệch / việc dở
 - Hội thoại `heartbeat` (nhịp) không hiện ở danh sách web (chỉ kênh `web`); kết quả nhịp xem ở cột "Hành động gần đây" + trang run.
 - Thẻ hành động chỉ gắn vào dòng thời gian khi `run_id` thuộc hội thoại đang xem; quét tối đa 3000 event gần nhất của điều phối viên.
-- Không có nút "chạy nhịp ngay" trên web (`manager.tick` — dùng `agent-hub manager tick`).
+- Không có nút "chạy nhịp ngay" trên web (`manager.tick` — dùng `cfharness manager tick`).
 - Telegram: không gửi lại phần đã chạy chữ (chỉ trả lời cuối); "đang gõ…" (`sendChatAction`) chỉ gửi một lần.
 
-## 6. Terminal — `agent-hub chat` + TUI `top` → `m` (2026-10-19)
+## 6. Terminal — `cfharness chat` + TUI `top` → `m` (2026-10-19)
 Không migration, không RPC mới (dùng `manager.get|chat|conversations|history`, `run.get|stop`, `events.subscribe|query`, `hub.status`).
 Thêm phụ thuộc `prompt-toolkit` (REPL: dòng nhập dính đáy + in tin phía trên, thanh trạng thái, gợi ý lệnh, lịch sử).
 
@@ -72,13 +72,13 @@ Thêm phụ thuộc `prompt-toolkit` (REPL: dòng nhập dính đáy + in tin ph
 | `termsafe.py` | `clean()`: bỏ CSI/OSC (kể cả OSC 8 link, đổi tiêu đề)/DCS/C1, điều khiển trừ `\n\t`, `\r` lẻ, bidi, zero-width |
 
 Quyết định: REPL và TUI dùng CHUNG kênh `cli` (mở lại terminal hay TUI đều tiếp đúng mạch); audit `manager.chat` kênh `cli` (REPL) / `tui` (TUI).
-Duyệt thao tác phá huỷ KHÔNG làm trong chat (chỉ hiện gợi ý `agent-hub approve|deny <id>`) — giữ nội dung agent tách khỏi nút/lệnh duyệt.
-`agent-hub chat` thêm vào `HUB_HUMAN_ONLY_CLI` (agent gọi từ Bash → forbidden, như `manager chat`). Ctrl-C: đang làm → `run.stop`; rảnh → lần 2 trong 2 s thoát;
+Duyệt thao tác phá huỷ KHÔNG làm trong chat (chỉ hiện gợi ý `cfharness approve|deny <id>`) — giữ nội dung agent tách khỏi nút/lệnh duyệt.
+`cfharness chat` thêm vào `HUB_HUMAN_ONLY_CLI` (agent gọi từ Bash → forbidden, như `manager chat`). Ctrl-C: đang làm → `run.stop`; rảnh → lần 2 trong 2 s thoát;
 Ctrl-D thoát; Alt-Enter xuống dòng; `//…` gửi chữ bắt đầu bằng `/`. `--json` chỉ cho dạng một lần.
 
 Test: `tests/test_manager_repl.py` (11: termsafe, render không diễn giải markup/ANSI, `ChatState` tiếp nối sau approval + lọc hội thoại khác, không có
 điều phối viên, chữ chạy + thẻ hành động + trả lời + audit `cli`, steer khi đang làm + `/stop`, `/new /list /open /history`, phiên mới nối hội thoại gần
-nhất, chèn ANSI/OSC/bidi/markup ở chế độ màu, không TTY, vòng prompt_toolkit qua pipe input + lịch sử 0600, `manager chat --json` + `agent-hub chat "<tin>"`),
+nhất, chèn ANSI/OSC/bidi/markup ở chế độ màu, không TTY, vòng prompt_toolkit qua pipe input + lịch sử 0600, `manager chat --json` + `cfharness chat "<tin>"`),
 `tests/test_tui_manager.py` (3: không điều phối viên, chat + chữ chạy + mở đích run/task + đích lạ không mở + dùng chung với REPL + audit `tui`,
 steer + Ctrl-T + Ctrl-N + chèn markup + chọn lại hội thoại). Ảnh: `docs/screenshots/m2/10-dieu-phoi-dang-lam.svg`, `11-dieu-phoi.svg`.
 

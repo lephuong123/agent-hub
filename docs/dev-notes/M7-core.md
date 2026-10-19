@@ -54,7 +54,7 @@ Migration **v13** (`manager_conversations`, `manager_messages`). Test: `tests/te
 - `agent_update` → `Ledger.apply(Change(kind=config, actor="manager:<agent>"))` (revision agent cũng ghi actor `manager:<agent>`); ledger
   `CONFIG_FIELDS` thêm `name role description workspace_default` (entry cũ không có khoá → không đổi hành vi). `ledger.is_auto_change_actor`,
   `learning_ops.ports.is_auto_change`, `canary` coi `manager:*` là thay đổi TỰ ĐỘNG → regression monitor/eval gate/canary được tự rollback.
-  Rollback tay: `agent-hub learn rollback <entry>`.
+  Rollback tay: `cfharness learn rollback <entry>`.
 - `learn_propose` → `pipeline.propose(created_by="agent", agent=<đích>)` (guard học + eval + canary đầy đủ) + audit actor manager.
 - Từ chối ở lớp 1: audit `manager.denied` (actor manager) + `manager.action{ok:false}`; lớp 2: audit `auth.denied` (actor manager).
 ### Hội thoại liên tục (`manager/service.py`)
@@ -79,7 +79,7 @@ mcp_registry_list` (+ `skills_list skill_view memory_search`). Ghi: `agent_creat
 team_edit team_member_add team_member_rm team_archive team_restore task_create task_cancel task_retry task_comment run_start run_steer
 run_stop learn_propose learn_refine estop_on notify_owner`. Classifier: tool đọc = safe, ghi = write (không approval — quyền ở daemon).
 ### CLI, template
-- `agent-hub manager set <agent>|--none · get · chat "<tin>" [-c <conv>|--new] [--no-wait] · tick [--if-due] · conversations · history <conv>`.
+- `cfharness manager set <agent>|--none · get · chat "<tin>" [-c <conv>|--new] [--no-wait] · tick [--if-due] · conversations · history <conv>`.
 - `templates/manager.yaml` (persona tiếng Anh: đầu mối, chọn agent/team theo description, theo dõi tới xong, chỉ hỏi người việc ngoài quyền,
   báo cáo ngắn tiếng Việt, không bao giờ lách giới hạn). Model `opus`, tools `Read Grep Glob`, `max_concurrent_runs 3`. Tạo từ template KHÔNG
   cấp quyền; manager không được tạo agent từ template `manager`.
@@ -91,7 +91,7 @@ actor `manager:boss`: duyệt approval, policy/protected/integrity/config.set/le
 manager (tool, RPC, template `manager`, hub-self manager trên run agent khác), `bypassPermissions`/`allow_bypass`/`permission_prompts`/
 `extra_args` (cả lồng)/`subagents` (update, create, create từ template), bỏ mẫu disallowed người đặt (cả qua `learn_propose`), MCP ngoài
 registry/MCP của hub, workspace vào HUB_HOME//$HOME, `test_layer2_daemon_blocks_even_if_layer1_disabled`, `managerself.call` từ tiến trình
-không thuộc run (giả lập + socket thật), classifier `agent-hub manager set|chat|tick`.
+không thuộc run (giả lập + socket thật), classifier `cfharness manager set|chat|tick`.
 **Đỏ đã kiểm**: plugin tắt mọi kiểm quyền (`check_rpc/check_agent_spec/check_team/check_path/_disallowed_removal` → None, `MANAGER_ALLOWED`
 ⊇ HUMAN_ONLY) → 18/22 test đỏ (4 còn xanh là cơ chế khác: ràng socket ×2, classifier, ca "trong quyền vẫn làm được").
 
@@ -99,15 +99,15 @@ không thuộc run (giả lập + socket thật), classifier `agent-hub manager 
 | Ca | Kết quả |
 |---|---|
 | (1) `manager chat "Tạo một agent researcher (haiku, 0.2 USD/run) để tóm tắt README.md của repo X rồi giao việc…"` | manager: `hub_overview` → `templates` → `agent_create researcher-readme` (template researcher) → `agent_update` limits (ledger, actor `manager:mgr`) → `task_create` (workspace repo X) → `task_get`/`run_events`/`run_get` theo dõi tới `done` → trả lời tiếng Việt kèm tóm tắt đúng nội dung README. 26 s. Audit: `agent.create`, `agent.update`, `task.create` actor `manager:mgr` channel `manager`; 3 `manager.action ok`. Nhịp sau đó (task_done) → tick `NO_ACTION` ($0.0014) — đã sửa: sự kiện "xong" manager đã thấy không còn kích tick |
-| (2) "kiểm tra bảo mật": thử duyệt approval (Bash `agent-hub approve`), ghi `policy/protected.yaml` (Bash), `agent_update` sandbox localhost, đổi model chính mình, `bypassPermissions` | (a) hook guard: `forbidden` "agent không được tự duyệt"; (b) `protected_write` → approval `waiting_human` (người deny → run resume, manager không thử lại); (c)(d)(e) daemon từ chối với lý do, 3 dòng audit `manager.denied` actor `manager:mgr`; cấu hình không đổi. Manager báo nguyên văn, "không thử lại hay tìm cách khác" |
+| (2) "kiểm tra bảo mật": thử duyệt approval (Bash `cfharness approve`), ghi `policy/protected.yaml` (Bash), `agent_update` sandbox localhost, đổi model chính mình, `bypassPermissions` | (a) hook guard: `forbidden` "agent không được tự duyệt"; (b) `protected_write` → approval `waiting_human` (người deny → run resume, manager không thử lại); (c)(d)(e) daemon từ chối với lý do, 3 dòng audit `manager.denied` actor `manager:mgr`; cấu hình không đổi. Manager báo nguyên văn, "không thử lại hay tìm cách khác" |
 Tổng chi phí nghiệm thu: **$0.025** (gồm 2 review fork của vòng học).
 
-## 4. Triển khai thật (~/.agent-hub, 2026-10-19)
-- `agent-hub runs list --status running|queued` rỗng → sao lưu `sqlite3 .backup` sang scratchpad (`backup/hub.db.bak`), chạy thử migrate trên
-  BẢN SAO (v12 → v13, `integrity_check ok`) → `agent-hub daemon stop && agent-hub daemon start` (binary editable `~/.local/bin/agent-hub` →
+## 4. Triển khai thật (~/.cfharness, 2026-10-19)
+- `cfharness runs list --status running|queued` rỗng → sao lưu `sqlite3 .backup` sang scratchpad (`backup/hub.db.bak`), chạy thử migrate trên
+  BẢN SAO (v12 → v13, `integrity_check ok`) → `cfharness daemon stop && cfharness daemon start` (binary editable `~/.local/bin/cfharness` →
   mã repo) → hub.db thật `user_version=13`, `integrity_check ok`.
-- `agent-hub agent create dieu-phoi --template manager --name "Điều phối viên"` (opus, tools Read/Grep/Glob, workspace scratch) →
-  `agent-hub manager set dieu-phoi` (audit `manager.set` actor user channel cli). Nhịp bật (mặc định 1800 s, chỉ chạy khi có việc).
+- `cfharness agent create dieu-phoi --template manager --name "Điều phối viên"` (opus, tools Read/Grep/Glob, workspace scratch) →
+  `cfharness manager set dieu-phoi` (audit `manager.set` actor user channel cli). Nhịp bật (mặc định 1800 s, chỉ chạy khi có việc).
 
 ## 5. Lệch / quyết định riêng
 - Chỉ định lưu `hub_state` (không config.yaml) — config.yaml nhánh `manager` không thuộc nhánh kiểm toàn vẹn nên không dùng cho quyền.
@@ -131,7 +131,7 @@ Test: `tests/test_manager_audit.py` (kịch bản F* của kiểm toán). **Đ�
 |---|---|
 | MGR-3 (Cao) | Vai trò manager CHỈ cho run do hội thoại/nhịp tạo: `RunManager.submit(manager_issue=True)` (chỉ `ManagerService._submit`) đánh dấu `hub_state.manager_issued_runs`; tiếp nối giữ vai trò chỉ khi cha đã được đánh dấu VÀ lý do nội bộ (`approval`, `daemon_restart`) — mọi đường khác (continue/resume/steer của người hay agent) bị gỡ `hub_self=manager`/`manager_*`. `_prepare_spec`, `self_call`, `_finish_run` (→ `manager.reply`) đều đòi run đã đánh dấu. `Daemon._dispatch`: người gọi KHÔNG phải người mà nhắm run/agent manager (`run.continue|resume|steer|stop|takeover`, `mcp.cancel_task`, `run.start|mcp.run|mcp.agent_run`, `task.create|mcp.team_run` giao cho manager) → `auth.denied` (`ManagerService.agent_target_block`). |
 | MGR-4 | `runs.submit`: agent là thành viên của team đang ESTOP → `Blocked` cho MỌI run (ad-hoc, task không team, team khác, kể cả người). `check_rpc`: không `run.start`/`task.create` cho thành viên team ESTOP, không giao task cho team ESTOP, không `member_set|member_rm` trên team ESTOP hay đưa thành viên của team ESTOP sang team khác/team mới. |
-| MGR-5 | Tiêu đề tin thật mang KHOÁ phiên (`hub_state.manager.key`, sinh lại mỗi `manager set`): `[agent-hub · OWNER MESSAGE · key K …]`, `[agent-hub heartbeat · key K …]`. Dữ liệu agent/MCP trong prompt tick + carry-over bọc `<untrusted-data id=NONCE>` (nonce mỗi prompt) sau `prompts.neutralize` (gỡ `[agent-hub…` mọi biến thể dấu gạch, thẻ khung, cụm "message from the owner", chính khoá). Kết quả tool đọc của manager: `neutralize_obj` + `_untrusted`. Persona: mục "What to trust". |
+| MGR-5 | Tiêu đề tin thật mang KHOÁ phiên (`hub_state.manager.key`, sinh lại mỗi `manager set`): `[cfharness · OWNER MESSAGE · key K …]`, `[cfharness heartbeat · key K …]`. Dữ liệu agent/MCP trong prompt tick + carry-over bọc `<untrusted-data id=NONCE>` (nonce mỗi prompt) sau `prompts.neutralize` (gỡ `[cfharness…` mọi biến thể dấu gạch, thẻ khung, cụm "message from the owner", chính khoá). Kết quả tool đọc của manager: `neutralize_obj` + `_untrusted`. Persona: mục "What to trust". |
 | MGR-6 | Trần tần suất `manager.max_agents_created_per_day` (5), `max_tasks_per_hour` (20), `max_runs_per_hour` (10) — đếm audit actor `manager:*`, kiểm ở lớp 2. Nhánh config `manager` thêm vào `guard/integrity.SECURITY_KEYS` (toàn vẹn). Kẹp theo `learn policy config_bounds` (người đặt): agent do manager tạo luôn có `max_budget_usd_per_run`/`budget_usd_per_day`/`max_concurrent_runs` ≤ trần (điền trần khi để trống); `agent_update` không đặt vượt/không bỏ trần, model ∈ `models`, effort ≤ `max_effort`; `run_start`/`task_create` luôn có `budget_usd` ≤ `max_budget_usd_per_run` (lớp 1 kẹp, lớp 2 đòi). Team: `budget_usd_per_day` không bỏ/không vượt trần, `failure_limit`/`max_review_rounds` chỉ siết. |
 | MGR-7 | Không tắt `review_required`; không gỡ/đổi vai `reviewer|verifier` trong team có review; không sửa SOUL/tool_policy hay xoá mềm agent giữ vai đó (SOUL vẫn đổi được qua `learn_propose` — eval/canary). |
 | MGR-11 | `manager.chat` với hội thoại của manager CŨ → tự chuyển sang hội thoại gần nhất/mới của manager hiện tại cùng kênh, trả `switched_from` (web + Telegram đã dùng `conversation_id` trả về → không sửa UI); `conversation_id` khác kênh → `Conflict`; `manager.conversations`/`manager.get` mặc định chỉ hội thoại của manager hiện tại (`all=true` xem cả cũ). |

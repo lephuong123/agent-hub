@@ -44,7 +44,7 @@ def test_user_profile_regression_on_any_watched_agent_rolls_back(hub):
 def test_line_pin_blocks_learning_patch(hub):
     r = user_change(hub, PREF)
     hub.learning.canary.promote(r["canary_id"], "test")
-    from agent_hub.learning.canary import entry_hash
+    from cfharness.learning.canary import entry_hash
 
     hub.knowledge.set_pin("global", None, "memory_entry", entry_hash(PREF), True)
     r2 = user_change(hub, "The user prefers dates written as yyyy-mm-dd.", action="patch", old="dd/mm/yyyy in every report")

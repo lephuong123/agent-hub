@@ -9,10 +9,10 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import yaml
 
-from agent_hub.curation.kpi import kpi_report, overhead_report, render_kpi, render_overhead
-from agent_hub.curation.overhead import bench
-from agent_hub.events import iso
-from agent_hub.hub import Hub
+from cfharness.curation.kpi import kpi_report, overhead_report, render_kpi, render_overhead
+from cfharness.curation.overhead import bench
+from cfharness.events import iso
+from cfharness.hub import Hub
 from m3_fake import ScriptedRuntime
 
 T0 = datetime(2026, 8, 1, 9, 0, tzinfo=timezone.utc)
@@ -82,7 +82,7 @@ def test_kpi_g4_repeat_corrections_drop(hub):
 
 def test_kpi_rollback_metrics(hub):
     # 2 thay đổi học, 1 bị người rollback
-    from agent_hub.learning.ledger import Change
+    from cfharness.learning.ledger import Change
 
     led = hub.learning.ledger
     p = hub.knowledge.memory_path("agent", "a")

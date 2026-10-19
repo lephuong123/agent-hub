@@ -9,8 +9,8 @@ import time
 
 import pytest
 
-from agent_hub.guard.classifier import GuardContext, classify
-from agent_hub.guard.policy import PolicyStore
+from cfharness.guard.classifier import GuardContext, classify
+from cfharness.guard.policy import PolicyStore
 
 
 @pytest.fixture(scope="module")
@@ -45,7 +45,7 @@ QA_HELD = [
     "python3 -c \"import subprocess; subprocess.run(['rm','-rf','docs'])\"",
     "python3 -c \"import pathlib; pathlib.Path('AGENTS.md').write_text('')\"",
     "node -e \"require('fs').writeFileSync('AGENTS.md','')\"",
-    "echo x > $AGENT_HUB_HOME/policy/catalog.yaml",
+    "echo x > $CFHARNESS_HOME/policy/catalog.yaml",
     "echo 'enabled: false' > HUB/policy/learning.yaml",
     "sqlite3 HUB/hub.db \"UPDATE golden_tasks SET checker='x'\"",
     "python3 -c \"import sqlite3;sqlite3.connect('HUB/hub.db').execute('delete from golden_tasks')\"",
@@ -53,21 +53,21 @@ QA_HELD = [
 ]
 # mặt điều khiển hub / mạo danh người → forbidden (không mở approval)
 QA_FORBIDDEN = [
-    "agent-hub approve ap_1",
-    "python3 -m agent_hub.cli approve ap_1",
-    "python -m agent_hub approve ap_1",
-    "echo approve ap_1 | xargs agent-hub",
-    "agent-hub learn propose me --target config --payload x",
-    "agent-hub learn rollback le_x",
-    "agent-hub learn retry pr_x",
-    "agent-hub learn refine a1",
-    "agent-hub agent update a1",
-    "agent-hub config set approval.timeout_s 1",
-    "agent-hub guard protect rm p1",
+    "cfharness approve ap_1",
+    "python3 -m cfharness.cli approve ap_1",
+    "python -m cfharness approve ap_1",
+    "echo approve ap_1 | xargs cfharness",
+    "cfharness learn propose me --target config --payload x",
+    "cfharness learn rollback le_x",
+    "cfharness learn retry pr_x",
+    "cfharness learn refine a1",
+    "cfharness agent update a1",
+    "cfharness config set approval.timeout_s 1",
+    "cfharness guard protect rm p1",
     "nc -U HUB/hub.sock",
     "cat HUB/hub.sock.auth",
 ]
-QA_SAFE = ["ls -la", "git status", "git log --oneline", "cat file", "grep -r x .", "agent-hub approvals", "echo x >> file", "python3 -m pytest"]
+QA_SAFE = ["ls -la", "git status", "git log --oneline", "cat file", "grep -r x .", "cfharness approvals", "echo x >> file", "python3 -m pytest"]
 
 
 def _s(env, c):

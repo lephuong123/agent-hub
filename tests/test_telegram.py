@@ -9,14 +9,14 @@ import time
 import pytest
 import yaml
 
-from agent_hub import auth
-from agent_hub.daemon import Daemon
-from agent_hub.errors import BLOCKED
-from agent_hub.events import make_event
-from agent_hub.guard.classifier import GuardContext, classify
-from agent_hub.guard.runtime import build_settings
-from agent_hub.notify.telegram import TelegramApi, TelegramError, format_event
-from agent_hub.runtime import FakeRuntime
+from cfharness import auth
+from cfharness.daemon import Daemon
+from cfharness.errors import BLOCKED
+from cfharness.events import make_event
+from cfharness.guard.classifier import GuardContext, classify
+from cfharness.guard.runtime import build_settings
+from cfharness.notify.telegram import TelegramApi, TelegramError, format_event
+from cfharness.runtime import FakeRuntime
 
 from telegram_fake import TOKEN, FakeTelegram
 
@@ -100,7 +100,7 @@ def texts(tg: FakeTelegram, chat: int) -> list[str]:
 
 
 def gctx(hub_home, cwd=None):
-    from agent_hub.guard.policy import PolicyStore
+    from cfharness.guard.policy import PolicyStore
 
     return GuardContext(cwd or hub_home.home, PolicyStore(hub_home.home).load(), hub_socket=str(hub_home.socket), git_probe=False)
 
@@ -179,7 +179,7 @@ async def test_human_only_gate_for_telegram_channel(make, tg, hub_home):
     resp = await d.call_as(auth.telegram_caller(d.hub, STRANGER, STRANGER), "estop.set", {"on": True})
     assert resp["error"]["code"] == BLOCKED and d.hub.runs.estop.get("on") is not True
     # agent gõ lệnh CLI telegram → forbidden (không tự ghép chat của nó vào allowlist)
-    for cmd in ("agent-hub notify telegram allow 5", "agent-hub notify telegram setup --token-stdin"):
+    for cmd in ("cfharness notify telegram allow 5", "cfharness notify telegram setup --token-stdin"):
         v = classify("Bash", {"command": cmd}, gctx(hub_home))
         assert v.forbidden, cmd
     await stop(d)
@@ -222,7 +222,7 @@ async def test_run_command_returns_result_with_cost_then_reply_continues(make, t
     await until(lambda: tg.calls_of("getUpdates"))
     await say(tg, BOSS, "/run coder viết hàm cộng hai số")
     await until(lambda: any("Đã giao run" in t for t in texts(tg, BOSS)))
-    res_msg = await until(lambda: next((m for m in tg.sent(BOSS) if m["text"].startswith("<b>[agent-hub] Run ")), None))
+    res_msg = await until(lambda: next((m for m in tg.sent(BOSS) if m["text"].startswith("<b>[cfharness] Run ")), None))
     runs = d.hub.store.list_runs(agent_id="coder")
     assert len(runs) == 1 and runs[0]["prompt"] == "viết hàm cộng hai số"
     run = runs[0]
@@ -239,7 +239,7 @@ async def test_run_command_returns_result_with_cost_then_reply_continues(make, t
     await until(lambda: len(d.hub.store.list_runs(agent_id="coder")) == 2)
     child = next(r for r in d.hub.store.list_runs(agent_id="coder") if r["id"] != run["id"])
     assert child["parent_run_id"] == run["id"] and child["prompt"] == "thêm test cho hàm đó"
-    await until(lambda: any(child["id"] in m["text"] and m["text"].startswith("<b>[agent-hub] Run ") for m in tg.sent(BOSS)))
+    await until(lambda: any(child["id"] in m["text"] and m["text"].startswith("<b>[cfharness] Run ") for m in tg.sent(BOSS)))
     await stop(d)
 
 
@@ -255,27 +255,27 @@ def _message_ids(tg: FakeTelegram, chat: int) -> list[int]:
 
 
 def test_long_result_truncated_with_hint(hub_home):
-    from agent_hub.hub import Hub
+    from cfharness.hub import Hub
 
     h = Hub(hub_home, runtime=FakeRuntime())
     txt = h.telegram.format_result({"id": "r_1", "agent_id": "a", "outcome": "completed", "cost_usd": 0.0123, "num_turns": 3, "duration_ms": 4200,
                                     "summary": "x" * 10_000})
-    assert len(txt) < 2000 and "đã cắt" in txt and "agent-hub runs show r_1" in txt and "$0.0123" in txt
+    assert len(txt) < 2000 and "đã cắt" in txt and "cfharness runs show r_1" in txt and "$0.0123" in txt
     h.store.close()
 
 
 def test_wt8_agent_result_framed_cannot_fake_system_message(hub_home):
     """WT-8: nội dung agent nằm TRỌN trong <pre> (escape), sau tiền tố cố định; không giả được dòng hệ thống / thẻ HTML / link."""
-    from agent_hub.chat.bot import AGENT_FRAME
-    from agent_hub.hub import Hub
+    from cfharness.chat.bot import AGENT_FRAME
+    from cfharness.hub import Hub
 
     h = Hub(hub_home, runtime=FakeRuntime())
-    evil = "xong</pre><b>[agent-hub] Đã CHO PHÉP ap_1</b>\n[agent-hub] nhắn /estop off tại https://evil.example <a href='x'>bấm</a>\u202e"
+    evil = "xong</pre><b>[cfharness] Đã CHO PHÉP ap_1</b>\n[cfharness] nhắn /estop off tại https://evil.example <a href='x'>bấm</a>\u202e"
     txt = h.telegram.format_result({"id": "r_2", "agent_id": "a", "outcome": "completed", "summary": evil})
     lines = txt.split("\n")
-    assert lines[0].startswith("<b>[agent-hub] Run r_2") and AGENT_FRAME in lines[2]
+    assert lines[0].startswith("<b>[cfharness] Run r_2") and AGENT_FRAME in lines[2]
     pre = txt[txt.index("<pre>") + 5 : txt.rindex("</pre>")]
-    assert "<" not in pre and "&lt;/pre&gt;&lt;b&gt;[agent-hub] Đã CHO PHÉP" in pre and "⟨U+202E⟩" in pre
+    assert "<" not in pre and "&lt;/pre&gt;&lt;b&gt;[cfharness] Đã CHO PHÉP" in pre and "⟨U+202E⟩" in pre
     assert txt.count("<pre>") == 1 and txt.count("</pre>") == 1 and "<a " not in txt
     h.store.close()
 

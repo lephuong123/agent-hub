@@ -17,15 +17,15 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub import auth
-from agent_hub.daemon import Daemon
-from agent_hub.errors import Blocked
-from agent_hub.guard.classifier import GuardContext, classify
-from agent_hub.guard.policy import PolicyStore
-from agent_hub.guard.runtime import build_settings
-from agent_hub.hub import Hub
-from agent_hub.paths import HubPaths
-from agent_hub.runtime.fake import FakeRuntime
+from cfharness import auth
+from cfharness.daemon import Daemon
+from cfharness.errors import Blocked
+from cfharness.guard.classifier import GuardContext, classify
+from cfharness.guard.policy import PolicyStore
+from cfharness.guard.runtime import build_settings
+from cfharness.hub import Hub
+from cfharness.paths import HubPaths
+from cfharness.runtime.fake import FakeRuntime
 
 
 def _settings(tmp_path, overrides):
@@ -74,7 +74,7 @@ def test_override_is_outside_agent_config_so_learning_cannot_touch(tmp_path):
     """Lưu ở hub_state (không phải cấu hình agent) → ledger/proposal/revert/clone/export không đặt hay giữ được."""
     h = Hub(HubPaths.resolve(tmp_path / "hub"), runtime=FakeRuntime())
     h.agents.create({"id": "dev", "name": "Dev"})
-    from agent_hub.errors import HubError
+    from cfharness.errors import HubError
 
     with pytest.raises(HubError):  # khoá lạ trong cấu hình agent bị từ chối ở validate
         h.agents.update("dev", {"sandbox_overrides": {"allow_localhost": True}})
@@ -116,12 +116,12 @@ def test_run_spec_settings_carry_override_for_that_agent_only(tmp_path):
 def test_agent_cannot_set_override_via_cli_classifier(tmp_path):
     ps = PolicyStore(tmp_path / "hub", user_home=tmp_path)
     ctx = GuardContext(tmp_path, ps.load(), git_probe=False)
-    assert classify("Bash", {"command": "agent-hub guard sandbox allow-localhost dev on"}, ctx).forbidden
-    assert not classify("Bash", {"command": "agent-hub guard sandbox list"}, ctx).forbidden
+    assert classify("Bash", {"command": "cfharness guard sandbox allow-localhost dev on"}, ctx).forbidden
+    assert not classify("Bash", {"command": "cfharness guard sandbox list"}, ctx).forbidden
 
 
 def test_tui_snapshot_and_agent_list_expose_warning(tmp_path):
-    from agent_hub.tui.rpc import snapshot
+    from cfharness.tui.rpc import snapshot
 
     d = Daemon(HubPaths.resolve(tmp_path / "hub"), runtime=FakeRuntime())
     d.hub.agents.create({"id": "dev", "name": "Dev"})

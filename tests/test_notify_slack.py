@@ -9,10 +9,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from agent_hub.events import make_event
-from agent_hub.hub import Hub
-from agent_hub.notify import format_message
-from agent_hub.runtime import FakeRuntime
+from cfharness.events import make_event
+from cfharness.hub import Hub
+from cfharness.notify import format_message
+from cfharness.runtime import FakeRuntime
 
 
 class FakeSlack:
@@ -89,7 +89,7 @@ async def test_webhook_via_secret_message_redacted(make):
     await hub.notifier.drain(10)
     assert len(slack.received) == 1
     text = slack.received[0]["text"]
-    assert "coder" in text and "r_1" in text and "agent-hub approve ap_1" in text and "rm -rf docs" in text
+    assert "coder" in text and "r_1" in text and "cfharness approve ap_1" in text and "rm -rf docs" in text
     assert "SECRETSECRET" not in text  # che secret
     types = [e.type for e in hub.store.query_events(types=["notify.sent"])]
     assert types == ["notify.sent"]
@@ -113,7 +113,7 @@ async def test_bot_token_and_channel(make):
     slack = FakeSlack(mode="bot")
     hub = m(api_base=slack.url + "/api", channel="#ops")
     hub.secrets.set("SLACK_BOT_TOKEN", "xoxb-1234567890-abcdefghij")
-    hub.publish(make_event("guard.blocked", "coder", {"detail": "tự duyệt", "preview": "agent-hub approve ap_1"}, run_id="r_2"))
+    hub.publish(make_event("guard.blocked", "coder", {"detail": "tự duyệt", "preview": "cfharness approve ap_1"}, run_id="r_2"))
     await hub.notifier.drain(10)
     assert slack.received[0]["channel"] == "#ops" and "guard chặn" in slack.received[0]["text"]
     assert slack.headers[0]["Authorization"] == "Bearer xoxb-1234567890-abcdefghij"

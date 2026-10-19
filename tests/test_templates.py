@@ -2,10 +2,10 @@
 
 import pytest
 
-from agent_hub import templates
-from agent_hub.errors import NotFound
-from agent_hub.hub import Hub
-from agent_hub.runtime import FakeRuntime
+from cfharness import templates
+from cfharness.errors import NotFound
+from cfharness.hub import Hub
+from cfharness.runtime import FakeRuntime
 
 
 def test_bundled_templates_listed():
@@ -51,8 +51,8 @@ def test_cli_template_and_steer_e2e(hub_home, capsys):
 
     import yaml
 
-    from agent_hub.cli import main
-    from agent_hub.daemon import spawn_background
+    from cfharness.cli import main
+    from cfharness.daemon import spawn_background
 
     hub_home.config.write_text(yaml.safe_dump({"runtime": {"kind": "fake", "fake": {"line_delay_s": 0.0}}}))
     spawn_background(hub_home)

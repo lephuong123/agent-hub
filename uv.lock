@@ -7,7 +7,7 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "agent-hub"
+name = "cfharness"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

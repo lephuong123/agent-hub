@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from agent_hub.daemon import Daemon
-from agent_hub.errors import HubError
+from cfharness.daemon import Daemon
+from cfharness.errors import HubError
 from m3_fake import ScriptedRuntime
 
 
@@ -18,7 +18,7 @@ class MgrScript:
 
     def __call__(self, spec: Any) -> dict[str, Any]:
         self.specs.append(spec)
-        if spec.prompt.lstrip().startswith(("[agent-hub · OWNER", "[agent-hub heartbeat", "[agent-hub · key")):
+        if spec.prompt.lstrip().startswith(("[cfharness · OWNER", "[cfharness heartbeat", "[cfharness · key")):
             return {"text": self.reply, "cost": 0.001, "hold": self.hold_manager}
         return {"text": "worker done", "cost": 0.001}
 

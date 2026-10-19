@@ -71,8 +71,8 @@ Không gọi `claude` thật, không tốn tiền.
 - Còn lại: ma trận chỉ có 2.1.302; khi nâng CLI phải thêm danh sách cờ (cùng fixture + contract test như AGENTS.md hướng dẫn).
 
 ### H-11 — hook quan sát fail-open (FR-RT-17)
-- `agent_hub/observe_hook.py` (stdlib): `python -I -m agent_hub.observe_hook <PostToolUse|UserPromptSubmit|Stop> --run --socket --timeout 2 --home`
-  (CLI tương đương: `agent-hub hook <Event>`). Gửi RPC `hook.observe` CHỈ metadata (event, tool_name, session_id, độ dài prompt —
+- `cfharness/observe_hook.py` (stdlib): `python -I -m cfharness.observe_hook <PostToolUse|UserPromptSubmit|Stop> --run --socket --timeout 2 --home`
+  (CLI tương đương: `cfharness hook <Event>`). Gửi RPC `hook.observe` CHỈ metadata (event, tool_name, session_id, độ dài prompt —
   không gửi input/output tool, prompt). Quá 2 s hoặc daemon không với tới → luôn exit 0, không in stdout; ghi `hook.timeout` bằng
   notification JSON-RPC không chờ trả lời; nếu cả việc đó hỏng → spool `logs/hook-timeouts.jsonl` (0600), daemon nạp thành event lúc khởi động.
 - Lắp vào settings: hàm RIÊNG `add_observe_hooks()` gọi trong `RunManager._prepare_spec` SAU `guard.runtime.build_settings` — không
@@ -102,7 +102,7 @@ Không gọi `claude` thật, không tốn tiền.
 ### H-20 — log, hợp đồng event, runtime (NFR-21/22/23)
 - `logs.run_logger(log, run_id, agent_id, task_id=…)` (`LoggerAdapter`) dùng trong `runs.py`; `set_run_context` đặt contextvar trong
   task asyncio của run, `RunContextFilter` (gắn vào handler `hub.log`) tự thêm `run_id/agent_id` cho MỌI log phát trong task đó.
-- `docs/schema/event.v1.json` sinh bằng `python -m agent_hub.event_schema --write docs/schema/event.v1.json`; `tests/test_event_schema.py`:
+- `docs/schema/event.v1.json` sinh bằng `python -m cfharness.event_schema --write docs/schema/event.v1.json`; `tests/test_event_schema.py`:
   envelope khớp snapshot, loại event chỉ thêm (không xoá/đổi level), mọi event từ fixture stream-json thật hợp lệ (jsonschema).
 - `AgentRuntime.oneshot()` (Claude + Fake); `curation/llm.structured_call` đi qua `ClaudeCliRuntime.oneshot` (giữ `curation.binary`).
 - Test: `test_h20_logger_adapter_and_context`, `test_h20_oneshot_via_runtime`, `tests/test_event_schema.py`.
@@ -118,7 +118,7 @@ Không gọi `claude` thật, không tốn tiền.
 - **LRN** (`evals/judge.py`, `dispatch/dispatcher.py`, `recovery.py` là file của LRN):
   1. Chuyển LLM judge sang `ClaudeCliRuntime({**runtime.claude, "binary": judge.binary}).oneshot(OneShotRequest(...))` như `curation/llm.py`
      (cùng argv `--json-schema --no-session-persistence --tools ""`, nay có kiểm ma trận cờ). Khi đó NFR-22 đạt hoàn toàn.
-  2. Log có `run_id`: dùng `from agent_hub.logs import run_logger` cho các dòng `log.warning("run %s …", run_id)` trong dispatcher/recovery
+  2. Log có `run_id`: dùng `from cfharness.logs import run_logger` cho các dòng `log.warning("run %s …", run_id)` trong dispatcher/recovery
      (log phát TRONG task run đã tự có nhờ contextvar; log của dispatcher chạy ngoài task run thì chưa).
 - **SEC** (xác thực người gọi RPC, H-01): các method sau được gọi TỪ BÊN TRONG run và phải tiếp tục được phép như `guard.check`:
   `hook.observe`, `hook.timeout` (hook quan sát), `memory.search_self` (hub-self). Các method người dùng mới cần token điều khiển:
@@ -142,7 +142,7 @@ Không gọi `claude` thật, không tốn tiền.
 | `guard policy show\|edit` | `guard policy` (xem) + `guard protect add\|list\|rm`; sửa catalog = sửa file `policy/` bằng tay | Ghi đúng lệnh |
 | `daemon logs` | Đọc `logs/hub.log` (+ `daemon.out`), lọc `--run/--agent`, `-n` | — |
 | Lệnh thêm không có trong BRD | `stop <run\|agent>`, `hook <Event>`, `top`, `attach`, `steer`, `takeover`, `template`, `report`, `cost`, `digest`, `regression`, `curation`, `telemetry`, `secret`, `audit`, `notify`, `config get\|set` | Bổ sung bảng FR-UI-08 |
-| FR-RT-17 "hook gọi `agent-hub hook <event>`" | settings gọi `python -I -m agent_hub.observe_hook <event>` (không phụ thuộc PATH, khởi động nhanh); `agent-hub hook` là cùng thân, cho người/script | Ghi lại |
+| FR-RT-17 "hook gọi `cfharness hook <event>`" | settings gọi `python -I -m cfharness.observe_hook <event>` (không phụ thuộc PATH, khởi động nhanh); `cfharness hook` là cùng thân, cho người/script | Ghi lại |
 | FR-RT-15 ma trận tương thích | Ma trận theo CỜ (`runtime.claude.flag_matrix`), phiên bản lạ không bị kiểm cờ (chỉ cảnh báo) | Ghi khoá cấu hình |
 | FR-MS-02 `hub_cancel(run_id\|task_id)` | Có; `task_id` dừng cả run của task con (`origin_task_id`) | — |
 | FR-MS-02 `hub_memory_search` | Tìm từ khoá trên file + bảng `runs` (prompt/summary), chưa có FTS5/transcript đầy đủ | Ghi "FTS5" là mục tiêu, hiện là tìm từ khoá tất định |

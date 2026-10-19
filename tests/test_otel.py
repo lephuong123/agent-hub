@@ -9,8 +9,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 import yaml
 
-from agent_hub.events import make_event
-from agent_hub.hub import Hub
+from cfharness.events import make_event
+from cfharness.hub import Hub
 from m3_fake import ScriptedRuntime
 
 SECRET = "sk-live-SUPERSECRET-123456"
@@ -72,7 +72,7 @@ def test_spans_metadata_only(hub_home):
     tools = [s for s in spans if s["name"].startswith("tool ")]
     assert all(t["traceId"] == run["traceId"] and t["parentSpanId"] == run["spanId"] for t in tools)
     attrs = {a["key"]: a["value"] for a in run["attributes"]}
-    assert attrs["agent_hub.cost_usd"]["doubleValue"] == pytest.approx(0.0123) and attrs["gen_ai.request.model"]["stringValue"] == "haiku"
+    assert attrs["cfharness.cost_usd"]["doubleValue"] == pytest.approx(0.0123) and attrs["gen_ai.request.model"]["stringValue"] == "haiku"
     mcp = next(s for s in tools if "mcp" in s["name"])
     assert {a["key"]: a["value"] for a in mcp["attributes"]}["tool.mcp_server"]["stringValue"] == "crm"
     assert next(s for s in tools if s["name"] == "tool Bash")["status"]["code"] == 2
@@ -113,7 +113,7 @@ def test_otlp_http_export(hub_home):
         _emit_run(h)
         h.telemetry.close()
         assert got and got[0][0] == "/v1/traces" and got[0][1].get("x-api-key") == "k1"
-        assert got[0][2]["resourceSpans"][0]["resource"]["attributes"][0]["value"]["stringValue"] == "agent-hub"
+        assert got[0][2]["resourceSpans"][0]["resource"]["attributes"][0]["value"]["stringValue"] == "cfharness"
         assert h.telemetry.stats["exported"] >= 4 and h.telemetry.stats["errors"] == 0
         h.store.close()
     finally:

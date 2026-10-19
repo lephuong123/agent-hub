@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from agent_hub.events import iso
+from cfharness.events import iso
 from m5a_fake import FakeGate, add_run, make_hub, phash, prompt_of, team_memory, types
 
 FACT = "The team release train leaves every Thursday at 15:00 Hanoi time."
@@ -127,7 +127,7 @@ def test_team_skill_canary_hides_new_skill_and_pins_old_version(hub):
     assert r["status"] == "canary", r
     names = lambda a: {s["name"] for s in hub.knowledge.effective_skills(a)}  # noqa: E731
     assert "release-notes" in names("a1") and "release-notes" not in names("a2")
-    from agent_hub.errors import NotFound
+    from cfharness.errors import NotFound
 
     with pytest.raises(NotFound):
         hub.knowledge.skill_view("a2", "release-notes")
@@ -155,7 +155,7 @@ def test_human_team_change_needs_team_and_resolves_single_team(hub):
 
 
 def test_tui_canary_head_lists_running(hub):
-    from agent_hub.tui.learnings import canary_head
+    from cfharness.tui.learnings import canary_head
 
     assert "không có" in canary_head([]).plain
     r = team_memory(hub, FACT)

@@ -4,8 +4,8 @@ import sqlite3
 
 import pytest
 
-from agent_hub import audit
-from agent_hub.hub import Hub
+from cfharness import audit
+from cfharness.hub import Hub
 
 
 def test_record_query_and_append_only(hub_home):

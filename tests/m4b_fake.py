@@ -17,8 +17,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from agent_hub.events import make_event
-from agent_hub.store import now_iso
+from cfharness.events import make_event
+from cfharness.store import now_iso
 
 
 async def settle(cond=None, timeout: float = 5.0) -> bool:

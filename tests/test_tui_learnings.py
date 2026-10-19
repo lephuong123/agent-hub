@@ -1,7 +1,7 @@
-"""M4-B: tab Learnings (FR-UI-06) + màn golden task trong `agent-hub top` — Textual Pilot, daemon IN-PROCESS (socket thật,
+"""M4-B: tab Learnings (FR-UI-06) + màn golden task trong `cfharness top` — Textual Pilot, daemon IN-PROCESS (socket thật,
 FakeRuntime), pipeline/ledger THẬT của M4-A. Không gọi `claude`. Thêm tool MCP `hub_steer`.
 
-Ảnh SVG: `AGENT_HUB_SCREENSHOTS=docs/screenshots/m4 uv run pytest tests/test_tui_learnings.py`.
+Ảnh SVG: `CFHARNESS_SCREENSHOTS=docs/screenshots/m4 uv run pytest tests/test_tui_learnings.py`.
 """
 
 from __future__ import annotations
@@ -13,13 +13,13 @@ from pathlib import Path
 import pytest
 from textual.widgets import DataTable, Input, Static
 
-from agent_hub.events import make_event
-from agent_hub.runtime import FakeRuntime
-from agent_hub.tui.app import ConfirmScreen, InfoScreen, PromptScreen, TopApp
-from agent_hub.tui.learnings import GoldenScreen, LearningsScreen, checker_to_spec, parse_checker_spec
+from cfharness.events import make_event
+from cfharness.runtime import FakeRuntime
+from cfharness.tui.app import ConfirmScreen, InfoScreen, PromptScreen, TopApp
+from cfharness.tui.learnings import GoldenScreen, LearningsScreen, checker_to_spec, parse_checker_spec
 from test_tui import ISOLATED, SIZE, start_daemon, stop_daemon, until
 
-SHOTS = os.environ.get("AGENT_HUB_SCREENSHOTS")
+SHOTS = os.environ.get("CFHARNESS_SCREENSHOTS")
 
 
 def shot(app, name: str) -> None:
@@ -95,7 +95,7 @@ async def test_learnings_tab_feed_rollback_pin_digest_and_golden(daemon, hub_hom
         table.move_cursor(row=keys.index(str(idx)))
         await pilot.pause(0.3)
         detail = str(scr.query_one("#learn-detail", Static).render())
-        assert f"agent-hub learn rollback {s['skill_entry']}" in detail and "Weekly" in detail
+        assert f"cfharness learn rollback {s['skill_entry']}" in detail and "Weekly" in detail
         shot(app, "03-learnings-detail.svg")
         # p: pin skill (knowledge.pin của A)
         await pilot.press("p")
@@ -181,8 +181,8 @@ async def test_mcp_hub_steer_tool(hub_home):
     """Tool MCP `hub_steer` gọi RPC `run.steer` (M2): annotations ghi, không phá huỷ; run đã xong → lỗi rõ."""
     from mcp.client.client import Client
 
-    from agent_hub.daemon import Daemon
-    from agent_hub.mcp_server.server import READ_ONLY_TOOLS, build_server
+    from cfharness.daemon import Daemon
+    from cfharness.mcp_server.server import READ_ONLY_TOOLS, build_server
 
     d = Daemon(hub_home, runtime=FakeRuntime(ISOLATED, line_delay_s=0.0, hold=True))
     d.hub.start()
@@ -192,7 +192,7 @@ async def test_mcp_hub_steer_tool(hub_home):
         fut = asyncio.run_coroutine_threadsafe(d._dispatch({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}), loop)
         resp = fut.result(30)
         if "error" in resp:
-            from agent_hub.rpc import RpcError
+            from cfharness.rpc import RpcError
 
             e = resp["error"]
             raise RpcError(e["code"], e["message"], e.get("data"))
@@ -224,7 +224,7 @@ async def test_mcp_hub_steer_tool(hub_home):
 async def test_h16_learning_off_key_ledger_by_agent_feedback_and_learned_toast(daemon, hub_home):
     """Hardening H-16 (FR-UI-06/01, FR-LN-13): `L` tắt học cho agent (xác nhận, audit tui), mục Ledger theo agent (`b`),
     `f` feedback trên `top`, thông báo "X learned" khi `learning.applied`."""
-    from agent_hub.tui.learnings import LedgerScreen
+    from cfharness.tui.learnings import LedgerScreen
 
     hub = daemon.hub
     s = seed(hub)

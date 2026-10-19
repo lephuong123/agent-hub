@@ -21,7 +21,7 @@ một script Bash (thư mục `scratchpad/sbx/`). Kết quả:
 
 Kết luận: đủ dùng làm lớp chính → `guard/runtime.sandbox_settings` sinh khoá `sandbox` cho settings.json của mọi run khi guard bật
 (`guard.sandbox.*`, mặc định bật, `failIfUnavailable: true` = fail-closed). denyWrite: mọi mục của HUB_HOME trừ `agents/<id>/workspaces`
-(và tổ tiên của cwd của run, vd bản sao eval), mã nguồn gói `agent_hub`, socket + token. denyRead: token, `secrets/`, `agents/*/runtime`,
+(và tổ tiên của cwd của run, vd bản sao eval), mã nguồn gói `cfharness`, socket + token. denyRead: token, `secrets/`, `agents/*/runtime`,
 `mcp_server/tokens.json`. `allowUnsandboxedCommands: false` (bỏ qua `dangerouslyDisableSandbox`), `autoAllowBashIfSandboxed: false`
 (hook guard vẫn quyết từng lệnh), `excludedCommands` từ cấu hình bị bỏ. Hook và server MCP do claude chạy NGOÀI sandbox nên hook guard /
 hub-self vẫn nói chuyện được với daemon. Giới hạn: sandbox chỉ phủ Bash (Write/Edit/Read do `permissions.deny` + classifier);
@@ -32,8 +32,8 @@ Linux cần bubblewrap/socat (thiếu → run lỗi, không chạy không sandbo
 
 | Mã | Đã sửa | Test chứng minh |
 |---|---|---|
-| H-01 | `auth.py` + `daemon._dispatch`: method trong `auth.HUMAN_ONLY` (approval.*, guard.protect.*, guard.integrity.accept, config.set, learn.*, agent.*, golden ghi, secret.*, mcp ghi, estop, team ghi, run.revert/takeover…) cần **token người** (`<socket>.auth`, 0600, sinh lại mỗi lần daemon khởi tạo, client người tự đọc trong `rpc.with_auth`/`tui/client.py` — không thêm bước tay) **và** người gọi không phải agent: pid ngang hàng do kernel báo (`LOCAL_PEERPID`/`SO_PEERCRED`) → cây ppid chứa pid run, session id = pid run (kể cả run đã kết thúc trong 24 h, đối chiếu thời điểm khởi động để tránh pid tái dùng), hoặc env `AGENT_HUB_RUN_ID`. Từ chối → `BLOCKED`, event `auth.denied` + audit + Slack. Classifier: `python -m agent_hub*`, import `agent_hub` trong mã, `agent-hub` qua xargs/find -exec/đối số động, mọi chuỗi chứa socket/`.sock.auth`/token → `forbidden`. | `tests/test_sec_auth.py` (daemon + socket thật, 3 cách của QA từ tiến trình con của "run" thật: `python -m agent_hub.cli approve`, `xargs agent-hub`, client socket kể cả khi đã đọc được token; double-fork mồ côi; setsid; người vẫn duyệt qua CLI thật), `tests/test_sec_classifier.py` |
-| H-02 | Classifier: literal đường dẫn tới tài nguyên bảo vệ / HUB_HOME trong mã python/node/perl/ruby → destructive; `$AGENT_HUB_HOME` được giải; symlink tạo trong CÙNG lệnh được theo dõi (`ln -s HUB/policy pol; echo > pol/…`); `ln -s` trỏ vào vùng bảo vệ → destructive. Lớp 3 `guard/integrity.py`: bản chuẩn policy/ + config.yaml trong `integrity_baseline` (migration **v11**); vòng kiểm (`guard.integrity.tick_s`=2 s) + lúc khởi động → khôi phục, bản bị sửa vào `trash/tamper/`, event `guard.tamper_detected` + Slack; config.yaml chỉ khôi phục nhánh an toàn (`guard approval runtime secrets telemetry notify`); `hub.db` bị kết nối khác ghi (`PRAGMA data_version`) hoặc bị thay file (inode) → chỉ phát hiện. Ghi hợp lệ của daemon (PolicyStore, LearningPolicy.set, GoldenStore._mirror, HubConfig.set) được bọc → chụp lại bản chuẩn. Người sửa tay: `guard.integrity.accept {path, content}` (chỉ người). | `tests/test_sec_integrity.py`, `tests/test_sec_classifier.py` |
+| H-01 | `auth.py` + `daemon._dispatch`: method trong `auth.HUMAN_ONLY` (approval.*, guard.protect.*, guard.integrity.accept, config.set, learn.*, agent.*, golden ghi, secret.*, mcp ghi, estop, team ghi, run.revert/takeover…) cần **token người** (`<socket>.auth`, 0600, sinh lại mỗi lần daemon khởi tạo, client người tự đọc trong `rpc.with_auth`/`tui/client.py` — không thêm bước tay) **và** người gọi không phải agent: pid ngang hàng do kernel báo (`LOCAL_PEERPID`/`SO_PEERCRED`) → cây ppid chứa pid run, session id = pid run (kể cả run đã kết thúc trong 24 h, đối chiếu thời điểm khởi động để tránh pid tái dùng), hoặc env `CFHARNESS_RUN_ID`. Từ chối → `BLOCKED`, event `auth.denied` + audit + Slack. Classifier: `python -m cfharness*`, import `cfharness` trong mã, `cfharness` qua xargs/find -exec/đối số động, mọi chuỗi chứa socket/`.sock.auth`/token → `forbidden`. | `tests/test_sec_auth.py` (daemon + socket thật, 3 cách của QA từ tiến trình con của "run" thật: `python -m cfharness.cli approve`, `xargs cfharness`, client socket kể cả khi đã đọc được token; double-fork mồ côi; setsid; người vẫn duyệt qua CLI thật), `tests/test_sec_classifier.py` |
+| H-02 | Classifier: literal đường dẫn tới tài nguyên bảo vệ / HUB_HOME trong mã python/node/perl/ruby → destructive; `$CFHARNESS_HOME` được giải; symlink tạo trong CÙNG lệnh được theo dõi (`ln -s HUB/policy pol; echo > pol/…`); `ln -s` trỏ vào vùng bảo vệ → destructive. Lớp 3 `guard/integrity.py`: bản chuẩn policy/ + config.yaml trong `integrity_baseline` (migration **v11**); vòng kiểm (`guard.integrity.tick_s`=2 s) + lúc khởi động → khôi phục, bản bị sửa vào `trash/tamper/`, event `guard.tamper_detected` + Slack; config.yaml chỉ khôi phục nhánh an toàn (`guard approval runtime secrets telemetry notify`); `hub.db` bị kết nối khác ghi (`PRAGMA data_version`) hoặc bị thay file (inode) → chỉ phát hiện. Ghi hợp lệ của daemon (PolicyStore, LearningPolicy.set, GoldenStore._mirror, HubConfig.set) được bọc → chụp lại bản chuẩn. Người sửa tay: `guard.integrity.accept {path, content}` (chỉ người). | `tests/test_sec_integrity.py`, `tests/test_sec_classifier.py` |
 | H-03 | Sửa regex `\b` trước API dạng phương thức (`Path(..).unlink()`); argv dạng list (`subprocess.run(['rm',…])`), `spawn('rm',[…])`; API ghi (`open(..,'w')`, `write_text`, `writeFileSync`, `File.write`, perl `open('>')`, shutil/os move/copy…) kiểm đích literal, đích động trong mã inline → `uncertain`; `cp -r`/`rsync`/`ditto` nguồn thư mục duyệt file đích đã có; `tar -x`/`unzip` liệt kê archive; `mv` file có sẵn ra ngoài workspace, `trash`, AppleScript delete → destructive; script tạo trong cùng lệnh được phân tích, script chưa tồn tại → `uncertain`. | `tests/test_sec_classifier.py`, `tests/test_guard_classifier.py` (vẫn recall 100%, báo nhầm ≤ 5%) |
 | H-05 | Classifier: `learn propose|rollback|retry|refine|policy`, `agent create|update|edit|rm|…`, `config set`, `secret`, `mcp` ghi, `estop`, `team` ghi… → `forbidden`. RPC: `learn.propose` từ người gọi không phải người bị HẠ xuống `created_by="agent"` (gán agent của run, qua guard học đầy đủ); mọi lời gọi ghi từ agent ghi audit `actor=agent` (không tin `_audit` client tự khai). | `test_sec_auth.py::test_agent_learn_propose_downgraded_and_agent_update_denied`, `::test_agent_mutating_calls_are_audited_as_agent` |
 | H-12 | `redact.py`: bộ che theo GIÁ TRỊ (nạp SecretStore khi khởi động, khi `secret set`, và giá trị env-fallback đã resolve; cả dạng escape JSON) dùng chung: `Hub.publish` (bus/TUI/Slack), `Store._insert/_update/insert_event`, raw stdout (`RawLog.write`) + stderr run (che sau khi chạy), log daemon (`SecretLogFilter` + handler stderr cho thư viện → `daemon.out`), OTel (che toàn bộ body, thêm mẫu `sk-live-…`). Probe MCP: stderr vào file tạm (`errlog`) rồi che; kết quả probe che. Khởi động: xoá mọi `agents/*/runtime/*` còn sót. | `tests/test_sec_secrets.py` (e2e grep toàn HUB_HOME gồm hub.db/WAL/runs/*.gz/logs; đã thử tắt bộ che → test đỏ), QA `otel_leak.py`, `probe_leak.py` |
@@ -42,7 +42,7 @@ Linux cần bubblewrap/socat (thiếu → run lỗi, không chạy không sandbo
 
 ## 3. Giới hạn còn lại
 - Không có sandbox (tắt, hoặc Linux thiếu bubblewrap mà `fail_if_unavailable: false`): một tiến trình con của run gọi `setsid()`, double-fork,
-  xoá `AGENT_HUB_RUN_ID` VÀ đọc được token thì qua được lớp 2. Đọc token phải lách được classifier trước; lớp 3 vẫn khôi phục policy.
+  xoá `CFHARNESS_RUN_ID` VÀ đọc được token thì qua được lớp 2. Đọc token phải lách được classifier trước; lớp 3 vẫn khôi phục policy.
 - HTTP MCP của hub (`mcp_server/tokens.json`): agent đọc được token control sẽ gọi qua HTTP (tiến trình của người). Chặn bằng sandbox denyRead + classifier.
 - Integrity là HẬU KIỂM (cửa sổ ≤ tick_s); `hub.db` chỉ phát hiện, không tự khôi phục.
 - Classifier vẫn là phỏng đoán: `vim -c`, `git apply`, `patch`, `make` tuỳ ý, `sed -i` file có sẵn = ghi thường (giữ báo nhầm thấp).
@@ -66,7 +66,7 @@ Linux cần bubblewrap/socat (thiếu → run lỗi, không chạy không sandbo
 Ghi chú: `agents.revert` (agents.py, luồng CLI) mới chỉ chặn ở tầng RPC; nên gọi `auth.require_human("agent revert")` ở service nếu có lời gọi nội bộ mới.
 
 ## 6. Bổ sung theo coordinator (mất dữ liệu trên file có sẵn, FR-TK-04)
-- Tái hiện `agent-hub guard test`: với file **đã tồn tại** và không do run tạo, `truncate -s 0`, `: >`/`>`, `dd of=`, `cp`/`mv` đè, `tee` (không -a), `shred`
+- Tái hiện `cfharness guard test`: với file **đã tồn tại** và không do run tạo, `truncate -s 0`, `: >`/`>`, `dd of=`, `cp`/`mv` đè, `tee` (không -a), `shred`
   vốn đã là `destructive` (`overwrite_existing`). Kết quả "ghi" chỉ xảy ra khi đích CHƯA tồn tại lúc kiểm (vd `~/proj/...` không có trên máy) — cắt cụt
   file chưa có là vô hại, giữ là `write`. Đích không giải được (`$VAR`) → `uncertain`.
 - Mới: `GuardContext.checkpoint_root` (GuardService lấy từ `runs.checkpoint` kind=git) — file **đã git track** trong repo có checkpoint của run
@@ -79,10 +79,10 @@ Ghi chú: `agents.revert` (agents.py, luồng CLI) mới chỉ chặn ở tầng
 
 ## 7. Kiểm toán web/Telegram — WT-3 (đọc vùng nhạy cảm HUB_HOME khi sandbox tắt)
 - `BashAnalyzer.sensitive_sweep` (chạy cho MỌI lệnh con): giải `cd` trong chuỗi (cwd kế thừa), mở glob, mở rộng biến đã biết +
-  `$AGENT_HUB_HOME`/`$HOME` cho cả nhánh ĐỌC, rồi so mọi đối số/đích với vùng nhạy cảm (`auth/`, `secrets/`, `mcp_server/tokens.json`,
+  `$CFHARNESS_HOME`/`$HOME` cho cả nhánh ĐỌC, rồi so mọi đối số/đích với vùng nhạy cảm (`auth/`, `secrets/`, `mcp_server/tokens.json`,
   `hub.db`, `hub.sock*`). Trong vùng → `hub_secret_read` forbidden; lệnh duyệt cây (`find/grep -r/cp -r/rsync/tar/zip/chmod -R/rm -r…`)
   có TỔ TIÊN của vùng → uncertain; đích động/glob không giải được mà có dấu hiệu (`SENSITIVE_HINT`: `auth/`, `secrets/`, `web.json`,
-  `tokens.json`, `.sock`, `hub.db`, `AGENT_HUB_HOME`) → uncertain. `cd`/`pushd` vào hub home là vô hại (kiểm ở lệnh sau theo cwd mới);
+  `tokens.json`, `.sock`, `hub.db`, `CFHARNESS_HOME`) → uncertain. `cd`/`pushd` vào hub home là vô hại (kiểm ở lệnh sau theo cwd mới);
   policy KHÔNG đưa vào vùng này (để `protected_write` giữ `protected_id`, và đọc policy vốn vô hại).
 - Cảnh báo sandbox tắt: `Hub._warn_if_sandbox_disabled` — guard bật mà `guard.sandbox.enabled=false` → event đỏ `guard.sandbox_disabled`
   (summary) + audit; `hub.status()` trả `sandbox_enabled` để TUI/web/Telegram hiển thị.
@@ -102,20 +102,20 @@ thật: kết nối **Unix socket vẫn EPERM**, `denyRead`/`denyWrite` vẫn ch
 
 **Cài đặt:** `GuardService.sandbox_overrides/sandbox_set` lưu ở `hub_state.sandbox_overrides` = `{agent: {allow_localhost, by, channel, at}}` —
 NGOÀI cấu hình agent nên vòng học/ledger/proposal, `agent update` (khoá lạ bị từ chối), revert/clone/export không đặt/giữ được. Chỉ người:
-RPC `guard.sandbox.set` ∈ `auth.HUMAN_ONLY` + cổng tầng service `auth.require_human`; classifier `agent-hub guard sandbox …` (trừ `list`) forbidden.
+RPC `guard.sandbox.set` ∈ `auth.HUMAN_ONLY` + cổng tầng service `auth.require_human`; classifier `cfharness guard sandbox …` (trừ `list`) forbidden.
 Audit + event `guard.sandbox_override`. `guard/runtime.sandbox_settings(overrides=…)` chỉ thêm `network.allowLocalBinding` — filesystem,
-Unix socket, `allowUnsandboxedCommands=false` giữ nguyên. CLI: `agent-hub guard sandbox list | allow-localhost <agent> on|off`
+Unix socket, `allowUnsandboxedCommands=false` giữ nguyên. CLI: `cfharness guard sandbox list | allow-localhost <agent> on|off`
 (tương đương `agent edit --sandbox-allow-localhost` coordinator gợi ý). Nhãn: TUI cột tên `⚠lo` (đỏ); `agent.list` trả `sandbox_overrides`
 (luồng WEB hiển thị nhãn từ trường này — chưa sửa template web vì là file của luồng WEB).
 Test: `tests/test_sec_sandbox_localhost.py`.
 
-**Rủi ro (agent có loopback):** chạm mọi dịch vụ trên 127.0.0.1/::1 của máy: web hub (`agent-hub.localhost:8765`, cần phiên — khoá ký ở
+**Rủi ro (agent có loopback):** chạm mọi dịch vụ trên 127.0.0.1/::1 của máy: web hub (`cfharness.localhost:8765`, cần phiên — khoá ký ở
 `auth/` agent không đọc được), HTTP MCP của hub (cần bearer — `mcp_server/tokens.json` bị denyRead), cổng CDP/remote-debugging của Chrome
 CỦA NGƯỜI nếu đang mở (điều khiển trình duyệt đã đăng nhập!), DB/Redis/dev server cục bộ không xác thực, và có thể mở cổng lắng nghe.
 Khuyến nghị: Chrome cho agent dùng profile riêng + cổng ngẫu nhiên; không bật remote-debugging trên Chrome cá nhân; DB cục bộ có mật khẩu.
 
-**Đã bật thật** (~/.agent-hub, daemon khởi động lại, không run nào đang chạy): toa-lead, dev-soan-thao, dev-du-lieu, dev-giao-dien-quyen,
-phep-thu-nguoc, nghiem-thu-chrome. Thăm dò lại `agent-hub run nghiem-thu-chrome … --model haiku --budget 0.2 --follow` (run r_7273ecaad352,
+**Đã bật thật** (~/.cfharness, daemon khởi động lại, không run nào đang chạy): toa-lead, dev-soan-thao, dev-du-lieu, dev-giao-dien-quyen,
+phep-thu-nguoc, nghiem-thu-chrome. Thăm dò lại `cfharness run nghiem-thu-chrome … --model haiku --budget 0.2 --follow` (run r_7273ecaad352,
 $0.0014): `curl http://127.0.0.1:8221/` → 404 rc=0 (trước: exit 7), `net.createServer().listen(0,'127.0.0.1')` → `listen ok 53761` (trước: EPERM).
 
 ## 9. Kiểm toán vai trò manager — MGR-1, MGR-2, MGR-8 (phần SEC)
@@ -123,15 +123,15 @@ $0.0014): `curl http://127.0.0.1:8221/` → 404 rc=0 (trước: exit 7), `net.cr
 tạo task (`workspace.dir`), chạy ad-hoc (`--cwd`), cho CẢ người lẫn manager: workspace `dir` phải nằm trong `workspace.allowed_roots`
 (mặc định `~/Workspace` + vùng scratch/worktree/eval/checkpoint của hub) VÀ không trùng/chứa/nằm trong bất kỳ `fixed_protected_dirs`
 hoặc protected path nào. (b) `sandbox_settings`: nhánh gỡ denyWrite theo cwd KHÔNG bao giờ gỡ mục thuộc `fixed_protected_dirs`
-(HUB_HOME nội bộ, mã agent-hub, token/socket, `home_persistence_dirs`, `path_bin_dirs`). (c) `path_bin_dirs()` (mọi thư mục `$PATH`
+(HUB_HOME nội bộ, mã cfharness, token/socket, `home_persistence_dirs`, `path_bin_dirs`). (c) `path_bin_dirs()` (mọi thư mục `$PATH`
 thuộc `$HOME` + `~/.local/bin`, `~/.cargo/bin`…) thêm vào denyWrite sandbox VÀ `classifier.protected_path` (chặn cả Write tool, không chỉ Bash).
 Test: `tests/test_sec_manager.py::test_fixed_protected_dirs_never_dropped_by_cwd`, `::test_path_bin_dirs_*`, `::test_workspace_in_sensitive_dir_rejected_*`, `::test_agent_create_rejects_*`, `::test_run_adhoc_cwd_*`.
 
 **MGR-2 (lách mẫu chặn bằng agent khác trên cùng repo).** Chính sách theo repo do NGƯỜI đặt: `policy/repo_deny.yaml`
 (`PolicyStore.repo_deny_*`, bọc integrity — chụp lại bản chuẩn khi ghi hợp lệ, nếu không sẽ bị khôi phục như tamper). RPC
-`guard.repo_deny.list|add|rm` (add/rm ∈ `auth.HUMAN_ONLY`, audit); CLI `agent-hub guard repo-deny list|add <repo> "<pattern>"|rm`.
+`guard.repo_deny.list|add|rm` (add/rm ∈ `auth.HUMAN_ONLY`, audit); CLI `cfharness guard repo-deny list|add <repo> "<pattern>"|rm`.
 Áp cho MỌI run có cwd trong repo (qua `git_root`), bất kể agent: vào `disallowedTools` tĩnh (`runs.py`) VÀ classifier (`GuardContext.repo_deny`
-→ `repo_deny` destructive). Manager/agent đặt mẫu → forbidden. Classifier forbidden cho `agent-hub guard repo-deny add|rm` từ agent.
+→ `repo_deny` destructive). Manager/agent đặt mẫu → forbidden. Classifier forbidden cho `cfharness guard repo-deny add|rm` từ agent.
 Đã chuyển 7 mẫu của toa-soan-ia (`npm run deploy|setup-db|seed-prompt|chuyen-kho*`, `git push`) sang repo `/Users/phuonglq/Workspace/toa-soan-ia`
 trong HUB_HOME thật (mẫu trên 5 agent giữ nguyên). Test: `::test_repo_deny_applies_to_any_agent_in_repo`, `::test_repo_deny_set_is_human_only`, `::test_repo_deny_cli_forbidden_from_agent`.
 
@@ -140,7 +140,7 @@ lớp `policy|hub|guard` (kể cả ghi `policy/`) → `forbidden` thẳng, khô
 Test: `::test_manager_run_policy_edit_is_forbidden_not_approval`.
 
 **Fixture test.** `conftest._allow_pytest_tmp_workspaces` (autouse, session): cho phép gốc tạm của pytest qua `workspace._EXTRA_ALLOWED_ROOTS`
-(cùng tiến trình) + biến môi trường `AGENT_HUB_EXTRA_WORKSPACE_ROOTS` (daemon tiến trình con `spawn_background` kế thừa) — CHỈ test, sản
+(cùng tiến trình) + biến môi trường `CFHARNESS_EXTRA_WORKSPACE_ROOTS` (daemon tiến trình con `spawn_background` kế thừa) — CHỈ test, sản
 phẩm không bao giờ đặt. Toàn bộ pytest xanh (554, 1 skip), chạy 2 lần. Hub thật: 6 agent toa-soan-ia (`~/Workspace/toa-soan-ia`) và
 `dieu-phoi` (scratch) hợp lệ với `allowed_roots` mặc định `~/Workspace`.
 
@@ -150,7 +150,7 @@ ngoài repo có thể lệch — sandbox denyWrite vẫn là lớp chặn ghi). 
 ## 10. Kiểm toán manager vòng 2 — R2-1, R2-2, R2-4, R2-5 (phần SEC; ESTOP do coordinator bật, KHÔNG tắt)
 **R2-1 (Nghiêm trọng — tool Write/Edit không chịu sandbox).** Nhiều lớp:
 - `guard/runtime.executable_zones()`: mọi thư mục `$PATH` (tuyệt đối), `sys.prefix`/`base_prefix` + `sysconfig` purelib/platlib/scripts/data của
-  interpreter chạy hub, `.venv` + TOÀN BỘ repo mã agent-hub (`hub_repo_root()`), `~/.local/share/uv`, `/opt/homebrew`, `/usr/local`, dotfile công cụ
+  interpreter chạy hub, `.venv` + TOÀN BỘ repo mã cfharness (`hub_repo_root()`), `~/.local/share/uv`, `/opt/homebrew`, `/usr/local`, dotfile công cụ
   (`~/.npmrc`, `~/.yarnrc*`, `~/.config/uv|pip|npm|gh`, `~/.pythonrc*`, `~/.tmux.conf`, `~/.netrc`, `~/.docker`…). Dùng ở 4 chỗ:
   (1) classifier `classify_file_write`: đích (đã realpath) trong vùng này → `exec_zone_write` **forbidden**; ngoài `write_roots` (cwd run ∪ /tmp ∪
   $TMPDIR ∪ `guard.sandbox.extra_allow_write`) → `write_outside_workspace` destructive (chờ người); `protected_path` cũng trả `exec-zone` (Bash).
@@ -160,7 +160,7 @@ ngoài repo có thể lệch — sandbox denyWrite vẫn là lớp chặn ghi). 
   từ chối workspace trong repo hub (`tests/`, `docs/`, `.git`).
 - R2-1(c): `guard.integrity.check_python_env` lúc hub khởi động: bản chuẩn `{*.pth, sitecustomize.py, usercustomize.py}` của site-packages
   (`hub_state.pyenv_baseline`); thêm/sửa → event đỏ `guard.env_tamper` + audit + Slack (Telegram: luồng TG thêm định dạng nếu muốn). Người cài gói
-  hợp lệ: `agent-hub guard integrity accept` (nhận cả bản chuẩn Python env). Không tự xoá file.
+  hợp lệ: `cfharness guard integrity accept` (nhận cả bản chuẩn Python env). Không tự xoá file.
 Test: `tests/test_sec_r2.py::test_write_tool_into_exec_zones_forbidden`, `::test_write_tool_outside_workspace_needs_human`,
 `::test_write_tool_symlink_into_exec_zone_resolved`, `::test_static_deny_and_sandbox_cover_exec_zones`, `::test_workspace_cannot_be_inside_hub_repo`,
 `::test_python_env_tamper_detected`.
@@ -221,7 +221,7 @@ trong sandbox → đọc token GitHub → `git push` mã độc. Không có sett
    vẫn rc=0 (đọc được token — xác nhận sandbox KHÔNG chặn keychain), NHƯNG `curl https://github.com`/`api.github.com` và `git ls-remote github`
    → `deny network-outbound github.com:443 (user denied)` (block); `registry.npmjs.org` → 200; loopback → 404 (vẫn chạy). Vậy token đọc được
    cũng không đẩy ra forge được.
-CLI: `agent-hub guard sandbox allow-domain <agent> <domain> [--remove]`; `guard sandbox list` hiện cột "DOMAIN MỞ THÊM".
+CLI: `cfharness guard sandbox allow-domain <agent> <domain> [--remove]`; `guard sandbox list` hiện cột "DOMAIN MỞ THÊM".
 Test: `tests/test_sec_r3.py` (lệnh/mã keychain forbidden, đọc file xác thực forbidden, default domains loại forge, allow-domain HUMAN_ONLY +
 audit + CLI forbidden từ agent, host MCP của agent tự vào domain).
 

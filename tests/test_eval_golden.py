@@ -10,11 +10,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agent_hub.errors import HubError
-from agent_hub.evals.checkers import EvalOutput, grade_deterministic, validate_checker
-from agent_hub.evals.judge import build_judge_argv, judge
-from agent_hub.hub import Hub
-from agent_hub.learning_ops.cli import checker_from_args, rewrite_argv
+from cfharness.errors import HubError
+from cfharness.evals.checkers import EvalOutput, grade_deterministic, validate_checker
+from cfharness.evals.judge import build_judge_argv, judge
+from cfharness.hub import Hub
+from cfharness.learning_ops.cli import checker_from_args, rewrite_argv
 from m3_fake import ScriptedRuntime
 from m4b_fake import judge_calls, write_fake_judge
 
@@ -62,7 +62,7 @@ def test_deterministic_checkers(tmp_path):
     assert not grade_deterministic({"kind": "command", "cmd": "grep -q 99"}, out).passed
     g = grade_deterministic({"kind": "command", "cmd": "echo 0.75", "score_from_stdout": True, "pass_threshold": 0.5}, out)
     assert g.score == 0.75 and g.passed
-    g = grade_deterministic({"kind": "command", "cmd": "cat \"$AGENT_HUB_OUTPUT_FILE\" | grep -q answer"}, out)
+    g = grade_deterministic({"kind": "command", "cmd": "cat \"$CFHARNESS_OUTPUT_FILE\" | grep -q answer"}, out)
     assert g.passed
 
 
@@ -142,26 +142,26 @@ async def test_judge_bad_binary(hub, tmp_path):
 
 # ============================================================================ guard: agent không sửa được golden task
 def test_guard_forbids_agent_golden_writes(hub_home, tmp_path):
-    from agent_hub.guard.classifier import GuardContext, classify
-    from agent_hub.guard.policy import PolicyStore
+    from cfharness.guard.classifier import GuardContext, classify
+    from cfharness.guard.policy import PolicyStore
 
     ps = PolicyStore(hub_home.home, user_home=tmp_path / "home")
     ps.ensure()
     ctx = GuardContext(tmp_path, ps.load(), git_probe=False)
-    for cmd in ("agent-hub golden add a --prompt x --regex y", "agent-hub golden rm g_1", "uv run agent-hub golden from-run r_1 --judge 'x'",
-                "agent-hub golden edit g_1 --regex z"):
+    for cmd in ("cfharness golden add a --prompt x --regex y", "cfharness golden rm g_1", "uv run cfharness golden from-run r_1 --judge 'x'",
+                "cfharness golden edit g_1 --regex z"):
         v = classify("Bash", {"command": cmd}, ctx)
         assert v.forbidden and v.rule == "policy_change", cmd
-    for cmd in ("agent-hub golden list", "agent-hub golden show g_1"):
+    for cmd in ("cfharness golden list", "cfharness golden show g_1"):
         assert not classify("Bash", {"command": cmd}, ctx).forbidden, cmd
-    assert classify("mcp__agent-hub__hub_golden_add", {}, ctx).forbidden
-    assert classify("mcp__agent-hub__hub_golden_rm", {}, ctx).forbidden
-    assert not classify("mcp__agent-hub__hub_golden_list", {}, ctx).forbidden
+    assert classify("mcp__cfharness__hub_golden_add", {}, ctx).forbidden
+    assert classify("mcp__cfharness__hub_golden_rm", {}, ctx).forbidden
+    assert not classify("mcp__cfharness__hub_golden_list", {}, ctx).forbidden
 
 
 # ============================================================================ RPC + CLI
 async def test_rpc_golden_audit_and_channel(hub_home):
-    from agent_hub.daemon import Daemon
+    from cfharness.daemon import Daemon
 
     d = Daemon(hub_home, runtime=ScriptedRuntime(lambda s: {"text": "ok"}))
     try:
@@ -194,7 +194,7 @@ def test_cli_checker_from_args(tmp_path):
 
 
 def test_cli_parsers_build():
-    from agent_hub.cli import build_parser
+    from cfharness.cli import build_parser
 
     p = build_parser()
     a = p.parse_args(["golden", "add", "a", "--prompt", "x", "--regex", "y"])

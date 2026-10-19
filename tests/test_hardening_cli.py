@@ -18,11 +18,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agent_hub.errors import Blocked, HubError, NotFound
-from agent_hub.events import make_event
-from agent_hub.hub import Hub
-from agent_hub.runtime import ArgvError, FakeRuntime, RunSpec, build_argv
-from agent_hub.config import DEFAULTS
+from cfharness.errors import Blocked, HubError, NotFound
+from cfharness.events import make_event
+from cfharness.hub import Hub
+from cfharness.runtime import ArgvError, FakeRuntime, RunSpec, build_argv
+from cfharness.config import DEFAULTS
 
 
 @pytest.fixture
@@ -110,19 +110,19 @@ def test_h08_agent_id_cannot_be_cli_keyword(hub, bad):
 
 
 def _parse(argv):
-    from agent_hub.cli import build_parser
-    from agent_hub.cli_surface import rewrite_argv
-    from agent_hub.curation.cli import rewrite_argv as r5
-    from agent_hub.dispatch.cli import rewrite_argv as r3
-    from agent_hub.guard.cli import rewrite_argv as rb
-    from agent_hub.learning_ops.cli import rewrite_argv as r4
+    from cfharness.cli import build_parser
+    from cfharness.cli_surface import rewrite_argv
+    from cfharness.curation.cli import rewrite_argv as r5
+    from cfharness.dispatch.cli import rewrite_argv as r3
+    from cfharness.guard.cli import rewrite_argv as rb
+    from cfharness.learning_ops.cli import rewrite_argv as r4
 
     p = build_parser()
     return p.parse_args(r5(r4(r3(rb(rewrite_argv(argv, p))))))
 
 
 def test_h08_run_subcommands_never_parsed_as_new_run():
-    from agent_hub.cli import cmd_run, cmd_runs
+    from cfharness.cli import cmd_run, cmd_runs
 
     for sub in ("list", "show", "logs", "stop", "follow"):
         argv = ["run", sub] + ([] if sub == "list" else ["r_abc"])
@@ -137,8 +137,8 @@ def test_h08_run_subcommands_never_parsed_as_new_run():
 
 
 def test_h08_aliases_parse():
-    from agent_hub.cli_surface import _subcommands, cmd_stop, cmd_trash
-    from agent_hub.cli import build_parser
+    from cfharness.cli_surface import _subcommands, cmd_stop, cmd_trash
+    from cfharness.cli import build_parser
 
     assert _parse(["requests"]).cmd == "approvals"
     a = _parse(["feedback", "r_1", "--wrong", "--note", "sai định dạng"])
@@ -171,17 +171,17 @@ def test_h08_aliases_parse():
 @pytest.fixture
 def daemon(hub_home):
     hub_home.config.write_text(yaml.safe_dump({"runtime": {"kind": "fake", "fake": {"line_delay_s": 0.0}}, "runs": {"stop_grace_s": 1}}))
-    from agent_hub.daemon import spawn_background
+    from cfharness.daemon import spawn_background
 
     spawn_background(hub_home)
     yield hub_home
-    from agent_hub.cli import main
+    from cfharness.cli import main
 
     main(["daemon", "stop"])
 
 
 def cli(capsys, *args):
-    from agent_hub.cli import main
+    from cfharness.cli import main
 
     code = main(list(args))
     out = capsys.readouterr()
@@ -189,7 +189,7 @@ def cli(capsys, *args):
 
 
 def test_h06_h07_h08_cli_e2e(daemon, capsys):
-    from agent_hub.rpc import RpcClient
+    from cfharness.rpc import RpcClient
 
     rpc = RpcClient(daemon.socket, timeout=30)
     assert cli(capsys, "agent", "create", "lead1")[0] == 0
@@ -303,7 +303,7 @@ class _ClaudeLike(FakeRuntime):
 
 
 async def test_h10_version_checked_on_start_and_shown_in_tui(hub_home):
-    from agent_hub.tui.rpc import snapshot
+    from cfharness.tui.rpc import snapshot
 
     h = Hub(hub_home, runtime=_ClaudeLike(cli_version="9.9.9"))
     try:
@@ -349,7 +349,7 @@ def test_h10_unknown_rate_below_threshold_no_alert(hub):
 
 # ============================================================================ H-11 hook quan sát fail-open
 def test_h11_observe_hooks_in_settings_keep_guard(hub_home):
-    from agent_hub.observe_hook import add_observe_hooks
+    from cfharness.observe_hook import add_observe_hooks
 
     base = {"autoMemoryEnabled": False, "hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "guard || exit 2"}]}]}}
     s, evs = add_observe_hooks(base, run_id="r_1", socket_path="/tmp/h.sock", hub_home=str(hub_home.home), python=sys.executable, cfg=DEFAULTS["runtime"]["claude"]["observe_hooks"])
@@ -357,7 +357,7 @@ def test_h11_observe_hooks_in_settings_keep_guard(hub_home):
     assert s["hooks"]["PreToolUse"] == base["hooks"]["PreToolUse"]  # guard fail-closed giữ nguyên
     for ev in evs:
         h = s["hooks"][ev][-1]["hooks"][0]
-        assert "agent_hub.observe_hook " + ev in h["command"] and h["command"].endswith("|| true") and h["timeout"] == 5
+        assert "cfharness.observe_hook " + ev in h["command"] and h["command"].endswith("|| true") and h["timeout"] == 5
     assert s["hooks"]["PostToolUse"][-1]["matcher"] == "*"
     s2, evs2 = add_observe_hooks(base, run_id="r", socket_path="/s", hub_home="/h", python="py", cfg={"enabled": False})
     assert evs2 == [] and s2 is base
@@ -406,7 +406,7 @@ def _slow_server(path: str, delay: float, got: list):
 
 
 def test_h11_hook_timeout_fail_open(tmp_path):
-    from agent_hub.observe_hook import observe
+    from cfharness.observe_hook import observe
 
     import tempfile
 
@@ -432,7 +432,7 @@ def test_h11_hook_timeout_fail_open(tmp_path):
 async def test_h11_hook_unreachable_spools_and_daemon_ingests(hub_home):
     import subprocess
 
-    r = subprocess.run([sys.executable, "-I", "-m", "agent_hub.observe_hook", "Stop", "--run", "r_zz", "--socket", str(hub_home.home / "nope.sock"),
+    r = subprocess.run([sys.executable, "-I", "-m", "cfharness.observe_hook", "Stop", "--run", "r_zz", "--socket", str(hub_home.home / "nope.sock"),
                         "--timeout", "2", "--home", str(hub_home.home)], input=b"{not json", capture_output=True, timeout=20)
     assert r.returncode == 0 and r.stdout == b""  # fail-open, không in quyết định
     spool = hub_home.logs_dir / "hook-timeouts.jsonl"
@@ -449,8 +449,8 @@ async def test_h11_hook_unreachable_spools_and_daemon_ingests(hub_home):
 
 
 def test_h11_hook_cli_and_rpc_record_events(daemon, capsys):
-    from agent_hub.observe_hook import observe
-    from agent_hub.rpc import RpcClient
+    from cfharness.observe_hook import observe
+    from cfharness.rpc import RpcClient
 
     rpc = RpcClient(daemon.socket, timeout=30)
     rpc.call("agent.create", {"config": {"id": "hk", "name": "HK"}})
@@ -469,7 +469,7 @@ def test_h11_hook_cli_and_rpc_record_events(daemon, capsys):
 
 # ============================================================================ H-13 MCP chưa probe / untrusted
 def test_h13_unprobed_literal_include_exclude_rules(hub):
-    from agent_hub.mcp_client import agent_mcp_tool_rules
+    from cfharness.mcp_client import agent_mcp_tool_rules
 
     hub.mcp.add({"name": "viec", "command": "echo", "trust": "trusted", "tools": {"include": ["tim_viec", "doc_viec", "xem_*"], "exclude": ["xoa_viec"], "require_approval": ["doc_viec"]}})
     hub.agents.create({"id": "m", "name": "M", "mcp_servers": ["viec"]})
@@ -496,8 +496,8 @@ async def test_h13_unprobed_rules_reach_argv(hub):
 
 
 def test_h13_classify_untrusted_requires_approval(hub_home):
-    from agent_hub.guard.classifier import GuardContext, classify
-    from agent_hub.guard.policy import PolicyStore
+    from cfharness.guard.classifier import GuardContext, classify
+    from cfharness.guard.policy import PolicyStore
 
     ps = PolicyStore(hub_home.home)
     ps.ensure()
@@ -539,7 +539,7 @@ async def test_h13_untrusted_mcp_tool_opens_approval(hub):
 
 # ============================================================================ H-14 MCP hub_* + hub-self
 def test_h14_hub_self_worker_has_memory_search():
-    from agent_hub.mcp_server.hub_self import ROLE_TOOLS, TOOLS
+    from cfharness.mcp_server.hub_self import ROLE_TOOLS, TOOLS
 
     for role in ("worker", "lead", "reviewer"):
         assert "memory_search" in ROLE_TOOLS[role]
@@ -547,7 +547,7 @@ def test_h14_hub_self_worker_has_memory_search():
 
 
 def test_h14_memory_search_finds_memory_skill_transcript(hub):
-    from agent_hub.mcp_server.surface_rpc import memory_search
+    from cfharness.mcp_server.surface_rpc import memory_search
 
     hub.agents.create({"id": "s", "name": "S"})
     home = Path(hub.agents.get_row("s")["home_path"])
@@ -568,8 +568,8 @@ def test_h14_memory_search_finds_memory_skill_transcript(hub):
 async def test_h14_mcp_tools_params(daemon):
     from mcp import Client
 
-    from agent_hub.mcp_server.server import READ_ONLY_TOOLS, build_server
-    from agent_hub.rpc import RpcClient
+    from cfharness.mcp_server.server import READ_ONLY_TOOLS, build_server
+    from cfharness.rpc import RpcClient
 
     rpc = RpcClient(daemon.socket, timeout=30)
     srv = build_server(lambda m, p: RpcClient(daemon.socket, timeout=60).call(m, p))
@@ -610,7 +610,7 @@ async def test_h14_mcp_tools_params(daemon):
 
 # ============================================================================ H-20 log có run_id/agent_id, oneshot qua runtime
 def test_h20_logger_adapter_and_context(tmp_path):
-    from agent_hub.logs import JsonFormatter, RunContextFilter, run_logger, set_run_context
+    from cfharness.logs import JsonFormatter, RunContextFilter, run_logger, set_run_context
 
     rec_out: list[str] = []
 
@@ -618,7 +618,7 @@ def test_h20_logger_adapter_and_context(tmp_path):
         def emit(self, record):
             rec_out.append(self.format(record))
 
-    lg = logging.getLogger("agent_hub.test_h20")
+    lg = logging.getLogger("cfharness.test_h20")
     h = H()
     h.setFormatter(JsonFormatter())
     h.addFilter(RunContextFilter())
@@ -643,7 +643,7 @@ def test_h20_logger_adapter_and_context(tmp_path):
 
 
 async def test_h20_oneshot_via_runtime(tmp_path):
-    from agent_hub.runtime import ClaudeCliRuntime, OneShotRequest
+    from cfharness.runtime import ClaudeCliRuntime, OneShotRequest
 
     fake = tmp_path / "judge.py"
     fake.write_text("import sys, json\nargs=sys.argv[1:]\nsys.stdin.read()\n"
@@ -663,7 +663,7 @@ async def test_h20_oneshot_via_runtime(tmp_path):
 
 # ============================================================================ Thấp: FR-AG-08 doctor thử kết nối MCP
 def test_low_doctor_probes_agent_mcp(daemon, capsys):
-    from agent_hub.rpc import RpcClient
+    from cfharness.rpc import RpcClient
 
     rpc = RpcClient(daemon.socket, timeout=30)
     rpc.call("mcp.add", {"config": {"name": "vb", "command": "/khong/ton/tai/mcp"}, "probe": False})
@@ -676,7 +676,7 @@ def test_low_doctor_probes_agent_mcp(daemon, capsys):
 async def test_low_tui_help_screen_lists_all_keys(hub_home):
     from test_tui import ISOLATED, SIZE, start_daemon, stop_daemon
 
-    from agent_hub.tui.app import HelpScreen, HtopScreen, TopApp
+    from cfharness.tui.app import HelpScreen, HtopScreen, TopApp
 
     ctl = await start_daemon(hub_home, FakeRuntime(ISOLATED))
     try:

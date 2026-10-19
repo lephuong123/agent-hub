@@ -3,8 +3,8 @@
 import asyncio
 import json
 
-from agent_hub.events import make_event
-from agent_hub.hub import Hub
+from cfharness.events import make_event
+from cfharness.hub import Hub
 
 
 async def test_tool_write_audit_and_event(hub_home):

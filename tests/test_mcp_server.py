@@ -14,10 +14,10 @@ import pytest
 import yaml
 from mcp import Client
 
-from agent_hub.cli import main
-from agent_hub.daemon import spawn_background
-from agent_hub.mcp_server.server import READ_ONLY_TOOLS, build_server
-from agent_hub.rpc import RpcClient
+from cfharness.cli import main
+from cfharness.daemon import spawn_background
+from cfharness.mcp_server.server import READ_ONLY_TOOLS, build_server
+from cfharness.rpc import RpcClient
 
 
 @pytest.fixture
@@ -180,8 +180,8 @@ async def test_stdio_transport(daemon):
     from mcp.client.stdio import StdioServerParameters
 
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG", "TMPDIR")}
-    env["AGENT_HUB_HOME"] = str(daemon.home)
-    params = StdioServerParameters(command=sys.executable, args=["-m", "agent_hub", "mcp", "serve"], env=env)
+    env["CFHARNESS_HOME"] = str(daemon.home)
+    params = StdioServerParameters(command=sys.executable, args=["-m", "cfharness", "mcp", "serve"], env=env)
     async with Client(params, read_timeout_seconds=30) as c:
         t0 = time.monotonic()
         st = sc(await c.call_tool("hub_list_agents", {}))
@@ -201,7 +201,7 @@ async def test_http_transport_tokens(daemon):
     import httpx2
     import uvicorn
 
-    from agent_hub.mcp_server.http import build_http_app, ensure_tokens
+    from cfharness.mcp_server.http import build_http_app, ensure_tokens
     from mcp.client.streamable_http import streamable_http_client
     from mcp.shared._httpx_utils import create_mcp_http_client
 
@@ -250,6 +250,6 @@ def test_snippet_does_not_touch_claude_config(hub_home, tmp_path, monkeypatch, c
     monkeypatch.setenv("HOME", str(fake_home))
     assert main(["mcp", "snippet", "--json"]) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["command"].startswith("claude mcp add") and out["json"]["mcpServers"]["agent-hub"]["args"][-2:] == ["mcp", "serve"]
-    assert out["json"]["mcpServers"]["agent-hub"]["env"]["AGENT_HUB_HOME"] == str(hub_home.home)
+    assert out["command"].startswith("claude mcp add") and out["json"]["mcpServers"]["cfharness"]["args"][-2:] == ["mcp", "serve"]
+    assert out["json"]["mcpServers"]["cfharness"]["env"]["CFHARNESS_HOME"] == str(hub_home.home)
     assert cj.read_text() == '{"mcpServers": {}}'

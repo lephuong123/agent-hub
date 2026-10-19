@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.config import DEFAULTS
-from agent_hub.hub import Hub
-from agent_hub.runtime import ClaudeCliRuntime
+from cfharness.config import DEFAULTS
+from cfharness.hub import Hub
+from cfharness.runtime import ClaudeCliRuntime
 
 FAKE = Path(__file__).parent / "fake_claude.py"
 

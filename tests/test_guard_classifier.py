@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.guard.classifier import GuardContext, action_fingerprint, classify, sql_destructive
-from agent_hub.guard.policy import PolicyStore
+from cfharness.guard.classifier import GuardContext, action_fingerprint, classify, sql_destructive
+from cfharness.guard.policy import PolicyStore
 
 
 @pytest.fixture(scope="module")
@@ -199,10 +199,10 @@ DESTRUCTIVE_BASH = [
     "git -C ../repo push --force",
     "cd docs && git push -f",
     # --- Hub
-    "agent-hub agent purge coder --confirm coder",
-    "agent-hub config set approval.timeout_s 1",
-    "agent-hub secret set X y",
-    "sqlite3 ~/.agent-hub/hub.db 'select 1'".replace("~/.agent-hub", "HUBHOME"),
+    "cfharness agent purge coder --confirm coder",
+    "cfharness config set approval.timeout_s 1",
+    "cfharness secret set X y",
+    "sqlite3 ~/.cfharness/hub.db 'select 1'".replace("~/.cfharness", "HUBHOME"),
     "rm -rf HUBHOME/ledger",
     "sed -i 's/rm/xx/' HUBHOME/policy/catalog.yaml",
     "echo '{}' > HUBHOME/policy/protected.yaml",
@@ -262,7 +262,7 @@ SAFE_BASH = [
     "cd src && ls", "cd src && python3 app.py", "export FOO=bar && echo $FOO", "for f in *.md; do wc -l \"$f\"; done",
     "ls | sort | uniq -c", "tar -czf build.tgz build", "unzip -o pkg.zip -d out", "chmod +x ok.sh", "bash ok.sh", "sh -c 'echo hi'",
     "ln -s build latest", "date && uptime", "env | sort", "which python3", "sleep 1", "test -f README.md && echo yes",
-    "agent-hub runs list", "agent-hub approvals", "true", "diff a.txt b.txt", "du -sh .", "ps aux | grep python",
+    "cfharness runs list", "cfharness approvals", "true", "diff a.txt b.txt", "du -sh .", "ps aux | grep python",
     "python3 -m pytest", "black src", "ruff check src --fix", "prettier --write src", "go fmt ./...",
     "mkdir -p build/x && cp src/app.py build/x/", "cat src/app.py | grep print", "echo 'DROP TABLE x' > notes-sql.txt",
     "grep -r 'DELETE FROM' src", "git log --grep='rm -rf'", "echo 'rm -rf is dangerous'",
@@ -342,7 +342,7 @@ def test_brd_acceptance_examples(env):
 
 
 def test_forbidden_self_approval(env):
-    for c in ("agent-hub approve ap_123", "agent-hub deny ap_1 --note x", "python3 -m agent_hub approve ap_1", f"nc -U {env['hub']}/hub.sock"):
+    for c in ("cfharness approve ap_123", "cfharness deny ap_1 --note x", "python3 -m cfharness approve ap_1", f"nc -U {env['hub']}/hub.sock"):
         v = bash(env, c)
         assert v.forbidden and not v.hold, c
 
@@ -401,7 +401,7 @@ def test_git_probe_real_repo(tmp_path):
 
 
 def test_classifier_error_is_uncertain(env, monkeypatch):
-    from agent_hub.guard import classifier as c
+    from cfharness.guard import classifier as c
 
     monkeypatch.setattr(c.BashAnalyzer, "run", lambda self, s: 1 / 0)
     v = classify("Bash", {"command": "ls"}, env["ctx"])

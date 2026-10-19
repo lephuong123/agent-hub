@@ -11,10 +11,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agent_hub.daemon import Daemon
-from agent_hub.errors import HubError
-from agent_hub.events import make_event
-from agent_hub.runs import ActiveRun
+from cfharness.daemon import Daemon
+from cfharness.errors import HubError
+from cfharness.events import make_event
+from cfharness.runs import ActiveRun
 
 FAKE = Path(__file__).parent / "fake_claude_learn.py"
 BODY = "# Daily status\n\n1. Reply with one line: `Status <date>: OK`.\n"
@@ -200,7 +200,7 @@ async def test_edit_output_detected_from_human_edit(env, tmp_path):
     r = await rpc(d, "run.start", {"agent": "r1", "prompt": "Write today's status line.", "cwd": str(repo)})
     await h.runs.wait(r["id"], 30)
     # mô phỏng: run vừa ghi a.txt (diff có after_sha) rồi người sửa lại
-    from agent_hub.workspace import compute_diff, take_checkpoint
+    from cfharness.workspace import compute_diff, take_checkpoint
 
     cp_dir = h.runs.checkpoint_dir(r["id"])
     cp = take_checkpoint(repo, cp_dir)
@@ -215,7 +215,7 @@ async def test_edit_output_detected_from_human_edit(env, tmp_path):
 
 
 def test_review_runs_do_not_take_agent_slot(hub_home):
-    from agent_hub.hub import Hub
+    from cfharness.hub import Hub
 
     h = Hub(hub_home)
     h.runs.active["r_a"] = ActiveRun("r_a", "x", kind="review")
@@ -225,7 +225,7 @@ def test_review_runs_do_not_take_agent_slot(hub_home):
 
 
 def test_hermes_prompt_verbatim_and_renamed():
-    from agent_hub.learning.prompts import hermes_review, render_review_prompt
+    from cfharness.learning.prompts import hermes_review, render_review_prompt
 
     raw = Path(hermes_review.__file__).read_text()
     assert "Copyright (c) 2025 Nous Research" in raw and "MIT" in raw

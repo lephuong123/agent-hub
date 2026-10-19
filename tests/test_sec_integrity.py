@@ -16,9 +16,9 @@ import sys
 import pytest
 import yaml
 
-from agent_hub.hub import Hub
-from agent_hub.paths import HubPaths
-from agent_hub.runtime.fake import FakeRuntime
+from cfharness.hub import Hub
+from cfharness.paths import HubPaths
+from cfharness.runtime.fake import FakeRuntime
 
 
 @pytest.fixture
@@ -158,7 +158,7 @@ async def test_tamper_while_daemon_down_restored_on_start(tmp_path):
 
 
 async def test_human_accept_installs_new_policy(hub, tmp_path):
-    from agent_hub.daemon import Daemon
+    from cfharness.daemon import Daemon
 
     d = Daemon(hub.paths, runtime=FakeRuntime())
     d.hub.start()

@@ -2,7 +2,7 @@
 
 import json
 
-from agent_hub.claude_adapter import ClaudeStreamAdapter, adapt_lines
+from cfharness.claude_adapter import ClaudeStreamAdapter, adapt_lines
 
 
 def types(evs):
@@ -147,7 +147,7 @@ def test_permission_denied_and_steer_fixtures_have_no_unknown():
 
 
 def test_hub_real_isolated_run_fixture_clean():
-    """stdout thô của lần chạy thật qua agent-hub (M0, cờ cô lập theo spike): không hook, không vi phạm."""
+    """stdout thô của lần chạy thật qua cfharness (M0, cờ cô lập theo spike): không hook, không vi phạm."""
     evs = adapt_lines("researcher", load("claude-hub-isolated-run.jsonl"), **ISO)
     t = types(evs)
     assert "hook.event" not in t and "isolation.violation" not in t

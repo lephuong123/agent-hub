@@ -5,8 +5,8 @@ import stat
 
 import pytest
 
-from agent_hub.errors import HubError
-from agent_hub.secrets import SecretMissing, SecretStore, normalize_name, refs_in
+from cfharness.errors import HubError
+from cfharness.secrets import SecretMissing, SecretStore, normalize_name, refs_in
 
 
 def test_set_get_permissions(tmp_path):

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_hub.paths import HubPaths
-from agent_hub.runtime import default_fixture
+from cfharness.paths import HubPaths
+from cfharness.runtime import default_fixture
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -17,19 +17,19 @@ def _allow_pytest_tmp_workspaces(tmp_path_factory):
     (spawn_background) kế thừa — sản phẩm không bao giờ đặt biến này."""
     import os
 
-    import agent_hub.workspace as _ws
+    import cfharness.workspace as _ws
 
     base = str(tmp_path_factory.getbasetemp())
     _ws._EXTRA_ALLOWED_ROOTS.append(base)
-    prev = os.environ.get("AGENT_HUB_EXTRA_WORKSPACE_ROOTS")
-    os.environ["AGENT_HUB_EXTRA_WORKSPACE_ROOTS"] = base if not prev else prev + os.pathsep + base
+    prev = os.environ.get("CFHARNESS_EXTRA_WORKSPACE_ROOTS")
+    os.environ["CFHARNESS_EXTRA_WORKSPACE_ROOTS"] = base if not prev else prev + os.pathsep + base
     try:
         yield
     finally:
         if prev is None:
-            os.environ.pop("AGENT_HUB_EXTRA_WORKSPACE_ROOTS", None)
+            os.environ.pop("CFHARNESS_EXTRA_WORKSPACE_ROOTS", None)
         else:
-            os.environ["AGENT_HUB_EXTRA_WORKSPACE_ROOTS"] = prev
+            os.environ["CFHARNESS_EXTRA_WORKSPACE_ROOTS"] = prev
         try:
             _ws._EXTRA_ALLOWED_ROOTS.remove(base)
         except ValueError:
@@ -39,8 +39,8 @@ def _allow_pytest_tmp_workspaces(tmp_path_factory):
 @pytest.fixture
 def hub_home(tmp_path, monkeypatch) -> HubPaths:
     home = tmp_path / "hub"
-    monkeypatch.setenv("AGENT_HUB_HOME", str(home))
-    monkeypatch.delenv("AGENT_HUB_SOCKET", raising=False)
+    monkeypatch.setenv("CFHARNESS_HOME", str(home))
+    monkeypatch.delenv("CFHARNESS_SOCKET", raising=False)
     paths = HubPaths.resolve()
     paths.ensure()
     return paths

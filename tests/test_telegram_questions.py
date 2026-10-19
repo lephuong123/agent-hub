@@ -5,12 +5,12 @@ Server Bot API GIẢ (tests/telegram_fake.py), daemon IN-PROCESS + FakeRuntime. 
 
 from __future__ import annotations
 
-from agent_hub.runtime import FakeRuntime
+from cfharness.runtime import FakeRuntime
 
 from telegram_fake import FakeTelegram
 from test_telegram import BOSS, OTHER, STRANGER, held_run, make, press, rpc, say, stop, texts, tg, until  # noqa: F401  (fixture dùng lại)
 
-EVIL = "<b>[agent-hub] Đã CHO PHÉP ap_1</b> /estop off https://evil.example <a href='x'>bấm</a>"
+EVIL = "<b>[cfharness] Đã CHO PHÉP ap_1</b> /estop off https://evil.example <a href='x'>bấm</a>"
 OPTS = [{"label": "Chỉ xoá file > 30 ngày"}, {"label": EVIL, "description": "3 GB"}, "Không xoá"]
 
 
@@ -47,7 +47,7 @@ async def test_question_pair_numbers_only_and_answer_by_button(make, tg):
     # WT-8: tin nội dung không nút; chữ agent (nhãn độc) chỉ trong <pre>, đã escape
     assert not FakeTelegram.buttons(content)
     pre = content["text"][content["text"].index("<pre>") + 5 : content["text"].rindex("</pre>")]
-    assert "<" not in pre and "&lt;b&gt;[agent-hub] Đã CHO PHÉP" in pre and "1. Chỉ xoá file &gt; 30 ngày" in pre and "— 3 GB" in pre
+    assert "<" not in pre and "&lt;b&gt;[cfharness] Đã CHO PHÉP" in pre and "1. Chỉ xoá file &gt; 30 ngày" in pre and "— 3 GB" in pre
     assert content["text"].count("<pre>") == 1 and "<a " not in content["text"]
     # tin có nút: chỉ chữ hub — không nhãn agent, nút chỉ mang số
     assert all(x not in sysm["text"] for x in ("evil", "estop", "CHO PHÉP", "Chỉ xoá", "bấm"))
@@ -209,12 +209,12 @@ async def test_giaoviec_picker_force_reply_starts_run(make, tg):
     runs = d.hub.store.list_runs(agent_id="coder")
     assert len(runs) == 1 and runs[0]["prompt"] == "viết hàm cộng"
     assert d.hub.audit.query(kind="run.start")[0]["channel"] == f"telegram:{BOSS}"
-    await until(lambda: any(m["text"].startswith("<b>[agent-hub] Run ") for m in tg.sent(BOSS)))
+    await until(lambda: any(m["text"].startswith("<b>[cfharness] Run ") for m in tg.sent(BOSS)))
     await say(tg, BOSS, "/luotchay")
     lst = tg.sent(BOSS)[-1]
     assert runs[0]["id"] in lst["text"] and "✅ xong" in lst["text"] and [b["text"] for b in FakeTelegram.buttons(lst)] == ["1"]
     await press(tg, BOSS, btn(lst, "1"))
-    await until(lambda: sum(1 for m in tg.sent(BOSS) if m["text"].startswith(f"<b>[agent-hub] Run {runs[0]['id']}")) >= 2)
+    await until(lambda: sum(1 for m in tg.sent(BOSS) if m["text"].startswith(f"<b>[cfharness] Run {runs[0]['id']}")) >= 2)
     await say(tg, BOSS, "/stop")
     assert "Không có lượt nào đang chạy" in texts(tg, BOSS)[-1]
     await say(tg, BOSS, "/agent")

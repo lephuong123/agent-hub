@@ -1,4 +1,4 @@
-agent-hub
+cfharness
 =========
 
 This product includes text and code derived from third-party software:
@@ -7,15 +7,15 @@ This product includes text and code derived from third-party software:
 hermes-agent — https://github.com/NousResearch/hermes-agent
 (commit ccc695635094d7615373db267b77f894d978b1a0)
 
-Used in agent-hub:
-- src/agent_hub/learning/prompts/hermes_review.py  — background review prompts
+Used in cfharness:
+- src/cfharness/learning/prompts/hermes_review.py  — background review prompts
   (_MEMORY_ROUTING_BLOCK, _MEMORY_REVIEW_PROMPT, _LESSON_LAYER_BLOCK,
   _DO_NOT_CAPTURE_BLOCK, _SKILL_REVIEW_PROMPT, _COMBINED_REVIEW_PROMPT),
   copied verbatim from agent/background_review.py; tool names are renamed at
   render time only.
-- src/agent_hub/learning/prompts/hermes_curator.py — CURATOR_REVIEW_PROMPT,
+- src/cfharness/learning/prompts/hermes_curator.py — CURATOR_REVIEW_PROMPT,
   copied verbatim from agent/curator.py.
-- src/agent_hub/learning/threats.py — threat pattern list and invisible-unicode
+- src/cfharness/learning/threats.py — threat pattern list and invisible-unicode
   set adapted from tools/threat_patterns.py.
 
 MIT License

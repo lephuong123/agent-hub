@@ -7,9 +7,9 @@ from datetime import datetime
 
 import pytest
 
-from agent_hub.events import make_event
-from agent_hub.hub import Hub
-from agent_hub.notify import format_message
+from cfharness.events import make_event
+from cfharness.hub import Hub
+from cfharness.notify import format_message
 from m3_fake import ScriptedRuntime
 from test_notify_slack import FakeSlack
 
@@ -48,9 +48,9 @@ def test_digest_content(hub):
     t = d["text"]
     assert d["counts"]["applied"] == 1 and d["counts"]["rolled_back"] == 1 and d["counts"]["blocked"] == 1 and d["counts"]["eval_failed"] == 1
     assert "*Team docs*" in t and "`researcher`" in t and "`coder`" in t
-    assert "agent-hub learn rollback le_1" in t and "+3/−1 dòng" in t
+    assert "cfharness learn rollback le_1" in t and "+3/−1 dòng" in t
     assert "regression_monitor" in t and "0.9 → 0.5" in t and "🔴" in t
-    assert "agent-hub golden from-run r_abc" in t and "Q-23" in t
+    assert "cfharness golden from-run r_abc" in t and "Q-23" in t
     assert "curator" in t and "chưa có golden task" in t
     row = hub.learning_ops.digest.get(d["id"])
     assert row["slack_status"] == "skipped" and row["counts"]["applied"] == 1
@@ -99,7 +99,7 @@ async def test_scheduled_digest_sent_to_fake_slack(hub):
                 break
         texts = [m["text"] for m in slack.received]
         dig = [t for t in texts if "digest học" in t]
-        assert dig and "agent-hub learn rollback le_1" in dig[0]
+        assert dig and "cfharness learn rollback le_1" in dig[0]
         assert any("deferred_no_eval" in t and "golden from-run r_abc" in t for t in texts)  # nhắc golden (Q-23)
         for _ in range(50):
             await asyncio.sleep(0.02)
@@ -113,8 +113,8 @@ async def test_scheduled_digest_sent_to_fake_slack(hub):
 
 
 def test_slack_format_messages():
-    e = make_event("learning.digest", None, {"send": True, "text": "*agent-hub — digest học*\nx"})
-    assert format_message(e).startswith("*agent-hub — digest học*")
+    e = make_event("learning.digest", None, {"send": True, "text": "*cfharness — digest học*\nx"})
+    assert format_message(e).startswith("*cfharness — digest học*")
     assert format_message(make_event("learning.digest", None, {"send": False, "text": "x"})) is None
     g = make_event("golden.suggested", "coder", {"reason": "unevaluated", "candidates": []})
     assert format_message(g) is None
@@ -123,7 +123,7 @@ def test_slack_format_messages():
 
 
 async def test_rpc_digest_and_learn_alias(hub_home):
-    from agent_hub.daemon import Daemon
+    from cfharness.daemon import Daemon
 
     d = Daemon(hub_home, runtime=ScriptedRuntime(lambda s: {"text": "ok"}))
     try:

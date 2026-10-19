@@ -10,12 +10,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agent_hub.curation.prompts import PHASE2_TAG, render_phase2_prompt
-from agent_hub.curation.service import parse_structured_summary
-from agent_hub.curation.similarity import cluster_key, find_clusters, merge_deterministic, skill_similarity
-from agent_hub.errors import HubError
-from agent_hub.hub import Hub
-from agent_hub.learning.prompts import hermes_curator
+from cfharness.curation.prompts import PHASE2_TAG, render_phase2_prompt
+from cfharness.curation.service import parse_structured_summary
+from cfharness.curation.similarity import cluster_key, find_clusters, merge_deterministic, skill_similarity
+from cfharness.errors import HubError
+from cfharness.hub import Hub
+from cfharness.learning.prompts import hermes_curator
 from m3_fake import ScriptedRuntime
 
 WEEKLY_A = """# Weekly report
@@ -166,7 +166,7 @@ async def test_after_promoted_agent_copies_archived(team_hub):
     d.mkdir(parents=True, exist_ok=True)
     (d / "SKILL.md").write_text("---\nname: weekly-status-report\ndescription: Weekly report\n---\n\n" + WEEKLY_B)
     hub.knowledge.sync_index("team", "t")
-    from agent_hub.events import make_event
+    from cfharness.events import make_event
 
     hub.publish(make_event("learning.promoted", "a", {"proposal_id": pid}))
     info = await _until(lambda: hub.curation._index().get("proposal:" + pid, {}).get("archived") and hub.curation._index()["proposal:" + pid])
@@ -292,8 +292,8 @@ async def test_phase2_merge_with_snapshot_and_rollback(p2_hub):
 
 
 def test_cli_rewrite_and_parsers():
-    from agent_hub.cli import build_parser
-    from agent_hub.curation.cli import rewrite_argv
+    from cfharness.cli import build_parser
+    from cfharness.curation.cli import rewrite_argv
 
     assert rewrite_argv(["report", "kpi", "--weeks", "6"]) == ["report-kpi", "--weeks", "6"]
     assert rewrite_argv(["--json", "report", "overhead"]) == ["--json", "report-overhead"]

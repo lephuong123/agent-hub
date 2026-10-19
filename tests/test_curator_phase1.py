@@ -8,9 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent_hub.events import iso
-from agent_hub.hub import Hub
-from agent_hub.learning_ops.curator import plan_transitions
+from cfharness.events import iso
+from cfharness.hub import Hub
+from cfharness.learning_ops.curator import plan_transitions
 from m3_fake import ScriptedRuntime
 
 NOW = datetime(2026, 10, 18, 8, 0, tzinfo=timezone.utc)
