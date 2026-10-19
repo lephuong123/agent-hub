@@ -105,6 +105,10 @@ class Daemon:
         from .systems.rpc import register_rpc as _register_systems
 
         _register_systems(self)
+        # Lịch chạy tự động: schedule.list|get|preview|create|update|pause|resume|rm|run_now (schedules/rpc.py — tự bọc audit method ghi)
+        from .schedules.rpc import register_rpc as _register_schedules
+
+        _register_schedules(self)
         # M1 luồng A: thêm mcp.*/secret.*/audit.*/feedback.* và bọc audit các method thay đổi trạng thái.
         # GIỮ Ở CUỐI __init__ — method thêm sau dòng này sẽ không được audit tự động.
         from .mcp_server.rpc import register_rpc
@@ -286,7 +290,8 @@ class Daemon:
                 why = self.hub.manager.check_rpc(caller, method, params if isinstance(params, dict) else {})
                 if why:
                     raise self._deny_caller(method, caller, why=why)
-            elif not caller.human and (why := self.hub.manager.agent_target_block(method, params if isinstance(params, dict) else {})):
+            elif not caller.human and (why := self.hub.manager.agent_target_block(method, params if isinstance(params, dict) else {})
+                                       or self.hub.manager.run_socket_block(caller, method)):
                 # M7 MGR-3: agent/tiến trình không phải người không điều khiển được run/agent điều phối viên
                 raise self._deny_caller(method, caller, why=why)
             elif method in _auth.HUMAN_ONLY and not caller.human:

@@ -721,6 +721,54 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE questions ADD COLUMN action TEXT;
     """,
+    # v16 — lịch chạy tự động (schedules/, docs/dev-notes/schedules.md). GỘP NHÁNH: phiên khác có thể cũng thêm migration sau v15 —
+    # người gộp đánh số lại (giữ thứ tự, chỉ thêm cuối). `schedule_fires` = lịch sử từng lượt (fired/skipped/completed/failed).
+    """
+    CREATE TABLE IF NOT EXISTS schedules (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        target TEXT,
+        prompt TEXT NOT NULL,
+        expr TEXT NOT NULL,
+        tz TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        paused_reason TEXT,
+        paused_by TEXT,
+        deliver_to TEXT NOT NULL DEFAULT '{}',
+        budget_usd REAL,
+        options TEXT NOT NULL DEFAULT '{}',
+        created_by TEXT NOT NULL,
+        last_run_at TEXT,
+        last_run_id TEXT,
+        last_task_id TEXT,
+        last_status TEXT,
+        next_run_at TEXT,
+        anchor_at TEXT,
+        fail_count INTEGER NOT NULL DEFAULT 0,
+        run_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS schedules_due ON schedules(status, next_run_at);
+    CREATE TABLE IF NOT EXISTS schedule_fires (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        schedule_id TEXT NOT NULL,
+        due_at TEXT,
+        fired_at TEXT NOT NULL,
+        status TEXT NOT NULL,
+        reason TEXT,
+        manual INTEGER NOT NULL DEFAULT 0,
+        run_id TEXT,
+        task_id TEXT,
+        cost_usd REAL,
+        ended_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS schedule_fires_sched ON schedule_fires(schedule_id, id);
+    CREATE INDEX IF NOT EXISTS schedule_fires_run ON schedule_fires(run_id);
+    CREATE INDEX IF NOT EXISTS schedule_fires_task ON schedule_fires(task_id);
+    """,
 ]
 
 JSON_COLS = {

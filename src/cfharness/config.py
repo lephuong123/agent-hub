@@ -175,6 +175,10 @@ DEFAULTS: dict[str, Any] = {
         "max_tasks_per_hour": 60,
         "max_runs_per_hour": 30,
         "max_system_ops_per_hour": 10,  # tạm dừng/bật lại/khởi động lại job launchd của hệ thống đã đăng ký
+        # §9 M7-core.md: khung quyền của điều phối viên (CHỈ người: config.set ∈ HUMAN_ONLY, nhánh `manager` kiểm toàn vẹn).
+        # profile strict = Read/Grep/Glob (như MGR-8); hermes = Bash/Read/Write/Edit/Grep/Glob/TodoWrite + Web + MCP trusted (chỉ đọc),
+        # VẪN dưới hook guard + sandbox OS + approval. null = theo profile. `cfharness manager capabilities show|set`.
+        "capabilities": {"profile": "strict", "tools": None, "mcp": None, "web": None},
     },
     # M3 — team & điều phối (FR-TK-*, FR-RT-12/16, FR-OB-03)
     "tasks": {
@@ -308,6 +312,21 @@ DEFAULTS: dict[str, Any] = {
             "flush_s": 2.0,
             "timeout_s": 5.0,
         },
+    },
+    # Lịch chạy tự động (schedules/, docs/dev-notes/schedules.md). Nhánh được kiểm toàn vẹn (trần của điều phối viên).
+    "schedules": {
+        "enabled": True,  # tắt = vòng nền không bắn lịch nào (lịch vẫn giữ)
+        "tick_s": 15,  # chu kỳ vòng nền
+        "catchup_grace_s": 3600,  # daemon tắt/máy ngủ: chạy bù MỘT lần nếu mốc gần nhất trễ ≤ N giây, còn lại bỏ (`skipped: missed`)
+        "max_failures": 3,  # lỗi liên tiếp ≥ N → tự tạm dừng + báo người
+        "default_budget_usd": 0.5,  # trần mỗi lượt khi lịch không đặt budget_usd
+        "prompt_max_chars": 4000,
+        # trần của ĐIỀU PHỐI VIÊN (chỉ người đổi): số lịch đang bật, khoảng tối thiểu giữa 2 lượt, chạy-ngay/giờ, $/ngày ước tính
+        # (null = learn policy config_bounds.budget_usd_per_day)
+        "manager_max_active": 10,
+        "min_interval_s": 900,
+        "manager_run_now_per_hour": 6,
+        "manager_daily_budget_usd": None,
     },
     # Hệ thống ngoài hub (systems/): app trong thư mục gốc + job launchd của chúng — người đăng ký, điều phối viên tạm dừng/bật lại/khởi động lại
     "systems": {
@@ -511,6 +530,14 @@ class HubConfig:
 
 def validate_setting(key: str, value: Any) -> None:
     """Kiểm tối thiểu các khoá quan trọng; khoá lạ vẫn cho ghi (mở rộng sau)."""
+    if key == "manager" or key.startswith("manager.capabilities"):
+        from .manager.permissions import validate_capabilities
+
+        if key == "manager":
+            if isinstance(value, dict) and "capabilities" in value:
+                validate_capabilities("manager.capabilities", value["capabilities"])
+        else:
+            validate_capabilities(key, value)
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")

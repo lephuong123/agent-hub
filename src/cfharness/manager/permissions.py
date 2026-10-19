@@ -44,6 +44,83 @@ RATE_LIMITS = {
 }
 
 
+# §9 (M7-core.md): khung quyền của điều phối viên — NGƯỜI đặt ở `manager.capabilities` (nhánh `manager` ∈ integrity.SECURITY_KEYS,
+# `config.set` ∈ HUMAN_ONLY). Tool ngoài CAP_TOOLS_MAX không bao giờ được (Task/Agent = subagent, có thể mang permissionMode riêng).
+CAP_PROFILES: dict[str, dict[str, Any]] = {
+    "strict": {"tools": ["Read", "Grep", "Glob"], "mcp": "none", "web": False},
+    "hermes": {"tools": ["Bash", "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Grep", "Glob", "TodoWrite"],
+               "mcp": "read_only_trusted", "web": True},
+}
+CAP_WEB_TOOLS = ("WebFetch", "WebSearch")
+CAP_TOOLS_MAX = frozenset(CAP_PROFILES["hermes"]["tools"]) | frozenset(CAP_WEB_TOOLS)
+CAP_MCP_MODES = ("none", "read_only_trusted", "trusted")
+_CAP_ORDER = ("Read", "Grep", "Glob", "Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "TodoWrite", "WebFetch", "WebSearch")
+
+
+def fmt_tools(ts: Any) -> str:
+    return "/".join(sorted(ts, key=lambda t: (_CAP_ORDER.index(t) if t in _CAP_ORDER else 99, t)))
+CAP_KEYS = ("profile", "tools", "mcp", "web")
+
+
+def validate_capabilities(key: str, value: Any) -> None:
+    """Kiểm khi `config set manager.capabilities[.x]` (gọi từ `config.validate_setting`) — sai → ValueError, không ghi."""
+    sub = key[len("manager.capabilities"):].lstrip(".")
+    if not sub:
+        if value is None:
+            return
+        if not isinstance(value, dict):
+            raise ValueError("manager.capabilities phải là object {profile, tools, mcp, web}")
+        bad = sorted(set(value) - set(CAP_KEYS))
+        if bad:
+            raise ValueError(f"manager.capabilities: khoá lạ {bad} (được: {', '.join(CAP_KEYS)})")
+        for k, v in value.items():
+            validate_capabilities(f"manager.capabilities.{k}", v)
+        return
+    if sub == "profile":
+        if value not in CAP_PROFILES:
+            raise ValueError(f"manager.capabilities.profile phải là {'|'.join(CAP_PROFILES)}")
+    elif sub == "tools":
+        if value is not None and (not isinstance(value, list) or not all(isinstance(x, str) for x in value)):
+            raise ValueError("manager.capabilities.tools phải là danh sách tên tool hoặc null (= theo profile)")
+        bad = sorted(set(value or []) - CAP_TOOLS_MAX)
+        if bad:
+            raise ValueError(f"manager.capabilities.tools: {bad} không bao giờ cấp cho điều phối viên (tối đa: {sorted(CAP_TOOLS_MAX)})")
+    elif sub == "mcp":
+        if value is not None and value not in CAP_MCP_MODES:
+            raise ValueError(f"manager.capabilities.mcp phải là {'|'.join(CAP_MCP_MODES)} hoặc null")
+    elif sub == "web":
+        if value is not None and not isinstance(value, bool):
+            raise ValueError("manager.capabilities.web phải là true/false hoặc null")
+    else:
+        raise ValueError(f"manager.capabilities: khoá lạ '{sub}' (được: {', '.join(CAP_KEYS)})")
+
+
+def resolve_capabilities(raw: Any) -> dict[str, Any]:
+    """Cấu hình thô → khung hiệu lực `{profile, tools: frozenset, mcp, web, warnings}`. Giá trị lạ (sửa tay config.yaml) → FAIL-CLOSED
+    (bỏ qua, về strict/không) + cảnh báo."""
+    raw = raw if isinstance(raw, dict) else {}
+    warnings: list[str] = []
+    profile = raw.get("profile") or "strict"
+    if profile not in CAP_PROFILES:
+        warnings.append(f"profile '{profile}' không hợp lệ → strict")
+        profile = "strict"
+    base = CAP_PROFILES[profile]
+    tools_raw = raw.get("tools")
+    tools = list(base["tools"]) if tools_raw is None else [str(x) for x in tools_raw] if isinstance(tools_raw, list) else list(CAP_PROFILES["strict"]["tools"])
+    dropped = sorted(set(tools) - CAP_TOOLS_MAX)
+    if dropped:
+        warnings.append(f"tool {dropped} không bao giờ cấp cho điều phối viên — bỏ qua")
+    web = raw.get("web") if isinstance(raw.get("web"), bool) else bool(base["web"])
+    ts = {t for t in tools if t in CAP_TOOLS_MAX and t not in CAP_WEB_TOOLS}
+    if web:
+        ts |= set(CAP_WEB_TOOLS)
+    mcp = raw.get("mcp") if raw.get("mcp") in CAP_MCP_MODES else base["mcp"]
+    if raw.get("mcp") is not None and raw.get("mcp") not in CAP_MCP_MODES:
+        mcp = "none"
+        warnings.append(f"mcp '{raw.get('mcp')}' không hợp lệ → none")
+    return {"profile": profile, "tools": frozenset(ts), "mcp": mcp, "web": web, "warnings": warnings}
+
+
 def _deep_keys(obj: Any, prefix: str = "") -> list[str]:
     out: list[str] = []
     if isinstance(obj, dict):
@@ -145,30 +222,80 @@ class ManagerPermissions:
         return out
 
     # ------------------------------------------------------------------ MGR-8: cấu hình tối thiểu của agent được chỉ định làm manager
-    MANAGER_TOOLS_OK = frozenset({"Read", "Grep", "Glob"})
+    MANAGER_TOOLS_OK = frozenset({"Read", "Grep", "Glob"})  # khung strict (mặc định) — giữ tên cũ
+
+    def capabilities(self) -> dict[str, Any]:
+        """Khung quyền của điều phối viên do NGƯỜI đặt (`manager.capabilities`, nhánh config kiểm toàn vẹn) — §9 M7-core.md."""
+        try:
+            raw = self.hub.config.get("manager.capabilities")
+        except KeyError:
+            raw = None
+        return resolve_capabilities(raw)
 
     def manager_config_problem(self, row: dict[str, Any]) -> str | None:
+        caps = self.capabilities()
+        ok_tools = caps["tools"]
+        aid = row.get("id") or "<agent>"
+        fix = (f"`cfharness agent edit {aid} --tools {fmt_tools(ok_tools).replace('/', ',')}` hoặc nới khung: "
+               "`cfharness manager capabilities set --profile hermes`")
         tp = row.get("tool_policy") or {}
         tools = tp.get("tools")
         if tools is None:
-            return "tool_policy.tools trống (= mọi tool, có Bash/Write/Edit) — điều phối viên chỉ được Read/Grep/Glob"
-        bad = sorted(set(tools) - self.MANAGER_TOOLS_OK)
+            return (f"tool_policy.tools trống (= mọi tool, có Task/subagent) — khung '{caps['profile']}' chỉ cho {fmt_tools(ok_tools)}; "
+                    f"liệt kê tool rõ ràng: {fix}")
+        bad = sorted(set(tools) - ok_tools)
         if bad:
-            return f"điều phối viên chỉ được tool {sorted(self.MANAGER_TOOLS_OK)}, đang có {bad}"
+            return f"khung điều phối viên '{caps['profile']}' chỉ cho tool {fmt_tools(ok_tools)}, agent đang có {bad} — {fix}"
         if tp.get("permission_mode") not in (None, "default", "plan"):
             return f"permission_mode '{tp.get('permission_mode')}' không hợp với điều phối viên (chỉ default/plan)"
         if tp.get("allow_bypass"):
             return "allow_bypass phải tắt"
-        extra = [x for x in tp.get("allowed_tools") or [] if not str(x).startswith(("Read", "Grep", "Glob", "mcp__hub-self"))]
+        mcp_ok = list(row.get("mcp_servers") or []) if caps["mcp"] != "none" else []
+        prefixes = tuple(sorted(ok_tools)) + ("mcp__hub-self",) + tuple(f"mcp__{s}" for s in mcp_ok)
+        extra = [x for x in tp.get("allowed_tools") or [] if not str(x).startswith(prefixes)]
         if extra:
-            return f"allowed_tools vượt khung đọc: {extra}"
+            return f"allowed_tools vượt khung '{caps['profile']}': {extra}"
         if row.get("mcp_servers"):
-            return f"điều phối viên không được có MCP ngoài hub-self (đang có {row['mcp_servers']})"
+            if caps["mcp"] == "none":
+                return (f"khung '{caps['profile']}' không cho MCP ngoài hub-self (agent đang có {row['mcp_servers']}) — "
+                        "`cfharness manager capabilities set --mcp read_only_trusted` nếu muốn")
+            names, own = self._mcp_names()
+            trust = self._mcp_trust()
+            for s in row["mcp_servers"]:
+                if s in own:
+                    return f"MCP '{s}' là MCP của chính hub — điều phối viên điều khiển hub qua hub-self, không qua MCP này"
+                if s not in names:
+                    return f"MCP '{s}' không có trong registry"
+                if trust.get(s, "untrusted") != "trusted":
+                    return f"MCP '{s}' có trust=untrusted — điều phối viên chỉ dùng MCP người đã đánh dấu trusted (`cfharness mcp edit {s} --trust trusted`)"
         if row.get("subagents"):
-            return "điều phối viên không được có subagents"
+            return "điều phối viên không được có subagents (có thể mang permissionMode riêng)"
         if row.get("workspace_default"):
             return "điều phối viên dùng workspace scratch (không workspace_default)"
+        if set(tools) - self.MANAGER_TOOLS_OK or row.get("mcp_servers"):
+            # tool rộng hơn strict CHỈ khi đủ lớp an toàn của agent thường: hook guard (approval) + sandbox OS
+            g = self.hub.config.get("guard") or {}
+            if not g.get("enabled", True):
+                return "khung rộng (Bash/Write/Web/MCP) cần guard.enabled=true (hook guard + approval) — đang tắt"
+            if not (g.get("sandbox") or {}).get("enabled", True):
+                return "khung rộng (Bash/Write/Web/MCP) cần guard.sandbox.enabled=true (sandbox OS) — đang tắt"
         return None
+
+    def mcp_run_disallowed(self, row: dict[str, Any]) -> list[str]:
+        """`mcp: read_only_trusted` — tool MCP đã probe mà KHÔNG readOnlyHint → --disallowedTools cho run manager (tool chưa probe
+        vẫn qua hook guard: `mcp_unknown_tool` → giữ chờ người)."""
+        if self.capabilities()["mcp"] != "read_only_trusted":
+            return []
+        out: list[str] = []
+        for s in row.get("mcp_servers") or []:
+            try:
+                r = self.hub.mcp.get_row(s) or {}  # type: ignore[attr-defined]
+            except Exception:
+                r = {}
+            for tool_name, rec in sorted((r.get("annotations_cache") or {}).items()):
+                if not (rec or {}).get("readOnlyHint"):
+                    out.append(f"mcp__{s}__{tool_name}")
+        return out
 
     # ------------------------------------------------------------------ agent
     def _mcp_names(self) -> tuple[set[str], frozenset[str]]:
@@ -555,6 +682,10 @@ class ManagerPermissions:
         if method == "system.job":
             # chỉ job thuộc hệ thống NGƯỜI đã đăng ký, không bị người khoá (systems/service.job_check — service kiểm lại)
             return self.hub.systems.job_check(str(p.get("label") or ""), str(p.get("action") or ""), manager=True)  # type: ignore[attr-defined]
+        if method.startswith("schedule."):
+            # Lịch chạy tự động: chỉ lịch do điều phối viên tạo; trần số lịch/tần suất/ngân sách; đích theo luật run.start/task.create
+            # (schedules/service.manager_check — service kiểm lại lần 3)
+            return self.hub.schedules.manager_check(caller, method, p)  # type: ignore[attr-defined]
         if method == "estop.set":
             if p.get("on") is not True:
                 return "điều phối viên chỉ được BẬT ESTOP — tắt ESTOP là việc của người"

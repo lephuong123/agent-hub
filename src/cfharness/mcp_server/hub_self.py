@@ -259,6 +259,31 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
     "notify_owner": _t("Send a short message to the human owner (Vietnamese) on their conversation channel. Use when you need a human "
                        "decision or when a goal is done. kind: info|need_human|done.", {"text": _S, "kind": _S}, ["text"]),
 }
+# Lịch chạy tự động (schedules/) — khối riêng (gộp nhánh dễ). Quyền kiểm ở daemon: schedules/service.manager_check.
+_SCHED_EXPR = ("expr: 5-field cron ('*/30 * * * *', '0 8 * * 1-5') or 'every 30m', 'daily 08:00', 'weekdays 08:30', 'weekly mon,thu 09:00', "
+               "'monthly 1 09:00', 'at 2026-10-20 09:00' / 'in 30m' (one-off); machine local time.")
+MANAGER_TOOLS.update({
+    "schedule_list": _t("Scheduled jobs (yours and the owner's): id, name, kind, expr, status active|paused|done, next_run_local (machine local time; "
+                        "next_run_at is UTC), last run, "
+                        "deliver_to, created_by. Jobs created by the owner are read-only for you.", {"status": _S}, ro=True),
+    "schedule_get": _t("One scheduled job with its recent fires (run/task ids, status, reason).", {"id": _S}, ["id"], ro=True),
+    "schedule_create": _t(
+        "Create a recurring/one-off job when the OWNER asks for one (e.g. 'every morning at 8 summarise new feedback and send it to me'). "
+        "BEFORE creating, confirm with the owner in one short line: what, when (in their words + the expr), where the result goes. "
+        "kind: manager (default — the prompt runs as a turn of YOUR conversation at each fire, the result goes to deliver_to), agent "
+        "(target = agent id; its result is delivered to deliver_to), task (team and/or assignee). " + _SCHED_EXPR + " deliver_to = "
+        "{conversation_id} (default: this conversation) or {channel: 'telegram:<chat_id>'|'web'|'cli'}. budget_usd per fire is "
+        "required and capped; your jobs must be ≥ 15 min apart and their estimated daily cost stays under the cap. prompt = the "
+        "instruction for each fire, in English, self-contained. After creating, tell the owner how to stop it (schedule_pause / "
+        "`cfharness schedule pause <id>`)." + _DENIED,
+        {"name": _S, "kind": {"type": "string", "enum": ["manager", "agent", "task"]}, "expr": _S, "prompt": _S, "target": _S, "team": _S,
+         "assignee": _S, "deliver_to": _O, "budget_usd": {"type": "number"}}, ["expr", "prompt", "budget_usd"]),
+    "schedule_pause": _t("Pause one of YOUR scheduled jobs (owner's jobs: read-only).", {"id": _S, "reason": _S}, ["id"]),
+    "schedule_resume": _t("Resume one of YOUR paused jobs (caps are re-checked).", {"id": _S}, ["id"]),
+    "schedule_rm": _t("Delete one of YOUR scheduled jobs (history kept). To change a job: delete it and create a new one.", {"id": _S}, ["id"]),
+    "schedule_run_now": _t("Fire one of YOUR jobs once now (e.g. to show the owner a sample). Refused while its previous fire runs.",
+                           {"id": _S}, ["id"]),
+})
 MANAGER_READ_TOOLS = frozenset(n for n, t in MANAGER_TOOLS.items() if (t.get("annotations") or {}).get("readOnlyHint"))
 _KNOW = ("skills_list", "skill_view")
 ROLE_TOOLS = {

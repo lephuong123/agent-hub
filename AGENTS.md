@@ -333,6 +333,12 @@ Bất biến: chỉ NGƯỜI chỉ định manager (`manager.set|chat|tick` ∈ 
 method ngoài `auth.MANAGER_ALLOWED` hoặc vi phạm `check_rpc` → từ chối + audit actor `manager:<agent>`. Thêm tool ghi cho manager → thêm method
 vào `MANAGER_ALLOWED` (kèm lý do), luật vào `permissions.check_rpc`, ca đỏ→xanh vào `tests/test_manager_security.py` (cả lớp 1 lẫn lớp 2).
 Thay đổi cấu hình agent do manager = actor `manager:<agent>` = thay đổi TỰ ĐỘNG (`ledger.is_auto_change_actor`) → được tự rollback.
+Khung quyền (§9 `docs/dev-notes/M7-core.md`): `manager.capabilities{profile strict|hermes, tools, mcp, web}` CHỈ người đặt (`cfharness manager
+capabilities set …` = `config.set`, nhánh `manager` kiểm toàn vẹn); strict = Read/Grep/Glob (mặc định), hermes = Bash/Write/Edit/Web + MCP trusted
+(chỉ đọc) — luôn dưới hook guard + sandbox OS + approval (khung rộng đòi `guard.enabled` + `guard.sandbox.enabled`), không bao giờ Task/subagents/
+bypass. `manager_config_problem` kiểm theo khung ở `manager.set` và mỗi run. Run manager: classifier cấm thẳng ghi `hub-*`, loopback/LAN
+(curl/WebFetch), `claude` lồng, CLAUDE.md/.claude; tiến trình con gọi socket chỉ được `managerself.call` (`ManagerService.run_socket_block`).
+Thêm tool vào khung → `CAP_PROFILES`/`CAP_TOOLS_MAX` (permissions.py) + ca trong `tests/test_manager_capabilities.py`.
 Không bao giờ: manager duyệt approval, sửa policy/guard/golden/sandbox, purge, tắt ESTOP, sửa agent manager (kể cả chính mình/manager cũ),
 `bypassPermissions`/`allow_bypass`/`extra_args`/`subagents`, bỏ mẫu disallowed người đặt, MCP ngoài registry. Test: `tests/test_manager*.py`
 (helper `tests/m7_fake.py`, ScriptedRuntime giữ run manager ở `running`).
@@ -382,3 +388,18 @@ Chi tiết: `docs/dev-notes/owner-permission.md`. Migration **v15** (`questions.
 - `guard.hold_uncertain=false` → chỉ `destructive` hỏi người (giữ uncertain vùng hub/policy + `mcp_require_approval`). `guard.enabled=false`
   → cho phép sẵn tool của agent (`GUARD_OFF_ALLOWED_TOOLS`), giữ mẫu chặn tĩnh + sandbox.
 
+
+## Lịch chạy tự động — `schedules/` (kiểu `cronjob_manage` của Hermes)
+Chi tiết, quyền, đỏ đã kiểm, lệch Hermes, việc dở: `docs/dev-notes/schedules.md`. Migration **v16** (`schedules`, `schedule_fires` — gộp nhánh thì
+đánh số lại). Test: `tests/test_schedules.py` (đồng hồ giả `hub.schedules.clock`, gọi `tick()` trực tiếp).
+
+| Module | Vai trò |
+|---|---|
+| `schedules/cron.py` | Parser THUẦN stdlib: cron 5 trường, `@daily…`, `every 30m`, `daily 08:00`, `weekdays 08:30`, `weekly …`, `monthly …`, `at …`/`in 30m`, alias tiếng Việt; `next_after`, `min_interval_s`, `runs_per_day` (giờ máy, zoneinfo) |
+| `schedules/service.py` | `hub.schedules`: CRUD (xoá mềm), vòng nền (start ở `hub.started`), bỏ lượt (ESTOP/overlap/agent pause/team ESTOP), chạy bù ≤ 1 lần trong `catchup_grace_s`, bắn manager (`ManagerService._submit` kind `schedule` trong hội thoại đích) / agent (`runs.submit kind=schedule`) / task (`created_by=schedule:<id>`), giao kết quả (`manager.reply{kind:notify}`), tự dừng khi lỗi lặp, `manager_check` |
+| `schedules/rpc.py`, `cli.py` | RPC `schedule.list\|get\|preview\|create\|update\|pause\|resume\|rm\|run_now` (ghi ∈ HUMAN_ONLY, tự audit); CLI `cfharness schedule …`; Telegram `/lich` (đọc) |
+
+Bất biến: `created_by` lấy từ người gọi. Điều phối viên chỉ ghi lịch `created_by=manager:*` (lịch người = chỉ đọc), trong trần nhánh config
+`schedules.*` (kiểm toàn vẹn), không từ lượt của lịch; luật ở `ScheduleService.manager_check`, gọi từ `manager/permissions.check_rpc` (2 lớp) và
+`_gate` (lần 3). Nội dung lịch do điều phối viên viết vào prompt trong khung `<untrusted-data>`, tiêu đề `[cfharness · SCHEDULED JOB · key …]`
+(không bao giờ thành "tin người"). Thêm luật/ trần → ca đỏ→xanh trong `tests/test_schedules.py`.

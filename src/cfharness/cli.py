@@ -765,6 +765,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_system_parsers(sub, common)
 
+    # Lịch chạy tự động: cfharness schedule add|list|show|pause|resume|rm|run-now|edit|preview (schedules/cli.py)
+    from .schedules.cli import add_parsers as _add_schedule_parsers
+
+    _add_schedule_parsers(sub, common)
+
     # đổi tên cfharness: home status|migrate (home_migrate.py)
     from .home_migrate import add_parsers as _add_home_parsers
 

@@ -13,6 +13,8 @@
 - `manager.history {conversation_id, limit?}` → `[{id, role: user|manager|notify|tick, text, run_id, ts}]` (cũ → mới)
 - `manager.tick {force?}` (HUMAN_ONLY) → `{run_id|null, skipped?, reason?, events?, conversation_id?}`
 - `managerself.call {run_id, op, args}` — tool hub-self của run manager (daemon ràng run ↔ người gọi).
+- `manager.capabilities {}` (đọc) → `{config, effective:{profile, tools, mcp, web, warnings}, profiles, manager, problem}` — khung quyền §9;
+  ghi bằng `config.set {key: "manager.capabilities", value}` (HUMAN_ONLY + audit).
 Event: `manager.reply{conversation_id, run_id, text, channel, kind: reply|tick|notify, ok, outcome?}`,
 `manager.action{tool, target ("agent:x"|"task:t_…"|…), summary, audit_id, ok, error?}`, `manager.tick{status, reason, events}`,
 `manager.designated{agent_id, previous}`.
@@ -62,6 +64,7 @@ def register_rpc(daemon: "Daemon") -> None:
         "manager.history": lambda p: m.history(str(_req(p, "conversation_id")), int(p.get("limit") or 100)),
         "manager.tick": lambda p: m.maybe_tick(force=bool(p.get("force", True))),
         "managerself.call": lambda p: m.self_call(str(_req(p, "run_id")), str(_req(p, "op")), p.get("args") or {}),
+        "manager.capabilities": lambda p: m.capabilities_info(),  # đọc; ghi = config.set manager.capabilities (HUMAN_ONLY, audit)
     }
     for name in _AUDITED:
         methods[name] = wrap_with_audit(daemon.hub, name, methods[name])

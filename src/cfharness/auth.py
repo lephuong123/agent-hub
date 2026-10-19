@@ -80,6 +80,9 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # Hệ thống ngoài hub (systems/): launchctl chạy NGOÀI sandbox trong daemon — đăng ký/khoá chỉ người; thao tác job: người hoặc
         # điều phối viên (MANAGER_ALLOWED, chỉ job đã đăng ký + không khoá)
         "system.scan", "system.add", "system.rm", "system.lock", "system.job",
+        # Lịch chạy tự động (schedules/): lịch = việc chạy lặp NGOÀI phiên người (tốn tiền, gửi tin) — chỉ người; điều phối viên qua
+        # MANAGER_ALLOWED (create/pause/resume/rm/run_now lịch CỦA MÌNH, trần số lịch/tần suất/ngân sách — schedules.manager_check)
+        "schedule.create", "schedule.update", "schedule.pause", "schedule.resume", "schedule.rm", "schedule.run_now",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})
@@ -145,6 +148,13 @@ MANAGER_ALLOWED: dict[str, str] = {
     "question.answer": "trả lời câu hỏi của agent trong task khi câu hỏi đang chờ điều phối viên (with_manager) — không phải câu hỏi đã lên người",
     "question.escalate": "chuyển câu hỏi đang chờ điều phối viên lên người",
     "system.job": "tạm dừng/bật lại/khởi động lại job launchd của hệ thống NGƯỜI đã đăng ký, job không bị khoá (đảo ngược được; trần/giờ)",
+    # Lịch chạy tự động (schedules/service.manager_check, chạy ở cả 2 lớp): chỉ lịch do điều phối viên tạo; lịch của người = chỉ đọc
+    "schedule.create": "tạo lịch theo yêu cầu người (≤ schedules.manager_max_active đang bật, khoảng ≥ schedules.min_interval_s, budget ≤ config_bounds, "
+                       "ước tính $/ngày ≤ trần; đích agent/task theo luật run.start/task.create; không tạo từ chính lượt của lịch)",
+    "schedule.pause": "tạm dừng lịch do điều phối viên tạo (đảo ngược được)",
+    "schedule.resume": "bật lại lịch do điều phối viên tạo (kiểm lại trần)",
+    "schedule.rm": "xoá mềm lịch do điều phối viên tạo (lịch sử lượt giữ nguyên)",
+    "schedule.run_now": "chạy ngay một lượt lịch do điều phối viên tạo (trần schedules.manager_run_now_per_hour)",
 }
 
 
@@ -155,7 +165,8 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.learning.rpc", "MUTATING_M4A"), ("cfharness.learning_ops.rpc", "MUTATING_B"),
                       ("cfharness.curation.rpc", "MUTATING_CURATION"), ("cfharness.chat.rpc", "MUTATING_TELEGRAM"),
                       ("cfharness.manager.rpc", "MUTATING_MANAGER"),
-                      ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS")):
+                      ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS"),
+                      ("cfharness.schedules.rpc", "MUTATING_SCHEDULES")):
         try:
             import importlib
 

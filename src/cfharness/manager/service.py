@@ -215,8 +215,7 @@ class ManagerService:
                 raise HubError(f"agent '{agent_id}' đã bị xoá mềm")
             why = self.perms.manager_config_problem(row)  # MGR-8: chỉ agent có tool/quyền trong khung điều phối viên
             if why:
-                raise Blocked(f"không chỉ định được '{agent_id}' làm điều phối viên: {why}. Sửa cấu hình agent trước "
-                              f"(vd `cfharness agent edit {agent_id} --tools Read,Grep,Glob`).", data={"reason": "manager_config"})
+                raise Blocked(f"không chỉ định được '{agent_id}' làm điều phối viên: {why}", data={"reason": "manager_config"})
         hist = [x for x in (st.get("history") or []) if x]
         if agent_id and agent_id not in hist:
             hist.append(agent_id)
@@ -225,6 +224,22 @@ class ManagerService:
         self.hub.store.state_set("manager", st)
         self.hub.publish(make_event("manager.designated", agent_id or prev, {"agent_id": agent_id or None, "previous": prev, "by": by, "channel": channel}))
         return self.get()
+
+    def capabilities_info(self) -> dict[str, Any]:
+        """§9: khung quyền hiện hành + cấu hình agent manager có vừa khung không (cho `cfharness manager capabilities show`)."""
+        from .permissions import CAP_PROFILES, fmt_tools
+
+        caps = self.perms.capabilities()
+        try:
+            raw = self.hub.config.get("manager.capabilities")
+        except KeyError:
+            raw = None
+        aid = self.agent_id()
+        row = self.hub.store.get_agent(aid) if aid else None
+        return {"config": raw, "effective": {**caps, "tools": fmt_tools(caps["tools"]).split("/") if caps["tools"] else []},
+                "profiles": CAP_PROFILES, "manager": aid,
+                "manager_tools": ((row or {}).get("tool_policy") or {}).get("tools") if row else None,
+                "problem": self.perms.manager_config_problem(row) if row else None}
 
     def get(self) -> dict[str, Any]:
         tk = self.hub.store.state_get("manager_tick") or {}
@@ -317,7 +332,7 @@ class ManagerService:
         aid = conv["agent_id"]
         why = self.perms.manager_config_problem(self.hub.agents.get_row(aid))  # MGR-8: cấu hình bị nới sau khi chỉ định → không chạy
         if why:
-            raise Blocked(f"điều phối viên '{aid}' có cấu hình vượt khung: {why}", data={"reason": "manager_config"})
+            raise Blocked(f"điều phối viên '{aid}' có cấu hình vượt khung (`cfharness manager capabilities show`): {why}", data={"reason": "manager_config"})
         resume = conv.get("session_id")
         carry = ""
         if resume and int(conv.get("session_turns") or 0) >= int(self.cfg("rotate_after_turns", 80)):
@@ -537,6 +552,8 @@ class ManagerService:
                     return  # UX: task chờ câu trả lời — đã có sự kiện `question` (với manager) hoặc đã hỏi người
                 self._push("task_blocked", f"tb:{t['id']}:{t.get('updated_at')}", f"task {t['id']} '{t['title'][:80]}' BLOCKED: {p.get('reason') or t.get('block_reason') or ''}",
                            task_id=t["id"], team_id=t.get("team_id"))
+            elif to == "done" and str(t.get("created_by") or "").startswith("schedule:"):
+                return  # task do lịch tạo: kết quả đã gửi về kênh của lịch (schedules/) — không tốn một nhịp chỉ để báo xong
             elif to == "done" and (not t.get("origin_task_id") or str(t.get("created_by") or "").startswith("manager:")):
                 self._push("task_done", f"td:{t['id']}", f"task {t['id']} '{t['title'][:80]}' DONE: {str(t.get('result_summary') or '')[:200]}",
                            task_id=t["id"], team_id=t.get("team_id"))
@@ -668,6 +685,17 @@ class ManagerService:
         self.hub.publish(make_event("manager.tick", aid, {"status": "started", "reason": reason, "events": len(events), "dropped": dropped,
                                                          "conversation_id": conv["id"]}, run_id=run["id"]))
         return {"run_id": run["id"], "conversation_id": conv["id"], "reason": reason, "events": len(events)}
+
+    def run_socket_block(self, caller: "_auth.Caller", method: str) -> str | None:
+        """§9: tiến trình con của run điều phối viên (Bash, script… — khung hermes) gọi THẲNG socket hub (khi sandbox không chặn) →
+        chỉ `managerself.call` (cùng luật lớp 1+2 như tool hub-self). Method ghi khác bị từ chối: không dùng quyền "agent thường"
+        (run.start/task.create… không trần) để lách trần/luật của manager. Daemon gọi cho mọi method ghi/HUMAN_ONLY từ socket."""
+        if not caller.is_agent or not caller.run_id or method == "managerself.call":
+            return None
+        if self.is_issued(caller.run_id):
+            return ("tiến trình trong run điều phối viên chỉ thao tác hub qua tool hub-self (managerself.call) — "
+                    "không gọi thẳng socket/CLI")
+        return None
 
     # ------------------------------------------------------------------ kiểm quyền (daemon, lớp 2)
     def check_rpc(self, caller: "_auth.Caller", method: str, params: dict[str, Any]) -> str | None:

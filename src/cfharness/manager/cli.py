@@ -27,6 +27,13 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     h = ms.add_parser("history", help="lịch sử một hội thoại", parents=[common])
     h.add_argument("conversation")
     h.add_argument("--limit", type=int, default=30)
+    cap = ms.add_parser("capabilities", help="khung quyền của điều phối viên (strict | hermes) — xem/đặt (đặt: chỉ người, audit)", parents=[common])
+    cap.add_argument("cap_action", nargs="?", default="show", choices=["show", "set", "reset"])
+    cap.add_argument("--profile", choices=["strict", "hermes"])
+    cap.add_argument("--tools", help="danh sách tool phân cách bằng dấu phẩy (ghi đè profile); 'profile' = theo profile")
+    cap.add_argument("--mcp", choices=["none", "read_only_trusted", "trusted", "profile"])
+    cap.add_argument("--web", choices=["on", "off", "profile"])
+    cap.add_argument("--sync-agent", action="store_true", help="đặt luôn tool_policy.tools của agent điều phối viên = tool của khung mới")
     mg.set_defaults(fn=cmd_manager)
     ch = sub.add_parser("chat", help="chat qua lại với điều phối viên trên terminal (kênh cli, dùng chung với TUI `top` → m)", parents=[common])
     _chat_args(ch)
@@ -96,7 +103,55 @@ def cmd_manager(ctx: Any) -> int:
         else:
             print(f"tick: run {res['run_id']} ({res.get('reason')}, {res.get('events', 0)} sự kiện)" if res.get("run_id") else f"tick bỏ qua: {res.get('skipped')}")
         return 0
+    if act == "capabilities":
+        return _cmd_capabilities(ctx)
     return cmd_chat(ctx)
+
+
+def _print_caps(info: dict[str, Any]) -> None:
+    e = info.get("effective") or {}
+    print(f"Khung điều phối viên: {e.get('profile')}  (cấu hình: {info.get('config')})")
+    print(f"  tool: {', '.join(e.get('tools') or []) or '-'}")
+    print(f"  MCP: {e.get('mcp')} · web: {'bật' if e.get('web') else 'tắt'}")
+    for w in e.get("warnings") or []:
+        print(f"  ! {w}")
+    if info.get("manager"):
+        print(f"  agent điều phối viên: {info['manager']} · tools: {info.get('manager_tools')}")
+        print(f"  {'VƯỢT KHUNG: ' + info['problem'] if info.get('problem') else 'cấu hình agent nằm trong khung'}")
+    print("  luôn giữ: hook guard + approval, sandbox OS, permissions.deny; không bypass/extra_args/subagents; không duyệt/policy/purge/ESTOP off")
+
+
+def _cmd_capabilities(ctx: Any) -> int:
+    from ..cli import eprint
+
+    a = ctx.args
+    if a.cap_action == "show":
+        info = ctx.call("manager.capabilities")
+        ctx.out(info) if ctx.json else _print_caps(info)
+        return 0
+    if a.cap_action == "reset":
+        new: dict[str, Any] = {"profile": "strict", "tools": None, "mcp": None, "web": None}
+    else:
+        cur = (ctx.call("manager.capabilities") or {}).get("config") or {}
+        new = {k: cur.get(k) for k in ("profile", "tools", "mcp", "web")}
+        if not any(x is not None for x in (a.profile, a.tools, a.mcp, a.web)):
+            eprint("lỗi: cần ít nhất một trong --profile/--tools/--mcp/--web")
+            return 1
+        if a.profile:
+            new["profile"] = a.profile
+        if a.tools is not None:
+            new["tools"] = None if a.tools == "profile" else [t.strip() for t in a.tools.split(",") if t.strip()]
+        if a.mcp:
+            new["mcp"] = None if a.mcp == "profile" else a.mcp
+        if a.web:
+            new["web"] = None if a.web == "profile" else a.web == "on"
+    ctx.call("config.set", {"key": "manager.capabilities", "value": new})
+    info = ctx.call("manager.capabilities")
+    if a.sync_agent and info.get("manager"):
+        ctx.call("agent.update", {"id": info["manager"], "changes": {"tool_policy": {"tools": (info.get("effective") or {}).get("tools") or []}}})
+        info = ctx.call("manager.capabilities")
+    ctx.out(info) if ctx.json else _print_caps(info)
+    return 0
 
 
 def cmd_chat(ctx: Any) -> int:

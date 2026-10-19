@@ -94,10 +94,12 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "answer": None,  # UX: trả lời câu hỏi = quyết định của người (agent không tự trả lời câu hỏi của mình/agent khác)
     "questions": {"answer", "escalate", "cancel"},
     "web": None,  # WEB: `cfharness web` sinh link đăng nhập = phiên NGƯỜI trên giao diện web
-    "manager": {"set", "chat", "tick"},  # M7: chỉ định/ra lệnh điều phối viên = quyền người (manager.* ∈ HUMAN_ONLY)
+    "manager": {"set", "chat", "tick", "capabilities"},  # M7: chỉ định/ra lệnh điều phối viên + khung quyền §9 = quyền người (manager.* ∈ HUMAN_ONLY)
     "chat": None,  # M7 terminal: `cfharness chat` = ra lệnh điều phối viên (manager.chat ∈ HUMAN_ONLY)
     "system": {"scan", "add", "rm", "lock", "unlock", "pause", "resume", "restart"},  # job launchd chạy NGOÀI sandbox (system.* ∈ HUMAN_ONLY)
     "home": {"migrate"},  # đổi tên cfharness: chuyển HUB_HOME (dừng daemon, đổi thư mục, viết lại DB) — chỉ người
+    # Lịch chạy tự động (schedules/): schedule.* ghi ∈ HUMAN_ONLY — agent không tự đặt việc chạy lặp
+    "schedule": {"add", "create", "edit", "update", "pause", "resume", "rm", "remove", "delete", "run-now", "run_now"},
 }
 
 # H-03: API dạng phương thức (`Path(..).unlink()`) đứng sau `)`/`]` nên KHÔNG dùng `\b` trước dấu chấm
@@ -242,7 +244,53 @@ def classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardContex
     if ctx.manager_run and not v.forbidden and (v.klass in ("policy", "hub", "guard") or v.rule in ("policy_write", "protected_write") and v.protected_id == "hub-policy"):
         return Verdict("destructive", v.rule, v.klass, f"điều phối viên không được chạm chính sách/hub an toàn ({v.reason})",
                        v.targets, v.protected_id, forbidden=True)
+    # §9 (manager.capabilities hermes): điều phối viên có Bash/Write/Web — ghi dữ liệu nội bộ hub (config.yaml, hub.db, agents/*, mã hub…),
+    # gọi web/dịch vụ loopback (web cfharness, MCP HTTP của hub), chạy `claude` lồng = CẤM thẳng, không mở approval (tránh xin người
+    # duyệt một thao tác nâng quyền của chính nó). Agent thường: các ca này vẫn giữ chờ người như cũ.
+    if ctx.manager_run and not v.forbidden and v.verdict != "safe" and (
+            (v.protected_id or "").startswith("hub-") or v.rule in ("webfetch_local", "nested_claude") or tool_name in ("Task", "Agent")
+            or any(_MGR_SELF_CFG.search(str(t)) for t in v.targets)):
+        return Verdict("destructive", v.rule, v.klass or "hub", f"điều phối viên không được làm việc này ({v.reason})",
+                       v.targets, v.protected_id, forbidden=True)
     return v
+
+
+# §9: file cấu hình/bộ nhớ mà `claude` có thể nạp ở lượt sau (tự cài chỉ dẫn/hook/MCP cho chính điều phối viên)
+_MGR_SELF_CFG = re.compile(r"(^|/)(CLAUDE(\.local)?\.md|\.mcp\.json|\.claude(/|$))", re.I)
+_NUMERIC_HOST_RE = re.compile(r"^[0-9a-fx.:]+$", re.I)
+
+
+def local_host(host: str | None) -> bool:
+    """Host loopback/mạng nội bộ (web cfharness `*.localhost`, MCP HTTP 127.0.0.1, dịch vụ LAN) — kể cả dạng IP số/hex/bát phân."""
+    import ipaddress
+
+    if not host:
+        return False
+    h = host.strip("[]").rstrip(".").lower()
+    if h == "localhost" or h.endswith(".localhost"):
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        try:
+            ip = ipaddress.ip_address(int(h, 0))
+        except (ValueError, TypeError):
+            # dạng số lạ (0177.0.0.1, 0x7f.1 …) mà trình phân giải vẫn hiểu là IP → coi là nội bộ (bảo thủ)
+            return bool(_NUMERIC_HOST_RE.match(h)) and any(c.isdigit() for c in h)
+    return ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_unspecified or ip.is_reserved
+    h = host.strip("[]").rstrip(".").lower()
+    if h == "localhost" or h.endswith(".localhost") or h in ("0", "0.0.0.0", "::", "::1"):
+        return True
+    for cand in (h,):
+        try:
+            ip = ipaddress.ip_address(cand)
+        except ValueError:
+            try:
+                ip = ipaddress.ip_address(int(cand, 0))
+            except (ValueError, TypeError):
+                return bool(_PRIVATE_HOST_RE.match(h)) and not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", h)
+        return ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_unspecified or ip.is_reserved
+    return False
 
 
 def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardContext) -> Verdict:
@@ -257,6 +305,16 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
             return classify_mcp(tool_name, ti, ctx)
         if tool_name in FILE_WRITE_TOOLS:
             return classify_file_write(tool_name, ti, ctx)
+        if tool_name == "WebFetch":
+            from urllib.parse import urlsplit
+
+            url = str(ti.get("url") or "")
+            try:
+                host = urlsplit(url if "//" in url else "//" + url).hostname
+            except ValueError:
+                host = None
+            if host is None or local_host(host):
+                return Verdict("uncertain", "webfetch_local", "network", f"WebFetch tới host nội bộ/loopback ({host or url[:80]}) — web/MCP của hub, dịch vụ LAN", [url[:200]])
         if tool_name in READ_ONLY_TOOLS:
             for k in ("file_path", "path", "notebook_path"):
                 v = ti.get(k)
@@ -534,6 +592,9 @@ class BashAnalyzer:
 
     # -------------------------------------------------------------- helpers
     def hit(self, verdict: str, rule: str, klass: str | None, reason: str, targets: list[str] | None = None, prot: ProtectedResource | None = None, forbidden: bool = False) -> None:
+        if self.ctx.manager_run and verdict != "safe" and any(_MGR_SELF_CFG.search(str(t)) for t in targets or []):
+            # §9: lệnh ghi CLAUDE.md/.claude/.mcp.json (thường chỉ là "write") — giữ đích để classify() cấm cho run manager
+            verdict, forbidden, reason = "destructive", True, f"điều phối viên không ghi cấu hình/bộ nhớ của claude ({reason})"
         self.v = _max(self.v, Verdict(verdict, rule, klass, reason, list(targets or []), prot.id if prot else None, forbidden))
 
     def sub(self, script: str, cwd: str | None = None) -> Verdict:
@@ -946,6 +1007,15 @@ class BashAnalyzer:
         if base in _names.HUB_CLI_NAMES:
             self.hub_cli(texts, unknown=unknown_targets or any(a.dynamic for a in args))
             return
+        if base == "claude" or base.endswith("claude-code") or (base in ("npx", "bunx", "pnpx", "pnpm", "yarn") and any("claude-code" in t for t in texts)):
+            # §9: `claude` lồng chạy ngoài hook guard của hub (đọc cấu hình người) — cờ bỏ phân quyền = lách guard → cấm mọi agent;
+            # run điều phối viên: cấm mọi `claude` lồng (giao việc bằng run_start/task_create) — ở classify()
+            joined = " ".join(texts)
+            if re.search(r"--(allow-)?dangerously-skip-permissions|bypassPermissions|--permission-prompt-tool|--settings\b|--mcp-config\b|--setting-sources\b", joined):
+                self.hit("destructive", "nested_claude", "hub", "claude lồng với cờ bỏ/ghi đè phân quyền — lách guard của hub", forbidden=True)
+            else:
+                self.hit("write", "nested_claude", None, "claude lồng (ngoài hook guard của hub)")
+            return
         if base in DB_CLIENTS or base in ("dropdb", "dropuser", "mysqladmin", "pg_restore", "mongorestore", "redis-server"):
             self.db_client(base, args, sc)
             return
@@ -1144,6 +1214,19 @@ class BashAnalyzer:
                     self.script_file(words[0], "chạy script")
                     return
         if base in ("curl", "wget", "http", "xh"):
+            if self.ctx.manager_run:  # §9: điều phối viên không gọi dịch vụ loopback/LAN (web/MCP HTTP của hub) — sandbox là lớp chính
+                from urllib.parse import urlsplit
+
+                for t in texts:
+                    if t.startswith("-") or not ("://" in t or ":" in t or "." in t or t.lower().startswith("localhost")):
+                        continue  # bỏ giá trị của tuỳ chọn (`-m 3`) — chỉ xét đối số trông như URL/host
+                    try:
+                        host = urlsplit(t if "//" in t else "//" + t).hostname
+                    except ValueError:
+                        host = None
+                    if host and local_host(host):
+                        self.hit("destructive", "webfetch_local", "hub", f"{base} tới host nội bộ/loopback ({host})", forbidden=True)
+                        return
             outs = [texts[i + 1] for i, t in enumerate(texts[:-1]) if t in ("-o", "--output", "-O", "--output-document")]
             for o in outs:
                 p = self.path(o)
@@ -2004,6 +2087,8 @@ class BashAnalyzer:
             if sub == "guard" and v1 in ("protect", "integrity", "sandbox", "repo-deny", "repo_deny") and len(t) > 2 and t[2] in ("list", "ls", "status", "show"):
                 verbs = set()
             if sub == "team" and v1 == "member" and len(t) > 2 and t[2] in ("list", "ls"):
+                verbs = set()
+            if sub == "manager" and v1 == "capabilities" and len(t) > 2 and t[2] in ("show", "get"):
                 verbs = set()
             if verbs is None or v1 in verbs:
                 # H-05: lệnh ứng với method RPC chỉ-người — daemon từ chối mọi lời gọi từ run → chặn thẳng, không mở approval

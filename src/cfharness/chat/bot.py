@@ -63,6 +63,7 @@ HELP = """cfharness qua Telegram — lệnh (bấm / để xem menu):
 /stop [run] — dừng run (không ghi run → chọn bằng nút)
 /estop on [lý do] | /estop off — dừng khẩn cấp toàn hub (tắt cần xác nhận)
 /digest — tóm tắt học 24 giờ qua
+/lich — lịch chạy tự động (xem; tạo/tắt: nhắn điều phối viên)
 /moi — mở cuộc trò chuyện mới với điều phối viên
 /help — trợ giúp
 Tin nhắn thường (không bắt đầu bằng /) → gửi cho ĐIỀU PHỐI VIÊN (agent quản lý cả đội); reply vào tin của
@@ -76,6 +77,7 @@ BOT_COMMANDS = [
     ("luotchay", "Lượt chạy gần nhất"), ("approvals", "Yêu cầu chờ duyệt"), ("stop", "Dừng một lượt chạy"),
     ("moi", "Cuộc trò chuyện mới với điều phối viên"), ("digest", "Tóm tắt học 24 giờ qua"), ("estop", "Dừng khẩn cấp: /estop on|off"),
     ("help", "Trợ giúp"),
+    ("lich", "Lịch chạy tự động (xem)"),
 ]
 # T-A: bàn phím nhanh (chat riêng) — bấm = gửi đúng chữ này → lệnh tương ứng
 QUICK_KEYS = {"📋 Cần bạn": "/canban", "📊 Trạng thái": "/trangthai", "➕ Giao việc": "/giaoviec", "🤖 Agent": "/agent"}
@@ -521,6 +523,7 @@ class TelegramBot:
             "/approvals": self._c_approvals, "/run": self.flows.c_run, "/giaoviec": self.flows.c_run, "/stop": self.flows.c_stop,
             "/estop": self._c_estop, "/digest": self._c_digest, "/moi": self._c_new, "/new": self._c_new,
             "/hoi": self._c_questions, "/questions": self._c_questions, "/canban": self._c_inbox,
+            "/lich": self._c_schedules, "/schedules": self._c_schedules,
         }
         fn = handlers.get(cmd)
         if fn is None:
@@ -532,6 +535,29 @@ class TelegramBot:
             out = f"Lỗi: {clip(e, 500)}"
         if out:
             await self._send(api, cid, out)
+
+    async def _c_schedules(self, cid: str, rest: str, api: TelegramApi) -> str:
+        """Lịch chạy tự động (CHỈ ĐỌC, qua `self.call` → cổng người + allowlist). Văn bản thuần (không HTML, không nút); tên/lịch có thể
+        do điều phối viên viết → bỏ ký tự điều khiển/vô hình."""
+        from ..notify.telegram import visible
+
+        rows = await self.call(cid, "schedule.list", {"limit": 30})
+        if not rows:
+            return "⏰ Chưa có lịch nào. Nhắn điều phối viên (vd \"8h sáng mỗi ngày tóm tắt góp ý mới gửi t\") hoặc dùng `cfharness schedule add`."
+        icon = {"active": "●", "paused": "⏸", "done": "✓"}
+        lines = [f"⏰ Lịch chạy tự động ({len(rows)}):"]
+        for r in rows:
+            nxt = str(r.get("next_run_at") or "")
+            try:
+                nxt = datetime.fromisoformat(nxt.replace("Z", "+00:00")).astimezone().strftime("%d/%m %H:%M") if nxt else "—"
+            except ValueError:
+                pass
+            who = "điều phối viên" if str(r.get("created_by") or "").startswith("manager:") else "bạn"
+            lines.append(f"{icon.get(r.get('status'), '?')} {r['id']} · {visible(str(r.get('name') or ''))[:50]}\n"
+                         f"   {visible(str(r.get('describe') or r.get('expr') or ''))[:60]} · lượt tới {nxt} · tạo bởi {who}"
+                         + (f" · lỗi {r['fail_count']}" if r.get("fail_count") else ""))
+        lines.append("Tắt/bật: nhắn điều phối viên, hoặc `cfharness schedule pause|resume <id>`.")
+        return fit("\n".join(lines))
 
     async def _c_help(self, cid: str, rest: str, api: TelegramApi) -> str | None:
         if cid.startswith("-"):

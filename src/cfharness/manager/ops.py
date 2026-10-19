@@ -491,3 +491,55 @@ class ManagerOps:
         self._action("notify_owner", a, summary=f"báo người: {text[:120]}", audit_id=audit_id)
         return {"delivered_to": conv["channel"] if conv else None, "conversation_id": cid, "note": None if conv else "no human conversation yet — stored as event only"}
 
+
+    # ================================================================== LỊCH CHẠY TỰ ĐỘNG (schedules/)
+    _SCHED_KEEP = ("id", "name", "kind", "target", "options", "expr", "describe", "status", "paused_reason", "deliver_to", "budget_usd", "created_by",
+                   "next_run_at", "next_run_local", "last_run_at", "last_run_id", "last_task_id", "last_status", "fail_count", "run_count")
+
+    def op_schedule_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
+        rows = self.hub.schedules.list(status=a.get("status") or None, limit=50)  # type: ignore[attr-defined]
+        out = []
+        for r in rows:
+            d = {k: r.get(k) for k in self._SCHED_KEEP}
+            d["prompt"] = str(r.get("prompt") or "")[:300]
+            d["yours"] = str(r.get("created_by") or "").startswith("manager:")
+            out.append(d)
+        return out
+
+    def op_schedule_get(self, a: dict[str, Any]) -> dict[str, Any]:
+        r = self.hub.schedules.get(str(a.get("id") or ""), fires=10)  # type: ignore[attr-defined]
+        d = {k: r.get(k) for k in self._SCHED_KEEP}
+        d.update({"prompt": str(r.get("prompt") or "")[:1500], "yours": str(r.get("created_by") or "").startswith("manager:"),
+                  "fires": [{k: f.get(k) for k in ("fired_at", "status", "reason", "run_id", "task_id", "manual")} for f in r.get("fires") or []]})
+        return d
+
+    async def op_schedule_create(self, a: dict[str, Any]) -> Any:
+        p = {k: a[k] for k in ("name", "kind", "expr", "prompt", "target", "team", "assignee", "budget_usd") if a.get(k) is not None}
+        dt = a.get("deliver_to")
+        if isinstance(dt, str):
+            dt = {"conversation_id": dt} if dt.startswith("mc_") else {"channel": dt}
+        if not dt:
+            conv = self._owner_conversation()  # mặc định: hội thoại hiện tại của người (không bao giờ heartbeat)
+            dt = {"conversation_id": conv} if conv else {}
+        p["deliver_to"] = dt
+        if p.get("budget_usd") is not None:
+            p["budget_usd"] = self._clamp_budget(p["budget_usd"])
+        res = await self._rpc("schedule_create", "schedule.create", p, a,
+                              summary=f"tạo lịch '{str(a.get('name') or a.get('prompt') or '')[:60]}' ({a.get('expr')})")
+        return {k: (res or {}).get(k) for k in ("id", "name", "kind", "expr", "describe", "next_run_local", "deliver_to", "budget_usd")} | {
+            "next": "tell the owner what/when/where in one line and how to stop it: schedule_pause or `cfharness schedule pause <id>`"}
+
+    async def op_schedule_pause(self, a: dict[str, Any]) -> Any:
+        res = await self._rpc("schedule_pause", "schedule.pause", {"id": a.get("id"), "reason": a.get("reason")}, a, summary=f"tạm dừng lịch {a.get('id')}")
+        return {k: (res or {}).get(k) for k in ("id", "status", "name")}
+
+    async def op_schedule_resume(self, a: dict[str, Any]) -> Any:
+        res = await self._rpc("schedule_resume", "schedule.resume", {"id": a.get("id")}, a, summary=f"bật lại lịch {a.get('id')}")
+        return {k: (res or {}).get(k) for k in ("id", "status", "name", "next_run_at")}
+
+    async def op_schedule_rm(self, a: dict[str, Any]) -> Any:
+        return await self._rpc("schedule_rm", "schedule.rm", {"id": a.get("id")}, a, summary=f"xoá lịch {a.get('id')}")
+
+    async def op_schedule_run_now(self, a: dict[str, Any]) -> Any:
+        res = await self._rpc("schedule_run_now", "schedule.run_now", {"id": a.get("id")}, a, summary=f"chạy ngay lịch {a.get('id')}")
+        return {k: (res or {}).get(k) for k in ("id", "run_id", "task_id", "conversation_id")}

@@ -163,6 +163,13 @@ EVENT_LEVELS: dict[str, str] = {
     "question.reminder": "summary",  # nhắc người: question_id, reminder_count, wait_s
     # Hệ thống ngoài hub (systems/): thao tác job launchd (system, label, action pause|resume|restart, ok, by, reason, detail)
     "system.job": "summary",
+    # Lịch chạy tự động (schedules/): schedule_id, name, kind, expr, status, next_run_at, created_by, by (+ action/reason/fire…)
+    "schedule.created": "summary",
+    "schedule.updated": "summary",  # action: edit|resume|rm
+    "schedule.fired": "summary",  # fire_id, run_id|task_id, conversation_id, due_at, manual, catchup
+    "schedule.skipped": "summary",  # reason: estop|overlap|missed|agent_paused|agent_archived|team_estop|no_manager|blocked: …
+    "schedule.failed": "summary",  # reason, fail_count
+    "schedule.paused": "summary",  # by (user|manager:<id>|hub — tự dừng sau lỗi liên tiếp), reason
 }
 
 # Không ghi vào bảng `events` (chỉ ring buffer + stdout thô) — FR-OB-01.

@@ -483,6 +483,11 @@ class RunManager:
             allowed_mcp.append(SERVER_NAME)
             tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + [f"mcp__{SERVER_NAME}"]))
             env_extra = {**env_extra, "CFHARNESS_RUN_ID": run_id}
+        if is_mgr:  # §9 khung `manager.capabilities.mcp=read_only_trusted`: tool MCP ghi (đã probe) bị chặn tĩnh cho run manager
+            mgr_deny = hub.manager.perms.mcp_run_disallowed(agent)
+            if mgr_deny:
+                tp["disallowed_tools"] = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + mgr_deny))
+                tp["allowed_tools"] = [x for x in tp.get("allowed_tools") or [] if x not in mgr_deny]
         if opts.get("disallowed_tools"):
             tp["disallowed_tools"] = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + list(opts["disallowed_tools"])))
         # M4-A (FR-RT-10): system prompt = quy ước + SOUL + memory snapshot + chỉ mục skill; run resume/fork dùng lại đúng

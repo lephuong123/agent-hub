@@ -40,7 +40,7 @@ log = logging.getLogger("cfharness.guard.integrity")
 
 POLICY = "policy"
 CONFIG = "config.yaml"
-SECURITY_KEYS = ("guard", "approval", "runtime", "secrets", "telemetry", "notify", "learning_guard", "manager")  # M7 MGR-6: trần của điều phối viên
+SECURITY_KEYS = ("guard", "approval", "runtime", "secrets", "telemetry", "notify", "learning_guard", "manager", "schedules")  # M7 MGR-6: trần của điều phối viên
 MAX_FILE = 2_000_000
 
 
