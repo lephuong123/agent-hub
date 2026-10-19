@@ -193,6 +193,20 @@ def home_persistence_dirs() -> list[str]:
                                   ".zprofile", ".zshenv", ".zlogin", ".claude", ".claude.json", ".local/bin")]
 
 
+def other_default_homes(hub_home: Path) -> list[str]:
+    """Home mặc định dưới ~ (tên mới `.cfharness` + tên cũ `.agent-hub`) KHÔNG phải/không chứa/không nằm trong home đang dùng."""
+    from ..paths import default_homes
+
+    cur = {str(hub_home).rstrip("/"), os.path.realpath(hub_home).rstrip("/")}
+    out: list[str] = []
+    for other in default_homes():
+        o = str(other).rstrip("/")
+        if o in cur or os.path.realpath(o) in cur or any(c.startswith(o + "/") or o.startswith(c + "/") for c in cur):
+            continue
+        out.append(o)
+    return out
+
+
 def fixed_protected_dirs(hub_home: Path, socket: Path, sb_cfg: dict[str, Any] | None = None) -> list[str]:
     """Vùng LUÔN cấm ghi (không bao giờ gỡ theo cwd; workspace không được trùng/chứa/nằm trong — MGR-1).
     Tách riêng với tên phát hiện động trong HUB_HOME (vd `evals/` bản sao eval vẫn ghi được)."""
@@ -206,6 +220,7 @@ def fixed_protected_dirs(hub_home: Path, socket: Path, sb_cfg: dict[str, Any] | 
         out += [str(hp / n) for n in HUB_WRITE_DENY_NAMES]
         out += [f"{hp}/agents/*/{n}" for n in AGENT_WRITE_DENY_NAMES]
     out += [str(socket), str(token_path(socket))]
+    out += other_default_homes(hub_home)
     if sb_cfg.get("protect_hub_code", True):
         out.append(os.path.realpath(package_dir()))
     out += home_persistence_dirs() + path_bin_dirs() + executable_zones()
@@ -282,6 +297,10 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
         uh = os.path.expanduser("~")
         deny_r += [f"{uh}/{x}" for x in (".ssh", ".git-credentials", ".config/git/credentials", ".config/gh", ".config/hub", ".netrc",
                                          ".docker/config.json", ".config/glab-cli", ".npmrc", ".pypirc", "Library/Keychains")]
+    # đổi tên cfharness: home mặc định KHÔNG phải home đang dùng (cũ hoặc mới) — chặn cả đọc lẫn ghi
+    others = other_default_homes(home)
+    deny_w += others
+    deny_r += others
     deny_r += [str(x) for x in sb_cfg.get("extra_deny_read") or []]
     socks = [str(x) for x in sb_cfg.get("allow_unix_sockets") or []]
     if sb_cfg.get("allow_ssh_agent", False) and os.environ.get("SSH_AUTH_SOCK"):

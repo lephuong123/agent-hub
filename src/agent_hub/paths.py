@@ -1,6 +1,8 @@
 """Bố cục thư mục `HUB_HOME` (BRD §8.2).
 
 HUB_HOME mặc định `~/.agent-hub`, ghi đè bằng biến môi trường `AGENT_HUB_HOME`.
+Đổi tên sang cfharness: biến môi trường tên CŨ vẫn được đọc làm dự phòng; nếu home mặc định chưa có mà home CŨ
+(`~/.agent-hub`) còn → dùng home cũ (`legacy_home_in_use`) cho tới khi người chạy `home migrate` (`home_migrate.py`).
 """
 
 from __future__ import annotations
@@ -10,8 +12,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import names as _names
+
 ENV_HOME = "AGENT_HUB_HOME"
 ENV_SOCKET = "AGENT_HUB_SOCKET"
+DEFAULT_HOME_DIRNAME = ".agent-hub"
+SOCKET_PREFIX = "agent-hub-"
 # macOS giới hạn đường dẫn AF_UNIX ~104 byte.
 _MAX_SOCK_PATH = 100
 
@@ -19,10 +25,33 @@ _MAX_SOCK_PATH = 100
 def resolve_home(home: str | os.PathLike[str] | None = None) -> Path:
     if home is not None:
         return Path(home).expanduser().resolve()
-    env = os.environ.get(ENV_HOME)
-    if env:
-        return Path(env).expanduser().resolve()
-    return (Path.home() / ".agent-hub").resolve()
+    for name in dict.fromkeys((ENV_HOME, _names.LEGACY_ENV_HOME)):
+        env = os.environ.get(name)
+        if env:
+            return Path(env).expanduser().resolve()
+    default = Path.home() / DEFAULT_HOME_DIRNAME
+    legacy = legacy_default_home()
+    if legacy is not None and not default.exists() and legacy.is_dir():
+        return legacy.resolve()
+    return default.resolve()
+
+
+def legacy_default_home() -> Path | None:
+    """Home mặc định tên CŨ (`~/.agent-hub`) nếu khác home mặc định hiện tại; None nếu trùng (trước khi đổi tên)."""
+    if _names.LEGACY_HOME_DIRNAME == DEFAULT_HOME_DIRNAME:
+        return None
+    return Path.home() / _names.LEGACY_HOME_DIRNAME
+
+
+def default_homes() -> list[Path]:
+    """Mọi home mặc định dưới ~ (mới + cũ) — sandbox chặn home KHÔNG dùng như vùng hub."""
+    return [Path.home() / n for n in dict.fromkeys((DEFAULT_HOME_DIRNAME, *_names.HUB_HOME_DIRNAMES))]
+
+
+def legacy_home_in_use(home: Path) -> bool:
+    """True khi đang chạy trên home CŨ do chưa `home migrate` (không đặt biến môi trường/`--home`)."""
+    legacy = legacy_default_home()
+    return legacy is not None and home == legacy.resolve()
 
 
 @dataclass(frozen=True)
@@ -50,14 +79,15 @@ class HubPaths:
     def socket(self) -> Path:
         """Đường dẫn Unix socket điều khiển. Nếu `HUB_HOME/hub.sock` quá dài cho AF_UNIX
         thì dùng `/tmp/agent-hub-<hash>.sock` (xác định theo HUB_HOME, client và daemon tính giống nhau)."""
-        env = os.environ.get(ENV_SOCKET)
-        if env:
-            return Path(env)
+        for name in dict.fromkeys((ENV_SOCKET, _names.LEGACY_ENV_SOCKET)):
+            env = os.environ.get(name)
+            if env:
+                return Path(env)
         p = self.home / "hub.sock"
         if len(str(p)) <= _MAX_SOCK_PATH:
             return p
         digest = hashlib.sha256(str(self.home).encode()).hexdigest()[:12]
-        return Path("/tmp") / f"agent-hub-{os.getuid()}-{digest}.sock"
+        return Path("/tmp") / f"{SOCKET_PREFIX}{os.getuid()}-{digest}.sock"
 
     @property
     def agents_dir(self) -> Path:

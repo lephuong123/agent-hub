@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from .. import names as _names
 from . import shell
 from .policy import Policy, ProtectedResource
 
@@ -93,6 +94,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "web": None,  # WEB: `agent-hub web` sinh link đăng nhập = phiên NGƯỜI trên giao diện web
     "manager": {"set", "chat", "tick"},  # M7: chỉ định/ra lệnh điều phối viên = quyền người (manager.* ∈ HUMAN_ONLY)
     "chat": None,  # M7 terminal: `agent-hub chat` = ra lệnh điều phối viên (manager.chat ∈ HUMAN_ONLY)
+    "home": {"migrate"},  # đổi tên cfharness: chuyển HUB_HOME (dừng daemon, đổi thư mục, viết lại DB) — chỉ người
 }
 
 # H-03: API dạng phương thức (`Path(..).unlink()`) đứng sau `)`/`]` nên KHÔNG dùng `\b` trước dấu chấm
@@ -105,9 +107,15 @@ JS_DESTRUCTIVE = re.compile(
 PL_DESTRUCTIVE = re.compile(r"\b(unlink|rmtree|remove_tree|rmdir)\b|FileUtils\.(rm|rm_r|rm_rf|remove|remove_dir|remove_entry|rm_f)|File\.(delete|unlink)|Dir\.(delete|rmdir)|\brm_rf\b|do shell script|\bftruncate\b|File\.truncate", re.I)
 JS_TEMPLATE = re.compile(r"`([^`$\\]*)`")
 # H-01: đụng mặt điều khiển hub từ mã/lệnh → forbidden
-HUB_SOCKET_RE = re.compile(r"hub\.sock|agent-hub-[^/\s'\"]*\.sock|\bAGENT_HUB_SOCKET\b|\.sock\.auth\b|human\.token|mcp_server/tokens\.json", re.I)
-HUB_MODULE_RE = re.compile(r"(\bimport\s+agent_hub\b|\bfrom\s+agent_hub\b|\bagent_hub\.(rpc|cli|daemon|auth|approvals|guard|mcp_server|learning|evals|hub)\b|__import__\(\s*['\"]agent_hub|import_module\(\s*['\"]agent_hub|require\(['\"][^'\"]*agent[-_]hub)")
-HUB_HOME_REF_RE = re.compile(r"\bAGENT_HUB_HOME\b|\.agent-hub\b")
+# Tên mới (cfharness) LẪN tên cũ (agent-hub) — `names.py`, nhận diện vĩnh viễn
+_SOCK_PFX = _names.alt(_names.HUB_SOCKET_PREFIXES)
+_MOD = _names.alt(_names.HUB_MODULE_NAMES)
+_CLI = _names.alt(_names.HUB_CLI_NAMES)
+_ENV_HOME = _names.alt(_names.env_names("HOME"))
+_HOME_DIR = _names.alt(_names.HUB_HOME_DIRNAMES)
+HUB_SOCKET_RE = re.compile(rf"hub\.sock|{_SOCK_PFX}[^/\s'\"]*\.sock|\b{_names.alt(_names.env_names('SOCKET'))}\b|\.sock\.auth\b|human\.token|mcp_server/tokens\.json", re.I)
+HUB_MODULE_RE = re.compile(rf"(\bimport\s+{_MOD}\b|\bfrom\s+{_MOD}\b|\b{_MOD}\.(rpc|cli|daemon|auth|approvals|guard|mcp_server|learning|evals|hub)\b|__import__\(\s*['\"]{_MOD}|import_module\(\s*['\"]{_MOD}|require\(['\"][^'\"]*{_CLI})")
+HUB_HOME_REF_RE = re.compile(rf"\b{_ENV_HOME}\b|{_HOME_DIR}\b")
 # R3-1: đọc thông tin xác thực từ keychain / credential helper / gh (sandbox KHÔNG chặn Mach IPC tới SecurityServer)
 KEYCHAIN_CODE_RE = re.compile(r"SecKeychain\w*|SecItemCopyMatching|SecItemCopy|kSecClass|Security\.framework|/System/Library/Frameworks/Security|"
                               r"\bkeyring\.get_password|\bkeytar\b|find-(generic|internet)-password|dump-keychain|credential-osxkeychain|"
@@ -116,7 +124,7 @@ SECURITY_READ_SUBS = re.compile(r"^(find-(generic|internet)-password|find-certif
                                 r"export-key|unlock-keychain|set-keychain-settings|show-keychain-info|dump-trust-settings|authorizationdb|"
                                 r"set-generic-password-partition-list|set-key-partition-list|add-(generic|internet)-password)$")
 # WT-3: dấu hiệu đường dẫn trỏ vào vùng nhạy cảm của HUB_HOME (dùng cho đích động không giải được)
-SENSITIVE_HINT = re.compile(r"(^|/)(auth|secrets)(/|$)|/(web|tokens)\.json$|\.sock(\.auth)?$|/hub\.db|AGENT_HUB_HOME|\.agent-hub")
+SENSITIVE_HINT = re.compile(rf"(^|/)(auth|secrets)(/|$)|/(web|tokens)\.json$|\.sock(\.auth)?$|/hub\.db|{_ENV_HOME}|{_HOME_DIR}")
 UNIX_SOCKET_RE = re.compile(r"\bAF_UNIX\b|UNIX-CONNECT|UNIX-CLIENT|\bcreateConnection\s*\(\s*\{?\s*path|\bnet\.connect\s*\(\s*\{?\s*path|\bnet\.connect\s*\(\s*['\"]/|UNIXSocket|socket\.AF_UNIX|IO::Socket::UNIX|\bunix:/", re.I)
 LIST_ARGV_RE = re.compile(r"""\[\s*((?:(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*,\s*)*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'))\s*,?\s*\]""")
 JS_SPAWN_RE = re.compile(r"""\b(?:spawn|spawnSync|execFile|execFileSync|Deno\.Command|Bun\.spawn)\s*\(\s*(["'])([^"']+)\1\s*,\s*\[([^\]]*)\]""")
@@ -432,7 +440,7 @@ def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdi
         return Verdict("safe", "hub_guard_tool")
     if MCP_FORBIDDEN.match(tool) or (server.startswith("hub") and tool in ("approve", "deny")):
         return Verdict("destructive", "self_approval", "hub", f"agent không được tự duyệt/sửa chính sách qua {tool_name}", forbidden=True)
-    is_hub = server in ctx.hub_mcp_servers or server in ("agent-hub", "agent_hub", "hub")
+    is_hub = server in ctx.hub_mcp_servers or server in _names.HUB_MCP_SERVER_NAMES
     if (is_hub or tool.startswith("hub_")) and HUB_MCP_HUMAN_ONLY.match(tool):
         # H-18: MCP server của hub (kể cả đăng ký dưới tên khác) — tool ứng với method chỉ-người
         return Verdict("destructive", "hub_mcp_human_only", "hub", f"{tool_name}: thao tác chỉ dành cho người (agent không được gọi)", forbidden=True)
@@ -645,9 +653,12 @@ class BashAnalyzer:
                     self.hit("destructive", "catalog_pattern", "policy", pat.get("note") or f"khớp mẫu {pat['pattern']}")
             except re.error:
                 continue
-        env: dict[str, str | None] = {"HOME": self.ctx.home, "AGENT_HUB_HOME": _hub_home(self.ctx)}
+        env: dict[str, str | None] = {"HOME": self.ctx.home}
+        for n in _names.env_names("HOME"):  # cả tên cũ: `$AGENT_HUB_HOME/...` vẫn giải ra HUB_HOME
+            env[n] = _hub_home(self.ctx)
         if self.ctx.hub_socket:
-            env["AGENT_HUB_SOCKET"] = self.ctx.hub_socket
+            for n in _names.env_names("SOCKET"):
+                env[n] = self.ctx.hub_socket
         res = shell.parse(norm, env=env, home=self.ctx.home)
         if res.error:
             self.hit("uncertain", "parse_error", "system", f"không phân tích được lệnh: {res.error}")
@@ -929,7 +940,7 @@ class BashAnalyzer:
         if base in INTERPRETERS or re.fullmatch(r"(python|pypy|ruby|perl|node|php)[\d.]*", base):
             self.interpreter(base, args, sc)
             return
-        if base in ("agent-hub", "agent_hub"):
+        if base in _names.HUB_CLI_NAMES:
             self.hub_cli(texts, unknown=unknown_targets or any(a.dynamic for a in args))
             return
         if base in DB_CLIENTS or base in ("dropdb", "dropuser", "mysqladmin", "pg_restore", "mongorestore", "redis-server"):
@@ -1659,7 +1670,7 @@ class BashAnalyzer:
                 break
             if t == "-m":
                 mod = args[i + 1].text if i + 1 < len(args) else ""
-                if mod == "agent_hub" or mod.startswith("agent_hub.") or shell.DYN in mod:
+                if mod.split(".")[0] in _names.HUB_MODULE_NAMES or shell.DYN in mod:
                     # H-01: `python -m agent_hub.cli approve …` — mọi module của hub từ trong run là forbidden
                     self.hit("destructive", "hub_module", "hub", f"agent không được chạy module nội bộ của hub ({mod or '?'})", forbidden=True)
                 elif mod in ("shutil", "os"):
@@ -1767,7 +1778,7 @@ class BashAnalyzer:
                 if not lit or len(lit) > 4000:
                     continue
                 if re.match(r"^\s*(rm|git|find|dd|mkfs|shred|truncate|chmod|chown|psql|mysql|sqlite3|sh|bash|zsh|curl|sudo|mv|cp|ln|tee|install|rsync|"
-                            r"unlink|agent-hub|python[\d.]*|node|perl|ruby|nc|socat|xargs|kill|pkill|docker|kubectl|terraform|aws|gh|npm|pnpm|yarn|bun|npx|tsx|launchctl|make)\b", lit):
+                            rf"unlink|{_CLI}|python[\d.]*|node|perl|ruby|nc|socat|xargs|kill|pkill|docker|kubectl|terraform|aws|gh|npm|pnpm|yarn|bun|npx|tsx|launchctl|make)\b", lit):
                     found = True
                     self.merge(self.sub(lit), f"lệnh trong mã {base}")
             for m in LIST_ARGV_RE.finditer(code):
