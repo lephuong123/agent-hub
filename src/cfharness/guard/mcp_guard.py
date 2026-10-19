@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 
+from ..oscompat import utf8_stdio
 from .hook import _args, rpc_call
 
 PROTOCOL_DEFAULT = "2025-06-18"
@@ -93,6 +94,7 @@ def handle(msg: dict, run_id: str, sock: str, timeout: float) -> None:
 
 
 def main() -> int:
+    utf8_stdio()
     a = _args(sys.argv[1:])
     run_id, sock, timeout = a.get("run", ""), a.get("socket", ""), float(a.get("timeout") or 870)
     threads: list[threading.Thread] = []

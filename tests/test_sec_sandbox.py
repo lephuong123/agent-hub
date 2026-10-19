@@ -16,7 +16,7 @@ import pytest
 from cfharness.auth import token_path
 from cfharness.guard.classifier import GuardContext, classify
 from cfharness.guard.policy import PolicyStore, package_dir
-from cfharness.guard.runtime import build_settings, check_extra_args, sandbox_settings
+from cfharness.guard.runtime import build_settings, check_extra_args, rule_path, sandbox_settings, sandbox_supported, sb_path
 from cfharness.guard.service import is_hub_mcp_config
 from cfharness.runtime.base import RunSpec
 from cfharness.runtime.claude_cli import ArgvError, build_argv
@@ -39,20 +39,21 @@ def test_sandbox_blocks_hub_writes_reads_and_socket(tmp_path, monkeypatch):
     monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/ssh-agent.sock")
     hub, sock, s = _settings(tmp_path)
     sb = s["sandbox"]
-    assert sb["enabled"] and sb["failIfUnavailable"] and sb["allowUnsandboxedCommands"] is False and sb["autoAllowBashIfSandboxed"] is False
+    # Windows: sandbox chưa có → không fail-closed (CLI sẽ từ chối mọi run) — xem docs/dev-notes/windows.md
+    assert sb["enabled"] and sb["failIfUnavailable"] is sandbox_supported() and sb["allowUnsandboxedCommands"] is False and sb["autoAllowBashIfSandboxed"] is False
     dw, dr = sb["filesystem"]["denyWrite"], sb["filesystem"]["denyRead"]
     for p in ("policy", "hub.db", "hub.db-wal", "config.yaml", "secrets", "mcp", "auth"):
-        assert str(hub / p) in dw, p
-    assert str(hub / "agents" / "a" / "MEMORY.md") in dw and str(hub / "agents" / "a" / "runtime") in dw
-    assert os.path.realpath(package_dir()) in dw  # mã nguồn hook/guard
+        assert sb_path(hub / p) in dw, p
+    assert sb_path(hub / "agents" / "a" / "MEMORY.md") in dw and sb_path(hub / "agents" / "a" / "runtime") in dw
+    assert sb_path(os.path.realpath(package_dir())) in dw  # mã nguồn hook/guard
     # workspace của chính run KHÔNG bị chặn (không có tổ tiên nào của cwd trong denyWrite)
-    cwd = str(hub / "agents" / "a" / "workspaces" / "r1")
+    cwd = sb_path(hub / "agents" / "a" / "workspaces" / "r1")
     assert not any(cwd == d or cwd.startswith(d.rstrip("/") + "/") for d in dw)
-    assert str(token_path(sock)) in dr and str(hub / "secrets") in dr and f"{hub}/agents/*/runtime" in dr
+    assert sb_path(token_path(sock)) in dr and sb_path(hub / "secrets") in dr and sb_path(f"{hub}/agents/*/runtime") in dr
     # Unix socket: hub.sock không bao giờ được phép; ssh-agent được (git push)
     socks = sb["network"].get("allowUnixSockets") or []
     # R2-2: ssh-agent mặc định TẮT (agent không push được); người bật bằng guard.sandbox.allow_ssh_agent
-    assert str(sock) not in socks and "/tmp/ssh-agent.sock" not in socks
+    assert sb_path(sock) not in socks and "/tmp/ssh-agent.sock" not in socks
     _, _, s_on = _settings(tmp_path / "on", sandbox={"allow_ssh_agent": True})
     assert "/tmp/ssh-agent.sock" in (s_on["sandbox"]["network"].get("allowUnixSockets") or [])
     from cfharness.guard.runtime import DEFAULT_ALLOWED_DOMAINS  # R3-1: mặc định hẹp, không "*"
@@ -60,13 +61,13 @@ def test_sandbox_blocks_hub_writes_reads_and_socket(tmp_path, monkeypatch):
     assert not any("github" in d for d in sb["network"]["allowedDomains"])
     # tool Read/Grep/Glob của agent cũng không đọc được token/secret/mcp.json
     deny = s["permissions"]["deny"]
-    assert f"Read(/{token_path(sock)})" in deny and f"Read(/{hub}/secrets/**)" in deny and f"Read(/{hub}/agents/*/runtime/**)" in deny
+    assert f"Read(/{rule_path(token_path(sock))})" in deny and f"Read(/{rule_path(hub)}/secrets/**)" in deny and f"Read(/{rule_path(hub)}/agents/*/runtime/**)" in deny
     json.dumps(s)  # settings.json hợp lệ
 
 
 def test_sandbox_config_cannot_reopen_hub_socket_or_exclude_commands(tmp_path):
     hub, sock, s = _settings(tmp_path, sandbox={"allow_unix_sockets": [str(tmp_path / "hub" / "hub.sock")]})
-    assert str(sock) not in (s["sandbox"]["network"].get("allowUnixSockets") or [])
+    assert sb_path(sock) not in (s["sandbox"]["network"].get("allowUnixSockets") or [])
     hub2 = tmp_path / "h2"
     (hub2 / "policy").mkdir(parents=True)
     s2 = build_settings({"sandbox": {"excludedCommands": ["python3:*"], "filesystem": {"denyWrite": ["/x"]}}}, run_id="r", socket=hub2 / "hub.sock",
@@ -81,7 +82,7 @@ def test_eval_overlay_workspace_not_blocked(tmp_path):
     hub = tmp_path / "hub"
     (hub / "evals" / "ov1" / "workspaces" / "r").mkdir(parents=True)
     sb = sandbox_settings(hub, hub / "hub.sock", {}, cwd=hub / "evals" / "ov1" / "workspaces" / "r")
-    assert str(hub / "evals") not in sb["filesystem"]["denyWrite"]
+    assert sb_path(hub / "evals") not in sb["filesystem"]["denyWrite"]
 
 
 # ------------------------------------------------------------------------------------------- H-18 extra_args
@@ -145,6 +146,6 @@ def test_guard_off_drops_hook_but_keeps_sandbox_and_static_deny(tmp_path):
     s = build_settings({}, run_id="r", socket=sock, policy_dir=hub / "policy", guard_cfg={"hook_timeout_s": 900},
                        approval_timeout_s=300, cwd=hub / "ws", hook=False)
     assert "PreToolUse" not in (s.get("hooks") or {})
-    assert s["sandbox"]["enabled"] and str(hub / "policy") in s["sandbox"]["filesystem"]["denyWrite"]
-    assert str(token_path(sock)) in s["sandbox"]["filesystem"]["denyRead"]
-    assert f"Read(/{hub}/secrets/**)" in s["permissions"]["deny"]
+    assert s["sandbox"]["enabled"] and sb_path(hub / "policy") in s["sandbox"]["filesystem"]["denyWrite"]
+    assert sb_path(token_path(sock)) in s["sandbox"]["filesystem"]["denyRead"]
+    assert f"Read(/{rule_path(hub)}/secrets/**)" in s["permissions"]["deny"]

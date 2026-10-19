@@ -618,8 +618,15 @@ class RunManager:
             spec = self._prepare_spec(run, agent)
             await self._checkpoint(ar, run, spec)
             cli_version = await self._check_cli_version(runtime, agent_id, run_id)
+            if self._ended_before_start(run_id):
+                return
             handle = await runtime.start(spec)
             ar.handle = handle
+            if self._ended_before_start(run_id):
+                # `stop` đến khi run còn `queued` (đang checkpoint/spawn — chậm trên Windows) đã ghi `cancelled`:
+                # không được ghi đè thành `running` (run ma giữ agent mãi) — dừng tiến trình vừa spawn
+                await runtime.stop(handle, grace_s=2)
+                return
             hub.store.update_run(
                 run_id,
                 {
@@ -917,6 +924,11 @@ class RunManager:
         etype = "run.interrupted" if outcome == "interrupted" else "run.failed"
         self.hub.publish(make_event(etype, ar.agent_id, {"outcome": outcome, "error": error}, run_id=ar.run_id))
         self._set_agent_after(ar.agent_id, ar.run_id, outcome)
+
+    def _ended_before_start(self, run_id: str) -> bool:
+        """Run đã kết thúc (vd `stop` khi còn `queued`) trong lúc `_run` đang await phần khởi động."""
+        run = self.store.get_run(run_id)
+        return bool(run) and run["status"] in TERMINAL_STATUSES
 
     def _finish_without_start(self, run_id: str, agent_id: str, outcome: str, reason: str) -> None:
         self.store.update_run(run_id, {"status": outcome, "outcome": outcome, "ended_at": now_iso(), "error": reason})

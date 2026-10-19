@@ -14,6 +14,7 @@ from cfharness.errors import Conflict, NotFound
 from cfharness.hub import Hub
 from cfharness.runtime import ClaudeCliRuntime, FakeRuntime
 from cfharness.steer import steer
+from conftest import fake_cli
 
 FIX = Path(__file__).parent / "fixtures"
 FAKE_STEER = Path(__file__).parent / "fake_claude_steer.py"
@@ -99,9 +100,7 @@ async def test_fake_runtime_send_after_result_raises(tmp_path):
 # ---------------------------------------------------------------- ClaudeCliRuntime + claude giả (subprocess thật)
 @pytest.fixture
 def steer_bin(tmp_path):
-    p = tmp_path / "claude"
-    p.write_text(f"#!/bin/sh\nexec {sys.executable} {FAKE_STEER} \"$@\"\n")
-    p.chmod(0o755)
+    p = fake_cli(tmp_path, FAKE_STEER)
     return p
 
 

@@ -20,6 +20,7 @@ from cfharness import auth
 from cfharness.errors import BLOCKED, HubError
 from cfharness.guard.classifier import GuardContext, classify
 from cfharness.guard.policy import PolicyStore
+from cfharness import transport
 from m7_fake import close, make_daemon, manager_run, rpc, tool, wait_status
 
 
@@ -283,9 +284,9 @@ async def test_managerself_call_bound_to_manager_run_process(env):
 async def test_managerself_over_real_socket_from_foreign_process(env):
     """Tiến trình KHÔNG thuộc run (qua socket thật) gọi managerself.call với run_id của manager → từ chối."""
     d, rid = env
-    srv = await asyncio.start_unix_server(d._handle_conn, path=str(d.paths.socket))
+    srv = await transport.start_server(d._handle_conn, d.paths.socket, limit=16 * 1024 * 1024)
     try:
-        code = ("import json,socket,sys;s=socket.socket(socket.AF_UNIX);s.connect(sys.argv[1]);"
+        code = ("import json,socket,sys;from cfharness import transport;s=transport.connect(sys.argv[1],30);"
                 "s.sendall((json.dumps({'jsonrpc':'2.0','id':1,'method':'managerself.call','params':{'run_id':sys.argv[2],'op':'agent_create','args':{'id':'zz'}}})+'\\n').encode());"
                 "print(s.makefile().readline())")
         cp = await asyncio.to_thread(subprocess.run, [sys.executable, "-c", code, str(d.paths.socket), rid], capture_output=True, text=True, timeout=30)

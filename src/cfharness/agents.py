@@ -511,7 +511,7 @@ def export_agent(svc: AgentService, agent_id: str, dest: str | Path, *, with_mem
     if skills.is_dir():
         for p in sorted(skills.rglob("*")):
             if p.is_file() and not p.is_symlink() and "__pycache__" not in p.parts:
-                files.append((str(Path("skills") / p.relative_to(skills)), p.read_bytes()))
+                files.append(((Path("skills") / p.relative_to(skills)).as_posix(), p.read_bytes()))  # tên trong tar luôn `/` (export mở được trên OS khác)
     dest.parent.mkdir(parents=True, exist_ok=True)
     scrubbed = 0
     with tarfile.open(dest, "w:gz") as tar:

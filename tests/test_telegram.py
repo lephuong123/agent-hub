@@ -4,6 +4,7 @@ daemon IN-PROCESS (`Daemon` + FakeRuntime), không gọi Telegram/claude thật.
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 
 import pytest
@@ -14,7 +15,7 @@ from cfharness.daemon import Daemon
 from cfharness.errors import BLOCKED
 from cfharness.events import make_event
 from cfharness.guard.classifier import GuardContext, classify
-from cfharness.guard.runtime import build_settings
+from cfharness.guard.runtime import build_settings, rule_path, sb_path
 from cfharness.notify.telegram import TelegramApi, TelegramError, format_event
 from cfharness.runtime import FakeRuntime
 
@@ -513,12 +514,12 @@ async def test_agent_in_run_cannot_read_bot_token(make, tg, hub_home):
     spec = rt.started[-1]
     assert TOKEN not in str(spec.env_extra) and TOKEN not in str(spec)
     tok_file = hub_home.home / "secrets" / "TELEGRAM_BOT_TOKEN"
-    assert tok_file.exists() and oct(tok_file.stat().st_mode & 0o777) == "0o600"
+    assert tok_file.exists() and (sys.platform == "win32" or oct(tok_file.stat().st_mode & 0o777) == "0o600")  # Windows: ACL hồ sơ người dùng
     # sandbox Bash: denyRead secrets/ ; tool Read: permissions.deny
     s = build_settings({}, run_id="r1", socket=hub_home.socket, policy_dir=hub_home.home / "policy", guard_cfg={"hook_timeout_s": 900},
                        approval_timeout_s=300, cwd=hub_home.home / "agents" / "coder" / "workspaces" / "r1")
-    assert str(hub_home.home / "secrets") in s["sandbox"]["filesystem"]["denyRead"]
-    assert f"Read(/{hub_home.home}/secrets/**)" in s["permissions"]["deny"]
+    assert sb_path(hub_home.home / "secrets") in s["sandbox"]["filesystem"]["denyRead"]
+    assert f"Read(/{rule_path(hub_home.home)}/secrets/**)" in s["permissions"]["deny"]
     # bộ phân loại: đọc file token → forbidden
     v = classify("Bash", {"command": f"cat {tok_file}"}, gctx(hub_home, hub_home.home / "agents" / "coder"))
     assert v.forbidden and v.rule == "hub_secret_read", v

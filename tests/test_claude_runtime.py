@@ -9,15 +9,14 @@ import pytest
 from cfharness.config import DEFAULTS
 from cfharness.hub import Hub
 from cfharness.runtime import ClaudeCliRuntime
+from conftest import fake_cli
 
 FAKE = Path(__file__).parent / "fake_claude.py"
 
 
 @pytest.fixture
 def fake_bin(tmp_path):
-    p = tmp_path / "claude"
-    p.write_text(f"#!/bin/sh\nexec {sys.executable} {FAKE} \"$@\"\n")
-    p.chmod(0o755)
+    p = fake_cli(tmp_path, FAKE)
     return p
 
 

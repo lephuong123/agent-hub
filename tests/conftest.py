@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
 
+from cfharness.oscompat import IS_WINDOWS
 from cfharness.paths import HubPaths
 from cfharness.runtime import default_fixture
 
@@ -54,3 +56,14 @@ def sample_lines() -> list[str]:
 @pytest.fixture
 def budget_fixture() -> Path:
     return FIXTURES / "claude-budget-exceeded.jsonl"
+
+
+def fake_cli(tmp_path: Path, script: Path, name: str = "claude") -> Path:
+    """`claude` giả chạy `script` bằng python hiện tại. POSIX: shim `#!/bin/sh` tên `name`; Windows: chính file `.py`
+    (runtime chạy `.py` bằng python — `oscompat.exec_argv`; shell script/`.cmd` làm hỏng argv có dấu nháy/xuống dòng)."""
+    if IS_WINDOWS:
+        return script
+    p = tmp_path / name
+    p.write_text(f"#!/bin/sh\nexec {sys.executable} {script} \"$@\"\n")
+    p.chmod(0o755)
+    return p

@@ -3,20 +3,25 @@
 - Kéo–thả file/thư mục vào terminal: terminal dán đường dẫn đã escape (`/Users/a/My\\ Folder`) hoặc trong nháy. `parse_input` nhận ra
   token là đường dẫn CÓ THẬT → thư mục/file thường giữ trong chữ (đã bỏ escape); file ảnh → tách thành ảnh đính kèm.
 - `is_command`: dòng bắt đầu bằng `/` CHỈ là lệnh khi token đầu là tên lệnh đã biết (đường dẫn kéo vào không bị hiểu nhầm là lệnh).
-- `clipboard_image()`: ảnh trong clipboard (macOS `osascript`, Linux `wl-paste`/`xclip`) → bytes PNG, hoặc None.
+- `clipboard_image()`/`clipboard_text()`: clipboard (macOS `osascript`/`pbpaste`, Linux `wl-paste`/`xclip`, Windows PowerShell
+  `-NoProfile -NonInteractive -STA` → PNG qua tệp tạm) → bytes PNG / chữ, hoặc None/"" khi không có, lỗi hay quá giờ.
 Ảnh gửi qua RPC `manager.chat{images:[{name, data_b64}]}`; daemon kiểm định dạng/kích thước và lưu vào workspace hội thoại.
 """
 
 from __future__ import annotations
 
 import base64
+import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from ..oscompat import IS_WINDOWS
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -24,6 +29,7 @@ MAX_IMAGES = 4
 _TOKEN = re.compile(r"'[^']*'|\"[^\"]*\"|(?:\\.|[^\s\\'\"])+")
 MARKER = "[Ảnh #{n}]"
 _MARKER_RE = re.compile(r"\[Ảnh #(\d+)\]")
+_WIN_ABS = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/])")  # C:\…, C:/…, \\máy\share\…
 
 
 @dataclass
@@ -44,7 +50,17 @@ class Parsed:
 
 
 def _as_path(tok: str) -> Path | None:
-    """Token (có thể escape/nháy) → Path nếu là đường dẫn tuyệt đối/~ đang tồn tại."""
+    """Token (có thể escape/nháy) → Path nếu là đường dẫn tuyệt đối/~ đang tồn tại.
+    Windows: `\\` là dấu phân cách, không phải escape — terminal kéo vào `C:\\a\\b` hoặc `"C:\\a b\\c"` (nháy khi có dấu cách)."""
+    if IS_WINDOWS:
+        raw = tok[1:-1] if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "'\"" else tok
+        if not (_WIN_ABS.match(raw) or raw.startswith("~")):
+            return None
+        try:
+            p = Path(raw).expanduser()
+            return p if p.exists() else None
+        except (OSError, ValueError):
+            return None
     try:
         parts = shlex.split(tok)
     except ValueError:
@@ -131,16 +147,94 @@ def parse_input(text: str, pasted: dict[int, Attachment] | None = None) -> Parse
 
 
 # ---------------------------------------------------------------------- clipboard
-def _run(argv: list[str], timeout: float = 5.0) -> bytes | None:
+CLIP_TIMEOUT_S = 5.0
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+CLIP_READ_CAP = 64 * 1024 * 1024  # ảnh clipboard > trần này → bỏ (không đọc vào RAM); > MAX_IMAGE_BYTES vẫn trả để REPL/TUI báo "quá lớn"
+
+# Windows: PowerShell (STA — clipboard WinForms cần STA). `Get-Clipboard -Format Image` chỉ có ở Windows PowerShell 5.1;
+# pwsh 7 → rơi về System.Windows.Forms.Clipboard. Đường dẫn tệp tạm truyền qua biến môi trường (không ghép vào mã lệnh).
+_PS_IMAGE = r"""
+$ErrorActionPreference = 'Stop'
+$img = $null
+try { $img = Get-Clipboard -Format Image } catch { $img = $null }
+if (-not $img) {
+  Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
+  if ([System.Windows.Forms.Clipboard]::ContainsImage()) { $img = [System.Windows.Forms.Clipboard]::GetImage() }
+}
+if (-not $img) { exit 3 }
+$img.Save($env:CFHARNESS_CLIP_OUT, [System.Drawing.Imaging.ImageFormat]::Png)
+$img.Dispose()
+exit 0
+"""
+_PS_TEXT = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$t = Get-Clipboard -Raw
+if ($null -eq $t) { exit 3 }
+[Console]::Out.Write([string]$t)
+exit 0
+"""
+
+
+def _run(argv: list[str], timeout: float = CLIP_TIMEOUT_S, env: dict[str, str] | None = None) -> bytes | None:
     try:
-        r = subprocess.run(argv, capture_output=True, timeout=timeout, check=False)
-    except (OSError, subprocess.TimeoutExpired):
+        r = subprocess.run(argv, capture_output=True, timeout=timeout, check=False, env=env, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return None
     return r.stdout if r.returncode == 0 and r.stdout else None
 
 
+def _powershell() -> str | None:
+    """Windows PowerShell 5.1 (luôn có, mặc định STA) trước; pwsh 7 nếu không có."""
+    return shutil.which("powershell.exe") or shutil.which("powershell") or shutil.which("pwsh.exe") or shutil.which("pwsh")
+
+
+def _ps_argv(exe: str, script: str) -> list[str]:
+    enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")  # -EncodedCommand: không lo nháy/escape
+    return [exe, "-NoProfile", "-NonInteractive", "-NoLogo", "-STA", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc]
+
+
+def _win_clipboard_image() -> bytes | None:
+    exe = _powershell()
+    if not exe:
+        return None
+    fd, tmp = tempfile.mkstemp(prefix="cfharness-clip-", suffix=".png")
+    os.close(fd)
+    try:
+        env = dict(os.environ, CFHARNESS_CLIP_OUT=tmp)
+        try:
+            r = subprocess.run(_ps_argv(exe, _PS_IMAGE), capture_output=True, timeout=CLIP_TIMEOUT_S, check=False, env=env,
+                               stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return None
+        if r.returncode != 0:
+            return None
+        try:
+            size = os.path.getsize(tmp)
+            if size <= 0 or size > CLIP_READ_CAP:
+                return None
+            with open(tmp, "rb") as f:
+                data = f.read(CLIP_READ_CAP + 1)
+        except OSError:
+            return None
+        return data if data.startswith(_PNG_MAGIC) else None
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _win_clipboard_text() -> bytes | None:
+    exe = _powershell()
+    return _run(_ps_argv(exe, _PS_TEXT)) if exe else None
+
+
 def clipboard_image() -> bytes | None:
-    """Ảnh trong clipboard → bytes (PNG), None nếu không có ảnh/không hỗ trợ."""
+    """Ảnh trong clipboard → bytes (PNG), None nếu không có ảnh/không hỗ trợ/lỗi/quá giờ."""
+    if IS_WINDOWS:
+        return _win_clipboard_image()
     if sys.platform == "darwin":
         out = _run(["osascript", "-e", "the clipboard as «class PNGf»"])
         if not out:
@@ -160,6 +254,9 @@ def clipboard_image() -> bytes | None:
 
 
 def clipboard_text() -> str:
+    if IS_WINDOWS:
+        out = _win_clipboard_text()
+        return out.decode("utf-8", "replace").lstrip("﻿").replace("\r\n", "\n") if out else ""
     if sys.platform == "darwin":
         out = _run(["pbpaste"])
     elif shutil.which("wl-paste"):

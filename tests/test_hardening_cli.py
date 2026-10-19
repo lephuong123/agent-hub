@@ -23,6 +23,7 @@ from cfharness.events import make_event
 from cfharness.hub import Hub
 from cfharness.runtime import ArgvError, FakeRuntime, RunSpec, build_argv
 from cfharness.config import DEFAULTS
+from conftest import fake_cli
 
 
 @pytest.fixture
@@ -282,10 +283,15 @@ def test_h10_flag_matrix_rejects_unsupported_flags():
 
 async def test_h10_spawn_refused_with_unsupported_flag(hub_home, tmp_path):
     """QA: trước đây cờ không hỗ trợ vẫn được spawn — giờ run failed với lỗi ma trận, KHÔNG spawn tiến trình."""
-    fake = tmp_path / "claude"
     marker = tmp_path / "spawned"
-    fake.write_text(f"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '2.1.302 (Claude Code)'; exit 0; fi\ntouch {marker}\nexit 1\n")
-    fake.chmod(0o755)
+    if sys.platform == "win32":  # Windows: claude giả là `.py` (runtime chạy bằng python — oscompat.exec_argv)
+        fake = tmp_path / "claude.py"
+        fake.write_text("import pathlib, sys\nif sys.argv[1:2] == ['--version']:\n    print('2.1.302 (Claude Code)')\n    sys.exit(0)\n"
+                        f"pathlib.Path({str(marker)!r}).touch()\nsys.exit(1)\n")
+    else:
+        fake = tmp_path / "claude"
+        fake.write_text(f"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '2.1.302 (Claude Code)'; exit 0; fi\ntouch {marker}\nexit 1\n")
+        fake.chmod(0o755)
     hub_home.config.write_text(yaml.safe_dump({"runtime": {"claude": {"binary": str(fake), "isolation": {"extra_args": ["--bogus-flag"]}}}}))
     h = Hub(hub_home)
     try:
@@ -382,9 +388,15 @@ async def test_h11_run_settings_contain_observe_hooks(hub):
 
 
 def _slow_server(path: str, delay: float, got: list):
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(path)
-    srv.listen(8)
+    from cfharness import oscompat, transport
+
+    if oscompat.IS_WINDOWS:  # Windows: TCP loopback + file endpoint (transport.py)
+        srv = socket.create_server((transport.LOOPBACK, 0), backlog=8)
+        transport.write_endpoint(path, srv.getsockname()[1])
+    else:
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(path)
+        srv.listen(8)
 
     def loop():
         while True:
@@ -410,7 +422,7 @@ def test_h11_hook_timeout_fail_open(tmp_path):
 
     import tempfile
 
-    sock = os.path.join(tempfile.mkdtemp(prefix="ah-", dir="/tmp"), "s.sock")  # AF_UNIX giới hạn độ dài đường dẫn
+    sock = os.path.join(tempfile.mkdtemp(prefix="ah-", dir=None if sys.platform == "win32" else "/tmp"), "s.sock")  # AF_UNIX giới hạn độ dài đường dẫn
     got: list = []
     srv = _slow_server(sock, 3.5, got)
     try:
@@ -649,9 +661,7 @@ async def test_h20_oneshot_via_runtime(tmp_path):
     fake.write_text("import sys, json\nargs=sys.argv[1:]\nsys.stdin.read()\n"
                     "assert '--json-schema' in args and '--no-session-persistence' in args and args[args.index('--tools')+1] == ''\n"
                     "print(json.dumps({'type':'result','is_error':False,'total_cost_usd':0.001,'structured_output':{'score':0.9}}))\n")
-    binp = tmp_path / "judge"
-    binp.write_text(f"#!/bin/sh\nexec {sys.executable} {fake} \"$@\"\n")
-    binp.chmod(0o755)
+    binp = fake_cli(tmp_path, fake, "judge")
     rt = ClaudeCliRuntime({**DEFAULTS["runtime"]["claude"], "binary": str(binp)})
     r = await rt.oneshot(OneShotRequest(prompt="p", schema={"type": "object"}, system="s", model="haiku", budget_usd=0.05, timeout_s=20))
     assert r.ok and r.output == {"score": 0.9} and r.cost_usd == 0.001

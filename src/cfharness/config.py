@@ -174,7 +174,7 @@ DEFAULTS: dict[str, Any] = {
         "max_agents_created_per_day": 20,
         "max_tasks_per_hour": 60,
         "max_runs_per_hour": 30,
-        "max_system_ops_per_hour": 10,  # tạm dừng/bật lại/khởi động lại job launchd của hệ thống đã đăng ký
+        "max_system_ops_per_hour": 10,  # tạm dừng/bật lại/khởi động lại job launchd/Task Scheduler của hệ thống đã đăng ký
         # §9 M7-core.md: khung quyền của điều phối viên (CHỈ người: config.set ∈ HUMAN_ONLY, nhánh `manager` kiểm toàn vẹn).
         # profile strict = Read/Grep/Glob (như MGR-8); hermes = Bash/Read/Write/Edit/Grep/Glob/TodoWrite + Web + MCP trusted (chỉ đọc),
         # VẪN dưới hook guard + sandbox OS + approval. null = theo profile. `cfharness manager capabilities show|set`.
@@ -328,12 +328,14 @@ DEFAULTS: dict[str, Any] = {
         "manager_run_now_per_hour": 6,
         "manager_daily_budget_usd": None,
     },
-    # Hệ thống ngoài hub (systems/): app trong thư mục gốc + job launchd của chúng — người đăng ký, điều phối viên tạm dừng/bật lại/khởi động lại
+    # Hệ thống ngoài hub (systems/): app trong thư mục gốc + job launchd (macOS) / task Task Scheduler (Windows) của chúng — người đăng ký, điều phối viên tạm dừng/bật lại/khởi động lại
     "systems": {
         "roots": None,  # null = theo workspace.allowed_roots
         "launch_agents_dir": "~/Library/LaunchAgents",
-        "launchctl": "/bin/launchctl",
-        "timeout_s": 15,  # mỗi lệnh launchctl
+        "launchctl": "/bin/launchctl",  # macOS
+        "schtasks": "schtasks",  # Windows: ghi (/End, /Change /DISABLE|/ENABLE, /Run)
+        "powershell": "powershell",  # Windows: đọc task (Get-ScheduledTask → JSON; mất gấp đôi timeout_s)
+        "timeout_s": 15,  # mỗi lệnh launchctl / schtasks
         "log_tail_bytes": 6000,  # system_get: đuôi log stdout/stderr mỗi job (đã che secret)
     },
     "workspace": {

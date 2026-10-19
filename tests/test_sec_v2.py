@@ -21,6 +21,7 @@ from cfharness.guard.policy import PolicyStore
 from cfharness.guard.runtime import sandbox_settings
 from cfharness.paths import HubPaths
 from cfharness.runtime.fake import FakeRuntime
+from cfharness import transport
 
 
 # ============================================================================ V2-N1
@@ -49,11 +50,11 @@ async def test_admin_surface_requires_human_token_over_socket(home):
     """QA V2-N1: tiến trình cục bộ KHÔNG token gọi agent.revert/archive/trash.* → từ chối (trước: revert bật lại allow_bypass)."""
     d = Daemon(home, runtime=FakeRuntime())
     d.hub.start()
-    srv = await asyncio.start_unix_server(d._handle_conn, path=str(home.socket))
+    srv = await transport.start_server(d._handle_conn, home.socket, limit=16 * 1024 * 1024)
     try:
         d.hub.agents.create({"id": "a2", "name": "A2", "tool_policy": {"allow_bypass": True}})
         d.hub.agents.update("a2", {"tool_policy": {"allow_bypass": False}})
-        code = ("import json,socket,sys;m,p=sys.argv[2],json.loads(sys.argv[3]);s=socket.socket(socket.AF_UNIX);s.connect(sys.argv[1]);"
+        code = ("import json,socket,sys;m,p=sys.argv[2],json.loads(sys.argv[3]);from cfharness import transport;s=transport.connect(sys.argv[1],30);"
                 "s.sendall((json.dumps({'jsonrpc':'2.0','id':1,'method':m,'params':p})+'\\n').encode());print(s.makefile().readline())")
         for m, prm in (("agent.revert", {"id": "a2", "to": 1}), ("agent.archive", {"id": "a2"}), ("trash.restore", {"id": "a2"}),
                        ("trash.purge", {"id": "a2", "confirm": "a2"})):
@@ -126,7 +127,9 @@ def test_v2_n2_persistence_locations_protected(ctx):
     sb = sandbox_settings(Path(c.policy.hub_home), Path(c.hub_socket), {})
     uhome = os.path.expanduser("~")
     for x in (".config/git", "Library/LaunchAgents", ".zshrc", ".ssh"):
-        assert f"{uhome}/{x}" in sb["filesystem"]["denyWrite"], x
+        from cfharness.guard.runtime import sb_path
+
+        assert sb_path(f"{uhome}/{x}") in sb["filesystem"]["denyWrite"], x
 
 
 # ============================================================================ V2-N3

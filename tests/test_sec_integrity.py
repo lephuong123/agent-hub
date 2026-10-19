@@ -34,6 +34,16 @@ def hub(tmp_path):
         pass
 
 
+def _dir_link(target, link) -> None:
+    """symlink thư mục; Windows: directory junction — agent tạo được KHÔNG cần quyền (symlink cần admin/Developer Mode)."""
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link)
+
+
 def tamper_events(h):
     return [e for e in h.store.query_events() if e.type == "guard.tamper_detected"]
 
@@ -52,7 +62,7 @@ async def test_policy_tamper_via_python_and_symlink_is_restored(hub, tmp_path):
     subprocess.run([sys.executable, "-c", f"open({str(pol / 'protected.yaml')!r},'a').write('\\nresources: []\\n')"], check=True)
     # QA: ln -s <HUB>/policy pol; echo x > pol/catalog.yaml (ghi xuyên symlink)
     link = tmp_path / "pol"
-    os.symlink(pol, link)
+    _dir_link(pol, link)
     (link / "catalog.yaml").write_text("bash_patterns: []\n")
     # thêm file lạ
     (pol / "evil.yaml").write_text("x")
@@ -82,9 +92,9 @@ async def test_policy_dir_replaced_by_symlink_and_learning_yaml(hub, tmp_path):
     fake.mkdir()
     (fake / "protected.yaml").write_text("resources: []\n")
     os.rename(pol, tmp_path / "moved_policy")
-    os.symlink(fake, pol)
+    _dir_link(fake, pol)
     await _tick(h, 10)
-    assert pol.is_dir() and not pol.is_symlink()
+    assert pol.is_dir() and not pol.is_symlink() and not pol.is_junction()
     assert (pol / "learning.yaml").read_text() == learn_orig and (pol / "protected.yaml").exists()
     await h.stop()
 

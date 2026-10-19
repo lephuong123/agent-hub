@@ -21,7 +21,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -182,6 +184,18 @@ def grade_deterministic(spec: dict[str, Any], out: EvalOutput) -> Grade:
     raise HubError(f"checker {kind} không phải tất định")
 
 
+def _shell_argv(cmd: str) -> list[str]:
+    """argv chạy lệnh checker kiểu sh. Windows: Git Bash (không lấy `System32\bash.exe` — đó là WSL, khác hệ file);
+    không có bash → `cmd /c`."""
+    if sys.platform != "win32":
+        return ["/bin/sh", "-c", cmd]
+    cands = [shutil.which("bash")] + [os.path.join(os.environ.get(v) or "", "Git", "bin", "bash.exe") for v in ("ProgramFiles", "ProgramW6432")]
+    for c in cands:
+        if c and os.path.isfile(c) and "system32" not in c.lower():
+            return [c, "-c", cmd]
+    return ["cmd", "/d", "/s", "/c", cmd]
+
+
 def _run_command(spec: dict[str, Any], out: EvalOutput) -> Grade:
     cwd = out.cwd if out.cwd and Path(out.cwd).is_dir() else Path(tempfile.gettempdir())
     with tempfile.TemporaryDirectory(prefix="cfharness-eval-") as td:
@@ -192,7 +206,7 @@ def _run_command(spec: dict[str, Any], out: EvalOutput) -> Grade:
         env = {**os.environ, "CFHARNESS_OUTPUT_FILE": str(of), "CFHARNESS_OUTPUT_JSON": str(jf), "CFHARNESS_EVAL_RUN_ID": out.run_id or ""}
         try:
             p = subprocess.run(
-                ["/bin/sh", "-c", spec["cmd"]], cwd=str(cwd), input=(out.text or "").encode("utf-8"), capture_output=True,
+                _shell_argv(spec["cmd"]), cwd=str(cwd), input=(out.text or "").encode("utf-8"), capture_output=True,
                 timeout=float(spec.get("timeout_s") or 120), env=env,
             )
         except subprocess.TimeoutExpired:

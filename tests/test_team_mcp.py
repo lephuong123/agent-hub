@@ -14,6 +14,7 @@ from mcp import Client
 from cfharness.daemon import Daemon
 from cfharness.errors import HubError
 from cfharness.mcp_server.server import READ_ONLY_TOOLS, build_server
+from cfharness import transport
 from m3_fake import ScriptedRuntime, kind_of
 
 PLAN = {"summary": "two steps", "subtasks": [
@@ -208,7 +209,7 @@ async def test_subagents_and_schema_reach_runspec(daemon):
 async def test_hub_self_stdio_server_roundtrip(daemon, tmp_path):
     """MCP stdio hub-self thật (tiến trình con) → RPC `taskself.call` (qua socket daemon thật)."""
     h = daemon.hub
-    server = await asyncio.start_unix_server(daemon._handle_conn, path=str(h.paths.socket))
+    server = await transport.start_server(daemon._handle_conn, h.paths.socket, limit=16 * 1024 * 1024)
     try:
         h.agents.create({"id": "w", "name": "W"})
         h.runs._runtime.script = lambda spec: {"hold": True}

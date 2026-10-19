@@ -23,6 +23,8 @@ from cfharness.errors import BLOCKED, HubError
 from cfharness.guard.classifier import classify
 from cfharness.guard.integrity import SECURITY_KEYS
 from cfharness.manager.permissions import CAP_TOOLS_MAX, resolve_capabilities
+from cfharness import transport
+from cfharness.guard.runtime import sb_path
 from m7_fake import close, make_daemon, manager_run, rpc, tool, wait_status
 
 HERMES_TOOLS = ["Bash", "Read", "Write", "Edit", "Grep", "Glob", "TodoWrite", "WebFetch", "WebSearch"]
@@ -230,9 +232,9 @@ async def test_child_over_real_socket_denied(d):
     res = await rpc(d, "manager.chat", {"channel": "web", "text": "hi"})
     rid = res["run_id"]
     await wait_status(d, rid)
-    srv = await asyncio.start_unix_server(d._handle_conn, path=str(d.paths.socket))
+    srv = await transport.start_server(d._handle_conn, d.paths.socket, limit=16 * 1024 * 1024)
     try:
-        code = ("import json,socket,sys;s=socket.socket(socket.AF_UNIX);s.connect(sys.argv[1]);"
+        code = ("import json,socket,sys;from cfharness import transport;s=transport.connect(sys.argv[1],30);"
                 "s.sendall((json.dumps({'jsonrpc':'2.0','id':1,'method':sys.argv[2],'params':json.loads(sys.argv[3])})+'\\n').encode());"
                 "print(s.makefile().readline())")
         env = {**os.environ, "CFHARNESS_RUN_ID": rid}
@@ -269,12 +271,12 @@ async def test_hermes_manager_run_spec_keeps_guard_and_sandbox(d):
     assert st["hooks"]["PreToolUse"], "hook guard PreToolUse phải có"
     sb = st["sandbox"]
     assert sb["enabled"] is True
-    home = str(d.paths.home)
+    home = sb_path(d.paths.home)  # Windows: sandbox dùng dấu `/`
     deny_w = sb["filesystem"]["denyWrite"]
     deny_r = sb["filesystem"]["denyRead"]
     assert any(x.endswith("config.yaml") and x.startswith(home) or x == f"{home}/config.yaml" for x in deny_w)
     assert any(x.endswith("/policy") for x in deny_w) and any(x.endswith(".auth") for x in deny_r) and any(x.endswith("/secrets") for x in deny_r)
-    assert str(d.paths.socket) not in (sb.get("network") or {}).get("allowUnixSockets", [])
+    assert sb_path(d.paths.socket) not in (sb.get("network") or {}).get("allowUnixSockets", [])
     assert st.get("permissions", {}).get("deny"), "permissions.deny tĩnh phải có"
     mcp = json.loads(spec.mcp_config_path.read_text())["mcpServers"]
     assert "hub-guard" in mcp and "hub-self" in mcp and "docs" in mcp
@@ -368,7 +370,7 @@ async def test_capabilities_tamper_restored(d):
 async def test_cli_capabilities_set_and_sync(d):
     _agent(d, "boss", tools=["Read", "Grep", "Glob"])
     await rpc(d, "manager.set", {"agent_id": "boss"})
-    srv = await asyncio.start_unix_server(d._handle_conn, path=str(d.paths.socket))
+    srv = await transport.start_server(d._handle_conn, d.paths.socket, limit=16 * 1024 * 1024)
     try:
         tok = auth.issue_token(d.paths.socket)
         d.auth_token = tok

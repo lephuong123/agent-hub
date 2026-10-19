@@ -17,10 +17,22 @@ import pytest
 from cfharness.errors import HubError
 from cfharness.guard.classifier import GuardContext, classify, exec_zone
 from cfharness.guard.policy import PolicyStore, repo_deny_for
-from cfharness.guard.runtime import build_settings, executable_zones, hub_repo_root
+from cfharness.guard.runtime import build_settings, executable_zones, hub_repo_root, rule_path, sb_path
 from cfharness.hub import Hub
 from cfharness.paths import HubPaths
 from cfharness.runtime.fake import FakeRuntime
+
+
+def _dir_link(target, link) -> None:
+    """symlink thư mục; Windows không có quyền tạo symlink (WinError 1314) → junction (cùng ngữ nghĩa với realpath)."""
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except OSError:
+        if sys.platform != "win32":
+            raise
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
 
 
 def held(v):
@@ -70,7 +82,7 @@ def test_write_tool_symlink_into_exec_zone_resolved(wctx):
     import sysconfig
 
     link = wctx.cwd / "sp"
-    os.symlink(sysconfig.get_paths()["purelib"], link)
+    _dir_link(sysconfig.get_paths()["purelib"], link)
     assert classify("Write", {"file_path": str(link / "evil.pth"), "content": "import os"}, wctx).forbidden
 
 
@@ -81,9 +93,9 @@ def test_static_deny_and_sandbox_cover_exec_zones(tmp_path):
     deny = set(s["permissions"]["deny"])
     dw = set(s["sandbox"]["filesystem"]["denyWrite"])
     for z in executable_zones():
-        assert f"Write(/{z.rstrip('/')}/**)" in deny and f"Edit(/{z.rstrip('/')}/**)" in deny, z
-        assert z in dw, z
-    assert os.path.realpath(sys.prefix) in dw  # venv của chính hub (Bash)
+        assert f"Write(/{rule_path(z)}/**)" in deny and f"Edit(/{rule_path(z)}/**)" in deny, z
+        assert sb_path(z) in dw, z
+    assert sb_path(os.path.realpath(sys.prefix)) in dw  # venv của chính hub (Bash)
 
 
 def test_workspace_cannot_be_inside_hub_repo(tmp_path, monkeypatch):
@@ -198,7 +210,7 @@ def test_git_credentials_not_readable_in_sandbox(tmp_path):
     dr = s["sandbox"]["filesystem"]["denyRead"]
     uh = os.path.expanduser("~")
     for x in (".ssh", ".config/gh", ".git-credentials", ".netrc"):
-        assert f"{uh}/{x}" in dr, x
+        assert sb_path(f"{uh}/{x}") in dr, x
     assert os.environ.get("SSH_AUTH_SOCK", "<none>") not in (s["sandbox"]["network"].get("allowUnixSockets") or [])
 
 
@@ -211,8 +223,8 @@ def test_human_protected_resource_enters_sandbox_and_static_deny(tmp_path):
     s = build_settings({}, run_id="r", socket=hub / "hub.sock", policy_dir=hub / "policy", guard_cfg={}, approval_timeout_s=300,
                        cwd=tmp_path / "Workspace" / "toa")
     real = os.path.realpath(nxt)
-    assert real in s["sandbox"]["filesystem"]["denyWrite"]  # không bị gỡ dù cwd là repo chứa nó
-    assert f"Write(/{real}/**)" in s["permissions"]["deny"]
+    assert sb_path(real) in s["sandbox"]["filesystem"]["denyWrite"]  # không bị gỡ dù cwd là repo chứa nó
+    assert f"Write(/{rule_path(real)}/**)" in s["permissions"]["deny"]
 
 
 # ============================================================================ R2-4: git config chạy lệnh
@@ -257,7 +269,7 @@ def test_workspace_rechecked_at_spawn(tmp_path, monkeypatch):
         h.agents.create({"id": "a", "name": "A", "workspace_default": str(later)})  # chưa tồn tại → hợp lệ lúc đặt
         evil = tmp_path / "evil-bin"
         evil.mkdir()
-        os.symlink(evil, later)  # sau đó thành symlink ra ngoài gốc
+        _dir_link(evil, later)  # sau đó thành symlink ra ngoài gốc
         r = h.runs.submit("a", "x")
         for _ in range(200):
             await asyncio.sleep(0.02)

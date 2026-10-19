@@ -96,8 +96,12 @@ def test_e2e_run_with_mcp_secret_never_leaks(tmp_path, monkeypatch):
             if cand:
                 mp = cand[0]
                 break
-        assert mp is not None and oct(mp.stat().st_mode & 0o777) == "0o600"
+        assert mp is not None and (sys.platform == "win32" or oct(mp.stat().st_mode & 0o777) == "0o600")  # Windows: không có bit POSIX
         assert STORE_SECRET in mp.read_text() and ENV_SECRET in mp.read_text()  # chỉ ở đây, 0600, trong thời gian chạy
+        for _ in range(500):  # mcp.json có trước `runtime.start` (checkpoint/spawn chậm trên Windows) — chờ gate rồi mới thả
+            if rid in rt.gates:
+                break
+            await asyncio.sleep(0.02)
         rt.release(rid)
         await hub.runs.wait(rid, 10)
         assert not mp.exists()

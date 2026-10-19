@@ -15,6 +15,8 @@ Bước 2 của BRD (LLM phụ phân loại phần luật tĩnh không quyết �
 
 from __future__ import annotations
 
+import base64
+import binascii
 import glob as _glob
 import json
 import os
@@ -25,8 +27,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .. import names as _names
+from ..oscompat import IS_WINDOWS
 from . import shell
-from .policy import Policy, ProtectedResource
+from .policy import Policy, ProtectedResource, canon_path, fold_path
 
 SEVERITY = {"safe": 0, "write": 1, "uncertain": 2, "destructive": 3}
 
@@ -63,6 +66,12 @@ DELETE_VERBS = re.compile(r"^(delete|delete-.*|.*-delete|rm|rb|rmdir|destroy|rem
 WRAPPERS_SIMPLE = {"nohup", "time", "builtin", "stdbuf", "chronic", "caffeinate", "unbuffer", "setsid", "noglob", "nocorrect", "torsocks", "proxychains", "proxychains4", "doas", "sudo", "nice", "ionice", "timeout", "gtimeout", "command", "exec", "env", "arch", "xcrun", "then", "else", "do", "!", "if", "elif", "while", "until", "time"}
 CRITICAL_DIRS = {"/", "/bin", "/sbin", "/usr", "/etc", "/var", "/System", "/Library", "/Applications", "/Users", "/home", "/opt", "/private", "/private/etc", "/private/var", "/boot", "/lib", "/lib64", "/root", "/Volumes", "/dev"}
 TMP_PREFIXES = ("/tmp/", "/private/tmp/", "/dev/shm/")
+# Windows: gốc ổ đĩa + thư mục hệ thống (so trên fold_path); thư mục tạm của user (Git Bash `/tmp` trỏ vào đây)
+WIN_CRITICAL_DIRS = {"c:/windows", "c:/windows/system32", "c:/program files", "c:/program files (x86)", "c:/programdata", "c:/users"}
+_WIN_DRIVE_ROOT = re.compile(r"^[a-z]:/?$")
+# đường dẫn Windows có `\` viết trong lệnh bash (`C:\Users\x`, `C:\\x`) — Git Bash ăn `\` ngoài quote, nhưng ý định của
+# agent là đường dẫn Windows → phân loại theo đường dẫn đó (đổi `\` → `/`) thay vì chuỗi đã bị bash làm hỏng (bảo thủ)
+_WIN_BS_PATH = re.compile(r"(?<![\w$])[A-Za-z]:\\[^\s'\"`;|&<>(){}]*")
 SPECIAL_FILES = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/zero", "/dev/fd/")
 DISK_DEV = re.compile(r"^/dev/(r?disk\d|sd[a-z]|nvme|hd[a-z]|mmcblk|xvd|vd[a-z]|md\d|dm-)")
 DELETE_CMDS = {"rm", "unlink", "shred", "srm", "wipe", "gshred", "grm", "trash", "trash-put", "rmtrash"}
@@ -134,6 +143,19 @@ UNIX_SOCKET_RE = re.compile(r"\bAF_UNIX\b|UNIX-CONNECT|UNIX-CLIENT|\bcreateConne
 LIST_ARGV_RE = re.compile(r"""\[\s*((?:(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*,\s*)*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'))\s*,?\s*\]""")
 JS_SPAWN_RE = re.compile(r"""\b(?:spawn|spawnSync|execFile|execFileSync|Deno\.Command|Bun\.spawn)\s*\(\s*(["'])([^"']+)\1\s*,\s*\[([^\]]*)\]""")
 _L = r"""(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')"""
+# Windows: lệnh/cmdlet tạo lịch chạy, dịch vụ, mục khởi động hoặc tiến trình qua WMI — chạy NGOÀI Job Object của run (tương đương
+# `launchctl submit` thoát sandbox trên macOS), như người, cả sau khi run kết thúc. Dùng cho mã PowerShell/Python… và chuỗi lệnh.
+WIN_PERSIST_CODE = re.compile(
+    r"(?i)\b(Register-ScheduledTask|New-ScheduledTask(Action|Trigger|Principal|Settings(Set)?)?|Set-ScheduledTask|Start-ScheduledTask|"
+    r"Enable-ScheduledTask|Disable-ScheduledTask|Unregister-ScheduledTask|Stop-ScheduledTask|New-Service|Set-Service|Start-Service|Remove-Service|"
+    r"Invoke-WmiMethod|Invoke-CimMethod|Set-WmiInstance|New-CimInstance|Register-WmiEvent|Register-CimIndicationEvent)\b"
+    r"|\bschtasks(\.exe)?\s+[/-](create|change|run|delete|end)\b"
+    r"|\bsc(\.exe)?\s+(create|config|start|stop|delete|failure)\b"
+    r"|\bwmic(\.exe)?\b.*\bcall\s+create\b"
+    r"|\bStart-Process\b.*-Verb\s+RunAs\b"
+    r"|\breg(\.exe)?\s+(add|delete|import|restore|load)\b"
+    r"|\b(Set|New)-ItemProperty\b.*\\(Run|RunOnce|Winlogon)\b")
+WIN_ESCAPE = "tiến trình do Task Scheduler/dịch vụ/WMI tạo nằm NGOÀI Job Object của run (như launchctl submit thoát sandbox)"
 EXEC_DYNAMIC = re.compile(r"\b(os\.system|subprocess|popen|os\.exec|execSync|exec\(|spawn|child_process|system\(|eval\(|`|__import__|b64decode|base64|codecs\.decode|fromCharCode|Function\()", re.I)
 STR_LITERAL = re.compile(r"""(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')""")
 FORK_BOMB = re.compile(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:|(\w+)\s*\(\s*\)\s*\{\s*\1\s*\|\s*\1\s*&\s*\}")
@@ -188,7 +210,7 @@ class GuardContext:
 
     @property
     def home(self) -> str:
-        return str(self.policy.user_home)
+        return canon_path(str(self.policy.user_home))
 
 
 def _max(a: Verdict, b: Verdict) -> Verdict:
@@ -208,8 +230,8 @@ def created_by_run(path: str, ctx: GuardContext) -> bool:
     Không có mốc (vd `guard test`) → False (bảo thủ). Đích không tồn tại → True (xoá cái không có = vô hại)."""
     if not os.path.lexists(path):
         # xoá cái không tồn tại là vô hại — nhưng chỉ tin điều đó trong workspace của run hoặc /tmp
-        cwd = str(ctx.cwd).rstrip("/")
-        return path.startswith(cwd + "/") or path.startswith(TMP_PREFIXES)
+        cwd = canon_path(str(ctx.cwd)).rstrip("/")
+        return bool(_rel_parts(path, cwd)) or _is_tmp(path)
     if ctx.run_since is None:
         return False
     since = ctx.run_since - 1.0
@@ -331,12 +353,38 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
         return Verdict("uncertain", "classifier_error", None, f"lỗi bộ phân loại: {e!r}")
 
 
+_WIN_ABS = re.compile(r"^[A-Za-z]:/")
+
+
+def _isabs(p: str) -> bool:
+    """Windows (Git Bash): `/x` (gốc MSYS), `/c/x`, `C:/x`, `C:\\x` đều tuyệt đối (ntpath 3.13 coi `/x` là tương đối)."""
+    if IS_WINDOWS:
+        q = canon_path(p)
+        return q.startswith("/") or bool(_WIN_ABS.match(q))
+    return os.path.isabs(p)
+
+
+def _norm(p: str) -> str:
+    return canon_path(os.path.normpath(p)) if IS_WINDOWS else os.path.normpath(p)
+
+
 def _abs(p: str, cwd: Path | str) -> str:
     p = os.path.expanduser(p)
+    if IS_WINDOWS:
+        p = canon_path(p)
+        return p if _isabs(p) else canon_path(canon_path(str(cwd)).rstrip("/") + "/" + p)
     return os.path.normpath(p if os.path.isabs(p) else os.path.join(str(cwd), p))
 
 
 def _real(p: str) -> str:
+    if IS_WINDOWS:  # realpath: tên dài (bỏ 8.3 `LEQUYP~1`), đúng hoa/thường của phần đã tồn tại, giải symlink/junction
+        q = canon_path(p)
+        if not _WIN_ABS.match(q):
+            return q  # `/dev/null`, `/data/x` (gốc MSYS) — không có trên ổ đĩa theo dạng này
+        try:
+            return canon_path(os.path.realpath(q))
+        except (OSError, ValueError):
+            return q
     try:
         return os.path.realpath(p)
     except OSError:
@@ -344,35 +392,86 @@ def _real(p: str) -> str:
 
 
 def _hub_home(ctx: GuardContext) -> str:
-    return str(ctx.policy.hub_home).rstrip("/")
+    return canon_path(str(ctx.policy.hub_home)).rstrip("/")
 
 
 def _under(p: str, base: str) -> bool:
+    if IS_WINDOWS:
+        p, base = fold_path(p), fold_path(base)
     base = base.rstrip("/")
     return p == base or p.startswith(base + "/")
 
 
+def _same(a: str, b: str) -> bool:
+    return fold_path(a) == fold_path(b) if IS_WINDOWS else a == b
+
+
+def _rel_parts(p: str, base: str) -> list[str]:
+    """Các phần của `p` NẰM DƯỚI `base` (không tính chính `base`); [] nếu không nằm dưới."""
+    if not _under(p, base) or _same(p.rstrip("/"), base.rstrip("/")):
+        return []
+    return canon_path(p)[len(canon_path(base).rstrip("/")) + 1 :].split("/")
+
+
+def _contains(hay: str, needle: str) -> bool:
+    """`needle` (đường dẫn) xuất hiện trong chuỗi lệnh/mã — Windows: cả dạng `\\` lẫn `/`, không phân biệt hoa/thường."""
+    if not IS_WINDOWS:
+        return needle in hay
+    h = hay.replace("\\", "/").lower()
+    return any(n in h for n in {needle.replace("\\", "/").lower(), canon_path(needle).lower()})
+
+
+def _is_tmp(p: str) -> bool:
+    """Thư mục tạm "vô hại" — chỉ tiền tố literal `/tmp/`… (Windows: KHÔNG tính %TEMP% thật, như macOS không tính $TMPDIR —
+    workspace có thể nằm trong đó; bảo thủ)."""
+    return p.startswith(TMP_PREFIXES)
+
+
+def _critical(p: str, home: str) -> bool:
+    """Thư mục hệ thống/home (xoá/mv/chmod -R = phá huỷ)."""
+    if not IS_WINDOWS:
+        return p in CRITICAL_DIRS or p == home
+    f = fold_path(p).rstrip("/") or "/"
+    return (f in {d.lower() for d in CRITICAL_DIRS} or f in WIN_CRITICAL_DIRS or bool(_WIN_DRIVE_ROOT.match(f)) or _same(p, home))
+
+
+def _jn(p: str) -> str:
+    """Kết quả os.path.join: Windows → dạng canon (gạch ngược → `/`); POSIX giữ nguyên (không thêm normpath)."""
+    return canon_path(os.path.normpath(p)) if IS_WINDOWS else p
+
+
+def _win_slashes(script: str) -> str:
+    return _WIN_BS_PATH.sub(lambda m: re.sub(r"\\+", "/", m.group(0)), script) if IS_WINDOWS else script
+
+
+def _win_cred_dirs() -> tuple[str, ...]:
+    """R3-1 Windows: nơi lưu thông tin xác thực của người (tương đương Keychain/.config/gh)."""
+    if not IS_WINDOWS:
+        return ()
+    return ("AppData/Roaming/GitHub CLI", "AppData/Roaming/gh", "AppData/Local/GitCredentialManager", "AppData/Roaming/Microsoft/Credentials",
+            "AppData/Local/Microsoft/Credentials", "AppData/Roaming/Microsoft/Protect", "AppData/Roaming/Microsoft/Crypto")
+
+
 def sensitive_read(p: str, ctx: GuardContext) -> bool:
     """Đường dẫn mà agent KHÔNG được đọc: token người cạnh socket, secrets/, mcp.json đã resolve, token MCP HTTP."""
-    homes = {_hub_home(ctx), os.path.realpath(_hub_home(ctx))}
-    cands = {p, _real(p)}
-    uh = str(ctx.policy.user_home).rstrip("/")
+    homes = {_hub_home(ctx), _real(_hub_home(ctx))}
+    cands = {canon_path(p), _real(p)}
+    uh = canon_path(str(ctx.policy.user_home)).rstrip("/")
     for c in cands:  # R3-1: thông tin xác thực git/forge/keychain của người
-        for x in (".config/gh", ".git-credentials", ".config/git/credentials", "Library/Keychains", ".netrc", ".ssh"):
+        for x in (".config/gh", ".git-credentials", ".config/git/credentials", "Library/Keychains", ".netrc", ".ssh") + _win_cred_dirs():
             if _under(c, f"{uh}/{x}"):
                 return True
     for c in cands:
-        if c.endswith(".sock.auth") or os.path.basename(c) == "human.token":
+        if fold_path(c).endswith(".sock.auth") or (os.path.basename(c).lower() if IS_WINDOWS else os.path.basename(c)) == "human.token":
             return True
-        if ctx.hub_socket and c == ctx.hub_socket + ".auth":
+        if ctx.hub_socket and _same(c, ctx.hub_socket + ".auth"):
             return True
         for h in homes:
-            if _under(c, h + "/secrets") or _under(c, h + "/auth") or c == h + "/mcp_server/tokens.json":
+            if _under(c, h + "/secrets") or _under(c, h + "/auth") or _same(c, h + "/mcp_server/tokens.json"):
                 return True
-            if c.startswith(h + "/"):
-                parts = c[len(h) + 1 :].split("/")
-                if len(parts) >= 3 and parts[0] == "agents" and parts[2] == "runtime":
-                    return True
+            parts = [x.lower() for x in _rel_parts(c, h)] if IS_WINDOWS else _rel_parts(c, h)
+            if len(parts) >= 3 and parts[0] == "agents" and parts[2] == "runtime":
+                return True
     return False
 
 
@@ -380,10 +479,14 @@ def _python_env_dirs() -> tuple[str, ...]:
     import sys
     import sysconfig
 
-    out = {os.path.realpath(sys.prefix) + "/bin"}
-    for k in ("purelib", "platlib"):
+    out = {_real(sys.prefix) + "/bin"}
+    if IS_WINDOWS:  # venv Windows: Scripts/ (python.exe, cfharness.exe) + Lib/site-packages
+        out |= {_real(sys.prefix) + "/Scripts", _real(sys.prefix) + "/Lib"}
+    for k in ("purelib", "platlib", "scripts"):
+        if k == "scripts" and not IS_WINDOWS:
+            continue
         try:
-            out.add(os.path.realpath(sysconfig.get_paths()[k]))
+            out.add(_real(sysconfig.get_paths()[k]))
         except KeyError:  # pragma: no cover
             pass
     return tuple(out)
@@ -412,9 +515,11 @@ def protected_path(ctx: GuardContext, p: str, op: str) -> ProtectedResource | No
         r = pol.match_path(cand, op)
         if r:
             return r
-        for h in {hh, os.path.realpath(hh)}:
-            if _under(cand, h) and cand != h:
-                rel = cand[len(h) + 1 :].split("/")
+        for h in {hh, _real(hh)}:
+            rel = _rel_parts(cand, h)
+            if rel:
+                if IS_WINDOWS:
+                    rel = [x.lower() for x in rel]
                 if not (len(rel) >= 3 and rel[0] == "agents" and rel[2] == "workspaces"):
                     return ProtectedResource("hub-home", "hub", h, note="dữ liệu nội bộ HUB_HOME (chỉ daemon ghi)", builtin=True)
         for d in _python_env_dirs():
@@ -423,13 +528,14 @@ def protected_path(ctx: GuardContext, p: str, op: str) -> ProtectedResource | No
         z = exec_zone(cand)
         if z is not None:  # R2-1: vùng thực thi ngoài sandbox (PATH, venv, /opt/homebrew, repo hub, dotfile)
             return ProtectedResource("exec-zone", "path", z, note="vùng thực thi ngoài sandbox (R2-1)", builtin=True)
-        for d in _persistence_dirs(str(pol.user_home)):
+        for d in _persistence_dirs(canon_path(str(pol.user_home))):
             if _under(cand, d):
                 return ProtectedResource("persistence", "path", d, note="cơ chế chạy trễ ngoài sandbox (V2-N2)", builtin=True)
-        parts = cand.split("/")
-        if ".git" in parts:
-            i = parts.index(".git")
-            if parts[i + 1 : i + 2] in (["hooks"], ["config"]):
+        parts = canon_path(cand).split("/")
+        lparts = [x.lower() for x in parts] if IS_WINDOWS else parts  # NTFS: `.GIT/Hooks` = `.git/hooks`
+        if ".git" in lparts:
+            i = lparts.index(".git")
+            if lparts[i + 1 : i + 2] in (["hooks"], ["config"]):
                 return ProtectedResource("git-hooks", "path", "/".join(parts[: i + 2]), note="git hooks/config chạy lệnh khi người dùng git (V2-N2)", builtin=True)
     return None
 
@@ -453,8 +559,8 @@ def write_roots(ctx: GuardContext) -> list[str]:
     """R2-1: nơi tool ghi file ĐƯỢC ghi không cần người — workspace của run + thư mục tạm (+ extra_allow_write/add-dir do người cấp)."""
     import tempfile
 
-    roots = [str(ctx.cwd), os.path.realpath(str(ctx.cwd)), "/tmp", "/private/tmp", os.path.realpath(tempfile.gettempdir())]
-    roots += list(ctx.extra_write_roots)
+    roots = [canon_path(str(ctx.cwd)), _real(str(ctx.cwd)), "/tmp", "/private/tmp", _real(tempfile.gettempdir())]
+    roots += [canon_path(r) for r in ctx.extra_write_roots]
     return [r.rstrip("/") for r in dict.fromkeys(roots) if r]
 
 
@@ -467,7 +573,7 @@ def classify_file_write(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -
     rp = _real(ap)
     op = "overwrite" if tool_name == "Write" and os.path.exists(ap) else "write"
     for cand in {ap, rp}:
-        if cand.startswith(str(ctx.policy.policy_dir) + "/") or cand == str(ctx.policy.policy_dir):
+        if _under(cand, canon_path(str(ctx.policy.policy_dir))):
             return Verdict("destructive", "policy_write", "policy", "agent không được ghi chính sách an toàn (FR-SG-05)", [ap], "hub-policy")
     # R2-1: tool ghi file KHÔNG chịu sandbox OS → vùng thực thi ngoài sandbox = CẤM thẳng
     z = exec_zone(ap)
@@ -584,7 +690,7 @@ class BashAnalyzer:
                  state: dict[str, Any] | None = None) -> None:
         self.ctx = ctx
         self.depth = depth
-        self.cwd: str | None = cwd if cwd is not None else str(ctx.cwd)
+        self.cwd: str | None = cwd if cwd is not None else canon_path(str(ctx.cwd))
         self.aliases: dict[str, str] = aliases if aliases is not None else {}
         # H-02: symlink tạo TRONG cùng lệnh (`ln -s <HUB>/policy pol; echo x > pol/…`) — dùng chung cho lệnh con
         self.state: dict[str, Any] = state if state is not None else {"links": {}}
@@ -612,7 +718,7 @@ class BashAnalyzer:
         txt = w.text if isinstance(w, shell.Word) else w
         if shell.DYN in txt:
             return None
-        if os.path.isabs(os.path.expanduser(txt)):
+        if _isabs(os.path.expanduser(txt)):
             return self.follow_links(_abs(txt, "/"))
         if self.cwd is None:
             return None
@@ -623,8 +729,8 @@ class BashAnalyzer:
         links: dict[str, str] = self.state.get("links") or {}
         for _ in range(8):
             for link, target in links.items():
-                if p == link or p.startswith(link + "/"):
-                    p = os.path.normpath(target + p[len(link):])
+                if _under(p, link):
+                    p = _norm(target + canon_path(p)[len(canon_path(link)):])
                     break
             else:
                 return p
@@ -637,14 +743,14 @@ class BashAnalyzer:
             return None
         if w.glob:
             hits = _glob.glob(p, recursive=False, include_hidden=False)
-            return [os.path.normpath(h) for h in hits] or []
+            return [_norm(h) for h in hits] or []
         return [p]
 
     def protected(self, p: str, op: str) -> ProtectedResource | None:
         return protected_path(self.ctx, p, op)
 
     def check_delete_target(self, p: str, what: str, recursive: bool = True) -> None:
-        if p in CRITICAL_DIRS or p == self.ctx.home or p == os.path.dirname(self.ctx.home):
+        if _critical(p, self.ctx.home) or _same(p, os.path.dirname(self.ctx.home)):
             self.hit("destructive", "delete_critical", "system", f"{what} thư mục hệ thống/home {p}", [p])
             return
         r = self.protected(p, "delete")
@@ -672,7 +778,7 @@ class BashAnalyzer:
         if r is not None:
             self.hit("destructive", "protected_write", "file", f"{what} vào tài nguyên được bảo vệ {r.selector}", [p], r)
             return
-        if p.startswith(TMP_PREFIXES) or not exists or os.path.isdir(p):
+        if _is_tmp(p) or not exists or os.path.isdir(p):
             self.hit("write", "write_file", "file", what, [p])
             return
         if not created_by_run(p, self.ctx):
@@ -686,9 +792,9 @@ class BashAnalyzer:
     def checkpointed(self, p: str) -> bool:
         """File THƯỜNG đã được git track trong repo có checkpoint của run → `cfharness run revert` khôi phục được."""
         root = self.ctx.checkpoint_root
-        if not root or os.path.isdir(p) or not _under(_real(p), os.path.realpath(root)):
+        if not root or os.path.isdir(p) or not _under(_real(p), _real(root)):
             return False
-        r = self._git(root, "ls-files", "--error-unmatch", "--", os.path.relpath(_real(p), os.path.realpath(root)))
+        r = self._git(root, "ls-files", "--error-unmatch", "--", os.path.relpath(_real(p), _real(root)))
         return r is not None and r.returncode == 0
 
     def check_write_target(self, p: str, what: str, op: str = "write") -> None:
@@ -700,16 +806,16 @@ class BashAnalyzer:
 
     # -------------------------------------------------------------- run
     def run(self, script: str) -> Verdict:
-        norm = shell.normalize(script)
+        norm = shell.normalize(_win_slashes(script))
         if FORK_BOMB.search(norm):
             self.hit("destructive", "fork_bomb", "system", "fork bomb")
         if OBFUSCATION.search(norm):
             self.hit("uncertain", "obfuscated", "system", "lệnh giải mã/che giấu (base64/xxd -r…) — không phân tích được")
         sock = self.ctx.hub_socket
-        if (sock and sock in norm) or HUB_SOCKET_RE.search(norm):
+        if (sock and _contains(norm, sock)) or HUB_SOCKET_RE.search(norm):
             self.hit("destructive", "hub_socket", "hub", "agent đụng socket/token điều khiển hub", forbidden=True)
         hh = _hub_home(self.ctx)
-        if hh + "/auth" in norm or hh + "/secrets" in norm:
+        if _contains(norm, hh + "/auth") or _contains(norm, hh + "/secrets"):
             self.hit("destructive", "hub_secret_read", "hub", "agent đụng token người/secret store của hub", forbidden=True)
         for pat in self.ctx.policy.bash_patterns:
             try:
@@ -766,7 +872,7 @@ class BashAnalyzer:
         # V2-N3: kiểm socket/token trên từ ĐÃ bỏ quote/nối chuỗi (`hub.so''ck`)
         for w in list(sc.words) + [rw for _, rw in sc.redirects]:
             lit = w.literal
-            if HUB_SOCKET_RE.search(lit) or (self.ctx.hub_socket and self.ctx.hub_socket in lit):
+            if HUB_SOCKET_RE.search(lit) or (self.ctx.hub_socket and _contains(lit, self.ctx.hub_socket)):
                 self.hit("destructive", "hub_socket", "hub", "agent đụng socket/token điều khiển hub", forbidden=True)
         if sc.words and os.path.basename(sc.words[0].text.lstrip("\\")) in ("socat", "nc", "ncat", "netcat") and any(
             "UNIX" in w.text.upper() or w.text == "-U" or w.dynamic for w in sc.words[1:]):
@@ -800,19 +906,24 @@ class BashAnalyzer:
         """Vùng NHẠY CẢM của HUB_HOME: đọc được = tự duyệt/ký link/lộ secret (WT-3). Không phụ thuộc cách viết lệnh."""
         # chỉ vùng mà ĐỌC ĐƯỢC = lộ secret/token/tự duyệt (policy đã do protected_write bắt — không đưa vào đây để không che protected_id)
         out: list[str] = []
-        for h in {_hub_home(self.ctx), os.path.realpath(_hub_home(self.ctx))}:
+        for h in {_hub_home(self.ctx), _real(_hub_home(self.ctx))}:
             out += [f"{h}/auth", f"{h}/secrets", f"{h}/mcp_server/tokens.json", f"{h}/hub.db"]
         if self.ctx.hub_socket:
-            out += [self.ctx.hub_socket, self.ctx.hub_socket + ".auth"]
-        uh = str(self.ctx.policy.user_home).rstrip("/")  # R3-1: thông tin xác thực của người
-        out += [f"{uh}/{x}" for x in (".config/gh", ".git-credentials", ".config/git/credentials", "Library/Keychains", ".netrc", ".ssh")]
+            sock = canon_path(self.ctx.hub_socket)
+            out += [sock, sock + ".auth"]
+        uh = canon_path(str(self.ctx.policy.user_home)).rstrip("/")  # R3-1: thông tin xác thực của người
+        out += [f"{uh}/{x}" for x in (".config/gh", ".git-credentials", ".config/git/credentials", "Library/Keychains", ".netrc", ".ssh") + _win_cred_dirs()]
         return list(dict.fromkeys(out))
 
     def _in_region(self, p: str, region: str) -> bool:
+        if IS_WINDOWS:
+            p, region = fold_path(p), fold_path(region)
         p, region = p.rstrip("/"), region.rstrip("/")
         return p == region or p.startswith(region + "/")
 
     def _ancestor_of_region(self, p: str, region: str) -> bool:
+        if IS_WINDOWS:
+            p, region = fold_path(p.rstrip("*")), fold_path(region)
         p = p.rstrip("*").rstrip("/")
         return bool(p) and region.rstrip("/").startswith(p + "/")
 
@@ -839,7 +950,7 @@ class BashAnalyzer:
             if w.dynamic:
                 # đích động: phần literal (đã bỏ $..) trỏ vào/kết thúc bằng tên nhạy cảm → uncertain (giữ chờ người)
                 lit = w.literal
-                if any(region in lit for region in regions) or SENSITIVE_HINT.search(lit):
+                if any(_contains(lit, region) for region in regions) or SENSITIVE_HINT.search(lit.replace("\\", "/") if IS_WINDOWS else lit):
                     self.hit("uncertain", "sensitive_dynamic", "hub", "đường dẫn động có thể chạm vùng nhạy cảm hub", [lit])
                     return
                 continue
@@ -998,6 +1109,8 @@ class BashAnalyzer:
             if args:
                 self.merge(self.sub(args[0].literal), "trap")
             return
+        if self.windows_cmd(base, args, sc):
+            return
         if base in SHELLS or re.fullmatch(r"(ba|z|k|da)?sh\d*(\.\d+)?", base):
             self.shell_cmd(base, args, sc)
             return
@@ -1110,7 +1223,7 @@ class BashAnalyzer:
                 p = self.path(a)
                 if not p or not (os.path.exists(p) or a.text.startswith(("/", "~", "."))):
                     continue
-                if rec and (p in CRITICAL_DIRS or p == self.ctx.home):
+                if rec and _critical(p, self.ctx.home):
                     self.hit("destructive", "chmod_recursive_system", "system", f"{base} -R trên {p}", [p])
                 else:
                     self.check_write_target(p, base)
@@ -1244,6 +1357,52 @@ class BashAnalyzer:
         # lệnh chung: kiểm đối số đường dẫn chạm tài nguyên được bảo vệ
         self.generic(base, args, unknown_targets)
 
+    def windows_cmd(self, base: str, args: list[shell.Word], sc: shell.SimpleCommand) -> bool:
+        """Lệnh Windows (agent gọi từ Git Bash của Claude Code trên Windows): Task Scheduler / dịch vụ / registry / WMI = lịch chạy
+        hoặc tiến trình NGOÀI Job Object của run → `schedule_persistence`. `cmd /c …` phân tích thêm lệnh bên trong; PowerShell
+        (kể cả `-EncodedCommand`) quét cmdlet tạo lịch/dịch vụ/WMI rồi vẫn đi tiếp luồng trình thông dịch cũ. True = đã xử lý xong."""
+        wb = re.split(r"[\\/]", base)[-1].lower()
+        wb = wb[:-4] if wb.endswith(".exe") else wb
+        low = [a.text.lower() for a in args]
+        if wb == "schtasks" and any(t[:1] in "/-" and t.lstrip("/-") in ("create", "change", "run", "delete", "end") for t in low):
+            self.hit("destructive", "schedule_persistence", "system", f"schtasks tạo/sửa/chạy/xoá task Task Scheduler — {WIN_ESCAPE}")
+            return True
+        if wb == "sc" and low and low[0] in ("create", "config", "start", "stop", "delete", "failure"):
+            self.hit("destructive", "schedule_persistence", "system", f"sc {low[0]}: tạo/sửa/chạy dịch vụ Windows — {WIN_ESCAPE}")
+            return True
+        if wb == "reg" and low and low[0] in ("add", "delete", "import", "restore", "load", "unload", "copy"):
+            run_key = any(re.search(r"\\(run|runonce|winlogon)\b|\\services\\", t) for t in low)
+            self.hit("destructive", "schedule_persistence" if run_key else "registry_write", "system",
+                     f"reg {low[0]}: ghi registry" + (f" (mục tự khởi động/dịch vụ — {WIN_ESCAPE})" if run_key else " (cấu hình hệ thống ngoài workspace)"))
+            return True
+        if wb == "wmic" and "create" in low and "call" in low:
+            self.hit("destructive", "schedule_persistence", "system", f"wmic … call create: tạo tiến trình qua WMI — {WIN_ESCAPE}")
+            return True
+        if wb == "cmd":
+            for i, t in enumerate(low):
+                if t in ("/c", "/k", "//c", "//k"):  # Git Bash đổi `/c` thành đường dẫn → người viết `//c`
+                    rest = args[i + 1:]
+                    if any(a.dynamic for a in rest):
+                        self.hit("uncertain", "shell_c_dynamic", "system", "cmd /c với nội dung động")
+                    self.merge(self.sub(" ".join(a.literal for a in rest)), "cmd /c")
+                    break
+            return False
+        if wb in ("powershell", "pwsh"):
+            code = " ".join(a.literal for a in args)
+            for i, t in enumerate(low[:-1]):
+                name = t.lstrip("-/")
+                if t[:1] in "-/" and name and (name in ("e", "ec") or (len(name) >= 3 and "encodedcommand".startswith(name))):
+                    try:
+                        code += "\n" + base64.b64decode(args[i + 1].text + "===").decode("utf-16-le", errors="replace")
+                    except (ValueError, binascii.Error):
+                        self.hit("uncertain", "interp_dynamic_code", "system", f"{wb} -EncodedCommand không giải mã được")
+            if WIN_PERSIST_CODE.search(code):
+                self.hit("destructive", "schedule_persistence", "system", f"{wb}: cmdlet tạo lịch/dịch vụ/tiến trình WMI/mục Run — {WIN_ESCAPE}")
+            if wb != base:  # `powershell.exe`, đường dẫn đầy đủ… → luồng trình thông dịch như `powershell`
+                self.interpreter(wb, args, sc)
+                return True
+        return False
+
     _PKG_RUN_SUB = {"npm": ("run", "run-script", "rum", "urn"), "pnpm": ("run", "run-script"), "yarn": ("run",), "bun": ("run",)}
     _PKG_VAL_FLAGS = ("--prefix", "-C", "--dir", "--cwd", "--workspace", "-w", "--filter", "-F", "--loglevel")
 
@@ -1346,7 +1505,7 @@ class BashAnalyzer:
             if a.dynamic:
                 self.hit("uncertain", "delete_dynamic_target", "file", f"{what} với đích động ({a.literal or '$…'})", [a.literal])
                 continue
-            if a.glob and self.cwd is None and not os.path.isabs(a.text):
+            if a.glob and self.cwd is None and not _isabs(a.text):
                 self.hit("uncertain", "delete_unknown_cwd", "file", f"{what} glob khi không biết thư mục hiện tại")
                 continue
             exp = self.expand(a)
@@ -1468,11 +1627,11 @@ class BashAnalyzer:
                 r = self.protected(sp, "delete")
                 if r is not None:
                     self.hit("destructive", "protected_move", "file", f"mv tài nguyên được bảo vệ {r.selector}", [sp], r)
-                elif sp in CRITICAL_DIRS or sp == self.ctx.home:
+                elif _critical(sp, self.ctx.home):
                     self.hit("destructive", "move_critical", "system", f"mv thư mục hệ thống {sp}", [sp])
                 else:
                     dp0 = self.path(dst)
-                    root = str(self.ctx.cwd).rstrip("/")
+                    root = canon_path(str(self.ctx.cwd)).rstrip("/")
                     if os.path.lexists(sp) and _under(sp, root) and dp0 is not None and not _under(dp0, root) and not created_by_run(sp, self.ctx):
                         # H-03: chuyển file/thư mục CÓ SẴN ra khỏi workspace = xoá khỏi repo của người
                         self.hit("destructive", "move_out_existing", "file", f"mv {sp} ra ngoài workspace (file có sẵn)", [sp])
@@ -1526,7 +1685,7 @@ class BashAnalyzer:
                 self.hit("uncertain", "ln_dynamic", "file", "ln nguồn động")
                 continue
             raw = src.text
-            if symbolic and not os.path.isabs(os.path.expanduser(raw)):
+            if symbolic and not _isabs(os.path.expanduser(raw)):
                 tgt = None  # đích tương đối tính theo thư mục của link — tính sau khi biết link
             else:
                 tgt = self.path(raw)
@@ -1536,15 +1695,15 @@ class BashAnalyzer:
                     self.hit("destructive", "symlink_to_protected", "file", f"ln trỏ vào tài nguyên được bảo vệ / HUB_HOME ({tgt})", [tgt], r)
         if tdir is not None:
             dpath = self.path(tdir)
-            links = [os.path.join(dpath, os.path.basename(a.text.rstrip("/"))) for a in srcs] if dpath else []
+            links = [_jn(os.path.join(dpath, os.path.basename(a.text.rstrip("/")))) for a in srcs] if dpath else []
         elif len(paths) >= 2:
             dpath = self.path(paths[-1])
             if dpath is None:
                 self.hit("uncertain", "ln_dynamic", "file", "ln đích động")
                 return
-            links = [os.path.join(dpath, os.path.basename(paths[0].text.rstrip("/")))] if os.path.isdir(dpath) and not force else [dpath]
+            links = [_jn(os.path.join(dpath, os.path.basename(paths[0].text.rstrip("/"))))] if os.path.isdir(dpath) and not force else [dpath]
         else:
-            links = [os.path.join(self.cwd or str(self.ctx.cwd), os.path.basename(paths[0].text.rstrip("/")))]
+            links = [_jn(os.path.join(self.cwd or canon_path(str(self.ctx.cwd)), os.path.basename(paths[0].text.rstrip("/"))))]
         for link in links:
             if link is None:
                 continue
@@ -1555,13 +1714,14 @@ class BashAnalyzer:
             src = srcs[0]
             if not src.dynamic:
                 raw = os.path.expanduser(src.text)
-                tgt = os.path.normpath(raw if os.path.isabs(raw) else os.path.join(os.path.dirname(link) if symbolic else (self.cwd or str(self.ctx.cwd)), raw))
+                tgt = _abs(raw, os.path.dirname(link) if symbolic else (self.cwd or canon_path(str(self.ctx.cwd)))) if IS_WINDOWS else \
+                    os.path.normpath(raw if os.path.isabs(raw) else os.path.join(os.path.dirname(link) if symbolic else (self.cwd or str(self.ctx.cwd)), raw))
                 tgt = self.follow_links(tgt)
                 if symbolic:
                     r = self.protected(tgt, "write")
                     if r is not None or (_under(tgt, _hub_home(self.ctx)) and not self._hub_workspace(tgt)):
                         self.hit("destructive", "symlink_to_protected", "file", f"symlink {link} → {tgt} (vùng bảo vệ)", [tgt], r)
-                self.state.setdefault("links", {})[os.path.normpath(link)] = tgt
+                self.state.setdefault("links", {})[_norm(link)] = tgt
 
     def extract(self, base: str, args: list[shell.Word]) -> None:
         """tar -x / unzip (H-03): liệt kê archive (nếu có) và kiểm file đích đã tồn tại sẽ bị ghi đè."""
@@ -1569,7 +1729,7 @@ class BashAnalyzer:
         import zipfile
 
         texts = [a.text for a in args]
-        dest = self.cwd or str(self.ctx.cwd)
+        dest = self.cwd or canon_path(str(self.ctx.cwd))
         archive: str | None = None
         if base == "unzip":
             if any(t in ("-l", "-v", "-t", "-Z", "-p", "-n") for t in texts):
@@ -1615,8 +1775,8 @@ class BashAnalyzer:
             self.hit("uncertain", "archive_too_big", "file", f"{base}: archive quá lớn để kiểm ghi đè")
             return
         for n in names:
-            t = os.path.normpath(os.path.join(dest, n))
-            if n.startswith("/") or ".." in n.split("/"):
+            t = _norm(os.path.join(dest, n))
+            if n.startswith("/") or ".." in n.split("/") or (IS_WINDOWS and (_isabs(n) or ".." in n.replace("\\", "/").split("/"))):
                 self.hit("destructive", "archive_path_escape", "file", f"{base}: mục archive thoát khỏi thư mục đích ({n})", [t])
             elif os.path.lexists(t) and not os.path.isdir(t):
                 self.check_overwrite_target(t, f"{base} giải nén")
@@ -1814,12 +1974,14 @@ class BashAnalyzer:
         # --- mặt điều khiển hub (H-01): socket/token/module nội bộ → forbidden; HUB_HOME → giữ chờ người
         if KEYCHAIN_CODE_RE.search(code):
             self.hit("destructive", "keychain_access", "system", f"mã {base} truy cập keychain/credential helper (R3-1)", forbidden=True)
-        if HUB_SOCKET_RE.search(code) or (self.ctx.hub_socket and self.ctx.hub_socket in code):
+        if HUB_SOCKET_RE.search(code) or (self.ctx.hub_socket and _contains(code, self.ctx.hub_socket)):
             self.hit("destructive", "hub_socket", "hub", f"mã {base} đụng socket/token điều khiển hub", forbidden=True)
         if HUB_MODULE_RE.search(code):
             self.hit("destructive", "hub_module", "hub", f"mã {base} dùng module nội bộ cfharness (client RPC/CLI)", forbidden=True)
         if HUB_HOME_REF_RE.search(code):
             self.hit("destructive", "hub_home_in_code", "policy", f"mã {base} tham chiếu HUB_HOME — chỉ người được đụng dữ liệu/chính sách hub")
+        if WIN_PERSIST_CODE.search(code):
+            self.hit("destructive", "schedule_persistence", "system", f"mã {base} tạo lịch/dịch vụ/tiến trình WMI/mục Run của Windows — {WIN_ESCAPE}")
         if UNIX_SOCKET_RE.search(code):
             self.hit("uncertain", "unix_socket_in_code", "hub", f"mã {base} kết nối Unix socket — không xác định được đích")
         rx = {"node": JS_DESTRUCTIVE, "nodejs": JS_DESTRUCTIVE, "deno": JS_DESTRUCTIVE, "bun": JS_DESTRUCTIVE}.get(base)
@@ -1864,7 +2026,8 @@ class BashAnalyzer:
                 if not lit or len(lit) > 4000:
                     continue
                 if re.match(r"^\s*(rm|git|find|dd|mkfs|shred|truncate|chmod|chown|psql|mysql|sqlite3|sh|bash|zsh|curl|sudo|mv|cp|ln|tee|install|rsync|"
-                            rf"unlink|{_CLI}|python[\d.]*|node|perl|ruby|nc|socat|xargs|kill|pkill|docker|kubectl|terraform|aws|gh|npm|pnpm|yarn|bun|npx|tsx|launchctl|make)\b", lit):
+                            rf"unlink|{_CLI}|python[\d.]*|node|perl|ruby|nc|socat|xargs|kill|pkill|docker|kubectl|terraform|aws|gh|npm|pnpm|yarn|bun|npx|tsx|launchctl|make|"
+                            r"schtasks|sc|reg|wmic|cmd|powershell|pwsh)\b", lit):
                     found = True
                     self.merge(self.sub(lit), f"lệnh trong mã {base}")
             for m in LIST_ARGV_RE.finditer(code):
@@ -1885,8 +2048,9 @@ class BashAnalyzer:
 
     def _hub_workspace(self, p: str) -> bool:
         """Đường dẫn trong workspace scratch của agent (HUB_HOME/agents/<id>/workspaces/…) — vùng agent được ghi."""
-        h = _hub_home(self.ctx)
-        rel = p[len(h) + 1 :].split("/") if p.startswith(h + "/") else []
+        rel = _rel_parts(p, _hub_home(self.ctx))
+        if IS_WINDOWS:
+            rel = [x.lower() for x in rel]
         return len(rel) >= 3 and rel[0] == "agents" and rel[2] == "workspaces"
 
     def code_writes(self, base: str, code: str, inline: bool) -> None:
@@ -2287,7 +2451,7 @@ class BashAnalyzer:
         for line in r.stdout.splitlines():
             m = re.match(r"^Would remove (.+)$", line.strip())
             if m:
-                out.append(os.path.normpath(os.path.join(cwd, m.group(1))))
+                out.append(_norm(os.path.join(cwd, m.group(1))))
         return out
 
 

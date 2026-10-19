@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..oscompat import owned_by_me, pid_alive
 from ..paths import HubPaths
 
 COOKIE = "ahub_web"
@@ -212,11 +213,12 @@ def read_state(paths: HubPaths) -> dict[str, Any] | None:
     p = state_path(paths)
     try:
         st = os.lstat(p)
-        if p.is_symlink() or st.st_uid != os.getuid():
+        if p.is_symlink() or not owned_by_me(st):
             return None
         data = json.loads(p.read_text(encoding="utf-8"))
         pid = int(data["pid"])
-        os.kill(pid, 0)
+        if not pid_alive(pid):  # KHÔNG os.kill(pid, 0) — trên Windows đó là TerminateProcess
+            return None
         bytes.fromhex(data["key"])
         return data
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):

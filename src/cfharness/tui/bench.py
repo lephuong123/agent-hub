@@ -18,7 +18,6 @@ import argparse
 import asyncio
 import json
 import os
-import resource
 import socket
 import statistics
 import subprocess
@@ -27,6 +26,11 @@ import time
 from pathlib import Path
 
 import yaml
+
+try:
+    import resource
+except ImportError:  # Windows: không có `resource`/`ps` — bench đo NFR chỉ chạy trên macOS/Linux
+    resource = None  # type: ignore[assignment]
 
 
 def _ps(pid: int) -> tuple[float, float]:
@@ -181,6 +185,8 @@ async def main_async(a: argparse.Namespace) -> dict:
 
 
 def main() -> None:
+    if resource is None:
+        raise SystemExit("bench chỉ chạy trên macOS/Linux (cần `resource` + `ps`)")
     p = argparse.ArgumentParser()
     p.add_argument("--home", required=True)
     p.add_argument("--agents", type=int, default=50)

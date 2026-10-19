@@ -161,7 +161,7 @@ EVENT_LEVELS: dict[str, str] = {
     "question.cancelled": "summary",  # question_id, reason
     "question.action": "summary",  # xin phép: người cho phép → hub thực hiện (question_id, kind, target, ok, error?)
     "question.reminder": "summary",  # nhắc người: question_id, reminder_count, wait_s
-    # Hệ thống ngoài hub (systems/): thao tác job launchd (system, label, action pause|resume|restart, ok, by, reason, detail)
+    # Hệ thống ngoài hub (systems/): thao tác job launchd/Task Scheduler (system, label, action pause|resume|restart, ok, by, reason, detail)
     "system.job": "summary",
     # Lịch chạy tự động (schedules/): schedule_id, name, kind, expr, status, next_run_at, created_by, by (+ action/reason/fire…)
     "schedule.created": "summary",

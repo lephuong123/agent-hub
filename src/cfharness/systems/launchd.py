@@ -7,12 +7,13 @@ bao giờ gọi `launchctl` thật. Lệnh chạy trong DAEMON (ngoài sandbox c
 
 from __future__ import annotations
 
-import os
 import plistlib
 import re
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
+
+from ..oscompat import uid_tag
 
 Runner = Callable[[list[str], float], tuple[int, str, str]]
 LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
@@ -100,22 +101,44 @@ def load_jobs(launch_agents_dir: Path) -> list[dict[str, Any]]:
     return out
 
 
+_WIN_ABS = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def is_abs_token(tok: str) -> bool:
+    r"""Token là đường dẫn tuyệt đối: `/…` (POSIX) hoặc `C:\…` / `C:/…` (Windows)."""
+    return tok.startswith("/") or bool(_WIN_ABS.match(tok))
+
+
 def job_paths(job: dict[str, Any]) -> list[str]:
     """Đường dẫn tuyệt đối job chạm tới (cwd + đối số dạng đường dẫn) — để gán job vào hệ thống."""
     out = [job["cwd"]] if job.get("cwd") else []
     for a in job.get("program") or []:
         for tok in str(a).split():
-            if tok.startswith("/"):
+            if is_abs_token(tok):
                 out.append(tok)
     return out
 
 
 class Launchctl:
+    """Backend job của macOS. Cùng giao diện với `taskscheduler.TaskScheduler` (Windows) — service chỉ dùng: `jobs(dir)`, `state()`,
+    `disabled()`, `pause(label)`, `resume(label, nguồn)`, `restart(label)`, `label_ok(label)`, `name`, `noun`."""
+
+    name = "launchd"
+    noun = "job launchd"
+
     def __init__(self, binary: str = "/bin/launchctl", runner: Runner | None = None, timeout: float = 15.0, uid: int | None = None) -> None:
         self.bin = binary
         self.runner = runner or default_runner
         self.timeout = timeout
-        self.domain = f"gui/{os.getuid() if uid is None else uid}"
+        self.domain = f"gui/{uid_tag() if uid is None else uid}"
+
+    @staticmethod
+    def label_ok(label: str) -> bool:
+        return bool(LABEL_RE.match(str(label or "")))
+
+    @staticmethod
+    def jobs(launch_agents_dir: Path) -> list[dict[str, Any]]:
+        return load_jobs(launch_agents_dir)
 
     def _run(self, *args: str) -> tuple[int, str, str]:
         return self.runner([self.bin, *args], self.timeout)
