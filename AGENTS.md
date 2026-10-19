@@ -299,8 +299,8 @@ tĩnh mới đặt trong `web/static/`. Không bao giờ đưa token người/kh
 Duyệt: hiện TOÀN BỘ thao tác (`present.action_view`, không cắt); lớp nặng (`notify.telegram.confirm_classes` + `file`, tài nguyên bảo vệ) cần bước 2. `config.set` chỉ khoá trong `SAFE_CONFIG`.
 Agent trong run: sandbox chặn TCP localhost (đã kiểm thật) + denyRead `HUB_HOME/auth` + `agent-hub web` forbidden trong classifier.
 
-## M7 luồng MGR-UI — Điều phối viên trên web + Telegram
-Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes/M7-ui.md`. Ảnh: `docs/screenshots/web/16-…18-*.png`. Không migration, không RPC mới.
+## M7 luồng MGR-UI — Điều phối viên trên web + Telegram + terminal
+Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes/M7-ui.md`. Ảnh: `docs/screenshots/web/16-…18-*.png`, `docs/screenshots/m2/10-11-dieu-phoi*.svg`. Không migration, không RPC mới.
 
 | Module | Vai trò |
 |---|---|
@@ -308,11 +308,15 @@ Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes
 | `web/present.py` (`mgr_*`) | Thuần: đích `manager.action` → link NỘI BỘ (loại đã biết + id an toàn), chuẩn hoá history/conversation |
 | `chat/manager_chat.py` | `hub.telegram.manager`: tin không `/` → `manager.chat(channel=telegram:<chat>)`, reply → đúng conversation (`hub_state telegram.mgr_*`), `/moi`, `manager.reply` (theo `channel`) → khung WT-8 |
 | `web/manager_stub.py` | Stub `manager.*` cùng chữ ký — CHỈ test/demo (`install(daemon, force=)`) |
+| `manager/repl.py`, `manager/chatview.py` | `agent-hub chat` (= `manager chat` không nội dung): REPL `prompt_toolkit` (nhập dính đáy, thanh trạng thái spinner/tool/chữ chạy, `/new /list /open /history /stop`, steer khi đang làm, Ctrl-C dừng lượt, lịch sử `HUB_HOME/cli_history` 0600); không TTY → từng dòng stdin. `ChatState`/`render` thuần dùng chung với TUI. `manager chat "<tin>"` chờ qua `events.subscribe` (`repl.oneshot`) |
+| `tui/manager.py` | `ManagerScreen` (phím `m` ở `top`): hội thoại + "Hành động" (Enter → Attach/Tasks, chỉ đích hợp lệ) + transcript `RichLog(markup=False)` + ô nhập; Ctrl-N mới, Ctrl-T dừng lượt. Hội thoại kênh `cli` DÙNG CHUNG với `agent-hub chat`; audit kênh `tui` |
+| `termsafe.py` | `clean()`/`one_line()`: bỏ ANSI/OSC/C1, điều khiển, bidi, zero-width trước khi in chữ agent ra terminal |
 
 Bất biến: chữ của điều phối viên (trả lời, tóm tắt/đích hành động) là DỮ LIỆU — web vẽ bằng autoescape + `pre-wrap` (không markdown, không `|safe`,
 không link do agent đặt; HTML qua SSE vẽ phía server, delta gán `textContent`); Telegram chỉ trong `<pre>` sau tiền tố cố định, không bao giờ kèm nút.
 Mọi ghi từ web qua `post_guard` (CSRF + khoá phiên WT-1) với `_audit.channel=web`; từ Telegram qua `bot.call` (cổng người + allowlist from.id, audit
-`telegram:<id>`). Test: `tests/test_web_manager.py`, `tests/test_telegram_manager.py` (thêm ca XSS mới vào đây).
+`telegram:<id>`). Terminal (REPL/TUI): chữ agent qua `termsafe.clean` + `rich.Text` (không markup, không OSC 8 link); `agent-hub chat` ∈ `HUB_HUMAN_ONLY_CLI`.
+Test: `tests/test_web_manager.py`, `tests/test_telegram_manager.py`, `tests/test_manager_repl.py`, `tests/test_tui_manager.py` (thêm ca XSS/chèn ANSI mới vào đây).
 
 ## M7 MGR-CORE — Điều phối viên (manager: agent harness quản lý + giao việc)
 Chi tiết, **chữ ký RPC cho MGR-UI**, nghiệm thu thật: `docs/dev-notes/M7-core.md`. Migration **v13** (`manager_conversations`, `manager_messages`).

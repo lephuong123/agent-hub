@@ -10,7 +10,7 @@ Luồng dữ liệu:
   detail}` → ring buffer bù phần còn thiếu (kể cả delta) rồi nối live; khử trùng theo (epoch, seq) (FR-UI-03).
 - Subscriber chậm bị daemon ngắt (`slow_consumer`, NFR-08) → TUI tự đăng ký lại từ seq cuối đã thấy.
 
-Phím màn bảng: ↑↓ chọn · Enter attach · a approve · d deny · N báo nhầm (allow + đánh dấu) · s steer · x stop
+Phím màn bảng: ↑↓ chọn · Enter attach · m điều phối (chat với điều phối viên) · a approve · d deny · N báo nhầm (allow + đánh dấu) · s steer · x stop
 (xác nhận) · X stop ngay · T takeover · n tạo · e sửa · Del xoá · / lọc · g team · o sắp xếp · t tasks · l learnings ·
 f feedback (good|wrong|partial, H-16) · E estop · q thoát. Có `learning.applied` → thông báo ngắn "X learned: …".
 """
@@ -86,6 +86,7 @@ class HtopScreen(Screen):
         Binding("slash", "search", "Lọc"),
         Binding("g", "cycle_team", "Team", show=False),
         Binding("o", "cycle_sort", "Sắp xếp", show=False),
+        Binding("m", "manager", "Điều phối"),  # M7 terminal: chat với điều phối viên (tui/manager.py)
         Binding("t", "tasks", "Tasks"),
         Binding("l", "learnings", "Learnings"),
         Binding("f", "feedback", "Feedback"),  # hardening H-16 (FR-UI-01)
@@ -421,6 +422,11 @@ class HtopScreen(Screen):
 
     def action_tasks(self) -> None:
         self.app.push_screen(TasksScreen())
+
+    def action_manager(self) -> None:
+        from .manager import ManagerScreen
+
+        self.app.push_screen(ManagerScreen())
 
     def action_learnings(self) -> None:
         self.app.push_screen(LearningsScreen())
@@ -874,11 +880,12 @@ class TasksScreen(Screen):
         Binding("f", "toggle_done", "Ẩn/hiện done"),
     ]
 
-    def __init__(self) -> None:
+    def __init__(self, select: str | None = None) -> None:
         super().__init__()
         self.tasks: list[dict[str, Any]] = []
         self.available: bool | None = None
         self.hide_done = True
+        self.select = select  # id task cần chọn sẵn (mở từ thẻ hành động của điều phối viên)
 
     def compose(self) -> ComposeResult:
         yield Static(id="tasks-head")
@@ -946,6 +953,11 @@ class TasksScreen(Screen):
                 key=t["id"],
             )
         ids = [t["id"] for t in rows]
+        if self.select:
+            if self.select not in ids and self.hide_done and any(t["id"] == self.select for t in self.tasks):
+                self.hide_done = False  # task đích đã done → hiện cả done
+                return await self._reload()
+            prev, self.select = self.select, None
         if prev in ids:
             table.move_cursor(row=ids.index(prev), animate=False)
         await self.show_detail()

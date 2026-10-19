@@ -92,6 +92,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "notify": {"telegram"},  # token bot / allowlist chat / gửi tin thay người (chat/rpc.py)
     "web": None,  # WEB: `agent-hub web` sinh link đăng nhập = phiên NGƯỜI trên giao diện web
     "manager": {"set", "chat", "tick"},  # M7: chỉ định/ra lệnh điều phối viên = quyền người (manager.* ∈ HUMAN_ONLY)
+    "chat": None,  # M7 terminal: `agent-hub chat` = ra lệnh điều phối viên (manager.chat ∈ HUMAN_ONLY)
 }
 
 # H-03: API dạng phương thức (`Path(..).unlink()`) đứng sau `)`/`]` nên KHÔNG dùng `\b` trước dấu chấm

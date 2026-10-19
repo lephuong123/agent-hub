@@ -59,3 +59,28 @@ Chạm file dùng chung (chỉ thêm): `web/app.py` (route, `overview` lấy `mg
 - Thẻ hành động chỉ gắn vào dòng thời gian khi `run_id` thuộc hội thoại đang xem; quét tối đa 3000 event gần nhất của điều phối viên.
 - Không có nút "chạy nhịp ngay" trên web (`manager.tick` — dùng `agent-hub manager tick`).
 - Telegram: không gửi lại phần đã chạy chữ (chỉ trả lời cuối); "đang gõ…" (`sendChatAction`) chỉ gửi một lần.
+
+## 6. Terminal — `agent-hub chat` + TUI `top` → `m` (2026-10-19)
+Không migration, không RPC mới (dùng `manager.get|chat|conversations|history`, `run.get|stop`, `events.subscribe|query`, `hub.status`).
+Thêm phụ thuộc `prompt-toolkit` (REPL: dòng nhập dính đáy + in tin phía trên, thanh trạng thái, gợi ý lệnh, lịch sử).
+
+| File | Vai trò |
+|---|---|
+| `manager/chatview.py` | THUẦN, dùng chung REPL + TUI: `ChatState.apply(ev)` (run của hội thoại + run tiếp nối qua `run.queued.parent_run_id`, chữ chạy `message.delta`/`message.complete`, tool đang dùng, approval), `render(item)` → `rich`, `timeline`, `pending_run`, banner/help |
+| `manager/repl.py` | `ChatSession` (mở hội thoại cli gần nhất / `-c` / `--new`, in lại 6 tin, phát hiện lượt còn đang chạy, giữ event tới trong lúc `manager.chat` chưa trả `run_id`, tự nối lại luồng), `run_tty` (prompt_toolkit), `run_plain` (stdin không TTY: gửi → CHỜ trả lời), `oneshot` (`manager chat "<tin>"`: đăng ký event TRƯỚC khi gửi, thay vòng hỏi `manager.history` mỗi giây) |
+| `tui/manager.py` | `ManagerScreen`: hội thoại (`+ Hội thoại mới`), "Hành động" (Enter → `AttachScreen` cho run/agent, `TasksScreen(select=)` cho task; đích không hợp lệ chỉ thông báo), transcript `RichLog(markup=False)`, dòng trạng thái, ô nhập; Ctrl-N, Ctrl-T, Esc |
+| `termsafe.py` | `clean()`: bỏ CSI/OSC (kể cả OSC 8 link, đổi tiêu đề)/DCS/C1, điều khiển trừ `\n\t`, `\r` lẻ, bidi, zero-width |
+
+Quyết định: REPL và TUI dùng CHUNG kênh `cli` (mở lại terminal hay TUI đều tiếp đúng mạch); audit `manager.chat` kênh `cli` (REPL) / `tui` (TUI).
+Duyệt thao tác phá huỷ KHÔNG làm trong chat (chỉ hiện gợi ý `agent-hub approve|deny <id>`) — giữ nội dung agent tách khỏi nút/lệnh duyệt.
+`agent-hub chat` thêm vào `HUB_HUMAN_ONLY_CLI` (agent gọi từ Bash → forbidden, như `manager chat`). Ctrl-C: đang làm → `run.stop`; rảnh → lần 2 trong 2 s thoát;
+Ctrl-D thoát; Alt-Enter xuống dòng; `//…` gửi chữ bắt đầu bằng `/`. `--json` chỉ cho dạng một lần.
+
+Test: `tests/test_manager_repl.py` (11: termsafe, render không diễn giải markup/ANSI, `ChatState` tiếp nối sau approval + lọc hội thoại khác, không có
+điều phối viên, chữ chạy + thẻ hành động + trả lời + audit `cli`, steer khi đang làm + `/stop`, `/new /list /open /history`, phiên mới nối hội thoại gần
+nhất, chèn ANSI/OSC/bidi/markup ở chế độ màu, không TTY, vòng prompt_toolkit qua pipe input + lịch sử 0600, `manager chat --json` + `agent-hub chat "<tin>"`),
+`tests/test_tui_manager.py` (3: không điều phối viên, chat + chữ chạy + mở đích run/task + đích lạ không mở + dùng chung với REPL + audit `tui`,
+steer + Ctrl-T + Ctrl-N + chèn markup + chọn lại hội thoại). Ảnh: `docs/screenshots/m2/10-dieu-phoi-dang-lam.svg`, `11-dieu-phoi.svg`.
+
+Việc dở: REPL không có nút/lệnh duyệt trong phiên (cố ý); chữ chạy chỉ hiện đuôi ở thanh trạng thái (bản cuối in khi có `manager.reply`); hành động của
+nhịp (heartbeat) không hiện trong chat terminal (xem web).
