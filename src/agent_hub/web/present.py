@@ -3,7 +3,7 @@
 - Nhãn trạng thái agent/run/task bằng tiếng Việt dễ hiểu cho người không quen terminal.
 - `transcript_item(ev)`: event (dict wire) → mục transcript (dict) để template `_items.html` vẽ; dùng chung cho phần
   phát lại từ DB lúc mở trang và cho luồng SSE live.
-- `activity_item(ev)`: dòng "hoạt động gần đây" (firehose mức summary, FR-UI-09) — tái dùng `tui.model.activity_line`.
+- `activity_item(ev)`: dòng "hoạt động gần đây" (firehose mức summary, FR-UI-09) — câu tiếng Việt do hub sinh, chỉ sự kiện có nghĩa (UX v2).
 """
 
 from __future__ import annotations
@@ -13,21 +13,23 @@ import time
 from datetime import datetime
 from typing import Any
 
-from ..tui.model import activity_line, fmt_cost, fmt_dur, fmt_tokens, parse_ts, short_tool
+from ..tui.model import fmt_cost, fmt_dur, fmt_tokens, parse_ts, short_tool
 
 __all__ = [
     "AGENT_STATUS", "RUN_STATUS", "TASK_STATUS", "fmt_cost", "fmt_dur", "fmt_tokens", "short_tool", "fmt_ts", "ago",
     "md", "transcript_item", "parse_ts", "wait_reason", "activity_item", "agent_status", "run_status", "is_live_run", "first_line", "tokens_of",
+    "run_title", "question_view", "QUESTION_STATUS", "avatar_tone", "iso_ts",
 ]
 
-# (biểu tượng, nhãn, tông màu CSS)
+# (icon trong /static/icons.svg, nhãn, tông màu CSS)
 AGENT_STATUS: dict[str, tuple[str, str, str]] = {
-    "working": ("●", "Đang làm", "ok"),
-    "waiting": ("◐", "Chờ duyệt", "warn"),
-    "waiting_human": ("⏸", "Chờ bạn duyệt", "danger"),
-    "idle": ("○", "Rảnh", "muted"),
-    "error": ("✖", "Lỗi", "danger"),
-    "paused": ("‖", "Tạm dừng", "muted"),
+    "working": ("dot", "Đang làm", "ok"),
+    "waiting": ("shield", "Chờ duyệt", "warn"),
+    "waiting_human": ("pause", "Chờ bạn duyệt", "danger"),
+    "asking": ("question", "Chờ bạn trả lời", "ask"),
+    "idle": ("circle", "Rảnh", "muted"),
+    "error": ("x", "Lỗi", "danger"),
+    "paused": ("pause", "Tạm dừng", "muted"),
 }
 RUN_STATUS: dict[str, tuple[str, str]] = {
     "queued": ("Đang xếp hàng", "info"),
@@ -72,7 +74,7 @@ def wait_reason(r: str | None) -> str:
 
 
 def agent_status(s: str | None) -> tuple[str, str, str]:
-    return AGENT_STATUS.get(s or "", ("?", s or "—", "muted"))
+    return AGENT_STATUS.get(s or "", ("circle", s or "—", "muted"))
 
 
 def run_status(s: str | None) -> tuple[str, str]:
@@ -187,32 +189,48 @@ def transcript_item(ev: dict[str, Any]) -> dict[str, Any] | None:
         return {**base, "kind": "tool", "dom": f"tool-{p.get('tool_id') or ev.get('seq')}", "name": short_tool(name), "summary": p.get("args_preview") or "",
                 "running": False, "dur": p.get("duration_s"), "error": bool(p.get("is_error")), "result": prev[:600], "diff": []}
     if t == "subagent.spawn":
-        return {**base, "kind": "note", "tone": "info", "text": f"⤷ subagent {p.get('type')}: {p.get('description') or ''}"}
-    if t == "approval.waiting_human" and not (p.get("preview") or p.get("tool")):
-        return {**base, "kind": "note", "tone": "danger", "text": "⏸ Quá thời gian giữ — agent tạm dừng và CHỜ BẠN duyệt (không tự từ chối)"}
+        return {**base, "kind": "note", "tone": "info", "text": f"Subagent {p.get('type')}: {p.get('description') or ''}"}
     if t in ("approval.open", "approval.waiting_human"):
-        return {**base, "kind": "approval", "human": t == "approval.waiting_human", "tool": p.get("tool") or "", "preview": p.get("preview") or "",
-                "rule": p.get("matched_rule") or "", "reason": p.get("reason") or "", "id": p.get("request_id") or p.get("approval_id")}
+        # một yêu cầu = MỘT mục (dom theo id): waiting_human thay tại chỗ mục approval.open (không lặp 2–3 lần)
+        aid = p.get("request_id") or p.get("approval_id")
+        return {**base, "kind": "approval", "dom": f"ev-ap-{aid}" if aid else None, "human": t == "approval.waiting_human", "tool": p.get("tool") or "",
+                "preview": p.get("preview") or "", "rule": p.get("matched_rule") or "", "reason": p.get("reason") or "", "id": aid}
     if t == "approval.resolved":
         dec = p.get("decision")
-        label = {"allowed": "✓ Đã cho phép", "denied": "✖ Đã từ chối"}.get(dec, f"■ {dec}")
-        return {**base, "kind": "note", "tone": "ok" if dec == "allowed" else "warn",
-                "text": f"{label} bởi {p.get('by') or '?'} qua {p.get('channel') or '?'}" + (f" — {p['note']}" if p.get("note") else "")}
+        label = {"allowed": "Đã cho phép", "denied": "Đã từ chối", "cancelled": "Đã huỷ yêu cầu duyệt"}.get(dec, str(dec))
+        aid = p.get("request_id")
+        return {**base, "kind": "approval", "resolved": True, "decision": dec, "dom": f"ev-ap-{aid}" if aid else None, "tool": p.get("tool") or "",
+                "preview": p.get("preview") or "", "id": aid,
+                "label": f"{label} bởi {p.get('by') or '?'} qua {p.get('channel') or '?'}" + (f" — {p['note']}" if p.get("note") else "")}
+    if t in ("question.open", "question.escalated", "question.reminder"):
+        qid = p.get("question_id")
+        who = "điều phối viên" if p.get("routed_to") == "manager" else "bạn"
+        return {**base, "kind": "question", "dom": f"ev-q-{qid}" if qid else None, "id": qid, "text": p.get("text") or "", "answered": False,
+                "label": f"Agent hỏi {who}" + (" (điều phối viên chuyển lên bạn)" if t == "question.escalated" else "")}
+    if t == "question.answered":
+        qid = p.get("question_id")
+        pick = "; ".join(f"{k}. {lbl}" for k, lbl in zip(p.get("keys") or [], p.get("labels") or []))
+        who = "điều phối viên" if str(p.get("by") or "").startswith("manager:") else "bạn"
+        return {**base, "kind": "question", "dom": f"ev-q-{qid}" if qid else None, "id": qid, "answered": True,
+                "label": f"Đã được {who} trả lời qua {p.get('channel') or '?'}", "text": " — ".join(x for x in (pick, p.get("text") or "") if x)}
+    if t == "question.cancelled":
+        qid = p.get("question_id")
+        return {**base, "kind": "note", "tone": "muted", "dom": f"ev-q-{qid}" if qid else None, "text": f"Câu hỏi đã huỷ ({p.get('reason') or ''})"}
     if t == "user.message":
         return {**base, "kind": "steer", "text": p.get("text") or "", "meta": f"{p.get('by') or 'user'} qua {p.get('channel') or '?'}"}
     if t == "steer.ack":
-        return {**base, "kind": "note", "tone": "info", "text": "✓ Agent đã nhận chỉ đạo"}
+        return {**base, "kind": "note", "tone": "info", "text": "Agent đã nhận chỉ đạo"}
     if t in ("run.completed", "run.failed", "run.cancelled", "run.interrupted", "run.waiting_human") and ev.get("source", "hub") == "hub":
         oc = p.get("outcome") or t.split(".")[1]
         label, tone = run_status(oc)
         dur = (p.get("duration_ms") or 0) / 1000
-        return {**base, "kind": "end", "tone": tone, "text": f"■ {label} · {fmt_dur(dur) if dur else '—'} · {p.get('num_turns') or '?'} lượt · ${float(p.get('cost_usd') or 0):.4f}",
+        return {**base, "kind": "end", "tone": tone, "text": f"{label} · {fmt_dur(dur) if dur else '—'} · {p.get('num_turns') or '?'} lượt · ${float(p.get('cost_usd') or 0):.4f}",
                 "error": str(p.get("error") or "")[:400] if oc != "completed" else ""}
     if t in ("error", "isolation.violation", "permission.denied", "guard.blocked", "auth.blocked", "budget.exceeded", "auth.denied"):
         detail = p.get("message") or p.get("detail") or p.get("name") or p.get("tool_name") or p
-        return {**base, "kind": "note", "tone": "danger", "text": f"✖ {t}: {str(detail)[:300]}"}
+        return {**base, "kind": "note", "tone": "danger", "text": f"{EVENT_VI.get(t, t)}: {str(detail)[:300]}"}
     if t == "run.takeover":
-        return {**base, "kind": "note", "tone": "info", "text": "⇄ Người tiếp quản bằng Claude Code"}
+        return {**base, "kind": "note", "tone": "info", "text": "Người tiếp quản bằng Claude Code"}
     return None
 
 
@@ -223,22 +241,117 @@ def stats_of(ev: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-# ============================================================================ firehose
-_TONE = {
-    "run.completed": "ok", "approval.resolved": "ok", "run.failed": "danger", "guard.blocked": "danger", "approval.waiting_human": "danger",
-    "run.waiting_human": "danger", "error": "danger", "approval.open": "warn", "run.interrupted": "warn", "hub.estop": "danger",
-    "user.message": "info", "steer.ack": "info", "run.started": "info",
+# ============================================================================ firehose ("Hoạt động gần đây")
+# Chỉ sự kiện CÓ NGHĨA với người (bắt đầu/xong/lỗi/duyệt/hỏi/task/học/điều phối viên) — câu chữ tiếng Việt do HUB sinh; chữ của
+# agent (prompt, câu hỏi) chỉ là phần trích ngắn, template autoescape. Tool/lời agent từng bước không vào đây (xem trang run).
+EVENT_VI = {
+    "error": "Lỗi", "isolation.violation": "Vi phạm cô lập", "permission.denied": "Bị từ chối quyền", "auth.blocked": "claude chưa đăng nhập",
+    "budget.exceeded": "Vượt ngân sách", "auth.denied": "Bị chặn (chỉ người)", "guard.blocked": "Guard chặn", "notify.failed": "Gửi thông báo lỗi",
 }
+_LEARN_VI = {"learning.applied": "tự học: áp dụng thay đổi", "learning.rolled_back": "tự học: đã rollback", "learning.eval_failed": "tự học: eval không đạt",
+             "learning.canary": "tự học: đang thử (canary)", "learning.promoted": "tự học: đã chốt thay đổi"}
+
+
+def _clip(s: Any, n: int = 90) -> str:
+    s = " ".join(str(s or "").split())
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def activity_text(ev: dict[str, Any]) -> tuple[str, str] | None:
+    """(câu tiếng Việt, tông) cho một event, hoặc None = không hiện (nhiễu)."""
+    t = ev.get("type", "")
+    p = ev.get("payload") or {}
+    if ev.get("subagent_id"):
+        return None
+    if t in ("run.completed", "run.failed", "run.cancelled", "run.interrupted") and ev.get("source", "hub") == "hub":
+        oc = p.get("outcome") or t.split(".")[1]
+        label, tone = run_status(oc)
+        dur = (p.get("duration_ms") or 0) / 1000
+        extra = f" · {fmt_dur(dur)}" if dur else ""
+        err = f" — {_clip(p.get('error'), 70)}" if p.get("error") and oc != "completed" else ""
+        return f"{label.lower()} · ${float(p.get('cost_usd') or 0):.4f}{extra}{err}", {"ok": "ok", "muted": ""}.get(tone, tone)
+    if t in ("approval.open", "approval.waiting_human"):
+        what = _clip(p.get("preview") or p.get("tool"), 70)
+        return (f"chờ bạn duyệt: {what}", "danger") if t == "approval.waiting_human" else (f"xin duyệt: {what}", "warn")
+    if t == "approval.resolved":
+        dec = {"allowed": "được cho phép", "denied": "bị từ chối", "cancelled": "đã huỷ"}.get(p.get("decision"), str(p.get("decision")))
+        return f"thao tác {dec} (bởi {p.get('by') or '?'} qua {p.get('channel') or '?'})", "ok" if p.get("decision") == "allowed" else ""
+    if t == "question.open":
+        who = "điều phối viên" if p.get("routed_to") == "manager" else "bạn"
+        return f"hỏi {who}: “{_clip(p.get('text'), 80)}”", "ask"
+    if t == "question.escalated":
+        return f"câu hỏi được chuyển lên bạn: “{_clip(p.get('text'), 70)}”", "ask"
+    if t == "question.answered":
+        who = "điều phối viên" if str(p.get("by") or "").startswith("manager:") else "bạn"
+        return f"câu hỏi đã được {who} trả lời", "ok"
+    if t == "task.status":
+        to = p.get("to")
+        if to not in ("running", "done", "blocked", "review"):
+            return None
+        label, tone = TASK_STATUS.get(to or "", (to, ""))
+        return f"task {p.get('task_id') or ''} → {label.lower()}" + (f": {_clip(p.get('reason'), 60)}" if to == "blocked" and p.get("reason") else ""), \
+            {"muted": "ok"}.get(tone, tone)
+    if t == "manager.action":
+        return _clip(p.get("summary") or p.get("tool"), 100), "danger" if p.get("ok") is False else "info"
+    if t in _LEARN_VI:
+        return _LEARN_VI[t], "warn" if t in ("learning.rolled_back", "learning.eval_failed") else ""
+    if t == "user.message":
+        return f"bạn chỉ đạo qua {p.get('channel') or '?'}: “{_clip(p.get('text'), 70)}”", "info"
+    if t == "hub.estop":
+        return (f"ESTOP BẬT {p.get('reason') or ''}".strip(), "danger") if p.get("on") else ("ESTOP đã tắt", "ok")
+    if t in EVENT_VI and t != "notify.failed":
+        return f"{EVENT_VI[t]}: {_clip(p.get('message') or p.get('detail') or p.get('rule') or p.get('name') or '', 70)}", "danger"
+    return None
 
 
 def activity_item(ev: dict[str, Any]) -> dict[str, Any] | None:
-    line = activity_line(ev, {})
-    if line is None:
+    r = activity_text(ev)
+    if r is None:
         return None
-    plain = line.plain
-    t = ev.get("type", "")
-    tone = _TONE.get(t, "danger" if t in ("isolation.violation", "permission.denied", "auth.blocked", "budget.exceeded", "notify.failed") else "")
-    return {"ts": plain[:8].strip(), "agent": ev.get("agent_id") or "hub", "text": plain[24:].strip(), "tone": tone, "run_id": ev.get("run_id")}
+    text, tone = r
+    return {"ts": fmt_ts(ev.get("ts"), date=False), "iso": ev.get("ts"), "agent": ev.get("agent_id") or "hub", "text": text, "tone": tone,
+            "run_id": ev.get("run_id"), "task_id": ev.get("task_id") or (ev.get("payload") or {}).get("task_id")}
+
+
+# ============================================================================ run, câu hỏi, avatar
+_HUB_HEAD = __import__("re").compile(r"^\s*\[agent-hub[^\]]*\]\s*")
+
+
+def run_title(run: dict[str, Any], titles: dict[str, str] | None = None, n: int = 110) -> str:
+    """Tiêu đề người đọc được: tiêu đề task nếu run thuộc task; không thì dòng đầu prompt (bỏ tiêu đề `[agent-hub …]`)."""
+    tid = run.get("task_id")
+    if tid and titles and titles.get(tid):
+        return first_line(titles[tid], n)
+    if run.get("kind") == "manager":
+        pr = str(run.get("prompt") or "")
+        return "Điều phối viên · nhịp kiểm tra" if pr.lstrip().startswith("[agent-hub heartbeat") else "Điều phối viên · trả lời tin nhắn"
+    s = _HUB_HEAD.sub("", str(run.get("prompt") or ""))
+    return first_line(s, n) or "—"
+
+
+QUESTION_STATUS = {"with_manager": ("Đang chờ điều phối viên", "info"), "open": ("Chờ bạn trả lời", "ask"), "answered": ("Đã trả lời", "ok"),
+                   "cancelled": ("Đã huỷ", "muted")}
+
+
+def question_view(q: dict[str, Any]) -> dict[str, Any]:
+    """Câu hỏi → dữ liệu cho thẻ (chữ agent giữ nguyên — template autoescape + pre-wrap)."""
+    a = q.get("answer") or {}
+    pick = [f"{k}. {lbl}" for k, lbl in zip(a.get("keys") or [], a.get("labels") or [])]
+    by = str(q.get("answered_by") or "")
+    who = "Điều phối viên" if by.startswith("manager:") else ("Hub" if by == "hub" else "Bạn")
+    label, tone = QUESTION_STATUS.get(q.get("status") or "", (q.get("status") or "", "muted"))
+    return {"status_label": label, "status_tone": tone, "pending": q.get("status") in ("with_manager", "open"), "pick": pick,
+            "answer_text": a.get("text") or "", "answered_by": who, "options": q.get("options") or [], "single_quick": bool(q.get("options")) and not q.get("multi")}
+
+
+def avatar_tone(name: str | None) -> str:
+    return f"c{sum(ord(c) for c in (name or '?')) % 5}"
+
+
+def iso_ts(s: Any) -> str:
+    """ISO cho thuộc tính `datetime` của <time> (JS hiện thời gian tương đối)."""
+    t = parse_ts(s)
+    return datetime.fromtimestamp(t).astimezone().isoformat(timespec="seconds") if t else ""
 
 
 # ============================================================================ xem đầy đủ thao tác chờ duyệt (WT-2)

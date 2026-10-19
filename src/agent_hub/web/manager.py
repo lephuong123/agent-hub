@@ -71,15 +71,44 @@ async def _actions(request: Request, agent_id: str) -> list[dict[str, Any]]:
     return sorted(acts, key=lambda a: str(a.get("ts") or ""))
 
 
-def _timeline(msgs: list[dict[str, Any]], acts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Tin nhắn + thẻ hành động của các run thuộc hội thoại, theo thời gian (thẻ hành động đứng trước trả lời của cùng run)."""
+def _timeline(msgs: list[dict[str, Any]], acts: list[dict[str, Any]], qs: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Tin nhắn + thẻ hành động của các run thuộc hội thoại (+ câu hỏi của điều phối viên), theo thời gian. Thẻ hành động liên tiếp của
+    cùng một lượt gom thành MỘT khối "Đã làm N việc" (UX v2)."""
     runs = {m.get("run_id") for m in msgs if m.get("run_id")}
     items = list(msgs) + [a for a in acts if a.get("run_id") in runs]
+    items += [{"kind": "question", "q": q, "ts": q.get("created_at"), "run_id": q.get("run_id")} for q in qs or []]
 
     def key(it: dict[str, Any]) -> tuple[str, int]:
-        return (str(it.get("ts") or ""), {"user": 0, "action": 1, "manager": 2}.get(it["kind"], 3))
+        return (str(it.get("ts") or ""), {"user": 0, "action": 1, "manager": 2, "question": 3}.get(it["kind"], 4))
 
-    return sorted(items, key=key)
+    out: list[dict[str, Any]] = []
+    for it in sorted(items, key=key):
+        prev = out[-1] if out else None
+        if it["kind"] == "action":
+            if prev and prev["kind"] == "actions" and prev.get("run_id") == it.get("run_id"):
+                prev["items"].append(it)
+                prev["ok"] = prev["ok"] and it["ok"]
+                continue
+            out.append({"kind": "actions", "run_id": it.get("run_id"), "items": [it], "ok": it["ok"], "ts": it.get("ts")})
+            continue
+        out.append(it)
+    return out
+
+
+def question_from_event(ev: dict[str, Any]) -> dict[str, Any]:
+    """Event `question.*` (payload `wire`) → dict câu hỏi đủ cho thẻ (không cần gọi lại RPC trong luồng SSE)."""
+    p = ev.get("payload") or {}
+    t = ev.get("type") or ""
+    q = {"id": p.get("question_id"), "agent_id": ev.get("agent_id"), "run_id": ev.get("run_id"), "task_id": p.get("task_id"),
+         "conversation_id": p.get("conversation_id"), "text": p.get("text") or "", "options": p.get("options") or [], "multi": bool(p.get("multi")),
+         "allow_free_text": p.get("allow_free_text") is not False, "status": p.get("status") or "open", "routed_to": p.get("routed_to"),
+         "created_at": ev.get("ts"), "escalation_note": p.get("note")}
+    if t == "question.answered":
+        q.update({"status": "answered", "answer": {"keys": p.get("keys") or [], "labels": p.get("labels") or [], "text": p.get("text") or ""},
+                  "answered_by": p.get("by"), "text": ""})
+    elif t == "question.cancelled":
+        q["status"] = "cancelled"
+    return q
 
 
 async def manager_page(request: Request) -> Response:
@@ -110,7 +139,10 @@ async def manager_page(request: Request) -> Response:
                     sess.flash("error", f"Không mở được cuộc trò chuyện {cid}: {err_text(e)}")
             cid = None
     acts = await _actions(request, st["agent_id"])
-    items = _timeline(msgs, acts)
+    from .app import questions as _questions
+
+    conv_qs = [q for q in await _questions(request, "all", agent_id=st["agent_id"]) if cid and q.get("conversation_id") == cid and q["status"] != "cancelled"]
+    items = _timeline(msgs, acts, conv_qs)
     # tin cuối của người chưa có trả lời + run còn chạy → khung "đang trả lời" (chữ chạy tới qua SSE)
     pending = None
     want = q.get("run") or next((m.get("run_id") for m in reversed(msgs) if m["kind"] == "user"), None)
@@ -134,7 +166,9 @@ async def partial_status(request: Request) -> Response:
 
 
 def _mod(request: Request) -> Any:
-    return ws(request).templates.env.get_template("_manager.html").module
+    """Module macro của _manager.html KÈM ngữ cảnh csrf (thẻ câu hỏi có form) — khoá phiên không bao giờ vào HTML."""
+    sess = session_of(request)
+    return ws(request).templates.env.get_template("_manager.html").make_module({"csrf": sess.csrf if sess else "", "path": "/manager"})
 
 
 async def manager_send(request: Request) -> Response:
@@ -192,7 +226,15 @@ def _converter(request: Request) -> Any:
             return [{"t": "reply", "run": run, "conv": p.get("conversation_id"), "notify": notify, "html": str(mod.item(it))}]
         if t == "manager.action":
             it = P.mgr_action_item(ev)
-            return [{"t": "action", "run": rid, "html": str(mod.item(it)), "side": str(mod.side_action(it))}]
+            group = {"kind": "actions", "run_id": rid, "items": [it], "ok": it["ok"], "ts": it.get("ts")}
+            return [{"t": "action", "run": rid, "html": str(mod.item(group)), "one": str(mod.item(it)), "ok": it["ok"], "side": str(mod.side_action(it))}]
+        if t.startswith("question.") and t != "question.reminder":
+            q = question_from_event(ev)
+            if not q.get("conversation_id"):
+                return []
+            if t == "question.answered":  # thẻ đã trả lời: lấy lại nội dung câu hỏi từ thẻ đang có phía trình duyệt — chỉ thay trạng thái
+                return [{"t": "question", "conv": q["conversation_id"], "dom": f"q-{q['id']}", "answered": True, "html": str(mod.answered(q))}]
+            return [{"t": "question", "conv": q["conversation_id"], "dom": f"q-{q['id']}", "html": str(mod.item({"kind": "question", "q": q}))}]
         if t in TERMINAL_RUN_EVENTS and ev.get("source") == "hub" and rid:
             outcome = p.get("outcome") or t.removeprefix("run.")
             label, tone = P.run_status(str(outcome))

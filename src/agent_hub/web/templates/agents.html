@@ -2,35 +2,34 @@
 {% import "_macros.html" as m with context %}
 {% block title %}Agent{% endblock %}
 {% block content %}
-<div class="page-head"><h1>Agent</h1><a class="btn primary" href="/agents/new">+ Tạo agent</a></div>
-<section class="card">
-  {% if not rows %}{{ m.empty("Chưa có agent nào.") }}{% else %}
+<div class="page-head"><div class="ph-title"><h1>Agent</h1><span class="sub">Mỗi agent là một trợ lý có vai trò, công cụ và ngân sách riêng.</span></div><a class="btn primary" href="/agents/new">{{ m.icon('plus') }}Tạo agent</a></div>
+{% if not rows %}<section class="card">{{ m.empty("Bắt đầu từ một mẫu có sẵn: nghiên cứu, lập trình, review, vận hành.", "bot", "", "Chưa có agent nào") }}</section>{% else %}
+<section class="card flush">
   <table class="tbl stack">
-    <thead><tr><th>Agent</th><th>Trạng thái</th><th>Vai trò</th><th>Model</th><th>MCP</th><th class="num">$ hôm nay</th><th></th></tr></thead>
+    <thead><tr><th>Agent</th><th>Trạng thái</th><th>Model</th><th>MCP</th><th class="num">Hôm nay</th><th></th></tr></thead>
     <tbody>
     {% for a in rows %}{% set lv = live.get(a.id) or {} %}
       <tr>
-        <td data-label="Agent"><a href="/agents/{{ a.id }}"><b>{{ a.name or a.id }}</b></a> <span class="muted small">{{ a.id }}</span>{% if (a.sandbox_overrides or {}).allow_localhost %} {{ m.localhost_badge() }}{% endif %}</td>
+        <td data-label="Agent"><div class="row gap">{{ m.avatar(a.name or a.id) }}<div class="title-cell"><a class="t" href="/agents/{{ a.id }}">{{ a.name or a.id }}</a><span class="s">{{ a.role or a.id }}{% if a.name and a.name != a.id %} · <span class="id">{{ a.id }}</span>{% endif %}</span></div>{% if (a.sandbox_overrides or {}).allow_localhost %} {{ m.localhost_badge() }}{% endif %}</div></td>
         <td data-label="Trạng thái">{{ m.agent_pill(lv.status or a.status) }}</td>
-        <td data-label="Vai trò">{{ a.role or '—' }}</td>
         <td data-label="Model"><code>{{ a.model }}</code></td>
-        <td data-label="MCP">{% for s in a.mcp_servers or [] %}<span class="chip">{{ s }}</span>{% else %}<span class="muted">—</span>{% endfor %}</td>
-        <td data-label="$ hôm nay" class="num">{{ a.cost_today_usd|cost }}</td>
-        <td class="actions"><a class="btn sm" href="/agents/{{ a.id }}">Mở</a> <a class="btn sm ghost" href="/agents/{{ a.id }}/edit">Sửa</a></td>
+        <td data-label="MCP">{% for s in a.mcp_servers or [] %}<span class="chip accent">{{ s }}</span>{% else %}<span class="faint">—</span>{% endfor %}</td>
+        <td data-label="Hôm nay" class="num">{{ a.cost_today_usd|cost }}</td>
+        <td class="actions"><a class="btn sm" href="/agents/{{ a.id }}">Mở</a> <a class="btn sm ghost icon" href="/agents/{{ a.id }}/edit" title="Sửa" aria-label="Sửa {{ a.id }}">{{ m.icon('edit') }}</a></td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
-  {% endif %}
 </section>
+{% endif %}
 {% if trash %}
-<section class="card">
-  <h2>Thùng rác</h2>
+<details class="card">
+  <summary><h2 class="inline-h">Thùng rác ({{ trash|length }})</h2></summary>
   <p class="muted small">Agent đã xoá mềm — khôi phục được tới khi hết hạn giữ.</p>
   <table class="tbl stack"><thead><tr><th>Agent</th><th>Xoá lúc</th><th>Xoá hẳn sau</th><th></th></tr></thead><tbody>
   {% for t in trash %}<tr><td data-label="Agent">{{ t.id or t.name }}</td><td data-label="Xoá lúc">{{ t.deleted_at|ts }}</td><td data-label="Xoá hẳn sau">{{ t.purge_after|ts }}</td>
-  <td class="actions">{{ m.act("agent_restore", "↺ Khôi phục", {"id": t.id or t.name}, "btn sm", confirm="Khôi phục agent " ~ (t.id or t.name) ~ " từ thùng rác (kèm cấu hình, quyền, MCP cũ)?") }}</td></tr>{% endfor %}
+  <td class="actions">{{ m.act("agent_restore", "Khôi phục", {"id": t.id or t.name}, "btn sm", confirm="Khôi phục agent " ~ (t.id or t.name) ~ " từ thùng rác (kèm cấu hình, quyền, MCP cũ)?", ic="undo") }}</td></tr>{% endfor %}
   </tbody></table>
-</section>
+</details>
 {% endif %}
 {% endblock %}

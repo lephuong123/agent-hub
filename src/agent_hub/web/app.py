@@ -257,7 +257,7 @@ async def render(request: Request, name: str, ctx: dict[str, Any] | None = None,
             pend = await rpc(request, "approval.list", {"limit": 500})
             es = await rpc(request, "estop.get")
             badge = {"approvals": len(pend or []), "waiting_human": sum(1 for a in pend or [] if a.get("status") == "waiting_human"),
-                     "estop": bool((es or {}).get("on"))}
+                     "estop": bool((es or {}).get("on")), "questions": len(await questions(request, "open"))}
         except (RpcError, DaemonUnavailable, OSError):
             badge = {"down": True}
     base = {"csrf": sess.csrf if sess else "", "flashes": sess.pop_flashes() if sess else [], "badge": badge, "nav": "", "htmx": HTMX,
@@ -318,6 +318,15 @@ async def logout(request: Request) -> Response:
     return resp
 
 
+# ============================================================================ câu hỏi (UX)
+async def questions(request: Request, status: str = "pending", **flt: Any) -> list[dict[str, Any]]:
+    """`question.list` — rỗng nếu daemon chưa có `question.*` (bản cũ)."""
+    try:
+        return await rpc(request, "question.list", {"status": status, "limit": 200, **{k: v for k, v in flt.items() if v}}) or []
+    except RpcError:
+        return []
+
+
 # ============================================================================ trang
 def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda r: (STATUS_ORDER.get(r.get("status") or "", 9), r.get("team") or "~", r["id"]))
@@ -325,9 +334,16 @@ def _sort_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 async def overview_data(request: Request) -> dict[str, Any]:
     snap = await rpc(request, "tui.snapshot")
-    rows = _sort_rows(snap.get("agents") or [])
+    qs = await questions(request, "pending")
+    asking = {q["agent_id"] for q in qs}
+    rows = snap.get("agents") or []
+    for r in rows:  # agent chờ câu trả lời (task bị chặn) hiện "Chờ bạn trả lời" thay vì "Rảnh"
+        if r["id"] in asking and r.get("status") in ("idle", "error"):
+            r["status"] = "asking"
+    rows = _sort_rows(rows)
     appr = sorted(snap.get("approvals") or [], key=lambda a: a.get("opened_at") or "")
-    return {"hub": snap.get("hub") or {}, "rows": rows, "approvals": appr}
+    return {"hub": snap.get("hub") or {}, "rows": rows, "approvals": appr, "questions": [q for q in qs if q["status"] == "open"],
+            "questions_mgr": [q for q in qs if q["status"] == "with_manager"]}
 
 
 async def overview(request: Request) -> Response:
@@ -517,7 +533,7 @@ async def agent_page(request: Request) -> Response:
     snap = await rpc(request, "tui.snapshot")
     live = next((r for r in snap.get("agents") or [] if r["id"] == aid), None)
     return await render(request, "agent.html", {"nav": "agents", "a": agent, "runs": runs, "revs": list(reversed(revs or []))[:15], "pend": pend,
-                                                "learn_on": learn_on, "live": live, "sandbox": sandbox})
+                                                "learn_on": learn_on, "live": live, "sandbox": sandbox, "titles": await task_titles(request, runs)})
 
 
 async def runs_page(request: Request) -> Response:
@@ -529,7 +545,18 @@ async def runs_page(request: Request) -> Response:
         params["status"] = q["status"]
     runs = await rpc(request, "run.list", params)
     agents = [a["id"] for a in await rpc(request, "agent.list", {})]
-    return await render(request, "runs.html", {"nav": "runs", "runs": runs, "agents": agents, "q": dict(q), "statuses": P.RUN_STATUS})
+    return await render(request, "runs.html", {"nav": "runs", "runs": runs, "agents": agents, "q": dict(q), "statuses": P.RUN_STATUS,
+                                               "titles": await task_titles(request, runs)})
+
+
+async def task_titles(request: Request, runs: list[dict[str, Any]]) -> dict[str, str]:
+    """task_id → tiêu đề (để danh sách run hiện tiêu đề người đọc được thay vì prompt thô của hub)."""
+    if not any(r.get("task_id") for r in runs or []):
+        return {}
+    try:
+        return {t["id"]: t.get("title") or "" for t in await rpc(request, "task.list", {"limit": 1000}) or []}
+    except RpcError:
+        return {}
 
 
 def replay_items(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -556,6 +583,11 @@ def replay_items(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 async def _run_ctx(request: Request, rid: str) -> dict[str, Any]:
     run = await rpc(request, "run.get", {"id": rid})
     pend = with_wait(await rpc(request, "approval.list", {"run_id": run["id"]}))
+    if run.get("task_id"):
+        try:
+            run["task_title"] = (await rpc(request, "task.get", {"id": run["task_id"]}) or {}).get("title")
+        except RpcError:
+            pass
     tokens = P.tokens_of(run.get("usage"))
     live = None
     if P.is_live_run(run):
@@ -575,13 +607,30 @@ async def run_page(request: Request) -> Response:
     since = max([int(e.get("seq") or 0) for e in events if e.get("epoch") == epoch] or [0])
     ctx = await _run_ctx(request, run["id"])
     children = [r for r in (await rpc(request, "run.list", {"agent": run["agent_id"], "limit": 50}) or []) if r.get("parent_run_id") == run["id"]]
-    return await render(request, "run.html", {**ctx, "nav": "runs", "items": replay_items(events), "since": since, "epoch": epoch, "children": children})
+    qs = await questions(request, "all", run_id=run["id"])
+    return await render(request, "run.html", {**ctx, "nav": "runs", "items": replay_items(events), "since": since, "epoch": epoch, "children": children,
+                                              "run_questions": [q for q in qs if q["status"] in ("open", "with_manager")]})
 
 
 async def partial_run(request: Request) -> Response:
     ctx = await _run_ctx(request, request.path_params["id"])
     sess = session_of(request)
     return ws(request).templates.TemplateResponse(request, "_run_bar.html", {**ctx, "csrf": sess.csrf if sess else ""})
+
+
+async def inbox_page(request: Request) -> Response:
+    """"Cần bạn": yêu cầu duyệt + câu hỏi chờ bạn + câu hỏi đang ở điều phối viên + task bị chặn không có câu hỏi."""
+    pend = sorted(with_wait(await rpc(request, "approval.list", {"limit": 500})), key=lambda a: a.get("opened_at") or "")
+    qs = await questions(request, "pending")
+    try:
+        blocked = await rpc(request, "task.list", {"status": "blocked", "limit": 100}) or []
+    except RpcError:
+        blocked = []
+    asked = {q.get("task_id") for q in qs}
+    blocked = [t for t in blocked if t.get("status") == "blocked" and t["id"] not in asked]
+    recent = [q for q in await questions(request, "answered") if q.get("answered_at")][:8]
+    return await render(request, "inbox.html", {"nav": "inbox", "pend": pend, "q_open": [q for q in qs if q["status"] == "open"],
+                                                 "q_mgr": [q for q in qs if q["status"] == "with_manager"], "blocked": blocked, "recent": recent})
 
 
 async def approvals_page(request: Request) -> Response:
@@ -596,6 +645,9 @@ async def tasks_page(request: Request) -> Response:
     if q.get("team"):
         params["team"] = q["team"]
     tasks = await rpc(request, "task.list", params)
+    asking = {q.get("task_id"): q for q in await questions(request, "pending") if q.get("task_id")}
+    for t in tasks:
+        t["question"] = asking.get(t["id"])
     cols = {c: [t for t in tasks if t.get("status") == c] for c in P.TASK_COLUMNS}
     if not q.get("all"):
         cols["done"] = cols["done"][:15]
@@ -607,7 +659,8 @@ async def tasks_page(request: Request) -> Response:
 
 async def task_page(request: Request) -> Response:
     t = await rpc(request, "task.get", {"id": request.path_params["id"]})
-    return await render(request, "task.html", {"nav": "tasks", "t": t})
+    qs = await questions(request, "all", task_id=t["id"])
+    return await render(request, "task.html", {"nav": "tasks", "t": t, "task_questions": [q for q in qs if q["status"] in ("open", "with_manager")]})
 
 
 async def teams_page(request: Request) -> Response:
@@ -746,6 +799,12 @@ ACTIONS: dict[str, Action] = {
     "deny": Action("approval.deny", lambda f: {"id": _req(f, "id"), "channel": CHANNEL, "by": "user", "note": f.get("note") or None},
                    "Đã từ chối thao tác", confirm=lambda f: f"Từ chối thao tác này?\n{f.get('preview') or ''}", danger=True, audit=False,
                    note="Ghi chú cho agent (tuỳ chọn)"),
+    # ---- câu hỏi của agent (UX) — question.* HUMAN_ONLY ở daemon, tự audit theo `_audit.channel=web`
+    "question_answer": Action("question.answer", lambda f: _answer_params(f), "Đã gửi câu trả lời — agent sẽ làm tiếp"),
+    "question_take": Action("question.escalate", lambda f: {"id": _req(f, "id"), "note": "người lấy về tự trả lời (web)", "channel": CHANNEL},
+                            "Câu hỏi đã chuyển về bạn — trả lời ngay bên dưới"),
+    "question_cancel": Action("question.cancel", lambda f: {"id": _req(f, "id"), "reason": "người huỷ từ web", "channel": CHANNEL}, "Đã huỷ câu hỏi",
+                              confirm="Huỷ câu hỏi này? Agent sẽ không nhận được câu trả lời.", danger=True),
     # ---- run
     "run_start": Action("run.start", lambda f: {"agent": _req(f, "agent", "agent"), "prompt": _req(f, "prompt", "nội dung công việc"),
                                                 **({"cwd": str(f.get("cwd")).strip()} if str(f.get("cwd") or "").strip() else {}),
@@ -848,6 +907,14 @@ ACTIONS: dict[str, Action] = {
     "notify_test": Action("notify.test", lambda f: {"text": "agent-hub: thử thông báo từ giao diện web"}, lambda r, f: f"Đã gửi thử: {json.dumps(r, ensure_ascii=False)[:200]}"),
     "auth_reset": Action("auth.reset", lambda f: {}, "Đã xoá cờ 'claude chưa đăng nhập' — run sẽ chạy lại"),
 }
+
+
+def _answer_params(f: FormData) -> dict[str, Any]:
+    keys = [str(x) for x in f.getlist("keys") if str(x).strip()]
+    text = str(f.get("text") or "").strip()
+    if not keys and not text:
+        raise ValueError("chọn một phương án hoặc nhập câu trả lời")
+    return {"id": _req(f, "id"), "keys": keys, "text": text or None, "channel": CHANNEL}
 
 
 def _safe_key(k: str) -> str:
@@ -1020,7 +1087,7 @@ def _run_converter(templates: Jinja2Templates) -> Callable[[dict[str, Any]], lis
         it = P.transcript_item(ev)
         if it is not None:
             out.append({"t": "item", "kind": it["kind"], "dom": it.get("dom"), "seq": ev.get("seq"), "html": str(mod.item(it))})
-        if t in ("approval.open", "approval.waiting_human", "approval.resolved", "user.message", "steer.ack") or (t or "").startswith("run."):
+        if t in ("approval.open", "approval.waiting_human", "approval.resolved", "user.message", "steer.ack") or (t or "").startswith(("run.", "question.")):
             out.append({"t": "refresh"})
         return out
 
@@ -1085,10 +1152,11 @@ def make_templates() -> Jinja2Templates:
     env = t.env
     env.autoescape = True
     env.globals.update({"agent_status": P.agent_status, "run_status": P.run_status, "task_status": lambda s: P.TASK_STATUS.get(s or "", (s or "—", "muted")),
-                        "is_live_run": P.is_live_run, "action_view": P.action_view, "wait_reason": P.wait_reason, "tokens_of": P.tokens_of, "TASK_COLUMNS": P.TASK_COLUMNS})
+                        "is_live_run": P.is_live_run, "action_view": P.action_view, "wait_reason": P.wait_reason, "tokens_of": P.tokens_of, "TASK_COLUMNS": P.TASK_COLUMNS,
+                        "question_view": P.question_view, "run_title": P.run_title})
     env.filters.update({"cost": P.fmt_cost, "tok": P.fmt_tokens, "dur": P.fmt_dur, "ts": P.fmt_ts, "ago": P.ago, "first": P.first_line,
                         "tool": P.short_tool, "md": lambda s: Markup(P.md(s)), "usd": lambda v: "—" if v is None else f"${float(v):.4f}",
-                        "j": lambda v: json.dumps(v, ensure_ascii=False, indent=2, default=str)})
+                        "j": lambda v: json.dumps(v, ensure_ascii=False, indent=2, default=str), "iso": P.iso_ts, "avatar": P.avatar_tone})
     return t
 
 
@@ -1110,6 +1178,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/runs", runs_page),
         Route("/runs/{id}", run_page),
         Route("/partials/run/{id}", partial_run),
+        Route("/inbox", inbox_page),
         Route("/approvals", approvals_page),
         Route("/tasks", tasks_page),
         Route("/tasks/{id}", task_page),

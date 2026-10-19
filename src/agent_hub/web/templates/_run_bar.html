@@ -1,26 +1,29 @@
 {% import "_macros.html" as m with context %}
 {% set here = "/runs/" ~ run.id %}
 <div class="run-head">
-  <div class="run-title">
-    <a href="/agents/{{ run.agent_id }}"><b>{{ run.agent_id }}</b></a>
-    {{ m.run_pill(run.status) }}
-    {% if run.kind and run.kind != 'adhoc' %}<span class="pill muted">{{ run.kind }}</span>{% endif %}
-    {% if run.task_id %}<a class="pill info" href="/tasks/{{ run.task_id }}">task {{ run.task_id }}</a>{% endif %}
+  <div class="row between wrap-row">
+    <div class="run-title">
+      {{ m.avatar(run.agent_id) }}
+      <a class="who" href="/agents/{{ run.agent_id }}">{{ run.agent_id }}</a>
+      {{ m.run_pill(run.status) }}
+      {% if run.kind and run.kind != 'adhoc' %}<span class="pill outline">{{ run.kind }}</span>{% endif %}
+      {% if run.task_id %}<a class="pill info" href="/tasks/{{ run.task_id }}">{{ m.icon('task') }}{{ (run.task_title or ('task ' ~ run.task_id))|first(50) }}</a>{% endif %}
+    </div>
+    <div class="btn-row">
+      {% if is_live_run(run) %}
+        {{ m.act("stop", "Dừng run", {"id": run.id}, "btn danger", confirm="Dừng run " ~ run.id ~ "? Agent sẽ ngừng việc đang làm.", next=here, ic="stop") }}
+      {% elif run.status in ('interrupted',) %}
+        {{ m.act("run_resume", "Tiếp tục run bị gián đoạn", {"id": run.id}, "btn primary", next=here, ic="refresh") }}
+      {% endif %}
+    </div>
   </div>
-  <dl class="kv">
-    <div><dt>Model</dt><dd>{{ run.model or '—' }}</dd></div>
-    <div><dt>Chi phí</dt><dd id="st-cost">{{ (run.cost_usd if run.cost_usd is not none else (live.run_cost_usd if live else 0))|cost }}</dd></div>
-    <div><dt>Token</dt><dd id="st-tok">{{ tokens|tok }}</dd></div>
-    <div><dt>Thời gian</dt><dd>{% if run.duration_ms %}{{ (run.duration_ms / 1000)|dur }}{% elif run.started_at %}từ {{ run.started_at|ts }}{% else %}—{% endif %}</dd></div>
-    <div><dt>Lượt</dt><dd>{{ run.num_turns or '—' }}</dd></div>
-    {% if run.max_budget_usd %}<div><dt>Ngân sách</dt><dd>${{ run.max_budget_usd }}</dd></div>{% endif %}
-  </dl>
-  <div class="row gap wrap-row">
-    {% if is_live_run(run) %}
-      {{ m.act("stop", "■ Dừng run", {"id": run.id}, "btn danger", confirm="Dừng run " ~ run.id ~ "? Agent sẽ ngừng việc đang làm.", next=here) }}
-    {% elif run.status in ('interrupted',) %}
-      {{ m.act("run_resume", "↻ Tiếp tục run bị gián đoạn", {"id": run.id}, "btn primary", next=here) }}
-    {% endif %}
+  <div class="chips-kv">
+    <span class="chip">{{ m.icon('bot') }}<b>{{ run.model or '—' }}</b></span>
+    <span class="chip">{{ m.icon('dollar') }}<b id="st-cost">{{ (run.cost_usd if run.cost_usd is not none else (live.run_cost_usd if live else 0))|cost }}</b>{% if run.max_budget_usd %}<span class="muted">/ ${{ run.max_budget_usd }}</span>{% endif %}</span>
+    <span class="chip">{{ m.icon('zap') }}<b id="st-tok">{{ tokens|tok }}</b> token</span>
+    <span class="chip">{{ m.icon('clock') }}{% if run.duration_ms %}<b>{{ (run.duration_ms / 1000)|dur }}</b>{% elif run.started_at %}từ <b>{{ run.started_at|ts }}</b>{% else %}chưa chạy{% endif %}</span>
+    {% if run.num_turns %}<span class="chip">{{ m.icon('refresh') }}<b>{{ run.num_turns }}</b> lượt</span>{% endif %}
+    <span class="chip id">{{ run.id }}</span>
   </div>
 </div>
-{% for a in pend %}{{ m.approval_card(a, here) }}{% endfor %}
+{% if pend %}<div class="need need-run">{% for a in pend %}{{ m.approval_card(a, here) }}{% endfor %}</div>{% endif %}

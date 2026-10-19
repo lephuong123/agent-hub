@@ -119,7 +119,28 @@ async def seed_manager(d) -> dict:
             conn.execute("UPDATE manager_messages SET ts=? WHERE id=?", (iso(now - timedelta(minutes=offs[i])), mid))
             if i in texts:
                 conn.execute("UPDATE manager_messages SET text=? WHERE id=?", (texts[i], mid))
-    return {"conversation": r1["conversation_id"]}
+    return {"conversation": r1["conversation_id"], "manager_run": r2["run_id"]}
+
+
+def seed_questions(hub, info: dict) -> dict:
+    """Câu hỏi có lựa chọn (UX): một câu chờ bạn, một câu đang ở điều phối viên, một câu của điều phối viên trong chat, một câu đã trả lời."""
+    get = hub.store.get_run
+    q1 = hub.questions.open(get(info["live"]), "Test tests/test_api.py đỏ vì API giờ trả ngày dạng ISO 8601 thay vì dd/mm/yyyy. Sửa theo hướng nào?",
+                            [{"label": "Sửa test theo định dạng mới (ISO 8601)", "description": "nhanh nhất, khớp chuẩn"},
+                             {"label": "Giữ định dạng cũ, sửa lại API", "description": "client cũ không phải đổi"},
+                             {"label": "Hỗ trợ cả hai, thêm cờ cấu hình"}])
+    tasks = {t["title"]: t["id"] for t in hub.tasks.list()}
+    tid = tasks.get("Kiểm tra link hỏng trong docs")
+    r = dict(get(info["done"][0]))
+    q2 = hub.questions.open(r, "Có 12 link hỏng trỏ tới wiki cũ (wiki.old.local). Thay bằng link wiki mới hay xoá hẳn?",
+                            ["Thay bằng link wiki mới", "Xoá các link hỏng"], task_id=tid)
+    mrun = dict(get(info["manager"]["manager_run"]))
+    q3 = hub.questions.open(mrun, "Team docs đã dùng $4.6/$5 ngân sách tuần. Anh muốn xử lý thế nào?",
+                            [{"label": "Tăng ngân sách lên $10/tuần"}, {"label": "Tạm dừng các task không gấp"}, {"label": "Giữ nguyên, báo lại khi hết"}],
+                            source="manager", conversation_id=info["manager"]["conversation"])
+    q4 = hub.questions.open(get(info["done"][1]), "Review theo chuẩn PEP 8 đầy đủ hay chỉ lỗi nghiêm trọng?", ["Đầy đủ", "Chỉ lỗi nghiêm trọng"])
+    hub.questions.answer(q4["id"], keys=["2"], text="lần này chỉ cần lỗi chặn merge", by="user", channel="web")
+    return {"open": q1["id"], "with_manager": q2["id"], "owner": q3["id"]}
 
 
 async def main_async(a: argparse.Namespace) -> None:
@@ -140,6 +161,7 @@ async def main_async(a: argparse.Namespace) -> None:
         await asyncio.sleep(0.05)
     info = await seed(d.hub)
     info["manager"] = await seed_manager(d)
+    info["questions"] = seed_questions(d.hub, info)
     auth = WebAuth()
     app = create_app(paths, auth=auth, port=a.port)
     write_state(paths, host="127.0.0.1", port=a.port, key=auth.key)  # name mặc định agent-hub.localhost

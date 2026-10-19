@@ -218,16 +218,24 @@ class CallbackStore:
 
     def issue(self, buttons: list[tuple[str, str, str]], chat_id: Any, *, ttl: float) -> tuple[dict[str, Any], str]:
         """buttons = [(action, ref, nhãn)] → (reply_markup, group). Các nút cùng nhóm: bấm một là tiêu cả nhóm."""
+        return self.issue_rows([buttons], chat_id, ttl=ttl)
+
+    def issue_rows(self, rows: list[list[tuple[str, str, str]]], chat_id: Any, *, ttl: float) -> tuple[dict[str, Any], str]:
+        """Như `issue` nhưng nhiều hàng nút (bàn phím câu hỏi). Mọi nút của các hàng cùng MỘT nhóm."""
         self.prune()
         group = "g" + _secrets.token_hex(6)
-        row = []
-        for action, ref, label in buttons:
-            nonce = _secrets.token_urlsafe(12)
-            rec = {"a": action, "r": ref, "c": str(chat_id), "g": group, "exp": time.time() + ttl}
-            self._all()[nonce] = rec
-            row.append({"text": label, "callback_data": f"v1.{nonce}.{self._sig(nonce, rec)}"})
+        kb = []
+        for buttons in rows:
+            row = []
+            for action, ref, label in buttons:
+                nonce = _secrets.token_urlsafe(12)
+                rec = {"a": action, "r": ref, "c": str(chat_id), "g": group, "exp": time.time() + ttl}
+                self._all()[nonce] = rec
+                row.append({"text": label, "callback_data": f"v1.{nonce}.{self._sig(nonce, rec)}"})
+            if row:
+                kb.append(row)
         self._save()
-        return {"inline_keyboard": [row]}, group
+        return {"inline_keyboard": kb}, group
 
     def consume(self, data: Any, chat_id: Any) -> tuple[dict[str, Any] | None, str]:
         """Kiểm + TIÊU nonce. Trả (rec, "ok") hoặc (None, lý do). Sai chat/chữ ký KHÔNG tiêu (không cho kẻ lạ huỷ nút thật)."""

@@ -82,7 +82,7 @@ def test_approve_via_telegram_button_runs_exactly_once(env):
     approve = FakeTelegram.buttons(msg)[0]["callback_data"]
     u1 = tg.press(BOSS, approve)  # bước 1 → tin xác nhận
     wait_for(lambda: tg.processed(u1))
-    step2 = wait_for(lambda: next((m for m in tg.sent(BOSS) if [b["text"] for b in FakeTelegram.buttons(m)] == ["Xác nhận CHO PHÉP", "Huỷ"]), None))
+    step2 = wait_for(lambda: tg.with_buttons(BOSS, ["Xác nhận CHO PHÉP", "Huỷ"]))  # T-B: bước 2 = tin hệ thống được sửa
     assert (env["work"] / "dummy").exists()
     uid = tg.press(BOSS, FakeTelegram.buttons(step2)[0]["callback_data"])
     final = rpc.call("run.wait", {"id": r["id"], "timeout": 30})

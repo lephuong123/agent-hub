@@ -154,6 +154,12 @@ EVENT_LEVELS: dict[str, str] = {
     "manager.reply": "summary",  # trả lời/ thông báo của manager tới kênh người (conversation_id, run_id, text, kind)
     "manager.tick": "summary",  # nhịp heartbeat: started|skipped (reason, events)
     "manager.designated": "summary",  # người chỉ định/huỷ chỉ định manager (agent_id, previous)
+    # UX — câu hỏi có lựa chọn (questions/): agent hỏi → điều phối viên (routed_to=manager) hoặc người (routed_to=human)
+    "question.open": "summary",  # question_id, routed_to, text, options[{key,label,description}], multi, allow_free_text, source
+    "question.escalated": "summary",  # điều phối viên không chốt được / quá hạn → người (question_id, by, note)
+    "question.answered": "summary",  # question_id, keys, text, by, channel
+    "question.cancelled": "summary",  # question_id, reason
+    "question.reminder": "summary",  # nhắc người: question_id, reminder_count, wait_s
 }
 
 # Không ghi vào bảng `events` (chỉ ring buffer + stdout thô) — FR-OB-01.

@@ -392,6 +392,9 @@ class ManagerService:
             if t is None:
                 return
             if to == "blocked":
+                qs = getattr(self.hub, "questions", None)
+                if qs is not None and qs.pending_for_task(t["id"]):
+                    return  # UX: task chờ câu trả lời — đã có sự kiện `question` (với manager) hoặc đã hỏi người
                 self._push("task_blocked", f"tb:{t['id']}:{t.get('updated_at')}", f"task {t['id']} '{t['title'][:80]}' BLOCKED: {p.get('reason') or t.get('block_reason') or ''}",
                            task_id=t["id"], team_id=t.get("team_id"))
             elif to == "done" and (not t.get("origin_task_id") or str(t.get("created_by") or "").startswith("manager:")):

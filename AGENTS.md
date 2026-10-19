@@ -332,3 +332,15 @@ Thay đổi cấu hình agent do manager = actor `manager:<agent>` = thay đổi
 Không bao giờ: manager duyệt approval, sửa policy/guard/golden/sandbox, purge, tắt ESTOP, sửa agent manager (kể cả chính mình/manager cũ),
 `bypassPermissions`/`allow_bypass`/`extra_args`/`subagents`, bỏ mẫu disallowed người đặt, MCP ngoài registry. Test: `tests/test_manager*.py`
 (helper `tests/m7_fake.py`, ScriptedRuntime giữ run manager ở `running`).
+
+## UX — câu hỏi có lựa chọn (agent → điều phối viên → người); làm lại web/Telegram
+Kế hoạch, quyết định, tiến độ: `docs/dev-notes/ux-plan.md`. Migration **v14** (`questions`). Test: `tests/test_questions.py`.
+
+| Module | Vai trò |
+|---|---|
+| `questions/service.py` | `hub.questions`: `open` (định tuyến `with_manager` nếu agent trong task + có manager sẵn sàng, ngược lại `open` cho người), `answer`, `escalate`, `cancel`, nối tiếp (task → bình luận `answer` + `unblock`; hội thoại manager → `manager.chat`; run → `run.continue`), vòng nền quá hạn → người + nhắc lại giãn dần |
+| `questions/rpc.py`, `cli.py` | RPC `question.*` (ghi = HUMAN_ONLY, tự audit; `by`/`channel` lấy từ người gọi), CLI `questions`, `answer` |
+
+Bất biến: không bao giờ tự trả lời thay người (không `expired`). Agent không trả lời/chuyển/huỷ câu hỏi (HUMAN_ONLY + classifier). Điều phối viên chỉ
+`question.answer|escalate` khi câu hỏi `with_manager` và không phải của chính nó — luật ở `manager/permissions.check_rpc` (cả 2 lớp). Nội dung câu hỏi
+và nhãn lựa chọn là DỮ LIỆU agent (đã che secret, bỏ ký tự điều khiển/vô hình): Telegram đặt trong `<pre>`, nút chỉ mang số (WT-8).

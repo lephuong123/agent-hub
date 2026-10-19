@@ -38,6 +38,8 @@ GUIDE = (
 )
 UNAVAILABLE = "Hub này chưa có chức năng điều phối viên (cần cập nhật agent-hub). Dùng /run <agent> <yêu cầu> hoặc /help."
 NO_REPLY_WAIT_S = 3.0
+TYPING_EVERY_S = 4.0  # Telegram tự tắt "đang gõ…" sau ~5 s
+TYPING_MAX_S = 180.0
 
 
 class ManagerChat:
@@ -103,10 +105,17 @@ class ManagerChat:
                 self._put(self.MSGMAP, f"{chat_id}:{message_id}", new_conv)
         if run_id:
             self._put(self.RUNS, run_id, {"chat": str(chat_id), "conv": new_conv, "reply_to": message_id}, cap=200)
-        try:  # "đang gõ…" — không bắt buộc (không phải mọi Bot API giả/thật đều có)
-            await api.call("sendChatAction", {"chat_id": chat_id, "action": "typing"})
-        except Exception:
-            pass
+            self.bot._spawn(self._typing(chat_id, run_id, api))
+
+    async def _typing(self, chat_id: str, run_id: str, api: "TelegramApi") -> None:
+        """T-D: "đang gõ…" lặp mỗi `TYPING_EVERY_S` tới khi điều phối viên trả lời (RUNS bị gỡ) hoặc quá `TYPING_MAX_S`."""
+        t0 = asyncio.get_running_loop().time()
+        while run_id in self._st(self.RUNS) and asyncio.get_running_loop().time() - t0 < TYPING_MAX_S:
+            try:  # không bắt buộc (không phải mọi Bot API giả/thật đều có)
+                await api.call("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+            except Exception:
+                return
+            await asyncio.sleep(TYPING_EVERY_S)
 
     async def new_conversation(self, chat_id: str, api: "TelegramApi") -> str:
         had = self.current(chat_id)

@@ -529,8 +529,14 @@ def test_present_transcript_and_markdown_safety():
     assert "Xong" in items[3]["text"]
     assert P.agent_status("waiting_human")[1] == "Chờ bạn duyệt"
     assert P.wait_reason("agent_busy") == "agent đang bận"
-    line = P.activity_item({"type": "tool.start", "agent_id": "ag0", "ts": "2026-10-18T01:02:03Z", "payload": {"name": "Bash", "args_preview": "ls"}})
-    assert line and line["agent"] == "ag0" and "Bash" in line["text"]
+    # UX v2: "Hoạt động" chỉ còn sự kiện có nghĩa, câu tiếng Việt do hub sinh — từng lời gọi tool/lời agent xem ở trang run
+    assert P.activity_item({"type": "tool.start", "agent_id": "ag0", "ts": "2026-10-18T01:02:03Z", "payload": {"name": "Bash", "args_preview": "ls"}}) is None
+    assert P.activity_item({"type": "message.complete", "agent_id": "ag0", "payload": {"text": "The directory is empty"}}) is None
+    line = P.activity_item({"type": "run.completed", "source": "hub", "agent_id": "ag0", "ts": "2026-10-18T01:02:03Z", "run_id": "r1",
+                            "payload": {"outcome": "completed", "cost_usd": 0.0123, "duration_ms": 4000}})
+    assert line and line["agent"] == "ag0" and line["text"].startswith("xong · $0.0123") and line["tone"] == "ok" and line["run_id"] == "r1"
+    q = P.activity_item({"type": "question.open", "agent_id": "ag0", "payload": {"text": "Xoá kiểu nào?", "routed_to": "manager"}})
+    assert q and q["tone"] == "ask" and "hỏi điều phối viên" in q["text"]
 
 
 def test_agent_form_parsing_sparse_for_template_full_for_edit():
@@ -686,11 +692,11 @@ async def test_waiting_human_event_carries_rule_and_page_has_no_dangling_colon(h
 
 
 async def test_sandbox_localhost_badge_and_toggle(env):
-    """SEC §8: nhãn '⚠ localhost' ở Tổng quan / Agent / chi tiết; bật/tắt qua `guard.sandbox.set` (HUMAN_ONLY, xác nhận, audit kênh web)."""
+    """SEC §8: nhãn cảnh báo localhost (`lh-badge`) ở Tổng quan / Agent / chi tiết; bật/tắt qua `guard.sandbox.set` (HUMAN_ONLY, xác nhận, audit kênh web)."""
     await env.login()
     for a in ("ag0", "ag1"):
         env.hub.agents.create({"id": a, "name": a, "model": "haiku"})
-    assert "⚠ localhost" not in (await env.client.get("/agents")).text
+    assert "lh-badge" not in (await env.client.get("/agents")).text
     r = await env.post("/do/sandbox_localhost", {"id": "ag0", "on": "1", "next": "/agents/ag0"})
     assert r.status_code == 200 and "MỞ CỔNG" in r.text and env.key not in r.text  # chưa xác nhận → chưa bật
     assert not env.hub.guard.sandbox_overrides("ag0").get("allow_localhost")
@@ -700,9 +706,9 @@ async def test_sandbox_localhost_badge_and_toggle(env):
     assert ov["allow_localhost"] and ov["channel"] == "web" and ov["by"] == "user"
     for path in ("/", "/agents", "/agents/ag0"):
         html = (await env.client.get(path)).text
-        assert html.count("⚠ localhost") >= 1, path
+        assert html.count("lh-badge") >= 1 and "localhost</span>" in html, path
         assert "chỉ người tắt được" in html.lower(), path
-    assert "⚠ localhost" not in (await env.client.get("/agents/ag1")).text
+    assert "lh-badge" not in (await env.client.get("/agents/ag1")).text
     rows = env.hub.store.conn.execute("SELECT channel, actor FROM audit_log WHERE kind='guard.sandbox_override'").fetchall()
     assert rows and rows[-1]["channel"] == "web"
     # không có khoá phiên → 403 (WT-1)
@@ -710,4 +716,4 @@ async def test_sandbox_localhost_badge_and_toggle(env):
     assert r.status_code == 403 and env.hub.guard.sandbox_overrides("ag0")["allow_localhost"]
     await env.post("/do/sandbox_localhost", {"id": "ag0", "on": "0", "confirm": "yes"})
     assert not env.hub.guard.sandbox_overrides("ag0")["allow_localhost"]
-    assert "⚠ localhost" not in (await env.client.get("/agents")).text
+    assert "lh-badge" not in (await env.client.get("/agents")).text

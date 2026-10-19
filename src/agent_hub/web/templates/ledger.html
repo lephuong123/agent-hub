@@ -4,7 +4,7 @@
 {% block content %}
 <nav class="crumbs"><a href="/learnings">Tự học</a> › <span>{{ e.id }}</span></nav>
 <div class="page-head"><h1><code>{{ e.op }} {{ e.target }}{{ ':' ~ e.target_ref if e.target_ref }}</code></h1>
-  {% if not (e.rolled_back_by or e.rolled_back_at) %}{{ m.act("learn_rollback", "↺ Rollback", {"id": e.id}, "btn danger", confirm="Rollback thay đổi " ~ e.id ~ "?", note="Lý do (tuỳ chọn)", next="/learnings/" ~ e.id) }}{% else %}<span class="pill muted">đã rollback</span>{% endif %}
+  {% if not (e.rolled_back_by or e.rolled_back_at) %}{{ m.act("learn_rollback", "Rollback", {"id": e.id}, "btn danger", confirm="Rollback thay đổi " ~ e.id ~ "?", note="Lý do (tuỳ chọn)", next="/learnings/" ~ e.id) }}{% else %}<span class="pill muted">đã rollback</span>{% endif %}
 </div>
 <section class="card">
   <dl class="kv cols">

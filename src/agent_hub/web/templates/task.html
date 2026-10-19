@@ -2,14 +2,15 @@
 {% import "_macros.html" as m with context %}
 {% block title %}Task {{ t.id }}{% endblock %}
 {% block content %}
-<nav class="crumbs"><a href="/tasks">Công việc</a> › <span>{{ t.id }}</span></nav>
-<div class="page-head"><h1>{{ t.title }} {{ m.task_pill(t.status) }}</h1>
-  <div class="row gap wrap-row">
+<nav class="crumbs"><a href="/tasks">Công việc</a>{{ m.icon('chev-right') }}<span class="id">{{ t.id }}</span></nav>
+<div class="page-head"><div class="ph-title"><h1>{{ t.title }} {{ m.task_pill(t.status) }}</h1></div>
+  <div class="btn-row">
     {% if t.status == 'blocked' %}{{ m.act("task_unblock", "Gỡ chặn", {"id": t.id}, "btn") }}{% elif t.status not in ('done','archived') %}{{ m.act("task_block", "Chặn", {"id": t.id}, "btn", confirm="Chặn task " ~ t.id ~ "?", note="Lý do") }}{% endif %}
-    {% if t.status in ('blocked','done') or t.consecutive_failures %}{{ m.act("task_retry", "↻ Chạy lại", {"id": t.id}, "btn") }}{% endif %}
+    {% if t.status in ('blocked','done') or t.consecutive_failures %}{{ m.act("task_retry", "Chạy lại", {"id": t.id}, "btn", ic="refresh") }}{% endif %}
     {% if t.status != 'archived' %}{{ m.act("task_archive", "Lưu trữ", {"id": t.id}, "btn ghost", confirm="Lưu trữ task " ~ t.id ~ "?") }}{% endif %}
   </div>
 </div>
+{% if task_questions %}<div class="need">{% for q in task_questions %}{{ m.question_card(q, "/tasks/" ~ t.id) }}{% endfor %}</div><div class="section-title"></div>{% endif %}
 <div class="grid2">
 <section class="card">
   <dl class="kv cols">
@@ -27,9 +28,9 @@
   <h3>Phụ thuộc (DAG)</h3>
   <div class="dag">
     {% for p in t.parents %}<a class="dag-node" href="/tasks/{{ p.id }}">{{ p.title|first(40) }} {{ m.task_pill(p.status) }}</a>{% else %}<span class="muted small">không có task cha</span>{% endfor %}
-    <div class="dag-arrow">↓</div>
+    <div class="dag-arrow">{{ m.icon('chev-down', 'sm') }}</div>
     <div class="dag-node self"><b>{{ t.title|first(40) }}</b></div>
-    <div class="dag-arrow">↓</div>
+    <div class="dag-arrow">{{ m.icon('chev-down', 'sm') }}</div>
     {% for c in t.children %}<a class="dag-node" href="/tasks/{{ c.id }}">{{ c.title|first(40) }} {{ m.task_pill(c.status) }}</a>{% else %}<span class="muted small">không có task con</span>{% endfor %}
   </div>
   {% if t.subtasks %}<h3>Việc con (do lead tách)</h3><ul>{% for s in t.subtasks %}<li><a href="/tasks/{{ s.id }}">{{ s.title }}</a> {{ m.task_pill(s.status) }} <span class="muted small">{{ s.assignee_agent_id }}</span></li>{% endfor %}</ul>{% endif %}
@@ -44,7 +45,7 @@
 </section>
 <section class="card">
   <h2>Bình luận</h2>
-  {% for c in t.comments %}<div class="comment"><b>{{ c.author }}</b> <span class="muted small">{{ c.kind }} · {{ c.created_at|ts }}</span><div class="md">{{ c.text|md }}</div></div>{% else %}<p class="muted small">Chưa có bình luận.</p>{% endfor %}
+  {% for c in t.comments %}<div class="comment{{ ' answer' if c.kind == 'answer' }}"><div class="comment-h">{% if c.kind == 'answer' %}{{ m.icon('check') }}{% endif %}<b>{{ c.author }}</b> <span class="muted small">{{ 'trả lời câu hỏi' if c.kind == 'answer' else c.kind }} · {{ c.created_at|ts }}</span></div><div class="md">{{ c.text|md }}</div></div>{% else %}<p class="muted small">Chưa có bình luận.</p>{% endfor %}
   <form method="post" action="/do/task_comment" class="form">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ t.id }}"><input type="hidden" name="next" value="/tasks/{{ t.id }}">
     <textarea name="text" rows="2" required placeholder="Viết bình luận…"></textarea>

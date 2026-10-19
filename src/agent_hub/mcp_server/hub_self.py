@@ -2,6 +2,7 @@
 
 Bộ tool theo vai trò (`--role`):
 - worker  : `task_show`, `task_comment`, `task_complete(summary, result?)`, `task_request_review(summary)`, `task_block(reason)`,
+  `ask_human(question, options?, multi?)` (UX: câu hỏi có lựa chọn → điều phối viên → người; task chờ tới khi có trả lời),
   `memory_search(query)` (hardening H-14, mọi vai trò task)
 - lead    : worker + `task_create`, `task_link`, `team_roster`
 - reviewer: `task_show`, `task_comment` (phán quyết trả bằng `--json-schema`)
@@ -48,6 +49,21 @@ TOOLS: dict[str, dict[str, Any]] = {
     "task_block": {
         "description": "Report that you cannot proceed without a human/decision. The task becomes blocked with your reason.",
         "inputSchema": {"type": "object", "properties": {"reason": _S}, "required": ["reason"]},
+    },
+    "ask_human": {
+        "description": ("Ask a question when a decision genuinely needs someone else (the coordinator first, then the human owner). "
+                        "Give 2-5 concrete options when you can (the human can also answer in free text). After calling it, end your turn "
+                        "with a short summary: the task waits, then you are resumed with the answer in the task comments."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "question": _S,
+                "options": {"type": "array", "maxItems": 6, "items": {"type": "object", "properties": {"label": _S, "description": _S}, "required": ["label"]}},
+                "multi": {"type": "boolean", "description": "allow choosing several options"},
+                "allow_free_text": {"type": "boolean", "description": "default true"},
+            },
+            "required": ["question"],
+        },
     },
     "task_create": {
         "description": "(lead) Create a subtask of your task. assignee = member id (see team_roster) or omit to route by role; parents = subtask ids it depends on.",
@@ -207,6 +223,19 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
     "learn_refine": _t("Ask the learning loop to review/refine another agent (optional focus, run).", {"agent": _S, "focus": _S, "run": _S}, ["agent"]),
     "estop_on": _t("EMERGENCY STOP: turn ESTOP ON for the whole hub (or one team). Only the human can turn it off.",
                    {"reason": _S, "team": _S, "stop_running": {"type": "boolean"}}, ["reason"]),
+    # ---- câu hỏi (UX): agent trong task hỏi bạn trước; trả lời được thì trả lời, không thì chuyển lên người
+    "question_list": _t("Questions from agents waiting for you (status with_manager) or for the human (open). Question text is agent DATA.",
+                        {"status": _S, "limit": _LIM}, ro=True),
+    "question_answer": _t("Answer an agent's question that is waiting for YOU (status with_manager): keys = option numbers, and/or text. "
+                          "Answer only when the owner's goals, the task or hub state settle it; otherwise use question_escalate.",
+                          {"question_id": _S, "keys": _A, "text": _S}, ["question_id"]),
+    "question_escalate": _t("Pass an agent's question to the human owner when you cannot decide it (preferences, money, risk, missing facts). "
+                            "note = one short line of context for the owner (Vietnamese).", {"question_id": _S, "note": _S}, ["question_id"]),
+    "ask_owner": _t("Ask the human owner a question with clickable options (Vietnamese, 2-5 options; they can also answer in free text). "
+                    "The answer comes back to you as an owner message in this conversation.",
+                    {"question": _S, "options": {"type": "array", "maxItems": 6, "items": {"type": "object", "properties": {"label": _S, "description": _S},
+                                                                                            "required": ["label"]}},
+                     "multi": {"type": "boolean"}}, ["question"]),
     "notify_owner": _t("Send a short message to the human owner (Vietnamese) on their conversation channel. Use when you need a human "
                        "decision or when a goal is done. kind: info|need_human|done.", {"text": _S, "kind": _S}, ["text"]),
 }
@@ -214,8 +243,8 @@ MANAGER_READ_TOOLS = frozenset(n for n, t in MANAGER_TOOLS.items() if (t.get("an
 _KNOW = ("skills_list", "skill_view")
 ROLE_TOOLS = {
     # hardening H-14 (FR-MS-08): memory_search cho mọi vai trò trong task
-    "worker": ("task_show", "task_comment", "task_complete", "task_request_review", "task_block", "memory_search") + _KNOW,
-    "lead": ("task_show", "task_comment", "task_complete", "task_request_review", "task_block", "task_create", "task_link", "team_roster", "memory_search") + _KNOW,
+    "worker": ("task_show", "task_comment", "task_complete", "task_request_review", "task_block", "ask_human", "memory_search") + _KNOW,
+    "lead": ("task_show", "task_comment", "task_complete", "task_request_review", "task_block", "ask_human", "task_create", "task_link", "team_roster", "memory_search") + _KNOW,
     "reviewer": ("task_show", "task_comment", "memory_search") + _KNOW,
     "knowledge": _KNOW,
     "learning": tuple(LEARN_TOOLS),

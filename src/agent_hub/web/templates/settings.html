@@ -2,22 +2,22 @@
 {% import "_macros.html" as m with context %}
 {% block title %}Cài đặt{% endblock %}
 {% block content %}
-<div class="page-head"><h1>Cài đặt</h1></div>
+<div class="page-head"><div class="ph-title"><h1>Cài đặt</h1><span class="sub">Dừng khẩn cấp, thông báo, secret và giới hạn của hub.</span></div></div>
 <section class="card {{ 'attention' if estop.on }}" id="estop">
-  <h2>Dừng khẩn cấp (ESTOP)</h2>
+  <h2>{{ m.icon('power') }} Dừng khẩn cấp (ESTOP)</h2>
   {% if estop.on %}
-    <p><span class="pill danger strong">■ ĐANG BẬT</span> {% if estop.reason %}— {{ estop.reason }}{% endif %} Không run mới nào được chạy.</p>
+    <p><span class="pill danger strong">{{ m.icon('stop') }}ĐANG BẬT</span> {% if estop.reason %}— {{ estop.reason }}{% endif %} Không run mới nào được chạy.</p>
     {{ m.act("estop", "Tắt ESTOP", {"on": "0"}, "btn primary", confirm="Tắt ESTOP — cho phép agent chạy lại?") }}
   {% else %}
     <p class="muted">Bấm khi cần dừng toàn bộ hub ngay (agent làm sai, chi phí tăng bất thường…).</p>
     <div class="row gap wrap-row">
-      {{ m.act("estop", "■ Bật ESTOP + dừng mọi run", {"on": "1", "stop_running": "1"}, "btn danger", confirm="BẬT ESTOP và DỪNG mọi run đang chạy?", note="Lý do (tuỳ chọn)") }}
+      {{ m.act("estop", "Bật ESTOP + dừng mọi run", {"on": "1", "stop_running": "1"}, "btn danger", confirm="BẬT ESTOP và DỪNG mọi run đang chạy?", note="Lý do (tuỳ chọn)") }}
       {{ m.act("estop", "Chỉ chặn run mới", {"on": "1"}, "btn ghost", confirm="BẬT ESTOP (run đang chạy vẫn tiếp tục)?", note="Lý do (tuỳ chọn)") }}
     </div>
   {% endif %}
 </section>
 <section class="card">
-  <h2>Cấu hình thường dùng</h2>
+  <h2>{{ m.icon('settings') }} Cấu hình thường dùng</h2>
   <p class="muted small">Đổi có hiệu lực ngay và được ghi nhật ký. Cấu hình khác: <code>agent-hub config set</code> trong terminal.</p>
   <table class="tbl stack cfg"><tbody>
   {% for c in cfg %}<tr><td data-label="Mục"><b>{{ c.label }}</b><div class="muted small"><code>{{ c.key }}</code></div></td>
@@ -28,7 +28,7 @@
 </section>
 <div class="grid2">
 <section class="card">
-  <h2>Thông báo</h2>
+  <h2>{{ m.icon('chat') }} Thông báo</h2>
   <dl class="kv one">
     <div><dt>Slack</dt><dd>{% if slack %}<span class="pill ok">đã cấu hình</span>{% else %}<span class="pill muted">chưa</span> <span class="small muted">đặt secret <code>SLACK_WEBHOOK_URL</code> bên dưới</span>{% endif %}</dd></div>
     <div><dt>Telegram</dt><dd>{% if telegram %}<span class="pill ok">đã cấu hình</span> <span class="small muted">{{ tg_chats|length }} chat được phép</span>{% else %}<span class="pill muted">chưa</span> <span class="small muted">chạy <code>agent-hub notify telegram setup</code></span>{% endif %}</dd></div>
@@ -36,7 +36,7 @@
   {{ m.act("notify_test", "Gửi thông báo thử", {}, "btn sm") }}
 </section>
 <section class="card" id="secrets">
-  <h2>Secret</h2>
+  <h2>{{ m.icon('shield') }} Secret</h2>
   <p class="muted small">Token/khoá API cho MCP và thông báo. Giá trị không bao giờ hiển thị lại; agent không đọc được.</p>
   <table class="tbl"><tbody>{% for s in secrets %}<tr><td><code>{{ s.name }}</code>{% if s.used_by %} <span class="muted small">dùng bởi {{ s.used_by|join(', ') }}</span>{% endif %}</td>
     <td class="actions">{{ m.act("secret_rm", "Xoá", {"name": s.name}, "btn sm ghost", confirm="Xoá secret " ~ s.name ~ "?") }}</td></tr>{% else %}<tr><td class="muted">Chưa có secret.</td></tr>{% endfor %}</tbody></table>
@@ -50,7 +50,7 @@
 </section>
 </div>
 <section class="card">
-  <h2>Hệ thống</h2>
+  <h2>{{ m.icon('info') }} Hệ thống</h2>
   <dl class="kv cols">
     <div><dt>Phiên bản hub</dt><dd>{{ status.version }}</dd></div><div><dt>Runtime</dt><dd>{{ status.runtime }}</dd></div>
     <div><dt>HUB_HOME</dt><dd><code>{{ status.home }}</code></dd></div><div><dt>Web</dt><dd>{{ web.host }}:{{ web.port }} · {{ web.sessions }} phiên đăng nhập</dd></div>

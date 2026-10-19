@@ -1,51 +1,114 @@
-{% macro act(name, label, fields={}, cls="btn", confirm=None, note=None, next=None, title=None) -%}
+{#- Macro dùng chung (UX v2). Mọi chữ do agent viết: autoescape, không |safe. Icon = sprite tĩnh /static/icons.svg (chữ của hub). -#}
+{% macro icon(name, cls="") -%}<svg class="ic {{ cls }}" aria-hidden="true" focusable="false"><use href="/static/icons.svg#i-{{ name }}"></use></svg>{%- endmacro %}
+
+{% macro act(name, label, fields={}, cls="btn", confirm=None, note=None, next=None, title=None, ic=None) -%}
 <form method="post" action="/do/{{ name }}" class="inline"{% if confirm %} data-confirm="{{ confirm }}"{% endif %}{% if note %} data-note="{{ note }}"{% endif %}>
 <input type="hidden" name="csrf" value="{{ csrf }}">
 {%- for k, v in fields.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor -%}
 <input type="hidden" name="next" value="{{ next or (path if path is defined and path else '/') }}">
-<button type="submit" class="{{ cls }}"{% if title %} title="{{ title }}"{% endif %}>{{ label }}</button>
+<button type="submit" class="{{ cls }}"{% if title %} title="{{ title }}"{% endif %}>{% if ic %}{{ icon(ic) }}{% endif %}<span>{{ label }}</span></button>
 </form>
 {%- endmacro %}
 
-{% macro agent_pill(status) -%}
-{% set s = agent_status(status) %}<span class="pill {{ s[2] }}"><span aria-hidden="true">{{ s[0] }}</span> {{ s[1] }}</span>
+{% macro rel(ts) -%}{% if ts %}<time datetime="{{ ts|iso }}" data-rel title="{{ ts|ts }}">{{ ts|ago }}</time>{% else %}—{% endif %}{%- endmacro %}
+
+{% macro status_pill(ic, label, tone, extra="") -%}
+<span class="pill {{ tone }} {{ extra }}">{{ icon(ic, 'pulse' if ic == 'dot' and tone == 'ok' else '') }}{{ label }}</span>
 {%- endmacro %}
 
+{% macro agent_pill(status) -%}{% set s = agent_status(status) %}{{ status_pill(s[0], s[1], s[2]) }}{%- endmacro %}
+
 {% macro run_pill(status) -%}
-{% set s = run_status(status) %}<span class="pill {{ s[1] }}">{{ s[0] }}</span>
+{% set s = run_status(status) %}<span class="pill {{ s[1] }}">{% if status == 'running' %}{{ icon('dot', 'pulse') }}{% elif status == 'waiting_human' %}{{ icon('pause') }}{% elif status == 'completed' %}{{ icon('check') }}{% elif s[1] == 'danger' %}{{ icon('x') }}{% endif %}{{ s[0] }}</span>
 {%- endmacro %}
 
 {% macro task_pill(status) -%}
 {% set s = task_status(status) %}<span class="pill {{ s[1] }}">{{ s[0] }}</span>
 {%- endmacro %}
 
+{% macro avatar(name) -%}<span class="avatar {{ name|avatar }}" aria-hidden="true">{{ (name or '?')[:1] }}</span>{%- endmacro %}
+
 {% macro action_block(v) -%}
 <div class="action-full">
-  <div class="small muted">{{ v.tool_full }}{% if v.long %} · <span class="pill warn">lệnh dài {{ v.length }} ký tự, {{ v.lines }} dòng — cuộn để đọc hết</span>{% endif %}{% if v.hidden_chars %} <span class="pill danger">có ký tự ẩn/điều khiển</span>{% endif %}</div>
+  <div class="action-meta"><code>{{ v.tool_full }}</code>{% if v.long %}<span class="pill warn">lệnh dài {{ v.length }} ký tự, {{ v.lines }} dòng — cuộn để đọc hết</span>{% endif %}{% if v.hidden_chars %}<span class="pill danger">có ký tự ẩn/điều khiển</span>{% endif %}</div>
   <pre class="cmd-full{{ ' long' if v.long }}" tabindex="0">{% for k, t in v.segments %}{% if k == 'hit' %}<mark>{{ t }}</mark>{% elif k == 'ctl' %}<mark class="ctl">{{ t }}</mark>{% else %}{{ t }}{% endif %}{% endfor %}</pre>
 </div>
 {%- endmacro %}
 
 {% macro approval_card(a, next) -%}
 {% set v = action_view(a) %}
-<div class="approval {{ 'human' if a.status == 'waiting_human' }}">
-  <div class="approval-head">
-    <span class="pill {{ 'danger' if a.status == 'waiting_human' else 'warn' }} strong">{{ '⏸ Chờ bạn duyệt' if a.status == 'waiting_human' else '◐ Xin duyệt' }}</span>
-    <a href="/agents/{{ a.agent_id }}"><b>{{ a.agent_id }}</b></a>
-    <span class="muted">· chờ {{ (a.wait_s or 0)|dur }} · <a href="/runs/{{ a.run_id }}">xem run</a></span>
+<article class="xcard approval {{ 'human' if a.status == 'waiting_human' }}" id="ap-{{ a.id }}">
+  <div class="xcard-head">
+    <span class="xcard-ic">{{ icon('shield') }}</span>
+    <div class="xcard-title">
+      <div class="t">{{ a.agent_id }} muốn chạy thao tác phá huỷ <span class="pill {{ 'danger' if a.status == 'waiting_human' else 'warn' }} strong">{{ icon('pause' if a.status == 'waiting_human' else 'clock') }}{{ 'Chờ bạn duyệt' if a.status == 'waiting_human' else 'Xin duyệt' }}</span></div>
+      <div class="m"><a href="/agents/{{ a.agent_id }}">{{ a.agent_id }}</a><span>·</span><span>chờ {{ (a.wait_s or 0)|dur }}</span><span>·</span><a href="/runs/{{ a.run_id }}">xem lượt chạy</a></div>
+    </div>
   </div>
   {{ action_block(v) }}
-  <div class="muted small">Vì sao cần duyệt: {% if a.matched_rule or a.destructive_class %}luật <b>{{ a.matched_rule or a.destructive_class }}</b>{% if a.destructive_class %} (lớp {{ a.destructive_class }}){% endif %}{% endif %}{% if a.reason %} — {{ a.reason }}{% endif %}{% if a.protected_resource_id %} · <b>tài nguyên được bảo vệ</b>{% endif %}</div>
-  <div class="row gap wrap-row">
-    {{ act("approve", "✓ Cho phép một lần", {"id": a.id}, "btn ok", confirm="Cho phép agent " ~ a.agent_id ~ " thực hiện MỘT lần (" ~ v.length ~ " ký tự):\n\n" ~ v.text, next=next) }}
-    {{ act("deny", "✖ Từ chối", {"id": a.id}, "btn danger", confirm="Từ chối thao tác của " ~ a.agent_id ~ ":\n\n" ~ v.text, note="Ghi chú cho agent (tuỳ chọn)", next=next) }}
+  <p class="xcard-why">Vì sao cần duyệt: {% if a.matched_rule or a.destructive_class %}luật <b>{{ a.matched_rule or a.destructive_class }}</b>{% if a.destructive_class %} (lớp {{ a.destructive_class }}){% endif %}{% endif %}{% if a.reason %} — {{ a.reason }}{% endif %}{% if a.protected_resource_id %} · <b>tài nguyên được bảo vệ</b>{% endif %}</p>
+  <div class="xcard-actions">
+    {{ act("approve", "Cho phép một lần", {"id": a.id}, "btn ok", confirm="Cho phép agent " ~ a.agent_id ~ " thực hiện MỘT lần (" ~ v.length ~ " ký tự):\n\n" ~ v.text, next=next, ic="check") }}
+    {{ act("deny", "Từ chối", {"id": a.id}, "btn danger", confirm="Từ chối thao tác của " ~ a.agent_id ~ ":\n\n" ~ v.text, note="Ghi chú cho agent (tuỳ chọn)", next=next, ic="x") }}
+    <span class="spacer"></span>
     {{ act("approve_fp", "Báo nhầm & cho phép", {"id": a.id}, "btn ghost sm", confirm="Cho phép và đánh dấu đây là BÁO NHẦM của bộ phân loại?", next=next, title="Thao tác này thật ra an toàn — giúp hub phân loại tốt hơn") }}
   </div>
-</div>
+</article>
+{%- endmacro %}
+
+{#- Thẻ câu hỏi của agent (UX). compact: chọn nhanh 1 chạm (câu một lựa chọn) — không có ô nhập (an toàn khi khung tự làm mới). -#}
+{% macro question_card(q, next, compact=False) -%}
+{% set v = question_view(q) %}
+<article class="xcard ask {{ 'done' if not v.pending }}" id="q-{{ q.id }}">
+  <div class="xcard-head">
+    <span class="xcard-ic">{{ icon('check' if not v.pending else 'question') }}</span>
+    <div class="xcard-title">
+      <div class="t">{{ q.agent_id }} hỏi {{ 'điều phối viên' if q.status == 'with_manager' else 'bạn' }} <span class="pill {{ v.status_tone }}">{{ v.status_label }}</span></div>
+      <div class="m"><a href="/agents/{{ q.agent_id }}">{{ q.agent_id }}</a>{% if q.task_id %}<span>·</span><a href="/tasks/{{ q.task_id }}">task {{ q.task_id }}</a>{% endif %}{% if q.run_id %}<span>·</span><a href="/runs/{{ q.run_id }}">lượt chạy</a>{% endif %}<span>·</span>{{ rel(q.created_at) }}</div>
+    </div>
+  </div>
+  <div class="q-text">{{ q.text }}</div>
+  {% if q.escalation_note and q.status == 'open' %}<div class="q-note">{{ icon('chat') }}<div class="pre"><b>{{ 'Điều phối viên' if q.escalated_at else 'Ghi chú' }}:</b> {{ q.escalation_note }}</div></div>{% endif %}
+  {% if not v.pending %}
+    {% if q.status == 'answered' %}<div class="q-answer">{{ icon('check') }}<div class="pre"><b>{{ v.answered_by }}</b> đã trả lời: {{ v.pick|join('; ') }}{% if v.answer_text %}{{ ' — ' if v.pick }}{{ v.answer_text }}{% endif %}</div></div>{% endif %}
+  {% elif q.status == 'with_manager' %}
+    {% if v.options %}<ol class="q-opts" start="1">{% for o in v.options %}<li class="q-opt"><span class="q-opt-k">{{ o.key }}</span><span class="q-opt-body"><span class="q-opt-l">{{ o.label }}</span>{% if o.description %}<span class="q-opt-d">{{ o.description }}</span>{% endif %}</span></li>{% endfor %}</ol>{% endif %}
+    <p class="xcard-why">Agent trong task hỏi điều phối viên trước; nếu không chốt được (hoặc quá hạn) câu hỏi sẽ chuyển lên bạn.</p>
+    <div class="xcard-actions">{{ act("question_take", "Tự trả lời", {"id": q.id}, "btn", next=next ~ "#q-" ~ q.id, ic="edit", title="Lấy câu hỏi khỏi điều phối viên để bạn trả lời") }}</div>
+  {% elif compact and v.single_quick %}
+    <div class="q-quick">{% for o in v.options %}{{ answer_btn(q, o, next) }}{% endfor %}</div>
+    {% if q.allow_free_text %}<div class="xcard-actions"><a class="btn sm ghost" href="/inbox#q-{{ q.id }}">{{ icon('edit') }}Trả lời bằng chữ…</a></div>{% endif %}
+  {% elif compact %}
+    <div class="xcard-actions"><a class="btn primary" href="/inbox#q-{{ q.id }}">{{ icon('question') }}Trả lời</a></div>
+  {% else %}
+  <form method="post" action="/do/question_answer" class="q-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ q.id }}"><input type="hidden" name="next" value="{{ next }}">
+    {% if v.options %}
+    <fieldset class="q-opts"><legend class="sr-only">Chọn {{ 'một hoặc nhiều' if q.multi else 'một' }} phương án</legend>
+      {% for o in v.options %}<label class="q-opt"><input type="{{ 'checkbox' if q.multi else 'radio' }}" name="keys" value="{{ o.key }}"><span class="q-opt-k">{{ o.key }}</span><span class="q-opt-body"><span class="q-opt-l">{{ o.label }}</span>{% if o.description %}<span class="q-opt-d">{{ o.description }}</span>{% endif %}</span></label>{% endfor %}
+    </fieldset>
+    {% endif %}
+    {% if q.allow_free_text %}<div class="q-free"><label>{{ 'Câu trả lời khác hoặc ghi chú thêm (tuỳ chọn)' if v.options else 'Câu trả lời của bạn' }}<textarea name="text" rows="2" maxlength="4000"{% if not v.options %} required{% endif %} placeholder="{{ 'Câu trả lời khác…' if v.options else 'Nhập câu trả lời…' }}"></textarea></label></div>{% endif %}
+    <div class="xcard-actions">
+      <button class="btn primary" type="submit">{{ icon('send') }}<span>Gửi câu trả lời</span></button>
+      <span class="spacer"></span>
+      {{ act("question_cancel", "Huỷ câu hỏi", {"id": q.id}, "btn ghost sm", confirm="Huỷ câu hỏi này? Agent sẽ không nhận được câu trả lời (task vẫn bị chặn tới khi bạn gỡ).", next=next) }}
+    </div>
+  </form>
+  {% endif %}
+</article>
+{%- endmacro %}
+
+{% macro answer_btn(q, o, next) -%}
+<form method="post" action="/do/question_answer" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ q.id }}"><input type="hidden" name="keys" value="{{ o.key }}"><input type="hidden" name="next" value="{{ next }}"><button class="btn" type="submit"{% if o.description %} title="{{ o.description }}"{% endif %}><span class="q-opt-k">{{ o.key }}</span><span>{{ o.label }}</span></button></form>
 {%- endmacro %}
 
 {% macro localhost_badge() -%}
-<span class="pill danger strong" title="Ngoại lệ sandbox: agent được mở cổng và gọi dịch vụ trên máy này (127.0.0.1/::1). Chỉ người tắt được.">⚠ localhost</span>
+<span class="pill danger strong lh-badge" title="Ngoại lệ sandbox: agent được mở cổng và gọi dịch vụ trên máy này (127.0.0.1/::1). Chỉ người tắt được.">{{ icon('alert') }}localhost</span>
 {%- endmacro %}
 
-{% macro empty(text) -%}<div class="empty">{{ text }}</div>{%- endmacro %}
+{% macro empty(text, ic="inbox", tone="", title=None) -%}<div class="empty {{ tone }}">{{ icon(ic) }}{% if title %}<b>{{ title }}</b>{% endif %}<span>{{ text }}</span></div>{%- endmacro %}
+
+{% macro more_menu(label="Thêm thao tác") -%}
+<details class="menu"><summary class="btn icon" aria-label="{{ label }}" title="{{ label }}">{{ icon('more') }}</summary><div class="menu-pop">{{ caller() }}</div></details>
+{%- endmacro %}

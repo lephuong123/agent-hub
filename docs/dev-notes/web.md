@@ -112,3 +112,37 @@ Test: `test_sandbox_localhost_badge_and_toggle`.
   takeover chạy từ web (chỉ hiện lệnh `agent-hub takeover <run>` — cần terminal tương tác), nhập MCP có bước xem trước (hiện nhập thẳng sau xác nhận).
 - Phiên lưu RAM: khởi động lại web → đăng nhập lại. Một server web/HUB_HOME (`auth/web.json`).
 - Reasoning chỉ hiện khi xem live (delta không lưu DB) — giống TUI.
+
+
+## UX v2 (2026-10-19) — kế hoạch `docs/dev-notes/ux-plan.md` (pha W-Q, W-A, W-B, W-C)
+Ảnh: `docs/screenshots/web/v2/` (sáng, `-toi`, `-mobile` 390 px, `-tablet` 900 px). Test: `tests/test_web_questions.py` (+ cập nhật `test_web.py`).
+
+**W-Q — câu hỏi của agent trên web.** Macro `question_card(q, next, compact)` (`_macros.html`): chữ agent (câu hỏi, nhãn, mô tả, ghi chú
+của điều phối viên) autoescape + `pre-wrap`; lựa chọn = radio/checkbox có `<label>`; ô "câu trả lời khác" nếu `allow_free_text`.
+`compact` (dải Cần bạn ở Tổng quan — khung tự làm mới 3 s) KHÔNG có ô nhập: mỗi lựa chọn là một nút một-chạm, "Trả lời bằng chữ…" dẫn sang
+`/inbox`. Câu `with_manager`: chỉ hiện lựa chọn + "Tự trả lời" (`question_take` → `question.escalate`). `ACTIONS`: `question_answer`
+(không hộp xác nhận), `question_take`, `question_cancel` (xác nhận) — đều qua `post_guard` (CSRF + khoá phiên WT-1), `channel=web`; daemon tự audit.
+Hiện ở: `/inbox`, Tổng quan, trang run (MỘT chỗ, ngoài khung tự làm mới), trang task, luồng chat Điều phối (cả qua SSE: `manager.py` dựng
+thẻ từ payload `question.*`, module macro dựng bằng `make_module({"csrf"})`). Badge menu = approval chờ + câu hỏi `open`. Agent có câu hỏi chờ
+→ trạng thái "Chờ bạn trả lời" (`asking`).
+
+**W-A — hệ thiết kế.** `app.css` viết lại: token sáng/tối (thêm `--ask` cho câu hỏi, `--on-ok`), nút `primary|ok|danger|ghost` + cỡ `sm|lg|icon`,
+`pill` có icon, `xcard` (thẻ duyệt/câu hỏi), lưới thẻ agent, timeline run, chat. Sprite icon tĩnh `static/icons.svg` (vẽ tay, `<use href>`,
+macro `icon()`); UI web không còn emoji. Toast góc dưới: tự ẩn bằng CSS animation (không cần JS), nút đóng bằng JS. `<time data-rel>` →
+"x phút trước" (app.js, 30 s). Ô chat/steer tự giãn; Enter gửi (Shift+Enter xuống dòng, bỏ qua khi đang gõ dấu IME).
+
+**W-B — bố cục.** Sidebar có nhóm (Làm việc · Đội ngũ · Học & chất lượng · Hệ thống; đáy: daemon, ESTOP, Thoát); 761–1100 px chỉ icon;
+≤ 760 px header gọn + tab đáy 5 mục (Điều phối · Cần bạn · Agent · Lượt chạy · Thêm — sheet `<details>`). Trang mới `/inbox` "Cần bạn"
+(câu hỏi chờ bạn, thao tác chờ duyệt, câu hỏi đang ở điều phối viên, task bị chặn không có câu hỏi, câu đã trả lời gần đây); `/approvals` giữ
+nguyên (lịch sử), thuộc mục "Cần bạn" trên menu.
+
+**W-C — từng màn.** Tổng quan: 4 thẻ số liệu, dải Cần bạn (≤ 3 thẻ), lưới thẻ agent (bỏ cột "công cụ gần nhất"), "Hoạt động" chỉ còn sự kiện có
+nghĩa với câu tiếng Việt do hub sinh (`present.activity_text` — bỏ tool/lời agent từng bước/run.started). Run: header chip, approval MỘT mục trong
+diễn biến (dom `ev-ap-<id>`: open → waiting_human → resolved thay tại chỗ, cả replay lẫn SSE), mục câu hỏi `ev-q-<id>`, ô chỉ đạo dính đáy.
+Điều phối: 3 cột (danh sách cuộc trò chuyện · chat · trạng thái), thẻ hành động liên tiếp của một lượt gom thành "Đã làm N việc" (`_timeline`; SSE
+gộp vào khối cuối cùng lượt), chip gợi ý. Danh sách run/agent: tiêu đề task thay prompt thô (`present.run_title`), lọc nhanh dạng chip.
+Agent: header + menu "⋯" (Tạm dừng/Xoá). Empty state có icon + hướng dẫn.
+
+Đổi hành vi/kỳ vọng test có chủ đích: nhãn localhost là `lh-badge` (không còn ký tự ⚠); "Hoạt động" không còn dòng `tool.start`.
+Chưa làm: gom nhóm nhiều lời gọi tool liên tiếp trên trang run; form agent nhiều bước; tab trên trang agent; trang Tự học/MCP/Chi phí/Nhật ký
+chỉ được tô lại bằng CSS mới (bố cục cũ).

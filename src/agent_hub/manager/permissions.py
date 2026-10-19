@@ -430,6 +430,16 @@ class ManagerPermissions:
         why = self.rate_block(method)
         if why:
             return why
+        if method in ("question.answer", "question.escalate"):
+            # UX: chỉ câu hỏi ĐANG CHỜ điều phối viên (agent trong task hỏi); câu hỏi đã lên người / của chính manager → người quyết
+            q = self.hub.questions.maybe(str(p.get("id") or p.get("question_id") or ""))  # type: ignore[attr-defined]
+            if q is None:
+                return "không có câu hỏi này"
+            if q["status"] != "with_manager" or q.get("routed_to") != "manager":
+                return f"câu hỏi {q['id']} không chờ điều phối viên (đang {q['status']}) — chỉ người trả lời"
+            if q["agent_id"] in mgrs:
+                return "câu hỏi của chính điều phối viên — chỉ người trả lời"
+            return None
         if method == "agent.create":
             cfg = dict(p.get("config") or {})
             aid = str(cfg.get("id") or "")

@@ -74,6 +74,10 @@ class ManagerOps:
         """Đích dạng "loại:id" cho thẻ `manager.action` (web dựng link nội bộ theo loại)."""
         if op in ("estop_on", "notify_owner"):
             return None
+        if op.startswith("question_"):
+            return f"question:{args.get('question_id')}" if args.get("question_id") else None
+        if op == "ask_owner":
+            return None
         if op in ("team_member_add", "team_member_rm"):
             return f"team:{args.get('team')}" if args.get("team") else None
         kind = op.split("_", 1)[0]
@@ -390,6 +394,39 @@ class ManagerOps:
         if a.get("team"):
             p["team"] = a["team"]
         return await self._rpc("estop_on", "estop.set", p, a, summary=f"BẬT ESTOP{' team ' + str(a['team']) if a.get('team') else ''}: {str(a.get('reason') or '')[:120]}")
+
+    # ================================================================== CÂU HỎI (UX)
+    def op_question_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
+        st = str(a.get("status") or "with_manager")
+        keep = ("id", "agent_id", "task_id", "run_id", "status", "routed_to", "text", "options", "multi", "allow_free_text", "escalation_note", "answer",
+                "answered_by", "created_at")
+        return [{k: q.get(k) for k in keep} for q in self.hub.questions.list(st, limit=int(a.get("limit") or 20))]
+
+    async def op_question_answer(self, a: dict[str, Any]) -> Any:
+        qid = str(a.get("question_id") or "")
+        res = await self._rpc("question_answer", "question.answer", {"id": qid, "keys": a.get("keys") or [], "text": a.get("text")}, a,
+                              summary=f"trả lời câu hỏi {qid}")
+        return {"question_id": qid, "status": (res or {}).get("status"), "next": "the asking agent is resumed with your answer"}
+
+    async def op_question_escalate(self, a: dict[str, Any]) -> Any:
+        qid = str(a.get("question_id") or "")
+        res = await self._rpc("question_escalate", "question.escalate", {"id": qid, "note": a.get("note")}, a, summary=f"chuyển câu hỏi {qid} lên người")
+        return {"question_id": qid, "status": (res or {}).get("status"), "next": "the human owner was asked; do not answer it yourself"}
+
+    def op_ask_owner(self, a: dict[str, Any]) -> Any:
+        opts = self.run.get("run_opts") or {}
+        conv = opts.get("manager_conversation")
+        try:
+            if conv and self.svc._conv_row(conv)["channel"] == "heartbeat":
+                conv = None
+        except NotFound:
+            conv = None
+        if conv is None:
+            home = self.svc._home_conversation()
+            conv = home["id"] if home else None
+        q = self.hub.questions.open(self.run, a.get("question"), a.get("options"), multi=bool(a.get("multi")), source="manager", conversation_id=conv)
+        self._action("ask_owner", a, summary=f"hỏi người: {q['text'][:120]}")
+        return {"question_id": q["id"], "status": q["status"], "note": "Asked. End your turn; the owner's answer arrives as an owner message."}
 
     def op_notify_owner(self, a: dict[str, Any]) -> Any:
         text = str(a.get("text") or "").strip()

@@ -754,6 +754,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .manager.cli import add_parsers as _add_manager_parsers
 
     _add_manager_parsers(sub, common)
+
+    # UX: agent-hub questions [list|show|escalate|cancel], agent-hub answer <id> (questions/cli.py)
+    from .questions.cli import add_parsers as _add_question_parsers
+
+    _add_question_parsers(sub, common)
     return p
 
 

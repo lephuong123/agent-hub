@@ -72,6 +72,9 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "telegram.setup", "telegram.pending", "telegram.allow", "telegram.revoke", "telegram.disable", "telegram.test",
         # M7: chỉ định điều phối viên (cấp quyền manager), nhắn/tick manager (agent khác không được "ra lệnh" cho manager)
         "manager.set", "manager.chat", "manager.tick",
+        # UX: trả lời/chuyển/huỷ câu hỏi của agent — agent không tự trả lời câu hỏi (của mình hay agent khác). Điều phối viên trả lời/
+        # chuyển lên người qua MANAGER_ALLOWED, chỉ khi câu hỏi đang `with_manager` (manager/permissions.check_rpc)
+        "question.answer", "question.escalate", "question.cancel",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})
@@ -134,6 +137,8 @@ MANAGER_ALLOWED: dict[str, str] = {
     "run.stop": "dừng run của agent khác",
     "learn.refine": "yêu cầu review/tinh chỉnh tri thức của agent khác (qua pipeline)",
     "estop.set": "CHỈ bật ESTOP (on=true)",
+    "question.answer": "trả lời câu hỏi của agent trong task khi câu hỏi đang chờ điều phối viên (with_manager) — không phải câu hỏi đã lên người",
+    "question.escalate": "chuyển câu hỏi đang chờ điều phối viên lên người",
 }
 
 
@@ -143,7 +148,8 @@ def all_mutating() -> frozenset[str]:
     for mod, name in (("agent_hub.mcp_server.rpc", "MUTATING"), ("agent_hub.mcp_server.surface_rpc", "MUTATING_SURFACE"),
                       ("agent_hub.learning.rpc", "MUTATING_M4A"), ("agent_hub.learning_ops.rpc", "MUTATING_B"),
                       ("agent_hub.curation.rpc", "MUTATING_CURATION"), ("agent_hub.chat.rpc", "MUTATING_TELEGRAM"),
-                      ("agent_hub.manager.rpc", "MUTATING_MANAGER")):
+                      ("agent_hub.manager.rpc", "MUTATING_MANAGER"),
+                      ("agent_hub.questions.rpc", "MUTATING_QUESTIONS")):
         try:
             import importlib
 

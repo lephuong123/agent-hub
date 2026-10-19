@@ -2,10 +2,10 @@
 {%- if not m.available -%}
 <p class="muted small">Daemon này chưa có chức năng điều phối viên (<code>manager.*</code>).</p>
 {%- elif not m.agent_id -%}
-<p class="small"><span class="pill muted">○ Chưa có điều phối viên</span></p>
+<p class="small"><span class="pill muted">Chưa có điều phối viên</span></p>
 {%- else -%}
 <div class="mgr-st">
-  <div><a href="/agents/{{ m.agent_id }}"><b>{{ (m.row.name if m.row else m.agent_id) }}</b></a>{% if m.row and m.row.name != m.agent_id %} <span class="muted small">{{ m.agent_id }}</span>{% endif %} {{ mc.agent_pill(m.row.status if m.row else 'idle') }}</div>
+  <div class="mgr-st-who">{{ mc.avatar(m.row.name if m.row else m.agent_id) }}<div class="acard-name"><a href="/agents/{{ m.agent_id }}">{{ (m.row.name if m.row else m.agent_id) }}</a><div class="r">{{ m.agent_id }}</div></div>{{ mc.agent_pill(m.row.status if m.row else 'idle') }}</div>
   <dl class="kv{{ ' one' if compact }}">
     <div><dt>Nhịp gần nhất</dt><dd>{% if m.last_tick %}{{ m.last_tick|ts }} <span class="muted small">({{ m.last_tick|ago }})</span>{% else %}chưa chạy{% endif %}</dd></div>
     <div><dt>Nhịp kế tiếp</dt><dd>{% if m.next_tick %}{{ m.next_tick|ts }}{% else %}khi có sự kiện{% endif %}</dd></div>

@@ -2,7 +2,7 @@
 {% import "_macros.html" as m with context %}
 {% block title %}Team{% endblock %}
 {% block content %}
-<div class="page-head"><h1>Team</h1></div>
+<div class="page-head"><div class="ph-title"><h1>Team</h1><span class="sub">Nhóm agent có lead tách việc, worker làm, reviewer duyệt.</span></div><a class="btn primary" href="#tao-team">{{ m.icon('plus') }}Tạo team</a></div>
 {% for t in teams %}
 <section class="card {{ 'archived' if t.archived_at }}" id="team-{{ t.id }}">
   <div class="card-head"><h2>{{ t.name }} <span class="muted small">{{ t.id }}</span>{% if t.estop %} <span class="pill danger">ESTOP</span>{% endif %}{% if t.archived_at %} <span class="pill muted">đã lưu trữ</span>{% endif %}</h2>
@@ -10,7 +10,7 @@
       <a class="btn sm" href="/tasks?team={{ t.id }}">Công việc</a>
       {% if t.archived_at %}{{ m.act("team_restore", "Khôi phục", {"id": t.id}, "btn sm") }}{% else %}
       {% if t.estop %}{{ m.act("team_estop", "Tắt ESTOP", {"id": t.id, "on": "0"}, "btn sm", confirm="Tắt dừng khẩn cấp cho team " ~ t.id ~ "?") }}
-      {% else %}{{ m.act("team_estop", "■ ESTOP team", {"id": t.id, "on": "1", "stop_running": "1"}, "btn sm danger", confirm="BẬT dừng khẩn cấp cho team " ~ t.id ~ " và dừng mọi run đang chạy của team?") }}{% endif %}
+      {% else %}{{ m.act("team_estop", "ESTOP team", {"id": t.id, "on": "1", "stop_running": "1"}, "btn sm danger", confirm="BẬT dừng khẩn cấp cho team " ~ t.id ~ " và dừng mọi run đang chạy của team?") }}{% endif %}
       {{ m.act("team_archive", "Lưu trữ", {"id": t.id}, "btn sm ghost", confirm="Lưu trữ team " ~ t.id ~ "?") }}{% endif %}
     </div>
   </div>
@@ -29,8 +29,8 @@
   </form>{% endif %}
 </section>
 {% else %}<section class="card">{{ m.empty("Chưa có team nào.") }}</section>{% endfor %}
-<section class="card">
-  <h2>+ Tạo team</h2>
+<section class="card" id="tao-team">
+  <h2>Tạo team</h2>
   <form method="post" action="/do/team_create" class="form">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/teams">
     <div class="fgrid">

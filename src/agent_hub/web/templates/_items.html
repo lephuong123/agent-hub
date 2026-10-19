@@ -1,32 +1,39 @@
+{% import "_macros.html" as m %}
 {% macro item(it) -%}
 {%- if it.kind == 'msg' -%}
 <div class="ti msg{{ ' sub' if it.sub }}" data-seq="{{ it.seq }}"><div class="md">{{ it.html|safe }}</div></div>
 {%- elif it.kind == 'reasoning' -%}
 <details class="ti reasoning"><summary>Suy nghĩ</summary><pre>{{ it.text }}</pre></details>
 {%- elif it.kind == 'prompt' -%}
-<div class="ti prompt" data-seq="{{ it.seq }}"><div class="ti-label">Yêu cầu <span class="muted small">{{ it.meta }}</span></div><div class="pre">{{ it.text }}</div></div>
+<div class="ti prompt" data-seq="{{ it.seq }}"><div class="ti-label">{{ m.icon('send', 'sm') }}Yêu cầu <span class="muted">· {{ it.meta }}</span></div><div class="pre">{{ it.text }}</div></div>
 {%- elif it.kind == 'start' -%}
-<div class="ti start" data-seq="{{ it.seq }}">── {{ it.text }}{% if it.mcp %} · MCP: {{ it.mcp|join(', ') }}{% endif %} <span class="muted small">{{ it.ts }}</span></div>
+<div class="ti start" data-seq="{{ it.seq }}"><span>{{ it.text }}{% if it.mcp %} · MCP: {{ it.mcp|join(', ') }}{% endif %} · {{ it.ts }}</span></div>
 {%- elif it.kind == 'tool' -%}
 <div class="ti tool{{ ' running' if it.running }}{{ ' err' if it.error }}{{ ' sub' if it.sub }}" id="{{ it.dom }}" data-seq="{{ it.seq }}">
-<div class="tool-line"><span class="tool-name">{{ it.name }}</span>{% if it.summary %} <span class="tool-args">{{ it.summary }}</span>{% endif %}
-{%- if it.running %} <span class="spin" aria-label="đang chạy">đang chạy…</span>{% elif it.dur is not none %} <span class="muted small">{{ '%.1f'|format(it.dur) }}s</span>{% endif %}</div>
+<div class="tool-line">{{ m.icon('x' if it.error else ('clock' if it.running else 'terminal')) }}<span class="tool-name">{{ it.name }}</span>{% if it.summary %}<span class="tool-args">{{ it.summary }}</span>{% endif %}
+{%- if it.running %} <span class="spin" aria-label="đang chạy">đang chạy…</span>{% elif it.dur is not none %} <span class="muted xs">{{ '%.1f'|format(it.dur) }}s</span>{% endif %}</div>
 {%- if it.diff %}<pre class="diff">{% for k, ln in it.diff %}<span class="{{ k }}">{{ '+ ' if k == 'add' else '- ' if k == 'del' else '' }}{{ ln }}</span>
 {% endfor %}</pre>{% endif %}
 {%- if it.result %}<details class="tool-res"><summary>{{ it.result|first(140) }}</summary><pre>{{ it.result }}</pre></details>{% endif %}
 </div>
 {%- elif it.kind == 'approval' -%}
-<div class="ti approval-ti{{ ' human' if it.human }}" data-seq="{{ it.seq }}"><b>{{ '⏸ Chờ bạn duyệt' if it.human else '◐ Xin duyệt' }}</b>{% if it.tool %} {{ it.tool }}:{% endif %} <code>{{ it.preview }}</code>
-<div class="muted small">{% if it.rule %}luật {{ it.rule }}{% if it.reason %} · {{ it.reason }}{% endif %} — {% endif %}duyệt ở khung phía trên</div></div>
-{%- elif it.kind == 'steer' -%}
-<div class="ti steer" data-seq="{{ it.seq }}"><div class="ti-label">Bạn chỉ đạo <span class="muted small">{{ it.meta }} · {{ it.ts }}</span></div><div class="pre">{{ it.text }}</div></div>
-{%- elif it.kind == 'end' -%}
-<div class="ti end {{ it.tone }}" data-seq="{{ it.seq }}">{{ it.text }}{% if it.error %}<div class="small">{{ it.error }}</div>{% endif %}</div>
+{%- if it.resolved -%}
+<div class="ti approval-ti resolved"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}">{{ m.icon('check' if it.decision == 'allowed' else 'x') }}<div class="ti-body"><b>{{ it.label }}</b>{% if it.preview %} · <code>{{ it.preview }}</code>{% endif %}</div></div>
 {%- else -%}
-<div class="ti note {{ it.tone }}" data-seq="{{ it.seq }}">{{ it.text }} <span class="muted small">{{ it.ts }}</span></div>
+<div class="ti approval-ti{{ ' human' if it.human }}"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}">{{ m.icon('pause' if it.human else 'shield') }}<div class="ti-body"><b>{{ 'Chờ bạn duyệt' if it.human else 'Xin duyệt' }}</b>{% if it.tool %} {{ it.tool }}{% endif %}{% if it.preview %} · <code>{{ it.preview }}</code>{% endif %}
+<div class="muted small">{% if it.rule %}luật {{ it.rule }}{% if it.reason %} · {{ it.reason }}{% endif %} — {% endif %}duyệt ở khung phía trên</div></div></div>
+{%- endif -%}
+{%- elif it.kind == 'question' -%}
+<div class="ti question-ti{{ ' answered' if it.answered }}"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}">{{ m.icon('check' if it.answered else 'question') }}<div class="ti-body"><b>{{ it.label }}</b>{% if it.text %}<div class="pre">{{ it.text }}</div>{% endif %}{% if not it.answered %}<div class="muted small">trả lời ở khung phía trên hoặc trang Cần bạn</div>{% endif %}</div></div>
+{%- elif it.kind == 'steer' -%}
+<div class="ti steer" data-seq="{{ it.seq }}"><div class="ti-label">{{ m.icon('chat', 'sm') }}Bạn chỉ đạo <span class="muted">· {{ it.meta }} · {{ it.ts }}</span></div><div class="pre">{{ it.text }}</div></div>
+{%- elif it.kind == 'end' -%}
+<div class="ti end {{ it.tone }}" data-seq="{{ it.seq }}">{{ m.icon('check' if it.tone == 'ok' else ('alert' if it.tone in ('danger', 'warn') else 'stop')) }}<div>{{ it.text }}{% if it.error %}<div class="small">{{ it.error }}</div>{% endif %}</div></div>
+{%- else -%}
+<div class="ti note {{ it.tone }}"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}"><span>{{ it.text }}</span> <span class="faint xs">{{ it.ts }}</span></div>
 {%- endif -%}
 {%- endmacro %}
 
 {% macro line(it) -%}
-<li class="fl {{ it.tone }}"><span class="fl-ts">{{ it.ts }}</span> <a class="fl-agent" href="{{ '/runs/' ~ it.run_id if it.run_id else ('/agents/' ~ it.agent if it.agent != 'hub' else '/') }}">{{ it.agent }}</a> <span class="fl-text">{{ it.text }}</span></li>
+<li class="fl {{ it.tone }}"><span class="fl-dot" aria-hidden="true"></span><span class="fl-main"><a class="fl-agent" href="{{ '/runs/' ~ it.run_id if it.run_id else ('/tasks/' ~ it.task_id if it.task_id else ('/agents/' ~ it.agent if it.agent != 'hub' else '/')) }}">{{ it.agent }}</a> <span class="fl-text">{{ it.text }}</span></span><span class="fl-ts">{% if it.iso %}<time datetime="{{ it.iso }}" data-rel title="{{ it.ts }}">{{ it.ts }}</time>{% else %}{{ it.ts }}{% endif %}</span></li>
 {%- endmacro %}

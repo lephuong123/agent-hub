@@ -708,6 +708,17 @@ class TaskDispatcher:
             return {k: g.get(k) for k in keep}
         if op == "task_comment":
             return self.tasks.comment(tid, str(args.get("text") or ""), author=author, run_id=run_id)
+        if op == "ask_human":
+            # UX: câu hỏi có lựa chọn → điều phối viên (nếu có) → người. Task bị chặn khi run kết thúc; trả lời → bình luận + gỡ chặn
+            if run.get("kind") not in ("task", "lead"):
+                raise HubError(f"ask_human không dùng được trong run {run.get('kind')}")
+            q = self.hub.questions.open(run, args.get("question"), args.get("options"), multi=bool(args.get("multi")),  # type: ignore[attr-defined]
+                                        allow_free_text=args.get("allow_free_text") is not False, source="ask_tool", task_id=tid)
+            self.store.update_run(run_id, {"task_signal": {"op": "block", "reason": f"waiting for an answer to question {q['id']}: {q['text'][:200]}",
+                                                           "question_id": q["id"]}})
+            who = "the coordinator (it may pass it to the human owner)" if q["routed_to"] == "manager" else "the human owner"
+            return {"ok": True, "question_id": q["id"], "asked": who,
+                    "note": "Question sent. End your turn now with a short summary of what you did so far; you will be resumed with the answer."}
         if op in ("task_complete", "task_request_review", "task_block"):
             if run.get("kind") not in ("task", "lead"):
                 raise HubError(f"{op} không dùng được trong run {run.get('kind')}")

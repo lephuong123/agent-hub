@@ -1,9 +1,65 @@
 /* agent-hub web — JS nhỏ, không phụ thuộc gì ngoài htmx (vendored). Tuân CSP script-src 'self' (không inline/eval).
  * 1. Hộp xác nhận cho form [data-confirm] (thao tác nhạy cảm). Không có JS → server tự hiện trang xác nhận.
  * 2. Luồng live của run (SSE /sse/run/<id>) và "hoạt động gần đây" (SSE /sse/firehose).
+ * 3. UX v2: đóng toast, thời gian tương đối (<time data-rel>), đóng menu/sheet khi bấm ra ngoài, ô nhập tự giãn.
+ * Không bao giờ dựng HTML từ chữ của agent: chỉ chèn HTML do server vẽ (autoescape) hoặc gán textContent.
  */
 (function () {
   "use strict";
+
+  // ------------------------------------------------------------ toast
+  document.addEventListener("click", function (e) {
+    var x = e.target.closest && e.target.closest(".toast-x");
+    if (x && x.parentNode) x.parentNode.remove();
+  });
+  setTimeout(function () {
+    var ok = document.querySelectorAll("#toasts .flash.ok");
+    for (var i = 0; i < ok.length; i++) ok[i].remove();
+  }, 7000);
+
+  // ------------------------------------------------------------ thời gian tương đối
+  function relText(d) {
+    var s = Math.round((Date.now() - d.getTime()) / 1000);
+    if (isNaN(s)) return null;
+    if (s < 0) s = 0;
+    if (s < 10) return "vừa xong";
+    if (s < 60) return s + " giây trước";
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + " phút trước";
+    var h = Math.floor(m / 60);
+    if (h < 24) return h + " giờ trước";
+    var dd = Math.floor(h / 24);
+    if (dd < 7) return dd + " ngày trước";
+    return d.toLocaleDateString("vi-VN");
+  }
+  function refreshTimes(root) {
+    var ts = (root || document).querySelectorAll("time[data-rel]");
+    for (var i = 0; i < ts.length; i++) {
+      var v = ts[i].getAttribute("datetime");
+      if (!v) continue;
+      var t = relText(new Date(v));
+      if (t) ts[i].textContent = t;
+    }
+  }
+  refreshTimes();
+  setInterval(refreshTimes, 30000);
+  document.body.addEventListener("htmx:afterSwap", function (e) { refreshTimes(e.target); });
+
+  // ------------------------------------------------------------ menu "⋯" + sheet "Thêm": đóng khi bấm ra ngoài / Esc
+  document.addEventListener("click", function (e) {
+    var open = document.querySelectorAll("details.menu[open], details.tab-more[open]");
+    for (var i = 0; i < open.length; i++) if (!open[i].contains(e.target)) open[i].removeAttribute("open");
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Escape") return;
+    var open = document.querySelectorAll("details.menu[open], details.tab-more[open]");
+    for (var i = 0; i < open.length; i++) open[i].removeAttribute("open");
+  });
+
+  // ------------------------------------------------------------ ô nhập tự giãn (chat, steer)
+  function autoGrow(t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight + 2, 240) + "px"; }
+  var grows = document.querySelectorAll(".mgr-form textarea, .composer textarea");
+  for (var g = 0; g < grows.length; g++) grows[g].addEventListener("input", function () { autoGrow(this); });
 
   // ------------------------------------------------------------ khoá phiên ngoài cookie (WT-1)
   // Server trao khoá MỘT lần qua fragment `#k=…` lúc đăng nhập (fragment không gửi lên server). Giữ trong localStorage của origin
@@ -107,6 +163,7 @@
     var state = document.getElementById("live-state");
     var empty = tr.querySelector(".empty");
     tr.scrollTop = tr.scrollHeight;
+    window.addEventListener("load", function () { tr.scrollTop = tr.scrollHeight; });
     function scrollMaybe(stick) { if (stick) tr.scrollTop = tr.scrollHeight; }
     function endBlock() { cur = null; curKind = null; }
     es.onmessage = function (ev) {
@@ -150,13 +207,13 @@
         if (bar && window.htmx && bar.getAttribute("hx-get")) window.htmx.ajax("GET", bar.getAttribute("hx-get"), { target: bar, swap: "innerHTML" });
       } else if (m.t === "end") {
         es.close();
-        if (state) { state.textContent = "■ đã kết thúc"; state.className = "pill muted"; }
+        if (state) { state.textContent = "đã kết thúc"; state.className = "pill muted"; }
         var box = document.querySelector("#steer-form textarea");
         if (!box || !box.value.trim()) setTimeout(function () { location.reload(); }, 800);
       }
     };
-    es.onerror = function () { if (state) { state.textContent = "↻ đang nối lại…"; state.className = "pill warn"; } };
-    es.onopen = function () { if (state) { state.textContent = "● trực tiếp"; state.className = "pill ok live-dot"; } };
+    es.onerror = function () { if (state) { state.textContent = "đang nối lại…"; state.className = "pill warn"; } };
+    es.onopen = function () { if (state) { state.textContent = "trực tiếp"; state.className = "pill ok live-dot"; } };
   }
 
   // ------------------------------------------------------------ firehose tổng quan
@@ -164,15 +221,17 @@
   if (fh && window.EventSource) {
     var st = document.getElementById("fh-state");
     var src = new EventSource(fh.getAttribute("data-sse-firehose"));
-    src.onopen = function () { if (st) st.textContent = "● trực tiếp"; };
-    src.onerror = function () { if (st) st.textContent = "↻ đang nối lại…"; };
+    src.onopen = function () { if (st) { st.textContent = "trực tiếp"; st.className = "pill ok"; } };
+    src.onerror = function () { if (st) { st.textContent = "đang nối lại…"; st.className = "pill warn"; } };
     src.onmessage = function (ev) {
       var m;
       try { m = JSON.parse(ev.data); } catch (_) { return; }
       if (m.t !== "line") return;
       var li = fromHTML(m.html);
       if (!li) return;
+      var fe = document.getElementById("fh-empty"); if (fe) fe.remove();
       fh.insertBefore(li, fh.firstChild);
+      refreshTimes(li);
       while (fh.children.length > 120) fh.removeChild(fh.lastChild);
     };
   }
@@ -193,12 +252,31 @@
     var p0 = ml.querySelector("[data-pending]");
     if (p0) pend[p0.getAttribute("data-pending")] = p0;
     ml.scrollTop = ml.scrollHeight;
+    window.addEventListener("load", function () { ml.scrollTop = ml.scrollHeight; });
+    setTimeout(function () { ml.scrollTop = ml.scrollHeight; }, 300);
     function dropEmpty() { var e = document.getElementById("mgr-empty"); if (e) e.remove(); }
     function stick() { return nearBottom(ml); }
     function put(node, atBottom) { if (!node) return; dropEmpty(); ml.appendChild(node); if (atBottom) ml.scrollTop = ml.scrollHeight; }
     function handle(m) {
       var r = m.run, s = stick();
       if (m.t === "tick") { document.body.dispatchEvent(new Event("mgr-tick")); return; }
+      if (m.t === "question") {
+        if (!conv || m.conv !== conv) return;  // câu hỏi của cuộc trò chuyện khác
+        var ex = document.getElementById(m.dom);
+        if (m.answered) {
+          if (!ex) return;
+          var rm = ex.querySelectorAll(".q-form, .q-quick, .xcard-actions, .q-opts, .q-free");
+          for (var k = 0; k < rm.length; k++) rm[k].remove();
+          ex.classList.add("done");
+          var ans = fromHTML(m.html); if (ans) ex.appendChild(ans);
+          return;
+        }
+        var qn = fromHTML(m.html);
+        if (!qn) return;
+        if (ex) ex.replaceWith(qn); else put(qn, s);
+        refreshTimes(qn);
+        return;
+      }
       if (m.t === "action") {
         var side = document.getElementById("mgr-actions");
         if (side && m.side && !m.sideDone) {
@@ -222,8 +300,18 @@
         if (pend[r]) { pend[r].replaceWith(node); delete pend[r]; if (s) ml.scrollTop = ml.scrollHeight; }
         else put(node, s);
       } else if (m.t === "action") {
-        var a = fromHTML(m.html);
-        if (pend[r]) { dropEmpty(); ml.insertBefore(a, pend[r]); } else put(a, s);
+        // gom vào khối "Đã làm N việc" của cùng lượt nếu khối đó là mục cuối (trước khung "đang trả lời")
+        var anchor = pend[r] || null;
+        var last = anchor ? anchor.previousElementSibling : ml.lastElementChild;
+        if (last && last.classList.contains("mm-acts") && last.getAttribute("data-run") === r) {
+          var one = fromHTML(m.one);
+          if (one) last.appendChild(one);
+          var n = last.querySelector(".n"); if (n) n.textContent = String(last.querySelectorAll(".mm-act").length);
+          if (!m.ok) last.classList.add("err");
+        } else {
+          var a = fromHTML(m.html);
+          if (anchor) { dropEmpty(); ml.insertBefore(a, anchor); } else put(a, s);
+        }
         if (s) ml.scrollTop = ml.scrollHeight;
       } else if (m.t === "run_end") {
         setTimeout(function () {
@@ -249,7 +337,15 @@
     }
     if (mform && window.fetch && window.FormData) {
       if (mtext) mtext.addEventListener("keydown", function (e) {
-        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (mform.requestSubmit) mform.requestSubmit(); else mform.submit(); }
+        // Enter gửi; Shift+Enter xuống dòng; không gửi khi đang gõ dấu (IME)
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); if (mform.requestSubmit) mform.requestSubmit(); else mform.submit(); }
+      });
+      var sug = document.getElementById("mgr-suggest");
+      if (sug && mtext) sug.addEventListener("click", function (e) {
+        var b = e.target.closest("button[data-fill]");
+        if (!b) return;
+        mtext.value = b.getAttribute("data-fill"); mtext.focus(); autoGrow(mtext);
+        try { mtext.setSelectionRange(mtext.value.length, mtext.value.length); } catch (_) {}
       });
       mform.addEventListener("submit", function (e) {
         e.preventDefault();  // khoá phiên `k` đã được gắn ở pha capture (trên)
@@ -273,7 +369,7 @@
               if (pn) { put(pn, true); pend[j.run_id] = pn; }
               track(j.run_id);
             }
-            mtext.value = "";
+            mtext.value = ""; autoGrow(mtext);
           })
           .catch(function () { if (merr) { merr.textContent = "Không gửi được — kiểm tra kết nối rồi thử lại."; merr.hidden = false; } })
           .then(function () { if (btn) btn.disabled = false; mtext.focus(); });

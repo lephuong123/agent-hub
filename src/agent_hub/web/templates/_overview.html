@@ -1,42 +1,59 @@
 {% import "_macros.html" as m with context %}
+{% if hub.estop and hub.estop.on %}<div class="banner danger">{{ m.icon('stop') }}<span><b>Dừng khẩn cấp (ESTOP) đang BẬT</b>{% if hub.estop.reason %} — {{ hub.estop.reason }}{% endif %}. Không run mới nào được chạy.</span> <a href="/settings#estop">Tắt ở Cài đặt</a></div>{% endif %}
+{% if hub.auth_block %}<div class="banner danger">{{ m.icon('alert') }}<span><code>claude</code> chưa đăng nhập — chạy <code>claude</code> trong terminal để đăng nhập, rồi bấm</span> {{ m.act("auth_reset", "Thử lại", {}, "btn sm", next="/") }}</div>{% endif %}
+{% if hub.cli_untested %}<div class="banner warn">{{ m.icon('alert') }}<span>Phiên bản Claude Code {{ hub.cli_version }} chưa được kiểm với hub.</span></div>{% endif %}
+{% set need = (hub.approvals_pending or 0) + (questions|length) %}
 <section class="stats">
-  <div class="stat"><div class="stat-n">{{ hub.agents or 0 }}</div><div class="stat-l">agent</div></div>
-  <div class="stat"><div class="stat-n ok-t">{{ hub.running or 0 }}</div><div class="stat-l">đang chạy{% if hub.queued %} · {{ hub.queued }} chờ slot{% endif %}</div></div>
-  <div class="stat {{ 'alert' if hub.approvals_pending }}"><div class="stat-n">{{ hub.approvals_pending or 0 }}</div><div class="stat-l">chờ duyệt{% if hub.approvals_pending %} · lâu nhất {{ hub.approvals_longest_wait_s|dur }}{% endif %}</div></div>
-  <div class="stat"><div class="stat-n">{{ hub.cost_today_usd|cost }}</div><div class="stat-l">chi phí hôm nay · {{ hub.tokens_today|tok }} token</div></div>
-  <div class="stat"><div class="stat-n">{{ hub.learnings_today or 0 }}</div><div class="stat-l">thay đổi tự học hôm nay</div></div>
+  <div class="stat tone-ok">
+    <div class="stat-top"><span class="stat-l">Đang chạy</span><span class="stat-ic">{{ m.icon('run') }}</span></div>
+    <div class="stat-n">{{ hub.running or 0 }}<span class="muted small"> / {{ hub.agents or 0 }} agent</span></div>
+    <div class="stat-s">{% if hub.queued %}{{ hub.queued }} chờ slot{% else %}tối đa {{ hub.max_concurrent_runs or '—' }} cùng lúc{% endif %}</div>
+  </div>
+  <a class="stat {{ 'alert' if hub.approvals_pending else ('tone-ask' if need else '') }}" href="/inbox">
+    <div class="stat-top"><span class="stat-l">Cần bạn</span><span class="stat-ic">{{ m.icon('inbox') }}</span></div>
+    <div class="stat-n">{{ need }}</div>
+    <div class="stat-s">{% if need %}{{ hub.approvals_pending or 0 }} duyệt · {{ questions|length }} câu hỏi{% if hub.approvals_pending %} · lâu nhất {{ hub.approvals_longest_wait_s|dur }}{% endif %}{% else %}không có gì chờ bạn{% endif %}</div>
+  </a>
+  <a class="stat tone-accent" href="/costs">
+    <div class="stat-top"><span class="stat-l">Chi phí hôm nay</span><span class="stat-ic">{{ m.icon('dollar') }}</span></div>
+    <div class="stat-n">{{ hub.cost_today_usd|cost }}</div>
+    <div class="stat-s">{{ hub.tokens_today|tok }} token</div>
+  </a>
+  <a class="stat" href="/learnings">
+    <div class="stat-top"><span class="stat-l">Tự học hôm nay</span><span class="stat-ic">{{ m.icon('learn') }}</span></div>
+    <div class="stat-n">{{ hub.learnings_today or 0 }}</div>
+    <div class="stat-s">thay đổi tri thức/cấu hình</div>
+  </a>
 </section>
-{% if hub.estop and hub.estop.on %}<div class="banner danger">■ Dừng khẩn cấp (ESTOP) đang BẬT{% if hub.estop.reason %} — {{ hub.estop.reason }}{% endif %}. Không run mới nào được chạy. <a href="/settings#estop">Tắt ở Cài đặt</a></div>{% endif %}
-{% if hub.auth_block %}<div class="banner danger">✖ <code>claude</code> chưa đăng nhập — chạy <code>claude</code> trong terminal để đăng nhập, rồi bấm {{ m.act("auth_reset", "Thử lại", {}, "btn sm", next="/") }}</div>{% endif %}
-{% if hub.cli_untested %}<div class="banner warn">⚠ Phiên bản Claude Code {{ hub.cli_version }} chưa được kiểm với hub.</div>{% endif %}
 
-{% if approvals %}
-<section class="card attention">
-  <h2>⚠ Cần bạn duyệt ({{ approvals|length }})</h2>
-  <p class="muted small">Agent chỉ hỏi khi định làm thao tác phá huỷ. Nếu bạn vắng, agent chờ — không bao giờ tự quyết.</p>
-  {% for a in approvals %}{{ m.approval_card(a, "/") }}{% endfor %}
+{% if approvals or questions %}
+<section class="need-strip{{ ' card attention' if approvals else '' }}">
+  <div class="need-head"><h2>{{ m.icon('inbox') }} Cần bạn</h2><a class="btn sm" href="/inbox">Xem tất cả ({{ need }}){{ m.icon('chev-right') }}</a></div>
+  <div class="need">
+    {% for a in approvals[:3] %}{{ m.approval_card(a, "/") }}{% endfor %}
+    {% set room = 3 - (approvals[:3]|length) %}
+    {% for q in questions[:room] %}{{ m.question_card(q, "/", compact=True) }}{% endfor %}
+  </div>
 </section>
 {% endif %}
 
-<section class="card">
-  <div class="card-head"><h2>Agent đang làm gì</h2><a class="btn sm" href="/agents/new">+ Tạo agent</a></div>
-  {% if not rows %}{{ m.empty("Chưa có agent nào. Bấm “Tạo agent” để bắt đầu từ một mẫu có sẵn.") }}{% else %}
-  <table class="tbl stack">
-    <thead><tr><th>Agent</th><th>Trạng thái</th><th>Đang làm</th><th>Công cụ gần nhất</th><th class="num">Token</th><th class="num">$ hôm nay</th><th></th></tr></thead>
-    <tbody>
-    {% for r in rows %}
-      {% set rid = r.current_run_id or r.waiting_human or r.last_run_id %}
-      <tr class="st-{{ r.status }}">
-        <td data-label="Agent"><div><a href="/agents/{{ r.id }}"><b>{{ r.name }}</b></a>{% if r.name != r.id %} <span class="muted small">{{ r.id }}</span>{% endif %}{% if r.sandbox_localhost %} {{ m.localhost_badge() }}{% endif %}{% if r.team %}<div class="muted small">team {{ r.team }}</div>{% endif %}</div></td>
-        <td data-label="Trạng thái">{{ m.agent_pill(r.status) }}</td>
-        <td data-label="Đang làm" class="task-cell">{{ (r.task or '—')|first(90) }}</td>
-        <td data-label="Công cụ"><div>{% if r.last_tool %}<code>{{ r.last_tool|tool }}</code>{% if r.last_tool_preview %} <span class="muted small">{{ r.last_tool_preview|first(50) }}</span>{% endif %}{% else %}<span class="muted">—</span>{% endif %}</div></td>
-        <td data-label="Token" class="num">{{ (r.run_tokens if r.status in ('working','waiting') else r.tokens_today)|tok }}</td>
-        <td data-label="$ hôm nay" class="num">{{ ((r.cost_today_usd or 0) + ((r.run_cost_usd or 0) if r.status in ('working','waiting') else 0))|cost }}</td>
-        <td class="actions">{% if rid %}<a class="btn sm {{ 'primary' if r.current_run_id or r.waiting_human }}" href="/runs/{{ rid }}">{{ 'Xem live' if r.current_run_id else 'Xem run' }}</a>{% endif %}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
-</section>
+<div class="section-title"><h2>Agent</h2><div class="btn-row"><a class="btn sm" href="/agents">Tất cả agent</a><a class="btn sm primary" href="/agents/new">{{ m.icon('plus') }}Tạo agent</a></div></div>
+{% if not rows %}<section class="card">{{ m.empty("Tạo agent đầu tiên từ một mẫu có sẵn (nghiên cứu, lập trình, review, vận hành).", "bot", "", "Chưa có agent nào") }}</section>{% else %}
+<div class="agent-grid">
+  {% for r in rows %}
+  {% set rid = r.current_run_id or r.waiting_human or r.last_run_id %}
+  <article class="acard st-{{ r.status }}">
+    <div class="acard-top">
+      {{ m.avatar(r.name) }}
+      <div class="acard-name"><a href="/agents/{{ r.id }}">{{ r.name }}</a><div class="r">{{ r.role or r.id }}{% if r.team %} · team {{ r.team }}{% endif %}</div></div>
+    </div>
+    <div class="acard-st">{{ m.agent_pill(r.status) }}{% if r.sandbox_localhost %}{{ m.localhost_badge() }}{% endif %}</div>
+    <div class="acard-doing{{ ' idle' if not r.task }}">{{ r.task or ('Đang chờ bạn trả lời câu hỏi — xem trang Cần bạn' if r.status == 'asking' else ('Đang chờ việc' if r.status == 'idle' else '—')) }}</div>
+    <div class="acard-foot">
+      <span class="k">{{ ((r.cost_today_usd or 0) + ((r.run_cost_usd or 0) if r.status in ('working','waiting') else 0))|cost }} hôm nay · {{ (r.run_tokens if r.status in ('working','waiting') else r.tokens_today)|tok }} token</span>
+      {% if rid %}<a class="btn sm {{ 'primary' if r.current_run_id or r.waiting_human }}" href="/runs/{{ rid }}">{{ 'Xem trực tiếp' if r.current_run_id else 'Lượt gần nhất' }}</a>{% endif %}
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% endif %}

@@ -15,7 +15,7 @@
   <h3>Tool ({{ (s.annotations_cache or {})|length }})</h3>
   <table class="tbl stack"><thead><tr><th>Tool</th><th>Chỉ đọc</th><th>Phá huỷ</th><th>Mô tả</th></tr></thead><tbody>
   {% for name, t in (s.annotations_cache or {}).items() %}<tr><td data-label="Tool"><code>{{ name }}</code></td>
-    <td data-label="Chỉ đọc">{{ '✓' if (t.annotations or t).readOnlyHint }}</td><td data-label="Phá huỷ">{{ '⚠' if (t.annotations or t).destructiveHint }}</td>
+    <td data-label="Chỉ đọc">{{ 'có' if (t.annotations or t).readOnlyHint }}</td><td data-label="Phá huỷ">{{ 'có' if (t.annotations or t).destructiveHint }}</td>
     <td data-label="Mô tả" class="small">{{ (t.description or '')|first(140) }}</td></tr>{% endfor %}
   </tbody></table>
 </section>

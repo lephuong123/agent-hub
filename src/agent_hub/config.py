@@ -85,6 +85,13 @@ DEFAULTS: dict[str, Any] = {
         "reminder_check_s": 30,  # chu kỳ kiểm nhắc lại
         "pause_delay_s": 0.5,  # chờ hook trả deny tới CLI rồi mới dừng tiến trình
     },
+    # UX — câu hỏi có lựa chọn của agent (questions/). Nhắc lại dùng notify.reminder_interval_s (giãn dần), KHÔNG tự trả lời.
+    "questions": {
+        "via_manager": True,  # agent trong task hỏi điều phối viên trước; không chốt được → người
+        "manager_timeout_s": 900,  # điều phối viên không xử lý trong N giây → tự chuyển lên người
+        "max_open_per_run": 3,
+        "check_s": 30,  # chu kỳ vòng nền (chuyển lên người khi quá hạn, nhắc lại)
+    },
     "notify": {
         "reminder_interval_s": 900,  # FR-SG-09: nhắc lại mỗi 15 phút…
         "reminder_max_interval_s": 7200,  # …giãn dần tới 2 giờ
@@ -109,6 +116,8 @@ DEFAULTS: dict[str, Any] = {
             "bot_token_secret": "TELEGRAM_BOT_TOKEN",
             "callback_key_secret": "TELEGRAM_CALLBACK_KEY",  # khoá HMAC ký callback nút inline (tự sinh)
             "api_base": "https://api.telegram.org",
+            "progress_after_s": 30,  # run do chat giao chạy quá N giây → một tin tiến độ (sửa tại chỗ)
+            "progress_edit_s": 10,  # sửa tin tiến độ tối đa mỗi N giây (tránh 429)
             "allowed_chat_ids": [],  # CHỈ các chat này được nhận thông báo + điều khiển hub
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng

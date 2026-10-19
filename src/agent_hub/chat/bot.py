@@ -50,14 +50,17 @@ OUTCOME_VI = {
     "completed": "hoàn thành", "failed": "lỗi", "cancelled": "đã huỷ", "budget_exceeded": "vượt ngân sách", "timed_out": "quá giờ",
     "crashed": "tiến trình chết", "rate_limited": "bị giới hạn tốc độ", "blocked": "bị chặn", "protocol_violation": "vi phạm giao thức",
 }
-HELP = """agent-hub qua Telegram — lệnh:
-/status — tình trạng hub, chi phí hôm nay, yêu cầu chờ duyệt
-/agents — danh sách agent
-/runs [agent] — 10 run gần nhất
-/approvals — yêu cầu chờ duyệt (kèm nút Cho phép / Từ chối)
-/run <agent> <yêu cầu> — giao việc; bot gửi kết quả tóm tắt + chi phí khi xong
+HELP = """agent-hub qua Telegram — lệnh (bấm / để xem menu):
+/canban — mọi thứ đang chờ bạn: yêu cầu duyệt + câu hỏi của agent
+/hoi — câu hỏi của agent đang chờ bạn trả lời (bấm số hoặc trả lời bằng chữ)
+/trangthai (/status) — tình trạng hub, chi phí hôm nay
+/agent (/agents) — danh sách agent (kèm nút giao việc / dừng)
+/luotchay (/runs) [agent] — lượt chạy gần nhất
+/giaoviec (/run) <agent> <yêu cầu> — giao việc; không ghi gì thêm → chọn agent bằng nút
+/run <agent> <yêu cầu> — như trên; bot gửi kết quả tóm tắt + chi phí khi xong
   Trả lời (reply) vào tin kết quả để tiếp tục hội thoại
-/stop <run> — dừng run
+/approvals — yêu cầu chờ duyệt (kèm nút Cho phép / Từ chối)
+/stop [run] — dừng run (không ghi run → chọn bằng nút)
 /estop on [lý do] | /estop off — dừng khẩn cấp toàn hub (tắt cần xác nhận)
 /digest — tóm tắt học 24 giờ qua
 /moi — mở cuộc trò chuyện mới với điều phối viên
@@ -65,6 +68,46 @@ HELP = """agent-hub qua Telegram — lệnh:
 Tin nhắn thường (không bắt đầu bằng /) → gửi cho ĐIỀU PHỐI VIÊN (agent quản lý cả đội); reply vào tin của
   điều phối viên để tiếp tục đúng cuộc trò chuyện đó.
 Xem đầy đủ (log, diff, dữ liệu MCP): agent-hub top / web."""
+
+# T-A: menu lệnh "/" (setMyCommands) — chữ của hub, tiếng Việt; alias tiếng Anh cũ vẫn chạy
+BOT_COMMANDS = [
+    ("canban", "Mọi thứ đang chờ bạn (duyệt + câu hỏi)"), ("hoi", "Câu hỏi của agent đang chờ bạn"),
+    ("giaoviec", "Giao việc cho một agent"), ("trangthai", "Tình trạng hub, chi phí hôm nay"), ("agent", "Danh sách agent"),
+    ("luotchay", "Lượt chạy gần nhất"), ("approvals", "Yêu cầu chờ duyệt"), ("stop", "Dừng một lượt chạy"),
+    ("moi", "Cuộc trò chuyện mới với điều phối viên"), ("digest", "Tóm tắt học 24 giờ qua"), ("estop", "Dừng khẩn cấp: /estop on|off"),
+    ("help", "Trợ giúp"),
+]
+# T-A: bàn phím nhanh (chat riêng) — bấm = gửi đúng chữ này → lệnh tương ứng
+QUICK_KEYS = {"📋 Cần bạn": "/canban", "📊 Trạng thái": "/trangthai", "➕ Giao việc": "/giaoviec", "🤖 Agent": "/agent"}
+QUICK_KEYBOARD = {"keyboard": [[{"text": "📋 Cần bạn"}, {"text": "📊 Trạng thái"}], [{"text": "➕ Giao việc"}, {"text": "🤖 Agent"}]],
+                  "resize_keyboard": True, "is_persistent": True}
+STATUS_VI = {
+    "queued": "⏳ đang chờ", "running": "▶️ đang chạy", "waiting_human": "⏸ chờ duyệt", "completed": "✅ xong", "failed": "❌ lỗi",
+    "cancelled": "⏹ đã huỷ", "budget_exceeded": "💸 vượt ngân sách", "timed_out": "⌛ quá giờ", "crashed": "💥 tiến trình chết",
+    "interrupted": "⏸ gián đoạn", "resumed": "↪ đã tiếp tục", "rate_limited": "🐢 giới hạn tốc độ", "blocked": "⛔ bị chặn",
+    "protocol_violation": "⚠️ vi phạm giao thức",
+}
+AGENT_STATUS_VI = {"idle": "🟢 rảnh", "working": "▶️ đang làm", "waiting": "⏸ chờ duyệt", "paused": "⏸ tạm dừng", "error": "❌ lỗi"}
+DECISION_VI = {"allowed": ("✅", "CHO PHÉP"), "denied": ("⛔", "TỪ CHỐI"), "cancelled": ("⏹", "HUỶ")}
+
+
+def channel_label(ch: Any) -> str:
+    c = str(ch or "")
+    if c.startswith("telegram:"):
+        return "Telegram"
+    return {"web": "web", "cli": "máy (CLI)", "tui": "TUI", "runtime": "hub", "mcp": "MCP"}.get(c, c or "?")
+
+
+def who_label(by: Any) -> str:
+    b = str(by or "")
+    return "bạn" if b in ("user", "") or b.isdigit() else ("hub" if b == "hub" else b)
+
+
+def decided_text(approval_id: str, p: dict[str, Any]) -> str:
+    """Dòng kết quả của approval (chữ hub, đã escape) — sửa tại chỗ tin có nút ở MỌI chat."""
+    icon, word = DECISION_VI.get(str(p.get("decision")), ("•", str(p.get("decision"))))
+    return (f"{icon} <b>[agent-hub] Yêu cầu {esc(approval_id)} — đã {esc(word)}</b> · bởi {esc(who_label(p.get('by')))} qua {esc(channel_label(p.get('channel')))}"
+            + (f" sau {int(float(p['wait_s']))} s" if p.get("wait_s") else "") + ".")
 
 
 class ChatError(Exception):
@@ -85,6 +128,12 @@ class TelegramBot:
         from .manager_chat import ManagerChat
 
         self.manager = ManagerChat(self)  # M7 MGR-UI: tin thường ↔ điều phối viên
+        from .questions_tg import QuestionChat
+
+        self.questions = QuestionChat(self)  # UX v2: câu hỏi có lựa chọn của agent (nút số + trả lời bằng chữ)
+        from .flows import ChatFlows
+
+        self.flows = ChatFlows(self)  # T-C/T-D: lệnh tương tác (chọn agent/run bằng nút), tiến độ run sửa tại chỗ
         hub.bus.add_listener(self._on_event)
         self._task: asyncio.Task | None = None
         self._wake: asyncio.Event | None = None
@@ -167,6 +216,10 @@ class TelegramBot:
         t = ev.type
         if t.startswith("manager.") or (t in TERMINAL_RUN_EVENTS and ev.source == "hub"):
             self.manager.on_event(ev)
+        if t.startswith("question."):
+            self.questions.on_event(ev)
+        elif t == "tool.start":
+            self.flows.on_event(ev)
         if t == "hub.started":
             self.start()
         elif t == "hub.stopping":
@@ -185,8 +238,7 @@ class TelegramBot:
                 self.callbacks.invalidate_ref(rid)
                 msgs = self.callbacks.pop_messages(rid)
                 if msgs:
-                    p = ev.payload
-                    self._spawn(self._clear_buttons(msgs, f"[đã quyết] {rid}: {p.get('decision')} — bởi {p.get('by')} qua {p.get('channel')}"))
+                    self._spawn(self._clear_buttons(msgs, decided_text(rid, ev.payload or {})))
 
     def _spawn(self, coro: Any) -> None:
         try:
@@ -251,6 +303,10 @@ class TelegramBot:
                         await api.call("deleteWebhook")  # getUpdates không chạy khi bot còn webhook
                     except TelegramError:
                         pass
+                    try:  # T-A: menu lệnh "/" tiếng Việt (chữ của hub)
+                        await api.call("setMyCommands", {"commands": [{"command": c, "description": d} for c, d in BOT_COMMANDS]})
+                    except TelegramError as e:
+                        log.debug("setMyCommands lỗi: %s", clip(e))
                     self._ready_for = fp
                 self.info["polling"] = True
                 pt = int(c.get("poll_timeout_s") or 25)
@@ -297,14 +353,28 @@ class TelegramBot:
         return res if isinstance(res, dict) else {}
 
     async def _clear_buttons(self, msgs: list[list[Any]], note: str) -> None:
+        """T-B: tin hệ thống có nút của approval → SỬA TẠI CHỖ thành dòng kết quả (chữ hub, HTML đã escape) và gỡ nút."""
         api = self.api()
         if api is None:
             return
         for chat, mid in msgs:
+            await self._edit(api, chat, mid, note, None)
+
+    async def _edit(self, api: TelegramApi, chat: Any, mid: Any, html_text: str, markup: dict[str, Any] | None) -> bool:
+        """Sửa tin (chữ HTML do hub sinh, đã escape giá trị động) + bàn phím (None = gỡ nút)."""
+        if mid is None:
+            return False
+        try:
+            await api.call("editMessageText", {"chat_id": chat, "message_id": mid, "text": html_text, "parse_mode": "HTML",
+                                               "disable_web_page_preview": True, "reply_markup": markup or {"inline_keyboard": []}})
+            return True
+        except Exception as e:  # tin đã sửa/xoá — thử ít nhất gỡ nút
+            log.debug("không sửa được tin: %s", clip(e))
             try:
-                await api.call("editMessageReplyMarkup", {"chat_id": chat, "message_id": mid, "reply_markup": {"inline_keyboard": []}})
-            except Exception as e:  # tin đã sửa/xoá — không quan trọng
-                log.debug("không gỡ được nút: %s", clip(e))
+                await api.call("editMessageReplyMarkup", {"chat_id": chat, "message_id": mid, "reply_markup": markup or {"inline_keyboard": []}})
+            except Exception:
+                pass
+            return False
 
     async def send_test(self, text: str) -> dict[str, Any]:
         api = self.api()
@@ -367,6 +437,12 @@ class TelegramBot:
             return
         reply = m.get("reply_to_message")
         if isinstance(reply, dict) and text and not text.startswith("/"):
+            qid = self.questions.question_of_message(cid, reply.get("message_id"))
+            if qid:  # UX v2: reply vào tin câu hỏi / ô "Trả lời bằng chữ" → câu trả lời (trước run.continue / điều phối viên)
+                await self.questions.answer_text(cid, qid, text, api)
+                return
+            if await self.flows.on_reply(cid, reply.get("message_id"), text, api):
+                return
             rid = self._state(self.MSGMAP).get(f"{cid}:{reply.get('message_id')}")
             if rid:
                 await self._continue(cid, rid, text, api)
@@ -375,6 +451,8 @@ class TelegramBot:
             if conv:  # reply vào tin của điều phối viên → đúng cuộc trò chuyện đó
                 await self.manager.handle_text(cid, text, api, message_id=m.get("message_id"), conv=conv)
                 return
+        if text in QUICK_KEYS:  # T-A: bàn phím nhanh → lệnh tương ứng (không chuyển cho điều phối viên)
+            text = QUICK_KEYS[text]
         if text.startswith("/"):
             await self._command(cid, text, api)
             return
@@ -438,9 +516,11 @@ class TelegramBot:
         cmd = head.split("@", 1)[0].lower()
         rest = rest.strip()
         handlers = {
-            "/start": self._c_help, "/help": self._c_help, "/status": self._c_status, "/agents": self._c_agents, "/runs": self._c_runs,
-            "/approvals": self._c_approvals, "/run": self._c_run, "/stop": self._c_stop, "/estop": self._c_estop, "/digest": self._c_digest,
-            "/moi": self._c_new, "/new": self._c_new,
+            "/start": self._c_help, "/help": self._c_help, "/status": self._c_status, "/trangthai": self._c_status,
+            "/agents": self.flows.c_agents, "/agent": self.flows.c_agents, "/runs": self.flows.c_runs, "/luotchay": self.flows.c_runs,
+            "/approvals": self._c_approvals, "/run": self.flows.c_run, "/giaoviec": self.flows.c_run, "/stop": self.flows.c_stop,
+            "/estop": self._c_estop, "/digest": self._c_digest, "/moi": self._c_new, "/new": self._c_new,
+            "/hoi": self._c_questions, "/questions": self._c_questions, "/canban": self._c_inbox,
         }
         fn = handlers.get(cmd)
         if fn is None:
@@ -453,8 +533,27 @@ class TelegramBot:
         if out:
             await self._send(api, cid, out)
 
-    async def _c_help(self, cid: str, rest: str, api: TelegramApi) -> str:
-        return HELP
+    async def _c_help(self, cid: str, rest: str, api: TelegramApi) -> str | None:
+        if cid.startswith("-"):
+            return HELP
+        await self._send(api, cid, HELP, QUICK_KEYBOARD)  # T-A: bàn phím nhanh chỉ ở chat riêng
+        return None
+
+    async def _c_questions(self, cid: str, rest: str, api: TelegramApi) -> str | None:
+        return await self.questions.command(cid, api)
+
+    async def _c_inbox(self, cid: str, rest: str, api: TelegramApi) -> str | None:
+        """"Cần bạn": yêu cầu duyệt + câu hỏi đang chờ người (mỗi mục gửi lại cặp tin có nút)."""
+        aps = await self.call(cid, "approval.list", {"status": "pending", "limit": 10})
+        qs = await self.call(cid, "question.list", {"status": "open", "limit": 10})
+        if not aps and not qs:
+            return "✅ Không có gì đang chờ bạn."
+        await self._send(api, cid, f"📋 Đang chờ bạn: {len(aps or [])} yêu cầu duyệt · {len(qs or [])} câu hỏi.")
+        for r in aps or []:
+            await self.send_approval(api, cid, r, kind="approvals.list")
+        for q in reversed(qs or []):
+            await self.questions.send(api, cid, q)
+        return None
 
     async def _c_status(self, cid: str, rest: str, api: TelegramApi) -> str:
         s = await self.call(cid, "hub.status")
@@ -467,24 +566,6 @@ class TelegramBot:
             f"Yêu cầu chờ duyệt: {len(pend or [])}" + (" — gõ /approvals" if pend else ""),
         ])
 
-    async def _c_agents(self, cid: str, rest: str, api: TelegramApi) -> str:
-        rows = await self.call(cid, "agent.list")
-        if not rows:
-            return "Chưa có agent nào (tạo bằng agent-hub agent create hoặc web)."
-        lines = ["Agent:"]
-        for r in rows[:30]:
-            lines.append(f"• {r.get('id')} — {r.get('status')}{' (tạm dừng)' if r.get('paused') else ''} · hôm nay ${float(r.get('cost_today_usd') or 0):.4f}")
-        return "\n".join(lines)
-
-    async def _c_runs(self, cid: str, rest: str, api: TelegramApi) -> str:
-        rows = await self.call(cid, "run.list", {"agent": rest.split()[0] if rest else None, "limit": 10})
-        if not rows:
-            return "Chưa có run nào."
-        lines = ["10 run gần nhất:"]
-        for r in rows:
-            lines.append(f"• {r.get('id')} · {r.get('agent_id')} — {r.get('status')} · ${float(r.get('cost_usd') or 0):.4f} · {str(r.get('queued_at') or '')[:16]}")
-        return "\n".join(lines)
-
     async def _c_approvals(self, cid: str, rest: str, api: TelegramApi) -> str | None:
         rows = await self.call(cid, "approval.list", {"status": "pending", "limit": 10})
         if not rows:
@@ -492,20 +573,6 @@ class TelegramBot:
         for r in rows:
             await self.send_approval(api, cid, r, kind="approvals.list")
         return None
-
-    async def _c_run(self, cid: str, rest: str, api: TelegramApi) -> str:
-        agent, _, prompt = rest.partition(" ")
-        if not agent or not prompt.strip():
-            return "Cú pháp: /run <agent> <yêu cầu>"
-        r = await self.call(cid, "run.start", {"agent": agent, "prompt": prompt.strip()})
-        self._watch(r["id"], cid)
-        return f"Đã giao run {r['id']} cho agent {agent} ({r.get('status')}). Bot sẽ gửi kết quả khi xong."
-
-    async def _c_stop(self, cid: str, rest: str, api: TelegramApi) -> str:
-        if not rest:
-            return "Cú pháp: /stop <run>"
-        r = await self.call(cid, "run.stop", {"id": rest.split()[0]})
-        return f"Đã gửi yêu cầu dừng run {(r or {}).get('id') or rest.split()[0]}."
 
     async def _c_estop(self, cid: str, rest: str, api: TelegramApi) -> str | None:
         arg, _, reason = rest.partition(" ")
@@ -556,7 +623,8 @@ class TelegramBot:
         rid = run["id"]
         outcome = run.get("outcome") or run.get("status")
         dur = float(run.get("duration_ms") or 0) / 1000
-        head = f"<b>[agent-hub] Run {esc(rid)} (agent {esc(run.get('agent_id'))}) — {esc(OUTCOME_VI.get(str(outcome), str(outcome)))}</b>"
+        icon = "✅" if outcome == "completed" else "⏹" if outcome == "cancelled" else "❌"
+        head = f"<b>[agent-hub] Run {esc(rid)} (agent {esc(run.get('agent_id'))}) — {icon} {esc(OUTCOME_VI.get(str(outcome), str(outcome)))}</b>"
         cost = f"Chi phí: ${float(run.get('cost_usd') or 0):.4f}" + (f" · {esc(run.get('num_turns'))} lượt" if run.get("num_turns") else "") + (f" · {dur:.1f} s" if dur else "")
         body = visible(redact_str(str(run.get("summary") or run.get("error") or "(không có nội dung kết quả)")))
         n = min(int(self.cfg().get("result_max_chars") or 1500), CHUNK)
@@ -589,6 +657,7 @@ class TelegramBot:
         self.hub.store.state_set(self.WATCH, w)
         if api is None or str(chat) not in self.notify_chats():
             return
+        await self.flows.finish(run_id, run.get("agent_id"))  # T-D: tin tiến độ → "đã kết thúc"
         try:
             res = await self._send(api, chat, self.format_result(run), html=True)
             if res.get("message_id") is not None:
@@ -651,19 +720,27 @@ class TelegramBot:
             text = (f"{head} — quá dài, đầy đủ trong tệp đính kèm. Đầu và CUỐI:\n<pre>{esc(action[:1500])}</pre>\n…\n"
                     f"<pre>{esc(action[-1500:])}</pre>" + (f"\n<pre>{esc(tail.strip()[:600])}</pre>" if tail else ""))
             await self._send(api, chat, text, html=True, reply_to=first_mid)
+        res = await self._send(api, chat, self.approval_sys_text(row, kind=kind, payload=payload, action_len=len(action)),
+                               self.approval_markup(aid, chat), html=True, reply_to=first_mid)
+        self.callbacks.add_message(aid, chat, res.get("message_id"))
+
+    def approval_sys_text(self, row: dict[str, Any], *, kind: str = "approval.open", payload: dict[str, Any] | None = None,
+                          action_len: int | None = None) -> str:
+        """Tin HỆ THỐNG có nút của approval — CHỈ chữ do hub sinh (id, agent, run, luật, lớp, độ dài)."""
+        aid = row["id"]
+        if action_len is None:
+            action_len = len(full_action(str(row.get("tool_name") or ""), row.get("tool_input")))
         heavy = is_heavy(row, self.cfg().get("confirm_classes") or [])
         title = {"approval.waiting_human": "chưa có người duyệt → run chuyển waiting_human (đã dừng tiến trình, giữ khoá repo, KHÔNG tự từ chối)",
                  "approval.reminder": f"nhắc lần {esc((payload or {}).get('reminder_count'))} — vẫn chờ người duyệt",
                  }.get(kind, "muốn chạy thao tác PHÁ HUỶ — đang giữ chờ duyệt")
-        sys_lines = [
-            f"<b>[agent-hub] Yêu cầu {esc(aid)}</b> — agent {esc(row.get('agent_id'))} {title}",
+        return "\n".join([
+            f"⏸ <b>[agent-hub] Yêu cầu {esc(aid)}</b> — agent {esc(row.get('agent_id'))} {title}",
             f"• Run: {esc(row.get('run_id'))} · luật: {esc(row.get('matched_rule'))} · lớp: {esc(row.get('destructive_class') or '-')}"
             + (" · tài nguyên BẢO VỆ" if row.get("protected_resource_id") else ""),
-            f"• Thao tác ĐẦY ĐỦ ở tin được trả lời phía trên ({len(action)} ký tự){' — THAO TÁC NẶNG' if heavy else ''}.",
+            f"• Thao tác ĐẦY ĐỦ ở tin được trả lời phía trên ({action_len} ký tự){' — THAO TÁC NẶNG' if heavy else ''}.",
             "• Cho phép cần xác nhận bước 2. Hoặc trên máy: agent-hub approve|deny " + esc(aid),
-        ]
-        res = await self._send(api, chat, "\n".join(sys_lines), self.approval_markup(aid, chat), html=True, reply_to=first_mid)
-        self.callbacks.add_message(aid, chat, res.get("message_id"))
+        ])
 
     # ------------------------------------------------------------------ nút inline
     async def _on_callback(self, cq: dict[str, Any], api: TelegramApi) -> None:
@@ -686,28 +763,42 @@ class TelegramBot:
                                           }.get(why, "Nút không hợp lệ."))
             return
         a, ref = rec["a"], rec["r"]
-        self._cb_mid = msg.get("message_id")
+        mid = msg.get("message_id")
+        self._cb_mid = mid
+        if a.startswith("q"):  # UX v2: câu hỏi (nonce đã tiêu; questions_tg tự sửa/cấp lại bàn phím)
+            await self._answer(api, qid, await self.questions.on_callback(cid, a, ref, mid, api))
+            return
+        if a.startswith("f"):  # T-C: luồng tương tác (giao việc, chọn run…)
+            await self._answer(api, qid, await self.flows.on_callback(cid, a, ref, mid, api))
+            return
+        # T-B: mọi kết quả SỬA TẠI CHỖ tin có nút (chữ hub) + toast; không gửi thêm tin mới
+        edit: str | None = None
+        markup: dict[str, Any] | None = None
         try:
             if a in ("ap", "apc", "dn"):
-                text = await self._decide(cid, a, ref, api)
+                text, edit, markup = await self._decide(cid, a, ref, api)
             elif a == "eo":
                 await self.call(cid, "estop.set", {"on": False, "reason": f"Telegram {cid}"})
                 text = "Đã TẮT ESTOP — hub chạy run trở lại."
+                edit = f"▶️ <b>[agent-hub] Đã TẮT ESTOP</b> — {esc(who_label(uid))} qua Telegram. Hub chạy run trở lại."
             elif a == "cx":
                 text = "Đã huỷ bước xác nhận — yêu cầu vẫn chờ duyệt."
                 ap = await self.call(cid, "approval.get", {"id": ref})
                 if ap.get("status") in PENDING:
-                    await self.send_approval(api, cid, ap, kind="approvals.list")
+                    edit, markup = self.approval_sys_text(ap, kind="approvals.list"), self.approval_markup(ref, cid)
+                    self.callbacks.add_message(ref, cid, mid)
+            elif a == "cx0":
+                text = "Đã huỷ — ESTOP vẫn BẬT."
+                edit = "🛑 <b>[agent-hub] Đã huỷ</b> — ESTOP vẫn BẬT."
             else:
                 text = "Đã huỷ."
+                edit = "<b>[agent-hub] Đã huỷ.</b>"
         except ChatError as e:
             text = f"Lỗi: {clip(e, 300)}"
+            edit = f"<b>[agent-hub] Lỗi:</b> {esc(clip(e, 300))}"
         await self._answer(api, qid, text)
-        try:
-            await api.call("editMessageReplyMarkup", {"chat_id": cid, "message_id": msg.get("message_id"), "reply_markup": {"inline_keyboard": []}})
-        except Exception:
-            pass
-        await self._send(api, cid, text)
+        if edit is not None:
+            await self._edit(api, cid, mid, edit, markup)
 
     async def _answer(self, api: TelegramApi, qid: Any, text: str) -> None:
         if qid is None:
@@ -717,25 +808,24 @@ class TelegramBot:
         except Exception as e:
             log.debug("answerCallbackQuery lỗi: %s", clip(e))
 
-    async def _decide(self, cid: str, action: str, approval_id: str, api: TelegramApi) -> str:
+    async def _decide(self, cid: str, action: str, approval_id: str, api: TelegramApi) -> tuple[str, str | None, dict[str, Any] | None]:
+        """→ (toast, chữ sửa tại chỗ | None, bàn phím | None). Quyết xong: `approval.resolved` sửa MỌI tin của approval (mọi chat)."""
         ap = await self.call(cid, "approval.get", {"id": approval_id})
         if ap.get("status") not in PENDING:
-            return f"Yêu cầu {approval_id} đã {ap.get('status')} trước đó (bởi {ap.get('resolved_by')} qua {ap.get('resolved_channel')})."
+            t = f"Yêu cầu {approval_id} đã {ap.get('status')} trước đó (bởi {ap.get('resolved_by')} qua {ap.get('resolved_channel')})."
+            return t, decided_text(approval_id, {"decision": ap.get("status"), "by": ap.get("resolved_by"), "channel": ap.get("resolved_channel")}), None
         uid = _UID.get()
-        if action == "ap":  # WT-5: mọi cho phép đều 2 bước (như hộp xác nhận của web); tin xác nhận chỉ chữ của hub, trả lời vào tin duyệt
+        if action == "ap":  # WT-5: mọi cho phép đều 2 bước; bước 2 SỬA tin hệ thống (chữ hub) thay vì gửi tin mới (T-B)
             heavy = is_heavy(ap, self.cfg().get("confirm_classes") or [])
             markup, _ = self.callbacks.issue([("apc", approval_id, "Xác nhận CHO PHÉP"), ("cx", approval_id, "Huỷ")], cid, ttl=min(self._ttl(), 3600))
-            res = await self._send(api, cid, (
-                f"<b>Xác nhận bước 2</b> — cho phép MỘT lần yêu cầu {esc(approval_id)} của agent {esc(ap.get('agent_id'))} (run {esc(ap.get('run_id'))}),"
-                f" luật {esc(ap.get('matched_rule'))}{' — THAO TÁC NẶNG' if heavy else ''}.\nĐọc lại thao tác ĐẦY ĐỦ ở các tin phía trên trước khi xác nhận."),
-                markup, html=True, reply_to=self._cb_mid)
-            self.callbacks.add_message(approval_id, cid, res.get("message_id"))
-            return "Cần xác nhận bước 2 (tin bên dưới)."
+            text = (f"⚠️ <b>Xác nhận bước 2</b> — cho phép MỘT lần yêu cầu {esc(approval_id)} của agent {esc(ap.get('agent_id'))} (run {esc(ap.get('run_id'))}),"
+                    f" luật {esc(ap.get('matched_rule'))}{' — THAO TÁC NẶNG' if heavy else ''}.\nĐọc lại thao tác ĐẦY ĐỦ ở tin phía trên trước khi xác nhận.")
+            return "Cần xác nhận bước 2 — xem tin này.", text, markup
         if action == "dn":
             await self.call(cid, "approval.deny", {"id": approval_id, "channel": f"telegram:{cid}", "by": "user", "note": f"từ chối qua Telegram (user {uid})"})
-            return f"Đã TỪ CHỐI {approval_id}."
+            return f"Đã TỪ CHỐI {approval_id}.", None, None
         await self.call(cid, "approval.approve", {"id": approval_id, "channel": f"telegram:{cid}", "by": "user", "note": f"cho phép qua Telegram (user {uid})"})
-        return f"Đã CHO PHÉP {approval_id} (một lần) — run sẽ chạy tiếp."
+        return f"Đã CHO PHÉP {approval_id} (một lần) — run sẽ chạy tiếp.", None, None
 
     # ------------------------------------------------------------------ trạng thái
     def status(self) -> dict[str, Any]:

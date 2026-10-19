@@ -291,7 +291,7 @@ def content_msgs(tg: FakeTelegram, chat: int, aid: str):
 
 async def approve_2step(tg: FakeTelegram, chat: int, sysmsg) -> None:
     await press(tg, chat, FakeTelegram.buttons(sysmsg)[0]["callback_data"])
-    step2 = next(m for m in reversed(tg.sent(chat)) if [b["text"] for b in FakeTelegram.buttons(m)] == ["Xác nhận CHO PHÉP", "Huỷ"])
+    step2 = tg.with_buttons(chat, ["Xác nhận CHO PHÉP", "Huỷ"])  # T-B: bước 2 = SỬA tin hệ thống (không gửi tin mới)
     await press(tg, chat, FakeTelegram.buttons(step2)[0]["callback_data"])
 
 
@@ -329,7 +329,8 @@ async def test_approval_notification_buttons_forgery_replay(make, tg):
     ans = [b["text"] for b in tg.calls_of("answerCallbackQuery")]
     assert any("đã dùng" in t for t in ans) and any("Đã CHO PHÉP" in t for t in ans)
     # nút trên chat OTHER bị gỡ sau khi quyết (approval.resolved)
-    await until(lambda: any(str(b.get("chat_id")) == str(OTHER) for b in tg.calls_of("editMessageReplyMarkup")))
+    edited = await until(lambda: next((b for b in tg.edits(OTHER) if ap["id"] in b["text"] and "CHO PHÉP" in b["text"]), None))
+    assert not FakeTelegram.buttons(edited) and "bởi bạn qua Telegram" in edited["text"]  # T-B: sửa tại chỗ thành kết quả, gỡ nút
     await stop(d)
 
 
@@ -341,14 +342,16 @@ async def test_heavy_destructive_needs_two_step_confirm_and_cancel(make, tg):
     assert "NẶNG" in msg["text"] and any("git push --force" in m["text"] for m in content_msgs(tg, BOSS, ap["id"]))
     await press(tg, BOSS, FakeTelegram.buttons(msg)[0]["callback_data"])
     assert d.hub.approvals.get(ap["id"])["status"] == "open"  # bước 1 chưa cho phép
-    step2 = next(m for m in reversed(tg.sent(BOSS)) if FakeTelegram.buttons(m))
+    n_sent = len(tg.sent(BOSS))
+    step2 = tg.with_buttons(BOSS, ["Xác nhận CHO PHÉP", "Huỷ"])
     b2 = FakeTelegram.buttons(step2)
-    assert [b["text"] for b in b2] == ["Xác nhận CHO PHÉP", "Huỷ"] and step2.get("reply_to_message_id")
-    # Huỷ → vẫn chờ, có tin duyệt mới với nút mới
+    assert step2 in tg.edits(BOSS) and "Xác nhận bước 2" in step2["text"] and "NẶNG" in step2["text"]  # T-B: sửa tại chỗ
+    # Huỷ → vẫn chờ, tin hệ thống trở lại nút duyệt (nút MỚI), không gửi thêm tin
     await press(tg, BOSS, b2[1]["callback_data"])
     assert d.hub.approvals.get(ap["id"])["status"] == "open"
-    again = approval_sys_msg(tg, BOSS, ap["id"])
-    assert again is not msg
+    again = tg.with_buttons(BOSS, ["Cho phép", "Từ chối"])
+    assert again is not msg and again in tg.edits(BOSS) and len(tg.sent(BOSS)) == n_sent
+    assert FakeTelegram.buttons(again)[0]["callback_data"] != FakeTelegram.buttons(msg)[0]["callback_data"]
     await approve_2step(tg, BOSS, again)
     assert d.hub.approvals.get(ap["id"])["status"] == "allowed"
     await stop(d)
@@ -362,7 +365,7 @@ async def test_wt5_file_class_rm_rf_needs_two_steps(make, tg):
     msg = await until(lambda: approval_sys_msg(tg, BOSS, ap["id"]))
     await press(tg, BOSS, FakeTelegram.buttons(msg)[0]["callback_data"])
     assert d.hub.approvals.get(ap["id"])["status"] == "open"
-    step2 = next(m for m in reversed(tg.sent(BOSS)) if FakeTelegram.buttons(m))
+    step2 = tg.with_buttons(BOSS, ["Xác nhận CHO PHÉP", "Huỷ"])
     await press(tg, BOSS, FakeTelegram.buttons(step2)[0]["callback_data"])
     assert d.hub.approvals.get(ap["id"])["status"] == "allowed"
     await stop(d)
@@ -441,7 +444,7 @@ async def test_wt4_groups_off_by_default(make, tg):
 
 async def approve_2step_from(tg: FakeTelegram, chat: int, sysmsg, from_id: int) -> None:
     await press(tg, chat, FakeTelegram.buttons(sysmsg)[0]["callback_data"], from_id=from_id)
-    step2 = next(m for m in reversed(tg.sent(chat)) if [b["text"] for b in FakeTelegram.buttons(m)] == ["Xác nhận CHO PHÉP", "Huỷ"])
+    step2 = tg.with_buttons(chat, ["Xác nhận CHO PHÉP", "Huỷ"])
     await press(tg, chat, FakeTelegram.buttons(step2)[0]["callback_data"], from_id=from_id)
 
 

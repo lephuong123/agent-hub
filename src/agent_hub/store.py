@@ -683,6 +683,39 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS manager_msg_conv ON manager_messages(conversation_id, id);
     """,
+    # v14 — UX: câu hỏi có lựa chọn của agent (questions/). Agent trong task hỏi → điều phối viên (`with_manager`) → nếu không
+    # chốt được thì người (`open`). Không có `expired` (không tự trả lời thay người). `resumed_at`: đã nối tiếp công việc sau khi trả lời.
+    """
+    CREATE TABLE IF NOT EXISTS questions (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        run_id TEXT,
+        session_id TEXT,
+        task_id TEXT,
+        conversation_id TEXT,
+        source TEXT NOT NULL,
+        text TEXT NOT NULL,
+        options TEXT NOT NULL DEFAULT '[]',
+        multi INTEGER NOT NULL DEFAULT 0,
+        allow_free_text INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL,
+        routed_to TEXT NOT NULL,
+        escalated_at TEXT,
+        escalation_note TEXT,
+        answer TEXT,
+        answered_by TEXT,
+        answered_channel TEXT,
+        answered_at TEXT,
+        resumed_at TEXT,
+        resumed_run_id TEXT,
+        reminder_count INTEGER NOT NULL DEFAULT 0,
+        last_reminded_at TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS questions_status ON questions(status, created_at);
+    CREATE INDEX IF NOT EXISTS questions_task ON questions(task_id);
+    CREATE INDEX IF NOT EXISTS questions_run ON questions(run_id);
+    """,
 ]
 
 JSON_COLS = {
@@ -698,6 +731,8 @@ JSON_COLS = {
     "ledger_entries": ("flags",),
     # M5-A
     "tier_canaries": ("watch_agents", "eval", "observed", "baseline"),
+    # UX — câu hỏi
+    "questions": ("options", "answer"),
 }
 
 

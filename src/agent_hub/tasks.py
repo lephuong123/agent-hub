@@ -391,7 +391,9 @@ class TaskService:
         cb = self._comments_block(t)
         if cb:
             lines.append("\n## Comments on this task (oldest first — address any requested changes)\n" + cb)
-        proto = ["\n## Protocol", "- Do the task yourself in the current working directory. Do not ask questions; make reasonable assumptions."]
+        proto = ["\n## Protocol", "- Do the task yourself in the current working directory. Prefer reasonable assumptions (state them)."
+                 + (" If a decision genuinely needs someone else, call the `ask_human` tool with 2-5 concrete options, then end your turn; "
+                    "the answer will appear in the task comments." if hub_self else " Do not ask questions.")]
         if hub_self:
             proto += [
                 "- When done, call the tool `mcp__hub-self__task_complete` with a concise summary (and `result` if useful).",

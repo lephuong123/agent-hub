@@ -97,6 +97,10 @@ class Daemon:
         from .curation.rpc import register_rpc as _register_m5b
 
         _register_m5b(self)
+        # UX: question.list|get|answer|escalate|cancel (questions/rpc.py — tự bọc audit method ghi)
+        from .questions.rpc import register_rpc as _register_questions
+
+        _register_questions(self)
         # M1 luồng A: thêm mcp.*/secret.*/audit.*/feedback.* và bọc audit các method thay đổi trạng thái.
         # GIỮ Ở CUỐI __init__ — method thêm sau dòng này sẽ không được audit tự động.
         from .mcp_server.rpc import register_rpc

@@ -31,7 +31,7 @@
     <td data-label="Đích"><code>{{ p.op or '' }} {{ p.target or '' }}{{ ':' ~ p.target_ref if p.target_ref }}</code></td>
     <td data-label="Chi tiết" class="small">{{ (p.reason or p.summary or p.detail or p.block_detail or '')|string|first(120) }}{% if p.scores %} <span class="muted">eval {{ p.scores.before }} → {{ p.scores.after }}</span>{% endif %}</td>
     <td class="actions">{% if p.ledger_entry_id %}<a class="btn sm ghost" href="/learnings/{{ p.ledger_entry_id }}">Xem diff</a>
-      {% if x.type == 'learning.applied' %}{{ m.act("learn_rollback", "↺ Rollback", {"id": p.ledger_entry_id}, "btn sm danger", confirm="Rollback thay đổi " ~ p.ledger_entry_id ~ "?", note="Lý do (tuỳ chọn)") }}{% endif %}{% endif %}</td>
+      {% if x.type == 'learning.applied' %}{{ m.act("learn_rollback", "Rollback", {"id": p.ledger_entry_id}, "btn sm danger", confirm="Rollback thay đổi " ~ p.ledger_entry_id ~ "?", note="Lý do (tuỳ chọn)") }}{% endif %}{% endif %}</td>
   </tr>{% endfor %}
   </tbody></table>{% endif %}
 </section>
@@ -43,7 +43,7 @@
   {% for e in ledger %}<tr><td data-label="Mục"><a href="/learnings/{{ e.id }}"><code>{{ e.id }}</code></a><div class="muted small">{{ (e.ts or e.created_at)|ts }}</div></td>
     <td data-label="Agent">{{ e.agent_id or e.scope or '—' }}</td><td data-label="Thay đổi"><code>{{ e.op }} {{ e.target }}{{ ':' ~ e.target_ref if e.target_ref }}</code>{% if e.rolled_back_by or e.rolled_back_at %} <span class="pill muted">đã rollback</span>{% endif %}</td>
     <td data-label="Bởi">{{ e.actor }}</td>
-    <td class="actions">{% if e.agent_id and e.target in ('skill','memory','config') and e.target_ref %}{{ m.act("pin", "📌 Ghim", {"agent": e.agent_id, "target": e.target, "ref": e.target_ref, "on": "1"}, "btn sm ghost", title="Ghim: vòng học không được sửa/xoá đích này") }}{% endif %}</td></tr>{% endfor %}
+    <td class="actions">{% if e.agent_id and e.target in ('skill','memory','config') and e.target_ref %}{{ m.act("pin", "Ghim", {"agent": e.agent_id, "target": e.target, "ref": e.target_ref, "on": "1"}, "btn sm ghost", title="Ghim: vòng học không được sửa/xoá đích này") }}{% endif %}</td></tr>{% endfor %}
   </tbody></table>{% endif %}
 </section>
 <section class="card">

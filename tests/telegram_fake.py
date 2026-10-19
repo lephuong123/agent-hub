@@ -1,7 +1,7 @@
 """Server Bot API Telegram GIẢ chạy cục bộ (127.0.0.1) cho test — không gọi Telegram thật.
 
-Hỗ trợ: getMe, deleteWebhook, getUpdates (long poll có offset/timeout), sendMessage, answerCallbackQuery,
-editMessageReplyMarkup. Token sai → 401. Test bơm update bằng `user_message()` / `press()` và đọc tin bot gửi bằng `sent()`.
+Hỗ trợ: getMe, deleteWebhook, setMyCommands, getUpdates (long poll có offset/timeout), sendMessage (cả reply_markup
+inline / keyboard / force_reply), answerCallbackQuery, editMessageReplyMarkup, editMessageText, sendChatAction. Token sai → 401. Test bơm update bằng `user_message()` / `press()` và đọc tin bot gửi bằng `sent()`.
 """
 
 from __future__ import annotations
@@ -93,7 +93,10 @@ class FakeTelegram:
                 self.next_msg += 1
             return 200, {"ok": True, "result": {"message_id": mid, "chat": {"id": int(body["chat_id"])}, "text": body.get("text"),
                                                  "reply_markup": body.get("reply_markup")}}
-        if method in ("answerCallbackQuery", "editMessageReplyMarkup", "deleteWebhook", "sendChatAction"):
+        if method == "editMessageText":
+            return 200, {"ok": True, "result": {"message_id": body.get("message_id"), "chat": {"id": int(body["chat_id"])}, "text": body.get("text"),
+                                                 "reply_markup": body.get("reply_markup")}}
+        if method in ("answerCallbackQuery", "editMessageReplyMarkup", "deleteWebhook", "sendChatAction", "setMyCommands"):
             return 200, {"ok": True, "result": True}
         return 404, {"ok": False, "error_code": 404, "description": "Not Found"}
 
@@ -114,6 +117,17 @@ class FakeTelegram:
             m["reply_to_message"] = {"message_id": reply_to, "chat": {"id": chat_id, "type": chat_type}}
         return self._push({"message": m})
 
+    def message_id_of(self, msg: dict[str, Any]) -> int | None:
+        """message_id server giả đã cấp cho một body sendMessage (đếm theo thứ tự gửi toàn cục)."""
+        n = 0
+        with self.cond:
+            for m, b in self.calls:
+                if m in ("sendMessage", "sendDocument"):
+                    n += 1
+                    if b is msg:
+                        return n
+        return msg.get("message_id")
+
     def press(self, chat_id: int, data: str, *, message_id: int = 1, from_id: int | None = None) -> int:
         return self._push({"callback_query": {"id": f"cq{self.next_update}", "data": data, "from": {"id": from_id or chat_id},
                                               "message": {"message_id": message_id, "chat": {"id": chat_id, "type": "private"}}}})
@@ -121,6 +135,17 @@ class FakeTelegram:
     def sent(self, chat_id: int | None = None) -> list[dict[str, Any]]:
         with self.cond:
             return [b for m, b in self.calls if m == "sendMessage" and (chat_id is None or str(b.get("chat_id")) == str(chat_id))]
+
+    def edits(self, chat_id: int | None = None) -> list[dict[str, Any]]:
+        """Các lần bot SỬA tin (editMessageText) — UX v2 sửa tại chỗ thay vì gửi tin mới."""
+        with self.cond:
+            return [b for m, b in self.calls if m == "editMessageText" and (chat_id is None or str(b.get("chat_id")) == str(chat_id))]
+
+    def with_buttons(self, chat_id: int, labels: list[str]) -> dict[str, Any] | None:
+        """Tin MỚI NHẤT (gửi hoặc sửa) có đúng bộ nút `labels`."""
+        with self.cond:
+            msgs = [b for m, b in self.calls if m in ("sendMessage", "editMessageText") and str(b.get("chat_id")) == str(chat_id)]
+        return next((m for m in reversed(msgs) if [b["text"] for b in self.buttons(m)] == labels), None)
 
     def calls_of(self, method: str) -> list[dict[str, Any]]:
         with self.cond:

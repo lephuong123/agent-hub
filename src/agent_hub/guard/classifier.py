@@ -90,6 +90,8 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "daemon": {"stop", "restart"},
     "auth": None,
     "notify": {"telegram"},  # token bot / allowlist chat / gửi tin thay người (chat/rpc.py)
+    "answer": None,  # UX: trả lời câu hỏi = quyết định của người (agent không tự trả lời câu hỏi của mình/agent khác)
+    "questions": {"answer", "escalate", "cancel"},
     "web": None,  # WEB: `agent-hub web` sinh link đăng nhập = phiên NGƯỜI trên giao diện web
     "manager": {"set", "chat", "tick"},  # M7: chỉ định/ra lệnh điều phối viên = quyền người (manager.* ∈ HUMAN_ONLY)
 }

@@ -81,6 +81,10 @@ class Hub:
         from .manager import attach as _attach_manager
 
         _attach_manager(self)
+        # UX: câu hỏi có lựa chọn của agent (`hub.questions`: task → điều phối viên → người) — questions/service.py
+        from .questions import attach as _attach_questions
+
+        _attach_questions(self)
         self._bg: list[Any] = []
         # hardening SEC (H-02 lớp 3): toàn vẹn policy/ + config.yaml + hub.db (`hub.integrity`) — guard/integrity.py. GIỮ CUỐI __init__
         from .guard.integrity import attach as _attach_integrity
@@ -130,6 +134,7 @@ class Hub:
         self.publish(make_event("hub.started", None, {"epoch": self.bus.epoch, "version": __version__, "reconciled_runs": n}))
         self.dispatcher.start()  # M3: vòng tick dispatcher (cần event loop đang chạy)
         self.manager.start()  # M7: vòng nhịp điều phối viên (chỉ tick khi có việc)
+        self.questions.start()  # UX: chuyển câu hỏi quá hạn của điều phối viên lên người + nhắc lại
         self.compat.check_on_start()  # hardening H-10: phiên bản CLI → hub_state.cli_compat (header TUI)
         try:  # vòng nhắc approval + purge retention (cần event loop đang chạy)
             import asyncio
@@ -142,6 +147,7 @@ class Hub:
         self.publish(make_event("hub.stopping", None, {"epoch": self.bus.epoch}))
         await self.dispatcher.stop()  # M3
         await self.manager.stop()  # M7
+        await self.questions.stop()
         await self.runs.shutdown()
         self.integrity.stop()
         for t in self._bg:

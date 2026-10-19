@@ -2,14 +2,14 @@
 {% import "_macros.html" as m with context %}
 {% block title %}Công việc{% endblock %}
 {% block content %}
-<div class="page-head"><h1>Công việc (task)</h1>
+<div class="page-head"><div class="ph-title"><h1>Công việc</h1><span class="sub">Task giao cho agent hoặc team; task có phụ thuộc chạy sau khi task cha xong.</span></div>
   <form method="get" action="/tasks" class="filters inline-f">
     <select name="team" aria-label="Lọc theo team"><option value="">mọi team</option>{% for t in teams %}<option value="{{ t.id }}" {{ 'selected' if q.team == t.id }}>{{ t.name }}</option>{% endfor %}</select>
     <button class="btn sm" type="submit">Lọc</button>
   </form>
 </div>
 <details class="card" {{ 'open' if not cols.values()|sum(start=[]) }}>
-  <summary><h2 class="inline-h">+ Tạo công việc</h2></summary>
+  <summary><h2 class="inline-h">Tạo công việc</h2></summary>
   <form method="post" action="/do/task_create" class="form">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/tasks">
     <div class="fgrid">
@@ -30,9 +30,10 @@
     {% for t in cols[c] %}
       <a class="tcard" href="/tasks/{{ t.id }}">
         <span class="tcard-title">{{ t.title|first(80) }}</span>
-        <span class="muted small">{{ t.assignee_agent_id or t.team_id or '—' }}{% if t.parents %} · sau {{ t.parents|length }} task{% endif %}{% if t.cost_usd %} · {{ t.cost_usd|cost }}{% endif %}</span>
-        {% if t.wait_reason %}<span class="small warn-t">chờ: {{ wait_reason(t.wait_reason) }}</span>{% endif %}
-        {% if t.block_reason %}<span class="small danger-t">{{ t.block_reason|first(60) }}</span>{% endif %}
+        <span class="meta">{{ m.icon('bot', 'sm') }}{{ t.assignee_agent_id or t.team_id or '—' }}{% if t.parents %} · sau {{ t.parents|length }} task{% endif %}{% if t.cost_usd %} · {{ t.cost_usd|cost }}{% endif %}</span>
+        {% if t.question %}<span class="ask-t">{{ m.icon('question', 'sm') }}{{ 'Hỏi điều phối viên' if t.question.status == 'with_manager' else 'Chờ bạn trả lời' }}</span>
+        {% elif t.block_reason %}<span class="small danger-t">{{ t.block_reason|first(60) }}</span>{% endif %}
+        {% if t.wait_reason %}<span class="xs warn-t">chờ: {{ wait_reason(t.wait_reason) }}</span>{% endif %}
       </a>
     {% else %}<div class="muted small empty-col">—</div>{% endfor %}
     {% if c == 'done' and not q.all and cols[c]|length >= 15 %}<a class="small" href="/tasks?all=1">xem tất cả…</a>{% endif %}
