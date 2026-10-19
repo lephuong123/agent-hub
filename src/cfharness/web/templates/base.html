@@ -9,8 +9,9 @@
 <title>{% block title %}cfharness{% endblock %} · cfharness</title>
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
+<script src="/static/early.js"></script>
 </head>
-<body>
+<body class="{% block bodyclass %}{% endblock %}">
 {%- set navkey = 'inbox' if nav == 'approvals' else nav %}
 {%- set need = (badge.approvals or 0) + (badge.questions or 0) %}
 {%- set need_tone = 'danger' if badge.waiting_human else ('ask' if badge.questions and not badge.approvals else '') %}
@@ -23,7 +24,11 @@
 <div class="shell{{ ' noside' if not csrf }}">
   {% if csrf %}
   <aside class="side" aria-label="Thanh bên">
-    <a class="brand" href="/">{{ _m.icon('logo') }}<span class="lbl">cfharness</span></a>
+    <div class="side-top">
+      <a class="brand" href="/" title="cfharness">{{ _m.icon('logo') }}<span class="lbl wordmark">cfharness</span></a>
+      <button type="button" class="side-toggle" id="side-toggle" aria-label="Thu gọn / mở rộng thanh bên" title="Thu gọn / mở rộng thanh bên">{{ _m.icon('sidebar') }}</button>
+    </div>
+    <a class="side-new" href="/manager?new=1" title="Cuộc trò chuyện mới với điều phối viên"><span class="side-new-ic">{{ _m.icon('plus') }}</span><span class="lbl">Cuộc trò chuyện mới</span></a>
     <nav class="nav" aria-label="Điều hướng chính">
       {% for gname, items in GROUPS %}
       <div class="nav-group">{{ gname }}</div>{% if not loop.first %}<div class="nav-sep" aria-hidden="true"></div>{% endif %}
@@ -32,18 +37,23 @@
       {% endfor %}
       {% endfor %}
     </nav>
+    {% block side_extra %}{% endblock %}
     <div class="side-foot">
       {% if badge.estop %}<a href="/settings#estop" class="btn danger solid sm side-btn" title="Dừng khẩn cấp đang bật">{{ _m.icon('stop') }}<span class="lbl">ESTOP đang bật</span></a>{% endif %}
-      <div class="daemon-st {{ 'down' if badge.down }}" title="{{ 'Không kết nối được daemon' if badge.down else 'Daemon đang chạy' }}">{{ _m.icon('dot') }}<span class="lbl">{{ 'daemon tắt' if badge.down else 'daemon đang chạy' }}</span></div>
-      <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn ghost sm side-btn" type="submit" title="Thoát">{{ _m.icon('logout') }}<span class="lbl">Thoát</span></button></form>
+      <div class="side-user">
+        <span class="side-av" aria-hidden="true">B</span>
+        <div class="side-user-t lbl"><span class="nm">Bạn</span><span class="daemon-st {{ 'down' if badge.down }}" title="{{ 'Không kết nối được daemon' if badge.down else 'Daemon đang chạy' }}">{{ _m.icon('dot') }}<span>{{ 'daemon tắt' if badge.down else 'daemon đang chạy' }}</span></span></div>
+        <form method="post" action="/logout" class="side-out"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn ghost sm icon side-btn" type="submit" title="Thoát" aria-label="Thoát">{{ _m.icon('logout') }}</button></form>
+      </div>
     </div>
   </aside>
   {% endif %}
   <div class="main">
     {% if csrf %}
     <header class="mtop">
-      <a class="brand" href="/">{{ _m.icon('logo') }}<span>cfharness</span></a>
+      <a class="brand" href="/">{{ _m.icon('logo') }}<span class="wordmark">cfharness</span></a>
       <div class="mtop-right">
+        <a class="btn ghost sm icon" href="/manager?new=1" title="Cuộc trò chuyện mới" aria-label="Cuộc trò chuyện mới">{{ _m.icon('pen-new') }}</a>
         {% if badge.estop %}<a href="/settings#estop" class="pill danger strong">{{ _m.icon('stop') }}ESTOP</a>{% endif %}
         {% if badge.down %}<span class="pill danger">daemon tắt</span>{% endif %}
       </div>

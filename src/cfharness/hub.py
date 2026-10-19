@@ -85,6 +85,10 @@ class Hub:
         from .questions import attach as _attach_questions
 
         _attach_questions(self)
+        # Hệ thống ngoài hub (`hub.systems`: app trong ~/Workspace + job launchd) — systems/service.py
+        from .systems import attach as _attach_systems
+
+        _attach_systems(self)
         self._bg: list[Any] = []
         # hardening SEC (H-02 lớp 3): toàn vẹn policy/ + config.yaml + hub.db (`hub.integrity`) — guard/integrity.py. GIỮ CUỐI __init__
         from .guard.integrity import attach as _attach_integrity

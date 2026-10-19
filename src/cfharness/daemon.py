@@ -101,6 +101,10 @@ class Daemon:
         from .questions.rpc import register_rpc as _register_questions
 
         _register_questions(self)
+        # Hệ thống ngoài hub: system.list|get|scan|add|rm|lock|job (systems/rpc.py — tự bọc audit method ghi)
+        from .systems.rpc import register_rpc as _register_systems
+
+        _register_systems(self)
         # M1 luồng A: thêm mcp.*/secret.*/audit.*/feedback.* và bọc audit các method thay đổi trạng thái.
         # GIỮ Ở CUỐI __init__ — method thêm sau dòng này sẽ không được audit tự động.
         from .mcp_server.rpc import register_rpc

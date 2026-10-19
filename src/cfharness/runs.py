@@ -43,6 +43,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("cfharness.runs")
 
+# guard.enabled=false: tool được cho phép sẵn khi agent không giới hạn `tools` (không còn ai trả lời yêu cầu quyền của CLI)
+GUARD_OFF_ALLOWED_TOOLS = ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Read", "Grep", "Glob", "WebFetch", "WebSearch", "TodoWrite")
+
 AUTH_PATTERNS = re.compile(
     r"(not logged in|please run /login|run `?claude auth login|invalid api key|authentication_error|"
     r"oauth token (has )?expired|login required|unauthorized)",
@@ -458,6 +461,15 @@ class RunManager:
             static = keep
             if removed:
                 self.hub.publish(make_event("guard.decision", agent["id"], {"tool": "(argv)", "action": "static_rules_lifted_once", "removed": removed, "tickets": [t["id"] for t in tickets]}, run_id=run_id))
+        else:
+            # guard.enabled=false: không còn kênh xin quyền (hook/permission-prompt-tool) → `claude -p` tự TỪ CHỐI mọi tool cần hỏi
+            # (Bash, Edit/Write ngoài cwd…) và agent chỉ còn đọc. Cho phép sẵn tool của agent; vẫn giữ mẫu luôn-phá-huỷ + mẫu chặn
+            # theo repo (disallowed) + sandbox OS + permissions.deny tĩnh.
+            if tp.get("permission_mode") not in ("plan", "bypassPermissions") and not opts.get("read_only"):
+                work = list(tp.get("tools") or []) if tp.get("tools") is not None else list(GUARD_OFF_ALLOWED_TOOLS)
+                tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + work))
+            static = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + gr.static_disallowed(guard_cfg) + hub.guard.repo_deny_patterns(str(cwd))))
+            tp["disallowed_tools"] = static
         # M3 — hub-self MCP (FR-MS-08): tool task_* theo vai trò, ràng với run_id
         # M7: run của điều phối viên (không có task) dùng hub-self vai trò `manager` — chỉ khi agent đúng là manager được chỉ định
         is_mgr = (opts.get("hub_self") == "manager" and getattr(hub, "manager", None) is not None and hub.manager.is_manager(agent["id"])

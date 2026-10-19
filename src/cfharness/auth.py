@@ -77,6 +77,9 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # UX: trả lời/chuyển/huỷ câu hỏi của agent — agent không tự trả lời câu hỏi (của mình hay agent khác). Điều phối viên trả lời/
         # chuyển lên người qua MANAGER_ALLOWED, chỉ khi câu hỏi đang `with_manager` (manager/permissions.check_rpc)
         "question.answer", "question.escalate", "question.cancel",
+        # Hệ thống ngoài hub (systems/): launchctl chạy NGOÀI sandbox trong daemon — đăng ký/khoá chỉ người; thao tác job: người hoặc
+        # điều phối viên (MANAGER_ALLOWED, chỉ job đã đăng ký + không khoá)
+        "system.scan", "system.add", "system.rm", "system.lock", "system.job",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})
@@ -141,6 +144,7 @@ MANAGER_ALLOWED: dict[str, str] = {
     "estop.set": "CHỈ bật ESTOP (on=true)",
     "question.answer": "trả lời câu hỏi của agent trong task khi câu hỏi đang chờ điều phối viên (with_manager) — không phải câu hỏi đã lên người",
     "question.escalate": "chuyển câu hỏi đang chờ điều phối viên lên người",
+    "system.job": "tạm dừng/bật lại/khởi động lại job launchd của hệ thống NGƯỜI đã đăng ký, job không bị khoá (đảo ngược được; trần/giờ)",
 }
 
 
@@ -151,7 +155,7 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.learning.rpc", "MUTATING_M4A"), ("cfharness.learning_ops.rpc", "MUTATING_B"),
                       ("cfharness.curation.rpc", "MUTATING_CURATION"), ("cfharness.chat.rpc", "MUTATING_TELEGRAM"),
                       ("cfharness.manager.rpc", "MUTATING_MANAGER"),
-                      ("cfharness.questions.rpc", "MUTATING_QUESTIONS")):
+                      ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS")):
         try:
             import importlib
 

@@ -78,6 +78,11 @@ class ManagerOps:
             return f"question:{args.get('question_id')}" if args.get("question_id") else None
         if op == "ask_owner":
             return None
+        if op == "ask_owner_permission":
+            ident = args.get("approval_id") if args.get("kind") == "approve_action" else args.get("agent")
+            return (f"approval:{ident}" if args.get("kind") == "approve_action" else f"agent:{ident}") if ident else None
+        if op == "system_job":
+            return f"system:{args.get('label')}" if args.get("label") else None
         if op in ("team_member_add", "team_member_rm"):
             return f"team:{args.get('team')}" if args.get("team") else None
         kind = op.split("_", 1)[0]
@@ -222,6 +227,13 @@ class ManagerOps:
                 continue
             out.append({"name": m["name"], "description": (m.get("description") or "")[:200], "transport": (m.get("config") or {}).get("type") or m.get("transport")})
         return out
+
+    def op_system_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
+        return self.hub.systems.list()  # type: ignore[attr-defined]
+
+    def op_system_get(self, a: dict[str, Any]) -> dict[str, Any]:
+        n = int(self.hub.config.get("systems.log_tail_bytes") or 0) if a.get("log") else 0
+        return self.hub.systems.get(str(a.get("id") or ""), log_bytes=n or None)  # type: ignore[attr-defined]
 
     def _clamp_budget(self, v: Any) -> Any:
         cap = self.svc.perms.bounds().get("max_budget_usd_per_run")
@@ -389,6 +401,13 @@ class ManagerOps:
         return _trunc(await self._rpc("learn_refine", "learn.refine", {"agent": a.get("agent"), "focus": a.get("focus"), "run": a.get("run")}, a,
                                       summary=f"yêu cầu tinh chỉnh tri thức của {a.get('agent')}"), 400)
 
+    async def op_system_job(self, a: dict[str, Any]) -> Any:
+        label, act = str(a.get("label") or ""), str(a.get("action") or "")
+        verb = {"pause": "tạm dừng", "resume": "bật lại", "restart": "khởi động lại"}.get(act, act)
+        res = await self._rpc("system_job", "system.job", {"label": label, "action": act, "reason": a.get("reason")}, a,
+                              summary=f"{verb} job {label}" + (f": {str(a.get('reason'))[:100]}" if a.get("reason") else ""))
+        return {k: (res or {}).get(k) for k in ("system", "label", "action", "status", "detail")}
+
     async def op_estop_on(self, a: dict[str, Any]) -> Any:
         p = {"on": True, "reason": f"[manager:{self.mid}] {str(a.get('reason') or '')[:300]}", "stop_running": bool(a.get("stop_running"))}
         if a.get("team"):
@@ -414,8 +433,30 @@ class ManagerOps:
         return {"question_id": qid, "status": (res or {}).get("status"), "next": "the human owner was asked; do not answer it yourself"}
 
     def op_ask_owner(self, a: dict[str, Any]) -> Any:
-        opts = self.run.get("run_opts") or {}
-        conv = opts.get("manager_conversation")
+        conv = self._owner_conversation()
+        q = self.hub.questions.open(self.run, a.get("question"), a.get("options"), multi=bool(a.get("multi")), source="manager", conversation_id=conv)
+        self._action("ask_owner", a, summary=f"hỏi người: {q['text'][:120]}")
+        return {"question_id": q["id"], "status": q["status"], "note": "Asked. End your turn; the owner's answer arrives as an owner message."}
+
+    def op_ask_owner_permission(self, a: dict[str, Any]) -> Any:
+        """Xin phép người (owner_actions): câu hỏi do HUB dựng từ dữ liệu thật; người chọn "Cho phép" → hub thực hiện với quyền người."""
+        from . import owner_actions
+
+        kind = str(a.get("kind") or "")
+        action, desc = owner_actions.build(self.hub, kind, a)
+        conv = self._owner_conversation()
+        for q in self.hub.questions.list("open", limit=200):  # cùng thao tác đang chờ → không hỏi lại
+            act = q.get("action") or {}
+            if act.get("method") == action["method"] and act.get("params") == action["params"]:
+                return {"question_id": q["id"], "status": q["status"], "note": "Already asked and still waiting. End your turn."}
+        q = self.hub.questions.open(self.run, owner_actions.question_text(desc, a.get("reason")), owner_actions.OPTIONS, source="manager",
+                                    conversation_id=conv, action=action)
+        self._action("ask_owner_permission", a, summary=f"xin phép người: {kind} {action.get('target')}")
+        return {"question_id": q["id"], "status": q["status"], "asked": desc[:400],
+                "note": "Asked. End your turn now; the owner's decision and the result arrive as an owner message."}
+
+    def _owner_conversation(self) -> str | None:
+        conv = (self.run.get("run_opts") or {}).get("manager_conversation")
         try:
             if conv and self.svc._conv_row(conv)["channel"] == "heartbeat":
                 conv = None
@@ -424,9 +465,7 @@ class ManagerOps:
         if conv is None:
             home = self.svc._home_conversation()
             conv = home["id"] if home else None
-        q = self.hub.questions.open(self.run, a.get("question"), a.get("options"), multi=bool(a.get("multi")), source="manager", conversation_id=conv)
-        self._action("ask_owner", a, summary=f"hỏi người: {q['text'][:120]}")
-        return {"question_id": q["id"], "status": q["status"], "note": "Asked. End your turn; the owner's answer arrives as an owner message."}
+        return conv
 
     def op_notify_owner(self, a: dict[str, Any]) -> Any:
         text = str(a.get("text") or "").strip()

@@ -34,6 +34,7 @@ log = logging.getLogger("cfharness.questions")
 PENDING = ("with_manager", "open")
 FINAL = ("answered", "cancelled")
 MAX_OPTIONS = 6
+ALLOW_KEY = "1"  # xin phép: phương án 1 = "Cho phép" (manager/owner_actions.OPTIONS)
 TEXT_MAX = 2000
 LABEL_MAX = 80
 DESC_MAX = 200
@@ -180,7 +181,8 @@ class QuestionService:
 
     # ------------------------------------------------------------------ mở
     def open(self, run: dict[str, Any], text: Any, options: Any = None, *, multi: bool = False, allow_free_text: bool = True,
-             source: str = "ask_tool", conversation_id: str | None = None, task_id: str | None = None) -> dict[str, Any]:
+             source: str = "ask_tool", conversation_id: str | None = None, task_id: str | None = None,
+             action: dict[str, Any] | None = None) -> dict[str, Any]:
         body = clean(text, TEXT_MAX)
         if not body:
             raise HubError("câu hỏi cần nội dung (question)")
@@ -201,6 +203,10 @@ class QuestionService:
             "allow_free_text": int(bool(allow_free_text)), "status": "with_manager" if mid else "open", "routed_to": "manager" if mid else "human",
             "created_at": now_iso(),
         }
+        if action is not None:
+            # xin phép (manager/owner_actions.py): CHỈ người trả lời — không bao giờ qua điều phối viên
+            row.update({"action": action, "status": "open", "routed_to": "human"})
+            mid = None
         self.hub.store._insert("questions", row)
         q = self.get(qid)
         self._event("question.open", q, self.wire(q))
@@ -213,7 +219,7 @@ class QuestionService:
         """Payload chung cho event/kênh hiển thị."""
         return {"routed_to": q["routed_to"], "status": q["status"], "text": q["text"], "options": q.get("options") or [], "multi": q["multi"],
                 "allow_free_text": q["allow_free_text"], "source": q["source"], "task_id": q.get("task_id"), "conversation_id": q.get("conversation_id"),
-                "answer_cmd": f"cfharness answer {q['id']}"}
+                "answer_cmd": f"cfharness answer {q['id']}", "permission": (q.get("action") or {}).get("kind")}
 
     def _push_manager(self, q: dict[str, Any]) -> None:
         mgr = getattr(self.hub, "manager", None)
@@ -236,12 +242,14 @@ class QuestionService:
         return q
 
     # ------------------------------------------------------------------ trả lời
-    def answer(self, qid: str, *, keys: Any = None, text: Any = None, by: str = "user", channel: str = "cli") -> dict[str, Any]:
+    def answer(self, qid: str, *, keys: Any = None, text: Any = None, by: str = "user", channel: str = "cli", resume: bool = True) -> dict[str, Any]:
         q = self.get(qid)
         if q["status"] in FINAL:
             raise Conflict(f"câu hỏi {q['id']} đã {q['status']}" + (f" (bởi {q.get('answered_by')} qua {q.get('answered_channel')})" if q.get("answered_by") else ""))
         if by.startswith("manager:") and q["status"] != "with_manager":
             raise Conflict(f"câu hỏi {q['id']} đã chuyển lên người — điều phối viên không trả lời thay")
+        if q.get("action") and by != "user":
+            raise Conflict(f"câu hỏi {q['id']} là xin phép — chỉ người trả lời")
         if isinstance(keys, (str, int)):
             keys = [k for k in re.split(r"[,\s]+", str(keys)) if k]
         keys = [str(k) for k in (keys or [])]
@@ -272,8 +280,48 @@ class QuestionService:
                 self.hub.tasks.comment(q["task_id"], self.answer_text(q), author=by if by != "user" else "human", kind="answer", run_id=q.get("run_id"))
             except HubError:
                 log.debug("không ghi được bình luận trả lời cho task %s", q.get("task_id"), exc_info=True)
-        self._try_continue(q)
+        if not resume:  # bên gọi tự lo (trả lời ngay trong `manager.chat` — tin người đi kèm chính lượt đó)
+            return q
+        if q.get("action") and ALLOW_KEY in keys:
+            self._spawn(self._act_then_continue(q, by=by, channel=channel))
+        else:
+            self._try_continue(q)
         return self.get(q["id"])
+
+    async def answer_in_chat(self, qid: str, keys: list[str], *, channel: str) -> str:
+        """Người trả lời ngay trong hội thoại điều phối viên ("1", "ok", "duyệt"…): trả lời + thực hiện thao tác xin phép (nếu cho phép)
+        NGAY, đánh dấu đã nối tiếp và trả về ghi chú gắn vào CHÍNH lượt chat đó (không đẻ thêm lượt)."""
+        from ..manager.owner_actions import execute
+
+        q = self.answer(qid, keys=keys, by="user", channel=channel, resume=False)
+        if q.get("action") and ALLOW_KEY in keys:
+            try:
+                res = await execute(self.hub, q["action"], by="user", channel=channel)
+            except Exception as e:
+                res = {"ok": False, "error": str(getattr(e, "message", None) or e)[:300]}
+            self._update(q["id"], {"answer": {**(q.get("answer") or {}), "action_result": res}})
+            q = self.get(q["id"])
+            self._event("question.action", q, {"kind": q["action"].get("kind"), "target": q["action"].get("target"), **res})
+        if q.get("task_id"):
+            self._try_continue(q)
+        else:
+            self._mark_resumed(q, None)
+        return self.continuation_text(self.get(q["id"]))
+
+    async def _act_then_continue(self, q: dict[str, Any], *, by: str, channel: str) -> None:
+        """Người chọn "Cho phép" → hub thực hiện thao tác đã chốt (quyền người), ghi kết quả vào answer rồi nối tiếp điều phối viên."""
+        from ..manager.owner_actions import execute
+
+        try:
+            res = await execute(self.hub, q["action"], by=by, channel=channel)
+        except Exception as e:  # thao tác lỗi vẫn phải nối tiếp (điều phối viên cần biết)
+            log.warning("xin phép %s: thực hiện lỗi", q["id"], exc_info=True)
+            res = {"ok": False, "error": str(getattr(e, "message", None) or e)[:300]}
+        a = {**(q.get("answer") or {}), "action_result": res}
+        self._update(q["id"], {"answer": a})
+        q = self.get(q["id"])
+        self._event("question.action", q, {"kind": (q.get("action") or {}).get("kind"), "target": (q.get("action") or {}).get("target"), **res})
+        self._try_continue(q)
 
     def answer_text(self, q: dict[str, Any]) -> str:
         """Khung trả lời gửi cho agent (tiếng Anh, chữ do HUB sinh; phần chữ tự do đánh dấu rõ là của người trả lời)."""
@@ -303,6 +351,8 @@ class QuestionService:
         """Nối tiếp ngay nếu run/task hỏi đã dừng; nếu còn chạy, listener làm khi nó kết thúc. Trả True nếu đã nối tiếp."""
         if q["status"] != "answered" or q.get("resumed_at"):
             return False
+        if q.get("action") and ALLOW_KEY in ((q.get("answer") or {}).get("keys") or []) and (q.get("answer") or {}).get("action_result") is None:
+            return False  # người cho phép, hub đang thực hiện — `_act_then_continue` nối tiếp khi xong
         run = self.hub.store.get_run(q["run_id"]) if q.get("run_id") else None
         if q.get("task_id"):
             t = self.hub.tasks.maybe(q["task_id"])
@@ -349,15 +399,27 @@ class QuestionService:
                 conv = None
         if conv is None or conv["channel"] == "heartbeat" or conv["agent_id"] != mgr.agent_id():
             conv = mgr._home_conversation()
-        a = q.get("answer") or {}
-        pick = "; ".join(f"{k}. {lbl}" for k, lbl in zip(a.get("keys") or [], a.get("labels") or []))
-        text = f"Trả lời câu hỏi {q['id']} của bạn (“{q['text'][:300]}”): " + (f"chọn {pick}" if pick else "") + (f" — {a['text']}" if a.get("text") else "")
         try:
-            res = await mgr.chat(conv["channel"] if conv else "web", text, conversation_id=conv["id"] if conv else None)
+            res = await mgr.chat(conv["channel"] if conv else "web", self.continuation_text(q), conversation_id=conv["id"] if conv else None)
             self._mark_resumed(q, res.get("run_id"))
         except HubError as e:
             log.warning("không gửi được trả lời câu hỏi %s cho điều phối viên: %s", q["id"], e.message)
             self._mark_resumed(q, None)
+
+    def continuation_text(self, q: dict[str, Any]) -> str:
+        a = q.get("answer") or {}
+        pick = "; ".join(f"{k}. {lbl}" for k, lbl in zip(a.get("keys") or [], a.get("labels") or []))
+        text = f"Trả lời câu hỏi {q['id']} của bạn (“{q['text'][:300]}”): " + (f"chọn {pick}" if pick else "") + (f" — {a['text']}" if a.get("text") else "")
+        if q.get("action"):
+            r = a.get("action_result")
+            act = q["action"]
+            if ALLOW_KEY not in (a.get("keys") or []):
+                text += f"\n[hub] Người KHÔNG cho phép ({act.get('kind')} {act.get('target')}). Không thử lại cách khác; làm tiếp phần còn lại hoặc báo người."
+            elif (r or {}).get("ok"):
+                text += f"\n[hub] Đã thực hiện {act.get('kind')} cho {act.get('target')} với quyền người. Chạy lại/tiếp tục việc đang chờ ngay (task_retry, run_start…)."
+            else:
+                text += f"\n[hub] Người cho phép nhưng thực hiện LỖI: {(r or {}).get('error')}. Báo người ngắn gọn."
+        return text
 
     def _spawn(self, coro: Any) -> None:
         try:

@@ -360,3 +360,25 @@ Chi tiết, cách áp, việc người dùng phải làm, lệch BRD: `docs/dev-
 
 Bất biến: guard nhận diện tên cũ VĨNH VIỄN (binary/module cũ có thể còn trong venv). Thêm tên/biến thể → sửa `names.py` + ca hai chiều trong
 `tests/test_rename_cfharness.py`. Literal tên cũ chỉ được nằm trên dòng có `rename:keep`. `home migrate` là lệnh chỉ người (`HUB_HUMAN_ONLY_CLI`).
+
+## Hệ thống ngoài hub — app trong ~/Workspace + job launchd (`systems/`)
+Chi tiết, quyền, nghiệm thu thật, việc dở: `docs/dev-notes/systems.md`. Không migration (`hub_state systems.registry|systems.paused`). Test: `tests/test_systems.py`.
+
+| Module | Vai trò |
+|---|---|
+| `systems/launchd.py` | Đọc plist (thuần, `plutil` dự phòng) + `Launchctl` (runner thay được — test KHÔNG gọi launchctl thật): state/disabled/pause/resume/restart miền `gui/<uid>` |
+| `systems/service.py` | `hub.systems`: nhận diện (gốc `systems.roots` → thư mục con + job theo cwd/đường dẫn), registry, `job(label, action)` + `job_check` dùng chung với quyền manager |
+| `systems/rpc.py`, `cli.py` | RPC `system.list|get|scan|add|rm|lock|job` (ghi = HUMAN_ONLY, tự audit); CLI `cfharness system scan|list|show|add|rm|lock|unlock|pause|resume|restart` |
+
+Bất biến: đăng ký/khoá = CHỈ người. Điều phối viên chỉ `system.job` (MANAGER_ALLOWED + `check_rpc` → `job_check`) trên job thuộc hệ thống đã đăng ký,
+không khoá, trong trần `manager.max_system_ops_per_hour`. Không bao giờ nhận diện thư mục/job của chính hub. `launchctl` chỉ chạy trong daemon.
+
+## Xin phép người bằng nút + giảm cổng chặn (`ask_owner_permission`)
+Chi tiết: `docs/dev-notes/owner-permission.md`. Migration **v15** (`questions.action`). Test: `tests/test_owner_permission.py`.
+- `manager/owner_actions.py`: điều phối viên ĐỀ XUẤT (approve_action, sandbox_localhost, sandbox_domain, agent_update) → câu hỏi do HUB soạn,
+  thao tác chốt sẵn → NGƯỜI chọn "Cho phép" → hub thực hiện bằng `call_as(internal)` + audit kênh trả lời → kết quả về điều phối viên.
+  Thêm kind mới → `KINDS` + `build()` (kiểm hợp lệ, cấm đích là agent manager) + ca trong test.
+- `ManagerService._owner_shortcut`: tin người trong chat ("1", "ok", "duyệt", `approve ap_…`, `answer q_… 1`) → làm ngay, gắn ghi chú `[hub]`.
+- `guard.hold_uncertain=false` → chỉ `destructive` hỏi người (giữ uncertain vùng hub/policy + `mcp_require_approval`). `guard.enabled=false`
+  → cho phép sẵn tool của agent (`GUARD_OFF_ALLOWED_TOOLS`), giữ mẫu chặn tĩnh + sandbox.
+

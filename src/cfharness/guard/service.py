@@ -263,6 +263,18 @@ class GuardService:
             )
 
     # ------------------------------------------------------------------ check
+    # uncertain luôn giữ dù `hold_uncertain=false`: vùng hub/policy (sandbox là lớp 2 nhưng đây là tài nguyên của chính hub) và
+    # tool MCP người đánh dấu cần duyệt
+    ALWAYS_HOLD_KLASS = ("hub", "policy")
+    ALWAYS_HOLD_RULES = ("mcp_require_approval",)
+
+    def needs_human(self, v: Verdict) -> bool:
+        if not v.hold:
+            return False
+        if v.verdict != "uncertain" or self.hub.config.get("guard.hold_uncertain") is not False:
+            return True
+        return v.klass in self.ALWAYS_HOLD_KLASS or v.rule in self.ALWAYS_HOLD_RULES
+
     async def check(self, p: dict[str, Any]) -> dict[str, Any]:
         run_id = str(p.get("run_id") or "")
         channel = str(p.get("channel") or "hook")
@@ -285,7 +297,7 @@ class GuardService:
                 make_event("guard.blocked", run["agent_id"], {"source": "runtime", "reason": "guard_rule", "rule": v.rule, "detail": v.reason, "tool": tool_name, "preview": action_preview(tool_name, tool_input)}, run_id=run_id)
             )
             return {"decision": "deny", "reason": FORBIDDEN_MSG.format(reason=v.reason)}
-        if not v.hold:
+        if not self.needs_human(v):
             self._record(run, channel, tool_name, tool_input, v, "allow")
             return {"decision": "allow", "reason": f"hub guard: {v.verdict}", "verdict": v.verdict}
         fp = action_fingerprint(tool_name, tool_input)
@@ -333,7 +345,7 @@ class GuardService:
         run = self.hub.store.find_run(p["run_id"]) if p.get("run_id") else None
         ctx = self.context_for(run, p.get("cwd"))
         v = classify(tool, ti, ctx)
-        return {**v.to_dict(), "hold": v.hold, "fingerprint": action_fingerprint(tool, ti), "cwd": str(ctx.cwd)}
+        return {**v.to_dict(), "hold": self.needs_human(v), "fingerprint": action_fingerprint(tool, ti), "cwd": str(ctx.cwd)}
 
     def policy(self) -> dict[str, Any]:
         return self.policy_store.load().to_dict()

@@ -16,6 +16,8 @@ You are running as a managed agent inside cfharness (agent id: {agent_id}).
 - You run non-interactively; nobody can answer questions mid-run. Make reasonable assumptions and state them.
 - Work only inside your working directory unless the task explicitly says otherwise.
 - Never perform destructive or irreversible operations (deleting data, force-pushing, dropping tables) unless the task explicitly requires it.
+- Bash runs in an OS sandbox. If a command fails with "Operation not permitted" on a file in your workspace (e.g. under .claude/),
+  change that file with the Edit/Write tools instead: they are not sandboxed and cfharness decides on them.
 - Finish with a short plain-text summary of the outcome."""
 
 

@@ -23,6 +23,7 @@ import binascii
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -45,6 +46,17 @@ log = logging.getLogger("cfharness.manager")
 HEARTBEAT_CHANNEL = "heartbeat"
 IMAGE_MAX_BYTES = 5 * 1024 * 1024
 IMAGE_MAX_COUNT = 4
+# Phím tắt của NGƯỜI trong hội thoại (tin `manager.chat` = HUMAN_ONLY): trả lời câu hỏi đang mở / duyệt approval mà không cần lệnh CLI
+_APPROVE_RE = re.compile(r"^\s*[!/]?\s*(?:cfharness\s+|agent-hub\s+)?(approve|allow|duyệt|duyet|cho\s*phép|deny|reject|từ\s*chối|tu\s*choi)"  # rename:keep
+                         r"\s+(ap_[0-9a-f]{6,})\b\s*(.*)$", re.I | re.S)
+_ANSWER_RE = re.compile(r"^\s*[!/]?\s*(?:cfharness\s+)?(?:answer|trả\s*lời)\s+(q_[0-9a-f]{6,})\s+([\d,\s]+)\s*$", re.I)
+_KEYS_RE = re.compile(r"^\s*\d(\s*[, ]\s*\d)*\s*\.?\s*$")
+_YES = {"ok", "oke", "okay", "okee", "yes", "y", "có", "co", "đồng ý", "dong y", "duyệt", "duyet", "duyệt đi", "approve", "cho phép", "cho phep",
+        "được", "duoc", "ừ", "uh", "làm đi", "ok làm đi", "approve tiếp đi", "duyệt tiếp đi", "đồng ý đi", "cho phép đi"}
+_NO = {"không", "khong", "no", "n", "deny", "từ chối", "tu choi", "thôi", "thoi", "đừng", "dung", "không cho", "khong cho"}
+# duyệt KHÔNG kèm mã: chỉ khi CẢ tin là một câu duyệt ngắn (không bắt "duyệt giúp t kế hoạch này")
+_APPROVE_ONLY = {"duyệt", "duyet", "duyệt đi", "duyet di", "duyệt tiếp", "duyệt tiếp đi", "duyệt luôn", "ok duyệt", "ok duyệt đi", "approve",
+                 "approve đi", "approve tiếp", "approve tiếp đi", "approve it", "cho phép", "cho phep", "cho phép đi", "cho phép tiếp đi"}
 _IMAGE_MAGIC = ((b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpg"), (b"GIF87a", "gif"), (b"GIF89a", "gif"))
 
 
@@ -357,13 +369,17 @@ class ManagerService:
         if files:
             text = f"{text}\n📎 {len(files)} ảnh: " + ", ".join(f.rsplit("/", 1)[-1] for f in files)
         busy = self._active_runs(aid, conv["id"])
+        if busy and busy[0]["status"] != "running":
+            r = busy[0]
+            raise Conflict(f"điều phối viên đang xử lý tin trước của hội thoại này (run {r['id']}, {r['status']}) — thử lại sau")
+        note = await self._owner_shortcut(channel, conv, text) if not files else None
+        if note:
+            prompt_text = f"{prompt_text}\n\n{note}"
         if busy:
             # run của hội thoại đang chạy → gửi tin vào run đó (steer) thay vì chồng run thứ hai cùng session
             from ..steer import steer
 
             r = busy[0]
-            if r["status"] != "running":
-                raise Conflict(f"điều phối viên đang xử lý tin trước của hội thoại này (run {r['id']}, {r['status']}) — thử lại sau")
             try:
                 res = await steer(self.hub, r["id"], self.render_prompt(r["id"], prompts.chat_prompt(channel, conv["id"], prompt_text)), by="user", channel=channel)
             except Conflict:
@@ -377,6 +393,69 @@ class ManagerService:
         if switched_from:
             out["switched_from"] = switched_from
         return out
+
+    # ------------------------------------------------------------------ phím tắt của người trong chat
+    async def _owner_shortcut(self, channel: str, conv: dict[str, Any], text: str) -> str | None:
+        """Tin NGƯỜI là câu trả lời ngắn cho câu hỏi đang mở của hội thoại ("1", "ok", "không", nhãn phương án) hoặc lệnh duyệt
+        (`approve ap_…`, `duyệt`) → hub làm NGAY với quyền người, trả ghi chú (chữ của HUB) gắn vào lượt chat. Không khớp → None."""
+        low = " ".join(text.lower().split()).rstrip(".!")
+        try:
+            m = _APPROVE_RE.match(text)
+            if m:
+                return await self._decide_approval(m.group(2), m.group(1).lower(), m.group(3).strip(), channel)
+            m = _ANSWER_RE.match(text)
+            if m:
+                keys = [k for k in re.split(r"[,\s]+", m.group(2)) if k]
+                return await self.hub.questions.answer_in_chat(m.group(1), keys, channel=channel)
+            if len(low) > 40:
+                return None
+            qs = [q for q in self.hub.questions.list("open", limit=50) if q.get("conversation_id") == conv["id"]]
+            if len(qs) == 1:
+                keys = self._keys_for(qs[0], low)
+                if keys:
+                    return await self.hub.questions.answer_in_chat(qs[0]["id"], keys, channel=channel)
+            if not qs and low in _APPROVE_ONLY:
+                pend = self.hub.approvals.list("pending", limit=10)
+                if len(pend) == 1:
+                    return await self._decide_approval(pend[0]["id"], "approve", "", channel)
+                if len(pend) > 1:
+                    return ("[hub] Người muốn duyệt nhưng có " + str(len(pend)) + " yêu cầu đang chờ: " + ", ".join(a["id"] for a in pend)
+                            + ". Hỏi người cái nào bằng ask_owner_permission (kind approve_action) cho từng yêu cầu.")
+        except HubError as e:
+            return f"[hub] Không xử lý được lệnh của người: {e.message}"
+        return None
+
+    @staticmethod
+    def _keys_for(q: dict[str, Any], low: str) -> list[str]:
+        opts = q.get("options") or []
+        if _KEYS_RE.match(low):
+            keys = [k for k in re.split(r"[,\s.]+", low) if k]
+            return keys if all(any(o["key"] == k for o in opts) for k in keys) else []
+        for o in opts:
+            if low == o["label"].lower():
+                return [o["key"]]
+        if q.get("action") or len(opts) == 2:  # câu hỏi có/không (xin phép: 1 = Cho phép, 2 = Từ chối)
+            if low in _YES:
+                return [opts[0]["key"]] if opts else []
+            if low in _NO and len(opts) >= 2:
+                return [opts[1]["key"]]
+        return []
+
+    async def _decide_approval(self, approval_id: str, verb: str, note: str, channel: str) -> str:
+        ap = self.hub.approvals.get(approval_id)
+        allow = not any(verb.startswith(w) for w in ("deny", "reject", "từ", "tu"))
+        if ap["status"] not in ("open", "waiting_human"):
+            return f"[hub] Approval {ap['id']} đã {ap['status']} trước đó — không đổi."
+        if self.daemon is None:
+            raise HubError("cần daemon để duyệt")
+        params = {"id": ap["id"], "by": "user", "channel": channel, "_audit": {"channel": channel, "actor": "user"}}
+        if note:
+            params["note"] = note[:300]
+        resp = await self.daemon.call_as(_auth.Caller(via="internal"), "approval.approve" if allow else "approval.deny", params)
+        if "error" in resp:
+            return f"[hub] Duyệt {ap['id']} lỗi: {resp['error'].get('message')}"
+        return (f"[hub] Người đã {'CHO PHÉP' if allow else 'TỪ CHỐI'} approval {ap['id']} ({ap['agent_id']}: {ap['tool_name']}). "
+                + ("Run của agent tự chạy tiếp; theo dõi tới khi xong." if allow else "Không thử lại thao tác đó."))
 
     def _home_conversation(self) -> dict[str, Any] | None:
         """Hội thoại của NGƯỜI hoạt động gần nhất (đích của notify_owner trong tick)."""

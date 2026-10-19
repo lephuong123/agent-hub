@@ -40,6 +40,7 @@ RATE_LIMITS = {
     "agent.create": ("max_agents_created_per_day", 86400, "agent tạo/ngày"),
     "task.create": ("max_tasks_per_hour", 3600, "task/giờ"),
     "run.start": ("max_runs_per_hour", 3600, "run ad-hoc/giờ"),
+    "system.job": ("max_system_ops_per_hour", 3600, "thao tác job hệ thống/giờ"),
 }
 
 
@@ -319,7 +320,8 @@ class ManagerPermissions:
         rl = RATE_LIMITS.get(method)
         if rl is None:
             return None
-        limit = int(self._cfg(rl[0], {"max_agents_created_per_day": 5, "max_tasks_per_hour": 20, "max_runs_per_hour": 10}[rl[0]]))
+        limit = int(self._cfg(rl[0], {"max_agents_created_per_day": 5, "max_tasks_per_hour": 20, "max_runs_per_hour": 10,
+                                       "max_system_ops_per_hour": 10}[rl[0]]))
         since = (datetime.now(timezone.utc) - timedelta(seconds=rl[1])).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         n = self.hub.store.conn.execute("SELECT COUNT(*) FROM audit_log WHERE kind=? AND actor LIKE 'manager:%' AND ts>=?", (method, since)).fetchone()[0]
         if int(n) >= limit:
@@ -550,6 +552,9 @@ class ManagerPermissions:
             if self._run_agent(p.get("id")) in mgrs:
                 return "không điều khiển run của agent điều phối viên"
             return None
+        if method == "system.job":
+            # chỉ job thuộc hệ thống NGƯỜI đã đăng ký, không bị người khoá (systems/service.job_check — service kiểm lại)
+            return self.hub.systems.job_check(str(p.get("label") or ""), str(p.get("action") or ""), manager=True)  # type: ignore[attr-defined]
         if method == "estop.set":
             if p.get("on") is not True:
                 return "điều phối viên chỉ được BẬT ESTOP — tắt ESTOP là việc của người"

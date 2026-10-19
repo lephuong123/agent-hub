@@ -96,6 +96,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "web": None,  # WEB: `cfharness web` sinh link đăng nhập = phiên NGƯỜI trên giao diện web
     "manager": {"set", "chat", "tick"},  # M7: chỉ định/ra lệnh điều phối viên = quyền người (manager.* ∈ HUMAN_ONLY)
     "chat": None,  # M7 terminal: `cfharness chat` = ra lệnh điều phối viên (manager.chat ∈ HUMAN_ONLY)
+    "system": {"scan", "add", "rm", "lock", "unlock", "pause", "resume", "restart"},  # job launchd chạy NGOÀI sandbox (system.* ∈ HUMAN_ONLY)
     "home": {"migrate"},  # đổi tên cfharness: chuyển HUB_HOME (dừng daemon, đổi thư mục, viết lại DB) — chỉ người
 }
 

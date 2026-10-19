@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Đăng nhập{% endblock %}
 {% block content %}
+<div class="login-hero">{{ _m.icon('logo', 'hero-mark') }}<span class="wordmark">cfharness</span><p class="login-tag">Điều phối cả đội agent của bạn — ngay trên máy này.</p></div>
 <section class="card narrow login">
   <h1>Đăng nhập cfharness</h1>
   {% if error %}<div class="flash error" role="alert">{{ error }}</div>{% endif %}

@@ -760,6 +760,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_question_parsers(sub, common)
 
+    # Hệ thống ngoài hub: cfharness system scan|list|show|add|rm|lock|unlock|pause|resume|restart (systems/cli.py)
+    from .systems.cli import add_parsers as _add_system_parsers
+
+    _add_system_parsers(sub, common)
+
     # đổi tên cfharness: home status|migrate (home_migrate.py)
     from .home_migrate import add_parsers as _add_home_parsers
 

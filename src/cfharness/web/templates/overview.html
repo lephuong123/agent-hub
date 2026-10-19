@@ -24,7 +24,7 @@
         {% if mgr.web_conv %}<input type="hidden" name="c" value="{{ mgr.web_conv }}">{% endif %}
         <label class="sr-only" for="mgr-quick">Gửi nhanh cho điều phối viên</label>
         <textarea id="mgr-quick" name="text" rows="2" required maxlength="8000" placeholder="Vd: “Có việc gì đang kẹt không?”"></textarea>
-        <button class="btn primary icon" type="submit" title="Gửi" aria-label="Gửi">{{ mc.icon('send') }}</button>
+        <button class="btn primary icon send" type="submit" title="Gửi" aria-label="Gửi">{{ mc.icon('arrow-up') }}</button>
       </form>
       {% elif mgr and mgr.available %}
       <p class="muted small">Chưa có điều phối viên — một agent bạn chỉ định để tự tạo agent/team, giao việc và báo lại. <a href="/manager">Chỉ định ở trang Điều phối</a>.</p>

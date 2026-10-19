@@ -44,6 +44,10 @@ DEFAULTS: dict[str, Any] = {
         "hook_timeout_s": 900,
         # kênh thứ hai: --permission-prompt-tool mcp__hub-guard__approve
         "permission_prompt_tool": True,
+        # `uncertain` (lệnh không phân tích chắc được: script động, python -c ghi file biến…) có giữ chờ người duyệt không.
+        # false = chỉ `destructive` mới hỏi người (uncertain → cho chạy + audit); vẫn giữ uncertain vùng hub/policy và tool MCP
+        # người đặt `require_approval`. Sandbox OS + permissions.deny vẫn áp. Người ít phải chạm nhất: false.
+        "hold_uncertain": True,
         # python chạy hook/hub-guard (null = python của daemon)
         "python": None,
         # gọi `git` để biết thay đổi chưa commit / nhánh đã push (FR-SG-01 nhóm Git)
@@ -160,16 +164,17 @@ DEFAULTS: dict[str, Any] = {
         "tick_interval_s": 1800,  # tick định kỳ dự phòng (chỉ chạy khi có việc đáng xử lý)
         "check_s": 10,  # chu kỳ vòng nền kiểm sự kiện gom được
         "event_debounce_s": 45,  # gom sự kiện trong cửa sổ này rồi mới tick (một tick cho nhiều sự kiện)
-        "approval_wait_min": 15,  # approval chờ người lâu hơn N phút → sự kiện cho tick
+        "approval_wait_min": 2,  # approval chờ người lâu hơn N phút → sự kiện cho tick (điều phối viên xin phép người bằng nút)
         "crash_repeat": 2,  # run crashed/failed lặp ≥ N lần/giờ cùng agent → sự kiện
         "max_pending_events": 40,  # trần sự kiện đưa vào một prompt tick (cũ hơn bị gộp đếm)
         "tick_budget_usd": 0.5,  # trần chi phí mỗi run tick
         "chat_budget_usd": None,  # trần mỗi run hội thoại (null = theo limits của agent)
         "rotate_after_turns": 80,  # sau N lượt cùng session → session mới (mang theo tóm tắt), ngoài autocompact của CLI
         # MGR-6: trần tần suất thao tác của manager (nhánh config được kiểm toàn vẹn; ngân sách/model/effort kẹp theo learn policy config_bounds)
-        "max_agents_created_per_day": 5,
-        "max_tasks_per_hour": 20,
-        "max_runs_per_hour": 10,
+        "max_agents_created_per_day": 20,
+        "max_tasks_per_hour": 60,
+        "max_runs_per_hour": 30,
+        "max_system_ops_per_hour": 10,  # tạm dừng/bật lại/khởi động lại job launchd của hệ thống đã đăng ký
     },
     # M3 — team & điều phối (FR-TK-*, FR-RT-12/16, FR-OB-03)
     "tasks": {
@@ -303,6 +308,14 @@ DEFAULTS: dict[str, Any] = {
             "flush_s": 2.0,
             "timeout_s": 5.0,
         },
+    },
+    # Hệ thống ngoài hub (systems/): app trong thư mục gốc + job launchd của chúng — người đăng ký, điều phối viên tạm dừng/bật lại/khởi động lại
+    "systems": {
+        "roots": None,  # null = theo workspace.allowed_roots
+        "launch_agents_dir": "~/Library/LaunchAgents",
+        "launchctl": "/bin/launchctl",
+        "timeout_s": 15,  # mỗi lệnh launchctl
+        "log_tail_bytes": 6000,  # system_get: đuôi log stdout/stderr mỗi job (đã che secret)
     },
     "workspace": {
         # MGR-1: gốc người cho phép đặt workspace `dir`. Ngoài ra luôn cho vùng scratch/worktree/eval của hub. Người thêm gốc tại đây (chỉ người).

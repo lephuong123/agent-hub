@@ -146,3 +146,26 @@ Agent: header + menu "⋯" (Tạm dừng/Xoá). Empty state có icon + hướng 
 Đổi hành vi/kỳ vọng test có chủ đích: nhãn localhost là `lh-badge` (không còn ký tự ⚠); "Hoạt động" không còn dòng `tool.start`.
 Chưa làm: gom nhóm nhiều lời gọi tool liên tiếp trên trang run; form agent nhiều bước; tab trên trang agent; trang Tự học/MCP/Chi phí/Nhật ký
 chỉ được tô lại bằng CSS mới (bố cục cũ).
+
+## UX v3 (2026-10-19) — giao diện kiểu claude.ai + logo mới
+Yêu cầu: "UI UX của web làm như claude — logo chế cái mới nhìn giống AI hơn". Chỉ sửa template + static (không đổi route/RPC/bảo mật).
+- **Token màu** (`app.css` `:root` + `@media (prefers-color-scheme: dark)`): sáng — nền `--bg #faf9f5`, thanh bên `--side-bg #f5f4ed`, thẻ
+  `--surface #fff`, viền `--line #e8e6dc`, chữ `--text #1f1e1d`/`--text-2 #3d3929`, nhấn cam đất `--accent #c96442` (`--accent-mark #d97757`
+  cho logo/icon), bong bóng người `--bubble #f0eee6`; tối — `--bg #262624`, `--side-bg #1f1e1d`, `--surface #30302e`, chữ `#f5f4ee`,
+  nhấn `#d97757`, bong bóng `#141413`. Màu trạng thái (ok/warn/danger/info/ask) dịu, ấm. Không có công tắc theme (theo hệ thống).
+- **Font**: chỉ font hệ thống — `--serif` (ui-serif/New York, Iowan, Palatino, Georgia…) cho h1, số liệu, lời chào, chữ điều phối viên và
+  tin agent; `--sans` cho UI. Nút/nhãn dạng pill, bo góc 12–22 px, bóng rất nhẹ.
+- **Bố cục**: thanh bên kiểu claude.ai (logo + nút thu gọn, nút tròn cam "Cuộc trò chuyện mới" → `/manager?new=1`, nhóm menu, "Gần đây" =
+  hội thoại điều phối viên khi ở trang Điều phối — block `side_extra`, đáy: người dùng + trạng thái daemon + Thoát). Thu gọn thành dải icon
+  bằng nút (`html.side-min`, nhớ ở `localStorage cfh_side` — tiện ích theo người xem; `static/early.js` đặt class trong `<head>` để không nháy).
+- **Điều phối** (`body.chat-page`): chiếm trọn chiều cao, `#mgr-log` cuộn bên trong, cột đọc `--read-w 768px`; tin người = bong bóng xám ấm
+  căn phải, trả lời điều phối viên không bong bóng, serif, vẫn `pre-wrap` + autoescape; ô nhập bo tròn lớn dính đáy với nút gửi tròn cam;
+  "đang nghĩ…" = logo xoay + chữ ánh lướt + con trỏ khi chữ chạy; màn trống = logo + lời chào serif lớn giữa màn, ô nhập + chip gợi ý dồn lên
+  giữa (`:has(#mgr-empty)`). Khung "Điều phối viên" (trạng thái + hành động gần đây) là cột phải ≥ 1280 px (nút ẩn/hiện, nhớ `cfh_mgr_info`),
+  ngăn kéo bên phải khi hẹp hơn. Giữ nguyên mọi id/attr mà `app.js`/htmx/SSE/test dùng.
+- **Logo "Chòm điều phối"** (vẽ gốc, không dựa logo Anthropic): lõi tia sáng 4 cánh (dấu hiệu AI) giữa một quỹ đạo có 4 nút agent (2 lớn,
+  2 nhỏ) — "đội agent quanh một bộ điều phối". `icons.svg#i-logo` (currentColor, hiện màu `--accent-mark`) cho thanh bên/chat/đăng nhập;
+  `favicon.svg` = ô vuông bo cam `#c96442` + dấu kem, đọc rõ ở 16 px trên nền sáng lẫn tối. Icon mới: `arrow-up`, `sidebar`, `panel`, `pen-new`.
+- Ảnh chụp lại (cùng tên): `docs/screenshots/web/*.png` và `docs/screenshots/web/v2/*.png` (1280 px sáng/tối, 900 px, 390 px).
+- Còn lệch so với claude.ai: không có font Copernicus/Styrene (dùng serif/sans hệ thống); menu nhiều mục hơn claude.ai (đủ các trang quản trị);
+  danh sách "Gần đây" chỉ hiện ở trang Điều phối (trang khác cần thêm một RPC mỗi lần tải — chưa làm); không có công tắc sáng/tối trong app.

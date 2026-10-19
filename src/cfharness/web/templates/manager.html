@@ -2,8 +2,15 @@
 {% import "_macros.html" as mc with context %}
 {% import "_manager.html" as mg with context %}
 {% block title %}Điều phối{% endblock %}
+{% block bodyclass %}{{ 'chat-page' if m.available and m.agent_id }}{% endblock %}
+{% block side_extra %}{% if m.available and m.agent_id %}
+<section class="side-recents" aria-label="Cuộc trò chuyện gần đây">
+  <div class="nav-group">Gần đây</div>
+  <ul class="mgr-convs">{% for c in convs[:30] %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}" title="{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}"><span class="ct">{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}</span><span class="cm">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></a></li>{% else %}<li class="muted small side-none">Chưa có cuộc trò chuyện nào.</li>{% endfor %}</ul>
+</section>
+{% endif %}{% endblock %}
 {% block content %}
-<div class="page-head"><div class="ph-title"><h1>Điều phối</h1><span class="sub">Nói mục tiêu bằng lời — điều phối viên tự tạo agent/team, giao việc, theo dõi và báo lại.</span></div></div>
+{% if not (m.available and m.agent_id) %}<div class="page-head"><div class="ph-title"><h1>Điều phối</h1><span class="sub">Nói mục tiêu bằng lời — điều phối viên tự tạo agent/team, giao việc, theo dõi và báo lại.</span></div></div>{% endif %}
 {% if not m.available %}
 <section class="card"><h2>Chưa sẵn sàng</h2>
 <p>Daemon đang chạy chưa có chức năng điều phối viên (<code>manager.*</code>). Cập nhật cfharness rồi khởi động lại daemon: <code class="cmd">cfharness daemon restart</code>.</p></section>
@@ -26,47 +33,57 @@
   <p class="small muted">Nên dùng một agent riêng cho vai trò này{% if templates %} — <a href="/agents/new?template={{ templates[0].name }}">tạo từ mẫu {{ templates[0].name }}</a>{% else %} (model mạnh, mô tả rõ vai trò){% endif %}. Trong terminal: <code class="cmd">cfharness manager set &lt;agent&gt;</code>.</p>
 </section>
 {% else %}
-<div class="mgr-grid">
-  <aside class="mgr-convs-col">
-    <div class="card-head"><h2>Cuộc trò chuyện</h2></div>
-    <a class="btn primary sm side-new" href="/manager?new=1">{{ mc.icon('plus') }}Cuộc trò chuyện mới</a>
-    <ul class="mgr-convs">{% for c in convs[:30] %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}"><span class="ct">{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}</span><span class="cm">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></a></li>{% else %}<li class="muted small">Chưa có cuộc trò chuyện nào.</li>{% endfor %}</ul>
-  </aside>
-  <section class="card mgr-chat">
-    <div class="card-head">
-      <h2>{{ mc.icon('chat') }} Trò chuyện với điều phối viên</h2>
-      <div class="row gap"><span class="pill muted" id="mgr-live">đang kết nối…</span><a class="btn sm" href="/manager?new=1">{{ mc.icon('plus') }}Mới</a></div>
-    </div>
-    {% if convs %}<details class="mgr-convs-m"><summary class="btn ghost sm">{{ mc.icon('menu') }}Cuộc trò chuyện ({{ convs|length }})</summary>
-      <ul class="mgr-convs">{% for c in convs[:15] %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}"><span class="ct">{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}</span><span class="cm">{{ c.updated_at|ago }}</span></a></li>{% endfor %}</ul></details>{% endif %}
+{%- set curl = (convs|selectattr('id', 'equalto', conv)|list) if conv else [] %}{%- set cur = curl[0] if curl else None %}
+<div class="mgr-grid" id="mgr-grid">
+  <section class="mgr-chat">
+    <header class="chat-head">
+      {% if convs %}<details class="mgr-convs-m menu"><summary class="btn ghost sm icon" title="Cuộc trò chuyện ({{ convs|length }})" aria-label="Cuộc trò chuyện">{{ mc.icon('menu') }}</summary>
+        <div class="menu-pop"><ul class="mgr-convs">{% for c in convs[:15] %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}"><span class="ct">{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}</span><span class="cm">{{ c.updated_at|ago }}</span></a></li>{% endfor %}</ul></div></details>{% endif %}
+      <div class="chat-title">
+        <h1 class="sr-only">Trò chuyện với điều phối viên</h1>
+        <span class="ct">{{ (cur.title if cur and cur.title else ('Cuộc trò chuyện ' ~ (cur.created_at|ts) if cur else 'Cuộc trò chuyện mới')) }}</span>
+        <span class="chat-sub">với điều phối viên <a href="/agents/{{ m.agent_id }}">{{ (m.row.name if m.row else m.agent_id) }}</a></span>
+      </div>
+      <div class="chat-tools">
+        <span class="pill muted" id="mgr-live">đang kết nối…</span>
+        <a class="btn ghost sm icon" href="/manager?new=1" title="Cuộc trò chuyện mới" aria-label="Cuộc trò chuyện mới">{{ mc.icon('pen-new') }}</a>
+        <button type="button" class="btn ghost sm icon" id="mgr-info-toggle" aria-controls="mgr-side" title="Thông tin điều phối viên" aria-label="Thông tin điều phối viên">{{ mc.icon('panel') }}</button>
+      </div>
+    </header>
     <div class="mgr-log" id="mgr-log" data-sse-manager="/sse/manager?since={{ since }}&amp;epoch={{ epoch }}" data-conv="{{ conv or '' }}" data-runs="{{ (conv_runs or [])|join(' ') }}" aria-live="polite">
-      {% for it in items %}{{ mg.item(it) }}{% else %}<div class="empty" id="mgr-empty">{{ mc.icon('chat') }}<b>{{ 'Cuộc trò chuyện mới' if not conv else 'Chưa có tin nhắn' }}</b><span>Nói mục tiêu bằng lời — ví dụ: “Tạo agent nghiên cứu để tóm tắt README của repo X rồi giao việc đó”.</span></div>{% endfor %}
+      {% for it in items %}{{ mg.item(it) }}{% else %}<div class="empty mgr-hero" id="mgr-empty">{{ mc.icon('logo', 'hero-mark') }}<b>{{ 'Hôm nay giao việc gì cho đội?' if not conv else 'Chưa có tin nhắn' }}</b><span>Nói mục tiêu bằng lời — điều phối viên tự tạo agent/team, giao việc, theo dõi và báo lại. Ví dụ: “Tạo agent nghiên cứu để tóm tắt README của repo X rồi giao việc đó”.</span></div>{% endfor %}
       {% if pending %}{{ mg.pending(pending) }}{% endif %}
     </div>
-    <div class="mgr-suggest" id="mgr-suggest">
-      <button type="button" data-fill="Có việc gì đang kẹt cần tôi không?">Có gì cần tôi?</button>
-      <button type="button" data-fill="Tóm tắt tình hình các agent và task hôm nay.">Tình hình hôm nay</button>
-      <button type="button" data-fill="Chi phí tuần này của từng team là bao nhiêu?">Chi phí tuần này</button>
-      <button type="button" data-fill="Giao việc mới: ">Giao việc mới…</button>
+    <div class="composer-wrap">
+      <form method="post" action="/manager/send" class="mgr-form" id="mgr-form">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="c" value="{{ conv or '' }}">
+        <label class="sr-only" for="mgr-text">Tin nhắn cho điều phối viên</label>
+        <textarea id="mgr-text" name="text" rows="1" required maxlength="8000" placeholder="Nhắn điều phối viên…"></textarea>
+        <div class="composer-bar">
+          <span class="composer-hint">Enter để gửi · Shift+Enter xuống dòng</span>
+          <button class="btn primary send" type="submit" title="Gửi" aria-label="Gửi">{{ mc.icon('arrow-up') }}<span class="sr-only">Gửi</span></button>
+        </div>
+      </form>
+      <div class="mgr-suggest" id="mgr-suggest">
+        <button type="button" data-fill="Có việc gì đang kẹt cần tôi không?">{{ mc.icon('inbox', 'sm') }}Có gì cần tôi?</button>
+        <button type="button" data-fill="Tóm tắt tình hình các agent và task hôm nay.">{{ mc.icon('home', 'sm') }}Tình hình hôm nay</button>
+        <button type="button" data-fill="Chi phí tuần này của từng team là bao nhiêu?">{{ mc.icon('dollar', 'sm') }}Chi phí tuần này</button>
+        <button type="button" data-fill="Giao việc mới: ">{{ mc.icon('task', 'sm') }}Giao việc mới…</button>
+      </div>
+      <p class="mgr-err flash error" id="mgr-err" role="alert" hidden></p>
+      <p class="chat-disclaimer">Điều phối viên là một agent và có thể nhầm. Thao tác phá huỷ luôn chờ bạn duyệt.</p>
     </div>
-    <form method="post" action="/manager/send" class="mgr-form" id="mgr-form">
-      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="c" value="{{ conv or '' }}">
-      <label class="sr-only" for="mgr-text">Tin nhắn cho điều phối viên</label>
-      <textarea id="mgr-text" name="text" rows="1" required maxlength="8000" placeholder="Nhắn điều phối viên… (Enter để gửi, Shift+Enter xuống dòng)"></textarea>
-      <button class="btn primary" type="submit">{{ mc.icon('send') }}<span>Gửi</span></button>
-    </form>
-    <p class="mgr-err flash error" id="mgr-err" role="alert" hidden></p>
   </section>
-  <aside class="mgr-side">
-    <section class="card">
-      <div class="card-head"><h2>Điều phối viên</h2></div>
+  <aside class="mgr-side" id="mgr-side" aria-label="Thông tin điều phối viên">
+    <div class="mgr-side-head"><h2>Điều phối viên</h2><button type="button" class="btn ghost sm icon" id="mgr-info-close" title="Đóng" aria-label="Đóng">{{ mc.icon('x') }}</button></div>
+    <section class="mgr-side-sec">
       <div id="mgr-status" hx-get="/partials/manager" hx-trigger="every 10s, mgr-tick from:body" hx-swap="innerHTML">{% include "_manager_status.html" %}</div>
       <div class="btn-row mgr-ctl">
         {{ mc.act("manager_unset", "Huỷ chỉ định", {"current": m.agent_id}, "btn sm danger", confirm="Huỷ chỉ định điều phối viên " ~ m.agent_id ~ "? Agent vẫn còn, chỉ mất vai trò.", next="/manager") }}
       </div>
     </section>
-    <section class="card">
-      <h2>Hành động gần đây</h2>
+    <section class="mgr-side-sec">
+      <h3>Hành động gần đây</h3>
       <ol class="feed" id="mgr-actions">{% for it in side_actions %}{{ mg.side_action(it) }}{% else %}<li class="empty" id="mgr-actions-empty">Chưa có hành động nào.</li>{% endfor %}</ol>
     </section>
   </aside>

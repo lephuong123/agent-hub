@@ -716,6 +716,11 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS questions_task ON questions(task_id);
     CREATE INDEX IF NOT EXISTS questions_run ON questions(run_id);
     """,
+    # v15 — điều phối viên xin phép người (`ask_owner_permission`): thao tác CHỐT sẵn {kind, method, params, target}, hub thực hiện
+    # với quyền người khi người chọn "Cho phép" (manager/owner_actions.py). NULL = câu hỏi thường.
+    """
+    ALTER TABLE questions ADD COLUMN action TEXT;
+    """,
 ]
 
 JSON_COLS = {
@@ -732,7 +737,7 @@ JSON_COLS = {
     # M5-A
     "tier_canaries": ("watch_agents", "eval", "observed", "baseline"),
     # UX — câu hỏi
-    "questions": ("options", "answer"),
+    "questions": ("options", "answer", "action"),
 }
 
 

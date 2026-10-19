@@ -159,7 +159,10 @@ EVENT_LEVELS: dict[str, str] = {
     "question.escalated": "summary",  # điều phối viên không chốt được / quá hạn → người (question_id, by, note)
     "question.answered": "summary",  # question_id, keys, text, by, channel
     "question.cancelled": "summary",  # question_id, reason
+    "question.action": "summary",  # xin phép: người cho phép → hub thực hiện (question_id, kind, target, ok, error?)
     "question.reminder": "summary",  # nhắc người: question_id, reminder_count, wait_s
+    # Hệ thống ngoài hub (systems/): thao tác job launchd (system, label, action pause|resume|restart, ok, by, reason, detail)
+    "system.job": "summary",
 }
 
 # Không ghi vào bảng `events` (chỉ ring buffer + stdout thô) — FR-OB-01.

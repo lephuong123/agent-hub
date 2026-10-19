@@ -49,6 +49,11 @@
 <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"><path d="M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z"/></symbol>
 <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
 <symbol id="i-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 4.5h6v6M19.5 4.5L11 13M17 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 4 18.5v-10A1.5 1.5 0 0 1 5.5 7H10"/></symbol>
-<symbol id="i-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M12 3l8 4.6v8.8L12 21l-8-4.6V7.6z"/><path d="M12 8.2l3.6 2v3.6L12 15.8l-3.6-2v-3.6z" fill="currentColor"/></symbol>
+<!-- Logo cfharness "Chòm điều phối": lõi tia sáng 4 cánh (AI) + quỹ đạo với 4 nút agent. Gốc, vẽ tay. -->
+<symbol id="i-logo" viewBox="0 0 32 32"><circle cx="16" cy="16" r="11.2" fill="none" stroke="currentColor" stroke-width="1.7" opacity=".42"/><path d="M16 6.6Q17.6 14.4 25.4 16Q17.6 17.6 16 25.4Q14.4 17.6 6.6 16Q14.4 14.4 16 6.6Z" fill="currentColor"/><circle cx="24" cy="8" r="2.7" fill="currentColor"/><circle cx="8" cy="24" r="2.7" fill="currentColor"/><circle cx="8" cy="8" r="1.9" fill="currentColor" opacity=".8"/><circle cx="24" cy="24" r="1.9" fill="currentColor" opacity=".8"/></symbol>
+<symbol id="i-arrow-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5.5M6 11.5l6-6 6 6"/></symbol>
+<symbol id="i-sidebar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M9.5 4.5v15"/></symbol>
+<symbol id="i-panel" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><path d="M14.5 4.5v15"/></symbol>
+<symbol id="i-pen-new" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.5H6.5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V12"/><path d="M17.6 4.2a1.8 1.8 0 0 1 2.6 2.6L13 14l-3.3.8.8-3.3z"/></symbol>
 </defs>
 </svg>

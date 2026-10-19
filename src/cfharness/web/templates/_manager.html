@@ -4,7 +4,7 @@
 {%- if it.kind == 'user' -%}
 <div class="mm user"{% if it.run_id %} data-run="{{ it.run_id }}"{% endif %}><div class="mm-who">Bạn{% if it.ts %} · {{ it.ts|ts }}{% endif %}</div><div class="mm-text">{{ it.text }}</div></div>
 {%- elif it.kind == 'manager' -%}
-<div class="mm mgr{{ ' notify' if it.notify }}"{% if it.run_id %} data-run="{{ it.run_id }}"{% endif %}><div class="mm-who">{% if it.notify %}{{ mc.icon('alert', 'sm') }}Điều phối viên báo{% else %}{{ 'Điều phối viên · nhịp' if it.tick else 'Điều phối viên' }}{% endif %}{% if it.ts %} · {{ it.ts|ts }}{% endif %}{% if it.run_id %} · <a href="/runs/{{ it.run_id }}">xem lượt chạy</a>{% endif %}</div><div class="mm-text">{{ it.text or '(không có nội dung)' }}</div></div>
+<div class="mm mgr{{ ' notify' if it.notify }}"{% if it.run_id %} data-run="{{ it.run_id }}"{% endif %}><div class="mm-who"><span class="mm-mark" aria-hidden="true">{{ mc.icon('logo') }}</span>{% if it.notify %}{{ mc.icon('alert', 'sm') }}Điều phối viên báo{% else %}{{ 'Điều phối viên · nhịp' if it.tick else 'Điều phối viên' }}{% endif %}{% if it.ts %} · {{ it.ts|ts }}{% endif %}{% if it.run_id %} · <a href="/runs/{{ it.run_id }}">xem lượt chạy</a>{% endif %}</div><div class="mm-text">{{ it.text or '(không có nội dung)' }}</div></div>
 {%- elif it.kind == 'actions' -%}
 <details class="mm-acts{{ ' err' if not it.ok }}"{% if it.run_id %} data-run="{{ it.run_id }}"{% endif %}><summary>{{ mc.icon('check' if it.ok else 'alert') }}<span>Đã làm <span class="n">{{ it['items']|length }}</span> việc</span>{% if it['items'] %}<span class="muted small">· {{ it['items'][-1].summary|first(60) }}</span>{% endif %}{{ mc.icon('chev-down', 'chev') }}</summary>{% for a in it['items'] %}{{ item(a) }}{% endfor %}</details>
 {%- elif it.kind == 'action' -%}
@@ -21,7 +21,7 @@
 {%- endmacro %}
 
 {% macro pending(run_id) -%}
-<div class="mm mgr pending" data-pending="{{ run_id }}"><div class="mm-who">Điều phối viên · <span class="spin">đang trả lời…</span> · <a href="/runs/{{ run_id }}">xem lượt chạy</a></div><div class="mm-text"></div></div>
+<div class="mm mgr pending" data-pending="{{ run_id }}"><div class="mm-who"><span class="mm-mark thinking" aria-hidden="true">{{ mc.icon('logo') }}</span>Điều phối viên · <span class="spin">đang nghĩ…</span> · <a href="/runs/{{ run_id }}">xem lượt chạy</a></div><div class="mm-text"></div></div>
 {%- endmacro %}
 
 {% macro side_action(it) -%}

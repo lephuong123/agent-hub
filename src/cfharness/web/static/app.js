@@ -52,8 +52,37 @@
   });
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape") return;
+    document.documentElement.classList.remove("mgr-info-open");
     var open = document.querySelectorAll("details.menu[open], details.tab-more[open]");
     for (var i = 0; i < open.length; i++) open[i].removeAttribute("open");
+  });
+
+  // ------------------------------------------------------------ thanh bên thu gọn (kiểu claude.ai) — nhớ theo người xem (localStorage)
+  var root = document.documentElement;
+  var sideBtn = document.getElementById("side-toggle");
+  if (sideBtn) sideBtn.addEventListener("click", function () {
+    var on = root.classList.toggle("side-min");
+    try { localStorage.setItem("cfh_side", on ? "min" : ""); } catch (_) {}
+  });
+  // khung "Thông tin điều phối viên": cột phải trên màn rộng (nhớ đóng/mở), ngăn kéo trên màn hẹp
+  var wide = window.matchMedia ? window.matchMedia("(min-width: 1280px)") : null;
+  function mgrInfo(open) {
+    if (wide && wide.matches) {
+      var closed = open === undefined ? !root.classList.contains("mgr-info-closed") : !open;
+      root.classList.toggle("mgr-info-closed", closed);
+      try { localStorage.setItem("cfh_mgr_info", closed ? "closed" : ""); } catch (_) {}
+    } else {
+      root.classList.toggle("mgr-info-open", open === undefined ? !root.classList.contains("mgr-info-open") : open);
+    }
+  }
+  var infoBtn = document.getElementById("mgr-info-toggle");
+  if (infoBtn) infoBtn.addEventListener("click", function (e) { e.stopPropagation(); mgrInfo(); });
+  var infoX = document.getElementById("mgr-info-close");
+  if (infoX) infoX.addEventListener("click", function () { mgrInfo(false); });
+  document.addEventListener("click", function (e) {
+    if (!root.classList.contains("mgr-info-open")) return;
+    var side = document.getElementById("mgr-side");
+    if (side && !side.contains(e.target)) root.classList.remove("mgr-info-open");
   });
 
   // ------------------------------------------------------------ ô nhập tự giãn (chat, steer)

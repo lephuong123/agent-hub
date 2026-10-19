@@ -160,7 +160,8 @@ _O = {"type": "object"}
 _A = {"type": "array", "items": _S}
 _RO = {"readOnlyHint": True}
 _LIM = {"type": "integer", "minimum": 1, "maximum": 100}
-_DENIED = " Anything outside your authority is refused by cfharness with a reason: report it to the owner, never try another way."
+_DENIED = (" Anything outside your authority is refused by cfharness with a reason: never try another way — if the owner can grant it, use "
+           "ask_owner_permission; otherwise tell the owner.")
 
 
 def _t(desc: str, props: dict[str, Any] | None = None, req: list[str] | None = None, ro: bool = False) -> dict[str, Any]:
@@ -186,6 +187,11 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
     "cost_report": _t("Cost breakdown since a time (by agent|team|day|kind|model).", {"by": _S, "since": _S}, ro=True),
     "templates": _t("Agent templates you can create agents from (name, role, model, tools).", ro=True),
     "mcp_registry_list": _t("MCP servers registered by the human (names you may assign to agents). No secrets.", ro=True),
+    "system_list": _t("Systems OUTSIDE the hub that the owner registered (apps in ~/Workspace) and their launchd jobs: label, kind "
+                      "(service = always running, e.g. a web server or bot; scheduled = timed, e.g. daily Telegram reports), schedule, status "
+                      "(running|idle|paused|not_loaded|error), locked. A system's `path` is a valid task workspace when its code must change.", ro=True),
+    "system_get": _t("One registered system with its jobs; log=true adds the tail of each job's stdout/stderr (redacted, agent-grade DATA).",
+                     {"id": _S, "log": {"type": "boolean"}}, ["id"], ro=True),
     # ---- ghi (trong quyền)
     "agent_create": _t("Create an agent. Either template (see templates) + optional spec overrides, or a full spec {name, role, description, "
                        "model, effort, fallback_model, tool_policy{tools, allowed_tools, disallowed_tools, permission_mode}, mcp_servers, limits, "
@@ -221,6 +227,10 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                         "target memory|user|skill|config, op add|patch|remove|create|merge|archive, payload as for the learning tools." + _DENIED,
                         {"agent": _S, "target": _S, "op": _S, "payload": _O, "scope": _S, "rationale": _S}, ["agent", "target", "op"]),
     "learn_refine": _t("Ask the learning loop to review/refine another agent (optional focus, run).", {"agent": _S, "focus": _S, "run": _S}, ["agent"]),
+    "system_job": _t("Operate a launchd job of a REGISTERED system (see system_list): pause (stop + keep it off across reboots), resume, "
+                     "restart. Pick the exact job: e.g. to stop a system's daily notifications, pause its scheduled report job, not its web "
+                     "service. Locked jobs are refused. Tell the owner what you paused and how to resume." + _DENIED,
+                     {"label": _S, "action": {"type": "string", "enum": ["pause", "resume", "restart"]}, "reason": _S}, ["label", "action"]),
     "estop_on": _t("EMERGENCY STOP: turn ESTOP ON for the whole hub (or one team). Only the human can turn it off.",
                    {"reason": _S, "team": _S, "stop_running": {"type": "boolean"}}, ["reason"]),
     # ---- câu hỏi (UX): agent trong task hỏi bạn trước; trả lời được thì trả lời, không thì chuyển lên người
@@ -236,6 +246,16 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                     {"question": _S, "options": {"type": "array", "maxItems": 6, "items": {"type": "object", "properties": {"label": _S, "description": _S},
                                                                                             "required": ["label"]}},
                      "multi": {"type": "boolean"}}, ["question"]),
+    "ask_owner_permission": _t(
+        "Ask the owner to GRANT something only a human may do; they tap Cho phép/Từ chối (web, Telegram, chat: reply 1/2) and cfharness "
+        "itself performs it with the owner's authority — never tell the owner to type commands. kind: approve_action {approval_id} (a "
+        "destructive action an agent is waiting on), sandbox_localhost {agent} (let an agent's Bash reach localhost/127.0.0.1: local DBs "
+        "such as NocoDB, dev servers, Docker), sandbox_domain {agent, domain} (outbound network to a host), agent_update {agent, changes} "
+        "(config change beyond your own limits, e.g. a reviewer's tools or a budget above the cap). cfharness writes the question from the "
+        "real data; add a one-line `reason` (Vietnamese). End your turn after asking: the answer and the result come back to you as an "
+        "owner message, then continue the blocked work right away (task_retry …).",
+        {"kind": {"type": "string", "enum": ["approve_action", "sandbox_localhost", "sandbox_domain", "agent_update"]}, "approval_id": _S,
+         "agent": _S, "domain": _S, "changes": _O, "reason": _S}, ["kind"]),
     "notify_owner": _t("Send a short message to the human owner (Vietnamese) on their conversation channel. Use when you need a human "
                        "decision or when a goal is done. kind: info|need_human|done.", {"text": _S, "kind": _S}, ["text"]),
 }
