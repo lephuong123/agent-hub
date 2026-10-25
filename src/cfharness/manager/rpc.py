@@ -4,7 +4,8 @@
   last_tick_run_id, last_reason, last_skip, running}, designated_at}`
 - `manager.set {agent_id|null}` (HUMAN_ONLY) → như `manager.get`
 - `manager.chat {channel, text, conversation_id?, reuse_latest?, images?:[{name, data_b64}]}` (HUMAN_ONLY; ảnh PNG/JPEG/GIF/WebP ≤ 5 MB, ≤ 4 → lưu
-  `<cwd hội thoại>/attachments/`, prompt bảo điều phối viên xem bằng Read; `text` được rỗng khi có ảnh) → `{conversation_id, run_id, session_id?, resumed?, steered?}`.
+  `<cwd hội thoại>/attachments/`, prompt bảo điều phối viên xem bằng Read; `text` được rỗng khi có ảnh;
+  `files?:[{name, data_b64}]` = tệp VĂN BẢN UTF-8 ≤ 10 MB, ≤ 4, tên do hub làm sạch → cùng thư mục `attachments/`) → `{conversation_id, run_id, session_id?, resumed?, steered?}`.
   Không có `conversation_id` → hội thoại MỚI (trừ `reuse_latest=true`: hội thoại gần nhất của đúng kênh). Hội thoại đang có run
   chạy → tin được steer vào run đó (`steered=true`). `conversation_id` phải cùng `channel` (khác → Conflict); hội thoại của manager CŨ →
   tự chuyển sang hội thoại gần nhất/mới của manager hiện tại trên kênh đó (`switched_from`).
@@ -54,7 +55,7 @@ def register_rpc(daemon: "Daemon") -> None:
 
     async def _chat(p: dict[str, Any]) -> dict[str, Any]:
         return await m.chat(str(_req(p, "channel")), str(p.get("text") or ""), conversation_id=p.get("conversation_id"),
-                            reuse_latest=bool(p.get("reuse_latest")), images=p.get("images"))
+                            reuse_latest=bool(p.get("reuse_latest")), images=p.get("images"), files=p.get("files"))
 
     methods: dict[str, Callable[[dict[str, Any]], Any]] = {
         "manager.get": lambda p: m.get(),

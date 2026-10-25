@@ -524,3 +524,67 @@ async def test_agent_in_run_cannot_read_bot_token(make, tg, hub_home):
     v = classify("Bash", {"command": f"cat {tok_file}"}, gctx(hub_home, hub_home.home / "agents" / "coder"))
     assert v.forbidden and v.rule == "hub_secret_read", v
     await stop(d)
+
+
+# ============================================================================ LLM-2: "Luôn cho phép" (chỉ approval đủ điều kiện, 2 bước)
+UNCERTAIN_CMD = 'eval "$CMD"'
+
+
+def open_uncertain(d: Daemon, run_id: str, *, fp: str = "fp-u"):
+    run = d.hub.store.get_run(run_id)
+    return d.hub.approvals.open(run, tool_name="Bash", tool_input={"command": UNCERTAIN_CMD}, tool_use_id="tu", fingerprint=fp,
+                                verdict={"klass": "system", "rule": "eval_dynamic", "verdict": "uncertain", "reason": "lệnh động"}, channel="hook")
+
+
+def sys_msg_with(tg: FakeTelegram, chat: int, aid: str, labels: list[str]):
+    return next((m for m in reversed(tg.sent(chat)) if aid in m["text"] and [b["text"] for b in FakeTelegram.buttons(m)] == labels), None)
+
+
+async def test_always_button_only_when_eligible_and_two_step(make, tg):
+    d = await make(runtime=FakeRuntime(hold=True))
+    rid = await held_run(d)
+    bad = open_approval(d, rid)  # destructive → KHÔNG có nút luôn cho phép
+    ok = open_uncertain(d, rid)
+    msg = await until(lambda: sys_msg_with(tg, BOSS, ok["id"], ["Cho phép", "Từ chối", "Luôn cho phép…"]))
+    assert "Luôn cho phép" in msg["text"] and UNCERTAIN_CMD not in msg["text"]  # tin có nút: chỉ chữ hub
+    await until(lambda: approval_sys_msg(tg, BOSS, bad["id"]))
+    assert not any("Luôn" in b["text"] for m in tg.sent(BOSS) if bad["id"] in m["text"] for b in FakeTelegram.buttons(m))
+    # bước 1: chưa quyết, tin hệ thống sửa tại chỗ thành bước 2 nói rõ luật (agent + tool + đúng vân tay)
+    await press(tg, BOSS, FakeTelegram.buttons(msg)[2]["callback_data"])
+    assert d.hub.approvals.get(ok["id"])["status"] == "open" and d.hub.guard.policy()["always_allow"] == []
+    step2 = tg.with_buttons(BOSS, ["Xác nhận LUÔN CHO PHÉP", "Huỷ"])
+    assert step2 in tg.edits(BOSS) and "Xác nhận bước 2" in step2["text"]
+    assert "exact" in step2["text"] and "coder" in step2["text"] and "Bash" in step2["text"] and ok["action_fingerprint"] in step2["text"]
+    # bước 2 → cho phép + luật hẹp, audit kênh telegram
+    await press(tg, BOSS, FakeTelegram.buttons(step2)[0]["callback_data"])
+    got = d.hub.approvals.get(ok["id"])
+    assert got["status"] == "allowed" and got["resolved_channel"] == f"telegram:{BOSS}"
+    rules = d.hub.guard.policy()["always_allow"]
+    assert len(rules) == 1 and rules[0]["kind"] == "exact" and rules[0]["agent_id"] == "coder" and rules[0]["fingerprint"] == ok["action_fingerprint"]
+    assert rules[0]["channel"] == f"telegram:{BOSS}"
+    assert any("luật luôn cho phép" in b["text"] for b in tg.calls_of("answerCallbackQuery"))
+    await stop(d)
+
+
+async def test_always_forged_or_ineligible_callback_rejected(make, tg):
+    d = await make(runtime=FakeRuntime(hold=True))
+    rid = await held_run(d)
+    bad = open_approval(d, rid, klass="git", cmd="git push --force origin main", fp="fp-g")
+    await until(lambda: approval_sys_msg(tg, BOSS, bad["id"]))
+    # dữ liệu bịa (không nonce/HMAC) → CallbackStore từ chối
+    for data in ("aa:" + bad["id"], "aac:" + bad["id"], "v1.AAAAAAAAAAAAAAAA.0123456789abcdef"):
+        await press(tg, BOSS, data)
+    rej = {a["data"]["reason"] for a in d.hub.audit.query(kind="telegram.callback_rejected")}
+    assert {"malformed", "unknown_or_used"} <= rej
+    # nonce HỢP LỆ nhưng cho approval không đủ điều kiện (vd nút cũ/bot lỗi): bước 1 không cấp xác nhận, bước 2 daemon từ chối
+    bot = d.hub.telegram
+    mk, _ = bot.callbacks.issue([("aa", bad["id"], "x")], BOSS, ttl=60)
+    await press(tg, BOSS, mk["inline_keyboard"][0][0]["callback_data"])
+    assert tg.with_buttons(BOSS, ["Xác nhận LUÔN CHO PHÉP", "Huỷ"]) is None
+    assert any("không đủ điều kiện" in b["text"] for b in tg.calls_of("answerCallbackQuery"))
+    mk, _ = bot.callbacks.issue([("aac", bad["id"], "x")], BOSS, ttl=60)
+    await press(tg, BOSS, mk["inline_keyboard"][0][0]["callback_data"])
+    assert d.hub.approvals.get(bad["id"])["status"] == "open"  # không quyết gì
+    assert d.hub.guard.policy()["always_allow"] == []
+    assert any(b["text"].startswith("Lỗi") for b in tg.calls_of("answerCallbackQuery"))
+    await stop(d)

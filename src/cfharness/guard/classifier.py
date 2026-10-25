@@ -9,8 +9,10 @@
                   xử lý NHƯ phá huỷ (mở approval, không chạy).
 Thêm cờ `forbidden`: agent tự duyệt/đụng socket điều khiển hub → từ chối thẳng (không mở approval), `guard.blocked`.
 
-Bước 2 của BRD (LLM phụ phân loại phần luật tĩnh không quyết được) CHƯA làm ở M1: mọi `uncertain` đều giữ chờ người
-(an toàn hơn, chấp nhận dương tính giả cao hơn ở nhóm lệnh động).
+Bước 2 của BRD (LLM phụ cho `uncertain`): KHÔNG ở đây (hàm thuần) mà ở daemon — `guard/second_opinion.py`, gọi từ
+`GuardService.check`, tắt mặc định (`guard.second_opinion.enabled`, chỉ người bật). Nó chỉ được HẠ `uncertain` → safe/write;
+không bao giờ chạm destructive/forbidden/tài nguyên bảo vệ. Luật "luôn cho phép" người tạo khi duyệt (`approve --always`) được
+tra ở `classify()` qua `GuardContext.always_allow` (chỉ khớp chính xác dấu vân tay thao tác, chỉ hạ `uncertain`).
 """
 
 from __future__ import annotations
@@ -87,7 +89,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "learn": {"propose", "rollback", "retry", "refine", "policy", "pin", "unpin", "review-cancel", "review_cancel", "cancel"},
     "knowledge": {"pin", "unpin"},
     "golden": {"add", "rm", "remove", "edit", "update", "from-run", "from_run", "restore", "dismiss"},
-    "guard": {"protect", "integrity", "sandbox", "repo-deny", "repo_deny"},
+    "guard": {"protect", "integrity", "sandbox", "repo-deny", "repo_deny", "always"},
     "config": {"set", "unset"},
     "secret": {"set", "rm", "remove", "delete"},
     "secrets": {"set", "rm", "remove", "delete"},
@@ -180,6 +182,7 @@ class Verdict:
     targets: list[str] = field(default_factory=list)
     protected_id: str | None = None
     forbidden: bool = False
+    net_urls: list[str] = field(default_factory=list)  # WEB-1: URL curl/wget trong lệnh Bash — daemon kiểm SSRF/DNS/domain
 
     @property
     def hold(self) -> bool:
@@ -207,6 +210,8 @@ class GuardContext:
     repo_deny: tuple[str, ...] = ()  # MGR-2: mẫu disallowedTools theo repo (người đặt) áp cho run có cwd trong repo
     extra_write_roots: tuple[str, ...] = ()  # R2-1: thư mục người cấp thêm cho tool ghi (guard.sandbox.extra_allow_write, add-dir)
     repo_deny_lookup: Callable[[str], list[str]] | None = None  # R2-2: mẫu chặn của repo ĐÍCH (git -C, npm --prefix, cd …)
+    agent_id: str | None = None  # agent của run (luật "luôn cho phép" theo agent)
+    always_allow: tuple[dict[str, Any], ...] = ()  # luật người tạo khi duyệt `--always` (policy/always_allow.yaml), chỉ hạ uncertain
 
     @property
     def home(self) -> str:
@@ -270,11 +275,57 @@ def classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardContex
     # gọi web/dịch vụ loopback (web cfharness, MCP HTTP của hub), chạy `claude` lồng = CẤM thẳng, không mở approval (tránh xin người
     # duyệt một thao tác nâng quyền của chính nó). Agent thường: các ca này vẫn giữ chờ người như cũ.
     if ctx.manager_run and not v.forbidden and v.verdict != "safe" and (
-            (v.protected_id or "").startswith("hub-") or v.rule in ("webfetch_local", "nested_claude") or tool_name in ("Task", "Agent")
+            (v.protected_id or "").startswith("hub-") or v.rule in ("nested_claude",) or v.rule in NET_BLOCK_RULES or tool_name in ("Task", "Agent")
             or any(_MGR_SELF_CFG.search(str(t)) for t in v.targets)):
         return Verdict("destructive", v.rule, v.klass or "hub", f"điều phối viên không được làm việc này ({v.reason})",
-                       v.targets, v.protected_id, forbidden=True)
+                       v.targets, v.protected_id, forbidden=True, net_urls=v.net_urls)
+    # luật "luôn cho phép" do NGƯỜI tạo khi duyệt (`approve --always`): chỉ HẠ uncertain đủ điều kiện, khớp chính xác dấu vân tay + agent
+    if ctx.always_allow and always_eligible(v):
+        rule = match_always(tool_name, tool_input, ctx)
+        if rule is not None:
+            return Verdict("write", "always_allow", v.klass, f"luật luôn-cho-phép {rule.get('id')} (người duyệt {rule.get('approval_id') or '-'}); "
+                           f"phân loại gốc: {v.rule}", v.targets, None, net_urls=v.net_urls)
     return v
+
+
+# tuỳ chọn curl/wget/httpie nhận giá trị (giá trị đó không phải URL đích)
+_NET_ARG_FLAGS = frozenset({"-o", "--output", "-O", "--output-document", "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-F",
+                            "--form", "-T", "--upload-file", "-H", "--header", "-u", "--user", "-A", "--user-agent", "-e", "--referer", "-b",
+                            "--cookie", "-c", "--cookie-jar", "-K", "--config", "-P", "--directory-prefix", "-x", "--proxy", "--resolve",
+                            "--connect-to", "-w", "--write-out", "--cacert", "--cert", "--key", "-m", "--max-time", "-a", "--append-output",
+                            "-i", "--input-file", "--header-file"})
+# WEB-1: luật mạng — run manager CẤM thẳng (không mở approval); agent thường giữ chờ người (trừ metadata: cấm với mọi agent)
+NET_BLOCK_RULES = frozenset({"webfetch_local", "ssrf_metadata", "ssrf_private_ip", "ssrf_internal_name", "ssrf_private_resolved",
+                             "url_scheme", "url_credentials", "url_no_host", "url_unparsable"})
+# không bao giờ cho "luôn cho phép"/LLM hạ cấp: luật mạng/SSRF, domain người chặn/ngoài allowlist (chính sách của người), MCP người
+# đánh dấu cần duyệt, lỗi bộ phân loại/không phân tích được đích, run không hoạt động/ESTOP
+NEVER_DOWNGRADE_RULES = NET_BLOCK_RULES | frozenset({
+    "url_dns_failed", "web_domain_denied", "web_domain_not_allowed", "mcp_require_approval", "classifier_error", "unknown_run", "estop",
+    "nesting_too_deep", "hub_secret_read", "self_approval",
+})
+NEVER_DOWNGRADE_KLASS = frozenset({"hub", "policy", "guard"})
+
+
+def always_eligible(v: Verdict) -> bool:
+    """`uncertain` có được hạ bởi luật luôn-cho-phép / LLM thứ hai không. Destructive/forbidden/tài nguyên bảo vệ/vùng hub → KHÔNG."""
+    return (v.verdict == "uncertain" and not v.forbidden and not v.protected_id and (v.klass or "") not in NEVER_DOWNGRADE_KLASS
+            and v.rule not in NEVER_DOWNGRADE_RULES)
+
+
+def match_always(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardContext) -> dict[str, Any] | None:
+    """Luật `exact`: cùng agent + cùng tool + cùng `action_fingerprint` (lệnh đã chuẩn hoá). Không có wildcard."""
+    fp = None
+    for r in ctx.always_allow:
+        if not isinstance(r, dict) or r.get("kind") != "exact" or r.get("disabled"):
+            continue
+        if r.get("agent_id") and r.get("agent_id") != ctx.agent_id:
+            continue
+        if r.get("tool") != tool_name:
+            continue
+        fp = fp or action_fingerprint(tool_name, tool_input)
+        if r.get("fingerprint") == fp:
+            return r
+    return None
 
 
 # §9: file cấu hình/bộ nhớ mà `claude` có thể nạp ở lượt sau (tự cài chỉ dẫn/hook/MCP cho chính điều phối viên)
@@ -322,7 +373,12 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
             cmd = ti.get("command")
             if not isinstance(cmd, str):
                 return Verdict("uncertain", "bash_no_command", "system", "Bash không có command dạng chuỗi")
-            return BashAnalyzer(ctx).run(cmd)
+            ba = BashAnalyzer(ctx)
+            bv = ba.run(cmd)
+            urls = list(dict.fromkeys(ba.state.get("net_urls") or []))[:20]
+            if urls:
+                bv = Verdict(bv.verdict, bv.rule, bv.klass, bv.reason, bv.targets, bv.protected_id, bv.forbidden, urls)
+            return bv
         if tool_name.startswith("mcp__"):
             return classify_mcp(tool_name, ti, ctx)
         if tool_name in FILE_WRITE_TOOLS:
@@ -330,13 +386,27 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
         if tool_name == "WebFetch":
             from urllib.parse import urlsplit
 
+            from .url_safety import static_check
+
             url = str(ti.get("url") or "")
             try:
                 host = urlsplit(url if "//" in url else "//" + url).hostname
             except ValueError:
                 host = None
             if host is None or local_host(host):
+                chk = static_check(url)
+                if chk.metadata:
+                    return Verdict("destructive", "ssrf_metadata", "network", f"WebFetch tới metadata đám mây ({chk.host})", [url[:200]], forbidden=True)
+                if not chk.ok and chk.rule.startswith("url_"):
+                    return Verdict("uncertain", chk.rule, "network", f"WebFetch: {chk.reason}", [url[:200]])
                 return Verdict("uncertain", "webfetch_local", "network", f"WebFetch tới host nội bộ/loopback ({host or url[:80]}) — web/MCP của hub, dịch vụ LAN", [url[:200]])
+            # WEB-1 (SSRF, ý tưởng Hermes url_safety): scheme, thông tin xác thực trong URL, metadata, tên nội bộ, IP dạng lạ.
+            # Phân giải DNS + danh sách domain: ở daemon (GuardService), không ở hàm thuần này.
+            chk = static_check(url)
+            if not chk.ok:
+                if chk.metadata:
+                    return Verdict("destructive", "ssrf_metadata", "network", f"WebFetch tới metadata đám mây: {chk.reason}", [url[:200]], forbidden=True)
+                return Verdict("uncertain", chk.rule, "network", f"WebFetch: {chk.reason}", [url[:200]])
         if tool_name in READ_ONLY_TOOLS:
             for k in ("file_path", "path", "notebook_path"):
                 v = ti.get(k)
@@ -1327,6 +1397,20 @@ class BashAnalyzer:
                     self.script_file(words[0], "chạy script")
                     return
         if base in ("curl", "wget", "http", "xh"):
+            # WEB-1: thu URL (đối số trông như URL) cho daemon kiểm SSRF/DNS/domain; metadata đám mây literal → CẤM với mọi agent
+            from .url_safety import static_check as _url_static
+
+            for i, t in enumerate(texts):
+                if t.startswith("-") or shell.DYN in t or not re.match(r"^(https?://|[a-z0-9.\[\]-]+\.[a-z]{2,}(:\d+)?(/|$)|\d+\.\d+\.\d+\.\d+)", t, re.I):
+                    continue
+                u = t if "://" in t else "http://" + t
+                # giá trị của tuỳ chọn (file ra, header, data…) không phải URL đích → không phân giải DNS; nhưng vẫn kiểm metadata
+                # (curl `-O <url>` là cờ không nhận giá trị — không để nó thành lối tránh)
+                if not (i and texts[i - 1] in _NET_ARG_FLAGS and "://" not in t):
+                    self.state.setdefault("net_urls", []).append(u[:500])
+                if _url_static(u).metadata:
+                    self.hit("destructive", "ssrf_metadata", "network", f"{base} tới metadata đám mây ({t[:80]})", [t[:200]], forbidden=True)
+                    return
             if self.ctx.manager_run:  # §9: điều phối viên không gọi dịch vụ loopback/LAN (web/MCP HTTP của hub) — sandbox là lớp chính
                 from urllib.parse import urlsplit
 
@@ -2424,7 +2508,8 @@ class BashAnalyzer:
         try:
             from ..workspace import GIT_ENV, GIT_SAFE_ARGS  # R2-4: probe git của guard chạy NGOÀI sandbox → tắt khoá chạy lệnh
 
-            return subprocess.run(["git", *GIT_SAFE_ARGS, "-C", cwd, *args], capture_output=True, text=True, timeout=3, env={**os.environ, **GIT_ENV})
+            return subprocess.run(["git", *GIT_SAFE_ARGS, "-C", cwd, *args], capture_output=True, encoding="utf-8", errors="replace", timeout=3,
+                                  env={**os.environ, **GIT_ENV})  # git xuất UTF-8; Windows mặc định cp1252
         except (OSError, subprocess.TimeoutExpired):
             return None
 

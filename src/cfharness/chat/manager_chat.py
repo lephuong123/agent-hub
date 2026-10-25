@@ -11,6 +11,8 @@
   `telegram:<chat_id>` (theo `payload.channel`) gửi trong
   KHUNG KẾT QUẢ AGENT (WT-8): dòng hệ thống in đậm do hub sinh, tiền tố cố định, nội dung agent TRỌN trong `<pre>` (escape),
   KHÔNG BAO GIỜ kèm nút. Dài → nhiều tin "phần i/n" (tối đa `MAX_CHUNKS`), quá nữa → cắt + chỉ dẫn xem trên web.
+- Tệp/ảnh người gửi (chat/media.py) → `manager.chat{images, files}`; dòng `[[file: <đường dẫn tương đối>]]` trong trả lời → gỡ khỏi
+  chữ và gửi tệp thành document (chỉ tệp thường trong cwd hội thoại, không symlink, trong trần kích thước, không chứa secret).
 - Run của điều phối viên kết thúc mà không có trả lời (lỗi, bị chặn, vượt ngân sách…) → báo ngắn (chữ của hub).
 """
 
@@ -75,7 +77,9 @@ class ManagerChat:
         return self._st(self.CONV).get(str(chat_id))
 
     # ------------------------------------------------------------------ từ người → điều phối viên
-    async def handle_text(self, chat_id: str, text: str, api: "TelegramApi", *, message_id: Any = None, conv: str | None = None) -> None:
+    async def handle_text(self, chat_id: str, text: str, api: "TelegramApi", *, message_id: Any = None, conv: str | None = None,
+                          images: list[dict[str, str]] | None = None, files: list[dict[str, str]] | None = None) -> None:
+        """`images`/`files` = `[{name, data_b64}]` (chat/media.py đã tải + kiểm sơ bộ; daemon kiểm lại ở `manager.chat`)."""
         from .bot import ChatError
 
         try:
@@ -89,6 +93,10 @@ class ManagerChat:
             return
         conv = conv or self.current(chat_id)
         params: dict[str, Any] = {"channel": f"telegram:{chat_id}", "text": text}
+        if images:
+            params["images"] = images
+        if files:
+            params["files"] = files
         if conv:
             params["conversation_id"] = conv
         try:
@@ -179,6 +187,11 @@ class ManagerChat:
         api = self.bot.api()
         if api is None or str(chat) not in self.bot.notify_chats():
             return
+        from .media import extract_file_markers
+
+        text, wanted = extract_file_markers(text)  # "deliverable mode": dòng `[[file: …]]` → gửi tệp sau phần chữ
+        if wanted and not text.strip():
+            text = "(gửi tệp kèm theo bên dưới)"
         for msg in self.format_reply(text, agent=agent, notify=notify, failed=failed):
             try:
                 res = await self.bot._send(api, chat, msg, html=True, reply_to=reply_to)
@@ -190,6 +203,11 @@ class ManagerChat:
                 self._put(self.MSGMAP, f"{chat}:{res['message_id']}", conv)
         if conv:
             self._put(self.CONVCHAT, conv, str(chat))
+        if wanted:
+            try:
+                await self.bot.media.deliver_files(api, chat, conv, wanted)
+            except Exception as e:
+                log.warning("không gửi được tệp của điều phối viên: %s", clip(e))
         self.sent_replies += 1
 
     async def _no_reply(self, run_id: str, etype: str) -> None:

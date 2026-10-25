@@ -74,14 +74,14 @@ def world(tmp_path):
     la.mkdir()
     a = ws / "viec-nhom-2"
     (a / "scripts").mkdir(parents=True)
-    (a / "package.json").write_text("{}")
-    (a / "README.md").write_text("# Việc nhóm 2\n")
+    (a / "package.json").write_text("{}", encoding="utf-8")
+    (a / "README.md").write_text("# Việc nhóm 2\n", encoding="utf-8")
     log = tmp_path / "bantin.log"
-    log.write_text("dòng 1\nGửi bản tin sáng OK\n")
+    log.write_text("dòng 1\nGửi bản tin sáng OK\n", encoding="utf-8")
     b = ws / "bot-khac"  # không có dấu hiệu dự án — nhận ra nhờ job trỏ vào
     b.mkdir()
     (ws / "_backup").mkdir()
-    (ws / "_backup" / "package.json").write_text("{}")
+    (ws / "_backup" / "package.json").write_text("{}", encoding="utf-8")
     (ws / "ghi-chu").mkdir()  # không dấu hiệu, không job → bỏ qua
     _plist(la, "com.vn2.web", ProgramArguments=["/usr/bin/node", "next", "start"], WorkingDirectory=str(a), KeepAlive=True)
     _plist(la, "com.vn2.bantin", ProgramArguments=["/usr/bin/node", str(a / "scripts" / "nhac-viec.ts"), "--sang"], StartInterval=900,
@@ -90,7 +90,7 @@ def world(tmp_path):
     _plist(la, "com.khac.bot", ProgramArguments=[str(b / "run.sh")], RunAtLoad=True)
     _plist(la, "com.hub.self", ProgramArguments=["/usr/local/bin/cfharness", "daemon", "start"], WorkingDirectory=str(a))  # job của chính hub
     _plist(la, "com.ngoai.root", ProgramArguments=["/opt/x/run"], KeepAlive=True)  # ngoài gốc
-    (la / "hong.plist").write_text("không phải plist")
+    (la / "hong.plist").write_text("không phải plist", encoding="utf-8")
     fake = FakeLaunchd({"com.vn2.web": 811, "com.vn2.bantin": None, "com.vn2.nhacviec": None, "com.khac.bot": 900})
     return {"ws": ws, "la": la, "fake": fake, "a": a}
 

@@ -796,6 +796,11 @@ ACTIONS: dict[str, Action] = {
                       "Đã cho phép thao tác", confirm=lambda f: f"Cho phép agent thực hiện thao tác phá huỷ này MỘT lần?\n{f.get('preview') or ''}", audit=False),
     "approve_fp": Action("approval.approve", lambda f: {"id": _req(f, "id"), "channel": CHANNEL, "by": "user", "false_positive": True, "note": "báo nhầm (web)"},
                          "Đã cho phép và đánh dấu báo nhầm", confirm="Cho phép và đánh dấu đây là BÁO NHẦM của bộ phân loại?", audit=False),
+    # "luôn cho phép" (LLM-2): luật hẹp do daemon dựng (`always_prepare`); LUÔN qua trang bước 2 nói rõ luật (dù không nặng)
+    "approve_always": Action("approval.approve", lambda f: {"id": _req(f, "id"), "channel": CHANNEL, "by": "user", "always": True,
+                                                            "note": "luôn cho phép (web)"},
+                             lambda r, f: "Đã cho phép và tạo luật luôn cho phép " + str(((r or {}).get("always_rule") or {}).get("id") or ""),
+                             confirm="Cho phép thao tác này VÀ tạo luật luôn cho phép (không hỏi lại thao tác y hệt)?", audit=False),
     "deny": Action("approval.deny", lambda f: {"id": _req(f, "id"), "channel": CHANNEL, "by": "user", "note": f.get("note") or None},
                    "Đã từ chối thao tác", confirm=lambda f: f"Từ chối thao tác này?\n{f.get('preview') or ''}", danger=True, audit=False,
                    note="Ghi chú cho agent (tuỳ chọn)"),
@@ -1000,6 +1005,16 @@ async def do_action(request: Request) -> Response:
         return await render(request, "confirm.html", {"message": msg + ("\n(Nhập lại giá trị ở trang Cài đặt và tích ô xác nhận.)" if name == "secret_set" else ""),
                                                       "fields": fields, "action": f"/do/{name}", "danger": act.danger, "back": back,
                                                       "note": act.note})
+    if name == "approve_always" and form.get("confirm2") != "yes":
+        # bước 2 BẮT BUỘC: trang nói rõ luật sẽ tạo (agent + tool + dấu vân tay / agent + host) — `always_offer` do daemon tính
+        try:
+            ap = await rpc(request, "approval.get", {"id": params["id"]})
+        except RpcError as e:
+            return flash_redirect(request, back, "error", err_text(e))
+        if not ap.get("always_offer"):
+            return flash_redirect(request, back, "error", f"Yêu cầu {ap.get('id')} không đủ điều kiện 'luôn cho phép' — chỉ cho phép một lần")
+        return await render(request, "approve2.html", {"a": ap, "view": P.action_view(ap), "fields": carry(form), "action": f"/do/{name}", "back": back,
+                                                       "always": ap["always_offer"]})
     if name in ("approve", "approve_fp") and form.get("confirm2") != "yes":
         # thao tác phá huỷ NẶNG (tài nguyên bảo vệ / lớp trong notify.telegram.confirm_classes + file) → bước 2, như Telegram (WT-5/6)
         try:

@@ -337,6 +337,12 @@ def purge_agent(hub: "Hub", agent_id: str, *, by: str, channel: str) -> dict[str
     if tp:
         shutil.rmtree(tp, ignore_errors=True)
     hub.store.update_agent(agent_id, {"status": "purged", "trash_path": None, "purge_after": None, "updated_at": now_iso()})
+    try:  # v17: purge = quên hẳn — xoá cả văn bản hội thoại đã chỉ mục của agent (session_search.py)
+        from .session_search import indexer_for
+
+        indexer_for(hub.store).purge_agent(agent_id)
+    except Exception:  # pragma: no cover
+        log.exception("không xoá được chỉ mục hội thoại của %s", agent_id)
     hub.publish(make_event("agent.purged", agent_id, {"agent_id": agent_id, "by": by, "trash_path": tp}))
     audit_record("agent.purged", agent_id, None, {"trash_path": tp, "actor": by, "channel": channel})
     return hub.store.get_agent(agent_id)  # type: ignore[return-value]

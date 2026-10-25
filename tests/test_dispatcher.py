@@ -175,7 +175,7 @@ async def test_spawn_failure_marks_run_failed(make_hub, hub_home):
 
 async def test_auth_block(make_hub, tmp_path):
     fx = tmp_path / "auth.jsonl"
-    fx.write_text('{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Not logged in · Please run /login","total_cost_usd":0}\n')
+    fx.write_text('{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Not logged in · Please run /login","total_cost_usd":0}\n', encoding="utf-8")
     hub, _ = make_hub()
     hub.runs._runtime = FakeRuntime(fx)
     hub.agents.create({"id": "a", "name": "A"})

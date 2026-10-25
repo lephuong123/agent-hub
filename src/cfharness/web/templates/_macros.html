@@ -49,6 +49,7 @@
   <p class="xcard-why">Vì sao cần duyệt: {% if a.matched_rule or a.destructive_class %}luật <b>{{ a.matched_rule or a.destructive_class }}</b>{% if a.destructive_class %} (lớp {{ a.destructive_class }}){% endif %}{% endif %}{% if a.reason %} — {{ a.reason }}{% endif %}{% if a.protected_resource_id %} · <b>tài nguyên được bảo vệ</b>{% endif %}</p>
   <div class="xcard-actions">
     {{ act("approve", "Cho phép một lần", {"id": a.id}, "btn ok", confirm="Cho phép agent " ~ a.agent_id ~ " thực hiện MỘT lần (" ~ v.length ~ " ký tự):\n\n" ~ v.text, next=next, ic="check") }}
+    {% if a.always_offer %}{{ act("approve_always", "Luôn cho phép", {"id": a.id}, "btn", confirm="Cho phép lần này VÀ tạo " ~ a.always_offer.summary ~ "?\n(Bước 2 hiện lại luật trước khi tạo.)", next=next, title="Tạo luật hẹp: không hỏi lại ĐÚNG thao tác này (gỡ: cfharness guard always rm)") }}{% endif %}
     {{ act("deny", "Từ chối", {"id": a.id}, "btn danger", confirm="Từ chối thao tác của " ~ a.agent_id ~ ":\n\n" ~ v.text, note="Ghi chú cho agent (tuỳ chọn)", next=next, ic="x") }}
     <span class="spacer"></span>
     {{ act("approve_fp", "Báo nhầm & cho phép", {"id": a.id}, "btn ghost sm", confirm="Cho phép và đánh dấu đây là BÁO NHẦM của bộ phân loại?", next=next, title="Thao tác này thật ra an toàn — giúp hub phân loại tốt hơn") }}

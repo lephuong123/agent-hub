@@ -91,6 +91,11 @@ HUMAN_ONLY: frozenset[str] = frozenset(
 )
 DOWNGRADE = frozenset({"learn.propose"})
 
+# Method ĐỌC mà kết quả phụ thuộc người gọi (phạm vi nhìn) → daemon phải xác định ĐẦY ĐỦ người gọi (cây tiến trình/env như method
+# ghi), không dùng đường nóng. Tìm kiếm hội thoại/memory: agent thường chỉ thấy của mình + team; điều phối viên/người thấy hết
+# (session_search.py, mcp_server/surface_rpc.py).
+SCOPED_READ: frozenset[str] = frozenset({"session.search", "session.search_self", "memory.search", "memory.search_self"})
+
 # Method GHI mà agent (trong run) ĐƯỢC gọi — mỗi method phải có lý do. Method ghi mới phải nằm ở HUMAN_ONLY hoặc ở đây
 # (test `test_every_mutating_method_is_classified` fail nếu chưa phân loại — tránh lặp lỗi phối hợp kiểu V2-N1).
 AGENT_ALLOWED_MUTATING: dict[str, str] = {

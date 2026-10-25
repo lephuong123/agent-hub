@@ -210,3 +210,48 @@ async def test_add_rejects_drive_root_and_matches_case(env, tmp_path):
         p = p.upper()
     s = await rpc(d, "system.add", {"path": p})
     assert sorted(j["label"] for j in s["jobs"]) == ["CF\\workflows web", "CF\\workflows-sync"]
+
+
+# ------------------------------------------------------------------ log: suy từ chuyển hướng `cmd /c … > file`
+def test_redirect_logs_parsing(monkeypatch, tmp_path):
+    from cfharness.systems.taskscheduler import redirect_logs
+
+    monkeypatch.setenv("LOGDIR", "C:\\logs")
+    assert redirect_logs("node.exe", "server.js > C:\\x.log") == (None, None)  # không qua cmd → `>` chỉ là đối số
+    assert redirect_logs("cmd.exe", "C:\\a.bat") == (None, None)  # không /c
+    assert redirect_logs("C:\\Windows\\System32\\cmd.exe", '/c "node s.js >> C:\\l\\out.log 2>&1"') == ("C:\\l\\out.log", "C:\\l\\out.log")
+    assert redirect_logs('"cmd"', '/d /s /C node s.js 1>"C:\\a b\\o.log" 2>C:\\e.log') == ("C:\\a b\\o.log", "C:\\e.log")
+    assert redirect_logs("cmd", "/c run.cmd 2> %LOGDIR%\\err.txt") == (None, "C:\\logs\\err.txt")
+    assert redirect_logs("cmd", "/c run.cmd > nul 2>&1") == (None, None)
+    assert redirect_logs("cmd", "/c echo a^>b") == (None, None)  # ^> là ký tự thường
+    rel_out, _ = redirect_logs("cmd", "/c run.cmd > o.log", cwd=str(tmp_path))
+    assert rel_out == str(tmp_path / "o.log")
+
+
+async def test_show_log_from_redirect_and_note(env):
+    d, w = env
+    a = w["a"]
+    log = a / "out.log"
+    log.write_text("dòng 1\ndòng 2 cuối\n", encoding="utf-8")
+    w["fake"].tasks["\\CF\\workflows-log"] = _task("\\CF\\workflows-log", "C:\\Windows\\System32\\cmd.exe",
+                                                    f'/c node server.js >> "{log}" 2>&1', cwd=str(a))
+    await rpc(d, "system.scan", {"apply": True})
+    s = await rpc(d, "system.get", {"id": "workflowswebapp", "log_bytes": 3000})
+    jobs = {j["label"]: j for j in s["jobs"]}
+    lg = jobs["CF\\workflows-log"]
+    assert "dòng 2 cuối" in lg["log"]["stdout"] and lg["log"]["stderr"] and "log_note" not in lg
+    note = jobs["CF\\workflows web"]["log_note"]  # node.exe trực tiếp → không có log, có ghi chú tiếng Việt
+    assert "Task Scheduler không lưu" in note and "2>&1" in note
+    log.unlink()
+    s = await rpc(d, "system.get", {"id": "workflowswebapp", "log_bytes": 3000})
+    assert "chưa có log" in {j["label"]: j for j in s["jobs"]}["CF\\workflows-log"]["log_note"]
+
+
+def test_cli_show_prints_log_note(capsys):
+    from cfharness.systems.cli import _print_system
+
+    _print_system({"id": "x", "title": "X", "path": "C:\\x", "jobs": [
+        {"label": "CF\\a", "status": "idle", "status_vi": "chờ", "schedule": "lúc 08:00", "log": {}, "log_note": "Task Scheduler không lưu stdout"}]},
+        logs=True)
+    assert "(log: Task Scheduler không lưu stdout)" in capsys.readouterr().out
+

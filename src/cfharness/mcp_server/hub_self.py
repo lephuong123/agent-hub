@@ -78,10 +78,19 @@ TOOLS: dict[str, dict[str, Any]] = {
         "inputSchema": {"type": "object", "properties": {"parent_id": _S, "child_id": _S}, "required": ["parent_id", "child_id"]},
     },
     "memory_search": {
-        "description": "Search your memory (agent/team/global MEMORY.md and USER.md), your skills and your past runs (prompt + summary) by keywords. "
-                       "Read-only, keyword match (no LLM). scope: all | memory | skills | transcripts.",
-        "inputSchema": {"type": "object", "properties": {"query": _S, "scope": {"type": "string", "enum": ["all", "memory", "skills", "transcripts"]},
-                                                         "limit": {"type": "integer", "minimum": 1, "maximum": 20}}, "required": ["query"]},
+        "description": "Search your memory (agent/team/global MEMORY.md and USER.md), your skills and your past conversations by keywords. "
+                       "Read-only, SQLite full-text search (no LLM); accents optional (Vietnamese 'cau hinh' matches 'cấu hình'). "
+                       "scope: all | memory | skills | transcripts. Past conversations cover prompts, steer messages, your final answers and "
+                       "tool calls/results of your own runs and your team's runs. "
+                       "Session modes (set `mode`): 'search' (query → ranked hits with message ids), 'around' (message_id → `window` "
+                       "messages before/after), 'read' (run_id or session_id → paged transcript, use offset), 'browse' (recent sessions).",
+        "inputSchema": {"type": "object", "properties": {
+            "query": _S, "scope": {"type": "string", "enum": ["all", "memory", "skills", "transcripts", "sessions"]},
+            "mode": {"type": "string", "enum": ["search", "around", "read", "browse"]},
+            "message_id": {"type": "integer"}, "window": {"type": "integer", "minimum": 1, "maximum": 50},
+            "run_id": _S, "session_id": _S, "agent_id": _S, "team_id": _S, "kind": _S, "role": _S,
+            "since": {"type": "string", "description": "ISO date/time or relative like 7d, 12h"}, "until": _S,
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "offset": {"type": "integer", "minimum": 0}}},
         "annotations": {"readOnlyHint": True},
     },
     "team_roster": {

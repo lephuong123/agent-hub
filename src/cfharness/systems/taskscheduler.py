@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import base64
 import json
+import ntpath
+import os
 import re
 import shlex
 import subprocess
@@ -119,6 +121,47 @@ def split_args(s: str | None) -> list[str]:
     return [t[1:-1] if len(t) >= 2 and t[0] == t[-1] == '"' else t for t in toks]
 
 
+_REDIR_RE = re.compile(r'(?<![\^\w])([12]?)>>?\s*(&[12]|"[^"]*"|[^\s"&|<>()]+)')
+_CMD_C_RE = re.compile(r"^\s*(?:/[a-bd-jl-z]\S*\s+)*/[ck]\s*(.*)$", re.I | re.S)
+NO_LOG_NOTE = ("Task Scheduler không lưu stdout/stderr của task. Muốn xem log qua `cfharness system show --log`, cho action chạy "
+               "qua cmd và chuyển hướng ra file, vd: cmd.exe /c \"node server.js >> C:\\logs\\app.log 2>&1\"")
+
+
+def redirect_logs(exe: str | None, args: str | None, cwd: str | None = None) -> tuple[str | None, str | None]:
+    """(stdout, stderr) suy ra từ chuyển hướng trong action `cmd /c …` (`>`, `>>`, `1>`, `2>`, `2>&1`); (None, None) nếu không có.
+
+    Chỉ nhận action chạy qua `cmd.exe` (/c hoặc /k) — với exe khác, `>` trong đối số không phải chuyển hướng. `%VAR%` được mở
+    theo môi trường hiện tại (cùng user với task); đường dẫn tương đối tính từ thư mục làm việc của task. `nul` bị bỏ qua.
+    """
+    name = ntpath.basename(str(exe or "").strip().strip('"')).lower()
+    if name not in ("cmd", "cmd.exe"):
+        return None, None
+    m = _CMD_C_RE.match(str(args or ""))
+    if not m:
+        return None, None
+    line = m.group(1).strip()
+    if len(line) >= 2 and line[0] == line[-1] == '"':  # cmd /c "…": cmd bỏ cặp ngoặc ngoài cùng
+        line = line[1:-1]
+    out: dict[str, str | None] = {"1": None, "2": None}
+    dup: dict[str, str] = {}
+    for fd, target in _REDIR_RE.findall(line):
+        fd = fd or "1"
+        if target.startswith("&"):
+            dup[fd] = target[1]
+            continue
+        p = ntpath.expandvars(target.strip('"'))
+        if not p or p.lower() in ("nul", "nul:", "con"):
+            out[fd] = None
+            continue
+        cwd_s = str(cwd or "").strip('"')
+        if not ntpath.isabs(p) and not os.path.isabs(p) and cwd_s:
+            p = os.path.join(cwd_s, p)
+        out[fd] = p
+    for fd, src in dup.items():  # 2>&1 (hoặc 1>&2): cùng file với luồng kia
+        out[fd] = out.get(src)
+    return out["1"], out["2"]
+
+
 def parse_task(t: dict[str, Any]) -> dict[str, Any] | None:
     """Job (cùng khoá với `launchd.parse_plist`) từ một task đã chiếu ra JSON; None nếu không phải của user/không hợp lệ."""
     if not isinstance(t, dict) or not t.get("mine"):
@@ -130,9 +173,12 @@ def parse_task(t: dict[str, Any]) -> dict[str, Any] | None:
     acts = [acts] if isinstance(acts, dict) else [a for a in acts if isinstance(a, dict)]
     program: list[str] = []
     cwd = None
+    stdout = stderr = None
     for a in acts:
         program += [str(a.get("exe") or "").strip('"')] + split_args(a.get("args"))
         cwd = cwd or (str(a.get("cwd") or "").strip('"') or None)
+        if stdout is None and stderr is None:
+            stdout, stderr = redirect_logs(a.get("exe"), a.get("args"), a.get("cwd"))
     trs = t.get("triggers") or []
     kind, sched = _schedule([trs] if isinstance(trs, dict) else list(trs))
     return {
@@ -142,8 +188,8 @@ def parse_task(t: dict[str, Any]) -> dict[str, Any] | None:
         "cwd": cwd,
         "kind": kind,
         "schedule": sched,
-        "stdout": None,  # Task Scheduler không có đường dẫn log riêng
-        "stderr": None,
+        "stdout": stdout,  # Task Scheduler không có log riêng — chỉ có khi action `cmd /c … > file` (redirect_logs)
+        "stderr": stderr,
         "disabled_in_plist": str(t.get("state")) == "Disabled",
         "_state": str(t.get("state") or ""),
         "_last": t.get("last"),
@@ -155,6 +201,7 @@ class TaskScheduler:
 
     name = "taskscheduler"
     noun = "task"
+    no_log_note = NO_LOG_NOTE
 
     def __init__(self, schtasks: str = "schtasks", powershell: str = "powershell", runner: Runner | None = None,
                  timeout: float = 15.0, cache_s: float = 2.0) -> None:

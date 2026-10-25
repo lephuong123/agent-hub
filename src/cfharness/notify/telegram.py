@@ -88,6 +88,33 @@ class TelegramApi:
             raise TelegramError(f"{method}: {self._scrub(d.get('description') or d)}", code=d.get("error_code"), retry_after=ra)
         return data.get("result")
 
+    async def download(self, file_id: str, max_bytes: int, *, timeout: float | None = None) -> bytes:
+        """Tải tệp người gửi: `getFile` → GET `<base>/file/bot<token>/<file_path>` (stream, dừng ngay khi vượt `max_bytes`).
+        Lỗi (gồm quá cỡ) → TelegramError đã gỡ token."""
+        info = await self.call("getFile", {"file_id": str(file_id)}, timeout=timeout)
+        fp = (info or {}).get("file_path") if isinstance(info, dict) else None
+        size = (info or {}).get("file_size") if isinstance(info, dict) else None
+        if not fp or not isinstance(fp, str) or ".." in fp.split("/") or fp.startswith("/"):
+            raise TelegramError("getFile: không có file_path hợp lệ")
+        if isinstance(size, int) and size > max_bytes:
+            raise TelegramError(f"tệp quá lớn ({size // 1024} KB)", code=413)
+        url = f"{self.base}/file/bot{self.token}/{fp}"
+        try:
+            async with _httpx.AsyncClient(timeout=timeout or max(self.timeout, 30.0)) as c:
+                async with c.stream("GET", url) as r:
+                    if r.status_code != 200:
+                        raise TelegramError(f"tải tệp: HTTP {r.status_code}", code=r.status_code)
+                    buf = bytearray()
+                    async for chunk in r.aiter_bytes():
+                        buf.extend(chunk)
+                        if len(buf) > max_bytes:
+                            raise TelegramError(f"tệp quá lớn (> {max_bytes // 1024} KB)", code=413)
+                    return bytes(buf)
+        except TelegramError:
+            raise
+        except Exception as e:  # lỗi mạng: URL chứa token → gỡ
+            raise TelegramError(f"tải tệp: {type(e).__name__}: {self._scrub(e)}") from None
+
 
 # ============================================================================ định dạng
 _EMOJI = re.compile(r":[a-z0-9_+\-]+:\s*")

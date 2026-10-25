@@ -4,7 +4,12 @@ Chữ ký (MCP server của luồng A gọi `approval.list|approve|deny` với c
 - `approval.list {status?: "open"|"pending"|"waiting_human"|"allowed"|"denied"|"cancelled"|"all", run_id?, agent_id?, limit?}`
   → list. `open` và `pending` đều = mọi request CHƯA quyết (open + waiting_human) — đúng nghĩa `open_requests`.
 - `approval.get {id}`
+  Mỗi approval trả về (list/get, cả `tui.snapshot`) có `always_offer`: None hoặc `{kind exact|web_domain, agent_id, tool,
+  fingerprint|domain, summary}` — tính bằng CÙNG hàm với `always_prepare` (`GuardService.always_offer`); TUI/web/Telegram chỉ hiện
+  nút "Luôn cho phép" khi khác None (bấm vẫn kiểm lại ở `approval.approve{always}`).
 - `approval.approve|deny {id | request_id, note?, channel? (vd "mcp:<client>"), actor?|by?}` → approval sau khi quyết.
+  `approval.approve {…, always: true}` → thêm luật "luôn cho phép" hẹp (chỉ verdict uncertain đủ điều kiện; destructive → lỗi,
+  không quyết gì); kết quả có `always_rule`. Gỡ: `guard.protect.rm {id: "aa_…"}` (chỉ người); xem: `guard.policy` → `always_allow`.
 - `guard.check` (hook/hub-guard), `guard.test {command|tool+input, cwd?, run_id?}`, `guard.policy`,
   `guard.protect.list|add|rm`, `notify.test {text?}`, `run.continue {id, prompt}`, `run.resume {id, prompt?}`,
   `agent.purge {id, confirm}` (confirm phải bằng id — người gõ lại).
@@ -62,13 +67,18 @@ def register_rpc(d: "Daemon") -> None:
         st = p.get("status") or "pending"
         if st == "open":
             st = "pending"
-        return hub.approvals.list(st, run_id=p.get("run_id"), agent_id=p.get("agent_id"), limit=int(p.get("limit") or 100))
+        return hub.guard.annotate_always(hub.approvals.list(st, run_id=p.get("run_id"), agent_id=p.get("agent_id"), limit=int(p.get("limit") or 100)))
 
     def decide(decision: str):
         def _f(p: dict[str, Any]) -> dict[str, Any]:
-            return hub.approvals.resolve(
-                _id(p), decision, by=str(p.get("by") or p.get("actor") or "user"), channel=str(p.get("channel") or "cli"), note=p.get("note")
-            )
+            by, channel = str(p.get("by") or p.get("actor") or "user"), str(p.get("channel") or "cli")
+            # `always` (chỉ approve): kiểm điều kiện TRƯỚC khi quyết (destructive/forbidden/vùng hub/SSRF → lỗi, không quyết gì),
+            # quyết như thường, rồi ghi luật hẹp vào policy/always_allow.yaml (có history; gỡ bằng `guard always rm`)
+            spec = hub.guard.always_prepare(_id(p)) if decision == "allowed" and p.get("always") is True else None
+            res = hub.approvals.resolve(_id(p), decision, by=by, channel=channel, note=p.get("note"))
+            if spec is not None:
+                res = {**res, "always_rule": hub.guard.always_commit(spec, by=by, channel=channel)}
+            return res
 
         return _f
 
@@ -108,7 +118,7 @@ def register_rpc(d: "Daemon") -> None:
     d.methods.update(
         {
             "approval.list": approval_list,
-            "approval.get": lambda p: hub.approvals.get(_id(p)),
+            "approval.get": lambda p: hub.guard.annotate_always(hub.approvals.get(_id(p))),
             "approval.approve": decide("allowed"),
             "approval.deny": decide("denied"),
             "guard.check": hub.guard.check,

@@ -11,12 +11,14 @@ An toàn:
   mã một lần do `cfharness notify telegram setup` sinh ra → chỉ ghi nhận chờ NGƯỜI xác nhận ở terminal.
 - Mọi lệnh đi qua `Daemon.call_as(auth.telegram_caller(...))` → cùng cổng HUMAN_ONLY, audit kênh `telegram:<chat_id>`.
 - Nút inline: nonce dùng một lần + chữ ký HMAC (notify/telegram.CallbackStore); MỌI "Cho phép" cần xác nhận bước 2 (như hộp
-  xác nhận của web — WT-5).
+  xác nhận của web — WT-5). "Luôn cho phép…" (LLM-2) chỉ khi daemon báo `always_offer`; cũng 2 bước, bước 2 nêu luật sẽ tạo.
 - Tin duyệt (WT-2): thao tác ĐẦY ĐỦ (không cắt; dài → nhiều tin hoặc tệp .txt), tham số MCP đầy đủ, đích khớp luật.
 - Nội dung do agent viết (lệnh, kết quả run) chỉ nằm trong khung `<pre>` có tiền tố cố định, KHÔNG BAO GIỜ cùng tin với nút (WT-8);
   tin có nút chỉ chứa chữ do hub sinh và trả lời (reply) vào tin nội dung.
 - Offset `getUpdates` được lưu TRƯỚC khi xử lý update → một update không bao giờ xử lý hai lần (kể cả sau restart).
 - Không gửi secret (che theo giá trị + mẫu), cắt kết quả run (`result_max_chars`) kèm chỉ dẫn xem trên web/TUI.
+- Ảnh/tệp người gửi (chat/media.py): chỉ tải SAU khi qua allowlist (người lạ không kích hoạt getFile); tệp điều phối viên đánh dấu
+  `[[file: …]]` → sendDocument riêng (không nút), chỉ tệp thường trong cwd hội thoại.
 """
 
 from __future__ import annotations
@@ -68,6 +70,7 @@ HELP = """cfharness qua Telegram — lệnh (bấm / để xem menu):
 /help — trợ giúp
 Tin nhắn thường (không bắt đầu bằng /) → gửi cho ĐIỀU PHỐI VIÊN (agent quản lý cả đội); reply vào tin của
   điều phối viên để tiếp tục đúng cuộc trò chuyện đó.
+Gửi ảnh (≤ 4, ≤ 5 MB) hoặc tệp văn bản kèm chú thích → điều phối viên xem; tin thoại chưa hỗ trợ.
 Xem đầy đủ (log, diff, dữ liệu MCP): cfharness top / web."""
 
 # T-A: menu lệnh "/" (setMyCommands) — chữ của hub, tiếng Việt; alias tiếng Anh cũ vẫn chạy
@@ -130,6 +133,9 @@ class TelegramBot:
         from .manager_chat import ManagerChat
 
         self.manager = ManagerChat(self)  # M7 MGR-UI: tin thường ↔ điều phối viên
+        from .media import MediaChat
+
+        self.media = MediaChat(self)  # ảnh/tệp người gửi → điều phối viên; tệp `[[file: …]]` điều phối viên đánh dấu → document
         from .questions_tg import QuestionChat
 
         self.questions = QuestionChat(self)  # UX v2: câu hỏi có lựa chọn của agent (nút số + trả lời bằng chữ)
@@ -188,9 +194,27 @@ class TelegramBot:
             self.hub.secrets.set(name, v)  # type: ignore[attr-defined]
         return v
 
-    def approval_markup(self, approval_id: str, chat_id: Any) -> dict[str, Any]:
-        markup, _ = self.callbacks.issue([("ap", approval_id, "Cho phép"), ("dn", approval_id, "Từ chối")], chat_id, ttl=self._ttl())
+    def approval_markup(self, approval_id: str, chat_id: Any, row: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Nút Cho phép / Từ chối; thêm "Luôn cho phép" CHỈ khi daemon báo đủ điều kiện (`GuardService.always_offer`)."""
+        rows = [[("ap", approval_id, "Cho phép"), ("dn", approval_id, "Từ chối")]]
+        if row is not None and self.always_offer(row):
+            rows.append([("aa", approval_id, "Luôn cho phép…")])
+        markup, _ = self.callbacks.issue_rows(rows, chat_id, ttl=self._ttl())
         return markup
+
+    def always_offer(self, row: dict[str, Any]) -> dict[str, Any] | None:
+        """Cùng kiểm tra với `approval.approve{always}` (`always_prepare`) — không tự suy ở bot."""
+        guard = getattr(self.hub, "guard", None)
+        return guard.always_offer(row) if guard is not None and hasattr(guard, "always_offer") else None
+
+    @staticmethod
+    def always_rule_text(offer: dict[str, Any]) -> str:
+        """Mô tả luật sẽ tạo (HTML đã escape). Host đã bị daemon giới hạn ở dạng DNS/IPv4 thuần; vân tay là hex do hub tính."""
+        if offer.get("kind") == "web_domain":
+            return (f"luật <b>web_domain</b>: agent {esc(offer.get('agent_id'))} được WebFetch tới ĐÚNG host <code>{esc(offer.get('domain'))}</code>"
+                    " (không gồm tên miền con) mà không hỏi lại")
+        return (f"luật <b>exact</b>: agent {esc(offer.get('agent_id'))} + tool <code>{esc(offer.get('tool'))}</code> + ĐÚNG dấu vân tay"
+                f" <code>{esc(offer.get('fingerprint'))}</code> (thao tác khác dù một ký tự vẫn hỏi lại)")
 
     def _ttl(self) -> float:
         return float(self.cfg().get("callback_ttl_s") or 604800)
@@ -436,8 +460,14 @@ class TelegramBot:
                 await self._send(api, cid, "Đã nhận mã ghép nối. Quay lại terminal để xác nhận đưa chat này vào allowlist.")
                 return
             self._audit_ignored(cid, chat.get("type"), "message", uid)
-            return
+            return  # người lạ: KHÔNG tải tệp/ảnh, không trả lời
         reply = m.get("reply_to_message")
+        from .media import has_media
+
+        if has_media(m):  # ảnh/tệp (chú thích = nội dung) → điều phối viên; thoại → báo chưa hỗ trợ
+            conv = self.manager.conv_of_message(cid, reply.get("message_id")) if isinstance(reply, dict) else None
+            await self.media.handle(cid, uid, m, api, conv=conv)
+            return
         if isinstance(reply, dict) and text and not text.startswith("/"):
             qid = self.questions.question_of_message(cid, reply.get("message_id"))
             if qid:  # UX v2: reply vào tin câu hỏi / ô "Trả lời bằng chữ" → câu trả lời (trước run.continue / điều phối viên)
@@ -747,7 +777,7 @@ class TelegramBot:
                     f"<pre>{esc(action[-1500:])}</pre>" + (f"\n<pre>{esc(tail.strip()[:600])}</pre>" if tail else ""))
             await self._send(api, chat, text, html=True, reply_to=first_mid)
         res = await self._send(api, chat, self.approval_sys_text(row, kind=kind, payload=payload, action_len=len(action)),
-                               self.approval_markup(aid, chat), html=True, reply_to=first_mid)
+                               self.approval_markup(aid, chat, row), html=True, reply_to=first_mid)
         self.callbacks.add_message(aid, chat, res.get("message_id"))
 
     def approval_sys_text(self, row: dict[str, Any], *, kind: str = "approval.open", payload: dict[str, Any] | None = None,
@@ -766,7 +796,7 @@ class TelegramBot:
             + (" · tài nguyên BẢO VỆ" if row.get("protected_resource_id") else ""),
             f"• Thao tác ĐẦY ĐỦ ở tin được trả lời phía trên ({action_len} ký tự){' — THAO TÁC NẶNG' if heavy else ''}.",
             "• Cho phép cần xác nhận bước 2. Hoặc trên máy: cfharness approve|deny " + esc(aid),
-        ])
+        ] + (["• Luôn cho phép (bước 2) = cho phép lần này VÀ tạo luật hẹp — chỉ có ở thao tác KHÔNG phá huỷ."] if self.always_offer(row) else []))
 
     # ------------------------------------------------------------------ nút inline
     async def _on_callback(self, cq: dict[str, Any], api: TelegramApi) -> None:
@@ -801,7 +831,7 @@ class TelegramBot:
         edit: str | None = None
         markup: dict[str, Any] | None = None
         try:
-            if a in ("ap", "apc", "dn"):
+            if a in ("ap", "apc", "dn", "aa", "aac"):
                 text, edit, markup = await self._decide(cid, a, ref, api)
             elif a == "eo":
                 await self.call(cid, "estop.set", {"on": False, "reason": f"Telegram {cid}"})
@@ -811,7 +841,7 @@ class TelegramBot:
                 text = "Đã huỷ bước xác nhận — yêu cầu vẫn chờ duyệt."
                 ap = await self.call(cid, "approval.get", {"id": ref})
                 if ap.get("status") in PENDING:
-                    edit, markup = self.approval_sys_text(ap, kind="approvals.list"), self.approval_markup(ref, cid)
+                    edit, markup = self.approval_sys_text(ap, kind="approvals.list"), self.approval_markup(ref, cid, ap)
                     self.callbacks.add_message(ref, cid, mid)
             elif a == "cx0":
                 text = "Đã huỷ — ESTOP vẫn BẬT."
@@ -847,6 +877,20 @@ class TelegramBot:
             text = (f"⚠️ <b>Xác nhận bước 2</b> — cho phép MỘT lần yêu cầu {esc(approval_id)} của agent {esc(ap.get('agent_id'))} (run {esc(ap.get('run_id'))}),"
                     f" luật {esc(ap.get('matched_rule'))}{' — THAO TÁC NẶNG' if heavy else ''}.\nĐọc lại thao tác ĐẦY ĐỦ ở tin phía trên trước khi xác nhận.")
             return "Cần xác nhận bước 2 — xem tin này.", text, markup
+        if action == "aa":  # LLM-2: "luôn cho phép" nặng ít nhất như cho phép → 2 bước; bước 2 nói rõ luật sẽ tạo
+            offer = ap.get("always_offer") or self.always_offer(ap)
+            if not offer:
+                return f"Yêu cầu {approval_id} không đủ điều kiện 'luôn cho phép' — chỉ cho phép một lần.", None, None
+            markup, _ = self.callbacks.issue([("aac", approval_id, "Xác nhận LUÔN CHO PHÉP"), ("cx", approval_id, "Huỷ")], cid,
+                                             ttl=min(self._ttl(), 3600))
+            text = (f"⚠️ <b>Xác nhận bước 2 — LUÔN cho phép</b> yêu cầu {esc(approval_id)} (run {esc(ap.get('run_id'))}): cho phép lần này VÀ tạo "
+                    f"{self.always_rule_text(offer)}.\nGỡ: cfharness guard always rm &lt;id luật&gt;. Đọc lại thao tác ĐẦY ĐỦ ở tin phía trên.")
+            return "Cần xác nhận bước 2 — xem tin này.", text, markup
+        if action == "aac":  # daemon kiểm lại (`always_prepare`): không đủ điều kiện → lỗi, approval giữ nguyên
+            res = await self.call(cid, "approval.approve", {"id": approval_id, "channel": f"telegram:{cid}", "by": "user", "always": True,
+                                                            "note": f"luôn cho phép qua Telegram (user {uid})"})
+            rid = ((res or {}).get("always_rule") or {}).get("id") if isinstance(res, dict) else None
+            return f"Đã CHO PHÉP {approval_id} + tạo luật luôn cho phép {rid or '?'}.", None, None
         if action == "dn":
             await self.call(cid, "approval.deny", {"id": approval_id, "channel": f"telegram:{cid}", "by": "user", "note": f"từ chối qua Telegram (user {uid})"})
             return f"Đã TỪ CHỐI {approval_id}.", None, None

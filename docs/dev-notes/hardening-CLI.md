@@ -145,4 +145,4 @@ Không gọi `claude` thật, không tốn tiền.
 | FR-RT-17 "hook gọi `cfharness hook <event>`" | settings gọi `python -I -m cfharness.observe_hook <event>` (không phụ thuộc PATH, khởi động nhanh); `cfharness hook` là cùng thân, cho người/script | Ghi lại |
 | FR-RT-15 ma trận tương thích | Ma trận theo CỜ (`runtime.claude.flag_matrix`), phiên bản lạ không bị kiểm cờ (chỉ cảnh báo) | Ghi khoá cấu hình |
 | FR-MS-02 `hub_cancel(run_id\|task_id)` | Có; `task_id` dừng cả run của task con (`origin_task_id`) | — |
-| FR-MS-02 `hub_memory_search` | Tìm từ khoá trên file + bảng `runs` (prompt/summary), chưa có FTS5/transcript đầy đủ | Ghi "FTS5" là mục tiêu, hiện là tìm từ khoá tất định |
+| FR-MS-02 `hub_memory_search` | ~~Tìm từ khoá trên file + bảng `runs` (prompt/summary), chưa có FTS5/transcript đầy đủ~~ — ĐÃ CÓ (v17): transcript qua FTS5 trên toàn bộ hội thoại, thêm `hub_session_search` + `cfharness search` | Xem `docs/dev-notes/session-search.md` |

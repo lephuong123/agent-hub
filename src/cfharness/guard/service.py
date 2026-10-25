@@ -13,9 +13,11 @@ Mỗi quyết định ghi `guard_decisions` (append-only) + event `guard.decisio
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -25,7 +27,7 @@ from ..errors import HubError
 from ..events import make_event
 from ..redact import redact
 from ..store import now_iso
-from .classifier import GuardContext, Verdict, action_fingerprint, classify
+from .classifier import GuardContext, Verdict, action_fingerprint, always_eligible, classify
 from .policy import PolicyStore
 from .runtime import pattern_matches
 
@@ -54,6 +56,18 @@ def _ts(s: str | None) -> float | None:
         return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
+
+
+_HOST_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*")
+
+
+def always_summary(offer: dict[str, Any]) -> str:
+    """Câu mô tả luật "luôn cho phép" sẽ tạo (chữ hub; host/agent là dữ liệu — mỗi bề mặt tự escape khi vẽ)."""
+    if offer.get("kind") == "web_domain":
+        return (f"luật web_domain: agent {offer.get('agent_id')} được WebFetch tới ĐÚNG host {offer.get('domain')} "
+                "(không gồm tên miền con, không wildcard) mà không hỏi lại")
+    return (f"luật exact: agent {offer.get('agent_id')} + tool {offer.get('tool')} + ĐÚNG dấu vân tay thao tác "
+            f"{offer.get('fingerprint')} (lệnh khác dù một ký tự vẫn hỏi lại)")
 
 
 def is_hub_mcp_config(cfg: dict[str, Any], port: int = 8765) -> bool:
@@ -86,6 +100,9 @@ class GuardService:
             self.policy_store.ensure()
         except OSError:  # pragma: no cover
             log.exception("không tạo được policy/")
+        from .second_opinion import SecondOpinion
+
+        self.second = SecondOpinion(hub)
 
     # ------------------------------------------------------------------ context
     def enabled(self) -> bool:
@@ -126,7 +143,168 @@ class GuardService:
             repo_deny=tuple(self.repo_deny_patterns(c)),
             repo_deny_lookup=self.repo_deny_patterns,
             extra_write_roots=tuple(os.path.realpath(os.path.expanduser(str(x))) for x in ((self.hub.config.get("guard.sandbox") or {}).get("extra_allow_write") or [])),
+            agent_id=(run or {}).get("agent_id"),
+            always_allow=tuple(r for r in self.always_rules() if r.get("kind") == "exact") if run else (),
         )
+
+    # ------------------------------------------------------------------ luật "luôn cho phép" (người tạo khi duyệt `--always`)
+    def always_rules(self) -> list[dict[str, Any]]:
+        try:
+            return self.policy_store.always_list()
+        except Exception:  # pragma: no cover — đọc lỗi = không luật nào (giữ chờ người)
+            return []
+
+    def always_domain(self, agent_id: str | None, host: str) -> dict[str, Any] | None:
+        h = (host or "").lower().rstrip(".")
+        for r in self.always_rules():
+            if r.get("kind") == "web_domain" and r.get("domain") == h and (not r.get("agent_id") or r.get("agent_id") == agent_id):
+                return r
+        return None
+
+    def always_prepare(self, approval_id: str) -> dict[str, Any]:
+        """Kiểm approval có được "luôn cho phép" không (TRƯỚC khi quyết) → bản luật (chưa ghi). Sai → HubError, không đổi gì.
+        Destructive / forbidden / tài nguyên bảo vệ / vùng hub / luật SSRF / MCP người đánh dấu → KHÔNG BAO GIỜ."""
+        from ..auth import require_human
+
+        require_human("tạo luật luôn cho phép")
+        return self._always_spec(self.hub.approvals.get(approval_id))
+
+    def always_offer(self, row: dict[str, Any]) -> dict[str, Any] | None:
+        """Approval có được hiện nút "Luôn cho phép" không — CÙNG kiểm tra với `always_prepare` (không lặp logic ở client).
+        → `{kind, agent_id, tool, fingerprint|domain, summary}` (summary = câu tiếng Việt mô tả luật sẽ tạo) hoặc None.
+        Chỉ đọc (không cần người) — TUI/web/Telegram dùng để quyết hiện nút; khi bấm, `approval.approve{always}` kiểm lại."""
+        try:
+            spec = self._always_spec(row)
+        except (HubError, KeyError, TypeError, ValueError):
+            return None
+        out = {k: spec[k] for k in ("kind", "agent_id", "tool", "fingerprint", "domain") if k in spec}
+        out["summary"] = always_summary(out)
+        return out
+
+    def annotate_always(self, rows: list[dict[str, Any]] | dict[str, Any]) -> Any:
+        """Gắn `always_offer` vào (các) approval trả cho client (approval.list|get, tui.snapshot)."""
+        for r in [rows] if isinstance(rows, dict) else rows:
+            if isinstance(r, dict) and "id" in r:
+                r["always_offer"] = self.always_offer(r)
+        return rows
+
+    def _always_spec(self, row: dict[str, Any]) -> dict[str, Any]:
+        from urllib.parse import urlsplit
+
+        from .classifier import always_eligible
+
+        if row.get("status") not in ("open", "waiting_human"):
+            raise HubError(f"approval {row['id']} đã {row.get('status')} — không tạo được luật luôn cho phép")
+        if (row.get("kind") or "destructive") != "destructive" or not row.get("tool_name") or not row.get("action_fingerprint"):
+            raise HubError("chỉ approval của guard (thao tác tool) mới có lựa chọn luôn cho phép")
+        risk = str(row.get("risk_level") or "")
+        if risk != "uncertain":
+            raise HubError(f"thao tác mức '{risk or '?'}' (phá huỷ) không thể 'luôn cho phép' — chỉ duyệt MỘT lần (bỏ --always)")
+        rule = str(row.get("matched_rule") or "")
+        ti = row.get("tool_input") if isinstance(row.get("tool_input"), dict) else {}
+        base = {"agent_id": row["agent_id"], "tool": row["tool_name"], "approval_id": row["id"], "from_rule": rule,
+                "preview": str(row.get("preview") or "")[:300]}
+        if rule == "web_domain_not_allowed" and row["tool_name"] == "WebFetch":
+            try:
+                host = (urlsplit(str(ti.get("url") or "")).hostname or "").lower().rstrip(".")
+            except ValueError:
+                host = ""
+            if not host or len(host) > 253 or not _HOST_RE.fullmatch(host):  # chỉ host DNS/IPv4 thuần (chữ hiện ở nút/xác nhận)
+                raise HubError("không đọc được host hợp lệ của URL — duyệt một lần")
+            return {**base, "kind": "web_domain", "domain": host}
+        v = Verdict(risk, rule, row.get("destructive_class"), str(row.get("reason") or ""), [], row.get("protected_resource_id"))
+        if not always_eligible(v):
+            raise HubError(f"luật '{rule}' (nhóm {row.get('destructive_class') or '-'}) không cho 'luôn cho phép' — chỉ duyệt một lần")
+        return {**base, "kind": "exact", "fingerprint": row["action_fingerprint"]}
+
+    def always_commit(self, spec: dict[str, Any], *, by: str = "user", channel: str = "cli") -> dict[str, Any]:
+        from ..auth import require_human
+
+        require_human("tạo luật luôn cho phép")
+        r = self.policy_store.always_add({**spec, "by": by, "channel": channel})
+        self._rebaseline()
+        self._policy_changed("always.add", r, {"by": by, "channel": channel})
+        return r
+
+    def always_rm(self, rid: str, *, by: str = "user", channel: str = "cli") -> dict[str, Any]:
+        from ..auth import require_human
+
+        require_human("gỡ luật luôn cho phép")
+        r = self.policy_store.always_rm(rid, by=by)
+        self._rebaseline()
+        self._policy_changed("always.rm", r, {"by": by, "channel": channel})
+        return r
+
+    def _rebaseline(self) -> None:
+        """Ghi hợp lệ vào policy/ của daemon → chụp lại bản chuẩn integrity (nếu không sẽ bị khôi phục như tamper)."""
+        mon = getattr(self.hub, "integrity", None)
+        if mon is not None:
+            try:
+                mon.rebaseline("daemon_write")
+            except Exception:  # pragma: no cover
+                log.exception("không chụp lại được bản chuẩn sau khi ghi always_allow")
+
+    # ------------------------------------------------------------------ WEB-1: mạng (SSRF/DNS/domain) — trong daemon
+    resolver: Any = None  # test gán hàm giả (host → [ip…]); None = socket.getaddrinfo
+
+    async def net_check(self, run: dict[str, Any] | None, tool_name: str, tool_input: dict[str, Any], v: Verdict, ctx: GuardContext,
+                        *, dns: bool = True) -> Verdict:
+        """Sau `classify`: WebFetch (và URL curl/wget của Bash) — danh sách domain người đặt, phân giải DNS (mọi IP phải công khai),
+        allowlist (cấu hình hoặc `manager.web_domains=allowlist`). Chỉ NÂNG mức (không bao giờ hạ)."""
+        from .classifier import SEVERITY
+        from .url_safety import domain_matches, resolve_check, static_check
+
+        def _up(a: Verdict, b: Verdict) -> Verdict:  # hoà mức → lấy luật mạng (không để luật hạ-được-bằng-LLM che luật domain)
+            return a if a.forbidden or SEVERITY[b.verdict] < SEVERITY[a.verdict] else b
+
+        if v.forbidden:
+            return v
+        web = tool_name == "WebFetch"
+        urls = [str(tool_input.get("url") or "")] if web else list(v.net_urls or []) if tool_name == "Bash" else []
+        if not urls:
+            return v
+        wcfg = self.hub.config.get("guard.web")
+        wcfg = wcfg if isinstance(wcfg, dict) else {}
+        deny = [str(x) for x in (wcfg.get("deny_domains") or []) if isinstance(x, str)]
+        allow = [str(x) for x in (wcfg.get("allow_domains") or []) if isinstance(x, str)]
+        mgr = ctx.manager_run
+        mode = str(self.hub.config.get("manager.web_domains") or "any") if mgr else "any"
+        if mgr and mode not in ("any", "allowlist"):
+            mode = "allowlist"  # giá trị lạ (sửa tay) → hẹp nhất
+        try:
+            dns_timeout = min(30.0, max(0.5, float(wcfg.get("dns_timeout_s") or 3)))
+        except (TypeError, ValueError):
+            dns_timeout = 3.0
+        agent_id = (run or {}).get("agent_id")
+        out = v
+        for url in urls[:20]:
+            st = static_check(url)
+            if not st.ok or not st.host:
+                continue  # WebFetch: classify đã xử lý; Bash: sandbox mạng + luật loopback của classifier
+            host = st.host
+            pat = domain_matches(host, deny)
+            if pat:
+                return Verdict("destructive", "web_domain_denied", "network", f"{tool_name}: domain {host} bị người chặn (guard.web.deny_domains: {pat})",
+                               [url[:200]], forbidden=True, net_urls=v.net_urls)
+            if dns and wcfg.get("resolve_dns", True) is not False and st.ips == ():
+                rc = await asyncio.to_thread(resolve_check, host, resolver=self.resolver, timeout_s=dns_timeout)
+                if not rc.ok:
+                    if rc.metadata:
+                        return Verdict("destructive", "ssrf_metadata", "network", f"{tool_name}: {rc.reason}", [url[:200]], forbidden=True, net_urls=v.net_urls)
+                    if rc.rule == "ssrf_private_resolved" and (web or mgr):
+                        if mgr:
+                            return Verdict("destructive", rc.rule, "network", f"điều phối viên không được gọi mạng nội bộ: {rc.reason}", [url[:200]],
+                                           forbidden=True, net_urls=v.net_urls)
+                        out = _up(out, Verdict("uncertain", rc.rule, "network", f"WebFetch: {rc.reason} (SSRF)", [url[:200]]))
+                        continue
+                    if rc.rule == "url_dns_failed" and web:
+                        out = _up(out, Verdict("uncertain", rc.rule, "network", f"WebFetch: {rc.reason}", [url[:200]]))
+                        continue
+            if web and (allow or (mgr and mode == "allowlist")) and not domain_matches(host, allow) and not self.always_domain(agent_id, host):
+                why = "manager.web_domains=allowlist" if mgr and mode == "allowlist" else "guard.web.allow_domains"
+                out = _up(out, Verdict("uncertain", "web_domain_not_allowed", "network", f"WebFetch: {host} ngoài danh sách domain cho phép ({why})",
+                                        [url[:200]]))
+        return out
 
     def repo_deny_patterns(self, cwd: str | None) -> list[str]:
         """MGR-2: mẫu chặn theo repo do NGƯỜI đặt (policy/repo_deny.yaml) áp cho mọi run có cwd trong repo."""
@@ -239,17 +417,18 @@ class GuardService:
         return frozenset(out)
 
     # ------------------------------------------------------------------ record
-    def _record(self, run: dict[str, Any] | None, channel: str, tool_name: str, tool_input: dict[str, Any], v: Verdict, action: str, approval_id: str | None = None) -> None:
+    def _record(self, run: dict[str, Any] | None, channel: str, tool_name: str, tool_input: dict[str, Any], v: Verdict, action: str, approval_id: str | None = None,
+                classifier: str = "static", extra: dict[str, Any] | None = None) -> None:
         inp = json.dumps(redact(tool_input), ensure_ascii=False, default=str)[:4000]
         self.hub.store.conn.execute(
             "INSERT INTO guard_decisions (ts, run_id, agent_id, channel, tool_name, input_redacted, matched_rule, classifier, verdict, action, reason, approval_request_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (now_iso(), (run or {}).get("id"), (run or {}).get("agent_id"), channel, tool_name, inp, v.rule, "static", v.verdict, action, v.reason[:500], approval_id),
+            (now_iso(), (run or {}).get("id"), (run or {}).get("agent_id"), channel, tool_name, inp, v.rule, classifier, v.verdict, action, v.reason[:500], approval_id),
         )
         self.hub.publish(
             make_event(
                 "guard.decision",
                 (run or {}).get("agent_id"),
-                {"tool": tool_name, "verdict": v.verdict, "matched_rule": v.rule, "classifier": "static", "action": action, "channel": channel, "approval_id": approval_id},
+                {"tool": tool_name, "verdict": v.verdict, "matched_rule": v.rule, "classifier": classifier, "action": action, "channel": channel, "approval_id": approval_id},
                 run_id=(run or {}).get("id"),
                 source="hook",
             )
@@ -259,14 +438,16 @@ class GuardService:
                 f"guard.{action}",
                 (run or {}).get("agent_id"),
                 (run or {}).get("id"),
-                {"tool": tool_name, "input": tool_input, "verdict": v.to_dict(), "channel": channel, "approval_id": approval_id, "actor": f"agent:{(run or {}).get('agent_id')}"},
+                {"tool": tool_name, "input": tool_input, "verdict": v.to_dict(), "channel": channel, "approval_id": approval_id, "actor": f"agent:{(run or {}).get('agent_id')}",
+                 "decided_by": classifier if classifier != "static" else ("human" if approval_id else "static"), **(extra or {})},
             )
 
     # ------------------------------------------------------------------ check
     # uncertain luôn giữ dù `hold_uncertain=false`: vùng hub/policy (sandbox là lớp 2 nhưng đây là tài nguyên của chính hub) và
     # tool MCP người đánh dấu cần duyệt
-    ALWAYS_HOLD_KLASS = ("hub", "policy")
-    ALWAYS_HOLD_RULES = ("mcp_require_approval",)
+    # WEB-1: luật mạng (SSRF/DNS/ngoài allowlist) cũng luôn giữ — chính sách mạng của người, không để `hold_uncertain=false` mở
+    ALWAYS_HOLD_KLASS = ("hub", "policy", "network")
+    ALWAYS_HOLD_RULES = ("mcp_require_approval", "web_domain_not_allowed", "ssrf_private_resolved", "url_dns_failed")
 
     def needs_human(self, v: Verdict) -> bool:
         if not v.hold:
@@ -291,6 +472,12 @@ class GuardService:
             return {"decision": "deny", "reason": "[cfharness] Emergency stop is on — all tool calls are blocked. End your turn."}
         ctx = self.context_for(run, p.get("cwd") if channel == "hook" and p.get("cwd") else None)
         v = classify(tool_name, tool_input, ctx)
+        try:
+            v = await self.net_check(run, tool_name, tool_input, v, ctx)
+        except Exception as e:  # lỗi kiểm mạng → giữ chờ người (fail-closed), không bao giờ cho qua
+            log.exception("net_check lỗi")
+            if not v.forbidden:
+                v = Verdict("uncertain", "url_dns_failed", "network", f"kiểm mạng lỗi: {type(e).__name__}", v.targets)
         if v.forbidden:
             self._record(run, channel, tool_name, tool_input, v, "deny")
             self.hub.publish(
@@ -302,6 +489,11 @@ class GuardService:
             return {"decision": "allow", "reason": f"hub guard: {v.verdict}", "verdict": v.verdict}
         fp = action_fingerprint(tool_name, tool_input)
         ap = self.hub.approvals
+        # LLM thứ hai (tắt mặc định): CHỈ hạ uncertain đủ điều kiện → safe/write; mọi kết quả khác → giữ chờ người như cũ
+        if always_eligible(v) and self.second.enabled() and ap.find_pending(run_id, fp) is None:
+            v, res = await self._second_opinion(run, channel, tool_name, tool_input, v, ctx, p.get("max_wait_s"))
+            if res is not None:
+                return res
         ticket = ap.consume_ticket(run.get("session_id"), fp, run_id)
         if ticket is not None:
             self._record(run, channel, tool_name, tool_input, v, "allow", ticket["id"])
@@ -338,17 +530,53 @@ class GuardService:
         self.hub.runs.pause_for_human(run_id, aid)
         return {"decision": "deny", "reason": WAITING_MSG.format(aid=aid, timeout=int(timeout)), "approval_id": aid, "waiting_human": True}
 
+    async def _second_opinion(self, run: dict[str, Any], channel: str, tool_name: str, tool_input: dict[str, Any], v: Verdict, ctx: GuardContext,
+                              max_wait: Any) -> tuple[Verdict, dict[str, Any] | None]:
+        role = ""
+        try:
+            role = str((self.hub.store.get_agent(run["agent_id"]) or {}).get("role") or "")
+        except Exception:  # pragma: no cover
+            pass
+        if ctx.manager_run:
+            role = (role + " (hub coordinator/manager)").strip()
+        mw = float(max_wait) - 5 if isinstance(max_wait, (int, float)) and max_wait > 0 else None
+        try:
+            op = await self.second.ask(tool_name, tool_input, cwd=str(ctx.cwd), role=role, rule=v.rule, why=v.reason, max_wait_s=mw)
+        except Exception as e:  # pragma: no cover — ask() đã tự bắt lỗi; phòng hờ
+            from .second_opinion import Opinion
+
+            op = Opinion("needs_human", f"second opinion lỗi: {type(e).__name__}", "error")
+        info = {"opinion": op.verdict, "opinion_reason": op.reason[:400], "opinion_source": op.source, "cost_usd": op.cost_usd, "model": op.model,
+                "static_verdict": v.to_dict()}
+        if op.downgrade and always_eligible(v):  # kiểm lại điều kiện ngay trước khi hạ (phòng thủ)
+            nv = Verdict(op.verdict, f"llm:{v.rule}", v.klass, f"second opinion ({op.source}): {op.reason}"[:500], v.targets)
+            self._record(run, channel, tool_name, tool_input, nv, "allow", classifier="llm", extra=info)
+            if nv.verdict == "safe":  # _record chỉ audit khi verdict khác safe — quyết định do LLM luôn phải có audit
+                audit_record("guard.allow", run["agent_id"], run["id"], {"tool": tool_name, "input": tool_input, "verdict": nv.to_dict(), "channel": channel,
+                                                                          "actor": f"agent:{run['agent_id']}", "decided_by": "llm", **info})
+            return nv, {"decision": "allow", "reason": f"hub guard: {op.verdict} (second opinion)", "verdict": op.verdict, "decided_by": "llm"}
+        audit_record("guard.second_opinion", run["agent_id"], run["id"], {"tool": tool_name, "input": tool_input, "channel": channel, "decided_by": "human_pending", **info})
+        if op.source in ("llm", "cache") and op.reason:
+            v = Verdict(v.verdict, v.rule, v.klass, f"{v.reason} | LLM: {op.reason}"[:500], v.targets, v.protected_id, v.forbidden, v.net_urls)
+        return v, None
+
     # ------------------------------------------------------------------ helpers cho CLI/RPC
-    def test(self, p: dict[str, Any]) -> dict[str, Any]:
+    async def test(self, p: dict[str, Any]) -> dict[str, Any]:
         tool = str(p.get("tool") or "Bash")
         ti = p.get("input") if isinstance(p.get("input"), dict) else {"command": str(p.get("command") or "")}
         run = self.hub.store.find_run(p["run_id"]) if p.get("run_id") else None
         ctx = self.context_for(run, p.get("cwd"))
         v = classify(tool, ti, ctx)
+        try:
+            v = await self.net_check(run, tool, ti, v, ctx)
+        except Exception as e:  # pragma: no cover
+            v = Verdict("uncertain", "url_dns_failed", "network", f"kiểm mạng lỗi: {type(e).__name__}")
         return {**v.to_dict(), "hold": self.needs_human(v), "fingerprint": action_fingerprint(tool, ti), "cwd": str(ctx.cwd)}
 
     def policy(self) -> dict[str, Any]:
-        return self.policy_store.load().to_dict()
+        d = self.policy_store.load().to_dict()
+        d["always_allow"] = self.policy_store.always_list(include_disabled=True)
+        return d
 
     def protect_add(self, p: dict[str, Any]) -> dict[str, Any]:
         ops = p.get("ops")
@@ -359,6 +587,8 @@ class GuardService:
         return r.to_dict()
 
     def protect_rm(self, p: dict[str, Any]) -> dict[str, Any]:
+        if str(p.get("id") or "").startswith("aa_"):  # luật luôn-cho-phép: gỡ qua cùng RPC chỉ-người (guard.protect.rm)
+            return self.always_rm(str(p["id"]), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli"))
         r = self.policy_store.remove(str(p.get("id") or ""))
         self._policy_changed("protect.rm", r.to_dict(), p)
         return r.to_dict()

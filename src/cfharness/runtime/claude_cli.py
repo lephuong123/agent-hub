@@ -266,7 +266,7 @@ def claude_version(binary: str = "claude", cache_s: float = 600) -> str | None:
     if hit and now - hit[0] < cache_s:
         return hit[1]
     try:
-        out = subprocess.run(exec_argv([binary, "--version"]), capture_output=True, text=True, timeout=20)
+        out = subprocess.run(exec_argv([binary, "--version"]), capture_output=True, encoding="utf-8", errors="replace", timeout=20)
         v = out.stdout.strip().split()[0] if out.returncode == 0 and out.stdout.strip() else None
     except (OSError, subprocess.TimeoutExpired):
         v = None

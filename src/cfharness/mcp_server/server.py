@@ -151,6 +151,14 @@ class MemorySearchOut(BaseModel):
     total: int
 
 
+class SessionSearchOut(_Open):
+    mode: str
+    hits: list[dict[str, Any]] | None = Field(default=None, description="mode=search: id, run_id, session_id/conversation_id, agent_id, role, ts, snippet, score")
+    messages: list[dict[str, Any]] | None = Field(default=None, description="mode=around|read: tin theo thứ tự thời gian (anchor=true là tin gốc)")
+    threads: list[dict[str, Any]] | None = Field(default=None, description="mode=browse: luồng gần đây (thread, agent_id, messages, runs, title)")
+    next_offset: int | None = None
+
+
 # M3
 class TeamOut(_Open):
     id: str
@@ -539,6 +547,39 @@ class HubMcp:
             res = await hub.call("memory.search", {"query": query, "agent_id": agent_id, "scope": scope, "limit": limit}, ctx=ctx)
             return MemorySearchOut(**res)
 
+        @srv.tool(
+            description="Tìm kiếm hội thoại (SQLite FTS5, KHÔNG gọi LLM) trên toàn bộ nội dung run + hội thoại điều phối viên: prompt, tin steer, "
+                        "câu trả lời hoàn chỉnh của agent, lời gọi/kết quả tool (đã che secret). Gõ có dấu hay không dấu đều khớp. "
+                        "mode: search (query → hit xếp hạng + đoạn trích + message id) | around (message_id → `window` tin trước/sau) | "
+                        "read (run_id / session_id / conversation_id → transcript phân trang) | browse (luồng gần đây). "
+                        "Lọc: agent_id, team_id, kind, role, since/until (ISO hoặc 7d/12h). Mặc định ẩn phiên kỹ thuật (review/eval/curator).",
+            annotations=_ann(True),
+        )
+        async def hub_session_search(
+            ctx: Context,
+            mode: Annotated[Literal["search", "around", "read", "browse"], Field(description="chế độ")] = "search",
+            query: Annotated[str | None, Field(description="từ khoá (mode=search); \"cụm từ\" trong ngoặc kép")] = None,
+            message_id: Annotated[int | None, Field(description="id tin (mode=around)")] = None,
+            window: Annotated[int, Field(description="số tin trước/sau (mode=around)", ge=1, le=50)] = 5,
+            run_id: Annotated[str | None, Field(description="run (mode=read, hoặc lọc)")] = None,
+            session_id: Annotated[str | None, Field(description="session claude (mode=read, hoặc lọc)")] = None,
+            conversation_id: Annotated[str | None, Field(description="hội thoại điều phối viên mc_… (mode=read)")] = None,
+            agent_id: Annotated[str | None, Field(description="lọc theo agent")] = None,
+            team_id: Annotated[str | None, Field(description="lọc theo team")] = None,
+            kind: Annotated[str | None, Field(description="lọc theo loại run (adhoc, task, chat, …; manager_chat = tin hội thoại điều phối viên)")] = None,
+            role: Annotated[str | None, Field(description="user|steer|assistant|tool_call|tool_result|manager|…")] = None,
+            since: Annotated[str | None, Field(description="từ thời điểm (ISO, YYYY-MM-DD, hoặc 7d/12h/30m)")] = None,
+            until: Annotated[str | None, Field(description="đến thời điểm")] = None,
+            include_technical: Annotated[bool, Field(description="kể cả phiên kỹ thuật review/eval/curator")] = False,
+            limit: Annotated[int, Field(description="số mục tối đa", ge=1, le=200)] = 20,
+            offset: Annotated[int, Field(description="phân trang", ge=0)] = 0,
+        ) -> SessionSearchOut:
+            params = {"mode": mode, "query": query, "message_id": message_id, "window": window, "run_id": run_id, "session_id": session_id,
+                      "conversation_id": conversation_id, "agent_id": agent_id, "team_id": team_id, "kind": kind, "role": role, "since": since,
+                      "until": until, "include_technical": include_technical, "limit": limit, "offset": offset}
+            res = await hub.call("session.search", {k: v for k, v in params.items() if v is not None}, ctx=ctx)
+            return SessionSearchOut(**res)
+
         # ---------------------------------------------------------------- M3: team & task (FR-MS-02, FR-MS-08)
         @srv.tool(description="Liệt kê team: thành viên + vai trò, chính sách, ESTOP, số task theo trạng thái, chi phí hôm nay.", annotations=_ann(True))
         async def hub_team_list(ctx: Context, include_archived: Annotated[bool, Field(description="kể cả team đã archive")] = False) -> TeamListOut:
@@ -669,4 +710,5 @@ READ_ONLY_TOOLS = ("hub_status", "hub_list_agents", "hub_agent_get", "hub_run_st
                    "hub_golden_list", "hub_golden_show", "hub_eval_list", "hub_learning_digest",  # M4-B
                    "hub_learn_feed", "hub_learn_status", "hub_learn_ledger", "hub_knowledge_get",  # M4-A
                    "hub_knowledge_tier", "hub_learn_canaries",  # M5-A
-                   "hub_policy_get", "hub_memory_search")  # hardening H-14
+                   "hub_policy_get", "hub_memory_search",  # hardening H-14
+                   "hub_session_search")  # v17: tìm kiếm hội thoại FTS5

@@ -46,6 +46,8 @@ def _print_system(s: dict[str, Any], *, logs: bool = False) -> None:
             if v:
                 print(f"    ── {k} ──")
                 print("    " + v.rstrip().replace("\n", "\n    "))
+        if logs and j.get("log_note"):
+            print(f"    (log: {j['log_note']})")
 
 
 def cmd_system(ctx: Any) -> int:

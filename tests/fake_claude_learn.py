@@ -16,6 +16,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+# như `claude` thật (node): stdin/stdout UTF-8 — Windows mặc định cp1252 làm hỏng prompt tiếng Việt
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
 args = sys.argv[1:]
 if args == ["--version"]:
     print("2.1.302 (Claude Code)")
@@ -34,11 +37,11 @@ sid = opt("--session-id") if (not resume or fork) else resume
 first = json.loads(sys.stdin.readline())
 prompt = first["message"]["content"]
 system = opt("--append-system-prompt") or opt("--system-prompt") or ""
-mcp_cfg = json.loads(Path(opt("--mcp-config")).read_text()) if opt("--mcp-config") else {"mcpServers": {}}
+mcp_cfg = json.loads(Path(opt("--mcp-config")).read_text(encoding="utf-8")) if opt("--mcp-config") else {"mcpServers": {}}
 tools = (opt("--tools") or "Bash,Read,Write,Edit").split(",") if "--tools" in args else ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
 mcp_names = list(mcp_cfg.get("mcpServers", {}))
 costs_f = proj / "costs.json"
-costs = json.loads(costs_f.read_text()) if costs_f.exists() else {}
+costs = json.loads(costs_f.read_text(encoding="utf-8")) if costs_f.exists() else {}
 
 
 def out(o):
@@ -52,7 +55,7 @@ if fork and resume:
     src = proj / f"{resume}.jsonl"
     if src.exists():
         shutil.copyfile(src, tr)
-with open(tr, "a") as f:
+with open(tr, "a", encoding="utf-8") as f:
     f.write(json.dumps({"type": "user", "content": prompt[:500]}) + "\n")
 
 out({"type": "system", "subtype": "init", "model": opt("--model") or "claude-haiku-5-5", "cwd": os.getcwd(), "tools": tools + [f"mcp__{n}__x" for n in mcp_names],
@@ -63,7 +66,7 @@ out({"type": "system", "subtype": "init", "model": opt("--model") or "claude-hai
 class Mcp:
     def __init__(self, entry):
         env = {**os.environ, **(entry.get("env") or {})}
-        self.p = subprocess.Popen([entry["command"], *entry.get("args", [])], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env)
+        self.p = subprocess.Popen([entry["command"], *entry.get("args", [])], stdin=subprocess.PIPE, stdout=subprocess.PIPE, encoding="utf-8", env=env)
         self.n = 0
         self.req("initialize", {"protocolVersion": "2025-06-18"})
 
@@ -117,7 +120,7 @@ if fork:
             tool_event(f"mcp__hub-self__{step['tool']}", step.get("args") or {}, err, data)
             results.append({"tool": step["tool"], "error": err, "data": data})
         m.close()
-    with open(proj / "review-results.jsonl", "a") as f:
+    with open(proj / "review-results.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps({"session": sid, "results": results}) + "\n")
     text = "Review done."
 else:
@@ -132,13 +135,13 @@ else:
                 fmt = "18/10/2026"
         m.close()
     text = f"Status {fmt}: OK"
-with open(tr, "a") as f:
+with open(tr, "a", encoding="utf-8") as f:
     f.write(json.dumps({"type": "assistant", "content": text}) + "\n")
 out({"type": "assistant", "message": {"id": "mfinal", "content": [{"type": "text", "text": text}]}})
 base = costs.get(resume, 0.0) if resume else 0.0
 total = base + 0.002
 costs[sid] = total
-costs_f.write_text(json.dumps(costs))
+costs_f.write_text(json.dumps(costs), encoding="utf-8")
 out({"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": total, "result": text,
      "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 300, "cache_creation_input_tokens": 50},
      "modelUsage": {"claude-haiku-5-5": {"costBasis": "list"}}, "terminal_reason": "completed", "duration_ms": 5, "num_turns": 1})

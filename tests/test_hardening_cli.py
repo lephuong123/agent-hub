@@ -316,7 +316,7 @@ async def test_h10_version_checked_on_start_and_shown_in_tui(hub_home):
         h.start()
         await h.compat.task
         st = h.store.state_get("cli_compat")
-        assert st["version"] == "9.9.9" and st["status"] == "untested" and st["tested"] == ["2.1.302"]
+        assert st["version"] == "9.9.9" and st["status"] == "untested" and st["tested"] == DEFAULTS["runtime"]["claude"]["tested_versions"]
         warn = [e for e in h.store.query_events(types=["cli.version_warning"])]
         assert warn and warn[0].payload["version"] == "9.9.9" and warn[0].payload["at"] == "daemon_start"
         hdr = snapshot(h)["hub"]

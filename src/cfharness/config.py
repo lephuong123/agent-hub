@@ -15,6 +15,18 @@ from typing import Any
 
 import yaml
 
+# Cờ `claude` được phép (runtime.claude.flag_matrix) — lấy từ `claude --help` 2.1.302, kiểm lại trên 2.1.303.
+_FLAGS_2_1_302: list[str] = [
+    "-p", "--print", "--add-dir", "--agent", "--agents", "--allowed-tools", "--allowedTools", "--append-system-prompt",
+    "--autocompact", "--bare", "--betas", "--brief", "--continue", "--debug", "--debug-file", "--disable-slash-commands",
+    "--disallowed-tools", "--disallowedTools", "--effort", "--exclude-dynamic-system-prompt-sections", "--fallback-model",
+    "--file", "--fork-session", "--forward-subagent-text", "--include-hook-events", "--include-partial-messages",
+    "--input-format", "--json-schema", "--max-budget-usd", "--mcp-config", "--model", "--name", "--no-session-persistence",
+    "--output-format", "--permission-mode", "--permission-prompt-tool", "--permission-prompts", "--plugin-dir",
+    "--replay-user-messages", "--restricted", "--resume", "--safe-mode", "--session-id", "--setting-sources", "--settings",
+    "--strict-mcp-config", "--system-prompt", "--system-prompt-snapshot", "--tools", "--verbose", "--worktree",
+]
+
 DEFAULTS: dict[str, Any] = {
     "hub": {
         # FR-TK-07: giới hạn số run đồng thời toàn hub (giá trị khởi tạo 4)
@@ -48,6 +60,14 @@ DEFAULTS: dict[str, Any] = {
         # false = chỉ `destructive` mới hỏi người (uncertain → cho chạy + audit); vẫn giữ uncertain vùng hub/policy và tool MCP
         # người đặt `require_approval`. Sandbox OS + permissions.deny vẫn áp. Người ít phải chạm nhất: false.
         "hold_uncertain": True,
+        # WEB-1: WebFetch/curl — SSRF (loopback/RFC1918/link-local/CGNAT/metadata/IPv6, scheme, user:pass@) luôn chặn; DNS phân giải
+        # trong daemon, mọi IP phải công khai (không phân giải được → giữ chờ người). Glob domain: deny → chặn thẳng;
+        # allow (rỗng = mọi domain công khai) → ngoài danh sách giữ chờ người (WebFetch; Bash đã có sandbox.allowed_domains).
+        "web": {"allow_domains": [], "deny_domains": [], "resolve_dns": True, "dns_timeout_s": 3},
+        # LLM thứ hai cho `uncertain` (guard/second_opinion.py): CHỈ người bật; chỉ hạ uncertain → safe/write, mọi lỗi/hết giờ/hết ngân
+        # sách/trả lời khác → giữ chờ người. Không bao giờ áp cho destructive/forbidden/tài nguyên bảo vệ/vùng hub.
+        "second_opinion": {"enabled": False, "model": "haiku", "binary": None, "timeout_s": 45, "call_budget_usd": 0.02,
+                           "daily_budget_usd": 0.5, "max_calls_per_day": 200, "cache_ttl_s": 3600},
         # python chạy hook/hub-guard (null = python của daemon)
         "python": None,
         # gọi `git` để biết thay đổi chưa commit / nhánh đã push (FR-SG-01 nhóm Git)
@@ -133,6 +153,13 @@ DEFAULTS: dict[str, Any] = {
             "poll_timeout_s": 25,
             "idle_check_s": 15,  # chưa cấu hình → kiểm lại sau mỗi chừng này giây
             "result_max_chars": 1500,
+            # Tệp/ảnh với điều phối viên: ảnh (PNG/JPEG/GIF/WebP ≤ 5 MB, ≤ 4/tin — cùng giới hạn TUI) + tệp VĂN BẢN người gửi;
+            # tệp điều phối viên đánh dấu `[[file: …]]` trong trả lời → gửi thành document (chỉ trong cwd hội thoại)
+            "document_max_bytes": 1048576,  # tệp văn bản người gửi tối đa (trần cứng 10 MB ở manager.chat)
+            "media_group_wait_s": 1.5,  # album (nhiều ảnh một lần) → gom thành MỘT tin cho điều phối viên
+            "deliver_files": True,
+            "deliver_max_bytes": 20971520,  # tệp gửi ra tối đa (Bot API cho tới 50 MB)
+            "deliver_max_files": 5,
             "max_attempts": 5,
             "backoff_base_s": 2,
             "timeout_s": 15,
@@ -179,6 +206,11 @@ DEFAULTS: dict[str, Any] = {
         # profile strict = Read/Grep/Glob (như MGR-8); hermes = Bash/Read/Write/Edit/Grep/Glob/TodoWrite + Web + MCP trusted (chỉ đọc),
         # VẪN dưới hook guard + sandbox OS + approval. null = theo profile. `cfharness manager capabilities show|set`.
         "capabilities": {"profile": "strict", "tools": None, "mcp": None, "web": None},
+        # WEB-1: WebFetch của điều phối viên — `any` = mọi domain công khai (vẫn chặn SSRF + guard.web.deny_domains);
+        # `allowlist` = chỉ guard.web.allow_domains (+ host người đã "luôn cho phép"), ngoài danh sách → giữ chờ người duyệt
+        "web_domains": "any",
+        # Windows (không sandbox OS): khung rộng (hermes) bị từ chối/hạ về strict trừ khi NGƯỜI đặt true — manager/sandbox_gate.py
+        "allow_hermes_without_sandbox": False,
     },
     # M3 — team & điều phối (FR-TK-*, FR-RT-12/16, FR-OB-03)
     "tasks": {
@@ -360,7 +392,7 @@ DEFAULTS: dict[str, Any] = {
         "claude": {
             "binary": "claude",
             # Phiên bản đã kiểm (FR-RT-15). Phiên bản lạ → cảnh báo, vẫn chạy.
-            "tested_versions": ["2.1.302"],
+            "tested_versions": ["2.1.302", "2.1.303"],  # 2.1.303: spike Windows (docs/dev-notes/windows.md)
             "include_partial_messages": True,
             # Spike A-04: bật để kiểm hậu nghiệm không có hook lạ (hook Serena…) trong stream
             "include_hook_events": True,
@@ -418,17 +450,10 @@ DEFAULTS: dict[str, Any] = {
             # hardening H-10 (FR-RT-02/15): cờ được phép theo phiên bản CLI. Phiên bản CÓ trong bảng → build_argv ném ArgvError
             # với cờ không có trong danh sách (gồm extra_args). Phiên bản lạ → không kiểm (cảnh báo vàng `cli.version_warning`).
             # Danh sách 2.1.302 lấy từ `claude --help` (bỏ cố ý --dangerously-skip-permissions / --allow-dangerously-skip-permissions).
+            # 2.1.303 (spike Windows): `claude --help` vẫn có đủ mọi cờ của 2.1.302 → cùng danh sách (cờ mới chưa dùng thì không thêm).
             "flag_matrix": {
-                "2.1.302": [
-                    "-p", "--print", "--add-dir", "--agent", "--agents", "--allowed-tools", "--allowedTools", "--append-system-prompt",
-                    "--autocompact", "--bare", "--betas", "--brief", "--continue", "--debug", "--debug-file", "--disable-slash-commands",
-                    "--disallowed-tools", "--disallowedTools", "--effort", "--exclude-dynamic-system-prompt-sections", "--fallback-model",
-                    "--file", "--fork-session", "--forward-subagent-text", "--include-hook-events", "--include-partial-messages",
-                    "--input-format", "--json-schema", "--max-budget-usd", "--mcp-config", "--model", "--name", "--no-session-persistence",
-                    "--output-format", "--permission-mode", "--permission-prompt-tool", "--permission-prompts", "--plugin-dir",
-                    "--replay-user-messages", "--restricted", "--resume", "--safe-mode", "--session-id", "--setting-sources", "--settings",
-                    "--strict-mcp-config", "--system-prompt", "--system-prompt-snapshot", "--tools", "--verbose", "--worktree",
-                ],
+                "2.1.302": _FLAGS_2_1_302,
+                "2.1.303": list(_FLAGS_2_1_302),
             },
             # hardening H-11 (FR-RT-17): hook QUAN SÁT fail-OPEN (cfharness/observe_hook.py) — luôn exit 0, quá timeout_s → hook.timeout
             "observe_hooks": {"enabled": True, "events": ["PostToolUse", "UserPromptSubmit", "Stop"], "timeout_s": 2.0, "cli_timeout_s": 5},
@@ -522,6 +547,10 @@ class HubConfig:
         self._maybe_reload()
         over = copy.deepcopy(self._overrides)
         set_path(over, key, value)
+        if key == "manager" or key.startswith("manager.capabilities"):  # Windows không sandbox OS: khung rộng cần người opt-in
+            from .manager.sandbox_gate import check_set
+
+            check_set(key, deep_merge(DEFAULTS, over))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".yaml.tmp")
         tmp.write_text(yaml.safe_dump(over, allow_unicode=True, sort_keys=True), encoding="utf-8")
@@ -540,6 +569,10 @@ def validate_setting(key: str, value: Any) -> None:
                 validate_capabilities("manager.capabilities", value["capabilities"])
         else:
             validate_capabilities(key, value)
+    if key in ("guard", "manager", "manager.web_domains") or key.startswith(("guard.web", "guard.second_opinion")):
+        from .guard.url_safety import validate_setting as _validate_web
+
+        _validate_web(key, value)
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")

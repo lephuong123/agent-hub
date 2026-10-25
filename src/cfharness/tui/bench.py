@@ -53,6 +53,9 @@ def _q(xs: list[float], p: float) -> float:
 
 
 async def main_async(a: argparse.Namespace) -> dict:
+    why = unsupported_reason()
+    if why:
+        return {"skipped": True, "reason": why, "platform": sys.platform}
     home = Path(a.home).resolve()
     home.mkdir(parents=True, exist_ok=True)
     os.environ["CFHARNESS_HOME"] = str(home)
@@ -72,7 +75,8 @@ async def main_async(a: argparse.Namespace) -> dict:
                 # hàng đợi subscriber nhỏ để subscriber "treo" bị ngắt trong thời gian đo (NFR-08)
                 "bus": {"subscriber_queue": a.sub_queue},
             }
-        )
+        ),
+        encoding="utf-8",
     )
     pid = spawn_background(paths)
     c = AsyncHubClient(paths.socket, channel="cli")
@@ -184,9 +188,25 @@ async def main_async(a: argparse.Namespace) -> dict:
     return res
 
 
-def main() -> None:
+def unsupported_reason() -> str | None:
+    """Lý do bench không chạy được trên máy này (None = chạy được). Windows: không có module `resource` lẫn lệnh `ps`."""
+    import shutil
+
+    if sys.platform == "win32":
+        return "bench đo NFR chỉ chạy trên macOS/Linux — Windows không có module `resource` (getrusage) và lệnh `ps` để đo RSS/CPU"
     if resource is None:
-        raise SystemExit("bench chỉ chạy trên macOS/Linux (cần `resource` + `ps`)")
+        return "bench cần module `resource` (getrusage) — không có trên nền tảng này"
+    if shutil.which("ps") is None:
+        return "bench cần lệnh `ps` để đo RSS/CPU của daemon — không tìm thấy trong PATH"
+    return None
+
+
+def main(argv: list[str] | None = None) -> int:
+    why = unsupported_reason()
+    if why:  # bỏ qua êm: mã 0 + JSON `skipped` để script đo hàng loạt không coi là lỗi
+        print(f"bỏ qua: {why}", file=sys.stderr)
+        print(json.dumps({"skipped": True, "reason": why, "platform": sys.platform}, ensure_ascii=False))
+        return 0
     p = argparse.ArgumentParser()
     p.add_argument("--home", required=True)
     p.add_argument("--agents", type=int, default=50)
@@ -194,9 +214,10 @@ def main() -> None:
     p.add_argument("--duration", type=float, default=60)
     p.add_argument("--line-delay", type=float, default=0.1)
     p.add_argument("--sub-queue", type=int, default=1000, help="bus.subscriber_queue của daemon đo")
-    a = p.parse_args()
+    a = p.parse_args(argv)
     print(json.dumps(asyncio.run(main_async(a)), ensure_ascii=False, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

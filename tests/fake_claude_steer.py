@@ -13,6 +13,9 @@ import select
 import sys
 import time
 
+# như `claude` thật (node): stdin/stdout UTF-8 — Windows mặc định cp1252 làm hỏng prompt tiếng Việt
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
 args = sys.argv[1:]
 if args == ["--version"]:
     print("2.1.302 (Claude Code)")

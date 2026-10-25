@@ -230,7 +230,13 @@ class ManagerPermissions:
             raw = self.hub.config.get("manager.capabilities")
         except KeyError:
             raw = None
-        return resolve_capabilities(raw)
+        from .sandbox_gate import gate  # Windows (không sandbox OS): khung rộng chỉ khi người opt-in, không thì về strict
+
+        try:
+            mgr = self.hub.config.get("manager")
+        except KeyError:
+            mgr = None
+        return gate(resolve_capabilities(raw), mgr)
 
     def manager_config_problem(self, row: dict[str, Any]) -> str | None:
         caps = self.capabilities()
