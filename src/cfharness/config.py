@@ -141,6 +141,13 @@ DEFAULTS: dict[str, Any] = {
             "poll_timeout_s": 25,
             "idle_check_s": 15,  # chưa cấu hình → kiểm lại sau mỗi chừng này giây
             "result_max_chars": 1500,
+            # Tệp/ảnh với điều phối viên: ảnh (PNG/JPEG/GIF/WebP ≤ 5 MB, ≤ 4/tin — cùng giới hạn TUI) + tệp VĂN BẢN người gửi;
+            # tệp điều phối viên đánh dấu `[[file: …]]` trong trả lời → gửi thành document (chỉ trong cwd hội thoại)
+            "document_max_bytes": 1048576,  # tệp văn bản người gửi tối đa (trần cứng 10 MB ở manager.chat)
+            "media_group_wait_s": 1.5,  # album (nhiều ảnh một lần) → gom thành MỘT tin cho điều phối viên
+            "deliver_files": True,
+            "deliver_max_bytes": 20971520,  # tệp gửi ra tối đa (Bot API cho tới 50 MB)
+            "deliver_max_files": 5,
             "max_attempts": 5,
             "backoff_base_s": 2,
             "timeout_s": 15,

@@ -1,7 +1,8 @@
 """Server Bot API Telegram GIẢ chạy cục bộ (127.0.0.1) cho test — không gọi Telegram thật.
 
 Hỗ trợ: getMe, deleteWebhook, setMyCommands, getUpdates (long poll có offset/timeout), sendMessage (cả reply_markup
-inline / keyboard / force_reply), answerCallbackQuery, editMessageReplyMarkup, editMessageText, sendChatAction. Token sai → 401. Test bơm update bằng `user_message()` / `press()` và đọc tin bot gửi bằng `sent()`.
+inline / keyboard / force_reply), answerCallbackQuery, editMessageReplyMarkup, editMessageText, sendChatAction, sendDocument,
+getFile + GET /file/bot<token>/<path> (tệp người gửi: `add_file`). Token sai → 401. Test bơm update bằng `user_message()` / `press()` và đọc tin bot gửi bằng `sent()`.
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ class FakeTelegram:
         self.next_update = 1000
         self.next_msg = 1
         self.fail_send = fail_send
+        self.files: dict[str, bytes] = {}  # file_id → nội dung (tệp/ảnh người gửi)
+        self.downloads: list[str] = []  # file_path đã bị tải (GET /file/...)
         self.cond = threading.Condition()
         outer = self
 
@@ -36,6 +39,10 @@ class FakeTelegram:
                     body = {"_raw": raw}  # sendDocument: giữ nguyên thân multipart để test tìm nội dung tệp
                     m = re.search(rb'name="chat_id"\r\n\r\n([^\r]*)', raw)
                     body["chat_id"] = m.group(1).decode() if m else None
+                    c = re.search(rb'name="caption"\r\n\r\n([^\r]*)', raw)
+                    body["caption"] = c.group(1).decode("utf-8", "replace") if c else None
+                    f = re.search(rb'name="document"; filename="([^"]*)"', raw)
+                    body["filename"] = f.group(1).decode("utf-8", "replace") if f else None
                 else:
                     body = json.loads(raw)
                 outer.paths.append(self.path)
@@ -43,6 +50,25 @@ class FakeTelegram:
                 data = json.dumps(res).encode()
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):  # noqa: N802 — tải tệp: /file/bot<token>/<file_path>
+                parts = self.path.strip("/").split("/", 2)
+                data = None
+                if len(parts) == 3 and parts[0] == "file" and parts[1] == f"bot{outer.token}":
+                    fid = parts[2].rsplit("/", 1)[-1]
+                    data = outer.files.get(fid)
+                    with outer.cond:
+                        outer.downloads.append(parts[2])
+                if data is None:
+                    self.send_response(404)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
@@ -79,6 +105,11 @@ class FakeTelegram:
                     if ups or time.monotonic() >= deadline:
                         return 200, {"ok": True, "result": ups}
                     self.cond.wait(timeout=max(0.01, deadline - time.monotonic()))
+        if method == "getFile":
+            fid = str(body.get("file_id") or "")
+            if fid not in self.files:
+                return 400, {"ok": False, "error_code": 400, "description": "Bad Request: invalid file_id"}
+            return 200, {"ok": True, "result": {"file_id": fid, "file_size": len(self.files[fid]), "file_path": f"documents/{fid}"}}
         if method == "sendDocument":
             with self.cond:
                 mid = self.next_msg
@@ -116,6 +147,42 @@ class FakeTelegram:
         if reply_to is not None:
             m["reply_to_message"] = {"message_id": reply_to, "chat": {"id": chat_id, "type": chat_type}}
         return self._push({"message": m})
+
+    def add_file(self, data: bytes) -> str:
+        fid = f"F{len(self.files) + 1}x{abs(hash(data)) % 10_000}"
+        self.files[fid] = data
+        return fid
+
+    def user_media(self, chat_id: int, *, photo: bytes | None = None, document: tuple[str, bytes, str] | None = None,
+                   caption: str | None = None, media_group_id: str | None = None, voice: bool = False, from_id: int | None = None,
+                   declared_size: int | None = None, reply_to: int | None = None) -> int:
+        """Tin có ảnh (`photo` — 2 cỡ, cỡ lớn = dữ liệu thật) / tài liệu `(tên, bytes, mime)` / thoại."""
+        m: dict[str, Any] = {"message_id": 10_000 + self.next_update, "date": int(time.time()),
+                             "chat": {"id": chat_id, "type": "private", "username": "boss", "first_name": "Sếp"},
+                             "from": {"id": from_id or chat_id, "is_bot": False, "username": "boss", "first_name": "Sếp"}}
+        if photo is not None:
+            small = self.add_file(b"small-thumb")
+            big = self.add_file(photo)
+            m["photo"] = [{"file_id": small, "file_unique_id": "s", "width": 90, "height": 90, "file_size": 11},
+                          {"file_id": big, "file_unique_id": "b", "width": 1280, "height": 720,
+                           "file_size": declared_size if declared_size is not None else len(photo)}]
+        if document is not None:
+            name, data, mime = document
+            m["document"] = {"file_id": self.add_file(data), "file_unique_id": "d", "file_name": name, "mime_type": mime,
+                             "file_size": declared_size if declared_size is not None else len(data)}
+        if voice:
+            m["voice"] = {"file_id": self.add_file(b"OggS-voice"), "file_unique_id": "v", "duration": 3, "mime_type": "audio/ogg", "file_size": 10}
+        if caption is not None:
+            m["caption"] = caption
+        if media_group_id:
+            m["media_group_id"] = media_group_id
+        if reply_to is not None:
+            m["reply_to_message"] = {"message_id": reply_to, "chat": {"id": chat_id, "type": "private"}}
+        return self._push({"message": m})
+
+    def documents(self, chat_id: int | None = None) -> list[dict[str, Any]]:
+        with self.cond:
+            return [b for m, b in self.calls if m == "sendDocument" and (chat_id is None or str(b.get("chat_id")) == str(chat_id))]
 
     def message_id_of(self, msg: dict[str, Any]) -> int | None:
         """message_id server giả đã cấp cho một body sendMessage (đếm theo thứ tự gửi toàn cục)."""

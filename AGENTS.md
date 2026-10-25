@@ -275,6 +275,7 @@ Chi tiết, lý do chọn `httpx2`, test chứng minh, việc dở: `docs/dev-no
 | `notify/telegram.py` | `TelegramApi` (httpx2 async, gỡ token khỏi lỗi), định dạng văn bản thuần đã che, `CallbackStore` (nonce dùng một lần + HMAC, theo chat), `TelegramNotifier` |
 | `chat/bot.py` | `hub.telegram`: long polling trong daemon (start ở `hub.started`, tắt êm khi chưa có token), ghép nối `/start <mã>`, lệnh chat, nút duyệt (2 bước cho thao tác nặng), theo dõi run → gửi kết quả, reply → `run.continue` |
 | `chat/rpc.py`, `chat/cli.py` | RPC `telegram.*` (trừ `status` đều HUMAN_ONLY, tự audit); CLI `notify telegram setup|status|test|disable|allow|revoke` |
+| `chat/media.py` | `bot.media`: ảnh/tệp văn bản người gửi (tải SAU allowlist, kiểm cỡ trước `getFile`, album gom một tin) → `manager.chat{images, files}`; thoại → báo chưa hỗ trợ; dòng `[[file: <tương đối>]]` trong trả lời điều phối viên → `sendDocument` (chỉ tệp thường trong cwd hội thoại, không symlink, ≤ `deliver_max_bytes`, không chứa secret). Test: `tests/test_telegram_media.py` |
 
 Bất biến: lệnh/nút từ chat CHỈ đi qua `Daemon.call_as(auth.telegram_caller(hub, chat_id), …)` (cổng HUMAN_ONLY + audit kênh `telegram:<chat_id>`);
 `telegram_caller(hub, chat_id, from_id)` là người chỉ khi bot bật VÀ chat ∈ `allowed_chat_ids` VÀ người gửi/bấm được phép (chat riêng: from.id = chat; nhóm: `allow_groups` + from.id ∈ `allowed_user_ids`). Nội dung agent (lệnh, kết quả) chỉ trong `<pre>` sau tiền tố cố định, KHÔNG BAO GIỜ cùng tin với nút; mọi "Cho phép" 2 bước. Chat

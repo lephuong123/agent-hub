@@ -17,6 +17,8 @@ An toàn:
   tin có nút chỉ chứa chữ do hub sinh và trả lời (reply) vào tin nội dung.
 - Offset `getUpdates` được lưu TRƯỚC khi xử lý update → một update không bao giờ xử lý hai lần (kể cả sau restart).
 - Không gửi secret (che theo giá trị + mẫu), cắt kết quả run (`result_max_chars`) kèm chỉ dẫn xem trên web/TUI.
+- Ảnh/tệp người gửi (chat/media.py): chỉ tải SAU khi qua allowlist (người lạ không kích hoạt getFile); tệp điều phối viên đánh dấu
+  `[[file: …]]` → sendDocument riêng (không nút), chỉ tệp thường trong cwd hội thoại.
 """
 
 from __future__ import annotations
@@ -68,6 +70,7 @@ HELP = """cfharness qua Telegram — lệnh (bấm / để xem menu):
 /help — trợ giúp
 Tin nhắn thường (không bắt đầu bằng /) → gửi cho ĐIỀU PHỐI VIÊN (agent quản lý cả đội); reply vào tin của
   điều phối viên để tiếp tục đúng cuộc trò chuyện đó.
+Gửi ảnh (≤ 4, ≤ 5 MB) hoặc tệp văn bản kèm chú thích → điều phối viên xem; tin thoại chưa hỗ trợ.
 Xem đầy đủ (log, diff, dữ liệu MCP): cfharness top / web."""
 
 # T-A: menu lệnh "/" (setMyCommands) — chữ của hub, tiếng Việt; alias tiếng Anh cũ vẫn chạy
@@ -130,6 +133,9 @@ class TelegramBot:
         from .manager_chat import ManagerChat
 
         self.manager = ManagerChat(self)  # M7 MGR-UI: tin thường ↔ điều phối viên
+        from .media import MediaChat
+
+        self.media = MediaChat(self)  # ảnh/tệp người gửi → điều phối viên; tệp `[[file: …]]` điều phối viên đánh dấu → document
         from .questions_tg import QuestionChat
 
         self.questions = QuestionChat(self)  # UX v2: câu hỏi có lựa chọn của agent (nút số + trả lời bằng chữ)
@@ -454,8 +460,14 @@ class TelegramBot:
                 await self._send(api, cid, "Đã nhận mã ghép nối. Quay lại terminal để xác nhận đưa chat này vào allowlist.")
                 return
             self._audit_ignored(cid, chat.get("type"), "message", uid)
-            return
+            return  # người lạ: KHÔNG tải tệp/ảnh, không trả lời
         reply = m.get("reply_to_message")
+        from .media import has_media
+
+        if has_media(m):  # ảnh/tệp (chú thích = nội dung) → điều phối viên; thoại → báo chưa hỗ trợ
+            conv = self.manager.conv_of_message(cid, reply.get("message_id")) if isinstance(reply, dict) else None
+            await self.media.handle(cid, uid, m, api, conv=conv)
+            return
         if isinstance(reply, dict) and text and not text.startswith("/"):
             qid = self.questions.question_of_message(cid, reply.get("message_id"))
             if qid:  # UX v2: reply vào tin câu hỏi / ô "Trả lời bằng chữ" → câu trả lời (trước run.continue / điều phối viên)

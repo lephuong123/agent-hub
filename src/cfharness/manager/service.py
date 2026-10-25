@@ -98,7 +98,10 @@ _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 def safe_file_name(name: Any, default: str = "file.txt") -> str:
     """Tên tệp do người/kênh gửi → tên an toàn (không thư mục, không `..`, ASCII, ≤ 60 ký tự)."""
-    base = re.split(r"[\\/]", str(name or ""))[-1]
+    import unicodedata
+
+    base = re.split(r"[\\/]", str(name or ""))[-1].replace("đ", "d").replace("Đ", "D")
+    base = "".join(c for c in unicodedata.normalize("NFKD", base) if not unicodedata.combining(c))  # "ghi chú" → "ghi chu"
     s = _SAFE_NAME.sub("_", base).strip("._-")[:60].strip("._-")
     return s or default
 
@@ -413,15 +416,16 @@ class ManagerService:
         return run
 
     async def chat(self, channel: str, text: str, *, conversation_id: str | None = None, reuse_latest: bool = False,
-                   images: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                   images: list[dict[str, Any]] | None = None, files: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         aid = self.agent_id()
         if not aid:
             raise Conflict("chưa có điều phối viên — chỉ định bằng `cfharness manager set <agent>`")
         text = str(text or "").strip()
         channel = str(channel or "cli")
         imgs = decode_images(images)  # kiểm TRƯỚC mọi ghi (định dạng theo magic bytes, kích thước, số lượng)
-        if not text and imgs:
-            text = "(xem ảnh đính kèm)"
+        docs = decode_files(files)  # tệp văn bản (vd tài liệu gửi qua Telegram): UTF-8, ≤ FILE_MAX_BYTES, tên do hub làm sạch
+        if not text and (imgs or docs):
+            text = "(xem ảnh đính kèm)" if imgs and not docs else "(xem tệp đính kèm)"
         if not text:
             raise HubError("thiếu 'text'")
         if channel == HEARTBEAT_CHANNEL:
@@ -441,10 +445,14 @@ class ManagerService:
             conv = self._conv_row(r[0]) if r else None
         if conv is None:
             conv = self._new_conv(channel, aid, text.splitlines()[0])
-        files = self._save_images(aid, conv["id"], imgs) if imgs else []
-        prompt_text = text + prompts.images_note(files) if files else text
-        if files:
-            text = f"{text}\n📎 {len(files)} ảnh: " + ", ".join(f.rsplit("/", 1)[-1] for f in files)
+        saved_imgs = self._save_images(aid, conv["id"], imgs) if imgs else []
+        saved_docs = self._save_files(aid, conv["id"], docs) if docs else []
+        files = saved_imgs + saved_docs
+        prompt_text = text + (prompts.images_note(saved_imgs) if saved_imgs else "") + (prompts.files_note(saved_docs) if saved_docs else "")
+        if saved_imgs:
+            text = f"{text}\n📎 {len(saved_imgs)} ảnh: " + ", ".join(f.rsplit("/", 1)[-1] for f in saved_imgs)
+        if saved_docs:
+            text = f"{text}\n📎 {len(saved_docs)} tệp: " + ", ".join(f.rsplit("/", 1)[-1] for f in saved_docs)
         busy = self._active_runs(aid, conv["id"])
         if busy and busy[0]["status"] != "running":
             r = busy[0]
