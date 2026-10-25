@@ -30,6 +30,13 @@ from m7_fake import close, make_daemon, manager_run, rpc, tool, wait_status
 HERMES_TOOLS = ["Bash", "Read", "Write", "Edit", "Grep", "Glob", "TodoWrite", "WebFetch", "WebSearch"]
 
 
+@pytest.fixture(autouse=True)
+def _os_sandbox(monkeypatch):
+    """Các test ở đây kiểm khung hermes trên máy CÓ sandbox OS (macOS/Linux) — chạy giống nhau trên Windows.
+    Cổng Windows (không sandbox → hermes cần opt-in) kiểm riêng ở tests/test_windows_hermes.py."""
+    monkeypatch.setattr("cfharness.manager.sandbox_gate.os_sandbox_available", lambda: True)
+
+
 @pytest.fixture
 async def d(hub_home):
     dm = await make_daemon(hub_home)
@@ -236,12 +243,14 @@ async def test_child_over_real_socket_denied(d):
     try:
         code = ("import json,socket,sys;from cfharness import transport;s=transport.connect(sys.argv[1],30);"
                 "s.sendall((json.dumps({'jsonrpc':'2.0','id':1,'method':sys.argv[2],'params':json.loads(sys.argv[3])})+'\\n').encode());"
-                "print(s.makefile().readline())")
+                "sys.stdout.buffer.write(s.makefile('rb').readline())")
         env = {**os.environ, "CFHARNESS_RUN_ID": rid}
+        # phản hồi JSON-RPC là UTF-8 (thông báo tiếng Việt): con chuyển nguyên byte, cha giải mã UTF-8 —
+        # Windows mặc định cp1252 cho cả makefile() văn bản lẫn ống stdout → hỏng nếu để theo locale
 
         async def call(method, params):
             cp = await asyncio.to_thread(subprocess.run, [sys.executable, "-c", code, str(d.paths.socket), method, json.dumps(params)],
-                                         capture_output=True, text=True, timeout=30, env=env)
+                                         capture_output=True, encoding="utf-8", timeout=30, env=env)
             return json.loads(cp.stdout)
 
         r = await call("run.start", {"agent": "w1", "prompt": "x"})
@@ -378,7 +387,8 @@ async def test_cli_capabilities_set_and_sync(d):
         env.pop("CFHARNESS_RUN_ID", None)
 
         def cli(*args):
-            return subprocess.run([sys.executable, "-m", "cfharness.cli", *args], capture_output=True, text=True, timeout=60, env=env)
+            # CLI luôn in UTF-8 (cli.py tự reconfigure stdout) → đọc UTF-8, không theo locale (Windows: cp1252)
+            return subprocess.run([sys.executable, "-m", "cfharness.cli", *args], capture_output=True, encoding="utf-8", timeout=60, env=env)
 
         cp = await asyncio.to_thread(cli, "manager", "capabilities", "set", "--profile", "hermes", "--sync-agent", "--json")
         assert cp.returncode == 0, cp.stderr + cp.stdout

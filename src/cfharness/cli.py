@@ -285,6 +285,11 @@ def cmd_doctor(ctx: Ctx) -> int:
 
     if not sandbox_supported():
         add("sandbox OS cho Bash", False, SANDBOX_UNAVAILABLE_NOTE, "warning")
+    from .manager.sandbox_gate import doctor_note
+
+    note = doctor_note(cfg)
+    if note:
+        add("khung điều phối viên (hermes) không sandbox", note[0], note[1], "warning")
     add("HUB_HOME ghi được", os.access(ctx.paths.home, os.W_OK) if ctx.paths.home.exists() else os.access(ctx.paths.home.parent, os.W_OK), str(ctx.paths.home))
     client = RpcClient(ctx.paths.socket, timeout=10)
     daemon_up = True

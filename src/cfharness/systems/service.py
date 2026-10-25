@@ -276,6 +276,11 @@ class SystemService:
             for j in row["jobs"]:
                 src = by_label.get(j["label"]) or {}
                 j["log"] = {k: self._tail(src.get(k), log_bytes) for k in ("stdout", "stderr") if src.get(k)}
+                if not src.get("stdout") and not src.get("stderr"):
+                    j["log_note"] = getattr(self.launchctl, "no_log_note", None) or "job không khai báo StandardOutPath/StandardErrorPath — không có log để đọc"
+                elif not any(j["log"].values()):
+                    paths = sorted({p for p in (src.get("stdout"), src.get("stderr")) if p})
+                    j["log_note"] = f"chưa có log (file trống hoặc chưa tồn tại): {', '.join(paths)}"
         return row
 
     @staticmethod

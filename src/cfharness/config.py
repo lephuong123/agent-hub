@@ -15,6 +15,18 @@ from typing import Any
 
 import yaml
 
+# Cờ `claude` được phép (runtime.claude.flag_matrix) — lấy từ `claude --help` 2.1.302, kiểm lại trên 2.1.303.
+_FLAGS_2_1_302: list[str] = [
+    "-p", "--print", "--add-dir", "--agent", "--agents", "--allowed-tools", "--allowedTools", "--append-system-prompt",
+    "--autocompact", "--bare", "--betas", "--brief", "--continue", "--debug", "--debug-file", "--disable-slash-commands",
+    "--disallowed-tools", "--disallowedTools", "--effort", "--exclude-dynamic-system-prompt-sections", "--fallback-model",
+    "--file", "--fork-session", "--forward-subagent-text", "--include-hook-events", "--include-partial-messages",
+    "--input-format", "--json-schema", "--max-budget-usd", "--mcp-config", "--model", "--name", "--no-session-persistence",
+    "--output-format", "--permission-mode", "--permission-prompt-tool", "--permission-prompts", "--plugin-dir",
+    "--replay-user-messages", "--restricted", "--resume", "--safe-mode", "--session-id", "--setting-sources", "--settings",
+    "--strict-mcp-config", "--system-prompt", "--system-prompt-snapshot", "--tools", "--verbose", "--worktree",
+]
+
 DEFAULTS: dict[str, Any] = {
     "hub": {
         # FR-TK-07: giới hạn số run đồng thời toàn hub (giá trị khởi tạo 4)
@@ -380,7 +392,7 @@ DEFAULTS: dict[str, Any] = {
         "claude": {
             "binary": "claude",
             # Phiên bản đã kiểm (FR-RT-15). Phiên bản lạ → cảnh báo, vẫn chạy.
-            "tested_versions": ["2.1.302"],
+            "tested_versions": ["2.1.302", "2.1.303"],  # 2.1.303: spike Windows (docs/dev-notes/windows.md)
             "include_partial_messages": True,
             # Spike A-04: bật để kiểm hậu nghiệm không có hook lạ (hook Serena…) trong stream
             "include_hook_events": True,
@@ -438,17 +450,10 @@ DEFAULTS: dict[str, Any] = {
             # hardening H-10 (FR-RT-02/15): cờ được phép theo phiên bản CLI. Phiên bản CÓ trong bảng → build_argv ném ArgvError
             # với cờ không có trong danh sách (gồm extra_args). Phiên bản lạ → không kiểm (cảnh báo vàng `cli.version_warning`).
             # Danh sách 2.1.302 lấy từ `claude --help` (bỏ cố ý --dangerously-skip-permissions / --allow-dangerously-skip-permissions).
+            # 2.1.303 (spike Windows): `claude --help` vẫn có đủ mọi cờ của 2.1.302 → cùng danh sách (cờ mới chưa dùng thì không thêm).
             "flag_matrix": {
-                "2.1.302": [
-                    "-p", "--print", "--add-dir", "--agent", "--agents", "--allowed-tools", "--allowedTools", "--append-system-prompt",
-                    "--autocompact", "--bare", "--betas", "--brief", "--continue", "--debug", "--debug-file", "--disable-slash-commands",
-                    "--disallowed-tools", "--disallowedTools", "--effort", "--exclude-dynamic-system-prompt-sections", "--fallback-model",
-                    "--file", "--fork-session", "--forward-subagent-text", "--include-hook-events", "--include-partial-messages",
-                    "--input-format", "--json-schema", "--max-budget-usd", "--mcp-config", "--model", "--name", "--no-session-persistence",
-                    "--output-format", "--permission-mode", "--permission-prompt-tool", "--permission-prompts", "--plugin-dir",
-                    "--replay-user-messages", "--restricted", "--resume", "--safe-mode", "--session-id", "--setting-sources", "--settings",
-                    "--strict-mcp-config", "--system-prompt", "--system-prompt-snapshot", "--tools", "--verbose", "--worktree",
-                ],
+                "2.1.302": _FLAGS_2_1_302,
+                "2.1.303": list(_FLAGS_2_1_302),
             },
             # hardening H-11 (FR-RT-17): hook QUAN SÁT fail-OPEN (cfharness/observe_hook.py) — luôn exit 0, quá timeout_s → hook.timeout
             "observe_hooks": {"enabled": True, "events": ["PostToolUse", "UserPromptSubmit", "Stop"], "timeout_s": 2.0, "cli_timeout_s": 5},
@@ -542,6 +547,10 @@ class HubConfig:
         self._maybe_reload()
         over = copy.deepcopy(self._overrides)
         set_path(over, key, value)
+        if key == "manager" or key.startswith("manager.capabilities"):  # Windows không sandbox OS: khung rộng cần người opt-in
+            from .manager.sandbox_gate import check_set
+
+            check_set(key, deep_merge(DEFAULTS, over))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".yaml.tmp")
         tmp.write_text(yaml.safe_dump(over, allow_unicode=True, sort_keys=True), encoding="utf-8")

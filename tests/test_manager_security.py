@@ -288,8 +288,8 @@ async def test_managerself_over_real_socket_from_foreign_process(env):
     try:
         code = ("import json,socket,sys;from cfharness import transport;s=transport.connect(sys.argv[1],30);"
                 "s.sendall((json.dumps({'jsonrpc':'2.0','id':1,'method':'managerself.call','params':{'run_id':sys.argv[2],'op':'agent_create','args':{'id':'zz'}}})+'\\n').encode());"
-                "print(s.makefile().readline())")
-        cp = await asyncio.to_thread(subprocess.run, [sys.executable, "-c", code, str(d.paths.socket), rid], capture_output=True, text=True, timeout=30)
+                "sys.stdout.buffer.write(s.makefile('rb').readline())")  # nguyên byte UTF-8 (Windows: locale cp1252)
+        cp = await asyncio.to_thread(subprocess.run, [sys.executable, "-c", code, str(d.paths.socket), rid], capture_output=True, encoding="utf-8", timeout=30)
         assert json.loads(cp.stdout).get("error", {}).get("code") == BLOCKED, cp.stdout
         assert d.hub.store.get_agent("zz") is None
     finally:

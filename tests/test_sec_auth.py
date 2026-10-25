@@ -94,7 +94,8 @@ async def _start_run(d: Daemon) -> tuple[dict, "subprocess.Popen[bytes]", Path]:
         for k in spec.get("unset") or []:
             env.pop(k, None)
         argv = {(_shell_argv("")[:-1] if IS_WINDOWS else None)!r}  # Windows: Git Bash như Bash tool của claude
-        p = subprocess.run(argv + [spec["cmd"]] if argv else spec["cmd"], shell=not argv, capture_output=True, text=True, env=env, timeout=60)
+        # CLI cfharness in UTF-8 (thông báo tiếng Việt) — không giải mã theo locale (Windows: cp1252 → stdout None)
+        p = subprocess.run(argv + [spec["cmd"]] if argv else spec["cmd"], shell=not argv, capture_output=True, encoding="utf-8", errors="replace", env=env, timeout=60)
         json.dump({{"rc": p.returncode, "out": p.stdout, "err": p.stderr}}, open(out + ".tmp", "w")); os.replace(out + ".tmp", out)
         time.sleep(spec.get("linger", 0))
     """)
@@ -141,7 +142,7 @@ def _client_py(home: HubPaths, method: str, params: dict, *, steal_token: bool, 
                 except OSError: pass
             s = transport.connect({_fwd(home.socket)!r}, 30)
             s.sendall((json.dumps({{"jsonrpc": "2.0", "id": 1, "method": {method!r}, "params": p}}) + "\\n").encode())
-            r = s.makefile().readline()
+            r = json.dumps(json.loads(s.makefile("rb").readline()))  # phản hồi UTF-8 → JSON ASCII: in/ghi file không phụ thuộc locale
             out = {_fwd(result) if result else ''!r}
             if out:
                 open(out + ".tmp", "w").write(r); os.replace(out + ".tmp", out)
@@ -192,7 +193,7 @@ async def test_human_cli_and_client_can_approve_without_manual_step(home):
         assert res["status"] == "allowed"
         # (2) CLI thật của người (tiến trình con của test, KHÔNG thuộc run) — tự đọc token
         aid2 = _open_approval(d, run)
-        cp = await asyncio.to_thread(subprocess.run, [CFHARNESS_BIN, "approve", aid2], capture_output=True, text=True, timeout=60,
+        cp = await asyncio.to_thread(subprocess.run, [CFHARNESS_BIN, "approve", aid2], capture_output=True, encoding="utf-8", timeout=60,
                                      env={**os.environ, "CFHARNESS_HOME": str(home.home)})
         assert cp.returncode == 0, cp.stderr
         assert d.hub.approvals.get(aid2)["status"] == "allowed"
@@ -333,7 +334,7 @@ async def test_socket_caller_without_token_denied_even_if_not_in_run(home):
         cp = await asyncio.to_thread(subprocess.run, [sys.executable, "-c",
             "import json,socket,sys;from cfharness import transport;s=transport.connect(sys.argv[1],30);"
             "s.sendall((json.dumps({'jsonrpc':'2.0','id':1,'method':'config.set','params':{'key':'approval.timeout_s','value':2}})+'\\n').encode());"
-            "print(s.makefile().readline())", str(home.socket)], capture_output=True, text=True, timeout=30)
+            "sys.stdout.buffer.write(s.makefile('rb').readline())", str(home.socket)], capture_output=True, encoding="utf-8", timeout=30)
         assert json.loads(cp.stdout)["error"]["code"] == -32003
         assert d.hub.config.get("approval.timeout_s") != 2
         # đọc vẫn được (không đổi hành vi cho client cũ/hook)

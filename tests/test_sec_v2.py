@@ -55,11 +55,11 @@ async def test_admin_surface_requires_human_token_over_socket(home):
         d.hub.agents.create({"id": "a2", "name": "A2", "tool_policy": {"allow_bypass": True}})
         d.hub.agents.update("a2", {"tool_policy": {"allow_bypass": False}})
         code = ("import json,socket,sys;m,p=sys.argv[2],json.loads(sys.argv[3]);from cfharness import transport;s=transport.connect(sys.argv[1],30);"
-                "s.sendall((json.dumps({'jsonrpc':'2.0','id':1,'method':m,'params':p})+'\\n').encode());print(s.makefile().readline())")
+                "s.sendall((json.dumps({'jsonrpc':'2.0','id':1,'method':m,'params':p})+'\\n').encode());sys.stdout.buffer.write(s.makefile('rb').readline())")  # nguyên byte UTF-8 (Windows: locale cp1252)
         for m, prm in (("agent.revert", {"id": "a2", "to": 1}), ("agent.archive", {"id": "a2"}), ("trash.restore", {"id": "a2"}),
                        ("trash.purge", {"id": "a2", "confirm": "a2"})):
             cp = await asyncio.to_thread(subprocess.run, [sys.executable, "-c", code, str(home.socket), m, json.dumps(prm)],
-                                         capture_output=True, text=True, timeout=30)
+                                         capture_output=True, encoding="utf-8", timeout=30)
             assert json.loads(cp.stdout).get("error", {}).get("code") == -32003, (m, cp.stdout)
         assert not (d.hub.store.get_agent("a2").get("tool_policy") or {}).get("allow_bypass")
     finally:
