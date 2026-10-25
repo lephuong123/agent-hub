@@ -48,6 +48,14 @@ DEFAULTS: dict[str, Any] = {
         # false = chỉ `destructive` mới hỏi người (uncertain → cho chạy + audit); vẫn giữ uncertain vùng hub/policy và tool MCP
         # người đặt `require_approval`. Sandbox OS + permissions.deny vẫn áp. Người ít phải chạm nhất: false.
         "hold_uncertain": True,
+        # WEB-1: WebFetch/curl — SSRF (loopback/RFC1918/link-local/CGNAT/metadata/IPv6, scheme, user:pass@) luôn chặn; DNS phân giải
+        # trong daemon, mọi IP phải công khai (không phân giải được → giữ chờ người). Glob domain: deny → chặn thẳng;
+        # allow (rỗng = mọi domain công khai) → ngoài danh sách giữ chờ người (WebFetch; Bash đã có sandbox.allowed_domains).
+        "web": {"allow_domains": [], "deny_domains": [], "resolve_dns": True, "dns_timeout_s": 3},
+        # LLM thứ hai cho `uncertain` (guard/second_opinion.py): CHỈ người bật; chỉ hạ uncertain → safe/write, mọi lỗi/hết giờ/hết ngân
+        # sách/trả lời khác → giữ chờ người. Không bao giờ áp cho destructive/forbidden/tài nguyên bảo vệ/vùng hub.
+        "second_opinion": {"enabled": False, "model": "haiku", "binary": None, "timeout_s": 45, "call_budget_usd": 0.02,
+                           "daily_budget_usd": 0.5, "max_calls_per_day": 200, "cache_ttl_s": 3600},
         # python chạy hook/hub-guard (null = python của daemon)
         "python": None,
         # gọi `git` để biết thay đổi chưa commit / nhánh đã push (FR-SG-01 nhóm Git)
@@ -179,6 +187,11 @@ DEFAULTS: dict[str, Any] = {
         # profile strict = Read/Grep/Glob (như MGR-8); hermes = Bash/Read/Write/Edit/Grep/Glob/TodoWrite + Web + MCP trusted (chỉ đọc),
         # VẪN dưới hook guard + sandbox OS + approval. null = theo profile. `cfharness manager capabilities show|set`.
         "capabilities": {"profile": "strict", "tools": None, "mcp": None, "web": None},
+        # WEB-1: WebFetch của điều phối viên — `any` = mọi domain công khai (vẫn chặn SSRF + guard.web.deny_domains);
+        # `allowlist` = chỉ guard.web.allow_domains (+ host người đã "luôn cho phép"), ngoài danh sách → giữ chờ người duyệt
+        "web_domains": "any",
+        # Windows (không sandbox OS): khung rộng (hermes) bị từ chối/hạ về strict trừ khi NGƯỜI đặt true — manager/sandbox_gate.py
+        "allow_hermes_without_sandbox": False,
     },
     # M3 — team & điều phối (FR-TK-*, FR-RT-12/16, FR-OB-03)
     "tasks": {
@@ -540,6 +553,10 @@ def validate_setting(key: str, value: Any) -> None:
                 validate_capabilities("manager.capabilities", value["capabilities"])
         else:
             validate_capabilities(key, value)
+    if key in ("guard", "manager", "manager.web_domains") or key.startswith(("guard.web", "guard.second_opinion")):
+        from .guard.url_safety import validate_setting as _validate_web
+
+        _validate_web(key, value)
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")

@@ -99,7 +99,7 @@ def snapshot(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
     now = time.time()
     store = hub.store
     agents = hub.agents.list()
-    approvals = hub.approvals.list("pending", limit=500)
+    approvals = hub.guard.annotate_always(hub.approvals.list("pending", limit=500))  # `always_offer` cho nút "Luôn cho phép"
     appr_by_agent: dict[str, list[dict[str, Any]]] = {}
     for a in approvals:
         a["wait_s"] = round(_age_s(a.get("opened_at"), now) or 0.0, 1)

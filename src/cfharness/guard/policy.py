@@ -329,6 +329,62 @@ class PolicyStore:
         self._cache = None
         return self.repo_deny_list()
 
+    # ------------------------------------------------------------------ luật "luôn cho phép" (người tạo khi duyệt `--always`)
+    @property
+    def always_file(self) -> Path:
+        return self.dir / "always_allow.yaml"
+
+    def always_list(self, include_disabled: bool = False) -> list[dict[str, Any]]:
+        """Luật hẹp: `exact` = agent + tool + dấu vân tay thao tác; `web_domain` = agent + host CHÍNH XÁC (không wildcard).
+        Đọc lỗi/không phải dict → [] (không luật nào = giữ chờ người, fail-closed)."""
+        try:
+            rules = self._read(self.always_file).get("rules") or []
+        except Exception:
+            return []
+        out = [dict(r) for r in rules if isinstance(r, dict) and r.get("id") and r.get("kind") in ("exact", "web_domain")]
+        return out if include_disabled else [r for r in out if not r.get("disabled")]
+
+    def always_add(self, rule: dict[str, Any]) -> dict[str, Any]:
+        if rule.get("kind") not in ("exact", "web_domain"):
+            raise ValueError("kind luật luôn-cho-phép phải là exact|web_domain")
+        if rule["kind"] == "exact" and not (rule.get("tool") and rule.get("fingerprint")):
+            raise ValueError("luật exact cần tool + fingerprint")
+        if rule["kind"] == "web_domain" and (not rule.get("domain") or any(c in str(rule["domain"]) for c in "*?[]")):
+            raise ValueError("luật web_domain cần host chính xác (không wildcard)")
+        self.ensure()
+        self._snapshot()
+        data = self._read(self.always_file)
+        rules = [r for r in (data.get("rules") or []) if isinstance(r, dict)]
+        for r in rules:  # trùng (cùng agent + cùng đích) → trả luật cũ (bật lại nếu đã gỡ)
+            same = r.get("kind") == rule["kind"] and r.get("agent_id") == rule.get("agent_id") and (
+                (rule["kind"] == "exact" and r.get("tool") == rule.get("tool") and r.get("fingerprint") == rule.get("fingerprint"))
+                or (rule["kind"] == "web_domain" and r.get("domain") == rule.get("domain")))
+            if same and not r.get("disabled"):
+                return dict(r)
+        new = {"id": "aa_" + secrets.token_hex(4), **rule, "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        rules.append(new)
+        data["rules"] = rules
+        data["version"] = int(data.get("version") or 1) + 1
+        self._write(self.always_file, data)
+        return new
+
+    def always_rm(self, rid: str, *, by: str = "user") -> dict[str, Any]:
+        """Gỡ (vô hiệu hoá, giữ lịch sử trong file + history/) — không xoá cứng để còn truy vết."""
+        self.ensure()
+        data = self._read(self.always_file)
+        rules = [r for r in (data.get("rules") or []) if isinstance(r, dict)]
+        hit = next((r for r in rules if r.get("id") == rid and not r.get("disabled")), None)
+        if hit is None:
+            raise KeyError(rid)
+        self._snapshot()
+        hit["disabled"] = True
+        hit["disabled_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        hit["disabled_by"] = by
+        data["rules"] = rules
+        data["version"] = int(data.get("version") or 1) + 1
+        self._write(self.always_file, data)
+        return dict(hit)
+
     def ensure(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
         (self.dir / "history").mkdir(exist_ok=True)
@@ -391,7 +447,7 @@ class PolicyStore:
     def _snapshot(self) -> None:
         hist = self.dir / "history" / time.strftime("%Y%m%dT%H%M%S")
         hist.mkdir(parents=True, exist_ok=True)
-        for p in (self.protected_file, self.catalog_file):
+        for p in (self.protected_file, self.catalog_file, self.always_file, self.repo_deny_file):
             if p.exists():
                 shutil.copy2(p, hist / p.name)
 

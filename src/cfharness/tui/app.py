@@ -10,7 +10,7 @@ Luồng dữ liệu:
   detail}` → ring buffer bù phần còn thiếu (kể cả delta) rồi nối live; khử trùng theo (epoch, seq) (FR-UI-03).
 - Subscriber chậm bị daemon ngắt (`slow_consumer`, NFR-08) → TUI tự đăng ký lại từ seq cuối đã thấy.
 
-Phím màn bảng: ↑↓ chọn · Enter attach · m điều phối (chat với điều phối viên) · a approve · d deny · N báo nhầm (allow + đánh dấu) · s steer · x stop
+Phím màn bảng: ↑↓ chọn · Enter attach · m điều phối (chat với điều phối viên) · a approve · A luôn cho phép (chỉ khi daemon báo đủ điều kiện, có xác nhận) · d deny · N báo nhầm (allow + đánh dấu) · s steer · x stop
 (xác nhận) · X stop ngay · T takeover · n tạo · e sửa · Del xoá · / lọc · g team · o sắp xếp · t tasks · l learnings ·
 f feedback (good|wrong|partial, H-16) · E estop · q thoát. Có `learning.applied` → thông báo ngắn "X learned: …".
 """
@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from rich.markdown import Markdown
+from rich.markup import escape as _mk_escape
 from rich.text import Text
 from textual import on
 from textual.app import App, ComposeResult
@@ -74,6 +75,7 @@ class HtopScreen(Screen):
     BINDINGS = [
         Binding("enter", "attach", "Attach", show=True),
         Binding("a", "approve", "Duyệt"),
+        Binding("A", "always", "Luôn cho phép", show=False),
         Binding("d", "deny", "Từ chối"),
         Binding("N", "false_positive", "Báo nhầm", show=False),
         Binding("s", "steer", "Steer"),
@@ -222,7 +224,7 @@ class HtopScreen(Screen):
             t.append(f"· luật {a.get('matched_rule') or a.get('destructive_class') or '?'} · chờ {fmt_dur(a.get('wait_s'))} ", style="grey70")
             if a.get("reason"):
                 t.append(f"· {str(a['reason'])[:80]} ", style="grey62")
-            t.append("[a] cho phép  [d] từ chối  [N] báo nhầm", style="bold")
+            t.append("[a] cho phép  " + ("[A] luôn cho phép  " if a.get("always_offer") else "") + "[d] từ chối  [N] báo nhầm", style="bold")
         detail.update(t)
 
     @on(DataTable.RowHighlighted)
@@ -244,18 +246,27 @@ class HtopScreen(Screen):
             return
         self.app.push_screen(AttachScreen(r.id, run_id))
 
-    async def _decide(self, decision: str, note: str | None = None) -> None:
+    def _pending(self) -> list[dict[str, Any]]:
         r = self.selected()
         pend = self.model.pending_for(r.id) if r else []
+        return pend or sorted(self.model.approvals, key=lambda a: a.get("opened_at") or "")
+
+    async def _decide(self, decision: str, note: str | None = None) -> None:
+        pend = self._pending()
         if not pend:
-            pend = sorted(self.model.approvals, key=lambda a: a.get("opened_at") or "")
-            if not pend:
-                self.notify("Không có thao tác nào đang chờ duyệt", severity="warning")
-                return
+            self.notify("Không có thao tác nào đang chờ duyệt", severity="warning")
+            return
         await self.app.decide(pend[0], decision, note)  # type: ignore[attr-defined]
 
     async def action_approve(self) -> None:
         await self._decide("approve")
+
+    def action_always(self) -> None:
+        pend = self._pending()
+        if not pend:
+            self.notify("Không có thao tác nào đang chờ duyệt", severity="warning")
+            return
+        self.app.confirm_always(pend[0])  # type: ignore[attr-defined]
 
     def action_deny(self) -> None:
         def done(note: str | None) -> None:
@@ -641,6 +652,7 @@ class AttachScreen(Screen):
     BINDINGS = [
         Binding("escape", "back", "Về bảng"),
         Binding("a", "approve", "Duyệt"),
+        Binding("A", "always", "Luôn cho phép", show=False),
         Binding("d", "deny", "Từ chối"),
         Binding("s", "steer", "Steer"),
         Binding("x", "stop", "Dừng"),
@@ -787,7 +799,8 @@ class AttachScreen(Screen):
             b = Text()
             b.append(" ⏸ CHỜ NGƯỜI DUYỆT " if a["status"] == "waiting_human" else " ◐ CHỜ DUYỆT ", style="bold black on yellow")
             b.append(f" {a.get('preview')}  ", style="bold yellow")
-            b.append(f"luật {a.get('matched_rule') or '?'} · chờ {fmt_dur(a.get('wait_s'))}  [a] cho phép · [d] từ chối", style="bold")
+            b.append(f"luật {a.get('matched_rule') or '?'} · chờ {fmt_dur(a.get('wait_s'))}  [a] cho phép"
+                     + (" · [A] luôn cho phép" if a.get("always_offer") else "") + " · [d] từ chối", style="bold")
             banner.update(b)
             banner.display = True
         else:
@@ -819,6 +832,13 @@ class AttachScreen(Screen):
             self.notify("Run này không có thao tác chờ duyệt", severity="warning")
             return
         await self.app.decide(pend[0], "approve", None)  # type: ignore[attr-defined]
+
+    def action_always(self) -> None:
+        pend = sorted((a for a in self.model.approvals if a.get("run_id") == self.run_id), key=lambda a: a.get("opened_at") or "")
+        if not pend:
+            self.notify("Run này không có thao tác chờ duyệt", severity="warning")
+            return
+        self.app.confirm_always(pend[0])  # type: ignore[attr-defined]
 
     def action_deny(self) -> None:
         pend = sorted((a for a in self.model.approvals if a.get("run_id") == self.run_id), key=lambda a: a.get("opened_at") or "")
@@ -1443,16 +1463,38 @@ class TopApp(App):
         await self.refresh_snapshot()
         return True
 
-    async def decide(self, approval: dict[str, Any], decision: str, note: str | None) -> None:
+    async def decide(self, approval: dict[str, Any], decision: str, note: str | None, *, always: bool = False) -> None:
         method = "approval.approve" if decision == "approve" else "approval.deny"
+        params: dict[str, Any] = {"id": approval["id"], "note": note, "channel": "tui", "by": "user"}
+        if always and decision == "approve":
+            params["always"] = True  # daemon kiểm lại điều kiện (`always_prepare`) — không đủ → lỗi, approval giữ nguyên
         try:
-            await self.client.call(method, {"id": approval["id"], "note": note, "channel": "tui", "by": "user"})
+            res = await self.client.call(method, params)
         except Exception as e:
             self.notify(_err(e), severity="error")  # vd viewer khác đã quyết trước (FR-UI-04)
             await self.refresh_snapshot()
             return
-        self.notify(("Đã cho phép " if decision == "approve" else "Đã từ chối ") + f"{approval.get('preview') or approval['id']}", severity="information" if decision == "approve" else "warning")
+        rule = (res or {}).get("always_rule") if isinstance(res, dict) else None
+        self.notify(("Đã cho phép " if decision == "approve" else "Đã từ chối ") + f"{approval.get('preview') or approval['id']}"
+                    + (f" + luật luôn cho phép {rule.get('id')} (gỡ: cfharness guard always rm {rule.get('id')})" if rule else ""),
+                    severity="information" if decision == "approve" else "warning")
         await self.refresh_snapshot()
+
+    def confirm_always(self, approval: dict[str, Any]) -> None:
+        """Phím A: chỉ khi daemon báo `always_offer` (cùng kiểm tra với `always_prepare`); hộp xác nhận nói rõ luật sẽ tạo."""
+        offer = approval.get("always_offer")
+        if not offer:
+            self.notify(f"Yêu cầu {approval['id']} không đủ điều kiện 'luôn cho phép' (phá huỷ/vùng bảo vệ) — chỉ cho phép MỘT lần bằng [a]",
+                        severity="warning")
+            return
+        msg = (f"[b]Luôn cho phép[/b] yêu cầu {_mk_escape(str(approval['id']))} — cho phép lần này VÀ tạo "
+               f"{_mk_escape(str(offer.get('summary') or ''))}.\nGỡ sau bằng: cfharness guard always rm <id luật>")
+
+        def done(ok: bool | None) -> None:
+            if ok:
+                self.run_worker(self.decide(approval, "approve", None, always=True))
+
+        self.push_screen(ConfirmScreen(msg, yes="Luôn cho phép (y)"), done)
 
     async def steer(self, run_id: str, text: str) -> bool:
         try:

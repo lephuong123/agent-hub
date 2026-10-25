@@ -55,8 +55,16 @@ def cmd_approvals(ctx: Any) -> int:
 def cmd_decide(ctx: Any) -> int:
     a = ctx.args
     method = "approval.approve" if a.cmd == "approve" else "approval.deny"
-    r = ctx.call(method, {"id": a.id, "note": a.note, "channel": "cli", "by": "user"})
-    ctx.out(r, f"{r['id']}: {r['status']} (chờ {r.get('wait_s')}s) — {r.get('preview')}")
+    params = {"id": a.id, "note": a.note, "channel": "cli", "by": "user"}
+    if a.cmd == "approve" and getattr(a, "always", False):
+        params["always"] = True
+    r = ctx.call(method, params)
+    extra = ""
+    if r.get("always_rule"):
+        ar = r["always_rule"]
+        extra = (f"\n  luật luôn cho phép {ar['id']} ({ar['kind']}: " + (ar.get("domain") or (ar.get("preview") or "")[:60]) + f", agent {ar.get('agent_id')})"
+                 f" — gỡ: cfharness guard always rm {ar['id']}")
+    ctx.out(r, f"{r['id']}: {r['status']} (chờ {r.get('wait_s')}s) — {r.get('preview')}{extra}")
     return 0
 
 
@@ -112,6 +120,16 @@ def cmd_guard(ctx: Any) -> int:
         else:
             r = ctx.call("guard.repo_deny.rm", {"repo": a.repo, "pattern": a.pattern})
             ctx.out(r, f"đã gỡ mẫu chặn repo {a.repo}")
+        return 0
+    if a.action == "always":
+        if a.op == "list":
+            rows = ctx.call("guard.policy").get("always_allow") or []
+            ctx.out(rows, _table([[r["id"], "đã gỡ" if r.get("disabled") else "bật", r.get("agent_id") or "*", r["kind"], r.get("tool") or "",
+                                   (r.get("domain") or r.get("preview") or "")[:60], r.get("approval_id") or "", r.get("created_at") or ""] for r in rows],
+                                 ["ID", "TRẠNG THÁI", "AGENT", "KIỂU", "TOOL", "THAO TÁC/DOMAIN", "TỪ APPROVAL", "LÚC"]) if rows else "(chưa có luật luôn cho phép)")
+        else:
+            r = ctx.call("guard.protect.rm", {"id": a.id})
+            ctx.out(r, f"đã gỡ luật luôn cho phép {r['id']} (lịch sử giữ trong policy/history/)")
         return 0
     if a.action == "protect":
         if a.op == "list":
@@ -176,6 +194,9 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
         x = sub.add_parser(name, help=hlp, parents=[common])
         x.add_argument("id")
         x.add_argument("--note", help="ghi chú (agent đọc được khi bị từ chối)")
+        if name == "approve":
+            x.add_argument("--always", action="store_true",
+                           help="luôn cho phép đúng thao tác này cho agent này (chỉ thao tác 'không chắc'; KHÔNG áp cho thao tác phá huỷ)")
         x.set_defaults(fn=cmd_decide)
 
     g = sub.add_parser("guard", help="bộ phân loại thao tác phá huỷ và tài nguyên được bảo vệ", parents=[common])
@@ -209,6 +230,11 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     rdr = rds.add_parser("rm", parents=[common])
     rdr.add_argument("repo")
     rdr.add_argument("pattern", nargs="?")
+    al = gs.add_parser("always", help="luật luôn cho phép tạo khi duyệt --always (chỉ người gỡ)", parents=[common])
+    als = al.add_subparsers(dest="op", required=True)
+    als.add_parser("list", parents=[common])
+    alr = als.add_parser("rm", parents=[common])
+    alr.add_argument("id")
     pr = gs.add_parser("protect", help="tài nguyên được bảo vệ (chỉ người sửa)", parents=[common])
     ps = pr.add_subparsers(dest="op", required=True)
     ps.add_parser("list", parents=[common])

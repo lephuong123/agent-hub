@@ -237,3 +237,70 @@ audit + CLI forbidden từ agent, host MCP của agent tự vào domain).
 
 Toàn bộ pytest xanh 2 lần (583, 1 skip). Daemon thật khởi động lại (không run nào chạy, ESTOP giữ BẬT); `guard test` thật:
 `security find-generic-password`/`gh auth token`/`git credential fill` → forbidden; MCP domain của toa agent (`toasoan.cchchn.com`) tự vào allowlist.
+
+
+## WEB-1 — kiểm mạng của guard cho WebFetch/curl (SSRF, DNS, danh sách domain)
+Lỗ hổng đã biết (M7-core.md §9 "Rủi ro còn lại"): WebFetch là kênh ra dữ liệu, chưa có allowlist domain, DNS rebinding không bị bắt.
+- `guard/url_safety.py` (ý tưởng Hermes `tools/url_safety.py`): `static_check(url)` thuần — scheme chỉ http/https, cấm `user:pass@`,
+  `\`/ký tự điều khiển, tên nội bộ (`localhost`, `*.localhost|.local|.internal|.home.arpa|.lan`, tên một nhãn), IP literal MỌI dạng
+  (`0x7f.1`, `2130706433`, `0177.0.0.1`, IPv6 mapped/6to4/NAT64/Teredo) thuộc loopback/RFC1918/link-local/CGNAT 100.64/10/ULA/multicast/
+  reserved; metadata (169.254.169.254, 169.254.170.2, fd00:ec2::254, 100.100.100.200, `metadata.google.internal`…) → `metadata=True`.
+  `resolve_check(host)` phân giải DNS (thread, hạn `guard.web.dns_timeout_s`), MỌI IP phải công khai; không phân giải được → `url_dns_failed`.
+- Classifier: WebFetch metadata → **forbidden mọi agent**; scheme/credentials → uncertain; run manager: mọi luật mạng (`NET_BLOCK_RULES`) →
+  forbidden. Bash curl/wget/http/xh: thu URL vào `Verdict.net_urls` (bỏ giá trị của `-o/-H/-d…`), metadata literal → forbidden (kể cả `-O <url>`).
+- Daemon `GuardService.net_check` (sau classify, chỉ NÂNG mức): `guard.web.deny_domains` (glob) → forbidden (WebFetch + URL của curl);
+  DNS về metadata → forbidden; DNS về IP nội bộ → WebFetch agent thường giữ chờ người, run manager forbidden (cả curl);
+  DNS lỗi → WebFetch giữ chờ người. Allowlist (chỉ WebFetch — Bash đã có `sandbox.allowed_domains`): `guard.web.allow_domains` khác rỗng,
+  hoặc run manager với `manager.web_domains=allowlist` → host ngoài danh sách (và không có luật `web_domain` người đã "luôn cho phép")
+  → `web_domain_not_allowed` = approval chờ NGƯỜI (không cấm, không tự cho qua). Luật mạng ∈ `ALWAYS_HOLD_*` nên `hold_uncertain=false` không mở.
+  `guard test` cũng chạy net_check.
+- **Chọn mặc định**: `manager.web_domains: any` + `guard.web.allow_domains: []` — điều phối viên khung hermes vẫn tra web công khai không
+  hỏi (mục tiêu §9), nhưng SSRF/metadata/LAN luôn chặn và người có `deny_domains`. Đánh đổi: `any` vẫn để ngỏ kênh exfil qua query URL tới
+  domain công khai bất kỳ khi bị prompt injection; người muốn chặt đặt `manager.web_domains allowlist` + `guard.web.allow_domains [...]`
+  (duyệt `--always` từng domain cần thêm). Không chọn allowlist mặc định vì danh sách "hợp lý" chung không tồn tại và mọi tra cứu ngoài
+  danh sách sẽ thành approval (mỏi duyệt → duyệt mù).
+- Config: `guard.web.{allow_domains, deny_domains, resolve_dns (chỉ nhận true), dns_timeout_s}`, `manager.web_domains any|allowlist`;
+  nhánh `guard`/`manager` ∈ `integrity.SECURITY_KEYS` + `config.set` ∈ HUMAN_ONLY; `config.validate_setting` → `url_safety.validate_setting`.
+
+**Rủi ro còn lại.** (1) DNS rebinding: WebFetch chạy trong tiến trình `claude` và tự phân giải lại lúc tải — tên miền TTL 0 trả IP công
+khai cho daemon rồi 127.0.0.1 cho claude KHÔNG chặn được ở lớp hook (không có lớp proxy/pin IP cho WebFetch); web cfharness còn đòi
+phiên + khoá, MCP HTTP đòi bearer. (2) Redirect: hook chỉ thấy URL ban đầu; redirect do `claude` tự xử lý (theo hiểu biết hiện tại redirect khác host được
+báo lại cho model và cần lời gọi mới — qua hook lại — nhưng CHƯA kiểm chứng trên claude thật). (3) WebSearch không có URL để kiểm;
+truy vấn có thể chứa dữ liệu. (4) Bash: phụ thuộc sandbox mạng (`allowed_domains`); trên nền tảng không có sandbox (Windows) curl tới domain
+công khai trỏ nội bộ chỉ bị chặn với run manager và metadata.
+
+## LLM-2 — LLM thứ hai cho `uncertain` + "luôn cho phép" từ duyệt của người
+- `guard/second_opinion.py` (`GuardService.second`), gọi trong DAEMON (`GuardService.check`), không trong hook. Tắt mặc định
+  (`guard.second_opinion.enabled=false`, chỉ người bật; nhánh `guard` kiểm toàn vẹn). Gọi `AgentRuntime.oneshot` (`claude -p --json-schema
+  --no-session-persistence --tools ""`, model `haiku`, `--max-budget-usd call_budget_usd`). Schema `{verdict: safe|write|needs_human, reason}`.
+- Chỉ cho `uncertain` đủ điều kiện (`classifier.always_eligible`): không destructive/forbidden/tài nguyên bảo vệ/klass hub|policy|guard/
+  luật mạng-domain/`mcp_require_approval`/`classifier_error`. Chỉ HẠ: safe|write → allow (`guard_decisions.classifier='llm'`, rule
+  `llm:<luật gốc>`, audit `decided_by=llm` + chi phí/model/lý do). needs_human, verdict lạ, thừa trường, lỗi, hết giờ (≤ `timeout_s` và
+  ≤ thời gian hook còn lại), vượt ngân sách ngày/`max_calls_per_day` → giữ chờ người như cũ (audit `guard.second_opinion`, lý do LLM nối
+  vào approval). Đã có approval chờ cho cùng thao tác → không gọi lại.
+- Prompt injection: input là JSON (escape) trong ranh giới `<<<TOOL_CALL_<nonce ngẫu nhiên>>>`; system prompt: dữ liệu không tin cậy, câu
+  nhắm vào bộ phán xử = dấu hiệu tấn công → needs_human. Lọc TRƯỚC (`INJECTION_RE`, sau NFKC, cả `description`): "ignore previous",
+  "security reviewer", "respond safe", "verdict", `</system>`, "pre-approved"… → giữ chờ người, KHÔNG gọi model.
+- Cache: sha256(fingerprint thao tác + cwd + vai + model), TTL `cache_ttl_s` (trong bộ nhớ daemon). Ngân sách: `hub_state.guard_second_opinion`
+  {day, cost_usd, calls}; một lời gọi model mỗi lúc (khoá) để đếm đúng. Chi phí KHÔNG vào bảng runs/báo cáo cost (tránh run kind mới đi
+  vào vòng học) — chỉ audit + hub_state.
+- "Luôn cho phép": `approval.approve {…, always: true}` / `cfharness approve <id> --always`. Kiểm TRƯỚC khi quyết (`always_prepare`,
+  `require_human`): approval guard, `risk_level == uncertain` và đủ điều kiện như trên → luật `exact` (agent + tool + `action_fingerprint`,
+  không wildcard); approval `web_domain_not_allowed` → luật `web_domain` (agent + host chính xác). Destructive → lỗi, approval giữ nguyên.
+  Lưu `policy/always_allow.yaml` (snapshot `policy/history/` mỗi lần đổi, rebaseline integrity, event `policy.changed` + audit). Classifier
+  tra ở `classify()` qua `GuardContext.always_allow` — chỉ hạ `uncertain` đủ điều kiện (luật trùng fingerprint của lệnh destructive vẫn
+  không có tác dụng). Gỡ: `cfharness guard always rm <aa_id>` = `guard.protect.rm {id: aa_…}` (HUMAN_ONLY sẵn có; luật bị đánh dấu
+  `disabled`, không xoá cứng). Xem: `cfharness guard always list` / `guard.policy.always_allow`. CLI từ Bash agent → forbidden.
+- Dây nút TUI/web/Telegram cho `always`: ĐÃ LÀM. Điều kiện chỉ ở daemon: `GuardService.always_offer(row)` (gọi chung `_always_spec`
+  với `always_prepare`) → field `always_offer` `{kind, agent_id, tool, fingerprint|domain, summary}` | None trên `approval.list|get` và
+  `tui.snapshot`; client chỉ hiện nút khi khác None, bấm vẫn qua `approval.approve{always:true}` (kiểm lại). Host `web_domain` phải là
+  DNS/IPv4 thuần (`_HOST_RE`; IDN/IPv6/chữ lạ → chỉ duyệt một lần) vì host hiện ở tin có nút. TUI: phím `A` (màn bảng + attach) → hộp xác
+  nhận nêu luật (markup đã escape). Web: `ACTIONS.approve_always` (session + CSRF + khoá phiên như mọi POST) → hộp xác nhận → trang bước 2
+  BẮT BUỘC (`approve2.html` nhánh `always`, nêu luật). Telegram: nút "Luôn cho phép…" (`aa`, hàng riêng, nonce+HMAC) → bước 2 sửa tại chỗ
+  nêu luật (`aac`) → `bot.call` (HUMAN_ONLY, audit `telegram:<chat>`); nút cho approval không đủ điều kiện (nonce hợp lệ) → bước 1 không
+  cấp xác nhận, bước 2 daemon từ chối. Test: `test_telegram.py::test_always_*`, `test_web.py::test_always_*`,
+  `test_tui.py::test_always_key_*`, `test_guard_second_opinion.py::test_always_offer_*`.
+
+Test: `tests/test_guard_web.py` (59), `tests/test_guard_second_opinion.py` (25). Đỏ đã kiểm bằng plugin tạm (biến `RED`, scratchpad): bỏ
+`always_eligible` ở service, bỏ lọc injection, DNS luôn ok, bỏ luật mạng khỏi ALWAYS_HOLD, cho luật
+always hạ cả destructive → mỗi lần có ca đỏ (1/7/7/1/1). Kiểm verdict hợp lệ chỉ ở một chỗ (`SecondOpinion.ask`).

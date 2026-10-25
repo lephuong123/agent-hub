@@ -720,3 +720,58 @@ async def test_sandbox_localhost_badge_and_toggle(env):
     await env.post("/do/sandbox_localhost", {"id": "ag0", "on": "0", "confirm": "yes"})
     assert not env.hub.guard.sandbox_overrides("ag0")["allow_localhost"]
     assert "lh-badge" not in (await env.client.get("/agents")).text
+
+
+# =========================================================================== LLM-2: "Luôn cho phép" (chỉ approval đủ điều kiện, luôn bước 2)
+def open_uncertain(hub, run_id: str, *, tool: str = "Bash", tool_input: dict | None = None, rule: str = "eval_dynamic", klass: str = "system") -> dict:
+    return hub.approvals.open(
+        hub.store.get_run(run_id), tool_name=tool, tool_input=tool_input or {"command": 'eval "$CMD"'}, tool_use_id="toolu_u",
+        fingerprint="fpu-" + run_id, verdict={"klass": klass, "rule": rule, "verdict": "uncertain", "reason": "chưa chắc"}, channel="hook",
+    )
+
+
+async def test_always_button_only_for_eligible_and_two_steps(held):
+    env = held
+    await env.login()
+    run = await running_run(env)
+    bad = open_approval(env.hub, run["id"])  # destructive
+    ok = open_uncertain(env.hub, run["id"])
+    html = (await env.client.get("/approvals")).text
+    forms = re.findall(r'<form method="post" action="/do/approve_always".*?</form>', html, re.S)
+    assert len(forms) == 1 and f'value="{ok["id"]}"' in forms[0] and bad["id"] not in forms[0]
+    assert env.key not in html
+    # bước 1 (hộp xác nhận) rồi bước 2 BẮT BUỘC: trang nói rõ luật (agent + tool + vân tay), chưa quyết gì
+    r = await env.post("/do/approve_always", {"id": ok["id"], "next": "/approvals"})
+    assert r.status_code == 200 and 'name="confirm" value="yes"' in r.text
+    r = await env.post("/do/approve_always", {"id": ok["id"], "confirm": "yes", "next": "/approvals"})
+    assert r.status_code == 200 and "Xác nhận lần 2 — luôn cho phép" in r.text and 'name="confirm2" value="yes"' in r.text
+    assert "luật exact" in r.text and ok["action_fingerprint"] in r.text and "ag0" in r.text and env.key not in r.text
+    assert env.hub.approvals.get(ok["id"])["status"] == "open" and env.hub.guard.policy()["always_allow"] == []
+    r = await env.post("/do/approve_always", {"id": ok["id"], "confirm": "yes", "confirm2": "yes", "next": "/approvals"})
+    assert r.status_code == 303
+    got = env.hub.approvals.get(ok["id"])
+    assert got["status"] == "allowed" and got["resolved_channel"] == "web"
+    rules = env.hub.guard.policy()["always_allow"]
+    assert len(rules) == 1 and rules[0]["kind"] == "exact" and rules[0]["fingerprint"] == ok["action_fingerprint"] and rules[0]["channel"] == "web"
+    assert audit_rows(env, "approval.resolved")[-1]["channel"] == "web"
+
+
+async def test_always_web_domain_rule_text_and_ineligible_forged_post_rejected(held):
+    env = held
+    await env.login()
+    run = await running_run(env)
+    web = open_uncertain(env.hub, run["id"], tool="WebFetch", tool_input={"url": "https://example.com/x", "prompt": "p"},
+                         rule="web_domain_not_allowed", klass="network")
+    r = await env.post("/do/approve_always", {"id": web["id"], "confirm": "yes"})
+    assert "luật web_domain" in r.text and "example.com" in r.text
+    # POST giả cho approval destructive (không có nút) — kể cả đủ confirm/confirm2 → daemon từ chối, không quyết, không luật
+    bad = open_approval(env.hub, run["id"])
+    r = await env.post("/do/approve_always", {"id": bad["id"], "confirm": "yes", "next": "/approvals"})
+    assert r.status_code == 303 and env.hub.approvals.get(bad["id"])["status"] == "open"
+    r = await env.post("/do/approve_always", {"id": bad["id"], "confirm": "yes", "confirm2": "yes", "next": "/approvals"})
+    assert r.status_code == 303 and env.hub.approvals.get(bad["id"])["status"] == "open"
+    assert "flash error" in (await env.client.get("/approvals")).text
+    assert env.hub.guard.policy()["always_allow"] == []
+    # thiếu khoá phiên/CSRF → 403 như mọi POST
+    r = await env.client.post("/do/approve_always", data={"csrf": env.csrf, "id": web["id"], "confirm": "yes", "confirm2": "yes"}, headers={"Origin": BASE})
+    assert r.status_code == 403 and env.hub.approvals.get(web["id"])["status"] == "open"

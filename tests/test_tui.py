@@ -468,3 +468,35 @@ async def test_tasks_tab_lists_and_creates(daemon, hub_home):
         await pilot.pause(0.3)
         assert "Write release notes" in str(scr.query_one("#task-detail", Static).render()) or scr.tasks
         shot(app, "06-tasks.svg")
+
+
+# =========================================================================== LLM-2: phím A "luôn cho phép" (chỉ khi daemon báo đủ điều kiện)
+async def test_always_key_only_for_eligible_with_confirm(held_daemon, hub_home):
+    ctl = held_daemon
+    hub = ctl.hub
+    mk_agents(hub, 1)
+    run = hub.runs.submit("ag0", "job")
+    await until(lambda: (ctl.runs(run["id"]) or {}).get("status") == "running")
+    bad = await _open_approval(hub, run)  # destructive: mở trước → là approval đầu tiên
+    app = TopApp(hub_home.socket, attach=run["id"], refresh_s=0.3)
+    async with app.run_test(size=SIZE) as pilot:
+        assert await until(lambda: isinstance(app.screen, AttachScreen) and app.screen.query_one("#banner").display, pilot=pilot)
+        assert "[A] luôn cho phép" not in str(app.screen.query_one("#banner").render())
+        await pilot.press("A")  # không đủ điều kiện → chỉ cảnh báo, không hộp xác nhận, không gọi RPC
+        await pilot.pause(0.2)
+        assert not isinstance(app.screen, ConfirmScreen)
+        assert hub.approvals.get(bad["id"])["status"] == "open" and hub.guard.policy()["always_allow"] == []
+        hub.approvals.resolve(bad["id"], "denied")
+        ok = hub.approvals.open(hub.store.get_run(run["id"]), tool_name="Bash", tool_input={"command": 'eval "$CMD"'}, tool_use_id="tu",
+                                fingerprint="fp-u", verdict={"klass": "system", "rule": "eval_dynamic", "verdict": "uncertain"}, channel="hook")
+        assert await until(lambda: "[A] luôn cho phép" in str(app.screen.query_one("#banner").render()), pilot=pilot)
+        await pilot.press("A")
+        assert await until(lambda: isinstance(app.screen, ConfirmScreen), pilot=pilot)
+        msg = app.screen.message
+        assert "luật exact" in msg and ok["action_fingerprint"] in msg and "ag0" in msg
+        assert hub.approvals.get(ok["id"])["status"] == "open"  # chưa quyết trước khi xác nhận
+        await pilot.press("y")
+        assert await until(lambda: hub.approvals.get(ok["id"])["status"] == "allowed", pilot=pilot)
+        assert hub.approvals.get(ok["id"])["resolved_channel"] == "tui"
+        rules = hub.guard.policy()["always_allow"]
+        assert len(rules) == 1 and rules[0]["fingerprint"] == ok["action_fingerprint"] and rules[0]["channel"] == "tui"
