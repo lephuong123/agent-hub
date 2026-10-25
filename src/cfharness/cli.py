@@ -91,8 +91,11 @@ def cmd_daemon(ctx: Ctx) -> int:
     if a.action == "run":
         from .daemon import run_foreground
 
+        os.environ["CFHARNESS_HOME"] = str(ctx.paths.home)  # dịch vụ tự khởi động truyền --home; tiến trình con cần env như spawn_background
         run_foreground(ctx.paths)
         return EXIT_OK
+    if a.action in ("install-service", "uninstall-service"):
+        return _daemon_service(ctx)
     client = RpcClient(ctx.paths.socket, timeout=10)
     if a.action == "start":
         try:
@@ -133,7 +136,9 @@ def cmd_daemon(ctx: Ctx) -> int:
         try:
             st = client.call("hub.status")
         except DaemonUnavailable:
-            ctx.out({"daemon_running": False, "home": str(ctx.paths.home)}, f"daemon không chạy (HUB_HOME={ctx.paths.home})")
+            auto = _autostart_status(ctx)
+            ctx.out({"daemon_running": False, "home": str(ctx.paths.home), "autostart": auto},
+                    f"daemon không chạy (HUB_HOME={ctx.paths.home})" + (f"\n{auto['text']}" if auto else ""))
             return EXIT_USER
         es = st["estop"]
         text = (
@@ -152,9 +157,46 @@ def cmd_daemon(ctx: Ctx) -> int:
         if compat:
             st["compat"] = compat
             text += _compat_text(compat)
+        auto = _autostart_status(ctx)
+        if auto:
+            st["autostart"] = auto
+            text += f"\n{auto['text']}"
         ctx.out({**st, "daemon_running": True}, text)
         return EXIT_OK
     return EXIT_USER
+
+
+def _autostart_status(ctx: Ctx) -> dict[str, Any] | None:
+    """Trạng thái dịch vụ tự khởi động cho `daemon status` — không bao giờ làm hỏng lệnh status."""
+    try:
+        from .systems.autostart import Autostart, status_text
+
+        st = Autostart(ctx.paths).status()
+        return {**st, "text": status_text(st)}
+    except Exception:
+        return None
+
+
+def _daemon_service(ctx: Ctx) -> int:
+    """`daemon install-service|uninstall-service [--dry-run]`: tự khởi động daemon khi đăng nhập (systems/autostart.py)."""
+    from .systems.autostart import Autostart
+
+    a = ctx.args
+    au = Autostart(ctx.paths)
+    r = au.install(dry_run=a.dry_run) if a.action == "install-service" else au.uninstall(dry_run=a.dry_run)
+    if ctx.json:
+        ctx.out(r)
+        return EXIT_OK
+    verb = "cài" if a.action == "install-service" else "gỡ"
+    head = f"[thử — không thay đổi gì] sẽ {verb}" if a.dry_run else (f"đã {verb}" if r["changed"] else "không đổi")
+    print(f"{head}: tự khởi động daemon ({r['method']}: {r['name']})")
+    for x in r["actions"]:
+        print(f"  - {x}")
+    if a.action == "install-service":
+        print(f"  lệnh: {' '.join(r['argv'])}")
+    for n in r["notes"]:
+        print(f"  ! {n}")
+    return EXIT_OK
 
 
 def _compat_text(compat: dict[str, Any]) -> str:
@@ -604,8 +646,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     d = sub.add_parser("daemon", help="quản lý daemon", parents=[common])
-    d.add_argument("action", choices=["start", "stop", "status", "run", "logs"])
+    d.add_argument("action", choices=["start", "stop", "status", "run", "logs", "install-service", "uninstall-service"],
+                   help="install-service/uninstall-service: tự khởi động daemon khi đăng nhập (Windows Task Scheduler, macOS LaunchAgent, Linux systemd --user)")
     d.add_argument("--foreground", action="store_true", help="chạy daemon ở tiền cảnh")
+    d.add_argument("--dry-run", action="store_true", help="install-service/uninstall-service: chỉ in kế hoạch, không thay đổi gì")
     d.add_argument("--lines", "-n", type=int, default=50, help="logs: số dòng cuối")
     d.add_argument("--run", help="logs: chỉ dòng có run_id này")
     d.add_argument("--agent", help="logs: chỉ dòng có agent_id này")

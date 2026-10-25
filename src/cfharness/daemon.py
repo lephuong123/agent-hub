@@ -462,6 +462,10 @@ def _req(p: dict[str, Any], key: str) -> Any:
 
 def run_foreground(paths: HubPaths) -> None:
     paths.ensure()
+    if sys.stdout is None or sys.stderr is None:  # pythonw (dịch vụ tự khởi động trên Windows): không có console → ghi daemon.out
+        out = open(paths.logs_dir / "daemon.out", "a", encoding="utf-8", errors="replace", buffering=1)
+        sys.stdout = sys.stdout or out
+        sys.stderr = sys.stderr or out
     setup_logging(paths.logs_dir)
     from .redact import install_log_filter, install_stderr_masking
 
