@@ -490,8 +490,10 @@ async def test_always_key_only_for_eligible_with_confirm(held_daemon, hub_home):
         ok = hub.approvals.open(hub.store.get_run(run["id"]), tool_name="Bash", tool_input={"command": 'eval "$CMD"'}, tool_use_id="tu",
                                 fingerprint="fp-u", verdict={"klass": "system", "rule": "eval_dynamic", "verdict": "uncertain"}, channel="hook")
         assert await until(lambda: "[A] luôn cho phép" in str(app.screen.query_one("#banner").render()), pilot=pilot)
+        shot(app, "13-luon-cho-phep-attach.svg")
         await pilot.press("A")
         assert await until(lambda: isinstance(app.screen, ConfirmScreen), pilot=pilot)
+        shot(app, "14-luon-cho-phep-xac-nhan.svg")
         msg = app.screen.message
         assert "luật exact" in msg and ok["action_fingerprint"] in msg and "ag0" in msg
         assert hub.approvals.get(ok["id"])["status"] == "open"  # chưa quyết trước khi xác nhận
@@ -500,3 +502,19 @@ async def test_always_key_only_for_eligible_with_confirm(held_daemon, hub_home):
         assert hub.approvals.get(ok["id"])["resolved_channel"] == "tui"
         rules = hub.guard.policy()["always_allow"]
         assert len(rules) == 1 and rules[0]["fingerprint"] == ok["action_fingerprint"] and rules[0]["channel"] == "tui"
+
+
+async def test_always_hint_on_table_detail(held_daemon, hub_home):
+    """Màn bảng: dòng chi tiết của approval đủ điều kiện có gợi ý `[A] luôn cho phép`; approval phá huỷ thì không."""
+    ctl = held_daemon
+    hub = ctl.hub
+    mk_agents(hub, 2)
+    run = hub.runs.submit("ag0", "build docs")
+    await until(lambda: (ctl.runs(run["id"]) or {}).get("status") == "running")
+    hub.approvals.open(hub.store.get_run(run["id"]), tool_name="Bash", tool_input={"command": 'eval "$BUILD_CMD"'}, tool_use_id="tu",
+                       fingerprint="fp-u", verdict={"klass": "system", "rule": "eval_dynamic", "verdict": "uncertain",
+                                                    "reason": "lệnh động — không biết trước sẽ chạy gì"}, channel="hook")
+    app = TopApp(hub_home.socket, refresh_s=0.3)
+    async with app.run_test(size=SIZE) as pilot:
+        assert await until(lambda: "[A] luôn cho phép" in str(app.htop.query_one("#detail", Static).render()), pilot=pilot)
+        shot(app, "12-luon-cho-phep.svg")

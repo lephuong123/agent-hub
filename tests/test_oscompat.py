@@ -6,9 +6,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 import pytest
 
@@ -37,7 +40,17 @@ def test_pid_alive_does_not_kill(tmp_path):
 
 
 def test_transport_roundtrip_and_peer_pid(tmp_path):
-    sock = tmp_path / "hub.sock"
+    # AF_UNIX: sun_path ≤ 104 byte (macOS) / 108 (Linux); tmp_path của pytest trên macOS (/private/var/folders/…) quá dài.
+    # Sản phẩm không gặp: Paths.socket tự rút về /tmp/cfharness-<uid>-<hash>.sock khi HUB_HOME dài (test_paths).
+    d = tmp_path if oscompat.IS_WINDOWS else Path(tempfile.mkdtemp(prefix="ah-", dir="/tmp"))
+    try:
+        _roundtrip(d / "hub.sock")
+    finally:
+        if d is not tmp_path:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def _roundtrip(sock: Path) -> None:
     seen: dict = {}
 
     async def handle(reader, writer):
@@ -73,6 +86,28 @@ def test_transport_roundtrip_and_peer_pid(tmp_path):
     assert json.loads(line2) == {"echo": {"y": 2}}
     if sys.platform in ("darwin", "linux", "win32"):
         assert seen["peer"] == os.getpid()
+
+
+@pytest.mark.skipif(oscompat.IS_WINDOWS, reason="AF_UNIX chỉ POSIX")
+def test_long_hub_home_socket_falls_back_and_binds(tmp_path, monkeypatch):
+    """HUB_HOME dài (vd tmp_path macOS) → socket rút về /tmp ngắn, daemon bind được (không OSError AF_UNIX path too long)."""
+    from cfharness import paths as _paths
+
+    for n in (_paths.ENV_SOCKET, _paths._names.LEGACY_ENV_SOCKET):
+        monkeypatch.delenv(n, raising=False)
+    home = tmp_path / ("h" * 120)
+    sock = _paths.HubPaths(home).socket
+    assert str(sock).startswith("/tmp/") and len(str(sock)) <= 100
+    assert _paths.HubPaths(home).socket == sock  # client và daemon tính giống nhau
+
+    async def main():
+        server = await transport.start_server(lambda r, w: w.close(), sock, limit=1 << 16)
+        server.close()
+
+    try:
+        asyncio.run(main())
+    finally:
+        sock.unlink(missing_ok=True)
 
 
 @win_only

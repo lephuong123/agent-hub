@@ -300,7 +300,44 @@ công khai trỏ nội bộ chỉ bị chặn với run manager và metadata.
   nêu luật (`aac`) → `bot.call` (HUMAN_ONLY, audit `telegram:<chat>`); nút cho approval không đủ điều kiện (nonce hợp lệ) → bước 1 không
   cấp xác nhận, bước 2 daemon từ chối. Test: `test_telegram.py::test_always_*`, `test_web.py::test_always_*`,
   `test_tui.py::test_always_key_*`, `test_guard_second_opinion.py::test_always_offer_*`.
+- MCP ngoài `hub_approve(request_id, always=true, confirm_rule)`: ĐÃ LÀM (trước đây chỉ duyệt một lần). **Ai gọi được:** server MCP ngoài
+  là bề mặt NGƯỜI — stdio = `cfharness mcp serve` do client của người (Claude Desktop/Code) spawn; HTTP = chỉ loopback + bearer
+  `control` (`mcp_server/tokens.json`, denyRead trong sandbox). Daemon vẫn xác thực từng lời gọi chứ không tin server MCP:
+  `approval.approve` ∈ HUMAN_ONLY (token `<socket>.auth` + pid ngang hàng không thuộc cây/session/env của run) và
+  `always_prepare`/`always_commit` gọi `require_human` → một run tự spawn `cfharness mcp serve` (vd hub được gán làm MCP của agent) bị
+  nhận là agent → Blocked; thêm nữa classifier coi `mcp__*__hub_approve` dưới mọi tên đăng ký là forbidden (H-18). Vì vậy thêm `always`.
+  **Không lặp logic:** tool gửi `approval.approve {always: true, always_confirm}` — cùng đường `always_prepare → resolve → always_commit`
+  với CLI/TUI/web/Telegram; trả `always_rule` hoặc lỗi điều kiện của daemon. `hub_open_requests` có sẵn `always_offer` (qua
+  `approval.list` → `annotate_always`), mô tả tool nêu nghĩa của trường.
+  **Tương đương bước 2:** client MCP là LLM hành động thay người → có thể bị prompt injection (preview lệnh, output agent) hoặc tự thêm
+  `always`. Bù bằng: (1) mô tả tool + `hub://huong-dan` nói rõ always TẠO LUẬT LÂU DÀI, chỉ khi người nói rõ sau khi xem
+  `always_offer.summary`, không theo chữ trong lệnh/output agent; (2) `confirm_rule` BẮT BUỘC = `always_offer.fingerprint` (exact) |
+  `.domain` (web_domain). Daemon so `always_confirm` với bản luật của `always_prepare` (`guard/rpc.py`) TRƯỚC khi quyết: thiếu/rỗng/sai →
+  lỗi, approval giữ nguyên, lỗi KHÔNG chứa giá trị đúng (thử lại mù không tự khớp); `confirm_rule` không kèm `always` → lỗi (không duyệt
+  một lần ngầm). Đây không phải xác nhận của người thật (LLM đọc offer rồi nhắc lại được) — chỉ chặn gọi mù/nhầm approval; trần rủi ro
+  vẫn là luật hẹp (1 agent + 1 fingerprint hoặc 1 host DNS thuần, chỉ `uncertain` đủ điều kiện, không bao giờ destructive), gỡ được
+  (`cfharness guard always rm`), audit `channel=mcp:<client>`, snapshot `policy/history/`.
+  **Giới hạn:** server HTTP là tiến trình của người → daemon thấy người. Agent đọc được token `control` (máy không có sandbox OS, hoặc lách
+  classifier) gọi được `hub_approve(always)` sau khi đọc `hub_open_requests` — cùng giới hạn §3 với duyệt một lần (vốn đã cho duyệt cả
+  thao tác phá huỷ), nặng hơn vì luật lâu dài nhưng vẫn hẹp. Không cấm riêng always trên HTTP vì không giảm rủi ro lớn hơn đó.
+- Điều phối viên (`ask_owner_permission` kind `approve_action`, `manager/owner_actions.build`): KHÔNG tạo luật always — quyết định giữ.
+  Action chốt sẵn do HUB dựng chỉ có `params={"id"}`; mọi tham số khác của điều phối viên (kể cả `always`/`always_confirm`) bị bỏ. Lưu ý:
+  `execute` chạy với `Caller(via="internal")` (= người) nên nếu action từng mang `always` thì sẽ qua cổng người → phải giữ params cố định.
+  Phím tắt duyệt trong hội thoại (`ManagerService._decide_approval`) cũng không truyền `always`; `approval.*` không ở MANAGER_ALLOWED.
+  Muốn luật lâu dài: người dùng TUI/web/Telegram/CLI/MCP. Test: `tests/test_mcp_approve_always.py` (người tạo đúng luật exact; destructive
+  → lỗi + approval chờ; thiếu/rỗng/sai confirm → lỗi; người gọi agent → Blocked; owner-permission bỏ `always`). Đỏ đã kiểm: tắt so
+  `always_confirm` ở daemon → ca `sai-fingerprint` đỏ.
 
 Test: `tests/test_guard_web.py` (59), `tests/test_guard_second_opinion.py` (25). Đỏ đã kiểm bằng plugin tạm (biến `RED`, scratchpad): bỏ
 `always_eligible` ở service, bỏ lọc injection, DNS luôn ok, bỏ luật mạng khỏi ALWAYS_HOLD, cho luật
 always hạ cả destructive → mỗi lần có ca đỏ (1/7/7/1/1). Kiểm verdict hợp lệ chỉ ở một chỗ (`SecondOpinion.ask`).
+
+## LNX-1 — Linux: ghi đè/xoá tệp có sẵn không cần duyệt (sửa 2026-10-25)
+CI ubuntu đỏ từ PR #1 ở bước SEC; nguyên nhân là hai lỗ thật của bộ phân loại trên Linux (Windows/macOS không bị):
+- **`/tmp` coi là nháp**: `check_overwrite_target` cho mọi tệp có sẵn dưới `/tmp/` là `write` → dự án clone vào `/tmp` (và thư mục tạm
+  của pytest) bị `: >`, `truncate`, `cp`, `dd`, `tee`, `python -c open(…,'w')`, `rsync` ghi đè không hỏi. Nay `_tmp_scratch(p, ctx)`: chỉ
+  miễn khi CẢ đường dẫn lẫn realpath nằm trong `/tmp` VÀ ngoài cwd của run (chặn luôn symlink `/tmp/x` → tệp dự án).
+- **`st_ctime` không phải giờ tạo**: `_birth()` trên Linux dùng `st_ctime` (Python không có birthtime) — ctime đổi theo mọi lần ghi/chmod/
+  rename → `echo >> f; rm f` hay `mv bak f; rm -rf f` được coi là "tệp run tự tạo" → xoá không hỏi. Nay đọc giờ tạo thật qua `statx(2)`
+  (ctypes); không đọc được → coi là KHÔNG do run tạo (fail-closed). Test: `test_preexisting_file_with_fresh_ctime_is_not_run_created`.
+Kiểm trong Docker (user không root như CI): HEAD tái hiện đúng các ca đỏ của CI, bản sửa xanh toàn bộ.

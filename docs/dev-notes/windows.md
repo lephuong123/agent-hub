@@ -1,6 +1,6 @@
 # Windows — mô hình an toàn khác macOS/Linux ở đâu
 
-cfharness chạy native trên Windows (Python 3.13, `claude` 2.1.303). Trên macOS/Linux mọi hành vi giữ nguyên; các khác biệt dưới đây
+cfharness chạy native trên Windows (Python 3.13, `claude` 2.1.303; contract test thật đến 2.1.310). Trên macOS/Linux mọi hành vi giữ nguyên; các khác biệt dưới đây
 chỉ áp khi `sys.platform == "win32"` (gom ở `oscompat.py`, `transport.py`, nhánh `IS_WINDOWS` trong `guard/runtime.py`).
 Đọc cùng `hardening-SEC.md`: ba lớp "không phụ thuộc cách agent viết lệnh" ở đó, trên Windows chỉ còn HAI (mất sandbox OS).
 
@@ -20,7 +20,19 @@ Quyết định: Windows mặc định `failIfUnavailable: false` (nếu không 
 để khi Claude Code bật sandbox Windows thì tự có hiệu lực. Người muốn fail-closed đặt `guard.sandbox.fail_if_unavailable_windows: true`.
 `guard.runtime.sandbox_supported()` = False trên Windows — doctor/status dùng để cảnh báo (`SANDBOX_UNAVAILABLE_NOTE`).
 2.1.303 đã vào `runtime.claude.tested_versions` và `flag_matrix` (`claude --help` 2.1.303 còn đủ mọi cờ của 2.1.302 → cùng danh
-sách; fixture stream-json vẫn của 2.1.302 — chưa ghi fixture/contract test riêng cho 2.1.303).
+sách). 2.1.303 CHỈ được kiểm bằng `--help` + spike trên — KHÔNG có fixture/contract test riêng; giữ trong danh sách vì đã chạy
+thật ở spike này, nhưng mức bằng chứng thấp hơn 2.1.302/2.1.310.
+
+**2.1.310** (2026-10-25, Windows, haiku, tổng ≈ $0.0055): `claude --help` còn đủ mọi cờ của `_FLAGS_2_1_302` (không cờ nào bị
+bỏ/đổi tên) → `flag_matrix["2.1.310"]` cùng danh sách. Fixture stream-json thật ở `tests/fixtures/claude-2.1.310/` (ghi theo cách
+spike M0: `run_iso.sh`/`a02_steer.py`/`a03_interrupt.py`, cwd tạm trong `%TEMP%`, tên user đã che), contract test
+`tests/test_claude_contract_2_1_310.py`: isolated, permission-denied (hook `ask`), budget-exceeded, steer (`steer.ack`),
+ngắt bằng `control_request interrupt` (→ `aborted_tools`, như SIGINT trên POSIX), CTRL_BREAK cho process group (→ KHÔNG có
+`result`, như SIGTERM), và stdout thô của một run thật qua daemon (guard + observe hook, không vi phạm cô lập). Adapter không
+cần sửa. Phát hiện: cwd dạng tên ngắn 8.3 (`C:\Users\XXXXXX~1\…` — chính là `%TEMP%` mặc định) → CLI tự từ chối ghi file bằng
+`permission_denied` `decision_reason_type: safetyCheck` ("suspicious Windows path pattern"), trước cả quyết định của hook
+(fixture `claude-permission-denied-8dot3-win.jsonl`). Hub không dính vì `HubPaths`, `runs.submit` và `cfharness run --cwd` đều
+`resolve()` ra tên dài; chỗ mới nào dựng cwd cho run cũng phải giữ quy tắc này.
 
 ## 2. Lớp nào còn, lớp nào đổi
 

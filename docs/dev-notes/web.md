@@ -169,3 +169,12 @@ Yêu cầu: "UI UX của web làm như claude — logo chế cái mới nhìn gi
 - Ảnh chụp lại (cùng tên): `docs/screenshots/web/*.png` và `docs/screenshots/web/v2/*.png` (1280 px sáng/tối, 900 px, 390 px).
 - Còn lệch so với claude.ai: không có font Copernicus/Styrene (dùng serif/sans hệ thống); menu nhiều mục hơn claude.ai (đủ các trang quản trị);
   danh sách "Gần đây" chỉ hiện ở trang Điều phối (trang khác cần thêm một RPC mỗi lần tải — chưa làm); không có công tắc sáng/tối trong app.
+
+## Ảnh "Luôn cho phép" (LLM-2, 2026-10-25)
+Ảnh mới ở `docs/screenshots/web/v2/` (1280 px, sáng): `20-luon-cho-phep.png` (trang Duyệt: thẻ phá huỷ chỉ có "Cho phép một lần",
+thẻ `uncertain` `eval_dynamic` có thêm nút "Luôn cho phép"), `21-luon-cho-phep-hop-xac-nhan.png` (hộp xác nhận bước 1 nêu luật),
+`22-luon-cho-phep-buoc-2.png` (`approve2.html` nhánh `always` — "Xác nhận lần 2 — luôn cho phép").
+Tạo lại: `web.demo` chỉ seed approval phá huỷ (không đủ điều kiện) → chạy demo qua một wrapper bọc `demo.seed` mở thêm MỘT approval
+`uncertain` (`tool_name="Bash"`, `eval "$TEST_CMD" tests/test_api.py`, luật `eval_dynamic`, lớp `system`) cho run `live` của `lap-trinh`,
+HUB_HOME tạm; Playwright Chromium 1280×860 đăng nhập bằng dòng `LOGIN`, chụp `/approvals` (full page), bấm "Luôn cho phép" (hộp xác nhận),
+"Đồng ý" (trang bước 2). Các ảnh cũ không đổi: demo không có approval đủ điều kiện nên nút không hiện ở đó.
