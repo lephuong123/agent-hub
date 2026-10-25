@@ -79,7 +79,7 @@ def build_argv(spec: RunSpec, claude_cfg: dict[str, Any], cli_version: str | Non
     - `input_format: text`: prompt đi qua argv ngay sau `-p`; nếu prompt bắt đầu bằng '-' (dễ bị hiểu
       nhầm là cờ) thì đưa qua stdin.
     """
-    iso = claude_cfg.get("isolation") or {}
+    iso = {**(claude_cfg.get("isolation") or {}), **(spec.isolation_overrides or {})}
     tp = spec.tool_policy or {}
     argv: list[str] = [str(claude_cfg.get("binary") or "claude"), "-p"]
     stdin: bytes | None = None

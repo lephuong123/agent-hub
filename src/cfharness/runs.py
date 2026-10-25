@@ -404,6 +404,20 @@ class RunManager:
             raise RuntimeError_("runtime.claude.settings phải là mapping JSON")
         guard_cfg = dict(cfg.get("guard") or {})
         guard_on = bool(guard_cfg.get("enabled"))
+        # M7: run của điều phối viên (không có task) dùng hub-self vai trò `manager` — chỉ khi agent đúng là manager được chỉ định
+        is_mgr = (opts.get("hub_self") == "manager" and getattr(hub, "manager", None) is not None and hub.manager.is_manager(agent["id"])
+                  and hub.manager.is_issued(run_id))  # MGR-3: chỉ run do hội thoại/tick tạo
+        if opts.get("hub_self") == "manager" and not is_mgr:
+            opts["hub_self"] = None
+        # connector claude.ai (manager.capabilities.connectors) — cần hook guard để chặn MCP lạ của ~/.claude (manager/connectors.py)
+        conn: dict[str, Any] | None = None
+        if is_mgr and guard_on:
+            conns = tuple(hub.manager.perms.capabilities().get("connectors") or ())
+            if conns:
+                from .manager.connectors import run_setup
+
+                conn = run_setup(conns)
+                settings = {**settings, **conn["settings_patch"]}
         # guard.enabled=false chỉ tắt hook phân loại/hỏi duyệt; permissions.deny tĩnh + sandbox OS vẫn áp (tắt riêng: guard.sandbox.enabled)
         from .guard import runtime as gr
 
@@ -432,6 +446,9 @@ class RunManager:
         # mcp.json: server của agent (luồng A — đã thay secret) + hub-guard (luồng B)
         servers = self._agent_mcp_servers(agent)
         tp = dict(agent.get("tool_policy") or {})
+        if conn and tp.get("tools") is not None and "ToolSearch" not in tp["tools"]:
+            # `--tools` thiếu ToolSearch → CLI nhét schema MỌI tool connector vào ngữ cảnh (đo 2.1.310: 161k vs 15k token/lượt)
+            tp["tools"] = list(tp["tools"]) + ["ToolSearch"]
         rules = self._agent_mcp_tool_rules(agent)
         if rules.get("allowed"):
             tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + rules["allowed"]))
@@ -439,8 +456,8 @@ class RunManager:
             tp["disallowed_tools"] = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + rules["disallowed"]))
         perm_tool = None
         env_extra: dict[str, str] = {}
-        allowed_hooks = list(iso.get("allowed_hooks") or []) + observe_events
-        allowed_mcp = list(agent.get("mcp_servers") or []) + list(iso.get("allowed_mcp_servers") or [])
+        allowed_hooks = list(iso.get("allowed_hooks") or []) + observe_events + list((conn or {}).get("allowed_hooks") or [])
+        allowed_mcp = list(agent.get("mcp_servers") or []) + list(iso.get("allowed_mcp_servers") or []) + list((conn or {}).get("allowed_mcp") or [])
         static: list[str] = []
         if guard_on:
             from .guard import runtime as gr
@@ -471,11 +488,6 @@ class RunManager:
             static = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + gr.static_disallowed(guard_cfg) + hub.guard.repo_deny_patterns(str(cwd))))
             tp["disallowed_tools"] = static
         # M3 — hub-self MCP (FR-MS-08): tool task_* theo vai trò, ràng với run_id
-        # M7: run của điều phối viên (không có task) dùng hub-self vai trò `manager` — chỉ khi agent đúng là manager được chỉ định
-        is_mgr = (opts.get("hub_self") == "manager" and getattr(hub, "manager", None) is not None and hub.manager.is_manager(agent["id"])
-                  and hub.manager.is_issued(run_id))  # MGR-3: chỉ run do hội thoại/tick tạo
-        if opts.get("hub_self") == "manager" and not is_mgr:
-            opts["hub_self"] = None
         if (run.get("task_id") or is_mgr) and opts.get("hub_self"):
             from .mcp_server.hub_self import SERVER_NAME, server_entry
 
@@ -535,6 +547,8 @@ class RunManager:
             agents_json=agent.get("subagents") or None,  # M3 FR-RT-13
             worktree=opts.get("worktree") if wkind == "worktree" else None,
             no_session_persistence=bool(opts.get("no_session_persistence")),  # M4-B: run eval
+            isolation_overrides=(conn or {}).get("isolation_overrides"),
+            allowed_mcp_prefixes=(conn or {}).get("allowed_mcp_prefixes"),
         )
 
     def _agent_mcp_servers(self, agent: dict[str, Any]) -> dict[str, Any]:

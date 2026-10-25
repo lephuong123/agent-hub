@@ -55,6 +55,9 @@ class RunSpec:
     worktree: str | None = None
     # M4-B: run eval (FR-LN-10) — `--no-session-persistence`, không ghi session ra đĩa
     no_session_persistence: bool = False
+    # run điều phối viên có connector claude.ai: ghi đè `runtime.claude.isolation` (setting_sources/strict_mcp_config) cho riêng run
+    isolation_overrides: dict[str, Any] | None = None
+    allowed_mcp_prefixes: list[str] | None = None
 
 
 @dataclass
@@ -174,4 +177,5 @@ def make_adapter(spec: RunSpec) -> ClaudeStreamAdapter:
         allowed_mcp_servers=spec.allowed_mcp_servers,
         allowed_plugin_prefixes=spec.allowed_plugin_prefixes,
         require_no_auto_memory=spec.require_no_auto_memory,
+        allowed_mcp_prefixes=spec.allowed_mcp_prefixes,
     )
