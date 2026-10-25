@@ -5,7 +5,7 @@
   trong `ProgramArguments`. Plist là nguồn sự thật của job (đọc lại mỗi lần), registry chỉ giữ hệ thống NGƯỜI đã đăng ký + khoá.
 - Backend job chọn theo hệ điều hành (`make_backend`): `launchd.Launchctl` (macOS) hoặc `taskscheduler.TaskScheduler` (Windows), cùng
   giao diện `jobs/state/disabled/pause/resume/restart/label_ok`. Đường dẫn so sánh theo `os.path.normcase` + `os.sep` (Windows: không
-  phân biệt hoa/thường, dấu `\`).
+  phân biệt hoa/thường, dấu `\\`).
 - Registry `hub_state["systems.registry"]` = {id: {path, title, added_at, added_by, locked: [label]}}; tạm dừng do hub ở
   `hub_state["systems.paused"]` = {label: {by, at, reason}}. Không có migration.
 - Ghi registry (scan --apply / add / rm / lock) = CHỈ NGƯỜI. Thao tác job (pause|resume|restart) = người hoặc điều phối viên (qua

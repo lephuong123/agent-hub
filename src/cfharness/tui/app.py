@@ -1277,6 +1277,7 @@ AgentFormScreen, ConfirmScreen, PromptScreen, InfoScreen { align: center middle;
 #buttons { height: auto; margin-top: 1; align-horizontal: right; }
 #buttons Button { margin-left: 1; }
 #confirm { width: 64; height: auto; padding: 1 2; border: thick $error; background: $panel; }
+#confirm > Label { width: 100%; }
 #prompt { width: 90; height: auto; padding: 1 2; border: thick $accent; background: $panel; }
 #prompt-title { margin-bottom: 1; }
 #info { width: 100; height: auto; padding: 1 2; border: thick $accent; background: $panel; }
