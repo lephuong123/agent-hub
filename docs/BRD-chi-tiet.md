@@ -669,7 +669,7 @@ Mô tả: Tên `hub_*`, mô tả tiếng Việt, input/output có JSON Schema (s
 | `hub_run_status` (tên ở 0.1–0.6: `hub_run_get`) | `run_id` | trạng thái, outcome, summary, result_json, usage, cost, diff (FR-RT-12), open_requests | ✔ | M1 |
 | `hub_events` | `run_id` **hoặc** `agent_id` **hoặc** `task_id`, `after_seq`, `epoch`, `wait_s` (≤ 25), `level` (`summary`\|`detail`) | `{events[], latest_seq, epoch, truncated, open_requests[], done}` (long-poll) | ✔ | M1 |
 | `hub_open_requests` (tên cũ: `hub_requests_open`) | `scope?` | danh sách approval (chỉ thao tác phá huỷ) / clarify đang mở, kể cả `waiting_human` và thời gian đã chờ | ✔ | M1 |
-| `hub_approve` / `hub_deny` | `request_id`, `note?` | `{status}` — `hub_approve` cho phép một lần đúng `action_fingerprint`; `hub_deny` từ chối (tách tool riêng) | ✗ (destructive) | M1 |
+| `hub_approve` / `hub_deny` | `request_id`, `note?`; `hub_approve` thêm `always?`, `confirm_rule?` | `{status}` — `hub_approve` cho phép một lần đúng `action_fingerprint`; `always=true` + `confirm_rule` = `always_offer.fingerprint|domain` (lấy từ `hub_open_requests`) cho phép VÀ tạo luật "luôn cho phép" hẹp (chỉ thao tác `uncertain` đủ điều kiện; trả `always_rule`; sai/thiếu `confirm_rule` hoặc phá huỷ → lỗi, approval giữ nguyên — LLM-2); `hub_deny` từ chối (tách tool riêng) | ✗ (destructive) | M1 (always: LLM-2) |
 | `hub_cancel` | `run_id` **hoặc** `task_id` (task_id dừng cả run của task con) | `{status}` | ✗ (destructive) | M1 |
 | `hub_steer` | `run_id`, `text` | `{ack}` | ✗ | M2 |
 | `hub_feedback` | `run_id`, `verdict (good\|wrong\|partial)`, `note?`, `corrected_output?` | `{signal_id}` | ✗ | M1 (ghi) / M4 (dùng để học) |

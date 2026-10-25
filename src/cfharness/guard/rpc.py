@@ -9,7 +9,8 @@ Chữ ký (MCP server của luồng A gọi `approval.list|approve|deny` với c
   nút "Luôn cho phép" khi khác None (bấm vẫn kiểm lại ở `approval.approve{always}`).
 - `approval.approve|deny {id | request_id, note?, channel? (vd "mcp:<client>"), actor?|by?}` → approval sau khi quyết.
   `approval.approve {…, always: true}` → thêm luật "luôn cho phép" hẹp (chỉ verdict uncertain đủ điều kiện; destructive → lỗi,
-  không quyết gì); kết quả có `always_rule`. Gỡ: `guard.protect.rm {id: "aa_…"}` (chỉ người); xem: `guard.policy` → `always_allow`.
+  không quyết gì); kết quả có `always_rule`. `always_confirm` (tuỳ chọn; MCP `hub_approve` luôn gửi) = fingerprint|domain của
+  `always_offer` — khác luật sẽ tạo → lỗi, không quyết gì. Gỡ: `guard.protect.rm {id: "aa_…"}` (chỉ người); xem: `guard.policy` → `always_allow`.
 - `guard.check` (hook/hub-guard), `guard.test {command|tool+input, cwd?, run_id?}`, `guard.policy`,
   `guard.protect.list|add|rm`, `notify.test {text?}`, `run.continue {id, prompt}`, `run.resume {id, prompt?}`,
   `agent.purge {id, confirm}` (confirm phải bằng id — người gõ lại).
@@ -75,6 +76,12 @@ def register_rpc(d: "Daemon") -> None:
             # `always` (chỉ approve): kiểm điều kiện TRƯỚC khi quyết (destructive/forbidden/vùng hub/SSRF → lỗi, không quyết gì),
             # quyết như thường, rồi ghi luật hẹp vào policy/always_allow.yaml (có history; gỡ bằng `guard always rm`)
             spec = hub.guard.always_prepare(_id(p)) if decision == "allowed" and p.get("always") is True else None
+            if spec is not None and p.get("always_confirm") is not None:
+                # MCP hub_approve: client phải nhắc lại đúng fingerprint/host của luật sẽ tạo (từ `always_offer`) — gọi mù → lỗi, không quyết gì
+                want = str(spec.get("fingerprint") or spec.get("domain") or "")
+                if not want or str(p["always_confirm"]).strip() != want:
+                    raise HubError("always_confirm không khớp luật sẽ tạo — đọc always_offer (fingerprint hoặc domain) của approval rồi nhắc lại "
+                                   "đúng giá trị; approval vẫn đang chờ")  # cố ý KHÔNG trả giá trị đúng trong lỗi (thử lại mù sẽ không tự khớp)
             res = hub.approvals.resolve(_id(p), decision, by=by, channel=channel, note=p.get("note"))
             if spec is not None:
                 res = {**res, "always_rule": hub.guard.always_commit(spec, by=by, channel=channel)}
