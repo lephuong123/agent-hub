@@ -49,7 +49,7 @@ def test_event_types_additive_only(committed):
 
 def _fixture_events():
     out = []
-    for f in sorted(FIXTURES.glob("*.jsonl")):
+    for f in sorted(FIXTURES.rglob("*.jsonl")):  # gồm fixture theo phiên bản CLI (claude-<ver>/)
         ad = ClaudeStreamAdapter("agent-x", "r_1")
         for line in f.read_text(encoding="utf-8").splitlines():
             if line.strip():

@@ -15,7 +15,7 @@ from typing import Any
 
 import yaml
 
-# Cờ `claude` được phép (runtime.claude.flag_matrix) — lấy từ `claude --help` 2.1.302, kiểm lại trên 2.1.303.
+# Cờ `claude` được phép (runtime.claude.flag_matrix) — lấy từ `claude --help` 2.1.302, kiểm lại trên 2.1.303 và 2.1.310.
 _FLAGS_2_1_302: list[str] = [
     "-p", "--print", "--add-dir", "--agent", "--agents", "--allowed-tools", "--allowedTools", "--append-system-prompt",
     "--autocompact", "--bare", "--betas", "--brief", "--continue", "--debug", "--debug-file", "--disable-slash-commands",
@@ -392,7 +392,9 @@ DEFAULTS: dict[str, Any] = {
         "claude": {
             "binary": "claude",
             # Phiên bản đã kiểm (FR-RT-15). Phiên bản lạ → cảnh báo, vẫn chạy.
-            "tested_versions": ["2.1.302", "2.1.303"],  # 2.1.303: spike Windows (docs/dev-notes/windows.md)
+            # 2.1.302: fixture + contract test M0. 2.1.303: CHỈ `claude --help` + spike sandbox Windows (không fixture riêng).
+            # 2.1.310: `claude --help` + fixture stream-json thật tests/fixtures/claude-2.1.310/ + tests/test_claude_contract_2_1_310.py.
+            "tested_versions": ["2.1.302", "2.1.303", "2.1.310"],
             "include_partial_messages": True,
             # Spike A-04: bật để kiểm hậu nghiệm không có hook lạ (hook Serena…) trong stream
             "include_hook_events": True,
@@ -454,6 +456,8 @@ DEFAULTS: dict[str, Any] = {
             "flag_matrix": {
                 "2.1.302": _FLAGS_2_1_302,
                 "2.1.303": list(_FLAGS_2_1_302),
+                # 2.1.310: `claude --help` còn đủ mọi cờ trong danh sách (không cờ nào bị bỏ/đổi tên) → cùng danh sách.
+                "2.1.310": list(_FLAGS_2_1_302),
             },
             # hardening H-11 (FR-RT-17): hook QUAN SÁT fail-OPEN (cfharness/observe_hook.py) — luôn exit 0, quá timeout_s → hook.timeout
             "observe_hooks": {"enabled": True, "events": ["PostToolUse", "UserPromptSubmit", "Stop"], "timeout_s": 2.0, "cli_timeout_s": 5},
