@@ -779,6 +779,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .home_migrate import add_parsers as _add_home_parsers
 
     _add_home_parsers(sub, common)
+
+    # v17: cfharness search "từ khoá" | --around ID | --read RUN | --browse (session_search.py, FTS5)
+    from .session_search import add_parsers as _add_search_parsers
+
+    _add_search_parsers(sub, common)
     return p
 
 

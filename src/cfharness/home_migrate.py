@@ -28,7 +28,8 @@ from typing import Any
 from .oscompat import IS_WINDOWS
 from .paths import HubPaths, legacy_default_home, legacy_home_in_use, resolve_home
 
-APPEND_ONLY = frozenset({"events", "audit_log", "guard_decisions", "snapshots", "ledger_entries", "integrity_baseline", "sqlite_sequence"})
+APPEND_ONLY = frozenset({"events", "audit_log", "guard_decisions", "snapshots", "ledger_entries", "integrity_baseline", "sqlite_sequence",
+                         "session_messages"})  # v17: văn bản hội thoại là lịch sử; FTS chỉ đồng bộ theo INSERT/DELETE
 HISTORY_COLS = frozenset({("runs", "argv_redacted"), ("runs", "diff")})
 REWRITE_FILES = ("config.yaml", "policy/*.yaml", "policy/golden/*", "mcp/registry.yaml", "checkpoints/*/checkpoint.json")
 SCAN_SKIP_DIRS = ("checkpoints", "runs", "logs", "snapshots", "ledger", "prompts", "policy/history", "trash/tamper", "worktrees", "evals", ".git")
@@ -91,8 +92,10 @@ def _olds(src: Path) -> list[str]:
 def _db_targets(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+    # bảng ảo (FTS5) + bảng bóng của nó (`<tên>_data|_idx|_config…`, có bảng WITHOUT ROWID) — không ghi tay vào chỉ mục
+    virtual = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND sql LIKE 'CREATE VIRTUAL%'")]
     for t in tables:
-        if t in APPEND_ONLY:
+        if t in APPEND_ONLY or any(t == v or t.startswith(v + "_") for v in virtual):
             continue
         for col in conn.execute(f'PRAGMA table_info("{t}")'):
             name, decl = col[1], (col[2] or "").upper()

@@ -673,7 +673,8 @@ Mô tả: Tên `hub_*`, mô tả tiếng Việt, input/output có JSON Schema (s
 | `hub_cancel` | `run_id` **hoặc** `task_id` (task_id dừng cả run của task con) | `{status}` | ✗ (destructive) | M1 |
 | `hub_steer` | `run_id`, `text` | `{ack}` | ✗ | M2 |
 | `hub_feedback` | `run_id`, `verdict (good\|wrong\|partial)`, `note?`, `corrected_output?` | `{signal_id}` | ✗ | M1 (ghi) / M4 (dùng để học) |
-| `hub_memory_search` | `query`, `agent_id?`, `scope?` | đoạn memory/skill/run khớp — hiện là **tìm từ khoá tất định** trên file + bảng `runs` (prompt/summary); FTS5 trên transcript đầy đủ là mục tiêu, không gọi LLM | ✔ | M4 |
+| `hub_memory_search` | `query`, `agent_id?`, `scope?` | đoạn memory/skill (tìm từ khoá tất định trên file) + transcript qua **SQLite FTS5 trên toàn bộ hội thoại** (migration v17, `session_search.py`), không gọi LLM | ✔ | M4 |
+| `hub_session_search` | `mode` (`search`\|`around`\|`read`\|`browse`), `query?`, `message_id?`, `window?`, `run_id?`/`session_id?`/`conversation_id?`, `agent_id?`, `team_id?`, `kind?`, `role?`, `since?`/`until?`, `limit?`, `offset?` | tìm kiếm hội thoại FTS5 (prompt, steer, câu trả lời hoàn chỉnh, tool call/result tóm tắt, hội thoại điều phối viên; đã che secret; có dấu/không dấu đều khớp) — chi tiết `docs/dev-notes/session-search.md` | ✔ | v17 |
 | `hub_knowledge_get` / `hub_knowledge_tier` (thay `hub_skill_list`/`hub_skill_view` ở 0.7) | `agent_id?`, `scope?`, `name?` | chỉ mục / toàn văn skill, memory theo tầng | ✔ | M4/M5 |
 | `hub_learn_feed` / `hub_learn_status` / `hub_learn_ledger` / `hub_learn_canaries` | `agent_id?`, `team_id?`, `since?` | feed thay đổi đã áp dụng, trạng thái học, ledger, canary đang chạy | ✔ | M4/M5 |
 | `hub_learn_refine` | `agent_id`, `focus?` | `{review_job_id}` | ✗ | M4 |

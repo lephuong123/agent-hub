@@ -769,6 +769,10 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS schedule_fires_run ON schedule_fires(run_id);
     CREATE INDEX IF NOT EXISTS schedule_fires_task ON schedule_fires(task_id);
     """,
+    # v17 — tìm kiếm hội thoại (session_search.py, docs/dev-notes/session-search.md): `session_messages` (tin đã che secret + bản gấp
+    # dấu) + FTS5 `session_fts` (tokenizer chọn LÚC CHẠY: trigram nếu SQLite hỗ trợ, không thì unicode61 remove_diacritics 2) + trigger
+    # đồng bộ, backfill từ runs/events/manager_messages hiện có. Là HÀM (không phải SQL tĩnh) vì cần dò tokenizer + che/gấp bằng Python.
+    "session_search.migrate_v17",
 ]
 
 JSON_COLS = {
@@ -832,8 +836,14 @@ class Store:
         cur = self.schema_version
         for i, sql in enumerate(MIGRATIONS[cur:], start=cur + 1):
             with self.tx():
-                for stmt in _split_sql(sql):
-                    self.conn.execute(stmt)
+                if sql.startswith("session_search."):  # migration bằng Python (v17): "module.hàm" trong gói cfharness
+                    import importlib
+
+                    mod, fn = sql.rsplit(".", 1)
+                    getattr(importlib.import_module(f"{__package__}.{mod}"), fn)(self.conn)
+                else:
+                    for stmt in _split_sql(sql):
+                        self.conn.execute(stmt)
                 self.conn.execute(f"PRAGMA user_version={i}")
         return self.schema_version
 
@@ -905,6 +915,14 @@ class Store:
                 _dumps(_mask_secrets(ev.payload)),
             ),
         )
+        try:  # v17: chỉ mục hội thoại (prompt/steer/assistant/tool) — lỗi chỉ mục không được làm mất event
+            from .session_search import indexer_for
+
+            indexer_for(self).index_event(ev)
+        except Exception:  # pragma: no cover
+            import logging
+
+            logging.getLogger(__name__).exception("không chỉ mục được event %s", ev.type)
 
     def query_events(
         self,
@@ -972,6 +990,17 @@ class Store:
     # ------------------------------------------------------------------ runs
     def insert_run(self, row: dict[str, Any]) -> None:
         self._insert("runs", row)
+        if row.get("prompt"):
+            try:  # v17: prompt đầy đủ của run vào chỉ mục hội thoại (session_search.py)
+                from .session_search import indexer_for
+
+                idx = indexer_for(self)
+                if idx.ready:
+                    idx.index_run_prompt({"id": row["id"], "prompt": row["prompt"], "queued_at": row.get("queued_at") or now_iso()})
+            except Exception:  # pragma: no cover
+                import logging
+
+                logging.getLogger(__name__).exception("không chỉ mục được prompt run %s", row.get("id"))
 
     def update_run(self, run_id: str, data: dict[str, Any]) -> None:
         self._update("runs", "id", run_id, data)

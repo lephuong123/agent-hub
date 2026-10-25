@@ -150,6 +150,9 @@ class Hub:
             self._bg.append(asyncio.get_running_loop().create_task(self.approvals.loop()))
         except RuntimeError:
             pass
+        from .session_search import start_backfill  # v17: chỉ mục hội thoại cũ theo lô nền (session_search.py)
+
+        start_backfill(self)
 
     async def stop(self) -> None:
         self.publish(make_event("hub.stopping", None, {"epoch": self.bus.epoch}))

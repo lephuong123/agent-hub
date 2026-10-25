@@ -336,9 +336,15 @@ class ManagerService:
         return self._conv_row(cid)
 
     def _add_msg(self, cid: str, role: str, text: str, run_id: str | None) -> None:
-        self.conn.execute("INSERT INTO manager_messages (conversation_id, role, text, run_id, ts) VALUES (?,?,?,?,?)",
-                          (cid, role, text[:20000], run_id, now_iso()))
+        cur = self.conn.execute("INSERT INTO manager_messages (conversation_id, role, text, run_id, ts) VALUES (?,?,?,?,?)",
+                                (cid, role, text[:20000], run_id, now_iso()))
         self.conn.execute("UPDATE manager_conversations SET updated_at=? WHERE id=?", (now_iso(), cid))
+        try:  # v17: chỉ mục hội thoại (session_search.py) — đã che secret trước khi vào FTS
+            from ..session_search import indexer_for
+
+            indexer_for(self.hub.store).index_manager_row(int(cur.lastrowid))
+        except Exception:  # pragma: no cover - lỗi chỉ mục không chặn hội thoại
+            log.exception("không chỉ mục được tin điều phối viên")
 
     def _save_images(self, agent_id: str, cid: str, imgs: list[tuple[str, bytes]]) -> list[str]:
         """Ảnh người gửi → `<cwd hội thoại>/attachments/` (0600, tên do hub đặt). Trả đường dẫn tương đối theo cwd."""
@@ -746,7 +752,8 @@ class ManagerService:
         """§9: tiến trình con của run điều phối viên (Bash, script… — khung hermes) gọi THẲNG socket hub (khi sandbox không chặn) →
         chỉ `managerself.call` (cùng luật lớp 1+2 như tool hub-self). Method ghi khác bị từ chối: không dùng quyền "agent thường"
         (run.start/task.create… không trần) để lách trần/luật của manager. Daemon gọi cho mọi method ghi/HUMAN_ONLY từ socket."""
-        if not caller.is_agent or not caller.run_id or method == "managerself.call":
+        if not caller.is_agent or not caller.run_id or method == "managerself.call" or method in _auth.SCOPED_READ:
+            # SCOPED_READ: đọc thuần (tìm hội thoại/memory) — tự giới hạn phạm vi theo người gọi, không phải thao tác ghi
             return None
         if self.is_issued(caller.run_id):
             return ("tiến trình trong run điều phối viên chỉ thao tác hub qua tool hub-self (managerself.call) — "

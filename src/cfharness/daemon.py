@@ -203,7 +203,7 @@ class Daemon:
         token = params.pop(_auth.AUTH_PARAM, None) if isinstance(params, dict) else None
         if not via_socket:
             return _auth.Caller(via="internal")
-        if method not in _auth.HUMAN_ONLY and method not in self._mutating:
+        if method not in _auth.HUMAN_ONLY and method not in self._mutating and method not in _auth.SCOPED_READ:
             return _auth.Caller(via="socket", pid=peer, token_ok=_auth.token_ok(token, self.auth_token))  # đường nóng: guard.check, đọc
         return self.callers.resolve(peer, token, self.auth_token)
 

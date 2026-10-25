@@ -4,8 +4,11 @@
 sửa `daemon.py`. Method:
 - `agent.delete` (thay bản của daemon: thêm `detach_teams`), `agent.archive` (= delete), `agent.revert {id, to}`;
 - `trash.list|restore|purge` — thùng rác hợp nhất (agent, team, MCP server); purge chỉ agent (gọi `agent.purge` của guard);
-- `memory.search {query, agent_id?, scope?, limit?}` (FTS đơn giản, KHÔNG gọi LLM) + `memory.search_self {run_id, args}` cho
-  hub-self (ràng với agent của run);
+- `memory.search {query, agent_id?, scope?, limit?}` (memory/skill theo từ khoá + transcript qua FTS5 v17, KHÔNG gọi LLM) +
+  `memory.search_self {run_id, args}` cho hub-self (ràng với run của tiến trình gọi);
+- `session.search {mode: search|around|read|browse, …}` + `session.search_self {run_id, args}` — tìm kiếm hội thoại đầy đủ
+  (session_search.py). Phạm vi nhìn tính từ NGƯỜI GỌI (auth.SCOPED_READ): agent thường chỉ thấy của mình + team,
+  điều phối viên/người thấy hết, socket không token và không thuộc run → từ chối;
 - `hook.observe` / `hook.timeout` — hook quan sát fail-OPEN (FR-RT-17), xem `runtime/observe_hook.py`;
 - `mcp.agent_run {agent_id}` (run hiện tại/gần nhất của agent cho `hub_events(agent_id=…)`), `mcp.cancel_task {task_id}`;
 - `hub.compat` — kết quả kiểm phiên bản CLI lúc daemon khởi động + cảnh báo `raw.unknown` (header TUI, `doctor`).
@@ -18,7 +21,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from ..errors import HubError, NotFound
+from .. import auth as _auth
+from ..errors import Blocked, HubError, NotFound
 from ..events import make_event
 
 if TYPE_CHECKING:
@@ -60,15 +64,22 @@ def _snippet(text: str, q: list[str], width: int = 240) -> str:
     return ("…" if start else "") + s + ("…" if start + width < len(text) else "")
 
 
-def memory_search(hub: Any, query: str, *, agent_id: str | None = None, scope: str = "all", limit: int = 10) -> dict[str, Any]:
-    """Tìm trong memory (MEMORY/USER các tầng agent→team→global), skill hiệu lực và transcript (prompt/summary run,
-    ẩn phiên kỹ thuật review/eval/curator). Thuần đọc, tất định, không gọi LLM."""
+def memory_search(hub: Any, query: str, *, agent_id: str | None = None, scope: str = "all", limit: int = 10, vis: Any = None) -> dict[str, Any]:
+    """Tìm trong memory (MEMORY/USER các tầng agent→team→global), skill hiệu lực và transcript (FTS5 trên toàn bộ hội thoại — v17,
+    ẩn phiên kỹ thuật review/eval/curator). Thuần đọc, tất định, không gọi LLM. `vis` (session_search.Visibility) giới hạn phạm vi
+    theo người gọi: agent thường chỉ thấy memory/skill của chính nó và transcript của nó + team."""
     q = _tokens(query)
     if not q:
         raise HubError("query rỗng")
     scope = scope or "all"
     if scope not in ("all", "memory", "skills", "transcripts"):
         raise HubError("scope phải là all|memory|skills|transcripts")
+    if vis is not None and not vis.all:
+        if agent_id and agent_id not in vis.agents:
+            raise Blocked(f"memory_search: không được xem dữ liệu của agent '{agent_id}' (chỉ của chính mình)")
+        agent_id = agent_id or (vis.agents[0] if vis.agents else None)
+        if agent_id is None:
+            raise Blocked("memory_search: không xác định được agent của người gọi")
     agents = [agent_id] if agent_id else [a["id"] for a in hub.store.list_agents()]
     results: list[dict[str, Any]] = []
     ks = getattr(hub, "knowledge", None)
@@ -116,20 +127,22 @@ def memory_search(hub: Any, query: str, *, agent_id: str | None = None, scope: s
                     results.append({"kind": "skill", "agent_id": aid if s.get("scope") == "agent" else None, "scope": s.get("scope"),
                                     "owner": s.get("owner"), "name": s["name"], "score": round(sc, 3),
                                     "text": _snippet(body or s.get("description") or s["name"], q)})
-        if scope in ("all", "transcripts"):
-            like = "%" + q[0] + "%"
-            ph = ",".join("?" * len(TECHNICAL_KINDS))
-            rows = hub.store.conn.execute(
-                f"SELECT id, prompt, summary, queued_at FROM runs WHERE agent_id=? AND kind NOT IN ({ph}) "
-                "AND (lower(coalesce(prompt,'')) LIKE ? OR lower(coalesce(summary,'')) LIKE ?) ORDER BY queued_at DESC LIMIT 200",
-                (aid, *TECHNICAL_KINDS, like, like),
-            ).fetchall()
-            for r in rows:
-                text = f"{r['prompt'] or ''}\n{r['summary'] or ''}"
-                sc = _score(q, text)
-                if sc:
-                    results.append({"kind": "transcript", "agent_id": aid, "run_id": r["id"], "at": r["queued_at"], "score": round(sc * 0.9, 3),
-                                    "text": _snippet(text, q)})
+    if scope in ("all", "transcripts"):
+        # v17: FTS5 trên toàn bộ hội thoại (session_search.py) thay cho LIKE trên prompt/summary run
+        from .. import session_search as ss
+
+        vis = vis or ss.Visibility()
+        sp: dict[str, Any] = {"mode": "search", "query": query, "limit": 50}
+        if agent_id:
+            sp["agent_id"] = agent_id
+        try:
+            hits = ss.search(hub.store.conn, sp, vis)["hits"]
+        except HubError:
+            hits = []
+        for i, h in enumerate(hits):
+            results.append({"kind": "transcript", "agent_id": h.get("agent_id"), "run_id": h.get("run_id"), "message_id": h["id"], "role": h.get("role"),
+                            "session_id": h.get("session_id"), "conversation_id": h.get("conversation_id"), "at": h.get("ts"),
+                            "score": round(0.9 * (1.0 + 0.5 / (1 + i)), 3), "text": h["snippet"]})
     results.sort(key=lambda r: (-r["score"], r["kind"]))
     return {"query": query, "results": results[: max(1, min(int(limit or 10), 50))], "total": len(results)}
 
@@ -213,18 +226,67 @@ class SurfaceRpc:
         res = await self._call("agent.purge", {"id": ident, "confirm": p.get("confirm"), "channel": p.get("channel") or "cli", "by": p.get("by") or "user"})
         return {"kind": kind, "id": ident, "purged": True, "item": res}
 
-    def memory_search(self, p: dict[str, Any]) -> dict[str, Any]:
-        return memory_search(self.hub, str(_req(p, "query")), agent_id=p.get("agent_id") or p.get("agent"), scope=p.get("scope") or "all",
-                             limit=int(p.get("limit") or 10))
+    # ---------------------------------------------------------------- tìm kiếm (phạm vi theo NGƯỜI GỌI — daemon xác định, auth.SCOPED_READ)
+    def _caller_vis(self, what: str) -> Any:
+        """Người/nội bộ/điều phối viên → thấy tất cả; agent → chính nó + team; socket không token, không rõ agent → từ chối."""
+        from .. import session_search as ss
 
-    def memory_search_self(self, p: dict[str, Any]) -> dict[str, Any]:
-        """hub-self `memory_search`: chỉ trong phạm vi agent của run (memory các tầng agent thấy, skill, transcript của nó)."""
+        c = _auth.current_caller()
+        if c is None or c.human:
+            return ss.Visibility()
+        if c.manager or (c.agent_id and self.hub.manager.is_manager(c.agent_id)):
+            return ss.Visibility(who=f"manager:{c.manager or c.agent_id}")
+        if c.is_agent and c.agent_id:
+            return ss.agent_visibility(self.hub.store.conn, c.agent_id)
+        raise Blocked(f"{what}: người gọi không xác định (thiếu token người, không thuộc run nào)", data={"caller": c.to_dict()})
+
+    def _self_run_vis(self, p: dict[str, Any], what: str) -> tuple[dict[str, Any], Any]:
+        """hub-self: run phải đang chạy VÀ (qua socket) người gọi phải là tiến trình của CHÍNH run đó."""
+        from .. import session_search as ss
+
         run = self.hub.store.get_run(str(_req(p, "run_id")))
         if run is None or run["status"] not in ("queued", "running"):
-            raise HubError("run không còn chạy — memory_search chỉ dùng được trong run đang chạy")
-        args = p.get("args") or {}
-        return memory_search(self.hub, str(args.get("query") or ""), agent_id=run["agent_id"], scope=args.get("scope") or "all",
-                             limit=int(args.get("limit") or 8))
+            raise HubError(f"run không còn chạy — {what} chỉ dùng được trong run đang chạy")
+        c = _auth.current_caller()
+        if c is not None and c.via == "socket" and not c.human and c.run_id != run["id"]:
+            raise Blocked(f"{what}: run_id không khớp tiến trình gọi (chỉ hub-self của chính run đó)", data={"caller": c.to_dict()})
+        if self.hub.manager.is_manager(run["agent_id"]):
+            return run, ss.Visibility(who=f"manager:{run['agent_id']}")
+        return run, ss.agent_visibility(self.hub.store.conn, run["agent_id"])
+
+    def memory_search(self, p: dict[str, Any]) -> dict[str, Any]:
+        vis = self._caller_vis("memory.search")
+        return memory_search(self.hub, str(_req(p, "query")), agent_id=p.get("agent_id") or p.get("agent"), scope=p.get("scope") or "all",
+                             limit=int(p.get("limit") or 10), vis=vis)
+
+    def memory_search_self(self, p: dict[str, Any]) -> dict[str, Any]:
+        """hub-self `memory_search`: memory/skill của agent của run; transcript của nó + team (điều phối viên: mọi hội thoại).
+        Có `mode` (search|around|read|browse) hoặc scope=sessions → tìm kiếm hội thoại đầy đủ (session.search)."""
+        run, vis = self._self_run_vis(p, "memory_search")
+        args = dict(p.get("args") or {})
+        if args.get("mode") or args.get("scope") == "sessions":
+            return self._session(args, vis)
+        own = None if vis.all else run["agent_id"]
+        return memory_search(self.hub, str(args.get("query") or ""), agent_id=own, scope=args.get("scope") or "all",
+                             limit=int(args.get("limit") or 8), vis=vis)
+
+    def _session(self, args: dict[str, Any], vis: Any) -> dict[str, Any]:
+        from .. import session_search as ss
+
+        args = {k: v for k, v in args.items() if not str(k).startswith("_") and k != "scope"}
+        args.setdefault("mode", "search")
+        if args["mode"] == "search" and not str(args.get("query") or "").strip():
+            raise HubError("thiếu tham số 'query'", code=-32602)
+        return ss.search(self.hub.store.conn, args, vis)
+
+    def session_search(self, p: dict[str, Any]) -> dict[str, Any]:
+        """`session.search {mode, query?, message_id?, window?, run_id?, session_id?, conversation_id?, agent_id?, team_id?, kind?, role?,
+        since?, until?, include_technical?, limit?, offset?}` — xem session_search.py."""
+        return self._session(dict(p), self._caller_vis("session.search"))
+
+    def session_search_self(self, p: dict[str, Any]) -> dict[str, Any]:
+        _run, vis = self._self_run_vis(p, "session_search")
+        return self._session(dict(p.get("args") or {}), vis)
 
     def _run_for_hook(self, run_id: str | None) -> dict[str, Any] | None:
         return self.hub.store.get_run(run_id) if run_id else None
@@ -299,6 +361,8 @@ class SurfaceRpc:
             "trash.purge": self.trash_purge,
             "memory.search": self.memory_search,
             "memory.search_self": self.memory_search_self,
+            "session.search": self.session_search,
+            "session.search_self": self.session_search_self,
             "hook.observe": self.hook_observe,
             "hook.timeout": self.hook_timeout,
             "mcp.agent_run": self.agent_run,
