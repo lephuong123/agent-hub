@@ -167,7 +167,9 @@ async def test_manager_marked_file_sent_as_document(make, tg):
 
 
 async def test_manager_marked_files_refused_outside_or_unsafe(make, tg, tmp_path):
-    d = await make_mgr(make, deliver_max_bytes=1024)
+    # 6 dấu (5 + link.txt khi tạo được symlink) > deliver_max_files mặc định 5 → nâng giới hạn để MỌI dấu đều được kiểm
+    # (Windows không tạo được symlink nên trước đây không lộ; macOS/Linux: link.txt rơi vào "tối đa 5 tệp")
+    d = await make_mgr(make, deliver_max_bytes=1024, deliver_max_files=10)
     conv, root = await _conv_with_root(d, tg)
     outside = tmp_path / "outside.txt"
     outside.write_text("bí mật ngoài workspace", encoding="utf-8")

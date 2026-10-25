@@ -304,3 +304,13 @@ công khai trỏ nội bộ chỉ bị chặn với run manager và metadata.
 Test: `tests/test_guard_web.py` (59), `tests/test_guard_second_opinion.py` (25). Đỏ đã kiểm bằng plugin tạm (biến `RED`, scratchpad): bỏ
 `always_eligible` ở service, bỏ lọc injection, DNS luôn ok, bỏ luật mạng khỏi ALWAYS_HOLD, cho luật
 always hạ cả destructive → mỗi lần có ca đỏ (1/7/7/1/1). Kiểm verdict hợp lệ chỉ ở một chỗ (`SecondOpinion.ask`).
+
+## LNX-1 — Linux: ghi đè/xoá tệp có sẵn không cần duyệt (sửa 2026-10-25)
+CI ubuntu đỏ từ PR #1 ở bước SEC; nguyên nhân là hai lỗ thật của bộ phân loại trên Linux (Windows/macOS không bị):
+- **`/tmp` coi là nháp**: `check_overwrite_target` cho mọi tệp có sẵn dưới `/tmp/` là `write` → dự án clone vào `/tmp` (và thư mục tạm
+  của pytest) bị `: >`, `truncate`, `cp`, `dd`, `tee`, `python -c open(…,'w')`, `rsync` ghi đè không hỏi. Nay `_tmp_scratch(p, ctx)`: chỉ
+  miễn khi CẢ đường dẫn lẫn realpath nằm trong `/tmp` VÀ ngoài cwd của run (chặn luôn symlink `/tmp/x` → tệp dự án).
+- **`st_ctime` không phải giờ tạo**: `_birth()` trên Linux dùng `st_ctime` (Python không có birthtime) — ctime đổi theo mọi lần ghi/chmod/
+  rename → `echo >> f; rm f` hay `mv bak f; rm -rf f` được coi là "tệp run tự tạo" → xoá không hỏi. Nay đọc giờ tạo thật qua `statx(2)`
+  (ctypes); không đọc được → coi là KHÔNG do run tạo (fail-closed). Test: `test_preexisting_file_with_fresh_ctime_is_not_run_created`.
+Kiểm trong Docker (user không root như CI): HEAD tái hiện đúng các ca đỏ của CI, bản sửa xanh toàn bộ.

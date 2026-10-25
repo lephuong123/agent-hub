@@ -24,6 +24,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -226,8 +227,49 @@ def _max(a: Verdict, b: Verdict) -> Verdict:
     return b if SEVERITY[b.verdict] > SEVERITY[a.verdict] else a
 
 
-def _birth(st: os.stat_result) -> float:
-    return getattr(st, "st_birthtime", None) or st.st_ctime
+def _linux_statx_btime():
+    """Linux: `os.stat` của Python KHÔNG có st_birthtime → đọc btime qua statx(2) của glibc (≥2.28). None nếu không có."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        import ctypes
+        import ctypes.util
+
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        fn = libc.statx
+    except (OSError, AttributeError):
+        return None
+    fn.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_uint, ctypes.c_void_p]
+    fn.restype = ctypes.c_int
+    AT_FDCWD, AT_SYMLINK_NOFOLLOW, STATX_BTIME = -100, 0x100, 0x800
+
+    def btime(path: str) -> float | None:
+        buf = ctypes.create_string_buffer(256)  # struct statx
+        if fn(AT_FDCWD, os.fsencode(path), AT_SYMLINK_NOFOLLOW, STATX_BTIME, buf) != 0:
+            return None
+        mask = int.from_bytes(buf.raw[0:4], sys.byteorder)
+        if not mask & STATX_BTIME:
+            return None  # hệ tệp không ghi thời điểm tạo
+        sec = int.from_bytes(buf.raw[80:88], sys.byteorder, signed=True)  # stx_btime.tv_sec
+        nsec = int.from_bytes(buf.raw[88:92], sys.byteorder)
+        return sec + nsec / 1e9
+
+    return btime
+
+
+_STATX_BTIME = _linux_statx_btime()
+
+
+def _birth(path: str, st: os.stat_result) -> float | None:
+    """Thời điểm TẠO của `path` (lstat). None = không biết → người gọi coi như KHÔNG phải file run tạo (bảo thủ).
+    KHÔNG dùng st_ctime trên POSIX: ctime đổi khi ghi/chmod/rename/touch → file có sẵn trông như "run vừa tạo" (Linux trước đây:
+    `echo >> f; rm f` hoặc `mv bak f; rm -rf f` lọt không cần duyệt). Windows: st_ctime = thời điểm tạo (Python < 3.12)."""
+    b = getattr(st, "st_birthtime", None)
+    if b:
+        return b
+    if IS_WINDOWS:
+        return st.st_ctime
+    return _STATX_BTIME(path) if _STATX_BTIME is not None else None
 
 
 def created_by_run(path: str, ctx: GuardContext) -> bool:
@@ -246,7 +288,8 @@ def created_by_run(path: str, ctx: GuardContext) -> bool:
         return True
     except OSError:
         return False
-    if _birth(st) < since:
+    b = _birth(path, st)
+    if b is None or b < since:
         return False
     if not os.path.isdir(path) or os.path.islink(path):
         return True
@@ -257,7 +300,9 @@ def created_by_run(path: str, ctx: GuardContext) -> bool:
             if n > ctx.max_walk:
                 return False
             try:
-                if _birth(os.lstat(os.path.join(root, name))) < since:
+                fp = os.path.join(root, name)
+                b = _birth(fp, os.lstat(fp))
+                if b is None or b < since:
                     return False
             except OSError:
                 return False
@@ -495,6 +540,18 @@ def _is_tmp(p: str) -> bool:
     """Thư mục tạm "vô hại" — chỉ tiền tố literal `/tmp/`… (Windows: KHÔNG tính %TEMP% thật, như macOS không tính $TMPDIR —
     workspace có thể nằm trong đó; bảo thủ)."""
     return p.startswith(TMP_PREFIXES)
+
+
+def _tmp_scratch(p: str, ctx: GuardContext) -> bool:
+    """Ghi đè file CÓ SẴN ở `p` được coi là nháp trong /tmp (không cần người) — chỉ khi cả đường dẫn literal lẫn realpath
+    nằm trong /tmp VÀ không nằm trong workspace của run. Linux: dự án/repo nằm trong /tmp (clone vào `mktemp -d`, CI,
+    thư mục tạm của pytest) là dữ liệu thật — trước đây `: > /tmp/…/repo/README.md` lọt thành `write` không cần duyệt;
+    symlink `/tmp/x → ~/proj/f` cũng phải đi đường kiểm tra file có sẵn."""
+    rp = _real(p)
+    if not (_is_tmp(p) and _is_tmp(rp)):
+        return False
+    ws = {canon_path(str(ctx.cwd)), _real(str(ctx.cwd))}
+    return not any(_under(c, w) for c in {p, rp} for w in ws if w)
 
 
 def _critical(p: str, home: str) -> bool:
@@ -848,7 +905,7 @@ class BashAnalyzer:
         if r is not None:
             self.hit("destructive", "protected_write", "file", f"{what} vào tài nguyên được bảo vệ {r.selector}", [p], r)
             return
-        if _is_tmp(p) or not exists or os.path.isdir(p):
+        if _tmp_scratch(p, self.ctx) or not exists or os.path.isdir(p):
             self.hit("write", "write_file", "file", what, [p])
             return
         if not created_by_run(p, self.ctx):

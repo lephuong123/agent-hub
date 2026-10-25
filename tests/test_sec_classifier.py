@@ -153,3 +153,32 @@ def test_checkpointed_git_file_overwrite_is_revertable_write(data_env):
     # cùng lệnh, KHÔNG có checkpoint → giữ chờ người
     ctx = GuardContext(data_env["repo"], data_env["ctx_cp"].policy, run_since=data_env["ctx_cp"].run_since, git_probe=True)
     assert held(classify("Bash", {"command": f": > {r}/tracked.txt"}, ctx))
+
+
+def test_preexisting_file_with_fresh_ctime_is_not_run_created(tmp_path):
+    """Linux: Python không có st_birthtime; trước đây dùng st_ctime → file CÓ SẴN vừa bị ghi/chmod/đổi tên (ctime mới) trông như
+    "run tự tạo" → `rm`/ghi đè lọt không cần người (test_approval_flow: `mv dummy-copy dummy; rm -rf dummy`)."""
+    import os
+
+    from cfharness.guard.classifier import created_by_run
+
+    ws, hub = tmp_path / "ws", tmp_path / "hub"
+    ws.mkdir()
+    for f in ("appended.txt", "chmodded.txt", "renamed-src.txt"):
+        (ws / f).write_text("user data")
+    ps = PolicyStore(hub, user_home=tmp_path / "home")
+    ps.ensure()
+    time.sleep(1.1)
+    ctx = GuardContext(ws, ps.load(), run_since=time.time(), hub_socket=str(hub / "hub.sock"), git_probe=False)
+    with open(ws / "appended.txt", "a") as fh:
+        fh.write("more")
+    os.chmod(ws / "chmodded.txt", 0o600)
+    os.rename(ws / "renamed-src.txt", ws / "renamed.txt")
+    (ws / "fresh.txt").write_text("run made this")
+    for f in ("appended.txt", "chmodded.txt", "renamed.txt"):
+        assert not created_by_run(str(ws / f), ctx), f
+        for cmd in (f"rm {ws / f}", f": > {ws / f}"):
+            assert held(classify("Bash", {"command": cmd}, ctx)), cmd
+    # file run vừa tạo vẫn xoá/ghi đè được không cần người (nếu hệ tệp ghi thời điểm tạo)
+    if getattr(os.stat(ws / "fresh.txt"), "st_birthtime", None) or os.name == "nt" or created_by_run(str(ws / "fresh.txt"), ctx):
+        assert classify("Bash", {"command": f"rm {ws / 'fresh.txt'}"}, ctx).verdict == "write"

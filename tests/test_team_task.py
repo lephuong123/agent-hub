@@ -244,11 +244,27 @@ async def test_rate_limited_requeued_with_backoff_not_counted(make_hub):
     hub, _ = make_hub(script)
     hub.config.set("tasks.rate_limit_backoff_s", 0.2)
     mk_team(hub, lead=False)
+    # Chụp hàng task ĐÚNG lúc dispatcher requeue. Trước đây test chờ `runs.outcome == rate_limited` rồi đọc task → đua 2 phía:
+    # outcome ghi DB trong RunManager._finalize TRƯỚC khi dispatcher xử lý event kết thúc (call_soon) → task còn `running`;
+    # và hết backoff 0.2 s trên runner chậm thì task đã bị nhận lại → lại `running`.
+    requeued: list[dict] = []
+    orig = hub.tasks.set_status
+
+    def spy(task_id, to, **kw):
+        r = orig(task_id, to, **kw)
+        if to == "ready" and str(kw.get("reason") or "").startswith("rate_limited"):
+            requeued.append(dict(r))
+        return r
+
+    hub.tasks.set_status = spy
     t = hub.tasks.create({"team": "docs", "assignee": "writer", "title": "rl", "body": "x"})
-    await settle(lambda: hub.store.list_runs() and hub.store.list_runs()[-1]["outcome"] == "rate_limited")
-    row = hub.tasks.row(t["id"])
+    await settle(lambda: requeued)
+    row = requeued[0]
     assert row["status"] == "ready" and row["not_before"] and row["consecutive_failures"] == 0 and row["rate_limit_hits"] == 1
     await settle(lambda: hub.tasks.row(t["id"])["status"] == "done")
+    outs = [r["outcome"] for r in sorted(hub.store.list_runs(), key=lambda r: r["queued_at"])]
+    assert outs == ["rate_limited", "completed"]
+    assert hub.tasks.row(t["id"])["consecutive_failures"] == 0
 
 
 async def test_rate_limit_event_throttles_concurrency(make_hub):
