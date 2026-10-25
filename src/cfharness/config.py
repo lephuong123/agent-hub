@@ -205,7 +205,8 @@ DEFAULTS: dict[str, Any] = {
         # §9 M7-core.md: khung quyền của điều phối viên (CHỈ người: config.set ∈ HUMAN_ONLY, nhánh `manager` kiểm toàn vẹn).
         # profile strict = Read/Grep/Glob (như MGR-8); hermes = Bash/Read/Write/Edit/Grep/Glob/TodoWrite + Web + MCP trusted (chỉ đọc),
         # VẪN dưới hook guard + sandbox OS + approval. null = theo profile. `cfharness manager capabilities show|set`.
-        "capabilities": {"profile": "strict", "tools": None, "mcp": None, "web": None},
+        # connectors: connector claude.ai cho phép (cần mcp=trusted + guard bật) — manager/connectors.py
+        "capabilities": {"profile": "strict", "tools": None, "mcp": None, "web": None, "connectors": None},
         # WEB-1: WebFetch của điều phối viên — `any` = mọi domain công khai (vẫn chặn SSRF + guard.web.deny_domains);
         # `allowlist` = chỉ guard.web.allow_domains (+ host người đã "luôn cho phép"), ngoài danh sách → giữ chờ người duyệt
         "web_domains": "any",

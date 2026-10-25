@@ -213,6 +213,10 @@ class GuardContext:
     repo_deny_lookup: Callable[[str], list[str]] | None = None  # R2-2: mẫu chặn của repo ĐÍCH (git -C, npm --prefix, cd …)
     agent_id: str | None = None  # agent của run (luật "luôn cho phép" theo agent)
     always_allow: tuple[dict[str, Any], ...] = ()  # luật người tạo khi duyệt `--always` (policy/always_allow.yaml), chỉ hạ uncertain
+    # run điều phối viên có connector claude.ai (manager.capabilities.connectors): slug connector được phép; None = không phải
+    # run connector. Run connector nạp cả MCP của ~/.claude → server ngoài `run_mcp_servers` + connector cho phép = forbidden
+    connectors: tuple[str, ...] | None = None
+    run_mcp_servers: frozenset[str] = frozenset()
 
     @property
     def home(self) -> str:
@@ -727,11 +731,35 @@ def _name_tokens(name: str) -> set[str]:
     return toks
 
 
+# tool connector có tên dạng đọc → safe (không audit ghi); còn lại = write (audit), mẫu xoá vẫn qua approval
+_CONNECTOR_READ_RE = re.compile(r"^(get|list|search|read|query|fetch|lookup|find|whoami|guide|download|export|suggest|atlassian_?user)", re.I)
+
+
+def classify_connector(server: str, tool: str, ctx: GuardContext) -> Verdict:
+    prot = ctx.policy.match_mcp(server, tool)
+    if prot is not None:
+        return Verdict("destructive", "protected_mcp_tool", "mcp", f"tool MCP được bảo vệ ({prot.selector})", [f"{server}/{tool}"], prot.id)
+    hit = _name_tokens(tool) & MCP_DELETE_TOKENS
+    if hit:
+        return Verdict("destructive", "mcp_delete_name", "mcp", f"tên tool khớp mẫu xoá ({', '.join(sorted(hit))})", [f"{server}/{tool}"])
+    if _CONNECTOR_READ_RE.match(tool):
+        return Verdict("safe", "claude_connector_read")
+    return Verdict("write", "claude_connector_write", "mcp", "tool connector claude.ai (người cho phép ở manager.capabilities.connectors)", [f"{server}/{tool}"])
+
+
 def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdict:
     rest = tool_name[len("mcp__") :]
     server, _, tool = rest.partition("__")
     if server == "hub-guard":
         return Verdict("safe", "hub_guard_tool")
+    if ctx.connectors is not None and server not in ctx.run_mcp_servers and server not in ("hub-self", "hub-guard"):
+        # run connector: CLI nạp thêm MCP/plugin của ~/.claude — chỉ connector người cho phép mới qua (slug có thể chứa "__")
+        for slug in ctx.connectors:
+            pre = f"claude_ai_{slug}__"
+            if rest.startswith(pre):
+                return classify_connector(f"claude_ai_{slug}", rest[len(pre):], ctx)
+        return Verdict("destructive", "mcp_not_in_run", "mcp", f"{tool_name}: server không thuộc agent và không nằm trong connector được phép",
+                       [tool_name[:200]], forbidden=True)
     if MCP_FORBIDDEN.match(tool) or (server.startswith("hub") and tool in ("approve", "deny")):
         return Verdict("destructive", "self_approval", "hub", f"agent không được tự duyệt/sửa chính sách qua {tool_name}", forbidden=True)
     is_hub = server in ctx.hub_mcp_servers or server in _names.HUB_MCP_SERVER_NAMES

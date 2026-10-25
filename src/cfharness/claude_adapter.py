@@ -107,6 +107,7 @@ class ClaudeStreamAdapter:
         allowed_mcp_servers: Iterable[str] | None = None,
         allowed_plugin_prefixes: Iterable[str] | None = None,
         require_no_auto_memory: bool = False,
+        allowed_mcp_prefixes: Iterable[str] | None = None,
         clock: Callable[[], float] = time.monotonic,
         now: Callable[[], datetime] | None = None,
         usage_tick_interval_s: float = 1.0,
@@ -116,6 +117,7 @@ class ClaudeStreamAdapter:
         self.allowed_hooks = set(allowed_hooks) if allowed_hooks is not None else None
         self.allowed_mcp = set(allowed_mcp_servers) if allowed_mcp_servers is not None else None
         self.allowed_plugin_prefixes = tuple(allowed_plugin_prefixes) if allowed_plugin_prefixes is not None else None
+        self.allowed_mcp_prefixes = tuple(allowed_mcp_prefixes or ())  # run connector: "claude.ai " (hook guard chặn tool ở lớp dưới)
         self.require_no_auto_memory = require_no_auto_memory
         self.result_count = 0
         self.replay_count = 0  # số tin user CLI phát lại (`isReplay`): #1 là prompt, các tin sau là steer
@@ -317,7 +319,8 @@ class ClaudeStreamAdapter:
         ]
         if self.allowed_mcp is not None:
             for s in mcp:
-                if s["name"] not in self.allowed_mcp:
+                known = bool(self.allowed_mcp_prefixes) and str(s["name"]).startswith(self.allowed_mcp_prefixes)
+                if s["name"] not in self.allowed_mcp and not known:
                     out += self._violation("mcp_server", str(s["name"]), None)
         if self.allowed_plugin_prefixes is not None:
             for name in payload["plugins"]:

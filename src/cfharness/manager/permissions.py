@@ -19,6 +19,7 @@ Luật (mỗi luật có test đỏ→xanh trong `tests/test_manager_security.py
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -59,7 +60,29 @@ _CAP_ORDER = ("Read", "Grep", "Glob", "Bash", "Write", "Edit", "MultiEdit", "Not
 
 def fmt_tools(ts: Any) -> str:
     return "/".join(sorted(ts, key=lambda t: (_CAP_ORDER.index(t) if t in _CAP_ORDER else 99, t)))
-CAP_KEYS = ("profile", "tools", "mcp", "web")
+CAP_KEYS = ("profile", "tools", "mcp", "web", "connectors")
+# Connector claude.ai (Claude Docs, Atlassian…) — `claude` CLI chỉ nạp khi có nguồn setting `user` và KHÔNG `--strict-mcp-config`
+# (đã kiểm 2.1.310, docs/dev-notes/manager-connectors.md). Tên server trong CLI: "claude.ai <Tên>", tool: mcp__claude_ai_<slug>__<tool>.
+CONNECTOR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()\-]{0,79}$")
+CONNECTOR_TOOL_PREFIX = "claude_ai_"
+
+
+def connector_slug(name: str) -> str:
+    """"Claude Docs" | "claude.ai Claude Docs" | "claude_ai_Claude_Docs" → "Claude_Docs" (phần sau `mcp__claude_ai_`)."""
+    n = str(name).strip()
+    for pre in ("claude.ai ", CONNECTOR_TOOL_PREFIX):
+        if n.startswith(pre):
+            n = n[len(pre):]
+    return re.sub(r"[^A-Za-z0-9_-]", "_", n)
+
+
+def valid_connector(name: Any) -> bool:
+    return isinstance(name, str) and bool(CONNECTOR_NAME_RE.match(name.strip())) and bool(connector_slug(name).strip("_"))
+
+
+def connector_server(name: str) -> str:
+    """Tên server dùng trong tên tool (`mcp__<server>__<tool>`)."""
+    return CONNECTOR_TOOL_PREFIX + connector_slug(name)
 
 
 def validate_capabilities(key: str, value: Any) -> None:
@@ -91,6 +114,14 @@ def validate_capabilities(key: str, value: Any) -> None:
     elif sub == "web":
         if value is not None and not isinstance(value, bool):
             raise ValueError("manager.capabilities.web phải là true/false hoặc null")
+    elif sub == "connectors":
+        if value is None:
+            return
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            raise ValueError("manager.capabilities.connectors phải là danh sách tên connector claude.ai hoặc null")
+        bad = [x for x in value if not valid_connector(x)]
+        if bad:
+            raise ValueError(f"manager.capabilities.connectors: tên không hợp lệ {bad}")
     else:
         raise ValueError(f"manager.capabilities: khoá lạ '{sub}' (được: {', '.join(CAP_KEYS)})")
 
@@ -118,7 +149,19 @@ def resolve_capabilities(raw: Any) -> dict[str, Any]:
     if raw.get("mcp") is not None and raw.get("mcp") not in CAP_MCP_MODES:
         mcp = "none"
         warnings.append(f"mcp '{raw.get('mcp')}' không hợp lệ → none")
-    return {"profile": profile, "tools": frozenset(ts), "mcp": mcp, "web": web, "warnings": warnings}
+    conns_raw = raw.get("connectors")
+    connectors: tuple[str, ...] = ()
+    if isinstance(conns_raw, list) and conns_raw:
+        slugs = [connector_slug(x) for x in conns_raw if valid_connector(x)]
+        if len(slugs) != len(conns_raw):
+            warnings.append("connectors có tên không hợp lệ — bỏ qua tên đó")
+        if mcp != "trusted":
+            warnings.append(f"connectors claude.ai cần mcp=trusted (đang {mcp}) — tắt connectors")
+        else:
+            connectors = tuple(dict.fromkeys(slugs))
+    elif conns_raw is not None and not isinstance(conns_raw, list):
+        warnings.append("connectors không phải danh sách → tắt")
+    return {"profile": profile, "tools": frozenset(ts), "mcp": mcp, "web": web, "connectors": connectors, "warnings": warnings}
 
 
 def _deep_keys(obj: Any, prefix: str = "") -> list[str]:

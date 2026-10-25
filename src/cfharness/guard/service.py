@@ -145,7 +145,24 @@ class GuardService:
             extra_write_roots=tuple(os.path.realpath(os.path.expanduser(str(x))) for x in ((self.hub.config.get("guard.sandbox") or {}).get("extra_allow_write") or [])),
             agent_id=(run or {}).get("agent_id"),
             always_allow=tuple(r for r in self.always_rules() if r.get("kind") == "exact") if run else (),
+            **self._connector_ctx(run),
         )
+
+    def _connector_ctx(self, run: dict[str, Any] | None) -> dict[str, Any]:
+        """Run điều phối viên có connector claude.ai → {connectors, run_mcp_servers} cho classify_mcp; còn lại {}."""
+        if not run or str((run.get("run_opts") or {}).get("hub_self") or "") != "manager":
+            return {}
+        mgr = getattr(self.hub, "manager", None)
+        if mgr is None:
+            return {}
+        try:
+            conns = tuple(mgr.perms.capabilities().get("connectors") or ())
+            agent = self.hub.store.get_agent(run.get("agent_id")) or {} if run.get("agent_id") else {}
+        except Exception:  # lỗi đọc cấu hình = coi như run connector KHÔNG cho connector nào (fail-closed)
+            return {"connectors": (), "run_mcp_servers": frozenset()}
+        if not conns:
+            return {}
+        return {"connectors": conns, "run_mcp_servers": frozenset(str(x) for x in agent.get("mcp_servers") or [])}
 
     # ------------------------------------------------------------------ luật "luôn cho phép" (người tạo khi duyệt `--always`)
     def always_rules(self) -> list[dict[str, Any]]:
