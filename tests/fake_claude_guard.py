@@ -17,6 +17,9 @@ import signal
 import subprocess
 import sys
 
+# như `claude` thật (node): stdin/stdout UTF-8 — Windows mặc định cp1252 làm hỏng prompt tiếng Việt
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
 args = sys.argv[1:]
 if args == ["--version"]:
     print("2.1.302 (Claude Code)")
@@ -42,9 +45,9 @@ resume = opt("--resume")
 sid = resume or opt("--session-id", "s")
 state_dir = os.environ.get("FAKE_STATE_DIR") or os.getcwd()
 cost_file = os.path.join(state_dir, f"fake-cost-{sid}.json")
-prev_cost = json.load(open(cost_file))["total"] if os.path.exists(cost_file) else 0.0
+prev_cost = json.load(open(cost_file, encoding="utf-8"))["total"] if os.path.exists(cost_file) else 0.0
 step_cost = float(os.environ.get("FAKE_STEP_COST", "0.001"))
-settings = json.load(open(opt("--settings"))) if opt("--settings") else {}
+settings = json.load(open(opt("--settings"), encoding="utf-8")) if opt("--settings") else {}
 hooks = [h for m in (settings.get("hooks") or {}).get("PreToolUse") or [] for h in m.get("hooks") or []]
 disallowed = multi("--disallowedTools")
 denials = []
@@ -60,7 +63,7 @@ def out(o):
 
 def result(subtype="success", reason="completed"):
     total = round(prev_cost + step_cost, 8)
-    json.dump({"total": total}, open(cost_file, "w"))
+    json.dump({"total": total}, open(cost_file, "w", encoding="utf-8"))
     out({"type": "result", "subtype": subtype, "is_error": subtype != "success", "total_cost_usd": total,
          "usage": {"input_tokens": 1, "output_tokens": 2}, "modelUsage": {"claude-haiku-5-5": {"costBasis": "list"}},
          "result": "done" if subtype == "success" else None, "terminal_reason": reason, "duration_ms": 5, "num_turns": 1,
@@ -89,7 +92,7 @@ def run_hook(tool_input, tool_use_id):
             "tool_input": tool_input, "tool_use_id": tool_use_id, "permission_mode": "default"}
     for h in hooks:
         try:
-            p = subprocess.run(h["command"], shell=True, input=json.dumps(data), capture_output=True, text=True, timeout=h.get("timeout", 60))
+            p = subprocess.run(h["command"], shell=True, input=json.dumps(data), capture_output=True, encoding="utf-8", errors="replace", timeout=h.get("timeout", 60))
         except subprocess.TimeoutExpired:
             continue  # CLI: hết giờ = fail-open
         if p.returncode == 2:
@@ -122,7 +125,7 @@ def bash(cmd):
     p = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     log = os.environ.get("FAKE_EXEC_LOG")
     if log:
-        with open(log, "a") as f:
+        with open(log, "a", encoding="utf-8") as f:
             f.write(cmd + "\n")
     out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "is_error": p.returncode != 0, "content": (p.stdout + p.stderr)[:500]}]}})
     return None

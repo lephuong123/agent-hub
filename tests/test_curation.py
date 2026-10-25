@@ -118,7 +118,7 @@ async def _until(fn, timeout=10.0):
 
 @pytest.fixture
 def team_hub(hub_home):
-    hub_home.config.write_text(yaml.safe_dump({"guard": {"git_probe": False}}))
+    hub_home.config.write_text(yaml.safe_dump({"guard": {"git_probe": False}}), encoding="utf-8")
     h = Hub(hub_home, runtime=ScriptedRuntime(lambda s: {"text": "ok"}))
     for a in ("a", "b", "c"):
         h.agents.create({"id": a, "name": a.upper()})
@@ -152,7 +152,7 @@ async def test_cross_agent_proposes_team_promotion_via_pipeline(team_hub):
     if p["status"] not in ("applied", "promoted", "canary"):
         assert not (hub.paths.home / "teams" / "t" / "skills" / "weekly-status-report").exists()
     assert any(e.type == "curation.promotion" and e.payload["proposal_id"] == p["id"] for e in evs)
-    assert Path(rec["report_path"]).read_text().startswith("# Curation cross_agent")
+    assert Path(rec["report_path"]).read_text(encoding="utf-8").startswith("# Curation cross_agent")
     # lượt sau: cụm đã đề xuất → bỏ qua (không lặp)
     rec2 = await hub.curation.cross_agent()
     assert rec2["clusters"][0]["action"] == "skip" and "đã đề xuất" in rec2["clusters"][0]["reason"]
@@ -165,7 +165,7 @@ async def test_after_promoted_agent_copies_archived(team_hub):
     # mô phỏng A: skill team đã được áp dụng + promoted
     d = hub.paths.home / "teams" / "t" / "skills" / "weekly-status-report"
     d.mkdir(parents=True, exist_ok=True)
-    (d / "SKILL.md").write_text("---\nname: weekly-status-report\ndescription: Weekly report\n---\n\n" + WEEKLY_B)
+    (d / "SKILL.md").write_text("---\nname: weekly-status-report\ndescription: Weekly report\n---\n\n" + WEEKLY_B, encoding="utf-8")
     hub.knowledge.sync_index("team", "t")
     from cfharness.events import make_event
 
@@ -190,7 +190,7 @@ async def test_cross_agent_llm_merge_with_fake_binary(team_hub, tmp_path):
         "import sys, json\nargv=sys.argv[1:]\nsys.stdin.read()\n"
         "assert '--json-schema' in argv and argv[argv.index('--tools')+1]=='' and '--no-session-persistence' in argv\n"
         "print(json.dumps({'type':'result','is_error':False,'total_cost_usd':0.0042,'structured_output':{'name':'weekly-engineering-report',"
-        "'description':'Weekly engineering report for the team','body':'# Weekly\\n1. Collect merged PRs.\\n','same_class':True,'reason':'same task'}}))\n")
+        "'description':'Weekly engineering report for the team','body':'# Weekly\\n1. Collect merged PRs.\\n','same_class':True,'reason':'same task'}}))\n", encoding="utf-8")
     binp = fake_cli(tmp_path, fake)
     hub.config.set("curation.binary", str(binp))
     rec = await hub.curation.cross_agent(llm=True)
@@ -226,7 +226,7 @@ RNF = "# Release notes format\n1. Use past tense in every bullet.\n"
 
 @pytest.fixture
 def p2_hub(hub_home):
-    hub_home.config.write_text(yaml.safe_dump({"guard": {"git_probe": False}, "curation": {"phase2": {"enabled": True}}}))
+    hub_home.config.write_text(yaml.safe_dump({"guard": {"git_probe": False}, "curation": {"phase2": {"enabled": True}}}), encoding="utf-8")
     ref: list = []
     plan = [
         ("propose_skill_archive", {"name": "release-notes-format", "absorbed_into": "release-notes"}),  # chưa đọc → chặn
@@ -255,7 +255,7 @@ def p2_hub(hub_home):
 async def test_phase2_merge_with_snapshot_and_rollback(p2_hub):
     hub, rt = p2_hub
     home = Path(hub.agents.get_row("w")["home_path"])
-    before_rn = (home / "skills" / "release-notes" / "SKILL.md").read_text()
+    before_rn = (home / "skills" / "release-notes" / "SKILL.md").read_text(encoding="utf-8")
     hub.start()
     rec = hub.curation.phase2("w")
     assert rec["status"] == "running" and rec["candidates"] == ["release-notes", "release-notes-format"]  # pin không vào danh sách
@@ -275,15 +275,15 @@ async def test_phase2_merge_with_snapshot_and_rollback(p2_hub):
     assert done["unlisted_archives"] == []
     assert not (home / "skills" / "release-notes-format").exists()
     assert list((home / ".archive" / "skills").glob("release-notes-format__*"))
-    assert "past tense" in (home / "skills" / "release-notes" / "SKILL.md").read_text()
+    assert "past tense" in (home / "skills" / "release-notes" / "SKILL.md").read_text(encoding="utf-8")
     led = hub.learning.ledger.list("w", actor="curator")
     assert {e["target_ref"] for e in led} == {"release-notes", "release-notes-format"}
-    assert Path(done["report_path"]).read_text().count("applied") >= 2
+    assert Path(done["report_path"]).read_text(encoding="utf-8").count("applied") >= 2
     # rollback cả lượt
     rb = hub.curation.rollback(rec["id"])
     assert rb["status"] == "rolled_back" and len(rb["rolled_back"]["rollback_entries"]) == 2
     assert (home / "skills" / "release-notes-format" / "SKILL.md").exists()
-    assert (home / "skills" / "release-notes" / "SKILL.md").read_text() == before_rn
+    assert (home / "skills" / "release-notes" / "SKILL.md").read_text(encoding="utf-8") == before_rn
     assert {s["name"] for s in hub.knowledge.list_skills("agent", "w")} >= {"release-notes", "release-notes-format"}
     hub.learning.stop()
     hub.learning_ops.stop()

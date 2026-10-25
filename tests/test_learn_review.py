@@ -48,7 +48,7 @@ async def env(hub_home, tmp_path, monkeypatch):
         "guard": {"git_probe": False},
         "learning": {"review_debounce_s": 0.3, "tick_s": 0.2},
     }
-    hub_home.config.write_text(yaml.safe_dump(cfg))
+    hub_home.config.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     d = Daemon(hub_home)
     server = await transport.start_server(d._handle_conn, hub_home.socket, limit=16 * 1024 * 1024)
     d.hub.start()
@@ -105,7 +105,7 @@ async def test_correction_review_fork_patch_then_no_repeat(env):
     assert rv["system_prompt_hash"] == run1["system_prompt_hash"]  # cùng system prompt → cache
     assert rv["cost_usd"] == pytest.approx(0.002) and rv["kind"] == "review" and rv["forked_from_session"] == run1["session_id"]
     assert sha(src_tr) == before  # session gốc KHÔNG đổi
-    res = [json.loads(x) for x in (proj / "review-results.jsonl").read_text().splitlines()][-1]["results"]
+    res = [json.loads(x) for x in (proj / "review-results.jsonl").read_text(encoding="utf-8").splitlines()][-1]["results"]
     assert res[1]["data"]["name"] == "daily-status"
     assert res[2]["data"]["status"] == "applied" and res[2]["data"]["risk_class"] == "L1"
     assert res[3]["data"]["status"] == "blocked" and res[3]["data"]["category"] == "policy_touch"
@@ -194,7 +194,7 @@ async def test_edit_output_detected_from_human_edit(env, tmp_path):
     repo.mkdir()
     for c in (["git", "init", "-q"], ["git", "config", "user.email", "t@t"], ["git", "config", "user.name", "t"]):
         subprocess.run(c, cwd=repo, check=True)
-    (repo / "a.txt").write_text("base\n")
+    (repo / "a.txt").write_text("base\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
     r = await rpc(d, "run.start", {"agent": "r1", "prompt": "Write today's status line.", "cwd": str(repo)})
@@ -204,10 +204,10 @@ async def test_edit_output_detected_from_human_edit(env, tmp_path):
 
     cp_dir = h.runs.checkpoint_dir(r["id"])
     cp = take_checkpoint(repo, cp_dir)
-    (repo / "a.txt").write_text("agent output 2026-10-18\n")
+    (repo / "a.txt").write_text("agent output 2026-10-18\n", encoding="utf-8")
     diff = compute_diff(cp, cp_dir)
     h.store.update_run(r["id"], {"diff": diff, "workspace_key": str(repo.resolve())})
-    (repo / "a.txt").write_text("agent output 18/10/2026\n")  # người sửa output
+    (repo / "a.txt").write_text("agent output 18/10/2026\n", encoding="utf-8")  # người sửa output
     r2 = await rpc(d, "run.start", {"agent": "r1", "prompt": "Write today's status line.", "cwd": str(repo)})
     await h.runs.wait(r2["id"], 30)
     sig = next(s for s in h.learning.signals.list("r1") if s["kind"] == "edit_output")
@@ -227,13 +227,13 @@ def test_review_runs_do_not_take_agent_slot(hub_home):
 def test_hermes_prompt_verbatim_and_renamed():
     from cfharness.learning.prompts import hermes_review, render_review_prompt
 
-    raw = Path(hermes_review.__file__).read_text()
+    raw = Path(hermes_review.__file__).read_text(encoding="utf-8")
     assert "Copyright (c) 2025 Nous Research" in raw and "MIT" in raw
     src = Path(__file__).parents[1] / "research" / "hermes-agent" / "agent" / "background_review.py"
     if src.exists():  # văn bản NGUYÊN VĂN (Q-13)
-        lines = src.read_text().splitlines()[369:569]
+        lines = src.read_text(encoding="utf-8").splitlines()[369:569]
         assert "\n".join(lines) in raw
     p = render_review_prompt(signals=[{"kind": "correction", "run_id": "r_1", "source": "mcp", "evidence": {"note": "use dd/mm/yyyy"}}], focus="dates")
     assert "skill_manage" not in p and "propose_skill_patch" in p and "propose_memory tool, target='user'" in p
     assert "use dd/mm/yyyy" in p and "focus — prioritize it" in p
-    assert (Path(__file__).parents[1] / "NOTICE").read_text().count("Nous Research") >= 1
+    assert (Path(__file__).parents[1] / "NOTICE").read_text(encoding="utf-8").count("Nous Research") >= 1

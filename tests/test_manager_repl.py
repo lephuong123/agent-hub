@@ -274,7 +274,7 @@ async def test_tty_prompt_loop_with_pipe_input(env, hub_home):
     assert code == 0
     assert "chào từ tty" in buf.getvalue()
     hist = hub_home.home / "cli_history"
-    assert hist.exists() and (WIN or (hist.stat().st_mode & 0o777) == 0o600) and "chào từ tty" in hist.read_text()
+    assert hist.exists() and (WIN or (hist.stat().st_mode & 0o777) == 0o600) and "chào từ tty" in hist.read_text(encoding="utf-8")
 
 
 async def test_oneshot_cli_waits_via_events(env, hub_home, capsys):

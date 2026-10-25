@@ -111,7 +111,8 @@ def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
 # ============================================================================ git helpers
 def _git(cwd: str | Path, *args: str, check: bool = False, binary: bool = False) -> subprocess.CompletedProcess:
     env = {**os.environ, **GIT_ENV}
-    return subprocess.run(["git", *GIT_SAFE_ARGS, "-C", str(cwd), *args], capture_output=True, text=not binary, timeout=60, env=env, check=check)
+    return subprocess.run(["git", *GIT_SAFE_ARGS, "-C", str(cwd), *args], capture_output=True, timeout=60, env=env, check=check,
+                          encoding=None if binary else "utf-8", errors=None if binary else "replace")  # git xuất UTF-8; Windows mặc định cp1252
 
 
 def git_root(path: str | Path) -> str | None:

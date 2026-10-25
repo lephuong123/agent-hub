@@ -75,7 +75,8 @@ async def main_async(a: argparse.Namespace) -> dict:
                 # hàng đợi subscriber nhỏ để subscriber "treo" bị ngắt trong thời gian đo (NFR-08)
                 "bus": {"subscriber_queue": a.sub_queue},
             }
-        )
+        ),
+        encoding="utf-8",
     )
     pid = spawn_background(paths)
     c = AsyncHubClient(paths.socket, channel="cli")

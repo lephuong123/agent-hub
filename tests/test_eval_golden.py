@@ -57,7 +57,7 @@ def test_deterministic_checkers(tmp_path):
     bad = grade_deterministic({"kind": "json_schema", "schema": schema}, EvalOutput(text="no json here"))
     assert not bad.passed and "JSON" in bad.detail["error"]
     # lệnh test: stdin = output, chạy trong cwd của run eval
-    (tmp_path / "f.txt").write_text("hello")
+    (tmp_path / "f.txt").write_text("hello", encoding="utf-8")
     assert grade_deterministic({"kind": "command", "cmd": "grep -q 42 && test -f f.txt"}, out).passed
     assert not grade_deterministic({"kind": "command", "cmd": "grep -q 99"}, out).passed
     g = grade_deterministic({"kind": "command", "cmd": "echo 0.75", "score_from_stdout": True, "pass_threshold": 0.5}, out)
@@ -74,7 +74,7 @@ def test_golden_crud_and_policy_mirror(hub):
     assert g["active"] and g["version"] == 1 and g["created_by"] == "user:cli" and g["title"] == "What is 6*7?"
     assert "golden.added" in evs
     mirror = hub.paths.home / "policy" / "golden" / "a.yaml"
-    assert mirror.exists() and yaml.safe_load(mirror.read_text())["tasks"][0]["id"] == g["id"]
+    assert mirror.exists() and yaml.safe_load(mirror.read_text(encoding="utf-8"))["tasks"][0]["id"] == g["id"]
     g2 = hub.evals.golden.update(g["id"][:6], {"checker": {"kind": "contains", "text": "42"}, "title": "mul"})
     assert g2["version"] == 2 and g2["checker"]["kind"] == "contains"
     hub.evals.golden.remove(g["id"])

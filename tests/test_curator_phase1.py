@@ -68,7 +68,7 @@ async def test_run_with_fake_port_dry_and_live(hub):
     hub.bus.add_listener(lambda e: evs.append(e))
     rep = await hub.learning_ops.curator.run(dry_run=True, now=NOW)
     assert rep["dry_run"] and fk.states == [] and rep["counts"]["archived"] == 1 and rep["counts"]["pinned_skipped"] == 1
-    assert Path(rep["report_path"]).read_text().startswith("# Curator pha 1")
+    assert Path(rep["report_path"]).read_text(encoding="utf-8").startswith("# Curator pha 1")
     rep = await hub.learning_ops.curator.run(now=NOW)
     assert sorted(fk.states) == [("a", "old", "archived:curator"), ("a", "stale", "stale")]
     cr = [e for e in evs if e.type == "curator.report"]
@@ -99,7 +99,7 @@ async def test_archive_through_m4a_ledger(hub):
         pytest.skip("M4-A chưa gắn hub.knowledge / hub.learning.ledger")
     d = ks.skill_dir("agent", "a", "old-skill")
     d.mkdir(parents=True)
-    (d / "SKILL.md").write_text("---\nname: old-skill\ndescription: Old thing\n---\nBody\n")
+    (d / "SKILL.md").write_text("---\nname: old-skill\ndescription: Old thing\n---\nBody\n", encoding="utf-8")
     ks.sync_index("agent", "a")
     old = iso(datetime.now(timezone.utc) - timedelta(days=40))
     hub.store.conn.execute("UPDATE skills SET last_used_at=?, use_count=3, created_at=? WHERE name='old-skill'", (old, old))
