@@ -16,7 +16,9 @@ if TYPE_CHECKING:
 
 def attach(hub: "Hub"):
     from .bot import TelegramBot
+    from .slack.bot import SlackBot
 
     bot = TelegramBot(hub)
     hub.telegram = bot  # type: ignore[attr-defined]
+    hub.slack = SlackBot(hub)  # type: ignore[attr-defined]  # Slack 2 chiều (Socket Mode) — chat/slack/
     return bot

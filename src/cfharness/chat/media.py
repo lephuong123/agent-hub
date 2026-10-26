@@ -300,8 +300,8 @@ class MediaChat:
                 continue
             name = why
             try:
-                res = await api.call("sendDocument", {"chat_id": str(chat), "caption": f"[cfharness] 📎 Tệp từ điều phối viên: {visible(name)[:200]}"},
-                                     files={"document": (name, data, "application/octet-stream")}, timeout=max(60.0, float(self.bot.cfg().get("timeout_s") or 15)))
+                res = await self.bot.send_document(api, chat, name, data, f"[cfharness] 📎 Tệp từ điều phối viên: {visible(name)[:200]}",
+                                                   timeout=max(60.0, float(self.bot.cfg().get("timeout_s") or 15)))
             except Exception as e:
                 errors.append(f"{rel}: gửi lỗi ({clip(e, 120)})")
                 continue
@@ -311,8 +311,8 @@ class MediaChat:
                 self.bot.manager._put(self.bot.manager.MSGMAP, f"{chat}:{mid}", conv)
             audit = getattr(self.hub, "audit", None)
             if audit is not None:
-                audit.record("telegram.file_sent", None, None, {"chat_id": str(chat), "conversation_id": conv, "path": rel, "bytes": len(data)},
-                             actor="hub", channel=f"telegram:{chat}", summary=f"gửi tệp {name}")
+                audit.record(f"{self.bot.NAME}.file_sent", None, None, {"chat_id": str(chat), "conversation_id": conv, "path": rel, "bytes": len(data)},
+                             actor="hub", channel=self.bot.channel_of(chat), summary=f"gửi tệp {name}")
         if errors:
             await self._send_errors_out(api, chat, errors)
         return sent

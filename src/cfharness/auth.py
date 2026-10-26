@@ -79,6 +79,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "agent.archive", "agent.revert", "agent.pause", "agent.resume", "trash.restore", "trash.purge", "task.archive",
         # Telegram (chat/rpc.py): token bot, allowlist chat, gửi tin — agent không được tự ghép chat của nó vào allowlist
         "telegram.setup", "telegram.pending", "telegram.allow", "telegram.revoke", "telegram.disable", "telegram.test",
+        # Slack 2 chiều (chat/slack/rpc.py): như Telegram — token bot/app, allowlist DM + người, gửi tin
+        "slack.setup", "slack.pending", "slack.allow", "slack.revoke", "slack.disable", "slack.test",
         # M7: chỉ định điều phối viên (cấp quyền manager), nhắn/tick manager (agent khác không được "ra lệnh" cho manager)
         "manager.set", "manager.chat", "manager.tick",
         # UX: trả lời/chuyển/huỷ câu hỏi của agent — agent không tự trả lời câu hỏi (của mình hay agent khác). Điều phối viên trả lời/
@@ -136,7 +138,7 @@ AGENT_ALLOWED_MUTATING: dict[str, str] = {
 # manager, không bao giờ từ socket) được gọi. Ngoài tập này → từ chối + audit. Method HUMAN_ONLY trong tập vẫn bị daemon kiểm
 # trường cấm theo từng method (`manager.permissions.check_rpc`) — "toàn quyền trừ an toàn" (docs/plan/M7-manager.md).
 # CỐ Ý KHÔNG có: approval.approve|deny (người), guard.*, golden.*, config.set, secret.*, mcp ghi, trash.purge/agent.purge, agent.revert, run.revert,
-# estop tắt (estop.set chỉ on=true), manager.*, telegram.*, learn.rollback/policy_set, run.takeover.
+# estop tắt (estop.set chỉ on=true), manager.*, telegram.*, slack.*, learn.rollback/policy_set, run.takeover.
 MANAGER_ALLOWED: dict[str, str] = {
     "agent.create": "tạo agent (MCP chỉ trong registry, không bypass/allow_bypass/extra_args/sandbox)",
     "agent.update": "sửa agent khác (trường cho phép; không bỏ mẫu chặn người đặt) — đi ledger",
@@ -178,7 +180,7 @@ def all_mutating() -> frozenset[str]:
     out: set[str] = set()
     for mod, name in (("cfharness.mcp_server.rpc", "MUTATING"), ("cfharness.mcp_server.surface_rpc", "MUTATING_SURFACE"),
                       ("cfharness.learning.rpc", "MUTATING_M4A"), ("cfharness.learning_ops.rpc", "MUTATING_B"),
-                      ("cfharness.curation.rpc", "MUTATING_CURATION"), ("cfharness.chat.rpc", "MUTATING_TELEGRAM"),
+                      ("cfharness.curation.rpc", "MUTATING_CURATION"), ("cfharness.chat.rpc", "MUTATING_TELEGRAM"), ("cfharness.chat.slack.rpc", "MUTATING_SLACK"),
                       ("cfharness.manager.rpc", "MUTATING_MANAGER"),
                       ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS"),
                       ("cfharness.schedules.rpc", "MUTATING_SCHEDULES")):
@@ -429,6 +431,28 @@ def telegram_caller(hub: "Hub", chat_id: Any, user_id: Any = None) -> Caller:
         else:
             ok = uid == cid or uid in users
     return Caller(via=f"telegram:{chat_id}", token_ok=ok)
+
+
+def slack_caller(hub: "Hub", chat_id: Any, user_id: Any = None) -> Caller:
+    """Người gọi qua bot Slack 2 chiều (chat/slack/bot.py, chạy TRONG daemon — không qua socket nên không có pid ngang hàng).
+
+    Là NGƯỜI chỉ khi kênh 2 chiều bật (`notify.slack.enabled` + `interactive`), `chat_id` ∈ `notify.slack.allowed_chat_ids` VÀ người
+    gửi/bấm (`user_id`, Slack đã xác thực qua kết nối Socket Mode) ∈ `allowed_user_ids`. Chat không phải DM (`D…`) chỉ khi
+    `allow_channels` bật rõ ràng — thành viên khác của kênh vẫn không phải người. Workspace (`team_id`) được bot kiểm trước khi gọi.
+    Allowlist chỉ người sửa được (`slack.allow` ∈ HUMAN_ONLY; nhánh `notify` của config.yaml được kiểm toàn vẹn). Kênh audit: `slack:<chat_id>`.
+    """
+    try:
+        cfg = hub.config.get("notify.slack") or {}
+    except Exception:  # pragma: no cover
+        cfg = {}
+    cid = str(chat_id)
+    uid = str(user_id) if user_id is not None else None
+    allowed = {str(x) for x in (cfg.get("allowed_chat_ids") or [])}
+    users = {str(x) for x in (cfg.get("allowed_user_ids") or [])}
+    ok = bool(cfg.get("enabled", True)) and bool(cfg.get("interactive")) and cid in allowed and uid is not None and uid in users
+    if ok and not cid.startswith("D"):
+        ok = bool(cfg.get("allow_channels"))
+    return Caller(via=f"slack:{chat_id}", token_ok=ok)
 
 
 CURRENT_CALLER: contextvars.ContextVar[Caller | None] = contextvars.ContextVar("cfharness_caller", default=None)

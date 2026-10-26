@@ -103,7 +103,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "curation": {"rollback"},
     "daemon": {"stop", "restart"},
     "auth": None,
-    "notify": {"telegram"},  # token bot / allowlist chat / gửi tin thay người (chat/rpc.py)
+    "notify": {"telegram", "slack"},  # token bot / allowlist chat / gửi tin thay người (chat/rpc.py, chat/slack/rpc.py)
     "answer": None,  # UX: trả lời câu hỏi = quyết định của người (agent không tự trả lời câu hỏi của mình/agent khác)
     "questions": {"answer", "escalate", "cancel"},
     "web": None,  # WEB: `cfharness web` sinh link đăng nhập = phiên NGƯỜI trên giao diện web

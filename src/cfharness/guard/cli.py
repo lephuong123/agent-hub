@@ -202,6 +202,10 @@ def cmd_notify(ctx: Any) -> int:
         from ..chat.cli import cmd_telegram
 
         return cmd_telegram(ctx)
+    if getattr(ctx.args, "action", None) == "slack":  # chat/slack/cli.py
+        from ..chat.slack.cli import cmd_slack
+
+        return cmd_slack(ctx)
     r = ctx.call("notify.test", {"text": ctx.args.text})
     ctx.out(r, "đã gửi Slack" if r.get("sent") else f"không gửi: {r.get('reason')}")
     return 0 if r.get("sent") else 1
@@ -312,6 +316,9 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     from ..chat.cli import add_notify_parsers as _add_telegram
 
     _add_telegram(ns, common)  # notify telegram setup|status|test|disable|allow|revoke
+    from ..chat.slack.cli import add_parser as _add_slack
+
+    _add_slack(ns, common)  # notify slack setup|status|test|disable|allow|revoke (Slack 2 chiều)
     n.set_defaults(fn=cmd_notify)
 
     rc = sub.add_parser("run-continue", help='(= run continue) tiếp tục hội thoại: cfharness run continue <run|session> "<tin>"', parents=[common])
