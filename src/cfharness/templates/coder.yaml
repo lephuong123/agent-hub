@@ -5,6 +5,7 @@ config:
   model: sonnet
   tool_policy:
     permission_mode: acceptEdits
+    browser: auto  # Claude in Chrome trước, Playwright khi Chrome không kết nối (docs/dev-notes/chrome.md)
   limits:
     max_budget_usd_per_run: 1.0
     max_runtime_s: 1800

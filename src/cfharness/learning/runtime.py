@@ -70,7 +70,9 @@ def system_prompt_for(hub: "Hub", run: dict[str, Any], agent: dict[str, Any]) ->
             import logging
 
             logging.getLogger("cfharness.learning").exception("không dựng được khối tri thức cho %s", agent["id"])
-    text = build_system_prompt(agent["id"], soul, blocks, charter=team_charter(hub, run.get("team_id")))
+    from ..browser import effective_mode
+
+    text = build_system_prompt(agent["id"], soul, blocks, charter=team_charter(hub, run.get("team_id")), browser=effective_mode(agent, hub.config))
     save_prompt(hub, text)
     return text, info
 

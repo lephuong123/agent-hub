@@ -70,7 +70,34 @@ def check_flag_matrix(argv: list[str], claude_cfg: dict[str, Any], cli_version: 
         )
 
 
-def build_argv(spec: RunSpec, claude_cfg: dict[str, Any], cli_version: str | None = None) -> tuple[list[str], bytes | None]:
+def _matrix_has(claude_cfg: dict[str, Any], cli_version: str | None, flag: str) -> bool | None:
+    """True/False nếu phiên bản có trong flag_matrix; None = không biết (phiên bản lạ / không đọc được)."""
+    matrix = claude_cfg.get("flag_matrix") or {}
+    if not cli_version or not isinstance(matrix, dict) or cli_version not in matrix:
+        return None
+    return flag in set(matrix.get(cli_version) or [])
+
+
+def chrome_argv(browser: Any, claude_cfg: dict[str, Any], cli_version: str | None) -> str | None:
+    """Cờ Claude in Chrome cho run (docs/dev-notes/chrome.md; `tool_policy.browser` đã qua kill switch ở RunManager).
+    - chrome|auto → `--chrome`; phiên bản CÓ trong flag_matrix mà thiếu `--chrome`: `chrome` → ArgvError, `auto` → bỏ cờ (còn Playwright);
+      phiên bản lạ → vẫn truyền (FR-RT-15: chỉ cảnh báo vàng).
+    - còn lại → `--no-chrome` khi `runtime.claude.chrome.pass_no_chrome` và phiên bản CHẮC CHẮN có cờ (flag_matrix)."""
+    if browser in ("chrome", "auto"):
+        has = _matrix_has(claude_cfg, cli_version, "--chrome")
+        if has is False:
+            if browser == "chrome":
+                raise ArgvError(f"tool_policy.browser=chrome nhưng claude {cli_version} không có cờ --chrome trong flag_matrix "
+                                "(nâng claude hoặc đổi --browser auto|playwright)")
+            return None
+        return "--chrome"
+    cc = claude_cfg.get("chrome") if isinstance(claude_cfg.get("chrome"), dict) else {}
+    if cc.get("pass_no_chrome", True) is not False and _matrix_has(claude_cfg, cli_version, "--no-chrome"):
+        return "--no-chrome"
+    return None
+
+
+def build_argv(spec: RunSpec,claude_cfg: dict[str, Any], cli_version: str | None = None) -> tuple[list[str], bytes | None]:
     """Dựng argv cho `claude` từ RunSpec + cấu hình `runtime.claude`.
 
     Trả (argv, stdin_bytes).
@@ -181,6 +208,9 @@ def build_argv(spec: RunSpec, claude_cfg: dict[str, Any], cli_version: str | Non
         argv += ["--worktree", spec.worktree]
     if spec.no_session_persistence:  # M4-B: run eval (FR-LN-10)
         argv.append("--no-session-persistence")
+    chrome_flag = chrome_argv(tp.get("browser"), claude_cfg, cli_version)
+    if chrome_flag:
+        argv.append(chrome_flag)
 
     extra = iso.get("extra_args") or []
     if not isinstance(extra, list) or not all(isinstance(x, str) for x in extra):

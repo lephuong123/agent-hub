@@ -127,12 +127,19 @@ class GuardService:
         from .second_opinion import SecondOpinion
 
         self.second = SecondOpinion(hub)
+        from .locks import BrowserLock
+
+        self.browser = BrowserLock(hub.store)  # Claude in Chrome: Chrome THẬT của người dùng chung → giới hạn số run cùng lúc
 
     # ------------------------------------------------------------------ context
     def enabled(self) -> bool:
         return bool(self.hub.config.get("guard.enabled"))
 
     def _annotations(self, server: str, tool: str) -> dict[str, Any] | None:
+        from ..browser import CHROME_SERVER
+
+        if server == CHROME_SERVER:  # server dynamic của CLI (không có trong registry): ghi đè của người ở runtime.claude.chrome.annotations
+            return self._chrome_annotations(tool)
         reg = getattr(self.hub, "mcp", None)
         if reg is not None and hasattr(reg, "tool_annotations"):
             return reg.tool_annotations(server, tool)
@@ -142,6 +149,29 @@ class GuardService:
             return tool_annotations(server, tool, home=self.hub.paths.home)
         except Exception:
             return None
+
+    def _chrome_annotations(self, tool: str) -> dict[str, Any] | None:
+        import fnmatch
+
+        from ..browser import chrome_cfg
+
+        ov: dict[str, Any] = {}
+        for pat, val in sorted((chrome_cfg(self.hub.config).get("annotations") or {}).items()):
+            if isinstance(val, dict) and fnmatch.fnmatchcase(tool, str(pat)):
+                ov.update({k: v for k, v in val.items() if k in ("destructiveHint", "readOnlyHint") and isinstance(v, bool)})
+        return {"human_override": ov} if ov else None
+
+    def chrome_allowed(self, run: dict[str, Any] | None) -> bool | None:
+        """Run có được dùng tool Claude in Chrome không: agent `tool_policy.browser` ∈ chrome|auto và kill switch bật. Không run → None."""
+        if not run:
+            return None
+        from ..browser import CHROME_MODES, effective_mode
+
+        try:
+            agent = self.hub.store.get_agent(run.get("agent_id")) if run.get("agent_id") else None
+        except Exception:  # lỗi đọc = không cho (fail-closed)
+            return False
+        return effective_mode(agent, self.hub.config) in CHROME_MODES
 
     def session_since(self, run: dict[str, Any]) -> float | None:
         """Mốc "file run tự tạo": lúc run ĐẦU TIÊN của session vào hàng đợi (chuỗi resume dùng chung mốc)."""
@@ -212,6 +242,7 @@ class GuardService:
             allowed_roots=roots,
             worktree_since=self.task_since(run) if run else None,
             scratch_workspace=len(rel) >= 3 and rel[1] == "workspaces" and not rel[2].startswith("conv-"),
+            chrome_allowed=self.chrome_allowed(run),
             **self._connector_ctx(run),
         )
 
@@ -351,8 +382,12 @@ class GuardService:
 
         if v.forbidden:
             return v
-        web = tool_name == "WebFetch"
-        urls = [str(tool_input.get("url") or "")] if web else list(v.net_urls or []) if tool_name == "Bash" else []
+        from ..browser import is_chrome_tool
+
+        chrome = is_chrome_tool(tool_name)  # Claude in Chrome navigate/tabs_create (+ trong browser_batch): CÙNG luật WebFetch
+        web = tool_name == "WebFetch" or chrome
+        urls = ([str(tool_input.get("url") or "")] if tool_name == "WebFetch" else list(v.net_urls or []) if tool_name == "Bash" or chrome else [])
+        label = "Chrome" if chrome else "WebFetch"
         if not urls:
             return v
         wcfg = self.hub.config.get("guard.web")
@@ -387,14 +422,14 @@ class GuardService:
                         if mgr:
                             return Verdict("destructive", rc.rule, "network", f"điều phối viên không được gọi mạng nội bộ: {rc.reason}", [url[:200]],
                                            forbidden=True, net_urls=v.net_urls)
-                        out = _up(out, Verdict("uncertain", rc.rule, "network", f"WebFetch: {rc.reason} (SSRF)", [url[:200]]))
+                        out = _up(out, Verdict("uncertain", rc.rule, "network", f"{label}: {rc.reason} (SSRF)", [url[:200]]))
                         continue
                     if rc.rule == "url_dns_failed" and web:
-                        out = _up(out, Verdict("uncertain", rc.rule, "network", f"WebFetch: {rc.reason}", [url[:200]]))
+                        out = _up(out, Verdict("uncertain", rc.rule, "network", f"{label}: {rc.reason}", [url[:200]]))
                         continue
             if web and (allow or (mgr and mode == "allowlist")) and not domain_matches(host, allow) and not self.always_domain(agent_id, host):
                 why = "manager.web_domains=allowlist" if mgr and mode == "allowlist" else "guard.web.allow_domains"
-                out = _up(out, Verdict("uncertain", "web_domain_not_allowed", "network", f"WebFetch: {host} ngoài danh sách domain cho phép ({why})",
+                out = _up(out, Verdict("uncertain", "web_domain_not_allowed", "network", f"{label}: {host} ngoài danh sách domain cho phép ({why})",
                                         [url[:200]]))
         return out
 
@@ -534,6 +569,29 @@ class GuardService:
                  "decided_by": classifier if classifier != "static" else ("human" if approval_id else "static"), **(extra or {})},
             )
 
+    # ------------------------------------------------------------------ Claude in Chrome: khoá trình duyệt
+    def chrome_lock_check(self, run: dict[str, Any], tool_name: str) -> dict[str, str] | None:
+        """Tool chrome (trừ `list_connected_browsers`): lấy khoá trình duyệt cho run (≤ runtime.claude.chrome.max_concurrent_runs run).
+        None = được dùng; dict {reason, message} = đang bận (deny kèm hướng dẫn)."""
+        from ..browser import agent_mode, chrome_cfg, is_chrome_tool
+
+        if not is_chrome_tool(tool_name) or tool_name.endswith("__list_connected_browsers"):
+            return None
+        holders = self.browser.acquire(run["id"], run.get("agent_id"), chrome_cfg(self.hub.config)["max_concurrent_runs"], self._run_active)
+        if holders is None:
+            return None
+        who = ", ".join(f"{h.get('agent_id') or '?'} (run {rid})" for rid, h in holders.items()) or "?"
+        agent = self.hub.store.get_agent(run.get("agent_id")) if run.get("agent_id") else None
+        fallback = (" Your browser setting is 'auto': use the Playwright MCP tools for this step instead."
+                    if agent_mode(agent) == "auto" else
+                    " Wait and retry later (at most a few times), or finish the rest of the task and report that the browser was busy.")
+        return {"reason": f"Chrome đang được run khác dùng: {who} (runtime.claude.chrome.max_concurrent_runs)",
+                "message": f"[cfharness] Claude in Chrome is busy: another cfharness run is using the owner's Chrome ({who}).{fallback}"}
+
+    def _run_active(self, run_id: str) -> bool:
+        r = self.hub.store.get_run(run_id)
+        return bool(r and r["status"] in ("running", "queued"))
+
     # ------------------------------------------------------------------ check
     # uncertain luôn giữ dù `hold_uncertain=false`: vùng hub/policy (sandbox là lớp 2 nhưng đây là tài nguyên của chính hub) và
     # tool MCP người đánh dấu cần duyệt
@@ -541,7 +599,9 @@ class GuardService:
     ALWAYS_HOLD_KLASS = ("hub", "policy", "network")
     # approval-profiles: tool MCP chưa probe / server untrusted cũng luôn giữ — MCP chạy NGOÀI sandbox OS nên "cho chạy + audit" của
     # uncertain (dựa vào sandbox) không áp được (FR-MC-03); người gỡ bằng `mcp probe`, `mcp annotate` hoặc luật mcp_tool
-    ALWAYS_HOLD_RULES = ("mcp_require_approval", "web_domain_not_allowed", "ssrf_private_resolved", "url_dns_failed", "mcp_unknown_tool", "mcp_untrusted_write")
+    # Claude in Chrome: `chrome_sensitive` (javascript_tool/file_upload/upload_image trên Chrome THẬT của người) luôn giữ — guard/chrome.py
+    ALWAYS_HOLD_RULES = ("mcp_require_approval", "web_domain_not_allowed", "ssrf_private_resolved", "url_dns_failed", "mcp_unknown_tool", "mcp_untrusted_write",
+                         "chrome_sensitive")
 
     def needs_human(self, v: Verdict) -> bool:
         from .profiles import never_automatic
@@ -740,6 +800,11 @@ class GuardService:
                 make_event("guard.blocked", run["agent_id"], {"source": "runtime", "reason": "guard_rule", "rule": v.rule, "detail": v.reason, "tool": tool_name, "preview": action_preview(tool_name, tool_input)}, run_id=run_id)
             )
             return {"decision": "deny", "reason": FORBIDDEN_MSG.format(reason=v.reason)}
+        busy = self.chrome_lock_check(run, tool_name)
+        if busy is not None:
+            vb = Verdict("uncertain", "chrome_busy", "mcp", busy["reason"], [tool_name[:200]])
+            self._record(run, channel, tool_name, tool_input, vb, "deny")
+            return {"decision": "deny", "reason": busy["message"], "browser_busy": True}
         if not self.needs_human(v):
             self._record(run, channel, tool_name, tool_input, v, "allow")
             return {"decision": "allow", "reason": f"hub guard: {v.verdict}", "verdict": v.verdict}

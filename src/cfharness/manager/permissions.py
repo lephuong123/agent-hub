@@ -31,7 +31,10 @@ if TYPE_CHECKING:
     from ..hub import Hub
 
 AGENT_FIELDS = frozenset({"name", "role", "description", "model", "effort", "fallback_model", "tool_policy", "mcp_servers", "limits", "workspace_default"})
-TOOL_POLICY_FIELDS = frozenset({"permission_mode", "tools", "allowed_tools", "disallowed_tools"})
+# `browser` (Claude in Chrome, browser.py): điều phối viên đặt được cho agent KHÁC; agent điều phối viên (kể cả chính nó) thì không —
+# chỉ người (luật "không đụng agent manager" bên dưới)
+TOOL_POLICY_FIELDS = frozenset({"permission_mode", "tools", "allowed_tools", "disallowed_tools", "browser"})
+BROWSER_VALUES = ("none", "playwright", "chrome", "auto")
 FORBIDDEN_MODES = frozenset({"bypassPermissions"})
 TEAM_FIELDS = frozenset({"name", "charter", "policies"})
 TEAM_POLICY_FORBIDDEN = frozenset({"learning"})
@@ -390,6 +393,8 @@ class ManagerPermissions:
                 return f"tool_policy: không được đặt {', '.join(bad)} (chỉ người: allow_bypass, permission_prompts)"
             if tp.get("permission_mode") in FORBIDDEN_MODES:
                 return "permission_mode=bypassPermissions bị cấm với điều phối viên (NFR-15)"
+            if "browser" in tp and tp["browser"] not in BROWSER_VALUES:
+                return f"tool_policy.browser phải là {'|'.join(BROWSER_VALUES)}"
             if "disallowed_tools" in tp and not creating:
                 why = self._disallowed_removal(target, tp.get("disallowed_tools"))
                 if why:

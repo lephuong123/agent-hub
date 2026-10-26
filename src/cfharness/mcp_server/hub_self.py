@@ -203,7 +203,7 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                      {"id": _S, "log": {"type": "boolean"}}, ["id"], ro=True),
     # ---- ghi (trong quyền)
     "agent_create": _t("Create an agent. Either template (see templates) + optional spec overrides, or a full spec {name, role, description, "
-                       "model, effort, fallback_model, tool_policy{tools, allowed_tools, disallowed_tools, permission_mode}, mcp_servers, limits, "
+                       "model, effort, fallback_model, tool_policy{tools, allowed_tools, disallowed_tools, permission_mode, browser: none|playwright|chrome|auto (chrome/auto = Claude in Chrome, the owner's real browser)}, mcp_servers, limits, "
                        "workspace_default}. soul = full SOUL.md in English (optional). Write a precise `description`: tasks are routed by it." + _DENIED,
                        {"id": _S, "template": _S, "spec": _O, "soul": _S, "rationale": _S}, ["id"]),
     "agent_update": _t("Change another agent: changes = subset of {name, role, description, model, effort, fallback_model, tool_policy, mcp_servers, "

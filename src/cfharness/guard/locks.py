@@ -74,3 +74,50 @@ class RepoLocks:
 
     def list(self) -> dict[str, dict[str, Any]]:
         return self._all()
+
+
+BROWSER_STATE_KEY = "browser_locks"
+
+
+class BrowserLock:
+    """Khoá trình duyệt Claude in Chrome: Chrome THẬT của người dùng chung cho mọi agent → tối đa
+    `runtime.claude.chrome.max_concurrent_runs` run dùng tool chrome cùng lúc. Gắn theo RUN (không theo session như RepoLocks):
+    lấy ở lần gọi tool chrome đầu tiên (GuardService.check), nhả khi run kết thúc (RunManager._run finally) — run `waiting_human`
+    đã dừng tiến trình nên cũng nhả. Lưu `hub_state` (sống qua restart); người giữ không còn chạy bị dọn khi có run khác xin."""
+
+    def __init__(self, store: Any) -> None:
+        self.store = store
+
+    def _all(self) -> dict[str, dict[str, Any]]:
+        d = self.store.state_get(BROWSER_STATE_KEY, {}) or {}
+        return dict(d) if isinstance(d, dict) else {}
+
+    def _save(self, d: dict[str, dict[str, Any]]) -> None:
+        self.store.state_set(BROWSER_STATE_KEY, d)
+
+    def acquire(self, run_id: str, agent_id: str | None, limit: int, is_active: Any = None) -> dict[str, dict[str, Any]] | None:
+        """None = run giữ khoá (mới lấy hoặc đã có); dict = các run đang giữ (đã đủ `limit`)."""
+        d = self._all()
+        if run_id in d:
+            return None
+        n = len(d)
+        if is_active is not None:
+            d = {rid: h for rid, h in d.items() if is_active(rid)}
+        if len(d) >= max(1, int(limit)):
+            if len(d) != n:
+                self._save(d)
+            return d
+        d[run_id] = {"agent_id": agent_id, "since": time.time()}
+        self._save(d)
+        return None
+
+    def release(self, run_id: str | None) -> None:
+        if not run_id:
+            return
+        d = self._all()
+        if run_id in d:
+            d.pop(run_id)
+            self._save(d)
+
+    def list(self) -> dict[str, dict[str, Any]]:
+        return self._all()

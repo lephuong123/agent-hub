@@ -5,6 +5,7 @@ config:
   model: sonnet
   tool_policy:
     permission_mode: plan
+    browser: auto  # Claude in Chrome trước, Playwright khi Chrome không kết nối (docs/dev-notes/chrome.md)
     tools: [Read, Grep, Glob]
   limits:
     max_budget_usd_per_run: 0.5

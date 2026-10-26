@@ -42,6 +42,7 @@
   <dl class="kv cols">
     <div><dt>Model</dt><dd><code>{{ a.model }}</code>{% if a.effort %} · {{ a.effort }}{% endif %}</dd></div>
     <div><dt>Quyền</dt><dd>{{ (a.tool_policy or {}).permission_mode or 'default' }}</dd></div>
+    <div><dt>Trình duyệt</dt><dd>{{ (a.tool_policy or {}).browser or 'none' }}</dd></div>
     <div><dt>Tool</dt><dd>{{ ((a.tool_policy or {}).tools or ['(mặc định)'])|join(', ') }}</dd></div>
     <div><dt>MCP</dt><dd>{% for s in a.mcp_servers or [] %}<span class="chip">{{ s }}</span>{% else %}—{% endfor %}</dd></div>
     <div><dt>Ngân sách / run</dt><dd>{{ (a.limits or {}).max_budget_usd_per_run and ('$' ~ a.limits.max_budget_usd_per_run) or '—' }}</dd></div>

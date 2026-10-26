@@ -227,6 +227,8 @@ class LearningGuard:
                 return Block("self_escalation", "allow_bypass", "allow_bypass chỉ người đặt (NFR-15)")
             if "permission_prompts" in tp and tp["permission_prompts"] != cur_tp.get("permission_prompts"):
                 return Block("self_escalation", "permission_prompts", "không được đổi kênh phê duyệt")
+            if tp.get("browser") in ("chrome", "auto") and tp.get("browser") != cur_tp.get("browser"):
+                return Block("self_escalation", "browser", "bật Claude in Chrome (Chrome THẬT của người) là việc của người/điều phối viên")
             if "disallowed_tools" in tp:
                 removed = [x for x in cur_tp.get("disallowed_tools") or [] if x not in (tp.get("disallowed_tools") or [])]
                 if removed:

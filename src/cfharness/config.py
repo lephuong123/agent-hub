@@ -481,7 +481,16 @@ DEFAULTS: dict[str, Any] = {
                 "2.1.302": _FLAGS_2_1_302,
                 "2.1.303": list(_FLAGS_2_1_302),
                 # 2.1.310: `claude --help` còn đủ mọi cờ trong danh sách (không cờ nào bị bỏ/đổi tên) → cùng danh sách.
-                "2.1.310": list(_FLAGS_2_1_302),
+                # + `--chrome`/`--no-chrome` (Claude in Chrome, có trong `claude --help` 2.1.310; spike docs/dev-notes/chrome.md).
+                "2.1.310": list(_FLAGS_2_1_302) + ["--chrome", "--no-chrome"],
+            },
+            # Claude in Chrome (cfharness/browser.py, docs/dev-notes/chrome.md). `enabled` = kill switch CHỈ NGƯỜI đặt (nhánh runtime
+            # ∈ integrity.SECURITY_KEYS); tắt → agent `chrome`/`auto` chạy như `playwright`, tool chrome bị guard chặn.
+            "chrome": {
+                "enabled": True,
+                "max_concurrent_runs": 1,  # Chrome THẬT của người dùng chung → số run dùng tool chrome cùng lúc
+                "pass_no_chrome": True,  # run không dùng Chrome nhận --no-chrome (khi phiên bản CLI có cờ)
+                "annotations": {},  # ghi đè của người: {glob: {destructiveHint?, readOnlyHint?}} (`mcp annotate claude-in-chrome …`)
             },
             # hardening H-11 (FR-RT-17): hook QUAN SÁT fail-OPEN (cfharness/observe_hook.py) — luôn exit 0, quá timeout_s → hook.timeout
             "observe_hooks": {"enabled": True, "events": ["PostToolUse", "UserPromptSubmit", "Stop"], "timeout_s": 2.0, "cli_timeout_s": 5},
@@ -615,6 +624,10 @@ def validate_setting(key: str, value: Any) -> None:
         from .guard.profiles import validate_setting as _validate_profile
 
         _validate_profile(key, value)
+    if key == "runtime.claude.chrome" or key.startswith("runtime.claude.chrome."):
+        from .browser import validate_setting as _validate_chrome
+
+        _validate_chrome(key, value)
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")
