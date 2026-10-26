@@ -1,7 +1,7 @@
 """Web: "Kết nối" MCP server OAuth một chạm (docs/dev-notes/mcp-oauth.md).
 
-- `POST /do/mcp_connect` (CSRF + khoá phiên WT-1 qua `post_guard`): `mcp.oauth_start` với redirect
-  `http://<web host>:<port>/mcp/oauth/callback` → trang chuyển tiếp tới `authorize_url`. Đây là chỗ DUY NHẤT web đưa trình duyệt ra
+- `POST /do/mcp_connect` (CSRF + khoá phiên WT-1 qua `post_guard`): `mcp.oauth_start` với redirect loopback
+  `http://127.0.0.1:<port>/mcp/oauth/callback` (`redirect_uri`) → trang chuyển tiếp tới `authorize_url`. Đây là chỗ DUY NHẤT web đưa trình duyệt ra
   URL ngoài; URL phải là https (http chỉ loopback). Không dùng 303 thẳng: CSP `form-action 'self'` của trang chặn chuyển hướng
   khác nguồn sau khi gửi form (Chrome/Firefox) — trang trung gian dùng `<meta refresh>` + nút bấm (không cần script inline).
 - `GET /mcp/oauth/callback`: CÔNG KHAI với GuardMiddleware (cookie phiên SameSite=Strict KHÔNG được gửi trong điều hướng
@@ -34,6 +34,13 @@ def _app() -> Any:
     return A
 
 
+def redirect_uri(port: int) -> str:
+    """Redirect URI đăng ký với nhà cung cấp: loopback IP (RFC 8252 §7.3). Nhiều máy chủ cấp quyền (vd Notion) chỉ nhận https
+    hoặc loopback — `cfharness.localhost` bị từ chối. Trình duyệt về `127.0.0.1:<port>/mcp/oauth/callback` → GuardMiddleware
+    303 sang host web riêng (giữ nguyên query; không đặt cookie trên 127.0.0.1) → `callback`; daemon đổi code bằng ĐÚNG URI này."""
+    return f"http://127.0.0.1:{port}{CALLBACK_PATH}"
+
+
 def _external_ok(url: str) -> bool:
     s = urlsplit(url or "")
     return bool(s.netloc) and (s.scheme == "https" or (s.scheme == "http" and is_loopback_host(s.hostname)))
@@ -48,7 +55,7 @@ async def connect(request: Request) -> Response:
     back = f"/mcp/{name}"
     st = A.ws(request)
     try:
-        res = await A.rpc(request, "mcp.oauth_start", {"name": name, "redirect_uri": st.base_url + CALLBACK_PATH}, audit=True)
+        res = await A.rpc(request, "mcp.oauth_start", {"name": name, "redirect_uri": redirect_uri(st.port)}, audit=True)
     except (RpcError, DaemonUnavailable) as e:
         return A.flash_redirect(request, back, "error", f"Không bắt đầu được đăng nhập: {A.err_text(e)}")
     url = str((res or {}).get("authorize_url") or "")

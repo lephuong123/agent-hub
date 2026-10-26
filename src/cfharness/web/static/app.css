@@ -824,3 +824,4 @@ html.mgr-info-closed .mgr-side { display: none; }
 .mcp-adv > summary { cursor: pointer; color: var(--text-2); font-size: var(--fs-sm); }
 .mcp-opts { flex-wrap: wrap; margin-top: var(--s2); }
 .mcp-ann .menu-pop .btn.primary { width: auto; background: var(--accent); color: var(--on-accent); justify-content: center; }
+.mcp-cat { margin: 1.5rem 0 .6rem; }

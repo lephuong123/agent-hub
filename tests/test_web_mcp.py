@@ -289,3 +289,30 @@ async def test_agent_mcp_config_preview_hides_secrets(env):
     assert "lost:${NOT_SET_ANYWHERE}" in r.text
     r = await env.client.get("/mcp/gh")
     assert 'href="/mcp/agent/ag1"' in r.text
+
+
+async def test_browse_featured_grouped_by_category(env):
+    await env.login()
+    r = await env.client.get("/mcp/browse")
+    assert r.status_code == 200
+    for cat in C.CATEGORIES:
+        assert cat.replace("&", "&amp;") in r.text
+    assert r.text.index("Công việc") < r.text.index("Chạy trên máy")
+    assert "Notion" in r.text and "OAuth · cần client_id" in r.text and "không cần đăng nhập" in r.text
+
+
+async def test_install_manual_oauth_client_stores_secret(env):
+    await env.login()
+    r = await env.client.get("/mcp/browse/install?name=com.slack%2Fmcp")
+    assert r.status_code == 200 and 'name="oauth_client_id"' in r.text and "/mcp/oauth/callback" in r.text and "127.0.0.1:33418/callback" in r.text
+    base = {"reg_name": "com.slack/mcp", "opt": "r0", "name": "slack", "url": "https://mcp.slack.com/mcp", "confirm": "yes"}
+    r = await env.post("/mcp/browse/install", base)
+    assert r.status_code == 400 and "client_id" in r.text and env.hub.mcp.get_row("slack") is None
+    n_probes = len(env.probes)
+    r = await env.post("/mcp/browse/install", {**base, "oauth_client_id": "123.456", "oauth_client_secret": SECRET})
+    assert r.status_code == 303 and r.headers["location"] == "/mcp/slack#oauth", r.text
+    auth = env.hub.mcp.get_row("slack")["config"]["auth"]
+    assert auth["type"] == "oauth" and auth["client_id"] == "123.456" and auth["client_secret_ref"] == "${MCP_SLACK_OAUTH_CLIENT_SECRET}"
+    assert env.hub.secrets.get("MCP_SLACK_OAUTH_CLIENT_SECRET") == SECRET and len(env.probes) == n_probes
+    dump = json.dumps([dict(x) for x in env.hub.store.conn.execute("SELECT * FROM audit_log")], default=str)
+    assert SECRET not in dump

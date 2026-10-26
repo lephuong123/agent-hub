@@ -314,11 +314,19 @@ async def browse(request: Request) -> Response:
         res = {"servers": [], "error": err_text(e), "source": "error"}
     from ..mcp_client.catalog import suggest_name
 
+    from ..mcp_client.catalog import CATEGORIES
+
     installed = {m.get("name") for m in await rpc(request, "mcp.list") or []}
     for e in res.get("servers") or []:
         e["installed"] = suggest_name(str(e.get("name") or "")) in installed
+    groups: list[tuple[str, list[dict[str, Any]]]] = []
+    if featured:  # nhóm theo loại, giữ thứ tự CATEGORIES; mục không có loại dồn vào "Khác"
+        by: dict[str, list[dict[str, Any]]] = {}
+        for e in res.get("servers") or []:
+            by.setdefault(e.get("category") or "Khác", []).append(e)
+        groups = [(c, by.pop(c)) for c in CATEGORIES if c in by] + list(by.items())
     return await render(request, "mcp_browse.html", {"nav": "mcp", "q": q, "cursor": cursor, "res": res, "installed": installed,
-                                                     "featured": featured})
+                                                     "featured": featured, "groups": groups})
 
 
 def _field_key(prefix: str, name: str) -> str:
@@ -333,7 +341,14 @@ async def _install_ctx(request: Request, reg_name: str, opt_id: str | None) -> d
             for fld in o.get(lst) or []:
                 fld["fkey"] = _field_key(prefix, str(fld.get(attr) or ""))
     opt = next((o for o in opts if o.get("id") == opt_id), opts[0] if opts else None)
-    return {"entry": res.get("server") or {}, "options": opts, "opt": opt, "suggested": res.get("suggested_name") or "mcp"}
+    from ..mcp_client.oauth_cli import DEFAULT_PORT
+    from .app import ws
+    from .mcp_oauth import redirect_uri
+
+    # app OAuth tạo tay ở nhà cung cấp phải khai đúng redirect URI: web (nút Kết nối) và `cfharness mcp login` (loopback)
+    redirect_uris = [redirect_uri(ws(request).port), f"http://127.0.0.1:{DEFAULT_PORT}/callback"]
+    return {"entry": res.get("server") or {}, "options": opts, "opt": opt, "suggested": res.get("suggested_name") or "mcp",
+            "redirect_uris": redirect_uris}
 
 
 async def install_page(request: Request) -> Response:
@@ -386,6 +401,24 @@ def build_install(opt: dict[str, Any], entry: dict[str, Any], form: FormData) ->
                 headers[h["name"]] = v
         if headers:
             cfg["headers"] = headers
+        if opt.get("needs_oauth"):  # chưa có token → không probe lúc cài; người bấm Kết nối ở trang server
+            auth: dict[str, Any] = {"type": "oauth"}
+            if opt.get("oauth_client") == "manual":  # nhà cung cấp không cho tự đăng ký client (DCR)
+                cid = str(form.get("oauth_client_id") or "").strip()
+                if not cid:
+                    raise ValueError("thiếu client_id của app OAuth")
+                if not re.fullmatch(r"[\x21-\x7e]{1,300}", cid):
+                    raise ValueError("client_id không hợp lệ")
+                auth["client_id"] = cid
+                csec = str(form.get("oauth_client_secret") or "").strip()
+                if csec:
+                    if is_ref(csec):
+                        auth["client_secret_ref"] = csec
+                    else:
+                        sn = secret_name(name, "OAUTH_CLIENT_SECRET")
+                        secrets[sn] = csec
+                        auth["client_secret_ref"] = f"${{{sn}}}"
+            cfg["auth"] = auth
     else:
         try:
             parts = shlex.split(str(form.get("command") or "").strip())
@@ -435,7 +468,7 @@ async def install_submit(request: Request) -> Response:
     # giá trị form để vẽ lại khi lỗi — KHÔNG gồm trường bí mật
     secret_keys = {_field_key("h.", h["name"]) for h in opt.get("headers") or [] if h.get("secret")} | \
                   {_field_key("e.", e["name"]) for e in opt.get("env") or [] if e.get("secret")} | \
-                  {_field_key("a.", a["key"]) for a in opt.get("arg_fields") or [] if a.get("secret")}
+                  {_field_key("a.", a["key"]) for a in opt.get("arg_fields") or [] if a.get("secret")} | {"oauth_client_secret"}
     keep = {k: v for k, v in carry(form) if k not in secret_keys}
 
     async def again(err: str) -> Response:
@@ -445,8 +478,6 @@ async def install_submit(request: Request) -> Response:
         cfg, secrets = build_install(opt, ctx["entry"], form)
     except ValueError as e:
         return await again(f"Chưa đủ thông tin: {e}")
-    if opt.get("needs_oauth") and cfg["transport"] != "stdio":
-        cfg["auth"] = {"type": "oauth"}
     if form.get("confirm") != "yes":
         # có JS thì hộp xác nhận đã hiện trước khi gửi; không JS → yêu cầu xác nhận lại (không mang secret sang trang khác)
         return await again("Cần xác nhận: " + install_confirm(cfg, secrets))
