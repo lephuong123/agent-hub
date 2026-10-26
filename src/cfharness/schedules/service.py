@@ -38,7 +38,7 @@ log = logging.getLogger("cfharness.schedules")
 KINDS = ("manager", "agent", "task")
 STATUSES = ("active", "paused", "done")
 LIVE = ("queued", "running", "waiting_human")
-CHANNEL_RE = re.compile(r"^(web|cli|tui|telegram:-?\d{1,20})$")
+CHANNEL_RE = re.compile(r"^(web|cli|tui|telegram:-?\d{1,20}|slack:[CDG][A-Z0-9]{2,20})$")  # slack: DM (D…) / kênh (C…, G…)
 DEFAULTS: dict[str, Any] = {
     "enabled": True, "tick_s": 15, "catchup_grace_s": 3600, "max_failures": 3, "default_budget_usd": 0.5, "prompt_max_chars": 4000,
     "min_interval_s": 900, "manager_max_active": 10, "manager_run_now_per_hour": 6, "manager_daily_budget_usd": None,
@@ -189,7 +189,7 @@ class ScheduleService:
             dt = {"conversation_id": dt} if dt.startswith("mc_") else {"channel": dt}
         dt = {k: v for k, v in dict(dt or {}).items() if k in ("conversation_id", "channel") and v}
         if dt.get("channel") and not CHANNEL_RE.match(str(dt["channel"])):
-            raise HubError("deliver_to.channel phải là web|cli|tui|telegram:<chat_id>")
+            raise HubError("deliver_to.channel phải là web|cli|tui|telegram:<chat_id>|slack:<chat_id>")
         if dt.get("conversation_id"):
             c = self.conn.execute("SELECT channel FROM manager_conversations WHERE id=?", (str(dt["conversation_id"]),)).fetchone()
             if c is None:
@@ -694,7 +694,7 @@ class ScheduleService:
 
     def _deliver(self, r: dict[str, Any], text: str, *, ok: bool, run_id: str | None) -> None:
         """Gửi chữ về `deliver_to`: tin `notify` của hội thoại điều phối viên + `manager.reply{kind:notify}` (web/Telegram/CLI tự hiện).
-        Chưa có điều phối viên: chỉ kênh `telegram:<chat>` nhận được (manager.reply không có hội thoại)."""
+        Chưa có điều phối viên: chỉ kênh `telegram:<chat>` / `slack:<chat>` nhận được (manager.reply không có hội thoại)."""
         mgr = self.hub.manager  # type: ignore[attr-defined]
         conv = self._deliver_conv(r, create=True)
         ch = (r.get("deliver_to") or {}).get("channel")

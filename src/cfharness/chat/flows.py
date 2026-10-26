@@ -120,7 +120,7 @@ class ChatFlows:
         return f"Đã giao run {r['id']} cho agent {agent} ({r.get('status')}). Bot sẽ gửi kết quả khi xong."
 
     async def ask_prompt(self, cid: str, agent: str, api: Any, reply_to: Any = None) -> None:
-        res = await self.bot._send(api, cid, f"✍️ Mô tả việc cần làm cho agent {agent} — trả lời (reply) tin này.",
+        res = await self.bot._send(api, cid, f"✍️ Mô tả việc cần làm cho agent {agent} — {self.bot.reply_here()}.",
                                    {"force_reply": True, "input_field_placeholder": f"Việc cho {agent}…", "selective": True}, reply_to=reply_to)
         if res.get("message_id") is not None:
             self._put(f"{cid}:{res['message_id']}", {"kind": "run", "agent": agent})

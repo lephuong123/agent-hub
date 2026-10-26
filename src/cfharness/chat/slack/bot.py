@@ -194,6 +194,18 @@ class SlackBot(ChatBot):
     def reply_hint(self, what: str) -> str:
         return f"Trả lời trong thread của tin này để {what}."
 
+    def reply_here(self) -> str:
+        return "trả lời trong thread của tin này"
+
+    def reply_into(self, target: str) -> str:
+        return f"trả lời trong thread của {target}"
+
+    def plain_hint(self) -> str:
+        return f"nhắn chữ trong DM với bot, không qua {self.slash()}"
+
+    def answer_box_hint(self) -> str:
+        return "Trả lời trong thread của tin vừa gửi."
+
     def team_ok(self, team: Any) -> bool:
         pinned = self.cfg().get("team_id")
         return not pinned or str(team or "") == str(pinned)

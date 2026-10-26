@@ -232,6 +232,29 @@ async def test_fires_on_time_and_delivers_agent_result(env):
     assert (await rpc(d, "schedule.get", {"id": s["id"]}))["last_status"] == "ok"
 
 
+async def test_slack_channel_accepted_and_delivered(env):
+    """Slack 2 chiều P3: `slack:<chat_id>` (DM D…, kênh C…/G…) là nơi nhận hợp lệ như `telegram:<chat_id>`."""
+    d = env
+    for ch in ("slack:D0ABC1234", "slack:C0TEAM001", "slack:G0PRIV001"):
+        s = await rpc(d, "schedule.create", {"kind": "agent", "target": "w1", "expr": "daily 08:00", "prompt": "x", "deliver_to": ch})
+        assert s["deliver_to"] == {"channel": ch}
+        await rpc(d, "schedule.rm", {"id": s["id"]})
+    for bad in ("slack:", "slack:d0abc1234", "slack:U0BOSS001", "slack:D0<!x>", "slack:D0ABC1234 x"):
+        with pytest.raises(HubError, match="slack:<chat_id>"):
+            await rpc(d, "schedule.create", {"kind": "agent", "target": "w1", "expr": "daily 08:00", "prompt": "x", "deliver_to": bad})
+    await designate(d)
+    s = await rpc(d, "schedule.create", {"kind": "agent", "target": "w1", "expr": "daily 08:00", "prompt": "tóm tắt góp ý mới",
+                                         "deliver_to": "slack:D0ABC1234"})
+    at(d, 2026, 10, 19, 8, 0)
+    d.clock["now"] += timedelta(seconds=5)
+    out = d.hub.schedules.tick()
+    await ended(d, out[0]["run_id"])
+    rep = await until(lambda: [p for p in evs(d, "manager.reply") if p.get("schedule_id") == s["id"]])
+    assert rep[-1]["channel"] == "slack:D0ABC1234" and rep[-1]["kind"] == "notify" and "worker done" in rep[-1]["text"]
+    conv = await rpc(d, "manager.history", {"conversation_id": rep[-1]["conversation_id"]})
+    assert conv[-1]["role"] == "notify"
+
+
 async def test_overlap_and_estop_and_paused_agent_skip(env):
     d = env
     s = await rpc(d, "schedule.create", {"kind": "agent", "target": "w1", "expr": "every 15m", "prompt": "HOLD việc dài"})

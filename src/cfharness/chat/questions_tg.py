@@ -160,7 +160,7 @@ class QuestionChat:
         elif n:
             lines.append(f"Bấm số của phương án ({n} phương án ở tin phía trên).")
         if q["allow_free_text"] or not n:
-            lines.append("Hoặc trả lời (reply) tin này bằng chữ.")
+            lines.append(f"Hoặc {esc(self.bot.reply_here())} bằng chữ.")
         lines.append(f"Trên máy: cfharness answer {esc(q['id'])} " + ("--pick &lt;số&gt;" if n else '--text "…"'))
         return "\n".join(lines)
 
@@ -268,12 +268,12 @@ class QuestionChat:
                 await self.bot.call(cid, "question.answer", {"id": qid, "keys": sel})
                 return f"Đã gửi: chọn {', '.join(sel)}."
             if action == "qf":
-                res = await self.bot._send(api, cid, f"✍️ Nhập câu trả lời cho câu hỏi {qid} — trả lời (reply) tin này.",
+                res = await self.bot._send(api, cid, f"✍️ Nhập câu trả lời cho câu hỏi {qid} — {self.bot.reply_here()}.",
                                            {"force_reply": True, "input_field_placeholder": "Câu trả lời…", "selective": True}, reply_to=mid)
                 if res.get("message_id") is not None:
                     self._put(self.MAP, f"{cid}:{res['message_id']}", qid)
                 await self._edit(api, cid, mid, self.system_text(q, sel), self.markup(q, cid, sel))
-                return "Nhập câu trả lời ở ô bên dưới."
+                return self.bot.answer_box_hint()
             if action == "qx":
                 await self._edit(api, cid, mid, self.system_text(q, confirm_cancel=True), self.markup(q, cid, confirm_cancel=True))
                 return "Xác nhận huỷ ở tin này."

@@ -481,6 +481,23 @@ class ChatBot:
         """Chỉ dẫn "trả lời tin này để …" theo cách của nền tảng (Telegram: reply; Slack: trả lời trong thread)."""
         return f"Trả lời (reply) tin này để {what}."
 
+    # Lời dẫn theo nền tảng (P3): mặc định = chữ Telegram (giữ nguyên từng byte); Slack ghi đè (chat/slack/bot.py).
+    def reply_here(self) -> str:
+        """"trả lời tin này" (chữ thường, giữa câu) — Telegram: reply; Slack: trả lời trong thread."""
+        return "trả lời (reply) tin này"
+
+    def reply_into(self, target: str) -> str:
+        """"reply vào <tin nào đó>" (giữa câu)."""
+        return f"reply vào {target}"
+
+    def plain_hint(self) -> str:
+        """Tin nào là "tin nhắn thường" (→ điều phối viên)."""
+        return "không phải lệnh /"
+
+    def answer_box_hint(self) -> str:
+        """Toast sau khi bấm "Trả lời bằng chữ"."""
+        return "Nhập câu trả lời ở ô bên dưới."
+
     async def _report_run(self, run_id: str, etype: str) -> None:
         run = self.hub.store.get_run(run_id)
         if run is None:
