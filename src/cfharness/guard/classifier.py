@@ -32,6 +32,7 @@ from typing import Any, Callable
 from .. import names as _names
 from ..oscompat import IS_WINDOWS, no_window_kwargs
 from . import shell
+from ..browser import CHROME_SERVER
 from .policy import Policy, ProtectedResource, canon_path, fold_path
 
 SEVERITY = {"safe": 0, "write": 1, "uncertain": 2, "destructive": 3}
@@ -223,6 +224,8 @@ class GuardContext:
     allowed_roots: tuple[str, ...] = ()  # workspace.allowed_roots (dạng so sánh fold_path) — ranh giới cho mọi ngoại lệ ghi
     worktree_since: float | None = None  # mốc "worktree do task/chuỗi run tạo": lúc run ĐẦU của task (hoặc session) vào hàng đợi
     scratch_workspace: bool = False  # cwd của run là scratch của hub (agents/<id>/workspaces/…)
+    # Claude in Chrome: None = không xét (guard test không run); False = agent không bật / kill switch tắt → tool chrome bị cấm
+    chrome_allowed: bool | None = None
 
     @property
     def home(self) -> str:
@@ -374,7 +377,8 @@ def always_eligible(v: Verdict) -> bool:
             and v.rule not in NEVER_DOWNGRADE_RULES)
 
 
-MCP_TOOL_ALWAYS_RULES = frozenset({"mcp_destructive_hint", "mcp_unknown_tool", "mcp_untrusted_write"})
+# + luật Claude in Chrome (guard/chrome.py): người "luôn cho phép tool này cho agent X" (đúng tên tool, không glob)
+MCP_TOOL_ALWAYS_RULES = frozenset({"mcp_destructive_hint", "mcp_unknown_tool", "mcp_untrusted_write", "chrome_action", "chrome_sensitive"})
 
 
 def mcp_tool_always_eligible(tool_name: str, v: Verdict) -> bool:
@@ -446,6 +450,34 @@ def local_host(host: str | None) -> bool:
     return False
 
 
+def url_verdict(url: str, label: str = "WebFetch") -> Verdict | None:
+    """Luật URL tĩnh dùng chung cho WebFetch và Claude in Chrome (`navigate`/`tabs_create_mcp`): host nội bộ/loopback, metadata,
+    scheme, thông tin xác thực, IP dạng lạ. None = qua kiểm tĩnh (DNS + guard.web allow/deny ở GuardService.net_check)."""
+    from urllib.parse import urlsplit
+
+    from .url_safety import static_check
+
+    try:
+        host = urlsplit(url if "//" in url else "//" + url).hostname
+    except ValueError:
+        host = None
+    if host is None or local_host(host):
+        chk = static_check(url)
+        if chk.metadata:
+            return Verdict("destructive", "ssrf_metadata", "network", f"{label} tới metadata đám mây ({chk.host})", [url[:200]], forbidden=True)
+        if not chk.ok and chk.rule.startswith("url_"):
+            return Verdict("uncertain", chk.rule, "network", f"{label}: {chk.reason}", [url[:200]])
+        return Verdict("uncertain", "webfetch_local", "network", f"{label} tới host nội bộ/loopback ({host or url[:80]}) — web/MCP của hub, dịch vụ LAN", [url[:200]])
+    # WEB-1 (SSRF, ý tưởng Hermes url_safety): scheme, thông tin xác thực trong URL, metadata, tên nội bộ, IP dạng lạ.
+    # Phân giải DNS + danh sách domain: ở daemon (GuardService), không ở hàm thuần này.
+    chk = static_check(url)
+    if not chk.ok:
+        if chk.metadata:
+            return Verdict("destructive", "ssrf_metadata", "network", f"{label} tới metadata đám mây: {chk.reason}", [url[:200]], forbidden=True)
+        return Verdict("uncertain", chk.rule, "network", f"{label}: {chk.reason}", [url[:200]])
+    return None
+
+
 def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardContext) -> Verdict:
     ti = tool_input if isinstance(tool_input, dict) else {}
     try:
@@ -464,29 +496,9 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
         if tool_name in FILE_WRITE_TOOLS:
             return classify_file_write(tool_name, ti, ctx)
         if tool_name == "WebFetch":
-            from urllib.parse import urlsplit
-
-            from .url_safety import static_check
-
-            url = str(ti.get("url") or "")
-            try:
-                host = urlsplit(url if "//" in url else "//" + url).hostname
-            except ValueError:
-                host = None
-            if host is None or local_host(host):
-                chk = static_check(url)
-                if chk.metadata:
-                    return Verdict("destructive", "ssrf_metadata", "network", f"WebFetch tới metadata đám mây ({chk.host})", [url[:200]], forbidden=True)
-                if not chk.ok and chk.rule.startswith("url_"):
-                    return Verdict("uncertain", chk.rule, "network", f"WebFetch: {chk.reason}", [url[:200]])
-                return Verdict("uncertain", "webfetch_local", "network", f"WebFetch tới host nội bộ/loopback ({host or url[:80]}) — web/MCP của hub, dịch vụ LAN", [url[:200]])
-            # WEB-1 (SSRF, ý tưởng Hermes url_safety): scheme, thông tin xác thực trong URL, metadata, tên nội bộ, IP dạng lạ.
-            # Phân giải DNS + danh sách domain: ở daemon (GuardService), không ở hàm thuần này.
-            chk = static_check(url)
-            if not chk.ok:
-                if chk.metadata:
-                    return Verdict("destructive", "ssrf_metadata", "network", f"WebFetch tới metadata đám mây: {chk.reason}", [url[:200]], forbidden=True)
-                return Verdict("uncertain", chk.rule, "network", f"WebFetch: {chk.reason}", [url[:200]])
+            uv = url_verdict(str(ti.get("url") or ""), "WebFetch")
+            if uv is not None:
+                return uv
         if tool_name in READ_ONLY_TOOLS:
             for k in ("file_path", "path", "notebook_path"):
                 v = ti.get(k)
@@ -844,6 +856,10 @@ def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdi
     server, _, tool = rest.partition("__")
     if server == "hub-guard":
         return Verdict("safe", "hub_guard_tool")
+    if server == CHROME_SERVER:  # Claude in Chrome (`--chrome`, server dynamic của CLI): bảng dựng sẵn, guard/chrome.py
+        from .chrome import classify_chrome
+
+        return classify_chrome(tool_name, ti, ctx)
     if ctx.connectors is not None and server not in ctx.run_mcp_servers and server not in ("hub-self", "hub-guard"):
         # run connector: CLI nạp thêm MCP/plugin của ~/.claude — chỉ connector người cho phép mới qua (slug có thể chứa "__")
         for slug in ctx.connectors:

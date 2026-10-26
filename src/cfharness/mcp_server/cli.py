@@ -237,6 +237,10 @@ def _cmd_annotate(ctx: Any) -> int:
     """`cfharness mcp annotate <server> <tool-glob> --not-destructive|--destructive|--read-only|--not-read-only|--clear` — ghi đè
     annotations server tự khai (chỉ người: mcp.update ∈ HUMAN_ONLY). Không gỡ được luật tên-xoá, tài nguyên bảo vệ, require_approval."""
     a = ctx.args
+    from ..browser import CHROME_SERVER
+
+    if a.name == CHROME_SERVER:
+        return _annotate_chrome(ctx)
     s = ctx.call("mcp.show", {"name": a.name})
     tools = dict((s.get("config") or {}).get("tools") or {})
     ann = {k: dict(v) for k, v in (tools.get("annotations") or {}).items()}
@@ -267,6 +271,41 @@ def _cmd_annotate(ctx: Any) -> int:
            (f" ({len(hits)} tool đã probe: {', '.join(hits[:10])}{'…' if len(hits) > 10 else ''})" if hits else
             " (chưa khớp tool nào đã probe — `cfharness mcp probe " + a.name + "`)"))
     ctx.out(res, msg)
+    return EXIT_OK
+
+
+def _annotate_chrome(ctx: Any) -> int:
+    """Claude in Chrome không nằm trong registry (server dynamic của `claude --chrome`) → ghi đè vào
+    `runtime.claude.chrome.annotations` qua `config.set` (chỉ người). Luật URL/SSRF của navigate không gỡ được."""
+    from ..guard.chrome import ACTION_TOOLS, READ_TOOLS, SENSITIVE_TOOLS, URL_TOOLS
+
+    a = ctx.args
+    cur_all = ctx.call("config.get", {"key": "runtime.claude.chrome.annotations"})
+    ann = {k: dict(v) for k, v in (cur_all if isinstance(cur_all, dict) else {}).items() if isinstance(v, dict)}
+    cur = {} if a.clear else dict(ann.get(a.tool) or {})
+    if a.not_destructive:
+        cur["destructiveHint"] = False
+    if a.destructive:
+        cur["destructiveHint"] = True
+    if a.read_only:
+        cur["readOnlyHint"] = True
+    if a.not_read_only:
+        cur["readOnlyHint"] = False
+    if not a.clear and not cur:
+        _eprint("chọn ít nhất một: --not-destructive | --destructive | --read-only | --not-read-only | --clear")
+        return EXIT_USER
+    if cur:
+        ann[a.tool] = cur
+    else:
+        ann.pop(a.tool, None)
+    import fnmatch
+
+    known = sorted(READ_TOOLS | URL_TOOLS | ACTION_TOOLS | SENSITIVE_TOOLS)
+    hits = [t for t in known if fnmatch.fnmatchcase(t, a.tool)]
+    res = ctx.call("config.set", {"key": "runtime.claude.chrome.annotations", "value": ann})
+    ctx.out(res, f"Claude in Chrome: tool khớp '{a.tool}' → " + (json.dumps(cur, ensure_ascii=False) if cur else "bỏ ghi đè")
+            + (f" ({', '.join(hits)})" if hits else " (chưa khớp tool nào trong bảng phân loại)")
+            + " — lưu ở runtime.claude.chrome.annotations")
     return EXIT_OK
 
 

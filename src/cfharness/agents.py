@@ -11,7 +11,7 @@ import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -73,6 +73,8 @@ class ToolPolicy(BaseModel):
     # NFR-15: chỉ khi người khai báo rõ VÀ workspace là scratch/worktree
     allow_bypass: bool = False
     permission_prompts: str | None = None
+    # Claude in Chrome (browser.py): none (mặc định = như cũ) | playwright | chrome (bỏ Playwright khỏi run) | auto (Chrome trước)
+    browser: Literal["none", "playwright", "chrome", "auto"] = "none"
 
     @field_validator("permission_mode")
     @classmethod

@@ -48,6 +48,7 @@ NEVER_RULES = frozenset({
     "ssrf_metadata", "ssrf_private_ip", "ssrf_internal_name", "ssrf_private_resolved", "webfetch_local", "url_dns_failed",
     "web_domain_denied", "web_domain_not_allowed", "url_scheme", "url_credentials", "url_no_host", "url_unparsable",
     "delete_critical", "move_critical", "write_block_device", "disk_admin", "fork_bomb", "system_power",
+    "chrome_sensitive",  # Claude in Chrome: JS tuỳ ý / tải file lên trên Chrome THẬT của người — chỉ người quyết
 })
 _NEVER_WORDS = ("credential", "keychain", "secret", "token", "sandbox", "estop", "protected", "push")
 

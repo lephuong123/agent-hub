@@ -1,6 +1,6 @@
 """Lắp khối system prompt của agent (FR-RT-10).
 
-Thứ tự ổn định (để giữ prompt cache): (1) quy ước hub → (2) SOUL → (3) charter team (hardening H-15: run có `team_id`;
+Thứ tự ổn định (để giữ prompt cache): (1) quy ước hub (+ khối trình duyệt Claude in Chrome theo `tool_policy.browser`) → (2) SOUL → (3) charter team (hardening H-15: run có `team_id`;
 trước đây nằm trong tin nhắn user) → (4) memory global/team/agent → (5) chỉ mục skill + (6) hướng dẫn đọc skill qua
 `skill_view` (M4, `knowledge/prompt_blocks.py`). Charter ổn định theo (agent, team) → hash ổn định giữa các run cùng team.
 Nội dung động (task, comment, vai trò trong task) KHÔNG vào đây mà vào tin nhắn user.
@@ -25,8 +25,15 @@ def charter_block(team_id: str, team_name: str, charter: str) -> str:
     return f"# Team charter (team '{team_name}', id {team_id})\n{charter.strip()}" if charter and charter.strip() else ""
 
 
-def build_system_prompt(agent_id: str, soul: str, knowledge_blocks: list[str] | None = None, charter: str | None = None) -> str:
+def build_system_prompt(agent_id: str, soul: str, knowledge_blocks: list[str] | None = None, charter: str | None = None,
+                        browser: str | None = None) -> str:
     parts = [HUB_CONVENTIONS.format(agent_id=agent_id).strip()]
+    if browser:
+        from .browser import prompt_block
+
+        block = prompt_block(browser)
+        if block:
+            parts.append(block)  # theo cấu hình agent (ổn định giữa các run) → không phá prompt cache
     if soul and soul.strip():
         parts.append("# Persona (SOUL)\n" + soul.strip())
     if charter and charter.strip():

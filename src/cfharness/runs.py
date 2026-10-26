@@ -468,6 +468,21 @@ class RunManager:
         env_extra: dict[str, str] = {}
         allowed_hooks = list(iso.get("allowed_hooks") or []) + observe_events + list((conn or {}).get("allowed_hooks") or [])
         allowed_mcp = list(agent.get("mcp_servers") or []) + list(iso.get("allowed_mcp_servers") or []) + list((conn or {}).get("allowed_mcp") or [])
+        # Claude in Chrome (browser.py): chế độ hiệu lực (kill switch của người) → build_argv thêm --chrome; `chrome` bỏ Playwright khỏi run
+        from .browser import CHROME_MODES, CHROME_SERVER, effective_mode, is_playwright_server
+
+        browser = effective_mode(agent, hub.config)
+        tp["browser"] = browser
+        if browser in CHROME_MODES:
+            allowed_mcp.append(CHROME_SERVER)  # server dynamic của CLI — không phải isolation.violation
+        if browser == "chrome":
+            drop = [n for n, e in servers.items() if is_playwright_server(n, e)]
+            for n in drop:
+                servers.pop(n, None)
+            if drop:
+                allowed_mcp = [x for x in allowed_mcp if x not in drop]
+                pre = tuple(f"mcp__{n}" for n in drop)
+                tp["allowed_tools"] = [x for x in tp.get("allowed_tools") or [] if not str(x).startswith(pre)]
         static: list[str] = []
         if guard_on:
             from .guard import runtime as gr
@@ -697,6 +712,12 @@ class RunManager:
             if ar.checkpoint is not None and not ar.diff_done:
                 await self._diff(ar)
             self.active.pop(run_id, None)
+            br = getattr(getattr(hub, "guard", None), "browser", None)
+            if br is not None:  # Claude in Chrome: nhả khoá trình duyệt khi run kết thúc (kể cả waiting_human — tiến trình đã dừng)
+                try:
+                    br.release(run_id)
+                except Exception:  # pragma: no cover - store đã đóng khi tắt
+                    pass
             final = self.store.get_run(run_id) or {}
             if final.get("status") != "waiting_human":
                 self.locks.release(ar.lock_key, run.get("session_id"))

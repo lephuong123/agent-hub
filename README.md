@@ -127,6 +127,29 @@ hub/chính sách, tài nguyên được bảo vệ, đường dẫn ngoài `work
 
 Ảnh: `docs/screenshots/web/16-dieu-phoi*.png`, `17-…`, `18-…`.
 
+## Trình duyệt: Claude in Chrome
+
+Agent có thể dùng **Claude in Chrome** (extension Chrome của Claude, `claude --chrome`) thay cho Playwright. Chi tiết, bảng phân loại
+và kết quả spike: `docs/dev-notes/chrome.md`.
+
+- **Bật cho một agent**: `cfharness agent edit <id> --browser chrome|auto|playwright|none` (web: form agent → *Trình duyệt*). Xem:
+  `cfharness agent show <id>` (dòng `browser`). Điều phối viên cũng đặt được cho agent khác ("cho agent X dùng Chrome"), không đặt cho
+  chính nó.
+  - `auto` (mặc định của mẫu researcher/coder/reviewer): dùng Chrome trước; Playwright chỉ khi Chrome không kết nối hoặc đang bận.
+  - `chrome`: chỉ Chrome — server Playwright (nếu agent được gán) KHÔNG gắn vào run.
+  - `none` (mặc định của agent cũ) / `playwright`: như trước, run nhận `--no-chrome`.
+- **Yêu cầu**: extension Claude in Chrome đã cài và đang kết nối trên máy chạy daemon; `claude` ≥ 2.1.310 (`--chrome` có trong
+  `runtime.claude.flag_matrix`).
+- **Tắt khẩn (chỉ người)**: `cfharness config set runtime.claude.chrome.enabled false` → mọi agent `chrome`/`auto` chạy như
+  `playwright`, tool Chrome bị guard chặn. `runtime.claude.chrome.max_concurrent_runs` (mặc định 1): số run được dùng Chrome cùng lúc —
+  run thứ hai bị từ chối kèm hướng dẫn chờ (hoặc chuyển Playwright nếu `auto`); khoá nhả khi run kết thúc.
+- **An toàn — đọc kỹ**: Claude in Chrome điều khiển **Chrome THẬT của bạn**, với mọi phiên đăng nhập (email, chat, trang quản trị,
+  ngân hàng…). Nên tạo **một profile Chrome riêng cho agent** (không đăng nhập tài khoản cá nhân) và chỉ kết nối extension ở profile đó.
+  Nội dung trang web có thể chứa **prompt injection** (chữ ẩn bảo agent làm việc khác) — guard của hub vẫn quyết từng thao tác:
+  đọc trang = tự do; `navigate` qua cùng luật SSRF/domain như WebFetch (`guard.web.allow_domains|deny_domains`; localhost/mạng nội bộ
+  phải duyệt, metadata đám mây bị cấm); click/gõ/form = ghi nhật ký (profile `strict`: hỏi bạn); `javascript_tool`, tải file/ảnh lên
+  trang = **luôn hỏi bạn**. Ghi đè: `cfharness mcp annotate claude-in-chrome '<tool>' --not-destructive|--read-only|--destructive|--clear`.
+
 ## Bố cục `HUB_HOME`
 
 ```

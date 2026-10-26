@@ -56,6 +56,7 @@
         {% if v.model and v.model not in models %}<option value="{{ v.model }}" selected>{{ v.model }}</option>{% endif %}</select></label>
       <label>Mức suy nghĩ (effort) <select name="effort"><option value="">(mặc định)</option>{% for x in efforts %}<option value="{{ x }}" {{ 'selected' if v.effort == x }}>{{ x }}</option>{% endfor %}</select></label>
       <label>Chế độ quyền <select name="permission_mode"><option value="">{{ '(theo mẫu)' if not agent else '(mặc định)' }}</option>{% for x in modes %}<option value="{{ x }}" {{ 'selected' if v.permission_mode == x }}>{{ x }}</option>{% endfor %}</select></label>
+      <label>Trình duyệt <select name="browser"><option value="">{{ '(theo mẫu)' if not agent else '' }}</option>{% for x in browsers %}<option value="{{ x }}" {{ 'selected' if v.browser == x }}>{{ x }}</option>{% endfor %}</select><span class="hint">chrome/auto = Claude in Chrome — điều khiển Chrome THẬT của bạn (nên dùng profile Chrome riêng)</span></label>
       <label>Tool cho phép <input name="tools" value="{{ v.tools or '' }}" placeholder="vd: Read, Grep, Glob — trống = mặc định"></label>
       <label class="span2">Thư mục làm việc mặc định <input name="workspace_default" value="{{ v.workspace_default or '' }}" placeholder="trống = thư mục tạm riêng cho mỗi run"></label>
       <label class="span2">SOUL — tính cách & cách làm việc (tiếng Anh) <textarea name="soul" rows="8" placeholder="{{ 'Để trống = SOUL của mẫu' if not agent else '' }}">{{ v.soul or '' }}</textarea></label>

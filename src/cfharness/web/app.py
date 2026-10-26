@@ -46,6 +46,7 @@ CHANNEL = "web"
 MODELS = ("sonnet", "opus", "haiku", "fable")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 PERMISSION_MODES = ("default", "acceptEdits", "plan", "auto", "dontAsk", "manual")
+BROWSERS = ("none", "playwright", "auto", "chrome")  # tool_policy.browser (Claude in Chrome — browser.py)
 # Cấu hình an toàn cho phép sửa từ web (khoá, nhãn, gợi ý). Phần còn lại: `cfharness config set` (vẫn chỉ người).
 SAFE_CONFIG: tuple[tuple[str, str, str], ...] = (
     ("hub.max_concurrent_runs", "Số run chạy đồng thời tối đa (toàn hub)", "số nguyên, vd 4"),
@@ -384,6 +385,7 @@ async def _agent_form_ctx(request: Request, agent: dict[str, Any] | None, values
         v = {
             "id": agent["id"], "name": agent.get("name"), "role": agent.get("role"), "description": agent.get("description"),
             "model": agent.get("model"), "effort": agent.get("effort") or "", "permission_mode": tp.get("permission_mode") or "",
+            "browser": tp.get("browser") or "none",
             "tools": ", ".join(tp.get("tools") or []), "mcp": list(agent.get("mcp_servers") or []),
             "max_budget_usd_per_run": lim.get("max_budget_usd_per_run") or "", "budget_usd_per_day": lim.get("budget_usd_per_day") or "",
             "max_runtime_s": lim.get("max_runtime_s") or "", "max_concurrent_runs": lim.get("max_concurrent_runs") or 1,
@@ -391,7 +393,7 @@ async def _agent_form_ctx(request: Request, agent: dict[str, Any] | None, values
         }
     v.setdefault("mcp", [])
     return {"nav": "agents", "agent": agent, "templates": templates_, "mcp": mcp, "v": v, "error": error, "models": MODELS, "efforts": EFFORTS,
-            "modes": PERMISSION_MODES}
+            "modes": PERMISSION_MODES, "browsers": BROWSERS}
 
 
 async def agent_new(request: Request) -> Response:
@@ -439,6 +441,11 @@ def agent_changes(form: FormData, *, creating: bool, from_template: bool) -> dic
         raise ValueError(f"chế độ quyền '{pm}' không được phép từ web (chỉ {', '.join(PERMISSION_MODES)})")
     if pm or not sparse:
         tp["permission_mode"] = pm or None
+    br = str(form.get("browser") or "").strip()
+    if br and br not in BROWSERS:
+        raise ValueError(f"trình duyệt '{br}' không hợp lệ (chỉ {', '.join(BROWSERS)})")
+    if br or (not sparse and "browser" in form):  # form không có ô (client cũ) → giữ nguyên giá trị đang có
+        tp["browser"] = br or "none"
     tools = [t.strip() for t in re.split(r"[,\s]+", str(form.get("tools") or "")) if t.strip()]
     if tools or not sparse:
         tp["tools"] = tools or None
@@ -494,6 +501,9 @@ async def agent_update(request: Request) -> Response:
         risky = []
         if (tp_new.get("permission_mode") or None) != (tp_old.get("permission_mode") or None):
             risky.append(f"chế độ quyền: {tp_old.get('permission_mode') or 'mặc định'} → {tp_new.get('permission_mode') or 'mặc định'}")
+        if "browser" in tp_new and (tp_new.get("browser") or "none") != (tp_old.get("browser") or "none"):
+            risky.append(f"trình duyệt: {tp_old.get('browser') or 'none'} → {tp_new.get('browser') or 'none'}"
+                         + (" (Claude in Chrome điều khiển Chrome THẬT của bạn)" if tp_new.get("browser") in ("chrome", "auto") else ""))
         if (tp_new.get("tools") or None) != (tp_old.get("tools") or None):
             risky.append(f"tool: {', '.join(tp_old.get('tools') or []) or 'mặc định'} → {', '.join(tp_new.get('tools') or []) or 'mặc định'}")
         if sorted(ch.get("mcp_servers") or []) != sorted(cur.get("mcp_servers") or []):

@@ -395,6 +395,8 @@ def _agent_payload(a: argparse.Namespace, *, creating: bool) -> dict[str, Any]:
     tp: dict[str, Any] = {}
     if a.permission_mode is not None:
         tp["permission_mode"] = a.permission_mode
+    if getattr(a, "browser", None) is not None:
+        tp["browser"] = a.browser
     for src, dst in (("allowed_tools", "allowed_tools"), ("disallowed_tools", "disallowed_tools"), ("tools", "tools")):
         v = _split_list(getattr(a, src, None))
         if v is not None:
@@ -438,6 +440,7 @@ def _agent_text(ag: dict[str, Any]) -> str:
         f"  status: {ag['status']}  current_run: {ag.get('current_run_id') or '-'}  revision: {ag['config_revision']}",
         f"  model: {ag.get('model')}  effort: {ag.get('effort') or '-'}  fallback: {ag.get('fallback_model') or '-'}",
         f"  permission_mode: {tp.get('permission_mode') or '(mặc định)'}  allowed: {','.join(tp.get('allowed_tools') or []) or '-'}  disallowed: {','.join(tp.get('disallowed_tools') or []) or '-'}",
+        f"  browser: {tp.get('browser') or 'none'}  (Claude in Chrome: chrome|auto — docs/dev-notes/chrome.md)",
         f"  mcp: {','.join(ag.get('mcp_servers') or []) or '-'}",
         f"  limits: {json.dumps(lim, ensure_ascii=False)}",
         f"  workspace: {ag.get('workspace_default') or '(scratch theo run)'}",
@@ -739,6 +742,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--disallowed-tools", action="append")
         sp.add_argument("--tools", action="append", help="danh sách tool built-in được dùng (--tools '' = không tool nào)")
         sp.add_argument("--mcp", action="append", help="tên MCP server trong registry")
+        sp.add_argument("--browser", choices=["chrome", "playwright", "auto", "none"],
+                        help="trình duyệt: chrome = Claude in Chrome (Chrome THẬT của bạn, bỏ Playwright), auto = Chrome trước rồi Playwright, "
+                             "playwright/none = không --chrome")
         sp.add_argument("--budget-per-run", type=float)
         sp.add_argument("--budget-per-day", type=float)
         sp.add_argument("--max-concurrent", type=int)

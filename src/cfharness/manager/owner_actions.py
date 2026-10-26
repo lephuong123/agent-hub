@@ -26,7 +26,7 @@ OPTIONS = [{"label": "Cho phép", "description": "hub thực hiện ngay thao t�
 ALLOW_KEY = "1"
 # trường cấu hình agent người có thể cho phép qua nút (mọi thứ khác → người tự sửa bằng web/CLI)
 AGENT_FIELDS = ("name", "role", "description", "model", "effort", "fallback_model", "tool_policy", "mcp_servers", "limits", "workspace_default")
-TOOL_POLICY_FIELDS = ("permission_mode", "tools", "allowed_tools", "disallowed_tools")
+TOOL_POLICY_FIELDS = ("permission_mode", "tools", "allowed_tools", "disallowed_tools", "browser")
 _DOMAIN_RE = re.compile(r"^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$|^localhost$", re.I)
 PREVIEW_MAX = 1200
 
