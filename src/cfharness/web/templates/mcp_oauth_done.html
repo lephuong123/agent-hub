@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="refresh" content="1;url={{ next }}">
+<title>Kết nối MCP · cfharness</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main class="main"><section class="card narrow">
+  <h1>{{ 'Đã kết nối' if ok else 'Chưa kết nối được' }}</h1>
+  <p class="{{ '' if ok else 'danger-t' }}">{{ message }}</p>
+  <div class="row end"><a class="btn primary" href="{{ next }}">Quay lại hub</a></div>
+</section></main>
+</body>
+</html>

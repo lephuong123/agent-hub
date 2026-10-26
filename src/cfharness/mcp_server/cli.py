@@ -185,6 +185,17 @@ def _server_payload(a: argparse.Namespace, *, creating: bool) -> dict[str, Any]:
             d[src] = getattr(a, src)
     if a.timeout is not None:
         d["timeout_s"] = a.timeout
+    if getattr(a, "no_oauth", False):
+        d["auth"] = None
+    elif a.oauth or a.oauth_scope or a.oauth_client_id or a.oauth_client_secret:
+        auth: dict[str, Any] = {"type": "oauth"}
+        if a.oauth_scope:
+            auth["scopes"] = _split(a.oauth_scope)
+        if a.oauth_client_id:
+            auth["client_id"] = a.oauth_client_id
+        if a.oauth_client_secret:
+            auth["client_secret_ref"] = a.oauth_client_secret  # dạng rõ → registry tự chuyển vào secret store
+        d["auth"] = auth
     return d
 
 
@@ -222,6 +233,12 @@ def _server_text(s: dict[str, Any]) -> str:
         *([f"  ghi đè annotations (người đặt): {json.dumps(tools['annotations'], ensure_ascii=False)}"] if tools.get("annotations") else []),
         f"  probe: {s.get('last_probe_at') or 'chưa'}" + (f"  lỗi: {s['probe_error']}" if s.get("probe_error") else "") + f"  · {len(s.get('annotations_cache') or {})} tool",
     ]
+    if s.get("oauth"):
+        o = s["oauth"]
+        lines.append(f"  oauth: {o.get('status')}" + (f"  hết hạn {o['expires_at']}" if o.get("expires_at") else "")
+                     + (f"  scope={o['scope']}" if o.get("scope") else "") + (f"  client={o['client']}" if o.get("client") else "")
+                     + (f"  lỗi: {o['error']}" if o.get("error") else "")
+                     + ("" if o.get("status") == "connected" else f"  (đăng nhập: cfharness mcp login {s['name']})"))
     if s.get("agents"):
         lines.append(f"  agent dùng: {', '.join(s['agents'])}")
     if s.get("missing_secrets"):
@@ -328,6 +345,9 @@ def cmd_mcp(ctx: Any) -> int:
         return EXIT_OK if not res.get("probe") or res["probe"].get("ok") else EXIT_SYS
     if act == "edit":
         patch = _server_payload(a, creating=False)
+        if patch.get("auth"):  # gộp với auth hiện có (sửa riêng client_id/scope không làm mất phần còn lại)
+            cur = (ctx.call("mcp.show", {"name": a.name}).get("config") or {}).get("auth") or {}
+            patch["auth"] = {**cur, **patch["auth"]}
         if not patch:
             _eprint("không có thay đổi nào")
             return EXIT_USER
@@ -342,7 +362,8 @@ def cmd_mcp(ctx: Any) -> int:
         lines = []
         for s in rows:
             n_tools = len(s.get("annotations_cache") or {})
-            lines.append(f"{s['name']:<28} {s['transport']:<6} {s['trust']:<10} {n_tools:>3} tool  probe={s.get('last_probe_at') or '-'}" + ("  (xoá)" if s.get("deleted_at") else ""))
+            lines.append(f"{s['name']:<28} {s['transport']:<6} {s['trust']:<10} {n_tools:>3} tool  probe={s.get('last_probe_at') or '-'}"
+                         + (f"  oauth={s['oauth_status']}" if s.get("oauth_status") else "") + ("  (xoá)" if s.get("deleted_at") else ""))
         ctx.out(rows, "\n".join(lines))
         return EXIT_OK
     if act == "show":
@@ -373,6 +394,10 @@ def cmd_mcp(ctx: Any) -> int:
         return EXIT_OK
     if act == "annotate":
         return _cmd_annotate(ctx)
+    if act in ("login", "logout"):
+        from ..mcp_client import oauth_cli
+
+        return oauth_cli.cmd_login(ctx) if act == "login" else oauth_cli.cmd_logout(ctx)
     if act == "agent-config":
         res = ctx.call("mcp.agent_config", {"agent": a.agent})
         ctx.out(res, json.dumps(res, ensure_ascii=False, indent=2))
@@ -491,6 +516,11 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
         sp.add_argument("--trust", help="trusted | untrusted (giá trị lạ = untrusted)")
         sp.add_argument("--timeout", type=float, help="giây")
         sp.add_argument("--description")
+        sp.add_argument("--oauth", action="store_true", help="server cần đăng nhập OAuth 2.1 (http/sse) — rồi `cfharness mcp login <tên>`")
+        sp.add_argument("--oauth-scope", action="append", help="scope OAuth xin (phân tách dấu phẩy)")
+        sp.add_argument("--oauth-client-id", help="client_id đăng ký tay (provider không hỗ trợ đăng ký động)")
+        sp.add_argument("--oauth-client-secret", help="client_secret hoặc ${SECRET} (giá trị rõ tự chuyển vào secret store)")
+        sp.add_argument("--no-oauth", action="store_true", help="(edit) bỏ OAuth")
         sp.add_argument("command", nargs=argparse.REMAINDER, help="(stdio) -- lệnh và tham số")
 
     ad = ms.add_parser("add", help="thêm MCP server: cfharness mcp add <tên> [--trust …] -- <lệnh> <args…> | --url URL", parents=[common])
@@ -535,6 +565,9 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
         x = ms.add_parser(name, help=f"{'gán' if name == 'assign' else 'gỡ'} MCP server cho agent", parents=[common])
         x.add_argument("server")
         x.add_argument("agent")
+    from ..mcp_client.oauth_cli import add_parsers as _oauth_parsers
+
+    _oauth_parsers(ms, common)
     ac = ms.add_parser("agent-config", help="xem mcpServers + allow/deny sẽ dùng khi chạy agent (không lộ secret)", parents=[common])
     ac.add_argument("agent")
     m.set_defaults(fn=cmd_mcp)

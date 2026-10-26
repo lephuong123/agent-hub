@@ -161,14 +161,22 @@ def attach(hub: "Hub") -> None:
 
     hub.mcp = McpRegistry(lambda: hub.store.conn, hub.paths, secrets, publish=hub.publish, agents_using=agents_using)  # type: ignore[attr-defined]
     register_registry(hub.paths.home, hub.mcp)  # type: ignore[attr-defined]
+    from .oauth import OAuthManager
+
+    hub.mcp_oauth = OAuthManager(hub.mcp, secrets, publish=hub.publish)  # type: ignore[attr-defined]  # docs/dev-notes/mcp-oauth.md
+    hub.mcp.oauth = hub.mcp_oauth  # type: ignore[attr-defined]
     hub.bus.add_listener(ToolWriteWatcher(hub))
     # H-12: bộ che theo GIÁ TRỊ — nạp mọi secret đã lưu + giá trị env-fallback mà registry đang tham chiếu
     try:
         secrets.preload()
         from ..secrets import refs_in
 
+        from .oauth import load_record
+
         for row in hub.store.conn.execute("SELECT * FROM mcp_servers"):
             for name in refs_in(json.dumps(dict(row), default=str)):
                 secrets.lookup(name)
+            if '"oauth"' in str(row["config"] or ""):
+                load_record(secrets, row["name"])  # token/client_secret OAuth bên trong bản ghi JSON → bộ che theo giá trị
     except Exception:  # pragma: no cover — không để lỗi nạp che làm hỏng khởi động
         pass

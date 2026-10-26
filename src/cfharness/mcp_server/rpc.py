@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from ..bus import LEVEL_RANK
 from ..errors import HubError, NotFound
 from ..events import HubEvent, make_event
+from ..mcp_client.oauth import rpc_methods as _oauth_methods
 from ..redact import redact
 
 if TYPE_CHECKING:
@@ -36,6 +37,8 @@ MUTATING = frozenset(
         "run.start", "run.stop", "run.resume", "run.continue",
         "estop.set", "config.set", "auth.reset", "hub.shutdown",
         "mcp.add", "mcp.update", "mcp.remove", "mcp.restore", "mcp.import", "mcp.assign", "mcp.run", "mcp.agent_create",
+        # OAuth MCP (mcp_client/oauth.py) — audit KHÔNG mang code/state (xem wrap_with_audit)
+        "mcp.oauth_start", "mcp.oauth_callback", "mcp.oauth_disconnect", "mcp.oauth_refresh",
         "secret.set", "secret.rm",
         "feedback.record",
         # M2
@@ -198,6 +201,10 @@ class IntegrationRpc:
             cfg = self.hub.mcp.config_of(r)
             servers[name] = cfg.claude_entry()
             missing += [f"{name}:${{{s}}}" for s in self.hub.secrets.missing(servers[name])]
+            if cfg.auth is not None:
+                st = self.hub.mcp.show(name).get("oauth_status")
+                if st != "connected":
+                    missing.append(f"{name}:oauth={st}")
         return {"mcpServers": servers, "tool_rules": agent_mcp_tool_rules(row), "problems": missing}
 
     def _idem_get(self, scope: str, key: str | None) -> dict[str, Any] | None:
@@ -414,7 +421,7 @@ class IntegrationRpc:
             "mcp.update": self.mcp_update,
             "mcp.remove": lambda p: h.mcp.remove(_req(p, "name"), force=bool(p.get("force"))),
             "mcp.restore": lambda p: h.mcp.restore(_req(p, "name")),
-            "mcp.list": lambda p: h.mcp.list(include_deleted=bool(p.get("deleted"))),
+            "mcp.list": lambda p: h.mcp.with_oauth(h.mcp.list(include_deleted=bool(p.get("deleted")))),
             "mcp.show": lambda p: h.mcp.show(_req(p, "name")),
             "mcp.probe": self.mcp_probe,
             "mcp.import": self.mcp_import,
@@ -432,6 +439,7 @@ class IntegrationRpc:
             "audit.list": self.audit_list,
             "feedback.record": self.feedback_record,
             "feedback.list": self.feedback_list,
+            **_oauth_methods(h),
         }
 
 
@@ -461,6 +469,8 @@ def wrap_with_audit(hub: "Hub", method: str, fn: Callable[[dict[str, Any]], Any]
             res = await res
         try:
             params = {k: v for k, v in p.items() if k not in ("value", "soul")}
+            if method.startswith("mcp.oauth_"):  # code/state/iss của callback OAuth là thông tin đăng nhập một lần — không vào audit
+                params = {k: v for k, v in params.items() if k in ("name", "redirect_uri", "error")}
             if "soul" in p:
                 params["soul"] = "(updated)" if p.get("soul") else None
             if "prompt" in params:

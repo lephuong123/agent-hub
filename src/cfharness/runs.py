@@ -654,6 +654,8 @@ class RunManager:
                 raise HubError(f"thư mục {ar.lock_key} đang bị khoá bởi run khác (workspace_locked)")
             runtime = self.runtime()
             ar.runtime = runtime
+            if agent.get("mcp_servers") and getattr(hub, "mcp_oauth", None) is not None:
+                await hub.mcp_oauth.ensure_fresh_for(list(agent["mcp_servers"]))  # OAuth MCP: làm mới token sắp hết hạn trước khi ghi mcp.json
             spec = self._prepare_spec(run, agent)
             await self._checkpoint(ar, run, spec)
             cli_version = await self._check_cli_version(runtime, agent_id, run_id)
