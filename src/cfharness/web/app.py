@@ -385,7 +385,7 @@ async def _agent_form_ctx(request: Request, agent: dict[str, Any] | None, values
         v = {
             "id": agent["id"], "name": agent.get("name"), "role": agent.get("role"), "description": agent.get("description"),
             "model": agent.get("model"), "effort": agent.get("effort") or "", "permission_mode": tp.get("permission_mode") or "",
-            "browser": tp.get("browser") or "none",
+            "browser": tp.get("browser") or "",
             "tools": ", ".join(tp.get("tools") or []), "mcp": list(agent.get("mcp_servers") or []),
             "max_budget_usd_per_run": lim.get("max_budget_usd_per_run") or "", "budget_usd_per_day": lim.get("budget_usd_per_day") or "",
             "max_runtime_s": lim.get("max_runtime_s") or "", "max_concurrent_runs": lim.get("max_concurrent_runs") or 1,
@@ -445,7 +445,7 @@ def agent_changes(form: FormData, *, creating: bool, from_template: bool) -> dic
     if br and br not in BROWSERS:
         raise ValueError(f"trình duyệt '{br}' không hợp lệ (chỉ {', '.join(BROWSERS)})")
     if br or (not sparse and "browser" in form):  # form không có ô (client cũ) → giữ nguyên giá trị đang có
-        tp["browser"] = br or "none"
+        tp["browser"] = br or None  # trống = theo mặc định hub (runtime.claude.chrome.default_mode)
     tools = [t.strip() for t in re.split(r"[,\s]+", str(form.get("tools") or "")) if t.strip()]
     if tools or not sparse:
         tp["tools"] = tools or None
@@ -501,8 +501,8 @@ async def agent_update(request: Request) -> Response:
         risky = []
         if (tp_new.get("permission_mode") or None) != (tp_old.get("permission_mode") or None):
             risky.append(f"chế độ quyền: {tp_old.get('permission_mode') or 'mặc định'} → {tp_new.get('permission_mode') or 'mặc định'}")
-        if "browser" in tp_new and (tp_new.get("browser") or "none") != (tp_old.get("browser") or "none"):
-            risky.append(f"trình duyệt: {tp_old.get('browser') or 'none'} → {tp_new.get('browser') or 'none'}"
+        if "browser" in tp_new and (tp_new.get("browser") or None) != (tp_old.get("browser") or None):
+            risky.append(f"trình duyệt: {tp_old.get('browser') or 'mặc định hub'} → {tp_new.get('browser') or 'mặc định hub'}"
                          + (" (Claude in Chrome điều khiển Chrome THẬT của bạn)" if tp_new.get("browser") in ("chrome", "auto") else ""))
         if (tp_new.get("tools") or None) != (tp_old.get("tools") or None):
             risky.append(f"tool: {', '.join(tp_old.get('tools') or []) or 'mặc định'} → {', '.join(tp_new.get('tools') or []) or 'mặc định'}")

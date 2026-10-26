@@ -488,6 +488,7 @@ DEFAULTS: dict[str, Any] = {
             # ∈ integrity.SECURITY_KEYS); tắt → agent `chrome`/`auto` chạy như `playwright`, tool chrome bị guard chặn.
             "chrome": {
                 "enabled": True,
+                "default_mode": "auto",  # agent KHÔNG đặt tool_policy.browser dùng chế độ này (none|playwright|chrome|auto)
                 "max_concurrent_runs": 1,  # Chrome THẬT của người dùng chung → số run dùng tool chrome cùng lúc
                 "pass_no_chrome": True,  # run không dùng Chrome nhận --no-chrome (khi phiên bản CLI có cờ)
                 "annotations": {},  # ghi đè của người: {glob: {destructiveHint?, readOnlyHint?}} (`mcp annotate claude-in-chrome …`)

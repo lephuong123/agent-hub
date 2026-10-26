@@ -73,8 +73,9 @@ class ToolPolicy(BaseModel):
     # NFR-15: chỉ khi người khai báo rõ VÀ workspace là scratch/worktree
     allow_bypass: bool = False
     permission_prompts: str | None = None
-    # Claude in Chrome (browser.py): none (mặc định = như cũ) | playwright | chrome (bỏ Playwright khỏi run) | auto (Chrome trước)
-    browser: Literal["none", "playwright", "chrome", "auto"] = "none"
+    # Claude in Chrome (browser.py): None = theo runtime.claude.chrome.default_mode của hub (mặc định auto) | none | playwright |
+    # chrome (bỏ Playwright khỏi run) | auto (Chrome trước)
+    browser: Literal["none", "playwright", "chrome", "auto"] | None = None
 
     @field_validator("permission_mode")
     @classmethod

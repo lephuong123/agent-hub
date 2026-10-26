@@ -137,7 +137,9 @@ và kết quả spike: `docs/dev-notes/chrome.md`.
   chính nó.
   - `auto` (mặc định của mẫu researcher/coder/reviewer): dùng Chrome trước; Playwright chỉ khi Chrome không kết nối hoặc đang bận.
   - `chrome`: chỉ Chrome — server Playwright (nếu agent được gán) KHÔNG gắn vào run.
-  - `none` (mặc định của agent cũ) / `playwright`: như trước, run nhận `--no-chrome`.
+  - Không đặt: theo `runtime.claude.chrome.default_mode` của hub — **mặc định `auto`**, mọi agent dùng Chrome trước, không cần bật
+    từng agent. Đổi mặc định (chỉ người): `cfharness config set runtime.claude.chrome.default_mode none`.
+  - `none` / `playwright`: như trước, run nhận `--no-chrome`.
 - **Yêu cầu**: extension Claude in Chrome đã cài và đang kết nối trên máy chạy daemon; `claude` ≥ 2.1.310 (`--chrome` có trong
   `runtime.claude.flag_matrix`).
 - **Tắt khẩn (chỉ người)**: `cfharness config set runtime.claude.chrome.enabled false` → mọi agent `chrome`/`auto` chạy như

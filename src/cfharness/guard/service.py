@@ -573,7 +573,7 @@ class GuardService:
     def chrome_lock_check(self, run: dict[str, Any], tool_name: str) -> dict[str, str] | None:
         """Tool chrome (trừ `list_connected_browsers`): lấy khoá trình duyệt cho run (≤ runtime.claude.chrome.max_concurrent_runs run).
         None = được dùng; dict {reason, message} = đang bận (deny kèm hướng dẫn)."""
-        from ..browser import agent_mode, chrome_cfg, is_chrome_tool
+        from ..browser import chrome_cfg, effective_mode, is_chrome_tool
 
         if not is_chrome_tool(tool_name) or tool_name.endswith("__list_connected_browsers"):
             return None
@@ -583,7 +583,7 @@ class GuardService:
         who = ", ".join(f"{h.get('agent_id') or '?'} (run {rid})" for rid, h in holders.items()) or "?"
         agent = self.hub.store.get_agent(run.get("agent_id")) if run.get("agent_id") else None
         fallback = (" Your browser setting is 'auto': use the Playwright MCP tools for this step instead."
-                    if agent_mode(agent) == "auto" else
+                    if effective_mode(agent, self.hub.config) == "auto" else
                     " Wait and retry later (at most a few times), or finish the rest of the task and report that the browser was busy.")
         return {"reason": f"Chrome đang được run khác dùng: {who} (runtime.claude.chrome.max_concurrent_runs)",
                 "message": f"[cfharness] Claude in Chrome is busy: another cfharness run is using the owner's Chrome ({who}).{fallback}"}
