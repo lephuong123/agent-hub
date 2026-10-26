@@ -5,6 +5,7 @@
 - `is_command`: dòng bắt đầu bằng `/` CHỈ là lệnh khi token đầu là tên lệnh đã biết (đường dẫn kéo vào không bị hiểu nhầm là lệnh).
 - `clipboard_image()`/`clipboard_text()`: clipboard (macOS `osascript`/`pbpaste`, Linux `wl-paste`/`xclip`, Windows PowerShell
   `-NoProfile -NonInteractive -STA` → PNG qua tệp tạm) → bytes PNG / chữ, hoặc None/"" khi không có, lỗi hay quá giờ.
+- `clipboard_set(text)`: ghi chữ (kéo chọn trong `cfharness chat` fullscreen — dự phòng cho OSC 52).
 Ảnh gửi qua RPC `manager.chat{images:[{name, data_b64}]}`; daemon kiểm định dạng/kích thước và lưu vào workspace hội thoại.
 """
 
@@ -266,3 +267,27 @@ def clipboard_text() -> str:
     else:
         out = None
     return out.decode("utf-8", "replace") if out else ""
+
+
+def _pipe(argv: list[str], data: bytes) -> bool:
+    try:
+        r = subprocess.run(argv, input=data, capture_output=True, timeout=CLIP_TIMEOUT_S, check=False, **no_window_kwargs())
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return False
+    return r.returncode == 0
+
+
+def clipboard_set(text: str) -> bool:
+    """Ghi chữ vào clipboard bằng công cụ của hệ điều hành (Windows `clip.exe` nhận UTF-16LE KHÔNG BOM — có BOM thì BOM
+    nằm luôn trong clipboard; macOS `pbcopy`; Linux `wl-copy`/`xclip`). Dự phòng cho OSC 52 (terminal không hỗ trợ).
+    False khi không có công cụ / lỗi / quá giờ."""
+    if IS_WINDOWS:
+        exe = shutil.which("clip.exe") or shutil.which("clip")
+        return bool(exe) and _pipe([exe], text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-16-le"))
+    if sys.platform == "darwin":
+        return _pipe(["pbcopy"], text.encode("utf-8"))
+    if shutil.which("wl-copy"):
+        return _pipe(["wl-copy"], text.encode("utf-8"))
+    if shutil.which("xclip"):
+        return _pipe(["xclip", "-selection", "clipboard"], text.encode("utf-8"))
+    return False

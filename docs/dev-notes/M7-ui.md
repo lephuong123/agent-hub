@@ -93,3 +93,27 @@ nhịp (heartbeat) không hiện trong chat terminal (xem web).
 - RPC `manager.chat{images:[{name, data_b64}]}` (≤ 4 ảnh, ≤ 5 MB; định dạng theo magic bytes, sai → lỗi trước mọi ghi) → daemon lưu
   `<cwd hội thoại>/attachments/img-<ts>-<rand>-<i>.<ext>` (0600, tên do hub đặt) và thêm vào prompt: xem bằng tool Read. Tin lưu lịch sử
   ghi "📎 n ảnh". Audit KHÔNG chứa base64 (`wrap_with_audit` thay bằng `{name, b64_chars}`). Web/Telegram chưa dùng tham số này.
+
+### 6.2 `cfharness chat` fullscreen kiểu Claude Code (2026-10-26)
+Không migration, không RPC mới. `cfharness chat` trên terminal mở `tui/chat.py` (`ChatApp`, kế thừa `TopApp`, kênh `cli`); `--classic` hoặc
+stdin/stdout không phải TTY → REPL như cũ (§6). Hội thoại vẫn dùng chung kênh `cli` với REPL và màn `m` của `top`; lịch sử ô nhập dùng chung tệp
+`HUB_HOME/cli_history` (định dạng `FileHistory`, ghi nhị phân "\n" — text mode trên Windows ghi "\r\n" làm REPL đọc ra chữ có "\r").
+
+| Phần | Cách làm |
+|---|---|
+| Lõi | `ChatSession` (repl.py) thêm điểm nối `state_cls`, `banner_keys`, `_emit(item)`, `Out.write(…, meta=)`; REPL không đổi hành vi. `TuiChatSession`: mục → widget, y/N → `ConfirmScreen` (chữ escape markup Textual), `/attach` → `AttachScreen` ngay trong app, chuông → `app.bell` |
+| Một luồng dữ liệu | `ChatApp.on_mount` chặn `TopApp.on_mount` (`prevent_default` — Textual gọi handler của mọi lớp trong MRO): không firehose/snapshot thứ hai; `app.model` = `AgentMonitor.model`, `refresh_snapshot` → của phiên |
+| Transcript | `VerticalScroll`, mỗi mục một `Static` (tối đa 1500); tự bám đáy khi đang ở đáy, thanh "↓ có tin mới" khi đã cuộn lên; PgUp/PgDn, Ctrl-End |
+| Chữ chạy + tool | `LiveChatState`: `tool.start/complete` của run hội thoại → dòng `● Tool(args)` + `⎿` 3 dòng kết quả; click / Ctrl-O → input JSON + kết quả đầy đủ (`result_preview` đã che secret ở adapter). Chữ viết trước mỗi tool giữ lại thành mục `interim` (trả lời cuối = `summary` của run nên không trùng) |
+| Click | Thẻ hành động → `tui.manager.open_target` (tách khỏi `ManagerScreen`, CHỈ loại đã biết + id an toàn). Thẻ duyệt/câu hỏi → ĐIỀN SẴN `/approve <id> ` / `/answer <id> `; không gọi RPC cho tới khi người Enter + y (giữ quy tắc §6: không nút duyệt từ nội dung agent) |
+| Bảng agent | `AgentMonitor.active()` dưới ô nhập (≤ 6 dòng + "+k nữa"); click / ↓ (ô nhập trống) + Enter → `AttachScreen`; ↑ ở dòng đầu / Esc → về ô nhập; Ctrl-G → `BoardScreen` (htop đầy đủ; Esc/q/m → về chat) |
+| Chọn chữ | Textual chỉ chọn được trên `Text`/`Content` → `flatten()` gộp `Group`/`Padding` của `chatview`/`agentsview` thành một `Text`. Thả chuột (`TextSelected`) → `copy_to_clipboard` (OSC 52) + `attachments.clipboard_set` (clip.exe UTF-16LE KHÔNG BOM / pbcopy / wl-copy / xclip). Kéo chọn không tính là click. Ctrl-C: có vùng chọn → copy; đang làm → dừng lượt; rảnh → lần 2 thoát |
+| Kênh | `TopApp.CHANNEL` ("tui"; `ChatApp` = "cli") cho `approval.*`/`run.steer`/feedback gọi từ Attach mở trong chat |
+
+Test `tests/test_chat_app.py` (Pilot + daemon in-process, không gọi `claude`, clipboard thật được thay bằng giả): `flatten`/`tool_text`/chèn ANSI,
+lịch sử đọc-ghi chéo với `FileHistory`, `LiveChatState`, không có điều phối viên, chữ chạy → `interim` + tool click mở/đóng + Ctrl-O + thẻ hành động
+(đích lạ không mở, task → Tasks) + trả lời, bảng agent ↓/↑/click → Attach + thẻ duyệt click chỉ điền lệnh → Enter + y → `allowed` kênh `cli`,
+kéo chọn → copy + Ctrl-C hai lần thoát, ↑↓ lịch sử + gợi ý lệnh `/`. Ảnh (`CFHARNESS_SCREENSHOTS`): `20-chat-dang-lam.svg`, `21-chat-xong.svg`, `22-chat-attach.svg`.
+
+Việc dở: ô nhập một dòng (Textual `Input`; dán nhiều dòng vẫn gửi nguyên); chữ điều phối viên vẫn KHÔNG render markdown (bất biến §3/§6 — là dữ liệu);
+chưa thử trên terminal thật ngoài Pilot (Windows Terminal/VS Code: OSC 52, chuột).

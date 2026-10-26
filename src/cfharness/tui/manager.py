@@ -385,25 +385,31 @@ class ManagerScreen(Screen):
         await self.open_target(a.get("target") or {})
 
     async def open_target(self, tgt: dict[str, Any]) -> None:
-        """Đích của thẻ hành động → màn nội bộ. CHỈ loại đã biết + id an toàn (`href` khác None) — không tin chữ agent."""
-        kind, ident = tgt.get("kind"), tgt.get("id")
-        if not tgt.get("href") or kind not in NAVIGABLE or not ident:
-            self.notify(f"Không mở được đích này trong TUI ({one_line(tgt.get('label') or '?', 40)})", severity="warning")
-            return
-        from .app import AttachScreen, TasksScreen
-
-        if kind == "task":
-            self.app.push_screen(TasksScreen(select=str(ident)))
-            return
-        if kind == "run":
-            try:
-                run = await self.client.call("run.get", {"id": ident})
-            except RpcError as e:
-                self.notify(e.message, severity="error")
-                return
-            self.app.push_screen(AttachScreen(run["agent_id"], run["id"]))
-            return
-        await self.app._open_attach(str(ident))  # type: ignore[attr-defined]
+        await open_target(self, tgt)
 
 
-__all__ = ["ManagerScreen"]
+async def open_target(screen: Screen, tgt: dict[str, Any]) -> None:
+    """Đích của thẻ hành động → màn nội bộ. CHỈ loại đã biết + id an toàn (`href` khác None) — không tin chữ agent.
+    Dùng chung cho màn "Điều phối" của `top` và `cfharness chat` fullscreen (`tui/chat.py`)."""
+    kind, ident = tgt.get("kind"), tgt.get("id")
+    if not tgt.get("href") or kind not in NAVIGABLE or not ident:
+        screen.notify(f"Không mở được đích này trong TUI ({one_line(tgt.get('label') or '?', 40)})", severity="warning")
+        return
+    from .app import AttachScreen, TasksScreen
+
+    app = screen.app
+    if kind == "task":
+        app.push_screen(TasksScreen(select=str(ident)))
+        return
+    if kind == "run":
+        try:
+            run = await app.client.call("run.get", {"id": ident})  # type: ignore[attr-defined]
+        except RpcError as e:
+            screen.notify(e.message, severity="error")
+            return
+        app.push_screen(AttachScreen(run["agent_id"], run["id"]))
+        return
+    await app._open_attach(str(ident))  # type: ignore[attr-defined]
+
+
+__all__ = ["ManagerScreen", "open_target"]
