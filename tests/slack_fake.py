@@ -2,9 +2,9 @@
 
 - Web API (HTTP, thân form như SlackApi gửi): auth.test, apps.connections.open (app token) → URL WebSocket cục bộ, chat.postMessage,
   chat.update, chat.postEphemeral, conversations.open, users.info, files.getUploadURLExternal (+ POST /upload/<id>),
-  files.completeUploadExternal. Token sai → `invalid_auth`.
+  files.completeUploadExternal, views.open (ghi lại view; `fail_views` → `expired_trigger_id`). Token sai → `invalid_auth`.
 - Socket Mode (WebSocket, `websockets.sync.server` trong luồng riêng): gửi `hello`, rồi các envelope test bơm vào
-  (`user_message()`, `press()`, `slash()`); ghi nhận ACK (`acked()`), `disconnect()` để thử kết nối lại; gửi trùng = cùng `event_id`.
+  (`user_message()`, `press()`, `slash()`, `submit_view()`); ghi nhận ACK (`acked()`), `disconnect()` để thử kết nối lại; gửi trùng = cùng `event_id`.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ class FakeSlack:
         self.cond = threading.Condition()
         self._ws: Any = None
         self._kick = False
+        self.fail_views = False
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -106,6 +107,10 @@ class FakeSlack:
             return {"ok": True, "channel": {"id": "D" + str(p.get("users"))[1:]}}
         if method == "users.info":
             return {"ok": True, "user": {"id": p.get("user"), "name": "sep", "profile": {"real_name": "Sếp Thử"}}}
+        if method == "views.open":
+            if self.fail_views or not p.get("trigger_id"):
+                return {"ok": False, "error": "expired_trigger_id"}
+            return {"ok": True, "view": {"id": f"V{self.next_ts}", **(p.get("view") or {})}}
         if method == "files.getUploadURLExternal":
             fid = f"F{self.next_ts}"
             return {"ok": True, "upload_url": f"{self.url}/upload/{fid}", "file_id": fid}
@@ -202,6 +207,26 @@ class FakeSlack:
             trig = f"trig-{self.next_env}"
         return self._push("slash_commands", {"command": "/cfh", "text": text, "user_id": user, "channel_id": channel, "team_id": team or self.team,
                                              "trigger_id": trig, "response_url": f"{self.url}/response"})
+
+    def views(self) -> list[dict[str, Any]]:
+        """View đã mở (`views.open`, đã giải JSON) — mới nhất cuối."""
+        return [p["view"] for p in self.calls_of("views.open") if isinstance(p.get("view"), dict)]
+
+    def submit_view(self, user: str, view: dict[str, Any], text: str, *, team: str | None = None, metadata: str | None = None,
+                    callback_id: str | None = None) -> str:
+        """Người bấm "Gửi" trên modal → envelope `interactive` `view_submission` (giá trị ô nhập theo block_id/action_id của view)."""
+        values: dict[str, Any] = {}
+        for b in view.get("blocks") or []:
+            if b.get("type") == "input":
+                aid = (b.get("element") or {}).get("action_id")
+                values[b.get("block_id")] = {aid: {"type": "plain_text_input", "value": text}}
+        with self.cond:
+            self.next_env += 1
+            trig = f"trig-{self.next_env}"
+        v = {"id": view.get("id") or "V0", "type": "modal", "callback_id": callback_id or view.get("callback_id"),
+             "private_metadata": view.get("private_metadata") if metadata is None else metadata, "state": {"values": values}}
+        return self._push("interactive", {"type": "view_submission", "user": {"id": user, "team_id": team or self.team},
+                                          "team": {"id": team or self.team}, "trigger_id": trig, "view": v})
 
     def wait(self, fn, timeout: float = 10.0) -> Any:
         t0 = time.monotonic()

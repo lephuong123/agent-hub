@@ -15,11 +15,14 @@ An toàn (như Telegram — WT-4/5/8):
 - mrkdwn: mọi giá trị động escape `& < >`, khối chữ `verbatim` (chat/slack/render.py) — agent không ping `<!channel>` / giả link được.
 - Lệnh: client Slack chặn tin bắt đầu bằng `/` → một slash command (`notify.slack.slash_command`, mặc định `/cfh <lệnh> …`); kết quả
   gửi vào DM của người với bot. Tin chữ thường trong DM → điều phối viên; trả lời trong thread = "reply" của Telegram.
+- Ô nhập (P2): Slack không có `force_reply` → `ask_input` mở MODAL bằng `trigger_id` của nút/slash vừa xử lý (chat/slack/modals.py:
+  nonce phía hub `slack.modals`, submit kiểm workspace + đúng người + allowlist rồi mới `self.call`). Không có trigger → thread như P1.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import json
 import logging
@@ -36,6 +39,7 @@ from ...notify.telegram import APPROVAL_EVENTS
 from ..base import _UID, ChatBot
 from . import render
 from .api import SlackApi, SlackError
+from .modals import SlackModals
 
 if TYPE_CHECKING:
     from ...hub import Hub
@@ -46,6 +50,8 @@ PAIR_RE = re.compile(r"^(?:ghepnoi|ghép nối|pair)\s+([A-Za-z0-9_-]{4,64})$", 
 SEEN_TTL_S = 3600
 SEEN_MAX = 2000
 ROOTS_MAX = 2000
+# trigger_id của tương tác đang xử lý (nút / slash command) — mở modal được MỘT lần, ~3 s (P2: chat/slack/modals.py)
+_TRIGGER: contextvars.ContextVar[str | None] = contextvars.ContextVar("slack_trigger_id", default=None)
 
 
 def help_text(slash: str) -> str:
@@ -56,7 +62,7 @@ def help_text(slash: str) -> str:
 {c} trangthai (status) — tình trạng hub, chi phí hôm nay
 {c} agent — danh sách agent (kèm nút giao việc / dừng)
 {c} luotchay [agent] — lượt chạy gần nhất
-{c} giaoviec <agent> <yêu cầu> — giao việc; bot gửi kết quả tóm tắt + chi phí khi xong
+{c} giaoviec <agent> <yêu cầu> — giao việc; bot gửi kết quả tóm tắt + chi phí khi xong (thiếu yêu cầu → hộp nhập)
   Trả lời trong thread của tin kết quả để tiếp tục hội thoại
 {c} approvals — yêu cầu chờ duyệt (kèm nút Cho phép / Từ chối)
 {c} stop [run] — dừng run
@@ -135,6 +141,7 @@ class SlackBot(ChatBot):
         self._roots: dict[str, str] = {}   # ts tin bot gửi → ts gốc của thread
         self._thread: dict[str, list[str]] = {}  # ts gốc → các ts bot đã gửi trong thread (mới nhất cuối)
         self._inbox: asyncio.Queue[tuple[str, dict[str, Any]]] | None = None
+        self.modals = SlackModals(self)  # P2: ô nhập giao việc / trả lời câu hỏi bằng chữ
 
     def _make_notifier(self) -> SlackChatNotifier:
         return SlackChatNotifier(self.hub, self)
@@ -193,6 +200,23 @@ class SlackBot(ChatBot):
 
     def reply_hint(self, what: str) -> str:
         return f"Trả lời trong thread của tin này để {what}."
+
+    def input_where(self) -> str:
+        return "ở hộp nhập vừa mở" if _TRIGGER.get() else "ở tin bên dưới (trả lời trong thread)"
+
+    async def ask_input(self, api: SlackApi, cid: str, kind: str, ref: str, text: str, placeholder: str, *,
+                        reply_to: Any = None) -> dict[str, Any]:
+        """P2: có `trigger_id` (nút / slash command vừa bấm) → modal; không có / `views.open` lỗi → tin mời trả lời trong thread (P1)."""
+        trig = _TRIGGER.get()
+        if trig:
+            _TRIGGER.set(None)  # trigger dùng một lần
+            try:
+                await self.modals.open(api, trig, cid, _UID.get(), kind, ref)
+                return {"message_id": None, "modal": True}
+            except Exception as e:
+                log.info("Slack: không mở được modal (%s) — dùng trả lời trong thread", clip(e, 200))
+        return await super().ask_input(api, cid, kind, ref, text.replace("trả lời (reply) tin này", "trả lời trong thread của tin này"),
+                                       placeholder, reply_to=reply_to)
 
     def team_ok(self, team: Any) -> bool:
         pinned = self.cfg().get("team_id")
@@ -380,6 +404,7 @@ class SlackBot(ChatBot):
 
     # ------------------------------------------------------------------ nhận
     async def handle_envelope(self, typ: str, p: dict[str, Any], api: SlackApi) -> None:
+        _TRIGGER.set(None)  # worker dùng chung một context — không để trigger của envelope trước lọt sang
         if typ == "events_api":
             ev = p.get("event") or {}
             if ev.get("type") == "message":
@@ -388,6 +413,8 @@ class SlackBot(ChatBot):
             await self._on_slash(p, api)
         elif typ == "interactive" and p.get("type") == "block_actions":
             await self._on_actions(p, api)
+        elif typ == "interactive" and p.get("type") == "view_submission":
+            await self.modals.on_submission(p, api)
 
     async def _on_message(self, ev: dict[str, Any], team: Any, api: SlackApi) -> None:
         if ev.get("bot_id") or ev.get("subtype") not in (None, "file_share"):
@@ -459,6 +486,7 @@ class SlackBot(ChatBot):
                 return
             self._audit_ignored(cid, "slash", "slash", uid)
             return
+        _TRIGGER.set(str(p.get("trigger_id") or "") or None)
         await self.run_command(cid, (name or "help").lower(), rest.strip(), api)
 
     async def _on_actions(self, p: dict[str, Any], api: SlackApi) -> None:
@@ -480,6 +508,7 @@ class SlackBot(ChatBot):
             return
         if mid:
             self._remember(str(mid), self._root_of(mid) or str(mid))
+        _TRIGGER.set(str(p.get("trigger_id") or "") or None)
         text, edit, markup = await self.handle_action(cid, rec, mid, api)
         await self._toast(api, cid, uid, text)
         if edit is not None:
@@ -522,5 +551,5 @@ class SlackBot(ChatBot):
         out.update({"interactive": bool(c.get("interactive")), "app_token": self.app_token() is not None, "team_id": c.get("team_id"),
                     "bot_user_id": self.info.get("bot_user_id"), "allowed_chat_ids": sorted(self.allowed()),
                     "allowed_user_ids": sorted(str(x) for x in (c.get("allowed_user_ids") or [])), "slash_command": self.slash(),
-                    "connected_at": self.info.get("connected_at")})
+                    "connected_at": self.info.get("connected_at"), "open_modals": self.modals.count()})
         return out

@@ -105,6 +105,9 @@ Manifest app (wizard điền sẵn):
 ## Tiến độ
 - 2026-10-26: **P0 xong** (lõi `chat/base.py`, test Telegram xanh không sửa). **P1 xong phần mã + test với Slack giả**
   (`tests/test_slack.py`); chưa nghiệm thu trên workspace Slack thật. Chi tiết: `docs/dev-notes/slack.md`.
+- 2026-10-26: **P2 xong** (mã + test Slack giả, `tests/test_slack_modals.py`): modal giao việc (nút agent, `/cfh giaoviec <agent>`) và
+  "Trả lời bằng chữ" cho câu hỏi; nonce phía hub `slack.modals`; không có trigger → trả lời trong thread. Lệnh `/cfh …`, theo dõi run,
+  thread → `run.continue` đã có từ P1. Chưa nghiệm thu `views.open` trên workspace thật.
 
 ## Pha thực hiện
 Mỗi pha chạy được độc lập, `uv run pytest -q` xanh, có ghi chú trong `docs/dev-notes/slack.md`.

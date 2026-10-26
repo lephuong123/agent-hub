@@ -1,6 +1,6 @@
 # Slack 2 chiều — bot Socket Mode (thông báo, duyệt bằng nút, lệnh `/cfh`, hội thoại)
 
-Nguồn: `docs/plan/slack-2way.md` (P0 + P1), luồng TG (`docs/dev-notes/telegram.md`), `hardening-SEC.md`.
+Nguồn: `docs/plan/slack-2way.md` (P0 + P1 + P2), luồng TG (`docs/dev-notes/telegram.md`), `hardening-SEC.md`.
 
 ## P0 — tách lõi chat khỏi Telegram
 | File | Vai trò |
@@ -26,6 +26,26 @@ File dùng chung (chỉ thêm): `auth.py` (`slack_caller`, `slack.*` ∈ HUMAN_O
 và các khoá mới), `chat/__init__.py` (`hub.slack`), `daemon.py` (đăng ký RPC), `guard/classifier.py` (`notify slack` từ agent → forbidden),
 `guard/cli.py` (subparser), `notify/slack.py` (nhường bot khi 2 chiều hoạt động + escape mrkdwn ở kênh webhook). Phụ thuộc mới: `websockets`.
 
+## P2 — modal thay `force_reply` (giao việc, trả lời câu hỏi bằng chữ)
+| File | Vai trò |
+|---|---|
+| `chat/base.py` | Hook `ChatBot.ask_input(api, cid, kind, ref, text, placeholder, reply_to=)` — mặc định = tin `force_reply` như cũ (Telegram không đổi một byte), trả `{"message_id"}` để người gọi map; `input_where()` cho chữ "nhập … ở tin bên dưới" |
+| `chat/flows.py`, `questions_tg.py` | `ask_prompt` (nút `fg`, `/giaoviec <agent>`) và nút `qf` gọi `bot.ask_input`; kết quả `{"modal": True}` → không map tin, toast "hộp vừa mở" |
+| `chat/slack/modals.py` | `SlackModals`: dựng view (tiêu đề/nhãn cố định của hub, mô tả chỉ id agent/câu hỏi đã escape), `views.open`, nhận `view_submission` |
+| `chat/slack/bot.py` | contextvar `_TRIGGER` = `trigger_id` của nút/slash đang xử lý (đặt lại `None` đầu mỗi envelope, dùng một lần); `ask_input` override: có trigger → modal, không/`views.open` lỗi → tin trả lời trong thread (P1); route `interactive` `type=view_submission` |
+
+- **Ràng buộc**: `private_metadata` = nonce ngẫu nhiên; bản ghi `{kind, ref, chat, user, exp}` ở `hub_state slack.modals` (TTL `notify.slack.modal_ttl_s`,
+  mặc định 3600 s; tối đa 500). Ghi TRƯỚC `views.open`, gỡ nếu mở lỗi.
+- **Submit**: `callback_id` khác `cfh_input` → bỏ. Rồi lần lượt: `team_ok` → nonce có → chưa hết hạn → `user.id` = người đã mở → `is_allowed(chat, user)`
+  (thu hồi sau khi mở vẫn chặn) → TIÊU nonce → `flows.start_run` / `questions.answer_text` (đều qua `bot.call` → cổng người, audit `slack:<chat>`).
+  Sai → audit `slack.callback_rejected` với `reason = modal:<wrong_team|unknown_or_used|expired|wrong_user|not_allowed>`; người lạ / sai người
+  KHÔNG tiêu nonce (không huỷ được hộp nhập của chủ). Workspace lạ thêm `slack.ignored`.
+- ACK `view_submission` là ACK rỗng → Slack đóng modal; ô nhập bắt buộc (Slack chặn gửi trống), ≤ 3000 ký tự.
+- Trigger sống ~3 s và hàng đợi xử lý tuần tự: envelope đến sau một việc chậm có thể làm `views.open` trả `expired_trigger_id` → lùi về thread.
+- Test: `tests/test_slack_modals.py` (nút agent → modal → `run.start` + tin kết quả; `/cfh giaoviec <agent>`; trigger hết hạn → thread;
+  metadata bịa / người lạ / người khác trong allowlist / workspace khác / modal lạ / dùng lại / thu hồi allowlist; câu hỏi bằng chữ qua modal,
+  chữ agent không vào modal). Slack giả: `views.open` (+ `fail_views`), `views()`, `submit_view()`.
+
 ## Luồng
 - **Tắt êm**: `interactive: false`, hoặc thiếu `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` trong secret store → vòng ngủ `idle_check_s`, không gọi mạng.
 - **Socket Mode**: `auth.test` (một lần mỗi cặp token) → `apps.connections.open` (app token) → WebSocket. Mỗi envelope: ACK ngay →
@@ -43,5 +63,5 @@ và các khoá mới), `chat/__init__.py` (`hub.slack`), `daemon.py` (đăng ký
 - **Thông báo**: khi bot hoạt động (`SlackBot.active()`), `SlackNotifier` (webhook/kênh) nhường hết cho `SlackChatNotifier` (DM, approval có nút).
 
 ## Chưa làm (theo plan)
-P2 modal giao việc, P3 câu hỏi bằng checkbox + `schedules` kênh `slack:<chat>` + ghi chú tệp trong prompt điều phối viên, P4 ảnh/tệp vào,
+P3 câu hỏi bằng checkbox + `schedules` kênh `slack:<chat>` + ghi chú tệp trong prompt điều phối viên, P4 ảnh/tệp vào,
 P5 wizard web 2 chiều (manifest Socket Mode). Nghiệm thu trên workspace Slack thật: chưa chạy.

@@ -11,7 +11,7 @@
   nhóm rồi CẤP LẠI bàn phím mới (sửa tại chỗ): nút cũ không bao giờ dùng lại được, trạng thái chọn nằm phía hub (`telegram.q_sel`),
   không nằm trong dữ liệu nút.
 - Trả lời → `bot.call(chat, "question.answer", …)` (cổng người + audit `telegram:<chat>`, `by`/kênh lấy từ người gọi).
-  "Trả lời bằng chữ" → tin `force_reply`; reply vào tin đó hoặc vào tin (1)/(2) → `question.answer{text}` (bot kiểm map này TRƯỚC
+  "Trả lời bằng chữ" → `bot.ask_input` (Telegram: tin `force_reply`; Slack: modal — chat/slack/modals.py); reply vào tin đó hoặc vào tin (1)/(2) → `question.answer{text}` (bot kiểm map này TRƯỚC
   `run.continue`/điều phối viên).
 - `question.answered|cancelled` (từ BẤT KỲ kênh nào) → sửa tin (2) ở mọi chat thành dòng kết quả (chữ hub: số đã chọn, ai, kênh — không
   có nhãn agent) và gỡ nút.
@@ -268,12 +268,12 @@ class QuestionChat:
                 await self.bot.call(cid, "question.answer", {"id": qid, "keys": sel})
                 return f"Đã gửi: chọn {', '.join(sel)}."
             if action == "qf":
-                res = await self.bot._send(api, cid, f"✍️ Nhập câu trả lời cho câu hỏi {qid} — trả lời (reply) tin này.",
-                                           {"force_reply": True, "input_field_placeholder": "Câu trả lời…", "selective": True}, reply_to=mid)
+                res = await self.bot.ask_input(api, cid, "question", qid, f"✍️ Nhập câu trả lời cho câu hỏi {qid} — trả lời (reply) tin này.",
+                                               "Câu trả lời…", reply_to=mid)  # Slack: modal (chat/slack/modals.py)
                 if res.get("message_id") is not None:
                     self._put(self.MAP, f"{cid}:{res['message_id']}", qid)
                 await self._edit(api, cid, mid, self.system_text(q, sel), self.markup(q, cid, sel))
-                return "Nhập câu trả lời ở ô bên dưới."
+                return "Nhập câu trả lời trong hộp vừa mở." if res.get("modal") else "Nhập câu trả lời ở ô bên dưới."
             if action == "qx":
                 await self._edit(api, cid, mid, self.system_text(q, confirm_cancel=True), self.markup(q, cid, confirm_cancel=True))
                 return "Xác nhận huỷ ở tin này."

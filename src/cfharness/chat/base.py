@@ -481,6 +481,18 @@ class ChatBot:
         """Chỉ dẫn "trả lời tin này để …" theo cách của nền tảng (Telegram: reply; Slack: trả lời trong thread)."""
         return f"Trả lời (reply) tin này để {what}."
 
+    # ------------------------------------------------------------------ mời người nhập chữ (giao việc, trả lời câu hỏi bằng chữ)
+    async def ask_input(self, api: Any, cid: str, kind: str, ref: str, text: str, placeholder: str, *,
+                        reply_to: Any = None) -> dict[str, Any]:
+        """Mời người nhập chữ cho `kind` ("run": ref = agent; "question": ref = id câu hỏi). Mặc định (Telegram) = tin `force_reply`
+        → `{"message_id": …}`, NGƯỜI GỌI map tin đó (reply vào tin = câu trả lời). Lớp con có ô nhập riêng (Slack: modal) trả
+        `{"message_id": None, "modal": True}` và tự lo phần nhận (vẫn qua `self.call` → cổng người)."""
+        return await self._send(api, cid, text, {"force_reply": True, "input_field_placeholder": placeholder, "selective": True}, reply_to=reply_to)
+
+    def input_where(self) -> str:
+        """Nơi người sẽ nhập sau `ask_input` (chữ hướng dẫn của hub) — Telegram: tin force_reply bên dưới."""
+        return "ở tin bên dưới"
+
     async def _report_run(self, run_id: str, etype: str) -> None:
         run = self.hub.store.get_run(run_id)
         if run is None:
