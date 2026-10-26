@@ -1,72 +1,189 @@
-import React, { useCallback, useState, useSyncExternalStore } from 'react';
-import { Box, useApp } from 'ink';
-import type { Session } from './types.js';
-import { nextPermissionMode, runLocalCommand } from './core/localCommands.js';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Box, useInput, useStdin, useWindowSize } from 'ink';
+import type { Session, TaskInfo } from './types.js';
+import { useHarness } from './useHarness.js';
 import { PromptInput } from './ui/input/PromptInput.js';
-import { PermissionDialog, Spinner, StatusBar, Transcript, Welcome } from './ui/render/index.js';
+import { MessageView, PermissionDialog, Spinner, StatusBar, Welcome, planTranscript } from './ui/render/index.js';
+import { ViewContext, useTicker, type ViewActions } from './ui/render/ViewContext.js';
+import { Clickable, MouseProvider, type MouseSource } from './ui/term/MouseContext.js';
+import { ScrollView, WHEEL_ROWS, type ScrollApi } from './ui/term/ScrollView.js';
+import { AgentView } from './ui/fullscreen/AgentView.js';
+import { LINGER_MS, TaskPanel, visibleTasks } from './ui/fullscreen/TaskPanel.js';
 
-export function App({ session, allowBypass = false }: { session: Session; allowBypass?: boolean }) {
-  const { exit } = useApp();
-  const state = useSyncExternalStore(session.subscribe.bind(session), () => session.getState());
-  const { status, pendingPermission } = state;
-  const [clearKey, setClearKey] = useState(0);
-  const [history, setHistory] = useState<string[]>([]);
-  const quit = useCallback(() => {
-    void session.close().finally(() => exit());
-  }, [session, exit]);
+const SHORTCUTS: [string, string][] = [
+  ['wheel / PgUp / PgDn to scroll', 'click a tool to expand it'],
+  ['ctrl+o to expand everything', 'click an agent to open it'],
+  ['↓ from the prompt for tasks', 'ctrl+b to background a task'],
+  ['shift+drag to select text', ''],
+];
 
+export interface AppProps {
+  session: Session;
+  allowBypass?: boolean;
+  /** Mouse events, or null when mouse capture is off (--no-mouse). */
+  mouse: MouseSource | null;
+}
+
+/** Fullscreen UI: the transcript lives in a scrollable, clickable viewport on the alternate screen. */
+export function App({ session, allowBypass = false, mouse }: AppProps) {
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const onClear = useCallback(() => setExpanded(new Set()), []);
+  const { state, quit, submit, cycleMode, background } = useHarness(session, allowBypass, onClear);
+  const { status, pendingPermission, entries, tasks } = state;
+  const { columns, rows } = useWindowSize();
+  const { isRawModeSupported } = useStdin();
+
+  const [all, setAll] = useState(false);
+  const [view, setView] = useState<string | null>(null);
+  const [focus, setFocus] = useState<'prompt' | 'tasks'>('prompt');
+  const [selected, setSelected] = useState(0);
+  const mainScroll = useRef<ScrollApi>(null);
+  const detailScroll = useRef<ScrollApi>(null);
+  const active = () => (view ? detailScroll : mainScroll).current;
+
+  const tasksByTool = useMemo(() => new Map(tasks.filter((t) => t.toolUseId).map((t) => [t.toolUseId!, t])), [tasks]);
+  // Re-render while finished tasks linger in the panel, so they drop out on time.
+  useTicker(tasks.some((t) => t.endedAt != null && Date.now() - t.endedAt < LINGER_MS));
+  const panelTasks = visibleTasks(tasks);
+  const sel = Math.min(selected, Math.max(0, panelTasks.length - 1));
+  const tasksFocused = focus === 'tasks' && panelTasks.length > 0;
+  const viewTask = view ? tasksByTool.get(view) : undefined;
+
+  const actions = useMemo<ViewActions>(
+    () => ({
+      interactive: true,
+      toggle: (id) =>
+        setExpanded((s) => {
+          const next = new Set(s);
+          if (!next.delete(id)) next.add(id);
+          return next;
+        }),
+      open: (id) => setView(id),
+    }),
+    [],
+  );
+
+  const openTask = (t: TaskInfo) => {
+    if (t.toolUseId) setView(t.toolUseId);
+    else session.notify(`Task "${t.description}" has no transcript to show.`, 'warn');
+  };
+  const stopTask = (t?: TaskInfo) => {
+    if (t?.status !== 'running') return;
+    session.stopTask(t.id).catch((e: unknown) => session.notify(`Could not stop task: ${e instanceof Error ? e.message : String(e)}`, 'error'));
+  };
+
+  // A task view whose entries were cleared has nothing to show.
+  useEffect(() => {
+    if (view && !viewTask && !entries.some((e) => e.id === view)) setView(null);
+  }, [view, viewTask, entries]);
+
+  useInput(
+    (input, key) => {
+      if (key.pageUp) return active()?.page(-1);
+      if (key.pageDown) return active()?.page(1);
+      if (key.ctrl && input === 'o') return setAll((a) => !a);
+      if (pendingPermission) return; // the dialog owns every other key
+      if (view) {
+        if (key.escape || (key.ctrl && input === 'c') || key.leftArrow) return setView(null);
+        if (key.upArrow) return active()?.scrollBy(-1);
+        if (key.downArrow) return active()?.scrollBy(1);
+        if (key.home) return active()?.toTop();
+        if (key.end) return active()?.toBottom();
+        if (input === 'x') return stopTask(viewTask);
+        if (key.ctrl && input === 'b') return background();
+        return;
+      }
+      if (tasksFocused) {
+        if (key.escape || (key.ctrl && input === 'c')) return setFocus('prompt');
+        if (key.upArrow) return sel === 0 ? setFocus('prompt') : setSelected(sel - 1);
+        if (key.downArrow) return setSelected(Math.min(sel + 1, panelTasks.length - 1));
+        if (key.return || key.rightArrow) return openTask(panelTasks[sel]!);
+        if (input === 'x') return stopTask(panelTasks[sel]);
+        if (key.ctrl && input === 'b') return background();
+      }
+    },
+    { isActive: isRawModeSupported === true },
+  );
 
   const onSubmit = useCallback(
     (text: string) => {
-      setHistory(h => [...h, text]);
-      const m = /^\/(\S+)\s*([\s\S]*)$/.exec(text);
-      if (m) {
-        const [, name, args] = m;
-        if (name === 'clear') setClearKey(k => k + 1);
-        if (runLocalCommand(session, name!, args!.trim(), { exit: quit, allowBypass })) return;
-      }
-      session.send(text);
+      mainScroll.current?.toBottom();
+      submit(text);
     },
-    [session, quit, allowBypass],
+    [submit],
   );
 
-  const cycleMode = useCallback(() => {
-    void session.setPermissionMode(nextPermissionMode(status.permissionMode, allowBypass));
-  }, [session, status.permissionMode, allowBypass]);
+  const { items } = useMemo(() => planTranscript(entries), [entries]);
 
   return (
-    <Box flexDirection="column">
-      <Transcript
-        entries={state.entries}
-        clearKey={clearKey}
-        header={<Welcome cwd={status.cwd} model={status.model} />}
-      />
-      {status.busy && !pendingPermission && (
-        <Spinner
-          activity={status.activity ?? 'Thinking'}
-          startedAt={status.turnStartedAt}
-          tokens={status.turnOutputTokens}
-        />
-      )}
-      {pendingPermission && (
-        <PermissionDialog
-          key={pendingPermission.id}
-          request={pendingPermission}
-          onDecision={d => session.answerPermission(pendingPermission.id, d)}
-        />
-      )}
-      <PromptInput
-        onSubmit={onSubmit}
-        commands={state.slashCommands}
-        disabled={!!pendingPermission}
-        busy={status.busy}
-        permissionMode={status.permissionMode}
-        onInterrupt={() => void session.interrupt()}
-        onCyclePermissionMode={cycleMode}
-        onExit={quit}
-        history={history}
-      />
-      <StatusBar status={status} />
-    </Box>
+    <ViewContext.Provider value={actions}>
+      <MouseProvider source={mouse} onUnhandledWheel={(e) => active()?.scrollBy(e.action === 'wheelUp' ? -WHEEL_ROWS : WHEEL_ROWS)}>
+        <Box flexDirection="column" width={columns} height={rows}>
+          {view ? (
+            <AgentView
+              entries={entries}
+              toolUseId={view}
+              task={viewTask}
+              tasksByTool={tasksByTool}
+              expanded={expanded}
+              all={all}
+              scrollRef={detailScroll}
+              onBack={() => setView(null)}
+              onStop={viewTask ? () => stopTask(viewTask) : undefined}
+            />
+          ) : (
+            <ScrollView apiRef={mainScroll}>
+              <Welcome cwd={status.cwd} model={status.model} />
+              {items.map((item) => (
+                <MessageView
+                  key={item.entry.id}
+                  entry={item.entry}
+                  childEntries={item.children}
+                  task={tasksByTool.get(item.entry.id)}
+                  expanded={all || expanded.has(item.entry.id)}
+                />
+              ))}
+            </ScrollView>
+          )}
+          <Box flexDirection="column" flexShrink={0}>
+            {status.busy && !pendingPermission && (
+              <Spinner
+                activity={status.activity ?? 'Thinking'}
+                startedAt={status.turnStartedAt}
+                tokens={status.turnOutputTokens}
+                hint={tasks.some((t) => t.status === 'running' && !t.backgrounded) ? 'ctrl+b to run in background' : undefined}
+              />
+            )}
+            {pendingPermission && (
+              <PermissionDialog
+                key={pendingPermission.id}
+                request={pendingPermission}
+                onDecision={(d) => session.answerPermission(pendingPermission.id, d)}
+              />
+            )}
+            {/* Hidden rather than unmounted in the task view, so the draft and history survive. */}
+            <Box display={view ? 'none' : 'flex'} flexDirection="column">
+              <Clickable flexDirection="column" onClick={() => setFocus('prompt')}>
+                <PromptInput
+                  onSubmit={onSubmit}
+                  commands={state.slashCommands}
+                  disabled={!!pendingPermission || tasksFocused || !!view}
+                  busy={status.busy}
+                  permissionMode={status.permissionMode}
+                  onInterrupt={() => void session.interrupt()}
+                  onCyclePermissionMode={cycleMode}
+                  onBackground={background}
+                  onDownAtEnd={() => panelTasks.length > 0 && setFocus('tasks')}
+                  onExit={quit}
+                  extraShortcuts={SHORTCUTS}
+                />
+              </Clickable>
+            </Box>
+            {!view && <TaskPanel tasks={panelTasks} focused={tasksFocused} selected={sel} onOpen={openTask} />}
+            <StatusBar status={status} />
+          </Box>
+        </Box>
+      </MouseProvider>
+    </ViewContext.Provider>
   );
 }

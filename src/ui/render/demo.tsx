@@ -27,10 +27,10 @@ See [the docs](https://example.com/retry) for more.`;
 
 const entries: Entry[] = [
   { kind: 'user', id: 'u1', text: 'Add a retry helper to src/net.ts and run the tests' },
-  { kind: 'thinking', id: 'th1', streaming: false, text: 'The user wants a retry helper.\nI should look at net.ts first.\nThen edit it.\nThen run tests.\nAnd update todos.' },
+  { kind: 'thinking', id: 'th1', streaming: false, parentToolUseId: null, text: 'The user wants a retry helper.\nI should look at net.ts first.\nThen edit it.\nThen run tests.\nAnd update todos.' },
   { kind: 'assistant', id: 'a1', streaming: false, parentToolUseId: null, text: assistantMd },
   {
-    kind: 'tool', id: 'tw', name: 'TodoWrite', status: 'done', parentToolUseId: null, result: 'ok',
+    kind: 'tool', id: 'tw', name: 'TodoWrite', status: 'done', startedAt: 0, parentToolUseId: null, result: 'ok',
     input: { todos: [
       { content: 'Read src/net.ts', status: 'completed' },
       { content: 'Add retry helper', status: 'in_progress' },
@@ -38,17 +38,17 @@ const entries: Entry[] = [
     ] },
   },
   {
-    kind: 'tool', id: 'e1', name: 'Edit', status: 'done', parentToolUseId: null, result: 'ok',
+    kind: 'tool', id: 'e1', name: 'Edit', status: 'done', startedAt: 0, parentToolUseId: null, result: 'ok',
     input: { file_path: 'src/net.ts', old_string: 'import x from "y";\nexport const a = 1;', new_string: 'import x from "y";\nexport const a = 2;\nexport { retry } from "./retry.js";' },
   },
   {
-    kind: 'tool', id: 'b1', name: 'Bash', status: 'done', parentToolUseId: null, input: { command: 'npm test' },
+    kind: 'tool', id: 'b1', name: 'Bash', status: 'done', startedAt: 0, parentToolUseId: null, input: { command: 'npm test' },
     result: '> test\n> tsx --test\n✔ retry works (3ms)\n✔ net ok (1ms)\nℹ tests 2\nℹ pass 2\nℹ fail 0',
   },
-  { kind: 'tool', id: 'r1', name: 'Read', status: 'done', parentToolUseId: null, input: { file_path: 'src/retry.ts' }, result: 'a\nb\nc\nd' },
-  { kind: 'tool', id: 'd1', name: 'Write', status: 'denied', parentToolUseId: null, input: { file_path: 'README.md', content: '# hi' } },
+  { kind: 'tool', id: 'r1', name: 'Read', status: 'done', startedAt: 0, parentToolUseId: null, input: { file_path: 'src/retry.ts' }, result: 'a\nb\nc\nd' },
+  { kind: 'tool', id: 'd1', name: 'Write', status: 'denied', startedAt: 0, parentToolUseId: null, input: { file_path: 'README.md', content: '# hi' } },
   { kind: 'system', id: 's1', level: 'error', text: 'API error: overloaded (529), retrying in 2s' },
-  { kind: 'tool', id: 'g1', name: 'Grep', status: 'running', parentToolUseId: null, input: { pattern: 'fetch\\(', path: 'src' } },
+  { kind: 'tool', id: 'g1', name: 'Grep', status: 'running', startedAt: 0, parentToolUseId: null, input: { pattern: 'fetch\\(', path: 'src' } },
   { kind: 'assistant', id: 'a2', streaming: true, parentToolUseId: null, text: 'Searching for callers:\n\n```ts\nfetch(' },
 ];
 

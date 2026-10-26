@@ -7,7 +7,7 @@ export type Entry =
   | { kind: 'user'; id: string; text: string }
   /** Assistant text. `streaming` is true while deltas are still arriving. */
   | { kind: 'assistant'; id: string; text: string; streaming: boolean; parentToolUseId: string | null }
-  | { kind: 'thinking'; id: string; text: string; streaming: boolean }
+  | { kind: 'thinking'; id: string; text: string; streaming: boolean; parentToolUseId: string | null }
   /** One tool call. `id` is the tool_use_id; `result` is the tool_result text once it arrives. */
   | {
       kind: 'tool';
@@ -17,8 +17,34 @@ export type Entry =
       status: ToolStatus;
       result?: string;
       parentToolUseId: string | null;
+      /** ms epoch when the call was first seen, and when its result (or the turn end) arrived. */
+      startedAt: number;
+      endedAt?: number;
     }
   | { kind: 'system'; id: string; text: string; level: 'info' | 'warn' | 'error' };
+
+export type TaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
+
+/** A task the CLI runs on its own: a subagent (local_agent), a background shell (local_bash), etc. */
+export interface TaskInfo {
+  /** task_id from the SDK; use it with Session.stopTask(). */
+  id: string;
+  /** tool_use_id of the call that started it (for a subagent: its Agent/Task tool entry). */
+  toolUseId?: string;
+  /** SDK task_type, e.g. 'local_agent', 'local_bash'. */
+  type?: string;
+  description: string;
+  subagentType?: string;
+  status: TaskStatus;
+  backgrounded: boolean;
+  startedAt: number;
+  endedAt?: number;
+  tokens: number;
+  toolUses: number;
+  lastToolName?: string;
+  /** One-line progress summary (agentProgressSummaries) or the final summary. */
+  summary?: string;
+}
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
 
@@ -66,6 +92,8 @@ export interface SessionState {
   /** At most one permission prompt is shown at a time; others queue inside the session. */
   pendingPermission: PermissionRequest | null;
   slashCommands: SlashCommand[];
+  /** Tasks in start order (running and finished). */
+  tasks: TaskInfo[];
 }
 
 export interface SessionOptions {
@@ -86,6 +114,10 @@ export interface Session {
   /** Send a user prompt. Allowed while busy (it queues inside the CLI). */
   send(text: string): void;
   interrupt(): Promise<void>;
+  /** Stop one running task (subagent, background shell). */
+  stopTask(taskId: string): Promise<void>;
+  /** Move running foreground tasks to the background (Ctrl+B). */
+  backgroundTasks(): Promise<void>;
   answerPermission(id: string, decision: PermissionDecision): void;
   setPermissionMode(mode: PermissionMode): Promise<void>;
   setModel(model?: string): Promise<void>;

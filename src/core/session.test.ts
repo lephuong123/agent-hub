@@ -14,6 +14,8 @@ function fakeQuery(script: Script, calls: string[] = []): typeof query {
       interrupt: async () => void calls.push('interrupt'),
       setPermissionMode: async (m: string) => void calls.push(`mode:${m}`),
       setModel: async (m?: string) => void calls.push(`model:${m}`),
+      stopTask: async (id: string) => void calls.push(`stop:${id}`),
+      backgroundTasks: async () => void calls.push('background'),
     });
   }) as unknown as typeof query;
 }
@@ -110,7 +112,7 @@ test('maps a full turn: init, text stream, tool use, tool result, result', async
     ['user', 'thinking', 'assistant', 'tool'],
   );
   const [, thinking, text, tool] = s.entries;
-  assert.deepEqual(thinking, { kind: 'thinking', id: 'm1:0', text: 'hmm.', streaming: false });
+  assert.deepEqual(thinking, { kind: 'thinking', id: 'm1:0', text: 'hmm.', streaming: false, parentToolUseId: null });
   assert.equal(text!.kind === 'assistant' && text.text, 'Hello!');
   assert.equal(text!.kind === 'assistant' && text.streaming, false);
   assert.equal(tool!.kind, 'tool');
@@ -218,5 +220,84 @@ test('interrupt, local commands', async () => {
   assert.equal(runLocalCommand(session, 'exit', '', ctx), true);
   assert.equal(exited, true);
   assert.equal(runLocalCommand(session, 'review', '', ctx), false);
+  await session.close();
+});
+
+test('tracks subagent tasks: started, progress, background, notification; subagent thinking keeps its parent', async () => {
+  const calls: string[] = [];
+  const sys = (m: object) => msg({ type: 'system', uuid: 'u', session_id: 's1', ...m });
+  const script: Script = async function* (prompt) {
+    for await (const _ of prompt) {
+      yield msg({
+        type: 'assistant',
+        parent_tool_use_id: null,
+        session_id: 's1',
+        uuid: 'a1',
+        message: { id: 'm1', content: [{ type: 'tool_use', id: 'agent1', name: 'Agent', input: { description: 'Explore repo' } }] },
+      });
+      yield sys({ subtype: 'task_started', task_id: 'task1', tool_use_id: 'agent1', description: 'Explore repo', subagent_type: 'Explore', task_type: 'local_agent' });
+      yield sys({ subtype: 'task_started', task_id: 'amb', description: 'watcher', ambient: true });
+      yield msg({
+        type: 'assistant',
+        parent_tool_use_id: 'agent1',
+        session_id: 's1',
+        uuid: 'a2',
+        message: { id: 'm2', content: [{ type: 'thinking', thinking: 'look around' }, { type: 'tool_use', id: 'c1', name: 'Read', input: { file_path: 'a.ts' } }] },
+      });
+      yield sys({ subtype: 'task_progress', task_id: 'task1', description: 'Explore repo', usage: { total_tokens: 1200, tool_uses: 1, duration_ms: 50 }, last_tool_name: 'Read', summary: 'Reading a.ts' });
+      yield sys({ subtype: 'task_updated', task_id: 'task1', patch: { is_backgrounded: true } });
+      yield msg({ type: 'result', subtype: 'success', is_error: false, result: '', session_id: 's1', total_cost_usd: 0.01, usage: {}, modelUsage: {} });
+      yield sys({ subtype: 'task_notification', task_id: 'task1', tool_use_id: 'agent1', status: 'completed', output_file: '/tmp/o', summary: 'Found 3 modules', usage: { total_tokens: 3000, tool_uses: 4, duration_ms: 900 } });
+    }
+  };
+  const session = new HarnessSession({ cwd: '/' }, { query: fakeQuery(script, calls) });
+  session.send('go');
+  const running = await waitFor(session, (st) => st.tasks[0]?.backgrounded === true);
+  assert.equal(running.tasks.length, 1, 'ambient tasks are hidden');
+  assert.deepEqual(
+    { ...running.tasks[0], startedAt: 0 },
+    {
+      id: 'task1',
+      toolUseId: 'agent1',
+      type: 'local_agent',
+      description: 'Explore repo',
+      subagentType: 'Explore',
+      status: 'running',
+      backgrounded: true,
+      startedAt: 0,
+      tokens: 1200,
+      toolUses: 1,
+      lastToolName: 'Read',
+      summary: 'Reading a.ts',
+      endedAt: undefined,
+    },
+  );
+  const thinking = running.entries.find((e) => e.kind === 'thinking');
+  assert.equal(thinking?.kind === 'thinking' && thinking.parentToolUseId, 'agent1');
+
+  const done = await waitFor(session, (st) => st.tasks[0]?.status === 'completed');
+  const agentTool = done.entries.find((e) => e.id === 'agent1');
+  assert.equal(agentTool?.kind === 'tool' && agentTool.status, 'running', 'a backgrounded agent is not failed at turn end');
+  assert.equal(done.tasks[0]!.tokens, 3000);
+  assert.equal(done.tasks[0]!.summary, 'Found 3 modules');
+  assert.ok(done.tasks[0]!.endedAt! >= done.tasks[0]!.startedAt);
+
+  await session.stopTask('task1');
+  await session.backgroundTasks();
+  assert.deepEqual(calls, ['stop:task1', 'background']);
+  await session.close();
+});
+
+test('a foreground task the CLI never closed is stopped when its turn ends', async () => {
+  const script: Script = async function* (prompt) {
+    for await (const _ of prompt) {
+      yield msg({ type: 'system', subtype: 'task_started', task_id: 'fg', tool_use_id: 'a1', description: 'x', uuid: 'u', session_id: 's1' });
+      yield msg({ type: 'result', subtype: 'success', is_error: false, result: '', session_id: 's1', total_cost_usd: 0, usage: {}, modelUsage: {} });
+    }
+  };
+  const session = new HarnessSession({ cwd: '/' }, { query: fakeQuery(script) });
+  session.send('go');
+  const s = await waitFor(session, (st) => st.tasks[0]?.status === 'stopped');
+  assert.ok(s.tasks[0]!.endedAt);
   await session.close();
 });

@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Text, useStdout } from 'ink';
+import { Text, useWindowSize } from 'ink';
 import { Marked, type Tokens } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 import chalk from 'chalk';
@@ -72,8 +72,9 @@ export interface MarkdownProps {
 }
 
 export function Markdown({ text, streaming, indent = 0 }: MarkdownProps) {
-  const { stdout } = useStdout();
-  const width = Math.max(20, (stdout?.columns ?? 80) - indent - 1);
+  const { columns } = useWindowSize();
+  // One column for the fullscreen scrollbar, one so wrapped lines never touch the edge.
+  const width = Math.max(20, (columns || 80) - indent - 2);
   const out = useMemo(() => renderMarkdown(streaming ? text : text.trimEnd(), width), [text, streaming, width]);
   return <Text>{out}</Text>;
 }

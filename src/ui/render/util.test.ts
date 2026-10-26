@@ -86,8 +86,8 @@ test('formatters', () => {
 test('planTranscript groups subagent entries and finds finished prefix', () => {
   const entries: Entry[] = [
     { kind: 'user', id: 'u', text: 'hi' },
-    { kind: 'tool', id: 't1', name: 'Task', input: {}, status: 'running', parentToolUseId: null },
-    { kind: 'tool', id: 'c1', name: 'Read', input: {}, status: 'done', parentToolUseId: 't1' },
+    { kind: 'tool', id: 't1', name: 'Task', startedAt: 0, input: {}, status: 'running', parentToolUseId: null },
+    { kind: 'tool', id: 'c1', name: 'Read', startedAt: 0, input: {}, status: 'done', parentToolUseId: 't1' },
     { kind: 'assistant', id: 'a', text: 'x', streaming: false, parentToolUseId: null },
   ];
   const { items, finishedPrefix } = planTranscript(entries);

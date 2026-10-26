@@ -11,9 +11,11 @@ export interface SpinnerProps {
   elapsedMs?: number;
   startedAt?: number;
   tokens?: number;
+  /** Extra hint before "esc to interrupt", e.g. "ctrl+b to run in background". */
+  hint?: string;
 }
 
-export function Spinner({ activity = 'Thinking', elapsedMs = 0, startedAt, tokens = 0 }: SpinnerProps) {
+export function Spinner({ activity = 'Thinking', elapsedMs = 0, startedAt, tokens = 0, hint }: SpinnerProps) {
   const frames = process.env.CFH_ASCII ? FRAMES_ASCII : FRAMES_UNICODE;
   const [frame, setFrame] = useState(0);
   useEffect(() => {
@@ -21,7 +23,7 @@ export function Spinner({ activity = 'Thinking', elapsedMs = 0, startedAt, token
     return () => clearInterval(t);
   }, []);
   const elapsed = startedAt != null ? Date.now() - startedAt : elapsedMs;
-  const parts = [formatElapsed(elapsed), tokens > 0 ? `↓ ${formatTokens(tokens)} tokens` : '', 'esc to interrupt'].filter(Boolean);
+  const parts = [formatElapsed(elapsed), tokens > 0 ? `↓ ${formatTokens(tokens)} tokens` : '', hint ?? '', 'esc to interrupt'].filter(Boolean);
   return (
     <Text>
       <Text color={ACCENT}>{`${frames[frame % frames.length]} ${activity.replace(/…$/, '')}… `}</Text>

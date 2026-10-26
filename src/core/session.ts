@@ -18,11 +18,14 @@ import type {
   SessionState,
   SessionStatus,
   SlashCommand,
+  TaskInfo,
 } from '../types.js';
 import { LOCAL_COMMANDS, PERMISSION_MODES } from './localCommands.js';
 
 type ToolEntry = Extract<Entry, { kind: 'tool' }>;
 type StreamedEntry = Extract<Entry, { kind: 'assistant' | 'thinking' }>;
+type SystemMessage = Extract<SDKMessage, { type: 'system' }>;
+type TaskMessage<S extends string> = Extract<SystemMessage, { subtype: S }>;
 
 export interface SessionDeps {
   query?: typeof sdkQuery;
@@ -126,6 +129,7 @@ export class HarnessSession implements Session {
       },
       pendingPermission: null,
       slashCommands: [...LOCAL_COMMANDS],
+      tasks: [],
     };
   }
 
@@ -166,6 +170,21 @@ export class HarnessSession implements Session {
     return true;
   }
 
+  private updateTask(id: string, fn: (t: TaskInfo) => TaskInfo): boolean {
+    const idx = this.state.tasks.findIndex((t) => t.id === id);
+    if (idx < 0) return false;
+    const tasks = this.state.tasks.slice();
+    tasks[idx] = fn(tasks[idx]!);
+    this.set({ tasks });
+    return true;
+  }
+
+  /** Foreground tasks cannot outlive their turn; mark any the CLI did not report as stopped. */
+  private endForegroundTasks(): TaskInfo[] {
+    const now = Date.now();
+    return this.state.tasks.map((t) => (t.status === 'running' && !t.backgrounded ? { ...t, status: 'stopped', endedAt: now } : t));
+  }
+
   private finalizeStreaming(): Entry[] {
     return this.state.entries.map((e) =>
       (e.kind === 'assistant' || e.kind === 'thinking') && e.streaming ? { ...e, streaming: false } : e,
@@ -188,6 +207,7 @@ export class HarnessSession implements Session {
           permissionMode: this.state.status.permissionMode,
           allowDangerouslySkipPermissions: !!this.opts.allowBypass,
           includePartialMessages: true,
+          agentProgressSummaries: true,
           canUseTool,
           settingSources: ['user', 'project', 'local'],
           systemPrompt: { type: 'preset', preset: 'claude_code' },
@@ -220,7 +240,11 @@ export class HarnessSession implements Session {
       this.q = null;
       this.dropPermissions();
       if (!this.closed)
-        this.set({ entries: this.finalizeStreaming(), status: { busy: false, activity: undefined, turnStartedAt: undefined } });
+        this.set({
+          entries: this.finalizeStreaming(),
+          tasks: this.state.tasks.map((t) => (t.status === 'running' ? { ...t, status: 'stopped', endedAt: Date.now() } : t)),
+          status: { busy: false, activity: undefined, turnStartedAt: undefined },
+        });
     }
   }
 
@@ -271,13 +295,27 @@ export class HarnessSession implements Session {
     if (!this.state.status.busy) return;
     this.interrupted = true;
     this.dropPermissions();
-    this.set({ entries: this.finalizeStreaming(), status: { busy: false, activity: undefined, turnStartedAt: undefined } });
+    this.set({
+      entries: this.finalizeStreaming(),
+      tasks: this.endForegroundTasks(),
+      status: { busy: false, activity: undefined, turnStartedAt: undefined },
+    });
     this.notify('Interrupted by user', 'warn');
     try {
       await this.q?.interrupt();
     } catch (e) {
       this.notify(`Interrupt failed: ${errMessage(e)}`, 'error');
     }
+  }
+
+  async stopTask(taskId: string): Promise<void> {
+    if (!this.q) return;
+    await this.q.stopTask(taskId);
+  }
+
+  async backgroundTasks(): Promise<void> {
+    if (!this.q) return;
+    await this.q.backgroundTasks();
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
@@ -340,7 +378,7 @@ export class HarnessSession implements Session {
     this.removePermission(pending);
     if (decision === 'deny') {
       pending.resolve({ behavior: 'deny', message: 'User denied this action' });
-      this.updateEntry(id, 'tool', (e) => ({ ...e, status: 'denied' }));
+      this.updateEntry(id, 'tool', (e) => ({ ...e, status: 'denied', endedAt: Date.now() }));
       return;
     }
     pending.resolve({
@@ -389,7 +427,11 @@ export class HarnessSession implements Session {
     return PERMISSION_MODES.includes(mode as PermissionMode) ? (mode as PermissionMode) : this.state.status.permissionMode;
   }
 
-  private handleSystem(msg: Extract<SDKMessage, { type: 'system' }>): void {
+  private handleSystem(msg: SystemMessage): void {
+    if (msg.subtype === 'task_started') return this.taskStarted(msg);
+    if (msg.subtype === 'task_progress') return this.taskProgress(msg);
+    if (msg.subtype === 'task_updated') return this.taskUpdated(msg);
+    if (msg.subtype === 'task_notification') return this.taskNotification(msg);
     if (msg.subtype === 'init') {
       this.set({
         status: { model: msg.model, sessionId: msg.session_id, permissionMode: this.toMode(msg.permissionMode) },
@@ -402,6 +444,61 @@ export class HarnessSession implements Session {
     } else if (msg.subtype === 'compact_boundary') {
       this.notify('Conversation compacted');
     }
+  }
+
+  // ---- tasks (subagents, background shells) ----
+
+  private taskStarted(msg: TaskMessage<'task_started'>): void {
+    if (msg.ambient || msg.skip_transcript) return;
+    const task: TaskInfo = {
+      id: msg.task_id,
+      toolUseId: msg.tool_use_id,
+      type: msg.task_type,
+      description: msg.description,
+      subagentType: msg.subagent_type,
+      status: 'running',
+      backgrounded: !!msg.is_backgrounded,
+      startedAt: Date.now(),
+      tokens: 0,
+      toolUses: 0,
+    };
+    if (!this.updateTask(task.id, (t) => ({ ...task, startedAt: t.startedAt })))
+      this.set({ tasks: [...this.state.tasks, task] });
+  }
+
+  private taskProgress(msg: TaskMessage<'task_progress'>): void {
+    this.updateTask(msg.task_id, (t) => ({
+      ...t,
+      subagentType: msg.subagent_type ?? t.subagentType,
+      tokens: msg.usage.total_tokens,
+      toolUses: msg.usage.tool_uses,
+      lastToolName: msg.last_tool_name ?? t.lastToolName,
+      summary: msg.summary ?? t.summary,
+    }));
+  }
+
+  private taskUpdated(msg: TaskMessage<'task_updated'>): void {
+    const { status, description, end_time, is_backgrounded } = msg.patch;
+    const mapped =
+      status === 'completed' || status === 'failed' ? status : status === 'killed' ? 'stopped' : status === 'running' ? status : undefined;
+    this.updateTask(msg.task_id, (t) => ({
+      ...t,
+      status: mapped ?? t.status,
+      description: description ?? t.description,
+      backgrounded: is_backgrounded ?? t.backgrounded,
+      endedAt: end_time ?? t.endedAt,
+    }));
+  }
+
+  private taskNotification(msg: TaskMessage<'task_notification'>): void {
+    this.updateTask(msg.task_id, (t) => ({
+      ...t,
+      status: msg.status,
+      endedAt: t.endedAt ?? Date.now(),
+      summary: msg.summary || t.summary,
+      tokens: msg.usage?.total_tokens ?? t.tokens,
+      toolUses: msg.usage?.tool_uses ?? t.toolUses,
+    }));
   }
 
   private mergeCommands(remote: SlashCommand[]): SlashCommand[] {
@@ -460,7 +557,10 @@ export class HarnessSession implements Session {
       } else if (block.type === 'thinking') {
         s.byIndex.set(ev.index, id);
         s.thinking.push(id);
-        this.addEntry({ kind: 'thinking', id, text: block.thinking ?? '', streaming: true }, { activity: 'Thinking' });
+        this.addEntry(
+          { kind: 'thinking', id, text: block.thinking ?? '', streaming: true, parentToolUseId: msg.parent_tool_use_id },
+          { activity: 'Thinking' },
+        );
       } else if (TOOL_USE_TYPES.has(block.type) && 'id' in block && 'name' in block) {
         this.upsertTool(block.id, block.name, {}, msg.parent_tool_use_id);
       }
@@ -480,7 +580,7 @@ export class HarnessSession implements Session {
   private upsertTool(id: string, name: string, input: Record<string, unknown>, parentToolUseId: string | null): void {
     const status = { activity: `Running ${name}` };
     const exists = this.updateEntry(id, 'tool', (e) => ({ ...e, name, input, parentToolUseId }), status);
-    if (!exists) this.addEntry({ kind: 'tool', id, name, input, status: 'running', parentToolUseId }, status);
+    if (!exists) this.addEntry({ kind: 'tool', id, name, input, status: 'running', parentToolUseId, startedAt: Date.now() }, status);
   }
 
   private finishStreamed(
@@ -521,6 +621,7 @@ export class HarnessSession implements Session {
           id: fresh,
           text: block.thinking,
           streaming: false,
+          parentToolUseId: parent,
         }));
       } else if (TOOL_USE_TYPES.has(block.type) && 'id' in block && 'name' in block) {
         const input = 'input' in block && block.input && typeof block.input === 'object' ? (block.input as Record<string, unknown>) : {};
@@ -539,10 +640,20 @@ export class HarnessSession implements Session {
       this.updateEntry(
         block.tool_use_id,
         'tool',
-        (e: ToolEntry) => ({ ...e, result, status: e.status === 'denied' ? 'denied' : isError ? 'error' : 'done' }),
+        (e: ToolEntry) => ({
+          ...e,
+          result,
+          status: e.status === 'denied' ? 'denied' : isError ? 'error' : 'done',
+          endedAt: e.endedAt ?? Date.now(),
+        }),
         this.state.status.busy ? { activity: 'Thinking' } : undefined,
       );
     }
+  }
+
+  /** A tool whose task was moved to the background keeps running after the turn ends. */
+  private isBackgroundTool(toolUseId: string): boolean {
+    return this.state.tasks.some((t) => t.toolUseId === toolUseId && t.backgrounded && t.status === 'running');
   }
 
   private handleResult(msg: Extract<SDKMessage, { type: 'result' }>): void {
@@ -563,10 +674,13 @@ export class HarnessSession implements Session {
     const more = (msg.queued_turn_count ?? 0) > 0;
     // Tool entries still running at turn end never got a result (e.g. interrupted).
     const entries = this.finalizeStreaming().map((e) =>
-      e.kind === 'tool' && e.status === 'running' && !more ? { ...e, status: 'error' as const } : e,
+      e.kind === 'tool' && e.status === 'running' && !more && !this.isBackgroundTool(e.id)
+        ? { ...e, status: 'error' as const, endedAt: Date.now() }
+        : e,
     );
     this.set({
       entries,
+      tasks: more ? this.state.tasks : this.endForegroundTasks(),
       status: {
         ...tokens,
         totalCostUsd: msg.total_cost_usd ?? this.state.status.totalCostUsd,

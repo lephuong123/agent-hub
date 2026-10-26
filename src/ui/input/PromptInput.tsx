@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useReducer, useRef } from 'react';
-import { Box, Text, useInput, useStdin, useStdout, type Key } from 'ink';
+import type { EventEmitter } from 'node:events';
+import { Box, Text, useInput, usePaste, useStdin, type Key } from 'ink';
 import type { PermissionMode, SlashCommand } from '../../types.js';
 import * as E from './editor.js';
 import { matchCommands, slashQuery } from './slash.js';
@@ -17,11 +18,15 @@ export interface PromptInputProps {
   onExit(): void;
   /** Initial history, oldest first. Submitted prompts are appended internally. */
   history?: string[];
+  /** ↓ pressed on the last line with no newer history entry (e.g. to move focus to the task panel). */
+  onDownAtEnd?(): void;
+  /** Ctrl+B while busy: move running tasks to the background. */
+  onBackground?(): void;
+  /** Extra rows for the "?" shortcuts panel. */
+  extraShortcuts?: [string, string][];
 }
 
 const PLACEHOLDER = 'Try "how does <filepath> work?"';
-const PASTE_START = '\x1b[200~';
-const PASTE_END = '\x1b[201~';
 const MENU_ROWS = 8;
 const ESC_WINDOW = 1000;
 const CTRL_C_WINDOW = 2000;
@@ -49,8 +54,6 @@ interface Model {
   help: boolean;
   pastes: Map<string, string>;
   pasteSeq: number;
-  /** Accumulated bracketed-paste text, or null when not inside a paste. */
-  pasting: string | null;
   /** Raw sequence of the event currently being handled (lets us tell Backspace from Delete, Ctrl+J, etc). */
   raw: string;
   lastEsc: number;
@@ -75,7 +78,6 @@ export function PromptInput(props: PromptInputProps) {
     help: false,
     pastes: new Map(),
     pasteSeq: 0,
-    pasting: null,
     raw: '',
     lastEsc: 0,
     lastCtrlC: 0,
@@ -137,37 +139,23 @@ export function PromptInput(props: PromptInputProps) {
     [setEd],
   );
 
-  // Raw listener: registered before useInput's, so it sees each event first. Handles bracketed paste.
-  const { internal_eventEmitter: emitter, isRawModeSupported } = useStdin();
+  // Raw listener: registered before useInput's, so it sees each event's raw sequence first
+  // (to tell Backspace from Delete, Ctrl+J from Enter). Ink keeps the emitter out of its public types.
+  const stdin = useStdin();
+  const { isRawModeSupported } = stdin;
+  const emitter = (stdin as unknown as { internal_eventEmitter: EventEmitter }).internal_eventEmitter;
   useEffect(() => {
     const onRaw = (raw: string) => {
-      const model = modelRef.current!;
-      model.raw = raw;
-      if (propsRef.current.disabled) return;
-      if (raw === PASTE_START) model.pasting = '';
-      else if (raw === PASTE_END) {
-        const text = model.pasting ?? '';
-        model.pasting = null;
-        if (text) insertText(text, true);
-      } else if (model.pasting !== null) model.pasting += raw;
+      modelRef.current!.raw = raw;
     };
     emitter.on('input', onRaw);
     return () => {
       emitter.off('input', onRaw);
     };
-  }, [emitter, insertText]);
+  }, [emitter]);
 
-  const { stdout } = useStdout();
-  useEffect(() => {
-    if (!stdout.isTTY) return;
-    const off = () => stdout.write('\x1b[?2004l');
-    stdout.write('\x1b[?2004h');
-    process.once('exit', off);
-    return () => {
-      off();
-      process.off('exit', off);
-    };
-  }, [stdout]);
+  // Bracketed paste arrives on its own channel; Ink turns the terminal mode on while this is active.
+  usePaste((text) => insertText(text, true), { isActive: !disabled && isRawModeSupported === true });
 
   useEffect(() => () => clearTimeout(modelRef.current?.hintTimer), []);
 
@@ -176,7 +164,6 @@ export function PromptInput(props: PromptInputProps) {
       const p = propsRef.current;
       const model = modelRef.current!;
       const raw = model.raw;
-      if (model.pasting !== null || raw === PASTE_START || raw === PASTE_END) return;
       const now = Date.now();
       const ed = model.ed;
 
@@ -226,6 +213,7 @@ export function PromptInput(props: PromptInputProps) {
       }
 
       if (key.tab && key.shift) return p.onCyclePermissionMode();
+      if (key.ctrl && input === 'b' && p.busy && p.onBackground) return p.onBackground();
 
       const menu = menuFor(model, p.commands);
       if (menu.length) {
@@ -260,7 +248,7 @@ export function PromptInput(props: PromptInputProps) {
         if (mv) {
           model.hist = mv.history;
           setEd(E.recalled(mv.value, 'next'));
-        }
+        } else p.onDownAtEnd?.();
         return;
       }
       if (key.leftArrow) return setEd(key.ctrl || key.meta ? E.wordLeft(ed) : E.left(ed));
@@ -337,7 +325,7 @@ export function PromptInput(props: PromptInputProps) {
         </Box>
       </Box>
       {m.help ? (
-        <ShortcutsPanel />
+        <ShortcutsPanel extra={props.extraShortcuts} />
       ) : menu.length ? (
         <SlashMenu items={menu} selected={sel} />
       ) : (
@@ -391,11 +379,12 @@ function SlashMenu({ items, selected }: { items: SlashCommand[]; selected: numbe
   );
 }
 
-function ShortcutsPanel() {
-  const width = Math.max(...SHORTCUTS.map(([a]) => a.length)) + 4;
+function ShortcutsPanel({ extra = [] }: { extra?: [string, string][] }) {
+  const rows = [...SHORTCUTS, ...extra];
+  const width = Math.max(...rows.map(([a]) => a.length)) + 4;
   return (
     <Box flexDirection="column" paddingX={2}>
-      {SHORTCUTS.map(([a, b]) => (
+      {rows.map(([a, b]) => (
         <Text key={a} dimColor>
           {a.padEnd(width)}
           {b}
