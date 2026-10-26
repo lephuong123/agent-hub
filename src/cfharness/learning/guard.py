@@ -28,7 +28,9 @@ CONFIG_KEYS = ("model", "effort", "fallback_model", "soul", "tool_policy", "mcp_
 POLICY_WORDS = re.compile(r"(^|[/\\.])(policy|evals?|golden|guard|audit|ledger|snapshots|secrets)([/\\.]|$)|learning\.(enabled|auto_apply|config_bounds|rate)", re.I)
 NEGATIVE_CLAIM = re.compile(
     r"(\b(tool|tools|mcp|server|command|feature|api|plugin|integration)\b|`[^`]{1,60}`|mcp__\w+)[^.\n]{0,80}?\b(is|are)\s+(broken|unusable|not\s+working|unavailable|unreliable)\b"
-    r"|\b(does|do)\s*(n't|\s+not)\s+work\b|\bcannot\s+(be\s+)?use[d]?\b[^.\n]{0,40}\b(tool|mcp|from)\b|\bnever\s+use\s+(the\s+)?(`[^`]+`|\w+\s+tool)",
+    r"|\b(does|do)\s*(n't|\s+not)\s+work\b|\bcannot\s+(be\s+)?use[d]?\b[^.\n]{0,40}\b(tool|mcp|from)\b"
+    # "never use X" chỉ là khẳng định tiêu cực khi kèm lý do hỏng — "Never use `--admin`" là quy tắc an toàn, phải học được
+    r"|\b(never|avoid)\s+us(e|ing)\b[^.\n]{0,80}\b(broken|unusable|unreliable|flaky|buggy|fails?|failing|hangs?|crash(es)?)\b",
     re.I,
 )
 ENV_FAILURE = re.compile(r"command not found|not installed|no such file or directory|missing binary|ModuleNotFoundError|permission denied|ENOENT|not configured|unconfigured credentials", re.I)
