@@ -427,12 +427,25 @@ class Ledger:
         new = self.apply(ch)
         if e.get("proposal_id"):
             self.conn.execute("UPDATE proposals SET status='rolled_back', updated_at=? WHERE id=?", (now_iso(), e["proposal_id"]))
+        self._wake_rate_deferred(e)
         ev = make_event("learning.rolled_back", e.get("agent_id"), {
             "ledger_entry_id": e["id"], "rollback_entry_id": new["id"], "actor": actor, "reason": reason, "target": e["target"],
             "target_ref": e["target_ref"], "scope": e["scope"], "proposal_id": e.get("proposal_id"),
         })
         self.hub.publish(ev)
         return new
+
+    def _wake_rate_deferred(self, e: dict[str, Any]) -> None:
+        """Rollback trả lại suất hạn mức (pipeline.rate_check bỏ entry đã rollback) → proposal đang hoãn vì hạn mức của cùng
+        agent / tầng team-global được thử lại ở tick kế tiếp thay vì chờ tới nửa đêm. Còn vượt hạn mức thì retry hoãn lại."""
+        if e["scope"] in ("team", "global"):
+            where, args = "scope IN ('team','global')", ()
+        elif e.get("agent_id"):
+            where, args = "agent_id=?", (e["agent_id"],)
+        else:
+            return
+        self.conn.execute(f"UPDATE proposals SET not_before=? WHERE status='deferred_rate_limited' AND block_reason='rate_limited' AND {where}",
+                          (now_iso(), *args))
 
     # ------------------------------------------------------------------ hợp đồng B (eval): dựng trạng thái TRƯỚC entry trên bản sao
     def materialize_before(self, entry: dict[str, Any], home: Path, cfg: dict[str, Any]) -> bool:

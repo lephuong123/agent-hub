@@ -5,13 +5,17 @@ Với mỗi ledger entry đã áp dụng (của M4-A) cho agent: cửa sổ quan
 - `correction` : Signal `correction`/`reject`/`cancel`/`edit_output`/`undo` gắn run trong cửa sổ, cộng run bị người huỷ
   (status `cancelled`), đếm theo run (một run tính một lần);
 - `failure`    : run `failed|crashed|protocol_violation|timed_out`;
-- `cost`       : chi phí trung bình/run.
+- `cost`       : chi phí TRUNG VỊ/run (bỏ run bị huỷ) — một task nặng bất thường không kéo lệch cả cửa sổ.
 Hồi quy khi (tỉ lệ cửa sổ > tỉ lệ mốc × (1 + `threshold_pct`/100)) VÀ số sự kiện trong cửa sổ ≥ `min_events`
-(mốc = 0 → chỉ cần đủ `min_events`). Chi phí: trung bình > mốc × (1 + `cost_threshold_pct`/100), cần ≥ `min_runs_cost` run
-mỗi phía. Entry gắn cờ `unevaluated` (không có golden task) dùng ngưỡng chặt hơn × `unevaluated_factor`.
+(mốc = 0 → chỉ cần đủ `min_events`). Chi phí: trung vị > mốc × (1 + `cost_threshold_pct`/100), cần ≥ `min_runs_cost` run
+mỗi phía. Entry gắn cờ `unevaluated` (không có golden task) dùng ngưỡng correction/failure chặt hơn × `unevaluated_factor`
+(KHÔNG áp cho chi phí: chi phí/run phụ thuộc task nhiều hơn tri thức).
+Chỉ vi phạm CHI PHÍ trên thay đổi tri thức (memory/skill/user_profile) → cảnh báo một lần, tiếp tục theo dõi, không rollback.
 
 Phát hiện hồi quy → rollback thay đổi GẦN NHẤT còn hiệu lực của agent có thể gây ra (đang theo dõi, theo thứ tự ngược thời
 gian) qua `learning.ledger.rollback(entry_id, actor="regression_monitor", reason)`; A phát `learning.rolled_back`.
+Một đợt hồi quy chỉ rollback MỘT entry: sau rollback, cửa sổ của các entry còn lại chỉ tính run SAU thời điểm rollback
+(không dùng lại chính những run vừa gây rollback để gỡ dây chuyền mọi thay đổi trước đó).
 Trạng thái theo dõi lưu ở bảng `regression_watch` (watching → passed | rolled_back | warned | gone).
 CHỈ tự rollback entry do vòng học/agent tạo (actor learning/review/agent/curator — `ports.AUTO_ROLLBACK_ACTORS`);
 thay đổi của NGƯỜI (actor user…) chỉ được cảnh báo (`regression.detected{human_change: true}` → digest + Slack).
@@ -20,6 +24,7 @@ thay đổi của NGƯỜI (actor user…) chỉ được cảnh báo (`regressi
 from __future__ import annotations
 
 import json
+import statistics
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +39,8 @@ WORK_KINDS = ("adhoc", "task")
 CORRECTION_KINDS = ("correction", "reject", "cancel", "edit_output", "undo")
 FAIL_STATUSES = ("failed", "crashed", "protocol_violation", "timed_out")
 DONE_STATUSES = ("completed", "failed", "crashed", "protocol_violation", "timed_out", "cancelled", "blocked", "budget_exceeded")
+KNOWLEDGE_TARGETS = ("memory", "skill", "user_profile")
+COST_WARN_PREFIX = "cảnh báo chi phí: "
 
 
 def _parse(ts: str | None) -> datetime | None:
@@ -63,12 +70,11 @@ def evaluate(window: dict[str, Any], baseline: dict[str, Any], cfg: dict[str, An
             out.append({"metric": metric, "window_rate": round(rate_w, 4), "baseline_rate": round(rate_b, 4), "window_events": ev_w,
                         "window_runs": n_w, "baseline_runs": n_b, "threshold_pct": round(thr * 100, 1)})
     cthr = float(cfg.get("cost_threshold_pct", 50)) / 100.0
-    if unevaluated:
-        cthr *= float(cfg.get("unevaluated_factor", 0.5))
-    min_cost_runs = int(cfg.get("min_runs_cost", 3))
-    cw, cb = window.get("cost_avg"), baseline.get("cost_avg")
-    if cw is not None and cb and n_w >= min_cost_runs and n_b >= min_cost_runs and cw > cb * (1 + cthr):
-        out.append({"metric": "cost", "window_avg": round(cw, 6), "baseline_avg": round(cb, 6), "window_runs": n_w, "baseline_runs": n_b,
+    min_cost_runs = int(cfg.get("min_runs_cost", 5))
+    cw, cb = window.get("cost_median", window.get("cost_avg")), baseline.get("cost_median", baseline.get("cost_avg"))
+    c_w, c_b = int(window.get("cost_runs", n_w)), int(baseline.get("cost_runs", n_b))
+    if cw is not None and cb and c_w >= min_cost_runs and c_b >= min_cost_runs and cw > cb * (1 + cthr):
+        out.append({"metric": "cost", "window_avg": round(cw, 6), "baseline_avg": round(cb, 6), "window_runs": c_w, "baseline_runs": c_b,
                     "threshold_pct": round(cthr * 100, 1)})
     return out
 
@@ -117,9 +123,10 @@ class RegressionMonitor:
             q = (f"SELECT DISTINCT run_id FROM signals WHERE run_id IN ({','.join('?' for _ in ids)}) "
                  f"AND kind IN ({','.join('?' for _ in CORRECTION_KINDS)})")
             corr |= {r[0] for r in self.hub.store.conn.execute(q, (*ids, *CORRECTION_KINDS))}
-        costs = [float(r["cost_usd"]) for r in runs if r.get("cost_usd") is not None]
+        costs = [float(r["cost_usd"]) for r in runs if r.get("cost_usd") is not None and r["status"] != "cancelled"]
         return {"runs": len(runs), "correction": len(corr), "failure": sum(1 for r in runs if r["status"] in FAIL_STATUSES),
-                "cost_avg": (sum(costs) / len(costs)) if costs else None, "run_ids": ids[-20:]}
+                "cost_avg": (sum(costs) / len(costs)) if costs else None, "cost_median": statistics.median(costs) if costs else None,
+                "cost_runs": len(costs), "run_ids": ids[-20:]}
 
     # ------------------------------------------------------------------ main
     async def sync_watches(self, agent_id: str | None = None) -> None:
@@ -156,16 +163,21 @@ class RegressionMonitor:
         conn = self.hub.store.conn
         watches = [dict(r) for r in conn.execute(
             "SELECT * FROM regression_watch WHERE agent_id=? AND status='watching' ORDER BY applied_at DESC", (agent_id,))]
+        last_rb = conn.execute("SELECT MAX(updated_at) FROM regression_watch WHERE agent_id=? AND status='rolled_back'", (agent_id,)).fetchone()[0]
         actions: list[dict[str, Any]] = []
         for w in watches:
             applied = w["applied_at"]
-            window_runs = self._runs(agent_id, after=applied, limit=watch_runs)
+            window_runs = self._runs(agent_id, after=max(applied, last_rb or ""), limit=watch_runs)
             ad = _parse(applied) or datetime.now(timezone.utc)
             base_runs = self._runs(agent_id, after=iso(ad - timedelta(days=base_days)), before=applied)
             win, base = self.metrics(window_runs), self.metrics(base_runs)
             viol = evaluate(win, base, cfg, unevaluated=bool(w.get("unevaluated")))
             conn.execute("UPDATE regression_watch SET observed=?, baseline=?, updated_at=? WHERE entry_id=?",
                          (json.dumps(win), json.dumps(base), now_iso(), w["entry_id"]))
+            if viol and all(v["metric"] == "cost" for v in viol) and w.get("target") in KNOWLEDGE_TARGETS:
+                if not str(w.get("reason") or "").startswith(COST_WARN_PREFIX):
+                    actions.append(self._warn_cost(w, viol))
+                viol = []
             if viol:
                 # thay đổi gần nhất còn hiệu lực DO VÒNG HỌC/AGENT tạo (watches sắp giảm dần theo thời gian);
                 # thay đổi của NGƯỜI không bao giờ bị tự rollback — chỉ cảnh báo (digest/Slack)
@@ -190,6 +202,14 @@ class RegressionMonitor:
             name = {"correction": "tỉ lệ correction/huỷ", "failure": "tỉ lệ run lỗi"}[v["metric"]]
             detail = f"{name} {v['baseline_rate'] * 100:.0f}% → {v['window_rate'] * 100:.0f}% ({v['window_events']}/{v['window_runs']} run)"
         return f"hồi quy sau thay đổi {w.get('target') or ''}:{w.get('target_ref') or ''} — {detail}"
+
+    def _warn_cost(self, w: dict[str, Any], viol: list[dict[str, Any]]) -> dict[str, Any]:
+        """Chỉ chi phí tăng sau thay đổi tri thức: cảnh báo MỘT lần (digest), tiếp tục theo dõi correction/failure, không rollback."""
+        reason = COST_WARN_PREFIX + self._describe(w, viol)
+        self.hub.store.conn.execute("UPDATE regression_watch SET reason=?, updated_at=? WHERE entry_id=?", (reason[:1000], now_iso(), w["entry_id"]))
+        self.hub.publish(make_event("regression.detected", w["agent_id"], {"ledger_entry_id": w["entry_id"], "violations": viol, "rolled_back": False,
+                                                                            "cost_only": True, "reason": reason, "hint": f"cfharness learn rollback {w['entry_id']}"}))
+        return {"entry_id": w["entry_id"], "action": "warned_cost", "reason": reason, "violations": viol}
 
     def _warn_human(self, w: dict[str, Any], viol: list[dict[str, Any]]) -> dict[str, Any]:
         """Thay đổi của NGƯỜI: KHÔNG rollback, ghi cảnh báo (một lần) → digest + Slack."""

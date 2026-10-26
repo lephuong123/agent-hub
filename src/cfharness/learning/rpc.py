@@ -164,7 +164,7 @@ class LearningRpc:
             "learn.proposals": lambda p: L().pipeline.list(p.get("agent"), p.get("status"), int(p.get("limit") or 100)),
             "learn.proposal_get": lambda p: L().pipeline.get(_req(p, "id")),
             "learn.propose": self.propose,
-            "learn.retry": lambda p: L().pipeline.retry(_req(p, "id")),
+            "learn.retry": lambda p: L().pipeline.retry(_req(p, "id"), revive=bool(p.get("revive"))),
             "learn.ledger": lambda p: L().ledger.list(p.get("agent"), target=p.get("target"), actor=p.get("actor"), since=p.get("since"), limit=int(p.get("limit") or 100)),
             "learn.show": lambda p: L().ledger.show(_req(p, "id")),
             "learn.rollback": self.rollback,

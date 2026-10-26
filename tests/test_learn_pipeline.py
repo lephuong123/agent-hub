@@ -261,3 +261,77 @@ def test_learning_rpc_status_has_no_approval_queue(hub):
     assert st["pending_approval_queue"] == 0 and st["switches"] == {"enabled": True, "auto_apply": True}
     since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
     assert json.dumps(st) and since
+
+
+# ---------------------------------------------------------------- hạn mức tính thay đổi còn hiệu lực + supersede đúng nghĩa
+def mem_add(h, c):
+    return h.learning.pipeline.propose(target="memory", op="add", agent_id="r1", payload={"action": "add", "content": c}, created_by="review")
+
+
+def test_rollback_refunds_rate_quota_and_wakes_deferred(hub):
+    hub.learning.policy.set("rate.max_changes_per_agent_per_day", 2)
+    P = hub.learning.pipeline
+    new_skill(hub, name="skill-a", by="review")
+    b = new_skill(hub, name="skill-b", by="review")
+    assert b["status"] == "applied"
+    r = mem_add(hub, "The build uses Node 22 LTS.")
+    assert r["status"] == "deferred_rate_limited" and P.get(r["proposal_id"])["not_before"] > "2001"
+    hub.learning.ledger.rollback(b["ledger_entry_id"], actor="regression_monitor", reason="test")
+    assert P.get(r["proposal_id"])["not_before"] <= datetime.now(timezone.utc).isoformat()  # được đánh thức, không chờ nửa đêm
+    hub.learning.tick()
+    assert P.get(r["proposal_id"])["status"] == "applied"  # entry đã rollback không còn chiếm suất
+    assert P.agent_quota_full("r1") is not None
+
+
+def test_memory_adds_do_not_supersede_each_other(hub):
+    hub.learning.policy.set("rate.max_changes_per_agent_per_day", 1)
+    P = hub.learning.pipeline
+    assert mem_add(hub, "The build uses Node 22 LTS.")["status"] == "applied"
+    a = mem_add(hub, "The database is Postgres 16.")
+    b = mem_add(hub, "The staging host is staging.internal.")
+    assert P.get(a["proposal_id"])["status"] == "deferred_rate_limited" and P.get(b["proposal_id"])["status"] == "deferred_rate_limited"
+    c = mem_add(hub, "the staging host is   staging.internal.")  # cùng fact → thay bản cũ
+    assert P.get(b["proposal_id"])["status"] == "superseded" and P.get(b["proposal_id"])["superseded_by"] == c["proposal_id"]
+    assert P.get(a["proposal_id"])["status"] == "deferred_rate_limited"
+
+
+def test_skill_patch_supersedes_only_same_edit_then_revive(hub):
+    new_skill(hub, by="review")  # cooldown 24 h → patch của review bị hoãn
+    P = hub.learning.pipeline
+    a = review_patch(hub, "1. Collect", "1. Gather")
+    b = review_patch(hub, "2. Write", "2. Print")
+    assert a["status"] == b["status"] == "deferred_rate_limited"
+    assert P.get(a["proposal_id"])["status"] == "deferred_rate_limited"  # patch khác chỗ không thay nhau
+    c = review_patch(hub, "1. Collect", "1. Pick up")
+    assert P.get(a["proposal_id"])["status"] == "superseded" and P.get(b["proposal_id"])["status"] == "deferred_rate_limited"
+    with pytest.raises(Exception, match="--revive"):
+        P.retry(a["proposal_id"])
+    r = P.retry(a["proposal_id"], revive=True)
+    assert r["status"] == "deferred_rate_limited" and P.get(a["proposal_id"])["superseded_by"] is None
+    assert c["status"] == "deferred_rate_limited"
+
+
+def test_deferred_patch_on_rolled_back_skill_is_dropped_quietly(hub):
+    s = new_skill(hub, by="review")
+    P = hub.learning.pipeline
+    a = review_patch(hub, "1. Collect", "1. Gather")
+    assert a["status"] == "deferred_rate_limited"
+    hub.learning.ledger.rollback(s["ledger_entry_id"], actor="user", reason="test")  # skill bị gỡ
+    hub.events.clear()
+    hub.learning.tick()
+    p = P.get(a["proposal_id"])
+    assert p["status"] == "superseded" and p["block_reason"] == "target_gone"
+    assert "guard.blocked" not in types(hub)
+
+
+def test_counter_review_waits_while_quota_full(hub):
+    from cfharness.store import now_iso
+
+    hub.learning.policy.set("rate.max_changes_per_agent_per_day", 1)
+    assert mem_add(hub, "The build uses Node 22 LTS.")["status"] == "applied"
+    hub.store.insert_run({"id": "r_src", "agent_id": "r1", "kind": "adhoc", "prompt": "x", "status": "completed", "outcome": "completed",
+                          "session_id": "s_src", "queued_at": now_iso(), "started_at": now_iso(), "ended_at": now_iso()})
+    job = hub.learning.reviews.enqueue("r1", "counter", source_run_id="r_src", delay_s=0)
+    assert hub.learning.reviews.tick() == []
+    j = hub.learning.reviews.get(job["id"])
+    assert j["status"] == "queued" and "chờ suất học" in j["reason"] and j["not_before"] > now_iso()

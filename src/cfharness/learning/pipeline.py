@@ -292,7 +292,10 @@ class Pipeline:
         return int(self.conn.execute(sql, args).fetchone()[0])
 
     def rate_check(self, prop: dict[str, Any]) -> tuple[str, str] | None:
-        """(not_before, lý do) nếu phải hoãn (FR-LN-18); None nếu trong hạn. Rollback không bị giới hạn."""
+        """(not_before, lý do) nếu phải hoãn (FR-LN-18); None nếu trong hạn. Rollback không bị giới hạn.
+        Hạn mức đếm thay đổi CÒN HIỆU LỰC: entry đã bị rollback trả lại suất (nếu không, regression monitor gỡ 3 thay đổi
+        vẫn để agent "đủ 5 thay đổi hôm nay" tới nửa đêm). Cooldown theo đích vẫn tính entry đã rollback — không áp lại ngay
+        vào chỗ vừa bị gỡ."""
         by = prop.get("created_by")
         if by == "user" or (by == "curator" and prop["op"] == "archive"):
             return None
@@ -301,17 +304,17 @@ class Pipeline:
         now = datetime.now(timezone.utc)
         if prop["scope"] in ("team", "global"):
             lim = int(r.get("max_team_global_changes_per_day") or 0)
-            if lim and self._count(f"SELECT COUNT(*) FROM ledger_entries WHERE scope IN ('team','global') AND actor IN ({acts}) AND applied_at>=?", (_utc(_local_midnight_utc()),)) >= lim:
+            if lim and self._count(f"SELECT COUNT(*) FROM ledger_entries WHERE scope IN ('team','global') AND actor IN ({acts}) AND op!='rollback' AND rolled_back_by IS NULL AND applied_at>=?", (_utc(_local_midnight_utc()),)) >= lim:
                 return _utc(_local_midnight_utc(True)), f"đã đủ {lim} thay đổi tầng team/global hôm nay"
         agent = prop.get("agent_id")
         if agent:
-            lim = int(r.get("max_changes_per_agent_per_day") or 0)
-            if lim and self._count(f"SELECT COUNT(*) FROM ledger_entries WHERE agent_id=? AND actor IN ({acts}) AND op!='rollback' AND applied_at>=?", (agent, _utc(_local_midnight_utc()))) >= lim:
-                return _utc(_local_midnight_utc(True)), f"agent đã có {lim} thay đổi hôm nay (learning.rate.max_changes_per_agent_per_day)"
+            full = self.agent_quota_full(agent)
+            if full is not None:
+                return full
             if prop["target"] == "config":
                 lim = int(r.get("max_config_changes_per_agent_per_week") or 0)
                 since = now - timedelta(days=7)
-                rows = self.conn.execute(f"SELECT applied_at FROM ledger_entries WHERE agent_id=? AND target='config' AND actor IN ({acts}) AND op!='rollback' AND applied_at>=? ORDER BY applied_at",
+                rows = self.conn.execute(f"SELECT applied_at FROM ledger_entries WHERE agent_id=? AND target='config' AND actor IN ({acts}) AND op!='rollback' AND rolled_back_by IS NULL AND applied_at>=? ORDER BY applied_at",
                                          (agent, _utc(since))).fetchall()
                 if lim and len(rows) >= lim:
                     return _utc(_parse(rows[0][0]) + timedelta(days=7)), f"đã đủ {lim} thay đổi cấu hình trong 7 ngày"
@@ -330,6 +333,15 @@ class Pipeline:
             if rows:
                 last = max(_parse(x[0]) for x in rows)
                 return _utc(last + timedelta(hours=cd)), f"'{prop['target_ref']}' vừa được sửa lúc {_utc(last)} (cooldown {cd:g} h)"
+        return None
+
+    def agent_quota_full(self, agent_id: str) -> tuple[str, str] | None:
+        """(not_before, lý do) khi agent đã dùng hết `max_changes_per_agent_per_day` (chỉ tính thay đổi còn hiệu lực)."""
+        lim = int(self.svc.policy.get("rate").get("max_changes_per_agent_per_day") or 0)
+        acts = ",".join(f"'{a}'" for a in LEARNING_ACTORS)
+        if lim and self._count(f"SELECT COUNT(*) FROM ledger_entries WHERE agent_id=? AND actor IN ({acts}) AND op!='rollback' AND rolled_back_by IS NULL AND applied_at>=?",
+                               (agent_id, _utc(_local_midnight_utc()))) >= lim:
+            return _utc(_local_midnight_utc(True)), f"agent đã có {lim} thay đổi hôm nay (learning.rate.max_changes_per_agent_per_day)"
         return None
 
     # ================================================================== propose
@@ -579,14 +591,25 @@ class Pipeline:
                     log.debug("retry deferred_no_eval lỗi", exc_info=True)
         return out
 
-    def retry(self, proposal_id: str) -> dict[str, Any]:
+    def retry(self, proposal_id: str, revive: bool = False) -> dict[str, Any]:
+        """Thử áp dụng lại proposal hoãn/gợi ý. `revive`: cả proposal `superseded` (khôi phục proposal bị thay nhầm)."""
         prop = self.get(proposal_id)
-        if prop["status"] not in ("deferred_rate_limited", "deferred_no_eval", "suggested"):
-            raise HubError(f"proposal {proposal_id} ở trạng thái {prop['status']} — không thử lại được")
+        ok = ("deferred_rate_limited", "deferred_no_eval", "suggested") + (("superseded",) if revive else ())
+        if prop["status"] not in ok:
+            hint = " (proposal bị thay: dùng --revive)" if prop["status"] == "superseded" else ""
+            raise HubError(f"proposal {proposal_id} ở trạng thái {prop['status']} — không thử lại được{hint}")
+        if prop["status"] == "superseded":
+            self._update(prop["id"], superseded_by=None)
         try:
             plan = self.plan(prop)
         except (KnowledgeError, NotFound) as e:
-            return self._block(prop, Block("guard_rule", getattr(e, "reason", "not_found"), e.message))
+            reason = getattr(e, "reason", "not_found")
+            if reason == "not_found" and prop["status"].startswith("deferred_"):
+                # đích đã biến mất trong lúc hoãn (vd skill bị rollback) → proposal hết thời, không phải vi phạm guard:
+                # bỏ lặng lẽ, không tốn suất hạn mức, không phát guard.blocked
+                self._update(prop["id"], status="superseded", block_reason="target_gone", block_detail=e.message[:1000])
+                return self._result(prop, "superseded", reason=f"đích không còn: {e.message}")
+            return self._block(prop, Block("guard_rule", reason, e.message))
         b = self.svc.guard.check(prop, plan)
         if b is not None:
             return self._block(prop, b)
@@ -597,10 +620,35 @@ class Pipeline:
     # ================================================================== tiện ích
     def _supersede(self, prop: dict[str, Any]) -> None:
         rows = self.conn.execute(
-            "SELECT id FROM proposals WHERE id!=? AND scope=? AND IFNULL(agent_id,'')=IFNULL(?,'') AND target=? AND IFNULL(target_ref,'')=IFNULL(?,'') "
+            "SELECT * FROM proposals WHERE id!=? AND scope=? AND IFNULL(agent_id,'')=IFNULL(?,'') AND target=? AND IFNULL(target_ref,'')=IFNULL(?,'') "
             "AND status IN ('deferred_rate_limited','deferred_no_eval')", (prop["id"], prop["scope"], prop.get("agent_id"), prop["target"], prop.get("target_ref"))).fetchall()
-        for (pid,) in rows:
-            self._update(pid, status="superseded", superseded_by=prop["id"])
+        for r in rows:
+            old = self.hub.store._row("proposals", r)
+            if self._replaces(prop, old):  # type: ignore[arg-type]
+                self._update(old["id"], status="superseded", superseded_by=prop["id"])  # type: ignore[index]
+
+    @staticmethod
+    def _replaces(new: dict[str, Any], old: dict[str, Any]) -> bool:
+        """Proposal mới có THAY proposal cũ cùng đích không. Cùng file (MEMORY.md, SKILL.md) chưa đủ: hai fact memory khác nhau,
+        hai patch khác chỗ của một skill là hai thay đổi độc lập — thay nhau là mất tri thức."""
+        npl, opl = new.get("payload") or {}, old.get("payload") or {}
+        if new["target"] in ("memory", "user_profile"):
+            def key(op: str, pl: dict[str, Any]) -> tuple[str, str]:
+                if op in ("patch", "delete"):
+                    return "edit", _norm(pl.get("old_text") or "")
+                return "add", _norm(pl.get("content") if pl.get("content") is not None else pl.get("new_text") or "")
+            return key(new["op"], npl) == key(old["op"], opl)
+        if new["target"] == "skill":
+            if new["op"] != "patch":
+                return True  # add/merge/archive/delete thay mọi thứ đang chờ trên skill đó
+            if old["op"] != "patch":
+                return False
+            if (npl.get("file_path") or SKILL_FILE) != (opl.get("file_path") or SKILL_FILE):
+                return False
+            if npl.get("old_string") is None or opl.get("old_string") is None:
+                return npl.get("old_string") is None  # patch ghi cả file thay patch cũ; patch cục bộ không thay bản ghi cả file
+            return npl["old_string"] == opl["old_string"]
+        return True  # config: target_ref là tập khoá — cùng khoá thì bản mới thay bản cũ
 
     def _block(self, prop: dict[str, Any], b: Block) -> dict[str, Any]:
         self._update(prop["id"], status="blocked", block_reason=b.rule, block_detail=b.detail[:1000])

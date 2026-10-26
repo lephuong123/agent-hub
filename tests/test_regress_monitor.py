@@ -163,3 +163,49 @@ async def test_human_change_skipped_but_learning_change_rolled_back(hub):
     acts = await hub.learning_ops.regression.check_agent("a")
     assert acts[0]["action"] == "rollback" and acts[0]["entry_id"] == auto["id"]
     assert [r[0] for r in lg.rollbacks] == [auto["id"]] and hub.agents.get_row("a")["model"] == "haiku"
+
+
+def test_cost_uses_median_and_needs_enough_runs():
+    cfg = {**CFG, "min_runs_cost": 5}
+    base = {"runs": 5, "correction": 0, "failure": 0, "cost_median": 0.48, "cost_runs": 5}
+    # một task nặng bất thường: trung bình 0.81 nhưng trung vị 0.20 → không hồi quy
+    assert evaluate({"runs": 5, "correction": 0, "failure": 0, "cost_avg": 0.81, "cost_median": 0.20, "cost_runs": 5}, base, cfg) == []
+    assert evaluate({"runs": 3, "correction": 0, "failure": 0, "cost_median": 2.0, "cost_runs": 3}, base, cfg) == []  # < min_runs_cost
+    assert evaluate({"runs": 5, "correction": 0, "failure": 0, "cost_median": 0.80, "cost_runs": 5}, base, cfg)[0]["metric"] == "cost"
+    # unevaluated KHÔNG siết ngưỡng chi phí: +40% < 50%
+    assert evaluate({"runs": 5, "correction": 0, "failure": 0, "cost_median": 0.672, "cost_runs": 5}, base, cfg, unevaluated=True) == []
+
+
+async def test_one_regression_rolls_back_one_change_not_a_cascade(hub):
+    lg = attach_fake_ledger(hub)
+    now = datetime.now(timezone.utc)
+    for i in range(6):
+        add_run(hub, f"r_b{i}", now - timedelta(days=2, minutes=i))
+    e1 = lg.apply_config("a", {"effort": "low"}, applied_at=iso(now - timedelta(hours=2)))
+    e2 = lg.apply_config("a", {"model": "haiku"}, applied_at=iso(now - timedelta(hours=1)))
+    for i in range(3):
+        add_run(hub, f"r_w{i}", now - timedelta(minutes=50 - i), correction=True)
+    acts = await hub.learning_ops.regression.check_agent("a")
+    assert [a["entry_id"] for a in acts if a["action"] == "rollback"] == [e2["id"]]
+    assert await hub.learning_ops.regression.check_agent("a") == []  # cùng những run đó không gỡ tiếp e1
+    assert [r[0] for r in lg.rollbacks] == [e2["id"]] and e1["id"] not in [r[0] for r in lg.rollbacks]
+
+
+async def test_cost_only_on_knowledge_change_warns_once_no_rollback(hub):
+    lg = attach_fake_ledger(hub)
+    now = datetime.now(timezone.utc)
+    for i in range(5):
+        add_run(hub, f"r_b{i}", now - timedelta(days=1, minutes=i), cost=0.1)
+    e = lg.apply_config("a", {"effort": "low"}, applied_at=iso(now - timedelta(hours=1)))
+    lg.entries[-1]["target"] = "memory"  # thay đổi tri thức
+    for i in range(5):
+        add_run(hub, f"r_w{i}", now - timedelta(minutes=50 - i), cost=0.5)
+    evs = []
+    hub.bus.add_listener(lambda ev: evs.append(ev))
+    acts = await hub.learning_ops.regression.check_agent("a")
+    assert [a["action"] for a in acts] == ["warned_cost"] and not lg.rollbacks
+    assert await hub.learning_ops.regression.check_agent("a") == []  # cảnh báo một lần
+    w = hub.learning_ops.regression.list("a")[0]
+    assert w["entry_id"] == e["id"] and w["status"] == "watching"
+    det = [x for x in evs if x.type == "regression.detected"]
+    assert len(det) == 1 and det[0].payload["cost_only"] is True and det[0].payload["rolled_back"] is False
