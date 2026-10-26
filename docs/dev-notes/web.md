@@ -170,6 +170,16 @@ Yêu cầu: "UI UX của web làm như claude — logo chế cái mới nhìn gi
 - Còn lệch so với claude.ai: không có font Copernicus/Styrene (dùng serif/sans hệ thống); menu nhiều mục hơn claude.ai (đủ các trang quản trị);
   danh sách "Gần đây" chỉ hiện ở trang Điều phối (trang khác cần thêm một RPC mỗi lần tải — chưa làm); không có công tắc sáng/tối trong app.
 
+## Slack 2 chiều trên trang Cài đặt (P5 `docs/plan/slack-2way.md`, 2026-10-26)
+Khối `#slack2` cạnh wizard webhook một chiều (giữ nguyên). Module `web/slack_pages.py` (theo khuôn `extra_pages.py`: `register_actions`
++ `routes`), manifest `app.SLACK_MANIFEST_2WAY`. RPC dùng thêm: `slack.status` (đọc), `slack.pending` (đọc, poll htmx 3 s qua
+`/partials/slack/pending` — không gia hạn phiên, không audit), `slack.setup|allow|revoke|test|disable` (HUMAN_ONLY, `audit=True` → daemon ghi
+`channel=web`). Thêm `Session.extra` (dict RAM theo phiên) để giữ mã ghép nối vừa tạo — trang Cài đặt chỉ hiện mã khi phiên này tạo ra và
+daemon còn đang ghép nối. Form token KHÔNG dùng `data-confirm` (hộp xác nhận JS sao chép giá trị input vào DOM) mà dùng ô tích như form
+secret. Chi tiết luồng/bảo mật/giới hạn: `docs/dev-notes/slack.md` mục P5. Test `tests/test_web_slack.py`; ảnh `v2/23-slack-2-chieu-cai-dat.png`,
+`v2/24-slack-2-chieu-ghep-noi.png` (tạo lại: chạy demo web với `notify.slack.api_base` trỏ vào `tests/slack_fake.FakeSlack`, dán
+`slack_fake.BOT_TOKEN|APP_TOKEN`, bơm `user_message(..., "ghepnoi <mã>")`).
+
 ## Ảnh "Luôn cho phép" (LLM-2, 2026-10-25)
 Ảnh mới ở `docs/screenshots/web/v2/` (1280 px, sáng): `20-luon-cho-phep.png` (trang Duyệt: thẻ phá huỷ chỉ có "Cho phép một lần",
 thẻ `uncertain` `eval_dynamic` có thêm nút "Luôn cho phép"), `21-luon-cho-phep-hop-xac-nhan.png` (hộp xác nhận bước 1 nêu luật),

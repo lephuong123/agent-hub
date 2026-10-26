@@ -1,0 +1,28 @@
+{#- Ghép nối Slack 2 chiều (partial /partials/slack/pending, poll 3 s khi đang ghép nối): mã một lần + người chờ xác nhận → slack.allow. -#}
+{% import "_macros.html" as m with context %}
+{% set active = slack2 and slack2.pairing_active %}
+<div id="slack2-pending"{% if active %} hx-get="/partials/slack/pending" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+{% if active %}
+  <div class="pairbox">
+    {% if slack2_pair %}
+      <p>{{ m.icon('chat') }} Mở Slack → DM với bot <b>cfharness</b> (mục <b>Apps</b> → cfharness → tab <b>Messages</b>) và nhắn:</p>
+      <p class="pair-code"><code>ghepnoi {{ slack2_pair.code }}</code></p>
+      <p class="muted small">Mã dùng một lần, còn khoảng {{ (slack2_pair.left_s // 60) + 1 }} phút. Hoặc gõ <code>{{ slack2_pair.slash or '/cfh' }} ghepnoi {{ slack2_pair.code }}</code>. Người nhắn sẽ hiện bên dưới — bạn xác nhận từng người.</p>
+    {% else %}
+      <p class="muted small">Đang có mã ghép nối được tạo ở nơi khác (CLI / tab khác). Người đã nhắn mã hiện bên dưới; cần mã mới thì bấm "Tạo mã ghép nối mới".</p>
+    {% endif %}
+    {% if slack2_pending %}
+      <table class="tbl stack"><tbody>
+      {% for p in slack2_pending %}<tr>
+        <td data-label="Người"><b>{{ p.name or p.username or p.user_id }}</b> <span class="muted small"><code>{{ p.user_id }}</code> · DM <code>{{ p.chat_id }}</code></span></td>
+        <td class="actions">{{ m.act("slack2_allow", "Xác nhận", {"chat_id": p.chat_id, "user_id": p.user_id, "name": p.name or p.username or ""}, "btn sm ok", ic="check",
+              confirm="Cho phép " ~ (p.name or p.username or p.user_id) ~ " (" ~ p.user_id ~ ") điều khiển cfharness qua DM Slack? Người này sẽ duyệt được thao tác phá huỷ, giao việc, bật/tắt ESTOP.",
+              next="/settings#slack2") }}</td>
+      </tr>{% endfor %}
+      </tbody></table>
+    {% else %}
+      <p class="muted small">{{ m.icon('clock') }} Chưa ai nhắn mã — trang tự cập nhật.</p>
+    {% endif %}
+  </div>
+{% endif %}
+</div>

@@ -100,6 +100,33 @@ và các khoá mới), `chat/__init__.py` (`hub.slack`), `daemon.py` (đăng ký
 - Scope: `files:read` (tải), `files:write` (gửi) — đã có trong manifest. Test: `tests/test_slack_media.py`; Slack giả phục vụ tệp ở
   `/files-pri/<id>/<tên>` (`user_files()`, `downloaded()`; thiếu token → trang HTML 200 như Slack thật).
 
+## P5 — wizard web 2 chiều (trang Cài đặt, không cần CLI)
+| File | Vai trò |
+|---|---|
+| `web/app.py` | `SLACK_MANIFEST_2WAY` (Socket Mode, `interactivity`, `app_home.messages_tab_enabled`, bot event `message.im`, scope `chat:write im:history im:read im:write commands users:read files:read files:write`), `slack_slash()` (lệnh hợp lệ, sai → `/cfh`), `slack_2way_create_url(slash)` — lệnh lấy từ `notify.slack.slash_command` |
+| `web/slack_pages.py` | ngữ cảnh khối Cài đặt (`slack.status`), partial `/partials/slack/pending`, thao tác `slack2_setup|pair|allow|revoke|test|disable` vào `ACTIONS` |
+| `templates/settings.html` (`#slack2`), `_slack_pending.html` | trạng thái, DM được phép (nút Gỡ), hướng dẫn tạo app + form 2 token, mã ghép nối + người chờ xác nhận (poll 3 s) |
+
+Luồng: "Tạo app Slack 2 chiều" (manifest điền sẵn) → Install → copy `xoxb-` (OAuth & Permissions) + tạo App-Level Token `xapp-`
+(`connections:write`) → dán → `slack.setup` (daemon kiểm `auth.test` + `apps.connections.open`, lưu secret, ghim workspace, bật
+`interactive`) → trang hiện `ghepnoi <mã>` → người nhắn mã trong DM (hoặc `/cfh ghepnoi <mã>`) → hiện tên + `user_id` ở danh sách chờ →
+"Xác nhận" (hộp xác nhận nêu quyền sẽ cấp) = `slack.allow`. "Tạo mã ghép nối mới" / "Bật lại" = `slack.setup {}` (dùng token đã lưu).
+"Tắt" = `slack.disable` (giữ token); "Tắt và xoá token" = `slack.disable {forget_token}`.
+
+Bảo mật: mọi POST qua `post_guard` (CSRF + Origin + khoá phiên WT-1), `slack.*` HUMAN_ONLY và tự audit `channel=web`; poll
+`slack.pending` gọi KHÔNG audit (đọc). Token: ô `type=password autocomplete=off` + `pattern` phía trình duyệt, kiểm lại phía server bằng
+`BOT_TOKEN_RE|APP_TOKEN_RE` của `chat/slack/rpc.py` (thông điệp lỗi không lặp giá trị), không đặt `data-confirm` lên form token (hộp xác nhận
+JS chép mọi input vào DOM) — dùng ô tích `confirm=yes`; trang xác nhận phía server bỏ hai trường token (`secret_fields`). Mã ghép nối giữ
+trong `Session.extra` (RAM, theo phiên), không phải bí mật lâu dài (một lần, TTL `pair_ttl_s`, vẫn cần người xác nhận).
+Test `tests/test_web_slack.py` (4): manifest + lệnh slash, khối hiện cạnh wizard webhook cũ, 403 khi thiếu CSRF/khoá phiên (không RPC nào
+chạy), luồng đủ với Slack giả (setup → ghép nối → allow → test → mã mới → revoke → disable → xoá token), audit `web`, token không có
+trong thân/header response, audit, log. Ảnh: `docs/screenshots/web/v2/23-slack-2-chieu-cai-dat.png`, `24-slack-2-chieu-ghep-noi.png`
+(Chromium thật + Slack giả, đã bấm Xác nhận qua hộp xác nhận JS → allowlist cập nhật, tin chào gửi).
+
+Giới hạn (RPC trong `chat/`, chưa sửa ở P5): `slack.status` không trả tên workspace (chỉ `team_id`) và không ghép `chat_id` ↔ `user_id`
+→ trang hiện hai danh sách riêng; `slack.revoke` chỉ gỡ `chat_id` (người vẫn ở `allowed_user_ids`, vô hại vì cần cả hai); tin bot trả khi
+ghép bằng slash vẫn nói "Quay lại terminal để xác nhận" (nên đổi thành "terminal hoặc trang Cài đặt").
+
 ## Chưa làm
 - Reaction ⏳ thay "đang gõ…" khi chờ điều phối viên (cần scope `reactions:write`); bot Slack hiện bỏ qua "đang gõ".
 - Nghiệm thu trên workspace Slack thật: chưa chạy (modal `views.open`, tải `url_private` với `files:read`, tệp từ máy tính + điện thoại).
