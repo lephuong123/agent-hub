@@ -92,9 +92,7 @@ class ChatBot:
         from .manager_chat import ManagerChat
 
         self.manager = ManagerChat(self)  # M7 MGR-UI: tin thường ↔ điều phối viên
-        from .media import MediaChat
-
-        self.media = MediaChat(self)  # ảnh/tệp người gửi → điều phối viên; tệp `[[file: …]]` điều phối viên đánh dấu → document
+        self.media = self._make_media()  # ảnh/tệp người gửi → điều phối viên; tệp `[[file: …]]` điều phối viên đánh dấu → document
         from .questions_tg import QuestionChat
 
         self.questions = QuestionChat(self)  # UX v2: câu hỏi có lựa chọn của agent (nút số + trả lời bằng chữ)
@@ -719,6 +717,12 @@ class ChatBot:
     # ================================================================== lớp con cài (vận chuyển)
     def _make_notifier(self) -> Any:  # pragma: no cover - lớp con
         raise NotImplementedError
+
+    def _make_media(self) -> Any:
+        """Ảnh/tệp: mặc định bản Telegram (chat/media.py); Slack thay bằng chat/slack/media.py."""
+        from .media import MediaChat
+
+        return MediaChat(self)
 
     def token(self, *, ignore_enabled: bool = False) -> str | None:  # pragma: no cover - lớp con
         raise NotImplementedError

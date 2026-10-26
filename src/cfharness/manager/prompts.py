@@ -74,18 +74,30 @@ def chat_prompt(channel: str, conversation_id: str, text: str, *, key: str = KEY
         "(Your final message in this turn is delivered to the owner as your reply: Vietnamese, short. "
         "If you started work, say what you assigned and that you will follow it until done. If something needs the owner's permission, "
         "ask with ask_owner_permission / ask_owner — never ask them to type commands. Never write your owner key anywhere.)"
-        + (TELEGRAM_FILES_NOTE if str(channel).startswith("telegram:") else "")
+        + deliverables_note(channel)
     )
 
 
-# Kênh Telegram: điều phối viên gửi tệp cho người bằng dòng đánh dấu `[[file: <đường dẫn tương đối>]]` (chat/manager_chat.py gửi
-# thành document; chỉ tệp trong cwd hội thoại, không symlink, trong trần kích thước)
-TELEGRAM_FILES_NOTE = (
+# Kênh Telegram + Slack: điều phối viên gửi tệp cho người bằng dòng đánh dấu `[[file: <đường dẫn tương đối>]]` (chat/manager_chat.py gửi
+# thành document Telegram / tệp Slack (files v2); chỉ tệp trong cwd hội thoại, không symlink, trong trần kích thước)
+_DELIVERABLES_NOTE = (
     "\n(Deliverables: to send the owner a file you produced, save it in your working directory and add a line exactly like "
     "`[[file: report.md]]` (path relative to your working directory, one per line, at most 5) to your final message. "
-    "The hub sends each as a Telegram document. Files outside your working directory, symlinks and files over the size limit are "
+    "The hub sends each as {what}. Files outside your working directory, symlinks and files over the size limit are "
     "refused; never put secrets in deliverables.)"
 )
+TELEGRAM_FILES_NOTE = _DELIVERABLES_NOTE.format(what="a Telegram document")
+SLACK_FILES_NOTE = _DELIVERABLES_NOTE.format(what="a Slack file in the same conversation")
+
+
+def deliverables_note(channel: str) -> str:
+    """Ghi chú `[[file: …]]` cho kênh gửi tệp được (Telegram, Slack); kênh khác (cli, web…) → rỗng."""
+    ch = str(channel)
+    if ch.startswith("telegram:"):
+        return TELEGRAM_FILES_NOTE
+    if ch.startswith("slack:"):
+        return SLACK_FILES_NOTE
+    return ""
 
 
 def images_note(files: list[str]) -> str:
