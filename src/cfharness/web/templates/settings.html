@@ -66,6 +66,7 @@
   </form>
   {% if slack_webhook %}{{ m.act("secret_rm", "Ngắt kết nối", {"name": "SLACK_WEBHOOK_URL"}, "btn sm ghost", confirm="Ngắt Slack (xoá secret SLACK_WEBHOOK_URL)?", next="/settings#slack") }}{% endif %}
 </section>
+<div id="health-slot" hx-get="/partials/health" hx-trigger="load" hx-swap="outerHTML"></div>
 <section class="card">
   <h2>{{ m.icon('info') }} Hệ thống</h2>
   <dl class="kv cols">

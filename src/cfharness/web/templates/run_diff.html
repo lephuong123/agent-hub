@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Thay đổi file · {{ run.id }}{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="/runs">Lượt chạy</a>{{ m.icon('chev-right') }}<a href="/runs/{{ run.id }}">{{ run_title(run, None, 60) }}</a>{{ m.icon('chev-right') }}<span>Thay đổi file</span></nav>
+{% if dv.has %}{% include "_run_diff.html" %}{% else %}<section class="card">{{ m.empty("Run này không ghi vào workspace (hoặc chưa kết thúc) — không có thay đổi file.", "branch") }}</section>{% endif %}
+{% endblock %}

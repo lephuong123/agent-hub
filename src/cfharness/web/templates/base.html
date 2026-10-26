@@ -16,8 +16,8 @@
 {%- set need = (badge.approvals or 0) + (badge.questions or 0) %}
 {%- set need_tone = 'danger' if badge.waiting_human else ('ask' if badge.questions and not badge.approvals else '') %}
 {%- set GROUPS = [
-  ("Làm việc", [("manager", "/manager", "chat", "Điều phối"), ("inbox", "/inbox", "inbox", "Cần bạn"), ("overview", "/", "home", "Tổng quan")]),
-  ("Đội ngũ", [("agents", "/agents", "bot", "Agent"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("runs", "/runs", "run", "Lượt chạy")]),
+  ("Làm việc", [("manager", "/manager", "chat", "Điều phối"), ("inbox", "/inbox", "inbox", "Cần bạn"), ("overview", "/", "home", "Tổng quan"), ("search", "/search", "search", "Tìm kiếm")]),
+  ("Đội ngũ", [("agents", "/agents", "bot", "Agent"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("runs", "/runs", "run", "Lượt chạy"), ("schedules", "/schedules", "calendar", "Lịch chạy")]),
   ("Học & chất lượng", [("learnings", "/learnings", "learn", "Tự học")]),
   ("Hệ thống", [("mcp", "/mcp", "plug", "MCP"), ("costs", "/costs", "dollar", "Chi phí"), ("audit", "/audit", "log", "Nhật ký"), ("settings", "/settings", "settings", "Cài đặt")]),
 ] %}
@@ -29,6 +29,7 @@
       <button type="button" class="side-toggle" id="side-toggle" aria-label="Thu gọn / mở rộng thanh bên" title="Thu gọn / mở rộng thanh bên">{{ _m.icon('sidebar') }}</button>
     </div>
     <a class="side-new" href="/manager?new=1" title="Cuộc trò chuyện mới với điều phối viên"><span class="side-new-ic">{{ _m.icon('plus') }}</span><span class="lbl">Cuộc trò chuyện mới</span></a>
+    <form method="get" action="/search" class="side-search" role="search"><label class="sr-only" for="side-q">Tìm trong hội thoại</label>{{ _m.icon('search') }}<input id="side-q" name="q" placeholder="Tìm trong hội thoại…" value="{{ request.query_params.get('q', '') if nav == 'search' else '' }}" autocomplete="off" spellcheck="false"></form>
     <nav class="nav" aria-label="Điều hướng chính">
       {% for gname, items in GROUPS %}
       <div class="nav-group">{{ gname }}</div>{% if not loop.first %}<div class="nav-sep" aria-hidden="true"></div>{% endif %}
@@ -72,7 +73,7 @@
   <details class="tab-more">
     <summary>{{ _m.icon('menu') }}<span>Thêm</span></summary>
     <div class="tab-sheet">
-      {% for key, href, ic, label in [("overview", "/", "home", "Tổng quan"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("learnings", "/learnings", "learn", "Tự học"), ("mcp", "/mcp", "plug", "MCP"), ("costs", "/costs", "dollar", "Chi phí"), ("audit", "/audit", "log", "Nhật ký"), ("settings", "/settings", "settings", "Cài đặt")] %}
+      {% for key, href, ic, label in [("overview", "/", "home", "Tổng quan"), ("search", "/search", "search", "Tìm kiếm"), ("schedules", "/schedules", "calendar", "Lịch chạy"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("learnings", "/learnings", "learn", "Tự học"), ("mcp", "/mcp", "plug", "MCP"), ("costs", "/costs", "dollar", "Chi phí"), ("audit", "/audit", "log", "Nhật ký"), ("settings", "/settings", "settings", "Cài đặt")] %}
       <a href="{{ href }}" class="{{ 'on' if navkey == key }}">{{ _m.icon(ic) }}<span>{{ label }}</span></a>
       {% endfor %}
       <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn ghost" type="submit">{{ _m.icon('logout') }}<span>Thoát</span></button></form>

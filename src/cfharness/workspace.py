@@ -304,7 +304,7 @@ def compute_diff(cp: dict[str, Any], store_dir: Path, *, max_file_bytes: int = 5
         dels += d
     patch_path = store_dir / "diff.patch"
     store_dir.mkdir(parents=True, exist_ok=True)
-    patch_path.write_text("".join(patch_parts), encoding="utf-8")
+    patch_path.write_text("".join(patch_parts), encoding="utf-8", newline="")  # newline="": giữ nguyên CRLF của nội dung (Windows không đổi thành CR CR LF)
     return {
         "kind": "git", "root": root, "head_before": head_before, "head_after": head_after, "branch_before": cp.get("branch"),
         "branch_after": branch_after, "commits_made": head_before != head_after, "files": files,
