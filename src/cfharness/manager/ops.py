@@ -76,6 +76,8 @@ class ManagerOps:
             return None
         if op.startswith("question_"):
             return f"question:{args.get('question_id')}" if args.get("question_id") else None
+        if op.startswith("approval_"):
+            return f"approval:{args.get('approval_id')}" if args.get("approval_id") else None
         if op == "ask_owner":
             return None
         if op == "ask_owner_permission":
@@ -146,10 +148,11 @@ class ManagerOps:
         runs = [{k: r.get(k) for k in ("id", "agent_id", "kind", "status", "task_id", "queued_at", "started_at")}
                 for st in ("running", "queued", "waiting_human") for r in h.store.list_runs(status=st, limit=20)]
         aps = [{"id": x["id"], "agent_id": x.get("agent_id"), "run_id": x.get("run_id"), "tool": x.get("tool_name"), "preview": str(x.get("preview") or "")[:200],
-                "status": x.get("status"), "opened_at": x.get("opened_at")} for x in h.approvals.list("pending", limit=20)]
+                "status": x.get("status"), "opened_at": x.get("opened_at"), "routed_to": x.get("routed_to")} for x in h.approvals.list("pending", limit=20)]
         return {"now": now_iso(), "you": self.mid, "estop": h.runs.estop, "cost_today_usd": round(h.store.cost_today(), 4), "agents": agents, "teams": teams,
                 "open_tasks": open_tasks, "live_runs": runs, "approvals_waiting_human": aps,
-                "note": "Approvals are decided ONLY by the human; tell the owner if one blocks progress."}
+                "note": "Approvals with routed_to='manager' were delegated to YOU: decide them with approval_decide (or approval_escalate). "
+                        "All other approvals are decided ONLY by the human: use ask_owner_permission (approve_action) if one blocks progress."}
 
     def op_agent_get(self, a: dict[str, Any]) -> dict[str, Any]:
         r = self.hub.agents.show(str(a.get("id") or ""))
@@ -341,7 +344,8 @@ class ManagerOps:
         return {"id": a.get("id"), "restored": True}
 
     async def op_task_create(self, a: dict[str, Any]) -> Any:
-        t = {k: a[k] for k in ("title", "body", "team", "assignee", "role", "parents", "workspace", "priority", "budget_usd", "model", "decompose") if a.get(k) is not None}
+        t = {k: a[k] for k in ("title", "body", "team", "assignee", "role", "parents", "workspace", "priority", "budget_usd", "model", "decompose",
+                               "extra_write_roots") if a.get(k) is not None}
         t["budget_usd"] = self._clamp_budget(t.get("budget_usd"))
         res = await self._rpc("task_create", "task.create", {"task": t, "created_by": self.actor}, a,
                               summary=f"giao task '{str(a.get('title') or '')[:80]}' cho {a.get('assignee') or a.get('team')}")
@@ -413,6 +417,40 @@ class ManagerOps:
         if a.get("team"):
             p["team"] = a["team"]
         return await self._rpc("estop_on", "estop.set", p, a, summary=f"BẬT ESTOP{' team ' + str(a['team']) if a.get('team') else ''}: {str(a.get('reason') or '')[:120]}")
+
+    # ================================================================== APPROVAL GIAO CHO ĐIỀU PHỐI VIÊN (approval-profiles.md)
+    def op_approval_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
+        """Approval đang chờ — mặc định chỉ các approval GIAO cho điều phối viên (routed_to=manager). Lệnh/đích là DỮ LIỆU agent."""
+        from ..guard.profiles import delegation_cfg
+
+        mine = str(a.get("scope") or "delegated") != "all"
+        rows = self.hub.approvals.list("pending", routed_to="manager" if mine else None, limit=int(a.get("limit") or 20))
+        timeout = delegation_cfg(self.hub.config)["timeout_s"]
+        out = []
+        for r in rows:
+            ti = r.get("tool_input") if isinstance(r.get("tool_input"), dict) else {}
+            out.append({"id": r["id"], "agent_id": r["agent_id"], "run_id": r["run_id"], "tool": r["tool_name"], "routed_to": r.get("routed_to"),
+                        "status": r["status"], "class": r.get("destructive_class"), "rule": r.get("matched_rule"), "risk": r.get("risk_level"),
+                        "reason": str(r.get("reason") or "")[:300], "targets": (r.get("verdict_targets") or [])[:10],
+                        "action": str(ti.get("command") or r.get("preview") or "")[:1500], "opened_at": r.get("opened_at"),
+                        "delegated_at": r.get("delegated_at"), "escalates_after_s": timeout if r.get("routed_to") == "manager" else None})
+        return out
+
+    async def op_approval_decide(self, a: dict[str, Any]) -> Any:
+        aid = str(a.get("approval_id") or "")
+        dec = str(a.get("decision") or "")
+        if dec not in ("allow", "deny"):
+            self._denied("approval_decide", "approval.manager_decide", "decision phải là allow|deny (chuyển người: approval_escalate)", a)
+        res = await self._rpc("approval_decide", "approval.manager_decide", {"id": aid, "decision": dec, "reason": a.get("reason")}, a,
+                              summary=f"{'cho phép' if dec == 'allow' else 'từ chối'} approval {aid}: {str(a.get('reason') or '')[:120]}")
+        return {"approval_id": aid, "status": (res or {}).get("status"),
+                "next": "the agent's run continues (allowed: the action runs once; denied: it continues another way)"}
+
+    async def op_approval_escalate(self, a: dict[str, Any]) -> Any:
+        aid = str(a.get("approval_id") or "")
+        res = await self._rpc("approval_escalate", "approval.manager_decide", {"id": aid, "decision": "escalate", "reason": a.get("note") or a.get("reason")}, a,
+                              summary=f"chuyển approval {aid} lên người")
+        return {"approval_id": aid, "routed_to": (res or {}).get("routed_to"), "next": "the human owner was notified; do not decide it yourself"}
 
     # ================================================================== CÂU HỎI (UX)
     def op_question_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:

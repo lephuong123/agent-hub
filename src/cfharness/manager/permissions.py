@@ -13,7 +13,9 @@ Luật (mỗi luật có test đỏ→xanh trong `tests/test_manager_security.py
 - MCP: chỉ server có trong registry (DB) và không phải MCP của chính hub;
 - workspace/cwd: không trong HUB_HOME (trừ workspaces của agent), không phải /, $HOME, vùng bảo vệ;
 - team: không chạm `policies.learning` (công tắc học = chính sách an toàn), không ESTOP qua team.update;
-- `estop.set` chỉ `on=true`.
+- `estop.set` chỉ `on=true`;
+- `approval.manager_decide` (approval-profiles.md): chỉ approval `routed_to=manager` còn chờ, của agent KHÔNG phải điều phối viên,
+  lớp + danh sách "không bao giờ" kiểm lại từ verdict đã lưu (`guard/profiles.delegable`), không `always`, cần lý do.
 """
 
 from __future__ import annotations
@@ -618,6 +620,37 @@ class ManagerPermissions:
             if q["agent_id"] in mgrs:
                 return "câu hỏi của chính điều phối viên — chỉ người trả lời"
             return None
+        if method == "approval.manager_decide":
+            # hồ sơ phê duyệt: CHỈ approval người đã giao (routed_to=manager), lớp trong approval.delegate_to_manager.classes, ngoài danh
+            # sách không-bao-giờ-tự-động (kiểm lại từ verdict đã lưu), không phải approval của run/agent điều phối viên, không `always`
+            from ..guard.profiles import allowed_roots, delegable
+
+            if p.get("always"):
+                return "điều phối viên không bao giờ tạo luật luôn cho phép"
+            dec = str(p.get("decision") or "")
+            if dec not in ("allow", "deny", "escalate"):
+                return "decision phải là allow|deny|escalate"
+            if not str(p.get("reason") or "").strip():
+                return "cần lý do (reason) cho quyết định"
+            try:
+                row = self.hub.approvals.get(str(p.get("id") or p.get("request_id") or ""))
+            except Exception:
+                return "không có approval này"
+            why = self.hub.approvals.manager_block(row, str(caller.manager))
+            if why:
+                return why
+            if row["agent_id"] in mgrs:
+                return "approval của agent điều phối viên — chỉ người quyết"
+            if dec == "allow":
+                run = self.hub.store.get_run(row["run_id"]) or {}
+                v = {"verdict": row.get("risk_level"), "rule": row.get("matched_rule"), "klass": row.get("destructive_class"),
+                     "protected_id": row.get("protected_resource_id"), "targets": row.get("verdict_targets") or []}
+                why = delegable(v, self.hub.config, tool_name=str(row.get("tool_name") or ""),
+                                tool_input=row["tool_input"] if isinstance(row.get("tool_input"), dict) else {}, roots=allowed_roots(self.hub),
+                                cwd=run.get("cwd"))
+                if why:
+                    return f"không được cho phép: {why} — chuyển người (decision=escalate)"
+            return None
         if method == "agent.create":
             cfg = dict(p.get("config") or {})
             aid = str(cfg.get("id") or "")
@@ -712,6 +745,12 @@ class ManagerPermissions:
                 rv = self.review_teams_of(str(t["assignee"]))
                 if rv and not (t.get("team") and self._team_policies(str(t["team"])).get("review_required")):
                     return f"'{t['assignee']}' thuộc team có review ({', '.join(rv)}) — giao việc qua team có review"
+            ws = t.get("workspace") if isinstance(t.get("workspace"), dict) else {}
+            extra = list(t.get("extra_write_roots") or []) + list(ws.get("extra_write_roots") or [])
+            for x in extra:
+                why = self.check_path(x, "extra_write_roots của task", agent_id=str(t.get("assignee") or "") or None)
+                if why:
+                    return why
             return (self.check_path(t.get("workspace"), "workspace của task", agent_id=str(t.get("assignee") or "") or None)
                     or self.check_run_budget(t))
         if method == "run.start":

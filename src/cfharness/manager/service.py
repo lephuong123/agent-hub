@@ -606,6 +606,12 @@ class ManagerService:
             self._first_pending = time.monotonic()
         self.pending.append({"kind": kind, "summary": summary[:300], "ts": now_iso(), **data})
 
+    def wake_soon(self) -> None:
+        """Sự kiện cần điều phối viên xử lý sớm (approval giao cho nó): bỏ thời gian gom `event_debounce_s` — vòng nền (`check_s`)
+        tick ở lần kiểm kế tiếp (vẫn khoá chống chồng, không chạy khi ESTOP/tạm dừng)."""
+        if self.pending:
+            self._first_pending = time.monotonic() - float(self.cfg("event_debounce_s", 45)) - 1.0
+
     def _collect(self, ev: HubEvent) -> None:
         aid = self.agent_id()
         if not aid or ev.agent_id == aid:
@@ -649,8 +655,8 @@ class ManagerService:
         mins = float(self.cfg("approval_wait_min", 15))
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=mins)
         for a in self.hub.approvals.list("pending", limit=50):
-            if a["id"] in self._reported_approvals:
-                continue
+            if a["id"] in self._reported_approvals or a.get("routed_to") == "manager":
+                continue  # giao cho điều phối viên: đã có sự kiện approval_delegated
             t = _parse(a.get("opened_at"))
             if t is not None and t <= cutoff:
                 self._reported_approvals.add(a["id"])

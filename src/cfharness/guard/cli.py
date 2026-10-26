@@ -11,7 +11,8 @@ import argparse
 import json
 from typing import Any
 
-HIDDEN = {("run", "continue"): "run-continue", ("run", "resume"): "run-resume", ("agent", "purge"): "agent-purge"}
+HIDDEN = {("run", "continue"): "run-continue", ("run", "resume"): "run-resume", ("agent", "purge"): "agent-purge",
+          ("approvals", "stats"): "approvals-stats", ("approvals", "profile"): "approvals-profile"}
 
 
 def rewrite_argv(argv: list[str]) -> list[str]:
@@ -49,6 +50,53 @@ def cmd_approvals(ctx: Any) -> int:
         )
         + "\n\nduyệt: cfharness approve <id>   từ chối: cfharness deny <id> --note '…'",
     )
+    return 0
+
+
+def cmd_approvals_stats(ctx: Any) -> int:
+    """`cfharness approvals stats [--days 30] [--json]` — vì sao agent phải dừng hỏi: theo luật / agent / tool / kết quả / người quyết."""
+    from ..cli import _table
+
+    st = ctx.call("approval.stats", {"days": ctx.args.days})
+
+    def sec(title: str, rows: list[dict[str, Any]], top: int = 15) -> str:
+        if not rows:
+            return f"{title}: (không có)"
+        body = _table([[r["key"], r["count"], r.get("allowed", 0), r.get("denied", 0), r.get("cancelled", 0), r.get("pending", 0),
+                        _fmt_s(r.get("wait_median_s")), _fmt_s(r.get("wait_max_s"))] for r in rows[:top]],
+                      ["", "SỐ", "CHO", "TỪ CHỐI", "HUỶ", "ĐANG CHỜ", "CHỜ (TRUNG VỊ)", "CHỜ (MAX)"])
+        return f"{title}\n{body}"
+
+    w = st.get("wait") or {}
+    head = (f"approval {st['days']:g} ngày qua (từ {st['since'][:10]}): {st['total']} yêu cầu, {st['pending']} đang chờ; "
+            f"thời gian chờ trung vị {_fmt_s(w.get('median_s'))}, max {_fmt_s(w.get('max_s'))}\n"
+            "phân bố chờ: " + ", ".join(f"{k} {v}" for k, v in (w.get("buckets") or {}).items()))
+    auto = st.get("auto_allowed_without_approval") or []
+    parts = [head, sec("THEO LUẬT", st["by_rule"]), sec("THEO AGENT", st["by_agent"]), sec("THEO TOOL", st["by_tool"]),
+             sec("THEO KẾT QUẢ", st["by_outcome"]), sec("AI QUYẾT", st["by_decider"]), sec("ĐỊNH TUYẾN (routed_to)", st["by_routed_to"])]
+    if auto:
+        parts.append("hub tự cho phép không mở approval (destructive/uncertain): " + ", ".join(f"{a['classifier']} {a['n']}" for a in auto))
+    ctx.out(st, "\n\n".join(parts))
+    return 0
+
+
+def _fmt_s(v: Any) -> str:
+    if v is None:
+        return "-"
+    v = float(v)
+    return f"{v:.0f}s" if v < 120 else f"{v / 60:.0f}m" if v < 7200 else f"{v / 3600:.1f}h"
+
+
+def cmd_approvals_profile(ctx: Any) -> int:
+    r = ctx.call("approval.profile")
+    lines = [f"approval.profile = {r['profile']}  (đổi — chỉ người: cfharness config set approval.profile strict|balanced|autonomous)"]
+    for k, v in (r.get("knobs") or {}).items():
+        lines.append(f"  {k} = {str(v['value']).lower()}  ({'đặt rõ trong config.yaml' if v['source'] == 'explicit' else 'theo profile'})")
+    d = r.get("delegate_to_manager") or {}
+    lines.append(f"  giao điều phối viên: {'bật' if d.get('enabled') else 'tắt'} · lớp {', '.join(d.get('classes') or []) or '-'} · "
+                 f"quá {int(d.get('timeout_s') or 0)}s → người")
+    lines.append(f"  hết giờ giữ (mặc định): {r.get('on_timeout')}")
+    ctx.out(r, "\n".join(lines))
     return 0
 
 
@@ -190,13 +238,19 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     ap.add_argument("--all", action="store_true", help="kể cả đã quyết")
     ap.add_argument("--limit", type=int, default=50)
     ap.set_defaults(fn=cmd_approvals)
+    st = sub.add_parser("approvals-stats", help="(= approvals stats) thống kê approval: luật/agent/tool/kết quả/thời gian chờ", parents=[common])
+    st.add_argument("--days", type=float, default=30, help="số ngày gần nhất (mặc định 30)")
+    st.set_defaults(fn=cmd_approvals_stats)
+    pf = sub.add_parser("approvals-profile", help="(= approvals profile) hồ sơ phê duyệt đang hiệu lực", parents=[common])
+    pf.set_defaults(fn=cmd_approvals_profile)
     for name, hlp in (("approve", "cho phép MỘT lần thao tác đang chờ"), ("deny", "từ chối thao tác đang chờ")):
         x = sub.add_parser(name, help=hlp, parents=[common])
         x.add_argument("id")
         x.add_argument("--note", help="ghi chú (agent đọc được khi bị từ chối)")
         if name == "approve":
             x.add_argument("--always", action="store_true",
-                           help="luôn cho phép đúng thao tác này cho agent này (chỉ thao tác 'không chắc'; KHÔNG áp cho thao tác phá huỷ)")
+                           help="luôn cho phép đúng thao tác này cho agent này (thao tác 'không chắc', hoặc tool MCP chỉ bị server tự đánh dấu "
+                                "destructive → luật cho đúng tool đó; KHÔNG áp cho thao tác phá huỷ khác)")
         x.set_defaults(fn=cmd_decide)
 
     g = sub.add_parser("guard", help="bộ phân loại thao tác phá huỷ và tài nguyên được bảo vệ", parents=[common])

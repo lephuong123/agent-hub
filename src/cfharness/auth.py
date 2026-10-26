@@ -55,8 +55,9 @@ ENV_RUN_ID = "CFHARNESS_RUN_ID"
 # Phương thức chỉ NGƯỜI được gọi (token + không phải hậu duệ run). Thêm method nhạy cảm mới → thêm vào đây + test.
 HUMAN_ONLY: frozenset[str] = frozenset(
     {
-        # phê duyệt / chính sách an toàn
-        "approval.approve", "approval.deny",
+        # phê duyệt / chính sách an toàn. `approval.manager_decide`: agent thường không bao giờ; điều phối viên qua MANAGER_ALLOWED
+        # (chỉ approval routed_to=manager — docs/dev-notes/approval-profiles.md); người dùng approval.approve|deny
+        "approval.approve", "approval.deny", "approval.manager_decide",
         "guard.protect.add", "guard.protect.rm", "guard.integrity.accept", "guard.sandbox.set", "guard.sandbox.allow_domain", "guard.repo_deny.add", "guard.repo_deny.rm",
         "config.set", "auth.reset", "hub.shutdown", "estop.set", "team.estop",
         # vòng đời / cấu hình agent (tool_policy, permission_mode, mcp_servers… là bề mặt nâng quyền)
@@ -132,7 +133,7 @@ AGENT_ALLOWED_MUTATING: dict[str, str] = {
 # M7 — điều phối viên: method RPC mà người gọi `Caller.manager` (do ManagerService dựng TRONG daemon cho tool hub-self của run
 # manager, không bao giờ từ socket) được gọi. Ngoài tập này → từ chối + audit. Method HUMAN_ONLY trong tập vẫn bị daemon kiểm
 # trường cấm theo từng method (`manager.permissions.check_rpc`) — "toàn quyền trừ an toàn" (docs/plan/M7-manager.md).
-# CỐ Ý KHÔNG có: approval.*, guard.*, golden.*, config.set, secret.*, mcp ghi, trash.purge/agent.purge, agent.revert, run.revert,
+# CỐ Ý KHÔNG có: approval.approve|deny (người), guard.*, golden.*, config.set, secret.*, mcp ghi, trash.purge/agent.purge, agent.revert, run.revert,
 # estop tắt (estop.set chỉ on=true), manager.*, telegram.*, learn.rollback/policy_set, run.takeover.
 MANAGER_ALLOWED: dict[str, str] = {
     "agent.create": "tạo agent (MCP chỉ trong registry, không bypass/allow_bypass/extra_args/sandbox)",
@@ -156,6 +157,9 @@ MANAGER_ALLOWED: dict[str, str] = {
     "estop.set": "CHỈ bật ESTOP (on=true)",
     "question.answer": "trả lời câu hỏi của agent trong task khi câu hỏi đang chờ điều phối viên (with_manager) — không phải câu hỏi đã lên người",
     "question.escalate": "chuyển câu hỏi đang chờ điều phối viên lên người",
+    # hồ sơ phê duyệt (approval-profiles.md): người GIAO lớp approval cho điều phối viên (approval.delegate_to_manager, chỉ người đặt)
+    "approval.manager_decide": "cho phép/từ chối/chuyển người approval ĐANG giao cho điều phối viên (routed_to=manager): lớp người cho phép, ngoài "
+                               "danh sách không-bao-giờ-tự-động, không phải approval của run điều phối viên, không bao giờ `always`, kèm lý do (audit manager:<agent>)",
     "system.job": "tạm dừng/bật lại/khởi động lại job launchd/Task Scheduler của hệ thống NGƯỜI đã đăng ký, job không bị khoá (đảo ngược được; trần/giờ)",
     # Lịch chạy tự động (schedules/service.manager_check, chạy ở cả 2 lớp): chỉ lịch do điều phối viên tạo; lịch của người = chỉ đọc
     "schedule.create": "tạo lịch theo yêu cầu người (≤ schedules.manager_max_active đang bật, khoảng ≥ schedules.min_interval_s, budget ≤ config_bounds, "

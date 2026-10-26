@@ -773,6 +773,18 @@ MIGRATIONS: list[str] = [
     # dấu) + FTS5 `session_fts` (tokenizer chọn LÚC CHẠY: trigram nếu SQLite hỗ trợ, không thì unicode61 remove_diacritics 2) + trigger
     # đồng bộ, backfill từ runs/events/manager_messages hiện có. Là HÀM (không phải SQL tĩnh) vì cần dò tokenizer + che/gấp bằng Python.
     "session_search.migrate_v17",
+    # v18 — hồ sơ phê duyệt (docs/dev-notes/approval-profiles.md): approval giao điều phối viên (`routed_to` manager|human|NULL = cũ,
+    # hợp đồng với web/chat), lúc giao/chuyển người + ghi chú, đích của verdict (kiểm lại ranh giới khi điều phối viên quyết), hành vi
+    # hết giờ giữ (`timeout_action`: NULL = wait/Q-04, `deny_and_continue` = agent đã nhận từ chối và chạy tiếp, approval vẫn mở).
+    """
+    ALTER TABLE approval_requests ADD COLUMN routed_to TEXT;
+    ALTER TABLE approval_requests ADD COLUMN delegated_at TEXT;
+    ALTER TABLE approval_requests ADD COLUMN escalated_at TEXT;
+    ALTER TABLE approval_requests ADD COLUMN escalation_note TEXT;
+    ALTER TABLE approval_requests ADD COLUMN verdict_targets TEXT;
+    ALTER TABLE approval_requests ADD COLUMN timeout_action TEXT;
+    CREATE INDEX IF NOT EXISTS approvals_routed ON approval_requests(routed_to, status);
+    """,
 ]
 
 JSON_COLS = {

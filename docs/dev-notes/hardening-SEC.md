@@ -291,6 +291,10 @@ công khai trỏ nội bộ chỉ bị chặn với run manager và metadata.
   tra ở `classify()` qua `GuardContext.always_allow` — chỉ hạ `uncertain` đủ điều kiện (luật trùng fingerprint của lệnh destructive vẫn
   không có tác dụng). Gỡ: `cfharness guard always rm <aa_id>` = `guard.protect.rm {id: aa_…}` (HUMAN_ONLY sẵn có; luật bị đánh dấu
   `disabled`, không xoá cứng). Xem: `cfharness guard always list` / `guard.policy.always_allow`. CLI từ Bash agent → forbidden.
+  Thêm 2026-10-26 (`approval-profiles.md`): kind `mcp_tool` = agent (bắt buộc) + ĐÚNG tên `mcp__<server>__<tool>`, CHỈ cho approval mà
+  verdict do annotations của server (`mcp_destructive_hint`, `mcp_unknown_tool`, `mcp_untrusted_write`) — ngoại lệ hẹp của "destructive
+  → không always": tên-xoá, tài nguyên bảo vệ, `require_approval` vẫn không bao giờ. `always_offer.confirm` = giá trị phải nhắc lại
+  (fingerprint | domain | tên tool). Điều phối viên không bao giờ tạo luật always (`approval.manager_decide` từ chối `always`).
 - Dây nút TUI/web/Telegram cho `always`: ĐÃ LÀM. Điều kiện chỉ ở daemon: `GuardService.always_offer(row)` (gọi chung `_always_spec`
   với `always_prepare`) → field `always_offer` `{kind, agent_id, tool, fingerprint|domain, summary}` | None trên `approval.list|get` và
   `tui.snapshot`; client chỉ hiện nút khi khác None, bấm vẫn qua `approval.approve{always:true}` (kiểm lại). Host `web_domain` phải là

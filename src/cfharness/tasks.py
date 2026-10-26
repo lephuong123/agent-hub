@@ -148,6 +148,44 @@ class TaskService:
         return {"id": tid, "title": t["title"] if t else None, "status": t["status"] if t else None}
 
     # ------------------------------------------------------------------ tạo
+    MAX_EXTRA_WRITE_ROOTS = 5
+
+    def _extra_write_roots(self, ws: dict[str, Any]) -> list[str]:
+        """`workspace.extra_write_roots` (hồ sơ phê duyệt): thư mục NGOÀI repo mà run của task được ghi không cần duyệt (vd git worktree
+        của ticket ở `~/Workspace/_wt/<tên>`). Mỗi thư mục: tuyệt đối, nằm TRONG workspace.allowed_roots (không phải chính gốc đó),
+        không phải/không chứa vùng bảo vệ (validate_workspace), có thể chưa tồn tại (agent tạo worktree trong run)."""
+        from pathlib import Path
+
+        from .workspace import validate_workspace
+
+        raw = ws.get("extra_write_roots")
+        if raw in (None, []):
+            return []
+        if ws.get("kind") not in ("dir", "worktree"):
+            raise HubError("extra_write_roots chỉ dùng với workspace dir|worktree")
+        if not isinstance(raw, list) or not all(isinstance(x, str) and x.strip() for x in raw) or len(raw) > self.MAX_EXTRA_WRITE_ROOTS:
+            raise HubError(f"extra_write_roots phải là danh sách ≤ {self.MAX_EXTRA_WRITE_ROOTS} đường dẫn tuyệt đối")
+        roots = []
+        for r in self.hub.config.get("workspace.allowed_roots") or []:
+            try:
+                roots.append(Path(str(r)).expanduser().resolve())
+            except (OSError, RuntimeError):
+                continue
+        out: list[str] = []
+        for x in raw:
+            p = Path(x.strip()).expanduser()
+            if not p.is_absolute():
+                raise HubError(f"extra_write_roots: '{x}' phải là đường dẫn tuyệt đối")
+            try:
+                rp = p.resolve()
+            except (OSError, RuntimeError):
+                raise HubError(f"extra_write_roots: đường dẫn không hợp lệ {x!r}") from None
+            if any(rp == r or r.is_relative_to(rp) for r in roots):
+                raise HubError(f"extra_write_roots: '{rp}' là/chứa cả một gốc workspace — quá rộng, chỉ định thư mục cụ thể (vd worktree)")
+            validate_workspace(self.hub, {"kind": "dir", "path": str(rp)}, "extra_write_roots")
+            out.append(str(rp))
+        return list(dict.fromkeys(out))
+
     def create(self, data: dict[str, Any], *, created_by: str = "human") -> dict[str, Any]:
         key = data.get("idempotency_key")
         if key:
@@ -180,9 +218,24 @@ class TaskService:
         if ws is None and team is not None:
             ws = self.hub.teams.policies(team).workspace
         warnings: list[str] = []
+        if ws and data.get("extra_write_roots") is not None:
+            ws = {**ws, "extra_write_roots": data["extra_write_roots"]}
         if ws:
             if ws.get("kind") not in WORKSPACE_KINDS:
                 raise HubError("workspace.kind phải là dir|scratch|worktree")
+            if ws.get("kind") == "worktree" and ws.get("path"):
+                # worktree của repo `path` (claude --worktree tạo trong repo) — repo phải nằm trong gốc người cho phép
+                from pathlib import Path
+
+                from .workspace import validate_workspace
+
+                wp = Path(str(ws["path"])).expanduser()
+                if not wp.is_dir():
+                    raise HubError(f"workspace worktree: repo không tồn tại: {ws.get('path')}")
+                validate_workspace(self.hub, {"kind": "dir", "path": str(wp)}, "repo của workspace worktree")
+                ws = {**ws, "path": str(wp.resolve())}
+            if ws.get("extra_write_roots") is not None:
+                ws = {**ws, "extra_write_roots": self._extra_write_roots(ws)}
             if ws.get("kind") == "dir":
                 from pathlib import Path
 
