@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Cài MCP {{ entry.title }}{% endblock %}
+{% macro fld(f) -%}
+{% set key = f.fkey %}
+<label>{{ f.name }}{% if f.required %} <span class="danger-t">*</span>{% endif %}{% if f.secret %} <span class="pill warn">bí mật → secret store</span>{% endif %}
+  {% if f.secret %}<input type="password" name="{{ key }}" autocomplete="off" {{ 'required' if f.required }} placeholder="{{ 'giá trị hoặc ${TÊN_SECRET} đã có' }}">
+  {% else %}<input name="{{ key }}" value="{{ v.get(key, f.default or '') }}" {{ 'required' if f.required }}>{% endif %}
+  {% if f.description %}<span class="muted xs">{{ f.description }}</span>{% endif %}</label>
+{%- endmacro %}
+{% block content %}
+<nav class="crumbs"><a href="/mcp">MCP</a> › <a href="/mcp/browse">Danh mục</a> › <span>{{ entry.title }}</span></nav>
+<div class="page-head"><div class="ph-title"><h1>Cài {{ entry.title }}</h1><span class="muted small">{{ entry.name }}{% if entry.version %} · v{{ entry.version }}{% endif %}</span></div></div>
+<section class="card">
+  <p>{{ entry.description }}</p>
+  {% if entry.repository %}<p class="small"><a href="{{ entry.repository }}" rel="noopener noreferrer">{{ entry.repository }}</a></p>{% endif %}
+  {% if options|length > 1 %}<div class="row gap mcp-opts" role="tablist">{% for o in options %}
+    <a class="btn sm {{ 'primary' if opt and o.id == opt.id else 'ghost' }}" href="/mcp/browse/install?{{ {'name': entry.name, 'opt': o.id}|urlencode }}">{{ o.label }}</a>{% endfor %}</div>{% endif %}
+</section>
+
+{% if not opt %}
+<section class="card">{{ m.empty("Server này không có cách cài tự động được hỗ trợ (chỉ remote http/sse, gói npm, gói PyPI). Thêm tay ở trang MCP.", "plug") }}</section>
+{% else %}
+{% if opt.needs_oauth %}
+<section class="card attention" id="oauth">
+  <h2>{{ m.icon('shield') }} Cần đăng nhập (OAuth)</h2>
+  <p class="small">Server này yêu cầu đăng nhập OAuth (trả 401 khi chưa có token). Hub <b>chưa hỗ trợ</b> đăng nhập OAuth — tính năng đang được làm.
+    Bạn vẫn có thể thêm server, nhưng kiểm tra kết nối sẽ báo lỗi 401 cho tới khi đăng nhập được.</p>
+  <button class="btn" type="button" disabled title="Sắp có">Đăng nhập (sắp có)</button>
+</section>
+{% endif %}
+<section class="card">
+  <h2>Cấu hình</h2>
+  {% if error %}<p class="danger-t" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="/mcp/browse/install" class="form" data-confirm="Cài MCP server này? Hub sẽ CHẠY NGAY để kiểm tra, ngoài sandbox, dưới quyền của bạn:
+{{ (opt.command ~ ' ' ~ opt.args|join(' ')) if opt.kind != 'remote' else opt.url }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="reg_name" value="{{ entry.name }}"><input type="hidden" name="opt" value="{{ opt.id }}">
+    <label>Tên trong hub <input name="name" required maxlength="63" value="{{ v.get('name', suggested) }}" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,62}"></label>
+    {% if opt.kind == 'remote' %}
+      <label>URL ({{ opt.transport }}) <input name="url" value="{{ v.get('url', opt.url) }}" required></label>
+      {% for var in opt.variables %}{{ fld(var) }}{% endfor %}
+      {% for h in opt.headers %}{{ fld(h) }}{% endfor %}
+      {% if opt.headers|selectattr('secret')|list %}<p class="muted xs">Header bí mật: nhập đúng giá trị header (vd <code>Bearer ghp_…</code>); hub lưu vào secret store, cấu hình chỉ giữ <code>${TÊN}</code>.</p>{% endif %}
+    {% else %}
+      <label>Lệnh chạy (stdio) <input name="command" value="{{ v.get('command', opt.command ~ ' ' ~ opt.args|join(' ')) }}" required></label>
+      {% for a in opt.arg_fields %}{{ fld(a) }}{% endfor %}
+      {% for e in opt.env %}{{ fld(e) }}{% endfor %}
+    {% endif %}
+    <label>Mô tả <input name="description" value="{{ v.get('description', (entry.description or '')[:300]) }}"></label>
+    <label class="check"><input type="checkbox" name="trust" value="trusted"{{ ' checked' if v.get('trust') == 'trusted' }}> Tin cậy (tool ghi chạy không cần duyệt; tool xoá vẫn luôn cần duyệt) — mặc định: cần duyệt</label>
+    <label class="check"><input type="checkbox" name="overwrite_secrets" value="1"> Ghi đè secret đã có cùng tên</label>
+    <div class="row end gap"><a class="btn ghost" href="/mcp/browse">Huỷ</a><button class="btn primary" type="submit">Cài &amp; kiểm tra</button></div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

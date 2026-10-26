@@ -1,22 +1,108 @@
 {% extends "base.html" %}
 {% import "_macros.html" as m with context %}
 {% block title %}MCP {{ s.name }}{% endblock %}
+{% macro top(op, label, tool, cls="btn sm", confirm=None) -%}
+<form method="post" action="/mcp/{{ s.name }}/tool" class="inline"{% if confirm %} data-confirm="{{ confirm }}"{% endif %}>
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="op" value="{{ op }}"><input type="hidden" name="tool" value="{{ tool }}">
+<button type="submit" class="{{ cls }}">{{ label }}</button></form>
+{%- endmacro %}
+{% macro tri(name, cur) -%}
+<select name="{{ name }}"><option value=""{{ ' selected' if cur is none }}>theo server</option><option value="true"{{ ' selected' if cur == true }}>có</option><option value="false"{{ ' selected' if cur == false }}>không</option></select>
+{%- endmacro %}
 {% block content %}
 <nav class="crumbs"><a href="/mcp">MCP</a> › <span>{{ s.name }}</span></nav>
-<div class="page-head"><h1>{{ s.name }}</h1>{{ m.act("mcp_probe", "Kiểm tra kết nối", {"name": s.name}, "btn") }}</div>
+<div class="page-head"><h1>{{ s.name }}{% if s.deleted_at %} <span class="pill muted">đã xoá</span>{% endif %}</h1>
+  <div class="row gap">{{ m.act("mcp_probe", "Kiểm tra kết nối", {"name": s.name}, "btn", ic="refresh") }}<a class="btn ghost" href="#edit">{{ m.icon('edit') }}<span>Sửa</span></a></div></div>
+
+{% if blocked_suspicious %}
+<section class="card attention" id="suspicious">
+  <h2>{{ m.icon('alert') }} Tool có mô tả đáng ngờ ({{ blocked_suspicious|length }})</h2>
+  <p class="small">Mô tả của các tool này có dấu hiệu chèn lệnh vào prompt (prompt injection). Hub <b>chặn mặc định</b> — agent không thấy và không gọi được
+    cho tới khi bạn cho phép rõ ràng từng tool trong bảng bên dưới.</p>
+  <ul class="small">{% for r in blocked_suspicious %}<li><code>{{ r.name }}</code> — <span class="danger-t">{{ r.suspicious|join('; ') }}</span></li>{% endfor %}</ul>
+</section>
+{% endif %}
+
 <section class="card">
   <dl class="kv cols">
-    <div><dt>Kiểu</dt><dd>{{ s.transport }}</dd></div><div><dt>Tin cậy</dt><dd>{{ s.trust }}</dd></div>
-    <div><dt>Nguồn</dt><dd>{{ s.source }}</dd></div><div><dt>Agent dùng</dt><dd>{{ (s.agents or [])|join(', ') or '—' }}</dd></div>
+    <div><dt>Kiểu</dt><dd>{{ s.transport }}</dd></div>
+    <div><dt>Tin cậy</dt><dd><span class="pill {{ 'ok' if s.trust == 'trusted' else 'muted' }}">{{ 'tin cậy' if s.trust == 'trusted' else 'cần duyệt' }}</span></dd></div>
+    <div><dt>Nguồn</dt><dd>{{ s.source }}</dd></div>
+    <div><dt>Agent dùng</dt><dd>{% for a in s.agents or [] %}<a class="chip" href="/mcp/agent/{{ a }}" title="Xem cấu hình MCP của agent {{ a }}">{{ a }}</a>{% else %}—{% endfor %}</dd></div>
+    <div><dt>Kiểm gần nhất</dt><dd>{% if s.last_probe_at %}{{ m.rel(s.last_probe_at) }}{% else %}chưa{% endif %}</dd></div>
+    {% if (s.config or {}).description %}<div class="span2"><dt>Mô tả</dt><dd>{{ s.config.description }}</dd></div>{% endif %}
     {% if s.missing_secrets %}<div class="span2"><dt>Thiếu secret</dt><dd class="danger-t">{{ s.missing_secrets|join(', ') }} — đặt ở <a href="/settings#secrets">Cài đặt</a></dd></div>{% endif %}
     {% if s.probe_error %}<div class="span2"><dt>Lỗi kiểm</dt><dd class="danger-t">{{ s.probe_error }}</dd></div>{% endif %}
   </dl>
-  <h3>Cấu hình</h3><pre>{{ s.config|j }}</pre>
-  <h3>Tool ({{ (s.annotations_cache or {})|length }})</h3>
-  <table class="tbl stack"><thead><tr><th>Tool</th><th>Chỉ đọc</th><th>Phá huỷ</th><th>Mô tả</th></tr></thead><tbody>
-  {% for name, t in (s.annotations_cache or {}).items() %}<tr><td data-label="Tool"><code>{{ name }}</code></td>
-    <td data-label="Chỉ đọc">{{ 'có' if (t.annotations or t).readOnlyHint }}</td><td data-label="Phá huỷ">{{ 'có' if (t.annotations or t).destructiveHint }}</td>
-    <td data-label="Mô tả" class="small">{{ (t.description or '')|first(140) }}</td></tr>{% endfor %}
-  </tbody></table>
 </section>
+
+<section class="card" id="tools">
+  <h2>Tool ({{ rows|length }})</h2>
+  {% if not rows %}{{ m.empty("Chưa có danh sách tool — bấm 'Kiểm tra kết nối' để hub đọc tools/list (không gọi tool nào).", "plug") }}{% else %}
+  <p class="muted small">Tự chạy = không hỏi (chỉ đọc hoặc server tin cậy). Luôn hỏi duyệt = thao tác phá huỷ hoặc nằm trong require_approval.
+    Ghi đè annotations là của bạn (như <code>cfharness mcp annotate</code>); luật tên-xoá, tài nguyên bảo vệ và require_approval vẫn áp dụng.</p>
+  <table class="tbl stack mcp-tools"><thead><tr><th>Tool</th><th>Trạng thái</th><th>Chỉ đọc</th><th>Phá huỷ</th><th>Mô tả</th><th></th></tr></thead><tbody>
+  {% for r in rows %}<tr class="{{ 'archived' if r.state == 'blocked' }}" id="tool-{{ r.name }}">
+    <td data-label="Tool"><code>{{ r.name }}</code>{% if r.suspicious %} <span class="pill danger strong" title="{{ r.suspicious|join('; ') }}">{{ m.icon('alert') }}đáng ngờ</span>{% endif %}</td>
+    <td data-label="Trạng thái"><span class="pill {{ r.tone }}">{{ r.label }}</span><div class="muted xs">{{ r.why }}</div></td>
+    <td data-label="Chỉ đọc">{{ 'có' if r.eff.readOnlyHint else ('không' if r.eff.readOnlyHint == false else '—') }}{% if 'readOnlyHint' in r.override_any %} <span class="pill info" title="server khai: {{ r.server_ro }}">ghi đè</span>{% endif %}</td>
+    <td data-label="Phá huỷ">{{ 'có' if r.eff.destructiveHint else ('không' if r.eff.destructiveHint == false else '—') }}{% if 'destructiveHint' in r.override_any %} <span class="pill info" title="server khai: {{ r.server_de }}">ghi đè</span>{% endif %}</td>
+    <td data-label="Mô tả" class="small mcp-desc">{{ (r.description or '')|first(160) }}</td>
+    <td class="actions">
+      {% if r.excluded_exact %}{{ top("unblock", "Bỏ chặn", r.name, confirm="Bỏ chặn tool " ~ r.name ~ "? Agent sẽ gọi được tool này.") }}
+      {% elif r.suspicious and not r.explicit %}{{ top("allow", "Cho phép", r.name, "btn sm danger", confirm="Cho phép tool ĐÁNG NGỜ " ~ r.name ~ "?\nMô tả có dấu hiệu chèn lệnh: " ~ r.suspicious|join('; ') ~ "\nAgent sẽ thấy và gọi được tool này.") }}
+      {% elif not r.excluded %}{{ top("block", "Chặn", r.name, "btn sm ghost") }}{% endif %}
+      {% if r.explicit %}{{ top("unallow", "Bỏ cho phép rõ", r.name, "btn sm ghost") }}{% endif %}
+      {% if r.approval_exact %}{{ top("approval_off", "Bỏ luôn hỏi duyệt", r.name, "btn sm ghost", confirm="Bỏ 'luôn hỏi duyệt' cho " ~ r.name ~ "?") }}
+      {% elif not r.approval %}{{ top("approval_on", "Luôn hỏi duyệt", r.name, "btn sm ghost") }}{% endif %}
+      <details class="menu mcp-ann"><summary class="btn sm ghost">Annotations</summary><div class="menu-pop">
+        <form method="post" action="/mcp/{{ s.name }}/tool" class="form" data-confirm="Ghi đè annotations cho tool {{ r.name }}? Chọn 'không phá huỷ' / 'chỉ đọc' sẽ bỏ hỏi duyệt do cờ của server.">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="op" value="annotate"><input type="hidden" name="tool" value="{{ r.name }}">
+          <label>Chỉ đọc (readOnlyHint) {{ tri("ro", r.override.get("readOnlyHint")) }}</label>
+          <label>Phá huỷ (destructiveHint) {{ tri("de", r.override.get("destructiveHint")) }}</label>
+          <div class="row end"><button class="btn sm primary" type="submit">Lưu</button></div>
+        </form></div></details>
+    </td>
+  </tr>{% endfor %}
+  </tbody></table>{% endif %}
+  <details class="mcp-adv"><summary>Ghi đè annotations theo glob (vd <code>browser_*</code>){% if annotations %} — đang có {{ annotations|length }}{% endif %}</summary>
+    {% if annotations %}<ul class="small">{% for pat, ov in annotations.items() %}<li><code>{{ pat }}</code>: {% for k, v in ov.items() %}{{ k }}={{ 'true' if v else 'false' }}{{ ', ' if not loop.last }}{% endfor %}
+      {{ top("annotate", "Bỏ", pat, "btn sm ghost") }}</li>{% endfor %}</ul>{% endif %}
+    <form method="post" action="/mcp/{{ s.name }}/tool" class="form" data-confirm="Ghi đè annotations cho mọi tool khớp mẫu này?">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="op" value="annotate">
+      <div class="grid2"><label>Tên tool hoặc glob <input name="tool" required maxlength="200" placeholder="browser_*"></label>
+        <div class="grid2"><label>Chỉ đọc {{ tri("ro", none) }}</label><label>Phá huỷ {{ tri("de", none) }}</label></div></div>
+      <div class="row end"><button class="btn sm" type="submit">Lưu ghi đè</button></div>
+    </form>
+  </details>
+</section>
+
+{% if not s.deleted_at %}
+<section class="card" id="edit">
+  <h2>Sửa cấu hình</h2>
+  <form method="post" action="/do/mcp_edit" class="form" data-confirm="Lưu cấu hình MCP server {{ s.name }}? Server MCP chạy NGOÀI sandbox của agent, dưới quyền của bạn.">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/mcp/{{ s.name }}#edit">
+    <input type="hidden" name="name" value="{{ s.name }}">
+    <input type="hidden" name="env_keys_old" value="{{ f.env_keys_old }}"><input type="hidden" name="header_keys_old" value="{{ f.header_keys_old }}">
+    <label>Kiểu kết nối <select name="transport">{% for t in ["stdio", "http", "sse"] %}<option value="{{ t }}"{{ ' selected' if f.transport == t }}>{{ t }}</option>{% endfor %}</select></label>
+    <label>Lệnh chạy (stdio) <input name="command" value="{{ f.command }}" placeholder="npx -y @playwright/mcp@0.0.82"></label>
+    <label>Biến môi trường (stdio; mỗi dòng TÊN=giá trị; <code>${SECRET}</code> lấy từ secret store)
+      <textarea name="env" rows="3" placeholder="GITHUB_TOKEN=${GITHUB_TOKEN}">{{ f.env }}</textarea></label>
+    <label>URL (http/sse) <input name="url" value="{{ f.url }}" placeholder="https://…/mcp"></label>
+    <label>Header (http/sse; mỗi dòng Tên: giá trị) <textarea name="headers" rows="2" placeholder="Authorization: Bearer ${MY_TOKEN}">{{ f.headers }}</textarea></label>
+    <p class="muted xs">Giá trị trông như secret (token, khoá…) được tự chuyển vào secret store và cấu hình chỉ giữ <code>${TÊN}</code>.
+      {% if masked %}<b>••••••</b> = giá trị đang được che — giữ nguyên nếu không sửa.{% endif %} Xoá một dòng = xoá biến/header đó.</p>
+    <label>Mô tả <input name="description" value="{{ f.description }}"></label>
+    <div class="grid2">
+      <label>Tool được dùng — include (glob, mỗi dòng/phẩy; trống = mọi tool) <textarea name="include" rows="2">{{ f.include }}</textarea></label>
+      <label>Tool bị chặn — exclude <textarea name="exclude" rows="2">{{ f.exclude }}</textarea></label>
+      <label>Luôn hỏi duyệt — require_approval <textarea name="require_approval" rows="2">{{ f.require_approval }}</textarea></label>
+      <label>Timeout kết nối (giây) <input name="timeout_s" value="{{ f.timeout_s }}" inputmode="decimal"></label>
+    </div>
+    <label class="check"><input type="checkbox" name="trust" value="trusted"{{ ' checked' if f.trust == 'trusted' }}> Tin cậy (tool ghi chạy không cần duyệt; tool xoá vẫn luôn cần duyệt)</label>
+    <label class="check"><input type="checkbox" name="probe" value="1" checked> Kiểm tra kết nối sau khi lưu</label>
+    <div class="row end"><button class="btn primary" type="submit">Lưu</button></div>
+  </form>
+</section>
+{% endif %}
 {% endblock %}

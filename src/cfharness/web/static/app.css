@@ -812,3 +812,15 @@ html.mgr-info-closed .mgr-side { display: none; }
   .hc { grid-template-columns: 18px 1fr; } .hc-d { grid-column: 2; }
   .udiff .dl { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
+
+/* MCP mở rộng (web/mcp_pages.py): danh mục, bảng tool, form cài */
+.mcp-search { margin-bottom: var(--s4); flex-wrap: nowrap; }
+.mcp-search input { flex: 1; min-width: 0; }
+.mcp-card .acard-doing { min-height: 4.4em; -webkit-line-clamp: 3; }
+.mcp-tools .actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mcp-tools .mcp-desc { overflow-wrap: anywhere; }
+.mcp-ann .menu-pop { min-width: 240px; padding: 10px; }
+.mcp-adv { margin-top: var(--s3); }
+.mcp-adv > summary { cursor: pointer; color: var(--text-2); font-size: var(--fs-sm); }
+.mcp-opts { flex-wrap: wrap; margin-top: var(--s2); }
+.mcp-ann .menu-pop .btn.primary { width: auto; background: var(--accent); color: var(--on-accent); justify-content: center; }

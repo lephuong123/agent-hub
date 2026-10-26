@@ -2,8 +2,8 @@
 {% import "_macros.html" as m with context %}
 {% block title %}MCP{% endblock %}
 {% block content %}
-<div class="page-head"><h1>MCP server</h1></div>
-<p class="muted">Kho công cụ MCP của hub. Gán cho agent bằng ô tích ở trang sửa agent.</p>
+<div class="page-head"><h1>MCP server</h1><a class="btn primary" href="/mcp/browse">{{ m.icon('plus') }}<span>Duyệt danh mục</span></a></div>
+<p class="muted">Kho công cụ MCP của hub. Gán cho agent bằng ô tích ở trang sửa agent. Tìm & cài server có sẵn ở <a href="/mcp/browse">danh mục MCP</a>.</p>
 <section class="card">
   {% if not servers %}{{ m.empty("Chưa có MCP server nào. Thêm mới hoặc nhập từ Claude Code bên dưới.") }}{% else %}
   <table class="tbl stack"><thead><tr><th>Tên</th><th>Kiểu</th><th>Tin cậy</th><th>Tool</th><th>Agent dùng</th><th>Kiểm gần nhất</th><th></th></tr></thead><tbody>

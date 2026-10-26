@@ -200,6 +200,26 @@ class IntegrationRpc:
             missing += [f"{name}:${{{s}}}" for s in self.hub.secrets.missing(servers[name])]
         return {"mcpServers": servers, "tool_rules": agent_mcp_tool_rules(row), "problems": missing}
 
+    async def mcp_catalog(self, p: dict[str, Any]) -> dict[str, Any]:
+        """Danh mục MCP Registry (CHỈ ĐỌC, không chạy gì): `{search?, limit?, cursor?, offline?}` → `{servers, next_cursor, source, error?}`;
+        `{name, check_auth?}` → `{server: mục | None, options: [...]}` (phương án cài; `check_auth` gọi `initialize` không token
+        tới remote để gắn nhãn cần OAuth). Mạng chạy trong thread, có timeout + cache + danh sách tuyển chọn khi offline."""
+        from ..mcp_client import catalog
+
+        cache_dir = self.hub.paths.home / "cache" / "mcp_catalog"
+        offline = bool(p.get("offline"))
+        if p.get("name"):
+            entry = await asyncio.to_thread(catalog.get, str(p["name"]), cache_dir=cache_dir, offline=offline)
+            if entry is None:
+                raise NotFound(f"không có '{p['name']}' trong MCP Registry")
+            opts = catalog.install_options(entry)
+            if p.get("check_auth") and not offline:
+                for o in opts:
+                    o["needs_oauth"] = await asyncio.to_thread(catalog.check_oauth, o)
+            return {"server": entry, "options": opts, "suggested_name": catalog.suggest_name(entry["name"])}
+        return await asyncio.to_thread(catalog.search, str(p.get("search") or ""), limit=int(p.get("limit") or 20), cursor=p.get("cursor"),
+                                       cache_dir=cache_dir, offline=offline)
+
     def _idem_get(self, scope: str, key: str | None) -> dict[str, Any] | None:
         if not key:
             return None
@@ -420,6 +440,7 @@ class IntegrationRpc:
             "mcp.import": self.mcp_import,
             "mcp.assign": self.mcp_assign,
             "mcp.agent_config": self.mcp_agent_config,
+            "mcp.catalog": self.mcp_catalog,
             "mcp.run": self.mcp_run,
             "mcp.agent_create": self.mcp_agent_create,
             "mcp.run_status": self.mcp_run_status,

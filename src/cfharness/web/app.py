@@ -722,11 +722,6 @@ async def mcp_page(request: Request) -> Response:
     return await render(request, "mcp.html", {"nav": "mcp", "servers": servers, "used": used})
 
 
-async def mcp_show(request: Request) -> Response:
-    s = await rpc(request, "mcp.show", {"name": request.path_params["name"]})
-    return await render(request, "mcp_show.html", {"nav": "mcp", "s": s})
-
-
 async def costs_page(request: Request) -> Response:
     q = request.query_params
     days = int(q.get("days") or 7)
@@ -1218,6 +1213,12 @@ def _extra_routes() -> list[Any]:
     return _x.routes()
 
 
+def _mcp_routes() -> list[Any]:
+    from .mcp_pages import routes as _r
+
+    return _r()
+
+
 def make_templates() -> Jinja2Templates:
     t = Jinja2Templates(directory=str(HERE / "templates"))
     env = t.env
@@ -1257,7 +1258,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/learnings", learnings_page),
         Route("/learnings/{id}", ledger_entry),
         Route("/mcp", mcp_page),
-        Route("/mcp/{name}", mcp_show),
+        *_mcp_routes(),  # /mcp/browse, /mcp/agent/{id}, /mcp/{name} (+ /tool) — web/mcp_pages.py
         Route("/costs", costs_page),
         Route("/audit", audit_page),
         Route("/settings", settings_page),
@@ -1278,5 +1279,10 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
 from . import manager as _mgr  # noqa: E402
 
 _mgr.register_actions(ACTIONS, Action, _req)
+
+# Trang MCP mở rộng (sửa server, tool, danh mục): thao tác `mcp_edit`
+from . import mcp_pages as _mcpp  # noqa: E402
+
+_mcpp.register_actions(ACTIONS, Action, _req)
 
 __all__ = ["create_app", "ACTIONS", "agent_changes", "replay_items", "WebState", "urlencode"]
