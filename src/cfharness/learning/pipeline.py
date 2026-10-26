@@ -604,8 +604,8 @@ class Pipeline:
             plan = self.plan(prop)
         except (KnowledgeError, NotFound) as e:
             reason = getattr(e, "reason", "not_found")
-            if reason == "not_found" and prop["status"].startswith("deferred_"):
-                # đích đã biến mất trong lúc hoãn (vd skill bị rollback) → proposal hết thời, không phải vi phạm guard:
+            if reason == "not_found" and prop["status"] != "suggested":
+                # đích đã biến mất trong lúc hoãn hoặc bị thay (vd skill bị rollback; cả khi --revive) → proposal hết thời, không phải vi phạm guard:
                 # bỏ lặng lẽ, không tốn suất hạn mức, không phát guard.blocked
                 self._update(prop["id"], status="superseded", block_reason="target_gone", block_detail=e.message[:1000])
                 return self._result(prop, "superseded", reason=f"đích không còn: {e.message}")

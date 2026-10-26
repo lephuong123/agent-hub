@@ -335,3 +335,16 @@ def test_counter_review_waits_while_quota_full(hub):
     assert hub.learning.reviews.tick() == []
     j = hub.learning.reviews.get(job["id"])
     assert j["status"] == "queued" and "chờ suất học" in j["reason"] and j["not_before"] > now_iso()
+
+
+def test_revived_patch_on_gone_skill_is_dropped_quietly(hub):
+    s = new_skill(hub, by="review")
+    P = hub.learning.pipeline
+    a = review_patch(hub, "1. Collect", "1. Gather")
+    review_patch(hub, "1. Collect", "1. Pick up")  # thay a
+    assert P.get(a["proposal_id"])["status"] == "superseded"
+    hub.learning.ledger.rollback(s["ledger_entry_id"], actor="user", reason="test")
+    hub.events.clear()
+    r = P.retry(a["proposal_id"], revive=True)
+    assert r["status"] == "superseded" and P.get(a["proposal_id"])["block_reason"] == "target_gone"
+    assert "guard.blocked" not in types(hub)
