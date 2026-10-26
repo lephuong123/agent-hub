@@ -96,6 +96,14 @@ def test_guard_blocks(hub):
     assert hub.learning.ledger.list("r1", target="memory") == []
 
 
+def test_negative_claim_needs_failure_reason(hub):
+    new_skill(hub)
+    r = review_patch(hub, "2. Write one line per item.\n", "2. Write one line per item.\n3. Merge only when CLEAN: `gh pr merge <n> --merge`. Never use `--admin`.\n")
+    assert r["status"] == "applied", r
+    r = review_patch(hub, "1. Collect the done items.", "1. Collect the done items. Never use the vb_tim tool, it is flaky.", run="r_rev2")
+    assert (r["status"], r["rule"]) == ("blocked", "negative_claim"), r
+
+
 def test_memory_limit_requires_consolidation(hub):
     hub.config.set("learning.limits.memory_chars", 300)
     P = hub.learning.pipeline
