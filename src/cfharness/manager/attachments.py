@@ -21,7 +21,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..oscompat import IS_WINDOWS
+from ..oscompat import IS_WINDOWS, no_window_kwargs
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -179,7 +179,7 @@ exit 0
 
 def _run(argv: list[str], timeout: float = CLIP_TIMEOUT_S, env: dict[str, str] | None = None) -> bytes | None:
     try:
-        r = subprocess.run(argv, capture_output=True, timeout=timeout, check=False, env=env, stdin=subprocess.DEVNULL)
+        r = subprocess.run(argv, capture_output=True, timeout=timeout, check=False, env=env, stdin=subprocess.DEVNULL, **no_window_kwargs())
     except (OSError, subprocess.TimeoutExpired, ValueError):
         return None
     return r.stdout if r.returncode == 0 and r.stdout else None
@@ -205,7 +205,7 @@ def _win_clipboard_image() -> bytes | None:
         env = dict(os.environ, CFHARNESS_CLIP_OUT=tmp)
         try:
             r = subprocess.run(_ps_argv(exe, _PS_IMAGE), capture_output=True, timeout=CLIP_TIMEOUT_S, check=False, env=env,
-                               stdin=subprocess.DEVNULL)
+                               stdin=subprocess.DEVNULL, **no_window_kwargs())
         except (OSError, subprocess.TimeoutExpired, ValueError):
             return None
         if r.returncode != 0:

@@ -23,12 +23,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..oscompat import IS_WINDOWS
+from ..oscompat import no_window_kwargs
 from .launchd import Runner
 
 # không ký tự điều khiển, không ký tự cấm trong tên task, không `..`; ký tự đầu là chữ/số/{ (tên task kiểu GUID)
 LABEL_RE = re.compile(r'^(?!.*\.\.)[A-Za-z0-9{][^\x00-\x1f"<>|*?:/]{0,250}$')
-_NO_WINDOW = 0x08000000
 # LastTaskResult "chưa chạy lần nào" / "đang chạy" / "đã sẵn sàng"… (SCHED_S_*) — không phải lỗi
 _NOT_ERROR = {0, 0x41300, 0x41301, 0x41302, 0x41303, 0x41304, 0x41305, 0x41306}
 _DAYS = ("CN", "2", "3", "4", "5", "6", "7")  # bitmask DaysOfWeek: bit0 = Chủ nhật
@@ -58,7 +57,7 @@ def default_runner(argv: list[str], timeout: float) -> tuple[int, str, str]:
     """Như `launchd.default_runner` nhưng đọc UTF-8 và không bật cửa sổ console."""
     try:
         cp = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
-                            stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW if IS_WINDOWS else 0)
+                            stdin=subprocess.DEVNULL, **no_window_kwargs())
     except subprocess.TimeoutExpired:
         return 124, "", f"hết giờ sau {timeout:g} s"
     except OSError as e:

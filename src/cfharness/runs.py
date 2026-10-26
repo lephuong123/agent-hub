@@ -438,7 +438,7 @@ class RunManager:
 
         settings, observe_events = add_observe_hooks(
             settings, run_id=run_id, socket_path=str(hub.paths.socket), hub_home=str(hub.paths.home),
-            python=str(guard_cfg.get("python") or sys.executable), cfg=claude_cfg.get("observe_hooks"),
+            python=str(guard_cfg.get("python") or sys.executable), cfg=claude_cfg.get("observe_hooks"), python_cmd=gr.bash_python(guard_cfg),
         )
         settings_path = rt_dir / "settings.json"
         _write_json_0600(settings_path, settings)

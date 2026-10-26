@@ -15,7 +15,8 @@
 - **Windows** (`docs/dev-notes/windows.md`, kiểm thật claude 2.1.303): luật quyền so khớp đường dẫn dạng POSIX (`C:\\Users\\x` →
   `//c/Users/x`, `rule_path`); hook chạy qua Git Bash (`MSYSTEM=MINGW64`) nên đường dẫn python dùng `/`; sandbox OS chưa có
   ("feature gate off") — `failIfUnavailable: true` làm CLI TỪ CHỐI chạy, nên trên Windows mặc định `false` (CLI cảnh báo và chạy
-  không sandbox) — `sandbox_supported()` cho doctor/status cảnh báo.
+  không sandbox) — `sandbox_supported()` cho doctor/status cảnh báo. Hook/MCP của run chạy bằng `pythonw` GUI (`child_python`)
+  → không cấp console, không bật cửa sổ Windows Terminal (windows.md §6).
 """
 
 from __future__ import annotations
@@ -36,6 +37,31 @@ FILE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
 def python_bin(cfg: dict[str, Any]) -> str:
     return str(cfg.get("python") or sys.executable)
+
+
+def child_python(cfg: dict[str, Any]) -> tuple[str, dict[str, str]]:
+    """(trình thông dịch, env thêm) cho tiến trình con của `claude` chạy mã hub: hook guard/quan sát, MCP `hub-guard`/`hub-self`.
+
+    Windows (docs/dev-notes/windows.md §6): `pythonw` GUI — không cấp console nên không bao giờ bật cửa sổ Windows Terminal,
+    kể cả khi cha không có console; venv của uv (pythonw của venv là bản console) → pythonw GỐC + `__PYVENV_LAUNCHER__` = python
+    của venv (spike: `-I` vẫn vào đúng venv, stdin/stdout qua pipe chạy, mã thoát giữ nguyên nên `|| exit 2` vẫn fail-closed).
+    `guard.python` do người đặt → dùng nguyên; không tìm được pythonw GUI hoặc POSIX → `python_bin` như cũ, env rỗng."""
+    if cfg.get("python") or not IS_WINDOWS:
+        return python_bin(cfg), {}
+    from ..systems.autostart import windows_gui_python
+
+    g = windows_gui_python(sys.executable, getattr(sys, "_base_executable", None) or sys.executable)
+    if not g:
+        return sys.executable, {}
+    return g[0], ({"__PYVENV_LAUNCHER__": g[1]} if g[1] else {})
+
+
+def bash_python(cfg: dict[str, Any]) -> str:
+    """Đầu lệnh hook (Claude Code chạy hook qua bash — Git Bash trên Windows): `[VAR=giá-trị ]'<python>'`, đã quote.
+    Windows: đường dẫn dùng `/` (trong Git Bash `\\` là ký tự thoát)."""
+    py, env = child_python(cfg)
+    pre = "".join(f"{k}={shlex.quote(sb_path(v))} " for k, v in env.items())
+    return pre + shlex.quote(sb_path(py))
 
 
 def sandbox_supported() -> bool:
@@ -76,8 +102,9 @@ def hook_timeouts(cfg: dict[str, Any], approval_timeout_s: float) -> tuple[int, 
 
 
 def hook_command(run_id: str, socket: Path, rpc_timeout: int, cfg: dict[str, Any]) -> str:
-    # Windows: CLI chạy hook qua Git Bash — `\` trong đường dẫn thành ký tự thoát, nên đổi sang `/` (python/Windows đều hiểu)
-    py = shlex.quote(sb_path(python_bin(cfg)))
+    # Windows: CLI chạy hook qua Git Bash — `\` trong đường dẫn thành ký tự thoát, nên đổi sang `/` (python/Windows đều hiểu);
+    # pythonw GUI (child_python) → hook không cấp console. pythonw không chạy được → bash 127 → `|| exit 2` vẫn chặn
+    py = bash_python(cfg)
     return f"{py} -I -m cfharness.guard.hook --run {shlex.quote(run_id)} --socket {shlex.quote(sb_path(socket))} --timeout {rpc_timeout} || exit 2"
 
 
@@ -459,11 +486,12 @@ def check_extra_args(extra: list[str], workspace_kind: str, *, guard_on: bool = 
 
 def guard_mcp_entry(run_id: str, socket: Path, hub_home: Path, guard_cfg: dict[str, Any], mcp_tool_timeout_ms: int) -> dict[str, Any]:
     rpc_t = max(30, int(mcp_tool_timeout_ms / 1000) - 30)
+    py, py_env = child_python(guard_cfg)
     return {
         "type": "stdio",
-        "command": python_bin(guard_cfg),
+        "command": py,
         "args": ["-I", "-m", "cfharness.guard.mcp_guard", "--run", run_id, "--socket", str(socket), "--timeout", str(rpc_t)],
-        "env": {"CFHARNESS_HOME": str(hub_home)},
+        "env": {**py_env, "CFHARNESS_HOME": str(hub_home)},
     }
 
 

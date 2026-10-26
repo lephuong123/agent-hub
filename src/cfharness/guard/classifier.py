@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .. import names as _names
-from ..oscompat import IS_WINDOWS
+from ..oscompat import IS_WINDOWS, no_window_kwargs
 from . import shell
 from .policy import Policy, ProtectedResource, canon_path, fold_path
 
@@ -2594,7 +2594,7 @@ class BashAnalyzer:
             from ..workspace import GIT_ENV, GIT_SAFE_ARGS  # R2-4: probe git của guard chạy NGOÀI sandbox → tắt khoá chạy lệnh
 
             return subprocess.run(["git", *GIT_SAFE_ARGS, "-C", cwd, *args], capture_output=True, encoding="utf-8", errors="replace", timeout=3,
-                                  env={**os.environ, **GIT_ENV})  # git xuất UTF-8; Windows mặc định cp1252
+                                  env={**os.environ, **GIT_ENV}, **no_window_kwargs())  # git xuất UTF-8; Windows mặc định cp1252
         except (OSError, subprocess.TimeoutExpired):
             return None
 

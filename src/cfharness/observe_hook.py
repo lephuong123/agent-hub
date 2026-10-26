@@ -127,10 +127,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 # ---------------------------------------------------------------------------- settings.json (gọi từ RunManager)
-def add_observe_hooks(settings: dict, *, run_id: str, socket_path: str, hub_home: str, python: str, cfg: dict | None) -> tuple[dict, list[str]]:
+def add_observe_hooks(settings: dict, *, run_id: str, socket_path: str, hub_home: str, python: str, cfg: dict | None,
+                      python_cmd: str | None = None) -> tuple[dict, list[str]]:
     """Thêm entry hook quan sát vào settings của run. Trả (settings mới, tên event đã thêm — để đưa vào allowed_hooks).
 
-    Hàm RIÊNG (không sửa `guard/runtime.build_settings` của luồng SEC); entry PreToolUse của guard giữ nguyên."""
+    Hàm RIÊNG (không sửa `guard/runtime.build_settings` của luồng SEC); entry PreToolUse của guard giữ nguyên.
+    `python_cmd`: đầu lệnh đã quote (`guard.runtime.bash_python` — Windows: pythonw GUI, không cấp console); None → quote `python`."""
     import shlex
 
     cfg = cfg or {}
@@ -142,7 +144,7 @@ def add_observe_hooks(settings: dict, *, run_id: str, socket_path: str, hub_home
     s = dict(settings)
     hooks = dict(s.get("hooks") or {})
     for ev in events:
-        cmd = (f"{shlex.quote(python)} -I -m cfharness.observe_hook {ev} --run {shlex.quote(run_id)} --socket {shlex.quote(socket_path)} "
+        cmd = (f"{python_cmd or shlex.quote(python)} -I -m cfharness.observe_hook {ev} --run {shlex.quote(run_id)} --socket {shlex.quote(socket_path)} "
                f"--timeout {t:g} --home {shlex.quote(hub_home)} >/dev/null 2>&1 || true")
         entry: dict = {"hooks": [{"type": "command", "command": cmd, "timeout": cli_t}]}
         if ev == "PostToolUse":
