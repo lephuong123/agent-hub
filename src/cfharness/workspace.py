@@ -26,7 +26,7 @@ from typing import Any
 
 from .errors import Conflict, HubError
 from .guard.locks import RepoLocks
-from .oscompat import IS_WINDOWS
+from .oscompat import IS_WINDOWS, no_window_kwargs
 
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache", ".tox", "dist", "build"}
 GIT_ENV = {"LC_ALL": "C", "LANG": "C", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"}
@@ -112,7 +112,7 @@ def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
 def _git(cwd: str | Path, *args: str, check: bool = False, binary: bool = False) -> subprocess.CompletedProcess:
     env = {**os.environ, **GIT_ENV}
     return subprocess.run(["git", *GIT_SAFE_ARGS, "-C", str(cwd), *args], capture_output=True, timeout=60, env=env, check=check,
-                          encoding=None if binary else "utf-8", errors=None if binary else "replace")  # git xuất UTF-8; Windows mặc định cp1252
+                          encoding=None if binary else "utf-8", errors=None if binary else "replace", **no_window_kwargs())  # git xuất UTF-8; Windows mặc định cp1252
 
 
 def git_root(path: str | Path) -> str | None:

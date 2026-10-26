@@ -315,12 +315,14 @@ _out_lock = threading.Lock()
 
 
 def server_entry(run_id: str, socket: Path, hub_home: Path, role: str, guard_cfg: dict[str, Any] | None = None) -> dict[str, Any]:
-    py = str((guard_cfg or {}).get("python") or sys.executable)
+    from ..guard.runtime import child_python  # Windows: pythonw GUI — không cấp console (docs/dev-notes/windows.md §6)
+
+    py, py_env = child_python(guard_cfg or {})
     return {
         "type": "stdio",
         "command": py,
         "args": ["-I", "-m", "cfharness.mcp_server.hub_self", "--run", run_id, "--socket", str(socket), "--role", role],
-        "env": {"CFHARNESS_HOME": str(hub_home), "CFHARNESS_RUN_ID": run_id},
+        "env": {**py_env, "CFHARNESS_HOME": str(hub_home), "CFHARNESS_RUN_ID": run_id},
     }
 
 

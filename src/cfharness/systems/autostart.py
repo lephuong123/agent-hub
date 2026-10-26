@@ -106,13 +106,9 @@ class Autostart:
         """
         if self.os != "windows":
             return [self.python, "-m", "cfharness"]
-        p = Path(self.python)
-        w = p.with_name("pythonw.exe" if p.name.lower() == "python.exe" else p.stem + "w" + p.suffix)
-        if _is_gui_exe(w):
-            return [str(w), "-c", _win_boot(None)]
-        bw = Path(self.base_python).with_name("pythonw.exe")
-        if _is_gui_exe(bw):
-            return [str(bw), "-c", _win_boot(None if _same_dir(bw.parent, p.parent) else str(p))]
+        g = windows_gui_python(self.python, self.base_python)
+        if g:
+            return [g[0], "-c", _win_boot(g[1])]
         return [self.python, "-m", "cfharness"]
 
     def argv(self) -> list[str]:
@@ -411,6 +407,22 @@ def _win_boot(venv_python: str | None) -> str:
             "c=[sys.executable,'-m','cfharness',*sys.argv[1:]];"
             f"sys.exit(next(r for n in range({BOOT_RESTARTS + 1}) if (r:=subprocess.call(c))==0 or n=={BOOT_RESTARTS} "
             f"or time.sleep({BOOT_DELAY_S})))")
+
+
+def windows_gui_python(python: str, base_python: str) -> tuple[str, str | None] | None:
+    """Windows: `(pythonw GUI, python của venv cho __PYVENV_LAUNCHER__ hoặc None)` chạy được mã của venv `python` mà KHÔNG
+    cấp console; None nếu không tìm được tệp PE hệ con GUI. Thứ tự: pythonw cạnh `python` nếu là GUI (venv chuẩn của
+    CPython/virtualenv — tự biết venv) → `pythonw.exe` cạnh python GỐC (`base_python`), kèm `python` để đặt
+    `__PYVENV_LAUNCHER__` (venv của uv: `.venv\\Scripts\\pythonw.exe` là bản sao CONSOLE). Dùng chung cho dịch vụ tự khởi
+    động (`Autostart.launcher`) và lệnh hook/MCP của run (`guard.runtime.child_python`)."""
+    p = Path(python)
+    w = p.with_name("pythonw.exe" if p.name.lower() == "python.exe" else p.stem + "w" + p.suffix)
+    if _is_gui_exe(w):
+        return str(w), None
+    bw = Path(base_python).with_name("pythonw.exe")
+    if _is_gui_exe(bw):
+        return str(bw), (None if _same_dir(bw.parent, p.parent) else str(p))
+    return None
 
 
 def _is_gui_exe(path: Path) -> bool:

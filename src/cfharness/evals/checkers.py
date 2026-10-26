@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from ..errors import HubError
+from ..oscompat import no_window_kwargs
 
 KINDS = ("regex", "contains", "json_schema", "command", "llm_judge", "all")
 _FLAG_MAP = {"i": re.IGNORECASE, "m": re.MULTILINE, "s": re.DOTALL, "x": re.VERBOSE}
@@ -207,7 +208,7 @@ def _run_command(spec: dict[str, Any], out: EvalOutput) -> Grade:
         try:
             p = subprocess.run(
                 _shell_argv(spec["cmd"]), cwd=str(cwd), input=(out.text or "").encode("utf-8"), capture_output=True,
-                timeout=float(spec.get("timeout_s") or 120), env=env,
+                timeout=float(spec.get("timeout_s") or 120), env=env, **no_window_kwargs(),
             )
         except subprocess.TimeoutExpired:
             return Grade(0.0, False, {"kind": "command", "error": "timeout"})

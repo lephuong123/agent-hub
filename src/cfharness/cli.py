@@ -20,7 +20,7 @@ from typing import Any
 from . import __version__
 from .config import parse_value
 from .errors import exit_code_for
-from .oscompat import exec_argv
+from .oscompat import exec_argv, no_window_kwargs
 from .paths import HubPaths
 from .rpc import DaemonUnavailable, RpcClient, RpcError
 
@@ -266,7 +266,7 @@ def cmd_doctor(ctx: Ctx) -> int:
         tested = ccfg.get("tested_versions") or []
         add("phiên bản claude", bool(v) and v in tested, f"{v} (đã kiểm: {', '.join(tested)})" + ("" if v in tested else " — phiên bản chưa kiểm"), "warning")
         try:
-            r = subprocess.run(exec_argv([binary, "auth", "status"]), capture_output=True, encoding="utf-8", errors="replace", timeout=30)
+            r = subprocess.run(exec_argv([binary, "auth", "status"]), capture_output=True, encoding="utf-8", errors="replace", timeout=30, **no_window_kwargs())
             try:
                 info = json.loads(r.stdout)
                 logged = bool(info.get("loggedIn", r.returncode == 0))
