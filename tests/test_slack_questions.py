@@ -108,6 +108,7 @@ async def test_multi_toggle_reissues_buttons_then_submit(make, sk):
 
 
 async def test_free_text_and_thread_reply(make, sk):
+    sk.fail_views = True  # nhánh dự phòng (không mở được modal → trả lời trong thread); nhánh modal: tests/test_slack_modals.py
     d, rid = await setup(make)
     q = ask(d, rid)
     content = await until(lambda: q_content(sk, DM_BOSS, q["id"]))
@@ -229,6 +230,7 @@ async def test_manager_conversation_threads_and_moi(make, sk):
 
 
 async def test_giaoviec_prompt_box_wording(make, sk):
+    sk.fail_views = True  # nhánh dự phòng — xem test_free_text_and_thread_reply
     d = await make()
     d.hub.agents.create({"id": "coder", "name": "coder"})
     await deliver(sk, sk.slash(BOSS, "giaoviec coder"))

@@ -123,9 +123,9 @@ chạy), luồng đủ với Slack giả (setup → ghép nối → allow → te
 trong thân/header response, audit, log. Ảnh: `docs/screenshots/web/v2/23-slack-2-chieu-cai-dat.png`, `24-slack-2-chieu-ghep-noi.png`
 (Chromium thật + Slack giả, đã bấm Xác nhận qua hộp xác nhận JS → allowlist cập nhật, tin chào gửi).
 
-Giới hạn (RPC trong `chat/`, chưa sửa ở P5): `slack.status` không trả tên workspace (chỉ `team_id`) và không ghép `chat_id` ↔ `user_id`
-→ trang hiện hai danh sách riêng; `slack.revoke` chỉ gỡ `chat_id` (người vẫn ở `allowed_user_ids`, vô hại vì cần cả hai); tin bot trả khi
-ghép bằng slash vẫn nói "Quay lại terminal để xác nhận" (nên đổi thành "terminal hoặc trang Cài đặt").
+Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên workspace); `slack.allow` nhớ DM ↔ người (`slack.dms`) và
+`slack.revoke` gỡ luôn người sở hữu DM khỏi `allowed_user_ids`; tin xác nhận ghép nối nhắc cả "terminal hoặc trang Cài đặt";
+`notify.slack.modal_ttl_s` có trong config mặc định.
 
 ## Chưa làm
 - Reaction ⏳ thay "đang gõ…" khi chờ điều phối viên (cần scope `reactions:write`); bot Slack hiện bỏ qua "đang gõ".

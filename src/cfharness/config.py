@@ -173,6 +173,7 @@ DEFAULTS: dict[str, Any] = {
             "deliver_max_files": 5,
             "document_max_bytes": 1048576,  # tệp văn bản người gửi tối đa (trần cứng 10 MB ở manager.chat)
             "files_base": None,  # CHỈ cho test: gốc URL tải tệp thay https://files.slack.com/ (không bao giờ theo URL tuỳ ý)
+            "modal_ttl_s": 3600,  # P2: hộp nhập (modal) còn hiệu lực — nonce phía hub `slack.modals`
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
                        "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,

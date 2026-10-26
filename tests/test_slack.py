@@ -66,11 +66,13 @@ async def make(hub_home, sk):
             d.hub.secrets.set("SLACK_APP_TOKEN", APP_TOKEN)
         d.hub.start()
         daemons.append(d)
+        _BOTS.append(d.hub.slack)
         if token and interactive and connect:
             await until(lambda: d.hub.slack.info.get("polling") and sk.connected())
         return d
 
     yield _m
+    _BOTS.clear()
     for d in daemons:
         try:
             await stop(d)
@@ -85,9 +87,20 @@ async def rpc(d: Daemon, method: str, params: dict | None = None):
     return resp["result"]
 
 
+_BOTS: list = []  # bot Slack của các daemon test đang chạy (deliver chờ hàng đợi của chúng xử lý xong)
+
+
+def _idle() -> bool:
+    return all(b._inbox is None or b._inbox._unfinished_tasks == 0 for b in _BOTS)  # type: ignore[attr-defined]
+
+
 async def deliver(sk: FakeSlack, eid: str) -> None:
+    """ACK tới TRƯỚC khi xử lý → chờ worker tiêu hết hàng đợi (không ngủ cố định: máy tải nặng thì chậm hơn), rồi chờ thêm chút
+    cho tác vụ nền do handler sinh (gửi tin…)."""
     await until(lambda: sk.acked(eid))
-    await asyncio.sleep(0.15)  # ACK trước xử lý — chờ worker xử lý xong
+    await asyncio.sleep(0.05)
+    await until(_idle, timeout=20)
+    await asyncio.sleep(0.1)
 
 
 def texts(sk: FakeSlack, ch: str) -> list[str]:
@@ -321,3 +334,12 @@ async def test_setup_pairing_allow(make, sk):
     assert DM_BOSS in out["allowed_chat_ids"] and BOSS in out["allowed_user_ids"]
     await deliver(sk, sk.slash(BOSS, "trangthai"))
     assert any("ESTOP" in t for t in texts(sk, DM_BOSS))
+
+
+async def test_revoke_dm_removes_its_user(make, sk):
+    d = await make(users=(BOSS, OTHER), chats=(DM_BOSS, DM_OTHER))
+    d.hub.slack.pairing = None
+    await rpc(d, "slack.allow", {"chat_id": DM_BOSS, "user_id": BOSS})  # ghi DM ↔ người
+    out = await rpc(d, "slack.revoke", {"chat_id": DM_BOSS})
+    assert DM_BOSS not in out["allowed_chat_ids"] and BOSS not in out["allowed_user_ids"] and OTHER in out["allowed_user_ids"]
+    assert not auth.slack_caller(d.hub, DM_BOSS, BOSS).human

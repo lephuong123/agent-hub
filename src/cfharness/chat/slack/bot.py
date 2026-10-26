@@ -47,6 +47,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("cfharness.chat.slack")
 
 PAIR_RE = re.compile(r"^(?:ghepnoi|ghép nối|pair)\s+([A-Za-z0-9_-]{4,64})$", re.IGNORECASE)
+PAIR_ACK = "Đã nhận mã ghép nối. Quay lại terminal hoặc trang Cài đặt trên web cfharness để xác nhận đưa DM này vào allowlist."
 SEEN_TTL_S = 3600
 SEEN_MAX = 2000
 ROOTS_MAX = 2000
@@ -253,6 +254,7 @@ class SlackBot(ChatBot):
                 if self._ready_for != fp:
                     me = await api.call("auth.test")
                     self.info["team_id"] = me.get("team_id")
+                    self.info["team"] = me.get("team")
                     self.info["bot_user_id"] = me.get("user_id")
                     self._ready_for = fp
                 conn = await api.call("apps.connections.open", app=True)
@@ -443,7 +445,7 @@ class SlackBot(ChatBot):
         text = str(ev.get("text") or "").strip()
         if not self.team_ok(team) or not self.is_allowed(cid, uid):
             if self.team_ok(team) and self._try_pair(cid, uid, text, ev.get("channel_type")):
-                await self._send(api, cid, "Đã nhận mã ghép nối. Quay lại terminal để xác nhận đưa DM này vào allowlist.")
+                await self._send(api, cid, PAIR_ACK)
                 return
             self._audit_ignored(cid, ev.get("channel_type"), "message", uid)
             return
@@ -498,7 +500,7 @@ class SlackBot(ChatBot):
             return
         if not self.is_allowed(cid, uid):
             if self._try_pair(cid, uid, text, "im"):
-                await self._send(api, cid, "Đã nhận mã ghép nối. Quay lại terminal để xác nhận đưa DM này vào allowlist.")
+                await self._send(api, cid, PAIR_ACK)
                 return
             self._audit_ignored(cid, "slash", "slash", uid)
             return
@@ -564,7 +566,7 @@ class SlackBot(ChatBot):
     def status(self) -> dict[str, Any]:
         out = super().status()
         c = self.cfg()
-        out.update({"interactive": bool(c.get("interactive")), "app_token": self.app_token() is not None, "team_id": c.get("team_id"),
+        out.update({"interactive": bool(c.get("interactive")), "app_token": self.app_token() is not None, "team_id": c.get("team_id"), "team": self.info.get("team"),
                     "bot_user_id": self.info.get("bot_user_id"), "allowed_chat_ids": sorted(self.allowed()),
                     "allowed_user_ids": sorted(str(x) for x in (c.get("allowed_user_ids") or [])), "slash_command": self.slash(),
                     "connected_at": self.info.get("connected_at"), "open_modals": self.modals.count()})
