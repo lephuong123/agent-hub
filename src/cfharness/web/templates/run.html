@@ -55,6 +55,7 @@
 </section>
 {% endif %}
 {% endif %}
+{% if not live_run %}<div id="diff-slot" hx-get="/partials/run/{{ run.id }}/diff" hx-trigger="load" hx-swap="outerHTML"><noscript><p class="small"><a href="/runs/{{ run.id }}/diff">Xem thay đổi file của run</a></p></noscript></div>{% endif %}
 {% if children %}
 <section class="card"><h2>Run tiếp nối</h2><ul>{% for c in children %}<li><a href="/runs/{{ c.id }}">{{ c.id }}</a> {{ m.run_pill(c.status) }} <span class="muted small">{{ run_title(c, None, 80) }}</span></li>{% endfor %}</ul></section>
 {% endif %}

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from ..bus import LEVEL_RANK
 from ..errors import HubError, NotFound
 from ..events import HubEvent, make_event
+from ..mcp_client.oauth import rpc_methods as _oauth_methods
 from ..redact import redact
 
 if TYPE_CHECKING:
@@ -36,6 +37,8 @@ MUTATING = frozenset(
         "run.start", "run.stop", "run.resume", "run.continue",
         "estop.set", "config.set", "auth.reset", "hub.shutdown",
         "mcp.add", "mcp.update", "mcp.remove", "mcp.restore", "mcp.import", "mcp.assign", "mcp.run", "mcp.agent_create",
+        # OAuth MCP (mcp_client/oauth.py) — audit KHÔNG mang code/state (xem wrap_with_audit)
+        "mcp.oauth_start", "mcp.oauth_callback", "mcp.oauth_disconnect", "mcp.oauth_refresh",
         "secret.set", "secret.rm",
         "feedback.record",
         # M2
@@ -198,7 +201,31 @@ class IntegrationRpc:
             cfg = self.hub.mcp.config_of(r)
             servers[name] = cfg.claude_entry()
             missing += [f"{name}:${{{s}}}" for s in self.hub.secrets.missing(servers[name])]
+            if cfg.auth is not None:
+                st = self.hub.mcp.show(name).get("oauth_status")
+                if st != "connected":
+                    missing.append(f"{name}:oauth={st}")
         return {"mcpServers": servers, "tool_rules": agent_mcp_tool_rules(row), "problems": missing}
+
+    async def mcp_catalog(self, p: dict[str, Any]) -> dict[str, Any]:
+        """Danh mục MCP Registry (CHỈ ĐỌC, không chạy gì): `{search?, limit?, cursor?, offline?}` → `{servers, next_cursor, source, error?}`;
+        `{name, check_auth?}` → `{server: mục | None, options: [...]}` (phương án cài; `check_auth` gọi `initialize` không token
+        tới remote để gắn nhãn cần OAuth). Mạng chạy trong thread, có timeout + cache + danh sách tuyển chọn khi offline."""
+        from ..mcp_client import catalog
+
+        cache_dir = self.hub.paths.home / "cache" / "mcp_catalog"
+        offline = bool(p.get("offline"))
+        if p.get("name"):
+            entry = await asyncio.to_thread(catalog.get, str(p["name"]), cache_dir=cache_dir, offline=offline)
+            if entry is None:
+                raise NotFound(f"không có '{p['name']}' trong MCP Registry")
+            opts = catalog.install_options(entry)
+            if p.get("check_auth") and not offline:
+                for o in opts:
+                    o["needs_oauth"] = await asyncio.to_thread(catalog.check_oauth, o)
+            return {"server": entry, "options": opts, "suggested_name": catalog.suggest_name(entry["name"])}
+        return await asyncio.to_thread(catalog.search, str(p.get("search") or ""), limit=int(p.get("limit") or 20), cursor=p.get("cursor"),
+                                       cache_dir=cache_dir, offline=offline)
 
     def _idem_get(self, scope: str, key: str | None) -> dict[str, Any] | None:
         if not key:
@@ -414,12 +441,13 @@ class IntegrationRpc:
             "mcp.update": self.mcp_update,
             "mcp.remove": lambda p: h.mcp.remove(_req(p, "name"), force=bool(p.get("force"))),
             "mcp.restore": lambda p: h.mcp.restore(_req(p, "name")),
-            "mcp.list": lambda p: h.mcp.list(include_deleted=bool(p.get("deleted"))),
+            "mcp.list": lambda p: h.mcp.with_oauth(h.mcp.list(include_deleted=bool(p.get("deleted")))),
             "mcp.show": lambda p: h.mcp.show(_req(p, "name")),
             "mcp.probe": self.mcp_probe,
             "mcp.import": self.mcp_import,
             "mcp.assign": self.mcp_assign,
             "mcp.agent_config": self.mcp_agent_config,
+            "mcp.catalog": self.mcp_catalog,
             "mcp.run": self.mcp_run,
             "mcp.agent_create": self.mcp_agent_create,
             "mcp.run_status": self.mcp_run_status,
@@ -432,6 +460,7 @@ class IntegrationRpc:
             "audit.list": self.audit_list,
             "feedback.record": self.feedback_record,
             "feedback.list": self.feedback_list,
+            **_oauth_methods(h),
         }
 
 
@@ -461,6 +490,8 @@ def wrap_with_audit(hub: "Hub", method: str, fn: Callable[[dict[str, Any]], Any]
             res = await res
         try:
             params = {k: v for k, v in p.items() if k not in ("value", "soul")}
+            if method.startswith("mcp.oauth_"):  # code/state/iss của callback OAuth là thông tin đăng nhập một lần — không vào audit
+                params = {k: v for k, v in params.items() if k in ("name", "redirect_uri", "error")}
             if "soul" in p:
                 params["soul"] = "(updated)" if p.get("soul") else None
             if "prompt" in params:

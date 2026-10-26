@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Danh mục MCP{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="/mcp">MCP</a> › <span>Danh mục</span></nav>
+<div class="page-head"><h1>Danh mục MCP</h1><a class="btn ghost" href="/mcp">{{ m.icon('arrow-left') }}<span>MCP đã cài</span></a></div>
+<p class="muted">Tìm MCP server trong MCP Registry chính thức (<code>registry.modelcontextprotocol.io</code>) rồi cài cho hub.
+  Thông tin trong danh mục do bên thứ ba khai — hãy đọc kỹ trước khi cài: server MCP chạy NGOÀI sandbox của agent.</p>
+<form method="get" action="/mcp/browse" class="row gap mcp-search" role="search">
+  <input name="q" value="{{ q }}" placeholder="Tìm: github, playwright, jira…" aria-label="Tìm MCP server" maxlength="200">
+  <button class="btn primary" type="submit">Tìm</button>
+</form>
+{% if res.error %}<p class="warn-t small">{{ m.icon('alert') }} {{ res.error }}{% if res.source == 'offline' %} — đang hiện danh sách tuyển chọn có sẵn trong hub.{% elif res.source == 'stale-cache' %} — đang hiện kết quả đã lưu trước đó.{% endif %}</p>
+{% elif featured %}<h2>Đề xuất</h2><p class="muted small">Server hay dùng, đã kiểm sẵn. Gõ tên ở ô trên để tìm trong toàn bộ registry.</p>
+{% elif res.source == 'offline' %}<p class="muted small">Danh sách tuyển chọn có sẵn trong hub (không kết nối registry).</p>{% endif %}
+
+{% if not res.servers %}{{ m.empty("Không tìm thấy server nào" ~ (" cho '" ~ q ~ "'" if q else "") ~ ".", "plug") }}{% else %}
+<div class="agent-grid">
+{% for e in res.servers %}
+  <article class="acard mcp-card">
+    <div class="acard-top"><span class="avatar {{ e.title|avatar }}" aria-hidden="true">{{ m.icon('plug') }}</span>
+      <div class="acard-name"><b>{{ e.title }}</b><div class="r" title="{{ e.name }}">{{ e.name }}{% if e.version %} · v{{ e.version }}{% endif %}</div></div></div>
+    <div class="acard-st">
+      {% for k in e.kinds %}<span class="pill outline">{{ k }}</span>{% endfor %}
+      {% if e.needs_oauth %}<span class="pill warn" title="Server yêu cầu đăng nhập OAuth — cài xong bấm Kết nối">Cần đăng nhập (OAuth)</span>{% endif %}
+      {% if e.curated %}<span class="pill accent">tuyển chọn</span>{% endif %}
+      {% if e.installed %}<span class="pill ok">{{ m.icon('check') }}đã có trong hub</span>{% endif %}
+      {% if e.status and e.status != 'active' %}<span class="pill danger">{{ e.status }}</span>{% endif %}
+    </div>
+    <div class="acard-doing">{{ e.description or '—' }}</div>
+    <div class="acard-foot">
+      <span class="k">{% if e.repository %}<a href="{{ e.repository }}" rel="noopener noreferrer">mã nguồn</a>{% endif %}</span>
+      {% if e.installable %}<a class="btn sm primary" href="/mcp/browse/install?{{ {'name': e.name}|urlencode }}">Cài</a>
+      {% else %}<span class="muted xs" title="Chỉ hỗ trợ cài tự động: remote http/sse, gói npm, gói PyPI">chưa cài tự động được</span>{% endif %}
+    </div>
+  </article>
+{% endfor %}
+</div>
+{% endif %}
+<div class="row gap end">
+  {% if cursor %}<a class="btn ghost" href="/mcp/browse?{{ {'q': q}|urlencode }}">Về trang đầu</a>{% endif %}
+  {% if res.next_cursor %}<a class="btn" href="/mcp/browse?{{ {'q': q, 'cursor': res.next_cursor}|urlencode }}">Trang sau {{ m.icon('arrow-right') }}</a>{% endif %}
+</div>
+{% endblock %}

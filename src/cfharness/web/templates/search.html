@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}{{ ('Tìm “' ~ query ~ '”') if query else 'Tìm kiếm' }}{% endblock %}
+{% block content %}
+<div class="page-head"><div class="ph-title"><h1>Tìm trong hội thoại</h1><span class="sub">Tìm trên toàn bộ prompt, trả lời của agent, chỉ đạo, lời gọi tool và hội thoại điều phối viên. Gõ không dấu cũng khớp có dấu.</span></div></div>
+<form method="get" action="/search" class="search-form" role="search">
+  <div class="search-box">{{ m.icon('search') }}<input name="q" value="{{ query }}" placeholder="Từ khoá, &quot;cụm từ chính xác&quot;, tên file, mã lỗi…" aria-label="Từ khoá" autofocus spellcheck="false"><button class="btn primary sm" type="submit">Tìm</button></div>
+  <div class="filters">
+    <label>Agent <select name="agent"><option value="">mọi agent</option>{% for a in agents %}<option value="{{ a }}" {{ 'selected' if q.agent == a }}>{{ a }}</option>{% endfor %}</select></label>
+    <label>Thời gian <select name="since">{% for k, label in since_opts %}<option value="{{ k }}" {{ 'selected' if (q.since or '') == k }}>{{ label }}</option>{% endfor %}</select></label>
+    <label>Loại tin <select name="role">{% for k, label in role_opts %}<option value="{{ k }}" {{ 'selected' if (q.role or '') == k }}>{{ label }}</option>{% endfor %}</select></label>
+    <label class="check small"><input type="checkbox" name="technical" value="1" {{ 'checked' if q.technical == '1' }}> Gồm phiên kỹ thuật (review, eval, tự học)</label>
+  </div>
+</form>
+{% if error %}<div class="banner danger" role="alert">{{ m.icon('alert') }}<span>{{ error }}</span></div>{% endif %}
+{% if res %}
+<section class="card flush search-res">
+  <div class="card-head search-head"><h2>{{ m.icon('search') }} {% if res.hits %}Kết quả {{ offset + 1 }}–{{ offset + res.hits|length }}{% else %}Không có kết quả{% endif %}</h2>
+    {% if res.backfill_pending %}<span class="pill warn" title="Dữ liệu cũ đang được chỉ mục nền — kết quả có thể thiếu">{{ m.icon('clock') }}đang chỉ mục dữ liệu cũ</span>{% endif %}</div>
+  {% if not res.hits %}{{ m.empty("Thử từ khoá khác, bỏ bớt bộ lọc, hoặc mở rộng thời gian.", "search") }}{% else %}
+  <ol class="hits" start="{{ offset + 1 }}">
+    {% for h in res.hits %}<li class="hit">
+      <div class="hit-meta">
+        {% if h.agent_id %}<a href="/agents/{{ h.agent_id }}">{{ h.agent_id }}</a>{% else %}<span>hub</span>{% endif %}
+        <span class="pill muted">{{ h._role }}{% if h.tool %} · <code>{{ h.tool|tool }}</code>{% endif %}</span>
+        {% if h.kind and h.kind not in ('adhoc', 'manager_chat') %}<span class="muted small">{{ h.kind }}</span>{% endif %}
+        <span class="muted small">{{ m.rel(h.ts) }}</span>
+      </div>
+      <p class="hit-snip">{% for is_hit, t in h._parts %}{% if is_hit %}<mark>{{ t }}</mark>{% else %}{{ t }}{% endif %}{% endfor %}</p>
+      {% if h._link %}<a class="hit-link small" href="{{ h._link }}">{{ 'Mở lượt chạy ' ~ h.run_id if h.run_id else 'Mở hội thoại điều phối' }}{{ m.icon('chev-right') }}</a>{% endif %}
+    </li>{% endfor %}
+  </ol>
+  <div class="row between pager">
+    {% if offset > 0 %}<a class="btn sm ghost" href="/search?{{ base|urlencode }}&amp;offset={{ [offset - 30, 0]|max }}">{{ m.icon('arrow-left') }}Trước</a>{% else %}<span></span>{% endif %}
+    {% if res.next_offset %}<a class="btn sm ghost" href="/search?{{ base|urlencode }}&amp;offset={{ res.next_offset }}">Sau{{ m.icon('arrow-right') }}</a>{% endif %}
+  </div>
+  {% endif %}
+</section>
+{% elif not query %}
+<section class="card">{{ m.empty("Ví dụ: tên file (\"config.yaml\"), mã lỗi, \"cấu hình sandbox\", tên khách hàng… Kết quả dẫn tới đúng lượt chạy.", "search", title="Gõ từ khoá để bắt đầu") }}</section>
+{% endif %}
+{% endblock %}

@@ -23,7 +23,7 @@ from pydantic import ValidationError
 from ..errors import Conflict, HubError, NotFound
 from ..events import make_event
 from ..paths import HubPaths
-from ..secrets import SecretStore
+from ..secrets import SecretStore, is_ref, normalize_name
 from .config import McpServerConfig, annotation_override, match_any, normalize_trust, tool_selected
 from .importer import _Extractor, convert_entry, read_claude_servers
 
@@ -59,6 +59,7 @@ class McpRegistry:
         self.publish = publish or (lambda ev: None)
         self.agents_using = agents_using or (lambda name: [])
         self.writable = writable
+        self.oauth: Any = None  # OAuthManager (daemon) — gắn trong wiring.attach; registry chỉ đọc thì None
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -96,10 +97,28 @@ class McpRegistry:
     def show(self, name: str) -> dict[str, Any]:
         row = self.require(name, include_deleted=True)
         cfg = row["config"]
-        refs_missing = self.secrets.missing({"env": cfg.get("env"), "headers": cfg.get("headers"), "args": cfg.get("args"), "url": cfg.get("url")})
+        refs_missing = self.secrets.missing({"env": cfg.get("env"), "headers": cfg.get("headers"), "args": cfg.get("args"), "url": cfg.get("url"),
+                                             "auth": (cfg.get("auth") or {}).get("client_secret_ref")})
         row["missing_secrets"] = refs_missing
         row["agents"] = self.agents_using(name)
+        self._add_oauth(row)
         return row
+
+    def _add_oauth(self, row: dict[str, Any]) -> dict[str, Any]:
+        """`oauth_status` (not_connected|connected|expired|error) + `oauth` (hạn, scope, issuer…) — KHÔNG BAO GIỜ có token."""
+        from .oauth import is_oauth, status_of
+
+        if is_oauth(row.get("config")):
+            try:
+                st = status_of(self.secrets, self.config_of(row))
+            except Exception as e:  # noqa: BLE001 — cấu hình hỏng không được làm hỏng mcp.list
+                st = {"status": "error", "error": f"{type(e).__name__}"}
+            row["oauth_status"], row["oauth"] = st["status"], st
+            row["oauth_expires_at"] = st.get("expires_at")
+        return row
+
+    def with_oauth(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [self._add_oauth(r) for r in rows]
 
     # ------------------------------------------------------------------ ghi
     def _check_writable(self) -> None:
@@ -139,6 +158,12 @@ class McpRegistry:
         d["args"] = ex.args(d["args"])
         if d.get("url"):
             d["url"] = ex.url(d["url"])
+        auth = d.get("auth")
+        if auth and auth.get("client_secret_ref") and not is_ref(auth["client_secret_ref"]):
+            # client_secret nhập dạng rõ (OAuth client đăng ký tay) → secret store, cấu hình chỉ giữ ${…}
+            n = normalize_name(f"MCP_{cfg.name}_OAUTH_CLIENT_SECRET")
+            ex.secrets[n] = str(auth["client_secret_ref"])
+            auth["client_secret_ref"] = f"${{{n}}}"
         for n, v in ex.secrets.items():
             self.secrets.set(n, v)
         return McpServerConfig(**d), sorted(ex.secrets)
@@ -199,6 +224,15 @@ class McpRegistry:
                 cur[k] = v
         cfg, warnings = self._validate({"name": name, **cur})
         cfg, moved = self._extract_literal_secrets(cfg)
+        if cfg.url != row["config"].get("url"):
+            from .oauth import load_record, save_record
+
+            rec = load_record(self.secrets, name)
+            if rec and rec.get("tokens"):
+                # token OAuth gắn với `resource` (URL cũ) — không bao giờ gửi sang URL mới
+                rec["tokens"], rec["error"] = None, {"message": "URL server đã đổi — kết nối lại"}
+                save_record(self.secrets, name, rec)
+                warnings.append("URL đổi → đã bỏ token OAuth cũ, cần kết nối lại")
         with _tx(self.conn):
             self.conn.execute(
                 "UPDATE mcp_servers SET transport=?, config=?, trust=?, tools_include=?, tools_exclude=?, updated_at=? WHERE name=?",
@@ -252,22 +286,35 @@ class McpRegistry:
         return self.show(name)
 
     # ------------------------------------------------------------------ probe
+    def runtime_entry(self, cfg: McpServerConfig) -> dict[str, Any]:
+        """Entry đã thay secret + `Authorization: Bearer` cho server OAuth (chưa kết nối/hết hạn → HubError). CHỈ trong bộ nhớ / file
+        runtime 0600 — không bao giờ trả qua RPC, ghi DB/log."""
+        from .oauth import inject_bearer
+
+        return inject_bearer(self.secrets.resolve(cfg.claude_entry()), self.secrets, cfg)
+
     def resolved_entry(self, name: str) -> dict[str, Any]:
         """Entry `mcpServers` đã thay secret (chỉ dùng trong bộ nhớ / file runtime 0600)."""
         cfg = self.config_of(self.require(name))
-        return self.secrets.resolve(cfg.claude_entry())
+        return self.runtime_entry(cfg)
 
     async def probe(self, name: str, *, timeout_s: float | None = None) -> dict[str, Any]:
         from .probe import probe_server
 
         row = self.require(name)
         cfg = self.config_of(row)
+        if cfg.auth is not None and self.oauth is not None:
+            await self.oauth.ensure_fresh_for([name])  # token sắp hết hạn → làm mới trước khi probe
         try:
-            resolved = self.secrets.resolve(cfg.claude_entry())
+            resolved = self.runtime_entry(cfg)
         except HubError as e:
-            res = {"ok": False, "tools": {}, "elapsed_ms": 0, "error": e.message, "hint": "đặt secret còn thiếu rồi probe lại"}
+            oauth_err = isinstance(e.data, dict) and e.data.get("oauth")
+            res = {"ok": False, "tools": {}, "elapsed_ms": 0, "error": e.message,
+                   "hint": (f"kết nối OAuth trước (nút Kết nối trên web / `cfharness mcp login {name}`)" if oauth_err else "đặt secret còn thiếu rồi probe lại")}
         else:
             res = await probe_server(cfg, resolved, timeout_s=timeout_s)
+            if not res["ok"] and cfg.auth is None and cfg.transport != "stdio" and "401" in str(res.get("error") or ""):
+                res["hint"] = f"server đòi xác thực (401) — nếu là OAuth: `cfharness mcp edit {name} --oauth` rồi `cfharness mcp login {name}`"
         now = _now()
         old = row.get("annotations_cache") or {}
         if res["ok"]:
@@ -381,7 +428,7 @@ class McpRegistry:
                 raise HubError(f"MCP server '{name}' của agent không có trong registry", data={"server": name})
             if row.get("deleted_at"):
                 raise HubError(f"MCP server '{name}' của agent đã bị xoá mềm — `cfharness mcp restore {name}` hoặc gỡ khỏi agent", data={"server": name})
-            out[name] = self.secrets.resolve(self.config_of(row).claude_entry())
+            out[name] = self.runtime_entry(self.config_of(row))
         return out
 
     def tool_rules_for_servers(self, server_names: list[str]) -> dict[str, list[str]]:

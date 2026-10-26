@@ -11,6 +11,7 @@
   supports_parallel_tool_calls: false   # như trên
   timeout_s: 60                    # timeout probe/kết nối
   description: "..."
+  auth: {type: oauth, scopes: [...], client_id: "...", client_secret_ref: "${SECRET}"}   # http/sse — docs/dev-notes/mcp-oauth.md
 ```
 """
 
@@ -68,6 +69,32 @@ class ToolFilter(BaseModel):
         return v
 
 
+class OAuthSettings(BaseModel):
+    """`auth` của server http/sse cần OAuth 2.1 (MCP Authorization). Token KHÔNG nằm ở đây — ở secret store (`mcp_client/oauth.py`)."""
+
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["oauth"] = "oauth"
+    scopes: list[str] = Field(default_factory=list, description="scope xin; rỗng = theo WWW-Authenticate / resource metadata")
+    client_id: str | None = Field(default=None, description="client đăng ký tay (provider không hỗ trợ DCR); rỗng = DCR")
+    client_secret_ref: str | None = Field(default=None, description="tham chiếu ${SECRET} tới client_secret (giá trị rõ tự chuyển vào secret store)")
+
+    @field_validator("scopes")
+    @classmethod
+    def _scopes(cls, v: list[str]) -> list[str]:
+        out = [s.strip() for s in v if s and s.strip()]
+        if any(any(ch.isspace() or ch == '"' for ch in s) for s in out):
+            raise ValueError("scope không được chứa khoảng trắng/dấu nháy")
+        return out
+
+    @field_validator("client_id")
+    @classmethod
+    def _client_id(cls, v: str | None) -> str | None:
+        v = (v or "").strip() or None
+        if v is not None and (len(v) > 512 or any(ord(ch) < 0x21 for ch in v)):
+            raise ValueError("client_id không hợp lệ")
+        return v
+
+
 class McpServerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -85,6 +112,7 @@ class McpServerConfig(BaseModel):
     timeout_s: float = Field(default=60, gt=0, le=3600)
     description: str = ""
     source: str = "manual"  # manual | claude-import
+    auth: OAuthSettings | None = None  # OAuth 2.1 (chỉ http/sse) — docs/dev-notes/mcp-oauth.md
 
     @field_validator("name")
     @classmethod
@@ -114,12 +142,21 @@ class McpServerConfig(BaseModel):
                 raise ValueError("url phải bắt đầu bằng http:// hoặc https://")
             if self.command:
                 raise ValueError(f"transport {self.transport} không dùng 'command'")
+        if self.auth is not None:
+            if self.transport == "stdio":
+                raise ValueError("auth.oauth chỉ dùng cho transport http/sse")
+            if any(k.lower() == "authorization" for k in self.headers):
+                raise ValueError("headers.Authorization xung đột với auth.oauth (hub tự chèn token OAuth) — bỏ một trong hai")
+            if self.auth.client_secret_ref and not self.auth.client_id:
+                raise ValueError("auth.client_secret_ref cần auth.client_id")
         return self
 
     # -- tiện ích
     def stored(self) -> dict[str, Any]:
         """Dạng lưu registry (bỏ name, bỏ trường rỗng cho gọn)."""
         d = self.model_dump(exclude={"name"})
+        if self.auth is None:
+            d.pop("auth", None)
         if self.transport == "stdio":
             d.pop("url", None)
             d.pop("headers", None)
