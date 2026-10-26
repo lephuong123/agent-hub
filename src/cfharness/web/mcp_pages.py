@@ -10,7 +10,8 @@ duyệt danh mục MCP Registry và cài.
 - `GET|POST /mcp/browse/install?name=&opt=`: form cài dựng từ mục registry. Trường `isSecret` = ô mật khẩu → `secret.set`
   (tên `MCP_<server>_<khoá>`), cấu hình chỉ giữ `${TÊN}`. Gửi: `mcp.add{probe:false}` → `secret.set` → `mcp.probe` (cùng RPC với
   thêm tay; trust mặc định untrusted). Giá trị secret không bao giờ được vẽ lại vào HTML (kể cả khi lỗi / cần xác nhận).
-  Remote cần OAuth → nhãn "Cần đăng nhập (OAuth)"; đăng nhập OAuth do nhánh `feat/mcp-oauth` làm (ở đây chỉ chỗ giữ).
+  Remote cần OAuth → cài với `auth: {type: oauth}` (không probe vì chưa có token) rồi đưa về trang server để bấm Kết nối
+  (luồng OAuth: `web/mcp_oauth.py`, docs/dev-notes/mcp-oauth.md).
 Mọi thao tác ghi: `post_guard` (CSRF + Origin + khoá phiên WT-1), `_audit.channel=web` qua `rpc(..., audit=True)`.
 """
 
@@ -450,6 +451,8 @@ async def install_submit(request: Request) -> Response:
     clash = sorted(n for n in secrets if n in existing)
     if clash and form.get("overwrite_secrets") != "1":
         return await again(f"Secret đã có: {', '.join(clash)} — tích 'Ghi đè secret đã có' hoặc đổi tên server")
+    if opt.get("needs_oauth") and cfg["transport"] != "stdio":
+        cfg["auth"] = {"type": "oauth"}
     try:
         added = await rpc(request, "mcp.add", {"config": cfg, "probe": False}, audit=True)
     except RpcError as e:
@@ -461,13 +464,14 @@ async def install_submit(request: Request) -> Response:
             return flash_redirect(request, f"/mcp/{cfg['name']}", "error", f"Đã thêm MCP {cfg['name']} nhưng chưa lưu được secret {sn}: {err_text(e)}")
     from .app import _probe_msg
 
+    if cfg.get("auth"):  # chưa có token → probe chắc chắn 401; người bấm Kết nối ở trang server (probe chạy sau khi đăng nhập)
+        return flash_redirect(request, safe_next(f"/mcp/{cfg['name']}#oauth", "/mcp"), "ok",
+                              f"Đã cài MCP {added.get('name')} — bấm Kết nối để đăng nhập OAuth")
     try:
         pr = await rpc(request, "mcp.probe", {"name": cfg["name"]})
         msg = f"Đã cài MCP {added.get('name')} — {_probe_msg(pr)}"
     except RpcError as e:
         msg = f"Đã cài MCP {added.get('name')} — kiểm tra lỗi: {err_text(e)}"
-    if opt.get("needs_oauth"):
-        msg += " — server cần đăng nhập OAuth (hub chưa hỗ trợ; đang làm)"
     return flash_redirect(request, safe_next(f"/mcp/{cfg['name']}", "/mcp"), "ok", msg)
 
 

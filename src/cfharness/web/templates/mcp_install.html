@@ -24,9 +24,8 @@
 {% if opt.needs_oauth %}
 <section class="card attention" id="oauth">
   <h2>{{ m.icon('shield') }} Cần đăng nhập (OAuth)</h2>
-  <p class="small">Server này yêu cầu đăng nhập OAuth (trả 401 khi chưa có token). Hub <b>chưa hỗ trợ</b> đăng nhập OAuth — tính năng đang được làm.
-    Bạn vẫn có thể thêm server, nhưng kiểm tra kết nối sẽ báo lỗi 401 cho tới khi đăng nhập được.</p>
-  <button class="btn" type="button" disabled title="Sắp có">Đăng nhập (sắp có)</button>
+  <p class="small">Server này yêu cầu đăng nhập OAuth (trả 401 khi chưa có token). Hub sẽ cài server với chế độ OAuth và chưa kiểm tra kết nối;
+    sau khi cài, bấm <b>Kết nối</b> ở trang server để đăng nhập ở trang của nhà cung cấp. Token chỉ nằm trong secret store của hub.</p>
 </section>
 {% endif %}
 <section class="card">

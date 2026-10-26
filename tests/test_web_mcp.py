@@ -141,7 +141,7 @@ async def test_install_npm_entry_with_secret_env(env):
 async def test_install_remote_oauth_badge_and_secret_header(env):
     await env.login()
     r = await env.client.get("/mcp/browse/install?name=com.example%2Foauth")
-    assert r.status_code == 200 and "Cần đăng nhập (OAuth)" in r.text and "Đăng nhập (sắp có)" in r.text
+    assert r.status_code == 200 and "Cần đăng nhập (OAuth)" in r.text and "bấm <b>Kết nối</b>" in r.text
     r = await env.client.get("/mcp/browse/install?name=io.github.github%2Fgithub-mcp-server")
     assert 'type="password" name="h.Authorization"' in r.text and "Cần đăng nhập (OAuth)" not in r.text  # header bắt buộc → không phải OAuth
     r = await env.post("/mcp/browse/install", {"reg_name": "io.github.github/github-mcp-server", "opt": "r0", "name": "github",
@@ -150,10 +150,14 @@ async def test_install_remote_oauth_badge_and_secret_header(env):
     cfg = env.hub.mcp.get_row("github")["config"]
     assert cfg["url"] == "https://api.githubcopilot.com/mcp/" and cfg["headers"] == {"Authorization": "${MCP_GITHUB_AUTHORIZATION}"}
     assert env.hub.secrets.get("MCP_GITHUB_AUTHORIZATION") == f"Bearer {SECRET}" and env.hub.mcp.get_row("github")["transport"] == "http"
-    # cài server OAuth vẫn được (badge = chỗ giữ cho nhánh OAuth)
+    # server OAuth: cài với auth=oauth, KHÔNG probe (chưa có token), đưa về trang server để bấm Kết nối
+    n_probes = len(env.probes)
     r = await env.post("/mcp/browse/install", {"reg_name": "com.example/oauth", "opt": "r0", "name": "oauthdemo", "url": "https://mcp.example.com/mcp",
                                                "confirm": "yes"})
-    assert r.status_code == 303 and env.hub.mcp.get_row("oauthdemo")
+    assert r.status_code == 303 and r.headers["location"] == "/mcp/oauthdemo#oauth", r.text
+    assert env.hub.mcp.get_row("oauthdemo")["config"]["auth"]["type"] == "oauth" and len(env.probes) == n_probes
+    r = await env.client.get("/mcp/oauthdemo")
+    assert r.status_code == 200 and 'id="oauth"' in r.text and "mcp_connect" in r.text and "chưa kết nối" in r.text
 
 
 async def test_install_requires_session_key(env):

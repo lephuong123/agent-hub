@@ -12,8 +12,8 @@ environmentVariables:[{name,description,isRequired,isSecret,default}], packageAr
   tuyển chọn đóng gói sẵn (`CURATED`, chỉ gồm mục đã kiểm trên registry/npm/PyPI).
 - Chỉ ĐỌC dữ liệu từ mạng; không chạy gì. Phương án cài (`install_options`) chỉ dựng cấu hình đề xuất — cài thật đi qua
   `mcp.add` (probe + trust mặc định untrusted) như thêm tay.
-- `check_oauth(url)`: remote không có header bắt buộc mà `initialize` trả 401 → cần đăng nhập OAuth (CHƯA hỗ trợ ở nhánh này —
-  nhánh `feat/mcp-oauth` làm; ở đây chỉ gắn nhãn).
+- `check_oauth(url)`: remote không có header bắt buộc mà `initialize` trả 401 → cần đăng nhập OAuth (web cài với
+  `auth: {type: oauth}`, người bấm Kết nối — docs/dev-notes/mcp-oauth.md).
 Test thay `_http_get_json`/`_http_status` (không gọi mạng thật).
 """
 
