@@ -94,7 +94,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "config": {"set", "unset"},
     "secret": {"set", "rm", "remove", "delete"},
     "secrets": {"set", "rm", "remove", "delete"},
-    "mcp": {"add", "edit", "update", "rm", "remove", "restore", "import", "assign", "unassign", "token", "agent-config"},
+    "mcp": {"add", "edit", "update", "rm", "remove", "restore", "import", "assign", "unassign", "token", "agent-config", "annotate"},
     "estop": {"on", "off", "set", "clear"},
     "team": {"create", "edit", "update", "archive", "restore", "member", "estop", "rm"},
     "run": {"revert", "takeover"},
@@ -217,6 +217,12 @@ class GuardContext:
     # run connector. Run connector nạp cả MCP của ~/.claude → server ngoài `run_mcp_servers` + connector cho phép = forbidden
     connectors: tuple[str, ...] | None = None
     run_mcp_servers: frozenset[str] = frozenset()
+    # hồ sơ phê duyệt (guard/profiles.py — knob theo profile, người đặt rõ thắng)
+    safe_reset_probe: bool = False  # `git reset --hard <ref>` trong worktree/scratch: probe chứng minh không mất gì → write
+    own_worktree_writes: bool = False  # Edit/Write vào git worktree cùng repo do chuỗi run/task tạo → write
+    allowed_roots: tuple[str, ...] = ()  # workspace.allowed_roots (dạng so sánh fold_path) — ranh giới cho mọi ngoại lệ ghi
+    worktree_since: float | None = None  # mốc "worktree do task/chuỗi run tạo": lúc run ĐẦU của task (hoặc session) vào hàng đợi
+    scratch_workspace: bool = False  # cwd của run là scratch của hub (agents/<id>/workspaces/…)
 
     @property
     def home(self) -> str:
@@ -328,6 +334,13 @@ def classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardContex
             or any(_MGR_SELF_CFG.search(str(t)) for t in v.targets)):
         return Verdict("destructive", v.rule, v.klass or "hub", f"điều phối viên không được làm việc này ({v.reason})",
                        v.targets, v.protected_id, forbidden=True, net_urls=v.net_urls)
+    # luật "luôn cho phép tool MCP này cho agent X" (kind mcp_tool, người tạo): chỉ HẠ verdict theo annotations của server
+    # (destructiveHint / tool chưa probe / server untrusted) — không bao giờ luật tên-xoá, tài nguyên bảo vệ, require_approval
+    if ctx.always_allow and mcp_tool_always_eligible(tool_name, v):
+        rule = match_always_mcp_tool(tool_name, ctx)
+        if rule is not None:
+            return Verdict("write", "always_allow", v.klass, f"luật luôn-cho-phép tool {rule.get('id')} (người duyệt {rule.get('approval_id') or '-'}); "
+                           f"phân loại gốc: {v.rule}", v.targets, None, net_urls=v.net_urls)
     # luật "luôn cho phép" do NGƯỜI tạo khi duyệt (`approve --always`): chỉ HẠ uncertain đủ điều kiện, khớp chính xác dấu vân tay + agent
     if ctx.always_allow and always_eligible(v):
         rule = match_always(tool_name, tool_input, ctx)
@@ -359,6 +372,24 @@ def always_eligible(v: Verdict) -> bool:
     """`uncertain` có được hạ bởi luật luôn-cho-phép / LLM thứ hai không. Destructive/forbidden/tài nguyên bảo vệ/vùng hub → KHÔNG."""
     return (v.verdict == "uncertain" and not v.forbidden and not v.protected_id and (v.klass or "") not in NEVER_DOWNGRADE_KLASS
             and v.rule not in NEVER_DOWNGRADE_RULES)
+
+
+MCP_TOOL_ALWAYS_RULES = frozenset({"mcp_destructive_hint", "mcp_unknown_tool", "mcp_untrusted_write"})
+
+
+def mcp_tool_always_eligible(tool_name: str, v: Verdict) -> bool:
+    """Verdict tool MCP chỉ do annotations của SERVER (không phải luật của người/tên xoá) → luật `mcp_tool` của người hạ được."""
+    return (tool_name.startswith("mcp__") and not v.forbidden and not v.protected_id and v.rule in MCP_TOOL_ALWAYS_RULES
+            and (v.klass or "") == "mcp")
+
+
+def match_always_mcp_tool(tool_name: str, ctx: GuardContext) -> dict[str, Any] | None:
+    """Luật `mcp_tool`: cùng agent (bắt buộc) + ĐÚNG tên tool đầy đủ `mcp__<server>__<tool>` (không glob)."""
+    for r in ctx.always_allow:
+        if (isinstance(r, dict) and r.get("kind") == "mcp_tool" and not r.get("disabled") and r.get("agent_id")
+                and r.get("agent_id") == ctx.agent_id and r.get("tool") == tool_name):
+            return r
+    return None
 
 
 def match_always(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardContext) -> dict[str, Any] | None:
@@ -718,8 +749,69 @@ def classify_file_write(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -
     # R2-1: ngoài workspace của run (+ tmp/add-dir) → chờ người (cùng mô hình sandbox Bash)
     roots = write_roots(ctx)
     if not any(_under(c, r) for c in {ap, rp} for r in roots):
+        wt = own_worktree(ap, ctx) if ctx.own_worktree_writes else None
+        if wt is not None:
+            return Verdict("write", "own_worktree_write", "file", f"{tool_name} trong git worktree {wt} (cùng repo với workspace, do task/run này tạo)", [ap])
         return Verdict("destructive", "write_outside_workspace", "file", f"{tool_name} ngoài workspace của run ({ap}) — cần người duyệt", [ap])
     return Verdict("write", "file_write", "file", targets=[ap])
+
+
+def _git_out(cwd: str, *args: str) -> str | None:
+    """Probe git (NGOÀI sandbox → tắt khoá chạy lệnh như workspace._git). Lỗi/timeout → None."""
+    try:
+        from ..workspace import GIT_ENV, GIT_SAFE_ARGS
+
+        r = subprocess.run(["git", *GIT_SAFE_ARGS, "-C", cwd, *args], capture_output=True, encoding="utf-8", errors="replace", timeout=3,
+                           env={**os.environ, **GIT_ENV})
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _in_roots(p: str, roots: tuple[str, ...]) -> bool:
+    from .policy import fold_path
+
+    if not roots:
+        return False
+    for c in {fold_path(p).rstrip("/"), fold_path(_real(p)).rstrip("/")}:
+        if not any(c == r or c.startswith(r + "/") for r in roots if r):
+            return False
+    return True
+
+
+def own_worktree(p: str, ctx: GuardContext) -> str | None:
+    """Gốc git worktree LIÊN KẾT chứa `p` nếu: cùng repo (git-common-dir) với cwd của run, nằm trong workspace.allowed_roots, và thư mục
+    worktree được tạo SAU mốc `worktree_since` (task/chuỗi run này tạo — không phải worktree của người/ticket khác). Mọi lỗi → None."""
+    if not ctx.git_probe or ctx.worktree_since is None or not _in_roots(p, ctx.allowed_roots):
+        return None
+    d = os.path.dirname(_real(p))
+    wt = None
+    for _ in range(40):
+        g = os.path.join(d, ".git")
+        if os.path.lexists(g):
+            if os.path.isfile(g) and not os.path.islink(g):  # worktree liên kết: `.git` là FILE "gitdir: …/.git/worktrees/<tên>"
+                wt = d
+            break
+        nd = os.path.dirname(d)
+        if nd == d:
+            break
+        d = nd
+    if wt is None or not _in_roots(wt, ctx.allowed_roots):
+        return None
+    try:
+        b = _birth(wt, os.lstat(wt))
+    except OSError:
+        return None
+    if b is None or b < ctx.worktree_since - 1.0:
+        return None
+    mine = _git_out(str(ctx.cwd), "rev-parse", "--path-format=absolute", "--git-common-dir")
+    theirs = _git_out(wt, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if not mine or not theirs or not _same(_real(mine), _real(theirs)):
+        return None
+    top = _git_out(wt, "rev-parse", "--show-toplevel")
+    if not top or not _same(_real(top), _real(wt)):
+        return None
+    return canon_path(wt)
 
 
 # ============================================================================ MCP
@@ -792,7 +884,8 @@ def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdi
     if ann.get("readOnlyHint") is True:
         return Verdict("safe", "mcp_read_only")
     desc = str(ann.get("description") or "")
-    if desc and MCP_DESC_RE.search(desc):
+    human = ann.get("human_override") if isinstance(ann.get("human_override"), dict) else {}
+    if desc and MCP_DESC_RE.search(desc) and human.get("destructiveHint") is not False:  # người đã xem tool và ghi đè → bỏ khớp mô tả
         return Verdict("destructive", "mcp_delete_description", "mcp", "mô tả tool khớp mẫu xoá", [f"{server}/{tool}"])
     if ctx.mcp_annotations is not None and not ann:
         return Verdict("uncertain", "mcp_unknown_tool", "mcp", "tool MCP chưa thấy khi probe → cần duyệt tới khi probe lại (FR-MC-03)", [f"{server}/{tool}"])
@@ -2458,7 +2551,8 @@ class BashAnalyzer:
         def short(ch: str) -> bool:
             return any(t.startswith("-") and not t.startswith("--") and ch in t[1:] for t in rest)
 
-        D = lambda rule, why: self.hit("destructive", rule, "git", why)  # noqa: E731
+        # đích = repo (cwd sau `cd`/`-C`) — hồ sơ phê duyệt kiểm ranh giới workspace.allowed_roots/checkpoint theo đích này
+        D = lambda rule, why: self.hit("destructive", rule, "git", why, [cwd] if cwd else None)  # noqa: E731
         if sub == "push":
             if any(t in ("--force", "--force-with-lease", "--force-if-includes", "--mirror", "--delete", "--prune") or t.startswith("--force-with-lease=") for t in rest) or short("f") or short("d"):
                 D("git_push_force_or_delete", "git push --force/--delete/--mirror/--prune")
@@ -2487,6 +2581,10 @@ class BashAnalyzer:
         if sub == "reset":
             if "--hard" in flags:
                 if pos and pos[0] not in ("HEAD",) or self._git_dirty(cwd, tracked_only=True) is not False:
+                    why = self._reset_hard_safe(cwd, pos, rest) if self.ctx.safe_reset_probe else None
+                    if why:
+                        self.hit("write", "git_reset_hard_safe", "git", why)
+                        return
                     D("git_reset_hard", "git reset --hard (mất thay đổi/commit)")
                 else:
                     self.hit("write", "git_reset_hard_clean", "git", "reset --hard khi không có thay đổi")
@@ -2603,6 +2701,60 @@ class BashAnalyzer:
         if r is None or r.returncode != 0:
             return None
         return bool(r.stdout.strip())
+
+    def _reset_hard_safe(self, cwd: str | None, pos: list[str], rest: list[str]) -> str | None:
+        """`git reset --hard <ref>` KHÔNG mất gì (probe bảo thủ; mọi lỗi → None = giữ destructive): cwd là worktree liên kết hoặc scratch
+        của hub, trong workspace.allowed_roots; cây sạch (kể cả untracked); không ghi đè file chưa track/bị ignore; HEAD hiện tại còn
+        nằm trên một ref KHÁC (nhánh remote hoặc nhánh local khác) → commit không mất. Trả lý do (chuỗi) nếu an toàn."""
+        if cwd is None or not self.ctx.git_probe or "--" in rest or len(pos) > 1:
+            return None
+        for t in rest:  # chỉ nhận đúng dạng `reset [-q|--quiet] --hard [<ref>]`
+            if t.startswith("--") and t not in ("--hard", "--quiet"):
+                return None
+            if t.startswith("-") and not t.startswith("--") and set(t[1:]) - {"q"}:
+                return None
+        if not _in_roots(cwd, self.ctx.allowed_roots):
+            return None
+        target = pos[0] if pos else "HEAD"
+        if target.startswith("-") or shell.DYN in target:
+            return None
+        gd = _git_out(cwd, "rev-parse", "--path-format=absolute", "--git-dir")
+        cd = _git_out(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        if not gd or not cd:
+            return None
+        linked = not _same(_real(gd), _real(cd))
+        if not (linked or self.ctx.scratch_workspace):
+            return None
+        head = _git_out(cwd, "rev-parse", "--verify", "-q", "HEAD")
+        tgt = _git_out(cwd, "rev-parse", "--verify", "-q", target + "^{commit}")
+        if not head or not tgt:
+            return None
+        st = self._git(cwd, "status", "--porcelain", "--untracked-files=all")
+        if st is None or st.returncode != 0 or st.stdout.strip():
+            return None
+        kept = "HEAD không đổi"
+        if head != tgt:
+            names = self._git(cwd, "diff", "--name-only", "-z", "--no-renames", head, tgt)
+            top = _git_out(cwd, "rev-parse", "--show-toplevel")
+            if names is None or names.returncode != 0 or not top:
+                return None
+            paths = [x for x in names.stdout.split("\0") if x]
+            if len(paths) > 5000:
+                return None
+            for rel in paths:  # file đích sẽ ghi ra, hiện CÓ trên đĩa nhưng không track ở HEAD (bị ignore) → bị ghi đè = mất
+                if os.path.lexists(os.path.join(top, rel)):
+                    tr = self._git(cwd, "cat-file", "-e", f"{head}:{rel}")
+                    if tr is None or tr.returncode != 0:
+                        return None
+            cur = _git_out(cwd, "symbolic-ref", "-q", "HEAD") or ""
+            refs = self._git(cwd, "for-each-ref", "--contains", head, "--format=%(refname)", "refs/heads", "refs/remotes")
+            if refs is None or refs.returncode != 0:
+                return None
+            others = [r for r in refs.stdout.split() if r and r != cur and not r.endswith("/HEAD")]
+            if not others:
+                return None
+            kept = others[0]
+        return f"reset --hard trong {'worktree' if linked else 'scratch'} sạch, commit hiện tại vẫn còn ở {kept} — không mất gì"
 
     def _git_head_pushed(self, cwd: str | None) -> bool | None:
         r = self._git(cwd, "branch", "-r", "--contains", "HEAD")

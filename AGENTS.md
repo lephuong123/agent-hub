@@ -341,7 +341,7 @@ capabilities set …` = `config.set`, nhánh `manager` kiểm toàn vẹn); stri
 bypass. `manager_config_problem` kiểm theo khung ở `manager.set` và mỗi run. Run manager: classifier cấm thẳng ghi `hub-*`, loopback/LAN
 (curl/WebFetch), `claude` lồng, CLAUDE.md/.claude; tiến trình con gọi socket chỉ được `managerself.call` (`ManagerService.run_socket_block`).
 Thêm tool vào khung → `CAP_PROFILES`/`CAP_TOOLS_MAX` (permissions.py) + ca trong `tests/test_manager_capabilities.py`.
-Không bao giờ: manager duyệt approval, sửa policy/guard/golden/sandbox, purge, tắt ESTOP, sửa agent manager (kể cả chính mình/manager cũ),
+Không bao giờ: manager duyệt approval CHƯA được người giao (chỉ `routed_to=manager` qua `approval.manager_decide` — `docs/dev-notes/approval-profiles.md`), sửa policy/guard/golden/sandbox, purge, tắt ESTOP, sửa agent manager (kể cả chính mình/manager cũ),
 `bypassPermissions`/`allow_bypass`/`extra_args`/`subagents`, bỏ mẫu disallowed người đặt, MCP ngoài registry. Test: `tests/test_manager*.py`
 (helper `tests/m7_fake.py`, ScriptedRuntime giữ run manager ở `running`).
 
@@ -405,3 +405,18 @@ Bất biến: `created_by` lấy từ người gọi. Điều phối viên chỉ
 `schedules.*` (kiểm toàn vẹn), không từ lượt của lịch; luật ở `ScheduleService.manager_check`, gọi từ `manager/permissions.check_rpc` (2 lớp) và
 `_gate` (lần 3). Nội dung lịch do điều phối viên viết vào prompt trong khung `<untrusted-data>`, tiêu đề `[cfharness · SCHEDULED JOB · key …]`
 (không bao giờ thành "tin người"). Thêm luật/ trần → ca đỏ→xanh trong `tests/test_schedules.py`.
+
+## Hồ sơ phê duyệt — `approval.profile` strict|balanced|autonomous, giao điều phối viên duyệt
+Chi tiết, dữ liệu hub thật, bảng profile, ranh giới, lưu ý cài đặt cũ: `docs/dev-notes/approval-profiles.md`. Migration **v18**
+(`approval_requests.routed_to…timeout_action`). Test: `tests/test_approval_profiles.py`.
+
+| Module | Vai trò |
+|---|---|
+| `guard/profiles.py` | `profile()`, `knob()` (khoá đặt rõ trong config.yaml thắng profile — đọc khoá profile qua đây, không `config.get`), `never_automatic()` (ranh giới DUY NHẤT cho mọi đường tự động), `delegable()`, `on_timeout()`, kiểm `config.set approval.*` |
+| `guard/service.py` | `auto_allow` (checkpoint / scratch autonomous), `route_for` (giao điều phối viên), on_timeout `deny_and_continue`, `always_offer` kind `mcp_tool` |
+| `approvals.py` | `routed_to`, `approval.delegated/escalated`, `manager_decide`, `check_delegations`, phê duyệt muộn của deny_and_continue, `approval_stats` |
+| `guard/classifier.py` | `own_worktree_write`, `git_reset_hard_safe`, luật `mcp_tool`, ghi đè annotations (`human_override`) |
+
+Bất biến: mọi đường tự động gọi `never_automatic` trước; thêm luật/lớp nhạy cảm → thêm vào `NEVER_RULES`/`NEVER_KLASS` + một test `test_never_*`.
+Điều phối viên chỉ quyết approval `routed_to=manager` (luật ở `permissions.check_rpc` lớp 1+2 và `ApprovalService.manager_decide` lớp 3), không bao giờ
+approval của run điều phối viên, không bao giờ `always`. Q-04 giữ: mặc định hết giờ = `wait`.

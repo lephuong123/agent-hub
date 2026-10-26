@@ -92,9 +92,16 @@ kênh `telegram:<chat_id>`. Bot không gửi secret và cắt dữ liệu dài (
 ## Điều phối viên
 
 Điều phối viên là **một agent bạn chỉ định** để quản lý cả đội: bạn nói mục tiêu bằng lời ("tạo agent nghiên cứu tóm tắt README
-của repo X rồi giao việc đó"), nó tự tạo/sửa agent và team, giao task, theo dõi tới khi xong và báo lại. Nó KHÔNG được duyệt thao tác
-phá huỷ, sửa chính sách/guard/golden task, mở ngoại lệ sandbox, xoá vĩnh viễn, tắt ESTOP hay sửa cấu hình của chính nó; mọi thao tác
-ghi nhật ký `manager:<agent>` và rollback được.
+của repo X rồi giao việc đó"), nó tự tạo/sửa agent và team, giao task, theo dõi tới khi xong và báo lại. Nó KHÔNG được sửa chính
+sách/guard/golden task, mở ngoại lệ sandbox, xoá vĩnh viễn, tắt ESTOP hay sửa cấu hình của chính nó; mọi thao tác ghi nhật ký
+`manager:<agent>` và rollback được.
+
+**Duyệt thao tác phá huỷ** (thay đổi 2026-10-26, `docs/dev-notes/approval-profiles.md`): điều phối viên CHỈ quyết những approval bạn
+đã giao (`approval.delegate_to_manager`, bật ở profile `balanced` mặc định, lớp `file`/`git`/`mcp`) của agent KHÁC — cho phép/từ chối
+kèm lý do hoặc chuyển lên bạn; quá `timeout_s` (10 phút) chưa quyết → tự chuyển lên bạn (thông báo như thường). Nó không bao giờ quyết
+approval của chính nó, không tạo luật "luôn cho phép", và hub không bao giờ giao: push/đổi remote, thông tin xác thực/secret, file
+hub/chính sách, tài nguyên được bảo vệ, đường dẫn ngoài `workspace.allowed_roots`. Bạn vẫn quyết được bất kỳ lúc nào. Muốn như cũ:
+`cfharness config set approval.profile strict`. Xem vì sao agent phải dừng hỏi: `cfharness approvals stats`.
 
 - **Chỉ định** (chỉ người): `cfharness manager set <agent>` (huỷ: `--none`), hoặc web → trang **Điều phối** → *Chỉ định…* (có hộp xác nhận).
 - **Web — trang Điều phối** (đầu menu): khung chat theo cuộc trò chuyện (*+ Cuộc trò chuyện mới* để mở ngữ cảnh mới), trả lời chạy

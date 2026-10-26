@@ -26,7 +26,7 @@ HUMAN = auth.Caller(via="socket", token_ok=True)
 
 @pytest.fixture
 async def d(hub_home):
-    hub_home.config.write_text(yaml.safe_dump({"guard": {"enabled": True, "git_probe": False}, "approval": {"timeout_s": 30}}))
+    hub_home.config.write_text(yaml.safe_dump({"guard": {"enabled": True, "git_probe": False}, "approval": {"timeout_s": 30, "profile": "strict"}}))
     rt = FakeRuntime(hold=True)
     dm = Daemon(hub_home, runtime=rt)
     dm.hub.start()

@@ -22,7 +22,11 @@ Mục tiêu: người chỉ nhắn yêu cầu và trả lời câu hỏi. Không
 | Persona/prompt | Tự gỡ kẹt: thiếu tool thì `agent_update` hoặc giao lại, rồi `task_retry`. Chỉ hỏi người khi cần quyền người, và hỏi bằng nút. Không bao giờ bảo người gõ lệnh. Tự chọn mặc định hợp lý. "Chỉ đọc" vẫn cần Bash. Thông điệp lỗi `_DENIED` trỏ tới `ask_owner_permission` |
 
 ## Bất biến giữ nguyên
-- Điều phối viên không tự duyệt, không tự cấp sandbox: nó chỉ tạo câu hỏi. Câu hỏi có action thì `question.answer` chỉ nhận người
+> Cập nhật 2026-10-26 (`approval-profiles.md`): điều phối viên ĐƯỢC quyết approval mà người đã giao cho nó (`routed_to=manager`,
+> `approval.delegate_to_manager`, lớp người cho phép, ngoài danh sách "không bao giờ tự động"). Mọi approval khác vẫn như dưới đây.
+> `guard.hold_uncertain` mặc định nay theo `approval.profile` (balanced → false).
+
+- Điều phối viên không tự duyệt approval chưa được giao, không tự cấp sandbox: với những thứ đó nó chỉ tạo câu hỏi. Câu hỏi có action thì `question.answer` chỉ nhận người
   (`by == "user"`). Lời gọi của điều phối viên vẫn bị chặn ở daemon (`question.answer` của manager chỉ dành cho câu hỏi `with_manager`).
 - Không kind nào đụng agent điều phối viên (hiện tại + lịch sử), `bypassPermissions`/`allow_bypass`/`extra_args`/`subagents`/`sandbox*`,
   policy, golden, purge.

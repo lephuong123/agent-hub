@@ -41,7 +41,7 @@ for _n in ("httpx", "httpx2", "httpcore", "httpcore2"):  # log thư viện có U
     logging.getLogger(_n).setLevel(logging.WARNING)
 
 MAX_TEXT = 3900  # Telegram giới hạn 4096 ký tự/tin
-APPROVAL_EVENTS = ("approval.open", "approval.waiting_human", "approval.reminder")
+APPROVAL_EVENTS = ("approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated")
 
 
 class TelegramError(Exception):
@@ -143,6 +143,7 @@ def format_approval(p: dict[str, Any], agent: str | None, run: str | None, *, ki
         "approval.waiting_human": f"[cfharness] Yêu cầu {rid} của agent {agent or '-'} chưa có người duyệt → run {run or '-'} chuyển waiting_human (đã dừng tiến trình, giữ khoá repo, KHÔNG tự từ chối)",
         "approval.reminder": f"[cfharness] Nhắc lần {p.get('reminder_count')}: yêu cầu {rid} (agent {agent or '-'}) vẫn chờ người duyệt sau {int(float(p.get('wait_s') or 0) // 60)} phút",
         "approvals.list": f"[cfharness] Yêu cầu {rid} — agent {agent or '-'} đang chờ duyệt ({p.get('status')})",
+        "approval.escalated": f"[cfharness] Điều phối viên chuyển yêu cầu {rid} của agent {agent or '-'} lên NGƯỜI duyệt ({clip(p.get('note'), 200)})",
     }.get(kind, f"[cfharness] Yêu cầu {rid}")
     lines = [head, f"• Run: {run or '-'} · Yêu cầu: {rid}", f"• Thao tác: {clip(p.get('preview'), 300)}"]
     if p.get("reason"):

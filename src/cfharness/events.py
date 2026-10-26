@@ -81,6 +81,11 @@ EVENT_LEVELS: dict[str, str] = {
     "approval.resolved": "summary",
     "approval.waiting_human": "summary",
     "approval.reminder": "summary",
+    # hồ sơ phê duyệt (docs/dev-notes/approval-profiles.md) — tên CỐ ĐỊNH (hợp đồng với web/chat): approval giao điều phối viên
+    # (request_id, routed_to="manager", manager, tool, preview, destructive_class, matched_rule, timeout_s) / chuyển lên người
+    # (request_id, routed_to="human", by, note, reason) — sau escalated người nhận thông báo như approval.open
+    "approval.delegated": "summary",
+    "approval.escalated": "summary",
     "guard.decision": "debug",
     "guard.blocked": "summary",
     "guard.tamper_detected": "summary",  # hardening SEC: policy/config/hub.db bị ghi NGOÀI RPC (guard/integrity.py) → khôi phục + Slack

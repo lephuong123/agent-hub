@@ -11,6 +11,11 @@ Chữ ký (MCP server của luồng A gọi `approval.list|approve|deny` với c
   `approval.approve {…, always: true}` → thêm luật "luôn cho phép" hẹp (chỉ verdict uncertain đủ điều kiện; destructive → lỗi,
   không quyết gì); kết quả có `always_rule`. `always_confirm` (tuỳ chọn; MCP `hub_approve` luôn gửi) = fingerprint|domain của
   `always_offer` — khác luật sẽ tạo → lỗi, không quyết gì. Gỡ: `guard.protect.rm {id: "aa_…"}` (chỉ người); xem: `guard.policy` → `always_allow`.
+- `approval.stats {days?}` → thống kê theo luật/agent/tool/kết quả/người quyết + thời gian chờ (`cfharness approvals stats`).
+- `approval.profile` → profile + khoá hiệu lực (`guard/profiles.resolved`), chỉ đọc.
+- `approval.manager_decide {id, decision: allow|deny|escalate, reason}` — CHỈ điều phối viên (HUMAN_ONLY + MANAGER_ALLOWED; luật ở
+  `manager/permissions.check_rpc` + `ApprovalService.manager_decide`): approval `routed_to=manager`, lớp được giao, không phải approval
+  của run điều phối viên, không bao giờ `always`. Người dùng `approval.approve|deny` như cũ (quyết được bất kỳ lúc nào).
 - `guard.check` (hook/hub-guard), `guard.test {command|tool+input, cwd?, run_id?}`, `guard.policy`,
   `guard.protect.list|add|rm`, `notify.test {text?}`, `run.continue {id, prompt}`, `run.resume {id, prompt?}`,
   `agent.purge {id, confirm}` (confirm phải bằng id — người gõ lại).
@@ -78,7 +83,9 @@ def register_rpc(d: "Daemon") -> None:
             spec = hub.guard.always_prepare(_id(p)) if decision == "allowed" and p.get("always") is True else None
             if spec is not None and p.get("always_confirm") is not None:
                 # MCP hub_approve: client phải nhắc lại đúng fingerprint/host của luật sẽ tạo (từ `always_offer`) — gọi mù → lỗi, không quyết gì
-                want = str(spec.get("fingerprint") or spec.get("domain") or "")
+                from .service import always_confirm_value
+
+                want = always_confirm_value(spec)
                 if not want or str(p["always_confirm"]).strip() != want:
                     raise HubError("always_confirm không khớp luật sẽ tạo — đọc always_offer (fingerprint hoặc domain) của approval rồi nhắc lại "
                                    "đúng giá trị; approval vẫn đang chờ")  # cố ý KHÔNG trả giá trị đúng trong lỗi (thử lại mù sẽ không tự khớp)
@@ -88,6 +95,31 @@ def register_rpc(d: "Daemon") -> None:
             return res
 
         return _f
+
+    def manager_decide(p: dict[str, Any]) -> dict[str, Any]:
+        from ..auth import current_caller
+        from ..errors import Blocked
+
+        c = current_caller()
+        if c is None or not c.manager:
+            raise Blocked("approval.manager_decide chỉ dành cho điều phối viên — người dùng approval.approve|deny")
+        if p.get("always"):
+            raise Blocked("điều phối viên không bao giờ tạo luật luôn cho phép")
+        return hub.approvals.manager_decide(_id(p), str(p.get("decision") or ""), manager_id=str(c.manager), reason=str(p.get("reason") or ""))
+
+    def approval_stats(p: dict[str, Any]) -> dict[str, Any]:
+        from ..approvals import approval_stats as _stats
+
+        try:
+            days = float(p.get("days") or 30)
+        except (TypeError, ValueError):
+            raise HubError("days phải là số") from None
+        return _stats(hub, max(0.01, min(days, 3650)))
+
+    def approval_profile(p: dict[str, Any]) -> dict[str, Any]:
+        from .profiles import resolved
+
+        return resolved(hub.config)
 
     def run_continue(p: dict[str, Any]) -> dict[str, Any]:
         prompt = p.get("prompt")
@@ -128,6 +160,9 @@ def register_rpc(d: "Daemon") -> None:
             "approval.get": lambda p: hub.guard.annotate_always(hub.approvals.get(_id(p))),
             "approval.approve": decide("allowed"),
             "approval.deny": decide("denied"),
+            "approval.manager_decide": manager_decide,
+            "approval.stats": approval_stats,
+            "approval.profile": approval_profile,
             "guard.check": hub.guard.check,
             "guard.test": hub.guard.test,
             "guard.policy": lambda p: hub.guard.policy(),
