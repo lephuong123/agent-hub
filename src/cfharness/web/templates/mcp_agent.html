@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}MCP của {{ agent_id }}{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="/agents">Agent</a> › <a href="/agents/{{ agent_id }}">{{ agent_id }}</a> › <span>Cấu hình MCP</span></nav>
+<div class="page-head"><h1>Cấu hình MCP của {{ agent_id }}</h1><a class="btn ghost" href="/agents/{{ agent_id }}/edit">{{ m.icon('edit') }}<span>Gán MCP</span></a></div>
+<p class="muted">Đây là cấu hình hub sẽ đưa cho <code>claude --mcp-config</code> khi chạy agent này (giống <code>cfharness mcp agent-config {{ agent_id }}</code>).
+  Secret chỉ hiện dạng <code>${TÊN}</code> — giá trị thật được thay vào lúc chạy, trong file tạm 0600.</p>
+{% if problems %}<section class="card attention"><h2>{{ m.icon('alert') }} Vấn đề</h2>
+  <ul class="small">{% for p in problems %}<li class="danger-t">{{ p }}</li>{% endfor %}</ul>
+  <p class="muted xs">Dạng <code>server:${TÊN}</code> = thiếu secret (đặt ở <a href="/settings#secrets">Cài đặt</a>); chỉ tên server = server không còn trong registry.</p></section>{% endif %}
+<section class="card">
+  <h2>Server ({{ servers|length }})</h2>
+  {% if not servers %}{{ m.empty("Agent chưa được gán MCP server nào.", "plug") }}{% else %}
+  {% for sv in servers %}<h3><a href="/mcp/{{ sv.name }}">{{ sv.name }}</a> <span class="pill outline">{{ sv.entry.type }}</span></h3>
+  <pre>{{ sv.entry|j }}</pre>{% endfor %}{% endif %}
+</section>
+<div class="grid2">
+<section class="card">
+  <h2>Tool tự chạy — allow ({{ (rules.allowed or [])|length }})</h2>
+  <p class="muted xs">Truyền vào <code>--allowedTools</code>: chỉ đọc hoặc server tin cậy, không phá huỷ, không require_approval.</p>
+  {% for t in rules.allowed or [] %}<code class="chip">{{ t }}</code> {% else %}<span class="muted">—</span>{% endfor %}
+</section>
+<section class="card">
+  <h2>Tool bị chặn — deny ({{ (rules.disallowed or [])|length }})</h2>
+  <p class="muted xs">Truyền vào <code>--disallowedTools</code>: exclude, ngoài include, hoặc mô tả đáng ngờ chưa được cho phép rõ.</p>
+  {% for t in rules.disallowed or [] %}<code class="chip">{{ t }}</code> {% else %}<span class="muted">—</span>{% endfor %}
+</section>
+</div>
+<p class="muted small">Tool không nằm ở hai danh sách trên đi qua guard của hub: thao tác ghi/phá huỷ sẽ hỏi duyệt.</p>
+{% if rules.warnings %}<section class="card"><h2>Cảnh báo</h2><ul class="small">{% for w in rules.warnings %}<li class="warn-t">{{ w }}</li>{% endfor %}</ul></section>{% endif %}
+{% endblock %}
