@@ -96,5 +96,5 @@ Tất cả test: `uv run pytest -q` (118 test, ~47 s, không gọi `claude` th�
 - LLM phụ cho `uncertain` (FR-SG-03 bước 2); `false_positive` đánh dấu từ TUI.
 - TUI: badge/chuông approval (FR-UI-04) — dữ liệu và event đã sẵn.
 - FR-RT-12 đầy đủ (khoá theo gốc repo, checkpoint, đối chiếu diff trước khi resume sau restart — hiện resume không kiểm người đã sửa file).
-- Digest hằng ngày qua Slack (FR-LN-13, M4). Duyệt bằng nút Slack (sau M5).
+- Digest hằng ngày qua Slack (FR-LN-13, M4). Duyệt bằng nút Slack: đã có — Slack 2 chiều (`docs/dev-notes/slack.md`).
 - Chưa thử giữ hook 10 phút–giờ với CLI thật (chỉ 20 s ở đây, 150 s ở spike M0); thiết kế không phụ thuộc vì quá 300 s là dừng & resume.

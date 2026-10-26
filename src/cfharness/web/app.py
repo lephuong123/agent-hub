@@ -59,8 +59,10 @@ SAFE_CONFIG: tuple[tuple[str, str, str], ...] = (
     ("notify.telegram.enabled", "Bật thông báo Telegram", "true / false"),
     ("retention.soft_delete_days", "Giữ thùng rác (ngày)", "vd 30"),
 )
-# Wizard "Kết nối Slack": manifest điền sẵn → người dùng chỉ bấm Create + Install rồi dán Incoming Webhook URL.
-# Mỗi người một app riêng (hub chỉ nghe loopback, Slack không gọi ngược được) → thông báo một chiều, không chia sẻ token.
+# Slack có HAI wizard ở Cài đặt, mỗi người một app riêng (không chia sẻ token):
+# - Một chiều (`SLACK_MANIFEST`): manifest điền sẵn → Create + Install rồi dán Incoming Webhook URL → chỉ nhận thông báo.
+# - Hai chiều (`SLACK_MANIFEST_2WAY`, web/slack_pages.py): Socket Mode — bot tự mở WebSocket RA Slack nên hub vẫn chỉ nghe loopback;
+#   duyệt bằng nút, lệnh `/cfh`, nhắn điều phối viên trong DM. Dán bot token `xoxb-` + app token `xapp-` → RPC `slack.setup`.
 SLACK_WEBHOOK_SECRET = "SLACK_WEBHOOK_URL"
 SLACK_WEBHOOK_PREFIX = "https://hooks.slack.com/services/"
 SLACK_MANIFEST: dict[str, Any] = {
@@ -71,6 +73,37 @@ SLACK_MANIFEST: dict[str, Any] = {
     "settings": {"org_deploy_enabled": False, "socket_mode_enabled": False, "token_rotation_enabled": False},
 }
 SLACK_CREATE_URL = "https://api.slack.com/apps?new_app=1&manifest_json=" + quote(json.dumps(SLACK_MANIFEST, ensure_ascii=False, separators=(",", ":")), safe="")
+# Manifest app 2 chiều (docs/plan/slack-2way.md). Lệnh slash lấy từ `notify.slack.slash_command` lúc dựng URL (`slack_2way_create_url`).
+# `app_mentions:read` + `channels:history` chỉ cần khi bật `allow_channels` (v1: chỉ DM) → không xin sẵn.
+SLACK_SLASH_DEFAULT = "/cfh"
+SLACK_MANIFEST_2WAY: dict[str, Any] = {
+    "display_information": {"name": "cfharness", "description": "cfharness 2 chiều: duyệt bằng nút, lệnh /cfh, nhắn điều phối viên trong DM",
+                            "background_color": "#1f2937"},
+    "features": {"bot_user": {"display_name": "cfharness", "always_online": True},
+                 "app_home": {"messages_tab_enabled": True, "messages_tab_read_only_enabled": False},
+                 "slash_commands": [{"command": SLACK_SLASH_DEFAULT, "description": "Điều khiển cfharness",
+                                     "usage_hint": "canban | giaoviec <agent> <yêu cầu> | help"}]},
+    "oauth_config": {"scopes": {"bot": ["chat:write", "im:history", "im:read", "im:write", "commands", "users:read", "files:read", "files:write"]}},
+    "settings": {"socket_mode_enabled": True, "interactivity": {"is_enabled": True}, "event_subscriptions": {"bot_events": ["message.im"]},
+                 "org_deploy_enabled": False, "token_rotation_enabled": False},
+}
+_SLASH_RE = re.compile(r"^/[a-z0-9][a-z0-9_\-]{0,30}$")
+
+
+def slack_slash(v: Any) -> str:
+    """Tên lệnh slash hợp lệ cho manifest (Slack: chữ thường, ≤ 32 ký tự kể cả `/`); sai dạng → `/cfh`."""
+    s = str(v or "").strip().lower()
+    return s if _SLASH_RE.match(s) else SLACK_SLASH_DEFAULT
+
+
+def slack_2way_manifest(slash: Any = None) -> dict[str, Any]:
+    m = json.loads(json.dumps(SLACK_MANIFEST_2WAY))  # bản sao sâu — không sửa hằng số
+    m["features"]["slash_commands"][0]["command"] = slack_slash(slash)
+    return m
+
+
+def slack_2way_create_url(slash: Any = None) -> str:
+    return "https://api.slack.com/apps?new_app=1&manifest_json=" + quote(json.dumps(slack_2way_manifest(slash), ensure_ascii=False, separators=(",", ":")), safe="")
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; "
        "frame-ancestors 'none'; form-action 'self'; base-uri 'none'; object-src 'none'")
 SECURITY_HEADERS = [
@@ -766,7 +799,8 @@ async def settings_page(request: Request) -> Response:
     integ = await rpc(request, "guard.integrity.status")
     status = await rpc(request, "hub.status")
     st = ws(request)
-    return await render(request, "settings.html", {"nav": "settings", "estop": es, "cfg": vals, "secrets": secrets_, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names,
+    slack2 = await _slack_pages.slack_ctx(request)  # khối "Slack 2 chiều" (web/slack_pages.py)
+    return await render(request, "settings.html", {**slack2, "nav": "settings", "estop": es, "cfg": vals, "secrets": secrets_, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names,
                                                    "slack_webhook": SLACK_WEBHOOK_SECRET in names, "slack_create_url": SLACK_CREATE_URL,
                                                    "telegram": "TELEGRAM_BOT_TOKEN" in names, "tg_chats": tg_chats, "integ": integ, "status": status,
                                                    "web": {"host": st.host, "port": st.port, "sessions": len(st.auth.sessions)}})
@@ -1271,6 +1305,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/sse/firehose", sse_firehose),
         *_manager_routes(),
         *_extra_routes(),
+        *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
     app = Starlette(routes=routes, exception_handlers={HTTPException: http_error, RpcError: rpc_error, DaemonUnavailable: rpc_error})
@@ -1291,5 +1326,10 @@ _mcp_oauth.register_actions(ACTIONS, Action, _req)
 from . import mcp_pages as _mcpp  # noqa: E402
 
 _mcpp.register_actions(ACTIONS, Action, _req)
+
+# Wizard Slack 2 chiều (P5): slack2_setup / pair / allow / revoke / test / disable + khối ở Cài đặt
+from . import slack_pages as _slack_pages  # noqa: E402
+
+_slack_pages.register_actions(ACTIONS, Action, _req)
 
 __all__ = ["create_app", "ACTIONS", "agent_changes", "replay_items", "WebState", "urlencode"]

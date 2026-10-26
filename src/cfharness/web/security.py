@@ -121,6 +121,7 @@ class Session:
     last: float
     key: str = ""  # bí mật NGOÀI cookie, không bao giờ nằm trong HTML (WT-1)
     flashes: list[tuple[str, str]] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)  # trạng thái UI ngắn hạn theo phiên (vd mã ghép nối Slack vừa tạo) — chỉ RAM
 
     def flash(self, kind: str, text: str) -> None:
         self.flashes.append((kind, text))

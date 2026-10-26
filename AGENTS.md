@@ -296,10 +296,11 @@ flows/questions/manager_chat nhận `ChatBot`), không gọi API nền tảng tr
 | `chat/slack/bot.py` | `hub.slack`: Socket Mode (`websockets`) trong daemon, ACK trước xử lý + hàng đợi tuần tự + chống trùng `slack.seen`; `/cfh <lệnh>` → DM; nút; thread → câu hỏi / giao việc / `run.continue` / điều phối viên; `SlackChatNotifier` (khi hoạt động, `SlackNotifier` webhook nhường) |
 | `chat/slack/render.py` | HTML hub → mrkdwn + Block Kit; escape `& < >`, `verbatim`, ` trong khối mã → ˋ |
 | `chat/slack/api.py`, `rpc.py`, `cli.py` | `SlackApi` (gỡ token khỏi lỗi); RPC `slack.*` (trừ `status` đều HUMAN_ONLY); CLI `notify slack setup|status|test|disable|allow|revoke` |
+| `web/slack_pages.py` (+ `app.SLACK_MANIFEST_2WAY`, `_slack_pending.html`) | Wizard web "Slack 2 chiều" ở Cài đặt: link tạo app (manifest Socket Mode), dán 2 token → `slack.setup`, mã ghép nối trong `Session.extra`, poll `slack.pending` (htmx), `slack.allow|revoke|test|disable` qua `ACTIONS` (CSRF + khoá phiên, audit `web`) |
 
 Bất biến: như Telegram — mọi lệnh/nút qua `Daemon.call_as(auth.slack_caller(hub, chat_id, user_id), …)`; người = `interactive` bật + chat ∈
 `allowed_chat_ids` + user ∈ `allowed_user_ids` (+ `allow_channels` cho kênh không phải DM); envelope khác `team_id` ghim → bỏ. Token bot/app chỉ
-ở secret store. Test: `tests/test_slack.py`, Slack giả `tests/slack_fake.py` (HTTP + WebSocket cục bộ).
+ở secret store. Test: `tests/test_slack.py`, `tests/test_web_slack.py` (wizard web), Slack giả `tests/slack_fake.py` (HTTP + WebSocket cục bộ).
 
 ## WEB — giao diện trình duyệt (`cfharness web`)
 Chi tiết, kiểm chứng sandbox thật, việc dở: `docs/dev-notes/web.md`. Ảnh: `docs/screenshots/web/`. Test: `tests/test_web.py`.

@@ -105,6 +105,8 @@ Manifest app (wizard điền sẵn):
 ## Tiến độ
 - 2026-10-26: **P0 xong** (lõi `chat/base.py`, test Telegram xanh không sửa). **P1 xong phần mã + test với Slack giả**
   (`tests/test_slack.py`); chưa nghiệm thu trên workspace Slack thật. Chi tiết: `docs/dev-notes/slack.md`.
+- 2026-10-26: **P5 xong phần web** — wizard "Slack 2 chiều" ở Cài đặt (`web/slack_pages.py`, `tests/test_web_slack.py`, ảnh
+  `docs/screenshots/web/v2/23-…`, `24-…`); chạy thử với Slack giả trong Chromium thật. Chưa nghiệm thu trên workspace Slack thật.
 
 ## Pha thực hiện
 Mỗi pha chạy được độc lập, `uv run pytest -q` xanh, có ghi chú trong `docs/dev-notes/slack.md`.
