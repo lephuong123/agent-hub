@@ -105,6 +105,9 @@ Manifest app (wizard điền sẵn):
 ## Tiến độ
 - 2026-10-26: **P0 xong** (lõi `chat/base.py`, test Telegram xanh không sửa). **P1 xong phần mã + test với Slack giả**
   (`tests/test_slack.py`); chưa nghiệm thu trên workspace Slack thật. Chi tiết: `docs/dev-notes/slack.md`.
+- 2026-10-26: **P4 xong phần mã + test với Slack giả** — ảnh/tệp văn bản trong DM → điều phối viên (tải `url_private` CHỈ sau allowlist,
+  chỉ host `files.slack.com`, cùng giới hạn Telegram), `[[file: …]]` → files v2, ghi chú tệp trong prompt kênh `slack:`. Phần dùng chung
+  tách ở `chat/media.py` (`MediaBase`). Scope không đổi. Test `tests/test_slack_media.py`; chưa nghiệm thu trên workspace thật.
 
 ## Pha thực hiện
 Mỗi pha chạy được độc lập, `uv run pytest -q` xanh, có ghi chú trong `docs/dev-notes/slack.md`.

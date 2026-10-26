@@ -3,6 +3,8 @@
 - Web API (HTTP, thân form như SlackApi gửi): auth.test, apps.connections.open (app token) → URL WebSocket cục bộ, chat.postMessage,
   chat.update, chat.postEphemeral, conversations.open, users.info, files.getUploadURLExternal (+ POST /upload/<id>),
   files.completeUploadExternal. Token sai → `invalid_auth`.
+- Tệp người gửi (P4): `user_files()` lưu nội dung và bơm tin `file_share`; GET `/files-pri/<id>/<tên>` trả nội dung khi có bot token
+  ở header (thiếu/sai → trang HTML 200 như Slack thật khi thiếu `files:read`); `downloads` ghi mọi lần GET.
 - Socket Mode (WebSocket, `websockets.sync.server` trong luồng riêng): gửi `hello`, rồi các envelope test bơm vào
   (`user_message()`, `press()`, `slash()`); ghi nhận ACK (`acked()`), `disconnect()` để thử kết nối lại; gửi trùng = cùng `event_id`.
 """
@@ -14,7 +16,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 from websockets.sync.server import serve
 
@@ -30,6 +32,8 @@ class FakeSlack:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.next_ts = 1000
         self.uploads: dict[str, bytes] = {}
+        self.files: dict[str, tuple[bytes, str]] = {}  # đường dẫn → (nội dung, mime) — tệp người gửi
+        self.downloads: list[str] = []  # đường dẫn đã GET (kể cả bị từ chối vì token)
         self.outbox: list[dict[str, Any]] = []  # envelope chờ gửi qua WebSocket
         self.acks: set[str] = set()
         self.connections = 0
@@ -40,6 +44,24 @@ class FakeSlack:
         outer = self
 
         class H(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                with outer.cond:
+                    outer.downloads.append(self.path)
+                    item = outer.files.get(self.path.split("?", 1)[0])
+                    outer.cond.notify_all()
+                auth = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
+                if item is None:
+                    data, ctype, code = b"not found", "text/plain", 404
+                elif auth != BOT_TOKEN:  # Slack thật: thiếu quyền → trang đăng nhập HTML, mã 200
+                    data, ctype, code = b"<!DOCTYPE html><html>sign in</html>", "text/html; charset=utf-8", 200
+                else:
+                    data, ctype, code = item[0], item[1], 200
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
             def do_POST(self):  # noqa: N802
                 n = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(n) or b""
@@ -187,6 +209,31 @@ class FakeSlack:
         if subtype:
             ev["subtype"] = subtype
         return self._push("events_api", {"team_id": team or self.team, "event": ev, "event_id": event_id or f"Ev{ts.replace('.', '')}"})
+
+    def user_files(self, channel: str, user: str, files: list[tuple[str, bytes, str]], *, text: str = "", thread_ts: str | None = None,
+                   sizes: dict[str, int] | None = None, urls: dict[str, str] | None = None, team: str | None = None) -> str:
+        """Tin `file_share` kèm `files` [(tên, nội dung, mime)]. `sizes` = cỡ khai báo giả; `urls` = URL tải thay (thử host lạ)."""
+        objs = []
+        for name, data, mime in files:
+            with self.cond:
+                self.next_ts += 1
+                fid = f"F{self.next_ts}"
+                path = f"/files-pri/{self.team}-{fid}/{quote(name)}"  # Slack thật: tên đã mã hoá %
+                self.files[path] = (data, mime)
+            url = (urls or {}).get(name) or f"{self.url}{path}"
+            dl = (urls or {}).get(name) or f"{self.url}{path}?dl=1"
+            objs.append({"id": fid, "name": name, "title": name, "mimetype": mime, "filetype": name.rsplit(".", 1)[-1],
+                         "size": (sizes or {}).get(name, len(data)), "mode": "hosted", "url_private": url, "url_private_download": dl})
+        ts = self._ts()
+        ev = {"type": "message", "subtype": "file_share", "channel": channel, "user": user, "text": text, "ts": ts, "files": objs,
+              "channel_type": "im" if channel.startswith("D") else "channel"}
+        if thread_ts:
+            ev["thread_ts"] = thread_ts
+        return self._push("events_api", {"team_id": team or self.team, "event": ev, "event_id": f"Ev{ts.replace('.', '')}"})
+
+    def downloaded(self) -> list[str]:
+        with self.cond:
+            return list(self.downloads)
 
     def press(self, channel: str, user: str, value: str, ts: str, *, team: str | None = None) -> str:
         with self.cond:

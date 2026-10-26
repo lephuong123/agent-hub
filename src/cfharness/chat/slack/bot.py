@@ -139,6 +139,11 @@ class SlackBot(ChatBot):
     def _make_notifier(self) -> SlackChatNotifier:
         return SlackChatNotifier(self.hub, self)
 
+    def _make_media(self) -> Any:
+        from .media import SlackMedia
+
+        return SlackMedia(self)
+
     # ------------------------------------------------------------------ cấu hình
     def _secret(self, name: str | None) -> str | None:
         # CHỈ secret store (như Telegram): kênh 2 chiều chỉ chạy sau `notify slack setup` có chủ đích
@@ -404,8 +409,8 @@ class SlackBot(ChatBot):
                 return
             self._audit_ignored(cid, ev.get("channel_type"), "message", uid)
             return
-        if ev.get("subtype") == "file_share":  # P4: ảnh/tệp → điều phối viên
-            await self._send(api, cid, "Bot Slack chưa nhận ảnh/tệp — gửi chữ, hoặc dùng web/TUI.", reply_to=ev.get("ts"))
+        if ev.get("subtype") == "file_share":  # P4: ảnh/tệp → điều phối viên (chat/slack/media.py; tải CHỈ sau allowlist ở trên)
+            await self.media.handle(cid, uid, ev, api)
             return
         if not text:
             return
