@@ -307,8 +307,9 @@ async def agent_config(request: Request) -> Response:
 async def browse(request: Request) -> Response:
     q = str(request.query_params.get("q") or "").strip()[:200]
     cursor = str(request.query_params.get("cursor") or "")[:500] or None
+    featured = not q and not cursor  # chưa gõ gì → danh sách đề xuất (CURATED), không đổ cả registry theo thứ tự chữ cái
     try:
-        res = await rpc(request, "mcp.catalog", {"search": q, "limit": PAGE_LIMIT, "cursor": cursor}) or {}
+        res = await rpc(request, "mcp.catalog", {"search": q, "limit": PAGE_LIMIT, "cursor": cursor, "offline": featured}) or {}
     except RpcError as e:
         res = {"servers": [], "error": err_text(e), "source": "error"}
     from ..mcp_client.catalog import suggest_name
@@ -316,7 +317,8 @@ async def browse(request: Request) -> Response:
     installed = {m.get("name") for m in await rpc(request, "mcp.list") or []}
     for e in res.get("servers") or []:
         e["installed"] = suggest_name(str(e.get("name") or "")) in installed
-    return await render(request, "mcp_browse.html", {"nav": "mcp", "q": q, "cursor": cursor, "res": res, "installed": installed})
+    return await render(request, "mcp_browse.html", {"nav": "mcp", "q": q, "cursor": cursor, "res": res, "installed": installed,
+                                                     "featured": featured})
 
 
 def _field_key(prefix: str, name: str) -> str:
@@ -417,6 +419,8 @@ def build_install(opt: dict[str, Any], entry: dict[str, Any], form: FormData) ->
 def install_confirm(cfg: dict[str, Any], secrets: dict[str, str]) -> str:
     what = (cfg.get("command", "") + " " + " ".join(cfg.get("args") or [])).strip() if cfg["transport"] == "stdio" else cfg.get("url", "")
     trust = "TIN CẬY (tool ghi chạy không cần duyệt)" if cfg["trust"] == "trusted" else "cần duyệt"
+    if cfg.get("auth"):
+        return f"Cài MCP server {cfg['name']} ({trust})?\nServer cần đăng nhập OAuth — cài xong bấm Kết nối ở trang server:\n{what}"
     return (f"Cài MCP server {cfg['name']} ({trust})?\nHub sẽ CHẠY NGAY để kiểm tra, ngoài sandbox, dưới quyền của bạn:\n{what}"
             + (f"\nSecret sẽ lưu vào secret store: {', '.join(sorted(secrets))}" if secrets else ""))
 
@@ -441,6 +445,8 @@ async def install_submit(request: Request) -> Response:
         cfg, secrets = build_install(opt, ctx["entry"], form)
     except ValueError as e:
         return await again(f"Chưa đủ thông tin: {e}")
+    if opt.get("needs_oauth") and cfg["transport"] != "stdio":
+        cfg["auth"] = {"type": "oauth"}
     if form.get("confirm") != "yes":
         # có JS thì hộp xác nhận đã hiện trước khi gửi; không JS → yêu cầu xác nhận lại (không mang secret sang trang khác)
         return await again("Cần xác nhận: " + install_confirm(cfg, secrets))
@@ -451,8 +457,6 @@ async def install_submit(request: Request) -> Response:
     clash = sorted(n for n in secrets if n in existing)
     if clash and form.get("overwrite_secrets") != "1":
         return await again(f"Secret đã có: {', '.join(clash)} — tích 'Ghi đè secret đã có' hoặc đổi tên server")
-    if opt.get("needs_oauth") and cfg["transport"] != "stdio":
-        cfg["auth"] = {"type": "oauth"}
     try:
         added = await rpc(request, "mcp.add", {"config": cfg, "probe": False}, audit=True)
     except RpcError as e:

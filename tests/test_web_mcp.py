@@ -85,6 +85,10 @@ async def test_mcp_page_links_to_browse_and_catalog_lists_cards(env):
     await env.login()
     r = await env.client.get("/mcp")
     assert r.status_code == 200 and 'href="/mcp/browse"' in r.text and "/do/mcp_add" in r.text and "/do/mcp_import" in r.text
+    # chưa gõ gì → danh sách đề xuất (CURATED), không gọi registry
+    n_calls = len(env.net_calls)
+    r = await env.client.get("/mcp/browse")
+    assert r.status_code == 200 and "Đề xuất" in r.text and "playwright" in r.text.lower() and len(env.net_calls) == n_calls
     r = await env.client.get("/mcp/browse?q=figma")
     assert r.status_code == 200, r.text
     assert "Figma Context" in r.text and "OAuth Demo" in r.text and "search=figma" in env.net_calls[-1]

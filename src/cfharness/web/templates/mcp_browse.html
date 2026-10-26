@@ -11,6 +11,7 @@
   <button class="btn primary" type="submit">Tìm</button>
 </form>
 {% if res.error %}<p class="warn-t small">{{ m.icon('alert') }} {{ res.error }}{% if res.source == 'offline' %} — đang hiện danh sách tuyển chọn có sẵn trong hub.{% elif res.source == 'stale-cache' %} — đang hiện kết quả đã lưu trước đó.{% endif %}</p>
+{% elif featured %}<h2>Đề xuất</h2><p class="muted small">Server hay dùng, đã kiểm sẵn. Gõ tên ở ô trên để tìm trong toàn bộ registry.</p>
 {% elif res.source == 'offline' %}<p class="muted small">Danh sách tuyển chọn có sẵn trong hub (không kết nối registry).</p>{% endif %}
 
 {% if not res.servers %}{{ m.empty("Không tìm thấy server nào" ~ (" cho '" ~ q ~ "'" if q else "") ~ ".", "plug") }}{% else %}
