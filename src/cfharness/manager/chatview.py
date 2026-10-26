@@ -26,6 +26,7 @@ from ..web.present import mgr_action_item, mgr_message
 CHANNEL = "cli"
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TERMINAL = ("run.completed", "run.failed", "run.cancelled", "run.interrupted")
+FAIL_PREFIX = "(Điều phối viên không trả lời được:"  # tin `manager.service._finish_run` ghi khi run không xong → lịch sử biết là lỗi
 
 # Style lấy từ bảng màu chung `ui/theme.py` (docs/dev-notes/cli-design.md §2) — chat, `top` và CLI là một sản phẩm
 C_USER = th.USER
@@ -82,8 +83,8 @@ def history_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if m["kind"] == "user":
             out.append({"kind": "user", "text": m["text"], "ts": m.get("ts"), "run_id": m.get("run_id")})
         else:
-            out.append({"kind": "notify" if m.get("notify") else "manager", "text": m["text"], "ts": m.get("ts"), "ok": True,
-                        "run_id": m.get("run_id")})
+            out.append({"kind": "notify" if m.get("notify") else "manager", "text": m["text"], "ts": m.get("ts"),
+                        "ok": not str(m["text"] or "").startswith(FAIL_PREFIX), "run_id": m.get("run_id")})
     return out
 
 
