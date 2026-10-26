@@ -1,0 +1,25 @@
+{#- OAuth của MCP server (docs/dev-notes/mcp-oauth.md) — include từ mcp_show.html; KHÔNG BAO GIỜ có token ở đây. -#}
+{% import "_macros.html" as m with context %}
+{% if s.config and s.config.auth and s.config.auth.type == 'oauth' %}
+{% set o = s.oauth or {} %}
+{% set st = s.oauth_status or 'not_connected' %}
+{% set q = request.query_params.get('oauth') if request is defined else None %}
+<section class="card" id="oauth">
+  <h2>Đăng nhập OAuth</h2>
+  {% if q == 'connected' and st == 'connected' %}<div class="flash ok" role="status">Đã kết nối OAuth.</div>
+  {% elif q == 'error' %}<div class="flash error" role="alert">Kết nối OAuth chưa thành công — xem trạng thái bên dưới và thử lại.</div>{% endif %}
+  <dl class="kv cols">
+    <div><dt>Trạng thái</dt><dd>{% if st == 'connected' %}<span class="pill ok">đã kết nối</span>{% elif st == 'expired' %}<span class="pill warn">hết hạn</span>{% elif st == 'error' %}<span class="pill danger">lỗi</span>{% else %}<span class="pill muted">chưa kết nối</span>{% endif %}</dd></div>
+    <div><dt>Token hết hạn</dt><dd>{{ o.expires_at|ts if o.expires_at else '—' }}{% if o.refreshable %} <span class="muted small">(tự làm mới)</span>{% endif %}</dd></div>
+    {% if o.issuer %}<div><dt>Nhà cung cấp</dt><dd><code>{{ o.issuer }}</code></dd></div>{% endif %}
+    <div><dt>Client</dt><dd>{{ {'dcr': 'đăng ký tự động', 'manual': 'client_id nhập tay'}.get(o.client, '—') }}</dd></div>
+    {% if o.scope %}<div class="span2"><dt>Scope</dt><dd><code>{{ o.scope }}</code></dd></div>{% endif %}
+    {% if o.error %}<div class="span2"><dt>Lỗi</dt><dd class="danger-t">{{ o.error }}</dd></div>{% endif %}
+  </dl>
+  <div class="row gap">
+    {% if not s.deleted_at %}{{ m.act("mcp_connect", "Kết nối lại" if st != 'not_connected' else "Kết nối", {"name": s.name}, "btn primary" if st != 'connected' else "btn", ic="plug") }}{% endif %}
+    {% if st != 'not_connected' or o.issuer %}{{ m.act("mcp_disconnect", "Ngắt kết nối", {"name": s.name}, "btn ghost", confirm="Ngắt kết nối OAuth của " ~ s.name ~ "? Agent dùng server này sẽ không chạy được tới khi kết nối lại.") }}{% endif %}
+  </div>
+  <p class="muted small">Bấm Kết nối → đăng nhập ở trang của nhà cung cấp → quay lại đây. Token lưu trong secret store của hub (không vào hub.db/log) và chỉ được chèn vào cấu hình MCP lúc agent chạy. Terminal: <code>cfharness mcp login {{ s.name }}</code></p>
+</section>
+{% endif %}

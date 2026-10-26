@@ -21,6 +21,7 @@
     cho tới khi bạn cho phép rõ ràng từng tool trong bảng bên dưới.</p>
   <ul class="small">{% for r in blocked_suspicious %}<li><code>{{ r.name }}</code> — <span class="danger-t">{{ r.suspicious|join('; ') }}</span></li>{% endfor %}</ul>
 </section>
+{% include "_mcp_oauth.html" %}
 {% endif %}
 
 <section class="card">

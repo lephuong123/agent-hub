@@ -69,6 +69,7 @@ Chi tiết, lệch BRD, việc dở: `docs/dev-notes/M1-A.md`.
 | `mcp_client/` | Registry MCP (DB `mcp_servers` là nguồn sự thật; `mcp/registry.yaml` là BẢN SAO chỉ đọc). Hợp đồng cho B: `build_agent_mcp_servers(agent)`, `tool_annotations(server, tool)`, thêm `agent_mcp_tool_rules(agent)` |
 | `mcp_client/wiring.py` | `attach(hub)` (gọi trong `Hub.__init__`): `hub.secrets`, `hub.audit`, `hub.mcp`, listener `ToolWriteWatcher` → audit + event `tool.write` |
 | `secrets.py` | Secret store file 0600 `HUB_HOME/secrets/<NAME>`; `${NAME}` trong cấu hình, `resolve()` fail-closed |
+| `mcp_client/oauth.py` | OAuth 2.1 cho MCP http/sse (`auth: {type: oauth}`): discovery PRM/AS, DCR, PKCE, state RAM ≤10 phút, token ở secret store; RPC `mcp.oauth_start|callback|status|disconnect|refresh`; chèn Bearer vào mcp.json runtime. Chi tiết: `docs/dev-notes/mcp-oauth.md` |
 | `audit.py` | `audit_log` append-only (trigger). `audit.record(kind, agent_id, run_id, data)` cho luồng B; tiến trình ngoài daemon dùng RPC `audit.record` |
 
 Quy tắc thêm: method RPC mới thay đổi trạng thái → thêm tên vào `MUTATING` (rpc.py) và khai báo TRƯỚC dòng `register_rpc(self)`.

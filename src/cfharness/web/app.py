@@ -112,7 +112,7 @@ class WebState:
 class GuardMiddleware:
     """ASGI thuần (không đệm response → SSE chạy được): kiểm Host, gắn phiên, chặn khi chưa đăng nhập, thêm header bảo mật."""
 
-    PUBLIC = ("/login", "/favicon.ico")
+    PUBLIC = ("/login", "/favicon.ico", "/mcp/oauth/callback")  # callback OAuth: state là lớp bảo vệ (web/mcp_oauth.py)
 
     def __init__(self, app: Any, state: WebState) -> None:
         self.app = app
@@ -927,7 +927,8 @@ ACTIONS: dict[str, Action] = {
                               confirm="Lấy run này làm golden task (bài kiểm tra chuẩn cho agent)?"),
     "digest_run": Action("digest.run", lambda f: {"no_send": True}, "Đã tạo bản tin học"),
     # ---- MCP
-    "mcp_add": Action("mcp.add", lambda f: {"config": _mcp_config(f), "probe": True}, lambda r, f: _mcp_ok(r), goto=lambda r, f: "/mcp", danger=True,
+    "mcp_add": Action("mcp.add", lambda f: {"config": _mcp_config(f), "probe": not f.get("oauth")}, lambda r, f: _mcp_ok(r),
+                      goto=lambda r, f: f"/mcp/{(r or {}).get('name')}" if f.get("oauth") else "/mcp", danger=True,
                       confirm=lambda f: _mcp_confirm(f)),
     "mcp_probe": Action("mcp.probe", lambda f: {"name": _req(f, "name")}, lambda r, f: _probe_msg(r)),
     "mcp_remove": Action("mcp.remove", lambda f: {"name": _req(f, "name"), "force": f.get("force") == "1"}, lambda r, f: f"Đã xoá MCP {f.get('name')} (khôi phục được)",
@@ -984,6 +985,8 @@ def _mcp_config(f: FormData) -> dict[str, Any]:
         cfg["command"], cfg["args"] = parts[0], parts[1:]
     else:
         cfg["url"] = _req(f, "url", "URL")
+        if f.get("oauth"):
+            cfg["auth"] = {"type": "oauth"}  # đăng nhập bằng nút Kết nối ở trang server (web/mcp_oauth.py)
     env: dict[str, str] = {}
     for line in str(f.get("env") or "").splitlines():
         if "=" in line:
@@ -1262,6 +1265,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/costs", costs_page),
         Route("/audit", audit_page),
         Route("/settings", settings_page),
+        *_mcp_oauth.routes(),  # /do/mcp_connect + /mcp/oauth/callback — TRƯỚC /do/{name}
         Route("/do/{name}", do_action, methods=["POST"]),
         Route("/sse/run/{id}", sse_run),
         Route("/sse/firehose", sse_firehose),
@@ -1279,6 +1283,9 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
 from . import manager as _mgr  # noqa: E402
 
 _mgr.register_actions(ACTIONS, Action, _req)
+from . import mcp_oauth as _mcp_oauth  # noqa: E402
+
+_mcp_oauth.register_actions(ACTIONS, Action, _req)
 
 # Trang MCP mở rộng (sửa server, tool, danh mục): thao tác `mcp_edit`
 from . import mcp_pages as _mcpp  # noqa: E402

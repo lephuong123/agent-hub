@@ -6,7 +6,7 @@
 <p class="muted">Kho công cụ MCP của hub. Gán cho agent bằng ô tích ở trang sửa agent. Tìm & cài server có sẵn ở <a href="/mcp/browse">danh mục MCP</a>.</p>
 <section class="card">
   {% if not servers %}{{ m.empty("Chưa có MCP server nào. Thêm mới hoặc nhập từ Claude Code bên dưới.") }}{% else %}
-  <table class="tbl stack"><thead><tr><th>Tên</th><th>Kiểu</th><th>Tin cậy</th><th>Tool</th><th>Agent dùng</th><th>Kiểm gần nhất</th><th></th></tr></thead><tbody>
+  <table class="tbl stack"><thead><tr><th>Tên</th><th>Kiểu</th><th>Tin cậy</th><th>Tool</th><th>Agent dùng</th><th>Kiểm gần nhất</th><th>OAuth</th><th></th></tr></thead><tbody>
   {% for s in servers %}<tr class="{{ 'archived' if s.deleted_at }}">
     <td data-label="Tên"><a href="/mcp/{{ s.name }}"><b>{{ s.name }}</b></a>{% if s.deleted_at %} <span class="pill muted">đã xoá</span>{% endif %}</td>
     <td data-label="Kiểu">{{ s.transport }}</td>
@@ -14,6 +14,7 @@
     <td data-label="Tool">{{ (s.annotations_cache or {})|length or '—' }}</td>
     <td data-label="Agent dùng">{% for a in used.get(s.name, []) %}<span class="chip">{{ a }}</span>{% else %}—{% endfor %}</td>
     <td data-label="Kiểm gần nhất">{% if s.probe_error %}<span class="pill danger" title="{{ s.probe_error }}">lỗi</span>{% elif s.last_probe_at %}<span class="pill ok">ok</span> <span class="muted small">{{ s.last_probe_at|ts }}</span>{% else %}—{% endif %}</td>
+    <td data-label="OAuth">{% if s.oauth_status %}<span class="pill {{ {'connected': 'ok', 'expired': 'warn', 'error': 'danger'}.get(s.oauth_status, 'muted') }}">{{ {'connected': 'đã kết nối', 'expired': 'hết hạn', 'error': 'lỗi', 'not_connected': 'chưa kết nối'}.get(s.oauth_status, s.oauth_status) }}</span>{% else %}—{% endif %}</td>
     <td class="actions">{% if s.deleted_at %}{{ m.act("mcp_restore", "Khôi phục", {"name": s.name}, "btn sm", confirm="Khôi phục MCP server " ~ s.name ~ "? Server MCP chạy NGOÀI sandbox của agent.") }}{% else %}
       {{ m.act("mcp_probe", "Kiểm tra", {"name": s.name}, "btn sm") }}
       {{ m.act("mcp_remove", "Xoá", {"name": s.name, "force": "1" if used.get(s.name) else ""}, "btn sm ghost", confirm="Xoá MCP " ~ s.name ~ "?" ~ (" Đang được dùng bởi: " ~ used.get(s.name)|join(", ") if used.get(s.name) else "")) }}{% endif %}</td>
@@ -31,6 +32,7 @@
     <label>URL (http/sse) <input name="url" placeholder="https://…"></label>
     <label>Biến môi trường (mỗi dòng TÊN=giá trị; dùng ${SECRET} để lấy từ secret) <textarea name="env" rows="2" placeholder="GITHUB_TOKEN=${GITHUB_TOKEN}"></textarea></label>
     <label>Mô tả <input name="description"></label>
+    <label class="check"><input type="checkbox" name="oauth" value="1"> Đăng nhập OAuth (chỉ http/sse — sau khi thêm, bấm Kết nối ở trang server)</label>
     <label class="check"><input type="checkbox" name="trust" value="trusted"> Tin cậy (tool ghi chạy không cần duyệt; tool xoá vẫn luôn cần duyệt)</label>
     <div class="row end"><button class="btn primary" type="submit">Thêm & kiểm tra</button></div>
   </form>
