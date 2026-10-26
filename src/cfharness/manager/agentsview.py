@@ -27,6 +27,7 @@ from rich.text import Text
 
 from ..termsafe import clean, one_line
 from ..tui.model import TopModel, cost_cell, fmt_dur, last_tool_cell, parse_ts, short_tool, tok_cell
+from ..ui import theme as th
 from ..web.present import action_view
 from . import chatview as V
 
@@ -251,13 +252,13 @@ def summary_line(mon: AgentMonitor, width: int, *, expanded: bool = False, now: 
         parts.append((f"{V.AGENT_STATE['running'][0]} {running} agent đang chạy", V.AGENT_STATE["running"][2]))
         parts.append((" · ", V.C_DIM))
     if c["manager"]:
-        parts.append((f"◐ {c['manager']} điều phối viên đang xử lý", V.AGENT_STATE["manager"][2]))
+        parts.append((f"{V.AGENT_STATE['manager'][0]} {c['manager']} điều phối viên đang xử lý", V.AGENT_STATE["manager"][2]))
         parts.append((" · ", V.C_DIM))
     if queued:
-        parts.append((f"◌ {queued} chờ slot", V.AGENT_STATE["queued"][2]))
+        parts.append((f"{V.AGENT_STATE['queued'][0]} {queued} chờ slot", V.AGENT_STATE["queued"][2]))
         parts.append((" · ", V.C_DIM))
     if errors:
-        parts.append((f"✖ {errors} lỗi", V.AGENT_STATE["error"][2]))
+        parts.append((f"{V.AGENT_STATE['error'][0]} {errors} lỗi", V.AGENT_STATE["error"][2]))
         parts.append((" · ", V.C_DIM))
     if parts[-1][0] == " · ":
         parts.pop()
@@ -315,7 +316,7 @@ def agent_row(mon: AgentMonitor, state: str, r: Any, width: int, now: float | No
     task_w = width - fixed
     t = Text(" ")
     t.append(icon + " ", style=style)
-    n = Text(one_line(r["name"] or r.id, 60), style="bold")
+    n = Text(one_line(r["name"] or r.id, 60), style=th.HEAD)
     n.truncate(name_w, overflow="ellipsis", pad=True)
     t.append_text(n)
     t.append(" ")
@@ -372,7 +373,7 @@ def agents_table(mon: AgentMonitor, now: float | None = None, width: int = 120) 
     agent_w = 18 if width >= 90 else 12
     # rộng cố định (gồm ô đệm giữa cột): trạng thái 13 + agent + 2 + TG 7 + tool 20 + TOK 7 + $ 8
     task_w = max(8, width - 13 - (agent_w + 2) - 7 - (20 if show_tool else 0) - (7 if show_tok else 0) - 8 - 2)
-    tb = Table(box=None, pad_edge=False, show_edge=False, header_style="bold", expand=False)
+    tb = Table(box=None, pad_edge=False, show_edge=False, header_style=th.HEAD, expand=False)
     cols: list[tuple[str, dict[str, Any]]] = [
         ("", {"no_wrap": True, "min_width": 11, "max_width": 11, "overflow": "ellipsis"}),
         ("AGENT", {"no_wrap": True, "max_width": agent_w, "overflow": "ellipsis"}),
@@ -389,8 +390,9 @@ def agents_table(mon: AgentMonitor, now: float | None = None, width: int = 120) 
         tb.add_column(col, **kw)
     for r in rows:
         st = mon.state(r, now) or ("idle" if r["status"] == "idle" else r["status"])
-        icon, label, style = V.AGENT_STATE.get(st, ("○" if st == "idle" else "‖", "rảnh" if st == "idle" else str(st), V.C_MID))
-        name = Text(one_line(r["name"] or r.id, 40), style="bold")
+        fb = th.STATUS["agent"]["idle" if st == "idle" else "paused"]
+        icon, label, style = V.AGENT_STATE.get(st, (fb.icon, "rảnh" if st == "idle" else str(st), fb.style))
+        name = Text(one_line(r["name"] or r.id, 40), style=th.HEAD)
         if r["name"] and r["name"] != r.id:
             name.append(f" {one_line(r.id, 30)}", style=V.C_DIM)
         tool = last_tool_cell(r, now)
@@ -437,10 +439,10 @@ def approval_card(ap: dict[str, Any], *, agent_name: str | None = None, routed: 
         t.append(f"\n     (bạn vẫn quyết được: /approve {aid} · /deny {aid})", style=V.C_FAINT)
         return t
     head = Text("")
-    head.append("⏸ " if ap.get("status") == "waiting_human" else "◐ ", style=V.C_CARD)
+    head.append(f"{th.status('approval', 'waiting_human' if ap.get('status') == 'waiting_human' else 'open').icon} ", style=V.C_CARD)
     head.append("Điều phối viên chuyển lên bạn — " if event == "approval.escalated" else "", style=V.C_CARD)
     head.append("Cần bạn duyệt", style=V.C_CARD)
-    head.append(f" · agent {agent}", style="bold")
+    head.append(f" · agent {agent}", style=th.HEAD)
     head.append(f" · {short_tool(tool) if tool.startswith('mcp__') else tool}", style=V.C_TOOL)
     tm = V.hhmm(ap.get("opened_at"))
     if tm:
@@ -462,12 +464,12 @@ def approval_card(ap: dict[str, Any], *, agent_name: str | None = None, routed: 
     if ap.get("status") == "waiting_human":
         idl.append(" · run đã tạm dừng chờ bạn", style=V.C_ERR)
     parts.append(idl)
-    how = Text(f"   → /approve {aid} [ghi chú]", style="bold")
+    how = Text(f"   → /approve {aid} [ghi chú]", style=th.HEAD)
     how.append("  ·  ", style=V.C_DIM)
-    how.append(f"/deny {aid} [lý do]", style="bold")
+    how.append(f"/deny {aid} [lý do]", style=th.HEAD)
     if ap.get("always_offer"):
         how.append("  ·  ", style=V.C_DIM)
-        how.append(f"/always {aid}", style="bold")
+        how.append(f"/always {aid}", style=th.HEAD)
     parts.append(how)
     return Group(*parts)
 
@@ -508,20 +510,20 @@ def question_card(q: dict[str, Any], *, agent_name: str | None = None, routed: s
     for ln in (clean(q.get("text")).rstrip("\n") or "(trống)").split("\n"):
         parts.append(Text("   " + ln))
     for o in q.get("options") or []:
-        line = Text(f"     {one_line(o.get('key'), 8)}. ", style="bold")
+        line = Text(f"     {one_line(o.get('key'), 8)}. ", style=th.HEAD)
         line.append(one_line(o.get("label"), 200))
         if o.get("description"):
             line.append(f" — {one_line(o['description'], 200)}", style=V.C_DIM)
         parts.append(line)
     if q.get("escalation_note") or q.get("note"):
         parts.append(_kv("ghi chú của điều phối viên", q.get("escalation_note") or q.get("note")))
-    how = Text(f"   → /answer {qid} ", style="bold")
+    how = Text(f"   → /answer {qid} ", style=th.HEAD)
     if q.get("options"):
-        how.append("<số>" + (" (chọn nhiều: 1,2)" if q.get("multi") else ""), style="bold")
+        how.append("<số>" + (" (chọn nhiều: 1,2)" if q.get("multi") else ""), style=th.HEAD)
         if q.get("allow_free_text", True):
             how.append(" [thêm chữ]", style=V.C_MID)
     else:
-        how.append("<câu trả lời>", style="bold")
+        how.append("<câu trả lời>", style=th.HEAD)
     how.append(f"   · id {qid}", style=V.C_DIM)
     parts.append(how)
     return Group(*parts)
@@ -543,9 +545,9 @@ def pending_text(mon: AgentMonitor, approvals: list[dict[str, Any]], questions: 
         return t
     for ap in approvals:
         route = mon.approval_route(ap)
-        icon = "◐" if route == "manager" else ("⏸" if ap.get("status") == "waiting_human" else "⚠")
+        icon = V.AGENT_STATE["manager"][0] if route == "manager" else (th.STATUS["approval"]["waiting_human"].icon if ap.get("status") == "waiting_human" else "⚠")
         t.append(f"  {icon} ", style=V.AGENT_STATE["manager"][2] if route == "manager" else V.C_CARD)
-        t.append(one_line(ap.get("id"), 40), style="bold")
+        t.append(one_line(ap.get("id"), 40), style=th.ID)
         t.append(f"  {mon.agent_name(ap.get('agent_id'))}", style=V.C_SOFT)
         t0 = parse_ts(ap.get("opened_at"))
         t.append(f"  chờ {fmt_dur(now - t0) if t0 else '—'}", style=V.C_DIM)
@@ -554,8 +556,8 @@ def pending_text(mon: AgentMonitor, approvals: list[dict[str, Any]], questions: 
         t.append(f"\n      {one_line(ap.get('preview') or ap.get('tool_name'), 160)}\n", style=V.C_SOFT)
     for q in questions:
         route = mon.question_route(q)
-        t.append("  ◐ " if route == "manager" else "  ❓ ", style=V.AGENT_STATE["manager"][2] if route == "manager" else V.C_QUESTION)
-        t.append(one_line(q.get("id"), 40), style="bold")
+        t.append(f"  {V.AGENT_STATE['manager'][0]} " if route == "manager" else "  ❓ ", style=V.AGENT_STATE["manager"][2] if route == "manager" else V.C_QUESTION)
+        t.append(one_line(q.get("id"), 40), style=th.ID)
         t.append(f"  {mon.agent_name(q.get('agent_id'))}", style=V.C_SOFT)
         if route == "manager":
             t.append("  · điều phối viên đang xử lý", style=V.AGENT_STATE["manager"][2])

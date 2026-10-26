@@ -37,6 +37,7 @@ from rich.text import Text
 from ..rpc import DaemonUnavailable, RpcError
 from ..termsafe import one_line
 from ..tui.client import AsyncHubClient, subscribe
+from ..ui import theme as th
 from . import agentsview as G
 from . import attachments as A
 from . import chatview as V
@@ -133,7 +134,7 @@ class ChatSession:
         g = await self.client.call("manager.get") or {}
         mid = g.get("agent_id")
         if not mid:
-            self.out.write(Text("◆ ", style="bold magenta") + Text(NO_MANAGER))
+            self.out.write(Text(f"{th.glyph('mark')} ", style=th.MGR) + Text(NO_MANAGER))
             return False
         st = await self.client.call("hub.status") or {}
         name = mid
@@ -314,7 +315,7 @@ class ChatSession:
         elif n.get("resolved") is not None:
             self.out.write(V.render(G.resolved_note(n["id"], n["resolved"])))
         elif n.get("waiting_human"):
-            self._note(f"⏸ {n['id']}: run đã tạm dừng chờ bạn — /approve {n['id']} · /deny {n['id']}", "warn")
+            self._note(f"{th.STATUS['approval']['waiting_human'].icon} {n['id']}: run đã tạm dừng chờ bạn — /approve {n['id']} · /deny {n['id']}", "warn")
             self.ring()
         elif n.get("question_done"):
             p = n.get("payload") or {}

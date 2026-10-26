@@ -15,15 +15,11 @@ from typing import Any
 
 from rich.text import Text
 
-# BRD FR-UI-01: ●working ◐waiting ⏸waiting_human ○idle ✖error ‖paused
-STATUS_STYLE: dict[str, tuple[str, str, str]] = {
-    "working": ("●", "working", "bold green"),
-    "waiting": ("◐", "waiting", "bold yellow"),
-    "waiting_human": ("⏸", "waiting_human", "bold red"),
-    "idle": ("○", "idle", "grey62"),
-    "error": ("✖", "error", "bold red"),
-    "paused": ("‖", "paused", "grey50"),
-}
+from ..ui import theme as th
+
+# BRD FR-UI-01: ●working ◐waiting ⏸waiting_human ○idle ✖error ‖paused — dựng từ từ vựng chung `th.STATUS["agent"]`
+# (cùng ký hiệu + màu với chat và CLI); nhãn giữ id tiếng Anh như cột STATUS của `top`.
+STATUS_STYLE: dict[str, tuple[str, str, str]] = {k: (s.icon, k, s.style) for k, s in th.STATUS["agent"].items()}
 STATUS_ORDER = {"waiting_human": 0, "waiting": 1, "working": 2, "error": 3, "paused": 4, "idle": 5}
 SORT_KEYS = ("status", "cost", "time")
 SORT_LABEL = {"status": "trạng thái", "cost": "$", "time": "thời gian chạy"}
@@ -228,29 +224,29 @@ class TopModel:
 # ============================================================================ hiển thị ô
 def task_cell(r: Row) -> Text:
     if r["status"] == "waiting_human":
-        return Text("⏸ chờ người duyệt — " + (r["task"] or ""), style="bold red")
+        return Text("⏸ chờ người duyệt — " + (r["task"] or ""), style=th.ERR_STRONG)
     if r["status"] == "waiting":
-        return Text("◐ chờ duyệt — " + (r["task"] or ""), style="yellow")
+        return Text("◐ chờ duyệt — " + (r["task"] or ""), style=th.WARN)
     if r["status"] in ("idle", "paused", "error"):
-        return Text(r["task"] or "—", style="grey50")
+        return Text(r["task"] or "—", style=th.MUTED)
     return Text(r["task"] or "—")
 
 
 def last_tool_cell(r: Row, now: float | None = None) -> Text:
     name = r["last_tool"]
     if not name:
-        return Text("—", style="grey50")
+        return Text("—", style=th.MUTED)
     now = time.time() if now is None else now
-    t = Text(short_tool(name), style="cyan" if r.tool_running else "")
+    t = Text(short_tool(name), style=th.INFO if r.tool_running else "")
     if r.tool_running:
         t0 = parse_ts(r["last_tool_at"])
-        t.append(f" …{fmt_dur(now - t0) if t0 else ''}", style="cyan")
+        t.append(f" …{fmt_dur(now - t0) if t0 else ''}", style=th.INFO)
     elif r.last_tool_dur is not None:
-        t.append(f" ({r.last_tool_dur:.1f}s)", style="grey62")
+        t.append(f" ({r.last_tool_dur:.1f}s)", style=th.MUTED)
     else:
         t0 = parse_ts(r["last_tool_at"])
         if t0:
-            t.append(f" ({fmt_dur(now - t0)} trước)", style="grey50")
+            t.append(f" ({fmt_dur(now - t0)} trước)", style=th.MUTED)
     return t
 
 
@@ -267,42 +263,42 @@ def cost_cell(r: Row) -> Text:
 def header_text(m: TopModel, *, now: float | None = None) -> Text:
     h = m.header
     t = Text()
-    t.append(" cfharness top ", style="bold reverse #7aa2f7")
-    t.append(f"  {h.get('agents', 0)} agent · ", style="bold")
-    t.append(f"{h.get('running', 0)} đang chạy", style="bold green")
+    t.append(" cfharness top ", style=th.BRAND)
+    t.append(f"  {h.get('agents', 0)} agent · ", style=th.HEAD)
+    t.append(f"{h.get('running', 0)} đang chạy", style=th.STATUS["agent"]["working"].style)
     if h.get("queued"):
-        t.append(f" · {h['queued']} chờ slot", style="yellow")
-    t.append(f" (tối đa {h.get('max_concurrent_runs', '?')})  ", style="grey62")
+        t.append(f" · {h['queued']} chờ slot", style=th.WARN)
+    t.append(f" (tối đa {h.get('max_concurrent_runs', '?')})  ", style=th.MUTED)
     n = h.get("approvals_pending", 0)
     if n:
-        t.append(f" ⚠ {n} thao tác phá huỷ chờ người · lâu nhất {fmt_dur(h.get('approvals_longest_wait_s'))} ", style="bold white on red")
+        t.append(f" ⚠ {n} thao tác phá huỷ chờ người · lâu nhất {fmt_dur(h.get('approvals_longest_wait_s'))} ", style=th.ALARM)
         t.append("  ")
-    t.append(f"học hôm nay {h.get('learnings_today', 0)}  ", style="magenta")
-    t.append(f"{fmt_cost(h.get('cost_today_usd'))} hôm nay · {fmt_tokens(h.get('tokens_today'))} tok", style="bold magenta")
+    t.append(f"học hôm nay {h.get('learnings_today', 0)}  ", style=th.COST)
+    t.append(f"{fmt_cost(h.get('cost_today_usd'))} hôm nay · {fmt_tokens(h.get('tokens_today'))} tok", style=f"bold {th.COST}")
     t.append("\n")
     rl = h.get("rate_limit") or {}
     rl_status = rl.get("status") if isinstance(rl, dict) else None
-    t.append(" rate limit: ", style="grey62")
-    t.append(str(rl_status or "—"), style="bold red" if rl_status and rl_status not in ("allowed", "ok") else "grey70")
+    t.append(" rate limit: ", style=th.MUTED)
+    t.append(str(rl_status or "—"), style=th.ERR_STRONG if rl_status and rl_status not in ("allowed", "ok") else th.MUTED)
     es = h.get("estop") or {}
     if es.get("on"):
-        t.append("  ■ ESTOP BẬT ", style="bold white on red")
+        t.append("  ■ ESTOP BẬT ", style=th.ALARM)
         if es.get("reason"):
-            t.append(f" {es['reason']}", style="red")
+            t.append(f" {es['reason']}", style=th.ERR)
     if h.get("auth_block"):
-        t.append("  ✖ claude chưa đăng nhập", style="bold red")
-    t.append(f"  · CLI {h.get('cli_version') or '?'}", style="grey62")
+        t.append("  ✖ claude chưa đăng nhập", style=th.ERR_STRONG)
+    t.append(f"  · CLI {h.get('cli_version') or '?'}", style=th.MUTED)
     if h.get("cli_untested"):
-        t.append(" (chưa kiểm!)", style="bold yellow")
+        t.append(" (chưa kiểm!)", style=f"bold {th.WARN}")
     ua = h.get("cli_unknown_alert")
     if ua:
-        t.append(f"  ✖ {float(ua.get('rate') or 0) * 100:.0f}% event lạ/1h — cân nhắc ESTOP", style="bold white on red")
-    t.append(f"  · sắp xếp: {SORT_LABEL.get(m.sort_key, m.sort_key)}", style="grey62")
+        t.append(f"  ✖ {float(ua.get('rate') or 0) * 100:.0f}% event lạ/1h — cân nhắc ESTOP", style=th.ALARM)
+    t.append(f"  · sắp xếp: {SORT_LABEL.get(m.sort_key, m.sort_key)}", style=th.MUTED)
     if m.team_filter:
-        t.append(f"  · team: {m.team_filter}", style="grey70")
+        t.append(f"  · team: {m.team_filter}", style=th.MUTED)
     if m.text_filter:
-        t.append(f"  · lọc: “{m.text_filter}”", style="grey70")
-    t.append(f"  · {datetime.now().strftime('%H:%M:%S')}", style="grey42")
+        t.append(f"  · lọc: “{m.text_filter}”", style=th.MUTED)
+    t.append(f"  · {datetime.now().strftime('%H:%M:%S')}", style=th.MUTED)
     return t
 
 
@@ -316,55 +312,55 @@ def activity_line(ev: dict[str, Any], names: dict[str, str]) -> Text | None:
         return None
     p = ev.get("payload") or {}
     if t == "tool.start":
-        body = Text.assemble(("⚡ ", "yellow"), (short_tool(p.get("name")), "bold"), (f" {p.get('args_preview') or ''}"[:80], "grey70"))
+        body = Text.assemble(("⚡ ", th.WARN), (short_tool(p.get("name")), th.HEAD), (f" {p.get('args_preview') or ''}"[:80], th.MUTED))
     elif t == "tool.complete":
         if not p.get("is_error"):
             return None
-        body = Text(f"✖ {short_tool(p.get('name'))} lỗi: {(p.get('result_preview') or '')[:80]}", style="red")
+        body = Text(f"✖ {short_tool(p.get('name'))} lỗi: {(p.get('result_preview') or '')[:80]}", style=th.ERR)
     elif t == "run.queued":
-        body = Text(f"… xếp hàng: {(p.get('prompt_preview') or '')[:80]}", style="grey62")
+        body = Text(f"… xếp hàng: {(p.get('prompt_preview') or '')[:80]}", style=th.MUTED)
     elif t == "run.started":
-        body = Text(f"▶ bắt đầu ({p.get('model') or '?'})", style="#7aa2f7")
+        body = Text(f"▶ bắt đầu ({p.get('model') or '?'})", style=th.ACCENT)
     elif t in ("run.completed", "run.failed", "run.cancelled", "run.interrupted"):
-        style = {"run.completed": "green", "run.cancelled": "grey62", "run.interrupted": "yellow"}.get(t, "bold red")
+        style = th.status("run", t.split(".")[1]).style
         body = Text(f"■ {p.get('outcome') or t.split('.')[1]} · ${float(p.get('cost_usd') or 0):.4f}", style=style)
         if p.get("error") and t != "run.completed":
-            body.append(f" — {str(p['error'])[:80]}", style="red")
+            body.append(f" — {str(p['error'])[:80]}", style=th.ERR)
     elif t == "run.waiting_human":
-        body = Text("⏸ run tạm dừng, chờ người duyệt", style="bold red")
+        body = Text("⏸ run tạm dừng, chờ người duyệt", style=th.ERR_STRONG)
     elif t in ("approval.open", "approval.waiting_human"):
         label = "⏸ chờ NGƯỜI duyệt" if t == "approval.waiting_human" else "◐ xin duyệt"
-        body = Text(f"{label} [{p.get('matched_rule') or p.get('destructive_class') or p.get('request_id') or '?'}] {(p.get('preview') or p.get('tool') or '')[:80]}", style="bold red" if t == "approval.waiting_human" else "bold yellow")
+        body = Text(f"{label} [{p.get('matched_rule') or p.get('destructive_class') or p.get('request_id') or '?'}] {(p.get('preview') or p.get('tool') or '')[:80]}", style=th.ERR_STRONG if t == "approval.waiting_human" else f"bold {th.WARN}")
     elif t == "approval.resolved":
         dec = p.get("decision")
-        body = Text(f"  {'✓ cho phép' if dec == 'allowed' else '✖ từ chối' if dec == 'denied' else dec} {p.get('request_id') or ''} · {p.get('by')} qua {p.get('channel')}", style="green" if dec == "allowed" else "yellow")
+        body = Text(f"  {'✓ cho phép' if dec == 'allowed' else '✖ từ chối' if dec == 'denied' else dec} {p.get('request_id') or ''} · {p.get('by')} qua {p.get('channel')}", style=th.OK if dec == "allowed" else th.WARN)
     elif t == "guard.blocked":
-        body = Text(f"⛔ guard chặn [{p.get('rule') or p.get('reason') or ''}]: {(p.get('preview') or p.get('detail') or '')[:80]}", style="bold red")
+        body = Text(f"⛔ guard chặn [{p.get('rule') or p.get('reason') or ''}]: {(p.get('preview') or p.get('detail') or '')[:80]}", style=th.ERR_STRONG)
     elif t == "user.message":
-        body = Text(f"› steer ({p.get('channel')}): {(p.get('text') or '')[:80]}", style="cyan")
+        body = Text(f"› steer ({p.get('channel')}): {(p.get('text') or '')[:80]}", style=th.INFO)
     elif t == "steer.ack":
-        body = Text("✓ agent đã nhận steer", style="cyan")
+        body = Text("✓ agent đã nhận steer", style=th.INFO)
     elif t == "subagent.spawn":
         body = Text(f"⤷ subagent {p.get('type')}: {(p.get('description') or '')[:70]}", style="magenta")
     elif t == "message.complete":
         if ev.get("subagent_id"):
             return None
-        body = Text(f"✎ {(p.get('text') or '').strip().splitlines()[0][:90] if (p.get('text') or '').strip() else ''}", style="grey70")
+        body = Text(f"✎ {(p.get('text') or '').strip().splitlines()[0][:90] if (p.get('text') or '').strip() else ''}", style=th.MUTED)
     elif t in ("error", "isolation.violation", "permission.denied", "auth.blocked", "budget.exceeded", "notify.failed"):
-        body = Text(f"✖ {t}: {str(p.get('message') or p.get('name') or p.get('tool_name') or p)[:90]}", style="bold red")
+        body = Text(f"✖ {t}: {str(p.get('message') or p.get('name') or p.get('tool_name') or p)[:90]}", style=th.ERR_STRONG)
     elif t.startswith("learning."):
         body = Text(f"✎ {t}", style="magenta")
     elif t.startswith(("task.", "team.")):
-        body = Text(f"▣ {t} {p.get('task_id') or ''} {p.get('from') or ''}→{p.get('to') or ''}".rstrip("→ "), style="#bb9af7")
+        body = Text(f"▣ {t} {p.get('task_id') or ''} {p.get('from') or ''}→{p.get('to') or ''}".rstrip("→ "), style="magenta")
     elif t in ("hub.estop",):
-        body = Text(f"■ ESTOP {'BẬT' if p.get('on') else 'tắt'} {p.get('reason') or ''}", style="bold red" if p.get("on") else "green")
+        body = Text(f"■ ESTOP {'BẬT' if p.get('on') else 'tắt'} {p.get('reason') or ''}", style=th.ERR_STRONG if p.get("on") else th.OK)
     elif t == "run.takeover":
         body = Text("⇄ người tiếp quản bằng Claude Code", style="magenta")
     else:
         return None
     ts = parse_ts(ev.get("ts"))
-    line = Text(datetime.fromtimestamp(ts).strftime("%H:%M:%S ") if ts else "         ", style="grey42")
+    line = Text(datetime.fromtimestamp(ts).strftime("%H:%M:%S ") if ts else "         ", style=th.MUTED)
     aid = ev.get("agent_id") or "hub"
-    line.append(f"{aid[:14]:<14} ", style="grey62")
+    line.append(f"{aid[:14]:<14} ", style=th.MUTED)
     line.append_text(body)
     return line

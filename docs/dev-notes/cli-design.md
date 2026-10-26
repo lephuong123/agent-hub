@@ -143,9 +143,24 @@ Ghi bằng hub tạm `runtime.kind fake` (`scripts/cli_screenshots.py`, che thư
 - `docs/screenshots/cli/05-run-follow.svg` — `cfharness run coder "…" -f`
 - `docs/screenshots/cli/06-approvals-estop-loi.svg` — `approvals` · `estop on` · lỗi có "Cách sửa"
 
-## 10. Danh sách chuyển đổi cho chat và TUI (CHƯA sửa — agent khác đang làm các file này)
+## 10. Danh sách chuyển đổi cho chat và TUI (ĐÃ áp dụng)
 
-Import: `from cfharness.ui import theme as th` (chỉ phụ thuộc `rich` + `termsafe`, không I/O).
+Đã áp dụng đúng hai bảng dưới cho `manager/chatview.py` và `tui/model.py`, import `from ..ui import theme as th` (chỉ phụ thuộc
+`rich` + `termsafe`, không I/O). Chỉ đổi style/ký hiệu — hành vi giữ nguyên; chữ agent vẫn là DỮ LIỆU (§7).
+Ảnh `docs/screenshots/m2/01–08, 10–16` ghi lại theo theme mới (`CFHARNESS_SCREENSHOTS=docs/screenshots/m2`).
+
+Cũng đã đổi (ngoài hai bảng):
+- `chatview.C_*` (dùng bởi `agentsview.py`): `C_DIM/C_FAINT/C_MID/C_SOFT` → `th.MUTED`, `C_TOOL` → `th.INFO`, `C_BADGE` → `th.ALARM`,
+  `C_CARD`/`C_CARD_BAR` → `bold WARN`/`WARN`, `C_QUESTION` → `bold INFO`, `C_OK/C_WARN/C_ERR` → `OK/WARN/ERR_STRONG`.
+  `AGENT_STATE` lấy ký hiệu + màu từ `th.STATUS` (`queued` = `run.queued` ◌ cyan; `manager` = `th.MGR`).
+- `tui/model.STATUS_STYLE` = `{k: (s.icon, k, s.style) for k, s in th.STATUS["agent"].items()}` — giữ nhãn id tiếng Anh ở cột STATUS của `top`.
+- `agentsview.py`, `repl.py`: ký hiệu ◐/⏸/◌/✖ lấy từ `th.STATUS`/`AGENT_STATE`; `"bold"` → `th.HEAD`, id → `th.ID`; ◆ "chưa có điều phối viên" → `th.MGR`.
+- `tui/app.py`, `tui/manager.py`, `tui/learnings.py`: grey42/50/62/70 → `th.MUTED`; `#7aa2f7` → `th.ACCENT` (huy hiệu attach `bold reverse #7aa2f7` → `th.BRAND`);
+  `bold white on red` → `th.ALARM`; red/green/yellow/cyan → `ERR/OK/WARN/INFO`; chi phí → `bold COST`; steer của người → `th.USER`;
+  lệnh takeover → `bold CMD`. `TASK_STYLE` (tab Tasks) = màu `th.STATUS["task"]`; màu kết thúc run ở attach = `th.STATUS["run"]`.
+  Hex không có token tương ứng đổi sang màu ANSI có tên: huy hiệu ` Tasks ` `#bb9af7` → `bold reverse magenta`, ` Golden task ` `#e0af68` → `bold reverse yellow`,
+  firehose `task.*/team.*` `#bb9af7` → `magenta`; `todo`/`proposal` `white` → màu mặc định (`th.DATA`, `white` mất chữ trên nền sáng).
+- Giữ nguyên: CSS Textual (`DEFAULT_CSS`, `$accent`…), `magenta` cho học/subagent/takeover (không phải chi phí), `tui/takeover.py` (không có style).
 
 ### `src/cfharness/manager/chatview.py`
 | Hiện tại | Đổi sang |
