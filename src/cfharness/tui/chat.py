@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -63,6 +64,8 @@ SELECT = "#5FD7FF"  # dòng đang chọn (menu lệnh, bảng agent) — xanh l�
 INPUT_BORDER = "#5F5F5F"
 INPUT_BORDER_FOCUS = "#8A8A8A"
 PLACEHOLDER = "Nhắn điều phối viên… (gõ / để xem lệnh)"
+USER_BG = "#373737"  # dải nền tin người, như Claude Code
+_FAIL = re.compile(r"^" + re.escape(V.FAIL_PREFIX) + r" run (\S+) kết thúc '([^']*)'(?: — (.*))?\)$", re.S)
 
 CSS = f"""
 ChatScreen {{ layout: vertical; background: $background; }}
@@ -70,6 +73,7 @@ ChatScreen #chat-log {{ height: 1fr; padding: 0 1; scrollbar-size-vertical: 1; b
     scrollbar-background: $background; scrollbar-background-hover: $background; scrollbar-background-active: $background; }}
 ChatScreen #chat-log > .item {{ width: 100%; margin: 1 0 0 0; }}
 ChatScreen #chat-log > .tight {{ margin: 0; }}
+ChatScreen #chat-log > .user {{ background: {USER_BG}; padding: 0 1; }}
 ChatScreen #chat-log > .welcome {{ width: auto; min-width: 52; max-width: 100%; border: round {cc.ACCENT}; padding: 0 1; margin: 0; }}
 ChatScreen #chat-log > .welcome.item {{ margin: 1 0 0 0; }}
 ChatScreen #chat-log > .card {{ border: round {cc.PERMISSION}; padding: 0 1; }}
@@ -164,7 +168,7 @@ def item_text(it: dict[str, Any]) -> Text:
         return cc.user_text(it.get("text"))
     if k == "manager":
         if it.get("ok", True) is False:
-            return _bullet_lines(it.get("text") or "không trả lời được", Text().append("● ", style=cc.ERR))
+            return failure_text(it.get("text"))
         return cc.assistant_text(it.get("text"))
     if k == "notify":
         head = Text().append("● ✉ ", style=cc.WARN)
@@ -189,18 +193,38 @@ def item_text(it: dict[str, Any]) -> Text:
     return flatten(V.render(it))
 
 
-def welcome_text(name: str, conversation_id: str | None, *, title: str | None = None, resumed: int = 0) -> Text:
-    """Nội dung hộp chào (viền do CSS `.welcome` vẽ) — như `✻ Welcome to Claude Code!`."""
+def failure_text(text: Any) -> Text:
+    """Lượt điều phối viên không xong (`FAIL_PREFIX…`): dừng → `  ⎿  Đã dừng lượt` (như `Interrupted` của Claude Code);
+    lỗi khác → `✗ Điều phối viên không trả lời được (outcome)`; lý do + run id mờ ở dòng dưới."""
+    m = _FAIL.match(clean(text).strip())
+    if m is None:
+        return _bullet_lines(text or "không trả lời được", Text().append("● ", style=cc.ERR))
+    rid, outcome, why = m.groups()
+    if outcome == "cancelled":
+        t = Text(cc.GUTTER, style=cc.DIM)
+        t.append("Đã dừng lượt", style=cc.ERR)
+    else:
+        t = Text().append(f"✗ Điều phối viên không trả lời được ({one_line(outcome, 30)})", style=cc.ERR)
+    t.append(f"\n{cc.INDENT}{one_line(why, 200) + ' · ' if why else ''}run {one_line(rid, 40)}", style=cc.DIM)
+    return t
+
+
+def is_failure(it: dict[str, Any]) -> bool:
+    return it.get("kind") == "manager" and it.get("ok", True) is False
+
+
+def welcome_text(name: str, conversation_id: str | None, *, title: str | None = None, resumed: int = 0,
+                 model: str | None = None) -> Text:
+    """Nội dung hộp chào (viền do CSS `.welcome` vẽ) — như `✻ Welcome to Claude Code!`: tiêu đề, gợi ý, rồi thông tin phiên."""
     t = Text()
     t.append("✻ ", style=cc.ACCENT)
     t.append("Chào mừng tới cfharness chat!", style="bold")
     t.append("\n\n")
-    t.append("  /help để xem lệnh, ? để xem phím tắt", style=cc.DIM)
+    t.append("  /help để xem lệnh · ? để xem phím tắt", style=cc.DIM)
     t.append("\n\n")
-    t.append(f"  điều phối viên: {one_line(name, 40)}", style=cc.DIM)
-    t.append(f"\n  hội thoại: {one_line(conversation_id, 40) if conversation_id else '(mới)'}", style=cc.DIM)
-    if title:
-        t.append(f"\n  chủ đề: {one_line(title, 50)}", style=cc.DIM)
+    t.append(f"  điều phối viên: {one_line(name, 40)}" + (f" · {one_line(model, 40)}" if model else ""), style=cc.DIM)
+    conv = one_line(conversation_id, 40) if conversation_id else "(mới)"
+    t.append(f"\n  hội thoại: {conv}" + (f" — {one_line(title, 50)}" if title else ""), style=cc.DIM)
     if resumed:
         t.append(f"\n  {resumed} tin trước bên dưới", style=cc.DIM)
     return t
@@ -314,6 +338,22 @@ def panel_head(mon: G.AgentMonitor, *, focused: bool = False, now: float | None 
     return t
 
 
+def foot_text(st: V.ChatState, model: str | None = None) -> Text:
+    """Bên phải dòng dưới ô nhập: `Điều phối · sonnet · lượt 12k token $0.010 · tổng $0.05 · hội thoại mc_…` (bỏ phần chưa có)."""
+    parts = [one_line(st.name, 30)]
+    if model:
+        parts.append(one_line(model, 30))
+    turn = st.turn_usage() if isinstance(st, LiveChatState) else None
+    if turn is not None:
+        tok, cost = turn
+        parts.append(f"lượt {cc.fmt_tokens(tok)} token ${cost:.3f}")
+        total = st.total_cost()  # type: ignore[union-attr]
+        if total > cost + 1e-9:
+            parts.append(f"tổng ${total:.3f}")
+    parts.append(f"hội thoại {one_line(st.conversation_id, 40) if st.conversation_id else '(mới)'}")
+    return Text(" · ".join(parts), style=cc.DIM)
+
+
 # ============================================================================ lịch sử ô nhập (cùng tệp/định dạng FileHistory của REPL)
 def load_history(path: Path) -> list[str]:
     try:
@@ -344,13 +384,38 @@ def append_history(path: Path, text: str) -> None:
 # ============================================================================ trạng thái + phiên
 class LiveChatState(V.ChatState):
     """`ChatState` + dòng tool của điều phối viên (`tool`/`tool_done`) và đoạn chữ viết trước mỗi tool (`interim`).
-    REPL không cần (chỉ hiện tool đang chạy ở thanh trạng thái)."""
+    REPL không cần (chỉ hiện tool đang chạy ở thanh trạng thái). Thêm: token/chi phí theo run (`usage.tick`, số cộng dồn của run)
+    → dòng dưới ô nhập hiện lượt gần nhất + tổng phiên."""
+
+    def __init__(self, *a: Any, **kw: Any) -> None:
+        super().__init__(*a, **kw)
+        self.usage: dict[str, tuple[int, float]] = {}  # run → (token, $) mới nhất
+        self.turn_run: str | None = None  # run chính của lượt gần nhất (không tính run con)
+
+    def resume(self, rows: list[dict[str, Any]], run: dict[str, Any] | None) -> None:
+        super().resume(rows, run)
+        if self.busy:
+            self.turn_run = self.active_run
+
+    def sent(self, res: dict[str, Any], text: str) -> list[dict[str, Any]]:
+        out = super().sent(res, text)
+        if not res.get("steered") and res.get("run_id"):
+            self.turn_run = res["run_id"]  # `active_run` đổi sang run con khi điều phối viên giao việc — giữ run chính
+        return out
+
+    def turn_usage(self) -> tuple[int, float] | None:
+        return self.usage.get(self.turn_run) if self.turn_run else None
+
+    def total_cost(self) -> float:
+        return sum(c for _, c in self.usage.values())
 
     def apply(self, ev: dict[str, Any]) -> list[dict[str, Any]]:
         t = str(ev.get("type") or "")
         p = ev.get("payload") or {}
         rid = ev.get("run_id")
         pre: list[dict[str, Any]] = []
+        if rid in self.runs and t == "usage.tick":
+            self.usage[rid] = (int(p.get("total_tokens") or 0), float(p.get("cost_usd") or 0.0))
         if rid in self.runs and t == "tool.start":
             if not ev.get("subagent_id") and self.draft.strip():
                 pre.append({"kind": "interim", "text": self.draft, "run_id": rid})
@@ -392,7 +457,14 @@ class TuiChatSession(R.ChatSession):
 
     def banner(self, manager_id: str, conversation_id: str | None, *, title: str | None = None, resumed: int = 0) -> None:
         name = self.state.name if self.state is not None else manager_id
-        self.screen.add_welcome(welcome_text(name, conversation_id, title=title, resumed=resumed))
+        self.screen.add_welcome(name, conversation_id, title=title, resumed=resumed)
+
+    def manager_model(self) -> str | None:
+        """Model của điều phối viên (dòng agent trong ảnh chụp của `AgentMonitor`); chưa có ảnh chụp → None."""
+        if self.mon is None or self.state is None:
+            return None
+        r = self.mon.model.rows.get(self.state.manager_id)
+        return str(r["model"]) if r is not None and r["model"] else None
 
     def _emit(self, item: dict[str, Any]) -> None:
         self.screen.add_item(item)
@@ -508,6 +580,7 @@ class ChatScreen(Screen):
         self.want_conv = conversation_id
         self.new = new
         self.session: TuiChatSession | None = None
+        self.welcome: Item | None = None
         self.tools: dict[str, ToolItem] = {}
         self.expand_all = False
         self._unseen = False
@@ -592,10 +665,22 @@ class ChatScreen(Screen):
         else:
             self._unseen = True
 
-    def add_welcome(self, text: Text) -> None:
-        """Hộp chào (thay dòng `banner` của REPL); mục đầu transcript, viền tròn cam."""
+    def add_welcome(self, name: str, conversation_id: str | None, *, title: str | None = None, resumed: int = 0) -> None:
+        """Hộp chào (thay dòng `banner` của REPL); mục đầu transcript, viền tròn cam. Model điền sau khi có ảnh chụp agent."""
         has_items = any(isinstance(k, Item) for k in self.chat_log.children)
-        self._mount(Item(text, {"kind": "welcome"}, classes="item welcome" if has_items else "welcome"))
+        meta = {"kind": "welcome", "name": name, "conversation_id": conversation_id, "title": title, "resumed": resumed, "model": None}
+        self.welcome = Item(welcome_text(name, conversation_id, title=title, resumed=resumed), meta,
+                            classes="item welcome" if has_items else "welcome")
+        self._mount(self.welcome)
+
+    def _sync_welcome(self) -> None:
+        w, s = self.welcome, self.session
+        model = s.manager_model() if s is not None else None
+        if w is None or not model or w.meta.get("model") == model or not w.is_attached:
+            return
+        w.meta["model"] = model
+        m = w.meta
+        w.update(welcome_text(m["name"], m["conversation_id"], title=m["title"], resumed=m["resumed"], model=model))
 
     def add(self, renderable: Any, meta: dict[str, Any] | None = None) -> None:
         """Đầu ra trực tiếp của phiên (thẻ duyệt/câu hỏi, bảng /agents, /help…). Thẻ duyệt/câu hỏi: hộp viền như hộp xin phép
@@ -638,8 +723,12 @@ class ChatScreen(Screen):
         cls = "item"
         if k == "action":
             cls = "item clickable"
+        elif k == "user":
+            cls = "item user"
         elif k in ("note", "steer") and not (k == "note" and it.get("tone") in ("warn", "err")):
             cls = "item tight"  # `  ⎿  ghi chú` dính vào mục trên, như Claude Code
+        elif is_failure(it) and (m := _FAIL.match(clean(it.get("text")).strip())) and m.group(2) == "cancelled":
+            cls = "item tight"  # `  ⎿  Đã dừng lượt` dính dưới tin người
         self._mount(Item(item_text(it), it, classes=cls))
         if k == "manager":  # lượt xong → spinner tắt ngay, không đợi nhịp vẽ
             self._tick()
@@ -701,11 +790,12 @@ class ChatScreen(Screen):
             s.out.console.width = width
 
     def _render_foot(self) -> None:
+        self._sync_welcome()
         s = self.session
         st = s.state if s else None
         t = Text()
         if st is not None:
-            t.append(f"{st.name} · hội thoại {st.conversation_id or '(mới)'}", style=cc.DIM)
+            t.append_text(foot_text(st, s.manager_model() if s else None))
         try:
             self.query_one("#chat-foot-right", Static).update(t)
         except NoMatches:
@@ -1020,5 +1110,5 @@ def run_chat(sock: Path, home: Path, *, conversation_id: str | None, new: bool) 
     return 0
 
 
-__all__ = ["ChatApp", "ChatScreen", "LiveChatState", "flatten", "tool_text", "text_item", "item_text", "welcome_text", "slash_menu",
+__all__ = ["ChatApp", "ChatScreen", "LiveChatState", "flatten", "tool_text", "text_item", "item_text", "welcome_text", "failure_text", "foot_text", "slash_menu",
            "shortcuts_text", "agent_line", "panel_head", "load_history", "append_history", "run_chat"]

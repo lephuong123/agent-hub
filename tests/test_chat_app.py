@@ -312,3 +312,30 @@ async def test_history_up_down_and_slash_hint(env, hub_home, monkeypatch):
         inp.cursor_position = 3
         await pilot.press("question_mark")
         assert inp.value == "sao?" and not keys.display
+
+
+def test_failure_welcome_foot_and_usage():
+    from cfharness.manager import chatview as Vw
+
+    stop = f"{Vw.FAIL_PREFIX} run r_1 kết thúc 'cancelled' — prompt_check: stopped)"
+    assert C.failure_text(stop).plain == "  ⎿  Đã dừng lượt\n     prompt_check: stopped · run r_1"
+    err = C.failure_text(f"{Vw.FAIL_PREFIX} run r_2 kết thúc 'failed')").plain
+    assert err == "✗ Điều phối viên không trả lời được (failed)\n     run r_2"
+    assert C.failure_text("lạ").plain == "● lạ"
+    assert C.item_text({"kind": "manager", "text": stop, "ok": False}).plain.startswith("  ⎿  Đã dừng lượt")
+    # lịch sử đọc lại: tin lỗi → ok False
+    assert Vw.history_items([{"role": "manager", "text": stop}])[0]["ok"] is False
+    assert Vw.history_items([{"role": "manager", "text": "Xong."}])[0]["ok"] is True
+
+    w = C.welcome_text("Điều phối", "mc_1", title="Slack", resumed=3, model="sonnet").plain
+    assert "điều phối viên: Điều phối · sonnet" in w and "hội thoại: mc_1 — Slack" in w and "3 tin trước" in w
+    assert "·" not in C.welcome_text("Điều phối", None).plain.split("\n")[4]
+
+    st = C.LiveChatState("m1", "mc_1", name="Điều phối")
+    assert C.foot_text(st, "sonnet").plain == "Điều phối · sonnet · hội thoại mc_1"
+    st.sent({"conversation_id": "mc_1", "run_id": "r_main"}, "hi")
+    st.runs.add("r_child")
+    st.apply({"type": "usage.tick", "run_id": "r_main", "payload": {"total_tokens": 12345, "cost_usd": 0.01}})
+    st.apply({"type": "usage.tick", "run_id": "r_child", "payload": {"total_tokens": 10, "cost_usd": 0.04}})
+    st.apply({"type": "usage.tick", "run_id": "r_other", "payload": {"total_tokens": 10, "cost_usd": 9}})  # run lạ: bỏ
+    assert C.foot_text(st).plain == "Điều phối · lượt 12.3k token $0.010 · tổng $0.050 · hội thoại mc_1"
