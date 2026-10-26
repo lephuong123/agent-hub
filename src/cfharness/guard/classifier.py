@@ -762,7 +762,7 @@ def _git_out(cwd: str, *args: str) -> str | None:
         from ..workspace import GIT_ENV, GIT_SAFE_ARGS
 
         r = subprocess.run(["git", *GIT_SAFE_ARGS, "-C", cwd, *args], capture_output=True, encoding="utf-8", errors="replace", timeout=3,
-                           env={**os.environ, **GIT_ENV})
+                           env={**os.environ, **GIT_ENV}, **no_window_kwargs())
     except (OSError, subprocess.TimeoutExpired, ValueError):
         return None
     return r.stdout.strip() if r.returncode == 0 else None

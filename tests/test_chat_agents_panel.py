@@ -274,7 +274,8 @@ async def until(pred, timeout: float = 10.0) -> bool:
 @pytest.fixture
 async def denv(hub_home, monkeypatch):
     monkeypatch.setattr(repl, "BELL_GAP_S", 0.0)  # đếm từng tiếng chuông (thật: gộp trong 1 s)
-    hub_home.config.write_text(yaml.safe_dump({"guard": {"enabled": True, "git_probe": False}, "approval": {"timeout_s": 30}}))
+    # approval-profiles: thẻ duyệt cho NGƯỜI dùng lệnh uncertain → profile strict (balanced cho uncertain chạy + audit, không mở approval)
+    hub_home.config.write_text(yaml.safe_dump({"guard": {"enabled": True, "git_probe": False}, "approval": {"timeout_s": 30, "profile": "strict"}}))
     s = Script()
     d = Daemon(hub_home, runtime=ScriptedRuntime(s))
     d.hub.config.set("tasks.tick_s", 0.05)
