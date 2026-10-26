@@ -58,3 +58,15 @@ Hệ quả: server tên `browse` không mở được trang chi tiết (vẫn qu
 - Cài từ danh mục chưa hỗ trợ oci (docker) — github chỉ cài được bản remote.
 - `secret.set` chạy SAU `mcp.add`; nếu `secret.set` lỗi giữa chừng, server đã có trong registry nhưng thiếu secret (trang chi tiết báo "Thiếu secret").
 - Chưa có CLI tương ứng cho danh mục (`cfharness mcp catalog`) — RPC đã sẵn.
+
+## Danh sách tuyển chọn mở rộng (2026-10-26)
+- `catalog.CURATED` ~64 mục, nhóm theo `CATEGORIES` (Công việc & cộng tác, Lập trình & vận hành, Dữ liệu & phân tích,
+  Kinh doanh & thanh toán, Tài liệu & tìm kiếm, Chạy trên máy). Trang `/mcp/browse` khi ô tìm trống hiện đủ danh sách theo nhóm.
+- Mỗi remote đã kiểm thật: `initialize` không token → 401 + protected-resource metadata → metadata máy chủ cấp quyền (S256).
+  Có `registration_endpoint` → DCR (Kết nối một chạm). KHÔNG có (GitHub, Slack, HubSpot, Box, PagerDuty, Asana V2) → `client="manual"`:
+  form cài đòi `client_id` (+ `client_secret` tuỳ chọn → secret store `MCP_<SERVER>_OAUTH_CLIENT_SECRET`), hiện 2 Redirect URI
+  (web `/mcp/oauth/callback`, CLI `http://127.0.0.1:33418/callback`) và link tạo app (`setup_url`). GitHub giữ cách PAT (header).
+- Mục tuyển chọn THẮNG mục registry cùng tên (`catalog.get` không gọi mạng); tìm kiếm trang đầu đặt mục tuyển chọn khớp lên trước.
+- `suggest_name`: đoạn cuối chung chung (`mcp`, `mcp-server`, …) → lấy tên tổ chức trong namespace (`com.notion/mcp` → `notion`).
+- Kiểm lại định kỳ: script dò trong lịch sử phiên làm việc; URL/hành vi OAuth của nhà cung cấp có thể đổi — `test_curated_list_is_consistent`
+  chỉ kiểm dữ liệu, không gọi mạng.

@@ -63,7 +63,7 @@ def test_normalize_and_install_options():
 
 def test_suggest_and_secret_names():
     assert C.suggest_name("io.github.microsoft/playwright-mcp") == "playwright-mcp"
-    assert C.suggest_name("com.figma.mcp/mcp") == "mcp"
+    assert C.suggest_name("com.figma.mcp/mcp") == "figma" and C.suggest_name("io.github.miroapp/mcp-server") == "miroapp"
     assert C.suggest_name("x/__weird name!!") == "weird-name"
     assert C.secret_name("figma", "FIGMA_API_KEY") == "MCP_FIGMA_FIGMA_API_KEY"
 
@@ -88,7 +88,10 @@ def test_search_calls_registry_caches_and_paginates(monkeypatch, tmp_path):
 
     monkeypatch.setattr(C, "_http_get_json", fake)
     r = C.search("figma", limit=5, cache_dir=tmp_path)
-    assert r["source"] == "registry" and r["next_cursor"] == "c2" and len(r["servers"]) == 2
+    assert r["source"] == "registry" and r["next_cursor"] == "c2" and len(r["servers"]) == 3
+    # trang đầu: mục tuyển chọn khớp (Figma) đứng trước kết quả registry
+    assert [s["name"] for s in r["servers"]] == ["com.figma.mcp/mcp", "io.github.GLips/Figma-Context-MCP", "com.example/remote"]
+    assert r["servers"][0]["curated"] and not r["servers"][1]["curated"]
     assert "search=figma" in calls[0] and "limit=5" in calls[0] and "version=latest" in calls[0] and calls[0].startswith(C.REGISTRY_URL + "/v0/servers?")
     assert C.search("figma", limit=5, cache_dir=tmp_path)["source"] == "cache" and len(calls) == 1
     C.search("figma", limit=5, cursor="c2", cache_dir=tmp_path)
@@ -111,7 +114,7 @@ def test_search_falls_back_to_stale_cache_then_curated(monkeypatch, tmp_path):
 
     monkeypatch.setattr(C, "_http_get_json", down)
     r = C.search("figma", cache_dir=tmp_path)
-    assert r["source"] == "stale-cache" and r["servers"][0]["name"] == "io.github.GLips/Figma-Context-MCP" and "offline" in r["error"]
+    assert r["source"] == "stale-cache" and r["servers"][1]["name"] == "io.github.GLips/Figma-Context-MCP" and "offline" in r["error"]
     # không có cache → danh sách tuyển chọn
     r = C.search("playwright", cache_dir=tmp_path / "empty")
     assert r["source"] == "offline" and [s["name"] for s in r["servers"]] == ["io.github.microsoft/playwright-mcp"] and r["error"]
@@ -167,3 +170,32 @@ def test_check_oauth(monkeypatch):
 
 def test_mcp_catalog_rpc_is_read_only():
     assert "mcp.catalog" not in MUTATING
+
+
+def test_curated_list_is_consistent():
+    """Danh sách tuyển chọn: tên duy nhất, mỗi mục cài được, có loại; mục OAuth là remote; mục cần client_id tay có chỗ tạo app."""
+    entries = [C.normalize(x, trusted_meta=True) for x in C.CURATED]
+    assert all(entries) and len(entries) >= 50
+    names = [e["name"] for e in entries]
+    assert len(names) == len(set(names))
+    assert len({C.suggest_name(n) for n in names}) == len(names)  # tên trong hub không đụng nhau
+    for e in entries:
+        assert e["curated"] and e["category"] in C.CATEGORIES, e["name"]
+        opts = C.install_options(e)
+        assert opts and e["installable"], e["name"]
+        if e["needs_oauth"]:
+            assert opts[0]["kind"] == "remote" and opts[0]["needs_oauth"] and opts[0]["url"].startswith("https://"), e["name"]
+        if e["oauth_client"] == "manual":
+            assert e["needs_oauth"] and e["setup_url"].startswith("https://") and opts[0]["oauth_client"] == "manual", e["name"]
+    assert {e["name"] for e in entries if e["oauth_client"] == "manual"} >= {"com.slack/mcp", "com.hubspot/mcp"}
+
+
+def test_get_prefers_curated_without_network(monkeypatch, tmp_path):
+    def boom(url, timeout):
+        raise AssertionError("không được gọi mạng cho mục tuyển chọn")
+
+    monkeypatch.setattr(C, "_http_get_json", boom)
+    e = C.get("com.notion/mcp", cache_dir=tmp_path)
+    assert e["title"] == "Notion" and e["needs_oauth"] and e["oauth_client"] is None and e["remotes"][0]["url"] == "https://mcp.notion.com/mcp"
+    sq = C.get("com.squareup/mcp", cache_dir=tmp_path)
+    assert C.install_options(sq)[0]["transport"] == "sse"
