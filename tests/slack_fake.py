@@ -2,9 +2,11 @@
 
 - Web API (HTTP, thân form như SlackApi gửi): auth.test, apps.connections.open (app token) → URL WebSocket cục bộ, chat.postMessage,
   chat.update, chat.postEphemeral, conversations.open, users.info, files.getUploadURLExternal (+ POST /upload/<id>),
-  files.completeUploadExternal. Token sai → `invalid_auth`.
+  files.completeUploadExternal, views.open (ghi lại view; `fail_views` → `expired_trigger_id`). Token sai → `invalid_auth`.
+- Tệp người gửi (P4): `user_files()` lưu nội dung và bơm tin `file_share`; GET `/files-pri/<id>/<tên>` trả nội dung khi có bot token
+  ở header (thiếu/sai → trang HTML 200 như Slack thật khi thiếu `files:read`); `downloads` ghi mọi lần GET.
 - Socket Mode (WebSocket, `websockets.sync.server` trong luồng riêng): gửi `hello`, rồi các envelope test bơm vào
-  (`user_message()`, `press()`, `slash()`); ghi nhận ACK (`acked()`), `disconnect()` để thử kết nối lại; gửi trùng = cùng `event_id`.
+  (`user_message()`, `press()`, `slash()`, `submit_view()`); ghi nhận ACK (`acked()`), `disconnect()` để thử kết nối lại; gửi trùng = cùng `event_id`.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 from websockets.sync.server import serve
 
@@ -30,6 +32,8 @@ class FakeSlack:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.next_ts = 1000
         self.uploads: dict[str, bytes] = {}
+        self.files: dict[str, tuple[bytes, str]] = {}  # đường dẫn → (nội dung, mime) — tệp người gửi
+        self.downloads: list[str] = []  # đường dẫn đã GET (kể cả bị từ chối vì token)
         self.outbox: list[dict[str, Any]] = []  # envelope chờ gửi qua WebSocket
         self.acks: set[str] = set()
         self.connections = 0
@@ -37,9 +41,28 @@ class FakeSlack:
         self.cond = threading.Condition()
         self._ws: Any = None
         self._kick = False
+        self.fail_views = False
         outer = self
 
         class H(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                with outer.cond:
+                    outer.downloads.append(self.path)
+                    item = outer.files.get(self.path.split("?", 1)[0])
+                    outer.cond.notify_all()
+                auth = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
+                if item is None:
+                    data, ctype, code = b"not found", "text/plain", 404
+                elif auth != BOT_TOKEN:  # Slack thật: thiếu quyền → trang đăng nhập HTML, mã 200
+                    data, ctype, code = b"<!DOCTYPE html><html>sign in</html>", "text/html; charset=utf-8", 200
+                else:
+                    data, ctype, code = item[0], item[1], 200
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
             def do_POST(self):  # noqa: N802
                 n = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(n) or b""
@@ -106,6 +129,10 @@ class FakeSlack:
             return {"ok": True, "channel": {"id": "D" + str(p.get("users"))[1:]}}
         if method == "users.info":
             return {"ok": True, "user": {"id": p.get("user"), "name": "sep", "profile": {"real_name": "Sếp Thử"}}}
+        if method == "views.open":
+            if self.fail_views or not p.get("trigger_id"):
+                return {"ok": False, "error": "expired_trigger_id"}
+            return {"ok": True, "view": {"id": f"V{self.next_ts}", **(p.get("view") or {})}}
         if method == "files.getUploadURLExternal":
             fid = f"F{self.next_ts}"
             return {"ok": True, "upload_url": f"{self.url}/upload/{fid}", "file_id": fid}
@@ -188,6 +215,31 @@ class FakeSlack:
             ev["subtype"] = subtype
         return self._push("events_api", {"team_id": team or self.team, "event": ev, "event_id": event_id or f"Ev{ts.replace('.', '')}"})
 
+    def user_files(self, channel: str, user: str, files: list[tuple[str, bytes, str]], *, text: str = "", thread_ts: str | None = None,
+                   sizes: dict[str, int] | None = None, urls: dict[str, str] | None = None, team: str | None = None) -> str:
+        """Tin `file_share` kèm `files` [(tên, nội dung, mime)]. `sizes` = cỡ khai báo giả; `urls` = URL tải thay (thử host lạ)."""
+        objs = []
+        for name, data, mime in files:
+            with self.cond:
+                self.next_ts += 1
+                fid = f"F{self.next_ts}"
+                path = f"/files-pri/{self.team}-{fid}/{quote(name)}"  # Slack thật: tên đã mã hoá %
+                self.files[path] = (data, mime)
+            url = (urls or {}).get(name) or f"{self.url}{path}"
+            dl = (urls or {}).get(name) or f"{self.url}{path}?dl=1"
+            objs.append({"id": fid, "name": name, "title": name, "mimetype": mime, "filetype": name.rsplit(".", 1)[-1],
+                         "size": (sizes or {}).get(name, len(data)), "mode": "hosted", "url_private": url, "url_private_download": dl})
+        ts = self._ts()
+        ev = {"type": "message", "subtype": "file_share", "channel": channel, "user": user, "text": text, "ts": ts, "files": objs,
+              "channel_type": "im" if channel.startswith("D") else "channel"}
+        if thread_ts:
+            ev["thread_ts"] = thread_ts
+        return self._push("events_api", {"team_id": team or self.team, "event": ev, "event_id": f"Ev{ts.replace('.', '')}"})
+
+    def downloaded(self) -> list[str]:
+        with self.cond:
+            return list(self.downloads)
+
     def press(self, channel: str, user: str, value: str, ts: str, *, team: str | None = None) -> str:
         with self.cond:
             self.next_env += 1
@@ -202,6 +254,26 @@ class FakeSlack:
             trig = f"trig-{self.next_env}"
         return self._push("slash_commands", {"command": "/cfh", "text": text, "user_id": user, "channel_id": channel, "team_id": team or self.team,
                                              "trigger_id": trig, "response_url": f"{self.url}/response"})
+
+    def views(self) -> list[dict[str, Any]]:
+        """View đã mở (`views.open`, đã giải JSON) — mới nhất cuối."""
+        return [p["view"] for p in self.calls_of("views.open") if isinstance(p.get("view"), dict)]
+
+    def submit_view(self, user: str, view: dict[str, Any], text: str, *, team: str | None = None, metadata: str | None = None,
+                    callback_id: str | None = None) -> str:
+        """Người bấm "Gửi" trên modal → envelope `interactive` `view_submission` (giá trị ô nhập theo block_id/action_id của view)."""
+        values: dict[str, Any] = {}
+        for b in view.get("blocks") or []:
+            if b.get("type") == "input":
+                aid = (b.get("element") or {}).get("action_id")
+                values[b.get("block_id")] = {aid: {"type": "plain_text_input", "value": text}}
+        with self.cond:
+            self.next_env += 1
+            trig = f"trig-{self.next_env}"
+        v = {"id": view.get("id") or "V0", "type": "modal", "callback_id": callback_id or view.get("callback_id"),
+             "private_metadata": view.get("private_metadata") if metadata is None else metadata, "state": {"values": values}}
+        return self._push("interactive", {"type": "view_submission", "user": {"id": user, "team_id": team or self.team},
+                                          "team": {"id": team or self.team}, "trigger_id": trig, "view": v})
 
     def wait(self, fn, timeout: float = 10.0) -> Any:
         t0 = time.monotonic()

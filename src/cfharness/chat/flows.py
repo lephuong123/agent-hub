@@ -1,6 +1,6 @@
 """Lệnh Telegram tương tác (UX v2 — T-C) + tiến độ run sửa tại chỗ (T-D). Gắn vào `TelegramBot` (`bot.flows`).
 
-- `/giaoviec` (`/run`): `<agent> <yêu cầu>` → giao ngay như cũ; chỉ `<agent>` → ô nhập (`force_reply`); không tham số → danh sách agent
+- `/giaoviec` (`/run`): `<agent> <yêu cầu>` → giao ngay như cũ; chỉ `<agent>` → ô nhập (`bot.ask_input`: Telegram `force_reply`, Slack modal); không tham số → danh sách agent
   đánh số + nút số `[➕ 1]…` → ô nhập. Reply vào ô nhập = yêu cầu → `run.start` (cổng người, audit `telegram:<chat>`).
 - `/agent`: danh sách đánh số (chữ hub: id, trạng thái, chi phí) + nút `[➕ n]` giao việc, `[⏹ n]` dừng run đang chạy của agent đó.
 - `/luotchay`: 10 lượt gần nhất (chữ hub) + nút số → chi tiết (khung kết quả agent WT-8, không nút). `/stop` không tham số → chọn run đang chạy.
@@ -120,8 +120,8 @@ class ChatFlows:
         return f"Đã giao run {r['id']} cho agent {agent} ({r.get('status')}). Bot sẽ gửi kết quả khi xong."
 
     async def ask_prompt(self, cid: str, agent: str, api: Any, reply_to: Any = None) -> None:
-        res = await self.bot._send(api, cid, f"✍️ Mô tả việc cần làm cho agent {agent} — trả lời (reply) tin này.",
-                                   {"force_reply": True, "input_field_placeholder": f"Việc cho {agent}…", "selective": True}, reply_to=reply_to)
+        res = await self.bot.ask_input(api, cid, "run", agent, f"✍️ Mô tả việc cần làm cho agent {agent} — {self.bot.reply_here()}.",
+                                       f"Việc cho {agent}…", reply_to=reply_to)  # Slack: modal (chat/slack/modals.py)
         if res.get("message_id") is not None:
             self._put(f"{cid}:{res['message_id']}", {"kind": "run", "agent": agent})
 
@@ -159,7 +159,7 @@ class ChatFlows:
 
         try:
             if action == "fg":
-                await self.bot._edit(api, cid, mid, f"➕ <b>[cfharness] Giao việc cho {esc(ref)}</b> — nhập yêu cầu ở tin bên dưới.", None)
+                await self.bot._edit(api, cid, mid, f"➕ <b>[cfharness] Giao việc cho {esc(ref)}</b> — nhập yêu cầu {esc(self.bot.input_where())}.", None)
                 await self.ask_prompt(cid, ref, api, reply_to=mid)
                 return f"Nhập yêu cầu cho {ref}."
             if action == "fs":

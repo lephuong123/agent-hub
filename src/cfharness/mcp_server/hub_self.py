@@ -296,7 +296,7 @@ MANAGER_TOOLS.update({
         "BEFORE creating, confirm with the owner in one short line: what, when (in their words + the expr), where the result goes. "
         "kind: manager (default — the prompt runs as a turn of YOUR conversation at each fire, the result goes to deliver_to), agent "
         "(target = agent id; its result is delivered to deliver_to), task (team and/or assignee). " + _SCHED_EXPR + " deliver_to = "
-        "{conversation_id} (default: this conversation) or {channel: 'telegram:<chat_id>'|'web'|'cli'}. budget_usd per fire is "
+        "{conversation_id} (default: this conversation) or {channel: 'telegram:<chat_id>'|'slack:<chat_id>'|'web'|'cli'}. budget_usd per fire is "
         "required and capped; your jobs must be ≥ 15 min apart and their estimated daily cost stays under the cap. prompt = the "
         "instruction for each fire, in English, self-contained. After creating, tell the owner how to stop it (schedule_pause / "
         "`cfharness schedule pause <id>`)." + _DENIED,

@@ -92,9 +92,7 @@ class ChatBot:
         from .manager_chat import ManagerChat
 
         self.manager = ManagerChat(self)  # M7 MGR-UI: tin thường ↔ điều phối viên
-        from .media import MediaChat
-
-        self.media = MediaChat(self)  # ảnh/tệp người gửi → điều phối viên; tệp `[[file: …]]` điều phối viên đánh dấu → document
+        self.media = self._make_media()  # ảnh/tệp người gửi → điều phối viên; tệp `[[file: …]]` điều phối viên đánh dấu → document
         from .questions_tg import QuestionChat
 
         self.questions = QuestionChat(self)  # UX v2: câu hỏi có lựa chọn của agent (nút số + trả lời bằng chữ)
@@ -481,6 +479,35 @@ class ChatBot:
         """Chỉ dẫn "trả lời tin này để …" theo cách của nền tảng (Telegram: reply; Slack: trả lời trong thread)."""
         return f"Trả lời (reply) tin này để {what}."
 
+    # ------------------------------------------------------------------ mời người nhập chữ (giao việc, trả lời câu hỏi bằng chữ)
+    async def ask_input(self, api: Any, cid: str, kind: str, ref: str, text: str, placeholder: str, *,
+                        reply_to: Any = None) -> dict[str, Any]:
+        """Mời người nhập chữ cho `kind` ("run": ref = agent; "question": ref = id câu hỏi). Mặc định (Telegram) = tin `force_reply`
+        → `{"message_id": …}`, NGƯỜI GỌI map tin đó (reply vào tin = câu trả lời). Lớp con có ô nhập riêng (Slack: modal) trả
+        `{"message_id": None, "modal": True}` và tự lo phần nhận (vẫn qua `self.call` → cổng người)."""
+        return await self._send(api, cid, text, {"force_reply": True, "input_field_placeholder": placeholder, "selective": True}, reply_to=reply_to)
+
+    def input_where(self) -> str:
+        """Nơi người sẽ nhập sau `ask_input` (chữ hướng dẫn của hub) — Telegram: tin force_reply bên dưới."""
+        return "ở tin bên dưới"
+
+    # Lời dẫn theo nền tảng (P3): mặc định = chữ Telegram (giữ nguyên từng byte); Slack ghi đè (chat/slack/bot.py).
+    def reply_here(self) -> str:
+        """"trả lời tin này" (chữ thường, giữa câu) — Telegram: reply; Slack: trả lời trong thread."""
+        return "trả lời (reply) tin này"
+
+    def reply_into(self, target: str) -> str:
+        """"reply vào <tin nào đó>" (giữa câu)."""
+        return f"reply vào {target}"
+
+    def plain_hint(self) -> str:
+        """Tin nào là "tin nhắn thường" (→ điều phối viên)."""
+        return "không phải lệnh /"
+
+    def answer_box_hint(self) -> str:
+        """Toast sau khi bấm "Trả lời bằng chữ"."""
+        return "Nhập câu trả lời ở ô bên dưới."
+
     async def _report_run(self, run_id: str, etype: str) -> None:
         run = self.hub.store.get_run(run_id)
         if run is None:
@@ -690,6 +717,12 @@ class ChatBot:
     # ================================================================== lớp con cài (vận chuyển)
     def _make_notifier(self) -> Any:  # pragma: no cover - lớp con
         raise NotImplementedError
+
+    def _make_media(self) -> Any:
+        """Ảnh/tệp: mặc định bản Telegram (chat/media.py); Slack thay bằng chat/slack/media.py."""
+        from .media import MediaChat
+
+        return MediaChat(self)
 
     def token(self, *, ignore_enabled: bool = False) -> str | None:  # pragma: no cover - lớp con
         raise NotImplementedError

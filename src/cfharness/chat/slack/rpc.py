@@ -81,6 +81,7 @@ def register_rpc(d: "Daemon") -> None:
             hub.config.set("notify.slack.enabled", True)
         pair = bot.start_pairing()
         bot.info["team_id"] = team
+        bot.info["team"] = me.get("team")
         bot.info["bot_user_id"] = me.get("user_id")
         bot.kick()
         _audit("slack.setup", p, {"team_id": team, "bot_user_id": me.get("user_id")})
@@ -108,6 +109,10 @@ def register_rpc(d: "Daemon") -> None:
         if uid not in users:
             users.append(uid)
             hub.config.set("notify.slack.allowed_user_ids", users)
+        if cid.startswith("D"):  # nhớ DM ↔ người (revoke gỡ đúng người; slash command trả về đúng DM)
+            dms = bot._state(bot.DMS)
+            dms[uid] = cid
+            hub.store.state_set(bot.DMS, dms)
         cur = [str(x) for x in (bot.cfg().get("allowed_chat_ids") or [])]
         if cid not in cur:
             cur.append(cid)
@@ -126,11 +131,20 @@ def register_rpc(d: "Daemon") -> None:
         return {"allowed_chat_ids": cur, "allowed_user_ids": users, "welcome_sent": welcome}
 
     def revoke(p: dict[str, Any]) -> dict[str, Any]:
+        """Gỡ DM/kênh; DM thì gỡ luôn người sở hữu DM đó (theo `slack.dms`, hoặc `user_id` truyền vào) khỏi `allowed_user_ids`."""
         cid = _chat(p)
         cur = [str(x) for x in (bot.cfg().get("allowed_chat_ids") or []) if str(x) != cid]
         hub.config.set("notify.slack.allowed_chat_ids", cur)
-        _audit("slack.revoke", p, {"chat_id": cid})
-        return {"allowed_chat_ids": cur}
+        gone = {str(p["user_id"])} if p.get("user_id") else set()
+        if cid.startswith("D"):
+            gone |= {u for u, d in bot._state(bot.DMS).items() if str(d) == cid}
+        gone |= {x["user_id"] for x in bot.pending(None) if x.get("chat_id") == cid and x.get("user_id")}
+        users = [str(x) for x in (bot.cfg().get("allowed_user_ids") or [])]
+        if gone & set(users):
+            users = [u for u in users if u not in gone]
+            hub.config.set("notify.slack.allowed_user_ids", users)
+        _audit("slack.revoke", p, {"chat_id": cid, "user_ids": sorted(gone)})
+        return {"allowed_chat_ids": cur, "allowed_user_ids": users}
 
     def disable(p: dict[str, Any]) -> dict[str, Any]:
         hub.config.set("notify.slack.interactive", False)
