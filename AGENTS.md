@@ -289,7 +289,9 @@ server Bot API giả `tests/telegram_fake.py` — không gọi Telegram thật.
 ## Slack 2 chiều — Socket Mode (duyệt bằng nút, `/cfh`, thread = reply)
 Chi tiết, việc dở: `docs/dev-notes/slack.md`; plan: `docs/plan/slack-2way.md`. Lõi chat dùng chung: `chat/base.py` (`ChatBot`) —
 Telegram (`chat/bot.py`) và Slack (`chat/slack/bot.py`) chỉ khác lớp vận chuyển. Thêm logic chat mới → viết ở `ChatBot` (hoặc
-flows/questions/manager_chat nhận `ChatBot`), không gọi API nền tảng trực tiếp; khoá `hub_state` luôn `f"{bot.NAME}.…"`.
+flows/questions/manager_chat nhận `ChatBot`), không gọi API nền tảng trực tiếp; khoá `hub_state` luôn `f"{bot.NAME}.…"`. Chữ hiển thị
+trong lõi không viết cứng `/lệnh` hay "reply": dùng `bot.cmd(name)`, `bot.reply_hint/reply_here/reply_into/plain_hint/answer_box_hint`
+(mặc định = chữ Telegram, giữ nguyên từng byte; Slack ghi đè).
 
 | Module | Vai trò |
 |---|---|
@@ -299,7 +301,7 @@ flows/questions/manager_chat nhận `ChatBot`), không gọi API nền tảng tr
 
 Bất biến: như Telegram — mọi lệnh/nút qua `Daemon.call_as(auth.slack_caller(hub, chat_id, user_id), …)`; người = `interactive` bật + chat ∈
 `allowed_chat_ids` + user ∈ `allowed_user_ids` (+ `allow_channels` cho kênh không phải DM); envelope khác `team_id` ghim → bỏ. Token bot/app chỉ
-ở secret store. Test: `tests/test_slack.py`, Slack giả `tests/slack_fake.py` (HTTP + WebSocket cục bộ).
+ở secret store. Test: `tests/test_slack.py`, `tests/test_slack_questions.py`, Slack giả `tests/slack_fake.py` (HTTP + WebSocket cục bộ).
 
 ## WEB — giao diện trình duyệt (`cfharness web`)
 Chi tiết, kiểm chứng sandbox thật, việc dở: `docs/dev-notes/web.md`. Ảnh: `docs/screenshots/web/`. Test: `tests/test_web.py`.

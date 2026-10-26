@@ -215,8 +215,19 @@ class SlackBot(ChatBot):
                 return {"message_id": None, "modal": True}
             except Exception as e:
                 log.info("Slack: không mở được modal (%s) — dùng trả lời trong thread", clip(e, 200))
-        return await super().ask_input(api, cid, kind, ref, text.replace("trả lời (reply) tin này", "trả lời trong thread của tin này"),
-                                       placeholder, reply_to=reply_to)
+        return await super().ask_input(api, cid, kind, ref, text, placeholder, reply_to=reply_to)  # chữ đã theo Slack (reply_here)
+
+    def reply_here(self) -> str:
+        return "trả lời trong thread của tin này"
+
+    def reply_into(self, target: str) -> str:
+        return f"trả lời trong thread của {target}"
+
+    def plain_hint(self) -> str:
+        return f"nhắn chữ trong DM với bot, không qua {self.slash()}"
+
+    def answer_box_hint(self) -> str:
+        return "Trả lời trong thread của tin vừa gửi."
 
     def team_ok(self, team: Any) -> bool:
         pinned = self.cfg().get("team_id")

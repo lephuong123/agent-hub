@@ -22,7 +22,7 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
         p.add_argument("--team", help="kind=task: team nhận task")
         p.add_argument("--assignee", help="kind=task: agent nhận task")
         p.add_argument("--name")
-        p.add_argument("--to", dest="deliver_to", help="nơi nhận kết quả: id hội thoại (mc_…) hoặc kênh web|cli|telegram:<chat_id> "
+        p.add_argument("--to", dest="deliver_to", help="nơi nhận kết quả: id hội thoại (mc_…) hoặc kênh web|cli|telegram:<chat_id>|slack:<chat_id> "
                                                        "(bỏ trống = hội thoại gần nhất của bạn)")
         p.add_argument("--budget", type=float, help="trần chi phí mỗi lượt ($)")
 

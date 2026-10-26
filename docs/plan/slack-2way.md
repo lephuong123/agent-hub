@@ -108,6 +108,9 @@ Manifest app (wizard điền sẵn):
 - 2026-10-26: **P2 xong** (mã + test Slack giả, `tests/test_slack_modals.py`): modal giao việc (nút agent, `/cfh giaoviec <agent>`) và
   "Trả lời bằng chữ" cho câu hỏi; nonce phía hub `slack.modals`; không có trigger → trả lời trong thread. Lệnh `/cfh …`, theo dõi run,
   thread → `run.continue` đã có từ P1. Chưa nghiệm thu `views.open` trên workspace thật.
+- 2026-10-26: **P3 xong phần mã + test với Slack giả** (`tests/test_slack_questions.py`): câu hỏi (nút số, chọn nhiều bằng nút bật/tắt
+  thay checkbox, trả lời trong thread), lời dẫn của lõi theo nền tảng (`bot.cmd`, `reply_*`), lịch giao kết quả về `slack:<chat>`.
+  Còn: reaction ⏳ thay "đang gõ…" (cần scope `reactions:write` — cùng P5).
 
 ## Pha thực hiện
 Mỗi pha chạy được độc lập, `uv run pytest -q` xanh, có ghi chú trong `docs/dev-notes/slack.md`.

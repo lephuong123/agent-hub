@@ -31,13 +31,26 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("cfharness.chat.telegram.manager")
 
-GUIDE = (
-    "Chưa có điều phối viên — tin nhắn thường (không phải lệnh /) sẽ được chuyển cho điều phối viên khi người quản trị chỉ định một agent:\n"
+_GUIDE = (
+    "Chưa có điều phối viên — tin nhắn thường ({plain}) sẽ được chuyển cho điều phối viên khi người quản trị chỉ định một agent:\n"
     "• trên máy: cfharness manager set <agent>\n"
     "• hoặc trên web: trang Điều phối → Chỉ định\n"
-    "Trong lúc chờ vẫn dùng được: /run <agent> <yêu cầu>, /status, /help."
+    "Trong lúc chờ vẫn dùng được: {run} <agent> <yêu cầu>, {status}, {help}."
 )
-UNAVAILABLE = "Hub này chưa có chức năng điều phối viên (cần cập nhật cfharness). Dùng /run <agent> <yêu cầu> hoặc /help."
+_UNAVAILABLE = "Hub này chưa có chức năng điều phối viên (cần cập nhật cfharness). Dùng {run} <agent> <yêu cầu> hoặc {help}."
+
+
+def guide_text(bot: "ChatBot") -> str:
+    """Hướng dẫn khi chưa có điều phối viên — lệnh/lời dẫn theo nền tảng của `bot` (Telegram: đúng bằng `GUIDE`)."""
+    return _GUIDE.format(plain=bot.plain_hint(), run=bot.cmd("run"), status=bot.cmd("status"), help=bot.cmd("help"))
+
+
+def unavailable_text(bot: "ChatBot") -> str:
+    return _UNAVAILABLE.format(run=bot.cmd("run"), help=bot.cmd("help"))
+
+
+GUIDE = _GUIDE.format(plain="không phải lệnh /", run="/run", status="/status", help="/help")  # chữ Telegram (test import)
+UNAVAILABLE = _UNAVAILABLE.format(run="/run", help="/help")
 NO_REPLY_WAIT_S = 3.0
 TYPING_EVERY_S = 4.0  # Telegram tự tắt "đang gõ…" sau ~5 s
 TYPING_MAX_S = 180.0
@@ -85,10 +98,10 @@ class ManagerChat:
             g = await self.bot.call(chat_id, "manager.get")
         except ChatError as e:
             msg = str(e)
-            await self.bot._send(api, chat_id, UNAVAILABLE if "không có method" in msg else f"Lỗi: {clip(msg, 300)}")
+            await self.bot._send(api, chat_id, unavailable_text(self.bot) if "không có method" in msg else f"Lỗi: {clip(msg, 300)}")
             return
         if not (g or {}).get("agent_id"):
-            await self.bot._send(api, chat_id, GUIDE)
+            await self.bot._send(api, chat_id, guide_text(self.bot))
             return
         conv = conv or self.current(chat_id)
         params: dict[str, Any] = {"channel": self.bot.channel_of(chat_id), "text": text}
@@ -128,7 +141,7 @@ class ManagerChat:
         had = self.current(chat_id)
         self._put(self.CONV, str(chat_id), None)
         return ("Đã mở cuộc trò chuyện MỚI với điều phối viên — tin tiếp theo bắt đầu ngữ cảnh mới."
-                + (" (Cuộc cũ vẫn tiếp tục được nếu bạn reply vào tin cũ của điều phối viên.)" if had else ""))
+                + (f" (Cuộc cũ vẫn tiếp tục được nếu bạn {self.bot.reply_into('tin cũ của điều phối viên')}.)" if had else ""))
 
     # ------------------------------------------------------------------ từ điều phối viên → người
     def on_event(self, ev: HubEvent) -> None:
@@ -175,7 +188,8 @@ class ManagerChat:
             if i == len(chunks) - 1:
                 if cut:
                     lines.append("…(đã cắt — xem đầy đủ trên web: trang Điều phối)")
-                lines.append("Trả lời (reply) tin này để tiếp tục cuộc trò chuyện · /moi để mở cuộc trò chuyện mới.")
+                lines.append(esc(self.bot.reply_hint("tiếp tục cuộc trò chuyện").rstrip("."))
+                             + f" · {esc(self.bot.cmd('moi'))} để mở cuộc trò chuyện mới.")
             out.append("\n".join(lines))
         return out
 
@@ -217,7 +231,7 @@ class ManagerChat:
         run = self.hub.store.get_run(run_id) or {}
         outcome = run.get("outcome") or run.get("status")
         if etype == "run.waiting_human" or outcome == "waiting_human":
-            text = f"Điều phối viên (run {run_id}) đang chờ người duyệt một thao tác — gõ /approvals."
+            text = f"Điều phối viên (run {run_id}) đang chờ người duyệt một thao tác — gõ {self.bot.cmd('approvals')}."
         elif outcome in ("resumed", "interrupted"):
             return
         else:

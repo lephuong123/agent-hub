@@ -62,6 +62,23 @@ và các khoá mới), `chat/__init__.py` (`hub.slack`), `daemon.py` (đăng ký
   Quyết ở kênh khác → `approval.resolved` → gỡ nút ở mọi kênh (Telegram và Slack).
 - **Thông báo**: khi bot hoạt động (`SlackBot.active()`), `SlackNotifier` (webhook/kênh) nhường hết cho `SlackChatNotifier` (DM, approval có nút).
 
+## P3 — câu hỏi của agent, điều phối viên, lịch
+- **Câu hỏi** (`questions_tg.py`, không đổi luồng): `question.open{routed_to=human}` → mỗi DM trong `notify_chats()` (+ chat đang theo dõi
+  run, chat của hội thoại điều phối viên) nhận tin NỘI DUNG (chữ agent trong khối mã) + tin HỆ THỐNG trong thread của nó với nút số;
+  chọn nhiều = nút bật/tắt `☐/☑ n` + `[Gửi lựa chọn]` (mỗi lần bấm: tiêu cả nhóm, `chat.update` cấp nút mới — giữ mô hình Telegram,
+  KHÔNG dùng checkbox Block Kit: checkbox giữ trạng thái phía client, không ký từng lựa chọn được). "Trả lời bằng chữ" → tin trong thread
+  (không có `force_reply` trên Slack — render thêm dòng "↩️ Trả lời trong thread"); trả lời trong thread của tin nội dung/hệ thống/ô nhập
+  → `question.answer{text}`. `question.answered|cancelled` từ BẤT KỲ kênh → `chat.update` tin hệ thống thành dòng kết quả, gỡ nút.
+  Đã chạy được nguyên trạng sau P0/P1 — P3 chỉ thêm test end-to-end với Slack giả (`tests/test_slack_questions.py`) + sửa lời dẫn.
+- **Lời dẫn theo nền tảng**: lõi không còn viết cứng "trả lời (reply) tin này", `/approvals`, `/moi`, `/run …`, `/help`. `ChatBot` có
+  `cmd(name)`, `reply_hint(what)`, `reply_here()`, `reply_into(target)`, `plain_hint()`, `answer_box_hint()` — mặc định = chữ Telegram
+  (từng byte như cũ), `SlackBot` ghi đè ("trả lời trong thread của …", `/cfh <lệnh>`). `manager_chat.GUIDE`/`UNAVAILABLE` giữ nguyên là chữ
+  Telegram (test import); bot gọi `guide_text(bot)` / `unavailable_text(bot)`.
+- **Lịch**: `deliver_to.channel` nhận `slack:<chat_id>` (`[CDG][A-Z0-9]{2,20}` — DM `D…`, kênh `C…`/`G…`). Giao kết quả giống `telegram:`:
+  `manager.reply{channel: "slack:<chat>", kind: notify}` → `SlackBot.manager` (chỉ gửi nếu chat ∈ `notify_chats()`). Mô tả công cụ
+  `schedule_create` (hub_self) và `cfharness schedule add --to` nhắc `slack:<chat_id>`.
+
 ## Chưa làm (theo plan)
-P3 câu hỏi bằng checkbox + `schedules` kênh `slack:<chat>` + ghi chú tệp trong prompt điều phối viên, P4 ảnh/tệp vào,
-P5 wizard web 2 chiều (manifest Socket Mode). Nghiệm thu trên workspace Slack thật: chưa chạy.
+P4 ảnh/tệp vào (+ ghi chú tệp trong prompt điều phối viên cho kênh `slack:`), P5 wizard web 2 chiều (manifest Socket Mode).
+P3 còn: reaction ⏳ thay "đang gõ…" khi chờ điều phối viên (cần scope `reactions:write` trong manifest); bot Slack hiện bỏ qua "đang gõ"
+(`typing` ném lỗi → vòng nhắc dừng êm). Nghiệm thu trên workspace Slack thật: chưa chạy.
