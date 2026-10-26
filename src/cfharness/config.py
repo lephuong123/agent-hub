@@ -330,9 +330,9 @@ DEFAULTS: dict[str, Any] = {
             "baseline_days": 7,
             "threshold_pct": 50,  # +50% so với mốc …
             "min_events": 2,  # … và tối thiểu 2 sự kiện trong cửa sổ
-            "cost_threshold_pct": 50,
-            "min_runs_cost": 3,
-            "unevaluated_factor": 0.5,  # entry không có golden task: ngưỡng chặt hơn
+            "cost_threshold_pct": 50,  # so trung vị chi phí/run (bỏ run huỷ)
+            "min_runs_cost": 5,
+            "unevaluated_factor": 0.5,  # entry không có golden task: ngưỡng correction/failure chặt hơn (không áp cho chi phí)
             "track_days": 14,
             "full_check_min": 30,
         },

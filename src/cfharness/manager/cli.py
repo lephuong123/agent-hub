@@ -1,12 +1,13 @@
 """CLI `cfharness manager set|get|chat|tick|conversations|history` + `cfharness chat` (client thuần của daemon, RPC `manager.*`).
 
-`cfharness chat` / `manager chat` KHÔNG kèm nội dung → phiên chat qua lại (`manager/repl.py`); kèm nội dung → gửi một tin và chờ
-trả lời qua luồng sự kiện (`repl.oneshot`)."""
+`cfharness chat` / `manager chat` KHÔNG kèm nội dung → phiên chat qua lại: terminal → giao diện fullscreen (`tui/chat.py`),
+`--classic` hoặc không phải TTY → REPL (`manager/repl.py`); kèm nội dung → gửi một tin và chờ trả lời qua luồng sự kiện (`repl.oneshot`)."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,8 @@ def _chat_args(c: argparse.ArgumentParser) -> None:
     c.add_argument("--channel", default="cli", help=argparse.SUPPRESS)
     c.add_argument("--no-wait", action="store_true", help="không chờ trả lời (chỉ khi có nội dung)")
     c.add_argument("--timeout", type=float, default=900, help="giây chờ mỗi câu trả lời")
+    c.add_argument("--classic", action="store_true",
+                   help="chat qua lại bằng REPL dòng lệnh cũ (prompt_toolkit) thay cho giao diện fullscreen (chuột, cuộn, bảng agent)")
 
 
 def _print_get(g: dict[str, Any]) -> None:
@@ -174,6 +177,10 @@ def cmd_chat(ctx: Any) -> int:
         if a.channel != "cli":
             eprint("lỗi: chat qua lại chỉ dùng kênh cli")
             return 1
+        if not a.classic and sys.stdin.isatty() and sys.stdout.isatty():
+            from ..tui.chat import run_chat  # fullscreen kiểu Claude Code (tui/chat.py)
+
+            return run_chat(ctx.paths.socket, ctx.paths.home, conversation_id=a.conversation, new=a.new)
         return asyncio.run(repl.repl(ctx.paths.socket, ctx.paths.home, conversation_id=a.conversation, new=a.new, timeout=a.timeout))
     from . import attachments as attach
 

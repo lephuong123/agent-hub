@@ -1322,6 +1322,7 @@ class TopApp(App):
     TITLE = "cfharness"
     SUB_TITLE = "top"
     CSS = CSS
+    CHANNEL = "tui"  # kênh ghi vào approval/steer (`cfharness chat` fullscreen kế thừa app này với kênh `cli`)
     BINDINGS = [Binding("question_mark", "help", "Trợ giúp (?)")]  # NFR-26
 
     def action_help(self) -> None:
@@ -1468,7 +1469,7 @@ class TopApp(App):
 
     async def decide(self, approval: dict[str, Any], decision: str, note: str | None, *, always: bool = False) -> None:
         method = "approval.approve" if decision == "approve" else "approval.deny"
-        params: dict[str, Any] = {"id": approval["id"], "note": note, "channel": "tui", "by": "user"}
+        params: dict[str, Any] = {"id": approval["id"], "note": note, "channel": self.CHANNEL, "by": "user"}
         if always and decision == "approve":
             params["always"] = True  # daemon kiểm lại điều kiện (`always_prepare`) — không đủ → lỗi, approval giữ nguyên
         try:
@@ -1501,7 +1502,7 @@ class TopApp(App):
 
     async def steer(self, run_id: str, text: str) -> bool:
         try:
-            r = await self.client.call("run.steer", {"id": run_id, "text": text, "channel": "tui", "by": "user"}, audit=True)
+            r = await self.client.call("run.steer", {"id": run_id, "text": text, "channel": self.CHANNEL, "by": "user"}, audit=True)
         except Exception as e:
             self.notify(_err(e), severity="error", timeout=8)
             return False
@@ -1514,7 +1515,7 @@ class TopApp(App):
         if kind not in ("good", "wrong", "partial"):
             kind, note = "wrong", text.strip()  # chỉ ghi chú → coi là sửa sai (correction)
         try:
-            await self.client.call("feedback.record", {"run_id": run_id, "kind": kind, "note": note or None, "source": "tui"}, audit=True)
+            await self.client.call("feedback.record", {"run_id": run_id, "kind": kind, "note": note or None, "source": self.CHANNEL}, audit=True)
         except Exception as e:
             self.notify(_err(e), severity="error")
             return False

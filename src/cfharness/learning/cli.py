@@ -130,7 +130,7 @@ def cmd_learn(ctx: Any) -> int:
                 + (f" canary {r['canary_id']} trên {r.get('canary_agent') or 'mọi agent (shadow)'}" if r.get("canary_id") else ""))
         return 0 if r["status"] != "blocked" else 3
     if act == "retry":
-        r = ctx.call("learn.retry", {"id": a.id})
+        r = ctx.call("learn.retry", {"id": a.id, "revive": a.revive})
         ctx.out(r, f"{r['proposal_id']}: {r['status']} {r.get('reason') or ''}")
         return 0
     if act == "ledger":
@@ -330,7 +330,9 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     x.add_argument("--scope", default="agent", choices=["agent", "team", "global"])
     x.add_argument("--team", help="team của tầng team (mặc định: team duy nhất của agent)")
     x.add_argument("--rationale")
-    ls.add_parser("retry", parents=[common], help="thử áp dụng lại proposal hoãn").add_argument("id")
+    x = ls.add_parser("retry", parents=[common], help="thử áp dụng lại proposal hoãn")
+    x.add_argument("id")
+    x.add_argument("--revive", action="store_true", help="cả proposal đã bị thay (superseded)")
     x = ls.add_parser("ledger", parents=[common], help="ledger thay đổi (append-only)")
     x.add_argument("--agent")
     x.add_argument("--target")

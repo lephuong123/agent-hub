@@ -220,6 +220,14 @@ class ReviewScheduler:
         if cap and int(self.conn.execute("SELECT COUNT(*) FROM review_jobs WHERE agent_id=? AND started_at>=?", (agent_id, start)).fetchone()[0]) >= cap:
             self.hub.store._update("review_jobs", "id", job["id"], {"not_before": _utc_in(3600), "reason": f"đã đủ {cap} review hôm nay", "updated_at": now_iso()})
             return None
+        if job["trigger"] == "counter":
+            # review định kỳ khi agent đã hết suất thay đổi hôm nay chỉ đẻ proposal bị hoãn (tốn tiền, dồn ứ sang hôm sau) → giữ job
+            # chờ tới khi có suất (nửa đêm, hoặc sớm hơn khi rollback trả suất). Signal mạnh / refine thủ công vẫn chạy.
+            full = self.svc.pipeline.agent_quota_full(agent_id)
+            if full is not None:
+                nb = min(full[0], _utc_in(3600))  # kiểm lại mỗi giờ: rollback có thể trả suất sớm
+                self.hub.store._update("review_jobs", "id", job["id"], {"not_before": nb, "reason": f"chờ suất học: {full[1]}", "updated_at": now_iso()})
+                return None
         signals = self.svc.signals.many(list(job.get("signal_ids") or []))
         prompt = render_review_prompt(scope=str(self.cfg("review_scope") or "combined"), signals=signals, focus=job.get("focus"))
         model = self.cfg("review_model") or src.get("model")

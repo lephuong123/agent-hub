@@ -69,7 +69,8 @@ class Out:
                                highlight=False, markup=False, emoji=False, width=width)
         self._held: list[Any] | None = None
 
-    def write(self, renderable: Any) -> None:
+    def write(self, renderable: Any, meta: dict[str, Any] | None = None) -> None:
+        """`meta`: mục gốc (`kind`, id…) của renderable — REPL bỏ qua; `cfharness chat` fullscreen dùng để làm mục click được."""
         if self._held is not None:  # đang nhường terminal (`/attach` mở TUI) → in sau
             self._held.append(renderable)
             return
@@ -97,7 +98,13 @@ def to_ansi(text: Text, width: int) -> str:
 
 
 class ChatSession:
-    """Lõi phiên chat (bất đồng bộ, không phụ thuộc giao diện nhập): mở hội thoại, gửi, nhận event, lệnh `/`."""
+    """Lõi phiên chat (bất đồng bộ, không phụ thuộc giao diện nhập): mở hội thoại, gửi, nhận event, lệnh `/`.
+
+    Điểm nối cho giao diện khác (`tui/chat.py`): `state_cls` (lớp trạng thái), `_emit(item)` (in một mục, kể cả ghi chú),
+    `banner(...)` (dòng chào), `Out.write(…, meta=)`."""
+
+    state_cls: type[V.ChatState] = V.ChatState
+    banner_keys: tuple[tuple[str, str], ...] = V.REPL_KEYS
 
     def __init__(self, client: AsyncHubClient, out: Out, *, conversation_id: str | None = None, new: bool = False,
                  replay: int = REPLAY, monitor: bool = True, home: Path | None = None) -> None:
@@ -155,13 +162,13 @@ class ChatSession:
                 cid, title = convs[0]["id"], convs[0].get("title")
         if cid and self.replay:
             rows = await self.client.call("manager.history", {"conversation_id": cid, "limit": self.replay}) or []
-        self.state = V.ChatState(mid, cid, name=one_line(name, 40))
+        self.state = self.state_cls(mid, cid, name=one_line(name, 40))
         self.state.last_seq = int(st.get("last_seq") or 0)
         self.state.epoch = st.get("epoch")
         items = V.history_items(rows)
-        self.out.write(V.banner(mid, cid, title=title, resumed=len(items)))
+        self.banner(mid, cid, title=title, resumed=len(items))
         for it in items:
-            self.out.write(V.render(it, manager_name=self.state.name))
+            self._emit(it)
         await self._resume(rows)
         self._pump_task = asyncio.ensure_future(self._pump())
         if self.monitor:
@@ -296,7 +303,8 @@ class ChatSession:
                 mon.carded.pop(n["id"], None)
                 return
             route = "human" if n.get("event") == "approval.escalated" else mon.approval_route(ap)
-            self.out.write(G.approval_card(ap, agent_name=mon.agent_name(ap.get("agent_id")), routed=route, event=n.get("event")))
+            self.out.write(G.approval_card(ap, agent_name=mon.agent_name(ap.get("agent_id")), routed=route, event=n.get("event")),
+                           meta={"kind": "approval_card", "id": str(ap.get("id") or n["id"]), "routed": route})
             if route == "human":
                 self.ring()
         elif k == "question":
@@ -309,11 +317,12 @@ class ChatSession:
                 mon.carded.pop(n["id"], None)
                 return
             route = "human" if n.get("event") == "question.escalated" else mon.question_route(q)
-            self.out.write(G.question_card(q, agent_name=mon.agent_name(q.get("agent_id")), routed=route, event=n.get("event")))
+            self.out.write(G.question_card(q, agent_name=mon.agent_name(q.get("agent_id")), routed=route, event=n.get("event")),
+                           meta={"kind": "question_card", "id": str(q.get("id") or n["id"]), "routed": route})
             if route == "human":
                 self.ring()
         elif n.get("resolved") is not None:
-            self.out.write(V.render(G.resolved_note(n["id"], n["resolved"])))
+            self._emit(G.resolved_note(n["id"], n["resolved"]))
         elif n.get("waiting_human"):
             self._note(f"{th.STATUS['approval']['waiting_human'].icon} {n['id']}: run đã tạm dừng chờ bạn — /approve {n['id']} · /deny {n['id']}", "warn")
             self.ring()
@@ -344,9 +353,11 @@ class ChatSession:
         for kind, x in human[:STARTUP_CARDS]:
             if kind == "approval":
                 full = await self._approval(str(x["id"]), x) or x
-                self.out.write(G.approval_card(full, agent_name=mon.agent_name(x.get("agent_id")), routed="human"))
+                self.out.write(G.approval_card(full, agent_name=mon.agent_name(x.get("agent_id")), routed="human"),
+                               meta={"kind": "approval_card", "id": str(x["id"]), "routed": "human"})
             else:
-                self.out.write(G.question_card(x, agent_name=mon.agent_name(x.get("agent_id")), routed="human"))
+                self.out.write(G.question_card(x, agent_name=mon.agent_name(x.get("agent_id")), routed="human"),
+                               meta={"kind": "question_card", "id": str(x["id"]), "routed": "human"})
         if len(human) > STARTUP_CARDS:
             self._note(f"+{len(human) - STARTUP_CARDS} yêu cầu/câu hỏi khác đang chờ bạn — /approvals", "warn")
         if human:
@@ -365,8 +376,16 @@ class ChatSession:
         return self.mon is not None and G.summary_line(self.mon, 200) is not None
 
     # ------------------------------------------------------------------ lệnh agent / duyệt
+    def banner(self, manager_id: str, conversation_id: str | None, *, title: str | None = None, resumed: int = 0) -> None:
+        """Dòng chào khi mở/chuyển hội thoại (`tui/chat.py` thay bằng hộp chào kiểu Claude Code)."""
+        self.out.write(V.banner(manager_id, conversation_id, title=title, resumed=resumed, keys=self.banner_keys))
+
+    def _emit(self, item: dict[str, Any]) -> None:
+        """In MỘT mục của hội thoại (tin, trả lời, thẻ hành động, ghi chú…)."""
+        self.out.write(V.render(item, manager_name=self.state.name if self.state else "Điều phối viên"), meta=item)
+
     def _note(self, text: str, tone: str | None = None) -> None:
-        self.out.write(V.render({"kind": "note", "text": text, "tone": tone}))
+        self._emit({"kind": "note", "text": text, "tone": tone})
 
     def _monitor(self) -> G.AgentMonitor:
         if self.mon is None:
@@ -526,7 +545,7 @@ class ChatSession:
                 run = None
         st.resume(rows, run)
         if st.busy:
-            self.out.write(V.render({"kind": "note", "text": f"điều phối viên vẫn đang xử lý tin trước (run {st.active_run})"}))
+            self._emit({"kind": "note", "text": f"điều phối viên vẫn đang xử lý tin trước (run {st.active_run})"})
 
     async def _find_conv(self, cid: str) -> dict[str, Any] | None:
         convs = await self.client.call("manager.conversations", {"channel": V.CHANNEL, "limit": 500}) or []
@@ -545,7 +564,7 @@ class ChatSession:
                     if "subscribed" in msg:
                         if self.lost:
                             self.lost = False
-                            self.out.write(V.render({"kind": "note", "text": "đã nối lại với daemon"}))
+                            self._emit({"kind": "note", "text": "đã nối lại với daemon"})
                         delay = 0.2
                         continue
                     if "end" in msg:
@@ -557,7 +576,7 @@ class ChatSession:
                 return
             if not self.lost:
                 self.lost = True
-                self.out.write(V.render({"kind": "note", "text": "mất kết nối luồng sự kiện — đang nối lại…", "tone": "warn"}))
+                self._emit({"kind": "note", "text": "mất kết nối luồng sự kiện — đang nối lại…", "tone": "warn"})
             await asyncio.sleep(delay)
             delay = min(delay * 2, 3.0)
 
@@ -570,7 +589,7 @@ class ChatSession:
             st.last_seq = max(st.last_seq, int(ev.get("seq") or 0))
             return
         for it in st.apply(ev):
-            self.out.write(V.render(it, manager_name=st.name))
+            self._emit(it)
         self.changed.set()
 
     # ------------------------------------------------------------------ gửi / dừng
@@ -580,13 +599,13 @@ class ChatSession:
         parsed = A.parse_input(text.strip(), self.pasted)
         self.pasted = {}
         for err in parsed.errors:
-            self.out.write(V.render({"kind": "note", "text": err, "tone": "warn"}))
+            self._emit({"kind": "note", "text": err, "tone": "warn"})
         text = parsed.text
         if not text and not parsed.images:
             return None
-        self.out.write(V.render({"kind": "user", "text": text or "(ảnh)"}))
+        self._emit({"kind": "user", "text": text or "(ảnh)"})
         if parsed.images:
-            self.out.write(V.render({"kind": "note", "text": "📎 " + ", ".join(f"{a.name} ({len(a.data) // 1024} KB)" for a in parsed.images)}))
+            self._emit({"kind": "note", "text": "📎 " + ", ".join(f"{a.name} ({len(a.data) // 1024} KB)" for a in parsed.images)})
         params: dict[str, Any] = {"channel": V.CHANNEL, "text": text}
         if parsed.images:
             params["images"] = [a.wire() for a in parsed.images]
@@ -596,30 +615,30 @@ class ChatSession:
         try:
             res = await self.client.call("manager.chat", params, audit=True) or {}
         except (RpcError, DaemonUnavailable) as e:
-            self.out.write(V.render({"kind": "note", "text": f"chưa gửi được: {_err(e)}", "tone": "err"}))
+            self._emit({"kind": "note", "text": f"chưa gửi được: {_err(e)}", "tone": "err"})
             return None
         finally:
             self._inflight -= 1
             held, self._held = self._held, []
         for it in st.sent(res, text):
-            self.out.write(V.render(it))
+            self._emit(it)
         for ev in held:
             for it in st.apply(ev):
-                self.out.write(V.render(it, manager_name=st.name))
+                self._emit(it)
         self.changed.set()
         return res
 
     async def stop_turn(self) -> bool:
         st = self.state
         if st is None or not st.busy or not st.active_run:
-            self.out.write(V.render({"kind": "note", "text": "không có lượt nào đang chạy"}))
+            self._emit({"kind": "note", "text": "không có lượt nào đang chạy"})
             return False
         try:
             await self.client.call("run.stop", {"id": st.active_run}, audit=True)
-            self.out.write(V.render({"kind": "note", "text": f"đã yêu cầu dừng lượt {st.active_run}", "tone": "warn"}))
+            self._emit({"kind": "note", "text": f"đã yêu cầu dừng lượt {st.active_run}", "tone": "warn"})
             return True
         except (RpcError, DaemonUnavailable) as e:
-            self.out.write(V.render({"kind": "note", "text": f"không dừng được: {_err(e)}", "tone": "err"}))
+            self._emit({"kind": "note", "text": f"không dừng được: {_err(e)}", "tone": "err"})
             return False
 
     async def wait_idle(self, timeout: float) -> bool:
@@ -657,33 +676,33 @@ class ChatSession:
                 self.out.write(V.help_text())
             elif cmd == "/new":
                 st.switch(None)
-                self.out.write(V.render({"kind": "note", "text": "hội thoại mới — tin tiếp theo sẽ mở hội thoại mới"}))
+                self._emit({"kind": "note", "text": "hội thoại mới — tin tiếp theo sẽ mở hội thoại mới"})
             elif cmd in ("/list", "/ls"):
                 rows = await self.client.call("manager.conversations", {"channel": V.CHANNEL}) or []
                 self.out.write(V.conv_list_text(rows[:20], st.conversation_id))
             elif cmd == "/open":
                 if not arg:
-                    self.out.write(V.render({"kind": "note", "text": "cần id hội thoại: /open <id> (xem /list)", "tone": "warn"}))
+                    self._emit({"kind": "note", "text": "cần id hội thoại: /open <id> (xem /list)", "tone": "warn"})
                     return True
                 conv = await self._find_conv(arg)
                 if conv is None:
-                    self.out.write(V.render({"kind": "note", "text": f"không có hội thoại '{one_line(arg, 40)}' (xem /list)", "tone": "err"}))
+                    self._emit({"kind": "note", "text": f"không có hội thoại '{one_line(arg, 40)}' (xem /list)", "tone": "err"})
                     return True
                 st.switch(conv["id"])
                 rows = await self.client.call("manager.history", {"conversation_id": conv["id"], "limit": max(self.replay, 10)}) or []
                 items = V.history_items(rows)
-                self.out.write(V.banner(st.manager_id, conv["id"], title=conv.get("title"), resumed=len(items)))
+                self.banner(st.manager_id, conv["id"], title=conv.get("title"), resumed=len(items))
                 for it in items:
-                    self.out.write(V.render(it, manager_name=st.name))
+                    self._emit(it)
                 await self._resume(rows)
             elif cmd == "/history":
                 if not st.conversation_id:
-                    self.out.write(V.render({"kind": "note", "text": "hội thoại mới — chưa có lịch sử"}))
+                    self._emit({"kind": "note", "text": "hội thoại mới — chưa có lịch sử"})
                     return True
                 n = int(arg) if arg.isdigit() else 20
                 rows = await self.client.call("manager.history", {"conversation_id": st.conversation_id, "limit": max(1, min(n, 500))}) or []
                 for it in V.history_items(rows):
-                    self.out.write(V.render(it, manager_name=st.name))
+                    self._emit(it)
             elif cmd == "/stop":
                 if arg:
                     await self.cmd_stop(arg)
@@ -702,9 +721,9 @@ class ChatSession:
             elif cmd == "/clear":
                 self.out.clear()
             else:
-                self.out.write(V.render({"kind": "note", "text": f"lệnh không rõ {one_line(cmd, 20)} — /help (muốn gửi chữ bắt đầu bằng / thì gõ //…)", "tone": "warn"}))
+                self._emit({"kind": "note", "text": f"lệnh không rõ {one_line(cmd, 20)} — /help (muốn gửi chữ bắt đầu bằng / thì gõ //…)", "tone": "warn"})
         except (RpcError, DaemonUnavailable) as e:
-            self.out.write(V.render({"kind": "note", "text": _err(e), "tone": "err"}))
+            self._emit({"kind": "note", "text": _err(e), "tone": "err"})
         return True
 
 

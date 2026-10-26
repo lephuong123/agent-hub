@@ -93,3 +93,52 @@ nhịp (heartbeat) không hiện trong chat terminal (xem web).
 - RPC `manager.chat{images:[{name, data_b64}]}` (≤ 4 ảnh, ≤ 5 MB; định dạng theo magic bytes, sai → lỗi trước mọi ghi) → daemon lưu
   `<cwd hội thoại>/attachments/img-<ts>-<rand>-<i>.<ext>` (0600, tên do hub đặt) và thêm vào prompt: xem bằng tool Read. Tin lưu lịch sử
   ghi "📎 n ảnh". Audit KHÔNG chứa base64 (`wrap_with_audit` thay bằng `{name, b64_chars}`). Web/Telegram chưa dùng tham số này.
+
+### 6.2 `cfharness chat` fullscreen kiểu Claude Code (2026-10-26)
+Không migration, không RPC mới. `cfharness chat` trên terminal mở `tui/chat.py` (`ChatApp`, kế thừa `TopApp`, kênh `cli`); `--classic` hoặc
+stdin/stdout không phải TTY → REPL như cũ (§6). Hội thoại vẫn dùng chung kênh `cli` với REPL và màn `m` của `top`; lịch sử ô nhập dùng chung tệp
+`HUB_HOME/cli_history` (định dạng `FileHistory`, ghi nhị phân "\n" — text mode trên Windows ghi "\r\n" làm REPL đọc ra chữ có "\r").
+
+| Phần | Cách làm |
+|---|---|
+| Lõi | `ChatSession` (repl.py) thêm điểm nối `state_cls`, `banner_keys`, `banner(...)`, `_emit(item)` (mọi ghi chú của phiên cũng đi qua đây), `Out.write(…, meta=)`; REPL không đổi hành vi (đầu ra từng byte như cũ). `TuiChatSession`: mục → widget, `banner` → hộp chào, y/N → `ConfirmScreen` (chữ escape markup Textual), `/attach` → `AttachScreen` ngay trong app, chuông → `app.bell` |
+| Hình (kiểu Claude Code, 2026-10-26 lần 2) | Mọi mục vẽ bằng `tui/cc_render.py`. Không thanh tiêu đề, không Footer; nền `$background` (đặt ở `ChatApp.CSS` vì CSS app thắng `DEFAULT_CSS`). Mục đầu = hộp chào viền tròn cam (`✻ Chào mừng tới cfharness chat!`, điều phối viên, hội thoại). Tin người `> chữ`; trả lời/chữ giữa tool/chữ đang chạy `● chữ` (lỗi: chấm đỏ; thông báo `● ✉` vàng); tool `● Tên(args)` + `  ⎿  ` (chấm nhấp nháy 0,5 s khi chạy); thẻ hành động `● tóm tắt` + `  ⎿  → đích`; ghi chú `  ⎿  …` dính mục trên (`⚠`/`✗` cho warn/err). Thẻ duyệt/câu hỏi: nội dung `agentsview` trong hộp viền tròn tím (`cc_render.PERMISSION`). Spinner `✳ Đang nghĩ… (12s · ⚙ tool · esc để dừng)` / `Chờ bạn duyệt <id>` ngay trên ô nhập, ẩn khi rảnh. Ô nhập: hộp viền tròn xám, `> ` + `Input(compact)`. Dưới: một dòng mờ `? phím tắt` … `<điều phối viên> · hội thoại <id>`; gõ `/` → menu lệnh (dòng đầu xanh lơ) thay dòng đó; `?` ở ô TRỐNG → bảng phím tắt 2 cột (`ChatInput._on_key`). Bảng agent dưới cùng như cây tác vụ nền: `n agent đang chạy · ↓ để chọn · click để xem`, dòng `◐ tên  task  tool · thống kê`, dòng chọn `❯` xanh lơ |
+| Một luồng dữ liệu | `ChatApp.on_mount` chặn `TopApp.on_mount` (`prevent_default` — Textual gọi handler của mọi lớp trong MRO): không firehose/snapshot thứ hai; `app.model` = `AgentMonitor.model`, `refresh_snapshot` → của phiên |
+| Transcript | `VerticalScroll`, mỗi mục một `Static` (tối đa 1500); tự bám đáy khi đang ở đáy, thanh "↓ có tin mới" khi đã cuộn lên; PgUp/PgDn, Ctrl-End |
+| Chữ chạy + tool | `LiveChatState`: `tool.start/complete` của run hội thoại → dòng `● Tool(args)` + `⎿` 3 dòng kết quả; click / Ctrl-O → input JSON + kết quả đầy đủ (`result_preview` đã che secret ở adapter). Chữ viết trước mỗi tool giữ lại thành mục `interim` (trả lời cuối = `summary` của run nên không trùng) |
+| Click | Thẻ hành động → `tui.manager.open_target` (tách khỏi `ManagerScreen`, CHỈ loại đã biết + id an toàn). Thẻ duyệt/câu hỏi → ĐIỀN SẴN `/approve <id> ` / `/answer <id> `; không gọi RPC cho tới khi người Enter + y (giữ quy tắc §6: không nút duyệt từ nội dung agent) |
+| Bảng agent | `AgentMonitor.active()` dưới ô nhập (≤ 6 dòng + "+k nữa"); click / ↓ (ô nhập trống) + Enter → `AttachScreen`; ↑ ở dòng đầu / Esc → về ô nhập; Ctrl-G → `BoardScreen` (htop đầy đủ; Esc/q/m → về chat) |
+| Chọn chữ | Textual chỉ chọn được trên `Text`/`Content` → `flatten()` gộp `Group`/`Padding` của `chatview`/`agentsview` thành một `Text`. Thả chuột (`TextSelected`) → `copy_to_clipboard` (OSC 52) + `attachments.clipboard_set` (clip.exe UTF-16LE KHÔNG BOM / pbcopy / wl-copy / xclip). Kéo chọn không tính là click. Ctrl-C: có vùng chọn → copy; đang làm → dừng lượt; rảnh → lần 2 thoát |
+| Kênh | `TopApp.CHANNEL` ("tui"; `ChatApp` = "cli") cho `approval.*`/`run.steer`/feedback gọi từ Attach mở trong chat |
+
+Test `tests/test_chat_app.py` (Pilot + daemon in-process, không gọi `claude`, clipboard thật được thay bằng giả): `flatten`/`tool_text`/chèn ANSI,
+lịch sử đọc-ghi chéo với `FileHistory`, `LiveChatState`, không có điều phối viên, chữ chạy → `interim` + tool click mở/đóng + Ctrl-O + thẻ hành động
+(đích lạ không mở, task → Tasks) + trả lời, bảng agent ↓/↑/click → Attach + thẻ duyệt click chỉ điền lệnh → Enter + y → `allowed` kênh `cli`,
+kéo chọn → copy + Ctrl-C hai lần thoát, ↑↓ lịch sử + gợi ý lệnh `/`; hình kiểu Claude Code (hộp chào, không Header/Footer, `> `/`● `, spinner hiện khi bận
+và ẩn khi rảnh, thẻ duyệt trong hộp viền, dòng agent `❯` khi chọn, `?` bật/tắt bảng phím tắt ở ô trống). Ảnh (`CFHARNESS_SCREENSHOTS`):
+`20-chat-dang-lam.svg`, `21-chat-xong.svg`, `22-chat-attach.svg`, `23-chat-duyet.svg`, `24-chat-phim-tat.svg`.
+
+Việc dở: ô nhập một dòng (Textual `Input`; dán nhiều dòng vẫn gửi nguyên; Claude Code có ô nhiều dòng); chữ điều phối viên vẫn KHÔNG render markdown
+(bất biến §3/§6 — là dữ liệu; `cc_render.markdown_text` đã có nhưng chat chưa dùng); spinner chưa hiện số token (`ChatState` chưa theo dõi
+`usage.tick` của lượt); menu lệnh `/` chỉ hiển thị (chọn bằng → của gợi ý, chưa có ↑↓ trong menu); chưa thử trên terminal thật ngoài Pilot
+(Windows Terminal/VS Code: OSC 52, chuột).
+
+### 6.3 Màn xem agent kiểu Claude Code (`tui/agent_view.py`, 2026-10-26)
+Không migration, không RPC mới. `AgentViewScreen(agent_id, run_id)` + `async open_agent_view(app, ref)` (ref = run id qua `run.get`, không thì
+agent id → `current_run_id`/`waiting_human`/`last_run_id` của `app.model.rows`, như `TopApp._open_attach`). Chat nối vào khi click agent đang chạy.
+
+| Phần | Cách làm |
+|---|---|
+| Dữ liệu | Chép logic `AttachScreen._stream` (không đổi AttachScreen): `run.get {events}` → `events.subscribe {run_id, since_seq, epoch, level: detail}`, khử trùng (epoch, seq), bị ngắt → đăng ký lại; epoch đổi → từ 0 |
+| Đầu màn | Khung `round #D97757`: tên agent · run rút gọn + chữ trạng thái (đang chạy / chờ duyệt / xong / lỗi / đã dừng); `cc_render.stats_text` (tick 0.2 s); dòng đầu prompt; `[x dừng]` (chỉ khi chạy) `[esc quay lại]` click được. Spinner `cc_render.spinner_text` dưới transcript khi đang chạy |
+| Transcript | Mỗi mục một `Static` = MỘT `Text` (kéo chọn → `copy_to_clipboard` + `attachments.clipboard_set`). Prompt/steer `user_text`; delta → cùng mục `assistant_text(live)`, `message.complete` thay; suy nghĩ `thinking_text` click mở; tool `tool_text` cập nhật tại chỗ, click / Ctrl-O mở input + kết quả; Task/Agent → `● Agent(mô tả)` + `⎿ Đang chạy… (n tool)` / `Xong (n tool · 3.2s)`, mục của subagent (`subagent_id`) chèn ngay dưới nhóm, thụt 4; delta/suy nghĩ của subagent bỏ; duyệt = hộp viền `#B1B9F9` (đổi viền khi đã quyết); kết thúc `note_text` |
+| Phím | esc/← quay lại · x dừng (`ConfirmScreen` → `stop_run`) · a/d duyệt qua `app.decide` (d hỏi ghi chú); khi model chưa có approval → dùng `request_id` của hộp đang mở · s ô chỉ đạo · PgUp/PgDn/End |
+
+Bẫy Textual: (1) `Screen.AUTO_FOCUS = None` nghĩa là DÙNG của app (`"*"`) → ô nhập ẩn vẫn bị focus và nuốt phím a/d/x/s; đặt `""`.
+(2) Kiểu GỐC của `Text` (`Text("…", style="grey50")`) qua parser màu của Textual — `grey50` không hợp lệ → mất màu; dùng `append(…, style=)`.
+`cc_render.thinking_text` đang dính bẫy (2) ở dòng `✻ Đang nghĩ…`. (3) `cc_render.tool_text(nested=True)` không thụt khi `status="running"` (trả sớm) → màn tự thụt.
+
+Test `tests/test_agent_view.py` (8, Pilot + daemon in-process, FakeRuntime giữ run, event giả bằng `make_event`; clipboard thật bị thay): replay + live
+(prompt, lời agent, tool `⎿`, không mất seq) + click/Ctrl-O mở rộng + esc; suy nghĩ click mở; tool đang chạy → cập nhật tại chỗ; subagent thụt dưới
+`Agent(…)`; hộp duyệt + `a` → allowed, `d` + ghi chú → denied; `x` + y → cancelled; steer; chèn ANSI/OSC/bidi/markup (`EVIL`) không diễn giải + kéo chọn copy;
+ref lạ; định dạng dòng kết thúc. Ảnh (`CFHARNESS_SCREENSHOTS`): `av-01-xong.svg`, `av-02-dang-chay.svg`, `av-03-duyet.svg`, `av-04-da-dung.svg`.

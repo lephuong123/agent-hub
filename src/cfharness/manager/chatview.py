@@ -320,6 +320,8 @@ def render(item: dict[str, Any], *, manager_name: str = "Điều phối viên") 
 
 REPL_KEYS = (("Enter", "gửi"), ("Ctrl-V", "dán ảnh"), ("/help", "lệnh"), ("Ctrl-C", "dừng lượt"), ("Ctrl-D", "thoát"))
 TUI_KEYS = (("Enter", "gửi"), ("Ctrl-V", "dán ảnh"), ("Ctrl-T", "dừng lượt"), ("Ctrl-N", "hội thoại mới"), ("Esc", "về bảng"))
+FULL_KEYS = (("Enter", "gửi"), ("Esc", "dừng lượt"), ("kéo chuột", "copy"), ("click", "mở tool/agent"), ("Ctrl-G", "bảng agent"),
+             ("/help", "lệnh"), ("Ctrl-D", "thoát"))  # `cfharness chat` fullscreen (tui/chat.py)
 
 
 def banner(manager_id: str, conversation_id: str | None, *, title: str | None = None, resumed: int = 0,
@@ -395,4 +397,4 @@ def conv_list_text(rows: list[dict[str, Any]], current: str | None) -> Text:
     return t
 
 
-__all__ = ["REPL_KEYS", "TUI_KEYS", "ChatState", "timeline", "pending_run", "render", "banner", "help_text", "conv_list_text", "history_items", "CHANNEL", "COMMANDS", "HELP", "hhmm"]
+__all__ = ["REPL_KEYS", "TUI_KEYS", "FULL_KEYS", "ChatState", "timeline", "pending_run", "render", "banner", "help_text", "conv_list_text", "history_items", "CHANNEL", "COMMANDS", "HELP", "hhmm"]
