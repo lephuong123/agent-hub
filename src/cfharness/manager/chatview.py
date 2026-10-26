@@ -19,7 +19,7 @@ from rich.padding import Padding
 from rich.text import Text
 
 from ..termsafe import clean, one_line
-from ..tui.model import short_tool
+from ..tui.model import STATUS_STYLE, short_tool
 from ..web.present import mgr_action_item, mgr_message
 
 CHANNEL = "cli"
@@ -28,6 +28,28 @@ TERMINAL = ("run.completed", "run.failed", "run.cancelled", "run.interrupted")
 
 C_USER = "bold cyan"
 C_MGR = "bold magenta"
+# Bảng agent + thẻ duyệt/câu hỏi của REPL (`agentsview.py`) — gom style ở đây để thay theme sau mà không sửa logic
+C_DIM = "grey50"
+C_FAINT = "grey42"
+C_MID = "grey62"
+C_SOFT = "grey70"
+C_TOOL = "cyan"
+C_BADGE = "bold white on red"
+C_CARD = "bold yellow"
+C_CARD_BAR = "yellow"
+C_QUESTION = "bold cyan"
+C_OK = "green"
+C_WARN = "yellow"
+C_ERR = "bold red"
+# trạng thái một dòng agent: (biểu tượng, nhãn, style). Biểu tượng dùng chung với `top` (tui/model.STATUS_STYLE)
+AGENT_STATE: dict[str, tuple[str, str, str]] = {
+    "running": (STATUS_STYLE["working"][0], "đang chạy", STATUS_STYLE["working"][2]),
+    "queued": ("◌", "chờ slot", "yellow"),
+    "approval": (STATUS_STYLE["waiting"][0], "chờ duyệt", STATUS_STYLE["waiting"][2]),
+    "human": (STATUS_STYLE["waiting_human"][0], "chờ bạn duyệt", STATUS_STYLE["waiting_human"][2]),
+    "manager": (STATUS_STYLE["waiting"][0], "điều phối viên đang xử lý", "magenta"),
+    "error": (STATUS_STYLE["error"][0], "lỗi", STATUS_STYLE["error"][2]),
+}
 
 
 def hhmm(ts: Any) -> str:
@@ -93,6 +115,8 @@ class ChatState:
         self.waiting_approval: str | None = None
         self.last_seq = 0
         self.epoch: str | None = None
+        # False: không trả mục approval (REPL in thẻ duyệt cho MỌI agent từ firehose — tránh in hai lần); trạng thái vẫn cập nhật
+        self.show_approvals = True
 
     # ------------------------------------------------------------------ hành động của người
     def resume(self, rows: list[dict[str, Any]], run: dict[str, Any] | None) -> None:
@@ -183,13 +207,19 @@ class ChatState:
             return [mgr_action_item(ev)]
         if t == "approval.open":
             self.waiting_approval = str(p.get("request_id") or "")
+            if not self.show_approvals:
+                return []
             return [{"kind": "approval", "request_id": self.waiting_approval, "preview": p.get("preview"), "reason": p.get("reason"),
                      "tool": p.get("tool")}]
         if t == "approval.waiting_human":
+            if not self.show_approvals:
+                return []
             return [{"kind": "note", "text": f"lượt tạm dừng chờ bạn duyệt {p.get('request_id')} — duyệt/từ chối xong điều phối viên tự làm tiếp",
                      "tone": "warn"}]
         if t == "approval.resolved":
             self.waiting_approval = None
+            if not self.show_approvals:
+                return []
             dec = {"allowed": "đã cho phép", "denied": "đã từ chối", "cancelled": "đã huỷ"}.get(str(p.get("decision")), str(p.get("decision")))
             return [{"kind": "note", "text": f"yêu cầu {p.get('request_id')}: {dec}" + (f" (qua {p.get('channel')})" if p.get("channel") else "")}]
         return []
@@ -310,23 +340,31 @@ HELP = [
     ("/list", "các hội thoại (kênh cli — dùng chung với TUI)"),
     ("/open <id>", "chuyển sang hội thoại"),
     ("/history [n]", "in lại n tin gần nhất (mặc định 20)"),
-    ("/stop", "dừng lượt điều phối viên đang làm"),
+    ("/stop [agent|run]", "dừng lượt điều phối viên; kèm agent/run = dừng run đó (y/N)"),
+    ("/agents", "bảng mọi agent: trạng thái, task, tool, token, $ (= /ps)"),
+    ("/attach <agent|run>", "xem trực tiếp run của agent (màn attach của top)"),
+    ("/approvals", "yêu cầu duyệt + câu hỏi đang chờ"),
+    ("/approve <id> [ghi chú]", "cho phép MỘT lần (hiện lại lệnh đầy đủ, hỏi y/N)"),
+    ("/deny <id> [lý do]", "từ chối yêu cầu duyệt"),
+    ("/always <id>", "luôn cho phép (chỉ khi hub cho phép; xác nhận 2 bước)"),
+    ("/answer <id> 1,2 [chữ]", "trả lời câu hỏi của agent"),
     ("/clear", "xoá màn hình"),
     ("/help", "trợ giúp"),
     ("/quit", "thoát (hoặc Ctrl-D)"),
 ]
-COMMANDS = [c.split()[0] for c, _ in HELP] + ["/exit"]
+COMMANDS = [c.split()[0] for c, _ in HELP] + ["/exit", "/ps"]
 
 
 def help_text() -> Text:
     t = Text()
     for c, d in HELP:
-        t.append(f"  {c:<14}", style="bold")
+        t.append(f"  {c:<24}", style="bold")
         t.append(f"{d}\n", style="grey62")
     t.append("  Gõ khi điều phối viên đang làm = chèn thêm ý vào lượt đó (steer).\n", style="grey50")
     t.append("  Kéo thư mục/file vào = gửi đường dẫn; kéo file ảnh vào hoặc Ctrl-V (ảnh trong clipboard) = gửi kèm ảnh (≤ 4, ≤ 5 MB).\n", style="grey50")
     t.append("  Muốn gửi chữ bắt đầu bằng `/` mà trùng tên lệnh: gõ `//…`.\n", style="grey50")
-    t.append("  Duyệt thao tác phá huỷ KHÔNG làm ở đây: cfharness approvals · cfharness approve <id>\n", style="grey50")
+    t.append("  ↓ (dòng nhập trống) mở/đóng bảng agent đang chạy; Esc đóng.\n", style="grey50")
+    t.append("  Agent cần bạn duyệt/hỏi bạn → thẻ hiện ngay (kèm chuông): lệnh ĐẦY ĐỦ + cách xử lý.\n", style="grey50")
     return t
 
 
