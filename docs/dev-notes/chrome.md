@@ -14,7 +14,8 @@ cài + kết nối trên máy chủ hub. `--no-chrome` cũng có. **Cờ cô l�
 `--tools` chỉ giới hạn tool built-in (không ảnh hưởng tool MCP).
 
 ## Cấu hình
-- Agent: `tool_policy.browser: none | playwright | chrome | auto` (mặc định `none` = hành vi cũ; mẫu researcher/coder/reviewer = `auto`).
+- Agent: `tool_policy.browser: none | playwright | chrome | auto` (không đặt → `runtime.claude.chrome.default_mode`, mặc định `auto` cho mọi agent kể cả agent cũ — chủ hub chốt 2026-10-26;
+  đặt rõ trên agent thì thắng; `none` để tắt cho một agent).
   CLI `agent create|edit --browser`, `agent show`, web form *Trình duyệt* (đổi giá trị → hộp xác nhận như đổi quyền).
 - Hub (chỉ người, nhánh `runtime` ∈ integrity.SECURITY_KEYS): `runtime.claude.chrome.{enabled: true, max_concurrent_runs: 1,
   pass_no_chrome: true, annotations: {}}`. Giá trị lạ sửa tay → `enabled=false`, 1 run (`browser.chrome_cfg`).

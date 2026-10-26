@@ -307,7 +307,7 @@ def agent_show(ag: dict[str, Any], mode: Mode | None = None, *, width: int | Non
         ("quyền", Text(str(tp.get("permission_mode") or "(mặc định)"))),
         ("tool cho phép", th.cell(",".join(tp.get("allowed_tools") or []))),
         ("tool cấm", th.cell(",".join(tp.get("disallowed_tools") or []))),
-        ("trình duyệt", Text(str(tp.get("browser") or "none"))),
+        ("trình duyệt", Text(str(tp.get("browser") or "(mặc định hub)"))),
         ("MCP", th.cell(",".join(ag.get("mcp_servers") or []))),
         ("giới hạn", th.cell(", ".join(f"{k}={v}" for k, v in lim.items()))),
         ("workspace", Text(str(ag.get("workspace_default") or "(scratch theo run)"), style=th.MUTED)),

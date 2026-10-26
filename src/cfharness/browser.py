@@ -1,7 +1,8 @@
 """Trình duyệt cho agent: Claude in Chrome (`claude --chrome`) và/hoặc Playwright MCP (docs/dev-notes/chrome.md).
 
 `tool_policy.browser` của agent:
-- `none` (mặc định — agent cũ không đổi hành vi): không `--chrome`; Playwright chỉ có nếu agent được gán server MCP đó.
+- (không đặt): theo `runtime.claude.chrome.default_mode` của hub (mặc định `auto` — mọi agent dùng Chrome trước, không cần bật từng agent).
+- `none`: không `--chrome`; Playwright chỉ có nếu agent được gán server MCP đó.
 - `playwright`: như `none` (nói rõ ý định); không `--chrome`.
 - `chrome`: `--chrome`; KHÔNG gắn server Playwright cho run (kể cả khi agent được gán).
 - `auto`: `--chrome` + giữ Playwright; khối system prompt bảo agent dùng `mcp__claude-in-chrome__*` trước, Playwright khi Chrome
@@ -22,6 +23,8 @@ CHROME_PREFIX = f"mcp__{CHROME_SERVER}__"
 
 CHROME_DEFAULTS: dict[str, Any] = {
     "enabled": True,
+    # chế độ cho agent KHÔNG đặt tool_policy.browser (đặt rõ trên agent thì thắng)
+    "default_mode": "auto",
     "max_concurrent_runs": 1,
     # truyền `--no-chrome` cho run KHÔNG dùng Chrome khi phiên bản CLI có cờ này trong flag_matrix (chặn cả khi người bật
     # Chrome mặc định trong ~/.claude.json)
@@ -44,19 +47,22 @@ def chrome_cfg(config: Any) -> dict[str, Any]:
     n = out.get("max_concurrent_runs")
     out["max_concurrent_runs"] = n if isinstance(n, int) and not isinstance(n, bool) and n >= 1 else 1
     out["pass_no_chrome"] = out.get("pass_no_chrome") is not False
+    out["default_mode"] = out["default_mode"] if out.get("default_mode") in BROWSER_MODES else "none"
     out["annotations"] = out["annotations"] if isinstance(out.get("annotations"), dict) else {}
     return out
 
 
-def agent_mode(agent: dict[str, Any] | None) -> str:
+def agent_mode(agent: dict[str, Any] | None, default: str = "none") -> str:
+    """Giá trị đặt RÕ trên agent; không đặt / lạ → `default`."""
     v = ((agent or {}).get("tool_policy") or {}).get("browser")
-    return v if v in BROWSER_MODES else "none"
+    return v if v in BROWSER_MODES else default
 
 
 def effective_mode(agent: dict[str, Any] | None, config: Any) -> str:
-    """Chế độ hiệu lực cho run: kill switch tắt → chrome/auto thành playwright."""
-    m = agent_mode(agent)
-    if m in CHROME_MODES and not chrome_cfg(config)["enabled"]:
+    """Chế độ hiệu lực cho run: agent không đặt → `default_mode` của hub; kill switch tắt → chrome/auto thành playwright."""
+    cfg = chrome_cfg(config)
+    m = agent_mode(agent, cfg["default_mode"])
+    if m in CHROME_MODES and not cfg["enabled"]:
         return "playwright"
     return m
 
@@ -78,7 +84,7 @@ def validate_setting(key: str, value: Any) -> None:
     """Kiểm `config set runtime.claude.chrome[.…]`."""
     if key == "runtime.claude.chrome":
         if not isinstance(value, dict):
-            raise ValueError("runtime.claude.chrome phải là object {enabled, max_concurrent_runs, pass_no_chrome, annotations}")
+            raise ValueError("runtime.claude.chrome phải là object {enabled, default_mode, max_concurrent_runs, pass_no_chrome, annotations}")
         bad = sorted(set(value) - set(CHROME_DEFAULTS))
         if bad:
             raise ValueError(f"runtime.claude.chrome: khoá lạ {bad}")
@@ -87,6 +93,9 @@ def validate_setting(key: str, value: Any) -> None:
     elif key in ("runtime.claude.chrome.enabled", "runtime.claude.chrome.pass_no_chrome"):
         if not isinstance(value, bool):
             raise ValueError(f"{key} phải là true/false")
+    elif key == "runtime.claude.chrome.default_mode":
+        if value not in BROWSER_MODES:
+            raise ValueError(f"runtime.claude.chrome.default_mode phải là một trong {list(BROWSER_MODES)}")
     elif key == "runtime.claude.chrome.max_concurrent_runs":
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise ValueError("runtime.claude.chrome.max_concurrent_runs phải là số nguyên ≥ 1")
@@ -115,7 +124,7 @@ def prompt_block(mode: str) -> str:
     if mode == "auto":
         return ("# Browser: prefer Claude in Chrome, fall back to Playwright\n"
                 "For any web browsing, page testing or UI checking, use the `mcp__claude-in-chrome__*` tools (Claude in Chrome) first.\n"
-                "Use the Playwright MCP tools (`mcp__playwright__*` or similar) ONLY when Chrome is unavailable: "
+                "Use the Playwright MCP tools (`mcp__playwright__*` or similar, if this run has them) ONLY when Chrome is unavailable: "
                 "`list_connected_browsers` returns no browser, a Chrome tool errors because the extension is not connected, "
                 "or a Chrome tool is denied because the browser is busy with another run. Say in your summary which browser you used.\n"
                 + _SAFETY)

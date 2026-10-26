@@ -124,7 +124,8 @@ async def test_prepare_spec_chrome_drops_playwright_auto_keeps(hub):
     _add_playwright(hub)
     _agent(hub, "c", "chrome", ["playwright"])
     _agent(hub, "u", "auto", ["playwright"])
-    _agent(hub, "n", None, ["playwright"])
+    _agent(hub, "n", "none", ["playwright"])
+    _agent(hub, "d", None, ["playwright"])  # không đặt → mặc định hub (auto)
     sc, su, sn = _spec_for(hub, "c"), _spec_for(hub, "u"), _spec_for(hub, "n")
     servers = lambda s: set(json.loads(Path(s.mcp_config_path).read_text(encoding="utf-8"))["mcpServers"])  # noqa: E731
     assert "playwright" not in servers(sc) and "playwright" not in sc.allowed_mcp_servers
@@ -136,12 +137,31 @@ async def test_prepare_spec_chrome_drops_playwright_auto_keeps(hub):
     assert "--chrome" in build_argv(su, hub.config.get("runtime.claude"), v)[0]
     argv_n = build_argv(sn, hub.config.get("runtime.claude"), v)[0]
     assert "--chrome" not in argv_n and "--no-chrome" in argv_n
+    sd = _spec_for(hub, "d")
+    assert "playwright" in servers(sd) and CHROME_SERVER in sd.allowed_mcp_servers and "--chrome" in build_argv(sd, hub.config.get("runtime.claude"), v)[0]
+
+
+async def test_default_mode_auto_for_unset_agents_explicit_wins(hub):
+    """Chủ hub chốt 2026-10-26: agent KHÔNG đặt browser dùng runtime.claude.chrome.default_mode (mặc định auto); đặt rõ thì thắng."""
+    _agent(hub, "d")
+    _agent(hub, "n", "none")
+    assert hub.store.get_agent("d")["tool_policy"].get("browser") is None
+    assert effective_mode(hub.store.get_agent("d"), hub.config) == "auto"
+    assert effective_mode(hub.store.get_agent("n"), hub.config) == "none"
+    assert effective_mode({"tool_policy": {"browser": "bogus"}}, hub.config) == "auto"  # giá trị lạ → mặc định hub
+    hub.config.set("runtime.claude.chrome.default_mode", "none")
+    assert effective_mode(hub.store.get_agent("d"), hub.config) == "none"
+    hub.config.set("runtime.claude.chrome.default_mode", "auto")
+    hub.config.set("runtime.claude.chrome.enabled", False)
+    assert effective_mode(hub.store.get_agent("d"), hub.config) == "playwright"  # kill switch vẫn thắng mặc định
+    with pytest.raises(Exception):
+        hub.config.set("runtime.claude.chrome.default_mode", "firefox")
 
 
 async def test_prompt_block_auto_and_chrome(hub):
     _agent(hub, "u", "auto")
     _agent(hub, "c", "chrome")
-    _agent(hub, "n")
+    _agent(hub, "n", "none")
     pu, pc, pn = _spec_for(hub, "u").system_prompt, _spec_for(hub, "c").system_prompt, _spec_for(hub, "n").system_prompt
     assert "prefer Claude in Chrome, fall back to Playwright" in pu and "list_connected_browsers" in pu and "mcp__claude-in-chrome__" in pu
     assert "Browser: Claude in Chrome" in pc and "Playwright" not in pc.split("# Browser")[1].split("\n# ")[0].replace("no other browser", "")
@@ -166,7 +186,7 @@ async def test_kill_switch(hub):
 
 
 async def test_kill_switch_and_not_enabled_agent_block_chrome_tools(hub):
-    _agent(hub, "n")
+    _agent(hub, "n", "none")
     _agent(hub, "c", "chrome")
     rn = await _running(hub, "n")
     res = await hub.guard.check({"run_id": rn["id"], "tool_name": C + "tabs_context_mcp", "tool_input": {}, "channel": "hook"})
@@ -408,7 +428,7 @@ async def test_manager_sets_browser_on_others_not_itself(mgr):
         await tool(d, rid, "agent_update", {"id": "boss", "changes": {"tool_policy": {"browser": "chrome"}}})
     with pytest.raises(HubError):
         await tool(d, rid, "agent_update", {"id": "w1", "changes": {"tool_policy": {"browser": "firefox"}}})
-    assert d.hub.store.get_agent("boss")["tool_policy"].get("browser", "none") == "none"
+    assert d.hub.store.get_agent("boss")["tool_policy"].get("browser") is None  # điều phối viên không tự đặt được (vẫn theo mặc định hub)
     # chủ hub đặt cho điều phối viên → được (bề mặt người)
     d.hub.agents.update("boss", {"tool_policy": {"browser": "auto"}})
     assert d.hub.store.get_agent("boss")["tool_policy"]["browser"] == "auto"
@@ -431,7 +451,9 @@ def test_agent_validation_and_cli_flag(hub):
     with pytest.raises(HubError):
         hub.agents.create({"id": "bad", "name": "bad", "tool_policy": {"browser": "firefox"}})
     _agent(hub, "w")
-    assert hub.store.get_agent("w")["tool_policy"]["browser"] == "none"  # mặc định = như cũ
+    assert hub.store.get_agent("w")["tool_policy"]["browser"] is None  # không đặt = theo mặc định hub (runtime.claude.chrome.default_mode)
+    a = build_parser().parse_args(["agent", "edit", "w", "--browser", "default"])
+    assert _agent_payload(a, creating=False) == {"tool_policy": {"browser": None}}
     a = build_parser().parse_args(["agent", "edit", "w", "--browser", "chrome"])
     assert _agent_payload(a, creating=False) == {"tool_policy": {"browser": "chrome"}}
     hub.agents.update("w", {"tool_policy": {"browser": "chrome"}})
@@ -453,7 +475,7 @@ def test_web_form_browser_field():
     from cfharness.web.app import agent_changes
 
     assert agent_changes(FormData([("name", "A"), ("browser", "chrome")]), creating=False, from_template=False)["tool_policy"]["browser"] == "chrome"
-    assert agent_changes(FormData([("name", "A"), ("browser", "")]), creating=False, from_template=False)["tool_policy"]["browser"] == "none"
+    assert agent_changes(FormData([("name", "A"), ("browser", "")]), creating=False, from_template=False)["tool_policy"]["browser"] is None
     assert "browser" not in agent_changes(FormData([("name", "A")]), creating=False, from_template=False)["tool_policy"]  # form cũ: giữ nguyên
     with pytest.raises(ValueError):
         agent_changes(FormData([("browser", "firefox")]), creating=False, from_template=False)
