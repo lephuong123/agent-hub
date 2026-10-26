@@ -1,18 +1,19 @@
 """`cfharness chat` fullscreen (tui/chat.py) — Textual Pilot + daemon IN-PROCESS (socket thật, ScriptedRuntime). Không gọi `claude`.
 
 Kiểm: chữ đang chạy + dòng tool của điều phối viên (click mở rộng), thẻ hành động click → mở đích, thẻ duyệt click → ĐIỀN SẴN lệnh
-(chỉ duyệt sau Enter + y), bảng agent đang chạy → click mở AttachScreen, kéo chọn chữ → copy, lịch sử ô nhập dùng chung tệp với REPL,
+(chỉ duyệt sau Enter + y), bảng agent đang chạy → click mở màn xem agent kiểu Claude Code (AgentViewScreen), kéo chọn chữ → copy, lịch sử ô nhập dùng chung tệp với REPL,
 chữ agent là DỮ LIỆU (không markup/ANSI). Ảnh SVG: `CFHARNESS_SCREENSHOTS=docs/screenshots/m2`.
 """
 
 from __future__ import annotations
 
-from textual.widgets import Input, Static
+from textual.widgets import Footer, Header, Input, Static
 
 from cfharness.events import make_event
 from cfharness.manager import attachments as A
 from cfharness.tui import chat as C
-from cfharness.tui.app import AttachScreen, ConfirmScreen, TasksScreen
+from cfharness.tui.agent_view import AgentViewScreen
+from cfharness.tui.app import ConfirmScreen, TasksScreen
 from m7_fake import wait_status
 from test_manager_repl import EVIL, designate, env  # noqa: F401  (fixture daemon + điều phối viên)
 from test_tui import SIZE, shot, until
@@ -66,9 +67,33 @@ def test_flatten_makes_selectable_text_and_tool_text():
     full = C.tool_text(it, expanded=True).plain
     assert "line 9" in full and '"command": "ls -la"' in full and "click để mở" not in full
     run = C.tool_text({"name": "Read", "args": "a.py", "started": 0.0}, expanded=False, now=3.0).plain
-    assert "đang chạy… 3s" in run
+    assert run.startswith("● Read(a.py)  3s") and "⎿  Đang chạy…" in run
+    assert C.tool_text({"name": "Read", "started": 0.0}, expanded=False, now=3.0, blink=False).plain.startswith("  Read")  # nhấp nháy
+    mcp = C.tool_text({"name": "mcp__hub__task_create", "done": True}, expanded=False).plain
+    assert mcp.startswith("● task_create@hub")
     evil = C.tool_text({"name": "x", "args": EVIL, "result": EVIL, "done": True}, expanded=True).plain + C.text_item(EVIL).plain
     assert "\x1b" not in evil and "http://evil" not in evil and "\x07" not in evil
+
+
+def test_claude_style_items():
+    assert C.item_text({"kind": "user", "text": "chào\ndòng 2"}).plain == "> chào\n  dòng 2"
+    assert C.item_text({"kind": "manager", "text": "Xong."}).plain == "● Xong."
+    bad = C.item_text({"kind": "manager", "text": "lỗi", "ok": False})
+    assert bad.plain == "● lỗi" and any("#FF6B80" in str(sp.style).upper() for sp in bad.spans)
+    assert C.item_text({"kind": "notify", "text": "nhắc"}).plain == "● ✉ nhắc"
+    act = C.item_text({"kind": "action", "summary": "Giao task", "target": {"label": "task t1"}, "ok": True}).plain
+    assert act == "● Giao task\n  ⎿  → task t1"
+    assert C.item_text({"kind": "note", "text": "ghi chú"}).plain == "  ⎿  ghi chú"
+    assert C.item_text({"kind": "note", "text": "cẩn thận", "tone": "warn"}).plain == "⚠ cẩn thận"
+    w = C.welcome_text("boss", None).plain
+    assert w.startswith("✻ Chào mừng tới cfharness chat!") and "/help để xem lệnh" in w and "điều phối viên: boss" in w
+    assert "hội thoại: (mới)" in w
+    menu = C.slash_menu("/ap")
+    assert menu is not None and menu.plain.startswith("/approvals") and "/approve <id>" in menu.plain
+    assert C.slash_menu("/zzz") is None
+    evil = "".join(C.item_text({"kind": k, "text": EVIL, "summary": EVIL, "target": {"label": EVIL}}).plain
+                   for k in ("user", "manager", "notify", "action", "note"))
+    assert "\x1b" not in evil and "http://evil" not in evil
 
 
 def test_history_file_shared_with_repl_format(tmp_path):
@@ -111,11 +136,22 @@ async def test_stream_tools_click_expand_actions_and_reply(env, hub_home, monkey
     app = C.ChatApp(hub_home.socket, home=hub_home.home)
     async with app.run_test(size=SIZE) as pilot:
         scr = await open_chat(app, pilot)
+        # kiểu Claude Code: không thanh tiêu đề/Footer; mục đầu = hộp chào; spinner ẩn khi rảnh
+        assert not app.screen.query(Footer) and not app.screen.query(Header) and not scr.query("#chat-head")
+        first = items(scr)[0]
+        assert first.has_class("welcome") and "✻ Chào mừng tới cfharness chat!" in first.render().plain
+        assert "điều phối viên:" in first.render().plain
+        status = scr.query_one("#chat-status", Static)
+        assert not status.display
+        assert "hội thoại" in scr.query_one("#chat-foot-right", Static).render().plain
         await send(pilot, scr, "giao việc tóm tắt README cho w1")
         assert await until(lambda: scr.session.state.active_run is not None, pilot=pilot)
         rid = scr.session.state.active_run
         await wait_status(d, rid)
-        assert "giao việc tóm tắt README" in log_text(scr)
+        user = item_with(scr, "giao việc tóm tắt README")
+        assert user is not None and user.render().plain.startswith("> giao việc")
+        assert await until(lambda: status.display and "esc để dừng" in status.render().plain, pilot=pilot)
+        assert "Đang nghĩ…" in status.render().plain
         # chữ đang chạy hiện trong transcript
         d.hub.publish(make_event("message.delta", "boss", {"text": "Để mình xem README trước. " + EVIL}, run_id=rid))
         draft = scr.query_one("#chat-draft", Static)
@@ -153,6 +189,9 @@ async def test_stream_tools_click_expand_actions_and_reply(env, hub_home, monkey
         d.hub.runs.runtime().release(rid)  # type: ignore[attr-defined]
         assert await until(lambda: not scr.session.state.busy and item_with(scr, "Đã giao việc.") is not None, pilot=pilot)
         assert not draft.display
+        assert item_with(scr, "Đã giao việc.").render().plain.startswith("● ")
+        assert item_with(scr, "Giao task cho w1").render().plain.startswith("● Giao task cho w1")
+        assert await until(lambda: not status.display, pilot=pilot)
         shot(app, "21-chat-xong.svg")
 
 
@@ -173,14 +212,17 @@ async def test_agent_panel_opens_attach_and_approval_card_prefills(env, hub_home
         agents = scr.query_one("#chat-agents", C.AgentList)
         assert await until(lambda: box.display and agents.option_count >= 1, pilot=pilot)
         assert "1 agent đang chạy" in scr.query_one("#chat-agents-head", Static).render().plain
-        # ↓ ở ô nhập trống → vào bảng; ↑ → về ô nhập
+        row = agents.get_option_at_index(0).prompt.plain
+        assert "◐ Worker một" in row and "dọn thư mục build" in row and not row.startswith("❯")
+        # ↓ ở ô nhập trống → vào bảng (dòng chọn có ❯); ↑ → về ô nhập
         await pilot.press("down")
         assert await until(lambda: agents.has_focus, pilot=pilot)
+        assert await until(lambda: agents.get_option_at_index(0).prompt.plain.startswith("❯ ◐ Worker một"), pilot=pilot)
         await pilot.press("up")
         assert await until(lambda: scr.query_one("#chat-input", Input).has_focus, pilot=pilot)
         # click dòng agent → xem agent chạy live; Esc → về chat
         await pilot.click(agents, offset=(4, 0))
-        assert await until(lambda: isinstance(app.screen, AttachScreen) and app.screen.run_id == run["id"], pilot=pilot)
+        assert await until(lambda: isinstance(app.screen, AgentViewScreen) and app.screen.run_id == run["id"], pilot=pilot)
         shot(app, "22-chat-attach.svg")
         await pilot.press("escape")
         assert await until(lambda: app.screen is scr, pilot=pilot)
@@ -190,7 +232,9 @@ async def test_agent_panel_opens_attach_and_approval_card_prefills(env, hub_home
                                   channel="hook")
         assert await until(lambda: item_with(scr, "Cần bạn duyệt") is not None, pilot=pilot)
         card = item_with(scr, "Cần bạn duyệt")
-        assert "rm -rf build/" in card.render().plain
+        assert "rm -rf build/" in card.render().plain and card.has_class("card")  # hộp viền như hộp xin phép của Claude Code
+        assert not card.render().plain.startswith("\n")
+        shot(app, "23-chat-duyet.svg")
         await pilot.click(card)
         inp = scr.query_one("#chat-input", Input)
         assert await until(lambda: inp.value == f"/approve {ap['id']} ", pilot=pilot)
@@ -250,5 +294,21 @@ async def test_history_up_down_and_slash_hint(env, hub_home, monkeypatch):
         await pilot.press("/", "a", "p")
         hint = scr.query_one("#chat-hint", Static)
         assert await until(lambda: hint.display and "/approve" in hint.render().plain, pilot=pilot)
+        assert not scr.query_one("#chat-foot").display  # menu lệnh thay chỗ dòng `? phím tắt`
         await pilot.press("escape")
         assert not hint.display
+        # `?` ở ô nhập TRỐNG → bảng phím tắt (không gõ chữ `?`); `?` lần nữa → đóng; ô có chữ → gõ `?` bình thường
+        inp.value = ""
+        await pilot.pause(0.05)
+        keys = scr.query_one("#chat-keys", Static)
+        assert "? phím tắt" in scr.query_one("#chat-foot-left", Static).render().plain
+        await pilot.press("question_mark")
+        assert await until(lambda: keys.display, pilot=pilot)
+        assert inp.value == "" and "ctrl + o" in keys.render().plain and not scr.query_one("#chat-foot").display
+        shot(app, "24-chat-phim-tat.svg")
+        await pilot.press("question_mark")
+        assert await until(lambda: not keys.display, pilot=pilot)
+        inp.value = "sao"
+        inp.cursor_position = 3
+        await pilot.press("question_mark")
+        assert inp.value == "sao?" and not keys.display

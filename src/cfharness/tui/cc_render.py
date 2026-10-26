@@ -17,6 +17,7 @@ Chữ hiển thị cho người: tiếng Việt (quy ước repo); tên tool/ph�
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from typing import Any
 
@@ -71,22 +72,77 @@ def user_text(text: Any) -> Text:
     return t
 
 
-def assistant_text(text: Any, *, nested: bool = False, live: bool = False, bullet: bool = True) -> Text:
-    """Lời agent: `● ` + chữ; `live` = đang viết (con trỏ ▌)."""
+def assistant_text(text: Any, *, nested: bool = False, live: bool = False, bullet: bool = True, markdown: bool = True,
+                   width: int | None = None) -> Text:
+    """Lời agent: `● ` + chữ (markdown như Claude Code — `markdown_text`, không link); `live` = đang viết (con trỏ ▌).
+    `width`: cột dành cho thân (mặc định theo terminal)."""
     t = Text()
     t.append("● " if bullet else "  ", style=DIM if nested else "bold white")
-    lines = _lines(text) or [""]
-    for i, ln in enumerate(lines):
+    if markdown and clean(text).strip():
+        w = width or max(20, shutil.get_terminal_size((100, 30)).columns - 8)
+        rows = markdown_text(text, w).split("\n", allow_blank=True)
+    else:
+        rows = [Text(ln) for ln in (_lines(text) or [""])]
+    for i, ln in enumerate(rows):
         if i:
-            t.append("\n  ")
-        t.append(ln)
+            t.append("\n  " if ln.plain else "\n")
+        t.append_text(ln)
     if live:
         t.append("▌", style=ACCENT)
     return t
 
 
+def markdown_text(text: Any, width: int = 100) -> Text:
+    """Markdown → MỘT `Text` (kéo chọn được), như Claude Code hiện lời agent: tiêu đề, đậm/nghiêng, danh sách, khối code tô màu.
+    An toàn (quyết định của chủ repo 2026-10-26 — xem AGENTS.md): chữ qua `termsafe.clean` TRƯỚC khi parse (bỏ ANSI/OSC/bidi…);
+    `hyperlinks=False` và mọi style `link` bị gỡ → không có OSC 8, link chỉ là chữ; ảnh chỉ còn chữ thay thế. Markup Rich trong
+    nội dung KHÔNG được diễn giải (Markdown của Rich không đọc `[bold]…`)."""
+    from rich.console import Console
+
+    src = clean(text).rstrip("\n")
+    console = Console(width=max(20, width), color_system="truecolor", force_terminal=True, highlight=False, markup=False, emoji=False)
+    rows: list[Text] = []
+    for segs in console.render_lines(_markdown(src), console.options.update(width=max(20, width)), pad=False):
+        row = Text()
+        for seg in segs:
+            if seg.control:
+                continue
+            style = seg.style
+            if style is not None and (style.link or style.meta):
+                style = style.copy()
+                style._link = None  # type: ignore[attr-defined]
+                style._link_id = ""  # type: ignore[attr-defined]
+                style._meta = None  # type: ignore[attr-defined]
+            row.append(seg.text, style=style)
+        row.rstrip()
+        rows.append(row)
+    while rows and not rows[-1].plain:
+        rows.pop()
+    while rows and not rows[0].plain:
+        rows.pop(0)
+    return Text("\n").join(rows)
+
+
+def _markdown(src: str) -> Any:
+    """Markdown của Rich, tiêu đề căn TRÁI + đậm như Claude Code (Rich mặc định căn giữa h1 trong khung)."""
+    from rich.markdown import Heading, Markdown
+
+    class LeftHeading(Heading):
+        def __rich_console__(self, console: Any, options: Any) -> Any:
+            t = self.text
+            t.justify = "left"
+            t.stylize("bold underline" if self.tag == "h1" else "bold")
+            yield t
+
+    class CCMarkdown(Markdown):
+        elements = {**Markdown.elements, "heading_open": LeftHeading}
+
+    return CCMarkdown(src, hyperlinks=False, code_theme="monokai")
+
+
 def thinking_text(text: Any = "", *, expanded: bool = False) -> Text:
-    t = Text("✻ Đang nghĩ…", style=f"italic {DIM}")
+    t = Text()  # style nền của cả `Text` bị Textual bỏ màu kiểu `grey50` → luôn `append(…, style=)`
+    t.append("✻ Đang nghĩ…", style=f"italic {DIM}")
     lines = _lines(text)
     shown = lines if expanded else lines[:PREVIEW_LINES]
     for ln in shown:
@@ -130,11 +186,11 @@ def tool_text(name: str, args: Any = "", *, status: str = "done", result: Any = 
     if status == "running":
         t.append(f"\n{GUTTER}", style=DIM)
         t.append("Đang chạy…", style=DIM)
-        return t
+        return _nest(t) if nested else t
     if status == "denied":
         t.append(f"\n{GUTTER}", style=DIM)
         t.append("Người dùng từ chối", style=ERR)
-        return t
+        return _nest(t) if nested else t
     res = _lines(result)
     shown = res if expanded else res[:PREVIEW_LINES]
     if not shown:
@@ -153,15 +209,18 @@ def tool_text(name: str, args: Any = "", *, status: str = "done", result: Any = 
         t.append(f"\n{INDENT}input:", style=DIM)
         for ln in _lines(body):
             t.append(f"\n{INDENT}  {ln}", style=DIM)
-    if nested:
-        out = Text()
-        for i, ln in enumerate(t.split("\n", allow_blank=True)):
-            if i:
-                out.append("\n")
-            out.append("    ")
-            out.append_text(ln)
-        return out
-    return t
+    return _nest(t) if nested else t
+
+
+def _nest(t: Text) -> Text:
+    """Thụt 4 cột (tool của agent con nằm dưới dòng `● Agent(…)`)."""
+    out = Text()
+    for i, ln in enumerate(t.split("\n", allow_blank=True)):
+        if i:
+            out.append("\n")
+        out.append("    ")
+        out.append_text(ln)
+    return out
 
 
 # ---------------------------------------------------------------------------- spinner / trạng thái

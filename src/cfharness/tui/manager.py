@@ -395,20 +395,13 @@ async def open_target(screen: Screen, tgt: dict[str, Any]) -> None:
     if not tgt.get("href") or kind not in NAVIGABLE or not ident:
         screen.notify(f"Không mở được đích này trong TUI ({one_line(tgt.get('label') or '?', 40)})", severity="warning")
         return
-    from .app import AttachScreen, TasksScreen
+    from .app import TasksScreen
 
     app = screen.app
     if kind == "task":
         app.push_screen(TasksScreen(select=str(ident)))
         return
-    if kind == "run":
-        try:
-            run = await app.client.call("run.get", {"id": ident})  # type: ignore[attr-defined]
-        except RpcError as e:
-            screen.notify(e.message, severity="error")
-            return
-        app.push_screen(AttachScreen(run["agent_id"], run["id"]))
-        return
+    # run hoặc agent → `_open_attach` của app: `top` mở AttachScreen; `cfharness chat` mở màn xem agent kiểu Claude Code
     await app._open_attach(str(ident))  # type: ignore[attr-defined]
 
 
