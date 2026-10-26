@@ -20,8 +20,7 @@ from ..notify.base import clip
 from ..notify.telegram import esc
 
 if TYPE_CHECKING:
-    from ..notify.telegram import TelegramApi
-    from .bot import TelegramBot
+    from .base import ChatBot
 
 log = logging.getLogger("cfharness.chat.telegram.flows")
 
@@ -35,10 +34,9 @@ def _rows(btns: list[tuple[str, str, str]], per: int = PER_ROW) -> list[list[tup
 
 
 class ChatFlows:
-    MAP = "telegram.flow_map"  # "chat:message_id" (ô nhập force_reply) → {"kind": "run", "agent": id}
-
-    def __init__(self, bot: "TelegramBot") -> None:
+    def __init__(self, bot: "ChatBot") -> None:
         self.bot = bot
+        self.MAP = f"{bot.NAME}.flow_map"  # "chat:message_id" (ô nhập force_reply) → {"kind": "run", "agent": id}
         self.hub = bot.hub
         self.progress: dict[str, dict[str, Any]] = {}
 
@@ -57,8 +55,8 @@ class ChatFlows:
         return min(self.bot._ttl(), 86400)
 
     # ------------------------------------------------------------------ /agent
-    async def c_agents(self, cid: str, rest: str, api: "TelegramApi") -> str | None:
-        from .bot import AGENT_STATUS_VI
+    async def c_agents(self, cid: str, rest: str, api: Any) -> str | None:
+        from .base import AGENT_STATUS_VI
 
         rows = await self.bot.call(cid, "agent.list")
         if not rows:
@@ -80,8 +78,8 @@ class ChatFlows:
         return None
 
     # ------------------------------------------------------------------ /luotchay
-    async def c_runs(self, cid: str, rest: str, api: "TelegramApi") -> str | None:
-        from .bot import STATUS_VI
+    async def c_runs(self, cid: str, rest: str, api: Any) -> str | None:
+        from .base import STATUS_VI
 
         rows = await self.bot.call(cid, "run.list", {"agent": rest.split()[0] if rest else None, "limit": 10})
         if not rows:
@@ -99,7 +97,7 @@ class ChatFlows:
         return None
 
     # ------------------------------------------------------------------ /giaoviec, /run
-    async def c_run(self, cid: str, rest: str, api: "TelegramApi") -> str | None:
+    async def c_run(self, cid: str, rest: str, api: Any) -> str | None:
         agent, _, prompt = rest.partition(" ")
         if agent and prompt.strip():
             return await self.start_run(cid, agent, prompt.strip())
@@ -111,7 +109,7 @@ class ChatFlows:
         if not rows:
             return "Chưa có agent nào để giao việc."
         lines = ["➕ <b>[cfharness] Giao việc cho agent nào?</b>"] + [f"{i}. {esc(r['id'])}" for i, r in enumerate(rows, 1)]
-        lines.append("Hoặc gõ: /giaoviec &lt;agent&gt; &lt;yêu cầu&gt;")
+        lines.append(f"Hoặc gõ: {esc(self.bot.cmd('giaoviec'))} &lt;agent&gt; &lt;yêu cầu&gt;")
         markup, _ = self.bot.callbacks.issue_rows(_rows([("fg", str(r["id"]), str(i)) for i, r in enumerate(rows, 1)]), cid, ttl=self._ttl())
         await self.bot._send(api, cid, "\n".join(lines), markup, html=True)
         return None
@@ -121,14 +119,14 @@ class ChatFlows:
         self.bot._watch(r["id"], cid)
         return f"Đã giao run {r['id']} cho agent {agent} ({r.get('status')}). Bot sẽ gửi kết quả khi xong."
 
-    async def ask_prompt(self, cid: str, agent: str, api: "TelegramApi", reply_to: Any = None) -> None:
+    async def ask_prompt(self, cid: str, agent: str, api: Any, reply_to: Any = None) -> None:
         res = await self.bot._send(api, cid, f"✍️ Mô tả việc cần làm cho agent {agent} — trả lời (reply) tin này.",
                                    {"force_reply": True, "input_field_placeholder": f"Việc cho {agent}…", "selective": True}, reply_to=reply_to)
         if res.get("message_id") is not None:
             self._put(f"{cid}:{res['message_id']}", {"kind": "run", "agent": agent})
 
-    async def on_reply(self, cid: str, mid: Any, text: str, api: "TelegramApi") -> bool:
-        from .bot import ChatError
+    async def on_reply(self, cid: str, mid: Any, text: str, api: Any) -> bool:
+        from .base import ChatError
 
         f = self.bot._state(self.MAP).get(f"{cid}:{mid}")
         if not f:
@@ -143,7 +141,7 @@ class ChatFlows:
         return True
 
     # ------------------------------------------------------------------ /stop
-    async def c_stop(self, cid: str, rest: str, api: "TelegramApi") -> str | None:
+    async def c_stop(self, cid: str, rest: str, api: Any) -> str | None:
         if rest:
             r = await self.bot.call(cid, "run.stop", {"id": rest.split()[0]})
             return f"Đã gửi yêu cầu dừng run {(r or {}).get('id') or rest.split()[0]}."
@@ -156,8 +154,8 @@ class ChatFlows:
         return None
 
     # ------------------------------------------------------------------ nút f*
-    async def on_callback(self, cid: str, action: str, ref: str, mid: Any, api: "TelegramApi") -> str:
-        from .bot import ChatError
+    async def on_callback(self, cid: str, action: str, ref: str, mid: Any, api: Any) -> str:
+        from .base import ChatError
 
         try:
             if action == "fg":
@@ -172,7 +170,7 @@ class ChatFlows:
                 run = await self.bot.call(cid, "run.get", {"id": ref})
                 run = (run or {}).get("run") or run
                 if (run or {}).get("status") in LIVE:
-                    await self.bot._send(api, cid, f"Run {ref} đang {run.get('status')} — bot gửi kết quả khi xong nếu bạn giao qua Telegram.")
+                    await self.bot._send(api, cid, f"Run {ref} đang {run.get('status')} — bot gửi kết quả khi xong nếu bạn giao qua {self.bot.LABEL}.")
                 else:
                     res = await self.bot._send(api, cid, self.bot.format_result(run), html=True)
                     if res.get("message_id") is not None:  # reply vào chi tiết = tiếp tục hội thoại run đó

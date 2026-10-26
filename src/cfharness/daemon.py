@@ -124,6 +124,10 @@ class Daemon:
         from .chat.rpc import register_rpc as _register_tg
 
         _register_tg(self)
+        # Slack 2 chiều: slack.* (setup/allow/…) + gắn daemon cho bot Slack — chat/slack/rpc.py
+        from .chat.slack.rpc import register_rpc as _register_slack
+
+        _register_slack(self)
         # M7 MGR-CORE: manager.* + managerself.call (tool hub-self của run manager) — manager/rpc.py (tự bọc audit method ghi)
         from .manager.rpc import register_rpc as _register_manager
 

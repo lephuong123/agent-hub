@@ -150,6 +150,27 @@ DEFAULTS: dict[str, Any] = {
             "bot_token_secret": "SLACK_BOT_TOKEN",
             "channel": None,
             "api_base": "https://slack.com/api",
+            # Slack 2 chiều (docs/plan/slack-2way.md): Socket Mode trong daemon — duyệt bằng nút, lệnh, hội thoại. Bật bằng
+            # `cfharness notify slack setup` (bot token + app token → secret store, ghép nối DM, allowlist người). Khi bot hoạt động,
+            # thông báo đi DM có nút thay cho webhook/kênh ở trên (không gửi trùng).
+            "interactive": False,
+            "app_token_secret": "SLACK_APP_TOKEN",  # App-Level Token (xapp-, scope connections:write)
+            "callback_key_secret": "SLACK_CALLBACK_KEY",  # khoá HMAC ký giá trị nút (tự sinh)
+            "team_id": None,  # workspace ghim lúc setup — envelope từ workspace khác bị bỏ qua
+            "allowed_chat_ids": [],  # DM (D…) được nhận thông báo + điều khiển hub
+            "allowed_user_ids": [],  # người (U…) được phép — Slack xác thực qua kết nối Socket Mode
+            "allow_channels": False,  # kênh chung phải bật rõ ràng; mặc định chỉ DM
+            "slash_command": "/cfh",  # lệnh đăng ký trong manifest app (mỗi người một app → nên đặt riêng, vd /cfh-ten)
+            "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp", "file"],
+            "callback_ttl_s": 604800,
+            "pair_ttl_s": 600,
+            "idle_check_s": 15,
+            "progress_after_s": 30,
+            "progress_edit_s": 10,
+            "result_max_chars": 1500,
+            "deliver_files": True,
+            "deliver_max_bytes": 20971520,
+            "deliver_max_files": 5,
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
                        "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,

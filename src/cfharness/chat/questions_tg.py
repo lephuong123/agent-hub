@@ -27,8 +27,7 @@ from ..notify.base import clip
 from ..notify.telegram import esc
 
 if TYPE_CHECKING:
-    from ..notify.telegram import TelegramApi
-    from .bot import TelegramBot
+    from .base import ChatBot
 
 log = logging.getLogger("cfharness.chat.telegram.questions")
 
@@ -46,18 +45,21 @@ def who_vi(by: Any, channel: Any) -> str:
         who = "hub"
     else:
         who = b or "?"
+    from .base import CHANNEL_LABELS
+
     ch = str(channel or "")
-    where = "Telegram" if ch.startswith("telegram:") else CHANNEL_VI.get(ch, ch)
+    head = ch.split(":", 1)[0]
+    where = CHANNEL_LABELS[head] if ":" in ch and head in CHANNEL_LABELS else CHANNEL_VI.get(ch, ch)
     return who + (f" qua {where}" if where else "")
 
 
 class QuestionChat:
-    MSGS = "telegram.q_msgs"    # question_id → [[chat, content_mid, system_mid], …]
-    MAP = "telegram.q_msgmap"   # "chat:message_id" → question_id (tin nội dung, tin hệ thống, tin force_reply)
-    SEL = "telegram.q_sel"      # "chat:question_id" → [key…] (chọn nhiều, đang bật)
-
-    def __init__(self, bot: "TelegramBot") -> None:
+    def __init__(self, bot: "ChatBot") -> None:
         self.bot = bot
+        n = bot.NAME
+        self.MSGS = f"{n}.q_msgs"    # question_id → [[chat, content_mid, system_mid], …]
+        self.MAP = f"{n}.q_msgmap"   # "chat:message_id" → question_id (tin nội dung, tin hệ thống, tin force_reply)
+        self.SEL = f"{n}.q_sel"      # "chat:question_id" → [key…] (chọn nhiều, đang bật)
         self.hub = bot.hub
 
     # ------------------------------------------------------------------ trạng thái nhỏ
@@ -127,7 +129,7 @@ class QuestionChat:
     # ------------------------------------------------------------------ dựng tin
     def content_text(self, q: dict[str, Any], *, kind: str = "question.open", payload: dict[str, Any] | None = None) -> str:
         from ..notify.telegram import visible
-        from .bot import AGENT_FRAME
+        from .base import AGENT_FRAME
 
         p = payload or {}
         head = f"<b>❓ [cfharness] Agent {esc(q['agent_id'])} hỏi bạn</b> · câu hỏi {esc(q['id'])}" + (f" · task {esc(q['task_id'])}" if q.get("task_id") else "")
@@ -186,7 +188,7 @@ class QuestionChat:
         m, _ = self.bot.callbacks.issue_rows(rows, chat, ttl=ttl)
         return m
 
-    async def send(self, api: "TelegramApi", chat: Any, q: dict[str, Any], *, kind: str = "question.open", payload: dict[str, Any] | None = None) -> None:
+    async def send(self, api: Any, chat: Any, q: dict[str, Any], *, kind: str = "question.open", payload: dict[str, Any] | None = None) -> None:
         res1 = await self.bot._send(api, chat, self.content_text(q, kind=kind, payload=payload), html=True)
         mid1 = res1.get("message_id")
         sel = self._st(self.SEL).get(f"{chat}:{q['id']}") or []
@@ -203,12 +205,11 @@ class QuestionChat:
         for _c, _m1, m2 in old:  # tin cũ của cùng câu hỏi trong chat này (nhắc lại / /hoi) → gỡ nút, chỉ tin mới nhất còn bấm được
             await self._edit(api, chat, m2, f"[cfharness] Câu hỏi {esc(q['id'])} — đã gửi lại bên dưới, dùng tin mới nhất.", None)
 
-    async def _edit(self, api: "TelegramApi", chat: Any, mid: Any, text: str, markup: dict[str, Any] | None) -> None:
+    async def _edit(self, api: Any, chat: Any, mid: Any, text: str, markup: dict[str, Any] | None) -> None:
         if mid is None:
             return
         try:
-            await api.call("editMessageText", {"chat_id": chat, "message_id": mid, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True,
-                                               "reply_markup": markup or {"inline_keyboard": []}})
+            await self.bot._edit(api, chat, mid, text, markup, fallback=False)
         except Exception as e:  # tin đã xoá/không đổi — không quan trọng
             log.debug("không sửa được tin câu hỏi: %s", clip(e))
 
@@ -237,9 +238,9 @@ class QuestionChat:
         self._put(self.MSGS, qid, None, cap=500)
 
     # ------------------------------------------------------------------ nút
-    async def on_callback(self, cid: str, action: str, qid: str, mid: Any, api: "TelegramApi") -> str:
+    async def on_callback(self, cid: str, action: str, qid: str, mid: Any, api: Any) -> str:
         """Nonce ĐÃ bị tiêu (cả nhóm). Trả chữ cho toast. Hành động chưa kết thúc → cấp lại bàn phím (sửa tại chỗ)."""
-        from .bot import ChatError
+        from .base import ChatError
 
         q = self._get(qid)
         if q is None:
@@ -280,7 +281,7 @@ class QuestionChat:
                 await self._edit(api, cid, mid, self.system_text(q, sel), self.markup(q, cid, sel))
                 return "Đã quay lại."
             if action == "qxc":
-                await self.bot.call(cid, "question.cancel", {"id": qid, "reason": "người huỷ qua Telegram"})
+                await self.bot.call(cid, "question.cancel", {"id": qid, "reason": f"người huỷ qua {self.bot.LABEL}"})
                 return "Đã huỷ câu hỏi."
         except ChatError as e:
             q2 = self._get(qid) or q
@@ -290,8 +291,8 @@ class QuestionChat:
         return "Nút không hợp lệ."
 
     # ------------------------------------------------------------------ trả lời bằng chữ (reply)
-    async def answer_text(self, cid: str, qid: str, text: str, api: "TelegramApi") -> None:
-        from .bot import ChatError
+    async def answer_text(self, cid: str, qid: str, text: str, api: Any) -> None:
+        from .base import ChatError
 
         q = self._get(qid)
         if q is None:
@@ -309,7 +310,7 @@ class QuestionChat:
         await self.bot._send(api, cid, f"✅ Đã gửi câu trả lời cho câu hỏi {qid} — agent {q['agent_id']} sẽ làm tiếp.")
 
     # ------------------------------------------------------------------ /hoi
-    async def command(self, cid: str, api: "TelegramApi") -> str | None:
+    async def command(self, cid: str, api: Any) -> str | None:
         rows = await self.bot.call(cid, "question.list", {"status": "open", "limit": 10})
         waiting = await self.bot.call(cid, "question.list", {"status": "with_manager", "limit": 50})
         if not rows:

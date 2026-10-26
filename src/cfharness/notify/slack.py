@@ -122,6 +122,9 @@ class SlackNotifier(QueuedNotifier):
         c = self.cfg()
         if not c.get("enabled", True):
             return None
+        bot = getattr(self.hub, "slack", None)
+        if bot is not None and bot.active():  # Slack 2 chiều đang chạy → thông báo đi DM có nút (chat/slack/bot.py), không gửi trùng
+            return None
         url = c.get("webhook_url") or self._secret(c.get("webhook_secret"))
         if url:
             return {"kind": "webhook", "url": str(url)}
@@ -131,7 +134,9 @@ class SlackNotifier(QueuedNotifier):
         return None
 
     def render(self, ev: HubEvent) -> str | None:
-        return format_message(ev)
+        t = format_message(ev)
+        # mrkdwn: Slack hiểu `<!channel>`, `<@U…>`, `<url|nhãn>` — giá trị động (thao tác/lý do do agent tạo) phải escape & < >
+        return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") if t else t
 
     # ------------------------------------------------------------------ send
     def _post(self, target: dict[str, str], text: str) -> None:

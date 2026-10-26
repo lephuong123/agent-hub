@@ -27,8 +27,7 @@ from ..notify.base import clip
 from ..notify.telegram import CHUNK, MAX_CHUNKS, esc, split_chunks
 
 if TYPE_CHECKING:
-    from ..notify.telegram import TelegramApi
-    from .bot import TelegramBot
+    from .base import ChatBot
 
 log = logging.getLogger("cfharness.chat.telegram.manager")
 
@@ -45,13 +44,13 @@ TYPING_MAX_S = 180.0
 
 
 class ManagerChat:
-    CONV = "telegram.mgr_conv"          # chat_id → conversation_id hiện tại
-    MSGMAP = "telegram.mgr_msgmap"      # "chat:message_id" → conversation_id (tin của điều phối viên + tin người đã gửi)
-    RUNS = "telegram.mgr_runs"          # run_id → {chat, conv, reply_to}
-    CONVCHAT = "telegram.mgr_convchat"  # conversation_id → chat_id
-
-    def __init__(self, bot: "TelegramBot") -> None:
+    def __init__(self, bot: "ChatBot") -> None:
         self.bot = bot
+        n = bot.NAME
+        self.CONV = f"{n}.mgr_conv"          # chat_id → conversation_id hiện tại
+        self.MSGMAP = f"{n}.mgr_msgmap"      # "chat:message_id" → conversation_id (tin của điều phối viên + tin người đã gửi)
+        self.RUNS = f"{n}.mgr_runs"          # run_id → {chat, conv, reply_to}
+        self.CONVCHAT = f"{n}.mgr_convchat"  # conversation_id → chat_id
         self.hub = bot.hub
         self.sent_replies = 0
 
@@ -77,10 +76,10 @@ class ManagerChat:
         return self._st(self.CONV).get(str(chat_id))
 
     # ------------------------------------------------------------------ từ người → điều phối viên
-    async def handle_text(self, chat_id: str, text: str, api: "TelegramApi", *, message_id: Any = None, conv: str | None = None,
+    async def handle_text(self, chat_id: str, text: str, api: Any, *, message_id: Any = None, conv: str | None = None,
                           images: list[dict[str, str]] | None = None, files: list[dict[str, str]] | None = None) -> None:
         """`images`/`files` = `[{name, data_b64}]` (chat/media.py đã tải + kiểm sơ bộ; daemon kiểm lại ở `manager.chat`)."""
-        from .bot import ChatError
+        from .base import ChatError
 
         try:
             g = await self.bot.call(chat_id, "manager.get")
@@ -92,7 +91,7 @@ class ManagerChat:
             await self.bot._send(api, chat_id, GUIDE)
             return
         conv = conv or self.current(chat_id)
-        params: dict[str, Any] = {"channel": f"telegram:{chat_id}", "text": text}
+        params: dict[str, Any] = {"channel": self.bot.channel_of(chat_id), "text": text}
         if images:
             params["images"] = images
         if files:
@@ -115,17 +114,17 @@ class ManagerChat:
             self._put(self.RUNS, run_id, {"chat": str(chat_id), "conv": new_conv, "reply_to": message_id}, cap=200)
             self.bot._spawn(self._typing(chat_id, run_id, api))
 
-    async def _typing(self, chat_id: str, run_id: str, api: "TelegramApi") -> None:
+    async def _typing(self, chat_id: str, run_id: str, api: Any) -> None:
         """T-D: "đang gõ…" lặp mỗi `TYPING_EVERY_S` tới khi điều phối viên trả lời (RUNS bị gỡ) hoặc quá `TYPING_MAX_S`."""
         t0 = asyncio.get_running_loop().time()
         while run_id in self._st(self.RUNS) and asyncio.get_running_loop().time() - t0 < TYPING_MAX_S:
             try:  # không bắt buộc (không phải mọi Bot API giả/thật đều có)
-                await api.call("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+                await self.bot.typing(api, chat_id)
             except Exception:
                 return
             await asyncio.sleep(TYPING_EVERY_S)
 
-    async def new_conversation(self, chat_id: str, api: "TelegramApi") -> str:
+    async def new_conversation(self, chat_id: str, api: Any) -> str:
         had = self.current(chat_id)
         self._put(self.CONV, str(chat_id), None)
         return ("Đã mở cuộc trò chuyện MỚI với điều phối viên — tin tiếp theo bắt đầu ngữ cảnh mới."
@@ -153,7 +152,7 @@ class ManagerChat:
 
     def _chat_of(self, p: dict[str, Any]) -> str | None:
         ch = str(p.get("channel") or "")
-        if ch.startswith("telegram:"):
+        if ch.startswith(f"{self.bot.NAME}:"):
             return ch.split(":", 1)[1] or None
         conv = p.get("conversation_id")
         return self._st(self.CONVCHAT).get(conv) if conv else None
@@ -162,7 +161,7 @@ class ManagerChat:
         """Khung kết quả agent (WT-8): dòng hệ thống (chữ của hub) + tiền tố cố định + nội dung agent trong `<pre>`. Không nút."""
         from ..notify.telegram import visible
         from ..redact import redact_str
-        from .bot import AGENT_FRAME
+        from .base import AGENT_FRAME
 
         body = visible(redact_str(text or "")) or "(không có nội dung)"
         chunks = split_chunks(body, CHUNK)
@@ -222,7 +221,7 @@ class ManagerChat:
         elif outcome in ("resumed", "interrupted"):
             return
         else:
-            from .bot import OUTCOME_VI
+            from .base import OUTCOME_VI
 
             self._put(self.RUNS, run_id, None, cap=200)
             if outcome == "completed":

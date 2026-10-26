@@ -1,0 +1,213 @@
+"""Slack GIẢ chạy cục bộ (127.0.0.1) cho test — không gọi Slack thật.
+
+- Web API (HTTP, thân form như SlackApi gửi): auth.test, apps.connections.open (app token) → URL WebSocket cục bộ, chat.postMessage,
+  chat.update, chat.postEphemeral, conversations.open, users.info, files.getUploadURLExternal (+ POST /upload/<id>),
+  files.completeUploadExternal. Token sai → `invalid_auth`.
+- Socket Mode (WebSocket, `websockets.sync.server` trong luồng riêng): gửi `hello`, rồi các envelope test bơm vào
+  (`user_message()`, `press()`, `slash()`); ghi nhận ACK (`acked()`), `disconnect()` để thử kết nối lại; gửi trùng = cùng `event_id`.
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
+from urllib.parse import parse_qs
+
+from websockets.sync.server import serve
+
+BOT_TOKEN = "xoxb-1111-2222-fakeBotTokenForTests0123"
+APP_TOKEN = "xapp-1-A111-2222-fakeAppTokenForTests0123"
+TEAM = "T0TEAM001"
+BOT_USER = "U0BOT0001"
+
+
+class FakeSlack:
+    def __init__(self, *, team: str = TEAM) -> None:
+        self.team = team
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.next_ts = 1000
+        self.uploads: dict[str, bytes] = {}
+        self.outbox: list[dict[str, Any]] = []  # envelope chờ gửi qua WebSocket
+        self.acks: set[str] = set()
+        self.connections = 0
+        self.next_env = 1
+        self.cond = threading.Condition()
+        self._ws: Any = None
+        self._kick = False
+        outer = self
+
+        class H(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                n = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(n) or b""
+                if self.path.startswith("/upload/"):
+                    with outer.cond:
+                        outer.uploads[self.path.rsplit("/", 1)[-1]] = raw
+                    self._reply(200, {"ok": True})
+                    return
+                form = {k: v[0] for k, v in parse_qs(raw.decode("utf-8"), keep_blank_values=True).items()}
+                for k, v in list(form.items()):
+                    if v[:1] in ("[", "{"):
+                        try:
+                            form[k] = json.loads(v)
+                        except ValueError:
+                            pass
+                auth = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
+                self._reply(200, outer.handle(self.path.strip("/"), form, auth))
+
+            def _reply(self, code: int, res: dict[str, Any]) -> None:
+                data = json.dumps(res).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.srv.daemon_threads = True
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
+        self.ws_srv = serve(self._ws_handler, "127.0.0.1", 0)
+        threading.Thread(target=self.ws_srv.serve_forever, daemon=True).start()
+        self.ws_url = f"ws://127.0.0.1:{self.ws_srv.socket.getsockname()[1]}/link"
+
+    def close(self) -> None:
+        self.srv.shutdown()
+        self.ws_srv.shutdown()
+
+    # ------------------------------------------------------------------ Web API
+    def _ts(self) -> str:
+        with self.cond:
+            self.next_ts += 1
+            return f"{self.next_ts}.000100"
+
+    def handle(self, method: str, p: dict[str, Any], auth: str) -> dict[str, Any]:
+        with self.cond:
+            self.calls.append((method, p))
+            self.cond.notify_all()
+        if method == "apps.connections.open":
+            return {"ok": True, "url": self.ws_url} if auth == APP_TOKEN else {"ok": False, "error": "invalid_auth"}
+        if auth != BOT_TOKEN:
+            return {"ok": False, "error": "invalid_auth"}
+        if method == "auth.test":
+            return {"ok": True, "team_id": self.team, "team": "Thử nghiệm", "user_id": BOT_USER, "user": "cfharness"}
+        if method == "chat.postMessage":
+            p["_ts"] = self._ts()  # test đọc lại ts của tin bot gửi
+            return {"ok": True, "channel": p.get("channel"), "ts": p["_ts"]}
+        if method in ("chat.update", "chat.postEphemeral"):
+            return {"ok": True, "channel": p.get("channel"), "ts": p.get("ts") or self._ts()}
+        if method == "conversations.open":
+            return {"ok": True, "channel": {"id": "D" + str(p.get("users"))[1:]}}
+        if method == "users.info":
+            return {"ok": True, "user": {"id": p.get("user"), "name": "sep", "profile": {"real_name": "Sếp Thử"}}}
+        if method == "files.getUploadURLExternal":
+            fid = f"F{self.next_ts}"
+            return {"ok": True, "upload_url": f"{self.url}/upload/{fid}", "file_id": fid}
+        if method == "files.completeUploadExternal":
+            return {"ok": True, "files": [{"id": f["id"]} for f in (p.get("files") or [])]}
+        return {"ok": False, "error": "unknown_method"}
+
+    def sent(self, channel: str | None = None) -> list[dict[str, Any]]:
+        """Tin bot đã post (chat.postMessage) — kèm `blocks` đã giải JSON."""
+        with self.cond:
+            return [p for m, p in self.calls if m == "chat.postMessage" and (channel is None or p.get("channel") == channel)]
+
+    def calls_of(self, method: str) -> list[dict[str, Any]]:
+        with self.cond:
+            return [p for m, p in self.calls if m == method]
+
+    @staticmethod
+    def text_of(p: dict[str, Any]) -> str:
+        return "\n".join(b["text"]["text"] for b in (p.get("blocks") or []) if b.get("type") == "section")
+
+    @staticmethod
+    def buttons(p: dict[str, Any]) -> list[dict[str, Any]]:
+        return [e for b in (p.get("blocks") or []) if b.get("type") == "actions" for e in b.get("elements") or []]
+
+    # ------------------------------------------------------------------ Socket Mode
+    def _ws_handler(self, ws: Any) -> None:
+        with self.cond:
+            self.connections += 1
+            self._ws = ws
+            self._kick = False
+        ws.send(json.dumps({"type": "hello", "num_connections": 1}))
+        while True:
+            with self.cond:
+                if self._kick:
+                    self._kick = False
+                    ws.send(json.dumps({"type": "disconnect", "reason": "refresh_requested"}))
+                out, self.outbox = self.outbox, []
+            for env in out:
+                ws.send(json.dumps(env))
+            try:
+                raw = ws.recv(timeout=0.02)
+            except TimeoutError:
+                continue
+            except Exception:
+                return
+            try:
+                eid = json.loads(raw).get("envelope_id")
+            except ValueError:
+                continue
+            with self.cond:
+                self.acks.add(eid)
+                self.cond.notify_all()
+
+    def _push(self, typ: str, payload: dict[str, Any], *, eid: str | None = None) -> str:
+        with self.cond:
+            eid = eid or f"env-{self.next_env}"
+            self.next_env += 1
+            self.outbox.append({"type": typ, "envelope_id": eid, "payload": payload, "accepts_response_payload": typ != "events_api"})
+        return eid
+
+    def acked(self, eid: str) -> bool:
+        with self.cond:
+            return eid in self.acks
+
+    def connected(self) -> bool:
+        with self.cond:
+            return self._ws is not None
+
+    def disconnect(self) -> None:
+        with self.cond:
+            self._kick = True
+
+    def user_message(self, channel: str, user: str, text: str, *, thread_ts: str | None = None, team: str | None = None,
+                     event_id: str | None = None, subtype: str | None = None) -> str:
+        ts = self._ts()
+        ev = {"type": "message", "channel": channel, "user": user, "text": text, "ts": ts, "channel_type": "im" if channel.startswith("D") else "channel"}
+        if thread_ts:
+            ev["thread_ts"] = thread_ts
+        if subtype:
+            ev["subtype"] = subtype
+        return self._push("events_api", {"team_id": team or self.team, "event": ev, "event_id": event_id or f"Ev{ts.replace('.', '')}"})
+
+    def press(self, channel: str, user: str, value: str, ts: str, *, team: str | None = None) -> str:
+        with self.cond:
+            self.next_env += 1
+            trig = f"trig-{self.next_env}"
+        return self._push("interactive", {"type": "block_actions", "user": {"id": user, "team_id": team or self.team}, "team": {"id": team or self.team},
+                                          "channel": {"id": channel}, "message": {"ts": ts}, "container": {"type": "message", "message_ts": ts, "channel_id": channel},
+                                          "trigger_id": trig, "actions": [{"action_id": "cfh_0_0", "value": value, "type": "button"}]})
+
+    def slash(self, user: str, text: str, *, channel: str = "C0GENERAL", team: str | None = None) -> str:
+        with self.cond:
+            self.next_env += 1
+            trig = f"trig-{self.next_env}"
+        return self._push("slash_commands", {"command": "/cfh", "text": text, "user_id": user, "channel_id": channel, "team_id": team or self.team,
+                                             "trigger_id": trig, "response_url": f"{self.url}/response"})
+
+    def wait(self, fn, timeout: float = 10.0) -> Any:
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            v = fn()
+            if v:
+                return v
+            time.sleep(0.02)
+        raise AssertionError("hết giờ chờ (fake Slack)")

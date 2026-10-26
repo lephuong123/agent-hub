@@ -214,8 +214,11 @@ class CallbackStore:
     STATE = "telegram.callbacks"
     MSGS = "telegram.approval_msgs"
 
-    def __init__(self, hub: "Hub", key_fn: Any) -> None:
+    def __init__(self, hub: "Hub", key_fn: Any, prefix: str = "telegram") -> None:
+        """`prefix` = tên kênh (`telegram`, `slack`): mỗi kênh một kho nút + khoá ký riêng trong `hub_state`."""
         self.hub = hub
+        self.STATE = f"{prefix}.callbacks"
+        self.MSGS = f"{prefix}.approval_msgs"
         self._key_fn = key_fn
         self._recs: dict[str, dict[str, Any]] | None = None
 

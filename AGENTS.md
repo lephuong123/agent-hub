@@ -286,6 +286,21 @@ Token bot chỉ ở secret store (không đọc env, không in, không trả qua
 service trực tiếp). Test: `tests/test_telegram.py` (daemon in-process), `tests/test_telegram_e2e.py` (daemon thật + hook guard thật),
 server Bot API giả `tests/telegram_fake.py` — không gọi Telegram thật.
 
+## Slack 2 chiều — Socket Mode (duyệt bằng nút, `/cfh`, thread = reply)
+Chi tiết, việc dở: `docs/dev-notes/slack.md`; plan: `docs/plan/slack-2way.md`. Lõi chat dùng chung: `chat/base.py` (`ChatBot`) —
+Telegram (`chat/bot.py`) và Slack (`chat/slack/bot.py`) chỉ khác lớp vận chuyển. Thêm logic chat mới → viết ở `ChatBot` (hoặc
+flows/questions/manager_chat nhận `ChatBot`), không gọi API nền tảng trực tiếp; khoá `hub_state` luôn `f"{bot.NAME}.…"`.
+
+| Module | Vai trò |
+|---|---|
+| `chat/slack/bot.py` | `hub.slack`: Socket Mode (`websockets`) trong daemon, ACK trước xử lý + hàng đợi tuần tự + chống trùng `slack.seen`; `/cfh <lệnh>` → DM; nút; thread → câu hỏi / giao việc / `run.continue` / điều phối viên; `SlackChatNotifier` (khi hoạt động, `SlackNotifier` webhook nhường) |
+| `chat/slack/render.py` | HTML hub → mrkdwn + Block Kit; escape `& < >`, `verbatim`, ` trong khối mã → ˋ |
+| `chat/slack/api.py`, `rpc.py`, `cli.py` | `SlackApi` (gỡ token khỏi lỗi); RPC `slack.*` (trừ `status` đều HUMAN_ONLY); CLI `notify slack setup|status|test|disable|allow|revoke` |
+
+Bất biến: như Telegram — mọi lệnh/nút qua `Daemon.call_as(auth.slack_caller(hub, chat_id, user_id), …)`; người = `interactive` bật + chat ∈
+`allowed_chat_ids` + user ∈ `allowed_user_ids` (+ `allow_channels` cho kênh không phải DM); envelope khác `team_id` ghim → bỏ. Token bot/app chỉ
+ở secret store. Test: `tests/test_slack.py`, Slack giả `tests/slack_fake.py` (HTTP + WebSocket cục bộ).
+
 ## WEB — giao diện trình duyệt (`cfharness web`)
 Chi tiết, kiểm chứng sandbox thật, việc dở: `docs/dev-notes/web.md`. Ảnh: `docs/screenshots/web/`. Test: `tests/test_web.py`.
 
