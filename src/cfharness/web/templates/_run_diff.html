@@ -1,0 +1,35 @@
+{#- Khối "Thay đổi file" của run (run.diff). Dùng cho partial htmx trên trang run và trang /runs/<id>/diff. Chữ trong diff: autoescape. -#}
+{% import "_macros.html" as m with context %}
+<section class="card" id="diff">
+  <div class="card-head"><h2>{{ m.icon('branch') }} Thay đổi file</h2>
+    <span class="muted small">{{ dv.total_files }} file{% if dv.stat.insertions is defined %} · <span class="ok-t">+{{ dv.stat.insertions }}</span> <span class="danger-t">−{{ dv.stat.deletions }}</span>{% endif %}</span></div>
+  <p class="muted small">Workspace <code>{{ dv.root }}</code>{% if dv.kind == 'git' %} · HEAD trước {{ dv.head_before or '—' }}{% if dv.commits_made %} → sau {{ dv.head_after }} <span class="pill warn">run đã commit</span>{% endif %}{% else %} · không phải repo git{% endif %}</p>
+  {% if dv.truncated %}<div class="banner warn">{{ m.icon('info') }}<span>Thư mục quá nhiều file lúc checkpoint — danh sách có thể thiếu.</span></div>{% endif %}
+  {% if dv.modified %}<div class="banner danger" role="alert">{{ m.icon('alert') }}<span><b>{{ dv.modified|length }} file đã bị sửa tiếp sau run</b> — hoàn tác sẽ bị từ chối để không ghi đè thay đổi mới: {% for p in dv.modified[:20] %}<code>{{ p }}</code>{{ ', ' if not loop.last }}{% endfor %}{% if dv.modified|length > 20 %} …{% endif %}</span></div>{% endif %}
+  {% if not dv.files %}<p class="muted">Run không sửa file nào.</p>{% endif %}
+  <div class="dfiles">
+  {% for f in dv.files %}
+    <details class="dfile{{ ' touched' if f.modified }}"{% if dv.open_all %} open{% endif %}>
+      <summary><span class="pill {{ f.status_view[1] }}">{{ f.status_view[0] }}</span><code class="dpath">{{ f.path }}</code>
+        {% if f.has_patch and not f.binary %}<span class="small"><span class="ok-t">+{{ f.adds }}</span> <span class="danger-t">−{{ f.dels }}</span></span>{% endif %}
+        {% if f.modified %}<span class="pill danger">đã bị sửa tiếp</span>{% endif %}</summary>
+      {% if f.binary %}<p class="muted small">File nhị phân — không hiển thị nội dung.</p>
+      {% elif not f.has_patch %}<p class="muted small">{{ 'Không có nội dung diff (workspace không phải git).' if dv.kind != 'git' else 'Không hiển thị được nội dung (patch đã bị cắt hoặc thiếu).' }}</p>
+      {% else %}<pre class="udiff" tabindex="0">{% for cls, t in f.lines %}<span class="dl {{ cls }}">{{ t }}</span>
+{% endfor %}{% if f.more %}<span class="dl meta">… còn {{ f.more }} dòng — xem đủ: cfharness run diff {{ run.id }} --patch</span>{% endif %}</pre>{% endif %}
+    </details>
+  {% endfor %}
+  </div>
+  {% if dv.hidden_files %}<p class="muted small">… còn {{ dv.hidden_files }} file không hiển thị — <code>cfharness run diff {{ run.id }}</code>.</p>{% endif %}
+  {% if dv.cut_patch %}<p class="muted small">Diff quá lớn — chỉ hiển thị phần đầu. Xem đủ: <code>cfharness run diff {{ run.id }} --patch</code>.</p>{% endif %}
+  <div class="btn-row diff-actions">
+    {% if dv.can_revert %}
+      {{ m.act("run_revert", "Hoàn tác thay đổi", {"id": run.id, "files": dv.total_files}, "btn danger sm", confirm="Hoàn tác thay đổi file của run " ~ run.id ~ "?\nGhi lại nội dung " ~ dv.total_files ~ " file như TRƯỚC khi run bắt đầu (file run tạo mới sẽ bị xoá).\nChỉ làm được khi các file này CHƯA bị sửa tiếp sau run: nếu bạn hoặc run khác đã sửa, hub từ chối và không ghi gì.\nKhông đổi HEAD/nhánh git — commit của run (nếu có) vẫn còn.", next="/runs/" ~ run.id ~ "#diff", ic="undo") }}
+      {{ m.act("run_revert_check", "Kiểm tra trước", {"id": run.id}, "btn ghost sm", next="/runs/" ~ run.id ~ "#diff", title="Thử hoàn tác (không ghi gì) — báo xung đột nếu có") }}
+      <span class="muted small">Chỉ hoàn tác được khi các file chưa bị sửa tiếp sau run.</span>
+    {% elif dv.modified %}
+      {{ m.act("run_revert_check", "Kiểm tra lại", {"id": run.id}, "btn ghost sm", next="/runs/" ~ run.id ~ "#diff", ic="refresh", title="Kiểm tra lại xung đột (không ghi gì)") }}
+      <span class="muted small">Không hoàn tác được: hãy tự xử lý các file đã bị sửa tiếp, hoặc hoàn tác bằng git.</span>
+    {% elif dv.why_not and dv.why_not != 'none' %}<span class="muted small">{{ m.icon('info') }} {{ dv.why_not }}</span>{% endif %}
+  </div>
+</section>

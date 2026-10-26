@@ -1172,6 +1172,13 @@ def _manager_routes() -> list[Any]:
     return _r()
 
 
+def _extra_routes() -> list[Any]:
+    from . import extra_pages as _x  # lịch chạy, tìm kiếm hội thoại, diff/revert run, sức khoẻ (+ thao tác vào ACTIONS)
+
+    _x.register_actions(ACTIONS, Action, _req)
+    return _x.routes()
+
+
 def make_templates() -> Jinja2Templates:
     t = Jinja2Templates(directory=str(HERE / "templates"))
     env = t.env
@@ -1219,6 +1226,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/sse/run/{id}", sse_run),
         Route("/sse/firehose", sse_firehose),
         *_manager_routes(),
+        *_extra_routes(),
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
     app = Starlette(routes=routes, exception_handlers={HTTPException: http_error, RpcError: rpc_error, DaemonUnavailable: rpc_error})

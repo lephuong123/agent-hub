@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Lịch chạy{% endblock %}
+{% block content %}
+<div class="page-head"><div class="ph-title"><h1>Lịch chạy</h1><span class="sub">Việc chạy tự động theo giờ: mỗi lượt là một run/task thật của hub (chịu guard, ngân sách, ESTOP). Kết quả về hội thoại điều phối viên hoặc Telegram.</span></div></div>
+{% if unavailable %}<div class="banner warn">{{ m.icon('alert') }}<span>{{ unavailable }}</span></div>{% endif %}
+<div class="row between wrap-row filters">
+  <nav class="seg" aria-label="Lọc theo trạng thái">
+    {% for k, label in [("", "Tất cả"), ("active", "Đang bật"), ("paused", "Tạm dừng"), ("done", "Đã xong")] %}
+    <a href="/schedules{% if k %}?status={{ k }}{% endif %}" class="{{ 'on' if (q.status or '') == k }}">{{ label }}</a>
+    {% endfor %}
+  </nav>
+  <a class="btn sm" href="#sched-new">{{ m.icon('plus') }}<span>Tạo lịch</span></a>
+</div>
+<section class="card flush" id="sched-list">
+  {% if not rows %}{{ m.empty("Tạo lịch ở form bên dưới, hoặc nhắn điều phối viên: \"8h sáng mỗi ngày tóm tắt góp ý mới\".", "calendar", title="Chưa có lịch nào") }}{% else %}
+  <table class="tbl stack sched-tbl">
+    <thead><tr><th>Lịch</th><th>Chạy gì</th><th>Khi nào</th><th>Lượt tới</th><th>Lượt trước</th><th>Trạng thái</th><th class="actions"><span class="sr-only">Thao tác</span></th></tr></thead>
+    <tbody>
+    {% for r in rows %}{% set st = sched_status.get(r.status, (r.status, 'muted', 'circle')) %}<tr id="sc-{{ r.id }}">
+      <td data-label="Lịch" class="title-cell"><span class="t">{{ r.name }}</span><span class="s"><span class="id">{{ r.id }}</span> · tạo bởi {{ r.created_by }}</span>
+        <details class="small sched-prompt"><summary class="muted">Việc mỗi lượt</summary><div class="pre">{{ r.prompt }}</div><div class="muted">Kết quả → {{ r._dest }} · ${{ r.budget_usd if r.budget_usd is not none else '—' }}/lượt</div></details></td>
+      <td data-label="Chạy gì">{% if r.kind == 'agent' and r.target %}<a href="/agents/{{ r.target }}">{{ r._target }}</a>{% else %}{{ r._target }}{% endif %}</td>
+      <td data-label="Khi nào">{{ r.describe or r.expr }}<div class="muted small"><code>{{ r.expr }}</code></div></td>
+      <td data-label="Lượt tới">{% if r.status == 'active' and r.next_run_local %}{{ r.next_run_local }}{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td data-label="Lượt trước">{% if r.last_run_at %}{{ m.rel(r.last_run_at) }}{% set fs = fire_status.get(r.last_status or '', (r.last_status or '', 'muted')) %}{% if r.last_status %} <span class="pill {{ fs[1] }}">{{ fs[0] }}</span>{% endif %}
+        {% if r.last_run_id %}<div class="small"><a href="/runs/{{ r.last_run_id }}">xem run</a></div>{% elif r.last_task_id %}<div class="small"><a href="/tasks/{{ r.last_task_id }}">xem task</a></div>{% endif %}
+        {% else %}<span class="muted">chưa chạy</span>{% endif %}{% if r.fail_count %}<div class="small danger-t">lỗi liên tiếp {{ r.fail_count }}</div>{% endif %}</td>
+      <td data-label="Trạng thái"><span class="pill {{ st[1] }}">{{ m.icon(st[2]) }}{{ st[0] }}</span>{% if r.paused_reason %}<div class="muted small">{{ r.paused_reason }}</div>{% endif %}</td>
+      <td class="actions">
+        {% if r.status == 'active' %}{{ m.act("schedule_pause", "Tạm dừng", {"id": r.id, "name": r.name}, "btn sm", confirm="Tạm dừng lịch '" ~ r.name ~ "'? Lịch không chạy cho tới khi bật lại.", next="/schedules", ic="pause") }}
+        {% elif r.status == 'paused' %}{{ m.act("schedule_resume", "Bật lại", {"id": r.id, "name": r.name}, "btn sm", confirm="Bật lại lịch '" ~ r.name ~ "'? Mỗi lượt là một run thật (tốn tiền).", next="/schedules", ic="play") }}{% endif %}
+        {% if r.status != 'done' %}{{ m.act("schedule_run_now", "Chạy ngay", {"id": r.id, "name": r.name}, "btn sm ghost", confirm="Chạy ngay MỘT lượt của lịch '" ~ r.name ~ "'? (tốn tiền như một lượt thường; không đổi mốc chạy kế tiếp)", next="/schedules", ic="zap") }}{% endif %}
+        {{ m.act("schedule_rm", "Xoá", {"id": r.id, "name": r.name}, "btn sm ghost danger-t", confirm="Xoá lịch '" ~ r.name ~ "'?\nXoá mềm: lịch ngừng chạy và biến khỏi danh sách; lịch sử các lượt đã chạy vẫn được giữ. Không khôi phục được từ web/CLI.", next="/schedules", ic="trash", title="Xoá lịch (xoá mềm)") }}
+      </td>
+    </tr>{% endfor %}
+    </tbody>
+  </table>{% endif %}
+</section>
+
+<div class="grid2">
+<section class="card" id="sched-new">
+  <h2>{{ m.icon('plus') }} Tạo lịch</h2>
+  {% if error %}<div class="banner danger" role="alert">{{ m.icon('alert') }}<span>{{ error }}</span></div>{% endif %}
+  <form method="post" action="/schedules/create" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="fgrid">
+      <label>Chạy gì <select name="kind">{% for k, label in kinds %}<option value="{{ k }}" {{ 'selected' if (v.kind or 'agent') == k }}>{{ label }}</option>{% endfor %}</select>
+        <span class="hint">Điều phối viên: chạy trong hội thoại của nó. Task: tạo task mới mỗi lượt.</span></label>
+      <label>Tên (tuỳ chọn) <input name="name" value="{{ v.name or '' }}" maxlength="80" placeholder="mặc định: dòng đầu của việc"></label>
+      <label>Agent chạy <span class="hint">(khi chạy một agent)</span><select name="target"><option value="">—</option>{% for a in agents %}<option value="{{ a }}" {{ 'selected' if v.target == a }}>{{ a }}</option>{% endfor %}</select></label>
+      <label>Team / agent nhận task <span class="hint">(khi tạo task)</span>
+        <span class="row gap"><select name="team" aria-label="Team"><option value="">team —</option>{% for t in teams %}<option value="{{ t }}" {{ 'selected' if v.team == t }}>{{ t }}</option>{% endfor %}</select>
+        <select name="assignee" aria-label="Agent nhận task"><option value="">agent —</option>{% for a in agents %}<option value="{{ a }}" {{ 'selected' if v.assignee == a }}>{{ a }}</option>{% endfor %}</select></span></label>
+      <label class="span2">Khi nào <input name="expr" required value="{{ v.expr or '' }}" placeholder="vd daily 08:00" autocomplete="off" spellcheck="false">
+        <span class="hint">Cron 5 trường hoặc dạng chữ: {% for e in examples %}<code>{{ e }}</code>{{ ', ' if not loop.last }}{% endfor %}. Giờ máy.</span></label>
+      <label class="span2">Việc cần làm mỗi lượt <textarea name="prompt" rows="3" required placeholder="vd Tóm tắt góp ý mới trong 24 giờ qua, gửi 5 ý chính">{{ v.prompt or '' }}</textarea></label>
+      <label>Ngân sách mỗi lượt ($) <input name="budget_usd" value="{{ v.budget_usd or '' }}" inputmode="decimal" placeholder="mặc định của hub"></label>
+      <label>Nơi nhận kết quả (tuỳ chọn) <input name="deliver_to" value="{{ v.deliver_to or '' }}" placeholder="mc_… / web / telegram:<chat_id>" spellcheck="false"></label>
+    </div>
+    <div class="row end"><button class="btn primary" type="submit">{{ m.icon('calendar') }}<span>Xem lại &amp; tạo</span></button></div>
+  </form>
+</section>
+<section class="card" id="sched-preview">
+  <h2>{{ m.icon('clock') }} Thử biểu thức</h2>
+  <p class="muted small">Xem trước các mốc chạy, không tạo gì.</p>
+  <form method="get" action="/schedules#sched-preview" class="row gap">
+    <input name="preview" value="{{ q.preview or '' }}" placeholder="vd weekdays 08:30" aria-label="Biểu thức lịch" spellcheck="false">
+    <button class="btn sm" type="submit">Xem</button>
+  </form>
+  {% if preview_err %}<div class="banner danger">{{ m.icon('alert') }}<span>{{ preview_err }}</span></div>{% endif %}
+  {% if preview %}
+  <dl class="kv one">
+    <div><dt>Hiểu là</dt><dd>{{ preview.describe }} <span class="muted small">(<code>{{ preview.expr }}</code>, giờ máy {{ preview.tz }})</span></dd></div>
+    <div><dt>Khoảng lượt/ngày</dt><dd>~{{ '%g'|format(preview.runs_per_day or 0) }}</dd></div>
+    <div><dt>Các lượt tới</dt><dd>{% for t in preview.next %}<div>{{ t[:16]|replace('T', ' ') }}</div>{% else %}<span class="muted">không có mốc nào</span>{% endfor %}</dd></div>
+  </dl>
+  {% endif %}
+</section>
+</div>
+{% endblock %}
