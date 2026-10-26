@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, useInput, useStdin, useWindowSize } from 'ink';
+import { Box, Text, useInput, useStdin, useWindowSize } from 'ink';
 import type { Session, TaskInfo } from './types.js';
 import { useHarness } from './useHarness.js';
 import { PromptInput } from './ui/input/PromptInput.js';
 import { MessageView, PermissionDialog, Spinner, StatusBar, Welcome, planTranscript } from './ui/render/index.js';
 import { ViewContext, useTicker, type ViewActions } from './ui/render/ViewContext.js';
-import { Clickable, MouseProvider, type MouseSource } from './ui/term/MouseContext.js';
+import { Clickable, MouseProvider, type DragHandlers, type MouseSource } from './ui/term/MouseContext.js';
+import type { Selection } from './ui/term/selection.js';
 import { ScrollView, WHEEL_ROWS, type ScrollApi } from './ui/term/ScrollView.js';
 import { AgentView } from './ui/fullscreen/AgentView.js';
 import { LINGER_MS, TaskPanel, visibleTasks } from './ui/fullscreen/TaskPanel.js';
@@ -14,7 +15,7 @@ const SHORTCUTS: [string, string][] = [
   ['wheel / PgUp / PgDn to scroll', 'click a tool to expand it'],
   ['ctrl+o to expand everything', 'click an agent to open it'],
   ['↓ from the prompt for tasks', 'ctrl+b to background a task'],
-  ['shift+drag to select text', ''],
+  ['drag to select and copy', 'shift+drag for native selection'],
 ];
 
 export interface AppProps {
@@ -22,10 +23,14 @@ export interface AppProps {
   allowBypass?: boolean;
   /** Mouse events, or null when mouse capture is off (--no-mouse). */
   mouse: MouseSource | null;
+  /** Drag-to-select overlay; null when it cannot run (no mouse, or Ink internals not found). */
+  selection?: Selection | null;
+  /** Put copied text on the clipboard. */
+  onCopy?(text: string): Promise<void>;
 }
 
 /** Fullscreen UI: the transcript lives in a scrollable, clickable viewport on the alternate screen. */
-export function App({ session, allowBypass = false, mouse }: AppProps) {
+export function App({ session, allowBypass = false, mouse, selection = null, onCopy }: AppProps) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const onClear = useCallback(() => setExpanded(new Set()), []);
   const { state, quit, submit, cycleMode, background } = useHarness(session, allowBypass, onClear);
@@ -40,6 +45,32 @@ export function App({ session, allowBypass = false, mouse }: AppProps) {
   const mainScroll = useRef<ScrollApi>(null);
   const detailScroll = useRef<ScrollApi>(null);
   const active = () => (view ? detailScroll : mainScroll).current;
+
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2500);
+    return () => clearTimeout(t);
+  }, [toast]);
+  const copyRef = useRef(onCopy);
+  copyRef.current = onCopy;
+  const drag = useMemo<DragHandlers | null>(
+    () =>
+      selection && {
+        drag: (a, b) => selection.set(a, b),
+        end: (a, b) => {
+          selection.set(a, b);
+          const text = selection.text();
+          if (!text) return selection.clear();
+          copyRef.current?.(text).then(
+            () => setToast(`Copied ${text.length} ${text.length === 1 ? 'character' : 'characters'} to the clipboard`),
+            () => setToast('Could not copy to the clipboard'),
+          );
+        },
+        clear: () => selection.clear(),
+      },
+    [selection],
+  );
 
   const tasksByTool = useMemo(() => new Map(tasks.filter((t) => t.toolUseId).map((t) => [t.toolUseId!, t])), [tasks]);
   // Re-render while finished tasks linger in the panel, so they drop out on time.
@@ -79,6 +110,7 @@ export function App({ session, allowBypass = false, mouse }: AppProps) {
 
   useInput(
     (input, key) => {
+      selection?.clear();
       if (key.pageUp) return active()?.page(-1);
       if (key.pageDown) return active()?.page(1);
       if (key.ctrl && input === 'o') return setAll((a) => !a);
@@ -117,7 +149,7 @@ export function App({ session, allowBypass = false, mouse }: AppProps) {
 
   return (
     <ViewContext.Provider value={actions}>
-      <MouseProvider source={mouse} onUnhandledWheel={(e) => active()?.scrollBy(e.action === 'wheelUp' ? -WHEEL_ROWS : WHEEL_ROWS)}>
+      <MouseProvider source={mouse} drag={drag} onUnhandledWheel={(e) => active()?.scrollBy(e.action === 'wheelUp' ? -WHEEL_ROWS : WHEEL_ROWS)}>
         <Box flexDirection="column" width={columns} height={rows}>
           {view ? (
             <AgentView
@@ -180,7 +212,7 @@ export function App({ session, allowBypass = false, mouse }: AppProps) {
               </Clickable>
             </Box>
             {!view && <TaskPanel tasks={panelTasks} focused={tasksFocused} selected={sel} onOpen={openTask} />}
-            <StatusBar status={status} />
+            {toast ? <Text color="green">{`✓ ${toast}`}</Text> : <StatusBar status={status} />}
           </Box>
         </Box>
       </MouseProvider>

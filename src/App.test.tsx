@@ -7,6 +7,8 @@ import type { Entry, Session, SessionState, TaskInfo } from './types.js';
 import { App } from './App.js';
 import { InlineApp } from './InlineApp.js';
 import { MouseStdin } from './ui/term/mouse.js';
+import { inkFrameReader } from './ui/term/inkFrame.js';
+import { Selection } from './ui/term/selection.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const strip = (s: string) => s.replace(/\x1b\[[0-9;?<>=]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
@@ -214,4 +216,60 @@ test('inline app still prints the transcript into scrollback on Ink 8', async (t
   stdin.write('\r');
   await sleep(100);
   assert.deepEqual(session.calls.slice(-1), ['send:hi']);
+});
+
+test('fullscreen app: drag selects and copies text; a click without a drag still expands', async (t) => {
+  const real = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
+  const stdin = new MouseStdin(real as never);
+  let frame = '';
+  const stdout = Object.assign(
+    new Writable({
+      write(c, _e, cb) {
+        frame = String(c);
+        cb();
+      },
+    }),
+    { columns: 100, rows: 40, isTTY: true },
+  );
+  const overlay: string[] = [];
+  const copied: string[] = [];
+  const read = await inkFrameReader(stdout);
+  assert.ok(read);
+  const selection = new Selection(read, (s) => overlay.push(s), () => 100);
+  const session = fakeSession();
+  const app = render(<App session={session} mouse={stdin} selection={selection} onCopy={async (text) => void copied.push(text)} />, {
+    stdin: stdin as never,
+    stdout: stdout as never,
+    debug: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+    onRender: () => selection.paint(),
+  });
+  t.after(() => app.unmount());
+  await sleep(300);
+  const lines = () => strip(frame).split('\n');
+  const r0 = lines().findIndex((l) => l.includes('line 0'));
+  const c0 = lines()[r0]!.indexOf('line 0');
+  const send = async (s: string) => {
+    real.write(s);
+    await sleep(120);
+  };
+
+  // Press on "line 0", drag to the end of "line 1", release.
+  await send(`\x1b[<0;${c0 + 1};${r0 + 1}M`);
+  await send(`\x1b[<32;${c0 + 4};${r0 + 2}M`);
+  await send(`\x1b[<32;${c0 + 6};${r0 + 2}M`);
+  assert.ok(overlay.some((o) => o.includes('\x1b[7m')), 'selection is highlighted while dragging');
+  await send(`\x1b[<0;${c0 + 6};${r0 + 2}m`);
+  assert.deepEqual(copied, ['line 0\n     line 1']);
+  assert.match(strip(frame), /✓ Copied 18 characters to the clipboard/);
+  assert.doesNotMatch(strip(frame), /line 29/, 'the drag did not count as a click on the tool');
+
+  // A key press clears the selection; a plain click still expands the tool.
+  const before = overlay.length;
+  await send('a');
+  assert.ok(overlay.length > before && !overlay.at(-1)!.includes('\x1b[7m'));
+  await send(`\x1b[<0;${c0 + 1};${r0 + 1}M\x1b[<0;${c0 + 1};${r0 + 1}m`);
+  assert.match(strip(frame), /line 29/);
+  assert.equal(copied.length, 1);
 });

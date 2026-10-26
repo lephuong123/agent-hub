@@ -7,6 +7,9 @@ import { HarnessSession } from './core/session.js';
 import { App } from './App.js';
 import { InlineApp } from './InlineApp.js';
 import { enableMouse, MouseStdin } from './ui/term/mouse.js';
+import { inkFrameReader } from './ui/term/inkFrame.js';
+import { Selection } from './ui/term/selection.js';
+import { copyToClipboard } from './ui/term/clipboard.js';
 
 const HELP = `cfharness — Claude Code-style terminal UI on the Claude Agent SDK
 
@@ -72,12 +75,20 @@ if (values.inline || !tty) {
 } else {
   const mouseStdin = values.mouse ? new MouseStdin(process.stdin) : null;
   const disableMouse = mouseStdin ? enableMouse(process.stdout) : () => {};
-  const app = render(<App session={session} allowBypass={allowBypass} mouse={mouseStdin} />, {
-    exitOnCtrlC: false,
-    alternateScreen: true,
-    incrementalRendering: true,
-    ...(mouseStdin ? { stdin: mouseStdin } : {}),
-  });
+  const write = (s: string) => void process.stdout.write(s);
+  const readFrame = mouseStdin ? await inkFrameReader(process.stdout) : null;
+  const selection = readFrame ? new Selection(readFrame, write, () => process.stdout.columns) : null;
+  const app = render(
+    <App session={session} allowBypass={allowBypass} mouse={mouseStdin} selection={selection} onCopy={(t) => copyToClipboard(t, write)} />,
+    {
+      exitOnCtrlC: false,
+      alternateScreen: true,
+      incrementalRendering: true,
+      // Ink may have drawn over the selection overlay; put it back.
+      onRender: () => selection?.paint(),
+      ...(mouseStdin ? { stdin: mouseStdin } : {}),
+    },
+  );
   try {
     await app.waitUntilExit();
   } finally {

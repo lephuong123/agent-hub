@@ -81,38 +81,75 @@ export interface MouseSource {
   onMouse(listener: (e: TermMouseEvent) => void): () => void;
 }
 
+export interface Cell {
+  x: number;
+  y: number;
+}
+
+/** Drag-to-select callbacks. A drag replaces the click that its press would otherwise become. */
+export interface DragHandlers {
+  drag(anchor: Cell, focus: Cell): void;
+  end(anchor: Cell, focus: Cell): void;
+  clear(): void;
+}
+
 /**
  * Routes mouse events from `source` to the innermost registered target under the pointer.
- * A click is a press and release on the same target. Wheel events bubble outwards until one is
- * handled, then fall back to `onUnhandledWheel`.
+ * A click is a press and release on the same target without dragging; a drag goes to `drag`
+ * (text selection) instead. Wheel events bubble outwards until one is handled, then fall back
+ * to `onUnhandledWheel`.
  */
 export function MouseProvider({
   source,
   onUnhandledWheel,
+  drag,
   children,
 }: {
   source: MouseSource | null;
   onUnhandledWheel?: (e: TermMouseEvent) => void;
+  drag?: DragHandlers | null;
   children: ReactNode;
 }) {
   const targets = useRef(new Set<Target>());
   const fallback = useRef(onUnhandledWheel);
   fallback.current = onUnhandledWheel;
+  const dragRef = useRef(drag);
+  dragRef.current = drag;
 
   useEffect(() => {
     if (!source) return;
     let pressed: Target | undefined;
+    let anchor: Cell | null = null;
+    let dragging = false;
     return source.onMouse((e) => {
+      const at = { x: e.x, y: e.y };
       if (e.action === 'wheelUp' || e.action === 'wheelDown') {
+        dragRef.current?.clear();
         for (const t of hits(targets.current, e.x, e.y)) if (t.handlers.current.onWheel?.(e)) return;
         fallback.current?.(e);
         return;
       }
       if (e.button !== 'left') return;
-      if (e.action === 'press') pressed = hits(targets.current, e.x, e.y).find((t) => t.handlers.current.onClick);
-      else if (e.action === 'release') {
+      if (e.action === 'press') {
+        pressed = hits(targets.current, e.x, e.y).find((t) => t.handlers.current.onClick);
+        anchor = at;
+        dragging = false;
+        dragRef.current?.clear();
+      } else if (e.action === 'drag') {
+        if (!anchor || !dragRef.current) return;
+        if (!dragging && anchor.x === at.x && anchor.y === at.y) return;
+        dragging = true;
+        dragRef.current.drag(anchor, at);
+      } else if (e.action === 'release') {
         const target = pressed;
+        const from = anchor;
         pressed = undefined;
+        anchor = null;
+        if (dragging && from) {
+          dragging = false;
+          dragRef.current?.end(from, at);
+          return;
+        }
         if (target && hits(targets.current, e.x, e.y).includes(target)) target.handlers.current.onClick?.(e);
       }
     });
