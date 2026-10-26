@@ -38,6 +38,14 @@ def _allow_pytest_tmp_workspaces(tmp_path_factory):
             pass
 
 
+@pytest.fixture(autouse=True)
+def _plain_cli_output(monkeypatch):
+    """CLI in văn bản thuần khi không phải TTY; FORCE_COLOR của CI/terminal ngoài sẽ bật chế độ rich (ui/theme.py)
+    và làm lệch các assert trên chuỗi thuần — test nào cần chế độ có kiểu tự đặt lại (tests/test_cli_design.py)."""
+    for k in ("FORCE_COLOR", "CFHARNESS_PLAIN", "CFHARNESS_ASCII"):
+        monkeypatch.delenv(k, raising=False)
+
+
 @pytest.fixture
 def hub_home(tmp_path, monkeypatch) -> HubPaths:
     home = tmp_path / "hub"

@@ -17,12 +17,17 @@ import time
 from pathlib import Path
 from typing import Any
 
+from rich.text import Text
+
 from . import __version__
 from .config import parse_value
 from .errors import exit_code_for
 from .oscompat import exec_argv, no_window_kwargs
 from .paths import HubPaths
 from .rpc import DaemonUnavailable, RpcClient, RpcError
+from .termsafe import clean
+from .ui import theme as th
+from .ui import views as V
 
 EXIT_OK, EXIT_USER, EXIT_SYS, EXIT_BLOCKED = 0, 1, 2, 3
 
@@ -53,9 +58,40 @@ class Ctx:
     def call(self, method: str, params: dict[str, Any] | None = None, **kw: Any) -> Any:
         return self.client().call(method, params or {}, **kw)
 
-    def out(self, data: Any, text: str | None = None) -> None:
+    # ---------------------------------------------------------------- giao diện (ui/theme.py, docs/dev-notes/cli-design.md)
+    @property
+    def mode(self) -> Any:
+        if not hasattr(self, "_mode"):
+            from .ui.theme import detect
+
+            self._mode = detect(sys.stdout)
+        return self._mode
+
+    @property
+    def styled(self) -> bool:
+        """TTY (hoặc FORCE_COLOR) và không --json → in bằng rich; còn lại in chuỗi văn bản cũ (ổn định cho pipe/test)."""
+        return not self.json and self.mode.styled
+
+    def console(self) -> Any:
+        if not hasattr(self, "_console"):
+            from .ui.theme import console
+
+            self._console = console(sys.stdout, self.mode)
+        return self._console
+
+    @property
+    def width(self) -> int:
+        return int(self.console().width)
+
+    def show(self, renderable: Any) -> None:
+        self.console().print(renderable, overflow="fold")  # đường dẫn dài gập theo ký tự, không xuống dòng giữa "cwd" và giá trị
+
+    def out(self, data: Any, text: str | None = None, view: Any = None) -> None:
+        """`--json` → JSON (byte không đổi) · TTY + `view` → màn rich (`view` là renderable hoặc hàm không đối số) · còn lại → `text`."""
         if self.json:
             print(json.dumps(data, ensure_ascii=False, indent=2, default=str))
+        elif view is not None and self.styled:
+            self.show(view() if callable(view) else view)
         elif text is not None:
             print(text)
 
@@ -100,7 +136,8 @@ def cmd_daemon(ctx: Ctx) -> int:
     if a.action == "start":
         try:
             st = client.call("hub.ping")
-            ctx.out({"running": True, "pid": st.get("pid")}, f"daemon đã chạy (pid {st.get('pid')})")
+            ctx.out({"running": True, "pid": st.get("pid")}, f"daemon đã chạy (pid {st.get('pid')})",
+                    lambda: th.success(f"daemon đã chạy sẵn (pid {st.get('pid')}) — xem: `cfharness daemon status`", ctx.mode))
             return EXIT_OK
         except DaemonUnavailable:
             pass
@@ -112,13 +149,14 @@ def cmd_daemon(ctx: Ctx) -> int:
         from .daemon import spawn_background
 
         pid = spawn_background(ctx.paths)
-        ctx.out({"running": True, "pid": pid, "socket": str(ctx.paths.socket)}, f"daemon đã khởi động (pid {pid}, socket {ctx.paths.socket})")
+        ctx.out({"running": True, "pid": pid, "socket": str(ctx.paths.socket)}, f"daemon đã khởi động (pid {pid}, socket {ctx.paths.socket})",
+                lambda: V.daemon_started(pid, str(ctx.paths.socket), ctx.mode))
         return EXIT_OK
     if a.action == "stop":
         try:
             client.call("hub.shutdown")
         except DaemonUnavailable:
-            ctx.out({"running": False}, "daemon không chạy")
+            ctx.out({"running": False}, "daemon không chạy", lambda: th.empty("daemon không chạy — không có gì để dừng"))
             return EXIT_OK
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline and ctx.paths.socket.exists():
@@ -128,7 +166,7 @@ def cmd_daemon(ctx: Ctx) -> int:
                 os.kill(int(ctx.paths.pidfile.read_text()), signal.SIGTERM)  # Windows: SIGTERM = TerminateProcess
             except (OSError, ValueError):
                 pass
-        ctx.out({"running": False}, "daemon đã dừng")
+        ctx.out({"running": False}, "daemon đã dừng", lambda: th.success("daemon đã dừng", ctx.mode))
         return EXIT_OK
     if a.action == "logs":
         return _daemon_logs(ctx)
@@ -138,7 +176,8 @@ def cmd_daemon(ctx: Ctx) -> int:
         except DaemonUnavailable:
             auto = _autostart_status(ctx)
             ctx.out({"daemon_running": False, "home": str(ctx.paths.home), "autostart": auto},
-                    f"daemon không chạy (HUB_HOME={ctx.paths.home})" + (f"\n{auto['text']}" if auto else ""))
+                    f"daemon không chạy (HUB_HOME={ctx.paths.home})" + (f"\n{auto['text']}" if auto else ""),
+                    lambda: V.daemon_down(str(ctx.paths.home), auto, ctx.mode))
             return EXIT_USER
         es = st["estop"]
         text = (
@@ -161,7 +200,7 @@ def cmd_daemon(ctx: Ctx) -> int:
         if auto:
             st["autostart"] = auto
             text += f"\n{auto['text']}"
-        ctx.out({**st, "daemon_running": True}, text)
+        ctx.out({**st, "daemon_running": True}, text, lambda: V.daemon_status(st, ctx.mode, width=ctx.width))
         return EXIT_OK
     return EXIT_USER
 
@@ -342,7 +381,7 @@ def cmd_doctor(ctx: Ctx) -> int:
             pass
     bad = [c for c in checks if c["level"] == "error"]
     text = "\n".join(f"{'✓' if c['ok'] else ('!' if c['level'] == 'warning' else '✗')} {c['check']}: {c['detail']}" for c in checks)
-    ctx.out({"ok": not bad, "checks": checks}, text)
+    ctx.out({"ok": not bad, "checks": checks}, text, lambda: V.doctor(checks, ctx.mode, home=str(ctx.paths.home), width=ctx.width))
     return EXIT_OK if not bad else EXIT_SYS
 
 
@@ -423,10 +462,10 @@ def cmd_agent(ctx: Ctx) -> int:
         if getattr(a, "template", None):  # M2 (FR-AG-07): cờ của lệnh ghi đè giá trị template
             payload.pop("id")
             ag = ctx.call("agent.create_from_template", {"id": a.id, "template": a.template, "overrides": payload, "soul": _read_soul(a)})
-            ctx.out(ag, f"đã tạo agent {ag['id']} từ template {a.template} (home {ag['home_path']})")
+            ctx.out(ag, f"đã tạo agent {ag['id']} từ template {a.template} (home {ag['home_path']})", lambda: V.agent_created(ag, ctx.mode, template=a.template))
             return EXIT_OK
         ag = ctx.call("agent.create", {"config": payload, "soul": _read_soul(a)})
-        ctx.out(ag, f"đã tạo agent {ag['id']} (home {ag['home_path']})")
+        ctx.out(ag, f"đã tạo agent {ag['id']} (home {ag['home_path']})", lambda: V.agent_created(ag, ctx.mode))
     elif act == "list":
         rows = ctx.call("agent.list", {"archived": a.archived})
         if getattr(a, "status", None):  # FR-AG-02: lọc theo trạng thái
@@ -442,13 +481,14 @@ def cmd_agent(ctx: Ctx) -> int:
             )
             if rows
             else "(chưa có agent)",
+            lambda: V.agent_list(rows, ctx.mode, width=ctx.width),
         )
     elif act == "show":
         ag = ctx.call("agent.get", {"id": a.id})
         if a.soul:
-            ctx.out(ag, ag.get("soul") or "")
+            ctx.out(ag, ag.get("soul") or "", lambda: th.data(ag.get("soul") or ""))
         else:
-            ctx.out(ag, _agent_text(ag))
+            ctx.out(ag, _agent_text(ag), lambda: V.agent_show(ag, ctx.mode, width=ctx.width))
     elif act == "edit":
         changes = _agent_payload(a, creating=False)
         soul = _read_soul(a)
@@ -456,22 +496,24 @@ def cmd_agent(ctx: Ctx) -> int:
             eprint("không có thay đổi nào (dùng --model, --role, --set khoá=giá_trị, --soul-file …)")
             return EXIT_USER
         ag = ctx.call("agent.update", {"id": a.id, "changes": changes, "soul": soul})
-        ctx.out(ag, f"đã sửa agent {ag['id']} → revision {ag['config_revision']}")
+        ctx.out(ag, f"đã sửa agent {ag['id']} → revision {ag['config_revision']}",
+                lambda: th.success(f"đã sửa agent {ag['id']} → revision {ag['config_revision']} · lịch sử: `cfharness agent revisions {ag['id']}`", ctx.mode))
     elif act in ("rm", "archive"):
         ag = ctx.call("agent.delete" if act == "rm" else "agent.archive", {"id": a.id, "detach_teams": bool(a.detach_teams)})
         det = ag.get("detached_teams") or []
         extra = f"; đã gỡ khỏi team: {', '.join(t['team_id'] for t in det)}" if det else ""
-        ctx.out(ag, f"đã xoá mềm agent {a.id} → {ag.get('trash_path')}{extra} (khôi phục: cfharness agent restore {a.id})")
+        ctx.out(ag, f"đã xoá mềm agent {a.id} → {ag.get('trash_path')}{extra} (khôi phục: cfharness agent restore {a.id})",
+                lambda: th.success(f"đã xoá mềm agent {a.id}{extra} · khôi phục: `cfharness agent restore {a.id}`", ctx.mode))
     elif act == "revert":
         ag = ctx.call("agent.revert", {"id": a.id, "to": a.to})
         note = " (revision đích không lưu SOUL — SOUL giữ nguyên)" if ag.get("soul_in_snapshot") is False else ""
         ctx.out(ag, f"agent {a.id}: revert về nội dung revision {a.to} → revision mới {ag['config_revision']}{note}")
     elif act == "restore":
         ag = ctx.call("agent.restore", {"id": a.id})
-        ctx.out(ag, f"đã khôi phục agent {a.id}")
+        ctx.out(ag, f"đã khôi phục agent {a.id}", lambda: th.success(f"đã khôi phục agent {a.id}", ctx.mode))
     elif act in ("pause", "resume"):
         ag = ctx.call(f"agent.{act}", {"id": a.id})
-        ctx.out(ag, f"agent {a.id}: {ag['status']}")
+        ctx.out(ag, f"agent {a.id}: {ag['status']}", lambda: Text.assemble(Text(f"agent {a.id}: ", style=th.HEAD), th.badge("agent", ag["status"], ctx.mode)))
     elif act == "revisions":
         revs = ctx.call("agent.revisions", {"id": a.id})
         ctx.out(revs, "\n".join(f"rev {r['revision']}  {r['actor']}  {r['created_at']}  model={r['config_snapshot'].get('model')}" for r in revs))
@@ -538,10 +580,14 @@ def follow_run(ctx: Ctx, run_id: str, since_seq: int | None, epoch: str | None) 
             continue
         if ctx.json:
             print(json.dumps(msg, ensure_ascii=False), flush=True)
+        elif ctx.styled:
+            row = V.event_line(msg, state, ctx.mode)
+            if row is not None:
+                ctx.show(row)
         else:
             line = render_event(msg, state)
             if line:
-                print(line, flush=True)
+                print(clean(line), flush=True)  # chữ của agent là DỮ LIỆU: bỏ ANSI/OSC/bidi kể cả khi pipe
         if msg["type"] in ("run.completed", "run.failed", "run.cancelled", "run.interrupted") and msg.get("source") == "hub":
             last = msg
     return last
@@ -567,14 +613,18 @@ def cmd_run(ctx: Ctx) -> int:
     if run is None:
         run = ctx.call("run.start", params)
     if not a.follow:
-        ctx.out(run, run["id"])
+        ctx.out(run, run["id"], lambda: V.run_queued(run, ctx.mode))
         return EXIT_OK
-    if not ctx.json:
+    if ctx.styled:
+        ctx.show(V.run_started(run, ctx.mode))
+    elif not ctx.json:
         eprint(f"run {run['id']} (session {run['session_id']})")
     follow_run(ctx, run["id"], run.get("seq_before"), run.get("epoch"))
     final = ctx.call("run.get", {"id": run["id"]})
     if ctx.json:
         print(json.dumps({"run": final}, ensure_ascii=False, default=str))
+    elif ctx.styled:
+        ctx.show(th.hint(f"chi tiết: `cfharness runs show {final.get('id')}`", ctx.mode))
     oc = final.get("outcome")
     return EXIT_OK if oc == "completed" else (EXIT_BLOCKED if oc == "budget_exceeded" else EXIT_USER)
 
@@ -591,11 +641,14 @@ def cmd_runs(ctx: Ctx) -> int:
             )
             if rows
             else "(chưa có run)",
+            lambda: V.runs_list(rows, ctx.mode, width=ctx.width),
         )
     elif a.action == "show":
         r = ctx.call("run.get", {"id": a.id, "events": a.events})
         if ctx.json:
             ctx.out(r)
+        elif ctx.styled:
+            ctx.show(V.run_show(r, ctx.mode, width=ctx.width))
         else:
             keys = ["id", "agent_id", "status", "outcome", "session_id", "model", "cli_version", "agent_config_revision", "cwd", "max_budget_usd", "cost_usd", "cost_basis", "duration_ms", "num_turns", "queued_at", "started_at", "ended_at", "pid", "system_prompt_hash", "raw_log_path", "stderr_log_path", "isolation_violations", "error", "summary"]
             print("\n".join(f"{k:>22}: {r.get(k)}" for k in keys))
@@ -605,7 +658,7 @@ def cmd_runs(ctx: Ctx) -> int:
                     print(f"  #{e['seq']:<5} {e['ts']}  {e['type']:<20} {json.dumps(e['payload'], ensure_ascii=False)[:120]}")
     elif a.action == "stop":
         r = ctx.call("run.stop", {"id": a.id})
-        ctx.out(r, f"đã gửi lệnh dừng run {r['id']}")
+        ctx.out(r, f"đã gửi lệnh dừng run {r['id']}", lambda: th.success(f"đã gửi lệnh dừng run {r['id']}", ctx.mode))
     elif a.action == "logs":
         r = ctx.call("run.logs", {"id": a.id})
         ctx.out(r, (r.get("stderr") or "(stderr rỗng)") + (f"\nlỗi: {r['error']}" if r.get("error") else "") + f"\nstdout thô: {r.get('raw_log_path')}")
@@ -622,7 +675,8 @@ def cmd_estop(ctx: Ctx) -> int:
         st = ctx.call("estop.get")
     else:
         st = ctx.call("estop.set", {"on": a.action == "on", "reason": getattr(a, "reason", None), "stop_running": getattr(a, "stop_running", False), "team": getattr(a, "team", None)})
-    ctx.out(st, f"ESTOP: {'BẬT' if st.get('on') else 'tắt'}" + (f" — {st.get('reason')}" if st.get("reason") else "") + (" (đã gửi dừng mọi run)" if st.get("stop_running") else ""))
+    ctx.out(st, f"ESTOP: {'BẬT' if st.get('on') else 'tắt'}" + (f" — {st.get('reason')}" if st.get("reason") else "") + (" (đã gửi dừng mọi run)" if st.get("stop_running") else ""),
+            lambda: V.estop(st, ctx.mode, team=getattr(a, "team", None)))
     return EXIT_OK
 
 
@@ -630,13 +684,18 @@ def cmd_config(ctx: Ctx) -> int:
     a = ctx.args
     if a.action == "get":
         v = ctx.call("config.get", {"key": a.key})
-        if ctx.json or isinstance(v, (dict, list)):
+        if ctx.json:
+            print(json.dumps(v, ensure_ascii=False, indent=2))
+        elif ctx.styled:
+            ctx.show(V.config_value(a.key, v, ctx.mode, width=ctx.width))
+        elif isinstance(v, (dict, list)):
             print(json.dumps(v, ensure_ascii=False, indent=2))
         else:
             print(v)
     else:
         r = ctx.call("config.set", {"key": a.key, "value": parse_value(a.value)})
-        ctx.out(r, f"{a.key} = {json.dumps(r[a.key], ensure_ascii=False)}")
+        ctx.out(r, f"{a.key} = {json.dumps(r[a.key], ensure_ascii=False)}",
+                lambda: V.config_set(a.key, r[a.key], ctx.mode))
     return EXIT_OK
 
 
@@ -836,7 +895,30 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _top_commands(parser: argparse.ArgumentParser) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for act in parser._actions:  # noqa: SLF001 - argparse không có API công khai
+        if isinstance(act, argparse._SubParsersAction):  # noqa: SLF001
+            out += [(ch.dest, ch.help or "") for ch in act._choices_actions if ch.help != argparse.SUPPRESS]  # noqa: SLF001
+    return out
+
+
+def report_error(message: str, *, code: int | None = None, data: Any = None, label: str = "lỗi", fix: str | None = None) -> None:
+    """Lỗi ra stderr. stderr là TTY → khối có màu + `Cách sửa`; không thì giữ đúng dòng cũ `lỗi: …` (script/test grep)."""
+    fields = (data or {}).get("fields") if isinstance(data, dict) else None
+    mode = th.detect(sys.stderr)
+    if not mode.styled:
+        eprint(f"{label}: {message}")
+        for f in fields or []:
+            eprint(f"  - {f['field']}: {f['error']}")
+        return
+    hint = fix if fix is not None else th.fix_for(code, message, data)
+    details = [(str(f.get("field")), str(f.get("error"))) for f in fields or [] if isinstance(f, dict)]
+    th.console(sys.stderr, mode).print(th.error(message, mode, fix=hint, details=details, label=label[:1].upper() + label[1:]))
+
+
 def main(argv: list[str] | None = None) -> int:
+    th.remember_encodings()  # code page gốc (trước khi ép UTF-8) quyết định ký hiệu unicode hay ASCII
     for stream in (sys.stdout, sys.stderr):  # Windows: console mặc định cp1252 không in được tiếng Việt
         if (getattr(stream, "encoding", "") or "").lower().replace("-", "") != "utf8" and hasattr(stream, "reconfigure"):
             try:
@@ -854,6 +936,16 @@ def main(argv: list[str] | None = None) -> int:
     from .cli_surface import rewrite_argv as _rewrite_surface
 
     raw = _rewrite_surface(sys.argv[1:] if argv is None else list(argv), parser)
+    if not raw or raw in (["-h"], ["--help"]):  # tổng quan thân thiện thay cho lỗi "thiếu lệnh" / danh sách argparse dài
+        mode = th.detect(sys.stdout)
+        if mode.styled:
+            con = th.console(sys.stdout, mode)
+            con.print(V.overview(__version__, mode, commands=_top_commands(parser) if raw else None, width=con.width))
+        elif raw:
+            parser.print_help()
+        else:
+            print(V.plain_overview(__version__))
+        return EXIT_OK
     args = parser.parse_args(_rewrite_m5b(_rewrite_m4b(_rewrite_m3(rewrite_argv(raw)))))
     ctx = Ctx(args)
     if getattr(args, "cmd", None) != "home":
@@ -868,21 +960,18 @@ def main(argv: list[str] | None = None) -> int:
         if ctx.json:
             print(json.dumps({"error": {"code": e.code, "message": e.message, "data": e.data}}, ensure_ascii=False, default=str))
         else:
-            eprint(f"lỗi: {e.message}")
-            fields = (e.data or {}).get("fields") if isinstance(e.data, dict) else None
-            for f in fields or []:
-                eprint(f"  - {f['field']}: {f['error']}")
+            report_error(e.message, code=e.code, data=e.data)
         return exit_code_for(e.code)
     except DaemonUnavailable as e:
-        eprint(f"lỗi: {e}")
+        report_error(str(e), fix=th.DAEMON_FIX)
         return EXIT_SYS
     except (ValueError, FileNotFoundError) as e:
-        eprint(f"lỗi: {e}")
+        report_error(str(e))
         return EXIT_USER
     except KeyboardInterrupt:
         return 130
     except RuntimeError as e:
-        eprint(f"lỗi hệ thống: {e}")
+        report_error(str(e), label="lỗi hệ thống", fix="xem log daemon: `cfharness daemon logs -n 50`")
         return EXIT_SYS
 
 

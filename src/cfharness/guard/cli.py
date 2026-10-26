@@ -38,9 +38,12 @@ def _ago(row: dict[str, Any]) -> str:
 def cmd_approvals(ctx: Any) -> int:
     from ..cli import _table
 
+    from ..ui import views
+
     rows = ctx.call("approval.list", {"status": "all" if ctx.args.all else "pending", "limit": ctx.args.limit})
+    view = lambda: views.approvals(rows, ctx.mode, width=ctx.width, ago=_ago, show_all=bool(ctx.args.all))  # noqa: E731 - màn TTY (ui/views.py)
     if not rows:
-        ctx.out(rows, "(không có yêu cầu phê duyệt nào đang chờ)" if not ctx.args.all else "(chưa có approval)")
+        ctx.out(rows, "(không có yêu cầu phê duyệt nào đang chờ)" if not ctx.args.all else "(chưa có approval)", view)
         return 0
     ctx.out(
         rows,
@@ -49,6 +52,7 @@ def cmd_approvals(ctx: Any) -> int:
             ["ID", "STATUS", "AGENT", "RUN", "CHỜ", "LUẬT", "THAO TÁC"],
         )
         + "\n\nduyệt: cfharness approve <id>   từ chối: cfharness deny <id> --note '…'",
+        view,
     )
     return 0
 
