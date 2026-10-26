@@ -59,7 +59,7 @@
     <label>Mô tả <input name="description" value="{{ v.get('description', (entry.description or '')[:300]) }}"></label>
     <label class="check"><input type="checkbox" name="trust" value="trusted"{{ ' checked' if v.get('trust') == 'trusted' }}> Tin cậy (tool ghi chạy không cần duyệt; tool xoá vẫn luôn cần duyệt) — mặc định: cần duyệt</label>
     <label class="check"><input type="checkbox" name="overwrite_secrets" value="1"> Ghi đè secret đã có cùng tên</label>
-    <div class="row end gap"><a class="btn ghost" href="/mcp/browse">Huỷ</a><button class="btn primary" type="submit">Cài &amp; kiểm tra</button></div>
+    <div class="row end gap"><a class="btn ghost" href="/mcp/browse">Huỷ</a><button class="btn primary" type="submit">{{ 'Cài' if opt.needs_oauth else 'Cài &amp; kiểm tra'|safe }}</button></div>
   </form>
 </section>
 {% endif %}

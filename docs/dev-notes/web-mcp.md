@@ -68,5 +68,6 @@ Hệ quả: server tên `browse` không mở được trang chi tiết (vẫn qu
   (web `/mcp/oauth/callback`, CLI `http://127.0.0.1:33418/callback`) và link tạo app (`setup_url`). GitHub giữ cách PAT (header).
 - Mục tuyển chọn THẮNG mục registry cùng tên (`catalog.get` không gọi mạng); tìm kiếm trang đầu đặt mục tuyển chọn khớp lên trước.
 - `suggest_name`: đoạn cuối chung chung (`mcp`, `mcp-server`, …) → lấy tên tổ chức trong namespace (`com.notion/mcp` → `notion`).
-- Kiểm lại định kỳ: script dò trong lịch sử phiên làm việc; URL/hành vi OAuth của nhà cung cấp có thể đổi — `test_curated_list_is_consistent`
-  chỉ kiểm dữ liệu, không gọi mạng.
+- URL/hành vi OAuth của nhà cung cấp có thể đổi: khi sửa danh sách, kiểm lại từng remote (POST `initialize` không token → mã HTTP,
+  `WWW-Authenticate`, `/.well-known/oauth-protected-resource`, metadata máy chủ cấp quyền có `registration_endpoint` hay không).
+  `test_curated_list_is_consistent` chỉ kiểm dữ liệu trong gói, không gọi mạng.

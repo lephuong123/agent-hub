@@ -353,8 +353,14 @@ async def test_web_connect_and_public_callback_flow(hub_home, fake):
         assert r.status_code == 200
         url = re.search(r'http-equiv="refresh" content="0;url=([^"]+)"', r.text).group(1).replace("&amp;", "&")
         assert url.startswith(fake.issuer + "/authorize?")
-        assert parse_qs(urlsplit(url).query)["redirect_uri"] == [WEB_BASE + "/mcp/oauth/callback"]
+        # redirect loopback IP (RFC 8252): nhiều nhà cung cấp (vd Notion) từ chối `cfharness.localhost`
+        assert parse_qs(urlsplit(url).query)["redirect_uri"] == [f"http://127.0.0.1:{WEB_PORT}/mcp/oauth/callback"]
         cb = await asyncio.to_thread(authorize, url)
+        # nhà cung cấp đưa trình duyệt về 127.0.0.1 → 303 sang host web riêng, giữ nguyên query (không đặt cookie trên 127.0.0.1)
+        hop = await anon.get("/mcp/oauth/callback", params={"state": cb["state"], "code": cb["code"]}, headers={"host": f"127.0.0.1:{WEB_PORT}"})
+        assert hop.status_code == 303 and hop.headers["location"].startswith(WEB_BASE + "/mcp/oauth/callback?")
+        assert parse_qs(urlsplit(hop.headers["location"]).query) == {"state": [cb["state"]], "code": [cb["code"]]}
+        assert "set-cookie" not in hop.headers
         # callback = điều hướng cấp cao từ trang nhà cung cấp: cookie SameSite=Strict KHÔNG được gửi → route công khai
         bad = await anon.get("/mcp/oauth/callback", params={"state": "sai", "code": cb["code"]})
         assert bad.status_code == 400 and "không hợp lệ" in bad.text
