@@ -775,3 +775,34 @@ async def test_always_web_domain_rule_text_and_ineligible_forged_post_rejected(h
     # thiếu khoá phiên/CSRF → 403 như mọi POST
     r = await env.client.post("/do/approve_always", data={"csrf": env.csrf, "id": web["id"], "confirm": "yes", "confirm2": "yes"}, headers={"Origin": BASE})
     assert r.status_code == 403 and env.hub.approvals.get(web["id"])["status"] == "open"
+
+
+async def test_slack_connect_wizard(env, monkeypatch):
+    await env.login()
+    sent: list[str] = []
+
+    async def fake_send(text):
+        sent.append(text)
+        return {"sent": True, "kind": "webhook"}
+
+    monkeypatch.setattr(env.hub.notifier, "send_now", fake_send)  # không gọi mạng thật
+    r = await env.client.get("/settings")
+    assert "manifest_json=" in r.text and "Kết nối Slack" in r.text
+    url = "https://hooks.slack.com/services/T000/B000/abcSECRETxyz"
+    # URL sai dạng → từ chối, không lưu
+    r = await env.post("/do/slack_connect", {"webhook": "https://evil.example/hook", "confirm": "yes", "next": "/settings#slack"})
+    assert r.status_code == 303 and "SLACK_WEBHOOK_URL" not in [x["name"] for x in env.hub.secrets.list()]
+    # thiếu xác nhận → trang xác nhận KHÔNG chứa URL
+    r = await env.post("/do/slack_connect", {"webhook": url})
+    assert r.status_code == 200 and "GHI ĐÈ" in r.text and "abcSECRETxyz" not in r.text
+    assert "SLACK_WEBHOOK_URL" not in [x["name"] for x in env.hub.secrets.list()]
+    # tắt Slack trước → kết nối bật lại + gửi thử
+    env.hub.config.set("notify.slack.enabled", False)
+    r = await env.post("/do/slack_connect", {"webhook": url, "confirm": "yes", "next": "/settings#slack"})
+    assert r.status_code == 303
+    assert "SLACK_WEBHOOK_URL" in [x["name"] for x in env.hub.secrets.list()]
+    assert env.hub.config.get("notify.slack.enabled") is True and sent
+    r = await env.client.get("/settings")
+    assert "đã kết nối" in r.text and "abcSECRETxyz" not in r.text
+    assert audit_rows(env, "secret.set")[-1]["channel"] == "web"
+    assert "abcSECRETxyz" not in json.dumps([dict(x) for x in env.hub.store.conn.execute("SELECT * FROM audit_log").fetchall()], default=str)

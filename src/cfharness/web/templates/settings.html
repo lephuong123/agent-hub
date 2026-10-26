@@ -30,7 +30,7 @@
 <section class="card">
   <h2>{{ m.icon('chat') }} Thông báo</h2>
   <dl class="kv one">
-    <div><dt>Slack</dt><dd>{% if slack %}<span class="pill ok">đã cấu hình</span>{% else %}<span class="pill muted">chưa</span> <span class="small muted">đặt secret <code>SLACK_WEBHOOK_URL</code> bên dưới</span>{% endif %}</dd></div>
+    <div><dt>Slack</dt><dd>{% if slack %}<span class="pill ok">đã cấu hình</span>{% else %}<span class="pill muted">chưa</span> <span class="small muted"><a href="#slack">kết nối Slack</a></span>{% endif %}</dd></div>
     <div><dt>Telegram</dt><dd>{% if telegram %}<span class="pill ok">đã cấu hình</span> <span class="small muted">{{ tg_chats|length }} chat được phép</span>{% else %}<span class="pill muted">chưa</span> <span class="small muted">chạy <code>cfharness notify telegram setup</code></span>{% endif %}</dd></div>
   </dl>
   {{ m.act("notify_test", "Gửi thông báo thử", {}, "btn sm") }}
@@ -49,6 +49,23 @@
   </form>
 </section>
 </div>
+<section class="card" id="slack">
+  <h2>{{ m.icon('chat') }} Kết nối Slack</h2>
+  {% if slack_webhook %}<p><span class="pill ok">{{ m.icon('check') }}đã kết nối</span> <span class="muted small">thông báo đi qua secret <code>SLACK_WEBHOOK_URL</code>. Dán URL mới bên dưới để đổi kênh.</span></p>{% endif %}
+  <p class="muted small">Thông báo một chiều (chờ duyệt, guard chặn, run lỗi, digest hằng ngày). App Slack là của riêng bạn, không chia sẻ token.</p>
+  <ol class="small">
+    <li><a class="btn sm" href="{{ slack_create_url }}" target="_blank" rel="noopener noreferrer">Tạo app Slack (điền sẵn)</a> → chọn workspace → <b>Create</b>.</li>
+    <li><b>Install to Workspace</b> → chọn kênh (hoặc DM cho chính bạn) → <b>Allow</b>. Workspace bắt admin duyệt thì chờ duyệt xong mới cài được.</li>
+    <li>Mở <b>Incoming Webhooks</b> trong trang app, copy URL <code>hooks.slack.com/services/…</code> rồi dán vào đây:</li>
+  </ol>
+  <form method="post" action="/do/slack_connect" class="form" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#slack">
+    <label>Webhook URL <input name="webhook" type="password" required placeholder="hooks.slack.com/services/…" autocomplete="off"></label>
+    <label class="check small"><input type="checkbox" name="confirm" value="yes" required> Lưu vào secret <code>SLACK_WEBHOOK_URL</code> (ghi đè URL cũ nếu có)</label>
+    <div class="row end"><button class="btn" type="submit">Kết nối + gửi thử</button></div>
+  </form>
+  {% if slack_webhook %}{{ m.act("secret_rm", "Ngắt kết nối", {"name": "SLACK_WEBHOOK_URL"}, "btn sm ghost", confirm="Ngắt Slack (xoá secret SLACK_WEBHOOK_URL)?", next="/settings#slack") }}{% endif %}
+</section>
 <section class="card">
   <h2>{{ m.icon('info') }} Hệ thống</h2>
   <dl class="kv cols">
