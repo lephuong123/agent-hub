@@ -63,7 +63,11 @@ class QueuedNotifier:
 
     # ------------------------------------------------------------------ bus
     def __call__(self, ev: HubEvent) -> None:
-        if ev.type not in (self.cfg().get("events") or []):
+        events = self.cfg().get("events") or []
+        # approval.escalated = "người được hỏi lần đầu" → nhận ở mọi cấu hình đã nhận approval.open (danh sách cũ người tự đặt)
+        if ev.type not in events and not (ev.type == "approval.escalated" and "approval.open" in events):
+            return
+        if self._delegated(ev):
             return
         if self.target() is None:
             return
@@ -79,6 +83,21 @@ class QueuedNotifier:
             self.queue = asyncio.Queue()
         self.queue.put_nowait((ev, msg))
         self.ensure_worker()
+
+    def _delegated(self, ev: HubEvent) -> bool:
+        """Approval đang giao điều phối viên (`routed_to=manager`) → chưa làm phiền người; quá hạn/điều phối viên chuyển lên →
+        `approval.escalated` mới thông báo. Đọc trạng thái HIỆN TẠI trong DB (event cũ có thể chậm hơn)."""
+        if ev.type not in ("approval.open", "approval.waiting_human", "approval.reminder"):
+            return False
+        rid = (ev.payload or {}).get("request_id")
+        ap = getattr(self.hub, "approvals", None)
+        if not rid or ap is None:
+            return (ev.payload or {}).get("routed_to") == "manager"
+        try:
+            row = ap.get(str(rid))
+        except Exception:
+            return (ev.payload or {}).get("routed_to") == "manager"
+        return row.get("routed_to") == "manager" and row.get("status") in ("open", "waiting_human")
 
     def ensure_worker(self) -> None:
         if self._task is None or self._task.done():

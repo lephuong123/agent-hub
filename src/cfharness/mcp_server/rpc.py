@@ -50,6 +50,8 @@ MUTATING = frozenset(
         "learn.canary_check",
         # hardening CLI (mcp_server/surface_rpc.py)
         "agent.archive", "agent.revert", "trash.restore", "trash.purge", "mcp.cancel_task",
+        # hồ sơ phê duyệt (guard/rpc.py) — audit trong ApprovalService (tiền tố approval. không bọc lần hai)
+        "approval.manager_decide",
     }
 )
 NOT_AUDITED_PREFIXES = ("approval.",)

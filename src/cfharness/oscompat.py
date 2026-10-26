@@ -271,6 +271,67 @@ def new_group_kwargs(*, suspended: bool = False) -> dict[str, Any]:
     return {"creationflags": flags}
 
 
+NO_WINDOW_FLAG = 0x08000000  # CREATE_NO_WINDOW — hằng số ở mức module để test giả IS_WINDOWS trên POSIX vẫn dùng được
+
+
+def no_window_kwargs(flags: int = 0) -> dict[str, Any]:
+    """kwargs cho subprocess KHÔNG tương tác (git, `claude --version`, PowerShell clipboard…): Windows → `CREATE_NO_WINDOW`
+    (gộp OR với `flags` nếu có), không bao giờ bật cửa sổ console — kể cả khi tiến trình gọi không có console (pythonw,
+    daemon do Task Scheduler chạy) — xem docs/dev-notes/windows.md §6. POSIX: `{}`.
+    KHÔNG dùng cho tiến trình run chính (`ClaudeCliRuntime.start` — phải chung console với daemon để nhận CTRL_BREAK,
+    `interrupt_group`) hay takeover tương tác (cần console của người)."""
+    if not IS_WINDOWS:
+        return {}  # POSIX: Popen từ chối creationflags ≠ 0
+    return {"creationflags": NO_WINDOW_FLAG | flags}
+
+
+
+def ensure_hidden_console() -> str:
+    """Windows: tiến trình KHÔNG có console (daemon chạy bằng pythonw — dịch vụ tự khởi động) → tự lấy một console KHÔNG
+    cửa sổ, để `claude` và mọi hậu duệ kế thừa nó: không thì mỗi run (và mỗi git/`claude --version` thiếu
+    `CREATE_NO_WINDOW`) được Windows cấp console MỚI có cửa sổ (Windows Terminal bật lên rồi tắt), và `interrupt_group`
+    (CTRL_BREAK chỉ gửi được trong CÙNG console) không chạy. Trả cách đã dùng: `"posix"`, `"existing"`, `"no_window"`
+    (`AllocConsoleWithOptions(NO_WINDOW)`, Windows 11 24H2+), `"attached"` (gắn vào console không cửa sổ của một tiến
+    trình phụ `CREATE_NO_WINDOW`), `"hidden"` (`AllocConsole` + `ShowWindow(SW_HIDE)` — có thể chớp một lần) hoặc `"failed"`.
+    Không đụng `sys.stdout/stderr` (pythonw: đã trỏ vào `logs/daemon.out`)."""
+    if not IS_WINDOWS:
+        return "posix"
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)  # pragma: no cover — Windows
+    k32.GetConsoleWindow.restype = wintypes.HWND
+    if k32.GetConsoleCP():  # đã có console (có hoặc không cửa sổ) → giữ nguyên
+        return "existing"
+    try:  # Windows 11 24H2+: console không cửa sổ, không qua Windows Terminal
+        class _Opts(ctypes.Structure):
+            _fields_ = [("mode", ctypes.c_int), ("useShowWindow", wintypes.BOOL), ("showWindow", wintypes.WORD)]
+
+        fn = k32.AllocConsoleWithOptions
+        fn.restype = ctypes.c_long
+        res = ctypes.c_int(0)
+        if fn(ctypes.byref(_Opts(2, False, 0)), ctypes.byref(res)) == 0 and k32.GetConsoleCP():  # ALLOC_CONSOLE_MODE_NO_WINDOW
+            return "no_window"
+    except AttributeError:
+        pass
+    try:  # bản Windows cũ hơn: mượn console không cửa sổ của một tiến trình phụ rồi cho nó thoát (console còn vì ta đã gắn)
+        p = subprocess.Popen(["cmd.exe", "/d", "/c", "pause"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, **no_window_kwargs())
+        try:
+            for _ in range(50):
+                if k32.AttachConsole(p.pid):
+                    return "attached"
+                time.sleep(0.02)
+        finally:
+            p.kill()
+            p.wait(5)
+    except OSError:
+        pass
+    if k32.AllocConsole():
+        hwnd = k32.GetConsoleWindow()
+        if hwnd:
+            ctypes.WinDLL("user32").ShowWindow(hwnd, 0)  # SW_HIDE
+        return "hidden"
+    return "failed"
+
+
 def exec_argv(argv: list[str]) -> list[str]:
     """Windows: CreateProcess chỉ tự thêm `.exe` — tìm `claude.cmd`/… trong PATH; script `.py` (claude giả trong test)
     chạy bằng python hiện tại. POSIX: giữ nguyên."""
@@ -314,8 +375,7 @@ def kill_tree(pid: int) -> bool:
         except (ProcessLookupError, PermissionError):
             return False
     try:  # pragma: no cover
-        cp = subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"], capture_output=True, timeout=15,
-                            creationflags=CREATE_NO_WINDOW)
+        cp = subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"], capture_output=True, timeout=15, **no_window_kwargs())
         return cp.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False

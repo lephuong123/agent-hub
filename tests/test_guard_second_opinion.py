@@ -49,6 +49,8 @@ def hub(hub_home):
     h.config.set("guard.enabled", True)
     h.config.set("approval.timeout_s", 0.3)
     h.config.set("guard.git_probe", False)
+    # approval-profiles: LLM thứ hai chỉ chạy cho uncertain ĐANG GIỮ → kiểm cơ chế ở profile strict (balanced không giữ uncertain)
+    h.config.set("approval.profile", "strict")
     yield h
     rt.release()
     h.store.close()

@@ -213,6 +213,9 @@ class TelegramBot:
         if offer.get("kind") == "web_domain":
             return (f"luật <b>web_domain</b>: agent {esc(offer.get('agent_id'))} được WebFetch tới ĐÚNG host <code>{esc(offer.get('domain'))}</code>"
                     " (không gồm tên miền con) mà không hỏi lại")
+        if offer.get("kind") == "mcp_tool":
+            return (f"luật <b>mcp_tool</b>: agent {esc(offer.get('agent_id'))} được gọi ĐÚNG tool <code>{esc(offer.get('tool'))}</code> (mọi tham số) "
+                    "mà không hỏi lại — chỉ bỏ cờ destructiveHint/chưa probe/untrusted do server tự khai")
         return (f"luật <b>exact</b>: agent {esc(offer.get('agent_id'))} + tool <code>{esc(offer.get('tool'))}</code> + ĐÚNG dấu vân tay"
                 f" <code>{esc(offer.get('fingerprint'))}</code> (thao tác khác dù một ký tự vẫn hỏi lại)")
 
@@ -789,6 +792,7 @@ class TelegramBot:
         heavy = is_heavy(row, self.cfg().get("confirm_classes") or [])
         title = {"approval.waiting_human": "chưa có người duyệt → run chuyển waiting_human (đã dừng tiến trình, giữ khoá repo, KHÔNG tự từ chối)",
                  "approval.reminder": f"nhắc lần {esc((payload or {}).get('reminder_count'))} — vẫn chờ người duyệt",
+                 "approval.escalated": "điều phối viên chuyển lên NGƯỜI duyệt (không quyết được / quá hạn)",
                  }.get(kind, "muốn chạy thao tác PHÁ HUỶ — đang giữ chờ duyệt")
         return "\n".join([
             f"⏸ <b>[cfharness] Yêu cầu {esc(aid)}</b> — agent {esc(row.get('agent_id'))} {title}",
@@ -796,7 +800,8 @@ class TelegramBot:
             + (" · tài nguyên BẢO VỆ" if row.get("protected_resource_id") else ""),
             f"• Thao tác ĐẦY ĐỦ ở tin được trả lời phía trên ({action_len} ký tự){' — THAO TÁC NẶNG' if heavy else ''}.",
             "• Cho phép cần xác nhận bước 2. Hoặc trên máy: cfharness approve|deny " + esc(aid),
-        ] + (["• Luôn cho phép (bước 2) = cho phép lần này VÀ tạo luật hẹp — chỉ có ở thao tác KHÔNG phá huỷ."] if self.always_offer(row) else []))
+        ] + (["• Luôn cho phép (bước 2) = cho phép lần này VÀ tạo luật hẹp (thao tác không phá huỷ, hoặc tool MCP chỉ bị server tự đánh dấu)."]
+             if self.always_offer(row) else []))
 
     # ------------------------------------------------------------------ nút inline
     async def _on_callback(self, cq: dict[str, Any], api: TelegramApi) -> None:

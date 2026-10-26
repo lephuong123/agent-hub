@@ -31,11 +31,12 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Static
 
 from ..rpc import RpcError
+from ..ui import theme as th
 
 FEED_TYPES = ("learning.applied", "learning.rolled_back", "learning.eval_failed", "learning.deferred", "guard.blocked", "learning.canary", "learning.promoted")
 KIND = {
-    "learning.applied": ("áp dụng", "bold green"), "learning.rolled_back": ("rollback", "bold yellow"), "learning.eval_failed": ("eval_failed", "bold red"),
-    "learning.deferred": ("hoãn", "cyan"), "guard.blocked": ("bị chặn", "bold white on red"), "learning.canary": ("canary", "magenta"),
+    "learning.applied": ("áp dụng", f"bold {th.OK}"), "learning.rolled_back": ("rollback", f"bold {th.WARN}"), "learning.eval_failed": ("eval_failed", th.ERR_STRONG),
+    "learning.deferred": ("hoãn", th.INFO), "guard.blocked": ("bị chặn", th.ALARM), "learning.canary": ("canary", "magenta"),
     "learning.promoted": ("promoted", "magenta"),
 }
 FILTERS = [None, "learning.applied", "learning.rolled_back", "learning.eval_failed", "learning.deferred", "guard.blocked"]
@@ -120,9 +121,9 @@ def eval_cell(item: dict[str, Any], evals: dict[str, dict[str, Any]]) -> Text:
     if ev:
         b, a = ev.get("before_score"), ev.get("after_score")
     if b is None and a is None:
-        return Text("—", style="grey50")
+        return Text("—", style=th.MUTED)
     f = lambda x: "-" if x is None else f"{float(x):.2f}"  # noqa: E731
-    style = "red" if (b is not None and a is not None and a < b) else "green"
+    style = th.ERR if (b is not None and a is not None and a < b) else th.OK
     return Text(f"{f(b)}→{f(a)}", style=style)
 
 
@@ -130,7 +131,7 @@ def canary_head(canaries: list[dict[str, Any]]) -> Text:
     """Dòng Canary trên đầu tab (M5-A, FR-LN-16): thay đổi tầng team/global/USER đang canary/shadow — tự promoted/rollback."""
     t = Text()
     if not canaries:
-        t.append("\n 🐤 Canary: không có thay đổi tầng team/global/USER nào đang thử (tự promoted/rollback — `cfharness learn canary list --all`)", style="grey50")
+        t.append("\n 🐤 Canary: không có thay đổi tầng team/global/USER nào đang thử (tự promoted/rollback — `cfharness learn canary list --all`)", style=th.MUTED)
         return t
     t.append(f"\n 🐤 Canary đang chạy: {len(canaries)}", style="bold magenta")
     for c in canaries[:4]:
@@ -138,7 +139,7 @@ def canary_head(canaries: list[dict[str, Any]]) -> Text:
         t.append(f"\n   {c['id']} {c['scope']}:{c.get('owner_id') or 'global'} {c['target']}:{c.get('target_ref') or ''} {who} — "
                  f"{c.get('progress') or ''} · hạn {_hm(c.get('deadline'))} · rollback: learn rollback {c.get('ledger_entry_id') or ''}", style="magenta")
     if len(canaries) > 4:
-        t.append(f"\n   … +{len(canaries) - 4}", style="grey50")
+        t.append(f"\n   … +{len(canaries) - 4}", style=th.MUTED)
     return t
 
 
@@ -212,7 +213,7 @@ class LearningsScreen(Screen):
             self.available = True
         except RpcError as e:
             self.available = False
-            head.update(Text(" Learnings — daemon chưa có RPC learn.* (M4-A): " + e.message, style="bold yellow"))
+            head.update(Text(" Learnings — daemon chưa có RPC learn.* (M4-A): " + e.message, style=f"bold {th.WARN}"))
             return
         try:
             evs = await self.client.call("eval.list", {"limit": 200}) or []
@@ -245,9 +246,9 @@ class LearningsScreen(Screen):
             if x["type"] == "learning.rolled_back":
                 detail = f"actor={p.get('actor')}: {p.get('reason') or ''}"
             table.add_row(
-                Text(_hm(x.get("ts")), style="grey62"), x.get("agent_id") or "—", Text(label, style=style), p.get("scope") or "agent",
-                p.get("risk_class") or "", target[:40], p.get("op") or "", eval_cell(x, self.evals), Text(str(ref), style="grey62"),
-                Text(str(detail)[:120], style="grey70"), key=str(i),
+                Text(_hm(x.get("ts")), style=th.MUTED), x.get("agent_id") or "—", Text(label, style=style), p.get("scope") or "agent",
+                p.get("risk_class") or "", target[:40], p.get("op") or "", eval_cell(x, self.evals), Text(str(ref), style=th.MUTED),
+                Text(str(detail)[:120], style=th.MUTED), key=str(i),
             )
         keys = [str(i) for i, _ in rows]
         if prev in keys:
@@ -262,20 +263,20 @@ class LearningsScreen(Screen):
                 cnt[x["type"]] = cnt.get(x["type"], 0) + 1
         h = Text()
         h.append(" Learnings ", style="bold reverse magenta")
-        h.append("  hôm nay: ", style="grey70")
+        h.append("  hôm nay: ", style=th.MUTED)
         for t in FEED_TYPES[:5]:
             label, style = KIND[t]
             h.append(f" {label} {cnt.get(t, 0)} ", style=style)
-            h.append("│", style="grey42")
-        h.append(f"   lọc: {KIND[FILTERS[self.filter_i]][0] if FILTERS[self.filter_i] else 'tất cả'} (f)", style="grey50")
+            h.append("│", style=th.MUTED)
+        h.append(f"   lọc: {KIND[FILTERS[self.filter_i]][0] if FILTERS[self.filter_i] else 'tất cả'} (f)", style=th.MUTED)
         h.append_text(canary_head(self.canaries))
         d = self.digest_today
         if d and d.get("id"):
             c = d.get("counts") or {}
             h.append(f"\n 📰 Digest {_hm(d.get('created_at'))}: áp dụng {c.get('applied', 0)} · rollback {c.get('rolled_back', 0)} · "
-                     f"eval_failed {c.get('eval_failed', 0)} · hoãn {c.get('deferred', 0)} · chặn {c.get('blocked', 0)} — Slack {d.get('slack_status')} (D xem)", style="grey70")
+                     f"eval_failed {c.get('eval_failed', 0)} · hoãn {c.get('deferred', 0)} · chặn {c.get('blocked', 0)} — Slack {d.get('slack_status')} (D xem)", style=th.MUTED)
         else:
-            h.append("\n 📰 Digest: chưa có (08:00 giờ máy, hoặc `cfharness digest run`)", style="grey50")
+            h.append("\n 📰 Digest: chưa có (08:00 giờ máy, hoặc `cfharness digest run`)", style=th.MUTED)
         self.query_one("#learn-head", Static).update(h)
 
     def _selected_index_key(self) -> str | None:
@@ -302,21 +303,21 @@ class LearningsScreen(Screen):
         w = self.query_one("#learn-detail", Static)
         x = self.selected()
         if x is None:
-            w.update(Text(" (chưa có thay đổi học nào — vòng học tự áp dụng, bạn chỉ cần xem/rollback ở đây)", style="grey50"))
+            w.update(Text(" (chưa có thay đổi học nào — vòng học tự áp dụng, bạn chỉ cần xem/rollback ở đây)", style=th.MUTED))
             return
         p = x.get("payload") or {}
         t = Text()
         label, style = KIND.get(x["type"], (x["type"], ""))
         t.append(f" {label} ", style=style)
-        t.append(f" {x.get('agent_id') or '—'} · {p.get('scope') or 'agent'} · {p.get('risk_class') or ''} {p.get('op') or ''} {p.get('target') or ''} {p.get('target_ref') or ''}\n", style="bold")
+        t.append(f" {x.get('agent_id') or '—'} · {p.get('scope') or 'agent'} · {p.get('risk_class') or ''} {p.get('op') or ''} {p.get('target') or ''} {p.get('target_ref') or ''}\n", style=th.HEAD)
         if p.get("reason"):
-            t.append(f" lý do: {p['reason']}\n", style="grey70")
+            t.append(f" lý do: {p['reason']}\n", style=th.MUTED)
         sc = p.get("scores") or {}
         ev = self.evals.get(str(p.get("proposal_id") or ""))
         if sc or ev:
             b = sc.get("before", (ev or {}).get("before_score"))
             a = sc.get("after", (ev or {}).get("after_score"))
-            t.append(f" eval: {b} → {a}" + (f" (eval {ev['id']}, ${float(ev.get('cost_usd') or 0):.4f})" if ev else "") + "\n", style="grey70")
+            t.append(f" eval: {b} → {a}" + (f" (eval {ev['id']}, ${float(ev.get('cost_usd') or 0):.4f})" if ev else "") + "\n", style=th.MUTED)
         diff = p.get("diff")
         entry = p.get("ledger_entry_id")
         if not diff and entry and x["type"] == "learning.applied":
@@ -326,10 +327,10 @@ class LearningsScreen(Screen):
                 diff = None
         if diff:
             for ln in str(diff).splitlines()[:8]:
-                st = "green" if ln.startswith("+") and not ln.startswith("+++") else "red" if ln.startswith("-") and not ln.startswith("---") else "grey62"
+                st = th.OK if ln.startswith("+") and not ln.startswith("+++") else th.ERR if ln.startswith("-") and not ln.startswith("---") else th.MUTED
                 t.append(" " + ln[:160] + "\n", style=st)
         if entry and x["type"] == "learning.applied":
-            t.append(f" r = rollback · CLI: cfharness learn rollback {entry}", style="cyan")
+            t.append(f" r = rollback · CLI: cfharness learn rollback {entry}", style=th.INFO)
         w.update(t)
 
     # ------------------------------------------------------------------ actions
@@ -421,12 +422,12 @@ class LearningsScreen(Screen):
             self.notify(_err(e), severity="error")
             return
         t = Text()
-        t.append(f"Journey học của {agent}\n\n", style="bold")
+        t.append(f"Journey học của {agent}\n\n", style=th.HEAD)
         for it in (j.get("items") or [])[-30:]:
             what = it.get("what")
             line = f"{_hm(it.get('ts'))}  {what:<8} {it.get('id', '')[:16]:<16} "
             line += " ".join(str(it.get(k)) for k in ("kind", "status", "op", "target", "target_ref", "actor") if it.get(k))
-            t.append(line[:150] + "\n", style={"signal": "yellow", "review": "cyan", "proposal": "white", "ledger": "green"}.get(str(what), ""))
+            t.append(line[:150] + "\n", style={"signal": th.WARN, "review": th.INFO, "proposal": th.DATA, "ledger": th.OK}.get(str(what), ""))
         self.app.push_screen(InfoScreen(t))
 
     def action_golden(self) -> None:
@@ -518,19 +519,19 @@ class LedgerScreen(Screen):
         try:
             self.entries = await self.client.call("learn.ledger", {"agent": self.agent_id, "limit": 200}) or []
         except RpcError as e:
-            self.query_one("#ledger-head", Static).update(Text(" Ledger: " + e.message, style="bold yellow"))
+            self.query_one("#ledger-head", Static).update(Text(" Ledger: " + e.message, style=f"bold {th.WARN}"))
             return
         try:
-            self.query_one("#ledger-head", Static).update(Text(f" Ledger · {self.agent_id} · {len(self.entries)} entry (mới nhất trước)", style="bold"))
+            self.query_one("#ledger-head", Static).update(Text(f" Ledger · {self.agent_id} · {len(self.entries)} entry (mới nhất trước)", style=th.HEAD))
             table = self.query_one("#ledger", DataTable)
         except NoMatches:
             return
         table.clear()
         for e in self.entries:
             flags = e.get("flags") or []
-            table.add_row(Text(_hm(e.get("applied_at")), style="grey62"), e["id"], Text(str(e.get("actor") or ""), style="cyan" if e.get("actor") == "user" else ""),
+            table.add_row(Text(_hm(e.get("applied_at")), style=th.MUTED), e["id"], Text(str(e.get("actor") or ""), style=th.INFO if e.get("actor") == "user" else ""),
                           e.get("op") or "", f"{e.get('scope')}:{e.get('target')}:{e.get('target_ref') or ''}"[:40], e.get("risk_class") or "",
-                          ",".join(flags if isinstance(flags, list) else [str(flags)])[:24], Text(str(e.get("rolled_back_by") or ""), style="yellow"), key=e["id"])
+                          ",".join(flags if isinstance(flags, list) else [str(flags)])[:24], Text(str(e.get("rolled_back_by") or ""), style=th.WARN), key=e["id"])
         await self.show_detail()
 
     def selected(self) -> dict[str, Any] | None:
@@ -554,21 +555,21 @@ class LedgerScreen(Screen):
         w = self.query_one("#ledger-detail", Static)
         e = self.selected()
         if e is None:
-            w.update(Text(" (agent chưa có entry ledger nào)", style="grey50"))
+            w.update(Text(" (agent chưa có entry ledger nào)", style=th.MUTED))
             return
         t = Text()
-        t.append(f" {e['id']} · {e.get('actor')} · {e.get('op')} {e.get('target')} {e.get('target_ref') or ''}\n", style="bold")
+        t.append(f" {e['id']} · {e.get('actor')} · {e.get('op')} {e.get('target')} {e.get('target_ref') or ''}\n", style=th.HEAD)
         if e.get("summary"):
-            t.append(f" {e['summary']}\n", style="grey70")
+            t.append(f" {e['summary']}\n", style=th.MUTED)
         try:
             diff = (await self.client.call("learn.show", {"id": e["id"]})).get("diff")
         except Exception:
             diff = None
         for ln in str(diff or "").splitlines()[:8]:
-            st = "green" if ln.startswith("+") and not ln.startswith("+++") else "red" if ln.startswith("-") and not ln.startswith("---") else "grey62"
+            st = th.OK if ln.startswith("+") and not ln.startswith("+++") else th.ERR if ln.startswith("-") and not ln.startswith("---") else th.MUTED
             t.append(" " + ln[:160] + "\n", style=st)
         if e.get("op") != "rollback" and not e.get("rolled_back_by"):
-            t.append(f" r = rollback · CLI: cfharness learn rollback {e['id']}", style="cyan")
+            t.append(f" r = rollback · CLI: cfharness learn rollback {e['id']}", style=th.INFO)
         w.update(t)
 
     def action_rollback(self) -> None:
@@ -655,17 +656,17 @@ class GoldenScreen(Screen):
             except Exception:
                 pass
         h = Text()
-        h.append(" Golden task ", style="bold reverse #e0af68")
-        h.append("  (người quản lý — Q-07; agent chỉ gợi ý)  ", style="grey62")
-        h.append("  ".join(f"{a}:{n}" for a, n in sorted(counts.items())) or "chưa có", style="bold")
+        h.append(" Golden task ", style="bold reverse yellow")
+        h.append("  (người quản lý — Q-07; agent chỉ gợi ý)  ", style=th.MUTED)
+        h.append("  ".join(f"{a}:{n}" for a, n in sorted(counts.items())) or "chưa có", style=th.HEAD)
         if missing:
-            h.append(f"\n ⚠ chưa có golden task: {', '.join(missing)} — thay đổi L3 của các agent này sẽ bị hoãn (Q-23). `a` để thêm từ run.", style="yellow")
+            h.append(f"\n ⚠ chưa có golden task: {', '.join(missing)} — thay đổi L3 của các agent này sẽ bị hoãn (Q-23). `a` để thêm từ run.", style=th.WARN)
         self.query_one("#golden-head", Static).update(h)
         table = self.query_one("#golden", DataTable)
         prev = self._selected_id()
         table.clear()
         for g in self.tasks:
-            table.add_row(Text(g["id"], style="grey62"), g["agent_id"], checker_label(g.get("checker")), Text("on" if g.get("active") else "off", style="green" if g.get("active") else "grey50"),
+            table.add_row(Text(g["id"], style=th.MUTED), g["agent_id"], checker_label(g.get("checker")), Text("on" if g.get("active") else "off", style=th.OK if g.get("active") else th.MUTED),
                           f"v{g.get('version')}", (g.get("title") or "")[:60], g.get("source_run_id") or "—", (g.get("created_by") or "")[:12], key=g["id"])
         ids = [g["id"] for g in self.tasks]
         if prev in ids:
@@ -694,14 +695,14 @@ class GoldenScreen(Screen):
         t = Text()
         if gid:
             g = next(x for x in self.tasks if x["id"] == gid)
-            t.append(f" {g.get('title')}\n", style="bold")
-            t.append(" prompt: " + g["prompt"].replace("\n", " ")[:200] + "\n", style="grey70")
-            t.append(" cách chấm: " + checker_to_spec(g.get("checker") or {})[:200] + "\n", style="cyan")
+            t.append(f" {g.get('title')}\n", style=th.HEAD)
+            t.append(" prompt: " + g["prompt"].replace("\n", " ")[:200] + "\n", style=th.MUTED)
+            t.append(" cách chấm: " + checker_to_spec(g.get("checker") or {})[:200] + "\n", style=th.INFO)
         if self.candidates:
-            t.append(" Run ứng viên (a để thêm): ", style="grey62")
-            t.append(", ".join(f"{c['agent_id']}/{c['run_id']}({c['reason']})" for c in self.candidates[:4]), style="grey62")
+            t.append(" Run ứng viên (a để thêm): ", style=th.MUTED)
+            t.append(", ".join(f"{c['agent_id']}/{c['run_id']}({c['reason']})" for c in self.candidates[:4]), style=th.MUTED)
         if not gid and not self.candidates:
-            t.append(" (chưa có golden task — `a` thêm từ run)", style="grey50")
+            t.append(" (chưa có golden task — `a` thêm từ run)", style=th.MUTED)
         w.update(t)
 
     # ------------------------------------------------------------------ actions (của NGƯỜI)
@@ -751,13 +752,13 @@ class GoldenScreen(Screen):
             self.notify(_err(e), severity="error")
             return
         t = Text()
-        t.append(f"{g['id']} · {g['agent_id']} · v{g.get('version')} · bởi {g.get('created_by')} · {('active' if g.get('active') else 'ĐÃ XOÁ MỀM')}\n\n", style="bold")
+        t.append(f"{g['id']} · {g['agent_id']} · v{g.get('version')} · bởi {g.get('created_by')} · {('active' if g.get('active') else 'ĐÃ XOÁ MỀM')}\n\n", style=th.HEAD)
         if g.get("context"):
-            t.append("ngữ cảnh: " + g["context"] + "\n", style="grey70")
+            t.append("ngữ cảnh: " + g["context"] + "\n", style=th.MUTED)
         t.append("prompt:\n" + g["prompt"] + "\n\n")
-        t.append("cách chấm: " + json.dumps(g.get("checker"), ensure_ascii=False, indent=1) + "\n\n", style="cyan")
+        t.append("cách chấm: " + json.dumps(g.get("checker"), ensure_ascii=False, indent=1) + "\n\n", style=th.INFO)
         for r in (g.get("recent_results") or [])[:8]:
-            t.append(f"{_hm(r['created_at'])}  {r['variant']:<9} #{r['sample']} điểm {r['score']}  {r['outcome']}\n", style="grey62")
+            t.append(f"{_hm(r['created_at'])}  {r['variant']:<9} #{r['sample']} điểm {r['score']}  {r['outcome']}\n", style=th.MUTED)
         self.app.push_screen(InfoScreen(t))
 
     def action_edit_checker(self) -> None:

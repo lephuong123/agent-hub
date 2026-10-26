@@ -45,6 +45,13 @@ def format_message(ev: HubEvent) -> str | None:
             f"chuyển *waiting_human* (đã dừng tiến trình, giữ khoá repo, KHÔNG tự từ chối)\n"
             f"• thao tác: `{_clip(p.get('preview'))}`\n• duyệt: `cfharness approve {rid}`"
         )
+    if ev.type == "approval.escalated":
+        return (
+            f":arrow_up: *cfharness* — yêu cầu `{rid}` của agent `{agent}` được chuyển lên NGƯỜI duyệt (điều phối viên không quyết: "
+            f"{_clip(p.get('note'), 200)})\n• run `{run}` · thao tác: `{_clip(p.get('preview'))}`\n"
+            f"• lý do: {_clip(p.get('reason'), 200)} ({p.get('matched_rule')})\n"
+            f"• duyệt: `cfharness approve {rid}` · từ chối: `cfharness deny {rid}`"
+        )
     if ev.type == "approval.reminder":
         mins = int(float(p.get("wait_s") or 0) // 60)
         return (

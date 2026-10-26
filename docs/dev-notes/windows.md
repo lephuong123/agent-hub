@@ -102,7 +102,7 @@ admin, venv do uv 0.11.14 tạo, CPython 3.13; HUB_HOME tạm dưới `%TEMP%`, 
   đọc lại đúng `LogonTrigger` của chính user, `InteractiveToken`, `ExecutionTimeLimit PT0S`, `RestartOnFailure PT1M×5`,
   `IgnoreNew` (`LeastPrivilege` là mặc định nên Windows không in lại).
 - Cài lần hai → `không đổi`; định nghĩa đổi → ghi đè (`/F`). `daemon status` có dòng `tự khởi động: đã cài (Task Scheduler …)`.
-- `schtasks /Run` → daemon chạy trên đúng HUB_HOME tạm (`daemon status` OK, `logs/daemon.out` được tạo), không cửa sổ nào.
+- `schtasks /Run` → daemon chạy trên đúng HUB_HOME tạm (`daemon status` OK, `logs/daemon.out` được tạo), không cửa sổ nào (của chính daemon — nhưng mỗi run `claude` của daemon pythonw từng bật một cửa sổ WT, xem §6).
 - `daemon stop` thoát 0 → task `Ready, Last Result 0`, chờ > 60 s không chạy lại. Giết tiến trình daemon (`taskkill /F`) → mồi
   chạy lại sau 60 s.
 - Dự phòng Startup (ép `schtasks /Create` lỗi bằng runner bọc): file `.cmd` chạy được, daemon lên đúng HUB_HOME; cài lại khi
@@ -132,3 +132,68 @@ giá trị `true` mới tính). Khoá nằm trong nhánh `manager` ∈ `integrit
 `config.set` ∈ `HUMAN_ONLY`. Tắt opt-in luôn được; khung rộng khi đó tự hạ về strict. macOS/Linux không đổi gì.
 
 Khuyến nghị khi chạy Windows: workspace `scratch`/`worktree` cho agent không tin cậy, không cấp MCP ghi, giữ `guard.enabled: true`.
+
+## 6. Cửa sổ console bật lên rồi tắt liên tục (2026-10-26)
+Báo lỗi: "màn hình terminal bật lên rồi tắt liên tục" khi agent chạy. Windows 11 mặc định Windows Terminal làm terminal → mỗi
+console MỚI có cửa sổ là một tab/cửa sổ WT mở ra rồi đóng.
+
+**Đo bằng** `scripts/win_console_watch.py` (vỏ `scripts/win_console_watch.ps1`): mỗi ~30 ms chụp tiến trình (Toolhelp32 + dòng
+lệnh từ PEB), ghi `conhost.exe` mới kèm chuỗi cha, và hỏi console của MỌI tiến trình mới qua một tiến trình phụ `DETACHED_PROCESS`
+(`AttachConsole` + `GetConsoleWindow` + `IsWindowVisible`; lớp `PseudoConsoleWindow` = console đã giao cho WT). Lưu ý khi đọc số:
+`conhost.exe` mới KHÔNG có nghĩa là có cửa sổ — `CREATE_NO_WINDOW` vẫn tạo conhost (console không cửa sổ). Đối chứng dương:
+`CREATE_NEW_CONSOLE` → `CỬA SỔ CONSOLE HIỆN class=PseudoConsoleWindow`.
+
+**Nguyên nhân (đã xác nhận trên máy thật, claude 2.1.310)**:
+- Mọi tiến trình con của `claude` (hook qua Git Bash, MCP stdio, `git`, `rg`, `reg`…) đều được node spawn với `CREATE_NO_WINDOW`
+  → mỗi cái một conhost KHÔNG cửa sổ (đây là các conhost "mỗi lần gọi hook" thấy trong báo lỗi) — tự chúng không bật cửa sổ.
+- Cửa sổ thật xuất hiện khi một tiến trình **không có console** spawn chương trình console **không** có `CREATE_NO_WINDOW`:
+  Windows cấp console MỚI có cửa sổ. Ca chính: daemon chạy bằng `pythonw` (dịch vụ tự khởi động, §4 — Task Scheduler + mồi
+  `-c`): mỗi run `claude.exe` được cấp console riêng có cửa sổ WT (mở suốt run rồi đóng), và mọi `git`/`claude --version`/
+  `claude auth status`… daemon gọi trực tiếp (checkpoint/diff workspace, doctor) cũng vậy. Hệ quả phụ: `interrupt_group`
+  (`CTRL_BREAK` = `GenerateConsoleCtrlEvent`, chỉ tới tiến trình CHUNG console) không chạy được với run như thế.
+- Daemon khởi động bằng `cfharness daemon start` (`detached_kwargs` = `CREATE_NO_WINDOW`) có console không cửa sổ → `claude` kế
+  thừa → không cửa sổ nào; nhưng mọi chỗ spawn khác vẫn phụ thuộc may rủi "cha có console hay không".
+
+| Đo (run haiku 3 lệnh Bash: guard + 3 hook quan sát, HUB_HOME tạm tên dài) | console mới | cửa sổ hiện |
+|---|---|---|
+| daemon `daemon start`, TRƯỚC sửa | 4 | 0 |
+| daemon `daemon start`, SAU sửa | 2 (chỉ con trực tiếp của `claude` do node tạo: `git`, `claude` con) | 0 |
+| daemon kiểu tự khởi động (`pythonw` + mồi, không console), TRƯỚC sửa | 25 | **1 / run** (`claude.exe` → `PseudoConsoleWindow`) |
+| daemon kiểu tự khởi động, SAU sửa | 24 (đều không cửa sổ) | **0** |
+
+**Sửa**:
+1. `oscompat.no_window_kwargs(flags=0)` (Windows `{"creationflags": CREATE_NO_WINDOW | flags}`, POSIX `{}`) cho MỌI subprocess
+   không tương tác: `guard/classifier._git` (chạy TRONG hook — hook là pythonw không console, thiếu cờ thì mỗi probe git bật một
+   cửa sổ; spike đã thấy ca này: pythonw spawn console KHÔNG cờ → `PseudoConsoleWindow`, CÓ cờ → không cửa sổ), `workspace._git`,
+   `evals/checkers` (lệnh checker), `manager/attachments` (PowerShell clipboard), `cli` (`claude auth status`), `runtime/claude_cli`
+   (`--version`, oneshot judge/curator), `systems/taskscheduler`, `oscompat.kill_tree`. KHÔNG áp cho spawn run chính
+   (`ClaudeCliRuntime.start` — phải chung console với daemon để nhận CTRL_BREAK) và takeover tương tác (`tui/app.py`, `tui/cli.py`).
+   `tests/test_windows_no_console.py` quét AST toàn `src/cfharness`: mọi `subprocess.run|Popen|call|check_output|check_call` /
+   `asyncio.create_subprocess_*` phải dùng `no_window_kwargs`/`new_group_kwargs`/`detached_kwargs` hoặc nằm trong ALLOWLIST có lý do.
+2. Hook (`guard.hook`, `observe_hook`) và MCP của run (`hub-guard`, `hub-self`) chạy bằng `pythonw` GUI (`guard.runtime.child_python`,
+   dùng lại `systems.autostart.windows_gui_python` — pythonw của venv uv là bản console): hook =
+   `__PYVENV_LAUNCHER__=<python venv> '<pythonw gốc>' -I -m … || exit 2`, MCP = `command: <pythonw gốc>`, `env.__PYVENV_LAUNCHER__`.
+   Không cấp console → không thể bật cửa sổ dù cha nào. `guard.python` do người đặt → dùng nguyên; không có pythonw GUI → như cũ.
+3. `oscompat.ensure_hidden_console()` gọi đầu `daemon.run_foreground`: không có console (pythonw) → `AllocConsoleWithOptions(NO_WINDOW)`
+   (Windows 11 24H2+; máy kiểm 26200 đi nhánh này) → dự phòng: gắn (`AttachConsole`) vào console không cửa sổ của một `cmd /c pause`
+   phụ `CREATE_NO_WINDOW` rồi cho nó thoát → cuối cùng `AllocConsole` + `ShowWindow(SW_HIDE)`. Log `daemon` ghi cách đã dùng. Đã kiểm
+   dưới pythonw: nhánh `no_window` và nhánh `attached` (ép bỏ `AllocConsoleWithOptions`) → con console không cờ kế thừa console
+   không cửa sổ (hwnd 0); `interrupt_group` → con nhận `CTRL_BREAK` (SIGBREAK, mã 7).
+
+**Spike pythonw** (Git Bash như CLI chạy hook; pythonw gốc của uv `cpython-3.13`, `__PYVENV_LAUNCHER__` = `.venv\Scripts\python.exe`):
+- `-I` vẫn vào venv (`sys.prefix` = `.venv`, import được `cfharness`); không có `__PYVENV_LAUNCHER__` → python gốc, KHÔNG có cfharness.
+- stdin/stdout/stderr qua pipe chạy (`sys.stdout` không None), không có console (`GetConsoleCP() == 0`).
+- Mã thoát giữ nguyên (3 → 3); `… exit 1 || exit 2` → 2; pythonw không tồn tại → 127 → `|| exit 2` → 2 (fail-closed giữ nguyên);
+  `cfharness.guard.hook` với stdin hỏng → in `deny` + exit 0.
+- Run thật qua daemon tạm (haiku): 3 `guard.decision` từ hook, 4 `hook.observed`, `mcp_servers: hub-guard connected`.
+- Chi phí cả buổi (8 run haiku + 1 review fork tự động): $0.0190.
+
+**Test**: `tests/test_windows_no_console.py` (quét AST, `no_window_kwargs`, `ensure_hidden_console` thật dưới pythonw trên Windows,
+`child_python`/`hook_command`/MCP entry/observe hook với `IS_WINDOWS` giả). `tests/fake_claude_guard.py` nay chạy lệnh hook qua bash
+như CLI thật (Windows: Git Bash — `VAR=… prog` không chạy trong `cmd.exe`).
+
+**Còn lại / giới hạn**: conhost không cửa sổ của các con trực tiếp của `claude` (do node tạo) vẫn còn — vô hại, ngoài tầm hub.
+`win_console_watch.ps1` là vỏ mỏng gọi bản Python (môi trường kiểm không chạy được PowerShell) — chưa chạy thử bản `.ps1`.
+Chưa kiểm daemon do Task Scheduler THẬT chạy sau bản sửa (đã mô phỏng đúng action: `pythonw -c <mồi> daemon run --home …` spawn
+`DETACHED_PROCESS`). Báo lỗi gốc có thể đến từ daemon tự khởi động hoặc một nguồn ngoài hub (máy đo có cả phiên Claude Code tương
+tác — các bash/git của nó cũng đều không cửa sổ).

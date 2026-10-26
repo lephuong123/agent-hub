@@ -235,9 +235,11 @@ class TaskDispatcher:
         return None
 
     def _workspace(self, t: dict[str, Any]) -> tuple[str | None, str]:
+        """(cwd, kind). `worktree` + path (repo) → cwd = repo, run `--worktree <tên>` (CLI tạo worktree trong repo, ghi không cần duyệt).
+        Trước đây path của `worktree` bị bỏ → run chạy ở scratch, worktree không bao giờ được tạo."""
         ws = t.get("workspace") or {}
         kind = ws.get("kind") or "scratch"
-        return (ws.get("path") if kind == "dir" else None), kind
+        return (ws.get("path") if kind in ("dir", "worktree") else None), kind
 
     def _lock_block(self, t: dict[str, Any], agent_id: str, session_id: str | None, read_only: bool) -> str | None:
         if read_only or not self.hub.config.get("guard.repo_lock"):
@@ -428,6 +430,9 @@ class TaskDispatcher:
         opts = {"json_schema": json_schema, "read_only": read_only, "hub_self": hub_self if self.cfg("hub_self_mcp") else None, "workspace_kind": wkind}
         if wkind == "worktree":
             opts["worktree"] = (t.get("workspace") or {}).get("name") or t["id"]
+        extra = (t.get("workspace") or {}).get("extra_write_roots") or []
+        if extra and wkind in ("dir", "worktree"):
+            opts["extra_write_roots"] = [str(x) for x in extra][:5]  # đã kiểm lúc tạo task; guard kiểm lại theo workspace.allowed_roots
         if read_only:
             opts["disallowed_tools"] = WRITE_TOOLS
         budget = ov.get("budget_usd")

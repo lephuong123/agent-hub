@@ -28,6 +28,7 @@ from ..manager import attachments as A
 from ..manager import chatview as V
 from ..rpc import DaemonUnavailable, RpcError
 from ..termsafe import one_line
+from ..ui import theme as th
 from .client import subscribe
 
 NEW = "__new__"
@@ -104,14 +105,14 @@ class ManagerScreen(Screen):
         try:
             g = await self.client.call("manager.get") or {}
         except (RpcError, DaemonUnavailable) as e:
-            log.write(Text(f"không đọc được điều phối viên: {e}", style="red"))
+            log.write(Text(f"không đọc được điều phối viên: {e}", style=th.ERR))
             return
         mid = g.get("agent_id")
         inp = self.query_one("#mgr-input", Input)
         if not mid:
             self.state = None
             inp.disabled = True
-            log.write(Text("◆ ", style="bold magenta") + Text(
+            log.write(Text(f"{th.glyph('mark')} ", style=th.MGR) + Text(
                 "Chưa có điều phối viên.\n\n  Tạo và chỉ định (chỉ người làm được), rồi mở lại màn này:\n"
                 "    cfharness agent create dieu-phoi --template manager --name \"Điều phối viên\"\n"
                 "    cfharness manager set dieu-phoi\n"))
@@ -171,38 +172,38 @@ class ManagerScreen(Screen):
         h.append(" ◆ Điều phối ", style="bold reverse magenta")
         st = self.state
         if st is None:
-            h.append("  (chưa chỉ định)", style="grey50")
+            h.append("  (chưa chỉ định)", style=th.MUTED)
         else:
-            h.append(f"  {st.name}", style="bold")
-            h.append(f"  · hội thoại {st.conversation_id or '(mới — tin đầu tiên sẽ tạo)'}", style="grey62")
-            h.append("  · dùng chung với `cfharness chat`", style="grey42")
+            h.append(f"  {st.name}", style=th.HEAD)
+            h.append(f"  · hội thoại {st.conversation_id or '(mới — tin đầu tiên sẽ tạo)'}", style=th.MUTED)
+            h.append("  · dùng chung với `cfharness chat`", style=th.MUTED)
         self.query_one("#mgr-head", Static).update(h)
 
     def _render_convs(self) -> None:
         ol = self.query_one("#mgr-convs", OptionList)
         ol.clear_options()
         cur = self.state.conversation_id if self.state else None
-        ol.add_option(Option(Text("+ Hội thoại mới", style="bold green"), id=NEW))
+        ol.add_option(Option(Text("+ Hội thoại mới", style=f"bold {th.OK}"), id=NEW))
         for c in self.convs[:50]:
             t = Text()
             t.append("▸ " if c["id"] == cur else "  ", style="magenta")
-            t.append(one_line(c.get("title") or c["id"], 22), style="bold" if c["id"] == cur else "")
-            t.append(f"\n  {c['id'][:14]} · {c.get('messages', 0)} tin · {V.hhmm(c.get('updated_at'))}", style="grey50")
+            t.append(one_line(c.get("title") or c["id"], 22), style=th.HEAD if c["id"] == cur else "")
+            t.append(f"\n  {c['id'][:14]} · {c.get('messages', 0)} tin · {V.hhmm(c.get('updated_at'))}", style=th.MUTED)
             ol.add_option(Option(t, id=f"c:{c['id']}"))
 
     def _render_actions(self) -> None:
         ol = self.query_one("#mgr-actions", OptionList)
         ol.clear_options()
         if not self.actions:
-            ol.add_option(Option(Text("(chưa có)", style="grey50"), id="none", disabled=True))
+            ol.add_option(Option(Text("(chưa có)", style=th.MUTED), id="none", disabled=True))
             return
         for i, a in enumerate(reversed(self.actions)):
             t = Text()
-            t.append("✓ " if a.get("ok", True) else "✗ ", style="green" if a.get("ok", True) else "red")
+            t.append("✓ " if a.get("ok", True) else "✗ ", style=th.OK if a.get("ok", True) else th.ERR)
             t.append(one_line(a.get("summary"), 28))
             tgt = a.get("target") or {}
             if tgt.get("label"):
-                t.append(f"\n  → {one_line(tgt['label'], 28)}", style="grey50")
+                t.append(f"\n  → {one_line(tgt['label'], 28)}", style=th.MUTED)
             ol.add_option(Option(t, id=f"a:{len(self.actions) - 1 - i}"))
 
     def _tick_status(self) -> None:

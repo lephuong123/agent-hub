@@ -16,7 +16,7 @@ import time
 from typing import Any, AsyncIterator
 
 from ..events import HubEvent, make_event
-from ..oscompat import IS_WINDOWS, JOBS, exec_argv, interrupt_group, kill_tree, new_group_kwargs
+from ..oscompat import IS_WINDOWS, JOBS, exec_argv, interrupt_group, kill_tree, new_group_kwargs, no_window_kwargs
 from ..redact import redact_argv
 from .base import AgentRuntime, OneShotRequest, OneShotResult, RawLog, RunHandle, RunSpec, RuntimeError_, make_adapter
 
@@ -266,7 +266,7 @@ def claude_version(binary: str = "claude", cache_s: float = 600) -> str | None:
     if hit and now - hit[0] < cache_s:
         return hit[1]
     try:
-        out = subprocess.run(exec_argv([binary, "--version"]), capture_output=True, encoding="utf-8", errors="replace", timeout=20)
+        out = subprocess.run(exec_argv([binary, "--version"]), capture_output=True, encoding="utf-8", errors="replace", timeout=20, **no_window_kwargs())
         v = out.stdout.strip().split()[0] if out.returncode == 0 and out.stdout.strip() else None
     except (OSError, subprocess.TimeoutExpired):
         v = None
@@ -313,7 +313,7 @@ class ClaudeCliRuntime(AgentRuntime):
             proc = None
             try:
                 proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                                                            stderr=asyncio.subprocess.PIPE, cwd=td, env=child_env(self.cfg))
+                                                            stderr=asyncio.subprocess.PIPE, cwd=td, env=child_env(self.cfg), **no_window_kwargs())
                 out_b, err_b = await asyncio.wait_for(proc.communicate(req.prompt.encode("utf-8")), req.timeout_s)
                 rc = proc.returncode or 0
             except (asyncio.TimeoutError, OSError) as e:

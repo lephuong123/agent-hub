@@ -404,6 +404,16 @@ class RunManager:
             raise RuntimeError_("runtime.claude.settings phải là mapping JSON")
         guard_cfg = dict(cfg.get("guard") or {})
         guard_on = bool(guard_cfg.get("enabled"))
+        if opts.get("extra_write_roots"):  # hồ sơ phê duyệt: thư mục ghi thêm của task (đã kiểm lúc tạo; guard kiểm lại theo allowed_roots)
+            from .guard import profiles as _prof
+            from .guard.classifier import _in_roots
+
+            roots = tuple(_prof.allowed_roots(hub))
+            extra = [str(x) for x in opts["extra_write_roots"] if _in_roots(os.path.realpath(str(x)), roots)]
+            if extra:
+                sb = dict(guard_cfg.get("sandbox") or {})
+                sb["extra_allow_write"] = list(sb.get("extra_allow_write") or []) + extra
+                guard_cfg["sandbox"] = sb
         # M7: run của điều phối viên (không có task) dùng hub-self vai trò `manager` — chỉ khi agent đúng là manager được chỉ định
         is_mgr = (opts.get("hub_self") == "manager" and getattr(hub, "manager", None) is not None and hub.manager.is_manager(agent["id"])
                   and hub.manager.is_issued(run_id))  # MGR-3: chỉ run do hội thoại/tick tạo
@@ -438,7 +448,7 @@ class RunManager:
 
         settings, observe_events = add_observe_hooks(
             settings, run_id=run_id, socket_path=str(hub.paths.socket), hub_home=str(hub.paths.home),
-            python=str(guard_cfg.get("python") or sys.executable), cfg=claude_cfg.get("observe_hooks"),
+            python=str(guard_cfg.get("python") or sys.executable), cfg=claude_cfg.get("observe_hooks"), python_cmd=gr.bash_python(guard_cfg),
         )
         settings_path = rt_dir / "settings.json"
         _write_json_0600(settings_path, settings)

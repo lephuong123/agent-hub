@@ -219,6 +219,7 @@ def _server_text(s: dict[str, Any]) -> str:
         f"  {target}",
         f"  env: {json.dumps(cfg.get('env') or {}, ensure_ascii=False)}" if s["transport"] == "stdio" else f"  headers: {json.dumps(cfg.get('headers') or {}, ensure_ascii=False)}",
         f"  tools: include={tools.get('include') or '*'} exclude={tools.get('exclude') or '-'} require_approval={tools.get('require_approval') or '-'}",
+        *([f"  ghi đè annotations (người đặt): {json.dumps(tools['annotations'], ensure_ascii=False)}"] if tools.get("annotations") else []),
         f"  probe: {s.get('last_probe_at') or 'chưa'}" + (f"  lỗi: {s['probe_error']}" if s.get("probe_error") else "") + f"  · {len(s.get('annotations_cache') or {})} tool",
     ]
     if s.get("agents"):
@@ -230,6 +231,43 @@ def _server_text(s: dict[str, Any]) -> str:
     if s.get("secrets_moved"):
         lines.append(f"  secret đã chuyển vào secret store: {', '.join(s['secrets_moved'])}")
     return "\n".join(lines)
+
+
+def _cmd_annotate(ctx: Any) -> int:
+    """`cfharness mcp annotate <server> <tool-glob> --not-destructive|--destructive|--read-only|--not-read-only|--clear` — ghi đè
+    annotations server tự khai (chỉ người: mcp.update ∈ HUMAN_ONLY). Không gỡ được luật tên-xoá, tài nguyên bảo vệ, require_approval."""
+    a = ctx.args
+    s = ctx.call("mcp.show", {"name": a.name})
+    tools = dict((s.get("config") or {}).get("tools") or {})
+    ann = {k: dict(v) for k, v in (tools.get("annotations") or {}).items()}
+    cur = dict(ann.get(a.tool) or {})
+    if a.clear:
+        cur = {}
+    if a.not_destructive:
+        cur["destructiveHint"] = False
+    if a.destructive:
+        cur["destructiveHint"] = True
+    if a.read_only:
+        cur["readOnlyHint"] = True
+    if a.not_read_only:
+        cur["readOnlyHint"] = False
+    if not a.clear and not cur:
+        _eprint("chọn ít nhất một: --not-destructive | --destructive | --read-only | --not-read-only | --clear")
+        return EXIT_USER
+    if cur:
+        ann[a.tool] = cur
+    else:
+        ann.pop(a.tool, None)
+    cache = s.get("annotations_cache") or {}
+    import fnmatch
+
+    hits = sorted(t for t in cache if fnmatch.fnmatchcase(t, a.tool))
+    res = ctx.call("mcp.update", {"name": a.name, "patch": {"tools": {"annotations": ann}}})
+    msg = (f"MCP {a.name}: tool khớp '{a.tool}' → " + (json.dumps(cur, ensure_ascii=False) if cur else "bỏ ghi đè") +
+           (f" ({len(hits)} tool đã probe: {', '.join(hits[:10])}{'…' if len(hits) > 10 else ''})" if hits else
+            " (chưa khớp tool nào đã probe — `cfharness mcp probe " + a.name + "`)"))
+    ctx.out(res, msg)
+    return EXIT_OK
 
 
 def cmd_mcp(ctx: Any) -> int:
@@ -294,6 +332,8 @@ def cmd_mcp(ctx: Any) -> int:
         ag = ctx.call("mcp.assign", {"server": a.server, "agent": a.agent, "unassign": act == "unassign"})
         ctx.out(ag, f"agent {ag['id']}: mcp = {', '.join(ag.get('mcp_servers') or []) or '-'} (revision {ag['config_revision']})")
         return EXIT_OK
+    if act == "annotate":
+        return _cmd_annotate(ctx)
     if act == "agent-config":
         res = ctx.call("mcp.agent_config", {"agent": a.agent})
         ctx.out(res, json.dumps(res, ensure_ascii=False, indent=2))
@@ -422,6 +462,15 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     ed.add_argument("name")
     ed.add_argument("--probe", action="store_true")
     server_fields(ed)
+    an = ms.add_parser("annotate", help="ghi đè annotations tool (người đặt), vd: mcp annotate playwright 'browser_navigate' --not-destructive",
+                       parents=[common])
+    an.add_argument("name", help="tên MCP server")
+    an.add_argument("tool", help="tên tool hoặc glob (vd browser_*)")
+    an.add_argument("--not-destructive", action="store_true", help="destructiveHint=false (không hỏi duyệt vì cờ của server)")
+    an.add_argument("--destructive", action="store_true", help="destructiveHint=true (luôn hỏi duyệt)")
+    an.add_argument("--read-only", action="store_true", help="readOnlyHint=true (coi là chỉ đọc)")
+    an.add_argument("--not-read-only", action="store_true", help="readOnlyHint=false")
+    an.add_argument("--clear", action="store_true", help="bỏ ghi đè của glob này")
     ls = ms.add_parser("list", help="liệt kê registry", parents=[common])
     ls.add_argument("--deleted", action="store_true")
     for name, hlp in (("show", "xem server + tool/annotations"), ("restore", "khôi phục server đã xoá mềm")):

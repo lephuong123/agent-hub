@@ -24,7 +24,7 @@ from ..errors import Conflict, HubError, NotFound
 from ..events import make_event
 from ..paths import HubPaths
 from ..secrets import SecretStore
-from .config import McpServerConfig, match_any, normalize_trust, tool_selected
+from .config import McpServerConfig, annotation_override, match_any, normalize_trust, tool_selected
 from .importer import _Extractor, convert_entry, read_claude_servers
 
 log = logging.getLogger("cfharness.mcp_client")
@@ -361,8 +361,11 @@ class McpRegistry:
             return None
         cfg = row["config"]
         tools = cfg.get("tools") or {}
+        ov = annotation_override(tool, tools)
         return {
             **rec,
+            **ov,  # ghi đè của NGƯỜI (tools.annotations) thắng annotations server tự khai
+            "human_override": ov or None,
             "server": server,
             "trust": row.get("trust") or "untrusted",
             "require_approval": match_any(tool, tools.get("require_approval") or []),
@@ -413,6 +416,7 @@ class McpRegistry:
                     warnings.append(f"server '{name}' chưa probe — mẫu glob/không có include không suy được allow/deny theo tool (`cfharness mcp probe {name}`)")
                 continue
             for tool, rec in sorted(cache.items()):
+                rec = {**rec, **annotation_override(tool, cfg.tools)}
                 full = f"mcp__{name}__{tool}"
                 explicit = tool in cfg.tools.include
                 if not tool_selected(tool, cfg.tools) or (rec.get("suspicious") and not explicit):

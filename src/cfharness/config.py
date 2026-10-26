@@ -59,7 +59,14 @@ DEFAULTS: dict[str, Any] = {
         # `uncertain` (lệnh không phân tích chắc được: script động, python -c ghi file biến…) có giữ chờ người duyệt không.
         # false = chỉ `destructive` mới hỏi người (uncertain → cho chạy + audit); vẫn giữ uncertain vùng hub/policy và tool MCP
         # người đặt `require_approval`. Sandbox OS + permissions.deny vẫn áp. Người ít phải chạm nhất: false.
-        "hold_uncertain": True,
+        # null = theo `approval.profile` (strict → true; balanced/autonomous → false). Giá trị người đặt rõ trong config.yaml luôn thắng.
+        "hold_uncertain": None,
+        # `git reset --hard <ref>` trong worktree/scratch: hạ về `write` khi probe git chứng minh không mất gì (cây sạch, HEAD còn trên
+        # nhánh remote). null = theo profile (strict → tắt).
+        "safe_reset_probe": None,
+        # Edit/Write vào git worktree (cùng repo với cwd của run) do CHÍNH chuỗi run tạo, nằm trong workspace.allowed_roots → `write`.
+        # null = theo profile (strict → tắt; vẫn hỏi người như cũ).
+        "own_worktree_writes": None,
         # WEB-1: WebFetch/curl — SSRF (loopback/RFC1918/link-local/CGNAT/metadata/IPv6, scheme, user:pass@) luôn chặn; DNS phân giải
         # trong daemon, mọi IP phải công khai (không phân giải được → giữ chờ người). Glob domain: deny → chặn thẳng;
         # allow (rỗng = mọi domain công khai) → ngoài danh sách giữ chờ người (WebFetch; Bash đã có sandbox.allowed_domains).
@@ -108,6 +115,22 @@ DEFAULTS: dict[str, Any] = {
         "timeout_s": 300,  # Q-04: giữ chờ trong hook; quá → waiting_human (KHÔNG tự từ chối)
         "reminder_check_s": 30,  # chu kỳ kiểm nhắc lại
         "pause_delay_s": 0.5,  # chờ hook trả deny tới CLI rồi mới dừng tiến trình
+        # Hồ sơ phê duyệt (docs/dev-notes/approval-profiles.md) — CHỈ người đặt (config.set ∈ HUMAN_ONLY, nhánh `approval` kiểm toàn vẹn).
+        # strict = như trước; balanced = uncertain cho chạy + audit, thao tác phá huỷ trong workspace có checkpoint revert được tự cho
+        # phép, giao điều phối viên duyệt một số lớp; autonomous = balanced + tự cho phép phá huỷ trong scratch/worktree của agent có
+        # tool_policy.allow_bypass (người đặt). Khoá đặt rõ trong config.yaml thắng profile.
+        "profile": "balanced",
+        # null = theo profile. true: thao tác phá huỷ mà MỌI đích nằm trong repo có checkpoint của run và revert được → cho phép + audit
+        "checkpoint_auto_allow": None,
+        # null = theo profile (chỉ autonomous). Run scratch/worktree của agent có allow_bypass: phá huỷ trong cwd của run → cho phép
+        "scratch_auto_allow": None,
+        # Giao điều phối viên duyệt approval của agent KHÁC thuộc các lớp này (không bao giờ: danh sách "không bao giờ tự động").
+        # enabled null = theo profile (balanced/autonomous bật). Quá timeout_s chưa quyết → chuyển người (approval.escalated).
+        "delegate_to_manager": {"enabled": None, "classes": ["file", "git", "mcp"], "timeout_s": 600},
+        # Hết `timeout_s` giữ chờ: wait (Q-04: run tạm dừng chờ người) | deny_and_continue (agent nhận từ chối kèm hướng dẫn, run chạy
+        # tiếp, approval VẪN mở; người duyệt sau → resume như luồng waiting_human). Theo agent: on_timeout_by_agent {agent_id: …}.
+        "on_timeout": "wait",
+        "on_timeout_by_agent": {},
     },
     # UX — câu hỏi có lựa chọn của agent (questions/). Nhắc lại dùng notify.reminder_interval_s (giãn dần), KHÔNG tự trả lời.
     "questions": {
@@ -127,7 +150,7 @@ DEFAULTS: dict[str, Any] = {
             "bot_token_secret": "SLACK_BOT_TOKEN",
             "channel": None,
             "api_base": "https://slack.com/api",
-            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
+            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
                        "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,
             "backoff_base_s": 2,
@@ -145,7 +168,7 @@ DEFAULTS: dict[str, Any] = {
             "allowed_chat_ids": [],  # CHỈ các chat này được nhận thông báo + điều khiển hub
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
-            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
+            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
                        "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],
             "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp", "file"],  # nhãn "THAO TÁC NẶNG" (mọi cho phép đều 2 bước — WT-5)
             "callback_ttl_s": 604800,  # nút duyệt còn hiệu lực 7 ngày (waiting_human có thể chờ lâu)
@@ -547,6 +570,16 @@ class HubConfig:
         data = self.data
         return data if not key else get_path(data, key)
 
+    def explicit(self, key: str) -> tuple[bool, Any]:
+        """(có, giá trị) nếu NGƯỜI đặt rõ `key` trong config.yaml (không tính DEFAULTS; null = coi như không đặt).
+        Dùng cho hồ sơ phê duyệt: khoá đặt rõ thắng `approval.profile` (cài đặt cũ có `guard.hold_uncertain` vẫn giữ nguyên)."""
+        self._maybe_reload()
+        try:
+            v = get_path(self._overrides, key)
+        except KeyError:
+            return False, None
+        return (v is not None), v
+
     def set(self, key: str, value: Any) -> Any:
         validate_setting(key, value)
         self._maybe_reload()
@@ -578,6 +611,10 @@ def validate_setting(key: str, value: Any) -> None:
         from .guard.url_safety import validate_setting as _validate_web
 
         _validate_web(key, value)
+    if key == "approval" or key.startswith("approval.") or key in ("guard", "guard.hold_uncertain", "guard.safe_reset_probe", "guard.own_worktree_writes"):
+        from .guard.profiles import validate_setting as _validate_profile
+
+        _validate_profile(key, value)
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")

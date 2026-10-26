@@ -20,14 +20,45 @@ from rich.text import Text
 
 from ..termsafe import clean, one_line
 from ..tui.model import short_tool
+from ..ui import theme as th
 from ..web.present import mgr_action_item, mgr_message
 
 CHANNEL = "cli"
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 TERMINAL = ("run.completed", "run.failed", "run.cancelled", "run.interrupted")
 
-C_USER = "bold cyan"
-C_MGR = "bold magenta"
+# Style lấy từ bảng màu chung `ui/theme.py` (docs/dev-notes/cli-design.md §2) — chat, `top` và CLI là một sản phẩm
+C_USER = th.USER
+C_MGR = th.MGR
+# Bảng agent + thẻ duyệt/câu hỏi của REPL (`agentsview.py`) — gom style ở đây để thay theme sau mà không sửa logic
+C_DIM = th.MUTED
+C_FAINT = th.MUTED
+C_MID = th.MUTED
+C_SOFT = th.MUTED
+C_TOOL = th.INFO
+C_BADGE = th.ALARM
+C_CARD = f"bold {th.WARN}"
+C_CARD_BAR = th.WARN
+C_QUESTION = f"bold {th.INFO}"
+C_OK = th.OK
+C_WARN = th.WARN
+C_ERR = th.ERR_STRONG
+_AG = th.STATUS["agent"]
+_QUEUED = th.STATUS["run"]["queued"]
+# trạng thái một dòng agent: (biểu tượng, nhãn, style). Biểu tượng = `th.STATUS` (dùng chung với `top` và CLI)
+AGENT_STATE: dict[str, tuple[str, str, str]] = {
+    "running": (_AG["working"].icon, "đang chạy", _AG["working"].style),
+    "queued": (_QUEUED.icon, "chờ slot", _QUEUED.style),
+    "approval": (_AG["waiting"].icon, "chờ duyệt", _AG["waiting"].style),
+    "human": (_AG["waiting_human"].icon, "chờ bạn duyệt", _AG["waiting_human"].style),
+    "manager": (_AG["waiting"].icon, "điều phối viên đang xử lý", th.MGR),
+    "error": (_AG["error"].icon, "lỗi", _AG["error"].style),
+}
+
+
+def _unicode() -> bool:
+    """Ký hiệu unicode hay ASCII (`th.detect`): conhost cũ / code page gốc không phải UTF → ASCII (cli-design.md §6)."""
+    return th.detect().unicode
 
 
 def hhmm(ts: Any) -> str:
@@ -93,6 +124,8 @@ class ChatState:
         self.waiting_approval: str | None = None
         self.last_seq = 0
         self.epoch: str | None = None
+        # False: không trả mục approval (REPL in thẻ duyệt cho MỌI agent từ firehose — tránh in hai lần); trạng thái vẫn cập nhật
+        self.show_approvals = True
 
     # ------------------------------------------------------------------ hành động của người
     def resume(self, rows: list[dict[str, Any]], run: dict[str, Any] | None) -> None:
@@ -183,13 +216,19 @@ class ChatState:
             return [mgr_action_item(ev)]
         if t == "approval.open":
             self.waiting_approval = str(p.get("request_id") or "")
+            if not self.show_approvals:
+                return []
             return [{"kind": "approval", "request_id": self.waiting_approval, "preview": p.get("preview"), "reason": p.get("reason"),
                      "tool": p.get("tool")}]
         if t == "approval.waiting_human":
+            if not self.show_approvals:
+                return []
             return [{"kind": "note", "text": f"lượt tạm dừng chờ bạn duyệt {p.get('request_id')} — duyệt/từ chối xong điều phối viên tự làm tiếp",
                      "tone": "warn"}]
         if t == "approval.resolved":
             self.waiting_approval = None
+            if not self.show_approvals:
+                return []
             dec = {"allowed": "đã cho phép", "denied": "đã từ chối", "cancelled": "đã huỷ"}.get(str(p.get("decision")), str(p.get("decision")))
             return [{"kind": "note", "text": f"yêu cầu {p.get('request_id')}: {dec}" + (f" (qua {p.get('channel')})" if p.get("channel") else "")}]
         return []
@@ -200,25 +239,25 @@ class ChatState:
         t = Text()
         if self.busy:
             el = time.monotonic() - self.busy_since
-            t.append(f" {SPINNER[int(el * 8) % len(SPINNER)]} ", style="bold magenta")
+            t.append(f" {SPINNER[int(el * 8) % len(SPINNER)]} ", style=C_MGR)
             if self.waiting_approval:
-                t.append(f"chờ bạn duyệt {self.waiting_approval}", style="bold yellow")
+                t.append(f"chờ bạn duyệt {self.waiting_approval}", style=f"bold {th.WARN}")
             else:
                 t.append("đang nghĩ…", style="magenta")
-            t.append(f" {int(el)}s", style="grey50")
+            t.append(f" {int(el)}s", style=th.MUTED)
             if self.activity:
-                t.append(f"  ⚙ {one_line(short_tool(self.activity), 32)}", style="grey62")
+                t.append(f"  ⚙ {one_line(short_tool(self.activity), 32)}", style=th.MUTED)
             hint = f"  {busy_hint}"
             room = width - len(t.plain) - len(hint) - 3
             tail = one_line(self.draft.rsplit("\n", 1)[-1] if self.draft.strip() else "", room) if room >= 12 else ""
             if tail:
-                t.append(f"  {tail}", style="italic grey70")
-            t.append(hint, style="grey42")
+                t.append(f"  {tail}", style=f"italic {th.MUTED}")
+            t.append(hint, style=th.MUTED)
         else:
             t.append(" ◆ ", style=C_MGR)
-            t.append(self.name, style="bold")
-            t.append(f"  · hội thoại {self.conversation_id or '(mới)'}", style="grey50")
-            t.append(f"   {idle_hint}", style="grey42")
+            t.append(self.name, style=th.HEAD)
+            t.append(f"  · hội thoại {self.conversation_id or '(mới)'}", style=th.MUTED)
+            t.append(f"   {idle_hint}", style=th.MUTED)
         return t
 
 
@@ -227,10 +266,10 @@ def _header(label: str, style: str, ts: Any, extra: str = "") -> Text:
     h = Text()
     h.append(label, style=style)
     if extra:
-        h.append(f" {extra}", style="grey50")
+        h.append(f" {extra}", style=th.MUTED)
     tm = hhmm(ts)
     if tm:
-        h.append(f"  {tm}", style="grey42")
+        h.append(f"  {tm}", style=th.MUTED)
     return h
 
 
@@ -246,35 +285,37 @@ def render(item: dict[str, Any], *, manager_name: str = "Điều phối viên") 
     if k == "manager":
         ok = item.get("ok", True)
         if not ok:
-            return Group(Text(""), _header("◆ " + manager_name, "bold red", item.get("ts"), "— không trả lời được"),
-                         _body(item.get("text"), "red"))
+            return Group(Text(""), _header("◆ " + manager_name, th.ERR_STRONG, item.get("ts"), "— không trả lời được"),
+                         _body(item.get("text"), th.ERR))
         return Group(Text(""), _header("◆ " + manager_name, C_MGR, item.get("ts")), _body(item.get("text")))
     if k == "notify":
-        return Group(Text(""), _header("✉ Thông báo từ " + manager_name, "bold yellow", item.get("ts")), _body(item.get("text")))
+        return Group(Text(""), _header("✉ Thông báo từ " + manager_name, f"bold {th.WARN}", item.get("ts")), _body(item.get("text")))
     if k == "action":
         t = Text("  ")
         ok = item.get("ok", True)
-        t.append("✓ " if ok else "✗ ", style="green" if ok else "red")
-        t.append(one_line(item.get("summary") or item.get("tool") or "hành động", 140), style="grey70" if ok else "red")
+        u = _unicode()
+        t.append(f"{th.glyph('ok', u)} " if ok else f"{th.glyph('err', u)} ", style=th.OK if ok else th.ERR)
+        t.append(one_line(item.get("summary") or item.get("tool") or "hành động", 140), style=th.MUTED if ok else th.ERR)
         tgt = item.get("target") or {}
         if tgt.get("label"):
-            t.append(f"  → {one_line(tgt['label'], 60)}", style="grey50")
+            t.append(f"  → {one_line(tgt['label'], 60)}", style=th.MUTED)
         if not ok and item.get("error"):
-            t.append(f"  ({one_line(item['error'], 120)})", style="grey50")
+            t.append(f"  ({one_line(item['error'], 120)})", style=th.MUTED)
         return t
     if k == "approval":
         rid = one_line(item.get("request_id"), 40)
-        t = Text("  ⏸ ", style="bold yellow")
-        t.append("Điều phối viên cần bạn duyệt: ", style="yellow")
+        t = Text(f"  {th.STATUS['approval']['waiting_human'].icon} ", style=f"bold {th.WARN}")
+        t.append("Điều phối viên cần bạn duyệt: ", style=th.WARN)
         t.append(one_line(item.get("preview") or item.get("tool") or "", 160))
         if item.get("reason"):
-            t.append(f"\n     lý do: {one_line(item['reason'], 160)}", style="grey62")
-        t.append(f"\n     cfharness approve {rid}  ·  cfharness deny {rid}", style="grey50")
+            t.append(f"\n     lý do: {one_line(item['reason'], 160)}", style=th.MUTED)
+        t.append("\n     ")
+        t.append(th.hint(f"duyệt: `cfharness approve {rid}` · từ chối: `cfharness deny {rid}`", th.detect()))
         return t
     if k == "steer":
-        return Text(f"  ↪ {item.get('text')}", style="grey50")
-    tone = {"warn": "yellow", "err": "red"}.get(str(item.get("tone") or ""), "grey50")
-    return Text(f"  • {clean(item.get('text'))}", style=f"italic {tone}")
+        return Text(f"  {th.STATUS['run']['resumed'].icon} {item.get('text')}", style=th.MUTED)
+    tone = {"warn": th.WARN, "err": th.ERR}.get(str(item.get("tone") or ""), th.MUTED)
+    return Text(f"  {th.glyph('bullet', _unicode())} {clean(item.get('text'))}", style=f"italic {tone}")
 
 
 REPL_KEYS = (("Enter", "gửi"), ("Ctrl-V", "dán ảnh"), ("/help", "lệnh"), ("Ctrl-C", "dừng lượt"), ("Ctrl-D", "thoát"))
@@ -285,23 +326,23 @@ def banner(manager_id: str, conversation_id: str | None, *, title: str | None = 
            keys: tuple[tuple[str, str], ...] = REPL_KEYS) -> Text:
     t = Text()
     t.append("◆ ", style=C_MGR)
-    t.append("Chat với điều phối viên ", style="bold")
+    t.append("Chat với điều phối viên ", style=th.HEAD)
     t.append(manager_id, style=C_MGR)
     t.append("\n  ")
     if conversation_id:
-        t.append(f"hội thoại {conversation_id}", style="grey62")
+        t.append(f"hội thoại {conversation_id}", style=th.MUTED)
         if title:
-            t.append(f" · {one_line(title, 50)}", style="grey50")
+            t.append(f" · {one_line(title, 50)}", style=th.MUTED)
         if resumed:
-            t.append(f" · {resumed} tin trước", style="grey50")
+            t.append(f" · {resumed} tin trước", style=th.MUTED)
     else:
-        t.append("hội thoại mới", style="grey62")
+        t.append("hội thoại mới", style=th.MUTED)
     t.append("\n  ")
     for i, (k, d) in enumerate(keys):
         if i:
-            t.append(" · ", style="grey50")
-        t.append(k, style="bold")
-        t.append(f" {d}", style="grey50")
+            t.append(" · ", style=th.MUTED)
+        t.append(k, style=th.HEAD)
+        t.append(f" {d}", style=th.MUTED)
     return t
 
 
@@ -310,38 +351,46 @@ HELP = [
     ("/list", "các hội thoại (kênh cli — dùng chung với TUI)"),
     ("/open <id>", "chuyển sang hội thoại"),
     ("/history [n]", "in lại n tin gần nhất (mặc định 20)"),
-    ("/stop", "dừng lượt điều phối viên đang làm"),
+    ("/stop [agent|run]", "dừng lượt điều phối viên; kèm agent/run = dừng run đó (y/N)"),
+    ("/agents", "bảng mọi agent: trạng thái, task, tool, token, $ (= /ps)"),
+    ("/attach <agent|run>", "xem trực tiếp run của agent (màn attach của top)"),
+    ("/approvals", "yêu cầu duyệt + câu hỏi đang chờ"),
+    ("/approve <id> [ghi chú]", "cho phép MỘT lần (hiện lại lệnh đầy đủ, hỏi y/N)"),
+    ("/deny <id> [lý do]", "từ chối yêu cầu duyệt"),
+    ("/always <id>", "luôn cho phép (chỉ khi hub cho phép; xác nhận 2 bước)"),
+    ("/answer <id> 1,2 [chữ]", "trả lời câu hỏi của agent"),
     ("/clear", "xoá màn hình"),
     ("/help", "trợ giúp"),
     ("/quit", "thoát (hoặc Ctrl-D)"),
 ]
-COMMANDS = [c.split()[0] for c, _ in HELP] + ["/exit"]
+COMMANDS = [c.split()[0] for c, _ in HELP] + ["/exit", "/ps"]
 
 
 def help_text() -> Text:
     t = Text()
     for c, d in HELP:
-        t.append(f"  {c:<14}", style="bold")
-        t.append(f"{d}\n", style="grey62")
-    t.append("  Gõ khi điều phối viên đang làm = chèn thêm ý vào lượt đó (steer).\n", style="grey50")
-    t.append("  Kéo thư mục/file vào = gửi đường dẫn; kéo file ảnh vào hoặc Ctrl-V (ảnh trong clipboard) = gửi kèm ảnh (≤ 4, ≤ 5 MB).\n", style="grey50")
-    t.append("  Muốn gửi chữ bắt đầu bằng `/` mà trùng tên lệnh: gõ `//…`.\n", style="grey50")
-    t.append("  Duyệt thao tác phá huỷ KHÔNG làm ở đây: cfharness approvals · cfharness approve <id>\n", style="grey50")
+        t.append(f"  {c:<24}", style=th.HEAD)
+        t.append(f"{d}\n", style=th.MUTED)
+    t.append("  Gõ khi điều phối viên đang làm = chèn thêm ý vào lượt đó (steer).\n", style=th.MUTED)
+    t.append("  Kéo thư mục/file vào = gửi đường dẫn; kéo file ảnh vào hoặc Ctrl-V (ảnh trong clipboard) = gửi kèm ảnh (≤ 4, ≤ 5 MB).\n", style=th.MUTED)
+    t.append("  Muốn gửi chữ bắt đầu bằng `/` mà trùng tên lệnh: gõ `//…`.\n", style=th.MUTED)
+    t.append("  ↓ (dòng nhập trống) mở/đóng bảng agent đang chạy; Esc đóng.\n", style=th.MUTED)
+    t.append("  Agent cần bạn duyệt/hỏi bạn → thẻ hiện ngay (kèm chuông): lệnh ĐẦY ĐỦ + cách xử lý.\n", style=th.MUTED)
     return t
 
 
 def conv_list_text(rows: list[dict[str, Any]], current: str | None) -> Text:
     t = Text()
     if not rows:
-        t.append("  (chưa có hội thoại nào — gõ tin để bắt đầu)\n", style="grey50")
+        t.append("  (chưa có hội thoại nào — gõ tin để bắt đầu)\n", style=th.MUTED)
         return t
     for c in rows:
         mark = "▸ " if c.get("id") == current else "  "
         t.append(mark, style=C_MGR)
-        t.append(f"{c.get('id')}", style="bold" if c.get("id") == current else "")
-        t.append(f"  {c.get('messages', 0):>3} tin · {hhmm(c.get('updated_at'))} {str(c.get('updated_at') or '')[:10]}", style="grey50")
+        t.append(f"{c.get('id')}", style=th.HEAD if c.get("id") == current else "")
+        t.append(f"  {c.get('messages', 0):>3} tin · {hhmm(c.get('updated_at'))} {str(c.get('updated_at') or '')[:10]}", style=th.MUTED)
         if c.get("title"):
-            t.append(f"  {one_line(c['title'], 60)}", style="grey70")
+            t.append(f"  {one_line(c['title'], 60)}", style=th.MUTED)
         t.append("\n")
     return t
 

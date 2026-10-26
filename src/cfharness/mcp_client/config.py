@@ -27,6 +27,7 @@ TRUST_VALUES = ("trusted", "untrusted")
 TRUST_ALIASES = {"full": "trusted", "trust": "trusted", "trusted": "trusted", "untrusted": "untrusted"}
 # Server nội bộ của hub — không nằm trong registry, không được đặt trùng tên.
 RESERVED_NAMES = frozenset({"hub-guard", "hub-self", "cfharness", "hub-learning"})
+ANNOTATION_OVERRIDE_KEYS = ("destructiveHint", "readOnlyHint")
 
 
 def normalize_trust(value: Any) -> tuple[str, str | None]:
@@ -46,6 +47,25 @@ class ToolFilter(BaseModel):
     require_approval: list[str] = Field(
         default_factory=list, description="glob tool luôn qua phê duyệt động dù server trusted (FR-MC-03)"
     )
+    # Ghi đè annotations do NGƯỜI đặt (`cfharness mcp annotate`; mcp.update ∈ HUMAN_ONLY): {glob tool: {destructiveHint?, readOnlyHint?}}.
+    # Sửa báo nhầm của server (vd playwright đánh dấu browser_navigate/close là destructive). Không gỡ được luật tên-xoá, tài nguyên
+    # bảo vệ hay require_approval.
+    annotations: dict[str, dict[str, bool]] = Field(default_factory=dict, description="ghi đè annotations theo glob tool (người đặt)")
+
+    @field_validator("annotations")
+    @classmethod
+    def _annotations(cls, v: dict[str, dict[str, bool]]) -> dict[str, dict[str, bool]]:
+        for pat, ov in v.items():
+            if not isinstance(pat, str) or not pat or len(pat) > 200:
+                raise ValueError("annotations: khoá phải là glob tên tool")
+            if not isinstance(ov, dict) or not ov:
+                raise ValueError(f"annotations[{pat}]: cần {{destructiveHint|readOnlyHint: true|false}}")
+            bad = sorted(set(ov) - set(ANNOTATION_OVERRIDE_KEYS))
+            if bad:
+                raise ValueError(f"annotations[{pat}]: khoá lạ {bad} (được: {', '.join(ANNOTATION_OVERRIDE_KEYS)})")
+            if not all(isinstance(x, bool) for x in ov.values()):
+                raise ValueError(f"annotations[{pat}]: giá trị phải là true/false")
+        return v
 
 
 class McpServerConfig(BaseModel):
@@ -123,6 +143,16 @@ class McpServerConfig(BaseModel):
 
 def match_any(name: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatchcase(name, p) for p in patterns)
+
+
+def annotation_override(tool: str, filt: ToolFilter | dict[str, Any] | None) -> dict[str, bool]:
+    """Ghi đè annotations người đặt cho `tool` (gộp mọi glob khớp; glob cụ thể hơn = dài hơn thắng)."""
+    ann = (filt.annotations if isinstance(filt, ToolFilter) else (filt or {}).get("annotations")) or {}
+    out: dict[str, bool] = {}
+    for pat in sorted(ann, key=len):
+        if fnmatch.fnmatchcase(tool, pat) and isinstance(ann[pat], dict):
+            out.update({k: bool(v) for k, v in ann[pat].items() if k in ANNOTATION_OVERRIDE_KEYS})
+    return out
 
 
 def tool_selected(tool: str, filt: ToolFilter) -> bool:

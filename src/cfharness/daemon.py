@@ -23,7 +23,7 @@ from .events import TERMINAL_RUN_EVENTS
 from .hub import Hub
 from .logs import setup_logging
 from .paths import HubPaths
-from .oscompat import IS_WINDOWS, JOBS, detached_kwargs, same_user
+from .oscompat import IS_WINDOWS, JOBS, detached_kwargs, ensure_hidden_console, same_user
 from .rpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, DaemonUnavailable, RpcClient, encode
 from .runtime import AgentRuntime
 
@@ -466,7 +466,10 @@ def run_foreground(paths: HubPaths) -> None:
         out = open(paths.logs_dir / "daemon.out", "a", encoding="utf-8", errors="replace", buffering=1)
         sys.stdout = sys.stdout or out
         sys.stderr = sys.stderr or out
+    console = ensure_hidden_console()  # Windows/pythonw: console ẩn cho claude + hậu duệ (không bật cửa sổ, CTRL_BREAK chạy được)
     setup_logging(paths.logs_dir)
+    if console not in ("posix", "existing"):
+        logging.getLogger("cfharness.daemon").info("không có console → đã lấy console ẩn (%s)", console)
     from .redact import install_log_filter, install_stderr_masking
 
     install_stderr_masking()  # H-12: log thư viện ra stderr (daemon.out) cũng che

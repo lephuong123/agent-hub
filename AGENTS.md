@@ -311,6 +311,7 @@ Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes
 | `chat/manager_chat.py` | `hub.telegram.manager`: tin không `/` → `manager.chat(channel=telegram:<chat>)`, reply → đúng conversation (`hub_state telegram.mgr_*`), `/moi`, `manager.reply` (theo `channel`) → khung WT-8 |
 | `web/manager_stub.py` | Stub `manager.*` cùng chữ ký — CHỈ test/demo (`install(daemon, force=)`) |
 | `manager/repl.py`, `manager/chatview.py` | `cfharness chat` (= `manager chat` không nội dung): REPL `prompt_toolkit` (nhập dính đáy, thanh trạng thái spinner/tool/chữ chạy, `/new /list /open /history /stop`, steer khi đang làm, Ctrl-C dừng lượt, lịch sử `HUB_HOME/cli_history` 0600); không TTY → từng dòng stdin. `ChatState`/`render` thuần dùng chung với TUI. `manager chat "<tin>"` chờ qua `events.subscribe` (`repl.oneshot`) |
+| `manager/agentsview.py` | `cfharness chat` thấy cả đội: `AgentMonitor` (bọc `tui.model.TopModel`: `tui.snapshot` ~1 s + firehose summary, đăng ký lại khi `slow_consumer`; `question.list`), bảng agent trong toolbar (↓/Esc), thẻ duyệt/câu hỏi của MỌI agent + chuông, `/agents /stop <agent> /attach /approvals /approve /deny /always /answer` (RPC có sẵn, y/N; `/always` 2 bước + `always_confirm`). Hợp đồng định tuyến: `routed_to` ∈ manager/human/None + event `approval.delegated|escalated` — manager = không chuông. Style ở hằng `chatview.C_*`/`AGENT_STATE`. Test: `tests/test_chat_agents_panel.py` |
 | `tui/manager.py` | `ManagerScreen` (phím `m` ở `top`): hội thoại + "Hành động" (Enter → Attach/Tasks, chỉ đích hợp lệ) + transcript `RichLog(markup=False)` + ô nhập; Ctrl-N mới, Ctrl-T dừng lượt. Hội thoại kênh `cli` DÙNG CHUNG với `cfharness chat`; audit kênh `tui` |
 | `termsafe.py` | `clean()`/`one_line()`: bỏ ANSI/OSC/C1, điều khiển, bidi, zero-width trước khi in chữ agent ra terminal |
 
@@ -341,7 +342,7 @@ capabilities set …` = `config.set`, nhánh `manager` kiểm toàn vẹn); stri
 bypass. `manager_config_problem` kiểm theo khung ở `manager.set` và mỗi run. Run manager: classifier cấm thẳng ghi `hub-*`, loopback/LAN
 (curl/WebFetch), `claude` lồng, CLAUDE.md/.claude; tiến trình con gọi socket chỉ được `managerself.call` (`ManagerService.run_socket_block`).
 Thêm tool vào khung → `CAP_PROFILES`/`CAP_TOOLS_MAX` (permissions.py) + ca trong `tests/test_manager_capabilities.py`.
-Không bao giờ: manager duyệt approval, sửa policy/guard/golden/sandbox, purge, tắt ESTOP, sửa agent manager (kể cả chính mình/manager cũ),
+Không bao giờ: manager duyệt approval CHƯA được người giao (chỉ `routed_to=manager` qua `approval.manager_decide` — `docs/dev-notes/approval-profiles.md`), sửa policy/guard/golden/sandbox, purge, tắt ESTOP, sửa agent manager (kể cả chính mình/manager cũ),
 `bypassPermissions`/`allow_bypass`/`extra_args`/`subagents`, bỏ mẫu disallowed người đặt, MCP ngoài registry. Test: `tests/test_manager*.py`
 (helper `tests/m7_fake.py`, ScriptedRuntime giữ run manager ở `running`).
 
@@ -405,3 +406,18 @@ Bất biến: `created_by` lấy từ người gọi. Điều phối viên chỉ
 `schedules.*` (kiểm toàn vẹn), không từ lượt của lịch; luật ở `ScheduleService.manager_check`, gọi từ `manager/permissions.check_rpc` (2 lớp) và
 `_gate` (lần 3). Nội dung lịch do điều phối viên viết vào prompt trong khung `<untrusted-data>`, tiêu đề `[cfharness · SCHEDULED JOB · key …]`
 (không bao giờ thành "tin người"). Thêm luật/ trần → ca đỏ→xanh trong `tests/test_schedules.py`.
+
+## Hồ sơ phê duyệt — `approval.profile` strict|balanced|autonomous, giao điều phối viên duyệt
+Chi tiết, dữ liệu hub thật, bảng profile, ranh giới, lưu ý cài đặt cũ: `docs/dev-notes/approval-profiles.md`. Migration **v18**
+(`approval_requests.routed_to…timeout_action`). Test: `tests/test_approval_profiles.py`.
+
+| Module | Vai trò |
+|---|---|
+| `guard/profiles.py` | `profile()`, `knob()` (khoá đặt rõ trong config.yaml thắng profile — đọc khoá profile qua đây, không `config.get`), `never_automatic()` (ranh giới DUY NHẤT cho mọi đường tự động), `delegable()`, `on_timeout()`, kiểm `config.set approval.*` |
+| `guard/service.py` | `auto_allow` (checkpoint / scratch autonomous), `route_for` (giao điều phối viên), on_timeout `deny_and_continue`, `always_offer` kind `mcp_tool` |
+| `approvals.py` | `routed_to`, `approval.delegated/escalated`, `manager_decide`, `check_delegations`, phê duyệt muộn của deny_and_continue, `approval_stats` |
+| `guard/classifier.py` | `own_worktree_write`, `git_reset_hard_safe`, luật `mcp_tool`, ghi đè annotations (`human_override`) |
+
+Bất biến: mọi đường tự động gọi `never_automatic` trước; thêm luật/lớp nhạy cảm → thêm vào `NEVER_RULES`/`NEVER_KLASS` + một test `test_never_*`.
+Điều phối viên chỉ quyết approval `routed_to=manager` (luật ở `permissions.check_rpc` lớp 1+2 và `ApprovalService.manager_decide` lớp 3), không bao giờ
+approval của run điều phối viên, không bao giờ `always`. Q-04 giữ: mặc định hết giờ = `wait`.

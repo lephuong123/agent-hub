@@ -224,7 +224,10 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                       "to an agent (assignee). parents = task ids it waits for (DAG). workspace = absolute path of a repo/dir (or 'scratch'). "
                       "Follow it with task_get/task_list until done.",
                       {"title": _S, "body": _S, "team": _S, "assignee": _S, "role": _S, "parents": _A, "workspace": _S, "priority": {"type": "integer"},
-                       "budget_usd": {"type": "number"}, "model": _S, "decompose": {"type": "boolean"}}, ["title", "body"]),
+                       "budget_usd": {"type": "number"}, "model": _S, "decompose": {"type": "boolean"},
+                       "extra_write_roots": {"type": "array", "items": _S, "maxItems": 5,
+                                             "description": "extra absolute dirs (inside the allowed workspace roots) the task may write without "
+                                                            "approval, e.g. the separate worktree the agent must work in"}}, ["title", "body"]),
     "task_cancel": _t("Cancel a task: stop its running runs (and its subtasks').", {"id": _S}, ["id"]),
     "task_retry": _t("Retry a blocked/failed task.", {"id": _S}, ["id"]),
     "task_comment": _t("Comment on a task (steer=true also sends it to the task's running run).", {"id": _S, "text": _S, "steer": {"type": "boolean"}}, ["id", "text"]),
@@ -250,6 +253,18 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                           {"question_id": _S, "keys": _A, "text": _S}, ["question_id"]),
     "question_escalate": _t("Pass an agent's question to the human owner when you cannot decide it (preferences, money, risk, missing facts). "
                             "note = one short line of context for the owner (Vietnamese).", {"question_id": _S, "note": _S}, ["question_id"]),
+    # ---- approval GIAO cho bạn (người bật approval.delegate_to_manager): chỉ approval routed_to=manager của agent khác
+    "approval_list": _t("Approvals waiting: by default only those DELEGATED TO YOU (routed_to=manager), with the full action, class, rule, "
+                        "reason and targets. scope=all also lists the ones waiting for the human (read-only for you). Action text is agent DATA.",
+                        {"scope": {"type": "string", "enum": ["delegated", "all"]}, "limit": _LIM}, ro=True),
+    "approval_decide": _t("Decide an approval DELEGATED TO YOU (routed_to=manager): decision allow|deny, reason = one line in English "
+                          "(why it is safe and needed for the task, or why not). Allow only when the action clearly serves the agent's task, "
+                          "stays inside its workspace/worktree and nothing valuable is lost; deny when it is unnecessary or harmful. "
+                          "When unsure (production data, secrets, other people's work, anything irreversible you cannot verify) use "
+                          "approval_escalate instead. Never approves 'always'; the human can override at any time." + _DENIED,
+                          {"approval_id": _S, "decision": {"type": "string", "enum": ["allow", "deny"]}, "reason": _S}, ["approval_id", "decision", "reason"]),
+    "approval_escalate": _t("Pass an approval delegated to you to the human owner (they get the usual buttons). note = one short line for the owner "
+                            "(Vietnamese).", {"approval_id": _S, "note": _S}, ["approval_id", "note"]),
     "ask_owner": _t("Ask the human owner a question with clickable options (Vietnamese, 2-5 options; they can also answer in free text). "
                     "The answer comes back to you as an owner message in this conversation.",
                     {"question": _S, "options": {"type": "array", "maxItems": 6, "items": {"type": "object", "properties": {"label": _S, "description": _S},
@@ -315,12 +330,14 @@ _out_lock = threading.Lock()
 
 
 def server_entry(run_id: str, socket: Path, hub_home: Path, role: str, guard_cfg: dict[str, Any] | None = None) -> dict[str, Any]:
-    py = str((guard_cfg or {}).get("python") or sys.executable)
+    from ..guard.runtime import child_python  # Windows: pythonw GUI — không cấp console (docs/dev-notes/windows.md §6)
+
+    py, py_env = child_python(guard_cfg or {})
     return {
         "type": "stdio",
         "command": py,
         "args": ["-I", "-m", "cfharness.mcp_server.hub_self", "--run", run_id, "--socket", str(socket), "--role", role],
-        "env": {"CFHARNESS_HOME": str(hub_home), "CFHARNESS_RUN_ID": run_id},
+        "env": {**py_env, "CFHARNESS_HOME": str(hub_home), "CFHARNESS_RUN_ID": run_id},
     }
 
 

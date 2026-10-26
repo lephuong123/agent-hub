@@ -92,9 +92,16 @@ kênh `telegram:<chat_id>`. Bot không gửi secret và cắt dữ liệu dài (
 ## Điều phối viên
 
 Điều phối viên là **một agent bạn chỉ định** để quản lý cả đội: bạn nói mục tiêu bằng lời ("tạo agent nghiên cứu tóm tắt README
-của repo X rồi giao việc đó"), nó tự tạo/sửa agent và team, giao task, theo dõi tới khi xong và báo lại. Nó KHÔNG được duyệt thao tác
-phá huỷ, sửa chính sách/guard/golden task, mở ngoại lệ sandbox, xoá vĩnh viễn, tắt ESTOP hay sửa cấu hình của chính nó; mọi thao tác
-ghi nhật ký `manager:<agent>` và rollback được.
+của repo X rồi giao việc đó"), nó tự tạo/sửa agent và team, giao task, theo dõi tới khi xong và báo lại. Nó KHÔNG được sửa chính
+sách/guard/golden task, mở ngoại lệ sandbox, xoá vĩnh viễn, tắt ESTOP hay sửa cấu hình của chính nó; mọi thao tác ghi nhật ký
+`manager:<agent>` và rollback được.
+
+**Duyệt thao tác phá huỷ** (thay đổi 2026-10-26, `docs/dev-notes/approval-profiles.md`): điều phối viên CHỈ quyết những approval bạn
+đã giao (`approval.delegate_to_manager`, bật ở profile `balanced` mặc định, lớp `file`/`git`/`mcp`) của agent KHÁC — cho phép/từ chối
+kèm lý do hoặc chuyển lên bạn; quá `timeout_s` (10 phút) chưa quyết → tự chuyển lên bạn (thông báo như thường). Nó không bao giờ quyết
+approval của chính nó, không tạo luật "luôn cho phép", và hub không bao giờ giao: push/đổi remote, thông tin xác thực/secret, file
+hub/chính sách, tài nguyên được bảo vệ, đường dẫn ngoài `workspace.allowed_roots`. Bạn vẫn quyết được bất kỳ lúc nào. Muốn như cũ:
+`cfharness config set approval.profile strict`. Xem vì sao agent phải dừng hỏi: `cfharness approvals stats`.
 
 - **Chỉ định** (chỉ người): `cfharness manager set <agent>` (huỷ: `--none`), hoặc web → trang **Điều phối** → *Chỉ định…* (có hộp xác nhận).
 - **Web — trang Điều phối** (đầu menu): khung chat theo cuộc trò chuyện (*+ Cuộc trò chuyện mới* để mở ngữ cảnh mới), trả lời chạy
@@ -106,6 +113,17 @@ ghi nhật ký `manager:<agent>` và rollback được.
   `/moi <nội dung>`) mở cuộc trò chuyện mới. Tin điều phối viên chủ động báo (`notify_owner`) cũng đến đây. Chưa có điều phối viên → bot
   trả hướng dẫn. Các lệnh cũ (`/run`, reply vào tin kết quả run…) giữ nguyên.
 - **Terminal**: `cfharness manager chat "<nội dung>"`, `manager get|conversations|history|tick`.
+- **Terminal — `cfharness chat`** (chat qua lại, giống Claude CLI): ngoài hội thoại với điều phối viên còn thấy **cả đội**.
+  - *Bảng agent* ngay trên thanh trạng thái: gọn một dòng `● 3 agent đang chạy · ⚠ 1 chờ bạn duyệt  (↓ xem)` (ẩn khi không có gì
+    chạy/chờ); **↓** khi dòng nhập trống mở bảng — mỗi agent một dòng: trạng thái (● chạy, ◌ chờ slot, ◐ chờ duyệt, ⏸ chờ bạn, ✖ lỗi),
+    tên, task, thời gian, tool cuối, token, $; **↓**/**Esc** đóng (đang gõ thì ↑↓ vẫn là lịch sử). Terminal thấp → `+k nữa`.
+  - *Thẻ duyệt / câu hỏi* của **mọi** agent hiện ngay trong chat kèm chuông: agent, tool, lệnh **đầy đủ**, lý do, rủi ro, id, cách xử
+    lý. Yêu cầu đang do điều phối viên xử lý chỉ hiện một dòng "điều phối viên đang xử lý" (không chuông); chuyển lên bạn → thẻ đầy đủ.
+  - Lệnh: `/agents` (`/ps`) bảng mọi agent · `/stop <agent|run>` (hỏi y/N) · `/attach <agent>` mở màn attach của `top`, thoát là quay
+    lại chat · `/approvals` · `/approve <id> [ghi chú]` (in lại lệnh đầy đủ rồi hỏi y/N) · `/deny <id> [lý do]` · `/always <id>`
+    (chỉ khi hub cho phép, xác nhận 2 bước) · `/answer <id> 1,2 [chữ]`. Mọi quyết định ghi audit kênh `cli`, cùng cổng chỉ-người
+    như TUI/web/Telegram. Không phải TTY (script): thẻ in chữ thường, không bảng, y/N đọc từ dòng stdin kế tiếp.
+  - Ảnh: `docs/screenshots/m2/15-chat-bang-agent.svg`, `16-chat-the-duyet.svg`.
 
 Ảnh: `docs/screenshots/web/16-dieu-phoi*.png`, `17-…`, `18-…`.
 

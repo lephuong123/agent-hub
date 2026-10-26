@@ -37,6 +37,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, DataTable, Footer, Input, Label, RichLog, Select, SelectionList, Static
 
 from ..rpc import DaemonUnavailable, RpcError
+from ..ui import theme as th
 from .client import AsyncHubClient, subscribe
 from .model import (
     STATUS_STYLE,
@@ -101,7 +102,7 @@ class HtopScreen(Screen):
         yield Input(placeholder="Lọc theo id / tên / task / team / trạng thái… (Enter áp dụng, Esc huỷ)", id="filter")
         yield DataTable(id="agents", cursor_type="row", zebra_stripes=True)
         yield Static(id="detail")
-        yield Static(Text(" Firehose — event tóm tắt của mọi agent (không gồm delta token)", style="bold grey70"), id="activity-title")
+        yield Static(Text(" Firehose — event tóm tắt của mọi agent (không gồm delta token)", style=f"bold {th.MUTED}"), id="activity-title")
         yield RichLog(id="activity", max_lines=1000, wrap=False, markup=False)
         yield Footer()
 
@@ -156,10 +157,10 @@ class HtopScreen(Screen):
 
     def _cells(self, r: Row, now: float) -> list[Any]:
         return [
-            Text(r.id, style="grey62"),
-            Text.assemble((r["name"] or r.id, "bold"), (" ⚠lo" if r["sandbox_localhost"] else "", "bold red"),
-                          (" ⚠net" if r["sandbox_domains"] else "", "bold red")),  # SEC: ngoại lệ sandbox loopback / domain mở thêm
-            Text(r["team"] or "—", style="grey70"),
+            Text(r.id, style=th.MUTED),
+            Text.assemble((r["name"] or r.id, th.HEAD), (" ⚠lo" if r["sandbox_localhost"] else "", th.ERR_STRONG),
+                          (" ⚠net" if r["sandbox_domains"] else "", th.ERR_STRONG)),  # SEC: ngoại lệ sandbox loopback / domain mở thêm
+            Text(r["team"] or "—", style=th.MUTED),
             status_text(r["status"]),
             task_cell(r),
             last_tool_cell(r, now),
@@ -205,26 +206,26 @@ class HtopScreen(Screen):
         r = self.selected()
         detail = self.query_one("#detail", Static)
         if r is None:
-            detail.update(Text(" Chưa có agent nào khớp. Bấm n để tạo agent (có template researcher/coder/reviewer/ops).", style="grey50"))
+            detail.update(Text(" Chưa có agent nào khớp. Bấm n để tạo agent (có template researcher/coder/reviewer/ops).", style=th.MUTED))
             return
         t = Text()
-        t.append(f" {r['name']}", style="bold")
-        t.append(f" · {r['role'] or '—'} · model {r['model']}", style="grey70")
+        t.append(f" {r['name']}", style=th.HEAD)
+        t.append(f" · {r['role'] or '—'} · model {r['model']}", style=th.MUTED)
         if r["current_run_id"]:
-            t.append(f" · run {r['current_run_id']}", style="grey62")
+            t.append(f" · run {r['current_run_id']}", style=th.MUTED)
         elif r["last_run_id"]:
-            t.append(f" · run cuối {r['last_run_id']} ({r['last_run_status']})", style="grey50")
+            t.append(f" · run cuối {r['last_run_id']} ({r['last_run_status']})", style=th.MUTED)
         if r["last_tool_preview"]:
-            t.append(f"\n ┊ {short_tool(r['last_tool'])}: {r['last_tool_preview']}"[:160], style="grey62")
+            t.append(f"\n ┊ {short_tool(r['last_tool'])}: {r['last_tool_preview']}"[:160], style=th.MUTED)
         pend = self.model.pending_for(r.id)
         if pend:
             a = pend[0]
             t.append("\n ⏸ CHỜ NGƯỜI DUYỆT " if a["status"] == "waiting_human" else "\n ◐ CHỜ DUYỆT ", style="bold black on yellow")
-            t.append(f" {a.get('preview') or a.get('tool_name')} ", style="bold yellow")
-            t.append(f"· luật {a.get('matched_rule') or a.get('destructive_class') or '?'} · chờ {fmt_dur(a.get('wait_s'))} ", style="grey70")
+            t.append(f" {a.get('preview') or a.get('tool_name')} ", style=f"bold {th.WARN}")
+            t.append(f"· luật {a.get('matched_rule') or a.get('destructive_class') or '?'} · chờ {fmt_dur(a.get('wait_s'))} ", style=th.MUTED)
             if a.get("reason"):
-                t.append(f"· {str(a['reason'])[:80]} ", style="grey62")
-            t.append("[a] cho phép  " + ("[A] luôn cho phép  " if a.get("always_offer") else "") + "[d] từ chối  [N] báo nhầm", style="bold")
+                t.append(f"· {str(a['reason'])[:80]} ", style=th.MUTED)
+            t.append("[a] cho phép  " + ("[A] luôn cho phép  " if a.get("always_offer") else "") + "[d] từ chối  [N] báo nhầm", style=th.HEAD)
         detail.update(t)
 
     @on(DataTable.RowHighlighted)
@@ -486,13 +487,13 @@ class Transcript(VerticalScroll):
     def _render_reasoning(self, text: str, est: int) -> Text:
         t = Text()
         if self.expand_reasoning:
-            t.append("▾ Suy nghĩ\n", style="italic grey50")
-            t.append(text or "(ẩn nội dung — chỉ có ước lượng token)", style="italic grey42")
+            t.append("▾ Suy nghĩ\n", style=f"italic {th.MUTED}")
+            t.append(text or "(ẩn nội dung — chỉ có ước lượng token)", style=f"italic {th.MUTED}")
         else:
             snippet = " ".join(text.split())[:90]
-            t.append("▸ Suy nghĩ", style="italic grey50")
-            t.append(f" · {len(text)} ký tự · " if text else f" · ~{est} token · ", style="grey42")
-            t.append((snippet + "…") if snippet else "", style="italic grey42")
+            t.append("▸ Suy nghĩ", style=f"italic {th.MUTED}")
+            t.append(f" · {len(text)} ký tự · " if text else f" · ~{est} token · ", style=th.MUTED)
+            t.append((snippet + "…") if snippet else "", style=f"italic {th.MUTED}")
         return t
 
     def toggle_reasoning(self) -> None:
@@ -500,7 +501,7 @@ class Transcript(VerticalScroll):
         for w, parts, est in self._reasoning:
             w.update(self._render_reasoning("".join(parts), est[0]))
 
-    def note(self, text: str, style: str = "grey50") -> None:
+    def note(self, text: str, style: str = th.MUTED) -> None:
         self._end_block()
         self._add(Text(text, style=style), "note")
 
@@ -544,16 +545,16 @@ class Transcript(VerticalScroll):
         self._end_block()
         if t == "run.queued":
             budget = p.get("max_budget_usd")
-            self._add(Text(f"… xếp hàng · {p.get('kind')} · ngân sách {'$' + str(budget) if budget else '—'}" + (" · resume" if p.get("resume") else ""), style="grey50"), "note")
+            self._add(Text(f"… xếp hàng · {p.get('kind')} · ngân sách {'$' + str(budget) if budget else '—'}" + (" · resume" if p.get("resume") else ""), style=th.MUTED), "note")
             if p.get("prompt_preview"):
-                line = Text("› Prompt: ", style="bold #7aa2f7")
-                line.append(p["prompt_preview"], style="#7aa2f7")
+                line = Text("› Prompt: ", style=th.ACCENT)
+                line.append(p["prompt_preview"], style=th.ACCENT)
                 self._add(line, "user")
         elif t == "run.started":
-            line = Text(f"── Bắt đầu · {p.get('model')} · CLI {p.get('claude_code_version') or '?'} · {p.get('permission_mode')} ", style="bold #7aa2f7")
+            line = Text(f"── Bắt đầu · {p.get('model')} · CLI {p.get('claude_code_version') or '?'} · {p.get('permission_mode')} ", style=th.ACCENT)
             mcp = [m.get("name") for m in p.get("mcp_servers") or [] if isinstance(m, dict)]
             if mcp:
-                line.append(f"\n   MCP: {', '.join(str(x) for x in mcp)}", style="grey50")
+                line.append(f"\n   MCP: {', '.join(str(x) for x in mcp)}", style=th.MUTED)
             self._add(line, "turn")
         elif t == "turn.start":
             return
@@ -574,42 +575,42 @@ class Transcript(VerticalScroll):
                 w.update(line)
             prev = (p.get("result_preview") or "").strip()
             if prev:
-                res = Text("┊    ↳ ", style="grey42")
+                res = Text("┊    ↳ ", style=th.MUTED)
                 first = prev.splitlines()
-                res.append(" ⏎ ".join(first[:3])[:200] + (" …" if len(first) > 3 or len(prev) > 200 else ""), style="red" if p.get("is_error") else "grey62")
+                res.append(" ⏎ ".join(first[:3])[:200] + (" …" if len(first) > 3 or len(prev) > 200 else ""), style=th.ERR if p.get("is_error") else th.MUTED)
                 self._add(res, "tool-result")
         elif t == "subagent.spawn":
             self._add(Text(f"┊ ⤷ subagent {p.get('type')}: {p.get('description')}", style="magenta"), "tool")
         elif t in ("approval.open", "approval.waiting_human"):
             body = Text()
             body.append(" ⏸ CHỜ NGƯỜI DUYỆT " if t == "approval.waiting_human" else " ◐ CHỜ DUYỆT ", style="bold black on yellow")
-            body.append(f" {p.get('tool') or ''}: ", style="bold yellow")
-            body.append(f"{p.get('preview')}\n", style="yellow")
+            body.append(f" {p.get('tool') or ''}: ", style=f"bold {th.WARN}")
+            body.append(f"{p.get('preview')}\n", style=th.WARN)
             if p.get("matched_rule") or p.get("reason"):
-                body.append(f"   luật {p.get('matched_rule') or '?'} · {p.get('reason') or ''}   ", style="grey70")
-            body.append("[a] cho phép  [d] từ chối", style="bold")
+                body.append(f"   luật {p.get('matched_rule') or '?'} · {p.get('reason') or ''}   ", style=th.MUTED)
+            body.append("[a] cho phép  [d] từ chối", style=th.HEAD)
             self._add(body, "request")
         elif t == "approval.resolved":
             dec = p.get("decision")
-            label, style = {"allowed": ("✓ Đã cho phép", "green"), "denied": ("✖ Đã từ chối", "red")}.get(dec, (f"■ {dec}", "grey50"))
+            label, style = {"allowed": ("✓ Đã cho phép", th.OK), "denied": ("✖ Đã từ chối", th.ERR)}.get(dec, (f"■ {dec}", th.MUTED))
             self._add(Text(f"   {label} bởi {p.get('by')} qua {p.get('channel')}" + (f" — {p['note']}" if p.get("note") else ""), style=style), "note")
         elif t == "user.message":
-            line = Text(f"› Steer ({p.get('by')} qua {p.get('channel')}): ", style="bold cyan")
-            line.append(p.get("text", ""), style="cyan")
+            line = Text(f"› Steer ({p.get('by')} qua {p.get('channel')}): ", style=th.USER)
+            line.append(p.get("text", ""), style=th.INFO)
             self._add(line, "user")
         elif t == "steer.ack":
-            self._add(Text("  ✓ steer.ack — agent đã nhận tin vào ngữ cảnh", style="cyan"), "note")
+            self._add(Text("  ✓ steer.ack — agent đã nhận tin vào ngữ cảnh", style=th.INFO), "note")
         elif t in ("run.completed", "run.failed", "run.cancelled", "run.interrupted", "run.waiting_human"):
             cost = float(p.get("cost_usd") or 0)
             dur = (p.get("duration_ms") or 0) / 1000
             oc = p.get("outcome") or t.split(".")[1]
-            style = {"completed": "green", "cancelled": "grey62", "waiting_human": "bold red"}.get(oc, "bold red")
+            style = th.STATUS["run"].get(oc, th.STATUS["run"]["failed"]).style
             txt = Text(f"■ Run {oc} · {fmt_dur(dur) if dur else '—'} · {p.get('num_turns') or '?'} lượt · ${cost:.4f}", style=style)
             if p.get("error") and oc != "completed":
-                txt.append(f"\n   {str(p['error'])[:300]}", style="red")
+                txt.append(f"\n   {str(p['error'])[:300]}", style=th.ERR)
             self._add(txt, "turn-end")
         elif t in ("error", "isolation.violation", "permission.denied", "guard.blocked", "auth.blocked", "budget.exceeded"):
-            self._add(Text(f"✖ {t}: {str(p.get('message') or p.get('detail') or p.get('name') or p.get('tool_name') or p)[:300]}", style="bold red"), "error")
+            self._add(Text(f"✖ {t}: {str(p.get('message') or p.get('detail') or p.get('name') or p.get('tool_name') or p)[:300]}", style=th.ERR_STRONG), "error")
         elif t == "run.takeover":
             self._add(Text("⇄ người tiếp quản bằng Claude Code", style="magenta"), "note")
 
@@ -620,30 +621,30 @@ class Transcript(VerticalScroll):
             t = Text()
             for e in edits[:3]:
                 for ln in str(e.get("old_string") or "").splitlines()[:8]:
-                    t.append(f"┊    - {ln}\n", style="red")
+                    t.append(f"┊    - {ln}\n", style=th.ERR)
                 for ln in str(e.get("new_string") or "").splitlines()[:8]:
-                    t.append(f"┊    + {ln}\n", style="green")
+                    t.append(f"┊    + {ln}\n", style=th.OK)
             return t if t.plain else None
         if name == "Write" and isinstance(inp, dict) and inp.get("content"):
             lines = str(inp["content"]).splitlines()
             t = Text()
             for ln in lines[:8]:
-                t.append(f"┊    + {ln}\n", style="green")
+                t.append(f"┊    + {ln}\n", style=th.OK)
             if len(lines) > 8:
-                t.append(f"┊    … (+{len(lines) - 8} dòng)\n", style="grey50")
+                t.append(f"┊    … (+{len(lines) - 8} dòng)\n", style=th.MUTED)
             return t
         return None
 
     @staticmethod
     def _tool_line(name: str, summ: str, dur: float | None, *, running: bool, error: bool = False, sub: bool = False) -> Text:
-        t = Text("┊ " + ("  ⤷ " if sub else ""), style="grey42")
-        t.append(short_tool(name), style="bold red" if error else "bold")
+        t = Text("┊ " + ("  ⤷ " if sub else ""), style=th.MUTED)
+        t.append(short_tool(name), style=th.ERR_STRONG if error else th.HEAD)
         if summ:
-            t.append(f" ({summ})", style="grey70")
+            t.append(f" ({summ})", style=th.MUTED)
         if running:
-            t.append("  đang chạy…", style="cyan")
+            t.append("  đang chạy…", style=th.INFO)
         elif dur is not None:
-            t.append(f" ({dur:.1f}s)", style="grey50")
+            t.append(f" ({dur:.1f}s)", style=th.MUTED)
         return t
 
 
@@ -702,7 +703,7 @@ class AttachScreen(Screen):
         try:
             run = await client.call("run.get", {"id": self.run_id, "events": True})
         except Exception as e:
-            tr.note(f"✖ không nạp được run {self.run_id}: {_err(e)}", "bold red")
+            tr.note(f"✖ không nạp được run {self.run_id}: {_err(e)}", th.ERR_STRONG)
             return
         self.run = run
         self.run_id = run["id"]
@@ -717,7 +718,7 @@ class AttachScreen(Screen):
         self.replayed = len(events)
         tr.note(
             f"↺ Attach run {self.run_id}: phát lại {len(events)} event từ DB (epoch {epoch}); tiếp theo nối live từ seq {since}",
-            "italic grey50",
+            f"italic {th.MUTED}",
         )
         tr.scroll_end(animate=False)
         self.refresh_bars()
@@ -729,7 +730,7 @@ class AttachScreen(Screen):
                 async for msg in self.sub:
                     if "subscribed" in msg:
                         if msg["subscribed"].get("truncated"):
-                            tr.note("⚠ ring buffer đã bị cắt — phần thiếu đã nạp từ DB", "yellow")
+                            tr.note("⚠ ring buffer đã bị cắt — phần thiếu đã nạp từ DB", th.WARN)
                         continue
                     if "end" in msg:
                         reason = msg["end"].get("reason", "?")
@@ -749,7 +750,7 @@ class AttachScreen(Screen):
                 reason = f"mất kết nối: {e}"
             if reason in ("closed", "client_closed") or not self.is_mounted:
                 return
-            tr.note(f"↻ luồng bị ngắt ({reason}) — đăng ký lại từ seq {since}", "yellow")
+            tr.note(f"↻ luồng bị ngắt ({reason}) — đăng ký lại từ seq {since}", th.WARN)
             await asyncio.sleep(0.5)
             try:
                 st = await client.call("hub.status")
@@ -783,40 +784,40 @@ class AttachScreen(Screen):
         bar = self.query_one("#statusbar", Static)
         banner = self.query_one("#banner", Static)
         h = Text()
-        h.append(f" {self.agent_id} ", style="bold reverse #7aa2f7")
-        h.append(f" run {self.run_id} ", style="bold")
+        h.append(f" {self.agent_id} ", style=th.BRAND)
+        h.append(f" run {self.run_id} ", style=th.HEAD)
         live_run = r is not None and r["current_run_id"] == self.run_id and self.run.get("status") in ("running", "queued", None)
         st = r["status"] if live_run else (self.run.get("status") or "?")
         if st in STATUS_STYLE:
             h.append_text(status_text(st))
         else:
-            h.append(st, style="grey70")
-        h.append(f"   {(self.run.get('prompt') or '').strip().splitlines()[0][:90] if (self.run.get('prompt') or '').strip() else ''}", style="grey70")
+            h.append(st, style=th.MUTED)
+        h.append(f"   {(self.run.get('prompt') or '').strip().splitlines()[0][:90] if (self.run.get('prompt') or '').strip() else ''}", style=th.MUTED)
         head.update(h)
         pend = [a for a in self.model.approvals if a.get("run_id") == self.run_id]
         if pend:
             a = pend[0]
             b = Text()
             b.append(" ⏸ CHỜ NGƯỜI DUYỆT " if a["status"] == "waiting_human" else " ◐ CHỜ DUYỆT ", style="bold black on yellow")
-            b.append(f" {a.get('preview')}  ", style="bold yellow")
+            b.append(f" {a.get('preview')}  ", style=f"bold {th.WARN}")
             b.append(f"luật {a.get('matched_rule') or '?'} · chờ {fmt_dur(a.get('wait_s'))}  [a] cho phép"
-                     + (" · [A] luôn cho phép" if a.get("always_offer") else "") + " · [d] từ chối", style="bold")
+                     + (" · [A] luôn cho phép" if a.get("always_offer") else "") + " · [d] từ chối", style=th.HEAD)
             banner.update(b)
             banner.display = True
         else:
             banner.display = False
         s = Text()
-        s.append(f" {self.model_name or self.run.get('model') or '?'} ", style="bold")
+        s.append(f" {self.model_name or self.run.get('model') or '?'} ", style=th.HEAD)
         ctx = min(100.0, self.tokens / 2000.0)
-        s.append(f"· ctx≈{ctx:.0f}% ", style="grey62")
+        s.append(f"· ctx≈{ctx:.0f}% ", style=th.MUTED)
         t0 = parse_ts(self.run.get("started_at"))
         el = (time.time() - t0) if (t0 and (r is not None and r["current_run_id"] == self.run_id)) else (self.run.get("duration_ms") or 0) / 1000
         if el:
-            s.append(f"· {self.tokens / el:.0f} tok/s ", style="cyan")
-        s.append(f"· {fmt_tokens(self.tokens)} tok ", style="grey70")
-        s.append(f"· {fmt_cost(self.cost or self.run.get('cost_usd'))} ", style="bold magenta")
-        s.append(f"· {fmt_dur(el)} ", style="grey70")
-        s.append(f"· seq {self.last_seq} · phiên {(self.run.get('session_id') or '—')[:8]} · replay {self.replayed} + live {self.live_events}", style="grey42")
+            s.append(f"· {self.tokens / el:.0f} tok/s ", style=th.INFO)
+        s.append(f"· {fmt_tokens(self.tokens)} tok ", style=th.MUTED)
+        s.append(f"· {fmt_cost(self.cost or self.run.get('cost_usd'))} ", style=f"bold {th.COST}")
+        s.append(f"· {fmt_dur(el)} ", style=th.MUTED)
+        s.append(f"· seq {self.last_seq} · phiên {(self.run.get('session_id') or '—')[:8]} · replay {self.replayed} + live {self.live_events}", style=th.MUTED)
         bar.update(s)
 
     def action_back(self) -> None:
@@ -887,7 +888,8 @@ class AttachScreen(Screen):
 
 
 TASK_STATUSES = ["triage", "todo", "ready", "running", "review", "blocked", "done"]
-TASK_STYLE = {"running": "bold green", "ready": "cyan", "review": "magenta", "blocked": "bold red", "done": "grey50", "triage": "yellow", "todo": "white"}
+# màu trạng thái task = từ vựng chung `th.STATUS["task"]` (CLI dùng cùng bảng)
+TASK_STYLE = {k: s.style for k, s in th.STATUS["task"].items()}
 
 
 class TasksScreen(Screen):
@@ -936,23 +938,23 @@ class TasksScreen(Screen):
         except RpcError as e:
             if e.code == -32601:
                 self.available = False
-                head.update(Text(" Tasks — daemon chưa có RPC task.* (M3). Tab sẽ hoạt động khi M3 được cài.", style="bold yellow"))
+                head.update(Text(" Tasks — daemon chưa có RPC task.* (M3). Tab sẽ hoạt động khi M3 được cài.", style=f"bold {th.WARN}"))
                 return
-            head.update(Text(f" Tasks — lỗi: {e.message}", style="bold red"))
+            head.update(Text(f" Tasks — lỗi: {e.message}", style=th.ERR_STRONG))
             return
         except Exception as e:
-            head.update(Text(f" Tasks — lỗi: {e}", style="bold red"))
+            head.update(Text(f" Tasks — lỗi: {e}", style=th.ERR_STRONG))
             return
         counts: dict[str, int] = {}
         for t in self.tasks:
             counts[t["status"]] = counts.get(t["status"], 0) + 1
         h = Text()
-        h.append(" Tasks ", style="bold reverse #bb9af7")
+        h.append(" Tasks ", style="bold reverse magenta")
         h.append("  ")
         for st in TASK_STATUSES:
             h.append(f" {st} {counts.get(st, 0)} ", style=TASK_STYLE.get(st, ""))
-            h.append("│", style="grey42")
-        h.append(f"   {'(ẩn done — f để hiện)' if self.hide_done else ''}", style="grey50")
+            h.append("│", style=th.MUTED)
+        h.append(f"   {'(ẩn done — f để hiện)' if self.hide_done else ''}", style=th.MUTED)
         head.update(h)
         table = self.query_one("#tasks", DataTable)
         prev = self._selected_id()
@@ -961,7 +963,7 @@ class TasksScreen(Screen):
         rows = sorted((t for t in self.tasks if not (self.hide_done and t["status"] in ("done", "archived"))), key=lambda t: (order.get(t["status"], 9), -int(t.get("priority") or 0), t.get("created_at") or ""))
         for t in rows:
             table.add_row(
-                Text(t["id"][:12], style="grey62"),
+                Text(t["id"][:12], style=th.MUTED),
                 Text(t["status"], style=TASK_STYLE.get(t["status"], "")),
                 str(t.get("priority") or 0),
                 t.get("team_id") or "—",
@@ -969,7 +971,7 @@ class TasksScreen(Screen):
                 (("  " if t.get("origin_task_id") else "") + (t.get("title") or ""))[:60],
                 t.get("current_run_id") or "—",
                 Text(fmt_cost(t.get("cost_usd")), justify="right"),
-                Text(t.get("wait_reason") or t.get("block_reason") or "", style="yellow"),
+                Text(t.get("wait_reason") or t.get("block_reason") or "", style=th.WARN),
                 key=t["id"],
             )
         ids = [t["id"] for t in rows]
@@ -1002,26 +1004,26 @@ class TasksScreen(Screen):
         tid = self._selected_id()
         w = self.query_one("#task-detail", Static)
         if not tid:
-            w.update(Text(" (chưa có task)", style="grey50"))
+            w.update(Text(" (chưa có task)", style=th.MUTED))
             return
         try:
             t = await self.app.client.call("task.get", {"id": tid})  # type: ignore[attr-defined]
         except Exception as e:
-            w.update(Text(f" {_err(e)}", style="red"))
+            w.update(Text(f" {_err(e)}", style=th.ERR))
             return
         x = Text()
-        x.append(f" {t.get('title')}\n", style="bold")
-        x.append(f" {t['id']} · {t['status']} · team {t.get('team_id') or '—'} · {t.get('assignee_agent_id') or t.get('role') or '—'} · lần thử {t.get('attempts')}\n", style="grey62")
+        x.append(f" {t.get('title')}\n", style=th.HEAD)
+        x.append(f" {t['id']} · {t['status']} · team {t.get('team_id') or '—'} · {t.get('assignee_agent_id') or t.get('role') or '—'} · lần thử {t.get('attempts')}\n", style=th.MUTED)
         for label, key in (("cha", "parents"), ("con", "children")):
             items = t.get(key) or []
             if items:
-                x.append(f" {label}: ", style="grey70")
-                x.append(", ".join(f"{i['id'][:10]}({i['status']})" for i in items) + "\n", style="grey70")
+                x.append(f" {label}: ", style=th.MUTED)
+                x.append(", ".join(f"{i['id'][:10]}({i['status']})" for i in items) + "\n", style=th.MUTED)
         for c in (t.get("comments") or [])[-3:]:
-            x.append(f" 💬 {c.get('author')}: {str(c.get('text') or '')[:100]}\n", style="grey62")
+            x.append(f" 💬 {c.get('author')}: {str(c.get('text') or '')[:100]}\n", style=th.MUTED)
         runs = t.get("runs") or []
         if runs:
-            x.append(" runs: " + ", ".join(f"{r['id']}({r['status']})" for r in runs[-4:]), style="grey62")
+            x.append(" runs: " + ", ".join(f"{r['id']}({r['status']})" for r in runs[-4:]), style=th.MUTED)
         w.update(x)
 
     def action_create_task(self) -> None:
@@ -1124,7 +1126,7 @@ class AgentFormScreen(ModalScreen[None]):
         self.dismiss(None)
 
     def _error(self, msg: str) -> None:
-        self.query_one("#f-error", Label).update(Text(msg, style="bold red"))
+        self.query_one("#f-error", Label).update(Text(msg, style=th.ERR_STRONG))
 
     @on(Button.Pressed, "#save")
     @on(Input.Submitted)
@@ -1234,7 +1236,7 @@ class InfoScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="info"):
             yield Static(self.text)
-            yield Label(Text("Esc/Enter để đóng", style="grey50"))
+            yield Label(Text("Esc/Enter để đóng", style=th.MUTED))
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -1386,7 +1388,7 @@ class TopApp(App):
             self.connected = False
             self.last_error = _err(e)
             try:
-                self.htop.query_one("#summary", Static).update(Text(f" ✖ không kết nối được daemon: {self.last_error}", style="bold red"))
+                self.htop.query_one("#summary", Static).update(Text(f" ✖ không kết nối được daemon: {self.last_error}", style=th.ERR_STRONG))
             except NoMatches:
                 pass
             return
@@ -1530,10 +1532,10 @@ class TopApp(App):
             return
         if not self.takeover_exec:
             t = Text()
-            t.append("Takeover (FR-UI-10)\n\n", style="bold")
-            t.append(f"Run {info['run_id']} · session {info['session_id']}\nChạy lệnh sau trong terminal:\n\n", style="grey70")
-            t.append(info["command"], style="bold cyan")
-            t.append("\n\nKhi xong: cfharness takeover " + info["run_id"] + " --record", style="grey62")
+            t.append("Takeover (FR-UI-10)\n\n", style=th.HEAD)
+            t.append(f"Run {info['run_id']} · session {info['session_id']}\nChạy lệnh sau trong terminal:\n\n", style=th.MUTED)
+            t.append(info["command"], style=f"bold {th.CMD}")
+            t.append("\n\nKhi xong: cfharness takeover " + info["run_id"] + " --record", style=th.MUTED)
             self.push_screen(InfoScreen(t))
             return
         env = {k: v for k, v in os.environ.items() if k not in set(info.get("env_strip") or [])}

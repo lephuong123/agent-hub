@@ -17,6 +17,8 @@ import signal
 import subprocess
 import sys
 
+from cfharness.evals.checkers import _shell_argv
+
 # như `claude` thật (node): stdin/stdout UTF-8 — Windows mặc định cp1252 làm hỏng prompt tiếng Việt
 sys.stdin.reconfigure(encoding="utf-8")
 sys.stdout.reconfigure(encoding="utf-8")
@@ -92,7 +94,8 @@ def run_hook(tool_input, tool_use_id):
             "tool_input": tool_input, "tool_use_id": tool_use_id, "permission_mode": "default"}
     for h in hooks:
         try:
-            p = subprocess.run(h["command"], shell=True, input=json.dumps(data), capture_output=True, encoding="utf-8", errors="replace", timeout=h.get("timeout", 60))
+            # như CLI thật: lệnh hook chạy qua bash (Windows: Git Bash — `VAR=… prog` của hook pythonw cần bash, không phải cmd.exe)
+            p = subprocess.run(_shell_argv(h["command"]), input=json.dumps(data), capture_output=True, encoding="utf-8", errors="replace", timeout=h.get("timeout", 60))
         except subprocess.TimeoutExpired:
             continue  # CLI: hết giờ = fail-open
         if p.returncode == 2:

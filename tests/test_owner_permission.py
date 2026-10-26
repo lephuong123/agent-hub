@@ -215,8 +215,11 @@ def test_hold_uncertain_off_only_destructive_asks(env):
     hubv = Verdict("uncertain", "sensitive_dynamic", "hub", "x")
     mcp = Verdict("uncertain", "mcp_require_approval", "mcp", "x")
     dest = Verdict("destructive", "rm_rf", "file", "x")
-    assert all(g.needs_human(v) for v in (unc, hubv, mcp, dest))  # mặc định: như cũ
-    d.hub.config.set("guard.hold_uncertain", False)
+    # approval-profiles: mặc định MỚI = balanced → uncertain thường không giữ; strict = như cũ
+    assert not g.needs_human(unc) and all(g.needs_human(v) for v in (hubv, mcp, dest))
+    d.hub.config.set("approval.profile", "strict")
+    assert all(g.needs_human(v) for v in (unc, hubv, mcp, dest))
+    d.hub.config.set("guard.hold_uncertain", False)  # khoá đặt rõ thắng profile
     assert not g.needs_human(unc)
     assert g.needs_human(hubv) and g.needs_human(mcp) and g.needs_human(dest)
     assert not g.needs_human(Verdict("write", "generic_cmd", None, ""))

@@ -33,6 +33,7 @@ import yaml
 from ..oscompat import IS_WINDOWS
 
 KINDS = ("path", "repo", "db", "mcp_tool", "hub")
+ALWAYS_KINDS = ("exact", "web_domain", "mcp_tool")  # luật "luôn cho phép" (policy/always_allow.yaml)
 OPS = ("delete", "overwrite", "write")
 OP_LEVEL = {"delete": 1, "overwrite": 2, "write": 3}
 HUB_KINDS = ("ledger", "events", "snapshots", "secrets", "policy", "audit", "config", "trash", "runs", "db", "mcp")
@@ -331,22 +332,26 @@ class PolicyStore:
 
     # ------------------------------------------------------------------ luật "luôn cho phép" (người tạo khi duyệt `--always`)
     @property
-    def always_file(self) -> Path:
+    def always_file(self) -> Path:  # kinds: ALWAYS_KINDS
         return self.dir / "always_allow.yaml"
 
     def always_list(self, include_disabled: bool = False) -> list[dict[str, Any]]:
-        """Luật hẹp: `exact` = agent + tool + dấu vân tay thao tác; `web_domain` = agent + host CHÍNH XÁC (không wildcard).
+        """Luật hẹp: `exact` = agent + tool + dấu vân tay thao tác; `web_domain` = agent + host CHÍNH XÁC (không wildcard);
+        `mcp_tool` = agent (bắt buộc) + ĐÚNG tên tool MCP đầy đủ — chỉ hạ verdict do annotations của server (approval-profiles.md).
         Đọc lỗi/không phải dict → [] (không luật nào = giữ chờ người, fail-closed)."""
         try:
             rules = self._read(self.always_file).get("rules") or []
         except Exception:
             return []
-        out = [dict(r) for r in rules if isinstance(r, dict) and r.get("id") and r.get("kind") in ("exact", "web_domain")]
+        out = [dict(r) for r in rules if isinstance(r, dict) and r.get("id") and r.get("kind") in ALWAYS_KINDS]
         return out if include_disabled else [r for r in out if not r.get("disabled")]
 
     def always_add(self, rule: dict[str, Any]) -> dict[str, Any]:
-        if rule.get("kind") not in ("exact", "web_domain"):
-            raise ValueError("kind luật luôn-cho-phép phải là exact|web_domain")
+        if rule.get("kind") not in ALWAYS_KINDS:
+            raise ValueError("kind luật luôn-cho-phép phải là exact|web_domain|mcp_tool")
+        if rule["kind"] == "mcp_tool" and (not rule.get("agent_id") or not str(rule.get("tool") or "").startswith("mcp__")
+                                           or any(c in str(rule.get("tool")) for c in "*?[]")):
+            raise ValueError("luật mcp_tool cần agent_id + tên tool mcp__<server>__<tool> chính xác (không glob)")
         if rule["kind"] == "exact" and not (rule.get("tool") and rule.get("fingerprint")):
             raise ValueError("luật exact cần tool + fingerprint")
         if rule["kind"] == "web_domain" and (not rule.get("domain") or any(c in str(rule["domain"]) for c in "*?[]")):
@@ -358,7 +363,8 @@ class PolicyStore:
         for r in rules:  # trùng (cùng agent + cùng đích) → trả luật cũ (bật lại nếu đã gỡ)
             same = r.get("kind") == rule["kind"] and r.get("agent_id") == rule.get("agent_id") and (
                 (rule["kind"] == "exact" and r.get("tool") == rule.get("tool") and r.get("fingerprint") == rule.get("fingerprint"))
-                or (rule["kind"] == "web_domain" and r.get("domain") == rule.get("domain")))
+                or (rule["kind"] == "web_domain" and r.get("domain") == rule.get("domain"))
+                or (rule["kind"] == "mcp_tool" and r.get("tool") == rule.get("tool")))
             if same and not r.get("disabled"):
                 return dict(r)
         new = {"id": "aa_" + secrets.token_hex(4), **rule, "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}

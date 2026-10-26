@@ -50,6 +50,9 @@ def render() -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .oscompat import utf8_stdio
+
+    utf8_stdio()  # Windows: console cp1252 không in được thông báo tiếng Việt
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["--write"]:
         out = Path(argv[1] if len(argv) > 1 else "docs/schema/event.v1.json")

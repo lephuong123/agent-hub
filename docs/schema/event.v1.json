@@ -152,6 +152,8 @@
     "agent.restored": "summary",
     "agent.status": "summary",
     "agent.updated": "summary",
+    "approval.delegated": "summary",
+    "approval.escalated": "summary",
     "approval.open": "summary",
     "approval.reminder": "summary",
     "approval.resolved": "summary",
