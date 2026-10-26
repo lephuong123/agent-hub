@@ -61,12 +61,17 @@ def posix(p) -> str:
 
 @pytest.fixture(autouse=True)
 def _tempdir_elsewhere(tmp_path, monkeypatch):
-    """Windows: thư mục tạm (TEMP) luôn là gốc ghi của tool ghi file, mà repo test lại nằm trong TEMP → trỏ tempdir sang chỗ khác."""
+    """Thư mục tạm luôn là gốc ghi của tool ghi file, mà repo test lại nằm trong đó → trỏ tempdir sang chỗ khác (Windows: TEMP)
+    và bỏ `/tmp`, `/private/tmp` (macOS/Linux: tmp_path của pytest nằm dưới đó)."""
     import tempfile
+
+    from cfharness.guard import classifier
 
     other = tmp_path / "_systemp"
     other.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(other))
+    orig = classifier.write_roots
+    monkeypatch.setattr(classifier, "write_roots", lambda ctx: [r for r in orig(ctx) if r not in ("/tmp", "/private/tmp")])
 
 
 @pytest.fixture
