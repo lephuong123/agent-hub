@@ -16,8 +16,8 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable
-from urllib.parse import parse_qs, urlencode, urlsplit
+from typing import Any, AsyncIterator, Awaitable, Callable
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 from markupsafe import Markup
 from starlette.applications import Starlette
@@ -59,6 +59,18 @@ SAFE_CONFIG: tuple[tuple[str, str, str], ...] = (
     ("notify.telegram.enabled", "Bật thông báo Telegram", "true / false"),
     ("retention.soft_delete_days", "Giữ thùng rác (ngày)", "vd 30"),
 )
+# Wizard "Kết nối Slack": manifest điền sẵn → người dùng chỉ bấm Create + Install rồi dán Incoming Webhook URL.
+# Mỗi người một app riêng (hub chỉ nghe loopback, Slack không gọi ngược được) → thông báo một chiều, không chia sẻ token.
+SLACK_WEBHOOK_SECRET = "SLACK_WEBHOOK_URL"
+SLACK_WEBHOOK_PREFIX = "https://hooks.slack.com/services/"
+SLACK_MANIFEST: dict[str, Any] = {
+    "display_information": {"name": "cfharness", "description": "Thông báo từ cfharness: chờ duyệt, guard chặn, run lỗi, digest hằng ngày",
+                            "background_color": "#1f2937"},
+    "features": {"bot_user": {"display_name": "cfharness", "always_online": False}},
+    "oauth_config": {"scopes": {"bot": ["incoming-webhook", "chat:write"]}},
+    "settings": {"org_deploy_enabled": False, "socket_mode_enabled": False, "token_rotation_enabled": False},
+}
+SLACK_CREATE_URL = "https://api.slack.com/apps?new_app=1&manifest_json=" + quote(json.dumps(SLACK_MANIFEST, ensure_ascii=False, separators=(",", ":")), safe="")
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; "
        "frame-ancestors 'none'; form-action 'self'; base-uri 'none'; object-src 'none'")
 SECURITY_HEADERS = [
@@ -759,7 +771,8 @@ async def settings_page(request: Request) -> Response:
     integ = await rpc(request, "guard.integrity.status")
     status = await rpc(request, "hub.status")
     st = ws(request)
-    return await render(request, "settings.html", {"nav": "settings", "estop": es, "cfg": vals, "secrets": secrets_, "slack": "SLACK_WEBHOOK_URL" in names or "SLACK_BOT_TOKEN" in names,
+    return await render(request, "settings.html", {"nav": "settings", "estop": es, "cfg": vals, "secrets": secrets_, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names,
+                                                   "slack_webhook": SLACK_WEBHOOK_SECRET in names, "slack_create_url": SLACK_CREATE_URL,
                                                    "telegram": "TELEGRAM_BOT_TOKEN" in names, "tg_chats": tg_chats, "integ": integ, "status": status,
                                                    "web": {"host": st.host, "port": st.port, "sessions": len(st.auth.sessions)}})
 
@@ -786,6 +799,8 @@ class Action:
     audit: bool = True
     goto: Callable[[Any, FormData], str | None] | None = None
     note: str | None = None  # nhãn ô ghi chú trong hộp xác nhận (vd lý do từ chối)
+    secret_fields: tuple[str, ...] = ()  # trường mang giá trị bí mật — KHÔNG đưa sang trang xác nhận
+    call: Callable[[Request, dict[str, Any]], Awaitable[Any]] | None = None  # thao tác nhiều RPC (mặc định: một RPC `method`)
 
 
 def _parse_cfg_value(raw: str) -> Any:
@@ -798,6 +813,28 @@ def _parse_cfg_value(raw: str) -> Any:
 def _run_goto(res: Any, form: FormData) -> str | None:
     rid = (res or {}).get("id") or (res or {}).get("run_id")
     return f"/runs/{rid}" if rid else None
+
+
+def _slack_webhook(f: FormData) -> dict[str, Any]:
+    url = _req(f, "webhook", "Webhook URL")
+    if not url.startswith(SLACK_WEBHOOK_PREFIX) or any(c.isspace() for c in url):
+        raise ValueError(f"Webhook URL phải bắt đầu bằng {SLACK_WEBHOOK_PREFIX}")
+    return {"url": url}
+
+
+async def _slack_connect(request: Request, p: dict[str, Any]) -> dict[str, Any]:
+    """Lưu webhook vào secret store, bật `notify.slack.enabled` nếu đang tắt, rồi gửi tin thử. Mỗi bước là RPC có audit sẵn."""
+    await rpc(request, "secret.set", {"name": SLACK_WEBHOOK_SECRET, "value": p["url"]}, audit=True)
+    if await rpc(request, "config.get", {"key": "notify.slack.enabled"}) is False:
+        await rpc(request, "config.set", {"key": "notify.slack.enabled", "value": True}, audit=True)
+    return await rpc(request, "notify.test", {"text": ":white_check_mark: cfharness đã kết nối Slack — thông báo sẽ đến kênh này"}, audit=True)
+
+
+def _slack_ok(r: Any, f: FormData) -> str:
+    r = r or {}
+    if r.get("sent"):
+        return "Đã kết nối Slack — đã gửi tin thử, kiểm tra kênh bạn chọn lúc Install"
+    return f"Đã lưu webhook nhưng gửi thử lỗi: {r.get('reason') or '?'} — kiểm tra lại URL rồi dán lại"
 
 
 ACTIONS: dict[str, Action] = {
@@ -916,10 +953,12 @@ ACTIONS: dict[str, Action] = {
                          confirm=lambda f: f"Đổi cấu hình {f.get('key')} thành '{f.get('value')}'?"),
     "secret_set": Action("secret.set", lambda f: {"name": _req(f, "name", "tên secret"), "value": _req(f, "value", "giá trị")},
                          lambda r, f: f"Đã lưu secret {r.get('name')} (giá trị không bao giờ hiển thị lại)",
-                         confirm=lambda f: f"Lưu secret {f.get('name')}? Nếu đã có secret cùng tên, giá trị cũ bị GHI ĐÈ.", danger=True),
+                         confirm=lambda f: f"Lưu secret {f.get('name')}? Nếu đã có secret cùng tên, giá trị cũ bị GHI ĐÈ.", danger=True, secret_fields=("value",)),
     "secret_rm": Action("secret.rm", lambda f: {"name": _req(f, "name")}, lambda r, f: f"Đã xoá secret {f.get('name')}", confirm=lambda f: f"Xoá secret {f.get('name')}?",
                         danger=True),
     "notify_test": Action("notify.test", lambda f: {"text": "cfharness: thử thông báo từ giao diện web"}, lambda r, f: f"Đã gửi thử: {json.dumps(r, ensure_ascii=False)[:200]}"),
+    "slack_connect": Action("secret.set", _slack_webhook, _slack_ok, secret_fields=("webhook",), call=_slack_connect,
+                            confirm=f"Lưu Slack webhook vào secret {SLACK_WEBHOOK_SECRET}? Nếu đã có, URL cũ bị GHI ĐÈ.", danger=True),
     "auth_reset": Action("auth.reset", lambda f: {}, "Đã xoá cờ 'claude chưa đăng nhập' — run sẽ chạy lại"),
 }
 
@@ -1011,8 +1050,8 @@ async def do_action(request: Request) -> Response:
         return flash_redirect(request, back, "error", f"Chưa đủ thông tin: {e}")
     if act.confirm and form.get("confirm") != "yes":
         msg = act.confirm(form) if callable(act.confirm) else act.confirm
-        fields = [(k, v) for k, v in carry(form) if not (name == "secret_set" and k == "value")]  # giá trị secret không vào HTML
-        return await render(request, "confirm.html", {"message": msg + ("\n(Nhập lại giá trị ở trang Cài đặt và tích ô xác nhận.)" if name == "secret_set" else ""),
+        fields = [(k, v) for k, v in carry(form) if k not in act.secret_fields]  # giá trị secret không vào HTML
+        return await render(request, "confirm.html", {"message": msg + ("\n(Nhập lại giá trị ở trang Cài đặt và tích ô xác nhận.)" if act.secret_fields else ""),
                                                       "fields": fields, "action": f"/do/{name}", "danger": act.danger, "back": back,
                                                       "note": act.note})
     if name == "approve_always" and form.get("confirm2") != "yes":
@@ -1035,7 +1074,7 @@ async def do_action(request: Request) -> Response:
         if heavy_approval(ap, classes):
             return await render(request, "approve2.html", {"a": ap, "view": P.action_view(ap), "fields": carry(form), "action": f"/do/{name}", "back": back})
     try:
-        res = await rpc(request, act.method, params, audit=act.audit)
+        res = await act.call(request, params) if act.call else await rpc(request, act.method, params, audit=act.audit)
     except RpcError as e:
         return flash_redirect(request, back, "error", err_text(e))
     msg = act.ok(res, form) if callable(act.ok) else act.ok
