@@ -46,7 +46,20 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("cfharness.chat.slack")
 
-PAIR_RE = re.compile(r"^(?:ghepnoi|ghép nối|pair)\s+([A-Za-z0-9_-]{4,64})$", re.IGNORECASE)
+PAIR_RE = re.compile(r"^(?:ghepnoi|ghép nối|ghep noi|pair)\s+([A-Za-z0-9_-]{4,64})$", re.IGNORECASE)
+_PAIR_JUNK = re.compile("[`*_~<>\"'“”‘’​-‏⁠﻿]")
+
+
+def pair_code_of(text: str) -> str | None:
+    """Mã trong tin ghép nối. Chấp nhận kiểu người hay dán từ web/terminal: `` `ghepnoi AB12` ``, *in đậm*, `<AB12>`, chữ thường,
+    dấu tiếng Việt dựng sẵn hoặc tổ hợp (NFC). Không có từ khoá → None (tin thường của người lạ vẫn bị bỏ qua)."""
+    import unicodedata
+
+    t = _PAIR_JUNK.sub(" ", unicodedata.normalize("NFC", text or ""))
+    m = PAIR_RE.match(" ".join(t.split()))
+    return m.group(1).upper() if m else None
+
+
 PAIR_ACK = "Đã nhận mã ghép nối. Quay lại terminal hoặc trang Cài đặt trên web cfharness để xác nhận đưa DM này vào allowlist."
 SEEN_TTL_S = 3600
 SEEN_MAX = 2000
@@ -276,8 +289,9 @@ class SlackBot(ChatBot):
 
         if not url.startswith(("wss://", "ws://")):
             raise SlackError("apps.connections.open: URL WebSocket không hợp lệ")
-        self._inbox = asyncio.Queue()
-        worker = asyncio.get_running_loop().create_task(self._worker(api))
+        inbox: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
+        self._inbox = inbox  # hàng đợi của RIÊNG kết nối này (kick() có thể đã mở kết nối mới trong lúc kết nối cũ đang đóng)
+        worker = asyncio.get_running_loop().create_task(self._worker(api, inbox))
         try:
             async with connect(url, open_timeout=float(self.cfg().get("timeout_s") or 15), ping_interval=20, max_size=4 * 1024 * 1024) as ws:
                 self.info["polling"] = True
@@ -301,20 +315,19 @@ class SlackBot(ChatBot):
                             continue
                         self.info["updates"] += 1
                         self.info["last_poll_at"] = time.time()
-                        self._inbox.put_nowait((typ, env["payload"]))
+                        inbox.put_nowait((typ, env["payload"]))
         finally:
-            self.info["polling"] = False
-            if self._inbox is not None:
-                try:  # xử lý nốt envelope đã ACK (không để mất) rồi dừng worker
-                    await asyncio.wait_for(self._inbox.join(), 10)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    pass
+            if self._inbox is inbox:  # kết nối cũ đóng muộn KHÔNG được ghi đè trạng thái của kết nối mới
+                self.info["polling"] = False
+            try:  # xử lý nốt envelope đã ACK (không để mất) rồi dừng worker
+                await asyncio.wait_for(inbox.join(), 10)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
             worker.cancel()
 
-    async def _worker(self, api: SlackApi) -> None:
-        assert self._inbox is not None
+    async def _worker(self, api: SlackApi, inbox: "asyncio.Queue[tuple[str, dict[str, Any]]]") -> None:
         while True:
-            typ, payload = await self._inbox.get()
+            typ, payload = await inbox.get()
             try:
                 await self.handle_envelope(typ, payload, api)
             except asyncio.CancelledError:
@@ -322,7 +335,7 @@ class SlackBot(ChatBot):
             except Exception:
                 log.exception("lỗi xử lý envelope Slack %s", typ)
             finally:
-                self._inbox.task_done()
+                inbox.task_done()
 
     def _first_time(self, typ: str, env: dict[str, Any]) -> bool:
         """Khoá chống trùng, ghi TRƯỚC khi xử lý (Slack gửi lại envelope chưa ACK; kết nối xoay có thể giao trùng)."""
@@ -535,10 +548,14 @@ class SlackBot(ChatBot):
     # ------------------------------------------------------------------ ghép nối
     def _try_pair(self, cid: str, uid: str | None, text: str, channel_type: Any) -> bool:
         pr = self.pairing
-        if not pr or time.time() > pr["exp"] or not uid:
+        code = pair_code_of(text)
+        if code is None:
             return False
-        m = PAIR_RE.match(text.strip())
-        if not m or not _secrets.compare_digest(m.group(1).upper(), pr["code"]):
+        why = ("chưa có mã ghép nối đang mở (bấm lưu token / Tạo mã ghép nối mới)" if not pr else
+               "mã đã hết hạn" if time.time() > pr["exp"] else "thiếu người gửi" if not uid else
+               "sai mã (mã cũ? mỗi lần lưu token / tạo mã mới thì mã trước mất hiệu lực)" if not _secrets.compare_digest(code, pr["code"]) else None)
+        if why:  # ghi lý do (KHÔNG ghi nội dung tin) — người lạ đoán mã cũng chỉ thấy dòng log này
+            log.info("Slack: tin ghép nối từ %s bị bỏ qua: %s", cid, why)
             return False
         if not cid.startswith("D") and not self.cfg().get("allow_channels"):
             return False
