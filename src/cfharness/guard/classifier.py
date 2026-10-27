@@ -309,8 +309,9 @@ def created_by_run(path: str, ctx: GuardContext) -> bool:
         return False
     if not os.path.isdir(path) or os.path.islink(path):
         return True
-    if ctx.task_created_deletes and _in_sys_temp(path) and not _contains_cwd(path, ctx):
-        # thư mục tạm của hệ thống do task tạo (vd bản sao node_modules để chạy test): không duyệt từng file con (thường > max_walk)
+    if ctx.task_created_deletes and _in_sys_temp(path) and not _contains_cwd(path, ctx) and not _in_cwd(path, ctx):
+        # thư mục tạm của hệ thống do task tạo (vd bản sao node_modules để chạy test): không duyệt từng file con (thường > max_walk).
+        # Không áp cho thứ nằm TRONG workspace của run: Linux có repo nằm trong /tmp (clone vào `mktemp -d`, CI) — dữ liệu thật
         return True
     n = 0
     for root, dirs, files in os.walk(path):
@@ -611,6 +612,11 @@ def _in_sys_temp(p: str) -> bool:
 def _contains_cwd(p: str, ctx: GuardContext) -> bool:
     cw = {canon_path(str(ctx.cwd)), _real(str(ctx.cwd))}
     return any(_under(c, x) for c in cw for x in {canon_path(p), _real(p)})
+
+
+def _in_cwd(p: str, ctx: GuardContext) -> bool:
+    cw = {canon_path(str(ctx.cwd)), _real(str(ctx.cwd))}
+    return any(_under(x, c) for c in cw for x in {canon_path(p), _real(p)})
 
 
 def _is_tmp(p: str) -> bool:
