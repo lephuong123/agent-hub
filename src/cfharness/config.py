@@ -284,7 +284,7 @@ DEFAULTS: dict[str, Any] = {
     # M4-A — lõi học (FR-LN-*). Công tắc học, config_bounds, rate là CHÍNH SÁCH AN TOÀN → `policy/learning.yaml`
     # (cfharness learn policy …), KHÔNG ở đây.
     "learning": {
-        "review_budget_usd": 0.20,  # FR-LN-03 --max-budget-usd của review fork
+        "review_budget_usd": 0.20,  # FR-LN-03 --max-budget-usd của review fork (null = không trần riêng, như run thường)
         "review_model": None,  # null = cùng model với run gốc (giữ cache, A-12)
         "review_scope": "combined",  # combined | skill | memory (prompt Hermes tương ứng)
         "review_debounce_s": 10,  # gom tín hiệu: review chạy ≥ N giây sau Signal cuối (newest-wins)
@@ -665,6 +665,9 @@ def validate_setting(key: str, value: Any) -> None:
     elif key == "runs.default_max_budget_usd":
         if value is not None and (not isinstance(value, (int, float)) or value <= 0):
             raise ValueError("runs.default_max_budget_usd phải > 0 hoặc null")
+    elif key == "learning.review_budget_usd":
+        if value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0):
+            raise ValueError("learning.review_budget_usd phải > 0 hoặc null (null = review không có trần riêng)")
     elif key == "runtime.claude.default_permission_mode":
         if value is not None and value not in VALID_PERMISSION_MODES:
             raise ValueError(f"permission mode không hợp lệ; chọn một trong {VALID_PERMISSION_MODES}")

@@ -147,6 +147,23 @@ async def test_budget_per_day(make_hub):
     assert any(e.type == "budget.exceeded" for e in hub.store.query_events(agent_id="b"))
 
 
+async def test_budget_none_without_limits_then_daily_remainder(make_hub):
+    """Điều phối viên bỏ trần mỗi run (max_budget_usd_per_run=null), không trần ngày, không runs.default_max_budget_usd
+    → không --max-budget-usd; thêm trần ngày → trần run = phần còn lại của ngày."""
+    hub, rt = make_hub()
+    hub.agents.create({"id": "m", "name": "M", "limits": {"max_budget_usd_per_run": 2.0}})
+    hub.agents.update("m", {"limits": {"max_budget_usd_per_run": None}})
+    row = hub.store.get_agent("m")
+    assert row["limits"].get("max_budget_usd_per_run") is None and hub.config.get("runs.default_max_budget_usd") is None
+    assert hub.runs._budget_for(row, None) is None
+    run = hub.runs.submit("m", "x")
+    assert run["max_budget_usd"] is None
+    await hub.runs.wait(run["id"], 5)
+    used = hub.store.cost_today("m")
+    hub.agents.update("m", {"limits": {"budget_usd_per_day": 30}})
+    assert hub.runs._budget_for(hub.store.get_agent("m"), None) == round(30 - used, 4)
+
+
 async def test_stop_queued_run(make_hub):
     hub, rt = make_hub(hold=True)
     hub.config.set("hub.max_concurrent_runs", 1)
