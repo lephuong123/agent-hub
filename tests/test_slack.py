@@ -343,3 +343,31 @@ async def test_revoke_dm_removes_its_user(make, sk):
     out = await rpc(d, "slack.revoke", {"chat_id": DM_BOSS})
     assert DM_BOSS not in out["allowed_chat_ids"] and BOSS not in out["allowed_user_ids"] and OTHER in out["allowed_user_ids"]
     assert not auth.slack_caller(d.hub, DM_BOSS, BOSS).human
+
+
+def test_pair_code_tolerates_pasted_formatting():
+    from cfharness.chat.slack.bot import pair_code_of
+
+    for t in ("ghepnoi ab12cd34", "`ghepnoi AB12CD34`", "*ghepnoi* <AB12CD34>", "ghép nối AB12CD34", "ghép nối AB12CD34",
+              "  ghepnoi​   AB12CD34 "):
+        assert pair_code_of(t) == "AB12CD34", t
+    assert pair_code_of("chào bot") is None and pair_code_of("ghepnoi") is None
+
+
+async def test_pairing_with_backticks_from_web(make, sk):
+    d = await make(users=(), chats=())
+    code = d.hub.slack.start_pairing()["code"]
+    await deliver(sk, sk.user_message(DM_BOSS, BOSS, f"`ghepnoi {code.lower()}`"))
+    pend = d.hub.slack.pending(code)
+    assert pend and pend[0]["user_id"] == BOSS
+
+
+async def test_kick_does_not_leave_polling_false(make, sk):
+    d = await make()
+    before = sk.connections
+    d.hub.slack.kick()  # như bấm lưu token lần 2: kết nối cũ đóng muộn không được ghi đè trạng thái kết nối mới
+    await until(lambda: sk.connections > before)
+    await asyncio.sleep(1.0)
+    assert d.hub.slack.info["polling"] is True
+    await deliver(sk, sk.slash(BOSS, "trangthai"))
+    assert any("ESTOP" in t for t in texts(sk, DM_BOSS))
