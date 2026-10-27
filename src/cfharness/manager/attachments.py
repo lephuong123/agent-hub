@@ -5,6 +5,8 @@
 - `is_command`: dòng bắt đầu bằng `/` CHỈ là lệnh khi token đầu là tên lệnh đã biết (đường dẫn kéo vào không bị hiểu nhầm là lệnh).
 - `clipboard_image()`/`clipboard_text()`: clipboard (macOS `osascript`/`pbpaste`, Linux `wl-paste`/`xclip`, Windows PowerShell
   `-NoProfile -NonInteractive -STA` → PNG qua tệp tạm) → bytes PNG / chữ, hoặc None/"" khi không có, lỗi hay quá giờ.
+- Dán chữ nhiều dòng/dài (bracketed paste, Ctrl-V): ô nhập chỉ hiện `[Pasted text #n +N lines]` như Claude Code; `expand_pastes`
+  thay lại nguyên văn lúc gửi (ô nhập một dòng của Textual/prompt_toolkit không giữ được xuống dòng).
 - `clipboard_set(text)`: ghi chữ (kéo chọn trong `cfharness chat` fullscreen — dự phòng cho OSC 52).
 Ảnh gửi qua RPC `manager.chat{images:[{name, data_b64}]}`; daemon kiểm định dạng/kích thước và lưu vào workspace hội thoại.
 """
@@ -30,6 +32,8 @@ MAX_IMAGES = 4
 _TOKEN = re.compile(r"'[^']*'|\"[^\"]*\"|(?:\\.|[^\s\\'\"])+")
 MARKER = "[Ảnh #{n}]"
 _MARKER_RE = re.compile(r"\[Ảnh #(\d+)\]")
+PASTE_MAX_CHARS = 800  # như tui/src/ui/input/paste.ts
+_PASTE_RE = re.compile(r"\[Pasted text #(\d+) \+\d+ lines?\]")
 _WIN_ABS = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/])")  # C:\…, C:/…, \\máy\share\…
 
 
@@ -145,6 +149,25 @@ def parse_input(text: str, pasted: dict[int, Attachment] | None = None) -> Parse
         out.images = out.images[:MAX_IMAGES]
     out.text = body.strip()
     return out
+
+
+def normalize_paste(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+
+
+def is_large_paste(text: str) -> bool:
+    """Chữ dán phải thu gọn thành marker: nhiều dòng (ô nhập một dòng) hoặc dài hơn PASTE_MAX_CHARS."""
+    return "\n" in text or len(text) > PASTE_MAX_CHARS
+
+
+def paste_marker(n: int, text: str) -> str:
+    lines = text.count("\n") + 1
+    return f"[Pasted text #{n} +{lines} line{'' if lines == 1 else 's'}]"
+
+
+def expand_pastes(text: str, pasted: dict[int, str]) -> str:
+    """`[Pasted text #n …]` còn trong dòng gửi → nguyên văn đã dán (marker không có trong `pasted` thì giữ nguyên)."""
+    return _PASTE_RE.sub(lambda m: pasted.get(int(m.group(1)), m.group(0)), text) if pasted else text
 
 
 # ---------------------------------------------------------------------- clipboard

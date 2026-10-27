@@ -314,6 +314,32 @@ async def test_history_up_down_and_slash_hint(env, hub_home, monkeypatch):
         assert inp.value == "sao?" and not keys.display
 
 
+async def test_multiline_paste_shows_marker_and_sends_full_text(env, hub_home, monkeypatch):
+    from textual import events
+
+    d = env
+    no_native_clipboard(monkeypatch)
+    await designate(d)
+    body = 'dreemShotMapping:\n{\n    "shotGroups": [],\n    "shotOverview": {"totalShots": 27}\n}'
+    app = C.ChatApp(hub_home.socket, home=hub_home.home)
+    async with app.run_test(size=SIZE) as pilot:
+        scr = await open_chat(app, pilot)
+        inp = scr.query_one("#chat-input", Input)
+        inp.focus()
+        inp.value = "model: "
+        inp.cursor_position = len(inp.value)
+        inp.post_message(events.Paste("\r\n" + body.replace("\n", "\r\n") + "\r\n"))  # Windows Terminal: CRLF, dòng trống đầu/cuối
+        assert await until(lambda: inp.value == "model: [Pasted text #1 +5 lines]", pilot=pilot)
+        await pilot.press("enter")
+        assert await until(lambda: scr.session.state.active_run is not None, pilot=pilot)
+        rid = scr.session.state.active_run
+        await wait_status(d, rid)
+        assert "model: " + body in d.hub.store.get_run(rid)["prompt"]
+        assert item_with(scr, "[Pasted text #1 +5 lines]") is not None and not scr.session.pasted_text
+        d.hub.runs.runtime().release(rid)  # type: ignore[attr-defined]
+        assert await until(lambda: not scr.session.state.busy, pilot=pilot)
+
+
 def test_failure_welcome_foot_and_usage():
     from cfharness.manager import chatview as Vw
 

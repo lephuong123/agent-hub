@@ -336,6 +336,19 @@ def test_parse_input_images_from_drag_and_clipboard(tmp_path):
     assert not p.images and p.errors and "quá lớn" in p.errors[0]
 
 
+def test_large_paste_collapses_to_marker_and_expands():
+    from cfharness.manager import attachments as A
+
+    body = '\r\ndreemShotMapping:\r\n{\r\n    "shotGroups": []\r\n}\r\n'
+    s = repl.ChatSession(None, repl.Out(color=False))  # type: ignore[arg-type]
+    assert s.paste_text("một dòng ngắn") == "một dòng ngắn" and not s.pasted_text
+    m1 = s.paste_text(body)
+    m2 = s.paste_text("x" * (A.PASTE_MAX_CHARS + 1))
+    assert (m1, m2) == ("[Pasted text #1 +4 lines]", "[Pasted text #2 +1 line]")
+    full = A.expand_pastes(f"xem {m1} và {m2} [Pasted text #9 +2 lines]", s.pasted_text)
+    assert full == 'xem dreemShotMapping:\n{\n    "shotGroups": []\n} và ' + "x" * (A.PASTE_MAX_CHARS + 1) + " [Pasted text #9 +2 lines]"
+
+
 async def test_send_folder_and_image_saved_for_manager(env, hub_home, tmp_path):
     d = env
     await designate(d)

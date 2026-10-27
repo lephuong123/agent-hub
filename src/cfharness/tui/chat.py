@@ -527,6 +527,21 @@ class ChatInput(Input):
             event.stop()
             self.screen.toggle_shortcuts()  # type: ignore[attr-defined]
 
+    def _on_paste(self, event: events.Paste) -> None:
+        """Dán bằng phím của terminal (bracketed paste): `Input._on_paste` gốc chỉ giữ DÒNG ĐẦU → nhiều dòng/dài thu thành
+        `[Pasted text #n +N lines]` như Claude Code; nguyên văn gửi lúc Enter (`ChatSession.send`)."""
+        session = getattr(self.screen, "session", None)
+        if session is None:
+            return  # chưa nối daemon → để `Input._on_paste` gốc xử lý
+        event.stop()
+        event.prevent_default()  # chặn `Input._on_paste` (lớp cha trong MRO)
+        text = session.paste_text(event.text)
+        if text:
+            if self.selection.is_empty:
+                self.insert_text_at_cursor(text)
+            else:
+                self.replace(text, *self.selection)
+
 
 class AgentList(OptionList):
     """Bảng agent đang chạy (dưới ô nhập). ↑ ở dòng đầu / Esc → về ô nhập."""
@@ -1053,7 +1068,7 @@ class ChatScreen(Screen):
         else:
             txt = A.clipboard_text()
             if txt:
-                inp.insert_text_at_cursor(txt)
+                inp.insert_text_at_cursor(s.paste_text(txt))
         inp.focus()
 
 

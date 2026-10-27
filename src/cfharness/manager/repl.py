@@ -115,6 +115,7 @@ class ChatSession:
         self.new = new
         self.replay = replay
         self.pasted: dict[int, A.Attachment] = {}  # ảnh dán bằng Ctrl-V, theo số `[Ảnh #n]` trong dòng đang gõ
+        self.pasted_text: dict[int, str] = {}  # chữ dán dài/nhiều dòng, theo số `[Pasted text #n …]` trong dòng đang gõ
         self.state: V.ChatState | None = None
         self.changed = asyncio.Event()
         self._pump_task: asyncio.Task | None = None
@@ -593,12 +594,21 @@ class ChatSession:
             self._emit(it)
         self.changed.set()
 
+    def paste_text(self, text: str) -> str:
+        """Chữ vừa dán → chuỗi chèn vào ô nhập: dài/nhiều dòng → `[Pasted text #n +N lines]` (nguyên văn gửi lúc Enter)."""
+        text = A.normalize_paste(text)
+        if not A.is_large_paste(text):
+            return text
+        n = max(self.pasted_text, default=0) + 1
+        self.pasted_text[n] = text
+        return A.paste_marker(n, text)
+
     # ------------------------------------------------------------------ gửi / dừng
     async def send(self, text: str) -> dict[str, Any] | None:
         st = self.state
         assert st is not None
         parsed = A.parse_input(text.strip(), self.pasted)
-        self.pasted = {}
+        pasted_text, self.pasted, self.pasted_text = self.pasted_text, {}, {}
         for err in parsed.errors:
             self._emit({"kind": "note", "text": err, "tone": "warn"})
         text = parsed.text
@@ -607,7 +617,7 @@ class ChatSession:
         self._emit({"kind": "user", "text": text or "(ảnh)"})
         if parsed.images:
             self._emit({"kind": "note", "text": "📎 " + ", ".join(f"{a.name} ({len(a.data) // 1024} KB)" for a in parsed.images)})
-        params: dict[str, Any] = {"channel": V.CHANNEL, "text": text}
+        params: dict[str, Any] = {"channel": V.CHANNEL, "text": A.expand_pastes(text, pasted_text)}
         if parsed.images:
             params["images"] = [a.wire() for a in parsed.images]
         if st.conversation_id:
@@ -765,6 +775,7 @@ async def run_tty(session: ChatSession, home: Path) -> int:
     from prompt_toolkit.formatted_text import ANSI
     from prompt_toolkit.history import FileHistory
     from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.keys import Keys
     from prompt_toolkit.patch_stdout import patch_stdout
     from prompt_toolkit.styles import Style
 
@@ -806,7 +817,12 @@ async def run_tty(session: ChatSession, home: Path) -> int:
             return
         txt = A.clipboard_text()
         if txt:
-            event.current_buffer.insert_text(txt)
+            event.current_buffer.insert_text(session.paste_text(txt))
+
+    @kb.add(Keys.BracketedPaste)
+    def _bracketed_paste(event: Any) -> None:
+        """Dán bằng phím của terminal: nhiều dòng/dài → `[Pasted text #n +N lines]` thay vì từng dòng thành Enter."""
+        event.current_buffer.insert_text(session.paste_text(event.data))
 
     can_toggle = Condition(lambda: session.panel_visible() and not get_app().current_buffer.text)
 
