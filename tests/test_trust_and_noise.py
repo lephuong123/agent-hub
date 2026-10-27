@@ -259,6 +259,28 @@ async def test_trust_expiry_review_runs_and_human_only(hub):
     assert any("guard.trust" in str(x.get("kind") or x.get("action") or "") for x in audits)
 
 
+async def test_trust_new_agents_default(hub):
+    hub.agents.create({"id": "old", "name": "OLD"})
+    assert hub.guard.trust_of("old") is None  # mặc định "off": như cũ
+    with pytest.raises(ValueError):
+        hub.config.set("guard.trust_new_agents", "maybe")
+    hub.config.set("guard.trust_new_agents", "full")
+    assert hub.guard.trust_of("old") is None  # chỉ áp lúc tạo — agent có sẵn giữ nguyên
+    tok = as_agent()  # điều phối viên/agent tạo agent mới cũng nhận trust (người đã chọn mặc định này)
+    try:
+        hub.agents.create({"id": "new", "name": "NEW"})
+    finally:
+        auth.CURRENT_CALLER.reset(tok)
+    t = hub.guard.trust_of("new")
+    assert t and t["mode"] == "full" and t["until"] is None and t["by"] == "default"
+    assert any(e.type == "guard.trust" and e.agent_id == "new" for e in hub.store.query_events())
+    hub.guard.trust_set("new", "off")
+    assert hub.guard.trust_of("new") is None
+    hub.config.set("guard.trust_new_agents", "off")
+    hub.agents.create({"id": "later", "name": "LATER"})
+    assert hub.guard.trust_of("later") is None
+
+
 async def test_trusted_spec_bypass_no_sandbox_on_real_repo(hub, tmp_path):
     from cfharness.runtime.claude_cli import build_argv
 

@@ -70,6 +70,9 @@ DEFAULTS: dict[str, Any] = {
         # `node|python <script>` mà script được git track, chưa sửa so với HEAD và commit TRƯỚC khi task bắt đầu (tooling của repo,
         # không phải mã agent vừa viết) → API xoá trong mã không làm lệnh thành `destructive`. null = theo profile (strict → tắt).
         "trusted_repo_scripts": None,
+        # Agent MỚI tạo (người, điều phối viên, clone, import) tự nhận trust như `cfharness guard trust <agent> <mode>`: "full" = không rào
+        # chắn (xem docs/dev-notes/trust-and-chat-settings.md), "off" = như cũ. Chỉ áp lúc tạo; agent có sẵn giữ nguyên. Chỉ người đặt.
+        "trust_new_agents": "off",
         # Xoá file/thư mục do CHUỖI RUN CỦA TASK tạo (không chỉ session hiện tại) → `write`; thư mục trong thư mục tạm của hệ thống
         # (%TEMP%, $TMPDIR) mà chính nó được tạo sau khi task bắt đầu → `write` không cần duyệt từng file con. null = theo profile.
         "task_created_deletes": None,
@@ -664,6 +667,8 @@ def validate_setting(key: str, value: Any) -> None:
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")
+    if key == "guard.trust_new_agents" and value not in ("off", "full"):
+        raise ValueError("guard.trust_new_agents chỉ nhận 'off' hoặc 'full'")
     if key == "notify.reminder_max_count":
         if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
             raise ValueError("notify.reminder_max_count phải là số nguyên ≥ 0 hoặc null")

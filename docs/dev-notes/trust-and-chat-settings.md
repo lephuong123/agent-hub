@@ -47,6 +47,10 @@ Quyết định của chủ hub: được phép tắt hẳn rào chắn cho mộ
   ESTOP. Run đang chạy giữ sandbox/cờ cũ cho tới khi kết thúc; phần guard có hiệu lực ngay.
 - `until` (tuỳ chọn): hết hạn thì trust tự hết hiệu lực ở cả guard lẫn run mới.
 - Hiển thị: `⚠TRUST` ở `top` và bảng `/agents`; `/perm` và `cfharness guard trust list` liệt kê.
+- **Mặc định cho agent mới** (`guard.trust_new_agents: off|full`, mặc định `off`; đặt bằng `config.set` nên chỉ người đổi được).
+  `full` → listener `agent.created` (`GuardService._trust_new_agent`) ghi trust full không hết hạn, `by=default, channel=config`, kèm
+  audit/event `guard.trust`. Áp cho MỌI đường tạo agent: người, điều phối viên, clone, import. Agent có sẵn giữ nguyên; tắt từng agent
+  bằng `guard trust <agent> off`. Rủi ro đã chấp nhận: điều phối viên (có thể dính prompt injection) tạo agent mới là có agent không rào chắn.
 - Rủi ro đã chấp nhận: agent trust có thể sửa `config.yaml`/`hub.db`/audit/policy, đọc secret của hub, push, gọi mạng nội bộ. Dấu vết
   trong `guard_decisions`/audit chỉ đáng tin tới khi agent tự sửa chúng.
 

@@ -127,6 +127,7 @@ class GuardService:
         from .second_opinion import SecondOpinion
 
         self.second = SecondOpinion(hub)
+        hub.bus.add_listener(self._trust_new_agent)
         from .locks import BrowserLock
 
         self.browser = BrowserLock(hub.store)  # Claude in Chrome: Chrome THẬT của người dùng chung → giới hạn số run cùng lúc
@@ -636,6 +637,26 @@ class GuardService:
         audit_record("guard.trust", agent_id=agent_id, run_id=None, data=info)
         self.hub.publish(make_event("guard.trust", agent_id, info, source="hub"))
         return {"agent_id": agent_id, **cur}
+
+    def _trust_new_agent(self, ev: Any) -> None:
+        """Listener `agent.created`: `guard.trust_new_agents=full` (người đặt trong config) → agent mới nhận trust full không hết hạn,
+        ghi `by=default, channel=config` + audit/event `guard.trust` như `trust_set`. Tắt cho từng agent bằng `guard trust <agent> off`."""
+        if ev.type != "agent.created" or not ev.agent_id:
+            return
+        try:
+            if self.hub.config.get("guard.trust_new_agents") != "full":
+                return
+            allv = dict(self.hub.store.state_get("agent_trust") or {})
+            if ev.agent_id in allv:
+                return
+            allv[ev.agent_id] = {"mode": "full", "until": None, "by": "default", "channel": "config", "at": now_iso()}
+            self.hub.store.state_set("agent_trust", allv)
+        except Exception:  # lỗi = không trust (giữ guard như thường)
+            log.exception("không đặt được trust mặc định cho %s", ev.agent_id)
+            return
+        info = {"agent_id": ev.agent_id, "before": "off", "after": "full", "until": None, "by": "default", "channel": "config"}
+        audit_record("guard.trust", agent_id=ev.agent_id, run_id=None, data=info)
+        self.hub.publish(make_event("guard.trust", ev.agent_id, info, source="hub"))
 
     def hub_mcp_servers(self) -> frozenset[str]:
         """H-18: tên đăng ký của MCP server trỏ về CHÍNH hub — nhận theo lệnh (`cfharness mcp serve`, `-m cfharness.mcp_server`)
