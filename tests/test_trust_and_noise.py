@@ -177,6 +177,15 @@ def test_task_created_temp_dir_delete(tmp_path, monkeypatch):
     v = classify("Bash", {"command": f"rm -rf {str(outside).replace(os.sep, '/')}"},
                  _ctx(tmp_path, run_since=now + 100, worktree_since=now - 10, max_walk=2, task_created_deletes=True))
     assert v.rule != "delete_run_created"
+    # workspace nằm TRONG thư mục tạm (Linux: repo clone vào /tmp, CI) → thư mục con của workspace vẫn duyệt từng file
+    ws_in_tmp = systemp / "repo"
+    (ws_in_tmp / "build" / "a").mkdir(parents=True)
+    for i in range(5):
+        (ws_in_tmp / "build" / "a" / f"f{i}").write_text("x")
+    ctx = GuardContext(cwd=ws_in_tmp, policy=PolicyStore(tmp_path / "hubhome").load(), git_probe=False, run_since=now + 100,
+                       worktree_since=now - 10, max_walk=2, task_created_deletes=True)
+    v = classify("Bash", {"command": f"rm -rf {str(ws_in_tmp / 'build').replace(os.sep, '/')}"}, ctx)
+    assert v.rule != "delete_run_created"
     # thư mục tạm có TRƯỚC task → vẫn hỏi
     v = classify("Bash", cmd, _ctx(tmp_path, run_since=now + 100, worktree_since=now + 50, max_walk=2, task_created_deletes=True))
     assert v.verdict == "destructive"
