@@ -62,7 +62,7 @@ class ChatFlows:
         if not rows:
             return "Chưa có agent nào (tạo bằng cfharness agent create hoặc web)."
         rows = rows[:30]
-        lines = ["🤖 <b>[cfharness] Agent</b>"]
+        lines = ["🤖 <b>Agent</b>"]
         btns: list[tuple[str, str, str]] = []
         stops: list[tuple[str, str, str]] = []
         for i, r in enumerate(rows, 1):
@@ -84,12 +84,12 @@ class ChatFlows:
         rows = await self.bot.call(cid, "run.list", {"agent": rest.split()[0] if rest else None, "limit": 10})
         if not rows:
             return "Chưa có run nào."
-        lines = [f"🗂 <b>[cfharness] {len(rows)} lượt chạy gần nhất</b>"]
+        lines = [f"🗂 <b>{len(rows)} lượt chạy gần nhất</b>"]
         btns = []
         for i, r in enumerate(rows, 1):
             st = r.get("outcome") or r.get("status")
-            lines.append(f"{i}. {esc(r.get('id'))} · {esc(r.get('agent_id'))} — {esc(STATUS_VI.get(str(st), str(st)))} · ${float(r.get('cost_usd') or 0):.4f}"
-                         f" · {esc(str(r.get('queued_at') or '')[:16].replace('T', ' '))}")
+            lines.append(f"{i}. {esc(r.get('agent_id'))} — {esc(STATUS_VI.get(str(st), str(st)))}"
+                         f" · {esc(str(r.get('queued_at') or '')[5:16].replace('T', ' '))}")
             btns.append(("fr", str(r["id"]), str(i)))
         lines.append("Bấm số để xem kết quả lượt đó.")
         markup, _ = self.bot.callbacks.issue_rows(_rows(btns), cid, ttl=self._ttl())
@@ -108,7 +108,7 @@ class ChatFlows:
         rows = [r for r in rows or [] if not r.get("paused")][:MAX_PICK]
         if not rows:
             return "Chưa có agent nào để giao việc."
-        lines = ["➕ <b>[cfharness] Giao việc cho agent nào?</b>"] + [f"{i}. {esc(r['id'])}" for i, r in enumerate(rows, 1)]
+        lines = ["➕ <b>Giao việc cho agent nào?</b>"] + [f"{i}. {esc(r['id'])}" for i, r in enumerate(rows, 1)]
         lines.append(f"Hoặc gõ: {esc(self.bot.cmd('giaoviec'))} &lt;agent&gt; &lt;yêu cầu&gt;")
         markup, _ = self.bot.callbacks.issue_rows(_rows([("fg", str(r["id"]), str(i)) for i, r in enumerate(rows, 1)]), cid, ttl=self._ttl())
         await self.bot._send(api, cid, "\n".join(lines), markup, html=True)
@@ -117,7 +117,7 @@ class ChatFlows:
     async def start_run(self, cid: str, agent: str, prompt: str) -> str:
         r = await self.bot.call(cid, "run.start", {"agent": agent, "prompt": prompt})
         self.bot._watch(r["id"], cid)
-        return f"Đã giao run {r['id']} cho agent {agent} ({r.get('status')}). Bot sẽ gửi kết quả khi xong."
+        return f"▶️ Đã giao việc cho {agent}. Bot sẽ báo kết quả khi xong."
 
     async def ask_prompt(self, cid: str, agent: str, api: Any, reply_to: Any = None) -> None:
         res = await self.bot.ask_input(api, cid, "run", agent, f"✍️ Mô tả việc cần làm cho agent {agent} — {self.bot.reply_here()}.",
@@ -148,7 +148,7 @@ class ChatFlows:
         rows = [r for r in (await self.bot.call(cid, "run.list", {"status": "running", "limit": MAX_PICK}) or []) if r.get("status") in LIVE]
         if not rows:
             return "Không có lượt nào đang chạy."
-        lines = ["⏹ <b>[cfharness] Dừng lượt nào?</b>"] + [f"{i}. {esc(r['id'])} · {esc(r.get('agent_id'))}" for i, r in enumerate(rows, 1)]
+        lines = ["⏹ <b>Dừng lượt nào?</b>"] + [f"{i}. {esc(r.get('agent_id'))} · {esc(r['id'])}" for i, r in enumerate(rows, 1)]
         markup, _ = self.bot.callbacks.issue_rows(_rows([("fs", str(r["id"]), f"⏹ {i}") for i, r in enumerate(rows, 1)]), cid, ttl=min(self._ttl(), 3600))
         await self.bot._send(api, cid, "\n".join(lines), markup, html=True)
         return None
@@ -159,18 +159,18 @@ class ChatFlows:
 
         try:
             if action == "fg":
-                await self.bot._edit(api, cid, mid, f"➕ <b>[cfharness] Giao việc cho {esc(ref)}</b> — nhập yêu cầu {esc(self.bot.input_where())}.", None)
+                await self.bot._edit(api, cid, mid, f"➕ <b>Giao việc cho {esc(ref)}</b> — nhập yêu cầu {esc(self.bot.input_where())}.", None)
                 await self.ask_prompt(cid, ref, api, reply_to=mid)
                 return f"Nhập yêu cầu cho {ref}."
             if action == "fs":
                 r = await self.bot.call(cid, "run.stop", {"id": ref})
-                await self.bot._edit(api, cid, mid, f"⏹ <b>[cfharness] Đã gửi yêu cầu dừng run {esc((r or {}).get('id') or ref)}</b>.", None)
+                await self.bot._edit(api, cid, mid, f"⏹ <b>Đã yêu cầu dừng {esc((r or {}).get('agent_id') or 'lượt chạy')}</b>.", None)
                 return "Đã gửi yêu cầu dừng."
             if action == "fr":
                 run = await self.bot.call(cid, "run.get", {"id": ref})
                 run = (run or {}).get("run") or run
                 if (run or {}).get("status") in LIVE:
-                    await self.bot._send(api, cid, f"Run {ref} đang {run.get('status')} — bot gửi kết quả khi xong nếu bạn giao qua {self.bot.LABEL}.")
+                    await self.bot._send(api, cid, f"{run.get('agent_id')} vẫn đang làm lượt này — bot báo kết quả khi xong nếu bạn giao qua {self.bot.LABEL}.")
                 else:
                     res = await self.bot._send(api, cid, self.bot.format_result(run), html=True)
                     if res.get("message_id") is not None:  # reply vào chi tiết = tiếp tục hội thoại run đó
@@ -203,8 +203,8 @@ class ChatFlows:
     def _progress_text(self, rid: str, agent: Any, pg: dict[str, Any], done: bool = False) -> str:
         secs = int(time.monotonic() - pg["t0"])
         if done:
-            return f"☑️ <b>[cfharness] Run {esc(rid)} (agent {esc(agent)}) đã kết thúc</b> · {pg['tools']} công cụ · {secs} s — kết quả ở tin bên dưới."
-        return f"▶️ <b>[cfharness] Run {esc(rid)} (agent {esc(agent)}) đang chạy</b> · {pg['tools']} công cụ · {secs} s"
+            return f"☑️ <b>{esc(agent)} đã xong</b> · {secs} giây — kết quả ở tin bên dưới."
+        return f"▶️ <b>{esc(agent)} đang làm…</b> · {pg['tools']} bước · {secs} giây"
 
     async def _progress(self, rid: str, agent: Any) -> None:
         pg = self.progress.get(rid)

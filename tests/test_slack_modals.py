@@ -39,14 +39,14 @@ async def test_agent_button_opens_modal_and_submission_starts_run(make, sk):
     assert any("hộp nhập vừa mở" in sk.text_of(u) for u in sk.calls_of("chat.update"))
     assert not any("Mô tả việc cần làm" in t for t in texts(sk, DM_BOSS))  # không có tin mời trả lời trong thread
     await deliver(sk, sk.submit_view(BOSS, view, "viết hàm cộng"))
-    await until(lambda: any("Đã giao run" in t for t in texts(sk, DM_BOSS)))
+    await until(lambda: any("Đã giao việc cho" in t for t in texts(sk, DM_BOSS)))
     runs = d.hub.store.list_runs(agent_id="coder")
     assert len(runs) == 1 and runs[0]["prompt"] == "viết hàm cộng"
     assert d.hub.audit.query(kind="run.start")[0]["channel"] == f"slack:{DM_BOSS}"
     cmd = [a for a in d.hub.audit.query(kind="slack.command") if a["data"]["method"] == "run.start"]
     assert cmd and cmd[0]["data"]["from_id"] == BOSS
-    res = await until(lambda: [m for m in sk.sent(DM_BOSS) if "Chi phí" in sk.text_of(m)])  # theo dõi run → tin kết quả
-    assert runs[0]["id"] in sk.text_of(res[-1])
+    res = await until(lambda: [m for m in sk.sent(DM_BOSS) if "coder — xong" in sk.text_of(m)])  # theo dõi run → tin kết quả
+    assert "[cfharness]" not in sk.text_of(res[-1])
     # gửi lại cùng modal (nonce đã tiêu) → từ chối, không chạy lần hai
     await deliver(sk, sk.submit_view(BOSS, view, "chạy lại lần nữa"))
     assert len(d.hub.store.list_runs(agent_id="coder")) == 1 and rejected(d, "unknown_or_used")
@@ -114,15 +114,15 @@ async def test_question_free_text_via_modal(make, sk):
     rid = await held_run(d)
     run = d.hub.store.get_run(rid)
     q = d.hub.questions.open(run, EVIL, [{"label": EVIL}, "Không"])
-    sysm = await until(lambda: next((m for m in reversed(sk.sent(DM_BOSS)) if sk.buttons(m) and q["id"] in sk.text_of(m)), None))
+    sysm = await until(lambda: sk.msg_for(DM_BOSS, q["id"]))
     await deliver(sk, sk.press(DM_BOSS, BOSS, btn(sk, sysm, "✍️ Trả lời bằng chữ"), sysm["_ts"]))
     view = await until(lambda: sk.views()[-1] if sk.views() else None)
-    assert view["title"]["text"] == "Trả lời câu hỏi" and q["id"] in view["blocks"][0]["text"]["text"]
+    assert view["title"]["text"] == "Trả lời câu hỏi" and "Nhập câu trả lời" in view["blocks"][0]["text"]["text"]
     blob = str(view)
     assert "evil" not in blob and "<!channel>" not in blob and "đậm" not in blob  # chữ agent không vào modal
     assert any("hộp vừa mở" in str(p.get("text")) for p in sk.calls_of("chat.postEphemeral"))
     # bàn phím được cấp lại (nonce cũ đã tiêu) — vẫn bấm được số
-    assert any(sk.buttons(u) for u in sk.calls_of("chat.update") if q["id"] in sk.text_of(u))
+    assert any(sk.buttons(u) for u in sk.calls_of("chat.update") if u.get("ts") == sysm["_ts"])
     await deliver(sk, sk.submit_view(STRANGER, view, "người lạ trả lời"))
     assert d.hub.questions.get(q["id"])["status"] == "open" and rejected(d, "wrong_user")
     await deliver(sk, sk.submit_view(BOSS, view, "chỉ xoá cache/"))

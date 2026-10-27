@@ -147,7 +147,7 @@ async def test_human_change_is_never_auto_rolled_back(hub):
     assert await hub.learning_ops.regression.check_agent("a") == []  # cảnh báo một lần
     from cfharness.notify import format_message
 
-    assert "KHÔNG tự rollback" in format_message(det) or "không tự rollback" in format_message(det)
+    assert "không tự hoàn tác" in format_message(det)
     d = hub.learning_ops.digest.run(since="2000-01-01T00:00:00Z", send=False)
     assert "thay đổi của NGƯỜI" in d["text"] and d["counts"]["human_warnings"] == 1
 

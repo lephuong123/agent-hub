@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("cfharness.chat")
 
 PENDING = ("open", "waiting_human")
-AGENT_FRAME = "▼ Nội dung do AGENT viết — không phải thông báo hệ thống:"
+AGENT_FRAME = "▼ Agent viết:"  # tiền tố cố định (chữ hub) ngay trước `<pre>` nội dung agent — WT-8, rút gọn theo ux-plan §3.1
 _UID: contextvars.ContextVar[str | None] = contextvars.ContextVar("chat_from_id", default=None)
 OUTCOME_VI = {
     "completed": "hoàn thành", "failed": "lỗi", "cancelled": "đã huỷ", "budget_exceeded": "vượt ngân sách", "timed_out": "quá giờ",
@@ -46,7 +46,7 @@ STATUS_VI = {
     "protocol_violation": "⚠️ vi phạm giao thức",
 }
 AGENT_STATUS_VI = {"idle": "🟢 rảnh", "working": "▶️ đang làm", "waiting": "⏸ chờ duyệt", "paused": "⏸ tạm dừng", "error": "❌ lỗi"}
-DECISION_VI = {"allowed": ("✅", "CHO PHÉP"), "denied": ("⛔", "TỪ CHỐI"), "cancelled": ("⏹", "HUỶ")}
+DECISION_VI = {"allowed": ("✅", "cho phép"), "denied": ("⛔", "từ chối"), "cancelled": ("⏹", "huỷ")}
 CHANNEL_LABELS = {"telegram": "Telegram", "slack": "Slack"}
 
 
@@ -63,11 +63,15 @@ def who_label(by: Any) -> str:
     return "bạn" if b in ("user", "") or b.isdigit() else ("hub" if b == "hub" else b)
 
 
+def _dur_vi(secs: float) -> str:
+    s = int(round(secs))
+    return f"{s} giây" if s < 60 else f"{s // 60} phút {s % 60} giây" if s < 3600 else f"{s // 3600} giờ {s % 3600 // 60} phút"
+
+
 def decided_text(approval_id: str, p: dict[str, Any]) -> str:
     """Dòng kết quả của approval (chữ hub, đã escape) — sửa tại chỗ tin có nút ở MỌI chat."""
     icon, word = DECISION_VI.get(str(p.get("decision")), ("•", str(p.get("decision"))))
-    return (f"{icon} <b>[cfharness] Yêu cầu {esc(approval_id)} — đã {esc(word)}</b> · bởi {esc(who_label(p.get('by')))} qua {esc(channel_label(p.get('channel')))}"
-            + (f" sau {int(float(p['wait_s']))} s" if p.get("wait_s") else "") + ".")
+    return f"{icon} <b>Đã {esc(word)}</b> — bởi {esc(who_label(p.get('by')))} qua {esc(channel_label(p.get('channel')))}."
 
 
 class ChatError(Exception):
@@ -148,13 +152,12 @@ class ChatBot:
     def always_rule_text(offer: dict[str, Any]) -> str:
         """Mô tả luật sẽ tạo (HTML đã escape). Host đã bị daemon giới hạn ở dạng DNS/IPv4 thuần; vân tay là hex do hub tính."""
         if offer.get("kind") == "web_domain":
-            return (f"luật <b>web_domain</b>: agent {esc(offer.get('agent_id'))} được WebFetch tới ĐÚNG host <code>{esc(offer.get('domain'))}</code>"
-                    " (không gồm tên miền con) mà không hỏi lại")
+            return (f"từ nay {esc(offer.get('agent_id'))} được mở trang trên <code>{esc(offer.get('domain'))}</code> mà không hỏi lại"
+                    " (không gồm tên miền con)")
         if offer.get("kind") == "mcp_tool":
-            return (f"luật <b>mcp_tool</b>: agent {esc(offer.get('agent_id'))} được gọi ĐÚNG tool <code>{esc(offer.get('tool'))}</code> (mọi tham số) "
-                    "mà không hỏi lại — chỉ bỏ cờ destructiveHint/chưa probe/untrusted do server tự khai")
-        return (f"luật <b>exact</b>: agent {esc(offer.get('agent_id'))} + tool <code>{esc(offer.get('tool'))}</code> + ĐÚNG dấu vân tay"
-                f" <code>{esc(offer.get('fingerprint'))}</code> (thao tác khác dù một ký tự vẫn hỏi lại)")
+            return f"từ nay {esc(offer.get('agent_id'))} được gọi tool <code>{esc(offer.get('tool'))}</code> mà không hỏi lại"
+        return (f"từ nay {esc(offer.get('agent_id'))} được chạy lại ĐÚNG thao tác này mà không hỏi lại"
+                f" (khác một ký tự vẫn hỏi; mã <code>{esc(str(offer.get('fingerprint') or '')[:12])}</code>)")
 
     def _ttl(self) -> float:
         return float(self.cfg().get("callback_ttl_s") or 604800)
@@ -449,7 +452,7 @@ class ChatBot:
             await self._send(api, cid, f"Không tiếp tục được run {run_id}: {clip(e, 400)}")
             return
         self._watch(r["id"], cid)
-        await self._send(api, cid, f"Đã tiếp tục hội thoại: run {r['id']} (agent {r.get('agent_id')}). Bot sẽ gửi kết quả khi xong.")
+        await self._send(api, cid, f"▶️ Đã gửi tiếp cho {r.get('agent_id')}. Bot sẽ báo kết quả khi xong.")
 
     # ------------------------------------------------------------------ kết quả run
     def format_result(self, run: dict[str, Any]) -> str:
@@ -458,21 +461,23 @@ class ChatBot:
         from ..redact import redact_str
         from ..notify.telegram import visible
 
-        rid = run["id"]
         outcome = run.get("outcome") or run.get("status")
         dur = float(run.get("duration_ms") or 0) / 1000
         icon = "✅" if outcome == "completed" else "⏹" if outcome == "cancelled" else "❌"
-        head = f"<b>[cfharness] Run {esc(rid)} (agent {esc(run.get('agent_id'))}) — {icon} {esc(OUTCOME_VI.get(str(outcome), str(outcome)))}</b>"
-        cost = f"Chi phí: ${float(run.get('cost_usd') or 0):.4f}" + (f" · {esc(run.get('num_turns'))} lượt" if run.get("num_turns") else "") + (f" · {dur:.1f} s" if dur else "")
+        word = "xong" if outcome == "completed" else OUTCOME_VI.get(str(outcome), str(outcome))
+        meta = [_dur_vi(dur)] if dur else []
+        if run.get("cost_usd"):
+            meta.append(f"${float(run['cost_usd']):.3f}")
+        head = f"{icon} <b>{esc(run.get('agent_id'))} — {esc(word)}</b>" + (f" · {esc(' · '.join(meta))}" if meta else "")
         body = visible(redact_str(str(run.get("summary") or run.get("error") or "(không có nội dung kết quả)")))
         n = min(int(self.cfg().get("result_max_chars") or 1500), CHUNK)
         cut = len(body) > n
         if cut:
             body = body[:n]
-        lines = [head, esc(cost), f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(body)}</pre>"]
+        lines = [head, f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(body)}</pre>"]
         if cut:
-            lines.append(f"…(đã cắt — xem đầy đủ: cfharness runs show {esc(rid)}, TUI hoặc web)")
-        lines.append(self.reply_hint("tiếp tục hội thoại"))
+            lines.append("…(đã cắt — xem đầy đủ trên web)")
+        lines.append("↩ " + self.reply_hint("giao thêm cho agent này"))
         return "\n".join(lines)
 
     def reply_hint(self, what: str) -> str:
@@ -520,7 +525,7 @@ class ChatBot:
         api = self.api()
         if etype == "run.waiting_human" or outcome == "waiting_human":
             if api is not None:
-                await self._send(api, chat, f"Run {run_id} đang chờ người duyệt thao tác phá huỷ — xem tin duyệt hoặc gõ {self.cmd('approvals')}.")
+                await self._send(api, chat, f"⏸ {run.get('agent_id')} đang chờ bạn duyệt — xem tin duyệt hoặc gõ {self.cmd('approvals')}.")
             return
         if outcome in ("resumed", "interrupted"):
             return  # run con (resume) kế thừa theo dõi qua parent_run_id
@@ -568,27 +573,27 @@ class ChatBot:
         action = full_action(str(row.get("tool_name") or ""), row.get("tool_input"))
         targets = self._targets(row, payload)
         detail = []
-        if targets:
-            detail.append("Phần khớp luật (đích): " + ", ".join(visible(redact_str(x)) for x in targets))
         if row.get("reason"):
-            detail.append("Lý do giữ: " + visible(redact_str(str(row["reason"]))))
+            detail.append("Vì sao hỏi: " + visible(redact_str(str(row["reason"]))))
+        if targets:
+            detail.append("Ảnh hưởng tới: " + ", ".join(visible(redact_str(x)) for x in targets))
         tail = ("\n\n" + "\n".join(detail)) if detail else ""
         chunks = split_chunks(action)
-        head = f"<i>{esc(AGENT_FRAME)}</i>\nThao tác của yêu cầu {esc(aid)} ({len(action)} ký tự)"
+        head = f"⏸ <b>{esc(row.get('agent_id'))} muốn chạy:</b>\n<i>{esc(AGENT_FRAME)}</i>"
         first_mid = None
         if len(chunks) <= MAX_CHUNKS:
             for i, ch in enumerate(chunks):
-                part = f" — phần {i + 1}/{len(chunks)}" if len(chunks) > 1 else ""
+                part = f" (phần {i + 1}/{len(chunks)})" if len(chunks) > 1 else ""
                 last = i == len(chunks) - 1
-                text = f"{head}{part}:\n<pre>{esc(ch)}</pre>" + (f"\n<pre>{esc(tail.strip())}</pre>" if last and tail else "")
+                text = f"{head}{part}\n<pre>{esc(ch)}</pre>" + (f"\n<pre>{esc(tail.strip())}</pre>" if last and tail else "")
                 res = await self._send(api, chat, text, html=True, reply_to=first_mid)
                 first_mid = first_mid or res.get("message_id")
         else:
             doc = (action + tail).encode("utf-8")
             res = await self.send_document(api, chat, f"{aid}.txt", doc,
-                                           f"Thao tác ĐẦY ĐỦ của yêu cầu {aid} ({len(action)} ký tự) — do agent viết", mime="text/plain")
+                                           f"Thao tác đầy đủ ({len(action)} ký tự) — do agent viết", mime="text/plain")
             first_mid = (res or {}).get("message_id") if isinstance(res, dict) else None
-            text = (f"{head} — quá dài, đầy đủ trong tệp đính kèm. Đầu và CUỐI:\n<pre>{esc(action[:1500])}</pre>\n…\n"
+            text = (f"{head} (quá dài — đầy đủ ở tệp đính kèm; dưới đây là phần đầu và CUỐI)\n<pre>{esc(action[:1500])}</pre>\n…\n"
                     f"<pre>{esc(action[-1500:])}</pre>" + (f"\n<pre>{esc(tail.strip()[:600])}</pre>" if tail else ""))
             await self._send(api, chat, text, html=True, reply_to=first_mid)
         res = await self._send(api, chat, self.approval_sys_text(row, kind=kind, payload=payload, action_len=len(action)),
@@ -598,22 +603,20 @@ class ChatBot:
     def approval_sys_text(self, row: dict[str, Any], *, kind: str = "approval.open", payload: dict[str, Any] | None = None,
                           action_len: int | None = None) -> str:
         """Tin HỆ THỐNG có nút của approval — CHỈ chữ do hub sinh (id, agent, run, luật, lớp, độ dài)."""
-        aid = row["id"]
-        if action_len is None:
-            action_len = len(full_action(str(row.get("tool_name") or ""), row.get("tool_input")))
+        agent = esc(row.get("agent_id"))
         heavy = is_heavy(row, self.cfg().get("confirm_classes") or [])
-        title = {"approval.waiting_human": "chưa có người duyệt → run chuyển waiting_human (đã dừng tiến trình, giữ khoá repo, KHÔNG tự từ chối)",
-                 "approval.reminder": f"nhắc lần {esc((payload or {}).get('reminder_count'))} — vẫn chờ người duyệt",
-                 "approval.escalated": "điều phối viên chuyển lên NGƯỜI duyệt (không quyết được / quá hạn)",
-                 }.get(kind, "muốn chạy thao tác PHÁ HUỶ — đang giữ chờ duyệt")
-        return "\n".join([
-            f"⏸ <b>[cfharness] Yêu cầu {esc(aid)}</b> — agent {esc(row.get('agent_id'))} {title}",
-            f"• Run: {esc(row.get('run_id'))} · luật: {esc(row.get('matched_rule'))} · lớp: {esc(row.get('destructive_class') or '-')}"
-            + (" · tài nguyên BẢO VỆ" if row.get("protected_resource_id") else ""),
-            f"• Thao tác ĐẦY ĐỦ ở tin được trả lời phía trên ({action_len} ký tự){' — THAO TÁC NẶNG' if heavy else ''}.",
-            "• Cho phép cần xác nhận bước 2. Hoặc trên máy: cfharness approve|deny " + esc(aid),
-        ] + (["• Luôn cho phép (bước 2) = cho phép lần này VÀ tạo luật hẹp (thao tác không phá huỷ, hoặc tool MCP chỉ bị server tự đánh dấu)."]
-             if self.always_offer(row) else []))
+        lead = {"approval.waiting_human": f"⏸ <b>{agent} đã tạm dừng, chờ bạn duyệt thao tác ở tin trên.</b>\nHub không tự từ chối — bấm khi bạn sẵn sàng.",
+                "approval.reminder": f"🔔 <b>Nhắc lần {esc((payload or {}).get('reminder_count'))}: {agent} vẫn chờ bạn duyệt thao tác ở tin trên.</b>",
+                "approval.escalated": f"⬆️ <b>Điều phối viên chuyển cho bạn: cho phép {agent} chạy thao tác ở tin trên?</b>",
+                }.get(kind, f"❓ <b>Cho phép {agent} chạy thao tác ở tin trên?</b>")
+        lines = [lead]
+        if row.get("protected_resource_id"):
+            lines.append("⚠️ Thao tác chạm tài nguyên được bảo vệ.")
+        elif heavy:
+            lines.append("⚠️ Thao tác nặng — đọc kỹ trước khi cho phép.")
+        if self.always_offer(row):
+            lines.append("«Luôn cho phép» = cho phép lần này và không hỏi lại đúng loại thao tác này.")
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------ nút (sau khi lớp con đã kiểm người + TIÊU nonce)
     async def handle_action(self, cid: str, rec: dict[str, Any], mid: Any, api: Any) -> tuple[str, str | None, dict[str, Any] | None]:
@@ -633,7 +636,7 @@ class ChatBot:
             elif a == "eo":
                 await self.call(cid, "estop.set", {"on": False, "reason": f"{self.LABEL} {cid}"})
                 text = "Đã TẮT ESTOP — hub chạy run trở lại."
-                edit = f"▶️ <b>[cfharness] Đã TẮT ESTOP</b> — {esc(who_label(_UID.get()))} qua {esc(self.LABEL)}. Hub chạy run trở lại."
+                edit = f"▶️ <b>Đã tắt dừng khẩn cấp</b> — bởi {esc(who_label(_UID.get()))} qua {esc(self.LABEL)}. Agent chạy lại bình thường."
             elif a == "cx":
                 text = "Đã huỷ bước xác nhận — yêu cầu vẫn chờ duyệt."
                 ap = await self.call(cid, "approval.get", {"id": ref})
@@ -642,13 +645,13 @@ class ChatBot:
                     self.callbacks.add_message(ref, cid, mid)
             elif a == "cx0":
                 text = "Đã huỷ — ESTOP vẫn BẬT."
-                edit = "🛑 <b>[cfharness] Đã huỷ</b> — ESTOP vẫn BẬT."
+                edit = "🛑 <b>Đã huỷ</b> — dừng khẩn cấp vẫn BẬT."
             else:
                 text = "Đã huỷ."
-                edit = "<b>[cfharness] Đã huỷ.</b>"
+                edit = "<b>Đã huỷ.</b>"
         except ChatError as e:
             text = f"Lỗi: {clip(e, 300)}"
-            edit = f"<b>[cfharness] Lỗi:</b> {esc(clip(e, 300))}"
+            edit = f"❌ <b>Lỗi:</b> {esc(clip(e, 300))}"
         return text, edit, markup
 
     def audit_rejected(self, cid: str, why: str, from_id: Any) -> None:
@@ -666,35 +669,35 @@ class ChatBot:
         """→ (toast, chữ sửa tại chỗ | None, bàn phím | None). Quyết xong: `approval.resolved` sửa MỌI tin của approval (mọi chat)."""
         ap = await self.call(cid, "approval.get", {"id": approval_id})
         if ap.get("status") not in PENDING:
-            t = f"Yêu cầu {approval_id} đã {ap.get('status')} trước đó (bởi {ap.get('resolved_by')} qua {ap.get('resolved_channel')})."
+            t = "Yêu cầu này đã được xử lý trước đó."
             return t, decided_text(approval_id, {"decision": ap.get("status"), "by": ap.get("resolved_by"), "channel": ap.get("resolved_channel")}), None
         uid = _UID.get()
         ch = self.channel_of(cid)
         if action == "ap":  # WT-5: mọi cho phép đều 2 bước; bước 2 SỬA tin hệ thống (chữ hub) thay vì gửi tin mới (T-B)
             heavy = is_heavy(ap, self.cfg().get("confirm_classes") or [])
             markup, _ = self.callbacks.issue([("apc", approval_id, "Xác nhận CHO PHÉP"), ("cx", approval_id, "Huỷ")], cid, ttl=min(self._ttl(), 3600))
-            text = (f"⚠️ <b>Xác nhận bước 2</b> — cho phép MỘT lần yêu cầu {esc(approval_id)} của agent {esc(ap.get('agent_id'))} (run {esc(ap.get('run_id'))}),"
-                    f" luật {esc(ap.get('matched_rule'))}{' — THAO TÁC NẶNG' if heavy else ''}.\nĐọc lại thao tác ĐẦY ĐỦ ở tin phía trên trước khi xác nhận.")
+            text = (f"⚠️ <b>Chắc chắn cho phép?</b> {esc(ap.get('agent_id'))} sẽ chạy thao tác ở tin trên (một lần)"
+                    f"{' — thao tác NẶNG' if heavy else ''}.\nĐọc lại thao tác trước khi xác nhận.")
             return "Cần xác nhận bước 2 — xem tin này.", text, markup
         if action == "aa":  # LLM-2: "luôn cho phép" nặng ít nhất như cho phép → 2 bước; bước 2 nói rõ luật sẽ tạo
             offer = ap.get("always_offer") or self.always_offer(ap)
             if not offer:
-                return f"Yêu cầu {approval_id} không đủ điều kiện 'luôn cho phép' — chỉ cho phép một lần.", None, None
+                return "Thao tác này không dùng được «luôn cho phép» — chỉ cho phép một lần.", None, None
             markup, _ = self.callbacks.issue([("aac", approval_id, "Xác nhận LUÔN CHO PHÉP"), ("cx", approval_id, "Huỷ")], cid,
                                              ttl=min(self._ttl(), 3600))
-            text = (f"⚠️ <b>Xác nhận bước 2 — LUÔN cho phép</b> yêu cầu {esc(approval_id)} (run {esc(ap.get('run_id'))}): cho phép lần này VÀ tạo "
-                    f"{self.always_rule_text(offer)}.\nGỡ: cfharness guard always rm &lt;id luật&gt;. Đọc lại thao tác ĐẦY ĐỦ ở tin phía trên.")
+            text = (f"⚠️ <b>Chắc chắn LUÔN cho phép?</b> Cho phép lần này, và {self.always_rule_text(offer)}.\n"
+                    "Đọc lại thao tác ở tin trên trước khi xác nhận. Gỡ sau: cfharness guard always rm &lt;id luật&gt;.")
             return "Cần xác nhận bước 2 — xem tin này.", text, markup
         if action == "aac":  # daemon kiểm lại (`always_prepare`): không đủ điều kiện → lỗi, approval giữ nguyên
             res = await self.call(cid, "approval.approve", {"id": approval_id, "channel": ch, "by": "user", "always": True,
                                                             "note": f"luôn cho phép qua {self.LABEL} (user {uid})"})
             rid = ((res or {}).get("always_rule") or {}).get("id") if isinstance(res, dict) else None
-            return f"Đã CHO PHÉP {approval_id} + tạo luật luôn cho phép {rid or '?'}.", None, None
+            return f"Đã cho phép và tạo luật {rid or '?'}.", None, None
         if action == "dn":
             await self.call(cid, "approval.deny", {"id": approval_id, "channel": ch, "by": "user", "note": f"từ chối qua {self.LABEL} (user {uid})"})
-            return f"Đã TỪ CHỐI {approval_id}.", None, None
+            return "Đã từ chối.", None, None
         await self.call(cid, "approval.approve", {"id": approval_id, "channel": ch, "by": "user", "note": f"cho phép qua {self.LABEL} (user {uid})"})
-        return f"Đã CHO PHÉP {approval_id} (một lần) — run sẽ chạy tiếp.", None, None
+        return "Đã cho phép — agent chạy tiếp.", None, None
 
     # ------------------------------------------------------------------ trạng thái
     def status(self) -> dict[str, Any]:

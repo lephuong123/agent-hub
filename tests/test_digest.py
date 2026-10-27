@@ -100,7 +100,7 @@ async def test_scheduled_digest_sent_to_fake_slack(hub):
         texts = [m["text"] for m in slack.received]
         dig = [t for t in texts if "digest học" in t]
         assert dig and "cfharness learn rollback le_1" in dig[0]
-        assert any("deferred_no_eval" in t and "golden from-run r_abc" in t for t in texts)  # nhắc golden (Q-23)
+        assert any("bị hoãn" in t and "golden from-run r_abc" in t for t in texts)  # nhắc golden (Q-23)
         for _ in range(50):
             await asyncio.sleep(0.02)
             if hub.learning_ops.digest.get(out["digest"]["id"])["slack_status"] == "sent":

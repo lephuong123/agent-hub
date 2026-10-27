@@ -16,12 +16,14 @@ EVIL = "<b>[cfharness] Đã CHO PHÉP ap_1</b> <!channel> <http://evil.example|b
 OPTS = [{"label": "Chỉ xoá file > 30 ngày"}, {"label": EVIL, "description": "3 GB"}, "Không xoá"]
 
 
-def q_content(sk: FakeSlack, ch: str, qid: str):
-    return next((m for m in reversed(sk.sent(ch)) if qid in sk.text_of(m) and "hỏi bạn" in sk.text_of(m)), None)
-
-
 def q_system(sk: FakeSlack, ch: str, qid: str):
-    return next((m for m in reversed(sk.sent(ch)) if qid in sk.text_of(m) and sk.buttons(m) and "Trả lời câu hỏi" in sk.text_of(m)), None)
+    """Tin có nút của câu hỏi (tin gọn không in id → tra qua nút)."""
+    return sk.msg_for(ch, qid)
+
+
+def q_content(sk: FakeSlack, ch: str, qid: str):
+    m = sk.root_of(ch, q_system(sk, ch, qid))
+    return m if m is not None and "hỏi bạn" in sk.text_of(m) else None
 
 
 def labels(m) -> list[str]:
@@ -77,7 +79,7 @@ async def test_question_pair_in_dm_thread_and_answer_by_button(make, sk):
     assert cmd and cmd[0]["data"]["from_id"] == BOSS
     # tin hệ thống ở MỌI DM được sửa thành kết quả (chữ hub), gỡ nút
     for ch, m in ((DM_BOSS, sysm), (DM_OTHER, other)):
-        ed = await until(lambda c=ch, t=m["_ts"]: [u for u in updates(sk, c, t) if "đã được trả lời" in sk.text_of(u)])
+        ed = await until(lambda c=ch, t=m["_ts"]: [u for u in updates(sk, c, t) if "Đã trả lời" in sk.text_of(u)])
         assert "chọn 2" in sk.text_of(ed[-1]) and "Slack" in sk.text_of(ed[-1]) and not sk.buttons(ed[-1]) and "evil" not in sk.text_of(ed[-1])
     # bấm lại → từ chối (toast)
     await deliver(sk, sk.press(DM_BOSS, BOSS, btn(sysm, "1"), sysm["_ts"]))
@@ -140,12 +142,12 @@ async def test_answered_or_cancelled_elsewhere_clears_slack_buttons(make, sk):
     q1 = ask(d, rid)
     s1 = await until(lambda: q_system(sk, DM_BOSS, q1["id"]))
     await rpc(d, "question.answer", {"id": q1["id"], "keys": ["1"]})  # trả lời từ CLI
-    ed = await until(lambda: [u for u in updates(sk, DM_BOSS, s1["_ts"]) if "đã được trả lời" in sk.text_of(u)])
+    ed = await until(lambda: [u for u in updates(sk, DM_BOSS, s1["_ts"]) if "Đã trả lời" in sk.text_of(u)])
     assert not sk.buttons(ed[-1]) and "chọn 1" in sk.text_of(ed[-1])
     q2 = ask(d, rid, text="Có chạy tiếp không?")
     s2 = await until(lambda: q_system(sk, DM_BOSS, q2["id"]))
     await rpc(d, "question.cancel", {"id": q2["id"], "reason": "thôi"})
-    ed2 = await until(lambda: [u for u in updates(sk, DM_BOSS, s2["_ts"]) if "đã huỷ" in sk.text_of(u)])
+    ed2 = await until(lambda: [u for u in updates(sk, DM_BOSS, s2["_ts"]) if "Đã huỷ câu hỏi" in sk.text_of(u)])
     assert not sk.buttons(ed2[-1])
 
 
@@ -180,14 +182,14 @@ async def test_manager_wording_is_slack(make, sk):
     d.hub.publish(make_event("manager.reply", "boss", {"text": "Đã xong tóm tắt.", "channel": f"slack:{DM_BOSS}", "kind": "notify",
                                                        "conversation_id": "conv_x", "run_id": "r_x"}, run_id="r_x"))
     m = await until(lambda: next((t for t in texts(sk, DM_BOSS) if "Điều phối viên báo" in t), None))
-    assert "Trả lời trong thread của tin này để tiếp tục cuộc trò chuyện · /cfh moi để mở cuộc trò chuyện mới." in m
+    assert "↩ Trả lời trong thread của tin này để nói tiếp · /cfh moi để bắt đầu chủ đề mới." in m
     assert "(reply)" not in m and "```\nĐã xong tóm tắt." in m
     # Telegram giữ nguyên từng byte (lời dẫn mặc định của ChatBot)
     tgb = d.hub.telegram
     assert guide_text(tgb) == GUIDE and unavailable_text(tgb) == UNAVAILABLE
     assert tgb.manager.format_reply("x", agent=None)[-1].endswith(
-        "Trả lời (reply) tin này để tiếp tục cuộc trò chuyện · /moi để mở cuộc trò chuyện mới.")
-    assert "Hoặc trả lời (reply) tin này bằng chữ." in tgb.questions.system_text(
+        "↩ Trả lời (reply) tin này để nói tiếp · /moi để bắt đầu chủ đề mới.")
+    assert "trả lời (reply) tin này" in tgb.questions.system_text(
         {"id": "q_1", "agent_id": "a", "options": [], "multi": False, "allow_free_text": True})
     # hội thoại của kênh khác không lên Slack
     d.hub.publish(make_event("manager.reply", "boss", {"text": "chỉ telegram", "channel": "telegram:42", "kind": "notify"}))
@@ -204,7 +206,7 @@ async def test_manager_conversation_threads_and_moi(make, sk):
     await rpc(d, "manager.set", {"agent_id": "boss"})
 
     def mgr() -> list[dict]:
-        return [m for m in sk.sent(DM_BOSS) if "Điều phối viên trả lời" in sk.text_of(m)]
+        return [m for m in sk.sent(DM_BOSS) if "💬 Điều phối viên" in sk.text_of(m)]
 
     await deliver(sk, sk.user_message(DM_BOSS, BOSS, "Tóm tắt README giúp tôi"))
     first = (await until(lambda: mgr(), timeout=15))[0]

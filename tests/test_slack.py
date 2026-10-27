@@ -67,6 +67,7 @@ async def make(hub_home, sk):
         d.hub.start()
         daemons.append(d)
         _BOTS.append(d.hub.slack)
+        sk.hubs.append(d.hub)
         if token and interactive and connect:
             await until(lambda: d.hub.slack.info.get("polling") and sk.connected())
         return d
@@ -122,7 +123,9 @@ async def held_run(d: Daemon, agent: str = "coder") -> str:
 
 
 def approval_msg(sk: FakeSlack, ch: str, aid: str) -> dict:
-    return next(m for m in reversed(sk.sent(ch)) if sk.buttons(m) and aid in sk.text_of(m))
+    m = sk.msg_for(ch, aid)  # tin gọn không in id → tra qua nút
+    assert m is not None
+    return m
 
 
 # ============================================================================ render (mrkdwn injection)
@@ -230,7 +233,7 @@ async def test_approval_buttons_two_step(make, sk):
     ts = sysmsg["_ts"]
     await deliver(sk, sk.press(DM_BOSS, BOSS, allow["value"], ts))
     upd = sk.calls_of("chat.update")[-1]
-    assert upd["ts"] == ts and "Xác nhận bước 2" in sk.text_of(upd)
+    assert upd["ts"] == ts and "Chắc chắn cho phép" in sk.text_of(upd)
     confirm = next(b for b in sk.buttons(upd) if b["text"]["text"] == "Xác nhận CHO PHÉP")
     await deliver(sk, sk.press(DM_BOSS, BOSS, confirm["value"], ts))
     row = d.hub.approvals.get(ap["id"])
@@ -264,7 +267,7 @@ async def test_resolved_elsewhere_clears_buttons(make, sk):
     ap = open_approval(d, rid)
     await until(lambda: any(sk.buttons(m) for m in sk.sent(DM_BOSS)))
     await rpc(d, "approval.deny", {"id": ap["id"], "channel": "cli", "by": "user"})
-    upd = await until(lambda: [u for u in sk.calls_of("chat.update") if "TỪ CHỐI" in sk.text_of(u)])
+    upd = await until(lambda: [u for u in sk.calls_of("chat.update") if "Đã từ chối" in sk.text_of(u)])
     assert not sk.buttons(upd[-1])
 
 
@@ -279,12 +282,12 @@ async def test_run_result_and_thread_continue(make, sk):
     d = await make()
     d.hub.agents.create({"id": "coder", "name": "coder"})
     await deliver(sk, sk.slash(BOSS, "giaoviec coder viết hàm cộng"))
-    res = await until(lambda: [m for m in sk.sent(DM_BOSS) if "Chi phí" in sk.text_of(m)])
+    res = await until(lambda: [m for m in sk.sent(DM_BOSS) if "— xong" in sk.text_of(m)])
     assert "Trả lời trong thread" in sk.text_of(res[-1])
     first = d.hub.store.list_runs(agent_id="coder")[0]
     n = len(res)
     await deliver(sk, sk.user_message(DM_BOSS, BOSS, "thêm test nữa", thread_ts=res[-1]["_ts"]))
-    await until(lambda: len([m for m in sk.sent(DM_BOSS) if "Chi phí" in sk.text_of(m)]) > n)
+    await until(lambda: len([m for m in sk.sent(DM_BOSS) if "— xong" in sk.text_of(m)]) > n)
     child = next(r for r in d.hub.store.list_runs(agent_id="coder") if r["id"] != first["id"])
     assert child["parent_run_id"] == first["id"] and child["prompt"] == "thêm test nữa"
 

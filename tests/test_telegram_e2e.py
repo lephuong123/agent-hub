@@ -76,7 +76,7 @@ def test_approve_via_telegram_button_runs_exactly_once(env):
     wait_for(lambda: tg.calls_of("getUpdates"))
     r = rpc.call("run.start", {"agent": "coder", "prompt": "BASH: ls\nBASH: rm -rf dummy", "cwd": str(env["work"])})
     ap = wait_for(lambda: rpc.call("approval.list", {"status": "open", "run_id": r["id"]}))[0]
-    msg = wait_for(lambda: next((m for m in tg.sent(BOSS) if ap["id"] in m["text"] and FakeTelegram.buttons(m)), None))
+    msg = wait_for(lambda: tg.with_buttons(BOSS, ["Cho phép", "Từ chối"]))  # tin gọn không in id; chỉ một yêu cầu đang mở
     assert any("rm -rf dummy" in m["text"] for m in tg.sent(BOSS)) and (env["work"] / "dummy").exists()
     approve = FakeTelegram.buttons(msg)[0]["callback_data"]
     u1 = tg.press(BOSS, approve)  # bước 1 → tin xác nhận
@@ -105,8 +105,8 @@ def test_run_via_telegram_and_stranger_ignored(env):
     wait_for(lambda: tg.calls_of("getUpdates"))
     tg.user_message(999, "/run coder BASH: touch hacked.txt")
     tg.user_message(BOSS, "/run coder BASH: ls")
-    res = wait_for(lambda: next((m for m in tg.sent(BOSS) if m["text"].startswith("<b>[cfharness] Run ")), None))
-    assert "hoàn thành" in res["text"] and "Chi phí: $" in res["text"]
+    res = wait_for(lambda: next((m for m in tg.sent(BOSS) if m["text"].startswith("✅ <b>coder — xong</b>")), None))
+    assert "[cfharness]" not in res["text"]
     runs = rpc.call("run.list", {"agent": "coder"})
     assert len(runs) == 1 and "touch hacked.txt" not in executed(env)
     assert tg.sent(999) == []

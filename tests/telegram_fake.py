@@ -29,6 +29,7 @@ class FakeTelegram:
         self.files: dict[str, bytes] = {}  # file_id → nội dung (tệp/ảnh người gửi)
         self.downloads: list[str] = []  # file_path đã bị tải (GET /file/...)
         self.cond = threading.Condition()
+        self.hubs: list[Any] = []  # hub của daemon test (fixture gắn) — tra nonce nút → id approval/câu hỏi
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -222,6 +223,33 @@ class FakeTelegram:
         """Bot đã gọi getUpdates với offset > update_id (đã nhận) — dùng để chờ update được xử lý."""
         with self.cond:
             return any(m == "getUpdates" and int(b.get("offset") or 0) > update_id for m, b in self.calls)
+
+    def ref_of(self, button: dict[str, Any]) -> str | None:
+        """Id đối tượng (approval/câu hỏi) mà nút trỏ tới — tin gọn không in id nên test tra qua kho nút của hub."""
+        parts = str(button.get("callback_data") or "").split(".")
+        if len(parts) != 3:
+            return None
+        for h in self.hubs:
+            rec = h.telegram.callbacks._all().get(parts[1])
+            if rec:
+                return rec.get("r")
+        return None
+
+    def msg_for(self, chat_id: int, ref: str, labels: list[str] | None = None) -> dict[str, Any] | None:
+        """Tin GỬI mới nhất có nút trỏ tới `ref` (tuỳ chọn: đúng bộ nhãn `labels`)."""
+        for m in reversed(self.sent(chat_id)):
+            btns = self.buttons(m)
+            if btns and (labels is None or [b["text"] for b in btns] == labels) and any(self.ref_of(b) == ref for b in btns):
+                return m
+        return None
+
+    def thread(self, chat_id: int, sysmsg: dict[str, Any] | None) -> list[dict[str, Any]]:
+        """Các tin NỘI DUNG mà tin hệ thống `sysmsg` trả lời vào (tin đầu + các phần reply vào tin đầu)."""
+        first = (sysmsg or {}).get("reply_to_message_id")
+        if first is None:
+            return []
+        return [m for m in self.sent(chat_id) if not self.buttons(m)
+                and (self.message_id_of(m) == first or m.get("reply_to_message_id") == first)]
 
     @staticmethod
     def buttons(msg: dict[str, Any]) -> list[dict[str, Any]]:

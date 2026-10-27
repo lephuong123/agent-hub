@@ -180,16 +180,16 @@ class ManagerChat:
         chunks = split_chunks(body, CHUNK)
         cut = len(chunks) > MAX_CHUNKS
         chunks = chunks[:MAX_CHUNKS]
-        title = "Điều phối viên báo" if notify else ("Điều phối viên KHÔNG trả lời được (lượt xử lý lỗi)" if failed else "Điều phối viên trả lời")
+        title = "📣 Điều phối viên báo" if notify else ("⚠️ Điều phối viên chưa trả lời được (lỗi)" if failed else "💬 Điều phối viên")
         out = []
         for i, ch in enumerate(chunks):
-            part = f" — phần {i + 1}/{len(chunks)}" if len(chunks) > 1 else ""
-            lines = [f"<b>[cfharness] {title}{part}</b>" + (f" (agent {esc(agent)})" if agent else ""), f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(ch)}</pre>"]
+            part = f" ({i + 1}/{len(chunks)})" if len(chunks) > 1 else ""
+            lines = [f"<b>{esc(title)}{part}</b>", f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(ch)}</pre>"]
             if i == len(chunks) - 1:
                 if cut:
-                    lines.append("…(đã cắt — xem đầy đủ trên web: trang Điều phối)")
-                lines.append(esc(self.bot.reply_hint("tiếp tục cuộc trò chuyện").rstrip("."))
-                             + f" · {esc(self.bot.cmd('moi'))} để mở cuộc trò chuyện mới.")
+                    lines.append("…(đã cắt — xem đầy đủ trên web, trang Điều phối)")
+                lines.append("↩ " + esc(self.bot.reply_hint("nói tiếp").rstrip("."))
+                             + f" · {esc(self.bot.cmd('moi'))} để bắt đầu chủ đề mới.")
             out.append("\n".join(lines))
         return out
 
@@ -231,7 +231,7 @@ class ManagerChat:
         run = self.hub.store.get_run(run_id) or {}
         outcome = run.get("outcome") or run.get("status")
         if etype == "run.waiting_human" or outcome == "waiting_human":
-            text = f"Điều phối viên (run {run_id}) đang chờ người duyệt một thao tác — gõ {self.bot.cmd('approvals')}."
+            text = f"⏸ Điều phối viên đang chờ bạn duyệt một thao tác — gõ {self.bot.cmd('approvals')}."
         elif outcome in ("resumed", "interrupted"):
             return
         else:
@@ -240,7 +240,7 @@ class ManagerChat:
             self._put(self.RUNS, run_id, None, cap=200)
             if outcome == "completed":
                 return  # xong mà không có trả lời: CORE không phát reply (vd chỉ làm việc nền) — không làm phiền
-            text = f"Điều phối viên chưa trả lời được: run {run_id} — {OUTCOME_VI.get(str(outcome), str(outcome))}. Xem: cfharness runs show {run_id} hoặc web."
+            text = f"⚠️ Điều phối viên chưa trả lời được ({OUTCOME_VI.get(str(outcome), str(outcome))}). Thử gửi lại, hoặc xem chi tiết trên web."
         api = self.bot.api()
         if api is not None and str(meta.get("chat")) in self.bot.notify_chats():
             try:

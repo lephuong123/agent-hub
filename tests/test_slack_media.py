@@ -158,7 +158,7 @@ async def test_manager_marked_file_uploaded(make, sk):
                              run_id="r_x"))
     done = await until(lambda: sk.calls_of("files.completeUploadExternal"))
     assert done[0]["channel_id"] == DM_BOSS and done[0]["files"][0]["title"] == "report.md"
-    assert done[0]["initial_comment"].startswith("[cfharness]")
+    assert done[0]["initial_comment"].startswith("📎 Tệp từ điều phối viên")
     req = sk.calls_of("files.getUploadURLExternal")[0]
     assert req["filename"] == "report.md" and sk.uploads[done[0]["files"][0]["id"]] == "# Báo cáo tuần\nổn\n".encode()
     framed = [sk.text_of(m) for m in sk.sent(DM_BOSS)[before:]]

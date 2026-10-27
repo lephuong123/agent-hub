@@ -71,7 +71,7 @@ class SlackModals:
         if kind == "run":
             desc = f"Giao việc cho agent *{render.escape(ref)}*. Bot gửi kết quả tóm tắt + chi phí vào DM khi xong."
         else:
-            desc = f"Trả lời bằng chữ cho câu hỏi *{render.escape(ref)}* — nội dung câu hỏi ở tin phía trên trong DM."
+            desc = "Nhập câu trả lời của bạn — câu hỏi ở tin phía trên trong DM."
         return {
             "type": "modal", "callback_id": CALLBACK_ID, "private_metadata": nonce,
             "title": {"type": "plain_text", "text": title}, "submit": {"type": "plain_text", "text": "Gửi"},
