@@ -7,7 +7,74 @@ giới hạn đồng thời toàn cục, ESTOP, `ClaudeCliRuntime` + `FakeRuntim
 Tài liệu nghiệp vụ: `docs/BRD-chi-tiet.md`. Quyết định đã chốt: `research/BRIEF.md`.
 Kết quả spike cô lập/phê duyệt/steer/ngắt: `docs/spikes/M0-spike-report.md`.
 
-## Cài đặt
+## Cài đặt (người dùng)
+
+Không cần cài Python sẵn: `uv` tự tải Python riêng cho cfharness, không đụng Python của máy.
+
+**1. Cài Claude Code và đăng nhập** (nếu máy chưa có):
+
+```bash
+# macOS / Linux
+curl -fsSL https://claude.ai/install.sh | bash
+# Windows (PowerShell) — cần thêm Git for Windows: https://git-scm.com/download/win
+irm https://claude.ai/install.ps1 | iex
+
+claude auth login
+```
+
+**2. Cài `uv`:**
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Mở terminal mới sau khi cài, để lệnh `uv` có trong PATH.
+
+**3. Cài cfharness:**
+
+```bash
+uv tool install --python 3.13 git+https://github.com/lephuong123/agent-hub@v0.1.0
+uv tool update-shell        # đưa lệnh `cfharness` vào PATH (chỉ cần lần đầu), rồi mở terminal mới
+cfharness doctor            # kiểm claude, đăng nhập, sandbox… — không tốn tiền
+```
+
+**4. (Tuỳ chọn) Tự chạy hub khi đăng nhập máy:**
+
+```bash
+cfharness daemon install-service      # gỡ: cfharness daemon uninstall-service
+```
+
+Xong thì mở giao diện web bằng `cfharness web --open` hoặc chat với điều phối viên bằng `cfharness chat` (xem các mục dưới).
+Ở các ví dụ dưới, bỏ tiền tố `uv run` (tiền tố này chỉ dành cho người phát triển chạy từ mã nguồn).
+
+### Cập nhật
+
+Mỗi bản phát hành là một tag `vX.Y.Z`, danh sách ở [Releases](https://github.com/lephuong123/agent-hub/releases).
+Cập nhật lên bản mới = cài đè đúng tag đó:
+
+```bash
+cfharness daemon stop
+uv tool install --force --python 3.13 git+https://github.com/lephuong123/agent-hub@v0.2.0   # thay bằng tag mới nhất
+cfharness --version
+```
+
+Dữ liệu (agent, lịch sử, cấu hình, secret) nằm ở `~/.cfharness`, tách khỏi phần mềm: cập nhật hay cài lại đều không mất dữ liệu,
+và cơ sở dữ liệu tự nâng cấp khi daemon khởi động (daemon tự chạy lại khi gọi lệnh). Muốn lấy code mới nhất trên `main` (chưa
+phát hành): bỏ `@<tag>` ở lệnh trên.
+
+### Gỡ cài đặt
+
+```bash
+cfharness daemon uninstall-service    # nếu đã bật tự chạy
+cfharness daemon stop
+uv tool uninstall cfharness
+# dữ liệu vẫn còn ở ~/.cfharness — xoá thư mục này nếu không dùng nữa
+```
+
+## Cài đặt (phát triển từ mã nguồn)
 
 ```bash
 uv sync                 # Python ≥ 3.12 (ghim 3.13 trong .python-version)
