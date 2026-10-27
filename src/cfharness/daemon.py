@@ -142,8 +142,10 @@ class Daemon:
             r["last_tool"] = live.last_tool if live else None
             r["cost_today_usd"] = round(self.hub.store.cost_today(r["id"]), 8)
         ov = self.hub.guard.sandbox_overrides()  # SEC: nhãn cảnh báo ngoại lệ sandbox cho TUI/web
+        trusts = self.hub.guard.trust_all()
         for r in rows:
             r["sandbox_overrides"] = ov.get(r["id"]) or {}
+            r["trust"] = trusts.get(r["id"])
         return rows
 
     def _pause(self, p: dict[str, Any], paused: bool) -> dict[str, Any]:

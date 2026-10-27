@@ -27,6 +27,10 @@ KNOBS: dict[str, dict[str, Any]] = {
     "guard.hold_uncertain": {"strict": True, "balanced": False, "autonomous": False},
     "guard.safe_reset_probe": {"strict": False, "balanced": True, "autonomous": True},
     "guard.own_worktree_writes": {"strict": False, "balanced": True, "autonomous": True},
+    # script đã commit trong repo (track, chưa sửa so với HEAD, commit trước khi task bắt đầu) → không coi API xoá trong mã là phá huỷ
+    "guard.trusted_repo_scripts": {"strict": False, "balanced": True, "autonomous": True},
+    # "file run tự tạo" tính từ run ĐẦU của task (không chỉ session hiện tại); thư mục tạm của hệ thống do task tạo xoá không hỏi
+    "guard.task_created_deletes": {"strict": False, "balanced": True, "autonomous": True},
     "approval.checkpoint_auto_allow": {"strict": False, "balanced": True, "autonomous": True},
     "approval.scratch_auto_allow": {"strict": False, "balanced": False, "autonomous": True},
     "approval.delegate_to_manager.enabled": {"strict": False, "balanced": True, "autonomous": True},
@@ -224,11 +228,11 @@ def validate_setting(key: str, value: Any) -> None:
         return
     if key == "guard":
         if isinstance(value, dict):
-            for k in ("hold_uncertain", "safe_reset_probe", "own_worktree_writes"):
+            for k in ("hold_uncertain", "safe_reset_probe", "own_worktree_writes", "trusted_repo_scripts", "task_created_deletes"):
                 if k in value:
                     _bool_or_null(f"guard.{k}", value[k])
         return
-    if key in ("guard.hold_uncertain", "guard.safe_reset_probe", "guard.own_worktree_writes",
+    if key in ("guard.hold_uncertain", "guard.safe_reset_probe", "guard.own_worktree_writes", "guard.trusted_repo_scripts", "guard.task_created_deletes",
                "approval.checkpoint_auto_allow", "approval.scratch_auto_allow", "approval.delegate_to_manager.enabled"):
         _bool_or_null(key, value)
     elif key == "approval.profile":

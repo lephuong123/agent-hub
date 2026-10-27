@@ -184,7 +184,7 @@ def build_argv(spec: RunSpec,claude_cfg: dict[str, Any], cli_version: str | None
 
     # Quyền tool (FR-RT-02, FR-RT-09 lớp tĩnh, NFR-15)
     pm = tp.get("permission_mode") or claude_cfg.get("default_permission_mode")
-    if pm == "bypassPermissions":
+    if pm == "bypassPermissions" and not spec.trust_full:
         if not tp.get("allow_bypass"):
             raise ArgvError("bypassPermissions bị từ chối: agent phải khai báo rõ tool_policy.allow_bypass=true (NFR-15)")
         if spec.workspace_kind not in ("scratch", "worktree"):

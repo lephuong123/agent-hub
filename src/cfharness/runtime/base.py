@@ -58,6 +58,8 @@ class RunSpec:
     # run điều phối viên có connector claude.ai: ghi đè `runtime.claude.isolation` (setting_sources/strict_mcp_config) cho riêng run
     isolation_overrides: dict[str, Any] | None = None
     allowed_mcp_prefixes: list[str] | None = None
+    # agent được người đặt trust full (guard/service.trust_set): cho phép `bypassPermissions` trên mọi workspace (ngoại lệ NFR-15 do người chọn)
+    trust_full: bool = False
 
 
 @dataclass

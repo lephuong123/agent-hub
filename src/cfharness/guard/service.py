@@ -243,6 +243,8 @@ class GuardService:
             worktree_since=self.task_since(run) if run else None,
             scratch_workspace=len(rel) >= 3 and rel[1] == "workspaces" and not rel[2].startswith("conv-"),
             chrome_allowed=self.chrome_allowed(run),
+            trusted_repo_scripts=bool(self.knob("guard.trusted_repo_scripts")),
+            task_created_deletes=bool(self.knob("guard.task_created_deletes")),
             **self._connector_ctx(run),
         )
 
@@ -419,6 +421,8 @@ class GuardService:
                     if rc.metadata:
                         return Verdict("destructive", "ssrf_metadata", "network", f"{tool_name}: {rc.reason}", [url[:200]], forbidden=True, net_urls=v.net_urls)
                     if rc.rule == "ssrf_private_resolved" and (web or mgr):
+                        if not mgr and self.dev_host_trusted(agent_id, host):
+                            continue  # host dev người đã tin cho agent này (vd tên miền dev trỏ về máy local qua hosts)
                         if mgr:
                             return Verdict("destructive", rc.rule, "network", f"điều phối viên không được gọi mạng nội bộ: {rc.reason}", [url[:200]],
                                            forbidden=True, net_urls=v.net_urls)
@@ -445,7 +449,7 @@ class GuardService:
             return []
 
     # ------------------------------------------------------------------ ngoại lệ sandbox THEO AGENT (chỉ người đặt)
-    SANDBOX_OVERRIDE_KEYS = ("allow_localhost", "allow_domains")
+    SANDBOX_OVERRIDE_KEYS = ("allow_localhost", "allow_domains", "dev_hosts")
 
     def sandbox_overrides(self, agent_id: str | None = None) -> dict[str, Any]:
         """`hub_state.sandbox_overrides` = {agent_id: {allow_localhost: bool, by, at}}. Lưu NGOÀI cấu hình agent nên vòng học/ledger,
@@ -521,6 +525,116 @@ class GuardService:
                 "by": by, "channel": channel}
         audit_record("guard.sandbox_override", agent_id=agent_id, run_id=None, data=info)
         self.hub.publish(make_event("guard.sandbox_override", agent_id, info, source="hub"))
+        return {"agent_id": agent_id, **cur}
+
+    # ------------------------------------------------------------------ host dev tin cậy THEO AGENT (chỉ người đặt)
+    def dev_host_trusted(self, agent_id: str | None, host: str) -> bool:
+        """Host (đúng tên, không wildcard) người đã đánh dấu là máy dev cho agent: phân giải về IP nội bộ vẫn cho WebFetch/Chrome."""
+        if not agent_id or not host:
+            return False
+        h = host.lower().rstrip(".")
+        return h in [str(x).lower() for x in (self.sandbox_overrides(agent_id).get("dev_hosts") or [])]
+
+    def sandbox_dev_host(self, agent_id: str, host: str, *, remove: bool = False, by: str = "user", channel: str = "cli") -> dict[str, Any]:
+        """CHỈ người: tin một host dev cho agent — guard không giữ chờ `ssrf_private_resolved` cho ĐÚNG host này (WebFetch, Claude in
+        Chrome) và Bash được ra mạng tới host đó (thêm vào allow_domains). Audit + event như ngoại lệ sandbox khác."""
+        from ..auth import require_human
+
+        require_human("tin host dev cho agent")
+        self.hub.agents.get_row(agent_id)
+        h = host.strip().lower().rstrip(".")
+        if h.startswith(("http://", "https://")):
+            from urllib.parse import urlsplit
+
+            try:
+                h = (urlsplit(h).hostname or "").lower()
+            except ValueError:
+                h = ""
+        if not h or len(h) > 253 or not _HOST_RE.fullmatch(h):
+            raise HubError(f"host không hợp lệ: {host!r} (đúng một tên host, không wildcard, không cổng)")
+        allv = dict(self.hub.store.state_get("sandbox_overrides") or {})
+        cur = dict(allv.get(agent_id) or {})
+        hosts = [x for x in (cur.get("dev_hosts") or []) if x != h]
+        doms = [x for x in (cur.get("allow_domains") or []) if x != h]
+        if not remove:
+            hosts.append(h)
+            doms.append(h)
+        cur.update({"dev_hosts": hosts, "allow_domains": doms, "by": by, "channel": channel, "at": now_iso()})
+        allv[agent_id] = cur
+        self.hub.store.state_set("sandbox_overrides", allv)
+        info = {"agent_id": agent_id, "dev_host": h, "action": "remove" if remove else "allow", "dev_hosts": hosts, "by": by, "channel": channel}
+        audit_record("guard.sandbox_override", agent_id=agent_id, run_id=None, data=info)
+        self.hub.publish(make_event("guard.sandbox_override", agent_id, info, source="hub"))
+        return {"agent_id": agent_id, **cur}
+
+    # ------------------------------------------------------------------ trust hoàn toàn THEO AGENT (chỉ người đặt)
+    TRUST_MODES = ("full", "off")
+
+    def trust_all(self) -> dict[str, Any]:
+        """`hub_state.agent_trust` = {agent_id: {mode, until, by, channel, at}} — NGOÀI cấu hình agent (vòng học/ledger/export/clone/
+        điều phối viên không chạm được); chỉ RPC `guard.trust.set` (HUMAN_ONLY) đổi. Chỉ trả mục còn hiệu lực."""
+        out: dict[str, Any] = {}
+        now = datetime.now().astimezone().timestamp()
+        for aid, t in (self.hub.store.state_get("agent_trust") or {}).items():
+            if not isinstance(t, dict) or t.get("mode") != "full":
+                continue
+            if t.get("until"):
+                until = _ts(t.get("until"))
+                if until is None or until <= now:
+                    continue
+            out[aid] = dict(t)
+        return out
+
+    def trust_of(self, agent_id: str | None) -> dict[str, Any] | None:
+        if not agent_id:
+            return None
+        try:
+            return self.trust_all().get(agent_id)
+        except Exception:  # lỗi đọc = không trust (giữ guard như thường)
+            return None
+
+    def run_trusted(self, run: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Run được hưởng trust full: agent đang trust và run là run làm việc thường (không phải review/eval/learning của hub)."""
+        if not run:
+            return None
+        opts = run.get("run_opts") or {}
+        if run.get("kind") == "review" or opts.get("learning_review") or opts.get("eval_overlay"):
+            return None
+        return self.trust_of(run.get("agent_id"))
+
+    def trust_set(self, agent_id: str, mode: str, *, for_s: float | None = None, by: str = "user", channel: str = "cli") -> dict[str, Any]:
+        """CHỈ người: `full` = hub cho phép MỌI tool call của agent (không giữ chờ, kể cả forbidden/vùng hub; run mới không sandbox OS,
+        không permissions.deny tĩnh, `bypassPermissions` kể cả trên repo thật) — vẫn ghi guard_decisions/audit, ESTOP vẫn chặn.
+        `off` = về như thường. Phần guard có hiệu lực ngay; sandbox/cờ CLI chốt lúc spawn (run đang chạy giữ như cũ)."""
+        from ..auth import require_human
+
+        require_human("đặt trust cho agent")
+        if mode not in self.TRUST_MODES:
+            raise HubError(f"trust phải là {'|'.join(self.TRUST_MODES)}")
+        self.hub.agents.get_row(agent_id)
+        until = None
+        if for_s is not None and mode == "full":
+            try:
+                secs = float(for_s)
+            except (TypeError, ValueError):
+                raise HubError("thời hạn trust không hợp lệ") from None
+            if secs <= 0:
+                raise HubError("thời hạn trust phải > 0")
+            from datetime import timedelta, timezone
+
+            until = (datetime.now(timezone.utc) + timedelta(seconds=secs)).isoformat(timespec="seconds").replace("+00:00", "Z")
+        allv = dict(self.hub.store.state_get("agent_trust") or {})
+        before = dict(allv.get(agent_id) or {})
+        if mode == "off":
+            allv.pop(agent_id, None)
+            cur: dict[str, Any] = {"mode": "off"}
+        else:
+            cur = {"mode": "full", "until": until, "by": by, "channel": channel, "at": now_iso()}
+            allv[agent_id] = cur
+        self.hub.store.state_set("agent_trust", allv)
+        info = {"agent_id": agent_id, "before": before.get("mode") or "off", "after": mode, "until": until, "by": by, "channel": channel}
+        audit_record("guard.trust", agent_id=agent_id, run_id=None, data=info)
+        self.hub.publish(make_event("guard.trust", agent_id, info, source="hub"))
         return {"agent_id": agent_id, **cur}
 
     def hub_mcp_servers(self) -> frozenset[str]:
@@ -787,6 +901,9 @@ class GuardService:
             self._record(run, channel, tool_name, tool_input, v, "deny")
             return {"decision": "deny", "reason": "[cfharness] Emergency stop is on — all tool calls are blocked. End your turn."}
         ctx = self.context_for(run, p.get("cwd") if channel == "hook" and p.get("cwd") else None)
+        trust = self.run_trusted(run)
+        if trust is not None:
+            return self._allow_trusted(run, channel, tool_name, tool_input, ctx, trust)
         v = classify(tool_name, tool_input, ctx)
         try:
             v = await self.net_check(run, tool_name, tool_input, v, ctx)
@@ -871,6 +988,22 @@ class GuardService:
         ap.to_waiting_human(aid)
         self.hub.runs.pause_for_human(run_id, aid)
         return {"decision": "deny", "reason": WAITING_MSG.format(aid=aid, timeout=int(timeout)), "approval_id": aid, "waiting_human": True}
+
+    def _allow_trusted(self, run: dict[str, Any], channel: str, tool_name: str, tool_input: dict[str, Any], ctx: GuardContext,
+                       trust: dict[str, Any]) -> dict[str, Any]:
+        """Agent trust full: cho phép mọi thao tác (kể cả forbidden/vùng hub). Vẫn phân loại để ghi guard_decisions + audit đúng mức."""
+        try:
+            v = classify(tool_name, tool_input, ctx)
+        except Exception as e:  # noqa: BLE001 — phân loại lỗi không chặn agent trust, chỉ ghi lại
+            v = Verdict("uncertain", "classifier_error", None, f"phân loại lỗi: {type(e).__name__}")
+        busy = self.chrome_lock_check(run, tool_name)  # khoá Chrome là điều phối tài nguyên dùng chung, không phải quyền — vẫn áp
+        if busy is not None:
+            vb = Verdict("uncertain", "chrome_busy", "mcp", busy["reason"], [tool_name[:200]])
+            self._record(run, channel, tool_name, tool_input, vb, "deny")
+            return {"decision": "deny", "reason": busy["message"], "browser_busy": True}
+        why = f"agent trust full (bởi {trust.get('by') or 'user'}" + (f", hết hạn {trust['until']})" if trust.get("until") else ")")
+        self._record(run, channel, tool_name, tool_input, v, "allow", classifier="trust", extra={"auto_reason": why})
+        return {"decision": "allow", "reason": f"hub guard: {v.verdict} (trust full)", "verdict": v.verdict, "decided_by": "trust"}
 
     async def _second_opinion(self, run: dict[str, Any], channel: str, tool_name: str, tool_input: dict[str, Any], v: Verdict, ctx: GuardContext,
                               max_wait: Any) -> tuple[Verdict, dict[str, Any] | None]:

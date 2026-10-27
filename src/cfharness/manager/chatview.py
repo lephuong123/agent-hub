@@ -349,6 +349,8 @@ def banner(manager_id: str, conversation_id: str | None, *, title: str | None = 
     return t
 
 
+from .settings_cmds import HELP as _SETTINGS_HELP  # noqa: E402 — lệnh cài đặt quyền (/perm, /trust…)
+
 HELP = [
     ("/new", "mở hội thoại mới"),
     ("/list", "các hội thoại (kênh cli — dùng chung với TUI)"),
@@ -362,6 +364,7 @@ HELP = [
     ("/deny <id> [lý do]", "từ chối yêu cầu duyệt"),
     ("/always <id>", "luôn cho phép (chỉ khi hub cho phép; xác nhận 2 bước)"),
     ("/answer <id> 1,2 [chữ]", "trả lời câu hỏi của agent"),
+    *[(c, d) for c, d in _SETTINGS_HELP],
     ("/clear", "xoá màn hình"),
     ("/help", "trợ giúp"),
     ("/quit", "thoát (hoặc Ctrl-D)"),
@@ -372,7 +375,7 @@ COMMANDS = [c.split()[0] for c, _ in HELP] + ["/exit", "/ps"]
 def help_text() -> Text:
     t = Text()
     for c, d in HELP:
-        t.append(f"  {c:<24}", style=th.HEAD)
+        t.append(f"  {c:<24}" if len(c) <= 24 else f"  {c}\n  {'':<24}", style=th.HEAD)
         t.append(f"{d}\n", style=th.MUTED)
     t.append("  Gõ khi điều phối viên đang làm = chèn thêm ý vào lượt đó (steer).\n", style=th.MUTED)
     t.append("  Kéo thư mục/file vào = gửi đường dẫn; kéo file ảnh vào hoặc Ctrl-V (ảnh trong clipboard) = gửi kèm ảnh (≤ 4, ≤ 5 MB).\n", style=th.MUTED)

@@ -41,6 +41,7 @@ from ..ui import theme as th
 from . import agentsview as G
 from . import attachments as A
 from . import chatview as V
+from . import settings_cmds as S
 
 NO_MANAGER = (
     "Chưa có điều phối viên.\n"
@@ -718,6 +719,8 @@ class ChatSession:
                 await self.cmd_decide(arg, cmd[1:])
             elif cmd == "/answer":
                 await self.cmd_answer(arg)
+            elif cmd in S.COMMANDS:
+                await S.run(self, cmd, arg)
             elif cmd == "/clear":
                 self.out.clear()
             else:
