@@ -52,7 +52,7 @@ async def test_plain_text_without_manager_returns_guidance(make, tg):
     # /run cũ vẫn chạy bình thường (không đi qua điều phối viên)
     d.hub.agents.create({"id": "coder", "name": "coder"})
     await say(tg, BOSS, "/run coder viết hello")
-    assert await until(lambda: any("Đã giao run" in t for t in texts(tg, BOSS)))
+    assert await until(lambda: any("Đã giao việc cho" in t for t in texts(tg, BOSS)))
     assert not d.hub.store.list_runs(agent_id="boss")
 
 
@@ -73,7 +73,7 @@ async def test_plain_text_goes_to_manager_reply_framed_and_conversation_kept(mak
     m = msgs[0]
     # khung kết quả agent (WT-8): dòng hệ thống + tiền tố cố định + <pre>, KHÔNG nút, trả lời vào tin của người
     assert m["parse_mode"] == "HTML" and "<pre>" in m["text"] and AGENT_FRAME in m["text"]
-    assert m["text"].startswith("<b>[cfharness] Điều phối viên trả lời")
+    assert m["text"].startswith("<b>💬 Điều phối viên</b>")
     assert not m.get("reply_markup")
     assert m.get("reply_to_message_id") == 10_000 + uid
     runs = d.hub.store.list_runs(agent_id="boss")
@@ -130,8 +130,8 @@ async def test_long_reply_split_into_parts(make, tg):
     conv = d.hub.store.state_get("telegram.mgr_conv")[str(BOSS)]
     d.hub.publish(make_event("manager.reply", "boss", {"conversation_id": conv, "run_id": "r_long", "text": "x" * 8000}, run_id="r_long"))
     msgs = await wait_mgr(tg, BOSS, 4)
-    parts = [m for m in msgs if "phần" in m["text"]]
-    assert len(parts) == 3 and "phần 3/3" in parts[-1]["text"] and all(len(p["text"]) < 4096 for p in parts)
+    parts = [m for m in msgs if "/3)</b>" in m["text"]]
+    assert len(parts) == 3 and "(3/3)" in parts[-1]["text"] and all(len(p["text"]) < 4096 for p in parts)
     assert all(not p.get("reply_markup") for p in parts)
 
 
@@ -141,7 +141,7 @@ async def test_notify_owner_goes_out_in_agent_frame(make, tg):
                                                        "kind": "notify", "conversation_id": "conv_x", "run_id": "r_tick"}, run_id="r_tick"))
     msgs = await wait_mgr(tg, BOSS)
     m = msgs[0]
-    assert m["text"].startswith("<b>[cfharness] Điều phối viên báo") and AGENT_FRAME in m["text"] and "<pre>Task t_1 bị chặn" in m["text"]
+    assert m["text"].startswith("<b>📣 Điều phối viên báo</b>") and AGENT_FRAME in m["text"] and "<pre>Task t_1 bị chặn" in m["text"]
     assert not m.get("reply_markup")
     # không chỉ định kênh → gửi tới các chat nhận thông báo
     d.hub.publish(make_event("manager.reply", "boss", {"text": "Đã hoàn thành mục tiêu.", "kind": "notify", "channel": None, "conversation_id": None}))

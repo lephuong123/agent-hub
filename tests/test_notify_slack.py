@@ -89,7 +89,8 @@ async def test_webhook_via_secret_message_redacted(make):
     await hub.notifier.drain(10)
     assert len(slack.received) == 1
     text = slack.received[0]["text"]
-    assert "coder" in text and "r_1" in text and "cfharness approve ap_1" in text and "rm -rf docs" in text
+    assert "coder" in text and "cfharness approve ap_1" in text and "rm -rf docs" in text
+    assert "r_1" not in text and "[cfharness]" not in text  # tin gọn: không id run, không tiền tố
     assert "SECRETSECRET" not in text  # che secret
     types = [e.type for e in hub.store.query_events(types=["notify.sent"])]
     assert types == ["notify.sent"]
@@ -115,7 +116,7 @@ async def test_bot_token_and_channel(make):
     hub.secrets.set("SLACK_BOT_TOKEN", "xoxb-1234567890-abcdefghij")
     hub.publish(make_event("guard.blocked", "coder", {"detail": "tự duyệt", "preview": "cfharness approve ap_1"}, run_id="r_2"))
     await hub.notifier.drain(10)
-    assert slack.received[0]["channel"] == "#ops" and "guard chặn" in slack.received[0]["text"]
+    assert slack.received[0]["channel"] == "#ops" and "Đã chặn" in slack.received[0]["text"]
     assert slack.headers[0]["Authorization"] == "Bearer xoxb-1234567890-abcdefghij"
     slack.close()
 
@@ -135,7 +136,7 @@ async def test_reminders_escalate_and_notify(make):
     assert hub.approvals.remind_due() == [row["id"]]
     await hub.notifier.drain(10)
     texts = [r["text"] for r in slack.received]
-    assert any("nhắc lần 1" in t for t in texts) and any("nhắc lần 2" in t for t in texts)
+    assert any("Nhắc lần 1" in t for t in texts) and any("Nhắc lần 2" in t for t in texts)
     assert all("a@b.c" not in t for t in texts)  # không đưa dữ liệu MCP ra Slack
     hub.approvals.resolve(row["id"], "deny", note="x")
     assert hub.approvals.remind_due() == []
@@ -143,6 +144,6 @@ async def test_reminders_escalate_and_notify(make):
 
 
 def test_format_messages():
-    assert "waiting_human" in format_message(make_event("approval.waiting_human", "a", {"request_id": "ap_9", "preview": "x"}, run_id="r"))
-    assert "lỗi 3 run" in format_message(make_event("run.repeated_failure", "a", {"count": 3, "error": "e"}, run_id="r"))
+    assert "tạm dừng" in format_message(make_event("approval.waiting_human", "a", {"request_id": "ap_9", "preview": "x"}, run_id="r"))
+    assert "lỗi 3 lần" in format_message(make_event("run.repeated_failure", "a", {"count": 3, "error": "e"}, run_id="r"))
     assert format_message(make_event("tool.start", "a", {})) is None

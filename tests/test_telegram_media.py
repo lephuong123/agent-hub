@@ -156,7 +156,7 @@ async def test_manager_marked_file_sent_as_document(make, tg):
     d.hub.publish(make_event("manager.reply", "boss", {"conversation_id": conv, "run_id": "r_x", "text": text}, run_id="r_x"))
     docs = await until(lambda: tg.documents(BOSS))
     assert docs[0]["filename"] == "report.md" and "Báo cáo tuần".encode() in docs[0]["_raw"]
-    assert docs[0]["caption"].startswith("[cfharness]") and "reply_markup" not in docs[0]["_raw"].decode("utf-8", "replace")
+    assert docs[0]["caption"].startswith("📎 Tệp từ điều phối viên") and "reply_markup" not in docs[0]["_raw"].decode("utf-8", "replace")
     framed = [m for m in tg.sent(BOSS)[before:] if "<pre>" in (m.get("text") or "")]
     assert framed and "Đã xong báo cáo." in framed[0]["text"] and "[[file:" not in framed[0]["text"]
     assert not framed[0].get("reply_markup")  # chữ agent KHÔNG cùng tin với nút

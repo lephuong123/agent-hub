@@ -29,64 +29,42 @@ log = logging.getLogger("cfharness.notify")
 
 
 def format_message(ev: HubEvent) -> str | None:
+    """Tin ngắn cho người đọc nhanh: AI — CẦN GÌ — LÀM GÌ. Không id run/luật; lệnh CLI chỉ khi đó là cách duy nhất để xử lý
+    (kênh một chiều: webhook Slack). Telegram dùng lại qua `to_plain` (bỏ `*`, `` ` ``)."""
     p = ev.payload or {}
-    agent, run = ev.agent_id or "-", ev.run_id or "-"
+    agent = ev.agent_id or "agent"
     rid = p.get("request_id")
+    op = f"\nThao tác: `{_clip(p.get('preview'))}`" if p.get("preview") else ""
+    why = f"\nVì sao hỏi: {_clip(p.get('reason'), 200)}" if p.get("reason") else ""
+    act = f"\nDuyệt: `cfharness approve {rid}` · Từ chối: `cfharness deny {rid}`"
     if ev.type == "approval.open":
-        return (
-            f":warning: *cfharness* — agent `{agent}` muốn chạy thao tác PHÁ HUỶ, đang giữ chờ duyệt\n"
-            f"• run `{run}` · request `{rid}`\n• thao tác: `{_clip(p.get('preview'))}`\n"
-            f"• lý do: {_clip(p.get('reason'), 200)} ({p.get('matched_rule')})\n"
-            f"• duyệt: `cfharness approve {rid}` · từ chối: `cfharness deny {rid}` (hoặc TUI / MCP `hub_approve`)"
-        )
+        return f"⏸ *{agent}* cần bạn duyệt một thao tác{op}{why}{act}"
     if ev.type == "approval.waiting_human":
-        return (
-            f":double_vertical_bar: *cfharness* — request `{rid}` của agent `{agent}` chưa có người duyệt → run `{run}` "
-            f"chuyển *waiting_human* (đã dừng tiến trình, giữ khoá repo, KHÔNG tự từ chối)\n"
-            f"• thao tác: `{_clip(p.get('preview'))}`\n• duyệt: `cfharness approve {rid}`"
-        )
+        return f"⏸ *{agent}* đã tạm dừng, vẫn chờ bạn duyệt (hub không tự từ chối){op}{act}"
     if ev.type == "approval.escalated":
-        return (
-            f":arrow_up: *cfharness* — yêu cầu `{rid}` của agent `{agent}` được chuyển lên NGƯỜI duyệt (điều phối viên không quyết: "
-            f"{_clip(p.get('note'), 200)})\n• run `{run}` · thao tác: `{_clip(p.get('preview'))}`\n"
-            f"• lý do: {_clip(p.get('reason'), 200)} ({p.get('matched_rule')})\n"
-            f"• duyệt: `cfharness approve {rid}` · từ chối: `cfharness deny {rid}`"
-        )
+        note = f"\nGhi chú của điều phối viên: {_clip(p.get('note'), 200)}" if p.get("note") else ""
+        return f"⬆️ Điều phối viên chuyển cho bạn: *{agent}* cần duyệt{op}{why}{note}{act}"
     if ev.type == "approval.reminder":
         mins = int(float(p.get("wait_s") or 0) // 60)
-        return (
-            f":bell: *cfharness* — nhắc lần {p.get('reminder_count')}: request `{rid}` (agent `{agent}`, run `{run}`) "
-            f"vẫn chờ người duyệt sau {mins} phút\n• thao tác: `{_clip(p.get('preview'))}`\n• duyệt: `cfharness approve {rid}`"
-        )
+        return f"🔔 Nhắc lần {p.get('reminder_count')}: *{agent}* chờ bạn duyệt đã {mins} phút{op}{act}"
     if ev.type == "guard.blocked":
-        return (
-            f":no_entry: *cfharness* — guard chặn agent `{agent}` (run `{run}`): {_clip(p.get('detail') or p.get('reason'), 200)}\n"
-            f"• thao tác: `{_clip(p.get('preview'))}`"
-        )
+        return f"⛔ Đã chặn *{agent}*: {_clip(p.get('detail') or p.get('reason'), 200)}{op}"
     if ev.type == "guard.env_tamper":
         files = (p.get("added") or []) + (p.get("changed") or [])
-        return (f":rotating_light: *cfharness* — file chạy-khi-khởi-động (.pth/sitecustomize) trong môi trường Python của hub bị thêm/sửa:\n"
-                f"• `{_clip(', '.join(files), 400)}`\n• nếu do bạn cài gói: `cfharness guard integrity accept`")
+        return (f"🚨 Có tệp chạy-khi-khởi-động lạ trong môi trường Python của hub: `{_clip(', '.join(files), 400)}`\n"
+                "Nếu do bạn cài gói: `cfharness guard integrity accept`")
     if ev.type == "guard.tamper_detected":
         what = p.get("target")
         files = (p.get("changed") or []) + [m.get("path") for m in (p.get("moved") or []) if isinstance(m, dict)] + (p.get("keys") or [])
-        act = "đã KHÔI PHỤC bản chuẩn" if (p.get("restored") or p.get("moved")) else "chỉ phát hiện (kiểm tra tay)"
-        return (
-            f":rotating_light: *cfharness* — `{what}` bị ghi NGOÀI RPC ({act})\n• chi tiết: `{_clip(', '.join(str(f) for f in files if f) or str(p), 300)}`\n"
-            f"• bản bị sửa lưu ở `trash/tamper/`; nếu chính bạn sửa tay: `cfharness guard integrity accept`"
-        )
+        done = "đã khôi phục bản chuẩn" if (p.get("restored") or p.get("moved")) else "cần bạn kiểm tra"
+        return (f"🚨 `{what}` bị sửa ngoài hub — {done}: `{_clip(', '.join(str(f) for f in files if f) or str(p), 300)}`\n"
+                "Nếu chính bạn sửa: `cfharness guard integrity accept`")
     if ev.type == "auth.denied":
-        return (
-            f":no_entry: *cfharness* — từ chối `{p.get('method')}` (chỉ dành cho người) từ pid {p.get('pid')} "
-            f"(run `{run}`, agent `{agent}`; bằng chứng: {_clip(', '.join(p.get('evidence') or []) or 'thiếu token', 200)})"
-        )
+        return f"⛔ Đã chặn *{agent}* dùng `{p.get('method')}` — thao tác này chỉ người được làm."
     if ev.type == "run.repeated_failure":
-        return (
-            f":x: *cfharness* — agent `{agent}` lỗi {p.get('count')} run liên tiếp (gần nhất `{run}`: "
-            f"{_clip(p.get('error'), 200)})"
-        )
+        return f"❌ *{agent}* lỗi {p.get('count')} lần liên tiếp: {_clip(p.get('error'), 200)}"
     if ev.type == "learning.rolled_back":
-        return f":leftwards_arrow_with_hook: *cfharness* — rollback học của agent `{agent}`: {_clip(p.get('reason'), 200)}"
+        return f"↩️ Đã hoàn tác một thay đổi tự học của *{agent}*: {_clip(p.get('reason'), 200)}"
     # M4-B: digest hằng ngày (FR-LN-13) — nội dung do learning_ops/digest.py dựng (đã tóm tắt, không chứa dữ liệu MCP)
     if ev.type == "learning.digest":
         if not p.get("send") or not p.get("text"):
@@ -97,16 +75,15 @@ def format_message(ev: HubEvent) -> str | None:
     if ev.type == "regression.detected":
         if not p.get("human_change"):
             return None
-        return (f":warning: *cfharness* — agent `{agent}`: {_clip(p.get('reason'), 300)}\n"
-                f"• thay đổi này do NGƯỜI tạo nên hub không tự rollback; nếu muốn: `{p.get('hint')}`")
+        return (f"⚠️ *{agent}* kém đi sau một thay đổi của bạn: {_clip(p.get('reason'), 300)}\n"
+                f"Hub không tự hoàn tác thay đổi của người. Muốn hoàn tác: `{p.get('hint')}`")
     # M4-B: thay đổi L3 bị hoãn vì agent chưa có golden task (Q-23) → nhắc người chọn golden task
     if ev.type == "golden.suggested":
         if p.get("reason") != "deferred_no_eval":
             return None
-        lines = [f":bulb: *cfharness* — thay đổi cấu hình/L3 của agent `{agent}` bị HOÃN (`deferred_no_eval`): agent chưa có golden task.",
-                 "Chọn golden task để vòng học áp dụng được (agent không tự tạo — Q-07):"]
+        lines = [f"💡 *{agent}* có thay đổi tự học đang bị hoãn vì chưa có bài kiểm tra mẫu (golden task). Tạo một bài từ lượt chạy tốt:"]
         for c in (p.get("candidates") or [])[:3]:
-            lines.append(f"• run `{c.get('run_id')}` ({c.get('reason')}): {_clip(c.get('prompt_preview'), 100)} → `cfharness golden from-run {c.get('run_id')} --judge \"<rubric>\"`")
+            lines.append(f"• {_clip(c.get('prompt_preview'), 100)} → `cfharness golden from-run {c.get('run_id')} --judge \"<tiêu chí>\"`")
         if not p.get("candidates"):
             lines.append(f"• viết tay: `cfharness golden add {agent} --prompt \"…\" --regex \"…\"`")
         return "\n".join(lines)

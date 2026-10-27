@@ -97,3 +97,13 @@ Ghi chú: các thông báo khác (guard.blocked, lỗi lặp…) vẫn văn bả
 
 Lệch/ghi chú: event `question.*` KHÔNG đi qua `notify.telegram.events`/`QueuedNotifier` (gửi trực tiếp từ bot, không backoff — lỗi chỉ log; người dùng `/hoi` để gửi lại). `progress_after_s`/`progress_edit_s` chưa có trong `config.DEFAULTS` (đọc với giá trị mặc định trong code). Nút giao việc/dừng dùng SỐ; tin danh sách có id agent/run (định danh do hub kiểm charset, như tin duyệt cũ). `question.cancel` không gỡ chặn task (hành vi của `questions/` — task vẫn blocked tới khi người xử lý).
 Test: `tests/test_telegram_questions.py` (10 ca: cặp tin + nhãn độc chỉ trong `<pre>`, nút chỉ số, người lạ/sai chat/phát lại bị từ chối, sửa tin ở mọi chat, chọn nhiều + nonce cấp lại, `force_reply` + reply vào tin nội dung, trả lời qua web → tin Telegram được sửa, huỷ 2 bước, `with_manager` không gửi tới khi chuyển lên, `/hoi` `/canban`, menu lệnh + bàn phím nhanh, `/giaoviec` `/luotchay` `/agent` `/stop`). Test cũ đổi kỳ vọng "bước 2 = tin mới" → "tin được sửa" (`tg.with_buttons`, `tg.edits`).
+
+## Tin gọn (2026-10-27)
+Theo phản hồi "tin khó hiểu, nhiều ký tự đặc biệt": mỗi tin chỉ còn AI — CẦN GÌ — BẤM GÌ.
+- Bỏ tiền tố `[cfharness]`, id run/yêu cầu/câu hỏi, tên luật/lớp, lệnh CLI dự phòng (`cfharness approve|deny|answer|runs show`) khỏi tin Telegram/Slack 2 chiều.
+  Lệnh CLI chỉ còn ở kênh MỘT chiều (webhook Slack, `notify/slack.format_message`) vì đó là cách duy nhất để xử lý.
+- `AGENT_FRAME` rút còn "▼ Agent viết:" (ux-plan §3.1). WT-8 giữ nguyên: chữ agent vẫn TRỌN trong `<pre>` sau tiền tố cố định, không chung tin với nút.
+- Duyệt: tin nội dung `⏸ <agent> muốn chạy:` + `<pre>lệnh</pre>` + `<pre>Vì sao hỏi / Ảnh hưởng tới</pre>`; tin nút `❓ Cho phép <agent> chạy thao tác ở tin trên?`
+  (+ "⚠️ Thao tác nặng" khi cần). Bước 2: "Chắc chắn cho phép?". Kết quả sửa tại chỗ: "✅ Đã cho phép — bởi bạn qua Telegram."
+- Kết quả run: `✅ <agent> — xong · 12 giây · $0.004` + khung agent + "↩ Trả lời tin này để giao thêm cho agent này."
+- Test không còn dò id trong chữ: `FakeTelegram.msg_for/thread`, `FakeSlack.msg_for/root_of` tra nút → id qua `CallbackStore` của hub (fixture gắn `tg.hubs`/`sk.hubs`).

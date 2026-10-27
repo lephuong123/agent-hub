@@ -132,12 +132,12 @@ class QuestionChat:
         from .base import AGENT_FRAME
 
         p = payload or {}
-        head = f"<b>❓ [cfharness] Agent {esc(q['agent_id'])} hỏi bạn</b> · câu hỏi {esc(q['id'])}" + (f" · task {esc(q['task_id'])}" if q.get("task_id") else "")
+        head = f"❓ <b>{esc(q['agent_id'])} hỏi bạn:</b>"
         lines = [head]
         if kind == "question.reminder":
-            lines.append(f"⏰ Nhắc lần {esc(p.get('reminder_count'))} — vẫn chờ bạn trả lời ({int(float(p.get('wait_s') or 0) // 60)} phút).")
+            lines.append(f"🔔 Nhắc lần {esc(p.get('reminder_count'))} — đã chờ {int(float(p.get('wait_s') or 0) // 60)} phút.")
         if q.get("escalated_at"):
-            lines.append("Điều phối viên không tự quyết được và chuyển câu hỏi lên bạn" + (" (ghi chú của điều phối viên ở cuối khung)." if q.get("escalation_note") else "."))
+            lines.append("⬆️ Điều phối viên không tự quyết được, chuyển cho bạn.")
         body = [str(q["text"])]
         opts = q.get("options") or []
         if opts:
@@ -151,17 +151,16 @@ class QuestionChat:
     def system_text(self, q: dict[str, Any], sel: list[str] | None = None, *, confirm_cancel: bool = False) -> str:
         n = len(q.get("options") or [])
         if confirm_cancel:
-            return (f"<b>[cfharness] Huỷ câu hỏi {esc(q['id'])}?</b>\nAgent {esc(q['agent_id'])} sẽ KHÔNG nhận được câu trả lời"
-                    + (" và task vẫn bị chặn." if q.get("task_id") else "."))
-        lines = [f"<b>[cfharness] Trả lời câu hỏi {esc(q['id'])}</b> (agent {esc(q['agent_id'])})"]
+            return (f"<b>Huỷ câu hỏi này?</b>\n{esc(q['agent_id'])} sẽ không nhận được câu trả lời"
+                    + (" và việc đang làm vẫn bị chặn." if q.get("task_id") else "."))
         if n and q["multi"]:
-            lines.append(f"Bấm các số để chọn ({n} phương án ở tin phía trên), rồi bấm «Gửi lựa chọn»."
-                         + (f" Đang chọn: {', '.join(sel)}." if sel else ""))
+            lines = ["👉 <b>Chọn các phương án ở tin trên</b>, rồi bấm «Gửi lựa chọn»." + (f" Đang chọn: {', '.join(esc(s) for s in sel)}." if sel else "")]
         elif n:
-            lines.append(f"Bấm số của phương án ({n} phương án ở tin phía trên).")
-        if q["allow_free_text"] or not n:
+            lines = ["👉 <b>Bấm số của phương án bạn chọn</b> (ở tin trên)."]
+        else:
+            lines = [f"👉 <b>Trả lời bằng chữ:</b> {esc(self.bot.reply_here())}."]
+        if n and q["allow_free_text"]:
             lines.append(f"Hoặc {esc(self.bot.reply_here())} bằng chữ.")
-        lines.append(f"Trên máy: cfharness answer {esc(q['id'])} " + ("--pick &lt;số&gt;" if n else '--text "…"'))
         return "\n".join(lines)
 
     def markup(self, q: dict[str, Any], chat: Any, sel: list[str] | None = None, *, confirm_cancel: bool = False) -> dict[str, Any]:
@@ -203,7 +202,7 @@ class QuestionChat:
             if x is not None:
                 self._put(self.MAP, f"{chat}:{x}", q["id"])
         for _c, _m1, m2 in old:  # tin cũ của cùng câu hỏi trong chat này (nhắc lại / /hoi) → gỡ nút, chỉ tin mới nhất còn bấm được
-            await self._edit(api, chat, m2, f"[cfharness] Câu hỏi {esc(q['id'])} — đã gửi lại bên dưới, dùng tin mới nhất.", None)
+            await self._edit(api, chat, m2, "Câu hỏi này đã được gửi lại bên dưới — dùng tin mới nhất.", None)
 
     async def _edit(self, api: Any, chat: Any, mid: Any, text: str, markup: dict[str, Any] | None) -> None:
         if mid is None:
@@ -216,15 +215,15 @@ class QuestionChat:
     def result_text(self, q: dict[str, Any]) -> str:
         """Dòng kết quả (chữ hub): số đã chọn + ai + kênh — KHÔNG có nhãn/chữ của agent hay chữ tự do của người."""
         if q["status"] == "cancelled":
-            return f"✖ <b>[cfharness] Câu hỏi {esc(q['id'])} đã huỷ</b> — {esc(who_vi(q.get('answered_by'), q.get('answered_channel')))}."
+            return f"✖ <b>Đã huỷ câu hỏi</b> — {esc(who_vi(q.get('answered_by'), q.get('answered_channel')))}."
         a = q.get("answer") or {}
         parts = []
         if a.get("keys"):
             parts.append("chọn " + ", ".join(esc(k) for k in a["keys"]))
         if a.get("text"):
             parts.append("có câu trả lời bằng chữ")
-        return (f"✅ <b>[cfharness] Câu hỏi {esc(q['id'])} đã được trả lời</b> — {' · '.join(parts) or 'đã trả lời'}"
-                f" — bởi {esc(who_vi(q.get('answered_by'), q.get('answered_channel')))}. Agent {esc(q['agent_id'])} sẽ làm tiếp.")
+        return (f"✅ <b>Đã trả lời</b> — {' · '.join(parts) or 'đã trả lời'}"
+                f" — {esc(who_vi(q.get('answered_by'), q.get('answered_channel')))}. {esc(q['agent_id'])} làm tiếp.")
 
     async def close_messages(self, qid: str) -> None:
         q = self._get(qid)
@@ -247,7 +246,7 @@ class QuestionChat:
             return "Không còn câu hỏi này."
         if q["status"] != "open":
             await self._edit(api, cid, mid, self.result_text(q) if q["status"] in ("answered", "cancelled") else
-                             f"[cfharness] Câu hỏi {esc(qid)} đang chờ điều phối viên.", None)
+                             "Câu hỏi này đang chờ điều phối viên xử lý.", None)
             return "Câu hỏi đã được xử lý trước đó."
         sk = f"{cid}:{qid}"
         sel = list(self._st(self.SEL).get(sk) or [])
@@ -268,7 +267,7 @@ class QuestionChat:
                 await self.bot.call(cid, "question.answer", {"id": qid, "keys": sel})
                 return f"Đã gửi: chọn {', '.join(sel)}."
             if action == "qf":
-                res = await self.bot.ask_input(api, cid, "question", qid, f"✍️ Nhập câu trả lời cho câu hỏi {qid} — {self.bot.reply_here()}.",
+                res = await self.bot.ask_input(api, cid, "question", qid, f"✍️ Nhập câu trả lời của bạn — {self.bot.reply_here()}.",
                                                "Câu trả lời…", reply_to=mid)  # Slack: modal (chat/slack/modals.py)
                 if res.get("message_id") is not None:
                     self._put(self.MAP, f"{cid}:{res['message_id']}", qid)
@@ -296,18 +295,18 @@ class QuestionChat:
 
         q = self._get(qid)
         if q is None:
-            await self.bot._send(api, cid, f"Không còn câu hỏi {qid}.")
+            await self.bot._send(api, cid, "Câu hỏi này không còn nữa.")
             return
         if q["status"] != "open":
-            await self.bot._send(api, cid, f"Câu hỏi {qid} đã " + ("được trả lời" if q["status"] == "answered" else "huỷ" if q["status"] == "cancelled"
+            await self.bot._send(api, cid, "Câu hỏi này đã " + ("được trả lời" if q["status"] == "answered" else "huỷ" if q["status"] == "cancelled"
                                                                     else "chuyển cho điều phối viên") + " — tin này không được gửi.")
             return
         try:
             await self.bot.call(cid, "question.answer", {"id": qid, "text": text})
         except ChatError as e:
-            await self.bot._send(api, cid, f"Không gửi được câu trả lời cho {qid}: {clip(e, 300)}")
+            await self.bot._send(api, cid, f"Không gửi được câu trả lời: {clip(e, 300)}")
             return
-        await self.bot._send(api, cid, f"✅ Đã gửi câu trả lời cho câu hỏi {qid} — agent {q['agent_id']} sẽ làm tiếp.")
+        await self.bot._send(api, cid, f"✅ Đã gửi câu trả lời — {q['agent_id']} làm tiếp.")
 
     # ------------------------------------------------------------------ /hoi
     async def command(self, cid: str, api: Any) -> str | None:

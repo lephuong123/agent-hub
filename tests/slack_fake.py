@@ -31,6 +31,7 @@ class FakeSlack:
         self.team = team
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.next_ts = 1000
+        self.hubs: list[Any] = []  # hub của daemon test (fixture gắn) — tra nonce nút → id approval/câu hỏi
         self.uploads: dict[str, bytes] = {}
         self.files: dict[str, tuple[bytes, str]] = {}  # đường dẫn → (nội dung, mime) — tệp người gửi
         self.downloads: list[str] = []  # đường dẫn đã GET (kể cả bị từ chối vì token)
@@ -152,6 +153,26 @@ class FakeSlack:
     @staticmethod
     def text_of(p: dict[str, Any]) -> str:
         return "\n".join(b["text"]["text"] for b in (p.get("blocks") or []) if b.get("type") == "section")
+
+    def ref_of(self, button: dict[str, Any]) -> str | None:
+        """Id đối tượng mà nút trỏ tới — tin gọn không in id nên test tra qua kho nút của hub."""
+        parts = str(button.get("value") or "").split(".")
+        if len(parts) != 3:
+            return None
+        for h in self.hubs:
+            rec = h.slack.callbacks._all().get(parts[1])
+            if rec:
+                return rec.get("r")
+        return None
+
+    def msg_for(self, channel: str, ref: str) -> dict[str, Any] | None:
+        """Tin GỬI mới nhất có nút trỏ tới `ref`."""
+        return next((m for m in reversed(self.sent(channel)) if any(self.ref_of(b) == ref for b in self.buttons(m))), None)
+
+    def root_of(self, channel: str, msg: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Tin gốc của thread mà `msg` nằm trong (tin nội dung của cặp duyệt/câu hỏi)."""
+        root = (msg or {}).get("thread_ts")
+        return next((m for m in self.sent(channel) if m.get("_ts") == root), None) if root else None
 
     @staticmethod
     def buttons(p: dict[str, Any]) -> list[dict[str, Any]]:

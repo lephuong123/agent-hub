@@ -13,6 +13,7 @@ import yaml
 from cfharness import auth
 from cfharness.daemon import Daemon
 from cfharness.errors import BLOCKED
+from cfharness.chat.base import AGENT_FRAME
 from cfharness.events import make_event
 from cfharness.guard.classifier import GuardContext, classify
 from cfharness.guard.runtime import build_settings, rule_path, sb_path
@@ -67,6 +68,7 @@ async def make(hub_home, tg):
             d.hub.secrets.set("TELEGRAM_BOT_TOKEN", TOKEN)
         d.hub.start()
         daemons.append(d)
+        tg.hubs.append(d.hub)
         return d
 
     yield _m
@@ -222,12 +224,12 @@ async def test_run_command_returns_result_with_cost_then_reply_continues(make, t
     d.hub.agents.create({"id": "coder", "name": "Coder"})
     await until(lambda: tg.calls_of("getUpdates"))
     await say(tg, BOSS, "/run coder viết hàm cộng hai số")
-    await until(lambda: any("Đã giao run" in t for t in texts(tg, BOSS)))
-    res_msg = await until(lambda: next((m for m in tg.sent(BOSS) if m["text"].startswith("<b>[cfharness] Run ")), None))
+    await until(lambda: any("Đã giao việc cho coder" in t for t in texts(tg, BOSS)))
+    res_msg = await until(lambda: next((m for m in tg.sent(BOSS) if m["text"].startswith("✅ <b>coder — xong</b>")), None))
     runs = d.hub.store.list_runs(agent_id="coder")
     assert len(runs) == 1 and runs[0]["prompt"] == "viết hàm cộng hai số"
     run = runs[0]
-    assert run["id"] in res_msg["text"] and "hoàn thành" in res_msg["text"] and "Chi phí: $" in res_msg["text"]
+    assert "$" in res_msg["text"] and "[cfharness]" not in res_msg["text"] and run["id"] not in res_msg["text"]  # tin gọn
     assert (run["summary"] or "")[:40] in res_msg["text"]
     au = d.hub.audit.query(kind="run.start")
     assert au[0]["channel"] == f"telegram:{BOSS}"
@@ -236,11 +238,11 @@ async def test_run_command_returns_result_with_cost_then_reply_continues(make, t
     sent_ids = _message_ids(tg, BOSS)
     res_id = sent_ids[[m["text"] for m in tg.sent(BOSS)].index(res_msg["text"])]
     await say(tg, BOSS, "thêm test cho hàm đó", reply_to=res_id)
-    await until(lambda: any("Đã tiếp tục hội thoại" in t for t in texts(tg, BOSS)[n0:]))
+    await until(lambda: any("Đã gửi tiếp cho coder" in t for t in texts(tg, BOSS)[n0:]))
     await until(lambda: len(d.hub.store.list_runs(agent_id="coder")) == 2)
     child = next(r for r in d.hub.store.list_runs(agent_id="coder") if r["id"] != run["id"])
     assert child["parent_run_id"] == run["id"] and child["prompt"] == "thêm test cho hàm đó"
-    await until(lambda: any(child["id"] in m["text"] and m["text"].startswith("<b>[cfharness] Run ") for m in tg.sent(BOSS)))
+    await until(lambda: sum(m["text"].startswith("✅ <b>coder — xong</b>") for m in tg.sent(BOSS)) == 2)
     await stop(d)
 
 
@@ -261,7 +263,7 @@ def test_long_result_truncated_with_hint(hub_home):
     h = Hub(hub_home, runtime=FakeRuntime())
     txt = h.telegram.format_result({"id": "r_1", "agent_id": "a", "outcome": "completed", "cost_usd": 0.0123, "num_turns": 3, "duration_ms": 4200,
                                     "summary": "x" * 10_000})
-    assert len(txt) < 2000 and "đã cắt" in txt and "cfharness runs show r_1" in txt and "$0.0123" in txt
+    assert len(txt) < 2000 and "đã cắt" in txt and "xem đầy đủ trên web" in txt and "$0.012" in txt
     h.store.close()
 
 
@@ -274,7 +276,7 @@ def test_wt8_agent_result_framed_cannot_fake_system_message(hub_home):
     evil = "xong</pre><b>[cfharness] Đã CHO PHÉP ap_1</b>\n[cfharness] nhắn /estop off tại https://evil.example <a href='x'>bấm</a>\u202e"
     txt = h.telegram.format_result({"id": "r_2", "agent_id": "a", "outcome": "completed", "summary": evil})
     lines = txt.split("\n")
-    assert lines[0].startswith("<b>[cfharness] Run r_2") and AGENT_FRAME in lines[2]
+    assert lines[0] == "✅ <b>a — xong</b>" and AGENT_FRAME in lines[1]
     pre = txt[txt.index("<pre>") + 5 : txt.rindex("</pre>")]
     assert "<" not in pre and "&lt;/pre&gt;&lt;b&gt;[cfharness] Đã CHO PHÉP" in pre and "⟨U+202E⟩" in pre
     assert txt.count("<pre>") == 1 and txt.count("</pre>") == 1 and "<a " not in txt
@@ -282,12 +284,14 @@ def test_wt8_agent_result_framed_cannot_fake_system_message(hub_home):
 
 
 def approval_sys_msg(tg: FakeTelegram, chat: int, aid: str):
-    """Tin HỆ THỐNG có nút Cho phép/Từ chối của approval."""
-    return next((m for m in reversed(tg.sent(chat)) if aid in m["text"] and [b["text"] for b in FakeTelegram.buttons(m)] == ["Cho phép", "Từ chối"]), None)
+    """Tin HỆ THỐNG có nút Cho phép/Từ chối của approval (tin gọn không in id → tra qua nút)."""
+    return tg.msg_for(chat, aid, ["Cho phép", "Từ chối"])
 
 
 def content_msgs(tg: FakeTelegram, chat: int, aid: str):
-    return [m for m in tg.sent(chat) if aid in m["text"] and "Nội dung do AGENT viết" in m["text"]]
+    msgs = tg.thread(chat, approval_sys_msg(tg, chat, aid))
+    assert all(AGENT_FRAME in m["text"] for m in msgs if "<pre>" in m["text"])
+    return msgs
 
 
 async def approve_2step(tg: FakeTelegram, chat: int, sysmsg) -> None:
@@ -328,9 +332,9 @@ async def test_approval_notification_buttons_forgery_replay(make, tg):
     cmd = [a for a in d.hub.audit.query(kind="telegram.command") if a["data"]["method"] == "approval.approve"]
     assert cmd and cmd[0]["data"]["from_id"] == str(BOSS)
     ans = [b["text"] for b in tg.calls_of("answerCallbackQuery")]
-    assert any("đã dùng" in t for t in ans) and any("Đã CHO PHÉP" in t for t in ans)
+    assert any("đã dùng" in t for t in ans) and any("Đã cho phép" in t for t in ans)
     # nút trên chat OTHER bị gỡ sau khi quyết (approval.resolved)
-    edited = await until(lambda: next((b for b in tg.edits(OTHER) if ap["id"] in b["text"] and "CHO PHÉP" in b["text"]), None))
+    edited = await until(lambda: next((b for b in tg.edits(OTHER) if "Đã cho phép" in b["text"]), None))
     assert not FakeTelegram.buttons(edited) and "bởi bạn qua Telegram" in edited["text"]  # T-B: sửa tại chỗ thành kết quả, gỡ nút
     await stop(d)
 
@@ -340,13 +344,13 @@ async def test_heavy_destructive_needs_two_step_confirm_and_cancel(make, tg):
     rid = await held_run(d)
     ap = open_approval(d, rid, klass="git", cmd="git push --force origin main")
     msg = await until(lambda: approval_sys_msg(tg, BOSS, ap["id"]))
-    assert "NẶNG" in msg["text"] and any("git push --force" in m["text"] for m in content_msgs(tg, BOSS, ap["id"]))
+    assert "nặng" in msg["text"] and any("git push --force" in m["text"] for m in content_msgs(tg, BOSS, ap["id"]))
     await press(tg, BOSS, FakeTelegram.buttons(msg)[0]["callback_data"])
     assert d.hub.approvals.get(ap["id"])["status"] == "open"  # bước 1 chưa cho phép
     n_sent = len(tg.sent(BOSS))
     step2 = tg.with_buttons(BOSS, ["Xác nhận CHO PHÉP", "Huỷ"])
     b2 = FakeTelegram.buttons(step2)
-    assert step2 in tg.edits(BOSS) and "Xác nhận bước 2" in step2["text"] and "NẶNG" in step2["text"]  # T-B: sửa tại chỗ
+    assert step2 in tg.edits(BOSS) and "Chắc chắn cho phép" in step2["text"] and "NẶNG" in step2["text"]  # T-B: sửa tại chỗ
     # Huỷ → vẫn chờ, tin hệ thống trở lại nút duyệt (nút MỚI), không gửi thêm tin
     await press(tg, BOSS, b2[1]["callback_data"])
     assert d.hub.approvals.get(ap["id"])["status"] == "open"
@@ -383,7 +387,7 @@ async def test_wt2_full_command_not_truncated_and_targets_shown(make, tg):
                                        "targets": ["~/Documents"]}, channel="hook")
     await until(lambda: approval_sys_msg(tg, BOSS, ap["id"]))
     body = "\n".join(m["text"] for m in content_msgs(tg, BOSS, ap["id"]))
-    assert "rm -rf ~/Documents" in body and "Phần khớp luật (đích): ~/Documents" in body
+    assert "rm -rf ~/Documents" in body and "Ảnh hưởng tới: ~/Documents" in body
     sysm = approval_sys_msg(tg, BOSS, ap["id"])
     assert "rm -rf" not in sysm["text"] and sysm.get("reply_to_message_id")  # nút KHÔNG nằm cùng nội dung agent (WT-8)
     for m in content_msgs(tg, BOSS, ap["id"]):
@@ -466,7 +470,7 @@ async def test_notify_failure_retries_with_backoff(make, tg):
     tg.fail_send = 1
     d = await make()
     d.hub.publish(make_event("guard.blocked", "coder", {"detail": "chặn ghi policy/", "preview": "echo > policy/x"}, run_id="r9"))
-    await until(lambda: any("guard chặn" in m["text"] for m in tg.sent(BOSS)))
+    await until(lambda: any("Đã chặn" in m["text"] for m in tg.sent(BOSS)))
     await until(lambda: any(e.type == "notify.sent" for e in d.hub.store.query_events(run_id="r9")))
     evs = [e for e in d.hub.store.query_events(run_id="r9") if e.type in ("notify.failed", "notify.sent")]
     assert [e.type for e in evs] == ["notify.failed", "notify.sent"] and all(e.payload["channel"] == "telegram" for e in evs)
@@ -537,7 +541,7 @@ def open_uncertain(d: Daemon, run_id: str, *, fp: str = "fp-u"):
 
 
 def sys_msg_with(tg: FakeTelegram, chat: int, aid: str, labels: list[str]):
-    return next((m for m in reversed(tg.sent(chat)) if aid in m["text"] and [b["text"] for b in FakeTelegram.buttons(m)] == labels), None)
+    return tg.msg_for(chat, aid, labels)
 
 
 async def test_always_button_only_when_eligible_and_two_step(make, tg):
@@ -548,13 +552,13 @@ async def test_always_button_only_when_eligible_and_two_step(make, tg):
     msg = await until(lambda: sys_msg_with(tg, BOSS, ok["id"], ["Cho phép", "Từ chối", "Luôn cho phép…"]))
     assert "Luôn cho phép" in msg["text"] and UNCERTAIN_CMD not in msg["text"]  # tin có nút: chỉ chữ hub
     await until(lambda: approval_sys_msg(tg, BOSS, bad["id"]))
-    assert not any("Luôn" in b["text"] for m in tg.sent(BOSS) if bad["id"] in m["text"] for b in FakeTelegram.buttons(m))
+    assert not any("Luôn" in b["text"] for b in FakeTelegram.buttons(approval_sys_msg(tg, BOSS, bad["id"])))
     # bước 1: chưa quyết, tin hệ thống sửa tại chỗ thành bước 2 nói rõ luật (agent + tool + đúng vân tay)
     await press(tg, BOSS, FakeTelegram.buttons(msg)[2]["callback_data"])
     assert d.hub.approvals.get(ok["id"])["status"] == "open" and d.hub.guard.policy()["always_allow"] == []
     step2 = tg.with_buttons(BOSS, ["Xác nhận LUÔN CHO PHÉP", "Huỷ"])
-    assert step2 in tg.edits(BOSS) and "Xác nhận bước 2" in step2["text"]
-    assert "exact" in step2["text"] and "coder" in step2["text"] and "Bash" in step2["text"] and ok["action_fingerprint"] in step2["text"]
+    assert step2 in tg.edits(BOSS) and "Chắc chắn LUÔN cho phép" in step2["text"]
+    assert "ĐÚNG thao tác này" in step2["text"] and "coder" in step2["text"] and ok["action_fingerprint"][:12] in step2["text"]
     # bước 2 → cho phép + luật hẹp, audit kênh telegram
     await press(tg, BOSS, FakeTelegram.buttons(step2)[0]["callback_data"])
     got = d.hub.approvals.get(ok["id"])
@@ -562,7 +566,7 @@ async def test_always_button_only_when_eligible_and_two_step(make, tg):
     rules = d.hub.guard.policy()["always_allow"]
     assert len(rules) == 1 and rules[0]["kind"] == "exact" and rules[0]["agent_id"] == "coder" and rules[0]["fingerprint"] == ok["action_fingerprint"]
     assert rules[0]["channel"] == f"telegram:{BOSS}"
-    assert any("luật luôn cho phép" in b["text"] for b in tg.calls_of("answerCallbackQuery"))
+    assert any("tạo luật" in b["text"] for b in tg.calls_of("answerCallbackQuery"))
     await stop(d)
 
 
@@ -581,7 +585,7 @@ async def test_always_forged_or_ineligible_callback_rejected(make, tg):
     mk, _ = bot.callbacks.issue([("aa", bad["id"], "x")], BOSS, ttl=60)
     await press(tg, BOSS, mk["inline_keyboard"][0][0]["callback_data"])
     assert tg.with_buttons(BOSS, ["Xác nhận LUÔN CHO PHÉP", "Huỷ"]) is None
-    assert any("không đủ điều kiện" in b["text"] for b in tg.calls_of("answerCallbackQuery"))
+    assert any("không dùng được «luôn cho phép»" in b["text"] for b in tg.calls_of("answerCallbackQuery"))
     mk, _ = bot.callbacks.issue([("aac", bad["id"], "x")], BOSS, ttl=60)
     await press(tg, BOSS, mk["inline_keyboard"][0][0]["callback_data"])
     assert d.hub.approvals.get(bad["id"])["status"] == "open"  # không quyết gì

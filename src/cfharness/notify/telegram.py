@@ -138,19 +138,22 @@ def fit(text: str, limit: int = MAX_TEXT, hint: str = "") -> str:
 
 def format_approval(p: dict[str, Any], agent: str | None, run: str | None, *, kind: str = "approval.open", heavy: bool = False) -> str:
     rid = p.get("request_id") or p.get("id")
+    who = agent or "agent"
     head = {
-        "approval.open": f"[cfharness] Agent {agent or '-'} muốn chạy thao tác PHÁ HUỶ — đang giữ chờ duyệt",
-        "approval.waiting_human": f"[cfharness] Yêu cầu {rid} của agent {agent or '-'} chưa có người duyệt → run {run or '-'} chuyển waiting_human (đã dừng tiến trình, giữ khoá repo, KHÔNG tự từ chối)",
-        "approval.reminder": f"[cfharness] Nhắc lần {p.get('reminder_count')}: yêu cầu {rid} (agent {agent or '-'}) vẫn chờ người duyệt sau {int(float(p.get('wait_s') or 0) // 60)} phút",
-        "approvals.list": f"[cfharness] Yêu cầu {rid} — agent {agent or '-'} đang chờ duyệt ({p.get('status')})",
-        "approval.escalated": f"[cfharness] Điều phối viên chuyển yêu cầu {rid} của agent {agent or '-'} lên NGƯỜI duyệt ({clip(p.get('note'), 200)})",
-    }.get(kind, f"[cfharness] Yêu cầu {rid}")
-    lines = [head, f"• Run: {run or '-'} · Yêu cầu: {rid}", f"• Thao tác: {clip(p.get('preview'), 300)}"]
+        "approval.open": f"⏸ {who} cần bạn duyệt một thao tác",
+        "approval.waiting_human": f"⏸ {who} đã tạm dừng, vẫn chờ bạn duyệt (hub không tự từ chối)",
+        "approval.reminder": f"🔔 Nhắc lần {p.get('reminder_count')}: {who} chờ bạn duyệt đã {int(float(p.get('wait_s') or 0) // 60)} phút",
+        "approvals.list": f"⏸ {who} đang chờ bạn duyệt",
+        "approval.escalated": f"⬆️ Điều phối viên chuyển cho bạn: {who} cần duyệt",
+    }.get(kind, f"⏸ {who} cần bạn duyệt")
+    lines = [head, f"Thao tác: {clip(p.get('preview'), 300)}"]
     if p.get("reason"):
-        lines.append(f"• Lý do: {clip(p.get('reason'), 200)} ({p.get('matched_rule')})")
+        lines.append(f"Vì sao hỏi: {clip(p.get('reason'), 200)}")
+    if kind == "approval.escalated" and p.get("note"):
+        lines.append(f"Ghi chú: {clip(p.get('note'), 200)}")
     if heavy:
-        lines.append("• Thao tác NẶNG — cho phép cần xác nhận 2 bước.")
-    lines.append(f"• Hoặc trên máy: cfharness approve {rid} · cfharness deny {rid}")
+        lines.append("⚠️ Thao tác nặng — đọc kỹ trước khi cho phép.")
+    lines.append(f"Duyệt: cfharness approve {rid} · Từ chối: cfharness deny {rid}")
     return "\n".join(lines)
 
 
@@ -202,7 +205,7 @@ def format_event(ev: HubEvent, *, heavy: bool = False) -> str | None:
     if ev.type == "learning.digest":
         if not p.get("send") or not p.get("text"):
             return None
-        return fit("[cfharness] Digest\n" + to_plain(str(p["text"])), hint="xem đầy đủ: cfharness digest show, TUI hoặc web")
+        return fit("📊 Tóm tắt hằng ngày\n" + to_plain(str(p["text"])), hint="xem đầy đủ trên web")
     t = _slack_format(ev)
     return fit(to_plain(t)) if t else None
 

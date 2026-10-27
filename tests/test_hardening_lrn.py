@@ -98,7 +98,7 @@ def test_h04_auto_rollback_conflicts_when_human_edited_same_key(hub):
     assert w and w[-1].payload["source"] == "regression_monitor" and w[-1].payload["ledger_entry_id"] == e["id"]
     from cfharness.notify import format_message
 
-    assert "không tự rollback" in format_message(w[-1]).lower()
+    assert "không tự hoàn tác" in format_message(w[-1]).lower()
     # người vẫn rollback được bằng --force
     with pytest.raises(Conflict):
         hub.learning.ledger.rollback(e["id"], actor="user")

@@ -255,7 +255,7 @@ class MediaBase:
         """Lý do từ chối (chữ hub; tên tệp do người gửi → trong <pre>, escape)."""
         body = "\n".join(f"• {visible(e)}" for e in errors[:10])
         try:
-            await self.bot._send(api, cid, f"<b>[cfharness] Một số tệp/ảnh không gửi được cho điều phối viên:</b>\n<pre>{esc(body)}</pre>",
+            await self.bot._send(api, cid, f"<b>Một số tệp/ảnh không gửi được cho điều phối viên:</b>\n<pre>{esc(body)}</pre>",
                                  html=True, reply_to=reply_to)
         except Exception as e:
             log.warning("không gửi được báo lỗi tệp: %s", clip(e))
@@ -295,7 +295,7 @@ class MediaBase:
                 continue
             name = why
             try:
-                res = await self.bot.send_document(api, chat, name, data, f"[cfharness] 📎 Tệp từ điều phối viên: {visible(name)[:200]}",
+                res = await self.bot.send_document(api, chat, name, data, f"📎 Tệp từ điều phối viên: {visible(name)[:200]}",
                                                    timeout=max(60.0, float(self.bot.cfg().get("timeout_s") or 15)))
             except Exception as e:
                 errors.append(f"{rel}: gửi lỗi ({clip(e, 120)})")
@@ -315,7 +315,7 @@ class MediaBase:
     async def _send_errors_out(self, api: Any, chat: Any, errors: list[str]) -> None:
         body = "\n".join(f"• {visible(e)}" for e in errors[:10])
         try:
-            await self.bot._send(api, chat, f"<b>[cfharness] Không gửi được một số tệp điều phối viên đánh dấu:</b>\n<pre>{esc(body)}</pre>", html=True)
+            await self.bot._send(api, chat, f"<b>Không gửi được một số tệp điều phối viên đánh dấu:</b>\n<pre>{esc(body)}</pre>", html=True)
         except Exception as e:
             log.warning("không gửi được báo lỗi tệp: %s", clip(e))
 
