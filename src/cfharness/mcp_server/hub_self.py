@@ -227,7 +227,13 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                        "budget_usd": {"type": "number"}, "model": _S, "decompose": {"type": "boolean"},
                        "extra_write_roots": {"type": "array", "items": _S, "maxItems": 5,
                                              "description": "extra absolute dirs (inside the allowed workspace roots) the task may write without "
-                                                            "approval, e.g. the separate worktree the agent must work in"}}, ["title", "body"]),
+                                                            "approval. Does NOT release the repo lock: a task whose workspace is a repo another "
+                                                            "open task uses waits for it (workspace_locked)"},
+                       "worktree": {"type": "object", "properties": {"repo": _S, "branch": _S, "base": _S, "path": _S}, "required": ["branch"],
+                                    "description": "run the task in its own git worktree, created by the hub now: repo (default = workspace), "
+                                                   "branch (checked out if it exists, else created from base, default the repo's HEAD), "
+                                                   "path (default <repo parent>/_wt/<repo>-<branch>). The worktree becomes the task's workspace, "
+                                                   "so tasks on the same repo run IN PARALLEL. Use one per parallel task."}}, ["title", "body"]),
     "task_cancel": _t("Cancel a task: stop its running runs (and its subtasks').", {"id": _S}, ["id"]),
     "task_retry": _t("Retry a blocked/failed task.", {"id": _S}, ["id"]),
     "task_comment": _t("Comment on a task (steer=true also sends it to the task's running run).", {"id": _S, "text": _S, "steer": {"type": "boolean"}}, ["id", "text"]),

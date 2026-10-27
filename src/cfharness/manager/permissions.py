@@ -756,6 +756,12 @@ class ManagerPermissions:
                 why = self.check_path(x, "extra_write_roots của task", agent_id=str(t.get("assignee") or "") or None)
                 if why:
                     return why
+            wt = t.get("worktree") if isinstance(t.get("worktree"), dict) else {}
+            for k in ("repo", "path"):
+                if wt.get(k):
+                    why = self.check_path(wt[k], f"worktree.{k} của task", agent_id=str(t.get("assignee") or "") or None)
+                    if why:
+                        return why
             return (self.check_path(t.get("workspace"), "workspace của task", agent_id=str(t.get("assignee") or "") or None)
                     or self.check_run_budget(t))
         if method == "run.start":

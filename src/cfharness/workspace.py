@@ -128,6 +128,52 @@ def git_root(path: str | Path) -> str | None:
     return os.path.realpath(r.stdout.strip())
 
 
+def _same(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+
+def ensure_worktree(hub: Any, repo: str, branch: str, base: str | None = None, path: str | None = None) -> tuple[str, bool]:
+    """Git worktree riêng cho một task (để nhiều task cùng repo chạy SONG SONG: khoá repo tính theo gốc của worktree, không theo
+    repo chính). Trả (đường dẫn, có tạo mới không). Mặc định `<thư mục cha của repo>/_wt/<tên repo>-<nhánh>`.
+    Đã có thư mục: phải là worktree của CÙNG repo và đang ở `branch` thì dùng lại; khác → lỗi (không đụng vào nó).
+    Nhánh đã có → checkout nó (git từ chối nếu nhánh đang mở ở worktree khác); chưa có → tạo từ `base` (mặc định HEAD của repo)."""
+    rp = Path(str(repo)).expanduser()
+    root = git_root(rp)
+    if root is None:
+        raise HubError(f"worktree: '{repo}' không phải repo git")
+    validate_workspace(hub, {"kind": "dir", "path": root}, "repo của worktree")
+    branch = str(branch or "").strip()
+    if not branch or _git(root, "check-ref-format", "--branch", branch).returncode != 0:
+        raise HubError(f"worktree: tên nhánh không hợp lệ: {branch!r}")
+    if path:
+        wp = Path(str(path)).expanduser()
+        if not wp.is_absolute():
+            raise HubError(f"worktree: path phải là đường dẫn tuyệt đối: {path!r}")
+    else:
+        slug = "".join(c if c.isalnum() or c in "-_." else "-" for c in branch.replace("/", "-")).strip("-.")[:80]
+        wp = Path(root).parent / "_wt" / f"{Path(root).name}-{slug}"
+    wp = wp.resolve()
+    validate_workspace(hub, {"kind": "dir", "path": str(wp)}, "thư mục worktree")
+    common = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    if wp.exists():
+        wroot = git_root(wp)
+        wcommon = _git(wp, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip() if wroot else ""
+        cur = _git(wp, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() if wroot else ""
+        if wroot and _same(wroot, str(wp)) and _same(wcommon, common) and cur == branch:
+            return str(wp), False
+        raise HubError(f"worktree: '{wp}' đã tồn tại nhưng không phải worktree của {root} trên nhánh {branch} — chọn path khác")
+    if _git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode == 0:
+        r = _git(root, "worktree", "add", str(wp), branch)
+    else:
+        b = str(base or "HEAD").strip()
+        if _git(root, "rev-parse", "--verify", "-q", f"{b}^{{commit}}").returncode != 0:
+            raise HubError(f"worktree: base không tồn tại: {b!r}")
+        r = _git(root, "worktree", "add", "-b", branch, str(wp), b)
+    if r.returncode != 0:
+        raise HubError(f"worktree: git worktree add thất bại: {(r.stderr or r.stdout).strip()[:300]}")
+    return str(wp), True
+
+
 def _head(root: str) -> tuple[str | None, str | None]:
     h = _git(root, "rev-parse", "--verify", "-q", "HEAD")
     head = h.stdout.strip() if h.returncode == 0 and h.stdout.strip() else None

@@ -174,6 +174,9 @@ def cmd_task(ctx: Any) -> int:
             p["workspace"] = {"kind": "dir", "path": str(Path(a.workspace).expanduser().resolve())}
             if getattr(a, "extra_write_root", None):
                 p["workspace"]["extra_write_roots"] = [str(Path(x).expanduser().resolve()) for x in a.extra_write_root]
+        if getattr(a, "worktree_branch", None):
+            p["worktree"] = {k: v for k, v in {"branch": a.worktree_branch, "base": a.worktree_base,
+                                               "path": str(Path(a.worktree_path).expanduser().resolve()) if a.worktree_path else None}.items() if v}
         if a.decompose is not None:
             p["decompose"] = a.decompose
         if a.schema_file:
@@ -325,6 +328,10 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     c.add_argument("--workspace", help="repo/thư mục làm việc (ghi thẳng, có khoá + checkpoint + diff)")
     c.add_argument("--extra-write-root", action="append", help="thư mục NGOÀI workspace được ghi không cần duyệt (vd worktree của ticket; "
                                                                  "phải nằm trong workspace.allowed_roots; lặp lại)")
+    c.add_argument("--worktree-branch", help="chạy trong git worktree riêng của --workspace (hub tạo ngay) trên nhánh này — "
+                                             "task cùng repo chạy song song")
+    c.add_argument("--worktree-base", help="nhánh/commit gốc khi tạo nhánh mới (mặc định HEAD của repo)")
+    c.add_argument("--worktree-path", help="thư mục worktree (mặc định <cha của repo>/_wt/<repo>-<nhánh>)")
     c.add_argument("--budget", type=float, help="trần USD mỗi run")
     c.add_argument("--model")
     c.add_argument("--max-runtime", type=int, help="giây")

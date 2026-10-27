@@ -277,6 +277,7 @@ def shortcuts_text() -> Text:
 _GLYPH = {
     "running": ("◐", cc.ACCENT),
     "queued": ("○", cc.DIM),
+    "waiting_task": ("○", cc.WARN),
     "approval": ("⚠", cc.WARN),
     "human": ("⚠", cc.WARN),
     "manager": ("◐", cc.PERMISSION),
@@ -313,7 +314,7 @@ def panel_head(mon: G.AgentMonitor, *, focused: bool = False, now: float | None 
     """`2 agent đang chạy · ⚠ 1 chờ bạn duyệt · ↓ để chọn · click để xem`; None khi không có gì."""
     act = mon.active(now)
     c = mon.counts()
-    if not (act or c["approvals_human"] or c["questions_human"] or c["manager"]):
+    if not (act or c["approvals_human"] or c["questions_human"] or c["manager"] or c["tasks_waiting"]):
         return None
     running = sum(1 for s, _ in act if s in ("running", "approval", "human", "manager"))
     queued = sum(1 for s, _ in act if s == "queued")
@@ -322,6 +323,9 @@ def panel_head(mon: G.AgentMonitor, *, focused: bool = False, now: float | None 
     parts: list[tuple[str, str]] = [(f"{running} agent đang chạy", cc.DIM)]
     if queued:
         parts.append((f"{queued} chờ slot", cc.DIM))
+    if c["tasks_waiting"]:
+        why = mon.wait_summary()
+        parts.append((f"{c['tasks_waiting']} task chờ" + (f": {why}" if why else ""), cc.WARN))
     if errors:
         parts.append((f"{errors} lỗi", cc.ERR))
     if c["approvals_human"]:

@@ -28,7 +28,7 @@ from rich.text import Text
 from ..termsafe import clean, one_line
 from ..tui.model import TopModel, cost_cell, fmt_dur, last_tool_cell, parse_ts, short_tool, tok_cell
 from ..ui import theme as th
-from ..web.present import action_view
+from ..web.present import action_view, wait_reason
 from . import chatview as V
 
 ERROR_TTL_S = 600.0  # agent lỗi trong phiên này hiện trong bảng 10 phút (tới khi chạy run mới)
@@ -61,6 +61,7 @@ class AgentMonitor:
         self.routed: dict[str, str] = {}  # approval id → "manager"|"human" theo event delegated/escalated (mới hơn snapshot)
         self.carded: dict[str, str] = {}  # id đã in thẻ → "human"|"manager" (không in lại, chỉ in dòng ngắn)
         self.errors: dict[str, tuple[float, str]] = {}  # agent_id → (lúc lỗi, lỗi) thấy TRONG phiên này
+        self.waiting_tasks: list[dict[str, Any]] = []  # task `ready` chưa claim được (snapshot `waiting_tasks`) — agent nhận vẫn idle
         self.loaded = False
 
     # ------------------------------------------------------------------ nạp
@@ -68,6 +69,9 @@ class AgentMonitor:
         self.model.load(snap)
         for r in self.model.rows.values():
             _scrub(r.data)
+        self.waiting_tasks = [
+            {**t, "title": one_line(t.get("title"), 200)} for t in snap.get("waiting_tasks") or [] if isinstance(t, dict) and t.get("id")
+        ]
         live = {a.get("id") for a in self.model.approvals}
         for k in [k for k in self.routed if k not in live]:
             self.routed.pop(k, None)
@@ -92,10 +96,19 @@ class AgentMonitor:
     def pending_approvals(self) -> list[dict[str, Any]]:
         return sorted(self.model.approvals, key=lambda a: str(a.get("opened_at") or ""))
 
+    def waiting_task(self, agent_id: str) -> dict[str, Any] | None:
+        return next((t for t in self.waiting_tasks if t.get("assignee") == agent_id), None)
+
+    def wait_summary(self) -> str:
+        """Lý do chờ chung của các task chờ (một lý do → chữ của nó; nhiều lý do → rỗng)."""
+        reasons = {str(t.get("wait_reason") or "") for t in self.waiting_tasks}
+        return one_line(wait_reason(reasons.pop()), 60) if len(reasons) == 1 else ""
+
     def counts(self) -> dict[str, int]:
         aps = self.pending_approvals()
         qs = list(self.questions.values())
         return {
+            "tasks_waiting": len(self.waiting_tasks),
             "approvals_human": sum(1 for a in aps if self.approval_route(a) == "human"),
             "questions_human": sum(1 for q in qs if self.question_route(q) == "human"),
             "manager": sum(1 for a in aps if self.approval_route(a) == "manager") + sum(1 for q in qs if self.question_route(q) == "manager"),
@@ -123,12 +136,15 @@ class AgentMonitor:
             return "queued"
         if st == "error":
             e = self.errors.get(r.id)
-            return "error" if e and now - e[0] < ERROR_TTL_S else None
+            if e and now - e[0] < ERROR_TTL_S:
+                return "error"
+        if self.waiting_task(r.id):
+            return "waiting_task"  # agent idle nhưng có task giao cho nó đang kẹt (vd workspace_locked) — không tính "đang chạy"
         return None
 
     def active(self, now: float | None = None) -> list[tuple[str, Any]]:
         now = time.time() if now is None else now
-        order = {"human": 0, "approval": 1, "manager": 2, "running": 3, "queued": 4, "error": 5}
+        order = {"human": 0, "approval": 1, "manager": 2, "running": 3, "queued": 4, "waiting_task": 5, "error": 6}
         out = []
         for r in self.model.rows.values():
             if r.id == self.manager_id:
@@ -239,7 +255,7 @@ def summary_line(mon: AgentMonitor, width: int, *, expanded: bool = False, now: 
     running = sum(1 for s, _ in act if s in ("running", "approval", "human", "manager"))
     queued = sum(1 for s, _ in act if s == "queued")
     errors = sum(1 for s, _ in act if s == "error")
-    if not (act or c["approvals_human"] or c["questions_human"] or c["manager"]):
+    if not (act or c["approvals_human"] or c["questions_human"] or c["manager"] or c["tasks_waiting"]):
         return None
     parts: list[tuple[str, str]] = [(" ", "")]
     if c["approvals_human"]:
@@ -256,6 +272,10 @@ def summary_line(mon: AgentMonitor, width: int, *, expanded: bool = False, now: 
         parts.append((" · ", V.C_DIM))
     if queued:
         parts.append((f"{V.AGENT_STATE['queued'][0]} {queued} chờ slot", V.AGENT_STATE["queued"][2]))
+        parts.append((" · ", V.C_DIM))
+    if c["tasks_waiting"]:
+        why = mon.wait_summary()
+        parts.append((f"{V.AGENT_STATE['waiting_task'][0]} {c['tasks_waiting']} task chờ" + (f": {why}" if why else ""), V.AGENT_STATE["waiting_task"][2]))
         parts.append((" · ", V.C_DIM))
     if errors:
         parts.append((f"{V.AGENT_STATE['error'][0]} {errors} lỗi", V.AGENT_STATE["error"][2]))
@@ -293,6 +313,9 @@ def _task(mon: AgentMonitor, state: str, r: Any) -> str:
         e = mon.errors.get(r.id)
         if e:
             return one_line(e[1], 200)
+    if state == "waiting_task":
+        wt = mon.waiting_task(r.id) or {}
+        return one_line(f"chờ ({wait_reason(wt.get('wait_reason'))}): {wt.get('title') or wt.get('id') or '—'}", 200)
     return one_line(r["task"] or "—", 200)
 
 

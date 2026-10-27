@@ -345,7 +345,7 @@ class ManagerOps:
 
     async def op_task_create(self, a: dict[str, Any]) -> Any:
         t = {k: a[k] for k in ("title", "body", "team", "assignee", "role", "parents", "workspace", "priority", "budget_usd", "model", "decompose",
-                               "extra_write_roots") if a.get(k) is not None}
+                               "extra_write_roots", "worktree") if a.get(k) is not None}
         t["budget_usd"] = self._clamp_budget(t.get("budget_usd"))
         res = await self._rpc("task_create", "task.create", {"task": t, "created_by": self.actor}, a,
                               summary=f"giao task '{str(a.get('title') or '')[:80]}' cho {a.get('assignee') or a.get('team')}")

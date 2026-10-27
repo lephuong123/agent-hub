@@ -186,6 +186,32 @@ class TaskService:
             out.append(str(rp))
         return list(dict.fromkeys(out))
 
+    def _same_lock_tasks(self, path: str, exclude: set[str]) -> list[str]:
+        """Task đang mở dùng cùng khoá repo với `path` (dispatcher không cho chạy cùng lúc — `workspace_locked`). Bỏ task gốc
+        (`root`, không tự chạy) và `exclude` (cha/gốc của task mới: đằng nào cũng chạy sau chúng)."""
+        locks = self.hub.runs.locks
+        key = locks.key_for(path, "dir")
+        if key is None or not self.hub.config.get("guard.repo_lock"):
+            return []
+        keys: dict[str, str | None] = {}
+        out = []
+        for r in self.conn.execute(f"SELECT id, workspace FROM tasks WHERE kind != 'root' AND status IN ({','.join('?' * len(OPEN))}) "
+                                   "ORDER BY created_at DESC LIMIT 200", OPEN):
+            if r[0] in exclude:
+                continue
+            try:
+                ws = json.loads(r[1]) if isinstance(r[1], str) else (r[1] or {})
+            except ValueError:
+                continue
+            wp = (ws or {}).get("path") if (ws or {}).get("kind") == "dir" else None
+            if not wp:
+                continue
+            if wp not in keys:
+                keys[wp] = locks.key_for(wp, "dir")
+            if keys[wp] == key:
+                out.append(r[0])
+        return out
+
     def create(self, data: dict[str, Any], *, created_by: str = "human") -> dict[str, Any]:
         key = data.get("idempotency_key")
         if key:
@@ -218,6 +244,20 @@ class TaskService:
         if ws is None and team is not None:
             ws = self.hub.teams.policies(team).workspace
         warnings: list[str] = []
+        wt = data.get("worktree")
+        if wt:
+            # worktree riêng do hub tạo → workspace dir = worktree: khoá repo theo gốc worktree, chạy song song với task khác cùng repo
+            from .workspace import ensure_worktree
+
+            if not isinstance(wt, dict) or not wt.get("branch"):
+                raise HubError("worktree cần {repo, branch, base?, path?}")
+            repo = wt.get("repo") or (ws or {}).get("path")
+            if not repo:
+                raise HubError("worktree cần repo (hoặc workspace = đường dẫn repo)")
+            wpath, made = ensure_worktree(self.hub, str(repo), str(wt["branch"]), wt.get("base"), wt.get("path"))
+            ws = {"kind": "dir", "path": wpath, **({"extra_write_roots": ws["extra_write_roots"]} if (ws or {}).get("extra_write_roots") else {})}
+            warnings.append(f"{'đã tạo' if made else 'dùng lại'} worktree {wpath} (nhánh {wt['branch']}) — xoá khi ghép xong: "
+                            f"git -C {repo} worktree remove {wpath}")
         if ws and data.get("extra_write_roots") is not None:
             ws = {**ws, "extra_write_roots": data["extra_write_roots"]}
         if ws:
@@ -249,6 +289,11 @@ class TaskService:
                 ws = {**ws, "path": str(p.resolve())}
                 if git_root(p) is None:
                     warnings.append("thư mục không phải repo git: hub chỉ khoá + ghi danh sách file bị sửa, KHÔNG hoàn tác được (run revert)")
+                same = self._same_lock_tasks(str(p.resolve()), set(parents) | {str(data.get("origin_task_id") or "")})
+                if same:
+                    warnings.append(f"cùng thư mục (khoá repo) với task đang mở {', '.join(same[:5])}: task này CHỜ các task đó xong "
+                                    "(workspace_locked), không chạy song song. Muốn song song: tạo task với `worktree` "
+                                    "{repo, branch, base} để hub tạo worktree riêng làm workspace (extra_write_roots không gỡ khoá)")
         overrides = dict(data.get("overrides") or {})
         for k in ("model", "effort", "budget_usd", "max_runtime_s"):
             if data.get(k) is not None:
