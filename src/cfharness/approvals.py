@@ -595,10 +595,13 @@ class ApprovalService:
         now = now or time.time()
         base = float(self.hub.config.get("notify.reminder_interval_s"))
         cap = float(self.hub.config.get("notify.reminder_max_interval_s"))
+        max_n = self.hub.config.get("notify.reminder_max_count")
         out = []
         for r in self.list("pending", limit=1000):
             if r.get("routed_to") == "manager":
                 continue  # đang chờ điều phối viên — người chưa được hỏi (quá hạn → approval.escalated)
+            if isinstance(max_n, int) and int(r.get("reminder_count") or 0) >= max_n:
+                continue  # đã nhắc đủ số lần người đặt — yêu cầu vẫn chờ (Q-04), chỉ thôi làm phiền
             last = _parse_ts(r.get("last_reminded_at")) or _parse_ts(r.get("escalated_at")) or _parse_ts(r["opened_at"]) or now
             interval = min(base * (2 ** int(r.get("reminder_count") or 0)), max(base, cap))
             if now - last < interval:

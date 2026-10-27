@@ -226,6 +226,8 @@ class GuardContext:
     scratch_workspace: bool = False  # cwd của run là scratch của hub (agents/<id>/workspaces/…)
     # Claude in Chrome: None = không xét (guard test không run); False = agent không bật / kill switch tắt → tool chrome bị cấm
     chrome_allowed: bool | None = None
+    trusted_repo_scripts: bool = False  # `node|python <file>` file được git track, sạch, commit trước mốc task → bỏ luật API xoá trong mã
+    task_created_deletes: bool = False  # mốc "file run tự tạo" = run đầu của task (worktree_since); thư mục tạm hệ thống do task tạo
 
     @property
     def home(self) -> str:
@@ -292,9 +294,10 @@ def created_by_run(path: str, ctx: GuardContext) -> bool:
         # xoá cái không tồn tại là vô hại — nhưng chỉ tin điều đó trong workspace của run hoặc /tmp
         cwd = canon_path(str(ctx.cwd)).rstrip("/")
         return bool(_rel_parts(path, cwd)) or _is_tmp(path)
-    if ctx.run_since is None:
+    marks = [x for x in (ctx.run_since, ctx.worktree_since if ctx.task_created_deletes else None) if x is not None]
+    if not marks:
         return False
-    since = ctx.run_since - 1.0
+    since = min(marks) - 1.0
     try:
         st = os.lstat(path)
     except FileNotFoundError:
@@ -305,6 +308,9 @@ def created_by_run(path: str, ctx: GuardContext) -> bool:
     if b is None or b < since:
         return False
     if not os.path.isdir(path) or os.path.islink(path):
+        return True
+    if ctx.task_created_deletes and _in_sys_temp(path) and not _contains_cwd(path, ctx):
+        # thư mục tạm của hệ thống do task tạo (vd bản sao node_modules để chạy test): không duyệt từng file con (thường > max_walk)
         return True
     n = 0
     for root, dirs, files in os.walk(path):
@@ -581,6 +587,30 @@ def _contains(hay: str, needle: str) -> bool:
         return needle in hay
     h = hay.replace("\\", "/").lower()
     return any(n in h for n in {needle.replace("\\", "/").lower(), canon_path(needle).lower()})
+
+
+def _sys_temp_dirs() -> list[str]:
+    import tempfile
+
+    out = []
+    for d in {tempfile.gettempdir(), os.environ.get("TEMP") or "", os.environ.get("TMP") or "", os.environ.get("TMPDIR") or ""}:
+        if d:
+            try:
+                out.append(canon_path(os.path.realpath(d)).rstrip("/"))
+            except (OSError, ValueError):
+                continue
+    return [d for d in dict.fromkeys(out) if d and d.count("/") >= 2]  # không bao giờ nhận gốc ổ/`/`
+
+
+def _in_sys_temp(p: str) -> bool:
+    """`p` nằm BÊN TRONG (không phải chính) thư mục tạm của hệ thống — cả đường dẫn lẫn realpath."""
+    cands = {canon_path(p), _real(p)}
+    return any(c != t and _under(c, t) for t in _sys_temp_dirs() for c in cands) or _is_tmp(p)
+
+
+def _contains_cwd(p: str, ctx: GuardContext) -> bool:
+    cw = {canon_path(str(ctx.cwd)), _real(str(ctx.cwd))}
+    return any(_under(c, x) for c in cw for x in {canon_path(p), _real(p)})
 
 
 def _is_tmp(p: str) -> bool:
@@ -2184,6 +2214,7 @@ class BashAnalyzer:
         code: str | None = None
         dyn = False
         file_arg: shell.Word | None = None
+        repo_script: str | None = None  # tên script đã commit của repo (guard.trusted_repo_scripts)
         i = 0
         while i < len(args):
             t = args[i].text
@@ -2221,6 +2252,8 @@ class BashAnalyzer:
                     code = Path(p).read_text(encoding="utf-8", errors="replace")[:512_000]
                 except OSError:
                     code = None
+                if code is not None and self.ctx.trusted_repo_scripts and self.repo_script_committed(p):
+                    repo_script = os.path.basename(p)
             later = [a.text for a in args[i + 1 :]]
             if os.path.basename(file_arg.text) == "manage.py" and any(t in ("flush", "reset_db", "sqlflush") for t in later):
                 self.hit("destructive", "framework_db_reset", "db", "manage.py flush/reset_db xoá dữ liệu")
@@ -2244,9 +2277,9 @@ class BashAnalyzer:
             inline = True
         if dyn:
             self.hit("uncertain", "interp_dynamic_code", "system", f"{base} với mã động")
-        self.scan_code(base, code, inline=inline)
+        self.scan_code(base, code, inline=inline, repo_script=repo_script)
 
-    def scan_code(self, base: str, code: str, inline: bool = True) -> None:
+    def scan_code(self, base: str, code: str, inline: bool = True, repo_script: str | None = None) -> None:
         """Quét mã trình thông dịch (H-01/H-02/H-03). `inline` = mã nằm ngay trong lệnh (-c/-e/stdin) — đích ghi không
         giải được thì `uncertain`; với file script của run, ghi đích động coi là ghi thường."""
         # --- mặt điều khiển hub (H-01): socket/token/module nội bộ → forbidden; HUB_HOME → giữ chờ người
@@ -2266,7 +2299,11 @@ class BashAnalyzer:
         if rx is None:
             rx = PL_DESTRUCTIVE if base.startswith(("perl", "ruby", "osascript", "php")) else PY_DESTRUCTIVE
         if rx.search(code) or (rx is not PY_DESTRUCTIVE and PY_DESTRUCTIVE.search(code) and base.startswith("python")):
-            self.hit("destructive", "code_delete_api", "file", f"mã {base} gọi API xoá file")
+            if repo_script:
+                # tooling đã commit của repo (không phải mã agent vừa viết): API xoá trong đó là hành vi bình thường của công cụ
+                self.hit("write", "repo_script_run", None, f"{base} chạy script đã commit của repo {repo_script}")
+            else:
+                self.hit("destructive", "code_delete_api", "file", f"mã {base} gọi API xoá file")
         if base == "osascript" and re.search(r"(?i)keychain|security\s+find|password", code):
             self.hit("destructive", "keychain_access", "system", "AppleScript truy cập keychain/mật khẩu (R3-1)", forbidden=True)
         if base == "osascript" and re.search(r"(?i)\b(delete|empty\s+(the\s+)?trash|move\b.*\bto\s+(the\s+)?trash)\b", code):
@@ -2711,6 +2748,26 @@ class BashAnalyzer:
                                   env={**os.environ, **GIT_ENV}, **no_window_kwargs())  # git xuất UTF-8; Windows mặc định cp1252
         except (OSError, subprocess.TimeoutExpired):
             return None
+
+    def repo_script_committed(self, p: str) -> bool:
+        """Script `p` là tooling đã commit của repo: git track, không khác HEAD (cả index lẫn cây làm việc), commit cuối chạm nó
+        TRƯỚC mốc bắt đầu task/session. Mọi lỗi probe / không có mốc → False (giữ luật cũ)."""
+        marks = [x for x in (self.ctx.run_since, self.ctx.worktree_since) if x is not None]
+        if not marks or os.path.islink(p):
+            return False
+        d, name = os.path.dirname(p), os.path.basename(p)
+        r = self._git(d, "ls-files", "--error-unmatch", "--", name)
+        if r is None or r.returncode != 0:
+            return False
+        r = self._git(d, "status", "--porcelain", "--", name)
+        if r is None or r.returncode != 0 or r.stdout.strip():
+            return False
+        r = self._git(d, "log", "-1", "--format=%ct", "--", name)
+        try:
+            ct = float((r.stdout if r is not None and r.returncode == 0 else "").strip())
+        except ValueError:
+            return False
+        return ct < min(marks) - 1.0
 
     def _git_dirty(self, cwd: str | None, paths: list[str] | None = None, tracked_only: bool = False) -> bool | None:
         r = self._git(cwd, "status", "--porcelain", *(["--untracked-files=no"] if tracked_only else []), *(["--", *paths] if paths else []))

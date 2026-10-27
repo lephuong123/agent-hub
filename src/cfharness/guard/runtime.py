@@ -426,8 +426,10 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
 
 
 def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_dir: Path, guard_cfg: dict[str, Any], approval_timeout_s: float,
-                   cwd: Path | None = None, sandbox_overrides: dict[str, Any] | None = None, hook: bool = True) -> dict[str, Any]:
-    """`hook=False` (guard.enabled=false): bỏ hook PreToolUse (không phân loại/hỏi duyệt) nhưng GIỮ `permissions.deny` tĩnh + sandbox OS."""
+                   cwd: Path | None = None, sandbox_overrides: dict[str, Any] | None = None, hook: bool = True, trust_full: bool = False) -> dict[str, Any]:
+    """`hook=False` (guard.enabled=false): bỏ hook PreToolUse (không phân loại/hỏi duyệt) nhưng GIỮ `permissions.deny` tĩnh + sandbox OS.
+    `trust_full` (agent người đặt trust full): GIỮ hook (guard cho phép mọi thứ nhưng vẫn ghi audit, ESTOP vẫn chặn), BỎ `permissions.deny`
+    tĩnh của hub và sandbox OS (`sandbox.enabled=false` để Bash không bị bọc)."""
     s = dict(base)
     if hook:
         cli_t, rpc_t = hook_timeouts(guard_cfg, approval_timeout_s)
@@ -436,6 +438,9 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
         pre.append({"matcher": "*", "hooks": [{"type": "command", "command": hook_command(run_id, socket, rpc_t, guard_cfg), "timeout": cli_t}]})
         hooks["PreToolUse"] = pre
         s["hooks"] = hooks
+    if trust_full:
+        s["sandbox"] = {"enabled": False}
+        return s
     perms = dict(s.get("permissions") or {})
     hub_home = Path(policy_dir).parent
     user_prot = protected_write_paths(hub_home)  # R2-2: tài nguyên NGƯỜI khai báo (vd `.next` prod) → chặn tĩnh tool ghi + sandbox

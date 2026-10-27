@@ -186,6 +186,12 @@ def register_rpc(d: "Daemon") -> None:
                 _id(p), allow_localhost=bool(p.get("allow_localhost")), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
             "guard.sandbox.allow_domain": lambda p: hub.guard.sandbox_allow_domain(
                 _id(p), str(p.get("domain") or ""), remove=bool(p.get("remove")), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+            "guard.sandbox.dev_host": lambda p: hub.guard.sandbox_dev_host(
+                _id(p), str(p.get("host") or ""), remove=bool(p.get("remove")), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+            # trust hoàn toàn theo agent — set chỉ người (auth.HUMAN_ONLY + cổng service), đọc tự do
+            "guard.trust.list": lambda p: hub.guard.trust_all(),
+            "guard.trust.set": lambda p: hub.guard.trust_set(
+                _id(p), str(p.get("mode") or ""), for_s=p.get("for_s"), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
             # MGR-2: mẫu chặn theo repo (người đặt, áp cho mọi agent) — set chỉ người, đọc tự do
             "guard.repo_deny.list": lambda p: hub.guard.policy_store.repo_deny_list(),
             "guard.repo_deny.add": lambda p: _repo_deny_add(hub, p),

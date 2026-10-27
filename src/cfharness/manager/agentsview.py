@@ -395,6 +395,8 @@ def agents_table(mon: AgentMonitor, now: float | None = None, width: int = 120) 
         name = Text(one_line(r["name"] or r.id, 40), style=th.HEAD)
         if r["name"] and r["name"] != r.id:
             name.append(f" {one_line(r.id, 30)}", style=V.C_DIM)
+        if r["trust"]:
+            name.append(" ⚠TRUST", style=th.ERR_STRONG)  # trust full: hub cho phép mọi thao tác, không sandbox (/trust <agent> off)
         tool = last_tool_cell(r, now)
         cells = [Text(f"{icon} {label}", style=style), name, Text(_task(mon, st, r) if st in V.AGENT_STATE else one_line(r["task"] or "—", 200), style=V.C_SOFT),
                  Text(_elapsed(mon, st, r, now) if st in V.AGENT_STATE else "—", style=V.C_MID),

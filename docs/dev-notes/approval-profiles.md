@@ -40,6 +40,8 @@ Xem lại số liệu bất kỳ lúc nào: `cfharness approvals stats [--days 3
 | `approval.checkpoint_auto_allow` | false | true — phá huỷ mà mọi đích nằm trong repo có checkpoint của CHÍNH run và `run revert` khôi phục được (file track ở HEAD lúc checkpoint / có bản lưu / do run tạo sau checkpoint; reset/checkout chỉ khi HEAD chưa đổi) | true |
 | `guard.safe_reset_probe` | false | true — `git reset [-q] --hard <ref>` trong worktree liên kết hoặc scratch: cây sạch (kể cả untracked), không ghi đè file ignore, commit hiện tại còn trên ref khác | true |
 | `guard.own_worktree_writes` | false | true | true |
+| `guard.trusted_repo_scripts` | false | true — `node\|python <script>` đã commit trước task, chưa sửa → API xoá trong mã không tính (trust-and-chat-settings.md) | true |
+| `guard.task_created_deletes` | false | true — xoá thứ do task tạo; thư mục tạm hệ thống do task tạo (trust-and-chat-settings.md) | true |
 | `approval.delegate_to_manager.enabled` | false | true | true |
 | `approval.scratch_auto_allow` | false | false | true — run scratch/worktree của agent có `tool_policy.allow_bypass` (người đặt): phá huỷ lớp file/git mà mọi đích trong cwd → cho phép (NFR-15 không đổi) |
 

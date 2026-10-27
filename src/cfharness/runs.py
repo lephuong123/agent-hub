@@ -428,6 +428,12 @@ class RunManager:
 
                 conn = run_setup(conns)
                 settings = {**settings, **conn["settings_patch"]}
+        # trust full (người đặt theo agent — guard/service.trust_set): bypassPermissions, không sandbox OS, không mẫu chặn tĩnh của hub
+        trust = hub.guard.run_trusted({**run, "run_opts": opts})
+        trusted = trust is not None
+        if trusted:
+            self.hub.publish(make_event("guard.decision", agent["id"], {"tool": "(argv)", "action": "trust_full", "until": trust.get("until"),
+                                                                       "by": trust.get("by")}, run_id=run_id))
         # guard.enabled=false chỉ tắt hook phân loại/hỏi duyệt; permissions.deny tĩnh + sandbox OS vẫn áp (tắt riêng: guard.sandbox.enabled)
         from .guard import runtime as gr
 
@@ -441,6 +447,7 @@ class RunManager:
             cwd=cwd,  # hardening SEC: sandbox không chặn ghi workspace của run
             sandbox_overrides=hub.guard.run_sandbox_overrides(agent["id"]),  # SEC: ngoại lệ theo agent (chỉ người) + host MCP của agent
             hook=guard_on,
+            trust_full=trusted,
         )
         # hardening H-11 (FR-RT-17): hook QUAN SÁT fail-OPEN (PostToolUse/UserPromptSubmit/Stop) — hàm riêng, không đụng
         # phần guard (fail-closed) của settings; tắt bằng runtime.claude.observe_hooks.enabled=false
@@ -497,7 +504,7 @@ class RunManager:
             # lớp tĩnh: mẫu luôn-phá-huỷ; bỏ ĐÚNG mẫu khớp thao tác đã được người duyệt (vé chưa dùng)
             tickets = hub.approvals.unused_tickets(run.get("session_id")) if run.get("resumed_from_session") else []
             repo_deny = hub.guard.repo_deny_patterns(str(cwd))  # MGR-2: mẫu chặn theo repo (người đặt), áp cho mọi agent
-            all_deny = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + gr.static_disallowed(guard_cfg) + repo_deny))
+            all_deny = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + ([] if trusted else gr.static_disallowed(guard_cfg) + repo_deny)))
             keep, removed = gr.strip_for_tickets(all_deny, tickets)
             tp["disallowed_tools"] = keep
             static = keep
@@ -510,7 +517,8 @@ class RunManager:
             if tp.get("permission_mode") not in ("plan", "bypassPermissions") and not opts.get("read_only"):
                 work = list(tp.get("tools") or []) if tp.get("tools") is not None else list(GUARD_OFF_ALLOWED_TOOLS)
                 tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + work))
-            static = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + gr.static_disallowed(guard_cfg) + hub.guard.repo_deny_patterns(str(cwd))))
+            static = list(dict.fromkeys(list(tp.get("disallowed_tools") or [])
+                                        + ([] if trusted else gr.static_disallowed(guard_cfg) + hub.guard.repo_deny_patterns(str(cwd)))))
             tp["disallowed_tools"] = static
         # M3 — hub-self MCP (FR-MS-08): tool task_* theo vai trò, ràng với run_id
         if (run.get("task_id") or is_mgr) and opts.get("hub_self"):
@@ -527,6 +535,8 @@ class RunManager:
                 tp["allowed_tools"] = [x for x in tp.get("allowed_tools") or [] if x not in mgr_deny]
         if opts.get("disallowed_tools"):
             tp["disallowed_tools"] = list(dict.fromkeys(list(tp.get("disallowed_tools") or []) + list(opts["disallowed_tools"])))
+        if trusted and not opts.get("read_only") and tp.get("permission_mode") != "plan":
+            tp["permission_mode"] = "bypassPermissions"
         # M4-A (FR-RT-10): system prompt = quy ước + SOUL + memory snapshot + chỉ mục skill; run resume/fork dùng lại đúng
         # prompt của session (giữ cache). Run review: chỉ MCP hub-self vai trò learning; run có skill: hub-self knowledge.
         from .learning.runtime import apply_mcp as _learning_mcp, system_prompt_for as _learning_prompt
@@ -574,6 +584,7 @@ class RunManager:
             no_session_persistence=bool(opts.get("no_session_persistence")),  # M4-B: run eval
             isolation_overrides=(conn or {}).get("isolation_overrides"),
             allowed_mcp_prefixes=(conn or {}).get("allowed_mcp_prefixes"),
+            trust_full=trusted and tp.get("permission_mode") == "bypassPermissions",
         )
 
     def _agent_mcp_servers(self, agent: dict[str, Any]) -> dict[str, Any]:

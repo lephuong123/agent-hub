@@ -159,7 +159,7 @@ class HtopScreen(Screen):
         return [
             Text(r.id, style=th.MUTED),
             Text.assemble((r["name"] or r.id, th.HEAD), (" ⚠lo" if r["sandbox_localhost"] else "", th.ERR_STRONG),
-                          (" ⚠net" if r["sandbox_domains"] else "", th.ERR_STRONG)),  # SEC: ngoại lệ sandbox loopback / domain mở thêm
+                          (" ⚠net" if r["sandbox_domains"] else "", th.ERR_STRONG), (" ⚠TRUST" if r["trust"] else "", th.ERR_STRONG)),  # SEC: ngoại lệ sandbox loopback / domain mở thêm
             Text(r["team"] or "—", style=th.MUTED),
             status_text(r["status"]),
             task_cell(r),

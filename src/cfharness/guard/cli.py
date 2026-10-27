@@ -91,6 +91,28 @@ def _fmt_s(v: Any) -> str:
     return f"{v:.0f}s" if v < 120 else f"{v / 60:.0f}m" if v < 7200 else f"{v / 3600:.1f}h"
 
 
+def parse_duration(s: str | None) -> float | None:
+    """`90s`, `30m`, `4h`, `2d` hoặc số giây → giây. None/rỗng → None. Sai định dạng → ValueError."""
+    if not s:
+        return None
+    import re
+
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smhd]?)\s*", str(s).lower())
+    if not m:
+        raise ValueError(f"thời hạn không hợp lệ: {s!r} (vd 30m, 4h, 2d)")
+    v = float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+    if v <= 0:
+        raise ValueError("thời hạn phải > 0")
+    return v
+
+
+def trust_text(rows: dict[str, Any]) -> str:
+    if not rows:
+        return "(không agent nào đang trust full)"
+    return "\n".join(f"⚠ {aid}: trust FULL — " + (f"hết hạn {t['until']}" if t.get("until") else "không hết hạn")
+                     + f" (bởi {t.get('by') or '?'} qua {t.get('channel') or '?'}, lúc {t.get('at') or '?'})" for aid, t in sorted(rows.items()))
+
+
 def cmd_approvals_profile(ctx: Any) -> int:
     r = ctx.call("approval.profile")
     lines = [f"approval.profile = {r['profile']}  (đổi — chỉ người: cfharness config set approval.profile strict|balanced|autonomous)"]
@@ -150,8 +172,12 @@ def cmd_guard(ctx: Any) -> int:
         if a.op == "list":
             rows = ctx.call("guard.sandbox.list")
             ctx.out(rows, _table([[k, "localhost/loopback" if v.get("allow_localhost") else "-", ",".join(v.get("allow_domains") or []) or "-",
-                                   v.get("by") or "", v.get("at") or ""] for k, v in rows.items()],
-                                 ["AGENT", "LOOPBACK", "DOMAIN MỞ THÊM", "BỞI", "LÚC"]) if rows else "(không agent nào có ngoại lệ sandbox)")
+                                   ",".join(v.get("dev_hosts") or []) or "-", v.get("by") or "", v.get("at") or ""] for k, v in rows.items()],
+                                 ["AGENT", "LOOPBACK", "DOMAIN MỞ THÊM", "HOST DEV", "BỞI", "LÚC"]) if rows else "(không agent nào có ngoại lệ sandbox)")
+        elif a.op == "dev-host":
+            r = ctx.call("guard.sandbox.dev_host", {"id": a.agent, "host": a.host, "remove": bool(a.remove)})
+            ctx.out(r, (f"agent {a.agent}: đã gỡ host dev {a.host}" if a.remove else
+                        f"⚠ agent {a.agent}: tin host dev {a.host} — WebFetch/Chrome tới host này không hỏi dù trỏ về IP nội bộ; Bash được ra mạng tới nó"))
         elif a.op == "allow-domain":
             r = ctx.call("guard.sandbox.allow_domain", {"id": a.agent, "domain": a.domain, "remove": bool(a.remove)})
             ctx.out(r, (f"agent {a.agent}: đã gỡ domain {a.domain}" if a.remove else
@@ -161,6 +187,22 @@ def cmd_guard(ctx: Any) -> int:
             r = ctx.call("guard.sandbox.set", {"id": a.agent, "allow_localhost": on})
             ctx.out(r, (f"⚠ agent {a.agent}: CHO PHÉP bind cổng local + kết nối loopback trong sandbox (filesystem/Unix socket vẫn chặn)"
                         if on else f"agent {a.agent}: đã gỡ ngoại lệ loopback"))
+        return 0
+    if a.action == "trust":
+        if a.op == "list":
+            rows = ctx.call("guard.trust.list")
+            ctx.out(rows, trust_text(rows))
+            return 0
+        try:
+            for_s = parse_duration(a.for_)
+        except ValueError as e:
+            from ..errors import HubError
+
+            raise HubError(str(e)) from None
+        r = ctx.call("guard.trust.set", {"id": a.op, "mode": a.mode, "for_s": for_s})
+        ctx.out(r, (f"⚠ agent {a.op}: TRUST FULL — hub cho phép mọi thao tác, không sandbox, bypassPermissions"
+                    + (f" tới {r.get('until')}" if r.get("until") else "") + " (áp cho run mới; ESTOP vẫn chặn; audit vẫn ghi)")
+               if a.mode == "full" else f"agent {a.op}: đã tắt trust — guard/sandbox như thường từ run kế tiếp")
         return 0
     if a.action == "repo-deny":
         if a.op == "list":
@@ -283,6 +325,16 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     sad.add_argument("agent")
     sad.add_argument("domain", help="vd github.com, *.cchchn.com, api.example.com:8443")
     sad.add_argument("--remove", action="store_true")
+    sdh = sbs.add_parser("dev-host", help="tin host dev trỏ về IP nội bộ cho agent (WebFetch/Chrome không hỏi SSRF; Bash ra mạng tới host)",
+                         parents=[common])
+    sdh.add_argument("agent")
+    sdh.add_argument("host", help="đúng một tên host, vd gamma-dev.creativeforce.io")
+    sdh.add_argument("--remove", action="store_true")
+    tr = gs.add_parser("trust", help="trust full theo agent (chỉ người): guard cho phép mọi thao tác, không sandbox, bypassPermissions",
+                       parents=[common])
+    tr.add_argument("op", metavar="agent|list", help="id agent, hoặc `list` để xem")
+    tr.add_argument("mode", nargs="?", choices=["full", "off"], default="full")
+    tr.add_argument("--for", dest="for_", help="tự tắt sau (vd 30m, 4h, 2d)")
     rd = gs.add_parser("repo-deny", help="mẫu chặn theo repo (chỉ người): áp cho MỌI agent chạy trong repo (MGR-2)", parents=[common])
     rds = rd.add_subparsers(dest="op", required=True)
     rds.add_parser("list", parents=[common])

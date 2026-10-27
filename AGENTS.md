@@ -53,7 +53,8 @@ Khi nâng phiên bản CLI: ghi fixture mới, thêm contract test, rồi thêm 
 - Persona/SOUL/skill/memory/prompt gửi cho agent: **tiếng Anh**.
 - Lỗi nghiệp vụ ném `HubError`/`NotFound`/`Conflict`/`Blocked` (`errors.py`) → mã JSON-RPC → mã thoát CLI (0/1/2/3).
 - Loại event mới: thêm vào `EVENT_LEVELS` trong `events.py`, cập nhật ánh xạ trong docstring `claude_adapter.py`, và test.
-- Không thêm `--dangerously-skip-permissions`; `bypassPermissions` chỉ khi `tool_policy.allow_bypass` + workspace scratch/worktree (NFR-15, có test).
+- Không thêm `--dangerously-skip-permissions`; `bypassPermissions` chỉ khi `tool_policy.allow_bypass` + workspace scratch/worktree (NFR-15, có test),
+  hoặc agent được NGƯỜI đặt trust full (`guard.trust.set`, `docs/dev-notes/trust-and-chat-settings.md`).
 - Thay đổi schema DB: thêm migration mới vào cuối `MIGRATIONS`.
 - Không commit secret; argv lưu DB đã che (`redact.py`), file runtime 0600 và bị xoá sau run.
 

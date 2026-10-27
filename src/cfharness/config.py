@@ -67,6 +67,12 @@ DEFAULTS: dict[str, Any] = {
         # Edit/Write vào git worktree (cùng repo với cwd của run) do CHÍNH chuỗi run tạo, nằm trong workspace.allowed_roots → `write`.
         # null = theo profile (strict → tắt; vẫn hỏi người như cũ).
         "own_worktree_writes": None,
+        # `node|python <script>` mà script được git track, chưa sửa so với HEAD và commit TRƯỚC khi task bắt đầu (tooling của repo,
+        # không phải mã agent vừa viết) → API xoá trong mã không làm lệnh thành `destructive`. null = theo profile (strict → tắt).
+        "trusted_repo_scripts": None,
+        # Xoá file/thư mục do CHUỖI RUN CỦA TASK tạo (không chỉ session hiện tại) → `write`; thư mục trong thư mục tạm của hệ thống
+        # (%TEMP%, $TMPDIR) mà chính nó được tạo sau khi task bắt đầu → `write` không cần duyệt từng file con. null = theo profile.
+        "task_created_deletes": None,
         # WEB-1: WebFetch/curl — SSRF (loopback/RFC1918/link-local/CGNAT/metadata/IPv6, scheme, user:pass@) luôn chặn; DNS phân giải
         # trong daemon, mọi IP phải công khai (không phân giải được → giữ chờ người). Glob domain: deny → chặn thẳng;
         # allow (rỗng = mọi domain công khai) → ngoài danh sách giữ chờ người (WebFetch; Bash đã có sandbox.allowed_domains).
@@ -142,6 +148,7 @@ DEFAULTS: dict[str, Any] = {
     "notify": {
         "reminder_interval_s": 900,  # FR-SG-09: nhắc lại mỗi 15 phút…
         "reminder_max_interval_s": 7200,  # …giãn dần tới 2 giờ
+        "reminder_max_count": None,  # số lần nhắc tối đa cho mỗi yêu cầu duyệt (null = không giới hạn, 0 = không nhắc)
         "repeated_failure_threshold": 3,  # run lỗi liên tiếp → thông báo
         "slack": {
             "enabled": True,  # tắt êm nếu chưa có URL/token
@@ -645,7 +652,8 @@ def validate_setting(key: str, value: Any) -> None:
         from .guard.url_safety import validate_setting as _validate_web
 
         _validate_web(key, value)
-    if key == "approval" or key.startswith("approval.") or key in ("guard", "guard.hold_uncertain", "guard.safe_reset_probe", "guard.own_worktree_writes"):
+    if key == "approval" or key.startswith("approval.") or key in ("guard", "guard.hold_uncertain", "guard.safe_reset_probe", "guard.own_worktree_writes",
+                                                                     "guard.trusted_repo_scripts", "guard.task_created_deletes"):
         from .guard.profiles import validate_setting as _validate_profile
 
         _validate_profile(key, value)
@@ -656,6 +664,9 @@ def validate_setting(key: str, value: Any) -> None:
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")
+    if key == "notify.reminder_max_count":
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+            raise ValueError("notify.reminder_max_count phải là số nguyên ≥ 0 hoặc null")
     if key == "hub.max_concurrent_runs":
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise ValueError("hub.max_concurrent_runs phải là số nguyên ≥ 1")
