@@ -1,5 +1,5 @@
 {#- Macro dùng chung (UX v2). Mọi chữ do agent viết: autoescape, không |safe. Icon = sprite tĩnh /static/icons.svg (chữ của hub). -#}
-{% macro icon(name, cls="") -%}<svg class="ic {{ cls }}" aria-hidden="true" focusable="false"><use href="/static/icons.svg#i-{{ name }}"></use></svg>{%- endmacro %}
+{% macro icon(name, cls="") -%}<svg class="ic {{ cls }}" aria-hidden="true" focusable="false"><use href="{{ static('icons.svg') }}#i-{{ name }}"></use></svg>{%- endmacro %}
 
 {% macro act(name, label, fields={}, cls="btn", confirm=None, note=None, next=None, title=None, ic=None) -%}
 <form method="post" action="/do/{{ name }}" class="inline"{% if confirm %} data-confirm="{{ confirm }}"{% endif %}{% if note %} data-note="{{ note }}"{% endif %}>

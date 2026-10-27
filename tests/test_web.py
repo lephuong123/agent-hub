@@ -226,7 +226,12 @@ async def test_security_headers_and_no_cors(env):
     html = r.text
     assert not re.search(r"<script(?![^>]*\bsrc=)[^>]*>", html)
     assert "cdn" not in html.lower() and "unpkg" not in html.lower()
-    assert re.search(r'src="/static/htmx-2\.0\.4\.min\.js"', html)
+    assert re.search(r'src="/static/htmx-2\.0\.4\.min\.js\?v=[0-9a-f]+"', html)
+    # tài nguyên tĩnh mang phiên bản theo mtime + luôn hỏi lại server → bản cập nhật (app.js…) có hiệu lực ngay, không kẹt cache
+    m = re.search(r'src="(/static/app\.js\?v=[0-9a-f]+)"', html)
+    assert m and re.search(r'href="/static/app\.css\?v=[0-9a-f]+"', html)
+    r = await env.client.get(m.group(1))
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache" and r.headers.get("etag")
 
 
 async def test_human_token_never_in_html_or_logs(held, caplog):

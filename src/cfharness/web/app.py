@@ -163,8 +163,9 @@ class GuardMiddleware:
                 h = list(msg.get("headers") or [])
                 names = {k.lower() for k, _ in h}
                 h += [(k, v) for k, v in SECURITY_HEADERS if k not in names]
-                if not path.startswith("/static/") and b"cache-control" not in names:
-                    h.append((b"cache-control", b"no-store"))
+                if b"cache-control" not in names:
+                    # tĩnh: luôn hỏi lại server (ETag → 304) để bản cập nhật có hiệu lực ngay; còn lại: không lưu
+                    h.append((b"cache-control", b"no-cache" if path.startswith("/static/") else b"no-store"))
                 msg = {**msg, "headers": h}
             await send(msg)
 
@@ -1256,13 +1257,22 @@ def _mcp_routes() -> list[Any]:
     return _r()
 
 
+def static_url(name: str) -> str:
+    """`/static/<name>?v=<mtime>` — đổi tệp là đổi URL, trình duyệt không dùng lại bản cũ trong cache."""
+    try:
+        v = format(int((HERE / "static" / name).stat().st_mtime), "x")
+    except OSError:
+        return f"/static/{name}"
+    return f"/static/{name}?v={v}"
+
+
 def make_templates() -> Jinja2Templates:
     t = Jinja2Templates(directory=str(HERE / "templates"))
     env = t.env
     env.autoescape = True
     env.globals.update({"agent_status": P.agent_status, "run_status": P.run_status, "task_status": lambda s: P.TASK_STATUS.get(s or "", (s or "—", "muted")),
                         "is_live_run": P.is_live_run, "action_view": P.action_view, "wait_reason": P.wait_reason, "tokens_of": P.tokens_of, "TASK_COLUMNS": P.TASK_COLUMNS,
-                        "question_view": P.question_view, "run_title": P.run_title})
+                        "question_view": P.question_view, "run_title": P.run_title, "static": static_url})
     env.filters.update({"cost": P.fmt_cost, "tok": P.fmt_tokens, "dur": P.fmt_dur, "ts": P.fmt_ts, "ago": P.ago, "first": P.first_line,
                         "tool": P.short_tool, "md": lambda s: Markup(P.md(s)), "usd": lambda v: "—" if v is None else f"${float(v):.4f}",
                         "j": lambda v: json.dumps(v, ensure_ascii=False, indent=2, default=str), "iso": P.iso_ts, "avatar": P.avatar_tone})

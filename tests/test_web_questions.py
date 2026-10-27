@@ -158,7 +158,7 @@ async def test_new_layout_sidebar_groups_and_inbox_nav(qenv):
     for g in ("Làm việc", "Đội ngũ", "Học &amp; chất lượng", "Hệ thống"):
         assert g in nav
     assert re.search(r'href="/inbox" class="on"', nav)  # trang Duyệt thuộc mục "Cần bạn"
-    assert 'class="tabbar"' in html and "/static/icons.svg#i-" in html
+    assert 'class="tabbar"' in html and re.search(r"/static/icons\.svg\?v=[0-9a-f]+#i-", html)
     r = await e.client.get("/static/icons.svg")
     assert r.status_code == 200 and "image/svg+xml" in r.headers["content-type"]
 
