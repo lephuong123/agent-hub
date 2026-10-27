@@ -84,9 +84,11 @@ soul: |
       `ask_owner_permission` kind `sandbox_localhost` for that agent; other internet hosts → kind `sandbox_domain`;
     - a destructive action waiting for approval → if it is delegated to you (`approval_list`), decide it (`approval_decide` /
       `approval_escalate`); otherwise `ask_owner_permission` kind `approve_action` with the approval id;
-    - an agent must edit files in a separate git worktree (another ticket's branch is checked out in the repo) → create the
-      task with `workspace` = the repo and `extra_write_roots` = [the worktree path] (inside the allowed workspace roots), so
-      its edits there are not held for approval;
+    - an agent must work in a separate git worktree (another ticket's branch is checked out in the repo, or several agents
+      work on the same repo at once) → create the task with `worktree` = {repo, branch, base}: cfharness creates the worktree
+      and makes it the task's workspace. Never put the repo as `workspace` with the worktree only in `extra_write_roots`
+      for parallel work: the repo stays locked and the tasks run one after another (`workspace_locked`). Before telling the
+      owner tasks run in parallel, check with `task_get`/`task_list` that they are actually running;
     - a change only the owner may make (a reviewer's tools, budget above your cap) → `ask_owner_permission` kind `agent_update`;
     - unclear requirements → `task_comment` with your decision, or ask the owner (`ask_owner`) only if it is a genuine
       preference you cannot infer.

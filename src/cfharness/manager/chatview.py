@@ -50,6 +50,7 @@ _QUEUED = th.STATUS["run"]["queued"]
 AGENT_STATE: dict[str, tuple[str, str, str]] = {
     "running": (_AG["working"].icon, "đang chạy", _AG["working"].style),
     "queued": (_QUEUED.icon, "chờ slot", _QUEUED.style),
+    "waiting_task": (_QUEUED.icon, "task đang chờ", _QUEUED.style),
     "approval": (_AG["waiting"].icon, "chờ duyệt", _AG["waiting"].style),
     "human": (_AG["waiting_human"].icon, "chờ bạn duyệt", _AG["waiting_human"].style),
     "manager": (_AG["waiting"].icon, "điều phối viên đang xử lý", th.MGR),

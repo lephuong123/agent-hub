@@ -174,7 +174,7 @@ def test_agents_table_fits_width(width):
 def test_routed_to_manager_no_bell_and_no_badge():
     m = G.AgentMonitor("boss")
     m.load_snapshot(snap([agent("w", "waiting")], [ap("ap_m", "w", routed_to="manager")]))
-    assert m.counts() == {"approvals_human": 0, "questions_human": 0, "manager": 1}
+    assert m.counts() == {"approvals_human": 0, "questions_human": 0, "manager": 1, "tasks_waiting": 0}
     assert m.state(m.model.rows["w"]) == "manager"
     s = G.summary_line(m, 200).plain
     assert "chờ bạn duyệt" not in s and "◐ 1 điều phối viên đang xử lý" in s
@@ -210,7 +210,7 @@ def test_question_routing():
     m.load_questions([{"id": "q_m", "agent_id": "w", "status": "with_manager", "routed_to": "manager", "text": "?"},
                       {"id": "q_h", "agent_id": "w", "status": "open", "routed_to": "human", "text": "?"},
                       {"id": "q_x", "status": "answered"}])
-    assert m.counts() == {"approvals_human": 0, "questions_human": 1, "manager": 1}
+    assert m.counts() == {"approvals_human": 0, "questions_human": 1, "manager": 1, "tasks_waiting": 0}
     n, _ = m.apply({"type": "question.open", "agent_id": "w", "payload": {"question_id": "q_n", "status": "with_manager", "routed_to": "manager", "text": "a?"}})
     assert n[0]["kind"] == "question" and n[0]["bell"] is False
     n, _ = m.apply({"type": "question.escalated", "agent_id": "w", "payload": {"question_id": "q_n", "status": "open", "routed_to": "human", "text": "a?"}})

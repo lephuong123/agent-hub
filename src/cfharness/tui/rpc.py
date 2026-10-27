@@ -216,7 +216,16 @@ def snapshot(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
         "subscribers": st["subscribers"],
         "version": st["version"],
     }
-    return {"hub": header, "agents": rows, "approvals": approvals, "epoch": hub.bus.epoch, "last_seq": hub.bus.last_seq, "server_ts": iso()}
+    # task `ready` không claim được (wait_reason: workspace_locked, agent_busy…) — agent nhận nó vẫn idle nên bảng agent không thấy
+    waiting_tasks = [
+        {"id": r["id"], "title": _first_line(r["title"]), "assignee": r["assignee_agent_id"], "team_id": r["team_id"], "wait_reason": r["wait_reason"]}
+        for r in store.conn.execute(
+            "SELECT id, title, assignee_agent_id, team_id, wait_reason FROM tasks WHERE status='ready' AND wait_reason IS NOT NULL "
+            "ORDER BY updated_at LIMIT 100"
+        )
+    ]
+    return {"hub": header, "agents": rows, "approvals": approvals, "waiting_tasks": waiting_tasks, "epoch": hub.bus.epoch,
+            "last_seq": hub.bus.last_seq, "server_ts": iso()}
 
 
 def register_rpc(d: "Daemon") -> None:
