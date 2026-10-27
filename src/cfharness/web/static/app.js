@@ -365,6 +365,83 @@
       mes.onmessage = function (ev) { var m; try { m = JSON.parse(ev.data); } catch (_) { return; } if (m.t === "end") { mes.close(); return; } handle(m); };
     }
     if (mform && window.fetch && window.FormData) {
+      // ---- đính kèm: nút 📎 (input file), kéo–thả vào ô nhập, dán ảnh. Giới hạn = của daemon; server kiểm lại theo nội dung.
+      var IMG_TYPES = { "image/png": 1, "image/jpeg": 1, "image/gif": 1, "image/webp": 1 };
+      var MAX_IMG = 4, MAX_DOC = 4, IMG_BYTES = 5 * 1024 * 1024, DOC_BYTES = 10 * 1024 * 1024;
+      var picked = [];
+      var finput = document.getElementById("mgr-file");
+      var flist = document.getElementById("mgr-files");
+      function isImg(f) { return !!IMG_TYPES[(f.type || "").toLowerCase()]; }
+      function human(n) { return n < 1024 ? n + " B" : n < 1048576 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB"; }
+      function showErr(msg) { if (merr) { merr.textContent = msg; merr.hidden = !msg; } }
+      function drawFiles() {
+        if (!flist) return;
+        flist.textContent = "";
+        flist.hidden = !picked.length;
+        picked.forEach(function (f, i) {
+          var li = document.createElement("li");
+          if (isImg(f) && window.FileReader) {
+            var im = document.createElement("img"); im.alt = "";
+            var rd = new FileReader(); rd.onload = function () { im.src = rd.result; }; rd.readAsDataURL(f);
+            li.appendChild(im);
+          } else {
+            var ic = document.createElement("span"); ic.className = "fi-ic";
+            var dot = f.name.lastIndexOf("."); ic.textContent = dot > 0 ? f.name.slice(dot + 1, dot + 5) : "txt";
+            li.appendChild(ic);
+          }
+          var nm = document.createElement("span"); nm.className = "fi-name"; nm.textContent = f.name; nm.title = f.name; li.appendChild(nm);
+          var sz = document.createElement("span"); sz.className = "fi-size"; sz.textContent = human(f.size); li.appendChild(sz);
+          var x = document.createElement("button"); x.type = "button"; x.textContent = "×"; x.title = "Bỏ " + f.name; x.setAttribute("aria-label", "Bỏ " + f.name);
+          x.addEventListener("click", function () { picked.splice(i, 1); drawFiles(); });
+          li.appendChild(x);
+          flist.appendChild(li);
+        });
+      }
+      function addFiles(list) {
+        var errs = [];
+        for (var i = 0; i < list.length; i++) {
+          var f = list[i];
+          if (!f || !f.size) { if (f) errs.push(f.name + ": tệp rỗng"); continue; }
+          var img = isImg(f);
+          var n = picked.filter(function (p) { return isImg(p) === img; }).length;
+          if (img && f.size > IMG_BYTES) { errs.push(f.name + ": ảnh quá lớn (tối đa 5 MB)"); continue; }
+          if (!img && f.size > DOC_BYTES) { errs.push(f.name + ": tệp quá lớn (tối đa 10 MB)"); continue; }
+          if (n >= (img ? MAX_IMG : MAX_DOC)) { errs.push("tối đa " + (img ? MAX_IMG + " ảnh" : MAX_DOC + " tệp") + " mỗi tin — bỏ " + f.name); continue; }
+          picked.push(f);
+        }
+        drawFiles();
+        showErr(errs.join("; "));
+      }
+      if (finput) finput.addEventListener("change", function () { addFiles(finput.files); finput.value = ""; });
+      var attachBtn = document.getElementById("mgr-attach");
+      if (attachBtn && finput) attachBtn.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); finput.click(); }
+      });
+      var dropT = 0;
+      mform.addEventListener("dragover", function (e) {
+        if (!e.dataTransfer || Array.prototype.indexOf.call(e.dataTransfer.types || [], "Files") < 0) return;
+        e.preventDefault(); mform.classList.add("drop"); clearTimeout(dropT);
+        dropT = setTimeout(function () { mform.classList.remove("drop"); }, 150);
+      });
+      mform.addEventListener("drop", function (e) {
+        if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+        e.preventDefault(); mform.classList.remove("drop"); addFiles(e.dataTransfer.files);
+      });
+      if (mtext) mtext.addEventListener("paste", function (e) {
+        var fs = e.clipboardData && e.clipboardData.files;
+        if (!fs || !fs.length) return;  // dán chữ: để trình duyệt tự xử lý
+        e.preventDefault();
+        var out = [];
+        for (var i = 0; i < fs.length; i++) {
+          var f = fs[i];
+          // ảnh chụp màn hình dán vào thường tên "image.png" → đặt tên dễ phân biệt
+          if (isImg(f) && /^image\.\w+$/.test(f.name) && window.File) {
+            try { f = new File([f], "anh-dan-" + (picked.length + out.length + 1) + "." + f.name.split(".").pop(), { type: f.type }); } catch (_) {}
+          }
+          out.push(f);
+        }
+        addFiles(out);
+      });
       if (mtext) mtext.addEventListener("keydown", function (e) {
         // Enter gửi; Shift+Enter xuống dòng; không gửi khi đang gõ dấu (IME)
         if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); if (mform.requestSubmit) mform.requestSubmit(); else mform.submit(); }
@@ -378,11 +455,14 @@
       });
       mform.addEventListener("submit", function (e) {
         e.preventDefault();  // khoá phiên `k` đã được gắn ở pha capture (trên)
-        if (!mtext.value.trim()) return;
+        if (!mtext.value.trim() && !picked.length) return;
         var btn = mform.querySelector("button[type=submit]");
         if (btn) btn.disabled = true;
         if (merr) merr.hidden = true;
-        fetch(mform.getAttribute("action"), { method: "POST", body: new FormData(mform), credentials: "same-origin", headers: { "X-Ahub-Fetch": "1" } })
+        var fd = new FormData(mform);
+        fd.delete("attach");
+        picked.forEach(function (f) { fd.append("attach", f, f.name); });
+        fetch(mform.getAttribute("action"), { method: "POST", body: fd, credentials: "same-origin", headers: { "X-Ahub-Fetch": "1" } })
           .then(function (resp) { return resp.json().catch(function () { return { error: "Lỗi " + resp.status }; }); })
           .then(function (j) {
             if (j.error) { if (merr) { merr.textContent = j.error; merr.hidden = false; } return; }
@@ -399,6 +479,7 @@
               track(j.run_id);
             }
             mtext.value = ""; autoGrow(mtext);
+            picked = []; drawFiles();
           })
           .catch(function () { if (merr) { merr.textContent = "Không gửi được — kiểm tra kết nối rồi thử lại."; merr.hidden = false; } })
           .then(function () { if (btn) btn.disabled = false; mtext.focus(); });

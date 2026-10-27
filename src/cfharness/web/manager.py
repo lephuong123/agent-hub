@@ -8,6 +8,8 @@ RPC dùng (hợp đồng `docs/plan/M7-manager.md`, MGR-CORE cung cấp): `manag
   + form chỉ định (action `manager_set`, HUMAN_ONLY, hộp xác nhận).
 - `POST /manager/send`: `post_guard` (CSRF + Origin + khoá phiên WT-1) → `manager.chat(channel=web)` (`_audit.channel=web`).
   Có header `X-Ahub-Fetch` (app.js) → JSON (mục đã vẽ sẵn phía server); không → 303 về trang (form thuần).
+  Đính kèm (multipart, trường `attach`, chọn bằng nút 📎 / kéo–thả / dán ảnh): ảnh PNG/JPEG/GIF/WebP (nhận theo magic bytes) → `images`,
+  tệp văn bản UTF-8 → `files`; PDF/Office/nhị phân → báo lỗi, KHÔNG gửi gì. Giới hạn = của daemon (`manager/service.py`), daemon kiểm lại.
 - `GET /sse/manager?since=&epoch=`: luồng JSON `{t: delta|reply|action|run_end|tick}`; mục HTML vẽ phía server bằng macro autoescape.
 - `GET /partials/manager`: khung trạng thái (htmx làm mới).
 Mọi chữ của điều phối viên là DỮ LIỆU: autoescape + `white-space: pre-wrap`, không markdown/HTML thô (test XSS).
@@ -15,6 +17,7 @@ Mọi chữ của điều phối viên là DỮ LIỆU: autoescape + `white-spac
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 
@@ -30,6 +33,49 @@ from .app import CHANNEL, _stream, err_text, flash_redirect, post_guard, render,
 HISTORY_LIMIT = 200
 ACTIONS_SCAN = 3000  # số event gần nhất của điều phối viên quét để lấy thẻ `manager.action`
 MAX_TEXT = 8000
+ATTACH_FIELD = "attach"
+
+
+async def _attachments(form: Any) -> tuple[list[dict[str, str]], list[dict[str, str]], list[str], list[str]]:
+    """Tệp đính kèm của form → (ảnh, tệp văn bản — dạng `{name, data_b64}` cho `manager.chat`, tên hiển thị, lỗi).
+    Phân loại theo NỘI DUNG (magic bytes ảnh; còn lại phải là UTF-8 không NUL), không tin đuôi/MIME trình duyệt."""
+    from ..manager.service import FILE_MAX_BYTES, FILE_MAX_COUNT, IMAGE_MAX_BYTES, IMAGE_MAX_COUNT, _image_ext
+
+    images: list[dict[str, str]] = []
+    files: list[dict[str, str]] = []
+    names: list[str] = []
+    errors: list[str] = []
+    for up in form.getlist(ATTACH_FIELD):
+        if isinstance(up, str) or not getattr(up, "filename", None):
+            continue  # ô chọn tệp rỗng (form thuần không chọn gì) gửi một phần tên rỗng
+        name = str(up.filename)
+        data = await up.read(FILE_MAX_BYTES + 1)
+        if not data:
+            errors.append(f"{name}: tệp rỗng")
+            continue
+        if _image_ext(data):
+            if len(data) > IMAGE_MAX_BYTES:
+                errors.append(f"{name}: ảnh quá lớn (tối đa {IMAGE_MAX_BYTES // 1024 // 1024} MB)")
+                continue
+            lst, cap, what = images, IMAGE_MAX_COUNT, "ảnh"
+        else:
+            if len(data) > FILE_MAX_BYTES:
+                errors.append(f"{name}: tệp quá lớn (tối đa {FILE_MAX_BYTES // 1024 // 1024} MB)")
+                continue
+            try:
+                ok = b"\x00" not in data and bool(data.decode("utf-8"))
+            except UnicodeDecodeError:
+                ok = False
+            if not ok:
+                errors.append(f"{name}: chưa hỗ trợ loại tệp này (chỉ ảnh PNG/JPEG/GIF/WebP và tệp văn bản UTF-8)")
+                continue
+            lst, cap, what = files, FILE_MAX_COUNT, "tệp văn bản"
+        if len(lst) >= cap:
+            errors.append(f"tối đa {cap} {what} mỗi tin — bỏ {name}")
+            continue
+        lst.append({"name": name, "data_b64": base64.b64encode(data).decode("ascii")})
+        names.append(name)
+    return images, files, names, errors
 
 
 async def mgr_state(request: Request) -> dict[str, Any]:
@@ -183,13 +229,20 @@ async def manager_send(request: Request) -> Response:
             return JSONResponse({"error": msg}, status_code=code)
         return flash_redirect(request, back, "error", msg)
 
-    if not text:
+    images, files, names, errors = await _attachments(form)
+    if errors:
+        return fail("Không gửi được tệp đính kèm — " + "; ".join(errors))
+    if not text and not names:
         return fail("Chưa nhập nội dung")
     if len(text) > MAX_TEXT:
         return fail(f"Tin quá dài ({len(text)} ký tự, tối đa {MAX_TEXT})")
     params: dict[str, Any] = {"channel": CHANNEL, "text": text}
     if cid:
         params["conversation_id"] = cid
+    if images:
+        params["images"] = images
+    if files:
+        params["files"] = files
     try:
         res = await rpc(request, "manager.chat", params, audit=True) or {}
     except RpcError as e:
@@ -201,7 +254,7 @@ async def manager_send(request: Request) -> Response:
     conv, run_id = res.get("conversation_id") or cid, res.get("run_id")
     if want_json:
         mod = _mod(request)
-        user = {"kind": "user", "text": text, "ts": None, "run_id": run_id}
+        user = {"kind": "user", "text": (text + (f"\n📎 {', '.join(names)}" if names else "")).strip(), "ts": None, "run_id": run_id}
         return JSONResponse({"conversation_id": conv, "run_id": run_id, "steered": bool(res.get("steered")), "html_user": str(mod.item(user)),
                              "html_pending": str(mod.pending(run_id)) if run_id else ""})
     return RedirectResponse(f"/manager?c={conv}" + (f"&run={run_id}" if run_id else ""), status_code=303)

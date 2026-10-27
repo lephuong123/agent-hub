@@ -7,6 +7,7 @@ trả lời (XSS) cài stub bắt buộc (`force=True`). Không gọi `claude`.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import re
 
@@ -159,6 +160,55 @@ async def test_send_guards_and_errors(menv):
     r = await menv.post("/manager/send", {"text": "   "}, headers={"X-Ahub-Fetch": "1"})
     assert r.status_code == 400
     assert (await c.get("/sse/manager")).status_code == 404  # chưa có điều phối viên
+
+
+# =========================================================================== đính kèm (nút 📎 / kéo–thả / dán ảnh)
+PNG_1PX = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6300010000050001"
+                        "0d0a2db40000000049454e44ae426082")
+
+
+async def post_files(e, files: list[tuple[str, bytes, str]], text: str = "", conv: str | None = None):
+    data = {"csrf": e.csrf, "k": e.key, "text": text, **({"c": conv} if conv else {})}
+    return await e.client.post("/manager/send", data=data, files=[("attach", f) for f in files], headers={"X-Ahub-Fetch": "1"})
+
+
+async def test_send_with_image_and_text_file_attachments(menv):
+    await menv.login()
+    await designate(menv)
+    seen: list[dict] = []
+    orig = menv.d.methods["manager.chat"]
+
+    def spy(p):  # ghi lại tham số web gửi daemon; chỉ chuyển tiếp phần chữ (test không phụ thuộc cách daemon lưu tệp)
+        seen.append(dict(p))
+        return orig({**{k: v for k, v in p.items() if k not in ("images", "files")}, "text": p.get("text") or "(xem tệp đính kèm)"})
+
+    menv.d.methods["manager.chat"] = spy
+    md = "# Kế hoạch\nviệc 1".encode()
+    r = await post_files(menv, [("chup man hinh.png", PNG_1PX, "image/png"), ("ghi chú.md", md, "text/markdown")], text="xem giúp tôi")
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert "chup man hinh.png" in j["html_user"] and "ghi chú.md" in j["html_user"]
+    p = seen[-1]
+    assert p["channel"] == "web" and p["text"] == "xem giúp tôi"
+    assert [i["name"] for i in p["images"]] == ["chup man hinh.png"] and base64.b64decode(p["images"][0]["data_b64"]) == PNG_1PX
+    assert [f["name"] for f in p["files"]] == ["ghi chú.md"] and base64.b64decode(p["files"][0]["data_b64"]) == md
+    # chỉ ảnh, không chữ → vẫn gửi (daemon tự điền nội dung)
+    r = await post_files(menv, [("a.png", PNG_1PX, "image/png")], conv=j["conversation_id"])
+    assert r.status_code == 200, r.text
+    assert seen[-1]["text"] == "" and len(seen[-1]["images"]) == 1 and "files" not in seen[-1]
+
+
+async def test_unsupported_or_oversized_attachment_rejected_before_daemon(menv):
+    await menv.login()
+    await designate(menv)
+    r = await post_files(menv, [("bao-cao.pdf", b"%PDF-1.7\n\x00\xff\xfe binary", "application/pdf")], text="đọc giúp")
+    assert r.status_code == 400 and "chưa hỗ trợ" in r.json()["error"]
+    # đuôi .png nhưng nội dung không phải ảnh, cũng không phải UTF-8 → từ chối (phân loại theo nội dung, không theo tên)
+    r = await post_files(menv, [("gia.png", b"\xff\x00\x01 nope", "image/png")])
+    assert r.status_code == 400
+    r = await post_files(menv, [(f"{i}.png", PNG_1PX, "image/png") for i in range(5)])
+    assert r.status_code == 400 and "tối đa 4 ảnh" in r.json()["error"]
+    assert not menv.hub.store.list_runs(agent_id="boss")  # không gửi gì khi có tệp hỏng
 
 
 # =========================================================================== XSS — nội dung điều phối viên là dữ liệu

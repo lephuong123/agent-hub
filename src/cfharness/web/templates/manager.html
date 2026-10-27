@@ -55,12 +55,15 @@
       {% if pending %}{{ mg.pending(pending) }}{% endif %}
     </div>
     <div class="composer-wrap">
-      <form method="post" action="/manager/send" class="mgr-form" id="mgr-form">
+      <form method="post" action="/manager/send" class="mgr-form" id="mgr-form" enctype="multipart/form-data">
         <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="c" value="{{ conv or '' }}">
         <label class="sr-only" for="mgr-text">Tin nhắn cho điều phối viên</label>
-        <textarea id="mgr-text" name="text" rows="1" required maxlength="8000" placeholder="Nhắn điều phối viên…"></textarea>
+        <ul class="mgr-files" id="mgr-files" hidden aria-label="Tệp đính kèm"></ul>
+        <textarea id="mgr-text" name="text" rows="1" maxlength="8000" placeholder="Nhắn điều phối viên…"></textarea>
         <div class="composer-bar">
-          <span class="composer-hint">Enter để gửi · Shift+Enter xuống dòng</span>
+          <input type="file" id="mgr-file" name="attach" multiple class="sr-only" tabindex="-1">
+          <label for="mgr-file" class="btn ghost sm icon attach" id="mgr-attach" title="Đính kèm ảnh hoặc tệp văn bản (hoặc kéo–thả, dán ảnh)" tabindex="0" role="button">{{ mc.icon('clip') }}<span class="sr-only">Đính kèm tệp</span></label>
+          <span class="composer-hint">Enter để gửi · Shift+Enter xuống dòng · kéo–thả hoặc dán ảnh để đính kèm</span>
           <button class="btn primary send" type="submit" title="Gửi" aria-label="Gửi">{{ mc.icon('arrow-up') }}<span class="sr-only">Gửi</span></button>
         </div>
       </form>

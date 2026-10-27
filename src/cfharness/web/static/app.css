@@ -642,6 +642,16 @@ html.mgr-info-closed .mgr-side { display: none; }
 .mgr-form textarea:focus { box-shadow: none; }
 .composer-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
 .composer-hint { color: var(--faint); font-size: var(--fs-xs); }
+.composer-bar .btn.attach { flex: 0 0 auto; margin-left: -6px; cursor: pointer; }
+.mgr-files { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.mgr-files li { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 4px 4px 4px 6px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); font-size: var(--fs-sm); }
+.mgr-files img { width: 32px; height: 32px; object-fit: cover; border-radius: 6px; flex: 0 0 auto; }
+.mgr-files .fi-ic { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 6px; background: var(--bubble); color: var(--text-2); font-size: 10px; font-weight: 600; text-transform: uppercase; flex: 0 0 auto; }
+.mgr-files .fi-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.mgr-files .fi-size { color: var(--faint); font-size: var(--fs-xs); white-space: nowrap; }
+.mgr-files button { border: 0; background: transparent; color: var(--text-2); cursor: pointer; padding: 2px 6px; border-radius: 6px; font: inherit; line-height: 1; }
+.mgr-files button:hover { background: var(--bubble); }
+.mgr-form.drop { border-color: var(--accent); border-style: dashed; }
 .btn.send { width: 34px; height: 34px; padding: 0; border-radius: 50%; flex: 0 0 auto; box-shadow: none; margin-left: auto; }
 .btn.send .ic { width: 18px; height: 18px; }
 .btn.send[disabled] { opacity: .45; }
