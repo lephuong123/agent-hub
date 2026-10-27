@@ -232,8 +232,11 @@ class ReviewScheduler:
         prompt = render_review_prompt(scope=str(self.cfg("review_scope") or "combined"), signals=signals, focus=job.get("focus"))
         model = self.cfg("review_model") or src.get("model")
         opts = {"fork": True, "learning_review": True, "read_only": True, "review_job_id": job["id"], "source_run_id": src["id"]}
+        # learning.review_budget_usd: chưa đặt → mặc định 0.20 (DEFAULTS); null = không trần riêng cho review (như run thường:
+        # theo limits của agent / runs.default_max_budget_usd / phần còn lại ngân sách ngày; tất cả trống → không --max-budget-usd)
+        rb = self.cfg("review_budget_usd")
         try:
-            run = self.hub.runs.submit(agent_id, prompt, cwd=src.get("cwd"), budget_usd=float(self.cfg("review_budget_usd") or 0.2) or None, model=model,
+            run = self.hub.runs.submit(agent_id, prompt, cwd=src.get("cwd"), budget_usd=float(rb) if rb else None, model=model,
                                        kind="review", resume_session_id=src["session_id"], run_opts=opts,
                                        max_runtime_s=float(self.cfg("review_timeout_s") or 600))
         except HubError as e:

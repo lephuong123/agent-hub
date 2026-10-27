@@ -125,6 +125,24 @@ async def test_correction_review_fork_patch_then_no_repeat(env):
     assert st["pending_approval_queue"] == 0
 
 
+async def test_review_budget_null_means_no_cap(env):
+    """learning.review_budget_usd chưa đặt → 0.20 (mặc định); null → review không có --max-budget-usd (agent không limits)."""
+    d, proj, mp = env
+    h = d.hub
+    assert h.config.get("learning.review_budget_usd") == 0.2
+    with pytest.raises(ValueError):
+        h.config.set("learning.review_budget_usd", 0)
+    r1 = await rpc(d, "run.start", {"agent": "r1", "prompt": "Write today's status line."})
+    await h.runs.wait(r1["id"], 30)
+    mp.setenv("FAKE_REVIEW_PLAN", json.dumps([{"tool": "skills_list"}]))
+    h.config.set("learning.review_budget_usd", None)
+    job = h.learning.reviews.refine("r1", run_ref=r1["id"])
+    job = await until(lambda: (j := h.learning.reviews.get(job["id"]))["status"] in ("done", "failed") and j)
+    rv = h.store.get_run(job["run_id"])
+    assert rv["kind"] == "review" and rv["max_budget_usd"] is None
+    assert "--max-budget-usd" not in rv["argv_redacted"]
+
+
 async def test_review_jobs_merge_and_counter_trigger(env):
     d, proj, mp = env
     h = d.hub
