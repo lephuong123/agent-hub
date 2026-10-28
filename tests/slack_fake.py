@@ -4,6 +4,8 @@
   chat.update, chat.postEphemeral, conversations.open, users.info, files.getUploadURLExternal (+ POST /upload/<id>),
   files.completeUploadExternal, views.open (ghi lại view; `fail_views` → `expired_trigger_id`), conversations.replies (P8: lịch sử
   thread từ mọi tin đã bơm/bot đã gửi, `thread_seed()` thêm tin cũ). Token sai → `invalid_auth`.
+- P7: assistant.threads.setStatus (`fail_status` → `method_not_supported_for_channel_type`), reactions.add/remove (`fail_reactions` →
+  `missing_scope`); `ratelimit[method] = n` → n lần kế tiếp trả HTTP 429 + `Retry-After: 1` (ghi vào `calls` là `<method>#429`).
 - Tệp người gửi (P4): `user_files()` lưu nội dung và bơm tin `file_share`; GET `/files-pri/<id>/<tên>` trả nội dung khi có bot token
   ở header (thiếu/sai → trang HTML 200 như Slack thật khi thiếu `files:read`); `downloads` ghi mọi lần GET.
 - Socket Mode (WebSocket, `websockets.sync.server` trong luồng riêng): gửi `hello`, rồi các envelope test bơm vào
@@ -45,6 +47,9 @@ class FakeSlack:
         self._kick = False
         self.fail_views = False
         self.history: dict[str, list[dict[str, Any]]] = {}  # kênh → tin (người + bot) — nguồn của conversations.replies
+        self.fail_status = False
+        self.fail_reactions = False
+        self.ratelimit: dict[str, int] = {}
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -82,7 +87,19 @@ class FakeSlack:
                         except ValueError:
                             pass
                 auth = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
-                self._reply(200, outer.handle(self.path.strip("/"), form, auth))
+                method = self.path.strip("/")
+                with outer.cond:
+                    limited = outer.ratelimit.get(method, 0) > 0
+                    if limited:
+                        outer.ratelimit[method] -= 1
+                        outer.calls.append((method + "#429", form))
+                if limited:
+                    self.send_response(429)
+                    self.send_header("Retry-After", "1")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                self._reply(200, outer.handle(method, form, auth))
 
             def _reply(self, code: int, res: dict[str, Any]) -> None:
                 data = json.dumps(res).encode()
@@ -143,6 +160,10 @@ class FakeSlack:
             if self.fail_views or not p.get("trigger_id"):
                 return {"ok": False, "error": "expired_trigger_id"}
             return {"ok": True, "view": {"id": f"V{self.next_ts}", **(p.get("view") or {})}}
+        if method == "assistant.threads.setStatus":
+            return {"ok": False, "error": "method_not_supported_for_channel_type"} if self.fail_status else {"ok": True}
+        if method in ("reactions.add", "reactions.remove"):
+            return {"ok": False, "error": "missing_scope"} if self.fail_reactions else {"ok": True}
         if method == "files.getUploadURLExternal":
             fid = f"F{self.next_ts}"
             return {"ok": True, "upload_url": f"{self.url}/upload/{fid}", "file_id": fid}

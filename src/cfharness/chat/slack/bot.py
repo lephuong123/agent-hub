@@ -21,6 +21,8 @@ An toàn (như Telegram — WT-4/5/8):
   chưa có bot + `thread_context` → tin trước đó trong thread đi kèm như DỮ LIỆU không tin cậy (khung `untrusted-data`, `neutralize`).
 - Ô nhập (P2): Slack không có `force_reply` → `ask_input` mở MODAL bằng `trigger_id` của nút/slash vừa xử lý (chat/slack/modals.py:
   nonce phía hub `slack.modals`, submit kiểm workspace + đúng người + allowlist rồi mới `self.call`). Không có trigger → thread như P1.
+- Điều phối viên đang làm (P7, chat/slack/progress.py): trạng thái "đang xử lý…" (`assistant.threads.setStatus`, lỗi → reaction ⏳) +
+  MỘT tin tiến độ sửa tại chỗ (tên tool + nhãn hub, không input tool) có nút "Dừng" (`run.stop` qua `self.call`, chỉ người trong allowlist).
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ from ..base import _UID, ChatBot
 from . import render
 from .api import SlackApi, SlackError
 from .modals import SlackModals
+from .progress import STOP_ACTION, SlackProgress
 
 if TYPE_CHECKING:
     from ...hub import Hub
@@ -169,6 +172,8 @@ class SlackBot(ChatBot):
     DMS = "slack.dms"  # user_id → kênh DM với bot (conversations.open)
     CHANNELS = "slack.channels"  # kênh chung → lần đầu người trong allowlist tag bot (chỉ dùng khi `allow_channels`)
     THREADS = "slack.threads"  # P8: "<kênh>:<ts gốc>" → ts bot đã gửi/được tag trong thread kênh chung
+    TYPING_EVERY_S = 90.0  # P7: trạng thái thread Slack tự hết sau 2 phút → nhắc lại trước đó (Telegram giữ 4 s)
+    TYPING_MAX_S = 1800.0
 
     def __init__(self, hub: "Hub") -> None:
         super().__init__(hub)
@@ -179,6 +184,7 @@ class SlackBot(ChatBot):
         self._names: dict[str, str] = {}  # user_id → tên hiển thị (users.info, cho ngữ cảnh thread)
         self._inbox: asyncio.Queue[tuple[str, dict[str, Any]]] | None = None
         self.modals = SlackModals(self)  # P2: ô nhập giao việc / trả lời câu hỏi bằng chữ
+        self.progress = SlackProgress(self)  # P7: "đang xử lý…" + tin tiến độ + nút Dừng khi điều phối viên làm việc
 
     def _make_notifier(self) -> SlackChatNotifier:
         return SlackChatNotifier(self.hub, self)
@@ -460,8 +466,26 @@ class SlackBot(ChatBot):
         await api.upload(str(chat), name, data, render.escape(caption), timeout=timeout)
         return {"message_id": None}  # Slack không trả ts tin chứa tệp ngay lúc tải lên
 
-    async def typing(self, api: SlackApi, chat: Any) -> None:
-        raise SlackError("bot Slack không có trạng thái 'đang gõ'")  # vòng nhắc của điều phối viên dừng êm
+    async def typing(self, api: SlackApi, chat: Any, *, reply_to: Any = None) -> None:
+        """P7: trạng thái "đang xử lý…" ở thread của tin `reply_to` (lỗi → reaction ⏳). Không có tin để bám / cả hai cách lỗi → ném lỗi,
+        vòng nhắc của điều phối viên dừng êm."""
+        if reply_to is None:
+            raise SlackError("không có thread để báo 'đang xử lý'")
+        await self.progress.status(api, str(chat), reply_to)
+
+    async def manager_run_started(self, api: SlackApi, chat: Any, run_id: str, *, reply_to: Any = None) -> None:
+        try:
+            await self.progress.start(api, str(chat), run_id, reply_to)
+        except Exception as e:  # tiến độ là phụ — không bao giờ chặn luồng điều phối viên
+            log.debug("tin tiến độ điều phối viên lỗi: %s", clip(e, 200))
+
+    async def manager_run_finished(self, run_id: str, *, chat: Any = None, reply_to: Any = None, outcome: str = "completed") -> None:
+        self._spawn(self.progress.finish(run_id, chat=chat, reply_to=reply_to, outcome=outcome))  # không chặn việc gửi trả lời (429 …)
+
+    async def handle_action(self, cid: str, rec: dict[str, Any], mid: Any, api: Any) -> tuple[str, str | None, dict[str, Any] | None]:
+        if rec.get("a") == STOP_ACTION:  # P7: nút Dừng của tin tiến độ — progress tự sửa tin (gỡ nút)
+            return await self.progress.on_stop(cid, str(rec.get("r")), api), None, None
+        return await super().handle_action(cid, rec, mid, api)
 
     async def _toast(self, api: SlackApi, chat: str, user: str | None, text: str) -> None:
         """Tương đương answerCallbackQuery: tin tạm (ephemeral) chỉ người bấm thấy."""

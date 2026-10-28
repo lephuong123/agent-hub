@@ -92,7 +92,7 @@ def test_manifest_2way_and_slash_validation():
     assert m["features"]["app_home"]["messages_tab_enabled"] is True
     assert m["features"]["slash_commands"][0]["command"] == "/cfh"
     assert set(m["oauth_config"]["scopes"]["bot"]) == {"chat:write", "im:history", "im:read", "im:write", "commands", "users:read", "files:read", "files:write",
-                                                        "app_mentions:read", "channels:history", "groups:history"}
+                                                        "app_mentions:read", "channels:history", "groups:history", "reactions:write"}
     assert slack_2way_manifest("/cfh-phuong")["features"]["slash_commands"][0]["command"] == "/cfh-phuong"
     assert slack_2way_manifest()["features"]["slash_commands"][0]["command"] == "/cfh"  # hằng số không bị sửa
     for bad in ("cfh", "/cfh x", "/" + "a" * 40, "/<script>", None, ""):
