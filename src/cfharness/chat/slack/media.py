@@ -91,7 +91,7 @@ class SlackMedia(MediaBase):
         root = ev.get("thread_ts")
         if not root or root == ev.get("ts"):
             return None, ev.get("ts")
-        for mid in self.bot._candidates(str(root)):
+        for mid in self.bot._candidates(str(root), cid):
             conv = self.bot.manager.conv_of_message(cid, mid)
             if conv:
                 return conv, str(root)

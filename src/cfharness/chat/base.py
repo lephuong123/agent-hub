@@ -769,6 +769,14 @@ class ChatBot:
                             timeout: float | None = None) -> dict[str, Any]:  # pragma: no cover - lớp con
         raise NotImplementedError
 
-    async def typing(self, api: Any, chat: Any) -> None:  # pragma: no cover - lớp con
-        """"Đang gõ…" (không bắt buộc — nền tảng không có thì lớp con bỏ qua/ném lỗi để dừng vòng nhắc)."""
+    async def typing(self, api: Any, chat: Any, *, reply_to: Any = None) -> None:  # pragma: no cover - lớp con
+        """"Đang gõ…" (không bắt buộc — nền tảng không có thì lớp con bỏ qua/ném lỗi để dừng vòng nhắc). `reply_to` = tin của người
+        mà trả lời sẽ bám vào (Slack: thread để đặt trạng thái); Telegram bỏ qua. Nhịp nhắc: `TYPING_EVERY_S` của lớp con nếu có."""
         raise NotImplementedError
+
+    # Hook của luồng điều phối viên (P7, chat/manager_chat.py) — mặc định không làm gì (Telegram không đổi); Slack: tin tiến độ + nút Dừng.
+    async def manager_run_started(self, api: Any, chat: Any, run_id: str, *, reply_to: Any = None) -> None:
+        """`manager.chat` vừa trả `run_id` cho tin `reply_to` của người (gọi TRƯỚC vòng "đang gõ")."""
+
+    async def manager_run_finished(self, run_id: str, *, chat: Any = None, reply_to: Any = None, outcome: str = "completed") -> None:
+        """Đã có trả lời (`outcome` completed|failed) hoặc run kết thúc không trả lời (outcome của run). Không được chặn việc gửi trả lời."""

@@ -47,12 +47,13 @@ def test_strip_mention():
     assert strip_mention("dòng 1\n<@U0BOT0001> dòng 2", BOT_USER) == "dòng 1\n dòng 2"
 
 
-def test_manifest_subscribes_app_mention_only():
+def test_manifest_subscribes_app_mention_and_channel_messages():
     m = webapp.slack_2way_manifest()
     assert "app_mention" in m["settings"]["event_subscriptions"]["bot_events"]
     assert "app_mentions:read" in m["oauth_config"]["scopes"]["bot"]
-    assert "message.channels" not in m["settings"]["event_subscriptions"]["bot_events"]  # không đọc cả kênh
-    assert "channels:history" not in m["oauth_config"]["scopes"]["bot"]
+    # P8: nói tiếp trong thread không cần tag → nhận tin kênh (bot lọc chặt: chỉ thread bot tham gia — tests/test_slack_threads.py)
+    assert {"message.channels", "message.groups"} <= set(m["settings"]["event_subscriptions"]["bot_events"])
+    assert {"channels:history", "groups:history"} <= set(m["oauth_config"]["scopes"]["bot"])
 
 
 async def test_mention_in_channel_goes_to_manager_and_replies_in_thread(make, sk):

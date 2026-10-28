@@ -170,6 +170,7 @@ DEFAULTS: dict[str, Any] = {
             "allowed_chat_ids": [],  # DM (D…) được nhận thông báo + điều khiển hub
             "allowed_user_ids": [],  # người (U…) được phép — Slack xác thực qua kết nối Socket Mode
             "allow_channels": False,  # kênh chung phải bật rõ ràng; mặc định chỉ DM
+            "thread_context": False,  # P8: tag bot giữa thread chưa có bot → đọc tin trước đó (conversations.replies) làm ngữ cảnh DỮ LIỆU
             "slash_command": "/cfh",  # lệnh đăng ký trong manifest app (mỗi người một app → nên đặt riêng, vd /cfh-ten)
             "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp", "file"],
             "callback_ttl_s": 604800,
@@ -184,6 +185,8 @@ DEFAULTS: dict[str, Any] = {
             "document_max_bytes": 1048576,  # tệp văn bản người gửi tối đa (trần cứng 10 MB ở manager.chat)
             "files_base": None,  # CHỈ cho test: gốc URL tải tệp thay https://files.slack.com/ (không bao giờ theo URL tuỳ ý)
             "modal_ttl_s": 3600,  # P2: hộp nhập (modal) còn hiệu lực — nonce phía hub `slack.modals`
+            "manager_progress": True,  # P7: tin tiến độ + nút Dừng khi điều phối viên làm việc cho tin Slack (chat/slack/progress.py)
+            "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
                        "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,

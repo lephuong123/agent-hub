@@ -74,8 +74,11 @@ SLACK_MANIFEST: dict[str, Any] = {
 }
 SLACK_CREATE_URL = "https://api.slack.com/apps?new_app=1&manifest_json=" + quote(json.dumps(SLACK_MANIFEST, ensure_ascii=False, separators=(",", ":")), safe="")
 # Manifest app 2 chiều (docs/plan/slack-2way.md). Lệnh slash lấy từ `notify.slack.slash_command` lúc dựng URL (`slack_2way_create_url`).
-# `app_mention` + `app_mentions:read`: tag bot trong kênh giao việc — chỉ có tác dụng khi bật `allow_channels` và kênh + người trong
-# allowlist. KHÔNG xin `channels:history`/`message.channels`: bot chỉ thấy tin tag nó, không đọc cả kênh.
+# `app_mention` + `app_mentions:read`: tag bot trong kênh giao việc — chỉ có tác dụng khi bật `allow_channels` và người trong allowlist.
+# P8: `message.channels`/`message.groups` + `channels:history`/`groups:history` để nói tiếp trong thread KHÔNG cần tag lại (như Claude
+# Tag) và đọc ngữ cảnh thread (`conversations.replies`, chỉ khi `thread_context`). Đánh đổi: Slack giờ gửi MỌI tin của kênh có bot về
+# daemon — bot bỏ ngay (không trả lời, không tải tệp, không log/audit nội dung) mọi tin không phải trả lời trong thread bot đang tham gia
+# từ người trong allowlist (chat/slack/bot.py `_on_channel_message`). Bot chỉ thấy kênh nó được mời vào.
 SLACK_SLASH_DEFAULT = "/cfh"
 SLACK_MANIFEST_2WAY: dict[str, Any] = {
     "display_information": {"name": "cfharness", "description": "cfharness 2 chiều: duyệt bằng nút, lệnh /cfh, nhắn điều phối viên trong DM",
@@ -85,9 +88,10 @@ SLACK_MANIFEST_2WAY: dict[str, Any] = {
                  "slash_commands": [{"command": SLACK_SLASH_DEFAULT, "description": "Điều khiển cfharness",
                                      "usage_hint": "canban | giaoviec <agent> <yêu cầu> | help"}]},
     "oauth_config": {"scopes": {"bot": ["chat:write", "im:history", "im:read", "im:write", "commands", "users:read", "files:read", "files:write",
-                                          "app_mentions:read"]}},
+                                          "app_mentions:read", "channels:history", "groups:history",
+                                          "reactions:write"]}},
     "settings": {"socket_mode_enabled": True, "interactivity": {"is_enabled": True},
-                 "event_subscriptions": {"bot_events": ["message.im", "app_mention"]},
+                 "event_subscriptions": {"bot_events": ["message.im", "app_mention", "message.channels", "message.groups"]},
                  "org_deploy_enabled": False, "token_rotation_enabled": False},
 }
 _SLASH_RE = re.compile(r"^/[a-z0-9][a-z0-9_\-]{0,30}$")
