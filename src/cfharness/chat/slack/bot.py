@@ -635,9 +635,10 @@ class SlackBot(ChatBot):
 
     async def _thread_context(self, api: SlackApi, cid: str, root: str, ts: str) -> str:
         """P8: tin của NGƯỜI trong thread trước tin tag (`conversations.replies`, bỏ tin bot — của mình và bot khác) → khối DỮ LIỆU
-        không tin cậy: mỗi tin một dòng (xuống dòng → ↵, không giả được dòng của người khác), `prompts.frame` (khung nonce + `neutralize`:
+        không tin cậy: mỗi tin một dòng (xuống dòng → ↵, không giả được dòng của người khác), `prompts.frame` (che secret `redact_str`, khung nonce + `neutralize`:
         gỡ tiêu đề `[cfharness…`, OWNER MESSAGE, thẻ khung, chỗ giữ khoá). Giữ tin MỚI nhất trong `CTX_MAX_CHARS`. Lỗi → "" (như tắt)."""
         from ...manager.prompts import frame
+        from ...redact import redact_str
 
         try:
             res = await api.call("conversations.replies", {"channel": cid, "ts": root, "limit": CTX_MAX_MSGS})
@@ -659,7 +660,7 @@ class SlackBot(ChatBot):
                 pass
             t = " ↵ ".join(s.strip() for s in strip_mention(str(x.get("text") or ""), me).splitlines() if s.strip())
             if t:
-                msgs.append((u, clip(t, CTX_MSG_CHARS)))
+                msgs.append((u, clip(redact_str(t), CTX_MSG_CHARS)))  # tin người khác có thể dán token/mật khẩu — che trước khi tới LLM
         lines: list[str] = []
         used = 0
         for u, t in reversed(msgs):  # mới nhất trước — tin cũ bị lược khi quá trần
