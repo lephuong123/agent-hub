@@ -2,11 +2,12 @@
 
 - Web API (HTTP, thân form như SlackApi gửi): auth.test, apps.connections.open (app token) → URL WebSocket cục bộ, chat.postMessage,
   chat.update, chat.postEphemeral, conversations.open, users.info, files.getUploadURLExternal (+ POST /upload/<id>),
-  files.completeUploadExternal, views.open (ghi lại view; `fail_views` → `expired_trigger_id`). Token sai → `invalid_auth`.
+  files.completeUploadExternal, views.open (ghi lại view; `fail_views` → `expired_trigger_id`), conversations.replies (P8: lịch sử
+  thread từ mọi tin đã bơm/bot đã gửi, `thread_seed()` thêm tin cũ). Token sai → `invalid_auth`.
 - Tệp người gửi (P4): `user_files()` lưu nội dung và bơm tin `file_share`; GET `/files-pri/<id>/<tên>` trả nội dung khi có bot token
   ở header (thiếu/sai → trang HTML 200 như Slack thật khi thiếu `files:read`); `downloads` ghi mọi lần GET.
 - Socket Mode (WebSocket, `websockets.sync.server` trong luồng riêng): gửi `hello`, rồi các envelope test bơm vào
-  (`user_message()`, `press()`, `slash()`, `submit_view()`); ghi nhận ACK (`acked()`), `disconnect()` để thử kết nối lại; gửi trùng = cùng `event_id`.
+  (`user_message()`, `channel_message()`, `mention()`, `press()`, `slash()`, `submit_view()`); ghi nhận ACK (`acked()`), `disconnect()` để thử kết nối lại; gửi trùng = cùng `event_id`.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ class FakeSlack:
         self._ws: Any = None
         self._kick = False
         self.fail_views = False
+        self.history: dict[str, list[dict[str, Any]]] = {}  # kênh → tin (người + bot) — nguồn của conversations.replies
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -123,6 +125,8 @@ class FakeSlack:
             return {"ok": True, "team_id": self.team, "team": "Thử nghiệm", "user_id": BOT_USER, "user": "cfharness"}
         if method == "chat.postMessage":
             p["_ts"] = self._ts()  # test đọc lại ts của tin bot gửi
+            self._log(str(p.get("channel")), {"type": "message", "user": BOT_USER, "bot_id": "B0BOT0001", "text": self.text_of(p), "ts": p["_ts"],
+                                              **({"thread_ts": p["thread_ts"]} if p.get("thread_ts") else {})})
             return {"ok": True, "channel": p.get("channel"), "ts": p["_ts"]}
         if method in ("chat.update", "chat.postEphemeral"):
             return {"ok": True, "channel": p.get("channel"), "ts": p.get("ts") or self._ts()}
@@ -130,6 +134,11 @@ class FakeSlack:
             return {"ok": True, "channel": {"id": "D" + str(p.get("users"))[1:]}}
         if method == "users.info":
             return {"ok": True, "user": {"id": p.get("user"), "name": "sep", "profile": {"real_name": "Sếp Thử"}}}
+        if method == "conversations.replies":
+            root = str(p.get("ts") or "")
+            with self.cond:
+                msgs = [dict(m) for m in self.history.get(str(p.get("channel")), []) if m.get("ts") == root or m.get("thread_ts") == root]
+            return {"ok": True, "messages": msgs[: int(p.get("limit") or 1000)], "has_more": False}
         if method == "views.open":
             if self.fail_views or not p.get("trigger_id"):
                 return {"ok": False, "error": "expired_trigger_id"}
@@ -140,6 +149,22 @@ class FakeSlack:
         if method == "files.completeUploadExternal":
             return {"ok": True, "files": [{"id": f["id"]} for f in (p.get("files") or [])]}
         return {"ok": False, "error": "unknown_method"}
+
+    def _log(self, channel: str, msg: dict[str, Any]) -> None:
+        with self.cond:
+            self.history.setdefault(channel, []).append(msg)
+
+    def thread_seed(self, channel: str, msgs: list[tuple[str, str]], *, bot_id: str | None = None) -> str:
+        """Thread có sẵn trong kênh (KHÔNG bơm sự kiện — như chuyện xảy ra trước khi bot vào): [(user, chữ)], tin đầu = gốc. Trả ts gốc."""
+        root = ""
+        for user, text in msgs:
+            ts = self._ts()
+            root = root or ts
+            m = {"type": "message", "user": user, "text": text, "ts": ts, **({"thread_ts": root} if ts != root else {})}
+            if bot_id:
+                m["bot_id"] = bot_id
+            self._log(channel, m)
+        return root
 
     def sent(self, channel: str | None = None) -> list[dict[str, Any]]:
         """Tin bot đã post (chat.postMessage) — kèm `blocks` đã giải JSON."""
@@ -227,22 +252,37 @@ class FakeSlack:
             self._kick = True
 
     def user_message(self, channel: str, user: str, text: str, *, thread_ts: str | None = None, team: str | None = None,
-                     event_id: str | None = None, subtype: str | None = None) -> str:
+                     event_id: str | None = None, subtype: str | None = None, bot_id: str | None = None) -> str:
         ts = self._ts()
         ev = {"type": "message", "channel": channel, "user": user, "text": text, "ts": ts, "channel_type": "im" if channel.startswith("D") else "channel"}
         if thread_ts:
             ev["thread_ts"] = thread_ts
         if subtype:
             ev["subtype"] = subtype
+        if bot_id:
+            ev["bot_id"] = bot_id
+        self._log(channel, {k: v for k, v in ev.items() if k != "channel"})
         return self._push("events_api", {"team_id": team or self.team, "event": ev, "event_id": event_id or f"Ev{ts.replace('.', '')}"})
 
-    def mention(self, channel: str, user: str, text: str, *, thread_ts: str | None = None, team: str | None = None) -> str:
-        """Sự kiện `app_mention` (tag bot trong kênh) — `text` chứa `<@BOT_USER>` như Slack thật; không có `channel_type`."""
+    def mention(self, channel: str, user: str, text: str, *, thread_ts: str | None = None, team: str | None = None,
+                also_message: bool = False) -> str:
+        """Sự kiện `app_mention` (tag bot trong kênh) — `text` chứa `<@BOT_USER>` như Slack thật; không có `channel_type`.
+        `also_message`: như Slack thật khi app đăng ký `message.channels` — CÙNG tin đến thêm một lần dạng `message` (event_id khác)."""
         ts = self._ts()
         ev = {"type": "app_mention", "channel": channel, "user": user, "text": text, "ts": ts, "event_ts": ts}
         if thread_ts:
             ev["thread_ts"] = thread_ts
+        self._log(channel, {"type": "message", "user": user, "text": text, "ts": ts, **({"thread_ts": thread_ts} if thread_ts else {})})
+        if also_message:
+            msg = {"type": "message", "channel": channel, "user": user, "text": text, "ts": ts, "channel_type": "channel",
+                   **({"thread_ts": thread_ts} if thread_ts else {})}
+            self._push("events_api", {"team_id": team or self.team, "event": msg, "event_id": f"EvM{ts.replace('.', '')}"})
         return self._push("events_api", {"team_id": team or self.team, "event": ev, "event_id": f"Ev{ts.replace('.', '')}"})
+
+    def channel_message(self, channel: str, user: str, text: str, *, thread_ts: str | None = None, team: str | None = None,
+                        bot_id: str | None = None) -> str:
+        """P8: tin thường trong kênh chung (`message.channels`, KHÔNG tag bot) — gốc kênh hoặc trả lời trong thread `thread_ts`."""
+        return self.user_message(channel, user, text, thread_ts=thread_ts, team=team, bot_id=bot_id)
 
     def user_files(self, channel: str, user: str, files: list[tuple[str, bytes, str]], *, text: str = "", thread_ts: str | None = None,
                    sizes: dict[str, int] | None = None, urls: dict[str, str] | None = None, team: str | None = None) -> str:
