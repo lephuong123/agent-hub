@@ -58,7 +58,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # phê duyệt / chính sách an toàn. `approval.manager_decide`: agent thường không bao giờ; điều phối viên qua MANAGER_ALLOWED
         # (chỉ approval routed_to=manager — docs/dev-notes/approval-profiles.md); người dùng approval.approve|deny
         "approval.approve", "approval.deny", "approval.manager_decide",
-        "guard.protect.add", "guard.protect.rm", "guard.integrity.accept", "guard.sandbox.set", "guard.sandbox.allow_domain", "guard.sandbox.dev_host", "guard.trust.set", "guard.repo_deny.add", "guard.repo_deny.rm",
+        "guard.protect.add", "guard.protect.rm", "guard.integrity.accept", "guard.sandbox.set", "guard.sandbox.allow_domain", "guard.sandbox.dev_host", "guard.trust.set", "guard.trust.set_all", "guard.repo_deny.add", "guard.repo_deny.rm",
         "config.set", "auth.reset", "hub.shutdown", "estop.set", "team.estop",
         # vòng đời / cấu hình agent (tool_policy, permission_mode, mcp_servers… là bề mặt nâng quyền)
         "agent.create", "agent.update", "agent.delete", "agent.restore", "agent.purge", "agent.clone", "agent.import",

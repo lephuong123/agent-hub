@@ -199,6 +199,13 @@ def cmd_guard(ctx: Any) -> int:
             from ..errors import HubError
 
             raise HubError(str(e)) from None
+        if a.op == "all":
+            r = ctx.call("guard.trust.set_all", {"mode": a.mode, "for_s": for_s})
+            ctx.out(r, (f"⚠ {r.get('count')} agent: TRUST FULL — hub cho phép mọi thao tác, không sandbox, bypassPermissions"
+                        + (f" tới {r.get('until')}" if r.get("until") else "") + " (áp cho run mới; ESTOP vẫn chặn; audit vẫn ghi)"
+                        + "\nagent tạo sau lệnh này: `cfharness config set guard.trust_new_agents full`")
+                   if a.mode == "full" else f"{r.get('count')} agent: đã tắt trust — guard/sandbox như thường từ run kế tiếp")
+            return 0
         r = ctx.call("guard.trust.set", {"id": a.op, "mode": a.mode, "for_s": for_s})
         ctx.out(r, (f"⚠ agent {a.op}: TRUST FULL — hub cho phép mọi thao tác, không sandbox, bypassPermissions"
                     + (f" tới {r.get('until')}" if r.get("until") else "") + " (áp cho run mới; ESTOP vẫn chặn; audit vẫn ghi)")
@@ -332,7 +339,7 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     sdh.add_argument("--remove", action="store_true")
     tr = gs.add_parser("trust", help="trust full theo agent (chỉ người): guard cho phép mọi thao tác, không sandbox, bypassPermissions",
                        parents=[common])
-    tr.add_argument("op", metavar="agent|list", help="id agent, hoặc `list` để xem")
+    tr.add_argument("op", metavar="agent|all|list", help="id agent, `all` = mọi agent đang có, hoặc `list` để xem")
     tr.add_argument("mode", nargs="?", choices=["full", "off"], default="full")
     tr.add_argument("--for", dest="for_", help="tự tắt sau (vd 30m, 4h, 2d)")
     rd = gs.add_parser("repo-deny", help="mẫu chặn theo repo (chỉ người): áp cho MỌI agent chạy trong repo (MGR-2)", parents=[common])
