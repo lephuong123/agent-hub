@@ -440,7 +440,8 @@ def slack_caller(hub: "Hub", chat_id: Any, user_id: Any = None) -> Caller:
 
     Là NGƯỜI chỉ khi kênh 2 chiều bật (`notify.slack.enabled` + `interactive`), `chat_id` ∈ `notify.slack.allowed_chat_ids` VÀ người
     gửi/bấm (`user_id`, Slack đã xác thực qua kết nối Socket Mode) ∈ `allowed_user_ids`. Chat không phải DM (`D…`) chỉ khi
-    `allow_channels` bật rõ ràng — thành viên khác của kênh vẫn không phải người. Workspace (`team_id`) được bot kiểm trước khi gọi.
+    `allow_channels` bật rõ ràng — khi đó MỌI kênh có bot (không cần nằm trong `allowed_chat_ids`); thành viên khác của kênh vẫn
+    không phải người. Workspace (`team_id`) được bot kiểm trước khi gọi.
     Allowlist chỉ người sửa được (`slack.allow` ∈ HUMAN_ONLY; nhánh `notify` của config.yaml được kiểm toàn vẹn). Kênh audit: `slack:<chat_id>`.
     """
     try:
@@ -451,8 +452,10 @@ def slack_caller(hub: "Hub", chat_id: Any, user_id: Any = None) -> Caller:
     uid = str(user_id) if user_id is not None else None
     allowed = {str(x) for x in (cfg.get("allowed_chat_ids") or [])}
     users = {str(x) for x in (cfg.get("allowed_user_ids") or [])}
-    ok = bool(cfg.get("enabled", True)) and bool(cfg.get("interactive")) and cid in allowed and uid is not None and uid in users
-    if ok and not cid.startswith("D"):
+    ok = bool(cfg.get("enabled", True)) and bool(cfg.get("interactive")) and uid is not None and uid in users
+    if ok and cid.startswith("D"):
+        ok = cid in allowed
+    elif ok:  # kênh chung: mọi kênh có bot khi `allow_channels` — cổng là NGƯỜI (allowed_user_ids) + workspace ghim, không cần ghép nối kênh
         ok = bool(cfg.get("allow_channels"))
     return Caller(via=f"slack:{chat_id}", token_ok=ok)
 

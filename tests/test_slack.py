@@ -165,6 +165,7 @@ async def test_slack_caller_gate(make):
     assert not auth.slack_caller(d.hub, DM_BOSS, STRANGER).human  # người lạ trong DM (không thể với DM thật) vẫn không phải người
     assert not auth.slack_caller(d.hub, DM_STRANGER, BOSS).human
     assert not auth.slack_caller(d.hub, "C0TEAM001", BOSS).human  # kênh chung chưa bật allow_channels
+    assert not auth.slack_caller(d.hub, "C0OTHER01", BOSS).human
     resp = await d.call_as(auth.slack_caller(d.hub, DM_STRANGER, STRANGER), "estop.set", {"on": True})
     assert resp["error"]["code"] == BLOCKED
 
