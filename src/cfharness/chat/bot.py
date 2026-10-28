@@ -223,7 +223,7 @@ class TelegramBot(ChatBot):
         res = await api.call("sendDocument", {"chat_id": str(chat), "caption": caption}, files={"document": (name, data, mime)}, **kw)
         return res if isinstance(res, dict) else {}
 
-    async def typing(self, api: TelegramApi, chat: Any) -> None:
+    async def typing(self, api: TelegramApi, chat: Any, *, reply_to: Any = None) -> None:  # reply_to: Telegram không dùng
         await api.call("sendChatAction", {"chat_id": chat, "action": "typing"})
 
     # ------------------------------------------------------------------ update

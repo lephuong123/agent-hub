@@ -14,6 +14,7 @@
 - Tệp/ảnh người gửi (chat/media.py) → `manager.chat{images, files}`; dòng `[[file: <đường dẫn tương đối>]]` trong trả lời → gỡ khỏi
   chữ và gửi tệp thành document (chỉ tệp thường trong cwd hội thoại, không symlink, trong trần kích thước, không chứa secret).
 - Run của điều phối viên kết thúc mà không có trả lời (lỗi, bị chặn, vượt ngân sách…) → báo ngắn (chữ của hub).
+- P7: hook `bot.manager_run_started|finished` (mặc định rỗng — Telegram không đổi; Slack: tin tiến độ + nút Dừng, chat/slack/progress.py).
 """
 
 from __future__ import annotations
@@ -125,17 +126,21 @@ class ManagerChat:
                 self._put(self.MSGMAP, f"{chat_id}:{message_id}", new_conv)
         if run_id:
             self._put(self.RUNS, run_id, {"chat": str(chat_id), "conv": new_conv, "reply_to": message_id}, cap=200)
-            self.bot._spawn(self._typing(chat_id, run_id, api))
+            await self.bot.manager_run_started(api, chat_id, run_id, reply_to=message_id)  # P7 Slack: tin tiến độ (Telegram: không làm gì)
+            self.bot._spawn(self._typing(chat_id, run_id, api, reply_to=message_id))
 
-    async def _typing(self, chat_id: str, run_id: str, api: Any) -> None:
-        """T-D: "đang gõ…" lặp mỗi `TYPING_EVERY_S` tới khi điều phối viên trả lời (RUNS bị gỡ) hoặc quá `TYPING_MAX_S`."""
+    async def _typing(self, chat_id: str, run_id: str, api: Any, *, reply_to: Any = None) -> None:
+        """T-D: "đang gõ…" lặp mỗi `TYPING_EVERY_S` tới khi điều phối viên trả lời (RUNS bị gỡ) hoặc quá `TYPING_MAX_S`.
+        Nền tảng tự đặt nhịp (`bot.TYPING_EVERY_S`/`TYPING_MAX_S`; Slack: trạng thái sống 2 phút → 90 s)."""
+        every = float(getattr(self.bot, "TYPING_EVERY_S", None) or TYPING_EVERY_S)
+        limit = float(getattr(self.bot, "TYPING_MAX_S", None) or TYPING_MAX_S)
         t0 = asyncio.get_running_loop().time()
-        while run_id in self._st(self.RUNS) and asyncio.get_running_loop().time() - t0 < TYPING_MAX_S:
+        while run_id in self._st(self.RUNS) and asyncio.get_running_loop().time() - t0 < limit:
             try:  # không bắt buộc (không phải mọi Bot API giả/thật đều có)
-                await self.bot.typing(api, chat_id)
+                await self.bot.typing(api, chat_id, reply_to=reply_to)
             except Exception:
                 return
-            await asyncio.sleep(TYPING_EVERY_S)
+            await asyncio.sleep(every)
 
     async def new_conversation(self, chat_id: str, api: Any) -> str:
         had = self.current(chat_id)
@@ -197,6 +202,7 @@ class ManagerChat:
                        agent: str | None = None, failed: bool = False) -> None:
         if run_id:
             self._put(self.RUNS, run_id, None, cap=200)
+            await self.bot.manager_run_finished(run_id, chat=chat, reply_to=reply_to, outcome="failed" if failed else "completed")
         api = self.bot.api()
         if api is None or str(chat) not in self.bot.notify_chats():
             return
@@ -238,6 +244,7 @@ class ManagerChat:
             from .base import OUTCOME_VI
 
             self._put(self.RUNS, run_id, None, cap=200)
+            await self.bot.manager_run_finished(run_id, chat=meta.get("chat"), reply_to=meta.get("reply_to"), outcome=str(outcome))
             if outcome == "completed":
                 return  # xong mà không có trả lời: CORE không phát reply (vd chỉ làm việc nền) — không làm phiền
             text = f"⚠️ Điều phối viên chưa trả lời được ({OUTCOME_VI.get(str(outcome), str(outcome))}). Thử gửi lại, hoặc xem chi tiết trên web."

@@ -148,6 +148,45 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
 - Test: `tests/test_slack_mentions.py` (thread + cuộc mới/cũ, người lạ, `allow_channels` tắt, workspace khác, approval chỉ vào DM, manifest);
   Slack giả: `FakeSlack.mention()`.
 
+## P7 — "đang xử lý…" + tin tiến độ + nút Dừng (khi điều phối viên làm việc)
+| File | Vai trò |
+|---|---|
+| `chat/slack/progress.py` | `SlackProgress`: trạng thái thread (`assistant.threads.setStatus`, lỗi → reaction ⏳), MỘT tin tiến độ sửa tại chỗ theo `tool.start`/`tool.complete` của run điều phối viên, nút "Dừng" (`ms`), thu về một dòng khi xong; `tool_label` (tên tool lọc ký tự + nhãn hub theo loại) |
+| `chat/slack/bot.py` | `typing(…, reply_to=)` → `progress.status`; `TYPING_EVERY_S = 90` (Slack tự xoá trạng thái sau 2 phút / khi bot đăng tin trong thread), `TYPING_MAX_S = 1800`; hook `manager_run_started|finished`; `handle_action` nhận nút `ms` (còn lại → lõi) |
+| `chat/base.py` | `typing(api, chat, *, reply_to=None)`; hook rỗng `manager_run_started(api, chat, run_id, reply_to=)` / `manager_run_finished(run_id, chat=, reply_to=, outcome=)` — Telegram không đổi |
+| `chat/manager_chat.py` | gọi `manager_run_started` sau `manager.chat` (TRƯỚC vòng "đang gõ"), `manager_run_finished` khi giao trả lời / run kết thúc không trả lời; nhịp "đang gõ" lấy `bot.TYPING_EVERY_S|TYPING_MAX_S` nếu có (Telegram vẫn 4 s / 180 s) |
+| `chat/bot.py` | `TelegramBot.typing` nhận (và bỏ qua) `reply_to` — lời gọi Bot API không đổi |
+| `config.py` | `notify.slack.manager_progress` (bật, mặc định `true`), `notify.slack.manager_progress_edit_s` (3) |
+
+- **Event tới bot**: `ChatBot` nghe bus bằng listener ĐỒNG BỘ (`hub.bus.add_listener`) — nhận MỌI event, không qua bộ lọc level của
+  `Subscription`; `tool.start`/`tool.complete` (level summary, `claude_adapter`) tới đủ, kể cả của agent phụ (`subagent_id` → "↳").
+  Run chạy ngay sau `manager.chat` nên event có thể tới trước khi có bản ghi → nạp lại từ store (`query_events(run_id, types)`), khử trùng
+  theo `tool_id`. Run con (resume sau duyệt, `run.queued{parent_run_id}`) nối vào cùng tin; nút Dừng dừng run con. `run.waiting_human` →
+  tiêu đề "⏸ Chờ bạn duyệt một thao tác".
+- **Trạng thái**: `setStatus{channel_id, thread_ts = gốc thread trả lời sẽ vào, status: "đang xử lý…"}`, nhắc mỗi 90 s, xoá bằng `status: ""`
+  khi xong. Tin tiến độ được đăng TRƯỚC khi đặt trạng thái (bot đăng tin trong thread làm Slack xoá trạng thái). Lỗi (vd
+  `method_not_supported_for_channel_type`, `missing_scope`, `not_allowed_token_type`) → `reactions.add hourglass_flowing_sand` trên tin của
+  người (một lần), `reactions.remove` khi có trả lời / run kết thúc; reaction cũng lỗi (thiếu `reactions:write`) → bỏ êm, log debug, vòng
+  nhắc dừng. Thread đã xong được nhớ (`_closed`) → vòng nhắc muộn không đặt lại trạng thái / gắn lại ⏳.
+- **Tin tiến độ**: reply vào tin của người (cùng thread với trả lời). Tiêu đề + "N bước · thời gian" + tối đa 8 bước gần nhất
+  (`▸` đang chạy, `✓` xong, `✗` lỗi) dạng `` `Tên` — nhãn``. Tên = tên tool chỉ giữ `[A-Za-z0-9_.:-]`, ≤ 40, qua `redact_str`
+  (`mcp__srv__tool` → `srv.tool`); nhãn do hub đặt theo loại tool (`TOOL_VI`, tool lạ → "dùng công cụ"). KHÔNG BAO GIỜ `input`,
+  `args_preview` hay `result_preview`. Không ghi "Điều phối viên" trong tin tiến độ (tin đó không được trông như khung trả lời WT-8).
+- **Nhịp sửa**: `chat.update` ≤ 1 lần / `manager_progress_edit_s` (gộp mọi event trong khoảng), không có event → vẫn sửa mỗi 30 s (thời gian);
+  429 → chờ `retry_after` (≤ 60 s) rồi sửa lại với trạng thái mới nhất. Xong → một dòng `✓ Xong · N bước · 42 giây` /
+  `⏹ Đã dừng · …` / `⚠️ Chưa xong · …`, gỡ nút; việc này chạy nền — không chặn tin trả lời. Theo dõi tối đa 6 giờ / 100 run.
+- **Nút Dừng**: `CallbackStore.issue([("ms", run_gốc, "⏹ Dừng")])` (nonce một lần + HMAC, ràng chat). `_on_actions` kiểm workspace +
+  allowlist người TRƯỚC khi tiêu nonce (người lạ trong kênh: `slack.ignored`, nút còn nguyên). Bấm → `bot.call(cid, "run.stop", {id})`
+  (cổng người, audit `slack.command`) → tin sửa ngay thành "⏹ Đang dừng…" không nút; lỗi → toast + cấp nút mới. Xong/hết hạn →
+  `invalidate_ref`. Trạng thái tiến độ chỉ trong RAM: daemon khởi động lại → tin cũ đứng yên, nút cũ vẫn dừng đúng run (ref = run id).
+- **Giới hạn**: trả lời trong thread (`_on_thread_reply`) gửi `message_id = gốc thread` → ⏳ (khi dùng reaction) gắn vào tin gốc chứ không
+  phải tin trả lời mới nhất; hai việc song song trong cùng thread dùng chung trạng thái/⏳ của thread. `setStatus` vốn dành cho app
+  "AI assistant" — workspace/kênh không hỗ trợ thì luôn rơi về reaction.
+- **Scope**: `chat:write` (setStatus, chat.update) đã có; reaction cần thêm `reactions:write` — CHƯA thêm vào manifest (`web/app.py`).
+- Test: `tests/test_slack_progress.py` (trạng thái đúng thread + xoá; tin tiến độ đăng/sửa/thu gọn, không lộ input; reaction thay thế được
+  gắn + gỡ; cả hai lỗi → bỏ êm; nút Dừng dừng run + người lạ không bấm được + bấm lại bị từ chối; gộp sửa + 429; Telegram không đổi).
+  Slack giả: `assistant.threads.setStatus` (`fail_status`), `reactions.add|remove` (`fail_reactions`), `ratelimit[method]` → HTTP 429.
+
 ## Chưa làm
-- Reaction ⏳ thay "đang gõ…" khi chờ điều phối viên (cần scope `reactions:write`); bot Slack hiện bỏ qua "đang gõ".
-- Nghiệm thu trên workspace Slack thật: chưa chạy (cả tag trong kênh — P6) (modal `views.open`, tải `url_private` với `files:read`, tệp từ máy tính + điện thoại).
+- Thêm `reactions:write` vào manifest 2 chiều (đường dự phòng ⏳ của P7) — app đã cài cần Reinstall.
+- Nghiệm thu trên workspace Slack thật: chưa chạy (cả tag trong kênh — P6, `setStatus`/tin tiến độ — P7) (modal `views.open`, tải `url_private` với `files:read`, tệp từ máy tính + điện thoại).
