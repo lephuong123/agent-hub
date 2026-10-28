@@ -32,7 +32,7 @@ from starlette.templating import Jinja2Templates
 from .. import auth as _auth
 from ..errors import BLOCKED
 from ..paths import HubPaths
-from ..rpc import DaemonUnavailable, RpcError
+from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
 from ..tui.client import AsyncHubClient, subscribe
 from ..tui.model import STATUS_ORDER
 from . import present as P
@@ -288,6 +288,9 @@ def err_text(e: Exception) -> str:
             msg += " — " + "; ".join(f"{f.get('field')}: {f.get('error')}" for f in fields if isinstance(f, dict))
         if e.code == BLOCKED:
             msg = "Bị chặn: " + msg
+        if e.code == METHOD_NOT_FOUND:  # web mới hơn daemon (vd daemon khởi động trước khi kéo code) — trang không tự sửa được
+            msg += (" — daemon đang chạy bản cũ hơn web. Khởi động lại daemon (`cfharness daemon stop` rồi `cfharness daemon start`; "
+                    "run đang chạy sẽ bị dừng) rồi tải lại trang.")
         return msg
     if isinstance(e, DaemonUnavailable):
         return "Daemon cfharness không chạy — chạy `cfharness daemon start` rồi tải lại trang."
@@ -1223,7 +1226,8 @@ async def http_error(request: Request, exc: Exception) -> Response:
 
 async def rpc_error(request: Request, exc: Exception) -> Response:
     msg = err_text(exc)
-    code = 404 if isinstance(exc, RpcError) and exc.code == -32004 else 503 if isinstance(exc, (DaemonUnavailable, OSError)) else 400
+    code = (404 if isinstance(exc, RpcError) and exc.code == -32004 else
+            503 if isinstance(exc, (DaemonUnavailable, OSError)) or (isinstance(exc, RpcError) and exc.code == METHOD_NOT_FOUND) else 400)
     if request.url.path.startswith(("/sse/", "/partials/")):
         return PlainTextResponse(msg, status_code=code)
     st = ws(request)
@@ -1248,6 +1252,12 @@ def _extra_routes() -> list[Any]:
 
     _x.register_actions(ACTIONS, Action, _req)
     return _x.routes()
+
+
+def _skill_routes() -> list[Any]:
+    from .skill_pages import routes as _r  # /skills… — quản lý skill (RPC knowledge.skill_*), web/skill_pages.py
+
+    return _r()
 
 
 def _mcp_routes() -> list[Any]:
@@ -1305,6 +1315,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/sse/firehose", sse_firehose),
         *_manager_routes(),
         *_extra_routes(),
+        *_skill_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]

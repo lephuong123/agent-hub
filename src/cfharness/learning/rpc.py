@@ -191,12 +191,17 @@ class LearningRpc:
 
 
 MUTATING_M4A = ("learn.signal_add", "learn.refine", "learn.review_cancel", "learn.propose", "learn.retry", "learn.rollback", "learn.policy_set", "knowledge.pin",
-                "learn.canary_check")
+                "learn.canary_check",
+                # skill manager của người (learning/skill_rpc.py)
+                "knowledge.skill_save", "knowledge.skill_archive", "knowledge.skill_restore", "knowledge.skill_import", "knowledge.skill_promote")
 
 
 def register_rpc(daemon: "Daemon") -> None:
     r = LearningRpc(daemon)
     daemon.methods.update(r.methods())
+    from .skill_rpc import SkillManageRpc
+
+    daemon.methods.update(SkillManageRpc(daemon).methods())  # knowledge.skill_* (skill manager của người)
     orig_stop = daemon.methods.get("run.stop")
     if orig_stop is not None:
         def run_stop(p: dict[str, Any]) -> Any:

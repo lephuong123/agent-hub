@@ -841,3 +841,11 @@ html.mgr-info-closed .mgr-side { display: none; }
 .pairbox .pair-code code { font-size: 1.25em; font-weight: 700; letter-spacing: .06em; user-select: all; }
 .slack2-setup { margin-top: var(--s3); }
 .slack2-setup > summary { cursor: pointer; color: var(--text-2); font-size: var(--fs-sm); font-weight: 600; }
+
+/* ---- quản lý skill (web/skill_pages.py) ---- */
+.skill-src { max-height: 70vh; font-size: 12.5px; }
+.file-list { list-style: none; padding: 0; margin: 0 0 var(--s3); }
+.file-list li { padding: 3px 0; overflow-wrap: anywhere; }
+.form label.row { flex-direction: row; align-items: center; font-weight: 560; margin-bottom: var(--s2); }
+.form .tier-pick select { width: auto; }
+.filters label.row { flex-direction: row; align-items: center; }

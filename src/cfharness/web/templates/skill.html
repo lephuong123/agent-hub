@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Skill {{ name }}{% endblock %}
+{% macro tier_fields() -%}
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ name }}"><input type="hidden" name="scope" value="{{ scope }}">
+{%- if scope == 'agent' %}<input type="hidden" name="agent" value="{{ owner }}">{% elif scope == 'team' %}<input type="hidden" name="team" value="{{ owner }}">{% endif -%}
+<input type="hidden" name="next" value="{{ url }}">
+{%- endmacro %}
+{% macro sact(op, label, cls="btn", confirm=None, extra={}, ic=None) -%}
+<form method="post" action="/skills/act/{{ op }}" class="inline"{% if confirm %} data-confirm="{{ confirm }}"{% endif %}>{{ tier_fields() }}
+{%- for k, v in extra.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor -%}
+<button type="submit" class="{{ cls }}">{% if ic %}{{ m.icon(ic) }}{% endif %}<span>{{ label }}</span></button></form>
+{%- endmacro %}
+{% block content %}
+{% set where = tier_label(scope, owner) %}
+<nav class="crumbs"><a href="/skills">Skill</a> › {% if scope == 'agent' %}<a href="/skills?agent={{ owner }}">{{ owner }}</a> › {% endif %}<span>{{ name }}</span></nav>
+<div class="page-head"><div class="ph-title"><h1>{{ name }}{% if row and row.state in ('archived', 'deleted') %} <span class="pill muted">{{ row.state }}</span>{% endif %}{% if row and row.pinned %} <span class="pill info">{{ m.icon('pin') }}đã ghim</span>{% endif %}</h1>
+  <span class="sub">Tầng {{ where }}{% if s and s.frontmatter %} · {{ s.frontmatter.description }}{% endif %}</span></div>
+  <div class="row gap">
+  {% if s %}
+    <a class="btn" href="{{ url }}/edit">{{ m.icon('edit') }}<span>Sửa</span></a>
+    {% if row and row.pinned %}{{ sact("pin", "Bỏ ghim", "btn ghost", extra={"on": "0"}, ic="pin") }}{% else %}{{ sact("pin", "Ghim", "btn ghost", extra={"on": "1"}, ic="pin") }}{% endif %}
+    {{ sact("archive", "Archive", "btn danger", confirm="Archive skill " ~ name ~ " ở tầng " ~ where ~ "? Xoá mềm — khôi phục được.", ic="trash") }}
+  {% elif row and row.restore_entry_id %}
+    {{ sact("restore", "Khôi phục", "btn primary", confirm="Khôi phục skill " ~ name ~ " ở tầng " ~ where ~ "?", ic="undo") }}
+  {% endif %}
+  </div></div>
+{% include "_skill_result.html" %}
+
+{% if not s %}
+<section class="card archived">
+  <p>Skill này đã bị archive{% if row.deleted_at %} lúc {{ row.deleted_at|ts }}{% endif %}{% if row.purge_after %}; sẽ bị xoá hẳn sau {{ row.purge_after|ts }}{% endif %}.</p>
+  <dl class="kv cols">
+    <div><dt>Mô tả</dt><dd>{{ row.description or '—' }}</dd></div>
+    <div><dt>Tạo bởi</dt><dd>{{ row.created_by or '—' }}</dd></div>
+    <div><dt>Entry archive</dt><dd>{% if row.restore_entry_id %}<a href="/learnings/{{ row.restore_entry_id }}"><code>{{ row.restore_entry_id }}</code></a>{% else %}không còn khôi phục được{% endif %}</dd></div>
+  </dl>
+</section>
+{% else %}
+{% set p = s.provenance or {} %}
+<section class="card">
+  <dl class="kv cols">
+    <div><dt>Tầng</dt><dd>{% if scope == 'agent' %}<a href="/agents/{{ owner }}">agent {{ owner }}</a>{% else %}{{ where }}{% endif %}</dd></div>
+    <div><dt>Trạng thái</dt><dd><span class="pill {{ tones.get(p.state or 'active', 'muted') }}">{{ p.state or 'active' }}</span></dd></div>
+    <div><dt>Tạo bởi</dt><dd>{{ p.created_by or '—' }}</dd></div>
+    <div><dt>Lượt dùng</dt><dd>{{ p.use_count or 0 }}{% if p.last_used_at %} · gần nhất {{ m.rel(p.last_used_at) }}{% endif %}</dd></div>
+    <div><dt>Tạo lúc</dt><dd>{{ p.created_at|ts if p.created_at else '—' }}</dd></div>
+    <div><dt>Sửa lúc</dt><dd>{{ p.updated_at|ts if p.updated_at else '—' }}</dd></div>
+    {% if s.shadows %}<div class="span2"><dt>Che bản</dt><dd>{% for x in s.shadows %}<span class="chip">{{ x }}</span>{% endfor %}</dd></div>{% endif %}
+    <div class="span2"><dt>Đường dẫn</dt><dd><code class="small">{{ s.path }}</code></dd></div>
+  </dl>
+</section>
+
+<div class="grid2">
+<section class="card" id="files">
+  <h2>{{ m.icon('clip') }} File</h2>
+  <ul class="small file-list">
+    <li>{% if file %}<a href="{{ url }}">SKILL.md</a>{% else %}<b>SKILL.md</b>{% endif %}</li>
+    {% for f in s.support_files %}<li>{% if file and file.path == f %}<b>{{ f }}</b>{% else %}<a href="{{ url }}?file={{ f|urlencode }}">{{ f }}</a>{% endif %} <a class="muted xs" href="{{ url }}/edit?file={{ f|urlencode }}">sửa</a></li>{% endfor %}
+  </ul>
+  <a class="btn sm ghost" href="{{ url }}/edit?mode=file">{{ m.icon('plus') }}<span>Thêm / thay file hỗ trợ</span></a>
+</section>
+{% if scope == 'agent' %}
+<section class="card" id="promote">
+  <h2>{{ m.icon('arrow-up') }} Đưa lên team / toàn hub</h2>
+  <form method="post" action="/skills/act/promote" class="form" data-confirm="Đưa skill {{ name }} lên tầng team/toàn hub? Áp dụng NGAY cho mọi agent của tầng đó (canary chỉ theo dõi).">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="agent" value="{{ owner }}"><input type="hidden" name="name" value="{{ name }}"><input type="hidden" name="next" value="{{ url }}">
+    <div class="fgrid">
+      <label>Đích <select name="to"><option value="team">team</option><option value="global">toàn hub (mọi agent)</option></select></label>
+      <label>Team <select name="team"><option value="">team duy nhất của {{ owner }}</option>{% for t in teams %}<option value="{{ t }}">{{ t }}</option>{% endfor %}</select>
+        <span class="hint">Chỉ dùng khi đích là team.</span></label>
+      <label class="span2 row gap"><input type="checkbox" name="archive_source" value="1"> Archive bản ở tầng agent sau khi đưa lên</label>
+    </div>
+    <p class="muted small">Không chọn archive: bản tầng agent vẫn giữ và che bản mới với chính agent {{ owner }}.</p>
+    <div class="row end"><button class="btn" type="submit">{{ m.icon('arrow-up') }}<span>Promote</span></button></div>
+  </form>
+</section>
+{% endif %}
+</div>
+
+<section class="card" id="content">
+  <h2>{{ file.path if file else 'SKILL.md' }}</h2>
+  <pre class="skill-src" tabindex="0">{{ file.content if file else s.content }}</pre>
+</section>
+
+<div class="section-title"><h2>Lịch sử thay đổi (ledger)</h2></div>
+<section class="card flush" id="ledger">
+  {% if not s.ledger %}{{ m.empty("Chưa có mục ledger nào cho skill này.") }}{% else %}
+  <table class="tbl stack"><thead><tr><th>Mục</th><th>Thao tác</th><th>Bởi</th><th>Lúc</th><th>Tóm tắt</th><th></th></tr></thead><tbody>
+  {% for e in s.ledger %}<tr class="{{ 'archived' if e.rolled_back_by }}">
+    <td data-label="Mục"><a href="/learnings/{{ e.id }}"><code>{{ e.id }}</code></a></td>
+    <td data-label="Thao tác"><code>{{ e.op }}</code>{% if e.risk_class %} <span class="pill muted">{{ e.risk_class }}</span>{% endif %}</td>
+    <td data-label="Bởi">{{ e.actor or '—' }}</td>
+    <td data-label="Lúc">{{ m.rel(e.applied_at) }}</td>
+    <td data-label="Tóm tắt" class="small">{{ e.summary or e.reason or '' }}</td>
+    <td class="actions">{% if e.rolled_back_by %}<span class="pill muted">đã rollback</span>{% elif e.rollback_of %}<span class="pill muted">rollback của {{ e.rollback_of }}</span>{% else %}<a class="btn sm ghost" href="/learnings/{{ e.id }}">Xem diff</a>{% endif %}</td>
+  </tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

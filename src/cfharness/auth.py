@@ -66,6 +66,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # học (H-05): propose bị HẠ xuống created_by=agent thay vì từ chối — xem `DOWNGRADE`
         "learn.propose", "learn.rollback", "learn.retry", "learn.refine", "learn.policy_set", "learn.review_cancel",
         "knowledge.pin", "curation.rollback", "eval.post_apply",
+        # skill manager của người (learning/skill_rpc.py): ghi skill với created_by=user — agent học qua learnself/review, không qua đây
+        "knowledge.skill_save", "knowledge.skill_archive", "knowledge.skill_restore", "knowledge.skill_import", "knowledge.skill_promote",
         # golden task = chính sách an toàn (Q-07)
         "golden.add", "golden.rm", "golden.update", "golden.restore", "golden.dismiss", "golden.from_run",
         # secret + registry MCP (server MCP chạy NGOÀI sandbox → thêm server = thoát sandbox)

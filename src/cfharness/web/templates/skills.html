@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Skill{% endblock %}
+{% block content %}
+<div class="page-head"><div class="ph-title"><h1>Skill</h1><span class="sub">Kỹ năng của agent, team và toàn hub. Mọi thay đổi đi qua guard + ledger (rollback được).</span></div>
+  <div class="row gap"><a class="btn primary" href="/skills/new{% if q.agent %}?agent={{ q.agent }}{% endif %}">{{ m.icon('plus') }}<span>Tạo skill</span></a>
+  <a class="btn ghost" href="/skills/new{% if q.agent %}?agent={{ q.agent }}{% endif %}#import">{{ m.icon('clip') }}<span>Nhập</span></a></div></div>
+{% include "_skill_result.html" %}
+<form method="get" action="/skills" class="filters" role="search">
+  <label>Agent <select name="agent"><option value="">mọi agent + team + toàn hub</option>{% for a in agents %}<option value="{{ a }}" {{ 'selected' if q.agent == a }}>{{ a }}</option>{% endfor %}</select></label>
+  <label>Tầng <select name="scope"><option value="">mọi tầng</option>{% for k, label in scopes %}<option value="{{ k }}" {{ 'selected' if q.scope == k }}>{{ label }}</option>{% endfor %}</select></label>
+  <label>Trạng thái <select name="state"><option value="">mọi trạng thái</option>{% for k, label in states %}<option value="{{ k }}" {{ 'selected' if q.state == k }}>{{ label }}</option>{% endfor %}</select></label>
+  <label>Tìm <input name="q" value="{{ q.q or '' }}" placeholder="tên hoặc mô tả" autocomplete="off" spellcheck="false"></label>
+  <label class="row gap"><input type="checkbox" name="archived" value="1" {{ 'checked' if archived }}> Hiện đã archive</label>
+  <button class="btn sm" type="submit">Lọc</button>
+</form>
+{% if mode == 'effective' %}<p class="muted small">Tập skill <b>hiệu lực</b> của agent {{ q.agent }}: bản tầng agent che bản team, bản team che bản toàn hub.</p>{% endif %}
+<section class="card flush">
+  {% if not rows %}{{ m.empty("Không có skill nào khớp bộ lọc.", "star", title="Trống") }}{% else %}
+  <table class="tbl stack skills-tbl">
+    <thead><tr><th>Skill</th><th>Tầng</th><th>Tạo bởi</th><th>Trạng thái</th><th class="num">Lượt dùng</th><th>Dùng gần nhất</th><th>Ghim</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}{% set gone = r.state in ('archived', 'deleted') %}<tr class="{{ 'archived' if gone }}">
+      <td data-label="Skill" class="title-cell"><a class="t" href="{{ r.url }}">{{ r.name }}</a><span class="s">{{ r.description or '' }}</span>{% if r.shadows %}<span class="s muted">che: {{ r.shadows|join(', ') }}</span>{% endif %}</td>
+      <td data-label="Tầng">{% if r.scope == 'agent' %}<a href="/agents/{{ r.owner }}">agent {{ r.owner }}</a>{% else %}{{ tier_label(r.scope, r.owner) }}{% endif %}</td>
+      <td data-label="Tạo bởi">{{ r.created_by or '—' }}</td>
+      <td data-label="Trạng thái"><span class="pill {{ tones.get(r.state or 'active', 'muted') }}">{{ r.state or 'active' }}</span></td>
+      <td data-label="Lượt dùng" class="num">{{ r.use_count or 0 }}</td>
+      <td data-label="Dùng gần nhất">{{ m.rel(r.last_used_at) }}</td>
+      <td data-label="Ghim">{% if r.pinned %}{{ m.icon('pin') }}<span class="sr-only">đã ghim</span>{% else %}—{% endif %}</td>
+      <td class="actions">{% if gone and r.restore_entry_id %}
+        <form method="post" action="/skills/act/restore" class="inline" data-confirm="Khôi phục skill {{ r.name }} ở tầng {{ tier_label(r.scope, r.owner) }}?">
+          <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="name" value="{{ r.name }}"><input type="hidden" name="scope" value="{{ r.scope }}">
+          {% if r.scope == 'agent' %}<input type="hidden" name="agent" value="{{ r.owner }}">{% elif r.scope == 'team' %}<input type="hidden" name="team" value="{{ r.owner }}">{% endif %}
+          <input type="hidden" name="next" value="{{ request.url.path }}?{{ request.url.query }}">
+          <button class="btn sm" type="submit">{{ m.icon('undo') }}<span>Khôi phục</span></button></form>
+      {% elif gone %}<span class="muted small" title="Không còn lần archive nào khôi phục được (đã purge hoặc đã khôi phục)">không khôi phục được</span>{% endif %}</td>
+    </tr>{% endfor %}
+    </tbody>
+  </table>{% endif %}
+</section>
+{% endblock %}

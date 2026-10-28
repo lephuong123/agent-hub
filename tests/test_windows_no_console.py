@@ -30,6 +30,7 @@ SAFE_HELPERS = {"no_window_kwargs", "new_group_kwargs", "detached_kwargs"}
 ALLOWLIST = {
     ("tui/cli.py", "cmd_takeover"): "takeover TƯƠNG TÁC: `claude --resume` phải dùng console của người",
     ("tui/app.py", "takeover"): "takeover TƯƠNG TÁC từ TUI: dùng console của người",
+    ("learning/skill_cli.py", "edit_text"): "`skill add|edit` mở $EDITOR TƯƠNG TÁC (vi/notepad): dùng console của người",
     ("recovery.py", "pid_start_time"): "`ps` — chỉ nhánh POSIX",
     ("tui/bench.py", "_ps"): "`ps` — bench bỏ qua trên Windows (unsupported_reason)",
     ("systems/launchd.py", "default_runner"): "launchctl/systemctl — chỉ macOS/Linux (Windows dùng taskscheduler.default_runner)",

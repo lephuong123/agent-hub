@@ -164,9 +164,11 @@ class Pipeline:
             scope, owner = prop["scope"], self._owner(prop)
             body = str(pl.get("body") or pl.get("content") or "")
             desc = " ".join(str(pl.get("description") or "").split())
+            extra_fm: dict[str, Any] = {}
             if body.startswith("---\n"):
                 fm, body = parse_skill(body)
                 desc = desc or " ".join(str(fm.get("description") or "").split())
+                extra_fm = {k: v for k, v in fm.items() if k not in ("name", "description")}
             if not body.strip():
                 raise KnowledgeError("skill mới cần body (nội dung SKILL.md)", "invalid")
             if not desc:
@@ -174,11 +176,15 @@ class Pipeline:
             d = self.ks.skill_dir(scope, owner, name)
             if (d / SKILL_FILE).exists():
                 raise KnowledgeError(f"skill '{name}' đã tồn tại — dùng propose_skill_patch (skill_view trước)", "exists")
-            text = render_skill(name, desc, body)
+            text = render_skill(name, desc, body, extra_fm)
+            support = self._support_files(pl)
             diff, size = _diff("", text, f"{name}/{SKILL_FILE}")
+            for rel, c in support.items():
+                dd, ds = _diff("", c, f"{name}/{rel}")
+                diff, size = diff + dd, size + ds
             ch = Change(scope=scope, owner_id=owner, target="skill", target_ref=name, op="add", actor="?", kind="tree", path=d,
-                        files={SKILL_FILE: text.encode("utf-8")}, agent_id=agent_id)
-            return {"scope": scope, "owner": owner, "change": ch, "diff": diff, "size": size, "new_text": desc + "\n" + body,
+                        files={SKILL_FILE: text.encode("utf-8"), **{r: c.encode("utf-8") for r, c in support.items()}}, agent_id=agent_id)
+            return {"scope": scope, "owner": owner, "change": ch, "diff": diff, "size": size, "new_text": desc + "\n" + body + "".join("\n" + c for c in support.values()),
                     "description": desc, "skill_chars": len(text)}
         s = None
         if prop["scope"] in ("team", "global"):  # M5-A: sửa thẳng skill của tầng chỉ định (kể cả khi tầng agent che khuất)
@@ -231,8 +237,26 @@ class Pipeline:
                 fm, _ = parse_skill(new)
                 desc = " ".join(str(fm.get("description") or "").split())
                 skill_chars = len(new)
+            files: dict[str, bytes | None] = {rel: None if new is None else new.encode("utf-8")}
+            replace_tree = bool(pl.get("replace_tree"))
+            if pl.get("files") is not None or replace_tree:
+                # thay CẢ skill (import --overwrite của người): SKILL.md ghi cả file + file hỗ trợ; replace_tree bỏ file không còn trong bản mới
+                if rel != SKILL_FILE or pl.get("content") is None or pl.get("old_string") is not None or new is None:
+                    raise KnowledgeError("files/replace_tree chỉ dùng cùng content (cả SKILL.md)", "invalid")
+                support = self._support_files(pl)
+                olds = {p.relative_to(d).as_posix(): p for p in d.rglob("*") if p.is_file() and p.name != SKILL_FILE} if d.is_dir() else {}
+                for r, c in support.items():
+                    before_c = olds[r].read_text(encoding="utf-8", errors="replace") if r in olds else ""
+                    dd, ds = _diff(before_c, c, f"{name}/{r}")
+                    diff, size = diff + dd, size + ds
+                    files[r] = c.encode("utf-8")
+                    added += "\n" + c
+                if replace_tree:
+                    for r in sorted(set(olds) - set(support)):
+                        dd, ds = _diff(olds[r].read_text(encoding="utf-8", errors="replace"), "", f"{name}/{r}")
+                        diff, size = diff + dd, size + ds
             ch = Change(scope=scope, owner_id=owner, target="skill", target_ref=name, op="patch", actor="?", kind="tree", path=d,
-                        files={rel: None if new is None else new.encode("utf-8")}, agent_id=agent_id)
+                        files=files, agent_id=agent_id, replace_tree=replace_tree)
             return {"scope": scope, "owner": owner, "change": ch, "diff": diff, "size": size, "new_text": added, "description": desc,
                     "skill_chars": skill_chars, "read_required": cur is not None, "was_read": self._was_read(prop, scope, owner, name, rel)}
         if op in ("merge", "archive", "delete"):
@@ -249,6 +273,27 @@ class Pipeline:
                     "absorbed_exists": t is not None and target != name,
                     "absorbed_read": t is not None and self._was_read(prop, t["scope"], t["owner"], target, SKILL_FILE)}
         raise KnowledgeError(f"op skill không hợp lệ: {op}", "invalid")
+
+    def _support_files(self, pl: dict[str, Any]) -> dict[str, str]:
+        """`payload.files` {rel: text} — file hỗ trợ (references/ templates/ scripts/) đi cùng SKILL.md (skill manager của người:
+        import/promote/import --overwrite). Kiểm đường dẫn (không thoát thư mục skill) + hạn mức `skill_chars` mỗi file."""
+        raw = pl.get("files")
+        if raw is None:
+            return {}
+        if not isinstance(raw, dict):
+            raise KnowledgeError("files phải là {đường dẫn tương đối: nội dung}", "invalid")
+        lim = self.ks.limits()["skill_chars"]
+        out: dict[str, str] = {}
+        for rel, c in raw.items():
+            rel = check_rel_path(str(rel).replace("\\", "/"))
+            if rel == SKILL_FILE:
+                raise KnowledgeError("SKILL.md truyền qua body/content, không qua files", "invalid")
+            if not isinstance(c, str):
+                raise KnowledgeError(f"nội dung file '{rel}' phải là văn bản", "invalid")
+            if len(c) > lim:
+                raise KnowledgeError(f"file '{rel}' {len(c)} > {lim} ký tự", "skill_limit")
+            out[rel] = c
+        return out
 
     def _plan_config(self, prop: dict[str, Any]) -> dict[str, Any]:
         pl = prop.get("payload") or {}
