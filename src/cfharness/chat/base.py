@@ -739,6 +739,10 @@ class ChatBot:
     def notify_chats(self) -> set[str]:  # pragma: no cover - lớp con
         raise NotImplementedError
 
+    def broadcast_chats(self) -> set[str]:
+        """Chat nhận tin chủ động không gắn cuộc trò chuyện nào (approval, câu hỏi, thông báo) — mặc định = `notify_chats()`."""
+        return self.notify_chats()
+
     def help_text(self) -> str:  # pragma: no cover - lớp con
         raise NotImplementedError
 

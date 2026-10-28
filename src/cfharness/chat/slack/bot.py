@@ -15,6 +15,7 @@ An toàn (như Telegram — WT-4/5/8):
 - mrkdwn: mọi giá trị động escape `& < >`, khối chữ `verbatim` (chat/slack/render.py) — agent không ping `<!channel>` / giả link được.
 - Lệnh: client Slack chặn tin bắt đầu bằng `/` → một slash command (`notify.slack.slash_command`, mặc định `/cfh <lệnh> …`); kết quả
   gửi vào DM của người với bot. Tin chữ thường trong DM → điều phối viên; trả lời trong thread = "reply" của Telegram.
+- Kênh chung (P6): chỉ tin TAG bot (`app_mention`) → điều phối viên, trả lời trong thread; approval / câu hỏi / thông báo chỉ vào DM.
 - Ô nhập (P2): Slack không có `force_reply` → `ask_input` mở MODAL bằng `trigger_id` của nút/slash vừa xử lý (chat/slack/modals.py:
   nonce phía hub `slack.modals`, submit kiểm workspace + đúng người + allowlist rồi mới `self.call`). Không có trigger → thread như P1.
 """
@@ -60,6 +61,16 @@ def pair_code_of(text: str) -> str | None:
     return m.group(1).upper() if m else None
 
 
+def strip_mention(text: str, bot_uid: str | None) -> str:
+    """Bỏ `<@bot>` khỏi tin tag bot trong kênh (`app_mention`); tag người khác giữ nguyên. Không biết bot id → bỏ tag đầu tin."""
+    t = str(text or "")
+    if bot_uid:
+        t = re.sub(rf"<@{re.escape(bot_uid)}(?:\|[^>]*)?>", " ", t)
+    else:
+        t = re.sub(r"^\s*<@[UW][A-Z0-9]+(?:\|[^>]*)?>", " ", t)
+    return re.sub(r"[ 	]{2,}", " ", t).strip()
+
+
 PAIR_ACK = "Đã nhận mã ghép nối. Quay lại terminal hoặc trang Cài đặt trên web cfharness để xác nhận đưa DM này vào allowlist."
 SEEN_TTL_S = 3600
 SEEN_MAX = 2000
@@ -102,7 +113,7 @@ class SlackChatNotifier(QueuedNotifier):
 
     def target(self) -> dict[str, Any] | None:
         api = self.bot.api()
-        chats = self.bot.notify_chats()
+        chats = self.bot.broadcast_chats()
         if api is None or not chats:
             return None
         return {"api": api, "chats": sorted(chats)}
@@ -204,6 +215,10 @@ class SlackBot(ChatBot):
         """Chat nhận thông báo: DM trong allowlist; kênh chung chỉ khi `allow_channels`."""
         chans = bool(self.cfg().get("allow_channels"))
         return {c for c in self.allowed() if c.startswith("D") or chans}
+
+    def broadcast_chats(self) -> set[str]:
+        """Approval / câu hỏi / thông báo chủ động: chỉ DM — kênh chung chỉ nhận trả lời cho việc được tag trong kênh đó."""
+        return {c for c in self.notify_chats() if c.startswith("D")}
 
     def slash(self) -> str:
         return str(self.cfg().get("slash_command") or "/cfh")
@@ -440,6 +455,8 @@ class SlackBot(ChatBot):
             ev = p.get("event") or {}
             if ev.get("type") == "message":
                 await self._on_message(ev, p.get("team_id"), api)
+            elif ev.get("type") == "app_mention":
+                await self._on_mention(ev, p.get("team_id"), api)
         elif typ == "slash_commands":
             await self._on_slash(p, api)
         elif typ == "interactive" and p.get("type") == "block_actions":
@@ -471,6 +488,24 @@ class SlackBot(ChatBot):
         if root and root != ev.get("ts") and await self._on_thread_reply(cid, str(root), text, api):
             return
         await self.manager.handle_text(cid, text, api, message_id=ev.get("ts"))
+
+    async def _on_mention(self, ev: dict[str, Any], team: Any, api: SlackApi) -> None:
+        """Tag bot trong kênh (`app_mention`) = tin chữ gửi điều phối viên, cùng cổng `_on_message` (workspace + allowlist kênh VÀ người,
+        kênh chỉ khi `allow_channels`). Bỏ `<@bot>`; trả lời vào thread của tin đã tag. Tag ở gốc kênh → cuộc trò chuyện MỚI (mỗi lần tag
+        một việc); tag trong thread của bot → tiếp tục cuộc trong thread đó. Kênh không đăng ký `message.channels` → tin không tag bị bỏ qua."""
+        cid = str(ev.get("channel") or "")
+        if cid.startswith("D"):
+            return  # DM đã đến qua `message.im` — tránh xử lý hai lần
+        m = dict(ev, type="message", text=strip_mention(str(ev.get("text") or ""), self.info.get("bot_user_id")),
+                 channel_type=ev.get("channel_type") or "channel")
+        if m.get("files") and not m.get("subtype"):
+            m["subtype"] = "file_share"
+        ts, root = m.get("ts"), m.get("thread_ts")
+        if ts and root and root != ts:
+            self._remember(str(ts), str(root))  # trả lời tin tag trong thread → vào đúng thread, không mở thread con
+        elif ts and self.team_ok(team) and self.is_allowed(cid, str(ev.get("user") or "") or None):
+            await self.manager.new_conversation(cid, api)  # chỉ đổi con trỏ cuộc hiện tại của kênh; cuộc cũ vẫn tiếp tục được trong thread
+        await self._on_message(m, team, api)
 
     def _candidates(self, root: str) -> list[str]:
         """Tin của bot trong thread (mới nhất trước) + gốc — nơi người có thể đang trả lời."""

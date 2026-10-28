@@ -88,10 +88,11 @@ def create_link(html: str) -> dict:
 def test_manifest_2way_and_slash_validation():
     m = slack_2way_manifest()
     assert m["settings"]["socket_mode_enabled"] is True and m["settings"]["interactivity"]["is_enabled"] is True
-    assert m["settings"]["event_subscriptions"]["bot_events"] == ["message.im"]
+    assert m["settings"]["event_subscriptions"]["bot_events"] == ["message.im", "app_mention"]
     assert m["features"]["app_home"]["messages_tab_enabled"] is True
     assert m["features"]["slash_commands"][0]["command"] == "/cfh"
-    assert set(m["oauth_config"]["scopes"]["bot"]) == {"chat:write", "im:history", "im:read", "im:write", "commands", "users:read", "files:read", "files:write"}
+    assert set(m["oauth_config"]["scopes"]["bot"]) == {"chat:write", "im:history", "im:read", "im:write", "commands", "users:read", "files:read", "files:write",
+                                                        "app_mentions:read"}
     assert slack_2way_manifest("/cfh-phuong")["features"]["slash_commands"][0]["command"] == "/cfh-phuong"
     assert slack_2way_manifest()["features"]["slash_commands"][0]["command"] == "/cfh"  # hằng số không bị sửa
     for bad in ("cfh", "/cfh x", "/" + "a" * 40, "/<script>", None, ""):

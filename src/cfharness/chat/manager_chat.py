@@ -154,7 +154,7 @@ class ManagerChat:
             chat = self._chat_of(p) if p.get("channel") else (meta.get("chat") or self._chat_of(p))
             if chat is None:
                 if notify and not p.get("channel"):  # notify_owner khi chưa có hội thoại nào của người → mọi chat nhận thông báo
-                    for c in sorted(self.bot.notify_chats()):
+                    for c in sorted(self.bot.broadcast_chats()):
                         self.bot._spawn(self._deliver(c, None, None, str(p.get("text") or ""), notify=True, agent=ev.agent_id))
                 return  # hội thoại của kênh khác (web/cli/heartbeat)
             self.bot._spawn(self._deliver(chat, p.get("conversation_id") or meta.get("conv"), None if notify else run, str(p.get("text") or ""),

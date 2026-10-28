@@ -127,6 +127,26 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
 `slack.revoke` gỡ luôn người sở hữu DM khỏi `allowed_user_ids`; tin xác nhận ghép nối nhắc cả "terminal hoặc trang Cài đặt";
 `notify.slack.modal_ttl_s` có trong config mặc định.
 
+## P6 — tag bot trong kênh (`app_mention`)
+| File | Vai trò |
+|---|---|
+| `chat/slack/bot.py` | `strip_mention` (bỏ `<@bot>`, giữ tag người khác); `_on_mention`: `app_mention` → chuẩn hoá thành tin `message` rồi đi `_on_message` (cùng cổng workspace + allowlist kênh VÀ người); `broadcast_chats()` = chỉ DM |
+| `chat/base.py` | `ChatBot.broadcast_chats()` — mặc định = `notify_chats()` (Telegram không đổi) |
+| `chat/questions_tg.py`, `chat/manager_chat.py`, `SlackChatNotifier.target` | tin chủ động (approval, câu hỏi, `notify_owner` khi chưa có hội thoại) dùng `broadcast_chats()` |
+| `web/app.py` | manifest 2 chiều thêm event `app_mention` + scope `app_mentions:read` |
+
+- **Bật**: `cfharness config set notify.slack.allow_channels true` → mời bot vào kênh (`/invite @cfharness`) → trong kênh gõ
+  `@cfharness ghepnoi <mã>` (mã từ `notify slack setup --keep-token` / web) → xác nhận. Người tag phải ∈ `allowed_user_ids`; kênh ∈ `allowed_chat_ids`.
+  App đã cài trước P6: dán lại manifest (hoặc thêm event + scope bằng tay) rồi **Reinstall** để Slack gửi `app_mention`.
+- **Luồng**: tag ở gốc kênh → cuộc trò chuyện điều phối viên MỚI (mỗi lần tag một việc), trả lời vào thread của tin đã tag. Tag lại trong thread
+  đó → tiếp tục cuộc đó (`_on_thread_reply`). Tag trong thread của người khác → `_remember(ts, thread_ts)` để trả lời vào đúng thread.
+- **Không đọc cả kênh**: không xin `message.channels` / `channels:history` → tin không tag bot (kể cả trả lời trong thread) bot không thấy.
+  `app_mention` trong DM bị bỏ (DM đã đến qua `message.im`).
+- **Kênh chỉ nhận trả lời của việc được tag ở đó**: approval có nút, câu hỏi của agent, thông báo hub → chỉ DM. Kết quả trong kênh mọi thành viên
+  đều thấy. Lịch `deliver_to: slack:C…` vẫn giao vào kênh (đi theo `notify_chats()`).
+- Test: `tests/test_slack_mentions.py` (thread + cuộc mới/cũ, người lạ, `allow_channels` tắt, workspace khác, approval chỉ vào DM, manifest);
+  Slack giả: `FakeSlack.mention()`.
+
 ## Chưa làm
 - Reaction ⏳ thay "đang gõ…" khi chờ điều phối viên (cần scope `reactions:write`); bot Slack hiện bỏ qua "đang gõ".
-- Nghiệm thu trên workspace Slack thật: chưa chạy (modal `views.open`, tải `url_private` với `files:read`, tệp từ máy tính + điện thoại).
+- Nghiệm thu trên workspace Slack thật: chưa chạy (cả tag trong kênh — P6) (modal `views.open`, tải `url_private` với `files:read`, tệp từ máy tính + điện thoại).
