@@ -259,6 +259,25 @@ async def test_trust_expiry_review_runs_and_human_only(hub):
     assert any("guard.trust" in str(x.get("kind") or x.get("action") or "") for x in audits)
 
 
+async def test_trust_set_all(hub):
+    for aid in ("a", "b"):
+        hub.agents.create({"id": aid, "name": aid.upper()})
+    r = hub.guard.trust_set_all("full", for_s=3600)
+    assert r["count"] == 2 and sorted(r["agents"]) == ["a", "b"] and r["until"]
+    assert set(hub.guard.trust_all()) == {"a", "b"}
+    assert len([e for e in hub.store.query_events() if e.type == "guard.trust"]) == 2  # mỗi agent một event
+    with pytest.raises(HubError):
+        hub.guard.trust_set_all("maybe")
+    tok = as_agent()
+    try:
+        with pytest.raises(Blocked):
+            hub.guard.trust_set_all("full")
+    finally:
+        auth.CURRENT_CALLER.reset(tok)
+    assert "guard.trust.set_all" in auth.HUMAN_ONLY
+    assert hub.guard.trust_set_all("off")["count"] == 2 and hub.guard.trust_all() == {}
+
+
 async def test_trust_new_agents_default(hub):
     hub.agents.create({"id": "old", "name": "OLD"})
     assert hub.guard.trust_of("old") is None  # mặc định "off": như cũ

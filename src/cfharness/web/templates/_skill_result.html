@@ -1,0 +1,21 @@
+{#- Khối kết quả lần ghi skill gần nhất (web/skill_pages.result_view) — hiện một lần sau khi ghi. Mọi chữ autoescape. -#}
+{% if result %}
+<section class="card {{ 'attention' if not result.ok }}" id="skill-result" role="status">
+  <div class="card-head"><h2>{{ m.icon('check' if result.ok else 'alert') }} {{ 'Kết quả' if result.ok else ('Bị guard chặn' if result.status == 'blocked' else 'Chưa áp dụng') }}</h2>
+    <span class="pill {{ 'ok' if result.ok else 'danger' }}">{{ result.status }}</span></div>
+  <p class="pre">{{ result.text }}</p>
+  <dl class="kv cols">
+    {% if result.status == 'blocked' %}<div><dt>Luật</dt><dd><code>{{ result.rule or '?' }}</code></dd></div><div class="span2"><dt>Lý do</dt><dd class="danger-t pre">{{ result.reason or '—' }}</dd></div>{% endif %}
+    {% if result.proposal_id %}<div><dt>Proposal</dt><dd><code>{{ result.proposal_id }}</code></dd></div>{% endif %}
+    {% if result.ledger_entry_id %}<div><dt>Ledger entry</dt><dd><a href="/learnings/{{ result.ledger_entry_id }}"><code>{{ result.ledger_entry_id }}</code></a></dd></div>{% endif %}
+    {% if result.restored_entry_id %}<div><dt>Đã rollback entry</dt><dd><a href="/learnings/{{ result.restored_entry_id }}"><code>{{ result.restored_entry_id }}</code></a></dd></div>{% endif %}
+    {% if result.canary_id %}<div><dt>Canary</dt><dd><code>{{ result.canary_id }}</code> · mode {{ result.mode or '?' }}{% if result.canary_status %} · <span class="pill info">{{ result.canary_status }}</span>{% endif %}</dd></div>{% endif %}
+    {% if result.source_archive %}<div><dt>Bản tầng agent</dt><dd>archive: {{ result.source_archive.status }}{% if result.source_archive.ledger_entry_id %} · <a href="/learnings/{{ result.source_archive.ledger_entry_id }}"><code>{{ result.source_archive.ledger_entry_id }}</code></a>{% endif %}</dd></div>{% endif %}
+    {% if result.imported_files %}<div class="span2"><dt>Đã nhập</dt><dd>{% for f in result.imported_files %}<code class="chip">{{ f }}</code>{% endfor %}</dd></div>{% endif %}
+    {% if result.skipped %}<div class="span2"><dt>Bỏ qua</dt><dd class="small">{% for x in result.skipped %}<div><code>{{ x.path }}</code> — {{ x.reason }}</div>{% endfor %}</dd></div>{% endif %}
+  </dl>
+  {% if result.shadowed %}<p class="muted small">Bản ở tầng agent vẫn còn và che bản mới với chính agent đó.</p>{% endif %}
+  {% if result.ledger_entry_id %}<p class="muted small">Hoàn tác: nút Rollback ở <a href="/learnings/{{ result.ledger_entry_id }}">trang ledger {{ result.ledger_entry_id }}</a>, hoặc <code>cfharness learn rollback {{ result.ledger_entry_id }}</code>.</p>{% endif %}
+  {% if result.canary_id %}<p class="muted small">Tầng team/global: thay đổi của người áp dụng ngay; canary mode <code>{{ result.mode or 'watch' }}</code> chỉ theo dõi/cảnh báo, không tự rollback.</p>{% endif %}
+</section>
+{% endif %}

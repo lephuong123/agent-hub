@@ -192,6 +192,8 @@ def register_rpc(d: "Daemon") -> None:
             "guard.trust.list": lambda p: hub.guard.trust_all(),
             "guard.trust.set": lambda p: hub.guard.trust_set(
                 _id(p), str(p.get("mode") or ""), for_s=p.get("for_s"), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+            "guard.trust.set_all": lambda p: hub.guard.trust_set_all(
+                str(p.get("mode") or ""), for_s=p.get("for_s"), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
             # MGR-2: mẫu chặn theo repo (người đặt, áp cho mọi agent) — set chỉ người, đọc tự do
             "guard.repo_deny.list": lambda p: hub.guard.policy_store.repo_deny_list(),
             "guard.repo_deny.add": lambda p: _repo_deny_add(hub, p),

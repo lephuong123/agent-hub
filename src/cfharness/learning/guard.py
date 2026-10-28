@@ -106,6 +106,8 @@ class LearningGuard:
             return Block("policy_touch", "target", f"target '{prop['target']}' không thuộc tri thức/cấu hình agent")
         pl = prop.get("payload") or {}
         refs = [str(prop.get("target_ref") or ""), str(pl.get("file_path") or ""), str(pl.get("name") or ""), str(pl.get("absorbed_into") or "")]
+        if isinstance(pl.get("files"), dict):  # file hỗ trợ đi kèm (skill manager: import/promote)
+            refs += [str(k) for k in pl["files"]]
         for r in refs:
             if r and (POLICY_WORDS.search(r) or ".." in r or r.startswith("/")):
                 return Block("policy_touch", "path", f"đích '{r}' chạm chính sách an toàn hoặc thoát khỏi kho tri thức")

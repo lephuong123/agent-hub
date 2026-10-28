@@ -638,6 +638,17 @@ class GuardService:
         self.hub.publish(make_event("guard.trust", agent_id, info, source="hub"))
         return {"agent_id": agent_id, **cur}
 
+    def trust_set_all(self, mode: str, *, for_s: float | None = None, by: str = "user", channel: str = "cli") -> dict[str, Any]:
+        """CHỈ người: `trust_set` cho MỌI agent đang có (không tính agent đã lưu trữ) — mỗi agent một audit/event `guard.trust`.
+        Agent tạo sau lệnh này không được phủ: dùng `guard.trust_new_agents`."""
+        from ..auth import require_human
+
+        require_human("đặt trust cho mọi agent")
+        if mode not in self.TRUST_MODES:
+            raise HubError(f"trust phải là {'|'.join(self.TRUST_MODES)}")
+        rows = [self.trust_set(str(a["id"]), mode, for_s=for_s, by=by, channel=channel) for a in self.hub.agents.list()]
+        return {"mode": mode, "count": len(rows), "until": rows[0].get("until") if rows else None, "agents": [r["agent_id"] for r in rows]}
+
     def _trust_new_agent(self, ev: Any) -> None:
         """Listener `agent.created`: `guard.trust_new_agents=full` (người đặt trong config) → agent mới nhận trust full không hết hạn,
         ghi `by=default, channel=config` + audit/event `guard.trust` như `trust_set`. Tắt cho từng agent bằng `guard trust <agent> off`."""

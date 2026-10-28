@@ -854,6 +854,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_m4a_parsers(sub, common)
 
+    # skill manager của người: cfharness skill ls|show|add|edit|import|rm|restore|pin|unpin|promote (learning/skill_cli.py)
+    from .learning.skill_cli import add_parsers as _add_skill_parsers
+
+    _add_skill_parsers(sub, common)
+
     # M5-B: curation, report kpi|overhead, telemetry
     from .curation.cli import add_parsers as _add_m5b_parsers
 

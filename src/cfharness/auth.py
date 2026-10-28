@@ -58,7 +58,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # phê duyệt / chính sách an toàn. `approval.manager_decide`: agent thường không bao giờ; điều phối viên qua MANAGER_ALLOWED
         # (chỉ approval routed_to=manager — docs/dev-notes/approval-profiles.md); người dùng approval.approve|deny
         "approval.approve", "approval.deny", "approval.manager_decide",
-        "guard.protect.add", "guard.protect.rm", "guard.integrity.accept", "guard.sandbox.set", "guard.sandbox.allow_domain", "guard.sandbox.dev_host", "guard.trust.set", "guard.repo_deny.add", "guard.repo_deny.rm",
+        "guard.protect.add", "guard.protect.rm", "guard.integrity.accept", "guard.sandbox.set", "guard.sandbox.allow_domain", "guard.sandbox.dev_host", "guard.trust.set", "guard.trust.set_all", "guard.repo_deny.add", "guard.repo_deny.rm",
         "config.set", "auth.reset", "hub.shutdown", "estop.set", "team.estop",
         # vòng đời / cấu hình agent (tool_policy, permission_mode, mcp_servers… là bề mặt nâng quyền)
         "agent.create", "agent.update", "agent.delete", "agent.restore", "agent.purge", "agent.clone", "agent.import",
@@ -66,6 +66,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # học (H-05): propose bị HẠ xuống created_by=agent thay vì từ chối — xem `DOWNGRADE`
         "learn.propose", "learn.rollback", "learn.retry", "learn.refine", "learn.policy_set", "learn.review_cancel",
         "knowledge.pin", "curation.rollback", "eval.post_apply",
+        # skill manager của người (learning/skill_rpc.py): ghi skill với created_by=user — agent học qua learnself/review, không qua đây
+        "knowledge.skill_save", "knowledge.skill_archive", "knowledge.skill_restore", "knowledge.skill_import", "knowledge.skill_promote",
         # golden task = chính sách an toàn (Q-07)
         "golden.add", "golden.rm", "golden.update", "golden.restore", "golden.dismiss", "golden.from_run",
         # secret + registry MCP (server MCP chạy NGOÀI sandbox → thêm server = thoát sandbox)

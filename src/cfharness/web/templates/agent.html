@@ -52,7 +52,7 @@
     <div><dt>Tự học</dt><dd>{% if learn_on is sameas false %}<span class="pill muted">tắt</span> {{ m.act("learn_toggle", "Bật", {"agent": a.id, "on": "1"}, "btn sm", confirm="Bật tự học cho " ~ a.id ~ "?") }}{% else %}<span class="pill ok">bật</span> {{ m.act("learn_toggle", "Tắt", {"agent": a.id, "on": "0"}, "btn sm ghost", confirm="Tắt tự học cho " ~ a.id ~ "?") }}{% endif %}</dd></div>
     <div><dt>Revision</dt><dd>{{ a.config_revision }}</dd></div>
   </dl>
-  {% if a.skills %}<p class="small"><b>Skill:</b> {% for s in a.skills %}<span class="chip">{{ s.name if s is mapping else s }}</span>{% endfor %}</p>{% endif %}
+  <p class="small"><b>Skill:</b> {% for s in a.skills or [] %}{% set sn = s.name if s is mapping else s %}<a class="chip" href="/skills/agent/{{ a.id|urlencode }}/{{ sn|urlencode }}" title="Xem skill {{ sn }}">{{ sn }}</a>{% else %}<span class="muted">chưa có skill riêng</span>{% endfor %} <a class="small" href="/skills?agent={{ a.id|urlencode }}">Quản lý skill</a></p>
 </section>
 </div>
 

@@ -51,6 +51,8 @@ MUTATING = frozenset(
         "learn.signal_add", "learn.refine", "learn.review_cancel", "learn.propose", "learn.retry", "learn.rollback", "learn.policy_set", "knowledge.pin",
         # M5-A
         "learn.canary_check",
+        # skill manager của người (learning/skill_rpc.py)
+        "knowledge.skill_save", "knowledge.skill_archive", "knowledge.skill_restore", "knowledge.skill_import", "knowledge.skill_promote",
         # hardening CLI (mcp_server/surface_rpc.py)
         "agent.archive", "agent.revert", "trash.restore", "trash.purge", "mcp.cancel_task",
         # hồ sơ phê duyệt (guard/rpc.py) — audit trong ApprovalService (tiền tố approval. không bọc lần hai)

@@ -90,6 +90,8 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "task": {"archive"},
     "learn": {"propose", "rollback", "retry", "refine", "policy", "pin", "unpin", "review-cancel", "review_cancel", "cancel"},
     "knowledge": {"pin", "unpin"},
+    # skill manager của người (RPC knowledge.skill_* + knowledge.pin là HUMAN_ONLY) — `cfharness skill <verb>` (learning/skill_cli.py)
+    "skill": {"add", "save", "new", "create", "edit", "set", "archive", "rm", "remove", "delete", "restore", "import", "promote", "pin", "unpin"},
     "golden": {"add", "rm", "remove", "edit", "update", "from-run", "from_run", "restore", "dismiss"},
     "guard": {"protect", "integrity", "sandbox", "repo-deny", "repo_deny", "always"},
     "config": {"set", "unset"},
@@ -171,7 +173,7 @@ MCP_FORBIDDEN = re.compile(r"^(hub_)?(approve|deny|approval_resolve|policy_set|p
 # H-18: tool của MCP server CỦA HUB (nhận theo lệnh/URL, không theo tên đăng ký) ứng với method chỉ-người
 HUB_MCP_HUMAN_ONLY = re.compile(
     r"^(hub_)?(approve|deny|agent_(create|update|archive|delete|purge|restore)|estop|config_set|secret_\w+|mcp_(add|update|remove|assign)|"
-    r"learn_(propose|rollback|retry|refine|policy_set)|knowledge_pin|team_(create|update|archive|member_set|member_rm|estop)|golden_(add|rm|remove|edit|update|from_run|restore|dismiss)|takeover|run_revert)$")
+    r"learn_(propose|rollback|retry|refine|policy_set)|knowledge_pin|knowledge_skill_(save|archive|restore|import|promote)|team_(create|update|archive|member_set|member_rm|estop)|golden_(add|rm|remove|edit|update|from_run|restore|dismiss)|takeover|run_revert)$")
 
 
 # ============================================================================ data

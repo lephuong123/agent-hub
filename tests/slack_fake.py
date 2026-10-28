@@ -236,6 +236,14 @@ class FakeSlack:
             ev["subtype"] = subtype
         return self._push("events_api", {"team_id": team or self.team, "event": ev, "event_id": event_id or f"Ev{ts.replace('.', '')}"})
 
+    def mention(self, channel: str, user: str, text: str, *, thread_ts: str | None = None, team: str | None = None) -> str:
+        """Sự kiện `app_mention` (tag bot trong kênh) — `text` chứa `<@BOT_USER>` như Slack thật; không có `channel_type`."""
+        ts = self._ts()
+        ev = {"type": "app_mention", "channel": channel, "user": user, "text": text, "ts": ts, "event_ts": ts}
+        if thread_ts:
+            ev["thread_ts"] = thread_ts
+        return self._push("events_api", {"team_id": team or self.team, "event": ev, "event_id": f"Ev{ts.replace('.', '')}"})
+
     def user_files(self, channel: str, user: str, files: list[tuple[str, bytes, str]], *, text: str = "", thread_ts: str | None = None,
                    sizes: dict[str, int] | None = None, urls: dict[str, str] | None = None, team: str | None = None) -> str:
         """Tin `file_share` kèm `files` [(tên, nội dung, mime)]. `sizes` = cỡ khai báo giả; `urls` = URL tải thay (thử host lạ)."""

@@ -32,7 +32,7 @@ from starlette.templating import Jinja2Templates
 from .. import auth as _auth
 from ..errors import BLOCKED
 from ..paths import HubPaths
-from ..rpc import DaemonUnavailable, RpcError
+from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
 from ..tui.client import AsyncHubClient, subscribe
 from ..tui.model import STATUS_ORDER
 from . import present as P
@@ -74,7 +74,8 @@ SLACK_MANIFEST: dict[str, Any] = {
 }
 SLACK_CREATE_URL = "https://api.slack.com/apps?new_app=1&manifest_json=" + quote(json.dumps(SLACK_MANIFEST, ensure_ascii=False, separators=(",", ":")), safe="")
 # Manifest app 2 chiều (docs/plan/slack-2way.md). Lệnh slash lấy từ `notify.slack.slash_command` lúc dựng URL (`slack_2way_create_url`).
-# `app_mentions:read` + `channels:history` chỉ cần khi bật `allow_channels` (v1: chỉ DM) → không xin sẵn.
+# `app_mention` + `app_mentions:read`: tag bot trong kênh giao việc — chỉ có tác dụng khi bật `allow_channels` và kênh + người trong
+# allowlist. KHÔNG xin `channels:history`/`message.channels`: bot chỉ thấy tin tag nó, không đọc cả kênh.
 SLACK_SLASH_DEFAULT = "/cfh"
 SLACK_MANIFEST_2WAY: dict[str, Any] = {
     "display_information": {"name": "cfharness", "description": "cfharness 2 chiều: duyệt bằng nút, lệnh /cfh, nhắn điều phối viên trong DM",
@@ -83,8 +84,10 @@ SLACK_MANIFEST_2WAY: dict[str, Any] = {
                  "app_home": {"messages_tab_enabled": True, "messages_tab_read_only_enabled": False},
                  "slash_commands": [{"command": SLACK_SLASH_DEFAULT, "description": "Điều khiển cfharness",
                                      "usage_hint": "canban | giaoviec <agent> <yêu cầu> | help"}]},
-    "oauth_config": {"scopes": {"bot": ["chat:write", "im:history", "im:read", "im:write", "commands", "users:read", "files:read", "files:write"]}},
-    "settings": {"socket_mode_enabled": True, "interactivity": {"is_enabled": True}, "event_subscriptions": {"bot_events": ["message.im"]},
+    "oauth_config": {"scopes": {"bot": ["chat:write", "im:history", "im:read", "im:write", "commands", "users:read", "files:read", "files:write",
+                                          "app_mentions:read"]}},
+    "settings": {"socket_mode_enabled": True, "interactivity": {"is_enabled": True},
+                 "event_subscriptions": {"bot_events": ["message.im", "app_mention"]},
                  "org_deploy_enabled": False, "token_rotation_enabled": False},
 }
 _SLASH_RE = re.compile(r"^/[a-z0-9][a-z0-9_\-]{0,30}$")
@@ -289,6 +292,9 @@ def err_text(e: Exception) -> str:
             msg += " — " + "; ".join(f"{f.get('field')}: {f.get('error')}" for f in fields if isinstance(f, dict))
         if e.code == BLOCKED:
             msg = "Bị chặn: " + msg
+        if e.code == METHOD_NOT_FOUND:  # web mới hơn daemon (vd daemon khởi động trước khi kéo code) — trang không tự sửa được
+            msg += (" — daemon đang chạy bản cũ hơn web. Khởi động lại daemon (`cfharness daemon stop` rồi `cfharness daemon start`; "
+                    "run đang chạy sẽ bị dừng) rồi tải lại trang.")
         return msg
     if isinstance(e, DaemonUnavailable):
         return "Daemon cfharness không chạy — chạy `cfharness daemon start` rồi tải lại trang."
@@ -1224,7 +1230,8 @@ async def http_error(request: Request, exc: Exception) -> Response:
 
 async def rpc_error(request: Request, exc: Exception) -> Response:
     msg = err_text(exc)
-    code = 404 if isinstance(exc, RpcError) and exc.code == -32004 else 503 if isinstance(exc, (DaemonUnavailable, OSError)) else 400
+    code = (404 if isinstance(exc, RpcError) and exc.code == -32004 else
+            503 if isinstance(exc, (DaemonUnavailable, OSError)) or (isinstance(exc, RpcError) and exc.code == METHOD_NOT_FOUND) else 400)
     if request.url.path.startswith(("/sse/", "/partials/")):
         return PlainTextResponse(msg, status_code=code)
     st = ws(request)
@@ -1249,6 +1256,12 @@ def _extra_routes() -> list[Any]:
 
     _x.register_actions(ACTIONS, Action, _req)
     return _x.routes()
+
+
+def _skill_routes() -> list[Any]:
+    from .skill_pages import routes as _r  # /skills… — quản lý skill (RPC knowledge.skill_*), web/skill_pages.py
+
+    return _r()
 
 
 def _mcp_routes() -> list[Any]:
@@ -1315,6 +1328,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/sse/firehose", sse_firehose),
         *_manager_routes(),
         *_extra_routes(),
+        *_skill_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]

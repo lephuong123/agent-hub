@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}{{ 'Sửa skill ' ~ edit.name if edit else 'Tạo skill' }}{% endblock %}
+{% macro tier_select(v, prefix) -%}
+<fieldset class="fgrid span2 tier-pick"><legend>Tầng</legend>
+  <label class="row gap"><input type="radio" name="scope" value="agent" {{ 'checked' if (v.scope or 'agent') == 'agent' }}> Agent
+    <select name="agent" aria-label="Agent"><option value="">— chọn agent —</option>{% for a in agents %}<option value="{{ a }}" {{ 'selected' if v.agent == a }}>{{ a }}</option>{% endfor %}</select></label>
+  <label class="row gap"><input type="radio" name="scope" value="team" {{ 'checked' if v.scope == 'team' }}> Team
+    <select name="team" aria-label="Team"><option value="">— chọn team —</option>{% for t in teams %}<option value="{{ t }}" {{ 'selected' if v.team == t }}>{{ t }}</option>{% endfor %}</select></label>
+  <label class="row gap"><input type="radio" name="scope" value="global" {{ 'checked' if v.scope == 'global' }}> Toàn hub (mọi agent)</label>
+  <span class="hint span2">Team / toàn hub: áp dụng ngay cho mọi agent của tầng đó (canary chỉ theo dõi).</span>
+</fieldset>
+{%- endmacro %}
+{% block content %}
+<nav class="crumbs"><a href="/skills">Skill</a> › {% if edit %}<a href="{{ edit.url }}">{{ edit.name }}</a> › <span>Sửa</span>{% else %}<span>Tạo</span>{% endif %}</nav>
+<div class="page-head"><div class="ph-title"><h1>{{ 'Sửa skill ' ~ edit.name if edit else 'Tạo skill' }}</h1>
+  <span class="sub">{% if edit %}Tầng {{ tier_label(edit.scope, edit.owner) }}. {% endif %}Lưu đi qua guard (quét nội dung, ghim, hạn mức) và ghi ledger — rollback được.</span></div></div>
+{% include "_skill_result.html" %}
+
+<section class="card" id="save">
+  <h2>{{ m.icon('edit') }} {{ 'Nội dung' if edit else 'Skill mới' }}</h2>
+  {% if error %}<div class="banner danger" role="alert">{{ m.icon('alert') }}<span>{{ error }}</span></div>{% endif %}
+  <form method="post" action="/skills/act/save" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% if edit %}
+      <input type="hidden" name="editing" value="1"><input type="hidden" name="name" value="{{ edit.name }}"><input type="hidden" name="scope" value="{{ edit.scope }}">
+      {% if edit.scope == 'agent' %}<input type="hidden" name="agent" value="{{ edit.owner }}">{% elif edit.scope == 'team' %}<input type="hidden" name="team" value="{{ edit.owner }}">{% endif %}
+      <input type="hidden" name="next" value="{{ edit.url }}/edit">
+    {% else %}<input type="hidden" name="next" value="/skills/new">{% endif %}
+    <div class="fgrid">
+      {% if not edit %}
+      <label class="span2">Tên <input name="name" required value="{{ v.name or '' }}" maxlength="64" pattern="[a-z0-9][a-z0-9\-]*" placeholder="vd daily-report" autocomplete="off" spellcheck="false">
+        <span class="hint">Chữ thường, số, gạch nối. Không đổi được sau khi tạo.</span></label>
+      {{ tier_select(v, '') }}
+      {% endif %}
+      <fieldset class="span2"><legend>Cách nhập</legend>
+        <label class="row gap"><input type="radio" name="mode" value="fields" {{ 'checked' if (v.mode or 'fields') == 'fields' }}> Mô tả + nội dung</label>
+        <label class="row gap"><input type="radio" name="mode" value="full" {{ 'checked' if v.mode == 'full' }}> Cả file SKILL.md (có frontmatter)</label>
+        {% if edit %}<label class="row gap"><input type="radio" name="mode" value="file" {{ 'checked' if v.mode == 'file' }}> Một file hỗ trợ</label>{% endif %}
+      </fieldset>
+      <label class="span2">Mô tả <input name="description" value="{{ v.description or '' }}" maxlength="{{ desc_limit }}" placeholder="một dòng tiếng Anh, vd Daily status report">
+        <span class="hint">Tối đa {{ desc_limit }} ký tự (<code>learning.limits.skill_desc_chars</code>). Dùng với "Mô tả + nội dung".</span></label>
+      <label class="span2">Nội dung (thân SKILL.md, không frontmatter) <textarea name="body" rows="14" spellcheck="false">{{ v.body or '' }}</textarea>
+        <span class="hint">Viết bằng tiếng Anh — agent đọc nội dung này.</span></label>
+      <label class="span2">Cả SKILL.md <textarea name="content" rows="14" spellcheck="false" placeholder="---&#10;name: daily-report&#10;description: Daily status report&#10;---&#10;# Steps…">{{ v.content or '' }}</textarea>
+        <span class="hint">Dùng với "Cả file SKILL.md". <code>name</code> trong frontmatter phải trùng tên skill.</span></label>
+      {% if edit %}
+      <label class="span2">File hỗ trợ <input name="file" value="{{ v.file or '' }}" placeholder="references/format.md" spellcheck="false" list="skill-files">
+        <datalist id="skill-files">{% for f in edit.support_files %}<option value="{{ f }}">{% endfor %}</datalist>
+        <span class="hint">Chỉ dưới <code>references/</code> <code>templates/</code> <code>scripts/</code> <code>assets/</code>. Tạo mới hoặc thay cả file.</span></label>
+      <label class="span2">Nội dung file hỗ trợ <textarea name="file_content" rows="10" spellcheck="false">{{ v.file_content or '' }}</textarea></label>
+      {% endif %}
+      <label class="span2">Lý do (tuỳ chọn, ghi vào ledger) <input name="rationale" value="{{ v.rationale or '' }}" maxlength="500"></label>
+    </div>
+    <div class="row end gap">{% if edit %}<a class="btn ghost" href="{{ edit.url }}">Huỷ</a>{% endif %}<button class="btn primary" type="submit">{{ m.icon('check') }}<span>{{ 'Lưu' if edit else 'Tạo skill' }}</span></button></div>
+  </form>
+</section>
+
+{% if not edit %}
+<section class="card" id="import">
+  <h2>{{ m.icon('clip') }} Nhập từ thư mục / file</h2>
+  {% if import_error %}<div class="banner danger" role="alert">{{ m.icon('alert') }}<span>{{ import_error }}</span></div>{% endif %}
+  <div class="banner info">{{ m.icon('info') }}<span>Đường dẫn được đọc <b>trên máy chạy daemon cfharness</b> (không phải máy của trình duyệt này). Nhận thư mục chứa SKILL.md,
+    file SKILL.md, hoặc một file .md. Chỉ nhập SKILL.md + <code>references/</code> <code>templates/</code> <code>scripts/</code>.</span></div>
+  <form method="post" action="/skills/act/import" class="form" data-confirm="Nhập skill từ đường dẫn trên máy daemon?">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/skills/new#import">
+    <div class="fgrid">
+      <label class="span2">Đường dẫn trên máy daemon <input name="path" required value="{{ iv.path or '' }}" placeholder="vd ~/skills/incident-triage" spellcheck="false" autocomplete="off"></label>
+      <label>Đặt tên khác (tuỳ chọn) <input name="name" value="{{ iv.name or '' }}" placeholder="mặc định: frontmatter / tên thư mục" spellcheck="false"></label>
+      <label>Mô tả (tuỳ chọn) <input name="description" value="{{ iv.description or '' }}" maxlength="{{ desc_limit }}" placeholder="khi SKILL.md thiếu description"></label>
+      {{ tier_select(iv, 'i') }}
+      <label class="span2 row gap"><input type="checkbox" name="overwrite" value="1" {{ 'checked' if iv.overwrite == '1' }}> Ghi đè nếu đã có skill cùng tên (thay cả cây, rollback được)</label>
+    </div>
+    <div class="row end"><button class="btn" type="submit">{{ m.icon('clip') }}<span>Nhập</span></button></div>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

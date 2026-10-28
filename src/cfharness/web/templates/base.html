@@ -18,7 +18,7 @@
 {%- set GROUPS = [
   ("Làm việc", [("manager", "/manager", "chat", "Điều phối"), ("inbox", "/inbox", "inbox", "Cần bạn"), ("overview", "/", "home", "Tổng quan"), ("search", "/search", "search", "Tìm kiếm")]),
   ("Đội ngũ", [("agents", "/agents", "bot", "Agent"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("runs", "/runs", "run", "Lượt chạy"), ("schedules", "/schedules", "calendar", "Lịch chạy")]),
-  ("Học & chất lượng", [("learnings", "/learnings", "learn", "Tự học")]),
+  ("Học & chất lượng", [("learnings", "/learnings", "learn", "Tự học"), ("skills", "/skills", "star", "Skill")]),
   ("Hệ thống", [("mcp", "/mcp", "plug", "MCP"), ("costs", "/costs", "dollar", "Chi phí"), ("audit", "/audit", "log", "Nhật ký"), ("settings", "/settings", "settings", "Cài đặt")]),
 ] %}
 <div class="shell{{ ' noside' if not csrf }}">
@@ -73,7 +73,7 @@
   <details class="tab-more">
     <summary>{{ _m.icon('menu') }}<span>Thêm</span></summary>
     <div class="tab-sheet">
-      {% for key, href, ic, label in [("overview", "/", "home", "Tổng quan"), ("search", "/search", "search", "Tìm kiếm"), ("schedules", "/schedules", "calendar", "Lịch chạy"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("learnings", "/learnings", "learn", "Tự học"), ("mcp", "/mcp", "plug", "MCP"), ("costs", "/costs", "dollar", "Chi phí"), ("audit", "/audit", "log", "Nhật ký"), ("settings", "/settings", "settings", "Cài đặt")] %}
+      {% for key, href, ic, label in [("overview", "/", "home", "Tổng quan"), ("search", "/search", "search", "Tìm kiếm"), ("schedules", "/schedules", "calendar", "Lịch chạy"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("learnings", "/learnings", "learn", "Tự học"), ("skills", "/skills", "star", "Skill"), ("mcp", "/mcp", "plug", "MCP"), ("costs", "/costs", "dollar", "Chi phí"), ("audit", "/audit", "log", "Nhật ký"), ("settings", "/settings", "settings", "Cài đặt")] %}
       <a href="{{ href }}" class="{{ 'on' if navkey == key }}">{{ _m.icon(ic) }}<span>{{ label }}</span></a>
       {% endfor %}
       <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn ghost" type="submit">{{ _m.icon('logout') }}<span>Thoát</span></button></form>

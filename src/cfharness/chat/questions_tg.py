@@ -100,7 +100,7 @@ class QuestionChat:
             self.bot._spawn(self.close_messages(qid))
 
     def chats_for(self, q: dict[str, Any]) -> list[str]:
-        out = set(self.bot.notify_chats())
+        out = set(self.bot.broadcast_chats())
         allowed = self.bot.allowed()
         w = self._st(self.bot.WATCH)
         if q.get("run_id") and w.get(q["run_id"]) in allowed:
