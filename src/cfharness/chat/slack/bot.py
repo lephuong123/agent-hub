@@ -16,6 +16,7 @@ An toàn (như Telegram — WT-4/5/8):
 - Lệnh: client Slack chặn tin bắt đầu bằng `/` → một slash command (`notify.slack.slash_command`, mặc định `/cfh <lệnh> …`); kết quả
   gửi vào DM của người với bot. Tin chữ thường trong DM → điều phối viên; trả lời trong thread = "reply" của Telegram.
 - Kênh chung (P6): chỉ tin TAG bot (`app_mention`) → điều phối viên, trả lời trong thread; approval / câu hỏi / thông báo chỉ vào DM.
+  Bật `allow_channels` là đủ: mọi kênh có bot, người tag ∈ `allowed_user_ids` — không ghép nối kênh.
 - Ô nhập (P2): Slack không có `force_reply` → `ask_input` mở MODAL bằng `trigger_id` của nút/slash vừa xử lý (chat/slack/modals.py:
   nonce phía hub `slack.modals`, submit kiểm workspace + đúng người + allowlist rồi mới `self.call`). Không có trigger → thread như P1.
 """
@@ -159,6 +160,7 @@ class SlackBot(ChatBot):
     CFG_KEY = "notify.slack"
     SEEN = "slack.seen"
     DMS = "slack.dms"  # user_id → kênh DM với bot (conversations.open)
+    CHANNELS = "slack.channels"  # kênh chung → lần đầu người trong allowlist tag bot (chỉ dùng khi `allow_channels`)
 
     def __init__(self, hub: "Hub") -> None:
         super().__init__(hub)
@@ -212,9 +214,11 @@ class SlackBot(ChatBot):
         return {str(x) for x in (self.cfg().get("allowed_chat_ids") or [])}
 
     def notify_chats(self) -> set[str]:
-        """Chat nhận thông báo: DM trong allowlist; kênh chung chỉ khi `allow_channels`."""
-        chans = bool(self.cfg().get("allow_channels"))
-        return {c for c in self.allowed() if c.startswith("D") or chans}
+        """Chat bot được gửi tin: DM trong allowlist; kênh chung chỉ khi `allow_channels` — kênh trong allowlist + kênh người trong
+        allowlist đã tag bot (`slack.channels`, ghi ở `_on_mention`)."""
+        if not self.cfg().get("allow_channels"):
+            return {c for c in self.allowed() if c.startswith("D")}
+        return self.allowed() | set(self._state(self.CHANNELS))
 
     def broadcast_chats(self) -> set[str]:
         """Approval / câu hỏi / thông báo chủ động: chỉ DM — kênh chung chỉ nhận trả lời cho việc được tag trong kênh đó."""
@@ -500,6 +504,11 @@ class SlackBot(ChatBot):
                  channel_type=ev.get("channel_type") or "channel")
         if m.get("files") and not m.get("subtype"):
             m["subtype"] = "file_share"
+        if self.team_ok(team) and self.is_allowed(cid, str(ev.get("user") or "") or None):
+            chans = self._state(self.CHANNELS)
+            if cid not in chans:  # nhớ kênh để giao trả lời vào đó (notify_chats) — không cần ghép nối kênh
+                chans[cid] = time.time()
+                self.hub.store.state_set(self.CHANNELS, chans)
         ts, root = m.get("ts"), m.get("thread_ts")
         if ts and root and root != ts:
             self._remember(str(ts), str(root))  # trả lời tin tag trong thread → vào đúng thread, không mở thread con

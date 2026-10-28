@@ -135,8 +135,9 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
 | `chat/questions_tg.py`, `chat/manager_chat.py`, `SlackChatNotifier.target` | tin chủ động (approval, câu hỏi, `notify_owner` khi chưa có hội thoại) dùng `broadcast_chats()` |
 | `web/app.py` | manifest 2 chiều thêm event `app_mention` + scope `app_mentions:read` |
 
-- **Bật**: `cfharness config set notify.slack.allow_channels true` → mời bot vào kênh (`/invite @cfharness`) → trong kênh gõ
-  `@cfharness ghepnoi <mã>` (mã từ `notify slack setup --keep-token` / web) → xác nhận. Người tag phải ∈ `allowed_user_ids`; kênh ∈ `allowed_chat_ids`.
+- **Bật**: `cfharness config set notify.slack.allow_channels true` → mời bot vào kênh (`/invite @cfharness`) → tag. KHÔNG ghép nối kênh:
+  khi `allow_channels` bật, `auth.slack_caller` nhận MỌI kênh (không phải DM) nếu người tag ∈ `allowed_user_ids` (workspace đã ghim);
+  kênh được nhớ ở `hub_state slack.channels` lần đầu người đó tag để giao trả lời (`notify_chats`). DM vẫn phải ghép nối.
   App đã cài trước P6: dán lại manifest (hoặc thêm event + scope bằng tay) rồi **Reinstall** để Slack gửi `app_mention`.
 - **Luồng**: tag ở gốc kênh → cuộc trò chuyện điều phối viên MỚI (mỗi lần tag một việc), trả lời vào thread của tin đã tag. Tag lại trong thread
   đó → tiếp tục cuộc đó (`_on_thread_reply`). Tag trong thread của người khác → `_remember(ts, thread_ts)` để trả lời vào đúng thread.

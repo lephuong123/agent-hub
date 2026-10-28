@@ -107,3 +107,22 @@ async def test_approvals_only_go_to_dm_not_channel(make, sk):
     await until(lambda: approval_msg(sk, DM_BOSS, ap["id"]) if any(sk.buttons(m) for m in sk.sent(DM_BOSS)) else None)
     assert not any(sk.buttons(m) for m in sk.sent(CH))
     assert d.hub.slack.notify_chats() == {DM_BOSS, CH} and d.hub.slack.broadcast_chats() == {DM_BOSS}
+
+
+async def test_any_channel_works_without_pairing(make, sk):
+    from cfharness import auth
+    from cfharness.web import manager_stub
+
+    d = await make(chats=(DM_BOSS,), sl_cfg={"allow_channels": True})  # kênh KHÔNG nằm trong allowlist
+    manager_stub.install(d)
+    d.hub.agents.create({"id": "boss", "name": "Điều phối", "model": "haiku", "tool_policy": {"tools": ["Read", "Grep", "Glob"]}})
+    await rpc(d, "manager.set", {"agent_id": "boss"})
+    assert auth.slack_caller(d.hub, CH, BOSS).human and not auth.slack_caller(d.hub, CH, STRANGER).human
+    assert not auth.slack_caller(d.hub, "D0NOTPAIRD", BOSS).human  # DM vẫn phải ghép nối
+    await deliver(sk, sk.mention(CH, BOSS, f"<@{BOT_USER}> làm báo cáo"))
+    await until(lambda: boss_runs(d))
+    reply = (await until(lambda: [m for m in sk.sent(CH) if "Điều phối viên" in sk.text_of(m)], timeout=15))[0]
+    assert reply.get("thread_ts")
+    assert CH in d.hub.slack.notify_chats() and d.hub.slack.broadcast_chats() == {DM_BOSS}
+    await deliver(sk, sk.mention(CH, STRANGER, f"<@{BOT_USER}> xoá hết"))
+    assert len(boss_runs(d)) == 1
