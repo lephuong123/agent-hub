@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
 import inspect
 import json
 import logging
@@ -55,6 +56,7 @@ log = logging.getLogger("cfharness.learning")
 TARGETS = ("memory", "skill", "config", "user_profile")
 OPS = ("add", "patch", "merge", "archive", "delete")
 LEARNING_ACTORS = ("review", "curator", "agent", "learning")
+READ_EVIDENCE = "_read_evidence"  # payload: {"scope|owner|name|rel": sha256} — bằng chứng đọc-trước-khi-ghi lúc đề xuất
 FINAL = ("applied", "promoted", "deferred_rate_limited", "deferred_no_eval", "eval_failed", "blocked", "rolled_back", "superseded", "suggested")
 
 
@@ -81,6 +83,13 @@ def _diff(before: str, after: str, name: str) -> tuple[str, int]:
 
 def _norm(s: str) -> str:
     return " ".join((s or "").lower().split())
+
+
+def _file_sha(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ""
 
 
 class Pipeline:
@@ -150,8 +159,24 @@ class Pipeline:
         return {"scope": scope, "owner": owner, "change": ch, "diff": diff, "size": size, "new_text": content or "",
                 "chars_before": memory_chars(entries), "chars_after": memory_chars(new_entries), "limit": self.ks.memory_limit(scope, store), "duplicate_of": dup, "touched_entries": touched}
 
-    def _was_read(self, prop: dict[str, Any], scope: str, owner: str | None, name: str, rel: str) -> bool:
-        return (scope, owner or "", name, rel) in self.svc.read_marks.get(prop.get("run_id") or "", set())
+    def _was_read(self, prop: dict[str, Any], scope: str, owner: str | None, name: str, rel: str, path: Path, anchored: bool = False) -> bool:
+        """Đọc-trước-khi-ghi (FR-LN-07). Dấu đọc trong RAM (`read_marks`, theo run review) chỉ sống tới khi review kết thúc /
+        daemon khởi động lại; proposal bị HOÃN được thử lại muộn hơn nhiều. Vì vậy lần ĐẦU kiểm thấy đã đọc, bằng chứng
+        (khoá + sha256 nội dung file lúc đề xuất) được lưu cùng proposal (`payload._read_evidence`); lần thử lại hợp lệ khi
+        file đích vẫn đúng nội dung đó. File đã đổi → `prop["_read_stale"]` (retry bỏ proposal: `target_changed`) — TRỪ patch
+        `anchored` (old_string/new_string: kế hoạch đã kiểm old_string vẫn có đúng một lần, nên patch cục bộ khác chỗ áp dụng
+        trước không làm hỏng nó). Proposal chưa từng đọc → không có bằng chứng → vẫn bị chặn."""
+        key = f"{scope}|{owner or ''}|{name}|{rel}"
+        digest = _file_sha(path)
+        if (scope, owner or "", name, rel) in self.svc.read_marks.get(prop.get("run_id") or "", set()):
+            prop.setdefault("_read_new", {})[key] = digest
+            return True
+        ev = prop.get("_read_evidence") or {}
+        if key in ev:
+            if ev[key] == digest or anchored:
+                return True
+            prop["_read_stale"] = True
+        return False
 
     def _plan_skill(self, prop: dict[str, Any]) -> dict[str, Any]:
         pl = prop.get("payload") or {}
@@ -258,7 +283,7 @@ class Pipeline:
             ch = Change(scope=scope, owner_id=owner, target="skill", target_ref=name, op="patch", actor="?", kind="tree", path=d,
                         files=files, agent_id=agent_id, replace_tree=replace_tree)
             return {"scope": scope, "owner": owner, "change": ch, "diff": diff, "size": size, "new_text": added, "description": desc,
-                    "skill_chars": skill_chars, "read_required": cur is not None, "was_read": self._was_read(prop, scope, owner, name, rel)}
+                    "skill_chars": skill_chars, "read_required": cur is not None, "was_read": self._was_read(prop, scope, owner, name, rel, f, anchored=pl.get("old_string") is not None)}
         if op in ("merge", "archive", "delete"):
             if scope != "agent":
                 prop["scope"] = scope  # xoá skill tầng team/global → L3
@@ -269,9 +294,9 @@ class Pipeline:
             diff, _ = _diff(cur, "", f"{name}/{SKILL_FILE}")
             ch = Change(scope=scope, owner_id=owner, target="skill", target_ref=name, op=op, actor="?", kind="tree", path=d, archive=True, agent_id=agent_id)
             return {"scope": scope, "owner": owner, "change": ch, "diff": diff, "size": len(cur), "new_text": "",
-                    "read_required": True, "was_read": self._was_read(prop, scope, owner, name, SKILL_FILE),
+                    "read_required": True, "was_read": self._was_read(prop, scope, owner, name, SKILL_FILE, d / SKILL_FILE),
                     "absorbed_exists": t is not None and target != name,
-                    "absorbed_read": t is not None and self._was_read(prop, t["scope"], t["owner"], target, SKILL_FILE)}
+                    "absorbed_read": t is not None and self._was_read(prop, t["scope"], t["owner"], target, SKILL_FILE, Path(t["path"]) / SKILL_FILE)}
         raise KnowledgeError(f"op skill không hợp lệ: {op}", "invalid")
 
     def _support_files(self, pl: dict[str, Any]) -> dict[str, str]:
@@ -405,6 +430,7 @@ class Pipeline:
             scope = "global"
         if scope == "team":
             team_id = self._resolve_team(agent_id, team_id)
+        payload = {k: v for k, v in (payload or {}).items() if k != READ_EVIDENCE}  # bằng chứng đọc chỉ do pipeline ghi
         prop: dict[str, Any] = {
             "id": "pr_" + uuid.uuid4().hex[:12], "scope": scope, "agent_id": agent_id, "team_id": team_id, "target": target, "op": op,
             "target_ref": target_ref or (payload or {}).get("name"), "payload": dict(payload or {}), "rationale": (rationale or "")[:2000],
@@ -421,6 +447,8 @@ class Pipeline:
             plan_err = KnowledgeError(e.message, "not_found")
         if plan is not None:
             prop["diff"], prop["size_chars"] = plan["diff"][:50_000], plan["size"]
+        if prop.get("_read_new"):
+            prop["payload"][READ_EVIDENCE] = dict(prop["_read_new"])
         row = {k: prop.get(k) for k in ("id", "scope", "agent_id", "team_id", "target", "op", "target_ref", "payload", "diff", "size_chars", "rationale",
                                          "evidence_signal_ids", "created_by", "review_job_id", "run_id", "status", "absorbed_into", "created_at", "updated_at")}
         self.hub.store._insert("proposals", row)
@@ -645,6 +673,7 @@ class Pipeline:
             raise HubError(f"proposal {proposal_id} ở trạng thái {prop['status']} — không thử lại được{hint}")
         if prop["status"] == "superseded":
             self._update(prop["id"], superseded_by=None)
+        prop["_read_evidence"] = dict((prop.get("payload") or {}).get(READ_EVIDENCE) or {})
         try:
             plan = self.plan(prop)
         except (KnowledgeError, NotFound) as e:
@@ -655,6 +684,11 @@ class Pipeline:
                 self._update(prop["id"], status="superseded", block_reason="target_gone", block_detail=e.message[:1000])
                 return self._result(prop, "superseded", reason=f"đích không còn: {e.message}")
             return self._block(prop, Block("guard_rule", reason, e.message))
+        if prop.get("_read_stale") and prop["status"] != "suggested":
+            # file đích đã đổi kể từ lúc review đọc → đề xuất dựa trên nội dung cũ: hết thời, bỏ lặng lẽ (như target_gone)
+            self._update(prop["id"], status="superseded", block_reason="target_changed",
+                         block_detail=f"'{prop.get('target_ref')}' đã thay đổi kể từ lúc review đọc — đề xuất dựa trên nội dung cũ")
+            return self._result(prop, "superseded", reason="đích đã thay đổi kể từ lúc đọc")
         b = self.svc.guard.check(prop, plan)
         if b is not None:
             return self._block(prop, b)

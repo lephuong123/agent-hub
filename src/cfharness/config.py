@@ -302,7 +302,14 @@ DEFAULTS: dict[str, Any] = {
     # M4-A — lõi học (FR-LN-*). Công tắc học, config_bounds, rate là CHÍNH SÁCH AN TOÀN → `policy/learning.yaml`
     # (cfharness learn policy …), KHÔNG ở đây.
     "learning": {
-        "review_budget_usd": 0.20,  # FR-LN-03 --max-budget-usd của review fork (null = không trần riêng, như run thường)
+        "review_budget_usd": 0.20,  # FR-LN-03 phần khám phá của --max-budget-usd review fork (null = không trần riêng, như run thường)
+        # fork nạp lại TOÀN BỘ ngữ cảnh session gốc ở lượt API đầu (ghi cache): trần thật = review_budget_usd + token ngữ cảnh lần
+        # cuối của session × giá dưới đây, chặn trên ở review_budget_max_usd (null = không chặn trên)
+        "review_reload_usd_per_mtok": 10.0,  # giá ghi cache ước tính ($/1M token; Opus ghi cache 1 giờ = $10)
+        "review_budget_max_usd": 1.5,
+        "review_rate_limit_retries": 5,  # review kết thúc rate_limited → xếp lại (Signal giữ nguyên), tối đa N lần
+        "review_retry_backoff_s": 300,  # backoff lần đầu sau rate_limited, nhân đôi mỗi lần (≤ 1 giờ)
+        "review_budget_retries": 1,  # budget_exceeded khi CHƯA có proposal → thử lại N lần với trần review_budget_max_usd
         "review_model": None,  # null = cùng model với run gốc (giữ cache, A-12)
         "review_scope": "combined",  # combined | skill | memory (prompt Hermes tương ứng)
         "review_debounce_s": 10,  # gom tín hiệu: review chạy ≥ N giây sau Signal cuối (newest-wins)
@@ -698,6 +705,15 @@ def validate_setting(key: str, value: Any) -> None:
     elif key == "learning.review_budget_usd":
         if value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0):
             raise ValueError("learning.review_budget_usd phải > 0 hoặc null (null = review không có trần riêng)")
+    elif key == "learning.review_budget_max_usd":
+        if value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0):
+            raise ValueError("learning.review_budget_max_usd phải > 0 hoặc null (null = không chặn trên)")
+    elif key in ("learning.review_reload_usd_per_mtok", "learning.review_retry_backoff_s"):
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{key} phải là số ≥ 0")
+    elif key in ("learning.review_rate_limit_retries", "learning.review_budget_retries"):
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 20:
+            raise ValueError(f"{key} phải là số nguyên 0..20")
     elif key == "runtime.claude.default_permission_mode":
         if value is not None and value not in VALID_PERMISSION_MODES:
             raise ValueError(f"permission mode không hợp lệ; chọn một trong {VALID_PERMISSION_MODES}")
