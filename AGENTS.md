@@ -455,3 +455,28 @@ Chi tiết: `docs/dev-notes/gates.md`, `docs/dev-notes/trust-and-chat-settings.m
 - Grant theo agent + luật: `hub_state.agent_rule_grants`, `approval.approve{grant_rule}`, `guard.grant.set|rm|list` (HUMAN_ONLY), áp ở
   `GuardService.check` (classifier `rule_grant`). Test: `tests/test_rule_grant.py`.
 
+## Chế độ 3D văn phòng (`/office`)
+Hợp đồng, quyết định, ánh xạ trạng thái → nhân vật: `docs/dev-notes/office-3d.md`. Không RPC mới, không migration. Test: `tests/test_web_office.py`.
+**Chế độ 3D = toàn trang 3D**: `/office` là trang độc lập (không `base.html`), thấy được chỉ canvas + nút "2D" nổi; HUD/thẻ nhân vật/kanban/
+"Cần bạn"/run đang chạy/hết phiên đều vẽ TRONG cảnh; danh sách chữ chỉ `sr-only`. Đang 3D thì MỌI trang (trừ `/office`, `/login`) → `/office`.
+
+| Module | Vai trò |
+|---|---|
+| `web/office.py` | `GET /office` (trang độc lập), `GET /office/state` (JSON gọn, `no-store`; + `tasks` ≤ 5/cột, `approvals`, `questions`, `runs`, `hub.cost_today_usd` — chữ tự do cắt ở server bằng `one_line`; chưa đăng nhập → 401 qua `GuardMiddleware.API`, polling không gia hạn phiên), `GET /sse/office` (`_stream` + `office_frames`: danh sách trắng loại event → khung `{t:"ev", seq, type, agent, team, tool, status, outcome}` + `{t:"refresh"}`). Chỉ RPC đọc `tui.snapshot`, `question.list`, `team.list`, `task.list`, `manager.get`, `hub.status` |
+| `web/static/office.js` (+ `static/office/{world,chibi,actors,path,boards,util,ui,flows,chat}.js` — `ui` = bảng canvas + nút DOM ẩn song sinh, `flows` = duyệt/xác nhận/bước 2/câu hỏi/thoát, `chat` = màn chat điều phối viên, `office.css`, `templates/office.html`) | Cảnh Three.js: nhân vật chibi dựng thủ tục, A* trên lưới sàn, bảng/thẻ/biển trong cảnh (`boards.js`); chữ chỉ `fillText` (DOM: `textContent` trong khối sr-only) |
+| `web/static/vendor/three-0.169.0/` | Three.js đóng gói sẵn (MIT, `LICENSE`), `OrbitControls.js` import tương đối — không CDN/importmap |
+| `early.js` / `app.js` / `base.html` | Nút `#view-toggle` (`data-view-toggle`, link thường tới `/office` khi không JS), khoá `cfh_view` (xoá khi đăng nhập `#k=` và khi đăng xuất), `cfh_view=3d` + trang khác `/office`/`/login` → `/office` |
+
+Bất biến: `/sse/office` và `/office/state` KHÔNG BAO GIỜ mang chữ tự do (text, input, args_preview, result_preview, summary, reason…) — chỉ id/tên tool
+(`[A-Za-z0-9_\-:.]`, ≤ 64)/từ khoá trạng thái; `/office/state` chỉ thêm chữ đã cắt: `task` ≤ 80, tiêu đề task ≤ 60, preview approval/chữ câu hỏi ≤ 120
+(một dòng, bỏ ký tự điều khiển/bidi) — dữ liệu agent, client chỉ `fillText`. Cảnh 3D không link sang trang 2D; không thêm phần tử 2D nhìn thấy vào `/office`.
+Event kết thúc run chỉ nhận `source=="hub"`. Thêm loại event vào cảnh → thêm vào `office.ALLOWED` + ca trong test. Không nới CSP (không `blob:`, WASM, worker,
+script inline).
+
+Giai đoạn 2 (duyệt + câu hỏi + chat trong 3D, mục "Giai đoạn 2" của hợp đồng): ghi từ cảnh 3D CHỈ qua `POST /office/do/{name}` — danh sách trắng
+`office.OFFICE_ACTIONS` (approve, deny, approve_always, approve_rule, answer→`question_answer`), dùng ĐÚNG `Action` của `app.ACTIONS`, sau `post_guard`
+(Origin, CSRF, khoá phiên `k`) và CÙNG cổng `app.plan_action` với `do_action` 2D (xác nhận → bước 2 heavy/always/grant). Không gọi RPC ghi khi chưa có
+`confirm=yes` (3D hỏi cả thao tác 2D không hỏi: `OFFICE_CONFIRM`) và `confirm2=yes` khi có bước 2. Thêm điều kiện cổng → sửa `plan_action` (áp cho cả 2D/3D),
+không viết cổng riêng cho 3D. Thêm thao tác 3D → `OFFICE_ACTIONS` + ca đỏ→xanh trong `tests/test_web_office.py`. Chữ đầy đủ (thao tác chờ duyệt — `present.action_view`,
+câu hỏi, chat) CHỈ ở `GET /office/approval|question/{id}`, `/office/chat`, `/sse/office/chat` (JSON, không HTML; client chỉ `fillText`/`textContent`),
+không bao giờ trong `/sse/office`. Đường JSON của 3D nằm trong `GuardMiddleware.API` (tiền tố): chưa đăng nhập → 401; GET không gia hạn phiên.

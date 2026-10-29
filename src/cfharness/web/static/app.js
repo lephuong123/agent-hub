@@ -64,6 +64,34 @@
     var on = root.classList.toggle("side-min");
     try { localStorage.setItem("cfh_side", on ? "min" : ""); } catch (_) {}
   });
+  // ------------------------------------------------------------ nút chuyển 2D/3D (`cfh_view`, docs/dev-notes/office-3d.md)
+  // Không JS → nút là link thường tới /office. Có JS: bật → nhớ `cfh_view=3d` + đi /office; tắt → xoá + đang ở /office thì về /.
+  var VIEW = "cfh_view";
+  function view3d() {
+    try { return localStorage.getItem(VIEW) === "3d"; } catch (_) { return false; }
+  }
+  var onOffice = location.pathname === "/office";
+  var viewBtns = document.querySelectorAll("[data-view-toggle]");
+  function paintView(on) {
+    root.classList.toggle("view-3d", on);
+    for (var vi = 0; vi < viewBtns.length; vi++) {
+      var vb = viewBtns[vi];
+      vb.setAttribute("aria-pressed", on ? "true" : "false");
+      vb.setAttribute("title", on ? "Về giao diện 2D" : "Chế độ 3D văn phòng");
+      vb.setAttribute("href", on ? "/" : "/office");
+      var lb = vb.querySelector(".view-lbl");
+      if (lb) lb.textContent = on ? "2D" : "3D";
+    }
+  }
+  if (viewBtns.length) paintView(view3d() || onOffice);
+  for (var vj = 0; vj < viewBtns.length; vj++) viewBtns[vj].addEventListener("click", function (e) {
+    e.preventDefault();
+    var on = this.getAttribute("aria-pressed") === "true";
+    try { if (on) localStorage.removeItem(VIEW); else localStorage.setItem(VIEW, "3d"); } catch (_) {}
+    if (!on) { location.href = "/office"; return; }
+    if (onOffice) { location.href = "/"; return; }
+    paintView(false);
+  });
   // khung "Thông tin điều phối viên": cột phải trên màn rộng (nhớ đóng/mở), ngăn kéo trên màn hẹp
   var wide = window.matchMedia ? window.matchMedia("(min-width: 1280px)") : null;
   function mgrInfo(open) {
@@ -106,7 +134,7 @@
     if (!(form instanceof HTMLFormElement) || (form.method || "").toLowerCase() !== "post") return;
     var action = form.getAttribute("action") || "";
     if (action === "/login") return;
-    if (action === "/logout") { try { localStorage.removeItem(KEY); } catch (_) {} return; }
+    if (action === "/logout") { try { localStorage.removeItem(KEY); localStorage.removeItem("cfh_view"); } catch (_) {} return; }
     var inp = form.querySelector('input[name="k"]');
     if (!inp) { inp = document.createElement("input"); inp.type = "hidden"; inp.name = "k"; form.appendChild(inp); }
     inp.value = getKey();
