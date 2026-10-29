@@ -103,6 +103,9 @@ def apply_mcp(hub: "Hub", run: dict[str, Any], agent: dict[str, Any], *, servers
         tp["tools"] = list(REVIEW_TOOLS)
         tp["allowed_tools"] = list(REVIEW_TOOLS) + [f"mcp__{SERVER_NAME}"]
         tp["permission_prompts"] = "none"
+        # review chỉ Read/Grep/Glob + hub-self: KHÔNG trình duyệt. RunManager đã thêm `--chrome` theo agent; bỏ ở đây, nếu
+        # không CLI vẫn nạp server claude-in-chrome (ngoài allowed_mcp vừa đặt lại) → isolation.violation giả
+        tp["browser"] = "none"
         if tp.get("permission_mode") in ("bypassPermissions", "acceptEdits", "auto", "dontAsk"):
             tp["permission_mode"] = None
         return None, {**env_extra, "CFHARNESS_RUN_ID": run_id}

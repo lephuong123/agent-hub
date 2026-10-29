@@ -165,6 +165,7 @@
     "cache.warning": "summary",
     "cli.unknown_rate_alert": "summary",
     "cli.version_warning": "summary",
+    "control.request": "debug",
     "control.response": "debug",
     "curation.completed": "summary",
     "curation.members_archived": "summary",
@@ -222,6 +223,7 @@
     "question.escalated": "summary",
     "question.open": "summary",
     "question.reminder": "summary",
+    "ratelimit.gate": "summary",
     "ratelimit.throttle": "summary",
     "ratelimit.update": "summary",
     "raw.invalid": "debug",
@@ -245,6 +247,7 @@
     "run.takeover": "summary",
     "run.waiting_human": "summary",
     "runtime.stderr": "debug",
+    "sandbox.network_request": "summary",
     "schedule.created": "summary",
     "schedule.failed": "summary",
     "schedule.fired": "summary",
@@ -271,6 +274,7 @@
     "team.updated": "summary",
     "tool.complete": "summary",
     "tool.generating": "detail",
+    "tool.progress": "debug",
     "tool.start": "summary",
     "tool.write": "summary",
     "turn.start": "detail",
@@ -281,6 +285,7 @@
   },
   "x-not-persisted": [
     "message.delta",
-    "reasoning.delta"
+    "reasoning.delta",
+    "tool.progress"
   ]
 }

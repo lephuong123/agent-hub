@@ -23,6 +23,15 @@ Bản đồ module: `src/cfharness/learning/__init__.py` (docstring), `src/cfhar
   `--session-id` đi được với `--fork-session`; `total_cost_usd` của fork LUỸ KẾ cả session gốc → `_record_cost` trừ mốc gốc),
   `--tools Read,Grep,Glob`, `--permission-prompts none`, chỉ MCP `hub-self` vai trò `learning`, không hub-guard/permission tool,
   `--max-budget-usd learning.review_budget_usd`.
+  *Sửa 2026-10-29 (dữ liệu thật: 44/126 review chết sau 1–3 lượt, $28.6 phí; 14/37 proposal hoãn bị chặn oan):*
+  trần review = `review_budget_usd` (phần khám phá) + token ngữ cảnh lần cuối của session gốc (`runs.model_usage`, `usage` có thể
+  = 0) × `review_reload_usd_per_mtok` (mặc định 10), chặn trên `review_budget_max_usd` (mặc định 1.5) — lượt đầu của fork ghi lại
+  cả ngữ cảnh vào cache. Review `rate_limited` → xếp lại (backoff `review_retry_backoff_s` nhân đôi, ≤ `review_rate_limit_retries`
+  lần), Signal giữ nguyên; `budget_exceeded` chưa có proposal → thử lại `review_budget_retries` lần ở trần, hết lượt → `failed`
+  + tiêu Signal. Lịch sử thử ở `review_jobs.result.attempts`. Review fork KHÔNG có trình duyệt (`tool_policy.browser=none`
+  trong `learning/runtime.apply_mcp` — trước đây `--chrome` của agent lọt vào → `isolation.violation` giả). Đọc-trước-khi-ghi:
+  bằng chứng đọc (sha256 file lúc đề xuất) lưu ở `proposals.payload._read_evidence`, nên proposal hoãn thử lại được sau khi
+  review kết thúc / daemon khởi động lại; file đã đổi (trừ patch neo `old_string`) → `superseded{target_changed}`.
 - **Prompt Hermes nguyên văn** (Q-13): `learning/prompts/hermes_review.py` (dòng 370–569 `agent/background_review.py`),
   `hermes_curator.py` (CURATOR_REVIEW_PROMPT), chỉ đổi tên tool lúc render (`TOOL_RENAMES`); `NOTICE` ở gốc repo (MIT, Nous Research).
   `threats.py` phỏng `tools/threat_patterns.py` (ghi trong NOTICE).

@@ -262,6 +262,10 @@ DEFAULTS: dict[str, Any] = {
         "tick_budget_usd": 0.5,  # trần chi phí mỗi run tick
         "chat_budget_usd": None,  # trần mỗi run hội thoại (null = theo limits của agent)
         "rotate_after_turns": 80,  # sau N lượt cùng session → session mới (mang theo tóm tắt), ngoài autocompact của CLI
+        # xoay session sớm (ManagerService.rotate_reason): resume nạp lại cả lịch sử, cache nguội = trả giá ghi cache cho cả khối
+        "rotate_session_cost_usd": 3.0,  # chi phí luỹ kế session ≥ N $ → session mới (0 = tắt)
+        "rotate_context_tokens": 40000,  # ngữ cảnh ước lượng ≥ N token = session "lớn": tick/lịch luôn xoay; chat xoay khi đã nghỉ lâu
+        "rotate_idle_s": 3600,  # nghỉ ≥ N giây (cache prompt nguội) + session lớn → session mới (0 = tắt)
         # MGR-6: trần tần suất thao tác của manager (nhánh config được kiểm toàn vẹn; ngân sách/model/effort kẹp theo learn policy config_bounds)
         "max_agents_created_per_day": 20,
         "max_tasks_per_hour": 60,
@@ -287,7 +291,9 @@ DEFAULTS: dict[str, Any] = {
         "require_completion_call": False,  # True: kết thúc mà không gọi task_complete/task_block → protocol_violation
         "hub_self_mcp": True,  # FR-MS-08: thêm MCP hub-self vào run của task
         "rate_limit_backoff_s": 30,  # FR-RT-16: 30 s nhân đôi…
-        "rate_limit_backoff_max_s": 600,  # …tới 10 phút
+        "rate_limit_backoff_max_s": 600,  # …tới 10 phút (chỉ khi KHÔNG biết thời điểm reset)
+        "rate_limit_reset_jitter_s": 30,  # biết resetsAt → thử lại lúc reset + ngẫu nhiên 5..N giây (tránh dồn cục)
+        "rate_limit_reset_max_s": 691200,  # resetsAt xa hơn 8 ngày → không tin, dùng backoff
         "max_subtasks": 20,
         "review_budget_usd": None,  # trần chi phí run review (null = như run thường)
     },
@@ -302,7 +308,14 @@ DEFAULTS: dict[str, Any] = {
     # M4-A — lõi học (FR-LN-*). Công tắc học, config_bounds, rate là CHÍNH SÁCH AN TOÀN → `policy/learning.yaml`
     # (cfharness learn policy …), KHÔNG ở đây.
     "learning": {
-        "review_budget_usd": 0.20,  # FR-LN-03 --max-budget-usd của review fork (null = không trần riêng, như run thường)
+        "review_budget_usd": 0.20,  # FR-LN-03 phần khám phá của --max-budget-usd review fork (null = không trần riêng, như run thường)
+        # fork nạp lại TOÀN BỘ ngữ cảnh session gốc ở lượt API đầu (ghi cache): trần thật = review_budget_usd + token ngữ cảnh lần
+        # cuối của session × giá dưới đây, chặn trên ở review_budget_max_usd (null = không chặn trên)
+        "review_reload_usd_per_mtok": 10.0,  # giá ghi cache ước tính ($/1M token; Opus ghi cache 1 giờ = $10)
+        "review_budget_max_usd": 1.5,
+        "review_rate_limit_retries": 5,  # review kết thúc rate_limited → xếp lại (Signal giữ nguyên), tối đa N lần
+        "review_retry_backoff_s": 300,  # backoff lần đầu sau rate_limited, nhân đôi mỗi lần (≤ 1 giờ)
+        "review_budget_retries": 1,  # budget_exceeded khi CHƯA có proposal → thử lại N lần với trần review_budget_max_usd
         "review_model": None,  # null = cùng model với run gốc (giữ cache, A-12)
         "review_scope": "combined",  # combined | skill | memory (prompt Hermes tương ứng)
         "review_debounce_s": 10,  # gom tín hiệu: review chạy ≥ N giây sau Signal cuối (newest-wins)
@@ -460,7 +473,9 @@ DEFAULTS: dict[str, Any] = {
             # Phiên bản đã kiểm (FR-RT-15). Phiên bản lạ → cảnh báo, vẫn chạy.
             # 2.1.302: fixture + contract test M0. 2.1.303: CHỈ `claude --help` + spike sandbox Windows (không fixture riêng).
             # 2.1.310: `claude --help` + fixture stream-json thật tests/fixtures/claude-2.1.310/ + tests/test_claude_contract_2_1_310.py.
-            "tested_versions": ["2.1.302", "2.1.303", "2.1.310"],
+            # 2.1.311/2.1.312: `claude --help` + fixture stream-json thật (raw log run production, đã che) tests/fixtures/claude-2.1.31{1,2}/
+            #   + tests/test_adapter_cli_312.py (tool_progress, vcs_state_changed, control_request SandboxNetworkAccess, init thứ 2).
+            "tested_versions": ["2.1.302", "2.1.303", "2.1.310", "2.1.311", "2.1.312"],
             "include_partial_messages": True,
             # Spike A-04: bật để kiểm hậu nghiệm không có hook lạ (hook Serena…) trong stream
             "include_hook_events": True,
@@ -515,6 +530,9 @@ DEFAULTS: dict[str, Any] = {
             "default_permission_mode": None,
             # cache `claude --version` (giây)
             "version_cache_s": 600,
+            # trần (giây) chờ quyết định cho một `control_request can_use_tool` của CLI (vd SandboxNetworkAccess) — quá → deny.
+            # Guard tự giữ ≤ approval.timeout_s; đây chỉ là chốt an toàn để CLI không bao giờ treo vô hạn.
+            "control_request_timeout_s": 1800,
             # hardening H-10 (FR-RT-02/15): cờ được phép theo phiên bản CLI. Phiên bản CÓ trong bảng → build_argv ném ArgvError
             # với cờ không có trong danh sách (gồm extra_args). Phiên bản lạ → không kiểm (cảnh báo vàng `cli.version_warning`).
             # Danh sách 2.1.302 lấy từ `claude --help` (bỏ cố ý --dangerously-skip-permissions / --allow-dangerously-skip-permissions).
@@ -525,6 +543,9 @@ DEFAULTS: dict[str, Any] = {
                 # 2.1.310: `claude --help` còn đủ mọi cờ trong danh sách (không cờ nào bị bỏ/đổi tên) → cùng danh sách.
                 # + `--chrome`/`--no-chrome` (Claude in Chrome, có trong `claude --help` 2.1.310; spike docs/dev-notes/chrome.md).
                 "2.1.310": list(_FLAGS_2_1_302) + ["--chrome", "--no-chrome"],
+                # 2.1.311/2.1.312: `claude --help` có đúng các cờ của 2.1.310 (không cờ nào bị bỏ/đổi tên; cờ mới chưa dùng thì không thêm).
+                "2.1.311": list(_FLAGS_2_1_302) + ["--chrome", "--no-chrome"],
+                "2.1.312": list(_FLAGS_2_1_302) + ["--chrome", "--no-chrome"],
             },
             # Claude in Chrome (cfharness/browser.py, docs/dev-notes/chrome.md). `enabled` = kill switch CHỈ NGƯỜI đặt (nhánh runtime
             # ∈ integrity.SECURITY_KEYS); tắt → agent `chrome`/`auto` chạy như `playwright`, tool chrome bị guard chặn.
@@ -698,6 +719,15 @@ def validate_setting(key: str, value: Any) -> None:
     elif key == "learning.review_budget_usd":
         if value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0):
             raise ValueError("learning.review_budget_usd phải > 0 hoặc null (null = review không có trần riêng)")
+    elif key == "learning.review_budget_max_usd":
+        if value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0):
+            raise ValueError("learning.review_budget_max_usd phải > 0 hoặc null (null = không chặn trên)")
+    elif key in ("learning.review_reload_usd_per_mtok", "learning.review_retry_backoff_s"):
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{key} phải là số ≥ 0")
+    elif key in ("learning.review_rate_limit_retries", "learning.review_budget_retries"):
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 20:
+            raise ValueError(f"{key} phải là số nguyên 0..20")
     elif key == "runtime.claude.default_permission_mode":
         if value is not None and value not in VALID_PERMISSION_MODES:
             raise ValueError(f"permission mode không hợp lệ; chọn một trong {VALID_PERMISSION_MODES}")

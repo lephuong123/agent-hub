@@ -18,6 +18,7 @@ outcome mới `crashed` (tiến trình chết không có `result`), `rate_limite
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -647,10 +648,36 @@ class RunManager:
         if runtime.name == "claude" and v is None:
             raise RuntimeError_("không chạy được `claude --version` — kiểm `claude` có trong PATH (cfharness doctor)")
         tested = self.hub.config.get("runtime.claude.tested_versions") or []
-        if v and v not in tested and v not in self._warned_versions:
-            self._warned_versions.add(v)
-            self.hub.publish(make_event("cli.version_warning", None, {"version": v, "matrix": tested}))
+        if v and v not in tested:
+            self.warn_cli_version(v, tested)
         return v
+
+    def warn_cli_version(self, version: str | None, tested: list[str], **extra: Any) -> bool:
+        """`cli.version_warning` MỘT lần mỗi phiên bản mỗi daemon — dùng chung cho kiểm lúc khởi động (runtime/compat.py) và
+        lần spawn đầu (trước đây hai nơi đếm riêng → mỗi phiên bản lạ cảnh báo 2 lần). Trả True nếu vừa phát."""
+        key = version or "<missing>"
+        if key in self._warned_versions:
+            return False
+        self._warned_versions.add(key)
+        self.hub.publish(make_event("cli.version_warning", None, {"version": version, "matrix": list(tested), **extra}))
+        return True
+
+    async def _control_request(self, ar: ActiveRun, request: dict[str, Any], request_id: str) -> dict[str, Any]:
+        """CLI 2.1.303+ hỏi `can_use_tool` qua stdout (runtime/claude_cli.py trả `control_response`). Quyết định LUÔN qua guard:
+        SandboxNetworkAccess → `GuardService.sandbox_network`; tool khác → `GuardService.check` (kênh `control`). Lỗi → runtime deny."""
+        tool = str(request.get("tool_name") or "")
+        inp = request.get("input") if isinstance(request.get("input"), dict) else {}
+        guard = self.hub.guard
+        from .guard.classifier import SANDBOX_NETWORK_TOOL
+
+        if tool == SANDBOX_NETWORK_TOOL:
+            res = await guard.sandbox_network(ar.run_id, inp.get("host"), request_id=request_id, tool_use_id=request.get("tool_use_id"))
+        else:
+            res = await guard.check({"run_id": ar.run_id, "channel": "control", "tool_name": tool, "tool_input": inp,
+                                     "tool_use_id": request.get("tool_use_id")})
+        if res.get("decision") == "allow":
+            return {"behavior": "allow"}
+        return {"behavior": "deny", "message": str(res.get("reason") or "[cfharness] denied")}
 
     async def _run(self, ar: ActiveRun, run: dict[str, Any], agent: dict[str, Any]) -> None:
         hub = self.hub
@@ -668,6 +695,7 @@ class RunManager:
             if agent.get("mcp_servers") and getattr(hub, "mcp_oauth", None) is not None:
                 await hub.mcp_oauth.ensure_fresh_for(list(agent["mcp_servers"]))  # OAuth MCP: làm mới token sắp hết hạn trước khi ghi mcp.json
             spec = self._prepare_spec(run, agent)
+            spec.control_handler = functools.partial(self._control_request, ar)  # CLI 2.1.303+: control_request can_use_tool → guard
             await self._checkpoint(ar, run, spec)
             cli_version = await self._check_cli_version(runtime, agent_id, run_id)
             if self._ended_before_start(run_id):

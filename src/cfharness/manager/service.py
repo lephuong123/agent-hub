@@ -4,7 +4,8 @@
   `auth.require_human` ở tầng service). Lưu trong hub.db (agent không ghi được) chứ không ở config.yaml.
 - **Hội thoại** (`manager_conversations`, `manager_messages`, migration v13): mỗi tin người → một run `kind=manager` của agent
   manager, `--resume` cùng session của conversation (claude tự autocompact khi ngữ cảnh gần đầy); sau `manager.rotate_after_turns`
-  lượt (hoặc run lỗi) → session mới, mang theo vài tin gần nhất. cwd cố định `agents/<id>/workspaces/conv-<id>` (resume cần cùng cwd).
+  lượt, run lỗi, session quá đắt/lớn (`rotate_reason`: chi phí luỹ kế, tick/lịch trên session lớn, session lớn nghỉ lâu) → session
+  mới, mang theo vài tin gần nhất. Tick chạy trong hội thoại riêng kênh `heartbeat`, lịch trong hội thoại đích — cùng luật xoay. cwd cố định `agents/<id>/workspaces/conv-<id>` (resume cần cùng cwd).
 - **Nhịp**: listener bus gom sự kiện đáng xử lý (task blocked/done, circuit open, run lỗi lặp, run do manager khởi chạy xong,
   digest) + vòng nền (`manager.check_s`) thêm approval chờ người > N phút; tick khi có sự kiện đã chờ `event_debounce_s`, hoặc
   định kỳ `tick_interval_s` CHỈ khi có việc (task do manager giao chưa xong, approval chờ, sự kiện). Không tick khi ESTOP, agent
@@ -423,6 +424,59 @@ class ManagerService:
             out = [r for r in out if (r.get("run_opts") or {}).get("manager_conversation") == cid]
         return out
 
+    def session_stats(self, session_id: str) -> dict[str, Any]:
+        """Độ lớn session để quyết xoay: chi phí luỹ kế (`sessions.cumulative_cost_usd`), ngữ cảnh ƯỚC LƯỢNG (token vào trung bình
+        mỗi lượt API của run gần nhất = (input + cache_read + cache_creation) / num_turns — `usage` của `result` là tổng các lượt),
+        số giây từ lúc run gần nhất của session kết thúc (cache prompt còn nóng hay không)."""
+        s = self.hub.store.get_session(session_id) or {}
+        out: dict[str, Any] = {"cost": float(s.get("cumulative_cost_usd") or 0), "ctx_tokens": None, "idle_s": None}
+        r = self.conn.execute("SELECT usage, num_turns, ended_at FROM runs WHERE session_id=? AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 1",
+                              (session_id,)).fetchone()
+        if r is None:
+            return out
+        try:
+            u = json.loads(r[0]) if isinstance(r[0], str) else (r[0] or {})
+            tok = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+            out["ctx_tokens"] = tok // max(1, int(r[1] or 1)) if tok else None
+        except (ValueError, TypeError, AttributeError):
+            pass
+        ended = _parse(r[2])
+        if ended:
+            if ended.tzinfo is None:
+                ended = ended.replace(tzinfo=timezone.utc)
+            out["idle_s"] = max(0.0, (datetime.now(timezone.utc) - ended).total_seconds())
+        return out
+
+    def rotate_reason(self, conv: dict[str, Any], kind: str) -> str | None:
+        """Lý do bỏ `--resume` session hiện tại của hội thoại (→ session mới mang theo `carry_over`), None = resume tiếp.
+
+        Mỗi resume nạp lại TOÀN BỘ lịch sử session; hết cache prompt thì trả giá ghi cache cho cả khối → tick NO_ACTION tốn $0.25–0.65,
+        lịch chết `budget_exceeded` trong 1 lượt. Luật (theo thứ tự):
+        1. `turns`: session đã ≥ `manager.rotate_after_turns` lượt.
+        2. `cost`: chi phí luỹ kế session ≥ `manager.rotate_session_cost_usd` (session dài = mỗi lượt đắt).
+        3. `background_large`: lượt nền (tick / lịch) mà ngữ cảnh ước lượng ≥ `manager.rotate_context_tokens` — lượt nền có trần
+           ngân sách nhỏ, không bao giờ để nó trả tiền nạp lại session lớn.
+        4. `idle_large`: nghỉ ≥ `manager.rotate_idle_s` (cache prompt đã nguội) VÀ ngữ cảnh ≥ `manager.rotate_context_tokens`.
+        Giá trị 0/null của một ngưỡng = tắt luật đó."""
+        sid = conv.get("session_id")
+        if not sid:
+            return None
+        n = int(self.cfg("rotate_after_turns", 80) or 0)
+        if n and int(conv.get("session_turns") or 0) >= n:
+            return "turns"
+        st = self.session_stats(str(sid))
+        cap = float(self.cfg("rotate_session_cost_usd", 3.0) or 0)
+        if cap and st["cost"] >= cap:
+            return "cost"
+        big_tok = int(self.cfg("rotate_context_tokens", 40000) or 0)
+        large = bool(big_tok) and st["ctx_tokens"] is not None and st["ctx_tokens"] >= big_tok
+        if large and kind in ("tick", "schedule"):
+            return "background_large"
+        idle = float(self.cfg("rotate_idle_s", 3600) or 0)
+        if large and idle and st["idle_s"] is not None and st["idle_s"] >= idle:
+            return "idle_large"
+        return None
+
     def _submit(self, conv: dict[str, Any], prompt: str, *, kind: str, budget: float | None) -> dict[str, Any]:
         aid = conv["agent_id"]
         why = self.perms.manager_config_problem(self.hub.agents.get_row(aid))  # MGR-8: cấu hình bị nới sau khi chỉ định → không chạy
@@ -430,13 +484,17 @@ class ManagerService:
             raise Blocked(f"điều phối viên '{aid}' có cấu hình vượt khung (`cfharness manager capabilities show`): {why}", data={"reason": "manager_config"})
         resume = conv.get("session_id")
         carry = ""
-        if resume and int(conv.get("session_turns") or 0) >= int(self.cfg("rotate_after_turns", 80)):
-            resume = None  # xoay session: claude autocompact lo ngữ cảnh dài trong session; ở đây giới hạn số lượt/session
+        rotated = self.rotate_reason(conv, kind) if resume else None
+        if rotated:
+            log.info("điều phối viên: hội thoại %s sang session mới (%s, lượt %s)", conv["id"], rotated, kind)
+            resume = None
         if resume and not self.hub.store.get_session(resume):
             resume = None
         if not resume and int(conv.get("turns") or 0) > 0:
             carry = prompts.carry_over(self.history(conv["id"], limit=6))
         opts = {"hub_self": "manager", "manager_conversation": conv["id"], "manager_kind": kind}
+        if rotated:
+            opts["manager_rotated"] = rotated
         run = self.hub.runs.submit(aid, carry + prompt, cwd=self._conv_cwd(aid, conv["id"]), budget_usd=budget, kind="manager",
                                    resume_session_id=resume, resume_reason="manager_conversation" if resume else None, run_opts=opts,
                                    manager_issue=True)

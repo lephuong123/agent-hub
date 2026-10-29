@@ -39,6 +39,11 @@ EVENT_LEVELS: dict[str, str] = {
     "permission.denied": "summary",
     "task.background": "detail",
     "control.response": "debug",
+    # CLI 2.1.303+: `control_request` CLI gửi trên stdout (vd can_use_tool SandboxNetworkAccess) — hub trả control_response qua stdin
+    "control.request": "debug",
+    # quyết định của hub cho yêu cầu mạng của Bash trong sandbox (host ngoài allowlist): host, decision allow|deny, decided_by,
+    # reason, approval_id, request_id (guard/service.GuardService.sandbox_network)
+    "sandbox.network_request": "summary",
     # Turn & message
     "turn.start": "detail",
     "status.update": "detail",
@@ -50,6 +55,7 @@ EVENT_LEVELS: dict[str, str] = {
     "tool.generating": "detail",
     "tool.start": "summary",
     "tool.complete": "summary",
+    "tool.progress": "debug",  # CLI 2.1.311+: `tool_progress` heartbeat 30 s của tool chạy lâu (tool_id, name, elapsed_s) — không ghi DB
     # Usage
     "usage.tick": "summary",
     "ratelimit.update": "summary",
@@ -126,6 +132,7 @@ EVENT_LEVELS: dict[str, str] = {
     "workspace.checkpoint": "debug",
     "workspace.diff": "summary",
     "ratelimit.throttle": "summary",
+    "ratelimit.gate": "summary",  # cổng dispatcher: open=false (hạn mức rejected tới `until`) / open=true (đã reset)
     "agent.cloned": "summary",
     "agent.imported": "summary",
     # M4-A — lõi học (FR-LN-01..07, 15, 18, 19; FR-OB-04)
@@ -180,7 +187,7 @@ EVENT_LEVELS: dict[str, str] = {
 }
 
 # Không ghi vào bảng `events` (chỉ ring buffer + stdout thô) — FR-OB-01.
-NOT_PERSISTED = frozenset({"message.delta", "reasoning.delta"})
+NOT_PERSISTED = frozenset({"message.delta", "reasoning.delta", "tool.progress"})
 TERMINAL_RUN_EVENTS = frozenset({"run.completed", "run.failed", "run.cancelled", "run.interrupted", "run.waiting_human"})
 
 

@@ -255,3 +255,26 @@ def test_hermes_prompt_verbatim_and_renamed():
     assert "skill_manage" not in p and "propose_skill_patch" in p and "propose_memory tool, target='user'" in p
     assert "use dd/mm/yyyy" in p and "focus — prioritize it" in p
     assert (Path(__file__).parents[1] / "NOTICE").read_text(encoding="utf-8").count("Nous Research") >= 1
+
+
+async def test_review_fork_has_no_browser_and_no_isolation_violation(env):
+    """Agent dùng Claude in Chrome: run thường có `--chrome`; review fork (Read/Grep/Glob + hub-self) KHÔNG được có —
+    trước đây CLI nạp claude-in-chrome ngoài allowed_mcp của review → isolation.violation giả (67 event thật)."""
+    d, proj, mp = env
+    h = d.hub
+    h.config.set("runtime.claude.chrome.enabled", True)
+    fm = dict(h.config.get("runtime.claude.flag_matrix") or {})
+    if "2.1.302" in fm:  # bản claude giả: coi như có cờ Chrome
+        fm["2.1.302"] = list(dict.fromkeys(list(fm["2.1.302"]) + ["--chrome", "--no-chrome"]))
+    h.config.set("runtime.claude.flag_matrix", fm)
+    await rpc(d, "agent.update", {"id": "r1", "changes": {"tool_policy": {"browser": "chrome"}}})
+    r1 = await rpc(d, "run.start", {"agent": "r1", "prompt": "Write today's status line."})
+    run1 = await h.runs.wait(r1["id"], 30)
+    assert "--chrome" in run1["argv_redacted"]
+    assert not list(h.store.query_events(run_id=r1["id"], types=["isolation.violation"]))
+    mp.setenv("FAKE_REVIEW_PLAN", json.dumps([{"tool": "skills_list"}]))
+    job = h.learning.reviews.refine("r1", run_ref=r1["id"])
+    job = await until(lambda: (j := h.learning.reviews.get(job["id"]))["status"] in ("done", "failed") and j)
+    rv = h.store.get_run(job["run_id"])
+    assert rv["kind"] == "review" and "--chrome" not in rv["argv_redacted"]
+    assert not list(h.store.query_events(run_id=rv["id"], types=["isolation.violation"]))

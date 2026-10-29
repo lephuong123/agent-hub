@@ -47,6 +47,10 @@ CONTINUE_MSG = (
     "Do it another way that is not destructive, or skip it and clearly report in your final summary what was skipped and why. "
     "Do NOT retry the same action now. The request stays open: if a human approves it later, the hub resumes this session so you can run it once."
 )
+NET_CONTINUE_MSG = (
+    "[cfharness] Nobody approved this network connection (request {aid}) within {timeout}s, so it is DENIED for now and your run continues. "
+    "Do not retry the same host now; work without it, or clearly report in your final summary what could not be fetched and why."
+)
 FORBIDDEN_MSG = "[cfharness] Blocked by hub safety policy: {reason}. Agents may not approve their own requests or change safety policy."
 RESTART_MSG = (
     "[cfharness] A human APPROVED this action (request {aid}), but a static safety rule blocks it in this process. "
@@ -1011,6 +1015,62 @@ class GuardService:
             return "human", "điều phối viên không sẵn sàng (ESTOP/tạm dừng/heartbeat tắt)"
         return "manager", None
 
+    async def sandbox_network(self, run_id: str, host: Any, *, request_id: str | None = None, tool_use_id: str | None = None) -> dict[str, Any]:
+        """CLI 2.1.303+: Bash trong sandbox OS mở kết nối tới host ngoài `sandbox.network.allowedDomains` của run → CLI hỏi qua
+        `control_request can_use_tool SandboxNetworkAccess {host}` (runtime/claude_cli.py). Quyết định:
+        1. host ∈ `guard.web.deny_domains` → deny (forbidden);
+        2. host khớp allowlist mạng HIỆN TẠI của agent (cấu hình + domain/localhost người mở + host MCP — người có thể vừa mở sau khi
+           run bắt đầu) và không bị luật tĩnh cấm → allow;
+        3. còn lại → `check()` như mọi tool (ESTOP, trust, gates, rule grant, approval giữ ≤ `approval.timeout_s`; hết giờ → deny, run
+           chạy tiếp). Mọi lỗi → deny (FAIL-CLOSED). Luôn phát `sandbox.network_request`."""
+        from .classifier import SANDBOX_NETWORK_TOOL
+        from .runtime import network_domains
+        from .url_safety import domain_matches, norm_host
+
+        h = norm_host(str(host or ""))[:253]
+        tool_input = {"host": h}
+        run = self.hub.store.get_run(run_id) if run_id else None
+        res: dict[str, Any] | None = None
+        try:
+            if run is not None and run["status"] in ("running", "queued") and not self.hub.runs.estop.get("on") and h:
+                ctx = self.context_for(run)
+                wcfg = self.hub.config.get("guard.web")
+                wcfg = wcfg if isinstance(wcfg, dict) else {}
+                deny = [str(x) for x in (wcfg.get("deny_domains") or []) if isinstance(x, str)]
+                pat = domain_matches(h, deny)
+                v = classify(SANDBOX_NETWORK_TOOL, tool_input, ctx)
+                if pat:
+                    v = Verdict("destructive", "web_domain_denied", "network", f"Bash (sandbox): domain {h} bị người chặn (guard.web.deny_domains: {pat})",
+                                [h], forbidden=True)
+                    self._record(run, "sandbox_network", SANDBOX_NETWORK_TOOL, tool_input, v, "deny")
+                    res = {"decision": "deny", "reason": FORBIDDEN_MSG.format(reason=v.reason)}
+                elif not v.forbidden:
+                    sb_cfg = self.hub.config.get("guard.sandbox")
+                    allowed = [str(x).strip("[]") for x in network_domains(sb_cfg if isinstance(sb_cfg, dict) else {}, self.run_sandbox_overrides(run["agent_id"]))]
+                    pat = domain_matches(h, allowed)
+                    if pat:
+                        va = Verdict("safe", "sandbox_network_allowlist", "network", f"host {h} khớp allowlist mạng của agent ({pat})", [h])
+                        self._record(run, "sandbox_network", SANDBOX_NETWORK_TOOL, tool_input, va, "allow")
+                        res = {"decision": "allow", "reason": f"hub guard: allowlist ({pat})", "decided_by": "allowlist"}
+            if res is None:
+                res = await self.check({"run_id": run_id, "channel": "sandbox_network", "tool_name": SANDBOX_NETWORK_TOOL, "tool_input": tool_input,
+                                        "tool_use_id": tool_use_id})
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — FAIL-CLOSED
+            log.exception("sandbox_network lỗi")
+            res = {"decision": "deny", "reason": f"[cfharness] guard error ({type(e).__name__}) — network access denied (fail-closed)"}
+        decision = "allow" if res.get("decision") == "allow" else "deny"
+        by = res.get("decided_by") or ("human" if res.get("approval_id") and decision == "allow" else "guard")
+        try:
+            self.hub.publish(make_event("sandbox.network_request", (run or {}).get("agent_id"), {
+                "host": h, "decision": decision, "decided_by": by, "reason": str(res.get("reason") or "")[:300], "approval_id": res.get("approval_id"),
+                "request_id": request_id, "continued": bool(res.get("continued")),
+            }, run_id=run_id or None, source="hub"))
+        except Exception:  # pragma: no cover — sự kiện không được làm hỏng quyết định
+            log.exception("không phát được sandbox.network_request")
+        return {**res, "decision": decision}
+
     async def check(self, p: dict[str, Any]) -> dict[str, Any]:
         run_id = str(p.get("run_id") or "")
         channel = str(p.get("channel") or "hook")
@@ -1119,11 +1179,15 @@ class GuardService:
         # hết giờ giữ → waiting_human (KHÔNG tự từ chối: request vẫn chờ người)
         from .profiles import on_timeout
 
-        if on_timeout(self.hub.config, run["agent_id"]) == "deny_and_continue":
+        from .classifier import SANDBOX_NETWORK_TOOL
+
+        net = tool_name == SANDBOX_NETWORK_TOOL  # mạng của Bash trong sandbox: không thuộc bất biến "phá huỷ không tự từ chối" — hết giờ = deny, chạy tiếp
+        if net or on_timeout(self.hub.config, run["agent_id"]) == "deny_and_continue":
             # opt-in theo agent: agent nhận từ chối kèm hướng dẫn, run CHẠY TIẾP, approval VẪN mở; người duyệt sau → resume (approvals.py)
             ap.to_waiting_human(aid, continued=True)
             self._record(run, channel, tool_name, tool_input, v, "deny", aid, extra={"timeout_action": "deny_and_continue"})
-            return {"decision": "deny", "reason": CONTINUE_MSG.format(aid=aid, timeout=int(timeout)), "approval_id": aid, "continued": True}
+            msg = NET_CONTINUE_MSG if net else CONTINUE_MSG
+            return {"decision": "deny", "reason": msg.format(aid=aid, timeout=int(timeout)), "approval_id": aid, "continued": True}
         ap.to_waiting_human(aid)
         self.hub.runs.pause_for_human(run_id, aid)
         return {"decision": "deny", "reason": WAITING_MSG.format(aid=aid, timeout=int(timeout)), "approval_id": aid, "waiting_human": True}

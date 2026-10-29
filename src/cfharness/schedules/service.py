@@ -677,6 +677,9 @@ class ScheduleService:
             self._deliver(r, f"{head}:\n{text or '(không có nội dung)'}", ok=ok, run_id=f.get("run_id"))
         if ok:
             self.conn.execute("UPDATE schedules SET fail_count=0, last_status='ok', updated_at=? WHERE id=?", (iso(self.now()), r["id"]))
+        elif outcome == "rate_limited":
+            # Hạn mức claude của cả máy, không phải lỗi của lịch: không tăng fail_count / không tự tạm dừng (lượt sau tự chạy lại).
+            self.conn.execute("UPDATE schedules SET last_status='rate_limited', updated_at=? WHERE id=?", (iso(self.now()), r["id"]))
         else:
             self._fail(r, f"lượt {f['id']} kết thúc '{outcome}'", run_id=f.get("run_id"))
 

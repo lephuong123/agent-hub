@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 import signal
@@ -19,6 +20,8 @@ from ..events import HubEvent, make_event
 from ..oscompat import IS_WINDOWS, JOBS, exec_argv, interrupt_group, kill_tree, new_group_kwargs, no_window_kwargs
 from ..redact import redact_argv
 from .base import AgentRuntime, OneShotRequest, OneShotResult, RawLog, RunHandle, RunSpec, RuntimeError_, make_adapter
+
+log = logging.getLogger("cfharness.runtime.claude")
 
 SIGKILL = getattr(signal, "SIGKILL", 9)  # Windows không có SIGKILL — chỉ dùng làm nhãn bước cuối của `stop`
 
@@ -272,6 +275,21 @@ def control_interrupt_line(request_id: str) -> bytes:
     return (json.dumps({"type": "control_request", "request_id": request_id, "request": {"subtype": "interrupt"}}) + "\n").encode("utf-8")
 
 
+def control_response_line(request_id: str, response: dict[str, Any] | None, *, error: str | None = None) -> bytes:
+    """Trả lời `control_request` của CLI qua stdin stream-json. Hình dạng đối chiếu mã CLI 2.1.312
+    (`StructuredIO.injectControlResponse`): `success` → `response.response` được parse theo schema của yêu cầu — với
+    `can_use_tool`: `{behavior:"allow", updatedInput?}` | `{behavior:"deny", message}`; `error` → yêu cầu bị reject."""
+    if error is not None:
+        body: dict[str, Any] = {"subtype": "error", "request_id": request_id, "error": error}
+    else:
+        body = {"subtype": "success", "request_id": request_id, "response": response or {}}
+    return (json.dumps({"type": "control_response", "response": body}, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _deny(message: str) -> dict[str, Any]:
+    return {"behavior": "deny", "message": message}
+
+
 def _fmt_usd(v: float) -> str:
     s = f"{v:.4f}".rstrip("0").rstrip(".")
     return s or "0"
@@ -453,6 +471,8 @@ class ClaudeCliRuntime(AgentRuntime):
                 if not line:
                     break
                 raw.write(line)
+                if b'"control_request"' in line:
+                    self._on_control_request(handle, line)
                 before = handle.adapter.result_count
                 for ev in handle.adapter.feed(line):
                     if ev.type == "steer.ack" and handle.internal.get("steer_pending"):
@@ -473,12 +493,68 @@ class ClaudeCliRuntime(AgentRuntime):
                     )
             handle.exit_code = await proc.wait()
         finally:
+            for t in list(handle.internal.get("control_tasks") or ()):
+                t.cancel()
             JOBS.finished(handle.run_id)
             handle.raw_log_final = raw.close()
             f = handle.internal.get("stderr_f")
             if f:
                 f.close()
             handle.stderr_tail = _tail(handle.spec.stderr_log_path)
+
+    # ------------------------------------------------------------------ control_request của CLI (2.1.303+)
+    def _on_control_request(self, handle: RunHandle, line: bytes) -> None:
+        """CLI hỏi qua stdout và CHỜ `control_response` trên stdin (không trả lời = lệnh treo, vd Bash ra mạng trong sandbox).
+        Quyết định chạy nền (không chặn đọc stdout: heartbeat/tool khác vẫn chảy); mọi lỗi → deny (FAIL-CLOSED)."""
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return
+        if not isinstance(obj, dict) or obj.get("type") != "control_request" or not isinstance(obj.get("request_id"), str):
+            return
+        task = asyncio.get_running_loop().create_task(self._answer_control(handle, obj))
+        tasks: set[asyncio.Task] = handle.internal.setdefault("control_tasks", set())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    async def _answer_control(self, handle: RunHandle, obj: dict[str, Any]) -> None:
+        rid = obj["request_id"]
+        req = obj.get("request") if isinstance(obj.get("request"), dict) else {}
+        if req.get("subtype") != "can_use_tool":
+            line = control_response_line(rid, None, error=f"cfharness: control_request '{req.get('subtype')}' không được hỗ trợ")
+        else:
+            decision: Any = None
+            handler = handle.spec.control_handler
+            timeout = float(self.cfg.get("control_request_timeout_s") or 1800)
+            try:
+                if handler is None:
+                    raise RuntimeError_("run không có bộ xử lý control_request")
+                decision = await asyncio.wait_for(handler(req, rid), timeout)
+            except asyncio.CancelledError:
+                raise
+            except asyncio.TimeoutError:
+                decision = _deny(f"[cfharness] No decision within {int(timeout)}s, so this was denied.")
+            except Exception as e:  # noqa: BLE001 — fail-closed
+                log.warning("control_request %s lỗi: %r", rid, e)
+                decision = _deny("[cfharness] The hub could not evaluate this request, so it was denied (fail-closed).")
+            if not isinstance(decision, dict) or decision.get("behavior") not in ("allow", "deny"):
+                decision = _deny("[cfharness] Invalid decision, so this was denied (fail-closed).")
+            if decision["behavior"] == "allow":
+                inp = req.get("input") if isinstance(req.get("input"), dict) else {}
+                upd = decision.get("updatedInput")
+                decision = {"behavior": "allow", "updatedInput": upd if isinstance(upd, dict) else inp}
+            else:
+                decision = _deny(str(decision.get("message") or "[cfharness] denied"))
+            line = control_response_line(rid, decision)
+        if not self._stdin_open(handle):
+            log.warning("không trả lời được control_request %s: stdin đã đóng", rid)
+            return
+        proc = handle.internal["proc"]
+        try:
+            proc.stdin.write(line)
+            await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError) as e:
+            log.warning("không ghi được control_response %s: %r", rid, e)
 
     def _signal(self, handle: RunHandle, sig: int) -> bool:
         proc = handle.internal.get("proc")

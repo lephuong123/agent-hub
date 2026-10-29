@@ -348,3 +348,59 @@ def test_revived_patch_on_gone_skill_is_dropped_quietly(hub):
     r = P.retry(a["proposal_id"], revive=True)
     assert r["status"] == "superseded" and P.get(a["proposal_id"])["block_reason"] == "target_gone"
     assert "guard.blocked" not in types(hub)
+
+
+# ---------------------------------------------------------------- read_before_write bền qua hoãn/khởi động lại (lỗi dữ liệu thật)
+def test_deferred_review_patch_survives_lost_read_marks(hub):
+    """Review đọc skill → đề xuất → bị hoãn (cooldown). Dấu đọc trong RAM mất (review kết thúc / daemon khởi động lại) →
+    lần thử lại KHÔNG được chặn `read_before_write` (trước đây 14/37 proposal hoãn chết vì vậy)."""
+    new_skill(hub, by="review")  # cooldown 24 h → patch của review bị hoãn
+    P = hub.learning.pipeline
+    a = review_patch(hub, "1. Collect", "1. Gather")
+    b = review_patch(hub, "2. Write", "2. Print")
+    assert a["status"] == b["status"] == "deferred_rate_limited"
+    assert P.get(a["proposal_id"])["payload"]["_read_evidence"]  # bằng chứng đọc lưu cùng proposal
+    hub.learning.read_marks.clear()  # = review.finalize + daemon restart
+    hub.learning.policy.set("rate.cooldown_per_target_h", 0)
+    hub.store.conn.execute("UPDATE proposals SET not_before='2000-01-01T00:00:00.000Z' WHERE status='deferred_rate_limited'")
+    hub.learning.tick()
+    # cả hai patch cục bộ (khác chỗ) đều áp dụng — patch thứ hai neo bằng old_string nên không bị coi là "đọc bản cũ"
+    assert P.get(a["proposal_id"])["status"] == "applied", P.get(a["proposal_id"])
+    assert P.get(b["proposal_id"])["status"] == "applied", P.get(b["proposal_id"])
+    assert not [e for e in hub.events if e.type == "guard.blocked"]
+
+
+def test_unread_proposal_still_blocked_even_with_forged_evidence(hub):
+    import hashlib
+    from pathlib import Path
+
+    new_skill(hub)
+    hub.learning.read_marks["r_x"] = set()
+    P = hub.learning.pipeline
+    f = Path(hub.knowledge.find_skill("r1", "daily-report")["path"]) / "SKILL.md"
+    forged = {"agent|r1|daily-report|SKILL.md": hashlib.sha256(f.read_bytes()).hexdigest()}
+    r = P.propose(target="skill", op="patch", agent_id="r1", created_by="review", run_id="r_x",
+                  payload={"name": "daily-report", "old_string": "1. Collect", "new_string": "1. Gather", "_read_evidence": forged})
+    assert r["status"] == "blocked" and r["rule"] == "read_before_write"
+    assert "_read_evidence" not in P.get(r["proposal_id"])["payload"]  # bằng chứng chỉ do pipeline ghi
+
+
+def test_deferred_whole_file_patch_dropped_when_target_changed(hub):
+    from pathlib import Path
+
+    new_skill(hub, by="review")
+    P = hub.learning.pipeline
+    hub.learning.read_marks.setdefault("r_rev", set()).add(("agent", "r1", "daily-report", "SKILL.md"))
+    a = P.propose(target="skill", op="patch", agent_id="r1", created_by="review", run_id="r_rev",
+                  payload={"name": "daily-report", "content": "# Daily report\n\n1. Rewritten from the old copy.\n"})
+    assert a["status"] == "deferred_rate_limited"
+    hub.learning.read_marks.clear()
+    f = Path(hub.knowledge.find_skill("r1", "daily-report")["path"]) / "SKILL.md"
+    f.write_text(f.read_text(encoding="utf-8") + "3. Added by the user.\n", encoding="utf-8")  # đích đổi sau lúc đọc
+    hub.learning.policy.set("rate.cooldown_per_target_h", 0)
+    hub.events.clear()
+    r = P.retry(a["proposal_id"])
+    p = P.get(a["proposal_id"])
+    assert r["status"] == "superseded" and p["block_reason"] == "target_changed"
+    assert "3. Added by the user." in f.read_text(encoding="utf-8")
+    assert "guard.blocked" not in types(hub)

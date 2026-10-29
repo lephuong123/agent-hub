@@ -87,6 +87,9 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
         _s("manager.tick_budget_usd", "Trần chi phí mỗi tick ($)", "float", "vd 0.5", min=0),
         _s("manager.chat_budget_usd", "Trần chi phí mỗi lượt hội thoại ($)", "float", "để trống = theo agent", nullable=True, min=0),
         _s("manager.rotate_after_turns", "Đổi session sau (lượt)", "int", "vd 80", min=1),
+        _s("manager.rotate_session_cost_usd", "Đổi session khi chi phí luỹ kế ≥ ($)", "float", "vd 3; 0 = tắt", min=0),
+        _s("manager.rotate_context_tokens", "Session lớn từ (token ngữ cảnh)", "int", "vd 40000; tick/lịch luôn đổi session lớn", min=0),
+        _s("manager.rotate_idle_s", "Đổi session lớn khi nghỉ ≥ (giây)", "int", "vd 3600 (cache nguội); 0 = tắt", min=0),
         _s("manager.max_agents_created_per_day", "Tạo agent tối đa / ngày", "int", min=0),
         _s("manager.max_tasks_per_hour", "Tạo task tối đa / giờ", "int", min=0),
         _s("manager.max_runs_per_hour", "Chạy run tối đa / giờ", "int", min=0),
@@ -110,6 +113,8 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
     )),
     ("learning", "Học & đánh giá", (
         _s("learning.review_budget_usd", "Trần chi phí review học ($)", "float", "để trống = không trần riêng", nullable=True, min=0),
+        _s("learning.review_budget_max_usd", "Trần tối đa review học kể cả nạp lại ngữ cảnh ($)", "float", "để trống = không chặn trên",
+           nullable=True, min=0),
         _s("learning.review_model", "Model review", "choice", "mặc định = cùng model với run gốc (giữ cache)", choices=MODELS, nullable=True),
         _s("learning.review_scope", "Phạm vi review", "choice", choices=("combined", "skill", "memory")),
         _s("learning.review_max_per_agent_per_day", "Review tối đa / agent / ngày", "int", min=0),

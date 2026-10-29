@@ -60,6 +60,9 @@ class RunSpec:
     allowed_mcp_prefixes: list[str] | None = None
     # agent được người đặt trust full (guard/service.trust_set): cho phép `bypassPermissions` trên mọi workspace (ngoại lệ NFR-15 do người chọn)
     trust_full: bool = False
+    # CLI 2.1.303+: bộ quyết định cho `control_request can_use_tool` (vd SandboxNetworkAccess) — async (request, request_id) →
+    # {behavior: allow|deny, message?, updatedInput?}. RunManager gắn (đi qua guard); None → runtime từ chối (fail-closed)
+    control_handler: Any = None
 
 
 @dataclass
