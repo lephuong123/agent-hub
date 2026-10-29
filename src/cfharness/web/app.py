@@ -142,6 +142,8 @@ class GuardMiddleware:
     """ASGI thuần (không đệm response → SSE chạy được): kiểm Host, gắn phiên, chặn khi chưa đăng nhập, thêm header bảo mật."""
 
     PUBLIC = ("/login", "/favicon.ico", "/mcp/oauth/callback")  # callback OAuth: state là lớp bảo vệ (web/mcp_oauth.py)
+    # JSON do trang gọi bằng fetch (polling): chưa đăng nhập → 401 (không chuyển hướng), không gia hạn phiên — như /sse/, /partials/
+    API = ("/office/state", "/office/approval/", "/office/question/", "/office/chat", "/office/do/")  # tiền tố
 
     def __init__(self, app: Any, state: WebState) -> None:
         self.app = app
@@ -179,11 +181,13 @@ class GuardMiddleware:
             return
         sid = cookie_parser(headers.get("cookie", "")).get(COOKIE)
         # polling/SSE không gia hạn phiên — chỉ thao tác của người (trang, POST) mới gia hạn
-        sess = self.state.auth.get(sid, touch=not path.startswith(("/sse/", "/partials/")))
+        poll = path.startswith(("/sse/", "/partials/")) or path.startswith(self.API)
+        # GET JSON của cảnh 3D không gia hạn; POST /office/do (thao tác của người) thì có
+        sess = self.state.auth.get(sid, touch=not poll or (path.startswith(self.API) and scope.get("method") != "GET"))
         scope.setdefault("state", {})["session"] = sess
         public = path in self.PUBLIC or path.startswith("/static/")
         if sess is None and not public:
-            if scope.get("method") == "GET" and not path.startswith(("/sse/", "/partials/")) and "hx-request" not in headers:
+            if scope.get("method") == "GET" and not poll and "hx-request" not in headers:
                 resp: Response = RedirectResponse("/login", status_code=303)
             else:
                 resp = PlainTextResponse("Chưa đăng nhập — chạy `cfharness web --open` trong terminal.", status_code=401)
@@ -1096,6 +1100,64 @@ def _mcp_ok(r: Any) -> str:
     return f"Đã thêm MCP {(r or {}).get('name')}" + (f" — {_probe_msg(pr)}" if pr else "")
 
 
+@dataclass
+class Plan:
+    """Quyết định của cổng thao tác (`plan_action`) — dùng chung cho web 2D (`do_action`) và cảnh 3D (`/office/do`, web/office.py).
+
+    `step`: `invalid` (form thiếu/sai — `error`), `error` (RPC đọc lỗi / không đủ điều kiện — `error`), `confirm` (chưa `confirm=yes` —
+    `message`, `fields`, `danger`, `note`), `step2` (bước 2 chưa `confirm2=yes` — `kind` heavy|always|grant, `ap`, `fields`), `go` (được làm — `params`)."""
+
+    step: str
+    act: Action
+    params: dict[str, Any] | None = None
+    error: str | None = None
+    message: str | None = None
+    fields: list[tuple[str, str]] | None = None
+    kind: str | None = None
+    ap: dict[str, Any] | None = None
+
+
+async def plan_action(request: Request, name: str, form: FormData, act: Action) -> Plan:
+    """Cổng thao tác: dựng tham số → xác nhận (`confirm=yes`) → bước 2 (`confirm2=yes`) cho duyệt nặng / luôn cho phép / cho phép theo luật.
+    KHÔNG gọi RPC ghi nào; chỉ trả `go` khi mọi bước đã qua. Không bao giờ nới: thêm điều kiện ở đây là áp cho cả 2D lẫn 3D."""
+    try:
+        params = act.build(form)
+    except ValueError as e:
+        return Plan("invalid", act, error=f"Chưa đủ thông tin: {e}")
+    if act.confirm and form.get("confirm") != "yes":
+        msg = act.confirm(form) if callable(act.confirm) else act.confirm
+        fields = [(k, v) for k, v in carry(form) if k not in act.secret_fields]  # giá trị secret không vào HTML
+        return Plan("confirm", act, params, message=msg + ("\n(Nhập lại giá trị ở trang Cài đặt và tích ô xác nhận.)" if act.secret_fields else ""),
+                    fields=fields)
+    if name == "approve_always" and form.get("confirm2") != "yes":
+        # bước 2 BẮT BUỘC: trang nói rõ luật sẽ tạo (agent + tool + dấu vân tay / agent + host) — `always_offer` do daemon tính
+        try:
+            ap = await rpc(request, "approval.get", {"id": params["id"]})
+        except RpcError as e:
+            return Plan("error", act, params, error=err_text(e))
+        if not ap.get("always_offer"):
+            return Plan("error", act, params, error=f"Yêu cầu {ap.get('id')} không đủ điều kiện 'luôn cho phép' — chỉ cho phép một lần")
+        return Plan("step2", act, params, kind="always", ap=ap, fields=carry(form))
+    if name == "approve_rule" and form.get("confirm2") != "yes":
+        try:
+            ap = await rpc(request, "approval.get", {"id": params["id"]})
+        except RpcError as e:
+            return Plan("error", act, params, error=err_text(e))
+        if not ap.get("matched_rule"):
+            return Plan("error", act, params, error=f"Yêu cầu {ap.get('id')} không có luật để cho phép luôn — chỉ cho phép một lần")
+        return Plan("step2", act, params, kind="grant", ap=ap, fields=[(k, v) for k, v in carry(form) if k != "grant_for"])
+    if name in ("approve", "approve_fp") and form.get("confirm2") != "yes":
+        # thao tác phá huỷ NẶNG (tài nguyên bảo vệ / lớp trong notify.telegram.confirm_classes + file) → bước 2, như Telegram (WT-5/6)
+        try:
+            ap = await rpc(request, "approval.get", {"id": params["id"]})
+            classes = await rpc(request, "config.get", {"key": "notify.telegram.confirm_classes"}) or []
+        except RpcError as e:
+            return Plan("error", act, params, error=err_text(e))
+        if heavy_approval(ap, classes):
+            return Plan("step2", act, params, kind="heavy", ap=ap, fields=carry(form))
+    return Plan("go", act, params)
+
+
 async def do_action(request: Request) -> Response:
     _, form = await post_guard(request)
     name = request.path_params["name"]
@@ -1103,44 +1165,21 @@ async def do_action(request: Request) -> Response:
     if act is None:
         raise HTTPException(404, "Không có thao tác này")
     back = safe_next(form.get("next"), "/")
-    try:
-        params = act.build(form)
-    except ValueError as e:
-        return flash_redirect(request, back, "error", f"Chưa đủ thông tin: {e}")
-    if act.confirm and form.get("confirm") != "yes":
-        msg = act.confirm(form) if callable(act.confirm) else act.confirm
-        fields = [(k, v) for k, v in carry(form) if k not in act.secret_fields]  # giá trị secret không vào HTML
-        return await render(request, "confirm.html", {"message": msg + ("\n(Nhập lại giá trị ở trang Cài đặt và tích ô xác nhận.)" if act.secret_fields else ""),
-                                                      "fields": fields, "action": f"/do/{name}", "danger": act.danger, "back": back,
-                                                      "note": act.note})
-    if name == "approve_always" and form.get("confirm2") != "yes":
-        # bước 2 BẮT BUỘC: trang nói rõ luật sẽ tạo (agent + tool + dấu vân tay / agent + host) — `always_offer` do daemon tính
-        try:
-            ap = await rpc(request, "approval.get", {"id": params["id"]})
-        except RpcError as e:
-            return flash_redirect(request, back, "error", err_text(e))
-        if not ap.get("always_offer"):
-            return flash_redirect(request, back, "error", f"Yêu cầu {ap.get('id')} không đủ điều kiện 'luôn cho phép' — chỉ cho phép một lần")
-        return await render(request, "approve2.html", {"a": ap, "view": P.action_view(ap), "fields": carry(form), "action": f"/do/{name}", "back": back,
-                                                       "always": ap["always_offer"]})
-    if name == "approve_rule" and form.get("confirm2") != "yes":
-        try:
-            ap = await rpc(request, "approval.get", {"id": params["id"]})
-        except RpcError as e:
-            return flash_redirect(request, back, "error", err_text(e))
-        if not ap.get("matched_rule"):
-            return flash_redirect(request, back, "error", f"Yêu cầu {ap.get('id')} không có luật để cho phép luôn — chỉ cho phép một lần")
-        return await render(request, "approve2.html", {"a": ap, "view": P.action_view(ap), "fields": [(k, v) for k, v in carry(form) if k != "grant_for"],
-                                                       "action": f"/do/{name}", "back": back, "grant": True})
-    if name in ("approve", "approve_fp") and form.get("confirm2") != "yes":
-        # thao tác phá huỷ NẶNG (tài nguyên bảo vệ / lớp trong notify.telegram.confirm_classes + file) → bước 2, như Telegram (WT-5/6)
-        try:
-            ap = await rpc(request, "approval.get", {"id": params["id"]})
-            classes = await rpc(request, "config.get", {"key": "notify.telegram.confirm_classes"}) or []
-        except RpcError as e:
-            return flash_redirect(request, back, "error", err_text(e))
-        if heavy_approval(ap, classes):
-            return await render(request, "approve2.html", {"a": ap, "view": P.action_view(ap), "fields": carry(form), "action": f"/do/{name}", "back": back})
+    plan = await plan_action(request, name, form, act)
+    if plan.step in ("invalid", "error"):
+        return flash_redirect(request, back, "error", plan.error)
+    if plan.step == "confirm":
+        return await render(request, "confirm.html", {"message": plan.message, "fields": plan.fields, "action": f"/do/{name}", "danger": act.danger,
+                                                      "back": back, "note": act.note})
+    if plan.step == "step2":
+        ap = plan.ap or {}
+        ctx = {"a": ap, "view": P.action_view(ap), "fields": plan.fields, "action": f"/do/{name}", "back": back}
+        if plan.kind == "always":
+            ctx["always"] = ap["always_offer"]
+        elif plan.kind == "grant":
+            ctx["grant"] = True
+        return await render(request, "approve2.html", ctx)
+    params = plan.params or {}
     try:
         res = await act.call(request, params) if act.call else await rpc(request, act.method, params, audit=act.audit)
     except RpcError as e:
@@ -1250,7 +1289,7 @@ async def sse_firehose(request: Request) -> Response:
 async def http_error(request: Request, exc: Exception) -> Response:
     code = getattr(exc, "status_code", 500)
     detail = getattr(exc, "detail", "Lỗi")
-    if request.url.path.startswith(("/sse/", "/partials/")) or request.method != "GET":
+    if request.url.path.startswith(("/sse/", "/partials/")) or request.url.path.startswith(GuardMiddleware.API) or request.method != "GET":
         return PlainTextResponse(str(detail), status_code=code)
     st = ws(request)
     return st.templates.TemplateResponse(request, "error.html", {"code": code, "message": detail, "htmx": HTMX, "badge": {}, "csrf": "", "flashes": [], "nav": ""},
@@ -1261,7 +1300,7 @@ async def rpc_error(request: Request, exc: Exception) -> Response:
     msg = err_text(exc)
     code = (404 if isinstance(exc, RpcError) and exc.code == -32004 else
             503 if isinstance(exc, (DaemonUnavailable, OSError)) or (isinstance(exc, RpcError) and exc.code == METHOD_NOT_FOUND) else 400)
-    if request.url.path.startswith(("/sse/", "/partials/")):
+    if request.url.path.startswith(("/sse/", "/partials/")) or request.url.path.startswith(GuardMiddleware.API):
         return PlainTextResponse(msg, status_code=code)
     st = ws(request)
     sess = session_of(request)
@@ -1285,6 +1324,12 @@ def _extra_routes() -> list[Any]:
 
     _x.register_actions(ACTIONS, Action, _req)
     return _x.routes()
+
+
+def _office_routes() -> list[Any]:
+    from .office import routes as _r  # /office, /office/state, /sse/office — chế độ 3D (docs/dev-notes/office-3d.md)
+
+    return _r()
 
 
 def _skill_routes() -> list[Any]:
@@ -1357,6 +1402,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/sse/firehose", sse_firehose),
         *_manager_routes(),
         *_extra_routes(),
+        *_office_routes(),
         *_skill_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),

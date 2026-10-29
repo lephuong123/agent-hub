@@ -1,0 +1,32 @@
+<!doctype html>
+{#- Chế độ 3D = TOÀN TRANG 3D (docs/dev-notes/office-3d.md): trang ĐỘC LẬP, không sidebar/thanh trên/bảng bên.
+    Thấy được chỉ có canvas + nút "2D" nổi. Mọi thông tin (HUD, thẻ nhân vật, kanban, "Cần bạn", hết phiên) vẽ TRONG cảnh.
+    Danh sách chữ chỉ cho trình đọc màn hình (sr-only). Không script/style inline (CSP 'self'). #}
+<html lang="vi" class="office-doc">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Văn phòng 3D · cfharness</title>
+<link rel="icon" href="{{ static('favicon.svg') }}" type="image/svg+xml">
+<link rel="stylesheet" href="{{ static('office.css') }}">
+</head>
+<body class="office-page">
+<main class="office" id="office" data-state="/office/state" data-sse="/sse/office" data-csrf="{{ csrf }}">
+  <div class="office-canvas" id="office-canvas" role="img" aria-label="Văn phòng 3D: mỗi agent là một nhân vật chibi. Danh sách agent dạng chữ nằm ngay sau phần này cho trình đọc màn hình."></div>
+  <a class="office-switch" id="office-to-2d" href="/" title="Về giao diện 2D" aria-label="Về giao diện 2D">2D</a>
+  <div class="office-fallback" id="office-fallback" hidden>
+    <p>Trình duyệt không vẽ được văn phòng 3D (cần WebGL). Bấm “2D” để dùng giao diện thường.</p>
+  </div>
+  <div class="sr-only">
+    <h1>Văn phòng 3D</h1>
+    <p id="office-hud" role="status">Đang tải…</p>
+    <p id="office-expired" hidden>Phiên đăng nhập đã hết — chạy cfharness web --open để đăng nhập lại.</p>
+    <div id="office-panel" aria-live="polite"></div>
+    <h2>Agent</h2>
+    <ul id="office-list" aria-live="polite"></ul>
+  </div>
+</main>
+<script type="module" src="{{ static('office.js') }}"></script>
+</body>
+</html>

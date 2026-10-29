@@ -13,6 +13,10 @@
 </head>
 <body class="{% block bodyclass %}{% endblock %}">
 {%- set navkey = 'inbox' if nav == 'approvals' else nav %}
+{%- set on3d = path == '/office' %}
+{%- macro view_toggle(id, cls) -%}
+<a href="{{ '/' if on3d else '/office' }}" id="{{ id }}" class="{{ cls }}" data-view-toggle role="button" aria-pressed="{{ 'true' if on3d else 'false' }}" aria-label="Chế độ 3D văn phòng" title="{{ 'Về giao diện 2D' if on3d else 'Chế độ 3D văn phòng' }}"><span class="view-lbl">{{ '2D' if on3d else '3D' }}</span></a>
+{%- endmacro %}
 {%- set need = (badge.approvals or 0) + (badge.questions or 0) %}
 {%- set need_tone = 'danger' if badge.waiting_human else ('ask' if badge.questions and not badge.approvals else '') %}
 {%- set GROUPS = [
@@ -26,6 +30,7 @@
   <aside class="side" aria-label="Thanh bên">
     <div class="side-top">
       <a class="brand" href="/" title="cfharness">{{ _m.icon('logo') }}<span class="lbl wordmark">cfharness</span></a>
+      {{ view_toggle('view-toggle', 'view-toggle side-view') }}
       <button type="button" class="side-toggle" id="side-toggle" aria-label="Thu gọn / mở rộng thanh bên" title="Thu gọn / mở rộng thanh bên">{{ _m.icon('sidebar') }}</button>
     </div>
     <a class="side-new" href="/manager?new=1" title="Cuộc trò chuyện mới với điều phối viên"><span class="side-new-ic">{{ _m.icon('plus') }}</span><span class="lbl">Cuộc trò chuyện mới</span></a>
@@ -54,6 +59,7 @@
     <header class="mtop">
       <a class="brand" href="/">{{ _m.icon('logo') }}<span class="wordmark">cfharness</span></a>
       <div class="mtop-right">
+        {{ view_toggle('view-toggle-m', 'view-toggle') }}
         <a class="btn ghost sm icon" href="/manager?new=1" title="Cuộc trò chuyện mới" aria-label="Cuộc trò chuyện mới">{{ _m.icon('pen-new') }}</a>
         {% if badge.estop %}<a href="/settings#estop" class="pill danger strong">{{ _m.icon('stop') }}ESTOP</a>{% endif %}
         {% if badge.down %}<span class="pill danger">daemon tắt</span>{% endif %}
