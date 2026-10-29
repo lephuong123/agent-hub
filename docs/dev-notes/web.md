@@ -34,7 +34,7 @@ heartbeat 15 s; client đóng tab → subscription đóng (run không ảnh hư�
 - HUMAN_ONLY qua web ghi `audit_log` `channel=web, actor=user`: approval.resolved, estop.set, config.set, secret.set, agent.*,
   trash.restore, learn.policy_set, run.*, team/task (`test_human_only_admin_actions_audited_as_web`, `test_approve_deny…`). Method chỉ-người
   mà daemon không tự audit theo `_audit` (guard.protect.*, integrity.accept, run.takeover) → web tự gọi `audit.record` (hiện chưa có trang nào dùng).
-- `config.set` từ web chỉ cho danh sách khoá an toàn `SAFE_CONFIG` (guard/sandbox… phải dùng CLI).
+- `config.set` từ web chỉ cho khoá trong danh mục `web/settings_schema.py` (`GROUPS`, ~80 khoá theo nhóm): bool/enum là `<select>`, danh sách chọn nhiều là dropdown checkbox, giờ là `type=time`; server kiểm kiểu + lựa chọn (`parse_form`) trước `config.set`. Khoá nới lỏng bảo vệ (guard/sandbox, `approval.profile`, khung quyền điều phối viên, runtime, gốc workspace, đích telemetry — `READONLY`) chỉ hiển thị, đổi bằng CLI.
 
 ## 3. Agent trong run có vào được web không? — đã kiểm THẬT
 Spike `claude` 2.1.302 + haiku (~$0.02), settings = `guard.runtime.sandbox_settings` thật, server demo trên 127.0.0.1:8799:

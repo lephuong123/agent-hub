@@ -36,6 +36,7 @@ from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
 from ..tui.client import AsyncHubClient, subscribe
 from ..tui.model import STATUS_ORDER
 from . import present as P
+from . import settings_schema as _settings
 from .security import COOKIE, KEY_FIELD, KEY_HEADER, WEB_HOST, Session, WebAuth, allowed_hosts, is_loopback
 
 log = logging.getLogger("cfharness.web")
@@ -47,18 +48,6 @@ MODELS = ("sonnet", "opus", "haiku", "fable")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 PERMISSION_MODES = ("default", "acceptEdits", "plan", "auto", "dontAsk", "manual")
 BROWSERS = ("none", "playwright", "auto", "chrome")  # tool_policy.browser (Claude in Chrome — browser.py)
-# Cấu hình an toàn cho phép sửa từ web (khoá, nhãn, gợi ý). Phần còn lại: `cfharness config set` (vẫn chỉ người).
-SAFE_CONFIG: tuple[tuple[str, str, str], ...] = (
-    ("hub.max_concurrent_runs", "Số run chạy đồng thời tối đa (toàn hub)", "số nguyên, vd 4"),
-    ("runs.default_max_budget_usd", "Ngân sách mặc định mỗi run ($)", "để trống = không giới hạn; vd 1.5"),
-    ("runs.stop_grace_s", "Thời gian chờ dừng êm (giây)", "vd 10"),
-    ("approval.timeout_s", "Giữ chờ duyệt trước khi chuyển 'chờ người' (giây)", "vd 300 — không bao giờ tự từ chối"),
-    ("digest.enabled", "Bật bản tin học hằng ngày", "true / false"),
-    ("digest.schedule", "Giờ gửi bản tin (giờ máy)", "HH:MM, vd 08:00"),
-    ("notify.slack.enabled", "Bật thông báo Slack", "true / false"),
-    ("notify.telegram.enabled", "Bật thông báo Telegram", "true / false"),
-    ("retention.soft_delete_days", "Giữ thùng rác (ngày)", "vd 30"),
-)
 # Slack có HAI wizard ở Cài đặt, mỗi người một app riêng (không chia sẻ token):
 # - Một chiều (`SLACK_MANIFEST`): manifest điền sẵn → Create + Install rồi dán Incoming Webhook URL → chỉ nhận thông báo.
 # - Hai chiều (`SLACK_MANIFEST_2WAY`, web/slack_pages.py): Socket Mode — bot tự mở WebSocket RA Slack nên hub vẫn chỉ nghe loopback;
@@ -793,13 +782,7 @@ async def audit_page(request: Request) -> Response:
 
 async def settings_page(request: Request) -> Response:
     es = await rpc(request, "estop.get")
-    vals = []
-    for key, label, hint in SAFE_CONFIG:
-        try:
-            v = await rpc(request, "config.get", {"key": key})
-        except RpcError:
-            v = None
-        vals.append({"key": key, "label": label, "hint": hint, "value": "" if v is None else (json.dumps(v) if isinstance(v, bool) else v)})
+    cfg_view = _settings.view(await rpc(request, "config.get") or {})  # danh mục khoá + kiểu ô (web/settings_schema.py)
     secrets_ = await rpc(request, "secret.list")
     names = {s.get("name") for s in secrets_ or []}
     tg_chats = []
@@ -811,7 +794,7 @@ async def settings_page(request: Request) -> Response:
     status = await rpc(request, "hub.status")
     st = ws(request)
     slack2 = await _slack_pages.slack_ctx(request)  # khối "Slack 2 chiều" (web/slack_pages.py)
-    return await render(request, "settings.html", {**slack2, "nav": "settings", "estop": es, "cfg": vals, "secrets": secrets_, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names,
+    return await render(request, "settings.html", {**slack2, "nav": "settings", "estop": es, "cfg": cfg_view, "secrets": secrets_, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names,
                                                    "slack_webhook": SLACK_WEBHOOK_SECRET in names, "slack_create_url": SLACK_CREATE_URL,
                                                    "telegram": "TELEGRAM_BOT_TOKEN" in names, "tg_chats": tg_chats, "integ": integ, "status": status,
                                                    "web": {"host": st.host, "port": st.port, "sessions": len(st.auth.sessions)}})
@@ -841,13 +824,6 @@ class Action:
     note: str | None = None  # nhãn ô ghi chú trong hộp xác nhận (vd lý do từ chối)
     secret_fields: tuple[str, ...] = ()  # trường mang giá trị bí mật — KHÔNG đưa sang trang xác nhận
     call: Callable[[Request, dict[str, Any]], Awaitable[Any]] | None = None  # thao tác nhiều RPC (mặc định: một RPC `method`)
-
-
-def _parse_cfg_value(raw: str) -> Any:
-    from ..config import parse_value
-
-    raw = (raw or "").strip()
-    return None if raw == "" else parse_value(raw)
 
 
 def _run_goto(res: Any, form: FormData) -> str | None:
@@ -989,9 +965,9 @@ ACTIONS: dict[str, Action] = {
                     lambda r, f: "ESTOP đã BẬT — không run mới nào được chạy" if f.get("on") == "1" else "ESTOP đã tắt",
                     confirm=lambda f: "BẬT dừng khẩn cấp (ESTOP)? Không run mới nào được chạy" + (" và mọi run đang chạy sẽ bị dừng." if f.get("stop_running") == "1" else ".")
                     if f.get("on") == "1" else "Tắt ESTOP — cho phép chạy lại?", danger=True, note="Lý do (tuỳ chọn)"),
-    "config_set": Action("config.set", lambda f: {"key": _safe_key(_req(f, "key")), "value": _parse_cfg_value(str(f.get("value") or ""))},
+    "config_set": Action("config.set", lambda f: dict(zip(("key", "value"), _settings.parse_form(f))),
                          lambda r, f: f"Đã đặt {f.get('key')} = {json.dumps((r or {}).get(f.get('key')), ensure_ascii=False)}",
-                         confirm=lambda f: f"Đổi cấu hình {f.get('key')} thành '{f.get('value')}'?"),
+                         confirm=lambda f: f"Đổi cấu hình {f.get('key')} thành '{_settings.show(_settings.parse_form(f)[1])}'?"),
     "secret_set": Action("secret.set", lambda f: {"name": _req(f, "name", "tên secret"), "value": _req(f, "value", "giá trị")},
                          lambda r, f: f"Đã lưu secret {r.get('name')} (giá trị không bao giờ hiển thị lại)",
                          confirm=lambda f: f"Lưu secret {f.get('name')}? Nếu đã có secret cùng tên, giá trị cũ bị GHI ĐÈ.", danger=True, secret_fields=("value",)),
@@ -1010,12 +986,6 @@ def _answer_params(f: FormData) -> dict[str, Any]:
     if not keys and not text:
         raise ValueError("chọn một phương án hoặc nhập câu trả lời")
     return {"id": _req(f, "id"), "keys": keys, "text": text or None, "channel": CHANNEL}
-
-
-def _safe_key(k: str) -> str:
-    if k not in {x[0] for x in SAFE_CONFIG}:
-        raise ValueError(f"khoá '{k}' không sửa được từ web — dùng `cfharness config set` trong terminal")
-    return k
 
 
 def _mcp_config(f: FormData) -> dict[str, Any]:

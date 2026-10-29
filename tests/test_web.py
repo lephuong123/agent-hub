@@ -383,6 +383,40 @@ async def test_human_only_admin_actions_audited_as_web(env):
     assert "sieu-bi-mat-123" not in json.dumps([dict(x) for x in env.hub.store.conn.execute("SELECT * FROM audit_log").fetchall()], default=str)
 
 
+async def test_settings_lists_are_dropdowns(env):
+    """Cài đặt: bool/enum là <select>, danh sách chọn nhiều là dropdown checkbox; server chỉ nhận giá trị trong danh mục."""
+    await env.login()
+    html = (await env.client.get("/settings")).text
+    assert 'name="key" value="digest.enabled"' in html and '<option value="true" selected>Bật</option>' in html
+    assert 'name="key" value="approval.on_timeout"' in html and '<option value="deny_and_continue"' in html
+    assert 'class="msel"' in html and 'type="checkbox" name="value" value="learning.digest" checked' in html
+    assert 'type="time" name="value" value="08:00"' in html
+    # khoá bảo mật: chỉ hiện, không có form sửa
+    assert "<code>approval.profile</code>" in html and 'name="key" value="approval.profile"' not in html
+    # bool / enum / time / multi
+    await env.post("/do/config_set", {"key": "digest.enabled", "value": "false", "confirm": "yes"})
+    assert env.hub.config.get("digest.enabled") is False
+    await env.post("/do/config_set", {"key": "approval.on_timeout", "value": "deny_and_continue", "confirm": "yes"})
+    assert env.hub.config.get("approval.on_timeout") == "deny_and_continue"
+    await env.post("/do/config_set", {"key": "eval.batch_time", "value": "04:30", "confirm": "yes"})
+    assert env.hub.config.get("eval.batch_time") == "04:30"
+    await env.post("/do/config_set", {"key": "notify.slack.confirm_classes", "value": ["git", "db"], "confirm": "yes"})
+    assert env.hub.config.get("notify.slack.confirm_classes") == ["db", "git"]
+    await env.post("/do/config_set", {"key": "notify.slack.confirm_classes", "confirm": "yes"})
+    assert env.hub.config.get("notify.slack.confirm_classes") == []
+    # nullable: để trống = null
+    await env.post("/do/config_set", {"key": "runs.default_max_budget_usd", "value": "", "confirm": "yes"})
+    assert env.hub.config.get("runs.default_max_budget_usd") is None
+    # giá trị ngoài lựa chọn / sai kiểu → từ chối, giữ nguyên
+    for key, bad in (("approval.on_timeout", "allow"), ("digest.enabled", "maybe"), ("eval.batch_time", "25:00"),
+                     ("hub.max_concurrent_runs", "0"), ("hub.max_concurrent_runs", "abc"), ("learning.review_scope", "")):
+        before = env.hub.config.get(key)
+        r = await env.post("/do/config_set", {"key": key, "value": bad, "confirm": "yes", "next": "/settings"})
+        assert r.status_code == 303 and env.hub.config.get(key) == before, (key, bad)
+    await env.post("/do/config_set", {"key": "notify.slack.confirm_classes", "value": ["git; rm -rf"], "confirm": "yes"})
+    assert env.hub.config.get("notify.slack.confirm_classes") == []
+
+
 async def test_tasks_and_teams_from_web(env):
     await env.login()
     for a in ("w1", "rv"):

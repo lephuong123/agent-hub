@@ -16,15 +16,44 @@
     </div>
   {% endif %}
 </section>
-<section class="card">
-  <h2>{{ m.icon('settings') }} Cấu hình thường dùng</h2>
-  <p class="muted small">Đổi có hiệu lực ngay và được ghi nhật ký. Cấu hình khác: <code>cfharness config set</code> trong terminal.</p>
-  <table class="tbl stack cfg"><tbody>
-  {% for c in cfg %}<tr><td data-label="Mục"><b>{{ c.label }}</b><div class="muted small"><code>{{ c.key }}</code></div></td>
-    <td data-label="Giá trị"><form method="post" action="/do/config_set" class="row gap" data-confirm="Đổi {{ c.label }}?">
-      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="key" value="{{ c.key }}"><input type="hidden" name="next" value="/settings">
-      <input name="value" value="{{ c.value }}" placeholder="{{ c.hint }}" aria-label="{{ c.label }}"><button class="btn sm" type="submit">Lưu</button></form></td></tr>{% endfor %}
-  </tbody></table>
+<section class="card" id="config">
+  <h2>{{ m.icon('settings') }} Cấu hình hệ thống</h2>
+  <p class="muted small">Đổi có hiệu lực ngay và được ghi nhật ký. Mục có danh sách giá trị cố định chọn bằng dropdown.</p>
+  {% for g in cfg.groups %}
+  <details class="cfg-group" id="cfg-{{ g.id }}"{% if loop.first %} open{% endif %}>
+    <summary>{{ g.title }} <span class="muted small">{{ g.rows|length }} mục</span></summary>
+    <table class="tbl stack cfg"><tbody>
+    {% for r in g.rows %}{% set s = r.s %}<tr><td data-label="Mục"><b>{{ s.label }}</b><div class="muted small"><code>{{ s.key }}</code>{% if s.hint %} · {{ s.hint }}{% endif %}</div></td>
+      <td data-label="Giá trị"><form method="post" action="/do/config_set" class="row gap" data-confirm="Đổi {{ s.label }}?">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="key" value="{{ s.key }}"><input type="hidden" name="next" value="/settings#cfg-{{ g.id }}">
+        {% if s.kind == 'bool' %}
+          <select name="value" aria-label="{{ s.label }}"><option value="true" {{ 'selected' if r.value == 'true' }}>Bật</option><option value="false" {{ 'selected' if r.value == 'false' }}>Tắt</option></select>
+        {% elif s.kind == 'choice' %}
+          <select name="value" aria-label="{{ s.label }}">{% if s.nullable %}<option value="">{{ s.null_label }}</option>{% endif %}
+            {% for c in s.choices %}<option value="{{ c }}" {{ 'selected' if r.value == c }}>{{ c }}</option>{% endfor %}
+            {% if r.value and r.value not in s.choices %}<option value="{{ r.value }}" selected>{{ r.value }}</option>{% endif %}</select>
+        {% elif s.kind == 'multi' %}
+          <details class="msel"><summary aria-label="{{ s.label }}">{{ r.value|length }}/{{ r.choices|length }} đã chọn</summary>
+            <div class="msel-list">{% for c in r.choices %}<label class="check small"><input type="checkbox" name="value" value="{{ c }}" {{ 'checked' if c in r.value }}> <code>{{ c }}</code></label>{% endfor %}</div></details>
+        {% elif s.kind == 'time' %}
+          <input type="time" name="value" value="{{ r.value }}" required aria-label="{{ s.label }}">
+        {% elif s.kind in ('int', 'float') %}
+          <input type="number" name="value" value="{{ r.value }}" step="{{ '1' if s.kind == 'int' else 'any' }}"{% if s.min is not none %} min="{{ s.min }}"{% endif %}{% if not s.nullable %} required{% endif %} placeholder="{{ s.hint }}" aria-label="{{ s.label }}">
+        {% else %}
+          <input name="value" value="{{ r.value }}" placeholder="{{ s.hint }}" aria-label="{{ s.label }}">
+        {% endif %}
+        <button class="btn sm" type="submit">Lưu</button></form></td></tr>{% endfor %}
+    </tbody></table>
+  </details>
+  {% endfor %}
+  <details class="cfg-group" id="cfg-security">
+    <summary>{{ m.icon('shield') }} Bảo mật <span class="muted small">chỉ xem — đổi bằng terminal</span></summary>
+    <p class="muted small">Các khoá này nới lỏng lớp bảo vệ nên web không sửa: chạy <code>cfharness config set &lt;khoá&gt; &lt;giá trị&gt;</code> trong terminal.</p>
+    <table class="tbl stack cfg"><tbody>
+    {% for r in cfg.readonly %}<tr><td data-label="Mục"><b>{{ r.label }}</b><div class="muted small"><code>{{ r.key }}</code></div></td>
+      <td data-label="Giá trị"><code>{{ r.value }}</code></td></tr>{% endfor %}
+    </tbody></table>
+  </details>
 </section>
 <div class="grid2">
 <section class="card">
