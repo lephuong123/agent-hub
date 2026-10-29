@@ -658,6 +658,10 @@ class ManagerService:
                     return  # UX: task chờ câu trả lời — đã có sự kiện `question` (với manager) hoặc đã hỏi người
                 self._push("task_blocked", f"tb:{t['id']}:{t.get('updated_at')}", f"task {t['id']} '{t['title'][:80]}' BLOCKED: {p.get('reason') or t.get('block_reason') or ''}",
                            task_id=t["id"], team_id=t.get("team_id"))
+                from ..guard.profiles import gates_mode
+
+                if gates_mode(self.hub.config) != "human":
+                    self.wake_soon()  # người giao hết cổng cho điều phối viên → quyết ngay, không đợi gom sự kiện
             elif to == "done" and str(t.get("created_by") or "").startswith("schedule:"):
                 return  # task do lịch tạo: kết quả đã gửi về kênh của lịch (schedules/) — không tốn một nhịp chỉ để báo xong
             elif to == "done" and (not t.get("origin_task_id") or str(t.get("created_by") or "").startswith("manager:")):
@@ -776,7 +780,9 @@ class ManagerService:
         r = self.conn.execute("SELECT id FROM manager_conversations WHERE channel=? AND agent_id=? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1",
                               (HEARTBEAT_CHANNEL, aid)).fetchone()
         conv = self._conv_row(r[0]) if r else self._new_conv(HEARTBEAT_CHANNEL, aid, "heartbeat")
-        prompt = prompts.tick_prompt(events, dropped=dropped, reason=reason, open_work=open_work)
+        from ..guard.profiles import gates_mode
+
+        prompt = prompts.tick_prompt(events, dropped=dropped, reason=reason, open_work=open_work, gates=gates_mode(self.hub.config))
         try:
             run = self._submit(conv, prompt, kind="tick", budget=self.cfg("tick_budget_usd"))
         except HubError as e:

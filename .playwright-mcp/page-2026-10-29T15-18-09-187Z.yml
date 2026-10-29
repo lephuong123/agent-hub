@@ -1,0 +1,84 @@
+- generic [active] [ref=f11e1]:
+  - generic [ref=f11e2]:
+    - complementary "Thanh bên" [ref=f11e3]:
+      - generic [ref=f11e4]:
+        - link "cfharness" [ref=f11e5] [cursor=pointer]:
+          - /url: /
+        - button "Chế độ 3D văn phòng" [pressed] [ref=f11e9] [cursor=pointer]:
+          - generic [ref=f11e10]: 2D
+        - button "Thu gọn / mở rộng thanh bên" [ref=f11e11] [cursor=pointer]
+      - link "Cuộc trò chuyện mới" [ref=f11e14] [cursor=pointer]:
+        - /url: /manager?new=1
+      - search [ref=f11e19]:
+        - generic [ref=f11e20]: Tìm trong hội thoại
+        - textbox "Tìm trong hội thoại" [ref=f11e23]:
+          - /placeholder: Tìm trong hội thoại…
+      - navigation "Điều hướng chính" [ref=f11e24]:
+        - generic [ref=f11e25]: Làm việc
+        - link "Điều phối" [ref=f11e26] [cursor=pointer]:
+          - /url: /manager
+        - link "Cần bạn" [ref=f11e30] [cursor=pointer]:
+          - /url: /inbox
+        - link "Tổng quan" [ref=f11e34] [cursor=pointer]:
+          - /url: /
+        - link "Tìm kiếm" [ref=f11e38] [cursor=pointer]:
+          - /url: /search
+        - generic [ref=f11e42]: Đội ngũ
+        - link "Agent" [ref=f11e43] [cursor=pointer]:
+          - /url: /agents
+        - link "Team" [ref=f11e47] [cursor=pointer]:
+          - /url: /teams
+        - link "Công việc" [ref=f11e51] [cursor=pointer]:
+          - /url: /tasks
+        - link "Lượt chạy" [ref=f11e55] [cursor=pointer]:
+          - /url: /runs
+        - link "Lịch chạy" [ref=f11e59] [cursor=pointer]:
+          - /url: /schedules
+        - generic [ref=f11e63]: Học & chất lượng
+        - link "Tự học" [ref=f11e64] [cursor=pointer]:
+          - /url: /learnings
+        - link "Skill" [ref=f11e68] [cursor=pointer]:
+          - /url: /skills
+        - generic [ref=f11e72]: Hệ thống
+        - link "MCP" [ref=f11e73] [cursor=pointer]:
+          - /url: /mcp
+        - link "Chi phí" [ref=f11e77] [cursor=pointer]:
+          - /url: /costs
+        - link "Nhật ký" [ref=f11e81] [cursor=pointer]:
+          - /url: /audit
+        - link "Cài đặt" [ref=f11e85] [cursor=pointer]:
+          - /url: /settings
+      - generic [ref=f11e90]:
+        - generic [aria-hidden] [ref=f11e91]: B
+        - generic [ref=f11e92]:
+          - generic [ref=f11e93]: Bạn
+          - generic "Daemon đang chạy" [ref=f11e94]: daemon đang chạy
+        - button "Thoát" [ref=f11e99] [cursor=pointer]
+    - main [ref=f11e103]:
+      - generic [ref=f11e104]:
+        - generic [ref=f11e105]:
+          - heading "Văn phòng 3D" [level=1] [ref=f11e106]
+          - status "Trạng thái hub" [ref=f11e107]:
+            - generic [ref=f11e108]: Mất kết nối — đang thử lại
+            - generic [ref=f11e109]: 0 đang chạy
+            - generic [ref=f11e110]: "Task: 0 sẵn sàng · 0 đang làm · 0 review · 0 kẹt"
+          - link "Về 2D" [ref=f11e111] [cursor=pointer]:
+            - /url: /
+        - generic [ref=f11e115]:
+          - generic [ref=f11e116]:
+            - 'img "Văn phòng 3D: mỗi agent là một nhân vật. Danh sách chữ tương ứng nằm ở bảng bên." [ref=f11e117]'
+            - paragraph [aria-hidden]: Kéo để xoay · cuộn để phóng to · chuột phải để di chuyển · bấm nhân vật để xem chi tiết
+            - generic [ref=f11e120]:
+              - heading "Phiên đăng nhập đã hết" [level=2] [ref=f11e121]
+              - paragraph [ref=f11e124]:
+                - text: Chạy
+                - code [ref=f11e125]: cfharness web --open
+                - text: để đăng nhập lại.
+          - complementary "Chi tiết và danh sách agent" [ref=f11e126]:
+            - generic [ref=f11e127]:
+              - region "Nhân vật đang chọn" [ref=f11e128]:
+                - paragraph [ref=f11e129]: Bấm vào một nhân vật để xem agent đang làm gì.
+              - generic [ref=f11e130]:
+                - heading "Agent" [level=2] [ref=f11e131]
+                - list
+  - status

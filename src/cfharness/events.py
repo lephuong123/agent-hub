@@ -92,6 +92,7 @@ EVENT_LEVELS: dict[str, str] = {
     "auth.denied": "summary",  # hardening SEC: method chỉ-người bị gọi từ tiến trình run/thiếu token (auth.py)
     "guard.env_tamper": "summary",  # hardening SEC R2-1: .pth/sitecustomize trong venv của hub bị thêm/sửa (chạy ngoài sandbox)
     "guard.trust": "summary",  # người bật/tắt trust full cho agent (guard/service.trust_set)
+    "guard.rule_grant": "summary",  # người luôn cho phép / gỡ cho phép agent theo luật (guard/service.rule_grant_set|rm)
     "guard.sandbox_override": "summary",  # hardening SEC: người đặt/gỡ ngoại lệ sandbox theo agent (vd loopback)
     "guard.sandbox_disabled": "summary",  # hardening SEC/WT-3: sandbox OS tắt bằng cấu hình (nhiều bất biến dựa vào sandbox)
     "policy.changed": "summary",

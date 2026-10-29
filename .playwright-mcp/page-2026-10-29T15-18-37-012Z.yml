@@ -1,0 +1,92 @@
+- generic [active] [ref=f13e1]:
+  - generic [ref=f13e3]:
+    - banner [ref=f13e4]:
+      - link "cfharness" [ref=f13e5] [cursor=pointer]:
+        - /url: /
+      - generic [ref=f13e9]:
+        - button "Chế độ 3D văn phòng" [pressed] [ref=f13e10] [cursor=pointer]:
+          - generic [ref=f13e11]: 2D
+        - link "Cuộc trò chuyện mới" [ref=f13e12] [cursor=pointer]:
+          - /url: /manager?new=1
+    - main [ref=f13e15]:
+      - generic [ref=f13e16]:
+        - generic [ref=f13e17]:
+          - heading "Văn phòng 3D" [level=1] [ref=f13e18]
+          - status "Trạng thái hub" [ref=f13e19]:
+            - generic [ref=f13e20]: Trực tiếp
+            - generic [ref=f13e21]: 4 đang chạy
+            - generic [ref=f13e22]: 1 đang xếp hàng
+            - generic [ref=f13e23]: 1 chờ bạn duyệt
+            - generic [ref=f13e24]: "Task: 3 sẵn sàng · 4 đang làm · 1 review · 2 kẹt"
+          - link "Về giao diện 2D" [ref=f13e25] [cursor=pointer]:
+            - /url: /
+        - generic [ref=f13e28]:
+          - 'img "Văn phòng 3D: mỗi agent là một nhân vật. Danh sách chữ tương ứng nằm ở bảng bên." [ref=f13e30]'
+          - complementary "Chi tiết và danh sách agent" [ref=f13e32]:
+            - button "Agent & chi tiết" [ref=f13e33] [cursor=pointer]
+            - generic:
+              - region "Nhân vật đang chọn" [ref=f13e37]:
+                - paragraph [ref=f13e38]: Bấm vào một nhân vật (hoặc chọn trong danh sách) để xem agent đang làm gì.
+              - generic [ref=f13e39]:
+                - heading "Agent" [level=2] [ref=f13e40]
+                - list [ref=f13e43]:
+                  - listitem [ref=f13e44]:
+                    - button "Điều phối viên Đang làm" [ref=f13e45] [cursor=pointer]:
+                      - generic [ref=f13e47]: Điều phối viên
+                      - generic [ref=f13e48]: Đang làm
+                  - listitem [ref=f13e49]:
+                    - button "Lập trình viên Đang làm" [ref=f13e50] [cursor=pointer]:
+                      - generic [ref=f13e52]: Lập trình viên
+                      - generic [ref=f13e53]: Đang làm
+                  - listitem [ref=f13e54]:
+                    - button "Nghiên cứu Đang làm" [ref=f13e55] [cursor=pointer]:
+                      - generic [ref=f13e57]: Nghiên cứu
+                      - generic [ref=f13e58]: Đang làm
+                  - listitem [ref=f13e59]:
+                    - button "Biên tập Chờ bạn duyệt" [ref=f13e60] [cursor=pointer]:
+                      - generic [ref=f13e62]: Biên tập
+                      - generic [ref=f13e63]: Chờ bạn duyệt
+                  - listitem [ref=f13e64]:
+                    - button "Viết bài Rảnh" [ref=f13e65] [cursor=pointer]:
+                      - generic [ref=f13e67]: Viết bài
+                      - generic [ref=f13e68]: Rảnh
+                  - listitem [ref=f13e69]:
+                    - button "Kiểm thử Chờ bạn trả lời" [ref=f13e70] [cursor=pointer]:
+                      - generic [ref=f13e72]: Kiểm thử
+                      - generic [ref=f13e73]: Chờ bạn trả lời
+                  - listitem [ref=f13e74]:
+                    - button "Review bot Lỗi" [ref=f13e75] [cursor=pointer]:
+                      - generic [ref=f13e77]: Review bot
+                      - generic [ref=f13e78]: Lỗi
+                  - listitem [ref=f13e79]:
+                    - button "Dữ liệu Đang làm" [ref=f13e80] [cursor=pointer]:
+                      - generic [ref=f13e82]: Dữ liệu
+                      - generic [ref=f13e83]: Đang làm
+                  - listitem [ref=f13e84]:
+                    - button "Phân tích Đang làm" [ref=f13e85] [cursor=pointer]:
+                      - generic [ref=f13e87]: Phân tích
+                      - generic [ref=f13e88]: Đang làm
+                  - listitem [ref=f13e89]:
+                    - button "Vận hành Tạm dừng" [ref=f13e90] [cursor=pointer]:
+                      - generic [ref=f13e92]: Vận hành
+                      - generic [ref=f13e93]: Tạm dừng
+                  - listitem [ref=f13e94]:
+                    - button "Trợ lý Rảnh" [ref=f13e95] [cursor=pointer]:
+                      - generic [ref=f13e97]: Trợ lý
+                      - generic [ref=f13e98]: Rảnh
+                  - listitem [ref=f13e99]:
+                    - button "<img src=x onerror=alert(1)> Chờ duyệt" [ref=f13e100] [cursor=pointer]:
+                      - generic [ref=f13e102]: <img src=x onerror=alert(1)>
+                      - generic [ref=f13e103]: Chờ duyệt
+  - navigation "Điều hướng (màn nhỏ)" [ref=f13e104]:
+    - link "Điều phối" [ref=f13e105] [cursor=pointer]:
+      - /url: /manager
+    - link "Cần bạn" [ref=f13e109] [cursor=pointer]:
+      - /url: /inbox
+    - link "Agent" [ref=f13e113] [cursor=pointer]:
+      - /url: /agents
+    - link "Lượt chạy" [ref=f13e117] [cursor=pointer]:
+      - /url: /runs
+    - group [ref=f13e121]:
+      - generic "Thêm" [ref=f13e122] [cursor=pointer]
+  - status

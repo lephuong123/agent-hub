@@ -195,7 +195,10 @@ class QuestionService:
         if run.get("id") and len(self.list("pending", run_id=run["id"])) >= cap:
             raise Conflict(f"run này đã có {cap} câu hỏi đang chờ — kết thúc lượt và chờ trả lời")
         task_id = task_id or run.get("task_id")
-        mid = self.manager_available(run.get("agent_id")) if (task_id and self.cfg("via_manager", True)) else None
+        from ..guard.profiles import gates_mode
+
+        gated = gates_mode(self.hub.config) != "human"  # công tắc chung: mọi câu hỏi (không chỉ trong task) qua điều phối viên trước
+        mid = self.manager_available(run.get("agent_id")) if ((task_id or gated) and self.cfg("via_manager", True)) else None
         qid = "q_" + secrets.token_hex(5)
         row = {
             "id": qid, "agent_id": run["agent_id"], "run_id": run.get("id"), "session_id": run.get("session_id"), "task_id": task_id,

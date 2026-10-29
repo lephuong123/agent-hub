@@ -202,8 +202,24 @@ def never_automatic(v: Any, *, tool_name: str = "", tool_input: dict[str, Any] |
     return None
 
 
+GATES_MODES = ("human", "manager", "off")
+
+
+def gates_mode(config: Any) -> str:
+    """Công tắc chung `gates.mode` (chỉ người đặt): human | manager | off. Giá trị lạ/lỗi đọc → human (bảo thủ)."""
+    try:
+        v = config.get("gates.mode")
+    except Exception:
+        return "human"
+    return v if v in GATES_MODES else "human"
+
+
 def delegable(v: Any, config: Any, **kw: Any) -> str | None:
-    """Lý do KHÔNG giao điều phối viên được (None = giao được): ngoài lớp người cho phép, hoặc thuộc danh sách "không bao giờ"."""
+    """Lý do KHÔNG giao điều phối viên được (None = giao được): ngoài lớp người cho phép, hoặc thuộc danh sách "không bao giờ".
+    `gates.mode` manager|off: người giao HẾT cho điều phối viên — mọi lớp, kể cả danh sách "không bao giờ" (push/deploy/credential…);
+    approval của chính run/agent điều phối viên vẫn chỉ người (route_for + ApprovalService.manager_block)."""
+    if gates_mode(config) != "human":
+        return None
     cfg = delegation_cfg(config)
     if not cfg["enabled"]:
         return "approval.delegate_to_manager tắt"

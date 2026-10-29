@@ -93,8 +93,9 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     # skill manager của người (RPC knowledge.skill_* + knowledge.pin là HUMAN_ONLY) — `cfharness skill <verb>` (learning/skill_cli.py)
     "skill": {"add", "save", "new", "create", "edit", "set", "archive", "rm", "remove", "delete", "restore", "import", "promote", "pin", "unpin"},
     "golden": {"add", "rm", "remove", "edit", "update", "from-run", "from_run", "restore", "dismiss"},
-    "guard": {"protect", "integrity", "sandbox", "repo-deny", "repo_deny", "always"},
+    "guard": {"protect", "integrity", "sandbox", "repo-deny", "repo_deny", "always", "grant"},
     "config": {"set", "unset"},
+    "gates": None,  # công tắc chung cổng duyệt (= config.set gates.mode) — agent gõ, kể cả chỉ xem, đều chặn
     "secret": {"set", "rm", "remove", "delete"},
     "secrets": {"set", "rm", "remove", "delete"},
     "mcp": {"add", "edit", "update", "rm", "remove", "restore", "import", "assign", "unassign", "token", "agent-config", "annotate", "login", "logout"},
@@ -2571,7 +2572,7 @@ class BashAnalyzer:
             v1 = t[1] if len(t) > 1 else ""
             if sub == "learn" and v1 == "policy" and len(t) > 2 and t[2] in ("get", "show"):
                 verbs = set()
-            if sub == "guard" and v1 in ("protect", "integrity", "sandbox", "repo-deny", "repo_deny") and len(t) > 2 and t[2] in ("list", "ls", "status", "show"):
+            if sub == "guard" and v1 in ("protect", "integrity", "sandbox", "repo-deny", "repo_deny", "grant") and len(t) > 2 and t[2] in ("list", "ls", "status", "show"):
                 verbs = set()
             if sub == "team" and v1 == "member" and len(t) > 2 and t[2] in ("list", "ls"):
                 verbs = set()

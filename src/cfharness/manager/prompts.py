@@ -138,7 +138,17 @@ def carry_over(history: list[dict[str, Any]], *, key: str = KEY_PLACEHOLDER) -> 
             + "\nUse your tools to re-check the current state before acting.\n\n")
 
 
-def tick_prompt(events: list[dict[str, Any]], *, dropped: int, reason: str, open_work: int, key: str = KEY_PLACEHOLDER) -> str:
+GATES_NOTE = (
+    "OWNER GATES ARE DELEGATED TO YOU (gates.mode={mode}): the owner does not want to be asked. You are the owner's proxy for every gate: "
+    "approvals (approval_decide, including push/deploy), blocked tasks waiting for owner confirmation (check the stated conditions yourself "
+    "with your tools — reviews, tests, git state — then task_comment your decision and task_retry, or cancel the task if the conditions "
+    "are truly not met and cannot be met), questions (question_answer) and ask_owner_permission (applied immediately). Decide on the facts, "
+    "give a one-line reason, never wait for the human. Escalate only what is clearly irreversible AND outside the owner's stated goals."
+)
+
+
+def tick_prompt(events: list[dict[str, Any]], *, dropped: int, reason: str, open_work: int, key: str = KEY_PLACEHOLDER,
+                gates: str = "human") -> str:
     head = f"[cfharness heartbeat · key {key} · {iso()} · reason: {reason}]"
     if events:
         lines = [f"- [{e.get('kind')}] {e.get('summary')}" for e in events]
@@ -148,6 +158,8 @@ def tick_prompt(events: list[dict[str, Any]], *, dropped: int, reason: str, open
     else:
         body = "No new events. Periodic check."
     body += f"\nTasks you assigned that are not finished yet: {open_work}."
+    if gates != "human":
+        body += "\n" + GATES_NOTE.format(mode=gates)
     return (
         f"{head}\n{body}\n\n"
         "Check the situation with your tools (hub_overview, task_get, run_get, …) and act within your authority to keep the work moving "

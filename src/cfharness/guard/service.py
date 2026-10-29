@@ -598,8 +598,7 @@ class GuardService:
         """Run được hưởng trust full: agent đang trust và run là run làm việc thường (không phải review/eval/learning của hub)."""
         if not run:
             return None
-        opts = run.get("run_opts") or {}
-        if run.get("kind") == "review" or opts.get("learning_review") or opts.get("eval_overlay"):
+        if self.run_trusted_kind_excluded(run):
             return None
         return self.trust_of(run.get("agent_id"))
 
@@ -637,6 +636,100 @@ class GuardService:
         audit_record("guard.trust", agent_id=agent_id, run_id=None, data=info)
         self.hub.publish(make_event("guard.trust", agent_id, info, source="hub"))
         return {"agent_id": agent_id, **cur}
+
+    # ------------------------------------------------------------------ cho phép THEO AGENT + LUẬT (chỉ người, xin một lần)
+    def rule_grants(self) -> dict[str, dict[str, Any]]:
+        """`hub_state.agent_rule_grants` = {agent_id: {rule: {until, by, channel, at, approval_id}}} — hẹp hơn trust full: chỉ bỏ
+        hỏi duyệt cho ĐÚNG luật đó của ĐÚNG agent đó (kể cả destructive). Chỉ trả mục còn hiệu lực. Ngoài cấu hình agent như trust."""
+        out: dict[str, dict[str, Any]] = {}
+        now = datetime.now().astimezone().timestamp()
+        for aid, rules in (self.hub.store.state_get("agent_rule_grants") or {}).items():
+            if not isinstance(rules, dict):
+                continue
+            for rule, g in rules.items():
+                if not isinstance(g, dict):
+                    continue
+                if g.get("until"):
+                    until = _ts(g.get("until"))
+                    if until is None or until <= now:
+                        continue
+                out.setdefault(aid, {})[rule] = dict(g)
+        return out
+
+    def run_rule_grant(self, run: dict[str, Any] | None, v: Verdict) -> dict[str, Any] | None:
+        """Grant áp cho run làm việc thường (cùng loại trừ với trust: review/eval/learning của hub); lỗi đọc = không grant."""
+        if not run or not v.rule or v.forbidden or self.run_trusted_kind_excluded(run):
+            return None
+        try:
+            return (self.rule_grants().get(str(run.get("agent_id") or "")) or {}).get(v.rule)
+        except Exception:
+            return None
+
+    @staticmethod
+    def run_trusted_kind_excluded(run: dict[str, Any]) -> bool:
+        opts = run.get("run_opts") or {}
+        return bool(run.get("kind") == "review" or opts.get("learning_review") or opts.get("eval_overlay"))
+
+    def rule_grant_set(self, agent_id: str, rule: str, *, for_s: float | None = None, by: str = "user", channel: str = "cli",
+                       approval_id: str | None = None) -> dict[str, Any]:
+        """CHỈ người: từ nay agent không bị hỏi duyệt lại cho luật `rule` (không hết hạn nếu `for_s` None). Mọi approval CHƯA quyết
+        cùng agent + luật được cho phép luôn. forbidden/ESTOP/khoá Chrome vẫn áp; vẫn ghi guard_decisions + audit."""
+        from ..auth import require_human
+
+        require_human("cho phép agent theo luật")
+        rule = str(rule or "").strip()
+        if not rule:
+            raise HubError("thiếu luật")
+        self.hub.agents.get_row(agent_id)
+        until = None
+        if for_s is not None:
+            try:
+                secs = float(for_s)
+            except (TypeError, ValueError):
+                raise HubError("thời hạn không hợp lệ") from None
+            if secs <= 0:
+                raise HubError("thời hạn phải > 0")
+            from datetime import timedelta, timezone
+
+            until = (datetime.now(timezone.utc) + timedelta(seconds=secs)).isoformat(timespec="seconds").replace("+00:00", "Z")
+        allv = dict(self.hub.store.state_get("agent_rule_grants") or {})
+        cur = {"until": until, "by": by, "channel": channel, "at": now_iso(), "approval_id": approval_id}
+        allv[agent_id] = {**dict(allv.get(agent_id) or {}), rule: cur}
+        self.hub.store.state_set("agent_rule_grants", allv)
+        info = {"agent_id": agent_id, "rule": rule, "action": "grant", "until": until, "by": by, "channel": channel, "approval_id": approval_id}
+        audit_record("guard.rule_grant", agent_id=agent_id, run_id=None, data=info)
+        self.hub.publish(make_event("guard.rule_grant", agent_id, info, source="hub"))
+        released = []
+        for row in self.hub.approvals.list("pending", agent_id=agent_id, limit=500):
+            if row.get("matched_rule") == rule and row["id"] != approval_id:
+                try:
+                    self.hub.approvals.resolve(row["id"], "allowed", by=by, channel=channel, note=f"luôn cho phép {agent_id} theo luật {rule}")
+                    released.append(row["id"])
+                except Exception:  # noqa: BLE001 — approval vừa được quyết ở nơi khác
+                    log.warning("không cho phép được %s theo grant", row["id"])
+        return {"agent_id": agent_id, "rule": rule, **cur, "released": released}
+
+    def rule_grant_rm(self, agent_id: str, rule: str | None = None, *, by: str = "user", channel: str = "cli") -> dict[str, Any]:
+        """CHỈ người: gỡ grant một luật (hoặc mọi luật nếu `rule` None) của agent."""
+        from ..auth import require_human
+
+        require_human("gỡ cho phép agent theo luật")
+        allv = dict(self.hub.store.state_get("agent_rule_grants") or {})
+        cur = dict(allv.get(agent_id) or {})
+        removed = list(cur) if rule is None else ([rule] if rule in cur else [])
+        if not removed:
+            raise HubError(f"agent '{agent_id}' không có cho phép theo luật {rule or ''}".rstrip(), code=-32004)
+        for r in removed:
+            cur.pop(r, None)
+        if cur:
+            allv[agent_id] = cur
+        else:
+            allv.pop(agent_id, None)
+        self.hub.store.state_set("agent_rule_grants", allv)
+        info = {"agent_id": agent_id, "rules": removed, "action": "remove", "by": by, "channel": channel}
+        audit_record("guard.rule_grant", agent_id=agent_id, run_id=None, data=info)
+        self.hub.publish(make_event("guard.rule_grant", agent_id, info, source="hub"))
+        return {"agent_id": agent_id, "removed": removed}
 
     def trust_set_all(self, mode: str, *, for_s: float | None = None, by: str = "user", channel: str = "cli") -> dict[str, Any]:
         """CHỈ người: `trust_set` cho MỌI agent đang có (không tính agent đã lưu trữ) — mỗi agent một audit/event `guard.trust`.
@@ -957,6 +1050,20 @@ class GuardService:
         if not self.needs_human(v):
             self._record(run, channel, tool_name, tool_input, v, "allow")
             return {"decision": "allow", "reason": f"hub guard: {v.verdict}", "verdict": v.verdict}
+        from .profiles import gates_mode
+
+        if gates_mode(self.hub.config) == "off":
+            # công tắc chung tắt mọi cổng (người đặt): cho phép thứ lẽ ra hỏi; forbidden/ESTOP/khoá Chrome vẫn áp, vẫn ghi quyết định
+            self._record(run, channel, tool_name, tool_input, v, "allow", classifier="gates_off", extra={"auto_reason": "gates.mode=off"})
+            return {"decision": "allow", "reason": "[cfharness] allowed: the owner turned all approval gates off", "verdict": v.verdict,
+                    "decided_by": "gates_off"}
+        grant = self.run_rule_grant(run, v)
+        if grant is not None:
+            # người đã "luôn cho phép agent này theo luật này" — không hỏi lại; vẫn ghi guard_decisions + audit
+            why = f"luôn cho phép theo luật {v.rule} (bởi {grant.get('by') or 'user'}" + (f", hết hạn {grant['until']})" if grant.get("until") else ")")
+            self._record(run, channel, tool_name, tool_input, v, "allow", classifier="rule_grant", extra={"auto_reason": why})
+            return {"decision": "allow", "reason": f"[cfharness] allowed: a human always allows this agent for rule {v.rule}", "verdict": v.verdict,
+                    "decided_by": "rule_grant"}
         auto = self.auto_allow(run, tool_name, tool_input, v, ctx)
         if auto is not None:
             # hồ sơ balanced/autonomous: phá huỷ nhưng revert được (checkpoint) / giới hạn trong scratch → cho phép + audit (decided_by)

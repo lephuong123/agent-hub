@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 HELP = [
     ("/perm", "tóm tắt quyền: profile, trust, ngoại lệ sandbox, thống kê duyệt 7 ngày + gợi ý bớt hỏi"),
+    ("/gates [human|manager|off]", "công tắc CHUNG mọi cổng chờ người (duyệt, task bị chặn, câu hỏi, xin phép)"),
     ("/profile [strict|balanced|autonomous]", "xem/đổi hồ sơ phê duyệt"),
     ("/trust [<agent> full|off [4h]]", "trust full theo agent: không hỏi gì, không sandbox, bypassPermissions (2 bước)"),
     ("/trust-host <agent> <host> [--remove]", "tin host dev trỏ về IP nội bộ (WebFetch/Chrome không hỏi SSRF)"),
@@ -77,7 +78,7 @@ def _known_agent(s: "ChatSession", aid: str) -> bool:
 
 async def run(s: "ChatSession", cmd: str, arg: str) -> None:
     fn = {"/perm": perm, "/profile": profile, "/trust": trust, "/trust-host": trust_host, "/sandbox": sandbox, "/mcp-safe": mcp_safe,
-          "/delegate": delegate, "/reminders": reminders}[cmd]
+          "/delegate": delegate, "/reminders": reminders, "/gates": gates}[cmd]
     try:
         args = shlex.split(arg) if arg else []
     except ValueError:
@@ -161,6 +162,32 @@ async def profile(s: "ChatSession", args: list[str]) -> None:
         return
     await _set(s, "approval.profile", new)
     s._note(f"approval.profile = {new}")
+
+
+# ---------------------------------------------------------------------------- /gates
+GATES_DESC = {
+    "human": "người duyệt mọi thứ như cũ",
+    "manager": "điều phối viên quyết MỌI approval (kể cả push/deploy), task bị chặn, câu hỏi, xin phép — trừ approval của chính nó",
+    "off": "hub tự cho phép mọi thao tác lẽ ra phải hỏi; task bị chặn/câu hỏi/xin phép do điều phối viên quyết",
+}
+
+
+async def gates(s: "ChatSession", args: list[str]) -> None:
+    cur = str(await _cfg(s, "gates.mode") or "human")
+    if not args:
+        s._note(f"cổng duyệt: {cur} — {GATES_DESC.get(cur, '')}. Đổi: /gates human|manager|off")
+        return
+    new = args[0].lower()
+    if new not in GATES_DESC:
+        return _usage(s, "dùng: /gates human|manager|off")
+    if new == cur:
+        s._note(f"cổng duyệt đã là {new}")
+        return
+    s._note(f"đổi cổng duyệt {cur} → {new}: {GATES_DESC[new]}", "warn" if new != "human" else None)
+    if not await s.confirm(f"Đổi gates.mode {cur} → {new}? [y/N] "):
+        return
+    await _set(s, "gates.mode", new)
+    s._note(f"gates.mode = {new}")
 
 
 # ---------------------------------------------------------------------------- /trust

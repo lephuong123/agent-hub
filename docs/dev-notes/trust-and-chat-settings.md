@@ -75,3 +75,22 @@ CLI tương ứng: `cfharness guard sandbox dev-host <agent> <host> [--remove]`,
 ## Chưa làm
 - Telegram/Slack chưa có các lệnh này (kênh từ xa cần nút xác nhận riêng).
 - `docs/schema/event.v1.json` chưa sinh lại cho event `guard.trust`: `python -m cfharness.event_schema --write docs/schema/event.v1.json`.
+
+## Không hỏi lại theo agent + luật (2026-10-29)
+Giữa "luôn cho phép" (chỉ đúng một thao tác, chỉ uncertain) và trust full (bỏ mọi rào chắn): người duyệt một lần và chọn
+"Không hỏi lại luật này" → từ nay agent đó không bị hỏi duyệt lại với `matched_rule` đó, KỂ CẢ destructive, ở mọi task/run.
+Lý do: hub thật hỏi lặp cùng luật (vd `code_delete_api` 6 lần cho dev-du-lieu, `schedule_persistence` cho `npm run deploy` mỗi lần deploy).
+
+- Lưu `hub_state.agent_rule_grants = {agent: {rule: {until, by, channel, at, approval_id}}}` (ngoài cấu hình agent như trust).
+  `until` None = không hạn. Chỉ người: `approval.approve{grant_rule: true, grant_for_s?}`, `guard.grant.set|rm` (HUMAN_ONLY +
+  `require_human`); `guard.grant.list` đọc tự do. Audit + event `guard.rule_grant`.
+- `GuardService.check`: sau forbidden/khoá Chrome/`needs_human`, TRƯỚC `auto_allow` → allow, `guard_decisions.classifier=rule_grant`.
+  forbidden, ESTOP, khoá Chrome vẫn áp; run review/eval/learning không hưởng (cùng loại trừ với trust).
+- Khi đặt grant: mọi approval CHƯA quyết cùng agent + luật được cho phép luôn (`released`).
+- Bề mặt: web nút "Luôn cho phép luật này" → trang bước 2 bắt buộc (chọn không hạn/8h/24h/7d/30d); Telegram/Slack nút
+  "Không hỏi lại luật này…" → bước 2 "không hạn" | "8 giờ"; CLI `cfharness approve <id> --rule [--for 8h]`,
+  `cfharness guard grant list|set|rm` (`guard grant` ∈ `HUB_HUMAN_ONLY_CLI` → agent gõ = forbidden).
+- Rủi ro đã chấp nhận: grant theo LUẬT, không theo đích — `delete_not_run_created` cho một agent nghĩa là agent đó xoá được mọi file
+  không do run tạo mà không hỏi (trong giới hạn sandbox/workspace). Người chọn thời hạn để thu hẹp.
+- Chưa làm: TUI `top`/`cfharness chat` chưa có phím/lệnh riêng (dùng CLI hoặc web); MCP `hub_approve` chưa có tham số grant.
+  Test: `tests/test_rule_grant.py`, `tests/test_web.py::test_rule_grant_button_two_steps_and_duration`.

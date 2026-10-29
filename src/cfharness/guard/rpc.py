@@ -11,6 +11,9 @@ Chữ ký (MCP server của luồng A gọi `approval.list|approve|deny` với c
   `approval.approve {…, always: true}` → thêm luật "luôn cho phép" hẹp (chỉ verdict uncertain đủ điều kiện; destructive → lỗi,
   không quyết gì); kết quả có `always_rule`. `always_confirm` (tuỳ chọn; MCP `hub_approve` luôn gửi) = fingerprint|domain của
   `always_offer` — khác luật sẽ tạo → lỗi, không quyết gì. Gỡ: `guard.protect.rm {id: "aa_…"}` (chỉ người); xem: `guard.policy` → `always_allow`.
+- `approval.approve {…, grant_rule: true, grant_for_s?}` → cho phép lần này VÀ từ nay agent đó không bị hỏi lại cho luật
+  `matched_rule` (kể cả destructive; không hạn nếu thiếu `grant_for_s`); mọi approval chưa quyết cùng agent + luật được cho phép luôn.
+  Kết quả có `rule_grant`. Chỉ người. Xem/gỡ: `guard.grant.list`, `guard.grant.rm {id: agent, rule?}`; đặt thẳng: `guard.grant.set {id, rule, for_s?}`.
 - `approval.stats {days?}` → thống kê theo luật/agent/tool/kết quả/người quyết + thời gian chờ (`cfharness approvals stats`).
 - `approval.profile` → profile + khoá hiệu lực (`guard/profiles.resolved`), chỉ đọc.
 - `approval.manager_decide {id, decision: allow|deny|escalate, reason}` — CHỈ điều phối viên (HUMAN_ONLY + MANAGER_ALLOWED; luật ở
@@ -89,9 +92,21 @@ def register_rpc(d: "Daemon") -> None:
                 if not want or str(p["always_confirm"]).strip() != want:
                     raise HubError("always_confirm không khớp luật sẽ tạo — đọc always_offer (fingerprint hoặc domain) của approval rồi nhắc lại "
                                    "đúng giá trị; approval vẫn đang chờ")  # cố ý KHÔNG trả giá trị đúng trong lỗi (thử lại mù sẽ không tự khớp)
+            grant = decision == "allowed" and p.get("grant_rule") is True
+            if grant:
+                # "luôn cho phép agent này theo luật này" (kể cả destructive; chỉ người — HUMAN_ONLY + require_human ở service)
+                from ..auth import require_human
+
+                require_human("cho phép agent theo luật")
+                row0 = hub.approvals.get(_id(p))
+                if not row0.get("matched_rule"):
+                    raise HubError("approval không có luật để cho phép luôn; approval vẫn đang chờ")
             res = hub.approvals.resolve(_id(p), decision, by=by, channel=channel, note=p.get("note"))
             if spec is not None:
                 res = {**res, "always_rule": hub.guard.always_commit(spec, by=by, channel=channel)}
+            if grant:
+                res = {**res, "rule_grant": hub.guard.rule_grant_set(str(row0["agent_id"]), str(row0["matched_rule"]), for_s=p.get("grant_for_s"),
+                                                                      by=by, channel=channel, approval_id=_id(p))}
             return res
 
         return _f
@@ -194,6 +209,12 @@ def register_rpc(d: "Daemon") -> None:
                 _id(p), str(p.get("mode") or ""), for_s=p.get("for_s"), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
             "guard.trust.set_all": lambda p: hub.guard.trust_set_all(
                 str(p.get("mode") or ""), for_s=p.get("for_s"), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+            # luôn cho phép theo agent + luật (xin một lần) — set/rm chỉ người (auth.HUMAN_ONLY + cổng service), đọc tự do
+            "guard.grant.list": lambda p: hub.guard.rule_grants(),
+            "guard.grant.set": lambda p: hub.guard.rule_grant_set(
+                _id(p), str(p.get("rule") or ""), for_s=p.get("for_s"), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+            "guard.grant.rm": lambda p: hub.guard.rule_grant_rm(
+                _id(p), (str(p["rule"]) if p.get("rule") else None), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
             # MGR-2: mẫu chặn theo repo (người đặt, áp cho mọi agent) — set chỉ người, đọc tự do
             "guard.repo_deny.list": lambda p: hub.guard.policy_store.repo_deny_list(),
             "guard.repo_deny.add": lambda p: _repo_deny_add(hub, p),
