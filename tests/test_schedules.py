@@ -134,6 +134,10 @@ class Script(MgrScript):
         if "HOLD" in p:
             self.specs.append(spec)
             return {"text": "held", "cost": 0.001, "hold": True}
+        if "RATELIMIT" in p:
+            self.specs.append(spec)
+            return {"text": "x", "subtype": "error_during_execution", "error_text": "API Error: rate limit exceeded",
+                    "api_error_status": 429, "cost": 0.0}
         if "FAIL" in p:
             self.specs.append(spec)
             return {"text": "x", "subtype": "error_during_execution", "error_text": "boom", "cost": 0.001}
@@ -158,7 +162,7 @@ def at(d, *args) -> None:
 
 
 async def ended(d, run_id: str, timeout: float = 10.0) -> dict:
-    return await wait_status(d, run_id, ("completed", "failed", "cancelled", "budget_exceeded", "timed_out", "crashed"), timeout)
+    return await wait_status(d, run_id, ("completed", "failed", "cancelled", "budget_exceeded", "timed_out", "crashed", "rate_limited"), timeout)
 
 
 async def until(pred, timeout: float = 10.0):
@@ -341,6 +345,23 @@ async def test_repeated_failures_auto_pause_and_notify(env):
     assert d.hub.schedules.tick() == []  # đã dừng
     r = await rpc(d, "schedule.resume", {"id": s["id"]})
     assert r["status"] == "active" and r["fail_count"] == 0
+
+
+async def test_rate_limited_fires_do_not_count_as_failures(env):
+    """Dữ liệu thật: lượt lịch gặp hạn mức claude (rate_limited) không phải lỗi của lịch — không tăng fail_count, không tự tạm dừng."""
+    d = env
+    await designate(d)
+    s = await rpc(d, "schedule.create", {"kind": "agent", "target": "w1", "expr": "every 15m", "prompt": "RATELIMIT mỗi lần", "deliver_to": "web"})
+    for i in range(4):
+        d.clock["now"] += timedelta(minutes=15)
+        r = d.hub.schedules.tick()[0]
+        run = await ended(d, r["run_id"])
+        assert run["outcome"] == "rate_limited"
+        await until(lambda: fires(d, s["id"])[-1]["status"] != "running")
+    row = await rpc(d, "schedule.get", {"id": s["id"]})
+    assert row["status"] == "active" and row["fail_count"] == 0 and row["last_status"] == "rate_limited"
+    assert [f["reason"] for f in fires(d, s["id"])] == ["rate_limited"] * 4
+    assert evs(d, "schedule.failed") == []
 
 
 # ---------------------------------------------------------------- kind manager → hội thoại + reply đúng kênh
