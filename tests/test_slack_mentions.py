@@ -127,3 +127,35 @@ async def test_any_channel_works_without_pairing(make, sk):
     assert CH in d.hub.slack.notify_chats() and d.hub.slack.broadcast_chats() == {DM_BOSS}
     await deliver(sk, sk.mention(CH, STRANGER, f"<@{BOT_USER}> xoá hết"))
     assert len(boss_runs(d)) == 1
+
+
+def root_posts(sk: FakeSlack) -> list[dict]:
+    return [m for m in sk.sent(CH) if not m.get("thread_ts")]
+
+
+async def test_reply_without_reply_to_goes_to_conversation_thread_not_channel_root(make, sk):
+    """Run tiếp tục sau khi daemon khởi động lại (run id mới, không có reply_to) + notify_owner từ heartbeat về cuộc của kênh →
+    vào thread người đã tag, KHÔNG đăng lên gốc kênh."""
+    from cfharness.events import make_event
+
+    d = await mk(make, sk)
+    await deliver(sk, sk.mention(CH, BOSS, f"<@{BOT_USER}> làm báo cáo tuần"))
+    reply = (await until(lambda: [m for m in sk.sent(CH) if "Điều phối viên" in sk.text_of(m)], timeout=15))[0]
+    root, conv = reply["thread_ts"], conv_of(d)
+    n = len(sk.sent(CH))
+    for kind, rid in (("reply", "r_resumed0001"), ("notify", "r_tick000001")):
+        d.hub.publish(make_event("manager.reply", "boss", {"conversation_id": conv, "run_id": rid, "text": f"tin {kind}",
+                                                           "channel": f"slack:{CH}", "kind": kind, "ok": True}, run_id=rid))
+    new = await until(lambda: sk.sent(CH)[n:] if len(sk.sent(CH)) >= n + 2 else None, timeout=10)
+    assert all(m.get("thread_ts") == root for m in new)
+    assert not root_posts(sk)
+
+
+async def test_channel_reply_with_no_known_thread_goes_to_dm(make, sk):
+    from cfharness.events import make_event
+
+    d = await mk(make, sk)
+    d.hub.publish(make_event("manager.reply", "boss", {"conversation_id": "mc_khongbiet", "run_id": "r_x00000001", "text": "báo xong",
+                                                       "channel": f"slack:{CH}", "kind": "notify", "ok": True}, run_id="r_x00000001"))
+    await until(lambda: [m for m in sk.sent(DM_BOSS) if "báo xong" in sk.text_of(m)], timeout=10)
+    assert not sk.sent(CH)

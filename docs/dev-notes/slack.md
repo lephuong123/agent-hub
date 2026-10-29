@@ -240,5 +240,13 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
 - Im lặng vẫn tốn một run (điều phối viên phải đọc tin mới quyết được) — đánh đổi chấp nhận để không phải tag lại.
 - Test: `tests/test_slack_threads.py` (tắt → không tag bị bỏ, tag vẫn chạy; chỉ người đã tag; `SILENT` → không đăng + xoá tin tiến độ).
 
+## Sửa: bot không bao giờ đăng lên gốc kênh chung
+- Lỗi thật (2026-10-29): (1) run điều phối viên tiếp tục sau khi daemon khởi động lại có run id MỚI → không có `reply_to` → trả lời đăng
+  lên gốc kênh; (2) `notify_owner` từ heartbeat nhắm "cuộc của người hoạt động gần nhất" = cuộc của kênh → `kind=notify` không có
+  `reply_to` → gốc kênh; (3) báo lỗi `_no_reply` gửi không kèm `reply_to`.
+- Sửa: `ChatBot.root_post_ok(chat)` (Slack: chỉ DM). Không có `reply_to` ở kênh chung → thread người nhắn gần nhất của cuộc
+  (`slack.mgr_convthread`); không biết thread → DM (`broadcast_chats`). `_no_reply` trả lời đúng thread.
+- Test: `tests/test_slack_mentions.py` (run tiếp tục + notify → đúng thread; cuộc lạ → DM, kênh không nhận gì).
+
 ## Chưa làm
 - Nghiệm thu trên workspace Slack thật: chưa chạy (cả tag trong kênh — P6, `setStatus`/tin tiến độ — P7, thread không tag + ngữ cảnh thread — P8) (modal `views.open`, tải `url_private` với `files:read`, tệp từ máy tính + điện thoại).
