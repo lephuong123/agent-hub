@@ -9,7 +9,8 @@ RPC dùng (hợp đồng `docs/plan/M7-manager.md`, MGR-CORE cung cấp): `manag
 - `POST /manager/send`: `post_guard` (CSRF + Origin + khoá phiên WT-1) → `manager.chat(channel=web)` (`_audit.channel=web`).
   Có header `X-Ahub-Fetch` (app.js) → JSON (mục đã vẽ sẵn phía server); không → 303 về trang (form thuần).
   Đính kèm (multipart, trường `attach`, chọn bằng nút 📎 / kéo–thả / dán ảnh): ảnh PNG/JPEG/GIF/WebP (nhận theo magic bytes) → `images`,
-  tệp văn bản UTF-8 → `files`; PDF/Office/nhị phân → báo lỗi, KHÔNG gửi gì. Giới hạn = của daemon (`manager/service.py`), daemon kiểm lại.
+  tệp văn bản UTF-8 hoặc tài liệu PDF/Office (nhận theo nội dung, `manager/doc_extract.py`) → `files`; nhị phân khác → báo lỗi,
+  KHÔNG gửi gì. Giới hạn = của daemon (`manager/service.py`), daemon kiểm lại.
 - `GET /sse/manager?since=&epoch=`: luồng JSON `{t: delta|reply|action|run_end|tick}`; mục HTML vẽ phía server bằng macro autoescape.
 - `GET /partials/manager`: khung trạng thái (htmx làm mới).
 Mọi chữ của điều phối viên là DỮ LIỆU: autoescape + `white-space: pre-wrap`, không markdown/HTML thô (test XSS).
@@ -37,9 +38,10 @@ ATTACH_FIELD = "attach"
 
 
 async def _attachments(form: Any) -> tuple[list[dict[str, str]], list[dict[str, str]], list[str], list[str]]:
-    """Tệp đính kèm của form → (ảnh, tệp văn bản — dạng `{name, data_b64}` cho `manager.chat`, tên hiển thị, lỗi).
-    Phân loại theo NỘI DUNG (magic bytes ảnh; còn lại phải là UTF-8 không NUL), không tin đuôi/MIME trình duyệt."""
-    from ..manager.service import FILE_MAX_BYTES, FILE_MAX_COUNT, IMAGE_MAX_BYTES, IMAGE_MAX_COUNT, _image_ext
+    """Tệp đính kèm của form → (ảnh, tệp văn bản/tài liệu — dạng `{name, data_b64}` cho `manager.chat`, tên hiển thị, lỗi).
+    Phân loại theo NỘI DUNG (magic bytes ảnh; PDF/Office theo `doc_ext`; còn lại phải là UTF-8 không NUL), không tin MIME trình duyệt."""
+    from ..manager.doc_extract import doc_ext
+    from ..manager.service import FILE_MAX_BYTES, FILE_MAX_COUNT, IMAGE_MAX_BYTES, IMAGE_MAX_COUNT, _image_ext, is_text_bytes
 
     images: list[dict[str, str]] = []
     files: list[dict[str, str]] = []
@@ -62,14 +64,10 @@ async def _attachments(form: Any) -> tuple[list[dict[str, str]], list[dict[str, 
             if len(data) > FILE_MAX_BYTES:
                 errors.append(f"{name}: tệp quá lớn (tối đa {FILE_MAX_BYTES // 1024 // 1024} MB)")
                 continue
-            try:
-                ok = b"\x00" not in data and bool(data.decode("utf-8"))
-            except UnicodeDecodeError:
-                ok = False
-            if not ok:
-                errors.append(f"{name}: chưa hỗ trợ loại tệp này (chỉ ảnh PNG/JPEG/GIF/WebP và tệp văn bản UTF-8)")
+            if not doc_ext(name, data) and not is_text_bytes(data):
+                errors.append(f"{name}: chưa hỗ trợ loại tệp này (chỉ ảnh PNG/JPEG/GIF/WebP, tệp văn bản UTF-8 và PDF/Excel/Word/PowerPoint)")
                 continue
-            lst, cap, what = files, FILE_MAX_COUNT, "tệp văn bản"
+            lst, cap, what = files, FILE_MAX_COUNT, "tệp"
         if len(lst) >= cap:
             errors.append(f"tối đa {cap} {what} mỗi tin — bỏ {name}")
             continue

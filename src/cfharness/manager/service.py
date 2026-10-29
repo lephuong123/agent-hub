@@ -91,7 +91,7 @@ def decode_images(images: Any) -> list[tuple[str, bytes]]:
             raise HubError(f"ảnh #{i}: chỉ nhận PNG/JPEG/GIF/WebP ≤ {IMAGE_MAX_BYTES // 1024 // 1024} MB")
         out.append((ext, data))
     return out
-FILE_MAX_BYTES = 10 * 1024 * 1024  # trần CỨNG tệp văn bản đính kèm (kênh có thể đặt trần nhỏ hơn, vd notify.telegram.document_max_bytes)
+FILE_MAX_BYTES = 10 * 1024 * 1024  # trần CỨNG tệp đính kèm (văn bản/tài liệu) (kênh có thể đặt trần nhỏ hơn, vd notify.telegram.document_max_bytes)
 FILE_MAX_COUNT = 4
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -107,7 +107,10 @@ def safe_file_name(name: Any, default: str = "file.txt") -> str:
 
 
 def decode_files(files: Any, max_bytes: int = FILE_MAX_BYTES) -> list[tuple[str, bytes]]:
-    """`[{name, data_b64}]` (tệp VĂN BẢN: UTF-8, không byte NUL) → `[(tên an toàn, bytes)]`. Sai → HubError, không ghi gì."""
+    """`[{name, data_b64}]` → `[(tên an toàn, bytes)]`. Nhận tệp VĂN BẢN (UTF-8, không byte NUL) hoặc TÀI LIỆU PDF/Office nhận diện
+    theo nội dung (`doc_extract.doc_ext`; tên an toàn giữ đúng đuôi chuẩn). Sai → HubError, không ghi gì."""
+    from .doc_extract import doc_ext
+
     if not files:
         return []
     if not isinstance(files, list):
@@ -126,14 +129,28 @@ def decode_files(files: Any, max_bytes: int = FILE_MAX_BYTES) -> list[tuple[str,
             raise HubError(f"tệp #{i}: base64 không hợp lệ") from None
         if len(data) > cap:
             raise HubError(f"tệp #{i}: quá {cap // 1024} KB")
-        if b"\x00" in data:
-            raise HubError(f"tệp #{i}: chỉ nhận tệp văn bản (UTF-8)")
-        try:
-            data.decode("utf-8")
-        except UnicodeDecodeError:
-            raise HubError(f"tệp #{i}: chỉ nhận tệp văn bản (UTF-8)") from None
+        ext = doc_ext(str(fl.get("name") or ""), data)
+        if ext:
+            safe = safe_file_name(fl.get("name"), "file" + ext)
+            if not safe.lower().endswith(ext):
+                safe += ext
+            out.append((safe, data))
+            continue
+        if not is_text_bytes(data):
+            raise HubError(f"tệp #{i}: chỉ nhận tệp văn bản (UTF-8) hoặc PDF/Excel/Word/PowerPoint")
         out.append((safe_file_name(fl.get("name")), data))
     return out
+
+
+def is_text_bytes(data: bytes) -> bool:
+    """Tệp văn bản = UTF-8 hợp lệ, không byte NUL."""
+    if b"\x00" in data:
+        return False
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
 
 
 LIVE = ("queued", "running", "waiting_human")
@@ -363,19 +380,32 @@ class ManagerService:
             out.append(f"attachments/{name}")
         return out
 
-    def _save_files(self, agent_id: str, cid: str, docs: list[tuple[str, bytes]]) -> list[str]:
-        """Tệp văn bản người gửi → `<cwd hội thoại>/attachments/doc-<thời điểm>-<ngẫu nhiên>-<tên an toàn>` (0600, O_EXCL)."""
+    def _save_files(self, agent_id: str, cid: str, docs: list[tuple[str, bytes]]) -> tuple[list[str], dict[str, list[str]]]:
+        """Tệp người gửi → `<cwd hội thoại>/attachments/doc-<thời điểm>-<ngẫu nhiên>-<tên an toàn>` (0600, O_EXCL).
+        Tài liệu Office trích được (xlsx/docx/pptx) → thêm bản đọc được cạnh bản gốc (`<tên>.<n>-<sheet>.csv` / `<tên>.txt`).
+        Trả (đường dẫn bản gốc tương đối theo cwd, {bản gốc: [bản trích]})."""
+        from .doc_extract import doc_ext, extract
+
         d = Path(self._conv_cwd(agent_id, cid)) / "attachments"
         d.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        out = []
-        for safe, data in docs:
-            name = f"doc-{stamp}-{secrets.token_hex(3)}-{safe}"
+        out: list[str] = []
+        extracted: dict[str, list[str]] = {}
+
+        def write(name: str, data: bytes) -> str:
             fd = os.open(d / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as f:
                 f.write(data)
-            out.append(f"attachments/{name}")
-        return out
+            return f"attachments/{name}"
+
+        for safe, data in docs:
+            name = f"doc-{stamp}-{secrets.token_hex(3)}-{safe}"
+            rel = write(name, data)
+            out.append(rel)
+            ext = doc_ext(safe, data)
+            if ext and ext != ".pdf":  # PDF: Read đọc thẳng
+                extracted[rel] = [write(name + suffix, body) for suffix, body in extract(ext, data)]
+        return out, extracted
 
     def _conv_cwd(self, agent_id: str, cid: str) -> str:
         home = Path(self.hub.agents.get_row(agent_id)["home_path"])
@@ -423,7 +453,7 @@ class ManagerService:
         text = str(text or "").strip()
         channel = str(channel or "cli")
         imgs = decode_images(images)  # kiểm TRƯỚC mọi ghi (định dạng theo magic bytes, kích thước, số lượng)
-        docs = decode_files(files)  # tệp văn bản (vd tài liệu gửi qua Telegram): UTF-8, ≤ FILE_MAX_BYTES, tên do hub làm sạch
+        docs = decode_files(files)  # tệp văn bản UTF-8 hoặc PDF/Office (nhận theo nội dung), ≤ FILE_MAX_BYTES, tên do hub làm sạch
         if not text and (imgs or docs):
             text = "(xem ảnh đính kèm)" if imgs and not docs else "(xem tệp đính kèm)"
         if not text:
@@ -446,9 +476,9 @@ class ManagerService:
         if conv is None:
             conv = self._new_conv(channel, aid, text.splitlines()[0])
         saved_imgs = self._save_images(aid, conv["id"], imgs) if imgs else []
-        saved_docs = self._save_files(aid, conv["id"], docs) if docs else []
+        saved_docs, extracted = self._save_files(aid, conv["id"], docs) if docs else ([], {})
         files = saved_imgs + saved_docs
-        prompt_text = text + (prompts.images_note(saved_imgs) if saved_imgs else "") + (prompts.files_note(saved_docs) if saved_docs else "")
+        prompt_text = text + (prompts.images_note(saved_imgs) if saved_imgs else "") + (prompts.files_note(saved_docs, extracted) if saved_docs else "")
         if saved_imgs:
             text = f"{text}\n📎 {len(saved_imgs)} ảnh: " + ", ".join(f.rsplit("/", 1)[-1] for f in saved_imgs)
         if saved_docs:
