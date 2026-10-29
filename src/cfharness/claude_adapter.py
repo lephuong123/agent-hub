@@ -4,13 +4,19 @@ Mỗi run (một tiến trình `claude`) dùng MỘT `ClaudeStreamAdapter`; gọ
 Adapter có trạng thái: tool đang mở (để tính `duration_s`), usage luỹ kế, kết quả cuối.
 
 Ánh xạ (BRD FR-RT-04):
-  system/init                    → run.started + agent.status(working)  [+ isolation.violation nếu MCP lạ]
+  system/init (lần đầu)          → run.started + agent.status(working)  [+ isolation.violation nếu MCP lạ]
+  system/init (lần 2+, cùng tiến trình: thông báo task nền mở lượt mới sau `result`)
+                                 → status.update{status:"init", init_count}  [vẫn kiểm cô lập]
   system/status                  → status.update
+  system/vcs_state_changed       → status.update{status:"vcs_state_changed", vcs_kind, branch}  (CLI 2.1.311+)
   system/hook_started|response   → hook.event (debug)                    [+ isolation.violation nếu hook lạ]
   system/thinking_tokens         → reasoning.progress
   system/permission_denied       → permission.denied        (spike A-01)
   system/task_*                  → task.background (detail)  (Bash chạy như task nền)
   control_response               → control.response (debug)
+  control_request                → control.request (debug; {request_id, subtype, tool_name, host}) — CLI 2.1.303+ hỏi quyền qua
+                                   stdout (vd can_use_tool SandboxNetworkAccess); ClaudeCliRuntime trả control_response qua stdin
+  tool_progress                  → tool.progress (debug, KHÔNG ghi DB; heartbeat 30 s của tool chạy lâu, CLI 2.1.311+)
   user isReplay (stream-json input) → lần đầu (prompt) bỏ qua; các lần sau → steer.ack (M2, spike A-02)
   system/<khác>                  → raw.unknown
   stream_event message_start     → turn.start (+ usage.tick)
@@ -120,6 +126,7 @@ class ClaudeStreamAdapter:
         self.allowed_mcp_prefixes = tuple(allowed_mcp_prefixes or ())  # run connector: "claude.ai " (hook guard chặn tool ở lớp dưới)
         self.require_no_auto_memory = require_no_auto_memory
         self.result_count = 0
+        self.init_count = 0  # số `system/init` (lượt mới do thông báo task nền sau `result` → init thứ 2+)
         self.replay_count = 0  # số tin user CLI phát lại (`isReplay`): #1 là prompt, các tin sau là steer
         self.clock = clock
         self.now = now or (lambda: datetime.now(timezone.utc))
@@ -254,6 +261,8 @@ class ClaudeStreamAdapter:
             return self._on_init(obj)
         if st == "status":
             return [self._ev("status.update", {"status": obj.get("status")}, subagent_id=sub)]
+        if st == "vcs_state_changed":
+            return [self._ev("status.update", {"status": st, "vcs_kind": obj.get("kind"), "branch": obj.get("branch")}, subagent_id=sub)]
         if st in ("hook_started", "hook_response"):
             name = obj.get("hook_name") or "?"
             payload = {
@@ -291,8 +300,10 @@ class ClaudeStreamAdapter:
         return self._unknown(obj)
 
     def _on_init(self, obj: dict) -> list[HubEvent]:
-        self.init = obj
-        self.model = obj.get("model")
+        self.init_count += 1
+        if self.init is None:
+            self.init = obj
+        self.model = obj.get("model") or self.model
         mcp = []
         for s in obj.get("mcp_servers") or []:
             if isinstance(s, dict):
@@ -313,10 +324,13 @@ class ClaudeStreamAdapter:
             "slash_commands_count": len(obj.get("slash_commands") or []),
             "memory_paths": obj.get("memory_paths"),
         }
-        out = [
-            self._ev("run.started", payload),
-            self._ev("agent.status", {"status": "working", "current_run_id": self.run_id}),
-        ]
+        if self.init_count == 1:
+            out = [
+                self._ev("run.started", payload),
+                self._ev("agent.status", {"status": "working", "current_run_id": self.run_id}),
+            ]
+        else:  # lượt mới trong CÙNG tiến trình (vd thông báo task nền sau `result`) — run đã bắt đầu, chỉ báo trạng thái
+            out = [self._ev("status.update", {"status": "init", "init_count": self.init_count, "model": self.model})]
         if self.allowed_mcp is not None:
             for s in mcp:
                 known = bool(self.allowed_mcp_prefixes) and str(s["name"]).startswith(self.allowed_mcp_prefixes)
@@ -467,6 +481,21 @@ class ClaudeStreamAdapter:
 
     def _on_control_response(self, obj: dict) -> list[HubEvent]:
         return [self._ev("control.response", {"response": obj.get("response")})]
+
+    def _on_control_request(self, obj: dict) -> list[HubEvent]:
+        """CLI hỏi quyền qua stdout (CLI 2.1.303+: `can_use_tool` SandboxNetworkAccess khi Bash trong sandbox ra host ngoài
+        allowlist). Chỉ ghi lại — câu trả lời do `ClaudeCliRuntime` gửi qua stdin sau khi guard quyết."""
+        req = obj.get("request") if isinstance(obj.get("request"), dict) else {}
+        inp = req.get("input") if isinstance(req.get("input"), dict) else {}
+        payload = {"request_id": obj.get("request_id"), "subtype": req.get("subtype"), "tool_name": req.get("tool_name")}
+        if "host" in inp:
+            payload["host"] = str(inp.get("host"))[:255]
+        return [self._ev("control.request", payload)]
+
+    def _on_tool_progress(self, obj: dict) -> list[HubEvent]:
+        """Heartbeat của tool chạy lâu (Bash, 30 s/lần). `parent_tool_use_id` ở đây là CHÍNH tool đang chạy (không phải subagent)."""
+        return [self._ev("tool.progress", {"tool_id": obj.get("parent_tool_use_id") or obj.get("tool_use_id"), "name": obj.get("tool_name"),
+                                           "elapsed_s": obj.get("elapsed_time_seconds"), "heartbeat": bool(obj.get("heartbeat"))})]
 
     def _on_rate_limit_event(self, obj: dict) -> list[HubEvent]:
         return [self._ev("ratelimit.update", {"rate_limit_info": obj.get("rate_limit_info") or {}})]

@@ -43,7 +43,7 @@ TICK_S = 0.2
 END_TYPES = ("run.completed", "run.failed", "run.cancelled", "run.interrupted", "run.waiting_human")
 ENDED = {"completed", "failed", "cancelled", "interrupted", "waiting_human", "crashed", "blocked"}
 AGENT_TOOLS = ("Task", "Agent")
-NOISE = ("usage.tick", "agent.status", "status.update", "hook.event", "tool.generating", "control.response", "raw.unknown",
+NOISE = ("usage.tick", "agent.status", "status.update", "hook.event", "tool.generating", "control.response", "control.request", "tool.progress", "raw.unknown",
          "task.background", "guard.decision", "turn.start", "run.started")
 ERROR_TYPES = ("error", "isolation.violation", "permission.denied", "guard.blocked", "auth.blocked", "budget.exceeded")
 STATUS_WORD = {

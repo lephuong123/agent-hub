@@ -375,7 +375,7 @@ NET_BLOCK_RULES = frozenset({"webfetch_local", "ssrf_metadata", "ssrf_private_ip
 # không bao giờ cho "luôn cho phép"/LLM hạ cấp: luật mạng/SSRF, domain người chặn/ngoài allowlist (chính sách của người), MCP người
 # đánh dấu cần duyệt, lỗi bộ phân loại/không phân tích được đích, run không hoạt động/ESTOP
 NEVER_DOWNGRADE_RULES = NET_BLOCK_RULES | frozenset({
-    "url_dns_failed", "web_domain_denied", "web_domain_not_allowed", "mcp_require_approval", "classifier_error", "unknown_run", "estop",
+    "url_dns_failed", "web_domain_denied", "web_domain_not_allowed", "sandbox_network_not_allowed", "sandbox_network_bad_host", "mcp_require_approval", "classifier_error", "unknown_run", "estop",
     "nesting_too_deep", "hub_secret_read", "self_approval",
 })
 NEVER_DOWNGRADE_KLASS = frozenset({"hub", "policy", "guard"})
@@ -488,9 +488,30 @@ def url_verdict(url: str, label: str = "WebFetch") -> Verdict | None:
     return None
 
 
+# CLI 2.1.303+: Bash trong sandbox OS mở kết nối tới host NGOÀI `sandbox.network.allowedDomains` → CLI hỏi qua
+# `control_request can_use_tool` với tool giả này, input `{host}` (runtime/claude_cli.py trả lời sau GuardService.sandbox_network)
+SANDBOX_NETWORK_TOOL = "SandboxNetworkAccess"
+_SANDBOX_HOST_RE = re.compile(r"(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?\.)*[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?|\[[0-9a-f:.]+\]|[0-9a-f:]+")
+
+
+def classify_sandbox_network(ti: dict[str, Any]) -> Verdict:
+    """Host ngoài allowlist sandbox (allowlist của người đã được GuardService kiểm TRƯỚC): metadata → cấm; loopback/nội bộ →
+    luật URL chung; host hợp lệ → `uncertain` lớp `network` (luôn giữ chờ người, không luật "luôn"/LLM nào hạ được)."""
+    host = str(ti.get("host") or "").strip().lower().rstrip(".")
+    if not host or len(host) > 253 or not _SANDBOX_HOST_RE.fullmatch(host):
+        return Verdict("uncertain", "sandbox_network_bad_host", "network", f"Bash (sandbox): host không hợp lệ {host[:80]!r}", [host[:200]])
+    uv = url_verdict(f"https://{host}/", "Bash (sandbox)")
+    if uv is not None:
+        return uv
+    return Verdict("uncertain", "sandbox_network_not_allowed", "network",
+                   f"Bash (sandbox) muốn kết nối {host} — ngoài danh sách domain mạng cho phép của agent", [host])
+
+
 def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardContext) -> Verdict:
     ti = tool_input if isinstance(tool_input, dict) else {}
     try:
+        if tool_name == SANDBOX_NETWORK_TOOL:
+            return classify_sandbox_network(ti)
         if tool_name == "Bash":
             cmd = ti.get("command")
             if not isinstance(cmd, str):

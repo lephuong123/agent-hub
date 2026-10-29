@@ -460,7 +460,9 @@ DEFAULTS: dict[str, Any] = {
             # Phiên bản đã kiểm (FR-RT-15). Phiên bản lạ → cảnh báo, vẫn chạy.
             # 2.1.302: fixture + contract test M0. 2.1.303: CHỈ `claude --help` + spike sandbox Windows (không fixture riêng).
             # 2.1.310: `claude --help` + fixture stream-json thật tests/fixtures/claude-2.1.310/ + tests/test_claude_contract_2_1_310.py.
-            "tested_versions": ["2.1.302", "2.1.303", "2.1.310"],
+            # 2.1.311/2.1.312: `claude --help` + fixture stream-json thật (raw log run production, đã che) tests/fixtures/claude-2.1.31{1,2}/
+            #   + tests/test_adapter_cli_312.py (tool_progress, vcs_state_changed, control_request SandboxNetworkAccess, init thứ 2).
+            "tested_versions": ["2.1.302", "2.1.303", "2.1.310", "2.1.311", "2.1.312"],
             "include_partial_messages": True,
             # Spike A-04: bật để kiểm hậu nghiệm không có hook lạ (hook Serena…) trong stream
             "include_hook_events": True,
@@ -515,6 +517,9 @@ DEFAULTS: dict[str, Any] = {
             "default_permission_mode": None,
             # cache `claude --version` (giây)
             "version_cache_s": 600,
+            # trần (giây) chờ quyết định cho một `control_request can_use_tool` của CLI (vd SandboxNetworkAccess) — quá → deny.
+            # Guard tự giữ ≤ approval.timeout_s; đây chỉ là chốt an toàn để CLI không bao giờ treo vô hạn.
+            "control_request_timeout_s": 1800,
             # hardening H-10 (FR-RT-02/15): cờ được phép theo phiên bản CLI. Phiên bản CÓ trong bảng → build_argv ném ArgvError
             # với cờ không có trong danh sách (gồm extra_args). Phiên bản lạ → không kiểm (cảnh báo vàng `cli.version_warning`).
             # Danh sách 2.1.302 lấy từ `claude --help` (bỏ cố ý --dangerously-skip-permissions / --allow-dangerously-skip-permissions).
@@ -525,6 +530,9 @@ DEFAULTS: dict[str, Any] = {
                 # 2.1.310: `claude --help` còn đủ mọi cờ trong danh sách (không cờ nào bị bỏ/đổi tên) → cùng danh sách.
                 # + `--chrome`/`--no-chrome` (Claude in Chrome, có trong `claude --help` 2.1.310; spike docs/dev-notes/chrome.md).
                 "2.1.310": list(_FLAGS_2_1_302) + ["--chrome", "--no-chrome"],
+                # 2.1.311/2.1.312: `claude --help` có đúng các cờ của 2.1.310 (không cờ nào bị bỏ/đổi tên; cờ mới chưa dùng thì không thêm).
+                "2.1.311": list(_FLAGS_2_1_302) + ["--chrome", "--no-chrome"],
+                "2.1.312": list(_FLAGS_2_1_302) + ["--chrome", "--no-chrome"],
             },
             # Claude in Chrome (cfharness/browser.py, docs/dev-notes/chrome.md). `enabled` = kill switch CHỈ NGƯỜI đặt (nhánh runtime
             # ∈ integrity.SECURITY_KEYS); tắt → agent `chrome`/`auto` chạy như `playwright`, tool chrome bị guard chặn.

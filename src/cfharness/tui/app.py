@@ -540,7 +540,7 @@ class Transcript(VerticalScroll):
             est[0] = int(p.get("estimated_tokens") or est[0] or 0)
             w.update(self._render_reasoning("".join(parts), est[0]))
             return
-        if t in ("usage.tick", "agent.status", "status.update", "hook.event", "tool.generating", "control.response", "raw.unknown", "task.background", "guard.decision"):
+        if t in ("usage.tick", "agent.status", "status.update", "hook.event", "tool.generating", "control.response", "control.request", "tool.progress", "raw.unknown", "task.background", "guard.decision"):
             return
         self._end_block()
         if t == "run.queued":
