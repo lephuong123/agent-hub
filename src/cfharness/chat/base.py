@@ -501,6 +501,10 @@ class ChatBot:
         """"trả lời tin này" (chữ thường, giữa câu) — Telegram: reply; Slack: trả lời trong thread."""
         return "trả lời (reply) tin này"
 
+    def continue_hint(self, chat: Any = None) -> str:
+        """Dòng cuối trả lời của điều phối viên: cách nói tiếp / mở chủ đề mới ở `chat`."""
+        return f"{self.reply_hint('nói tiếp').rstrip('.')} · {self.cmd('moi')} để bắt đầu chủ đề mới."
+
     def reply_into(self, target: str) -> str:
         """"reply vào <tin nào đó>" (giữa câu)."""
         return f"reply vào {target}"

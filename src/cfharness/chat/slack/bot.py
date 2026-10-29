@@ -285,6 +285,12 @@ class SlackBot(ChatBot):
     def reply_here(self) -> str:
         return "trả lời trong thread của tin này"
 
+    def continue_hint(self, chat: Any = None) -> str:
+        if chat is None or str(chat).startswith("D"):
+            return super().continue_hint(chat)
+        how = "Trả lời" if self.cfg().get("thread_followup") else "Tag bot"
+        return f"{how} trong thread này để nói tiếp · tag bot ở tin mới trong kênh để bắt đầu việc khác."
+
     def reply_into(self, target: str) -> str:
         return f"trả lời trong thread của {target}"
 
