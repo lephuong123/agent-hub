@@ -262,6 +262,10 @@ DEFAULTS: dict[str, Any] = {
         "tick_budget_usd": 0.5,  # trần chi phí mỗi run tick
         "chat_budget_usd": None,  # trần mỗi run hội thoại (null = theo limits của agent)
         "rotate_after_turns": 80,  # sau N lượt cùng session → session mới (mang theo tóm tắt), ngoài autocompact của CLI
+        # xoay session sớm (ManagerService.rotate_reason): resume nạp lại cả lịch sử, cache nguội = trả giá ghi cache cho cả khối
+        "rotate_session_cost_usd": 3.0,  # chi phí luỹ kế session ≥ N $ → session mới (0 = tắt)
+        "rotate_context_tokens": 40000,  # ngữ cảnh ước lượng ≥ N token = session "lớn": tick/lịch luôn xoay; chat xoay khi đã nghỉ lâu
+        "rotate_idle_s": 3600,  # nghỉ ≥ N giây (cache prompt nguội) + session lớn → session mới (0 = tắt)
         # MGR-6: trần tần suất thao tác của manager (nhánh config được kiểm toàn vẹn; ngân sách/model/effort kẹp theo learn policy config_bounds)
         "max_agents_created_per_day": 20,
         "max_tasks_per_hour": 60,

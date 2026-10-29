@@ -161,6 +161,9 @@ ngoài repo có thể lệch — sandbox denyWrite vẫn là lớp chặn ghi). 
 - R2-1(c): `guard.integrity.check_python_env` lúc hub khởi động: bản chuẩn `{*.pth, sitecustomize.py, usercustomize.py}` của site-packages
   (`hub_state.pyenv_baseline`); thêm/sửa → event đỏ `guard.env_tamper` + audit + Slack (Telegram: luồng TG thêm định dạng nếu muốn). Người cài gói
   hợp lệ: `cfharness guard integrity accept` (nhận cả bản chuẩn Python env). Không tự xoá file.
+  Bản chuẩn KHOÁ THEO INTERPRETER (`sys.prefix`, dạng `{v:2, by_prefix:{…}}`): daemon chuyển venv/uv tool → lần đầu gặp prefix = ghi bản
+  chuẩn (log info, không tamper); cùng prefix thêm/sửa vẫn báo; `accept` chỉ nhận prefix hiện tại. Dạng cũ (dict phẳng) tự chuyển: giữ
+  mục dưới prefix hiện tại. Test: `tests/test_integrity_pyenv.py`.
 Test: `tests/test_sec_r2.py::test_write_tool_into_exec_zones_forbidden`, `::test_write_tool_outside_workspace_needs_human`,
 `::test_write_tool_symlink_into_exec_zone_resolved`, `::test_static_deny_and_sandbox_cover_exec_zones`, `::test_workspace_cannot_be_inside_hub_repo`,
 `::test_python_env_tamper_detected`.

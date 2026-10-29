@@ -37,6 +37,7 @@ from ..notify.telegram import TelegramApi, TelegramError, TelegramNotifier, fit
 # lõi chung (chat/base.py) — giữ tên cũ ở đây cho mã/test đang import từ chat.bot
 from .base import (AGENT_FRAME, AGENT_STATUS_VI, DECISION_VI, OUTCOME_VI, PENDING, STATUS_VI, _UID, ChatBot, ChatError,  # noqa: F401
                    channel_label, decided_text, who_label)
+from .netlog import TransientLog
 
 if TYPE_CHECKING:
     from ..hub import Hub
@@ -132,6 +133,7 @@ class TelegramBot(ChatBot):
     # ------------------------------------------------------------------ vòng long polling
     async def _loop(self) -> None:
         backoff = 0.0
+        netlog = TransientLog(log, "Telegram")  # lỗi mạng getUpdates chập chờn → DEBUG; kéo dài → WARNING một lần; hồi → INFO
         while True:
             c = self.cfg()
             api = self.api()
@@ -163,6 +165,7 @@ class TelegramBot(ChatBot):
                 self.info["last_poll_at"] = time.time()
                 self.info["last_error"] = None
                 backoff = 0.0
+                netlog.ok()
                 for u in ups or []:
                     # lưu offset TRƯỚC khi xử lý: update không bao giờ chạy lại (chống bấm duyệt hai lần qua restart)
                     self.hub.store.state_set(self.OFFSET, int(u.get("update_id", 0)) + 1)
@@ -177,7 +180,7 @@ class TelegramBot(ChatBot):
                 raise
             except Exception as e:
                 self.info["last_error"] = clip(e, 300)
-                log.warning("Telegram: %s", self.info["last_error"])
+                netlog.error(e, self.info["last_error"])
                 ra = getattr(e, "retry_after", None)
                 backoff = float(ra) if ra else min(60.0, max(1.0, backoff * 2 or 1.0))
                 await self._sleep_or_wake(backoff)

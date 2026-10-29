@@ -45,6 +45,7 @@ from ...notify.slack import format_message as _slack_format
 from ...notify.telegram import APPROVAL_EVENTS
 from ..base import _UID, ChatBot
 from ..manager_chat import SILENT
+from ..netlog import TransientLog
 from . import render
 from .api import SlackApi, SlackError
 from .modals import SlackModals
@@ -307,6 +308,7 @@ class SlackBot(ChatBot):
     # ------------------------------------------------------------------ Socket Mode
     async def _loop(self) -> None:
         backoff = 0.0
+        netlog = TransientLog(log, "Slack")  # lỗi mạng chập chờn khi nối lại Socket Mode → DEBUG; kéo dài → WARNING một lần
         while True:
             c = self.cfg()
             api = self.api()
@@ -314,6 +316,7 @@ class SlackBot(ChatBot):
                 self.info["polling"] = False
                 await self._sleep_or_wake(float(c.get("idle_check_s") or 15))
                 continue
+            attempt = time.monotonic()
             try:
                 fp = hashlib.sha256((api.token + "|" + str(api.app_token)).encode()).hexdigest()
                 if self._ready_for != fp:
@@ -325,12 +328,15 @@ class SlackBot(ChatBot):
                 conn = await api.call("apps.connections.open", app=True)
                 await self._serve(str(conn.get("url") or ""), api)
                 backoff = 0.0
+                netlog.ok()
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 self.info["polling"] = False
                 self.info["last_error"] = clip(e, 300)
-                log.warning("Slack: %s", self.info["last_error"])
+                if time.monotonic() - attempt > 60:  # kết nối đã sống một lúc rồi mới rớt → chuỗi lỗi mới
+                    netlog.ok()
+                netlog.error(e, self.info["last_error"])
                 ra = getattr(e, "retry_after", None)
                 backoff = float(ra) if ra else min(60.0, max(1.0, backoff * 2 or 1.0))
                 await self._sleep_or_wake(backoff)
