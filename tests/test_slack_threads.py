@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 
+from cfharness.chat.manager_chat import SILENT
 from cfharness.manager import prompts
 
 from slack_fake import BOT_USER, FakeSlack
@@ -14,10 +15,10 @@ from test_slack import BOSS, DM_BOSS, OTHER, STRANGER, deliver, make, rpc, sk, u
 CH = "C0TEAM0001"
 
 
-async def mk(make, sk: FakeSlack, *, channels: bool = True, ctx: bool = False):
+async def mk(make, sk: FakeSlack, *, channels: bool = True, ctx: bool = False, follow: bool = True, users=(BOSS,)):
     from cfharness.web import manager_stub
 
-    d = await make(chats=(DM_BOSS,), sl_cfg={"allow_channels": channels, "thread_context": ctx})
+    d = await make(chats=(DM_BOSS,), users=users, sl_cfg={"allow_channels": channels, "thread_context": ctx, "thread_followup": follow})
     manager_stub.install(d)
     d.hub.agents.create({"id": "boss", "name": "Điều phối", "model": "haiku", "tool_policy": {"tools": ["Read", "Grep", "Glob"]}})
     await rpc(d, "manager.set", {"agent_id": "boss"})
@@ -45,6 +46,13 @@ def owner_text(prompt: str) -> str:
     return prompt.split("]\n", 1)[1].split("\n\n(Your final message", 1)[0]
 
 
+def followup_text(prompt: str) -> str:
+    """Chữ người của tin nói tiếp KHÔNG tag — sau lời dặn được im lặng (`untagged`)."""
+    note, _, text = owner_text(prompt).partition("\n\n")
+    assert note.startswith("(Tin này KHÔNG tag bạn") and SILENT in note
+    return text
+
+
 def ignored_rows(d) -> list:
     return d.hub.store.conn.execute("SELECT data FROM audit_log WHERE kind='slack.ignored'").fetchall()
 
@@ -63,7 +71,7 @@ async def test_followup_in_bot_thread_without_tag_continues_conversation(make, s
     before = ids(d)
     await deliver(sk, sk.channel_message(CH, BOSS, "thêm phần chi phí", thread_ts=root))
     new = await until(lambda: [r for r in boss_runs(d) if r["id"] not in before])
-    assert owner_text(new[0]["prompt"]) == "thêm phần chi phí"
+    assert followup_text(new[0]["prompt"]) == "thêm phần chi phí"  # kèm lời dặn được im lặng
     assert conv_of(d) == conv1  # cùng cuộc trò chuyện
     await until(lambda: len(replies(sk, root)) >= 2, timeout=15)  # trả lời vẫn trong thread đó
 
@@ -211,3 +219,46 @@ async def test_stranger_mention_in_thread_does_not_fetch_or_join(make, sk):
     assert not sk.calls_of("conversations.replies") and not boss_runs(d)
     await deliver(sk, sk.channel_message(CH, BOSS, "trả lời đồng nghiệp", thread_ts=root))  # người lạ tag không kéo bot vào thread
     assert not boss_runs(d) and not sk.sent(CH)
+
+
+async def test_followup_off_by_default_needs_tag(make, sk):
+    d = await mk(make, sk, follow=False)
+    root = await tagged_thread(d, sk)
+    before = ids(d)
+    await deliver(sk, sk.channel_message(CH, BOSS, "ờ để mai tính", thread_ts=root))
+    await asyncio.sleep(0.3)
+    assert ids(d) == before and not ignored_rows(d)  # tắt → tin không tag bỏ lặng lẽ
+    await deliver(sk, sk.mention(CH, BOSS, f"<@{BOT_USER}> thêm phần chi phí", thread_ts=root))
+    new = await until(lambda: [r for r in boss_runs(d) if r["id"] not in before])
+    assert owner_text(new[0]["prompt"]) == "thêm phần chi phí"  # tin tag: không kèm lời dặn im lặng
+
+
+async def test_followup_only_from_who_tagged(make, sk):
+    d = await mk(make, sk, users=(BOSS, OTHER))  # OTHER cũng trong allowlist nhưng chưa tag bot ở thread này
+    root = await tagged_thread(d, sk)
+    before = ids(d)
+    await deliver(sk, sk.channel_message(CH, OTHER, "mình nghĩ nên làm sau", thread_ts=root))
+    await asyncio.sleep(0.3)
+    assert ids(d) == before and not ignored_rows(d)
+    await deliver(sk, sk.mention(CH, OTHER, f"<@{BOT_USER}> thêm số liệu Q3", thread_ts=root))  # tag → từ giờ nghe cả OTHER
+    await until(lambda: ids(d) - before)
+    before = ids(d)
+    await deliver(sk, sk.channel_message(CH, OTHER, "và cả Q4", thread_ts=root))
+    new = await until(lambda: [r for r in boss_runs(d) if r["id"] not in before])
+    assert followup_text(new[0]["prompt"]) == "và cả Q4"
+
+
+async def test_silent_reply_posts_nothing_and_removes_progress(make, sk):
+    d = await mk(make, sk)
+    root = await tagged_thread(d, sk)
+    bot = d.hub.slack
+    n = len(replies(sk, root))
+    rid = "r_silent0001"
+    bot.manager._put(bot.manager.RUNS, rid, {"chat": CH, "conv": conv_of(d), "reply_to": root})
+    await bot.progress.start(bot.api(), CH, rid, root)
+    mid = bot.progress.recs[rid]["mid"]
+    assert mid
+    await bot.manager._deliver(CH, conv_of(d), rid, f"  `{SILENT}`\n", reply_to=root)
+    await until(lambda: [c for c in sk.calls_of("chat.delete") if c.get("ts") == mid])
+    assert len(replies(sk, root)) == n  # không đăng trả lời
+    assert rid not in (d.hub.store.state_get("slack.mgr_runs") or {})

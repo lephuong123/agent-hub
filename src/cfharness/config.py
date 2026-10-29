@@ -170,6 +170,7 @@ DEFAULTS: dict[str, Any] = {
             "allowed_chat_ids": [],  # DM (D…) được nhận thông báo + điều khiển hub
             "allowed_user_ids": [],  # người (U…) được phép — Slack xác thực qua kết nối Socket Mode
             "allow_channels": False,  # kênh chung phải bật rõ ràng; mặc định chỉ DM
+            "thread_followup": False,  # nói tiếp trong thread có bot KHÔNG cần tag (chỉ người đã tag; điều phối viên được im lặng)
             "thread_context": False,  # P8: tag bot giữa thread chưa có bot → đọc tin trước đó (conversations.replies) làm ngữ cảnh DỮ LIỆU
             "slash_command": "/cfh",  # lệnh đăng ký trong manifest app (mỗi người một app → nên đặt riêng, vd /cfh-ten)
             "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp", "file"],

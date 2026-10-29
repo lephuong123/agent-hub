@@ -15,6 +15,8 @@
   chữ và gửi tệp thành document (chỉ tệp thường trong cwd hội thoại, không symlink, trong trần kích thước, không chứa secret).
 - Run của điều phối viên kết thúc mà không có trả lời (lỗi, bị chặn, vượt ngân sách…) → báo ngắn (chữ của hub).
 - P7: hook `bot.manager_run_started|finished` (mặc định rỗng — Telegram không đổi; Slack: tin tiến độ + nút Dừng, chat/slack/progress.py).
+- Trả lời đúng `SILENT` (Slack: tin nói tiếp không tag — điều phối viên thấy tin không dành cho mình) → không đăng gì, hook nhận
+  `outcome="silent"` (Slack xoá tin tiến độ).
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ _GUIDE = (
     "• hoặc trên web: trang Điều phối → Chỉ định\n"
     "Trong lúc chờ vẫn dùng được: {run} <agent> <yêu cầu>, {status}, {help}."
 )
+SILENT = "<<im-lang>>"
 _UNAVAILABLE = "Hub này chưa có chức năng điều phối viên (cần cập nhật cfharness). Dùng {run} <agent> <yêu cầu> hoặc {help}."
 
 
@@ -200,9 +203,13 @@ class ManagerChat:
 
     async def _deliver(self, chat: Any, conv: str | None, run_id: str | None, text: str, *, notify: bool = False, reply_to: Any = None,
                        agent: str | None = None, failed: bool = False) -> None:
+        silent = not notify and not failed and text.strip().strip("`").strip() == SILENT
         if run_id:
             self._put(self.RUNS, run_id, None, cap=200)
-            await self.bot.manager_run_finished(run_id, chat=chat, reply_to=reply_to, outcome="failed" if failed else "completed")
+            await self.bot.manager_run_finished(run_id, chat=chat, reply_to=reply_to,
+                                                outcome="silent" if silent else ("failed" if failed else "completed"))
+        if silent:
+            return
         api = self.bot.api()
         if api is None or str(chat) not in self.bot.notify_chats():
             return

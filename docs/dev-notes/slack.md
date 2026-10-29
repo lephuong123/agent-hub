@@ -226,5 +226,19 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
 
 - Manifest 2 chiều có `reactions:write` (đường dự phòng ⏳ của P7) — app đã cài cần Reinstall.
 
+## P9 — nói tiếp không tag: bật rõ ràng, chỉ người đã tag, điều phối viên được im lặng
+| File | Vai trò |
+|---|---|
+| `config.py` | `notify.slack.thread_followup` (mặc định `false`) |
+| `chat/slack/bot.py` | `_follow`/`_follows`: `hub_state slack.thread_users` = `"<kênh>:<ts gốc>" → [U…]` (≤ 10 người/thread, ≤ 500 thread) — người qua cổng tag bot (gốc kênh: gốc = tin tag); `_on_channel_message` bỏ lặng lẽ khi tắt `thread_followup` hoặc người chưa tag ở thread đó; `untagged()` kèm lời dặn trước chữ gửi điều phối viên |
+| `chat/manager_chat.py` | `SILENT = "<<im-lang>>"`: trả lời đúng chuỗi này (bỏ khoảng trắng/backtick) → không đăng gì, hook `outcome="silent"` |
+| `chat/slack/progress.py` | `finish(outcome="silent")` → `chat.delete` tin tiến độ (thread không bị rác) |
+
+- Lý do: P8 coi MỌI tin của người trong allowlist trong thread có bot là nói với bot → chủ bàn chuyện khác trong thread cũng bị bot trả lời
+  (tốn một run). Giờ: tắt mặc định (phải tag lại); bật → chỉ người đã tag bot ở thread đó, và điều phối viên tự quyết im lặng.
+- Lời dặn chỉ đi kèm tin KHÔNG tag gửi điều phối viên (không đi vào câu trả lời câu hỏi / ô giao việc / `run.continue`). Tin tag không kèm.
+- Im lặng vẫn tốn một run (điều phối viên phải đọc tin mới quyết được) — đánh đổi chấp nhận để không phải tag lại.
+- Test: `tests/test_slack_threads.py` (tắt → không tag bị bỏ, tag vẫn chạy; chỉ người đã tag; `SILENT` → không đăng + xoá tin tiến độ).
+
 ## Chưa làm
 - Nghiệm thu trên workspace Slack thật: chưa chạy (cả tag trong kênh — P6, `setStatus`/tin tiến độ — P7, thread không tag + ngữ cảnh thread — P8) (modal `views.open`, tải `url_private` với `files:read`, tệp từ máy tính + điện thoại).

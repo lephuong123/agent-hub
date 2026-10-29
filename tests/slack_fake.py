@@ -1,7 +1,7 @@
 """Slack GIẢ chạy cục bộ (127.0.0.1) cho test — không gọi Slack thật.
 
 - Web API (HTTP, thân form như SlackApi gửi): auth.test, apps.connections.open (app token) → URL WebSocket cục bộ, chat.postMessage,
-  chat.update, chat.postEphemeral, conversations.open, users.info, files.getUploadURLExternal (+ POST /upload/<id>),
+  chat.update, chat.delete, chat.postEphemeral, conversations.open, users.info, files.getUploadURLExternal (+ POST /upload/<id>),
   files.completeUploadExternal, views.open (ghi lại view; `fail_views` → `expired_trigger_id`), conversations.replies (P8: lịch sử
   thread từ mọi tin đã bơm/bot đã gửi, `thread_seed()` thêm tin cũ). Token sai → `invalid_auth`.
 - P7: assistant.threads.setStatus (`fail_status` → `method_not_supported_for_channel_type`), reactions.add/remove (`fail_reactions` →
@@ -145,6 +145,8 @@ class FakeSlack:
             self._log(str(p.get("channel")), {"type": "message", "user": BOT_USER, "bot_id": "B0BOT0001", "text": self.text_of(p), "ts": p["_ts"],
                                               **({"thread_ts": p["thread_ts"]} if p.get("thread_ts") else {})})
             return {"ok": True, "channel": p.get("channel"), "ts": p["_ts"]}
+        if method == "chat.delete":
+            return {"ok": True, "channel": p.get("channel"), "ts": p.get("ts")}
         if method in ("chat.update", "chat.postEphemeral"):
             return {"ok": True, "channel": p.get("channel"), "ts": p.get("ts") or self._ts()}
         if method == "conversations.open":
