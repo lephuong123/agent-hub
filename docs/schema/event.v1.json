@@ -222,6 +222,7 @@
     "question.escalated": "summary",
     "question.open": "summary",
     "question.reminder": "summary",
+    "ratelimit.gate": "summary",
     "ratelimit.throttle": "summary",
     "ratelimit.update": "summary",
     "raw.invalid": "debug",

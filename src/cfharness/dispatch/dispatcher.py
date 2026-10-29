@@ -17,15 +17,22 @@ Kết quả run (listener bus → `call_soon`, idempotent vì chỉ xử lý khi
 - `crashed|timed_out|failed|protocol_violation` → `consecutive_failures+1`; ≥ `failure_limit` → `blocked` +
   `task.circuit_open` (FR-TK-09); còn lượt → `ready`, retry tạo Run mới (`parent_run_id`), `--resume <session cũ>`
   khi outcome là `crashed|timed_out|rate_limited` (FR-TK-05).
-- `rate_limited` → requeue với backoff 30 s nhân đôi tới 10 phút, KHÔNG tính lỗi.
+- `rate_limited` (run task, lead VÀ review) → requeue, KHÔNG tính lỗi (không circuit breaker, không tăng `attempts`). Biết thời điểm
+  reset (`resetsAt` của `ratelimit.update` `rejected` trong run, trạng thái `rejected` toàn hub, hoặc chữ lỗi "resets 6am" /
+  "limit reached|<epoch>") → hẹn thử lại đúng lúc reset (+ jitter) và đóng CỔNG toàn hub (`hub_state.rate_limit_gate`,
+  event `ratelimit.gate`): tới lúc reset dispatcher không claim task nào (`wait_reason=rate_limit_reset`). Không biết → backoff
+  30 s nhân đôi tới 10 phút như cũ.
 - `budget_exceeded` / lỗi auth → `blocked` ngay.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import random
+import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -46,6 +53,10 @@ RESUMABLE = ("crashed", "timed_out", "rate_limited")
 FAILURES = ("crashed", "timed_out", "failed", "protocol_violation")
 LIVE_RUN = ("queued", "running", "waiting_human")
 WRITE_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
+RL_GATE_KEY = "rate_limit_gate"
+# "… limit reached|1792324800" (CLI cũ) và "… resets 6am" / "resets 6:30pm (Asia/Saigon)" (CLI mới)
+_RESET_EPOCH = re.compile(r"limit reached\|(\d{10})", re.I)
+_RESET_CLOCK = re.compile(r"resets\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s*\(([^)]+)\))?", re.I)
 
 
 def _now() -> datetime:
@@ -63,6 +74,67 @@ def _parse(s: str | None) -> datetime | None:
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def reset_from_text(text: str | None, now: datetime | None = None) -> datetime | None:
+    """Thời điểm reset hạn mức đọc từ chữ lỗi của `claude` (None nếu không thấy). Giờ không kèm múi → giờ máy; lần tới sau `now`."""
+    if not text:
+        return None
+    now = now or _now()
+    m = _RESET_EPOCH.search(text)
+    if m:
+        return datetime.fromtimestamp(int(m.group(1)), tz=timezone.utc)
+    m = _RESET_CLOCK.search(text)
+    if not m:
+        return None
+    hour, minute, ampm, zone = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower(), m.group(4)
+    if ampm:
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if ampm == "pm" else 0)
+    elif not m.group(2):
+        return None  # "resets 6" không có am/pm hay phút → không đủ chắc
+    if hour > 23 or minute > 59:
+        return None
+    tz = None
+    if zone:
+        try:
+            from zoneinfo import ZoneInfo
+
+            tz = ZoneInfo(zone.strip())
+        except Exception:
+            tz = None
+    local_now = now.astimezone(tz) if tz else now.astimezone()
+    cand = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if cand <= local_now:
+        cand += timedelta(days=1)
+    return cand.astimezone(timezone.utc)
+
+
+def _epoch_dt(v: Any) -> datetime | None:
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)) and v > 0:
+        return datetime.fromtimestamp(float(v) / (1000 if v > 1e12 else 1), tz=timezone.utc)
+    if isinstance(v, str):
+        return _parse(v)
+    return None
+
+
+def reset_from_info(info: dict[str, Any] | None) -> datetime | None:
+    """`resetsAt` của `rate_limit_info` khi status `rejected` (ưu tiên khoá cấp trên, rồi cửa sổ đã chạm 100%)."""
+    if not isinstance(info, dict) or info.get("status") != "rejected":
+        return None
+    dt = _epoch_dt(info.get("resetsAt"))
+    if dt is not None:
+        return dt
+    best = None
+    for w in (info.get("unifiedWindows") or {}).values():
+        if isinstance(w, dict) and float(w.get("utilization") or 0) >= 1:
+            d = _epoch_dt(w.get("resetsAt"))
+            if d is not None and (best is None or d > best):
+                best = d
+    return best
 
 
 class TaskDispatcher:
@@ -172,6 +244,77 @@ class TaskDispatcher:
         self.store.state_set("rate_limit", state)
         if bool(prev.get("throttled")) != throttled:
             self.hub.publish(make_event("ratelimit.throttle", None, state))
+        reset = reset_from_info(info)
+        if reset is not None:
+            self._close_gate(reset, source="event", run_id=ev.run_id)
+
+    # ------------------------------------------------------------------ cổng rate limit toàn hub
+    def gate_until(self) -> datetime | None:
+        """Thời điểm hạn mức reset nếu cổng đang đóng (dispatcher không claim gì tới lúc đó); hết hạn → tự mở + event."""
+        g = self.store.state_get(RL_GATE_KEY) or {}
+        until = _parse(g.get("until")) if g else None
+        if until is None:
+            return None
+        if until > _now():
+            return until
+        self.store.state_set(RL_GATE_KEY, None)
+        self.hub.publish(make_event("ratelimit.gate", None, {"open": True, "until": g.get("until"), "source": g.get("source")}))
+        return None
+
+    def _close_gate(self, reset: datetime, *, source: str, run_id: str | None = None) -> None:
+        now = _now()
+        if reset <= now or (reset - now).total_seconds() > float(self.cfg("rate_limit_reset_max_s") or 8 * 86400):
+            return  # đã qua hoặc xa vô lý → không tin
+        g = self.store.state_get(RL_GATE_KEY) or {}
+        cur = _parse(g.get("until")) if g else None
+        if cur is not None and cur >= reset:
+            return
+        state = {"until": _iso(reset), "source": source, "run_id": run_id, "set_at": now_iso()}
+        self.store.state_set(RL_GATE_KEY, state)
+        self.hub.publish(make_event("ratelimit.gate", None, {"open": False, **state}, run_id=run_id))
+
+    def _run_reset(self, run: dict[str, Any]) -> tuple[datetime | None, str]:
+        """Thời điểm reset cho một run kết thúc `rate_limited`: event `ratelimit.update` cuối của run → cổng/trạng thái toàn hub → chữ lỗi."""
+        now = _now()
+        row = self.conn.execute("SELECT payload FROM events WHERE run_id=? AND type='ratelimit.update' ORDER BY epoch DESC, seq DESC LIMIT 1",
+                                (run["id"],)).fetchone()
+        if row is not None:
+            try:
+                dt = reset_from_info((json.loads(row[0]) or {}).get("rate_limit_info"))
+            except (ValueError, TypeError, AttributeError):
+                dt = None
+            if dt is not None and dt > now:
+                return dt, "run_event"
+        g = self.gate_until()
+        if g is not None:
+            return g, "hub"
+        rl = self.store.state_get("rate_limit", {}) or {}
+        if rl.get("status") == "rejected":
+            dt = _epoch_dt(rl.get("resets_at"))
+            if dt is not None and dt > now:
+                return dt, "hub"
+        dt = reset_from_text(f"{run.get('error') or ''} {run.get('summary') or ''}", now)
+        if dt is not None and dt > now:
+            return dt, "error_text"
+        return None, ""
+
+    def _on_rate_limited(self, t: dict[str, Any], run: dict[str, Any], to_status: str, **extra: Any) -> None:
+        """Run bị giới hạn tốc độ (task/lead/review): KHÔNG tính lỗi. Biết lúc reset → hẹn đúng lúc đó (+ jitter) + đóng cổng
+        toàn hub; không biết → backoff nhân đôi (`rate_limit_backoff_s` … `rate_limit_backoff_max_s`)."""
+        hits = int(t.get("rate_limit_hits") or 0) + 1
+        reset, src = self._run_reset(run)
+        if reset is not None:
+            self._close_gate(reset, source=src, run_id=run["id"])
+            jitter = float(self.cfg("rate_limit_reset_jitter_s") or 0)
+            when = reset + timedelta(seconds=random.uniform(min(5.0, jitter), jitter) if jitter > 0 else 0)
+            reason = f"rate_limited — chờ hạn mức reset lúc {when.astimezone().strftime('%Y-%m-%d %H:%M')}"
+        else:
+            base = float(self.cfg("rate_limit_backoff_s") or 30)
+            delay = min(base * (2 ** (hits - 1)), float(self.cfg("rate_limit_backoff_max_s") or 600))
+            when = _now() + timedelta(seconds=delay)
+            reason = f"rate_limited — thử lại sau {int(delay)}s"
+        self.tasks.set_status(t["id"], to_status, reason=reason, current_run_id=None, rate_limit_hits=hits, not_before=_iso(when),
+                              wait_reason="rate_limit_reset" if reset is not None else "backoff", **extra)
 
     # ------------------------------------------------------------------ helpers
     def _failure_limit(self, t: dict[str, Any]) -> int:
@@ -323,7 +466,7 @@ class TaskDispatcher:
     def _due(self, t: dict[str, Any]) -> bool:
         nb = _parse(t.get("not_before"))
         if nb is not None and nb > _now():
-            self._set_wait(t, "backoff")
+            self._set_wait(t, "rate_limit_reset" if t.get("wait_reason") == "rate_limit_reset" else "backoff")
             return False
         return True
 
@@ -331,8 +474,12 @@ class TaskDispatcher:
         return self.hub.runs.capacity_left()
 
     def _dispatch_triage(self) -> None:
+        gate = self.gate_until()
         for t in self._rows("SELECT * FROM tasks WHERE status='triage' AND current_run_id IS NULL AND deleted_at IS NULL ORDER BY priority DESC, created_at"):
             if not self._due(t):
+                continue
+            if gate is not None:
+                self._set_wait(t, "rate_limit_reset")
                 continue
             lead = self.teams.lead(t["team_id"]) if t.get("team_id") else None
             if not lead:
@@ -349,8 +496,12 @@ class TaskDispatcher:
                         prompt=self.tasks.lead_prompt(t, lead), hub_self="lead")
 
     def _dispatch_review(self) -> None:
+        gate = self.gate_until()
         for t in self._rows("SELECT * FROM tasks WHERE status='review' AND current_run_id IS NULL AND deleted_at IS NULL ORDER BY priority DESC, created_at"):
             if not self._due(t):
+                continue
+            if gate is not None:
+                self._set_wait(t, "rate_limit_reset")
                 continue
             members = self.teams.members(t["team_id"]) if t.get("team_id") else []
             reviewer = routing.choose_reviewer(members, self._load, exclude=t.get("assignee_agent_id"))
@@ -369,10 +520,11 @@ class TaskDispatcher:
 
     def _dispatch_ready(self) -> None:
         rows = self._rows("SELECT * FROM tasks WHERE status='ready' AND current_run_id IS NULL AND deleted_at IS NULL ORDER BY priority DESC, created_at")
+        gate = self.gate_until()
         for t in rows:
             if not self._due(t):
                 continue
-            reason = self._estop_block(t)
+            reason = self._estop_block(t) or ("rate_limit_reset" if gate is not None else None)
             if reason:
                 self._set_wait(t, reason)
                 continue
@@ -452,7 +604,9 @@ class TaskDispatcher:
             self.tasks.update(t["id"], {"status": from_status, "current_run_id": None})
             self.tasks.set_status(t["id"], "blocked", reason=f"không khởi chạy được run: {e.message}")
             return None
-        data: dict[str, Any] = {"current_run_id": run["id"], "attempts": int(t.get("attempts") or 0) + (1 if kind == "task" else 0), "wait_reason": None,
+        # lần chạy lại sau rate limit không phải một "lần thử" mới (không tính vào attempts)
+        counts = kind == "task" and (parent_run or {}).get("outcome") != "rate_limited"
+        data: dict[str, Any] = {"current_run_id": run["id"], "attempts": int(t.get("attempts") or 0) + (1 if counts else 0), "wait_reason": None,
                                 "retry_from_run_id": None, "lease_expires_at": _iso(_now() + timedelta(seconds=float(self.cfg("lease_ttl_s") or 120)))}
         if kind == "task":
             data["assignee_agent_id"] = agent_id
@@ -521,11 +675,7 @@ class TaskDispatcher:
                 self._after_done(t)
             return
         if oc == "rate_limited":
-            hits = int(t.get("rate_limit_hits") or 0) + 1
-            base = float(self.cfg("rate_limit_backoff_s") or 30)
-            delay = min(base * (2 ** (hits - 1)), float(self.cfg("rate_limit_backoff_max_s") or 600))
-            self.tasks.set_status(t["id"], "ready", reason=f"rate_limited — thử lại sau {int(delay)}s", current_run_id=None, rate_limit_hits=hits,
-                                  not_before=_iso(_now() + timedelta(seconds=delay)), retry_from_run_id=run["id"], wait_reason="backoff")
+            self._on_rate_limited(t, run, "ready", retry_from_run_id=run["id"])
             return
         if oc == "budget_exceeded":
             self.tasks.set_status(t["id"], "blocked", reason=f"run {run['id']} chạm trần chi phí (--max-budget-usd)", current_run_id=None)
@@ -602,9 +752,7 @@ class TaskDispatcher:
             return
         if oc != "completed":
             if oc == "rate_limited":
-                hits = int(t.get("rate_limit_hits") or 0) + 1
-                delay = min(float(self.cfg("rate_limit_backoff_s") or 30) * (2 ** (hits - 1)), float(self.cfg("rate_limit_backoff_max_s") or 600))
-                self.tasks.set_status(t["id"], "triage", reason="rate_limited", current_run_id=None, rate_limit_hits=hits, not_before=_iso(_now() + timedelta(seconds=delay)))
+                self._on_rate_limited(t, run, "triage")
                 return
             if oc in ("budget_exceeded", "cancelled"):
                 self.tasks.set_status(t["id"], "blocked", reason=f"run lead {oc}", current_run_id=None)
@@ -635,7 +783,7 @@ class TaskDispatcher:
             ids[s["key"]] = child["id"]
         plan = run.get("result_json") or {}
         self.tasks.set_status(t["id"], "running", reason=f"lead tách thành {len(ids) or len(existing)} task con", current_run_id=None, decomposed=1,
-                              consecutive_failures=0, result_summary=(plan.get("summary") if isinstance(plan, dict) else None))
+                              consecutive_failures=0, rate_limit_hits=0, result_summary=(plan.get("summary") if isinstance(plan, dict) else None))
         self.tasks.publish("task.decomposed", self.tasks.row(t["id"]), {"subtasks": list(ids.values()) or [s["id"] for s in existing], "plan_summary": plan.get("summary") if isinstance(plan, dict) else None, "run_id": run["id"]},
                            agent_id=run["agent_id"])
         if not ids and not existing:
@@ -646,6 +794,9 @@ class TaskDispatcher:
     def _on_review(self, t: dict[str, Any], run: dict[str, Any]) -> None:
         oc = self._outcome(run)
         if oc != "completed":
+            if oc == "rate_limited":  # trước đây rơi vào _on_failure → 2 lần là circuit open → task blocked oan
+                self._on_rate_limited(t, run, "review")
+                return
             if oc in ("budget_exceeded", "cancelled"):
                 self.tasks.set_status(t["id"], "blocked", reason=f"run review {oc}", current_run_id=None)
                 self._refresh_root(t)
@@ -658,7 +809,7 @@ class TaskDispatcher:
             return self._on_failure(t, run, "protocol_violation", back_to="review")
         self.tasks.comment(t["id"], comment or verdict, author=f"agent:{run['agent_id']}", kind=f"review:{verdict}", run_id=run["id"])
         if verdict == "approve":
-            self.tasks.set_status(t["id"], "done", reason=f"reviewer {run['agent_id']} approve", current_run_id=None, consecutive_failures=0)
+            self.tasks.set_status(t["id"], "done", reason=f"reviewer {run['agent_id']} approve", current_run_id=None, consecutive_failures=0, rate_limit_hits=0)
             self._after_done(t)
             return
         rounds = int(t.get("review_rounds") or 0) + 1
@@ -670,7 +821,7 @@ class TaskDispatcher:
             self.tasks.set_status(t["id"], "blocked", reason=f"reviewer yêu cầu sửa {rounds} lần (tối đa {maxr})", current_run_id=None, review_rounds=rounds)
             self._refresh_root(t)
             return
-        self.tasks.set_status(t["id"], "ready", reason="reviewer yêu cầu sửa", current_run_id=None, review_rounds=rounds, consecutive_failures=0)
+        self.tasks.set_status(t["id"], "ready", reason="reviewer yêu cầu sửa", current_run_id=None, review_rounds=rounds, consecutive_failures=0, rate_limit_hits=0)
 
     def _signal_reject(self, worker_run: dict[str, Any], t: dict[str, Any], comment: str, review_run: dict[str, Any]) -> None:
         """FR-TK-12: Signal `reject` cho worker (nguồn học)."""

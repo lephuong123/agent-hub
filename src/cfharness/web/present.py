@@ -65,7 +65,7 @@ USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache
 WAIT_REASON = {
     "workspace_locked": "thư mục đang bị run khác giữ", "budget": "hết ngân sách", "estop": "ESTOP đang bật", "team_estop": "ESTOP team",
     "concurrency": "hết slot chạy", "agent_busy": "agent đang bận", "agent_paused": "agent tạm dừng", "rate_limit": "giới hạn tốc độ",
-    "backoff": "chờ thử lại", "no_assignee": "chưa có người nhận", "member_limit": "thành viên đủ việc",
+    "backoff": "chờ thử lại", "rate_limit_reset": "chờ hạn mức reset", "no_assignee": "chưa có người nhận", "member_limit": "thành viên đủ việc",
 }
 
 

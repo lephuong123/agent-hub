@@ -287,7 +287,9 @@ DEFAULTS: dict[str, Any] = {
         "require_completion_call": False,  # True: kết thúc mà không gọi task_complete/task_block → protocol_violation
         "hub_self_mcp": True,  # FR-MS-08: thêm MCP hub-self vào run của task
         "rate_limit_backoff_s": 30,  # FR-RT-16: 30 s nhân đôi…
-        "rate_limit_backoff_max_s": 600,  # …tới 10 phút
+        "rate_limit_backoff_max_s": 600,  # …tới 10 phút (chỉ khi KHÔNG biết thời điểm reset)
+        "rate_limit_reset_jitter_s": 30,  # biết resetsAt → thử lại lúc reset + ngẫu nhiên 5..N giây (tránh dồn cục)
+        "rate_limit_reset_max_s": 691200,  # resetsAt xa hơn 8 ngày → không tin, dùng backoff
         "max_subtasks": 20,
         "review_budget_usd": None,  # trần chi phí run review (null = như run thường)
     },
