@@ -113,7 +113,8 @@ async def test_fallback_reaction_added_and_removed(make, sk):
     d._rt.release()
     rm = (await until(lambda: sk.calls_of("reactions.remove"), timeout=15))[0]
     assert rm == {"channel": DM_BOSS, "timestamp": ts, "name": REACTION}
-    assert len(sk.calls_of("reactions.add")) == 1
+    adds = await until(lambda: sk.calls_of("reactions.add")[1:])  # ⏳ → ✅ khi xong
+    assert [a["name"] for a in sk.calls_of("reactions.add")] == [REACTION, "white_check_mark"] and adds[0]["timestamp"] == ts
 
 
 async def test_no_status_no_reaction_gives_up_quietly(make, sk):
@@ -189,6 +190,7 @@ async def test_quiet_mode_only_reaction_and_result(make, sk):
     assert reply["thread_ts"] == ts
     assert [p for p in sk.calls_of("reactions.add") if p.get("timestamp") == ts and p.get("name") == REACTION]
     await until(lambda: [p for p in sk.calls_of("reactions.remove") if p.get("timestamp") == ts])
+    await until(lambda: [p for p in sk.calls_of("reactions.add") if p.get("timestamp") == ts and p.get("name") == "white_check_mark"])
     assert not sk.calls_of("assistant.threads.setStatus") and not progress_msgs(sk, CH)
     assert [m for m in sk.sent(CH) if m.get("thread_ts") == ts] == [reply]  # đúng MỘT tin: kết quả
     assert "Tag bot trong thread này để nói tiếp" in sk.text_of(reply)
@@ -216,4 +218,4 @@ async def test_tag_inside_thread_reacts_on_that_message_and_replies_in_thread(ma
     new = await until(lambda: [m for m in sk.sent(CH)[n:] if "Điều phối viên" in sk.text_of(m)], timeout=15)
     assert new[0]["thread_ts"] == root
     assert [p for p in sk.calls_of("reactions.add") if p.get("timestamp") == ts]
-    assert len([p for p in sk.calls_of("reactions.add") if p.get("timestamp") == root]) == 1  # chỉ lần tag đầu
+    assert len([p for p in sk.calls_of("reactions.add") if p.get("timestamp") == root and p["name"] == REACTION]) == 1  # chỉ lần tag đầu

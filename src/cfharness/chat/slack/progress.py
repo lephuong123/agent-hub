@@ -4,7 +4,8 @@
   xoá khi bot đăng tin trong thread hoặc sau 2 phút → nhắc lại mỗi `SlackBot.TYPING_EVERY_S` (90 s). Lỗi (kênh không hỗ trợ, thiếu
   scope…) → reaction ⏳ (`reactions.add`, cần `reactions:write`) trên tin của người, gỡ khi có trả lời / run kết thúc; reaction cũng lỗi
   → bỏ êm (log debug), vòng nhắc dừng.
-- `notify.slack.busy_indicator: reaction` → bỏ setStatus, chỉ reaction ⏳ trên tin của người (gỡ khi có kết quả).
+- `notify.slack.busy_indicator: reaction` → bỏ setStatus, chỉ reaction ⏳ trên tin của người; có kết quả → ⏳ đổi thành ✅ (xong)
+  hoặc ❌ (lỗi/dừng); điều phối viên im lặng → chỉ gỡ ⏳.
 - Tin tiến độ: MỘT tin trong thread (reply vào tin của người), sửa tại chỗ (`chat.update`) theo `tool.start`/`tool.complete` của run
   điều phối viên. Mỗi bước = tên tool (lọc ký tự, che secret) + nhãn do HUB đặt theo loại tool — KHÔNG BAO GIỜ input/kết quả tool.
   Sửa ≤ 1 lần / `manager_progress_edit_s` (3 s, gộp event), không có event mới thì vẫn cập nhật thời gian mỗi `TICK_S`; 429 → chờ
@@ -44,6 +45,8 @@ STEPS_KEPT = 50
 MAX_RECS = 100
 STATUS_TEXT = "đang xử lý…"
 REACTION = "hourglass_flowing_sand"
+DONE_REACTION = {"completed": "white_check_mark"}  # ⏳ → ✅ khi xong; outcome khác (lỗi/dừng) → ❌; "silent" → không icon
+FAIL_REACTION = "x"
 STOP_ACTION = "ms"  # mã nút Dừng trong CallbackStore (không trùng `q*`/`f*`/`ap`… của lõi)
 STOP_LABEL = "⏹ Dừng"
 
@@ -81,7 +84,7 @@ class SlackProgress:
         self.recs: dict[str, dict[str, Any]] = {}  # run gốc (run_id manager.chat trả) → bản ghi tin tiến độ
         self.alias: dict[str, str] = {}  # run con (resume) → run gốc
         self.marks: dict[tuple[str, str], str] = {}  # (chat, ts tin người) → "status" | "reaction" | "none"
-        self._closed: dict[tuple[str, str], float] = {}  # thread đã xong — vòng nhắc muộn không đặt lại trạng thái
+        self._closed: dict[tuple[str, str], str] = {}  # thread đã xong → outcome — vòng nhắc muộn không đặt lại trạng thái
         bot.hub.bus.add_listener(self.on_event)
 
     # ------------------------------------------------------------------ cấu hình
@@ -125,7 +128,7 @@ class SlackProgress:
                 raise SlackError("không báo được 'đang xử lý'") from None
         self._mark(k, "reaction")
         if k in self._closed:  # run đã xong trong lúc đang gắn → gỡ ngay, không để ⏳ treo
-            await self._unmark(api, k)
+            await self._unmark(api, k, self._closed[k])
 
     def _mark(self, k: tuple[str, str], mode: str) -> None:
         self.marks[k] = mode
@@ -133,7 +136,7 @@ class SlackProgress:
             for old in list(self.marks)[: len(self.marks) - MAX_RECS * 4]:
                 self.marks.pop(old, None)
 
-    async def _unmark(self, api: "SlackApi", k: tuple[str, str]) -> None:
+    async def _unmark(self, api: "SlackApi", k: tuple[str, str], outcome: str | None = None) -> None:
         mode = self.marks.pop(k, None)
         try:
             if mode == "status":
@@ -142,6 +145,12 @@ class SlackProgress:
                 await api.call("reactions.remove", {"channel": k[0], "timestamp": k[1], "name": REACTION})
         except Exception as e:
             log.debug("không xoá được trạng thái 'đang xử lý': %s", clip(e, 200))
+        if mode == "reaction" and outcome and outcome != "silent":  # chế độ icon: thay ⏳ bằng kết quả trên tin của người
+            try:
+                await api.call("reactions.add", {"channel": k[0], "timestamp": k[1], "name": DONE_REACTION.get(outcome, FAIL_REACTION)})
+            except SlackError as e:
+                if e.code != "already_reacted":
+                    log.debug("không gắn được icon kết quả: %s", clip(e, 200))
 
     # ------------------------------------------------------------------ vòng đời (hook từ ManagerChat)
     async def start(self, api: "SlackApi", chat: str, run_id: str, reply_to: Any) -> None:
@@ -200,12 +209,12 @@ class SlackProgress:
         if chat is None or reply_to is None:
             return
         k = (str(chat), str(reply_to))
-        self._closed[k] = time.monotonic()
+        self._closed[k] = outcome
         if len(self._closed) > MAX_RECS * 4:
             for old in list(self._closed)[: len(self._closed) - MAX_RECS * 4]:
                 self._closed.pop(old, None)
         if api is not None:
-            await self._unmark(api, k)
+            await self._unmark(api, k, outcome)
 
     def _drop(self, key: str) -> None:
         rec = self.recs.pop(key, None)
