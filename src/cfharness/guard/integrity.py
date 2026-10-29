@@ -528,22 +528,58 @@ def python_env_files() -> dict[str, str]:
     return out
 
 
-def check_python_env(hub: "Hub", *, adopt: bool = False) -> dict[str, Any] | None:
-    """So .pth/sitecustomize với bản chuẩn (`hub_state.pyenv_baseline`). Lần đầu / `adopt` → nhận. Lệch → event đỏ
-    `guard.env_tamper` + audit (+ Slack/Telegram qua listener). KHÔNG tự xoá (có thể là cài gói hợp lệ của người)."""
+def env_prefix() -> str:
+    """Khoá bản chuẩn: `sys.prefix` (realpath) của interpreter chạy hub — mỗi venv/uv tool một bản chuẩn riêng."""
+    import sys
+
+    return os.path.realpath(sys.prefix)
+
+
+def _load_pyenv_baselines(hub: "Hub", prefix: str) -> dict[str, dict[str, str]]:
+    """Đọc `hub_state.pyenv_baseline` dạng mới `{"v": 2, "by_prefix": {prefix: {path: sha}}}`. Dạng cũ (một dict phẳng
+    `{path: sha}` toàn cục) → chuyển: giữ các mục nằm dưới `prefix` hiện tại làm bản chuẩn của prefix đó (vẫn bắt được sửa đổi
+    xảy ra trước khi nâng cấp), bỏ phần thuộc interpreter khác (nguyên nhân cảnh báo lặp mãi khi daemon đổi interpreter)."""
+    raw = hub.store.state_get("pyenv_baseline")
+    if not isinstance(raw, dict):
+        return {}
+    if raw.get("v") == 2 and isinstance(raw.get("by_prefix"), dict):
+        return {str(k): dict(v) for k, v in raw["by_prefix"].items() if isinstance(v, dict)}
+    pre = prefix.rstrip(os.sep) + os.sep
+    mine = {k: v for k, v in raw.items() if isinstance(v, str) and k.startswith(pre)}
+    return {prefix: mine} if mine else {}
+
+
+def _save_pyenv_baselines(hub: "Hub", by_prefix: dict[str, dict[str, str]]) -> None:
+    hub.store.state_set("pyenv_baseline", {"v": 2, "by_prefix": by_prefix})
+
+
+def check_python_env(hub: "Hub", *, adopt: bool = False, prefix: str | None = None) -> dict[str, Any] | None:
+    """So .pth/sitecustomize với bản chuẩn CỦA INTERPRETER ĐANG CHẠY (`hub_state.pyenv_baseline`, khoá theo `sys.prefix`).
+
+    - Lần đầu gặp một prefix (daemon chuyển sang venv/uv tool khác) / `adopt` → nhận bản chuẩn cho prefix đó (log info, KHÔNG
+      phải tamper). Bản chuẩn của prefix khác giữ nguyên (quay lại interpreter cũ vẫn được kiểm).
+    - Cùng prefix mà có .pth/sitecustomize THÊM/SỬA → event đỏ `guard.env_tamper` + audit (+ Slack/Telegram qua listener).
+      KHÔNG tự xoá (có thể là cài gói hợp lệ của người: `cfharness guard integrity accept` nhận cho prefix hiện tại).
+    - Chỉ bị xoá bớt → cập nhật bản chuẩn êm."""
+    prefix = prefix or env_prefix()
     cur = python_env_files()
-    base = hub.store.state_get("pyenv_baseline")
+    by_prefix = _load_pyenv_baselines(hub, prefix)
+    base = by_prefix.get(prefix)
     if base is None or adopt:
-        hub.store.state_set("pyenv_baseline", cur)
+        if base is None and not adopt:
+            log.info("môi trường Python mới của hub (%s): ghi bản chuẩn .pth/sitecustomize (%d file)", prefix, len(cur))
+        by_prefix[prefix] = cur
+        _save_pyenv_baselines(hub, by_prefix)
         return None
     added = sorted(set(cur) - set(base))
     changed = sorted(k for k in set(cur) & set(base) if cur[k] != base[k])
     removed = sorted(set(base) - set(cur))
     if not (added or changed):
         if removed:
-            hub.store.state_set("pyenv_baseline", cur)
+            by_prefix[prefix] = cur
+            _save_pyenv_baselines(hub, by_prefix)
         return None
-    info = {"added": added, "changed": changed, "removed": removed,
+    info = {"prefix": prefix, "added": added, "changed": changed, "removed": removed,
             "message": "File chạy-khi-khởi-động (.pth/sitecustomize) trong môi trường Python của hub bị thêm/sửa — kiểm tra; nếu do bạn cài gói: "
                        "`cfharness guard integrity accept`"}
     try:

@@ -64,6 +64,11 @@ Migration **v13** (`manager_conversations`, `manager_messages`). Test: `tests/te
 - Ngữ cảnh dài: autocompact của claude CLI (mặc định bật, tự nén khi ngữ cảnh gần đầy cửa sổ model) lo trong một session; hub thêm trần
   `manager.rotate_after_turns` (80) lượt/session → session mới, prompt đầu mang 6 tin gần nhất (`prompts.carry_over`). Run lỗi (không
   `completed`/`cancelled`) → lần sau cũng mở session mới (session có thể hỏng).
+- Xoay sớm (`ManagerService.rotate_reason`, sự cố: tick NO_ACTION $0.25–0.65, lịch chết `budget_exceeded` khi resume session $15):
+  chi phí luỹ kế session ≥ `manager.rotate_session_cost_usd` (3); tick/lịch (`kind` tick|schedule) trên session lớn — ngữ cảnh ước lượng
+  (usage run gần nhất / num_turns) ≥ `manager.rotate_context_tokens` (40000); chat trên session lớn đã nghỉ ≥ `manager.rotate_idle_s`
+  (3600, cache prompt nguội). 0 = tắt luật. Lý do ở `run_opts.manager_rotated`. Tick dùng hội thoại `heartbeat` riêng (không resume
+  session chat). Session mới có `cumulative_cost_usd` = 0 → `runs.cost_usd` đúng. Test: `tests/test_manager_rotation.py`.
 - `runs._prepare_spec`: hub-self vai trò `manager` chỉ gắn khi agent của run đúng là manager được chỉ định (ngược lại bị gỡ).
 ### Nhịp (heartbeat)
 - Listener gom: `task.status→blocked`, `task.status→done` (task gốc hoặc do manager giao), `task.circuit_open`, run failed/crashed/
