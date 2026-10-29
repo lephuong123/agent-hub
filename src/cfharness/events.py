@@ -126,6 +126,7 @@ EVENT_LEVELS: dict[str, str] = {
     "workspace.checkpoint": "debug",
     "workspace.diff": "summary",
     "ratelimit.throttle": "summary",
+    "ratelimit.gate": "summary",  # cổng dispatcher: open=false (hạn mức rejected tới `until`) / open=true (đã reset)
     "agent.cloned": "summary",
     "agent.imported": "summary",
     # M4-A — lõi học (FR-LN-01..07, 15, 18, 19; FR-OB-04)

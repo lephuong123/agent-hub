@@ -199,6 +199,7 @@ class Hub:
             "queued": len(self.runs.queue),
             "estop": self.runs.estop,
             "rate_limit": self.store.state_get("rate_limit"),  # M3 FR-RT-16
+            "rate_limit_gate": self.store.state_get("rate_limit_gate"),  # dispatcher không claim tới `until` (hạn mức đã rejected)
             "teams_estop": [r[0] for r in self.store.conn.execute("SELECT id FROM teams WHERE estop=1 AND archived_at IS NULL")],  # M3
             "auth_block": self.runs.auth_block,
             "agents": len(self.store.list_agents()),
