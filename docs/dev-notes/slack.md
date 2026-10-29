@@ -248,5 +248,13 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
   (`slack.mgr_convthread`); không biết thread → DM (`broadcast_chats`). `_no_reply` trả lời đúng thread.
 - Test: `tests/test_slack_mentions.py` (run tiếp tục + notify → đúng thread; cuộc lạ → DM, kênh không nhận gì).
 
+## Chế độ gọn: chỉ icon + kết quả
+- `notify.slack.busy_indicator: reaction` (mặc định `status`): bỏ "đang xử lý…" (setStatus), chỉ reaction ⏳ trên tin đã tag, gỡ khi có
+  kết quả. Kết hợp `manager_progress: false` (không tin tiến độ) + `thread_followup: false` (chỉ trả lời khi được tag) → mỗi lần tag = ⏳
+  rồi đúng MỘT tin kết quả trong thread.
+- Dòng cuối trả lời ở kênh chung (`ChatBot.continue_hint(chat)`) nói đúng cách nói tiếp: "Tag bot trong thread này…" khi tắt
+  `thread_followup` (trước luôn ghi "Trả lời trong thread" + `/cfh moi`, sai ở kênh).
+- Test: `tests/test_slack_progress.py::test_quiet_mode_only_reaction_and_result`.
+
 ## Chưa làm
 - Nghiệm thu trên workspace Slack thật: chưa chạy (cả tag trong kênh — P6, `setStatus`/tin tiến độ — P7, thread không tag + ngữ cảnh thread — P8) (modal `views.open`, tải `url_private` với `files:read`, tệp từ máy tính + điện thoại).

@@ -192,7 +192,7 @@ class ManagerChat:
         conv = p.get("conversation_id")
         return self._st(self.CONVCHAT).get(conv) if conv else None
 
-    def format_reply(self, text: str, *, agent: str | None, notify: bool = False, failed: bool = False) -> list[str]:
+    def format_reply(self, text: str, *, agent: str | None, notify: bool = False, failed: bool = False, chat: Any = None) -> list[str]:
         """Khung kết quả agent (WT-8): dòng hệ thống (chữ của hub) + tiền tố cố định + nội dung agent trong `<pre>`. Không nút."""
         from ..notify.telegram import visible
         from ..redact import redact_str
@@ -210,8 +210,7 @@ class ManagerChat:
             if i == len(chunks) - 1:
                 if cut:
                     lines.append("…(đã cắt — xem đầy đủ trên web, trang Điều phối)")
-                lines.append("↩ " + esc(self.bot.reply_hint("nói tiếp").rstrip("."))
-                             + f" · {esc(self.bot.cmd('moi'))} để bắt đầu chủ đề mới.")
+                lines.append("↩ " + esc(self.bot.continue_hint(chat)))
             out.append("\n".join(lines))
         return out
 
@@ -232,7 +231,7 @@ class ManagerChat:
         text, wanted = extract_file_markers(text)  # "deliverable mode": dòng `[[file: …]]` → gửi tệp sau phần chữ
         if wanted and not text.strip():
             text = "(gửi tệp kèm theo bên dưới)"
-        for msg in self.format_reply(text, agent=agent, notify=notify, failed=failed):
+        for msg in self.format_reply(text, agent=agent, notify=notify, failed=failed, chat=chat):
             try:
                 res = await self.bot._send(api, chat, msg, html=True, reply_to=reply_to)
             except Exception as e:

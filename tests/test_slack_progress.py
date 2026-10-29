@@ -172,3 +172,23 @@ async def test_updates_coalesced_and_respect_429(make, sk):
     assert len(updates(sk, prog["_ts"])) - n0 <= 2  # 6 event → 1 lần sửa (sau khi chờ Retry-After)
     d._rt.release()
     await until(lambda: [u for u in updates(sk, prog["_ts"]) if "Xong" in sk.text_of(u)], timeout=15)
+
+
+async def test_quiet_mode_only_reaction_and_result(make, sk):
+    """`busy_indicator: reaction` + `manager_progress: false` → chỉ ⏳ trên tin đã tag rồi một tin kết quả; không trạng thái, không tin
+    tiến độ; dòng cuối chỉ cách nói tiếp bằng TAG (không bật `thread_followup`)."""
+    from cfharness.web import manager_stub
+
+    d = await make(chats=(DM_BOSS,), sl_cfg={"allow_channels": True, "busy_indicator": "reaction", "manager_progress": False},
+                   runtime=FakeRuntime(hold=False))
+    manager_stub.install(d)
+    d.hub.agents.create({"id": "boss", "name": "Điều phối", "model": "haiku", "tool_policy": {"tools": ["Read", "Grep", "Glob"]}})
+    await rpc(d, "manager.set", {"agent_id": "boss"})
+    ts = await tag(sk, "làm báo cáo")
+    reply = (await until(lambda: [m for m in sk.sent(CH) if "Điều phối viên" in sk.text_of(m)], timeout=15))[0]
+    assert reply["thread_ts"] == ts
+    assert [p for p in sk.calls_of("reactions.add") if p.get("timestamp") == ts and p.get("name") == REACTION]
+    await until(lambda: [p for p in sk.calls_of("reactions.remove") if p.get("timestamp") == ts])
+    assert not sk.calls_of("assistant.threads.setStatus") and not progress_msgs(sk, CH)
+    assert [m for m in sk.sent(CH) if m.get("thread_ts") == ts] == [reply]  # đúng MỘT tin: kết quả
+    assert "Tag bot trong thread này để nói tiếp" in sk.text_of(reply)

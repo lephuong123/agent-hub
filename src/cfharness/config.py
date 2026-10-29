@@ -186,6 +186,7 @@ DEFAULTS: dict[str, Any] = {
             "document_max_bytes": 1048576,  # tệp văn bản người gửi tối đa (trần cứng 10 MB ở manager.chat)
             "files_base": None,  # CHỈ cho test: gốc URL tải tệp thay https://files.slack.com/ (không bao giờ theo URL tuỳ ý)
             "modal_ttl_s": 3600,  # P2: hộp nhập (modal) còn hiệu lực — nonce phía hub `slack.modals`
+            "busy_indicator": "status",  # "status" ("đang xử lý…" trong thread, lỗi → ⏳) | "reaction" (chỉ icon ⏳ trên tin người)
             "manager_progress": True,  # P7: tin tiến độ + nút Dừng khi điều phối viên làm việc cho tin Slack (chat/slack/progress.py)
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",

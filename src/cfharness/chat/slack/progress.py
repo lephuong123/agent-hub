@@ -4,6 +4,7 @@
   xoá khi bot đăng tin trong thread hoặc sau 2 phút → nhắc lại mỗi `SlackBot.TYPING_EVERY_S` (90 s). Lỗi (kênh không hỗ trợ, thiếu
   scope…) → reaction ⏳ (`reactions.add`, cần `reactions:write`) trên tin của người, gỡ khi có trả lời / run kết thúc; reaction cũng lỗi
   → bỏ êm (log debug), vòng nhắc dừng.
+- `notify.slack.busy_indicator: reaction` → bỏ setStatus, chỉ reaction ⏳ trên tin của người (gỡ khi có kết quả).
 - Tin tiến độ: MỘT tin trong thread (reply vào tin của người), sửa tại chỗ (`chat.update`) theo `tool.start`/`tool.complete` của run
   điều phối viên. Mỗi bước = tên tool (lọc ký tự, che secret) + nhãn do HUB đặt theo loại tool — KHÔNG BAO GIỜ input/kết quả tool.
   Sửa ≤ 1 lần / `manager_progress_edit_s` (3 s, gộp event), không có event mới thì vẫn cập nhật thời gian mỗi `TICK_S`; 429 → chờ
@@ -105,15 +106,16 @@ class SlackProgress:
             return
         if mode == "none":
             raise SlackError("chat này không báo được 'đang xử lý'")
-        try:
-            await api.call("assistant.threads.setStatus", {"channel_id": k[0], "thread_ts": self.bot._root_of(reply_to) or k[1],
-                                                            "status": STATUS_TEXT})
-            self._mark(k, "status")
-            return
-        except SlackError as e:
-            if e.retry_after or mode == "status":
-                return  # giới hạn tốc độ / lỗi thoáng qua sau khi đã chạy được — lần nhắc sau thử lại
-            log.debug("assistant.threads.setStatus lỗi (%s) — dùng reaction", clip(e, 200))
+        if self.bot.cfg().get("busy_indicator") != "reaction":  # "reaction" → chỉ icon trên tin người, không "đang xử lý…"
+            try:
+                await api.call("assistant.threads.setStatus", {"channel_id": k[0], "thread_ts": self.bot._root_of(reply_to) or k[1],
+                                                                "status": STATUS_TEXT})
+                self._mark(k, "status")
+                return
+            except SlackError as e:
+                if e.retry_after or mode == "status":
+                    return  # giới hạn tốc độ / lỗi thoáng qua sau khi đã chạy được — lần nhắc sau thử lại
+                log.debug("assistant.threads.setStatus lỗi (%s) — dùng reaction", clip(e, 200))
         try:
             await api.call("reactions.add", {"channel": k[0], "timestamp": k[1], "name": REACTION})
         except SlackError as e:
