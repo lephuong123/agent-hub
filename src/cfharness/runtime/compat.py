@@ -85,10 +85,11 @@ class CliCompat:
         state = {"version": version, "tested": tested, "status": status, "runtime": runtime_name, "checked_at": iso(),
                  "flag_matrix": bool(version and version in (self.hub.config.get("runtime.claude").get("flag_matrix") or {}))}
         self.hub.store.state_set("cli_compat", state)
+        # một lần mỗi phiên bản mỗi daemon, chung bộ đếm với lần spawn đầu (RunManager.warn_cli_version)
         if status == "untested":
-            self.hub.publish(make_event("cli.version_warning", None, {"version": version, "matrix": tested, "at": "daemon_start"}))
+            self.hub.runs.warn_cli_version(version, tested, at="daemon_start")
         elif status == "missing":
-            self.hub.publish(make_event("cli.version_warning", None, {"version": None, "matrix": tested, "missing": True, "at": "daemon_start"}))
+            self.hub.runs.warn_cli_version(None, tested, missing=True, at="daemon_start")
         return state
 
     async def _check(self) -> None:
