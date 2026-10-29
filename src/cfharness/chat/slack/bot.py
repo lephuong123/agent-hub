@@ -463,9 +463,17 @@ class SlackBot(ChatBot):
         return root in self._thread or f"{chat}:{root}" in self._threads()
 
     def _root_of(self, ts: Any) -> str | None:
+        """ts gốc của thread chứa tin `ts` (Slack: `thread_ts` phải là tin GỐC, không phải một trả lời). RAM trống (vừa khởi động lại)
+        → bản lưu `slack.threads`; không biết → chính `ts`."""
         if ts is None:
             return None
-        return self._roots.get(str(ts), str(ts))
+        t = str(ts)
+        if t in self._roots:
+            return self._roots[t]
+        for k, lst in self._threads().items():
+            if t in lst:
+                return k.split(":", 1)[1]
+        return t
 
     async def _send(self, api: SlackApi, chat_id: Any, text: str, markup: dict[str, Any] | None = None, *, html: bool = False,
                     reply_to: Any = None) -> dict[str, Any]:
@@ -583,7 +591,7 @@ class SlackBot(ChatBot):
         if not text:
             return
         root = ev.get("thread_ts")
-        if root and root != ev.get("ts") and await self._on_thread_reply(cid, str(root), text, api):
+        if root and root != ev.get("ts") and await self._on_thread_reply(cid, str(root), text, api, msg_ts=ev.get("ts")):
             return
         await self.manager.handle_text(cid, text, api, message_id=ev.get("ts"))
 
@@ -651,10 +659,10 @@ class SlackBot(ChatBot):
             await self.media.handle(cid, uid, ev, api)  # tải CHỈ sau cổng ở trên (media kiểm lại)
             return
         text = str(ev.get("text") or "").strip()
-        if not text or await self._on_thread_reply(cid, root, text, api, mgr_text=untagged(text)):
+        if not text or await self._on_thread_reply(cid, root, text, api, mgr_text=untagged(text), msg_ts=ts):
             return
         await self.manager.new_conversation(cid, api)  # thread có bot nhưng chưa gắn cuộc nào (vd tin lịch giao vào kênh)
-        await self.manager.handle_text(cid, untagged(text), api, message_id=root)
+        await self.manager.handle_text(cid, untagged(text), api, message_id=self._own(cid, root, ts))
 
     async def _user_name(self, api: SlackApi, uid: str) -> str:
         """Tên hiển thị (users.info, nhớ RAM) — lỗi/thiếu → user id."""
@@ -723,9 +731,11 @@ class SlackBot(ChatBot):
         lst = self._thread.get(root) or (self._threads().get(f"{cid}:{root}") if cid else None) or []
         return list(reversed(lst)) + [root]
 
-    async def _on_thread_reply(self, cid: str, root: str, text: str, api: SlackApi, *, mgr_text: str | None = None) -> bool:
+    async def _on_thread_reply(self, cid: str, root: str, text: str, api: SlackApi, *, mgr_text: str | None = None,
+                               msg_ts: Any = None) -> bool:
         """Trả lời trong thread ≈ reply của Telegram: câu hỏi → ô giao việc → run.continue → hội thoại điều phối viên
-        (`mgr_text`: chữ gửi điều phối viên thay `text` — tin không tag kèm lời dặn được im lặng)."""
+        (`mgr_text`: chữ gửi điều phối viên thay `text` — tin không tag kèm lời dặn được im lặng; `msg_ts`: tin của người — icon ⏳ /
+        trạng thái gắn vào ĐÚNG tin đó, trả lời vẫn vào thread `root`)."""
         cands = self._candidates(root, cid)
         for mid in cands:
             qid = self.questions.question_of_message(cid, mid)
@@ -744,9 +754,16 @@ class SlackBot(ChatBot):
         for mid in cands:
             conv = self.manager.conv_of_message(cid, mid)
             if conv:
-                await self.manager.handle_text(cid, mgr_text or text, api, message_id=root, conv=conv)
+                await self.manager.handle_text(cid, mgr_text or text, api, message_id=self._own(cid, root, msg_ts), conv=conv)
                 return True
         return False
+
+    def _own(self, cid: str, root: str, msg_ts: Any) -> str:
+        """Tin của người trong thread làm `reply_to` (⏳ trên đúng tin vừa nhắn), nhớ gốc của nó để trả lời vẫn vào thread `root`."""
+        if not msg_ts or str(msg_ts) == root:
+            return root
+        self._remember(str(msg_ts), root, cid)
+        return str(msg_ts)
 
     async def _on_slash(self, p: dict[str, Any], api: SlackApi) -> None:
         uid = str(p.get("user_id") or "") or None

@@ -192,3 +192,28 @@ async def test_quiet_mode_only_reaction_and_result(make, sk):
     assert not sk.calls_of("assistant.threads.setStatus") and not progress_msgs(sk, CH)
     assert [m for m in sk.sent(CH) if m.get("thread_ts") == ts] == [reply]  # đúng MỘT tin: kết quả
     assert "Tag bot trong thread này để nói tiếp" in sk.text_of(reply)
+
+
+async def test_tag_inside_thread_reacts_on_that_message_and_replies_in_thread(make, sk):
+    """Tag bot lần nữa trong thread đã có bot → ⏳ trên ĐÚNG tin vừa tag (không phải tin gốc), trả lời vẫn vào thread gốc —
+    kể cả sau khi daemon khởi động lại (RAM mất)."""
+    from cfharness.web import manager_stub
+
+    d = await make(chats=(DM_BOSS,), sl_cfg={"allow_channels": True, "busy_indicator": "reaction", "manager_progress": False},
+                   runtime=FakeRuntime(hold=False))
+    manager_stub.install(d)
+    d.hub.agents.create({"id": "boss", "name": "Điều phối", "model": "haiku", "tool_policy": {"tools": ["Read", "Grep", "Glob"]}})
+    await rpc(d, "manager.set", {"agent_id": "boss"})
+    root = await tag(sk, "làm báo cáo")
+    await until(lambda: [m for m in sk.sent(CH) if "Điều phối viên" in sk.text_of(m)], timeout=15)
+    bot = d.hub.slack
+    bot._thread.clear(), bot._roots.clear()
+    bot._chan_threads = None
+    n = len(sk.sent(CH))
+    eid = sk.mention(CH, BOSS, f"<@{BOT_USER}> thêm phần chi phí", thread_ts=root)
+    ts = last_ts(sk)
+    await deliver(sk, eid)
+    new = await until(lambda: [m for m in sk.sent(CH)[n:] if "Điều phối viên" in sk.text_of(m)], timeout=15)
+    assert new[0]["thread_ts"] == root
+    assert [p for p in sk.calls_of("reactions.add") if p.get("timestamp") == ts]
+    assert len([p for p in sk.calls_of("reactions.add") if p.get("timestamp") == root]) == 1  # chỉ lần tag đầu
