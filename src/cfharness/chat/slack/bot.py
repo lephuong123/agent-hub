@@ -436,6 +436,9 @@ class SlackBot(ChatBot):
             th.pop(old, None)
         self.hub.store.state_set(self.THREADS, th)
 
+    def root_post_ok(self, chat: Any) -> bool:
+        return str(chat).startswith("D")  # kênh chung: bot chỉ nói trong thread người đã tag, không bao giờ đăng lên gốc kênh
+
     def _follow(self, chat: str, root: str, uid: str) -> None:
         """Người (đã qua cổng) tag bot trong thread → bot nghe tiếp tin không tag của người đó ở thread này."""
         th = self._state(self.THREAD_USERS)

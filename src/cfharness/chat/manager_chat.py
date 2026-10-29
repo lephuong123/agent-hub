@@ -15,6 +15,8 @@
   chữ và gửi tệp thành document (chỉ tệp thường trong cwd hội thoại, không symlink, trong trần kích thước, không chứa secret).
 - Run của điều phối viên kết thúc mà không có trả lời (lỗi, bị chặn, vượt ngân sách…) → báo ngắn (chữ của hub).
 - P7: hook `bot.manager_run_started|finished` (mặc định rỗng — Telegram không đổi; Slack: tin tiến độ + nút Dừng, chat/slack/progress.py).
+- Kênh không cho đăng gốc (`bot.root_post_ok`, Slack: kênh chung) → trả lời / tin chủ động của cuộc đi vào thread người đã nhắn
+  gần nhất của cuộc đó (`mgr_convthread`; vd run tiếp tục sau khi daemon khởi động lại, `notify_owner` từ heartbeat); không có thread → DM.
 - Trả lời đúng `SILENT` (Slack: tin nói tiếp không tag — điều phối viên thấy tin không dành cho mình) → không đăng gì, hook nhận
   `outcome="silent"` (Slack xoá tin tiến độ).
 """
@@ -68,6 +70,7 @@ class ManagerChat:
         self.MSGMAP = f"{n}.mgr_msgmap"      # "chat:message_id" → conversation_id (tin của điều phối viên + tin người đã gửi)
         self.RUNS = f"{n}.mgr_runs"          # run_id → {chat, conv, reply_to}
         self.CONVCHAT = f"{n}.mgr_convchat"  # conversation_id → chat_id
+        self.CONVTHREAD = f"{n}.mgr_convthread"  # conversation_id → tin người nhắn gần nhất (thread để trả lời khi run mất reply_to)
         self.hub = bot.hub
         self.sent_replies = 0
 
@@ -127,6 +130,7 @@ class ManagerChat:
             self._put(self.CONVCHAT, new_conv, str(chat_id))
             if message_id is not None:
                 self._put(self.MSGMAP, f"{chat_id}:{message_id}", new_conv)
+                self._put(self.CONVTHREAD, new_conv, message_id)
         if run_id:
             self._put(self.RUNS, run_id, {"chat": str(chat_id), "conv": new_conv, "reply_to": message_id}, cap=200)
             await self.bot.manager_run_started(api, chat_id, run_id, reply_to=message_id)  # P7 Slack: tin tiến độ (Telegram: không làm gì)
@@ -165,9 +169,19 @@ class ManagerChat:
                     for c in sorted(self.bot.broadcast_chats()):
                         self.bot._spawn(self._deliver(c, None, None, str(p.get("text") or ""), notify=True, agent=ev.agent_id))
                 return  # hội thoại của kênh khác (web/cli/heartbeat)
-            self.bot._spawn(self._deliver(chat, p.get("conversation_id") or meta.get("conv"), None if notify else run, str(p.get("text") or ""),
-                                          notify=notify, reply_to=None if notify else meta.get("reply_to"), agent=ev.agent_id,
-                                          failed=p.get("ok") is False))
+            conv = p.get("conversation_id") or meta.get("conv")
+            reply_to = None if notify else meta.get("reply_to")
+            if reply_to is None and not self.bot.root_post_ok(chat):
+                reply_to = self._st(self.CONVTHREAD).get(conv) if conv else None  # run tiếp tục / notify_owner → thread của cuộc
+                if reply_to is None:  # không biết thread nào → DM, KHÔNG đăng lên gốc kênh chung
+                    if run and not notify:
+                        self._put(self.RUNS, run, None, cap=200)
+                    for c in sorted(self.bot.broadcast_chats()):
+                        self.bot._spawn(self._deliver(c, None, None, str(p.get("text") or ""), notify=True, agent=ev.agent_id,
+                                                      failed=p.get("ok") is False))
+                    return
+            self.bot._spawn(self._deliver(chat, conv, None if notify else run, str(p.get("text") or ""),
+                                          notify=notify, reply_to=reply_to, agent=ev.agent_id, failed=p.get("ok") is False))
         elif t in TERMINAL_RUN_EVENTS and ev.source == "hub" and ev.run_id and ev.run_id in self._st(self.RUNS):
             self.bot._spawn(self._no_reply(ev.run_id, t))
 
@@ -258,6 +272,6 @@ class ManagerChat:
         api = self.bot.api()
         if api is not None and str(meta.get("chat")) in self.bot.notify_chats():
             try:
-                await self.bot._send(api, meta["chat"], text)
+                await self.bot._send(api, meta["chat"], text, reply_to=meta.get("reply_to"))
             except Exception as e:
                 log.warning("không gửi được báo lỗi điều phối viên: %s", clip(e))

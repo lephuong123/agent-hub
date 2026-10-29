@@ -746,6 +746,10 @@ class ChatBot:
         """Chat nhận tin chủ động không gắn cuộc trò chuyện nào (approval, câu hỏi, thông báo) — mặc định = `notify_chats()`."""
         return self.notify_chats()
 
+    def root_post_ok(self, chat: Any) -> bool:
+        """Được đăng tin KHÔNG trả lời tin nào vào `chat` (Slack: chỉ DM — kênh chung chỉ nhận trả lời trong thread)."""
+        return True
+
     def help_text(self) -> str:  # pragma: no cover - lớp con
         raise NotImplementedError
 
