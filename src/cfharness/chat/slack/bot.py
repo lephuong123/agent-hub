@@ -17,7 +17,8 @@ An toàn (như Telegram — WT-4/5/8):
   gửi vào DM của người với bot. Tin chữ thường trong DM → điều phối viên; trả lời trong thread = "reply" của Telegram.
 - Kênh chung (P6): chỉ tin TAG bot (`app_mention`) → điều phối viên, trả lời trong thread; approval / câu hỏi / thông báo chỉ vào DM.
   Bật `allow_channels` là đủ: mọi kênh có bot, người tag ∈ `allowed_user_ids` — không ghép nối kênh.
-  P8: trả lời trong thread BOT ĐANG THAM GIA (không cần tag lại) cũng đi điều phối viên; mọi tin kênh khác bị bỏ lặng lẽ. Tag giữa thread
+  P8: trả lời trong thread BOT ĐANG THAM GIA (không cần tag lại) cũng đi điều phối viên — chỉ khi bật `thread_followup`, chỉ của người
+  đã tag bot trong thread đó, và điều phối viên được trả `SILENT` (không đăng gì) nếu tin không dành cho nó; mọi tin kênh khác bị bỏ lặng lẽ. Tag giữa thread
   chưa có bot + `thread_context` → tin trước đó trong thread đi kèm như DỮ LIỆU không tin cậy (khung `untrusted-data`, `neutralize`).
 - Ô nhập (P2): Slack không có `force_reply` → `ask_input` mở MODAL bằng `trigger_id` của nút/slash vừa xử lý (chat/slack/modals.py:
   nonce phía hub `slack.modals`, submit kiểm workspace + đúng người + allowlist rồi mới `self.call`). Không có trigger → thread như P1.
@@ -43,6 +44,7 @@ from ...notify.base import QueuedNotifier, clip
 from ...notify.slack import format_message as _slack_format
 from ...notify.telegram import APPROVAL_EVENTS
 from ..base import _UID, ChatBot
+from ..manager_chat import SILENT
 from . import render
 from .api import SlackApi, SlackError
 from .modals import SlackModals
@@ -77,12 +79,20 @@ def strip_mention(text: str, bot_uid: str | None) -> str:
     return re.sub(r"[ 	]{2,}", " ", t).strip()
 
 
+def untagged(text: str) -> str:
+    """Tin nói tiếp KHÔNG tag bot (P8 `thread_followup`): kèm lời dặn — người có thể đang nói với người khác trong thread → điều phối viên
+    trả đúng `SILENT` thì bot không đăng gì (manager_chat._deliver)."""
+    return (f"(Tin này KHÔNG tag bạn — người đang nói tiếp trong thread Slack có bạn, có thể đang bàn với người khác. Nếu tin không dành "
+            f"cho bạn hoặc không cần bạn làm/nói gì, trả lời đúng một dòng {SILENT} và không làm gì khác.)\n\n{text}")
+
+
 PAIR_ACK = "Đã nhận mã ghép nối. Quay lại terminal hoặc trang Cài đặt trên web cfharness để xác nhận đưa DM này vào allowlist."
 SEEN_TTL_S = 3600
 SEEN_MAX = 2000
 ROOTS_MAX = 2000
 THREADS_MAX = 500  # P8: thread kênh chung bot tham gia — lưu `slack.threads` (sống qua khởi động lại daemon)
 THREAD_TS_MAX = 20  # ts nhớ mỗi thread (tin bot + tin tag, mới nhất cuối)
+THREAD_USERS_MAX = 10  # người đã tag bot mỗi thread (bot chỉ nghe tiếp những người này)
 CTX_MAX_MSGS = 50  # P8: `conversations.replies` limit
 CTX_MAX_CHARS = 6000  # trần chữ ngữ cảnh thread (giữ tin MỚI nhất)
 CTX_MSG_CHARS = 800  # trần mỗi tin
@@ -172,6 +182,7 @@ class SlackBot(ChatBot):
     DMS = "slack.dms"  # user_id → kênh DM với bot (conversations.open)
     CHANNELS = "slack.channels"  # kênh chung → lần đầu người trong allowlist tag bot (chỉ dùng khi `allow_channels`)
     THREADS = "slack.threads"  # P8: "<kênh>:<ts gốc>" → ts bot đã gửi/được tag trong thread kênh chung
+    THREAD_USERS = "slack.thread_users"  # "<kênh>:<ts gốc>" → người đã tag bot trong thread (nói tiếp không tag chỉ nhận từ họ)
     TYPING_EVERY_S = 90.0  # P7: trạng thái thread Slack tự hết sau 2 phút → nhắc lại trước đó (Telegram giữ 4 s)
     TYPING_MAX_S = 1800.0
 
@@ -425,6 +436,19 @@ class SlackBot(ChatBot):
             th.pop(old, None)
         self.hub.store.state_set(self.THREADS, th)
 
+    def _follow(self, chat: str, root: str, uid: str) -> None:
+        """Người (đã qua cổng) tag bot trong thread → bot nghe tiếp tin không tag của người đó ở thread này."""
+        th = self._state(self.THREAD_USERS)
+        k = f"{chat}:{root}"
+        lst = [u for u in (th.pop(k, None) or []) if u != uid]
+        th[k] = (lst + [uid])[-THREAD_USERS_MAX:]  # mới dùng → cuối dict (cắt thread cũ nhất trước)
+        for old in list(th)[: max(0, len(th) - THREADS_MAX)]:
+            th.pop(old, None)
+        self.hub.store.state_set(self.THREAD_USERS, th)
+
+    def _follows(self, chat: str, root: str, uid: str | None) -> bool:
+        return bool(uid) and uid in (self._state(self.THREAD_USERS).get(f"{chat}:{root}") or [])
+
     def _in_thread(self, chat: str, root: str) -> bool:
         """Bot đang tham gia thread (đã gửi tin trong đó, hoặc người trong allowlist đã tag bot ở đó)."""
         return root in self._thread or f"{chat}:{root}" in self._threads()
@@ -573,6 +597,8 @@ class SlackBot(ChatBot):
                 chans[cid] = time.time()
                 self.hub.store.state_set(self.CHANNELS, chans)
         ts, root = m.get("ts"), m.get("thread_ts")
+        if ok and (root or ts):
+            self._follow(cid, str(root or ts), str(ev.get("user")))  # tag ở gốc kênh → thread mới có gốc = chính tin tag
         if ts and root and root != ts:
             known = self._in_thread(cid, str(root))
             if ok:  # người lạ tag KHÔNG kéo bot vào thread (không thì trả lời không tag sau đó của chủ trong thread ấy bị nhận)
@@ -601,21 +627,25 @@ class SlackBot(ChatBot):
         root, ts = ev.get("thread_ts"), ev.get("ts")
         if not me or uid == me or f"<@{me}" in str(ev.get("text") or ""):
             return  # chưa biết bot id (chưa auth.test) → không phân biệt được tin tag → bỏ cho chắc
-        if not root or root == ts or not self.cfg().get("allow_channels") or not self._in_thread(cid, str(root)):
+        if not root or root == ts or not self.cfg().get("allow_channels") or not self.cfg().get("thread_followup"):
+            return
+        if not self._in_thread(cid, str(root)):
             return
         _UID.set(uid)
         if not self.team_ok(team) or not self.is_allowed(cid, uid):
             self._audit_ignored(cid, ev.get("channel_type"), "thread_reply", uid)
             return
         root = str(root)
+        if not self._follows(cid, root, uid):
+            return  # người trong allowlist nhưng chưa tag bot ở thread này → đang nói với người khác, không phải bot
         if ev.get("subtype") == "file_share":
             await self.media.handle(cid, uid, ev, api)  # tải CHỈ sau cổng ở trên (media kiểm lại)
             return
         text = str(ev.get("text") or "").strip()
-        if not text or await self._on_thread_reply(cid, root, text, api):
+        if not text or await self._on_thread_reply(cid, root, text, api, mgr_text=untagged(text)):
             return
         await self.manager.new_conversation(cid, api)  # thread có bot nhưng chưa gắn cuộc nào (vd tin lịch giao vào kênh)
-        await self.manager.handle_text(cid, text, api, message_id=root)
+        await self.manager.handle_text(cid, untagged(text), api, message_id=root)
 
     async def _user_name(self, api: SlackApi, uid: str) -> str:
         """Tên hiển thị (users.info, nhớ RAM) — lỗi/thiếu → user id."""
@@ -684,8 +714,9 @@ class SlackBot(ChatBot):
         lst = self._thread.get(root) or (self._threads().get(f"{cid}:{root}") if cid else None) or []
         return list(reversed(lst)) + [root]
 
-    async def _on_thread_reply(self, cid: str, root: str, text: str, api: SlackApi) -> bool:
-        """Trả lời trong thread ≈ reply của Telegram: câu hỏi → ô giao việc → run.continue → hội thoại điều phối viên."""
+    async def _on_thread_reply(self, cid: str, root: str, text: str, api: SlackApi, *, mgr_text: str | None = None) -> bool:
+        """Trả lời trong thread ≈ reply của Telegram: câu hỏi → ô giao việc → run.continue → hội thoại điều phối viên
+        (`mgr_text`: chữ gửi điều phối viên thay `text` — tin không tag kèm lời dặn được im lặng)."""
         cands = self._candidates(root, cid)
         for mid in cands:
             qid = self.questions.question_of_message(cid, mid)
@@ -704,7 +735,7 @@ class SlackBot(ChatBot):
         for mid in cands:
             conv = self.manager.conv_of_message(cid, mid)
             if conv:
-                await self.manager.handle_text(cid, text, api, message_id=root, conv=conv)
+                await self.manager.handle_text(cid, mgr_text or text, api, message_id=root, conv=conv)
                 return True
         return False
 

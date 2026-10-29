@@ -176,7 +176,7 @@ class SlackProgress:
         task.add_done_callback(self.bot._bg.discard)
 
     async def finish(self, run_id: str, *, chat: Any = None, reply_to: Any = None, outcome: str = "completed") -> None:
-        """Có trả lời / run kết thúc không trả lời → tin tiến độ thu về một dòng, gỡ nút, xoá trạng thái/reaction."""
+        """Có trả lời / run kết thúc không trả lời → tin tiến độ thu về một dòng, gỡ nút, xoá trạng thái/reaction (`silent` → xoá tin)."""
         api = self.bot.api()
         key = self.key_of(run_id)
         rec = self.recs.get(key) if key else None
@@ -187,7 +187,13 @@ class SlackProgress:
             if rec["task"] is not None:
                 rec["task"].cancel()
             if api is not None and rec["mid"] is not None:
-                await self._push(rec, final=True)
+                if outcome == "silent":  # điều phối viên chọn im lặng → gỡ hẳn tin tiến độ (thread không bị rác)
+                    try:
+                        await api.call("chat.delete", {"channel": rec["chat"], "ts": rec["mid"]})
+                    except Exception as e:
+                        log.debug("không xoá được tin tiến độ: %s", clip(e, 200))
+                else:
+                    await self._push(rec, final=True)
             chat, reply_to = rec["chat"], rec["reply_to"]
         if chat is None or reply_to is None:
             return
