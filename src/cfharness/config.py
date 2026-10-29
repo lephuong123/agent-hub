@@ -120,6 +120,9 @@ DEFAULTS: dict[str, Any] = {
         # hardening SEC: toàn vẹn policy/ + config.yaml (nhánh an toàn) + hub.db — phát hiện ghi ngoài RPC
         "integrity": {"enabled": True, "tick_s": 2.0, "restore": True},
     },
+    # công tắc CHUNG mọi cổng chờ người (guard/profiles.gates_mode — chỉ người đặt): human = như cũ; manager = điều phối viên quyết
+    # mọi approval/task bị chặn/câu hỏi/xin phép (trừ approval của chính nó); off = hub tự cho phép mọi approval, phần còn lại như manager
+    "gates": {"mode": "human"},
     "approval": {
         "timeout_s": 300,  # Q-04: giữ chờ trong hook; quá → waiting_human (KHÔNG tự từ chối)
         "reminder_check_s": 30,  # chu kỳ kiểm nhắc lại
@@ -672,6 +675,12 @@ def validate_setting(key: str, value: Any) -> None:
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")
+    if key in ("gates", "gates.mode"):
+        from .guard.profiles import GATES_MODES
+
+        mode = value.get("mode", "human") if key == "gates" and isinstance(value, dict) else value
+        if mode not in GATES_MODES:
+            raise ValueError(f"gates.mode phải là {'|'.join(GATES_MODES)}")
     if key == "guard.trust_new_agents" and value not in ("off", "full"):
         raise ValueError("guard.trust_new_agents chỉ nhận 'off' hoặc 'full'")
     if key == "notify.reminder_max_count":

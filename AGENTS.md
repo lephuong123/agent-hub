@@ -446,3 +446,12 @@ Chi tiết, dữ liệu hub thật, bảng profile, ranh giới, lưu ý cài đ
 Bất biến: mọi đường tự động gọi `never_automatic` trước; thêm luật/lớp nhạy cảm → thêm vào `NEVER_RULES`/`NEVER_KLASS` + một test `test_never_*`.
 Điều phối viên chỉ quyết approval `routed_to=manager` (luật ở `permissions.check_rpc` lớp 1+2 và `ApprovalService.manager_decide` lớp 3), không bao giờ
 approval của run điều phối viên, không bao giờ `always`. Q-04 giữ: mặc định hết giờ = `wait`.
+
+## Cổng duyệt — công tắc chung `gates.mode` + không hỏi lại theo luật
+Chi tiết: `docs/dev-notes/gates.md`, `docs/dev-notes/trust-and-chat-settings.md` (mục "Không hỏi lại theo agent + luật"). Không migration.
+- `gates.mode` human|manager|off (chỉ người; đọc qua `guard/profiles.gates_mode`). manager = `delegable()` mở mọi lớp kể cả danh sách
+  "không bao giờ" — approval của chính run/agent điều phối viên vẫn chỉ người. off = guard cho phép mọi thứ lẽ ra phải hỏi (forbidden/ESTOP giữ).
+  Thêm cổng chờ người mới → đọc `gates_mode` và có ca trong `tests/test_gates.py`.
+- Grant theo agent + luật: `hub_state.agent_rule_grants`, `approval.approve{grant_rule}`, `guard.grant.set|rm|list` (HUMAN_ONLY), áp ở
+  `GuardService.check` (classifier `rule_grant`). Test: `tests/test_rule_grant.py`.
+

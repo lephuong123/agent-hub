@@ -135,6 +135,8 @@ class ManagerOps:
 
     # ================================================================== ĐỌC
     def op_hub_overview(self, a: dict[str, Any]) -> dict[str, Any]:
+        from ..guard.profiles import gates_mode
+
         h = self.hub
         agents = []
         for r in h.store.list_agents():
@@ -151,6 +153,7 @@ class ManagerOps:
                 "status": x.get("status"), "opened_at": x.get("opened_at"), "routed_to": x.get("routed_to")} for x in h.approvals.list("pending", limit=20)]
         return {"now": now_iso(), "you": self.mid, "estop": h.runs.estop, "cost_today_usd": round(h.store.cost_today(), 4), "agents": agents, "teams": teams,
                 "open_tasks": open_tasks, "live_runs": runs, "approvals_waiting_human": aps,
+                "gates_mode": gates_mode(h.config),
                 "note": "Approvals with routed_to='manager' were delegated to YOU: decide them with approval_decide (or approval_escalate). "
                         "All other approvals are decided ONLY by the human: use ask_owner_permission (approve_action) if one blocks progress."}
 
@@ -476,12 +479,20 @@ class ManagerOps:
         self._action("ask_owner", a, summary=f"hỏi người: {q['text'][:120]}")
         return {"question_id": q["id"], "status": q["status"], "note": "Asked. End your turn; the owner's answer arrives as an owner message."}
 
-    def op_ask_owner_permission(self, a: dict[str, Any]) -> Any:
-        """Xin phép người (owner_actions): câu hỏi do HUB dựng từ dữ liệu thật; người chọn "Cho phép" → hub thực hiện với quyền người."""
+    async def op_ask_owner_permission(self, a: dict[str, Any]) -> Any:
+        """Xin phép người (owner_actions): câu hỏi do HUB dựng từ dữ liệu thật; người chọn "Cho phép" → hub thực hiện với quyền người.
+        `gates.mode` manager|off (người giao hết cổng): hub thực hiện NGAY thao tác đã chốt (vẫn qua `build` kiểm hợp lệ), audit actor manager."""
+        from ..guard.profiles import gates_mode
         from . import owner_actions
 
         kind = str(a.get("kind") or "")
         action, desc = owner_actions.build(self.hub, kind, a)
+        mode = gates_mode(self.hub.config)
+        if mode != "human":
+            res = await owner_actions.execute(self.hub, action, by=f"manager:{self.mid}", channel="manager")
+            self._action("ask_owner_permission", a, summary=f"tự áp dụng (gates.mode={mode}): {kind} {action.get('target')}")
+            return {"applied": bool(res.get("ok")), "error": res.get("error"), "did": desc[:400],
+                    "note": f"gates.mode={mode}: the owner delegated this to you — applied directly, no question asked."}
         conv = self._owner_conversation()
         for q in self.hub.questions.list("open", limit=200):  # cùng thao tác đang chờ → không hỏi lại
             act = q.get("action") or {}

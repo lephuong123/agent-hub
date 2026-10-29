@@ -792,11 +792,15 @@ async def settings_page(request: Request) -> Response:
         pass
     integ = await rpc(request, "guard.integrity.status")
     status = await rpc(request, "hub.status")
+    try:
+        gates = await rpc(request, "config.get", {"key": "gates.mode"}) or "human"
+    except RpcError:
+        gates = "human"
     st = ws(request)
     slack2 = await _slack_pages.slack_ctx(request)  # khối "Slack 2 chiều" (web/slack_pages.py)
     return await render(request, "settings.html", {**slack2, "nav": "settings", "estop": es, "cfg": cfg_view, "secrets": secrets_, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names,
                                                    "slack_webhook": SLACK_WEBHOOK_SECRET in names, "slack_create_url": SLACK_CREATE_URL,
-                                                   "telegram": "TELEGRAM_BOT_TOKEN" in names, "tg_chats": tg_chats, "integ": integ, "status": status,
+                                                   "telegram": "TELEGRAM_BOT_TOKEN" in names, "tg_chats": tg_chats, "integ": integ, "status": status, "gates": gates,
                                                    "web": {"host": st.host, "port": st.port, "sessions": len(st.auth.sessions)}})
 
 
@@ -853,6 +857,39 @@ def _slack_ok(r: Any, f: FormData) -> str:
     return f"Đã lưu webhook nhưng gửi thử lỗi: {r.get('reason') or '?'} — kiểm tra lại URL rồi dán lại"
 
 
+GATES_LABEL = {"human": "Người duyệt", "manager": "Điều phối viên duyệt", "off": "Tắt hết"}
+GATES_DESC = {
+    "human": "Mọi approval, task bị chặn chờ chủ, câu hỏi và xin phép đều chờ BẠN như trước.",
+    "manager": "Điều phối viên quyết thay bạn MỌI approval (kể cả push/deploy), task bị chặn, câu hỏi và xin phép — có lý do + audit; "
+               "chỉ approval của chính điều phối viên vẫn hỏi bạn.",
+    "off": "Hub tự cho phép MỌI thao tác lẽ ra phải hỏi (forbidden/ESTOP/sandbox vẫn giữ); task bị chặn, câu hỏi, xin phép do điều phối viên quyết.",
+}
+
+
+def _gates_value(f: FormData) -> str:
+    v = str(f.get("mode") or "")
+    if v not in GATES_LABEL:
+        raise ValueError("chế độ cổng không hợp lệ")
+    return v
+
+
+GRANT_FOR = {"": None, "8h": 8 * 3600, "24h": 24 * 3600, "7d": 7 * 86400, "30d": 30 * 86400}
+
+
+def _grant_for(f: FormData) -> float | None:
+    k = str(f.get("grant_for") or "")
+    if k not in GRANT_FOR:
+        raise ValueError("thời hạn không hợp lệ")
+    return GRANT_FOR[k]
+
+
+def _grant_ok(r: Any) -> str:
+    g = (r or {}).get("rule_grant") or {}
+    rel = f"; cho phép luôn {len(g['released'])} yêu cầu đang chờ cùng luật" if g.get("released") else ""
+    return (f"Đã cho phép — từ nay {g.get('agent_id')} không bị hỏi lại luật {g.get('rule')}"
+            + (f" tới {g['until']}" if g.get("until") else "") + rel)
+
+
 ACTIONS: dict[str, Action] = {
     # ---- duyệt thao tác phá huỷ (FR-UI-04) — approval.* tự ghi audit theo `channel`
     "approve": Action("approval.approve", lambda f: {"id": _req(f, "id"), "channel": CHANNEL, "by": "user", "note": f.get("note") or None},
@@ -864,6 +901,10 @@ ACTIONS: dict[str, Action] = {
                                                             "note": "luôn cho phép (web)"},
                              lambda r, f: "Đã cho phép và tạo luật luôn cho phép " + str(((r or {}).get("always_rule") or {}).get("id") or ""),
                              confirm="Cho phép thao tác này VÀ tạo luật luôn cho phép (không hỏi lại thao tác y hệt)?", audit=False),
+    # "luôn cho phép agent này theo luật này" (kể cả phá huỷ) — không hỏi lại; bước 2 BẮT BUỘC (approve2.html nhánh grant, chọn thời hạn)
+    "approve_rule": Action("approval.approve", lambda f: {"id": _req(f, "id"), "channel": CHANNEL, "by": "user", "grant_rule": True,
+                                                          "grant_for_s": _grant_for(f), "note": "luôn cho phép theo luật (web)"},
+                           lambda r, f: _grant_ok(r), audit=False),
     "deny": Action("approval.deny", lambda f: {"id": _req(f, "id"), "channel": CHANNEL, "by": "user", "note": f.get("note") or None},
                    "Đã từ chối thao tác", confirm=lambda f: f"Từ chối thao tác này?\n{f.get('preview') or ''}", danger=True, audit=False,
                    note="Ghi chú cho agent (tuỳ chọn)"),
@@ -965,6 +1006,11 @@ ACTIONS: dict[str, Action] = {
                     lambda r, f: "ESTOP đã BẬT — không run mới nào được chạy" if f.get("on") == "1" else "ESTOP đã tắt",
                     confirm=lambda f: "BẬT dừng khẩn cấp (ESTOP)? Không run mới nào được chạy" + (" và mọi run đang chạy sẽ bị dừng." if f.get("stop_running") == "1" else ".")
                     if f.get("on") == "1" else "Tắt ESTOP — cho phép chạy lại?", danger=True, note="Lý do (tuỳ chọn)"),
+    # công tắc CHUNG mọi cổng chờ người (guard/profiles.gates_mode) — nới lỏng bảo vệ nên luôn hỏi xác nhận
+    "gates_set": Action("config.set", lambda f: {"key": "gates.mode", "value": _gates_value(f)},
+                        lambda r, f: f"Cổng duyệt: {GATES_LABEL[_gates_value(f)]}",
+                        confirm=lambda f: f"Đổi cổng duyệt sang «{GATES_LABEL.get(str(f.get('mode')), '?')}»?\n{GATES_DESC.get(str(f.get('mode')), '')}",
+                        danger=True),
     "config_set": Action("config.set", lambda f: dict(zip(("key", "value"), _settings.parse_form(f))),
                          lambda r, f: f"Đã đặt {f.get('key')} = {json.dumps((r or {}).get(f.get('key')), ensure_ascii=False)}",
                          confirm=lambda f: f"Đổi cấu hình {f.get('key')} thành '{_settings.show(_settings.parse_form(f)[1])}'?"),
@@ -1077,6 +1123,15 @@ async def do_action(request: Request) -> Response:
             return flash_redirect(request, back, "error", f"Yêu cầu {ap.get('id')} không đủ điều kiện 'luôn cho phép' — chỉ cho phép một lần")
         return await render(request, "approve2.html", {"a": ap, "view": P.action_view(ap), "fields": carry(form), "action": f"/do/{name}", "back": back,
                                                        "always": ap["always_offer"]})
+    if name == "approve_rule" and form.get("confirm2") != "yes":
+        try:
+            ap = await rpc(request, "approval.get", {"id": params["id"]})
+        except RpcError as e:
+            return flash_redirect(request, back, "error", err_text(e))
+        if not ap.get("matched_rule"):
+            return flash_redirect(request, back, "error", f"Yêu cầu {ap.get('id')} không có luật để cho phép luôn — chỉ cho phép một lần")
+        return await render(request, "approve2.html", {"a": ap, "view": P.action_view(ap), "fields": [(k, v) for k, v in carry(form) if k != "grant_for"],
+                                                       "action": f"/do/{name}", "back": back, "grant": True})
     if name in ("approve", "approve_fp") and form.get("confirm2") != "yes":
         # thao tác phá huỷ NẶNG (tài nguyên bảo vệ / lớp trong notify.telegram.confirm_classes + file) → bước 2, như Telegram (WT-5/6)
         try:

@@ -76,7 +76,7 @@ def test_approve_via_telegram_button_runs_exactly_once(env):
     wait_for(lambda: tg.calls_of("getUpdates"))
     r = rpc.call("run.start", {"agent": "coder", "prompt": "BASH: ls\nBASH: rm -rf dummy", "cwd": str(env["work"])})
     ap = wait_for(lambda: rpc.call("approval.list", {"status": "open", "run_id": r["id"]}))[0]
-    msg = wait_for(lambda: tg.with_buttons(BOSS, ["Cho phép", "Từ chối"]))  # tin gọn không in id; chỉ một yêu cầu đang mở
+    msg = wait_for(lambda: tg.with_buttons(BOSS, ["Cho phép", "Từ chối", "Không hỏi lại luật này…"]))  # tin gọn không in id; chỉ một yêu cầu đang mở
     assert any("rm -rf dummy" in m["text"] for m in tg.sent(BOSS)) and (env["work"] / "dummy").exists()
     approve = FakeTelegram.buttons(msg)[0]["callback_data"]
     u1 = tg.press(BOSS, approve)  # bước 1 → tin xác nhận

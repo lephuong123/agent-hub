@@ -132,13 +132,40 @@ def cmd_decide(ctx: Any) -> int:
     params = {"id": a.id, "note": a.note, "channel": "cli", "by": "user"}
     if a.cmd == "approve" and getattr(a, "always", False):
         params["always"] = True
+    if a.cmd == "approve" and getattr(a, "rule", False):
+        params["grant_rule"] = True
+        if getattr(a, "for_", None):
+            params["grant_for_s"] = parse_duration(a.for_)
     r = ctx.call(method, params)
     extra = ""
     if r.get("always_rule"):
         ar = r["always_rule"]
         extra = (f"\n  luật luôn cho phép {ar['id']} ({ar['kind']}: " + (ar.get("domain") or (ar.get("preview") or "")[:60]) + f", agent {ar.get('agent_id')})"
                  f" — gỡ: cfharness guard always rm {ar['id']}")
+    if r.get("rule_grant"):
+        g = r["rule_grant"]
+        rel = f"; cho phép luôn {len(g['released'])} yêu cầu đang chờ cùng luật" if g.get("released") else ""
+        extra += (f"\n  từ nay {g['agent_id']} không bị hỏi lại luật {g['rule']}" + (f" tới {g['until']}" if g.get("until") else "") + rel
+                  + f" — gỡ: cfharness guard grant rm {g['agent_id']} {g['rule']}")
     ctx.out(r, f"{r['id']}: {r['status']} (chờ {r.get('wait_s')}s) — {r.get('preview')}{extra}")
+    return 0
+
+
+GATES_DESC = {
+    "human": "người duyệt mọi thứ như cũ",
+    "manager": "điều phối viên quyết MỌI approval (kể cả push/deploy), task bị chặn, câu hỏi, xin phép — trừ approval của chính nó",
+    "off": "hub tự cho phép mọi thao tác lẽ ra phải hỏi; task bị chặn/câu hỏi/xin phép do điều phối viên quyết",
+}
+
+
+def cmd_gates(ctx: Any) -> int:
+    a = ctx.args
+    if not a.mode:
+        cur = ctx.call("config.get", {"key": "gates.mode"}) or "human"
+        ctx.out({"mode": cur}, f"gates.mode = {cur} — {GATES_DESC.get(cur, '')}\nđổi: cfharness gates human|manager|off")
+        return 0
+    r = ctx.call("config.set", {"key": "gates.mode", "value": a.mode})
+    ctx.out({"mode": r}, ("⚠ " if a.mode != "human" else "") + f"gates.mode = {a.mode} — {GATES_DESC[a.mode]}")
     return 0
 
 
@@ -221,6 +248,20 @@ def cmd_guard(ctx: Any) -> int:
         else:
             r = ctx.call("guard.repo_deny.rm", {"repo": a.repo, "pattern": a.pattern})
             ctx.out(r, f"đã gỡ mẫu chặn repo {a.repo}")
+        return 0
+    if a.action == "grant":
+        if a.op == "list":
+            d = ctx.call("guard.grant.list")
+            rows = [[aid, rule, g.get("until") or "không hạn", g.get("by") or "", g.get("channel") or "", g.get("approval_id") or "", g.get("at") or ""]
+                    for aid, rules in sorted(d.items()) for rule, g in sorted(rules.items())]
+            ctx.out(d, _table(rows, ["AGENT", "LUẬT", "HẠN", "BỞI", "KÊNH", "TỪ APPROVAL", "LÚC"]) if rows else "(chưa có cho phép theo luật)")
+        elif a.op == "set":
+            r = ctx.call("guard.grant.set", {"id": a.agent, "rule": a.rule, "for_s": parse_duration(a.for_) if a.for_ else None})
+            ctx.out(r, f"từ nay {a.agent} không bị hỏi lại luật {a.rule}" + (f" tới {r['until']}" if r.get("until") else "")
+                    + (f" (đã cho phép {len(r['released'])} yêu cầu đang chờ)" if r.get("released") else ""))
+        else:
+            r = ctx.call("guard.grant.rm", {"id": a.agent, "rule": a.rule})
+            ctx.out(r, f"đã gỡ cho phép {a.agent}: {', '.join(r['removed'])}")
         return 0
     if a.action == "always":
         if a.op == "list":
@@ -308,7 +349,15 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
             x.add_argument("--always", action="store_true",
                            help="luôn cho phép đúng thao tác này cho agent này (thao tác 'không chắc', hoặc tool MCP chỉ bị server tự đánh dấu "
                                 "destructive → luật cho đúng tool đó; KHÔNG áp cho thao tác phá huỷ khác)")
+            x.add_argument("--rule", action="store_true",
+                           help="cho phép lần này VÀ từ nay không hỏi lại agent này với cùng luật (kể cả phá huỷ); "
+                                "gỡ: cfharness guard grant rm <agent> <luật>")
+            x.add_argument("--for", dest="for_", help="với --rule: tự hết hạn sau (vd 8h, 2d); bỏ trống = không hạn")
         x.set_defaults(fn=cmd_decide)
+
+    gt = sub.add_parser("gates", help="công tắc CHUNG mọi cổng chờ người: human | manager (điều phối viên quyết) | off", parents=[common])
+    gt.add_argument("mode", nargs="?", choices=list(GATES_DESC))
+    gt.set_defaults(fn=cmd_gates)
 
     g = sub.add_parser("guard", help="bộ phân loại thao tác phá huỷ và tài nguyên được bảo vệ", parents=[common])
     gs = g.add_subparsers(dest="action", required=True)
@@ -351,6 +400,17 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     rdr = rds.add_parser("rm", parents=[common])
     rdr.add_argument("repo")
     rdr.add_argument("pattern", nargs="?")
+    gr = gs.add_parser("grant", help="luôn cho phép agent theo luật (chỉ người): không hỏi duyệt lại luật đó, kể cả phá huỷ",
+                       parents=[common])
+    grs = gr.add_subparsers(dest="op", required=True)
+    grs.add_parser("list", parents=[common])
+    grset = grs.add_parser("set", parents=[common])
+    grset.add_argument("agent")
+    grset.add_argument("rule", help="tên luật (cột LUẬT của `cfharness approvals`)")
+    grset.add_argument("--for", dest="for_", help="tự hết hạn sau (vd 8h, 2d); bỏ trống = không hạn")
+    grm = grs.add_parser("rm", parents=[common])
+    grm.add_argument("agent")
+    grm.add_argument("rule", nargs="?", help="bỏ trống = gỡ mọi luật của agent")
     al = gs.add_parser("always", help="luật luôn cho phép tạo khi duyệt --always (chỉ người gỡ)", parents=[common])
     als = al.add_subparsers(dest="op", required=True)
     als.add_parser("list", parents=[common])

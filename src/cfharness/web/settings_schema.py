@@ -148,6 +148,7 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
 
 # Khoá nới lỏng bảo vệ: web chỉ hiện giá trị + lệnh CLI.
 READONLY: tuple[tuple[str, str], ...] = (
+    ("gates.mode", "Cổng duyệt toàn hệ thống (thẻ Cổng duyệt ở trên)"),
     ("guard.enabled", "Bật guard (chặn thao tác phá huỷ)"),
     ("approval.profile", "Hồ sơ phê duyệt"),
     ("guard.hold_uncertain", "Giữ chờ lệnh không chắc (uncertain)"),

@@ -138,8 +138,13 @@ class ChatBot:
     def approval_markup(self, approval_id: str, chat_id: Any, row: dict[str, Any] | None = None) -> dict[str, Any]:
         """Nút Cho phép / Từ chối; thêm "Luôn cho phép" CHỈ khi daemon báo đủ điều kiện (`GuardService.always_offer`)."""
         rows = [[("ap", approval_id, "Cho phép"), ("dn", approval_id, "Từ chối")]]
+        extra = []
         if row is not None and self.always_offer(row):
-            rows.append([("aa", approval_id, "Luôn cho phép…")])
+            extra.append(("aa", approval_id, "Luôn cho phép…"))
+        if row is not None and row.get("matched_rule"):
+            extra.append(("ar", approval_id, "Không hỏi lại luật này…"))
+        if extra:
+            rows.append(extra)
         markup, _ = self.callbacks.issue_rows(rows, chat_id, ttl=self._ttl())
         return markup
 
@@ -620,6 +625,8 @@ class ChatBot:
             lines.append("⚠️ Thao tác nặng — đọc kỹ trước khi cho phép.")
         if self.always_offer(row):
             lines.append("«Luôn cho phép» = cho phép lần này và không hỏi lại đúng loại thao tác này.")
+        if row.get("matched_rule"):
+            lines.append(f"«Không hỏi lại luật này» = cho phép lần này và từ nay không hỏi {agent} với luật {esc(row.get('matched_rule'))}.")
         return "\n".join(lines)
 
     # ------------------------------------------------------------------ nút (sau khi lớp con đã kiểm người + TIÊU nonce)
@@ -635,7 +642,7 @@ class ChatBot:
         edit: str | None = None
         markup: dict[str, Any] | None = None
         try:
-            if a in ("ap", "apc", "dn", "aa", "aac"):
+            if a in ("ap", "apc", "dn", "aa", "aac", "ar", "arc", "arh"):
                 text, edit, markup = await self._decide(cid, a, ref, api)
             elif a == "eo":
                 await self.call(cid, "estop.set", {"on": False, "reason": f"{self.LABEL} {cid}"})
@@ -697,6 +704,22 @@ class ChatBot:
                                                             "note": f"luôn cho phép qua {self.LABEL} (user {uid})"})
             rid = ((res or {}).get("always_rule") or {}).get("id") if isinstance(res, dict) else None
             return f"Đã cho phép và tạo luật {rid or '?'}.", None, None
+        if action == "ar":  # luôn cho phép agent + luật (kể cả phá huỷ) → 2 bước; bước 2 chọn không hạn / 8 giờ
+            if not ap.get("matched_rule"):
+                return "Yêu cầu này không có luật — chỉ cho phép một lần.", None, None
+            markup, _ = self.callbacks.issue([("arc", approval_id, "Xác nhận — không hạn"), ("arh", approval_id, "Xác nhận — 8 giờ"),
+                                              ("cx", approval_id, "Huỷ")], cid, ttl=min(self._ttl(), 3600))
+            text = (f"⚠️ <b>Chắc chắn không hỏi lại?</b> Cho phép lần này, và từ nay {esc(ap.get('agent_id'))} không bị hỏi lại với luật "
+                    f"<code>{esc(ap.get('matched_rule'))}</code> — kể cả thao tác phá huỷ khác cùng luật. Yêu cầu đang chờ cùng luật cũng được cho phép.\n"
+                    f"Gỡ sau: cfharness guard grant rm {esc(ap.get('agent_id'))} {esc(ap.get('matched_rule'))}.")
+            return "Cần xác nhận bước 2 — xem tin này.", text, markup
+        if action in ("arc", "arh"):
+            res = await self.call(cid, "approval.approve", {"id": approval_id, "channel": ch, "by": "user", "grant_rule": True,
+                                                            "grant_for_s": 8 * 3600 if action == "arh" else None,
+                                                            "note": f"không hỏi lại luật qua {self.LABEL} (user {uid})"})
+            g = (res or {}).get("rule_grant") or {} if isinstance(res, dict) else {}
+            n = len(g.get("released") or [])
+            return f"Đã cho phép — không hỏi lại luật {g.get('rule') or '?'}" + (f" (+{n} yêu cầu đang chờ)" if n else "") + ".", None, None
         if action == "dn":
             await self.call(cid, "approval.deny", {"id": approval_id, "channel": ch, "by": "user", "note": f"từ chối qua {self.LABEL} (user {uid})"})
             return "Đã từ chối.", None, None

@@ -283,9 +283,12 @@ def test_wt8_agent_result_framed_cannot_fake_system_message(hub_home):
     h.store.close()
 
 
+RULE_BTN = "Không hỏi lại luật này…"  # approval có luật → nút "không hỏi lại agent này với luật này" (guard.rule_grant)
+
+
 def approval_sys_msg(tg: FakeTelegram, chat: int, aid: str):
     """Tin HỆ THỐNG có nút Cho phép/Từ chối của approval (tin gọn không in id → tra qua nút)."""
-    return tg.msg_for(chat, aid, ["Cho phép", "Từ chối"])
+    return tg.msg_for(chat, aid, ["Cho phép", "Từ chối", RULE_BTN])
 
 
 def content_msgs(tg: FakeTelegram, chat: int, aid: str):
@@ -354,7 +357,7 @@ async def test_heavy_destructive_needs_two_step_confirm_and_cancel(make, tg):
     # Huỷ → vẫn chờ, tin hệ thống trở lại nút duyệt (nút MỚI), không gửi thêm tin
     await press(tg, BOSS, b2[1]["callback_data"])
     assert d.hub.approvals.get(ap["id"])["status"] == "open"
-    again = tg.with_buttons(BOSS, ["Cho phép", "Từ chối"])
+    again = tg.with_buttons(BOSS, ["Cho phép", "Từ chối", RULE_BTN])
     assert again is not msg and again in tg.edits(BOSS) and len(tg.sent(BOSS)) == n_sent
     assert FakeTelegram.buttons(again)[0]["callback_data"] != FakeTelegram.buttons(msg)[0]["callback_data"]
     await approve_2step(tg, BOSS, again)
@@ -549,7 +552,7 @@ async def test_always_button_only_when_eligible_and_two_step(make, tg):
     rid = await held_run(d)
     bad = open_approval(d, rid)  # destructive → KHÔNG có nút luôn cho phép
     ok = open_uncertain(d, rid)
-    msg = await until(lambda: sys_msg_with(tg, BOSS, ok["id"], ["Cho phép", "Từ chối", "Luôn cho phép…"]))
+    msg = await until(lambda: sys_msg_with(tg, BOSS, ok["id"], ["Cho phép", "Từ chối", "Luôn cho phép…", RULE_BTN]))
     assert "Luôn cho phép" in msg["text"] and UNCERTAIN_CMD not in msg["text"]  # tin có nút: chỉ chữ hub
     await until(lambda: approval_sys_msg(tg, BOSS, bad["id"]))
     assert not any("Luôn" in b["text"] for b in FakeTelegram.buttons(approval_sys_msg(tg, BOSS, bad["id"])))
@@ -591,4 +594,22 @@ async def test_always_forged_or_ineligible_callback_rejected(make, tg):
     assert d.hub.approvals.get(bad["id"])["status"] == "open"  # không quyết gì
     assert d.hub.guard.policy()["always_allow"] == []
     assert any(b["text"].startswith("Lỗi") for b in tg.calls_of("answerCallbackQuery"))
+    await stop(d)
+
+
+async def test_rule_grant_button_two_steps(make, tg):
+    d = await make(runtime=FakeRuntime(hold=True))
+    rid = await held_run(d)
+    ap = open_approval(d, rid)  # destructive — "luôn cho phép" không có, "không hỏi lại luật" có
+    msg = await until(lambda: approval_sys_msg(tg, BOSS, ap["id"]))
+    assert "Không hỏi lại luật này" in msg["text"]
+    await press(tg, BOSS, FakeTelegram.buttons(msg)[2]["callback_data"])
+    assert d.hub.approvals.get(ap["id"])["status"] == "open" and d.hub.guard.rule_grants() == {}
+    step2 = tg.with_buttons(BOSS, ["Xác nhận — không hạn", "Xác nhận — 8 giờ", "Huỷ"])
+    assert step2 is not None and ap["matched_rule"] in step2["text"] and "kể cả thao tác phá huỷ" in step2["text"]
+    await press(tg, BOSS, FakeTelegram.buttons(step2)[1]["callback_data"])
+    got = d.hub.approvals.get(ap["id"])
+    assert got["status"] == "allowed" and got["resolved_channel"] == f"telegram:{BOSS}"
+    g = d.hub.guard.rule_grants()[got["agent_id"]][ap["matched_rule"]]
+    assert g["until"] and g["channel"] == f"telegram:{BOSS}"
     await stop(d)

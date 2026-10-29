@@ -845,3 +845,28 @@ async def test_slack_connect_wizard(env, monkeypatch):
     assert "đã kết nối" in r.text and "abcSECRETxyz" not in r.text
     assert audit_rows(env, "secret.set")[-1]["channel"] == "web"
     assert "abcSECRETxyz" not in json.dumps([dict(x) for x in env.hub.store.conn.execute("SELECT * FROM audit_log").fetchall()], default=str)
+
+
+async def test_rule_grant_button_two_steps_and_duration(held):
+    env = held
+    await env.login()
+    run = await running_run(env)
+    ap = open_approval(env.hub, run["id"])  # destructive, có luật
+    other = open_approval(env.hub, run["id"])
+    rule = ap["matched_rule"]
+    assert rule
+    html = (await env.client.get("/approvals")).text
+    assert re.findall(r'<form method="post" action="/do/approve_rule".*?</form>', html, re.S)
+    # bước 1 = trang bước 2 (chọn thời hạn), chưa quyết gì
+    r = await env.post("/do/approve_rule", {"id": ap["id"], "next": "/approvals"})
+    assert r.status_code == 200 and "luôn cho phép theo luật" in r.text and 'name="grant_for"' in r.text and rule in r.text
+    assert env.key not in r.text and env.hub.approvals.get(ap["id"])["status"] == "open" and env.hub.guard.rule_grants() == {}
+    r = await env.post("/do/approve_rule", {"id": ap["id"], "grant_for": "bogus", "confirm": "yes", "confirm2": "yes", "next": "/approvals"})
+    assert r.status_code == 303 and env.hub.approvals.get(ap["id"])["status"] == "open"
+    r = await env.post("/do/approve_rule", {"id": ap["id"], "grant_for": "8h", "confirm": "yes", "confirm2": "yes", "next": "/approvals"})
+    assert r.status_code == 303
+    got = env.hub.approvals.get(ap["id"])
+    assert got["status"] == "allowed" and got["resolved_channel"] == "web"
+    g = env.hub.guard.rule_grants()[run["agent_id"]][rule]
+    assert g["until"] and g["channel"] == "web" and g["approval_id"] == ap["id"]
+    assert env.hub.approvals.get(other["id"])["status"] == "allowed"

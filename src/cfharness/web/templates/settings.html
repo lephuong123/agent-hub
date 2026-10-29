@@ -16,6 +16,18 @@
     </div>
   {% endif %}
 </section>
+<section class="card {{ 'attention' if gates != 'human' }}" id="gates">
+  <h2>{{ m.icon('shield') }} Cổng duyệt (toàn hệ thống)</h2>
+  <p>Đang: <span class="pill {{ 'ok' if gates == 'human' else 'warn' }} strong">{{ {'human': 'Người duyệt', 'manager': 'Điều phối viên duyệt', 'off': 'Tắt hết'}[gates] }}</span></p>
+  <p class="muted small">Một công tắc cho mọi chỗ agent phải chờ: duyệt thao tác phá huỷ, task bị chặn chờ chủ xác nhận, câu hỏi, điều phối viên xin phép.
+    <b>Điều phối viên duyệt</b> = nó quyết thay bạn (kể cả push/deploy), báo lý do; <b>Tắt hết</b> = hub tự cho phép mọi thao tác lẽ ra phải hỏi.
+    Forbidden (agent tự duyệt, sửa chính sách), ESTOP, sandbox vẫn giữ. CLI: <code>cfharness gates human|manager|off</code>.</p>
+  <div class="row gap wrap-row">
+    {% for k, label in (('human', 'Người duyệt'), ('manager', 'Điều phối viên duyệt'), ('off', 'Tắt hết')) %}{% if k != gates %}
+    {{ m.act("gates_set", label, {"mode": k}, "btn " ~ ('primary' if k == 'human' else 'danger' if k == 'off' else ''), next="/settings#gates") }}
+    {% endif %}{% endfor %}
+  </div>
+</section>
 <section class="card" id="config">
   <h2>{{ m.icon('settings') }} Cấu hình hệ thống</h2>
   <p class="muted small">Đổi có hiệu lực ngay và được ghi nhật ký. Mục có danh sách giá trị cố định chọn bằng dropdown.</p>
