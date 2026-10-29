@@ -50,7 +50,7 @@ async def test_image_and_text_file_go_to_manager(make, sk):
                         text="xem giúp ảnh và ghi chú")
     await deliver(sk, eid)
     run = (await until(lambda: boss_runs(d)))[0]
-    assert "xem giúp ảnh và ghi chú" in run["prompt"] and "Read tool" in run["prompt"] and "text file(s)" in run["prompt"]
+    assert "xem giúp ảnh và ghi chú" in run["prompt"] and "Read tool" in run["prompt"] and "file(s), saved in your working directory" in run["prompt"]
     files = attachments_of(run)
     assert any(f.name.startswith("img-") and f.read_bytes() == PNG for f in files)
     assert any(f.name.startswith("doc-") and f.read_text(encoding="utf-8").startswith("# Kế hoạch") for f in files)
@@ -75,11 +75,11 @@ async def test_stranger_files_never_downloaded(make, sk):
 
 async def test_oversize_and_unsupported_rejected_before_download(make, sk):
     d = await mk(make, sk)
-    eid = sk.user_files(DM_BOSS, BOSS, [("to.png", PNG, "image/png"), ("bao-cao.pdf", b"%PDF-1.7 ...", "application/pdf"),
+    eid = sk.user_files(DM_BOSS, BOSS, [("to.png", PNG, "image/png"), ("cai-dat.exe", b"MZ\x90\x00binary", "application/octet-stream"),
                                          ("big.txt", b"x" * 2_000_000, "text/plain")], sizes={"to.png": 6 * 1024 * 1024}, text="xem")
     await deliver(sk, eid)
     err = await until(lambda: errors_text(sk))
-    assert "to.png" in err and "quá lớn" in err and "bao-cao.pdf" in err and "chưa hỗ trợ loại tệp" in err and "big.txt" in err
+    assert "to.png" in err and "quá lớn" in err and "cai-dat.exe" in err and "chưa hỗ trợ loại tệp" in err and "big.txt" in err
     assert sk.downloaded() == [] and not boss_runs(d)
 
 
@@ -115,7 +115,7 @@ async def test_download_url_outside_slack_rejected(make, sk):
 
 async def test_file_names_escaped_in_rejection(make, sk):
     await mk(make, sk)
-    eid = sk.user_files(DM_BOSS, BOSS, [("<!channel> <@U1>.pdf", b"%PDF", "application/pdf")])
+    eid = sk.user_files(DM_BOSS, BOSS, [("<!channel> <@U1>.exe", b"MZ", "application/octet-stream")])
     await deliver(sk, eid)
     err = await until(lambda: errors_text(sk))
     assert "<!channel>" not in err and "<@U1>" not in err and "&lt;!channel&gt;" in err

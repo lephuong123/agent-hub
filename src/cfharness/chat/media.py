@@ -10,7 +10,8 @@ VÀO (người → điều phối viên) — Telegram:
 - Ảnh (`photo` — lấy cỡ LỚN NHẤT; hoặc `document` là ảnh PNG/JPEG/GIF/WebP) ≤ 5 MB, ≤ 4 ảnh/tin (cùng giới hạn TUI,
   `manager/attachments.py`); định dạng kiểm lại theo magic bytes ở daemon (`manager.chat`).
 - Tệp VĂN BẢN khác (`document`: text/*, JSON, YAML, CSV, mã nguồn…) ≤ `notify.telegram.document_max_bytes`, UTF-8, không NUL, ≤ 4/tin.
-  PDF/Office/nhị phân → từ chối kèm lời giải thích (chưa hỗ trợ).
+- Tài liệu PDF/Office (xlsx/docx/pptx/xls/doc/ppt/ODF) cùng trần; daemon nhận diện lại theo nội dung (`manager/doc_extract.py`) và
+  trích bản đọc được. Nhị phân khác → từ chối kèm lời giải thích (chưa hỗ trợ).
 - Album (`media_group_id`) → gom trong `media_group_wait_s` thành MỘT tin; chú thích (caption) = nội dung tin.
 - Tin thoại/âm thanh/video tròn → trả lời lịch sự là chưa hỗ trợ (chưa có chuyển giọng nói thành chữ).
 - Gửi qua `bot.manager.handle_text(images=…, files=…)` → `bot.call("manager.chat")` (cổng người + audit kênh telegram).
@@ -162,16 +163,22 @@ def is_image_file(mime: Any, name: Any) -> bool:
     return m in IMAGE_MIMES or (not m.startswith("image/svg") and _ext(str(name or "")) in IMAGE_SUFFIXES)
 
 
+def is_doc_file(name: Any) -> bool:
+    from ..manager.doc_extract import DOC_SUFFIXES
+
+    return _ext(str(name or "")) in DOC_SUFFIXES
+
+
 def classify(mime: Any, name: Any) -> str | None:
-    """"image" | "file" (văn bản) | None (chưa hỗ trợ) — cùng quy tắc mọi kênh."""
+    """"image" | "file" (văn bản hoặc tài liệu PDF/Office) | None (chưa hỗ trợ) — cùng quy tắc mọi kênh."""
     if is_image_file(mime, name):
         return "image"
-    if is_text_file(mime, name):
+    if is_text_file(mime, name) or is_doc_file(name):
         return "file"
     return None
 
 
-UNSUPPORTED = "chưa hỗ trợ loại tệp này (chỉ ảnh PNG/JPEG/GIF/WebP và tệp văn bản)"
+UNSUPPORTED = "chưa hỗ trợ loại tệp này (chỉ ảnh PNG/JPEG/GIF/WebP, tệp văn bản và PDF/Excel/Word/PowerPoint)"
 
 
 def _b64(name: str, data: bytes) -> dict[str, str]:
@@ -206,7 +213,11 @@ class MediaBase:
 
     # ------------------------------------------------------------------ vào
     async def collect(self, items: list[MediaItem], errors: list[str]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-        """Kiểm số lượng + cỡ khai báo TRƯỚC khi tải, tải (đếm `downloads`), kiểm văn bản UTF-8/không NUL → ([ảnh], [tệp]) dạng b64."""
+        """Kiểm số lượng + cỡ khai báo TRƯỚC khi tải, tải (đếm `downloads`), kiểm văn bản UTF-8/không NUL hoặc tài liệu
+        PDF/Office theo nội dung → ([ảnh], [tệp]) dạng b64."""
+        from ..manager.doc_extract import doc_ext
+        from ..manager.service import is_text_bytes
+
         doc_cap = self.doc_cap()
         images: list[dict[str, str]] = []
         files: list[dict[str, str]] = []
@@ -228,15 +239,9 @@ class MediaBase:
             except self.fetch_errors as e:
                 errors.append(f"{name}: không tải được ({clip(e, 120)})")
                 continue
-            if kind == "file":
-                if b"\x00" in data:
-                    errors.append(f"{name}: không phải tệp văn bản (UTF-8)")
-                    continue
-                try:
-                    data.decode("utf-8")
-                except UnicodeDecodeError:
-                    errors.append(f"{name}: không phải tệp văn bản (UTF-8)")
-                    continue
+            if kind == "file" and not doc_ext(name, data) and not is_text_bytes(data):
+                errors.append(f"{name}: không phải tệp văn bản (UTF-8) hay PDF/Office hợp lệ")
+                continue
             lst.append(_b64(name, data))
         return images, files
 

@@ -59,7 +59,7 @@ async def test_text_document_saved_and_announced(make, tg):
     files = attachments_of(run)
     assert len(files) == 1 and files[0].name.startswith("doc-") and files[0].name.endswith("-ghi_chu.md")
     assert files[0].read_text(encoding="utf-8").startswith("# Kế hoạch")
-    assert "text file(s)" in run["prompt"] and f"attachments/{files[0].name}" in run["prompt"]
+    assert "file(s), saved in your working directory" in run["prompt"] and f"attachments/{files[0].name}" in run["prompt"]
 
 
 async def test_image_document_is_image(make, tg):
@@ -116,7 +116,7 @@ async def test_oversize_and_unsupported_rejected_before_download(make, tg):
     d = await mk(make)
     await push(tg, BOSS, photo=JPG, declared_size=6 * 1024 * 1024)
     await until(lambda: any("quá lớn" in t for t in texts(tg, BOSS)))
-    await push(tg, BOSS, document=("bao-cao.pdf", b"%PDF-1.7 ...", "application/pdf"), caption="xem pdf")
+    await push(tg, BOSS, document=("cai-dat.exe", b"MZ\x90\x00binary", "application/octet-stream"), caption="xem exe")
     await until(lambda: any("chưa hỗ trợ loại tệp" in t for t in texts(tg, BOSS)))
     assert tg.calls_of("getFile") == [] and not boss_runs(d)
     # tài liệu văn bản vượt `document_max_bytes`
@@ -233,3 +233,17 @@ def test_decode_files_validation():
 def test_files_convention_only_in_telegram_prompt():
     assert "[[file:" in prompts.chat_prompt("telegram:111", "mc_1", "hi")
     assert "[[file:" not in prompts.chat_prompt("cli", "mc_1", "hi")
+
+
+async def test_office_and_pdf_documents_saved_with_readable_copy(make, tg):
+    from test_doc_extract import XLSX
+
+    d = await mk(make)
+    await push(tg, BOSS, document=("Rà soát.xlsx", XLSX, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+               caption="xem sheet 3. B1_KhoiLuong")
+    run = (await until(lambda: boss_runs(d)))[0]
+    names = [f.name for f in attachments_of(run)]
+    orig = next(n for n in names if n.endswith("-Ra_soat.xlsx"))
+    sheet = next(f for f in attachments_of(run) if f.name.endswith(".2-3._B1_KhoiLuong.csv"))
+    assert sheet.name.startswith(orig) and "Đào móng" in sheet.read_text(encoding="utf-8")
+    assert f"attachments/{orig}" in run["prompt"] and f"attachments/{sheet.name}" in run["prompt"] and "Excel row number" in run["prompt"]

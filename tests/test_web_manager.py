@@ -198,10 +198,34 @@ async def test_send_with_image_and_text_file_attachments(menv):
     assert seen[-1]["text"] == "" and len(seen[-1]["images"]) == 1 and "files" not in seen[-1]
 
 
+async def test_office_document_attachment_forwarded(menv):
+    from test_doc_extract import XLSX
+
+    await menv.login()
+    await designate(menv)
+    seen: list[dict] = []
+    orig = menv.d.methods["manager.chat"]
+
+    def spy(p):
+        seen.append(dict(p))
+        return orig({k: v for k, v in p.items() if k != "files"})
+
+    menv.d.methods["manager.chat"] = spy
+    r = await post_files(menv, [("Rà soát.xlsx", XLSX, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+                                ("bao-cao.pdf", b"%PDF-1.7\n\x00\xff binary", "application/pdf")], text="File này")
+    assert r.status_code == 200, r.text
+    assert "Rà soát.xlsx" in r.json()["html_user"]
+    assert [f["name"] for f in seen[-1]["files"]] == ["Rà soát.xlsx", "bao-cao.pdf"]
+    assert base64.b64decode(seen[-1]["files"][0]["data_b64"]) == XLSX
+
+
 async def test_unsupported_or_oversized_attachment_rejected_before_daemon(menv):
     await menv.login()
     await designate(menv)
-    r = await post_files(menv, [("bao-cao.pdf", b"%PDF-1.7\n\x00\xff\xfe binary", "application/pdf")], text="đọc giúp")
+    r = await post_files(menv, [("cai-dat.exe", b"MZ\x90\x00\xff\xfe binary", "application/octet-stream")], text="đọc giúp")
+    assert r.status_code == 400 and "chưa hỗ trợ" in r.json()["error"]
+    # đuôi .xlsx nhưng nội dung không phải zip Office → từ chối (không tin đuôi)
+    r = await post_files(menv, [("gia.xlsx", b"\x00\x01 not a zip", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")])
     assert r.status_code == 400 and "chưa hỗ trợ" in r.json()["error"]
     # đuôi .png nhưng nội dung không phải ảnh, cũng không phải UTF-8 → từ chối (phân loại theo nội dung, không theo tên)
     r = await post_files(menv, [("gia.png", b"\xff\x00\x01 nope", "image/png")])
