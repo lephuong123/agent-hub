@@ -110,6 +110,8 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
     )),
     ("learning", "Học & đánh giá", (
         _s("learning.review_budget_usd", "Trần chi phí review học ($)", "float", "để trống = không trần riêng", nullable=True, min=0),
+        _s("learning.review_budget_max_usd", "Trần tối đa review học kể cả nạp lại ngữ cảnh ($)", "float", "để trống = không chặn trên",
+           nullable=True, min=0),
         _s("learning.review_model", "Model review", "choice", "mặc định = cùng model với run gốc (giữ cache)", choices=MODELS, nullable=True),
         _s("learning.review_scope", "Phạm vi review", "choice", choices=("combined", "skill", "memory")),
         _s("learning.review_max_per_agent_per_day", "Review tối đa / agent / ngày", "int", min=0),

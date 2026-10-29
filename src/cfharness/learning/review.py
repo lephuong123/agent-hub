@@ -12,8 +12,17 @@ KHÔNG bị review chặn (review không tính vào `max_concurrent_runs` của 
 Review = Run `kind=review`: `claude -p <prompt Hermes + Signal> --resume <session nguồn> --fork-session --session-id <mới>`
 (cùng model, cùng system prompt của session → cache; persistence ở session MỚI, session gốc không đổi), `--tools
 Read,Grep,Glob`, `--permission-prompts none`, `--strict-mcp-config` + chỉ MCP `hub-self` vai trò `learning` (tool
-propose_* — không ghi file), `--max-budget-usd learning.review_budget_usd`. Proposal được pipeline tự áp dụng ngay khi tool
-được gọi. Hết ngân sách → run `budget_exceeded`, proposal đã gửi vẫn giữ.
+propose_* — không ghi file), `--max-budget-usd` = `learning.review_budget_usd` (phần khám phá) + chi phí ƯỚC TÍNH nạp lại ngữ
+cảnh session gốc (lượt API đầu của fork ghi lại cả ngữ cảnh vào cache: token ngữ cảnh lần cuối của session ×
+`learning.review_reload_usd_per_mtok`), chặn trên bởi `learning.review_budget_max_usd`. Proposal được pipeline tự áp dụng ngay
+khi tool được gọi. Hết ngân sách → run `budget_exceeded`, proposal đã gửi vẫn giữ.
+
+Kết thúc không trọn (không tiêu Signal của job khi chưa review xong):
+- `rate_limited` → job xếp hàng lại sau `learning.review_retry_backoff_s` (nhân đôi mỗi lần, ≤ 1 giờ), tối đa
+  `learning.review_rate_limit_retries` lần; quá trần → `failed` nhưng Signal VẪN chưa xử lý (review sau nhặt lại).
+- `budget_exceeded` CHƯA có proposal nào → thử lại tối đa `learning.review_budget_retries` lần với trần = `review_budget_max_usd`;
+  quá trần → `failed` + Signal đánh dấu đã xử lý (chống vòng lặp tốn tiền). Có proposal rồi → `done` như cũ.
+Lịch sử từng lần thử ở `review_jobs.result.attempts`.
 """
 
 from __future__ import annotations
@@ -232,11 +241,9 @@ class ReviewScheduler:
         prompt = render_review_prompt(scope=str(self.cfg("review_scope") or "combined"), signals=signals, focus=job.get("focus"))
         model = self.cfg("review_model") or src.get("model")
         opts = {"fork": True, "learning_review": True, "read_only": True, "review_job_id": job["id"], "source_run_id": src["id"]}
-        # learning.review_budget_usd: chưa đặt → mặc định 0.20 (DEFAULTS); null = không trần riêng cho review (như run thường:
-        # theo limits của agent / runs.default_max_budget_usd / phần còn lại ngân sách ngày; tất cả trống → không --max-budget-usd)
-        rb = self.cfg("review_budget_usd")
+        budget = self.review_budget(src, retry_after_budget=any(a.get("outcome") == "budget_exceeded" for a in self._attempts(job)))
         try:
-            run = self.hub.runs.submit(agent_id, prompt, cwd=src.get("cwd"), budget_usd=float(rb) if rb else None, model=model,
+            run = self.hub.runs.submit(agent_id, prompt, cwd=src.get("cwd"), budget_usd=budget, model=model,
                                        kind="review", resume_session_id=src["session_id"], run_opts=opts,
                                        max_runtime_s=float(self.cfg("review_timeout_s") or 600))
         except HubError as e:
@@ -248,6 +255,81 @@ class ReviewScheduler:
         self.hub.publish(make_event("review.started", agent_id, {"review_id": job["id"], "run_id": run["id"], "trigger": job["trigger"], "source_run_id": src["id"],
                                                                  "source_session_id": src["session_id"], "signals": [s["id"] for s in signals]}, run_id=run["id"]))
         return run["id"]
+
+    # ------------------------------------------------------------------ ngân sách
+    @staticmethod
+    def _run_context_tokens(run: dict[str, Any]) -> int:
+        """Ước lượng cỡ ngữ cảnh (token) của session lúc run kết thúc. `runs.usage` có thể bằng 0 → ưu tiên `model_usage`
+        (số thật theo model). Số là LUỸ KẾ cả run: lấy max(input + cache_creation, tổng/num_turns)."""
+        mu = run.get("model_usage") or {}
+        inp = cr = cc = 0
+        for m in (mu.values() if isinstance(mu, dict) else []):
+            if not isinstance(m, dict):
+                continue
+            inp += int(m.get("inputTokens") or m.get("input_tokens") or 0)
+            cr += int(m.get("cacheReadInputTokens") or m.get("cache_read_input_tokens") or 0)
+            cc += int(m.get("cacheCreationInputTokens") or m.get("cache_creation_input_tokens") or 0)
+        if inp + cr + cc == 0:
+            u = run.get("usage") or {}
+            if isinstance(u, dict):
+                inp = int(u.get("input_tokens") or 0)
+                cr = int(u.get("cache_read_input_tokens") or 0)
+                cc = int(u.get("cache_creation_input_tokens") or 0)
+        total = inp + cr + cc
+        if total == 0:
+            return 0
+        return max(inp + cc, total // max(1, int(run.get("num_turns") or 1)))
+
+    def context_tokens(self, src: dict[str, Any]) -> int:
+        """Token ngữ cảnh lần cuối biết được của session nguồn: run nguồn, không có số thì run trước đó cùng session."""
+        t = self._run_context_tokens(src)
+        if t or not src.get("session_id"):
+            return t
+        for r in self.conn.execute("SELECT id FROM runs WHERE session_id=? AND id!=? ORDER BY queued_at DESC LIMIT 5", (src["session_id"], src["id"])).fetchall():
+            t = self._run_context_tokens(self.hub.store.get_run(r[0]) or {})
+            if t:
+                return t
+        return 0
+
+    def review_budget(self, src: dict[str, Any], *, retry_after_budget: bool = False) -> float | None:
+        """--max-budget-usd của review fork. `review_budget_usd` null → None (không trần riêng, như run thường: limits của agent /
+        runs.default_max_budget_usd / phần còn lại ngân sách ngày). Ngược lại = base + nạp lại ngữ cảnh, chặn trên ở
+        `review_budget_max_usd` (không bao giờ dưới base). Lần thử lại sau `budget_exceeded` → dùng thẳng trần."""
+        base = self.cfg("review_budget_usd")
+        if not base:
+            return None
+        base = float(base)
+        mx = self.cfg("review_budget_max_usd")
+        rate = float(self.cfg("review_reload_usd_per_mtok") or 0)
+        want = base + self.context_tokens(src) / 1_000_000 * rate
+        if retry_after_budget:
+            want = float(mx) if mx else want * 2
+        if mx:
+            want = min(want, float(mx))
+        return round(max(base, want), 4)
+
+    def _attempts(self, job: dict[str, Any]) -> list[dict[str, Any]]:
+        res = job.get("result") if isinstance(job.get("result"), dict) else {}
+        return list((res or {}).get("attempts") or [])
+
+    def _requeue(self, job: dict[str, Any], attempts: list[dict[str, Any]], delay_s: float, reason: str) -> str:
+        """Xếp job lại hàng (Signal giữ nguyên, chưa xử lý). Agent đã có job queued khác → gộp Signal + lịch sử thử vào đó."""
+        nb = _utc_in(delay_s)
+        q = self.conn.execute("SELECT id FROM review_jobs WHERE agent_id=? AND status='queued' AND id!=? ORDER BY created_at LIMIT 1",
+                              (job["agent_id"], job["id"])).fetchone()
+        if q is not None:
+            other = self.get(q[0])
+            sids = list(dict.fromkeys(list(other.get("signal_ids") or []) + list(job.get("signal_ids") or [])))
+            self.hub.store._update("review_jobs", "id", other["id"], {"signal_ids": sids, "not_before": max(other.get("not_before") or "", nb),
+                                                                     "result": {"attempts": self._attempts(other) + attempts}, "updated_at": now_iso()})
+            self._end(job, "cancelled", reason=f"{reason} — gộp vào {other['id']}", result={"attempts": attempts})
+            target = other["id"]
+        else:
+            self.hub.store._update("review_jobs", "id", job["id"], {"status": "queued", "run_id": None, "not_before": nb, "reason": reason,
+                                                                   "result": {"attempts": attempts}, "updated_at": now_iso()})
+            target = job["id"]
+        self._kick(delay_s)
+        return target
 
     def _end(self, job: dict[str, Any], status: str, *, reason: str | None = None, result: dict[str, Any] | None = None, cost: float | None = None) -> None:
         self.hub.store._update("review_jobs", "id", job["id"], {"status": status, "reason": reason, "result": result, "cost_usd": cost, "ended_at": now_iso(), "updated_at": now_iso()})
@@ -262,11 +344,30 @@ class ReviewScheduler:
         props = [{k: p.get(k) for k in ("id", "status", "target", "op", "target_ref", "risk_class", "block_reason")}
                  for p in (self.hub.store._row("proposals", x) for x in self.conn.execute("SELECT * FROM proposals WHERE review_job_id=? ORDER BY created_at", (job["id"],)))]
         outcome = run.get("outcome") or run.get("status")
-        status = "done" if outcome in ("completed", "budget_exceeded") else "failed"
-        self.svc.signals.mark_processed(list(job.get("signal_ids") or []), job["id"])
-        self.svc.read_marks.pop(run["id"], None)
-        self._end(job, status, reason=None if status == "done" else (run.get("error") or outcome), result={"outcome": outcome, "proposals": props,
-                  "summary": (run.get("summary") or "")[:1000]}, cost=run.get("cost_usd"))
+        self.svc.read_marks.pop(run["id"], None)  # proposal đã lưu bằng chứng đọc của chính nó (pipeline._was_read)
+        attempts = self._attempts(job) + [{"run_id": run["id"], "outcome": outcome, "cost_usd": run.get("cost_usd"), "proposals": len(props)}]
+        total_cost = round(sum(float(a.get("cost_usd") or 0) for a in attempts), 6)
+        retry_of = outcome if outcome == "rate_limited" or (outcome == "budget_exceeded" and not props) else None
+        exhausted = None
+        if retry_of:
+            n = sum(1 for a in attempts if a.get("outcome") == retry_of)
+            cap = int(self.cfg("review_rate_limit_retries" if retry_of == "rate_limited" else "review_budget_retries") or 0)
+            if n <= cap:
+                base = float(self.cfg("review_retry_backoff_s") or 0)
+                delay = min(3600.0, base * (2 ** (n - 1))) if retry_of == "rate_limited" else float(self.cfg("review_debounce_s") or 0)
+                why = f"{retry_of} — thử lại lần {n}/{cap}"
+                target = self._requeue(job, attempts, delay, why)
+                self.hub.publish(make_event("review.completed", job["agent_id"], {"review_id": job["id"], "run_id": run["id"], "outcome": outcome, "proposals": props,
+                                                                                  "cost_usd": run.get("cost_usd"), "requeued": target, "retry": n}, run_id=run["id"]))
+                return
+            exhausted = f"{retry_of} sau {n} lần thử"
+        status = "done" if outcome == "completed" or (outcome == "budget_exceeded" and props) else "failed"
+        if outcome != "rate_limited":
+            # rate limit là lỗi tạm thời của nhà cung cấp: Signal giữ nguyên cho review sau (không đánh rơi). Các kết thúc khác
+            # (kể cả budget_exceeded hết lượt thử) tiêu Signal — tránh vòng review lặp lại tốn tiền trên cùng tín hiệu.
+            self.svc.signals.mark_processed(list(job.get("signal_ids") or []), job["id"])
+        self._end(job, status, reason=None if status == "done" else (exhausted or run.get("error") or outcome),
+                  result={"outcome": outcome, "proposals": props, "summary": (run.get("summary") or "")[:1000], "attempts": attempts}, cost=total_cost)
         self.hub.publish(make_event("review.completed", job["agent_id"], {"review_id": job["id"], "run_id": run["id"], "outcome": outcome, "proposals": props,
                                                                           "cost_usd": run.get("cost_usd")}, run_id=run["id"]))
 

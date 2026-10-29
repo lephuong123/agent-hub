@@ -40,6 +40,8 @@ system = opt("--append-system-prompt") or opt("--system-prompt") or ""
 mcp_cfg = json.loads(Path(opt("--mcp-config")).read_text(encoding="utf-8")) if opt("--mcp-config") else {"mcpServers": {}}
 tools = (opt("--tools") or "Bash,Read,Write,Edit").split(",") if "--tools" in args else ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
 mcp_names = list(mcp_cfg.get("mcpServers", {}))
+# như CLI thật: `--chrome` nạp server động claude-in-chrome (không nằm trong --mcp-config)
+init_mcp = mcp_names + (["claude-in-chrome"] if "--chrome" in args else [])
 costs_f = proj / "costs.json"
 costs = json.loads(costs_f.read_text(encoding="utf-8")) if costs_f.exists() else {}
 
@@ -59,7 +61,7 @@ with open(tr, "a", encoding="utf-8") as f:
     f.write(json.dumps({"type": "user", "content": prompt[:500]}) + "\n")
 
 out({"type": "system", "subtype": "init", "model": opt("--model") or "claude-haiku-5-5", "cwd": os.getcwd(), "tools": tools + [f"mcp__{n}__x" for n in mcp_names],
-     "mcp_servers": [{"name": n, "status": "connected"} for n in mcp_names], "plugins": [], "memory_paths": None, "claude_code_version": "2.1.302",
+     "mcp_servers": [{"name": n, "status": "connected"} for n in init_mcp], "plugins": [], "memory_paths": None, "claude_code_version": "2.1.302",
      "permissionMode": opt("--permission-mode") or "default", "argv": args})
 
 
