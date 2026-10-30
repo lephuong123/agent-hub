@@ -525,7 +525,10 @@ class RunManager:
         if (run.get("task_id") or is_mgr) and opts.get("hub_self"):
             from .mcp_server.hub_self import SERVER_NAME, server_entry
 
-            servers[SERVER_NAME] = server_entry(run_id, hub.paths.socket, hub.paths.home, str(opts["hub_self"]), guard_cfg)
+            from .learning.runtime import memory_scopes
+
+            servers[SERVER_NAME] = server_entry(run_id, hub.paths.socket, hub.paths.home, str(opts["hub_self"]), guard_cfg,
+                                                memory_scopes=memory_scopes(hub, agent))
             allowed_mcp.append(SERVER_NAME)
             tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + [f"mcp__{SERVER_NAME}"]))
             env_extra = {**env_extra, "CFHARNESS_RUN_ID": run_id}

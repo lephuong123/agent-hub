@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..errors import HubError, NotFound
+from ..errors import Blocked, HubError, NotFound
 from ..events import TERMINAL_RUN_EVENTS, HubEvent, make_event
 from .canary import CanaryManager
 from .guard import LearningGuard
@@ -228,22 +228,79 @@ class LearningService:
             return self.pipeline.propose(target="config", op="patch", payload={"changes": ch, "soul": args.get("soul")}, **common)
         raise HubError(f"op không hỗ trợ: {op}")
 
+    def memory_scopes(self, agent_id: str) -> list[str]:
+        """Tầng tool `memory` của agent được ghi: luôn `agent`; `team` khi là lead của một team (chỉ team mình lead), điều phối viên
+        hoặc policy `agents.<id>.shared_memory_write`; `global` (kể cả USER dùng chung) chỉ điều phối viên hoặc policy. Daemon là ranh
+        giới — schema tool chỉ ẩn/hiện `scope`."""
+        mgr = getattr(self.hub, "manager", None)
+        if (mgr is not None and mgr.is_manager(agent_id)) or self.policy.shared_memory_write(agent_id):
+            return ["agent", "team", "global"]
+        lead = self.hub.store.conn.execute("SELECT 1 FROM team_members m JOIN teams t ON t.id=m.team_id WHERE m.agent_id=? AND m.role='lead' "
+                                           "AND t.archived_at IS NULL LIMIT 1", (agent_id,)).fetchone()
+        return ["agent", "team"] if lead else ["agent"]
+
+    def _shared_team(self, agent_id: str, team_id: str | None, wide: bool) -> str:
+        """scope=team của tool `memory`: lead chỉ ghi team mình LEAD; điều phối viên/policy ghi mọi team agent thuộc (như review)."""
+        if wide:
+            return self.pipeline._resolve_team(agent_id, team_id)
+        led = [r[0] for r in self.hub.store.conn.execute("SELECT m.team_id FROM team_members m JOIN teams t ON t.id=m.team_id WHERE m.agent_id=? "
+                                                        "AND m.role='lead' AND t.archived_at IS NULL ORDER BY m.team_id", (agent_id,))]
+        if team_id:
+            if team_id not in led:
+                raise Blocked(f"tool memory: '{agent_id}' không phải lead của team '{team_id}' — không ghi được tầng team đó")
+            return team_id
+        if len(led) != 1:
+            raise HubError(f"'{agent_id}' lead {len(led)} team — chỉ rõ team_id")
+        return led[0]
+
     def _agent_memory(self, run: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
-        """Tool `memory` (kiểu Hermes): agent ghi kho CỦA CHÍNH NÓ ngay trong session. Vẫn qua pipeline (guard, threat scan,
-        hạn mức, ledger, rollback) với `created_by=agent`; chỉ tầng agent — tầng team/global vẫn chỉ review đề xuất (L3).
-        Một lời gọi = một proposal = một suất hạn mức; hạn mức ký tự xét trên kết quả cuối của lô. Ghi xuống đĩa ngay nhưng
-        system prompt của session hiện tại KHÔNG đổi (snapshot đóng băng, giữ prompt cache) — kết quả trả trạng thái sống."""
+        """Tool `memory` (kiểu Hermes): agent ghi memory ngay trong session. Vẫn qua pipeline (guard, threat scan, hạn mức ký tự,
+        ledger, rollback) với `created_by=agent`; KHÔNG giới hạn số lần (`rate.agent_tool_max_per_day`, mặc định 0 = không giới hạn).
+        `scope` team/global (`memory_scopes`): áp dụng ngay cho mọi agent của tầng, canary `watch` tự rollback theo mục khi hồi quy.
+        Hạn mức ký tự xét trên kết quả cuối của lô. Ghi xuống đĩa ngay nhưng system prompt của session hiện tại KHÔNG đổi
+        (snapshot đóng băng, giữ prompt cache) — kết quả trả trạng thái sống."""
         opts = run.get("run_opts") or {}
         if run.get("kind") in ("eval", "eval_judge", "curator") or opts.get("eval_overlay"):
             raise HubError("tool memory không dùng được trong run eval/curator", code=-32003)
+        agent_id = run["agent_id"]
         store = "user" if args.get("target") == "user" else "memory"
-        res = self.pipeline.propose(target="memory", op="patch", agent_id=run["agent_id"], scope="agent", run_id=run["id"], created_by="agent",
-                                    payload={"store": store, "operations": _memory_ops(args)}, rationale=str(args.get("rationale") or ""))
-        view = self.hub.knowledge.memory_view(run["agent_id"], store)
+        scope = str(args.get("scope") or "agent")
+        if scope not in ("agent", "team", "global"):
+            raise HubError("scope phải là agent|team|global")
+        allowed = self.memory_scopes(agent_id)
+        if scope not in allowed:
+            raise Blocked(f"tool memory: '{agent_id}' không được ghi tầng {scope} (được: {', '.join(allowed)}) — người bật bằng "
+                          f"`cfharness learn policy set agents.{agent_id}.shared_memory_write true`")
+        common = {"agent_id": agent_id, "run_id": run["id"], "created_by": "agent", "rationale": str(args.get("rationale") or "")}
+        payload = {"store": store, "operations": _memory_ops(args)}
+        owner = None
+        if scope == "agent":
+            res = self.pipeline.propose(target="memory", op="patch", scope="agent", payload=payload, **common)
+        elif store == "user":  # USER dùng chung = một hồ sơ cho mọi agent
+            if scope != "global":
+                raise HubError("hồ sơ người dùng dùng chung chỉ có ở tầng global (scope='global', target='user')")
+            res = self.pipeline.propose(target="user_profile", op="patch", scope="global", payload=payload, **common)
+        else:
+            owner = self._shared_team(agent_id, args.get("team_id"), "global" in allowed) if scope == "team" else None
+            res = self.pipeline.propose(target="memory", op="patch", scope=scope, team_id=owner, payload=payload, **common)
+        ks = self.hub.knowledge
+        if scope == "agent":
+            view = ks.memory_view(agent_id, store)
+        else:
+            from ..knowledge.store import memory_chars
+
+            entries = ks.read_memory(scope, owner, store)
+            view = {"entries": entries, "chars": memory_chars(entries), "limit": ks.memory_limit(scope, store)}
         out: dict[str, Any] = {k: res.get(k) for k in ("status", "reason", "rule", "not_before") if res.get(k) is not None}
-        out.update(target=store, usage=f"{view['chars']}/{view['limit']} chars", entries=view["entries"])
-        if res.get("status") == "applied":
-            out["note"] = "Saved to disk. Your system prompt for this session is unchanged; the change is visible from the next session."
+        if res.get("status") == "canary":  # watch: đã áp dụng cho mọi agent của tầng
+            out["status"] = "applied"
+            out["watch"] = res.get("canary_id")
+        out.update(target=store, scope=scope, usage=f"{view['chars']}/{view['limit']} chars", entries=view["entries"])
+        if owner:
+            out["team_id"] = owner
+        if out.get("status") == "applied":
+            out["note"] = ("Saved to disk. Your system prompt for this session is unchanged; the change is visible from the next session."
+                           + ("" if scope == "agent" else f" Shared with every agent of this {scope} tier; it is watched and rolled back automatically if it causes regressions."))
         return out
 
     # ------------------------------------------------------------------ hợp đồng B

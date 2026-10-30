@@ -23,6 +23,9 @@ Một đích (file memory / cây skill) chỉ có MỘT canary đang chạy; pro
 KHÔNG ghim — áp dụng NGAY cho cả team/mọi agent, mở bản ghi mode **`watch`** (theo dõi mọi agent bị ảnh hưởng). Xấu hơn →
 KHÔNG rollback, chỉ `regression.detected{human_change, source=canary}` (digest + Slack) và kết thúc `warned`. Canary không bao
 giờ rollback entry `actor=user`; `Ledger.rollback(actor="canary")` cũng tự từ chối (H-04).
+
+**Tool `memory` của agent** (`created_by=agent`, kiểu Hermes): cũng `watch` (áp dụng ngay, không eval, không ghim) nhưng hồi quy
+→ TỰ rollback theo mục (memory tầng team/global rollback theo mục — `ledger.is_entry_memory`). Nhiều watch cùng đích chạy song song.
 """
 
 from __future__ import annotations
@@ -86,8 +89,8 @@ class CanaryManager:
                 "sample": max(3, int(g("learning.tier_eval_sample") or 3)), "user_mode": str(g("learning.user_profile_mode") or "shadow")}
 
     def mode_for(self, prop: dict[str, Any]) -> str:
-        if prop.get("created_by") == "user":
-            return "watch"  # thay đổi của người: áp dụng ngay cho mọi agent, chỉ theo dõi + cảnh báo
+        if prop.get("created_by") in ("user", "agent"):
+            return "watch"  # người / tool `memory` của agent: áp dụng ngay cho mọi agent, theo dõi (người: chỉ cảnh báo; agent: tự rollback)
         return "shadow" if prop.get("target") == "user_profile" and self.cfg()["user_mode"] == "shadow" else "canary"
 
     # ------------------------------------------------------------------ agent bị ảnh hưởng
@@ -177,12 +180,12 @@ class CanaryManager:
         return {"status": "deferred_no_eval", "scores": scores, "reason": "; ".join(f"{a}: {v.get('reason')}" for a, v in per.items())[:500]}
 
     # ------------------------------------------------------------------ 2. mở canary/shadow
-    def busy(self, plan: dict[str, Any]) -> dict[str, Any] | None:
+    def busy(self, plan: dict[str, Any], exclude_mode: str | None = None) -> dict[str, Any] | None:
         ch = plan.get("change")
         path = str(getattr(ch, "path", "") or "")
         if not path:
             return None
-        r = self.conn.execute("SELECT * FROM tier_canaries WHERE status='canary' AND path=? LIMIT 1", (path,)).fetchone()
+        r = self.conn.execute("SELECT * FROM tier_canaries WHERE status='canary' AND path=? AND mode IS NOT ? LIMIT 1", (path, exclude_mode)).fetchone()
         return self.hub.store._row("tier_canaries", r) if r else None
 
     def open(self, prop: dict[str, Any], plan: dict[str, Any], verdict: dict[str, Any]) -> str:
@@ -313,9 +316,9 @@ class CanaryManager:
         e = self.svc.ledger.get(c["ledger_entry_id"]) if c.get("ledger_entry_id") else {}
         from .ledger import is_auto_change_actor
 
-        if c["mode"] == "watch" or c.get("created_by") == "user" or (e and not is_auto_change_actor(e.get("actor"))):
+        if c.get("created_by") == "user" or (e and not is_auto_change_actor(e.get("actor"))):
             return self._warn_human(c, viol, win, e)
-        where = f"canary {c['canary_agent_id']}" if c["mode"] == "canary" else "shadow"
+        where = f"canary {c['canary_agent_id']}" if c["mode"] == "canary" else c["mode"]
         reason = f"hồi quy ở {where}: {self._describe(viol)} — rollback trước khi lan"
         try:
             try:

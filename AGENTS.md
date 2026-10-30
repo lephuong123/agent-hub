@@ -229,6 +229,7 @@ Bất biến (thay thế ghi chú M5-A "canary rollback cả thay đổi của n
   Thêm bên gọi tự động mới → thêm vào `AUTO_ROLLBACK_CALLERS` + ca trong `tests/test_hardening_lrn.py`.
 - Rollback cấu hình chỉ khôi phục khoá entry đã đổi (`ledger.config_keys`); "cùng đích" cấu hình = trùng khoá.
 - Proposal tầng team/global/USER `created_by=user` → áp dụng ngay, canary mode `watch` (không ghim, chỉ cảnh báo).
+  `created_by=agent` (tool `memory` có `scope`) → cũng `watch` nhưng hồi quy thì canary TỰ rollback theo mục.
 - Khoá repo giữ ĐỒNG BỘ trong `RunManager.tick` trước `create_task`; dispatcher coi run ghi cùng repo đang xếp hàng là khoá
   (`RunManager.lock_pending`). Không nới `settle` trong test để che race.
 - Ngân sách ngày trừ phần giữ chỗ của run `queued|running` (`RunManager.reserved_budget`).
@@ -493,6 +494,8 @@ Thu hẹp khoảng cách với Hermes (`docs/dev-notes/memory-hermes-gaps.md`): 
 hoặc session > `learning.review_digest_over_tokens` (`ReviewScheduler.digest_for`); quét memory lúc nạp (`prompt_blocks._safe`,
 `threats.scan_load`); guard `format_drift` + `entry_too_long` (`learning.limits.memory_entry_chars`); `MEMORY_GUIDANCE` trong prompt;
 rollback memory tầng agent THEO MỤC (`ledger.invert_memory`, không chuỗi). Test: `tests/test_memory_hermes_gaps.py`.
-Plan ngang Hermes còn lại: `docs/dev-notes/plan-memory-hermes-parity.md`. `session_search` giữ kết quả tool 2.000 ký tự
+Plan ngang Hermes còn lại: `docs/dev-notes/plan-memory-hermes-parity.md`. Tool `memory` không giới hạn số lần
+(`rate.agent_tool_max_per_day`, 0 = không giới hạn, không ăn suất review) và ghi được tầng team/global theo `LearningService.memory_scopes`
+(lead → team mình lead; điều phối viên / policy `agents.<id>.shared_memory_write` → mọi tầng) — test `tests/test_memory_tool_parity.py`. `session_search` giữ kết quả tool 2.000 ký tự
 (`claude_adapter.RESULT_PREVIEW_MAX` = `session_search.TOOL_RESULT_MAX`) và `group` gộp hit theo luồng — mặc định bật cho hub-self + MCP,
 tắt cho RPC `session.search`/CLI (`--group`). Test: `tests/test_session_search.py`.

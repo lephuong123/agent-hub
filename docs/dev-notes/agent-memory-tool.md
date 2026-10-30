@@ -12,9 +12,19 @@ nguyên pipeline an toàn.
   Thao tác như Hermes: `add`, `patch` (old_text là chuỗi con duy nhất của một mục → thay bằng content), `remove`. Không có `replace`.
 - Daemon: `LearningService._agent_memory` → `pipeline.propose(target="memory", scope="agent", created_by="agent", payload.operations)`.
   Guard (threat scan, mệnh lệnh, không phải tiếng Anh, khẳng định tiêu cực, một fact – một kho, pin từng dòng), hạn mức ký tự,
-  rate (`learning.rate.max_changes_per_agent_per_day` — dùng CHUNG suất với review), ledger + rollback như mọi thay đổi do học.
+  ledger + rollback như mọi thay đổi do học. Rate: KHÔNG giới hạn (như Hermes, 2026-10-30) — suất riêng `learning.rate.agent_tool_max_per_day`
+  (policy, mặc định 0 = không giới hạn), không ăn suất review (`max_changes_per_agent_per_day`/`max_team_global_changes_per_day` chỉ đếm
+  `pipeline.QUOTA_ACTORS`). Thứ hãm là trần ký tự kho + `memory_entry_chars`.
 - Lô: áp tuần tự, sai một thao tác → cả lô bị chặn (báo `thao tác #n`). Hạn mức xét trên kết quả cuối, nên khi đầy agent gửi một lô
-  vừa gộp/xoá vừa thêm. Một lô = một proposal = một ledger entry = một suất.
+  vừa gộp/xoá vừa thêm. Một lô = một proposal = một ledger entry.
+- `scope` (2026-10-30): `agent` (mặc định) | `team` | `global`. Ai được (`LearningService.memory_scopes`, daemon là ranh giới):
+  lead → `team` của team mình LEAD (`team_id` khi lead nhiều team); điều phối viên hoặc policy `agents.<id>.shared_memory_write: true`
+  → mọi tầng. `target=user` + `scope=global` = USER dùng chung (`user_profile`). Schema hub-self chỉ hiện `scope` khi được
+  (`server_entry(memory_scopes=…)` → `--memory-scopes`; `hub_self.memory_tool_def`).
+  Tầng chung: `_continue_tier` nhánh `created_by=agent` → áp dụng NGAY cho mọi agent của tầng, không eval, không ghim, canary mode
+  `watch`; khác người: hồi quy → canary TỰ rollback THEO MỤC (`ledger.is_entry_memory` nay gồm memory tầng team/global). Nhiều watch
+  cùng đích chạy song song; chỉ hoãn khi đích đang canary/shadow của review (`canary.busy(exclude_mode="watch")`). USER dùng chung vẫn
+  rollback cả file.
 - Kết quả: `status` (applied/blocked/deferred_rate_limited/suggested) + `reason`/`rule` + `entries` hiện có + `usage`. Ghi xuống đĩa
   ngay; system prompt của session hiện tại không đổi (snapshot đóng băng, giữ prompt cache) — thấy từ session sau.
 - `learning.agent_memory_tool` (mặc định `true`): khi bật, `learning/runtime.apply_mcp` gắn hub-self vai trò `knowledge` cho mọi run thường
@@ -24,8 +34,8 @@ nguyên pipeline an toàn.
 
 ## Lệch Hermes
 - Không có `write_approval`/hàng chờ duyệt (hub là "báo chứ không hỏi"); thay bằng guard + ledger + rollback + regression monitor.
-- Không có tầng team/global qua tool này — ghi tầng chung vẫn chỉ qua review (L3: eval + canary).
-- Hermes không giới hạn số lần ghi; hub tính vào `rate.max_changes_per_agent_per_day`.
+- Hermes không có tầng team/global; hub cho tool ghi tầng chung nhưng giới hạn người được ghi (lead/điều phối viên/policy) và theo dõi
+  + tự rollback theo mục.
 
 ## Việc dở
 - Đã làm ở `memory-hermes-gaps.md`: hướng dẫn memory trong system prompt, rollback theo mục.

@@ -57,6 +57,8 @@ log = logging.getLogger("cfharness.learning")
 TARGETS = ("memory", "skill", "config", "user_profile")
 OPS = ("add", "patch", "merge", "archive", "delete")
 LEARNING_ACTORS = ("review", "curator", "agent", "learning")
+# Suất tần suất của vòng học nền (review/curator). Tool `memory` của agent (actor `agent`) có suất riêng `rate.agent_tool_max_per_day`.
+QUOTA_ACTORS = tuple(a for a in LEARNING_ACTORS if a != "agent")
 READ_EVIDENCE = "_read_evidence"  # payload: {"scope|owner|name|rel": sha256} — bằng chứng đọc-trước-khi-ghi lúc đề xuất
 FINAL = ("applied", "promoted", "deferred_rate_limited", "deferred_no_eval", "eval_failed", "blocked", "rolled_back", "superseded", "suggested")
 
@@ -394,7 +396,14 @@ class Pipeline:
         if by == "user" or (by == "curator" and prop["op"] == "archive"):
             return None
         r = self.svc.policy.get("rate")
-        acts = ",".join(f"'{a}'" for a in LEARNING_ACTORS)
+        if by == "agent":  # tool `memory` (kiểu Hermes): không giới hạn mặc định — trần ký tự kho là thứ hãm
+            lim = int(r.get("agent_tool_max_per_day") or 0)
+            if lim and prop.get("agent_id") and self._count(
+                    "SELECT COUNT(*) FROM ledger_entries WHERE agent_id=? AND actor='agent' AND op!='rollback' AND rolled_back_by IS NULL AND applied_at>=?",
+                    (prop["agent_id"], _utc(_local_midnight_utc()))) >= lim:
+                return _utc(_local_midnight_utc(True)), f"agent đã ghi {lim} lần qua tool memory hôm nay (learning.rate.agent_tool_max_per_day)"
+            return None
+        acts = ",".join(f"'{a}'" for a in QUOTA_ACTORS)
         now = datetime.now(timezone.utc)
         if prop["scope"] in ("team", "global"):
             lim = int(r.get("max_team_global_changes_per_day") or 0)
@@ -430,9 +439,10 @@ class Pipeline:
         return None
 
     def agent_quota_full(self, agent_id: str) -> tuple[str, str] | None:
-        """(not_before, lý do) khi agent đã dùng hết `max_changes_per_agent_per_day` (chỉ tính thay đổi còn hiệu lực)."""
+        """(not_before, lý do) khi agent đã dùng hết `max_changes_per_agent_per_day` của vòng học nền (chỉ tính thay đổi còn hiệu lực;
+        ghi qua tool `memory` không tính)."""
         lim = int(self.svc.policy.get("rate").get("max_changes_per_agent_per_day") or 0)
-        acts = ",".join(f"'{a}'" for a in LEARNING_ACTORS)
+        acts = ",".join(f"'{a}'" for a in QUOTA_ACTORS)
         if lim and self._count(f"SELECT COUNT(*) FROM ledger_entries WHERE agent_id=? AND actor IN ({acts}) AND op!='rollback' AND rolled_back_by IS NULL AND applied_at>=?",
                                (agent_id, _utc(_local_midnight_utc()))) >= lim:
             return _utc(_local_midnight_utc(True)), f"agent đã có {lim} thay đổi hôm nay (learning.rate.max_changes_per_agent_per_day)"
@@ -543,6 +553,17 @@ class Pipeline:
             if busy is not None:
                 cn.supersede(busy["id"], f"đích bị thay bởi thay đổi của người (proposal {prop['id']})")
             return self._apply(prop, plan, tier_verdict={"status": "skipped", "scores": {}, "reason": "thay đổi của người — áp dụng ngay, chỉ theo dõi"})
+        if prop.get("created_by") == "agent":
+            # tool `memory` (kiểu Hermes): áp dụng NGAY cho mọi agent của tầng, không eval trước, không ghim; theo dõi (watch) và —
+            # khác thay đổi của người — hồi quy thì canary TỰ rollback THEO MỤC. Chỉ chờ khi đích đang canary/shadow của review.
+            busy = cn.busy(plan, exclude_mode="watch")
+            if busy is not None:
+                why = f"đích đang canary ({busy['id']}) — áp dụng sau khi canary kết thúc"
+                nb = busy.get("deadline") or now_iso()
+                self._update(prop["id"], status="deferred_rate_limited", not_before=nb, block_reason="canary_active", block_detail=why)
+                self._emit("learning.deferred", prop, {"reason": "canary_active", "detail": why, "not_before": nb, "canary_id": busy["id"]})
+                return self._result(prop, "deferred_rate_limited", reason=why, not_before=nb)
+            return self._apply(prop, plan, tier_verdict={"status": "skipped", "scores": {}, "reason": "tool memory của agent — áp dụng ngay, theo dõi, tự rollback theo mục"})
         busy = cn.busy(plan)
         if busy is not None:
             why = f"đích đang canary ({busy['id']}) — áp dụng sau khi canary kết thúc"
