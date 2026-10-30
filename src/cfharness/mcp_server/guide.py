@@ -49,6 +49,8 @@ Hỏi người dùng, rồi `hub_approve(request_id)` (cho phép đúng một l�
 "Luôn cho phép" (tạo luật lâu dài) chỉ khi mục có `always_offer` khác null VÀ người dùng nói rõ sau khi xem
 `always_offer.summary`: `hub_approve(request_id, always=true, confirm_rule=<always_offer.confirm>)` (fingerprint | domain | tên tool MCP).
 Không bao giờ tự chọn always; thao tác phá huỷ không bao giờ có luật này.
+"Không hỏi lại luật này" (agent đó không bị hỏi lại với `matched_rule` của mục, KỂ CẢ phá huỷ) chỉ khi người dùng nói rõ VÀ chọn
+thời hạn: `hub_approve(request_id, grant_rule=true, confirm_rule=<matched_rule>, grant_for="forever"|"8h"|"7d"…)`. Không bao giờ tự chọn.
 
 ## Điều khiển
 - `hub_cancel(run_id)` dừng run (phá huỷ phần việc đang dở).
