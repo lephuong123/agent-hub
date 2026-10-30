@@ -436,6 +436,7 @@ async def _agent_form_ctx(request: Request, agent: dict[str, Any] | None, values
             "model": agent.get("model"), "effort": agent.get("effort") or "", "permission_mode": tp.get("permission_mode") or "",
             "browser": tp.get("browser") or "",
             "tools": ", ".join(tp.get("tools") or []), "mcp": list(agent.get("mcp_servers") or []),
+            "web_allow_domains": ", ".join(tp.get("web_allow_domains") or []),
             "max_budget_usd_per_run": lim.get("max_budget_usd_per_run") or "", "budget_usd_per_day": lim.get("budget_usd_per_day") or "",
             "max_runtime_s": lim.get("max_runtime_s") or "", "max_concurrent_runs": lim.get("max_concurrent_runs") or 1,
             "workspace_default": agent.get("workspace_default") or "", "soul": agent.get("soul") or "",
@@ -498,6 +499,10 @@ def agent_changes(form: FormData, *, creating: bool, from_template: bool) -> dic
     tools = [t.strip() for t in re.split(r"[,\s]+", str(form.get("tools") or "")) if t.strip()]
     if tools or not sparse:
         tp["tools"] = tools or None
+    if "web_allow_domains" in form:  # form không có ô (client cũ) → giữ nguyên; trống = không giới hạn ([] = chặn hết: đặt qua CLI)
+        doms = [d.strip() for d in re.split(r"[,\s]+", str(form.get("web_allow_domains") or "")) if d.strip()]
+        if doms or not sparse:
+            tp["web_allow_domains"] = doms or None
     if tp:
         ch["tool_policy"] = tp
     ch["mcp_servers"] = [str(x) for x in form.getlist("mcp") if str(x).strip()]
@@ -537,6 +542,10 @@ async def agent_create(request: Request) -> Response:
     return flash_redirect(request, f"/agents/{aid}", "ok", f"Đã tạo agent {aid}" + (f" từ template {tpl}" if tpl else ""))
 
 
+def _web_domains_label(d: Any) -> str:
+    return "không giới hạn" if d is None else ", ".join(d) or "chặn mọi WebFetch"
+
+
 async def agent_update(request: Request) -> Response:
     _, form = await post_guard(request)
     aid = request.path_params["id"]
@@ -553,6 +562,10 @@ async def agent_update(request: Request) -> Response:
         if "browser" in tp_new and (tp_new.get("browser") or None) != (tp_old.get("browser") or None):
             risky.append(f"trình duyệt: {tp_old.get('browser') or 'mặc định hub'} → {tp_new.get('browser') or 'mặc định hub'}"
                          + (" (Claude in Chrome điều khiển Chrome THẬT của bạn)" if tp_new.get("browser") in ("chrome", "auto") else ""))
+        if tp_old.get("web_allow_domains") == [] and tp_new.get("web_allow_domains") is None:
+            tp_new.pop("web_allow_domains", None)  # ô trống không phân biệt được "chặn hết" với "không giới hạn" → giữ nguyên (bỏ qua CLI --web-domains any)
+        if "web_allow_domains" in tp_new and tp_new.get("web_allow_domains") != tp_old.get("web_allow_domains"):
+            risky.append(f"domain WebFetch: {_web_domains_label(tp_old.get('web_allow_domains'))} → {_web_domains_label(tp_new.get('web_allow_domains'))}")
         if (tp_new.get("tools") or None) != (tp_old.get("tools") or None):
             risky.append(f"tool: {', '.join(tp_old.get('tools') or []) or 'mặc định'} → {', '.join(tp_new.get('tools') or []) or 'mặc định'}")
         if sorted(ch.get("mcp_servers") or []) != sorted(cur.get("mcp_servers") or []):

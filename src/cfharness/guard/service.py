@@ -389,6 +389,9 @@ class GuardService:
 
         if v.forbidden:
             return v
+        av = self.agent_web_check(run, tool_name, tool_input, v)
+        if av is not None:
+            return av
         from ..browser import is_chrome_tool
 
         chrome = is_chrome_tool(tool_name)  # Claude in Chrome navigate/tabs_create (+ trong browser_batch): CÙNG luật WebFetch
@@ -441,6 +444,37 @@ class GuardService:
                 out = _up(out, Verdict("uncertain", "web_domain_not_allowed", "network", f"{label}: {host} ngoài danh sách domain cho phép ({why})",
                                         [url[:200]]))
         return out
+
+    def agent_web_check(self, run: dict[str, Any] | None, tool_name: str, tool_input: dict[str, Any], v: Verdict) -> Verdict | None:
+        """`tool_policy.web_allow_domains` của agent (người đặt): khác None → WebFetch/Chrome navigate tới host ngoài danh sách = forbidden
+        (từ chối thẳng, không mở approval; `_record` ghi audit `guard.deny`). Host so sau `static_check` (chữ thường, IDN → punycode, bỏ
+        cổng/dấu chấm cuối); URL không tách được host (userinfo, scheme lạ, ký tự mập mờ) → từ chối. Áp cả agent trust full.
+        None = không áp (chưa đặt / không phải tool web / không có run)."""
+        from ..browser import is_chrome_tool
+        from .url_safety import domain_matches, static_check
+
+        chrome = is_chrome_tool(tool_name)
+        if not run or not run.get("agent_id") or not (tool_name == "WebFetch" or chrome):
+            return None
+        agent = self.hub.store.get_agent(run["agent_id"]) or {}
+        raw = (agent.get("tool_policy") or {}).get("web_allow_domains")
+        if raw is None:
+            return None
+        allow = [str(x) for x in raw if isinstance(x, str)] if isinstance(raw, list) else []  # giá trị lạ (sửa tay) → hẹp nhất
+        urls = [str(tool_input.get("url") or "")] if tool_name == "WebFetch" else list(v.net_urls or [])
+        label = "Chrome" if chrome else "WebFetch"
+        for url in urls[:20]:
+            st = static_check(url)
+            host = st.host if st.rule not in ("url_credentials", "url_unparsable", "url_scheme", "url_no_host") else None
+            if not host:
+                return Verdict("destructive", "web_agent_domain_not_allowed", "network",
+                               f"{label}: không xác định được host của URL ({st.reason or st.rule}) — agent chỉ được tới web_allow_domains",
+                               [url[:200]], forbidden=True, net_urls=v.net_urls)
+            if not domain_matches(host, allow):
+                return Verdict("destructive", "web_agent_domain_not_allowed", "network",
+                               f"{label}: {host} ngoài allowlist domain của agent (tool_policy.web_allow_domains: {', '.join(allow) or '(rỗng)'})",
+                               [url[:200]], forbidden=True, net_urls=v.net_urls)
+        return None
 
     def repo_deny_patterns(self, cwd: str | None) -> list[str]:
         """MGR-2: mẫu chặn theo repo do NGƯỜI đặt (policy/repo_deny.yaml) áp cho mọi run có cwd trong repo."""
@@ -1199,6 +1233,12 @@ class GuardService:
             v = classify(tool_name, tool_input, ctx)
         except Exception as e:  # noqa: BLE001 — phân loại lỗi không chặn agent trust, chỉ ghi lại
             v = Verdict("uncertain", "classifier_error", None, f"phân loại lỗi: {type(e).__name__}")
+        av = self.agent_web_check(run, tool_name, tool_input, v)  # allowlist domain theo agent là giới hạn người đặt riêng — trust không gỡ
+        if av is not None:
+            self._record(run, channel, tool_name, tool_input, av, "deny", classifier="trust")
+            self.hub.publish(make_event("guard.blocked", run["agent_id"], {"source": "runtime", "reason": "guard_rule", "rule": av.rule, "detail": av.reason,
+                                                                         "tool": tool_name, "preview": action_preview(tool_name, tool_input)}, run_id=run["id"]))
+            return {"decision": "deny", "reason": FORBIDDEN_MSG.format(reason=av.reason)}
         busy = self.chrome_lock_check(run, tool_name)  # khoá Chrome là điều phối tài nguyên dùng chung, không phải quyền — vẫn áp
         if busy is not None:
             vb = Verdict("uncertain", "chrome_busy", "mcp", busy["reason"], [tool_name[:200]])

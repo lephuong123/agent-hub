@@ -397,6 +397,9 @@ def _agent_payload(a: argparse.Namespace, *, creating: bool) -> dict[str, Any]:
         tp["permission_mode"] = a.permission_mode
     if getattr(a, "browser", None) is not None:
         tp["browser"] = None if a.browser == "default" else a.browser
+    if getattr(a, "web_domains", None) is not None:  # "any" = bỏ giới hạn, "none" = chặn mọi WebFetch
+        w = a.web_domains.strip()
+        tp["web_allow_domains"] = None if w == "any" else [] if w == "none" else _split_list([w])
     for src, dst in (("allowed_tools", "allowed_tools"), ("disallowed_tools", "disallowed_tools"), ("tools", "tools")):
         v = _split_list(getattr(a, src, None))
         if v is not None:
@@ -430,6 +433,11 @@ def _read_soul(a: argparse.Namespace) -> str | None:
     return None
 
 
+def _web_domains_text(tp: dict[str, Any]) -> str:
+    d = tp.get("web_allow_domains")
+    return "(không giới hạn)" if d is None else ",".join(d) or "(rỗng — chặn mọi WebFetch)"
+
+
 def _agent_text(ag: dict[str, Any]) -> str:
     tp = ag.get("tool_policy") or {}
     lim = ag.get("limits") or {}
@@ -441,6 +449,7 @@ def _agent_text(ag: dict[str, Any]) -> str:
         f"  model: {ag.get('model')}  effort: {ag.get('effort') or '-'}  fallback: {ag.get('fallback_model') or '-'}",
         f"  permission_mode: {tp.get('permission_mode') or '(mặc định)'}  allowed: {','.join(tp.get('allowed_tools') or []) or '-'}  disallowed: {','.join(tp.get('disallowed_tools') or []) or '-'}",
         f"  browser: {tp.get('browser') or '(mặc định hub: runtime.claude.chrome.default_mode)'}  (Claude in Chrome: chrome|auto — docs/dev-notes/chrome.md)",
+        f"  web_allow_domains: {_web_domains_text(tp)}",
         f"  mcp: {','.join(ag.get('mcp_servers') or []) or '-'}",
         f"  limits: {json.dumps(lim, ensure_ascii=False)}",
         f"  workspace: {ag.get('workspace_default') or '(scratch theo run)'}",
@@ -741,6 +750,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--allowed-tools", action="append", help="lặp lại hoặc phân tách bằng dấu phẩy")
         sp.add_argument("--disallowed-tools", action="append")
         sp.add_argument("--tools", action="append", help="danh sách tool built-in được dùng (--tools '' = không tool nào)")
+        sp.add_argument("--web-domains", help="allowlist domain WebFetch, phân tách dấu phẩy (vd docs.python.org,*.github.io); "
+                        "'any' = không giới hạn, 'none' = chặn mọi WebFetch")
         sp.add_argument("--mcp", action="append", help="tên MCP server trong registry")
         sp.add_argument("--browser", choices=["chrome", "playwright", "auto", "none", "default"],
                         help="trình duyệt: chrome = Claude in Chrome (Chrome THẬT của bạn, bỏ Playwright), auto = Chrome trước rồi Playwright, "

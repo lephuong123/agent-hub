@@ -520,6 +520,9 @@ class RunManager:
                 tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + work))
             static = list(dict.fromkeys(list(tp.get("disallowed_tools") or [])
                                         + ([] if trusted else gr.static_disallowed(guard_cfg) + hub.guard.repo_deny_patterns(str(cwd)))))
+            if tp.get("web_allow_domains") is not None:  # không có hook để lọc domain → tắt hẳn WebFetch (fail-closed), không mở toang
+                tp["allowed_tools"] = [x for x in tp.get("allowed_tools") or [] if not str(x).startswith("WebFetch")]
+                static = list(dict.fromkeys(static + ["WebFetch"]))
             tp["disallowed_tools"] = static
         # M3 — hub-self MCP (FR-MS-08): tool task_* theo vai trò, ràng với run_id
         if (run.get("task_id") or is_mgr) and opts.get("hub_self"):
