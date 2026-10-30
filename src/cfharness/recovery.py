@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 
 from .errors import HubError
 from .events import make_event
+from .logs import run_logger
 from .oscompat import IS_WINDOWS, kill_tree, pid_alive, win_start_time
 from .store import now_iso
 
@@ -118,19 +119,23 @@ def reconcile(hub: "Hub") -> dict[str, Any]:
     to_resume: list[dict[str, Any]] = []
     interrupted = killed = waiting = 0
     for run in store.list_runs(status="running", limit=10_000):
+        rlog = run_logger(log, run["id"], run["agent_id"], task_id=run.get("task_id"))
         pid = run.get("pid")
         if pid and process_matches(pid, run.get("pid_start_time"), tol):
             if kill_group(int(pid)):
                 killed += 1
+                rlog.warning("khôi phục: đã dừng tiến trình mồ côi pid %s của run %s", pid, run["id"])
         if hub.approvals.pending_for_run(run["id"]):
             for a in hub.approvals.pending_for_run(run["id"]):
                 hub.approvals.to_waiting_human(a["id"])
             store.update_run(run["id"], {"status": "waiting_human", "ended_at": now_iso(), "error": "daemon khởi động lại khi đang chờ duyệt"})
             waiting += 1
+            rlog.info("khôi phục: run %s đang chờ duyệt → waiting_human", run["id"])
             continue
         store.update_run(run["id"], {"status": "interrupted", "outcome": "interrupted", "ended_at": now_iso(), "error": "daemon khởi động lại (tiến trình mồ côi đã dừng)" if pid else "daemon khởi động lại"})
         hub.publish(make_event("run.interrupted", run["agent_id"], {"outcome": "interrupted", "error": "daemon restart", "orphan_killed": bool(pid)}, run_id=run["id"]))
         interrupted += 1
+        rlog.info("khôi phục: run %s → interrupted (daemon khởi động lại)", run["id"])
         to_resume.append(store.get_run(run["id"]))  # type: ignore[arg-type]
     for rid in store.state_get("pending_resume", []) or []:
         r = store.get_run(rid)
@@ -148,6 +153,7 @@ def reconcile(hub: "Hub") -> dict[str, Any]:
         for r in queued:
             if r.get("kind") == "eval":  # M4-B: bản sao home tạm của eval đã mất khi daemon dừng → huỷ, gate chạy lại sau
                 store.update_run(r["id"], {"status": "cancelled", "outcome": "cancelled", "ended_at": now_iso(), "error": "eval bị huỷ do daemon khởi động lại"})
+                run_logger(log, r["id"], r["agent_id"], task_id=r.get("task_id")).info("khôi phục: huỷ run eval %s (home tạm đã mất)", r["id"])
                 continue
             runs.queue.append(r["id"])
             runs.waiters[r["id"]] = asyncio.Event()
@@ -177,8 +183,10 @@ def resume_interrupted(hub: "Hub", run: dict[str, Any]) -> dict[str, Any] | None
         return None
     from .workspace import resume_conflicts  # M3: người đã sửa file của run trong lúc gián đoạn → không resume
 
+    rlog = run_logger(log, run["id"], run["agent_id"], task_id=run.get("task_id"))
     changed = resume_conflicts(run)
     if changed:
+        rlog.warning("khôi phục: không tự resume run %s — %d file đã bị sửa sau khi gián đoạn", run["id"], len(changed))
         hub.publish(make_event("error", run["agent_id"], {"code": "workspace_changed", "message": f"không tự resume: {len(changed)} file của run đã bị sửa sau khi gián đoạn", "files": changed[:20]}, run_id=run["id"]))
         return None
     try:
@@ -190,9 +198,11 @@ def resume_interrupted(hub: "Hub", run: dict[str, Any]) -> dict[str, Any] | None
         else:
             nr = hub.runs.submit(run["agent_id"], run.get("prompt") or "", cwd=run.get("cwd"), budget_usd=run.get("max_budget_usd"), model=run.get("model"), kind=run.get("kind") or "adhoc", parent_run_id=run["id"], resume_reason="daemon_restart")
     except HubError as e:
+        rlog.warning("khôi phục: tự resume run %s lỗi: %s", run["id"], e.message)
         hub.publish(make_event("error", run["agent_id"], {"code": "auto_resume_failed", "message": e.message}, run_id=run["id"]))
         return None
     hub.store.update_run(run["id"], {"continued_in_run_id": nr["id"]})
+    rlog.info("khôi phục: run %s tiếp tục ở run %s", run["id"], nr["id"])
     hub.publish(make_event("run.resumed", run["agent_id"], {"from_run_id": run["id"], "run_id": nr["id"], "reason": "daemon_restart"}, run_id=run["id"], session_id=run.get("session_id")))
     return nr
 
@@ -342,7 +352,7 @@ def purge_agent(hub: "Hub", agent_id: str, *, by: str, channel: str) -> dict[str
 
         indexer_for(hub.store).purge_agent(agent_id)
     except Exception:  # pragma: no cover
-        log.exception("không xoá được chỉ mục hội thoại của %s", agent_id)
+        run_logger(log, None, agent_id).exception("không xoá được chỉ mục hội thoại của %s", agent_id)
     hub.publish(make_event("agent.purged", agent_id, {"agent_id": agent_id, "by": by, "trash_path": tp}))
     audit_record("agent.purged", agent_id, None, {"trash_path": tp, "actor": by, "channel": channel})
     return hub.store.get_agent(agent_id)  # type: ignore[return-value]
