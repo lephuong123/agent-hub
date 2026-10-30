@@ -249,3 +249,19 @@ async def test_health_card_on_settings(env):
     assert page.status_code == 200 and 'hx-get="/partials/health"' in page.text
     r = await env.client.get("/partials/health")
     assert r.status_code == 200 and "Sức khoẻ" in r.text and "Daemon" in r.text and "Toàn vẹn chính sách" in r.text and "cfharness doctor" in r.text
+
+
+async def test_health_card_shows_hang_stats(env):
+    """report.hangs: run timed_out/interrupted 14 ngày theo agent/loại/tool dở/thời lượng (auto_resume.hang_stats)."""
+    import uuid
+
+    from cfharness.store import now_iso
+
+    env.hub.agents.create({"id": "slowpoke", "name": "slowpoke", "model": "haiku"})
+    for oc in ("timed_out", "timed_out", "interrupted"):
+        env.hub.store.insert_run({"id": "r_" + uuid.uuid4().hex[:10], "agent_id": "slowpoke", "kind": "adhoc", "prompt": "p", "session_id": str(uuid.uuid4()),
+                                  "status": oc, "outcome": oc, "queued_at": now_iso(), "started_at": now_iso(), "ended_at": now_iso()})
+    await env.login()
+    r = await env.client.get("/partials/health")
+    assert r.status_code == 200 and "Run treo / quá giờ (14 ngày)" in r.text and "2 timed_out" in r.text
+    assert "Run hay treo / quá giờ — 3 run" in r.text and "slowpoke" in r.text and "Tool đang chạy dở" in r.text

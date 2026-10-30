@@ -6,7 +6,8 @@
   (không dùng `|safe`: tách đoạn ở server, template autoescape từng đoạn).
 - **Thay đổi file của run**: `/partials/run/{id}/diff` (trang run tải lười bằng htmx) + `/runs/{id}/diff` (không cần JS) — `run.diff{patch}`,
   diff unified tách theo file, gập/mở, có trần kích thước; "Hoàn tác" = `run.revert` (hộp xác nhận nguy hiểm), "Kiểm tra" = `dry_run`.
-- **Sức khoẻ** `/partials/health` (thẻ ở Cài đặt): chỉ RPC đọc sẵn có `hub.status` + `hub.compat` + `guard.integrity.status`
+- **Sức khoẻ** `/partials/health` (thẻ ở Cài đặt): chỉ RPC đọc `hub.status` + `hub.compat` + `guard.integrity.status` + `report.hangs`
+  (run timed_out/interrupted/crashed 14 ngày theo agent/loại/tool dở/thời lượng — auto_resume.py)
   (không có RPC `doctor` — `cfharness doctor` chạy `claude` cục bộ, không thêm RPC nặng).
 
 Module này không đọc/ghi `hub.db`; chỉ gọi RPC như phần còn lại của web. `app.py` chỉ thêm route + `register_actions`.
@@ -341,8 +342,12 @@ def revert_confirm(f: Any) -> str:
 
 
 # ============================================================================ sức khoẻ (thẻ ở Cài đặt)
+HANG_GROUPS = (("by_agent", "Theo agent"), ("by_kind", "Theo loại run"), ("by_tool", "Tool đang chạy dở"), ("by_duration", "Theo thời lượng"))
+
+
 async def partial_health(request: Request) -> Response:
     checks: list[dict[str, Any]] = []
+    hangs: dict[str, Any] = {}
 
     def add(name: str, ok: bool, detail: str, level: str = "error") -> None:
         checks.append({"check": name, "ok": ok, "detail": detail, "tone": "ok" if ok else ("warn" if level == "warning" else "danger")})
@@ -370,10 +375,17 @@ async def partial_health(request: Request) -> Response:
         integ = await _opt(request, "guard.integrity.status", {}, {}) or {}
         n = len(integ.get("recent_events") or [])
         add("Toàn vẹn chính sách", n == 0, "bình thường" if n == 0 else f"{n} cảnh báo gần đây — xem `cfharness guard integrity`")
+        hangs = await _opt(request, "report.hangs", {"since": "14d"}, {}) or {}
+        if hangs:
+            oc = ", ".join(f"{x['count']} {x['key']}" for x in hangs.get("by_outcome") or [])
+            auto = sum((hangs.get("auto_resumed") or {}).values())
+            add("Run treo / quá giờ (14 ngày)", not hangs.get("hung"), f"{hangs.get('hung', 0)}/{hangs.get('runs_total', 0)} run" + (f" ({oc})" if oc else "")
+                + (f" · {auto} lần tự resume" if auto else ""), "warning")
     except (RpcError, DaemonUnavailable, OSError) as e:
         add("Daemon", False, err_text(e))
     sess = session_of(request)
     return ws(request).templates.TemplateResponse(request, "_health.html", {"checks": checks, "bad": sum(1 for c in checks if c["tone"] == "danger"),
+                                                                           "hangs": hangs, "hang_groups": HANG_GROUPS,
                                                                            "csrf": sess.csrf if sess else ""})
 
 

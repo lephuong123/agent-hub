@@ -233,6 +233,13 @@ DEFAULTS: dict[str, Any] = {
     "recovery": {
         "auto_resume": True,  # Q-09: daemon restart → dừng-và-resume tự động (trừ waiting_human)
         "pid_start_tolerance_s": 5,
+        # tự resume run ad-hoc kết thúc vì lỗi tạm thời (crashed/timed_out/rate_limited/mạng) — auto_resume.py.
+        # Trần số lần dùng CHUNG với resume sau daemon restart (interrupted)
+        "auto_resume_enabled": True,
+        "auto_resume_kinds": ["adhoc"],
+        "auto_resume_max_attempts": 3,
+        "auto_resume_backoff_s": 30,
+        "auto_resume_backoff_max_s": 900,
     },
     # M1 luồng A — MCP client registry (FR-MC-*)
     "mcp": {
