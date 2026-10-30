@@ -21,7 +21,7 @@
 |---|---|---|---|---|
 | FR-AG-01 | Must | Đạt | ✎ | = v1. Thêm `RESERVED_IDS` cấm id trùng từ khoá CLI (H-08) — lệch BRD, xem §3 |
 | FR-AG-02 | Must | Đạt | ↑ | H-08/Thấp: `agent list --team/--status`, `hub_list_agents(team,status)`. `tests/test_hardening_cli.py` |
-| FR-AG-03 | Must | **Một phần** | ↑ rồi ✎ | H-07 thêm `agent revert --to N` (test `test_h07_*`, QA chạy). **NHƯNG V2-N1**: `agent.revert` qua RPC KHÔNG đòi token người → agent khôi phục revision cũ (QA tái hiện: `allow_bypass` bật lại). Xem §4 |
+| FR-AG-03 | Must | Đạt | ↑ rồi ✎ rồi ↑ | H-07 thêm `agent revert --to N` (test `test_h07_*`, QA chạy). V2-N1 (`agent.revert` qua RPC không đòi token người) **đã sửa 2026-10-30** — xem §3.2 và `tests/test_sec_v2_n1.py` |
 | FR-AG-04 | Must | Đạt | ↑ | H-06: `rm` kiểm thành viên team, `--detach-teams`, event `agent.archived`. `test_h06_*` |
 | FR-AG-05..07 | | Đạt | = | = v1 |
 | FR-AG-08 | Should | Đạt | ↑ | CLI: `doctor <agent>` probe thật từng MCP + tỉ lệ event lạ. `test_low_doctor_probes_agent_mcp` |
@@ -161,7 +161,7 @@ Tính cả "Lệch có chủ ý": 124/137 = **91%**. (v1: 81/137 = 59%; +lệch 
 | Should | 17 | 16 | 1 | 0 | 94% |
 | Could | 5 | 3 | 1 | 1 | 60% (80%) |
 
-Must một phần còn lại: FR-AG-03 (V2-N1), FR-TK-04 (assert yếu), FR-SG-01, FR-SG-03, FR-SG-07 (recall heuristic — bất biến vẫn đứng nhờ sandbox). Must lệch: FR-TK-06, FR-RT-06, FR-MC-01.
+Must một phần còn lại: FR-TK-04 (assert yếu), FR-SG-01, FR-SG-03, FR-SG-07 (recall heuristic — bất biến vẫn đứng nhờ sandbox). Must lệch: FR-TK-06, FR-RT-06, FR-MC-01.
 
 ### 2.3 So với v1 (Must)
 
@@ -173,7 +173,7 @@ v1: Must đạt 50/83 = 60% (65% +lệch). v2: **75/83 = 90% (94% +lệch)**. +2
 
 | # | Bất biến | v1 | v2 | Kết luận QA (độc lập) |
 |---|---|---|---|---|
-| 1 | Thao tác phá huỷ luôn cần người | **VI PHẠM** | **Đạt (còn 1 lỗ Cao V2-N1 + rủi ro tồn dư)** | Lỗ gốc (RPC không xác thực người gọi) đã bịt: token người (0600 cạnh socket) + nhận diện hậu duệ run qua pid/session/env (kernel báo) + sandbox chặn đọc token & kết nối socket. QA chạy lại 3 cách v1 + double-fork/setsid/đọc trộm token → ĐỀU từ chối; người vẫn duyệt. **NHƯNG** xem V2-N1 (agent.revert/archive/trash.* chưa nằm trong `HUMAN_ONLY`) và V2-N2 (lập lịch hoãn) |
+| 1 | Thao tác phá huỷ luôn cần người | **VI PHẠM** | **Đạt (V2-N1 đã sửa 2026-10-30, §3.2; còn rủi ro tồn dư)** | Lỗ gốc (RPC không xác thực người gọi) đã bịt: token người (0600 cạnh socket) + nhận diện hậu duệ run qua pid/session/env (kernel báo) + sandbox chặn đọc token & kết nối socket. QA chạy lại 3 cách v1 + double-fork/setsid/đọc trộm token → ĐỀU từ chối; người vẫn duyệt. **NHƯNG** xem V2-N1 (agent.revert/archive/trash.* chưa nằm trong `HUMAN_ONLY` — **đã sửa**, §3.2) và V2-N2 (lập lịch hoãn) |
 | 2 | Hook fail-closed | Đạt | Đạt | = v1, nay thêm sandbox + hook quan sát fail-open riêng (không đụng lớp fail-closed) |
 | 3 | Agent không ghi `policy/`, `golden/` | **VI PHẠM** | **Đạt** | 3 lớp độc lập: classifier (literal/symlink/interpreter — QA `cls.py`), sandbox denyWrite, integrity khôi phục ≤ 2 s (`guard/integrity.py`, migration v11). Không còn phụ thuộc cách viết lệnh |
 | 4 | Tự rollback không chạm thay đổi của người | **VI PHẠM** | **Đạt** | H-04: hàm áp dụng duy nhất `Ledger._rollback_one` chỉ khôi phục khoá của entry + chặn khi actor ngoài `{learning,review,agent,curator}` hoặc đích bị sửa ngoài ledger. QA `repro_cfg.py`/`repro_cfg2.py`: `model=haiku` của người được GIỮ (v1: bị ghi đè về `sonnet`). Canary cũng không rollback `actor=user` |
@@ -184,9 +184,26 @@ v1: Must đạt 50/83 = 60% (65% +lệch). v2: **75/83 = 90% (94% +lệch)**. +2
 
 | # | Mức | Lỗ hổng | Bằng chứng QA | Đề xuất |
 |---|---|---|---|---|
-| **V2-N1** | **Cao** | **Lệch phối hợp CLI↔SEC**: luồng CLI thêm `agent.archive`, `agent.revert`, `trash.restore`, `trash.purge` vào `MUTATING` và dev-notes CLI ĐÃ yêu cầu SEC đưa chúng vào token điều khiển — nhưng `auth.HUMAN_ONLY` KHÔNG có chúng. Hệ quả: một tiến trình cục bộ (kể cả agent trong run) gọi RPC `agent.revert` **không cần token** → khôi phục agent về revision cũ (QA tái hiện: `allow_bypass` bật lại = nâng quyền/tamper). `trash.purge` gọi `agent.purge` (human-only) qua lời gọi NỘI BỘ → **bỏ qua** cổng token → xoá vĩnh viễn agent. `agent.archive` = DoS. Khi sandbox TẮT (Linux thiếu bubblewrap, hoặc `guard.sandbox.enabled=false`) agent gọi thẳng `agent-hub agent revert …` (classifier chỉ `write/ALLOW`) | Daemon thật (QA, không token, tiến trình con): `agent.revert{id,to:2}` → `result` ok, `allow_bypass=True`. `agent.revert`/`agent.archive`/`trash.*` ∈ MUTATING \ HUMAN_ONLY (8 method admin lọt; phần còn lại như `run.start`,`task.create` là bề mặt hợp lệ trong run) | Thêm `agent.archive, agent.revert, trash.restore, trash.purge` vào `auth.HUMAN_ONLY`; classifier `forbidden` cho `agent-hub agent revert|archive`, `agent-hub trash restore|purge`. Thêm ca test như `test_sec_auth` |
+| **V2-N1** | **Cao** | **Lệch phối hợp CLI↔SEC**: luồng CLI thêm `agent.archive`, `agent.revert`, `trash.restore`, `trash.purge` vào `MUTATING` và dev-notes CLI ĐÃ yêu cầu SEC đưa chúng vào token điều khiển — nhưng `auth.HUMAN_ONLY` KHÔNG có chúng. Hệ quả: một tiến trình cục bộ (kể cả agent trong run) gọi RPC `agent.revert` **không cần token** → khôi phục agent về revision cũ (QA tái hiện: `allow_bypass` bật lại = nâng quyền/tamper). `trash.purge` gọi `agent.purge` (human-only) qua lời gọi NỘI BỘ → **bỏ qua** cổng token → xoá vĩnh viễn agent. `agent.archive` = DoS. Khi sandbox TẮT (Linux thiếu bubblewrap, hoặc `guard.sandbox.enabled=false`) agent gọi thẳng `agent-hub agent revert …` (classifier chỉ `write/ALLOW`) | Daemon thật (QA, không token, tiến trình con): `agent.revert{id,to:2}` → `result` ok, `allow_bypass=True`. `agent.revert`/`agent.archive`/`trash.*` ∈ MUTATING \ HUMAN_ONLY (8 method admin lọt; phần còn lại như `run.start`,`task.create` là bề mặt hợp lệ trong run) | Thêm `agent.archive, agent.revert, trash.restore, trash.purge` vào `auth.HUMAN_ONLY`; classifier `forbidden` cho `agent-hub agent revert|archive`, `agent-hub trash restore|purge`. Thêm ca test như `test_sec_auth`. **ĐÃ SỬA (2026-10-30)** — xem §3.2 |
 | **V2-N2** | Trung bình | **Mạo danh người HOÃN**: classifier `ALLOW` cho `crontab -`, `at`, và ghi `~/.config/git/config` (hooksPath/alias → RCE khi người chạy git), `~/Library/LaunchAgents/*.plist`. Các tiến trình này chạy NGOÀI run/sandbox như người → đọc được token người → tự duyệt về sau. (`~/.zshrc` đã bị bắt `protected_path`; `launchctl submit` bị sandbox chặn theo spike SEC) | QA `cls_new.py`: `crontab -l|…|crontab -`, `at …`, Write `~/.config/git/config`, `~/Library/LaunchAgents/evil.plist` → ALLOW | Bổ sung `protected_path` cho `~/.config/git/`, `~/Library/LaunchAgents/`, `~/Library/LaunchDaemons/`, `~/.gitconfig` (đã có); classifier HOLD cho `crontab`/`at`/`launchctl load`. Ưu tiên sau V2-N1 |
 | V2-N3 | Thấp/Info | Classifier bỏ sót `socat UNIX-CONNECT:…hub.so''ck` (nối chuỗi) và một số `rm` có tiền tố (`\rm`,`command rm`,`/bin/rm`,`env rm`) khi đích là file run tạo. Chỉ còn sandbox làm lớp chặn | QA `cls_new.py` | Chấp nhận được nếu sandbox luôn bật; nếu không, mở rộng chuẩn hoá lệnh |
+
+
+### 3.2 Đóng V2-N1 (2026-10-30, `docs/dev-notes/v2-n1-require-human.md`)
+
+Mọi đường vào của `agent.revert`, `agent.archive`, `trash.restore`, `trash.purge` tới cùng cổng người, fail closed, có audit `auth.denied`:
+
+| Đường vào | Cổng | Test (`tests/test_sec_v2_n1.py` trừ khi ghi khác) |
+|---|---|---|
+| Daemon RPC qua socket (tiến trình con không token / hậu duệ run có token trộm) | `auth.HUMAN_ONLY` ở `Daemon._dispatch` → `-32003` + `auth.denied` | `test_sec_v2.py::test_admin_surface_requires_human_token_over_socket`, `test_rpc_gate_refuses_every_non_human_channel`, `test_forged_audit_and_token_param_do_not_help` |
+| Kênh trong daemon (`call_as`: Telegram/Slack ngoài allowlist), điều phối viên | như trên; điều phối viên chỉ `agent.archive` (MANAGER_ALLOWED) | `test_rpc_gate_refuses_every_non_human_channel` |
+| Lời gọi nội bộ lọt cổng RPC (handler gọi handler, kênh mới quên cổng) | **mới**: `auth.require_human()` trong 4 handler `mcp_server/surface_rpc.py` (archive: `allow_manager`); từ chối → audit `auth.denied` `layer=service` | `test_service_gate_refuses_non_human_and_audits` (16 ca), `test_service_gate_lets_human_through` |
+| CLI (`cfharness`/`agent-hub`/`python -m`/`uv run`/`sh -c`/tiền tố env) | classifier `hub_human_only` → forbidden | `test_cli_evasions_forbidden`, `test_sec_v2.py::test_v2_n1_cli_admin_forbidden` |
+| MCP server của hub (`hub_*`, kể cả đăng ký dưới tên khác) | **mới**: `HUB_MCP_HUMAN_ONLY` thêm `agent_revert|pause|resume`, `trash_*`, `task_archive` (trước: `hub_agent_revert` = `write` ALLOW) | `test_hub_mcp_admin_tools_forbidden` |
+| hub-self | không có tool tương ứng (điều phối viên chỉ `agent_archive`) | `test_hub_self_exposes_no_admin_tool` |
+| Web | client của web gửi token người qua socket → cùng cổng daemon + service; `cfharness web` từ run = forbidden | (dùng chung cổng daemon) |
+
+Đỏ trước sửa: 23/51 ca của `test_sec_v2_n1.py` fail trên code cũ (15 ca tầng service, 8 ca tool MCP của hub).
 
 ---
 

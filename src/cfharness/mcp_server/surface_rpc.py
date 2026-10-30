@@ -194,7 +194,10 @@ class SurfaceRpc:
             res = await res
         return res
 
+    # V2-N1 (FR-SG-11): 4 thao tác quản trị dưới đây ∈ auth.HUMAN_ONLY (cổng RPC) VÀ có cổng tầng service `require_human` — lời gọi
+    # nội bộ lọt qua cổng RPC (handler gọi handler, kênh mới quên cổng) vẫn bị chặn + audit. Điều phối viên chỉ được xoá mềm.
     def agent_delete(self, p: dict[str, Any]) -> dict[str, Any]:
+        _auth.require_human("xoá mềm agent", allow_manager=True)
         return self.hub.agents.remove(_req(p, "id"), detach_teams=bool(p.get("detach_teams")))
 
     def agent_revert(self, p: dict[str, Any]) -> dict[str, Any]:
@@ -205,9 +208,11 @@ class SurfaceRpc:
             to = int(to)
         except (TypeError, ValueError):
             raise HubError("'to' phải là số revision") from None
+        _auth.require_human("revert agent về revision cũ")
         return self.hub.agents.revert(_req(p, "id"), to, actor=str(p.get("actor") or "user"))
 
     async def trash_restore(self, p: dict[str, Any]) -> dict[str, Any]:
+        _auth.require_human("khôi phục từ thùng rác")
         ident = str(_req(p, "id"))
         kind = _trash_kind(self.hub, ident, p.get("kind"))
         if kind == "agent":
@@ -219,6 +224,7 @@ class SurfaceRpc:
         return {"kind": kind, "id": ident, "restored": True, "item": res}
 
     async def trash_purge(self, p: dict[str, Any]) -> dict[str, Any]:
+        _auth.require_human("xoá vĩnh viễn từ thùng rác")
         ident = str(_req(p, "id"))
         kind = _trash_kind(self.hub, ident, p.get("kind"))
         if kind != "agent":

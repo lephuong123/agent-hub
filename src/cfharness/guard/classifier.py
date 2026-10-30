@@ -171,9 +171,9 @@ OBFUSCATION = re.compile(r"\b(base64\s+(-d|--decode|-D)|openssl\s+(enc|base64)\s
 MCP_DELETE_TOKENS = {"delete", "del", "remove", "rm", "purge", "drop", "destroy", "wipe", "erase", "truncate", "xoa", "xoá", "xóa", "huy", "huỷ", "hủy", "gỡ", "gobo", "unlink", "trash", "clear", "reset"}
 MCP_DESC_RE = re.compile(r"\b(delete[sd]?|deleting|remove[sd]?|removing|purge[sd]?|drop(s|ped)?|destroy(s|ed)?|wipe[sd]?|erase[sd]?|permanently)\b|xoá|xóa|huỷ|hủy|gỡ bỏ", re.I)
 MCP_FORBIDDEN = re.compile(r"^(hub_)?(approve|deny|approval_resolve|policy_set|protect_(add|rm|remove)|golden_(add|rm|remove|edit|update|from_run|restore))$")  # M4-B: golden = chính sách an toàn (Q-07)
-# H-18: tool của MCP server CỦA HUB (nhận theo lệnh/URL, không theo tên đăng ký) ứng với method chỉ-người
+# H-18: tool của MCP server CỦA HUB (nhận theo lệnh/URL, không theo tên đăng ký) ứng với method chỉ-người (V2-N1: + revert/pause/resume, trash_*, task_archive)
 HUB_MCP_HUMAN_ONLY = re.compile(
-    r"^(hub_)?(approve|deny|agent_(create|update|archive|delete|purge|restore)|estop|config_set|secret_\w+|mcp_(add|update|remove|assign)|"
+    r"^(hub_)?(approve|deny|agent_(create|update|archive|delete|purge|restore|revert|pause|resume)|trash_(restore|purge|empty|rm)|task_archive|estop|config_set|secret_\w+|mcp_(add|update|remove|assign)|"
     r"learn_(propose|rollback|retry|refine|policy_set)|knowledge_pin|knowledge_skill_(save|archive|restore|import|promote)|team_(create|update|archive|member_set|member_rm|estop)|golden_(add|rm|remove|edit|update|from_run|restore|dismiss)|takeover|run_revert)$")
 
 

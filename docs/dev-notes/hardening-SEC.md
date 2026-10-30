@@ -63,7 +63,7 @@ Linux cần bubblewrap/socat (thiếu → run lỗi, không chạy không sandbo
 | V2-N2 (TB) | `classifier.protected_path`: vùng cứng (không cần khai báo) = dữ liệu nội bộ HUB_HOME trừ workspace, môi trường Python của hub (site-packages/bin), nơi chạy trễ (`~/Library/LaunchAgents|LaunchDaemons`, `~/.config/git|systemd|autostart`, `/etc/cron.d`…), `.git/hooks` + `.git/config` ở mọi repo. `crontab` (trừ `-l`), `at`/`batch`, `launchctl load|bootstrap|submit|…`, `systemctl --user enable|start` → destructive (chờ người). Sandbox denyWrite thêm `~/.ssh`, `~/.gitconfig`, `~/.config/git`, LaunchAgents/Daemons, file rc shell, `~/.claude*`, `~/.local/bin`. | `::test_v2_n2_scheduler_commands_held`, `::test_v2_n2_persistence_locations_protected` |
 | V2-N3 (Thấp) | Kiểm socket/token trên từ ĐÃ bỏ quote/nối chuỗi; `socat`/`nc` với UNIX/`-U`/đích động → uncertain. Tên lệnh đã chuẩn hoá (`\rm`, `/bin/rm`, `command`, `env`) → cùng phán quyết với `rm` (xoá file run tự tạo vẫn là ghi thường — đúng FR-SG-01). | `::test_v2_n3_command_name_normalized` |
 
-Ghi chú: `agents.revert` (agents.py, luồng CLI) mới chỉ chặn ở tầng RPC; nên gọi `auth.require_human("agent revert")` ở service nếu có lời gọi nội bộ mới.
+Ghi chú: đã làm (2026-10-30) — cổng tầng service cho cả 4 handler `agent.revert|archive`, `trash.restore|purge` + audit khi từ chối; xem `v2-n1-require-human.md`.
 
 ## 6. Bổ sung theo coordinator (mất dữ liệu trên file có sẵn, FR-TK-04)
 - Tái hiện `cfharness guard test`: với file **đã tồn tại** và không do run tạo, `truncate -s 0`, `: >`/`>`, `dd of=`, `cp`/`mv` đè, `tee` (không -a), `shred`

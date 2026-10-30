@@ -195,14 +195,23 @@ def all_mutating() -> frozenset[str]:
     return frozenset(out)
 
 
-def require_human(what: str) -> None:
-    """Cổng ở TẦNG SERVICE (V2-N1): gọi trong ngữ cảnh RPC của người gọi không phải người → Blocked.
-    Ngoài ngữ cảnh RPC (vòng nền của daemon, vd retention) thì cho qua."""
+def require_human(what: str, *, allow_manager: bool = False) -> None:
+    """Cổng ở TẦNG SERVICE (V2-N1): gọi trong ngữ cảnh RPC của người gọi không phải người → Blocked + audit `auth.denied`
+    (layer=service). Ngoài ngữ cảnh RPC (vòng nền của daemon, vd retention) thì cho qua. `allow_manager`: điều phối viên được
+    (chỉ cho thao tác nằm trong MANAGER_ALLOWED — daemon đã kiểm trường cấm ở `manager.check_rpc`)."""
     c = CURRENT_CALLER.get()
-    if c is not None and not c.human:
-        from .errors import Blocked
+    if c is None or c.human or (allow_manager and c.manager):
+        return
+    from .approvals import audit_record
+    from .errors import Blocked
 
-        raise Blocked(f"{what}: chỉ người được làm (người gọi: {'agent' if c.is_agent else 'thiếu token'})", data={"caller": c.to_dict()})
+    who = f"manager:{c.manager}" if c.manager else "agent" if c.is_agent else "thiếu token"
+    try:
+        audit_record("auth.denied", c.agent_id, c.run_id, {"what": what, "layer": "service", **c.to_dict(),
+                                                           "actor": f"manager:{c.manager}" if c.manager else "agent", "channel": c.via})
+    except Exception:  # pragma: no cover — audit lỗi không được mở cổng
+        pass
+    raise Blocked(f"{what}: chỉ người được làm (người gọi: {who})", data={"caller": c.to_dict()})
 
 
 # ============================================================================ token
