@@ -42,7 +42,7 @@ from ... import auth as _auth
 from ...events import HubEvent
 from ...notify.base import QueuedNotifier, clip
 from ...notify.slack import format_message as _slack_format
-from ...notify.telegram import APPROVAL_EVENTS
+from ...notify.telegram import APPROVAL_EVENTS, GOLDEN_SUGGESTION_EVENT
 from ..base import _UID, ChatBot
 from ..manager_chat import SILENT
 from ..netlog import TransientLog
@@ -142,6 +142,8 @@ class SlackChatNotifier(QueuedNotifier):
 
     def render(self, ev: HubEvent) -> dict[str, Any] | None:
         p = ev.payload or {}
+        if ev.type == GOLDEN_SUGGESTION_EVENT:
+            return {"golden_id": p.get("suggestion_id"), "done": set()} if p.get("suggestion_id") else None
         aid = p.get("request_id") if ev.type in APPROVAL_EVENTS else None
         if aid:
             try:
@@ -163,7 +165,12 @@ class SlackChatNotifier(QueuedNotifier):
             if chat in msg["done"]:
                 continue
             aid = msg.get("approval_id")
-            if aid:
+            if msg.get("golden_id"):
+                s = self.hub.evals.golden.suggestion(msg["golden_id"])
+                if s.get("status") != "open":
+                    return {"chats": n, "skipped": "resolved"}
+                await self.bot.send_golden_suggestion(api, chat, s)
+            elif aid:
                 row = self.hub.approvals.get(aid)
                 if row.get("status") not in ("open", "waiting_human"):
                     return {"chats": n, "skipped": "resolved"}

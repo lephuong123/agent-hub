@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 MUTATING_B = (
     "golden.add", "golden.from_run", "golden.update", "golden.rm", "golden.restore", "golden.dismiss",
+    "golden.suggestion_approve", "golden.suggestion_reject", "golden.suggest_scan",
     "eval.run", "eval.check", "eval.post_apply", "eval.batch", "digest.run", "curator.run", "regression.check",
 )
 
@@ -144,6 +145,12 @@ class LearningOpsRpc:
             "golden.restore": lambda p: g().restore(_req(p, "id"), created_by=self._who(p)),
             "golden.candidates": lambda p: g().candidates(p.get("agent_id") or _req(p, "agent"), limit=int(p.get("limit") or 5)),
             "golden.dismiss": lambda p: g().dismiss(_req(p, "run_id")),
+            # đề xuất golden: agent/hub CHỈ đề xuất, NGƯỜI quyết (Q-07) — approve/reject là HUMAN_ONLY (auth.py)
+            "golden.suggestions": lambda p: g().suggestions(p.get("agent_id") or p.get("agent"), p.get("status") or "open", int(p.get("limit") or 50)),
+            "golden.suggestion_show": lambda p: g().suggestion(_req(p, "id")),
+            "golden.suggestion_approve": lambda p: g().decide_suggestion(_req(p, "id"), "approve", created_by=self._who(p)),
+            "golden.suggestion_reject": lambda p: g().decide_suggestion(_req(p, "id"), "reject", created_by=self._who(p)),
+            "golden.suggest_scan": lambda p: g().auto_suggest(),
             "eval.run": self.eval_run,
             "eval.check": self.eval_check,
             "eval.post_apply": self.eval_post_apply,

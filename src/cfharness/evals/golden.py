@@ -7,11 +7,18 @@
 - Mỗi task: prompt đầu vào, ngữ cảnh (`context` — chèn trước prompt; `files` — seed vào workspace eval), cách chấm
   (`checker`, xem `checkers.py`), người tạo, ngày, `source_run_id` nếu đánh dấu từ run thật, `version` tăng khi sửa.
 - Xoá = xoá mềm (`active=0`, `archived_at`) — khôi phục bằng `golden restore`.
+- Tự ĐỀ XUẤT (docs/dev-notes/golden-suggestions.md): `auto_suggest()` (vòng nền M4-B) quét task `done` đủ lâu mà người không sửa
+  (Signal correction/edit_output/reject/cancel), không hoàn tác (`undo`, `run.reverted`) và không tiếp quản → bản nháp trong
+  `golden_suggestions` (`gs_…`) + event `golden.suggestion_opened` (nút một chạm Telegram/Slack). Lọc: chống trùng theo hash prompt,
+  đủ tín hiệu (prompt/kết quả đủ dài, run completed), không secret. CHỈ NGƯỜI quyết (`decide_suggestion`, `_require_human`, RPC
+  HUMAN_ONLY): duyệt → `add()` (golden thật) + đánh thức proposal `deferred_no_eval`; từ chối → `dismissed` (không gợi ý lại).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,8 +26,9 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from ..errors import HubError, NotFound
+from ..errors import Conflict, HubError, NotFound
 from ..events import make_event
+from ..redact import redact_str
 from ..store import now_iso
 from .checkers import validate_checker
 
@@ -29,6 +37,42 @@ if TYPE_CHECKING:
 
 JSON_FIELDS = ("checker", "files", "output_schema", "tags")
 HUMAN_ACTORS_DENY = ("agent", "learning", "review", "curator", "eval_gate", "regression_monitor")
+# người đã can thiệp vào kết quả → task KHÔNG đủ "tốt" để làm golden (BRD FR-LN-01)
+HUMAN_TOUCH_SIGNALS = ("correction", "edit_output", "undo", "reject", "cancel")
+SUGGEST_DEFAULTS: dict[str, Any] = {
+    "enabled": True, "every_min": 60, "min_age_h": 6, "lookback_days": 14, "max_open_per_agent": 3, "max_per_scan": 10,
+    "min_prompt_chars": 20, "min_result_chars": 20,
+}
+RUBRIC = ("The output must accomplish the task above. The human accepted the reference result below without editing or "
+          "reverting it; pass if the output reaches the same result (wording may differ), fail if it misses or contradicts it.\n"
+          "Reference result:\n{ref}")
+
+
+def prompt_hash(text: str) -> str:
+    """Hash prompt đã chuẩn hoá (chữ thường, gộp khoảng trắng) — chống trùng golden/đề xuất."""
+    norm = re.sub(r"\s+", " ", (text or "").strip().lower())
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:32]
+
+
+def has_secret(*texts: Any) -> bool:
+    """Có secret (mẫu `redact` hoặc giá trị secret hub biết) → không đề xuất (prompt golden đi vào run eval + DB + chat)."""
+    return any(isinstance(t, str) and t and redact_str(t) != t for t in texts)
+
+
+def _sid() -> str:
+    return "gs_" + uuid.uuid4().hex[:10]
+
+
+def _srow(r: Any) -> dict[str, Any] | None:
+    if r is None:
+        return None
+    d = dict(r)
+    if d.get("checker"):
+        try:
+            d["checker"] = json.loads(d["checker"])
+        except ValueError:
+            d["checker"] = None
+    return d
 
 
 def _row(r: Any) -> dict[str, Any] | None:
@@ -219,9 +263,9 @@ class GoldenStore:
         now = now_iso()
         for c in cands:
             self.conn.execute(
-                "INSERT INTO golden_suggestions (run_id, agent_id, reason, proposal_id, status, created_at, updated_at) VALUES (?,?,?,?, 'open', ?, ?) "
+                "INSERT INTO golden_suggestions (id, run_id, agent_id, reason, proposal_id, status, created_at, updated_at) VALUES (?,?,?,?,?, 'open', ?, ?) "
                 "ON CONFLICT(run_id) DO UPDATE SET updated_at=excluded.updated_at, proposal_id=COALESCE(excluded.proposal_id, golden_suggestions.proposal_id)",
-                (c["run_id"], agent_id, c.get("reason") or reason, proposal_id, now, now),
+                (_sid(), c["run_id"], agent_id, c.get("reason") or reason, proposal_id, now, now),
             )
         payload = {"reason": reason, "proposal_id": proposal_id, "candidates": cands[:5], "golden_count": len(self.active_for(agent_id)),
                    "hint": f"cfharness golden from-run <run_id> --regex '…' | --judge '<rubric>'"}
@@ -231,7 +275,152 @@ class GoldenStore:
     def dismiss(self, run_id: str) -> dict[str, Any]:
         now = now_iso()
         self.conn.execute(
-            "INSERT INTO golden_suggestions (run_id, agent_id, reason, status, created_at, updated_at) "
-            "SELECT id, agent_id, 'dismissed', 'dismissed', ?, ? FROM runs WHERE id=? "
-            "ON CONFLICT(run_id) DO UPDATE SET status='dismissed', updated_at=excluded.updated_at", (now, now, run_id))
+            "INSERT INTO golden_suggestions (id, run_id, agent_id, reason, status, created_at, updated_at) "
+            "SELECT ?, id, agent_id, 'dismissed', 'dismissed', ?, ? FROM runs WHERE id=? "
+            "ON CONFLICT(run_id) DO UPDATE SET status='dismissed', updated_at=excluded.updated_at", (_sid(), now, now, run_id))
         return {"run_id": run_id, "status": "dismissed"}
+
+    # ------------------------------------------------------------------ tự đề xuất từ task done (người duyệt một chạm)
+    def suggest_cfg(self) -> dict[str, Any]:
+        return {**SUGGEST_DEFAULTS, **((self.hub.config.get("eval") or {}).get("golden_suggest") or {})}
+
+    def suggestion(self, ref: str) -> dict[str, Any]:
+        r = self.conn.execute("SELECT * FROM golden_suggestions WHERE id=? OR run_id=?", (ref, ref)).fetchone()
+        if r is None:
+            rows = self.conn.execute("SELECT * FROM golden_suggestions WHERE id LIKE ?", (ref + "%",)).fetchall() if len(ref) >= 4 else []
+            if len(rows) != 1:
+                raise NotFound(f"không tìm thấy đề xuất golden '{ref}'" + (" (tiền tố trùng nhiều đề xuất)" if rows else ""))
+            r = rows[0]
+        return _srow(r)  # type: ignore[return-value]
+
+    def suggestions(self, agent_id: str | None = None, status: str | None = "open", limit: int = 50) -> list[dict[str, Any]]:
+        where, args = [], []
+        if agent_id:
+            where.append("agent_id=?")
+            args.append(agent_id)
+        if status and status != "all":
+            where.append("status=?")
+            args.append(status)
+        sql = "SELECT * FROM golden_suggestions" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY created_at DESC LIMIT ?"
+        return [_srow(r) for r in self.conn.execute(sql, (*args, int(limit)))]  # type: ignore[misc]
+
+    def _human_touched(self, task_id: str, run_ids: list[str]) -> bool:
+        """Người đã sửa (Signal correction/edit_output/reject/cancel), hoàn tác (`undo`, `run.reverted`) hay tiếp quản run của task."""
+        kinds = ",".join("?" * len(HUMAN_TOUCH_SIGNALS))
+        marks = ",".join("?" * len(run_ids)) or "''"
+        if self.conn.execute(f"SELECT 1 FROM signals WHERE kind IN ({kinds}) AND (task_id=? OR run_id IN ({marks})) LIMIT 1",
+                             (*HUMAN_TOUCH_SIGNALS, task_id, *run_ids)).fetchone():
+            return True
+        return bool(run_ids) and self.conn.execute(
+            f"SELECT 1 FROM events WHERE type IN ('run.reverted','run.takeover') AND run_id IN ({marks}) LIMIT 1", tuple(run_ids)).fetchone() is not None
+
+    def _draft(self, t: dict[str, Any], c: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+        """Task done → (bản nháp, "ok") hoặc (None, lý do bỏ). Chỉ đọc."""
+        title = str(t.get("title") or "").strip()
+        body = str(t.get("body") or "").strip()
+        prompt = title if not body else f"{title}\n\n{body}"
+        result = str(t.get("result_summary") or "").strip()
+        if t.get("kind") == "root" or not t.get("assignee_agent_id"):
+            return None, "not_leaf"
+        if len(prompt) < int(c["min_prompt_chars"]) or len(result) < int(c["min_result_chars"]):
+            return None, "weak_signal"
+        if has_secret(prompt, result):
+            return None, "secret"
+        runs = [dict(r) for r in self.conn.execute("SELECT id, status, kind FROM runs WHERE task_id=? ORDER BY queued_at", (t["id"],))]
+        work = [r for r in runs if r.get("kind") in (None, "adhoc", "task")]
+        if not work or work[-1]["status"] != "completed":
+            return None, "no_completed_run"
+        if self._human_touched(t["id"], [r["id"] for r in runs]):
+            return None, "human_touched"
+        checker = validate_checker({"kind": "llm_judge", "rubric": RUBRIC.format(ref=result[:1500])})
+        return {"run_id": work[-1]["id"], "task_id": t["id"], "agent_id": t["assignee_agent_id"], "title": title[:120], "prompt": prompt,
+                "checker": checker, "prompt_hash": prompt_hash(prompt)}, "ok"
+
+    def auto_suggest(self, *, now: datetime | None = None) -> dict[str, Any]:
+        """Quét task `done` (đủ `min_age_h` để người kịp sửa/hoàn tác) → đề xuất. Hub (daemon) gọi; KHÔNG tạo golden task."""
+        c = self.suggest_cfg()
+        out: dict[str, Any] = {"suggested": [], "skipped": {}}
+        if not c.get("enabled", True):
+            return out
+        now = now or datetime.now(timezone.utc)
+        upto = (now - timedelta(hours=float(c["min_age_h"]))).isoformat()
+        since = (now - timedelta(days=float(c["lookback_days"]))).isoformat()
+        seen_tasks = {r[0] for r in self.conn.execute("SELECT task_id FROM golden_suggestions WHERE task_id IS NOT NULL")}
+        hashes = {r[0] for r in self.conn.execute("SELECT prompt_hash FROM golden_suggestions WHERE prompt_hash IS NOT NULL")}
+        hashes |= {prompt_hash(r[0]) for r in self.conn.execute("SELECT prompt FROM golden_tasks")}
+        used_runs = {r[0] for r in self.conn.execute("SELECT run_id FROM golden_suggestions")}
+        used_runs |= {r[0] for r in self.conn.execute("SELECT source_run_id FROM golden_tasks WHERE source_run_id IS NOT NULL")}
+        open_n = {r[0]: r[1] for r in self.conn.execute("SELECT agent_id, COUNT(*) FROM golden_suggestions WHERE status='open' GROUP BY agent_id")}
+        rows = self.conn.execute("SELECT * FROM tasks WHERE status='done' AND deleted_at IS NULL AND done_at IS NOT NULL AND done_at<=? AND done_at>=? "
+                                 "ORDER BY done_at DESC", (upto, since)).fetchall()
+        for r in rows:
+            if len(out["suggested"]) >= int(c["max_per_scan"]):
+                break
+            t = dict(r)
+            if t["id"] in seen_tasks:
+                continue
+            d, why = self._draft(t, c)
+            if d is not None and (d["prompt_hash"] in hashes or d["run_id"] in used_runs):
+                d, why = None, "duplicate"
+            if d is not None and open_n.get(d["agent_id"], 0) >= int(c["max_open_per_agent"]):
+                d, why = None, "agent_cap"
+            if d is not None and self.conn.execute("SELECT 1 FROM agents WHERE id=? AND deleted_at IS NULL", (d["agent_id"],)).fetchone() is None:
+                d, why = None, "agent_gone"
+            if d is None:
+                out["skipped"][why] = out["skipped"].get(why, 0) + 1
+                continue
+            sid, ts = _sid(), now_iso()
+            self.conn.execute(
+                "INSERT INTO golden_suggestions (id, run_id, agent_id, reason, status, task_id, title, prompt, checker, prompt_hash, created_at, updated_at) "
+                "VALUES (?,?,?, 'task_done', 'open', ?,?,?,?,?,?,?)",
+                (sid, d["run_id"], d["agent_id"], d["task_id"], d["title"], d["prompt"], json.dumps(d["checker"], ensure_ascii=False), d["prompt_hash"], ts, ts))
+            hashes.add(d["prompt_hash"])
+            open_n[d["agent_id"]] = open_n.get(d["agent_id"], 0) + 1
+            out["suggested"].append(sid)
+            ev = make_event("golden.suggestion_opened", d["agent_id"], {"suggestion_id": sid, "task_id": d["task_id"], "title": d["title"],
+                                                                        "golden_count": len(self.active_for(d["agent_id"]))}, run_id=d["run_id"])
+            ev.task_id = d["task_id"]
+            self.hub.publish(ev)
+        return out
+
+    def _suggestion_draft(self, s: dict[str, Any]) -> dict[str, Any]:
+        """Đề xuất của gate (theo run, chưa có nháp) → dựng nháp từ run lúc duyệt, cùng bộ lọc secret."""
+        if s.get("prompt") and s.get("checker"):
+            return {"prompt": s["prompt"], "checker": s["checker"], "title": s.get("title")}
+        run = self.hub.store.get_run(s["run_id"]) or {}
+        prompt = str(run.get("prompt") or "").strip()
+        ref = str(run.get("summary") or "").strip()
+        if not prompt or len(ref) < 20:
+            raise HubError(f"đề xuất {s['id']}: run {s['run_id']} thiếu prompt/kết quả để dựng golden — dùng `cfharness golden from-run {s['run_id']} …`")
+        if has_secret(prompt, ref):
+            raise HubError(f"đề xuất {s['id']}: run chứa secret — không dựng golden tự động")
+        return {"prompt": prompt, "checker": validate_checker({"kind": "llm_judge", "rubric": RUBRIC.format(ref=ref[:1500])}), "title": None}
+
+    def decide_suggestion(self, ref: str, decision: str, *, created_by: str = "user") -> dict[str, Any]:
+        """CHỈ NGƯỜI (Q-07): `approve` → tạo golden task từ nháp; `reject` → không gợi ý lại. Mỗi quyết định vào audit."""
+        who = self._require_human(created_by)
+        if decision not in ("approve", "reject"):
+            raise HubError("decision phải là 'approve' hoặc 'reject'")
+        s = self.suggestion(ref)
+        if s["status"] != "open":
+            raise Conflict(f"đề xuất {s['id']} đã {s['status']}" + (f" (bởi {s['decided_by']})" if s.get("decided_by") else ""))
+        ch = who.split(":", 1)[1] if ":" in who else "cli"
+        now = now_iso()
+        gid = None
+        if decision == "approve":
+            d = self._suggestion_draft(s)
+            gid = self.add({"agent_id": s["agent_id"], "prompt": d["prompt"], "checker": d["checker"], "title": d.get("title"),
+                            "source_run_id": s["run_id"], "tags": ["auto_suggested"]}, created_by=who)["id"]
+            # L3 đang hoãn vì thiếu golden (Q-23) → thử lại ở tick kế tiếp thay vì chờ tới 1 giờ
+            self.conn.execute("UPDATE proposals SET not_before=? WHERE status='deferred_no_eval'", (now,))
+        status = "accepted" if decision == "approve" else "dismissed"
+        self.conn.execute("UPDATE golden_suggestions SET status=?, decided_by=?, decided_channel=?, decided_at=?, golden_task_id=?, updated_at=? WHERE id=?",
+                          (status, who, ch, now, gid, now, s["id"]))
+        audit = getattr(self.hub, "audit", None)
+        if audit is not None:
+            audit.record("golden.suggestion_decided", s["agent_id"], s["run_id"],
+                         {"suggestion_id": s["id"], "decision": decision, "golden_task_id": gid, "task_id": s.get("task_id")},
+                         actor=who, channel=ch, target=s["id"], summary=f"{decision} đề xuất golden {s['id']}")
+        self.hub.publish(make_event("golden.suggestion_decided", s["agent_id"],
+                                    {"suggestion_id": s["id"], "decision": decision, "by": who, "channel": ch, "golden_task_id": gid}, run_id=s["run_id"]))
+        return self.suggestion(s["id"])

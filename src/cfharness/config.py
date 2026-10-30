@@ -193,7 +193,7 @@ DEFAULTS: dict[str, Any] = {
             "manager_progress": True,  # P7: tin tiến độ + nút Dừng khi điều phối viên làm việc cho tin Slack (chat/slack/progress.py)
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
-                       "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],  # M4-B: digest + nhắc chọn golden task (Q-23)
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,
             "backoff_base_s": 2,
             "timeout_s": 10,
@@ -211,7 +211,7 @@ DEFAULTS: dict[str, Any] = {
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
-                       "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],
             "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp", "file"],  # nhãn "THAO TÁC NẶNG" (mọi cho phép đều 2 bước — WT-5)
             "callback_ttl_s": 604800,  # nút duyệt còn hiệu lực 7 ngày (waiting_human có thể chờ lâu)
             "pair_ttl_s": 600,
@@ -364,6 +364,9 @@ DEFAULTS: dict[str, Any] = {
         "batch_time": "03:00",  # giờ máy
         "batch_lookback_days": 2,
         "suggest_every_h": 24,  # gợi ý golden task cho agent chưa có (không lặp quá dày)
+        # tự đề xuất golden từ task done mà người không sửa/hoàn tác (docs/dev-notes/golden-suggestions.md) — người duyệt một chạm
+        "golden_suggest": {"enabled": True, "every_min": 60, "min_age_h": 6, "lookback_days": 14, "max_open_per_agent": 3, "max_per_scan": 10,
+                           "min_prompt_chars": 20, "min_result_chars": 20},
         "keep_tmp": False,  # giữ bản sao home tạm (gỡ lỗi)
         "ops_tick_s": 30,  # chu kỳ vòng nền M4-B (digest/curator/eval lô/hồi quy)
         "judge": {"model": "haiku", "budget_usd": 0.05, "timeout_s": 180, "binary": None},  # LLM judge (null binary = runtime.claude.binary)

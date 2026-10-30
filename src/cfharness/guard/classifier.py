@@ -92,7 +92,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "knowledge": {"pin", "unpin"},
     # skill manager của người (RPC knowledge.skill_* + knowledge.pin là HUMAN_ONLY) — `cfharness skill <verb>` (learning/skill_cli.py)
     "skill": {"add", "save", "new", "create", "edit", "set", "archive", "rm", "remove", "delete", "restore", "import", "promote", "pin", "unpin"},
-    "golden": {"add", "rm", "remove", "edit", "update", "from-run", "from_run", "restore", "dismiss"},
+    "golden": {"add", "rm", "remove", "edit", "update", "from-run", "from_run", "restore", "dismiss", "approve", "reject"},
     "guard": {"protect", "integrity", "sandbox", "repo-deny", "repo_deny", "always", "grant"},
     "config": {"set", "unset"},
     "gates": None,  # công tắc chung cổng duyệt (= config.set gates.mode) — agent gõ, kể cả chỉ xem, đều chặn
@@ -170,11 +170,11 @@ OBFUSCATION = re.compile(r"\b(base64\s+(-d|--decode|-D)|openssl\s+(enc|base64)\s
 
 MCP_DELETE_TOKENS = {"delete", "del", "remove", "rm", "purge", "drop", "destroy", "wipe", "erase", "truncate", "xoa", "xoá", "xóa", "huy", "huỷ", "hủy", "gỡ", "gobo", "unlink", "trash", "clear", "reset"}
 MCP_DESC_RE = re.compile(r"\b(delete[sd]?|deleting|remove[sd]?|removing|purge[sd]?|drop(s|ped)?|destroy(s|ed)?|wipe[sd]?|erase[sd]?|permanently)\b|xoá|xóa|huỷ|hủy|gỡ bỏ", re.I)
-MCP_FORBIDDEN = re.compile(r"^(hub_)?(approve|deny|approval_resolve|policy_set|protect_(add|rm|remove)|golden_(add|rm|remove|edit|update|from_run|restore))$")  # M4-B: golden = chính sách an toàn (Q-07)
+MCP_FORBIDDEN = re.compile(r"^(hub_)?(approve|deny|approval_resolve|policy_set|protect_(add|rm|remove)|golden_(add|rm|remove|edit|update|from_run|restore|approve|reject|suggestion_approve|suggestion_reject))$")  # M4-B: golden = chính sách an toàn (Q-07)
 # H-18: tool của MCP server CỦA HUB (nhận theo lệnh/URL, không theo tên đăng ký) ứng với method chỉ-người
 HUB_MCP_HUMAN_ONLY = re.compile(
     r"^(hub_)?(approve|deny|agent_(create|update|archive|delete|purge|restore)|estop|config_set|secret_\w+|mcp_(add|update|remove|assign)|"
-    r"learn_(propose|rollback|retry|refine|policy_set)|knowledge_pin|knowledge_skill_(save|archive|restore|import|promote)|team_(create|update|archive|member_set|member_rm|estop)|golden_(add|rm|remove|edit|update|from_run|restore|dismiss)|takeover|run_revert)$")
+    r"learn_(propose|rollback|retry|refine|policy_set)|knowledge_pin|knowledge_skill_(save|archive|restore|import|promote)|team_(create|update|archive|member_set|member_rm|estop)|golden_(add|rm|remove|edit|update|from_run|restore|dismiss|approve|reject|suggestion_approve|suggestion_reject)|takeover|run_revert)$")
 
 
 # ============================================================================ data
@@ -2578,7 +2578,7 @@ class BashAnalyzer:
         if sub in HUB_FORBIDDEN_SUB or (sub == "approvals" and len(t) > 1 and t[1] in ("approve", "deny")):
             self.hit("destructive", "self_approval", "hub", "agent không được tự duyệt/từ chối approval", forbidden=True)
             return
-        if sub == "golden" and len(t) > 1 and t[1] not in ("list", "show", "candidates", "ls"):  # M4-B: golden task = chính sách an toàn (Q-07)
+        if sub == "golden" and len(t) > 1 and t[1] not in ("list", "show", "candidates", "ls", "suggestions"):  # M4-B: golden task = chính sách an toàn (Q-07)
             self.hit("destructive", "policy_change", "policy", "agent không được tạo/sửa/xoá golden task (chính sách an toàn, Q-07)", forbidden=True)
             return
         if (sub == "learn" and len(t) > 2 and t[1] == "policy" and t[2] not in ("get", "show")) or (sub == "knowledge" and len(t) > 1 and t[1] in ("pin", "unpin")):

@@ -42,6 +42,7 @@ for _n in ("httpx", "httpx2", "httpcore", "httpcore2"):  # log thư viện có U
 
 MAX_TEXT = 3900  # Telegram giới hạn 4096 ký tự/tin
 APPROVAL_EVENTS = ("approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated")
+GOLDEN_SUGGESTION_EVENT = "golden.suggestion_opened"  # đề xuất golden → cặp tin có nút Duyệt / Bỏ qua (chat/base.send_golden_suggestion)
 
 
 class TelegramError(Exception):
@@ -348,6 +349,8 @@ class TelegramNotifier(QueuedNotifier):
 
     def render(self, ev: HubEvent) -> dict[str, Any] | None:
         p = ev.payload or {}
+        if ev.type == GOLDEN_SUGGESTION_EVENT:
+            return {"golden_id": p.get("suggestion_id"), "done": set()} if p.get("suggestion_id") else None
         aid = p.get("request_id") if ev.type in APPROVAL_EVENTS else None
         heavy = False
         if aid:
@@ -372,7 +375,12 @@ class TelegramNotifier(QueuedNotifier):
             if chat in msg["done"]:
                 continue
             aid = msg.get("approval_id")
-            if aid:
+            if msg.get("golden_id"):
+                s = self.hub.evals.golden.suggestion(msg["golden_id"])
+                if s.get("status") != "open":
+                    return {"chats": n, "skipped": "resolved"}
+                await self.bot.send_golden_suggestion(api, chat, s)
+            elif aid:
                 row = self.hub.approvals.get(aid)
                 if row.get("status") not in ("open", "waiting_human"):
                     return {"chats": n, "skipped": "resolved"}

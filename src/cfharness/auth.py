@@ -70,6 +70,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "knowledge.skill_save", "knowledge.skill_archive", "knowledge.skill_restore", "knowledge.skill_import", "knowledge.skill_promote",
         # golden task = chính sách an toàn (Q-07)
         "golden.add", "golden.rm", "golden.update", "golden.restore", "golden.dismiss", "golden.from_run",
+        "golden.suggestion_approve", "golden.suggestion_reject", "golden.suggest_scan",  # đề xuất golden: hub đề xuất (vòng nền), người quyết
         # secret + registry MCP (server MCP chạy NGOÀI sandbox → thêm server = thoát sandbox)
         "secret.set", "secret.rm", "mcp.add", "mcp.update", "mcp.remove", "mcp.restore", "mcp.import", "mcp.assign",
         # OAuth MCP: đăng nhập/làm mới/ngắt = cấp/thu hồi quyền truy cập dịch vụ ngoài thay người (docs/dev-notes/mcp-oauth.md)

@@ -7,7 +7,8 @@ Vòng nền tự khởi động khi bus phát `hub.started` (trong event loop c�
   1. digest đến giờ (`digest.schedule`, giờ máy) → dựng + gửi Slack;
   2. eval L1 theo lô (`eval.batch_time`, mỗi ngày một lần) → `gate.run_batch_l1()`;
   3. curator pha 1 đến chu kỳ và daemon rảnh → `curator.run()`;
-  4. agent có run/signal mới → `regression.check_agent()`; toàn bộ mỗi `eval.regression.full_check_min` phút.
+  4. agent có run/signal mới → `regression.check_agent()`; toàn bộ mỗi `eval.regression.full_check_min` phút;
+  5. mỗi `eval.golden_suggest.every_min` phút → `golden.auto_suggest()` (đề xuất golden từ task done, người duyệt).
 """
 
 from __future__ import annotations
@@ -93,7 +94,19 @@ class LearningOps:
             acts += await self.regression.check_all()
         if acts:
             out["regression"] = acts
+        if self._golden_suggest_due(loop_t):
+            out["golden_suggest"] = self.hub.evals.golden.auto_suggest()
         return out
+
+    def _golden_suggest_due(self, loop_t: float) -> bool:
+        c = self.hub.evals.golden.suggest_cfg()
+        if not c.get("enabled", True):
+            return False
+        last = getattr(self, "_last_golden_suggest", None)
+        if last is not None and loop_t - last < 60 * float(c.get("every_min") or 60):
+            return False
+        self._last_golden_suggest = loop_t
+        return True
 
     def _batch_due(self, now_local: datetime | None) -> bool:
         c = self.hub.config.get("eval") or {}
