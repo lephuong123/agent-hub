@@ -291,6 +291,9 @@ WEB_DOMAIN_MODES = ("any", "allowlist")
 
 
 # ============================================================================ allowlist theo agent (`tool_policy.web_allow_domains`)
+_AGENT_DOMAIN_PAT = re.compile(r"(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*")  # tên đầy đủ hoặc `*.` ở đầu — không `?`/`*` chỗ khác
+
+
 def normalize_agent_domains(value: Any) -> list[str] | None:
     """Kiểm + chuẩn hoá `tool_policy.web_allow_domains`: None = chưa đặt (hành vi cũ); danh sách = CHỈ các host khớp mẫu (rỗng = chặn mọi
     WebFetch). Chữ thường, bỏ dấu chấm cuối, IDN → punycode (khớp với host `static_check` trả về). `*` bị từ chối (= không giới hạn:
@@ -309,11 +312,25 @@ def normalize_agent_domains(value: Any) -> list[str] | None:
                 d = ".".join(lab if lab == "*" or lab.isascii() else lab.encode("idna").decode("ascii") for lab in d.split("."))
             except UnicodeError:
                 raise ValueError(f"web_allow_domains: domain IDN không hợp lệ {x!r}") from None
-        if d == "*" or not _DOMAIN_PAT.fullmatch(d):
-            raise ValueError(f"web_allow_domains: mẫu domain không hợp lệ {x!r} (không giới hạn = null, không dùng '*')")
+        if not _AGENT_DOMAIN_PAT.fullmatch(d):
+            raise ValueError(f"web_allow_domains: mẫu domain không hợp lệ {x!r} — chỉ tên đầy đủ hoặc '*.' ở đầu (vd docs.python.org, "
+                             "*.github.io); không giới hạn = null")
         if d not in out:
             out.append(d)
     return out
+
+
+def agent_domain_matches(host: str, patterns: Iterable[str]) -> str | None:
+    """So host với allowlist của agent — CHẶT hơn `domain_matches`: chỉ tên đầy đủ hoặc `*.x` (host kết thúc `.x`, không khớp `x`);
+    không fnmatch (`*` giữa/cuối mẫu khớp qua dấu chấm: `example.*` ⊃ `example.attacker.net`). Mẫu sai dạng (sửa tay) → bỏ qua."""
+    h = norm_host(host)
+    for p in patterns or ():
+        pat = str(p or "").strip().lower().rstrip(".")
+        if not _AGENT_DOMAIN_PAT.fullmatch(pat):
+            continue
+        if h == pat or (pat.startswith("*.") and h.endswith(pat[1:])):
+            return pat
+    return None
 
 
 def agent_domains_widening(cur: Any, new: Any) -> str | None:

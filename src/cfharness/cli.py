@@ -399,6 +399,8 @@ def _agent_payload(a: argparse.Namespace, *, creating: bool) -> dict[str, Any]:
         tp["browser"] = None if a.browser == "default" else a.browser
     if getattr(a, "web_domains", None) is not None:  # "any" = bỏ giới hạn, "none" = chặn mọi WebFetch
         w = a.web_domains.strip()
+        if not w.strip(", "):  # chuỗi rỗng dễ là gõ nhầm → không âm thầm chặn hết; chặn hết phải ghi rõ 'none'
+            raise ValueError("--web-domains rỗng: dùng 'none' để chặn mọi WebFetch, 'any' để bỏ giới hạn")
         tp["web_allow_domains"] = None if w == "any" else [] if w == "none" else _split_list([w])
     for src, dst in (("allowed_tools", "allowed_tools"), ("disallowed_tools", "disallowed_tools"), ("tools", "tools")):
         v = _split_list(getattr(a, src, None))

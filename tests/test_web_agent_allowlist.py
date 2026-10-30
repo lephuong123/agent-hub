@@ -7,6 +7,8 @@ IDN/punycode, IP literal, cổng, hoa/thường, dấu chấm cuối, `\\`) và 
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 
 import pytest
 
@@ -229,15 +231,121 @@ async def test_trust_full_does_not_lift_allowlist(hub):
     assert _decisions(hub, rid)[-1]["matched_rule"] == "web_agent_domain_not_allowed"
 
 
+C = "mcp__claude-in-chrome__"
+CHROME_ALLOW = {"web_allow_domains": ALLOW, "browser": "chrome"}
+
+
+async def _chrome(hub, rid, tool, ti):
+    return await asyncio.wait_for(hub.guard.check({"run_id": rid, "tool_name": C + tool, "tool_input": ti, "channel": "hook"}), 20)
+
+
+def _spec_for(hub, aid):
+    run = hub.store.get_run(hub.runs.submit(aid, "hi")["id"])
+    return hub.runs._prepare_spec(run, hub.store.get_agent(aid))
+
+
 async def test_chrome_navigate_same_rule(hub):
+    rid = await _run(hub, tool_policy=CHROME_ALLOW)
+    assert (await _chrome(hub, rid, "navigate", {"url": "https://docs.python.org/3/", "tabId": 1}))["decision"] == "allow"
+    for ti in ({"url": "https://evil.com/", "tabId": 1}, {"url": "evil.com", "tabId": 1}, {"url": "https://docs.python.org.evil.com/", "tabId": 1}):
+        assert (await _chrome(hub, rid, "navigate", ti))["decision"] == "deny", ti
+        assert _decisions(hub, rid)[-1]["matched_rule"] == "web_agent_domain_not_allowed"
+    assert (await _chrome(hub, rid, "tabs_create_mcp", {"url": "https://evil.com/"}))["decision"] == "deny"
+    batch = {"actions": [{"name": "navigate", "input": {"url": "https://x.github.io/", "tabId": 1}},
+                         {"name": "navigate", "input": {"url": "https://evil.com/", "tabId": 1}}]}
+    assert (await _chrome(hub, rid, "browser_batch", batch))["decision"] == "deny"
+
+
+CHROME_ESCAPES = [  # thao tác có thể rời domain mà hub không thấy URL đích
+    ("computer", {"action": "left_click", "coordinate": [1, 1], "tabId": 1}),
+    ("form_input", {"ref": "r1", "value": "x", "tabId": 1}),
+    ("javascript_tool", {"text": "location = 'https://evil.com'", "tabId": 1}),
+    ("navigate", {"url": "back", "tabId": 1}),
+    ("browser_batch", {"actions": [{"name": "navigate", "input": {"url": "https://docs.python.org/", "tabId": 1}},
+                                   {"name": "computer", "input": {"action": "left_click", "coordinate": [1, 1], "tabId": 1}}]}),
+]
+
+
+@pytest.mark.parametrize("tool,ti", CHROME_ESCAPES)
+async def test_chrome_actions_held_even_autonomous(hub, tool, ti):
+    hub.config.set("approval.profile", "autonomous")
+    rid = await _run(hub, tool_policy=CHROME_ALLOW)
+    r = await hub.guard.test({"run_id": rid, "tool": C + tool, "input": ti})
+    assert r["hold"] is True and r["rule"] == "web_agent_chrome_action" and "web_allow_domains" in r["reason"]
+    assert not r["forbidden"]  # người vẫn duyệt được (màn duyệt nêu rõ allowlist)
+
+
+@pytest.mark.parametrize("tool,ti", CHROME_ESCAPES)
+async def test_chrome_actions_refused_for_trust_full(hub, tool, ti):
+    rid = await _run(hub, tool_policy=CHROME_ALLOW)
+    hub.guard.trust_set("w", "full")
+    res = await _chrome(hub, rid, tool, ti)
+    assert res["decision"] == "deny"
+    d = _decisions(hub, rid)[-1]
+    assert d["matched_rule"] == "web_agent_chrome_action" and d["action"] == "deny"
+    assert any(a["kind"] == "guard.deny" for a in _audit(hub, rid))
+
+
+async def test_chrome_read_tools_still_free(hub):
+    rid = await _run(hub, tool_policy=CHROME_ALLOW)
+    hub.guard.trust_set("w", "full")
+    for tool, ti in (("read_page", {"tabId": 1}), ("get_page_text", {"tabId": 1}), ("computer", {"action": "screenshot", "tabId": 1})):
+        assert (await _chrome(hub, rid, tool, ti))["decision"] == "allow", tool
+
+
+async def test_chrome_actions_not_set_unchanged(hub):
+    hub.config.set("approval.profile", "autonomous")
+    rid = await _run(hub, tool_policy={"browser": "chrome"})
+    click = {"action": "left_click", "coordinate": [1, 1], "tabId": 1}
+    r = await hub.guard.test({"run_id": rid, "tool": C + "computer", "input": click})
+    assert r["rule"] == "chrome_action" and r["hold"] is False
+    hub.guard.trust_set("w", "full")
+    assert (await _chrome(hub, rid, "computer", click))["decision"] == "allow"
+
+
+@pytest.mark.parametrize("browser", ["auto", "none", "playwright", None])
+async def test_playwright_dropped_when_set(hub, browser):
+    hub.mcp.add({"name": "pw", "transport": "stdio", "command": "npx", "args": ["@playwright/mcp@latest"], "trust": "trusted"})
+    tp = {"browser": browser} if browser else {}
+    hub.agents.create({"id": "p", "name": "p", "mcp_servers": ["pw"], "tool_policy": {**tp, "web_allow_domains": ALLOW}})
+    hub.agents.create({"id": "q", "name": "q", "mcp_servers": ["pw"], "tool_policy": tp})
+    servers = lambda s: set(json.loads(Path(s.mcp_config_path).read_text(encoding="utf-8"))["mcpServers"])  # noqa: E731
+    sp, sq = _spec_for(hub, "p"), _spec_for(hub, "q")
+    assert "pw" not in servers(sp) and "pw" not in sp.allowed_mcp_servers  # Playwright không áp được luật URL → gỡ
+    assert "pw" in servers(sq)  # chưa đặt = như cũ
+
+
+async def test_playwright_tool_refused(hub):
     rid = await _run(hub, tool_policy={"web_allow_domains": ALLOW})
-    run = hub.store.get_run(rid)
-    nav = "mcp__claude-in-chrome__navigate"
-    v = Verdict("write", "chrome_navigate", "mcp", "x", net_urls=["https://evil.com/"])
-    out = hub.guard.agent_web_check(run, nav, {"url": "https://evil.com/"}, v)
-    assert out is not None and out.forbidden and out.rule == "web_agent_domain_not_allowed"
-    v = Verdict("write", "chrome_navigate", "mcp", "x", net_urls=["https://docs.python.org/"])
-    assert hub.guard.agent_web_check(run, nav, {"url": "https://docs.python.org/"}, v) is None
+    hub.guard.trust_set("w", "full")
+    res = await asyncio.wait_for(hub.guard.check({"run_id": rid, "tool_name": "mcp__playwright__browser_navigate",
+                                                  "tool_input": {"url": "https://docs.python.org/"}, "channel": "hook"}), 20)
+    assert res["decision"] == "deny" and _decisions(hub, rid)[-1]["matched_rule"] == "web_agent_domain_not_allowed"
+
+
+async def test_check_error_refuses_not_asks(hub, monkeypatch):
+    rid = await _run(hub, tool_policy={"web_allow_domains": ALLOW})
+
+    def boom(*a, **k):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(hub.store, "get_agent", boom)
+    res = await _check(hub, rid, "https://docs.python.org/")
+    assert res["decision"] == "deny" and not res.get("approval_id")
+    monkeypatch.undo()
+    assert _decisions(hub, rid)[-1]["matched_rule"] == "web_agent_domain_not_allowed"
+
+
+def test_loose_globs_rejected_and_ignored():
+    from cfharness.guard.url_safety import agent_domain_matches
+
+    for bad in (["example.*"], ["*x"], ["docs.*.org"], ["a?.com"], ["*.*.com"], ["x.*.com"]):
+        with pytest.raises(ValueError):
+            normalize_agent_domains(bad)
+    assert agent_domain_matches("example.attacker.net", ["example.*", "*x", "*net"]) is None  # mẫu lỏng (sửa tay) → bỏ qua
+    assert agent_domain_matches("a.b.github.io", ["*.github.io"]) == "*.github.io"
+    assert agent_domain_matches("github.io", ["*.github.io"]) is None
+    assert agent_domain_matches("evilgithub.io", ["*.github.io"]) is None
 
 
 async def test_guard_test_rpc_reports_rule(hub):
@@ -252,6 +360,16 @@ async def test_guard_off_disables_webfetch_when_set(hub):
     spec = hub.runs.runtime().started[-1]
     assert "WebFetch" in spec.tool_policy["disallowed_tools"]  # không có hook lọc domain → fail-closed
     assert "WebFetch" not in (spec.tool_policy.get("allowed_tools") or [])
+
+
+async def test_guard_off_disables_chrome_when_set(hub):
+    hub.config.set("guard.enabled", False)
+    hub.agents.create({"id": "c", "name": "c", "tool_policy": {"browser": "chrome", "web_allow_domains": ALLOW}})
+    hub.agents.create({"id": "d", "name": "d", "tool_policy": {"browser": "chrome"}})
+    sc, sd = _spec_for(hub, "c"), _spec_for(hub, "d")
+    assert sc.tool_policy["browser"] == "none" and "mcp__claude-in-chrome" in sc.tool_policy["disallowed_tools"]
+    assert "claude-in-chrome" not in sc.allowed_mcp_servers
+    assert sd.tool_policy["browser"] == "chrome" and "mcp__claude-in-chrome" not in sd.tool_policy["disallowed_tools"]  # chưa đặt = như cũ
 
 
 async def test_malformed_stored_value_fails_closed(hub):
@@ -322,6 +440,9 @@ def test_cli_flag_and_text(hub):
     assert _agent_payload(a, creating=False) == {"tool_policy": {"web_allow_domains": None}}
     a = build_parser().parse_args(["agent", "edit", "w", "--web-domains", "none"])
     assert _agent_payload(a, creating=False) == {"tool_policy": {"web_allow_domains": []}}
+    for empty in ("", " ", ","):  # rỗng = gõ nhầm, không âm thầm chặn hết
+        with pytest.raises(ValueError, match="none"):
+            _agent_payload(build_parser().parse_args(["agent", "edit", "w", "--web-domains", empty]), creating=False)
     hub.agents.create({"id": "w", "name": "w", "tool_policy": {"web_allow_domains": ["docs.python.org"]}})
     ag = hub.agents.show("w")
     assert "web_allow_domains: docs.python.org" in _agent_text(ag)
