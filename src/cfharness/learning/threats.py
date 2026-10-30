@@ -140,6 +140,12 @@ POLICY_TOUCH_PATTERNS: list[tuple[re.Pattern, str]] = [
 ]
 
 
+def scan_load(content: str) -> list[str]:
+    """Quét lúc NẠP tri thức vào prompt (như Hermes quét memory lúc load): injection/Unicode ẩn — KHÔNG gồm mẫu chạm chính
+    sách (đó là luật cho thay đổi do học, mục người viết tay nói về policy/ không phải mối đe doạ lúc nạp)."""
+    return [x for x in scan(content) if x not in ("policy_touch", "self_escalation")]
+
+
 def scan(content: str, scope: str = "strict") -> list[str]:
     """Id các mẫu nguy hiểm khớp trong `content` (rỗng = sạch)."""
     if not content:

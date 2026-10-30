@@ -46,7 +46,7 @@ class KnowledgeError(HubError):
 
 # ============================================================================ memory (thuần)
 def parse_memory(text: str) -> list[str]:
-    body = text or ""
+    body = (text or "").replace("\r\n", "\n")  # file sửa tay trên Windows (CRLF) — không thì '\n§\n' không khớp, mọi mục dồn làm một
     lines = body.split("\n", 1)
     if lines and lines[0].startswith("# "):
         body = lines[1] if len(lines) > 1 else ""

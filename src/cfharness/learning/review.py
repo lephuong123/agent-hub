@@ -16,6 +16,9 @@ propose_* — không ghi file), `--max-budget-usd` = `learning.review_budget_usd
 cảnh session gốc (lượt API đầu của fork ghi lại cả ngữ cảnh vào cache: token ngữ cảnh lần cuối của session ×
 `learning.review_reload_usd_per_mtok`), chặn trên bởi `learning.review_budget_max_usd`. Proposal được pipeline tự áp dụng ngay
 khi tool được gọi. Hết ngân sách → run `budget_exceeded`, proposal đã gửi vẫn giữ.
+Digest (như Hermes `auxiliary.background_review`): `review_model` khác model run nguồn, hoặc ngữ cảnh session nguồn >
+`learning.review_digest_over_tokens` → KHÔNG fork; review chạy session mới với digest các tin gần nhất (`digest_for`,
+`run_opts.review_digest`) — chi phí không còn tỉ lệ với cỡ session.
 
 Kết thúc không trọn (không tiêu Signal của job khi chưa review xong):
 - `rate_limited` → job xếp hàng lại sau `learning.review_retry_backoff_s` (nhân đôi mỗi lần, ≤ 1 giờ), tối đa
@@ -240,11 +243,16 @@ class ReviewScheduler:
         signals = self.svc.signals.many(list(job.get("signal_ids") or []))
         prompt = render_review_prompt(scope=str(self.cfg("review_scope") or "combined"), signals=signals, focus=job.get("focus"))
         model = self.cfg("review_model") or src.get("model")
-        opts = {"fork": True, "learning_review": True, "read_only": True, "review_job_id": job["id"], "source_run_id": src["id"]}
-        budget = self.review_budget(src, retry_after_budget=any(a.get("outcome") == "budget_exceeded" for a in self._attempts(job)))
+        digest = self.digest_for(src, model)
+        opts = {"fork": not digest, "learning_review": True, "read_only": True, "review_job_id": job["id"], "source_run_id": src["id"]}
+        if digest:
+            opts["review_digest"] = True
+            prompt = digest + "\n\n" + prompt
+        budget = self.review_budget(src, retry_after_budget=any(a.get("outcome") == "budget_exceeded" for a in self._attempts(job)),
+                                    digest_chars=len(digest) if digest else None)
         try:
             run = self.hub.runs.submit(agent_id, prompt, cwd=src.get("cwd"), budget_usd=budget, model=model,
-                                       kind="review", resume_session_id=src["session_id"], run_opts=opts,
+                                       kind="review", resume_session_id=None if digest else src["session_id"], run_opts=opts,
                                        max_runtime_s=float(self.cfg("review_timeout_s") or 600))
         except HubError as e:
             self._end(job, "failed", reason=e.message[:300])
@@ -291,7 +299,40 @@ class ReviewScheduler:
                 return t
         return 0
 
-    def review_budget(self, src: dict[str, Any], *, retry_after_budget: bool = False) -> float | None:
+    def digest_for(self, src: dict[str, Any], model: str | None) -> str | None:
+        """Digest thay cho fork (như Hermes chạy review bằng model phụ trên digest): khi review dùng model KHÁC run nguồn (fork
+        không còn cache) hoặc ngữ cảnh session nguồn > `review_digest_over_tokens`. Digest = các tin mới nhất của session (chỉ mục
+        session_search, đã che secret), tối đa `review_digest_chars`. None → fork như cũ (kể cả khi session chưa được chỉ mục)."""
+        over = self.cfg("review_digest_over_tokens")
+        other_model = bool(self.cfg("review_model")) and model != src.get("model")
+        if not other_model and not (over and self.context_tokens(src) > int(over)):
+            return None
+        cap = int(self.cfg("review_digest_chars") or 40_000)
+        try:
+            rows = self.conn.execute("SELECT role, tool, text FROM session_messages WHERE session_id=? ORDER BY ts DESC, id DESC LIMIT 2000",
+                                     (src["session_id"],)).fetchall()
+        except Exception:  # bảng chưa có (chỉ mục chưa dựng)
+            return None
+        lines: list[str] = []
+        used = 0
+        for role, tool, text in rows:
+            t = " ".join(str(text or "").split())
+            if not t:
+                continue
+            t = t if len(t) <= 1500 else t[:1500] + " …"
+            line = f"[{role}{'/' + tool if tool else ''}] {t}"
+            if used + len(line) > cap:
+                break
+            lines.append(line)
+            used += len(line) + 1
+        if not lines:
+            return None
+        omitted = len(rows) - len(lines)
+        return ("The conversation to review is NOT loaded in this session. Below is a digest of it: its most recent messages, oldest first"
+                + (f" ({omitted} older messages omitted)" if omitted > 0 else "") + ". Treat it as the conversation above.\n"
+                "<conversation_digest>\n" + "\n".join(reversed(lines)) + "\n</conversation_digest>")
+
+    def review_budget(self, src: dict[str, Any], *, retry_after_budget: bool = False, digest_chars: int | None = None) -> float | None:
         """--max-budget-usd của review fork. `review_budget_usd` null → None (không trần riêng, như run thường: limits của agent /
         runs.default_max_budget_usd / phần còn lại ngân sách ngày). Ngược lại = base + nạp lại ngữ cảnh, chặn trên ở
         `review_budget_max_usd` (không bao giờ dưới base). Lần thử lại sau `budget_exceeded` → dùng thẳng trần."""
@@ -301,7 +342,8 @@ class ReviewScheduler:
         base = float(base)
         mx = self.cfg("review_budget_max_usd")
         rate = float(self.cfg("review_reload_usd_per_mtok") or 0)
-        want = base + self.context_tokens(src) / 1_000_000 * rate
+        ctx = (digest_chars // 4 + 20_000) if digest_chars is not None else self.context_tokens(src)  # digest: chỉ digest + system prompt
+        want = base + ctx / 1_000_000 * rate
         if retry_after_budget:
             want = float(mx) if mx else want * 2
         if mx:

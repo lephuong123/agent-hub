@@ -7,6 +7,8 @@
 - Rollback từng entry tạo entry MỚI (`op=rollback`, `rollback_of`); rollback của rollback cũng được. Có entry sau cùng
   đích chưa rollback → `Conflict` + gợi ý chuỗi (`chain=True` rollback ngược thời gian). Đích bị sửa ngoài ledger → Conflict
   (trừ `force`). Rollback KHÔNG bị giới hạn tần suất (FR-LN-18).
+- Memory tầng agent (MEMORY.md/USER.md — kho theo MỤC): rollback ĐẢO NGƯỢC đúng các mục entry đã thêm/sửa/xoá trên nội dung
+  hiện tại (`invert_memory`), không khôi phục cả file → không cần chuỗi, không gỡ fact thêm sau, mục đã bị sửa tiếp thì bỏ qua.
 - Xoá skill = chuyển `.archive/` (xoá mềm, FR-SG-06); rollback khôi phục đúng nội dung từ blob.
 - Cấu hình (hardening H-04): rollback CHỈ khôi phục các khoá entry đã đổi (`target_ref` ∪ khoá khác nhau before/after; SOUL chỉ
   khi entry đổi SOUL), không ghi đè khoá khác. "Cùng đích" của cấu hình = trùng ít nhất một khoá. Khoá của entry bị sửa sau
@@ -157,6 +159,38 @@ class Change:
     flags: list[str] = field(default_factory=list)
     created_by: str = "agent"  # provenance cho skill mới
     rollback_of: str | None = None
+
+
+def is_entry_memory(e: dict[str, Any]) -> bool:
+    """Entry memory tầng agent → rollback theo mục. Tầng team/global giữ rollback cả file (canary ghim phiên bản theo file)."""
+    return e.get("blob_kind") == "file" and e.get("target") == "memory" and e.get("scope") == "agent"
+
+
+def invert_memory(before: list[str], after: list[str], current: list[str]) -> list[str]:
+    """Đảo ngược thay đổi before→after trên `current`: mục entry thêm thì gỡ, mục entry sửa thì trả bản cũ đúng chỗ, mục entry
+    xoá thì thêm lại (sau mục đứng trước nó, không còn thì đầu file). Mục entry thêm/sửa đã bị thay đổi sau entry đè lên → bỏ qua
+    (không đụng thay đổi sau)."""
+    import difflib
+
+    swap: dict[str, list[str]] = {}
+    restore_after: dict[str | None, list[str]] = {}
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=before, b=after, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        old, new = before[i1:i2], after[j1:j2]
+        if new:
+            swap[new[0]] = old
+            for x in new[1:]:
+                swap[x] = []
+        else:
+            restore_after.setdefault(after[j1 - 1] if j1 > 0 else None, []).extend(old)
+    have = set(current)
+    out = [x for x in restore_after.pop(None, []) if x not in have]
+    for c in current:
+        out.extend((x for x in swap.pop(c) if x not in have) if c in swap else [c])
+        out.extend(x for x in restore_after.pop(c, []) if x not in have)
+    out.extend(x for v in restore_after.values() for x in v if x not in have)  # mục đứng trước đã mất → thêm cuối
+    return list(dict.fromkeys(out))
 
 
 class Ledger:
@@ -324,6 +358,8 @@ class Ledger:
         return ks.memory_path(e["scope"], e["owner_id"], store)
 
     def later_entries(self, e: dict[str, Any]) -> list[dict[str, Any]]:
+        if is_entry_memory(e):
+            return []  # rollback theo mục: thay đổi sau trên cùng file độc lập
         if e.get("blob_kind") == "config":
             # cấu hình: đích = TẬP KHOÁ — entry sau đổi ít nhất một khoá trùng mới là "cùng đích" (H-04)
             ks, sl = config_keys(e)
@@ -408,6 +444,15 @@ class Ledger:
                                f"xem `learn show {e['id']}`; dùng --force để vẫn khôi phục", data={"drifted": drifted})
             ch.config_changes = {k: (st_before.get("config") or {}).get(k) for k in keys}
             ch.soul = (st_before.get("soul") or "") if soul else None
+        elif is_entry_memory(e):
+            from ..knowledge.store import parse_memory, render_memory
+
+            current = self._current_bytes(kind, path, e.get("agent_id"))
+            after = self.blobs.get(e.get("after_blob"))
+            store = "user" if e["target_ref"] == "USER.md" else "memory"
+            ch.after = render_memory(invert_memory(parse_memory((before or b"").decode("utf-8", "replace")),
+                                                   parse_memory((after or b"").decode("utf-8", "replace")),
+                                                   parse_memory((current or b"").decode("utf-8", "replace"))), store).encode("utf-8")
         else:
             current = self._current_bytes(kind, path, e.get("agent_id"))
             cur_sha = hashlib.sha256(current).hexdigest() if current is not None else None
