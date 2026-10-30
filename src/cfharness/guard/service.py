@@ -389,6 +389,11 @@ class GuardService:
 
         if v.forbidden:
             return v
+        av = self.agent_web_check(run, tool_name, tool_input, v)
+        if av is not None:
+            if av.forbidden:
+                return av
+            v = av  # Chrome hành động (giữ chờ người): URL trong batch vẫn qua luật domain/DNS bên dưới
         from ..browser import is_chrome_tool
 
         chrome = is_chrome_tool(tool_name)  # Claude in Chrome navigate/tabs_create (+ trong browser_batch): CÙNG luật WebFetch
@@ -441,6 +446,67 @@ class GuardService:
                 out = _up(out, Verdict("uncertain", "web_domain_not_allowed", "network", f"{label}: {host} ngoài danh sách domain cho phép ({why})",
                                         [url[:200]]))
         return out
+
+    def agent_web_check(self, run: dict[str, Any] | None, tool_name: str, tool_input: dict[str, Any], v: Verdict, *,
+                        trusted: bool = False) -> Verdict | None:
+        """`tool_policy.web_allow_domains` của agent (người đặt): khác None → WebFetch/Chrome navigate tới host ngoài danh sách = forbidden
+        (từ chối thẳng, không mở approval; `_record` ghi audit `guard.deny`). Host so sau `static_check` (chữ thường, IDN → punycode, bỏ
+        cổng/dấu chấm cuối); URL không tách được host (userinfo, scheme lạ, ký tự mập mờ) → từ chối. Áp cả agent trust full.
+        Chrome: thao tác có thể rời domain mà không lộ URL (click/gõ/form/JS/batch có hành động/navigate back-forward) → luôn giữ chờ
+        người (`web_agent_chrome_action`, klass network), trust full → từ chối. Playwright MCP (runs.py đã gỡ server) → từ chối.
+        Lỗi khi kiểm → từ chối (fail-closed, không hạ thành "hỏi người"). None = không áp (chưa đặt / không phải tool web / không có run)."""
+        try:
+            return self._agent_web_check(run, tool_name, tool_input, v, trusted=trusted)
+        except Exception as e:  # noqa: BLE001 — FAIL-CLOSED: allowlist đã đặt mà không kiểm được → từ chối
+            log.exception("agent_web_check lỗi")
+            return Verdict("destructive", "web_agent_domain_not_allowed", "network",
+                           f"{tool_name}: kiểm allowlist domain của agent lỗi ({type(e).__name__}) — từ chối (fail-closed)",
+                           [tool_name[:200]], forbidden=True, net_urls=v.net_urls)
+
+    def _agent_web_check(self, run: dict[str, Any] | None, tool_name: str, tool_input: dict[str, Any], v: Verdict, *,
+                         trusted: bool) -> Verdict | None:
+        from ..browser import is_chrome_tool
+        from .url_safety import agent_domain_matches, static_check
+
+        chrome = is_chrome_tool(tool_name)
+        pw = tool_name.startswith("mcp__") and "playwright" in tool_name.split("__")[1].lower()
+        if not run or not run.get("agent_id") or not (tool_name == "WebFetch" or chrome or pw):
+            return None
+        agent = self.hub.store.get_agent(run["agent_id"]) or {}
+        raw = (agent.get("tool_policy") or {}).get("web_allow_domains")
+        if raw is None:
+            return None
+        if pw:  # Playwright đi web không qua luật URL của hub → agent có allowlist không được dùng
+            return Verdict("destructive", "web_agent_domain_not_allowed", "network",
+                           f"{tool_name}: Playwright MCP không áp được allowlist domain của agent (tool_policy.web_allow_domains) — dùng WebFetch "
+                           "hoặc Claude in Chrome", [tool_name[:200]], forbidden=True)
+        allow = [str(x) for x in raw if isinstance(x, str)] if isinstance(raw, list) else []  # giá trị lạ (sửa tay) → hẹp nhất
+        urls = [str(tool_input.get("url") or "")] if tool_name == "WebFetch" else list(v.net_urls or [])
+        label = "Chrome" if chrome else "WebFetch"
+        if len(urls) > 20:
+            return Verdict("destructive", "web_agent_domain_not_allowed", "network", f"{label}: quá nhiều URL trong một lệnh ({len(urls)} > 20)",
+                           [tool_name[:200]], forbidden=True, net_urls=v.net_urls)
+        for url in urls:
+            st = static_check(url)
+            host = st.host if st.rule not in ("url_credentials", "url_unparsable", "url_scheme", "url_no_host") else None
+            if not host:
+                return Verdict("destructive", "web_agent_domain_not_allowed", "network",
+                               f"{label}: không xác định được host của URL ({st.reason or st.rule}) — agent chỉ được tới web_allow_domains",
+                               [url[:200]], forbidden=True, net_urls=v.net_urls)
+            if not agent_domain_matches(host, allow):
+                return Verdict("destructive", "web_agent_domain_not_allowed", "network",
+                               f"{label}: {host} ngoài allowlist domain của agent (tool_policy.web_allow_domains: {', '.join(allow) or '(rỗng)'})",
+                               [url[:200]], forbidden=True, net_urls=v.net_urls)
+        if chrome and v.verdict != "safe" and not (v.rule == "chrome_navigate" and v.net_urls):
+            # click/gõ/JS/form/batch có hành động/back-forward: có thể rời domain mà hub không thấy URL đích
+            why = (f"Chrome {tool_name.split('__')[-1]}: thao tác có thể đưa trình duyệt ra ngoài allowlist domain của agent "
+                   f"(tool_policy.web_allow_domains: {', '.join(allow) or '(rỗng)'}) mà không lộ URL đích")
+            if v.reason:
+                why += f" — {v.reason}"
+            if trusted:
+                return Verdict("destructive", "web_agent_chrome_action", "network", why, v.targets, forbidden=True, net_urls=v.net_urls)
+            return Verdict("uncertain", "web_agent_chrome_action", "network", why, v.targets, net_urls=v.net_urls)
+        return None
 
     def repo_deny_patterns(self, cwd: str | None) -> list[str]:
         """MGR-2: mẫu chặn theo repo do NGƯỜI đặt (policy/repo_deny.yaml) áp cho mọi run có cwd trong repo."""
@@ -1199,6 +1265,12 @@ class GuardService:
             v = classify(tool_name, tool_input, ctx)
         except Exception as e:  # noqa: BLE001 — phân loại lỗi không chặn agent trust, chỉ ghi lại
             v = Verdict("uncertain", "classifier_error", None, f"phân loại lỗi: {type(e).__name__}")
+        av = self.agent_web_check(run, tool_name, tool_input, v, trusted=True)  # allowlist domain theo agent là giới hạn người đặt riêng — trust không gỡ
+        if av is not None:
+            self._record(run, channel, tool_name, tool_input, av, "deny", classifier="trust")
+            self.hub.publish(make_event("guard.blocked", run["agent_id"], {"source": "runtime", "reason": "guard_rule", "rule": av.rule, "detail": av.reason,
+                                                                         "tool": tool_name, "preview": action_preview(tool_name, tool_input)}, run_id=run["id"]))
+            return {"decision": "deny", "reason": FORBIDDEN_MSG.format(reason=av.reason)}
         busy = self.chrome_lock_check(run, tool_name)  # khoá Chrome là điều phối tài nguyên dùng chung, không phải quyền — vẫn áp
         if busy is not None:
             vb = Verdict("uncertain", "chrome_busy", "mcp", busy["reason"], [tool_name[:200]])

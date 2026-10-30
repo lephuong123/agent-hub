@@ -480,10 +480,13 @@ class RunManager:
         from .browser import CHROME_MODES, CHROME_SERVER, effective_mode, is_playwright_server
 
         browser = effective_mode(agent, hub.config)
+        web_allow = tp.get("web_allow_domains") is not None  # allowlist domain theo agent: Playwright không áp được luật URL → gỡ
+        if web_allow and not guard_on and browser in CHROME_MODES:
+            browser = "none"  # guard tắt = không hook lọc URL/hành động Chrome → tắt Chrome (fail-closed), như WebFetch bên dưới
         tp["browser"] = browser
         if browser in CHROME_MODES:
             allowed_mcp.append(CHROME_SERVER)  # server dynamic của CLI — không phải isolation.violation
-        if browser == "chrome":
+        if browser == "chrome" or web_allow:
             drop = [n for n, e in servers.items() if is_playwright_server(n, e)]
             for n in drop:
                 servers.pop(n, None)
@@ -520,6 +523,9 @@ class RunManager:
                 tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + work))
             static = list(dict.fromkeys(list(tp.get("disallowed_tools") or [])
                                         + ([] if trusted else gr.static_disallowed(guard_cfg) + hub.guard.repo_deny_patterns(str(cwd)))))
+            if web_allow:  # không có hook để lọc domain → tắt hẳn WebFetch + Chrome (fail-closed), không mở toang
+                tp["allowed_tools"] = [x for x in tp.get("allowed_tools") or [] if not str(x).startswith(("WebFetch", f"mcp__{CHROME_SERVER}"))]
+                static = list(dict.fromkeys(static + ["WebFetch", f"mcp__{CHROME_SERVER}"]))
             tp["disallowed_tools"] = static
         # M3 — hub-self MCP (FR-MS-08): tool task_* theo vai trò, ràng với run_id
         if (run.get("task_id") or is_mgr) and opts.get("hub_self"):

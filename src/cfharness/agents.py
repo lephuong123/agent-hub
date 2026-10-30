@@ -76,6 +76,8 @@ class ToolPolicy(BaseModel):
     # Claude in Chrome (browser.py): None = theo runtime.claude.chrome.default_mode của hub (mặc định auto) | none | playwright |
     # chrome (bỏ Playwright khỏi run) | auto (Chrome trước)
     browser: Literal["none", "playwright", "chrome", "auto"] | None = None
+    # allowlist domain WebFetch/Chrome theo agent (guard/service.agent_web_check): None = không giới hạn (hành vi cũ) | [] = chặn mọi WebFetch
+    web_allow_domains: list[str] | None = None
 
     @field_validator("permission_mode")
     @classmethod
@@ -83,6 +85,13 @@ class ToolPolicy(BaseModel):
         if v is not None and v not in VALID_PERMISSION_MODES:
             raise ValueError(f"permission_mode phải là một trong {VALID_PERMISSION_MODES}")
         return v
+
+    @field_validator("web_allow_domains", mode="before")
+    @classmethod
+    def _web_domains(cls, v: Any) -> list[str] | None:
+        from .guard.url_safety import normalize_agent_domains
+
+        return normalize_agent_domains(v)
 
 
 class Limits(BaseModel):

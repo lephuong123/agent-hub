@@ -10,6 +10,7 @@ Luật (mỗi luật có test đỏ→xanh trong `tests/test_manager_security.py
 - agent: chỉ trường cho phép (`AGENT_FIELDS`, `TOOL_POLICY_FIELDS`); cấm `permission_mode=bypassPermissions`, `allow_bypass`,
   `permission_prompts`, `extra_args`, `sandbox*`, `subagents`, `result_schema`, đổi id;
 - không BỎ mẫu `disallowed_tools` có sẵn trừ mẫu do chính manager đã thêm (`hub_state.manager_disallowed_added`);
+- `web_allow_domains` chỉ được thu hẹp (không bỏ allowlist, không thêm domain);
 - MCP: chỉ server có trong registry (DB) và không phải MCP của chính hub;
 - workspace/cwd: không trong HUB_HOME (trừ workspaces của agent), không phải /, $HOME, vùng bảo vệ;
 - team: không chạm `policies.learning` (công tắc học = chính sách an toàn), không ESTOP qua team.update;
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 AGENT_FIELDS = frozenset({"name", "role", "description", "model", "effort", "fallback_model", "tool_policy", "mcp_servers", "limits", "workspace_default"})
 # `browser` (Claude in Chrome, browser.py): điều phối viên đặt được cho agent KHÁC; agent điều phối viên (kể cả chính nó) thì không —
 # chỉ người (luật "không đụng agent manager" bên dưới)
-TOOL_POLICY_FIELDS = frozenset({"permission_mode", "tools", "allowed_tools", "disallowed_tools", "browser"})
+TOOL_POLICY_FIELDS = frozenset({"permission_mode", "tools", "allowed_tools", "disallowed_tools", "browser", "web_allow_domains"})
 BROWSER_VALUES = ("none", "playwright", "chrome", "auto")
 FORBIDDEN_MODES = frozenset({"bypassPermissions"})
 TEAM_FIELDS = frozenset({"name", "charter", "policies"})
@@ -399,6 +400,18 @@ class ManagerPermissions:
                 why = self._disallowed_removal(target, tp.get("disallowed_tools"))
                 if why:
                     return why
+            if "web_allow_domains" in tp:
+                from ..guard.url_safety import agent_domains_widening, normalize_agent_domains
+
+                try:
+                    normalize_agent_domains(tp["web_allow_domains"])
+                except ValueError as e:
+                    return str(e)
+                if not creating:  # như disallowed_tools: chỉ được thu hẹp, nới (bỏ/thêm domain) là việc của người
+                    cur = ((self.hub.store.get_agent(target) or {}).get("tool_policy") or {}).get("web_allow_domains")
+                    why = agent_domains_widening(cur, tp["web_allow_domains"])
+                    if why:
+                        return why
         for k in ("name", "role", "id") if creating else ("name", "role"):
             if changes.get(k) and self._confusable(str(changes[k])):
                 return f"{k} '{changes[k]}' dễ nhầm với điều phối viên — chọn tên/vai khác (MGR-9)"

@@ -290,6 +290,66 @@ def validate_domain_list(key: str, value: Any) -> None:
 WEB_DOMAIN_MODES = ("any", "allowlist")
 
 
+# ============================================================================ allowlist theo agent (`tool_policy.web_allow_domains`)
+_AGENT_DOMAIN_PAT = re.compile(r"(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*")  # tên đầy đủ hoặc `*.` ở đầu — không `?`/`*` chỗ khác
+
+
+def normalize_agent_domains(value: Any) -> list[str] | None:
+    """Kiểm + chuẩn hoá `tool_policy.web_allow_domains`: None = chưa đặt (hành vi cũ); danh sách = CHỈ các host khớp mẫu (rỗng = chặn mọi
+    WebFetch). Chữ thường, bỏ dấu chấm cuối, IDN → punycode (khớp với host `static_check` trả về). `*` bị từ chối (= không giới hạn:
+    dùng null). Sai → ValueError."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise ValueError("web_allow_domains phải là danh sách domain (glob), vd ['docs.python.org', '*.github.io'] hoặc null")
+    out: list[str] = []
+    for x in value:
+        d = x.strip().lower().rstrip(".")
+        try:
+            d.encode("ascii")
+        except UnicodeEncodeError:
+            try:
+                d = ".".join(lab if lab == "*" or lab.isascii() else lab.encode("idna").decode("ascii") for lab in d.split("."))
+            except UnicodeError:
+                raise ValueError(f"web_allow_domains: domain IDN không hợp lệ {x!r}") from None
+        if not _AGENT_DOMAIN_PAT.fullmatch(d):
+            raise ValueError(f"web_allow_domains: mẫu domain không hợp lệ {x!r} — chỉ tên đầy đủ hoặc '*.' ở đầu (vd docs.python.org, "
+                             "*.github.io); không giới hạn = null")
+        if d not in out:
+            out.append(d)
+    return out
+
+
+def agent_domain_matches(host: str, patterns: Iterable[str]) -> str | None:
+    """So host với allowlist của agent — CHẶT hơn `domain_matches`: chỉ tên đầy đủ hoặc `*.x` (host kết thúc `.x`, không khớp `x`);
+    không fnmatch (`*` giữa/cuối mẫu khớp qua dấu chấm: `example.*` ⊃ `example.attacker.net`). Mẫu sai dạng (sửa tay) → bỏ qua."""
+    h = norm_host(host)
+    for p in patterns or ():
+        pat = str(p or "").strip().lower().rstrip(".")
+        if not _AGENT_DOMAIN_PAT.fullmatch(pat):
+            continue
+        if h == pat or (pat.startswith("*.") and h.endswith(pat[1:])):
+            return pat
+    return None
+
+
+def agent_domains_widening(cur: Any, new: Any) -> str | None:
+    """Đổi `web_allow_domains` có NỚI quyền không (chỉ người được nới): bỏ allowlist đang đặt, hoặc thêm mẫu chưa có. Thu hẹp/đặt mới → None."""
+    if cur is None:
+        return None
+    if new is None:
+        return "bỏ allowlist domain WebFetch (web_allow_domains) — chỉ người được nới"
+    cur_l = {str(x).strip().lower().rstrip(".") for x in cur} if isinstance(cur, list) else set()
+    try:
+        new_l = normalize_agent_domains(new) or []
+    except ValueError as e:
+        return str(e)
+    added = [x for x in new_l if x not in cur_l]
+    if added:
+        return f"thêm domain vào web_allow_domains: {added} — chỉ người được nới"
+    return None
+
+
 def validate_setting(key: str, value: Any) -> None:
     """Kiểm `guard.web.*`, `guard.second_opinion.*`, `manager.web_domains` (gọi từ `config.validate_setting`) — sai → ValueError."""
     if key in ("guard.web", "guard"):

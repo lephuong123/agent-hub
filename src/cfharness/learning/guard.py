@@ -241,6 +241,12 @@ class LearningGuard:
                 return Block("self_escalation", "permission_prompts", "không được đổi kênh phê duyệt")
             if tp.get("browser") in ("chrome", "auto") and tp.get("browser") != cur_tp.get("browser"):
                 return Block("self_escalation", "browser", "bật Claude in Chrome (Chrome THẬT của người) là việc của người/điều phối viên")
+            if "web_allow_domains" in tp:
+                from ..guard.url_safety import agent_domains_widening
+
+                why = agent_domains_widening(cur_tp.get("web_allow_domains"), tp["web_allow_domains"])
+                if why:
+                    return Block("self_escalation", "web_allow_domains", why)
             if "disallowed_tools" in tp:
                 removed = [x for x in cur_tp.get("disallowed_tools") or [] if x not in (tp.get("disallowed_tools") or [])]
                 if removed:

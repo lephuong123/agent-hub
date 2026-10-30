@@ -272,6 +272,12 @@ báo lại cho model và cần lời gọi mới — qua hook lại — nhưng C
 truy vấn có thể chứa dữ liệu. (4) Bash: phụ thuộc sandbox mạng (`allowed_domains`); trên nền tảng không có sandbox (Windows) curl tới domain
 công khai trỏ nội bộ chỉ bị chặn với run manager và metadata.
 
+**Thêm 2026-10-30 — allowlist theo agent** (`webfetch-agent-allowlist.md`): `tool_policy.web_allow_domains` (null = như trên). Đặt →
+WebFetch + Chrome `navigate`/`tabs_create_mcp` tới host ngoài danh sách = **forbidden** `web_agent_domain_not_allowed` (cả trust full;
+chỉ tên đầy đủ hoặc `*.x`); thao tác Chrome có thể rời domain không lộ URL (click/gõ/form/JS/back-forward/batch có hành động) = luôn giữ chờ
+người `web_agent_chrome_action` (trust full → từ chối); Playwright MCP bị gỡ khỏi run; `guard.enabled=false` → tắt WebFetch + Chrome;
+lỗi khi kiểm → từ chối. Còn lại: chuyển hướng trong trang (JS/meta refresh) sau khi mở trang hợp lệ; rủi ro (1)–(4) ở trên vẫn áp.
+
 ## LLM-2 — LLM thứ hai cho `uncertain` + "luôn cho phép" từ duyệt của người
 - `guard/second_opinion.py` (`GuardService.second`), gọi trong DAEMON (`GuardService.check`), không trong hook. Tắt mặc định
   (`guard.second_opinion.enabled=false`, chỉ người bật; nhánh `guard` kiểm toàn vẹn). Gọi `AgentRuntime.oneshot` (`claude -p --json-schema
