@@ -92,6 +92,7 @@ TOOLS: dict[str, dict[str, Any]] = {
             "message_id": {"type": "integer"}, "window": {"type": "integer", "minimum": 1, "maximum": 50},
             "run_id": _S, "session_id": _S, "agent_id": _S, "team_id": _S, "kind": _S, "role": _S,
             "since": {"type": "string", "description": "ISO date/time or relative like 7d, 12h"}, "until": _S,
+            "group": {"type": "boolean", "description": "mode=search: group hits by session (default true); false = flat message hits"},
             "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "offset": {"type": "integer", "minimum": 0}}},
         "annotations": {"readOnlyHint": True},
     },

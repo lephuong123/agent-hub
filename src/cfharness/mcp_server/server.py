@@ -155,7 +155,7 @@ class SessionSearchOut(_Open):
     mode: str
     hits: list[dict[str, Any]] | None = Field(default=None, description="mode=search: id, run_id, session_id/conversation_id, agent_id, role, ts, snippet, score")
     messages: list[dict[str, Any]] | None = Field(default=None, description="mode=around|read: tin theo thứ tự thời gian (anchor=true là tin gốc)")
-    threads: list[dict[str, Any]] | None = Field(default=None, description="mode=browse: luồng gần đây (thread, agent_id, messages, runs, title)")
+    threads: list[dict[str, Any]] | None = Field(default=None, description="mode=browse: luồng gần đây (thread, agent_id, messages, runs, title); mode=search + group: luồng khớp (best_score, matches, hits ≤ 3)")
     next_offset: int | None = None
 
 
@@ -591,12 +591,13 @@ class HubMcp:
             since: Annotated[str | None, Field(description="từ thời điểm (ISO, YYYY-MM-DD, hoặc 7d/12h/30m)")] = None,
             until: Annotated[str | None, Field(description="đến thời điểm")] = None,
             include_technical: Annotated[bool, Field(description="kể cả phiên kỹ thuật review/eval/curator")] = False,
+            group: Annotated[bool, Field(description="mode=search: gộp hit theo luồng (top session, ≤ 3 đoạn trích mỗi luồng); false = từng tin")] = True,
             limit: Annotated[int, Field(description="số mục tối đa", ge=1, le=200)] = 20,
             offset: Annotated[int, Field(description="phân trang", ge=0)] = 0,
         ) -> SessionSearchOut:
             params = {"mode": mode, "query": query, "message_id": message_id, "window": window, "run_id": run_id, "session_id": session_id,
                       "conversation_id": conversation_id, "agent_id": agent_id, "team_id": team_id, "kind": kind, "role": role, "since": since,
-                      "until": until, "include_technical": include_technical, "limit": limit, "offset": offset}
+                      "until": until, "include_technical": include_technical, "group": group, "limit": limit, "offset": offset}
             res = await hub.call("session.search", {k: v for k, v in params.items() if v is not None}, ctx=ctx)
             return SessionSearchOut(**res)
 
