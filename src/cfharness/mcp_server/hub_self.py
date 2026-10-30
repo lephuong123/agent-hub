@@ -190,6 +190,27 @@ MEMORY_TOOL: dict[str, dict[str, Any]] = {
     },
 }
 TOOLS.update(MEMORY_TOOL)
+
+
+def memory_tool_def(scopes: tuple[str, ...] | list[str]) -> dict[str, Any]:
+    """Tool `memory` có `scope` khi agent được ghi tầng chung (daemon `LearningService.memory_scopes` quyết, schema chỉ ẩn/hiện)."""
+    base = MEMORY_TOOL["memory"]
+    if [s for s in scopes if s != "agent"] == []:
+        return base
+    shared = [s for s in scopes if s != "agent"]
+    desc = base["description"] + (
+        f" scope: 'agent' (default, your own memory) | {' | '.join(repr(s) for s in shared)}. "
+        + ("'team' = your team's shared MEMORY.md (team_id when you are in several teams): conventions and facts every member needs. " if "team" in shared else "")
+        + ("'global' = shared by every agent (target='user' + scope='global' = the shared user profile). " if "global" in shared else "")
+        + "Shared tiers apply to the other agents immediately — write there only facts that hold for all of them; they are watched and "
+          "rolled back automatically on regressions.")
+    props = dict(base["inputSchema"]["properties"])
+    props["scope"] = {"type": "string", "enum": ["agent", *shared]}
+    if "team" in shared:
+        props["team_id"] = _S
+    return {**base, "description": desc, "inputSchema": {**base["inputSchema"], "properties": props}}
+
+
 LEARN_TOOLS["propose_memory"]["description"] += " Several changes at once (char limit checked on the final result): operations=[{action, content, old_text}, …]."
 LEARN_TOOLS["propose_memory"]["inputSchema"]["properties"]["operations"] = {"type": "array", "minItems": 1, "maxItems": 10, "items": _MEM_OP}
 LEARN_TOOLS["propose_memory"]["inputSchema"]["required"] = ["target"]
@@ -358,22 +379,26 @@ ROLE_TOOLS = {
 }
 
 
-def _tool_def(name: str, role: str) -> dict[str, Any]:
+def _tool_def(name: str, role: str, scopes: tuple[str, ...] = ("agent",)) -> dict[str, Any]:
     if role == "manager" and name in MANAGER_TOOLS:
         return MANAGER_TOOLS[name]
+    if name == "memory":
+        return memory_tool_def(scopes)
     return TOOLS[name]
 
 _out_lock = threading.Lock()
 
 
-def server_entry(run_id: str, socket: Path, hub_home: Path, role: str, guard_cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+def server_entry(run_id: str, socket: Path, hub_home: Path, role: str, guard_cfg: dict[str, Any] | None = None,
+                 memory_scopes: list[str] | None = None) -> dict[str, Any]:
     from ..guard.runtime import child_python  # Windows: pythonw GUI — không cấp console (docs/dev-notes/windows.md §6)
 
     py, py_env = child_python(guard_cfg or {})
+    extra = ["--memory-scopes", ",".join(memory_scopes)] if memory_scopes and set(memory_scopes) - {"agent"} else []
     return {
         "type": "stdio",
         "command": py,
-        "args": ["-I", "-m", "cfharness.mcp_server.hub_self", "--run", run_id, "--socket", str(socket), "--role", role],
+        "args": ["-I", "-m", "cfharness.mcp_server.hub_self", "--run", run_id, "--socket", str(socket), "--role", role, *extra],
         "env": {**py_env, "CFHARNESS_HOME": str(hub_home), "CFHARNESS_RUN_ID": run_id},
     }
 
@@ -388,7 +413,7 @@ def _text(mid: Any, obj: Any, is_error: bool = False) -> None:
     _send({"jsonrpc": "2.0", "id": mid, "result": {"content": [{"type": "text", "text": json.dumps(obj, ensure_ascii=False, default=str) if not isinstance(obj, str) else obj}], "isError": is_error}})
 
 
-def handle(msg: dict, run_id: str, sock: str, role: str) -> None:
+def handle(msg: dict, run_id: str, sock: str, role: str, scopes: tuple[str, ...] = ("agent",)) -> None:
     from ..guard.hook import rpc_call
 
     mid = msg.get("id")
@@ -406,7 +431,7 @@ def handle(msg: dict, run_id: str, sock: str, role: str) -> None:
         elif method == "ping":
             _send({"jsonrpc": "2.0", "id": mid, "result": {}})
         elif method == "tools/list":
-            _send({"jsonrpc": "2.0", "id": mid, "result": {"tools": [{"name": n, **_tool_def(n, role)} for n in tools]}})
+            _send({"jsonrpc": "2.0", "id": mid, "result": {"tools": [{"name": n, **_tool_def(n, role, scopes)} for n in tools]}})
         elif method == "tools/call":
             p = msg.get("params") or {}
             name = p.get("name")
@@ -441,6 +466,7 @@ def main() -> int:
 
     a = _args(sys.argv[1:])
     run_id, sock, role = a.get("run", ""), a.get("socket", ""), a.get("role", "worker")
+    scopes = tuple(s for s in (a.get("memory-scopes") or "agent").split(",") if s)
     threads: list[threading.Thread] = []
     for line in sys.stdin:
         line = line.strip()
@@ -452,11 +478,11 @@ def main() -> int:
             _send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
             continue
         if isinstance(msg, dict) and msg.get("method") == "tools/call":
-            t = threading.Thread(target=handle, args=(msg, run_id, sock, role), daemon=True)
+            t = threading.Thread(target=handle, args=(msg, run_id, sock, role, scopes), daemon=True)
             t.start()
             threads.append(t)
         elif isinstance(msg, dict):
-            handle(msg, run_id, sock, role)
+            handle(msg, run_id, sock, role, scopes)
     for t in threads:
         t.join(65)
     return 0

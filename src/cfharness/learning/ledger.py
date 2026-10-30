@@ -162,8 +162,9 @@ class Change:
 
 
 def is_entry_memory(e: dict[str, Any]) -> bool:
-    """Entry memory tầng agent → rollback theo mục. Tầng team/global giữ rollback cả file (canary ghim phiên bản theo file)."""
-    return e.get("blob_kind") == "file" and e.get("target") == "memory" and e.get("scope") == "agent"
+    """Entry memory (mọi tầng; USER dùng chung là target `user_profile` — vẫn cả file) → rollback theo mục: gỡ một fact không kéo các
+    fact ghi sau. Tầng team/global theo mục từ 2026-10-30, để watch gỡ đúng mục tool `memory` của agent đã ghi."""
+    return e.get("blob_kind") == "file" and e.get("target") == "memory"
 
 
 def invert_memory(before: list[str], after: list[str], current: list[str]) -> list[str]:

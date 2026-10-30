@@ -25,7 +25,9 @@ EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
 POLICY_DEFAULTS: dict[str, Any] = {
     "enabled": True,  # FR-LN-15: tắt → không review
     "auto_apply": True,  # tắt → proposal chỉ ghi `suggested`
-    "agents": {},  # {agent_id: {enabled: bool, auto_apply: bool}}
+    # {agent_id: {enabled: bool, auto_apply: bool, shared_memory_write: bool}} — shared_memory_write: tool `memory` của agent được ghi
+    # tầng team/global (mặc định chỉ lead ghi tầng team của mình, điều phối viên ghi mọi tầng)
+    "agents": {},
     # Q-20 — biên cấu hình vòng học được tự đặt (FR-LN-19)
     "config_bounds": {
         "models": ["opus", "sonnet", "haiku"],
@@ -40,6 +42,9 @@ POLICY_DEFAULTS: dict[str, Any] = {
         "max_config_changes_per_agent_per_week": 2,
         "max_team_global_changes_per_day": 3,
         "cooldown_per_target_h": 24,
+        # tool `memory` của agent (kiểu Hermes: không giới hạn số lần ghi; trần ký tự kho là thứ hãm). 0 = không giới hạn.
+        # Không dùng chung suất với review (max_changes_per_agent_per_day / max_team_global_changes_per_day).
+        "agent_tool_max_per_day": 0,
     },
 }
 
@@ -104,12 +109,15 @@ class LearningPolicy:
             auto = auto and bool(a.get("auto_apply", True))
         return {"enabled": enabled, "auto_apply": auto and enabled}
 
+    def shared_memory_write(self, agent_id: str) -> bool:
+        return bool(((self.data.get("agents") or {}).get(agent_id) or {}).get("shared_memory_write"))
+
 
 def _validate(key: str, value: Any) -> None:
     top = key.split(".")[0]
     if top not in POLICY_DEFAULTS:
         raise HubError(f"khoá chính sách học không hợp lệ: {key} (có: {', '.join(POLICY_DEFAULTS)})")
-    if key in ("enabled", "auto_apply") or key.endswith((".enabled", ".auto_apply")):
+    if key in ("enabled", "auto_apply") or key.endswith((".enabled", ".auto_apply", ".shared_memory_write")):
         if not isinstance(value, bool):
             raise HubError(f"{key} phải là true/false")
     if key == "config_bounds.max_effort" and value not in EFFORT_ORDER:

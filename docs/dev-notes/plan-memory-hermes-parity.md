@@ -9,14 +9,16 @@ kiểm trước khi code.
 - `group`: gộp hit theo luồng (top session, ≤ 3 đoạn trích/luồng). Mặc định bật cho hub-self + MCP, tắt cho RPC/CLI (`--group`).
 - Chưa làm: tóm tắt luồng bằng LLM (`summarize`, haiku, trần chi phí, cache theo `(thread, query)`) — chỉ làm nếu Hermes có.
 
-## PR 2 — tool `memory`: bỏ rate limit + ghi tầng team/global
+## PR 2 — tool `memory`: bỏ rate limit + ghi tầng team/global (xong)
 - `pipeline.rate_check`: miễn `created_by == "agent"`; `agent_quota_full` + đếm team/global loại `agent` khỏi `acts` (tool và review
   không ăn suất của nhau). Cầu dao `learning.rate.agent_tool_max_per_day` (null = không giới hạn). Hãm tự nhiên: trần ký tự kho + 600/mục.
-- `hub_self` tool `memory` thêm `scope: agent|team|global` — chỉ hiện cho `lead`, `manager`, agent có `learning.shared_memory_write: true`.
+- `hub_self` tool `memory` thêm `scope: agent|team|global` — lead: chỉ `team` của team mình lead; điều phối viên / policy
+  `agents.<id>.shared_memory_write: true`: mọi tầng.
 - `_continue_tier`: `created_by == "agent"` áp dụng ngay như người (không eval trước), canary `watch` NHƯNG regression monitor được tự
   rollback (người: không bao giờ).
 - Rollback THEO MỤC cho memory tầng team/global (mở rộng `ledger.is_entry_memory`), để gỡ một mục agent ghi không kéo mục khác theo.
-- MEMORY_GUIDANCE: khi nào ghi tầng chung (đổi prompt hash một lần).
+- Hướng dẫn khi nào ghi tầng chung nằm trong MÔ TẢ tool (chỉ agent được phép thấy) thay vì MEMORY_GUIDANCE — không đổi prompt hash
+  của mọi agent.
 
 ## PR 3 — lưu memory trước khi nén context
 - Thêm `PreCompact` vào `observe_hook.EVENTS`, `cli_surface` hook choices, `surface_rpc.HOOK_EVENTS`; metadata `trigger` (auto/manual).
