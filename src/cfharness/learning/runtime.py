@@ -114,7 +114,7 @@ def apply_mcp(hub: "Hub", run: dict[str, Any], agent: dict[str, Any], *, servers
     has_skills = info.get("skills")
     if has_skills is None:  # prompt dùng lại của session: có hub-self nếu session gốc có skill
         has_skills = bool(hub.knowledge.effective_skills(agent["id"], home=Path(agent["home_path"]))) if getattr(hub, "knowledge", None) else False
-    if has_skills:
+    if has_skills or (hub.config.get("learning.agent_memory_tool") and run.get("kind") not in ("eval", "eval_judge", "curator") and not opts.get("eval_overlay")):
         servers[SERVER_NAME] = server_entry(run_id, hub.paths.socket, hub.paths.home, "knowledge", guard_cfg)
         allowed_mcp.append(SERVER_NAME)
         tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + [f"mcp__{SERVER_NAME}"]))

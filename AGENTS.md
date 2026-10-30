@@ -480,3 +480,12 @@ Giai đoạn 2 (duyệt + câu hỏi + chat trong 3D, mục "Giai đoạn 2" c�
 không viết cổng riêng cho 3D. Thêm thao tác 3D → `OFFICE_ACTIONS` + ca đỏ→xanh trong `tests/test_web_office.py`. Chữ đầy đủ (thao tác chờ duyệt — `present.action_view`,
 câu hỏi, chat) CHỈ ở `GET /office/approval|question/{id}`, `/office/chat`, `/sse/office/chat` (JSON, không HTML; client chỉ `fillText`/`textContent`),
 không bao giờ trong `/sse/office`. Đường JSON của 3D nằm trong `GuardMiddleware.API` (tiền tố): chưa đăng nhập → 401; GET không gia hạn phiên.
+
+## Tool `memory` của agent (kiểu Hermes) — ghi memory ngay trong session
+Chi tiết, lệch Hermes: `docs/dev-notes/agent-memory-tool.md`. Agent đang chạy (vai trò hub-self worker/lead/reviewer/knowledge/manager) có tool
+`memory(target memory|user, action add|patch|remove | operations[≤10])` → RPC `learnself.call` op `memory` → `LearningService._agent_memory` →
+`pipeline.propose(created_by="agent", scope="agent")`: VẪN qua guard/threat scan/hạn mức/rate/ledger (rollback được), chỉ tầng agent (team/global vẫn
+chỉ review đề xuất L3). Lô `operations` = một proposal = một ledger entry, hạn mức ký tự xét trên kết quả cuối (`knowledge.store.apply_memory_ops`);
+`propose_memory` của review cũng nhận `operations`. Kết quả trả mục hiện có + usage; system prompt của session KHÔNG đổi (snapshot đóng băng).
+Không có trong run review/eval/curator. Tắt: `config set learning.agent_memory_tool false` (khi bật, mọi run thường có hub-self kể cả agent chưa có skill).
+Test: `tests/test_agent_memory_tool.py`.

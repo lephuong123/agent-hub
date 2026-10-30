@@ -11,6 +11,8 @@ Bộ tool theo vai trò (`--role`):
 - M4-A — mọi vai trò trên + `skills_list`, `skill_view` (FR-RT-10); `knowledge` (run thường có skill): chỉ hai tool đó;
   `learning` (review fork, FR-LN-03): `skills_list`, `skill_view`, `memory_view`, `propose_*` → RPC `learnself.call`
   (pipeline học tự áp dụng; review KHÔNG ghi file trực tiếp).
+- `memory` (mọi vai trò trừ `learning`, bật bằng `learning.agent_memory_tool`): agent ghi MEMORY.md/USER.md tầng agent ngay trong
+  session (kiểu Hermes) → RPC `learnself.call` → pipeline (`docs/dev-notes/agent-memory-tool.md`).
 Mọi lời gọi gửi RPC `taskself.call {run_id, op, args}` tới daemon; daemon ràng với `run_id` (do hub cấp qua argv/env)
 và chỉ cho thao tác task của chính run (FR-MS-08). Tự cài giao thức MCP tối thiểu (JSON-RPC theo dòng) như `hub-guard`
 — chỉ stdlib, khởi động nhanh, không phụ thuộc thư viện `mcp`.
@@ -162,6 +164,34 @@ LEARN_TOOLS: dict[str, dict[str, Any]] = {
     },
 }
 TOOLS.update(LEARN_TOOLS)
+# Tool `memory` của agent đang chạy (kiểu Hermes `memory`): ghi kho tầng agent ngay trong session → RPC `learnself.call` op `memory`
+# (daemon: `LearningService._agent_memory` — vẫn qua pipeline guard/ledger; tắt bằng `learning.agent_memory_tool`).
+_MEM_OP = {"type": "object", "properties": {"action": {"type": "string", "enum": ["add", "patch", "remove"]}, "content": _S, "old_text": _S},
+           "required": ["action"]}
+MEMORY_TOOL: dict[str, dict[str, Any]] = {
+    "memory": {
+        "description": (
+            "Save durable information to your persistent memory, which is injected into your system prompt in future sessions. "
+            "target='memory' (MEMORY.md): facts about the environment, projects, tools and conventions you learned. "
+            "target='user' (USER.md): who the user is — preferences, communication style, expectations. One fact in ONE store. "
+            "Save proactively when the user corrects you or states a preference, or when you discover a stable fact that will save time later. "
+            "Do NOT save task progress, PR/ticket status, session outcomes, temporary state or anything easy to re-discover. "
+            "Entries are short declarative facts in English (rules for doing work belong in skills). "
+            "action add (content) | patch (old_text: a unique substring of one entry → replaced by content) | remove (old_text). "
+            "Use `operations` to apply several actions at once: the char limit is checked on the final result, so when memory is full, "
+            "merge/shorten/remove old entries and add the new one in the SAME call. The result shows the current entries and usage. "
+            "Changes are saved immediately but your system prompt for this session does not change (visible from the next session). "
+            "cfharness validates every write (safety scan, limits) and can roll it back."),
+        "inputSchema": {"type": "object", "properties": {
+            "target": {"type": "string", "enum": ["memory", "user"]},
+            "action": {"type": "string", "enum": ["add", "patch", "remove"]}, "content": _S, "old_text": _S,
+            "operations": {"type": "array", "minItems": 1, "maxItems": 10, "items": _MEM_OP}}, "required": ["target"]},
+    },
+}
+TOOLS.update(MEMORY_TOOL)
+LEARN_TOOLS["propose_memory"]["description"] += " Several changes at once (char limit checked on the final result): operations=[{action, content, old_text}, …]."
+LEARN_TOOLS["propose_memory"]["inputSchema"]["properties"]["operations"] = {"type": "array", "minItems": 1, "maxItems": 10, "items": _MEM_OP}
+LEARN_TOOLS["propose_memory"]["inputSchema"]["required"] = ["target"]
 
 # M7 — vai trò `manager` (điều phối viên). Mọi tool → RPC `managerself.call {run_id, op, args}`; DAEMON kiểm quyền theo run →
 # agent manager (MANAGER_ALLOWED + trường cấm) — danh sách tool ở đây KHÔNG phải ranh giới an toàn.
@@ -318,12 +348,12 @@ MANAGER_READ_TOOLS = frozenset(n for n, t in MANAGER_TOOLS.items() if (t.get("an
 _KNOW = ("skills_list", "skill_view")
 ROLE_TOOLS = {
     # hardening H-14 (FR-MS-08): memory_search cho mọi vai trò trong task
-    "worker": ("task_show", "task_comment", "task_complete", "task_request_review", "task_block", "ask_human", "memory_search") + _KNOW,
-    "lead": ("task_show", "task_comment", "task_complete", "task_request_review", "task_block", "ask_human", "task_create", "task_link", "team_roster", "memory_search") + _KNOW,
-    "reviewer": ("task_show", "task_comment", "memory_search") + _KNOW,
-    "knowledge": _KNOW,
+    "worker": ("task_show", "task_comment", "task_complete", "task_request_review", "task_block", "ask_human", "memory_search", "memory") + _KNOW,
+    "lead": ("task_show", "task_comment", "task_complete", "task_request_review", "task_block", "ask_human", "task_create", "task_link", "team_roster", "memory_search", "memory") + _KNOW,
+    "reviewer": ("task_show", "task_comment", "memory_search", "memory") + _KNOW,
+    "knowledge": _KNOW + ("memory",),
     "learning": tuple(LEARN_TOOLS),
-    "manager": tuple(MANAGER_TOOLS) + ("memory_search",) + _KNOW,
+    "manager": tuple(MANAGER_TOOLS) + ("memory_search", "memory") + _KNOW,
 }
 
 
@@ -388,7 +418,7 @@ def handle(msg: dict, run_id: str, sock: str, role: str) -> None:
                 elif role == "manager" and name in MANAGER_TOOLS:  # M7: daemon kiểm quyền theo run → agent manager
                     method = "managerself.call"
                 else:
-                    method = "learnself.call" if name in LEARN_TOOLS else "taskself.call"
+                    method = "learnself.call" if name in LEARN_TOOLS or name in MEMORY_TOOL else "taskself.call"
                 res = rpc_call(sock, method, {"run_id": run_id, "op": name, "args": p.get("arguments") or {}}, 60)
             except Exception as e:  # daemon trả lỗi nghiệp vụ hoặc không với tới
                 _text(mid, f"cfharness error: {e}", True)

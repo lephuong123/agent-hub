@@ -33,6 +33,7 @@ from ..knowledge.store import (
     SKILL_FILE,
     KnowledgeError,
     apply_memory_op,
+    apply_memory_ops,
     check_rel_path,
     check_skill_name,
     memory_chars,
@@ -127,24 +128,34 @@ class Pipeline:
         else:
             store = "user" if (pl.get("store") or pl.get("target")) == "user" else "memory"
         scope, owner = prop["scope"], self._owner(prop)
-        action = pl.get("action") or {"add": "add", "patch": "patch", "delete": "remove"}.get(prop["op"], "add")
         path = self.ks.memory_path(scope, owner, store)
         before = path.read_text(encoding="utf-8") if path.exists() else ""
         entries = parse_memory(before)
-        content = pl.get("content") if pl.get("content") is not None else pl.get("new_text")
-        new_entries = apply_memory_op(entries, action, content, pl.get("old_text"))
-        touched = [e for e in entries if pl.get("old_text") and pl["old_text"] in e] if action in ("patch", "remove") else []
+        if pl.get("operations") is not None:  # lô (tool `memory` của agent / propose_memory operations): hạn mức xét trên kết quả cuối
+            ops = [dict(o) for o in pl["operations"]] if isinstance(pl["operations"], list) else []
+            new_entries = apply_memory_ops(entries, ops)
+            acts = {str(o.get("action")) for o in ops}
+            action = next(iter(acts)) if len(acts) == 1 else "patch"
+        else:
+            action = pl.get("action") or {"add": "add", "patch": "patch", "delete": "remove"}.get(prop["op"], "add")
+            ops = [{"action": action, "content": pl.get("content") if pl.get("content") is not None else pl.get("new_text"), "old_text": pl.get("old_text")}]
+            new_entries = apply_memory_op(entries, action, ops[0]["content"], ops[0]["old_text"])
+        touched = [e for e in entries for o in ops if o.get("action") in ("patch", "remove") and o.get("old_text") and o["old_text"] in e]
         after = render_memory(new_entries, store)
         prop["op"] = {"add": "add", "patch": "patch", "remove": "delete"}[action]
         prop["target_ref"] = path.name
         diff, size = _diff(before, after, path.name)
         dup = None
-        if action in ("add", "patch") and content:
-            c = _norm(content)
+        written = [(str(o.get("action")), str(o.get("content"))) for o in ops if o.get("action") in ("add", "patch") and o.get("content")]
+        content = "\n".join(w for _, w in written)
+        for act, w in written:
+            if dup:
+                break
+            c = _norm(w)
             other = "memory" if store == "user" else "user"
             if scope != "team" and any(c in _norm(e) or _norm(e) in c for e in self.ks.read_memory(scope, owner, other) if len(_norm(e)) > 20):
                 dup = "USER.md" if other == "user" else "MEMORY.md"
-            if not dup and scope == "agent" and store == "user" and action == "add":
+            if not dup and scope == "agent" and store == "user" and act == "add":
                 # M5-A (FR-LN-14): quan sát riêng của agent (peer) không lặp lại hồ sơ dùng chung
                 if any(c in _norm(e) or _norm(e) in c for e in self.ks.read_memory("global", None, "user") if len(_norm(e)) > 20):
                     dup = "global USER.md (hồ sơ dùng chung)"
@@ -713,6 +724,9 @@ class Pipeline:
         npl, opl = new.get("payload") or {}, old.get("payload") or {}
         if new["target"] in ("memory", "user_profile"):
             def key(op: str, pl: dict[str, Any]) -> tuple[str, str]:
+                if pl.get("operations") is not None:  # lô: chỉ thay lô giống hệt
+                    return "batch", json.dumps([[o.get("action"), _norm(o.get("content") or ""), _norm(o.get("old_text") or "")]
+                                                for o in pl["operations"] if isinstance(o, dict)])
                 if op in ("patch", "delete"):
                     return "edit", _norm(pl.get("old_text") or "")
                 return "add", _norm(pl.get("content") if pl.get("content") is not None else pl.get("new_text") or "")

@@ -331,6 +331,9 @@ DEFAULTS: dict[str, Any] = {
         "repeat_pattern_window_runs": 20,
         "failure_min_runs": 2,
         "knowledge_tools": True,  # thêm hub-self (skill_view) vào run khi agent có skill (FR-RT-10)
+        # tool `memory` (kiểu Hermes): agent ghi MEMORY.md/USER.md tầng agent ngay trong session, qua pipeline (guard, ledger);
+        # bật → mọi run (khi knowledge_tools bật) có hub-self kể cả agent chưa có skill
+        "agent_memory_tool": True,
         "tick_s": 15,  # vòng nền: review đến hạn, proposal hoãn đến hạn
         "snapshot_keep": 20,
         "cache_warn_hash_changes_per_day": 3,  # FR-OB-04
