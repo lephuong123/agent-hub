@@ -14,17 +14,25 @@ người quyết).
   - `weak_signal`: prompt (`title` + `body`) < `min_prompt_chars` hoặc `result_summary` < `min_result_chars` (20);
   - `secret`: prompt/kết quả có secret (`redact_str` đổi chuỗi, gồm cả giá trị secret hub biết);
   - `no_completed_run`: run làm việc cuối của task không `completed`;
-  - `human_touched`: Signal `correction|edit_output|undo|reject|cancel` trên task hoặc run của nó, hay event `run.reverted` / `run.takeover`;
+  - `human_touched`: Signal `correction|edit_output|undo|reject|cancel` trên task hoặc run của nó, event `run.reverted` / `run.takeover`,
+    MỌI tin steer của người vào run của task (`user.message` steer, `by` không phải `hub`/`agent…` — kể cả không khớp regex correction),
+    hay bình luận của người vào task (`task_comments.kind='comment'`, author không `agent:…`; câu trả lời `ask_human` không tính);
   - `duplicate`: hash prompt chuẩn hoá (chữ thường, gộp khoảng trắng) trùng golden task hoặc đề xuất có sẵn (mọi trạng thái), hoặc run đã dùng;
   - `agent_cap`: agent đã có `max_open_per_agent` (3) đề xuất đang mở; `agent_gone`: agent đã xoá. Mỗi lượt tối đa `max_per_scan` (10).
 - Bản nháp: prompt = `title\n\nbody` của task; checker = `llm_judge` với rubric tiếng Anh cố định + `result_summary` làm kết quả tham chiếu.
   Lưu ở `golden_suggestions` (migration **v19**: `id gs_…`, `task_id`, `title`, `prompt`, `checker`, `prompt_hash`, `decided_*`,
   `golden_task_id`; dòng cũ được cấp `id`). Event `golden.suggestion_opened`. Đề xuất KHÔNG tạo golden task.
+- Người chạm SAU khi đề xuất mở (`edit_output` chỉ phát hiện ở run kế tiếp cùng workspace, `undo` có thể tới muộn): mỗi lượt quét tự bỏ
+  đề xuất mở bị chạm (`decided_by=auto:human_touched`, đếm `skipped.human_touched_after_open`, event `golden.suggestion_decided` để
+  gỡ nút); duyệt cũng kiểm lại → `Conflict` + tự bỏ, không tạo golden.
 - Quyết định: `decide_suggestion(id, approve|reject, created_by)` — `_require_human` (actor agent/learning/review/curator/eval_gate/
   regression_monitor bị từ chối), đề xuất phải `open` (quyết lần 2 → `Conflict`). Duyệt → `add()` (golden thật, tag `auto_suggested`,
-  `source_run_id`) + đặt `not_before=now` cho mọi proposal `deferred_no_eval` để `pipeline` thử lại ở tick kế tiếp (thay vì chờ tới 1 giờ).
+  `source_run_id`) + đặt `not_before=now` cho proposal `deferred_no_eval` của agent đó (và proposal không gắn agent) để `pipeline` thử lại ở tick kế tiếp (thay vì chờ tới 1 giờ).
   Từ chối → `dismissed` (không gợi ý lại). Mỗi quyết định: audit `golden.suggestion_decided` (actor `user:<kênh>`) + event cùng tên.
-  Đề xuất cũ của gate (theo run, chưa có nháp) cũng duyệt được: nháp dựng từ `runs.prompt` + `runs.summary`, cùng bộ lọc secret.
+  Đề xuất cũ của gate (theo run, chưa có nháp) cũng duyệt được: nháp dựng từ `runs.prompt` + `runs.summary`, cùng bộ lọc với quét
+  (người chạm → `Conflict` + tự bỏ; run không phải run làm việc `completed` hoặc chưa đủ `min_age_h` → `HubError`, vẫn mở; secret).
+- Tra đề xuất theo tiền tố id: `%`/`_` là chữ (`LIKE … ESCAPE '!'`). Mốc `upto`/`since` của quét dùng `events.iso()` (cùng định dạng
+  `…000Z` với `done_at`), không `isoformat()` — so chuỗi lệch ở đúng mốc.
 - Eval gate / canary đọc `active_for(agent)` nên thấy golden mới ngay; không cần sửa gate.
 
 ## Bề mặt
@@ -42,12 +50,17 @@ người quyết).
   (giống `approval.escalated`).
 
 ## Test
-`tests/test_golden_suggestions.py` (15 ca, cả 15 đỏ trên code cũ): bộ lọc (sửa/hoàn tác/secret/yếu/trùng/còn mới/run lỗi), trần + tắt,
+`tests/test_golden_suggestions.py` (22 ca; 15 ca đầu đỏ trên code trước PR, 6 ca review PR #40 đỏ trên commit đầu của PR, Slack e2e
+là test phủ thêm): bộ lọc (sửa/hoàn tác/secret/yếu/trùng/còn mới/run lỗi), trần + tắt,
 duyệt tạo golden + đánh thức `deferred_no_eval` + audit, từ chối không gợi ý lại, 6 actor không phải người bị từ chối, HUMAN_ONLY +
 guard CLI/MCP, RPC kênh web + caller agent bị chặn, parser CLI, tick nền theo giờ, Telegram một chạm (người lạ/chat khác/replay bị từ
-chối, chat còn lại được gỡ nút).
+chối, chat còn lại được gỡ nút) + Slack y hệt; người chạm sau lượt quét (duyệt bị chặn + tự bỏ), steer/bình luận của người, đề xuất
+cũ của gate, mốc thời gian định dạng hub, đánh thức theo agent, tiền tố có `%`/`_`.
 
 ## Việc dở / câu hỏi
 - Rubric mặc định là LLM judge so với `result_summary` — rẻ nhưng lỏng. Task chạy trên worktree/repo (đa số task hub-dev) không seed
   lại file vào workspace eval, nên judge chỉ chấm chữ trả lời. Có thể cần nút "Duyệt + sửa cách chấm" trên web.
-- Slack chưa có test e2e riêng (dùng chung lõi `ChatBot` + `CallbackStore` với Telegram); TUI chưa có màn đề xuất.
+- TUI chưa có màn đề xuất.
+- "Người tự đánh dấu done" chưa tính là người chạm: hiện không có đường nào cho người đặt task `done` (chỉ dispatcher sau run/review/
+  task con); nếu thêm lệnh đó cần ghi Signal hoặc lọc theo `task.status` reason.
+- Web vẫn hiện đề xuất cũ của gate chưa có nháp; bấm Duyệt mà run không đạt bộ lọc → báo lỗi, đề xuất vẫn mở (Bỏ qua để dọn).

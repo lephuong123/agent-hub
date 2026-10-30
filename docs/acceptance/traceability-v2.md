@@ -56,7 +56,7 @@
 |---|---|---|---|---|
 | FR-LN-05 | Must | Đạt | ↑ | H-05 bịt đường `learn propose` mạo danh người (RPC hạ `created_by="agent"`). `auto_apply_max_items` nay có mặc định (`config.py:153`) |
 | FR-LN-06 | Must | Đạt | ↑ | H-04: `Ledger._rollback_one` chỉ khôi phục khoá của entry + kiểm xung đột; QA tái hiện (`repro_cfg.py`): rollback `effort` của review GIỮ `model=haiku` của người |
-| FR-LN-10 | Must | Đạt | ↑ | H-15 (charter + snapshot) |
+| FR-LN-10 | Must | Đạt | ↑ | H-15 (charter + snapshot). ✎ Đề xuất golden từ task done + người duyệt một chạm (`evals/golden.py` `auto_suggest`/`decide_suggestion`; `tests/test_golden_suggestions.py` 22 ca, gồm kiểm lại người chạm lúc duyệt, đề xuất cũ của gate, Telegram + Slack e2e) |
 | FR-LN-15 | Must | Đạt | ↑ | H-05: classifier `forbidden` cho `learn/agent/config/secret/mcp/estop/team` ghi; RPC hạ propose. `test_sec_auth`, `test_sec_classifier` |
 | FR-LN-16 | Must | Đạt | ↑ (lệch→đạt) | Quyết định coordinator: canary/eval/regression **không bao giờ** rollback entry `actor=user`; thay đổi của người áp ngay, chỉ cảnh báo. BRD cần cập nhật (§3) |
 | FR-LN-17 | Must | Đạt | ↑ | H-04 (ledger thật) + lọc actor. FakeLedger đã thay bằng Ledger thật cho ca người sửa xen giữa |

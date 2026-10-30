@@ -15,6 +15,7 @@ from cfharness.errors import Conflict, HubError
 from cfharness.events import make_event
 from cfharness.hub import Hub
 from m3_fake import ScriptedRuntime
+from test_slack import make, sk  # noqa: F401 — fixture Slack giả cho test e2e Slack
 
 OLD = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()
 RESULT = "Report written to report.md: 3 sections, totals reconcile with the ledger."
@@ -224,3 +225,118 @@ async def test_telegram_one_tap_approve_replay_and_cross_chat_cleanup(hub_home):
         d.hub.runs.shutting_down = True
         await asyncio.wait_for(d.hub.stop(), 15)
         tg.close()
+
+
+# ============================================================================ review PR #40: người chạm sau lượt quét, đề xuất cũ của gate
+def legacy_row(h: Hub, rid: str, sid: str = "gs_legacy01") -> str:
+    h.store.conn.execute("INSERT INTO golden_suggestions (id, run_id, agent_id, reason, status, created_at, updated_at) VALUES (?,?,'a','good','open',?,?)",
+                         (sid, rid, OLD, OLD))
+    return sid
+
+
+def test_approve_legacy_gate_row_applies_same_filters(hub):
+    g = hub.evals.golden
+    rid = done_task(hub, "t_rev", title="Refactor the parser module into two files")
+    hub.publish(make_event("run.reverted", "a", {"files": ["x.py"]}, run_id=rid))
+    sid = legacy_row(hub, rid, "gs_legacy01")
+    with pytest.raises(Conflict):  # run đã bị hoàn tác → không thành golden, đề xuất tự bỏ
+        g.decide_suggestion(sid, "approve", created_by="user:web")
+    assert g.suggestion(sid)["status"] == "dismissed" and g.suggestion(sid)["decided_by"] == "auto:human_touched"
+    sid2 = legacy_row(hub, done_task(hub, "t_fail", title="Migrate the database schema to v3", run_status="failed"), "gs_legacy02")
+    young = done_task(hub, "t_young", title="Draft the release notes for v2", done_at=datetime.now(timezone.utc).isoformat())
+    sid3 = legacy_row(hub, young, "gs_legacy03")
+    for s in (sid2, sid3):
+        with pytest.raises(HubError):
+            g.decide_suggestion(s, "approve", created_by="user:web")
+        assert g.suggestion(s)["status"] == "open"
+    sid4 = legacy_row(hub, done_task(hub, "t_ok"), "gs_legacy04")
+    assert g.decide_suggestion(sid4, "approve", created_by="user:web")["status"] == "accepted"
+    assert len(g.active_for("a")) == 1
+
+
+def test_human_touch_after_scan_blocks_approve_and_auto_dismisses(hub):
+    g = hub.evals.golden
+    rid = done_task(hub, "t_ok")
+    done_task(hub, "t_two", title="Summarize the incident timeline for ops")
+    g.auto_suggest()
+    ids = sugg_ids(hub)
+    # edit_output chỉ được phát hiện ở run sau, undo có thể tới muộn → Signal xuất hiện SAU lượt quét
+    hub.store.conn.execute("INSERT INTO signals (id, agent_id, run_id, kind, source, evidence, created_at) VALUES ('s9','a',?,'edit_output','detector','{}',?)",
+                           (rid, OLD))
+    with pytest.raises(Conflict):
+        g.decide_suggestion(ids["t_ok"], "approve", created_by="user:telegram:1")
+    assert g.suggestion(ids["t_ok"])["status"] == "dismissed" and g.active_for("a") == []
+    hub.store.conn.execute("INSERT INTO signals (id, agent_id, run_id, kind, source, evidence, created_at) VALUES ('s10','a','r_t_two','undo','cli','{}',?)", (OLD,))
+    out = g.auto_suggest()
+    assert out["skipped"].get("human_touched_after_open") == 1 and g.suggestion(ids["t_two"])["status"] == "dismissed"
+
+
+def test_human_steer_and_comment_count_as_touched(hub):
+    rid = done_task(hub, "t_steer", title="Summarize the incident timeline for ops")
+    hub.publish(make_event("user.message", "a", {"text": "also add a chart", "by": "user", "channel": "cli", "steer": True}, run_id=rid))
+    done_task(hub, "t_cmt", title="Refactor the parser module into two files")
+    hub.tasks.comment("t_cmt", "please keep the old API too", author="human")
+    rid3 = done_task(hub, "t_agent", title="Draft the release notes for v2")
+    hub.tasks.comment("t_agent", "progress: done", author="agent:a")
+    hub.publish(make_event("user.message", "a", {"text": "approval granted", "by": "hub", "channel": "approval", "steer": True}, run_id=rid3))
+    out = hub.evals.golden.auto_suggest()
+    assert set(sugg_ids(hub)) == {"t_agent"} and out["skipped"] == {"human_touched": 2}
+
+
+def test_scan_window_uses_hub_timestamp_format(hub):
+    from cfharness.events import iso
+
+    now = datetime(2026, 10, 30, 12, 0, 0, tzinfo=timezone.utc)
+    done_task(hub, "t_edge", done_at=iso(now - timedelta(hours=6)))  # đúng mốc min_age_h, định dạng hub (`…000Z`)
+    assert hub.evals.golden.auto_suggest(now=now)["suggested"]
+
+
+def test_approve_wakes_only_this_agents_deferred_proposals(hub):
+    hub.agents.create({"id": "b", "name": "B", "model": "sonnet"})
+    done_task(hub, "t_ok")
+    hub.evals.golden.auto_suggest()
+    later = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    for pid, ag in (("pa", "a"), ("pb", "b")):
+        hub.store.conn.execute("INSERT INTO proposals (id, scope, agent_id, target, op, created_by, status, not_before, created_at, updated_at) "
+                               "VALUES (?,'agent',?,'config','patch','review','deferred_no_eval',?,?,?)", (pid, ag, later, OLD, OLD))
+    hub.evals.golden.decide_suggestion(sugg_ids(hub)["t_ok"], "approve", created_by="user:web")
+    nb = dict(hub.store.conn.execute("SELECT id, not_before FROM proposals").fetchall())
+    assert nb["pa"] < later and nb["pb"] == later
+
+
+def test_suggestion_prefix_treats_like_wildcards_literally(hub):
+    from cfharness.errors import NotFound
+
+    done_task(hub, "t_ok")
+    sid = hub.evals.golden.auto_suggest()["suggested"][0]
+    assert hub.evals.golden.suggestion(sid[:6])["id"] == sid
+    for ref in ("%%%%", "____", "gs_%"):
+        with pytest.raises(NotFound):
+            hub.evals.golden.suggestion(ref)
+
+
+# ============================================================================ Slack: nút một chạm (cùng lõi ChatBot + CallbackStore)
+async def test_slack_one_tap_approve_replay_and_cross_chat_cleanup(make, sk):
+    from test_slack import BOSS, DM_BOSS, DM_OTHER, OTHER, STRANGER, deliver, until
+
+    d = await make(users=(BOSS, OTHER), chats=(DM_BOSS, DM_OTHER))
+    d.hub.agents.create({"id": "a", "name": "A"})
+    done_task(d.hub, "t_ok")
+    sid = d.hub.evals.golden.auto_suggest()["suggested"][0]
+    msg = await until(lambda: sk.msg_for(DM_BOSS, sid))
+    other = await until(lambda: sk.msg_for(DM_OTHER, sid))
+    content = sk.root_of(DM_BOSS, msg) or next(m for m in sk.sent(DM_BOSS) if "Write the monthly cost report" in sk.text_of(m))
+    assert RESULT[:30] in sk.text_of(content) and not sk.buttons(content)
+    approve, reject = [b["value"] for b in sk.buttons(msg)]
+    await deliver(sk, sk.press(DM_BOSS, STRANGER, approve, msg["_ts"]))  # người lạ / DM khác: không tiêu, không quyết
+    await deliver(sk, sk.press(DM_OTHER, OTHER, approve, msg["_ts"]))
+    assert d.hub.evals.golden.suggestion(sid)["status"] == "open"
+    await deliver(sk, sk.press(DM_BOSS, BOSS, approve, msg["_ts"]))  # MỘT chạm
+    s = d.hub.evals.golden.suggestion(sid)
+    assert s["status"] == "accepted" and s["decided_by"] == f"user:slack:{DM_BOSS}"
+    await deliver(sk, sk.press(DM_BOSS, BOSS, reject, msg["_ts"]))  # cùng nhóm → đã tiêu
+    await deliver(sk, sk.press(DM_BOSS, BOSS, approve, msg["_ts"]))  # replay
+    assert len(d.hub.evals.golden.active_for("a")) == 1
+    assert [a["data"]["method"] for a in d.hub.audit.query(kind="slack.command")] == ["golden.suggestion_approve"]
+    upd = await until(lambda: [u for u in sk.calls_of("chat.update") if u.get("channel") == DM_OTHER and u.get("ts") == other["_ts"]])
+    assert not sk.buttons(upd[-1])

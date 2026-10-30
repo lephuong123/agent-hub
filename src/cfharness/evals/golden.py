@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from ..errors import Conflict, HubError, NotFound
-from ..events import make_event
+from ..events import iso, make_event
 from ..redact import redact_str
 from ..store import now_iso
 from .checkers import validate_checker
@@ -287,7 +287,8 @@ class GoldenStore:
     def suggestion(self, ref: str) -> dict[str, Any]:
         r = self.conn.execute("SELECT * FROM golden_suggestions WHERE id=? OR run_id=?", (ref, ref)).fetchone()
         if r is None:
-            rows = self.conn.execute("SELECT * FROM golden_suggestions WHERE id LIKE ?", (ref + "%",)).fetchall() if len(ref) >= 4 else []
+            pat = re.sub(r"[!%_]", lambda m: "!" + m.group(0), ref) + "%"  # `%`/`_` trong ref là chữ, không phải wildcard
+            rows = self.conn.execute("SELECT * FROM golden_suggestions WHERE id LIKE ? ESCAPE '!'", (pat,)).fetchall() if len(ref) >= 4 else []
             if len(rows) != 1:
                 raise NotFound(f"không tìm thấy đề xuất golden '{ref}'" + (" (tiền tố trùng nhiều đề xuất)" if rows else ""))
             r = rows[0]
@@ -304,15 +305,35 @@ class GoldenStore:
         sql = "SELECT * FROM golden_suggestions" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY created_at DESC LIMIT ?"
         return [_srow(r) for r in self.conn.execute(sql, (*args, int(limit)))]  # type: ignore[misc]
 
-    def _human_touched(self, task_id: str, run_ids: list[str]) -> bool:
-        """Người đã sửa (Signal correction/edit_output/reject/cancel), hoàn tác (`undo`, `run.reverted`) hay tiếp quản run của task."""
+    def _human_touched(self, task_id: str | None, run_ids: list[str]) -> bool:
+        """Người đã sửa (Signal correction/edit_output/reject/cancel), hoàn tác (`undo`, `run.reverted`), tiếp quản, steer run
+        (mọi tin steer của người, kể cả không khớp regex correction) hay bình luận vào task."""
         kinds = ",".join("?" * len(HUMAN_TOUCH_SIGNALS))
         marks = ",".join("?" * len(run_ids)) or "''"
         if self.conn.execute(f"SELECT 1 FROM signals WHERE kind IN ({kinds}) AND (task_id=? OR run_id IN ({marks})) LIMIT 1",
                              (*HUMAN_TOUCH_SIGNALS, task_id, *run_ids)).fetchone():
             return True
+        if task_id and self.conn.execute("SELECT 1 FROM task_comments WHERE task_id=? AND kind='comment' AND author NOT LIKE 'agent%' LIMIT 1",
+                                         (task_id,)).fetchone():
+            return True
         return bool(run_ids) and self.conn.execute(
-            f"SELECT 1 FROM events WHERE type IN ('run.reverted','run.takeover') AND run_id IN ({marks}) LIMIT 1", tuple(run_ids)).fetchone() is not None
+            f"SELECT 1 FROM events WHERE run_id IN ({marks}) AND (type IN ('run.reverted','run.takeover') OR (type='user.message' "
+            "AND json_extract(payload,'$.steer') AND COALESCE(json_extract(payload,'$.by'),'user') NOT IN ('hub') "
+            "AND COALESCE(json_extract(payload,'$.by'),'user') NOT LIKE 'agent%')) LIMIT 1", tuple(run_ids)).fetchone() is not None
+
+    def _suggestion_touched(self, s: dict[str, Any]) -> bool:
+        task_id = s.get("task_id") or (self.hub.store.get_run(s["run_id"]) or {}).get("task_id")
+        run_ids = [r[0] for r in self.conn.execute("SELECT id FROM runs WHERE task_id=?", (task_id,))] if task_id else []
+        return self._human_touched(task_id, list(dict.fromkeys([s["run_id"], *run_ids])))
+
+    def _auto_dismiss(self, s: dict[str, Any], why: str) -> None:
+        """Người chạm vào task/run SAU khi đề xuất mở (edit_output/undo tới muộn) → tự bỏ, không cần người bấm."""
+        now = now_iso()
+        self.conn.execute("UPDATE golden_suggestions SET status='dismissed', decided_by=?, decided_at=?, updated_at=? WHERE id=? AND status='open'",
+                          (f"auto:{why}", now, now, s["id"]))
+        self.hub.publish(make_event("golden.suggestion_decided", s["agent_id"],
+                                    {"suggestion_id": s["id"], "decision": "reject", "by": f"auto:{why}", "channel": None, "golden_task_id": None},
+                                    run_id=s["run_id"]))
 
     def _draft(self, t: dict[str, Any], c: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
         """Task done → (bản nháp, "ok") hoặc (None, lý do bỏ). Chỉ đọc."""
@@ -343,8 +364,12 @@ class GoldenStore:
         if not c.get("enabled", True):
             return out
         now = now or datetime.now(timezone.utc)
-        upto = (now - timedelta(hours=float(c["min_age_h"]))).isoformat()
-        since = (now - timedelta(days=float(c["lookback_days"]))).isoformat()
+        upto = iso(now - timedelta(hours=float(c["min_age_h"])))
+        since = iso(now - timedelta(days=float(c["lookback_days"])))
+        for o in self.suggestions(status="open", limit=500):
+            if self._suggestion_touched(o):
+                self._auto_dismiss(o, "human_touched")
+                out["skipped"]["human_touched_after_open"] = out["skipped"].get("human_touched_after_open", 0) + 1
         seen_tasks = {r[0] for r in self.conn.execute("SELECT task_id FROM golden_suggestions WHERE task_id IS NOT NULL")}
         hashes = {r[0] for r in self.conn.execute("SELECT prompt_hash FROM golden_suggestions WHERE prompt_hash IS NOT NULL")}
         hashes |= {prompt_hash(r[0]) for r in self.conn.execute("SELECT prompt FROM golden_tasks")}
@@ -384,10 +409,16 @@ class GoldenStore:
         return out
 
     def _suggestion_draft(self, s: dict[str, Any]) -> dict[str, Any]:
-        """Đề xuất của gate (theo run, chưa có nháp) → dựng nháp từ run lúc duyệt, cùng bộ lọc secret."""
+        """Đề xuất của gate (theo run, chưa có nháp) → dựng nháp từ run lúc duyệt, cùng bộ lọc với `auto_suggest`
+        (run làm việc completed, đủ `min_age_h`, secret). Người chạm đã được `decide_suggestion` kiểm trước."""
         if s.get("prompt") and s.get("checker"):
             return {"prompt": s["prompt"], "checker": s["checker"], "title": s.get("title")}
         run = self.hub.store.get_run(s["run_id"]) or {}
+        if run.get("status") != "completed" or run.get("kind") not in (None, "adhoc", "task"):
+            raise HubError(f"đề xuất {s['id']}: run {s['run_id']} không phải run làm việc completed — không dựng golden")
+        upto = iso(datetime.now(timezone.utc) - timedelta(hours=float(self.suggest_cfg()["min_age_h"])))
+        if str(run.get("ended_at") or run.get("queued_at") or "9") > upto:
+            raise HubError(f"đề xuất {s['id']}: run {s['run_id']} mới xong — chờ đủ {self.suggest_cfg()['min_age_h']} h để người kịp sửa/hoàn tác")
         prompt = str(run.get("prompt") or "").strip()
         ref = str(run.get("summary") or "").strip()
         if not prompt or len(ref) < 20:
@@ -408,11 +439,14 @@ class GoldenStore:
         now = now_iso()
         gid = None
         if decision == "approve":
+            if self._suggestion_touched(s):  # edit_output/undo có thể tới sau lượt quét
+                self._auto_dismiss(s, "human_touched")
+                raise Conflict(f"đề xuất {s['id']}: người đã sửa/hoàn tác/steer/bình luận task hoặc run sau khi đề xuất — đã tự bỏ")
             d = self._suggestion_draft(s)
             gid = self.add({"agent_id": s["agent_id"], "prompt": d["prompt"], "checker": d["checker"], "title": d.get("title"),
                             "source_run_id": s["run_id"], "tags": ["auto_suggested"]}, created_by=who)["id"]
             # L3 đang hoãn vì thiếu golden (Q-23) → thử lại ở tick kế tiếp thay vì chờ tới 1 giờ
-            self.conn.execute("UPDATE proposals SET not_before=? WHERE status='deferred_no_eval'", (now,))
+            self.conn.execute("UPDATE proposals SET not_before=? WHERE status='deferred_no_eval' AND (agent_id=? OR agent_id IS NULL)", (now, s["agent_id"]))
         status = "accepted" if decision == "approve" else "dismissed"
         self.conn.execute("UPDATE golden_suggestions SET status=?, decided_by=?, decided_channel=?, decided_at=?, golden_task_id=?, updated_at=? WHERE id=?",
                           (status, who, ch, now, gid, now, s["id"]))
