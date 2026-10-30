@@ -103,6 +103,39 @@ NOT_HELD = [
     "defaults read com.apple.dock", "plutil -p Info.plist", "plutil -lint Info.plist", "git config --get alias.st", "schtasks /query",
     "python -c \"import subprocess; print('at least once'); subprocess.run(['ls'])\"", "powershell -c Get-ScheduledTask",
     "powershell -c \"& git status\"", "loginctl list-sessions",
+    # review PR #37: chuỗi `shell:startup` chỉ bị giữ khi được MỞ (explorer/start), không phải khi in/tìm
+    "echo shell:startup", "grep -r shell:startup docs", "busctl --user list", "busctl --user status org.freedesktop.systemd1",
+    "defaults -currentHost read com.apple.screensaver", "systemctl --user is-enabled x.service",
+]
+
+# Review PR #37 (t_6ec1fa1d83): ca lách còn sót sau lần sửa đầu — đỏ trên f399711
+REVIEW_HELD = [
+    # 1. PowerShell: Register-ScheduledJob, gọi động bằng dấu chấm, New-Item/`sp` vào khoá Run, đổi thư mục Startup, GetFolderPath(7)
+    "powershell -c \"Register-ScheduledJob -Name x -FilePath C:/x.ps1\"",
+    "powershell -c \". ('Reg'+'ister-ScheduledTask') -TaskName x\"",
+    r'powershell -c "New-Item -Path HKCU:\Software\Microsoft\Windows\CurrentVersion\Run -Name x"',
+    r'powershell -c "sp HKCU:\Software\Microsoft\Windows\CurrentVersion\Run x calc"',
+    r'''powershell -c "Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders' Startup C:/x"''',
+    "powershell -c \"Copy-Item x.bat ([Environment]::GetFolderPath(7))\"",
+    # 3. cmd /c: thoát bằng `^`, gián tiếp qua `set X=…` + `call %X%`
+    "cmd /c sch^tasks /create /tn x",
+    "cmd //c \"s^c create x binPath= C:/x.exe\"",
+    "cmd /c \"set X=schtasks&& call %X% /create /tn x\"",
+    # 4. lệnh lập lịch trong mã có tiền tố đường dẫn / env / VAR=
+    "python -c \"import os; os.system('/usr/bin/crontab f')\"",
+    "python -c \"import os; os.system('env crontab f')\"",
+    "python -c \"import os; os.system('x=1 crontab f')\"",
+    "node -e \"require('child_process').execSync('sudo -n /usr/bin/at now')\"",
+    # 5. defaults với cờ host đứng trước động từ
+    "defaults -currentHost write com.apple.loginwindow LoginHook /tmp/x.sh",
+    "defaults -host h write com.apple.loginwindow LoginHook /tmp/x.sh",
+    # 6. gọi systemd qua D-Bus
+    "busctl --user call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager StartUnit ss x.service replace",
+    "gdbus call --session --dest org.freedesktop.systemd1 --object-path /org/freedesktop/systemd1 "
+    "--method org.freedesktop.systemd1.Manager.StartUnit x.service replace",
+    "dbus-send --session --dest=org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.systemd1.Manager.StartUnit string:x string:replace",
+    # low: systemctl unmask/revert, regedit /s, sfltool
+    "systemctl --user unmask x.service", "systemctl revert x.service", "regedit /s x.reg", "regedit.exe -s x.reg", "sfltool add-item x",
 ]
 
 
@@ -125,6 +158,20 @@ def test_schedule_reads_not_held(env, cmd):
     c, _ = env
     v = classify("Bash", {"command": cmd}, c)
     assert not _held(v), (cmd, v)
+
+
+@pytest.mark.parametrize("cmd", REVIEW_HELD)
+def test_review_evasions_held(env, cmd):
+    c, _ = env
+    v = classify("Bash", {"command": cmd}, c)
+    assert _held(v), (cmd, v)
+
+
+def test_shell_startup_opened_still_held(env):
+    c, _ = env
+    for cmd in ("explorer shell:startup", "explorer.exe shell:common startup", "cmd /c start shell:startup", "start shell:startup"):
+        v = classify("Bash", {"command": cmd}, c)
+        assert v.verdict == "destructive" and v.rule == "schedule_persistence", (cmd, v)
 
 
 def test_scheduler_rule_name(env):
@@ -157,6 +204,45 @@ def test_persistence_paths_protected_for_file_tools(env, tool):
         v = classify(tool, ti, c)
         assert v.verdict == "destructive" and v.rule == "protected_path", (p, v)
         assert protected_path(c, p, "write") is not None, p
+
+
+def _review_paths(uh: str) -> list[str]:
+    """Review PR #37: profile PowerShell (chạy mỗi khi NGƯỜI mở PowerShell) + nhóm thấp (env phiên, X11, IPython, .pth)."""
+    return [f"{uh}/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1", f"{uh}/Documents/PowerShell/profile.ps1",
+            f"{uh}/OneDrive/Documents/PowerShell/Microsoft.PowerShell_profile.ps1", f"{uh}/.config/powershell/Microsoft.PowerShell_profile.ps1",
+            f"{uh}/.config/environment.d/x.conf", f"{uh}/.pam_environment", f"{uh}/.xprofile", f"{uh}/.xinitrc", f"{uh}/.xsessionrc",
+            f"{uh}/.ipython/profile_default/startup/x.py", f"{uh}/.local/lib/python3.12/site-packages/x.pth",
+            f"{uh}/AppData/Roaming/Python/Python313/site-packages/evil.pth"]
+
+
+@pytest.mark.parametrize("tool", ["Write", "Edit"])
+def test_review_paths_protected_for_file_tools(env, tool):
+    c, uh = env
+    for p in _review_paths(uh):
+        ti = {"file_path": p, "content": "x"} if tool == "Write" else {"file_path": p, "old_string": "a", "new_string": "b"}
+        v = classify(tool, ti, c)
+        assert v.verdict == "destructive" and v.rule == "protected_path", (p, v)
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="Win32 bỏ dấu chấm/khoảng trắng cuối mỗi thành phần đường dẫn")
+@pytest.mark.parametrize("tool", ["Write", "Edit"])
+def test_windows_trailing_dot_space_normalised(env, tool):
+    """`…/Startup./x.bat`, `…/Startup /x.bat` = `…/Startup/x.bat` trên NTFS → phải khớp vùng bảo vệ."""
+    c, uh = env
+    for p in (f"{uh}/{STARTUP}./x.bat", f"{uh}/{STARTUP} /x.bat", f"{uh}/{STARTUP}. ./x.bat", f"{uh}/{STARTUP}/x.bat.",
+              f"{uh}/.config/git./config", f"{uh}/Library/LaunchAgents../x.plist"):
+        ti = {"file_path": p, "content": "x"} if tool == "Write" else {"file_path": p, "old_string": "a", "new_string": "b"}
+        v = classify(tool, ti, c)
+        assert v.verdict == "destructive" and v.rule == "protected_path", (p, v)
+
+
+@pytest.mark.skipif(not IS_WINDOWS, reason="canon_path chỉ chuẩn hoá trên Windows")
+def test_canon_path_strips_trailing_dot_space():
+    from cfharness.guard.policy import canon_path
+
+    assert canon_path("C:/a./b /c. .") == "C:/a/b/c"
+    assert canon_path("C:/a/./b/../c") == "C:/a/c"
+    assert canon_path("C:/a/.../b") == "C:/a/.../b"
 
 
 def test_system_persistence_dirs_protected(env):

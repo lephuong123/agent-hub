@@ -66,12 +66,13 @@ def canon_path(p: str) -> str:
     """Dạng so sánh DUY NHẤT của một đường dẫn. POSIX: giữ nguyên (không đổi hành vi). Windows (Git Bash chạy lệnh của agent):
     `C:\a\b`, `C:/a/b`, `/c/a/b` (MSYS), `//c/a/b` (luật Claude Code) → `C:/a/b`; ổ đĩa viết hoa, gộp `//`, `.`/`..`;
     `C:x` (tương đối theo ổ) coi như `C:/x` (bảo thủ). Đường dẫn gốc không ổ đĩa (`/data/x`, `/dev/null`) giữ dạng POSIX.
+    Win32 bỏ dấu chấm/khoảng trắng CUỐI mỗi thành phần (`Startup./x`, `Startup /x` = `Startup/x`) → bỏ theo (review V2-N2).
     KHÔNG gập chữ hoa/thường — so sánh dùng `fold_path`."""
     if not IS_WINDOWS or not p:
         return p
     import posixpath
 
-    s = p.replace("\\", "/")
+    s = "/".join(_win_trim(x) for x in p.replace("\\", "/").split("/"))
     m = _MSYS_DRIVE.match(s)
     if m:
         s = m.group(1) + ":/" + s[m.end():].lstrip("/")
@@ -82,6 +83,13 @@ def canon_path(p: str) -> str:
     if s.startswith("/"):
         return "/" + posixpath.normpath(s).lstrip("/")  # posixpath giữ `//x` — gốc MSYS chỉ một `/`
     return posixpath.normpath(s) if s not in ("", ".") else s
+
+
+def _win_trim(part: str) -> str:
+    t = part.rstrip(" ")
+    if t in (".", ".."):
+        return t
+    return part.rstrip(". ") or part
 
 
 def fold_path(p: str) -> str:
