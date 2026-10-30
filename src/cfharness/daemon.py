@@ -18,10 +18,11 @@ from typing import Any, Awaitable, Callable
 
 from . import auth as _auth
 from . import transport
+from .config import HubConfig
 from .errors import BLOCKED, HubError, SYSTEM_ERROR
 from .events import TERMINAL_RUN_EVENTS
 from .hub import Hub
-from .logs import setup_logging
+from .logs import DEFAULT_BACKUP_COUNT, DEFAULT_MAX_AGE_DAYS, DEFAULT_MAX_BYTES, rotate_if_large, setup_logging
 from .paths import HubPaths
 from .oscompat import IS_WINDOWS, JOBS, detached_kwargs, ensure_hidden_console, same_user
 from .rpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, DaemonUnavailable, RpcClient, encode
@@ -466,14 +467,31 @@ def _req(p: dict[str, Any], key: str) -> Any:
     return p[key]
 
 
+def _log_settings(paths: HubPaths) -> dict[str, Any]:
+    """`logs.*` (NFR-21); config hỏng → mặc định (log không được làm daemon không khởi động)."""
+    try:
+        c = HubConfig(paths.config).get("logs") or {}
+    except Exception:  # pragma: no cover
+        c = {}
+    return {"max_bytes": c.get("max_bytes", DEFAULT_MAX_BYTES), "backup_count": c.get("backup_count", DEFAULT_BACKUP_COUNT),
+            "max_age_days": c.get("max_age_days", DEFAULT_MAX_AGE_DAYS)}
+
+
+def _rotate_daemon_out(paths: HubPaths, ls: dict[str, Any]) -> None:
+    """daemon.out là stdout/stderr thô của daemon (không xoay được khi đang chạy) → xoay lúc khởi động nếu quá max_bytes."""
+    rotate_if_large(paths.logs_dir / "daemon.out", int(ls["max_bytes"] or 0), int(ls["backup_count"] or 0))
+
+
 def run_foreground(paths: HubPaths) -> None:
     paths.ensure()
+    ls = _log_settings(paths)
     if sys.stdout is None or sys.stderr is None:  # pythonw (dịch vụ tự khởi động trên Windows): không có console → ghi daemon.out
+        _rotate_daemon_out(paths, ls)
         out = open(paths.logs_dir / "daemon.out", "a", encoding="utf-8", errors="replace", buffering=1)
         sys.stdout = sys.stdout or out
         sys.stderr = sys.stderr or out
     console = ensure_hidden_console()  # Windows/pythonw: console ẩn cho claude + hậu duệ (không bật cửa sổ, CTRL_BREAK chạy được)
-    setup_logging(paths.logs_dir)
+    setup_logging(paths.logs_dir, max_bytes=ls["max_bytes"], backup_count=ls["backup_count"], max_age_days=ls["max_age_days"])
     if console not in ("posix", "existing"):
         logging.getLogger("cfharness.daemon").info("không có console → đã lấy console ẩn (%s)", console)
     from .redact import install_log_filter, install_stderr_masking
@@ -487,6 +505,7 @@ def run_foreground(paths: HubPaths) -> None:
 def spawn_background(paths: HubPaths, wait_s: float = 15.0) -> int:
     """Khởi chạy daemon nền (tách session), chờ socket sẵn sàng. Trả pid."""
     paths.ensure()
+    _rotate_daemon_out(paths, _log_settings(paths))
     out = open(paths.logs_dir / "daemon.out", "ab")
     env = dict(os.environ)
     env["CFHARNESS_HOME"] = str(paths.home)

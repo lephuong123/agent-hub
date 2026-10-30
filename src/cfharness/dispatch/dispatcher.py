@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..errors import Blocked, HubError
 from ..events import HubEvent, make_event
+from ..logs import RunLogger, run_logger
 from ..oscompat import pid_alive
 from ..store import now_iso
 from . import routing
@@ -224,8 +225,16 @@ class TaskDispatcher:
         try:
             self.on_run_terminal(run_id)
         except Exception:  # pragma: no cover
-            log.exception("xử lý kết quả run %s lỗi", run_id)
+            self._rlog(run_id).exception("xử lý kết quả run %s lỗi", run_id)
         self.kick()
+
+    def _rlog(self, run_id: str) -> RunLogger:
+        """Log gắn run_id/agent_id/task_id (NFR-21): dispatcher chạy NGOÀI task asyncio của run nên contextvar không có."""
+        try:
+            run = self.store.get_run(run_id) or {}
+        except Exception:  # pragma: no cover - log không được làm hỏng đường lỗi
+            run = {}
+        return run_logger(log, run_id, run.get("agent_id"), task_id=run.get("task_id"))
 
     # ------------------------------------------------------------------ rate limit (FR-RT-16)
     def _on_rate_limit(self, ev: HubEvent) -> None:
@@ -438,7 +447,8 @@ class TaskDispatcher:
             hb = _parse(run.get("last_heartbeat_at") or run.get("started_at"))
             stale = hb is not None and (now - hb).total_seconds() > ttl
             if stale and not self._alive(ar):
-                log.warning("run %s: tiến trình chết, không heartbeat > %ss → dừng (crashed)", run["id"], ttl)
+                run_logger(log, run["id"], run["agent_id"], task_id=t["id"]).warning(
+                    "run %s: tiến trình chết, không heartbeat > %ss → dừng (crashed)", run["id"], ttl)
                 ar.crashed = True  # type: ignore[attr-defined]
                 if ar.runtime is not None:
                     asyncio.ensure_future(ar.runtime.stop(ar.handle, grace_s=1))
