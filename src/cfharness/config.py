@@ -316,7 +316,11 @@ DEFAULTS: dict[str, Any] = {
         "review_rate_limit_retries": 5,  # review kết thúc rate_limited → xếp lại (Signal giữ nguyên), tối đa N lần
         "review_retry_backoff_s": 300,  # backoff lần đầu sau rate_limited, nhân đôi mỗi lần (≤ 1 giờ)
         "review_budget_retries": 1,  # budget_exceeded khi CHƯA có proposal → thử lại N lần với trần review_budget_max_usd
-        "review_model": None,  # null = cùng model với run gốc (giữ cache, A-12)
+        "review_model": None,  # null = cùng model với run gốc (giữ cache, A-12); model khác → review chạy trên DIGEST (không fork)
+        # digest (như auxiliary.background_review của Hermes): session nguồn có ngữ cảnh > N token → review KHÔNG fork (nạp lại cả
+        # session rất đắt) mà chạy session mới với digest các tin gần nhất của session từ chỉ mục session_search (null = luôn fork)
+        "review_digest_over_tokens": 150_000,
+        "review_digest_chars": 40_000,  # cỡ digest (ký tự, tin mới nhất trước — mỗi tin ≤ 1.500 ký tự)
         "review_scope": "combined",  # combined | skill | memory (prompt Hermes tương ứng)
         "review_debounce_s": 10,  # gom tín hiệu: review chạy ≥ N giây sau Signal cuối (newest-wins)
         "review_max_per_agent_per_day": 10,
@@ -326,7 +330,8 @@ DEFAULTS: dict[str, Any] = {
         "high_signals": ["correction", "reject", "edit_output"],
         "auto_apply_max_chars": 800,  # Q-03 ngưỡng đường nhanh L1
         "auto_apply_max_items": 1,
-        "limits": {"memory_chars": 2200, "user_chars": 1375, "team_memory_chars": 2200, "skill_chars": 100_000, "skill_desc_chars": 60},
+        "limits": {"memory_chars": 2200, "user_chars": 1375, "team_memory_chars": 2200, "skill_chars": 100_000, "skill_desc_chars": 60,
+                   "memory_entry_chars": 600},  # memory_entry_chars: trần một mục memory do học ghi (một fact, không phải cả đoạn)
         "repeat_pattern_n": 3,  # FR-LN-01: n-gram tool + số run tối thiểu
         "repeat_pattern_window_runs": 20,
         "failure_min_runs": 2,
@@ -728,6 +733,9 @@ def validate_setting(key: str, value: Any) -> None:
     elif key in ("learning.review_reload_usd_per_mtok", "learning.review_retry_backoff_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
             raise ValueError(f"{key} phải là số ≥ 0")
+    elif key in ("learning.review_digest_over_tokens", "learning.review_digest_chars"):
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
+            raise ValueError(f"{key} phải là số nguyên ≥ 1 hoặc null")
     elif key in ("learning.review_rate_limit_retries", "learning.review_budget_retries"):
         if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 20:
             raise ValueError(f"{key} phải là số nguyên 0..20")

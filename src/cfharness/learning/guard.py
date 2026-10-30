@@ -162,6 +162,14 @@ class LearningGuard:
     def _limits(self, prop: dict[str, Any], plan: dict[str, Any]) -> Block | None:
         lim = self.hub.knowledge.limits()
         if prop["target"] in ("memory", "user_profile"):
+            if plan.get("format_drift") and prop.get("created_by") != "user":
+                return Block("guard_rule", "format_drift",
+                             f"{prop.get('target_ref')} đã bị sửa tay lệch định dạng (mục ngăn bởi dòng '§') — vòng học không ghi đè; người sửa lại file "
+                             "hoặc ghi qua `cfharness learn propose`")
+            elim = int(lim.get("memory_entry_chars") or 0)
+            if elim and plan.get("longest_written", 0) > elim and prop.get("created_by") != "user":
+                return Block("guard_rule", "entry_too_long",
+                             f"một mục memory {plan['longest_written']} > {elim} ký tự — mỗi mục là MỘT fact ngắn; tách thành nhiều mục hoặc rút gọn")
             if plan.get("chars_after", 0) > plan.get("limit", 10**9) and plan.get("chars_after", 0) > plan.get("chars_before", 0):
                 return Block("guard_rule", "memory_limit",
                              f"{prop.get('target_ref')} sẽ là {plan['chars_after']}/{plan['limit']} ký tự — gửi MỘT lô `operations` vừa gộp/rút gọn/xoá mục cũ (patch/remove) vừa thêm mục mới")

@@ -28,5 +28,4 @@ nguyên pipeline an toàn.
 - Hermes không giới hạn số lần ghi; hub tính vào `rate.max_changes_per_agent_per_day`.
 
 ## Việc dở
-- Hướng dẫn "lưu chủ động" hiện chỉ nằm trong mô tả tool (không thêm khối vào system prompt để không đổi prompt hash của mọi agent).
-- Rollback memory vẫn theo cả file (xem báo cáo audit memory 2026-10-30) — rollback một lô agent ghi cũng gỡ các thay đổi sau nó.
+- Đã làm ở `memory-hermes-gaps.md`: hướng dẫn memory trong system prompt, rollback theo mục.

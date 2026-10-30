@@ -86,6 +86,18 @@ def _norm(s: str) -> str:
     return " ".join((s or "").lower().split())
 
 
+def _memory_drift(text: str, entries: list[str], store: str) -> bool:
+    """File memory bị sửa tay lệch định dạng (như Hermes phát hiện "drift"): đọc rồi viết lại không ra đúng nội dung → ghi đè
+    sẽ âm thầm đổi chỗ người viết. So sau khi bỏ khác biệt vô hại (CRLF, khoảng trắng cuối dòng). File chỉ có tiêu đề/rỗng: không tính."""
+    if not entries:
+        return False
+
+    def norm(s: str) -> str:
+        return "\n".join(x.rstrip() for x in s.replace("\r\n", "\n").split("\n")).strip()
+
+    return norm(text) != norm(render_memory(entries, store))
+
+
 def _file_sha(path: Path) -> str:
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -168,6 +180,7 @@ class Pipeline:
         ch = Change(scope=scope, owner_id=owner, target=prop["target"], target_ref=path.name, op=prop["op"], actor="?", kind="file", path=path,
                     after=after.encode("utf-8"), agent_id=prop.get("agent_id"))
         return {"scope": scope, "owner": owner, "change": ch, "diff": diff, "size": size, "new_text": content or "",
+                "format_drift": _memory_drift(before, entries, store), "longest_written": max((len(w.strip()) for _, w in written), default=0),
                 "chars_before": memory_chars(entries), "chars_after": memory_chars(new_entries), "limit": self.ks.memory_limit(scope, store), "duplicate_of": dup, "touched_entries": touched}
 
     def _was_read(self, prop: dict[str, Any], scope: str, owner: str | None, name: str, rel: str, path: Path, anchored: bool = False) -> bool:

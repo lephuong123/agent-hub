@@ -489,3 +489,7 @@ chỉ review đề xuất L3). Lô `operations` = một proposal = một ledger 
 `propose_memory` của review cũng nhận `operations`. Kết quả trả mục hiện có + usage; system prompt của session KHÔNG đổi (snapshot đóng băng).
 Không có trong run review/eval/curator. Tắt: `config set learning.agent_memory_tool false` (khi bật, mọi run thường có hub-self kể cả agent chưa có skill).
 Test: `tests/test_agent_memory_tool.py`.
+Thu hẹp khoảng cách với Hermes (`docs/dev-notes/memory-hermes-gaps.md`): review chạy trên DIGEST khi `review_model` khác model nguồn
+hoặc session > `learning.review_digest_over_tokens` (`ReviewScheduler.digest_for`); quét memory lúc nạp (`prompt_blocks._safe`,
+`threats.scan_load`); guard `format_drift` + `entry_too_long` (`learning.limits.memory_entry_chars`); `MEMORY_GUIDANCE` trong prompt;
+rollback memory tầng agent THEO MỤC (`ledger.invert_memory`, không chuỗi). Test: `tests/test_memory_hermes_gaps.py`.
