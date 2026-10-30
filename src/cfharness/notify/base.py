@@ -65,7 +65,9 @@ class QueuedNotifier:
     def __call__(self, ev: HubEvent) -> None:
         events = self.cfg().get("events") or []
         # approval.escalated = "người được hỏi lần đầu" → nhận ở mọi cấu hình đã nhận approval.open (danh sách cũ người tự đặt)
-        if ev.type not in events and not (ev.type == "approval.escalated" and "approval.open" in events):
+        # đề xuất golden có nút = bản một chạm của `golden.suggested` → nhận ở mọi cấu hình đã nhận golden.suggested
+        if ev.type not in events and not (ev.type == "approval.escalated" and "approval.open" in events) \
+                and not (ev.type == "golden.suggestion_opened" and "golden.suggested" in events):
             return
         if self._delegated(ev):
             return

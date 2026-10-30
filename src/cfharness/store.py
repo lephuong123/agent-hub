@@ -785,6 +785,24 @@ MIGRATIONS: list[str] = [
     ALTER TABLE approval_requests ADD COLUMN timeout_action TEXT;
     CREATE INDEX IF NOT EXISTS approvals_routed ON approval_requests(routed_to, status);
     """,
+    # v19 — tự đề xuất golden task từ task `done` (docs/dev-notes/golden-suggestions.md): `id` ngắn (nút/CLI/web), bản nháp
+    # (task, tiêu đề, prompt, checker, hash prompt để chống trùng) và người/kênh/lúc quyết + golden task tạo ra.
+    """
+    ALTER TABLE golden_suggestions ADD COLUMN id TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN task_id TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN title TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN prompt TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN checker TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN prompt_hash TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN decided_by TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN decided_channel TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN decided_at TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN golden_task_id TEXT;
+    UPDATE golden_suggestions SET id='gs_' || lower(hex(randomblob(5))) WHERE id IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS golden_suggestions_id ON golden_suggestions(id);
+    CREATE INDEX IF NOT EXISTS golden_suggestions_hash ON golden_suggestions(prompt_hash);
+    CREATE INDEX IF NOT EXISTS golden_suggestions_status ON golden_suggestions(status, agent_id);
+    """,
 ]
 
 JSON_COLS = {

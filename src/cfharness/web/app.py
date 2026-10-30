@@ -735,12 +735,14 @@ async def learnings_page(request: Request) -> Response:
             if x.get("type") in feed_types]
     ledger = await rpc(request, "learn.ledger", {"limit": 60, **({"agent": q["agent"]} if q.get("agent") else {})})
     golden = await rpc(request, "golden.list", {"all": True})
+    golden_sugg = await rpc(request, "golden.suggestions", {"limit": 30})
     digest = await rpc(request, "digest.show", {})
     agents = await rpc(request, "agent.list", {})
     policy = await rpc(request, "learn.policy_get", {})
     agent_pol = (policy or {}).get("agents") or {}
     learn = [{"id": a["id"], "enabled": (agent_pol.get(a["id"]) or {}).get("enabled", True) if isinstance(agent_pol.get(a["id"]), dict) else True} for a in agents]
     return await render(request, "learnings.html", {"nav": "learnings", "feed": feed, "ledger": ledger, "golden": (golden or {}).get("tasks") or [],
+                                                    "golden_sugg": golden_sugg or [],
                                                     "digest": digest or {}, "learn": learn, "policy": policy or {}, "q": dict(q), "agents": [a["id"] for a in agents]})
 
 
@@ -991,6 +993,10 @@ ACTIONS: dict[str, Action] = {
                              confirm=lambda f: f"Khôi phục golden task {f.get('id')}?"),
     "golden_from_run": Action("golden.from_run", lambda f: {"run_id": _req(f, "run_id")}, lambda r, f: f"Đã tạo golden task {(r or {}).get('id')} từ run",
                               confirm="Lấy run này làm golden task (bài kiểm tra chuẩn cho agent)?"),
+    # đề xuất golden do hub tự đề xuất từ task done — NGƯỜI duyệt một chạm (RPC HUMAN_ONLY, audit kênh web)
+    "golden_suggestion_approve": Action("golden.suggestion_approve", lambda f: {"id": _req(f, "id")},
+                                        lambda r, f: f"Đã tạo golden task {(r or {}).get('golden_task_id')} từ đề xuất {f.get('id')}"),
+    "golden_suggestion_reject": Action("golden.suggestion_reject", lambda f: {"id": _req(f, "id")}, lambda r, f: f"Đã bỏ đề xuất {f.get('id')}"),
     "digest_run": Action("digest.run", lambda f: {"no_send": True}, "Đã tạo bản tin học"),
     # ---- MCP
     "mcp_add": Action("mcp.add", lambda f: {"config": _mcp_config(f), "probe": not f.get("oauth")}, lambda r, f: _mcp_ok(r),
