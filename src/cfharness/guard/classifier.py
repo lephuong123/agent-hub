@@ -80,6 +80,8 @@ SPECIAL_FILES = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/ze
 DISK_DEV = re.compile(r"^/dev/(r?disk\d|sd[a-z]|nvme|hd[a-z]|mmcblk|xvd|vd[a-z]|md\d|dm-)")
 DELETE_CMDS = {"rm", "unlink", "shred", "srm", "wipe", "gshred", "grm", "trash", "trash-put", "rmtrash"}
 HUB_FORBIDDEN_SUB = {"approve", "deny"}
+SYSTEMCTL_PERSIST_VERBS = {"enable", "reenable", "start", "restart", "try-restart", "reload-or-restart", "try-reload-or-restart", "link", "edit",
+                           "preset", "preset-all", "add-wants", "add-requires", "set-environment", "import-environment"}
 HUB_DESTRUCTIVE_SUB = {"guard", "config", "secret", "secrets", "estop", "mcp", "purge", "trash", "audit", "policy"}
 # H-01/H-05: lệnh CLI ứng với method RPC CHỈ-NGƯỜI (auth.HUMAN_ONLY) — từ trong run luôn bị daemon từ chối → chặn thẳng
 HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
@@ -161,7 +163,13 @@ WIN_PERSIST_CODE = re.compile(
     r"|\bwmic(\.exe)?\b.*\bcall\s+create\b"
     r"|\bStart-Process\b.*-Verb\s+RunAs\b"
     r"|\breg(\.exe)?\s+(add|delete|import|restore|load)\b"
-    r"|\b(Set|New)-ItemProperty\b.*\\(Run|RunOnce|Winlogon)\b")
+    r"|\b(Set|New)-ItemProperty\b.*[\\/](Run|RunOnce|Winlogon)\b"
+    r"|Start\s*Menu[\\/]+Programs[\\/]+Startup\b|GetFolderPath\(\s*['\"]?(\[Environment\+SpecialFolder\]::)?(Common)?Startup\b|\bshell:(common\s*)?startup\b")
+# V2-N2: PowerShell gọi lệnh ĐỘNG (`& ('Reg'+'ister…')`, `iex`, `[scriptblock]::Create`) — tên cmdlet lập lịch bị ghép/giấu khỏi WIN_PERSIST_CODE
+PS_DYNAMIC_INVOKE = re.compile(r"(?i)(^|[\s;|({])&\s*[(\[$]|\b(Invoke-Expression|iex)\b|\[scriptblock\]::Create|\.InvokeCommand\.|\bInvoke-Command\b.*-ScriptBlock\s*\(")
+# V2-N2: chuỗi trong mã trình thông dịch là lệnh lập lịch, kể cả sau `|`/`;` (os.system('echo x | at now'), execSync('crontab f'))
+SCHED_CMD_IN_LIT = re.compile(r"(?:^|[|;&(])\s*(?:crontab|systemd-run|loginctl|launchctl|systemctl|defaults\s+write|plutil|osascript|"
+                              r"at(?=\s+(?:-[fmqtvM]\b|now\b|\d|midnight\b|noon\b|teatime\b|tomorrow\b|today\b))|batch(?=\s*(?:$|<|-)))")
 WIN_ESCAPE = "tiến trình do Task Scheduler/dịch vụ/WMI tạo nằm NGOÀI Job Object của run (như launchctl submit thoát sandbox)"
 EXEC_DYNAMIC = re.compile(r"\b(os\.system|subprocess|popen|os\.exec|execSync|exec\(|spawn|child_process|system\(|eval\(|`|__import__|b64decode|base64|codecs\.decode|fromCharCode|Function\()", re.I)
 STR_LITERAL = re.compile(r"""(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')""")
@@ -730,8 +738,11 @@ def _persistence_dirs(home: str) -> tuple[str, ...]:
     """V2-N2: nơi đặt thứ CHẠY TRỄ như người, ngoài run/sandbox (cron/launchd/git hooks/autostart);
     MGR-1: + thư mục bin trên $PATH thuộc $HOME (người/daemon THỰC THI binary ngoài sandbox → giả lệnh = thoát sandbox)."""
     base = (f"{home}/Library/LaunchAgents", f"{home}/Library/LaunchDaemons", "/Library/LaunchAgents", "/Library/LaunchDaemons",
-            f"{home}/.config/git", f"{home}/.config/systemd", f"{home}/.config/autostart", f"{home}/.git-templates",
-            "/etc/cron.d", "/var/spool/cron", "/usr/lib/cron/tabs")
+            f"{home}/.config/git", f"{home}/.config/systemd", f"{home}/.local/share/systemd", f"{home}/.config/autostart", f"{home}/.git-templates",
+            f"{home}/Library/Application Support/com.apple.backgroundtaskmanagementagent", "/Library/StartupItems",
+            f"{home}/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup", "C:/ProgramData/Microsoft/Windows/Start Menu/Programs/StartUp",
+            "/etc/crontab", "/etc/anacrontab", "/etc/cron.d", "/etc/cron.hourly", "/etc/cron.daily", "/etc/cron.weekly", "/etc/cron.monthly",
+            "/var/spool/cron", "/var/spool/at", "/var/at", "/usr/lib/cron", "/etc/systemd", "/etc/xdg/autostart", "/etc/init.d", "/etc/rc.local")
     try:
         from .runtime import path_bin_dirs
 
@@ -1585,8 +1596,24 @@ class BashAnalyzer:
                                              "kill", "stop", "remove", "disable", "reboot") for t in texts):
             self.hit("destructive", "schedule_persistence", "system", "launchctl nạp/chạy job launchd (ngoài sandbox)")
             return
-        if base == "systemctl" and "--user" in texts and any(t in ("enable", "start", "link", "edit") for t in texts):
-            self.hit("destructive", "schedule_persistence", "system", "systemctl --user enable/start")
+        if base == "systemctl" and any(t in SYSTEMCTL_PERSIST_VERBS for t in texts):
+            # V2-N2: unit (user lẫn hệ thống) do systemd chạy NGOÀI run/sandbox; set-environment = tiêm env cho mọi unit về sau
+            self.hit("destructive", "schedule_persistence", "system", f"systemctl {'--user ' if '--user' in texts else ''}nạp/chạy unit (ngoài sandbox)")
+            return
+        if base == "systemd-run":
+            self.hit("destructive", "schedule_persistence", "system", "systemd-run: unit/timer tạm do systemd chạy ngoài sandbox")
+            return
+        if base == "loginctl" and any(t in ("enable-linger", "disable-linger") for t in texts):
+            self.hit("destructive", "schedule_persistence", "system", "loginctl enable-linger: dịch vụ user chạy cả khi người đã đăng xuất")
+            return
+        if base == "defaults" and texts[:1] and texts[0] in ("write", "import", "delete", "rename"):
+            if any(re.search(r"(?i)loginwindow|loginitems|backgrounditems", t) for t in texts[1:2]) or any(t in ("LoginHook", "LogoutHook") for t in texts):
+                self.hit("destructive", "schedule_persistence", "system", "defaults: LoginHook/login item chạy lệnh khi người đăng nhập")
+                return
+            self.generic(base, args, unknown_targets)  # domain dạng đường dẫn = file plist (LaunchAgents/…)
+            return
+        if base == "plutil" and any(t in ("-create", "-insert", "-replace", "-remove", "-convert", "-o") for t in texts):
+            self.generic(base, args, unknown_targets)
             return
         if base == "security" and any(SECURITY_READ_SUBS.match(t) for t in texts):
             self.hit("destructive", "keychain_access", "system", "agent không được đọc/xuất keychain (thông tin xác thực của người — R3-1)", forbidden=True)
@@ -1702,6 +1729,9 @@ class BashAnalyzer:
         wb = re.split(r"[\\/]", base)[-1].lower()
         wb = wb[:-4] if wb.endswith(".exe") else wb
         low = [a.text.lower() for a in args]
+        if any(re.search(r"\bshell:(common\s*)?startup\b", t) for t in low):
+            self.hit("destructive", "schedule_persistence", "system", f"{wb} mở/ghi thư mục Startup (chạy khi người đăng nhập) — {WIN_ESCAPE}")
+            return True
         if wb == "schtasks" and any(t[:1] in "/-" and t.lstrip("/-") in ("create", "change", "run", "delete", "end") for t in low):
             self.hit("destructive", "schedule_persistence", "system", f"schtasks tạo/sửa/chạy/xoá task Task Scheduler — {WIN_ESCAPE}")
             return True
@@ -1722,7 +1752,7 @@ class BashAnalyzer:
                     rest = args[i + 1:]
                     if any(a.dynamic for a in rest):
                         self.hit("uncertain", "shell_c_dynamic", "system", "cmd /c với nội dung động")
-                    self.merge(self.sub(" ".join(a.literal for a in rest)), "cmd /c")
+                    self.merge(self.sub(self.cmd_line(rest)), "cmd /c")
                     break
             return False
         if wb in ("powershell", "pwsh"):
@@ -1736,12 +1766,35 @@ class BashAnalyzer:
                         self.hit("uncertain", "interp_dynamic_code", "system", f"{wb} -EncodedCommand không giải mã được")
             if WIN_PERSIST_CODE.search(code):
                 self.hit("destructive", "schedule_persistence", "system", f"{wb}: cmdlet tạo lịch/dịch vụ/tiến trình WMI/mục Run — {WIN_ESCAPE}")
+            elif PS_DYNAMIC_INVOKE.search(code):
+                self.hit("uncertain", "code_obfuscated", "system", f"{wb} gọi lệnh động (&(…)/iex/scriptblock) — không biết cmdlet thật")
             if wb != base:  # `powershell.exe`, đường dẫn đầy đủ… → luồng trình thông dịch như `powershell`
                 self.interpreter(wb, args, sc)
                 return True
         return False
 
-    _PKG_RUN_SUB = {"npm": ("run", "run-script", "rum", "urn"), "pnpm": ("run", "run-script"), "yarn": ("run",), "bun": ("run",)}
+    _CMD_ENV = {"appdata": "AppData/Roaming", "localappdata": "AppData/Local", "userprofile": "", "home": ""}
+
+    def cmd_line(self, rest: list[shell.Word]) -> str:
+        """Dòng lệnh của `cmd /c …` để phân tích như shell (V2-N2): một đối số chứa khoảng trắng = cả dòng lệnh (`cmd /c "…"`),
+        đối số có khoảng trắng được bọc nháy như MSYS; `%APPDATA%`/`%USERPROFILE%`… mở theo home người dùng, `\\` → `/`."""
+        if len(rest) == 1 and re.search(r"\s", rest[0].literal):
+            line = rest[0].literal
+        else:
+            line = " ".join(f'"{a.literal}"' if re.search(r"\s", a.literal) and '"' not in a.literal else a.literal for a in rest)
+        uh = canon_path(str(self.ctx.policy.user_home)).rstrip("/")
+
+        def env(m: re.Match[str]) -> str:
+            name = m.group(1).lower()
+            if name in self._CMD_ENV:
+                return f"{uh}/{self._CMD_ENV[name]}".rstrip("/")
+            if name in ("programdata", "allusersprofile"):
+                return "C:/ProgramData"
+            return os.environ.get(m.group(1), m.group(0))
+
+        return re.sub(r"%(\w+)%", env, line).replace("\\", "/")
+
+    _PKG_RUN_SUB ={"npm": ("run", "run-script", "rum", "urn"), "pnpm": ("run", "run-script"), "yarn": ("run",), "bun": ("run",)}
     _PKG_VAL_FLAGS = ("--prefix", "-C", "--dir", "--cwd", "--workspace", "-w", "--filter", "-F", "--loglevel")
 
     def pkg_run(self, base: str, args: list[shell.Word]) -> bool:
@@ -2336,6 +2389,8 @@ class BashAnalyzer:
                 self.hit("destructive", "code_delete_api", "file", f"mã {base} gọi API xoá file")
         if base == "osascript" and re.search(r"(?i)keychain|security\s+find|password", code):
             self.hit("destructive", "keychain_access", "system", "AppleScript truy cập keychain/mật khẩu (R3-1)", forbidden=True)
+        if base == "osascript" and re.search(r"(?i)\bmake\s+(new\s+)?login\s+item\b", code):
+            self.hit("destructive", "schedule_persistence", "system", "AppleScript thêm login item (chạy khi người đăng nhập, ngoài sandbox)")
         if base == "osascript" and re.search(r"(?i)\b(delete|empty\s+(the\s+)?trash|move\b.*\bto\s+(the\s+)?trash)\b", code):
             self.hit("destructive", "applescript_delete", "file", "AppleScript xoá/chuyển vào thùng rác")
         s = sql_destructive(code) if re.search(r"(?i)\b(drop|truncate|delete|update|flushall|flushdb)\b", code) else None
@@ -2372,7 +2427,7 @@ class BashAnalyzer:
                     continue
                 if re.match(r"^\s*(rm|git|find|dd|mkfs|shred|truncate|chmod|chown|psql|mysql|sqlite3|sh|bash|zsh|curl|sudo|mv|cp|ln|tee|install|rsync|"
                             rf"unlink|{_CLI}|python[\d.]*|node|perl|ruby|nc|socat|xargs|kill|pkill|docker|kubectl|terraform|aws|gh|npm|pnpm|yarn|bun|npx|tsx|launchctl|make|"
-                            r"schtasks|sc|reg|wmic|cmd|powershell|pwsh)\b", lit):
+                            r"schtasks|sc|reg|wmic|cmd|powershell|pwsh)\b", lit) or SCHED_CMD_IN_LIT.search(lit):
                     found = True
                     self.merge(self.sub(lit), f"lệnh trong mã {base}")
             for m in LIST_ARGV_RE.finditer(code):
