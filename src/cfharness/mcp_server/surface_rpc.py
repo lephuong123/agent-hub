@@ -265,6 +265,7 @@ class SurfaceRpc:
         run, vis = self._self_run_vis(p, "memory_search")
         args = dict(p.get("args") or {})
         if args.get("mode") or args.get("scope") == "sessions":
+            args.setdefault("group", True)  # agent: mặc định gộp theo luồng (như Hermes trả top session)
             return self._session(args, vis)
         own = None if vis.all else run["agent_id"]
         return memory_search(self.hub, str(args.get("query") or ""), agent_id=own, scope=args.get("scope") or "all",
@@ -281,12 +282,14 @@ class SurfaceRpc:
 
     def session_search(self, p: dict[str, Any]) -> dict[str, Any]:
         """`session.search {mode, query?, message_id?, window?, run_id?, session_id?, conversation_id?, agent_id?, team_id?, kind?, role?,
-        since?, until?, include_technical?, limit?, offset?}` — xem session_search.py."""
+        since?, until?, include_technical?, group?, limit?, offset?}` — xem session_search.py."""
         return self._session(dict(p), self._caller_vis("session.search"))
 
     def session_search_self(self, p: dict[str, Any]) -> dict[str, Any]:
         _run, vis = self._self_run_vis(p, "session_search")
-        return self._session(dict(p.get("args") or {}), vis)
+        args = dict(p.get("args") or {})
+        args.setdefault("group", True)
+        return self._session(args, vis)
 
     def _run_for_hook(self, run_id: str | None) -> dict[str, Any] | None:
         return self.hub.store.get_run(run_id) if run_id else None

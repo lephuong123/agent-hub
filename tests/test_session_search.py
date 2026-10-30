@@ -319,7 +319,9 @@ def test_scope_worker_sees_own_and_team_only(scoped):
         res = rpc.memory_search({"query": "alpha", "scope": "transcripts"})
         assert {r["run_id"] for r in res["results"]} <= {"rw1", "rw2"}
         # hub-self: run_id phải là run của chính tiến trình gọi
-        assert rpc.session_search_self({"run_id": "rw1", "args": {"query": "alpha"}})["hits"]
+        g = rpc.session_search_self({"run_id": "rw1", "args": {"query": "alpha"}})
+        assert g["grouped"] and {t["thread"]["id"] for t in g["threads"]} <= {"s_rw1", "s_rw2"}  # hub-self: mặc định gộp theo luồng
+        assert rpc.session_search_self({"run_id": "rw1", "args": {"query": "alpha", "group": False}})["hits"]
         hub.store.update_run("rw3", {"status": "running"})
         with pytest.raises(Blocked):
             rpc.session_search_self({"run_id": "rw3", "args": {"query": "alpha"}})
@@ -366,8 +368,11 @@ def test_hub_self_memory_search_modes(scoped):
     assert "memory_search" in ROLE_TOOLS["worker"]
     r = rpc.memory_search_self({"run_id": "rw1", "args": {"mode": "browse"}})
     assert r["mode"] == "browse" and {t["thread"]["id"] for t in r["threads"]} == {"s_rw1", "s_rw2"}
-    r = rpc.memory_search_self({"run_id": "rw1", "args": {"query": "alpha", "scope": "sessions"}})
+    r = rpc.memory_search_self({"run_id": "rw1", "args": {"query": "alpha", "scope": "sessions", "group": False}})
     assert {h["run_id"] for h in r["hits"]} == {"rw1", "rw2"}
+    r = rpc.memory_search_self({"run_id": "rw1", "args": {"query": "alpha", "scope": "sessions"}})
+    assert r["grouped"] and {h["run_id"] for t in r["threads"] for h in t["hits"]} == {"rw1", "rw2"}
+    assert "group" in props
     assert "memory.search_self" in _auth.SCOPED_READ and "session.search" in _auth.SCOPED_READ
 
 
@@ -423,8 +428,58 @@ async def test_daemon_cli_and_mcp_session_search(daemon, capsys):
         tools = {t.name: t for t in (await c.list_tools()).tools}
         assert "hub_session_search" in READ_ONLY_TOOLS and tools["hub_session_search"].annotations.read_only_hint is True
         r = (await c.call_tool("hub_session_search", {"query": "wombat"})).structured_content
-        assert r["mode"] == "search" and r["hits"][0]["run_id"] == run["id"]
+        assert r["mode"] == "search" and r["threads"][0]["hits"][0]["run_id"] == run["id"]
+        r = (await c.call_tool("hub_session_search", {"query": "wombat", "group": False})).structured_content
+        assert r["hits"][0]["run_id"] == run["id"]
         r = (await c.call_tool("hub_session_search", {"mode": "browse"})).structured_content
         assert r["threads"]
         ms = (await c.call_tool("hub_memory_search", {"query": "wombat", "scope": "transcripts"})).structured_content
         assert ms["results"][0]["kind"] == "transcript" and ms["results"][0]["run_id"] == run["id"]
+
+
+# ============================================================================ Hermes parity: kết quả tool 2.000 ký tự + gộp theo luồng
+def test_tool_result_keeps_2000_chars(hub):
+    from cfharness.claude_adapter import RESULT_PREVIEW_MAX
+
+    assert RESULT_PREVIEW_MAX == ss.TOOL_RESULT_MAX == 2000
+    hub.agents.create({"id": "a", "name": "A"})
+    _run(hub, "r1", "a", prompt="chạy test")
+    tail = "lỗi-cuối-zqx ở dòng 1800"
+    _ev(hub, "tool.complete", "a", "r1", {"name": "Bash", "result_preview": "." * 1700 + tail + "." * 1000})
+    tr = hub.store.conn.execute("SELECT text FROM session_messages WHERE role='tool_result'").fetchone()[0]
+    assert len(tr) == 2000
+    assert _search(hub, query="loi-cuoi-zqx")["hits"][0]["role"] == "tool_result"  # trước đây (300 ký tự) không tìm được
+
+
+def test_group_by_thread(hub):
+    hub.agents.create({"id": "a", "name": "A"})
+    _run(hub, "r1", "a", prompt="Sửa lỗi proxy kafka", session="sA")
+    for i in range(5):
+        _ev(hub, "message.complete", "a", "r1", {"text": f"proxy kafka bước {i}"}, session="sA")
+    _run(hub, "r2", "a", prompt="Việc khác", session="sB")
+    _ev(hub, "message.complete", "a", "r2", {"text": "nhắc tới proxy kafka một lần"}, session="sB")
+    flat = _search(hub, query="proxy kafka")
+    assert "threads" not in flat and len(flat["hits"]) == 7
+    g = _search(hub, query="proxy kafka", group=True)
+    assert g["grouped"] and g["count"] == 2
+    ids = {t["thread"]["id"] for t in g["threads"]}
+    assert ids == {"sA", "sB"}
+    a = next(t for t in g["threads"] if t["thread"]["id"] == "sA")
+    assert a["matches"] == 6 and len(a["hits"]) == ss.GROUP_HITS_PER_THREAD and a["title"].startswith("Sửa lỗi proxy")
+    assert all("«" in h["snippet"] for h in a["hits"])
+    scores = [t["best_score"] for t in g["threads"]]
+    assert scores == sorted(scores, reverse=True)
+    p1 = _search(hub, query="proxy kafka", group=True, limit=1)
+    assert p1["count"] == 1 and p1["next_offset"] == 1
+    p2 = _search(hub, query="proxy kafka", group=True, limit=1, offset=1)
+    assert p2["count"] == 1 and p2["next_offset"] is None and p2["threads"][0]["thread"] != p1["threads"][0]["thread"]
+    assert "khớp" in ss.render_text(g)
+
+
+def test_group_respects_visibility(hub):
+    hub.agents.create({"id": "a", "name": "A"})
+    hub.agents.create({"id": "b", "name": "B"})
+    _run(hub, "r1", "a", prompt="bí mật của a: chuỗi quokka", session="sA")
+    _run(hub, "r2", "b", prompt="b cũng nói quokka", session="sB")
+    g = _search(hub, ss.agent_visibility(hub.store.conn, "b"), query="quokka", group=True)
+    assert [t["thread"]["id"] for t in g["threads"]] == ["sB"]

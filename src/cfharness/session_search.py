@@ -1,6 +1,6 @@
 """Tìm kiếm hội thoại (session search) — SQLite FTS5 trên TOÀN BỘ nội dung hội thoại của run + hội thoại điều phối viên.
 
-Giống `session_search` của Hermes Agent: thuần SQLite, tất định, KHÔNG gọi LLM. Ghi chú thiết kế: `docs/dev-notes/session-search.md`.
+Giống `session_search` của Hermes Agent: thuần SQLite, tất định, KHÔNG gọi LLM. `group` gộp hit theo luồng (top session). Ghi chú thiết kế: `docs/dev-notes/session-search.md`.
 
 Dữ liệu (migration v17, `store.py`):
 - `session_messages`: mỗi hàng = một "tin" đã chuẩn hoá: prompt của run (`runs.prompt`, role `user`), tin steer (`user.message`,
@@ -43,7 +43,9 @@ TECHNICAL_KINDS = ("review", "eval", "eval_judge", "curator", "learning")
 MODES = ("search", "around", "read", "browse")
 MAX_TEXT = 8000  # = claude_adapter.MESSAGE_COMPLETE_MAX
 TOOL_INPUT_MAX = 200
-TOOL_RESULT_MAX = 300
+TOOL_RESULT_MAX = 2000  # như Hermes (2.000); = claude_adapter.RESULT_PREVIEW_MAX — hàng chỉ mục trước đó giữ 300
+GROUP_SCAN_MAX = 500  # group: số tin xếp hạng tối đa quét để gộp luồng
+GROUP_HITS_PER_THREAD = 3
 INDEXED_EVENTS = ("user.message", "message.complete", "tool.start", "tool.complete")
 _WORD = re.compile(r"\w+", re.U)
 
@@ -577,6 +579,9 @@ def _mode_search(conn: sqlite3.Connection, p: dict[str, Any], vis: Visibility) -
         raise HubError("query rỗng")
     limit = _limit(p.get("limit"), 10, 100)
     offset = max(0, int(p.get("offset") or 0))
+    group = bool(p.get("group"))
+    # group: xếp hạng tin rồi gộp theo luồng (như Hermes trả top session) — lấy cửa sổ tin đủ rộng, offset/limit tính theo LUỒNG
+    take, skip = (min(GROUP_SCAN_MAX, (offset + limit) * 10 + 1), 0) if group else (limit + 1, offset)
     fsql, fargs = _filters(p)
     vsql, vargs = vis.clause()
     tok = _tokenizer(conn)
@@ -586,24 +591,64 @@ def _mode_search(conn: sqlite3.Connection, p: dict[str, Any], vis: Visibility) -
     if match:
         sql = ("SELECT m.*, bm25(session_fts) AS rank FROM session_fts JOIN session_messages m ON m.id = session_fts.rowid "
                f"WHERE session_fts MATCH ?{fsql}{vsql}{like_sql} ORDER BY rank, m.ts DESC LIMIT ? OFFSET ?")
-        args = [match, *fargs, *vargs, *like_args, limit + 1, offset]
+        args = [match, *fargs, *vargs, *like_args, take, skip]
     else:
         sql = f"SELECT m.*, 0.0 AS rank FROM session_messages m WHERE 1{fsql}{vsql}{like_sql} ORDER BY m.ts DESC LIMIT ? OFFSET ?"
-        args = [*fargs, *vargs, *like_args, limit + 1, offset]
+        args = [*fargs, *vargs, *like_args, take, skip]
     try:
         rows = conn.execute(sql, args).fetchall()
     except sqlite3.OperationalError as e:
         raise HubError(f"truy vấn tìm kiếm không hợp lệ: {e}") from None
-    more = len(rows) > limit
     needles = phrases + words
-    hits = []
-    for r in rows[:limit]:
+
+    def hit(r: sqlite3.Row) -> dict[str, Any]:
         h = _msg(r, full=False)
         h["score"] = round(-float(r["rank"] or 0.0), 4)
         h["snippet"] = _snippet(r["text"], needles)
-        hits.append(h)
+        return h
+
+    if group:
+        threads = _group_hits(conn, [hit(r) for r in rows], vis)
+        page = threads[offset:offset + limit]
+        more = len(threads) > offset + limit
+        return {"query": query, "threads": page, "count": len(page), "offset": offset, "next_offset": offset + limit if more else None,
+                "engine": tok or "like", "grouped": True, "scanned": len(rows), "scan_truncated": len(rows) >= take}
+    more = len(rows) > limit
+    hits = [hit(r) for r in rows[:limit]]
     return {"query": query, "hits": hits, "count": len(hits), "offset": offset, "next_offset": offset + limit if more else None,
             "engine": tok or "like"}
+
+
+def _group_hits(conn: sqlite3.Connection, hits: list[dict[str, Any]], vis: Visibility) -> list[dict[str, Any]]:
+    """Gộp hit đã xếp hạng theo luồng, GIỮ thứ tự hạng của hit tốt nhất mỗi luồng; mỗi luồng ≤ GROUP_HITS_PER_THREAD đoạn trích."""
+    order: list[str] = []
+    by: dict[str, dict[str, Any]] = {}
+    for h in hits:
+        th = h["thread"]
+        key = f"{th['type']}:{th['id']}"
+        g = by.get(key)
+        if g is None:
+            g = by[key] = {"thread": th, "agent_id": h.get("agent_id"), "best_score": h["score"], "matches": 0, "first_ts": h.get("ts"),
+                           "last_ts": h.get("ts"), "hits": []}
+            order.append(key)
+        g["matches"] += 1
+        ts = h.get("ts")
+        if ts:
+            g["first_ts"] = min(g["first_ts"] or ts, ts)
+            g["last_ts"] = max(g["last_ts"] or ts, ts)
+        if len(g["hits"]) < GROUP_HITS_PER_THREAD:
+            g["hits"].append({k: h[k] for k in ("id", "run_id", "role", "tool", "ts", "snippet", "score") if h.get(k) is not None})
+    vsql, vargs = vis.clause()
+    out = []
+    for key in order:
+        g = by[key]
+        tsql, targs = _thread_clause(g["thread"])
+        first = conn.execute(f"SELECT text FROM session_messages m WHERE {tsql}{vsql} AND m.role IN ('user','steer') ORDER BY m.ts, m.id LIMIT 1",
+                             (*targs, *vargs)).fetchone()
+        title = (first[0] if first else "").replace("\n", " ").strip()
+        g["title"] = title[:120] + ("…" if len(title) > 120 else "")
+        out.append({k: v for k, v in g.items() if v is not None})
+    return out
 
 
 def _get_msg(conn: sqlite3.Connection, mid: Any, vis: Visibility) -> dict[str, Any]:
@@ -701,7 +746,18 @@ def _mode_browse(conn: sqlite3.Connection, p: dict[str, Any], vis: Visibility) -
 def render_text(res: dict[str, Any]) -> str:
     mode = res.get("mode")
     lines: list[str] = []
-    if mode == "search":
+    if mode == "search" and res.get("grouped"):
+        if not res.get("threads"):
+            return "(không có kết quả)"
+        for t in res["threads"]:
+            th = t["thread"]
+            lines.append(f"{(t.get('last_ts') or '')[:19]}  {th['type']}:{str(th['id'])[:14]}  {t.get('agent_id') or '-'}  {t.get('matches')} khớp  "
+                         f"điểm {t.get('best_score')}  {t.get('title', '')}")
+            for h in t.get("hits", []):
+                lines.append(f"    #{h['id']} {h.get('role')}: {h.get('snippet', '')}")
+        if res.get("next_offset") is not None:
+            lines.append(f"(còn nữa — --offset {res['next_offset']})")
+    elif mode == "search":
         if not res.get("hits"):
             return "(không có kết quả)"
         for h in res["hits"]:
@@ -739,6 +795,8 @@ def cmd_search(ctx: Any) -> int:
                                             ("until", a.until), ("limit", a.limit), ("offset", a.offset or None)) if v}
     if a.technical:
         p["include_technical"] = True
+    if a.group:
+        p["group"] = True
     if a.around is not None:
         p.update(mode="around", message_id=a.around, window=a.window)
     elif a.read:
@@ -783,6 +841,7 @@ def add_parsers(sub: Any, common: Any) -> None:
     s.add_argument("--since", help="từ thời điểm (ISO, YYYY-MM-DD, 7d/12h/30m)")
     s.add_argument("--until", help="đến thời điểm")
     s.add_argument("--technical", action="store_true", help="kể cả phiên kỹ thuật review/eval/curator")
+    s.add_argument("--group", action="store_true", help="gộp kết quả theo luồng hội thoại (top session, ≤ 3 đoạn trích mỗi luồng)")
     s.add_argument("--limit", type=int)
     s.add_argument("--offset", type=int, default=0)
     s.set_defaults(fn=cmd_search)

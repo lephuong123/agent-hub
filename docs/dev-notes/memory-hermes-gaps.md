@@ -9,7 +9,7 @@ Theo báo cáo so sánh memory agent-hub ↔ Hermes (hermes-agent @ 903230b). Ph
   (`session_messages`, đã che secret) ≤ `learning.review_digest_chars` (mặc định 40.000, mỗi tin ≤ 1.500 ký tự), cũ trước, rồi
   prompt review. `run_opts.review_digest=true`, `fork=false`. Ngân sách: base + (digest/4 + 20k token) × giá nạp lại.
 - Session chưa được chỉ mục / digest rỗng → fork như cũ. `review_digest_over_tokens: null` → luôn fork (trừ khi đổi model).
-- Đánh đổi: review thấy tối đa ~40k ký tự gần nhất, không thấy tool output đầy đủ (chỉ mục giữ ≤ 300 ký tự/kết quả tool).
+- Đánh đổi: review thấy tối đa ~40k ký tự gần nhất, không thấy tool output đầy đủ (chỉ mục giữ ≤ 2.000 ký tự/kết quả tool — trước 2026-10-30: 300).
 
 ## 2. Quét lúc nạp
 `knowledge/prompt_blocks._safe`: mỗi mục memory (mọi tầng) quét `threats.scan_load` (injection, Unicode ẩn — KHÔNG gồm mẫu
@@ -37,4 +37,4 @@ fact thêm sau, và không còn Conflict vì entry sau của người. Tầng te
 ## Còn lệch Hermes
 - Không có cơ chế cắm memory ngoài (MemoryProvider: Honcho, Mem0…) / tìm theo ngữ nghĩa.
 - Không có hook trước nén context (claude CLI tự nén).
-- `session_search`: kết quả tool giữ 300 ký tự (Hermes 2.000), chưa gộp theo session.
+- ~~`session_search`: kết quả tool giữ 300 ký tự, chưa gộp theo session~~ — xong 2026-10-30 (2.000 ký tự, `group`).

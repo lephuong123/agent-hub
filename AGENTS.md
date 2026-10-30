@@ -493,3 +493,6 @@ Thu hẹp khoảng cách với Hermes (`docs/dev-notes/memory-hermes-gaps.md`): 
 hoặc session > `learning.review_digest_over_tokens` (`ReviewScheduler.digest_for`); quét memory lúc nạp (`prompt_blocks._safe`,
 `threats.scan_load`); guard `format_drift` + `entry_too_long` (`learning.limits.memory_entry_chars`); `MEMORY_GUIDANCE` trong prompt;
 rollback memory tầng agent THEO MỤC (`ledger.invert_memory`, không chuỗi). Test: `tests/test_memory_hermes_gaps.py`.
+Plan ngang Hermes còn lại: `docs/dev-notes/plan-memory-hermes-parity.md`. `session_search` giữ kết quả tool 2.000 ký tự
+(`claude_adapter.RESULT_PREVIEW_MAX` = `session_search.TOOL_RESULT_MAX`) và `group` gộp hit theo luồng — mặc định bật cho hub-self + MCP,
+tắt cho RPC `session.search`/CLI (`--group`). Test: `tests/test_session_search.py`.
