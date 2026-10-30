@@ -1,9 +1,20 @@
-{#- Thẻ "Sức khoẻ" ở Cài đặt (partial /partials/health) — chỉ RPC đọc: hub.status, hub.compat, guard.integrity.status. -#}
+{#- Thẻ "Sức khoẻ" ở Cài đặt (partial /partials/health) — chỉ RPC đọc: hub.status, hub.compat, guard.integrity.status, report.hangs. -#}
 {% import "_macros.html" as m with context %}
 <section class="card" id="health">
   <div class="card-head"><h2>{{ m.icon('shield') }} Sức khoẻ</h2>{% if bad %}<span class="pill danger">{{ bad }} vấn đề</span>{% else %}<span class="pill ok">{{ m.icon('check') }}ổn</span>{% endif %}</div>
   <ul class="health">
     {% for c in checks %}<li class="hc {{ c.tone }}">{{ m.icon('check' if c.ok else 'alert') }}<span class="hc-n">{{ c.check }}</span><span class="hc-d">{{ c.detail }}</span></li>{% endfor %}
   </ul>
+  {% if hangs and hangs.hung %}
+  <details class="hangs"><summary>Run hay treo / quá giờ — {{ hangs.hung }} run trong 14 ngày</summary>
+    <div class="hang-grid">
+    {% for key, label in hang_groups %}{% if hangs[key] %}
+      <table class="tbl small"><thead><tr><th>{{ label }}</th><th>Số run</th></tr></thead><tbody>
+      {% for x in hangs[key] %}<tr><td>{{ x.key }}</td><td>{{ x.count }}</td></tr>{% endfor %}
+      </tbody></table>
+    {% endif %}{% endfor %}
+    </div>
+  </details>
+  {% endif %}
   <p class="muted small">Kiểm đầy đủ (gồm đăng nhập claude, PATH, MCP của agent): chạy <code>cfharness doctor</code> trong terminal.</p>
 </section>

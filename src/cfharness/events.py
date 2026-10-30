@@ -104,6 +104,7 @@ EVENT_LEVELS: dict[str, str] = {
     "policy.changed": "summary",
     "run.waiting_human": "summary",  # tiến trình đã dừng, chờ người duyệt (slot nhả, khoá giữ)
     "run.resumed": "summary",  # run được tiếp tục ở run mới (--resume)
+    "run.auto_resume": "summary",  # tự resume lỗi tạm thời: {status: scheduled|started|skipped|exhausted, cause, attempt} (auto_resume.py)
     "run.repeated_failure": "summary",
     "recovery.reconciled": "summary",
     "notify.sent": "debug",
