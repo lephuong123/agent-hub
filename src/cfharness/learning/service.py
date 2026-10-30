@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("cfharness.learning")
 
 KNOWLEDGE_OPS = ("skills_list", "skill_view")
+MEMORY_OP = "memory"  # tool `memory` của agent đang chạy (kiểu Hermes): ghi MEMORY.md/USER.md tầng agent ngay trong session
 LEARNING_OPS = ("skills_list", "skill_view", "memory_view", "propose_memory", "propose_skill_new", "propose_skill_patch", "propose_skill_merge",
                 "propose_skill_archive", "propose_config_change", "propose_user_profile")
 
@@ -162,7 +163,7 @@ class LearningService:
             raise NotFound(f"run {run_id} không tồn tại")
         opts = run.get("run_opts") or {}
         is_review = bool(opts.get("learning_review"))
-        allowed = LEARNING_OPS if is_review else KNOWLEDGE_OPS
+        allowed = LEARNING_OPS if is_review else KNOWLEDGE_OPS + ((MEMORY_OP,) if self.hub.config.get("learning.agent_memory_tool") else ())
         if op not in allowed:
             raise HubError(f"tool '{op}' không dùng được trong run này", code=-32003)
         if run.get("status") not in ("running", "queued"):
@@ -192,6 +193,8 @@ class LearningService:
 
                 return {"scope": sc, "owner": owner, "target": st, "entries": entries, "chars": memory_chars(entries), "limit": ks.memory_limit(sc, st)}
             return ks.memory_view(agent_id, "user" if args.get("target") == "user" else "memory")
+        if op == MEMORY_OP:
+            return self._agent_memory(run, args)
         job_id = opts.get("review_job_id")
         job = self.reviews.get(job_id) if job_id else {}
         common = {"agent_id": agent_id, "created_by": "review", "review_job_id": job_id, "run_id": run_id, "rationale": str(args.get("rationale") or ""),
@@ -203,9 +206,11 @@ class LearningService:
             action = str(args.get("action") or "add")
             if scope != "agent" and args.get("target") == "user":
                 raise HubError("hồ sơ người dùng dùng chung: dùng propose_user_profile")
+            store = "user" if args.get("target") == "user" else "memory"
+            if args.get("operations") is not None:
+                return self.pipeline.propose(target="memory", op="patch", scope=scope, payload={"store": store, "operations": _memory_ops(args)}, **common)
             return self.pipeline.propose(target="memory", op={"add": "add", "patch": "patch", "remove": "delete"}.get(action, "add"), scope=scope,
-                                         payload={"store": "user" if args.get("target") == "user" else "memory", "action": action,
-                                                  "content": args.get("content"), "old_text": args.get("old_text")}, **common)
+                                         payload={"store": store, "action": action, "content": args.get("content"), "old_text": args.get("old_text")}, **common)
         if op == "propose_user_profile":
             action = str(args.get("action") or "add")
             return self.pipeline.propose(target="user_profile", op={"add": "add", "patch": "patch", "remove": "delete"}.get(action, "add"), scope="global",
@@ -222,6 +227,24 @@ class LearningService:
             ch = dict(args.get("changes") or {})
             return self.pipeline.propose(target="config", op="patch", payload={"changes": ch, "soul": args.get("soul")}, **common)
         raise HubError(f"op không hỗ trợ: {op}")
+
+    def _agent_memory(self, run: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        """Tool `memory` (kiểu Hermes): agent ghi kho CỦA CHÍNH NÓ ngay trong session. Vẫn qua pipeline (guard, threat scan,
+        hạn mức, ledger, rollback) với `created_by=agent`; chỉ tầng agent — tầng team/global vẫn chỉ review đề xuất (L3).
+        Một lời gọi = một proposal = một suất hạn mức; hạn mức ký tự xét trên kết quả cuối của lô. Ghi xuống đĩa ngay nhưng
+        system prompt của session hiện tại KHÔNG đổi (snapshot đóng băng, giữ prompt cache) — kết quả trả trạng thái sống."""
+        opts = run.get("run_opts") or {}
+        if run.get("kind") in ("eval", "eval_judge", "curator") or opts.get("eval_overlay"):
+            raise HubError("tool memory không dùng được trong run eval/curator", code=-32003)
+        store = "user" if args.get("target") == "user" else "memory"
+        res = self.pipeline.propose(target="memory", op="patch", agent_id=run["agent_id"], scope="agent", run_id=run["id"], created_by="agent",
+                                    payload={"store": store, "operations": _memory_ops(args)}, rationale=str(args.get("rationale") or ""))
+        view = self.hub.knowledge.memory_view(run["agent_id"], store)
+        out: dict[str, Any] = {k: res.get(k) for k in ("status", "reason", "rule", "not_before") if res.get(k) is not None}
+        out.update(target=store, usage=f"{view['chars']}/{view['limit']} chars", entries=view["entries"])
+        if res.get("status") == "applied":
+            out["note"] = "Saved to disk. Your system prompt for this session is unchanged; the change is visible from the next session."
+        return out
 
     # ------------------------------------------------------------------ hợp đồng B
     def materialize(self, proposal: dict[str, Any], home: Path, cfg: dict[str, Any]) -> dict[str, Any]:
@@ -249,6 +272,17 @@ class LearningService:
         if agent_id:
             out["counters"] = self.reviews.counters_for(agent_id)
         return out
+
+
+def _memory_ops(args: dict[str, Any]) -> list[dict[str, Any]]:
+    """`operations` (lô) hoặc một thao tác `action/content/old_text` → danh sách thao tác chuẩn hoá."""
+    raw = args.get("operations")
+    if raw is None:
+        raw = [{"action": args.get("action"), "content": args.get("content"), "old_text": args.get("old_text")}]
+    if not isinstance(raw, list):
+        raise HubError("operations phải là mảng")
+    return [{"action": str((o or {}).get("action") or ""), "content": (o or {}).get("content"), "old_text": (o or {}).get("old_text")}
+            for o in raw if isinstance(o, dict)] or [{"action": ""}]
 
 
 def attach(hub: "Hub") -> None:

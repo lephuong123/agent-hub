@@ -164,7 +164,7 @@ class LearningGuard:
         if prop["target"] in ("memory", "user_profile"):
             if plan.get("chars_after", 0) > plan.get("limit", 10**9) and plan.get("chars_after", 0) > plan.get("chars_before", 0):
                 return Block("guard_rule", "memory_limit",
-                             f"{prop.get('target_ref')} sẽ là {plan['chars_after']}/{plan['limit']} ký tự — gộp/rút gọn mục cũ trong cùng một đề xuất (patch/remove) rồi thêm")
+                             f"{prop.get('target_ref')} sẽ là {plan['chars_after']}/{plan['limit']} ký tự — gửi MỘT lô `operations` vừa gộp/rút gọn/xoá mục cũ (patch/remove) vừa thêm mục mới")
             if plan.get("duplicate_of"):
                 return Block("guard_rule", "one_fact_one_store", f"fact này đã có ở {plan['duplicate_of']} — một fact chỉ ở một kho")
         if prop["target"] == "skill":

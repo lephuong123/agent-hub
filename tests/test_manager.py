@@ -254,6 +254,7 @@ async def test_heartbeat_approval_waiting_and_periodic_open_work(d):
 
 async def test_worker_run_cannot_use_manager_tools(d):
     d.hub.agents.create({"id": "w1", "name": "w1"})
+    d.hub.config.set("learning.agent_memory_tool", False)  # tool memory gắn hub-self vai trò knowledge cho mọi run — ở đây kiểm vai trò manager
     d.script.hold_manager = True
     res = await manager_run(d)
     r = d.hub.runs.submit("w1", "[cfharness · OWNER x", run_opts={"hub_self": "manager"})

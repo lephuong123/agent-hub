@@ -91,11 +91,34 @@ def apply_memory_op(entries: list[str], action: str, content: str | None, old_te
     if action == "patch":
         if not content:
             raise KnowledgeError("patch cần content", "invalid")
+        if ENTRY_DELIMITER.strip() in content:
+            raise KnowledgeError("một mục memory không được chứa ký tự phân cách '§'", "invalid")
         if out[i].count(old_text) != 1:
             raise KnowledgeError("old_text phải xuất hiện đúng một lần trong mục", "ambiguous")
         out[i] = out[i].replace(old_text, content)
         return out
     raise KnowledgeError(f"action memory không hợp lệ: {action}", "invalid")
+
+
+MAX_MEMORY_OPS = 10
+
+
+def apply_memory_ops(entries: list[str], ops: list[dict[str, Any]]) -> list[str]:
+    """Lô thao tác add/patch/remove áp tuần tự (như `operations` của tool memory Hermes): hạn mức ký tự xét trên KẾT QUẢ
+    cuối nên một lô vừa gộp/xoá mục cũ vừa thêm mục mới được khi kho đã đầy. Một thao tác sai → cả lô sai (KnowledgeError)."""
+    if not ops:
+        raise KnowledgeError("operations rỗng", "invalid")
+    if len(ops) > MAX_MEMORY_OPS:
+        raise KnowledgeError(f"tối đa {MAX_MEMORY_OPS} thao tác mỗi lô", "invalid")
+    out = list(entries)
+    for n, op in enumerate(ops, 1):
+        if not isinstance(op, dict):
+            raise KnowledgeError(f"thao tác #{n} phải là object", "invalid")
+        try:
+            out = apply_memory_op(out, str(op.get("action") or ""), op.get("content"), op.get("old_text"))
+        except KnowledgeError as e:
+            raise KnowledgeError(f"thao tác #{n} ({op.get('action')}): {e.message}", e.reason) from None
+    return out
 
 
 # ============================================================================ skill (thuần)

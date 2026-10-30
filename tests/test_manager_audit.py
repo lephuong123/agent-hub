@@ -59,6 +59,7 @@ async def test_mgr3_inherited_manager_opts_do_not_grant_tools(env):
     """Kể cả đường nội bộ: submit với parent = run manager mà lý do không phải tiếp nối của hub → mất vai trò manager."""
     d, res = env
     d.hub.agents.update("boss", {"limits": {"max_concurrent_runs": 5}})
+    d.hub.config.set("learning.agent_memory_tool", False)  # tool memory gắn hub-self vai trò knowledge cho mọi run — ở đây kiểm vai trò manager
     r = d.hub.runs.submit("boss", "[cfharness · OWNER x", parent_run_id=res["run_id"], resume_reason="continue")
     run = d.hub.store.get_run(r["id"])
     assert (run.get("run_opts") or {}).get("hub_self") != "manager" and not d.hub.manager.is_issued(r["id"])
