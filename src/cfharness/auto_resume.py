@@ -12,9 +12,10 @@ Chính sách (`hub.auto_resume`, listener bus):
   `auto_resume:*` hoặc `daemon_restart`). Hết lượt → event `run.auto_resume{status: exhausted}` + audit, dừng.
 - Backoff: `auto_resume_backoff_s * 2^attempt` (trần `auto_resume_backoff_max_s`); rate limit thì chờ tới thời điểm reset
   đã biết (`dispatcher._run_reset`). Lịch hẹn lưu ở `hub_state.auto_resume_pending` → daemon khởi động lại vẫn chạy tiếp.
-- Lúc tới hạn kiểm lại: ESTOP, agent tạm dừng/đã xoá, session đang bận, run đã được tiếp tục (`continued_in_run_id`) →
-  bỏ (idempotent: daemon là luồng đơn, kiểm-tạo-ghi không có `await` xen giữa). Ngân sách/đồng thời: `RunManager.submit`
-  (chặn ngân sách → `skipped`), run mới vào hàng đợi chung.
+- Lúc tới hạn kiểm lại: ESTOP, agent tạm dừng/đã xoá, session đang bận hoặc đã có run mới hơn (người `run continue`), run đã
+  được tiếp tục (`continued_in_run_id`), chuỗi hết ngân sách → bỏ (idempotent: daemon là luồng đơn, kiểm-tạo-ghi không có `await` xen giữa). Ngân sách/đồng thời: `RunManager.submit`
+  (chặn ngân sách → `skipped`), run mới vào hàng đợi chung. Cả chuỗi chung MỘT ngân sách run gốc (`chain_budget_left`).
+- Người `run.stop` run đã kết thúc đang chờ tự resume → `cancel`: bỏ lịch hẹn, `skipped` + audit (actor = người gọi).
 - Mọi bước phát event `run.auto_resume{status: scheduled|started|skipped|exhausted}` trên run CŨ + audit `run.auto_resume`.
 
 `hang_stats(conn, since)`: run `timed_out|interrupted|crashed` theo agent, kind, tool đang chạy dở (tool.start cuối không có
@@ -62,21 +63,37 @@ def transient_cause(run: dict[str, Any]) -> str | None:
         return "daemon_restart"
     if oc in OUTCOME_CAUSE:
         return OUTCOME_CAUSE[oc]
-    if oc == "failed" and NETWORK_PATTERNS.search(f"{run.get('error') or ''} {run.get('summary') or ''}"):
+    # chỉ lỗi do hub/CLI ghi (`error`: summary của result lỗi hoặc stderr khi không có result), KHÔNG `summary` — có thể là chữ của agent
+    if oc == "failed" and NETWORK_PATTERNS.search(run.get("error") or ""):
         return "network"
     return None
 
 
-def chain_attempts(store: Any, run: dict[str, Any], limit: int = 50) -> int:
-    """Số lần tự resume liên tiếp đã làm để đi tới `run` (đi ngược `parent_run_id`, dừng ở run không do tự resume)."""
-    n, cur = 0, run
+def chain_runs(store: Any, run: dict[str, Any], limit: int = 50) -> list[dict[str, Any]]:
+    """Chuỗi tự resume đi tới `run`: [run, cha, …, run gốc] (đi ngược `parent_run_id`, dừng ở run không do tự resume)."""
+    out, cur = [run], run
     for _ in range(limit):
         reason = cur.get("resume_reason") or ""
         if not (reason.startswith(AUTO_REASON) or reason == "daemon_restart") or not cur.get("parent_run_id"):
             break
-        n += 1
         cur = store.get_run(cur["parent_run_id"]) or {}
-    return n
+        out.append(cur)
+    return out
+
+
+def chain_attempts(store: Any, run: dict[str, Any], limit: int = 50) -> int:
+    """Số lần tự resume liên tiếp đã làm để đi tới `run`."""
+    return len(chain_runs(store, run, limit)) - 1
+
+
+def chain_budget_left(store: Any, run: dict[str, Any]) -> float | None:
+    """Ngân sách còn lại của CẢ chuỗi = `max_budget_usd` của run gốc − chi phí mọi run trong chuỗi; None = không giới hạn.
+    Cả chuỗi tiêu tối đa một ngân sách run (không phải (1+trần)× như khi mỗi lượt nhận lại ngân sách đầy)."""
+    runs = chain_runs(store, run)
+    cap = runs[-1].get("max_budget_usd")
+    if cap is None:
+        return None
+    return float(cap) - sum(float(r.get("cost_usd") or 0) for r in runs)
 
 
 class AutoResumer:
@@ -88,12 +105,12 @@ class AutoResumer:
     def cfg(self, key: str) -> Any:
         return self.hub.config.get(f"recovery.{key}")
 
-    def _event(self, run: dict[str, Any], status: str, **data: Any) -> None:
+    def _event(self, run: dict[str, Any], status: str, *, _actor: str = "hub", _channel: str = "hub", **data: Any) -> None:
         from .approvals import audit_record
 
         payload = {"status": status, **data}
         self.hub.publish(make_event("run.auto_resume", run["agent_id"], payload, run_id=run["id"], session_id=run.get("session_id")))
-        audit_record("run.auto_resume", run["agent_id"], run["id"], {**payload, "actor": "hub", "channel": "hub"})
+        audit_record("run.auto_resume", run["agent_id"], run["id"], {**payload, "actor": _actor, "channel": _channel})
 
     def exhausted(self, run: dict[str, Any], cause: str) -> bool:
         """Đã hết lượt tự resume cho chuỗi của `run` → phát event + audit `exhausted`, trả True. Dùng chung với recovery.py."""
@@ -163,6 +180,25 @@ class AutoResumer:
         for rid, due in self._pending().items():
             self._arm(rid, float(due) - now)
 
+    def cancel(self, run_id: str) -> bool:
+        """Người dừng/huỷ run đã kết thúc đang chờ tự resume (`run.stop`): bỏ lịch hẹn, event `skipped` + audit có người gọi.
+        False nếu run không có lịch hẹn."""
+        if run_id not in self._pending():
+            return False
+        h = self._handles.pop(run_id, None)
+        if h:
+            h.cancel()
+        self._persist(run_id, None)
+        run = self.hub.store.get_run(run_id)
+        if run is not None:
+            from .auth import current_caller
+
+            c = current_caller()
+            actor = f"agent:{c.agent_id}" if c is not None and c.is_agent else "human"
+            self._event(run, "skipped", cause=transient_cause(run) or "unknown", reason="người huỷ lượt tự resume đã hẹn",
+                        _actor=actor, _channel=c.via if c is not None else "internal")
+        return True
+
     def stop(self) -> None:
         for h in self._handles.values():
             h.cancel()
@@ -181,13 +217,17 @@ class AutoResumer:
             return None
         att = chain_attempts(self.hub.store, run) + 1
         rr = f"{AUTO_REASON}{cause}"
+        budget = chain_budget_left(self.hub.store, run)
+        if budget is not None and budget <= 0:
+            self._event(run, "skipped", cause=cause, reason="chuỗi tự resume đã tiêu hết ngân sách của run gốc")
+            return None
         try:
             if run.get("started_at") and run.get("session_id"):
-                nr = self.hub.runs.submit(run["agent_id"], AUTO_RESUME_PROMPT.format(cause=cause), cwd=run.get("cwd"), budget_usd=run.get("max_budget_usd"),
+                nr = self.hub.runs.submit(run["agent_id"], AUTO_RESUME_PROMPT.format(cause=cause), cwd=run.get("cwd"), budget_usd=budget,
                                           model=run.get("model"), kind=run.get("kind") or "adhoc", resume_session_id=run["session_id"],
                                           parent_run_id=run["id"], resume_reason=rr)
             else:
-                nr = self.hub.runs.submit(run["agent_id"], run.get("prompt") or "", cwd=run.get("cwd"), budget_usd=run.get("max_budget_usd"),
+                nr = self.hub.runs.submit(run["agent_id"], run.get("prompt") or "", cwd=run.get("cwd"), budget_usd=budget,
                                           model=run.get("model"), kind=run.get("kind") or "adhoc", parent_run_id=run["id"], resume_reason=rr)
         except HubError as e:  # ngân sách, ESTOP, chưa đăng nhập… → không resume
             self._event(run, "skipped", cause=cause, reason=e.message)
@@ -213,6 +253,11 @@ class AutoResumer:
                                                (run["session_id"],)).fetchone()
             if busy:
                 return f"session đang bận (run {busy[0]})"
+            # người đã `run continue` session này và run đó đã xong trước lúc tới hạn → resume nữa là làm lại việc
+            newer = self.hub.store.conn.execute("SELECT id FROM runs WHERE session_id=? AND id<>? AND queued_at>? ORDER BY queued_at LIMIT 1",
+                                                (run["session_id"], run["id"], run.get("ended_at") or run.get("queued_at") or "")).fetchone()
+            if newer:
+                return f"session đã được tiếp tục ở run {newer[0]}"
         from .workspace import resume_conflicts
 
         if resume_conflicts(run):

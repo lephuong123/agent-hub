@@ -1064,6 +1064,8 @@ class RunManager:
             self._finish_without_start(rid, run["agent_id"], "cancelled", "người dùng huỷ khi đang chờ")
             return self.store.get_run(rid)  # type: ignore[return-value]
         ar = self.active.get(rid)
+        if (ar is None or ar.handle is None or ar.runtime is None) and self.hub.auto_resume.cancel(rid):
+            return self.store.get_run(rid)  # type: ignore[return-value]  # run đã dừng đang chờ tự resume → người huỷ lượt đã hẹn
         if ar is None or ar.handle is None or ar.runtime is None:
             raise HubError(f"run '{rid}' không đang chạy (status={run['status']})")
         grace = float(self.hub.config.get("runs.stop_grace_s"))

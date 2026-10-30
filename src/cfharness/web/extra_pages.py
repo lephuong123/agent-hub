@@ -142,6 +142,7 @@ ROLES = (("", "Mọi loại tin"), ("user", "Prompt / tin người"), ("assistan
 ROLE_LABEL = {"user": "Người", "assistant": "Agent", "steer": "Chỉ đạo", "tool_call": "Gọi tool", "tool_result": "Kết quả tool",
               "manager": "Điều phối viên", "notify": "Thông báo", "tick": "Nhịp", "schedule": "Lịch"}
 PAGE = 30
+HANG_WARN_RATIO, HANG_WARN_MIN = 0.1, 3  # thẻ Sức khoẻ: vàng khi ≥3 run treo VÀ ≥10% số run trong 14 ngày
 
 
 def snippet_parts(s: str) -> list[tuple[bool, str]]:
@@ -379,7 +380,9 @@ async def partial_health(request: Request) -> Response:
         if hangs:
             oc = ", ".join(f"{x['count']} {x['key']}" for x in hangs.get("by_outcome") or [])
             auto = sum((hangs.get("auto_resumed") or {}).values())
-            add("Run treo / quá giờ (14 ngày)", not hangs.get("hung"), f"{hangs.get('hung', 0)}/{hangs.get('runs_total', 0)} run" + (f" ({oc})" if oc else "")
+            # vàng chỉ khi tỉ lệ đáng kể — vài run treo lẻ trong 14 ngày là bình thường, không phải "vấn đề"
+            hung, total = int(hangs.get("hung") or 0), int(hangs.get("runs_total") or 0)
+            add("Run treo / quá giờ (14 ngày)", hung < HANG_WARN_MIN or hung < HANG_WARN_RATIO * total, f"{hangs.get('hung', 0)}/{hangs.get('runs_total', 0)} run" + (f" ({oc})" if oc else "")
                 + (f" · {auto} lần tự resume" if auto else ""), "warning")
     except (RpcError, DaemonUnavailable, OSError) as e:
         add("Daemon", False, err_text(e))

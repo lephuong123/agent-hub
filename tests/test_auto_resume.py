@@ -273,3 +273,73 @@ def test_hang_stats_groups(hub_home):
         assert hang_stats(hub.store.conn, "2026-10-25T00:00:00.000Z")["hung"] == 0
     finally:
         hub.store.close()
+
+
+# --------------------------------------------------------------------------- sửa theo review PR #42
+def test_network_pattern_ignores_agent_summary():
+    """`summary` có thể là chữ của agent → không được kích hoạt tự resume; chỉ `error` (hub/CLI ghi)."""
+    assert transient_cause({"outcome": "failed", "summary": "curl: connection refused (ECONNRESET)"}) is None
+    assert transient_cause({"outcome": "failed", "error": "stderr: socket hang up", "summary": "xong"}) == "network"
+
+
+async def test_fire_skips_when_human_already_continued_session(make_hub):
+    hub, _ = make_hub(**{"recovery.auto_resume_backoff_s": 60})
+    row = _row(status="crashed", outcome="crashed", started_at="2026-10-30T10:00:00.000Z", ended_at="2026-10-30T10:05:00.000Z")
+    hub.store.insert_run(row)
+    assert hub.auto_resume.consider(row["id"]) == "scheduled"
+    # người `run continue` session đó, run đã xong trước lúc tới hạn (không gắn continued_in_run_id vào run cũ)
+    hub.store.insert_run(_row(status="completed", outcome="completed", session_id=row["session_id"], queued_at="2026-10-30T10:06:00.000Z",
+                              started_at="2026-10-30T10:06:00.000Z", ended_at="2026-10-30T10:07:00.000Z"))
+    assert hub.auto_resume.fire(row["id"]) is None
+    last = ar_events(hub, row["id"])[-1]
+    assert last["status"] == "skipped" and "đã được tiếp tục" in last["reason"]
+    assert not any(r.get("parent_run_id") == row["id"] for r in chain(hub))
+
+
+async def test_older_run_in_session_does_not_block_resume(make_hub):
+    hub, _ = make_hub(**{"recovery.auto_resume_backoff_s": 60})
+    sid = str(uuid.uuid4())
+    hub.store.insert_run(_row(status="completed", outcome="completed", session_id=sid, queued_at="2026-10-30T09:00:00.000Z"))
+    row = _row(status="crashed", outcome="crashed", session_id=sid, queued_at="2026-10-30T10:00:00.000Z",
+               started_at="2026-10-30T10:00:00.000Z", ended_at="2026-10-30T10:05:00.000Z")
+    hub.store.insert_run(row)
+    assert hub.auto_resume.consider(row["id"]) == "scheduled"
+    assert hub.auto_resume.fire(row["id"]) is not None
+
+
+async def test_human_stop_cancels_scheduled_resume(make_hub):
+    from cfharness.errors import HubError
+
+    hub, _ = make_hub(**{"recovery.auto_resume_backoff_s": 60})
+    row = _row(status="crashed", outcome="crashed", started_at=now_iso(), ended_at=now_iso())
+    hub.store.insert_run(row)
+    assert hub.auto_resume.consider(row["id"]) == "scheduled"
+    out = await hub.runs.stop(row["id"])  # trước đây: HubError "không đang chạy" → người không huỷ được
+    assert out["id"] == row["id"]
+    assert row["id"] not in (hub.store.state_get("auto_resume_pending") or {}) and row["id"] not in hub.auto_resume._handles
+    last = ar_events(hub, row["id"])[-1]
+    assert last["status"] == "skipped" and "người huỷ" in last["reason"]
+    a = audit_rows(hub)[-1]
+    assert a["run_id"] == row["id"] and a["actor"] == "human" and "người huỷ" in a["data"]
+    with pytest.raises(HubError):  # không còn lịch hẹn → như cũ
+        await hub.runs.stop(row["id"])
+    await settle(timeout=0.2)
+    assert len(chain(hub)) == 1
+
+
+async def test_chain_shares_one_budget(make_hub):
+    hub, _ = make_hub(**{"recovery.auto_resume_backoff_s": 60})
+    root = _row(status="crashed", outcome="crashed", started_at=now_iso(), ended_at=now_iso(), max_budget_usd=1.0, cost_usd=0.4)
+    hub.store.insert_run(root)
+    child = _row(status="crashed", outcome="crashed", started_at=now_iso(), ended_at=now_iso(), session_id=root["session_id"],
+                 parent_run_id=root["id"], resume_reason="auto_resume:process_killed", max_budget_usd=0.6, cost_usd=0.25)
+    hub.store.insert_run(child)
+    hub.store.update_run(root["id"], {"continued_in_run_id": child["id"]})
+    assert hub.auto_resume.consider(child["id"]) == "scheduled"
+    nr = hub.auto_resume.fire(child["id"])
+    assert nr is not None and nr["max_budget_usd"] == pytest.approx(0.35)  # 1.0 − 0.4 − 0.25, không phải 0.6/1.0 đầy
+    spent = _row(status="crashed", outcome="crashed", started_at=now_iso(), ended_at=now_iso(), max_budget_usd=0.5, cost_usd=0.5)
+    hub.store.insert_run(spent)
+    assert hub.auto_resume.consider(spent["id"]) == "scheduled"
+    assert hub.auto_resume.fire(spent["id"]) is None
+    assert "ngân sách" in ar_events(hub, spent["id"])[-1]["reason"]

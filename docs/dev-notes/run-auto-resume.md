@@ -6,7 +6,8 @@ Bối cảnh: 14 ngày gần nhất hub thật có 19 run `timed_out` và 9 `int
 
 ## Chính sách (`src/cfharness/auto_resume.py`, `hub.auto_resume`)
 - Nguyên nhân tạm thời theo DANH SÁCH CHO PHÉP (`transient_cause`, fail-closed): `crashed` → `process_killed`, `timed_out` →
-  `timeout`, `rate_limited` → `rate_limit`, `failed` có lỗi mạng/API 5xx/overloaded (`NETWORK_PATTERNS`) → `network`,
+  `timeout`, `rate_limited` → `rate_limit`, `failed` có lỗi mạng/API 5xx/overloaded (`NETWORK_PATTERNS`, CHỈ khớp cột `error` do hub/CLI ghi — không `summary`
+  vì có thể là chữ của agent) → `network`,
   `interrupted` → `daemon_restart`. Không bao giờ: `budget_exceeded`, `blocked`, `cancelled` (người dừng, ESTOP dừng run),
   `protocol_violation`, `failed` khác (guard từ chối, chưa đăng nhập, lỗi thường).
 - Phạm vi listener (`run.failed` nguồn hub): run KHÔNG gắn task, `kind ∈ recovery.auto_resume_kinds` (mặc định `["adhoc"]`;
@@ -16,10 +17,15 @@ Bối cảnh: 14 ngày gần nhất hub thật có 19 run `timed_out` và 9 `int
   Hết lượt: event `run.auto_resume{status: exhausted}` + audit.
 - Backoff `auto_resume_backoff_s × 2^lượt` (30 s, trần `auto_resume_backoff_max_s` 900 s); rate limit chờ tới thời điểm reset
   đã biết (`dispatcher._run_reset`). Lịch hẹn ở `hub_state.auto_resume_pending` → `Hub.start` hẹn lại sau restart.
-- Lúc tới hạn (`fire`) kiểm lại: tắt, ESTOP, agent tạm dừng/xoá, session bận (người đã `run continue`), run đã có
-  `continued_in_run_id`, file của run bị sửa (`resume_conflicts`) → `skipped`. Idempotent: daemon luồng đơn, kiểm → `submit` →
+- Lúc tới hạn (`fire`) kiểm lại: tắt, ESTOP, agent tạm dừng/xoá, session bận (người đã `run continue`), session đã có run
+  MỚI HƠN (`queued_at > ended_at` của run cũ — người `run continue` và run đó đã xong trước lúc tới hạn), run đã có
+  `continued_in_run_id`, chuỗi đã tiêu hết ngân sách, file của run bị sửa (`resume_conflicts`) → `skipped`. Idempotent: daemon luồng đơn, kiểm → `submit` →
   ghi `continued_in_run_id` không có `await` xen giữa; `fire` lần hai bỏ. Ngân sách/ESTOP/đăng nhập: `RunManager.submit`
-  (HubError → `skipped`); đồng thời: run mới vào hàng đợi chung. Ngân sách run giữ `max_budget_usd` của run cũ.
+  (HubError → `skipped`); đồng thời: run mới vào hàng đợi chung. Ngân sách: CẢ chuỗi chung một `max_budget_usd` của run gốc
+  (`chain_budget_left` = trần − tổng `cost_usd` các run trong chuỗi); mỗi lượt nhận phần còn lại, hết → `skipped`.
+- Người huỷ lượt đã hẹn: `run.stop` trên run đã kết thúc mà còn trong `auto_resume_pending` → `AutoResumer.cancel`: bỏ hẹn
+  (timer + hub_state), `skipped{reason: người huỷ…}` + audit với actor = người gọi (`human`/`agent:<id>`, channel = `via`).
+  Run không có lịch hẹn vẫn báo lỗi "không đang chạy" như cũ.
 - Run mới: `--resume <session cũ>` + lời nhắc `AUTO_RESUME_PROMPT` (tiếng Anh, nêu nguyên nhân), `resume_reason=auto_resume:<cause>`;
   run chưa kịp start → chạy lại prompt gốc. Event trên run CŨ: `run.auto_resume{scheduled|started|skipped|exhausted, cause,
   attempt, max_attempts, delay_s, new_run_id}` + `run.resumed`; audit `run.auto_resume` (actor=hub) mỗi bước.
@@ -29,14 +35,21 @@ Bối cảnh: 14 ngày gần nhất hub thật có 19 run `timed_out` và 9 `int
 ## Thống kê run treo (thẻ Sức khoẻ)
 RPC đọc `report.hangs{since=14d, top}` → `auto_resume.hang_stats`: run `timed_out|interrupted|crashed` theo outcome, agent,
 kind, **tool đang chạy dở** (tool.start cuối chưa có tool.complete cùng `tool_id`), khoảng thời lượng (started→ended), và số run
-tự resume. Thẻ Sức khoẻ (`/partials/health`): dòng "Run treo / quá giờ (14 ngày)" (cảnh báo vàng) + bảng gập theo từng nhóm.
+tự resume. Thẻ Sức khoẻ (`/partials/health`): dòng "Run treo / quá giờ (14 ngày)" — vàng chỉ khi ≥3 run treo VÀ ≥10% số run
+(`HANG_WARN_MIN`/`HANG_WARN_RATIO`, vài run lẻ là bình thường) — + bảng gập theo từng nhóm.
 Lưu ý: event cũ hơn `retention.events_days` đã bị xoá → cột tool là "(không có tool dở)".
 
 ## Test
 `tests/test_auto_resume.py` (phân loại danh sách cho phép; crash/timeout/mạng → resume cùng session; trần + exhausted; budget/
 lỗi thường/người huỷ/task/manager/tắt → không; ESTOP lúc tới hạn → skipped; idempotent; lịch hẹn qua restart; trần chung với
-recovery; `hang_stats`), `tests/test_web_pages_extra.py::test_health_card_shows_hang_stats`.
+recovery; `hang_stats`; theo review PR #42: `summary` không kích hoạt `network`, session đã được người tiếp tục → skipped, run
+cũ hơn trong session không chặn, `run.stop` huỷ lượt đã hẹn + audit, chuỗi chung một ngân sách),
+`tests/test_web_pages_extra.py::test_health_card_shows_hang_stats` + `test_health_hang_row_not_warning_for_low_ratio`.
 
 ## Việc dở / câu hỏi
+- `api_error_status`/stderr không lưu thành cột riêng của `runs`: mạng chỉ nhận qua `error` (summary của result lỗi, hoặc
+  stderr khi không có result). `error` của result lỗi vẫn là chữ CLI viết (không phải agent), nhưng nếu agent in đúng chuỗi lỗi
+  rồi CLI lấy làm `result` thì vẫn có thể khớp — rủi ro thấp (có trần + ngân sách chung).
+- Chi phí run đang chạy dở khi chết (`crashed` không có result) không có `cost_usd` → ngân sách chuỗi tính thiếu phần đó.
 - Run của task: dispatcher vẫn requeue `interrupted` không giới hạn (không tính lỗi); có nên áp trần chung không?
 - `timed_out` được coi là tạm thời (đa số do treo mạng/tool); nếu run quá giờ vì việc quá lớn sẽ tốn tối đa 3 lượt nữa.
