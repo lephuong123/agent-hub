@@ -212,7 +212,9 @@ def token_path(sock_path: str | os.PathLike[str]) -> Path:
 
 
 def issue_token(sock_path: str | os.PathLike[str]) -> str:
-    """Sinh token mới (mỗi lần daemon khởi tạo), ghi 0600 không theo symlink. Trả token."""
+    """Sinh token mới (mỗi lần daemon khởi tạo), ghi 0600 không theo symlink. Trả token.
+
+    Daemon KHÔNG gọi khi socket đang có daemon sống (`daemon._live_daemon`) — ghi đè sẽ làm token trong file lệch daemon đang chạy."""
     path = token_path(sock_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tok = secrets.token_urlsafe(32)
