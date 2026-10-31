@@ -155,12 +155,21 @@ class Autostart:
                 "chcp 65001 >nul\r\n"
                 f'start "" /min {subprocess.list2cmdline(argv)}\r\n')
 
+    def service_path(self) -> str:
+        """PATH cho daemon chạy qua launchd/systemd: PATH lúc cài (launchd chỉ cho `/usr/bin:/bin:/usr/sbin:/sbin` → daemon không thấy
+        `claude` ở ~/.local/bin, homebrew, uv… — đã gặp thật). Bỏ mục tương đối/rỗng (sẽ tìm theo cwd = HUB_HOME), bỏ trùng, giữ thứ tự."""
+        out: list[str] = []
+        for d in (self.env.get("PATH") or "").split(os.pathsep) + list(_SYSTEM_PATH):
+            if d and os.path.isabs(d) and d not in out:
+                out.append(d)
+        return os.pathsep.join(out)
+
     def launchd_plist(self) -> bytes:
         log = str(self.paths.logs_dir / "daemon.out")
         d = {
             "Label": self.name,
             "ProgramArguments": self.argv(),
-            "EnvironmentVariables": {"CFHARNESS_HOME": str(self.paths.home)},
+            "EnvironmentVariables": {"CFHARNESS_HOME": str(self.paths.home), "PATH": self.service_path()},
             "WorkingDirectory": str(self.paths.home),
             "RunAtLoad": True,
             "KeepAlive": {"SuccessfulExit": False},  # chỉ chạy lại khi crash; `daemon stop` (mã 0) thì thôi
@@ -179,6 +188,7 @@ class Autostart:
             "[Service]\n"
             "Type=simple\n"
             f"Environment={_systemd_quote('CFHARNESS_HOME=' + str(self.paths.home))}\n"
+            f"Environment={_systemd_quote('PATH=' + self.service_path())}\n"
             f"WorkingDirectory={self.paths.home}\n"
             f"ExecStart={argv}\n"
             "Restart=on-failure\n"
@@ -446,6 +456,9 @@ def _same_dir(a: Path, b: Path) -> bool:
         return os.path.normcase(str(a.resolve())) == os.path.normcase(str(b.resolve()))
     except OSError:
         return os.path.normcase(str(a)) == os.path.normcase(str(b))
+
+
+_SYSTEM_PATH = ("/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
 
 
 def _systemd_quote(s: str) -> str:

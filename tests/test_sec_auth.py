@@ -349,3 +349,23 @@ def test_human_only_covers_sensitive_surface():
               "learn.retry", "learn.refine", "agent.update", "golden.add", "golden.rm", "learn.policy_set", "secret.set", "mcp.add", "estop.set"):
         assert m in auth.HUMAN_ONLY, m
     assert "guard.check" not in auth.HUMAN_ONLY and "taskself.call" not in auth.HUMAN_ONLY  # hook/hub-self không bị chặn
+
+
+async def test_second_daemon_does_not_overwrite_human_token(home):
+    """Bản daemon thứ hai (vd launchd thử tiếp quản lúc daemon tay còn chạy) thoát ở `serve()` — nhưng trước đây đã ghi đè
+    `<socket>.auth` ở `__init__` → token trong file lệch daemon đang chạy, mọi lệnh của người bị từ chối (đã gặp thật)."""
+    d, srv = await _start(home)
+    try:
+        before = auth.load_token(home.socket)
+        assert before == d.auth_token
+        d2 = await asyncio.to_thread(Daemon, home, runtime=FakeRuntime(hold=True))
+        assert d2.auth_token is None and auth.load_token(home.socket) == before
+        with pytest.raises(SystemExit):  # tiến trình thứ hai → loop riêng (ping đồng bộ không chặn loop đang phục vụ daemon thứ nhất)
+            await asyncio.to_thread(asyncio.run, d2.serve())
+        assert auth.load_token(home.socket) == before
+        # người vẫn gọi được method chỉ-người bằng token trong file
+        r = await asyncio.to_thread(RpcClient(home.socket, timeout=5).call, "estop.set", {"on": False, auth.AUTH_PARAM: before})
+        assert r is not None
+    finally:
+        await _stop(d, srv)
+

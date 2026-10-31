@@ -267,3 +267,18 @@ def test_cli_install_service_dry_run_json(paths, tmp_path, monkeypatch, capsys):
     assert code == 1 and st["daemon_running"] is False and st["autostart"]["installed"] is True
     code = cli_mod.main(["--home", str(paths.home), "daemon", "uninstall-service"])
     assert code == 0 and "đã gỡ" in capsys.readouterr().out
+
+
+def test_service_path_carries_install_path(paths, tmp_path):
+    """launchd/systemd chỉ có PATH tối thiểu → daemon không thấy `claude` (~/.local/bin), homebrew, uv… — mang PATH lúc cài,
+    bỏ mục tương đối/rỗng (sẽ tìm theo cwd = HUB_HOME), bỏ trùng, luôn có thư mục hệ thống."""
+    env = {"PATH": f"/Users/u/.local/bin::.:bin:/opt/homebrew/bin:/Users/u/.local/bin:/usr/bin"}
+    mac = Autostart(paths, platform="darwin", runner=FakeOS(), user_home=tmp_path / "user", env=env, python=str(tmp_path / "py" / "python3"))
+    want = "/Users/u/.local/bin:/opt/homebrew/bin:/usr/bin:/usr/local/bin:/bin:/usr/sbin:/sbin"
+    assert mac.service_path() == want
+    assert plistlib.loads(mac.launchd_plist())["EnvironmentVariables"]["PATH"] == want
+    lin = Autostart(paths, platform="linux", runner=FakeOS(), user_home=tmp_path / "user", env=env, python=str(tmp_path / "py" / "python3"))
+    assert f"Environment=PATH={want}\n" in lin.systemd_unit()
+    bare = Autostart(paths, platform="darwin", runner=FakeOS(), user_home=tmp_path / "user", env={}, python=str(tmp_path / "py" / "python3"))
+    assert bare.service_path() == "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
