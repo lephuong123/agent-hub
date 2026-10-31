@@ -1,6 +1,6 @@
 [project]
 name = "cfharness"
-version = "0.1.0"
+version = "0.2.0"
 description = "cfharness — hub điều phối đội agent chạy trên `claude` CLI (mốc M0: lõi chạy 1 agent)"
 readme = "README.md"
 requires-python = ">=3.12"
