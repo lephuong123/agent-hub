@@ -484,6 +484,8 @@ DEFAULTS: dict[str, Any] = {
             # 2.1.311/2.1.312: `claude --help` + fixture stream-json thật (raw log run production, đã che) tests/fixtures/claude-2.1.31{1,2}/
             #   + tests/test_adapter_cli_312.py (tool_progress, vcs_state_changed, control_request SandboxNetworkAccess, init thứ 2).
             "tested_versions": ["2.1.302", "2.1.303", "2.1.310", "2.1.311", "2.1.312"],
+            # Đang chặn vì "chưa đăng nhập": cứ mỗi N giây kiểm lại `claude auth status`, thấy đăng nhập thì tự gỡ chặn (0 = tắt)
+            "auth_recheck_s": 300,
             "include_partial_messages": True,
             # Spike A-04: bật để kiểm hậu nghiệm không có hook lạ (hook Serena…) trong stream
             "include_hook_events": True,

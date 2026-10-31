@@ -116,6 +116,11 @@ class AgentRuntime(abc.ABC):
     def version(self) -> str | None:
         return None
 
+    async def auth_status(self) -> bool | None:
+        """Kiểm lại trạng thái đăng nhập của runtime: True = đã đăng nhập, False = chưa, None = không xác định được.
+        Dùng trước khi chặn mọi run vì một lỗi "Not logged in" (có thể chỉ thoáng qua lúc làm mới OAuth)."""
+        return None
+
     async def oneshot(self, req: "OneShotRequest") -> "OneShotResult":
         """Gọi một lượt KHÔNG session, không tool, output có cấu trúc (`--json-schema`) — cho LLM judge (FR-LN-10) và
         curator gộp skill (FR-LN-12). Hardening H-20 (NFR-22): mọi lời gọi model đi qua AgentRuntime, không spawn `claude` trực tiếp."""

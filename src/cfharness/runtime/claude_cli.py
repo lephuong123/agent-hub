@@ -341,6 +341,30 @@ class ClaudeCliRuntime(AgentRuntime):
     def version(self) -> str | None:
         return claude_version(self.cfg.get("binary") or "claude", float(self.cfg.get("version_cache_s", 600)))
 
+    async def auth_status(self) -> bool | None:
+        """`claude auth status` (JSON `loggedIn`) với cùng env của tiến trình con. None khi không chạy được/không đọc được."""
+        argv = exec_argv([self.cfg.get("binary") or "claude", "auth", "status"])
+        try:
+            proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                                                        stderr=asyncio.subprocess.PIPE, env=child_env(self.cfg), **no_window_kwargs())
+        except OSError:
+            return None
+        try:
+            out_b, _ = await asyncio.wait_for(proc.communicate(), float(self.cfg.get("auth_check_timeout_s", 30)))
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:  # pragma: no cover
+                pass
+            return None
+        try:
+            info = json.loads(out_b.decode("utf-8", "replace"))
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(info, dict) or "loggedIn" not in info:
+            return None
+        return bool(info["loggedIn"])
+
     async def oneshot(self, req: "OneShotRequest") -> "OneShotResult":
         import tempfile
 
