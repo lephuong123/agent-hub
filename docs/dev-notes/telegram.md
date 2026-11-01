@@ -107,3 +107,14 @@ Theo phản hồi "tin khó hiểu, nhiều ký tự đặc biệt": mỗi tin c
   (+ "⚠️ Thao tác nặng" khi cần). Bước 2: "Chắc chắn cho phép?". Kết quả sửa tại chỗ: "✅ Đã cho phép — bởi bạn qua Telegram."
 - Kết quả run: `✅ <agent> — xong · 12 giây · $0.004` + khung agent + "↩ Trả lời tin này để giao thêm cho agent này."
 - Test không còn dò id trong chữ: `FakeTelegram.msg_for/thread`, `FakeSlack.msg_for/root_of` tra nút → id qua `CallbackStore` của hub (fixture gắn `tg.hubs`/`sk.hubs`).
+
+## Gửi về đúng chat gốc (2026-11-01)
+Trước đây tin duyệt, câu hỏi và thông báo sự kiện gửi tới MỌI chat trong `notify_chats()` (chat riêng + nhóm khi `allow_groups`).
+Nay mỗi tin chủ động gắn với một run/hội thoại đi qua `ChatBot.route_chats(run_id, conversation_id)` (`chat/base.py`):
+- `origin_chat` lần chat gốc: `<kênh>.watch` (run giao từ chat) → `mgr_runs` (run điều phối viên gửi từ chat) → `parent_run_id`
+  (≤ 8 bậc, resume/continue) → hội thoại điều phối viên (`mgr_convchat`, hoặc kênh `telegram:<chat>` của hội thoại).
+- Có chat gốc còn trong allowlist → CHỈ gửi về đó. Không có (run từ web/CLI/lịch/nền) → `broadcast_chats()`: Telegram = chỉ chat
+  riêng (nhóm không bao giờ nhận tin không phải việc của nhóm), Slack = chỉ DM (như cũ).
+- Áp ở `TelegramNotifier._send`, `SlackChatNotifier._send`, `QuestionChat.chats_for`. `notify test` vẫn gửi mọi chat.
+- Lưu ý Slack: trước đây mọi DM trong allowlist đều nhận; nay việc giao từ một DM chỉ về DM đó.
+Test: `tests/test_telegram.py::test_route_to_origin_chat_only`.
