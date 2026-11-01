@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Cập nhật hệ thống{% endblock %}
+{% block content %}
+<div class="page-head"><div class="ph-title"><h1>Cập nhật hệ thống</h1><span class="sub">Phiên bản cfharness đang chạy, bản phát hành mới nhất và nhật ký cập nhật.</span></div></div>
+<div id="update" hx-get="/partials/update?full=1" hx-trigger="load" hx-swap="outerHTML"><p class="muted">Đang kiểm tra…</p></div>
+<p class="small"><a href="/settings">← Cài đặt</a></p>
+{% endblock %}

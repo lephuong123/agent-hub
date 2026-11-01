@@ -1,0 +1,49 @@
+{#- Thẻ "Cập nhật hệ thống" (web/update_pages.py) — RPC đọc update.check + update.status; poll 3 s khi đang cập nhật / daemon đang chạy lại. -#}
+{% import "_macros.html" as m with context %}
+{% set polling = down or busy %}
+{% set q = "full=1" if full else "" %}
+<section class="card {{ 'attention' if polling or (chk and chk.update_available) }}" id="update"{% if polling %} hx-get="/partials/update?{{ q }}" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+  <div class="card-head"><h2>{{ m.icon('refresh') }} Cập nhật hệ thống</h2>
+    {% if down %}<span class="pill warn">{{ m.icon('clock') }}daemon đang khởi động lại…</span>
+    {% elif busy %}<span class="pill warn">{{ m.icon('clock') }}đang cập nhật</span>
+    {% elif chk and chk.update_available %}<span class="pill warn strong">có bản mới {{ chk.latest.tag }}</span>
+    {% elif chk and chk.latest.ok %}<span class="pill ok">{{ m.icon('check') }}mới nhất</span>{% endif %}
+  </div>
+  {% if down %}
+    <p>Daemon đang dừng để cài bản mới — thường xong trong khoảng 1 phút. Trang tự cập nhật, không cần tải lại.</p>
+  {% elif error %}
+    <p class="muted">Không đọc được trạng thái cập nhật: {{ error }}</p>
+  {% else %}
+    <dl class="kv cols">
+      <div><dt>Đang chạy</dt><dd><b>{{ chk.current }}</b></dd></div>
+      <div><dt>Bản mới nhất</dt><dd>{% if chk.latest.ok %}<a href="{{ chk.latest.url }}" target="_blank" rel="noopener noreferrer">{{ chk.latest.tag }}</a>{% if chk.latest.published_at %} <span class="muted small">{{ chk.latest.published_at[:10] }}</span>{% endif %}{% else %}<span class="muted">? — {{ chk.latest.error }}</span>{% endif %}</dd></div>
+    </dl>
+    {% if busy %}
+      <p><b>{{ phase }}</b> → {{ st.tag }} …</p>
+    {% elif st and st.state in ('done', 'failed') %}
+      {% if st.state == 'done' %}<p class="small"><span class="pill ok">{{ m.icon('check') }}đã cập nhật</span> {{ st.version_before }} → {{ st.version_after or st.tag }} {{ m.rel(st.finished_at) }}</p>
+      {% else %}<p class="small"><span class="pill danger">{{ m.icon('alert') }}cập nhật lỗi</span> {{ m.rel(st.finished_at) }} — {{ st.error }}</p>{% endif %}
+    {% endif %}
+    {% if web_stale %}
+      <p class="small"><span class="pill warn">{{ m.icon('alert') }}giao diện web đang chạy bản cũ {{ web_version }}</span> Tắt <code>cfharness web</code> (Ctrl+C) rồi chạy lại <code>cfharness web --open</code> để dùng giao diện mới.</p>
+    {% endif %}
+    {% if not busy %}
+      {% if not chk.can_update %}
+        <p class="muted small">Không cập nhật tự động được: {{ chk.reason }}</p>
+      {% elif chk.update_available %}
+        <div class="row gap wrap-row">
+          {% if runs %}
+            <span class="small muted">Đang có {{ runs }} run chạy/chờ — chờ xong rồi cập nhật, hoặc:</span>
+            {{ m.act("update_start", "Cập nhật dù vậy (ngắt run, tự chạy tiếp sau)", {"force": "1", "tag": chk.latest.tag}, "btn danger", next="/update", ic="refresh") }}
+          {% else %}
+            {{ m.act("update_start", "Cập nhật lên " ~ chk.latest.tag, {"tag": chk.latest.tag}, "btn primary", next="/update", ic="refresh") }}
+          {% endif %}
+        </div>
+        <p class="muted small">Daemon dừng khoảng 1 phút rồi tự chạy lại bằng bản mới. Dữ liệu (<code>~/.cfharness</code>) giữ nguyên.</p>
+      {% endif %}
+      <p class="small"><button class="btn sm ghost" type="button" hx-get="/partials/update?refresh=1{{ '&full=1' if full }}" hx-target="#update" hx-swap="outerHTML">{{ m.icon('refresh') }}<span>Kiểm tra lại</span></button>
+        {% if not full %}<a class="small" href="/update">nhật ký cập nhật</a>{% endif %}</p>
+    {% endif %}
+    {% if full and log_tail %}<pre class="cmd-full long" tabindex="0">{{ log_tail }}</pre>{% endif %}
+  {% endif %}
+</section>
