@@ -189,6 +189,10 @@ class LearningGuard:
                 return Block("guard_rule", "fact_too_long", f"một fact graph {plan['longest_written']} > {flim} ký tự — mỗi fact là MỘT câu ngắn")
             g = plan.get("graph") or {}
             if not g.get("changed"):
+                why = {str(d.get("reason")) for d in g.get("dropped") or []}
+                if "conflicts_with_user_fact" in why:
+                    return Block("guard_rule", "conflicts_with_user_fact",
+                                 "fact mới mâu thuẫn fact người khai (cùng thực thể + quan hệ) — chỉ người đóng được fact của người; không có gì để ghi")
                 return Block("guard_rule", "duplicate_fact", "mọi fact trong lô đã có trong graph (còn hiệu lực) — không có gì mới để ghi")
         if prop["target"] == "skill":
             if plan.get("skill_chars", 0) > lim["skill_chars"]:

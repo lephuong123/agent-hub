@@ -150,11 +150,12 @@ async def test_learning_ops_tick_settles_and_consolidates(rhub):
 
 # ============================================================================ consolidation
 def test_consolidation_merges_entities_and_near_duplicates_without_deleting(hub):
-    write(hub, [fact("Agent-Hub", "uses", "Agent-Hub uses SQLite for memory.", confidence=0.4)])
+    # created_by=review (trích xuất): agent không tự đặt confidence được nữa (graph_write bỏ `confidence` của agent)
+    write(hub, [fact("Agent-Hub", "uses", "Agent-Hub uses SQLite for memory.", confidence=0.4)], by="review")
     write(hub, [fact("agent hub", "language", "agent hub is written in Python.", confidence=0.7),
-                fact("Phương", "prefers", "Phương prefers dark mode.", multi=True, confidence=0.3)])
+                fact("Phương", "prefers", "Phương prefers dark mode.", multi=True, confidence=0.3)], by="review")
     write(hub, [fact("Phương", "prefers", "Phương prefers the dark mode", multi=True, confidence=0.6),
-                fact("Phương", "prefers", "Phương prefers short answers.", multi=True)], episode={"text": "user said things", "source_kind": "test"})
+                fact("Phương", "prefers", "Phương prefers short answers.", multi=True)], episode={"text": "user said things", "source_kind": "test"}, by="review")
     c = hub.store.conn
     n_ep = c.execute("SELECT COUNT(*) FROM mem_episodes").fetchone()[0]
     gq = hub.learning.graph_quality
@@ -254,7 +255,8 @@ async def test_eval_gate_uses_memory_golden_for_graph_entries(rhub):
     orig = rhub.runs.submit
     rhub.runs.submit = lambda *a, **k: submitted.append(a) or orig(*a, **k)  # type: ignore[method-assign]
     # thay đổi xấu: đóng fact embedding (câu hỏi EN mất đáp án) → recall tụt → eval gate tự rollback
-    r = rhub.learning.graph_write("a1", [{"action": "invalidate_fact", "src": "agent-hub", "relation": "uses_embedding_model"}], created_by="review")
+    r = rhub.learning.graph_write("a1", [{"action": "invalidate_fact", "src": "agent-hub", "relation": "uses_embedding_model", "_user_grounded": True}],
+                                  created_by="review")
     assert r["status"] == "applied", r
     e = rhub.learning.ledger.get(rhub.store.conn.execute("SELECT id FROM ledger_entries WHERE proposal_id=?", (r["proposal_id"],)).fetchone()[0])
     v = await gate.post_apply(e)

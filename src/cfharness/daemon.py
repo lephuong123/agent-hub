@@ -254,12 +254,11 @@ class Daemon:
                 raise _ParamError(f"thiếu tham số '{k}'")
             return params[k]
 
-        res = self.hub.learning.pipeline.propose(
+        return self.hub.learning.agent_propose(
             target=_r("target"), op=_r("op"), payload=params.get("payload") or {}, agent_id=caller.agent_id or params.get("agent"),
             scope=params.get("scope") or "agent", team_id=params.get("team"), target_ref=params.get("target_ref"),
-            rationale=params.get("rationale") or "", created_by="agent", run_id=caller.run_id,
+            rationale=params.get("rationale") or "", run_id=caller.run_id,
         )
-        return res
 
     async def call_as(self, caller: _auth.Caller, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Gọi method thay mặt một kênh của người KHÔNG qua socket (bot Telegram trong daemon — chat/bot.py).

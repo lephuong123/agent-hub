@@ -486,8 +486,9 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     for name in ("pin", "unpin"):
         x = ks.add_parser(name, parents=[common], help="vòng học không đụng vào đích đã pin")
         x.add_argument("agent", help="id agent (scope agent) | id team (scope team) | '-' (scope global)")
-        x.add_argument("target", choices=["skill", "memory", "config", "memory_entry"])
-        x.add_argument("ref", help="tên skill | MEMORY.md/USER.md | trường cấu hình | memory_entry: đoạn trích duy nhất của dòng")
+        x.add_argument("target", choices=["skill", "memory", "config", "memory_entry", "graph", "graph_fact"])
+        x.add_argument("ref", help="tên skill | MEMORY.md/USER.md | trường cấu hình | memory_entry: đoạn trích duy nhất của dòng | "
+                                   "graph: '-' (cả graph tầng đó) | graph_fact: id fact (hoặc tiền tố duy nhất)")
         x.add_argument("--scope", default="agent", choices=["agent", "team", "global"])
         x.add_argument("--team")
         x.add_argument("--file", help="memory_entry: USER.md | MEMORY.md | memory.md (mặc định USER.md ở global)")

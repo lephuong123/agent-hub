@@ -110,7 +110,12 @@ class EvalGate:
         mem = [t for t in tasks if is_memory_task(t)]
         other = [t for t in tasks if not is_memory_task(t)]
         if targets and all(t == "graph" for t in targets):
-            return mem or other
+            # run eval KHÔNG thấy graph (không prefetch trong eval_overlay; memory_recall chỉ khi có skill) → task thường không đo
+            # được thay đổi graph. Không có task memory → [] (deferred_no_eval + cờ `unevaluated`, ngưỡng hồi quy chặt H-17),
+            # không đốt ngân sách eval vào run nhìn không thấy graph.
+            return mem
+        if "graph" in targets:  # lô trộn (MEMORY.md + graph cùng ngày): task memory (miễn phí, tất định) chấm phần graph
+            return other + mem
         return other
 
     def _agent_budget(self, agent: dict[str, Any]) -> float | None:
@@ -259,13 +264,15 @@ class EvalGate:
         since = since or (datetime.now(timezone.utc) - timedelta(days=int(self.cfg().get("batch_lookback_days", 2)))).isoformat()
         rows = await ledger_list(self.hub, risk_class="L1", since=since)
         done = {r[0] for r in self.hub.store.conn.execute("SELECT entry_id FROM eval_entry_log")}
-        groups: dict[str, list[dict[str, Any]]] = {}
+        groups: dict[tuple[str, bool], list[dict[str, Any]]] = {}
         for e in rows:
             if e.get("rolled_back") or e.get("is_rollback") or str(e.get("id")) in done or not e.get("agent_id"):
                 continue
-            groups.setdefault(e["agent_id"], []).append(e)
+            # graph tách lô riêng: chấm bằng task memory (run eval không thấy graph); eval_failed của lô này không kéo theo
+            # rollback MEMORY.md/skill và ngược lại
+            groups.setdefault((e["agent_id"], e.get("target") == "graph"), []).append(e)
         out = []
-        for agent_id, ents in groups.items():
+        for (agent_id, _graph), ents in groups.items():
             v = await self.post_apply_batch(ents, kind="batch")
             if v.status == "deferred_no_eval" or "unevaluated" in (v.flags or []):
                 self._mark_unevaluated([str(e["id"]) for e in ents])  # H-17: L1 không chấm được → ngưỡng hồi quy chặt hơn

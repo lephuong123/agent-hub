@@ -503,7 +503,8 @@ tắt cho RPC `session.search`/CLI (`--group`). Test: `tests/test_session_search
 ## Graph memory — kho thực thể + fact có thời gian (kiểu Graphiti, SQLite)
 Plan (đối chiếu Hermes, chia PR store → retrieval ∥ write → quality, thay PR 3/4 của `plan-memory-hermes-parity.md`): `docs/dev-notes/plan-graph-memory.md`.
 Đã làm (store + retrieval + write + quality, nhánh `feat/graph-memory`): `docs/dev-notes/graph-memory.md`. Migration v20 (SQL) = `mem_fact_uses`. Migration **v19** (Python `knowledge.graph.schema.migrate_v19` — migration Python mới: thêm
-tiền tố vào `store.PY_MIGRATION_PREFIXES`). Test: `tests/test_graph_memory.py`, `tests/test_graph_memory_write.py` (bộ trích xuất GIẢ), `tests/test_graph_retrieval.py`, `tests/test_graph_quality.py`.
+tiền tố vào `store.PY_MIGRATION_PREFIXES`). Test: `tests/test_graph_memory.py`, `tests/test_graph_memory_write.py` (bộ trích xuất GIẢ), `tests/test_graph_retrieval.py`, `tests/test_graph_quality.py`, `tests/test_graph_memory_review.py` (sửa theo review: pin graph qua RPC/CLI, quyền tầng
+`learn.propose` của agent, fact người khai không bị bên khác đóng, trần độ dài tên thực thể, trần trích xuất nguyên tử).
 
 | Module | Vai trò |
 |---|---|

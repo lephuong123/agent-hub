@@ -122,6 +122,7 @@ class GraphExtractor:
         self.svc = svc
         self.runtime: Any = None
         self._inflight: set[str] = set()
+        self._reserved: dict[str, int] = {}  # agent → số lần gọi đã qua trần nhưng chưa ghi dòng `runs` (trần đếm cả phần này)
         self._pending: dict[str, Any] = {}  # khoá session → TimerHandle (debounce, newest-wins)
         self.tasks: set[asyncio.Task] = set()
 
@@ -267,7 +268,15 @@ class GraphExtractor:
                                      "ORDER BY updated_at DESC LIMIT ?", (*args, int(limit))).fetchall()
         except Exception:
             return []
-        return [f"{r[0]}" + (f" ({r[1]})" if r[1] else "") for r in rows]
+        from ..redact import redact_str
+        from .threats import scan_load
+
+        out: list[str] = []
+        for name, etype in rows:  # tên/kiểu vào prompt trích xuất: che secret, quét lúc nạp, một dòng, có trần độ dài
+            item = " ".join(redact_str(str(name or "")).split())[:120] + (f" ({' '.join(redact_str(str(etype)).split())[:40]})" if etype else "")
+            if item.strip() and not scan_load(item):
+                out.append(item.replace(";", ","))
+        return out
 
     # ------------------------------------------------------------------ trần chi phí
     def cap_problem(self, agent_id: str) -> str | None:
@@ -276,11 +285,14 @@ class GraphExtractor:
         since = _utc(_local_midnight_utc())
         n, cost = self.conn.execute("SELECT COUNT(*), COALESCE(SUM(cost_usd), 0) FROM runs WHERE agent_id=? AND kind=? AND queued_at>=?",
                                     (agent_id, RUN_KIND, since)).fetchone()
+        held = int(self._reserved.get(agent_id, 0))
+        n = int(n) + held
         mx = int(self.cfg("graph_extract_max_per_agent_per_day", 12) or 0)
         if mx and int(n) >= mx:
             return f"đã trích xuất graph {n} lần hôm nay (learning.graph_extract_max_per_agent_per_day={mx})"
         daily = float(self.cfg("graph_extract_daily_usd_per_agent", 0.5) or 0)
         per = float(self.cfg("graph_extract_budget_usd", 0.05) or 0)
+        cost = float(cost) + held * per  # lần đang chạy tính theo mức trần mỗi lần (budget_usd) cho tới khi có chi phí thật
         if daily and float(cost) + per > daily + 1e-9:
             return f"vượt trần chi phí trích xuất graph/ngày ${daily:g} (đã dùng ${float(cost):.4f})"
         return None
@@ -319,6 +331,18 @@ class GraphExtractor:
         why = self.cap_problem(agent_id)
         if why:
             return {"status": "skipped", "reason": why}
+        # giữ chỗ NGAY sau khi kiểm (không có await ở giữa): session song song của cùng agent thấy chỗ này khi kiểm trần
+        self._reserved[agent_id] = self._reserved.get(agent_id, 0) + 1
+        try:
+            return await self._extract_paid(run, agent_id, key, trigger, msgs)
+        finally:
+            left = self._reserved.get(agent_id, 1) - 1
+            if left > 0:
+                self._reserved[agent_id] = left
+            else:
+                self._reserved.pop(agent_id, None)
+
+    async def _extract_paid(self, run: dict[str, Any], agent_id: str, key: str, trigger: str, msgs: list[dict[str, Any]]) -> dict[str, Any]:
         win, omitted = self.window(msgs)
         known = self.known_entities(agent_id)
         max_facts = int(self.cfg("graph_extract_max_facts", 30) or 30)
@@ -394,6 +418,7 @@ class GraphExtractor:
         bỏ thao tác hỏng thay vì để cả lô bị chặn."""
         from ..knowledge.graph import GraphStore, canon
         from ..knowledge.graph.resolve import resolve_entity
+        from ..knowledge.graph.store import USER_GROUNDED
         from ..knowledge.store import KnowledgeError
 
         roles = {m["id"]: m["role"] for m in win}
@@ -449,7 +474,7 @@ class GraphExtractor:
                 dropped.append({"invalidate": f"{v.get('subject')} {v.get('relation')}", "reason": "no_evidence"})
                 continue
             b = batch(*self._tier(agent_id, run, str(v.get("scope") or "agent"), allowed))
-            b["inval"].append(v)
+            b["inval"].append({**v, "_by_user": any(roles[i] == "user" for i in ev)})
             b["evidence"].update(ev)
 
         result: dict[tuple[str, str | None], dict[str, Any]] = {}
@@ -480,6 +505,8 @@ class GraphExtractor:
             for f in b["facts"]:
                 op = {"action": "add_fact", "src": name_of(f["subject"]), "relation": f.get("relation"), "fact": f.get("fact"),
                       "confidence": f["_conf"]}
+                if f["_conf"] >= 0.6:  # bằng chứng là lượt NGƯỜI (source=user đã kiểm) → được đóng fact người khai cũ
+                    op[USER_GROUNDED] = True
                 if f.get("object"):
                     op["dst"] = name_of(f["object"])
                 for k_in, k_out in (("subject_type", "src_type"), ("object_type", "dst_type"), ("valid_from", "valid_from"), ("multi", "multi")):
@@ -494,6 +521,8 @@ class GraphExtractor:
                 op = {"action": "invalidate_fact", "src": subj["name"], "relation": v.get("relation")}
                 if v.get("object"):
                     op["dst"] = v["object"]
+                if v.get("_by_user"):  # chỉ lượt agent (có thể lặp nội dung web/tool) → không đóng được fact người khai
+                    op[USER_GROUNDED] = True
                 ops.append(op)
             # chạy thử (thuần): thao tác hỏng (alias trùng thực thể khác, không có fact để đóng…) bị bỏ, phần còn lại vẫn ghi
             for _ in range(len(ops)):

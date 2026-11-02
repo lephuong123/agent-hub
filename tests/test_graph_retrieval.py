@@ -212,7 +212,7 @@ def test_visibility_tiers_and_canary_pins(hub):
     a3 = {f["fact"] for f in recall(hub, "a3", "zephyr")["facts"]}
     assert a3 == {"Zephyr team release is on Thursday.", "Zephyr global policy: all deploys need a ticket."}  # không thấy tầng agent của a2
     # review đổi tầng team → canary trên a1; a2/a3 bị ghim về bản trước
-    write(hub, [fact("Zephyr", "release", "Zephyr team release moved to Friday.")], scope="team", by="review")
+    write(hub, [fact("Zephyr", "release", "Zephyr team release moved to Friday.", _user_grounded=True)], scope="team", by="review")
     a1 = {f["fact"] for f in recall(hub, "a1", "zephyr release")["facts"]}
     a3 = {f["fact"] for f in recall(hub, "a3", "zephyr release")["facts"]}
     assert "Zephyr team release moved to Friday." in a1 and "Zephyr team release is on Thursday." not in a1

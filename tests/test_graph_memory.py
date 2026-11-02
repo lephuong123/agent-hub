@@ -280,7 +280,8 @@ def test_canary_hidden_invalidation_is_undone_for_pinned_agents(hub):
     write(hub, [fact("svc", "port", "svc listens on 8080.")], scope="team", by="user")
     for c in hub.learning.canary.list("canary"):
         hub.learning.canary.promote(c["id"], "x")
-    r = write(hub, [fact("svc", "port", "svc listens on 9090.")], scope="team", by="review")
+    # trích xuất có bằng chứng là lượt người → được đóng fact người khai
+    r = write(hub, [fact("svc", "port", "svc listens on 9090.", _user_grounded=True)], scope="team", by="review")
     assert r["status"] == "canary"
     v = hub.knowledge.versions
     assert [f["fact"] for f in gs(hub).facts([("team", "t1")], hidden=v.graph_hidden("a2"))] == ["svc listens on 8080."]

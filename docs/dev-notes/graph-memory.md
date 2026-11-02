@@ -204,3 +204,25 @@ up→down một lần, kẹp sàn, idempotent; tick nền settle + consolidation
 bộ mẫu EN/VI/không dấu/trộn/thời gian/đầu độc đều đạt, stale-rate > 0 khi cập nhật bị sót, đầu độc → 0, pipeline chặn fact chỉ thị; eval gate
 dùng task memory cho entry graph (tụt → `eval_gate` rollback, không run eval, `scores.memory`), `run_manual`; RPC + parser `learn graph`; bộ khớp
 thực thể bằng vector (cùng tầng, chỉ khi model `ready`).
+
+## Sửa theo review (2026-11-02)
+Test: `tests/test_graph_memory_review.py` (12 ca, bộ trích xuất GIẢ, không gọi claude, không tải model).
+- **Pin graph/graph_fact qua đường thật**: RPC `knowledge.pin` + CLI `cfharness knowledge pin|unpin <agent|team|-> graph|graph_fact <ref>` —
+  `graph` ref `-` (= `graph://<scope>/<owner>`), `graph_fact` ref = id fact hoặc tiền tố duy nhất trong đúng tầng. Trước đó chỉ test gọi
+  `set_pin` trực tiếp nên luật bảo vệ của người không dùng được.
+- **Eval gate**: lô toàn graph chỉ chấm bằng task memory; không có task memory → `[]` → `deferred_no_eval` + `unevaluated` (H-17), KHÔNG
+  rơi về task thường (run eval không thấy graph). `run_batch_l1` tách entry graph thành lô riêng theo agent (không trộn với MEMORY.md/skill).
+- **Trần độ dài**: tên/alias thực thể ≤ 200, kiểu ≤ 64, tóm tắt ≤ 1000 (`too_long`); tổng văn bản mới một lô ≤ 60 000 < `MAX_SCAN_CHARS`
+  (`batch_too_large`) — không còn đuôi không được quét. Kiểu thực thể vào `new_texts` (được quét). Lúc nạp: `memory_recall` quét + che
+  `src`/`dst` như câu fact (cờ → `blocked`); `known_entities` (prompt trích xuất) che secret, quét, một dòng, cắt độ dài. `import_rows` vẫn
+  không quét lúc ghi — dựa vào quét lúc nạp (fact, tên, known_entities).
+- **`learn.propose` từ agent** (daemon `_agent_propose` → `LearningService.agent_propose`): memory/USER/graph theo `memory_scopes` như tool
+  `memory` (trước đây worker thường ghi được team/global); graph đi qua `graph_write`. `graph_write(created_by=agent)` chỉ nhận
+  `add_entity|add_alias|add_fact|invalidate_fact`, bỏ `confidence` agent tự khai và mọi khoá `_…` nội bộ. Skill/config qua `learn.propose`
+  không đổi (chưa xét quyền tầng skill).
+- **Fact người khai** (`created_by=user`): bên ghi khác KHÔNG đóng được — `add_fact` mâu thuẫn bị bỏ (`conflicts_with_user_fact`; cả lô không
+  còn gì → guard chặn cùng tên luật), `invalidate_fact` → `protected_user_fact`. Ngoại lệ: trích xuất gắn cờ nội bộ `_user_grounded` khi bằng
+  chứng có lượt NGƯỜI (fact `source=user`; invalidation có ít nhất một id lượt người) — người nói "từ giờ deploy lên canary" vẫn cập nhật được.
+  Cờ bị bỏ ở pipeline cho `created_by` ngoài user/review/curator.
+- **Trần trích xuất nguyên tử theo agent**: `GraphExtractor._reserved` giữ chỗ ngay sau `cap_problem` (không có await ở giữa); `cap_problem`
+  đếm cả chỗ đang giữ (số lần + `graph_extract_budget_usd` mỗi chỗ) → session song song của một agent không vượt trần lần/ngày và $/ngày.

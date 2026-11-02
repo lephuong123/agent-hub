@@ -197,6 +197,8 @@ class Pipeline:
         if not isinstance(ops, list):
             raise KnowledgeError("graph cần operations (mảng thao tác)", "invalid")
         scope, owner = prop["scope"], self._owner(prop)
+        if str(prop.get("created_by") or "agent") not in ("user", "review", "curator"):  # cờ nội bộ (`_user_grounded`…) không nhận từ agent
+            ops = [{k: v for k, v in o.items() if not str(k).startswith("_")} if isinstance(o, dict) else o for o in ops]
         ep = pl.get("episode") if isinstance(pl.get("episode"), dict) else None
         gp = GraphStore(self.conn).plan_ops(scope, owner, ops, episode=ep, agent_id=prop.get("agent_id"), run_id=prop.get("run_id"),
                                             created_by=str(prop.get("created_by") or "agent"))
@@ -208,7 +210,7 @@ class Pipeline:
         else:
             prop["op"] = "patch"
         prop["target_ref"] = gp["key"]
-        lines = list(gp["lines"]) + [f"= duplicate (skipped): {d['fact']}" for d in gp["dropped"]]
+        lines = list(gp["lines"]) + [f"= {str(d.get('reason') or 'duplicate').replace('_', ' ')} (skipped): {d['fact']}" for d in gp["dropped"]]
         diff = "".join(x + "\n" for x in lines)
         ch = Change(scope=scope, owner_id=owner, target="graph", target_ref=gp["key"], op=prop["op"], actor="?", kind="graph",
                     graph_rows=gp["rows"], graph_key=gp["key"], agent_id=prop.get("agent_id"))

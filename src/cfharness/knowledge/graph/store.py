@@ -43,6 +43,15 @@ VOLATILE = frozenset({"hits", "last_used", "confidence"})
 SNAPSHOT_VOLATILE = frozenset({"hits", "last_used"})
 ACTIONS = ("add_entity", "add_alias", "add_fact", "invalidate_fact", "invalidate_entity", "merge_entity", "supersede_fact")
 MAX_OPS = 200
+# Trần độ dài (review): tên/alias/kiểu/tóm tắt thực thể KHÔNG có trần thì văn bản sau mốc `threats.MAX_SCAN_CHARS` (64 KiB) của
+# lần quét lúc ghi không bao giờ được quét. Tổng văn bản mới của MỘT lô < MAX_SCAN_CHARS để guard quét trọn lô.
+MAX_NAME_CHARS = 200
+MAX_TYPE_CHARS = 64
+MAX_SUMMARY_CHARS = 1000
+MAX_BATCH_TEXT = 60_000
+# Cờ nội bộ trên thao tác: CHỈ trích xuất (created_by=review) gắn khi bằng chứng có lượt NGƯỜI. Không có cờ này, bên ghi không
+# phải người không đóng được fact người khai (created_by=user) — chống MINJA: agent lặp lại nội dung web/tool độc.
+USER_GROUNDED = "_user_grounded"
 SECTION = {"mem_facts": "facts", "mem_entities": "entities"}
 SNAPSHOT_FILE = ".graph_snapshot.json"  # bản chụp graph trong BẢN SAO home của eval (evals/overlay.make_home) — home thật không có
 
@@ -259,8 +268,17 @@ class GraphStore:
                 if canon(n):
                     batch_ent[canon(n)] = e
 
+        def bounded(s: str, n: int, what: str) -> str:
+            if len(s) > n:
+                raise KnowledgeError(f"{what} {len(s)} > {n} ký tự", "too_long")
+            return s
+
+        def protected(f: dict[str, Any], op: dict[str, Any]) -> bool:
+            """Fact người khai chỉ bị đóng tự động bởi người, hoặc bởi trích xuất có bằng chứng là lượt người."""
+            return f.get("created_by") == "user" and created_by != "user" and not op.get(USER_GROUNDED)
+
         def entity(name: Any, etype: Any = None, create: bool = True) -> dict[str, Any]:
-            nm = _clean_text(name)
+            nm = bounded(_clean_text(name), MAX_NAME_CHARS, "tên thực thể")
             c = canon(nm)
             if not c:
                 raise KnowledgeError("tên thực thể rỗng", "invalid")
@@ -272,18 +290,21 @@ class GraphStore:
                 return e
             if not create:
                 raise KnowledgeError(f"không có thực thể '{nm}' trong graph {graph_key(scope, ok)}", "not_found")
-            e = put("mem_entities", {"id": _new_id("ge"), "scope": scope, "owner_id": ok, "name": nm, "canon": c, "type": _clean_text(etype) or None,
+            et = bounded(_clean_text(etype), MAX_TYPE_CHARS, "kiểu thực thể") or None
+            e = put("mem_entities", {"id": _new_id("ge"), "scope": scope, "owner_id": ok, "name": nm, "canon": c, "type": et,
                                      "aliases": "[]", "alias_keys": "", "summary": None, "folded": folded(nm), "created_by": created_by, "agent_id": agent_id,
                                      "created_at": now, "updated_at": now, "invalidated_at": None, "invalidated_entry_id": None,
                                      "ledger_entry_id": ENTRY, "retracted_by": None})
             new_texts.append(nm)
+            if et:
+                new_texts.append(et)  # kiểu cũng vào ngữ cảnh (known_entities) — quét như tên
             stats["entities_added"] += 1
             lines.append(f"+ entity {nm}" + (f" ({e['type']})" if e["type"] else ""))
             remember(e)
             return e
 
         def add_alias(e: dict[str, Any], alias: Any) -> dict[str, Any]:
-            al = _clean_text(alias)
+            al = bounded(_clean_text(alias), MAX_NAME_CHARS, "alias")
             c = canon(al)
             if not c or c == e["canon"] or c in {canon(x) for x in _aliases(e)}:
                 return e
@@ -326,7 +347,7 @@ class GraphStore:
                     for al in op.get("aliases") or []:
                         e = add_alias(e, al)
                     if op.get("summary") and not e.get("summary"):
-                        s = _clean_text(op["summary"])
+                        s = bounded(_clean_text(op["summary"]), MAX_SUMMARY_CHARS, "tóm tắt thực thể")
                         e = put("mem_entities", dict(e, summary=s, updated_at=now))
                         new_texts.append(s)
                         remember(e)
@@ -352,6 +373,10 @@ class GraphStore:
                     vf = _clean_text(op.get("valid_from")) or None
                     fid = _new_id("gf")
                     if not op.get("multi"):
+                        guarded = [f for f in live if protected(f, op)]
+                        if guarded:  # mâu thuẫn fact người khai: fact người thắng, fact mới bị bỏ (người sửa qua CLI / lượt người)
+                            dropped.append({"op": n, "reason": "conflicts_with_user_fact", "fact": text, "existing": guarded[0]["id"]})
+                            continue
                         for f in live:
                             close(f, fid, vf, "superseded")
                     try:
@@ -374,6 +399,8 @@ class GraphStore:
                         if f is None or f["scope"] != scope or f["owner_id"] != ok or f.get("retracted_by"):
                             raise KnowledgeError(f"không có fact '{op['fact_id']}' trong graph {graph_key(scope, ok)}", "not_found")
                         targets = [] if f.get("invalidated_at") else [f]
+                        if targets and protected(f, op):
+                            raise KnowledgeError(f"fact '{f['id']}' do người khai — chỉ người (hoặc lượt người) đóng được", "protected_user_fact")
                     else:
                         src = entity(op.get("src"), create=False)
                         rel = norm_relation(op.get("relation"))
@@ -385,6 +412,9 @@ class GraphStore:
                             targets = [f for f in targets if f.get("dst_entity_id") == d["id"]]
                         if not targets:
                             raise KnowledgeError("không có fact còn hiệu lực khớp để đóng", "not_found")
+                        if all(protected(f, op) for f in targets):
+                            raise KnowledgeError("fact khớp do người khai — chỉ người (hoặc lượt người) đóng được", "protected_user_fact")
+                        targets = [f for f in targets if not protected(f, op)]
                     for f in targets:
                         close(f, None, _clean_text(op.get("valid_to")) or None, "invalidated")
                 elif act == "invalidate_entity":
@@ -446,6 +476,9 @@ class GraphStore:
                     raise KnowledgeError(f"action graph không hợp lệ: {act!r} (được: {', '.join(ACTIONS)})", "invalid")
             except KnowledgeError as e:
                 raise KnowledgeError(f"thao tác #{n} ({act}): {e.message}", e.reason) from None
+        total = sum(len(t) + 1 for t in new_texts)
+        if total > MAX_BATCH_TEXT:
+            raise KnowledgeError(f"lô graph {total} > {MAX_BATCH_TEXT} ký tự văn bản mới — chia nhỏ lô", "batch_too_large")
         changed = [k for k in rows if not k.startswith("mem_episodes:")]
         return {"scope": scope, "owner": ok, "key": graph_key(scope, ok), "rows": [{"table": k.split(":", 1)[0], "id": r["id"], "row": r} for k, r in rows.items()],
                 "changed": len(changed), "new_texts": new_texts, "dropped": dropped, "invalidated": invalidated, "longest_fact": longest,

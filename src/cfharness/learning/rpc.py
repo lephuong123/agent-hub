@@ -119,9 +119,24 @@ class LearningRpc:
         if scope == "agent":
             self.hub.agents.get_row(owner)
         target = _req(p, "target")
-        if target not in ("skill", "memory", "config", "memory_entry"):
-            raise HubError("target pin: skill | memory | config | memory_entry")
+        if target not in ("skill", "memory", "config", "memory_entry", "graph", "graph_fact"):
+            raise HubError("target pin: skill | memory | config | memory_entry | graph | graph_fact")
         ref = str(_req(p, "ref"))
+        if target in ("graph", "graph_fact"):  # graph memory: pin cả graph một tầng, hoặc TỪNG fact (không bị đóng hiệu lực tự động)
+            from ..knowledge.graph import graph_key, owner_key
+
+            key = graph_key(scope, owner)
+            if target == "graph":
+                if ref not in ("-", key):
+                    raise HubError(f"pin graph: ref là '-' hoặc {key}")
+                ref = key
+            else:
+                hits = [r[0] for r in self.hub.store.conn.execute(
+                    "SELECT id FROM mem_facts WHERE scope=? AND owner_id=? AND retracted_by IS NULL AND (id=? OR id LIKE ? ESCAPE '\\') LIMIT 2",
+                    (scope, owner_key(scope, owner), ref, ref.replace("%", "").replace("_", r"\_") + "%"))]
+                if len(hits) != 1:
+                    raise HubError(f"'{ref}' khớp {len(hits)} fact trong {key} — đưa id fact đầy đủ (cfharness learn graph …)")
+                ref = hits[0]
         if target == "memory_entry":  # M5-A (FR-LN-14): pin TỪNG DÒNG; ref = đoạn trích duy nhất của dòng (hoặc khoá 12 hex)
             from .canary import entry_hash
 

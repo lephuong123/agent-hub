@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("cfharness.learning")
 
 KNOWLEDGE_OPS = ("skills_list", "skill_view")
+AGENT_GRAPH_ACTIONS = ("add_entity", "add_alias", "add_fact", "invalidate_fact")  # merge/supersede/invalidate_entity: consolidation/người
 MEMORY_OP = "memory"  # tool `memory` của agent đang chạy (kiểu Hermes): ghi MEMORY.md/USER.md tầng agent ngay trong session
 LEARNING_OPS = ("skills_list", "skill_view", "memory_view", "propose_memory", "propose_skill_new", "propose_skill_patch", "propose_skill_merge",
                 "propose_skill_archive", "propose_config_change", "propose_user_profile")
@@ -364,6 +365,30 @@ class LearningService:
                            "closes the old fact (kept as history).")
         return out
 
+    def agent_propose(self, *, target: str, op: str, payload: dict[str, Any], agent_id: str | None, scope: str = "agent",
+                      team_id: str | None = None, target_ref: str | None = None, rationale: str = "", run_id: str | None = None) -> dict[str, Any]:
+        """H-05: `learn.propose` từ tiến trình agent (daemon hạ xuống `created_by=agent`). Quyền tầng GIỐNG tool `memory`
+        (`memory_scopes`) cho memory/USER/graph — trước đây đường này gọi thẳng pipeline nên worker thường ghi được tầng team/global.
+        Graph đi qua `graph_write` (lọc thao tác consolidation + `confidence` agent tự đặt)."""
+        if not agent_id:
+            raise HubError("learn.propose từ agent cần agent")
+        if target == "graph":
+            pl = payload if isinstance(payload, dict) else {}
+            return self.graph_write(agent_id, list(pl.get("operations") or []), scope=scope, team_id=team_id,
+                                    episode=pl.get("episode") if isinstance(pl.get("episode"), dict) else None, created_by="agent",
+                                    run_id=run_id, rationale=rationale)
+        if target == "user_profile":
+            scope = "global"
+        if target in ("memory", "user_profile") and scope != "agent":
+            allowed = self.memory_scopes(agent_id)
+            if scope not in allowed:
+                raise Blocked(f"learn propose: '{agent_id}' không được ghi tầng {scope} (được: {', '.join(allowed)}) — người bật bằng "
+                              f"`cfharness learn policy set agents.{agent_id}.shared_memory_write true`")
+            if scope == "team":
+                team_id = self._shared_team(agent_id, team_id, "global" in allowed)
+        return self.pipeline.propose(target=target, op=op, payload=payload, agent_id=agent_id, scope=scope, team_id=team_id,
+                                     target_ref=target_ref, rationale=rationale, created_by="agent", run_id=run_id)
+
     def graph_write(self, agent_id: str, operations: list[dict[str, Any]], *, scope: str = "agent", team_id: str | None = None,
                     episode: dict[str, Any] | None = None, created_by: str = "agent", run_id: str | None = None, rationale: str = "") -> dict[str, Any]:
         """Ghi graph memory (docs/dev-notes/plan-graph-memory.md) — cửa vào chung cho trích xuất cuối session (PR write) và tool hub-self.
@@ -386,7 +411,18 @@ class LearningService:
                 owner = self._shared_team(agent_id, team_id, "global" in allowed)
         elif scope == "team":
             owner = self.pipeline._resolve_team(agent_id, team_id)
-        payload: dict[str, Any] = {"operations": list(operations or [])}
+        ops = list(operations or [])
+        if created_by == "agent":  # agent (tool `memory`, `learn propose`): không tự đặt độ tin cậy, không thao tác của consolidation
+            clean: list[Any] = []
+            for o in ops:
+                if not isinstance(o, dict):
+                    clean.append(o)
+                    continue
+                if str(o.get("action") or "") not in AGENT_GRAPH_ACTIONS:
+                    raise Blocked(f"graph: agent chỉ được {', '.join(AGENT_GRAPH_ACTIONS)} — '{o.get('action')}' là thao tác của consolidation/người")
+                clean.append({k: v for k, v in o.items() if k != "confidence" and not str(k).startswith("_")})
+            ops = clean
+        payload: dict[str, Any] = {"operations": ops}
         if episode:
             payload["episode"] = dict(episode)
         return self.pipeline.propose(target="graph", op="patch", agent_id=agent_id, scope=scope, team_id=owner, payload=payload,

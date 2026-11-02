@@ -239,11 +239,14 @@ class GraphMemoryProvider(MemoryProvider):
         out = []
         for f in facts:
             line = render_fact(f)
-            if line is None:  # cờ threat lúc nạp → không trả văn bản
+            # tên thực thể cũng vào ngữ cảnh agent: che secret + quét lúc nạp như câu fact (hàng import/sửa ngoài pipeline)
+            ends = {k: safe_fact(f[k]) if f.get(k) else (f.get(k), []) for k in ("src", "dst")}
+            if line is None or any(fl for _, fl in ends.values()):  # cờ threat lúc nạp → không trả văn bản
                 out.append({"id": f["id"], "blocked": "this fact failed the safety scan and was not returned"})
                 continue
-            out.append({**{k: f[k] for k in ("id", "relation", "src", "dst", "valid_from", "valid_to", "invalidated_at", "scope", "confidence",
-                                             "created_by", "score")}, "fact": safe_fact(f["fact"])[0], "valid": not f.get("invalidated_at")})
+            out.append({**{k: f[k] for k in ("id", "relation", "valid_from", "valid_to", "invalidated_at", "scope", "confidence",
+                                             "created_by", "score")}, **{k: v for k, (v, _) in ends.items()},
+                        "fact": safe_fact(f["fact"])[0], "valid": not f.get("invalidated_at")})
         if r is not None and out:
             from ...store import now_iso
 
