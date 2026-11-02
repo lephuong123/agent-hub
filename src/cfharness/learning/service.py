@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from ..errors import Blocked, HubError, NotFound
 from ..events import TERMINAL_RUN_EVENTS, HubEvent, make_event
 from .canary import CanaryManager
+from .graph_extract import GraphExtractor
 from .guard import LearningGuard
 from .ledger import Ledger
 from .pipeline import Pipeline
@@ -46,6 +47,7 @@ class LearningService:
         self.pipeline = Pipeline(hub, self)
         self.reviews = ReviewScheduler(hub, self)
         self.canary = CanaryManager(hub, self)  # M5-A: L3 tầng team/global/USER — canary/shadow (FR-LN-16)
+        self.graph_extract = GraphExtractor(hub, self)  # graph memory PR write: trích xuất theo lô cuối session / PreCompact / xoay session
         self.read_marks: dict[str, set[tuple[str, str, str, str]]] = {}
         self._task: asyncio.Task | None = None
         hub.bus.add_listener(self._on_event)
@@ -102,6 +104,10 @@ class LearningService:
         except Exception:
             log.exception("bộ phát hiện Signal lỗi run %s", run_id)
         self.reviews.on_run_terminal(run)
+        try:
+            self.graph_extract.on_run_terminal(run)
+        except Exception:
+            log.exception("xếp trích xuất graph lỗi run %s", run_id)
         self._cache_watch(run)
 
     # ------------------------------------------------------------------ vòng nền
@@ -114,6 +120,9 @@ class LearningService:
             self._task = None
 
     def stop(self) -> None:
+        for h in list(self.graph_extract._pending.values()):
+            h.cancel()
+        self.graph_extract._pending.clear()
         if self._task is not None:
             self._task.cancel()
             self._task = None
@@ -262,6 +271,8 @@ class LearningService:
         opts = run.get("run_opts") or {}
         if run.get("kind") in ("eval", "eval_judge", "curator") or opts.get("eval_overlay"):
             raise HubError("tool memory không dùng được trong run eval/curator", code=-32003)
+        if args.get("target") == "graph":
+            return self._agent_graph(run, args)
         agent_id = run["agent_id"]
         store = "user" if args.get("target") == "user" else "memory"
         scope = str(args.get("scope") or "agent")
@@ -301,6 +312,53 @@ class LearningService:
         if out.get("status") == "applied":
             out["note"] = ("Saved to disk. Your system prompt for this session is unchanged; the change is visible from the next session."
                            + ("" if scope == "agent" else f" Shared with every agent of this {scope} tier; it is watched and rolled back automatically if it causes regressions."))
+        return out
+
+    def _agent_graph(self, run: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
+        """Tool `memory` với `target='graph'` (graph memory PR write): agent ghi fact có cấu trúc (subject, relation, object, câu fact)
+        vào graph tầng agent/team/global — quyền tầng như MEMORY.md (`graph_write` → `memory_scopes`). `forget` đóng hiệu lực fact
+        (không xoá). Provenance: episode = các lượt NGƯỜI gần nhất của session (không phải output tool), `source_kind=agent_tool`."""
+        ops: list[dict[str, Any]] = []
+        for f in args.get("facts") or []:
+            if not isinstance(f, dict):
+                continue
+            op: dict[str, Any] = {"action": "add_fact", "src": f.get("subject"), "relation": f.get("relation"), "fact": f.get("fact")}
+            for a, b in (("object", "dst"), ("subject_type", "src_type"), ("object_type", "dst_type"), ("valid_from", "valid_from"), ("multi", "multi")):
+                if f.get(a) not in (None, ""):
+                    op[b] = f[a]
+            ops.append(op)
+        for v in args.get("forget") or []:
+            if not isinstance(v, dict):
+                continue
+            if v.get("fact_id"):
+                ops.append({"action": "invalidate_fact", "fact_id": v["fact_id"]})
+            else:
+                op = {"action": "invalidate_fact", "src": v.get("subject"), "relation": v.get("relation")}
+                if v.get("object"):
+                    op["dst"] = v["object"]
+                ops.append(op)
+        if not ops:
+            raise HubError("target='graph' cần facts=[{subject, relation, object?, fact}] hoặc forget=[{subject, relation}]")
+        scope = str(args.get("scope") or "agent")
+        ge = self.graph_extract
+        key = ge.source_key(run)
+        users = [m for m in (ge.collect(key) if key else []) if m["role"] == "user"][-3:]
+        text = "\n".join(f"[#{m['id']} user] {m['text'][:2000]}" for m in users) or f"(no user message indexed for run {run['id']})"
+        episode = {"text": text, "run_id": run["id"], "session_id": run.get("session_id"), "source_kind": "agent_tool",
+                   "source_ref": f"run:{run['id']}"}
+        res = self.graph_write(run["agent_id"], ops, scope=scope, team_id=args.get("team_id"), episode=episode, created_by="agent",
+                               run_id=run["id"], rationale=str(args.get("rationale") or ""))
+        out: dict[str, Any] = {k: res.get(k) for k in ("status", "reason", "rule", "not_before", "target_ref") if res.get(k) is not None}
+        if res.get("status") == "canary":
+            out["status"] = "applied"
+            out["watch"] = res.get("canary_id")
+        out.update(target="graph", scope=scope)
+        prop = self.pipeline.get(res["proposal_id"]) if res.get("proposal_id") else {}
+        if prop.get("diff"):
+            out["changes"] = [ln for ln in str(prop["diff"]).splitlines() if not ln.startswith("+ episode")][:40]
+        if out.get("status") == "applied":
+            out["note"] = ("Saved to your memory graph. Facts are recalled in future sessions; a new value for the same subject and relation "
+                           "closes the old fact (kept as history).")
         return out
 
     def graph_write(self, agent_id: str, operations: list[dict[str, Any]], *, scope: str = "agent", team_id: str | None = None,

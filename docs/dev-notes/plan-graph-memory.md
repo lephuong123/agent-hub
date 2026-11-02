@@ -48,7 +48,7 @@ metadata)`, `get_tool_schemas()`, `handle_tool_call(name, args, **kw) -> str`. L
    1–2 hop, xếp hạng; chèn vào tin user đầu; tool hub-self `graph_search`/`graph_neighbors`; sửa `memory_search` (`surface_rpc.py`) đang đọc
    file SỐNG (lách ghim canary); đọc bản chụp `.graph_snapshot.json` khi run eval. **Đã làm** (`graph-memory.md` § PR 2) — hai tool dự kiến
    gộp thành MỘT `memory_recall(query | entity, hops, include_history)` + `memory_search` scope `graph`; runtime vector = fastembed (ONNX).
-3. **write** (song song với 2) — hook `PreCompact` + `on_session_end` + xoay session điều phối viên → MỘT lần trích xuất JSON-schema/session
+3. **write** (song song với 2, ĐÃ LÀM — `graph-memory.md` mục PR write) — hook `PreCompact` + `on_session_end` + xoay session điều phối viên → MỘT lần trích xuất JSON-schema/session
    (debounce, trần chi phí, `agent_context` không primary thì không ghi) → `graph_write(created_by="review")`; mirror tool `memory`
    (`on_memory_write`) thành episode; tool hub-self `graph` cho agent (dùng `graph_write`, quyền tầng đã có ở PR 1).
 4. **quality** — consolidation (gộp thực thể alias/embedding + LLM xác nhận), độ tin cậy theo kết quả run, decay hạng, golden set memory +

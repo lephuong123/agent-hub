@@ -39,7 +39,7 @@ from typing import Any, Iterable
 from .errors import HubError, NotFound
 from .redact import redact_str
 
-TECHNICAL_KINDS = ("review", "eval", "eval_judge", "curator", "learning")
+TECHNICAL_KINDS = ("review", "eval", "eval_judge", "curator", "learning", "graph_extract")
 MODES = ("search", "around", "read", "browse")
 MAX_TEXT = 8000  # = claude_adapter.MESSAGE_COMPLETE_MAX
 TOOL_INPUT_MAX = 200

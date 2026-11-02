@@ -487,6 +487,10 @@ class ManagerService:
         rotated = self.rotate_reason(conv, kind) if resume else None
         if rotated:
             log.info("điều phối viên: hội thoại %s sang session mới (%s, lượt %s)", conv["id"], rotated, kind)
+            try:  # graph memory (PR write): trích MỘT lần phần hội thoại chưa trích trước khi bỏ session cũ
+                self.hub.learning.graph_extract.on_session_rotated(aid, resume, conv.get("last_run_id"), conv["id"])
+            except Exception:  # pragma: no cover - không chặn lượt điều phối viên
+                log.exception("xếp trích xuất graph khi xoay session lỗi")
             resume = None
         if resume and not self.hub.store.get_session(resume):
             resume = None

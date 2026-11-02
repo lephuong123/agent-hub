@@ -321,7 +321,22 @@ DEFAULTS: dict[str, Any] = {
         # session rất đắt) mà chạy session mới với digest các tin gần nhất của session từ chỉ mục session_search (null = luôn fork)
         "review_digest_over_tokens": 150_000,
         "review_digest_chars": 40_000,  # cỡ digest (ký tự, tin mới nhất trước — mỗi tin ≤ 1.500 ký tự)
-        "review_scope": "combined",  # combined | skill | memory (prompt Hermes tương ứng)
+        # combined | skill | memory (prompt Hermes tương ứng) | graph (review job = MỘT lần trích xuất graph trên session nguồn, không fork —
+        # learning/graph_extract.py; MEMORY.md/skill khi đó chỉ do tool `memory` của agent cập nhật)
+        "review_scope": "combined",
+        # graph memory PR write (docs/dev-notes/graph-memory.md): MỘT lần trích xuất LLM có cấu trúc / kết thúc session, PreCompact, xoay session
+        # điều phối viên. Chỉ đọc lượt người + câu trả lời agent (không output tool/web). Ghi qua pipeline (graph_write, created_by=review).
+        "graph_extract": True,
+        "graph_extract_model": "haiku",
+        "graph_extract_budget_usd": 0.05,  # --max-budget-usd mỗi lần (trần cứng một lần)
+        "graph_extract_max_per_agent_per_day": 12,
+        "graph_extract_daily_usd_per_agent": 0.5,  # tổng chi phí trích xuất / agent / ngày (0 = không trần)
+        "graph_extract_debounce_s": 30,  # run kết thúc → chờ N giây (resume ngay thì gộp vào lần sau); PreCompact/xoay session: ngay
+        "graph_extract_min_chars": 200,  # hội thoại mới ngắn hơn → chưa trích (để dồn)
+        "graph_extract_max_chars": 30_000,  # cửa sổ tin mới nhất đưa vào một lần (phần cũ hơn bị bỏ)
+        "graph_extract_max_facts": 30,
+        "graph_extract_timeout_s": 180,
+        "graph_extract_binary": None,  # null = runtime của hub (runtime.claude.binary)
         "review_debounce_s": 10,  # gom tín hiệu: review chạy ≥ N giây sau Signal cuối (newest-wins)
         "review_max_per_agent_per_day": 10,
         "review_timeout_s": 600,
@@ -588,7 +603,7 @@ DEFAULTS: dict[str, Any] = {
                 "annotations": {},  # ghi đè của người: {glob: {destructiveHint?, readOnlyHint?}} (`mcp annotate claude-in-chrome …`)
             },
             # hardening H-11 (FR-RT-17): hook QUAN SÁT fail-OPEN (cfharness/observe_hook.py) — luôn exit 0, quá timeout_s → hook.timeout
-            "observe_hooks": {"enabled": True, "events": ["PostToolUse", "UserPromptSubmit", "Stop"], "timeout_s": 2.0, "cli_timeout_s": 5},
+            "observe_hooks": {"enabled": True, "events": ["PostToolUse", "UserPromptSubmit", "Stop", "PreCompact"], "timeout_s": 2.0, "cli_timeout_s": 5},
             # hardening H-10: tỉ lệ raw.unknown trong cửa sổ trượt → `cli.unknown_rate_alert` (đỏ, gợi ý ESTOP)
             "unknown_alert": {"threshold": 0.05, "window_s": 3600, "min_events": 50},
         },

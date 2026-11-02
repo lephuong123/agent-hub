@@ -19,6 +19,7 @@ sửa `daemon.py`. Method:
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -30,10 +31,12 @@ from ..events import make_event
 if TYPE_CHECKING:
     from ..daemon import Daemon
 
+log = logging.getLogger("cfharness.surface")
+
 MUTATING_SURFACE = ("agent.archive", "agent.revert", "trash.restore", "trash.purge", "mcp.cancel_task")
-TECHNICAL_KINDS = ("review", "eval", "eval_judge", "curator", "learning")
+TECHNICAL_KINDS = ("review", "eval", "eval_judge", "curator", "learning", "graph_extract")
 _TOKEN = re.compile(r"[\wÀ-ỹ]+", re.U)
-HOOK_EVENTS = ("PostToolUse", "UserPromptSubmit", "Stop")
+HOOK_EVENTS = ("PostToolUse", "UserPromptSubmit", "Stop", "PreCompact")
 
 
 def _req(p: dict[str, Any], key: str) -> Any:
@@ -376,12 +379,20 @@ class SurfaceRpc:
         data = p.get("data") if isinstance(p.get("data"), dict) else {}
         payload = {"hook_event": event, "tool_name": data.get("tool_name"), "session_id": data.get("session_id"),
                    "prompt_chars": data.get("prompt_chars") if event == "UserPromptSubmit" else None,
-                   "stop_hook_active": data.get("stop_hook_active") if event == "Stop" else None}
+                   "stop_hook_active": data.get("stop_hook_active") if event == "Stop" else None,
+                   "trigger": data.get("trigger") if event == "PreCompact" and data.get("trigger") in ("manual", "auto") else None}
         ev = make_event("hook.observed", run["agent_id"], {k: v for k, v in payload.items() if v is not None}, run_id=run["id"])
         ev.source = "hook"
         if run.get("task_id"):
             ev.task_id, ev.team_id = run.get("task_id"), run.get("team_id")
         self.hub.publish(ev)
+        if event == "PreCompact" and run.get("status") in ("running", "queued"):
+            # graph memory (PR write): ngữ cảnh sắp bị nén → MỘT lần trích xuất nền cho session của run (nguồn = chỉ mục session_messages,
+            # không đọc transcript_path do hook gửi). Hook không chờ (fail-open, timeout 2 s).
+            try:
+                self.hub.learning.graph_extract.on_pre_compact(run)
+            except Exception:  # pragma: no cover
+                log.exception("xếp trích xuất graph (PreCompact) lỗi")
         return {"ok": True}
 
     def hook_timeout(self, p: dict[str, Any]) -> dict[str, Any]:
