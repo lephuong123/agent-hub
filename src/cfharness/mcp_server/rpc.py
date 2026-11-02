@@ -51,6 +51,8 @@ MUTATING = frozenset(
         "learn.signal_add", "learn.refine", "learn.review_cancel", "learn.propose", "learn.retry", "learn.rollback", "learn.policy_set", "knowledge.pin",
         # M5-A
         "learn.canary_check",
+        # graph memory (learning/graph_quality.py): bảo trì graph của NGƯỜI — trước đây chỉ nằm trong MUTATING_M4A nên không được bọc audit
+        "learn.graph_consolidate", "learn.graph_settle",
         # skill manager của người (learning/skill_rpc.py)
         "knowledge.skill_save", "knowledge.skill_archive", "knowledge.skill_restore", "knowledge.skill_import", "knowledge.skill_promote",
         # hardening CLI (mcp_server/surface_rpc.py)

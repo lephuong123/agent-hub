@@ -1338,6 +1338,12 @@ def _skill_routes() -> list[Any]:
     return _r()
 
 
+def _memory_routes() -> list[Any]:
+    from .memory_pages import routes as _r  # /memory… — xem + quản lý memory và graph memory, web/memory_pages.py
+
+    return _r()
+
+
 def _mcp_routes() -> list[Any]:
     from .mcp_pages import routes as _r
 
@@ -1404,6 +1410,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_extra_routes(),
         *_office_routes(),
         *_skill_routes(),
+        *_memory_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]

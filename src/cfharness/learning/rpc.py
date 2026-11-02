@@ -160,6 +160,11 @@ class LearningRpc:
         self.hub.agents.get_row(agent)
         return {"agent_id": agent, "versions": self.K.versions.version_map(agent)}
 
+    def graph_view(self, p: dict[str, Any]) -> dict[str, Any]:
+        from .graph_view import graph_view
+
+        return graph_view(self.hub, p)
+
     def canary_check(self, p: dict[str, Any]) -> list[dict[str, Any]]:
         if p.get("id"):
             return [self.L.canary.check(p["id"])]
@@ -207,6 +212,8 @@ class LearningRpc:
             "learn.graph_fact": lambda p: L().graph_quality.fact_history(_req(p, "id")),
             "learn.graph_consolidate": lambda p: L().graph_quality.consolidate(dry_run=bool(p.get("dry_run")), scope=p.get("scope"), owner=p.get("owner")),
             "learn.graph_settle": lambda p: L().graph_quality.settle(),
+            # trang web /memory/graph (learning/graph_view.py): đồ thị con CHỈ ĐỌC, cùng phạm vi nhìn + quét lúc nạp như memory.recall
+            "learn.graph_view": self.graph_view,
         }
 
 

@@ -67,7 +67,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "learn.propose", "learn.rollback", "learn.retry", "learn.refine", "learn.policy_set", "learn.review_cancel",
         "knowledge.pin", "curation.rollback", "eval.post_apply",
         # graph memory (learn graph …): xem graph MỌI agent + bảo trì (consolidation/chốt độ tin cậy). Agent tra graph của mình qua memory_recall
-        "learn.graph_stats", "learn.graph_fact", "learn.graph_consolidate", "learn.graph_settle",
+        "learn.graph_stats", "learn.graph_fact", "learn.graph_consolidate", "learn.graph_settle", "learn.graph_view",
         # skill manager của người (learning/skill_rpc.py): ghi skill với created_by=user — agent học qua learnself/review, không qua đây
         "knowledge.skill_save", "knowledge.skill_archive", "knowledge.skill_restore", "knowledge.skill_import", "knowledge.skill_promote",
         # golden task = chính sách an toàn (Q-07)
