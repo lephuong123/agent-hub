@@ -9,6 +9,9 @@
   (trừ `force`). Rollback KHÔNG bị giới hạn tần suất (FR-LN-18).
 - Memory tầng agent (MEMORY.md/USER.md — kho theo MỤC): rollback ĐẢO NGƯỢC đúng các mục entry đã thêm/sửa/xoá trên nội dung
   hiện tại (`invert_memory`), không khôi phục cả file → không cần chuỗi, không gỡ fact thêm sau, mục đã bị sửa tiếp thì bỏ qua.
+- Graph memory (`kind="graph"`, docs/dev-notes/plan-graph-memory.md): blob before/after = trạng thái JSON của đúng các HÀNG entry chạm
+  (`GraphStore.rows_state`); rollback THEO HÀNG (`GraphStore.invert_rows`): hàng entry tạo bị gỡ (`retracted_by`, không xoá cứng), hàng
+  entry đóng hiệu lực được mở lại, hàng đã bị đổi sau entry thì bỏ qua — không chuỗi, như memory theo mục. Đích = `graph://<scope>/<owner>`.
 - Xoá skill = chuyển `.archive/` (xoá mềm, FR-SG-06); rollback khôi phục đúng nội dung từ blob.
 - Cấu hình (hardening H-04): rollback CHỈ khôi phục các khoá entry đã đổi (`target_ref` ∪ khoá khác nhau before/after; SOUL chỉ
   khi entry đổi SOUL), không ghi đè khoá khác. "Cùng đích" của cấu hình = trùng ít nhất một khoá. Khoá của entry bị sửa sau
@@ -143,7 +146,7 @@ class Change:
     target_ref: str
     op: str  # add | patch | merge | archive | delete | rollback
     actor: str
-    kind: str = "file"  # file | tree | config
+    kind: str = "file"  # file | tree | config | graph
     path: Path | None = None
     after: bytes | None = None  # file: nội dung mới; tree: dùng `files`
     files: dict[str, bytes | None] = field(default_factory=dict)  # tree: rel → nội dung (None = bỏ file)
@@ -159,6 +162,21 @@ class Change:
     flags: list[str] = field(default_factory=list)
     created_by: str = "agent"  # provenance cho skill mới
     rollback_of: str | None = None
+    graph_rows: list[dict[str, Any]] = field(default_factory=list)  # graph: [{table, id, row}] — hàng SAU (GraphStore.plan_ops)
+    graph_key: str | None = None  # graph: `graph://<scope>/<owner>` (đường dẫn tổng hợp cho canary/ghim)
+
+
+def change_key(ch: Any) -> str:
+    """Khoá đích của một Change cho canary (một đích một canary) và ghim: đường dẫn file/cây, hoặc `graph://…` cho graph."""
+    gk = getattr(ch, "graph_key", None)
+    if gk:
+        return str(gk)
+    p = getattr(ch, "path", None)
+    return str(p) if p else ""
+
+
+def is_entry_graph(e: dict[str, Any]) -> bool:
+    return e.get("blob_kind") == "graph"
 
 
 def is_entry_memory(e: dict[str, Any]) -> bool:
@@ -211,6 +229,17 @@ class Ledger:
         soul_p = Path(row["home_path"]) / "SOUL.md"
         return {"config": {k: cfg.get(k) for k in CONFIG_FIELDS}, "soul": soul_p.read_text(encoding="utf-8") if soul_p.exists() else ""}
 
+    def graph(self):
+        from ..knowledge.graph import GraphStore
+
+        return GraphStore(self.conn)
+
+    def state_bytes(self, ch: Change) -> bytes | None:
+        """Trạng thái đích hiện tại (blob) của một Change — mọi kind, kể cả graph."""
+        if ch.kind == "graph":
+            return self.graph().dump_state(self.graph().rows_state(f"{m['table']}:{m['id']}" for m in ch.graph_rows))
+        return self._current_bytes(ch.kind, ch.path, ch.agent_id)
+
     def _current_bytes(self, ch_kind: str, path: Path | None, agent_id: str | None) -> bytes | None:
         if ch_kind == "config":
             return json.dumps(self._config_state(agent_id or ""), sort_keys=True, ensure_ascii=False).encode("utf-8")
@@ -223,7 +252,8 @@ class Ledger:
     # ------------------------------------------------------------------ áp dụng (duy nhất)
     def apply(self, ch: Change) -> dict[str, Any]:
         ks = self.hub.knowledge
-        before = self._current_bytes(ch.kind, ch.path, ch.agent_id)
+        eid = "le_" + uuid.uuid4().hex[:12]
+        before = self.state_bytes(ch)
         before_sha = self.blobs.put(before)
         snap_id = "sn_" + uuid.uuid4().hex[:12]
         self.conn.execute("INSERT INTO snapshots (id, kind, scope, owner_id, target, target_ref, blob, created_at) VALUES (?,?,?,?,?,?,?,?)",
@@ -262,15 +292,16 @@ class Ledger:
                             p.parent.mkdir(parents=True, exist_ok=True)
                             p.write_bytes(data)
                 self._register_tree(ch)
+        elif ch.kind == "graph":
+            self.graph().write_rows(ch.graph_rows, eid)
         elif ch.kind == "config":
             rev_actor = "rollback" if ch.op == "rollback" else (ch.actor if str(ch.actor).startswith(MANAGER_ACTOR_PREFIX) else "learning")
             res = self.hub.agents.update(ch.agent_id or "", dict(ch.config_changes or {}), soul=ch.soul, actor=rev_actor)
             revision = res.get("config_revision")
         else:
             raise HubError(f"kind thay đổi không hợp lệ: {ch.kind}")
-        after = self._current_bytes(ch.kind, ch.path, ch.agent_id) if not ch.archive else None
+        after = self.state_bytes(ch) if not ch.archive else None
         after_sha = self.blobs.put(after)
-        eid = "le_" + uuid.uuid4().hex[:12]
         row = {
             "id": eid, "proposal_id": ch.proposal_id, "scope": ch.scope, "owner_id": ch.owner_id, "agent_id": ch.agent_id,
             "target": ch.target, "target_ref": ch.target_ref, "op": ch.op, "risk_class": ch.risk_class, "snapshot_id": snap_id,
@@ -349,7 +380,7 @@ class Ledger:
 
     def _path_for(self, e: dict[str, Any]) -> Path | None:
         ks = self.hub.knowledge
-        if e["blob_kind"] == "config":
+        if e["blob_kind"] in ("config", "graph"):
             return None
         if e["blob_kind"] == "tree":
             return ks.skill_dir(e["scope"], e["owner_id"], e["target_ref"])
@@ -359,7 +390,7 @@ class Ledger:
         return ks.memory_path(e["scope"], e["owner_id"], store)
 
     def later_entries(self, e: dict[str, Any]) -> list[dict[str, Any]]:
-        if is_entry_memory(e):
+        if is_entry_memory(e) or is_entry_graph(e):
             return []  # rollback theo mục: thay đổi sau trên cùng file độc lập
         if e.get("blob_kind") == "config":
             # cấu hình: đích = TẬP KHOÁ — entry sau đổi ít nhất một khoá trùng mới là "cùng đích" (H-04)
@@ -445,6 +476,14 @@ class Ledger:
                                f"xem `learn show {e['id']}`; dùng --force để vẫn khôi phục", data={"drifted": drifted})
             ch.config_changes = {k: (st_before.get("config") or {}).get(k) for k in keys}
             ch.soul = (st_before.get("soul") or "") if soul else None
+        elif is_entry_graph(e):
+            gs = self.graph()
+            b_state, a_state = gs.load_state(before), gs.load_state(self.blobs.get(e.get("after_blob")))
+            rows, skipped = gs.invert_rows(b_state, a_state, gs.rows_state(a_state.keys()))
+            ch.graph_rows, ch.graph_key = rows, str(e.get("target_ref") or "")
+            if skipped:
+                ch.flags = ["partial"]
+                ch.summary = f"{ch.summary} — bỏ qua {len(skipped)} hàng đã đổi sau entry"
         elif is_entry_memory(e):
             from ..knowledge.store import parse_memory, render_memory
 
@@ -503,6 +542,16 @@ class Ledger:
             st = json.loads((before or b"{}").decode("utf-8"))
             cfg.update(st.get("config") or {})
             (home / "SOUL.md").write_text(st.get("soul") or "", encoding="utf-8")
+            return True
+        if e["blob_kind"] == "graph":  # bản chụp graph trong bản sao home (evals/overlay.make_home)
+            from ..knowledge.graph import SNAPSHOT_FILE, GraphStore
+
+            p = home / SNAPSHOT_FILE
+            if not p.exists():
+                return False
+            snap = json.loads(p.read_text(encoding="utf-8"))
+            GraphStore.revert_on_snapshot(snap, GraphStore.load_state(before), GraphStore.load_state(self.blobs.get(e.get("after_blob"))))
+            p.write_bytes(GraphStore.dump_snapshot(snap))
             return True
         if e["blob_kind"] == "tree":
             d = home / "skills" / e["target_ref"]

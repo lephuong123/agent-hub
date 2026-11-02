@@ -45,6 +45,9 @@ POLICY_DEFAULTS: dict[str, Any] = {
         # tool `memory` của agent (kiểu Hermes: không giới hạn số lần ghi; trần ký tự kho là thứ hãm). 0 = không giới hạn.
         # Không dùng chung suất với review (max_changes_per_agent_per_day / max_team_global_changes_per_day).
         "agent_tool_max_per_day": 0,
+        # graph memory (plan-graph-memory.md): không có trần ký tự tổng → suất ghi graph RIÊNG theo agent/ngày (mọi tầng, mọi bên ghi
+        # trừ người). Một lần trích xuất cuối session = một lần ghi. 0 = không giới hạn.
+        "graph_writes_per_agent_per_day": 20,
     },
 }
 

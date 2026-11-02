@@ -499,3 +499,21 @@ Plan ngang Hermes còn lại: `docs/dev-notes/plan-memory-hermes-parity.md`. Too
 (lead → team mình lead; điều phối viên / policy `agents.<id>.shared_memory_write` → mọi tầng) — test `tests/test_memory_tool_parity.py`. `session_search` giữ kết quả tool 2.000 ký tự
 (`claude_adapter.RESULT_PREVIEW_MAX` = `session_search.TOOL_RESULT_MAX`) và `group` gộp hit theo luồng — mặc định bật cho hub-self + MCP,
 tắt cho RPC `session.search`/CLI (`--group`). Test: `tests/test_session_search.py`.
+
+## Graph memory — kho thực thể + fact có thời gian (kiểu Graphiti, SQLite)
+Plan (đối chiếu Hermes, chia PR store → retrieval ∥ write → quality, thay PR 3/4 của `plan-memory-hermes-parity.md`): `docs/dev-notes/plan-graph-memory.md`.
+Đã làm (PR store): `docs/dev-notes/graph-memory.md`. Migration **v19** (Python `knowledge.graph.schema.migrate_v19` — migration Python mới: thêm
+tiền tố vào `store.PY_MIGRATION_PREFIXES`). Test: `tests/test_graph_memory.py`.
+
+| Module | Vai trò |
+|---|---|
+| `knowledge/graph/` | `GraphStore` (đọc, `plan_ops` THUẦN, hàng cho ledger, bản chụp eval, purge/clone/export, vector), `text.py` (NFC + gấp dấu), `schema.py` (bảng `mem_*`, FTS5) |
+| `learning/ledger.py` | `Change.kind="graph"` (`graph_rows`, `graph_key=graph://<scope>/<owner>`), rollback THEO HÀNG (`retracted_by`, không xoá cứng) |
+| `learning/pipeline.py`, `guard.py` | target `graph`: threat scan, `fact_too_long`, `duplicate_fact`, pin `graph`/`graph_fact`, suất `rate.graph_writes_per_agent_per_day` (riêng, không trần tổng) |
+| `learning/service.py` | `graph_write(...)`: quyền tầng = tool `memory` (`memory_scopes`) |
+
+Bất biến: graph CHỈ ghi qua `pipeline.propose(target="graph")` / `LearningService.graph_write` → `Ledger.apply` (không INSERT trực tiếp vào `mem_*`
+ngoài `GraphStore.write_rows` do Ledger gọi; ngoại lệ: clone/import agent mới, purge). Mọi hàng có `scope` + `owner_id`; đọc LUÔN qua
+`GraphStore.visible`/`hidden=versions.graph_hidden(agent)` (ghim canary). Output tool/web không bao giờ ghi thẳng vào graph; văn bản episode
+không bao giờ chèn nguyên văn vào ngữ cảnh. Eval: graph vào bản sao home qua `.graph_snapshot.json` (băm trong fingerprint), không đọc DB sống.
+Thêm cột vào `mem_*` → migration mới; cột thay đổi ngoài ledger → thêm vào `graph.store.VOLATILE`.

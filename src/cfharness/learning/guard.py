@@ -102,7 +102,7 @@ class LearningGuard:
 
     # ------------------------------------------------------------------ luật
     def _policy_touch(self, prop: dict[str, Any], plan: dict[str, Any]) -> Block | None:
-        if prop["target"] not in ("memory", "skill", "config", "user_profile"):
+        if prop["target"] not in ("memory", "skill", "config", "user_profile", "graph"):
             return Block("policy_touch", "target", f"target '{prop['target']}' không thuộc tri thức/cấu hình agent")
         pl = prop.get("payload") or {}
         refs = [str(prop.get("target_ref") or ""), str(pl.get("file_path") or ""), str(pl.get("name") or ""), str(pl.get("absorbed_into") or "")]
@@ -129,6 +129,12 @@ class LearningGuard:
             for k in (prop.get("payload") or {}).get("changes") or {}:
                 if ks.is_pinned("agent", prop.get("agent_id"), "config", k) and prop.get("created_by") != "user":
                     return Block("guard_rule", "pinned", f"trường cấu hình '{k}' đã được người pin")
+        if t == "graph" and prop.get("created_by") != "user":  # người pin cả graph một tầng, hoặc TỪNG fact (không bị đóng hiệu lực tự động)
+            if ks.is_pinned(plan.get("scope", prop["scope"]), plan.get("owner"), "graph", ref):
+                return Block("guard_rule", "pinned", f"graph {ref} đã được người pin")
+            for fid in plan.get("touched_facts") or []:
+                if ks.is_pinned(plan.get("scope", prop["scope"]), plan.get("owner"), "graph_fact", fid):
+                    return Block("guard_rule", "pinned", f"fact {fid} đã được người pin — không đóng hiệu lực tự động")
         if t in ("memory", "user_profile") and ks.is_pinned(plan.get("scope", prop["scope"]), plan.get("owner"), "memory", ref) and prop.get("created_by") != "user":
             return Block("guard_rule", "pinned", f"{ref} đã được người pin")
         if t in ("memory", "user_profile") and prop.get("created_by") != "user":  # M5-A (FR-LN-14): người pin TỪNG DÒNG
@@ -147,6 +153,8 @@ class LearningGuard:
         if found:
             cat = "policy_touch" if "policy_touch" in found else "self_escalation" if "self_escalation" in found else "guard_rule"
             return Block(cat, "threat_scan", "nội dung chứa mẫu nguy hiểm: " + ", ".join(found[:5]))
+        if prop["target"] == "graph":
+            return None  # graph: fact là DỮ LIỆU khai báo (đa ngôn ngữ, bge-m3) — chỉ threat scan; luật văn phong memory không áp dụng
         if prop.get("created_by") == "user":
             return None
         if NEGATIVE_CLAIM.search(text):
@@ -175,6 +183,13 @@ class LearningGuard:
                              f"{prop.get('target_ref')} sẽ là {plan['chars_after']}/{plan['limit']} ký tự — gửi MỘT lô `operations` vừa gộp/rút gọn/xoá mục cũ (patch/remove) vừa thêm mục mới")
             if plan.get("duplicate_of"):
                 return Block("guard_rule", "one_fact_one_store", f"fact này đã có ở {plan['duplicate_of']} — một fact chỉ ở một kho")
+        if prop["target"] == "graph":  # KHÔNG có trần tổng (graph không giới hạn); trần từng fact + trùng lặp
+            flim = int(lim.get("graph_fact_chars") or 0)
+            if flim and plan.get("longest_written", 0) > flim and prop.get("created_by") != "user":
+                return Block("guard_rule", "fact_too_long", f"một fact graph {plan['longest_written']} > {flim} ký tự — mỗi fact là MỘT câu ngắn")
+            g = plan.get("graph") or {}
+            if not g.get("changed"):
+                return Block("guard_rule", "duplicate_fact", "mọi fact trong lô đã có trong graph (còn hiệu lực) — không có gì mới để ghi")
         if prop["target"] == "skill":
             if plan.get("skill_chars", 0) > lim["skill_chars"]:
                 return Block("guard_rule", "skill_limit", f"SKILL.md {plan['skill_chars']} > {lim['skill_chars']} ký tự — đẩy chiều sâu vào references/")

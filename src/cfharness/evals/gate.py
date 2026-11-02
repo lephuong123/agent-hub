@@ -126,9 +126,9 @@ class EvalGate:
             budget = _Budget(self._agent_budget(agent))
             try:
                 src = Path(agent["home_path"])
-                base_home = ov.make_home(src, tmp / "baseline")
+                base_home = ov.make_home(src, tmp / "baseline", hub=self.hub, agent_id=agent_id)
                 base_cfg = ov.base_config(agent)
-                cand_home = ov.make_home(src, tmp / "candidate")
+                cand_home = ov.make_home(src, tmp / "candidate", hub=self.hub, agent_id=agent_id)
                 cand_cfg = ov.base_config(agent)
                 try:
                     ov.materialize(self.hub, cand_home, cand_cfg, p)
@@ -178,9 +178,9 @@ class EvalGate:
             budget = _Budget(self._agent_budget(agent))
             try:
                 src = Path(agent["home_path"])
-                after_home = ov.make_home(src, tmp / "after")
+                after_home = ov.make_home(src, tmp / "after", hub=self.hub, agent_id=agent_id)
                 after_cfg = ov.base_config(agent)
-                before_home = ov.make_home(src, tmp / "before")
+                before_home = ov.make_home(src, tmp / "before", hub=self.hub, agent_id=agent_id)
                 before_cfg = ov.base_config(agent)
                 rebuilt = all(ov.materialize_before(self.hub, before_home, before_cfg, e) for e in reversed(ents))
                 after = await self._eval_variant(eval_id, agent, tasks, after_home, after_cfg, "after", budget)
@@ -281,7 +281,7 @@ class EvalGate:
             tmp = self._tmp(eval_id)
             budget = _Budget(self._agent_budget(agent))
             try:
-                home = ov.make_home(Path(agent["home_path"]), tmp / "current")
+                home = ov.make_home(Path(agent["home_path"]), tmp / "current", hub=self.hub, agent_id=agent["id"])
                 res = await self._eval_variant(eval_id, agent, tasks, home, ov.base_config(agent), "manual", budget, n=n, use_cache=False)
                 m = _mean([t["mean"] for t in res.values() if t["mean"] is not None])
                 v = GateVerdict("passed", {"after": None if m is None else round(m, 4), "per_task": self._per_task({}, res)}, cost_usd=round(budget.spent, 6), reason="manual")

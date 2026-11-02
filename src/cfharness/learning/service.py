@@ -303,6 +303,34 @@ class LearningService:
                            + ("" if scope == "agent" else f" Shared with every agent of this {scope} tier; it is watched and rolled back automatically if it causes regressions."))
         return out
 
+    def graph_write(self, agent_id: str, operations: list[dict[str, Any]], *, scope: str = "agent", team_id: str | None = None,
+                    episode: dict[str, Any] | None = None, created_by: str = "agent", run_id: str | None = None, rationale: str = "") -> dict[str, Any]:
+        """Ghi graph memory (docs/dev-notes/plan-graph-memory.md) — cửa vào chung cho trích xuất cuối session (PR write) và tool hub-self.
+        Quyền tầng GIỐNG tool `memory`: `created_by` agent/review chỉ ghi tầng trong `memory_scopes` (agent; lead → team mình lead;
+        điều phối viên / policy `shared_memory_write` → mọi tầng). Người (`created_by=user`) ghi mọi tầng. Vẫn qua pipeline: guard (threat
+        scan, trần từng fact, trùng lặp), suất `rate.graph_writes_per_agent_per_day`, ledger (rollback theo hàng), canary watch/canary."""
+        if scope not in ("agent", "team", "global"):
+            raise HubError("scope phải là agent|team|global")
+        if run_id:
+            run = self.hub.store.get_run(run_id) or {}
+            if run.get("kind") in ("eval", "eval_judge", "curator") or (run.get("run_opts") or {}).get("eval_overlay"):
+                raise HubError("graph memory không ghi được từ run eval/curator", code=-32003)
+        owner = None
+        if created_by != "user":
+            allowed = self.memory_scopes(agent_id)
+            if scope not in allowed:
+                raise Blocked(f"graph: '{agent_id}' không được ghi tầng {scope} (được: {', '.join(allowed)}) — người bật bằng "
+                              f"`cfharness learn policy set agents.{agent_id}.shared_memory_write true`")
+            if scope == "team":
+                owner = self._shared_team(agent_id, team_id, "global" in allowed)
+        elif scope == "team":
+            owner = self.pipeline._resolve_team(agent_id, team_id)
+        payload: dict[str, Any] = {"operations": list(operations or [])}
+        if episode:
+            payload["episode"] = dict(episode)
+        return self.pipeline.propose(target="graph", op="patch", agent_id=agent_id, scope=scope, team_id=owner, payload=payload,
+                                     created_by=created_by, run_id=run_id, rationale=rationale)
+
     # ------------------------------------------------------------------ hợp đồng B
     def materialize(self, proposal: dict[str, Any], home: Path, cfg: dict[str, Any]) -> dict[str, Any]:
         return self.pipeline.materialize(proposal, home, cfg)

@@ -55,6 +55,26 @@ class TierVersions:
         """{đường dẫn tuyệt đối đích: canary} mà agent bị ghim về bản TRƯỚC (agent ≠ agent canary)."""
         return {p["path"]: p for p in self.active_pins() if p["canary_agent_id"] != agent_id and p.get("path")}
 
+    def graph_hidden(self, agent_id: str | None) -> set[str]:
+        """Ledger entry graph đang CANARY mà agent bị ghim về bản trước (agent ≠ agent canary): đọc graph bỏ hàng các entry này tạo và
+        coi phép đóng hiệu lực của chúng như chưa xảy ra (`GraphStore.visible`). Đích graph = `graph://<scope>/<owner>`."""
+        try:
+            rows = self.hub.store.conn.execute(
+                "SELECT ledger_entry_id, canary_agent_id FROM tier_canaries WHERE status='canary' AND mode='canary' AND path LIKE 'graph://%' "
+                "AND ledger_entry_id IS NOT NULL").fetchall()
+        except Exception:
+            return set()
+        return {r[0] for r in rows if r[1] != agent_id}
+
+    def graph_tiers(self, agent_id: str) -> list[tuple[str, str | None]]:
+        """Tầng graph agent đọc được: chính nó, team nó là thành viên, global (như memory/skill)."""
+        return self.ks.agent_tiers(agent_id)
+
+    def graph_snapshot(self, agent_id: str) -> dict[str, Any]:
+        from .graph import GraphStore
+
+        return GraphStore(self.hub.store.conn).snapshot(self.graph_tiers(agent_id), self.graph_hidden(agent_id))
+
     def blob_text(self, sha: str | None) -> str | None:
         if not sha:
             return None

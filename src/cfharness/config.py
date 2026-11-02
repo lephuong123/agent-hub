@@ -331,7 +331,7 @@ DEFAULTS: dict[str, Any] = {
         "auto_apply_max_chars": 800,  # Q-03 ngưỡng đường nhanh L1
         "auto_apply_max_items": 1,
         "limits": {"memory_chars": 2200, "user_chars": 1375, "team_memory_chars": 2200, "skill_chars": 100_000, "skill_desc_chars": 60,
-                   "memory_entry_chars": 600},  # memory_entry_chars: trần một mục memory do học ghi (một fact, không phải cả đoạn)
+                   "memory_entry_chars": 600, "graph_fact_chars": 500},  # graph_fact_chars: trần MỘT fact graph (không có trần tổng)  # memory_entry_chars: trần một mục memory do học ghi (một fact, không phải cả đoạn)
         "repeat_pattern_n": 3,  # FR-LN-01: n-gram tool + số run tối thiểu
         "repeat_pattern_window_runs": 20,
         "failure_min_runs": 2,

@@ -785,7 +785,18 @@ MIGRATIONS: list[str] = [
     ALTER TABLE approval_requests ADD COLUMN timeout_action TEXT;
     CREATE INDEX IF NOT EXISTS approvals_routed ON approval_requests(routed_to, status);
     """,
+    # v19 — graph memory (docs/dev-notes/plan-graph-memory.md): `mem_episodes`/`mem_entities`/`mem_facts` (scope + owner mọi hàng,
+    # thời gian kép, `retracted_by` cho rollback theo hàng) + `mem_vectors` (tuỳ chọn, model+phiên bản mỗi vector) + FTS5 trên cột gấp
+    # dấu (tokenizer chọn lúc chạy như v17). Là HÀM vì cần dò tokenizer. GỘP NHÁNH: nhánh khác thêm v19 → đánh số lại, không sửa cũ.
+    "knowledge.graph.schema.migrate_v19",
 ]
+
+# Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
+PY_MIGRATION_PREFIXES = ("session_search.", "knowledge.graph.schema.")
+
+
+def is_py_migration(sql: str) -> bool:
+    return sql.startswith(PY_MIGRATION_PREFIXES) and not any(c.isspace() for c in sql)
 
 JSON_COLS = {
     "agents": ("tool_policy", "mcp_servers", "limits", "subagents", "result_schema"),
@@ -848,7 +859,7 @@ class Store:
         cur = self.schema_version
         for i, sql in enumerate(MIGRATIONS[cur:], start=cur + 1):
             with self.tx():
-                if sql.startswith("session_search."):  # migration bằng Python (v17): "module.hàm" trong gói cfharness
+                if is_py_migration(sql):  # migration bằng Python (v17, v19): "module.hàm" trong gói cfharness
                     import importlib
 
                     mod, fn = sql.rsplit(".", 1)

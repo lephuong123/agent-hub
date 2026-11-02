@@ -7,6 +7,7 @@ Xoá = xoá mềm (FR-SG-06): chuyển home vào `HUB_HOME/trash/agents/`, giữ
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from datetime import datetime, timezone
@@ -460,6 +461,7 @@ class AgentService:
 
 # ============================================================================ M3: clone / export / import (FR-AG-06)
 EXPORT_FORMAT = "cfharness-agent/1"
+GRAPH_EXPORT = "graph.json"  # graph memory tầng agent trong gói export (with_memory) — bảng → danh sách hàng (GraphStore.export_owner)
 
 
 def _copy_tree(src: Path, dst: Path) -> None:
@@ -468,7 +470,8 @@ def _copy_tree(src: Path, dst: Path) -> None:
 
 
 def clone_agent(svc: AgentService, src: str, dst: str, *, with_memory: bool = False, name: str | None = None) -> dict[str, Any]:
-    """Sao chép cấu hình + SOUL + skill (giữ nguyên nội dung/`created_by` trong SKILL.md); memory chỉ khi `with_memory`."""
+    """Sao chép cấu hình + SOUL + skill (giữ nguyên nội dung/`created_by` trong SKILL.md); memory chỉ khi `with_memory` — gồm cả graph
+    memory tầng agent (hàng chép sang agent mới với id mới, không qua ledger như MEMORY.md)."""
     row = svc.get_row(src)
     cfg = svc.config_of(row).model_dump()
     cfg["id"] = dst
@@ -482,6 +485,10 @@ def clone_agent(svc: AgentService, src: str, dst: str, *, with_memory: bool = Fa
         for f in ("MEMORY.md", "USER.md"):
             if (src_home / f).exists():
                 shutil.copy2(src_home / f, home / f)
+        from .knowledge.graph import GraphStore
+
+        gs = GraphStore(svc.store.conn)
+        gs.import_rows(gs.export_owner("agent", src), "agent", dst, agent_id=dst)
     svc.store.update_agent(dst, {"cloned_from": src})
     svc.publish(make_event("agent.cloned", dst, {"agent_id": dst, "cloned_from": src, "with_memory": with_memory}))
     return svc.show(dst)
@@ -491,7 +498,6 @@ def export_agent(svc: AgentService, agent_id: str, dest: str | Path, *, with_mem
     """`.tar.gz` gồm manifest, config.yaml, SOUL.md, skills/ (+ MEMORY/USER nếu `with_memory`). KHÔNG chứa secret:
     cấu hình chỉ có tham chiếu `${NAME}`; mọi file text được lọc qua `scrub` (che giá trị secret đã biết)."""
     import io
-    import json
     import tarfile
 
     row = svc.get_row(agent_id)
@@ -510,6 +516,12 @@ def export_agent(svc: AgentService, agent_id: str, dest: str | Path, *, with_mem
     for n in names:
         if (home / n).exists():
             files.append((n, (home / n).read_bytes()))
+    if with_memory:  # graph memory tầng agent (hàng chưa bị gỡ, kể cả fact đã đóng hiệu lực) — qua `scrub` như mọi file text
+        from .knowledge.graph import GraphStore
+
+        g = GraphStore(svc.store.conn).export_owner("agent", agent_id)
+        if any(g.values()):
+            files.append((GRAPH_EXPORT, json.dumps(g, ensure_ascii=False, indent=1, default=str).encode("utf-8")))
     skills = home / "skills"
     if skills.is_dir():
         for p in sorted(skills.rglob("*")):
@@ -566,6 +578,13 @@ def import_agent(svc: AgentService, path: str | Path, *, new_id: str | None = No
         for f in ("MEMORY.md", "USER.md"):
             if (root / f).exists():
                 shutil.copy2(root / f, home / f)
+        if (root / GRAPH_EXPORT).exists():
+            from .knowledge.graph import GraphStore
+
+            data = json.loads((root / GRAPH_EXPORT).read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise HubError(f"{GRAPH_EXPORT} không hợp lệ")
+            GraphStore(svc.store.conn).import_rows(data, "agent", cfg["id"], agent_id=cfg["id"])
     svc.store.update_agent(cfg["id"], {"cloned_from": f"import:{manifest['agent_id']}"})
     svc.publish(make_event("agent.imported", cfg["id"], {"agent_id": cfg["id"], "from": manifest["agent_id"], "path": str(path)}))
     return svc.show(cfg["id"])
