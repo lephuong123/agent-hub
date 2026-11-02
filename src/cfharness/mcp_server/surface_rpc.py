@@ -343,7 +343,7 @@ class SurfaceRpc:
 
         run, _vis = self._self_run_vis(p, "memory_recall")
         home, ev = _eval_home(run)
-        return provider_for(self.hub).recall(run["agent_id"], dict(p.get("args") or {}), home=home, eval_run=ev)
+        return provider_for(self.hub).recall(run["agent_id"], dict(p.get("args") or {}), home=home, eval_run=ev, run_id=None if ev else run["id"])
 
     def _session(self, args: dict[str, Any], vis: Any) -> dict[str, Any]:
         from .. import session_search as ss

@@ -1,7 +1,11 @@
-# Graph memory — đã làm (PR 1: store, PR 3: write)
+# Graph memory — đã làm (store, retrieval, write, quality — nhánh `feat/graph-memory`)
 
-Plan + đối chiếu Hermes + chia PR: `plan-graph-memory.md`. PR store là nền móng; PR write (mục cuối) tự GHI graph (trích xuất theo lô +
-tool `memory` target=graph). CHƯA có gì đọc graph vào prompt (recall = PR retrieval) — graph được ghi nhưng agent chưa thấy nó.
+Plan + đối chiếu Hermes + chia PR: `plan-graph-memory.md`. Nhánh `feat/graph-memory` = `feat/graph-memory-retrieval` (store → retrieval)
++ merge `feat/graph-memory-write` + PR quality (mục cuối). Vòng đầy đủ: agent nói chuyện → trích xuất theo lô ghi fact (PR write) → fact
+được chèn vào tin user đầu / tra bằng `memory_recall` (PR retrieval) → kết quả run đẩy độ tin cậy lên/xuống, consolidation gộp trùng,
+golden memory chấm recall@k / stale-fact-rate trong eval gate (PR quality).
+
+Các mục "Việc dở" theo từng PR bên dưới là ghi chép LÚC PR đó xong; trạng thái hiện tại xem § "Tích hợp" và § "PR quality".
 
 ## Đã làm
 | Phần | Ở đâu |
@@ -133,8 +137,70 @@ classifier + `SCOPED_READ`, RPC ràng run, run eval đọc bản chụp, `memory
 - Cửa sổ giữ tin MỚI nhất; phần cũ hơn quá trần bị bỏ (`omitted` trong kết quả) — PreCompact giúp session dài được trích từng đoạn.
 
 ## Việc dở sau PR write
-- Recall (PR retrieval) — chưa có gì đọc graph vào prompt. Bộ khớp embedding (`set_embed_matcher`) chưa cắm.
+- ~~Recall (PR retrieval) — chưa có gì đọc graph vào prompt. Bộ khớp embedding (`set_embed_matcher`) chưa cắm.~~ Xong khi tích hợp (dưới).
 - Chưa mirror ghi MEMORY.md (tool `memory` target memory/user) thành episode (`on_memory_write` của Hermes).
 - `agent_context` không primary (subagent/cron) của Hermes: hub không phân biệt — run do lịch chạy vẫn được trích như run thường.
 - LLM xác nhận mâu thuẫn / gộp hai thực thể đã có: PR quality.
 - `review_scope=graph` không đưa Signal (correction…) vào prompt trích xuất.
+
+# Tích hợp (nhánh `feat/graph-memory`)
+
+Merge commit `feat/graph-memory-write` → `feat/graph-memory` (từ `feat/graph-memory-retrieval`). Xung đột chỉ ở tài liệu (AGENTS.md, dev note,
+plan) — giữ cả hai. Sửa sau merge:
+- `provider.TECHNICAL_KINDS` thêm `graph_extract` (không prefetch cho run kỹ thuật mới của PR write).
+- **Cắm bộ khớp thực thể bằng embedding** (`resolve.set_embed_matcher`): `embed.entity_matcher(hub, graph_memory.vector.entity_match=0.92)`,
+  cắm trong `start_vector_loop` (chỉ khi có embedder). Vòng nền chỉ mục thêm vector TÊN thực thể (`mem_vectors.item_kind='entity'`, sau khi hết
+  fact). Bộ khớp chỉ chạy khi model đã nạp (`ready`), chỉ trong cùng tầng, và chỉ cho DB của hub đã cắm nó (matcher là biến toàn cục).
+- Hook ghi của `MemoryProvider` (`sync_turn`, `on_session_end`, `on_pre_compress`) VẪN là no-op: trigger thật đã nằm ở `GraphExtractor`
+  (`on_run_terminal`, `on_pre_compact`, `on_session_rotated`) — không nhân đôi đường gọi.
+
+# PR quality — độ chính xác tăng theo thời gian
+
+| Phần | Ở đâu |
+|---|---|
+| Migration **v20** (SQL): `mem_fact_uses` (fact_id, run_id, agent_id, channel prefetch/recall, used_at, outcome NULL/up/down/neutral, delta, settled_at) | `store.py` |
+| Ghi lượt dùng: prefetch (`RunManager._memory_prefetch` → `prefetch_for_run(run_id)`) và tool `memory_recall` (`memory.recall_self`, run_id của run). Một lượt / (fact, run). Không ghi cho người tra cứu (không có run) và run eval (đọc bản chụp) | `knowledge/graph/provider.py` (`record`), `learning/graph_quality.record_uses`, `mcp_server/surface_rpc.py` |
+| **Độ tin cậy theo kết quả** `GraphQuality.settle()`: run XẤU → −0.1 (thay đổi do run tạo — `proposals.run_id` — bị `regression_monitor`/`eval_gate`/`canary` rollback; run nằm trong `regression_watch.observed.run_ids` của entry đã rollback; run có Signal correction/reject/cancel/edit_output/undo). Run `completed` kết thúc ≥ `settle_h`=6 h mà không xấu → +0.03. Lỗi/huỷ/không còn run → trung lập. `up` hoá xấu sau → lật thành `down` đúng một lần. Kẹp [0.05, 0.95] | `learning/graph_quality.py`, `graph_memory.quality.*` |
+| **Consolidation** `GraphQuality.consolidate()`: theo tầng — gộp thực thể (khoá `entity_key` = canon bỏ ký tự không phải chữ/số, hoặc tên là alias của thực thể khác; giữ thực thể cũ nhất) + gộp fact gần trùng cùng (src, relation) (Jaccard từ ≥ 0.8 hoặc cosine bge-m3 ≥ 0.95; khác đích thì không gộp; giữ fact tin cậy cao nhất, hoà → mới nhất; tin cậy fact giữ = max nhóm). Bỏ qua fact/graph người pin. Qua `pipeline.propose(target="graph", created_by="curator")` — guard + ledger (rollback theo hàng) + canary; KHÔNG ăn suất graph của agent | `learning/graph_quality.py`, `pipeline.rate_check` |
+| Thao tác graph mới: `merge_entity {entity, into}` (alias + chép fact sang thực thể giữ, bản cũ đóng với `invalidated_by` = bản chép, `valid_to` giữ nguyên) và `supersede_fact {fact_id, by}` (đóng + liên kết thay thế). Không thao tác nào chạm `mem_episodes` | `knowledge/graph/store.py` (`plan_ops`) |
+| Vòng nền: `LearningOps.tick` → `graph_quality.tick()` — settle mỗi `settle_interval_s`=300 s, consolidation mỗi `graph_memory.consolidate.interval_h`=24 h | `learning_ops/wiring.py` |
+| **Golden memory**: checker `memory_recall` (`k`, `gold_fact_ids`/`gold_contains`, `gold_answer`, `as_of`, `stale_fact_ids`/`stale_contains`, `forbidden_contains`/`forbidden_fact_ids`, `pass_threshold`). Chấm tất định trên `.graph_snapshot.json` của bản sao home: recall@k × (1 − stale-fact-rate); thăm dò đầu độc lọt vào top-k HOẶC vào graph → 0. `as_of` quá khứ → tra cả lịch sử, chỉ tính fact còn hiệu lực ngày đó | `evals/memory_golden.py`, `evals/checkers.py` |
+| Eval gate: task memory KHÔNG chạy run (không tốn tiền, không gọi model). `_tasks_for`: lô entry toàn `graph` → chỉ task memory (không có → task thường); đích khác → bỏ task memory. `scores.memory = {after, before}` (recall@k, stale_rate, poisoned trung bình mẫu). Graph ở tầng agent là L1 → chấm trong lô hằng ngày `run_batch_l1`, tụt → `eval_gate` tự rollback | `evals/gate.py` |
+| Bộ mẫu: `fixtures/graph_memory_golden.json` — 9 fact (hai lần ghi: có cập nhật theme/deadline), 7 câu hỏi: EN, VI có dấu, VI không dấu, trộn VI/EN (cập nhật), EN (cập nhật), theo thời gian (`as_of` 2025), thăm dò đầu độc. `seed_fixture(hub, agent)` ghi graph (created_by=user) + tạo golden task (người) | `evals/memory_golden.py` |
+| CLI client mỏng `cfharness learn graph stats\|search\|show\|rollback\|consolidate\|settle` → RPC `learn.graph_stats`, `memory.recall`, `learn.graph_fact` (fact + chuỗi thay thế + cùng cạnh + episode nguồn + ledger + lượt dùng), `learn.rollback` (entry tạo fact), `learn.graph_consolidate`, `learn.graph_settle`. Bốn RPC `learn.graph_*` là `HUMAN_ONLY` (xem graph MỌI agent; agent dùng `memory_recall`) | `learning/cli.py`, `learning/rpc.py`, `auth.py` |
+
+## Quyết định / lệch (PR quality)
+- **"Run xấu" không gồm run lỗi/huỷ**: lỗi hạ tầng (timeout, crash) không nói gì về fact; huỷ là tín hiệu mơ hồ. Chỉ các tín hiệu mà regression
+  monitor/eval gate dùng để kết luận hồi quy mới hạ độ tin cậy. Run thành công nhưng sai mà người không sửa → vẫn `up` (giới hạn đã biết).
+- **Ghi thẳng `confidence`/`mem_fact_uses` ngoài ledger** (cột VOLATILE, như `hits`/`mem_vectors`): là thống kê dẫn xuất, không phải tri thức;
+  rollback entry không khôi phục chúng. Độ tin cậy đổi → bản chụp eval đổi (snapshot giữ `confidence`) → cache baseline eval tính lại.
+- **Rollback một fact = rollback cả lô** (ledger entry) đã tạo nó — ledger rollback theo entry; `learn graph rollback <fact>` nói rõ điều này.
+- **Consolidation tất định, không LLM xác nhận** (plan nói "LLM confirm"): luật khoá tên + Jaccard/cosine bảo thủ, mọi gộp đi qua ledger nên
+  rollback được; LLM xác nhận để sau nếu thấy gộp sai/sót. Fact vừa được chép sang thực thể gộp không được gộp trùng trong cùng lượt (lượt sau).
+- **Golden memory không chạy agent**: đo TRUY HỒI (cái agent sẽ được chèn/tra được), không đo câu trả lời cuối. `gold_answer` chỉ cho
+  `answer_hit` (có fact top-k chứa đáp án). Độ chính xác câu trả lời cần golden task thường (`llm_judge`) — không có trong bộ mẫu.
+- `summarize` đếm theo MẪU (mỗi task chạy `eval.samples` lần) — `samples`, không phải số task.
+
+## Chưa kiểm chứng / việc dở
+- **bge-m3 thật CHƯA chạy** (không tải model 2,3 GB trong các phiên này): fastembed `add_custom_model` có tải `onnx/model.onnx_data` không,
+  chất lượng/độ trễ thật, ngưỡng `entity_match`=0.92 và `fact_cosine`=0.95 trên bge-m3 thật — đều là phỏng đoán, cần đo trên dữ liệu thật.
+- Chưa chạy với daemon thật / `claude` thật: payload hook PreCompact có `trigger`; haiku trả đúng schema trích xuất; vòng nền settle/consolidate
+  trên DB lớn (truy vấn `_bad_runs` quét `regression_watch` đã rollback mỗi lần settle — đủ nhỏ hiện tại).
+- Chưa có chỉ số chèn (số fact/ký tự/token khối recall, tỉ lệ cache-read) — `provider.last` chỉ trong RAM; plan có "injected tokens,
+  cache-read ratio" → chưa làm. Prefetch vẫn tắt cho run eval nên eval chưa đo tác động của khối chèn lên câu trả lời.
+- Bộ mẫu golden nhỏ (7 câu), chưa có câu hỏi kiêng (abstention — câu không liên quan phải trả rỗng): `min_score` gần như không lọc (độ liên quan
+  chuẩn hoá theo hit tốt nhất) nên câu không liên quan vẫn kéo fact yếu; cần sửa xếp hạng trước khi chấm kiêng có ý nghĩa.
+- Run eval không có kênh vector (bản chụp không chứa vector) → golden memory chấm FTS5 + thực thể + mở rộng, không chấm kênh vector.
+- Không có tool MCP cho người `hub_memory_recall`; người dùng `cfharness learn graph search` (RPC `memory.recall`).
+- Chưa mirror ghi MEMORY.md thành episode (`on_memory_write`), chưa phân biệt `agent_context` không primary, `review_scope=graph` chưa đưa
+  Signal vào prompt trích xuất (từ PR write — vẫn còn).
+- Alias/thực thể tìm bằng LIKE không index; web/TUI chưa có trang xem graph; `knowledge versions` chưa liệt kê graph.
+
+## Test
+`tests/test_graph_quality.py` (11 ca; không gọi claude, không tải model — embedder giả túi-từ): khoá gộp + Jaccard; lượt dùng một lần/(fact, run),
+không ghi cho người/eval; độ tin cậy lên với run thành công, xuống với correction / cửa sổ hồi quy / thay đổi bị `eval_gate` rollback, lật
+up→down một lần, kẹp sàn, idempotent; tick nền settle + consolidation đến hạn; consolidation gộp thực thể + fact gần trùng (liên kết thay thế,
+`valid_to` giữ, không xoá episode, alias tìm được, rollback theo hàng, idempotent); bỏ qua fact pin + không ăn suất agent; kiểm checker memory;
+bộ mẫu EN/VI/không dấu/trộn/thời gian/đầu độc đều đạt, stale-rate > 0 khi cập nhật bị sót, đầu độc → 0, pipeline chặn fact chỉ thị; eval gate
+dùng task memory cho entry graph (tụt → `eval_gate` rollback, không run eval, `scores.memory`), `run_manual`; RPC + parser `learn graph`; bộ khớp
+thực thể bằng vector (cùng tầng, chỉ khi model `ready`).

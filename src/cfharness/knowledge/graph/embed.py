@@ -193,7 +193,14 @@ def pending(hub: Any, emb: Embedder, batch: int) -> list[tuple[str, str]]:
     return [(r[0], r[1]) for r in rows]
 
 
-def write_vectors(hub: Any, emb: Embedder, items: list[tuple[str, str]], vecs: list[list[float]]) -> int:
+def pending_entities(hub: Any, emb: Embedder, batch: int) -> list[tuple[str, str]]:
+    """Thực thể còn dùng chưa có vector tên (model, phiên bản) — cho bộ khớp thực thể khi ghi (`entity_matcher`)."""
+    return [(r[0], r[1]) for r in hub.store.conn.execute(
+        "SELECT e.id, e.name FROM mem_entities e LEFT JOIN mem_vectors v ON v.item_kind='entity' AND v.item_id=e.id AND v.model=? AND v.model_version=? "
+        "WHERE e.retracted_by IS NULL AND e.invalidated_at IS NULL AND v.item_id IS NULL ORDER BY e.rowid LIMIT ?", (emb.model, emb.version, int(batch)))]
+
+
+def write_vectors(hub: Any, emb: Embedder, items: list[tuple[str, str]], vecs: list[list[float]], kind: str = "fact") -> int:
     from .store import GraphStore
 
     gs = GraphStore(hub.store.conn)
@@ -202,9 +209,44 @@ def write_vectors(hub: Any, emb: Embedder, items: list[tuple[str, str]], vecs: l
         for (fid, _), v in zip(items, vecs):
             if len(v) != emb.dim:
                 raise ValueError(f"embedder trả vector {len(v)} chiều, cần {emb.dim}")
-            gs.put_vector("fact", fid, emb.model, emb.version, v)
+            gs.put_vector(kind, fid, emb.model, emb.version, v)
             n += 1
     return n
+
+
+def backfill_entities(hub: Any, emb: Embedder, batch: int = 64) -> int:
+    total = 0
+    while True:
+        items = pending_entities(hub, emb, batch)
+        if not items:
+            return total
+        total += write_vectors(hub, emb, items, emb.embed([t for _, t in items]), kind="entity")
+
+
+def entity_matcher(hub: Any, threshold: float = 0.92, max_scan: int = 5000) -> Any:
+    """Bộ khớp thực thể bằng embedding cho `resolve.set_embed_matcher` (PR write): tên mới ↔ vector tên thực thể đã có cùng tầng,
+    cosine ≥ `threshold` → dùng thực thể đó (tên mới thành alias). CHỈ khi model đã nạp (`ready`) — không bao giờ chờ nạp model khi ghi."""
+    from .store import owner_key
+
+    def fn(store: Any, scope: str, owner: str, name: str) -> dict[str, Any] | None:
+        if getattr(store, "conn", None) is not hub.store.conn:  # matcher là toàn cục — chỉ phục vụ DB của hub đã cắm nó
+            return None
+        emb = get_embedder(hub)
+        if emb is None or not getattr(emb, "ready", False) or not str(name or "").strip():
+            return None
+        q = emb.embed([str(name)[:200]])[0]
+        rows = store.conn.execute(
+            "SELECT e.*, v.vec AS _v, v.dim AS _dim FROM mem_vectors v JOIN mem_entities e ON e.id=v.item_id WHERE v.item_kind='entity' AND v.model=? "
+            "AND v.model_version=? AND e.scope=? AND e.owner_id=? AND e.retracted_by IS NULL AND e.invalidated_at IS NULL ORDER BY e.rowid DESC LIMIT ?",
+            (emb.model, emb.version, scope, owner_key(scope, owner or None), int(max_scan))).fetchall()
+        best, best_s = None, float(threshold)
+        for r in rows:
+            s = cosine(q, unpack(r["_v"], r["_dim"]))
+            if s >= best_s:
+                best, best_s = r, s
+        return None if best is None else {k: best[k] for k in best.keys() if k not in ("_v", "_dim")}
+
+    return fn
 
 
 def backfill(hub: Any, emb: Embedder, batch: int = 64) -> int:
@@ -229,9 +271,12 @@ async def run_vector_loop(hub: Any) -> None:
             return
         try:
             items = pending(hub, emb, batch)
+            kind = "fact"
+            if not items:
+                items, kind = pending_entities(hub, emb, batch), "entity"
             if items:
                 vecs = await asyncio.to_thread(emb.embed, [t for _, t in items])
-                write_vectors(hub, emb, items, vecs)
+                write_vectors(hub, emb, items, vecs, kind=kind)
                 failures = 0
                 await asyncio.sleep(0.05)
                 continue
@@ -260,4 +305,7 @@ def start_vector_loop(hub: Any) -> None:
         load_vec(hub.store.conn)
     except Exception:  # pragma: no cover
         pass
+    from .resolve import set_embed_matcher  # bộ khớp thực thể khi GHI (PR write) — dùng vector tên do vòng nền này chỉ mục
+
+    set_embed_matcher(entity_matcher(hub, float(_cfg(hub, "vector.entity_match", 0.92))))
     hub._bg.append(loop.create_task(run_vector_loop(hub)))

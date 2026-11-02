@@ -425,8 +425,8 @@ class Pipeline:
         vẫn để agent "đủ 5 thay đổi hôm nay" tới nửa đêm). Cooldown theo đích vẫn tính entry đã rollback — không áp lại ngay
         vào chỗ vừa bị gỡ."""
         by = prop.get("created_by")
-        if by == "user" or (by == "curator" and prop["op"] == "archive"):
-            return None
+        if by == "user" or (by == "curator" and (prop["op"] == "archive" or prop["target"] == "graph")):
+            return None  # curator: archive skill / consolidation graph (chỉ gộp, không thêm tri thức) — không ăn suất của agent
         r = self.svc.policy.get("rate")
         if prop["target"] == "graph":
             # graph: suất RIÊNG theo agent/ngày (mọi tầng, mọi bên ghi trừ người) — bỏ trần ký tự thì đây là cái hãm; không ăn suất

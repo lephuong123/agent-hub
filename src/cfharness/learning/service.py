@@ -48,6 +48,9 @@ class LearningService:
         self.reviews = ReviewScheduler(hub, self)
         self.canary = CanaryManager(hub, self)  # M5-A: L3 tầng team/global/USER — canary/shadow (FR-LN-16)
         self.graph_extract = GraphExtractor(hub, self)  # graph memory PR write: trích xuất theo lô cuối session / PreCompact / xoay session
+        from .graph_quality import GraphQuality
+
+        self.graph_quality = GraphQuality(hub)  # graph memory PR quality: độ tin cậy theo kết quả run + consolidation (vòng nền learning_ops)
         self.read_marks: dict[str, set[tuple[str, str, str, str]]] = {}
         self._task: asyncio.Task | None = None
         hub.bus.add_listener(self._on_event)

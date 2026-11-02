@@ -181,7 +181,96 @@ def cmd_learn(ctx: Any) -> int:
         return 0
     if act == "canary":
         return _cmd_canary(ctx)
+    if act == "graph":
+        return _cmd_graph(ctx)
     raise ValueError(f"lệnh learn không hợp lệ: {act}")
+
+
+def _fact_line(f: dict[str, Any]) -> str:
+    vt = f.get("valid_to") or ("" if not f.get("invalidated_at") else "?")
+    state = "" if not f.get("invalidated_at") else f"  [đóng {str(f['invalidated_at'])[:10]}" + (f" → {f['invalidated_by']}" if f.get("invalidated_by") else "") + "]"
+    if f.get("retracted_by"):
+        state += f"  [gỡ bởi {f['retracted_by']}]"
+    conf = f.get("confidence")
+    return (f"{f['id']}  {_short(f.get('fact'), 90)}  (hiệu lực {str(f.get('valid_from') or '?')[:10]} → {str(vt)[:10] or 'nay'}"
+            + (f", tin cậy {float(conf):.2f}" if conf is not None else "") + f"){state}")
+
+
+def _cmd_graph(ctx: Any) -> int:
+    """Graph memory: `learn graph stats|search|show|rollback|consolidate` — client mỏng trên RPC (learning/graph_quality.py, memory.recall)."""
+    a = ctx.args
+    op = a.graph_action
+    if op == "stats":
+        r = ctx.call("learn.graph_stats", {"agent": a.agent})
+        if ctx.json:
+            ctx.out(r)
+            return 0
+        for t in r["tiers"]:
+            print(f"{t['scope']:<6} {t['owner']:<16} fact={t['facts']:<5} lịch sử={t['history']:<5} thực thể={t['entities']:<5} episode={t['episodes']:<5} "
+                  f"tin cậy TB={t['avg_confidence'] if t['avg_confidence'] is not None else '-'}")
+        if not r["tiers"]:
+            print("(graph trống)")
+        print(f"lượt dùng: {r['uses'] or {}}  vector: {r['vectors'] or {}}  trích xuất 24h: {r['extractions_today']}  consolidation gần nhất: {r['consolidated_at'] or '-'}")
+        return 0
+    if op == "search":
+        r = ctx.call("memory.recall", {"query": a.query, "agent_id": a.agent, "limit": a.limit, "include_history": a.history, "hops": a.hops})
+        if ctx.json:
+            ctx.out(r)
+            return 0
+        for f in r.get("facts") or []:
+            if "fact" not in f:
+                print(f"{f['id']}  (bị chặn: {f.get('blocked')})")
+                continue
+            print(f"{f['score']:.3f}  {f['scope']:<6} {_fact_line(f)}")
+        if not r.get("facts"):
+            print("(không có fact khớp)")
+        return 0
+    if op == "show":
+        r = ctx.call("learn.graph_fact", {"id": a.id})
+        if ctx.json:
+            ctx.out(r)
+            return 0
+        f = r["fact"]
+        print(f"[{f['scope']}:{f['owner']}] {f.get('src')} -{f['relation']}-> {f.get('dst') or '·'}")
+        print("  " + _fact_line(f))
+        print(f"  tạo bởi {f.get('created_by')} (entry {f.get('ledger_entry_id')}), dùng {f.get('hits') or 0} lần")
+        if r.get("episode"):
+            ep = r["episode"]
+            print(f"  nguồn: episode {ep['id']} ({ep.get('source_kind')} {ep.get('source_ref') or ''})")
+        for title, key in (("thay cho", "supersedes"), ("bị thay bởi", "superseded_by"), ("cùng cạnh (lịch sử)", "same_edge")):
+            if r.get(key):
+                print(f"  {title}:")
+                for x in r[key]:
+                    print("    " + _fact_line(x))
+        if r.get("uses"):
+            print("  lượt đưa cho run: " + ", ".join(f"{u['run_id']}:{u['channel']}={u['outcome'] or 'chờ'}" for u in r["uses"][:10]))
+        if r.get("rollback_hint"):
+            print(f"  ↩ {r['rollback_hint']}")
+        return 0
+    if op == "rollback":
+        fid = a.id
+        f = ctx.call("learn.graph_fact", {"id": fid})["fact"]
+        entry = f.get("ledger_entry_id")
+        if not entry:
+            raise ValueError(f"fact {f['id']} không có ledger entry (chép từ clone/import) — không rollback được")
+        r = ctx.call("learn.rollback", {"id": entry, "chain": a.chain, "reason": a.reason or f"rollback graph fact {f['id']}"})
+        ctx.out(r, f"đã rollback entry {entry} (cả lô ghi chứa fact {f['id']}) → entry mới {r['id']} (rollback được tiếp: cfharness learn rollback {r['id']})")
+        return 0
+    if op == "consolidate":
+        r = ctx.call("learn.graph_consolidate", {"dry_run": a.dry_run, "scope": a.scope, "owner": a.owner}, timeout=600)
+        if ctx.json:
+            ctx.out(r)
+            return 0
+        for t in r["tiers"]:
+            print(f"{t['scope']:<6} {t['owner']:<16} gộp thực thể={t.get('merges', 0)} gộp fact={t.get('supersedes', 0)} → {t['status']}"
+                  + (f" ({t['reason']})" if t.get("reason") else ""))
+        if not r["tiers"]:
+            print("không có gì để gộp")
+        return 0
+    if op == "settle":
+        ctx.out(ctx.call("learn.graph_settle", {}))
+        return 0
+    raise ValueError(f"lệnh learn graph không hợp lệ: {op}")
 
 
 def _cmd_canary(ctx: Any) -> int:
@@ -361,6 +450,26 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     cs.add_parser("show", parents=[common]).add_argument("id")
     y = cs.add_parser("check", parents=[common], help="(gỡ lỗi) kiểm ngay cửa sổ canary: promote / rollback nếu đến hạn")
     y.add_argument("id", nargs="?")
+    x = ls.add_parser("graph", parents=[common], help="graph memory: thống kê, tìm, lịch sử fact, rollback, consolidation")
+    gs = x.add_subparsers(dest="graph_action", required=True)
+    y = gs.add_parser("stats", parents=[common], help="số fact/thực thể/episode theo tầng, lượt dùng, vector")
+    y.add_argument("--agent", help="chỉ các tầng agent này thấy (agent + team + global)")
+    y = gs.add_parser("search", parents=[common], help="tìm fact (FTS5 + vector + thực thể, như recall của agent)")
+    y.add_argument("query")
+    y.add_argument("--agent", help="tìm như agent này thấy (tầng + ghim canary); bỏ trống = mọi tầng")
+    y.add_argument("--limit", type=int, default=10)
+    y.add_argument("--hops", type=int, default=1)
+    y.add_argument("--history", action="store_true", help="gồm cả fact đã hết hiệu lực")
+    gs.add_parser("show", parents=[common], help="lịch sử một fact: thay thế, cùng cạnh, nguồn, ledger, lượt dùng").add_argument("id")
+    y = gs.add_parser("rollback", parents=[common], help="rollback lô ghi (ledger entry) đã tạo fact này")
+    y.add_argument("id")
+    y.add_argument("--chain", action="store_true")
+    y.add_argument("--reason")
+    y = gs.add_parser("consolidate", parents=[common], help="gộp thực thể trùng + fact gần trùng ngay (bình thường chạy nền mỗi ngày)")
+    y.add_argument("--dry-run", action="store_true")
+    y.add_argument("--scope", choices=["agent", "team", "global"])
+    y.add_argument("--owner")
+    gs.add_parser("settle", parents=[common], help="(gỡ lỗi) chốt ngay độ tin cậy fact theo kết quả run")
     lp.set_defaults(fn=cmd_learn)
 
     kp = sub.add_parser("knowledge", help="kho tri thức tầng agent: memory, skill, pin (FR-LN-11)", parents=[common])

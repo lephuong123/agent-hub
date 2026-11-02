@@ -789,6 +789,26 @@ MIGRATIONS: list[str] = [
     # thời gian kép, `retracted_by` cho rollback theo hàng) + `mem_vectors` (tuỳ chọn, model+phiên bản mỗi vector) + FTS5 trên cột gấp
     # dấu (tokenizer chọn lúc chạy như v17). Là HÀM vì cần dò tokenizer. GỘP NHÁNH: nhánh khác thêm v19 → đánh số lại, không sửa cũ.
     "knowledge.graph.schema.migrate_v19",
+    # v20 — graph memory PR quality (docs/dev-notes/graph-memory.md § PR quality): fact nào được ĐƯA cho run nào (prefetch vào tin user đầu /
+    # tool memory_recall) → độ tin cậy cập nhật theo KẾT QUẢ run (run thành công → tăng; run có thay đổi bị tự rollback / nằm trong cửa sổ
+    # hồi quy bị rollback / có correction → giảm). `outcome` NULL = chưa chốt; `delta` = mức đã cộng vào `mem_facts.confidence` (để đổi
+    # up → down đúng một lần). Bảng dẫn xuất (ngoài ledger), như `hits`/`last_used`.
+    """
+    CREATE TABLE IF NOT EXISTS mem_fact_uses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fact_id TEXT NOT NULL,
+        run_id TEXT,
+        agent_id TEXT,
+        channel TEXT NOT NULL,
+        used_at TEXT NOT NULL,
+        outcome TEXT,
+        delta REAL NOT NULL DEFAULT 0,
+        settled_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS mem_fact_uses_run ON mem_fact_uses(run_id);
+    CREATE INDEX IF NOT EXISTS mem_fact_uses_open ON mem_fact_uses(outcome, used_at);
+    CREATE INDEX IF NOT EXISTS mem_fact_uses_fact ON mem_fact_uses(fact_id);
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("cfharness.graph.provider")
 
-TECHNICAL_KINDS = ("review", "eval", "eval_judge", "curator", "learning")
+TECHNICAL_KINDS = ("review", "eval", "eval_judge", "curator", "learning", "graph_extract")
 
 class MemoryProvider:
     """Giao diện như Hermes `MemoryProvider` (tên + chữ ký giữ nguyên để đối chiếu)."""
@@ -125,7 +125,7 @@ class GraphMemoryProvider(MemoryProvider):
         return bool(q.strip()) and not TRIVIAL_PROMPT_RE.match(q)
 
     def prefetch(self, query: str, *, session_id: str | None = None, agent_id: str | None = None, query_vec: Any = None,
-                 limit: int | None = None, **kwargs: Any) -> str:
+                 limit: int | None = None, run_id: str | None = None, **kwargs: Any) -> str:
         if not agent_id or not query.strip():
             return ""
         tiers, hidden = self.view(agent_id)
@@ -141,6 +141,7 @@ class GraphMemoryProvider(MemoryProvider):
 
             try:
                 r.touch(used, now_iso())
+                self.record(used, run_id=run_id, agent_id=agent_id, channel="prefetch")
             except Exception:  # pragma: no cover - đếm dùng hỏng không chặn run
                 log.exception("không cập nhật hits graph")
         self.last = {"agent_id": agent_id, "session_id": session_id, "facts": len(used), "chars": len(block), "vector": query_vec is not None}
@@ -162,7 +163,7 @@ class GraphMemoryProvider(MemoryProvider):
         if not self.should_prefetch(run):
             return ""
         try:
-            return await self.queue_prefetch(str(run.get("prompt") or ""), session_id=run.get("session_id"), agent_id=agent["id"])
+            return await self.queue_prefetch(str(run.get("prompt") or ""), session_id=run.get("session_id"), agent_id=agent["id"], run_id=run.get("id"))
         except Exception:  # pragma: no cover - recall hỏng KHÔNG BAO GIỜ chặn run
             log.exception("graph recall lỗi cho run %s", run.get("id"))
             return ""
@@ -178,12 +179,24 @@ class GraphMemoryProvider(MemoryProvider):
         return [{"name": "memory_recall", **TOOLS["memory_recall"]}]
 
     def handle_tool_call(self, tool_name: str, args: dict[str, Any], *, agent_id: str | None = None, home: Path | None = None,
-                         eval_run: bool = False, **kwargs: Any) -> dict[str, Any]:
+                         eval_run: bool = False, run_id: str | None = None, **kwargs: Any) -> dict[str, Any]:
         if tool_name != "memory_recall":
             raise NotImplementedError(tool_name)
-        return self.recall(agent_id, args, home=home, eval_run=eval_run)
+        return self.recall(agent_id, args, home=home, eval_run=eval_run, run_id=run_id)
 
-    def recall(self, agent_id: str | None, args: dict[str, Any], *, home: Path | None = None, eval_run: bool = False) -> dict[str, Any]:
+    def record(self, fact_ids: list[str], *, run_id: str | None, agent_id: str | None, channel: str) -> None:
+        """PR quality: fact được ĐƯA cho run nào (`mem_fact_uses`) — độ tin cậy cập nhật theo kết quả run đó (learning/graph_quality.py)."""
+        if not run_id or not fact_ids:
+            return
+        from ...learning.graph_quality import record_uses
+
+        try:
+            record_uses(self.conn, fact_ids, run_id=run_id, agent_id=agent_id, channel=channel)
+        except Exception:  # pragma: no cover - bảng chưa có / DB bận: không chặn run
+            log.exception("không ghi lượt dùng fact")
+
+    def recall(self, agent_id: str | None, args: dict[str, Any], *, home: Path | None = None, eval_run: bool = False,
+               run_id: str | None = None) -> dict[str, Any]:
         from ...errors import HubError
 
         if not self.is_available():
@@ -236,6 +249,7 @@ class GraphMemoryProvider(MemoryProvider):
 
             try:
                 r.touch([f["id"] for f in out if "fact" in f], now_iso())
+                self.record([f["id"] for f in out if "fact" in f], run_id=run_id, agent_id=agent_id, channel="recall")
             except Exception:  # pragma: no cover
                 pass
         return {"query": query, "entity": entity, "facts": out, "vector": qvec is not None,

@@ -187,11 +187,16 @@ class LearningRpc:
             "learn.canaries": lambda p: L().canary.list(p.get("status"), p.get("agent"), int(p.get("limit") or 100)),
             "learn.canary_get": lambda p: L().canary.get(_req(p, "id")),
             "learn.canary_check": self.canary_check,
+            # graph memory PR quality (learning/graph_quality.py) — `cfharness learn graph …` (client mỏng)
+            "learn.graph_stats": lambda p: L().graph_quality.stats(p.get("agent")),
+            "learn.graph_fact": lambda p: L().graph_quality.fact_history(_req(p, "id")),
+            "learn.graph_consolidate": lambda p: L().graph_quality.consolidate(dry_run=bool(p.get("dry_run")), scope=p.get("scope"), owner=p.get("owner")),
+            "learn.graph_settle": lambda p: L().graph_quality.settle(),
         }
 
 
 MUTATING_M4A = ("learn.signal_add", "learn.refine", "learn.review_cancel", "learn.propose", "learn.retry", "learn.rollback", "learn.policy_set", "knowledge.pin",
-                "learn.canary_check",
+                "learn.canary_check", "learn.graph_consolidate", "learn.graph_settle",
                 # skill manager của người (learning/skill_rpc.py)
                 "knowledge.skill_save", "knowledge.skill_archive", "knowledge.skill_restore", "knowledge.skill_import", "knowledge.skill_promote")
 

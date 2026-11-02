@@ -384,7 +384,20 @@ DEFAULTS: dict[str, Any] = {
             "query_timeout_s": 3.0,  # trần thời gian embed câu hỏi lúc prefetch (quá → chỉ FTS5)
             "max_scan": 5000,  # không có sqlite-vec: cosine Python trên ≤ N vector mới nhất
             "threads": None,
+            "entity_match": 0.92,  # cosine tên thực thể ≥ ngưỡng → coi là cùng thực thể khi ghi (resolve.set_embed_matcher); chỉ khi model đã nạp
         },
+        # PR quality (learning/graph_quality.py): độ tin cậy theo KẾT QUẢ run (không theo độ phổ biến) — chốt ở vòng nền learning_ops
+        "quality": {
+            "confidence_up": 0.03,  # fact được đưa cho run completed (không correction / không bị tự rollback) sau settle_h giờ
+            "confidence_down": 0.1,  # run có thay đổi bị tự rollback / trong cửa sổ hồi quy bị rollback / có correction
+            "confidence_min": 0.05,
+            "confidence_max": 0.95,
+            "settle_h": 6,  # chờ N giờ sau khi run kết thúc mới tính "thành công" (để correction/rollback kịp đến)
+            "lookback_days": 14,  # lượt dùng cũ hơn không còn được chốt/lật
+            "settle_interval_s": 300,
+        },
+        # consolidation (vòng nền): gộp thực thể trùng + fact gần trùng (đóng hiệu lực + liên kết thay thế), qua pipeline created_by=curator
+        "consolidate": {"enabled": True, "interval_h": 24, "fact_jaccard": 0.8, "fact_cosine": 0.95, "max_ops": 150},
     },
     # M4-B — đánh giá & vận hành học (FR-LN-08/10/13/17)
     "eval": {

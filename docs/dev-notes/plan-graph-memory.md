@@ -51,7 +51,7 @@ metadata)`, `get_tool_schemas()`, `handle_tool_call(name, args, **kw) -> str`. L
 3. **write** (song song với 2, ĐÃ LÀM — `graph-memory.md` mục PR write) — hook `PreCompact` + `on_session_end` + xoay session điều phối viên → MỘT lần trích xuất JSON-schema/session
    (debounce, trần chi phí, `agent_context` không primary thì không ghi) → `graph_write(created_by="review")`; mirror tool `memory`
    (`on_memory_write`) thành episode; tool hub-self `graph` cho agent (dùng `graph_write`, quyền tầng đã có ở PR 1).
-4. **quality** — consolidation (gộp thực thể alias/embedding + LLM xác nhận), độ tin cậy theo kết quả run, decay hạng, golden set memory +
+4. **quality** (ĐÃ LÀM — `graph-memory.md` § PR quality; consolidation tất định, chưa có LLM xác nhận và trang web) — consolidation (gộp thực thể alias/embedding + LLM xác nhận), độ tin cậy theo kết quả run, decay hạng, golden set memory +
    chỉ số vào eval gate/`report`, trang web xem graph.
 
 ## 4. Khác biệt CỐ Ý so với Hermes / Graphiti

@@ -13,6 +13,11 @@ Thao tác (`operations`, mỗi phần tử một dict `action`):
       `valid_to` = `valid_from` của fact mới hoặc bây giờ), không bao giờ xoá.
 - `invalidate_fact` {fact_id} | {src, relation, dst?}         — đóng hiệu lực (thông tin đã sai/hết hạn).
 - `invalidate_entity` {entity}
+- `merge_entity` {entity, into}                               — (consolidation) gộp thực thể trùng: tên + alias của `entity` thành alias
+      của `into`; mỗi fact còn hiệu lực chạm `entity` được CHÉP sang `into` (giữ valid_from/valid_to/ingested_at/độ tin cậy/provenance)
+      và bản cũ bị đóng với `invalidated_by` = bản chép (liên kết thay thế); `entity` bị đóng (`invalidated_at`). Không xoá gì.
+- `supersede_fact` {fact_id, by}                              — (consolidation) fact gần trùng: đóng `fact_id`, `invalidated_by` = `by`
+      (fact giữ lại). Thời gian thế giới (`valid_to`) giữ nguyên — trùng lặp không có nghĩa là hết hiệu lực.
 """
 
 from __future__ import annotations
@@ -36,7 +41,7 @@ KEY_PREFIX = "graph://"
 # khôi phục, không làm rollback theo hàng "thấy bị sửa sau".
 VOLATILE = frozenset({"hits", "last_used", "confidence"})
 SNAPSHOT_VOLATILE = frozenset({"hits", "last_used"})
-ACTIONS = ("add_entity", "add_alias", "add_fact", "invalidate_fact", "invalidate_entity")
+ACTIONS = ("add_entity", "add_alias", "add_fact", "invalidate_fact", "invalidate_entity", "merge_entity", "supersede_fact")
 MAX_OPS = 200
 SECTION = {"mem_facts": "facts", "mem_entities": "entities"}
 SNAPSHOT_FILE = ".graph_snapshot.json"  # bản chụp graph trong BẢN SAO home của eval (evals/overlay.make_home) — home thật không có
@@ -294,8 +299,9 @@ class GraphStore:
             remember(e)
             return e
 
-        def close(f: dict[str, Any], by: str | None, valid_to: str | None, why: str) -> None:
-            put("mem_facts", dict(f, invalidated_at=now, invalidated_by=by, invalidated_entry_id=ENTRY, valid_to=f.get("valid_to") or valid_to or now))
+        def close(f: dict[str, Any], by: str | None, valid_to: str | None, why: str, *, keep_valid: bool = False) -> None:
+            vt = f.get("valid_to") if keep_valid else (f.get("valid_to") or valid_to or now)
+            put("mem_facts", dict(f, invalidated_at=now, invalidated_by=by, invalidated_entry_id=ENTRY, valid_to=vt))
             invalidated.append(f["id"])
             stats["invalidated"] += 1
             lines.append(f"- {why}: {f['fact']}")
@@ -386,6 +392,56 @@ class GraphStore:
                     put("mem_entities", dict(e, invalidated_at=now, invalidated_entry_id=ENTRY, updated_at=now))
                     stats["invalidated"] += 1
                     lines.append(f"- entity {e['name']}")
+                elif act == "merge_entity":
+                    e = entity(op.get("entity"), create=False)
+                    into = entity(op.get("into"), create=False)
+                    if e["id"] == into["id"]:
+                        raise KnowledgeError("merge_entity: entity và into là cùng một thực thể", "invalid")
+                    names = [*_aliases(into)]
+                    keys = {into["canon"], *(canon(x) for x in names)}
+                    for n in [e["name"], *_aliases(e)]:
+                        if canon(n) and canon(n) not in keys:
+                            names.append(n)
+                            keys.add(canon(n))
+                    into = put("mem_entities", dict(into, aliases=json.dumps(names, ensure_ascii=False), alias_keys=_alias_keys(names),
+                                                    folded=folded(" ".join([into["name"], *names])), type=into.get("type") or e.get("type"),
+                                                    summary=into.get("summary") or e.get("summary"), updated_at=now))
+                    put("mem_entities", dict(e, invalidated_at=now, invalidated_entry_id=ENTRY, updated_at=now))
+                    for n in [e["name"], *_aliases(e)]:
+                        if canon(n):
+                            batch_ent[canon(n)] = into
+                    remember(into)
+                    touching = [cur_fact(r[0]) for r in self.conn.execute(
+                        "SELECT id FROM mem_facts WHERE scope=? AND owner_id=? AND (src_entity_id=? OR dst_entity_id=?) AND retracted_by IS NULL "
+                        "AND invalidated_at IS NULL ORDER BY rowid", (scope, ok, e["id"], e["id"]))]
+                    touching += [r for k, r in rows.items() if k.startswith("mem_facts:") and e["id"] in (r["src_entity_id"], r.get("dst_entity_id"))
+                                 and r not in touching]
+                    for f in [x for x in touching if x is not None and not x.get("invalidated_at")]:
+                        src_id = into["id"] if f["src_entity_id"] == e["id"] else f["src_entity_id"]
+                        dst_id = into["id"] if f.get("dst_entity_id") == e["id"] else f.get("dst_entity_id")
+                        twins = [cur_fact(g["id"]) or g for g in self.live_facts(scope, ok, src_id, f["relation"])]
+                        twins += [r for k, r in rows.items() if k.startswith("mem_facts:") and r["src_entity_id"] == src_id and r["relation"] == f["relation"]]
+                        twin = [g for g in twins if not g.get("invalidated_at") and (g.get("dst_entity_id") or None) == (dst_id or None)
+                                and canon(g["fact"]) == canon(f["fact"]) and g["id"] != f["id"]]
+                        if twin:
+                            close(f, twin[0]["id"], None, "merged duplicate", keep_valid=True)
+                            continue
+                        nid = _new_id("gf")
+                        put("mem_facts", dict(f, id=nid, src_entity_id=src_id, dst_entity_id=dst_id, invalidated_at=None, invalidated_by=None,
+                                              invalidated_entry_id=None, hits=0, last_used=None, ledger_entry_id=ENTRY, retracted_by=None))
+                        close(f, nid, None, "moved to merged entity", keep_valid=True)
+                    stats["entities_merged"] = stats.get("entities_merged", 0) + 1
+                    lines.append(f"~ merge entity {e['name']} -> {into['name']}")
+                elif act == "supersede_fact":
+                    f = cur_fact(str(op.get("fact_id") or ""))
+                    by = cur_fact(str(op.get("by") or ""))
+                    for x, nm in ((f, "fact_id"), (by, "by")):
+                        if x is None or x["scope"] != scope or x["owner_id"] != ok or x.get("retracted_by") or x.get("invalidated_at"):
+                            raise KnowledgeError(f"supersede_fact: '{op.get(nm)}' không phải fact còn hiệu lực trong graph {graph_key(scope, ok)}", "not_found")
+                    assert f is not None and by is not None
+                    if f["id"] == by["id"]:
+                        raise KnowledgeError("supersede_fact: fact_id và by trùng nhau", "invalid")
+                    close(f, by["id"], None, "merged duplicate", keep_valid=True)
                 else:
                     raise KnowledgeError(f"action graph không hợp lệ: {act!r} (được: {', '.join(ACTIONS)})", "invalid")
             except KnowledgeError as e:
@@ -504,14 +560,17 @@ class GraphStore:
 
     # ================================================================== vòng đời agent (purge / clone / export / import)
     def purge_owner(self, scope: str, owner: str | None) -> dict[str, int]:
-        """Xoá CỨNG mọi hàng của một tầng (purge agent = quên hẳn). FTS đồng bộ bằng trigger; vector theo id."""
+        """Xoá CỨNG mọi hàng của một tầng (purge agent = quên hẳn). FTS đồng bộ bằng trigger; vector + lượt dùng theo id."""
         ok = owner_key(scope, owner)
         out = {}
+        has_uses = self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mem_fact_uses'").fetchone() is not None
         for table, kind in (("mem_facts", "fact"), ("mem_entities", "entity"), ("mem_episodes", "episode")):
             ids = [r[0] for r in self.conn.execute(f"SELECT id FROM {table} WHERE scope=? AND owner_id=?", (scope, ok))]
             for i in range(0, len(ids), 500):
                 chunk = ids[i:i + 500]
                 self.conn.execute(f"DELETE FROM mem_vectors WHERE item_kind=? AND item_id IN ({','.join('?' * len(chunk))})", (kind, *chunk))
+                if kind == "fact" and has_uses:
+                    self.conn.execute(f"DELETE FROM mem_fact_uses WHERE fact_id IN ({','.join('?' * len(chunk))})", chunk)
             out[table] = self.conn.execute(f"DELETE FROM {table} WHERE scope=? AND owner_id=?", (scope, ok)).rowcount
         return out
 
