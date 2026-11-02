@@ -226,3 +226,15 @@ Test: `tests/test_graph_memory_review.py` (12 ca, bộ trích xuất GIẢ, khô
   Cờ bị bỏ ở pipeline cho `created_by` ngoài user/review/curator.
 - **Trần trích xuất nguyên tử theo agent**: `GraphExtractor._reserved` giữ chỗ ngay sau `cap_problem` (không có await ở giữa); `cap_problem`
   đếm cả chỗ đang giữ (số lần + `graph_extract_budget_usd` mỗi chỗ) → session song song của một agent không vượt trần lần/ngày và $/ngày.
+
+## Chạy thử bge-m3 thật + chỉnh xếp hạng (2026-11-02)
+- Tải `BAAI/bge-m3` qua fastembed 0.9.1 (`add_custom_model` lấy đủ `onnx/model.onnx_data`): 1 phút 41 giây, 2,2 GB; vector 1024-d đã
+  chuẩn hoá; embed một câu hỏi trung vị 41 ms trên CPU; sqlite-vec 0.1.9 nạp được trên Windows. HF cache trên Windows không có symlink
+  (không bật Developer Mode) → chạy được, chỉ tốn chỗ hơn; tắt cảnh báo bằng `HF_HUB_DISABLE_SYMLINKS_WARNING=1`.
+- Bộ thử 10 fact (theo memory thật của agent) / 11 câu hỏi EN-VI-trộn, chấm đúng FACT: FTS5 7/11 top-1; FTS5 + vector (cũ) 8/11 top-1,
+  11/11 top-3. Nguyên nhân: kênh vector giữ MỌI fact có cosine > 0, nên hit FTS rác (trigram khớp nhầm tiếng Việt) được cộng ở fts +
+  vector + expand và đứng đầu; tăng riêng weight vector không đổi gì.
+- Sửa: kênh vector chỉ giữ cosine ≥ `graph_memory.vector.min_sim` (0.4) và ≥ tốt nhất − `sim_margin` (0.15); weight vector 1.5
+  (`graph_memory.recall.weights` ghi đè được). Kết quả: **10/11 top-1, 11/11 top-3**. Câu còn sai ("how do I run unit tests in
+  workflowswebapp") là hoà cosine 0.612 vs 0.610 giữa hai fact cùng repo. Ngưỡng là theo bge-m3 — đổi model thì đo lại. Mẫu nhỏ: chỉnh
+  tiếp theo golden set, không theo bộ này.

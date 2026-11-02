@@ -375,6 +375,7 @@ DEFAULTS: dict[str, Any] = {
             "hops": 1,  # mở rộng 1–2 bước quanh thực thể của hit đầu
             "half_life_days": 90,  # suy giảm theo tuổi fact (giảm hạng, sàn 0.3 — không xoá)
             "min_score": 0.05,
+            "weights": None,  # null = mặc định retrieval.WEIGHTS {fts 1.0, vector 1.5, entity 0.8, expand 0.5}; dict → ghi đè từng kênh
         },
         "vector": {
             "enabled": "auto",  # auto = dùng khi cài extra cfharness[vector] (fastembed + sqlite-vec); false = chỉ FTS5
@@ -383,6 +384,8 @@ DEFAULTS: dict[str, Any] = {
             "interval_s": 60,  # nhịp quét fact mới chưa có vector
             "query_timeout_s": 3.0,  # trần thời gian embed câu hỏi lúc prefetch (quá → chỉ FTS5)
             "max_scan": 5000,  # không có sqlite-vec: cosine Python trên ≤ N vector mới nhất
+            "min_sim": 0.4,  # kênh vector chỉ giữ hit cosine ≥ ngưỡng (đo trên bge-m3 — đổi model thì đo lại)
+            "sim_margin": 0.15,  # … và ≥ cosine tốt nhất − margin
             "threads": None,
             "entity_match": 0.92,  # cosine tên thực thể ≥ ngưỡng → coi là cùng thực thể khi ghi (resolve.set_embed_matcher); chỉ khi model đã nạp
         },

@@ -52,6 +52,9 @@ class FakeEmbedder:
 @pytest.fixture
 def hub(hub_home):
     h = make_hub(hub_home)
+    # ngưỡng cosine tuyệt đối 0.4 đo trên bge-m3; FakeEmbedder túi-từ cho cosine thấp hơn (1 từ khớp / 7 từ ≈ 0.38) → bỏ sàn tuyệt đối,
+    # giữ margin so với hit tốt nhất (vẫn kiểm được trong test cutoff)
+    h.config.set("graph_memory.vector.min_sim", 0.0)
     yield h
     h.store.close()
 
@@ -72,7 +75,7 @@ def recall(h, agent, q, **kw):
 
 # ============================================================================ thuần
 def test_rrf_and_decay_are_pure():
-    s = rrf({"fts": ["a", "b"], "vector": ["b", "c"]})
+    s = rrf({"fts": ["a", "b"], "vector": ["b", "c"]}, {"fts": 1.0, "vector": 1.0})
     assert s["b"] > s["a"] > s["c"] - 1e-9 and round(s["a"], 6) == round(1 / 61, 6)
     now = datetime(2026, 11, 2, tzinfo=timezone.utc)
     assert decay((now - timedelta(days=90)).isoformat(), now, 90) == pytest.approx(0.5)
@@ -405,3 +408,51 @@ def test_sqlite_vec_distance_matches_python_cosine(hub, monkeypatch):
     via_py = [(f["id"], f["_sim"]) for f in r._vector([("agent", "a1")], q, set(), False, 5)]
     assert via_sql and [i for i, _ in via_sql] == [i for i, _ in via_py]
     assert all(abs(a - b) < 1e-4 for (_, a), (_, b) in zip(via_sql, via_py))
+
+
+class TableEmbedder:
+    """Vector cố định theo câu (để kiểm ngưỡng cosine): khớp chuỗi con đầu tiên trong bảng, không khớp → vector 'nhiễu' chung."""
+
+    model = E.BGE_M3
+    version = "table-1"
+    dim = 3
+    ready = True
+
+    def __init__(self, table):
+        self.table = table
+
+    def embed(self, texts):
+        out = []
+        for t in texts:
+            v = next((vec for key, vec in self.table.items() if key in t), [0.3, 0.3, 0.9])
+            out.append(E.normalize(v))
+        return out
+
+
+def test_vector_channel_cutoff_stops_fts_junk_from_outranking_semantic_match(hub):
+    """Sự cố đo trên bge-m3 thật: câu 'cài đặt package mất bao lâu' khớp nhầm FTS vào fact Dreem; không lọc thì kênh vector chứa MỌI fact
+    nên fact rác được cộng điểm ở fts + vector + expand và đứng đầu. Lọc cosine (min_sim + margin) → fact khớp nghĩa đứng đầu."""
+    write(hub, [fact("DreemShotService", "mock_behavior", "DreemShotService serves mock data whenever NODE_ENV is not production; mất bao lâu không rõ.")])
+    write(hub, [fact("workflowswebapp", "install_time", "npm ci in workflowswebapp takes about 11 minutes.")])
+    write(hub, [fact("vendorportal", "node_version", "vendorportal builds only with Node 16.")])
+    q = "cài đặt package mất bao lâu"
+    emb = TableEmbedder({"npm ci": [1.0, 0.0, 0.0], "Dreem": [0.0, 1.0, 0.1], "vendorportal": [0.2, 0.6, 0.6], q: [0.95, 0.25, 0.05]})
+    hub.graph_embedder = emb
+    assert E.backfill(hub, emb) == 3
+    p = provider_for(hub)
+    tiers, hidden = p.view("a1")
+    qv = emb.embed([q])[0]
+    res = p.retriever().search(tiers, q, hidden=hidden, limit=3, query_vec=qv)
+    assert res[0]["fact"].startswith("npm ci") and "vector" in res[0]["channels"]
+    dreem = next(r for r in res if r["fact"].startswith("Dreem"))
+    assert "fts" in dreem["channels"] and "vector" not in dreem["channels"]  # cosine ~0.47 < best − margin → không vào kênh vector
+    # không lọc (min_sim 0, margin rộng) = hành vi cũ: fact rác đứng đầu
+    from cfharness.knowledge.graph.retrieval import Retriever
+    old = Retriever(hub.store.conn, model=emb.model, model_version=emb.version, min_sim=0.0, sim_margin=9.0)
+    assert old.search(tiers, q, hidden=hidden, limit=3, query_vec=qv)[0]["fact"].startswith("Dreem")
+    # mặc định module (0.4 / 0.15) cũng loại fact Dreem; cấu hình được: graph_memory.vector.min_sim / sim_margin / recall.weights
+    assert Retriever(hub.store.conn, model=emb.model, model_version=emb.version).search(tiers, q, hidden=hidden, limit=1, query_vec=qv)[0]["fact"].startswith("npm ci")
+    s_def = rrf({"fts": ["x"], "vector": ["y"]})
+    assert s_def["y"] > s_def["x"]  # vector nặng hơn fts mặc định (1.5 vs 1.0)
+    hub.config.set("graph_memory.vector.min_sim", 0.99)  # sàn tuyệt đối do cấu hình
+    assert all("vector" not in r["channels"] for r in p.retriever().search(tiers, q, hidden=hidden, limit=3, query_vec=qv))

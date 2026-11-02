@@ -30,7 +30,13 @@ from .store import GraphStore, owner_key
 from .text import folded
 
 RRF_K = 60
-WEIGHTS = {"fts": 1.0, "vector": 1.0, "entity": 0.8, "expand": 0.5}
+WEIGHTS = {"fts": 1.0, "vector": 1.5, "entity": 0.8, "expand": 0.5}
+# Kênh vector chỉ giữ hit đủ gần: cosine ≥ VECTOR_MIN_SIM và ≥ (cosine tốt nhất − VECTOR_SIM_MARGIN). Không lọc thì MỌI fact có cosine > 0
+# đều vào kênh, nên một hit FTS rác (trigram khớp nhầm tiếng Việt) được cộng điểm ở cả fts + vector + expand và đứng đầu dù câu hỏi khớp
+# nghĩa fact khác. Ngưỡng đo trên bge-m3 thật (2026-11-02, 10 fact / 11 câu EN-VI): fact liên quan 0.56–0.67, không liên quan 0.35–0.48;
+# top-1 đúng fact 8/11 → 10/11 (cùng weight vector 1.5; chỉ tăng weight mà không lọc thì không đổi gì).
+VECTOR_MIN_SIM = 0.4
+VECTOR_SIM_MARGIN = 0.15
 DECAY_FLOOR = 0.3
 HISTORY_FACTOR = 0.5
 TRIVIAL_PROMPT_RE = re.compile(r"^\s*(hi|hello|hey|thanks?|thank you|ok(ay)?|yes|no|ping|test|chào|chao|cảm ơn|cam on|ừ|uh|vâng|/\S+.*)\s*[.!?]*\s*$",
@@ -78,8 +84,12 @@ def safe_fact(text: str) -> tuple[str, list[str]]:
 
 
 class Retriever:
-    def __init__(self, conn: sqlite3.Connection, *, model: str | None = None, model_version: str | None = None, max_scan: int = 5000) -> None:
+    def __init__(self, conn: sqlite3.Connection, *, model: str | None = None, model_version: str | None = None, max_scan: int = 5000,
+                 min_sim: float = VECTOR_MIN_SIM, sim_margin: float = VECTOR_SIM_MARGIN, weights: dict[str, float] | None = None) -> None:
         self.conn = conn
+        self.min_sim = float(min_sim)
+        self.sim_margin = float(sim_margin)
+        self.weights = {**WEIGHTS, **(weights or {})}
         self.gs = GraphStore(conn)
         self.model = model
         self.model_version = model_version
@@ -136,10 +146,14 @@ class Retriever:
                 scored.append((cosine(qvec, unpack(r["_v"], r["_dim"])), d))
             scored.sort(key=lambda x: -x[0])
         out = []
+        best: float | None = None
         for sim, row in scored:
             v = self.gs.visible(row, hidden)
             if v is None or (v.get("invalidated_at") and not include_invalid) or sim <= 0:
                 continue
+            best = sim if best is None else best
+            if sim < self.min_sim or sim < best - self.sim_margin:  # scored đã xếp giảm dần → mọi hit sau cũng dưới ngưỡng
+                break
             out.append(dict(v, _sim=round(sim, 4)))
             if len(out) >= limit:
                 break
@@ -190,7 +204,7 @@ class Retriever:
             take("expand", exp)
         if not rows:
             return []
-        fused = rrf(channels)
+        fused = rrf(channels, self.weights)
         top = max(fused.values()) or 1.0
         names = self._names({x for f in rows.values() for x in (f.get("src_entity_id"), f.get("dst_entity_id")) if x}, hidden)
         out = []

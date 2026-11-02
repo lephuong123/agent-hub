@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .retrieval import TRIVIAL_PROMPT_RE, Retriever, format_recall, load_snapshot, render_fact, safe_fact, snapshot_conn, snapshot_tiers, tiers_all
+from .retrieval import TRIVIAL_PROMPT_RE, VECTOR_MIN_SIM, VECTOR_SIM_MARGIN, Retriever, format_recall, load_snapshot, render_fact, safe_fact, snapshot_conn, snapshot_tiers, tiers_all
 
 if TYPE_CHECKING:
     from .embed import Embedder
@@ -100,7 +100,10 @@ class GraphMemoryProvider(MemoryProvider):
     def retriever(self, conn: Any = None) -> Retriever:
         emb = self.embedder() if conn is None else None
         return Retriever(conn or self.conn, model=emb.model if emb else None, model_version=emb.version if emb else None,
-                         max_scan=int(_cfg(self.hub, "vector.max_scan", 5000)))
+                         max_scan=int(_cfg(self.hub, "vector.max_scan", 5000)),
+                         min_sim=float(_cfg(self.hub, "vector.min_sim", VECTOR_MIN_SIM)),
+                         sim_margin=float(_cfg(self.hub, "vector.sim_margin", VECTOR_SIM_MARGIN)),
+                         weights=_cfg(self.hub, "recall.weights", None) or None)
 
     def view(self, agent_id: str | None) -> tuple[list[tuple[str, str | None]], set[str]]:
         """(tầng, entry bị ẩn) agent nhìn thấy — agent + team + global, theo ghim canary. None = người/toàn hub: mọi tầng, không ghim."""
