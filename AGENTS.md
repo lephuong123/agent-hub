@@ -502,18 +502,22 @@ tắt cho RPC `session.search`/CLI (`--group`). Test: `tests/test_session_search
 
 ## Graph memory — kho thực thể + fact có thời gian (kiểu Graphiti, SQLite)
 Plan (đối chiếu Hermes, chia PR store → retrieval ∥ write → quality, thay PR 3/4 của `plan-memory-hermes-parity.md`): `docs/dev-notes/plan-graph-memory.md`.
-Đã làm (PR store): `docs/dev-notes/graph-memory.md`. Migration **v19** (Python `knowledge.graph.schema.migrate_v19` — migration Python mới: thêm
-tiền tố vào `store.PY_MIGRATION_PREFIXES`). Test: `tests/test_graph_memory.py`.
+Đã làm (PR store + PR write): `docs/dev-notes/graph-memory.md`. Migration **v19** (Python `knowledge.graph.schema.migrate_v19` — migration Python mới: thêm
+tiền tố vào `store.PY_MIGRATION_PREFIXES`). Test: `tests/test_graph_memory.py`, `tests/test_graph_memory_write.py` (bộ trích xuất GIẢ).
 
 | Module | Vai trò |
 |---|---|
 | `knowledge/graph/` | `GraphStore` (đọc, `plan_ops` THUẦN, hàng cho ledger, bản chụp eval, purge/clone/export, vector), `text.py` (NFC + gấp dấu), `schema.py` (bảng `mem_*`, FTS5) |
 | `learning/ledger.py` | `Change.kind="graph"` (`graph_rows`, `graph_key=graph://<scope>/<owner>`), rollback THEO HÀNG (`retracted_by`, không xoá cứng) |
 | `learning/pipeline.py`, `guard.py` | target `graph`: threat scan, `fact_too_long`, `duplicate_fact`, pin `graph`/`graph_fact`, suất `rate.graph_writes_per_agent_per_day` (riêng, không trần tổng) |
-| `learning/service.py` | `graph_write(...)`: quyền tầng = tool `memory` (`memory_scopes`) |
+| `learning/service.py` | `graph_write(...)`: quyền tầng = tool `memory` (`memory_scopes`); tool `memory` `target='graph'` (`_agent_graph`: `facts`/`forget`, provenance = lượt người gần nhất) |
+| `learning/graph_extract.py` | `GraphExtractor` (`hub.learning.graph_extract`): MỘT oneshot JSON-schema / kết thúc run làm việc, hook `PreCompact`, xoay session điều phối viên, review job khi `review_scope=graph`; con trỏ theo session (`hub_state learning.graph_cursor`); chỉ `user`/`steer`/`assistant` (+ `user`/`manager` của điều phối viên), bằng chứng bắt buộc; tầng LLM chọn hạ về `agent` khi không có quyền; trần `graph_extract_*`; dòng `runs` kind=`graph_extract` |
+| `knowledge/graph/resolve.py` | gộp thực thể khi ghi: canon → alias → `set_embed_matcher` (chỗ cắm embedding cho PR retrieval) |
 
 Bất biến: graph CHỈ ghi qua `pipeline.propose(target="graph")` / `LearningService.graph_write` → `Ledger.apply` (không INSERT trực tiếp vào `mem_*`
 ngoài `GraphStore.write_rows` do Ledger gọi; ngoại lệ: clone/import agent mới, purge). Mọi hàng có `scope` + `owner_id`; đọc LUÔN qua
 `GraphStore.visible`/`hidden=versions.graph_hidden(agent)` (ghim canary). Output tool/web không bao giờ ghi thẳng vào graph; văn bản episode
 không bao giờ chèn nguyên văn vào ngữ cảnh. Eval: graph vào bản sao home qua `.graph_snapshot.json` (băm trong fingerprint), không đọc DB sống.
-Thêm cột vào `mem_*` → migration mới; cột thay đổi ngoài ledger → thêm vào `graph.store.VOLATILE`.
+Thêm cột vào `mem_*` → migration mới; cột thay đổi ngoài ledger → thêm vào `graph.store.VOLATILE`. Trích xuất KHÔNG BAO GIỜ đọc
+`tool_call`/`tool_result`/tin subagent/`tick`/`notify` (lọc ở SQL `GraphExtractor.collect`) — thêm vai trò mới vào chỉ mục session thì quyết định rõ
+có cho trích hay không. Run kind mới không phải "làm việc" → thêm vào `review.NON_WORK_KINDS`, `session_search.TECHNICAL_KINDS`, `kpi.LEARNING_KINDS`.

@@ -29,7 +29,7 @@ DIGEST_TYPES = [
     "learning.applied", "learning.rolled_back", "learning.eval_failed", "learning.deferred", "learning.canary", "learning.promoted",
     "guard.blocked", "golden.suggested", "curator.report", "eval.completed", "regression.detected",
 ]
-LEARNING_RUN_KINDS = ("review", "eval", "eval_judge", "curator")
+LEARNING_RUN_KINDS = ("review", "eval", "eval_judge", "curator", "graph_extract")
 POLICY_REASONS = ("policy_touch", "self_escalation", "bounds", "safety_policy", "policy")
 
 

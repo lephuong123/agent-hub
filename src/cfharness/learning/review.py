@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from .service import LearningService
 
 log = logging.getLogger("cfharness.learning")
-NON_WORK_KINDS = ("review", "eval", "eval_judge", "curator")
+NON_WORK_KINDS = ("review", "eval", "eval_judge", "curator", "graph_extract")
 ACTIVE_STATUSES = ("queued", "running", "waiting_human")
 
 
@@ -180,7 +180,7 @@ class ReviewScheduler:
         return job
 
     def _latest_source(self, agent_id: str) -> dict[str, Any] | None:
-        r = self.conn.execute("SELECT id FROM runs WHERE agent_id=? AND kind NOT IN ('review','eval','eval_judge','curator') AND session_id IS NOT NULL "
+        r = self.conn.execute("SELECT id FROM runs WHERE agent_id=? AND kind NOT IN ('review','eval','eval_judge','curator','graph_extract') AND session_id IS NOT NULL "
                               "AND status NOT IN ('queued','running','waiting_human') AND started_at IS NOT NULL ORDER BY queued_at DESC LIMIT 1", (agent_id,)).fetchone()
         return self.hub.store.get_run(r[0]) if r else None
 
@@ -232,6 +232,8 @@ class ReviewScheduler:
         if cap and int(self.conn.execute("SELECT COUNT(*) FROM review_jobs WHERE agent_id=? AND started_at>=?", (agent_id, start)).fetchone()[0]) >= cap:
             self.hub.store._update("review_jobs", "id", job["id"], {"not_before": _utc_in(3600), "reason": f"đã đủ {cap} review hôm nay", "updated_at": now_iso()})
             return None
+        if str(self.cfg("review_scope") or "") == "graph":
+            return self._start_graph(job, src)
         if job["trigger"] == "counter":
             # review định kỳ khi agent đã hết suất thay đổi hôm nay chỉ đẻ proposal bị hoãn (tốn tiền, dồn ứ sang hôm sau) → giữ job
             # chờ tới khi có suất (nửa đêm, hoặc sớm hơn khi rollback trả suất). Signal mạnh / refine thủ công vẫn chạy.
@@ -263,6 +265,34 @@ class ReviewScheduler:
         self.hub.publish(make_event("review.started", agent_id, {"review_id": job["id"], "run_id": run["id"], "trigger": job["trigger"], "source_run_id": src["id"],
                                                                  "source_session_id": src["session_id"], "signals": [s["id"] for s in signals]}, run_id=run["id"]))
         return run["id"]
+
+    def _start_graph(self, job: dict[str, Any], src: dict[str, Any]) -> str | None:
+        """`review_scope = graph`: review job = MỘT lần trích xuất graph (oneshot, không tool, chỉ lượt người + câu trả lời agent) trên
+        session nguồn — không fork session (fork thấy cả output tool). Job `running` tới khi trích xuất xong; Signal của job được tiêu."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return None  # không có loop (CLI đồng bộ): để daemon chạy
+        self.hub.store._update("review_jobs", "id", job["id"], {"status": "running", "source_session_id": src["session_id"], "source_run_id": src["id"],
+                                                               "started_at": now_iso(), "updated_at": now_iso()})
+        self.reset_counters(job["agent_id"])
+
+        async def go() -> None:
+            try:
+                res = await self.svc.graph_extract.extract(src, "review")
+            except Exception as e:  # pragma: no cover
+                res = {"status": "failed", "reason": repr(e)[:300]}
+            st = "done" if res.get("status") in ("done", "skipped") else "failed"
+            self.svc.signals.mark_processed(list(job.get("signal_ids") or []), job["id"])
+            self._end(job, st, reason=None if st == "done" else str(res.get("reason") or "")[:300], result={"graph_extract": jsonable(res)},
+                      cost=float(res.get("cost_usd") or 0) or None)
+            self.hub.publish(make_event("review.completed", job["agent_id"], {"review_id": job["id"], "outcome": res.get("status"), "scope": "graph",
+                                                                              "cost_usd": res.get("cost_usd")}))
+
+        t = loop.create_task(go())
+        self.svc.graph_extract.tasks.add(t)
+        t.add_done_callback(self.svc.graph_extract.tasks.discard)
+        return None
 
     # ------------------------------------------------------------------ ngân sách
     @staticmethod
