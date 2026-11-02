@@ -511,9 +511,16 @@ tiền tố vào `store.PY_MIGRATION_PREFIXES`). Test: `tests/test_graph_memory.
 | `learning/ledger.py` | `Change.kind="graph"` (`graph_rows`, `graph_key=graph://<scope>/<owner>`), rollback THEO HÀNG (`retracted_by`, không xoá cứng) |
 | `learning/pipeline.py`, `guard.py` | target `graph`: threat scan, `fact_too_long`, `duplicate_fact`, pin `graph`/`graph_fact`, suất `rate.graph_writes_per_agent_per_day` (riêng, không trần tổng) |
 | `learning/service.py` | `graph_write(...)`: quyền tầng = tool `memory` (`memory_scopes`) |
+| `knowledge/graph/retrieval.py` | (PR retrieval) `Retriever.search`: FTS5 + vector + thực thể + mở rộng 1–2 bước → RRF → liên quan × độ tin cậy × độ mới; `format_recall` (khối `<recalled-memory>` dạng DỮ LIỆU, có ngày hiệu lực, qua `scan_load` + redact); `snapshot_conn` cho run eval |
+| `knowledge/graph/embed.py` | Embedder bge-m3 (fastembed/ONNX, extra `cfharness[vector]`, import lười), sqlite-vec `load_vec`, backfill nền `run_vector_loop` (`Hub.start`). Không cài → FTS5 thuần |
+| `knowledge/graph/provider.py` | `MemoryProvider` kiểu Hermes + `GraphMemoryProvider` (`provider_for(hub)`): prefetch vào TIN USER ĐẦU (`RunManager._memory_prefetch` → `_prepare_spec(recall=)`), tool hub-self `memory_recall` (RPC `memory.recall[_self]`) |
 
 Bất biến: graph CHỈ ghi qua `pipeline.propose(target="graph")` / `LearningService.graph_write` → `Ledger.apply` (không INSERT trực tiếp vào `mem_*`
 ngoài `GraphStore.write_rows` do Ledger gọi; ngoại lệ: clone/import agent mới, purge). Mọi hàng có `scope` + `owner_id`; đọc LUÔN qua
 `GraphStore.visible`/`hidden=versions.graph_hidden(agent)` (ghim canary). Output tool/web không bao giờ ghi thẳng vào graph; văn bản episode
 không bao giờ chèn nguyên văn vào ngữ cảnh. Eval: graph vào bản sao home qua `.graph_snapshot.json` (băm trong fingerprint), không đọc DB sống.
 Thêm cột vào `mem_*` → migration mới; cột thay đổi ngoài ledger → thêm vào `graph.store.VOLATILE`.
+Đọc (PR retrieval, `docs/dev-notes/graph-memory.md` § PR 2): recall KHÔNG gọi LLM, KHÔNG vào system prompt (chỉ tin user đầu của session mới,
+không cho run review/eval/curator/resume/fork); không bao giờ chờ nạp model trên đường chạy run (`Embedder.ready`); `mem_vectors` là chỉ mục
+dẫn xuất (vòng nền ghi thẳng, ngoài ledger). Test KHÔNG tải model: `tests/conftest.py` đặt `CFHARNESS_GRAPH_VECTOR=off`, test cần vector gán
+`hub.graph_embedder = <giả>`. `memory_search` đọc memory/skill THEO PHIÊN BẢN agent (ghim canary), không đọc file sống. Test: `tests/test_graph_retrieval.py`.

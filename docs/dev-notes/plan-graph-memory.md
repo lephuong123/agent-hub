@@ -46,7 +46,8 @@ metadata)`, `get_tool_schemas()`, `handle_tool_call(name, args, **kw) -> str`. L
 2. **retrieval** (song song với 3) — `MemoryProvider` kiểu Hermes (prefetch/queue_prefetch/recall_status), kênh vector (bge-m3 qua
    `cfharness[vector]`, backfill nền theo lô như `session_search.run_backfill`, đổi model → chỉ mục lại theo `needs_embedding`), RRF,
    1–2 hop, xếp hạng; chèn vào tin user đầu; tool hub-self `graph_search`/`graph_neighbors`; sửa `memory_search` (`surface_rpc.py`) đang đọc
-   file SỐNG (lách ghim canary); đọc bản chụp `.graph_snapshot.json` khi run eval.
+   file SỐNG (lách ghim canary); đọc bản chụp `.graph_snapshot.json` khi run eval. **Đã làm** (`graph-memory.md` § PR 2) — hai tool dự kiến
+   gộp thành MỘT `memory_recall(query | entity, hops, include_history)` + `memory_search` scope `graph`; runtime vector = fastembed (ONNX).
 3. **write** (song song với 2) — hook `PreCompact` + `on_session_end` + xoay session điều phối viên → MỘT lần trích xuất JSON-schema/session
    (debounce, trần chi phí, `agent_context` không primary thì không ghi) → `graph_write(created_by="review")`; mirror tool `memory`
    (`on_memory_write`) thành episode; tool hub-self `graph` cho agent (dùng `graph_write`, quyền tầng đã có ở PR 1).

@@ -937,7 +937,7 @@ def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdi
     if server == "hub-self":  # M3 FR-MS-08: tool task_* của hub, ràng với run — không phá huỷ
         from ..mcp_server.hub_self import MANAGER_READ_TOOLS  # M7: tool đọc của điều phối viên (quyền ghi kiểm ở daemon)
 
-        safe = tool in ("task_show", "team_roster", "skills_list", "skill_view", "memory_view", "memory_search") or tool in MANAGER_READ_TOOLS
+        safe = tool in ("task_show", "team_roster", "skills_list", "skill_view", "memory_view", "memory_search", "memory_recall") or tool in MANAGER_READ_TOOLS
         return Verdict("safe" if safe else "write", "hub_self_tool")  # M4-A: tool đọc tri thức
     ann = None
     if ctx.mcp_annotations is not None:

@@ -350,6 +350,27 @@ DEFAULTS: dict[str, Any] = {
         "user_profile_mode": "shadow",  # USER dùng chung không canary theo agent được: eval (shadow) → áp dụng cho mọi agent + theo dõi
         "steer_correction_regex": r"(?i)(\bđừng\b|\bsai\s+rồi\b|\bkhông\s+phải\b|\bkhông\s+đúng\b|\bsửa\s+lại\b|\bdon'?t\b|\bdo\s+not\b|\bstop\s+doing\b|\bwrong\b|\bthat'?s\s+not\b|\bnot\s+what\s+i\b|\binstead\b)",
     },
+    # Graph memory — đọc (knowledge/graph/retrieval.py, provider.py; docs/dev-notes/graph-memory.md)
+    "graph_memory": {
+        "recall": {
+            "enabled": True,  # tắt → không chèn recall, tool memory_recall trả lỗi
+            "prefetch": True,  # top-k fact vào TIN USER ĐẦU của session mới (không bao giờ system prompt; không run review/eval/curator)
+            "top_k": 8,
+            "max_chars": 2000,  # trần khối recall (ký tự)
+            "hops": 1,  # mở rộng 1–2 bước quanh thực thể của hit đầu
+            "half_life_days": 90,  # suy giảm theo tuổi fact (giảm hạng, sàn 0.3 — không xoá)
+            "min_score": 0.05,
+        },
+        "vector": {
+            "enabled": "auto",  # auto = dùng khi cài extra cfharness[vector] (fastembed + sqlite-vec); false = chỉ FTS5
+            "model": "BAAI/bge-m3",  # dense 1024-d; đổi model/phiên bản → chỉ mục lại
+            "batch": 32,  # số fact mỗi lô embed nền
+            "interval_s": 60,  # nhịp quét fact mới chưa có vector
+            "query_timeout_s": 3.0,  # trần thời gian embed câu hỏi lúc prefetch (quá → chỉ FTS5)
+            "max_scan": 5000,  # không có sqlite-vec: cosine Python trên ≤ N vector mới nhất
+            "threads": None,
+        },
+    },
     # M4-B — đánh giá & vận hành học (FR-LN-08/10/13/17)
     "eval": {
         "enabled": True,  # tắt → gate trả deferred_no_eval (L3 hoãn), post-apply gắn unevaluated

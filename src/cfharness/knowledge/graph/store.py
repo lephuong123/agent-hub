@@ -198,7 +198,7 @@ class GraphStore:
         if not words:
             return []
         where, args = self._tier_where(tiers, "f")
-        rows: list[sqlite3.Row] = []
+        rows: list[sqlite3.Row] | None = None
         long_words = [w for w in words if len(w) >= 3]
         if has_fts(self.conn) and long_words:
             match = " OR ".join('"' + w.replace('"', '""') + '"' for w in long_words)
@@ -206,8 +206,10 @@ class GraphStore:
                 rows = self.conn.execute(f"SELECT f.* FROM mem_facts_fts JOIN mem_facts f ON f.rowid=mem_facts_fts.rowid "
                                          f"WHERE mem_facts_fts MATCH ? AND {where} ORDER BY rank LIMIT ?", (match, *args, int(limit) * 4)).fetchall()
             except sqlite3.OperationalError:
-                rows = []
-        if not rows:
+                rows = None
+        if rows is None:
+            # LIKE chỉ khi không dùng được FTS5 (không có / câu hỏi toàn từ < 3 ký tự). Từ 1 ký tự ("I", "a") khớp MỌI fact → bỏ
+            words = long_words or [w for w in words if len(w) >= 2] or words
             like = " OR ".join("f.folded LIKE ?" for _ in words)
             rows = self.conn.execute(f"SELECT f.* FROM mem_facts f WHERE ({like}) AND {where} ORDER BY f.ingested_at DESC LIMIT ?",
                                      (*[f"%{w}%" for w in words], *args, int(limit) * 4)).fetchall()

@@ -5,7 +5,9 @@ sửa `daemon.py`. Method:
 - `agent.delete` (thay bản của daemon: thêm `detach_teams`), `agent.archive` (= delete), `agent.revert {id, to}`;
 - `trash.list|restore|purge` — thùng rác hợp nhất (agent, team, MCP server); purge chỉ agent (gọi `agent.purge` của guard);
 - `memory.search {query, agent_id?, scope?, limit?}` (memory/skill theo từ khoá + transcript qua FTS5 v17, KHÔNG gọi LLM) +
-  `memory.search_self {run_id, args}` cho hub-self (ràng với run của tiến trình gọi);
+  `memory.search_self {run_id, args}` cho hub-self (ràng với run của tiến trình gọi); scope `graph` = fact graph memory; memory/skill
+  đọc theo PHIÊN BẢN agent được gán (ghim canary), run eval đọc bản sao home;
+- `memory.recall {query?, entity?, agent_id?, …}` + `memory.recall_self {run_id, args}` — graph memory (FTS5 + vector + 1–2 bước, RRF);
 - `session.search {mode: search|around|read|browse, …}` + `session.search_self {run_id, args}` — tìm kiếm hội thoại đầy đủ
   (session_search.py). Phạm vi nhìn tính từ NGƯỜI GỌI (auth.SCOPED_READ): agent thường chỉ thấy của mình + team,
   điều phối viên/người thấy hết, socket không token và không thuộc run → từ chối;
@@ -64,16 +66,19 @@ def _snippet(text: str, q: list[str], width: int = 240) -> str:
     return ("…" if start else "") + s + ("…" if start + width < len(text) else "")
 
 
-def memory_search(hub: Any, query: str, *, agent_id: str | None = None, scope: str = "all", limit: int = 10, vis: Any = None) -> dict[str, Any]:
-    """Tìm trong memory (MEMORY/USER các tầng agent→team→global), skill hiệu lực và transcript (FTS5 trên toàn bộ hội thoại — v17,
-    ẩn phiên kỹ thuật review/eval/curator). Thuần đọc, tất định, không gọi LLM. `vis` (session_search.Visibility) giới hạn phạm vi
-    theo người gọi: agent thường chỉ thấy memory/skill của chính nó và transcript của nó + team."""
+def memory_search(hub: Any, query: str, *, agent_id: str | None = None, scope: str = "all", limit: int = 10, vis: Any = None,
+                  home: Path | None = None, eval_run: bool = False) -> dict[str, Any]:
+    """Tìm trong memory (MEMORY/USER các tầng agent→team→global), skill hiệu lực, graph memory (fact) và transcript (FTS5 trên toàn bộ
+    hội thoại — v17, ẩn phiên kỹ thuật review/eval/curator). Thuần đọc, tất định, không gọi LLM. `vis` (session_search.Visibility) giới
+    hạn phạm vi theo người gọi: agent thường chỉ thấy memory/skill/graph của chính nó (+ team/global) và transcript của nó + team.
+    Memory/skill/graph đọc THEO PHIÊN BẢN agent được gán (ghim canary — `knowledge.versions`), không đọc file sống; `home` (bản sao home
+    của run eval) → đọc tri thức tầng agent + overlay ứng viên + bản chụp graph trong bản sao."""
     q = _tokens(query)
     if not q:
         raise HubError("query rỗng")
     scope = scope or "all"
-    if scope not in ("all", "memory", "skills", "transcripts"):
-        raise HubError("scope phải là all|memory|skills|transcripts")
+    if scope not in ("all", "memory", "skills", "graph", "transcripts"):
+        raise HubError("scope phải là all|memory|skills|graph|transcripts")
     if vis is not None and not vis.all:
         if agent_id and agent_id not in vis.agents:
             raise Blocked(f"memory_search: không được xem dữ liệu của agent '{agent_id}' (chỉ của chính mình)")
@@ -83,20 +88,32 @@ def memory_search(hub: Any, query: str, *, agent_id: str | None = None, scope: s
     agents = [agent_id] if agent_id else [a["id"] for a in hub.store.list_agents()]
     results: list[dict[str, Any]] = []
     ks = getattr(hub, "knowledge", None)
-    seen_tier: set[tuple[str, str | None, str]] = set()
+    seen_tier: set[tuple[Any, ...]] = set()
+    seen_facts: set[str] = set()
     for aid in agents:
         if hub.store.get_agent(aid) is None:
             raise NotFound(f"không tìm thấy agent '{aid}'")
         if scope in ("all", "memory"):
             tiers = ks.agent_tiers(aid) if ks is not None else [("agent", aid)]
+            pins = ks.versions.pins_for(aid) if ks is not None else {}
             for tscope, owner in tiers:
-                for store_name in ("memory", "user"):
-                    key = (tscope, owner, store_name)
+                for store_name in (("memory",) if tscope == "team" else ("memory", "user")):  # team chỉ có memory.md (không USER)
+                    path =str(ks.memory_path(tscope, owner, store_name)) if ks is not None else None
+                    # khoá gộp theo PHIÊN BẢN: agent bị ghim và agent canary thấy hai bản khác nhau của cùng một tầng
+                    key = (tscope, owner, store_name, (pins.get(path) or {}).get("before_blob") if path else None)
                     if tscope != "agent" and key in seen_tier:
                         continue
                     seen_tier.add(key)
                     try:
-                        entries = ks.read_memory(tscope, owner, store_name) if ks is not None else []
+                        if ks is None:
+                            entries = []
+                        elif tscope == "agent" and home is not None:
+                            f = Path(home) / ("MEMORY.md" if store_name == "memory" else "USER.md")
+                            from ..knowledge.store import parse_memory
+
+                            entries = parse_memory(f.read_text(encoding="utf-8")) if f.exists() else []
+                        else:
+                            entries = ks.versions.read_memory(aid, tscope, owner, store_name, home=home)
                     except Exception:
                         entries = []
                     if ks is None and tscope == "agent":
@@ -110,13 +127,14 @@ def memory_search(hub: Any, query: str, *, agent_id: str | None = None, scope: s
                                             "owner": owner, "store": store_name, "score": round(sc, 3), "text": _snippet(e, q)})
         if scope in ("all", "skills") and ks is not None:
             try:
-                skills = ks.effective_skills(aid)
+                skills = ks.effective_skills(aid, home=home) if home is not None else ks.effective_skills(aid)
             except Exception:
                 skills = []
             for s in skills:
-                if s.get("scope") != "agent" and ("skill", s.get("owner"), s["name"]) in seen_tier:
+                skey = ("skill", s.get("owner"), s["name"], s.get("path"))
+                if s.get("scope") != "agent" and skey in seen_tier:
                     continue
-                seen_tier.add(("skill", s.get("owner"), s["name"]))
+                seen_tier.add(skey)
                 body = ""
                 try:
                     body = (Path(s["path"]) / "SKILL.md").read_text(encoding="utf-8", errors="replace")
@@ -127,6 +145,21 @@ def memory_search(hub: Any, query: str, *, agent_id: str | None = None, scope: s
                     results.append({"kind": "skill", "agent_id": aid if s.get("scope") == "agent" else None, "scope": s.get("scope"),
                                     "owner": s.get("owner"), "name": s["name"], "score": round(sc, 3),
                                     "text": _snippet(body or s.get("description") or s["name"], q)})
+        if scope in ("all", "graph") and ks is not None:
+            try:
+                from ..knowledge.graph.provider import provider_for
+
+                facts = provider_for(hub).recall(aid, {"query": query, "limit": 10}, home=home, eval_run=eval_run)["facts"]
+            except HubError:
+                facts = []
+            for f in facts:
+                if "fact" not in f or f["id"] in seen_facts:
+                    continue
+                seen_facts.add(f["id"])
+                # điểm graph ∈ [0,1] → thang memory/skill (khớp từ khoá ∈ [0,2]): fact liên quan nhất ngang một mục khớp đủ từ
+                results.append({"kind": "graph", "agent_id": aid if f.get("scope") == "agent" else None, "scope": f.get("scope"), "fact_id": f["id"],
+                                "relation": f.get("relation"), "valid_from": f.get("valid_from"), "valid_to": f.get("valid_to"),
+                                "valid": f.get("valid"), "score": round(0.5 + float(f.get("score") or 0), 3), "text": f["fact"]})
     if scope in ("all", "transcripts"):
         # v17: FTS5 trên toàn bộ hội thoại (session_search.py) thay cho LIKE trên prompt/summary run
         from .. import session_search as ss
@@ -145,6 +178,16 @@ def memory_search(hub: Any, query: str, *, agent_id: str | None = None, scope: s
                             "score": round(0.9 * (1.0 + 0.5 / (1 + i)), 3), "text": h["snippet"]})
     results.sort(key=lambda r: (-r["score"], r["kind"]))
     return {"query": query, "results": results[: max(1, min(int(limit or 10), 50))], "total": len(results)}
+
+
+def _eval_home(run: dict[str, Any]) -> tuple[Path | None, bool]:
+    """(bản sao home, là run eval) — run eval (M4-B) chạy trên BẢN SAO home; tri thức phải đọc từ đó, không từ kho sống."""
+    opts = run.get("run_opts") or {}
+    ov = opts.get("eval_overlay")
+    if ov or run.get("kind") in ("eval", "eval_judge"):
+        h = (ov or {}).get("home") if isinstance(ov, dict) else None
+        return (Path(str(h)) if h else None), True
+    return None, False
 
 
 # ============================================================================ trash
@@ -268,8 +311,36 @@ class SurfaceRpc:
             args.setdefault("group", True)  # agent: mặc định gộp theo luồng (như Hermes trả top session)
             return self._session(args, vis)
         own = None if vis.all else run["agent_id"]
+        home, ev = _eval_home(run)
+        if ev:  # run eval: tri thức của BẢN SAO home (ứng viên + bản chụp graph), không đọc kho sống
+            own = run["agent_id"]
         return memory_search(self.hub, str(args.get("query") or ""), agent_id=own, scope=args.get("scope") or "all",
-                             limit=int(args.get("limit") or 8), vis=vis)
+                             limit=int(args.get("limit") or 8), vis=vis, home=home, eval_run=ev)
+
+    def memory_recall(self, p: dict[str, Any]) -> dict[str, Any]:
+        """`memory.recall {query?, entity?, agent_id?, limit?, hops?, include_history?}` — graph memory (knowledge/graph/retrieval.py).
+        Người/điều phối viên: `agent_id` → đúng tầng + ghim agent đó thấy; bỏ trống → mọi tầng. Agent: chỉ graph của chính nó."""
+        from ..knowledge.graph.provider import provider_for
+
+        vis = self._caller_vis("memory.recall")
+        aid = p.get("agent_id") or p.get("agent")
+        if not vis.all:
+            if aid and aid not in vis.agents:
+                raise Blocked(f"memory_recall: không được xem graph của agent '{aid}' (chỉ của chính mình)")
+            aid = aid or (vis.agents[0] if vis.agents else None)
+            if aid is None:
+                raise Blocked("memory_recall: không xác định được agent của người gọi")
+        if aid and self.hub.store.get_agent(aid) is None:
+            raise NotFound(f"không tìm thấy agent '{aid}'")
+        return provider_for(self.hub).recall(aid, dict(p))
+
+    def memory_recall_self(self, p: dict[str, Any]) -> dict[str, Any]:
+        """hub-self `memory_recall`: graph agent của run thấy (agent + team + global, theo ghim canary); run eval → bản chụp trong bản sao."""
+        from ..knowledge.graph.provider import provider_for
+
+        run, _vis = self._self_run_vis(p, "memory_recall")
+        home, ev = _eval_home(run)
+        return provider_for(self.hub).recall(run["agent_id"], dict(p.get("args") or {}), home=home, eval_run=ev)
 
     def _session(self, args: dict[str, Any], vis: Any) -> dict[str, Any]:
         from .. import session_search as ss
@@ -364,6 +435,8 @@ class SurfaceRpc:
             "trash.purge": self.trash_purge,
             "memory.search": self.memory_search,
             "memory.search_self": self.memory_search_self,
+            "memory.recall": self.memory_recall,
+            "memory.recall_self": self.memory_recall_self,
             "session.search": self.session_search,
             "session.search_self": self.session_search_self,
             "hook.observe": self.hook_observe,

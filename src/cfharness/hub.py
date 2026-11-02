@@ -155,6 +155,12 @@ class Hub:
         from .session_search import start_backfill  # v17: chỉ mục hội thoại cũ theo lô nền (session_search.py)
 
         start_backfill(self)
+        try:  # graph memory: vector bge-m3 cho fact (chỉ khi cài extra `cfharness[vector]`) — embed nền theo lô, không chặn run
+            from .knowledge.graph.embed import start_vector_loop
+
+            start_vector_loop(self)
+        except Exception:  # pragma: no cover
+            log.exception("không khởi động được vòng vector graph memory")
 
     async def stop(self) -> None:
         self.publish(make_event("hub.stopping", None, {"epoch": self.bus.epoch}))

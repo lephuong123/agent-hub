@@ -374,7 +374,19 @@ class RunManager:
         return started
 
     # ------------------------------------------------------------------ launch
-    def _prepare_spec(self, run: dict[str, Any], agent: dict[str, Any]) -> RunSpec:
+    async def _memory_prefetch(self, run: dict[str, Any], agent: dict[str, Any]) -> str:
+        """Graph memory (knowledge/graph/provider.py): chỉ session MỚI, không run kỹ thuật (review/eval/curator); lỗi → rỗng."""
+        if getattr(self.hub, "knowledge", None) is None:
+            return ""
+        try:
+            from .knowledge.graph.provider import provider_for
+
+            return await provider_for(self.hub).prefetch_for_run(run, agent)
+        except Exception:  # pragma: no cover - recall KHÔNG BAO GIỜ chặn run
+            log.exception("graph memory prefetch lỗi")
+            return ""
+
+    def _prepare_spec(self, run: dict[str, Any], agent: dict[str, Any], *, recall: str = "") -> RunSpec:
         hub = self.hub
         cfg = hub.config.data
         claude_cfg = cfg["runtime"]["claude"]
@@ -557,6 +569,8 @@ class RunManager:
         prompt = run["prompt"]
         if is_mgr:  # R2-3: khoá tiêu đề tin thật chỉ đưa vào stdin của run manager, không bao giờ vào DB
             prompt = hub.manager.render_prompt(run_id, prompt)
+        if recall:  # graph memory: khối DỮ LIỆU trước tin user đầu — chỉ vào stdin, KHÔNG vào DB (runs.prompt giữ nguyên lời người)
+            prompt = f"{recall}\n\n{prompt}"
         return RunSpec(
             run_id=run_id,
             agent_id=agent["id"],
@@ -698,7 +712,8 @@ class RunManager:
             ar.runtime = runtime
             if agent.get("mcp_servers") and getattr(hub, "mcp_oauth", None) is not None:
                 await hub.mcp_oauth.ensure_fresh_for(list(agent["mcp_servers"]))  # OAuth MCP: làm mới token sắp hết hạn trước khi ghi mcp.json
-            spec = self._prepare_spec(run, agent)
+            recall = await self._memory_prefetch(run, agent)  # graph memory: top-k fact vào TIN USER ĐẦU (không vào system prompt)
+            spec = self._prepare_spec(run, agent, recall=recall)
             spec.control_handler = functools.partial(self._control_request, ar)  # CLI 2.1.303+: control_request can_use_tool → guard
             await self._checkpoint(ar, run, spec)
             cli_version = await self._check_cli_version(runtime, agent_id, run_id)
