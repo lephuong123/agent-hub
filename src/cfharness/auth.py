@@ -66,6 +66,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # học (H-05): propose bị HẠ xuống created_by=agent thay vì từ chối — xem `DOWNGRADE`
         "learn.propose", "learn.rollback", "learn.retry", "learn.refine", "learn.policy_set", "learn.review_cancel",
         "knowledge.pin", "curation.rollback", "eval.post_apply",
+        # graph memory (learn graph …): xem graph MỌI agent + bảo trì (consolidation/chốt độ tin cậy). Agent tra graph của mình qua memory_recall
+        "learn.graph_stats", "learn.graph_fact", "learn.graph_consolidate", "learn.graph_settle",
         # skill manager của người (learning/skill_rpc.py): ghi skill với created_by=user — agent học qua learnself/review, không qua đây
         "knowledge.skill_save", "knowledge.skill_archive", "knowledge.skill_restore", "knowledge.skill_import", "knowledge.skill_promote",
         # golden task = chính sách an toàn (Q-07)
@@ -101,7 +103,7 @@ DOWNGRADE = frozenset({"learn.propose"})
 # Method ĐỌC mà kết quả phụ thuộc người gọi (phạm vi nhìn) → daemon phải xác định ĐẦY ĐỦ người gọi (cây tiến trình/env như method
 # ghi), không dùng đường nóng. Tìm kiếm hội thoại/memory: agent thường chỉ thấy của mình + team; điều phối viên/người thấy hết
 # (session_search.py, mcp_server/surface_rpc.py).
-SCOPED_READ: frozenset[str] = frozenset({"session.search", "session.search_self", "memory.search", "memory.search_self"})
+SCOPED_READ: frozenset[str] = frozenset({"session.search", "session.search_self", "memory.search", "memory.search_self", "memory.recall", "memory.recall_self"})
 
 # Method GHI mà agent (trong run) ĐƯỢC gọi — mỗi method phải có lý do. Method ghi mới phải nằm ở HUMAN_ONLY hoặc ở đây
 # (test `test_every_mutating_method_is_classified` fail nếu chưa phân loại — tránh lặp lỗi phối hợp kiểu V2-N1).

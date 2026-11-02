@@ -181,8 +181,9 @@ class CanaryManager:
 
     # ------------------------------------------------------------------ 2. mở canary/shadow
     def busy(self, plan: dict[str, Any], exclude_mode: str | None = None) -> dict[str, Any] | None:
-        ch = plan.get("change")
-        path = str(getattr(ch, "path", "") or "")
+        from .ledger import change_key
+
+        path = change_key(plan.get("change"))  # file/cây: đường dẫn; graph: `graph://<scope>/<owner>`
         if not path:
             return None
         r = self.conn.execute("SELECT * FROM tier_canaries WHERE status='canary' AND path=? AND mode IS NOT ? LIMIT 1", (path, exclude_mode)).fetchone()
@@ -191,6 +192,8 @@ class CanaryManager:
     def open(self, prop: dict[str, Any], plan: dict[str, Any], verdict: dict[str, Any]) -> str:
         """Gọi bởi Pipeline NGAY TRƯỚC `Ledger.apply` (cùng lượt đồng bộ — không run nào dựng prompt giữa hai bước):
         ghi canary (ghim agent khác về bản trước). Trả canary id."""
+        from .ledger import change_key
+
         ch = plan["change"]
         mode = self.mode_for(prop)
         scores = verdict.get("scores") or {}
@@ -198,13 +201,13 @@ class CanaryManager:
         with_golden = scores.get("agents") or []
         canary_agent = self.canary_agent(prop, affected, with_golden)
         watch = [canary_agent] if mode == "canary" else (with_golden or affected)
-        before = self.svc.ledger._current_bytes(ch.kind, ch.path, ch.agent_id)
+        before = self.svc.ledger.state_bytes(ch)
         cfg = self.cfg()
         now = datetime.now(timezone.utc)
         cid = "cn_" + uuid.uuid4().hex[:10]
         self.hub.store._insert("tier_canaries", {
             "id": cid, "proposal_id": prop["id"], "mode": mode, "scope": prop["scope"], "owner_id": plan.get("owner"), "target": prop["target"],
-            "target_ref": prop.get("target_ref"), "blob_kind": ch.kind, "path": str(ch.path) if ch.path else None,
+            "target_ref": prop.get("target_ref"), "blob_kind": ch.kind, "path": change_key(ch) or None,
             "before_blob": self.svc.ledger.blobs.put(before), "canary_agent_id": canary_agent if mode == "canary" else None,
             "origin_agent_id": prop.get("agent_id"), "watch_agents": [a for a in watch if a], "status": "canary", "created_by": prop.get("created_by"),
             "started_at": _utc(now), "deadline": _utc(now + timedelta(hours=cfg["hours"])), "eval": {k: verdict.get(k) for k in ("status", "reason")} | {"scores": {k: v for k, v in scores.items() if k != "per_agent"}},

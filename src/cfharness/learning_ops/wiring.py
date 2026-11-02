@@ -7,7 +7,8 @@ Vòng nền tự khởi động khi bus phát `hub.started` (trong event loop c�
   1. digest đến giờ (`digest.schedule`, giờ máy) → dựng + gửi Slack;
   2. eval L1 theo lô (`eval.batch_time`, mỗi ngày một lần) → `gate.run_batch_l1()`;
   3. curator pha 1 đến chu kỳ và daemon rảnh → `curator.run()`;
-  4. agent có run/signal mới → `regression.check_agent()`; toàn bộ mỗi `eval.regression.full_check_min` phút.
+  4. agent có run/signal mới → `regression.check_agent()`; toàn bộ mỗi `eval.regression.full_check_min` phút;
+  5. graph memory (`hub.learning.graph_quality.tick()`): chốt độ tin cậy fact theo kết quả run + consolidation đến hạn.
 """
 
 from __future__ import annotations
@@ -93,6 +94,14 @@ class LearningOps:
             acts += await self.regression.check_all()
         if acts:
             out["regression"] = acts
+        gq = getattr(getattr(self.hub, "learning", None), "graph_quality", None)
+        if gq is not None:  # graph memory PR quality: chốt độ tin cậy theo kết quả run (sau regression check) + consolidation đến hạn
+            try:
+                g = gq.tick()
+                if g:
+                    out["graph"] = g
+            except Exception:  # pragma: no cover - vòng nền không được chết
+                log.exception("graph quality tick lỗi")
         return out
 
     def _batch_due(self, now_local: datetime | None) -> bool:

@@ -499,3 +499,42 @@ Plan ngang Hermes còn lại: `docs/dev-notes/plan-memory-hermes-parity.md`. Too
 (lead → team mình lead; điều phối viên / policy `agents.<id>.shared_memory_write` → mọi tầng) — test `tests/test_memory_tool_parity.py`. `session_search` giữ kết quả tool 2.000 ký tự
 (`claude_adapter.RESULT_PREVIEW_MAX` = `session_search.TOOL_RESULT_MAX`) và `group` gộp hit theo luồng — mặc định bật cho hub-self + MCP,
 tắt cho RPC `session.search`/CLI (`--group`). Test: `tests/test_session_search.py`.
+
+## Graph memory — kho thực thể + fact có thời gian (kiểu Graphiti, SQLite)
+Plan (đối chiếu Hermes, chia PR store → retrieval ∥ write → quality, thay PR 3/4 của `plan-memory-hermes-parity.md`): `docs/dev-notes/plan-graph-memory.md`.
+Đã làm (store + retrieval + write + quality, nhánh `feat/graph-memory`): `docs/dev-notes/graph-memory.md`. Migration v20 (SQL) = `mem_fact_uses`. Migration **v19** (Python `knowledge.graph.schema.migrate_v19` — migration Python mới: thêm
+tiền tố vào `store.PY_MIGRATION_PREFIXES`). Test: `tests/test_graph_memory.py`, `tests/test_graph_memory_write.py` (bộ trích xuất GIẢ), `tests/test_graph_retrieval.py`, `tests/test_graph_quality.py`, `tests/test_graph_memory_review.py` (sửa theo review: pin graph qua RPC/CLI, quyền tầng
+`learn.propose` của agent, fact người khai không bị bên khác đóng, trần độ dài tên thực thể, trần trích xuất nguyên tử).
+
+| Module | Vai trò |
+|---|---|
+| `knowledge/graph/` | `GraphStore` (đọc, `plan_ops` THUẦN, hàng cho ledger, bản chụp eval, purge/clone/export, vector), `text.py` (NFC + gấp dấu), `schema.py` (bảng `mem_*`, FTS5) |
+| `learning/ledger.py` | `Change.kind="graph"` (`graph_rows`, `graph_key=graph://<scope>/<owner>`), rollback THEO HÀNG (`retracted_by`, không xoá cứng) |
+| `learning/pipeline.py`, `guard.py` | target `graph`: threat scan, `fact_too_long`, `duplicate_fact`, pin `graph`/`graph_fact`, suất `rate.graph_writes_per_agent_per_day` (riêng, không trần tổng) |
+| `knowledge/graph/retrieval.py` | (PR retrieval) `Retriever.search`: FTS5 + vector + thực thể + mở rộng 1–2 bước → RRF → liên quan × độ tin cậy × độ mới; `format_recall` (khối `<recalled-memory>` dạng DỮ LIỆU, có ngày hiệu lực, qua `scan_load` + redact); `snapshot_conn` cho run eval |
+| `knowledge/graph/embed.py` | Embedder bge-m3 (fastembed/ONNX, extra `cfharness[vector]`, import lười), sqlite-vec `load_vec`, backfill nền `run_vector_loop` (`Hub.start`). Không cài → FTS5 thuần |
+| `knowledge/graph/provider.py` | `MemoryProvider` kiểu Hermes + `GraphMemoryProvider` (`provider_for(hub)`): prefetch vào TIN USER ĐẦU (`RunManager._memory_prefetch` → `_prepare_spec(recall=)`), tool hub-self `memory_recall` (RPC `memory.recall[_self]`) |
+| `learning/service.py` | `graph_write(...)`: quyền tầng = tool `memory` (`memory_scopes`); tool `memory` `target='graph'` (`_agent_graph`: `facts`/`forget`, provenance = lượt người gần nhất) |
+| `learning/graph_extract.py` | `GraphExtractor` (`hub.learning.graph_extract`): MỘT oneshot JSON-schema / kết thúc run làm việc, hook `PreCompact`, xoay session điều phối viên, review job khi `review_scope=graph`; con trỏ theo session (`hub_state learning.graph_cursor`); chỉ `user`/`steer`/`assistant` (+ `user`/`manager` của điều phối viên), bằng chứng bắt buộc; tầng LLM chọn hạ về `agent` khi không có quyền; trần `graph_extract_*`; dòng `runs` kind=`graph_extract` |
+| `knowledge/graph/resolve.py` | gộp thực thể khi ghi: canon → alias → `set_embed_matcher` (cắm `embed.entity_matcher` trong `start_vector_loop`: vector TÊN thực thể, cùng tầng, chỉ khi model `ready`) |
+| `learning/graph_quality.py` | `GraphQuality` (`hub.learning.graph_quality`): `record_uses` (bảng `mem_fact_uses`), `settle` (độ tin cậy theo KẾT QUẢ run: run xấu = thay đổi do run tạo bị tự rollback / trong cửa sổ hồi quy đã rollback / có correction → giảm; run completed sau `settle_h` → tăng), `consolidate` (gộp thực thể + fact gần trùng qua `merge_entity`/`supersede_fact`, `created_by=curator`), `stats`/`fact_history`; `tick` từ `LearningOps.tick` |
+| `evals/memory_golden.py` | checker `memory_recall` (golden memory: recall@k × (1 − stale-fact-rate), thăm dò đầu độc → 0) chấm trên bản chụp graph, KHÔNG chạy run; eval gate `_tasks_for` (entry toàn graph → task memory); bộ mẫu `fixtures/graph_memory_golden.json` + `seed_fixture` |
+| `learning/cli.py` `learn graph` | `stats\|search\|show\|rollback\|consolidate\|settle` — client mỏng; RPC `learn.graph_*` là `HUMAN_ONLY` |
+
+Bất biến: graph CHỈ ghi qua `pipeline.propose(target="graph")` / `LearningService.graph_write` → `Ledger.apply` (không INSERT trực tiếp vào `mem_*`
+ngoài `GraphStore.write_rows` do Ledger gọi; ngoại lệ: clone/import agent mới, purge). Mọi hàng có `scope` + `owner_id`; đọc LUÔN qua
+`GraphStore.visible`/`hidden=versions.graph_hidden(agent)` (ghim canary). Output tool/web không bao giờ ghi thẳng vào graph; văn bản episode
+không bao giờ chèn nguyên văn vào ngữ cảnh. Eval: graph vào bản sao home qua `.graph_snapshot.json` (băm trong fingerprint), không đọc DB sống.
+Thêm cột vào `mem_*` → migration mới; cột thay đổi ngoài ledger → thêm vào `graph.store.VOLATILE`.
+Đọc (PR retrieval, `docs/dev-notes/graph-memory.md` § PR 2): recall KHÔNG gọi LLM, KHÔNG vào system prompt (chỉ tin user đầu của session mới,
+không cho run review/eval/curator/resume/fork); không bao giờ chờ nạp model trên đường chạy run (`Embedder.ready`); `mem_vectors` là chỉ mục
+dẫn xuất (vòng nền ghi thẳng, ngoài ledger). Test KHÔNG tải model: `tests/conftest.py` đặt `CFHARNESS_GRAPH_VECTOR=off`, test cần vector gán
+`hub.graph_embedder = <giả>`. `memory_search` đọc memory/skill THEO PHIÊN BẢN agent (ghim canary), không đọc file sống. Test: `tests/test_graph_retrieval.py`.
+Thêm cột vào `mem_*` → migration mới; cột thay đổi ngoài ledger → thêm vào `graph.store.VOLATILE`. Trích xuất KHÔNG BAO GIỜ đọc
+`tool_call`/`tool_result`/tin subagent/`tick`/`notify` (lọc ở SQL `GraphExtractor.collect`) — thêm vai trò mới vào chỉ mục session thì quyết định rõ
+có cho trích hay không. Run kind mới không phải "làm việc" → thêm vào `review.NON_WORK_KINDS`, `session_search.TECHNICAL_KINDS`, `kpi.LEARNING_KINDS`
+(và `graph.provider.TECHNICAL_KINDS` để không prefetch).
+Quality (PR quality): độ tin cậy CHỈ đổi theo KẾT QUẢ run (`graph_quality.settle`), không theo số lần dùng (`hits` chỉ để quan sát); suy giảm theo
+tuổi chỉ giảm HẠNG lúc đọc, không bao giờ xoá. `confidence` + `mem_fact_uses` ghi ngoài ledger (dẫn xuất, như `mem_vectors`). Consolidation chỉ
+ĐÓNG hiệu lực + liên kết thay thế (`invalidated_by`) qua pipeline (`created_by=curator`, không ăn suất agent), không bao giờ xoá episode, bỏ qua fact
+người pin. Golden memory (`checker.kind=memory_recall`) không chạy run/không gọi model; chỉ dùng cho lô entry graph.

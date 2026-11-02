@@ -24,11 +24,14 @@ if TYPE_CHECKING:
     from ..hub import Hub
 
 CONFIG_FIELDS = ("model", "effort", "fallback_model", "tool_policy", "mcp_servers", "limits", "subagents", "result_schema")
-KNOWLEDGE_FILES = ("SOUL.md", "MEMORY.md", "USER.md")
+KNOWLEDGE_FILES = ("SOUL.md", "MEMORY.md", "USER.md", ".graph_snapshot.json")  # graph: knowledge.graph.SNAPSHOT_FILE
 _IGNORE = shutil.ignore_patterns("workspaces", "runtime", "__pycache__", "*.lock")
 
 
-def make_home(src: Path, dest: Path) -> Path:
+def make_home(src: Path, dest: Path, *, hub: Any = None, agent_id: str | None = None) -> Path:
+    """Bản sao home. Có `hub` + `agent_id`: chụp thêm graph memory agent nhìn thấy (tầng agent + team + global, theo ghim canary) vào
+    `<dest>/.graph_snapshot.json` — graph nằm trong hub.db, không phải file trong home, nên không chụp thì eval không thấy graph và
+    fingerprint không đổi khi graph đổi."""
     if dest.exists():
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -37,6 +40,10 @@ def make_home(src: Path, dest: Path) -> Path:
     else:
         dest.mkdir(parents=True)
     (dest / "workspaces").mkdir(exist_ok=True)
+    if hub is not None and agent_id and getattr(getattr(hub, "knowledge", None), "versions", None) is not None:
+        from ..knowledge.graph import SNAPSHOT_FILE, GraphStore
+
+        (dest / SNAPSHOT_FILE).write_bytes(GraphStore.dump_snapshot(hub.knowledge.versions.graph_snapshot(agent_id)))
     return dest
 
 
@@ -248,7 +255,7 @@ def materialize_before(hub: "Hub", home: Path, cfg: dict[str, Any], entry: dict[
 
 def fingerprint(home: Path, cfg: dict[str, Any], *, hub: Any = None, agent_id: str | None = None) -> str:
     """Khoá cache điểm baseline = MỌI THỨ đi vào prompt/hành vi của run eval:
-    cấu hình ứng viên + file tri thức tầng agent (SOUL/MEMORY/USER/skills của bản sao) + (khi có `hub`) system prompt
+    cấu hình ứng viên + file tri thức tầng agent (SOUL/MEMORY/USER/skills của bản sao, bản chụp graph memory) + (khi có `hub`) system prompt
     THỰC dựng như `RunManager` (khối tri thức agent + team + global + USER theo PHIÊN BẢN gán cho agent — M5-A) và
     bản đồ phiên bản tri thức (`hub.knowledge.versions.version_map`). Đổi tri thức team/global → baseline tính lại."""
     h = hashlib.sha256()
