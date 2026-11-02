@@ -103,6 +103,16 @@ def propose_params(op: str, scope: str, owner: str | None, store: str, *, conten
             "payload": payload, "created_by": "user", "rationale": f"web: human {op} of a {store} entry"}
 
 
+def edit_url(back: str, key: str, store: str) -> str:
+    """URL tầng mở sẵn form sửa mục `key` (giữ path của `back`, thay query `edit`/`store`)."""
+    from urllib.parse import parse_qsl, urlsplit, urlunsplit
+
+    u = urlsplit(back)
+    q = [(k, v) for k, v in parse_qsl(u.query, keep_blank_values=True) if k not in ("edit", "store")]
+    q += [("edit", key), ("store", store)]
+    return urlunsplit(("", "", u.path, urlencode(q), "e-" + quote(key, safe="")))
+
+
 def parse_tier(v: str | None) -> tuple[str, str | None] | None:
     """Ô chọn tầng của trình duyệt graph: `agent:<id>` | `team:<id>` | `global` | '' (mọi tầng)."""
     v = (v or "").strip()
@@ -159,6 +169,32 @@ def fact_safety(text: Any) -> dict[str, Any]:
 
     t, flags = safe_fact(str(text or ""))
     return {"text": t, "flags": flags}
+
+
+def label_safety(text: Any) -> tuple[str | None, list[str]]:
+    """Tên thực thể / quan hệ hiện cho NGƯỜI: cùng luật `learn.graph_view` — che secret, bị cờ quét lúc nạp → None (template ghi
+    "(tên bị ẩn)"). Không bao giờ đưa tên vào URL (link theo id thực thể)."""
+    if text is None or text == "":
+        return (None if text is None else ""), []
+    s = fact_safety(text)
+    return (None if s["flags"] else s["text"]), list(s["flags"])
+
+
+def safe_plan(res: Any) -> Any:
+    """Kết quả `learn.graph_consolidate` dry-run: tên thực thể trong kế hoạch gộp (`entity`/`into`) qua `label_safety`."""
+    if not isinstance(res, dict):
+        return res
+    tiers = []
+    for t in res.get("tiers") or []:
+        plan = []
+        for o in (t.get("plan") or []) if isinstance(t, dict) else []:
+            if isinstance(o, dict) and o.get("action") == "merge_entity":
+                o = dict(o)
+                for k in ("entity", "into"):
+                    o[k] = label_safety(o.get(k))[0]
+            plan.append(o)
+        tiers.append({**t, "plan": plan} if isinstance(t, dict) else t)
+    return {**res, "tiers": tiers}
 
 
 def result_view(res: Any, what: str) -> dict[str, Any]:
@@ -345,7 +381,7 @@ async def graph_page(request: Request) -> Response:
         error = err_text(e)
     stats = await _soft(request, "learn.graph_stats", {}, None)
     agents, _teams = await _ids(request)
-    keep = ("q", "agent", "tier", "history", "min_conf", "hops", "entity")
+    keep = ("q", "agent", "tier", "history", "min_conf", "hops", "entity", "limit")
     qs = urlencode({k: v for k, v in q.items() if k in keep})
     qs_noent = urlencode({k: v for k, v in q.items() if k in keep and k != "entity"})
     return await render(request, "memory_graph.html", {"nav": "memory", "q": dict(q), "view": view, "rows": _named(view or {}), "error": error,
@@ -382,6 +418,13 @@ async def fact_page(request: Request) -> Response:
     okey = "global" if scope == "global" else str(owner)
     pinned = (scope, okey, "graph_fact", f.get("id") or "") in pins
     safe = {x["id"]: fact_safety(x.get("fact")) for x in [f, *(h.get("superseded_by") or []), *(h.get("supersedes") or []), *(h.get("same_edge") or [])] if x.get("id")}
+    # tên thực thể + quan hệ cũng là văn bản không tin được (sửa ngoài pipeline) → che + quét như `learn.graph_view`
+    f = dict(f)
+    label_flags: list[str] = []
+    for k in ("src", "dst", "relation"):
+        f[k], fl = label_safety(f.get(k))
+        label_flags += fl
+    f["label_flags"] = sorted(set(label_flags))
     return await render(request, "memory_fact.html", {"nav": "memory", "h": h, "f": f, "pinned": pinned, "safe": safe, "scope": scope, "owner": own,
                                                       "tier_label": tier_label(scope, own), "tier_url": tier_url(scope, own), "result": _pop_result(request)})
 
@@ -462,7 +505,7 @@ async def memory_act(request: Request) -> Response:
     except RpcError as e:
         return flash_redirect(request, back, "error", err_text(e))
     if op == "consolidate_preview":
-        return await render(request, "memory_consolidate.html", {"nav": "memory", "res": res or {}, "scope": scope, "owner": owner,
+        return await render(request, "memory_consolidate.html", {"nav": "memory", "res": safe_plan(res or {}), "scope": scope, "owner": owner,
                                                                  "where": tier_label(scope, owner) if scope else "mọi tầng", "back": back})
     if op == "consolidate":
         items = (res or {}).get("tiers") or []
@@ -486,6 +529,9 @@ async def memory_act(request: Request) -> Response:
     if not v["ok"] and op in ("add", "edit"):
         # guard chặn: quay lại form sửa/thêm với chữ đã nhập (giữ trong phiên — không đưa vào URL)
         sess.extra["memory_draft"] = {"store": form.get("store"), "key": form.get("key") or "", "content": str(form.get("content") or "")[:20000]}
+        if op == "edit" and form.get("key"):
+            # mở lại đúng form sửa (khoá + kho trong URL — chỉ hash, không phải chữ) để bản nháp hiện ra, không bị _pop_draft nuốt
+            back = edit_url(back, str(form.get("key")), str(form.get("store") or "memory"))
     return flash_redirect(request, back)
 
 

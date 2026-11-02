@@ -12,11 +12,14 @@
 {%- endmacro %}
 {% block content %}
 <nav class="crumbs"><a href="/memory">Memory</a> › <a href="/memory/graph">Graph</a> › <span>Fact</span></nav>
-<div class="page-head"><div class="ph-title"><h1 class="g-edge"><a href="/memory/graph?q={{ f.src|urlencode if f.src else '' }}">{{ f.src or '?' }}</a> <span class="g-rel">{{ f.relation }}</span> {% if f.dst %}{{ f.dst }}{% endif %}
+<div class="page-head"><div class="ph-title">{% set hidden_name = '(tên bị ẩn)' %}
+<h1 class="g-edge">{% if f.src_id %}<a href="/memory/graph/entity/{{ f.src_id|urlencode }}">{{ f.src if f.src is not none else hidden_name }}</a>{% else %}?{% endif %}
+  <span class="g-rel">{{ f.relation if f.relation is not none else hidden_name }}</span>
+  {% if f.dst_id %}<a href="/memory/graph/entity/{{ f.dst_id|urlencode }}">{{ f.dst if f.dst is not none else hidden_name }}</a>{% endif %}
   {% if pinned %}<span class="pill info">{{ m.icon('pin') }}đã ghim</span>{% endif %}{% if f.retracted_by %}<span class="pill muted">đã gỡ</span>{% elif f.invalidated_at %}<span class="pill muted">lịch sử</span>{% else %}<span class="pill ok">hiệu lực</span>{% endif %}</h1>
-  <span class="sub">Tầng <a href="{{ tier_url }}">{{ tier_label }}</a> · <code>{{ f.id }}</code></span></div>
+  <span class="sub">Tầng <a href="{{ tier_url }}">{{ tier_label }}</a> · <code>{{ f.id }}</code>{% if f.label_flags %} · <span class="danger-t">{{ m.icon('alert') }} tên thực thể / quan hệ không qua quét an toàn ({{ f.label_flags|join(', ') }}) — đã ẩn</span>{% endif %}</span></div>
   <div class="row gap">
-    <a class="btn ghost" href="/memory/graph/view?q={{ (f.src or '')|urlencode }}{% if scope != 'global' %}&tier={{ scope }}:{{ owner }}{% else %}&tier=global{% endif %}">{{ m.icon('graph') }}<span>Đồ thị</span></a>
+    {% if f.src_id %}<a class="btn ghost" href="/memory/graph/view?entity={{ f.src_id|urlencode }}{% if scope != 'global' %}&tier={{ (scope ~ ':' ~ owner)|urlencode }}{% else %}&tier=global{% endif %}">{{ m.icon('graph') }}<span>Đồ thị</span></a>{% endif %}
     {% if not f.retracted_by %}
     <form method="post" action="/memory/act/fact_pin" class="inline"{% if pinned %} data-confirm="Bỏ ghim fact này? Bên ghi khác (trích xuất, consolidation) lại được đóng/thay nó."{% endif %}>
       <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="scope" value="{{ scope }}"><input type="hidden" name="owner" value="{{ owner or '-' }}">
@@ -55,7 +58,7 @@
   {% if not h.supersedes and not h.superseded_by %}<p class="muted small">Không có liên kết thay thế.</p>{% endif %}
 </section>
 <section class="card"><h2>{{ m.icon('clock') }} Cùng cạnh theo thời gian</h2>
-  {% if h.same_edge %}<ul class="plain small">{% for x in h.same_edge %}{{ frow(x) }}{% endfor %}</ul>{% else %}<p class="muted small">Không có fact nào khác cùng ({{ f.src }}, {{ f.relation }}).</p>{% endif %}
+  {% if h.same_edge %}<ul class="plain small">{% for x in h.same_edge %}{{ frow(x) }}{% endfor %}</ul>{% else %}<p class="muted small">Không có fact nào khác cùng ({{ f.src if f.src is not none else hidden_name }}, {{ f.relation if f.relation is not none else hidden_name }}).</p>{% endif %}
 </section>
 </div>
 

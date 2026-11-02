@@ -16,7 +16,7 @@
   <p class="small">{{ t.merges }} gộp thực thể · {{ t.supersedes }} fact gần trùng bị thay · {{ t.ops }} thao tác</p>
   <ul class="small plain cons-ops">
   {% for o in t.plan or [] %}
-    {% if o.action == 'merge_entity' %}<li><span class="pill accent">gộp thực thể</span> <b>{{ o.entity }}</b> → <b>{{ o.into }}</b></li>
+    {% if o.action == 'merge_entity' %}<li><span class="pill accent">gộp thực thể</span> <b>{{ o.entity if o.entity is not none else '(tên bị ẩn)' }}</b> → <b>{{ o.into if o.into is not none else '(tên bị ẩn)' }}</b></li>
     {% elif o.action == 'supersede_fact' %}<li><span class="pill warn">thay fact</span> <a href="/memory/graph/fact/{{ o.fact_id }}"><code>{{ o.fact_id }}</code></a> bị thay bởi <a href="/memory/graph/fact/{{ o.by }}"><code>{{ o.by }}</code></a></li>
     {% else %}<li><code>{{ o.action }}</code></li>{% endif %}
   {% endfor %}

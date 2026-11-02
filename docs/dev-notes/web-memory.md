@@ -46,6 +46,18 @@ thể) qua `safe_fact` (= `redact_str` + `threats.scan_load`): bị cờ → `nu
 - **Fact bị cờ quét**: danh sách/đồ thị chỉ hiện "bị ẩn"; trang chi tiết fact (`learn.graph_fact` trả văn bản thô cho người) che secret
   + giấu sau `<details>` có cảnh báo — người cần thấy để quyết định rollback. Mọi chữ autoescape; JS chỉ `textContent`/`setAttribute`; JSON
   thoát `<`, `>`, `&`, U+2028/2029 thành `\uXXXX`, `Content-Type: application/json` + `nosniff`.
+- **Tên thực thể + quan hệ cũng là văn bản không tin được** (sửa ngoài pipeline): trang fact (`learn.graph_fact` trả tên thô) và xem trước
+  consolidation (`plan_tier` trả `entity`/`into` thô) cho qua `label_safety` (= `safe_fact`; bị cờ → "(tên bị ẩn)"), cùng luật `learn.graph_view`.
+  Link sang graph/đồ thị đi theo **id thực thể** (`/memory/graph/entity/<id>`, `/memory/graph/view?entity=<id>`) — tên không vào URL/lịch sử/Referer.
+  `learn.graph_fact` trả thêm `src_id`/`dst_id`.
+- **Bật lịch sử chỉ THÊM hàng**: `learn.graph_view` (mode recent) lấy fact còn hiệu lực riêng trước rồi mới nối fact lịch sử; mode query sort ổn
+  định fact sống lên trước khi lấp trần node. `GraphStore.facts` lọc `retracted_by IS NULL` và (khi không gồm lịch sử) `invalidated_at IS NULL`
+  — trừ đóng hiệu lực bởi entry đang ẩn — NGAY trong SQL trước `LIMIT`, để lịch sử mới hơn không chiếm trần. Trang danh sách có ô "Tối đa".
+- **Guard chặn khi sửa**: redirect về `?edit=<key>&store=<store>#e-<key>` để form sửa mở lại với bản nháp (trước đó bản nháp bị `_pop_draft`
+  nuốt vì form không mở).
+- **Mục là chuỗi con của mục khác**: `knowledge.store.match_entries` — `old_text` ĐÚNG BẰNG một mục (bỏ khoảng trắng đầu/cuối) → chỉ mục đó;
+  ngược lại khớp chuỗi con như cũ (tool Hermes). Áp cho `apply_memory_op` và `touched_entries` của pipeline. Trước đó web không sửa/xoá được
+  "Run the linter." khi có "Run the linter. Then test." (ambiguous).
 - **JSON dưới `/partials/`**: chưa đăng nhập → 401 (không redirect), không gia hạn phiên — cùng luật polling hiện có.
 - **Fact không có đích** (thuộc tính) không vẽ thành cạnh: hiện trong panel của nút, đếm vào cỡ nút.
 - **"Lần đổi gần nhất"** lấy từ `learn.ledger` (500 entry memory + 500 user_profile mới nhất) — tầng có thay đổi cũ hơn cửa sổ đó hiện "—".
@@ -56,13 +68,15 @@ thể) qua `safe_fact` (= `redact_str` + `threats.scan_load`): bị cờ → `nu
   nên daemon không ghi audit; web/CLI gọi hai method này không để lại dấu).
 - `graph_quality.stats`: thêm `last_extraction_at` và `last_ingested_at` theo tầng.
 
-## Test — `tests/test_web_memory.py` (11 ca, không gọi claude, không tải model)
+## Test — `tests/test_web_memory.py` (17 ca, không gọi claude, không tải model)
 Hàm thuần; mọi route + JSON cần đăng nhập (303/401), thiếu khoá phiên/CSRF sai/Origin lạ → 403; `learn.graph_view` HUMAN_ONLY + không mutating;
 thêm/sửa/ghim/bỏ ghim/xoá mục agent đi qua pipeline (ledger actor=user, audit `learn.propose` kênh web, khoá cũ → lỗi, xoá cần xác nhận);
 guard chặn → hiện luật, không ghi, bản nháp giữ; XSS mục memory escape; tầng global/team cần xác nhận + tổng quan liệt kê mọi tầng + bảng phiên
 bản team; RPC view: phạm vi agent, quét lúc nạp chặn fact bị sửa ngoài pipeline, entity/query/limit, không tăng `hits`; trang graph/JSON/đồ thị/
 thực thể/fact escape XSS, JSON content-type + `<`, CSP + không script inline; lịch sử + ghim fact + rollback (xác nhận, fact cũ mở lại, audit
 kênh web) + ghim graph tầng; consolidation xem trước (không ghi, không dời lịch) → xác nhận → áp dụng (audit kênh web).
+Sửa theo review: trang fact + xem trước consolidation che secret trong tên thực thể/quan hệ, link theo id; bật lịch sử không làm mất fact sống
+(+ `GraphStore.facts` LIMIT chỉ đếm fact sống); guard chặn khi sửa mở lại form với bản nháp; mục là chuỗi con của mục khác sửa/xoá được.
 
 ## Kiểm chứng thật
 Server demo (`web.demo`, qua wrapper bỏ `seed_manager` — xem dưới) + Chromium (Playwright MCP) 1280×860: `/memory`, tầng agent/team/global,

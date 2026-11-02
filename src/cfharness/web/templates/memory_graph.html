@@ -8,6 +8,7 @@
   <label>Tầng <select name="tier"><option value="">mọi tầng</option>{% for k, label in tiers %}<option value="{{ k }}" {{ 'selected' if q.tier == k }}>{{ label }}</option>{% endfor %}</select></label>
   <label>Tin cậy ≥ <select name="min_conf">{% for c in conf_steps %}<option value="{{ c }}" {{ 'selected' if (q.min_conf or '') == c }}>{{ c or 'bất kỳ' }}</option>{% endfor %}</select></label>
   <label>Bước <select name="hops"><option value="1">1</option><option value="2" {{ 'selected' if q.hops == '2' }}>2</option></select></label>
+  <label>Tối đa <select name="limit">{% for n in ('50', '150', '300') %}<option value="{{ n }}" {{ 'selected' if (q.limit or '150') == n }}>{{ n }} thực thể</option>{% endfor %}</select></label>
   <label class="row gap"><input type="checkbox" name="history" value="1" {{ 'checked' if q.history == '1' }}> Gồm lịch sử</label>
   {% if q.entity %}<input type="hidden" name="entity" value="{{ q.entity }}">{% endif %}
   <button class="btn sm primary" type="submit">{{ m.icon('search') }}<span>Tìm</span></button>

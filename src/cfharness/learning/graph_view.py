@@ -181,9 +181,16 @@ def graph_view(hub: "Hub", p: dict[str, Any]) -> dict[str, Any]:
                 row = dict(row, score=by_id[row["id"]]["score"])
                 facts.append(row)
     else:
-        facts = gs.facts(tiers, include_invalid=history, hidden=hidden, limit=MAX_FACTS)
+        # fact còn hiệu lực lấy RIÊNG trước: bật lịch sử chỉ THÊM hàng, không để lịch sử mới hơn chiếm trần và đẩy fact sống ra ngoài
+        facts = gs.facts(tiers, include_invalid=False, hidden=hidden, limit=MAX_FACTS)
+        if history:
+            seen = {f["id"] for f in facts}
+            facts += [f for f in gs.facts(tiers, include_invalid=True, hidden=hidden, limit=MAX_FACTS) if f["id"] not in seen]
     if min_conf is not None:
         facts = [f for f in facts if float(f.get("confidence") or 0) >= min_conf]
+    if history and mode != "entity":
+        # trần node lấp fact còn hiệu lực trước (sort ổn định — giữ thứ tự mới nhất / xếp hạng trong mỗi nhóm); chế độ entity đã sort
+        facts.sort(key=lambda f: f.get("invalidated_at") is not None)
     nodes: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, Any]] = []
     truncated = False

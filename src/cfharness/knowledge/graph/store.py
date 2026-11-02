@@ -171,6 +171,15 @@ class GraphStore:
         if relation:
             sql += " AND relation=?"
             args.append(norm_relation(relation))
+        hid = sorted(set(hidden or ()))
+        # lọc ngay trong SQL (trước LIMIT) để fact lịch sử / đã gỡ không chiếm trần và đẩy fact còn hiệu lực ra ngoài; `visible` vẫn chạy sau
+        sql += " AND retracted_by IS NULL"
+        if not include_invalid:
+            if hid:
+                sql += f" AND (invalidated_at IS NULL OR invalidated_entry_id IN ({','.join('?' * len(hid))}))"
+                args += hid
+            else:
+                sql += " AND invalidated_at IS NULL"
         out = []
         for r in self.conn.execute(sql + " ORDER BY ingested_at DESC, rowid DESC LIMIT ?", (*args, int(limit))):
             v = self.visible(dict(r), hidden)

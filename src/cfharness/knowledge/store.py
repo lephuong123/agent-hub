@@ -64,6 +64,17 @@ def memory_chars(entries: list[str]) -> int:
     return len(ENTRY_DELIMITER.join(entries))
 
 
+def match_entries(entries: list[str], old_text: str | None) -> list[int]:
+    """Chỉ số các mục mà `old_text` trỏ tới: nếu `old_text` ĐÚNG BẰNG một mục (bỏ khoảng trắng đầu/cuối) thì chỉ mục đó — một mục là
+    chuỗi con của mục khác vẫn sửa/xoá được (web gửi nguyên văn mục); ngược lại mọi mục chứa `old_text` (chuỗi con, như tool Hermes)."""
+    if not old_text:
+        return []
+    exact = [i for i, e in enumerate(entries) if e.strip() == old_text.strip()]
+    if len(exact) == 1:
+        return exact
+    return [i for i, e in enumerate(entries) if old_text in e]
+
+
 def apply_memory_op(entries: list[str], action: str, content: str | None, old_text: str | None) -> list[str]:
     """Phép add/patch/remove trên danh sách mục (ngữ nghĩa tool memory của Hermes). Sai → KnowledgeError."""
     out = list(entries)
@@ -79,7 +90,7 @@ def apply_memory_op(entries: list[str], action: str, content: str | None, old_te
         return out
     if not old_text:
         raise KnowledgeError(f"{action} cần old_text", "invalid")
-    hits = [i for i, e in enumerate(out) if old_text in e]
+    hits = match_entries(out, old_text)
     if not hits:
         raise KnowledgeError("old_text không khớp mục memory nào", "not_found")
     if len(hits) > 1:
@@ -93,6 +104,9 @@ def apply_memory_op(entries: list[str], action: str, content: str | None, old_te
             raise KnowledgeError("patch cần content", "invalid")
         if ENTRY_DELIMITER.strip() in content:
             raise KnowledgeError("một mục memory không được chứa ký tự phân cách '§'", "invalid")
+        if out[i].strip() == old_text.strip():
+            out[i] = content
+            return out
         if out[i].count(old_text) != 1:
             raise KnowledgeError("old_text phải xuất hiện đúng một lần trong mục", "ambiguous")
         out[i] = out[i].replace(old_text, content)

@@ -411,7 +411,7 @@ class GraphQuality:
         uses = [dict(r) for r in self.conn.execute("SELECT run_id, channel, used_at, outcome, delta FROM mem_fact_uses WHERE fact_id=? ORDER BY id DESC LIMIT 50", (f["id"],))]
         entries = [e for e in (f.get("ledger_entry_id"), f.get("invalidated_entry_id"), f.get("retracted_by")) if e]
         return {"fact": {**brief(f), "scope": f["scope"], "owner": f["owner_id"], "relation": f["relation"], "src": names.get(f["src_entity_id"]),
-                         "dst": names.get(f.get("dst_entity_id") or "")},
+                         "dst": names.get(f.get("dst_entity_id") or ""), "src_id": f["src_entity_id"], "dst_id": f.get("dst_entity_id")},
                 "superseded_by": chain_after, "supersedes": before, "same_edge": same_edge,
                 "episode": {k: ep.get(k) for k in ("id", "source_kind", "source_ref", "run_id", "session_id", "created_at")} if ep else None,
                 "ledger_entries": entries, "uses": uses,
