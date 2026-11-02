@@ -202,6 +202,10 @@ class KnowledgeStore:
         if scope == "team":
             if not owner:
                 raise HubError("scope team cần team id")
+            from ..agents import ID_RE
+
+            if not ID_RE.match(owner):  # team id hợp lệ không có '/', '\', '..' — chặn path traversal ra ngoài hub home
+                raise HubError(f"team id không hợp lệ: {owner!r}")
             return home / "teams" / owner
         if scope == "global":
             return home / "global"

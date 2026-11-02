@@ -118,6 +118,8 @@ class LearningRpc:
         owner = p.get("agent") if scope == "agent" else p.get("team") if scope == "team" else None
         if scope == "agent":
             self.hub.agents.get_row(owner)
+        elif scope == "team":  # pin cho team không tồn tại = rác + (trước đây) đọc memory.md ngoài hub home
+            self.hub.teams.row(owner or "", allow_archived=True)
         target = _req(p, "target")
         if target not in ("skill", "memory", "config", "memory_entry", "graph", "graph_fact"):
             raise HubError("target pin: skill | memory | config | memory_entry | graph | graph_fact")

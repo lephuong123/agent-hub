@@ -423,3 +423,26 @@ def test_apply_memory_op_prefers_exact_entry():
     assert apply_memory_op(ents, "patch", "Run ruff.", " Run the linter. ") == ["Run ruff.", "Run the linter. Then test."]
     with pytest.raises(KnowledgeError):
         apply_memory_op(ents, "remove", None, "the linter")  # chuỗi con không trùng nguyên mục → vẫn mơ hồ
+
+
+async def test_pin_rejects_traversal_and_unknown_team_owner(env):
+    r"""Review (low): owner team '..\..' từng làm knowledge.pin đọc memory.md NGOÀI hub home (oracle nội dung) + pin cho team không tồn tại."""
+    h = env.hub
+    outside = h.paths.home.parent / "memory.md"
+    outside.write_text("Secret outside line one.\n§\nOther outside entry.", encoding="utf-8")
+    try:
+        await env.login()
+        for owner in (r"..\..", "../..", str(h.paths.home.parent), "no-such-team"):
+            r = await env.post("/memory/act/pin", {"scope": "team", "owner": owner, "store": "memory", "key": "Secret outside", "on": "1",
+                                                   "next": "/memory"})
+            assert r.status_code == 303
+            r = await env.post("/memory/act/graph_pin", {"scope": "team", "owner": owner, "on": "1", "next": "/memory"})
+            assert r.status_code == 303
+        assert h.store.conn.execute("SELECT COUNT(*) FROM knowledge_pins WHERE scope='team'").fetchone()[0] == 0
+        with pytest.raises(Exception, match="không hợp lệ"):
+            h.knowledge.tier_dir("team", r"..\..")
+        # team thật vẫn pin được
+        r = await env.post("/memory/act/graph_pin", {"scope": "team", "owner": "t1", "on": "1", "next": "/memory/team/t1", "confirm": "yes"})
+        assert r.status_code == 303 and h.knowledge.is_pinned("team", "t1", "graph", "graph://team/t1")
+    finally:
+        outside.unlink(missing_ok=True)
