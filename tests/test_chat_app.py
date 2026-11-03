@@ -31,6 +31,22 @@ def item_with(scr: C.ChatScreen, needle: str) -> C.Item | None:
     return next((w for w in items(scr) if needle in str(getattr(w.render(), "plain", ""))), None)
 
 
+async def click_item(app, pilot, w) -> None:
+    """Click một Item của log khi nó ĐÃ bố trí xong và nằm trong khung nhìn. Item vừa thêm có thể chưa có vùng/chưa cuộn tới
+    (CI chậm): `pilot.click(w)` bấm vào tâm vùng cũ → trúng widget khác, thẻ không điền sẵn lệnh."""
+    def on_top() -> bool:
+        w.scroll_visible(animate=False)
+        if not w.region.area:
+            return False
+        try:
+            hit, _ = app.screen.get_widget_at(*w.region.center)
+        except Exception:
+            return False
+        return hit is w or w in hit.ancestors
+    assert await until(on_top, pilot=pilot)
+    await pilot.click(w)
+
+
 async def open_chat(app, pilot) -> C.ChatScreen:
     assert await until(lambda: isinstance(app.screen, C.ChatScreen) and app.screen.session is not None, pilot=pilot)
     scr = app.screen
@@ -165,9 +181,9 @@ async def test_stream_tools_click_expand_actions_and_reply(env, hub_home, monkey
         d.hub.publish(make_event("tool.complete", "boss", {"tool_id": "t1", "name": "Read", "duration_s": 0.3, "result_preview": out}, run_id=rid))
         tool = item_with(scr, "Read(README.md)")
         assert await until(lambda: "+9 dòng (click để mở)" in tool.render().plain, pilot=pilot)
-        await pilot.click(tool)
+        await click_item(app, pilot, tool)
         assert await until(lambda: "dòng 11" in tool.render().plain and '"file_path": "README.md"' in tool.render().plain, pilot=pilot)
-        await pilot.click(tool)
+        await click_item(app, pilot, tool)
         assert await until(lambda: "dòng 11" not in tool.render().plain, pilot=pilot)
         # Ctrl-O: mở rộng mọi tool
         await pilot.press("ctrl+o")
@@ -178,10 +194,10 @@ async def test_stream_tools_click_expand_actions_and_reply(env, hub_home, monkey
         d.hub.publish(make_event("manager.action", "boss", {"tool": "x", "target": "javascript:alert(1)", "summary": "Đích lạ", "ok": True}, run_id=rid))
         assert await until(lambda: item_with(scr, "Đích lạ") is not None, pilot=pilot)
         shot(app, "20-chat-dang-lam.svg")
-        await pilot.click(item_with(scr, "Đích lạ"))
+        await click_item(app, pilot, item_with(scr, "Đích lạ"))
         await pilot.pause(0.2)
         assert app.screen is scr
-        await pilot.click(item_with(scr, "Giao task cho w1"))
+        await click_item(app, pilot, item_with(scr, "Giao task cho w1"))
         assert await until(lambda: isinstance(app.screen, TasksScreen), pilot=pilot)
         await pilot.press("escape")
         assert await until(lambda: app.screen is scr, pilot=pilot)
@@ -235,7 +251,7 @@ async def test_agent_panel_opens_attach_and_approval_card_prefills(env, hub_home
         assert "rm -rf build/" in card.render().plain and card.has_class("card")  # hộp viền như hộp xin phép của Claude Code
         assert not card.render().plain.startswith("\n")
         shot(app, "23-chat-duyet.svg")
-        await pilot.click(card)
+        await click_item(app, pilot, card)
         inp = scr.query_one("#chat-input", Input)
         assert await until(lambda: inp.value == f"/approve {ap['id']} ", pilot=pilot)
         assert d.hub.approvals.get(ap["id"])["status"] == "open"  # chưa làm gì
