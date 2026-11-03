@@ -149,7 +149,13 @@ export class Walker {
       const d = this.isCoordinator ? deskSpawn(world) : null;
       if (d) { this.pos = { x: d.x, z: d.z }; this.yaw = this.view = d.yaw; } else { this.pos = spawnPoint(world); this.yaw = this.view = Math.PI; }
     }
-    if (this.seated) return;
+    if (this.seated) {
+      // ghế cũ thuộc World cũ: bám sang ghế điều phối viên của World mới; World mới không còn ghế đó → đứng dậy ở chỗ đứng cũ
+      const s = this.seated, sp = s.zone === 'mgr' ? world.mgrSpot : null;
+      if (sp) { this.seated = sp; this.pos = { x: sp.x, z: sp.z }; this.yaw = this.view = sp.rot; this.path = []; return; }
+      const st = s.stand || s;
+      this.seated = null; this.camInit = false; this.pos = { x: st.x, z: st.z };
+    }
     if (blockedAt(world.grid, this.pos.x, this.pos.z, WALK_R)) {
       const g = world.grid, [c, r] = g.nearestFree(...g.cellOf(this.pos.x, this.pos.z)), [x, z] = g.center(c, r);
       this.pos = { x, z };

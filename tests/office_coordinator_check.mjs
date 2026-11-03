@@ -14,17 +14,21 @@ const THREE = await import(url('vendor/three-0.169.0/three.module.min.js'));
 const { World } = await import(url('office/world.js'));
 const { Walker, blockedAt, deskSpawn, coordinatorOf, nearDesk, spawnPoint, WALK_R } = await import(url('office/walk.js'));
 const { Actor, IDLE_DESK_MIN } = await import(url('office/actors.js'));
-const { talkPlan } = await import(url('office/talk.js'));
+const T = await import(url('office/talk.js'));
+const { talkPlan } = T;
 
 let fails = 0;
 const check = (name, cond) => { if (cond) console.log('ok ' + name); else { fails++; console.log('FAIL ' + name); } };
 
 // ---- điểm xuất hiện + tới được mọi phòng + ngồi/đứng
-for (const n of [1, 5, 19, 40]) for (const withTeams of [false, true]) {
-  const teams = withTeams ? [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }] : [];
+const mkWorld = (n, nt) => {
+  const teams = Array.from({ length: nt }, (_, i) => ({ id: 't' + i, name: 'T' + i }));
   const agents = [{ id: 'mgr', is_manager: true }];
-  for (let i = 0; i < n; i++) agents.push({ id: 'ag' + i, team: withTeams ? (i % 2 ? 'a' : 'b') : null });
-  const w = new World({ teams, agents, manager_id: 'mgr' }), g = w.grid, tag = `n=${n} teams=${withTeams}`;
+  for (let i = 0; i < n; i++) agents.push({ id: 'ag' + i, team: nt ? 't' + (i % nt) : null });
+  return new World({ teams, agents, manager_id: 'mgr' });
+};
+for (const n of [1, 5, 19, 40, 80]) for (const nt of [0, 2, 3]) {
+  const w = mkWorld(n, nt), g = w.grid, tag = `n=${n} teams=${nt}`;
   const d = deskSpawn(w), room = d && w.roomAt(d.x, d.z);
   const rooms = w.rooms.filter((r) => { const p = g.findPath(d.x, d.z, r.p.x, r.p.z), l = p[p.length - 1]; return l && Math.hypot(l.x - r.p.x, l.z - r.p.z) < 0.8; });
   check(`spawn ${tag}: cạnh bàn trong phòng điều phối viên, không bị chặn, tới được ${rooms.length}/${w.rooms.length} phòng`,
@@ -40,6 +44,15 @@ for (const n of [1, 5, 19, 40]) for (const withTeams of [false, true]) {
   for (let i = 0; i < 30; i++) { wk.update(0.1, i * 0.1, false); wk.updateCamera(0.1, false); }
   check(`walker ${tag}: ngồi bàn → phím đi không di chuyển, chibi ở ghế`, wk.seated && wk.pos.x === w.mgrSpot.x && wk.pos.z === w.mgrSpot.z && wk.chibi.pose === 'type');
   wk.key('KeyW', false, false);
+  // văn phòng dựng lại (thêm agent) khi đang ngồi: bám ghế điều phối viên của World MỚI, không giữ ghế cũ
+  const w2 = mkWorld(n + 7, nt);
+  wk.setWorld(w2);
+  check(`walker ${tag}: dựng lại World khi đang ngồi → ghế là mgrSpot của World mới`, wk.seated === w2.mgrSpot && wk.pos.x === w2.mgrSpot.x && wk.pos.z === w2.mgrSpot.z);
+  const w3 = new World({ teams: [], agents: [{ id: 'ag0' }], manager_id: null });
+  wk.setWorld(w3);
+  check(`walker ${tag}: dựng lại World nhỏ hơn → ghế mới hoặc đứng ở ô trống (không giữ ghế cũ)`,
+    wk.seated ? wk.seated === w3.mgrSpot : !blockedAt(w3.grid, wk.pos.x, wk.pos.z, WALK_R));
+  wk.setWorld(w); wk.sit(w.mgrSpot);
   wk.stand();
   check(`walker ${tag}: đứng dậy ở ô trống trong phòng`, !wk.seated && !blockedAt(g, wk.pos.x, wk.pos.z, WALK_R) && w.roomAt(wk.pos.x, wk.pos.z).key === 'mgr');
   wk.setIdentity(null); wk.exit(); wk.enter(w);
@@ -115,4 +128,40 @@ check('talkPlan: agent đang chạy → steer run hiện tại', talkPlan({ id: 
 check('talkPlan: chờ duyệt / đang hỏi có run → steer', ['waiting', 'waiting_human', 'asking'].every((s) => talkPlan({ id: 'a', status: s, run_id: 'r1' }, null, 'x').name === 'steer'));
 check('talkPlan: rảnh, có run của hội thoại → run_continue', JSON.stringify(talkPlan({ id: 'a', status: 'idle' }, { lastRun: 'r0' }, 'x')) === '{"name":"run_continue","fields":{"id":"r0","prompt":"x"}}');
 check('talkPlan: rảnh, chưa có → run_start', JSON.stringify(talkPlan({ id: 'a', status: 'idle', run_id: null }, { lastRun: null }, 'x')) === '{"name":"run_start","fields":{"agent":"a","prompt":"x"}}');
+
+// ---- trả lời qua SSE (steer): khung refresh (run.completed / duyệt / câu hỏi) KHÔNG được xoá câu trả lời cuối
+const fn = (k) => typeof T[k] === 'function';
+const feed = (mode, frames) => {
+  const r = { pending: '', mode, seq: 0 }, out = [];
+  for (const f of frames) if (T.replyFrame(r, f) === 'end') { out.push(r.pending); break; }
+  return { r, out };
+};
+if (fn('replyFrame')) {
+  const run = [
+    { t: 'item', kind: 'prompt', seq: 1 }, { t: 'delta', k: 'text', text: 'Câu trả lời cũ', seq: 2 }, { t: 'item', kind: 'msg', seq: 3 },
+    { t: 'item', kind: 'steer', seq: 4 }, { t: 'refresh' }, { t: 'item', kind: 'note', seq: 5 }, { t: 'refresh' },
+    { t: 'delta', k: 'text', text: 'Đã xem ', seq: 6 }, { t: 'refresh' }, { t: 'delta', k: 'text', text: 'src/ xong', seq: 7 }, { t: 'item', kind: 'msg', seq: 8 },
+    { t: 'item', kind: 'approval', seq: 9 }, { t: 'refresh' }, { t: 'item', kind: 'question', seq: 10 }, { t: 'refresh' },
+    { t: 'stats' }, { t: 'item', kind: 'end', seq: 11 }, { t: 'refresh' }, { t: 'end', reason: 'closed' },
+  ];
+  const a = feed('steer', run);
+  check(`steer: run kết thúc (run.completed/duyệt/câu hỏi → refresh) vẫn giữ câu trả lời cuối (${JSON.stringify(a.out[0])})`, a.out[0] === 'Đã xem src/ xong\n');
+  check('steer: seq theo khung mới nhất (để nối lại tiếp từ đó)', a.r.seq === 11);
+  const b = feed('run', run);
+  check('run mới: giữ toàn bộ chữ của agent', b.out[0] === 'Câu trả lời cũ\nĐã xem src/ xong\n');
+  const c = { pending: '', mode: 'steer', seq: 0 };
+  T.replyFrame(c, { t: 'item', kind: 'msg', html: '<img src=x onerror=alert(1)>' });
+  check('khung item: không đọc trường html', c.pending === '');
+} else check('talk.js export replyFrame (xử lý khung SSE trả lời)', false);
+{
+  const src = (await import('node:fs')).readFileSync(new URL(url('office/talk.js')), 'utf8');
+  check('talk.js: luồng trả lời dùng replyFrame, không xoá chữ theo khung refresh', src.includes('replyFrame(s, f)') && !/t === 'refresh'/.test(src));
+}
+check('confirmKey: run_start / run_continue luôn hỏi lại (không cache)', fn('confirmKey') && T.confirmKey(talkPlan({ id: 'a', status: 'idle' }, {}, 'x')) === null
+  && T.confirmKey(talkPlan({ id: 'a', status: 'idle' }, { lastRun: 'r0' }, 'x')) === null);
+check('confirmKey: steer gắn run_id', fn('confirmKey') && T.confirmKey(talkPlan({ id: 'a', status: 'working', run_id: 'r1' }, {}, 'x')) === 'steer:r1'
+  && T.confirmKey(talkPlan({ id: 'a', status: 'working', run_id: 'r2' }, {}, 'x')) === 'steer:r2');
+check('retryDelay: lùi dần, có trần, có giới hạn lần', fn('retryDelay') && T.retryDelay(0) === 1000 && T.retryDelay(1) === 2000 && T.retryDelay(5) <= 30000
+  && T.retryDelay(T.RETRY_MAX) === null);
+check('TALK_ORDER dưới nền mờ (1000) / bảng modal (1001)', typeof T.TALK_ORDER === 'number' && T.TALK_ORDER < 1000);
 process.exit(fails ? 1 : 0);

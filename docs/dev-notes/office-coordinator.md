@@ -31,13 +31,16 @@ Client: `static/office.js`, `static/office/{walk,actors,chibi,chat,flows,talk}.j
   2. agent rảnh và hội thoại này (trong lần mở trang) đã bắt đầu một run → **`run_continue`** run đó (giữ ngữ cảnh, tạo run MỚI);
   3. còn lại → **`run_start`** run mới. Không tự "tiếp" một run cũ không do hội thoại này bắt đầu (vd. run của task, của lịch) — tránh
      chen ngữ cảnh lạ; muốn tiếp run cũ thì dùng trang run 2D.
-- **Tiền**: dòng báo trên bảng luôn nói tin kế sẽ "chen vào run đang chạy" hay "bắt đầu run mới cho <agent> — có thể tốn tiền". Lần gửi đầu
-  tiên **mỗi loại action cho mỗi agent**: server trả `need: "confirm"` với thông điệp "Sẽ bắt đầu run mới cho <agent> (có thể tốn tiền; budget và
+- **Tiền**: dòng báo trên bảng luôn nói tin kế sẽ "chen vào run đang chạy" hay "bắt đầu run mới cho <agent> — có thể tốn tiền". **Mỗi lần
+  bắt đầu run mới** (run_start / run_continue) và lần steer đầu **cho mỗi run** (`confirmKey` = `steer:<run_id>`): server trả `need: "confirm"` với thông điệp "Sẽ bắt đầu run mới cho <agent> (có thể tốn tiền; budget và
   giới hạn của agent vẫn áp dụng). Gửi?" → hộp xác nhận 3D (`flows.ask`), chỉ khi NGƯỜI bấm "Đồng ý" mới gửi `confirm=yes`. Budget/giới hạn
   do daemon áp như mọi run.
 - **Câu trả lời**: `run_id` trả về (run mới, hoặc run được steer) → `EventSource('/sse/run/{id}')` sẵn có. talk.js CHỈ đọc khung `delta`
-  (`k === 'text'`, chữ thô), `end`, `refresh` (steer: luồng phát lại cả run → mỗi `refresh` mở đoạn mới, đoạn cuối là trả lời sau tin của bạn)
-  và `item.kind` (ngắt đoạn); trường HTML của khung `item` **không bao giờ đọc**. Chữ agent chỉ `fillText` (sr-only: `textContent` qua Panel).
+  (`k === 'text'`, chữ thô), `end` và `item.kind` (hàm thuần `replyFrame`; steer: luồng phát lại cả run → khung `item` kind `steer` (user.message)
+  mở đoạn mới, đoạn cuối là trả lời sau tin của bạn; `refresh` — run.completed / duyệt / câu hỏi — KHÔNG xoá chữ). Luồng lỗi → nối lại
+  lùi dần 1 s → 30 s (`retryDelay`, tối đa 6 lần) với `?since=<seq đã thấy>` (không phát lại, không nhân đôi chữ); hết lượt mới báo "Luồng
+  trả lời đã đóng". Gửi tin mới vào run đang nghe → chốt đoạn trả lời trước thành một tin. Bảng hội thoại `renderOrder = TALK_ORDER` (990),
+  dưới nền mờ / bảng modal (1000/1001) — bảng duyệt mở từ đây luôn nằm trên. Văn phòng dựng lại khi đang ngồi → bám `mgrSpot` của World mới; trường HTML của khung `item` **không bao giờ đọc**. Chữ agent chỉ `fillText` (sr-only: `textContent` qua Panel).
 - Agent có approval / câu hỏi đang mở → bảng hội thoại có nút "🛡 Duyệt…" / "❓ Trả lời…" mở đúng bảng duyệt / trả lời sẵn có (`flows.*`).
 - Lịch sử hội thoại chỉ giữ trong trang (Map theo agent, ≤ 100 tin); đóng bảng → luồng trả lời vẫn chạy nền, mở lại thấy tiếp.
 
@@ -62,9 +65,10 @@ Client: `static/office.js`, `static/office/{walk,actors,chibi,chat,flows,talk}.j
 
 ## Kiểm tra
 - `tests/office_coordinator_check.mjs` (gọi từ `tests/test_office_coordinator.py`): deskSpawn trong phòng điều phối viên, không bị chặn, tới
-  được 8/8 phòng (1/5/19/40 agent, có/không team); ngồi bàn khoá di chuyển, đứng dậy ở ô trống; không có điều phối viên → avatar chủ hub;
+  được 8/8 phòng (1/5/19/40/80 agent × 0/2/3 team); ngồi bàn khoá di chuyển, dựng lại World khi đang ngồi → ghế mới, đứng dậy ở ô trống; không có điều phối viên → avatar chủ hub;
   **đúng 1 điều phối viên hiện** suốt 2 giờ mô phỏng có bật/tắt đi bộ; idle ≥ 80 % ở bàn; nghỉ thưa; trip thưa; đang nói chuyện thì đứng yên;
-  `talkPlan`. Test tĩnh: talk/chat/walk không dựng HTML, talk.js không đọc `.html`, chỉ 3 action trong danh sách trắng + `confirm=yes` chỉ sau
+  `talkPlan`, `replyFrame` (steer: chuỗi khung có refresh run.completed/duyệt/câu hỏi vẫn giữ câu trả lời cuối — đỏ trên 2f396de),
+  `confirmKey`, `retryDelay`, `TALK_ORDER`. Test tĩnh: talk/chat/walk không dựng HTML, talk.js không đọc `.html`, chỉ 3 action trong danh sách trắng + `confirm=yes` chỉ sau
   `o.ask`; office.js ẩn actor puppet và loại khỏi `pick`.
 - `tests/test_office_talk.py`: 401 khi chưa đăng nhập, 403 thiếu CSRF / khoá phiên / khác origin, hỏi xác nhận trước (không tạo run), run_start →
   `run_id` + audit kênh web, run_continue → run mới, steer → cùng run + `steer_count`, action ngoài danh sách 404. 3 test đỏ trên 054c70f.
@@ -73,6 +77,6 @@ Client: `static/office.js`, `static/office/{walk,actors,chibi,chat,flows,talk}.j
 ## Rủi ro còn lại
 - Lịch sử nói chuyện với agent chỉ trong trang (tải lại là mất; run vẫn xem được ở trang run 2D). Không đọc lại transcript cũ để khỏi phải
   thêm endpoint JSON mới.
-- Steer: đoạn trả lời tách bằng khung `refresh` — approval giữa chừng cũng mở đoạn mới (mất phần chữ trước đó trên bảng).
+- Steer: đoạn trả lời tách theo tin người (`item` kind `steer`) — tin steer của NGƯỜI KHÁC vào cùng run cũng mở đoạn mới.
 - `flows.ask` bị `modals.clear()` (hết phiên) khi đang mở → promise không trả, nút Gửi kẹt "Đang gửi…" tới khi tải lại (trang đã hết phiên).
-- Xác nhận một lần cho mỗi (agent, loại action) trong lần mở trang — các tin sau cùng loại không hỏi lại (vẫn thấy dòng báo "tốn tiền").
+- Steer chỉ hỏi xác nhận một lần mỗi run (không tốn tiền thêm ngoài run đang chạy); run mới thì lần nào cũng hỏi.

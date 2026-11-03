@@ -3,13 +3,15 @@
  *   agent đang chạy (working / chờ duyệt / đang hỏi, có run_id) → `steer` vào run hiện tại;
  *   agent rảnh + đã có run do hội thoại này bắt đầu (trong lần mở trang) → `run_continue` run đó (giữ ngữ cảnh, run MỚI);
  *   còn lại → `run_start` một run mới. (Không tự tiếp một run cũ không do hội thoại này bắt đầu — vd. run của task.)
- * Lần gửi đầu tiên mỗi loại action cho một agent: server trả need:"confirm" ("Sẽ bắt đầu run mới cho <agent>…") → hộp xác nhận, NGƯỜI bấm
- * mới gửi confirm=yes. Câu trả lời: SSE /sse/run/{id} sẵn có — chỉ đọc khung `delta` (chữ thô); khung `item` mang HTML → BỎ QUA, không đọc.
+ * Server trả need:"confirm" ("Sẽ bắt đầu run mới cho <agent>…") → hộp xác nhận, NGƯỜI bấm mới gửi confirm=yes: MỖI lần bắt đầu run mới
+ * (run_start / run_continue — tốn tiền) đều hỏi lại; steer chỉ hỏi lần đầu cho MỖI run (confirmKey gắn run_id). Câu trả lời: SSE /sse/run/{id} sẵn có — chỉ đọc khung `delta` (chữ thô); khung `item` mang HTML → BỎ QUA, không đọc.
  * Chữ của agent là DỮ LIỆU: chỉ fillText (bản sr-only: textContent qua Panel). Gõ chữ qua <textarea> thật (IME tiếng Việt). */
 import { FONT, roundRect } from './util.js';
 import { Panel, COLORS as C, wrapLines, clean } from './ui.js';
 
 const MAX_TEXT = 8000, MAX_REPLY = 20000;
+// Thứ tự vẽ: bảng nói chuyện DƯỚI nền mờ (1000) và bảng modal (1001) của Modals (flows.js) — bảng duyệt/trả lời mở từ đây luôn nằm trên.
+export const TALK_ORDER = 990;
 export const RUNNING = new Set(['working', 'waiting', 'waiting_human', 'asking']);
 
 // Thuần: chọn action cho tin kế tiếp. a = {id, status, run_id}; sess = {lastRun}.
@@ -25,16 +27,36 @@ export function talkNotice(name, agentName) {
   return 'Tin sẽ bắt đầu run mới cho ' + agentName + ' — có thể tốn tiền; budget và giới hạn của agent vẫn áp dụng.';
 }
 
+// Thuần: khoá "đã xác nhận" để khỏi hỏi lại. null = luôn hỏi (run_start / run_continue bắt đầu run MỚI, có thể tốn tiền).
+export function confirmKey(plan) { return plan && plan.name === 'steer' && plan.fields && plan.fields.id ? 'steer:' + plan.fields.id : null; }
+
+// Thuần: một khung SSE /sse/run vào trạng thái trả lời r = {pending, mode, seq}. Trả 'dirty' (vẽ lại) | 'end' | null (bỏ qua).
+// steer: luồng phát lại cả run từ đầu → khung `item` kind "steer" (user.message — một tin của người) mở đoạn mới; đoạn cuối = trả lời sau
+// tin của bạn. Khung `refresh` (run.completed, duyệt, câu hỏi…) KHÔNG xoá gì — trước đây xoá → mất câu trả lời khi run kết thúc.
+// KHÔNG đọc trường html của khung `item` (chỉ kind/seq).
+export function replyFrame(r, f) {
+  if (!f || typeof f !== 'object') return null;
+  if (typeof f.seq === 'number' && f.seq > (r.seq || 0)) r.seq = f.seq;
+  if (f.t === 'delta' && f.k === 'text') { r.pending = ((r.pending || '') + String(f.text || '')).slice(-MAX_REPLY); return 'dirty'; }
+  if (f.t === 'item' && f.kind === 'steer' && r.mode === 'steer') { r.pending = ''; return 'dirty'; }
+  if (f.t === 'item' && f.kind === 'msg' && r.pending && !r.pending.endsWith('\n')) { r.pending += '\n'; return 'dirty'; }
+  if (f.t === 'end') return 'end';
+  return null;
+}
+// Thuần: chờ trước lần nối lại thứ n (0, 1, …) khi luồng trả lời lỗi — lùi dần 1 s → 30 s; null = thôi, báo luồng đã đóng.
+export const RETRY_MAX = 6;
+export function retryDelay(n) { return n >= RETRY_MAX ? null : Math.min(30000, 1000 * 2 ** n); }
+
 export function createTalk(o) {
   // o: {api, srRoot, camera, toast(msg, ok), onExpired(), agent(id) → {id, name, status, run_id, approval, question} | null,
   //     ask(d) → Promise<bool> (hộp xác nhận, true khi NGƯỜI bấm Đồng ý), openApproval(id), openQuestion(id), onOpenChange(open, id)}
-  const sessions = new Map(); // agentId → {messages, lastRun, confirmed:Set, pending, es, esRun, mode}
+  const sessions = new Map(); // agentId → {messages, lastRun, confirmed:Set, pending, es, esRun, mode, seq, tries, retry}
   const st = { id: null, sending: false };
   const panel = new Panel({ title: 'Nói chuyện với agent', pxW: 1500, pxH: 900, srRoot: o.srRoot, modal: false, build, onEscape: () => close() });
   panel.mesh.userData.talk = true;
   panel.sr.hidden = true;
   const m = panel.mesh.material;
-  m.depthTest = false; m.depthWrite = false; panel.mesh.renderOrder = 1001; panel.mesh.visible = false;
+  m.depthTest = false; m.depthWrite = false; panel.mesh.renderOrder = TALK_ORDER; panel.mesh.visible = false;
   o.camera.add(panel.mesh);
 
   function fit() {
@@ -47,32 +69,45 @@ export function createTalk(o) {
   }
   const sess = (id) => {
     let s = sessions.get(id);
-    if (!s) { s = { messages: [], lastRun: null, confirmed: new Set(), pending: null, es: null, esRun: null, mode: '' }; sessions.set(id, s); }
+    if (!s) { s = { messages: [], lastRun: null, confirmed: new Set(), pending: null, es: null, esRun: null, mode: '', seq: 0, tries: 0, retry: null }; sessions.set(id, s); }
     return s;
   };
 
   // ---------------------------------------------------------------- luồng trả lời (SSE run)
   function stream(id, runId, mode) {
     const s = sess(id);
-    if (s.es && s.esRun === runId) return;
+    if (s.esRun === runId && (s.es || s.retry)) return;
     stop(s, false);
-    s.esRun = runId; s.mode = mode; s.pending = '';
-    const es = new EventSource('/sse/run/' + encodeURIComponent(runId), { withCredentials: true });
+    s.esRun = runId; s.mode = mode; s.pending = ''; s.seq = 0; s.tries = 0;
+    connect(s, runId);
+  }
+  function connect(s, runId) {
+    // nối lại: tiếp từ seq đã thấy (since) → không phát lại, không nhân đôi chữ
+    const es = new EventSource('/sse/run/' + encodeURIComponent(runId) + (s.seq ? '?since=' + s.seq : ''), { withCredentials: true });
     s.es = es;
     es.onmessage = (ev) => {
+      if (s.es !== es) return;
       let f; try { f = JSON.parse(ev.data); } catch (_) { return; }
-      if (!f || typeof f !== 'object' || s.es !== es) return;
-      if (f.t === 'delta' && f.k === 'text') s.pending = (s.pending + String(f.text || '')).slice(-MAX_REPLY);
-      // steer: luồng phát lại cả run từ đầu → mỗi `refresh` (user.message, duyệt…) mở đoạn mới; đoạn cuối = trả lời sau tin của bạn
-      else if (f.t === 'refresh' && s.mode === 'steer') s.pending = '';
-      else if (f.t === 'item' && f.kind === 'msg' && s.pending && !s.pending.endsWith('\n')) s.pending += '\n'; // KHÔNG đọc trường HTML của khung
-      else if (f.t === 'end') stop(s, true);
-      else return;
-      panel.dirty = true;
+      s.tries = 0;
+      const r = replyFrame(s, f);
+      if (r === 'end') stop(s, true);
+      if (r) panel.dirty = true;
     };
-    es.onerror = () => { if (s.es === es) { stop(s, true); s.messages.push({ kind: 'note', text: 'Luồng trả lời đã đóng.' }); panel.dirty = true; } };
+    es.onerror = () => {
+      if (s.es !== es) return;
+      es.close(); s.es = null;
+      const wait = retryDelay(s.tries++);
+      if (wait == null) { stop(s, true); s.messages.push({ kind: 'note', text: 'Luồng trả lời đã đóng.' }); panel.dirty = true; return; }
+      s.retry = setTimeout(() => { s.retry = null; if (s.esRun === runId && !s.es) connect(s, runId); }, wait);
+    };
+  }
+  // đoạn trả lời đang dở thành một tin của agent (trước khi gửi tin mới vào cùng run)
+  function commit(s) {
+    if (s.pending && s.pending.trim()) s.messages.push({ kind: 'agent', text: s.pending });
+    if (s.pending != null) s.pending = '';
   }
   function stop(s, keep) {
+    if (s.retry) { clearTimeout(s.retry); s.retry = null; }
     if (s.es) { s.es.close(); s.es = null; }
     if (keep && s.pending && s.pending.trim()) s.messages.push({ kind: 'agent', text: s.pending });
     s.pending = null; s.esRun = null;
@@ -86,13 +121,13 @@ export function createTalk(o) {
     const text = el.value.trim();
     if (!text) return;
     if (text.length > MAX_TEXT) { o.toast('Tin quá dài (tối đa ' + MAX_TEXT + ' ký tự)', false); return; }
-    const s = sess(a.id), plan = talkPlan(a, s, text), url = '/office/do/' + plan.name;
+    const s = sess(a.id), plan = talkPlan(a, s, text), url = '/office/do/' + plan.name, ck = confirmKey(plan);
     st.sending = true; panel.busy = true; panel.dirty = true;
-    let res = await o.api.post(url, s.confirmed.has(plan.name) ? Object.assign({ confirm: 'yes' }, plan.fields) : plan.fields);
+    let res = await o.api.post(url, ck && s.confirmed.has(ck) ? Object.assign({ confirm: 'yes' }, plan.fields) : plan.fields);
     if (!res.error && res.data && res.data.need === 'confirm') {
-      // lần đầu loại action này cho agent: hỏi (thông điệp do server soạn) — chỉ người bấm "Đồng ý" mới gửi confirm=yes
+      // hỏi (thông điệp do server soạn) — chỉ người bấm "Đồng ý" mới gửi confirm=yes; run mới: lần nào cũng hỏi, steer: một lần mỗi run
       const ok = await o.ask(res.data);
-      if (ok) { s.confirmed.add(plan.name); res = await o.api.post(url, Object.assign({ confirm: 'yes' }, plan.fields)); } else res = null;
+      if (ok) { if (ck) s.confirmed.add(ck); res = await o.api.post(url, Object.assign({ confirm: 'yes' }, plan.fields)); } else res = null;
     }
     st.sending = false; panel.busy = false; panel.dirty = true;
     if (!res) { setTimeout(() => panel.focus('input'), 0); return; }
@@ -101,6 +136,7 @@ export function createTalk(o) {
     const d = res.data || {};
     if (!d.ok) { o.toast('Phản hồi không rõ từ hub', false); return; }
     el.value = '';
+    if (d.run_id && s.esRun === d.run_id) commit(s); // tin mới vào run đang nghe: chốt câu trả lời trước đó, mở đoạn mới
     s.messages.push({ kind: 'user', text, steered: plan.name === 'steer' });
     if (plan.name !== 'steer' && d.run_id) s.lastRun = d.run_id;
     if (d.run_id) stream(a.id, d.run_id, plan.name === 'steer' ? 'steer' : 'run');
@@ -115,7 +151,7 @@ export function createTalk(o) {
     st.id = id; panel.sr.hidden = false; panel.mesh.visible = true; panel.dirty = true;
     const s = sess(id), a = o.agent(id);
     // agent đang chạy run mình đã gửi trước đó: nghe tiếp
-    if (a && a.run_id && s.lastRun === a.run_id && !s.es) stream(id, a.run_id, 'run');
+    if (a && a.run_id && s.lastRun === a.run_id && !s.es && !s.retry) stream(id, a.run_id, 'run');
     fit();
     o.onOpenChange(true, id);
     setTimeout(() => { panel.draw(); panel.focus('input'); }, 0);

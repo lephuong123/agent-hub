@@ -28,7 +28,8 @@ def test_coordinator_behaviour_headless():
                        encoding="utf-8", timeout=180)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "FAIL" not in r.stdout and r.stdout.count("ok ") >= 24, r.stdout
-    for must in ("không có 2 điều phối viên", "ngồi bàn ≥ 80 %", "spawn n=19 teams=true", "đang nói chuyện"):
+    for must in ("không có 2 điều phối viên", "ngồi bàn ≥ 80 %", "spawn n=19 teams=2", "spawn n=80 teams=0", "spawn n=80 teams=3", "đang nói chuyện",
+                 "vẫn giữ câu trả lời cuối", "ghế là mgrSpot của World mới", "confirmKey: steer gắn run_id"):
         assert must in r.stdout, must
 
 
@@ -52,10 +53,12 @@ def test_talk_only_uses_whitelisted_run_actions():
     names = set(re.findall(r"name: '(\w+)'", talk))
     assert names == {"steer", "run_continue", "run_start"} and names <= set(O.OFFICE_ACTIONS) and names == O.RUN_ACTIONS
     assert sorted(set(re.findall(r"'(/[a-z/]+)'", talk))) == ["/office/do/", "/sse/run/"]
-    # confirm=yes chỉ sau khi người bấm Đồng ý (o.ask) hoặc đã đồng ý trước đó cho đúng loại action này
+    # confirm=yes chỉ sau khi người bấm Đồng ý (o.ask), hoặc đã đồng ý steer cho ĐÚNG run này; run mới (tốn tiền) lần nào cũng hỏi
     send = talk[talk.index("async function send()"):talk.index("// ---------------------------------------------------------------- mở / đóng")]
-    assert send.count("confirm: 'yes'") == 2 and "await o.ask(res.data)" in send and "s.confirmed.has(plan.name)" in send
-    assert send.index("await o.ask(res.data)") < send.index("s.confirmed.add(plan.name)")
+    assert send.count("confirm: 'yes'") == 2 and "await o.ask(res.data)" in send and "ck && s.confirmed.has(ck)" in send
+    assert send.index("await o.ask(res.data)") < send.index("if (ck) s.confirmed.add(ck)") and "s.confirmed.has(plan.name)" not in send
+    ck = talk[talk.index("export function confirmKey"):talk.index("export function replyFrame")]
+    assert "plan.name === 'steer'" in ck and "'steer:' + plan.fields.id" in ck and ": null;" in ck
 
 
 def test_office_hides_ai_coordinator_while_walking():
