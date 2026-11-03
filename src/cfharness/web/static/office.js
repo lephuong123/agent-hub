@@ -5,7 +5,7 @@
  * Chữ của agent là DỮ LIỆU: trong DOM chỉ textContent, trên cảnh chỉ fillText. Không innerHTML. Hợp đồng: docs/dev-notes/office-3d.md.
  * Giai đoạn 2: duyệt / trả lời câu hỏi / chat với điều phối viên / đăng xuất NGAY TRONG CẢNH (office/flows.js, office/chat.js, office/ui.js),
  * cùng cổng ghi với web 2D (CSRF từ data-csrf + khoá phiên `k` trong localStorage — không bao giờ vẽ/in/log).
- * Hiệu năng: ≤ 30 FPS, dừng khi tab ẩn, pixelRatio ≤ 1,5; không có WebGL hoặc FPS TB < 10 trong 5 s → #office-fallback. */
+ * Hiệu năng: ≤ 30 FPS, dừng khi tab ẩn, pixelRatio ≤ 1,5; không có WebGL (hoặc mất context không khôi phục trong 5 s) hoặc FPS TB < 10 trong 3 cửa sổ 5 s liền → #office-fallback (chậm: giữ renderer, nút "Tiếp tục 3D"). */
 import * as THREE from './vendor/three-0.169.0/three.module.min.js';
 import { OrbitControls } from './vendor/three-0.169.0/OrbitControls.js';
 import { World, layoutKey } from './office/world.js';
@@ -727,10 +727,16 @@ function main() {
   }
 
   // ------------------------------------------------------------ vòng vẽ (≤ 30 FPS, dừng khi ẩn)
-  let raf = 0, last = 0, lastDraw = 0, fpsFrames = 0, fpsStart = 0, uiAt = 0;
+  let raf = 0, last = 0, lastDraw = 0, fpsFrames = 0, fpsStart = 0, uiAt = 0, prevRaf = 0, prevGap = 0, slowWins = 0;
   const tmp = new THREE.Vector3();
   function frame(ts) {
     raf = requestAnimationFrame(frame);
+    // một lần khựng > 1 s sau khung hình bình thường (tab bị che/điều tiết, máy ngủ, GC, devtools…) không phải "máy chậm":
+    // bỏ cửa sổ đo đang dở, đo lại. Khung nào cũng > 1 s (chậm thật) thì vẫn đo bình thường → fallback.
+    const gap = prevRaf ? ts - prevRaf : 0;
+    // cửa sổ không có focus (đang ở app khác): Chrome/Windows điều tiết rAF xuống ~1 FPS dù tab vẫn "visible" → không đo
+    if ((gap > 1000 && prevGap < 250) || !document.hasFocus()) { fpsStart = ts + 1000; fpsFrames = 0; slowWins = 0; }
+    prevRaf = ts; prevGap = gap;
     if (ts - lastDraw < 1000 / 30 - 3) return;
     const dt = Math.min(0.1, last ? (ts - last) / 1000 : 0.016);
     last = ts; lastDraw = ts;
@@ -796,14 +802,15 @@ function main() {
     talk.update();
     if (toastTs.sprite.visible && performance.now() > toastUntil) toastTs.sprite.visible = false;
     renderer.render(scene, camera);
-    // đo FPS: bỏ 2 s đầu, cửa sổ 5 s
+    // đo FPS: bỏ 2 s đầu, cửa sổ 5 s; chỉ tắt 3D khi CHẬM LIÊN TỤC 3 cửa sổ liền (15 s), một lần giật không tính
     if (!fpsStart) fpsStart = ts + 2000;
     if (ts >= fpsStart) {
       fpsFrames++;
       if (ts - fpsStart >= 5000) {
         const fps = fpsFrames / ((ts - fpsStart) / 1000);
         fpsFrames = 0; fpsStart = ts;
-        if (fps < 10) disableRender();
+        slowWins = fps < 10 ? slowWins + 1 : 0;
+        if (slowWins >= 3) disableRender('slow');
       }
     }
   }
@@ -842,21 +849,50 @@ function main() {
       t.add(tmp); camera.position.add(tmp);
     }
   }
-  function start() { if (!raf && !stopped && !noRender && renderer) { last = 0; lastDraw = 0; fpsStart = 0; fpsFrames = 0; raf = requestAnimationFrame(frame); } }
+  function start() { if (!raf && !stopped && !noRender && !ctxLost && renderer) { last = 0; lastDraw = 0; fpsStart = 0; fpsFrames = 0; prevRaf = 0; prevGap = 0; slowWins = 0; raf = requestAnimationFrame(frame); } }
   function pause() { if (raf) cancelAnimationFrame(raf); raf = 0; }
   document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); else start(); });
 
   // Quá chậm / không WebGL: ngừng vẽ (thông báo DOM tối thiểu) nhưng vẫn cập nhật danh sách sr-only.
-  let slowT = 0;
-  function disableRender() {
+  let slowT = 0, ctxLost = false, lostT = 0;
+  // Mất WebGL context (GPU reset, driver, quá nhiều context…): KHÔNG tắt ngay — chờ trình duyệt khôi phục (three.js tự dựng lại),
+  // chỉ khi 5 s không khôi phục mới về fallback.
+  cvs.addEventListener('webglcontextlost', (e) => {
+    if (noRender) return; // do chính disableRender() gọi forceContextLoss
+    e.preventDefault(); // cho phép khôi phục
+    ctxLost = true; pause();
+    clearTimeout(lostT);
+    lostT = setTimeout(() => { if (ctxLost) disableRender('nogl'); }, 5000);
+  });
+  cvs.addEventListener('webglcontextrestored', () => {
+    ctxLost = false; clearTimeout(lostT);
+    if (!document.hidden) start();
+  });
+  function disableRender(reason) {
+    if (noRender) return;
     noRender = true; pause();
+    const msg = fallback && fallback.querySelector('[data-reason="' + (reason || 'nogl') + '"]');
+    if (msg) for (const p of fallback.querySelectorAll('[data-reason]')) p.hidden = p !== msg;
     if (walkBtn) walkBtn.hidden = true;
     if (povBtn) povBtn.hidden = true;
     if (fallback) fallback.hidden = false;
     host.hidden = true;
     if (!slowT) slowT = setInterval(() => { if (!stopped) { renderList(); renderSrPanel(); } }, 1000);
-    if (renderer) { renderer.dispose(); renderer.forceContextLoss(); }
+    // chậm (thường do CPU/GPU đang bận việc khác): GIỮ renderer để người dùng bấm "Tiếp tục 3D"; chỉ huỷ khi thật sự không có WebGL
+    if (reason !== 'slow' && renderer) { renderer.dispose(); renderer.forceContextLoss(); }
   }
+  function resumeRender() {
+    if (!noRender || !renderer || ctxLost) return;
+    noRender = false;
+    clearInterval(slowT); slowT = 0;
+    if (fallback) fallback.hidden = true;
+    host.hidden = false;
+    if (walkBtn && world) walkBtn.hidden = false;
+    if (povBtn) povBtn.hidden = !walk.active;
+    start();
+  }
+  const resumeBtn = $('office-resume');
+  if (resumeBtn) resumeBtn.addEventListener('click', resumeRender);
   function stopAll() {
     stopped = true;
     if (es) { es.close(); es = null; }
@@ -946,7 +982,7 @@ function main() {
   }
 
   (async () => {
-    if (renderer) start(); else disableRender();
+    if (renderer) start(); else disableRender('nogl');
     const r = await fetchState();
     if (r === 'ok') connect();
     else if (r === 'error') { setConn('lost'); reconnect(2000); }
