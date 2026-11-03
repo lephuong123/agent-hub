@@ -118,6 +118,7 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
         _s("learning.review_model", "Model review", "choice", "mặc định = cùng model với run gốc (giữ cache)", choices=MODELS, nullable=True),
         _s("learning.review_scope", "Phạm vi review", "choice", "graph = review trích fact vào graph memory", choices=("combined", "skill", "memory", "graph")),
         _s("learning.graph_extract", "Trích xuất graph memory cuối session", "bool", "một lần gọi LLM rẻ mỗi session"),
+        _s("learning.graph_mirror_memory", "Mirror MEMORY.md/USER.md vào graph", "bool", "mục memory mới → fact graph cùng tầng; mục mất → đóng fact"),
         _s("learning.graph_extract_budget_usd", "Trần mỗi lần trích xuất graph ($)", "float", min=0),
         _s("learning.graph_extract_daily_usd_per_agent", "Trần trích xuất graph / agent / ngày ($)", "float", min=0),
         _s("learning.review_max_per_agent_per_day", "Review tối đa / agent / ngày", "int", min=0),

@@ -138,7 +138,7 @@ classifier + `SCOPED_READ`, RPC ràng run, run eval đọc bản chụp, `memory
 
 ## Việc dở sau PR write
 - ~~Recall (PR retrieval) — chưa có gì đọc graph vào prompt. Bộ khớp embedding (`set_embed_matcher`) chưa cắm.~~ Xong khi tích hợp (dưới).
-- Chưa mirror ghi MEMORY.md (tool `memory` target memory/user) thành episode (`on_memory_write` của Hermes).
+- ~~Chưa mirror ghi MEMORY.md (tool `memory` target memory/user) thành episode (`on_memory_write` của Hermes).~~ Xong — § "Mirror MEMORY.md".
 - `agent_context` không primary (subagent/cron) của Hermes: hub không phân biệt — run do lịch chạy vẫn được trích như run thường.
 - LLM xác nhận mâu thuẫn / gộp hai thực thể đã có: PR quality.
 - `review_scope=graph` không đưa Signal (correction…) vào prompt trích xuất.
@@ -192,7 +192,7 @@ plan) — giữ cả hai. Sửa sau merge:
   chuẩn hoá theo hit tốt nhất) nên câu không liên quan vẫn kéo fact yếu; cần sửa xếp hạng trước khi chấm kiêng có ý nghĩa.
 - Run eval không có kênh vector (bản chụp không chứa vector) → golden memory chấm FTS5 + thực thể + mở rộng, không chấm kênh vector.
 - Không có tool MCP cho người `hub_memory_recall`; người dùng `cfharness learn graph search` (RPC `memory.recall`).
-- Chưa mirror ghi MEMORY.md thành episode (`on_memory_write`), chưa phân biệt `agent_context` không primary, `review_scope=graph` chưa đưa
+- ~~Chưa mirror ghi MEMORY.md thành episode (`on_memory_write`)~~ (xong — § "Mirror MEMORY.md"), chưa phân biệt `agent_context` không primary, `review_scope=graph` chưa đưa
   Signal vào prompt trích xuất (từ PR write — vẫn còn).
 - Alias/thực thể tìm bằng LIKE không index; web/TUI chưa có trang xem graph; `knowledge versions` chưa liệt kê graph.
 
@@ -238,3 +238,29 @@ Test: `tests/test_graph_memory_review.py` (12 ca, bộ trích xuất GIẢ, khô
   (`graph_memory.recall.weights` ghi đè được). Kết quả: **10/11 top-1, 11/11 top-3**. Câu còn sai ("how do I run unit tests in
   workflowswebapp") là hoà cosine 0.612 vs 0.610 giữa hai fact cùng repo. Ngưỡng là theo bge-m3 — đổi model thì đo lại. Mẫu nhỏ: chỉnh
   tiếp theo golden set, không theo bộ này.
+
+# Mirror MEMORY.md → graph (`on_memory_write`, nhánh `feat/graph-memory-mirror`)
+
+Vấn đề: bộ trích xuất chỉ đọc lượt người + câu trả lời agent, không đọc `tool_call` → mục agent ghi bằng tool `memory` / `propose_memory`
+(và mục người/curator/review ghi) không bao giờ vào graph.
+
+| Phần | Ở đâu |
+|---|---|
+| `MemoryMirror` (`hub.learning.graph_mirror`): đơn vị = một file memory (`agent/<id>/memory\|user`, `team/<id>/memory`, `global/-/memory\|user`). Trạng thái `hub_state learning.graph_mirror` = {khoá file: {sha mục: [chữ ký fact]}}; chữ ký = `norm_relation(relation)\|canon(fact)` (không dùng tên thực thể — bền qua consolidation) | `learning/graph_mirror.py` |
+| `sync`: mục mới → MỘT oneshot (`EXTRACT_SCHEMA`, `MIRROR_PROMPT`; đi qua `GraphExtractor.to_batches` để gộp thực thể + chạy thử `plan_ops`); mục mất (xoá/sửa/rollback/sửa tay) → `invalidate_fact` theo id cho fact có episode `memory:<khoá>` mà chữ ký không còn mục nào khác giữ (tất định, không LLM). File chưa sync → mọi mục là mới (backfill) | `MemoryMirror._sync`, `_invalidations` |
+| Trigger: `Pipeline._apply` target memory/user_profile → `on_applied` (debounce `learning.graph_mirror_debounce_s`=20); `LearningOps.tick` → `tick()` mỗi `graph_mirror_interval_s`=300 (≤ 5 file lệch / lượt) | `pipeline.py`, `learning_ops/wiring.py` |
+| Ghi: `graph_write(created_by="agent")` ở ĐÚNG tầng của file (LLM không chọn tầng). Tác giả: tầng agent = chủ; tầng chung = agent vừa ghi hoặc agent của ledger entry mới nhất trên file, phải có quyền tầng (`memory_scopes`, lead team đó) — không có → bỏ qua, không gọi LLM. Episode `source_kind=memory_write` | `author` |
+| Chi phí: chung trần `graph_extract_*` (dòng `runs` kind `graph_extract`, trigger `memory_write`) + suất `graph_writes_per_agent_per_day` | `cap_problem`, `_record` |
+| Prefetch bỏ fact mirror (`graph_memory.recall.prefetch_mirrored=false`): mục gốc đã nằm trong system prompt. `memory_recall`/web/CLI vẫn thấy | `provider._drop_mirrored` |
+| Công tắc `learning.graph_mirror_memory` (mặc định bật, có trên trang cài đặt) | `config.py`, `web/settings_schema.py` |
+
+Quyết định / lệch:
+- **`created_by=agent`, không `review`**: nội dung đã qua guard + cổng tầng khi vào file memory; lô graph là chỉ mục dẫn xuất của nó. Với
+  `review`, lô tầng team/global sẽ treo `deferred_no_eval` (eval gate L3 cần golden task) như lô trích xuất hiện nay. Đổi lại: độ tin cậy
+  mặc định 0.5 (không phân biệt mục người ghi), không đóng được fact người khai.
+- LLM lỗi → không tiến trạng thái (lượt sau thử lại). Lô bị guard chặn → vẫn tiến (gọi lại chỉ tốn tiền ra cùng kết quả). Lô hoãn vì suất
+  → pipeline tự thử lại.
+- Rollback LÔ GRAPH mirror (regression/người) không làm mục được mirror lại — trạng thái coi mục đã xong. Sửa mục (đổi sha) thì mirror lại.
+
+Test: `tests/test_graph_memory_mirror.py` (11 ca, LLM giả).
+

@@ -708,6 +708,11 @@ class Pipeline:
         self._emit("learning.applied", prop, {"canary_id": cid, "ledger_entry_id": entry["id"], "snapshot_id": entry["snapshot_id"], "scope": prop["scope"], "target": prop["target"],
                                               "target_ref": prop.get("target_ref"), "op": prop["op"], "risk_class": prop["risk_class"], "summary": ch.summary,
                                               "diff": plan["diff"][:1500], "rollback_cmd": f"cfharness learn rollback {entry['id']}"})
+        if prop["target"] in ("memory", "user_profile"):  # on_memory_write: mục memory mới/mất → graph (nền, debounce)
+            try:
+                self.svc.graph_mirror.on_applied(prop)
+            except Exception:  # pragma: no cover - mirror hỏng không được chặn áp dụng memory
+                log.exception("xếp mirror memory → graph lỗi (%s)", prop["id"])
         if prop["risk_class"] == "L2":
             self._post_apply(entry)
         if canary is not None:

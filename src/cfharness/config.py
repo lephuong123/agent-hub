@@ -337,6 +337,11 @@ DEFAULTS: dict[str, Any] = {
         "graph_extract_max_facts": 30,
         "graph_extract_timeout_s": 180,
         "graph_extract_binary": None,  # null = runtime của hub (runtime.claude.binary)
+        # on_memory_write (learning/graph_mirror.py): mục MEMORY.md/USER.md/team memory.md mới → fact graph cùng tầng (một lần gọi LLM,
+        # chung trần graph_extract_*); mục mất → đóng hiệu lực fact của nó (không LLM). Vòng nền bắt rollback/sửa tay/file có từ trước.
+        "graph_mirror_memory": True,
+        "graph_mirror_debounce_s": 20,
+        "graph_mirror_interval_s": 300,
         "review_debounce_s": 10,  # gom tín hiệu: review chạy ≥ N giây sau Signal cuối (newest-wins)
         "review_max_per_agent_per_day": 10,
         "review_timeout_s": 600,
@@ -375,6 +380,7 @@ DEFAULTS: dict[str, Any] = {
             "hops": 1,  # mở rộng 1–2 bước quanh thực thể của hit đầu
             "half_life_days": 90,  # suy giảm theo tuổi fact (giảm hạng, sàn 0.3 — không xoá)
             "min_score": 0.05,
+            "prefetch_mirrored": False,  # fact mirror từ file memory (đã có trong system prompt) không chèn lại vào tin đầu; memory_recall vẫn thấy
             "weights": None,  # null = mặc định retrieval.WEIGHTS {fts 1.0, vector 1.5, entity 0.8, expand 0.5}; dict → ghi đè từng kênh
         },
         "vector": {
