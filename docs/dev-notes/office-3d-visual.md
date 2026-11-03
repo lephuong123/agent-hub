@@ -364,5 +364,7 @@ Mỗi bước chạy lại §12. Chưa kiểm hình thật bằng trình duyệt
   viền óc chó, vách lửng mặt ngoài sáng / mặt trong ốp óc chó, LED trắng ấm mảnh trên đỉnh vách + MỘT dải accent dịu sát chân vách
   (`rgbMats[0]`, trôi màu chậm trong dải lục lam–chàm, tĩnh khi reduced/ESTOP) có quầng hắt xuống sàn; vách ngăn vải giữa hai hàng bàn,
   bàn óc chó sẫm, ghế gaming ghế-ngồi màu team dịu; biển "Cafe điện tử" tấm than chữ trắng ấm (không neon). `rgbMats`/`cafeMats`/spot/zone/grid giữ nguyên.
+  QA (2026-11-03): ở toàn cảnh khu này vẫn đọc như một khối tối → sàn thảm yến mạch ấm `#d3c6b3` + thảm chạy `#b3a28c`, ốp trong óc chó sáng,
+  bàn óc chó vừa, vách ngăn xanh xô thơm, lưng ghế màu team pha than, thùng máy trắng ngà, đèn phím chỉ là vạch mảnh, cây cao hai đầu dãy (khi dư ≥ 0,9 m).
 - **Declutter** (`util.js`, được phép sau khi B xong): vùng chiếm của nhãn tính thêm khoảng bong bóng emoji phía trên (1,2× cao nhãn) → cafe đông không còn nhãn đè bong bóng.
 - Đo (n = 24 agent + điều phối viên, 1440×900, Iris Xe, high): toàn cảnh 308–366 draw call, ~350–376 k tam giác (World ~165 k), 29,9 FPS (giới hạn 30).
