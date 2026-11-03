@@ -139,6 +139,31 @@ def test_render_escapes_and_keeps_agent_inside_code():
     assert "<!here>" not in plain["blocks"][0]["text"]["text"] and plain["blocks"][0]["text"]["verbatim"] is True
 
 
+def test_render_agent_quote_links_clickable_but_safe():
+    """Trả lời điều phối viên (`<blockquote>`): trích dẫn gọn, markdown nhẹ, link http(s) bấm được; không mention/ping, không giả đích link."""
+    from cfharness.notify.telegram import esc
+    body = ("## Kết quả\n- Xem https://app.example.io/a?x=1&y=2. rồi [PR #57](https://github.com/o/r/pull/57)\n"
+            "- giả: [https://good.com](https://evil.com) <!channel> <@U1> <http://x|bấm> javascript:alert(1)\n"
+            "```\ncode https://no.link `x`\n```\n**xong**")
+    m = render.message(f"<b>📣 Điều phối viên báo</b>\n<blockquote>{esc(body)}</blockquote>\n<small>↩ Tag bot để nói tiếp</small>", html=True)
+    sec = m["blocks"][0]["text"]["text"]
+    assert m["blocks"][-1]["type"] == "context" and m["blocks"][-1]["elements"][0]["text"] == "↩ Tag bot để nói tiếp"
+    assert sec.startswith("*📣 Điều phối viên báo*\n> *Kết quả*\n> • Xem <https://app.example.io/a?x=1&amp;y=2>. rồi")
+    assert "<https://github.com/o/r/pull/57|PR #57>" in sec
+    assert "<https://evil.com>" in sec and "|https://good.com" not in sec  # nhãn trông như URL → hiện URL thật
+    assert "<!channel>" not in sec and "<@U1>" not in sec and "<http://x|" not in sec and "<javascript" not in sec
+    assert "> code https://no.link ˋxˋ" in sec and sec.endswith("> *xong*")  # trong khối mã: không link, không thoát được
+    assert all(ln.startswith(">") for ln in sec.split("\n")[1:])  # mọi dòng agent nằm trong trích dẫn
+
+
+def test_render_splits_long_quote_keeps_quote():
+    from cfharness.notify.telegram import esc
+    body = "```\n" + "\n".join(f"dòng {i} " + "x" * 80 for i in range(120)) + "\n```"
+    parts = render.split_sections(render.to_mrkdwn(f"<blockquote>{esc(body)}</blockquote>", html=True))
+    assert len(parts) > 1 and all(len(p) <= 3000 for p in parts)
+    assert all(ln.startswith(">") for p in parts for ln in p.split("\n"))
+
+
 def test_render_splits_long_code_block():
     md = "<pre>" + "\n".join(f"dòng {i} " + "x" * 80 for i in range(120)) + "</pre>"
     parts = render.split_sections(render.html_to_mrkdwn(md))

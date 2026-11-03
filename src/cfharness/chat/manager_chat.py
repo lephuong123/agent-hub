@@ -197,11 +197,9 @@ class ManagerChat:
         return self._st(self.CONVCHAT).get(conv) if conv else None
 
     def format_reply(self, text: str, *, agent: str | None, notify: bool = False, failed: bool = False, chat: Any = None) -> list[str]:
-        """Khung kết quả agent (WT-8): dòng hệ thống (chữ của hub) + tiền tố cố định + nội dung agent trong `<pre>`. Không nút."""
+        """Khung kết quả agent (WT-8): dòng hệ thống (chữ của hub) + nội dung agent trong khung của kênh (`bot.agent_frame`). Không nút."""
         from ..notify.telegram import visible
         from ..redact import redact_str
-        from .base import AGENT_FRAME
-
         body = visible(redact_str(text or "")) or "(không có nội dung)"
         chunks = split_chunks(body, CHUNK)
         cut = len(chunks) > MAX_CHUNKS
@@ -210,12 +208,12 @@ class ManagerChat:
         out = []
         for i, ch in enumerate(chunks):
             part = f" ({i + 1}/{len(chunks)})" if len(chunks) > 1 else ""
-            lines = [f"<b>{esc(title)}{part}</b>", f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(ch)}</pre>"]
+            tail: list[str] = []
             if i == len(chunks) - 1:
                 if cut:
-                    lines.append("…(đã cắt — xem đầy đủ trên web, trang Điều phối)")
-                lines.append("↩ " + esc(self.bot.continue_hint(chat)))
-            out.append("\n".join(lines))
+                    tail.append("…(đã cắt — xem đầy đủ trên web, trang Điều phối)")
+                tail.append("↩ " + esc(self.bot.continue_hint(chat)))
+            out.append(self.bot.agent_frame(f"<b>{esc(title)}{part}</b>", ch, tail))
         return out
 
     async def _deliver(self, chat: Any, conv: str | None, run_id: str | None, text: str, *, notify: bool = False, reply_to: Any = None,

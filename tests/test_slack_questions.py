@@ -183,7 +183,7 @@ async def test_manager_wording_is_slack(make, sk):
                                                        "conversation_id": "conv_x", "run_id": "r_x"}, run_id="r_x"))
     m = await until(lambda: next((t for t in texts(sk, DM_BOSS) if "Điều phối viên báo" in t), None))
     assert "↩ Trả lời trong thread của tin này để nói tiếp · /cfh moi để bắt đầu chủ đề mới." in m
-    assert "(reply)" not in m and "```\nĐã xong tóm tắt." in m
+    assert "(reply)" not in m and "\n> Đã xong tóm tắt." in m and "```" not in m
     # Telegram giữ nguyên từng byte (lời dẫn mặc định của ChatBot)
     tgb = d.hub.telegram
     assert guide_text(tgb) == GUIDE and unavailable_text(tgb) == UNAVAILABLE

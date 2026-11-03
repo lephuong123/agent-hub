@@ -545,6 +545,11 @@ class ChatBot:
         """"trả lời tin này" (chữ thường, giữa câu) — Telegram: reply; Slack: trả lời trong thread."""
         return "trả lời (reply) tin này"
 
+    def agent_frame(self, title: str, body: str, tail: list[str]) -> str:
+        """Khung kết quả agent (WT-8): `title`/`tail` = chữ hub đã escape; `body` = chữ agent THÔ (hàm này escape).
+        Mặc định (Telegram): tiền tố cố định + `<pre>` — Telegram không tạo link/lệnh bấm được bên trong. Slack ghi đè (trích dẫn + link)."""
+        return "\n".join([title, f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(body)}</pre>", *tail])
+
     def continue_hint(self, chat: Any = None) -> str:
         """Dòng cuối trả lời của điều phối viên: cách nói tiếp / mở chủ đề mới ở `chat`."""
         return f"{self.reply_hint('nói tiếp').rstrip('.')} · {self.cmd('moi')} để bắt đầu chủ đề mới."
