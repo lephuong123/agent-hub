@@ -13,7 +13,8 @@ Chữ ký (MCP server của luồng A gọi `approval.list|approve|deny` với c
   `always_offer` — khác luật sẽ tạo → lỗi, không quyết gì. Gỡ: `guard.protect.rm {id: "aa_…"}` (chỉ người); xem: `guard.policy` → `always_allow`.
 - `approval.approve {…, grant_rule: true, grant_for_s?}` → cho phép lần này VÀ từ nay agent đó không bị hỏi lại cho luật
   `matched_rule` (kể cả destructive; không hạn nếu thiếu `grant_for_s`); mọi approval chưa quyết cùng agent + luật được cho phép luôn.
-  Kết quả có `rule_grant`. Chỉ người. Xem/gỡ: `guard.grant.list`, `guard.grant.rm {id: agent, rule?}`; đặt thẳng: `guard.grant.set {id, rule, for_s?}`.
+  Kết quả có `rule_grant`. Chỉ người. `grant_confirm` (tuỳ chọn; MCP `hub_approve` luôn gửi) = `matched_rule` — khác → lỗi, không quyết gì.
+  Xem/gỡ: `guard.grant.list`, `guard.grant.rm {id: agent, rule?}`; đặt thẳng: `guard.grant.set {id, rule, for_s?}`.
 - `approval.stats {days?}` → thống kê theo luật/agent/tool/kết quả/người quyết + thời gian chờ (`cfharness approvals stats`).
 - `approval.profile` → profile + khoá hiệu lực (`guard/profiles.resolved`), chỉ đọc.
 - `approval.manager_decide {id, decision: allow|deny|escalate, reason}` — CHỈ điều phối viên (HUMAN_ONLY + MANAGER_ALLOWED; luật ở
@@ -101,6 +102,10 @@ def register_rpc(d: "Daemon") -> None:
                 row0 = hub.approvals.get(_id(p))
                 if not row0.get("matched_rule"):
                     raise HubError("approval không có luật để cho phép luôn; approval vẫn đang chờ")
+                if p.get("grant_confirm") is not None and str(p["grant_confirm"]).strip() != str(row0["matched_rule"]):
+                    # MCP hub_approve: client nhắc lại đúng matched_rule của approval — gọi mù → lỗi, không quyết gì
+                    raise HubError("grant_confirm không khớp luật của approval — đọc matched_rule (hub_open_requests) rồi nhắc lại đúng; "
+                                   "approval vẫn đang chờ")
             res = hub.approvals.resolve(_id(p), decision, by=by, channel=channel, note=p.get("note"))
             if spec is not None:
                 res = {**res, "always_rule": hub.guard.always_commit(spec, by=by, channel=channel)}

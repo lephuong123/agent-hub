@@ -193,7 +193,7 @@ DEFAULTS: dict[str, Any] = {
             "manager_progress": True,  # P7: tin tiến độ + nút Dừng khi điều phối viên làm việc cho tin Slack (chat/slack/progress.py)
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
-                       "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],  # M4-B: digest + nhắc chọn golden task (Q-23)
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,
             "backoff_base_s": 2,
             "timeout_s": 10,
@@ -211,7 +211,7 @@ DEFAULTS: dict[str, Any] = {
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
-                       "learning.digest", "golden.suggested", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],
             "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp", "file"],  # nhãn "THAO TÁC NẶNG" (mọi cho phép đều 2 bước — WT-5)
             "callback_ttl_s": 604800,  # nút duyệt còn hiệu lực 7 ngày (waiting_human có thể chờ lâu)
             "pair_ttl_s": 600,
@@ -240,6 +240,13 @@ DEFAULTS: dict[str, Any] = {
     "recovery": {
         "auto_resume": True,  # Q-09: daemon restart → dừng-và-resume tự động (trừ waiting_human)
         "pid_start_tolerance_s": 5,
+        # tự resume run ad-hoc kết thúc vì lỗi tạm thời (crashed/timed_out/rate_limited/mạng) — auto_resume.py.
+        # Trần số lần dùng CHUNG với resume sau daemon restart (interrupted)
+        "auto_resume_enabled": True,
+        "auto_resume_kinds": ["adhoc"],
+        "auto_resume_max_attempts": 3,
+        "auto_resume_backoff_s": 30,
+        "auto_resume_backoff_max_s": 900,
     },
     # M1 luồng A — MCP client registry (FR-MC-*)
     "mcp": {
@@ -328,7 +335,27 @@ DEFAULTS: dict[str, Any] = {
         # session rất đắt) mà chạy session mới với digest các tin gần nhất của session từ chỉ mục session_search (null = luôn fork)
         "review_digest_over_tokens": 150_000,
         "review_digest_chars": 40_000,  # cỡ digest (ký tự, tin mới nhất trước — mỗi tin ≤ 1.500 ký tự)
-        "review_scope": "combined",  # combined | skill | memory (prompt Hermes tương ứng)
+        # combined | skill | memory (prompt Hermes tương ứng) | graph (review job = MỘT lần trích xuất graph trên session nguồn, không fork —
+        # learning/graph_extract.py; MEMORY.md/skill khi đó chỉ do tool `memory` của agent cập nhật)
+        "review_scope": "combined",
+        # graph memory PR write (docs/dev-notes/graph-memory.md): MỘT lần trích xuất LLM có cấu trúc / kết thúc session, PreCompact, xoay session
+        # điều phối viên. Chỉ đọc lượt người + câu trả lời agent (không output tool/web). Ghi qua pipeline (graph_write, created_by=review).
+        "graph_extract": True,
+        "graph_extract_model": "haiku",
+        "graph_extract_budget_usd": 0.05,  # --max-budget-usd mỗi lần (trần cứng một lần)
+        "graph_extract_max_per_agent_per_day": 12,
+        "graph_extract_daily_usd_per_agent": 0.5,  # tổng chi phí trích xuất / agent / ngày (0 = không trần)
+        "graph_extract_debounce_s": 30,  # run kết thúc → chờ N giây (resume ngay thì gộp vào lần sau); PreCompact/xoay session: ngay
+        "graph_extract_min_chars": 200,  # hội thoại mới ngắn hơn → chưa trích (để dồn)
+        "graph_extract_max_chars": 30_000,  # cửa sổ tin mới nhất đưa vào một lần (phần cũ hơn bị bỏ)
+        "graph_extract_max_facts": 30,
+        "graph_extract_timeout_s": 180,
+        "graph_extract_binary": None,  # null = runtime của hub (runtime.claude.binary)
+        # on_memory_write (learning/graph_mirror.py): mục MEMORY.md/USER.md/team memory.md mới → fact graph cùng tầng (một lần gọi LLM,
+        # chung trần graph_extract_*); mục mất → đóng hiệu lực fact của nó (không LLM). Vòng nền bắt rollback/sửa tay/file có từ trước.
+        "graph_mirror_memory": True,
+        "graph_mirror_debounce_s": 20,
+        "graph_mirror_interval_s": 300,
         "review_debounce_s": 10,  # gom tín hiệu: review chạy ≥ N giây sau Signal cuối (newest-wins)
         "review_max_per_agent_per_day": 10,
         "review_timeout_s": 600,
@@ -338,7 +365,7 @@ DEFAULTS: dict[str, Any] = {
         "auto_apply_max_chars": 800,  # Q-03 ngưỡng đường nhanh L1
         "auto_apply_max_items": 1,
         "limits": {"memory_chars": 2200, "user_chars": 1375, "team_memory_chars": 2200, "skill_chars": 100_000, "skill_desc_chars": 60,
-                   "memory_entry_chars": 600},  # memory_entry_chars: trần một mục memory do học ghi (một fact, không phải cả đoạn)
+                   "memory_entry_chars": 600, "graph_fact_chars": 500},  # graph_fact_chars: trần MỘT fact graph (không có trần tổng)  # memory_entry_chars: trần một mục memory do học ghi (một fact, không phải cả đoạn)
         "repeat_pattern_n": 3,  # FR-LN-01: n-gram tool + số run tối thiểu
         "repeat_pattern_window_runs": 20,
         "failure_min_runs": 2,
@@ -357,6 +384,44 @@ DEFAULTS: dict[str, Any] = {
         "user_profile_mode": "shadow",  # USER dùng chung không canary theo agent được: eval (shadow) → áp dụng cho mọi agent + theo dõi
         "steer_correction_regex": r"(?i)(\bđừng\b|\bsai\s+rồi\b|\bkhông\s+phải\b|\bkhông\s+đúng\b|\bsửa\s+lại\b|\bdon'?t\b|\bdo\s+not\b|\bstop\s+doing\b|\bwrong\b|\bthat'?s\s+not\b|\bnot\s+what\s+i\b|\binstead\b)",
     },
+    # Graph memory — đọc (knowledge/graph/retrieval.py, provider.py; docs/dev-notes/graph-memory.md)
+    "graph_memory": {
+        "recall": {
+            "enabled": True,  # tắt → không chèn recall, tool memory_recall trả lỗi
+            "prefetch": True,  # top-k fact vào TIN USER ĐẦU của session mới (không bao giờ system prompt; không run review/eval/curator)
+            "top_k": 8,
+            "max_chars": 2000,  # trần khối recall (ký tự)
+            "hops": 1,  # mở rộng 1–2 bước quanh thực thể của hit đầu
+            "half_life_days": 90,  # suy giảm theo tuổi fact (giảm hạng, sàn 0.3 — không xoá)
+            "min_score": 0.05,
+            "prefetch_mirrored": False,  # fact mirror từ file memory (đã có trong system prompt) không chèn lại vào tin đầu; memory_recall vẫn thấy
+            "weights": None,  # null = mặc định retrieval.WEIGHTS {fts 1.0, vector 1.5, entity 0.8, expand 0.5}; dict → ghi đè từng kênh
+        },
+        "vector": {
+            "enabled": "auto",  # auto = dùng khi cài extra cfharness[vector] (fastembed + sqlite-vec); false = chỉ FTS5
+            "model": "BAAI/bge-m3",  # dense 1024-d; đổi model/phiên bản → chỉ mục lại
+            "batch": 32,  # số fact mỗi lô embed nền
+            "interval_s": 60,  # nhịp quét fact mới chưa có vector
+            "query_timeout_s": 3.0,  # trần thời gian embed câu hỏi lúc prefetch (quá → chỉ FTS5)
+            "max_scan": 5000,  # không có sqlite-vec: cosine Python trên ≤ N vector mới nhất
+            "min_sim": 0.4,  # kênh vector chỉ giữ hit cosine ≥ ngưỡng (đo trên bge-m3 — đổi model thì đo lại)
+            "sim_margin": 0.15,  # … và ≥ cosine tốt nhất − margin
+            "threads": None,
+            "entity_match": 0.92,  # cosine tên thực thể ≥ ngưỡng → coi là cùng thực thể khi ghi (resolve.set_embed_matcher); chỉ khi model đã nạp
+        },
+        # PR quality (learning/graph_quality.py): độ tin cậy theo KẾT QUẢ run (không theo độ phổ biến) — chốt ở vòng nền learning_ops
+        "quality": {
+            "confidence_up": 0.03,  # fact được đưa cho run completed (không correction / không bị tự rollback) sau settle_h giờ
+            "confidence_down": 0.1,  # run có thay đổi bị tự rollback / trong cửa sổ hồi quy bị rollback / có correction
+            "confidence_min": 0.05,
+            "confidence_max": 0.95,
+            "settle_h": 6,  # chờ N giờ sau khi run kết thúc mới tính "thành công" (để correction/rollback kịp đến)
+            "lookback_days": 14,  # lượt dùng cũ hơn không còn được chốt/lật
+            "settle_interval_s": 300,
+        },
+        # consolidation (vòng nền): gộp thực thể trùng + fact gần trùng (đóng hiệu lực + liên kết thay thế), qua pipeline created_by=curator
+        "consolidate": {"enabled": True, "interval_h": 24, "fact_jaccard": 0.8, "fact_cosine": 0.95, "max_ops": 150},
+    },
     # M4-B — đánh giá & vận hành học (FR-LN-08/10/13/17)
     "eval": {
         "enabled": True,  # tắt → gate trả deferred_no_eval (L3 hoãn), post-apply gắn unevaluated
@@ -371,6 +436,9 @@ DEFAULTS: dict[str, Any] = {
         "batch_time": "03:00",  # giờ máy
         "batch_lookback_days": 2,
         "suggest_every_h": 24,  # gợi ý golden task cho agent chưa có (không lặp quá dày)
+        # tự đề xuất golden từ task done mà người không sửa/hoàn tác (docs/dev-notes/golden-suggestions.md) — người duyệt một chạm
+        "golden_suggest": {"enabled": True, "every_min": 60, "min_age_h": 6, "lookback_days": 14, "max_open_per_agent": 3, "max_per_scan": 10,
+                           "min_prompt_chars": 20, "min_result_chars": 20},
         "keep_tmp": False,  # giữ bản sao home tạm (gỡ lỗi)
         "ops_tick_s": 30,  # chu kỳ vòng nền M4-B (digest/curator/eval lô/hồi quy)
         "judge": {"model": "haiku", "budget_usd": 0.05, "timeout_s": 180, "binary": None},  # LLM judge (null binary = runtime.claude.binary)
@@ -491,6 +559,8 @@ DEFAULTS: dict[str, Any] = {
             # 2.1.311/2.1.312: `claude --help` + fixture stream-json thật (raw log run production, đã che) tests/fixtures/claude-2.1.31{1,2}/
             #   + tests/test_adapter_cli_312.py (tool_progress, vcs_state_changed, control_request SandboxNetworkAccess, init thứ 2).
             "tested_versions": ["2.1.302", "2.1.303", "2.1.310", "2.1.311", "2.1.312"],
+            # Đang chặn vì "chưa đăng nhập": cứ mỗi N giây kiểm lại `claude auth status`, thấy đăng nhập thì tự gỡ chặn (0 = tắt)
+            "auth_recheck_s": 300,
             "include_partial_messages": True,
             # Spike A-04: bật để kiểm hậu nghiệm không có hook lạ (hook Serena…) trong stream
             "include_hook_events": True,
@@ -572,7 +642,7 @@ DEFAULTS: dict[str, Any] = {
                 "annotations": {},  # ghi đè của người: {glob: {destructiveHint?, readOnlyHint?}} (`mcp annotate claude-in-chrome …`)
             },
             # hardening H-11 (FR-RT-17): hook QUAN SÁT fail-OPEN (cfharness/observe_hook.py) — luôn exit 0, quá timeout_s → hook.timeout
-            "observe_hooks": {"enabled": True, "events": ["PostToolUse", "UserPromptSubmit", "Stop"], "timeout_s": 2.0, "cli_timeout_s": 5},
+            "observe_hooks": {"enabled": True, "events": ["PostToolUse", "UserPromptSubmit", "Stop", "PreCompact"], "timeout_s": 2.0, "cli_timeout_s": 5},
             # hardening H-10: tỉ lệ raw.unknown trong cửa sổ trượt → `cli.unknown_rate_alert` (đỏ, gợi ý ESTOP)
             "unknown_alert": {"threshold": 0.05, "window_s": 3600, "min_events": 50},
         },

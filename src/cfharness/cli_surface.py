@@ -188,8 +188,8 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
             x.add_argument("--confirm", help="gõ lại id để xác nhận")
     tr.set_defaults(fn=cmd_trash)
 
-    hk = sub.add_parser("hook", help="hook quan sát của hub (PostToolUse|UserPromptSubmit|Stop), fail-open — CLI tự gọi", parents=[common])
-    hk.add_argument("event", choices=["PostToolUse", "UserPromptSubmit", "Stop"])
+    hk = sub.add_parser("hook", help="hook quan sát của hub (PostToolUse|UserPromptSubmit|Stop|PreCompact), fail-open — CLI tự gọi", parents=[common])
+    hk.add_argument("event", choices=["PostToolUse", "UserPromptSubmit", "Stop", "PreCompact"])
     hk.add_argument("--run", help="id run (mặc định $CFHARNESS_RUN_ID)")
     hk.add_argument("--socket", help="socket daemon (mặc định của HUB_HOME)")
     hk.add_argument("--timeout", type=float, default=2.0, help="giây chờ daemon (quá giờ → hook.timeout, vẫn exit 0)")

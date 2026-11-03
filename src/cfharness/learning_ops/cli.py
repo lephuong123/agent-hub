@@ -170,6 +170,18 @@ def cmd_golden(ctx: Any) -> int:
     elif act == "candidates":
         r = ctx.call("golden.candidates", {"agent_id": a.agent, "limit": a.limit})
         ctx.out(r, "\n".join(f"{c['run_id']}  ({c['reason']})  {c['prompt_preview']}" for c in r) or "(không có run ứng viên)")
+    elif act == "suggestions":
+        r = ctx.call("golden.suggestions", {"agent_id": a.agent, "status": "all" if a.all else "open"})
+        ctx.out(r, _table([[s["id"], s["agent_id"], s["status"], s.get("task_id") or "-", s["run_id"], (s.get("title") or s.get("reason") or "")[:60]] for s in r],
+                          ["ID", "AGENT", "TT", "TASK", "RUN", "TIÊU ĐỀ"]) if r else "(không có đề xuất golden đang chờ)")
+    elif act in ("approve", "reject"):
+        s = ctx.call(f"golden.suggestion_{act}", {"id": a.id})
+        ctx.out(s, f"đã tạo golden task {s['golden_task_id']} từ đề xuất {s['id']} ({s['agent_id']})" if act == "approve"
+                else f"đã bỏ đề xuất {s['id']} — không gợi ý lại")
+    elif act == "scan":
+        r = ctx.call("golden.suggest_scan", {})
+        ctx.out(r, (f"đề xuất mới: {', '.join(r['suggested'])}" if r["suggested"] else "không có đề xuất mới")
+                + ("\nbỏ qua: " + ", ".join(f"{k}={v}" for k, v in sorted(r["skipped"].items())) if r["skipped"] else ""))
     return 0
 
 
@@ -289,6 +301,12 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     x = gs.add_parser("candidates", parents=[common], help="run ứng viên nên làm golden")
     x.add_argument("agent")
     x.add_argument("--limit", type=int, default=5)
+    x = gs.add_parser("suggestions", parents=[common], help="đề xuất golden từ task done (hub tự đề xuất, bạn duyệt)")
+    x.add_argument("agent", nargs="?")
+    x.add_argument("--all", action="store_true", help="kể cả đã duyệt/bỏ")
+    gs.add_parser("approve", parents=[common], help="duyệt đề xuất → tạo golden task").add_argument("id")
+    gs.add_parser("reject", parents=[common], help="bỏ đề xuất (không gợi ý lại)").add_argument("id")
+    gs.add_parser("scan", parents=[common], help="quét task done ngay (vòng nền tự quét mỗi giờ)")
     gp.set_defaults(fn=cmd_golden)
 
     ep = sub.add_parser("eval", help="eval gate (FR-LN-10)", parents=[common])

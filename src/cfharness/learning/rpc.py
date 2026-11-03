@@ -118,10 +118,27 @@ class LearningRpc:
         owner = p.get("agent") if scope == "agent" else p.get("team") if scope == "team" else None
         if scope == "agent":
             self.hub.agents.get_row(owner)
+        elif scope == "team":  # pin cho team không tồn tại = rác + (trước đây) đọc memory.md ngoài hub home
+            self.hub.teams.row(owner or "", allow_archived=True)
         target = _req(p, "target")
-        if target not in ("skill", "memory", "config", "memory_entry"):
-            raise HubError("target pin: skill | memory | config | memory_entry")
+        if target not in ("skill", "memory", "config", "memory_entry", "graph", "graph_fact"):
+            raise HubError("target pin: skill | memory | config | memory_entry | graph | graph_fact")
         ref = str(_req(p, "ref"))
+        if target in ("graph", "graph_fact"):  # graph memory: pin cả graph một tầng, hoặc TỪNG fact (không bị đóng hiệu lực tự động)
+            from ..knowledge.graph import graph_key, owner_key
+
+            key = graph_key(scope, owner)
+            if target == "graph":
+                if ref not in ("-", key):
+                    raise HubError(f"pin graph: ref là '-' hoặc {key}")
+                ref = key
+            else:
+                hits = [r[0] for r in self.hub.store.conn.execute(
+                    "SELECT id FROM mem_facts WHERE scope=? AND owner_id=? AND retracted_by IS NULL AND (id=? OR id LIKE ? ESCAPE '\\') LIMIT 2",
+                    (scope, owner_key(scope, owner), ref, ref.replace("%", "").replace("_", r"\_") + "%"))]
+                if len(hits) != 1:
+                    raise HubError(f"'{ref}' khớp {len(hits)} fact trong {key} — đưa id fact đầy đủ (cfharness learn graph …)")
+                ref = hits[0]
         if target == "memory_entry":  # M5-A (FR-LN-14): pin TỪNG DÒNG; ref = đoạn trích duy nhất của dòng (hoặc khoá 12 hex)
             from .canary import entry_hash
 
@@ -144,6 +161,11 @@ class LearningRpc:
         agent = _req(p, "agent")
         self.hub.agents.get_row(agent)
         return {"agent_id": agent, "versions": self.K.versions.version_map(agent)}
+
+    def graph_view(self, p: dict[str, Any]) -> dict[str, Any]:
+        from .graph_view import graph_view
+
+        return graph_view(self.hub, p)
 
     def canary_check(self, p: dict[str, Any]) -> list[dict[str, Any]]:
         if p.get("id"):
@@ -187,11 +209,18 @@ class LearningRpc:
             "learn.canaries": lambda p: L().canary.list(p.get("status"), p.get("agent"), int(p.get("limit") or 100)),
             "learn.canary_get": lambda p: L().canary.get(_req(p, "id")),
             "learn.canary_check": self.canary_check,
+            # graph memory PR quality (learning/graph_quality.py) — `cfharness learn graph …` (client mỏng)
+            "learn.graph_stats": lambda p: L().graph_quality.stats(p.get("agent")),
+            "learn.graph_fact": lambda p: L().graph_quality.fact_history(_req(p, "id")),
+            "learn.graph_consolidate": lambda p: L().graph_quality.consolidate(dry_run=bool(p.get("dry_run")), scope=p.get("scope"), owner=p.get("owner")),
+            "learn.graph_settle": lambda p: L().graph_quality.settle(),
+            # trang web /memory/graph (learning/graph_view.py): đồ thị con CHỈ ĐỌC, cùng phạm vi nhìn + quét lúc nạp như memory.recall
+            "learn.graph_view": self.graph_view,
         }
 
 
 MUTATING_M4A = ("learn.signal_add", "learn.refine", "learn.review_cancel", "learn.propose", "learn.retry", "learn.rollback", "learn.policy_set", "knowledge.pin",
-                "learn.canary_check",
+                "learn.canary_check", "learn.graph_consolidate", "learn.graph_settle",
                 # skill manager của người (learning/skill_rpc.py)
                 "knowledge.skill_save", "knowledge.skill_archive", "knowledge.skill_restore", "knowledge.skill_import", "knowledge.skill_promote")
 

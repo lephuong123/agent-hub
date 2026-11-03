@@ -239,6 +239,13 @@ class OrchestrationRpc:
 
         return report(self.hub.store.conn, parse_since(p.get("since")), top=int(p.get("top") or 10))
 
+    def report_hangs(self, p: dict[str, Any]) -> dict[str, Any]:
+        """Run timed_out/interrupted/crashed theo agent/kind/tool dở/thời lượng (thẻ Sức khoẻ) — auto_resume.hang_stats."""
+        from ..auto_resume import hang_stats
+        from ..reports import _iso, parse_since
+
+        return hang_stats(self.hub.store.conn, _iso(parse_since(p.get("since"), default_days=14)), top=int(p.get("top") or 8))
+
     def report_cost(self, p: dict[str, Any]) -> dict[str, Any]:
         from ..reports import cost_breakdown, parse_since
 
@@ -300,6 +307,7 @@ class OrchestrationRpc:
             "workspace.locks": lambda p: h.runs.locks.list(),
             "report.get": self.report_get,
             "report.cost": self.report_cost,
+            "report.hangs": self.report_hangs,
             "agent.clone": self.agent_clone,
             "agent.export": self.agent_export,
             "agent.import": self.agent_import,

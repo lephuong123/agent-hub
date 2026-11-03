@@ -167,6 +167,38 @@ class ChatBot:
     def _ttl(self) -> float:
         return float(self.cfg().get("callback_ttl_s") or 604800)
 
+    # ------------------------------------------------------------------ đề xuất golden (docs/dev-notes/golden-suggestions.md)
+    async def send_golden_suggestion(self, api: Any, chat: Any, s: dict[str, Any]) -> None:
+        """(1) Tin NỘI DUNG: đề bài + kết quả tham chiếu (do agent viết) trong `<pre>` sau tiền tố cố định. (2) Tin HỆ THỐNG
+        một chạm Duyệt / Bỏ qua (nonce một lần + HMAC, như approval) — chữ hub. Quyết ở kênh khác → gỡ nút mọi chat."""
+        rubric = str(((s.get("checker") or {}).get("rubric")) or "")
+        ref = rubric.split("Reference result:\n", 1)[1] if "Reference result:\n" in rubric else ""
+        body = clip(s.get("prompt") or s.get("title") or "", 1200) + ("\n\n— kết quả được giữ —\n" + clip(ref, 1200) if ref else "")
+        head = f"💡 <b>Đề xuất golden task cho {esc(s.get('agent_id'))}</b> (task {esc(s.get('task_id') or '-')})\n<i>{esc(AGENT_FRAME)}</i>"
+        res = await self._send(api, chat, f"{head}\n<pre>{esc(body)}</pre>", html=True)
+        first = (res or {}).get("message_id") if isinstance(res, dict) else None
+        sid = s["id"]
+        markup, _ = self.callbacks.issue([("gsa", sid, "Duyệt làm golden"), ("gsr", sid, "Bỏ qua")], chat, ttl=self._ttl())
+        text = (f"❓ <b>Lấy task này làm bài kiểm tra chuẩn (golden) cho {esc(s.get('agent_id'))}?</b>\n"
+                f"Task xong mà bạn không sửa/hoàn tác. Duyệt = mọi thay đổi tự học sau này phải không làm tụt điểm trên bài này "
+                f"(LLM judge so với kết quả ở tin trên). Mã <code>{esc(sid)}</code>.")
+        res = await self._send(api, chat, text, markup, html=True, reply_to=first)
+        self.callbacks.add_message(sid, chat, (res or {}).get("message_id") if isinstance(res, dict) else None)
+
+    async def _golden_decide(self, cid: str, action: str, sid: str) -> tuple[str, str | None]:
+        """Nút một chạm → RPC HUMAN_ONLY qua `call` (cổng người + audit `<kênh>:<chat>`). Agent không có đường nào tới đây."""
+        method = "golden.suggestion_approve" if action == "gsa" else "golden.suggestion_reject"
+        s = await self.call(cid, method, {"id": sid})
+        if action == "gsa":
+            return f"Đã tạo golden task {s.get('golden_task_id')}.", None
+        return "Đã bỏ đề xuất.", None
+
+    @staticmethod
+    def golden_decided_text(p: dict[str, Any]) -> str:
+        word = f"duyệt → golden {p.get('golden_task_id')}" if p.get("decision") == "approve" else "bỏ qua"
+        return f"{'✅' if p.get('decision') == 'approve' else '⏹'} <b>Đề xuất golden {esc(p.get('suggestion_id'))}: đã {esc(word)}</b> — bởi " \
+               f"{esc(who_label(str(p.get('by') or '').split(':', 1)[0]))} qua {esc(channel_label(p.get('channel')))}."
+
     # ------------------------------------------------------------------ trạng thái nhỏ (hub_state)
     def _state(self, key: str) -> dict[str, Any]:
         v = self.hub.store.state_get(key) or {}
@@ -213,6 +245,13 @@ class ChatBot:
                 msgs = self.callbacks.pop_messages(rid)
                 if msgs:
                     self._spawn(self._clear_buttons(msgs, decided_text(rid, ev.payload or {})))
+        elif t == "golden.suggestion_decided":
+            sid = (ev.payload or {}).get("suggestion_id")
+            if sid:
+                self.callbacks.invalidate_ref(sid)
+                msgs = self.callbacks.pop_messages(sid)
+                if msgs:
+                    self._spawn(self._clear_buttons(msgs, self.golden_decided_text(ev.payload or {})))
 
     def _spawn(self, coro: Any) -> None:
         try:
@@ -644,6 +683,8 @@ class ChatBot:
         try:
             if a in ("ap", "apc", "dn", "aa", "aac", "ar", "arc", "arh"):
                 text, edit, markup = await self._decide(cid, a, ref, api)
+            elif a in ("gsa", "gsr"):  # đề xuất golden: một chạm; `golden.suggestion_decided` sửa tin ở MỌI chat
+                text, edit = await self._golden_decide(cid, a, ref)
             elif a == "eo":
                 await self.call(cid, "estop.set", {"on": False, "reason": f"{self.LABEL} {cid}"})
                 text = "Đã TẮT ESTOP — hub chạy run trở lại."
@@ -770,8 +811,51 @@ class ChatBot:
         raise NotImplementedError
 
     def broadcast_chats(self) -> set[str]:
-        """Chat nhận tin chủ động không gắn cuộc trò chuyện nào (approval, câu hỏi, thông báo) — mặc định = `notify_chats()`."""
+        """Chat nhận tin chủ động KHÔNG có chat gốc (approval, câu hỏi, thông báo của run từ web/lịch/nền) — mặc định = `notify_chats()`."""
         return self.notify_chats()
+
+    ORIGIN_DEPTH = 8  # số bậc `parent_run_id` tối đa khi lần chat gốc
+
+    def origin_chat(self, run_id: str | None = None, conversation_id: str | None = None) -> str | None:
+        """Chat đã giao việc gốc của `run_id` / hội thoại điều phối viên `conversation_id` (None = không xuất phát từ kênh này).
+        Lần: run được theo dõi (`watch`) → run điều phối viên gửi từ chat (`mgr_runs`) → run cha (`parent_run_id`, resume/continue)
+        → hội thoại điều phối viên (`mgr_convchat`, hoặc kênh `<NAME>:<chat>` của hội thoại)."""
+        w = self._state(self.WATCH)
+        mruns = self.manager._st(self.manager.RUNS)
+        issued = self.hub.store.state_get("manager_issued_runs") or {}
+        rid, seen = run_id, set()
+        for _ in range(self.ORIGIN_DEPTH):
+            if not rid or rid in seen:
+                break
+            seen.add(rid)
+            if w.get(rid):
+                return str(w[rid])
+            meta = mruns.get(rid)
+            if isinstance(meta, dict) and meta.get("chat"):
+                return str(meta["chat"])
+            if not conversation_id and isinstance(issued, dict) and issued.get(rid):
+                conversation_id = str(issued[rid])
+            rid = (self.hub.store.get_run(rid) or {}).get("parent_run_id")
+        if conversation_id:
+            c = self.manager._st(self.manager.CONVCHAT).get(conversation_id)
+            if c:
+                return str(c)
+            mgr = getattr(self.hub, "manager", None)
+            try:
+                ch = str((mgr._conv_row(conversation_id) if mgr is not None else {}).get("channel") or "")
+            except Exception:
+                ch = ""
+            if ch.startswith(f"{self.NAME}:"):
+                return ch.split(":", 1)[1] or None
+        return None
+
+    def route_chats(self, run_id: str | None = None, conversation_id: str | None = None) -> list[str]:
+        """Nơi gửi tin chủ động gắn với một run/hội thoại (approval, câu hỏi, thông báo): CHỈ chat gốc nếu biết và còn được phép
+        (và đăng gốc được); không có chat gốc → `broadcast_chats()` (Telegram: chỉ chat riêng; Slack: chỉ DM)."""
+        o = self.origin_chat(run_id, conversation_id)
+        if o and o in self.notify_chats() and self.root_post_ok(o):
+            return [o]
+        return sorted(self.broadcast_chats())
 
     def root_post_ok(self, chat: Any) -> bool:
         """Được đăng tin KHÔNG trả lời tin nào vào `chat` (Slack: chỉ DM — kênh chung chỉ nhận trả lời trong thread)."""

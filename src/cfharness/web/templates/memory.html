@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Memory{% endblock %}
+{% macro usage_bar(f) -%}
+<div class="mem-usage {{ f.tone }}"><progress class="meter" max="{{ f.limit or 1 }}" value="{{ f.chars if f.chars <= (f.limit or 1) else (f.limit or 1) }}" aria-label="{{ f.name }}: {{ f.chars }} / {{ f.limit }} ký tự"></progress>
+<span class="xs muted">{{ f.chars }} / {{ f.limit }} ký tự · {{ f.raw_pct }}%</span></div>
+{%- endmacro %}
+{% block content %}
+<div class="page-head"><div class="ph-title"><h1>Memory</h1><span class="sub">Memory của hệ thống theo tầng (toàn hub, team, agent) và graph memory. Người sửa qua guard + ledger — rollback được.</span></div>
+  <div class="row gap"><a class="btn primary" href="/memory/graph">{{ m.icon('search') }}<span>Duyệt graph</span></a>
+  <a class="btn ghost" href="/memory/graph/view">{{ m.icon('graph') }}<span>Xem đồ thị</span></a></div></div>
+{% include "_skill_result.html" %}
+
+{% set gs = stats or {} %}
+<section class="stats">
+  {% set live = (gs.tiers or [])|sum(attribute='facts') %}{% set hist = (gs.tiers or [])|sum(attribute='history') %}
+  <div class="stat"><div class="stat-top"><span class="stat-l">Fact đang hiệu lực</span><span class="stat-ic">{{ m.icon('graph') }}</span></div>
+    <div class="stat-n">{{ live }}</div><div class="stat-s">{{ hist }} đã đóng hiệu lực (lịch sử)</div></div>
+  <div class="stat"><div class="stat-top"><span class="stat-l">Thực thể</span><span class="stat-ic">{{ m.icon('dot') }}</span></div>
+    <div class="stat-n">{{ (gs.tiers or [])|sum(attribute='entities') }}</div><div class="stat-s">{{ (gs.tiers or [])|sum(attribute='episodes') }} episode nguồn</div></div>
+  <div class="stat"><div class="stat-top"><span class="stat-l">Vector</span><span class="stat-ic">{{ m.icon('zap') }}</span></div>
+    <div class="stat-n">{{ vectors.values()|sum if vectors else 0 }}</div>
+    <div class="stat-s">{% if vectors %}{% for k, v in vectors.items() %}{{ k }}: {{ v }}{{ ', ' if not loop.last }}{% endfor %}{% else %}chưa có (chỉ FTS5){% endif %}</div></div>
+  <div class="stat"><div class="stat-top"><span class="stat-l">Trích xuất 24 h</span><span class="stat-ic">{{ m.icon('learn') }}</span></div>
+    <div class="stat-n">{{ gs.extractions_today or 0 }}</div>
+    <div class="stat-s">gần nhất {{ m.rel(gs.last_extraction_at) }} · gộp {{ m.rel(gs.consolidated_at) }}</div></div>
+</section>
+{% if stats is none %}<p class="muted small">Không đọc được thống kê graph (daemon cũ hơn web, hoặc graph memory tắt).</p>{% endif %}
+
+<section class="card flush">
+  <div class="card-head pad"><h2>{{ m.icon('log') }} Các tầng memory</h2><span class="muted small">Bấm tên tầng để xem / sửa từng mục.</span></div>
+  <table class="tbl stack mem-tiers">
+    <thead><tr><th>Tầng</th><th>File</th><th class="num">Mục</th><th>Dung lượng</th><th>Ghim / canary</th><th>Đổi gần nhất</th><th>Graph</th></tr></thead>
+    <tbody>
+    {% for t in tiers %}
+      {% set nf = t.files|length or 1 %}
+      {% for f in (t.files or [{}]) %}
+      <tr class="{{ 'tier-first' if loop.first }}">
+        {% if loop.first %}<td data-label="Tầng" rowspan="{{ nf }}" class="title-cell"><a class="t" href="{{ t.url }}">{{ t.label }}</a>
+          {% if t.error %}<span class="s danger-t">{{ t.error }}</span>{% endif %}</td>{% endif %}
+        <td data-label="File"><code>{{ f.name or '—' }}</code></td>
+        <td data-label="Mục" class="num">{{ f.entries|length if f.entries is defined else '—' }}</td>
+        <td data-label="Dung lượng">{% if f.limit is defined %}{{ usage_bar(f) }}{% else %}—{% endif %}</td>
+        <td data-label="Ghim / canary">{% if f.pinned_count %}<span class="pill info">{{ m.icon('pin') }}{{ f.pinned_count }} mục ghim</span>{% endif %}
+          {% if loop.first %}{% for c in t.canaries %}<span class="pill warn" title="canary {{ c.id }} — {{ c.target }} {{ c.target_ref or '' }}">canary {{ c.mode }} · {{ c.progress or c.status }}</span>{% endfor %}{% endif %}
+          {% if not f.pinned_count and not (loop.first and t.canaries) %}<span class="muted">—</span>{% endif %}</td>
+        <td data-label="Đổi gần nhất">{% if f.last %}<a href="/learnings/{{ f.last.id }}" title="{{ f.last.summary or '' }}">{{ m.rel(f.last.applied_at) }}</a> <span class="xs muted">{{ f.last.actor }}{% if f.last.rolled_back_by %} · đã rollback{% endif %}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        {% if loop.first %}<td data-label="Graph" rowspan="{{ nf }}">{% set g = t.graph %}
+          {% if g %}<a href="/memory/graph?tier={{ 'global' if t.scope == 'global' else t.scope ~ ':' ~ t.owner }}">{{ g.facts }} fact</a>
+            <span class="xs muted">· {{ g.history }} lịch sử · {{ g.entities }} thực thể · {{ g.episodes }} episode{% if g.avg_confidence is not none %} · tin cậy TB {{ '%.2f'|format(g.avg_confidence) }}{% endif %}</span>
+            {% if g.last_ingested_at %}<span class="xs muted"> · ghi {{ m.rel(g.last_ingested_at) }}</span>{% endif %}
+          {% else %}<span class="muted">—</span>{% endif %}
+          {% if t.graph_pinned %}<span class="pill info">{{ m.icon('pin') }}graph ghim</span>{% endif %}</td>{% endif %}
+      </tr>
+      {% endfor %}
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% if gs.uses %}<p class="muted small">Lượt fact được đưa cho run: {% for k, v in gs.uses.items() %}{{ k }} {{ v }}{{ ' · ' if not loop.last }}{% endfor %} (độ tin cậy cập nhật theo kết quả run).</p>{% endif %}
+{% endblock %}

@@ -66,10 +66,13 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # học (H-05): propose bị HẠ xuống created_by=agent thay vì từ chối — xem `DOWNGRADE`
         "learn.propose", "learn.rollback", "learn.retry", "learn.refine", "learn.policy_set", "learn.review_cancel",
         "knowledge.pin", "curation.rollback", "eval.post_apply",
+        # graph memory (learn graph …): xem graph MỌI agent + bảo trì (consolidation/chốt độ tin cậy). Agent tra graph của mình qua memory_recall
+        "learn.graph_stats", "learn.graph_fact", "learn.graph_consolidate", "learn.graph_settle", "learn.graph_view",
         # skill manager của người (learning/skill_rpc.py): ghi skill với created_by=user — agent học qua learnself/review, không qua đây
         "knowledge.skill_save", "knowledge.skill_archive", "knowledge.skill_restore", "knowledge.skill_import", "knowledge.skill_promote",
         # golden task = chính sách an toàn (Q-07)
         "golden.add", "golden.rm", "golden.update", "golden.restore", "golden.dismiss", "golden.from_run",
+        "golden.suggestion_approve", "golden.suggestion_reject", "golden.suggest_scan",  # đề xuất golden: hub đề xuất (vòng nền), người quyết
         # secret + registry MCP (server MCP chạy NGOÀI sandbox → thêm server = thoát sandbox)
         "secret.set", "secret.rm", "mcp.add", "mcp.update", "mcp.remove", "mcp.restore", "mcp.import", "mcp.assign",
         # OAuth MCP: đăng nhập/làm mới/ngắt = cấp/thu hồi quyền truy cập dịch vụ ngoài thay người (docs/dev-notes/mcp-oauth.md)
@@ -101,7 +104,7 @@ DOWNGRADE = frozenset({"learn.propose"})
 # Method ĐỌC mà kết quả phụ thuộc người gọi (phạm vi nhìn) → daemon phải xác định ĐẦY ĐỦ người gọi (cây tiến trình/env như method
 # ghi), không dùng đường nóng. Tìm kiếm hội thoại/memory: agent thường chỉ thấy của mình + team; điều phối viên/người thấy hết
 # (session_search.py, mcp_server/surface_rpc.py).
-SCOPED_READ: frozenset[str] = frozenset({"session.search", "session.search_self", "memory.search", "memory.search_self"})
+SCOPED_READ: frozenset[str] = frozenset({"session.search", "session.search_self", "memory.search", "memory.search_self", "memory.recall", "memory.recall_self"})
 
 # Method GHI mà agent (trong run) ĐƯỢC gọi — mỗi method phải có lý do. Method ghi mới phải nằm ở HUMAN_ONLY hoặc ở đây
 # (test `test_every_mutating_method_is_classified` fail nếu chưa phân loại — tránh lặp lỗi phối hợp kiểu V2-N1).
@@ -195,14 +198,23 @@ def all_mutating() -> frozenset[str]:
     return frozenset(out)
 
 
-def require_human(what: str) -> None:
-    """Cổng ở TẦNG SERVICE (V2-N1): gọi trong ngữ cảnh RPC của người gọi không phải người → Blocked.
-    Ngoài ngữ cảnh RPC (vòng nền của daemon, vd retention) thì cho qua."""
+def require_human(what: str, *, allow_manager: bool = False) -> None:
+    """Cổng ở TẦNG SERVICE (V2-N1): gọi trong ngữ cảnh RPC của người gọi không phải người → Blocked + audit `auth.denied`
+    (layer=service). Ngoài ngữ cảnh RPC (vòng nền của daemon, vd retention) thì cho qua. `allow_manager`: điều phối viên được
+    (chỉ cho thao tác nằm trong MANAGER_ALLOWED — daemon đã kiểm trường cấm ở `manager.check_rpc`)."""
     c = CURRENT_CALLER.get()
-    if c is not None and not c.human:
-        from .errors import Blocked
+    if c is None or c.human or (allow_manager and c.manager):
+        return
+    from .approvals import audit_record
+    from .errors import Blocked
 
-        raise Blocked(f"{what}: chỉ người được làm (người gọi: {'agent' if c.is_agent else 'thiếu token'})", data={"caller": c.to_dict()})
+    who = f"manager:{c.manager}" if c.manager else "agent" if c.is_agent else "thiếu token"
+    try:
+        audit_record("auth.denied", c.agent_id, c.run_id, {"what": what, "layer": "service", **c.to_dict(),
+                                                           "actor": f"manager:{c.manager}" if c.manager else "agent", "channel": c.via})
+    except Exception:  # pragma: no cover — audit lỗi không được mở cổng
+        pass
+    raise Blocked(f"{what}: chỉ người được làm (người gọi: {who})", data={"caller": c.to_dict()})
 
 
 # ============================================================================ token
@@ -212,7 +224,9 @@ def token_path(sock_path: str | os.PathLike[str]) -> Path:
 
 
 def issue_token(sock_path: str | os.PathLike[str]) -> str:
-    """Sinh token mới (mỗi lần daemon khởi tạo), ghi 0600 không theo symlink. Trả token."""
+    """Sinh token mới (mỗi lần daemon khởi tạo), ghi 0600 không theo symlink. Trả token.
+
+    Daemon KHÔNG gọi khi socket đang có daemon sống (`daemon._live_daemon`) — ghi đè sẽ làm token trong file lệch daemon đang chạy."""
     path = token_path(sock_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tok = secrets.token_urlsafe(32)

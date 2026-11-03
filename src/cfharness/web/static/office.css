@@ -27,3 +27,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); c
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 /* nút trong danh sách sr-only vẫn dùng bàn phím được (Tab → Enter): phản hồi nhìn thấy là camera bay tới + thẻ 3D cạnh nhân vật */
+
+/* chế độ "Vào văn phòng" (đi bộ): nút cạnh nút "2D" — ẩn tới khi có WebGL (office.js bỏ hidden) */
+.office-switch.office-walk { right: calc(max(12px, env(safe-area-inset-right)) + 56px); font-size: 20px; }
+.office-switch.office-pov { right: calc(max(12px, env(safe-area-inset-right)) + 112px); font-size: 20px; }
+.office-switch.office-walk[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, var(--surface)); }
+.office-switch:is(button) { cursor: pointer; padding: 0; font-family: inherit; }

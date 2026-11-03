@@ -7,7 +7,9 @@ Vòng nền tự khởi động khi bus phát `hub.started` (trong event loop c�
   1. digest đến giờ (`digest.schedule`, giờ máy) → dựng + gửi Slack;
   2. eval L1 theo lô (`eval.batch_time`, mỗi ngày một lần) → `gate.run_batch_l1()`;
   3. curator pha 1 đến chu kỳ và daemon rảnh → `curator.run()`;
-  4. agent có run/signal mới → `regression.check_agent()`; toàn bộ mỗi `eval.regression.full_check_min` phút.
+  4. agent có run/signal mới → `regression.check_agent()`; toàn bộ mỗi `eval.regression.full_check_min` phút;
+  5. graph memory (`hub.learning.graph_quality.tick()`): chốt độ tin cậy fact theo kết quả run + consolidation đến hạn.
+  6. mỗi `eval.golden_suggest.every_min` phút → `golden.auto_suggest()` (đề xuất golden từ task done, người duyệt).
 """
 
 from __future__ import annotations
@@ -93,7 +95,35 @@ class LearningOps:
             acts += await self.regression.check_all()
         if acts:
             out["regression"] = acts
+        gq = getattr(getattr(self.hub, "learning", None), "graph_quality", None)
+        if gq is not None:  # graph memory PR quality: chốt độ tin cậy theo kết quả run (sau regression check) + consolidation đến hạn
+            try:
+                g = gq.tick()
+                if g:
+                    out["graph"] = g
+            except Exception:  # pragma: no cover - vòng nền không được chết
+                log.exception("graph quality tick lỗi")
+        gm = getattr(getattr(self.hub, "learning", None), "graph_mirror", None)
+        if gm is not None:  # on_memory_write: file memory lệch graph (rollback, sửa tay, có từ trước) → sync
+            try:
+                m = await gm.tick()
+                if m:
+                    out["graph_mirror"] = m
+            except Exception:  # pragma: no cover
+                log.exception("graph mirror tick lỗi")
+        if self._golden_suggest_due(loop_t):
+            out["golden_suggest"] = self.hub.evals.golden.auto_suggest()
         return out
+
+    def _golden_suggest_due(self, loop_t: float) -> bool:
+        c = self.hub.evals.golden.suggest_cfg()
+        if not c.get("enabled", True):
+            return False
+        last = getattr(self, "_last_golden_suggest", None)
+        if last is not None and loop_t - last < 60 * float(c.get("every_min") or 60):
+            return False
+        self._last_golden_suggest = loop_t
+        return True
 
     def _batch_due(self, now_local: datetime | None) -> bool:
         c = self.hub.config.get("eval") or {}

@@ -36,12 +36,15 @@ class Daemon:
     def __init__(self, paths: HubPaths, *, runtime: AgentRuntime | None = None) -> None:
         self.paths = paths
         self.hub = Hub(paths, runtime=runtime)
-        # H-01: token người (file 0600 `<socket>.auth`, sinh lại mỗi lần khởi tạo) + xác định người gọi theo pid ngang hàng
+        # H-01: token người (file 0600 `<socket>.auth`, sinh lại mỗi lần khởi tạo) + xác định người gọi theo pid ngang hàng.
+        # KHÔNG ghi đè file khi socket đang có daemon sống: bản thứ hai (vd launchd thử tiếp quản trong lúc daemon chạy tay) sẽ
+        # thoát ở `serve()`, nhưng nếu đã ghi file thì token trong file lệch với daemon đang chạy → mọi lệnh của người bị từ chối.
         self.auth_token: str | None = None
-        try:
-            self.auth_token = _auth.issue_token(paths.socket)
-        except OSError:  # pragma: no cover — không có token → mọi method nhạy cảm qua socket bị từ chối (fail-closed)
-            log.exception("không tạo được token người cạnh socket %s", paths.socket)
+        if not _live_daemon(paths.socket):
+            try:
+                self.auth_token = _auth.issue_token(paths.socket)
+            except OSError:  # pragma: no cover — không có token → mọi method nhạy cảm qua socket bị từ chối (fail-closed)
+                log.exception("không tạo được token người cạnh socket %s", paths.socket)
         self.callers = _auth.CallerResolver(self.hub)
         self._mutating: frozenset[str] = frozenset()
         self.server: asyncio.base_events.Server | None = None
@@ -252,12 +255,11 @@ class Daemon:
                 raise _ParamError(f"thiếu tham số '{k}'")
             return params[k]
 
-        res = self.hub.learning.pipeline.propose(
+        return self.hub.learning.agent_propose(
             target=_r("target"), op=_r("op"), payload=params.get("payload") or {}, agent_id=caller.agent_id or params.get("agent"),
             scope=params.get("scope") or "agent", team_id=params.get("team"), target_ref=params.get("target_ref"),
-            rationale=params.get("rationale") or "", created_by="agent", run_id=caller.run_id,
+            rationale=params.get("rationale") or "", run_id=caller.run_id,
         )
-        return res
 
     async def call_as(self, caller: _auth.Caller, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Gọi method thay mặt một kênh của người KHÔNG qua socket (bot Telegram trong daemon — chat/bot.py).
@@ -429,13 +431,9 @@ class Daemon:
     async def serve(self) -> None:
         sock = self.paths.socket
         if sock.exists():
-            try:
-                RpcClient(sock, timeout=2).call("hub.ping")
+            if _live_daemon(sock):
                 raise SystemExit(f"daemon đã chạy (socket {sock})")
-            except DaemonUnavailable:
-                sock.unlink(missing_ok=True)
-            except Exception:
-                sock.unlink(missing_ok=True)
+            sock.unlink(missing_ok=True)
         self.hub.start()
         self.server = await transport.start_server(self._handle_conn, sock, limit=16 * 1024 * 1024)
         self.paths.pidfile.write_text(str(os.getpid()), encoding="utf-8")
@@ -455,6 +453,17 @@ class Daemon:
             JOBS.close_all()
             sock.unlink(missing_ok=True)
             self.paths.pidfile.unlink(missing_ok=True)
+
+
+def _live_daemon(sock: Path) -> bool:
+    """Socket có daemon đang trả lời không (`hub.ping`)."""
+    if not sock.exists():
+        return False
+    try:
+        RpcClient(sock, timeout=2).call("hub.ping")
+        return True
+    except Exception:
+        return False
 
 
 class _ParamError(Exception):

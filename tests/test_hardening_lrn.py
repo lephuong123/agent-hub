@@ -272,12 +272,16 @@ async def test_h21_lock_race_second_task_never_spawned(hub_home, repo):
         t1 = h.tasks.create({"assignee": "c1", "title": "a", "body": "a", "workspace": str(repo)})
         t2 = h.tasks.create({"assignee": "c2", "title": "b", "body": "b", "workspace": str(repo / "sub")})
         await settle(lambda: h.tasks.row(t1["id"])["status"] == "running" and h.tasks.row(t2["id"])["wait_reason"] == "workspace_locked")
+        # task "running" ≠ run đã spawn: run còn `queued` trong lúc checkpoint git (chậm trên Windows) → chờ runtime.start (gate tồn
+        # tại), nếu không release() rơi vào khoảng chưa có gate, mất tín hiệu và run giữ khoá mãi (nguyên nhân test chập chờn)
+        rid1 = h.tasks.row(t1["id"])["current_run_id"]
+        await settle(lambda: h.store.get_run(rid1)["status"] == "running" and rid1 in rt.gates, timeout=15.0)
         await asyncio.sleep(0.5)  # vài tick nữa
         n = lambda tid: h.store.conn.execute("SELECT count(*) FROM runs WHERE task_id=?", (tid,)).fetchone()[0]  # noqa: E731
         r2 = h.tasks.row(t2["id"])
         assert n(t2["id"]) == 0, h.store.conn.execute("SELECT id,status,error FROM runs WHERE task_id=?", (t2["id"],)).fetchall()
         assert r2["status"] == "ready" and int(r2.get("consecutive_failures") or 0) == 0 and int(r2.get("attempts") or 0) == 0
-        rt.release(h.tasks.row(t1["id"])["current_run_id"])
+        rt.release(rid1)
         await settle(lambda: h.tasks.row(t2["id"])["status"] == "running")
         assert n(t2["id"]) == 1
     finally:

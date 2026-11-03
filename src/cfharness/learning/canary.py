@@ -23,6 +23,9 @@ Một đích (file memory / cây skill) chỉ có MỘT canary đang chạy; pro
 KHÔNG ghim — áp dụng NGAY cho cả team/mọi agent, mở bản ghi mode **`watch`** (theo dõi mọi agent bị ảnh hưởng). Xấu hơn →
 KHÔNG rollback, chỉ `regression.detected{human_change, source=canary}` (digest + Slack) và kết thúc `warned`. Canary không bao
 giờ rollback entry `actor=user`; `Ledger.rollback(actor="canary")` cũng tự từ chối (H-04).
+
+**Tool `memory` của agent** (`created_by=agent`, kiểu Hermes): cũng `watch` (áp dụng ngay, không eval, không ghim) nhưng hồi quy
+→ TỰ rollback theo mục (memory tầng team/global rollback theo mục — `ledger.is_entry_memory`). Nhiều watch cùng đích chạy song song.
 """
 
 from __future__ import annotations
@@ -86,8 +89,8 @@ class CanaryManager:
                 "sample": max(3, int(g("learning.tier_eval_sample") or 3)), "user_mode": str(g("learning.user_profile_mode") or "shadow")}
 
     def mode_for(self, prop: dict[str, Any]) -> str:
-        if prop.get("created_by") == "user":
-            return "watch"  # thay đổi của người: áp dụng ngay cho mọi agent, chỉ theo dõi + cảnh báo
+        if prop.get("created_by") in ("user", "agent"):
+            return "watch"  # người / tool `memory` của agent: áp dụng ngay cho mọi agent, theo dõi (người: chỉ cảnh báo; agent: tự rollback)
         return "shadow" if prop.get("target") == "user_profile" and self.cfg()["user_mode"] == "shadow" else "canary"
 
     # ------------------------------------------------------------------ agent bị ảnh hưởng
@@ -177,17 +180,20 @@ class CanaryManager:
         return {"status": "deferred_no_eval", "scores": scores, "reason": "; ".join(f"{a}: {v.get('reason')}" for a, v in per.items())[:500]}
 
     # ------------------------------------------------------------------ 2. mở canary/shadow
-    def busy(self, plan: dict[str, Any]) -> dict[str, Any] | None:
-        ch = plan.get("change")
-        path = str(getattr(ch, "path", "") or "")
+    def busy(self, plan: dict[str, Any], exclude_mode: str | None = None) -> dict[str, Any] | None:
+        from .ledger import change_key
+
+        path = change_key(plan.get("change"))  # file/cây: đường dẫn; graph: `graph://<scope>/<owner>`
         if not path:
             return None
-        r = self.conn.execute("SELECT * FROM tier_canaries WHERE status='canary' AND path=? LIMIT 1", (path,)).fetchone()
+        r = self.conn.execute("SELECT * FROM tier_canaries WHERE status='canary' AND path=? AND mode IS NOT ? LIMIT 1", (path, exclude_mode)).fetchone()
         return self.hub.store._row("tier_canaries", r) if r else None
 
     def open(self, prop: dict[str, Any], plan: dict[str, Any], verdict: dict[str, Any]) -> str:
         """Gọi bởi Pipeline NGAY TRƯỚC `Ledger.apply` (cùng lượt đồng bộ — không run nào dựng prompt giữa hai bước):
         ghi canary (ghim agent khác về bản trước). Trả canary id."""
+        from .ledger import change_key
+
         ch = plan["change"]
         mode = self.mode_for(prop)
         scores = verdict.get("scores") or {}
@@ -195,13 +201,13 @@ class CanaryManager:
         with_golden = scores.get("agents") or []
         canary_agent = self.canary_agent(prop, affected, with_golden)
         watch = [canary_agent] if mode == "canary" else (with_golden or affected)
-        before = self.svc.ledger._current_bytes(ch.kind, ch.path, ch.agent_id)
+        before = self.svc.ledger.state_bytes(ch)
         cfg = self.cfg()
         now = datetime.now(timezone.utc)
         cid = "cn_" + uuid.uuid4().hex[:10]
         self.hub.store._insert("tier_canaries", {
             "id": cid, "proposal_id": prop["id"], "mode": mode, "scope": prop["scope"], "owner_id": plan.get("owner"), "target": prop["target"],
-            "target_ref": prop.get("target_ref"), "blob_kind": ch.kind, "path": str(ch.path) if ch.path else None,
+            "target_ref": prop.get("target_ref"), "blob_kind": ch.kind, "path": change_key(ch) or None,
             "before_blob": self.svc.ledger.blobs.put(before), "canary_agent_id": canary_agent if mode == "canary" else None,
             "origin_agent_id": prop.get("agent_id"), "watch_agents": [a for a in watch if a], "status": "canary", "created_by": prop.get("created_by"),
             "started_at": _utc(now), "deadline": _utc(now + timedelta(hours=cfg["hours"])), "eval": {k: verdict.get(k) for k in ("status", "reason")} | {"scores": {k: v for k, v in scores.items() if k != "per_agent"}},
@@ -313,9 +319,9 @@ class CanaryManager:
         e = self.svc.ledger.get(c["ledger_entry_id"]) if c.get("ledger_entry_id") else {}
         from .ledger import is_auto_change_actor
 
-        if c["mode"] == "watch" or c.get("created_by") == "user" or (e and not is_auto_change_actor(e.get("actor"))):
+        if c.get("created_by") == "user" or (e and not is_auto_change_actor(e.get("actor"))):
             return self._warn_human(c, viol, win, e)
-        where = f"canary {c['canary_agent_id']}" if c["mode"] == "canary" else "shadow"
+        where = f"canary {c['canary_agent_id']}" if c["mode"] == "canary" else c["mode"]
         reason = f"hồi quy ở {where}: {self._describe(viol)} — rollback trước khi lan"
         try:
             try:

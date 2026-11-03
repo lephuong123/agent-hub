@@ -188,3 +188,8 @@ Tạo lại: `web.demo` chỉ seed approval phá huỷ (không đủ điều ki�
 `uncertain` (`tool_name="Bash"`, `eval "$TEST_CMD" tests/test_api.py`, luật `eval_dynamic`, lớp `system`) cho run `live` của `lap-trinh`,
 HUB_HOME tạm; Playwright Chromium 1280×860 đăng nhập bằng dòng `LOGIN`, chụp `/approvals` (full page), bấm "Luôn cho phép" (hộp xác nhận),
 "Đồng ý" (trang bước 2). Các ảnh cũ không đổi: demo không có approval đủ điều kiện nên nút không hiện ở đó.
+
+## Memory + graph memory (`/memory…`, 2026-11-02)
+Module `web/memory_pages.py` + `static/memory_graph.js` (đồ thị SVG tự viết, CSP-safe) + RPC chỉ đọc mới `learn.graph_view`
+(learning/graph_view.py, HUMAN_ONLY, phạm vi + quét lúc nạp như `memory.recall`). Ghi qua `learn.propose` (created_by=user) / `knowledge.pin` /
+`learn.rollback` / `learn.graph_consolidate`, audit kênh web. Chi tiết: `docs/dev-notes/web-memory.md`. Test `tests/test_web_memory.py`.

@@ -70,6 +70,8 @@ EVENT_LEVELS: dict[str, str] = {
     "hub.config_changed": "summary",
     "cli.version_warning": "summary",
     "auth.blocked": "summary",
+    "auth.cleared": "summary",  # cờ chặn đăng nhập được gỡ (người: doctor/auth.reset; tự động: kiểm lại thấy đã đăng nhập)
+    "auth.transient": "summary",  # run báo "Not logged in" nhưng kiểm lại `claude auth status` vẫn đăng nhập → KHÔNG chặn
     "hook.event": "debug",
     "hook.timeout": "summary",  # hardening H-11: hook quan sát quá 2 s → fail-OPEN, ghi lại (FR-RT-17)
     "hook.observed": "debug",  # hardening H-11: hook quan sát PostToolUse/UserPromptSubmit/Stop (chỉ metadata)
@@ -104,6 +106,7 @@ EVENT_LEVELS: dict[str, str] = {
     "policy.changed": "summary",
     "run.waiting_human": "summary",  # tiến trình đã dừng, chờ người duyệt (slot nhả, khoá giữ)
     "run.resumed": "summary",  # run được tiếp tục ở run mới (--resume)
+    "run.auto_resume": "summary",  # tự resume lỗi tạm thời: {status: scheduled|started|skipped|exhausted, cause, attempt} (auto_resume.py)
     "run.repeated_failure": "summary",
     "recovery.reconciled": "summary",
     "notify.sent": "debug",
@@ -151,6 +154,8 @@ EVENT_LEVELS: dict[str, str] = {
     "golden.updated": "summary",
     "golden.removed": "summary",  # xoá mềm
     "golden.suggested": "summary",  # vòng học/gate CHỈ gợi ý run ứng viên (Q-23) — vào digest + Slack
+    "golden.suggestion_opened": "summary",  # hub tự đề xuất golden từ task done không bị sửa/hoàn tác → nút một chạm
+    "golden.suggestion_decided": "summary",  # NGƯỜI duyệt/từ chối đề xuất golden (Q-07) — gỡ nút ở mọi chat
     "eval.started": "summary",  # eval gate bắt đầu (check / post_apply / batch / manual)
     "eval.completed": "summary",  # kết quả gate: status, điểm trước/sau, chi phí
     "regression.detected": "summary",  # FR-LN-17: hồi quy → rollback (A phát learning.rolled_back)
