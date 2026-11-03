@@ -38,11 +38,12 @@ export function createChat(o) {
   }
 
   // Điện thoại (màn dọc): màn hình chat phủ trước camera, bố cục hẹp; màn ngang: treo trên vách phòng điều phối viên.
-  function setOverlay(camera) {
+  // wide: ngồi bàn ra lệnh (chế độ đi bộ) — màn hình bàn thành bàn điều khiển phủ trước camera, bố cục rộng.
+  function setOverlay(camera, wide) {
     const m = panel.mesh.material;
     if (camera) {
       overlayCam = camera;
-      panel.setSize(760, 1240);
+      if (wide) panel.setSize(1600, 914); else panel.setSize(760, 1240);
       m.depthTest = false; m.depthWrite = false; panel.mesh.renderOrder = 1001;
       camera.add(panel.mesh); panel.mesh.rotation.set(0, 0, 0);
       fitOverlay();
@@ -160,10 +161,12 @@ export function createChat(o) {
   }
 
   // ---------------------------------------------------------------- mở / đóng
-  async function open() {
+  // opts.desk: mở từ bàn của điều phối viên (ngồi bàn) → bàn điều khiển phủ trước camera thay vì màn hình lớn trên vách
+  async function open(opts) {
     if (st.open) { panel.draw(); panel.focus('input'); return; }
     st.open = true; panel.sr.hidden = false; panel.dirty = true;
-    if (o.camera && o.camera.aspect < 0.85) setOverlay(o.camera);
+    const desk = !!(opts && opts.desk);
+    if (o.camera && (o.camera.aspect < 0.85 || desk)) setOverlay(o.camera, desk && o.camera.aspect >= 0.85);
     o.onOpenChange(true);
     await load(st.conv);
     setTimeout(() => { panel.draw(); panel.focus('input'); }, 0);

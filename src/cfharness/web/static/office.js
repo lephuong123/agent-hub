@@ -15,7 +15,8 @@ import { drawHud, drawKanban, drawRuns, drawNeeds, drawCard, drawApprovalTag, dr
 import { makeApi, Modals, createFlows } from './office/flows.js';
 import { createChat } from './office/chat.js';
 import { FONT, roundRect } from './office/util.js';
-import { Walker, walkBusy, hintShown, hintLayout } from './office/walk.js';
+import { Walker, walkBusy, hintShown, hintLayout, coordinatorOf, nearDesk } from './office/walk.js';
+import { createTalk } from './office/talk.js';
 
 const $ = (id) => document.getElementById(id);
 const KCOL_VI = { ready: 'Sẵn sàng', running: 'Đang làm', review: 'Review', blocked: 'Kẹt' };
@@ -148,11 +149,30 @@ function main() {
         if (side.lengthSq() > 1e-4) { side.normalize(); f.center.addScaledVector(side, 0.25); }
         f.center.y += 0.4; f.h += 1.0; // chừa phía trên màn hình cho bong bóng lời nói
         flyToFrame(f, 1.1);
-      } } else if (walk.active) { tween = null; } else if (overview) { flyTo(overview.pos, overview.target); }
+      } } else if (walk.active) { tween = null; if (walk.stand()) walk.resume(reduced); } else if (overview) { flyTo(overview.pos, overview.target); }
       renderSrPanel();
     },
   });
-  function syncControls() { controls.enabled = !walk.active && !modals.open && !chat.isOpen; }
+  // Nói chuyện với agent (chế độ đi bộ, [E] khi đứng gần): office/talk.js — action steer / run_continue / run_start qua /office/do
+  const talk = createTalk({
+    api, srRoot: srDialogs, camera, toast, onExpired: () => onExpired(), ask: (d) => flows.ask(d),
+    openApproval: (id) => flows.openApproval(id), openQuestion: (id) => flows.openQuestion(id),
+    agent: (id) => {
+      const act = actors.get(id);
+      if (!act) return null;
+      const ap = ((state && state.approvals) || []).find((x) => x.agent === id), q = ((state && state.questions) || []).find((x) => x.agent === id);
+      return { id, name: act.agent.name || id, status: act.status(perfNow()), statusText: statusText(act), run_id: act.agent.run_id || null,
+        approval: ap ? ap.id : null, question: q ? q.id : null };
+    },
+    onOpenChange: (open, id) => {
+      const act = actors.get(id);
+      // agent đứng/ngồi yên, quay mặt về người dùng trong lúc nói chuyện
+      if (act) act.talking = open && walk.pos ? { x: walk.pos.x, z: walk.pos.z } : null;
+      if (open) { select(null); focusBoard = null; }
+      syncControls(); renderSrPanel();
+    },
+  });
+  function syncControls() { controls.enabled = !walk.active && !modals.open && !chat.isOpen && !talk.isOpen; }
   // khi chưa có văn phòng (vd. hết phiên ngay lần tải đầu): biển dựng trên một khoảnh sàn nhỏ cho ra cảnh 3D
   const signStand = new THREE.Group();
   {
@@ -233,7 +253,10 @@ function main() {
   hint.sprite.visible = false; camera.add(hint.sprite);
   let near = null, autoSel = false, walkHere = null, walkYield = true, nearAt = 0;
   // trạng thái giao diện cho chính sách đi bộ (walk.js): có bảng modal / chat / bảng đang xem → ẩn gợi ý, không tự chọn agent
-  const ui = () => ({ walk: walk.active, modal: modals.open, chat: chat.isOpen, board: !!focusBoard });
+  const ui = () => ({ walk: walk.active, modal: modals.open, chat: chat.isOpen || talk.isOpen, board: !!focusBoard });
+  // nhân vật người dùng điều khiển = điều phối viên (nhãn + màu của agent is_manager); không có → "Bạn · chủ hub"
+  const coordinator = () => coordinatorOf(actors, state && state.manager_id);
+  function syncIdentity() { const c = coordinator(); walk.setIdentity(c ? { id: c.id, name: c.agent.name || c.id, color: c.color } : null); }
   // dòng gợi ý: gọn, sát mép dưới khung nhìn (không đè biển tên khu vực / đầu hộp thoại)
   function fitHint() {
     const L = hintLayout(camera.fov, camera.aspect);
@@ -243,9 +266,11 @@ function main() {
   function setWalk(on) {
     if (!world || !renderer || on === walk.active) return;
     select(null); focusBoard = null; tween = null; near = null; autoSel = false;
-    if (on) { walk.enter(world); walkYield = true; }
+    if (on) { syncIdentity(); walk.enter(world); walkYield = true; }
     else {
+      talk.close(); chat.close();
       walk.exit();
+      for (const a of actors.values()) { a.puppet = false; a.talking = null; } // actor điều phối viên AI hiện lại
       // OrbitControls tiếp quản từ chỗ camera đang đứng rồi bay về toàn cảnh
       const f = new THREE.Vector3(); camera.getWorldDirection(f);
       controls.target.copy(camera.position).addScaledVector(f, 4);
@@ -263,6 +288,9 @@ function main() {
     const p = walk.pos;
     if (!p || !world) return null;
     const a = world.chatAnchor, room = world.roomAt(p.x, p.z);
+    if (walk.seated) return { kind: 'stand', label: 'Đứng dậy (Esc)' };
+    // điều phối viên đứng cạnh bàn của mình → ngồi xuống ra lệnh (bàn điều khiển = chat với điều phối viên AI)
+    if (walk.isCoordinator && room && room.key === 'mgr' && nearDesk(world, p)) return { kind: 'sit', label: 'Ngồi vào bàn (ra lệnh)' };
     if (room && room.key === 'mgr' && Math.hypot(a.x - p.x, a.z - p.z) < 2.8) return { kind: 'chat', label: 'Chat với điều phối viên' };
     const v = new THREE.Vector3();
     for (const [k, label] of [['kanban', 'Xem bảng công việc'], ['runs', 'Xem màn hình phòng server'], ['needs', 'Xem bảng Cần bạn'], ['hud', 'Xem màn hình trạng thái']]) {
@@ -275,6 +303,8 @@ function main() {
     if (act) {
       const ap = ((state && state.approvals) || []).find((x) => x.agent === act.id);
       const q = ((state && state.questions) || []).find((x) => x.agent === act.id);
+      // agent thường: [E] mở hội thoại (bảng hội thoại có nút Duyệt / Trả lời khi agent đang chờ)
+      if (!act.isManager && !act.puppet) return { kind: 'talk', id: act.id, label: 'Nói chuyện với ' + (act.agent.name || act.id) };
       if (ap) return { kind: 'ap', id: ap.id, label: 'Duyệt yêu cầu của ' + (act.agent.name || act.id) };
       if (q) return { kind: 'q', id: q.id, label: 'Trả lời câu hỏi của ' + (act.agent.name || act.id) };
       if (act.isManager) return { kind: 'chat', label: 'Chat với điều phối viên' };
@@ -285,6 +315,9 @@ function main() {
     const t = walkTarget();
     if (!t) return;
     if (t.kind === 'chat') chat.open();
+    else if (t.kind === 'sit') { if (walk.sit(world.mgrSpot)) chat.open({ desk: true }); }
+    else if (t.kind === 'stand') { if (chat.isOpen) chat.close(); else if (walk.stand()) walk.resume(reduced); }
+    else if (t.kind === 'talk') talk.open(t.id);
     else if (t.kind === 'board') showBoard(t.board);
     else if (t.kind === 'exit') flows.openLogout();
     else doAct(t.kind, t.id);
@@ -294,7 +327,7 @@ function main() {
     const p = walk.pos;
     let best = null, bd = 1.8;
     for (const a of actors.values()) {
-      if (!a.pos) continue;
+      if (!a.pos || a.puppet) continue;
       const d = Math.hypot(a.pos.x - p.x, a.pos.z - p.z);
       if (d < bd || (a.id === near && d < 2.6 && !best)) { bd = Math.min(bd, d); best = a; }
     }
@@ -310,7 +343,7 @@ function main() {
     hint.draw(JSON.stringify(walkHere) + walk.pov, (ctx, W, H) => {
       ctx.fillStyle = 'rgba(31,30,29,0.78)'; roundRect(ctx, 6, 6, W - 12, H - 12, 36); ctx.fill();
       ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff'; ctx.font = '700 40px ' + FONT;
-      let top = '📍 ' + walkHere.room + (walkHere.action ? '   ·   [E] ' + walkHere.action : '');
+      let top = (walk.seated ? '🪑 ' : '📍 ') + walkHere.room + (walkHere.action ? '   ·   [E] ' + walkHere.action : '');
       while (top.length > 4 && ctx.measureText(top).width > W - 70) top = top.slice(0, -2) + '…';
       ctx.fillText(top, 36, 56);
       ctx.fillStyle = '#d6d3c8'; ctx.font = '500 28px ' + FONT;
@@ -336,6 +369,7 @@ function main() {
       wkey = key;
       for (const a of actors.values()) a.attach(world);
       chat.mount(world);
+      if (walk.active) syncIdentity();
       world.setDaylight(hourNow());
       if (walk.active) { walk.setWorld(world); near = null; }
       if (walkBtn && renderer && !noRender) walkBtn.hidden = false;
@@ -536,7 +570,7 @@ function main() {
     const objs = [];
     if (card.sprite.visible) objs.push(card.sprite);
     for (const ts of tags.values()) if (ts.sprite.visible) objs.push(ts.sprite);
-    objs.push(...[...actors.values()].map((a) => a.chibi.group));
+    objs.push(...[...actors.values()].filter((a) => !a.puppet).map((a) => a.chibi.group)); // actor bị ẩn (điều phối viên khi đi bộ): không bấm được
     // chế độ đi bộ: cửa ra KHÔNG bấm được (bấm/chạm cửa chỉ là bấm sàn) — hộp thoại thoát chỉ mở khi bấm E chủ động
     if (world) objs.push(...world.focusables, ...(walk.active ? [] : world.exitMeshes || []), chat.panel.mesh);
     for (const h of ray.intersectObjects(objs, true)) {
@@ -568,7 +602,7 @@ function main() {
     cvs.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, drag: false }; });
     // chế độ đi bộ: kéo chuột / kéo tay = xoay hướng nhìn (OrbitControls đang tắt)
     cvs.addEventListener('pointermove', (e) => {
-      if (!down || !walk.active || modals.open || chat.isOpen) return;
+      if (!down || !walk.active || modals.open || chat.isOpen || talk.isOpen) return;
       if (!down.drag && Math.hypot(e.clientX - down.x, e.clientY - down.y) <= 5) return;
       down.drag = true;
       walk.look(e.clientX - down.lx, e.clientY - down.ly);
@@ -579,6 +613,7 @@ function main() {
       down = null;
       // bảng modal đang mở: chỉ bảng trên cùng nhận chuột (bấm ra ngoài không làm gì — tránh bấm nhầm)
       if (modals.open) { const uv = panelUV(e, modals.top); if (uv) modals.top.click(uv); return; }
+      if (talk.isOpen) { const uv = panelUV(e, talk.panel); if (uv) talk.panel.click(uv); else talk.close(); return; }
       if (chat.isOpen) {
         const uv = panelUV(e, chat.panel);
         if (uv) { chat.panel.click(uv); return; }
@@ -600,7 +635,7 @@ function main() {
     });
     // con lăn trên bảng: cuộn bảng, không phóng to cảnh (bắt ở pha capture trước OrbitControls)
     host.addEventListener('wheel', (e) => {
-      const pnl = modals.open ? modals.top : chat.isOpen ? chat.panel : null;
+      const pnl = modals.open ? modals.top : talk.isOpen ? talk.panel : chat.isOpen ? chat.panel : null;
       if (!pnl) { if (walk.active) { e.preventDefault(); e.stopPropagation(); if (!focusBoard) walk.zoom(e.deltaY); } return; }
       e.preventDefault(); e.stopPropagation();
       const uv = panelUV(e, pnl);
@@ -612,7 +647,7 @@ function main() {
       const n = performance.now();
       if (n - hoverAt < 120) return;
       hoverAt = n;
-      const pnl = modals.open ? modals.top : chat.isOpen ? chat.panel : null;
+      const pnl = modals.open ? modals.top : talk.isOpen ? talk.panel : chat.isOpen ? chat.panel : null;
       if (pnl) { const uv = panelUV(e, pnl); cvs.style.cursor = pnl.hover(uv) ? 'pointer' : ''; return; }
       const p = pick(e);
       cvs.style.cursor = p ? 'pointer' : '';
@@ -630,9 +665,13 @@ function main() {
   const typing = (t) => t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
   document.addEventListener('keydown', (e) => {
     if (e.isComposing) return;
+    // ngồi bàn ra lệnh: E (khi không gõ chữ trong ô chat) cũng đứng dậy — Esc đóng bàn điều khiển → đứng dậy (onOpenChange)
+    if (walk.active && walk.seated && e.code === 'KeyE' && !e.repeat && !modals.open && !typing(e.target) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault(); if (chat.isOpen) chat.close(); else if (walk.stand()) walk.resume(reduced); return;
+    }
     if (walk.active && e.key !== 'Escape') {
       // phím đi bộ: chỉ khi không có bảng/chat mở và không đang gõ chữ (ô chat ẩn, ô ghi chú)
-      if (modals.open || chat.isOpen || typing(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (modals.open || chat.isOpen || talk.isOpen || typing(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
       // preventDefault cả khi focus đang ở nút/link (vd. vừa bấm 🚶): mũi tên không cuộn trang, E/V không kích hoạt gì khác
       if (walk.key(e.code, true, e.shiftKey)) { e.preventDefault(); if (focusBoard) toOverview(); return; }
       if (e.code === 'KeyV') { e.preventDefault(); if (!e.repeat) { walk.togglePov(); renderSrPanel(); } return; }
@@ -641,8 +680,10 @@ function main() {
     }
     if (e.key !== 'Escape') return;
     if (modals.open) { e.preventDefault(); const t = modals.top; if (t.opts.onEscape) t.opts.onEscape(); return; }
+    if (talk.isOpen) { e.preventDefault(); talk.close(); return; }
     if (chat.isOpen) { e.preventDefault(); chat.close(); return; }
     if (typing(e.target)) return;
+    if (walk.active && walk.seated) { if (walk.stand()) walk.resume(reduced); return; }
     // chế độ đi bộ: Esc đóng thẻ/bảng trước, lần sau mới ra toàn cảnh
     if (walk.active && !selected && !focusBoard) { setWalk(false); return; }
     toOverview();
@@ -656,7 +697,7 @@ function main() {
     const w = Math.max(1, host.clientWidth), h = Math.max(1, host.clientHeight);
     renderer.setSize(w, h, false);
     camera.aspect = w / h; camera.updateProjectionMatrix();
-    modals.fit(); fitToast(); fitHint(); chat.fitOverlay();
+    modals.fit(); fitToast(); fitHint(); chat.fitOverlay(); talk.fit();
     if (world) fitCamera();
   }
   if (window.ResizeObserver) new ResizeObserver(resize).observe(host); else window.addEventListener('resize', resize);
@@ -697,10 +738,13 @@ function main() {
     const lf = walk.active ? 1 : Math.min(2.6, Math.max(1, camera.position.distanceTo(controls.target) / 20));
     if (world) {
       world.setLabelScale(lf);
-      const quiet = !!focusBoard || chat.isOpen || modals.open;
+      const quiet = !!focusBoard || chat.isOpen || modals.open || talk.isOpen;
       world.setSignsVisible(!quiet);
       world.update(dt, now, reduced);
-      for (const a of actors.values()) { a.chibi.labelScale = lf; a.update(dt, now, now, reduced, world.estop); }
+      // KHÔNG có 2 điều phối viên: khi đi bộ, actor điều phối viên AI nhường chỗ cho avatar người dùng (ẩn, giữ trạng thái/bong bóng)
+      const coord = walk.active && walk.isCoordinator ? coordinator() : null;
+      for (const a of actors.values()) { a.puppet = a === coord; a.chibi.labelScale = lf; a.update(dt, now, now, reduced, world.estop); }
+      if (walk.active) walk.setStatus(coord ? coord.bubble : null);
       syncLabels(quiet);
     }
     hint.sprite.visible = hintShown(ui());
@@ -719,7 +763,7 @@ function main() {
     if (walk.active && world) {
       // đi bộ: avatar luôn cập nhật; camera do walker lái trừ khi đang xem bảng / chat / bay camera (khi đó nhìn controls.target)
       walk.update(dt, now, reduced);
-      const yieldCam = !!tween || !!focusBoard || chat.isOpen;
+      const yieldCam = !!tween || !!focusBoard || (chat.isOpen && !walk.seated);
       if (yieldCam) { camera.lookAt(controls.target); world.fade(new Set()); }
       else { if (walkYield) walk.resume(reduced); walk.updateCamera(dt, reduced); }
       walkYield = yieldCam;
@@ -735,11 +779,11 @@ function main() {
       card.sprite.position.copy(cardPos(act));
     }
     for (const [id, ts2] of tags) {
-      const a = actors.get(id);
-      if (!a || !a.pos) { ts2.sprite.visible = false; continue; }
+      const a = actors.get(id), ap2 = a && a.puppet && walk.active ? walk.pos : a && a.pos; // thẻ đỏ của điều phối viên theo avatar
+      if (!ap2) { ts2.sprite.visible = false; continue; }
       ts2.sprite.visible = true;
       scaleLabel(ts2.sprite, Math.min(lf, 2));
-      ts2.sprite.position.set(a.pos.x, 2.55 + (lf - 1) * 0.5, a.pos.z);
+      ts2.sprite.position.set(ap2.x, 2.55 + (lf - 1) * 0.5, ap2.z);
     }
     if (now - uiAt > 1) {
       uiAt = now;
@@ -749,6 +793,7 @@ function main() {
     }
     modals.update();
     chat.update();
+    talk.update();
     if (toastTs.sprite.visible && performance.now() > toastUntil) toastTs.sprite.visible = false;
     renderer.render(scene, camera);
     // đo FPS: bỏ 2 s đầu, cửa sổ 5 s
@@ -774,7 +819,7 @@ function main() {
     for (const a of actors.values()) {
       const L = a.chibi.label;
       if (!L) continue;
-      if (quiet || !a.pos) { L.visible = false; continue; }
+      if (quiet || !a.pos || a.puppet) { L.visible = false; continue; }
       const must = a.id === selected || a.id === hoverId;
       if (!must && walk.active && walk.pos && Math.hypot(a.pos.x - walk.pos.x, a.pos.z - walk.pos.z) > 7) { L.visible = false; continue; }
       L.getWorldPosition(lv);
@@ -834,6 +879,7 @@ function main() {
     return 'ok';
   }
   function onExpired() {
+    talk.close();
     setConn('expired');
     select(null);
     stopAll(); // vẫn vẽ cảnh (biển "hết phiên"), chỉ ngừng dữ liệu

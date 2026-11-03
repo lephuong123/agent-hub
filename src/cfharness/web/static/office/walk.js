@@ -1,4 +1,6 @@
-/* Văn phòng 3D — chế độ "Vào văn phòng" (đi bộ): avatar chibi của chủ hub đi trong văn phòng, camera góc thứ ba bám sau lưng
+/* Văn phòng 3D — chế độ "Vào văn phòng" (đi bộ): người dùng điều khiển chính nhân vật ĐIỀU PHỐI VIÊN (nhãn + màu của agent `is_manager`;
+ * không có điều phối viên → avatar "Bạn · chủ hub"), xuất hiện cạnh bàn trong phòng điều phối viên, [E] ngồi vào bàn ra lệnh.
+ * Avatar đi trong văn phòng, camera góc thứ ba bám sau lưng
  * hoặc góc thứ nhất (phím V). Chỉ là một cách XEM: không gọi endpoint nào, mọi thao tác vẫn đi qua flows/chat như chế độ toàn cảnh.
  * Điều khiển: WASD / phím mũi tên đi (Shift chạy), kéo chuột/kéo tay xoay hướng nhìn, bấm/chạm sàn để tự đi tới (A* của Grid),
  * con lăn đổi khoảng cách camera. Va chạm theo lưới chướng ngại của World (tường, vách, đồ đạc; ghế không chặn).
@@ -52,6 +54,25 @@ export function spawnPoint(world) {
   return best || { x: world.W - 1.4, z: world.D - 1.2 };
 }
 
+// Điểm xuất hiện của Điều phối viên: đứng cạnh bàn trong phòng điều phối viên (chỗ đứng `stand` của ghế giám đốc), nhìn về phía bàn.
+// Ô bị chặn (bố cục đổi) → ô trống gần nhất còn trong phòng; không được → null (dùng spawnPoint).
+export function deskSpawn(world) {
+  const s = world.mgrSpot, g = world.grid;
+  if (!s) return null;
+  const st = s.stand || s;
+  if (!blockedAt(g, st.x, st.z, WALK_R)) return { x: st.x, z: st.z, yaw: s.rot };
+  const [c, r] = g.nearestFree(...g.cellOf(st.x, st.z)), [x, z] = g.center(c, r);
+  const room = world.roomAt(x, z);
+  return room && room.key === 'mgr' && !blockedAt(g, x, z, WALK_R) ? { x, z, yaw: s.rot } : null;
+}
+// Actor điều phối viên do AI điều khiển mà avatar thay chỗ khi đi bộ (id = state.manager_id, không có thì actor isManager đầu tiên).
+export function coordinatorOf(actors, managerId) {
+  return (managerId && actors.get(managerId)) || [...actors.values()].find((a) => a.isManager) || null;
+}
+// Đứng gần ghế của mình (≤ SIT_R) trong phòng điều phối viên → [E] ngồi vào bàn.
+export const SIT_R = 1.3;
+export const nearDesk = (world, p) => !!(world && world.mgrSpot && p && Math.hypot(world.mgrSpot.x - p.x, world.mgrSpot.z - p.z) <= SIT_R);
+
 // ui = { walk, modal, chat, board } (đang đi bộ / có bảng modal / chat / đang xem bảng). Khi có thứ đang mở: KHÔNG tự chọn agent theo
 // khoảng cách (chọn → bảng/chat tự đóng) và ẩn dòng gợi ý (nó đè lên đầu hộp thoại).
 export const walkBusy = (ui) => !!(ui.modal || ui.chat || ui.board);
@@ -67,11 +88,9 @@ export function hintLayout(fov, aspect) {
 export class Walker {
   constructor(opts) {
     this.camera = opts.camera;
-    this.chibi = new Chibi({ id: 'cfh-owner', name: opts.name || 'Bạn · chủ hub', color: '#c96442' });
-    this.chibi.group.userData.actorId = null; // không phải agent: bấm vào avatar không chọn gì
-    this.chibi.group.visible = false;
-    this.chibi.pose = 'stand';
-    opts.scene.add(this.chibi.group);
+    this.scene = opts.scene; this.ident = '';
+    this.setIdentity(null);
+    this.seated = null; // ghế đang ngồi (spot) — ngồi bàn ra lệnh
     this.active = false; this.pov = 'third';
     this.world = null; this.pos = null; this.yaw = Math.PI; this.view = Math.PI; this.pitch = -0.12; this.dist = 3.4;
     this.keys = new Set(); this.run = false; this.path = [];
@@ -79,21 +98,58 @@ export class Walker {
     this._ray = new THREE.Raycaster(); this._v = new THREE.Vector3(); this._head = new THREE.Vector3();
   }
 
-  // Vào chế độ đi bộ: đứng giữa khu làm việc (spawnPoint), nhìn về phía bắc vào văn phòng.
+  // Nhân vật người dùng điều khiển: điều phối viên ({id, name, color}) hoặc null = "Bạn · chủ hub". Đổi → dựng lại chibi.
+  setIdentity(who) {
+    const name = who ? who.name || who.id : 'Bạn · chủ hub', color = who ? who.color || '#c8413a' : '#c96442';
+    const key = (who ? 'm:' : 'o:') + name + color;
+    if (key === this.ident) return;
+    this.ident = key; this.isCoordinator = !!who;
+    const vis = this.chibi ? this.chibi.group.visible : false;
+    if (this.chibi) { this.chibi.group.removeFromParent(); this.chibi.dispose(); }
+    this.chibi = new Chibi({ id: who ? 'cfh-coord-' + who.id : 'cfh-owner', name, color, isManager: !!who });
+    this.chibi.group.userData.actorId = null; // avatar người dùng: bấm vào không chọn gì (actor AI bị ẩn)
+    this.chibi.group.visible = vis;
+    this.chibi.pose = 'stand';
+    this.scene.add(this.chibi.group);
+  }
+  // bong bóng trạng thái run của điều phối viên (đang chạy, chờ duyệt…) hiện trên avatar
+  setStatus(b) { this.chibi.setBubble(b ? b.emoji : null, b ? b.tone : ''); this.chibi.setRing(!!(b && b.ring)); }
+
+  // Vào chế độ đi bộ: điều phối viên đứng cạnh bàn của mình (deskSpawn); không có → giữa khu làm việc (spawnPoint).
   enter(world) {
-    this.active = true; this.camInit = false; this.keys.clear(); this.path = [];
+    this.active = true; this.camInit = false; this.keys.clear(); this.path = []; this.seated = null;
     this.setWorld(world, true);
     this.chibi.group.visible = this.pov === 'third';
   }
+  // Ngồi vào ghế (spot của World): khoá di chuyển, tư thế ngồi, camera nhìn vào màn hình bàn. stand() đứng dậy ở chỗ đứng cạnh ghế.
+  sit(spot) {
+    if (!spot || !this.active) return false;
+    this.seated = spot; this.keys.clear(); this.path = [];
+    this.pos = { x: spot.x, z: spot.z }; this.yaw = this.view = spot.rot; this.camInit = false;
+    return true;
+  }
+  stand() {
+    const s = this.seated;
+    if (!s) return false;
+    this.seated = null; this.camInit = false;
+    const st = s.stand || s;
+    this.pos = { x: st.x, z: st.z };
+    if (this.world) this.setWorld(this.world);
+    return true;
+  }
   exit() {
-    this.active = false; this.keys.clear(); this.path = [];
+    this.active = false; this.keys.clear(); this.path = []; this.seated = null;
     this.chibi.group.visible = false;
     if (this.world) this.world.fade(new Set());
   }
   // Văn phòng dựng lại (thêm/bớt agent): giữ vị trí nếu còn đi được, không thì về ô trống gần nhất.
   setWorld(world, reset) {
     this.world = world;
-    if (reset || !this.pos) { this.pos = spawnPoint(world); this.yaw = this.view = Math.PI; }
+    if (reset || !this.pos) {
+      const d = this.isCoordinator ? deskSpawn(world) : null;
+      if (d) { this.pos = { x: d.x, z: d.z }; this.yaw = this.view = d.yaw; } else { this.pos = spawnPoint(world); this.yaw = this.view = Math.PI; }
+    }
+    if (this.seated) return;
     if (blockedAt(world.grid, this.pos.x, this.pos.z, WALK_R)) {
       const g = world.grid, [c, r] = g.nearestFree(...g.cellOf(this.pos.x, this.pos.z)), [x, z] = g.center(c, r);
       this.pos = { x, z };
@@ -111,6 +167,7 @@ export class Walker {
   key(code, down, shift) {
     this.run = !!shift;
     if (!KEYS[code]) return false;
+    if (down && this.seated) return true; // đang ngồi bàn: phím đi không làm gì (Esc/E để đứng dậy)
     if (down) { this.keys.add(code); this.path = []; } else this.keys.delete(code);
     return true;
   }
@@ -124,7 +181,7 @@ export class Walker {
   // bấm/chạm sàn: tự đi tới bằng A*; reduced-motion → dịch chuyển tức thời tới điểm cuối
   goTo(x, z, reduced) {
     const w = this.world;
-    if (!w || !this.pos) return;
+    if (!w || !this.pos || this.seated) return;
     const pts = w.grid.findPath(this.pos.x, this.pos.z, x, z);
     // điểm cuối nằm trong đồ đạc → dừng ở ô trống cuối cùng của đường
     while (pts.length > 1 && blockedAt(w.grid, pts[pts.length - 1].x, pts[pts.length - 1].z, WALK_R)) pts.pop();
@@ -136,6 +193,13 @@ export class Walker {
   update(dt, t, reduced) {
     const w = this.world;
     if (!this.active || !w || !this.pos) return;
+    if (this.seated) {
+      const c = this.chibi, s = this.seated;
+      c.walking = false; c.pose = 'type'; c.seatY = s.seatY || 0.37;
+      c.animate(dt, t, reduced);
+      c.group.position.set(s.x, 0, s.z); c.group.rotation.y = s.rot;
+      return;
+    }
     let mx = 0, mz = 0;
     for (const k of this.keys) { mx += KEYS[k][0]; mz += KEYS[k][1]; }
     let walking = false;
@@ -175,6 +239,16 @@ export class Walker {
     const w = this.world, cam = this.camera;
     if (!this.active || !w || !this.pos) return;
     const fx = Math.sin(this.view), fz = Math.cos(this.view);
+    if (this.seated) {
+      // ngồi bàn: camera sau vai, nhìn thẳng vào màn hình trên bàn (bàn điều khiển chat phủ trước camera)
+      const s = this.seated, sx = Math.sin(s.rot), sz = Math.cos(s.rot);
+      this._v.set(s.x - sx * 0.55, 1.35, s.z - sz * 0.55);
+      if (!this.camInit || reduced) { this.camPos.copy(this._v); this.camInit = true; } else this.camPos.lerp(this._v, Math.min(1, dt * 6));
+      cam.position.copy(this.camPos);
+      cam.lookAt(this._head.set(s.x + sx * 1.1, 0.95, s.z + sz * 1.1));
+      w.fade(new Set());
+      return;
+    }
     if (this.pov === 'first') {
       cam.position.set(this.pos.x, EYE, this.pos.z);
       this._v.set(this.pos.x + fx * Math.cos(this.pitch), EYE + Math.sin(this.pitch), this.pos.z + fz * Math.cos(this.pitch));

@@ -1,6 +1,8 @@
 # Văn phòng 3D — khu "Cafe điện tử" cho agent rảnh
 
 Chủ hub (2026-11-03): văn phòng `/office` cần một khu cafe điện tử riêng; agent nào **rảnh (`idle`)** thì ra đó ngồi máy.
+
+> **Đã đổi tần suất** (`office-coordinator.md`): agent rảnh giờ ngồi bàn team mình, chỉ ra cafe/pantry mỗi 6–10 phút một lần ngắn. Khu cafe giữ nguyên.
 Chỉ đổi client (`static/office/world.js`, `static/office/actors.js`), không đổi server/RPC/CSP, không asset ngoài, không thư viện mới.
 
 ## Vị trí & mặt bằng

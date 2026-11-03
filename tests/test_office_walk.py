@@ -55,13 +55,13 @@ def test_walk_exit_door_only_on_e():
     assert pick.count("exitMeshes") == 1
     assert "flows.openLogout()" in _fn(office_js, "function walkInteract()")
     walk = (STATIC / "office" / "walk.js").read_text(encoding="utf-8")
-    assert "this.pos = spawnPoint(world)" in walk and "this.pos = { x: world.W - 1.4, z: world.D - 1.2 }" not in walk
+    assert "this.pos = spawnPoint(world)" in walk and "deskSpawn(world)" in walk and "this.pos = { x: world.W - 1.4, z: world.D - 1.2 }" not in walk
 
 
 def test_walk_hint_and_autoselect_respect_open_panels():
     """Gợi ý ẩn khi modal/chat/bảng mở (finding office.js:232); walkProximity không tự chọn agent khi đó (finding office.js:302)."""
     office_js = (STATIC / "office.js").read_text(encoding="utf-8")
-    assert "const ui = () => ({ walk: walk.active, modal: modals.open, chat: chat.isOpen, board: !!focusBoard });" in office_js
+    assert "const ui = () => ({ walk: walk.active, modal: modals.open, chat: chat.isOpen || talk.isOpen, board: !!focusBoard });" in office_js
     prox = _fn(office_js, "function walkProximity(now)")
     assert "if (id !== near && !walkBusy(ui())) {" in prox
     # mọi chỗ select() trong walkProximity nằm sau cổng walkBusy
@@ -89,7 +89,7 @@ def test_walk_module_is_view_only():
     imports = re.findall(r"^import .* from '([^']+)';", walk, re.M)
     assert imports and all(i.startswith("./") or i == "../vendor/three-0.169.0/three.module.min.js" for i in imports), imports
     office_js = (STATIC / "office.js").read_text(encoding="utf-8")
-    assert "import { Walker, walkBusy, hintShown, hintLayout } from './office/walk.js';" in office_js
+    assert "import { Walker, walkBusy, hintShown, hintLayout, coordinatorOf, nearDesk } from './office/walk.js';" in office_js
     # thao tác từ chế độ đi bộ đi qua đúng luồng sẵn có (chat / bảng / flows), không có đường ghi riêng
     fn = office_js[office_js.index("function walkInteract()"):]
     fn = fn[:fn.index("\n  }\n")]
