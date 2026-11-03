@@ -534,6 +534,7 @@ class ManagerOps:
             conv = c if c["channel"] != "heartbeat" else None
         except NotFound:
             conv = None
+        guessed = conv is None  # lượt heartbeat: không có hội thoại gốc → đoán "hội thoại người hoạt động gần nhất" (có thể không liên quan)
         conv = conv or self.svc._home_conversation()
         cid = conv["id"] if conv else None
         if cid:
@@ -542,7 +543,8 @@ class ManagerOps:
         audit_id = self.hub.audit.record("manager.notify", self.mid, self.run["id"], {"text": text[:1000], "kind": kind, "conversation_id": cid},
                                          actor=self.actor, channel="manager", target=cid, summary="manager.notify")
         self.hub.publish(make_event("manager.reply", self.mid, {"conversation_id": cid, "run_id": self.run["id"], "text": text[:4000],
-                                                               "channel": conv["channel"] if conv else None, "kind": "notify", "notify_kind": kind, "ok": True},
+                                                               "channel": conv["channel"] if conv else None, "kind": "notify", "notify_kind": kind, "ok": True,
+                                                               "conversation_guessed": bool(conv) and guessed},
                                     run_id=self.run["id"]))
         self._action("notify_owner", a, summary=f"báo người: {text[:120]}", audit_id=audit_id)
         return {"delivered_to": conv["channel"] if conv else None, "conversation_id": cid, "note": None if conv else "no human conversation yet — stored as event only"}

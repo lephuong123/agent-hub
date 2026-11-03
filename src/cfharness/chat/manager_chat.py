@@ -16,7 +16,8 @@
 - Run của điều phối viên kết thúc mà không có trả lời (lỗi, bị chặn, vượt ngân sách…) → báo ngắn (chữ của hub).
 - P7: hook `bot.manager_run_started|finished` (mặc định rỗng — Telegram không đổi; Slack: tin tiến độ + nút Dừng, chat/slack/progress.py).
 - Kênh không cho đăng gốc (`bot.root_post_ok`, Slack: kênh chung) → trả lời / tin chủ động của cuộc đi vào thread người đã nhắn
-  gần nhất của cuộc đó (`mgr_convthread`; vd run tiếp tục sau khi daemon khởi động lại, `notify_owner` từ heartbeat); không có thread → DM.
+  gần nhất của cuộc đó (`mgr_convthread`; vd run tiếp tục sau khi daemon khởi động lại); không có thread → DM. `notify_owner` từ
+  heartbeat (hội thoại chỉ đoán, `conversation_guessed`) → luôn DM, không chen vào thread của việc khác.
 - Trả lời đúng `SILENT` (Slack: tin nói tiếp không tag — điều phối viên thấy tin không dành cho mình) → không đăng gì, hook nhận
   `outcome="silent"` (Slack xoá tin tiến độ).
 """
@@ -172,7 +173,10 @@ class ManagerChat:
             conv = p.get("conversation_id") or meta.get("conv")
             reply_to = None if notify else meta.get("reply_to")
             if reply_to is None and not self.bot.root_post_ok(chat):
-                reply_to = self._st(self.CONVTHREAD).get(conv) if conv else None  # run tiếp tục / notify_owner → thread của cuộc
+                # run tiếp tục / notify_owner của chính cuộc → thread của cuộc. Hội thoại chỉ là ĐOÁN (notify_owner từ heartbeat
+                # rơi vào "cuộc người hoạt động gần nhất") → không chen vào thread của việc khác, gửi DM.
+                guessed = notify and bool(p.get("conversation_guessed"))
+                reply_to = self._st(self.CONVTHREAD).get(conv) if conv and not guessed else None
                 if reply_to is None:  # không biết thread nào → DM, KHÔNG đăng lên gốc kênh chung
                     if run and not notify:
                         self._put(self.RUNS, run, None, cap=200)

@@ -161,6 +161,7 @@ async def test_team_task_run_ops_and_notify_owner(d):
     assert n["conversation_id"] == res["conversation_id"]
     rep = [e.payload for e in _events(d, "manager.reply") if e.payload.get("kind") == "notify"]
     assert rep and rep[0]["text"] == "Xong việc A" and rep[0]["channel"] == "web"
+    assert rep[0]["conversation_guessed"] is False  # run của chính hội thoại → không phải đoán (heartbeat mới đoán)
     hist = await rpc(d, "manager.history", {"conversation_id": res["conversation_id"]})
     assert hist[-1]["role"] == "notify"
     on = await tool(d, rid, "estop_on", {"reason": "agent w2 phá hoại"})
