@@ -973,6 +973,14 @@ Mô tả: Người có thể cho **từng agent** kết nối/lắng nghe trên 
 - Given agent khác chưa bật, Then kết nối loopback vẫn bị chặn (exit 7 / EPERM).
 - Given điều phối viên, vòng học, hoặc `agent update` cố đặt khoá sandbox, Then bị từ chối và audit; Given `agent clone` một agent có ngoại lệ, Then bản clone **không** có ngoại lệ.
 
+**FR-SG-14 — Allowlist domain web theo agent** · Should · M7 (thêm 2026-10-30, hardening WEB-1)
+Mô tả: Người có thể khoá **từng agent** vào vài domain web (`tool_policy.web_allow_domains`; `null` = không giới hạn, hành vi y như trước; `[]` = chặn mọi WebFetch). Chỉ tên đầy đủ hoặc `*.x`. Chi tiết: `docs/dev-notes/webfetch-agent-allowlist.md`.
+- WebFetch và Claude in Chrome `navigate`/`tabs_create_mcp` (cả trong `browser_batch`) tới host ngoài danh sách → **từ chối** (forbidden `web_agent_domain_not_allowed`, audit `guard.deny` + event `guard.blocked`), kể cả agent trust full; URL không tách chắc host hoặc lỗi khi kiểm → từ chối.
+- Thao tác Chrome có thể rời domain không lộ URL (click/gõ/form/JS/back-forward/batch có hành động) → luôn giữ chờ người ở mọi profile (`web_agent_chrome_action`); trust full → từ chối. Playwright MCP bị gỡ khỏi run của agent có allowlist.
+- `guard.enabled=false` + có allowlist → WebFetch và Chrome bị tắt (fail-closed).
+- Quyền đổi: người tự do; điều phối viên chỉ thu hẹp; vòng học nới = `self_escalation`.
+- Given agent có `web_allow_domains: [docs.python.org]` (kể cả trust full), When WebFetch/Chrome navigate tới `https://evil.com/`, Then bị từ chối + audit; When Chrome click (trust full), Then bị từ chối; Given agent không đặt, Then mọi hành vi như trước.
+
 ### 6.11 Web UI (FR-WEB) — thêm ở 0.8, mốc M6
 
 > Web là **client** của daemon qua RPC (như CLI/TUI, `channel=web`), không đọc/ghi `hub.db` trực tiếp, không thêm RPC mới. Starlette + Jinja2 + htmx (vendored, không CDN, không cần build) + SSE. Một người dùng / một máy (Q-11).
