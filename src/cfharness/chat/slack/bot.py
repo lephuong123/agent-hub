@@ -42,7 +42,7 @@ from ... import auth as _auth
 from ...events import HubEvent
 from ...notify.base import QueuedNotifier, clip
 from ...notify.slack import format_message as _slack_format
-from ...notify.telegram import APPROVAL_EVENTS, GOLDEN_SUGGESTION_EVENT
+from ...notify.telegram import APPROVAL_EVENTS, GOLDEN_SUGGESTION_EVENT, esc
 from ..base import _UID, ChatBot
 from ..manager_chat import SILENT
 from ..netlog import TransientLog
@@ -293,6 +293,12 @@ class SlackBot(ChatBot):
 
     def reply_here(self) -> str:
         return "trả lời trong thread của tin này"
+
+    def agent_frame(self, title: str, body: str, tail: list[str]) -> str:
+        """Slack: chữ agent trong trích dẫn (thanh xám bên trái = ranh giới với chữ hub), markdown nhẹ + link http(s) bấm được
+        (render.quote_mrkdwn — vẫn escape `& < >`, không mention/`<!channel>`); dòng hướng dẫn của hub thành chữ nhỏ (context)."""
+        out = f"{title}\n<blockquote>{esc(body)}</blockquote>"
+        return out + ("\n<small>" + "\n".join(tail) + "</small>" if tail else "")
 
     def continue_hint(self, chat: Any = None) -> str:
         if chat is None or str(chat).startswith("D"):

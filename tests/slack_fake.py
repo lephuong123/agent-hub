@@ -200,7 +200,13 @@ class FakeSlack:
 
     @staticmethod
     def text_of(p: dict[str, Any]) -> str:
-        return "\n".join(b["text"]["text"] for b in (p.get("blocks") or []) if b.get("type") == "section")
+        out = []
+        for b in p.get("blocks") or []:
+            if b.get("type") == "section":
+                out.append(b["text"]["text"])
+            elif b.get("type") == "context":  # dòng hướng dẫn chữ nhỏ (vd cuối trả lời điều phối viên)
+                out += [e.get("text", "") for e in b.get("elements") or [] if e.get("type") == "mrkdwn"]
+        return "\n".join(out)
 
     def ref_of(self, button: dict[str, Any]) -> str | None:
         """Id đối tượng mà nút trỏ tới — tin gọn không in id nên test tra qua kho nút của hub."""

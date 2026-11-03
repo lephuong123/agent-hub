@@ -19,7 +19,9 @@
   <button type="button" class="office-switch office-walk" id="office-walk" aria-pressed="false" title="Vào văn phòng (đi bộ)" aria-label="Vào văn phòng (đi bộ)" hidden>🚶</button>
   <button type="button" class="office-switch office-pov" id="office-pov" title="Đổi góc nhìn thứ nhất / thứ ba (V)" aria-label="Đổi góc nhìn thứ nhất / thứ ba" hidden>👁</button>
   <div class="office-fallback" id="office-fallback" hidden>
-    <p>Trình duyệt không vẽ được văn phòng 3D (cần WebGL). Bấm “2D” để dùng giao diện thường.</p>
+    <p data-reason="nogl">Trình duyệt không vẽ được văn phòng 3D (cần WebGL). Bấm “2D” để dùng giao diện thường.</p>
+    <p data-reason="slow" hidden>Văn phòng 3D chạy quá chậm (dưới 10 khung hình/giây liên tục 15 giây — thường do máy đang bận việc khác) nên đã tạm dừng vẽ.<br>
+      <button type="button" class="office-resume" id="office-resume">Tiếp tục 3D</button> hoặc bấm “2D”.</p>
   </div>
   <div class="sr-only">
     <h1>Văn phòng 3D</h1>

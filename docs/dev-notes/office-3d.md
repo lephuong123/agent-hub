@@ -86,7 +86,7 @@ Agent thuộc nhiều team → lấy team đầu tiên (theo `team.list`). `aski
 DOM do template cung cấp (thấy được: chỉ canvas + nút "2D"; từ 2026-11-03 thêm nút 🚶 `#office-walk` / 👁 `#office-pov` của chế độ đi bộ — `office-walk.md`):
 - `#office` (data-state="/office/state", data-sse="/sse/office") chứa `#office-canvas` (vùng vẽ, toàn khung nhìn).
 - `#office-to-2d` — nút tròn "2D" nổi góc phải trên (link `/`; JS xoá `cfh_view` trước khi đi).
-- `#office-fallback` (hidden) — chữ DOM tối thiểu khi không có WebGL/FPS quá thấp (nút "2D" vẫn ở góc).
+- `#office-fallback` (hidden) — chữ DOM tối thiểu khi không có WebGL (hoặc mất context không khôi phục trong 5 s) / FPS < 10 liên tục 15 s (một lần khựng > 1 s không tính; chậm thì giữ renderer + nút "Tiếp tục 3D" `#office-resume`) (nút "2D" vẫn ở góc).
 - Khối `.sr-only` (KHÔNG hiển thị, cho trình đọc màn hình): `#office-hud` (role=status, dòng trạng thái hub), `#office-expired` (hidden
   trừ khi 401), `#office-panel` (aria-live: mô tả nhân vật/bảng đang xem), `#office-list` (aria-live; mỗi agent một `<button>` — Enter →
   camera bay tới + thẻ 3D) + các nút "Toàn cảnh / Xem màn hình trạng thái / bảng công việc / màn hình phòng server / bảng Cần bạn".

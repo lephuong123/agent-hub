@@ -18,7 +18,7 @@ chuỗi hiển thị hay lời gọi Bot API của Telegram — 5 file `tests/te
 | File | Vai trò |
 |---|---|
 | `chat/slack/api.py` | `SlackApi` (httpx2, thân form, gỡ token khỏi lỗi, 429 → `retry_after`), `upload` (files v2) |
-| `chat/slack/render.py` | HTML hub → mrkdwn; escape `& < >`; khối chữ `verbatim`; ` trong khối mã → ˋ; chia section ≤ 2900 (đóng/mở lại ```); nút → `actions` |
+| `chat/slack/render.py` | HTML hub → mrkdwn; escape `& < >`; khối chữ `verbatim`; ` trong khối mã → ˋ; chia section ≤ 2900 (đóng/mở lại ```); nút → `actions`. Trả lời điều phối viên (`bot.agent_frame` → `<blockquote>`, `<small>`): chữ agent thành trích dẫn `>` (thanh xám = ranh giới WT-8, thay cho tiền tố "▼ Agent viết:" + khối mã), markdown nhẹ (`**` → `*`, `#` → đậm, `-` → •), link http(s) bấm được (`[nhãn](url)` → `<url\|nhãn>`; nhãn trông như URL/tên miền → hiện URL thật; trong ``` không link); `<!…>`/`<@…>`/`<url\|…>` agent tự viết vẫn bị escape; dòng hướng dẫn cuối → khối `context` chữ nhỏ. Telegram giữ khung `<pre>` cũ |
 | `chat/slack/bot.py` | `SlackBot(ChatBot)` + `SlackChatNotifier`: Socket Mode (`websockets`), ACK trước xử lý, hàng đợi tuần tự, chống trùng `slack.seen`, thread ≈ reply, `/cfh`, nút, ghép nối `ghepnoi <mã>` |
 | `chat/slack/rpc.py`, `cli.py` | `slack.status|setup|pending|allow|revoke|disable|test`, `cfharness notify slack …` |
 
