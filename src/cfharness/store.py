@@ -809,6 +809,24 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS mem_fact_uses_open ON mem_fact_uses(outcome, used_at);
     CREATE INDEX IF NOT EXISTS mem_fact_uses_fact ON mem_fact_uses(fact_id);
     """,
+    # v21 — tự đề xuất golden task (nhánh golden-suggestions đánh số lại sau v19/v20 của graph memory) từ task `done` (docs/dev-notes/golden-suggestions.md): `id` ngắn (nút/CLI/web), bản nháp
+    # (task, tiêu đề, prompt, checker, hash prompt để chống trùng) và người/kênh/lúc quyết + golden task tạo ra.
+    """
+    ALTER TABLE golden_suggestions ADD COLUMN id TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN task_id TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN title TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN prompt TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN checker TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN prompt_hash TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN decided_by TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN decided_channel TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN decided_at TEXT;
+    ALTER TABLE golden_suggestions ADD COLUMN golden_task_id TEXT;
+    UPDATE golden_suggestions SET id='gs_' || lower(hex(randomblob(5))) WHERE id IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS golden_suggestions_id ON golden_suggestions(id);
+    CREATE INDEX IF NOT EXISTS golden_suggestions_hash ON golden_suggestions(prompt_hash);
+    CREATE INDEX IF NOT EXISTS golden_suggestions_status ON golden_suggestions(status, agent_id);
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.

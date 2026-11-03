@@ -65,4 +65,16 @@
     <td class="actions">{% if g.deleted_at %}{{ m.act("golden_restore", "Khôi phục", {"id": g.id}, "btn sm", confirm="Khôi phục golden task " ~ g.id ~ "?") }}{% else %}{{ m.act("golden_rm", "Xoá", {"id": g.id}, "btn sm ghost", confirm="Xoá golden task " ~ g.id ~ "?") }}{% endif %}</td></tr>{% endfor %}
   </tbody></table>{% endif %}
 </section>
+
+<section class="card" id="golden-suggestions">
+  <h2>Đề xuất golden task</h2>
+  <p class="muted small">Hub tự đề xuất từ task đã xong mà bạn không sửa/hoàn tác. Agent chỉ đề xuất — bạn quyết. Duyệt = tạo golden task chấm bằng LLM judge so với kết quả đã giữ.</p>
+  {% if not golden_sugg %}{{ m.empty("Không có đề xuất đang chờ.") }}{% else %}
+  <table class="tbl stack"><thead><tr><th>Id</th><th>Agent</th><th>Task</th><th>Đề bài</th><th></th></tr></thead><tbody>
+  {% for s in golden_sugg %}<tr><td data-label="Id"><code>{{ s.id }}</code></td><td data-label="Agent">{{ s.agent_id }}</td>
+    <td data-label="Task">{% if s.task_id %}<a href="/tasks/{{ s.task_id }}">{{ s.task_id }}</a>{% else %}<code>{{ s.run_id }}</code>{% endif %}</td>
+    <td data-label="Đề bài">{{ (s.title or s.prompt or s.reason or '')|first(100) }}</td>
+    <td class="actions">{{ m.act("golden_suggestion_approve", "Duyệt", {"id": s.id}, "btn sm") }}{{ m.act("golden_suggestion_reject", "Bỏ qua", {"id": s.id}, "btn sm ghost") }}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
 {% endblock %}
