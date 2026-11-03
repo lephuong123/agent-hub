@@ -34,7 +34,8 @@ KHÔNG dùng PointerLockControls — xoay bằng kéo chuột cho gọn, không 
   (nhỏ hơn đệm tường để qua cửa một ô lưới); `blockedAt` lấy mẫu tâm + 8 điểm; `slideMove` cắt bước ≤ 0,1 m và trượt theo trục khi
   đâm tường. Bấm sàn: đi theo đường A* (đã là ô trống) không kiểm va chạm lại — giống nhân vật agent.
 - `World.rooms`: 8 phòng có tên + điểm `p` bên trong (server, thư viện, phòng họp, điều phối viên, cafe, pantry, phòng nghỉ, hàng ghế chờ);
-  `roomAt(x, z)` → tên phòng trên dòng gợi ý; ngoài phòng = "Khu làm việc". Điểm vào của avatar: `(W − 1,4, D − 1,2)` cạnh cửa ra.
+  `roomAt(x, z)` → tên phòng trên dòng gợi ý; ngoài phòng = "Khu làm việc". Điểm vào của avatar: `spawnPoint(world)` = ô trống gần tâm khu
+  làm việc nhất (giữa dãy phòng bắc và cafe, ngoài mọi phòng), nhìn về phía bắc. (Trước đây `(W − 1,4, D − 1,2)` sát cửa ra — xem "Sửa sau chạy thử".)
 
 ## Tương tác gần (office.js)
 - Mỗi 0,2 s: agent gần nhất ≤ 1,8 m (giữ tới 2,6 m) → tự mở **thẻ thông tin** sẵn có (trạng thái, việc, tool cuối, run, approval + nút
@@ -44,6 +45,19 @@ KHÔNG dùng PointerLockControls — xoay bằng kéo chuột cho gọn, không 
   trong phòng điều phối viên (≤ 2,8 m) → `chat.open()`; gần bảng kanban / màn hình phòng server / bảng Cần bạn / HUD → `showBoard`;
   trước cửa ra → `flows.openLogout()` (xác nhận 3D); agent gần có approval → bảng duyệt, có câu hỏi → bảng trả lời, là điều phối viên → chat.
 - `#office-panel` (sr-only, aria-live) đọc "Chế độ đi bộ… Bạn đang ở <phòng>. Bấm E: …".
+
+## Sửa sau chạy thử trên trình duyệt (chủ hub, dữ liệu hub thật 19 agent) + 2 finding Medium của reviewer PR #54
+- **Điểm xuất hiện sát cửa thoát**: camera dí vào cánh cửa, gợi ý đầu là "[E] Thoát", lùi một chút + bấm là bật "Thoát khỏi cfharness?".
+  → `spawnPoint` giữa khu làm việc (sẽ đổi thành bàn điều phối viên ở task sau). Trong chế độ đi bộ cửa ra **không bấm được** (`pick` bỏ
+  `exitMeshes` → bấm/chạm cửa = bấm sàn, tự đi tới); hộp thoại thoát chỉ mở khi bấm **E** chủ động trước cửa (chế độ toàn cảnh giữ nguyên).
+- **Dòng gợi ý đè đầu hộp thoại / biển tên khu vực** (finding office.js:232): `hintShown(ui)` — ẩn khi có bảng modal, chat hoặc đang xem
+  bảng (`walkBusy`); `hintLayout` gọn hơn (≤ 70 % ngang, ≤ 0,8 chiều cao) và sát **mép dưới** khung nhìn.
+- **Tự chọn agent khi đang mở bảng/chat/modal** (finding office.js:302): `walkProximity` bỏ qua tự chọn/bỏ chọn khi `walkBusy(ui())`;
+  `near` không đổi nên đóng bảng xong lần quét sau mới chọn.
+- **Nhãn tên chồng thành đám (cafe, cụm đông)**: `syncLabels` mỗi khung chiếu nhãn ra màn hình rồi `declutter` (util.js, tham lam theo
+  ưu tiên): luôn hiện agent đang chọn / đang rê chuột; rồi điều phối viên, agent có approval, gần camera, nhãn đang hiện (đỡ nhấp nháy).
+  Đi bộ: chỉ nhãn agent trong 7 m. Nhãn bị ẩn vẫn có trong danh sách sr-only.
+- Low: phím E/V trong chế độ đi bộ cũng `preventDefault` (focus đang ở nút 🚶/link); sửa tên test trong comment `office_layout_check.mjs`.
 
 ## An toàn
 - Đi bộ chỉ là cách XEM: `walk.js` không gọi mạng, không đọc khoá phiên/CSRF, không dựng HTML (test tĩnh khoá lại). Mọi thao tác từ
@@ -62,7 +76,10 @@ KHÔNG dùng PointerLockControls — xoay bằng kéo chuột cho gọn, không 
 - `tests/office_layout_check.mjs` (commit theo finding Low của reviewer PR #52) + `tests/test_office_walk.py` gọi nó: dựng `World` thật
   (canvas giả) với 1/5/19/40/80 agent, có/không team: số chỗ cafe + giữ chỗ, không chồng lấn, A* bàn → cafe/pantry/quầy/ghế chờ/cửa ra,
   **avatar từ điểm vào tới được cả 8 phòng**, đi thẳng bằng phím qua cửa 4 phòng phía bắc, không xuyên vách server|thư viện, vách trước
-  phòng, tường bắc. Thêm `node --check` mọi file JS office, test tĩnh "chỉ là cách xem", test template nút chuyển.
+  phòng, tường bắc; **điểm xuất hiện** không bị chặn, ngoài phòng, cách cửa ra ≥ 4 m, gần giữa bề ngang. `tests/office_walk_ui_check.mjs`
+  (hàm thuần): gợi ý ẩn khi modal/chat/bảng mở + nằm nửa dưới; không tự chọn khi bận; declutter. Test tĩnh: cửa ra không nằm trong `pick`
+  khi đi bộ, `walkProximity` gác `walkBusy`, `hint.sprite.visible` chỉ đặt qua `hintShown`. Thêm `node --check` mọi file JS office,
+  test tĩnh "chỉ là cách xem", test template nút chuyển.
 - **Chưa kiểm hình** bằng trình duyệt (run không có trình duyệt): cảm giác điều khiển, góc camera, độ mờ tường, màu theo giờ, FPS.
 
 ## Rủi ro còn lại

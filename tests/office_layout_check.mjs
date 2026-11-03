@@ -1,7 +1,7 @@
 // Kiểm bố cục văn phòng 3D KHÔNG cần trình duyệt (Node ≥ 18): dựng World thật (static/office/world.js) với canvas giả, rồi kiểm
 // số chỗ, chồng lấn, A* tới được (bàn ↔ cafe ↔ pantry/quầy/cửa ra) và chế độ đi bộ: avatar từ cửa vào tới được MỌI phòng
 // (bấm sàn = đi theo A*), đi thẳng bằng phím qua cửa phòng được (va chạm của walk.js), không xuyên được tường/vách. In một dòng mỗi ca; lỗi → exit 1.
-// Chạy: node tests/office_layout_check.mjs <thư mục gốc repo>   (tests/test_office_layout.py gọi script này)
+// Chạy: node tests/office_layout_check.mjs <thư mục gốc repo>   (tests/test_office_walk.py gọi script này)
 const ctx = new Proxy({}, {
   get: (t, k) => (k === 'measureText' ? () => ({ width: 10 }) : k in t ? t[k] : () => ({ addColorStop() {} })),
   set: (t, k, v) => { t[k] = v; return true; },
@@ -10,7 +10,7 @@ globalThis.document = { createElement: () => ({ width: 0, height: 0, getContext:
 const root = process.argv[2].replace(/\\/g, '/');
 const url = (p) => (root.startsWith('/') ? 'file://' : 'file:///') + root + '/src/cfharness/web/static/office/' + p;
 const { World } = await import(url('world.js'));
-const { blockedAt, slideMove, WALK_R } = await import(url('walk.js'));
+const { blockedAt, slideMove, spawnPoint, WALK_R } = await import(url('walk.js'));
 
 let fails = 0;
 const bad = (m) => { fails++; console.log('FAIL ' + m); };
@@ -43,8 +43,12 @@ for (const n of [1, 5, 19, 40, 80]) for (const withTeams of [false, true]) {
   }
   if (!reach(g, seat0, entrance)) bad(`${tag}: bàn → cửa ra`);
   // chế độ đi bộ: điểm vào của avatar không bị chặn; tới được mọi phòng (A* + đi có va chạm)
-  const start = { x: w.W - 1.4, z: w.D - 1.2 };
+  // điểm xuất hiện: giữa khu làm việc (ngoài mọi phòng), xa cửa ra (≥ 4 m: không vừa vào đã thấy "[E] Thoát" / camera dí vào cửa)
+  const start = spawnPoint(w);
   if (blockedAt(g, start.x, start.z, WALK_R)) bad(`${tag}: điểm vào của avatar bị chặn`);
+  if (w.roomAt(start.x, start.z)) bad(`${tag}: điểm vào nằm trong phòng ${w.roomAt(start.x, start.z).key}`);
+  if (Math.hypot(w.W - 1.4 - start.x, w.D - start.z) < 4) bad(`${tag}: điểm vào sát cửa ra (${start.x.toFixed(1)},${start.z.toFixed(1)})`);
+  if (Math.abs(start.x - w.W / 2) > w.W * 0.25) bad(`${tag}: điểm vào không ở giữa văn phòng (x=${start.x.toFixed(1)}, W=${w.W})`);
   const keys = w.rooms.map((r) => r.key).sort().join(',');
   if (keys !== 'bench,cafe,library,lounge,meeting,mgr,pantry,server') bad(`${tag}: danh sách phòng ${keys}`);
   for (const r of w.rooms) {

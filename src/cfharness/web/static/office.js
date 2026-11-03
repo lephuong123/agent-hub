@@ -10,12 +10,12 @@ import * as THREE from './vendor/three-0.169.0/three.module.min.js';
 import { OrbitControls } from './vendor/three-0.169.0/OrbitControls.js';
 import { World, layoutKey } from './office/world.js';
 import { Actor, STATUS_VI } from './office/actors.js';
-import { NO_TEAM_COLOR, scaleLabel } from './office/util.js';
+import { NO_TEAM_COLOR, scaleLabel, declutter } from './office/util.js';
 import { drawHud, drawKanban, drawRuns, drawNeeds, drawCard, drawApprovalTag, drawSign, TextSprite, fmtUsd } from './office/boards.js';
 import { makeApi, Modals, createFlows } from './office/flows.js';
 import { createChat } from './office/chat.js';
 import { FONT, roundRect } from './office/util.js';
-import { Walker } from './office/walk.js';
+import { Walker, walkBusy, hintShown, hintLayout } from './office/walk.js';
 
 const $ = (id) => document.getElementById(id);
 const KCOL_VI = { ready: 'Sẵn sàng', running: 'Đang làm', review: 'Review', blocked: 'Kẹt' };
@@ -232,11 +232,13 @@ function main() {
   const hint = new TextSprite(1100, 150, 1, { depthTest: false, order: 1900 });
   hint.sprite.visible = false; camera.add(hint.sprite);
   let near = null, autoSel = false, walkHere = null, walkYield = true, nearAt = 0;
+  // trạng thái giao diện cho chính sách đi bộ (walk.js): có bảng modal / chat / bảng đang xem → ẩn gợi ý, không tự chọn agent
+  const ui = () => ({ walk: walk.active, modal: modals.open, chat: chat.isOpen, board: !!focusBoard });
+  // dòng gợi ý: gọn, sát mép dưới khung nhìn (không đè biển tên khu vực / đầu hộp thoại)
   function fitHint() {
-    const d = 1.5, vh = 2 * d * Math.tan((camera.fov * Math.PI) / 360), vw = vh * camera.aspect;
-    const w = Math.min(vw * 0.86, vh * 0.95), h = (w * 150) / 1100;
-    hint.sprite.scale.set(w, h, 1);
-    hint.sprite.position.set(0, vh / 2 - h * 0.75, -d);
+    const L = hintLayout(camera.fov, camera.aspect);
+    hint.sprite.scale.set(L.w, L.h, 1);
+    hint.sprite.position.set(0, L.y, -L.d);
   }
   function setWalk(on) {
     if (!world || !renderer || on === walk.active) return;
@@ -249,7 +251,7 @@ function main() {
       controls.target.copy(camera.position).addScaledVector(f, 4);
       if (overview) flyTo(overview.pos, overview.target);
     }
-    hint.sprite.visible = on;
+    hint.sprite.visible = hintShown(ui());
     if (walkBtn) { walkBtn.setAttribute('aria-pressed', on ? 'true' : 'false'); walkBtn.title = on ? 'Ra toàn cảnh' : 'Vào văn phòng (đi bộ)'; walkBtn.setAttribute('aria-label', walkBtn.title); }
     if (povBtn) povBtn.hidden = !on;
     syncControls(); renderSrPanel();
@@ -297,7 +299,8 @@ function main() {
       if (d < bd || (a.id === near && d < 2.6 && !best)) { bd = Math.min(bd, d); best = a; }
     }
     const id = best ? best.id : null;
-    if (id !== near) {
+    // đang mở bảng modal / chat / bảng: không tự chọn/bỏ chọn (select đóng bảng đang xem) — xét lại khi đóng
+    if (id !== near && !walkBusy(ui())) {
       near = id;
       if (best) { best.greet(p.x, p.z, now); if (!selected || autoSel) { select(id, false); autoSel = true; } }
       else if (autoSel) { select(null); autoSel = false; }
@@ -525,7 +528,7 @@ function main() {
   // ------------------------------------------------------------ chuột: nhân vật / bảng / sàn trống
   const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
   ray.camera = camera;
-  let down = null;
+  let down = null, hoverId = null;
   function pick(ev) {
     const r = cvs.getBoundingClientRect();
     ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
@@ -534,7 +537,8 @@ function main() {
     if (card.sprite.visible) objs.push(card.sprite);
     for (const ts of tags.values()) if (ts.sprite.visible) objs.push(ts.sprite);
     objs.push(...[...actors.values()].map((a) => a.chibi.group));
-    if (world) objs.push(...world.focusables, ...(world.exitMeshes || []), chat.panel.mesh);
+    // chế độ đi bộ: cửa ra KHÔNG bấm được (bấm/chạm cửa chỉ là bấm sàn) — hộp thoại thoát chỉ mở khi bấm E chủ động
+    if (world) objs.push(...world.focusables, ...(walk.active ? [] : world.exitMeshes || []), chat.panel.mesh);
     for (const h of ray.intersectObjects(objs, true)) {
       let o = h.object;
       if (o === card.sprite) {
@@ -610,8 +614,11 @@ function main() {
       hoverAt = n;
       const pnl = modals.open ? modals.top : chat.isOpen ? chat.panel : null;
       if (pnl) { const uv = panelUV(e, pnl); cvs.style.cursor = pnl.hover(uv) ? 'pointer' : ''; return; }
-      cvs.style.cursor = pick(e) ? 'pointer' : '';
+      const p = pick(e);
+      cvs.style.cursor = p ? 'pointer' : '';
+      hoverId = (p && p.actor) || null; // rê chuột lên agent → luôn hiện tên
     });
+    cvs.addEventListener('pointerleave', () => { hoverId = null; });
   }
   function panelUV(ev, pnl) {
     const r = cvs.getBoundingClientRect();
@@ -626,9 +633,10 @@ function main() {
     if (walk.active && e.key !== 'Escape') {
       // phím đi bộ: chỉ khi không có bảng/chat mở và không đang gõ chữ (ô chat ẩn, ô ghi chú)
       if (modals.open || chat.isOpen || typing(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+      // preventDefault cả khi focus đang ở nút/link (vd. vừa bấm 🚶): mũi tên không cuộn trang, E/V không kích hoạt gì khác
       if (walk.key(e.code, true, e.shiftKey)) { e.preventDefault(); if (focusBoard) toOverview(); return; }
-      if (e.code === 'KeyV' && !e.repeat) { walk.togglePov(); renderSrPanel(); return; }
-      if (e.code === 'KeyE' && !e.repeat) { walkInteract(); return; }
+      if (e.code === 'KeyV') { e.preventDefault(); if (!e.repeat) { walk.togglePov(); renderSrPanel(); } return; }
+      if (e.code === 'KeyE') { e.preventDefault(); if (!e.repeat) walkInteract(); return; }
       return;
     }
     if (e.key !== 'Escape') return;
@@ -691,10 +699,11 @@ function main() {
       world.setLabelScale(lf);
       const quiet = !!focusBoard || chat.isOpen || modals.open;
       world.setSignsVisible(!quiet);
-      for (const a of actors.values()) a.chibi.label.visible = !quiet;
       world.update(dt, now, reduced);
       for (const a of actors.values()) { a.chibi.labelScale = lf; a.update(dt, now, now, reduced, world.estop); }
+      syncLabels(quiet);
     }
+    hint.sprite.visible = hintShown(ui());
     // camera bay
     if (tween) {
       tween.k = Math.min(1, tween.k + dt / 1.0);
@@ -752,6 +761,32 @@ function main() {
         if (fps < 10) disableRender();
       }
     }
+  }
+  // Nhãn tên agent: không để chồng thành một đám (cafe, cụm bàn đông). Luôn hiện: agent đang chọn / rê chuột; đi bộ: chỉ agent
+  // trong bán kính 7 m; còn lại tránh chồng trên màn hình (declutter) — ưu tiên điều phối viên, agent có approval, gần camera,
+  // nhãn đang hiện (đỡ nhấp nháy khi agent đi lại).
+  const lv = new THREE.Vector3();
+  function syncLabels(quiet) {
+    const sh = Math.max(1, host.clientHeight), sw = Math.max(1, host.clientWidth);
+    const ppu = sh / (2 * Math.tan((camera.fov * Math.PI) / 360)); // pixel trên 1 m ở khoảng cách 1 m
+    const aps = new Set(((state && state.approvals) || []).map((x) => x.agent));
+    const items = [];
+    for (const a of actors.values()) {
+      const L = a.chibi.label;
+      if (!L) continue;
+      if (quiet || !a.pos) { L.visible = false; continue; }
+      const must = a.id === selected || a.id === hoverId;
+      if (!must && walk.active && walk.pos && Math.hypot(a.pos.x - walk.pos.x, a.pos.z - walk.pos.z) > 7) { L.visible = false; continue; }
+      L.getWorldPosition(lv);
+      const dist = Math.max(0.1, lv.distanceTo(camera.position));
+      lv.project(camera);
+      if (lv.z > 1 || Math.abs(lv.x) > 1.2 || Math.abs(lv.y) > 1.2) { L.visible = false; continue; }
+      const k = ppu / dist;
+      items.push({ id: a.id, L, x: (lv.x + 1) * sw / 2, y: (1 - lv.y) * sh / 2, w: L.scale.x * k * 0.8, h: L.scale.y * k * 0.75,
+        pri: (must ? 100 : 0) + (a.isManager ? 20 : 0) + (aps.has(a.id) ? 10 : 0) + (L.visible ? 2 : 0) - dist * 0.01 });
+    }
+    const keep = declutter(items);
+    for (const it of items) it.L.visible = keep.has(it.id);
   }
   function clampTarget() {
     if (!world) return;

@@ -37,6 +37,33 @@ export function slideMove(grid, x, z, dx, dz, r) {
   return { x, z };
 }
 
+// Điểm xuất hiện khi bấm 🚶: ô trống gần tâm khu làm việc nhất (giữa dãy phòng phía bắc và cafe, ngoài mọi phòng), xa cửa ra —
+// không còn đứng sát cửa thoát (camera dí vào cánh cửa, gợi ý đầu tiên là "[E] Thoát"). Hướng nhìn: phía bắc, vào trong văn phòng.
+export function spawnPoint(world) {
+  const g = world.grid, north = world.rooms.find((r) => r.key === 'server');
+  const tx = world.W / 2, tz = ((north ? north.z1 : 6) + (world.cafe ? world.cafe.z0 : world.D / 2)) / 2;
+  let best = null, bd = Infinity;
+  for (let r = 0; r < g.rows; r++) {
+    for (let c = 0; c < g.cols; c++) {
+      const [x, z] = g.center(c, r), d = Math.hypot(x - tx, z - tz);
+      if (d < bd && !world.roomAt(x, z) && !blockedAt(g, x, z, WALK_R)) { best = { x, z }; bd = d; }
+    }
+  }
+  return best || { x: world.W - 1.4, z: world.D - 1.2 };
+}
+
+// ui = { walk, modal, chat, board } (đang đi bộ / có bảng modal / chat / đang xem bảng). Khi có thứ đang mở: KHÔNG tự chọn agent theo
+// khoảng cách (chọn → bảng/chat tự đóng) và ẩn dòng gợi ý (nó đè lên đầu hộp thoại).
+export const walkBusy = (ui) => !!(ui.modal || ui.chat || ui.board);
+export const hintShown = (ui) => !!ui.walk && !walkBusy(ui);
+// Dòng gợi ý gắn camera, cách d: gọn (≤ 70 % bề ngang, ≤ 0,8 chiều cao) và nằm sát MÉP DƯỚI khung nhìn — không trùng biển tên khu vực
+// (treo cao trong cảnh) và đầu hộp thoại. Trả { w, h, y, d } theo đơn vị thế giới (hệ toạ độ camera).
+export function hintLayout(fov, aspect) {
+  const d = 1.5, vh = 2 * d * Math.tan((fov * Math.PI) / 360), vw = vh * aspect;
+  const w = Math.min(vw * 0.7, vh * 0.8), h = (w * 150) / 1100;
+  return { w, h, y: -vh / 2 + h * 0.5 + vh * 0.025, d };
+}
+
 export class Walker {
   constructor(opts) {
     this.camera = opts.camera;
@@ -52,7 +79,7 @@ export class Walker {
     this._ray = new THREE.Raycaster(); this._v = new THREE.Vector3(); this._head = new THREE.Vector3();
   }
 
-  // Vào chế độ đi bộ: đứng ở cửa ra vào (góc đông nam), nhìn về phía bắc vào văn phòng.
+  // Vào chế độ đi bộ: đứng giữa khu làm việc (spawnPoint), nhìn về phía bắc vào văn phòng.
   enter(world) {
     this.active = true; this.camInit = false; this.keys.clear(); this.path = [];
     this.setWorld(world, true);
@@ -66,7 +93,7 @@ export class Walker {
   // Văn phòng dựng lại (thêm/bớt agent): giữ vị trí nếu còn đi được, không thì về ô trống gần nhất.
   setWorld(world, reset) {
     this.world = world;
-    if (reset || !this.pos) { this.pos = { x: world.W - 1.4, z: world.D - 1.2 }; this.yaw = this.view = Math.PI; }
+    if (reset || !this.pos) { this.pos = spawnPoint(world); this.yaw = this.view = Math.PI; }
     if (blockedAt(world.grid, this.pos.x, this.pos.z, WALK_R)) {
       const g = world.grid, [c, r] = g.nearestFree(...g.cellOf(this.pos.x, this.pos.z)), [x, z] = g.center(c, r);
       this.pos = { x, z };

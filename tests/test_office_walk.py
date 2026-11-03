@@ -1,7 +1,9 @@
 """Văn phòng 3D — chế độ "Vào văn phòng" (đi bộ) + kiểm bố cục không trình duyệt (docs/dev-notes/office-walk.md).
 
 - Kiểm bố cục: chạy `tests/office_layout_check.mjs` bằng Node (dựng World thật với canvas giả): số chỗ, chồng lấn, A* tới được,
-  avatar từ cửa vào tới được mọi phòng, đi thẳng qua cửa được, không xuyên tường. Không có Node → skip.
+  điểm xuất hiện của avatar ở giữa khu làm việc (xa cửa ra), tới được mọi phòng, đi thẳng qua cửa được, không xuyên tường.
+- Chính sách giao diện (`tests/office_walk_ui_check.mjs`, hàm thuần của walk.js/util.js): gợi ý ẩn khi modal/chat/bảng mở và nằm
+  sát mép dưới; không tự chọn agent khi đang mở các thứ đó; nhãn tên tránh chồng. Không có Node → skip.
 - Tĩnh: nút chuyển chế độ trong office.html, walk.js không gọi mạng / không dựng HTML (đi bộ chỉ là cách XEM).
 """
 
@@ -32,6 +34,43 @@ def test_office_layout_and_walk_reachability():
     assert r.stdout.count("ok n=") == 10, r.stdout
 
 
+@pytest.mark.skipif(not NODE, reason="cần Node để import module walk.js/util.js")
+def test_walk_ui_policy_headless():
+    r = subprocess.run([NODE, str(ROOT / "tests" / "office_walk_ui_check.mjs"), str(ROOT)], capture_output=True, text=True,
+                       encoding="utf-8", timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "FAIL" not in r.stdout and r.stdout.count("ok ") >= 14, r.stdout
+
+
+def _fn(src: str, head: str) -> str:
+    body = src[src.index(head):]
+    return body[:body.index("\n  }\n")]
+
+
+def test_walk_exit_door_only_on_e():
+    """Chạm/bấm cửa ra trong chế độ đi bộ KHÔNG mở hộp thoại thoát; chỉ [E] (walkInteract) mở. Điểm xuất hiện không ở cửa."""
+    office_js = (STATIC / "office.js").read_text(encoding="utf-8")
+    pick = _fn(office_js, "function pick(ev)")
+    assert "...(walk.active ? [] : world.exitMeshes || [])" in pick, "cửa ra vẫn bấm được trong chế độ đi bộ"
+    assert pick.count("exitMeshes") == 1
+    assert "flows.openLogout()" in _fn(office_js, "function walkInteract()")
+    walk = (STATIC / "office" / "walk.js").read_text(encoding="utf-8")
+    assert "this.pos = spawnPoint(world)" in walk and "this.pos = { x: world.W - 1.4, z: world.D - 1.2 }" not in walk
+
+
+def test_walk_hint_and_autoselect_respect_open_panels():
+    """Gợi ý ẩn khi modal/chat/bảng mở (finding office.js:232); walkProximity không tự chọn agent khi đó (finding office.js:302)."""
+    office_js = (STATIC / "office.js").read_text(encoding="utf-8")
+    assert "const ui = () => ({ walk: walk.active, modal: modals.open, chat: chat.isOpen, board: !!focusBoard });" in office_js
+    prox = _fn(office_js, "function walkProximity(now)")
+    assert "if (id !== near && !walkBusy(ui())) {" in prox
+    # mọi chỗ select() trong walkProximity nằm sau cổng walkBusy
+    assert prox.index("walkBusy(ui())") < prox.index("select(")
+    # hiện/ẩn gợi ý chỉ qua hintShown (mỗi khung + lúc bật/tắt), vị trí qua hintLayout
+    assert re.findall(r"hint\.sprite\.visible = ([^;]+);", office_js) == ["false", "hintShown(ui())", "hintShown(ui())"]
+    assert "hintLayout(camera.fov, camera.aspect)" in _fn(office_js, "function fitHint()")
+
+
 @pytest.mark.skipif(not NODE, reason="cần Node cho node --check")
 def test_office_js_syntax():
     files = [STATIC / "office.js", *sorted((STATIC / "office").glob("*.js"))]
@@ -50,7 +89,7 @@ def test_walk_module_is_view_only():
     imports = re.findall(r"^import .* from '([^']+)';", walk, re.M)
     assert imports and all(i.startswith("./") or i == "../vendor/three-0.169.0/three.module.min.js" for i in imports), imports
     office_js = (STATIC / "office.js").read_text(encoding="utf-8")
-    assert "import { Walker } from './office/walk.js';" in office_js
+    assert "import { Walker, walkBusy, hintShown, hintLayout } from './office/walk.js';" in office_js
     # thao tác từ chế độ đi bộ đi qua đúng luồng sẵn có (chat / bảng / flows), không có đường ghi riêng
     fn = office_js[office_js.index("function walkInteract()"):]
     fn = fn[:fn.index("\n  }\n")]
