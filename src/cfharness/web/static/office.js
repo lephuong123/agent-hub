@@ -94,7 +94,8 @@ function main() {
   let envTex = null;
   function applyEnv() {
     if (!renderer) return;
-    if (tier === 'high') { if (!envTex) envTex = makeEnvironment(renderer); scene.environment = envTex; } else scene.environment = null;
+    if (tier === 'high') { if (!envTex) envTex = makeEnvironment(renderer); scene.environment = envTex; }
+    else { scene.environment = null; if (envTex) { envTex.dispose(); envTex = null; } } // low: không giữ PMREM (render target) trên GPU
   }
   applyEnv();
   scene.fog = new THREE.Fog('#faf9f5', 60, 140);
@@ -869,7 +870,7 @@ function main() {
       if (ts - fpsStart >= 5000) {
         const fps = fpsFrames / ((ts - fpsStart) / 1000);
         fpsFrames = 0; fpsStart = ts;
-        if (tier === 'high') { lowWins = fps < 24 ? lowWins + 1 : 0; if (lowWins >= 2) { lowWins = 0; setQuality('low'); } }
+        if (tier === 'high') { lowWins = fps < 24 ? lowWins + 1 : 0; if (lowWins >= 2) { lowWins = 0; slowWins = 0; setQuality('low'); fpsStart = 0; fpsFrames = 0; return; } }
         slowWins = fps < 10 ? slowWins + 1 : 0;
         if (slowWins >= 3) disableRender('slow');
       }

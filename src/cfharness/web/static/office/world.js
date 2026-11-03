@@ -1094,6 +1094,8 @@ export class World {
     this.batch.dispose();
     if (this.lampBatch) this.lampBatch.dispose();
     for (const im of [this.ledMesh, this.books]) if (im) { im.geometry.dispose(); im.material.dispose(); im.dispose(); }
+    // shadow map 2048² của đèn nắng (WebGLRenderTarget) — không dispose thì mỗi lần dựng lại World rò một render target
+    for (const l of [this.dir, this.fill, this.hemi]) if (l) l.dispose();
     this.group.removeFromParent();
   }
 }
