@@ -145,3 +145,66 @@ async def test_coordinator_owner_permission_never_carries_always(d):
     action, _desc = owner_actions.build(d.hub, "approve_action", {"approval_id": ap["id"], "always": True, "always_confirm": ap["action_fingerprint"]})
     assert action["method"] == "approval.approve" and action["params"] == {"id": ap["id"]}
     await _finish(d, ap["id"], task)
+
+
+# ============================================================================ grant_rule: "Không hỏi lại luật này" từ client MCP
+async def test_human_mcp_grant_rule_allows_same_rule_later_and_audits(d):
+    rid, task, ap = await _held(d, DESTRUCTIVE)
+    rule = ap["matched_rule"]
+    assert rule
+    async with Client(mcp_for(d, HUMAN)) as c:
+        tools = {t.name: t for t in (await c.list_tools()).tools}
+        props = tools["hub_approve"].input_schema["properties"]
+        assert "grant_rule" in props and "grant_for" in props and "matched_rule" in tools["hub_approve"].description
+        reqs = (await c.call_tool("hub_open_requests", {})).structured_content["requests"]
+        assert next(r for r in reqs if r["id"] == ap["id"])["matched_rule"] == rule
+        res = await c.call_tool("hub_approve", {"request_id": ap["id"], "grant_rule": True, "confirm_rule": rule, "grant_for": "8h"})
+        assert not res.is_error, res.content
+        g = res.structured_content["rule_grant"]
+    assert g["agent_id"] == "w" and g["rule"] == rule and g["until"] and g["channel"].startswith("mcp:") and g["approval_id"] == ap["id"]
+    assert (await asyncio.wait_for(task, 20))["decision"] == "allow"
+    assert d.hub.guard.rule_grants()["w"][rule]["until"] == g["until"]
+    rows = d.hub.store.conn.execute("SELECT data FROM audit_log WHERE kind='guard.rule_grant'").fetchall()
+    assert len(rows) == 1 and ap["id"] in rows[0][0]
+    # lần sau: cùng agent + cùng luật (kể cả phá huỷ) → cho phép không hỏi
+    assert (await asyncio.wait_for(d.hub.guard.check({"run_id": rid, "tool_name": "Bash", "tool_input": {"command": DESTRUCTIVE},
+                                                         "channel": "hook"}), 20))["decision"] == "allow"
+
+
+async def test_human_mcp_grant_rule_forever_has_no_expiry(d):
+    _, task, ap = await _held(d, DESTRUCTIVE)
+    async with Client(mcp_for(d, HUMAN)) as c:
+        res = await c.call_tool("hub_approve", {"request_id": ap["id"], "grant_rule": True, "confirm_rule": ap["matched_rule"], "grant_for": "forever"})
+        assert not res.is_error, res.content
+    assert res.structured_content["rule_grant"]["until"] is None
+    assert (await asyncio.wait_for(task, 20))["decision"] == "allow"
+
+
+@pytest.mark.parametrize("bad", [
+    {"grant_for": "8h"},                                         # thiếu confirm_rule
+    {"confirm_rule": "sai_luat", "grant_for": "8h"},             # confirm_rule không khớp matched_rule (daemon từ chối)
+    {"confirm_rule": "@rule"},                                   # thiếu thời hạn: phải chọn rõ như bước 2 của web
+    {"confirm_rule": "@rule", "grant_for": "mãi"},              # thời hạn sai định dạng
+    {"confirm_rule": "@rule", "grant_for": "8h", "always": True},  # always và grant_rule loại trừ nhau
+])
+async def test_mcp_grant_rule_bad_args_keep_request_pending(d, bad):
+    _, task, ap = await _held(d, DESTRUCTIVE)
+    args = {"request_id": ap["id"], "grant_rule": True, **{k: (ap["matched_rule"] if v == "@rule" else v) for k, v in bad.items()}}
+    async with Client(mcp_for(d, HUMAN)) as c:
+        res = await c.call_tool("hub_approve", args)
+        assert res.is_error
+        # grant_for không đi kèm grant_rule → lỗi, không duyệt một lần ngầm
+        res = await c.call_tool("hub_approve", {"request_id": ap["id"], "grant_for": "8h"})
+        assert res.is_error
+    assert _pending(d, ap["id"]) and d.hub.guard.rule_grants() == {}
+    await _finish(d, ap["id"], task)
+
+
+async def test_mcp_grant_rule_from_agent_caller_blocked(d):
+    rid, task, ap = await _held(d, DESTRUCTIVE)
+    agent = auth.Caller(via="socket", token_ok=True, run_id=rid, agent_id="w", evidence=[f"ppid:{rid}"])
+    async with Client(mcp_for(d, agent)) as c:
+        res = await c.call_tool("hub_approve", {"request_id": ap["id"], "grant_rule": True, "confirm_rule": ap["matched_rule"], "grant_for": "forever"})
+        assert res.is_error and "NGƯỜI" in res.content[0].text
+    assert _pending(d, ap["id"]) and d.hub.guard.rule_grants() == {}
+    await _finish(d, ap["id"], task)

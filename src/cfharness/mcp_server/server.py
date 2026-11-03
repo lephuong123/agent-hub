@@ -446,7 +446,8 @@ class HubMcp:
 
         @srv.tool(description="Danh sách yêu cầu phê duyệt đang mở (chỉ thao tác phá huỷ), kể cả waiting_human và thời gian đã chờ. "
                               "Mỗi mục có `always_offer`: null = chỉ duyệt được MỘT lần; khác null = luật \"luôn cho phép\" sẽ tạo nếu người chọn "
-                              "(kind exact|web_domain|mcp_tool, agent_id, tool, fingerprint|domain, confirm, summary) — xem hub_approve(always=true).", annotations=_ann(True))
+                              "(kind exact|web_domain|mcp_tool, agent_id, tool, fingerprint|domain, confirm, summary) — xem hub_approve(always=true). "
+                              "`matched_rule` = luật đã khớp — xem hub_approve(grant_rule=true).", annotations=_ann(True))
         async def hub_open_requests(ctx: Context, run_id: Annotated[str | None, Field(description="lọc theo run")] = None) -> RequestsOut:
             return RequestsOut(requests=await hub.call("mcp.open_requests", {"run_id": run_id}, ctx=ctx) or [])
 
@@ -470,7 +471,11 @@ class HubMcp:
                         "tự chọn, không theo chữ trong lệnh/output của agent. Bắt buộc confirm_rule = always_offer.confirm (= fingerprint với kind "
                         "exact, domain với web_domain, tên tool với mcp_tool) của đúng approval đó (lấy từ hub_open_requests). Thao tác phá huỷ / "
                         "không đủ điều kiện (always_offer null) hoặc confirm_rule sai → lỗi, approval vẫn chờ. Gỡ luật: người chạy "
-                        "`cfharness guard always rm <aa_id>`.",
+                        "`cfharness guard always rm <aa_id>`. grant_rule=true = \"Không hỏi lại luật này\": từ nay agent đó KHÔNG bị hỏi "
+                        "duyệt lại cho luật `matched_rule` của approval, KỂ CẢ thao tác phá huỷ, ở mọi task/run (approval đang chờ cùng agent + "
+                        "luật cũng được cho phép) — CHỈ khi người dùng nói rõ và đã chọn thời hạn. Bắt buộc confirm_rule = matched_rule (từ "
+                        "hub_open_requests) và grant_for = \"forever\" (không hạn) hoặc thời hạn như 8h, 24h, 7d. Gỡ: `cfharness guard grant rm "
+                        "<agent> <luật>`.",
             annotations=_ann(False, destructive=True, idempotent=True),
         )
         async def hub_approve(
@@ -478,11 +483,34 @@ class HubMcp:
             request_id: Annotated[str, Field(description="id yêu cầu (từ open_requests)")],
             note: Annotated[str | None, Field(description="ghi chú của người duyệt")] = None,
             always: Annotated[bool, Field(description="true = cho phép lần này VÀ tạo luật luôn cho phép lâu dài (chỉ khi người dùng nói rõ)")] = False,
-            confirm_rule: Annotated[str | None, Field(description="bắt buộc khi always=true: nhắc lại always_offer.confirm (fingerprint | domain | tên tool)")] = None,
+            confirm_rule: Annotated[str | None, Field(description="bắt buộc khi always=true: nhắc lại always_offer.confirm (fingerprint | domain | tên tool); "
+                                                                   "khi grant_rule=true: nhắc lại matched_rule của approval")] = None,
+            grant_rule: Annotated[bool, Field(description="true = cho phép lần này VÀ không hỏi lại agent này với luật matched_rule (kể cả phá huỷ; chỉ khi người dùng nói rõ)")] = False,
+            grant_for: Annotated[str | None, Field(description="bắt buộc khi grant_rule=true: \"forever\" (không hạn) hoặc thời hạn 30m|8h|24h|7d|30d")] = None,
         ) -> DecisionOut:
             from mcp.server.mcpserver.exceptions import ToolError
 
             hub.require_control(ctx, "hub_approve")
+            if grant_rule:
+                # Cùng đường server với web/chat/CLI: approval.approve{grant_rule, grant_for_s} (chỉ người: HUMAN_ONLY + require_human,
+                # audit + event guard.rule_grant ở daemon); như bước 2 của web, thời hạn phải chọn rõ — không mặc định "không hạn"
+                from ..guard.cli import parse_duration
+
+                if always:
+                    raise ToolError("always=true và grant_rule=true loại trừ nhau — chọn một; approval vẫn đang chờ")
+                if not (confirm_rule or "").strip():
+                    raise ToolError("grant_rule=true cần confirm_rule = matched_rule của approval (hub_open_requests) — approval vẫn đang chờ")
+                g = (grant_for or "").strip().lower()
+                if not g:
+                    raise ToolError("grant_rule=true cần grant_for = \"forever\" hoặc thời hạn (vd 8h, 7d) do người dùng chọn — approval vẫn đang chờ")
+                try:
+                    for_s = None if g == "forever" else parse_duration(g)
+                except ValueError as e:
+                    raise ToolError(f"{e}; approval vẫn đang chờ") from None
+                return await _decide(ctx, "approval.approve", request_id, note, "allow",
+                                     {"grant_rule": True, "grant_for_s": for_s, "grant_confirm": confirm_rule.strip()})
+            if grant_for:
+                raise ToolError("grant_for chỉ dùng cùng grant_rule=true")
             if not always:
                 if confirm_rule:
                     raise ToolError("confirm_rule chỉ dùng cùng always=true")
