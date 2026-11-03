@@ -142,7 +142,7 @@ class ManagerOps:
         for r in h.store.list_agents():
             agents.append({"id": r["id"], "name": r.get("name"), "role": r.get("role"), "description": (r.get("description") or "")[:240],
                            "model": r.get("model"), "status": r.get("status"), "cost_today_usd": round(h.store.cost_today(r["id"]), 4),
-                           "manager": r["id"] == self.mid})
+                           "manager": r["id"] == self.mid, "teams": self.svc.perms.teams_of(r["id"])})
         teams = [{"id": t["id"], "name": t.get("name"), "estop": bool(t.get("estop")), "counts": t.get("counts"),
                   "members": [{"agent_id": m.get("agent_id"), "role": m.get("role")} for m in t.get("members") or []]} for t in h.teams.list()]
         open_tasks = [{k: t.get(k) for k in ("id", "title", "team_id", "assignee_agent_id", "status", "wait_reason", "block_reason", "created_by", "updated_at")}
@@ -350,13 +350,20 @@ class ManagerOps:
         t = {k: a[k] for k in ("title", "body", "team", "assignee", "role", "parents", "workspace", "priority", "budget_usd", "model", "decompose",
                                "extra_write_roots", "worktree") if a.get(k) is not None}
         t["budget_usd"] = self._clamp_budget(t.get("budget_usd"))
+        auto_team = None
+        if t.get("assignee") and not t.get("team"):
+            tm = self.svc.perms.teams_of(str(t["assignee"]))
+            if len(tm) == 1:  # MGR-8: agent chỉ thuộc một team → gắn team đó; nhiều team → check_rpc từ chối, manager tự chọn
+                t["team"] = auto_team = tm[0]
         res = await self._rpc("task_create", "task.create", {"task": t, "created_by": self.actor}, a,
                               summary=f"giao task '{str(a.get('title') or '')[:80]}' cho {a.get('assignee') or a.get('team')}")
         tr = dict(self.hub.store.state_get("manager_tracked") or {})
         tr["tasks"] = (list(tr.get("tasks") or []) + [res.get("id")])[-200:]
         self.hub.store.state_set("manager_tracked", tr)
         return {"task_id": res.get("id"), "status": res.get("status"), "team_id": res.get("team_id"), "assignee": res.get("assignee_agent_id"),
-                "warnings": res.get("warnings") or [], "next": "follow it with task_get until status is done"}
+                "warnings": (res.get("warnings") or []) + ([f"assignee is a member of team '{auto_team}' — task attached to that team "
+                                                           "(pass team= yourself next time)"] if auto_team else []),
+                "next": "follow it with task_get until status is done"}
 
     async def op_task_cancel(self, a: dict[str, Any]) -> Any:
         return await self._rpc("task_cancel", "mcp.cancel_task", {"task_id": a.get("id")}, a, summary=f"huỷ task {a.get('id')}")
@@ -527,6 +534,7 @@ class ManagerOps:
             conv = c if c["channel"] != "heartbeat" else None
         except NotFound:
             conv = None
+        guessed = conv is None  # lượt heartbeat: không có hội thoại gốc → đoán "hội thoại người hoạt động gần nhất" (có thể không liên quan)
         conv = conv or self.svc._home_conversation()
         cid = conv["id"] if conv else None
         if cid:
@@ -535,7 +543,8 @@ class ManagerOps:
         audit_id = self.hub.audit.record("manager.notify", self.mid, self.run["id"], {"text": text[:1000], "kind": kind, "conversation_id": cid},
                                          actor=self.actor, channel="manager", target=cid, summary="manager.notify")
         self.hub.publish(make_event("manager.reply", self.mid, {"conversation_id": cid, "run_id": self.run["id"], "text": text[:4000],
-                                                               "channel": conv["channel"] if conv else None, "kind": "notify", "notify_kind": kind, "ok": True},
+                                                               "channel": conv["channel"] if conv else None, "kind": "notify", "notify_kind": kind, "ok": True,
+                                                               "conversation_guessed": bool(conv) and guessed},
                                     run_id=self.run["id"]))
         self._action("notify_owner", a, summary=f"báo người: {text[:120]}", audit_id=audit_id)
         return {"delivered_to": conv["channel"] if conv else None, "conversation_id": cid, "note": None if conv else "no human conversation yet — stored as event only"}
@@ -573,6 +582,12 @@ class ManagerOps:
         p["deliver_to"] = dt
         if p.get("budget_usd") is not None:
             p["budget_usd"] = self._clamp_budget(p["budget_usd"])
+        if p.get("kind") == "task" and p.get("assignee") and not p.get("team"):
+            tm = self.svc.perms.teams_of(str(p["assignee"]))
+            if len(tm) > 1:
+                self._denied("schedule_create", "schedule.create", f"'{p['assignee']}' thuộc team {', '.join(tm)} — truyền team=<một trong số đó>", a)
+            if tm:
+                p["team"] = tm[0]  # MGR-8: task do lịch tạo cũng chạy với charter/chính sách của team
         res = await self._rpc("schedule_create", "schedule.create", p, a,
                               summary=f"tạo lịch '{str(a.get('name') or a.get('prompt') or '')[:60]}' ({a.get('expr')})")
         return {k: (res or {}).get(k) for k in ("id", "name", "kind", "expr", "describe", "next_run_local", "deliver_to", "budget_usd")} | {

@@ -295,7 +295,9 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
     "team_archive": _t("Archive (soft-delete) a team.", {"id": _S, "cancel_open_tasks": {"type": "boolean"}}, ["id"]),
     "team_restore": _t("Restore an archived team.", {"id": _S}, ["id"]),
     "task_create": _t("Assign work: a task for a team (routed to the best member by role/description, or decomposed by the lead) or directly "
-                      "to an agent (assignee). parents = task ids it waits for (DAG). workspace = absolute path of a repo/dir (or 'scratch'). "
+                      "to an agent (assignee). If the assignee belongs to a team, pass that team too (team + assignee) so the run gets the team's "
+                      "charter and policies; it is attached automatically when the agent is in exactly one team and refused when in several. "
+                      "parents = task ids it waits for (DAG). workspace = absolute path of a repo/dir (or 'scratch'). "
                       "Follow it with task_get/task_list until done.",
                       {"title": _S, "body": _S, "team": _S, "assignee": _S, "role": _S, "parents": _A, "workspace": _S, "priority": {"type": "integer"},
                        "budget_usd": {"type": "number"}, "model": _S, "decompose": {"type": "boolean"},
