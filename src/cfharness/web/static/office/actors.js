@@ -16,6 +16,7 @@ const ERR_OUT = new Set(['failed', 'error', 'crashed', 'protocol_violation', 'bl
 const SCREEN_ON = new Set(['working', 'waiting', 'waiting_human', 'asking', 'error']);
 const TRIP_DELAY = 1.5, RETURN_DELAY = 1.5, TRIP_MAX = 45, POP_S = 2.5;
 const SPEED = 1.7;
+const CAFE_DRINK = 0.15; // xác suất đi lấy nước mỗi khi hết một lượt chơi ở cafe (25–60 s)
 
 export class Actor {
   constructor(agent, color, opts) {
@@ -29,7 +30,7 @@ export class Actor {
     this.spot = null; this.zone = ''; this.want = ''; this.path = [];
     this.trip = null; this.pendingTrip = null;
     this.rateUntil = 0; this.reviewUntil = 0; this.visitUntil = 0; this.queuedUntil = 0;
-    this.pop = null; this.wander = null; this.fallback = false; this.retryAt = 0;
+    this.pop = null; this.wander = null; this.fallback = false; this.alt = false; this.retryAt = 0;
     this.spawnAtEntrance = !!(opts && opts.entrance);
     this.selected = false;
   }
@@ -139,17 +140,18 @@ export class Actor {
       case 'paused': return { zone: this.isManager ? home : 'lounge', pose: 'sleep', bubble: '💤' };
       default: break;
     }
-    // rảnh: điều phối viên ngả lưng ở phòng riêng; agent đi lang thang pantry ↔ sofa (thỉnh thoảng ngồi bàn)
+    // rảnh: điều phối viên ngả lưng ở phòng riêng; agent ra cafe điện tử ngồi máy chơi game, thỉnh thoảng
+    // (CAFE_DRINK mỗi lần hết lượt chơi) đi lấy nước ở quầy cafe hoặc pantry rồi quay lại. Hết chỗ → khu dự phòng (alt).
     if (this.isManager) return { zone: home, pose: 'relax' };
     if (!this.wander || now >= this.wander.until) {
-      const r = this.rnd();
-      let z = r < 0.45 ? 'pantry' : r < 0.85 ? 'lounge' : 'desk';
-      if (this.wander && z === this.wander.zone) z = z === 'pantry' ? 'lounge' : 'pantry';
-      const first = !this.wander;
-      this.wander = { zone: z, until: now + (first ? 4 + this.rnd() * 20 : 12 + this.rnd() * 16) };
+      const prev = this.wander && this.wander.zone;
+      let z = 'cafe';
+      if (prev === 'cafe' && this.rnd() < CAFE_DRINK) z = this.rnd() < 0.5 ? 'cafeBar' : 'pantry';
+      this.wander = { zone: z, until: now + (z === 'cafe' ? 25 + this.rnd() * 35 : 14 + this.rnd() * 8) };
     }
     const wz = this.wander.zone;
-    return { zone: wz, pose: wz === 'desk' ? 'relax' : wz === 'lounge' ? 'relax' : 'spot', bubble: wz === 'pantry' ? '☕' : null };
+    if (wz === 'cafe') return { zone: 'cafe', pose: 'typeFast', bubble: '🎮', alt: { zone: 'lounge', pose: 'relax' } };
+    return { zone: wz, pose: 'spot', bubble: wz === 'pantry' ? '☕' : '🥤', alt: { zone: wz === 'pantry' ? 'cafeBar' : 'pantry', pose: 'spot' } };
   }
 
   _target(pose) {
@@ -159,7 +161,8 @@ export class Actor {
   }
 
   _resolvePose(g) {
-    let pose = g.pose === 'spot' ? ((this.spot && this.spot.pose) || 'stand') : g.pose;
+    const gp = this.alt && g.alt ? g.alt.pose : g.pose;
+    let pose = gp === 'spot' ? ((this.spot && this.spot.pose) || 'stand') : gp;
     if (this.fallback && g.pose === 'spot') pose = this.agent.status === 'working' ? 'type' : 'sit';
     if (this.fallback && pose === 'standType') pose = 'type';
     return pose;
@@ -168,11 +171,13 @@ export class Actor {
   _replan(g, now, teleport) {
     const w = this.world;
     let spot = g.zone === 'desk' || g.zone === 'mgr' ? w.seatFor(this.id) : w.reserve(g.zone, this.id, this.pos);
-    this.fallback = false;
+    this.fallback = false; this.alt = false;
+    // khu chính hết chỗ → thử khu dự phòng của mục tiêu (vd. cafe đầy → sofa) trước khi về bàn
+    if (!spot && g.alt) { spot = w.reserve(g.alt.zone, this.id, this.pos); if (spot) { this.alt = true; this.retryAt = now + 4; } }
     if (!spot) { spot = w.seatFor(this.id) || w.reserve('lounge', this.id, this.pos); this.fallback = true; this.retryAt = now + 4; }
     if (this.spot && this.spot !== spot) w.release(this.spot, this.id);
     this.spot = spot;
-    this.zone = this.fallback ? (spot && spot.zone) || '' : g.zone;
+    this.zone = this.fallback || this.alt ? (spot && spot.zone) || '' : g.zone;
     this.path = [];
     if (!spot) return;
     const tp = this._target(this._resolvePose(g));
@@ -193,7 +198,7 @@ export class Actor {
       return;
     }
     if (g.zone !== this.want || !this.spot) { this.want = g.zone; this._replan(g, now, !this.pos || reduced || frozen); }
-    else if (this.fallback && now >= this.retryAt) this._replan(g, now, reduced);
+    else if ((this.fallback || this.alt) && now >= this.retryAt) this._replan(g, now, reduced);
     const pose = this._resolvePose(g);
     const tp = this._target(pose);
     if (reduced && this.path.length) { const last = this.path[this.path.length - 1]; this.pos = { x: last.x, z: last.z }; this.path = []; }
@@ -225,6 +230,7 @@ export class Actor {
     c.setSelected(this.selected);
     c.animate(dt, t, reduced);
     this._place();
+    if (this.zone === 'cafe') w.playCafe(this.spot, !walking && pose === 'typeFast');
     w.setScreen(this.id, SCREEN_ON.has(this.status(now)) && (this.zone === 'desk' || this.zone === 'mgr') && !walking);
   }
 
