@@ -1,5 +1,8 @@
 # Văn phòng 3D — chế độ "Vào văn phòng" (đi bộ)
 
+> **Tiếp theo**: `office-coordinator.md` — người dùng điều khiển Điều phối viên (xuất hiện cạnh bàn của mình, thay avatar "Bạn · chủ hub"),
+> [E] ngồi bàn ra lệnh, [E] gần agent để nói chuyện (steer / run_continue / run_start).
+
 Chủ hub (2026-11-03): người dùng **bước vào** văn phòng `/office` như một văn phòng thật thay vì chỉ nhìn từ trên xuống kiểu nhà búp bê.
 Làm trên nhánh cafe (`feat/office-cafe`, PR #52). Chỉ đổi client + template (`office.html`, `office.css`, `static/office.js`,
 `static/office/{walk,world,actors}.js`); không đổi server/RPC/CSP, không asset ngoài, không thư viện mới (chỉ three 0.169.0 đã vendor;

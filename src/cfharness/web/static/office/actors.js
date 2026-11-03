@@ -14,9 +14,15 @@ const TRIP = { Bash: 'server', Read: 'library', Grep: 'library', Glob: 'library'
 const FAST = new Set(['Edit', 'Write', 'NotebookEdit', 'MultiEdit']);
 const ERR_OUT = new Set(['failed', 'error', 'crashed', 'protocol_violation', 'blocked', 'timeout']);
 const SCREEN_ON = new Set(['working', 'waiting', 'waiting_human', 'asking', 'error']);
-const TRIP_DELAY = 1.5, RETURN_DELAY = 1.5, TRIP_MAX = 45, POP_S = 2.5;
+const RETURN_DELAY = 1.5, TRIP_MAX = 45, POP_S = 2.5;
 const SPEED = 1.7;
-const CAFE_DRINK = 0.15; // xác suất đi lấy nước mỗi khi hết một lượt chơi ở cafe (25–60 s)
+// ---- Nhịp đi lại (office-coordinator.md): agent ở bàn team mình gần như cả ngày; chỉnh ở đây.
+// Làm việc: chuyến server/thư viện chỉ khi tool chạy lâu hơn TRIP_DELAY, và cách chuyến trước ≥ TRIP_COOLDOWN (thưa hơn trước: 1,5 s, không nghỉ).
+export const TRIP_DELAY = 6, TRIP_COOLDOWN = 90;
+// Rảnh: ngồi bàn (ngả lưng / xem điện thoại, đổi tư thế mỗi IDLE_POSE_S) IDLE_DESK_MIN + rnd·IDLE_DESK_VAR giây, rồi một lần nghỉ ngắn:
+// BREAK_CAFE_P ra cafe điện tử chơi BREAK_CAFE_S…+BREAK_CAFE_VAR s, còn lại lấy nước ở quầy cafe / pantry BREAK_DRINK_S…+BREAK_DRINK_VAR s.
+export const IDLE_DESK_MIN = 360, IDLE_DESK_VAR = 240, IDLE_POSE_S = 35;
+export const BREAK_CAFE_P = 0.5, BREAK_CAFE_S = 40, BREAK_CAFE_VAR = 40, BREAK_DRINK_S = 15, BREAK_DRINK_VAR = 10;
 
 export class Actor {
   constructor(agent, color, opts) {
@@ -82,7 +88,7 @@ export class Actor {
         const z = TRIP[a.tool];
         if (z && !this.isManager) {
           if (this.trip && this.trip.zone === z) { this.trip.end = null; this.trip.hard = now + TRIP_MAX; }
-          else if (!this.pendingTrip || this.pendingTrip.zone !== z) this.pendingTrip = { zone: z, at: now + TRIP_DELAY };
+          else if ((!this.pendingTrip || this.pendingTrip.zone !== z) && now >= (this.tripCool || 0)) this.pendingTrip = { zone: z, at: now + TRIP_DELAY };
         } else {
           this.pendingTrip = null;
           if (this.trip && !this.trip.end) this.trip.end = now + RETURN_DELAY;
@@ -117,7 +123,7 @@ export class Actor {
     const st = this.status(now), a = this.agent;
     if (st !== 'working') { this.trip = null; this.pendingTrip = null; }
     if (this.pendingTrip && now >= this.pendingTrip.at) { this.trip = { zone: this.pendingTrip.zone, end: null, hard: now + TRIP_MAX }; this.pendingTrip = null; }
-    if (this.trip && ((this.trip.end && now >= this.trip.end) || now >= this.trip.hard)) this.trip = null;
+    if (this.trip && ((this.trip.end && now >= this.trip.end) || now >= this.trip.hard)) { this.trip = null; this.tripCool = now + TRIP_COOLDOWN; }
     if (st !== 'idle') this.wander = null;
     const home = this.isManager ? 'mgr' : 'desk';
     switch (st) {
@@ -140,16 +146,21 @@ export class Actor {
       case 'paused': return { zone: this.isManager ? home : 'lounge', pose: 'sleep', bubble: '💤' };
       default: break;
     }
-    // rảnh: điều phối viên ngả lưng ở phòng riêng; agent ra cafe điện tử ngồi máy chơi game, thỉnh thoảng
-    // (CAFE_DRINK mỗi lần hết lượt chơi) đi lấy nước ở quầy cafe hoặc pantry rồi quay lại. Hết chỗ → khu dự phòng (alt).
+    // rảnh: điều phối viên ngả lưng ở phòng riêng; agent NGỒI BÀN team mình (ngả lưng / xem điện thoại) gần như cả ngày, mỗi
+    // IDLE_DESK_MIN…+VAR giây mới nghỉ ngắn một lần (cafe điện tử hoặc lấy nước ở quầy cafe / pantry) rồi về bàn. Hết chỗ → khu dự phòng (alt).
     if (this.isManager) return { zone: home, pose: 'relax' };
     if (!this.wander || now >= this.wander.until) {
       const prev = this.wander && this.wander.zone;
-      let z = 'cafe';
-      if (prev === 'cafe' && this.rnd() < CAFE_DRINK) z = this.rnd() < 0.5 ? 'cafeBar' : 'pantry';
-      this.wander = { zone: z, until: now + (z === 'cafe' ? 25 + this.rnd() * 35 : 14 + this.rnd() * 8) };
+      let z = 'desk', dur;
+      // lần đầu: lệch pha (agent không cùng lúc đứng dậy); sau một lần nghỉ → về bàn
+      if (!prev) dur = this.rnd() * (IDLE_DESK_MIN + IDLE_DESK_VAR);
+      else if (prev !== 'desk') dur = IDLE_DESK_MIN + this.rnd() * IDLE_DESK_VAR;
+      else if (this.rnd() < BREAK_CAFE_P) { z = 'cafe'; dur = BREAK_CAFE_S + this.rnd() * BREAK_CAFE_VAR; }
+      else { z = this.rnd() < 0.5 ? 'cafeBar' : 'pantry'; dur = BREAK_DRINK_S + this.rnd() * BREAK_DRINK_VAR; }
+      this.wander = { zone: z, until: now + dur, ph: this.rnd() * IDLE_POSE_S * 2 };
     }
     const wz = this.wander.zone;
+    if (wz === 'desk') return { zone: 'desk', pose: Math.floor((now + this.wander.ph) / IDLE_POSE_S) % 2 ? 'sitPhone' : 'relax' };
     if (wz === 'cafe') return { zone: 'cafe', pose: 'typeFast', bubble: '🎮', alt: { zone: 'lounge', pose: 'relax' } };
     return { zone: wz, pose: 'spot', bubble: wz === 'pantry' ? '☕' : '🥤', alt: { zone: wz === 'pantry' ? 'cafeBar' : 'pantry', pose: 'spot' } };
   }
@@ -197,9 +208,20 @@ export class Actor {
       this._place();
       return;
     }
-    if (g.zone !== this.want || !this.spot) { this.want = g.zone; this._replan(g, now, !this.pos || reduced || frozen); }
+    // điều phối viên khi người dùng điều khiển (chế độ đi bộ): avatar của người dùng thay chỗ — actor AI ẩn, chỉ giữ trạng thái/bong bóng
+    c.group.visible = !this.puppet;
+    // đang nói chuyện với người dùng: đứng/ngồi YÊN tại chỗ (không đổi mục tiêu, không đi), quay mặt về người dùng nếu đang đứng
+    const talk = this.talking && this.pos && this.spot ? this.talking : null;
+    if (talk) this.path = [];
+    else if (g.zone !== this.want || !this.spot) { this.want = g.zone; this._replan(g, now, !this.pos || reduced || frozen); }
     else if ((this.fallback || this.alt) && now >= this.retryAt) this._replan(g, now, reduced);
-    const pose = this._resolvePose(g);
+    let pose = this._resolvePose(g);
+    if (talk) {
+      const t0 = this._target(pose), at = t0 && Math.hypot(t0.x - this.pos.x, t0.z - this.pos.z) < 0.08;
+      if (!at) pose = 'stand';
+      this.face = { x: talk.x, z: talk.z, until: now + 1 };
+    }
+    this.lastGoal = g;
     const tp = this._target(pose);
     if (reduced && this.path.length) { const last = this.path[this.path.length - 1]; this.pos = { x: last.x, z: last.z }; this.path = []; }
     let walking = false;
@@ -212,13 +234,13 @@ export class Actor {
         if (d <= step) { this.pos = { x: p.x, z: p.z }; this.path.shift(); step -= d; }
         else { this.pos.x += (dx / d) * step; this.pos.z += (dz / d) * step; step = 0; }
       }
-    } else if (tp) {
+    } else if (tp && !(talk && pose === 'stand')) {
       const dx = tp.x - this.pos.x, dz = tp.z - this.pos.z, d = Math.hypot(dx, dz);
       if (d > 0.01) {
         const step = reduced ? d : Math.min(d, 1.2 * dt);
         this.pos.x += (dx / d) * step; this.pos.z += (dz / d) * step;
       }
-      if (this.spot) this.yaw = reduced ? this.spot.rot : lerpAngle(this.yaw, this.spot.rot, Math.min(1, dt * 8));
+      if (this.spot && !(talk && !SIT_POSES.has(pose))) this.yaw = reduced ? this.spot.rot : lerpAngle(this.yaw, this.spot.rot, Math.min(1, dt * 8));
     }
     // chủ hub (chế độ đi bộ) đi ngang: đang đứng thì quay mặt về phía người dùng; đang ngồi chỉ vẫy (bong bóng 👋)
     if (this.face && this.face.until > now && !walking && !SIT_POSES.has(pose)) {
@@ -230,7 +252,8 @@ export class Actor {
     c.seatY = (this.spot && this.spot.seatY) || 0.33;
     const popOn = this.pop && this.pop.until > now;
     if (!popOn) this.pop = null;
-    c.setBubble(popOn ? this.pop.emoji : g.bubble, popOn ? '' : g.tone);
+    c.setBubble(popOn ? this.pop.emoji : talk ? '💬' : g.bubble, popOn || talk ? '' : g.tone);
+    this.bubble = { emoji: popOn ? this.pop.emoji : g.bubble, tone: popOn ? '' : g.tone, ring: !!g.ring };
     c.setRing(!!g.ring);
     c.setSelected(this.selected);
     c.animate(dt, t, reduced);

@@ -117,7 +117,7 @@ Bố cục văn phòng & hành vi: xem phần "Ánh xạ" bên dưới. Hiệu n
 | `waiting_human` / `approval.waiting_human` | đứng **giơ tay**, vòng đỏ dưới chân, bong bóng ✋ |
 | `approval.delegated` | đi tới **phòng điều phối viên** |
 | `asking` / `question.open` | bong bóng ❓ |
-| `idle` | ra **cafe điện tử** ngồi máy chơi game (gõ phím nhanh, 🎮); thỉnh thoảng đi lấy nước ở quầy cafe/pantry rồi quay lại — xem `office-cafe.md` |
+| `idle` | **ngồi bàn team mình** (ngả lưng / xem điện thoại) gần như cả ngày; mỗi 6–10 phút mới nghỉ ngắn: cafe điện tử (🎮, 40–80 s) hoặc lấy nước ở quầy cafe/pantry — xem `office-coordinator.md` (trước: `office-cafe.md`) |
 | `paused` | ngủ trên sofa/bàn, 💤 |
 | `error` / outcome lỗi | ngồi ôm đầu, ⚠ |
 | `rate_limited` / `ratelimit.throttle` | ngồi **hàng ghế chờ** ⏳ |
