@@ -34,8 +34,14 @@ export function confirmKey(plan) { return plan && plan.name === 'steer' && plan.
 // steer: luồng phát lại cả run từ đầu → khung `item` kind "steer" (user.message — một tin của người) mở đoạn mới; đoạn cuối = trả lời sau
 // tin của bạn. Khung `refresh` (run.completed, duyệt, câu hỏi…) KHÔNG xoá gì — trước đây xoá → mất câu trả lời khi run kết thúc.
 // KHÔNG đọc trường html của khung `item` (chỉ kind/seq).
+// `hello` mang epoch của daemon: epoch đổi so với lần trước (daemon khởi động lại) → daemon phát lại cả run từ đầu (since=0)
+// → bỏ đoạn đang dở + seq cũ để khỏi nhân đôi chữ.
 export function replyFrame(r, f) {
   if (!f || typeof f !== 'object') return null;
+  if (f.t === 'hello') {
+    if (f.epoch) { if (r.epoch && r.epoch !== f.epoch) { r.pending = ''; r.seq = 0; } r.epoch = String(f.epoch); }
+    return null;
+  }
   if (typeof f.seq === 'number' && f.seq > (r.seq || 0)) r.seq = f.seq;
   if (f.t === 'delta' && f.k === 'text') { r.pending = ((r.pending || '') + String(f.text || '')).slice(-MAX_REPLY); return 'dirty'; }
   if (f.t === 'item' && f.kind === 'steer' && r.mode === 'steer') { r.pending = ''; return 'dirty'; }
@@ -46,6 +52,15 @@ export function replyFrame(r, f) {
 // Thuần: chờ trước lần nối lại thứ n (0, 1, …) khi luồng trả lời lỗi — lùi dần 1 s → 30 s; null = thôi, báo luồng đã đóng.
 export const RETRY_MAX = 6;
 export function retryDelay(n) { return n >= RETRY_MAX ? null : Math.min(30000, 1000 * 2 ** n); }
+// Thuần: chỉ khung có nội dung (delta/item) mới xoá bộ đếm thử lại — `hello` thì không, kẻo nối được rồi rớt ngay sẽ thử lại mãi mỗi 1 s.
+export function resetsRetry(f) { return !!f && (f.t === 'delta' || f.t === 'item'); }
+// Thuần: URL luồng trả lời; nối lại kèm since + epoch (khác epoch → daemon phát lại từ đầu thay vì bỏ sót/nhân đôi).
+export function streamUrl(runId, s) {
+  const q = [];
+  if (s && s.seq) q.push('since=' + encodeURIComponent(String(s.seq)));
+  if (s && s.seq && s.epoch) q.push('epoch=' + encodeURIComponent(String(s.epoch)));
+  return '/sse/run/' + encodeURIComponent(runId) + (q.length ? '?' + q.join('&') : '');
+}
 
 export function createTalk(o) {
   // o: {api, srRoot, camera, toast(msg, ok), onExpired(), agent(id) → {id, name, status, run_id, approval, question} | null,
@@ -78,17 +93,17 @@ export function createTalk(o) {
     const s = sess(id);
     if (s.esRun === runId && (s.es || s.retry)) return;
     stop(s, false);
-    s.esRun = runId; s.mode = mode; s.pending = ''; s.seq = 0; s.tries = 0;
+    s.esRun = runId; s.mode = mode; s.pending = ''; s.seq = 0; s.epoch = null; s.tries = 0;
     connect(s, runId);
   }
   function connect(s, runId) {
     // nối lại: tiếp từ seq đã thấy (since) → không phát lại, không nhân đôi chữ
-    const es = new EventSource('/sse/run/' + encodeURIComponent(runId) + (s.seq ? '?since=' + s.seq : ''), { withCredentials: true });
+    const es = new EventSource(streamUrl(runId, s), { withCredentials: true });
     s.es = es;
     es.onmessage = (ev) => {
       if (s.es !== es) return;
       let f; try { f = JSON.parse(ev.data); } catch (_) { return; }
-      s.tries = 0;
+      if (resetsRetry(f)) s.tries = 0;
       const r = replyFrame(s, f);
       if (r === 'end') stop(s, true);
       if (r) panel.dirty = true;
