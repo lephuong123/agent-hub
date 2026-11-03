@@ -194,6 +194,10 @@ class QuestionChat:
                 self._put(self.MAP, f"{chat}:{x}", q["id"])
         for _c, _m1, m2 in old:  # tin cũ của cùng câu hỏi trong chat này (nhắc lại / /hoi) → gỡ nút, chỉ tin mới nhất còn bấm được
             await self._edit(api, chat, m2, "Câu hỏi này đã được gửi lại bên dưới — dùng tin mới nhất.", None)
+        cur = self._get(q["id"])
+        if cur is not None and cur["status"] != "open":  # trả lời/huỷ ở kênh khác TRONG LÚC đang gửi → close_messages đã chạy hụt tin này
+            self.bot.callbacks.invalidate_ref(q["id"])
+            await self.close_messages(q["id"])
 
     async def _edit(self, api: Any, chat: Any, mid: Any, text: str, markup: dict[str, Any] | None) -> None:
         if mid is None:

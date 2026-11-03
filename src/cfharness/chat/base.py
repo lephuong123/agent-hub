@@ -652,6 +652,22 @@ class ChatBot:
         res = await self._send(api, chat, self.approval_sys_text(row, kind=kind, payload=payload, action_len=len(action)),
                                self.approval_markup(aid, chat, row), html=True, reply_to=first_mid)
         self.callbacks.add_message(aid, chat, res.get("message_id"))
+        self._clear_if_resolved_meanwhile(aid)
+
+    def _clear_if_resolved_meanwhile(self, aid: str) -> None:
+        """Approval được quyết ở kênh khác TRONG LÚC đang gửi tin có nút (trước `add_message`) thì `approval.resolved` không
+        thấy tin nào để gỡ → nút ở lại mãi. Đọc lại trạng thái sau khi ghi tin; đã quyết → gỡ ngay."""
+        try:
+            row = self.hub.approvals.get(aid)
+        except Exception:  # pragma: no cover - approval đã bị dọn
+            return
+        if row.get("status") in PENDING:
+            return
+        self.callbacks.invalidate_ref(aid)
+        msgs = self.callbacks.pop_messages(aid)
+        if msgs:
+            p = {"decision": row.get("status"), "by": row.get("resolved_by"), "channel": row.get("resolved_channel")}
+            self._spawn(self._clear_buttons(msgs, decided_text(aid, p)))
 
     def approval_sys_text(self, row: dict[str, Any], *, kind: str = "approval.open", payload: dict[str, Any] | None = None,
                           action_len: int | None = None) -> str:

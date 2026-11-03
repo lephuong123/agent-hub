@@ -400,3 +400,26 @@ async def test_kick_does_not_leave_polling_false(make, sk):
     assert d.hub.slack.info["polling"] is True
     await deliver(sk, sk.slash(BOSS, "trangthai"))
     assert any("ESTOP" in t for t in texts(sk, DM_BOSS))
+
+
+async def test_resolved_while_sending_still_clears_buttons(make, sk):
+    """Chạy đua: approval được quyết ở kênh khác TRONG LÚC bot đang gửi tin có nút (trước khi bot nhớ ts của tin) →
+    `approval.resolved` không thấy tin nào để gỡ. Bot phải đọc lại trạng thái sau khi gửi và tự gỡ nút."""
+    d = await make(runtime=FakeRuntime(hold=True))
+    rid = await held_run(d)
+    bot = d.hub.slack
+    orig = bot._send
+
+    async def send_then_resolve(*a, **kw):
+        res = await orig(*a, **kw)
+        markup = a[3] if len(a) > 3 else kw.get("markup")
+        if markup:  # tin HỆ THỐNG có nút vừa lên Slack, bot chưa kịp add_message → người từ chối qua CLI đúng lúc này
+            for r in d.hub.store.conn.execute("SELECT id FROM approval_requests WHERE status IN ('open','waiting_human')").fetchall():
+                d.hub.approvals.resolve(r[0], "deny", by="user", channel="cli")
+            await asyncio.sleep(0.2)  # như ngoài đời: quyết xảy ra trong lúc chờ phản hồi HTTP → handler gỡ nút chạy TRƯỚC khi bot ghi tin
+        return res
+
+    bot._send = send_then_resolve
+    open_approval(d, rid)
+    upd = await until(lambda: [u for u in sk.calls_of("chat.update") if "Đã từ chối" in sk.text_of(u)])
+    assert not sk.buttons(upd[-1])
