@@ -36,6 +36,7 @@ from ..knowledge.store import (
     apply_memory_ops,
     check_rel_path,
     check_skill_name,
+    match_entries,
     memory_chars,
     parse_memory,
     parse_skill,
@@ -156,7 +157,7 @@ class Pipeline:
             action = pl.get("action") or {"add": "add", "patch": "patch", "delete": "remove"}.get(prop["op"], "add")
             ops = [{"action": action, "content": pl.get("content") if pl.get("content") is not None else pl.get("new_text"), "old_text": pl.get("old_text")}]
             new_entries = apply_memory_op(entries, action, ops[0]["content"], ops[0]["old_text"])
-        touched = [e for e in entries for o in ops if o.get("action") in ("patch", "remove") and o.get("old_text") and o["old_text"] in e]
+        touched = [entries[i] for o in ops if o.get("action") in ("patch", "remove") for i in match_entries(entries, o.get("old_text"))]
         after = render_memory(new_entries, store)
         prop["op"] = {"add": "add", "patch": "patch", "remove": "delete"}[action]
         prop["target_ref"] = path.name

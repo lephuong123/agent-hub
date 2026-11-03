@@ -320,7 +320,8 @@ class GraphQuality:
                 for fid, c in plan["conf"].items():  # độ tin cậy fact giữ = max của nhóm (cột VOLATILE)
                     self.conn.execute("UPDATE mem_facts SET confidence=MAX(confidence, ?) WHERE id=?", (c, fid))
             out.append({**item, "status": st, "proposal_id": res.get("proposal_id"), "reason": res.get("block_reason") or res.get("reason")})
-        self.hub.store.state_set("graph.consolidated_at", now_iso())
+        if not dry_run:  # xem trước (web/CLI --dry-run) không được dời lịch consolidation nền
+            self.hub.store.state_set("graph.consolidated_at", now_iso())
         return {"tiers": out, "dry_run": dry_run}
 
     # ================================================================== vòng nền (learning_ops tick)
@@ -365,10 +366,12 @@ class GraphQuality:
                 f"FROM mem_facts WHERE retracted_by IS NULL{where} GROUP BY scope, owner_id ORDER BY scope, owner_id", args):
             tiers_out.append({"scope": sc, "owner": ow, "facts": int(live or 0), "history": int(inval or 0), "avg_confidence": round(float(conf), 3) if conf is not None else None,
                               "entities": int(one("SELECT COUNT(*) FROM mem_entities WHERE scope=? AND owner_id=? AND retracted_by IS NULL AND invalidated_at IS NULL", sc, ow)),
-                              "episodes": int(one("SELECT COUNT(*) FROM mem_episodes WHERE scope=? AND owner_id=? AND retracted_by IS NULL", sc, ow))})
+                              "episodes": int(one("SELECT COUNT(*) FROM mem_episodes WHERE scope=? AND owner_id=? AND retracted_by IS NULL", sc, ow)),
+                              "last_ingested_at": one("SELECT MAX(ingested_at) FROM mem_facts WHERE scope=? AND owner_id=? AND retracted_by IS NULL", sc, ow)})
         uses = {r[0] or "open": int(r[1]) for r in c.execute("SELECT outcome, COUNT(*) FROM mem_fact_uses GROUP BY outcome")}
         vec = {f"{r[0]}@{r[1]}": int(r[2]) for r in c.execute("SELECT model, model_version, COUNT(*) FROM mem_vectors GROUP BY model, model_version")}
         return {"tiers": tiers_out, "uses": uses, "vectors": vec, "consolidated_at": self.hub.store.state_get("graph.consolidated_at"),
+                "last_extraction_at": one("SELECT MAX(queued_at) FROM runs WHERE kind='graph_extract'"),
                 "extractions_today": int(one("SELECT COUNT(*) FROM runs WHERE kind='graph_extract' AND queued_at>=?", _iso(datetime.now(timezone.utc) - timedelta(days=1))))}
 
     def fact_history(self, fact_id: str) -> dict[str, Any]:
@@ -408,7 +411,7 @@ class GraphQuality:
         uses = [dict(r) for r in self.conn.execute("SELECT run_id, channel, used_at, outcome, delta FROM mem_fact_uses WHERE fact_id=? ORDER BY id DESC LIMIT 50", (f["id"],))]
         entries = [e for e in (f.get("ledger_entry_id"), f.get("invalidated_entry_id"), f.get("retracted_by")) if e]
         return {"fact": {**brief(f), "scope": f["scope"], "owner": f["owner_id"], "relation": f["relation"], "src": names.get(f["src_entity_id"]),
-                         "dst": names.get(f.get("dst_entity_id") or "")},
+                         "dst": names.get(f.get("dst_entity_id") or ""), "src_id": f["src_entity_id"], "dst_id": f.get("dst_entity_id")},
                 "superseded_by": chain_after, "supersedes": before, "same_edge": same_edge,
                 "episode": {k: ep.get(k) for k in ("id", "source_kind", "source_ref", "run_id", "session_id", "created_at")} if ep else None,
                 "ledger_entries": entries, "uses": uses,

@@ -317,6 +317,7 @@ Chi tiết, kiểm chứng sandbox thật, việc dở: `docs/dev-notes/web.md`.
 | `web/app.py` | Starlette + Jinja2 + htmx vendored + SSE. `GuardMiddleware` ASGI thuần (không dùng BaseHTTPMiddleware — làm hỏng SSE). Ghi = `POST /do/<action>` (bảng `ACTIONS`) hoặc form agent |
 | `web/present.py` | Thuần: nhãn tiếng Việt, `transcript_item`, `activity_item`, `md()` an toàn |
 | `web/cli.py`, `web/demo.py` | `cfharness web [--port] [--open] [--url]`; hub demo FakeRuntime để chụp ảnh |
+| `web/memory_pages.py`, `static/memory_graph.js` | `/memory…`: memory mọi tầng (thêm/sửa/xoá/ghim mục qua `learn.propose`/`knowledge.pin`), graph memory (tìm, fact/thực thể, rollback, ghim, consolidation, đồ thị SVG tự viết). RPC chỉ đọc `learn.graph_view` (`learning/graph_view.py`, HUMAN_ONLY). Chi tiết: `docs/dev-notes/web-memory.md`, test `tests/test_web_memory.py` |
 
 Quy tắc: web là CLIENT thuần (RPC qua `AsyncHubClient(channel="web")`), không đụng `hub.db`. Thao tác ghi mới → thêm vào `ACTIONS`
 (nhạy cảm: đặt `confirm`), gửi `audit=True` (approval: `channel="web"`). Không script/style inline (CSP `'self'`), không CDN; tài nguyên
