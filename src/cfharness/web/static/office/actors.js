@@ -220,6 +220,11 @@ export class Actor {
       }
       if (this.spot) this.yaw = reduced ? this.spot.rot : lerpAngle(this.yaw, this.spot.rot, Math.min(1, dt * 8));
     }
+    // chủ hub (chế độ đi bộ) đi ngang: đang đứng thì quay mặt về phía người dùng; đang ngồi chỉ vẫy (bong bóng 👋)
+    if (this.face && this.face.until > now && !walking && !SIT_POSES.has(pose)) {
+      const fy = Math.atan2(this.face.x - this.pos.x, this.face.z - this.pos.z);
+      this.yaw = reduced ? fy : lerpAngle(this.yaw, fy, Math.min(1, dt * 6));
+    }
     c.walking = walking;
     c.pose = pose;
     c.seatY = (this.spot && this.spot.seatY) || 0.33;
@@ -232,6 +237,12 @@ export class Actor {
     this._place();
     if (this.zone === 'cafe') w.playCafe(this.spot, !walking && pose === 'typeFast');
     w.setScreen(this.id, SCREEN_ON.has(this.status(now)) && (this.zone === 'desk' || this.zone === 'mgr') && !walking);
+  }
+
+  // người dùng (avatar chủ hub) tới gần: chào 👋 một lần, nhìn theo trong 4 s (chỉ là hiển thị, không đổi trạng thái agent)
+  greet(x, z, now) {
+    this.face = { x, z, until: now + 4 };
+    if (!this.pop) this.pop = { emoji: '👋', until: now + POP_S };
   }
 
   _place() {

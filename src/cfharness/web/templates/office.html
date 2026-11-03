@@ -15,6 +15,9 @@
 <main class="office" id="office" data-state="/office/state" data-sse="/sse/office" data-csrf="{{ csrf }}">
   <div class="office-canvas" id="office-canvas" role="img" aria-label="Văn phòng 3D: mỗi agent là một nhân vật chibi. Danh sách agent dạng chữ nằm ngay sau phần này cho trình đọc màn hình."></div>
   <a class="office-switch" id="office-to-2d" href="/" title="Về giao diện 2D" aria-label="Về giao diện 2D">2D</a>
+  {#- Chế độ "Vào văn phòng" (đi bộ — docs/dev-notes/office-walk.md): ẩn tới khi JS có WebGL. Chỉ là cách XEM, không mở thêm quyền. #}
+  <button type="button" class="office-switch office-walk" id="office-walk" aria-pressed="false" title="Vào văn phòng (đi bộ)" aria-label="Vào văn phòng (đi bộ)" hidden>🚶</button>
+  <button type="button" class="office-switch office-pov" id="office-pov" title="Đổi góc nhìn thứ nhất / thứ ba (V)" aria-label="Đổi góc nhìn thứ nhất / thứ ba" hidden>👁</button>
   <div class="office-fallback" id="office-fallback" hidden>
     <p>Trình duyệt không vẽ được văn phòng 3D (cần WebGL). Bấm “2D” để dùng giao diện thường.</p>
   </div>
