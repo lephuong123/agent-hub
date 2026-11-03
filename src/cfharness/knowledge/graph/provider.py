@@ -138,6 +138,8 @@ class GraphMemoryProvider(MemoryProvider):
                          half_life_days=float(_cfg(self.hub, "recall.half_life_days", 90)))
         floor = float(_cfg(self.hub, "recall.min_score", 0.05))
         facts = [f for f in facts if f["score"] >= floor]
+        if facts and not _cfg(self.hub, "recall.prefetch_mirrored", False):
+            facts = self._drop_mirrored(facts)
         block, used = format_recall(facts, max_chars=int(_cfg(self.hub, "recall.max_chars", 2000)))
         if used:
             from ...store import now_iso
@@ -149,6 +151,18 @@ class GraphMemoryProvider(MemoryProvider):
                 log.exception("không cập nhật hits graph")
         self.last = {"agent_id": agent_id, "session_id": session_id, "facts": len(used), "chars": len(block), "vector": query_vec is not None}
         return block
+
+    def _drop_mirrored(self, facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Fact mirror từ MEMORY.md/USER.md (`learning/graph_mirror.py`): agent đã thấy mục gốc trong system prompt — không chèn lại."""
+        eps = sorted({str(f["source_episode_id"]) for f in facts if f.get("source_episode_id")})
+        if not eps:
+            return facts
+        try:
+            mirrored = {r[0] for r in self.conn.execute(
+                f"SELECT id FROM mem_episodes WHERE source_kind='memory_write' AND id IN ({','.join('?' * len(eps))})", eps)}
+        except Exception:  # pragma: no cover - bảng chưa có: giữ nguyên
+            return facts
+        return [f for f in facts if f.get("source_episode_id") not in mirrored]
 
     async def queue_prefetch(self, query: str, *, session_id: str | None = None, agent_id: str | None = None, **kwargs: Any) -> str:
         """Như Hermes `queue_prefetch`: vector câu hỏi tính trong THREAD có hạn giờ; chỉ khi model đã nạp (`ready`) — không bao giờ

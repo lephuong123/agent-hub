@@ -102,6 +102,14 @@ class LearningOps:
                     out["graph"] = g
             except Exception:  # pragma: no cover - vòng nền không được chết
                 log.exception("graph quality tick lỗi")
+        gm = getattr(getattr(self.hub, "learning", None), "graph_mirror", None)
+        if gm is not None:  # on_memory_write: file memory lệch graph (rollback, sửa tay, có từ trước) → sync
+            try:
+                m = await gm.tick()
+                if m:
+                    out["graph_mirror"] = m
+            except Exception:  # pragma: no cover
+                log.exception("graph mirror tick lỗi")
         return out
 
     def _batch_due(self, now_local: datetime | None) -> bool:

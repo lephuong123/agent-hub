@@ -52,6 +52,9 @@ class LearningService:
         from .graph_quality import GraphQuality
 
         self.graph_quality = GraphQuality(hub)  # graph memory PR quality: độ tin cậy theo kết quả run + consolidation (vòng nền learning_ops)
+        from .graph_mirror import MemoryMirror
+
+        self.graph_mirror = MemoryMirror(hub, self)  # on_memory_write: MEMORY.md/USER.md/team memory.md → graph (vòng nền learning_ops)
         self.read_marks: dict[str, set[tuple[str, str, str, str]]] = {}
         self._task: asyncio.Task | None = None
         hub.bus.add_listener(self._on_event)
@@ -127,6 +130,7 @@ class LearningService:
         for h in list(self.graph_extract._pending.values()):
             h.cancel()
         self.graph_extract._pending.clear()
+        self.graph_mirror.cancel()
         if self._task is not None:
             self._task.cancel()
             self._task = None
