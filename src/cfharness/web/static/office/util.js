@@ -102,30 +102,39 @@ export function fitText(ctx, text, maxW) {
 function texFromCanvas(c) {
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 2;
+  t.anisotropy = 4;
   return t;
 }
 
-// Nhãn tên (viên thuốc bo tròn, chấm màu team ở đầu).
+// Nhãn tên (viên thuốc bo tròn, chấm màu team viền trắng ở đầu). Canvas 2× (640×144) cho nét; bóng đổ mềm vẽ trên canvas.
+// Không bị tone mapping/fog làm xỉn (toneMapped/fog false). Hợp đồng: Sprite, userData.base = [1.6k, 0.36k], renderOrder 5.
 export function labelSprite(text, dot, opts) {
   const o = opts || {};
   const c = document.createElement('canvas');
-  c.width = 320; c.height = 72;
+  c.width = 640; c.height = 144;
   const ctx = c.getContext('2d');
-  ctx.font = '600 30px ' + FONT;
-  const t = fitText(ctx, text, 250);
+  ctx.font = '600 52px ' + FONT;
+  const t = fitText(ctx, text, 470);
   const tw = Math.ceil(ctx.measureText(t).width);
-  const w = Math.min(316, tw + (dot ? 64 : 40));
-  const x0 = (c.width - w) / 2;
-  ctx.fillStyle = o.bg || 'rgba(255,253,248,0.92)';
-  roundRect(ctx, x0, 8, w, 54, 27); ctx.fill();
-  ctx.strokeStyle = o.stroke || 'rgba(60,50,30,0.18)'; ctx.lineWidth = 2; ctx.stroke();
-  let tx = x0 + 20;
-  if (dot) { ctx.fillStyle = dot; ctx.beginPath(); ctx.arc(x0 + 24, 35, 9, 0, Math.PI * 2); ctx.fill(); tx = x0 + 42; }
+  const w = Math.min(612, tw + (dot ? 118 : 72));
+  const x0 = (c.width - w) / 2, y0 = 22, ph = 92;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.18)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
+  ctx.fillStyle = o.bg || 'rgba(255,253,248,0.94)';
+  roundRect(ctx, x0, y0, w, ph, ph / 2); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = o.stroke || 'rgba(60,50,30,0.14)'; ctx.lineWidth = 2; roundRect(ctx, x0, y0, w, ph, ph / 2); ctx.stroke();
+  let tx = x0 + 36;
+  if (dot) {
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(x0 + 46, y0 + ph / 2, 19, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = dot; ctx.beginPath(); ctx.arc(x0 + 46, y0 + ph / 2, 14, 0, Math.PI * 2); ctx.fill();
+    tx = x0 + 78;
+  }
   ctx.fillStyle = o.fg || '#2d2a24';
   ctx.textBaseline = 'middle';
-  ctx.fillText(t, tx, 36);
-  const sm = new THREE.SpriteMaterial({ map: texFromCanvas(c), transparent: true, depthWrite: false, depthTest: o.depthTest !== false });
+  ctx.fillText(t, tx, y0 + ph / 2 + 2);
+  const sm = new THREE.SpriteMaterial({ map: texFromCanvas(c), transparent: true, depthWrite: false, depthTest: o.depthTest !== false,
+    toneMapped: false, fog: false });
   const s = new THREE.Sprite(sm);
   const k = o.scale || 1;
   s.scale.set(1.6 * k, 0.36 * k, 1);
@@ -134,27 +143,33 @@ export function labelSprite(text, dot, opts) {
   return s;
 }
 
-// Bong bóng emoji — dùng lại texture theo emoji.
+// Bong bóng emoji — dùng lại texture theo emoji. Canvas 2× (256), bong bóng bo + đuôi + bóng đổ mềm.
 const _bubbleTex = new Map();
 export function bubbleTexture(emoji, tone) {
   const k = emoji + '|' + (tone || '');
   let t = _bubbleTex.get(k);
   if (t) return t;
   const c = document.createElement('canvas');
-  c.width = 128; c.height = 128;
+  c.width = 256; c.height = 256;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = tone === 'danger' ? '#fde2dc' : tone === 'ask' ? '#efe7fb' : '#fffdf8';
-  ctx.strokeStyle = tone === 'danger' ? '#c4483a' : tone === 'ask' ? '#7b5ea7' : 'rgba(60,50,30,0.35)';
-  ctx.lineWidth = 5;
-  ctx.beginPath(); ctx.arc(64, 56, 46, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-  // đuôi bong bóng
-  ctx.beginPath(); ctx.moveTo(52, 98); ctx.lineTo(64, 122); ctx.lineTo(74, 98); ctx.closePath(); ctx.fill();
-  ctx.beginPath(); ctx.moveTo(52, 99); ctx.lineTo(64, 122); ctx.lineTo(74, 99); ctx.stroke();
-  ctx.fillStyle = ctx.fillStyle; ctx.fillRect(50, 90, 26, 10);
-  ctx.font = '54px ' + EMOJI_FONT;
+  const fill = tone === 'danger' ? '#fde2dc' : tone === 'ask' ? '#efe7fb' : '#fffdf8';
+  const edge = tone === 'danger' ? '#c4483a' : tone === 'ask' ? '#7b5ea7' : 'rgba(60,50,30,0.28)';
+  const shape = () => {
+    ctx.beginPath();
+    ctx.arc(128, 110, 88, Math.PI * 0.62, Math.PI * 0.38 + Math.PI * 2, false); // vòng tròn chừa chỗ đuôi ở dưới
+    ctx.quadraticCurveTo(140, 214, 128, 236);
+    ctx.quadraticCurveTo(116, 214, 128 + 88 * Math.cos(Math.PI * 0.62), 110 + 88 * Math.sin(Math.PI * 0.62));
+    ctx.closePath();
+  };
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.2)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 4;
+  ctx.fillStyle = fill; shape(); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = edge; ctx.lineWidth = tone ? 7 : 4; shape(); ctx.stroke();
+  ctx.font = '104px ' + EMOJI_FONT;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillStyle = '#222';
-  ctx.fillText(emoji, 64, 60);
+  ctx.fillText(emoji, 128, 116);
   t = texFromCanvas(c);
   _bubbleTex.set(k, t);
   return t;
