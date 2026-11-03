@@ -94,6 +94,7 @@ Chi tiết, lệch BRD, việc dở, kết quả kiểm chứng `claude` thật:
 | `approvals.py` | `ApprovalService`: open → waiting_human → allowed/denied/cancelled (không `expired`), vé một lần, nhắc lại giãn dần, Signal `reject` |
 | `notify/slack.py` | Listener bus → Slack webhook/bot (secret), tin đã che, backoff, `notify.failed`; tắt êm khi chưa cấu hình |
 | `recovery.py` | Đối soát `(pid, start_time)` khi daemon khởi động, dừng mồ côi, `interrupted` → tự resume (trừ waiting_human); purge retention |
+| `auto_resume.py` | Tự resume CÓ TRẦN run ad-hoc dừng vì lỗi tạm thời (crashed/timed_out/rate_limited/mạng; trần chung với restart), backoff, event `run.auto_resume` + audit; `hang_stats` cho thẻ Sức khoẻ (`report.hangs`). `docs/dev-notes/run-auto-resume.md` |
 
 Bất biến: thao tác phá huỷ KHÔNG BAO GIỜ tự từ chối do hết giờ; hook/hub-guard lỗi = deny; agent không ghi được `policy/`
 (settings `permissions.deny` + classifier) và không tự duyệt (`cfharness approve`, socket hub, `mcp__*__hub_approve` = forbidden).

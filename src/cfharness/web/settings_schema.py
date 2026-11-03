@@ -50,6 +50,8 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
         _s("budget.hub_usd_per_day", "Ngân sách ngày toàn hub ($)", "float", "để trống = không giới hạn", nullable=True, min=0),
         _s("budget.warn_pct", "Cảnh báo khi dùng tới (% ngân sách)", "int", "vd 80", min=1),
         _s("recovery.auto_resume", "Tự resume run khi daemon khởi động lại", "bool"),
+        _s("recovery.auto_resume_enabled", "Tự resume run ad-hoc dừng vì lỗi tạm thời (crash, quá giờ, rate limit, mạng)", "bool"),
+        _s("recovery.auto_resume_max_attempts", "Số lần tự resume tối đa liên tiếp (gồm sau restart)", "int", "vd 3", min=0),
         _s("workspace.checkpoint", "Checkpoint + diff cho run ghi vào workspace", "bool"),
     )),
     ("approval", "Phê duyệt & câu hỏi", (

@@ -60,6 +60,10 @@ class Hub:
         self.teams = TeamService(self)
         self.tasks = TaskService(self)
         self.dispatcher = TaskDispatcher(self)
+        # tự resume có giới hạn run ad-hoc dừng vì lỗi tạm thời (crashed/timed_out/rate_limited/mạng) — auto_resume.py
+        from .auto_resume import AutoResumer
+
+        self.auto_resume = AutoResumer(self)
         # M4-A: kho tri thức tầng agent (`hub.knowledge`) + lõi học (`hub.learning`: Signal, review fork, proposal,
         # pipeline tự áp dụng, guard học, ledger/rollback) — learning/service.py
         from .learning import attach as _attach_m4a
@@ -143,6 +147,7 @@ class Hub:
         self.dispatcher.start()  # M3: vòng tick dispatcher (cần event loop đang chạy)
         if self.runs.auth_block:
             self.runs.start_auth_watch()  # cờ chặn đăng nhập còn từ lần chạy trước → kiểm lại định kỳ, tự gỡ khi đã đăng nhập
+        self.auto_resume.start()  # hẹn lại lượt tự resume đã lên lịch trước khi daemon dừng
         self.manager.start()  # M7: vòng nhịp điều phối viên (chỉ tick khi có việc)
         self.questions.start()  # UX: chuyển câu hỏi quá hạn của điều phối viên lên người + nhắc lại
         self.compat.check_on_start()  # hardening H-10: phiên bản CLI → hub_state.cli_compat (header TUI)
@@ -165,6 +170,7 @@ class Hub:
     async def stop(self) -> None:
         self.publish(make_event("hub.stopping", None, {"epoch": self.bus.epoch}))
         await self.dispatcher.stop()  # M3
+        self.auto_resume.stop()  # lịch hẹn vẫn ở hub_state, lần khởi động sau chạy tiếp
         await self.manager.stop()  # M7
         await self.questions.stop()
         await self.runs.shutdown()

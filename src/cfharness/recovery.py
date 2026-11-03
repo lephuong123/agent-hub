@@ -6,7 +6,7 @@
    mồ côi của run → dừng cả process group (SIGINT → SIGTERM → SIGKILL). pid đã bị tái sử dụng → không đụng.
    Run → `interrupted`. Run có approval đang chờ → `waiting_human` (KHÔNG resume cho tới khi có người).
 2. Run trong danh sách `pending_resume` (daemon dừng có kiểm soát khi run đang chạy) → như trên.
-3. Tự resume (`recovery.auto_resume`, trừ ESTOP/agent paused/agent đã xoá): run mới `--resume <session>` cùng cwd với
+3. Tự resume (`recovery.auto_resume`, trừ ESTOP/agent paused/agent đã xoá, chuỗi đã hết `recovery.auto_resume_max_attempts`): run mới `--resume <session>` cùng cwd với
    lời nhắc tiếp tục chuẩn; run chưa kịp có session (chưa start) → chạy lại prompt gốc.
 4. Run `queued` → xếp lại hàng đợi theo thứ tự cũ.
 
@@ -174,6 +174,8 @@ def resume_interrupted(hub: "Hub", run: dict[str, Any]) -> dict[str, Any] | None
         return None
     ag = hub.store.get_agent(run["agent_id"])
     if ag is None or ag.get("archived_at") or ag["status"] == "paused":
+        return None
+    if hub.auto_resume.exhausted(run, "daemon_restart"):  # trần chung với auto_resume.py: daemon chết lặp lại không resume mãi
         return None
     from .workspace import resume_conflicts  # M3: người đã sửa file của run trong lúc gián đoạn → không resume
 
