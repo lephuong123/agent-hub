@@ -201,7 +201,8 @@ export function scaleLabel(s, f) {
 export function declutter(items) {
   const kept = [], out = new Set();
   for (const it of [...items].sort((a, b) => b.pri - a.pri)) {
-    if (kept.some((k) => Math.abs(k.x - it.x) * 2 < k.w + it.w && Math.abs(k.y - it.y) * 2 < k.h + it.h)) continue;
+    // vùng chiếm = nhãn + khoảng bong bóng emoji phía trên (≈ 1,2 lần cao nhãn) → chỗ đông (cafe) không còn nhãn đè bong bóng
+    if (kept.some((k) => Math.abs(k.x - it.x) * 2 < k.w + it.w && it.y - it.h * 1.7 < k.y + k.h / 2 && k.y - k.h * 1.7 < it.y + it.h / 2)) continue;
     kept.push(it); out.add(it.id);
   }
   return out;
