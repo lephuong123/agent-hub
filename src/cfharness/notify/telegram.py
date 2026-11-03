@@ -371,7 +371,8 @@ class TelegramNotifier(QueuedNotifier):
     async def _send(self, target: dict[str, Any], ev: HubEvent, msg: Any) -> dict[str, Any]:
         api: TelegramApi = target["api"]
         n = 0
-        for chat in target["chats"]:
+        p = ev.payload or {}
+        for chat in self.bot.route_chats(ev.run_id or p.get("run_id"), p.get("conversation_id")):
             if chat in msg["done"]:
                 continue
             aid = msg.get("approval_id")

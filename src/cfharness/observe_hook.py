@@ -1,4 +1,5 @@
-"""Hook QUAN SÁT của hub (FR-RT-17, hardening H-11): `PostToolUse`, `UserPromptSubmit`, `Stop`.
+"""Hook QUAN SÁT của hub (FR-RT-17, hardening H-11): `PostToolUse`, `UserPromptSubmit`, `Stop`, `PreCompact` (graph memory: ngữ cảnh
+sắp bị nén → daemon xếp MỘT lần trích xuất graph cho session, `learning/graph_extract.py`).
 
 `python -I -m cfharness.observe_hook <Event> --run <id> --socket <sock> [--timeout 2] [--home <HUB_HOME>]`
 (cũng gọi được bằng `cfharness hook <Event> …`).
@@ -21,7 +22,7 @@ import time
 from cfharness import transport
 from cfharness.oscompat import utf8_stdio
 
-EVENTS = ("PostToolUse", "UserPromptSubmit", "Stop")
+EVENTS = ("PostToolUse", "UserPromptSubmit", "Stop", "PreCompact")
 MAX_STDIN = 4 * 1024 * 1024
 
 
@@ -93,6 +94,8 @@ def observe(argv: list[str], stdin_text: str | None = None) -> dict:
     except Exception:
         data = {}
     meta = {k: data.get(k) for k in ("session_id", "tool_name", "stop_hook_active") if data.get(k) is not None}
+    if event == "PreCompact" and data.get("trigger") in ("manual", "auto"):
+        meta["trigger"] = data["trigger"]  # chỉ manual|auto — không gửi custom_instructions/transcript_path
     if event == "UserPromptSubmit":
         meta["prompt_chars"] = len(str(data.get("prompt") or ""))  # chỉ độ dài, không gửi nội dung
     if event not in EVENTS or not sock:

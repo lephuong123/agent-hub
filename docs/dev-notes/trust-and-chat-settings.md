@@ -74,7 +74,7 @@ CLI tương ứng: `cfharness guard sandbox dev-host <agent> <host> [--remove]`,
 
 ## Chưa làm
 - Telegram/Slack chưa có các lệnh này (kênh từ xa cần nút xác nhận riêng).
-- `docs/schema/event.v1.json` chưa sinh lại cho event `guard.trust`: `python -m cfharness.event_schema --write docs/schema/event.v1.json`.
+- ~~`docs/schema/event.v1.json` chưa sinh lại cho event `guard.trust`~~ — đã có (`af2784a`); test chống trôi: `mcp-grant-schema-h21.md`.
 
 ## Không hỏi lại theo agent + luật (2026-10-29)
 Giữa "luôn cho phép" (chỉ đúng một thao tác, chỉ uncertain) và trust full (bỏ mọi rào chắn): người duyệt một lần và chọn
@@ -92,5 +92,5 @@ Lý do: hub thật hỏi lặp cùng luật (vd `code_delete_api` 6 lần cho de
   `cfharness guard grant list|set|rm` (`guard grant` ∈ `HUB_HUMAN_ONLY_CLI` → agent gõ = forbidden).
 - Rủi ro đã chấp nhận: grant theo LUẬT, không theo đích — `delete_not_run_created` cho một agent nghĩa là agent đó xoá được mọi file
   không do run tạo mà không hỏi (trong giới hạn sandbox/workspace). Người chọn thời hạn để thu hẹp.
-- Chưa làm: TUI `top`/`cfharness chat` chưa có phím/lệnh riêng (dùng CLI hoặc web); MCP `hub_approve` chưa có tham số grant.
+- Chưa làm: TUI `top`/`cfharness chat` chưa có phím/lệnh riêng (dùng CLI hoặc web). MCP `hub_approve(grant_rule=true, confirm_rule, grant_for)`: `mcp-grant-schema-h21.md`.
   Test: `tests/test_rule_grant.py`, `tests/test_web.py::test_rule_grant_button_two_steps_and_duration`.

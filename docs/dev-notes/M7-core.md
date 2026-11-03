@@ -229,7 +229,7 @@ Ca "sleep 45" (giữ run chạy để kiểm hook) $0.0028. Tổng chi phí nghi
 - WebFetch/WebSearch chạy trong tiến trình `claude` (NGOÀI sandbox Bash): lọc host chỉ theo URL — tên miền công khai trỏ DNS về 127.0.0.1
   (DNS rebinding) không bị classifier bắt; web cfharness vẫn đòi cookie phiên + khoá ngoài cookie, MCP HTTP đòi bearer token → rủi ro thấp.
 - WebFetch là kênh RA dữ liệu: manager đọc được mọi thứ Read đọc được (ngoài vùng nhạy cảm) và có thể gửi qua query URL nếu bị prompt injection.
-  Giảm nhẹ: persona, `web: false` (`--web off`) khi không cần. Chưa có allowlist domain cho WebFetch (`permissions.allow WebFetch(domain:…)` là hướng sau).
+  Giảm nhẹ: persona, `web: false` (`--web off`) khi không cần. Allowlist domain theo agent: `tool_policy.web_allow_domains` (webfetch-agent-allowlist.md).
 - MCP trusted: server chạy NGOÀI sandbox — tin cậy là quyết định của người khi đánh dấu `trust=trusted`.
 - Bash của manager chịu sandbox: cần `guard.sandbox.enabled=true` (đã ép). Ngoại lệ sandbox theo agent (`allow_localhost`…) cho agent manager vẫn
   chỉ người đặt được; điều phối viên không xin được cho chính mình (`owner_actions`).

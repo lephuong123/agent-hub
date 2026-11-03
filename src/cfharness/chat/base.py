@@ -811,8 +811,51 @@ class ChatBot:
         raise NotImplementedError
 
     def broadcast_chats(self) -> set[str]:
-        """Chat nhận tin chủ động không gắn cuộc trò chuyện nào (approval, câu hỏi, thông báo) — mặc định = `notify_chats()`."""
+        """Chat nhận tin chủ động KHÔNG có chat gốc (approval, câu hỏi, thông báo của run từ web/lịch/nền) — mặc định = `notify_chats()`."""
         return self.notify_chats()
+
+    ORIGIN_DEPTH = 8  # số bậc `parent_run_id` tối đa khi lần chat gốc
+
+    def origin_chat(self, run_id: str | None = None, conversation_id: str | None = None) -> str | None:
+        """Chat đã giao việc gốc của `run_id` / hội thoại điều phối viên `conversation_id` (None = không xuất phát từ kênh này).
+        Lần: run được theo dõi (`watch`) → run điều phối viên gửi từ chat (`mgr_runs`) → run cha (`parent_run_id`, resume/continue)
+        → hội thoại điều phối viên (`mgr_convchat`, hoặc kênh `<NAME>:<chat>` của hội thoại)."""
+        w = self._state(self.WATCH)
+        mruns = self.manager._st(self.manager.RUNS)
+        issued = self.hub.store.state_get("manager_issued_runs") or {}
+        rid, seen = run_id, set()
+        for _ in range(self.ORIGIN_DEPTH):
+            if not rid or rid in seen:
+                break
+            seen.add(rid)
+            if w.get(rid):
+                return str(w[rid])
+            meta = mruns.get(rid)
+            if isinstance(meta, dict) and meta.get("chat"):
+                return str(meta["chat"])
+            if not conversation_id and isinstance(issued, dict) and issued.get(rid):
+                conversation_id = str(issued[rid])
+            rid = (self.hub.store.get_run(rid) or {}).get("parent_run_id")
+        if conversation_id:
+            c = self.manager._st(self.manager.CONVCHAT).get(conversation_id)
+            if c:
+                return str(c)
+            mgr = getattr(self.hub, "manager", None)
+            try:
+                ch = str((mgr._conv_row(conversation_id) if mgr is not None else {}).get("channel") or "")
+            except Exception:
+                ch = ""
+            if ch.startswith(f"{self.NAME}:"):
+                return ch.split(":", 1)[1] or None
+        return None
+
+    def route_chats(self, run_id: str | None = None, conversation_id: str | None = None) -> list[str]:
+        """Nơi gửi tin chủ động gắn với một run/hội thoại (approval, câu hỏi, thông báo): CHỈ chat gốc nếu biết và còn được phép
+        (và đăng gốc được); không có chat gốc → `broadcast_chats()` (Telegram: chỉ chat riêng; Slack: chỉ DM)."""
+        o = self.origin_chat(run_id, conversation_id)
+        if o and o in self.notify_chats() and self.root_post_ok(o):
+            return [o]
+        return sorted(self.broadcast_chats())
 
     def root_post_ok(self, chat: Any) -> bool:
         """Được đăng tin KHÔNG trả lời tin nào vào `chat` (Slack: chỉ DM — kênh chung chỉ nhận trả lời trong thread)."""

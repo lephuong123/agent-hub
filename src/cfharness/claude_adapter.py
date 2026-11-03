@@ -52,7 +52,8 @@ PRICES: dict[str, tuple[float, float]] = {
 }
 DEFAULT_CONTEXT_WINDOW = 200_000
 MESSAGE_COMPLETE_MAX = 8000
-RESULT_PREVIEW_MAX = 500
+RESULT_PREVIEW_MAX = 2000  # tool.complete: đủ cho session_search tìm lại output tool (Hermes giữ 2.000)
+STEER_ACK_MAX = 500
 BACKGROUND_TASK_SUBTYPES = frozenset({"task_started", "task_notification", "task_updated", "background_tasks_changed"})
 KNOWN_STREAM_EVENTS = frozenset(
     {"message_start", "content_block_start", "content_block_delta", "content_block_stop", "message_delta", "message_stop", "ping"}
@@ -477,7 +478,7 @@ class ClaudeStreamAdapter:
             text = "\n".join(str(b.get("text", "")) for b in content if isinstance(b, dict) and b.get("type") == "text")
         else:
             text = str(content or "")
-        return [self._ev("steer.ack", {"text": redact(text[:RESULT_PREVIEW_MAX]), "uuid": obj.get("uuid"), "index": self.replay_count - 1})]
+        return [self._ev("steer.ack", {"text": redact(text[:STEER_ACK_MAX]), "uuid": obj.get("uuid"), "index": self.replay_count - 1})]
 
     def _on_control_response(self, obj: dict) -> list[HubEvent]:
         return [self._ev("control.response", {"response": obj.get("response")})]

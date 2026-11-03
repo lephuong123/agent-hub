@@ -124,6 +124,10 @@ class TelegramBot(ChatBot):
         groups = bool(self.cfg().get("allow_groups"))
         return {c for c in self.allowed() if not c.startswith("-") or groups}
 
+    def broadcast_chats(self) -> set[str]:
+        """Tin chủ động không có chat gốc → chỉ chat riêng; nhóm chỉ nhận tin của việc giao từ chính nhóm đó (`route_chats`)."""
+        return {c for c in self.notify_chats() if not c.startswith("-")}
+
     def help_text(self) -> str:
         return HELP
 

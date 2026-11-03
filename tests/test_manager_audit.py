@@ -255,7 +255,8 @@ async def test_r2_mgr7_review_roles_parallel_team_restore(env):
     await _deny(d, rid, "team_create", {"id": "tq2", "members": [{"agent_id": "dev", "role": "worker"}]}, match="review")
     d.hub.teams.create({"id": "tq3"})
     await _deny(d, rid, "team_member_add", {"team": "tq3", "agent": "dev"}, match="review")
-    await _deny(d, rid, "task_create", {"title": "x", "body": "y", "assignee": "dev"}, match="review")
+    t0 = await tool(d, rid, "task_create", {"title": "x", "body": "y", "assignee": "dev"})  # MGR-8: tự gắn team duy nhất (tq có review)
+    assert t0["team_id"] == "tq" and any("tq" in w for w in t0["warnings"])
     await _deny(d, rid, "run_start", {"agent": "dev", "prompt": "x"}, match="review")
     await tool(d, rid, "task_create", {"title": "x", "body": "y", "team": "tq", "assignee": "dev"})  # qua team có review: được
     # (c) chỉ khôi phục agent chính manager xoá mềm
@@ -326,3 +327,28 @@ async def test_r2_mgr12_manager_added_patterns_bound_to_agent_instance(env):
     purge_agent(d.hub, "w", by="user", channel="cli")
     await asyncio.sleep(0)
     assert "w" not in (d.hub.store.state_get("manager_disallowed_added") or {})
+
+
+# ============================================================ MGR-8: thành viên team được giao QUA team (charter/chính sách)
+async def test_mgr8_member_task_goes_through_team(env):
+    d, res = env
+    rid = res["run_id"]
+    for x in ("solo", "one", "two"):
+        d.hub.agents.create({"id": x, "name": x})
+    d.hub.teams.create({"id": "ta", "charter": "Team A rules.", "members": [{"agent_id": "one", "role": "worker"}, {"agent_id": "two", "role": "worker"}]})
+    d.hub.teams.create({"id": "tb", "members": [{"agent_id": "two", "role": "worker"}]})
+    ov = await tool(d, rid, "hub_overview")
+    by = {a["id"]: a for a in ov["agents"]}
+    assert by["one"]["teams"] == ["ta"] and by["two"]["teams"] == ["ta", "tb"] and by["solo"]["teams"] == []
+    # không thuộc team nào → giao thẳng như cũ
+    t = await tool(d, rid, "task_create", {"title": "x", "body": "y", "assignee": "solo"})
+    assert t["team_id"] is None and t["assignee"] == "solo" and not t["warnings"]
+    # thuộc đúng một team → tự gắn team, giữ assignee, có cảnh báo
+    t = await tool(d, rid, "task_create", {"title": "x", "body": "y", "assignee": "one"})
+    row = d.hub.tasks.row(t["task_id"])
+    assert row["team_id"] == "ta" and row["assignee_agent_id"] == "one" and row["status"] == "ready"
+    assert any("ta" in w for w in t["warnings"])
+    # thuộc nhiều team mà không nói team nào → từ chối, nêu tên các team
+    await _deny(d, rid, "task_create", {"title": "x", "body": "y", "assignee": "two"}, match="ta, tb")
+    t = await tool(d, rid, "task_create", {"title": "x", "body": "y", "team": "tb", "assignee": "two"})
+    assert t["team_id"] == "tb" and not t["warnings"]

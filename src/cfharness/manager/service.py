@@ -477,7 +477,8 @@ class ManagerService:
             return "idle_large"
         return None
 
-    def _submit(self, conv: dict[str, Any], prompt: str, *, kind: str, budget: float | None) -> dict[str, Any]:
+    def _submit(self, conv: dict[str, Any], prompt: str, *, kind: str, budget: float | None,
+                extra_opts: dict[str, Any] | None = None) -> dict[str, Any]:
         aid = conv["agent_id"]
         why = self.perms.manager_config_problem(self.hub.agents.get_row(aid))  # MGR-8: cấu hình bị nới sau khi chỉ định → không chạy
         if why:
@@ -487,12 +488,16 @@ class ManagerService:
         rotated = self.rotate_reason(conv, kind) if resume else None
         if rotated:
             log.info("điều phối viên: hội thoại %s sang session mới (%s, lượt %s)", conv["id"], rotated, kind)
+            try:  # graph memory (PR write): trích MỘT lần phần hội thoại chưa trích trước khi bỏ session cũ
+                self.hub.learning.graph_extract.on_session_rotated(aid, resume, conv.get("last_run_id"), conv["id"])
+            except Exception:  # pragma: no cover - không chặn lượt điều phối viên
+                log.exception("xếp trích xuất graph khi xoay session lỗi")
             resume = None
         if resume and not self.hub.store.get_session(resume):
             resume = None
         if not resume and int(conv.get("turns") or 0) > 0:
             carry = prompts.carry_over(self.history(conv["id"], limit=6))
-        opts = {"hub_self": "manager", "manager_conversation": conv["id"], "manager_kind": kind}
+        opts = {"hub_self": "manager", "manager_conversation": conv["id"], "manager_kind": kind, **(extra_opts or {})}
         if rotated:
             opts["manager_rotated"] = rotated
         run = self.hub.runs.submit(aid, carry + prompt, cwd=self._conv_cwd(aid, conv["id"]), budget_usd=budget, kind="manager",
@@ -630,6 +635,36 @@ class ManagerService:
         return (f"[hub] Người đã {'CHO PHÉP' if allow else 'TỪ CHỐI'} approval {ap['id']} ({ap['agent_id']}: {ap['tool_name']}). "
                 + ("Run của agent tự chạy tiếp; theo dõi tới khi xong." if allow else "Không thử lại thao tác đó."))
 
+    # ------------------------------------------------------------------ hội thoại gốc của việc đã giao
+    def remember_origin(self, kind: str, item_id: Any, conv_id: Any) -> None:
+        """Task/run điều phối viên giao trong hội thoại của NGƯỜI `conv_id` → nhớ (`manager_tracked.task_conv|run_conv`, trần 200) để
+        kết quả báo về đúng hội thoại đó (Slack: đúng thread người đã tag), không phải "cuộc hoạt động gần nhất"."""
+        if not item_id or not conv_id:
+            return
+        key = "task_conv" if kind == "task" else "run_conv"
+        tr = dict(self.hub.store.state_get("manager_tracked") or {})
+        m = {k: v for k, v in dict(tr.get(key) or {}).items() if k != str(item_id)}
+        m[str(item_id)] = str(conv_id)
+        tr[key] = dict(list(m.items())[-200:])
+        self.hub.store.state_set("manager_tracked", tr)
+
+    def origin_conversation(self, *, task_id: Any = None, run_id: Any = None) -> str | None:
+        """Hội thoại người đã giao task (đi ngược `origin_task_id` — task con do lead tách) hoặc run. Không biết → None."""
+        tr = self.hub.store.state_get("manager_tracked") or {}
+        if run_id:
+            c = (tr.get("run_conv") or {}).get(str(run_id))
+            if c:
+                return str(c)
+        tc = tr.get("task_conv") or {}
+        tid, seen = (str(task_id) if task_id else None), set()
+        while tid and tid not in seen and len(seen) < 8:
+            if tc.get(tid):
+                return str(tc[tid])
+            seen.add(tid)
+            t = self.hub.tasks.maybe(tid)
+            tid = str(t["origin_task_id"]) if t and t.get("origin_task_id") else None
+        return None
+
     def _home_conversation(self) -> dict[str, Any] | None:
         """Hội thoại của NGƯỜI hoạt động gần nhất (đích của notify_owner trong tick)."""
         aid = self.agent_id()
@@ -690,6 +725,12 @@ class ManagerService:
         if key in self._pending_keys:
             return
         self._pending_keys.add(key)
+        try:
+            conv = self.origin_conversation(task_id=data.get("task_id"), run_id=data.get("run_id"))
+        except Exception:  # pragma: no cover — chỉ là gợi ý định tuyến
+            conv = None
+        if conv:
+            data["conversation_id"] = conv
         if self._first_pending is None:
             self._first_pending = time.monotonic()
         self.pending.append({"kind": kind, "summary": summary[:300], "ts": now_iso(), **data})
@@ -841,8 +882,11 @@ class ManagerService:
         from ..guard.profiles import gates_mode
 
         prompt = prompts.tick_prompt(events, dropped=dropped, reason=reason, open_work=open_work, gates=gates_mode(self.hub.config))
+        # hội thoại gốc (của người) của các sự kiện — notify_owner/câu hỏi trong lượt này về đúng cuộc đó thay vì đoán
+        tick_convs = sorted({str(e["conversation_id"]) for e in events if e.get("conversation_id")})
         try:
-            run = self._submit(conv, prompt, kind="tick", budget=self.cfg("tick_budget_usd"))
+            run = self._submit(conv, prompt, kind="tick", budget=self.cfg("tick_budget_usd"),
+                               extra_opts={"tick_convs": tick_convs} if tick_convs else None)
         except HubError as e:
             self.hub.publish(make_event("manager.tick", aid, {"status": "failed", "reason": e.message[:200]}))
             return self._skip("submit_failed: " + e.message[:80])

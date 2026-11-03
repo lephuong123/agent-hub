@@ -785,7 +785,31 @@ MIGRATIONS: list[str] = [
     ALTER TABLE approval_requests ADD COLUMN timeout_action TEXT;
     CREATE INDEX IF NOT EXISTS approvals_routed ON approval_requests(routed_to, status);
     """,
-    # v19 — tự đề xuất golden task từ task `done` (docs/dev-notes/golden-suggestions.md): `id` ngắn (nút/CLI/web), bản nháp
+    # v19 — graph memory (docs/dev-notes/plan-graph-memory.md): `mem_episodes`/`mem_entities`/`mem_facts` (scope + owner mọi hàng,
+    # thời gian kép, `retracted_by` cho rollback theo hàng) + `mem_vectors` (tuỳ chọn, model+phiên bản mỗi vector) + FTS5 trên cột gấp
+    # dấu (tokenizer chọn lúc chạy như v17). Là HÀM vì cần dò tokenizer. GỘP NHÁNH: nhánh khác thêm v19 → đánh số lại, không sửa cũ.
+    "knowledge.graph.schema.migrate_v19",
+    # v20 — graph memory PR quality (docs/dev-notes/graph-memory.md § PR quality): fact nào được ĐƯA cho run nào (prefetch vào tin user đầu /
+    # tool memory_recall) → độ tin cậy cập nhật theo KẾT QUẢ run (run thành công → tăng; run có thay đổi bị tự rollback / nằm trong cửa sổ
+    # hồi quy bị rollback / có correction → giảm). `outcome` NULL = chưa chốt; `delta` = mức đã cộng vào `mem_facts.confidence` (để đổi
+    # up → down đúng một lần). Bảng dẫn xuất (ngoài ledger), như `hits`/`last_used`.
+    """
+    CREATE TABLE IF NOT EXISTS mem_fact_uses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fact_id TEXT NOT NULL,
+        run_id TEXT,
+        agent_id TEXT,
+        channel TEXT NOT NULL,
+        used_at TEXT NOT NULL,
+        outcome TEXT,
+        delta REAL NOT NULL DEFAULT 0,
+        settled_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS mem_fact_uses_run ON mem_fact_uses(run_id);
+    CREATE INDEX IF NOT EXISTS mem_fact_uses_open ON mem_fact_uses(outcome, used_at);
+    CREATE INDEX IF NOT EXISTS mem_fact_uses_fact ON mem_fact_uses(fact_id);
+    """,
+    # v21 — tự đề xuất golden task (nhánh golden-suggestions đánh số lại sau v19/v20 của graph memory) từ task `done` (docs/dev-notes/golden-suggestions.md): `id` ngắn (nút/CLI/web), bản nháp
     # (task, tiêu đề, prompt, checker, hash prompt để chống trùng) và người/kênh/lúc quyết + golden task tạo ra.
     """
     ALTER TABLE golden_suggestions ADD COLUMN id TEXT;
@@ -804,6 +828,13 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS golden_suggestions_status ON golden_suggestions(status, agent_id);
     """,
 ]
+
+# Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
+PY_MIGRATION_PREFIXES = ("session_search.", "knowledge.graph.schema.")
+
+
+def is_py_migration(sql: str) -> bool:
+    return sql.startswith(PY_MIGRATION_PREFIXES) and not any(c.isspace() for c in sql)
 
 JSON_COLS = {
     "agents": ("tool_policy", "mcp_servers", "limits", "subagents", "result_schema"),
@@ -866,7 +897,7 @@ class Store:
         cur = self.schema_version
         for i, sql in enumerate(MIGRATIONS[cur:], start=cur + 1):
             with self.tx():
-                if sql.startswith("session_search."):  # migration bằng Python (v17): "module.hàm" trong gói cfharness
+                if is_py_migration(sql):  # migration bằng Python (v17, v19): "module.hàm" trong gói cfharness
                     import importlib
 
                     mod, fn = sql.rsplit(".", 1)

@@ -141,6 +141,8 @@ class Hub:
             log.exception("không kiểm được môi trường Python")
         self.publish(make_event("hub.started", None, {"epoch": self.bus.epoch, "version": __version__, "reconciled_runs": n}))
         self.dispatcher.start()  # M3: vòng tick dispatcher (cần event loop đang chạy)
+        if self.runs.auth_block:
+            self.runs.start_auth_watch()  # cờ chặn đăng nhập còn từ lần chạy trước → kiểm lại định kỳ, tự gỡ khi đã đăng nhập
         self.manager.start()  # M7: vòng nhịp điều phối viên (chỉ tick khi có việc)
         self.questions.start()  # UX: chuyển câu hỏi quá hạn của điều phối viên lên người + nhắc lại
         self.compat.check_on_start()  # hardening H-10: phiên bản CLI → hub_state.cli_compat (header TUI)
@@ -153,6 +155,12 @@ class Hub:
         from .session_search import start_backfill  # v17: chỉ mục hội thoại cũ theo lô nền (session_search.py)
 
         start_backfill(self)
+        try:  # graph memory: vector bge-m3 cho fact (chỉ khi cài extra `cfharness[vector]`) — embed nền theo lô, không chặn run
+            from .knowledge.graph.embed import start_vector_loop
+
+            start_vector_loop(self)
+        except Exception:  # pragma: no cover
+            log.exception("không khởi động được vòng vector graph memory")
 
     async def stop(self) -> None:
         self.publish(make_event("hub.stopping", None, {"epoch": self.bus.epoch}))

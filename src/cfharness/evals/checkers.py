@@ -12,6 +12,9 @@ LLM judge (gọi `claude -p --json-schema --no-session-persistence`, xem `judge.
 - `llm_judge`   : `{"kind":"llm_judge","rubric":"<rubric người viết>","model":"haiku","pass_threshold":0.7}`
 Tổ hợp:
 - `all`         : `{"kind":"all","checks":[...]}` — điểm = trung bình, đạt khi mọi check đạt.
+Graph memory (không chạy run, không gọi model — `memory_golden.py`):
+- `memory_recall`: `{"kind":"memory_recall","k":5,"gold_fact_ids":[...],"gold_answer":"...","as_of":"YYYY-MM-DD",...}` — chấm TRUY HỒI
+                  của câu hỏi (= prompt golden task) trên bản chụp graph của bản sao home: recall@k × (1 − stale-fact-rate). Chỉ ở mức ngoài.
 
 Điểm luôn trong [0, 1]. Run eval không `completed` → 0 điểm (không chấm).
 """
@@ -32,7 +35,7 @@ from typing import Any
 from ..errors import HubError
 from ..oscompat import no_window_kwargs
 
-KINDS = ("regex", "contains", "json_schema", "command", "llm_judge", "all")
+KINDS = ("regex", "contains", "json_schema", "command", "llm_judge", "all", "memory_recall")
 _FLAG_MAP = {"i": re.IGNORECASE, "m": re.MULTILINE, "s": re.DOTALL, "x": re.VERBOSE}
 
 
@@ -101,6 +104,12 @@ def validate_checker(spec: Any, *, _depth: int = 0) -> dict[str, Any]:
         thr = s.get("pass_threshold", 0.7)
         if not isinstance(thr, (int, float)) or not 0 <= float(thr) <= 1:
             raise HubError("checker llm_judge: pass_threshold phải trong [0, 1]")
+    elif kind == "memory_recall":
+        if _depth:
+            raise HubError("checker memory_recall chỉ dùng ở mức ngoài (không lồng trong 'all')")
+        from .memory_golden import validate_memory_checker
+
+        s = validate_memory_checker(s)
     elif kind == "all":
         checks = s.get("checks")
         if not isinstance(checks, list) or not checks or _depth > 2:
@@ -145,6 +154,10 @@ def grade_deterministic(spec: dict[str, Any], out: EvalOutput) -> Grade:
     """Chấm các checker tất định. `llm_judge` không xử lý ở đây (xem `judge.py`)."""
     kind = spec["kind"]
     text = out.text or ""
+    if kind == "memory_recall":  # chấm ở eval gate trên bản chụp graph (memory_golden.grade_memory), không có output run
+        from .memory_golden import grade_memory
+
+        return grade_memory(spec, out.prompt, out.cwd)
     if kind == "regex":
         hit = re.search(spec["pattern"], text, _flags(str(spec.get("flags") or ""))) is not None
         ok = hit if spec.get("must_match", True) else not hit

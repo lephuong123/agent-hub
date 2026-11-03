@@ -2,7 +2,7 @@
 
 - envelope sinh từ code phải KHỚP file đã commit (đổi envelope = sinh lại bằng `python -m cfharness.event_schema --write`
   và cân nhắc tăng `SCHEMA_VERSION`);
-- danh mục loại event chỉ được THÊM (loại đã công bố không được biến mất/đổi level);
+- danh mục loại event chỉ được THÊM (loại đã công bố không được biến mất/đổi level), và loại mới phải có trong snapshot (sinh lại);
 - mọi event phát ra từ fixture stream-json thật + event hub hợp lệ theo schema.
 """
 
@@ -45,6 +45,16 @@ def test_event_types_additive_only(committed):
 
     bad = [t for t in EVENT_LEVELS if not re.match(pat, t)]
     assert not bad, f"tên loại event sai mẫu: {bad}"
+
+
+def test_snapshot_lists_every_event_type(committed):
+    """Loại event mới (vd `guard.trust`) phải có trong snapshot đã commit — trước đây chỉ kiểm "không bớt" nên quên sinh lại vẫn xanh."""
+    gen = envelope_schema()
+    hint = "chạy `python -m cfharness.event_schema --write docs/schema/event.v1.json`"
+    unpublished = sorted(set(gen["x-event-types"]) - set(committed["x-event-types"]))
+    assert not unpublished, f"loại event chưa có trong snapshot: {unpublished} — {hint}"
+    assert committed["x-not-persisted"] == gen["x-not-persisted"], hint
+    assert committed == gen, hint
 
 
 def _fixture_events():
