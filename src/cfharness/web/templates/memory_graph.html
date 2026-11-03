@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Graph memory{% endblock %}
+{% macro filters(action) -%}
+<form method="get" action="{{ action }}" class="filters" role="search">
+  <label class="grow">Tìm <input name="q" value="{{ q.q or '' }}" placeholder="câu hỏi hoặc từ khoá (có dấu / không dấu)" autocomplete="off" spellcheck="false"></label>
+  <label>Như agent thấy <select name="agent"><option value="">— người: mọi tầng —</option>{% for a in agents %}<option value="{{ a }}" {{ 'selected' if q.agent == a }}>{{ a }}</option>{% endfor %}</select></label>
+  <label>Tầng <select name="tier"><option value="">mọi tầng</option>{% for k, label in tiers %}<option value="{{ k }}" {{ 'selected' if q.tier == k }}>{{ label }}</option>{% endfor %}</select></label>
+  <label>Tin cậy ≥ <select name="min_conf">{% for c in conf_steps %}<option value="{{ c }}" {{ 'selected' if (q.min_conf or '') == c }}>{{ c or 'bất kỳ' }}</option>{% endfor %}</select></label>
+  <label>Bước <select name="hops"><option value="1">1</option><option value="2" {{ 'selected' if q.hops == '2' }}>2</option></select></label>
+  <label>Tối đa <select name="limit">{% for n in ('50', '150', '300') %}<option value="{{ n }}" {{ 'selected' if (q.limit or '150') == n }}>{{ n }} thực thể</option>{% endfor %}</select></label>
+  <label class="row gap"><input type="checkbox" name="history" value="1" {{ 'checked' if q.history == '1' }}> Gồm lịch sử</label>
+  {% if q.entity %}<input type="hidden" name="entity" value="{{ q.entity }}">{% endif %}
+  <button class="btn sm primary" type="submit">{{ m.icon('search') }}<span>Tìm</span></button>
+</form>
+{%- endmacro %}
+{% block content %}
+<nav class="crumbs"><a href="/memory">Memory</a> › <span>Graph</span></nav>
+<div class="page-head"><div class="ph-title"><h1>Graph memory</h1><span class="sub">Thực thể + fact có thời gian. Tìm như agent tra (<code>memory_recall</code>: FTS5 + vector + thực thể), xem lịch sử, rollback, ghim.</span></div>
+  <div class="row gap"><a class="btn" href="/memory/graph/view{{ '?' ~ qs if qs }}">{{ m.icon('graph') }}<span>Xem đồ thị</span></a></div></div>
+{% include "_skill_result.html" %}
+{{ filters("/memory/graph") }}
+{% if q.entity %}<p class="small">Quanh thực thể <code>{{ q.entity }}</code> · <a href="/memory/graph?{{ qs_noent }}">bỏ lọc thực thể</a></p>{% endif %}
+{% if error %}<section class="card attention"><p class="danger-t">{{ error }}</p></section>{% endif %}
+
+{% if view %}
+<p class="muted small">{% if view.mode == 'query' %}Xếp hạng theo độ liên quan × tin cậy × độ mới (như agent tra).{% elif view.mode == 'entity' %}Fact chạm thực thể, mở rộng {{ view.hops }} bước.{% else %}Fact mới nhất.{% endif %}
+  {{ rows|length }} fact · {{ view.nodes|length }} thực thể{% if view.agent %} · phạm vi agent <b>{{ view.agent }}</b> (tầng + ghim canary agent đó thấy){% endif %}{% if view.truncated %} · <b>đã cắt</b> (thu hẹp bộ lọc){% endif %}.</p>
+<section class="card flush">
+  {% if not rows %}{{ m.empty("Không có fact nào khớp.", "graph", title="Trống") }}{% else %}
+  <table class="tbl stack graph-tbl">
+    <thead><tr><th>Fact</th><th>Hiệu lực</th><th class="num">Tin cậy</th><th>Tầng</th><th>Nguồn</th></tr></thead>
+    <tbody>
+    {% for r in rows %}<tr class="{{ 'archived' if not r.valid }}">
+      <td data-label="Fact" class="title-cell">
+        <span class="g-edge"><a href="/memory/graph/entity/{{ r.src }}">{{ r.src_name if r.src_name is not none else '(tên bị ẩn)' }}</a>
+          <span class="g-rel">{{ r.relation if r.relation is not none else '?' }}</span>
+          {% if r.dst %}<a href="/memory/graph/entity/{{ r.dst }}">{{ r.dst_name if r.dst_name is not none else '(tên bị ẩn)' }}</a>{% endif %}</span>
+        {% if r.blocked %}<span class="s danger-t">{{ m.icon('alert') }} Không qua quét an toàn lúc nạp ({{ r.flags|join(', ') }}) — agent không nhận văn bản này. <a href="/memory/graph/fact/{{ r.id }}">Xem chi tiết</a></span>
+        {% else %}<a class="t" href="/memory/graph/fact/{{ r.id }}">{{ r.fact }}</a>{% endif %}
+      </td>
+      <td data-label="Hiệu lực" class="small">{{ (r.valid_from or '?')[:10] }} → {{ (r.valid_to or '')[:10] or ('đã đóng' if not r.valid else 'nay') }}
+        {% if not r.valid %}<span class="pill muted">lịch sử</span>{% endif %}</td>
+      <td data-label="Tin cậy" class="num">{{ '%.2f'|format(r.confidence) }}{% if r.score is defined and r.score is not none %}<span class="xs muted"> · điểm {{ '%.2f'|format(r.score) }}</span>{% endif %}</td>
+      <td data-label="Tầng"><a href="/memory/{{ r.scope }}/{{ '-' if r.scope == 'global' else r.owner }}">{{ 'toàn hub' if r.scope == 'global' else r.scope ~ ' ' ~ r.owner }}</a></td>
+      <td data-label="Nguồn" class="small">{{ r.created_by or '?' }}{% if r.ledger_entry_id %} · <a href="/learnings/{{ r.ledger_entry_id }}"><code>{{ r.ledger_entry_id }}</code></a>{% endif %}
+        {% if r.source_episode_id %}<span class="xs muted"> · episode <code>{{ r.source_episode_id }}</code></span>{% endif %}</td>
+    </tr>{% endfor %}
+    </tbody>
+  </table>{% endif %}
+</section>
+{% endif %}
+
+<section class="card" id="consolidate">
+  <h2>{{ m.icon('refresh') }} Consolidation</h2>
+  <p class="muted small">Gộp thực thể trùng tên/alias và fact gần trùng cùng cạnh (Jaccard / cosine). Đi qua pipeline (created_by=curator) + ledger — rollback được; fact/graph đã ghim được bỏ qua. Xem trước không ghi gì.
+    {% if stats and stats.consolidated_at %}Lần gộp gần nhất {{ m.rel(stats.consolidated_at) }}.{% endif %}</p>
+  <form method="post" action="/memory/act/consolidate_preview" class="row gap wrap-row">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/memory/graph">
+    <label class="row gap">Tầng <select name="tier_pick">
+      <option value="">mọi tầng</option>{% for k, label in tiers %}<option value="{{ k }}">{{ label }}</option>{% endfor %}</select></label>
+    <button class="btn" type="submit">{{ m.icon('search') }}<span>Xem trước</span></button>
+  </form>
+</section>
+{% endblock %}

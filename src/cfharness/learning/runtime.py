@@ -90,6 +90,12 @@ def team_charter(hub: "Hub", team_id: str | None) -> str:
     return charter_block(team["id"], team.get("name") or team["id"], team.get("charter") or "")
 
 
+def memory_scopes(hub: "Hub", agent: dict[str, Any]) -> list[str] | None:
+    """Tầng tool `memory` được ghi (schema hub-self hiện `scope` khi có tầng chung) — None khi không có vòng học."""
+    lr = getattr(hub, "learning", None)
+    return lr.memory_scopes(agent["id"]) if lr is not None else None
+
+
 def apply_mcp(hub: "Hub", run: dict[str, Any], agent: dict[str, Any], *, servers: dict[str, Any], tp: dict[str, Any], allowed_mcp: list[str],
               env_extra: dict[str, str], perm_tool: str | None, guard_cfg: dict[str, Any], info: dict[str, Any]) -> tuple[str | None, dict[str, str]]:
     from ..mcp_server.hub_self import SERVER_NAME, server_entry
@@ -115,7 +121,7 @@ def apply_mcp(hub: "Hub", run: dict[str, Any], agent: dict[str, Any], *, servers
     if has_skills is None:  # prompt dùng lại của session: có hub-self nếu session gốc có skill
         has_skills = bool(hub.knowledge.effective_skills(agent["id"], home=Path(agent["home_path"]))) if getattr(hub, "knowledge", None) else False
     if has_skills or (hub.config.get("learning.agent_memory_tool") and run.get("kind") not in ("eval", "eval_judge", "curator") and not opts.get("eval_overlay")):
-        servers[SERVER_NAME] = server_entry(run_id, hub.paths.socket, hub.paths.home, "knowledge", guard_cfg)
+        servers[SERVER_NAME] = server_entry(run_id, hub.paths.socket, hub.paths.home, "knowledge", guard_cfg, memory_scopes=memory_scopes(hub, agent))
         allowed_mcp.append(SERVER_NAME)
         tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + [f"mcp__{SERVER_NAME}"]))
         env_extra = {**env_extra, "CFHARNESS_RUN_ID": run_id}

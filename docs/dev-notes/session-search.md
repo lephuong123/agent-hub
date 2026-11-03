@@ -13,7 +13,7 @@ Mã: `src/cfharness/session_search.py` (schema, chỉ mục, 4 chế độ, CLI)
 | event `user.message` (steer) | `steer` | bỏ qua run điều phối viên (như trên) |
 | event `message.complete` | `assistant` | tin assistant HOÀN CHỈNH — CLI đã gộp các `message.delta` (không ghi DB) thành một tin; tối đa 8000 ký tự như adapter. Có `subagent_id` nếu là subagent |
 | event `tool.start` | `tool_call` | `"<tên tool> <args_preview>"` (≤ 200 ký tự input), cột `tool` |
-| event `tool.complete` | `tool_result` | `result_preview` cắt còn 300 ký tự; bỏ nếu rỗng |
+| event `tool.complete` | `tool_result` | `result_preview` cắt còn 2.000 ký tự (trước 2026-10-30: 300 — hàng cũ giữ nguyên); bỏ nếu rỗng |
 | `manager_messages` (lúc `ManagerService._add_msg`) | giữ nguyên (`user`/`manager`/`notify`/`tick`/`schedule`) | `source='manager'`, `kind='manager_chat'`, `conversation_id` |
 | `runs.summary` (chỉ khi backfill, run không còn `message.complete` vì event đã bị retention xoá) | `assistant` | để run cũ vẫn tìm được |
 
@@ -43,16 +43,22 @@ Mỗi hàng `session_messages` mang `run_id, agent_id, team_id, task_id, session
   thay vì index `events(type, ts)` (đo: chọn sai index làm một lô mất 15–22 s).
 - **Retention**: job retention (`recovery.purge_retention`) xoá `events` > 30 ngày nhưng KHÔNG đụng `session_messages` — văn bản hội thoại
   đã chỉ mục được giữ CÙNG VÒNG ĐỜI với `runs` (giữ vĩnh viễn). Đây là chủ ý: transcript đầy đủ chỉ còn ở dạng đã che + cắt ngắn
-  (tool result 300 ký tự), đủ để tìm lại "đã làm gì ở đâu". Ngoại lệ: `recovery.purge_agent` (xoá cứng agent) xoá luôn tin của agent đó.
+  (tool result 2.000 ký tự), đủ để tìm lại "đã làm gì ở đâu". Ngoại lệ: `recovery.purge_agent` (xoá cứng agent) xoá luôn tin của agent đó.
 
 ## Bốn chế độ (`session.search {mode, …}`)
 
 | mode | Tham số | Kết quả |
 |---|---|---|
-| `search` (mặc định) | `query` (từ / `"cụm từ"`), lọc `agent_id, team_id, task_id, run_id, session_id, conversation_id, kind, role, source, since, until` (ISO / `YYYY-MM-DD` / `7d` `12h` `30m`), `include_technical`, `limit` ≤ 100, `offset` | `hits[]`: `id` (message id), `run_id`, `session_id`/`conversation_id`, `thread`, `agent_id`, `role`, `tool`, `ts`, `snippet`, `score` (−bm25), `next_offset`, `engine` |
+| `search` (mặc định) | `query` (từ / `"cụm từ"`), lọc `agent_id, team_id, task_id, run_id, session_id, conversation_id, kind, role, source, since, until` (ISO / `YYYY-MM-DD` / `7d` `12h` `30m`), `include_technical`, `group`, `limit` ≤ 100, `offset` | `group=true` → `threads[]` (xem dưới); không thì `hits[]`: `id` (message id), `run_id`, `session_id`/`conversation_id`, `thread`, `agent_id`, `role`, `tool`, `ts`, `snippet`, `score` (−bm25), `next_offset`, `engine` |
 | `around` | `message_id`, `window` (mặc định 5, ≤ 50) | `messages[]` cùng luồng, tin gốc có `anchor: true` |
 | `read` | `run_id` (cả tiền tố) \| `session_id` \| `conversation_id`, `role?`, `limit` ≤ 500, `offset` | transcript theo thời gian + `total`, `next_offset` |
 | `browse` | các bộ lọc như `search` | `threads[]`: `thread`, `first_ts`, `last_ts`, `messages`, `runs`, `agent_id`, `title` (tin user đầu) |
+
+**Gộp theo luồng (`group`, 2026-10-30 — như Hermes trả top session)**: xếp hạng tin như thường (quét tối đa `GROUP_SCAN_MAX` = 500 tin),
+rồi gộp theo luồng giữ thứ tự hit tốt nhất. Mỗi luồng: `thread`, `agent_id`, `best_score`, `matches` (số tin khớp trong cửa sổ quét),
+`first_ts`/`last_ts`, `title` (tin user đầu), `hits[]` ≤ 3 đoạn trích. `offset`/`limit` tính theo LUỒNG; `scan_truncated: true` khi cửa sổ
+quét đầy (có thể còn luồng khớp yếu hơn). Mặc định BẬT cho agent (hub-self `memory_search`/`session_search`) và MCP `hub_session_search`;
+TẮT cho RPC `session.search` và CLI (`--group` để bật) — giữ hình dạng cũ cho người gọi hiện có.
 
 "Luồng" (thread) = hội thoại điều phối viên (`conversation_id`) › session `claude` (gồm mọi run resume cùng session) › run.
 Mặc định ẩn phiên kỹ thuật `review|eval|eval_judge|curator|learning` (như `memory.search` cũ), trừ khi lọc `kind` hoặc `include_technical`.
@@ -82,8 +88,9 @@ run_id của agent khác để mở rộng phạm vi. `run_socket_block` của �
 
 ## Việc dở / giới hạn
 
-- Chưa gộp hit theo luồng (Hermes trả top session); client tự nhóm theo `thread`.
-- Tin `tool_result` chỉ có bản tóm tắt 300 ký tự (adapter chỉ giữ `result_preview` 500 ký tự) — không tìm được nội dung đầy đủ của output tool.
+- Tin `tool_result` giữ 2.000 ký tự đầu (như Hermes; adapter `RESULT_PREVIEW_MAX` = 2.000) — output tool dài hơn vẫn không tìm được phần đuôi.
+  Hàng chỉ mục trước 2026-10-30 chỉ có 300 ký tự và không khôi phục được (event gốc cũng chỉ giữ 500).
+- Chưa tóm tắt luồng bằng LLM (nếu Hermes có — đối chiếu trước khi làm; xem `plan-memory-hermes-parity.md`).
 - Chưa có lệnh `reindex`/xây lại FTS thủ công (`INSERT INTO session_fts(session_fts) VALUES('rebuild')` dùng được nếu cần).
 - Web/TUI chưa có ô tìm kiếm hội thoại (chỉ RPC/MCP/CLI/hub-self).
 - `web/demo.py` sửa `manager_messages.text/ts` trực tiếp (chỉ demo) → bản chỉ mục giữ nội dung cũ.

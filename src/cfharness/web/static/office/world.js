@@ -1,4 +1,5 @@
 /* Văn phòng 3D — dựng mặt bằng từ dữ liệu: dãy phòng phía bắc (server, thư viện, phòng họp, điều phối viên), cụm bàn theo team ở giữa,
+ * khu cafe điện tử (agent rảnh ngồi chơi game, số máy co giãn theo số agent),
  * dải phía nam (pantry, phòng nghỉ sofa, hàng ghế chờ). Tường bắc + tây cao (kiểu nhà búp bê), vách trong thấp để camera nhìn được.
  * Mọi "điểm đứng/ngồi" (spot) có hướng + tư thế; spot dùng chung được giữ chỗ để nhân vật không chồng lên nhau. */
 import * as THREE from '../vendor/three-0.169.0/three.module.min.js';
@@ -9,10 +10,27 @@ import { TEAM_COLORS, NO_TEAM_COLOR, mat, basic, box, cyl, sphere, seeded, hashS
 export const ZONE_NAMES = {
   desk: 'Bàn làm việc', server: 'Phòng server', library: 'Thư viện', meeting: 'Phòng họp', mgr: 'Phòng điều phối viên',
   mgrVisit: 'Phòng điều phối viên', pantry: 'Pantry', lounge: 'Phòng nghỉ', bench: 'Hàng ghế chờ',
+  cafe: 'Cafe điện tử', cafeBar: 'Quầy nước cafe',
 };
 
 const ROOM_D = 6;
 const WALL_H = 2.6;
+// khu cafe điện tử (mét): lối đi hai bên ngoài vách, lối vào phía tây trong phòng, quầy nước phía đông,
+// bề rộng một máy, khoảng vách → tâm dãy máy, khoảng cách hai dãy, độ dày dải vách, số máy tối thiểu
+const CAFE_SIDE = 2.0, CAFE_AISLE = 1.8, CAFE_BAR = 3.4, CAFE_STEP = 1.2, CAFE_EDGE = 2.7, CAFE_ROW = 3.8, CAFE_WALL = 0.3, CAFE_MIN = 6;
+const CAFE_RGB = ['#ff3df2', '#3df5ff', '#7dff5a'];
+const CAFE_SCREEN_OFF = '#1d2030';
+// ánh sáng theo giờ: [giờ, màu trời (hemi), cường độ hemi, màu nắng (dir), cường độ dir, chụp đèn trần, kính cửa sổ, độ sáng 0–1]
+const DAYLIGHT = [
+  [0, '#aab8e8', 1.25, '#8c9cff', 0.25, '#ffd88a', '#27324f', 0],
+  [5.5, '#aab8e8', 1.25, '#8c9cff', 0.25, '#ffd88a', '#27324f', 0],
+  [7.5, '#f2f5ff', 2.0, '#ffffff', 1.55, '#f3ead8', '#d4ebf6', 1],
+  [12, '#fff6e8', 2.1, '#fff0d8', 1.5, '#f3ead8', '#d4ebf6', 1],
+  [16.5, '#ffeedd', 2.0, '#ffd6a8', 1.45, '#f3ead8', '#e6e2d0', 1],
+  [18.5, '#ffd7bd', 1.7, '#ff9f5a', 1.1, '#ffd88a', '#f2a46b', 0.5],
+  [20, '#aab8e8', 1.25, '#8c9cff', 0.25, '#ffd88a', '#27324f', 0],
+  [24, '#aab8e8', 1.25, '#8c9cff', 0.25, '#ffd88a', '#27324f', 0],
+];
 
 // Khoá bố cục: đổi team/thành viên/điều phối viên → dựng lại văn phòng.
 export function layoutKey(data) {
@@ -28,7 +46,8 @@ export class World {
   constructor(data) {
     this.group = new THREE.Group();
     this.textures = [];
-    this.zones = { server: [], library: [], meeting: [], mgrVisit: [], pantry: [], lounge: [], bench: [] };
+    this.zones = { server: [], library: [], meeting: [], mgrVisit: [], pantry: [], lounge: [], bench: [], cafe: [], cafeBar: [] };
+    this.cafeMats = [];          // vật liệu RGB/màn hình riêng của cafe (đổi màu theo thời gian → không dùng bộ đệm basic())
     this.seats = new Map();      // agentId → spot bàn riêng
     this.leds = [];
     this.signs = [];
@@ -36,6 +55,9 @@ export class World {
     this.teamColor = new Map();
     this.estop = false;
     this.clockFlash = 0;
+    this.rooms = [];             // {key, name, x0, z0, x1, z1, p:{x,z}} — phòng có vách (chế độ đi bộ: tên phòng + kiểm đi tới được)
+    this.occluders = [];         // mesh tường/vách có thể che camera chế độ đi bộ → làm mờ (fade)
+    this.ownMats = [];           // vật liệu riêng (đèn trần, ô cửa sổ, lớp mờ) — đổi màu theo giờ → không dùng bộ đệm mat()/basic()
     this._plan(data);
     this._build(data);
   }
@@ -67,9 +89,20 @@ export class World {
       c.x = x; c.z = z; c.cx = x + c.w / 2; c.cz = z + c.d / 2;
       x += c.w + 1.4; rowH = Math.max(rowH, c.d);
     }
-    const zs = z + rowH + 1.2;
+    // khu cafe điện tử: dải riêng giữa cụm bàn và dải phía nam, số máy co giãn theo số agent không phải điều phối viên
+    // (+2 máy dư) để agent rảnh luôn có chỗ. Một "dãy" = 2 hàng máy quay lưng vào nhau; thiếu chỗ → thêm dãy (nới D).
+    const zc = z + rowH + 1.2;
+    const nAgents = clusters.reduce((n, c) => n + c.members.length, 0);
+    const need = Math.max(CAFE_MIN, nAgents + 2);
+    const cx0 = CAFE_SIDE, cx1 = W - CAFE_SIDE;
+    const kMax = Math.max(2, Math.floor((cx1 - cx0 - CAFE_AISLE - CAFE_BAR) / CAFE_STEP));
+    const rows = Math.ceil(need / (2 * kMax));
+    const k = Math.ceil(need / (2 * rows));
+    const cd = 2 * (CAFE_WALL + CAFE_EDGE) + (rows - 1) * CAFE_ROW;
+    this.cafe = { x0: cx0, x1: cx1, z0: zc + CAFE_WALL, z1: zc + cd - CAFE_WALL, rows, k, seats: 2 * k * rows, need };
+    const zs = zc + cd;
     this.W = W; this.zs = zs; this.D = zs + 6; this.clusters = clusters; this.mgrId = mgrId;
-    this.openZ0 = ROOM_D; this.openZ1 = zs;
+    this.openZ0 = ROOM_D; this.openZ1 = zc;
     this.grid = new Grid(0, 0, W, this.D, 0.5);
   }
 
@@ -98,8 +131,8 @@ export class World {
     this.floor = floor;
 
     // tường bắc + tây (cao), viền chân tường
-    box(g, W + 0.25, WALL_H, 0.25, '#f4ece0', W / 2 - 0.125, 0, -0.125);
-    box(g, 0.25, WALL_H, D, '#efe5d6', -0.125, 0, D / 2);
+    this.occluders.push(box(g, W + 0.25, WALL_H, 0.25, '#f4ece0', W / 2 - 0.125, 0, -0.125));
+    this.occluders.push(box(g, 0.25, WALL_H, D, '#efe5d6', -0.125, 0, D / 2));
     box(g, W, 0.12, 0.04, '#d6c4a8', W / 2, 0, 0.02);
     box(g, 0.04, 0.12, D, '#d6c4a8', 0.02, 0, D / 2);
     box(g, W + 0.3, 0.08, 0.3, '#e2d3bd', W / 2 - 0.15, WALL_H, -0.15);
@@ -108,15 +141,66 @@ export class World {
 
     this._rooms(data);
     this._clusters();
+    this._cafe();
     this._south();
     this._walls();
+    this._lamps();
 
-    // ánh sáng ấm: trời + một nguồn hướng (không shadow map)
+    // ánh sáng ấm: trời + một nguồn hướng (không shadow map); màu/cường độ theo giờ thật (setDaylight)
     this.hemi = new THREE.HemisphereLight('#fff6e8', '#cdb497', 2.1);
     this.dir = new THREE.DirectionalLight('#fff0d8', 1.5);
     this.dir.position.set(W * 0.25, 20, D * 0.95); this.dir.target.position.set(W / 2, 0, D / 2);
     g.add(this.hemi, this.dir, this.dir.target);
-    this.hemiBase = this.hemi.color.clone(); this.dirBase = this.dir.color.clone();
+    this.hemiBase = this.hemi.color.clone(); this.dirBase = this.dir.color.clone(); this.hemiInt = 2.1; this.dirInt = 1.5;
+    // lớp mờ cho tường che camera (chế độ đi bộ): MỘT vật liệu riêng, gán tạm thay vật liệu gốc rồi trả lại
+    this.fadeMat = new THREE.MeshLambertMaterial({ color: '#efe5d6', transparent: true, opacity: 0.18, depthWrite: false });
+    this.ownMats.push(this.fadeMat);
+    this.faded = new Set();
+  }
+
+  // đèn trần thả (chụp đèn sáng ấm khi trời tối) trên mỗi cụm bàn và dãy máy cafe; thêm cây góc khu làm việc
+  _lamps() {
+    const g = this.group;
+    this.lampMat = new THREE.MeshBasicMaterial({ color: '#f3ead8' });
+    this.ownMats.push(this.lampMat);
+    const lamp = (x, z) => {
+      cyl(g, 0.012, 0.012, 0.7, '#555555', x, 3.0, z, 6);
+      cyl(g, 0.08, 0.32, 0.22, '#3d3929', x, 2.8, z, 16);
+      cyl(g, 0.26, 0.26, 0.01, '', x, 2.79, z, 16).material = this.lampMat;
+    };
+    for (const c of this.clusters) {
+      const n = Math.max(1, Math.round(c.w / 4));
+      for (let i = 0; i < n; i++) lamp(c.x + (c.w * (i + 0.5)) / n, c.cz);
+    }
+    const cf = this.cafe;
+    for (let i = 0; i < cf.rows; i++) for (const fx of [0.3, 0.6]) lamp(cf.x0 + (cf.x1 - cf.x0) * fx, cf.z0 + CAFE_EDGE + i * CAFE_ROW);
+    this._plant(this.W - 0.5, ROOM_D + 0.8, 1.1);
+    this._plant(this.W - 0.5, this.openZ1 - 0.5, 1.1);
+  }
+
+  // Ánh sáng theo giờ thật (giờ địa phương, số thực 0–24): sáng mát → trưa ấm → chiều cam → tối xanh + đèn trần bật.
+  // ESTOP ghi đè màu trong update(); tắt ESTOP trả về mức của giờ hiện tại.
+  setDaylight(h) {
+    const K = DAYLIGHT;
+    let i = 0;
+    while (i < K.length - 2 && h >= K[i + 1][0]) i++;
+    const a = K[i], b = K[i + 1], t = Math.min(1, Math.max(0, (h - a[0]) / Math.max(1e-6, b[0] - a[0])));
+    const col = (x, y) => new THREE.Color(x).lerp(new THREE.Color(y), t);
+    this.hemiBase.copy(col(a[1], b[1])); this.hemiInt = a[2] + (b[2] - a[2]) * t;
+    this.dirBase.copy(col(a[3], b[3])); this.dirInt = a[4] + (b[4] - a[4]) * t;
+    this.lampMat.color.copy(col(a[5], b[5]));
+    this.skyMat.color.copy(col(a[6], b[6]));
+    // mặt trời đi từ đông (sáng) sang tây (chiều)
+    const sun = Math.min(1, Math.max(0, (h - 6) / 13));
+    this.dir.position.set(this.W * (0.9 - 0.8 * sun), 20, this.D * 0.95);
+    this.daylight = a[7] + (b[7] - a[7]) * t;
+    if (!this.estop) { this.hemi.color.copy(this.hemiBase); this.dir.color.copy(this.dirBase); this.hemi.intensity = this.hemiInt; this.dir.intensity = this.dirInt; }
+  }
+  roomAt(x, z) { return this.rooms.find((r) => x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1) || null; }
+  // làm mờ đúng tập mesh `set` (mesh khác trả lại vật liệu gốc)
+  fade(set) {
+    for (const m of this.faded) if (!set.has(m)) { m.material = m.userData.mat0; this.faded.delete(m); }
+    for (const m of set) if (!this.faded.has(m)) { m.userData.mat0 = m.material; m.material = this.fadeMat; this.faded.add(m); }
   }
 
   // ------------------------------------------------------------ dãy phòng phía bắc
@@ -128,9 +212,11 @@ export class World {
       const s = labelSprite(text, color, { scale: 1.15, bg: 'rgba(61,57,41,0.88)', fg: '#fffaf0', stroke: 'rgba(0,0,0,0)' });
       s.position.set(rw * i + rw / 2, 2.75, ROOM_D); g.add(s); this.textures.push(s.material.map); this.signs.push(s);
     };
-    // cửa sổ cao trên tường bắc
+    // cửa sổ cao trên tường bắc (màu kính theo giờ: setDaylight)
+    this.skyMat = new THREE.MeshBasicMaterial({ color: '#d4ebf6' });
+    this.ownMats.push(this.skyMat);
     for (let i = 0; i < 4; i++) {
-      box(g, rw * 0.62, 0.55, 0.02, '#cfe6f2', rw * i + rw / 2, 1.85, 0.01, basic('#d4ebf6'));
+      box(g, rw * 0.62, 0.55, 0.02, '#cfe6f2', rw * i + rw / 2, 1.85, 0.01, this.skyMat);
       box(g, rw * 0.62 + 0.12, 0.06, 0.06, '#ffffff', rw * i + rw / 2, 1.8, 0.03);
     }
 
@@ -256,16 +342,20 @@ export class World {
     const glass = new THREE.MeshLambertMaterial({ color: '#bfe2f2', transparent: true, opacity: 0.22, depthWrite: false });
     const half = (x0, z0, x1, z1, withGlass) => {
       const w = Math.max(0.12, x1 - x0), d = Math.max(0.12, z1 - z0);
-      box(g, w, 1.0, d, '#f1e8da', (x0 + x1) / 2, 0, (z0 + z1) / 2);
+      this.occluders.push(box(g, w, 1.0, d, '#f1e8da', (x0 + x1) / 2, 0, (z0 + z1) / 2));
       box(g, w + 0.02, 0.05, d + 0.02, '#d8c7ad', (x0 + x1) / 2, 1.0, (z0 + z1) / 2);
       if (withGlass) {
-        box(g, w, 1.2, d, '', (x0 + x1) / 2, 1.05, (z0 + z1) / 2, glass);
+        this.occluders.push(box(g, w, 1.2, d, '', (x0 + x1) / 2, 1.05, (z0 + z1) / 2, glass));
         box(g, w + 0.02, 0.05, d + 0.02, '#c9d6dc', (x0 + x1) / 2, 2.25, (z0 + z1) / 2);
       }
       grid.rect(x0, z0, x1, z1, 0.15);
     };
     // vách giữa các phòng (kính cho phòng họp + điều phối viên)
     for (let i = 1; i < 4; i++) half(rw * i - 0.06, 0, rw * i + 0.06, ROOM_D, i >= 2);
+    // phòng phía bắc: p = chỗ trống bên trong (kiểm đi tới được), door = giữa cửa
+    for (const [i, key, pz] of [[0, 'server', 3.0], [1, 'library', 2.6], [2, 'meeting', 5.0], [3, 'mgr', 4.6]]) {
+      this.rooms.push({ key, name: ZONE_NAMES[key], x0: rw * i, z0: 0, x1: rw * (i + 1), z1: ROOM_D, p: { x: rw * i + rw / 2, z: pz }, door: { x: rw * i + rw / 2, z: ROOM_D } });
+    }
     half(this.W - 0.12, 0, this.W, ROOM_D, true);
     // vách trước có cửa ở giữa
     for (let i = 0; i < 4; i++) {
@@ -348,6 +438,116 @@ export class World {
     sphere(g, 0.15 * k, '#7fc06b', x + 0.1 * k, y + 0.55 * k, z + 0.05 * k, 10);
     sphere(g, 0.13 * k, '#5e9d52', x - 0.1 * k, y + 0.52 * k, z - 0.06 * k, 10);
     if (!y0) this.grid.rect(x - 0.2 * k, z - 0.2 * k, x + 0.2 * k, z + 0.2 * k, 0.05);
+  }
+
+  // ------------------------------------------------------------ khu cafe điện tử (agent rảnh ra ngồi chơi game)
+  // Phòng riêng giữa cụm bàn và dải phía nam: vách thấp tím than viền neon RGB, cửa hai đầu ở vách bắc + nam,
+  // lối đi 2 m bên ngoài hai vách tây/đông (đi từ cụm bàn xuống pantry không phải xuyên qua cafe).
+  // Bên trong: lối vào + 2 máy arcade phía tây, các dãy máy (2 hàng quay lưng) ở giữa, quầy nước phía đông.
+  _cafe() {
+    const g = this.group, grid = this.grid, c = this.cafe;
+    const { x0, x1, z0, z1 } = c, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+    const rgb = CAFE_RGB.map((col) => new THREE.MeshBasicMaterial({ color: col }));
+    this.rgbMats = rgb; this.cafeMats.push(...rgb);
+    // sàn thảm tối + thảm dưới từng dãy
+    box(g, x1 - x0, 0.012, z1 - z0, '#3b3552', cx, 0, cz);
+    // vách thấp + viền neon (đổi màu theo thời gian)
+    const wall = (ax, az, bx, bz, i) => {
+      const w = Math.max(0.12, bx - ax), d = Math.max(0.12, bz - az), mx = (ax + bx) / 2, mz = (az + bz) / 2;
+      this.occluders.push(box(g, w, 1.0, d, '#3a3350', mx, 0, mz));
+      box(g, w + 0.02, 0.05, d + 0.02, '', mx, 1.0, mz, rgb[i % rgb.length]);
+      grid.rect(ax, az, bx, bz, 0.15);
+    };
+    const doors = [[x0 + 0.2, x0 + 1.6], [x1 - 3.2, x1 - 1.8]];
+    for (const [wz, i] of [[z0, 0], [z1, 1]]) {
+      wall(x0, wz - 0.06, doors[0][0], wz + 0.06, i);
+      wall(doors[0][1], wz - 0.06, doors[1][0], wz + 0.06, i + 1);
+      wall(doors[1][1], wz - 0.06, x1, wz + 0.06, i + 2);
+      for (const [a, b] of doors) box(g, b - a, 0.012, 0.6, '#5b4f7a', (a + b) / 2, 0.006, wz);
+    }
+    wall(x0 - 0.06, z0, x0 + 0.06, z1, 2);
+    wall(x1 - 0.06, z0, x1 + 0.06, z1, 0);
+
+    // dãy máy: tâm dãy cách vách CAFE_EDGE, máy chia đều trong phần giữa lối vào tây và quầy nước đông
+    const sx0 = x0 + CAFE_AISLE, sx1 = x1 - CAFE_BAR, span = c.k * CAFE_STEP;
+    const first = (sx0 + sx1) / 2 - span / 2 + CAFE_STEP / 2;
+    const rnd = seeded(77);
+    for (let i = 0; i < c.rows; i++) {
+      const bz = z0 + CAFE_EDGE + i * CAFE_ROW;
+      box(g, span + 0.4, 0.014, 3.3, '#2d2940', (sx0 + sx1) / 2, 0, bz);
+      for (let j = 0; j < c.k; j++) {
+        const x = first + j * CAFE_STEP;
+        for (const side of [-1, 1]) {
+          const screen = this._gameDesk(x, bz + side * 0.4, side, j, rnd);
+          const sz = bz + side * 1.25;
+          this._gamingChair(x, sz, side, CAFE_RGB[(j + (side > 0 ? 1 : 0)) % CAFE_RGB.length]);
+          this._spot('cafe', x, sz, side < 0 ? 0 : Math.PI, 'typeFast', 0.34, { screen, ph: i * 3.1 + j * 0.9 + (side > 0 ? 1.7 : 0), stand: { x, z: bz + side * 1.7 } });
+        }
+      }
+      grid.rect(first - 0.58, bz - 0.8, first + (c.k - 1) * CAFE_STEP + 0.58, bz + 0.8, 0.08);
+    }
+
+    // 2 máy arcade sát vách tây, quay vào trong
+    for (const oz of [-0.45, 0.45]) {
+      const az = cz + oz;
+      box(g, 0.6, 1.6, 0.6, '#3a1f5c', x0 + 0.42, 0, az);
+      box(g, 0.02, 0.38, 0.44, '', x0 + 0.73, 0.98, az, rgb[1]);
+      box(g, 0.02, 0.14, 0.5, '', x0 + 0.73, 1.42, az, rgb[oz < 0 ? 0 : 2]);
+      box(g, 0.22, 0.07, 0.5, '#2a2a33', x0 + 0.8, 0.82, az);
+      sphere(g, 0.035, '#ff5a4a', x0 + 0.84, 0.92, az - 0.1, 8).material = basic('#ff5a4a');
+    }
+    grid.rect(x0, cz - 0.75, x0 + 0.92, cz + 0.75, 0.05);
+
+    // quầy nước nhỏ sát vách đông: quầy + tủ lạnh kính + ly; 2 chỗ đứng uống (zone cafeBar)
+    const len = Math.min(2.4, z1 - z0 - 1.6), qx = x1 - 0.55;
+    box(g, 0.6, 1.0, len, '#4a3b5e', qx, 0, cz);
+    box(g, 0.66, 0.05, len + 0.06, '#e9e2f5', qx, 1.0, cz);
+    box(g, 0.02, 0.04, len, '', qx - 0.31, 0.85, cz, rgb[1]);
+    for (let i = 0; i < 4; i++) cyl(g, 0.045, 0.04, 0.12, ['#ffffff', '#ff3df2', '#3df5ff', '#e9b44c'][i], qx, 1.05, cz - len / 2 + 0.35 + i * 0.5);
+    const fz = cz - len / 2 - 0.45;
+    box(g, 0.6, 1.5, 0.6, '#d9dde8', x1 - 0.45, 0, fz);
+    box(g, 0.02, 1.1, 0.46, '', x1 - 0.76, 0.3, fz, basic('#9fe8ff'));
+    grid.rect(x1 - 0.85, fz - 0.3, x1, cz + len / 2, 0.1);
+    for (const oz of [-0.55, 0.55]) this._spot('cafeBar', x1 - 1.45, cz + oz, Math.PI / 2, 'drink');
+    this._plant(x1 - 0.5, z1 - 0.55, 1);
+
+    this.rooms.push({ key: 'cafe', name: ZONE_NAMES.cafe, x0, z0, x1, z1, p: { x: x0 + 1.2, z: z0 + 1.0 }, door: { x: (doors[0][0] + doors[0][1]) / 2, z: z0 } });
+    const s = labelSprite('Cafe điện tử 🎮', '#ff3df2', { scale: 1.25, bg: 'rgba(40,30,70,0.9)', fg: '#fffaf0', stroke: 'rgba(0,0,0,0)' });
+    s.position.set(cx, 2.5, z0); g.add(s); this.textures.push(s.material.map); this.signs.push(s);
+  }
+
+  // bàn game: mặt bàn tối, viền RGB phía ghế, màn hình rộng (mặt màn hình riêng để đổi màu khi có người chơi),
+  // bàn phím phát sáng, thùng máy kính hông RGB dưới gầm
+  _gameDesk(x, z, side, j, rnd) {
+    const g = this.group, rgb = this.rgbMats;
+    box(g, 1.1, 0.05, 0.7, '#2b2d38', x, 0.6, z);
+    box(g, 0.05, 0.6, 0.62, '#1e1f27', x - 0.52, 0, z); box(g, 0.05, 0.6, 0.62, '#1e1f27', x + 0.52, 0, z);
+    box(g, 1.1, 0.03, 0.02, '', x, 0.57, z + side * 0.36, rgb[j % rgb.length]);
+    box(g, 0.44, 0.02, 0.14, '#15161b', x, 0.65, z + side * 0.18);
+    box(g, 0.4, 0.006, 0.1, '', x, 0.67, z + side * 0.18, rgb[(j + 1) % rgb.length]);
+    box(g, 0.08, 0.03, 0.12, '#15161b', x + 0.3, 0.65, z + side * 0.18);
+    const mz = z - side * 0.16;
+    box(g, 0.08, 0.16, 0.06, '#15161b', x, 0.65, mz);
+    box(g, 0.26, 0.02, 0.18, '#15161b', x, 0.65, mz);
+    box(g, 0.72, 0.4, 0.04, '#15161b', x, 0.79, mz);
+    const scr = new THREE.MeshBasicMaterial({ color: CAFE_SCREEN_OFF });
+    this.cafeMats.push(scr);
+    box(g, 0.66, 0.34, 0.01, '', x, 0.82, mz + side * 0.025, scr);
+    box(g, 0.2, 0.45, 0.42, '#1b1c22', x + 0.36, 0, z);
+    box(g, 0.006, 0.34, 0.32, '', x + 0.255, 0.05, z, rgb[(j + 2) % rgb.length]);
+    if (rnd() < 0.4) cyl(g, 0.035, 0.035, 0.11, ['#c8413a', '#3df5ff', '#e9b44c', '#7dff5a'][Math.floor(rnd() * 4)], x - 0.42, 0.65, z + side * 0.1);
+    return scr;
+  }
+
+  // ghế gaming: lưng cao, sọc màu nhấn (dày hơn lưng để thấy được cả hai mặt)
+  _gamingChair(x, z, side, accent) {
+    const g = this.group;
+    box(g, 0.46, 0.08, 0.46, '#25262e', x, 0.26, z);
+    box(g, 0.46, 0.6, 0.07, '#25262e', x, 0.33, z + side * 0.2);
+    box(g, 0.12, 0.5, 0.09, accent, x, 0.38, z + side * 0.2);
+    for (const sx of [-0.25, 0.25]) box(g, 0.05, 0.04, 0.34, accent, x + sx, 0.44, z);
+    cyl(g, 0.03, 0.03, 0.2, '#777777', x, 0.06, z, 8);
+    cyl(g, 0.22, 0.22, 0.05, '#444444', x, 0.0, z, 14);
   }
 
   // ------------------------------------------------------------ dải phía nam + tường tây (kanban, đồng hồ)
@@ -441,6 +641,9 @@ export class World {
     grid.rect(bx - 1.9, this.D - 0.7, bx + 1.9, this.D - 0.2, 0.05);
     this._plant(W - 0.6, zs + 0.7, 1.1);
     sign(bx, 'Hàng ghế chờ ⏳', '#4f8fc0');
+    this.rooms.push({ key: 'pantry', name: ZONE_NAMES.pantry, x0: 0, z0: zs, x1: 7.6, z1: this.D, p: { x: 2.6, z: zs + 2.1 } });
+    this.rooms.push({ key: 'lounge', name: ZONE_NAMES.lounge, x0: lx0, z0: zs, x1: lx1, z1: this.D, p: { x: lcx - 2.0, z: lcz } });
+    this.rooms.push({ key: 'bench', name: ZONE_NAMES.bench, x0: W - 7.3, z0: zs, x1: W, z1: this.D, p: { x: bx, z: zs + 4.0 } });
 
     // tường tây: bảng kanban + đồng hồ
     const kz = Math.max(ROOM_D + 2.2, (this.openZ0 + this.openZ1) / 2);
@@ -494,13 +697,18 @@ export class World {
     if (best) best.owner = id;
     return best;
   }
-  release(spot, id) { if (spot && this.zones[spot.zone] && spot.owner === id) spot.owner = null; }
+  release(spot, id) { if (spot && this.zones[spot.zone] && spot.owner === id) { spot.owner = null; spot._play = false; } }
+  // màn hình máy cafe sáng khi có người đang ngồi chơi (actor gọi mỗi khung; nhả chỗ → tắt)
+  playCafe(spot, on) { if (spot && spot.zone === 'cafe') spot._play = !!on; }
 
   setScreen(id, on) {
     const s = this.seats.get(id);
     if (s && s.screen && s._on !== on) { s._on = on; s.screen.color.set(on ? '#9fd8ff' : '#2c3138'); }
   }
-  setEstop(on) { this.estop = !!on; if (!on) { this.hemi.color.copy(this.hemiBase); this.dir.color.copy(this.dirBase); this.hemi.intensity = 2.1; } }
+  setEstop(on) {
+    this.estop = !!on;
+    if (!on) { this.hemi.color.copy(this.hemiBase); this.dir.color.copy(this.dirBase); this.hemi.intensity = this.hemiInt; this.dir.intensity = this.dirInt; }
+  }
   setTeamEstop(id, on) {
     const fx = this.teamFx.get(id || '');
     if (fx) { fx.on = !!on; fx.ov.visible = fx.lamp.visible = !!on; }
@@ -535,10 +743,24 @@ export class World {
       const p = reduced ? 0.6 : 0.5 + 0.5 * Math.sin(t * 4);
       fx.ov.material.opacity = 0.18 + p * 0.22; fx.lamp.material.opacity = 0.06 + p * 0.1;
     }
+    // cafe: viền neon đổi màu, màn hình người đang chơi nhấp nháy; reduced-motion / ESTOP → màu tĩnh
+    const still = reduced || this.estop;
+    if (!still) this.rgbMats.forEach((m, i) => m.color.setHSL((t * 0.08 + i / 3) % 1, 1, 0.6));
+    for (const s of this.zones.cafe) {
+      if (s._play) {
+        if (still && s._on === 'still') continue;
+        s._on = still ? 'still' : 'anim';
+        const hue = ((still ? 0 : t * 0.15) + s.ph * 0.13) % 1;
+        s.screen.color.setHSL(hue, 0.8, still ? 0.6 : 0.55 + 0.08 * Math.sin(t * 7 + s.ph));
+      } else if (s._on) { s._on = false; s.screen.color.set(CAFE_SCREEN_OFF); }
+    }
   }
 
   dispose() {
     for (const t of this.textures) t.dispose();
+    for (const m of this.cafeMats) m.dispose();
+    this.fade(new Set());
+    for (const m of this.ownMats) m.dispose();
     for (const b of Object.values(this.boards || {})) b.dispose();
     if (this.exitBoard) this.exitBoard.dispose();
     this.group.traverse((o) => {

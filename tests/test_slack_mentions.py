@@ -151,6 +151,21 @@ async def test_reply_without_reply_to_goes_to_conversation_thread_not_channel_ro
     assert not root_posts(sk)
 
 
+async def test_heartbeat_notify_with_guessed_conversation_goes_to_dm_not_other_thread(make, sk):
+    """notify_owner từ heartbeat: hội thoại chỉ là đoán (cuộc người hoạt động gần nhất) → DM, không chen vào thread việc khác."""
+    from cfharness.events import make_event
+
+    d = await mk(make, sk)
+    await deliver(sk, sk.mention(CH, BOSS, f"<@{BOT_USER}> kiểm tra xem lỗi gì"))
+    await until(lambda: [m for m in sk.sent(CH) if "Điều phối viên" in sk.text_of(m)], timeout=15)
+    n = len(sk.sent(CH))
+    d.hub.publish(make_event("manager.reply", "boss", {"conversation_id": conv_of(d), "run_id": "r_tick000002", "text": "việc walk mode xong",
+                                                       "channel": f"slack:{CH}", "kind": "notify", "ok": True,
+                                                       "conversation_guessed": True}, run_id="r_tick000002"))
+    await until(lambda: [m for m in sk.sent(DM_BOSS) if "việc walk mode xong" in sk.text_of(m)], timeout=10)
+    assert len(sk.sent(CH)) == n
+
+
 async def test_channel_reply_with_no_known_thread_goes_to_dm(make, sk):
     from cfharness.events import make_event
 

@@ -592,6 +592,9 @@ Mô tả: **Bộ golden task do người dùng quyết định** (đã chốt Q-
 - **Trước áp dụng (bắt buộc)** cho L3: cấu hình agent; tầng team/global (chạy golden task của mọi agent bị ảnh hưởng, hoặc mẫu ≥ 3 agent **[ĐỀ XUẤT]**); USER profile. Tụt → `eval_failed`, không áp dụng, Signal `failure` cho review. Không có golden task → `deferred_no_eval` (Q-23), và digest/Slack nhắc người dùng chọn golden task cho agent đó kèm danh sách ứng viên.
 - **Sau áp dụng** cho L1 (theo lô, mặc định hằng ngày **[ĐỀ XUẤT]**) và L2 (ngay). Tụt → **tự rollback** entry (trừ entry `actor=user` — chỉ cảnh báo), event `learning.rolled_back` (`actor=eval_gate`).
 - L1/L2 của agent không có golden task vẫn áp dụng nhưng gắn cờ `unevaluated` và chịu theo dõi hồi quy chặt hơn (FR-LN-17).
+- **Đề xuất golden từ task done, người duyệt một chạm** (vẫn đúng Q-07: hub đề xuất, người quyết): vòng nền (mỗi giờ) dựng bản nháp (prompt = đề bài task, cách chấm = LLM judge so với kết quả người đã nhận) từ task `done` đủ cũ (`eval.golden_suggest.min_age_h` = 6 h) mà người **không chạm** — không Signal sửa/hoàn tác/từ chối/huỷ, không `run.reverted`/tiếp quản, không steer của người, không bình luận của người vào task — không secret, không trùng. Người bấm Duyệt / Bỏ qua trên web, Telegram/Slack (nút nonce một lần) hoặc CLI (`golden approve|reject`); RPC HUMAN_ONLY, mọi quyết định vào audit. Lúc duyệt hub **kiểm lại** người chạm (sửa/hoàn tác tới muộn → `Conflict`, đề xuất tự bỏ); đề xuất cũ của gate (theo run) chịu cùng bộ lọc. Duyệt → golden thật + proposal `deferred_no_eval` của agent đó được thử lại ngay. Chi tiết: `docs/dev-notes/golden-suggestions.md`.
+- Given task done 7 h trước, người không sửa/hoàn tác, When vòng nền quét, Then có đề xuất mở (chưa có golden task); When người bấm Duyệt trên Telegram, Then golden task tạo bởi `user:telegram:<chat>` và eval gate của agent thấy ngay.
+- Given đề xuất đang mở và người hoàn tác run của task, When người bấm Duyệt, Then bị từ chối (`Conflict`), đề xuất thành `dismissed`, không tạo golden task.
 - Given patch skill (L1) làm 2/3 golden task trượt rubric, When eval theo lô chạy, Then entry bị rollback tự động, digest ghi "đã rollback do eval tụt 0.9 → 0.5".
 - Given proposal đổi model agent từ `opus` sang `haiku` làm điểm tụt 20%, Then `eval_failed`, cấu hình agent không đổi.
 
@@ -972,6 +975,14 @@ Mô tả: Người có thể cho **từng agent** kết nối/lắng nghe trên 
 - Given người chạy `agent-hub guard sandbox allow-localhost nghiem-thu-chrome on`, Then run kế tiếp của agent đó `curl http://127.0.0.1:<port>/` và `listen(0,'127.0.0.1')` thành công, còn kết nối Unix socket hub và đọc `HUB_HOME/auth/` vẫn `Operation not permitted`; có audit + event `guard.sandbox_override`; TUI hiện `⚠lo`.
 - Given agent khác chưa bật, Then kết nối loopback vẫn bị chặn (exit 7 / EPERM).
 - Given điều phối viên, vòng học, hoặc `agent update` cố đặt khoá sandbox, Then bị từ chối và audit; Given `agent clone` một agent có ngoại lệ, Then bản clone **không** có ngoại lệ.
+
+**FR-SG-14 — Allowlist domain web theo agent** · Should · M7 (thêm 2026-10-30, hardening WEB-1)
+Mô tả: Người có thể khoá **từng agent** vào vài domain web (`tool_policy.web_allow_domains`; `null` = không giới hạn, hành vi y như trước; `[]` = chặn mọi WebFetch). Chỉ tên đầy đủ hoặc `*.x`. Chi tiết: `docs/dev-notes/webfetch-agent-allowlist.md`.
+- WebFetch và Claude in Chrome `navigate`/`tabs_create_mcp` (cả trong `browser_batch`) tới host ngoài danh sách → **từ chối** (forbidden `web_agent_domain_not_allowed`, audit `guard.deny` + event `guard.blocked`), kể cả agent trust full; URL không tách chắc host hoặc lỗi khi kiểm → từ chối.
+- Thao tác Chrome có thể rời domain không lộ URL (click/gõ/form/JS/back-forward/batch có hành động) → luôn giữ chờ người ở mọi profile (`web_agent_chrome_action`); trust full → từ chối. Playwright MCP bị gỡ khỏi run của agent có allowlist.
+- `guard.enabled=false` + có allowlist → WebFetch và Chrome bị tắt (fail-closed).
+- Quyền đổi: người tự do; điều phối viên chỉ thu hẹp; vòng học nới = `self_escalation`.
+- Given agent có `web_allow_domains: [docs.python.org]` (kể cả trust full), When WebFetch/Chrome navigate tới `https://evil.com/`, Then bị từ chối + audit; When Chrome click (trust full), Then bị từ chối; Given agent không đặt, Then mọi hành vi như trước.
 
 ### 6.11 Web UI (FR-WEB) — thêm ở 0.8, mốc M6
 

@@ -12,6 +12,7 @@ Không gọi claude: Hub in-process + FakeRuntime.
 from __future__ import annotations
 
 import asyncio
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -30,7 +31,8 @@ def files(tmp_path, monkeypatch):
     from cfharness.guard import classifier
 
     real = classifier._birth
-    monkeypatch.setattr(classifier, "_birth", lambda p, st: 0.0 if str(p).startswith(str(tmp_path)) else real(p, st))
+    root = os.path.normcase(str(tmp_path))  # Windows: classifier đưa đường dẫn dạng `C:/…` → so sau khi chuẩn hoá
+    monkeypatch.setattr(classifier, "_birth", lambda p, st: 0.0 if os.path.normcase(os.path.abspath(str(p))).startswith(root) else real(p, st))
     for n in ("a", "b", "c"):
         (tmp_path / n).write_text("x")
     return {n: {"command": f"rm {tmp_path / n}"} for n in ("a", "b", "c")}

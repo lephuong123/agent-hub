@@ -422,6 +422,7 @@ async def test_wt4_group_requires_allowed_user_and_explicit_opt_in(make, tg):
     GROUP = -1001234
     d = await make(allowed=(GROUP,), runtime=FakeRuntime(hold=True), tg_cfg={"allow_groups": True, "allowed_user_ids": [str(BOSS)]})
     rid = await held_run(d)
+    d.hub.telegram._watch(rid, GROUP)  # việc giao từ nhóm → tin duyệt về nhóm (không có chat gốc thì nhóm không nhận)
     ap = open_approval(d, rid)
     msg = await until(lambda: approval_sys_msg(tg, GROUP, ap["id"]))
     approve = FakeTelegram.buttons(msg)[0]["callback_data"]
@@ -437,6 +438,60 @@ async def test_wt4_group_requires_allowed_user_and_explicit_opt_in(make, tg):
     await approve_2step_from(tg, GROUP, msg, BOSS)
     assert d.hub.approvals.get(ap["id"])["status"] == "allowed"
     assert auth.telegram_caller(d.hub, GROUP, BOSS).human and not auth.telegram_caller(d.hub, GROUP, 777777).human
+    await stop(d)
+
+
+async def test_route_to_origin_chat_only(make, tg):
+    """Tin chủ động gắn với việc chỉ về chat đã giao việc; không có chat gốc → chỉ chat riêng (nhóm không nhận)."""
+    GROUP = -1001234
+    d = await make(allowed=(BOSS, OTHER, GROUP), runtime=FakeRuntime(hold=True),
+                   tg_cfg={"allow_groups": True, "allowed_user_ids": [str(BOSS)]})
+    bot = d.hub.telegram
+    assert bot.broadcast_chats() == {str(BOSS), str(OTHER)}
+    for a in ("a1", "a2", "a3"):  # mỗi tình huống một agent (giới hạn đồng thời theo agent)
+        d.hub.agents.create({"id": a, "name": a})
+
+    async def run_from(agent, chat):
+        r = d.hub.runs.submit(agent, "làm việc")
+        if chat is not None:
+            bot._watch(r["id"], chat)
+        await until(lambda: d.hub.store.get_run(r["id"])["status"] == "running")
+        return r["id"]
+
+    # (1) giao từ nhóm → approval + câu hỏi CHỈ về nhóm
+    r1 = await run_from("a1", GROUP)
+    ap1 = open_approval(d, r1, fp="g1")
+    await until(lambda: approval_sys_msg(tg, GROUP, ap1["id"]))
+    q1 = d.hub.questions.open(d.hub.store.get_run(r1), "Chọn cách nào?", ["A", "B"])
+    await until(lambda: any("Chọn cách nào?" in t for t in texts(tg, GROUP)))
+    await asyncio.sleep(0.3)
+    for c in (BOSS, OTHER):
+        assert approval_sys_msg(tg, c, ap1["id"]) is None and not any("Chọn cách nào?" in t for t in texts(tg, c))
+    assert bot.route_chats(q1["run_id"]) == [str(GROUP)]
+
+    # (2) giao từ chat riêng OTHER → chỉ OTHER (BOSS và nhóm không nhận); run con (resume) kế thừa chat gốc
+    r2 = await run_from("a2", OTHER)
+    ap2 = open_approval(d, r2, fp="o2")
+    await until(lambda: approval_sys_msg(tg, OTHER, ap2["id"]))
+    await asyncio.sleep(0.3)
+    assert approval_sys_msg(tg, BOSS, ap2["id"]) is None and approval_sys_msg(tg, GROUP, ap2["id"]) is None
+    child = d.hub.runs.submit("a2", "tiếp", parent_run_id=r2)
+    w = bot._state(bot.WATCH)
+    w.pop(child["id"], None)  # bỏ theo dõi trực tiếp → vẫn lần được qua parent_run_id
+    d.hub.store.state_set(bot.WATCH, w)
+    assert bot.origin_chat(child["id"]) == str(OTHER)
+
+    # (3) không có chat gốc (run từ web/lịch) → chỉ chat riêng
+    r3 = await run_from("a3", None)
+    ap3 = open_approval(d, r3, fp="n3")
+    await until(lambda: approval_sys_msg(tg, BOSS, ap3["id"]) and approval_sys_msg(tg, OTHER, ap3["id"]))
+    await asyncio.sleep(0.3)
+    assert approval_sys_msg(tg, GROUP, ap3["id"]) is None
+
+    # (4) hội thoại điều phối viên kênh `telegram:<nhóm>` → nhóm; kênh web → chat riêng
+    bot.manager._put(bot.manager.CONVCHAT, "conv-g", str(GROUP))
+    assert bot.route_chats(None, "conv-g") == [str(GROUP)]
+    assert bot.route_chats(None, "conv-khong-co") == [str(BOSS), str(OTHER)]
     await stop(d)
 
 

@@ -359,7 +359,7 @@ def test_h11_observe_hooks_in_settings_keep_guard(hub_home):
 
     base = {"autoMemoryEnabled": False, "hooks": {"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "guard || exit 2"}]}]}}
     s, evs = add_observe_hooks(base, run_id="r_1", socket_path="/tmp/h.sock", hub_home=str(hub_home.home), python=sys.executable, cfg=DEFAULTS["runtime"]["claude"]["observe_hooks"])
-    assert evs == ["PostToolUse", "UserPromptSubmit", "Stop"]
+    assert evs == ["PostToolUse", "UserPromptSubmit", "Stop", "PreCompact"]  # PreCompact: graph memory (trích xuất trước khi nén)
     assert s["hooks"]["PreToolUse"] == base["hooks"]["PreToolUse"]  # guard fail-closed giữ nguyên
     for ev in evs:
         h = s["hooks"][ev][-1]["hooks"][0]

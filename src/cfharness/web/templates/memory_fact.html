@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Fact {{ f.id }}{% endblock %}
+{% macro ftext(x) -%}
+{% set s = safe.get(x.id) or {"text": x.fact, "flags": []} %}
+{% if s.flags %}<details class="flagged"><summary class="danger-t">{{ m.icon('alert') }} Không qua quét an toàn lúc nạp ({{ s.flags|join(', ') }}) — agent không nhận văn bản này. Bấm để xem (đã che secret).</summary><div class="pre">{{ s.text }}</div></details>
+{% else %}<span class="pre">{{ s.text }}</span>{% endif %}
+{%- endmacro %}
+{% macro frow(x) -%}
+<li class="{{ 'muted' if x.invalidated_at or x.retracted_by }}"><a href="/memory/graph/fact/{{ x.id }}"><code>{{ x.id }}</code></a> {{ ftext(x) }}
+  <span class="xs muted">· {{ (x.valid_from or '?')[:10] }} → {{ (x.valid_to or '')[:10] or ('đã đóng' if x.invalidated_at else 'nay') }} · tin cậy {{ '%.2f'|format(x.confidence or 0) }} · {{ x.created_by or '?' }}{% if x.retracted_by %} · đã gỡ (rollback){% endif %}</span></li>
+{%- endmacro %}
+{% block content %}
+<nav class="crumbs"><a href="/memory">Memory</a> › <a href="/memory/graph">Graph</a> › <span>Fact</span></nav>
+<div class="page-head"><div class="ph-title">{% set hidden_name = '(tên bị ẩn)' %}
+<h1 class="g-edge">{% if f.src_id %}<a href="/memory/graph/entity/{{ f.src_id|urlencode }}">{{ f.src if f.src is not none else hidden_name }}</a>{% else %}?{% endif %}
+  <span class="g-rel">{{ f.relation if f.relation is not none else hidden_name }}</span>
+  {% if f.dst_id %}<a href="/memory/graph/entity/{{ f.dst_id|urlencode }}">{{ f.dst if f.dst is not none else hidden_name }}</a>{% endif %}
+  {% if pinned %}<span class="pill info">{{ m.icon('pin') }}đã ghim</span>{% endif %}{% if f.retracted_by %}<span class="pill muted">đã gỡ</span>{% elif f.invalidated_at %}<span class="pill muted">lịch sử</span>{% else %}<span class="pill ok">hiệu lực</span>{% endif %}</h1>
+  <span class="sub">Tầng <a href="{{ tier_url }}">{{ tier_label }}</a> · <code>{{ f.id }}</code>{% if f.label_flags %} · <span class="danger-t">{{ m.icon('alert') }} tên thực thể / quan hệ không qua quét an toàn ({{ f.label_flags|join(', ') }}) — đã ẩn</span>{% endif %}</span></div>
+  <div class="row gap">
+    {% if f.src_id %}<a class="btn ghost" href="/memory/graph/view?entity={{ f.src_id|urlencode }}{% if scope != 'global' %}&tier={{ (scope ~ ':' ~ owner)|urlencode }}{% else %}&tier=global{% endif %}">{{ m.icon('graph') }}<span>Đồ thị</span></a>{% endif %}
+    {% if not f.retracted_by %}
+    <form method="post" action="/memory/act/fact_pin" class="inline"{% if pinned %} data-confirm="Bỏ ghim fact này? Bên ghi khác (trích xuất, consolidation) lại được đóng/thay nó."{% endif %}>
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="scope" value="{{ scope }}"><input type="hidden" name="owner" value="{{ owner or '-' }}">
+      <input type="hidden" name="fact" value="{{ f.id }}"><input type="hidden" name="on" value="{{ '0' if pinned else '1' }}"><input type="hidden" name="next" value="/memory/graph/fact/{{ f.id }}">
+      <button class="btn ghost" type="submit" title="Fact ghim: không bị đóng hiệu lực / gộp tự động">{{ m.icon('pin') }}<span>{{ 'Bỏ ghim' if pinned else 'Ghim' }}</span></button></form>
+    {% endif %}
+    {% if f.ledger_entry_id and not f.retracted_by %}
+    <form method="post" action="/memory/act/fact_rollback" class="inline" data-confirm="Rollback ledger entry {{ f.ledger_entry_id }} đã tạo fact này? Rollback theo LÔ: mọi fact/thực thể cùng lần ghi bị gỡ; fact cũ bị nó đóng được mở lại.">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="scope" value="{{ scope }}"><input type="hidden" name="owner" value="{{ owner or '-' }}">
+      <input type="hidden" name="entry" value="{{ f.ledger_entry_id }}"><input type="hidden" name="next" value="/memory/graph/fact/{{ f.id }}">
+      <button class="btn danger" type="submit">{{ m.icon('undo') }}<span>Rollback</span></button></form>
+    {% endif %}
+  </div></div>
+{% include "_skill_result.html" %}
+
+<section class="card">
+  <div class="fact-text">{{ ftext(f) }}</div>
+  <dl class="kv cols">
+    <div><dt>Hiệu lực (thế giới)</dt><dd>{{ (f.valid_from or '?')[:10] }} → {{ (f.valid_to or '')[:10] or 'nay' }}</dd></div>
+    <div><dt>Ghi vào hub</dt><dd>{{ f.ingested_at|ts if f.ingested_at else '—' }}</dd></div>
+    <div><dt>Đóng hiệu lực</dt><dd>{{ f.invalidated_at|ts if f.invalidated_at else '—' }}{% if f.invalidated_by %} bởi <a href="/memory/graph/fact/{{ f.invalidated_by }}"><code>{{ f.invalidated_by }}</code></a>{% endif %}</dd></div>
+    <div><dt>Tin cậy</dt><dd>{{ '%.2f'|format(f.confidence or 0) }}</dd></div>
+    <div><dt>Lượt tra</dt><dd>{{ f.hits or 0 }}</dd></div>
+    <div><dt>Tạo bởi</dt><dd>{{ f.created_by or '?' }}</dd></div>
+    <div><dt>Ledger</dt><dd>{% for e in h.ledger_entries %}<a href="/learnings/{{ e }}"><code>{{ e }}</code></a>{{ ' · ' if not loop.last }}{% else %}—{% endfor %}</dd></div>
+    <div class="span2"><dt>Episode nguồn</dt><dd>{% if h.episode %}<code>{{ h.episode.id }}</code> · {{ h.episode.source_kind }} <code class="xs">{{ h.episode.source_ref or '' }}</code>{% if h.episode.run_id %} · <a href="/runs/{{ h.episode.run_id }}">lượt chạy</a>{% endif %} · {{ m.rel(h.episode.created_at) }}
+      <span class="xs muted">(chỉ tham chiếu — văn bản episode không hiện, không bao giờ vào ngữ cảnh agent)</span>{% else %}—{% endif %}</dd></div>
+  </dl>
+  {% if f.ledger_entry_id and not f.retracted_by %}<p class="muted small">Rollback một fact = rollback cả lần ghi (ledger entry) đã tạo nó. CLI: <code>{{ h.rollback_hint }}</code>.</p>{% endif %}
+</section>
+
+<div class="grid2">
+<section class="card"><h2>{{ m.icon('branch') }} Chuỗi thay thế</h2>
+  {% if h.supersedes %}<h3 class="small">Fact này thay cho</h3><ul class="plain small">{% for x in h.supersedes %}{{ frow(x) }}{% endfor %}</ul>{% endif %}
+  {% if h.superseded_by %}<h3 class="small">Bị thay bởi</h3><ul class="plain small">{% for x in h.superseded_by %}{{ frow(x) }}{% endfor %}</ul>{% endif %}
+  {% if not h.supersedes and not h.superseded_by %}<p class="muted small">Không có liên kết thay thế.</p>{% endif %}
+</section>
+<section class="card"><h2>{{ m.icon('clock') }} Cùng cạnh theo thời gian</h2>
+  {% if h.same_edge %}<ul class="plain small">{% for x in h.same_edge %}{{ frow(x) }}{% endfor %}</ul>{% else %}<p class="muted small">Không có fact nào khác cùng ({{ f.src if f.src is not none else hidden_name }}, {{ f.relation if f.relation is not none else hidden_name }}).</p>{% endif %}
+</section>
+</div>
+
+<section class="card flush"><div class="card-head pad"><h2>{{ m.icon('run') }} Lượt dùng</h2><span class="muted small">Fact được đưa cho run nào; độ tin cậy cập nhật theo kết quả run.</span></div>
+  {% if not h.uses %}{{ m.empty("Chưa run nào được đưa fact này.", "run") }}{% else %}
+  <table class="tbl stack small"><thead><tr><th>Run</th><th>Kênh</th><th>Lúc</th><th>Kết quả</th><th class="num">Δ tin cậy</th></tr></thead>
+  <tbody>{% for u in h.uses %}<tr><td data-label="Run"><a href="/runs/{{ u.run_id }}"><code>{{ u.run_id }}</code></a></td><td data-label="Kênh">{{ u.channel }}</td><td data-label="Lúc">{{ m.rel(u.used_at) }}</td>
+    <td data-label="Kết quả">{{ u.outcome or 'chưa chốt' }}</td><td data-label="Δ" class="num">{{ u.delta if u.delta is not none else '—' }}</td></tr>{% endfor %}</tbody></table>{% endif %}
+</section>
+{% endblock %}

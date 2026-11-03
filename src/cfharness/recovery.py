@@ -345,6 +345,13 @@ def purge_agent(hub: "Hub", agent_id: str, *, by: str, channel: str) -> dict[str
         indexer_for(hub.store).purge_agent(agent_id)
     except Exception:  # pragma: no cover
         log.exception("không xoá được chỉ mục hội thoại của %s", agent_id)
+    graph = None
+    try:  # v19: graph memory tầng agent cũng bị quên hẳn (fact tầng team/global agent đã ghi là tri thức chung — giữ)
+        from .knowledge.graph import GraphStore
+
+        graph = GraphStore(hub.store.conn).purge_owner("agent", agent_id)
+    except Exception:  # pragma: no cover
+        log.exception("không xoá được graph memory của %s", agent_id)
     hub.publish(make_event("agent.purged", agent_id, {"agent_id": agent_id, "by": by, "trash_path": tp}))
-    audit_record("agent.purged", agent_id, None, {"trash_path": tp, "actor": by, "channel": channel})
+    audit_record("agent.purged", agent_id, None, {"trash_path": tp, "actor": by, "channel": channel, "graph_rows": graph})
     return hub.store.get_agent(agent_id)  # type: ignore[return-value]

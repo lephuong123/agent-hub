@@ -9,7 +9,8 @@
   trắng: chỉ id / tên tool / trạng thái / outcome — KHÔNG BAO GIỜ chữ tự do (text, input, args_preview, result_preview, reason…).
 
 Giai đoạn 2 (duyệt + chat ngay trong 3D):
-- `POST /office/do/{name}` → JSON: chỉ `OFFICE_ACTIONS` (approve, deny, approve_always, approve_rule, answer) — dùng ĐÚNG `Action` trong
+- `POST /office/do/{name}` → JSON: chỉ `OFFICE_ACTIONS` (approve, deny, approve_always, approve_rule, answer; nói chuyện với agent: steer,
+  run_continue, run_start — trả thêm `run_id`, câu trả lời stream qua `/sse/run/{id}` sẵn có) — dùng ĐÚNG `Action` trong
   `app.ACTIONS` và CÙNG cổng `app.plan_action` với web 2D (xác nhận → bước 2 nặng / luôn cho phép / theo luật), sau `post_guard`
   (Origin, CSRF, khoá phiên `k`). Không gọi RPC ghi nào khi chưa có `confirm=yes` (và `confirm2=yes` khi có bước 2) — kể cả thao tác
   mà 2D không hỏi xác nhận (trả lời câu hỏi, cho phép theo luật): bấm nhầm trong cảnh 3D dễ hơn trên form.
@@ -314,10 +315,20 @@ async def sse_office(request: Request) -> Response:
 
 # ---------------------------------------------------------------------------- giai đoạn 2: thao tác ghi (JSON)
 # tên 3D → tên trong `app.ACTIONS` (cùng Action, cùng cổng `plan_action` với 2D)
-OFFICE_ACTIONS = {"approve": "approve", "deny": "deny", "approve_always": "approve_always", "approve_rule": "approve_rule", "answer": "question_answer"}
-# thao tác 2D không có hộp xác nhận → cảnh 3D vẫn hỏi (bước `confirm`) trước khi gọi RPC
-OFFICE_CONFIRM = {"approve_rule": "Cho phép agent này theo luật này (không hỏi lại)? Bước sau nêu rõ luật và thời hạn.",
-                  "answer": "Gửi câu trả lời này cho agent?"}
+OFFICE_ACTIONS = {"approve": "approve", "deny": "deny", "approve_always": "approve_always", "approve_rule": "approve_rule", "answer": "question_answer",
+                  # nói chuyện với agent trong chế độ đi bộ (office-coordinator.md): CHỈ 3 action run sẵn có của 2D, cùng Action/cổng
+                  "steer": "steer", "run_continue": "run_continue", "run_start": "run_start"}
+# thao tác chạy run: trả thêm `run_id` để cảnh 3D mở /sse/run/{id} (stream câu trả lời) — run mới (start/continue) hoặc run được chỉ đạo
+RUN_ACTIONS = {"steer", "run_continue", "run_start"}
+# thao tác 2D không có hộp xác nhận → cảnh 3D vẫn hỏi (bước `confirm`) trước khi gọi RPC. Gửi tin cho agent = có thể tốn tiền:
+# hộp xác nhận nói rõ sẽ bắt đầu run mới (start/continue) hay chen vào run đang chạy (steer), budget/giới hạn agent vẫn áp dụng.
+OFFICE_CONFIRM: dict[str, str | Callable[[Any], str]] = {
+    "approve_rule": "Cho phép agent này theo luật này (không hỏi lại)? Bước sau nêu rõ luật và thời hạn.",
+    "answer": "Gửi câu trả lời này cho agent?",
+    "run_start": lambda f: f"Sẽ bắt đầu run mới cho {safe_id(f.get('agent')) or '?'} (có thể tốn tiền; budget và giới hạn của agent vẫn áp dụng). Gửi?",
+    "run_continue": lambda f: f"Sẽ bắt đầu run mới (tiếp phiên {safe_id(f.get('id')) or '?'}) — có thể tốn tiền; budget và giới hạn của agent vẫn áp dụng. Gửi?",
+    "steer": lambda f: f"Gửi tin này vào run đang chạy {safe_id(f.get('id')) or '?'} (chen vào việc agent đang làm)?",
+}
 NOT_FOUND_CODE = -32004
 
 
@@ -354,7 +365,8 @@ async def office_do(request: Request) -> Response:
             act.build(form)
         except ValueError as e:
             return _err(f"Chưa đủ thông tin: {e}")
-        return JSONResponse({"need": "confirm", "message": OFFICE_CONFIRM.get(name, "Thực hiện thao tác này?"), "danger": act.danger,
+        msg = OFFICE_CONFIRM.get(name, "Thực hiện thao tác này?")
+        return JSONResponse({"need": "confirm", "message": msg(form) if callable(msg) else msg, "danger": act.danger,
                              "note_label": act.note}, headers=NO_STORE)
     try:
         plan = await plan_action(request, target, form, act)
@@ -377,7 +389,11 @@ async def office_do(request: Request) -> Response:
     except (RpcError, DaemonUnavailable, OSError) as e:
         return _err(err_text(e), _rpc_status(e))
     msg = act.ok(res, form) if callable(act.ok) else act.ok
-    return JSONResponse({"ok": True, "message": msg}, headers=NO_STORE)
+    body: dict[str, Any] = {"ok": True, "message": msg}
+    if name in RUN_ACTIONS:
+        r = res if isinstance(res, dict) else {}
+        body["run_id"] = safe_id(form.get("id")) if name == "steer" else safe_id(r.get("id") or r.get("run_id"))
+    return JSONResponse(body, headers=NO_STORE)
 
 
 # ---------------------------------------------------------------------------- giai đoạn 2: đọc chi tiết

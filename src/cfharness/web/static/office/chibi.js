@@ -8,7 +8,7 @@ const HAIR = ['#3b2a20', '#5a3b28', '#1f1b1a', '#8a5a3b', '#d8a657', '#b4513a', 
 const PANTS = ['#4a4e69', '#3d405b', '#5c4d3c', '#2f3e46', '#6d597a'];
 const STYLES = ['short', 'bob', 'pony', 'buns', 'spiky', 'ahoge'];
 
-export const SIT_POSES = new Set(['sit', 'type', 'typeFast', 'headInHands', 'sleep', 'relax', 'sitDrink', 'sitThink', 'sitRead']);
+export const SIT_POSES = new Set(['sit', 'type', 'typeFast', 'headInHands', 'sleep', 'relax', 'sitDrink', 'sitThink', 'sitRead', 'sitPhone']);
 const HIP_Y = 0.26;
 
 function shade(hex, k) {
@@ -79,6 +79,9 @@ export class Chibi {
     this.cup.add(cupM, coffee); this.cup.position.set(0, -0.24, 0.05); this.cup.visible = false; this.armR.add(this.cup);
     this.book = new THREE.Mesh(UNIT(), mat(['#c8413a', '#4f8fc0', '#7fb069', '#e9b44c'][h % 4]));
     this.book.scale.set(0.2, 0.03, 0.15); this.book.position.set(-0.08, -0.25, 0.06); this.book.visible = false; this.armR.add(this.book);
+    // điện thoại (rảnh ngồi bàn xem điện thoại — tư thế sitPhone)
+    this.phone = new THREE.Mesh(UNIT(), mat('#2b2d33'));
+    this.phone.scale.set(0.07, 0.012, 0.13); this.phone.position.set(-0.04, -0.25, 0.05); this.phone.visible = false; this.armR.add(this.phone);
 
     // đầu
     const head = this.head = new THREE.Group(); head.position.set(0, 0.6, 0); body.add(head);
@@ -181,6 +184,7 @@ export class Chibi {
     let eyesClosed = false;
     this.cup.visible = (p === 'drink' || p === 'sitDrink') && !w;
     this.book.visible = (p === 'read' || p === 'sitRead') && !w;
+    this.phone.visible = p === 'sitPhone' && !w;
     if (sit) { lL = lR = -1.45; by = this.seatY - HIP_Y + 0.02; }
     switch (w ? 'walk' : p) {
       case 'type': case 'typeFast': case 'standType': aLx = aRx = -1.15; aLz = 0.25; aRz = -0.25; hx = 0.12; break;
@@ -190,6 +194,7 @@ export class Chibi {
       case 'relax': aLz = 0.6; aRz = -0.6; hx = -0.15; break;
       case 'drink': case 'sitDrink': aRx = -1.9; aRz = 0.55; aLx = -0.2; break;
       case 'read': case 'sitRead': aLx = aRx = -1.0; aLz = -0.25; aRz = 0.25; hx = 0.3; break;
+      case 'sitPhone': aRx = -1.25; aRz = 0.2; aLx = -0.9; aLz = -0.1; hx = 0.42; break;
       case 'think': case 'sitThink': aRx = -2.3; aRz = 0.6; hz = 0.18; hy = 0.2; break;
       case 'freeze': aLz = 0.05; aRz = -0.05; break;
       default: break;

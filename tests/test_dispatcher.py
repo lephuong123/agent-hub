@@ -203,3 +203,85 @@ async def test_auth_block(make_hub, tmp_path):
         hub.runs.submit("a", "y")
     hub.runs.clear_auth_block()
     hub.runs.submit("a", "z")
+
+
+class _AuthRuntime(FakeRuntime):
+    """FakeRuntime trả `auth_status` theo kịch bản (lần lượt), giữ giá trị cuối."""
+
+    def __init__(self, fixture, statuses):
+        super().__init__(fixture)
+        self.statuses = list(statuses)
+        self.checks = 0
+
+    async def auth_status(self):
+        self.checks += 1
+        return self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+
+
+def _auth_fixture(tmp_path):
+    fx = tmp_path / "auth.jsonl"
+    fx.write_text('{"type":"result","subtype":"error_during_execution","is_error":true,"result":"Not logged in · Please run /login","total_cost_usd":0}\n', encoding="utf-8")
+    return fx
+
+
+async def test_auth_transient_not_blocked(make_hub, tmp_path):
+    """Lỗi "Not logged in" nhưng `claude auth status` vẫn đăng nhập → chỉ run đó lỗi, KHÔNG chặn cả hub."""
+    hub, _ = make_hub()
+    rt = _AuthRuntime(_auth_fixture(tmp_path), [True])
+    hub.runs._runtime = rt
+    hub.agents.create({"id": "a", "name": "A"})
+    run = hub.runs.submit("a", "x")
+    final = await hub.runs.wait(run["id"], 5)
+    assert final["status"] == "failed"
+    assert rt.checks == 1
+    assert not hub.runs.auth_block
+    hub.runs.submit("a", "y")  # không bị Blocked
+
+
+async def test_auth_block_auto_clears(make_hub, tmp_path):
+    """Kiểm lại xác nhận chưa đăng nhập → chặn; vòng nền thấy đăng nhập lại → tự gỡ chặn."""
+    hub, _ = make_hub()
+    hub.config.set("runtime.claude.auth_recheck_s", 0.05)
+    rt = _AuthRuntime(_auth_fixture(tmp_path), [False, False, True])
+    hub.runs._runtime = rt
+    hub.agents.create({"id": "a", "name": "A"})
+    run = hub.runs.submit("a", "x")
+    await hub.runs.wait(run["id"], 5)
+    assert hub.runs.auth_block
+    with pytest.raises(Blocked, match="chưa đăng nhập"):
+        hub.runs.submit("a", "y")
+    for _ in range(100):
+        if not hub.runs.auth_block:
+            break
+        await asyncio.sleep(0.02)
+    assert not hub.runs.auth_block
+    assert rt.checks >= 3
+    hub.runs.submit("a", "z")
+
+
+async def test_auth_recheck_disabled(make_hub, tmp_path):
+    hub, _ = make_hub()
+    hub.config.set("runtime.claude.auth_recheck_s", 0)
+    rt = _AuthRuntime(_auth_fixture(tmp_path), [False, True])
+    hub.runs._runtime = rt
+    hub.agents.create({"id": "a", "name": "A"})
+    run = hub.runs.submit("a", "x")
+    await hub.runs.wait(run["id"], 5)
+    await asyncio.sleep(0.1)
+    assert hub.runs.auth_block and rt.checks == 1
+
+
+@pytest.mark.skipif(__import__("sys").platform == "win32", reason="script shell")
+async def test_claude_cli_auth_status(tmp_path):
+    from cfharness.runtime.claude_cli import ClaudeCliRuntime
+
+    def bin_(out):
+        b = tmp_path / f"claude_{abs(hash(out))}"
+        b.write_text(f"#!/bin/sh\nprintf '%s' '{out}'\n", encoding="utf-8")
+        b.chmod(0o755)
+        return str(b)
+
+    assert await ClaudeCliRuntime({"binary": bin_('{"loggedIn": true}')}).auth_status() is True
+    assert await ClaudeCliRuntime({"binary": bin_('{"loggedIn": false}')}).auth_status() is False
+    assert await ClaudeCliRuntime({"binary": bin_("garbage")}).auth_status() is None
+    assert await ClaudeCliRuntime({"binary": "/nonexistent/claude"}).auth_status() is None

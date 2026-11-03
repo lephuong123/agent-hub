@@ -356,5 +356,26 @@ export function createFlows(o) {
     });
   }
 
-  return { openApproval, openQuestion, openLogout };
+  // Hộp xác nhận chung (thông điệp do SERVER soạn, vd. "Sẽ bắt đầu run mới cho <agent>…") → Promise<bool>: true CHỈ khi NGƯỜI bấm
+  // "Đồng ý" (chuột hoặc Enter/Space trên nút); Huỷ / Esc → false. Dùng cho hội thoại với agent (office/talk.js).
+  function ask(d) {
+    return new Promise((resolve) => {
+      let done = false;
+      const fin = (v) => { if (done) return; done = true; modals.pop(p); resolve(v); };
+      const p = modals.push({
+        title: 'Xác nhận', pxL: [1100, 460], pxP: [760, 720], onEscape: () => fin(false),
+        build: (ui) => {
+          const W = ui.W, H = ui.H, pad = 44;
+          ui.bg();
+          ui.heading('h', pad, 60, 'Xác nhận', 40, d.danger ? C.danger : C.text, W - 2 * pad);
+          ui.para('m', pad, 100, W - 2 * pad, d.message || '', '500 27px ' + FONT, C.text, 36, 8);
+          const bw = Math.min(300, (W - 2 * pad - 24) / 2), by = H - 110;
+          ui.button('cancel', W - pad - 2 * bw - 24, by, bw, 72, 'Huỷ', { onClick: () => fin(false) });
+          ui.button('yes', W - pad - bw, by, bw, 72, 'Đồng ý', { kind: 'primary', onClick: () => fin(true) });
+        },
+      });
+    });
+  }
+
+  return { openApproval, openQuestion, openLogout, ask };
 }

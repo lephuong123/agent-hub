@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Memory {{ label }}{% endblock %}
+{% macro tier_fields(store=None) -%}
+<input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="scope" value="{{ scope }}"><input type="hidden" name="owner" value="{{ owner or '-' }}">
+{%- if store %}<input type="hidden" name="store" value="{{ store }}">{% endif %}<input type="hidden" name="next" value="{{ url }}">
+{%- endmacro %}
+{% set shared = scope in ('team', 'global') %}
+{% block content %}
+<nav class="crumbs"><a href="/memory">Memory</a> › <span>{{ label }}</span></nav>
+<div class="page-head"><div class="ph-title"><h1>Memory {{ label }}</h1>
+  <span class="sub">{% if scope == 'agent' %}MEMORY.md + USER.md (quan sát riêng) của <a href="/agents/{{ owner }}">agent {{ owner }}</a>{% elif scope == 'team' %}memory.md dùng chung của team {{ owner }}{% else %}USER.md (hồ sơ dùng chung) + MEMORY.md của toàn hub{% endif %}. Mỗi mục là một khối ngăn bởi <code>§</code>.</span></div>
+  <div class="row gap">
+    <a class="btn ghost" href="/memory/graph?tier={{ tier_q }}">{{ m.icon('search') }}<span>Graph tầng này</span></a>
+    <form method="post" action="/memory/act/graph_pin" class="inline"{% if graph_pinned %} data-confirm="Bỏ ghim graph tầng {{ label }}? Consolidation và bên ghi khác lại được sửa graph này."{% endif %}>{{ tier_fields() }}
+      <input type="hidden" name="on" value="{{ '0' if graph_pinned else '1' }}">
+      <button class="btn ghost" type="submit" title="Ghim graph: chỉ người được sửa/đóng fact của tầng này; consolidation bỏ qua">{{ m.icon('pin') }}<span>{{ 'Bỏ ghim graph' if graph_pinned else 'Ghim graph' }}</span></button></form>
+  </div></div>
+{% include "_skill_result.html" %}
+<p class="muted small">Memory được đưa vào ngữ cảnh agent — viết <b>tiếng Anh</b>, một ý một mục. Mọi thay đổi đi qua <code>learn.propose</code> (người, created_by=user): guard có thể chặn (lý do hiện ở trên), thay đổi được ghi ledger và rollback được.{% if shared %} Tầng {{ label }} áp dụng NGAY cho mọi agent của tầng (canary chỉ theo dõi).{% endif %}</p>
+
+{% for f in files %}
+<section class="card mem-file" id="f-{{ f.store }}">
+  <div class="card-head"><h2>{{ m.icon('log') }} {{ f.name }}</h2>
+    <span class="pill {{ f.tone }}">{{ f.entries|length }} mục · {{ f.chars }} / {{ f.limit }} ký tự</span></div>
+  <progress class="meter" max="{{ f.limit or 1 }}" value="{{ f.chars if f.chars <= (f.limit or 1) else (f.limit or 1) }}" aria-label="Dung lượng {{ f.name }}"></progress>
+  {% if not f.entries %}{{ m.empty("Chưa có mục nào.", "log") }}{% endif %}
+  <ol class="mem-entries">
+  {% for e in f.entries %}
+    {% set editing = edit_key == e.key and (edit_store or f.store) == f.store %}
+    <li class="mem-entry{{ ' pinned' if e.pinned }}" id="e-{{ e.key }}">
+      {% if editing %}
+      <form method="post" action="/memory/act/edit" class="form"{% if shared %} data-confirm="Sửa mục trong {{ f.name }} của tầng {{ label }}? Áp dụng NGAY cho mọi agent của tầng."{% endif %}>{{ tier_fields(f.store) }}
+        <input type="hidden" name="key" value="{{ e.key }}">
+        <label>Sửa mục <span class="hint">(thay cả mục)</span><textarea name="content" rows="4" required spellcheck="false">{{ draft.content if draft and draft.key == e.key else e.text }}</textarea></label>
+        <div class="row end gap"><a class="btn ghost" href="{{ url }}#e-{{ e.key }}">Huỷ</a><button class="btn primary" type="submit">{{ m.icon('check') }}<span>Lưu</span></button></div>
+      </form>
+      {% else %}
+      <div class="mem-text pre">{{ e.text }}</div>
+      <div class="mem-meta">
+        {% if e.pinned %}<span class="pill info" title="Mục ghim: học tự động không sửa/xoá được">{{ m.icon('pin') }}ghim</span>{% endif %}
+        <code class="xs muted" title="Khoá mục (pin memory_entry)">{{ e.key }}</code>
+        <span class="spacer"></span>
+        <a class="btn sm ghost" href="{{ url }}?edit={{ e.key }}&store={{ f.store }}#e-{{ e.key }}">{{ m.icon('edit') }}<span>Sửa</span></a>
+        <form method="post" action="/memory/act/pin" class="inline">{{ tier_fields(f.store) }}<input type="hidden" name="key" value="{{ e.key }}"><input type="hidden" name="on" value="{{ '0' if e.pinned else '1' }}">
+          <button class="btn sm ghost" type="submit">{{ m.icon('pin') }}<span>{{ 'Bỏ ghim' if e.pinned else 'Ghim' }}</span></button></form>
+        <form method="post" action="/memory/act/remove" class="inline" data-confirm="Xoá mục này khỏi {{ f.name }} của tầng {{ label }}?&#10;&#10;{{ e.text[:400] }}&#10;&#10;Ghi qua ledger — rollback được.">{{ tier_fields(f.store) }}
+          <input type="hidden" name="key" value="{{ e.key }}"><input type="hidden" name="preview" value="{{ e.text[:400] }}">
+          <button class="btn sm danger" type="submit">{{ m.icon('trash') }}<span>Xoá</span></button></form>
+      </div>
+      {% endif %}
+    </li>
+  {% endfor %}
+  </ol>
+  <form method="post" action="/memory/act/add" class="form mem-add"{% if shared %} data-confirm="Thêm mục vào {{ f.name }} của tầng {{ label }}? Áp dụng NGAY cho mọi agent của tầng."{% endif %}>{{ tier_fields(f.store) }}
+    <label>Thêm mục vào {{ f.name }}<textarea name="content" rows="3" required spellcheck="false" placeholder="One fact per entry, in English.">{{ draft.content if draft and draft.store == f.store and not draft.key else '' }}</textarea></label>
+    <div class="row end"><button class="btn" type="submit">{{ m.icon('plus') }}<span>Thêm mục</span></button></div>
+  </form>
+</section>
+{% endfor %}
+
+<div class="grid2">
+<section class="card" id="versions">
+  <h2>{{ m.icon('branch') }} Phiên bản &amp; canary</h2>
+  {% if canaries %}
+  <ul class="small plain">{% for c in canaries %}<li><span class="pill warn">canary {{ c.mode }}</span> <code>{{ c.id }}</code> — {{ c.target }} {{ c.target_ref or '' }}{% if c.canary_agent_id %} · agent canary <a href="/agents/{{ c.canary_agent_id }}">{{ c.canary_agent_id }}</a>{% endif %} · {{ c.progress or c.status }}
+    {% if c.ledger_entry_id %} · <a href="/learnings/{{ c.ledger_entry_id }}">thay đổi (diff)</a>{% endif %}</li>{% endfor %}</ul>
+  <p class="muted small">Mode <code>canary</code>: agent canary thấy bản MỚI, agent khác được ghim về bản TRƯỚC tới khi canary xong. Mode <code>watch</code>: mọi agent thấy bản mới, hub chỉ theo dõi.</p>
+  {% else %}<p class="muted small">Không có canary nào đang chạy trên memory của tầng này{% if scope == 'agent' %} (tầng agent không qua canary){% endif %}.</p>{% endif %}
+  {% if versions %}
+  <table class="tbl small">
+    <thead><tr><th>Agent</th><th>Tầng</th><th>File</th><th>Đang thấy</th><th>Phiên bản</th></tr></thead>
+    <tbody>{% for v in versions %}<tr><td><a href="/agents/{{ v.agent }}">{{ v.agent }}</a></td><td>{{ v.scope }} {{ v.owner }}</td><td><code>{{ v.ref }}</code></td>
+      <td><span class="pill {{ 'ok' if v.source == 'live' else 'warn' if v.source == 'pinned_before' else 'info' }}">{{ {'live': 'bản sống', 'pinned_before': 'bản TRƯỚC (ghim)', 'canary': 'bản canary'}.get(v.source, v.source) }}</span></td>
+      <td><code>{{ v.version }}</code></td></tr>{% endfor %}</tbody>
+  </table>
+  {% if scope == 'agent' %}<p class="muted small">Tri thức tầng team/toàn hub mà agent {{ owner }} đang được gán.</p>{% endif %}
+  {% endif %}
+</section>
+<section class="card" id="graph">
+  <h2>{{ m.icon('graph') }} Graph tầng này</h2>
+  {% if graph %}
+  <dl class="kv cols">
+    <div><dt>Fact hiệu lực</dt><dd><a href="/memory/graph?tier={{ tier_q }}">{{ graph.facts }}</a></dd></div>
+    <div><dt>Lịch sử</dt><dd><a href="/memory/graph?tier={{ tier_q }}&history=1">{{ graph.history }}</a></dd></div>
+    <div><dt>Thực thể</dt><dd>{{ graph.entities }}</dd></div>
+    <div><dt>Episode</dt><dd>{{ graph.episodes }}</dd></div>
+    <div><dt>Tin cậy TB</dt><dd>{{ '%.2f'|format(graph.avg_confidence) if graph.avg_confidence is not none else '—' }}</dd></div>
+    <div><dt>Ghi gần nhất</dt><dd>{{ m.rel(graph.last_ingested_at) }}</dd></div>
+  </dl>
+  <div class="row gap"><a class="btn sm" href="/memory/graph/view?tier={{ tier_q }}">{{ m.icon('graph') }}<span>Xem đồ thị</span></a></div>
+  {% else %}<p class="muted small">Tầng này chưa có fact nào trong graph.</p>{% endif %}
+</section>
+</div>
+
+<section class="card flush" id="ledger">
+  <div class="card-head pad"><h2>{{ m.icon('undo') }} Thay đổi gần đây (ledger)</h2></div>
+  {% if not ledger %}{{ m.empty("Chưa có thay đổi nào qua ledger.", "log") }}{% else %}
+  <table class="tbl stack">
+    <thead><tr><th>Lúc</th><th>Entry</th><th>File</th><th>Thao tác</th><th>Bởi</th><th>Tóm tắt</th></tr></thead>
+    <tbody>{% for e in ledger %}<tr class="{{ 'archived' if e.rolled_back_by }}">
+      <td data-label="Lúc">{{ m.rel(e.applied_at) }}</td><td data-label="Entry"><a href="/learnings/{{ e.id }}"><code>{{ e.id }}</code></a></td>
+      <td data-label="File"><code>{{ e.target_ref or e.target }}</code></td><td data-label="Thao tác">{{ e.op }}</td><td data-label="Bởi">{{ e.actor }}</td>
+      <td data-label="Tóm tắt" class="small">{{ e.summary or '' }}{% if e.rolled_back_by %} <span class="pill muted">đã rollback</span>{% endif %}</td></tr>{% endfor %}</tbody>
+  </table>{% endif %}
+</section>
+{% endblock %}

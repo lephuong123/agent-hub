@@ -99,6 +99,7 @@ class RunManager:
         self.active: dict[str, ActiveRun] = {}  # run đang chạy
         self.waiters: dict[str, asyncio.Event] = {}
         self._warned_versions: set[str] = set()
+        self._auth_watch: asyncio.Task | None = None
         self.shutting_down = False
         from .workspace import WorkspaceLocks
 
@@ -373,7 +374,19 @@ class RunManager:
         return started
 
     # ------------------------------------------------------------------ launch
-    def _prepare_spec(self, run: dict[str, Any], agent: dict[str, Any]) -> RunSpec:
+    async def _memory_prefetch(self, run: dict[str, Any], agent: dict[str, Any]) -> str:
+        """Graph memory (knowledge/graph/provider.py): chỉ session MỚI, không run kỹ thuật (review/eval/curator); lỗi → rỗng."""
+        if getattr(self.hub, "knowledge", None) is None:
+            return ""
+        try:
+            from .knowledge.graph.provider import provider_for
+
+            return await provider_for(self.hub).prefetch_for_run(run, agent)
+        except Exception:  # pragma: no cover - recall KHÔNG BAO GIỜ chặn run
+            log.exception("graph memory prefetch lỗi")
+            return ""
+
+    def _prepare_spec(self, run: dict[str, Any], agent: dict[str, Any], *, recall: str = "") -> RunSpec:
         hub = self.hub
         cfg = hub.config.data
         claude_cfg = cfg["runtime"]["claude"]
@@ -480,10 +493,13 @@ class RunManager:
         from .browser import CHROME_MODES, CHROME_SERVER, effective_mode, is_playwright_server
 
         browser = effective_mode(agent, hub.config)
+        web_allow = tp.get("web_allow_domains") is not None  # allowlist domain theo agent: Playwright không áp được luật URL → gỡ
+        if web_allow and not guard_on and browser in CHROME_MODES:
+            browser = "none"  # guard tắt = không hook lọc URL/hành động Chrome → tắt Chrome (fail-closed), như WebFetch bên dưới
         tp["browser"] = browser
         if browser in CHROME_MODES:
             allowed_mcp.append(CHROME_SERVER)  # server dynamic của CLI — không phải isolation.violation
-        if browser == "chrome":
+        if browser == "chrome" or web_allow:
             drop = [n for n, e in servers.items() if is_playwright_server(n, e)]
             for n in drop:
                 servers.pop(n, None)
@@ -520,12 +536,18 @@ class RunManager:
                 tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + work))
             static = list(dict.fromkeys(list(tp.get("disallowed_tools") or [])
                                         + ([] if trusted else gr.static_disallowed(guard_cfg) + hub.guard.repo_deny_patterns(str(cwd)))))
+            if web_allow:  # không có hook để lọc domain → tắt hẳn WebFetch + Chrome (fail-closed), không mở toang
+                tp["allowed_tools"] = [x for x in tp.get("allowed_tools") or [] if not str(x).startswith(("WebFetch", f"mcp__{CHROME_SERVER}"))]
+                static = list(dict.fromkeys(static + ["WebFetch", f"mcp__{CHROME_SERVER}"]))
             tp["disallowed_tools"] = static
         # M3 — hub-self MCP (FR-MS-08): tool task_* theo vai trò, ràng với run_id
         if (run.get("task_id") or is_mgr) and opts.get("hub_self"):
             from .mcp_server.hub_self import SERVER_NAME, server_entry
 
-            servers[SERVER_NAME] = server_entry(run_id, hub.paths.socket, hub.paths.home, str(opts["hub_self"]), guard_cfg)
+            from .learning.runtime import memory_scopes
+
+            servers[SERVER_NAME] = server_entry(run_id, hub.paths.socket, hub.paths.home, str(opts["hub_self"]), guard_cfg,
+                                                memory_scopes=memory_scopes(hub, agent))
             allowed_mcp.append(SERVER_NAME)
             tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + [f"mcp__{SERVER_NAME}"]))
             env_extra = {**env_extra, "CFHARNESS_RUN_ID": run_id}
@@ -553,6 +575,8 @@ class RunManager:
         prompt = run["prompt"]
         if is_mgr:  # R2-3: khoá tiêu đề tin thật chỉ đưa vào stdin của run manager, không bao giờ vào DB
             prompt = hub.manager.render_prompt(run_id, prompt)
+        if recall:  # graph memory: khối DỮ LIỆU trước tin user đầu — chỉ vào stdin, KHÔNG vào DB (runs.prompt giữ nguyên lời người)
+            prompt = f"{recall}\n\n{prompt}"
         return RunSpec(
             run_id=run_id,
             agent_id=agent["id"],
@@ -694,7 +718,8 @@ class RunManager:
             ar.runtime = runtime
             if agent.get("mcp_servers") and getattr(hub, "mcp_oauth", None) is not None:
                 await hub.mcp_oauth.ensure_fresh_for(list(agent["mcp_servers"]))  # OAuth MCP: làm mới token sắp hết hạn trước khi ghi mcp.json
-            spec = self._prepare_spec(run, agent)
+            recall = await self._memory_prefetch(run, agent)  # graph memory: top-k fact vào TIN USER ĐẦU (không vào system prompt)
+            spec = self._prepare_spec(run, agent, recall=recall)
             spec.control_handler = functools.partial(self._control_request, ar)  # CLI 2.1.303+: control_request can_use_tool → guard
             await self._checkpoint(ar, run, spec)
             cli_version = await self._check_cli_version(runtime, agent_id, run_id)
@@ -897,7 +922,7 @@ class RunManager:
             error = f"tiến trình kết thúc (exit={h.exit_code}) không có event result. stderr: {h.stderr_tail[-800:]}"
         elif res is not None and outcome != "completed":
             error = res.get("summary") or "; ".join(str(x) for x in res.get("errors") or []) or res.get("subtype")
-        self._detect_auth(ar, (res or {}).get("summary") or "", h.stderr_tail, outcome)
+        await self._detect_auth(ar, (res or {}).get("summary") or "", h.stderr_tail, outcome)
         data: dict[str, Any] = {
             "status": outcome,
             "outcome": outcome,
@@ -1028,7 +1053,14 @@ class RunManager:
         status = "working" if others else ("error" if outcome in ("failed", "crashed") else "idle")
         self.hub.agents.set_status(agent_id, status, current_run_id=others[0] if others else None, reason=f"run {outcome}")
 
-    def _detect_auth(self, ar: ActiveRun, text: str, stderr: str, outcome: str) -> None:
+    async def _auth_ok(self, runtime: AgentRuntime | None) -> bool | None:
+        try:
+            return await (runtime or self.runtime()).auth_status()
+        except Exception:  # pragma: no cover - kiểm lại lỗi = không xác định → chặn như cũ
+            log.exception("không kiểm lại được trạng thái đăng nhập")
+            return None
+
+    async def _detect_auth(self, ar: ActiveRun, text: str, stderr: str, outcome: str) -> None:
         if outcome == "completed":
             return
         blob = f"{text}\n{stderr}"
@@ -1036,11 +1068,46 @@ class RunManager:
         if not m:
             return
         info = {"message": blob.strip()[-500:], "run_id": ar.run_id, "at": now_iso()}
+        # Một lỗi "Not logged in" có thể chỉ thoáng qua (token OAuth đang làm mới). Kiểm lại trước khi chặn MỌI run:
+        # còn đăng nhập → chỉ run này lỗi (dispatcher retry như lỗi thường), không dựng cờ.
+        if await self._auth_ok(ar.runtime) is True:
+            log.warning("run %s báo lỗi đăng nhập nhưng `claude auth status` vẫn đăng nhập — không chặn", ar.run_id)
+            self.hub.publish(make_event("auth.transient", None, info, run_id=ar.run_id))
+            return
         self.store.state_set("auth_block", info)
         self.hub.publish(make_event("auth.blocked", None, info))
+        self.start_auth_watch()
 
-    def clear_auth_block(self) -> None:
+    def clear_auth_block(self, *, by: str = "human") -> None:
+        had = self.auth_block
         self.store.state_set("auth_block", None)
+        if had:
+            self.hub.publish(make_event("auth.cleared", None, {"by": by, "run_id": had.get("run_id"), "blocked_at": had.get("at")}))
+
+    def start_auth_watch(self) -> None:
+        """Vòng nền khi đang chặn: định kỳ (`runtime.claude.auth_recheck_s`, mặc định 300 s; 0 = tắt) kiểm lại
+        `claude auth status`, thấy đã đăng nhập thì tự gỡ cờ và xếp lại hàng đợi — không cần người chạy `doctor`."""
+        if self._auth_watch is not None and not self._auth_watch.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._auth_watch = loop.create_task(self._auth_watch_loop())
+
+    async def _auth_watch_loop(self) -> None:
+        while self.auth_block and not self.shutting_down:
+            interval = float(self.hub.config.get("runtime.claude.auth_recheck_s") or 0)
+            if interval <= 0:
+                return
+            await asyncio.sleep(interval)
+            if not self.auth_block or self.shutting_down:
+                return
+            if await self._auth_ok(None) is True:
+                log.info("claude đã đăng nhập lại — tự gỡ cờ chặn")
+                self.clear_auth_block(by="auto_recheck")
+                self.tick()
+                return
 
     # ------------------------------------------------------------------ control
     async def stop(self, run_id: str) -> dict[str, Any]:
@@ -1095,6 +1162,8 @@ class RunManager:
         """Daemon dừng: dừng mọi run đang chạy → `interrupted` và ghi danh sách để lần khởi động sau tự resume
         (Q-09); run đang giữ chờ người → `waiting_human`; run còn trong hàng đợi giữ `queued` (khởi động lại sẽ xếp lại)."""
         self.shutting_down = True
+        if self._auth_watch is not None:
+            self._auth_watch.cancel()
         interrupted = [ar.run_id for ar in self.active.values() if ar.handle is not None]
         for ar in list(self.active.values()):
             if ar.task is not None:

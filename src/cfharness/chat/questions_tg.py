@@ -100,17 +100,8 @@ class QuestionChat:
             self.bot._spawn(self.close_messages(qid))
 
     def chats_for(self, q: dict[str, Any]) -> list[str]:
-        out = set(self.bot.broadcast_chats())
-        allowed = self.bot.allowed()
-        w = self._st(self.bot.WATCH)
-        if q.get("run_id") and w.get(q["run_id"]) in allowed:
-            out.add(str(w[q["run_id"]]))
-        conv = q.get("conversation_id")
-        if conv:
-            c = self.bot.manager._st(self.bot.manager.CONVCHAT).get(conv)
-            if c and str(c) in allowed:
-                out.add(str(c))
-        return sorted(out)
+        """Chỉ chat đã giao việc gốc (run/hội thoại của câu hỏi); không có → chat riêng/DM (`ChatBot.route_chats`)."""
+        return self.bot.route_chats(q.get("run_id"), q.get("conversation_id"))
 
     async def broadcast(self, qid: str, *, kind: str = "question.open", payload: dict[str, Any] | None = None) -> int:
         q = self._get(qid)
