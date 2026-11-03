@@ -586,6 +586,11 @@ class ManagerPermissions:
                 out.append(f"{r[0]}:{r[2]}")
         return out
 
+    def teams_of(self, agent_id: str) -> list[str]:
+        """Team (chưa xoá mềm) mà agent là thành viên — việc của họ phải mang `team` để nhận charter/chính sách (MGR-8)."""
+        return [r[0] for r in self.hub.store.conn.execute(
+            "SELECT t.id FROM team_members m JOIN teams t ON t.id=m.team_id WHERE m.agent_id=? AND t.archived_at IS NULL ORDER BY t.id", (agent_id,))]
+
     def review_teams_of(self, agent_id: str) -> list[str]:
         """Team có review mà agent là thành viên (bất kỳ vai) — việc của họ chỉ được giao qua team có review (MGR-7)."""
         import json as _j
@@ -746,6 +751,12 @@ class ManagerPermissions:
                 return f"'{t['assignee']}' thuộc team đang ESTOP — không giao việc"
             if t.get("team") and self._team_estop(str(t["team"])):
                 return f"team '{t['team']}' đang ESTOP"
+            if t.get("assignee") and not t.get("team"):
+                # MGR-8: thành viên team thì giao QUA team (charter, ngân sách, ESTOP, học của team mới áp dụng cho run)
+                tm = self.teams_of(str(t["assignee"]))
+                if tm:
+                    return (f"'{t['assignee']}' thuộc team {', '.join(tm)} — truyền team=<một trong số đó> cùng assignee "
+                            "(hoặc chỉ team để lead tách việc / hub chọn người)")
             if t.get("assignee"):
                 rv = self.review_teams_of(str(t["assignee"]))
                 if rv and not (t.get("team") and self._team_policies(str(t["team"])).get("review_required")):
