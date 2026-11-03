@@ -1,0 +1,179 @@
+/* Văn phòng 3D — chế độ "Vào văn phòng" (đi bộ): avatar chibi của chủ hub đi trong văn phòng, camera góc thứ ba bám sau lưng
+ * hoặc góc thứ nhất (phím V). Chỉ là một cách XEM: không gọi endpoint nào, mọi thao tác vẫn đi qua flows/chat như chế độ toàn cảnh.
+ * Điều khiển: WASD / phím mũi tên đi (Shift chạy), kéo chuột/kéo tay xoay hướng nhìn, bấm/chạm sàn để tự đi tới (A* của Grid),
+ * con lăn đổi khoảng cách camera. Va chạm theo lưới chướng ngại của World (tường, vách, đồ đạc; ghế không chặn).
+ * reduced-motion: bấm sàn → dịch chuyển tức thời, camera không trễ. Tường che camera → làm mờ (World.fade). */
+import * as THREE from '../vendor/three-0.169.0/three.module.min.js';
+import { Chibi } from './chibi.js';
+import { lerpAngle } from './util.js';
+
+export const WALK_R = 0.12;          // bán kính va chạm avatar (m): nhỏ hơn đệm của tường (0,15) để qua được cửa 1 ô lưới
+const SPEED = 2.4, RUN = 4.2, EYE = 1.02, LOOK_Y = 1.0;
+const KEYS = {
+  KeyW: [0, 1], ArrowUp: [0, 1], KeyS: [0, -1], ArrowDown: [0, -1],
+  KeyA: [-1, 0], ArrowLeft: [-1, 0], KeyD: [1, 0], ArrowRight: [1, 0],
+};
+
+// Ô (x, z) có bị chặn với bán kính r không: tâm + 4 điểm trục + 4 điểm chéo.
+export function blockedAt(grid, x, z, r) {
+  const k = r * 0.7071;
+  for (const [ox, oz] of [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r], [k, k], [k, -k], [-k, k], [-k, -k]]) {
+    const [c, w] = grid.cellOf(x + ox, z + oz);
+    if (grid.blocked(c, w)) return true;
+  }
+  return false;
+}
+
+// Bước đi có va chạm: thử cả bước, không được thì trượt theo từng trục (đi dọc tường không bị kẹt). Bước dài cắt nhỏ ≤ 0,1 m.
+export function slideMove(grid, x, z, dx, dz, r) {
+  const n = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.1));
+  const sx = dx / n, sz = dz / n;
+  for (let i = 0; i < n; i++) {
+    if (!blockedAt(grid, x + sx, z + sz, r)) { x += sx; z += sz; }
+    else if (sx && !blockedAt(grid, x + sx, z, r)) x += sx;
+    else if (sz && !blockedAt(grid, x, z + sz, r)) z += sz;
+    else break;
+  }
+  return { x, z };
+}
+
+export class Walker {
+  constructor(opts) {
+    this.camera = opts.camera;
+    this.chibi = new Chibi({ id: 'cfh-owner', name: opts.name || 'Bạn · chủ hub', color: '#c96442' });
+    this.chibi.group.userData.actorId = null; // không phải agent: bấm vào avatar không chọn gì
+    this.chibi.group.visible = false;
+    this.chibi.pose = 'stand';
+    opts.scene.add(this.chibi.group);
+    this.active = false; this.pov = 'third';
+    this.world = null; this.pos = null; this.yaw = Math.PI; this.view = Math.PI; this.pitch = -0.12; this.dist = 3.4;
+    this.keys = new Set(); this.run = false; this.path = [];
+    this.camPos = new THREE.Vector3(); this.camInit = false;
+    this._ray = new THREE.Raycaster(); this._v = new THREE.Vector3(); this._head = new THREE.Vector3();
+  }
+
+  // Vào chế độ đi bộ: đứng ở cửa ra vào (góc đông nam), nhìn về phía bắc vào văn phòng.
+  enter(world) {
+    this.active = true; this.camInit = false; this.keys.clear(); this.path = [];
+    this.setWorld(world, true);
+    this.chibi.group.visible = this.pov === 'third';
+  }
+  exit() {
+    this.active = false; this.keys.clear(); this.path = [];
+    this.chibi.group.visible = false;
+    if (this.world) this.world.fade(new Set());
+  }
+  // Văn phòng dựng lại (thêm/bớt agent): giữ vị trí nếu còn đi được, không thì về ô trống gần nhất.
+  setWorld(world, reset) {
+    this.world = world;
+    if (reset || !this.pos) { this.pos = { x: world.W - 1.4, z: world.D - 1.2 }; this.yaw = this.view = Math.PI; }
+    if (blockedAt(world.grid, this.pos.x, this.pos.z, WALK_R)) {
+      const g = world.grid, [c, r] = g.nearestFree(...g.cellOf(this.pos.x, this.pos.z)), [x, z] = g.center(c, r);
+      this.pos = { x, z };
+    }
+    this.path = [];
+  }
+  togglePov() {
+    this.pov = this.pov === 'third' ? 'first' : 'third';
+    this.chibi.group.visible = this.active && this.pov === 'third';
+    this.pitch = this.pov === 'first' ? 0 : -0.12;
+    this.camInit = false;
+    return this.pov;
+  }
+
+  key(code, down, shift) {
+    this.run = !!shift;
+    if (!KEYS[code]) return false;
+    if (down) { this.keys.add(code); this.path = []; } else this.keys.delete(code);
+    return true;
+  }
+  // kéo chuột/tay: dx, dy pixel
+  look(dx, dy) {
+    this.view -= dx * 0.006;
+    this.pitch = Math.max(-0.9, Math.min(this.pov === 'first' ? 0.7 : 0.25, this.pitch - dy * 0.004));
+  }
+  zoom(dy) { this.dist = Math.max(1.8, Math.min(7, this.dist * (dy > 0 ? 1.1 : 1 / 1.1))); }
+
+  // bấm/chạm sàn: tự đi tới bằng A*; reduced-motion → dịch chuyển tức thời tới điểm cuối
+  goTo(x, z, reduced) {
+    const w = this.world;
+    if (!w || !this.pos) return;
+    const pts = w.grid.findPath(this.pos.x, this.pos.z, x, z);
+    // điểm cuối nằm trong đồ đạc → dừng ở ô trống cuối cùng của đường
+    while (pts.length > 1 && blockedAt(w.grid, pts[pts.length - 1].x, pts[pts.length - 1].z, WALK_R)) pts.pop();
+    if (pts.length && blockedAt(w.grid, pts[0].x, pts[0].z, WALK_R)) return;
+    if (reduced) { const p = pts[pts.length - 1]; if (p) { this.pos = { x: p.x, z: p.z }; } this.path = []; return; }
+    this.path = pts;
+  }
+
+  update(dt, t, reduced) {
+    const w = this.world;
+    if (!this.active || !w || !this.pos) return;
+    let mx = 0, mz = 0;
+    for (const k of this.keys) { mx += KEYS[k][0]; mz += KEYS[k][1]; }
+    let walking = false;
+    if (mx || mz) {
+      // hướng theo camera: tiến = hướng nhìn, ngang = vuông góc
+      const fx = Math.sin(this.view), fz = Math.cos(this.view), len = Math.hypot(mx, mz);
+      const dx = (fz * -mx + fx * mz) / len, dz = (fx * mx + fz * mz) / len;
+      const sp = (this.run ? RUN : SPEED) * dt;
+      const p = slideMove(w.grid, this.pos.x, this.pos.z, dx * sp, dz * sp, WALK_R);
+      walking = Math.hypot(p.x - this.pos.x, p.z - this.pos.z) > 1e-4;
+      this.pos = p;
+      this.yaw = this.pov === 'first' ? this.view : lerpAngle(this.yaw, Math.atan2(dx, dz), Math.min(1, dt * 12));
+    } else if (this.path.length) {
+      let step = SPEED * dt;
+      walking = true;
+      while (step > 0 && this.path.length) {
+        const p = this.path[0], dx = p.x - this.pos.x, dz = p.z - this.pos.z, d = Math.hypot(dx, dz);
+        if (d > 1e-4) this.yaw = lerpAngle(this.yaw, Math.atan2(dx, dz), Math.min(1, dt * 12));
+        if (d <= step) { this.pos = { x: p.x, z: p.z }; this.path.shift(); step -= d; } else { this.pos.x += (dx / d) * step; this.pos.z += (dz / d) * step; step = 0; }
+      }
+      // tự đi: camera từ từ quay theo hướng đi (góc thứ ba)
+      if (this.pov === 'third') this.view = lerpAngle(this.view, this.yaw, Math.min(1, dt * 1.5));
+      else this.view = this.yaw;
+    } else if (this.pov === 'first') this.yaw = this.view;
+    const c = this.chibi;
+    c.walking = walking; c.pose = 'stand';
+    c.animate(dt, t, reduced);
+    c.group.position.set(this.pos.x, 0, this.pos.z);
+    c.group.rotation.y = this.yaw;
+  }
+
+  // camera vừa được trả lại (đóng bảng/chat): đi mượt từ chỗ camera đang đứng về sau lưng avatar
+  resume(reduced) { this.camPos.copy(this.camera.position); this.camInit = !reduced; }
+
+  // Camera (gọi khi chế độ đi bộ đang lái camera, tức không có bảng/chat/bay camera).
+  updateCamera(dt, reduced) {
+    const w = this.world, cam = this.camera;
+    if (!this.active || !w || !this.pos) return;
+    const fx = Math.sin(this.view), fz = Math.cos(this.view);
+    if (this.pov === 'first') {
+      cam.position.set(this.pos.x, EYE, this.pos.z);
+      this._v.set(this.pos.x + fx * Math.cos(this.pitch), EYE + Math.sin(this.pitch), this.pos.z + fz * Math.cos(this.pitch));
+      cam.lookAt(this._v);
+      w.fade(new Set());
+      this.camInit = true;
+      return;
+    }
+    const head = this._head.set(this.pos.x, LOOK_Y, this.pos.z);
+    const hd = this.dist * Math.cos(this.pitch - 0.35), up = this.dist * Math.sin(0.35 - this.pitch);
+    this._v.set(this.pos.x - fx * hd, LOOK_Y + up, this.pos.z - fz * hd);
+    // giữ camera trong văn phòng (không chui ra sau tường bắc/tây cao)
+    this._v.x = Math.max(0.3, Math.min(w.W + 2, this._v.x)); this._v.z = Math.max(0.3, Math.min(w.D + 2, this._v.z));
+    this._v.y = Math.max(0.6, this._v.y);
+    if (!this.camInit || reduced) { this.camPos.copy(this._v); this.camInit = true; } else this.camPos.lerp(this._v, Math.min(1, dt * 8));
+    cam.position.copy(this.camPos);
+    cam.lookAt(head);
+    // tường/vách nằm giữa camera và avatar → làm mờ
+    const dir = this._v.copy(head).sub(this.camPos), len = dir.length();
+    const hit = new Set();
+    if (len > 1e-3) {
+      this._ray.set(this.camPos, dir.multiplyScalar(1 / len)); this._ray.far = len;
+      for (const h of this._ray.intersectObjects(w.occluders, false)) hit.add(h.object);
+    }
+    w.fade(hit);
+  }
+
+  dispose() { this.chibi.group.removeFromParent(); this.chibi.dispose(); }
+}

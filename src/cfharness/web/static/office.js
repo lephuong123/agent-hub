@@ -15,9 +15,12 @@ import { drawHud, drawKanban, drawRuns, drawNeeds, drawCard, drawApprovalTag, dr
 import { makeApi, Modals, createFlows } from './office/flows.js';
 import { createChat } from './office/chat.js';
 import { FONT, roundRect } from './office/util.js';
+import { Walker } from './office/walk.js';
 
 const $ = (id) => document.getElementById(id);
 const KCOL_VI = { ready: 'Sẵn sàng', running: 'Đang làm', review: 'Review', blocked: 'Kẹt' };
+// giờ địa phương (số thực) cho ánh sáng theo giờ thật
+const hourNow = () => { const d = new Date(); return d.getHours() + d.getMinutes() / 60; };
 
 function el(tag, text) {
   const e = document.createElement(tag);
@@ -145,11 +148,11 @@ function main() {
         if (side.lengthSq() > 1e-4) { side.normalize(); f.center.addScaledVector(side, 0.25); }
         f.center.y += 0.4; f.h += 1.0; // chừa phía trên màn hình cho bong bóng lời nói
         flyToFrame(f, 1.1);
-      } } else if (overview) { flyTo(overview.pos, overview.target); }
+      } } else if (walk.active) { tween = null; } else if (overview) { flyTo(overview.pos, overview.target); }
       renderSrPanel();
     },
   });
-  function syncControls() { controls.enabled = !modals.open && !chat.isOpen; }
+  function syncControls() { controls.enabled = !walk.active && !modals.open && !chat.isOpen; }
   // khi chưa có văn phòng (vd. hết phiên ngay lần tải đầu): biển dựng trên một khoảnh sàn nhỏ cho ra cảnh 3D
   const signStand = new THREE.Group();
   {
@@ -216,8 +219,100 @@ function main() {
     if (chat.isOpen) { chat.close(); return; }
     select(null);
     focusBoard = null;
-    if (overview) flyTo(overview.pos, overview.target);
+    if (walk.active) tween = null; // chế độ đi bộ: camera trở lại sau lưng avatar
+    else if (overview) flyTo(overview.pos, overview.target);
     renderSrPanel();
+  }
+
+  // ------------------------------------------------------------ chế độ "Vào văn phòng" (đi bộ) — chỉ là cách XEM, không mở thêm quyền
+  // Avatar chủ hub + camera góc thứ ba/thứ nhất (office/walk.js). Đứng gần agent → thẻ thông tin + agent chào; đứng gần màn hình chat /
+  // bảng / cửa ra → [E] mở đúng luồng sẵn có (chat.open, showBoard, flows.*) — cùng endpoint, CSRF, khoá phiên như chế độ toàn cảnh.
+  const walk = new Walker({ camera, scene });
+  const walkBtn = $('office-walk'), povBtn = $('office-pov');
+  const hint = new TextSprite(1100, 150, 1, { depthTest: false, order: 1900 });
+  hint.sprite.visible = false; camera.add(hint.sprite);
+  let near = null, autoSel = false, walkHere = null, walkYield = true, nearAt = 0;
+  function fitHint() {
+    const d = 1.5, vh = 2 * d * Math.tan((camera.fov * Math.PI) / 360), vw = vh * camera.aspect;
+    const w = Math.min(vw * 0.86, vh * 0.95), h = (w * 150) / 1100;
+    hint.sprite.scale.set(w, h, 1);
+    hint.sprite.position.set(0, vh / 2 - h * 0.75, -d);
+  }
+  function setWalk(on) {
+    if (!world || !renderer || on === walk.active) return;
+    select(null); focusBoard = null; tween = null; near = null; autoSel = false;
+    if (on) { walk.enter(world); walkYield = true; }
+    else {
+      walk.exit();
+      // OrbitControls tiếp quản từ chỗ camera đang đứng rồi bay về toàn cảnh
+      const f = new THREE.Vector3(); camera.getWorldDirection(f);
+      controls.target.copy(camera.position).addScaledVector(f, 4);
+      if (overview) flyTo(overview.pos, overview.target);
+    }
+    hint.sprite.visible = on;
+    if (walkBtn) { walkBtn.setAttribute('aria-pressed', on ? 'true' : 'false'); walkBtn.title = on ? 'Ra toàn cảnh' : 'Vào văn phòng (đi bộ)'; walkBtn.setAttribute('aria-label', walkBtn.title); }
+    if (povBtn) povBtn.hidden = !on;
+    syncControls(); renderSrPanel();
+  }
+  if (walkBtn) walkBtn.addEventListener('click', () => setWalk(!walk.active));
+  if (povBtn) povBtn.addEventListener('click', () => { walk.togglePov(); renderSrPanel(); });
+  // thứ ở gần avatar có thể tương tác bằng [E]: màn hình chat, bảng, cửa ra, agent
+  function walkTarget() {
+    const p = walk.pos;
+    if (!p || !world) return null;
+    const a = world.chatAnchor, room = world.roomAt(p.x, p.z);
+    if (room && room.key === 'mgr' && Math.hypot(a.x - p.x, a.z - p.z) < 2.8) return { kind: 'chat', label: 'Chat với điều phối viên' };
+    const v = new THREE.Vector3();
+    for (const [k, label] of [['kanban', 'Xem bảng công việc'], ['runs', 'Xem màn hình phòng server'], ['needs', 'Xem bảng Cần bạn'], ['hud', 'Xem màn hình trạng thái']]) {
+      const b = world.boards[k];
+      b.mesh.getWorldPosition(v);
+      if (Math.hypot(v.x - p.x, v.z - p.z) < (k === 'hud' ? 3.2 : 2.6)) return { kind: 'board', board: b, label };
+    }
+    if (Math.hypot(world.W - 1.4 - p.x, world.D - p.z) < 1.4) return { kind: 'exit', label: 'Thoát (đăng xuất)' };
+    const act = near && actors.get(near);
+    if (act) {
+      const ap = ((state && state.approvals) || []).find((x) => x.agent === act.id);
+      const q = ((state && state.questions) || []).find((x) => x.agent === act.id);
+      if (ap) return { kind: 'ap', id: ap.id, label: 'Duyệt yêu cầu của ' + (act.agent.name || act.id) };
+      if (q) return { kind: 'q', id: q.id, label: 'Trả lời câu hỏi của ' + (act.agent.name || act.id) };
+      if (act.isManager) return { kind: 'chat', label: 'Chat với điều phối viên' };
+    }
+    return null;
+  }
+  function walkInteract() {
+    const t = walkTarget();
+    if (!t) return;
+    if (t.kind === 'chat') chat.open();
+    else if (t.kind === 'board') showBoard(t.board);
+    else if (t.kind === 'exit') flows.openLogout();
+    else doAct(t.kind, t.id);
+  }
+  // mỗi 0,2 s: agent gần nhất (≤ 1,8 m) → tự mở thẻ + agent chào; đi xa (> 2,6 m) → đóng thẻ tự mở; cập nhật dòng gợi ý
+  function walkProximity(now) {
+    const p = walk.pos;
+    let best = null, bd = 1.8;
+    for (const a of actors.values()) {
+      if (!a.pos) continue;
+      const d = Math.hypot(a.pos.x - p.x, a.pos.z - p.z);
+      if (d < bd || (a.id === near && d < 2.6 && !best)) { bd = Math.min(bd, d); best = a; }
+    }
+    const id = best ? best.id : null;
+    if (id !== near) {
+      near = id;
+      if (best) { best.greet(p.x, p.z, now); if (!selected || autoSel) { select(id, false); autoSel = true; } }
+      else if (autoSel) { select(null); autoSel = false; }
+    }
+    const room = world.roomAt(p.x, p.z), t = walkTarget();
+    walkHere = { room: room ? room.name : 'Khu làm việc', action: t ? t.label : '' };
+    hint.draw(JSON.stringify(walkHere) + walk.pov, (ctx, W, H) => {
+      ctx.fillStyle = 'rgba(31,30,29,0.78)'; roundRect(ctx, 6, 6, W - 12, H - 12, 36); ctx.fill();
+      ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff'; ctx.font = '700 40px ' + FONT;
+      let top = '📍 ' + walkHere.room + (walkHere.action ? '   ·   [E] ' + walkHere.action : '');
+      while (top.length > 4 && ctx.measureText(top).width > W - 70) top = top.slice(0, -2) + '…';
+      ctx.fillText(top, 36, 56);
+      ctx.fillStyle = '#d6d3c8'; ctx.font = '500 28px ' + FONT;
+      ctx.fillText('WASD/mũi tên: đi · Shift: chạy · kéo: xoay · bấm sàn: tự đi · V: ' + (walk.pov === 'third' ? 'góc thứ nhất' : 'góc thứ ba') + ' · Esc: ra', 36, 112);
+    });
   }
 
   // ------------------------------------------------------------ áp dữ liệu /office/state
@@ -238,6 +333,9 @@ function main() {
       wkey = key;
       for (const a of actors.values()) a.attach(world);
       chat.mount(world);
+      world.setDaylight(hourNow());
+      if (walk.active) { walk.setWorld(world); near = null; }
+      if (walkBtn && renderer && !noRender) walkBtn.hidden = false;
       fitCamera();
       if (first) { camera.position.copy(overview.pos); controls.target.copy(overview.target); controls.update(); }
     }
@@ -376,6 +474,9 @@ function main() {
       } else if (k === 'runs') {
         t = 'Lượt chạy đang chạy: ' + ((state.runs || []).map((r) => (names(r.agent) || r.agent) + ' ' + fmtUsd(r.cost_usd)).join(', ') || 'không có') + '.';
       } else t = srHud ? srHud.textContent : '';
+    } else if (walk.active && walkHere) {
+      t = 'Chế độ đi bộ (' + (walk.pov === 'third' ? 'góc nhìn thứ ba' : 'góc nhìn thứ nhất') + '). Bạn đang ở ' + walkHere.room + '.' +
+        (walkHere.action ? ' Bấm E: ' + walkHere.action + '.' : '');
     }
     if (srPanel.textContent !== t) srPanel.textContent = t;
   }
@@ -460,9 +561,17 @@ function main() {
     return null;
   }
   if (renderer) {
-    cvs.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
+    cvs.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, drag: false }; });
+    // chế độ đi bộ: kéo chuột / kéo tay = xoay hướng nhìn (OrbitControls đang tắt)
+    cvs.addEventListener('pointermove', (e) => {
+      if (!down || !walk.active || modals.open || chat.isOpen) return;
+      if (!down.drag && Math.hypot(e.clientX - down.x, e.clientY - down.y) <= 5) return;
+      down.drag = true;
+      walk.look(e.clientX - down.lx, e.clientY - down.ly);
+      down.lx = e.clientX; down.ly = e.clientY;
+    });
     cvs.addEventListener('pointerup', (e) => {
-      if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) { down = null; return; }
+      if (!down || down.drag || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) { down = null; return; }
       down = null;
       // bảng modal đang mở: chỉ bảng trên cùng nhận chuột (bấm ra ngoài không làm gì — tránh bấm nhầm)
       if (modals.open) { const uv = panelUV(e, modals.top); if (uv) modals.top.click(uv); return; }
@@ -477,14 +586,18 @@ function main() {
       else if (p && p.question) flows.openQuestion(p.question);
       else if (p && p.exit) flows.openLogout();
       else if (p && p.chat) chat.open();
-      else if (p && p.actor) select(p.actor);
+      else if (p && p.actor) { autoSel = false; select(p.actor, !walk.active); }
       else if (p && p.board) showBoard(p.board);
-      else if (selected || focusBoard) toOverview(); // bấm sàn trống → về toàn cảnh
+      else if (walk.active && !focusBoard) {
+        // chế độ đi bộ: bấm/chạm sàn → avatar tự đi tới (A*); reduced-motion → dịch chuyển tức thời
+        const h = world && ray.intersectObject(world.floor, false)[0];
+        if (h) walk.goTo(h.point.x, h.point.z, reduced);
+      } else if (selected || focusBoard) toOverview(); // bấm sàn trống → về toàn cảnh
     });
     // con lăn trên bảng: cuộn bảng, không phóng to cảnh (bắt ở pha capture trước OrbitControls)
     host.addEventListener('wheel', (e) => {
       const pnl = modals.open ? modals.top : chat.isOpen ? chat.panel : null;
-      if (!pnl) return;
+      if (!pnl) { if (walk.active) { e.preventDefault(); e.stopPropagation(); if (!focusBoard) walk.zoom(e.deltaY); } return; }
       e.preventDefault(); e.stopPropagation();
       const uv = panelUV(e, pnl);
       if (uv) pnl.wheel(uv, e.deltaY);
@@ -507,14 +620,27 @@ function main() {
     const h = ray.intersectObject(pnl.mesh, false)[0];
     return h && h.uv ? h.uv : null;
   }
+  const typing = (t) => t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
   document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || e.isComposing) return;
+    if (e.isComposing) return;
+    if (walk.active && e.key !== 'Escape') {
+      // phím đi bộ: chỉ khi không có bảng/chat mở và không đang gõ chữ (ô chat ẩn, ô ghi chú)
+      if (modals.open || chat.isOpen || typing(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (walk.key(e.code, true, e.shiftKey)) { e.preventDefault(); if (focusBoard) toOverview(); return; }
+      if (e.code === 'KeyV' && !e.repeat) { walk.togglePov(); renderSrPanel(); return; }
+      if (e.code === 'KeyE' && !e.repeat) { walkInteract(); return; }
+      return;
+    }
+    if (e.key !== 'Escape') return;
     if (modals.open) { e.preventDefault(); const t = modals.top; if (t.opts.onEscape) t.opts.onEscape(); return; }
     if (chat.isOpen) { e.preventDefault(); chat.close(); return; }
-    const t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (typing(e.target)) return;
+    // chế độ đi bộ: Esc đóng thẻ/bảng trước, lần sau mới ra toàn cảnh
+    if (walk.active && !selected && !focusBoard) { setWalk(false); return; }
     toOverview();
   });
+  document.addEventListener('keyup', (e) => { walk.key(e.code, false, e.shiftKey); });
+  window.addEventListener('blur', () => { walk.keys.clear(); });
 
   // ------------------------------------------------------------ kích thước
   function resize() {
@@ -522,7 +648,7 @@ function main() {
     const w = Math.max(1, host.clientWidth), h = Math.max(1, host.clientHeight);
     renderer.setSize(w, h, false);
     camera.aspect = w / h; camera.updateProjectionMatrix();
-    modals.fit(); fitToast(); chat.fitOverlay();
+    modals.fit(); fitToast(); fitHint(); chat.fitOverlay();
     if (world) fitCamera();
   }
   if (window.ResizeObserver) new ResizeObserver(resize).observe(host); else window.addEventListener('resize', resize);
@@ -560,7 +686,7 @@ function main() {
     const dt = Math.min(0.1, last ? (ts - last) / 1000 : 0.016);
     last = ts; lastDraw = ts;
     const now = perfNow();
-    const lf = Math.min(2.6, Math.max(1, camera.position.distanceTo(controls.target) / 20));
+    const lf = walk.active ? 1 : Math.min(2.6, Math.max(1, camera.position.distanceTo(controls.target) / 20));
     if (world) {
       world.setLabelScale(lf);
       const quiet = !!focusBoard || chat.isOpen || modals.open;
@@ -576,13 +702,23 @@ function main() {
       camera.position.lerpVectors(tween.p0, tween.p1, e);
       controls.target.lerpVectors(tween.q0, tween.q1, e);
       if (tween.k >= 1) tween = null;
-    } else if (selected && actors.get(selected) && actors.get(selected).pos) {
+    } else if (!walk.active && selected && actors.get(selected) && actors.get(selected).pos) {
       // bám theo nhân vật đang đi
       tmp.copy(charTarget(actors.get(selected))).sub(controls.target).multiplyScalar(reduced ? 1 : Math.min(1, dt * 2.5));
       controls.target.add(tmp); camera.position.add(tmp);
     }
-    clampTarget();
-    controls.update();
+    if (walk.active && world) {
+      // đi bộ: avatar luôn cập nhật; camera do walker lái trừ khi đang xem bảng / chat / bay camera (khi đó nhìn controls.target)
+      walk.update(dt, now, reduced);
+      const yieldCam = !!tween || !!focusBoard || chat.isOpen;
+      if (yieldCam) { camera.lookAt(controls.target); world.fade(new Set()); }
+      else { if (walkYield) walk.resume(reduced); walk.updateCamera(dt, reduced); }
+      walkYield = yieldCam;
+      if (now - nearAt > 0.2) { nearAt = now; walkProximity(now); }
+    } else {
+      clampTarget();
+      controls.update();
+    }
     // thẻ nhân vật cạnh nhân vật (phía phải theo camera)
     const act = selected && actors.get(selected);
     if (act && act.pos) {
@@ -599,6 +735,7 @@ function main() {
     if (now - uiAt > 1) {
       uiAt = now;
       if (world && state) drawRuns(world.boards.runs, state.runs || [], names, Date.now());
+      if (world) world.setDaylight(hourNow());
       renderList(); renderSrPanel(); syncSign();
     }
     modals.update();
@@ -633,6 +770,8 @@ function main() {
   let slowT = 0;
   function disableRender() {
     noRender = true; pause();
+    if (walkBtn) walkBtn.hidden = true;
+    if (povBtn) povBtn.hidden = true;
     if (fallback) fallback.hidden = false;
     host.hidden = true;
     if (!slowT) slowT = setInterval(() => { if (!stopped) { renderList(); renderSrPanel(); } }, 1000);
