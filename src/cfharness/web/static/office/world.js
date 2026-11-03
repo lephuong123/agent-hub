@@ -701,7 +701,8 @@ export class World {
     const rgb = ['#5fc7d6', '#9fd8e6', '#7a8fe0'].map((col) => new THREE.MeshBasicMaterial({ color: col, toneMapped: false }));
     this.rgbMats = rgb; this.cafeMats.push(...rgb);
     this.warmLed = new THREE.MeshBasicMaterial({ color: '#ffe6c2', toneMapped: false }); this.ownMats.push(this.warmLed);
-    const FLOOR = '#736a62', RUN = '#5f5852', INNER = '#6b5240';
+    // sàn thảm tấm màu yến mạch ấm (sáng hơn sàn sồi một chút, ít bão hoà) + thảm chạy dưới dãy bàn tông nâu xám vừa — không còn mảng tối lớn
+    const FLOOR = '#d3c6b3', RUN = '#b3a28c', INNER = '#9a7457';
     B.box(x1 - x0, 0.012, z1 - z0, cx, 0, cz, 'carpet', FLOOR);
     // viền gỗ óc chó quanh sàn thảm
     for (const [w, d, x, z] of [[x1 - x0, 0.14, cx, z0 + 0.13], [x1 - x0, 0.14, cx, z1 - 0.13], [0.14, z1 - z0, x0 + 0.13, cz], [0.14, z1 - z0, x1 - 0.13, cz]]) B.box(w, 0.016, d, x, 0, z, 'walnut', WALNUT);
@@ -745,7 +746,7 @@ export class World {
       const bz = z0 + CAFE_EDGE + i * CAFE_ROW;
       B.box(span + 0.4, 0.014, 3.3, (sx0 + sx1) / 2, 0, bz, 'carpet', RUN);
       // vách ngăn vải giữa hai hàng bàn quay lưng + LED trắng ấm mảnh trên đỉnh
-      B.box(span, 0.34, 0.03, (sx0 + sx1) / 2, 0.62, bz, 'fabric', '#3d3a38', { r: 0.01 });
+      B.box(span, 0.34, 0.03, (sx0 + sx1) / 2, 0.62, bz, 'fabric', '#8d9a88', { r: 0.01 });
       B.box(span, 0.012, 0.012, (sx0 + sx1) / 2, 0.955, bz, 'warm', '#ffffff');
       for (let j = 0; j < c.k; j++) {
         const x = first + j * CAFE_STEP;
@@ -753,11 +754,13 @@ export class World {
           const screen = this._gameDesk(x, bz + side * 0.4, side, j, rnd);
           const sz = bz + side * 1.25;
           const tint = muted(TEAM_COLORS[(j * 2 + i + (side > 0 ? 1 : 0)) % TEAM_COLORS.length]);
-          this._chair(x, sz, side, tint, { high: true, arms: true, back: '#2b2c31', stripe: tint });
+          this._chair(x, sz, side, tint, { high: true, arms: true, back: mix(tint, '#2b2c31', 0.55), stripe: tint });
           this._spot('cafe', x, sz, side < 0 ? 0 : Math.PI, 'typeFast', 0.34, { screen, ph: i * 3.1 + j * 0.9 + (side > 0 ? 1.7 : 0), stand: { x, z: bz + side * 1.7 } });
         }
       }
       grid.rect(first - 0.58, bz - 0.8, first + (c.k - 1) * CAFE_STEP + 0.58, bz + 0.8, 0.08);
+      // cây cao ở hai đầu dãy, trên trục vách ngăn (chỉ khi còn ≥ 0,9 m trống — không chắn lối vòng quanh dãy)
+      if ((sx1 - sx0 - span) / 2 >= 0.9) for (const px of [first - 0.95, first + (c.k - 1) * CAFE_STEP + 0.95]) this._plant(px, bz, 0.9);
     }
 
     // 2 máy arcade sát vách tây, quay vào trong (thân than, hông óc chó)
@@ -808,11 +811,12 @@ export class World {
   // bàn phím đèn nền dịu, thùng máy dưới gầm có khe kính hông
   _gameDesk(x, z, side, j, rnd) {
     const B = this.batch;
-    B.box(1.1, 0.04, 0.7, x, 0.6, z, 'walnut', '#4a3a30', { r: 0.012, seg: 2 });
+    B.box(1.1, 0.04, 0.7, x, 0.6, z, 'walnut', '#7a5a43', { r: 0.012, seg: 2 });
     for (const sx of [-0.5, 0.5]) { B.box(0.05, 0.6, 0.06, x + sx, 0, z, 'metal', BLACK); B.box(0.06, 0.03, 0.62, x + sx, 0, z, 'metal', BLACK); }
-    B.box(0.8, 0.003, 0.32, x, 0.64, z + side * 0.14, 'fabric', '#2a2a2e');
+    B.box(0.8, 0.003, 0.32, x, 0.64, z + side * 0.14, 'fabric', '#3a3a3e');
     B.box(0.44, 0.02, 0.14, x, 0.643, z + side * 0.18, 'plastic', '#1e1f23', { r: 0.006 });
-    B.box(0.4, 0.003, 0.1, x, 0.663, z + side * 0.18, 'rgb1', '#ffffff');
+    // đèn nền bàn phím: chỉ một vạch mảnh ở mép sau (trước đây cả mặt phím phát sáng → ô xanh chói nhìn từ trên)
+    B.box(0.4, 0.003, 0.015, x, 0.663, z + side * 0.12, 'rgb1', '#ffffff');
     B.box(0.07, 0.025, 0.11, x + 0.3, 0.643, z + side * 0.18, 'plastic', '#1e1f23', { r: 0.01 });
     const mz = z - side * 0.16;
     B.cyl(0.1, 0.11, 0.012, x, 0.64, mz - side * 0.02, 'metal', '#2a2b30', 20);
@@ -824,7 +828,7 @@ export class World {
     if (!this.ownGeos.includes(pg)) this.ownGeos.push(pg);
     const m = new THREE.Mesh(pg, scr);
     m.position.set(x, 0.99, mz + side * 0.0165); m.rotation.y = side < 0 ? Math.PI : 0; this.group.add(m);
-    B.box(0.2, 0.45, 0.42, x + 0.36, 0.0, z, 'paint', '#26262a', { r: 0.012 });
+    B.box(0.2, 0.45, 0.42, x + 0.36, 0.0, z, 'paint', '#e4e0d9', { r: 0.012 });
     B.box(0.004, 0.3, 0.3, x + 0.258, 0.07, z, 'rgb2', '#ffffff');
     if (rnd() < 0.4) B.cyl(0.033, 0.033, 0.11, x - 0.42, 0.643, z + side * 0.1, 'ceramic', ['#f4f1ea', '#d98a92', '#7fc6d0', '#d4a446'][Math.floor(rnd() * 4)], 12);
     this._aoq(x, z, 1.1, 0.7);
