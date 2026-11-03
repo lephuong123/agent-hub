@@ -360,6 +360,9 @@ class ManagerOps:
         tr = dict(self.hub.store.state_get("manager_tracked") or {})
         tr["tasks"] = (list(tr.get("tasks") or []) + [res.get("id")])[-200:]
         self.hub.store.state_set("manager_tracked", tr)
+        origin, guessed = self._target_conv()
+        if origin and not guessed:  # kết quả task báo về đúng hội thoại (thread Slack) đã giao nó
+            self.svc.remember_origin("task", res.get("id"), origin["id"])
         return {"task_id": res.get("id"), "status": res.get("status"), "team_id": res.get("team_id"), "assignee": res.get("assignee_agent_id"),
                 "warnings": (res.get("warnings") or []) + ([f"assignee is a member of team '{auto_team}' — task attached to that team "
                                                            "(pass team= yourself next time)"] if auto_team else []),
@@ -384,6 +387,9 @@ class ManagerOps:
         tr = dict(self.hub.store.state_get("manager_tracked") or {})
         tr["runs"] = (list(tr.get("runs") or []) + [res.get("id")])[-200:]
         self.hub.store.state_set("manager_tracked", tr)
+        origin, guessed = self._target_conv()
+        if origin and not guessed:
+            self.svc.remember_origin("run", res.get("id"), origin["id"])
         return {"run_id": res.get("id"), "status": res.get("status"), "next": "follow it with run_get until it ends"}
 
     async def op_run_steer(self, a: dict[str, Any]) -> Any:
@@ -511,31 +517,48 @@ class ManagerOps:
         return {"question_id": q["id"], "status": q["status"], "asked": desc[:400],
                 "note": "Asked. End your turn now; the owner's decision and the result arrive as an owner message."}
 
-    def _owner_conversation(self) -> str | None:
-        conv = (self.run.get("run_opts") or {}).get("manager_conversation")
+    def _human_conv(self, cid: Any) -> dict[str, Any] | None:
+        """Hội thoại của NGƯỜI (không phải nhịp heartbeat, chưa lưu trữ, của điều phối viên này) — không hợp lệ → None."""
+        if not cid:
+            return None
         try:
-            if conv and self.svc._conv_row(conv)["channel"] == "heartbeat":
-                conv = None
+            c = self.svc._conv_row(str(cid))
         except NotFound:
-            conv = None
-        if conv is None:
-            home = self.svc._home_conversation()
-            conv = home["id"] if home else None
-        return conv
+            return None
+        if c["channel"] == "heartbeat" or c.get("archived_at") or c["agent_id"] != self.mid:
+            return None
+        return c
+
+    def _target_conv(self, task_id: Any = None) -> tuple[dict[str, Any] | None, bool]:
+        """Hội thoại nhận tin chủ động / câu hỏi của run này → (hội thoại, có_phải_đoán).
+        1) run chat: chính hội thoại của nó. 2) lượt heartbeat: hội thoại đã giao `task_id` (hub tra, không tin chữ của agent).
+        3) mọi sự kiện của lượt cùng MỘT hội thoại gốc (`run_opts.tick_convs`). 4) đoán: cuộc người hoạt động gần nhất (`guessed`)."""
+        opts = self.run.get("run_opts") or {}
+        own = self._human_conv(opts.get("manager_conversation"))
+        if own:
+            return own, False
+        if task_id:
+            c = self._human_conv(self.svc.origin_conversation(task_id=task_id))
+            if c:
+                return c, False
+        tc = [x for x in (opts.get("tick_convs") or []) if x]
+        if len(tc) == 1:
+            c = self._human_conv(tc[0])
+            if c:
+                return c, False
+        return self.svc._home_conversation(), True
+
+    def _owner_conversation(self) -> str | None:
+        conv, _ = self._target_conv()
+        return conv["id"] if conv else None
 
     def op_notify_owner(self, a: dict[str, Any]) -> Any:
         text = str(a.get("text") or "").strip()
         if not text:
             raise HubError("notify_owner cần text")
-        opts = self.run.get("run_opts") or {}
-        conv = None
-        try:
-            c = self.svc._conv_row(opts.get("manager_conversation") or "")
-            conv = c if c["channel"] != "heartbeat" else None
-        except NotFound:
-            conv = None
-        guessed = conv is None  # lượt heartbeat: không có hội thoại gốc → đoán "hội thoại người hoạt động gần nhất" (có thể không liên quan)
-        conv = conv or self.svc._home_conversation()
+        # lượt heartbeat: về hội thoại đã giao task (`task_id`) / hội thoại gốc duy nhất của các sự kiện; không biết → đoán
+        # "hội thoại người hoạt động gần nhất" (`guessed` — Slack gửi DM, không chen vào thread của việc khác)
+        conv, guessed = self._target_conv(a.get("task_id"))
         cid = conv["id"] if conv else None
         if cid:
             self.svc._add_msg(cid, "notify", text, self.run["id"])

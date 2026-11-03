@@ -363,7 +363,9 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
         {"kind": {"type": "string", "enum": ["approve_action", "sandbox_localhost", "sandbox_domain", "agent_update"]}, "approval_id": _S,
          "agent": _S, "domain": _S, "changes": _O, "reason": _S}, ["kind"]),
     "notify_owner": _t("Send a short message to the human owner (Vietnamese) on their conversation channel. Use when you need a human "
-                       "decision or when a goal is done. kind: info|need_human|done.", {"text": _S, "kind": _S}, ["text"]),
+                       "decision or when a goal is done. kind: info|need_human|done. In a heartbeat, pass task_id (the task the message is "
+                       "about) so it reaches the conversation/thread where the owner asked for that work; one message per task — do not "
+                       "bundle results of different tasks.", {"text": _S, "kind": _S, "task_id": _S}, ["text"]),
 }
 # Lịch chạy tự động (schedules/) — khối riêng (gộp nhánh dễ). Quyền kiểm ở daemon: schedules/service.manager_check.
 _SCHED_EXPR = ("expr: 5-field cron ('*/30 * * * *', '0 8 * * 1-5') or 'every 30m', 'daily 08:00', 'weekdays 08:30', 'weekly mon,thu 09:00', "

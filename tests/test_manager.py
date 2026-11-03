@@ -228,6 +228,56 @@ async def test_heartbeat_event_debounce_lock_estop_and_nothing_to_do(d):
     assert any(x["status"] == "started" for x in ticks)
 
 
+async def test_heartbeat_notify_goes_to_conversation_that_assigned_the_task(d):
+    """Kết quả task báo từ heartbeat về ĐÚNG hội thoại đã giao task (Slack: đúng thread đã tag), không phải cuộc hoạt động gần nhất."""
+    d.hub.config.set("manager.event_debounce_s", 0)
+    res_a = await manager_run(d, text="việc A")
+    d.hub.agents.create({"id": "w1", "name": "w1"})
+    ta = await tool(d, res_a["run_id"], "task_create", {"title": "A", "body": "làm A", "assignee": "w1"})
+    tb = await tool(d, res_a["run_id"], "task_create", {"title": "A2", "body": "làm A2", "assignee": "w1"})
+    d.hub.runs.runtime().release()
+    await wait_status(d, res_a["run_id"], ("completed",))
+    res_b = await rpc(d, "manager.chat", {"channel": "web", "text": "việc B khác hẳn"})  # B thành "cuộc hoạt động gần nhất"
+    assert res_b["conversation_id"] != res_a["conversation_id"]
+    await wait_status(d, res_b["run_id"])
+    d.hub.runs.runtime().release()
+    await wait_status(d, res_b["run_id"], ("completed",))
+    m = d.hub.manager
+    m.pending.clear()
+    m._pending_keys.clear()
+    d.hub.tasks.set_status(ta["task_id"], "blocked", reason="cần quyết định")
+    assert m.pending and m.pending[-1]["conversation_id"] == res_a["conversation_id"]
+    tk = await m.maybe_tick()
+    run = await wait_status(d, tk["run_id"])
+    assert run["run_opts"]["tick_convs"] == [res_a["conversation_id"]] and res_a["conversation_id"] in run["prompt"]
+    # có task_id → hội thoại đã giao task
+    n = await tool(d, tk["run_id"], "notify_owner", {"text": "A xong", "task_id": tb["task_id"]})
+    assert n["conversation_id"] == res_a["conversation_id"]
+    # không có task_id nhưng mọi sự kiện của lượt cùng một hội thoại gốc → hội thoại đó
+    n2 = await tool(d, tk["run_id"], "notify_owner", {"text": "A vướng"})
+    assert n2["conversation_id"] == res_a["conversation_id"]
+    reps = [e.payload for e in _events(d, "manager.reply") if e.payload.get("kind") == "notify"]
+    assert [r["conversation_guessed"] for r in reps[-2:]] == [False, False]
+    hist_b = await rpc(d, "manager.history", {"conversation_id": res_b["conversation_id"]})
+    assert not [x for x in hist_b if x["role"] == "notify"]  # không lẫn vào cuộc B
+
+
+async def test_heartbeat_notify_without_known_origin_is_guessed(d):
+    d.hub.config.set("manager.event_debounce_s", 0)
+    res = await manager_run(d, text="việc A")
+    d.hub.agents.create({"id": "w1", "name": "w1"})
+    d.hub.runs.runtime().release()
+    await wait_status(d, res["run_id"], ("completed",))
+    t = d.hub.tasks.create({"assignee": "w1", "title": "x", "body": "y"}, created_by="human")
+    d.hub.tasks.set_status(t["id"], "blocked", reason="lỗi")
+    tk = await d.hub.manager.maybe_tick()
+    run = await wait_status(d, tk["run_id"])
+    assert "tick_convs" not in run["run_opts"]
+    await tool(d, tk["run_id"], "notify_owner", {"text": "báo chung", "task_id": t["id"]})
+    rep = [e.payload for e in _events(d, "manager.reply") if e.payload.get("kind") == "notify"][-1]
+    assert rep["conversation_guessed"] is True  # Slack: DM, không chen vào thread của việc khác
+
+
 async def test_heartbeat_approval_waiting_and_periodic_open_work(d):
     d.hub.config.set("manager.approval_wait_min", 0)
     d.hub.config.set("manager.event_debounce_s", 3600)
