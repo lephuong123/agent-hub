@@ -230,6 +230,13 @@ DEFAULTS: dict[str, Any] = {
             "timeout_s": 15,
         },
     },
+    # Log daemon `logs/` (NFR-21): hub.log xoay vòng theo dung lượng (an toàn trên Windows), daemon.out xoay lúc khởi động;
+    # bản cũ (`*.log.N`, `*.out.N`) quá max_age_days bị xoá (0/null = chỉ giới hạn theo số bản). Đổi có hiệu lực khi daemon khởi động lại.
+    "logs": {
+        "max_bytes": 10 * 1024 * 1024,
+        "backup_count": 5,
+        "max_age_days": 30,
+    },
     "recovery": {
         "auto_resume": True,  # Q-09: daemon restart → dừng-và-resume tự động (trừ waiting_human)
         "pid_start_tolerance_s": 5,

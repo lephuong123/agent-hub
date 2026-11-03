@@ -91,7 +91,7 @@ Canary/eval gate/regression monitor **không bao giờ rollback entry `actor=use
   revert được nên ngoại lệ đó sẽ làm retention vô nghĩa). GIỮ checkpoint của run `queued|running|waiting_human|interrupted`
   (resume/`resume_conflicts` cần). Sau khi xoá: `runs.diff.revertible=false` + `checkpoint_purged_at` (danh sách file/stat còn);
   `run revert` báo lỗi rõ "đã bị xoá theo retention". Test `test_checkpoints_retention_keeps_live_and_recent`.
-- Còn lại: `logs/` daemon chưa xoay vòng.
+- Còn lại: `logs/` daemon chưa xoay vòng. → đã làm: `daemon-log-rotation.md`.
 
 ## NFR-22 — LLM judge qua `AgentRuntime.oneshot` (yêu cầu bổ sung của coordinator, sau H-20 của CLI)
 - `evals/judge.py`: bỏ spawn `claude` trực tiếp; gọi `ClaudeCliRuntime({**runtime.claude, "binary": eval.judge.binary}).oneshot(
@@ -99,7 +99,7 @@ Canary/eval gate/regression monitor **không bao giờ rollback entry `actor=use
   rỗng + `--strict-mcp-config`, `--setting-sources ""`, `--tools ""`, env_strip), giữ `--json-schema`/`--no-session-persistence`,
   thêm kiểm ma trận cờ. Vẫn ghi dòng `runs kind=eval_judge` (ngân sách ngày). `build_judge_argv` giờ ủy quyền cho `oneshot_argv`.
 - Test: `test_judge_goes_through_runtime_oneshot` (chặn `create_subprocess_exec`), các test judge cũ (`test_eval_golden.py`) xanh.
-- Chưa làm (dev-notes CLI mục 2): `run_logger` cho log dispatcher/recovery.
+- Chưa làm (dev-notes CLI mục 2): `run_logger` cho log dispatcher/recovery. → đã làm: `daemon-log-rotation.md`.
 
 ## Phối hợp với luồng khác
 - File dùng chung đã chạm (chỉ thêm): `store.py` (v12), `config.py` (`retention.*` mới; đổi mặc định `system_prompt_snapshot`),
