@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Đồ thị memory{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="/memory">Memory</a> › <a href="/memory/graph">Graph</a> › <span>Đồ thị</span></nav>
+<div class="page-head"><div class="ph-title"><h1>Đồ thị memory</h1><span class="sub">Thực thể = nút (cỡ theo số fact, màu theo tầng), fact = cạnh (nhãn = quan hệ). Kéo nút, kéo nền để di chuyển, cuộn để phóng to. Bấm nút để xem fact.</span></div></div>
+<form method="get" action="/memory/graph/view" class="filters" role="search">
+  <label class="grow">Tìm <input name="q" value="{{ q.q or '' }}" placeholder="câu hỏi / từ khoá — bỏ trống: fact mới nhất" autocomplete="off" spellcheck="false"></label>
+  <label>Thực thể <input name="entity" value="{{ q.entity or '' }}" placeholder="tên hoặc id" autocomplete="off" spellcheck="false"></label>
+  <label>Như agent thấy <select name="agent"><option value="">— người: mọi tầng —</option>{% for a in agents %}<option value="{{ a }}" {{ 'selected' if q.agent == a }}>{{ a }}</option>{% endfor %}</select></label>
+  <label>Tầng <select name="tier"><option value="">mọi tầng</option>{% for k, label in tiers %}<option value="{{ k }}" {{ 'selected' if q.tier == k }}>{{ label }}</option>{% endfor %}</select></label>
+  <label>Tin cậy ≥ <select name="min_conf">{% for c in conf_steps %}<option value="{{ c }}" {{ 'selected' if (q.min_conf or '') == c }}>{{ c or 'bất kỳ' }}</option>{% endfor %}</select></label>
+  <label>Bước <select name="hops"><option value="1">1</option><option value="2" {{ 'selected' if q.hops == '2' }}>2</option></select></label>
+  <label>Tối đa nút <select name="limit">{% for n in (50, 100, 150, 300) %}<option value="{{ n }}" {{ 'selected' if params.limit == n }}>{{ n }}</option>{% endfor %}</select></label>
+  <label class="row gap"><input type="checkbox" name="history" value="1" {{ 'checked' if q.history == '1' }}> Tải lịch sử</label>
+  <button class="btn sm primary" type="submit">{{ m.icon('search') }}<span>Vẽ</span></button>
+</form>
+<div class="mg-wrap">
+  <section class="card mg-card">
+    <div class="mg-tools row gap">
+      <button type="button" class="btn sm ghost" id="mg-zoom-in" aria-label="Phóng to">+</button>
+      <button type="button" class="btn sm ghost" id="mg-zoom-out" aria-label="Thu nhỏ">−</button>
+      <button type="button" class="btn sm ghost" id="mg-fit">{{ m.icon('refresh') }}<span>Vừa khung</span></button>
+      <label class="row gap small"><input type="checkbox" id="mg-show-invalid" checked> Hiện fact đã đóng (nét đứt)</label>
+      <label class="row gap small"><input type="checkbox" id="mg-labels" checked> Nhãn quan hệ</label>
+      <span class="spacer"></span>
+      <span class="mg-legend small"><span class="mg-dot t-agent"></span>agent <span class="mg-dot t-team"></span>team <span class="mg-dot t-global"></span>toàn hub</span>
+    </div>
+    <div id="mg" class="mg-canvas" data-src="{{ src }}" role="img" aria-label="Đồ thị memory"><p class="muted small mg-status" id="mg-status">Đang tải…</p>
+      <noscript><p class="muted small">Đồ thị cần JavaScript — dùng <a href="/memory/graph">danh sách fact</a>.</p></noscript></div>
+  </section>
+  <aside class="card mg-side" id="mg-side" aria-live="polite">
+    <h2 id="mg-side-title">Chọn một nút</h2>
+    <p class="muted small" id="mg-side-sub">Bấm vào một thực thể để xem fact của nó.</p>
+    <div id="mg-side-links" class="row gap"></div>
+    <ul class="plain small mg-facts" id="mg-side-facts"></ul>
+  </aside>
+</div>
+<script src="{{ static('memory_graph.js') }}"></script>
+{% endblock %}

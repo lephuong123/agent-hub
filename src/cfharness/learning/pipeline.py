@@ -36,6 +36,7 @@ from ..knowledge.store import (
     apply_memory_ops,
     check_rel_path,
     check_skill_name,
+    match_entries,
     memory_chars,
     parse_memory,
     parse_skill,
@@ -54,9 +55,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("cfharness.learning")
 
-TARGETS = ("memory", "skill", "config", "user_profile")
+TARGETS = ("memory", "skill", "config", "user_profile", "graph")
 OPS = ("add", "patch", "merge", "archive", "delete")
 LEARNING_ACTORS = ("review", "curator", "agent", "learning")
+# Suất tần suất của vòng học nền (review/curator). Tool `memory` của agent (actor `agent`) có suất riêng `rate.agent_tool_max_per_day`.
+QUOTA_ACTORS = tuple(a for a in LEARNING_ACTORS if a != "agent")
 READ_EVIDENCE = "_read_evidence"  # payload: {"scope|owner|name|rel": sha256} — bằng chứng đọc-trước-khi-ghi lúc đề xuất
 FINAL = ("applied", "promoted", "deferred_rate_limited", "deferred_no_eval", "eval_failed", "blocked", "rolled_back", "superseded", "suggested")
 
@@ -128,6 +131,8 @@ class Pipeline:
             return self._plan_skill(prop)
         if t == "config":
             return self._plan_config(prop)
+        if t == "graph":
+            return self._plan_graph(prop)
         raise KnowledgeError(f"target không hợp lệ: {t}", "invalid")
 
     def _owner(self, prop: dict[str, Any]) -> str | None:
@@ -152,7 +157,7 @@ class Pipeline:
             action = pl.get("action") or {"add": "add", "patch": "patch", "delete": "remove"}.get(prop["op"], "add")
             ops = [{"action": action, "content": pl.get("content") if pl.get("content") is not None else pl.get("new_text"), "old_text": pl.get("old_text")}]
             new_entries = apply_memory_op(entries, action, ops[0]["content"], ops[0]["old_text"])
-        touched = [e for e in entries for o in ops if o.get("action") in ("patch", "remove") and o.get("old_text") and o["old_text"] in e]
+        touched = [entries[i] for o in ops if o.get("action") in ("patch", "remove") for i in match_entries(entries, o.get("old_text"))]
         after = render_memory(new_entries, store)
         prop["op"] = {"add": "add", "patch": "patch", "remove": "delete"}[action]
         prop["target_ref"] = path.name
@@ -182,6 +187,36 @@ class Pipeline:
         return {"scope": scope, "owner": owner, "change": ch, "diff": diff, "size": size, "new_text": content or "",
                 "format_drift": _memory_drift(before, entries, store), "longest_written": max((len(w.strip()) for _, w in written), default=0),
                 "chars_before": memory_chars(entries), "chars_after": memory_chars(new_entries), "limit": self.ks.memory_limit(scope, store), "duplicate_of": dup, "touched_entries": touched}
+
+    def _plan_graph(self, prop: dict[str, Any]) -> dict[str, Any]:
+        """Graph memory (docs/dev-notes/plan-graph-memory.md): `payload.operations` (+ `episode` tuỳ chọn) → hàng sẽ ghi
+        (`GraphStore.plan_ops`, thuần). Đích = `graph://<scope>/<owner>` — một Change cho cả lô, rollback theo hàng."""
+        from ..knowledge.graph import GraphStore
+
+        pl = prop.get("payload") or {}
+        ops = pl.get("operations")
+        if not isinstance(ops, list):
+            raise KnowledgeError("graph cần operations (mảng thao tác)", "invalid")
+        scope, owner = prop["scope"], self._owner(prop)
+        if str(prop.get("created_by") or "agent") not in ("user", "review", "curator"):  # cờ nội bộ (`_user_grounded`…) không nhận từ agent
+            ops = [{k: v for k, v in o.items() if not str(k).startswith("_")} if isinstance(o, dict) else o for o in ops]
+        ep = pl.get("episode") if isinstance(pl.get("episode"), dict) else None
+        gp = GraphStore(self.conn).plan_ops(scope, owner, ops, episode=ep, agent_id=prop.get("agent_id"), run_id=prop.get("run_id"),
+                                            created_by=str(prop.get("created_by") or "agent"))
+        acts = {str(o.get("action")) for o in ops if isinstance(o, dict)}
+        if acts <= {"invalidate_fact", "invalidate_entity"}:
+            prop["op"] = "delete"
+        elif acts <= {"add_entity", "add_alias", "add_fact"} and not gp["invalidated"]:
+            prop["op"] = "add"
+        else:
+            prop["op"] = "patch"
+        prop["target_ref"] = gp["key"]
+        lines = list(gp["lines"]) + [f"= {str(d.get('reason') or 'duplicate').replace('_', ' ')} (skipped): {d['fact']}" for d in gp["dropped"]]
+        diff = "".join(x + "\n" for x in lines)
+        ch = Change(scope=scope, owner_id=owner, target="graph", target_ref=gp["key"], op=prop["op"], actor="?", kind="graph",
+                    graph_rows=gp["rows"], graph_key=gp["key"], agent_id=prop.get("agent_id"))
+        return {"scope": scope, "owner": owner, "change": ch, "diff": diff, "size": sum(len(t) for t in gp["new_texts"]),
+                "new_text": "\n".join(gp["new_texts"]), "graph": gp, "longest_written": gp["longest_fact"], "touched_facts": gp["invalidated"]}
 
     def _was_read(self, prop: dict[str, Any], scope: str, owner: str | None, name: str, rel: str, path: Path, anchored: bool = False) -> bool:
         """Đọc-trước-khi-ghi (FR-LN-07). Dấu đọc trong RAM (`read_marks`, theo run review) chỉ sống tới khi review kết thúc /
@@ -376,6 +411,8 @@ class Pipeline:
     def risk_class(self, prop: dict[str, Any], plan: dict[str, Any]) -> str:
         if prop["scope"] != "agent" or prop["target"] in ("config", "user_profile"):
             return "L3"
+        if prop["target"] == "graph":
+            return "L1"  # graph tầng agent: không trần tổng, rollback theo hàng; chấm lô hằng ngày (batch_eval) như L1 memory
         if prop["op"] in ("merge", "archive", "delete"):
             return "L2"
         if plan.get("size", 0) > int(self.hub.config.get("learning.auto_apply_max_chars") or 800):
@@ -391,14 +428,30 @@ class Pipeline:
         vẫn để agent "đủ 5 thay đổi hôm nay" tới nửa đêm). Cooldown theo đích vẫn tính entry đã rollback — không áp lại ngay
         vào chỗ vừa bị gỡ."""
         by = prop.get("created_by")
-        if by == "user" or (by == "curator" and prop["op"] == "archive"):
-            return None
+        if by == "user" or (by == "curator" and (prop["op"] == "archive" or prop["target"] == "graph")):
+            return None  # curator: archive skill / consolidation graph (chỉ gộp, không thêm tri thức) — không ăn suất của agent
         r = self.svc.policy.get("rate")
-        acts = ",".join(f"'{a}'" for a in LEARNING_ACTORS)
+        if prop["target"] == "graph":
+            # graph: suất RIÊNG theo agent/ngày (mọi tầng, mọi bên ghi trừ người) — bỏ trần ký tự thì đây là cái hãm; không ăn suất
+            # memory/review và không bị suất đó chặn. 0 = không giới hạn (không khuyến nghị).
+            lim = int(r.get("graph_writes_per_agent_per_day") or 0)
+            if lim and prop.get("agent_id") and self._count(
+                    "SELECT COUNT(*) FROM ledger_entries WHERE agent_id=? AND target='graph' AND op!='rollback' AND rolled_back_by IS NULL AND applied_at>=?",
+                    (prop["agent_id"], _utc(_local_midnight_utc()))) >= lim:
+                return _utc(_local_midnight_utc(True)), f"agent đã ghi graph {lim} lần hôm nay (learning.rate.graph_writes_per_agent_per_day)"
+            return None
+        if by == "agent":  # tool `memory` (kiểu Hermes): không giới hạn mặc định — trần ký tự kho là thứ hãm
+            lim = int(r.get("agent_tool_max_per_day") or 0)
+            if lim and prop.get("agent_id") and self._count(
+                    "SELECT COUNT(*) FROM ledger_entries WHERE agent_id=? AND actor='agent' AND target!='graph' AND op!='rollback' AND rolled_back_by IS NULL AND applied_at>=?",
+                    (prop["agent_id"], _utc(_local_midnight_utc()))) >= lim:
+                return _utc(_local_midnight_utc(True)), f"agent đã ghi {lim} lần qua tool memory hôm nay (learning.rate.agent_tool_max_per_day)"
+            return None
+        acts = ",".join(f"'{a}'" for a in QUOTA_ACTORS)
         now = datetime.now(timezone.utc)
         if prop["scope"] in ("team", "global"):
             lim = int(r.get("max_team_global_changes_per_day") or 0)
-            if lim and self._count(f"SELECT COUNT(*) FROM ledger_entries WHERE scope IN ('team','global') AND actor IN ({acts}) AND op!='rollback' AND rolled_back_by IS NULL AND applied_at>=?", (_utc(_local_midnight_utc()),)) >= lim:
+            if lim and self._count(f"SELECT COUNT(*) FROM ledger_entries WHERE scope IN ('team','global') AND actor IN ({acts}) AND target!='graph' AND op!='rollback' AND rolled_back_by IS NULL AND applied_at>=?", (_utc(_local_midnight_utc()),)) >= lim:
                 return _utc(_local_midnight_utc(True)), f"đã đủ {lim} thay đổi tầng team/global hôm nay"
         agent = prop.get("agent_id")
         if agent:
@@ -430,10 +483,11 @@ class Pipeline:
         return None
 
     def agent_quota_full(self, agent_id: str) -> tuple[str, str] | None:
-        """(not_before, lý do) khi agent đã dùng hết `max_changes_per_agent_per_day` (chỉ tính thay đổi còn hiệu lực)."""
+        """(not_before, lý do) khi agent đã dùng hết `max_changes_per_agent_per_day` của vòng học nền (chỉ tính thay đổi còn hiệu lực;
+        ghi qua tool `memory` không tính)."""
         lim = int(self.svc.policy.get("rate").get("max_changes_per_agent_per_day") or 0)
-        acts = ",".join(f"'{a}'" for a in LEARNING_ACTORS)
-        if lim and self._count(f"SELECT COUNT(*) FROM ledger_entries WHERE agent_id=? AND actor IN ({acts}) AND op!='rollback' AND rolled_back_by IS NULL AND applied_at>=?",
+        acts = ",".join(f"'{a}'" for a in QUOTA_ACTORS)
+        if lim and self._count(f"SELECT COUNT(*) FROM ledger_entries WHERE agent_id=? AND actor IN ({acts}) AND target!='graph' AND op!='rollback' AND rolled_back_by IS NULL AND applied_at>=?",
                                (agent_id, _utc(_local_midnight_utc()))) >= lim:
             return _utc(_local_midnight_utc(True)), f"agent đã có {lim} thay đổi hôm nay (learning.rate.max_changes_per_agent_per_day)"
         return None
@@ -543,6 +597,17 @@ class Pipeline:
             if busy is not None:
                 cn.supersede(busy["id"], f"đích bị thay bởi thay đổi của người (proposal {prop['id']})")
             return self._apply(prop, plan, tier_verdict={"status": "skipped", "scores": {}, "reason": "thay đổi của người — áp dụng ngay, chỉ theo dõi"})
+        if prop.get("created_by") == "agent":
+            # tool `memory` (kiểu Hermes): áp dụng NGAY cho mọi agent của tầng, không eval trước, không ghim; theo dõi (watch) và —
+            # khác thay đổi của người — hồi quy thì canary TỰ rollback THEO MỤC. Chỉ chờ khi đích đang canary/shadow của review.
+            busy = cn.busy(plan, exclude_mode="watch")
+            if busy is not None:
+                why = f"đích đang canary ({busy['id']}) — áp dụng sau khi canary kết thúc"
+                nb = busy.get("deadline") or now_iso()
+                self._update(prop["id"], status="deferred_rate_limited", not_before=nb, block_reason="canary_active", block_detail=why)
+                self._emit("learning.deferred", prop, {"reason": "canary_active", "detail": why, "not_before": nb, "canary_id": busy["id"]})
+                return self._result(prop, "deferred_rate_limited", reason=why, not_before=nb)
+            return self._apply(prop, plan, tier_verdict={"status": "skipped", "scores": {}, "reason": "tool memory của agent — áp dụng ngay, theo dõi, tự rollback theo mục"})
         busy = cn.busy(plan)
         if busy is not None:
             why = f"đích đang canary ({busy['id']}) — áp dụng sau khi canary kết thúc"
@@ -643,6 +708,11 @@ class Pipeline:
         self._emit("learning.applied", prop, {"canary_id": cid, "ledger_entry_id": entry["id"], "snapshot_id": entry["snapshot_id"], "scope": prop["scope"], "target": prop["target"],
                                               "target_ref": prop.get("target_ref"), "op": prop["op"], "risk_class": prop["risk_class"], "summary": ch.summary,
                                               "diff": plan["diff"][:1500], "rollback_cmd": f"cfharness learn rollback {entry['id']}"})
+        if prop["target"] in ("memory", "user_profile"):  # on_memory_write: mục memory mới/mất → graph (nền, debounce)
+            try:
+                self.svc.graph_mirror.on_applied(prop)
+            except Exception:  # pragma: no cover - mirror hỏng không được chặn áp dụng memory
+                log.exception("xếp mirror memory → graph lỗi (%s)", prop["id"])
         if prop["risk_class"] == "L2":
             self._post_apply(entry)
         if canary is not None:
@@ -735,6 +805,8 @@ class Pipeline:
         """Proposal mới có THAY proposal cũ cùng đích không. Cùng file (MEMORY.md, SKILL.md) chưa đủ: hai fact memory khác nhau,
         hai patch khác chỗ của một skill là hai thay đổi độc lập — thay nhau là mất tri thức."""
         npl, opl = new.get("payload") or {}, old.get("payload") or {}
+        if new["target"] == "graph":  # lô graph độc lập nhau: chỉ thay lô giống hệt
+            return json.dumps(npl.get("operations"), sort_keys=True, default=str) == json.dumps(opl.get("operations"), sort_keys=True, default=str)
         if new["target"] in ("memory", "user_profile"):
             def key(op: str, pl: dict[str, Any]) -> tuple[str, str]:
                 if pl.get("operations") is not None:  # lô: chỉ thay lô giống hệt
@@ -817,6 +889,13 @@ class Pipeline:
         p = self.get(proposal["id"]) if proposal.get("id") else dict(proposal)
         plan = self.plan(p)
         ch: Change = plan["change"]
+        if ch.kind == "graph":  # bản chụp graph trong bản sao home (evals/overlay.make_home) — mọi tầng (agent/team/global)
+            from ..knowledge.graph import SNAPSHOT_FILE, GraphStore
+
+            sp = home / SNAPSHOT_FILE
+            snap = json.loads(sp.read_text(encoding="utf-8")) if sp.exists() else self.ks.versions.graph_snapshot(p["agent_id"])
+            sp.write_bytes(GraphStore.dump_snapshot(GraphStore.apply_to_snapshot(snap, ch.graph_rows)))
+            return cfg
         if ch.kind == "config":
             for k, v in (ch.config_changes or {}).items():
                 cfg[k] = {**(cfg.get(k) or {}), **v} if isinstance(v, dict) and isinstance(cfg.get(k), dict) else v

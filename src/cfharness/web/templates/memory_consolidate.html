@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Consolidation graph{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="/memory">Memory</a> › <a href="/memory/graph">Graph</a> › <span>Consolidation</span></nav>
+<div class="page-head"><div class="ph-title"><h1>Xem trước consolidation</h1><span class="sub">Phạm vi: {{ where }}. Chưa có gì được ghi.</span></div></div>
+{% set items = res.tiers or [] %}
+{% if not items %}
+<section class="card">{{ m.empty("Không có thực thể / fact nào cần gộp.", "check", title="Gọn rồi") }}</section>
+{% else %}
+{% for t in items %}
+<section class="card">
+  <div class="card-head"><h2>{{ 'toàn hub' if t.scope == 'global' else t.scope ~ ' ' ~ t.owner }}</h2>
+    <span class="pill {{ 'info' if t.status == 'dry_run' else 'muted' }}">{{ 'sẽ gộp' if t.status == 'dry_run' else t.status }}{% if t.reason %} — {{ t.reason }}{% endif %}</span></div>
+  {% if t.status == 'dry_run' %}
+  <p class="small">{{ t.merges }} gộp thực thể · {{ t.supersedes }} fact gần trùng bị thay · {{ t.ops }} thao tác</p>
+  <ul class="small plain cons-ops">
+  {% for o in t.plan or [] %}
+    {% if o.action == 'merge_entity' %}<li><span class="pill accent">gộp thực thể</span> <b>{{ o.entity if o.entity is not none else '(tên bị ẩn)' }}</b> → <b>{{ o.into if o.into is not none else '(tên bị ẩn)' }}</b></li>
+    {% elif o.action == 'supersede_fact' %}<li><span class="pill warn">thay fact</span> <a href="/memory/graph/fact/{{ o.fact_id }}"><code>{{ o.fact_id }}</code></a> bị thay bởi <a href="/memory/graph/fact/{{ o.by }}"><code>{{ o.by }}</code></a></li>
+    {% else %}<li><code>{{ o.action }}</code></li>{% endif %}
+  {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endfor %}
+{% if items|selectattr('status', 'equalto', 'dry_run')|list %}
+<form method="post" action="/memory/act/consolidate" class="row end gap" data-confirm="Áp dụng consolidation cho {{ where }}? Gộp qua pipeline + ledger (rollback được).">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/memory/graph">
+  {% if scope %}<input type="hidden" name="scope" value="{{ scope }}"><input type="hidden" name="owner" value="{{ owner or '-' }}">{% endif %}
+  <a class="btn ghost" href="/memory/graph">Huỷ</a>
+  <button class="btn danger" type="submit">{{ m.icon('refresh') }}<span>Áp dụng</span></button>
+</form>
+{% endif %}
+{% endif %}
+{% endblock %}

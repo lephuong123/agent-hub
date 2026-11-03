@@ -277,7 +277,7 @@ def windows_autorun_dirs() -> list[str]:
 
 def home_persistence_dirs() -> list[str]:
     uh = os.path.expanduser("~")
-    return [f"{uh}/{x}" for x in (".ssh", ".gitconfig", ".config/git", ".config/systemd", ".config/autostart", ".config/fish", ".git-templates",
+    return [f"{uh}/{x}" for x in (".ssh", ".gitconfig", ".config/git", ".config/systemd", ".local/share/systemd", ".config/autostart", ".config/fish", ".git-templates",
                                   "Library/LaunchAgents", "Library/LaunchDaemons", ".bashrc", ".bash_profile", ".profile", ".zshrc",
                                   ".zprofile", ".zshenv", ".zlogin", ".claude", ".claude.json", ".local/bin")] + windows_autorun_dirs()
 
@@ -368,7 +368,7 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
         deny_w.append(os.path.realpath(package_dir()))
     # V2-N2: nơi đặt thứ chạy trễ/chạy khi NGƯỜI dùng shell/git/claude — ngoài run, ngoài sandbox
     uh = os.path.expanduser("~")
-    deny_w += [f"{uh}/{x}" for x in (".ssh", ".gitconfig", ".config/git", ".config/systemd", ".config/autostart", ".config/fish", ".git-templates",
+    deny_w += [f"{uh}/{x}" for x in (".ssh", ".gitconfig", ".config/git", ".config/systemd", ".local/share/systemd", ".config/autostart", ".config/fish", ".git-templates",
                                      "Library/LaunchAgents", "Library/LaunchDaemons", ".bashrc", ".bash_profile", ".profile", ".zshrc",
                                      ".zprofile", ".zshenv", ".zlogin", ".claude", ".claude.json", ".local/bin")]
     deny_w += path_bin_dirs()  # MGR-1: mọi thư mục bin trên PATH thuộc $HOME (người/daemon thực thi ngoài sandbox)

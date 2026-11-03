@@ -1,6 +1,6 @@
 [project]
 name = "cfharness"
-version = "0.1.0"
+version = "0.2.0"
 description = "cfharness — hub điều phối đội agent chạy trên `claude` CLI (mốc M0: lõi chạy 1 agent)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -15,6 +15,14 @@ dependencies = [
     "tzdata>=2026.5 ; sys_platform == 'win32'",
     "uvicorn>=0.30",
     "websockets>=13",
+]
+
+[project.optional-dependencies]
+# Graph memory: kênh vector BAAI/bge-m3 (dense 1024-d) qua fastembed (onnxruntime, không torch) + sqlite-vec (khoảng cách trong SQLite).
+# Không cài → chỉ FTS5. Model (~2.3 GB) chỉ được tải khi daemon chạy vòng nền lần đầu, vào HUB_HOME/models.
+vector = [
+    "fastembed>=0.7",
+    "sqlite-vec>=0.1.6",
 ]
 
 [project.scripts]

@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 CORRECTION_KINDS = ("correction", "reject", "cancel", "edit_output", "undo")
 WORK_KINDS = ("adhoc", "task")
-LEARNING_KINDS = ("review", "eval", "eval_judge", "curator")
+LEARNING_KINDS = ("review", "eval", "eval_judge", "curator", "graph_extract")
 LEARNING_ACTORS = ("review", "curator", "agent", "learning")
 PENDING_STATUSES = ("pending", "pending_approval", "awaiting_approval", "approved")
 

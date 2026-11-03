@@ -46,6 +46,13 @@ def _plain_cli_output(monkeypatch):
         monkeypatch.delenv(k, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_embedding_model(monkeypatch):
+    """Graph memory: test KHÔNG BAO GIỜ nạp/tải model embedding thật (bge-m3 ~2.3 GB) kể cả khi máy dev đã cài extra `cfharness[vector]`.
+    Test cần kênh vector gán embedder giả: `hub.graph_embedder = FakeEmbedder()` (get_embedder ưu tiên thuộc tính này)."""
+    monkeypatch.setenv("CFHARNESS_GRAPH_VECTOR", "off")
+
+
 @pytest.fixture
 def hub_home(tmp_path, monkeypatch) -> HubPaths:
     home = tmp_path / "hub"

@@ -44,6 +44,8 @@
     <div><dt>Quyền</dt><dd>{{ (a.tool_policy or {}).permission_mode or 'default' }}</dd></div>
     <div><dt>Trình duyệt</dt><dd>{{ (a.tool_policy or {}).browser or 'none' }}</dd></div>
     <div><dt>Tool</dt><dd>{{ ((a.tool_policy or {}).tools or ['(mặc định)'])|join(', ') }}</dd></div>
+    {% set wad = (a.tool_policy or {}).web_allow_domains %}
+    <div><dt>Domain WebFetch</dt><dd>{% if wad is none %}không giới hạn{% elif wad %}{% for d in wad %}<span class="chip">{{ d }}</span>{% endfor %}{% else %}chặn mọi WebFetch{% endif %}</dd></div>
     <div><dt>MCP</dt><dd>{% for s in a.mcp_servers or [] %}<span class="chip">{{ s }}</span>{% else %}—{% endfor %}{% if a.mcp_servers %} <a class="small" href="/mcp/agent/{{ a.id }}">xem cấu hình MCP</a>{% endif %}</dd></div>
     <div><dt>Ngân sách / run</dt><dd>{{ (a.limits or {}).max_budget_usd_per_run and ('$' ~ a.limits.max_budget_usd_per_run) or '—' }}</dd></div>
     <div><dt>Ngân sách / ngày</dt><dd>{{ (a.limits or {}).budget_usd_per_day and ('$' ~ a.limits.budget_usd_per_day) or '—' }}</dd></div>

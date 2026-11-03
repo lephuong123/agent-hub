@@ -15,6 +15,11 @@ API (async, chạy trong event loop của daemon; `hub.evals` = `EvalService`, `
 Ngân sách: `eval.budget_usd` cho cả lần gate (mọi run eval + judge), `eval.run_budget_usd` mỗi run; hết ngân sách giữa chừng
 → chấm trên các mẫu đã có, thiếu cặp trước/sau → `deferred_no_eval` (reason `eval_incomplete`).
 Run eval là run `kind=eval` của chính agent (vào ngân sách ngày), `--no-session-persistence`, workspace scratch trong bản sao.
+
+Golden MEMORY (`checker.kind = memory_recall`, `memory_golden.py`): không chạy run, chấm truy hồi trên bản chụp graph của bản sao
+(recall@k × (1 − stale-fact-rate), thăm dò đầu độc → 0) — miễn phí, tất định. Chọn task theo đích (`_tasks_for`): lô entry TOÀN
+`graph` → chỉ task memory (nếu có; không có thì task thường); đích khác → chỉ task thường (task memory không đổi điểm khi graph không
+đổi, chỉ làm loãng mức tụt). `scores.memory` = recall@k / stale-rate trung bình của các mẫu memory vừa chạy.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from ..store import now_iso
 from . import overlay as ov
 from .checkers import EvalOutput, Grade, grade_deterministic
 from .judge import judge
+from .memory_golden import grade_memory, is_memory_task, summarize
 
 if TYPE_CHECKING:
     from ..hub import Hub
@@ -96,6 +102,22 @@ class EvalGate:
     def golden(self):
         return self.hub.evals.golden
 
+    def _tasks_for(self, agent_id: str, targets: list[str] | None) -> list[dict[str, Any]]:
+        """Golden task cho một lần gate theo đích thay đổi (None = mọi task — `eval run` thủ công)."""
+        tasks = self.golden.active_for(agent_id)
+        if targets is None:
+            return tasks
+        mem = [t for t in tasks if is_memory_task(t)]
+        other = [t for t in tasks if not is_memory_task(t)]
+        if targets and all(t == "graph" for t in targets):
+            # run eval KHÔNG thấy graph (không prefetch trong eval_overlay; memory_recall chỉ khi có skill) → task thường không đo
+            # được thay đổi graph. Không có task memory → [] (deferred_no_eval + cờ `unevaluated`, ngưỡng hồi quy chặt H-17),
+            # không đốt ngân sách eval vào run nhìn không thấy graph.
+            return mem
+        if "graph" in targets:  # lô trộn (MEMORY.md + graph cùng ngày): task memory (miễn phí, tất định) chấm phần graph
+            return other + mem
+        return other
+
     def _agent_budget(self, agent: dict[str, Any]) -> float | None:
         c = self.cfg()
         learning = agent.get("learning")
@@ -116,7 +138,7 @@ class EvalGate:
         if not self.cfg().get("enabled", True):
             return GateVerdict("deferred_no_eval", reason="eval_disabled (eval.enabled=false)")
         agent = self.hub.agents.get_row(agent_id)
-        tasks = self.golden.active_for(agent_id)
+        tasks = self._tasks_for(agent_id, [str(p.get("target") or "")])
         if not tasks:
             self.golden.suggest(agent_id, reason="deferred_no_eval", proposal_id=p.get("id"))
             return GateVerdict("deferred_no_eval", reason="no_golden_tasks: agent chưa có golden task (Q-23) — đã gợi ý run ứng viên")
@@ -126,9 +148,9 @@ class EvalGate:
             budget = _Budget(self._agent_budget(agent))
             try:
                 src = Path(agent["home_path"])
-                base_home = ov.make_home(src, tmp / "baseline")
+                base_home = ov.make_home(src, tmp / "baseline", hub=self.hub, agent_id=agent_id)
                 base_cfg = ov.base_config(agent)
-                cand_home = ov.make_home(src, tmp / "candidate")
+                cand_home = ov.make_home(src, tmp / "candidate", hub=self.hub, agent_id=agent_id)
                 cand_cfg = ov.base_config(agent)
                 try:
                     ov.materialize(self.hub, cand_home, cand_cfg, p)
@@ -137,6 +159,7 @@ class EvalGate:
                 before = await self._eval_variant(eval_id, agent, tasks, base_home, base_cfg, "baseline", budget)
                 after = await self._eval_variant(eval_id, agent, tasks, cand_home, cand_cfg, "candidate", budget)
                 v = self._compare(before, after, budget)
+                self._memory_scores(v, before, after)
                 if v.status == "eval_failed":
                     from ..learning_ops.ports import record_signal
 
@@ -167,7 +190,7 @@ class EvalGate:
         if not self.cfg().get("enabled", True):
             return GateVerdict("deferred_no_eval", reason="eval_disabled", flags=["unevaluated"])
         agent = self.hub.agents.get_row(agent_id)
-        tasks = self.golden.active_for(agent_id)
+        tasks = self._tasks_for(agent_id, [str(e.get("target") or "") for e in ents])
         if not tasks:
             self._log_entries(ids, None, "deferred_no_eval")
             self._maybe_suggest(agent_id, ents)
@@ -178,9 +201,9 @@ class EvalGate:
             budget = _Budget(self._agent_budget(agent))
             try:
                 src = Path(agent["home_path"])
-                after_home = ov.make_home(src, tmp / "after")
+                after_home = ov.make_home(src, tmp / "after", hub=self.hub, agent_id=agent_id)
                 after_cfg = ov.base_config(agent)
-                before_home = ov.make_home(src, tmp / "before")
+                before_home = ov.make_home(src, tmp / "before", hub=self.hub, agent_id=agent_id)
                 before_cfg = ov.base_config(agent)
                 rebuilt = all(ov.materialize_before(self.hub, before_home, before_cfg, e) for e in reversed(ents))
                 after = await self._eval_variant(eval_id, agent, tasks, after_home, after_cfg, "after", budget)
@@ -198,6 +221,7 @@ class EvalGate:
                     else:
                         v = GateVerdict("passed" if a >= floor else "eval_failed", {"before": None, "after": round(a, 4), "drop": None, "per_task": self._per_task({}, after)},
                                         reason=f"no_baseline: so với ngưỡng tuyệt đối {floor}")
+                self._memory_scores(v, before or {}, after)
                 v.cost_usd = round(budget.spent, 6)
                 if v.status == "eval_failed" and auto_rollback:
                     from ..learning_ops.ports import is_auto_change
@@ -240,13 +264,15 @@ class EvalGate:
         since = since or (datetime.now(timezone.utc) - timedelta(days=int(self.cfg().get("batch_lookback_days", 2)))).isoformat()
         rows = await ledger_list(self.hub, risk_class="L1", since=since)
         done = {r[0] for r in self.hub.store.conn.execute("SELECT entry_id FROM eval_entry_log")}
-        groups: dict[str, list[dict[str, Any]]] = {}
+        groups: dict[tuple[str, bool], list[dict[str, Any]]] = {}
         for e in rows:
             if e.get("rolled_back") or e.get("is_rollback") or str(e.get("id")) in done or not e.get("agent_id"):
                 continue
-            groups.setdefault(e["agent_id"], []).append(e)
+            # graph tách lô riêng: chấm bằng task memory (run eval không thấy graph); eval_failed của lô này không kéo theo
+            # rollback MEMORY.md/skill và ngược lại
+            groups.setdefault((e["agent_id"], e.get("target") == "graph"), []).append(e)
         out = []
-        for agent_id, ents in groups.items():
+        for (agent_id, _graph), ents in groups.items():
             v = await self.post_apply_batch(ents, kind="batch")
             if v.status == "deferred_no_eval" or "unevaluated" in (v.flags or []):
                 self._mark_unevaluated([str(e["id"]) for e in ents])  # H-17: L1 không chấm được → ngưỡng hồi quy chặt hơn
@@ -281,12 +307,14 @@ class EvalGate:
             tmp = self._tmp(eval_id)
             budget = _Budget(self._agent_budget(agent))
             try:
-                home = ov.make_home(Path(agent["home_path"]), tmp / "current")
+                home = ov.make_home(Path(agent["home_path"]), tmp / "current", hub=self.hub, agent_id=agent["id"])
                 res = await self._eval_variant(eval_id, agent, tasks, home, ov.base_config(agent), "manual", budget, n=n, use_cache=False)
                 m = _mean([t["mean"] for t in res.values() if t["mean"] is not None])
                 v = GateVerdict("passed", {"after": None if m is None else round(m, 4), "per_task": self._per_task({}, res)}, cost_usd=round(budget.spent, 6), reason="manual")
+                self._memory_scores(v, {}, res)
                 self._close(eval_id, v, agent_id)
-                return {"eval_id": eval_id, "score": v.scores["after"], "per_task": v.scores["per_task"], "cost_usd": v.cost_usd}
+                return {"eval_id": eval_id, "score": v.scores["after"], "per_task": v.scores["per_task"], "cost_usd": v.cost_usd,
+                        **({"memory": v.scores["memory"]} if v.scores.get("memory") else {})}
             finally:
                 self._cleanup(tmp)
 
@@ -315,6 +343,8 @@ class EvalGate:
                     slot["budget_exhausted"] = True
                     continue
                 g, outcome = await self._sample(eval_id, agent, t, home, cfg, variant, i, budget, fp)
+                if is_memory_task(t):
+                    slot.setdefault("memory", []).append(g.detail)
                 slot["scores"].append(g.score)
                 slot["completed"] += 1 if outcome == "completed" else 0
         for slot in out.values():
@@ -323,6 +353,13 @@ class EvalGate:
 
     async def _sample(self, eval_id: str, agent: dict[str, Any], t: dict[str, Any], home: Path, cfg: dict[str, Any], variant: str,
                       i: int, budget: _Budget, fp: str) -> tuple[Grade, str]:
+        if is_memory_task(t):  # golden memory: chấm truy hồi trên bản chụp graph của bản sao — không run, không model, không tốn tiền
+            try:
+                g = await asyncio.to_thread(grade_memory, t["checker"], t["prompt"], home)
+            except HubError as e:
+                g = Grade(0.0, False, {"kind": "memory_recall", "error": str(e)[:300]})
+            self._record(eval_id, agent["id"], t, variant, i, fp, g, None, "completed", 0.0)
+            return g, "completed"
         c = self.cfg()
         per_run = c.get("run_budget_usd")
         left = budget.left()
@@ -395,6 +432,15 @@ class EvalGate:
                   "partial": len(both) < len(after) or any(after[k].get("budget_exhausted") or before[k].get("budget_exhausted") for k in both)}
         reason = f"điểm {b:.2f} → {a:.2f} (tụt {drop * 100:.0f}%, ngưỡng {thr * 100:.0f}%)" if drop > 0 else f"điểm {b:.2f} → {a:.2f}"
         return GateVerdict(status, scores, reason=reason, cost_usd=round(budget.spent, 6))
+
+    @staticmethod
+    def _memory_scores(v: GateVerdict, before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]) -> None:
+        """`scores.memory` = {after: {recall_at_k, stale_rate, poisoned}, before: …} từ các mẫu memory chạy trong lần gate (mẫu lấy từ cache
+        không có chi tiết → không tính)."""
+        a = summarize([d for s in after.values() for d in s.get("memory") or []])
+        b = summarize([d for s in before.values() for d in s.get("memory") or []])
+        if a or b:
+            v.scores["memory"] = {"after": a, "before": b}
 
     @staticmethod
     def _per_task(before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]) -> dict[str, Any]:

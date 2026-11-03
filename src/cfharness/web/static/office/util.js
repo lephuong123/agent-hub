@@ -180,3 +180,14 @@ export function scaleLabel(s, f) {
   const b = s.userData.base;
   if (b && s.userData.f !== f) { s.userData.f = f; s.scale.set(b[0] * f, b[1] * f, 1); }
 }
+
+// Nhãn tên tránh chồng: items [{id, x, y, w, h, pri}] = hình chữ nhật trên màn hình (tâm x, y; pixel). Duyệt theo pri giảm dần,
+// giữ nhãn không chồng nhãn đã giữ → Set id được hiện. Chỗ đông (cafe) chỉ còn vài tên đọc được thay vì một đám chồng nhau.
+export function declutter(items) {
+  const kept = [], out = new Set();
+  for (const it of [...items].sort((a, b) => b.pri - a.pri)) {
+    if (kept.some((k) => Math.abs(k.x - it.x) * 2 < k.w + it.w && Math.abs(k.y - it.y) * 2 < k.h + it.h)) continue;
+    kept.push(it); out.add(it.id);
+  }
+  return out;
+}

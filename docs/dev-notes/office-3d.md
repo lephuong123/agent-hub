@@ -83,7 +83,7 @@ Agent thuộc nhiều team → lấy team đầu tiên (theo `team.list`). `aski
   Chỉ id/tên tool/trạng thái theo danh sách trên (tên tool cắt ≤ 64 ký tự, chỉ `[A-Za-z0-9_\-:.]`).
 
 ## Client (`office.html` + `static/office.js` + `static/office/*.js` + `static/office.css`)
-DOM do template cung cấp (thấy được: chỉ canvas + nút "2D"):
+DOM do template cung cấp (thấy được: chỉ canvas + nút "2D"; từ 2026-11-03 thêm nút 🚶 `#office-walk` / 👁 `#office-pov` của chế độ đi bộ — `office-walk.md`):
 - `#office` (data-state="/office/state", data-sse="/sse/office") chứa `#office-canvas` (vùng vẽ, toàn khung nhìn).
 - `#office-to-2d` — nút tròn "2D" nổi góc phải trên (link `/`; JS xoá `cfh_view` trước khi đi).
 - `#office-fallback` (hidden) — chữ DOM tối thiểu khi không có WebGL/FPS quá thấp (nút "2D" vẫn ở góc).
@@ -117,7 +117,7 @@ Bố cục văn phòng & hành vi: xem phần "Ánh xạ" bên dưới. Hiệu n
 | `waiting_human` / `approval.waiting_human` | đứng **giơ tay**, vòng đỏ dưới chân, bong bóng ✋ |
 | `approval.delegated` | đi tới **phòng điều phối viên** |
 | `asking` / `question.open` | bong bóng ❓ |
-| `idle` | đi lang thang giữa **pantry** (uống cà phê ☕) và **sofa** (ngồi nghỉ) |
+| `idle` | **ngồi bàn team mình** (ngả lưng / xem điện thoại) gần như cả ngày; mỗi 6–10 phút mới nghỉ ngắn: cafe điện tử (🎮, 40–80 s) hoặc lấy nước ở quầy cafe/pantry — xem `office-coordinator.md` (trước: `office-cafe.md`) |
 | `paused` | ngủ trên sofa/bàn, 💤 |
 | `error` / outcome lỗi | ngồi ôm đầu, ⚠ |
 | `rate_limited` / `ratelimit.throttle` | ngồi **hàng ghế chờ** ⏳ |
@@ -175,3 +175,7 @@ xác nhận + bước 2. Không có đường ghi nào "nhẹ" hơn 2D.
   "Hội thoại mới" + chọn hội thoại cũ trên màn hình.
 - Cửa ra vào "Thoát" = đăng xuất (xác nhận 3D).
 - Mọi nút 3D có bản sao `<button>` sr-only trong danh sách ẩn (trình đọc màn hình).
+
+## Chế độ "Vào văn phòng" (đi bộ)
+Avatar chủ hub đi trong văn phòng (WASD, kéo xoay, bấm sàn tự đi, góc nhìn thứ ba/thứ nhất), tương tác gần bằng [E] qua đúng
+luồng sẵn có; ánh sáng theo giờ thật. Chi tiết, giới hạn, kiểm tra: `docs/dev-notes/office-walk.md`.

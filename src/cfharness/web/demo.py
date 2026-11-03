@@ -143,6 +143,54 @@ def seed_questions(hub, info: dict) -> dict:
     return {"open": q1["id"], "with_manager": q2["id"], "owner": q3["id"]}
 
 
+def seed_memory(hub) -> dict:
+    """Memory + graph memory mẫu cho trang `/memory` (docs/dev-notes/web-memory.md): mục MEMORY.md/USER.md các tầng (qua pipeline như
+    NGƯỜI — created_by=user) và một graph nhỏ có cập nhật (fact cũ bị đóng hiệu lực) để có lịch sử + đồ thị."""
+    pl = hub.learning.pipeline
+
+    def mem(scope: str, owner, store: str, text: str) -> None:
+        target = "user_profile" if scope == "global" and store == "user" else "memory"
+        pl.propose(target=target, op="add", payload={"store": store, "action": "add", "content": text}, agent_id=owner if scope == "agent" else None,
+                   scope=scope, team_id=owner if scope == "team" else None, created_by="user", rationale="demo seed")
+
+    mem("global", None, "user", "The user prefers short answers and wants commit messages written in Vietnamese.")
+    mem("global", None, "memory", "Every repository in this hub uses uv for Python dependencies; run tests with `uv run pytest -q`.")
+    mem("team", "docs", "memory", "Team docs keeps installation guides in docs/install/ and reviews every change within one working day.")
+    mem("agent", "lap-trinh", "memory", "tests/test_api.py needs the local fixture server started by `make fixtures` before running.")
+    mem("agent", "lap-trinh", "memory", "The API returns dates in ISO 8601 since v0.3; old dd/mm/yyyy parsing lives in legacy/dates.py.")
+    mem("agent", "lap-trinh", "user", "The user reviews diffs on a 13-inch laptop, so keep patches small.")
+    mem("agent", "nghien-cuu", "memory", "The internal wiki moved from wiki.old.local to wiki.example.com in 2026.")
+
+    def fact(src, rel, text, dst=None, **kw):
+        return {"action": "add_fact", "src": src, "relation": rel, "dst": dst, "fact": text, **kw}
+
+    g = hub.learning.graph_write
+    g("lap-trinh", [{"action": "add_entity", "name": "agent-hub", "type": "project", "aliases": ["cfharness"]},
+                    {"action": "add_entity", "name": "Phương", "type": "person"},
+                    fact("agent-hub", "stores_data_in", "agent-hub stores its memory graph in SQLite.", dst="SQLite", valid_from="2026-11-01"),
+                    fact("agent-hub", "uses_embedding_model", "agent-hub uses BAAI/bge-m3 for memory embeddings.", dst="bge-m3", valid_from="2026-11-01"),
+                    fact("agent-hub", "release_deadline", "The agent-hub v0.3 release deadline is 2026-11-15.", valid_from="2026-10-01"),
+                    fact("Phương", "works_on", "Phương works on agent-hub.", dst="agent-hub", valid_from="2025-01-01"),
+                    fact("Phương", "prefers_theme", "Phương prefers the light theme in editors.", valid_from="2025-03-01"),
+                    fact("agent-hub", "runs_on", "The agent-hub daemon runs on Windows 11.", dst="Windows 11", valid_from="2026-01-01")],
+      scope="agent", created_by="user", rationale="demo seed")
+    g("lap-trinh", [fact("agent-hub", "release_deadline", "The agent-hub v0.3 release deadline moved to 2026-12-01.", valid_from="2026-11-02"),
+                    fact("Phương", "prefers_theme", "Phương now prefers the dark theme in editors.", valid_from="2026-06-01"),
+                    fact("SQLite", "has_extension", "sqlite-vec provides cosine distance for vectors.", dst="sqlite-vec")],
+      scope="agent", created_by="user", rationale="demo seed (update)")
+    g("lap-trinh", [fact("Nhóm tài liệu", "maintains", "Team docs maintains the installation guide.", dst="installation guide"),
+                    fact("installation guide", "lives_in", "The installation guide lives in docs/install/.", dst="docs/install")],
+      scope="team", team_id="docs", created_by="user", rationale="demo seed (team)")
+    g("nghien-cuu", [fact("wiki", "moved_to", "The internal wiki moved to wiki.example.com.", dst="wiki.example.com", valid_from="2026-02-01"),
+                     fact("agent-hub", "documented_in", "agent-hub is documented in the internal wiki.", dst="wiki")],
+      scope="agent", created_by="user", rationale="demo seed")
+    g("lap-trinh", [fact("cfharness web", "binds_to", "The cfharness web UI only binds to loopback (127.0.0.1).", dst="loopback"),
+                    fact("cfharness web", "part_of", "The web UI is part of agent-hub.", dst="agent-hub")],
+      scope="global", created_by="user", rationale="demo seed (global)")
+    n = hub.store.conn.execute("SELECT COUNT(*) FROM mem_facts").fetchone()[0]
+    return {"facts": n}
+
+
 async def main_async(a: argparse.Namespace) -> None:
     import uvicorn
 
@@ -162,6 +210,7 @@ async def main_async(a: argparse.Namespace) -> None:
     info = await seed(d.hub)
     info["manager"] = await seed_manager(d)
     info["questions"] = seed_questions(d.hub, info)
+    info["memory"] = seed_memory(d.hub)
     auth = WebAuth()
     app = create_app(paths, auth=auth, port=a.port)
     write_state(paths, host="127.0.0.1", port=a.port, key=auth.key)  # name mặc định cfharness.localhost
