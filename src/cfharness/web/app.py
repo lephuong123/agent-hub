@@ -1248,7 +1248,9 @@ async def _stream(request: Request, params: dict[str, Any], convert: Callable[[d
                 yield _sse({"t": "end", "reason": "closed"})
                 break
             if "subscribed" in msg:
-                yield _sse({"t": "hello", "truncated": bool((msg["subscribed"] or {}).get("truncated"))})
+                info = msg["subscribed"] or {}
+                # epoch: client nối lại gửi kèm since+epoch; daemon đổi epoch (khởi động lại) → phát lại từ đầu (since=0)
+                yield _sse({"t": "hello", "truncated": bool(info.get("truncated")), "epoch": info.get("epoch")})
                 continue
             if "end" in msg:
                 yield _sse({"t": "end", "reason": (msg["end"] or {}).get("reason") or "closed"})

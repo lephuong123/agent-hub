@@ -163,5 +163,20 @@ check('confirmKey: steer gắn run_id', fn('confirmKey') && T.confirmKey(talkPla
   && T.confirmKey(talkPlan({ id: 'a', status: 'working', run_id: 'r2' }, {}, 'x')) === 'steer:r2');
 check('retryDelay: lùi dần, có trần, có giới hạn lần', fn('retryDelay') && T.retryDelay(0) === 1000 && T.retryDelay(1) === 2000 && T.retryDelay(5) <= 30000
   && T.retryDelay(T.RETRY_MAX) === null);
+check('resetsRetry: chỉ delta/item xoá bộ đếm thử lại, hello/refresh/end thì không', fn('resetsRetry')
+  && T.resetsRetry({ t: 'delta', k: 'text', text: 'a' }) && T.resetsRetry({ t: 'item', kind: 'msg' })
+  && !T.resetsRetry({ t: 'hello' }) && !T.resetsRetry({ t: 'refresh' }) && !T.resetsRetry({ t: 'end' }));
+check('streamUrl: lần đầu không since; nối lại kèm since + epoch', fn('streamUrl') && T.streamUrl('r 1', { seq: 0 }) === '/sse/run/r%201'
+  && T.streamUrl('r1', { seq: 42, epoch: 'e1' }) === '/sse/run/r1?since=42&epoch=e1' && T.streamUrl('r1', { seq: 42 }) === '/sse/run/r1?since=42');
+if (fn('replyFrame')) {
+  // daemon khởi động lại: hello epoch mới → phát lại cả run từ đầu; đoạn dở cũ phải bỏ, không nhân đôi
+  const r = { pending: '', mode: 'run', seq: 0 };
+  for (const f of [{ t: 'hello', epoch: 'e1' }, { t: 'delta', k: 'text', text: 'Xin ', seq: 5 }, { t: 'delta', k: 'text', text: 'chào', seq: 6 }]) T.replyFrame(r, f);
+  const same = { ...r }; T.replyFrame(same, { t: 'hello', epoch: 'e1' });
+  T.replyFrame(r, { t: 'hello', epoch: 'e2' });
+  for (const f of [{ t: 'delta', k: 'text', text: 'Xin ', seq: 1 }, { t: 'delta', k: 'text', text: 'chào', seq: 2 }]) T.replyFrame(r, f);
+  check('replyFrame: epoch đổi → bỏ đoạn dở, phát lại không nhân đôi', r.pending === 'Xin chào' && r.seq === 2 && r.epoch === 'e2');
+  check('replyFrame: hello cùng epoch → giữ nguyên đoạn dở và seq', same.pending === 'Xin chào' && same.seq === 6);
+}
 check('TALK_ORDER dưới nền mờ (1000) / bảng modal (1001)', typeof T.TALK_ORDER === 'number' && T.TALK_ORDER < 1000);
 process.exit(fails ? 1 : 0);

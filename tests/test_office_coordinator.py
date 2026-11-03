@@ -29,7 +29,7 @@ def test_coordinator_behaviour_headless():
     assert r.returncode == 0, r.stdout + r.stderr
     assert "FAIL" not in r.stdout and r.stdout.count("ok ") >= 24, r.stdout
     for must in ("không có 2 điều phối viên", "ngồi bàn ≥ 80 %", "spawn n=19 teams=2", "spawn n=80 teams=0", "spawn n=80 teams=3", "đang nói chuyện",
-                 "vẫn giữ câu trả lời cuối", "ghế là mgrSpot của World mới", "confirmKey: steer gắn run_id"):
+                 "vẫn giữ câu trả lời cuối", "ghế là mgrSpot của World mới", "confirmKey: steer gắn run_id", "resetsRetry: chỉ delta/item", "streamUrl: lần đầu", "epoch đổi → bỏ đoạn dở"):
         assert must in r.stdout, must
 
 

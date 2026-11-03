@@ -280,6 +280,7 @@ async def test_sse_office_live(held):
     finally:
         task.cancel()
     assert out[0]["t"] == "hello" and any(m.get("t") == "refresh" for m in out)
+    assert out[0]["epoch"] == st["epoch"]  # client nối lại gửi kèm since+epoch (talk.js streamUrl)
     evs = [m for m in out if m.get("t") == "ev"]
     assert all(m["type"] in O.ALLOWED for m in evs)
     _no_free_text([m for m in out if m.get("t") in ("ev", "refresh")])
@@ -303,7 +304,7 @@ async def test_sse_office_endpoint_streams(env):
                 frames.append(json.loads(chunk[6:]))
                 break
         await it.aclose()
-        assert frames == [{"t": "hello", "truncated": False}]
+        assert frames == [{"t": "hello", "truncated": False, "epoch": st["epoch"]}]
 
 
 # =========================================================================== nút chuyển 2D/3D
@@ -527,6 +528,6 @@ async def test_office_chat_with_manager_stub(hub_home):
                 first = json.loads(chunk[6:])
                 break
         await it.aclose()
-        assert first == {"t": "hello", "truncated": False}
+        assert first["t"] == "hello" and first["truncated"] is False and first["epoch"]
     finally:
         await _stop(e)
