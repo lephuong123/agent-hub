@@ -12,8 +12,11 @@ import { damp, dampAngle } from './util.js';
 export const WALK_R = 0.12;          // bán kính va chạm avatar (m): nhỏ hơn đệm của tường (0,15) để qua được cửa 1 ô lưới
 const SPEED = 2.4, RUN = 4.2, EYE = 1.02, LOOK_Y = 1.0;
 // động học avatar (docs/dev-notes/office-walk.md): vận tốc tiến tới vận tốc mong muốn theo damp λ — tăng tốc λ 14 (≈ 0,16 s tới 90 %),
-// hãm λ 18 (≈ 0,13 s); bước con cố định 1/120 s → cùng quỹ đạo dù khung 16,7 hay 33,4 ms. Tự đi: pure pursuit, nhắm trước 0,6 m.
-const ACC_L = 14, BRAKE_L = 18, SUB = 1 / 120, AIM = 0.6, YAW_L = 16, FOLLOW_L = 2.5;
+// hãm λ 24 (kèm trần gia tốc A_MAX: dừng hẳn ≈ 0,18–0,2 s); bước con cố định 1/120 s → cùng quỹ đạo dù khung 16,7 hay 33,4 ms. Tự đi: pure pursuit, nhắm trước 0,6 m.
+const ACC_L = 14, BRAKE_L = 24, SUB = 1 / 120, AIM = 0.6, YAW_L = 16, FOLLOW_L = 2.5;
+// trần gia tốc (m/s²): đầu pha tăng tốc/hãm của damp mũ dồn ~0,6 m/s vào một khung 60 Hz (thấy như "giật cục"); kẹp |Δv| ≤ A_MAX·h
+// giữ cảm giác nhanh (hãm 2,4 → 0 trong ~0,19 s) nhưng mỗi khung đổi tốc ≤ 0,47 m/s
+const A_MAX = 28;
 // camera góc thứ ba = spring-arm (cần lò xo) quanh đầu avatar: hướng (yaw/pitch) damp λ 30 (λ 6 trong 0,6 s đầu khi bay vào),
 // khoảng cách zoom λ 12; cần co ngay khi vật cản cao hơn tia nhìn chen vào, dài lại λ 4. Đầu avatar (pivot) gắn cứng — không lerp
 // vị trí camera (trước: lerp dt·8 → camera trôi 240–410 ms sau khi dừng, khoảng cách co giãn 2,9–3,6 m khi đi/xoay).
@@ -344,10 +347,14 @@ export class Walker {
     }
     // tích phân theo bước con cố định: damp vận tốc → di chuyển có va chạm → vận tốc thực (bỏ phần đâm vào tường)
     const T = Math.min(dt, 0.25), n = Math.max(1, Math.ceil(T / SUB - 1e-6)), h = T / n;
-    // tăng tốc λ 14; hãm (nhả phím, hoặc tự đi chậm lại gần đích) λ 18
+    // tăng tốc λ 14; hãm (nhả phím, hoặc tự đi chậm lại gần đích) λ 24
     const lam = reduced ? Infinity : (wx || wz) && Math.hypot(wx, wz) >= Math.hypot(this.vel.x, this.vel.z) - 1e-3 ? ACC_L : BRAKE_L;
     for (let i = 0; i < n && T > 0; i++) {
-      const vx = damp(this.vel.x, wx, lam, h), vz = damp(this.vel.z, wz, lam, h);
+      let vx = damp(this.vel.x, wx, lam, h), vz = damp(this.vel.z, wz, lam, h);
+      if (lam !== Infinity) {
+        const ax = vx - this.vel.x, az = vz - this.vel.z, da = Math.hypot(ax, az), lim = A_MAX * h;
+        if (da > lim) { vx = this.vel.x + (ax * lim) / da; vz = this.vel.z + (az * lim) / da; }
+      }
       const p = circleMove(w.grid, this.pos.x, this.pos.z, vx * h, vz * h, WALK_R);
       this.vel.x = (p.x - this.pos.x) / h; this.vel.z = (p.z - this.pos.z) / h;
       if (!wx && !wz && Math.hypot(this.vel.x, this.vel.z) < 0.02) { this.vel.x = 0; this.vel.z = 0; }
