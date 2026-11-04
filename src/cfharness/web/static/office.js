@@ -11,7 +11,7 @@ import { OrbitControls } from './vendor/three-0.169.0/OrbitControls.js';
 import { World, layoutKey } from './office/world.js';
 import { Actor, STATUS_VI } from './office/actors.js';
 import { setChibiQuality, updateChibiLod } from './office/chibi.js';
-import { setChibiEnv } from './office/chibi.js';
+import { setChibiEnv, setChibiLodWalk } from './office/chibi.js';
 import { NO_TEAM_COLOR, scaleLabel, declutter } from './office/util.js';
 import { createPacer } from './office/pacer.js';
 import { watchdogStep } from './office/pacer.js';
@@ -969,6 +969,7 @@ function main() {
       if (shadowFrames > 0) { shadowFrames--; renderer.shadowMap.needsUpdate = true; }
     }
     camera.updateMatrixWorld();
+    setChibiLodWalk(walk.active);
     updateChibiLod(camera, Math.max(1, host.clientHeight)); // chibi nhỏ trên màn hình → hình ít tam giác
     if (perf) perf.gpuBegin();
     renderer.render(scene, camera);

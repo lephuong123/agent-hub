@@ -178,7 +178,7 @@ export class World {
   // tấm chữ phẳng MeshBasic (biển kiến trúc) — vào this.signs (ẩn khi xem bảng), không userData.base (không phóng to)
   _plate(texture, w, h, x, y, z, rotY, opts) {
     const o = opts || {};
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: texture, toneMapped: false, transparent: !!o.transparent, depthWrite: !o.transparent, side: o.double ? THREE.DoubleSide : THREE.FrontSide }));
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: texture, toneMapped: false, transparent: !!o.transparent, depthWrite: !o.transparent, side: o.double ? THREE.DoubleSide : THREE.FrontSide, forceSinglePass: true }));
     m.position.set(x, y, z); m.rotation.y = rotY || 0; if (o.rx) m.rotation.x = o.rx;
     if (o.order) m.renderOrder = o.order;
     this.group.add(m); this.signs.push(m); this.textures.push(texture); this.ownMats.push(m.material); this.ownGeos.push(m.geometry);
@@ -286,13 +286,16 @@ export class World {
     pools.renderOrder = 2; g.add(pools); this.ownMats.push(this.poolMat); this.ownGeos.push(pools.geometry);
     // quầng neon cafe: 3 vật liệu (1/màu), màu chép từ rgbMats mỗi khung
     this.glowMats = this._glow.map((list) => {
-      const mat = new THREE.MeshBasicMaterial({ map: softTex('glow'), transparent: true, opacity: 0.4, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false });
+      const mat = new THREE.MeshBasicMaterial({ map: softTex('glow'), transparent: true, opacity: 0.4, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, toneMapped: false });
       if (list.length) { const m = new THREE.Mesh(quadGeo(list), mat); m.renderOrder = 2; g.add(m); this.ownGeos.push(m.geometry); }
       this.ownMats.push(mat);
       return mat;
     });
     // vệt nắng qua cửa sổ bắc (ban ngày)
-    this.sunShaftMat = new THREE.MeshBasicMaterial({ color: '#fff2d8', map: softTex('glow'), transparent: true, opacity: 0.1, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false });
+    // forceSinglePass: vật trong suốt DoubleSide mặc định vẽ 2 lượt (mặt sau rồi mặt trước) và three đặt needsUpdate giữa 2 lượt → tính lại
+    // program key (getParameters + getProgramCacheKey) MỖI khung cho từng vật liệu (đo: 60–120 lần/s mỗi cái). Cộng dồn / không ghi depth
+    // nên thứ tự mặt không đổi hình.
+    this.sunShaftMat = new THREE.MeshBasicMaterial({ color: '#fff2d8', map: softTex('glow'), transparent: true, opacity: 0.1, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, toneMapped: false });
     const sh = new THREE.Mesh(quadGeo(this._shafts), this.sunShaftMat); sh.renderOrder = 2; g.add(sh);
     this.ownMats.push(this.sunShaftMat); this.ownGeos.push(sh.geometry);
     this._ao = this._pools = this._glow = this._shafts = this._lampParts = null;
@@ -650,7 +653,7 @@ export class World {
       // hiệu ứng ESTOP team: lớp đỏ trên sàn + đèn đỏ
       const ov = new THREE.Mesh(new THREE.BoxGeometry(c.w, 0.02, c.d), new THREE.MeshBasicMaterial({ color: '#ff3b30', transparent: true, opacity: 0.3, depthWrite: false }));
       ov.position.set(c.cx, 0.03, c.cz); g.add(ov);
-      const lamp = new THREE.Mesh(new THREE.ConeGeometry(Math.max(c.w, c.d) * 0.55, 3, 24, 1, true), new THREE.MeshBasicMaterial({ color: '#ff4d40', transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide }));
+      const lamp = new THREE.Mesh(new THREE.ConeGeometry(Math.max(c.w, c.d) * 0.55, 3, 24, 1, true), new THREE.MeshBasicMaterial({ color: '#ff4d40', transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true }));
       lamp.position.set(c.cx, 1.5, c.cz);
       ov.visible = lamp.visible = false; g.add(lamp);
       this.ownGeos.push(ov.geometry, lamp.geometry); this.ownMats.push(ov.material, lamp.material);
