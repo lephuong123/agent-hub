@@ -10,6 +10,7 @@ import * as THREE from './vendor/three-0.169.0/three.module.min.js';
 import { OrbitControls } from './vendor/three-0.169.0/OrbitControls.js';
 import { World, layoutKey } from './office/world.js';
 import { Actor, STATUS_VI } from './office/actors.js';
+import { setChibiQuality } from './office/chibi.js';
 import { NO_TEAM_COLOR, scaleLabel, declutter } from './office/util.js';
 import { drawHud, drawKanban, drawRuns, drawNeeds, drawCard, drawApprovalTag, drawSign, TextSprite, fmtUsd } from './office/boards.js';
 import { makeApi, Modals, createFlows } from './office/flows.js';
@@ -68,13 +69,15 @@ function main() {
   if ((navigator.hardwareConcurrency || 8) <= 4 && (window.devicePixelRatio || 1) >= 2) tier = 'low';
   const pixelRatio = () => (tier === 'high' ? Math.min(window.devicePixelRatio || 1, 1.5) : 1);
   setTier(tier, { aniso: renderer ? renderer.capabilities.getMaxAnisotropy() : 4 });
+  setChibiQuality(tier); // nhân vật theo cùng tier (vinyl PBR ↔ Lambert)
   if (renderer) {
     renderer.setPixelRatio(pixelRatio());
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     renderer.shadowMap.enabled = tier === 'high';
-    renderer.shadowMap.type = THREE.PCFShadowMap;   // PCF + shadow.radius (PCFSoft bỏ qua radius và đắt hơn)
+    // PCFSoft (lọc song tuyến): PCF thường + radius cho mép bóng bậc thang khi nhìn gần (đi bộ) — đo trên Iris Xe không tụt FPS
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.shadowMap.autoUpdate = false;          // bóng TĨNH: chỉ vẽ lại khi world.shadowDirty
     host.appendChild(cvs);
     cvs.setAttribute('aria-hidden', 'true');
@@ -757,6 +760,7 @@ function main() {
     if (!renderer || t === tier) return;
     tier = t;
     setTier(t, { aniso: renderer.capabilities.getMaxAnisotropy() });
+    setChibiQuality(t);
     if (t === 'low') { try { sessionStorage.setItem('cfh_office_q', 'low'); } catch (_) { /* bỏ qua */ } }
     renderer.setPixelRatio(pixelRatio()); resize();
     renderer.shadowMap.enabled = t === 'high';
@@ -850,7 +854,10 @@ function main() {
     if (world) {
       scene.environmentIntensity = world.envInt;
       // bóng tĩnh: vẽ lại shadow map vài khung sau khi World báo đổi (khung đầu sau khi dựng có thể chưa đủ — đo thực tế)
+      // đi bộ (tier high): shadow camera thu nhỏ quanh avatar → bóng nét khi nhìn gần; tâm dời xa mới vẽ lại 1 khung
+      if (tier === 'high') { if (walk.active && walk.pos) world.setShadowFocus(walk.pos.x, walk.pos.z, walk.view); else world.setShadowFocus(null); }
       if (world.shadowDirty) { shadowFrames = 3; world.shadowDirty = false; }
+      if (world.shadowRefocus) { shadowFrames = Math.max(shadowFrames, 1); world.shadowRefocus = false; }
       if (shadowFrames > 0) { shadowFrames--; renderer.shadowMap.needsUpdate = true; }
     }
     renderer.render(scene, camera);

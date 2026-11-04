@@ -12,7 +12,7 @@ const root = process.argv[2].replace(/\\/g, '/');
 const url = (p) => (root.startsWith('/') ? 'file://' : 'file:///') + root + '/src/cfharness/web/static/' + p;
 const THREE = await import(url('vendor/three-0.169.0/three.module.min.js'));
 const { World } = await import(url('office/world.js'));
-const { Walker, blockedAt, deskSpawn, coordinatorOf, nearDesk, spawnPoint, WALK_R } = await import(url('office/walk.js'));
+const { Walker, blockedAt, deskSpawn, doorSpawn, coordinatorOf, nearDesk, spawnPoint, WALK_R } = await import(url('office/walk.js'));
 const { Actor, IDLE_DESK_MIN } = await import(url('office/actors.js'));
 const T = await import(url('office/talk.js'));
 const { talkPlan } = T;
@@ -33,12 +33,18 @@ for (const n of [1, 5, 19, 40, 80]) for (const nt of [0, 2, 3]) {
   const rooms = w.rooms.filter((r) => { const p = g.findPath(d.x, d.z, r.p.x, r.p.z), l = p[p.length - 1]; return l && Math.hypot(l.x - r.p.x, l.z - r.p.z) < 0.8; });
   check(`spawn ${tag}: cạnh bàn trong phòng điều phối viên, không bị chặn, tới được ${rooms.length}/${w.rooms.length} phòng`,
     d && room && room.key === 'mgr' && !blockedAt(g, d.x, d.z, WALK_R) && nearDesk(w, d) && rooms.length === w.rooms.length);
+  // điểm vào chế độ đi bộ: ngay ngoài cửa phòng điều phối viên (khu làm việc), không bị chặn, đi tới được bàn của mình
+  const e = doorSpawn(w), mr = w.rooms.find((r) => r.key === 'mgr');
+  const toDesk = e && g.findPath(e.x, e.z, d.x, d.z), lastD = toDesk && toDesk[toDesk.length - 1];
+  check(`doorSpawn ${tag}: ngoài cửa phòng điều phối viên, không bị chặn, tới được bàn`,
+    e && !w.roomAt(e.x, e.z) && !blockedAt(g, e.x, e.z, WALK_R) && Math.hypot(e.x - mr.door.x, e.z - mr.door.z) <= 2.6 &&
+    lastD && Math.hypot(lastD.x - d.x, lastD.z - d.z) < 0.8 && Number.isFinite(e.yaw));
   if (n !== 5) continue;
   const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(45, 1.6, 0.3, 400);
   const wk = new Walker({ camera: cam, scene });
   wk.setIdentity({ id: 'mgr', name: 'Điều phối viên', color: '#c8413a' });
   wk.enter(w);
-  check(`walker ${tag}: vào chế độ đi bộ đứng ở deskSpawn`, wk.isCoordinator && Math.hypot(wk.pos.x - d.x, wk.pos.z - d.z) < 1e-6);
+  check(`walker ${tag}: vào chế độ đi bộ đứng ở doorSpawn (ngoài cửa phòng, nhìn vào văn phòng)`, wk.isCoordinator && Math.hypot(wk.pos.x - e.x, wk.pos.z - e.z) < 1e-6 && wk.view === e.yaw);
   wk.sit(w.mgrSpot);
   wk.key('KeyW', true, false);
   for (let i = 0; i < 30; i++) { wk.update(0.1, i * 0.1, false); wk.updateCamera(0.1, false); }

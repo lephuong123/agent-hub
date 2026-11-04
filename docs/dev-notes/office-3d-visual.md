@@ -368,3 +368,15 @@ Mỗi bước chạy lại §12. Chưa kiểm hình thật bằng trình duyệt
   bàn óc chó vừa, vách ngăn xanh xô thơm, lưng ghế màu team pha than, thùng máy trắng ngà, đèn phím chỉ là vạch mảnh, cây cao hai đầu dãy (khi dư ≥ 0,9 m).
 - **Declutter** (`util.js`, được phép sau khi B xong): vùng chiếm của nhãn tính thêm khoảng bong bóng emoji phía trên (1,2× cao nhãn) → cafe đông không còn nhãn đè bong bóng.
 - Đo (n = 24 agent + điều phối viên, 1440×900, Iris Xe, high): toàn cảnh 308–366 draw call, ~350–376 k tam giác (World ~165 k), 29,9 FPS (giới hạn 30).
+- **Sửa sau góp ý chủ sản phẩm (2026-11-04)**:
+  - *Tier low lệch tông*: nền đất là `MeshBasicMaterial` đúng màu `scene.background` (`#faf9f5` / `#262624`, `toneMapped:false`) → tan liền vào nền
+    trang ở cả hai tier/theme (trước đó nền đất được chiếu sáng + fog chưa phủ hết → nâu xám, low còn nâu hơn). Bóng nhà lên nền đất: lớp
+    `ShadowMaterial` (opacity 0,16) chỉ ở high. Low không có env PMREM → `_lightBase` cộng `envInt · 1,6` vào cường độ hemi (đo so pixel sàn
+    high/low lệch ≤ 2 %).
+  - *Bóng bậc thang khi đi bộ*: `PCFSoftShadowMap` (lọc song tuyến) thay PCF + radius; chế độ đi bộ (tier high) shadow camera thu còn ±11 m quanh
+    tâm = avatar + 4,5 m theo hướng nhìn (`World.setShadowFocus`, ~2,3× mật độ texel); tâm lệch > 2,5 m mới vẽ lại map 1 khung (`shadowRefocus`),
+    `autoUpdate` vẫn tắt; thoát đi bộ → về khung toàn cảnh. Đo Iris Xe: 29,9 FPS (giới hạn 30) cả toàn cảnh và đi bộ, ≤ 200 draw call.
+  - *Điểm vào chế độ đi bộ*: điều phối viên xuất hiện NGAY NGOÀI cửa phòng mình (`doorSpawn`, ưu tiên cách mọi ghế agent ≥ 2,4 m để không tự
+    chọn agent), nhìn vào giữa văn phòng; không được → `deskSpawn` → `spawnPoint`. Nhãn tên trên đầu avatar chính mình ẩn (camera sau gáy làm nó
+    phóng to che nửa màn hình).
+  - *Nhân vật theo tier*: office.js gọi `setChibiQuality(tier)` lúc khởi động và trong `setQuality`.

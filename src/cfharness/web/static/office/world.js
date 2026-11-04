@@ -8,7 +8,7 @@ import * as THREE from '../vendor/three-0.169.0/three.module.min.js';
 import { Grid } from './path.js';
 import { Board } from './boards.js';
 import { TEAM_COLORS, NO_TEAM_COLOR, seeded, hashStr, textCanvas, roundRect, FONT, fitText, scaleLabel } from './util.js';
-import { Batch, surface, solidMesh, roundedBoxGeo, mergeGeometries, litMaterial, tex, softTex } from './materials.js';
+import { Batch, surface, solidMesh, roundedBoxGeo, mergeGeometries, litMaterial, tex, softTex, getTier } from './materials.js';
 
 export const ZONE_NAMES = {
   desk: 'Bàn làm việc', server: 'Phòng server', library: 'Thư viện', meeting: 'Phòng họp', mgr: 'Phòng điều phối viên',
@@ -26,7 +26,13 @@ const SCREEN_OFF = '#1b1f26', SCREEN_ON = '#9fd8ff';
 // bảng màu (§1)
 const CUT = '#3f3a35', BASE = '#6d543c', PLASTER = '#efe9df', LOWWALL = '#e6dfd3', WOOD = '#e6d6bd', WALNUT = '#6b4a33';
 const BLACK = '#26272b', ALU = '#a9aeb4', BACKF = '#34363c', LEAVES = ['#4f7d4a', '#5f8f52', '#3f6b3f'];
-const THEME = { light: { ground: '#ebe7df', plinth: '#cfc6b8' }, dark: { ground: '#2c2b28', plinth: '#3a3732' } };
+// nền đất = ĐÚNG màu nền trang (scene.background, không chiếu sáng, không tone mapping) → tan liền vào trang ở mọi tier/theme
+const THEME = { light: { ground: '#faf9f5', plinth: '#cfc6b8' }, dark: { ground: '#262624', plinth: '#3a3732' } };
+// tier low không có env PMREM: bù phần sáng env bằng hemi (≈ cùng độ sáng high, không ngả nâu) — đo bằng so pixel sàn high/low
+const LOW_ENV_HEMI = 1.6;
+// chế độ đi bộ: shadow camera thu nhỏ quanh avatar (±SHADOW_NEAR m, tâm lệch FOCUS_AHEAD m về hướng nhìn) → texel nhỏ ~2,5× (hết bậc thang);
+// tâm lệch quá FOCUS_MOVE m mới vẽ lại bóng (1 khung)
+const SHADOW_NEAR = 11, FOCUS_AHEAD = 4.5, FOCUS_MOVE = 2.5;
 // ánh sáng theo giờ: [giờ, màu trời (hemi), cường độ hemi, màu nắng (dir), cường độ dir, đèn trần, kính cửa sổ, độ sáng 0–1,
 //                     cường độ fill, scene.environmentIntensity gợi ý]
 const DAYLIGHT = [
@@ -194,13 +200,19 @@ export class World {
     this.floor = floor;
     // bệ (plinth) + nền đất tan vào fog — màu theo theme (setTheme)
     this.plinthMat = litMaterial({ color: THEME.light.plinth, roughness: 0.85 });
-    this.groundMat = litMaterial({ color: THEME.light.ground, roughness: 1 });
+    this.groundMat = new THREE.MeshBasicMaterial({ color: THEME.light.ground, toneMapped: false });
     this.ownMats.push(this.plinthMat, this.groundMat);
     const plinth = new THREE.Mesh(roundedBoxGeo(W + 1.1, 0.32, D + 1.1, 0.04, 1), this.plinthMat);
     plinth.position.set(W / 2 - 0.1, -0.18, D / 2 + 0.1); plinth.receiveShadow = true; g.add(plinth);
     const groundGeo = new THREE.CircleGeometry(Math.max(W, D) * 3, 48); groundGeo.rotateX(-Math.PI / 2);
     const ground = new THREE.Mesh(groundGeo, this.groundMat);
-    ground.position.set(W / 2, -0.34, D / 2); ground.receiveShadow = true; g.add(ground); this.ownGeos.push(groundGeo);
+    ground.position.set(W / 2, -0.34, D / 2); g.add(ground); this.ownGeos.push(groundGeo);
+    // tier high: bóng của nhà đổ lên nền đất (lớp ShadowMaterial trong suốt trên nền không chiếu sáng)
+    if (getTier() === 'high') {
+      const catchMat = new THREE.ShadowMaterial({ color: '#000000', opacity: 0.16, depthWrite: false });
+      const catcher = new THREE.Mesh(groundGeo, catchMat); this.ownMats.push(catchMat);
+      catcher.position.set(W / 2, -0.335, D / 2); catcher.receiveShadow = true; catcher.renderOrder = 1; g.add(catcher);
+    }
 
     // tường bắc + tây (cao, thạch cao dày 0,25), mặt cắt than ở đỉnh, chân tường sồi sẫm
     const bx = (w, h, d, x, y0, z, color) => ({ geo: new THREE.BoxGeometry(w, h, d), matrix: new THREE.Matrix4().makeTranslation(x, y0 + h / 2, z), color });
@@ -228,6 +240,8 @@ export class World {
     sc.left = -L; sc.right = L; sc.top = L; sc.bottom = -L; sc.near = 1; sc.far = 3 * Math.max(W, D); sc.updateProjectionMatrix();
     this.dir.shadow.mapSize.set(2048, 2048); this.dir.shadow.bias = -0.0004; this.dir.shadow.normalBias = 0.03; this.dir.shadow.radius = 2.5;
     this.dir.target.position.set(W / 2, 0, D / 2);
+    this._shadowL = L; this._sunOff = new THREE.Vector3(); this._focus = null;
+    this.shadowRefocus = false;  // office.js: true → vẽ lại shadow map 1 khung (tâm bóng đi theo avatar)
     this.fill = new THREE.DirectionalLight('#cfe0ff', 0.55);
     this.fill.target.position.set(W / 2, 0, D / 2);
     g.add(this.hemi, this.dir, this.dir.target, this.fill, this.fill.target);
@@ -324,7 +338,8 @@ export class World {
       this._sunKey = hq;
       // lệch pha 0,7 rad: trưa nắng từ tây-nam → bóng đổ chéo sang đông, nhìn thấy được từ camera toàn cảnh (đặt ở đông-nam)
       const W = this.W, D = this.D, L = Math.max(W, D), phi = Math.PI * Math.min(1, Math.max(0, (hq - 6) / 13)) * 0.8 + 0.7;
-      this.dir.position.set(W / 2 + 0.8 * L * Math.cos(phi), L * (0.36 + 0.26 * Math.sin(phi)), D / 2 + 0.6 * L * Math.sin(phi));
+      this._sunOff.set(0.8 * L * Math.cos(phi), L * (0.36 + 0.26 * Math.sin(phi)), 0.6 * L * Math.sin(phi));
+      this._applySun();
       this.fill.position.set(W / 2 - 0.6 * L * Math.cos(phi), L * 0.6, D / 2 - 0.5 * L);
       this.shadowDirty = true;
     }
@@ -338,7 +353,27 @@ export class World {
   }
   _lightBase() {
     this.hemi.color.copy(this.hemiBase); this.dir.color.copy(this.dirBase); this.fill.color.copy(this.fillBase);
-    this.hemi.intensity = this.hemiInt; this.dir.intensity = this.dirInt;
+    this.hemi.intensity = this.hemiInt + (getTier() === 'low' ? this.envInt * LOW_ENV_HEMI : 0); this.dir.intensity = this.dirInt;
+  }
+  // đặt đèn nắng + shadow camera: toàn cảnh = cả văn phòng; đi bộ (setShadowFocus) = ô vuông nhỏ quanh tâm bóng
+  _applySun() {
+    const f = this._focus, cx = f ? f.x : this.W / 2, cz = f ? f.z : this.D / 2, r = f ? SHADOW_NEAR : this._shadowL;
+    this.dir.target.position.set(cx, 0, cz); this.dir.target.updateMatrixWorld();
+    this.dir.position.set(cx + this._sunOff.x, this._sunOff.y, cz + this._sunOff.z);
+    const sc = this.dir.shadow.camera;
+    if (sc.right !== r) { sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r; sc.updateProjectionMatrix(); }
+  }
+  // Chế độ đi bộ: bóng nét quanh avatar. (x, z) = vị trí, view = hướng nhìn (walk.view); null → về bóng toàn cảnh.
+  // Chỉ đổi khi tâm lệch > FOCUS_MOVE m → shadowRefocus (office.js vẽ lại map 1 khung), không vẽ lại mỗi khung.
+  setShadowFocus(x, z, view) {
+    if (x == null) {
+      if (!this._focus) return;
+      this._focus = null; this._applySun(); this.shadowRefocus = true; return;
+    }
+    const W = this.W, D = this.D;
+    const tx = Math.min(W, Math.max(0, x + Math.sin(view || 0) * FOCUS_AHEAD)), tz = Math.min(D, Math.max(0, z + Math.cos(view || 0) * FOCUS_AHEAD));
+    if (this._focus && Math.hypot(tx - this._focus.x, tz - this._focus.z) < FOCUS_MOVE) return;
+    this._focus = { x: tx, z: tz }; this._applySun(); this.shadowRefocus = true;
   }
   setTheme(dark) {
     const T = dark ? THEME.dark : THEME.light;

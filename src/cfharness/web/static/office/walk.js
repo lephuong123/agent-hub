@@ -65,6 +65,26 @@ export function deskSpawn(world) {
   const room = world.roomAt(x, z);
   return room && room.key === 'mgr' && !blockedAt(g, x, z, WALK_R) ? { x, z, yaw: s.rot } : null;
 }
+// Điểm vào chế độ đi bộ của Điều phối viên: ngay NGOÀI cửa phòng điều phối viên (khu làm việc), nhìn vào giữa văn phòng.
+// Đứng cạnh bàn (deskSpawn) thì camera góc thứ ba bị kẹt sát tường bắc — dí vào gáy avatar, nhãn tên che nửa màn hình.
+// Không có phòng / ô bị chặn / rơi vào phòng khác → null (dùng deskSpawn, rồi spawnPoint).
+export function doorSpawn(world) {
+  const room = world.rooms.find((r) => r.key === 'mgr'), g = world.grid;
+  if (!room || !room.door) return null;
+  // ưu tiên chỗ cách mọi ghế agent ≥ 2,4 m (không vừa vào đã tự chọn agent bên cạnh → thẻ thông tin che cảnh), không được thì bỏ điều kiện đó
+  const seats = world.seats ? [...world.seats.values()] : [];
+  const clear = (x, z) => seats.every((s) => s === world.mgrSpot || Math.hypot(s.x - x, s.z - z) >= 2.4);
+  let x = 0, z = 0, ok = false;
+  for (const strict of [true, false]) for (const dz of [1.3, 1.0, 1.7, 2.0]) for (const dx of [0, -0.5, 0.5, -1, 1, -1.5, 1.5]) {
+    if (ok) break;
+    x = room.door.x + dx; z = room.door.z + dz;
+    ok = !world.roomAt(x, z) && !blockedAt(g, x, z, WALK_R) && (!strict || clear(x, z));
+  }
+  if (!ok) return null;
+  const north = world.rooms.find((q) => q.key === 'server');
+  const tx = world.W / 2, tz = ((north ? north.z1 : 6) + (world.cafe ? world.cafe.z0 : world.D / 2)) / 2;
+  return { x, z, yaw: Math.atan2(tx - x, tz - z) };
+}
 // Actor điều phối viên do AI điều khiển mà avatar thay chỗ khi đi bộ (id = state.manager_id, không có thì actor isManager đầu tiên).
 export function coordinatorOf(actors, managerId) {
   return (managerId && actors.get(managerId)) || [...actors.values()].find((a) => a.isManager) || null;
@@ -108,6 +128,8 @@ export class Walker {
     if (this.chibi) { this.chibi.group.removeFromParent(); this.chibi.dispose(); }
     this.chibi = new Chibi({ id: who ? 'cfh-coord-' + who.id : 'cfh-owner', name, color, isManager: !!who });
     this.chibi.group.userData.actorId = null; // avatar người dùng: bấm vào không chọn gì (actor AI bị ẩn)
+    // nhãn tên trên đầu chính mình: camera góc thứ ba ở ngay sau gáy → nhãn phóng to che nửa màn hình; dòng gợi ý đã nói mình là ai
+    if (this.chibi.label) this.chibi.label.visible = false;
     this.chibi.group.visible = vis;
     this.chibi.pose = 'stand';
     this.scene.add(this.chibi.group);
@@ -115,7 +137,8 @@ export class Walker {
   // bong bóng trạng thái run của điều phối viên (đang chạy, chờ duyệt…) hiện trên avatar
   setStatus(b) { this.chibi.setBubble(b ? b.emoji : null, b ? b.tone : ''); this.chibi.setRing(!!(b && b.ring)); }
 
-  // Vào chế độ đi bộ: điều phối viên đứng cạnh bàn của mình (deskSpawn); không có → giữa khu làm việc (spawnPoint).
+  // Vào chế độ đi bộ: điều phối viên đứng ngay ngoài cửa phòng mình nhìn vào văn phòng (doorSpawn; không được → cạnh bàn, deskSpawn);
+  // không phải điều phối viên → giữa khu làm việc (spawnPoint).
   enter(world) {
     this.active = true; this.camInit = false; this.keys.clear(); this.path = []; this.seated = null;
     this.setWorld(world, true);
@@ -146,7 +169,7 @@ export class Walker {
   setWorld(world, reset) {
     this.world = world;
     if (reset || !this.pos) {
-      const d = this.isCoordinator ? deskSpawn(world) : null;
+      const d = this.isCoordinator ? doorSpawn(world) || deskSpawn(world) : null;
       if (d) { this.pos = { x: d.x, z: d.z }; this.yaw = this.view = d.yaw; } else { this.pos = spawnPoint(world); this.yaw = this.view = Math.PI; }
     }
     if (this.seated) {
