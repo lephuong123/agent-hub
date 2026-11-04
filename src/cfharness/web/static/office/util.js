@@ -208,11 +208,13 @@ export function declutter(items) {
   return out;
 }
 
-// Nhịp vẽ của văn phòng 3D (docs/dev-notes/office-3d-perf.md): `active` (camera/cảnh đang chuyển động) → MOTION_FPS, còn lại IDLE_FPS.
-// Vẽ khi đã qua (chu kỳ đích − nửa khoảng rAF `gapEst`) → khớp lưới vsync: màn 60 Hz động = mọi khung, yên = cách 1 khung (30 đều);
-// màn 120/144 Hz động = cách 1 khung (60/72). rAF chậm hơn chu kỳ đích (máy bận) → vẽ mọi rAF, không bỏ thêm khung.
+// Nhịp vẽ của văn phòng 3D (docs/dev-notes/office-3d-perf.md): cổng thuần dùng bởi office/pacer.js.
+// frameGate(ts, lastDraw, periodMs, vsync): vẽ khi đã qua (chu kỳ đích − nửa vsync − 0,5 ms) → khớp lưới vsync (chu kỳ = d·vsync:
+// d = 1 vẽ mọi rAF, d = 2 cách một rAF). Chữ ký cũ frameGate(ts, lastDraw, gapEst, active) (đối số thứ tư boolean) vẫn được hỗ trợ:
+// active → MOTION_FPS, không → IDLE_FPS; rAF chậm hơn chu kỳ đích (máy bận) → vẽ mọi rAF, không bỏ thêm khung.
 export const MOTION_FPS = 60, IDLE_FPS = 30;
-export function frameGate(ts, lastDraw, gapEst, active) {
-  const T = 1000 / (active ? MOTION_FPS : IDLE_FPS);
-  return ts - lastDraw >= T - gapEst / 2 - 0.5;
+export function frameGate(ts, lastDraw, a, b) {
+  let periodMs = a, vsync = b;
+  if (typeof b === 'boolean') { periodMs = 1000 / (b ? MOTION_FPS : IDLE_FPS); vsync = a; }
+  return ts - lastDraw >= periodMs - vsync / 2 - 0.5;
 }

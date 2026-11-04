@@ -116,10 +116,12 @@ def test_office_render_loop_perf_contract():
     perf.js chỉ chạy khi có #perf3d (không global, không log, không mạng)."""
     office_js = (STATIC / "office.js").read_text(encoding="utf-8")
     assert "1000 / 30" not in office_js  # bỏ giới hạn cứng 30 FPS
-    assert "frameGate(ts, lastDraw, gapEst, ts < activeUntil)" in office_js
+    # cổng nhịp vẽ nằm trong office/pacer.js (vsync p20, khoá 30 khi quá tải); pacer vẫn gọi frameGate thuần của util.js
+    assert "pacer.shouldDraw(ts, " in office_js and "gapEst" not in office_js
+    assert "import { createPacer } from './office/pacer.js';" in office_js
     frame = office_js[office_js.index("function frame(ts)"):]
     # watchdog (hạ tier < 24, fallback < 10) đo TRƯỚC cổng nhịp vẽ → khung bỏ qua vì đứng yên vẫn được đếm
-    assert frame.index("fps < 24") < frame.index("frameGate(") and frame.index("fps < 10") < frame.index("frameGate(")
+    assert frame.index("fps < 24") < frame.index("pacer.shouldDraw(") and frame.index("fps < 10") < frame.index("pacer.shouldDraw(")
     assert "if (rebuilt) warmShaders();" in office_js and "renderer.compile(scene, camera)" in office_js
     assert "compileAsync(" not in office_js  # thăm dò isReady() ném lỗi khi vật liệu bị dispose giữa chừng
     assert "updateChibiLod(camera, Math.max(1, host.clientHeight));" in office_js
@@ -130,3 +132,17 @@ def test_office_render_loop_perf_contract():
     assert "if (!perfFlags().perf || !renderer) return null;" in perf
     for bad in ("console.", "fetch(", "localStorage", "innerHTML", "Worker", "blob:"):
         assert bad not in perf, bad
+    pacer = (STATIC / "office" / "pacer.js").read_text(encoding="utf-8")
+    assert "frameGate(" in pacer and "from './util.js'" in pacer
+    for bad in ("console.", "fetch(", "localStorage", "innerHTML", "import * as THREE"):
+        assert bad not in pacer, bad
+
+
+@pytest.mark.skipif(not NODE, reason="cần Node để import office/pacer.js")
+def test_office_pacer_headless():
+    """Bộ điều nhịp (pacer.js): 60/30 đúng nhịp màn hình, rAF chậm vẽ mọi rAF, quá tải → khoá đều 30, gai/hitch không khoá,
+    khoá lại nhân đôi thời gian, dt lượng tử theo vsync, việc phụ chạy ở rAF bị bỏ."""
+    r = subprocess.run([NODE, str(ROOT / "tests" / "office_pacer_check.mjs"), str(ROOT)], capture_output=True, text=True,
+                       encoding="utf-8", timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "FAIL" not in r.stdout and r.stdout.count("ok ") >= 10, r.stdout

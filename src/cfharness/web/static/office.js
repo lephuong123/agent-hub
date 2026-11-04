@@ -11,7 +11,8 @@ import { OrbitControls } from './vendor/three-0.169.0/OrbitControls.js';
 import { World, layoutKey } from './office/world.js';
 import { Actor, STATUS_VI } from './office/actors.js';
 import { setChibiQuality, updateChibiLod } from './office/chibi.js';
-import { NO_TEAM_COLOR, scaleLabel, declutter, frameGate } from './office/util.js';
+import { NO_TEAM_COLOR, scaleLabel, declutter } from './office/util.js';
+import { createPacer } from './office/pacer.js';
 import { drawHud, drawKanban, drawRuns, drawNeeds, drawCard, drawApprovalTag, drawSign, TextSprite, fmtUsd } from './office/boards.js';
 import { makeApi, Modals, createFlows } from './office/flows.js';
 import { createChat } from './office/chat.js';
@@ -25,8 +26,7 @@ const $ = (id) => document.getElementById(id);
 const KCOL_VI = { ready: 'Sẵn sàng', running: 'Đang làm', review: 'Review', blocked: 'Kẹt' };
 // giờ địa phương (số thực) cho ánh sáng theo giờ thật
 const hourNow = () => { const d = new Date(); return d.getHours() + d.getMinutes() / 60; };
-// Nhịp vẽ (frameGate, util.js): camera/cảnh đang chuyển động → theo màn hình (≈ 60 FPS); đứng yên → 30 FPS. Giữ nhịp nhanh thêm ACTIVE_HOLD ms.
-const ACTIVE_HOLD = 400;
+// Nhịp vẽ: office/pacer.js — chuyển động → theo màn hình (≈ 60 FPS), đứng yên → 30 FPS, quá tải → khoá đều 30 (không 60/30 xen kẽ).
 // OrbitControls: hệ số tắt dần theo THỜI GIAN (0,08 mỗi 1/60 s) — không phụ thuộc số khung/giây
 const DAMP_60 = 0.08;
 
@@ -120,6 +120,9 @@ function main() {
   const mqDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   if (mqDark && mqDark.addEventListener) mqDark.addEventListener('change', applyTheme);
 
+  // nhịp vẽ (office/pacer.js); #debug3d → window.__pacer() cho QA/bench (vsync, d, khoá…)
+  const pacer = createPacer();
+  if (location.hash.indexOf('debug3d') >= 0) window.__pacer = pacer.state;
   const actors = new Map();
   let selected = null, focusBoard = null;
   let conn = 'connecting', lostAt = 0;
@@ -299,6 +302,7 @@ function main() {
   }
   function setWalk(on) {
     if (!world || !renderer || on === walk.active) return;
+    pacer.hitch(500); // khung đầu: shadow map tiêu điểm mới + vật hiện ra lần đầu — không tính là quá tải
     select(null); focusBoard = null; tween = null; near = null; autoSel = false;
     if (on) { syncIdentity(); walk.enter(world); walkYield = true; }
     else {
@@ -396,6 +400,7 @@ function main() {
     state = s;
     const key = layoutKey(s), rebuilt = key !== wkey || !world;
     if (rebuilt) {
+      pacer.hitch(500);
       const first = !world;
       if (world) world.dispose();
       world = new World(s);
@@ -794,7 +799,7 @@ function main() {
   // Hạ chất lượng (tự động khi FPS thấp): đổi tier vật liệu, tắt bóng/env, pixelRatio 1, dựng lại World theo đường layoutKey sẵn có.
   function setQuality(t) {
     if (!renderer || t === tier) return;
-    tier = t;
+    tier = t; pacer.hitch(500);
     setTier(t, { aniso: renderer.capabilities.getMaxAnisotropy() });
     setChibiQuality(t);
     if (t === 'low') { try { sessionStorage.setItem('cfh_office_q', 'low'); } catch (_) { /* bỏ qua */ } }
@@ -814,11 +819,11 @@ function main() {
   // đo hiệu năng chỉ khi gỡ lỗi (#perf3d / #uncap3d — office/perf.js); không bật thì perf = null
   const pf = perfFlags(), perf = createPerf(renderer, () => ({ tier, actors: actors.size, walk: walk.active }));
   // ------------------------------------------------------------ vòng vẽ (động ≈ 60 FPS / yên 30 FPS, dừng khi ẩn)
-  let raf = 0, last = 0, lastDraw = 0, fpsFrames = 0, fpsStart = 0, uiAt = 0, prevRaf = 0, prevGap = 0, slowWins = 0, lowWins = 0;
-  let gapEst = 1000 / 60, activeUntil = 0;
+  let raf = 0, lastDraw = 0, fpsFrames = 0, fpsStart = 0, uiAt = 0, prevRaf = 0, prevGap = 0, slowWins = 0, lowWins = 0;
+  let kicked = false, camMoved = false;
   const tmp = new THREE.Vector3(), camWas = new THREE.Matrix4();
-  // có tương tác (chuột/chạm/lăn/phím) → vẽ theo màn hình trong ACTIVE_HOLD ms tới
-  function kick() { activeUntil = performance.now() + ACTIVE_HOLD; }
+  // có tương tác (chuột/chạm/lăn/phím) → khung tới tính là chuyển động (pacer giữ nhịp động thêm 150 ms)
+  function kick() { kicked = true; }
   // cảnh "đang động" theo nghĩa người dùng nhìn thấy: camera dời/xoay (kể cả OrbitControls còn trôi), tween, đi bộ đang bước
   const moving = () => !!tween || (walk.active && (walk.keys.size > 0 || walk.path.length > 0)) || !!down;
   function frame(ts) {
@@ -829,7 +834,6 @@ function main() {
     // cửa sổ không có focus (đang ở app khác): Chrome/Windows điều tiết rAF xuống ~1 FPS dù tab vẫn "visible" → không đo
     if ((gap > 1000 && prevGap < 250) || !document.hasFocus()) { fpsStart = ts + 1000; fpsFrames = 0; slowWins = 0; lowWins = 0; }
     prevRaf = ts; prevGap = gap;
-    if (gap > 0 && gap < 100) gapEst += (gap - gapEst) * 0.1; // khoảng rAF (≈ tần số màn hình)
     // đo FPS theo nhịp rAF (cả khung bỏ qua vì đứng yên): máy theo kịp → rAF bằng tần số màn hình; vẽ nặng → rAF chậm theo.
     // Không phụ thuộc giới hạn khung (trước: đếm khung đã vẽ, cap 30 → mốc < 24 sát nút, rAF lệch nhịp là tụt).
     // Bỏ 2 s đầu, cửa sổ 5 s; chỉ tắt 3D khi CHẬM LIÊN TỤC 3 cửa sổ liền (15 s), một lần giật không tính
@@ -844,11 +848,13 @@ function main() {
         if (slowWins >= 3) { disableRender('slow'); return; }
       }
     }
-    if (moving()) activeUntil = Math.max(activeUntil, ts + ACTIVE_HOLD);
-    if (!pf.uncap && lastDraw && !frameGate(ts, lastDraw, gapEst, ts < activeUntil)) { if (perf) perf.skip(); return; }
+    // "đang động" = tương tác vừa xảy ra, camera/tween/đi bộ đang dời, hoặc camera vừa đổi ở khung trước (OrbitControls còn trôi)
+    const motion = kicked || camMoved || moving();
+    kicked = false;
+    if (!pf.uncap && lastDraw && !pacer.shouldDraw(ts, motion)) { if (perf) perf.skip(); return; }
     if (perf) perf.begin(ts);
-    const dt = Math.min(0.1, last ? (ts - last) / 1000 : 0.016);
-    last = ts; lastDraw = ts;
+    const dt = pacer.drew(ts);
+    lastDraw = ts;
     const now = perfNow();
     const lf = walk.active ? 1 : Math.min(2.6, Math.max(1, camera.position.distanceTo(controls.target) / 20));
     if (world) {
@@ -926,9 +932,10 @@ function main() {
     if (perf) perf.gpuBegin();
     renderer.render(scene, camera);
     if (perf) { perf.gpuEnd(); perf.end(); }
-    // camera vừa dời/xoay (OrbitControls còn trôi, bám nhân vật, walker lerp…) → giữ nhịp vẽ theo màn hình
+    // camera vừa dời/xoay (OrbitControls còn trôi, bám nhân vật, walker damping…) → khung sau vẫn là chuyển động
     const cm = camera.matrixWorld.elements, cw = camWas.elements;
-    for (let i = 0; i < 16; i++) if (Math.abs(cm[i] - cw[i]) > 1e-5) { activeUntil = ts + ACTIVE_HOLD; camWas.copy(camera.matrixWorld); break; }
+    camMoved = false;
+    for (let i = 0; i < 16; i++) if (Math.abs(cm[i] - cw[i]) > 1e-5) { camMoved = true; camWas.copy(camera.matrixWorld); break; }
     // gỡ lỗi cho QA: #debug3d → mỗi 2 s ghi số draw call / tam giác / FPS / tier vào data-office3d (không log, không chữ agent)
     dbgFrames++;
     if (ts - dbgAt >= 2000) {
@@ -974,9 +981,9 @@ function main() {
       t.add(tmp); camera.position.add(tmp);
     }
   }
-  function start() { if (!raf && !stopped && !noRender && !ctxLost && renderer) { last = 0; lastDraw = 0; fpsStart = 0; fpsFrames = 0; prevRaf = 0; prevGap = 0; slowWins = 0; lowWins = 0; raf = requestAnimationFrame(frame); } }
+  function start() { if (!raf && !stopped && !noRender && !ctxLost && renderer) { pacer.reset(); lastDraw = 0; fpsStart = 0; fpsFrames = 0; prevRaf = 0; prevGap = 0; slowWins = 0; lowWins = 0; raf = requestAnimationFrame(frame); } }
   function pause() { if (raf) cancelAnimationFrame(raf); raf = 0; }
-  document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); else start(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); else { pacer.hitch(500); start(); } });
 
   // Quá chậm / không WebGL: ngừng vẽ (thông báo DOM tối thiểu) nhưng vẫn cập nhật danh sách sr-only.
   let slowT = 0, ctxLost = false, lostT = 0;
@@ -992,7 +999,7 @@ function main() {
   cvs.addEventListener('webglcontextrestored', () => {
     ctxLost = false; clearTimeout(lostT);
     if (envTex) { envTex.dispose(); envTex = null; }
-    applyEnv(); shadowFrames = 3;
+    applyEnv(); shadowFrames = 3; pacer.reset(); pacer.hitch(500);
     if (!document.hidden) start();
   });
   function disableRender(reason) {
