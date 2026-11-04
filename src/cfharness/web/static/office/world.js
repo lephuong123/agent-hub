@@ -30,6 +30,9 @@ const BLACK = '#26272b', ALU = '#a9aeb4', BACKF = '#34363c', LEAVES = ['#4f7d4a'
 const THEME = { light: { ground: '#faf9f5', plinth: '#cfc6b8' }, dark: { ground: '#262624', plinth: '#3a3732' } };
 // tier low không có env PMREM: bù phần sáng env bằng hemi (≈ cùng độ sáng high, không ngả nâu) — đo bằng so pixel sàn high/low
 const LOW_ENV_HEMI = 1.6;
+// tier high cũng không còn IBL cho World (PBR không env map — tiết kiệm sample PMREM mỗi pixel, đắt trên Iris Xe ở góc đi bộ):
+// bù bằng hemi như low, hệ số chọn bằng so độ sáng pixel sàn với bản có IBL (9h/14h/18h, theme tối)
+const HIGH_ENV_HEMI = 1.9;
 // chế độ đi bộ: shadow camera thu nhỏ quanh avatar (±SHADOW_NEAR m, tâm lệch FOCUS_AHEAD m về hướng nhìn) → texel nhỏ ~2,5× (hết bậc thang);
 // tâm lệch quá FOCUS_MOVE m mới vẽ lại bóng (1 khung)
 const SHADOW_NEAR = 11, FOCUS_AHEAD = 4.5, FOCUS_MOVE = 2.5;
@@ -353,7 +356,7 @@ export class World {
   }
   _lightBase() {
     this.hemi.color.copy(this.hemiBase); this.dir.color.copy(this.dirBase); this.fill.color.copy(this.fillBase);
-    this.hemi.intensity = this.hemiInt + (getTier() === 'low' ? this.envInt * LOW_ENV_HEMI : 0); this.dir.intensity = this.dirInt;
+    this.hemi.intensity = this.hemiInt + this.envInt * (getTier() === 'low' ? LOW_ENV_HEMI : HIGH_ENV_HEMI); this.dir.intensity = this.dirInt;
   }
   // đặt đèn nắng + shadow camera: toàn cảnh = cả văn phòng; đi bộ (setShadowFocus) = ô vuông nhỏ quanh tâm bóng
   _applySun() {

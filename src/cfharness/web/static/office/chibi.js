@@ -57,6 +57,12 @@ export function updateChibiLod(camera, viewH) {
   }
 }
 
+// Tier high: World không dùng IBL (office-3d-visual.md §3, phase 2) — chỉ vật liệu vinyl của nhân vật giữ env map riêng (highlight).
+export function setChibiEnv(tex, intensity) {
+  const v = mats().vinyl;
+  if (v.envMap !== tex) { v.envMap = tex || null; v.needsUpdate = true; }
+  if (intensity != null) v.envMapIntensity = intensity;
+}
 // Tier chất lượng nhân vật: 'high' = vinyl PBR + rim, 'low' = Lambert vertex color. Gọi được trước khi có chibi nào và gọi lặp lại.
 export function setChibiQuality(tier) {
   const q = tier === 'low' ? 'low' : 'high';

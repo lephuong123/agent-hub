@@ -11,6 +11,7 @@ import { OrbitControls } from './vendor/three-0.169.0/OrbitControls.js';
 import { World, layoutKey } from './office/world.js';
 import { Actor, STATUS_VI } from './office/actors.js';
 import { setChibiQuality, updateChibiLod } from './office/chibi.js';
+import { setChibiEnv } from './office/chibi.js';
 import { NO_TEAM_COLOR, scaleLabel, declutter } from './office/util.js';
 import { createPacer } from './office/pacer.js';
 import { watchdogStep } from './office/pacer.js';
@@ -107,8 +108,10 @@ function main() {
   let envTex = null;
   function applyEnv() {
     if (!renderer) return;
-    if (tier === 'high') { if (!envTex) envTex = makeEnvironment(renderer); scene.environment = envTex; }
-    else { scene.environment = null; if (envTex) { envTex.dispose(); envTex = null; } } // low: không giữ PMREM (render target) trên GPU
+    // World không dùng IBL ở mọi tier (bù sáng bằng hemi — world.js HIGH_ENV_HEMI); chỉ nhân vật (vinyl) nhận env map riêng ở tier high
+    scene.environment = null;
+    if (tier === 'high') { if (!envTex) envTex = makeEnvironment(renderer); setChibiEnv(envTex); }
+    else { setChibiEnv(null); if (envTex) { envTex.dispose(); envTex = null; } } // low: không giữ PMREM (render target) trên GPU
   }
   applyEnv();
   scene.fog = new THREE.Fog('#faf9f5', 60, 140);
@@ -957,7 +960,7 @@ function main() {
     if (toastTs.sprite.visible && performance.now() > toastUntil) toastTs.sprite.visible = false;
     syncFog();
     if (world) {
-      scene.environmentIntensity = world.envInt;
+      if (envTex) setChibiEnv(envTex, world.envInt);
       // bóng tĩnh: vẽ lại shadow map vài khung sau khi World báo đổi (khung đầu sau khi dựng có thể chưa đủ — đo thực tế)
       // đi bộ (tier high): shadow camera thu nhỏ quanh avatar → bóng nét khi nhìn gần; tâm dời xa mới vẽ lại 1 khung
       if (tier === 'high') { if (walk.active && walk.pos) world.setShadowFocus(walk.pos.x, walk.pos.z, walk.view); else world.setShadowFocus(null); }

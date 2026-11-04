@@ -61,6 +61,12 @@ bàn trà, ly, cây, đèn cây), hàng ghế chờ (sàn, 2 băng ghế), thả
 đèn thả (`_lamps`, `lampMat`) trên cụm + cafe · cây góc · `hemi` + `dir` · `fadeMat`.
 
 ## 3. Renderer, môi trường, chất lượng (A — `office.js`, chỉ phần renderer/ánh sáng/tier)
+
+> **Cập nhật phase 2 hiệu năng (`office-3d-perf.md` §7)**: tier high = **PBR không IBL cho World** — `scene.environment = null` ở mọi
+> tier; env PMREM chỉ còn gắn riêng vào vật liệu vinyl của nhân vật (`setChibiEnv`, giữ highlight). Phần sáng env bù bằng hemi:
+> `hemi.intensity += envInt × HIGH_ENV_HEMI (1,9)` (low vẫn 1,6) — chọn bằng so độ sáng trung bình vùng giữa ảnh toàn cảnh với bản
+> có IBL: 9h +0,4 %, 14h +0,6 %, 18h −1,0 %, 14h theme tối +0,7 %. Kính = `MeshBasicMaterial` `#e4f1f6`, opacity 0,18,
+> không ghi depth. Mô tả "env map: có" ở bảng dưới là trạng thái phase 1.
 Trong `main()` sau khi tạo renderer (~dòng 56–67):
 ```js
 renderer.toneMapping = THREE.ACESFilmicToneMapping;   // AgX thử được nhưng làm pastel nhạt hơn — chọn ACES

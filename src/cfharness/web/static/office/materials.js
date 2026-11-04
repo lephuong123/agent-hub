@@ -275,7 +275,7 @@ export function surface(kind, opts) {
   if (kind === 'glass') {
     m = tier === 'low'
       ? new THREE.MeshLambertMaterial({ color: '#cfe6f0', transparent: true, opacity: 0.22, depthWrite: false })
-      : new THREE.MeshStandardMaterial({ color: '#d8edf5', roughness: 0.05, metalness: 0, transparent: true, opacity: 0.18, envMapIntensity: 1.2, depthWrite: false });
+      : new THREE.MeshBasicMaterial({ color: '#e4f1f6', transparent: true, opacity: 0.18, depthWrite: false }); // không IBL: kính phẳng màu nhạt
   } else {
     const s = SPEC[kind] || SPEC.paint;
     const p = Object.assign({ color: '#ffffff', vertexColors: true, roughness: s.roughness, metalness: s.metalness || 0 }, opts || {});
