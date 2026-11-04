@@ -248,7 +248,10 @@ export class World {
     this.shadowRefocus = false;  // office.js: true → vẽ lại shadow map 1 khung (tâm bóng đi theo avatar)
     this.fill = new THREE.DirectionalLight('#cfe0ff', 0.55);
     this.fill.target.position.set(W / 2, 0, D / 2);
-    g.add(this.hemi, this.dir, this.dir.target, this.fill, this.fill.target);
+    // bù phần sáng IBL đã bỏ (tier high): hemi RIÊNG màu trung tính-ấm như env PMREM (phòng xám nâu + đèn hộp trắng), KHÔNG theo màu trời —
+    // bù bằng chính hemi trời thì ban đêm (trời #9aa6d4, envInt 0,32) cả văn phòng ám tím-xanh, tối hơn ~10–16 % so với bản có IBL
+    this.envHemi = new THREE.HemisphereLight('#fff8ee', '#b89a7a', 0);
+    g.add(this.hemi, this.envHemi, this.dir, this.dir.target, this.fill, this.fill.target);
     this.hemiBase = this.hemi.color.clone(); this.dirBase = this.dir.color.clone(); this.fillBase = this.fill.color.clone();
     this.hemiInt = 1.1; this.dirInt = 3.0;
     this._sunKey = null;
@@ -360,7 +363,10 @@ export class World {
   }
   _lightBase() {
     this.hemi.color.copy(this.hemiBase); this.dir.color.copy(this.dirBase); this.fill.color.copy(this.fillBase);
-    this.hemi.intensity = this.hemiInt + this.envInt * (getTier() === 'low' ? LOW_ENV_HEMI : HIGH_ENV_HEMI); this.dir.intensity = this.dirInt;
+    const low = getTier() === 'low';
+    this.hemi.intensity = this.hemiInt + (low ? this.envInt * LOW_ENV_HEMI : 0); this.dir.intensity = this.dirInt;
+    this.envHemi.intensity = low ? 0 : this.envInt * HIGH_ENV_HEMI;
+    this.envHemi.color.set('#fff8ee');
   }
   // đặt đèn nắng + shadow camera: toàn cảnh = cả văn phòng; đi bộ (setShadowFocus) = ô vuông nhỏ quanh tâm bóng
   _applySun() {
@@ -1108,6 +1114,7 @@ export class World {
       this.dir.color.set('#ff7b6e');
       this.fill.color.set('#ffb0a8');
       this.hemi.intensity = 1.0 + p * 0.4;
+      this.envHemi.color.copy(this.hemi.color); // ESTOP: phần bù IBL cũng đỏ (không pha loãng màu cảnh báo)
     }
     for (const fx of this.teamFx.values()) {
       if (!fx.on) continue;
