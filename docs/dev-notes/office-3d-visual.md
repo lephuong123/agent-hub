@@ -380,3 +380,16 @@ Mỗi bước chạy lại §12. Chưa kiểm hình thật bằng trình duyệt
     chọn agent), nhìn vào giữa văn phòng; không được → `deskSpawn` → `spawnPoint`. Nhãn tên trên đầu avatar chính mình ẩn (camera sau gáy làm nó
     phóng to che nửa màn hình).
   - *Nhân vật theo tier*: office.js gọi `setChibiQuality(tier)` lúc khởi động và trong `setQuality`.
+- **Ghi chú B (nhân vật, 2026-11-04) — ngân sách draw call theo số agent**:
+  - Cả thân chibi là MỘT `SkinnedMesh` (vertex color + attribute `rough`: mắt 0,15, còn lại 0,6; rim chỉ khi `rough > 0,3` → mắt không viền).
+    Khớp = `THREE.Bone` cứng (trọng số 1): `body, legL, legR, armL, armR, head, eyes` — tên thuộc tính giữ nguyên, chớp mắt vẫn `eyes[0].scale.y`,
+    đạo cụ `cup/book/phone` vẫn gắn vào `armR`. `boundingSphere` cố định (tâm y 0,62, r 0,95) → frustum cull/raycast không tính lại theo xương.
+  - Bóng blob của mọi chibi = MỘT `InstancedMesh` (`chibiBlobs`) tự gắn vào scene chứa chibi ở `animate()` lần đầu; ma trận ghi trong
+    `scene.onBeforeRender` (móc nối tiếp hàm cũ) từ `group.matrixWorld` → không trễ khung; chibi ẩn/không trong scene thì bỏ qua.
+    `chibi.shadow` vẫn còn nhưng `visible = false` (Raycaster không xét visible → bấm vùng chân như cũ).
+  - Giảm phân đoạn hình cầu/capsule (đầu 24×16, mắt 12×9…): 8,7 k → 5,8 k tam giác / chibi, nhìn gần không thấy khác.
+  - `setChibiQuality('high'|'low')`: low = `MeshLambertMaterial({vertexColors})` không rim; áp cho chibi đang sống (`_live`) và chibi tạo sau;
+    gọi trước khi có chibi / gọi lặp đều an toàn. Không có phần nào bỏ ở low vì không còn phần nào tốn draw call riêng.
+  - Đo (#debug3d, 1440×900, Iris Xe, high, toàn cảnh, mock hub): **24 agent 191–194 call / 305 k tam giác; 40 agent 253–257 / 473 k;
+    80 agent 406–410 / 878 k**; 29,9 FPS (giới hạn 30). Chibi ≈ 1 call + nhãn/bong bóng khi hiện; phần còn lại là World (màn hình 2n…).
+    Tam giác ở n ≥ 40 vượt mốc 400 k của §10 — chủ yếu World + chibi; nếu cần, hạ tiếp ở World hoặc LOD chibi khi xa.
