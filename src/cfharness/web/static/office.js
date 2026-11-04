@@ -655,7 +655,7 @@ function main() {
     return null;
   }
   if (renderer) {
-    cvs.addEventListener('pointerdown', (e) => { kick(); down = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, drag: false }; });
+    cvs.addEventListener('pointerdown', (e) => { kick(); down = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, drag: false, id: e.pointerId }; });
     // chế độ đi bộ: kéo chuột / kéo tay = xoay hướng nhìn (OrbitControls đang tắt)
     cvs.addEventListener('pointermove', (e) => {
       if (down || e.pointerType !== 'mouse') kick(); // đang kéo / chạm: vẽ theo màn hình
@@ -712,6 +712,12 @@ function main() {
       hoverId = (p && p.actor) || null; // rê chuột lên agent → luôn hiện tên
     });
     cvs.addEventListener('pointerleave', () => { hoverId = null; });
+    // thả chuột NGOÀI canvas (đi bộ: OrbitControls tắt → không pointer capture; nút nổi, ngoài cửa sổ) / trình duyệt huỷ chạm:
+    // canvas không nhận pointerup → `down` kẹt → moving() đúng mãi → vẽ 60 FPS mãi + kéo-nhìn dính. Listener cửa sổ chạy SAU canvas.
+    const release = (e) => { if (down && (!e || e.type === 'blur' || e.pointerId === down.id)) down = null; };
+    window.addEventListener('pointerup', release);
+    window.addEventListener('pointercancel', release);
+    window.addEventListener('blur', release);
   }
   function panelUV(ev, pnl) {
     const r = cvs.getBoundingClientRect();

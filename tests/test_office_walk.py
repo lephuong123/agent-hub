@@ -123,6 +123,8 @@ def test_office_render_loop_perf_contract():
     assert "if (rebuilt) warmShaders();" in office_js and "renderer.compile(scene, camera)" in office_js
     assert "compileAsync(" not in office_js  # thăm dò isReady() ném lỗi khi vật liệu bị dispose giữa chừng
     assert "updateChibiLod(camera, Math.max(1, host.clientHeight));" in office_js
+    # thả chuột ngoài canvas không được để `down` kẹt (moving() đúng mãi → vẽ 60 FPS mãi)
+    assert "window.addEventListener('pointerup', release);" in office_js and "window.addEventListener('pointercancel', release);" in office_js
     assert "controls.dampingFactor = 1 - Math.pow(1 - DAMP_60, dt * 60);" in office_js
     perf = (STATIC / "office" / "perf.js").read_text(encoding="utf-8")
     assert "if (!perfFlags().perf || !renderer) return null;" in perf
