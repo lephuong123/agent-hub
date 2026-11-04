@@ -737,7 +737,7 @@ async def task_page(request: Request) -> Response:
 
 async def teams_page(request: Request) -> Response:
     teams = await rpc(request, "team.list", {"include_archived": True})
-    agents = [a["id"] for a in await rpc(request, "agent.list", {})]
+    agents = [{"id": a["id"], "name": a.get("name") or a["id"]} for a in await rpc(request, "agent.list", {})]
     return await render(request, "teams.html", {"nav": "teams", "teams": teams, "agents": agents})
 
 

@@ -99,7 +99,7 @@ class TeamService:
 
     def members(self, team_id: str) -> list[dict[str, Any]]:
         rows = self.conn.execute(
-            "SELECT m.*, a.status AS agent_status, a.role AS agent_role, a.description AS agent_description, a.archived_at AS agent_archived_at "
+            "SELECT m.*, a.name AS agent_name, a.status AS agent_status, a.role AS agent_role, a.description AS agent_description, a.archived_at AS agent_archived_at "
             "FROM team_members m LEFT JOIN agents a ON a.id = m.agent_id WHERE m.team_id=? ORDER BY CASE m.role WHEN 'lead' THEN 0 WHEN 'worker' THEN 1 ELSE 2 END, m.created_at",
             (team_id,),
         ).fetchall()
@@ -124,7 +124,7 @@ class TeamService:
         return {r[0]: r[1] for r in self.conn.execute("SELECT status, COUNT(*) FROM tasks WHERE team_id=? AND deleted_at IS NULL GROUP BY status", (team_id,))}
 
     def _summary(self, t: dict[str, Any]) -> dict[str, Any]:
-        t["members"] = [{"agent_id": m["agent_id"], "role": m["role"], "max_in_progress": m["max_in_progress"]} for m in self.members(t["id"])]
+        t["members"] = [{"agent_id": m["agent_id"], "agent_name": m.get("agent_name") or m["agent_id"], "role": m["role"], "max_in_progress": m["max_in_progress"]} for m in self.members(t["id"])]
         t["counts"] = self.counts(t["id"])
         t["cost_today_usd"] = round(self.cost_today(t["id"]), 8)
         return t
@@ -142,7 +142,7 @@ class TeamService:
         """FR-TM-04: thành viên + trạng thái, task theo trạng thái, chi phí hôm nay/tuần, ngân sách còn lại, ESTOP."""
         t = self._summary(self.row(team_id, allow_archived=True))
         t["members"] = [
-            {"agent_id": m["agent_id"], "role": m["role"], "max_in_progress": m["max_in_progress"], "agent_status": m.get("agent_status"),
+            {"agent_id": m["agent_id"], "agent_name": m.get("agent_name") or m["agent_id"], "role": m["role"], "max_in_progress": m["max_in_progress"], "agent_status": m.get("agent_status"),
              "agent_role": m.get("agent_role"), "description": m.get("agent_description"),
              "in_progress": self.in_progress(team_id, m["agent_id"])}
             for m in self.members(team_id)

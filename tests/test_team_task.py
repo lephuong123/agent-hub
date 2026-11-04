@@ -100,6 +100,17 @@ async def test_team_crud_lead_unique_archive_restore(make_hub):
 
 
 # ============================================================================ task, DAG
+async def test_team_members_show_current_agent_name(make_hub):
+    """Đổi tên agent → team.show/team.list hiện tên mới (đọc qua JOIN, không lưu bản sao trong team_members)."""
+    hub, _ = make_hub()
+    mk_team(hub)
+    assert hub.teams.show("docs")["members"][0]["agent_name"] == "Lead"
+    hub.agents.update("lead", {"name": "Trưởng nhóm"})
+    assert hub.teams.show("docs")["members"][0]["agent_name"] == "Trưởng nhóm"
+    listed = next(t for t in hub.teams.list() if t["id"] == "docs")
+    assert listed["members"][0]["agent_name"] == "Trưởng nhóm"
+
+
 async def test_task_idempotency_dag_cycle_and_promotion(make_hub):
     hub, rt = make_hub()
     mk_team(hub, lead=False)
