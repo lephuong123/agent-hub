@@ -158,7 +158,7 @@ MANAGER_ALLOWED: dict[str, str] = {
     "task.create": "giao việc (created_by=manager:<id>)",
     "task.comment": "bình luận task",
     "task.retry": "thử lại task",
-    "mcp.cancel_task": "huỷ task (dừng run của task)",
+    "mcp.cancel_task": "huỷ task (dừng run + archive task và task con chưa xong)",
     "run.start": "run ad-hoc cho agent khác",
     "run.steer": "gửi tin vào run của agent khác",
     "run.stop": "dừng run của agent khác",

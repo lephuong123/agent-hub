@@ -311,7 +311,10 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                                                    "branch (checked out if it exists, else created from base, default the repo's HEAD), "
                                                    "path (default <repo parent>/_wt/<repo>-<branch>). The worktree becomes the task's workspace, "
                                                    "so tasks on the same repo run IN PARALLEL. Use one per parallel task."}}, ["title", "body"]),
-    "task_cancel": _t("Cancel a task: stop its running runs (and its subtasks').", {"id": _S}, ["id"]),
+    "task_cancel": _t("Cancel a task: stop its running runs and archive it plus its unfinished subtasks, so nothing of it runs or "
+                      "reports later (also tasks still waiting, e.g. on a workspace lock). Check `status` in the result: 'cancelled' "
+                      "lists archived_tasks; 'already_done' means it finished before you cancelled — its result may already be on its "
+                      "way to the owner.", {"id": _S, "reason": _S}, ["id"]),
     "task_retry": _t("Retry a blocked/failed task.", {"id": _S}, ["id"]),
     "task_comment": _t("Comment on a task (steer=true also sends it to the task's running run).", {"id": _S, "text": _S, "steer": {"type": "boolean"}}, ["id", "text"]),
     "run_start": _t("Start an ad-hoc run of another agent with a prompt (optional cwd, budget_usd, model).",
@@ -366,7 +369,9 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
     "notify_owner": _t("Send a short message to the human owner (Vietnamese) on their conversation channel. Use when you need a human "
                        "decision or when a goal is done. kind: info|need_human|done. In a heartbeat, pass task_id (the task the message is "
                        "about) so it reaches the conversation/thread where the owner asked for that work; one message per task — do not "
-                       "bundle results of different tasks.", {"text": _S, "kind": _S, "task_id": _S}, ["text"]),
+                       "bundle results of different tasks. If that conversation is a shared Slack channel thread, the text is posted "
+                       "there for everyone: write it as the thread reply, not as a private report about the thread. The result's "
+                       "delivered_to says where it went.", {"text": _S, "kind": _S, "task_id": _S}, ["text"]),
 }
 # Lịch chạy tự động (schedules/) — khối riêng (gộp nhánh dễ). Quyền kiểm ở daemon: schedules/service.manager_check.
 _SCHED_EXPR = ("expr: 5-field cron ('*/30 * * * *', '0 8 * * 1-5') or 'every 30m', 'daily 08:00', 'weekdays 08:30', 'weekly mon,thu 09:00', "

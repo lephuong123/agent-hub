@@ -369,7 +369,7 @@ class ManagerOps:
                 "next": "follow it with task_get until status is done"}
 
     async def op_task_cancel(self, a: dict[str, Any]) -> Any:
-        return await self._rpc("task_cancel", "mcp.cancel_task", {"task_id": a.get("id")}, a, summary=f"huỷ task {a.get('id')}")
+        return await self._rpc("task_cancel", "mcp.cancel_task", {"task_id": a.get("id"), "reason": a.get("reason")}, a, summary=f"huỷ task {a.get('id')}")
 
     async def op_task_retry(self, a: dict[str, Any]) -> Any:
         res = await self._rpc("task_retry", "task.retry", {"id": a.get("id")}, a, summary=f"thử lại task {a.get('id')}")

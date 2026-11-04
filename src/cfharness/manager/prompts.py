@@ -147,11 +147,31 @@ GATES_NOTE = (
 )
 
 
+def shared_audience(channel: str | None) -> str | None:
+    """Hội thoại mà tin gửi vào được NHIỀU người đọc (thread kênh Slack, nhóm Telegram) → mô tả; DM/cli/web → None."""
+    ch = str(channel or "")
+    if ch.startswith("slack:") and ch[6:7] in ("C", "G"):
+        return "a shared Slack channel thread"
+    if ch.startswith("telegram:-"):
+        return "a Telegram group"
+    return None
+
+
+def _origin_note(cid: Any, conv_channels: dict[str, str]) -> str:
+    note = " (owner asked in conversation " + str(cid)
+    aud = shared_audience(conv_channels.get(str(cid)))
+    if aud:
+        note += (f" — {aud}: notify_owner with this task_id posts the text straight INTO it, read by everyone there. Write it as the "
+                 "reply for that thread itself; never say it has not been posted there or ask whether to post it")
+    return note + ")"
+
+
 def tick_prompt(events: list[dict[str, Any]], *, dropped: int, reason: str, open_work: int, key: str = KEY_PLACEHOLDER,
-                gates: str = "human") -> str:
+                gates: str = "human", conv_channels: dict[str, str] | None = None) -> str:
     head = f"[cfharness heartbeat · key {key} · {iso()} · reason: {reason}]"
+    conv_channels = conv_channels or {}
     if events:
-        lines = [f"- [{e.get('kind')}] {e.get('summary')}" + (" (owner asked in conversation " + str(e["conversation_id"]) + ")"
+        lines = [f"- [{e.get('kind')}] {e.get('summary')}" + (_origin_note(e["conversation_id"], conv_channels)
                                                               if e.get("conversation_id") else "") for e in events]
         if dropped:
             lines.append(f"- (+{dropped} older events not listed — use hub_overview)")
