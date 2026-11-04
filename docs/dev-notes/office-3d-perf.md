@@ -188,6 +188,19 @@ chưa tái hiện được nguyên nhân gốc, nhưng watchdog mới đã chặ
 GPU cặp đôi (`gpuab.cjs`, trung vị): C9 (bỏ IBL, headed) đi bộ 8,91 → 6,88 ms, toàn cảnh 6,25 → 4,68; C10 (bóng 1024, ép vẽ lại bóng mỗi
 lần render, headless) đi bộ 8,07 → 6,97, phần vẽ lại bóng +2,85 → +1,86 ms (mục tiêu +0,8 chưa đạt).
 
+### 6.4b Sửa sau đo độc lập + review (4 commit cuối nhánh)
+Đo độc lập (3 lượt xen kẽ mỗi bên, headless + headed) và review đối kháng tìm ra; đã sửa, các ngưỡng ở §6.3 đổi theo:
+- **Pacer khoá 30 nhầm khi máy bận vừa** (n=19 ×2: rAF trễ chỉ 2–4 % mà khoá 2/3 lượt, nhân đôi tới 8 s, dính 30–40 FPS sang thao tác sau)
+  → khoá khi ≥ 9/60 khung trễ (15 %), trần 4 s. Quá tải thật vẫn khoá sau ~27 khung. Hysteresis 150 → **400 ms** (như phase 1): stopgo
+  51 → 57 FPS, đổi nhịp 10 → 2. Bench lại ×2 n=19/40 (2 lượt): locks 0 mọi kịch bản; orbit n=40 ×2 judder 0,9–2,3 → 0,1–0,3 ms.
+- **Watchdog tắt fallback vĩnh viễn sau một lần đứng** (cần 30 khoảng < 100 ms — máy < 10 FPS không bao giờ tới) → 10 khoảng < 500 ms;
+  cửa sổ "đều" p80 ≤ 2,1 × trung vị (33/67 ms xen kẽ giờ được tính). 4 ca test mới.
+- **Camera nhảy 21–36 m khi vào đi bộ / đóng bảng** (`armHit` trả 8 m khi cần đang 35 m; kẹp hộp văn phòng ngay khung đầu) → `armHit`
+  thoáng trả `max(len, 8)`; trong 0,9 s bay vào cần co theo λ 6 và chưa kẹp hộp. Khung đầu 28,7 → 5,6 m rồi giảm dần.
+- **22h tối hơn 10–16 %, ám tím-xanh** (bù IBL bằng hemi trời, ban đêm màu #9aa6d4) → `envHemi` riêng màu trung tính-ấm; 22h giờ khớp main
+  (RGB TB toàn cảnh 173,166,163 → 176,169,164).
+- Test vòng vẽ kiểm vị trí lời gọi `watchdogStep(…, 24, 10, …)` (trước khớp nhầm chú thích); `#uncap3d` vẫn đo vsync (dt đúng ở màn > 60 Hz).
+
 ### 6.5 Ngân sách và các bước có điều kiện
 - Ngân sách: JS khung đi bộ ≤ 4 ms ở ×1 (đo: p95 1,8–3,2 ms); GPU đi bộ ≤ 7 ms p50, ≤ 12 ms p95 trên Iris Xe.
 - **C12 (bóng nướng sẵn)**: điều kiện "walk GPU p50 > 7 ms hoặc p95 > 12 ms (headed)". Sau C11: p95 9,9–11,9 (đạt), p50 8,6–10,7 ms theo timer
