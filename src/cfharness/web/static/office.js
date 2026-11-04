@@ -394,8 +394,8 @@ function main() {
 
   function applyState(s) {
     state = s;
-    const key = layoutKey(s);
-    if (key !== wkey || !world) {
+    const key = layoutKey(s), rebuilt = key !== wkey || !world;
+    if (rebuilt) {
       const first = !world;
       if (world) world.dispose();
       world = new World(s);
@@ -432,6 +432,26 @@ function main() {
     syncTags();
     drawBoards(true);
     renderList(); renderSrHud(); renderSrPanel(); renderActions();
+    if (rebuilt) warmShaders();
+  }
+
+  // Biên dịch trước MỌI shader của cảnh (kể cả vật đang ẩn: đèn trần chế độ đi bộ, vật liệu mờ tường, thẻ, vòng chọn, đạo cụ, ESTOP…)
+  // ngay sau khi dựng World — trước đây shader biên dịch lần đầu vật hiện ra → khựng 50–170 ms khi vào đi bộ / bay tới agent / đêm.
+  // compileAsync dùng KHR_parallel_shader_compile nếu có (không chặn luồng chính). Không bật vật chứa đèn (đổi số đèn → sai biến thể).
+  function warmShaders() {
+    if (!renderer || !world || noRender) return;
+    const shown = [];
+    scene.traverse((o) => {
+      if (o.visible || o.isLight) return;
+      let light = false;
+      o.traverse((c) => { if (c.isLight) light = true; });
+      if (!light) { o.visible = true; shown.push(o); }
+    });
+    const occ = world.occluders && world.occluders[0];
+    if (occ) world.fade(new Set([occ])); // biến thể vật liệu mờ tường (chế độ đi bộ)
+    try { renderer.compileAsync(scene, camera).catch(() => {}); } catch (_) { /* bỏ qua: sẽ biên dịch khi vẽ như cũ */ }
+    if (occ) world.fade(new Set());
+    for (const o of shown) o.visible = false;
   }
 
   function drawBoards() {
