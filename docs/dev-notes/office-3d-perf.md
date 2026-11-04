@@ -50,8 +50,9 @@ màn 60 Hz, 96 DPI → `devicePixelRatio` 1; người dùng có ~19 agent). Các
   chậm theo. Giữ nguyên mốc (< 24 hai cửa sổ 5 s → low; < 10 ba cửa sổ → fallback), luật bỏ khựng > 1 s / mất focus. Kiểm: CDP CPU ×6, 40 agent
   → tự hạ `low` sau ~10 s, không rơi vào fallback; máy thường không bao giờ hạ (mọi lần bench: `tier: high`).
 - **Biên dịch shader trước** (`warmShaders()` cuối `applyState` khi World vừa dựng, kể cả sau `setQuality`): tạm bật mọi vật đang ẩn (trừ vật
-  chứa đèn — đổi số đèn là sai biến thể), gán `fadeMat` cho một occluder, `renderer.compileAsync(scene, camera)` (KHR_parallel_shader_compile
-  nếu có), rồi trả lại như cũ ngay (phần biên dịch chạy đồng bộ ở đầu `compileAsync`).
+  chứa đèn — đổi số đèn là sai biến thể), gán `fadeMat` cho một occluder, `renderer.compile(scene, camera)` (KHR_parallel_shader_compile
+  nếu có thì driver link song song), rồi trả lại như cũ ngay. Không dùng `compileAsync`: r169 thăm dò `currentProgram.isReady()` bằng
+  setTimeout, vật liệu bị dispose giữa chừng (dựng lại World, `setQuality`, agent rời đi) → TypeError không bắt được (đã tái hiện).
 - **LOD nhân vật** (`chibi.js`): mỗi chibi dựng 2 geometry gộp từ cùng bộ chi tiết — gần (như cũ, ~5,8 k tam giác) và xa (số phân đoạn ×0,5,
   ~1,6–1,8 k); cùng xương, cùng vật liệu, cùng `boundingSphere` → không thêm draw call. `updateChibiLod(camera, viewH)` mỗi khung: chibi cao
   < 80 px trên màn hình → hình xa, > 96 px → hình gần (trễ giữa hai mốc). Toàn cảnh 20–40 agent = hình xa; bay tới / đi bộ gần = hình gần.

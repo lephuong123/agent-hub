@@ -437,7 +437,9 @@ function main() {
 
   // Biên dịch trước MỌI shader của cảnh (kể cả vật đang ẩn: đèn trần chế độ đi bộ, vật liệu mờ tường, thẻ, vòng chọn, đạo cụ, ESTOP…)
   // ngay sau khi dựng World — trước đây shader biên dịch lần đầu vật hiện ra → khựng 50–170 ms khi vào đi bộ / bay tới agent / đêm.
-  // compileAsync dùng KHR_parallel_shader_compile nếu có (không chặn luồng chính). Không bật vật chứa đèn (đổi số đèn → sai biến thể).
+  // renderer.compile (đồng bộ: tạo/link program, có KHR_parallel_shader_compile thì driver link song song). KHÔNG dùng compileAsync: three r169
+  // thăm dò `currentProgram.isReady()` bằng setTimeout — vật liệu bị dispose trước khi xong (dựng lại World, setQuality, agent rời đi)
+  // → TypeError không bắt được. Không bật vật chứa đèn (đổi số đèn → sai biến thể).
   function warmShaders() {
     if (!renderer || !world || noRender) return;
     const shown = [];
@@ -449,7 +451,7 @@ function main() {
     });
     const occ = world.occluders && world.occluders[0];
     if (occ) world.fade(new Set([occ])); // biến thể vật liệu mờ tường (chế độ đi bộ)
-    try { renderer.compileAsync(scene, camera).catch(() => {}); } catch (_) { /* bỏ qua: sẽ biên dịch khi vẽ như cũ */ }
+    try { renderer.compile(scene, camera); } catch (_) { /* bỏ qua: sẽ biên dịch khi vẽ như cũ */ }
     if (occ) world.fade(new Set());
     for (const o of shown) o.visible = false;
   }

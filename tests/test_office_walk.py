@@ -120,7 +120,8 @@ def test_office_render_loop_perf_contract():
     frame = office_js[office_js.index("function frame(ts)"):]
     # watchdog (hạ tier < 24, fallback < 10) đo TRƯỚC cổng nhịp vẽ → khung bỏ qua vì đứng yên vẫn được đếm
     assert frame.index("fps < 24") < frame.index("frameGate(") and frame.index("fps < 10") < frame.index("frameGate(")
-    assert "if (rebuilt) warmShaders();" in office_js and "renderer.compileAsync(scene, camera)" in office_js
+    assert "if (rebuilt) warmShaders();" in office_js and "renderer.compile(scene, camera)" in office_js
+    assert "compileAsync(" not in office_js  # thăm dò isReady() ném lỗi khi vật liệu bị dispose giữa chừng
     assert "updateChibiLod(camera, Math.max(1, host.clientHeight));" in office_js
     assert "controls.dampingFactor = 1 - Math.pow(1 - DAMP_60, dt * 60);" in office_js
     perf = (STATIC / "office" / "perf.js").read_text(encoding="utf-8")
