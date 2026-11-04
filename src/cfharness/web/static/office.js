@@ -10,7 +10,7 @@ import * as THREE from './vendor/three-0.169.0/three.module.min.js';
 import { OrbitControls } from './vendor/three-0.169.0/OrbitControls.js';
 import { World, layoutKey } from './office/world.js';
 import { Actor, STATUS_VI } from './office/actors.js';
-import { setChibiQuality } from './office/chibi.js';
+import { setChibiQuality, updateChibiLod } from './office/chibi.js';
 import { NO_TEAM_COLOR, scaleLabel, declutter, frameGate } from './office/util.js';
 import { drawHud, drawKanban, drawRuns, drawNeeds, drawCard, drawApprovalTag, drawSign, TextSprite, fmtUsd } from './office/boards.js';
 import { makeApi, Modals, createFlows } from './office/flows.js';
@@ -913,6 +913,8 @@ function main() {
       if (world.shadowRefocus) { shadowFrames = Math.max(shadowFrames, 1); world.shadowRefocus = false; }
       if (shadowFrames > 0) { shadowFrames--; renderer.shadowMap.needsUpdate = true; }
     }
+    camera.updateMatrixWorld();
+    updateChibiLod(camera, Math.max(1, host.clientHeight)); // chibi nhỏ trên màn hình → hình ít tam giác
     if (perf) perf.gpuBegin();
     renderer.render(scene, camera);
     if (perf) { perf.gpuEnd(); perf.end(); }
