@@ -412,12 +412,12 @@ class HubMcp:
             res = await hub.call("mcp.events", {"run_id": run_id, "after_seq": after_seq, "epoch": epoch, "wait_s": wait_s, "level": level}, ctx=ctx)
             return EventsOut(**res)
 
-        @srv.tool(description="Dừng một run (run_id) HOẶC mọi run đang chạy/chờ của một task và task con (task_id). Phần việc dở bị bỏ; session được giữ để tiếp tục sau.",
+        @srv.tool(description="Dừng một run (run_id) HOẶC huỷ một task (task_id): dừng mọi run đang chạy/chờ của task và task con, rồi archive task cùng task con chưa xong (kể cả task đang chờ khoá workspace) để không chạy tiếp về sau. Phần việc dở bị bỏ; session được giữ để tiếp tục sau.",
                   annotations=_ann(False, destructive=True, idempotent=True))
         async def hub_cancel(
             ctx: Context,
             run_id: Annotated[str | None, Field(description="id run")] = None,
-            task_id: Annotated[str | None, Field(description="id task — dừng run của task và các task con")] = None,
+            task_id: Annotated[str | None, Field(description="id task — dừng run và archive task cùng các task con chưa xong")] = None,
         ) -> CancelOut:
             from mcp.server.mcpserver.exceptions import ToolError
 
@@ -426,7 +426,8 @@ class HubMcp:
                 raise ToolError("cần đúng một trong run_id hoặc task_id")
             if task_id:
                 r = await hub.call("mcp.cancel_task", {"task_id": task_id}, ctx=ctx, audit=True)
-                return CancelOut(run_id=",".join(r["stopped_runs"]), status=r["status"], task_id=task_id, stopped_runs=r["stopped_runs"])
+                return CancelOut(run_id=",".join(r["stopped_runs"]), status=r["status"], task_id=task_id, stopped_runs=r["stopped_runs"],
+                                 archived_tasks=r.get("archived_tasks", []))
             r = await hub.call("run.stop", {"id": run_id}, ctx=ctx, audit=True)
             return CancelOut(run_id=r["id"], status="stop_requested" if r.get("status") == "running" else r.get("status", "unknown"))
 

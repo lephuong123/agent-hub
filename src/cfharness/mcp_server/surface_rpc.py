@@ -422,9 +422,12 @@ class SurfaceRpc:
         return {"agent_id": aid, "run_id": rid}
 
     async def cancel_task(self, p: dict[str, Any]) -> dict[str, Any]:
-        """`hub_cancel(task_id)`: dừng mọi run đang chạy/chờ của task và các task con (origin_task_id)."""
+        """`hub_cancel(task_id)`: huỷ task — dừng mọi run đang chạy/chờ của task và các task con (origin_task_id), rồi archive
+        task + task con chưa xong. Trước đây chỉ dừng run: task con đang `ready` chờ khoá workspace (chưa có run) vẫn được
+        claim sau đó, chạy xong và báo kết quả vào thread như chưa từng bị huỷ (trả lời trùng)."""
         tid = str(_req(p, "task_id"))
-        if self.hub.store.conn.execute("SELECT 1 FROM tasks WHERE id=?", (tid,)).fetchone() is None:
+        t = self.hub.tasks.maybe(tid)
+        if t is None:
             raise NotFound(f"không tìm thấy task '{tid}'")
         rows = self.hub.store.conn.execute(
             "SELECT id FROM runs WHERE status IN ('queued','running') AND task_id IN (SELECT id FROM tasks WHERE id=? OR origin_task_id=?)",
@@ -437,7 +440,20 @@ class SurfaceRpc:
                 stopped.append(rid)
             except HubError:
                 pass
-        return {"task_id": tid, "stopped_runs": stopped, "status": "stop_requested" if stopped else "no_active_run"}
+        reason = str(p.get("reason") or "").strip() or "cancelled"
+        open_ids = [x["id"] for x in [t, *self.hub.tasks.subtasks(tid)] if x["status"] not in ("done", "archived")]
+        for xid in open_ids:
+            if self.hub.tasks.row(xid)["status"] != "archived":  # archive task gốc đã archive luôn task con của nó
+                await self.hub.tasks.archive(xid, reason=f"huỷ: {reason}" if xid == tid else f"task gốc {tid} bị huỷ", stop_running=False)
+        archived = open_ids
+        if archived:
+            self.hub.dispatcher.kick()
+            status = "cancelled"
+        elif t["status"] == "done":
+            status = "already_done"
+        else:
+            status = "already_archived"
+        return {"task_id": tid, "stopped_runs": stopped, "archived_tasks": archived, "status": status}
 
     def compat(self, p: dict[str, Any]) -> dict[str, Any]:
         return {"cli": self.hub.store.state_get("cli_compat"), "unknown_rate": self.hub.store.state_get("cli_unknown_rate")}

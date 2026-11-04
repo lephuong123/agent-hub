@@ -881,9 +881,16 @@ class ManagerService:
         conv = self._conv_row(r[0]) if r else self._new_conv(HEARTBEAT_CHANNEL, aid, "heartbeat")
         from ..guard.profiles import gates_mode
 
-        prompt = prompts.tick_prompt(events, dropped=dropped, reason=reason, open_work=open_work, gates=gates_mode(self.hub.config))
         # hội thoại gốc (của người) của các sự kiện — notify_owner/câu hỏi trong lượt này về đúng cuộc đó thay vì đoán
         tick_convs = sorted({str(e["conversation_id"]) for e in events if e.get("conversation_id")})
+        conv_channels: dict[str, str] = {}
+        for cid in tick_convs:  # kênh của từng hội thoại → prompt nói rõ tin sẽ vào thread chung (không viết như báo riêng người)
+            try:
+                conv_channels[cid] = str(self._conv_row(cid)["channel"])
+            except NotFound:
+                pass
+        prompt = prompts.tick_prompt(events, dropped=dropped, reason=reason, open_work=open_work, gates=gates_mode(self.hub.config),
+                                     conv_channels=conv_channels)
         try:
             run = self._submit(conv, prompt, kind="tick", budget=self.cfg("tick_budget_usd"),
                                extra_opts={"tick_convs": tick_convs} if tick_convs else None)
