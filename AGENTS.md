@@ -459,7 +459,7 @@ Chi tiết: `docs/dev-notes/gates.md`, `docs/dev-notes/trust-and-chat-settings.m
   `GuardService.check` (classifier `rule_grant`). Test: `tests/test_rule_grant.py`.
 
 ## Chế độ 3D văn phòng (`/office`)
-Hợp đồng, quyết định, ánh xạ trạng thái → nhân vật: `docs/dev-notes/office-3d.md`. Không RPC mới, không migration. Test: `tests/test_web_office.py`.
+Hợp đồng, quyết định, ánh xạ trạng thái → nhân vật: `docs/dev-notes/office-3d.md`. Không RPC mới, không migration. Test: `tests/test_web_office.py`. Hiệu năng (nhịp vẽ động 60 / yên 30, đo `#perf3d`): `docs/dev-notes/office-3d-perf.md`.
 **Chế độ 3D = toàn trang 3D**: `/office` là trang độc lập (không `base.html`), thấy được chỉ canvas + nút "2D" nổi; HUD/thẻ nhân vật/kanban/
 "Cần bạn"/run đang chạy/hết phiên đều vẽ TRONG cảnh; danh sách chữ chỉ `sr-only`. Đang 3D thì MỌI trang (trừ `/office`, `/login`) → `/office`.
 
