@@ -14,6 +14,28 @@ const SPEED = 2.4, RUN = 4.2, EYE = 1.02, LOOK_Y = 1.0;
 // động học avatar (docs/dev-notes/office-walk.md): vận tốc tiến tới vận tốc mong muốn theo damp λ — tăng tốc λ 14 (≈ 0,16 s tới 90 %),
 // hãm λ 18 (≈ 0,13 s); bước con cố định 1/120 s → cùng quỹ đạo dù khung 16,7 hay 33,4 ms. Tự đi: pure pursuit, nhắm trước 0,6 m.
 const ACC_L = 14, BRAKE_L = 18, SUB = 1 / 120, AIM = 0.6, YAW_L = 16, FOLLOW_L = 2.5;
+// camera góc thứ ba = spring-arm (cần lò xo) quanh đầu avatar: hướng (yaw/pitch) damp λ 30 (λ 6 trong 0,6 s đầu khi bay vào),
+// khoảng cách zoom λ 12; cần co ngay khi vật cản cao hơn tia nhìn chen vào, dài lại λ 4. Đầu avatar (pivot) gắn cứng — không lerp
+// vị trí camera (trước: lerp dt·8 → camera trôi 240–410 ms sau khi dừng, khoảng cách co giãn 2,9–3,6 m khi đi/xoay).
+const CAM_L = 30, FLY_L = 6, FLY_T = 0.6, ZOOM_L = 12, ARM_IN_L = 20, ARM_OUT_L = 4, ARM_FREE = 8, ARM_MIN = 0.6;
+// đồ cao sát sau lưng (cần ngắn hơn 1,2 m): nâng cần lên cao (nhìn xuống đầu avatar) thay vì dí camera vào đồ; tối đa −1,3 rad
+const RAISE_AT = 1.2, RAISE_STEP = 0.15, RAISE_MAX = -1.3;
+const NO_FADE = new Set();
+
+// Cần camera: đi trên lưới theo bước 0,25 m dọc tia từ pivot (đầu avatar) hướng d (đơn vị) tới khoảng cách len. Gặp ô bị chặn có vật cao hơn
+// tia (top > y − 0,1) → trả t − 0,2 (≥ ARM_MIN). Ngoài lưới phía bắc/tây (tường cao) = chặn; phía nam/đông (cắt mở cho toàn cảnh) = thoáng.
+// Không raycast mesh: World gộp ~140k tam giác vào vài Batch, three không có BVH.
+export function armHit(grid, px, py, pz, dx, dy, dz, len) {
+  for (let t = 0.1; t <= len + 1e-6; t += 0.1) {
+    const x = px + dx * t, y = py + dy * t, z = pz + dz * t;
+    const [c, r] = grid.cellOf(x, z);
+    let top;
+    if (!grid.inside(c, r)) { if (x > grid.minX + 0.3 && z > grid.minZ + 0.3) continue; top = 99; }
+    else { if (!grid.blocked(c, r)) continue; top = grid.top[r * grid.cols + c]; }
+    if (top > y - 0.1) return Math.max(ARM_MIN, t - 0.2);
+  }
+  return ARM_FREE;
+}
 const KEYS = {
   KeyW: [0, 1], ArrowUp: [0, 1], KeyS: [0, -1], ArrowDown: [0, -1],
   KeyA: [-1, 0], ArrowLeft: [-1, 0], KeyD: [1, 0], ArrowRight: [1, 0],
@@ -140,7 +162,10 @@ export class Walker {
     this.keys = new Set(); this.run = false; this.path = [];
     this.vel = { x: 0, z: 0 }; this.lookT = -1e9; this.t = 0;
     this.camPos = new THREE.Vector3(); this.camInit = false;
+    // spring-arm: hướng/khoảng cách đã làm mượt + giới hạn cần do va chạm; rigInit = false → lấy từ vị trí camera hiện tại (bay vào)
+    this.camYaw = Math.PI; this.camPitch = -0.12; this.camDist = 3.4; this.armLim = ARM_FREE; this.rigInit = false; this.flyT = 1; this.raise = 0;
     this._ray = new THREE.Raycaster(); this._v = new THREE.Vector3(); this._head = new THREE.Vector3();
+    this._hits = []; this._hitSet = new Set(); // tái sử dụng mỗi khung (không cấp phát)
   }
 
   // Nhân vật người dùng điều khiển: điều phối viên ({id, name, color}) hoặc null = "Bạn · chủ hub". Đổi → dựng lại chibi.
@@ -165,7 +190,7 @@ export class Walker {
   // Vào chế độ đi bộ: điều phối viên đứng ngay ngoài cửa phòng mình nhìn vào văn phòng (doorSpawn; không được → cạnh bàn, deskSpawn);
   // không phải điều phối viên → giữa khu làm việc (spawnPoint).
   enter(world) {
-    this.active = true; this.camInit = false; this.keys.clear(); this.path = []; this.seated = null; this.vel = { x: 0, z: 0 };
+    this.active = true; this.camInit = false; this.rigInit = false; this.keys.clear(); this.path = []; this.seated = null; this.vel = { x: 0, z: 0 };
     this.setWorld(world, true);
     this.chibi.group.visible = this.pov === 'third';
   }
@@ -188,7 +213,7 @@ export class Walker {
   exit() {
     this.active = false; this.keys.clear(); this.path = []; this.seated = null;
     this.chibi.group.visible = false;
-    if (this.world) this.world.fade(new Set());
+    if (this.world) this.world.fade(NO_FADE);
   }
   // Văn phòng dựng lại (thêm/bớt agent): giữ vị trí nếu còn đi được, không thì về ô trống gần nhất.
   setWorld(world, reset) {
@@ -214,7 +239,7 @@ export class Walker {
     this.pov = this.pov === 'third' ? 'first' : 'third';
     this.chibi.group.visible = this.active && this.pov === 'third';
     this.pitch = this.pov === 'first' ? 0 : -0.12;
-    this.camInit = false;
+    this.camInit = false; this.rigInit = false; // về góc thứ ba: cần dài ra từ đầu avatar (không nhảy)
     return this.pov;
   }
 
@@ -320,49 +345,96 @@ export class Walker {
     c.group.rotation.y = this.yaw;
   }
 
-  // camera vừa được trả lại (đóng bảng/chat): đi mượt từ chỗ camera đang đứng về sau lưng avatar
-  resume(reduced) { this.camPos.copy(this.camera.position); this.camInit = !reduced; }
+  // camera vừa được trả lại (đóng bảng/chat, đứng dậy, vừa vào đi bộ): đi mượt từ chỗ camera đang đứng về sau lưng avatar
+  resume(reduced) { this.camPos.copy(this.camera.position); this.camInit = !reduced; this.rigInit = false; }
+
+  // lấy hướng/khoảng cách cần từ vị trí camera hiện tại so với đầu avatar → damping cầu đưa camera về sau lưng (bay vào liền mạch)
+  _rigFrom(cam) {
+    const v = this._v.copy(cam.position).sub(this._head.set(this.pos.x, LOOK_Y, this.pos.z)), len = v.length();
+    if (len < 1e-3) { this.camYaw = this.view; this.camPitch = this.pitch; this.camDist = ARM_MIN; this.armLim = ARM_MIN; }
+    else {
+      this.camYaw = Math.atan2(-v.x, -v.z);
+      this.camPitch = 0.35 - Math.asin(Math.max(-1, Math.min(1, v.y / len)));
+      this.camDist = len; this.armLim = Math.max(len, ARM_MIN);
+    }
+    this.flyT = 0; this.rigInit = true;
+  }
 
   // Camera (gọi khi chế độ đi bộ đang lái camera, tức không có bảng/chat/bay camera).
   updateCamera(dt, reduced) {
     const w = this.world, cam = this.camera;
     if (!this.active || !w || !this.pos) return;
-    const fx = Math.sin(this.view), fz = Math.cos(this.view);
     if (this.seated) {
       // ngồi bàn: camera sau vai, nhìn thẳng vào màn hình trên bàn (bàn điều khiển chat phủ trước camera)
       const s = this.seated, sx = Math.sin(s.rot), sz = Math.cos(s.rot);
       this._v.set(s.x - sx * 0.55, 1.35, s.z - sz * 0.55);
-      if (!this.camInit || reduced) { this.camPos.copy(this._v); this.camInit = true; } else this.camPos.lerp(this._v, Math.min(1, dt * 6));
+      if (!this.camInit || reduced) { this.camPos.copy(this._v); this.camInit = true; }
+      else {
+        const p = this.camPos, q = this._v;
+        p.set(damp(p.x, q.x, 6, dt), damp(p.y, q.y, 6, dt), damp(p.z, q.z, 6, dt));
+      }
       cam.position.copy(this.camPos);
       cam.lookAt(this._head.set(s.x + sx * 1.1, 0.95, s.z + sz * 1.1));
-      w.fade(new Set());
+      w.fade(NO_FADE);
+      this.rigInit = false;
       return;
     }
     if (this.pov === 'first') {
+      const fx = Math.sin(this.view), fz = Math.cos(this.view);
       cam.position.set(this.pos.x, EYE, this.pos.z);
       this._v.set(this.pos.x + fx * Math.cos(this.pitch), EYE + Math.sin(this.pitch), this.pos.z + fz * Math.cos(this.pitch));
       cam.lookAt(this._v);
-      w.fade(new Set());
+      w.fade(NO_FADE);
       this.camInit = true;
       return;
     }
-    const head = this._head.set(this.pos.x, LOOK_Y, this.pos.z);
-    const hd = this.dist * Math.cos(this.pitch - 0.35), up = this.dist * Math.sin(0.35 - this.pitch);
-    this._v.set(this.pos.x - fx * hd, LOOK_Y + up, this.pos.z - fz * hd);
-    // giữ camera trong văn phòng (không chui ra sau tường bắc/tây cao)
-    this._v.x = Math.max(0.3, Math.min(w.W + 2, this._v.x)); this._v.z = Math.max(0.3, Math.min(w.D + 2, this._v.z));
-    this._v.y = Math.max(0.6, this._v.y);
-    if (!this.camInit || reduced) { this.camPos.copy(this._v); this.camInit = true; } else this.camPos.lerp(this._v, Math.min(1, dt * 8));
-    cam.position.copy(this.camPos);
-    cam.lookAt(head);
-    // tường/vách nằm giữa camera và avatar → làm mờ
-    const dir = this._v.copy(head).sub(this.camPos), len = dir.length();
-    const hit = new Set();
-    if (len > 1e-3) {
-      this._ray.set(this.camPos, dir.multiplyScalar(1 / len)); this._ray.far = len;
-      for (const h of this._ray.intersectObjects(w.occluders, false)) hit.add(h.object);
+    if (!this.rigInit) {
+      if (reduced) { this.camYaw = this.view; this.camPitch = this.pitch; this.camDist = this.dist; this.armLim = ARM_FREE; this.rigInit = true; this.flyT = 1; }
+      else this._rigFrom(cam);
     }
-    w.fade(hit);
+    const L = reduced ? Infinity : this.flyT < FLY_T ? FLY_L : CAM_L;
+    this.flyT += dt;
+    this.camYaw = dampAngle(this.camYaw, this.view, L, dt);
+    this.camPitch = damp(this.camPitch, this.pitch, L, dt);
+    this.camDist = damp(this.camDist, this.dist, reduced ? Infinity : this.flyT < FLY_T ? FLY_L : ZOOM_L, dt);
+    const px = this.pos.x, py = LOOK_Y, pz = this.pos.z, g = w.grid, sy = Math.sin(this.camYaw), syz = Math.cos(this.camYaw);
+    const hitAt = (pitch) => {
+      const c = Math.cos(pitch - 0.35);
+      return armHit(g, px, py, pz, -sy * c, Math.sin(0.35 - pitch), -syz * c, this.camDist);
+    };
+    // đồ cao chen sát sau lưng → nâng cần (pitch dốc hơn) tới khi cần dài được ≥ min(zoom, 1,6 m)
+    let raiseT = 0;
+    if (hitAt(this.camPitch) < RAISE_AT) {
+      for (let p = this.camPitch - RAISE_STEP; p >= RAISE_MAX - 1e-6; p -= RAISE_STEP) {
+        if (hitAt(p) >= Math.min(this.camDist, 1.6)) { raiseT = p - this.camPitch; break; }
+      }
+    }
+    this.raise = reduced ? raiseT : damp(this.raise, raiseT, raiseT < this.raise ? ARM_IN_L : ARM_OUT_L, dt);
+    const ep = this.camPitch + this.raise;
+    const cp = Math.cos(ep - 0.35), dx = -sy * cp, dy = Math.sin(0.35 - ep), dz = -syz * cp;
+    // cần lò xo: vật cản chen vào → co ngay (hoặc nhanh), hết vật cản → dài lại chậm
+    const hit = armHit(g, px, py, pz, dx, dy, dz, this.camDist);
+    if (reduced || hit < this.armLim - 0.3) this.armLim = hit;
+    else this.armLim = damp(this.armLim, hit, hit < this.armLim ? ARM_IN_L : ARM_OUT_L, dt);
+    const len = Math.max(ARM_MIN, Math.min(this.camDist, this.armLim));
+    let cx = px + dx * len, cy = py + dy * len, cz = pz + dz * len;
+    // giữ camera trong văn phòng (không chui ra sau tường bắc/tây cao); vẫn luôn nhìn vào đầu avatar (y = LOOK_Y)
+    cx = Math.max(0.3, Math.min(w.W + 2, cx)); cz = Math.max(0.3, Math.min(w.D + 2, cz)); cy = Math.max(0.6, cy);
+    cam.position.set(cx, cy, cz);
+    const head = this._head.set(px, py, pz);
+    cam.lookAt(head);
+    this.camPos.copy(cam.position); this.camInit = true;
+    // tường/vách mỏng còn nằm giữa camera và avatar → làm mờ (mảng/Set dùng lại — không cấp phát mỗi khung)
+    const dir = this._v.copy(head).sub(cam.position), dl = dir.length(), hs = this._hitSet;
+    hs.clear();
+    if (dl > 1e-3) {
+      this._ray.set(cam.position, dir.multiplyScalar(1 / dl)); this._ray.far = dl;
+      this._hits.length = 0;
+      this._ray.intersectObjects(w.occluders, false, this._hits);
+      for (let i = 0; i < this._hits.length; i++) hs.add(this._hits[i].object);
+      this._hits.length = 0;
+    }
+    w.fade(hs);
   }
 
   dispose() { this.chibi.group.removeFromParent(); this.chibi.dispose(); }

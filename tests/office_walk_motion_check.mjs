@@ -113,4 +113,87 @@ const mkWalker = (w) => {
     !r2.path.length && Math.hypot(r2.pos.x - lib.x, r2.pos.z - lib.z) < 0.8);
 }
 
+// ---- C5: camera spring-arm
+{
+  const w = mkWorld(19);
+  // chỗ đứng thoáng: trước mặt ≥ 4 m và sau lưng (hướng cần camera) ≥ 4 m không có vật cao hơn tia
+  const pick = () => {
+    const m = mkWalker(w), wk = m.wk;
+    for (let k = 0; k < 72; k++) {
+      const a = wk.view + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * (Math.PI / 36);
+      const cp = Math.cos(-0.12 - 0.35), dy = Math.sin(0.35 + 0.12);
+      const q = circleMove(w.grid, wk.pos.x, wk.pos.z, Math.sin(a) * 4, Math.cos(a) * 4, WALK_R * 1.5);
+      const free = Math.hypot(q.x - wk.pos.x - Math.sin(a) * 4, q.z - wk.pos.z - Math.cos(a) * 4) < 1e-3;
+      const back = W.armHit(w.grid, wk.pos.x, 1, wk.pos.z, -Math.sin(a) * cp, dy, -Math.cos(a) * cp, 4.5) > 4.5;
+      if (free && back) { wk.view = wk.yaw = a; return m; }
+    }
+    return m;
+  };
+  const dist = (wk, cam) => Math.hypot(cam.position.x - wk.pos.x, cam.position.y - 1, cam.position.z - wk.pos.z);
+  for (const [name, f] of Object.entries({ đều: () => 1 / 60, 'xen kẽ': (i) => (i % 2 ? 1 / 30 : 1 / 60) })) {
+    const { wk, cam } = pick();
+    wk.updateCamera(1 / 60, true); // reduced: gán thẳng (camera đã ở sau lưng)
+    let t = 0, i = 0, dmin = 9, dmax = 0, prev = null; const sp = [];
+    wk.keys.add('KeyW');
+    while (t < 1.6) {
+      const dt = f(i++); wk.update(dt, t, false); wk.updateCamera(dt, false); t += dt;
+      if (t > 0.5) {
+        const d = dist(wk, cam); dmin = Math.min(dmin, d); dmax = Math.max(dmax, d);
+        if (prev) sp.push(Math.hypot(cam.position.x - prev.x, cam.position.z - prev.z) / dt);
+      }
+      prev = cam.position.clone();
+    }
+    const m = sp.reduce((a, b) => a + b, 0) / sp.length, cv = Math.sqrt(sp.reduce((a, b) => a + (b - m) ** 2, 0) / sp.length) / m;
+    check(`camera đi thẳng (dt ${name}): khoảng cách ${dmin.toFixed(3)}–${dmax.toFixed(3)} ∈ [3,35; 3,45], CV tốc độ ${cv.toFixed(4)} (≤ 0,01)`,
+      dmin >= 3.35 && dmax <= 3.45 && cv <= 0.01);
+  }
+  {
+    // chỗ thoáng mọi hướng (cần không chạm gì khi xoay 360°)
+    const { wk, cam } = mkWalker(w), g = w.grid, cp = Math.cos(-0.47), dy = Math.sin(0.47);
+    let spot = null;
+    for (let r = 0; r < g.rows && !spot; r++) for (let c = 0; c < g.cols && !spot; c++) {
+      const [x, z] = g.center(c, r);
+      if (blockedAt(g, x, z, WALK_R)) continue;
+      let ok = true;
+      for (let k = 0; k < 36 && ok; k++) { const a = (k * Math.PI) / 18; ok = W.armHit(g, x, 1, z, -Math.sin(a) * cp, dy, -Math.cos(a) * cp, 3.6) > 3.6; }
+      if (ok) spot = { x, z };
+    }
+    wk.pos = spot; wk.rigInit = false;
+    wk.updateCamera(1 / 60, true);
+    let dmin = 9, dmax = 0;
+    for (let i = 0; i < 30; i++) { wk.look(-6 / 0.006 / 60, 0); wk.update(1 / 60, i / 60, false); wk.updateCamera(1 / 60, false); const d = dist(wk, cam); dmin = Math.min(dmin, d); dmax = Math.max(dmax, d); }
+    check(`camera xoay 6 rad/s (chỗ thoáng): khoảng cách ${dmin.toFixed(3)}–${dmax.toFixed(3)} ∈ [3,35; 3,45]`, !!spot && dmin >= 3.35 && dmax <= 3.45);
+  }
+  // đứng sát tủ cao / tường, xoay 360°: camera không nằm trong ô bị chặn có vật cao hơn camera
+  {
+    const { wk, cam } = mkWalker(w);
+    const g = w.grid; let bad = 0, n = 0;
+    const tall = [];
+    for (let r = 0; r < g.rows; r++) for (let c = 0; c < g.cols; c++) if (g.blocked(c, r) && g.top[r * g.cols + c] >= 1.3 && g.top[r * g.cols + c] < 2.55) tall.push([c, r]);
+    for (const [c, r] of tall.slice(0, 40)) {
+      const [x, z] = g.center(c, r), fr = g.nearestFree(c, r), [fx, fz] = g.center(fr[0], fr[1]);
+      if (blockedAt(g, fx, fz, WALK_R)) continue;
+      wk.pos = { x: fx, z: fz }; wk.rigInit = false; wk.updateCamera(1 / 60, true);
+      for (let k = 0; k < 36; k++) {
+        wk.view += Math.PI / 18; wk.updateCamera(1 / 60, true); n++;
+        const [cc, rr] = g.cellOf(cam.position.x, cam.position.z);
+        // đồ đạc (không tính ô tường 2,6: ô lưới 0,5 m dày hơn tường thật, camera sát tường vẫn được làm mờ như cũ)
+        const top = g.inside(cc, rr) && g.blocked(cc, rr) ? g.top[rr * g.cols + cc] : 0;
+        if (top < 2.55 && top > cam.position.y) bad++;
+      }
+    }
+    check(`camera sát đồ cao (${tall.length} ô ≥ 1,3 m, ${n} góc): không chui vào đồ đạc (${bad})`, n > 0 && bad === 0);
+  }
+  // không cấp phát Set mỗi khung (đếm qua spy)
+  {
+    const { wk } = pick();
+    const S0 = globalThis.Set; let made = 0;
+    globalThis.Set = class extends S0 { constructor(a) { super(a); made++; } };
+    wk.keys.add('KeyW');
+    for (let i = 0; i < 120; i++) { wk.update(1 / 60, i / 60, false); wk.updateCamera(1 / 60, false); }
+    globalThis.Set = S0;
+    check(`120 khung đi bộ: không tạo Set mới (${made})`, made === 0);
+  }
+}
+
 process.exit(fails ? 1 : 0);
