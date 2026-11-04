@@ -24,7 +24,7 @@ export function createPacer(opts) {
   const iv = new Float64Array(RING), tmp = new Float64Array(RING);
   const late = new Uint8Array(LATE_N);
   let ivN = 0, ivI = 0, vsync = 1000 / 60, prevTs = 0, lastDraw = 0;
-  let motionUntil = -1, moving = false, dEff = 2;
+  let motionUntil = -1, moving = false, dEff = 2, prevDrawD = 0;
   let lateN = 0, lateI = 0, lateSum = 0;
   let cap = 0, capUntil = 0, lockMs = LOCK_MIN, locks = 0, lastRelease = -1e12, lastLockEnd = -1e12, misses = 0;
   let hitchUntil = -1;
@@ -75,7 +75,8 @@ export function createPacer(opts) {
         const g = ts - lastDraw;
         dt = Math.min(0.1, Math.max(vsync / 1000, (Math.round(g / vsync) * vsync) / 1000));
         const b = base();
-        if (moving && vsync <= 20 && dEff === b && ts >= hitchUntil && g <= 4 * vsync) {
+        // chỉ tính khi khung trước cũng vẽ ở nhịp động (d = base): khoảng 33 ms ngay sau lúc đứng yên (d = 2) không phải "trễ"
+        if (moving && vsync <= 20 && dEff === b && prevDrawD === b && ts >= hitchUntil && g <= 4 * vsync) {
           const isLate = g > 1.5 * dEff * vsync ? 1 : 0;
           if (isLate) misses++;
           lateSum += isLate - late[lateI]; late[lateI] = isLate; lateI = (lateI + 1) % LATE_N; if (lateN < LATE_N) lateN++;
@@ -85,7 +86,7 @@ export function createPacer(opts) {
           }
         }
       }
-      lastDraw = ts;
+      lastDraw = ts; prevDrawD = dEff;
       if (jobs.size) runJob(ts, true);
       return dt;
     },
@@ -97,7 +98,7 @@ export function createPacer(opts) {
       jobs.set(k, { fn, at: j ? j.at : (prevTs || clock()) });
     },
     reset() {
-      ivN = 0; ivI = 0; prevTs = 0; lastDraw = 0; motionUntil = -1; moving = false; cap = 0; capUntil = 0; clearLate();
+      ivN = 0; ivI = 0; prevTs = 0; lastDraw = 0; motionUntil = -1; moving = false; cap = 0; capUntil = 0; prevDrawD = 0; clearLate();
     },
     state() { return { vsync, d: dEff, cap, lockMs, locks, misses, moving }; },
   };

@@ -62,6 +62,11 @@ const inWin = (a, t0, t1) => a.filter((t) => t >= t0 && t < t1).length;
   check(`quá tải 16,7/33,4: khoá sau ${at} khung (≤ 30), sau đó đều (sd ${sd(tiv).toFixed(2)} ms, TB ${mean.toFixed(1)} ms)`,
     at > 0 && at <= 30 && sd(tiv) <= 1 && Math.abs(mean - 33.3) < 1);
 }
+// động/yên xen kẽ (bắt đầu kéo, dừng phím… liên tục) ở 60 Hz không quá tải: khoảng 33 ms lúc chuyển từ yên sang động không bị tính là trễ
+{
+  const r = sim(even(60, 6000), (t) => Math.floor(t / 250) % 2 === 0);
+  check(`động/yên xen kẽ 250 ms (60 Hz đều): không khoá (locks ${r.p.state().locks})`, r.p.state().locks === 0);
+}
 // gai đơn 120 ms khi đang động: không khoá
 {
   const t = even(60, 3000).filter((x) => x < 1500 || x > 1620);
