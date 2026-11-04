@@ -102,3 +102,40 @@ export function createPacer(opts) {
     state() { return { vsync, d: dEff, cap, lockMs, locks, misses, moving }; },
   };
 }
+
+// Watchdog chất lượng (đo theo nhịp rAF, đặt TRƯỚC cổng vẽ): trả 'ok' | 'low' (hạ tier) | 'slow' (tắt 3D, fallback).
+// Phase 1 coi "gap > 1 s sau khung bình thường" là khựng — nhưng sau khung đứng đầu tiên điều kiện đó sai, nên GPU/driver đứng
+// 27 s + 72 s rồi rAF 1 Hz (đo được ở n=19 ×2) bị tính là "máy chậm" → tier low vĩnh viễn → fallback "slow". Ở đây:
+//  - khoảng > 1000 ms = ĐỨNG (stall): bỏ cửa sổ đo, không đếm cho tới khi có 30 khoảng liên tiếp < 100 ms;
+//  - chỉ cửa sổ rAF ĐỀU mà chậm (phân vị 80 ≤ 1,5 × trung vị) mới được tính vào lowFps / slowFps;
+//  - không có focus: không đếm.
+// st = {} giữ trạng thái giữa các lần gọi; gap = khoảng rAF (ms, 0 ở khung đầu).
+export function watchdogStep(st, ts, gap, focused, lowFps, slowFps, tierHigh) {
+  if (!st.init) { st.init = true; st.start = ts + 2000; st.frames = 0; st.gaps = []; st.okRun = 30; st.low = 0; st.slow = 0; }
+  if (!focused || gap > 1000) {
+    st.start = ts + 1000; st.frames = 0; st.gaps.length = 0;
+    if (gap > 1000) { st.okRun = 0; st.low = 0; st.slow = 0; }
+    if (!focused) { st.low = 0; st.slow = 0; }
+    return 'ok';
+  }
+  if (st.okRun < 30) {
+    st.okRun = gap > 0 && gap < 100 ? st.okRun + 1 : 0;
+    if (st.okRun < 30) return 'ok';
+    st.start = ts; st.frames = 0; st.gaps.length = 0;
+  }
+  if (ts < st.start) return 'ok';
+  st.frames++;
+  if (gap > 0) st.gaps.push(gap);
+  if (ts - st.start < 5000) return 'ok';
+  const fps = st.frames / ((ts - st.start) / 1000);
+  const g = st.gaps.slice().sort((a, b) => a - b), med = g[g.length >> 1] || 0, p80 = g[Math.floor(g.length * 0.8)] || 0;
+  st.start = ts; st.frames = 0; st.gaps.length = 0;
+  if (!(med > 0 && p80 <= 1.5 * med)) return 'ok'; // không đều (giật/đứng xen kẽ) → không kết luận "chậm"
+  if (tierHigh) {
+    st.low = fps < lowFps ? st.low + 1 : 0;
+    if (st.low >= 2) { st.low = 0; st.slow = 0; return 'low'; }
+  }
+  st.slow = fps < slowFps ? st.slow + 1 : 0;
+  if (st.slow >= 3) { st.slow = 0; return 'slow'; }
+  return 'ok';
+}

@@ -4,7 +4,7 @@
 const root = process.argv[2].replace(/\\/g, '/');
 const url = (p) => (root.startsWith('/') ? 'file://' : 'file:///') + root + '/src/cfharness/web/static/office/' + p;
 const mod = await import(url('pacer.js'));
-const { createPacer } = mod;
+const { createPacer, watchdogStep } = mod;
 
 let fails = 0;
 const check = (name, cond) => { if (cond) console.log('ok ' + name); else { fails++; console.log('FAIL ' + name); } };
@@ -126,5 +126,41 @@ const inWin = (a, t0, t1) => a.filter((t) => t >= t0 && t < t1).length;
   p.onSkip(() => { ran++; ranAt = t; }, 'card'); const t0 = t;
   for (let i = 0; i < 30; i++) { t += 1000 / 60; if (p.shouldDraw(t, true)) p.drew(t); }
   check(`onSkip: chạy trong rAF bị bỏ (${idle}), đang động → chạy sau ${(ranAt - t0).toFixed(0)} ms (≥ 250)`, idle === 1 && ran === 2 && ranAt - t0 >= 250 && ranAt - t0 < 300);
+}
+// ---- watchdog (watchdogStep): phân biệt ĐỨNG với CHẬM ĐỀU
+const wdRun = (segs, focused = true, high = true) => {
+  // segs: [[hz | 'stall', ms], …] → chuỗi rAF; trả các kết luận khác 'ok'
+  const st = {}, out = []; let t = 0, prev = 0;
+  const tick = (ts) => { const v = watchdogStep(st, ts, prev ? ts - prev : 0, typeof focused === 'function' ? focused(ts) : focused, 24, 10, high); prev = ts; if (v !== 'ok') out.push([Math.round(ts), v]); };
+  for (const [hz, ms] of segs) {
+    if (hz === 'stall') { t += ms; tick(t); continue; }
+    const end = t + ms; while (t + 1000 / hz <= end) { t += 1000 / hz; tick(t); }
+  }
+  return out;
+};
+{
+  const v = wdRun([[60, 5000], ['stall', 27000], [60, 50], ['stall', 72000], [1, 10000], [60, 30000]]);
+  check(`watchdog: đứng 27 s + 72 s, rAF 1 Hz 10 s, rồi 60 Hz → không hạ cấp (${JSON.stringify(v)})`, v.length === 0);
+}
+{
+  const v = wdRun([[15, 13000]]);
+  check(`watchdog: 15 Hz đều 13 s → 'low' (${JSON.stringify(v)})`, v.length === 1 && v[0][1] === 'low');
+}
+{
+  const v = wdRun([[8, 18000]], true, false);
+  check(`watchdog: 8 Hz đều 18 s (tier low) → 'slow' (${JSON.stringify(v)})`, v.length === 1 && v[0][1] === 'slow');
+}
+{
+  const v = wdRun([[8, 30000]], false, true);
+  check(`watchdog: mất focus → không đếm (${JSON.stringify(v)})`, v.length === 0);
+}
+{
+  // rAF lúc 60 Hz lúc 12 Hz xen kẽ mỗi 0,5 s (FPS TB ~36, không đều) → không kết luận chậm
+  const segs = []; for (let i = 0; i < 30; i++) segs.push([60, 500], [12, 500]);
+  const v = wdRun(segs);
+  check(`watchdog: rAF không đều (60/12 Hz xen kẽ) → không hạ cấp (${JSON.stringify(v)})`, v.length === 0);
+  // rAF đều 20 Hz nhưng có 1 lần đứng 3 s giữa chừng → vẫn hạ được khi chậm đều kéo dài (không bị chặn vĩnh viễn)
+  const v2 = wdRun([[20, 6000], ['stall', 3000], [60, 1000], [20, 20000]]);
+  check(`watchdog: chậm đều sau một lần đứng → vẫn 'low' (${JSON.stringify(v2)})`, v2.length === 1 && v2[0][1] === 'low');
 }
 process.exit(fails ? 1 : 0);

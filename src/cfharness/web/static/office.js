@@ -13,6 +13,7 @@ import { Actor, STATUS_VI } from './office/actors.js';
 import { setChibiQuality, updateChibiLod } from './office/chibi.js';
 import { NO_TEAM_COLOR, scaleLabel, declutter } from './office/util.js';
 import { createPacer } from './office/pacer.js';
+import { watchdogStep } from './office/pacer.js';
 import { drawHud, drawKanban, drawRuns, drawNeeds, drawCard, drawApprovalTag, drawSign, TextSprite, fmtUsd } from './office/boards.js';
 import { makeApi, Modals, createFlows } from './office/flows.js';
 import { createChat } from './office/chat.js';
@@ -63,6 +64,8 @@ function main() {
   try {
     renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
     if (!renderer.getContext()) throw new Error('no ctx');
+    // kiểm lỗi shader (getProgramInfoLog/getShaderInfoLog đồng bộ — chờ driver link xong) chỉ khi gỡ lỗi
+    renderer.debug.checkShaderErrors = location.hash.indexOf('debug3d') >= 0;
   } catch (_) {
     renderer = null;
   }
@@ -819,7 +822,7 @@ function main() {
   // đo hiệu năng chỉ khi gỡ lỗi (#perf3d / #uncap3d — office/perf.js); không bật thì perf = null
   const pf = perfFlags(), perf = createPerf(renderer, () => ({ tier, actors: actors.size, walk: walk.active }));
   // ------------------------------------------------------------ vòng vẽ (động ≈ 60 FPS / yên 30 FPS, dừng khi ẩn)
-  let raf = 0, lastDraw = 0, fpsFrames = 0, fpsStart = 0, uiAt = 0, prevRaf = 0, prevGap = 0, slowWins = 0, lowWins = 0;
+  let raf = 0, lastDraw = 0, uiAt = 0, prevRaf = 0, wd = {};
   let kicked = false, camMoved = false;
   const tmp = new THREE.Vector3(), camWas = new THREE.Matrix4();
   // có tương tác (chuột/chạm/lăn/phím) → khung tới tính là chuyển động (pacer giữ nhịp động thêm 150 ms)
@@ -828,26 +831,15 @@ function main() {
   const moving = () => !!tween || (walk.active && (walk.keys.size > 0 || walk.path.length > 0)) || !!down;
   function frame(ts) {
     raf = requestAnimationFrame(frame);
-    // một lần khựng > 1 s sau khung hình bình thường (tab bị che/điều tiết, máy ngủ, GC, devtools…) không phải "máy chậm":
-    // bỏ cửa sổ đo đang dở, đo lại. Khung nào cũng > 1 s (chậm thật) thì vẫn đo bình thường → fallback.
+    // watchdog chất lượng (pacer.js watchdogStep) — đo theo NHỊP rAF, trước cổng vẽ (khung bỏ qua vì đứng yên vẫn được đếm):
+    // rAF đều mà chậm: fps < 24 hai cửa sổ 5 s liền → hạ tier low; fps < 10 ba cửa sổ liền → tắt 3D (fallback "slow").
+    // Đứng (khoảng > 1 s: GPU/driver đứng, máy ngủ, tab bị điều tiết) hoặc không có focus → bỏ cửa sổ, chờ 30 khoảng bình thường;
+    // rAF không đều (giật/đứng xen kẽ) không bị coi là "chậm" → một lần GPU đứng không còn thành hạ cấp vĩnh viễn.
     const gap = prevRaf ? ts - prevRaf : 0;
-    // cửa sổ không có focus (đang ở app khác): Chrome/Windows điều tiết rAF xuống ~1 FPS dù tab vẫn "visible" → không đo
-    if ((gap > 1000 && prevGap < 250) || !document.hasFocus()) { fpsStart = ts + 1000; fpsFrames = 0; slowWins = 0; lowWins = 0; }
-    prevRaf = ts; prevGap = gap;
-    // đo FPS theo nhịp rAF (cả khung bỏ qua vì đứng yên): máy theo kịp → rAF bằng tần số màn hình; vẽ nặng → rAF chậm theo.
-    // Không phụ thuộc giới hạn khung (trước: đếm khung đã vẽ, cap 30 → mốc < 24 sát nút, rAF lệch nhịp là tụt).
-    // Bỏ 2 s đầu, cửa sổ 5 s; chỉ tắt 3D khi CHẬM LIÊN TỤC 3 cửa sổ liền (15 s), một lần giật không tính
-    if (!fpsStart) fpsStart = ts + 2000;
-    if (ts >= fpsStart) {
-      fpsFrames++;
-      if (ts - fpsStart >= 5000) {
-        const fps = fpsFrames / ((ts - fpsStart) / 1000);
-        fpsFrames = 0; fpsStart = ts;
-        if (tier === 'high') { lowWins = fps < 24 ? lowWins + 1 : 0; if (lowWins >= 2) { lowWins = 0; slowWins = 0; setQuality('low'); fpsStart = 0; fpsFrames = 0; return; } }
-        slowWins = fps < 10 ? slowWins + 1 : 0;
-        if (slowWins >= 3) { disableRender('slow'); return; }
-      }
-    }
+    prevRaf = ts;
+    const verdict = watchdogStep(wd, ts, gap, document.hasFocus(), 24, 10, tier === 'high');
+    if (verdict === 'low') { setQuality('low'); return; }
+    if (verdict === 'slow') { disableRender('slow'); return; }
     // "đang động" = tương tác vừa xảy ra, camera/tween/đi bộ đang dời, hoặc camera vừa đổi ở khung trước (OrbitControls còn trôi)
     const motion = kicked || camMoved || moving();
     kicked = false;
@@ -981,7 +973,7 @@ function main() {
       t.add(tmp); camera.position.add(tmp);
     }
   }
-  function start() { if (!raf && !stopped && !noRender && !ctxLost && renderer) { pacer.reset(); lastDraw = 0; fpsStart = 0; fpsFrames = 0; prevRaf = 0; prevGap = 0; slowWins = 0; lowWins = 0; raf = requestAnimationFrame(frame); } }
+  function start() { if (!raf && !stopped && !noRender && !ctxLost && renderer) { pacer.reset(); lastDraw = 0; prevRaf = 0; wd = {}; raf = requestAnimationFrame(frame); } }
   function pause() { if (raf) cancelAnimationFrame(raf); raf = 0; }
   document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); else { pacer.hitch(500); start(); } });
 
