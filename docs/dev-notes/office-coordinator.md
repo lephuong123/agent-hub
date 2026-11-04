@@ -11,8 +11,8 @@ Client: `static/office.js`, `static/office/{walk,actors,chibi,chat,flows,talk}.j
   actor puppet (`group.visible = !puppet`) nhưng vẫn chạy máy trạng thái → bong bóng/vòng đỏ trạng thái run (đang chạy, chờ duyệt ✋, đang
   hỏi ❓…) chép sang avatar (`walk.setStatus(coord.bubble)`); thẻ đỏ "cần duyệt" bám theo avatar. Actor puppet không bấm được, không có nhãn,
   không tính "agent gần". Tắt đi bộ → `puppet = false`, actor AI hiện lại.
-- Điểm xuất hiện (`deskSpawn`): chỗ đứng `stand` cạnh ghế giám đốc trong phòng điều phối viên, nhìn về phía bàn; bị chặn → ô trống gần nhất
-  còn trong phòng; không được → `spawnPoint`.
+- Điểm xuất hiện (`doorSpawn`, từ 2026-11-04): ngay ngoài cửa phòng điều phối viên, nhìn vào giữa văn phòng (đứng cạnh bàn thì camera góc
+  thứ ba kẹt sát tường bắc). Không được → `deskSpawn` (chỗ đứng `stand` cạnh ghế giám đốc; bị chặn → ô trống gần nhất còn trong phòng) → `spawnPoint`.
 
 ## 2. Ngồi bàn → ra lệnh
 - Đứng cách ghế ≤ `SIT_R` = 1,3 m → gợi ý "[E] Ngồi vào bàn (ra lệnh)". E → `walk.sit(world.mgrSpot)` (tư thế gõ phím, khoá phím đi / bấm sàn,

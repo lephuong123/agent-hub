@@ -46,7 +46,7 @@ export class Board {
     this.canvas = document.createElement('canvas');
     this.canvas.width = px; this.canvas.height = Math.round((px * h) / w);
     this.tex = tex(this.canvas);
-    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: this.tex, toneMapped: false }));
+    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: this.tex, toneMapped: false, fog: false }));
     this.mesh.userData.focus = { kind, label, board: this };
     this.sig = null;
   }
@@ -214,7 +214,8 @@ export class TextSprite {
     this.canvas.width = px; this.canvas.height = py;
     this.tex = tex(this.canvas);
     const o = opts || {};
-    this.sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.tex, transparent: true, depthTest: o.depthTest !== false, depthWrite: false }));
+    this.sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.tex, transparent: true, depthTest: o.depthTest !== false, depthWrite: false,
+      toneMapped: false, fog: false }));
     this.sprite.scale.set(worldW, (worldW * py) / px, 1);
     this.sprite.renderOrder = o.order || 20;
     this.sig = null;
@@ -233,8 +234,9 @@ export class TextSprite {
 // Thẻ thông tin nhân vật đang chọn (bay cạnh nhân vật).
 export function drawCard(ts, info) {
   ts.draw(JSON.stringify(info), (ctx, W, H) => {
-    ctx.fillStyle = 'rgba(255,253,248,0.97)'; roundRect(ctx, 6, 6, W - 12, H - 12, 28); ctx.fill();
-    ctx.strokeStyle = info.color || '#c96442'; ctx.lineWidth = 6; ctx.stroke();
+    ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.16)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
+    ctx.fillStyle = 'rgba(255,253,248,0.97)'; roundRect(ctx, 6, 6, W - 12, H - 12, 28); ctx.fill(); ctx.restore();
+    ctx.strokeStyle = info.color || '#c96442'; ctx.lineWidth = 6; roundRect(ctx, 6, 6, W - 12, H - 12, 28); ctx.stroke();
     ctx.fillStyle = info.color || '#c96442'; ctx.beginPath(); ctx.arc(46, 54, 14, 0, Math.PI * 2); ctx.fill();
     ctx.textBaseline = 'middle'; ctx.fillStyle = '#1f1e1d'; ctx.font = '700 38px ' + FONT;
     ctx.fillText(fitText(ctx, info.name, W - 110), 74, 54);
@@ -280,7 +282,8 @@ export function drawCard(ts, info) {
 // Thẻ đỏ trên đầu agent có approval đang chờ.
 export function drawApprovalTag(ts, a, waitingHuman) {
   ts.draw(JSON.stringify([a.tool, a.klass, a.preview, waitingHuman]), (ctx, W, H) => {
-    ctx.fillStyle = waitingHuman ? '#c4483a' : '#c47a1a'; roundRect(ctx, 4, 4, W - 8, H - 8, 20); ctx.fill();
+    ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.2)'; ctx.shadowBlur = 6; ctx.shadowOffsetY = 2;
+    ctx.fillStyle = waitingHuman ? '#c4483a' : '#c47a1a'; roundRect(ctx, 6, 4, W - 12, H - 12, 24); ctx.fill(); ctx.restore();
     ctx.fillStyle = '#ffffff'; ctx.textBaseline = 'middle'; ctx.font = '800 30px ' + FONT;
     ctx.fillText(fitText(ctx, (waitingHuman ? '✋ Chờ bạn duyệt · ' : 'Chờ duyệt · ') + (a.tool || '?') + (a.klass ? ' [' + a.klass + ']' : ''), W - 40), 22, 40);
     ctx.font = '500 24px ui-monospace, Menlo, monospace'; ctx.fillStyle = '#ffe9e4';

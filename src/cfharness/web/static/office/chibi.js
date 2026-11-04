@@ -1,5 +1,8 @@
-/* Văn phòng 3D — nhân vật chibi dựng thủ tục từ hình khối (đầu to ~ bằng thân, tay chân ngắn có khớp để chuyển động).
- * Mô hình nhìn về +z khi rotation.y = 0. Tư thế = góc đích cho từng khớp, nội suy mượt + dao động cộng thêm (đi, gõ phím…). */
+/* Văn phòng 3D — nhân vật chibi kiểu tượng vinyl (designer toy), dựng thủ tục từ hình khối (đầu to, tay chân ngắn có khớp).
+ * Mô hình nhìn về +z khi rotation.y = 0. Tư thế = góc đích cho từng khớp, nội suy mượt + dao động cộng thêm (đi, gõ phím…).
+ * Cả thân là MỘT SkinnedMesh gộp mọi chi tiết (màu ở vertex color), mỗi khớp là một Bone cứng (trọng số 1): body, chân trái/phải,
+ * tay trái/phải, đầu, mắt (chớp = scale.y của bone mắt) → 1 draw call / chibi + nhãn/bong bóng khi hiện. Bóng blob của MỌI chibi là một
+ * InstancedMesh chung (1 draw call cho cả văn phòng), ma trận cập nhật mỗi khung trong scene.onBeforeRender (docs/dev-notes/office-3d-visual.md §9, §15). */
 import * as THREE from '../vendor/three-0.169.0/three.module.min.js';
 import { hashStr, seeded, mat, basic, geo, labelSprite, bubbleTexture, scaleLabel } from './util.js';
 
@@ -7,9 +10,99 @@ const SKIN = ['#f7d7c4', '#f1c6a6', '#e0ac87', '#c98f68', '#a8714f', '#fbe1cf'];
 const HAIR = ['#3b2a20', '#5a3b28', '#1f1b1a', '#8a5a3b', '#d8a657', '#b4513a', '#6b4f8a', '#2f4858', '#e7c9a0'];
 const PANTS = ['#4a4e69', '#3d405b', '#5c4d3c', '#2f3e46', '#6d597a'];
 const STYLES = ['short', 'bob', 'pony', 'buns', 'spiky', 'ahoge'];
+const SHOE = '#2d2622', SOLE = '#d9d2c5', VEST = '#3a3f58', GEAR = '#2d2d33';
 
 export const SIT_POSES = new Set(['sit', 'type', 'typeFast', 'headInHands', 'sleep', 'relax', 'sitDrink', 'sitThink', 'sitRead', 'sitPhone']);
 const HIP_Y = 0.26;
+// sọ: elipxoit bán trục (A, B, C), tâm y = SKULL_Y trong nhóm đầu
+const SA = 0.3, SB = 0.279, SC = 0.285, SKULL_Y = 0.29;
+const BLOB_R = 0.34, BLOB_SIT = 0.42 / 0.34;
+
+// Vật liệu dùng chung (một lần cho mọi chibi). Màu từng chi tiết nằm ở vertex color, độ nhám ở attribute `rough`
+// (mắt 0.15 bóng, còn lại 0.6) → cả chibi 1 vật liệu = 1 draw call. Tier 'low' (setChibiQuality): Lambert + vertex color, không rim.
+let _mats = null, _quality = 'high';
+function mats() {
+  if (_mats) return _mats;
+  const vinyl = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0 });
+  vinyl.onBeforeCompile = (sh) => {
+    sh.vertexShader = 'attribute float rough;\nvarying float vRough;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvRough = rough;');
+    sh.fragmentShader = 'varying float vRough;\n' + sh.fragmentShader
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = vRough;')
+      // viền sáng nhẹ ở mép (kiểu nhựa vinyl dưới đèn softbox) — rẻ, không thêm draw call; mắt (nhám thấp) không có viền
+      .replace('#include <opaque_fragment>',
+        'outgoingLight += vec3(1.0, 0.96, 0.9) * pow(1.0 - saturate(dot(normal, normalize(vViewPosition))), 3.0) * 0.2 * step(0.3, vRough);\n#include <opaque_fragment>');
+  };
+  vinyl.customProgramCacheKey = () => 'cfh-vinyl-rim2';
+  const low = new THREE.MeshLambertMaterial({ vertexColors: true });
+  _mats = { vinyl, low };
+  return _mats;
+}
+const bodyMat = () => (_quality === 'low' ? mats().low : mats().vinyl);
+
+const _live = new Set(); // chibi đang sống — đổi tier áp cho cả chibi có sẵn, bóng blob lặp qua đây
+
+// Tier chất lượng nhân vật: 'high' = vinyl PBR + rim, 'low' = Lambert vertex color. Gọi được trước khi có chibi nào và gọi lặp lại.
+export function setChibiQuality(tier) {
+  const q = tier === 'low' ? 'low' : 'high';
+  if (q === _quality) return;
+  _quality = q;
+  const m = bodyMat();
+  for (const c of _live) for (const mesh of c._mats) mesh.material = m;
+}
+
+// Bóng blob dưới chân: radial đen 0.45 → 0. MỌI chibi chung một InstancedMesh (1 draw call); `chibi.shadow` vẫn là Mesh riêng
+// nhưng visible = false (chỉ để bấm/raycast như cũ — Raycaster không xét visible).
+let _blob = null;
+function blobMat() {
+  if (_blob) return _blob;
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const ctx = c.getContext('2d');
+  const gr = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(0,0,0,0.45)'); gr.addColorStop(0.55, 'rgba(0,0,0,0.3)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = gr; ctx.fillRect(0, 0, 64, 64);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  _blob = new THREE.MeshBasicMaterial({ map: t, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2,
+    toneMapped: false, fog: false });
+  return _blob;
+}
+const blobGeo = () => geo('blob', () => new THREE.PlaneGeometry(BLOB_R * 2, BLOB_R * 2));
+let _blobs = null;
+const _bm = new THREE.Matrix4(), _bw = new THREE.Matrix4(), _sv = new THREE.Vector3();
+// Gắn InstancedMesh bóng vào scene chứa chibi (lần đầu / khi scene đổi / khi cần thêm chỗ) + móc cập nhật trước mỗi lần vẽ.
+function ensureBlobs(scene) {
+  const need = Math.max(32, _live.size);
+  if (_blobs && _blobs.parent === scene && _blobs.instanceMatrix.count >= need) return;
+  let cap = _blobs ? _blobs.instanceMatrix.count : 32;
+  while (cap < need) cap *= 2;
+  if (_blobs) { _blobs.removeFromParent(); _blobs.dispose(); }
+  _blobs = new THREE.InstancedMesh(blobGeo(), blobMat(), cap);
+  _blobs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  _blobs.count = 0; _blobs.frustumCulled = false; _blobs.renderOrder = 1; _blobs.name = 'chibiBlobs';
+  _blobs.raycast = () => {}; // không bấm được (bấm qua chibi.shadow như cũ)
+  scene.add(_blobs);
+  if (!scene.userData.cfhBlobHook) {
+    const prev = scene.onBeforeRender;
+    scene.onBeforeRender = function (...a) { if (prev) prev.apply(this, a); syncBlobs(this); };
+    scene.userData.cfhBlobHook = true;
+  }
+}
+function syncBlobs(scene) {
+  if (!_blobs || _blobs.parent !== scene) return;
+  let n = 0;
+  for (const c of _live) {
+    let o = c.group, ok = false;
+    while (o && o.visible) { if (o === scene) { ok = true; break; } o = o.parent; }
+    if (!ok) continue;
+    const s = c._blobS;
+    _bm.makeRotationX(-Math.PI / 2).scale(_sv.set(s, s, s)).setPosition(0, 0.006, 0);
+    _blobs.setMatrixAt(n++, _bw.multiplyMatrices(c.group.matrixWorld, _bm));
+    if (n >= _blobs.instanceMatrix.count) break;
+  }
+  _blobs.count = n;
+  _blobs.instanceMatrix.needsUpdate = true;
+}
 
 function shade(hex, k) {
   const c = new THREE.Color(hex);
@@ -17,9 +110,75 @@ function shade(hex, k) {
   c.setHSL(hsl.h, Math.min(1, hsl.s * (0.85 + 0.3 * k)), Math.max(0.18, Math.min(0.8, hsl.l + (k - 0.5) * 0.18)));
   return '#' + c.getHexString();
 }
+function mix(a, b, k) { return '#' + new THREE.Color(a).lerp(new THREE.Color(b), k).getHexString(); }
+function darker(hex, k) { const c = new THREE.Color(hex); c.multiplyScalar(k); return '#' + c.getHexString(); }
 
-function capsule(r, len) { return geo('cap' + r + ':' + len, () => new THREE.CapsuleGeometry(r, len, 4, 10)); }
-function hairCap(r, theta) { return geo('hair' + r + ':' + theta, () => new THREE.SphereGeometry(r, 18, 12, 0, Math.PI * 2, 0, theta)); }
+function capsule(r, len) { return geo('cap' + r + ':' + len, () => new THREE.CapsuleGeometry(r, len, 3, 10)); }
+function hairCap(r, theta) { return geo('hair' + r + ':' + theta, () => new THREE.SphereGeometry(r, 20, 11, 0, Math.PI * 2, 0, theta)); }
+const sph = (r, ws, hs) => geo('vs' + r + ':' + ws + ':' + hs, () => new THREE.SphereGeometry(r, ws, hs));
+
+// thân: tiện xoay profile bo (hông 0.16 → eo 0.14 → vai 0.17 → cổ), cao 0.3, gốc y = 0
+function torsoGeo() {
+  return geo('torsoLathe', () => {
+    const P = [[0, 0], [0.1, 0.002], [0.148, 0.018], [0.16, 0.05], [0.152, 0.1], [0.142, 0.145], [0.152, 0.2], [0.168, 0.245],
+      [0.166, 0.275], [0.14, 0.3], [0.09, 0.318], [0.05, 0.324], [0, 0.326]];
+    return new THREE.LatheGeometry(P.map(([x, y]) => new THREE.Vector2(x, y)), 16);
+  });
+}
+
+const _q = new THREE.Quaternion(), _e = new THREE.Euler(), _v = new THREE.Vector3(), _s = new THREE.Vector3(), _z = new THREE.Vector3(0, 0, 1);
+// ma trận từ vị trí + góc Euler + tỉ lệ
+function M(x, y, z, rx, ry, rz, sx, sy, sz) {
+  _e.set(rx || 0, ry || 0, rz || 0);
+  return new THREE.Matrix4().compose(_v.set(x, y, z), _q.setFromEuler(_e), _s.set(sx || 1, sy == null ? sx || 1 : sy, sz == null ? sx || 1 : sz));
+}
+// điểm trên mặt sọ theo hướng (dx, dy, dz), đẩy ra `off` theo pháp tuyến → ma trận đặt chi tiết "dán" lên mặt (trục z = pháp tuyến)
+function onSkull(dx, dy, dz, off, spin, sx, sy, sz) {
+  const d = new THREE.Vector3(dx, dy, dz).normalize();
+  const t = 1 / Math.sqrt((d.x / SA) ** 2 + (d.y / SB) ** 2 + (d.z / SC) ** 2);
+  const p = d.multiplyScalar(t);
+  const n = new THREE.Vector3(p.x / (SA * SA), p.y / (SB * SB), p.z / (SC * SC)).normalize();
+  p.addScaledVector(n, off || 0); p.y += SKULL_Y;
+  const q = new THREE.Quaternion().setFromUnitVectors(_z, n);
+  if (spin) q.multiply(new THREE.Quaternion().setFromAxisAngle(_z, spin));
+  return new THREE.Matrix4().compose(p, q, _s.set(sx || 1, sy || 1, sz || 1));
+}
+
+// Gộp các chi tiết [{ g: geometry, m: Matrix4, c: màu, r?: độ nhám (mặc định 0.6), b?: chỉ số bone }] thành 1 BufferGeometry
+// non-indexed: position, normal, color, rough (+ skinIndex/skinWeight cứng khi skin = true).
+function mergeColored(parts, skin) {
+  const list = [];
+  let n = 0;
+  for (const p of parts) {
+    const g = p.g.index ? p.g.toNonIndexed() : p.g.clone();
+    g.applyMatrix4(p.m);
+    list.push([g, new THREE.Color(p.c), p.r == null ? 0.6 : p.r, p.b || 0]);
+    n += g.attributes.position.count;
+  }
+  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), col = new Float32Array(n * 3), rough = new Float32Array(n);
+  const si = skin ? new Uint16Array(n * 4) : null, sw = skin ? new Float32Array(n * 4) : null;
+  let o = 0;
+  for (const [g, c, r, b] of list) {
+    const cnt = g.attributes.position.count;
+    pos.set(g.attributes.position.array, o * 3);
+    nor.set(g.attributes.normal.array, o * 3);
+    for (let i = 0; i < cnt; i++) {
+      const j = o + i;
+      col[j * 3] = c.r; col[j * 3 + 1] = c.g; col[j * 3 + 2] = c.b; rough[j] = r;
+      if (skin) { si[j * 4] = b; sw[j * 4] = 1; }
+    }
+    o += cnt;
+    g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  out.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  out.setAttribute('rough', new THREE.BufferAttribute(rough, 1));
+  if (skin) { out.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4)); out.setAttribute('skinWeight', new THREE.BufferAttribute(sw, 4)); }
+  out.computeBoundingSphere();
+  return out;
+}
 
 export class Chibi {
   constructor(opts) {
@@ -27,127 +186,164 @@ export class Chibi {
     this.isManager = !!opts.isManager;
     const skin = SKIN[h % SKIN.length];
     const hairC = HAIR[(h >>> 3) % HAIR.length];
-    const shirt = shade(opts.color, rnd());
+    const shirt = shade(mix(opts.color, '#8a8580', 0.2), rnd());
     const pants = PANTS[(h >>> 7) % PANTS.length];
     const style = STYLES[(h >>> 11) % STYLES.length];
+    this._geos = [];
+    this._mats = []; // mesh dùng vật liệu thân (đổi khi đổi tier)
 
     const g = this.group = new THREE.Group();
     g.userData.actorId = opts.id;
-    const body = this.body = new THREE.Group();
-    g.add(body);
+    // khung xương cứng: mỗi khớp một Bone (vẫn là Object3D — đạo cụ gắn vào tay như cũ)
+    const bone = (parent, x, y, z) => { const o = new THREE.Bone(); o.position.set(x, y, z); parent.add(o); return o; };
+    const body = this.body = bone(g, 0, 0, 0);
+    this.legL = bone(body, -0.09, HIP_Y, 0); this.legR = bone(body, 0.09, HIP_Y, 0);
+    this.armL = bone(body, -0.2, 0.53, 0); this.armR = bone(body, 0.2, 0.53, 0);
+    const head = this.head = bone(body, 0, 0.6, 0);
+    const eyeY = onSkull(0.105, -0.04, 0.265, 0).elements[13];
+    const eyes = bone(head, 0, eyeY, 0);
+    const bones = [body, this.legL, this.legR, this.armL, this.armR, head, eyes];
+    const parts = [];
+    const add = (b, list) => { for (const q of list) { q.b = b; parts.push(q); } };
 
-    // bóng giả dưới chân (không dùng shadow map)
-    const sh = new THREE.Mesh(geo('shadow', () => new THREE.CircleGeometry(0.32, 20)), basic('#000000', { transparent: true, opacity: 0.16, depthWrite: false }));
-    sh.rotation.x = -Math.PI / 2; sh.position.y = 0.012; g.add(sh);
+    // bóng blob dưới chân (không dùng shadow map): vẽ chung qua InstancedMesh; mesh riêng ẩn chỉ để raycast như cũ
+    const sh = new THREE.Mesh(blobGeo(), blobMat());
+    sh.rotation.x = -Math.PI / 2; sh.position.y = 0.006; sh.renderOrder = 1; sh.visible = false; g.add(sh);
     this.shadow = sh;
+    this._blobS = 1;
 
-    // chân
-    const mkLeg = (x) => {
-      const p = new THREE.Group(); p.position.set(x, HIP_Y, 0);
-      const leg = new THREE.Mesh(capsule(0.075, 0.1), mat(pants)); leg.position.y = -0.11; p.add(leg);
-      const shoe = new THREE.Mesh(geo('shoe', () => new THREE.SphereGeometry(0.08, 10, 8)), mat('#3a302a'));
-      shoe.scale.set(1, 0.65, 1.35); shoe.position.set(0, -0.22, 0.03); p.add(shoe);
-      body.add(p); return p;
-    };
-    this.legL = mkLeg(-0.09); this.legR = mkLeg(0.09);
+    // chân: ống quần + giày bo + đế sáng
+    for (const b of [1, 2]) add(b, [
+      { g: capsule(0.075, 0.1), m: M(0, -0.11, 0), c: pants },
+      { g: sph(0.08, 12, 8), m: M(0, -0.205, 0.035, 0, 0, 0, 1, 0.55, 1.4), c: SHOE },
+      { g: geo('sole', () => new THREE.CylinderGeometry(0.079, 0.079, 0.018, 12)), m: M(0, -0.247, 0.035, 0, 0, 0, 1, 1, 1.4), c: SOLE },
+    ]);
 
-    // thân
-    const torso = new THREE.Mesh(capsule(0.17, 0.14), mat(shirt));
-    torso.position.y = 0.43; torso.scale.set(1, 1, 0.85); body.add(torso);
+    // thân: áo (lathe) + cạp quần + cổ áo; điều phối viên: vest + sơ mi chữ V + cà vạt
+    const top = this.isManager ? VEST : shirt;
+    const tparts = [
+      { g: torsoGeo(), m: M(0, 0.27, 0, 0, 0, 0, 1, 1, 0.85), c: top },
+      { g: geo('waist', () => new THREE.CylinderGeometry(0.158, 0.163, 0.07, 16)), m: M(0, 0.29, 0, 0, 0, 0, 1, 1, 0.85), c: pants },
+    ];
     if (this.isManager) {
-      // áo vest tối + cà vạt đỏ
-      torso.material = mat('#3a3f58');
-      const shirtV = new THREE.Mesh(geo('vee', () => new THREE.ConeGeometry(0.07, 0.16, 3)), mat('#ffffff'));
-      shirtV.rotation.x = Math.PI; shirtV.position.set(0, 0.52, 0.135); body.add(shirtV);
-      const tie = new THREE.Mesh(geo('tie', () => new THREE.ConeGeometry(0.035, 0.2, 4)), mat('#c8413a'));
-      tie.rotation.x = Math.PI; tie.position.set(0, 0.45, 0.15); body.add(tie);
+      tparts.push({ g: geo('vee', () => new THREE.ConeGeometry(0.07, 0.16, 3)), m: M(0, 0.52, 0.128, Math.PI, 0, 0, 1, 1, 0.5), c: '#ffffff' });
+      tparts.push({ g: geo('tie', () => new THREE.ConeGeometry(0.03, 0.18, 4)), m: M(0, 0.47, 0.142, Math.PI, 0, 0, 1, 1, 0.5), c: '#c8413a' });
+      tparts.push({ g: geo('knot', () => new THREE.SphereGeometry(0.022, 8, 6)), m: M(0, 0.565, 0.13), c: '#c8413a' });
+    } else {
+      tparts.push({ g: geo('collar', () => new THREE.TorusGeometry(0.105, 0.02, 6, 20)), m: M(0, 0.585, 0, Math.PI / 2, 0, 0, 1, 0.85, 1), c: '#f6f3ee' });
     }
+    add(0, tparts);
 
-    // tay
-    const mkArm = (x) => {
-      const p = new THREE.Group(); p.position.set(x, 0.53, 0);
-      const arm = new THREE.Mesh(capsule(0.055, 0.1), mat(this.isManager ? '#3a3f58' : shirt)); arm.position.y = -0.09; p.add(arm);
-      const hand = new THREE.Mesh(geo('hand', () => new THREE.SphereGeometry(0.06, 10, 8)), mat(skin)); hand.position.y = -0.2; p.add(hand);
-      body.add(p); return p;
-    };
-    this.armL = mkArm(-0.2); this.armR = mkArm(0.2);
+    // tay: tay áo + bàn tay hơi dẹt
+    for (const b of [3, 4]) add(b, [
+      { g: capsule(0.056, 0.115), m: M(0, -0.1, 0), c: top },
+      { g: sph(0.06, 10, 8), m: M(0, -0.222, 0, 0, 0, 0, 0.82, 1, 0.95), c: skin },
+    ]);
     // cốc cà phê và quyển sách gắn vào tay phải (ẩn mặc định)
     this.cup = new THREE.Group();
-    const cupM = new THREE.Mesh(geo('cup', () => new THREE.CylinderGeometry(0.045, 0.038, 0.09, 10)), mat('#ffffff'));
-    const coffee = new THREE.Mesh(geo('coffee', () => new THREE.CircleGeometry(0.04, 10)), mat('#6b4226'));
-    coffee.rotation.x = -Math.PI / 2; coffee.position.y = 0.046;
-    this.cup.add(cupM, coffee); this.cup.position.set(0, -0.24, 0.05); this.cup.visible = false; this.armR.add(this.cup);
+    const cupMesh = new THREE.Mesh(geo('cupM', () => mergeColored([
+      { g: new THREE.CylinderGeometry(0.045, 0.038, 0.09, 12), m: M(0, 0, 0), c: '#ffffff' },
+      { g: new THREE.CircleGeometry(0.04, 12), m: M(0, 0.046, 0, -Math.PI / 2, 0, 0), c: '#6b4226' },
+      { g: new THREE.TorusGeometry(0.025, 0.008, 6, 10), m: M(0.048, 0, 0), c: '#ffffff' },
+    ])), bodyMat());
+    this._mats.push(cupMesh);
+    this.cup.add(cupMesh);
+    this.cup.position.set(0, -0.24, 0.05); this.cup.visible = false; this.armR.add(this.cup);
     this.book = new THREE.Mesh(UNIT(), mat(['#c8413a', '#4f8fc0', '#7fb069', '#e9b44c'][h % 4]));
     this.book.scale.set(0.2, 0.03, 0.15); this.book.position.set(-0.08, -0.25, 0.06); this.book.visible = false; this.armR.add(this.book);
     // điện thoại (rảnh ngồi bàn xem điện thoại — tư thế sitPhone)
     this.phone = new THREE.Mesh(UNIT(), mat('#2b2d33'));
     this.phone.scale.set(0.07, 0.012, 0.13); this.phone.position.set(-0.04, -0.25, 0.05); this.phone.visible = false; this.armR.add(this.phone);
 
-    // đầu
-    const head = this.head = new THREE.Group(); head.position.set(0, 0.6, 0); body.add(head);
-    const skull = new THREE.Mesh(geo('skull', () => new THREE.SphereGeometry(0.3, 22, 16)), mat(skin));
-    skull.position.y = 0.29; skull.scale.set(1.04, 0.96, 1); head.add(skull);
-    const eyeG = geo('eye', () => new THREE.SphereGeometry(0.045, 12, 10));
-    this.eyes = [];
-    for (const sx of [-0.105, 0.105]) {
-      const eye = new THREE.Group(); eye.position.set(sx, 0.25, 0.265);
-      const e = new THREE.Mesh(eyeG, basic('#2a211c')); e.scale.set(0.85, 1.15, 0.5); eye.add(e);
-      const hl = new THREE.Mesh(geo('hl', () => new THREE.SphereGeometry(0.015, 6, 6)), basic('#ffffff')); hl.position.set(0.015, 0.02, 0.022); eye.add(hl);
-      head.add(eye); this.eyes.push(eye);
-      const blush = new THREE.Mesh(geo('blush', () => new THREE.CircleGeometry(0.045, 14)), basic('#f39a9a', { transparent: true, opacity: 0.55 }));
-      blush.position.set(sx * 1.6, 0.17, 0.262 - Math.abs(sx) * 0.18); blush.rotation.y = sx > 0 ? 0.55 : -0.55; head.add(blush);
+    // đầu: sọ + tai + má hồng + miệng + lông mày + tóc (+ tai nghe điều phối viên)
+    const brow = mix(darker(hairC, 0.6), '#2a1d17', 0.45);
+    const hp = [
+      { g: sph(0.3, 24, 16), m: M(0, SKULL_Y, 0, 0, 0, 0, SA / 0.3, SB / 0.3, SC / 0.3), c: skin },
+      { g: geo('mouth', () => new THREE.TorusGeometry(0.028, 0.008, 6, 12, Math.PI)), m: onSkull(0, -0.15, 1, 0.002, Math.PI), c: '#7a3b2e' },
+    ];
+    for (const s of [-1, 1]) {
+      hp.push({ g: sph(0.055, 8, 6), m: M(s * 0.292, SKULL_Y - 0.03, -0.01, 0, 0, 0, 0.45, 0.9, 0.75), c: skin }); // tai
+      hp.push({ g: geo('blush', () => new THREE.CircleGeometry(0.048, 16)), m: onSkull(s * 0.175, -0.1, 0.25, 0.003, 0, 1, 0.68, 1), c: mix(skin, '#f39a9a', 0.4) });
+      hp.push({ g: geo('brow', () => new THREE.BoxGeometry(0.068, 0.017, 0.03)), m: onSkull(s * 0.11, 0.042, 0.26, 0.006, s * -0.14), c: brow });
     }
-    const mouth = new THREE.Mesh(geo('mouth', () => new THREE.TorusGeometry(0.03, 0.008, 6, 12, Math.PI)), basic('#7a3b2e'));
-    mouth.rotation.z = Math.PI; mouth.position.set(0, 0.16, 0.285); head.add(mouth);
-    this.mouth = mouth;
-
-    // tóc (chỏm cầu nghiêng ra sau: che trán + gáy, chừa mặt)
-    const hm = mat(hairC);
-    const cap = new THREE.Mesh(hairCap(0.318, style === 'bob' ? 2.05 : 1.8), hm);
-    cap.position.y = 0.3; cap.rotation.x = -0.6; head.add(cap);
-    const fringe = new THREE.Mesh(hairCap(0.322, 0.75), hm); // mái trước
-    fringe.position.y = 0.3; fringe.rotation.x = 0.35; head.add(fringe);
+    // tóc: chỏm cầu nghiêng ra sau (che đỉnh + gáy), mái trước, lọn mái dẹt (bớt "mũ bảo hiểm")
+    hp.push({ g: hairCap(0.318, style === 'bob' ? 2.05 : 1.8), m: M(0, SKULL_Y + 0.01, 0, -0.6, 0, 0, 1, 0.95, 0.97), c: hairC });
+    hp.push({ g: hairCap(0.322, 0.75), m: M(0, SKULL_Y + 0.01, 0, 0.35, 0, 0, 1, 0.95, 0.97), c: hairC });
+    const locks = style === 'spiky' ? [[0, 0.3, 0.95, 0]] : [[-0.17, 0.31, 0.9, 0.35], [0.0, 0.35, 0.95, 0], [0.18, 0.31, 0.9, -0.35]];
+    for (const [x, y, z, rz] of locks) {
+      hp.push({ g: sph(0.085, 10, 6), m: onSkull(x, y, z, 0.012, rz, 1.05, 0.72, 0.32), c: hairC });
+    }
+    if (style === 'bob') for (const s of [-1, 1]) hp.push({ g: sph(0.1, 12, 10), m: M(s * 0.27, SKULL_Y - 0.08, -0.04, 0, 0, s * 0.15, 0.5, 1.15, 0.95), c: hairC });
     if (style === 'pony') {
-      const tail = new THREE.Mesh(capsule(0.08, 0.2), hm); tail.position.set(0, 0.32, -0.36); tail.rotation.x = 0.55; head.add(tail);
-      this.tail = tail;
+      hp.push({ g: capsule(0.08, 0.2), m: M(0, 0.32, -0.36, 0.55, 0, 0), c: hairC });
+      hp.push({ g: geo('tie2', () => new THREE.TorusGeometry(0.06, 0.018, 6, 14)), m: M(0, 0.4, -0.3, 0.55 + Math.PI / 2, 0, 0), c: '#e07a5f' });
     } else if (style === 'buns') {
-      for (const sx of [-0.21, 0.21]) { const b = new THREE.Mesh(geo('bun', () => new THREE.SphereGeometry(0.1, 12, 10)), hm); b.position.set(sx, 0.52, -0.05); head.add(b); }
+      for (const sx of [-0.21, 0.21]) hp.push({ g: sph(0.1, 14, 10), m: M(sx, 0.52, -0.05), c: hairC });
     } else if (style === 'spiky') {
-      const cg = geo('spike', () => new THREE.ConeGeometry(0.07, 0.17, 6));
+      const cg = geo('spike', () => new THREE.ConeGeometry(0.07, 0.17, 8));
       for (let i = 0; i < 5; i++) {
-        const s = new THREE.Mesh(cg, hm), a = (i - 2) * 0.35;
-        s.position.set(Math.sin(a) * 0.2, 0.55 + Math.cos(a) * 0.04, -0.04 - Math.abs(a) * 0.05); s.rotation.z = -a * 0.9; s.rotation.x = -0.25; head.add(s);
+        const a = (i - 2) * 0.35;
+        hp.push({ g: cg, m: M(Math.sin(a) * 0.2, 0.55 + Math.cos(a) * 0.04, -0.04 - Math.abs(a) * 0.05, -0.25, 0, -a * 0.9), c: hairC });
       }
     } else if (style === 'ahoge') {
-      const s = new THREE.Mesh(geo('ahoge', () => new THREE.TorusGeometry(0.07, 0.016, 6, 12, Math.PI * 1.2)), hm);
-      s.position.set(0.02, 0.66, 0); s.rotation.y = Math.PI / 2; head.add(s);
+      hp.push({ g: geo('ahoge', () => new THREE.TorusGeometry(0.07, 0.016, 6, 12, Math.PI * 1.2)), m: M(0.02, 0.66, 0, 0, Math.PI / 2, 0), c: hairC });
     }
     if (this.isManager) {
       // tai nghe: vòng qua đầu + chụp tai + mic
-      const band = new THREE.Mesh(geo('band', () => new THREE.TorusGeometry(0.33, 0.022, 8, 24, Math.PI)), mat('#2d2d33'));
-      band.position.y = 0.3; head.add(band);
-      for (const sx of [-0.32, 0.32]) { const cupE = new THREE.Mesh(geo('ear', () => new THREE.CylinderGeometry(0.075, 0.075, 0.05, 14)), mat('#2d2d33')); cupE.rotation.z = Math.PI / 2; cupE.position.set(sx, 0.28, 0); head.add(cupE); }
-      const mic = new THREE.Mesh(capsule(0.012, 0.2), mat('#2d2d33')); mic.position.set(0.25, 0.2, 0.14); mic.rotation.set(1.3, 0, 0.6); head.add(mic);
-      const tip = new THREE.Mesh(geo('mictip', () => new THREE.SphereGeometry(0.025, 8, 6)), mat('#c8413a')); tip.position.set(0.17, 0.15, 0.24); head.add(tip);
+      hp.push({ g: geo('band', () => new THREE.TorusGeometry(0.33, 0.022, 8, 24, Math.PI)), m: M(0, 0.3, 0), c: GEAR });
+      for (const sx of [-0.32, 0.32]) hp.push({ g: geo('ear', () => new THREE.CylinderGeometry(0.075, 0.075, 0.05, 16)), m: M(sx, 0.28, 0, 0, 0, Math.PI / 2), c: GEAR });
+      hp.push({ g: capsule(0.012, 0.2), m: M(0.25, 0.2, 0.14, 1.3, 0, 0.6), c: GEAR });
+      hp.push({ g: geo('mictip', () => new THREE.SphereGeometry(0.025, 8, 6)), m: M(0.17, 0.15, 0.24), c: '#c8413a' });
     }
+    add(5, hp);
+
+    // mắt (bone riêng — chớp = scale.y): lòng đen nâu sẫm + con ngươi + 2 điểm sáng, nhám thấp (bóng), không viền rim
+    const ep = [];
+    for (const s of [-1, 1]) {
+      const base = onSkull(s * 0.105, -0.04, 0.265, -0.004);
+      base.elements[13] -= eyeY; // về gốc bone mắt
+      const at = (x, y, z, sx, sy, sz) => base.clone().multiply(M(x, y, z, 0, 0, 0, sx, sy, sz));
+      ep.push({ g: sph(0.05, 12, 9), m: at(0, 0, 0, 0.85, 1.15, 0.45), c: '#3a2519', r: 0.15 });
+      ep.push({ g: sph(0.03, 8, 6), m: at(0, -0.008, 0.012, 0.85, 1.1, 0.45), c: '#120c09', r: 0.15 });
+      ep.push({ g: sph(0.016, 6, 4), m: at(0.014, 0.024, 0.02, 1, 1, 0.5), c: '#ffffff', r: 0.15 });
+      ep.push({ g: sph(0.008, 5, 4), m: at(-0.012, -0.022, 0.02, 1, 1, 0.5), c: '#ffffff', r: 0.15 });
+    }
+    add(6, ep);
+    this.eyes = [eyes];
+
+    // gộp mọi chi tiết về không gian nhóm (tư thế gốc) → 1 SkinnedMesh, mỗi đỉnh bám cứng 1 bone
+    g.updateMatrixWorld(true);
+    for (const q of parts) q.m = bones[q.b].matrixWorld.clone().multiply(q.m);
+    const bg = mergeColored(parts, true);
+    this._geos.push(bg);
+    const sk = this.mesh = new THREE.SkinnedMesh(bg, bodyMat());
+    sk.receiveShadow = true;
+    // bao đủ mọi tư thế (tay giơ cao, ngồi): frustum cull + lọc raycast không phải tính lại theo xương
+    sk.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.62, 0), 0.95);
+    g.add(sk);
+    g.updateMatrixWorld(true);
+    sk.bind(new THREE.Skeleton(bones), sk.matrixWorld);
+    this._mats.push(sk);
+    _live.add(this);
 
     // vòng dưới chân: đỏ = chờ bạn duyệt; cam = đang chọn
-    this.ringRed = new THREE.Mesh(geo('ringR', () => new THREE.RingGeometry(0.36, 0.46, 32)), basic('#e0443a', { transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide }));
+    const ringO = { transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false, fog: false };
+    this.ringRed = new THREE.Mesh(geo('ringR', () => new THREE.RingGeometry(0.36, 0.46, 32)), basic('#e0443a', Object.assign({ opacity: 0.85 }, ringO)));
     this.ringRed.rotation.x = -Math.PI / 2; this.ringRed.position.y = 0.02; this.ringRed.visible = false; g.add(this.ringRed);
-    this.ringSel = new THREE.Mesh(geo('ringS', () => new THREE.RingGeometry(0.5, 0.58, 40)), basic('#d97757', { transparent: true, opacity: 0.95, depthWrite: false, side: THREE.DoubleSide }));
+    this.ringSel = new THREE.Mesh(geo('ringS', () => new THREE.RingGeometry(0.5, 0.58, 40)), basic('#d97757', Object.assign({ opacity: 0.95 }, ringO)));
     this.ringSel.rotation.x = -Math.PI / 2; this.ringSel.position.y = 0.025; this.ringSel.visible = false; g.add(this.ringSel);
 
     // nhãn tên + bong bóng
     this.label = null;
     this.setLabel(opts.name, opts.color);
-    this.bubble = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false }));
+    this.bubble = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthWrite: false, toneMapped: false, fog: false }));
     this.bubble.scale.set(0.55, 0.55, 1); this.bubble.position.y = 2.0; this.bubble.visible = false; this.bubble.renderOrder = 6;
     g.add(this.bubble);
     this._bubbleKey = '';
 
     if (this.isManager) g.scale.setScalar(1.08);
     this.pose = 'stand';
-    this.cur = { lL: 0, lR: 0, aLx: 0, aRx: 0, aLz: 0.12, aRz: -0.12, hx: 0, hz: 0, hy: 0, by: 0 };
+    this.cur = { lL: 0, lR: 0, aLx: 0, aRx: 0, aLz: 0.12, aRz: -0.12, hx: 0, hz: 0, hy: 0, by: 0, lean: 0 };
     this.phase = rnd() * 10; this.walkPhase = 0; this.blinkAt = 1 + rnd() * 4; this.blink = 0;
     this.walking = false; this.seatY = 0.3;
   }
@@ -156,7 +352,7 @@ export class Chibi {
     if (this._labelText === name + '|' + color) return;
     this._labelText = name + '|' + color;
     if (this.label) { this.group.remove(this.label); this.label.material.map.dispose(); this.label.material.dispose(); }
-    this.label = labelSprite(name, color, { scale: this.isManager ? 1.35 : 1.2 });
+    this.label = labelSprite(name, color, { scale: this.isManager ? 1.25 : 1.05 });
     this.label.position.y = 1.62;
     this.group.add(this.label);
   }
@@ -180,7 +376,7 @@ export class Chibi {
     const p = this.pose, c = this.cur, w = this.walking;
     const sit = SIT_POSES.has(p) && !w;
     // góc đích
-    let lL = 0, lR = 0, aLx = 0, aRx = 0, aLz = 0.14, aRz = -0.14, hx = 0, hz = 0, hy = 0, by = 0;
+    let lL = 0, lR = 0, aLx = 0, aRx = 0, aLz = 0.14, aRz = -0.14, hx = 0, hz = 0, hy = 0, by = 0, lean = 0;
     let eyesClosed = false;
     this.cup.visible = (p === 'drink' || p === 'sitDrink') && !w;
     this.book.visible = (p === 'read' || p === 'sitRead') && !w;
@@ -201,12 +397,15 @@ export class Chibi {
     }
     // dao động cộng thêm
     this.phase += dt;
+    let blob = sit ? BLOB_SIT : 1;
     if (!reduced) {
       if (w) {
         this.walkPhase += dt * 9;
         const s = Math.sin(this.walkPhase);
         lL = s * 0.65; lR = -s * 0.65; aLx = -s * 0.55; aRx = s * 0.55;
         by += Math.abs(Math.cos(this.walkPhase)) * 0.05;
+        lean = 0.07; // nghiêng người nhẹ về trước khi đi
+        blob *= 1 - Math.abs(Math.cos(this.walkPhase)) * 0.1 + 0.05; // bóng co giãn ±5 % theo nhịp nảy
       } else if (p === 'type' || p === 'typeFast' || p === 'standType') {
         const f = p === 'typeFast' ? 24 : 13;
         aLx += Math.sin(this.phase * f) * 0.12; aRx += Math.sin(this.phase * f + 1.7) * 0.12;
@@ -230,7 +429,7 @@ export class Chibi {
     const k = reduced ? 1 : 1 - Math.exp(-dt * 12);
     c.lL += (lL - c.lL) * k; c.lR += (lR - c.lR) * k;
     c.aLx += (aLx - c.aLx) * k; c.aRx += (aRx - c.aRx) * k; c.aLz += (aLz - c.aLz) * k; c.aRz += (aRz - c.aRz) * k;
-    c.hx += (hx - c.hx) * k; c.hz += (hz - c.hz) * k; c.hy += (hy - c.hy) * k; c.by += (by - c.by) * k;
+    c.hx += (hx - c.hx) * k; c.hz += (hz - c.hz) * k; c.hy += (hy - c.hy) * k; c.by += (by - c.by) * k; c.lean += (lean - c.lean) * k;
     this.legL.rotation.x = c.lL; this.legR.rotation.x = c.lR;
     this.armL.rotation.set(c.aLx, 0, c.aLz); this.armR.rotation.set(c.aRx, 0, c.aRz);
     // tay giơ cao dài ra một chút để thấy rõ trên đầu to
@@ -238,7 +437,13 @@ export class Chibi {
     this.armR.scale.y += (ry - this.armR.scale.y) * k;
     this.head.rotation.set(c.hx, c.hy, c.hz);
     this.body.position.y = c.by;
-    this.shadow.scale.setScalar(sit ? 1.15 : 1);
+    this.body.rotation.x = c.lean;
+    this.shadow.scale.setScalar(blob);
+    this._blobS = blob;
+    // bóng blob chung: gắn InstancedMesh vào scene đang chứa chibi (rẻ — chỉ so sánh khi đã gắn)
+    let root = this.group;
+    while (root.parent) root = root.parent;
+    if (root.isScene && (!_blobs || _blobs.parent !== root || _blobs.instanceMatrix.count < _live.size)) ensureBlobs(root);
 
     // chớp mắt
     let ey = 1;
@@ -248,7 +453,7 @@ export class Chibi {
       if (this.blinkAt < 0) { this.blink = 0.14; this.blinkAt = 2.5 + Math.random() * 4; }
       if (this.blink > 0) { this.blink -= dt; ey = 0.15; }
     }
-    this.eyes[0].scale.y = this.eyes[1].scale.y = ey;
+    for (const e of this.eyes) e.scale.y = ey;
 
     // bong bóng nảy + lắc nhẹ; vòng đỏ nhấp nháy
     if (this.bubble.visible) {
@@ -269,6 +474,10 @@ export class Chibi {
   dispose() {
     if (this.label) { this.label.material.map.dispose(); this.label.material.dispose(); }
     this.bubble.material.dispose();
+    for (const g of this._geos) g.dispose(); // hình gộp riêng từng chibi (geometry chung qua geo() thì không)
+    this._geos = [];
+    if (this.mesh && this.mesh.skeleton) this.mesh.skeleton.dispose(); // bone texture riêng
+    _live.delete(this);
   }
 }
 

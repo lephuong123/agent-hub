@@ -10,6 +10,7 @@ import * as THREE from './vendor/three-0.169.0/three.module.min.js';
 import { OrbitControls } from './vendor/three-0.169.0/OrbitControls.js';
 import { World, layoutKey } from './office/world.js';
 import { Actor, STATUS_VI } from './office/actors.js';
+import { setChibiQuality } from './office/chibi.js';
 import { NO_TEAM_COLOR, scaleLabel, declutter } from './office/util.js';
 import { drawHud, drawKanban, drawRuns, drawNeeds, drawCard, drawApprovalTag, drawSign, TextSprite, fmtUsd } from './office/boards.js';
 import { makeApi, Modals, createFlows } from './office/flows.js';
@@ -17,6 +18,7 @@ import { createChat } from './office/chat.js';
 import { FONT, roundRect } from './office/util.js';
 import { Walker, walkBusy, hintShown, hintLayout, coordinatorOf, nearDesk } from './office/walk.js';
 import { createTalk } from './office/talk.js';
+import { setTier, makeEnvironment } from './office/materials.js';
 
 const $ = (id) => document.getElementById(id);
 const KCOL_VI = { ready: 'Sẵn sàng', running: 'Đang làm', review: 'Review', blocked: 'Kẹt' };
@@ -60,9 +62,23 @@ function main() {
     renderer = null;
   }
   const cvs = renderer ? renderer.domElement : document.createElement('canvas');
+  // Chất lượng (docs/dev-notes/office-3d-visual.md §3): 'high' = PBR + env map + bóng tĩnh; 'low' = Lambert, không bóng/env, pixelRatio 1.
+  // Máy yếu (≤ 4 nhân + màn dày) hoặc đã tự hạ trong tab này (sessionStorage) → low; FPS < 24 hai cửa sổ đo liền → tự hạ (không tự nâng).
+  let tier = 'high';
+  try { if (sessionStorage.getItem('cfh_office_q') === 'low') tier = 'low'; } catch (_) { /* bỏ qua */ }
+  if ((navigator.hardwareConcurrency || 8) <= 4 && (window.devicePixelRatio || 1) >= 2) tier = 'low';
+  const pixelRatio = () => (tier === 'high' ? Math.min(window.devicePixelRatio || 1, 1.5) : 1);
+  setTier(tier, { aniso: renderer ? renderer.capabilities.getMaxAnisotropy() : 4 });
+  setChibiQuality(tier); // nhân vật theo cùng tier (vinyl PBR ↔ Lambert)
   if (renderer) {
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.setPixelRatio(pixelRatio());
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    renderer.shadowMap.enabled = tier === 'high';
+    // PCFSoft (lọc song tuyến): PCF thường + radius cho mép bóng bậc thang khi nhìn gần (đi bộ) — đo trên Iris Xe không tụt FPS
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.autoUpdate = false;          // bóng TĨNH: chỉ vẽ lại khi world.shadowDirty
     host.appendChild(cvs);
     cvs.setAttribute('aria-hidden', 'true');
   }
@@ -77,15 +93,28 @@ function main() {
   controls.minDistance = 3; controls.maxDistance = 70;
   controls.screenSpacePanning = false;
 
-  function applyTheme() {
-    const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-    scene.background = new THREE.Color(dark ? '#262624' : '#faf9f5');
+  // env map tự dựng (PMREM) — chỉ tier high; mất context → dựng lại (webglcontextrestored)
+  let envTex = null;
+  function applyEnv() {
+    if (!renderer) return;
+    if (tier === 'high') { if (!envTex) envTex = makeEnvironment(renderer); scene.environment = envTex; }
+    else { scene.environment = null; if (envTex) { envTex.dispose(); envTex = null; } } // low: không giữ PMREM (render target) trên GPU
   }
+  applyEnv();
+  scene.fog = new THREE.Fog('#faf9f5', 60, 140);
+  let dark = false;
+  function applyTheme() {
+    dark = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    scene.background = new THREE.Color(dark ? '#262624' : '#faf9f5');
+    scene.fog.color.copy(scene.background);
+    if (renderer) renderer.toneMappingExposure = dark ? 0.92 : 1.0;
+    if (world) world.setTheme(dark);
+  }
+  let world = null, wkey = '', state = null, stopped = false;
   applyTheme();
   const mqDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   if (mqDark && mqDark.addEventListener) mqDark.addEventListener('change', applyTheme);
 
-  let world = null, wkey = '', state = null, stopped = false;
   const actors = new Map();
   let selected = null, focusBoard = null;
   let conn = 'connecting', lostAt = 0;
@@ -370,7 +399,7 @@ function main() {
       for (const a of actors.values()) a.attach(world);
       chat.mount(world);
       if (walk.active) syncIdentity();
-      world.setDaylight(hourNow());
+      world.setDaylight(hourNow()); world.setTheme(dark);
       if (walk.active) { walk.setWorld(world); near = null; }
       if (walkBtn && renderer && !noRender) walkBtn.hidden = false;
       fitCamera();
@@ -726,8 +755,28 @@ function main() {
     if (world && state) drawHud(world.boards.hud, { hub: state.hub, task_counts: state.task_counts, conn });
   }
 
+  // Hạ chất lượng (tự động khi FPS thấp): đổi tier vật liệu, tắt bóng/env, pixelRatio 1, dựng lại World theo đường layoutKey sẵn có.
+  function setQuality(t) {
+    if (!renderer || t === tier) return;
+    tier = t;
+    setTier(t, { aniso: renderer.capabilities.getMaxAnisotropy() });
+    setChibiQuality(t);
+    if (t === 'low') { try { sessionStorage.setItem('cfh_office_q', 'low'); } catch (_) { /* bỏ qua */ } }
+    renderer.setPixelRatio(pixelRatio()); resize();
+    renderer.shadowMap.enabled = t === 'high';
+    applyEnv();
+    wkey = ''; if (state) applyState(state);
+    scene.traverse((o) => { if (o.material) [].concat(o.material).forEach((m) => { m.needsUpdate = true; }); });
+  }
+  // fog: toàn cảnh → nhà rõ, nền đất tan vào nền trang; đi bộ / nhìn gần → không mờ gì trong nhà
+  function syncFog() {
+    const cd = walk.active ? 0 : camera.position.distanceTo(controls.target), k = Math.min(1, Math.max(0, (cd - 15) / 25));
+    scene.fog.near = 40 + (cd * 1.05 - 40) * k; scene.fog.far = 140 + (cd * 2.4 - 140) * k;
+    if (world) world.setLampsVisible(walk.active || cd < 26);
+  }
+  let dbgAt = 0, dbgFrames = 0, shadowFrames = 0;
   // ------------------------------------------------------------ vòng vẽ (≤ 30 FPS, dừng khi ẩn)
-  let raf = 0, last = 0, lastDraw = 0, fpsFrames = 0, fpsStart = 0, uiAt = 0, prevRaf = 0, prevGap = 0, slowWins = 0;
+  let raf = 0, last = 0, lastDraw = 0, fpsFrames = 0, fpsStart = 0, uiAt = 0, prevRaf = 0, prevGap = 0, slowWins = 0, lowWins = 0;
   const tmp = new THREE.Vector3();
   function frame(ts) {
     raf = requestAnimationFrame(frame);
@@ -735,7 +784,7 @@ function main() {
     // bỏ cửa sổ đo đang dở, đo lại. Khung nào cũng > 1 s (chậm thật) thì vẫn đo bình thường → fallback.
     const gap = prevRaf ? ts - prevRaf : 0;
     // cửa sổ không có focus (đang ở app khác): Chrome/Windows điều tiết rAF xuống ~1 FPS dù tab vẫn "visible" → không đo
-    if ((gap > 1000 && prevGap < 250) || !document.hasFocus()) { fpsStart = ts + 1000; fpsFrames = 0; slowWins = 0; }
+    if ((gap > 1000 && prevGap < 250) || !document.hasFocus()) { fpsStart = ts + 1000; fpsFrames = 0; slowWins = 0; lowWins = 0; }
     prevRaf = ts; prevGap = gap;
     if (ts - lastDraw < 1000 / 30 - 3) return;
     const dt = Math.min(0.1, last ? (ts - last) / 1000 : 0.016);
@@ -801,7 +850,26 @@ function main() {
     chat.update();
     talk.update();
     if (toastTs.sprite.visible && performance.now() > toastUntil) toastTs.sprite.visible = false;
+    syncFog();
+    if (world) {
+      scene.environmentIntensity = world.envInt;
+      // bóng tĩnh: vẽ lại shadow map vài khung sau khi World báo đổi (khung đầu sau khi dựng có thể chưa đủ — đo thực tế)
+      // đi bộ (tier high): shadow camera thu nhỏ quanh avatar → bóng nét khi nhìn gần; tâm dời xa mới vẽ lại 1 khung
+      if (tier === 'high') { if (walk.active && walk.pos) world.setShadowFocus(walk.pos.x, walk.pos.z, walk.view); else world.setShadowFocus(null); }
+      if (world.shadowDirty) { shadowFrames = 3; world.shadowDirty = false; }
+      if (world.shadowRefocus) { shadowFrames = Math.max(shadowFrames, 1); world.shadowRefocus = false; }
+      if (shadowFrames > 0) { shadowFrames--; renderer.shadowMap.needsUpdate = true; }
+    }
     renderer.render(scene, camera);
+    // gỡ lỗi cho QA: #debug3d → mỗi 2 s ghi số draw call / tam giác / FPS / tier vào data-office3d (không log, không chữ agent)
+    dbgFrames++;
+    if (ts - dbgAt >= 2000) {
+      if (location.hash.indexOf('debug3d') >= 0) {
+        const ri = renderer.info.render;
+        document.documentElement.dataset.office3d = JSON.stringify({ calls: ri.calls, triangles: ri.triangles, fps: Math.round((dbgFrames * 10000) / (ts - dbgAt)) / 10, tier });
+      }
+      dbgAt = ts; dbgFrames = 0;
+    }
     // đo FPS: bỏ 2 s đầu, cửa sổ 5 s; chỉ tắt 3D khi CHẬM LIÊN TỤC 3 cửa sổ liền (15 s), một lần giật không tính
     if (!fpsStart) fpsStart = ts + 2000;
     if (ts >= fpsStart) {
@@ -809,6 +877,7 @@ function main() {
       if (ts - fpsStart >= 5000) {
         const fps = fpsFrames / ((ts - fpsStart) / 1000);
         fpsFrames = 0; fpsStart = ts;
+        if (tier === 'high') { lowWins = fps < 24 ? lowWins + 1 : 0; if (lowWins >= 2) { lowWins = 0; slowWins = 0; setQuality('low'); fpsStart = 0; fpsFrames = 0; return; } }
         slowWins = fps < 10 ? slowWins + 1 : 0;
         if (slowWins >= 3) disableRender('slow');
       }
@@ -849,7 +918,7 @@ function main() {
       t.add(tmp); camera.position.add(tmp);
     }
   }
-  function start() { if (!raf && !stopped && !noRender && !ctxLost && renderer) { last = 0; lastDraw = 0; fpsStart = 0; fpsFrames = 0; prevRaf = 0; prevGap = 0; slowWins = 0; raf = requestAnimationFrame(frame); } }
+  function start() { if (!raf && !stopped && !noRender && !ctxLost && renderer) { last = 0; lastDraw = 0; fpsStart = 0; fpsFrames = 0; prevRaf = 0; prevGap = 0; slowWins = 0; lowWins = 0; raf = requestAnimationFrame(frame); } }
   function pause() { if (raf) cancelAnimationFrame(raf); raf = 0; }
   document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); else start(); });
 
@@ -866,6 +935,8 @@ function main() {
   });
   cvs.addEventListener('webglcontextrestored', () => {
     ctxLost = false; clearTimeout(lostT);
+    if (envTex) { envTex.dispose(); envTex = null; }
+    applyEnv(); shadowFrames = 3;
     if (!document.hidden) start();
   });
   function disableRender(reason) {
