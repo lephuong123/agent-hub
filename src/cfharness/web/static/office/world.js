@@ -241,7 +241,8 @@ export class World {
     this.dir.castShadow = true;
     const L = Math.hypot(W, D) * 0.62, sc = this.dir.shadow.camera;
     sc.left = -L; sc.right = L; sc.top = L; sc.bottom = -L; sc.near = 1; sc.far = 3 * Math.max(W, D); sc.updateProjectionMatrix();
-    this.dir.shadow.mapSize.set(2048, 2048); this.dir.shadow.bias = -0.0004; this.dir.shadow.normalBias = 0.03; this.dir.shadow.radius = 2.5;
+    this.dir.shadow.mapSize.set(1024, 1024); // 1024 cả toàn cảnh lẫn đi bộ (phase 2: refocus khi đi bộ rẻ hơn; không cấp lại render target)
+    this.dir.shadow.bias = -0.0004; this.dir.shadow.normalBias = 0.03; this.dir.shadow.radius = 2.5;
     this.dir.target.position.set(W / 2, 0, D / 2);
     this._shadowL = L; this._sunOff = new THREE.Vector3(); this._focus = null;
     this.shadowRefocus = false;  // office.js: true → vẽ lại shadow map 1 khung (tâm bóng đi theo avatar)
@@ -1136,7 +1137,7 @@ export class World {
     this.batch.dispose();
     if (this.lampBatch) this.lampBatch.dispose();
     for (const im of [this.ledMesh, this.books]) if (im) { im.geometry.dispose(); im.material.dispose(); im.dispose(); }
-    // shadow map 2048² của đèn nắng (WebGLRenderTarget) — không dispose thì mỗi lần dựng lại World rò một render target
+    // shadow map 1024² của đèn nắng (WebGLRenderTarget) — không dispose thì mỗi lần dựng lại World rò một render target
     for (const l of [this.dir, this.fill, this.hemi]) if (l) l.dispose();
     this.group.removeFromParent();
   }
