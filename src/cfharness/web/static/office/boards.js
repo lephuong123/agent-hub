@@ -231,26 +231,58 @@ export class TextSprite {
   dispose() { this.tex.dispose(); this.sprite.material.dispose(); this.sprite.removeFromParent(); }
 }
 
-// Thẻ thông tin nhân vật đang chọn (bay cạnh nhân vật).
+// Nền thẻ (bo góc + bóng đổ mềm + viền màu team) vẽ MỘT lần mỗi (cỡ, màu) vào canvas riêng: shadowBlur trên canvas 640×560
+// từng tốn 13–32 ms mỗi lần vẽ lại thẻ khi CPU bị tranh. Mỗi lần vẽ thẻ chỉ còn drawImage + chữ.
+const _cardBg = new Map();
+function cardBg(W, H, color, r, lw) {
+  const k = W + 'x' + H + color + r;
+  let c = _cardBg.get(k);
+  if (c) return c;
+  c = document.createElement('canvas'); c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.16)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
+  ctx.fillStyle = 'rgba(255,253,248,0.97)'; roundRect(ctx, 6, 6, W - 12, H - 12, r); ctx.fill(); ctx.restore();
+  ctx.strokeStyle = color; ctx.lineWidth = lw; roundRect(ctx, 6, 6, W - 12, H - 12, r); ctx.stroke();
+  if (_cardBg.size > 64) _cardBg.clear();
+  _cardBg.set(k, c);
+  return c;
+}
+
+// Dải trạng thái nhỏ (640×80) gắn TRÊN thẻ nhân vật: trạng thái + nơi đang ở + tool — phần đổi thường xuyên (sự kiện tool mỗi vài
+// giây) chỉ upload ~200 KB thay vì cả thẻ 1,4 MB.
+export function drawCardStatus(ts, info) {
+  ts.draw(JSON.stringify([info.status, info.statusKey, info.where, info.tool, info.color]), (ctx, W, H) => {
+    ctx.drawImage(cardBg(W, H, info.color || '#c96442', 22, 4), 0, 0);
+    ctx.textBaseline = 'middle'; ctx.font = '700 26px ' + FONT;
+    const st = info.status, sw = ctx.measureText(st).width + 36, sc = STATUS_COLOR[info.statusKey] || '#73726c';
+    ctx.fillStyle = sc; roundRect(ctx, 22, 18, sw, 44, 22); ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.fillText(st, 40, 41);
+    let x = 36 + sw;
+    if (info.where) {
+      ctx.fillStyle = '#73726c'; ctx.font = '500 22px ' + FONT;
+      const wt = fitText(ctx, info.where, Math.max(60, (W - x - 30) * 0.45));
+      ctx.fillText(wt, x, 41); x += ctx.measureText(wt).width + 18;
+    }
+    if (info.tool && info.tool !== '—') {
+      ctx.fillStyle = '#2d2a24'; ctx.font = '500 22px ui-monospace, Menlo, monospace';
+      ctx.fillText(fitText(ctx, '⚙ ' + info.tool, W - x - 24), x, 41);
+    }
+  });
+}
+
+// Thẻ thông tin nhân vật đang chọn (bay cạnh nhân vật). Phần ít đổi; trạng thái/nơi/tool ở dải drawCardStatus.
 export function drawCard(ts, info) {
-  ts.draw(JSON.stringify(info), (ctx, W, H) => {
-    ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.16)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
-    ctx.fillStyle = 'rgba(255,253,248,0.97)'; roundRect(ctx, 6, 6, W - 12, H - 12, 28); ctx.fill(); ctx.restore();
-    ctx.strokeStyle = info.color || '#c96442'; ctx.lineWidth = 6; roundRect(ctx, 6, 6, W - 12, H - 12, 28); ctx.stroke();
+  const sig = JSON.stringify([info.id, info.name, info.manager, info.color, info.role, info.team, info.task, info.run, info.approval, info.actions]);
+  ts.draw(sig, (ctx, W, H) => {
+    ctx.drawImage(cardBg(W, H, info.color || '#c96442', 28, 6), 0, 0);
     ctx.fillStyle = info.color || '#c96442'; ctx.beginPath(); ctx.arc(46, 54, 14, 0, Math.PI * 2); ctx.fill();
     ctx.textBaseline = 'middle'; ctx.fillStyle = '#1f1e1d'; ctx.font = '700 38px ' + FONT;
     ctx.fillText(fitText(ctx, info.name, W - 110), 74, 54);
     ctx.fillStyle = '#73726c'; ctx.font = '500 22px ui-monospace, Menlo, monospace';
     ctx.fillText(fitText(ctx, (info.manager ? 'Điều phối viên · ' : '') + info.id, W - 90), 34, 98);
-    // trạng thái (viên thuốc)
-    ctx.font = '700 26px ' + FONT;
-    const st = info.status, sw = ctx.measureText(st).width + 36, sc = STATUS_COLOR[info.statusKey] || '#73726c';
-    ctx.fillStyle = sc; roundRect(ctx, 30, 124, sw, 44, 22); ctx.fill();
-    ctx.fillStyle = '#ffffff'; ctx.fillText(st, 48, 147);
-    if (info.where) { ctx.fillStyle = '#73726c'; ctx.font = '500 22px ' + FONT; ctx.fillText(fitText(ctx, info.where, W - sw - 80), 44 + sw, 147); }
-    const rows = [['Vai trò', info.role], ['Team', info.team], ['Việc', info.task], ['Tool', info.tool], ['Run', info.run]];
+    const rows = [['Vai trò', info.role], ['Team', info.team], ['Việc', info.task], ['Run', info.run]];
     if (info.approval) rows.push(['Cần duyệt', info.approval]);
-    let y = 200;
+    let y = 150;
     for (const [k, v] of rows) {
       ctx.fillStyle = '#73726c'; ctx.font = '600 23px ' + FONT; ctx.fillText(k, 34, y);
       ctx.fillStyle = k === 'Cần duyệt' ? '#c4483a' : '#2d2a24';

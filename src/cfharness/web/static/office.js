@@ -15,6 +15,7 @@ import { NO_TEAM_COLOR, scaleLabel, declutter } from './office/util.js';
 import { createPacer } from './office/pacer.js';
 import { watchdogStep } from './office/pacer.js';
 import { drawHud, drawKanban, drawRuns, drawNeeds, drawCard, drawApprovalTag, drawSign, TextSprite, fmtUsd } from './office/boards.js';
+import { drawCardStatus } from './office/boards.js';
 import { makeApi, Modals, createFlows } from './office/flows.js';
 import { createChat } from './office/chat.js';
 import { FONT, roundRect, fitText, iconCanvas } from './office/util.js';
@@ -137,6 +138,9 @@ function main() {
   // ------------------------------------------------------------ vật thể chữ trong cảnh
   const card = new TextSprite(640, 560, 2.7, { depthTest: false, order: 30 });
   card.sprite.visible = false; scene.add(card.sprite);
+  const cardSt = new TextSprite(640, 80, 2.7, { depthTest: false, order: 31 }); // dải trạng thái/tool trên thẻ
+  cardSt.sprite.visible = false; scene.add(cardSt.sprite);
+  let cardAt = -1;
   const sign = new TextSprite(1200, 320, 10, { depthTest: false, order: 40 });
   sign.sprite.visible = false; scene.add(sign.sprite);
   const tags = new Map(); // agentId → TextSprite thẻ đỏ "cần duyệt"
@@ -483,7 +487,7 @@ function main() {
     // vẽ THẬT một lần vào ô 1×1 (scissor) kèm pass bóng: biên dịch program bóng (depth/skinning), cấp bone texture của nhân vật,
     // upload texture canvas (gợi ý, thông báo, thẻ, biển) — để khung đầu khi vào đi bộ / chọn agent không phải làm việc này
     try {
-      for (const ts of [hint, toastTs, card, sign]) renderer.initTexture(ts.tex);
+      for (const ts of [hint, toastTs, card, cardSt, sign]) renderer.initTexture(ts.tex);
       const sm = renderer.shadowMap, nu = sm.needsUpdate;
       sm.needsUpdate = sm.enabled;
       renderer.setScissorTest(true); renderer.setScissor(0, 0, 1, 1);
@@ -617,11 +621,12 @@ function main() {
   function select(id, fly) {
     if (selected && actors.get(selected)) actors.get(selected).selected = false;
     selected = id && actors.has(id) ? id : null;
-    card.sprite.visible = !!selected && !!renderer;
+    card.sprite.visible = cardSt.sprite.visible = !!selected && !!renderer;
     if (selected) {
       focusBoard = null;
       const act = actors.get(selected);
       act.selected = true;
+      const ci = cardInfo(act); drawCard(card, ci); drawCardStatus(cardSt, ci); cardAt = perfNow(); // vẽ ngay khi chọn (không chờ)
       if (fly !== false) flyToActor(act);
     }
     renderList(); renderSrPanel();
@@ -851,9 +856,9 @@ function main() {
   // đo hiệu năng chỉ khi gỡ lỗi (#perf3d / #uncap3d — office/perf.js); không bật thì perf = null
   const pf = perfFlags(), perf = createPerf(renderer, () => ({ tier, actors: actors.size, walk: walk.active }));
   // ------------------------------------------------------------ vòng vẽ (động ≈ 60 FPS / yên 30 FPS, dừng khi ẩn)
-  let raf = 0, lastDraw = 0, uiAt = 0, prevRaf = 0, wd = {};
+  let raf = 0, lastDraw = 0, uiAt = 0, uiStep = -1, prevRaf = 0, wd = {};
   let kicked = false, camMoved = false;
-  const tmp = new THREE.Vector3(), camWas = new THREE.Matrix4();
+  const tmp = new THREE.Vector3(), tmpUp = new THREE.Vector3(), camWas = new THREE.Matrix4();
   // có tương tác (chuột/chạm/lăn/phím) → khung tới tính là chuyển động (pacer giữ nhịp động thêm 150 ms)
   function kick() { kicked = true; }
   // cảnh "đang động" theo nghĩa người dùng nhìn thấy: camera dời/xoay (kể cả OrbitControls còn trôi), tween, đi bộ đang bước
@@ -917,10 +922,18 @@ function main() {
       controls.update();
     }
     // thẻ nhân vật cạnh nhân vật (phía phải theo camera)
+    // thẻ: vị trí mỗi khung; nội dung tối đa 4 lần/s, vẽ trong rAF mà pacer bỏ qua (hoặc sau ≤ 250 ms)
     const act = selected && actors.get(selected);
     if (act && act.pos) {
-      drawCard(card, cardInfo(act));
+      if (now - cardAt > 0.25) {
+        cardAt = now;
+        const sel = selected;
+        pacer.onSkip(() => { const a = actors.get(sel); if (a && sel === selected) { const ci = cardInfo(a); drawCard(card, ci); drawCardStatus(cardSt, ci); } }, 'card');
+      }
       card.sprite.position.copy(cardPos(act));
+      // dải trạng thái ngay trên mép trên thẻ (sprite quay theo camera → dời theo trục "lên" của camera)
+      tmpUp.setFromMatrixColumn(camera.matrixWorld, 1);
+      cardSt.sprite.position.copy(card.sprite.position).addScaledVector(tmpUp, card.sprite.scale.y / 2 + cardSt.sprite.scale.y / 2 + 0.04);
     }
     for (const [id, ts2] of tags) {
       const a = actors.get(id), ap2 = a && a.puppet && walk.active ? walk.pos : a && a.pos; // thẻ đỏ của điều phối viên theo avatar
@@ -929,11 +942,14 @@ function main() {
       scaleLabel(ts2.sprite, Math.min(lf, 2));
       ts2.sprite.position.set(ap2.x, 2.55 + (lf - 1) * 0.5, ap2.z);
     }
-    if (now - uiAt > 1) {
-      uiAt = now;
-      if (world && state) drawRuns(world.boards.runs, state.runs || [], names, Date.now());
-      if (world) world.setDaylight(hourNow());
-      renderList(); renderSrPanel(); syncSign();
+    // việc mỗi giây chia ra nhiều khung (mỗi khung một việc; DOM ngoài rAF) — trước: dồn vào một khung (~6 ms khi CPU bị tranh)
+    if (uiStep < 0 && now - uiAt > 1) { uiAt = now; uiStep = 0; }
+    if (uiStep >= 0) {
+      const k = uiStep++;
+      if (k === 0) { if (world && state) drawRuns(world.boards.runs, state.runs || [], names, Date.now()); }
+      else if (k === 1) { if (world) world.setDaylight(hourNow()); }
+      else if (k === 2) syncSign();
+      else { uiStep = -1; setTimeout(() => { renderList(); renderSrPanel(); }, 0); }
     }
     modals.update();
     chat.update();
