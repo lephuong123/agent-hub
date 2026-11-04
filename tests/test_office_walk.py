@@ -138,6 +138,16 @@ def test_office_render_loop_perf_contract():
         assert bad not in pacer, bad
 
 
+@pytest.mark.skipif(not NODE, reason="cần Node để dựng World (ES module) không trình duyệt")
+def test_walk_motion_headless():
+    """Động học đi bộ (walk.js): va chạm hình tròn trượt dọc tường liền mạch, qua mọi cửa, không lẹm; bộ điều khiển có vận tốc;
+    camera spring-arm (docs/dev-notes/office-walk.md)."""
+    r = subprocess.run([NODE, str(ROOT / "tests" / "office_walk_motion_check.mjs"), str(ROOT)], capture_output=True, text=True,
+                       encoding="utf-8", timeout=240)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "FAIL" not in r.stdout and r.stdout.count("ok ") >= 5, r.stdout
+
+
 @pytest.mark.skipif(not NODE, reason="cần Node để import office/pacer.js")
 def test_office_pacer_headless():
     """Bộ điều nhịp (pacer.js): 60/30 đúng nhịp màn hình, rAF chậm vẽ mọi rAF, quá tải → khoá đều 30, gai/hitch không khoá,

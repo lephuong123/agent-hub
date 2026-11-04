@@ -443,7 +443,7 @@ export class World {
     B.box(0.7, 1.6, 0.5, rw - 0.6, 0, ROOM_D - 1.2, 'paint', '#e8edf0', { r: 0.03 });
     for (let k = 0; k < 6; k++) B.box(0.52, 0.012, 0.02, rw - 0.6, 1.1 + k * 0.06, ROOM_D - 0.945, 'metal', '#9aa5ad');
     this._aoq(rw - 0.6, ROOM_D - 1.2, 0.7, 0.5);
-    grid.rect(rw - 0.95, ROOM_D - 1.45, rw - 0.25, ROOM_D - 0.95, 0.1);
+    grid.rect(rw - 0.95, ROOM_D - 1.45, rw - 0.25, ROOM_D - 0.95, 0.1, 1, 1.6);
     sign(0, 'Phòng server', '#4f8fc0');
 
     // 1 — thư viện
@@ -486,7 +486,7 @@ export class World {
     B.cyl(0.05, 0.045, 0.1, tcx + 0.2, 0.6, tcz - 0.1, 'ceramic', '#f4f1ea', 14);
     B.box(0.22, 0.03, 0.3, tcx - 0.18, 0.6, tcz + 0.05, 'paint', '#b5473f', { rotY: 0.3 });
     this._aoq(tcx, tcz, 0.7, 0.7, true);
-    grid.rect(tcx - 0.5, tcz - 0.5, tcx + 0.5, tcz + 0.5, 0.05);
+    grid.rect(tcx - 0.5, tcz - 0.5, tcx + 0.5, tcz + 0.5, 0.05, 1, 0.75);
     for (const s of [-1, 1]) {
       const ax = tcx + s * 1.05, TEAL = '#5b8a8c', TD = darker(TEAL, 0.82);
       B.box(0.66, 0.24, 0.66, ax, 0.06, tcz, 'fabric', TD, { r: 0.05, seg: 2 });
@@ -496,7 +496,7 @@ export class World {
       for (const ox of [-0.26, 0.26]) for (const oz of [-0.26, 0.26]) B.cyl(0.02, 0.015, 0.06, ax + ox, 0, tcz + oz, 'walnut', WALNUT, 8);
       this._aoq(ax, tcz, 0.66, 0.66);
       this._spot('library', ax, tcz, s < 0 ? Math.PI / 2 : -Math.PI / 2, 'sitRead', 0.32);
-      grid.rect(ax - 0.31, tcz - 0.31, ax + 0.31, tcz + 0.31, 0.02);
+      grid.rect(ax - 0.31, tcz - 0.31, ax + 0.31, tcz + 0.31, 0.02, 1, 0.95);
     }
     this._plant(lx + rw - 0.6, ROOM_D - 0.7, 1);
     sign(1, 'Thư viện', '#7fb069');
@@ -508,7 +508,7 @@ export class World {
     for (const sx of [-1.0, 1.0]) { B.box(0.06, 0.58, 0.8, mcx + sx, 0.02, mcz, 'metal', BLACK); B.box(0.1, 0.02, 0.9, mcx + sx, 0, mcz, 'metal', BLACK); }
     B.box(1.9, 0.08, 0.04, mcx, 0.48, mcz, 'metal', BLACK);
     this._aoq(mcx, mcz, 2.7, 1.15);
-    grid.rect(mcx - 1.35, mcz - 0.58, mcx + 1.35, mcz + 0.58, 0.08);
+    grid.rect(mcx - 1.35, mcz - 0.58, mcx + 1.35, mcz + 0.58, 0.08, 1, 0.8);
     for (const side of [-1, 1]) for (const ox of [-0.85, 0, 0.85]) {
       const cz = mcz + side * 1.0;
       this._chair(mcx + ox, cz, side, '#b9705c');
@@ -532,7 +532,7 @@ export class World {
     for (const sx of [-0.88, 0.88]) B.box(0.06, 0.64, 0.8, ocx + sx, 0, 2.2, 'walnut', darker(WALNUT, 0.9));
     B.box(0.4, 0.5, 0.6, ocx + 0.55, 0.06, 2.2, 'walnut', darker(WALNUT, 0.95));
     this._aoq(ocx, 2.2, 1.9, 0.85);
-    grid.rect(ocx - 0.95, 1.78, ocx + 0.95, 2.62, 0.08);
+    grid.rect(ocx - 0.95, 1.78, ocx + 0.95, 2.62, 0.08, 1, 1.25);
     // ghế giám đốc (lưng cao) + màn hình hướng về ghế
     this._chair(ocx, 1.3, -1, '#3a3a40', { high: true });
     const mgrScreen = this._monitor(ocx, 2.4, -1, 0.69, 0.72);
@@ -548,7 +548,7 @@ export class World {
     B.box(0.45, 1.3, 1.2, ox0 + 0.4, 0, 2.4, 'walnut', WALNUT, { r: 0.02 });
     for (const oz of [-0.3, 0.3]) for (const y of [0.35, 0.8, 1.15]) B.box(0.02, 0.02, 0.18, ox0 + 0.635, y, 2.4 + oz, 'chrome', '#d0d4d8');
     this._aoq(ox0 + 0.4, 2.4, 0.45, 1.2);
-    grid.rect(ox0 + 0.15, 1.8, ox0 + 0.65, 3.0, 0.08);
+    grid.rect(ox0 + 0.15, 1.8, ox0 + 0.65, 3.0, 0.08, 1, 1.35);
     // màn hình chat với điều phối viên (giai đoạn 2): treo ở vách đông, quay vào trong phòng
     // đặt lệch về phía cửa (z 2.1…5.7) để điều phối viên (ngồi z≈1.3) đứng BÊN CẠNH màn hình, không che chữ
     B.box(0.1, 2.3, 3.9, this.W - 0.08, 0.4, 3.9, 'metal', '#2a2e38', { r: 0.02 });
@@ -642,7 +642,7 @@ export class World {
           if (id) this.seats.set(id, { zone: 'desk', x, z: c.cz + side * 1.35, rot: side < 0 ? 0 : Math.PI, pose: 'sit', seatY: 0.33, owner: id, screen, team: c.id, stand: { x, z: c.cz + side * 1.78 } });
         }
       }
-      this.grid.rect(deskX0 - 0.68, c.cz - 0.8, deskX0 + (c.k - 1) * 1.4 + 0.68, c.cz + 0.8, 0.08);
+      this.grid.rect(deskX0 - 0.68, c.cz - 0.8, deskX0 + (c.k - 1) * 1.4 + 0.68, c.cz + 0.8, 0.08, 1, 1.25); // bàn + màn hình
       // hiệu ứng ESTOP team: lớp đỏ trên sàn + đèn đỏ
       const ov = new THREE.Mesh(new THREE.BoxGeometry(c.w, 0.02, c.d), new THREE.MeshBasicMaterial({ color: '#ff3b30', transparent: true, opacity: 0.3, depthWrite: false }));
       ov.position.set(c.cx, 0.03, c.cz); g.add(ov);
@@ -721,7 +721,7 @@ export class World {
     }
     B.sphere(0.12 * k, x, y + 0.72 * k, z, 'plant', LEAVES[1], 6, { rings: 4, scale: [1, 0.5, 1] });
     this._aoq(x, z, 0.32 * k, 0.32 * k, true);
-    if (!y0) this.grid.rect(x - 0.2 * k, z - 0.2 * k, x + 0.2 * k, z + 0.2 * k, 0.05);
+    if (!y0) this.grid.rect(x - 0.2 * k, z - 0.2 * k, x + 0.2 * k, z + 0.2 * k, 0.05, 1, 1.2 * k);
   }
 
   // ------------------------------------------------------------ khu cafe điện tử (agent rảnh ra ngồi chơi game)
@@ -793,7 +793,7 @@ export class World {
           this._spot('cafe', x, sz, side < 0 ? 0 : Math.PI, 'typeFast', 0.34, { screen, ph: i * 3.1 + j * 0.9 + (side > 0 ? 1.7 : 0), stand: { x, z: bz + side * 1.7 } });
         }
       }
-      grid.rect(first - 0.58, bz - 0.8, first + (c.k - 1) * CAFE_STEP + 0.58, bz + 0.8, 0.08);
+      grid.rect(first - 0.58, bz - 0.8, first + (c.k - 1) * CAFE_STEP + 0.58, bz + 0.8, 0.08, 1, 1.25);
       // cây cao ở hai đầu dãy, trên trục vách ngăn (chỉ khi còn ≥ 0,9 m trống — không chắn lối vòng quanh dãy)
       if ((sx1 - sx0 - span) / 2 >= 0.9) for (const px of [first - 0.95, first + (c.k - 1) * CAFE_STEP + 0.95]) this._plant(px, bz, 0.9);
     }
@@ -810,7 +810,7 @@ export class World {
       B.sphere(0.03, x0 + 0.84, 0.91, az + 0.1, 'emit', '#e9c46a', 8);
       this._aoq(x0 + 0.42, az, 0.6, 0.6);
     }
-    grid.rect(x0, cz - 0.75, x0 + 0.92, cz + 0.75, 0.05);
+    grid.rect(x0, cz - 0.75, x0 + 0.92, cz + 0.75, 0.05, 1, 1.1);
 
     // quầy nước nhỏ sát vách đông: quầy óc chó mặt terrazzo + tủ lạnh kính + ly; 2 chỗ đứng uống (zone cafeBar)
     const len = Math.min(2.4, z1 - z0 - 1.6), qx = x1 - 0.55;
@@ -887,7 +887,7 @@ export class World {
     for (let k = 0; k < 4; k++) B.box(0.01, 0.8, 0.9, 0.83, 0.03, zs + 1.38 + k * 0.95, 'walnut', darker(WALNUT, 0.85));
     B.box(0.82, 0.04, 3.85, 0.45, 0.86, zs + 2.8, 'ceramic', '#f1ede6', { r: 0.01, seg: 2 });
     this._aoq(0.45, zs + 2.8, 0.75, 3.8);
-    grid.rect(0, zs + 0.9, 0.85, zs + 4.7, 0.1);
+    grid.rect(0, zs + 0.9, 0.85, zs + 4.7, 0.1, 1, 2.0); // quầy + tủ treo
     B.box(0.42, 0.48, 0.38, 0.42, 0.9, zs + 1.6, 'paint', '#3a3a40', { r: 0.03 });
     B.box(0.3, 0.06, 0.2, 0.5, 1.2, zs + 1.6, 'chrome', '#c9ccd0');
     B.sphere(0.03, 0.64, 1.33, zs + 1.5, 'emit', '#ff5a4a', 8);
@@ -904,7 +904,7 @@ export class World {
     const hx = 4.0, hz = zs + 3.0;
     B.cyl(0.45, 0.45, 0.04, hx, 0.95, hz, 'wood', WOOD, 32); B.cyl(0.035, 0.035, 0.95, hx, 0, hz, 'metal', BLACK, 10); B.cyl(0.24, 0.26, 0.02, hx, 0, hz, 'metal', BLACK, 24);
     this._aoq(hx, hz, 0.6, 0.6, true);
-    grid.rect(hx - 0.45, hz - 0.45, hx + 0.45, hz + 0.45, 0.05);
+    grid.rect(hx - 0.45, hz - 0.45, hx + 0.45, hz + 0.45, 0.05, 1, 1.0);
     for (const s of [-1, 1]) {
       const sx = hx + s * 0.75;
       B.cyl(0.19, 0.18, 0.06, sx, 0.56, hz, 'fabric', '#d4a446', 20); B.cyl(0.02, 0.02, 0.56, sx, 0, hz, 'chrome', '#c9ccd0', 8);
@@ -917,7 +917,7 @@ export class World {
     // bình nước
     B.box(0.4, 0.9, 0.4, 6.8, 0, zs + 0.7, 'paint', '#dfe6ea', { r: 0.03 }); B.cyl(0.15, 0.15, 0.42, 6.8, 0.9, zs + 0.7, 'plastic', '#9fd3f0', 18);
     this._aoq(6.8, zs + 0.7, 0.4, 0.4);
-    grid.rect(6.6, zs + 0.5, 7.0, zs + 0.9, 0.08);
+    grid.rect(6.6, zs + 0.5, 7.0, zs + 0.9, 0.08, 1, 1.35);
 
     // phòng nghỉ (sofa)
     const lx0 = 8, lx1 = W - 8, lcx = (lx0 + lx1) / 2, lcz = zs + 3, rw2 = Math.min(6, lx1 - lx0 - 0.5);
@@ -936,7 +936,7 @@ export class World {
       B.box(0.36, 0.3, 0.12, lcx - 0.95, 0.42, z + side * 0.12, 'fabric', '#e9c46a', { r: 0.06, seg: 2, rx: side * 0.2, rotY: 0.2 });
       for (const sx of [-1.15, 1.15]) for (const oz of [-0.34, 0.34]) B.cyl(0.025, 0.018, 0.08, lcx + sx, 0, z + oz, 'walnut', WALNUT, 8);
       this._aoq(lcx, z, 2.5, 0.85);
-      grid.rect(lcx - 1.26, z - 0.43, lcx + 1.26, z + 0.43, 0.05);
+      grid.rect(lcx - 1.26, z - 0.43, lcx + 1.26, z + 0.43, 0.05, 1, 0.9);
       for (const sx of [-0.72, 0, 0.72]) this._spot('lounge', lcx + sx, z - side * 0.05, side < 0 ? 0 : Math.PI, 'relax', 0.4);
     };
     sofa(zs + 1.4, -1, '#6f97b0');
@@ -948,7 +948,7 @@ export class World {
     B.cyl(0.16, 0.08, 0.08, lcx + 0.35, 0.36, lcz + 0.1, 'ceramic', '#5b8a8c', 18);
     for (const [ox, oz, cc] of [[0.3, 0.08, '#e9b44c'], [0.4, 0.14, '#c8413a'], [0.36, 0.04, '#7fb069']]) B.sphere(0.05, lcx + ox, 0.46, lcz + oz, 'plastic', cc, 10);
     this._aoq(lcx, lcz, 1.5, 0.8);
-    grid.rect(lcx - 0.75, lcz - 0.4, lcx + 0.75, lcz + 0.4, 0.05);
+    grid.rect(lcx - 0.75, lcz - 0.4, lcx + 0.75, lcz + 0.4, 0.05, 1, 0.55);
     this._plant(lcx - 2.6, zs + 0.7, 1.2); this._plant(lcx + 2.6, zs + 5.3, 1.2);
     // đèn cây (chân đen, chao vải sáng) + vũng sáng ban đêm
     B.cyl(0.015, 0.015, 1.55, lcx + 2.7, 0.02, zs + 1.3, 'metal', BLACK, 8); B.cyl(0.14, 0.16, 0.02, lcx + 2.7, 0, zs + 1.3, 'metal', BLACK, 20);
@@ -966,7 +966,7 @@ export class World {
       for (const sx of [-1.2, 1.2]) { B.box(0.05, 0.28, 0.4, bx + sx, 0, bz, 'metal', BLACK); B.box(0.05, 0.4, 0.04, bx + sx, 0.3, bz - 0.24, 'metal', BLACK); }
       B.box(2.5, 0.03, 0.04, bx, 0.24, bz - 0.1, 'metal', BLACK);
       this._aoq(bx, bz, 2.6, 0.5);
-      grid.rect(bx - 1.3, bz - 0.27, bx + 1.3, bz + 0.25, 0.04);
+      grid.rect(bx - 1.3, bz - 0.27, bx + 1.3, bz + 0.25, 0.04, 1, 0.75);
       for (const sx of [-0.85, 0, 0.85]) this._spot('bench', bx + sx, bz, 0, 'sit', 0.35);
     }
     // thảm lối vào + bảng "Cần bạn" (đứng nghiêng như giá vẽ, quay về phía camera)

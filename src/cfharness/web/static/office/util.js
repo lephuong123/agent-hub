@@ -183,6 +183,21 @@ export function textCanvas(w, h, draw) {
   return texFromCanvas(c);
 }
 
+// Tắt dần theo hàm mũ, độc lập dt: sau thời gian dt còn lại e^(−λ·dt) khoảng cách tới đích. λ = Infinity → tới đích ngay
+// (reduced-motion). Chuỗi khung 1/60 hay 1/30 đều cho cùng quỹ đạo theo thời gian (khác lerp(dt*k) phụ thuộc nhịp khung).
+export function damp(a, b, lambda, dt) {
+  if (lambda === Infinity) return b;
+  return a + (b - a) * (1 - Math.exp(-lambda * dt));
+}
+// Như damp cho góc (radian): đi đường ngắn nhất qua ±π.
+export function dampAngle(a, b, lambda, dt) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  if (lambda === Infinity) return a + d;
+  return a + d * (1 - Math.exp(-lambda * dt));
+}
+
 export function lerpAngle(a, b, t) {
   let d = b - a;
   while (d > Math.PI) d -= Math.PI * 2;

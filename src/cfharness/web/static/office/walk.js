@@ -26,17 +26,38 @@ export function blockedAt(grid, x, z, r) {
   return false;
 }
 
-// Bước đi có va chạm: thử cả bước, không được thì trượt theo từng trục (đi dọc tường không bị kẹt). Bước dài cắt nhỏ ≤ 0,1 m.
-export function slideMove(grid, x, z, dx, dz, r) {
-  const n = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.1));
-  const sx = dx / n, sz = dz / n;
+// Va chạm hình tròn (tâm x, z, bán kính r) với các ô bị chặn của lưới (ngoài lưới = bị chặn): cắt bước thành bước con ≤ r/2; mỗi bước con
+// đẩy tâm ra khỏi mọi ô chạm vào theo PHÁP TUYẾN tới điểm gần nhất của ô (2 vòng — góc trong). Đi chéo vào tường → trượt dọc tường liền
+// mạch (chỉ mất thành phần đâm vào tường), không còn "đổi trục" giật như thử-cả-bước-rồi-từng-trục (tốc độ 2,4 → 0,57 → 2,05 m/s).
+export function circleMove(grid, x, z, dx, dz, r) {
+  const n = Math.max(1, Math.ceil(Math.hypot(dx, dz) / (r * 0.5)));
+  const sx = dx / n, sz = dz / n, cell = grid.cell, mx = grid.minX, mz = grid.minZ;
   for (let i = 0; i < n; i++) {
-    if (!blockedAt(grid, x + sx, z + sz, r)) { x += sx; z += sz; }
-    else if (sx && !blockedAt(grid, x + sx, z, r)) x += sx;
-    else if (sz && !blockedAt(grid, x, z + sz, r)) z += sz;
-    else break;
+    x += sx; z += sz;
+    for (let it = 0; it < 2; it++) {
+      const c0 = Math.floor((x - r - mx) / cell), c1 = Math.floor((x + r - mx) / cell);
+      const r0 = Math.floor((z - r - mz) / cell), r1 = Math.floor((z + r - mz) / cell);
+      for (let rr = r0; rr <= r1; rr++) {
+        for (let cc = c0; cc <= c1; cc++) {
+          if (!grid.blocked(cc, rr)) continue;
+          const ax = mx + cc * cell, az = mz + rr * cell, bx = ax + cell, bz = az + cell;
+          const qx = x < ax ? ax : x > bx ? bx : x, qz = z < az ? az : z > bz ? bz : z;
+          const ex = x - qx, ez = z - qz, d = Math.hypot(ex, ez);
+          if (d >= r) continue;
+          if (d > 1e-9) { x += (ex / d) * (r - d); z += (ez / d) * (r - d); continue; }
+          // tâm nằm trong ô: đẩy theo trục xuyên ít nhất
+          const pl = x - ax, pr = bx - x, pt = z - az, pb = bz - z, m = Math.min(pl, pr, pt, pb);
+          if (m === pl) x = ax - r; else if (m === pr) x = bx + r; else if (m === pt) z = az - r; else z = bz + r;
+        }
+      }
+    }
   }
   return { x, z };
+}
+
+// Bước đi có va chạm (giữ chữ ký cũ cho test/bố cục): = circleMove — không xuyên tường, qua được cửa 1 ô, trượt dọc tường.
+export function slideMove(grid, x, z, dx, dz, r) {
+  return circleMove(grid, x, z, dx, dz, r);
 }
 
 // Điểm xuất hiện khi bấm 🚶: ô trống gần tâm khu làm việc nhất (giữa dãy phòng phía bắc và cafe, ngoài mọi phòng), xa cửa ra —
