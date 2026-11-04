@@ -37,7 +37,8 @@ export function armHit(grid, px, py, pz, dx, dy, dz, len) {
     else { if (!grid.blocked(c, r)) continue; top = grid.top[r * grid.cols + c]; }
     if (top > y - 0.1) return Math.max(ARM_MIN, t - 0.2);
   }
-  return ARM_FREE;
+  // thoáng: trả ít nhất len — trả ARM_FREE (8) khi cần đang dài hơn (camera vừa rời toàn cảnh, cách 20–35 m) làm cần co cụt 1 khung
+  return Math.max(len, ARM_FREE);
 }
 // kéo nhìn: rad mỗi pixel (ngang); dọc = 2/3
 export const LOOK_SENS = 0.006;
@@ -444,12 +445,16 @@ export class Walker {
     const cp = Math.cos(ep - 0.35), dx = -sy * cp, dy = Math.sin(0.35 - ep), dz = -syz * cp;
     // cần lò xo: vật cản chen vào → co ngay (hoặc nhanh), hết vật cản → dài lại chậm
     const hit = armHit(g, px, py, pz, dx, dy, dz, this.camDist);
-    if (reduced || hit < this.armLim - 0.3) this.armLim = hit;
-    else this.armLim = damp(this.armLim, hit, hit < this.armLim ? ARM_IN_L : ARM_OUT_L, dt);
+    // đang bay vào (0,6 s + 0,3 s lắng): không co cụt — co nhanh nhưng liền (λ 20), kể cả khi vật cao chắn ngay sau điểm xuất hiện
+    if (reduced || (this.flyT >= FLY_T + 0.3 && hit < this.armLim - 0.3)) this.armLim = hit;
+    else this.armLim = damp(this.armLim, hit, hit < this.armLim ? (this.flyT < FLY_T + 0.3 ? FLY_L : ARM_IN_L) : ARM_OUT_L, dt);
     const len = Math.max(ARM_MIN, Math.min(this.camDist, this.armLim));
     let cx = px + dx * len, cy = py + dy * len, cz = pz + dz * len;
     // giữ camera trong văn phòng (không chui ra sau tường bắc/tây cao); vẫn luôn nhìn vào đầu avatar (y = LOOK_Y)
-    cx = Math.max(0.3, Math.min(w.W + 2, cx)); cz = Math.max(0.3, Math.min(w.D + 2, cz)); cy = Math.max(0.6, cy);
+    // đang bay vào từ toàn cảnh (camera ngoài hộp, cách 20–35 m): chưa kẹp — kẹp ngay làm camera nhảy ~9 m ở khung đầu; hết bay thì cần
+    // đã về ~3,5 m nên kẹp không còn đổi gì đáng kể
+    if (reduced || this.flyT >= FLY_T + 0.3) { cx = Math.max(0.3, Math.min(w.W + 2, cx)); cz = Math.max(0.3, Math.min(w.D + 2, cz)); }
+    cy = Math.max(0.6, cy);
     cam.position.set(cx, cy, cz);
     const head = this._head.set(px, py, pz);
     cam.lookAt(head);
