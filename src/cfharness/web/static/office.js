@@ -19,6 +19,7 @@ import { FONT, roundRect } from './office/util.js';
 import { Walker, walkBusy, hintShown, hintLayout, coordinatorOf, nearDesk } from './office/walk.js';
 import { createTalk } from './office/talk.js';
 import { setTier, makeEnvironment } from './office/materials.js';
+import { createPerf, perfFlags } from './office/perf.js';
 
 const $ = (id) => document.getElementById(id);
 const KCOL_VI = { ready: 'Sẵn sàng', running: 'Đang làm', review: 'Review', blocked: 'Kẹt' };
@@ -775,6 +776,7 @@ function main() {
     if (world) world.setLampsVisible(walk.active || cd < 26);
   }
   let dbgAt = 0, dbgFrames = 0, shadowFrames = 0;
+  const pf = perfFlags(), perf = createPerf(renderer, () => ({ tier, actors: actors.size, walk: walk.active }));
   // ------------------------------------------------------------ vòng vẽ (≤ 30 FPS, dừng khi ẩn)
   let raf = 0, last = 0, lastDraw = 0, fpsFrames = 0, fpsStart = 0, uiAt = 0, prevRaf = 0, prevGap = 0, slowWins = 0, lowWins = 0;
   const tmp = new THREE.Vector3();
@@ -786,7 +788,8 @@ function main() {
     // cửa sổ không có focus (đang ở app khác): Chrome/Windows điều tiết rAF xuống ~1 FPS dù tab vẫn "visible" → không đo
     if ((gap > 1000 && prevGap < 250) || !document.hasFocus()) { fpsStart = ts + 1000; fpsFrames = 0; slowWins = 0; lowWins = 0; }
     prevRaf = ts; prevGap = gap;
-    if (ts - lastDraw < 1000 / 30 - 3) return;
+    if (!pf.uncap && ts - lastDraw < 1000 / 30 - 3) { if (perf) perf.skip(); return; }
+    if (perf) perf.begin(ts);
     const dt = Math.min(0.1, last ? (ts - last) / 1000 : 0.016);
     last = ts; lastDraw = ts;
     const now = perfNow();
@@ -860,7 +863,9 @@ function main() {
       if (world.shadowRefocus) { shadowFrames = Math.max(shadowFrames, 1); world.shadowRefocus = false; }
       if (shadowFrames > 0) { shadowFrames--; renderer.shadowMap.needsUpdate = true; }
     }
+    if (perf) perf.gpuBegin();
     renderer.render(scene, camera);
+    if (perf) { perf.gpuEnd(); perf.end(); }
     // gỡ lỗi cho QA: #debug3d → mỗi 2 s ghi số draw call / tam giác / FPS / tier vào data-office3d (không log, không chữ agent)
     dbgFrames++;
     if (ts - dbgAt >= 2000) {
