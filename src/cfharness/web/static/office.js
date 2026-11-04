@@ -17,7 +17,7 @@ import { watchdogStep } from './office/pacer.js';
 import { drawHud, drawKanban, drawRuns, drawNeeds, drawCard, drawApprovalTag, drawSign, TextSprite, fmtUsd } from './office/boards.js';
 import { makeApi, Modals, createFlows } from './office/flows.js';
 import { createChat } from './office/chat.js';
-import { FONT, roundRect } from './office/util.js';
+import { FONT, roundRect, fitText, iconCanvas } from './office/util.js';
 import { Walker, walkBusy, hintShown, hintLayout, coordinatorOf, nearDesk } from './office/walk.js';
 import { lookDrag } from './office/walk.js';
 import { createTalk } from './office/talk.js';
@@ -292,7 +292,7 @@ function main() {
   const walkBtn = $('office-walk'), povBtn = $('office-pov');
   const hint = new TextSprite(1100, 150, 1, { depthTest: false, order: 1900 });
   hint.sprite.visible = false; camera.add(hint.sprite);
-  let near = null, autoSel = false, walkHere = null, walkYield = true, nearAt = 0;
+  let near = null, autoSel = false, walkHere = null, walkYield = true, nearAt = 0, enterHold = false;
   // trạng thái giao diện cho chính sách đi bộ (walk.js): có bảng modal / chat / bảng đang xem → ẩn gợi ý, không tự chọn agent
   const ui = () => ({ walk: walk.active, modal: modals.open, chat: chat.isOpen || talk.isOpen, board: !!focusBoard });
   // nhân vật người dùng điều khiển = điều phối viên (nhãn + màu của agent is_manager); không có → "Bạn · chủ hub"
@@ -308,7 +308,8 @@ function main() {
     if (!world || !renderer || on === walk.active) return;
     pacer.hitch(500); // khung đầu: shadow map tiêu điểm mới + vật hiện ra lần đầu — không tính là quá tải
     select(null); focusBoard = null; tween = null; near = null; autoSel = false;
-    if (on) { syncIdentity(); walk.enter(world); walkYield = true; }
+    // khung đầu sau khi bật: làm phần nặng (shadow map quanh avatar, nhân vật hiện ra) khi camera còn đứng yên; camera bay vào từ khung sau
+    if (on) { prebuildWalk(); syncIdentity(); walk.enter(world); walkYield = true; enterHold = true; }
     else {
       talk.close(); chat.close();
       walk.exit();
@@ -382,15 +383,29 @@ function main() {
     }
     const room = world.roomAt(p.x, p.z), t = walkTarget();
     walkHere = { room: room ? room.name : 'Khu làm việc', action: t ? t.label : '' };
-    hint.draw(JSON.stringify(walkHere) + walk.pov, (ctx, W, H) => {
+    drawHint(walkHere, !!walk.seated, walk.pov);
+  }
+  // dòng gợi ý: biểu tượng vẽ sẵn (iconCanvas) + chữ cắt bằng tìm nhị phân — vẽ lại chỉ khi nội dung đổi (sig)
+  function drawHint(here, seated, pov) {
+    hint.draw(JSON.stringify(here) + pov + seated, (ctx, W, H) => {
       ctx.fillStyle = 'rgba(31,30,29,0.78)'; roundRect(ctx, 6, 6, W - 12, H - 12, 36); ctx.fill();
+      ctx.drawImage(iconCanvas(seated ? '🪑' : '📍', 48), 30, 32);
       ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff'; ctx.font = '700 40px ' + FONT;
-      let top = (walk.seated ? '🪑 ' : '📍 ') + walkHere.room + (walkHere.action ? '   ·   [E] ' + walkHere.action : '');
-      while (top.length > 4 && ctx.measureText(top).width > W - 70) top = top.slice(0, -2) + '…';
-      ctx.fillText(top, 36, 56);
+      ctx.fillText(fitText(ctx, here.room + (here.action ? '   ·   [E] ' + here.action : ''), W - 130), 88, 56);
       ctx.fillStyle = '#d6d3c8'; ctx.font = '500 28px ' + FONT;
-      ctx.fillText('WASD/mũi tên: đi · Shift: chạy · kéo: xoay · bấm sàn: tự đi · V: ' + (walk.pov === 'third' ? 'góc thứ nhất' : 'góc thứ ba') + ' · Esc: ra', 36, 112);
+      ctx.fillText('WASD/mũi tên: đi · Shift: chạy · kéo: xoay · bấm sàn: tự đi · V: ' + (pov === 'third' ? 'góc thứ nhất' : 'góc thứ ba') + ' · Esc: ra', 36, 112);
     });
+  }
+  // Dựng sẵn khi rảnh (sau lần tải state đầu): nhân vật điều phối viên cho chế độ đi bộ + vẽ thử gợi ý (nạp font emoji) + làm ấm shader/
+  // texture của chúng — trước đây cả việc này rơi vào cú bấm 🚶 (mergeColored/toNonIndexed ~28 ms, gợi ý ~34 ms, shader/bóng lần đầu).
+  let prebuilt = false;
+  function prebuildWalk() {
+    if (prebuilt || !world || !renderer || noRender) return;
+    prebuilt = true;
+    if (!walk.active) syncIdentity();
+    drawHint({ room: 'Khu làm việc', action: '' }, false, walk.pov);
+    hint.sig = null; // vẽ thật khi vào đi bộ
+    warmShaders();
   }
 
   // ------------------------------------------------------------ áp dữ liệu /office/state
@@ -417,7 +432,11 @@ function main() {
       if (walk.active) { walk.setWorld(world); near = null; }
       if (walkBtn && renderer && !noRender) walkBtn.hidden = false;
       fitCamera();
-      if (first) { camera.position.copy(overview.pos); controls.target.copy(overview.target); controls.update(); }
+      if (first) {
+        camera.position.copy(overview.pos); controls.target.copy(overview.target); controls.update();
+        const idle = window.requestIdleCallback ? (f) => window.requestIdleCallback(f, { timeout: 2000 }) : (f) => setTimeout(f, 500);
+        idle(() => prebuildWalk());
+      }
     }
     const seen = new Set(), now = perfNow(), initial = actors.size === 0;
     for (const ag of s.agents || []) {
@@ -461,6 +480,17 @@ function main() {
     const occ = world.occluders && world.occluders[0];
     if (occ) world.fade(new Set([occ])); // biến thể vật liệu mờ tường (chế độ đi bộ)
     try { renderer.compile(scene, camera); } catch (_) { /* bỏ qua: sẽ biên dịch khi vẽ như cũ */ }
+    // vẽ THẬT một lần vào ô 1×1 (scissor) kèm pass bóng: biên dịch program bóng (depth/skinning), cấp bone texture của nhân vật,
+    // upload texture canvas (gợi ý, thông báo, thẻ, biển) — để khung đầu khi vào đi bộ / chọn agent không phải làm việc này
+    try {
+      for (const ts of [hint, toastTs, card, sign]) renderer.initTexture(ts.tex);
+      const sm = renderer.shadowMap, nu = sm.needsUpdate;
+      sm.needsUpdate = sm.enabled;
+      renderer.setScissorTest(true); renderer.setScissor(0, 0, 1, 1);
+      renderer.render(scene, camera);
+      renderer.setScissorTest(false);
+      sm.needsUpdate = nu; if (world) world.shadowDirty = true; // shadow map thật vẽ lại ở khung kế
+    } catch (_) { renderer.setScissorTest(false); }
     if (occ) world.fade(new Set());
     for (const o of shown) o.visible = false;
   }
@@ -875,7 +905,8 @@ function main() {
     if (walk.active && world) {
       // đi bộ: avatar luôn cập nhật; camera do walker lái trừ khi đang xem bảng / chat / bay camera (khi đó nhìn controls.target)
       walk.update(dt, now, reduced);
-      const yieldCam = !!tween || !!focusBoard || (chat.isOpen && !walk.seated);
+      const yieldCam = !!tween || !!focusBoard || (chat.isOpen && !walk.seated) || enterHold;
+      enterHold = false;
       if (yieldCam) { camera.lookAt(controls.target); world.fade(new Set()); }
       else { if (walkYield) walk.resume(reduced); walk.updateCamera(dt, reduced); }
       walkYield = yieldCam;

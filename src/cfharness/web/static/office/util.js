@@ -92,11 +92,30 @@ export const FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto
 export const EMOJI_FONT = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
 
 // Cắt chữ cho vừa bề rộng (thêm "…"). Chỉ đo/vẽ — không diễn giải nội dung.
+// Tìm nhị phân độ dài cắt (≈ log₂ n lần measureText thay vì n lần — chuỗi dài từng tốn hàng chục ms mỗi lần vẽ gợi ý).
 export function fitText(ctx, text, maxW) {
-  let t = String(text == null ? '' : text).replace(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩]/g, '');
+  const t = String(text == null ? '' : text).replace(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩]/g, '');
   if (ctx.measureText(t).width <= maxW) return t;
-  while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
-  return t + '…';
+  let lo = 1, hi = t.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ctx.measureText(t.slice(0, mid) + '…').width <= maxW) lo = mid; else hi = mid - 1;
+  }
+  return t.slice(0, Math.max(1, lo)) + '…';
+}
+// Emoji vẽ một lần vào canvas nhỏ rồi drawImage (font emoji màu chậm hơn chữ thường nhiều lần).
+const _icons = new Map();
+export function iconCanvas(emoji, px) {
+  const k = emoji + '|' + px;
+  let c = _icons.get(k);
+  if (!c) {
+    c = document.createElement('canvas'); c.width = px; c.height = px;
+    const x = c.getContext('2d');
+    x.font = Math.round(px * 0.82) + 'px ' + EMOJI_FONT; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText(emoji, px / 2, px / 2 + px * 0.04);
+    _icons.set(k, c);
+  }
+  return c;
 }
 
 function texFromCanvas(c) {
