@@ -870,7 +870,7 @@ function main() {
     raf = requestAnimationFrame(frame);
     // watchdog chất lượng (pacer.js watchdogStep) — đo theo NHỊP rAF, trước cổng vẽ (khung bỏ qua vì đứng yên vẫn được đếm):
     // rAF đều mà chậm: fps < 24 hai cửa sổ 5 s liền → hạ tier low; fps < 10 ba cửa sổ liền → tắt 3D (fallback "slow").
-    // Đứng (khoảng > 1 s: GPU/driver đứng, máy ngủ, tab bị điều tiết) hoặc không có focus → bỏ cửa sổ, chờ 30 khoảng bình thường;
+    // Đứng (khoảng > 1 s: GPU/driver đứng, máy ngủ, tab bị điều tiết) hoặc không có focus → bỏ cửa sổ, chờ 10 khoảng < 500 ms;
     // rAF không đều (giật/đứng xen kẽ) không bị coi là "chậm" → một lần GPU đứng không còn thành hạ cấp vĩnh viễn.
     const gap = prevRaf ? ts - prevRaf : 0;
     prevRaf = ts;
@@ -880,7 +880,9 @@ function main() {
     // "đang động" = tương tác vừa xảy ra, camera/tween/đi bộ đang dời, hoặc camera vừa đổi ở khung trước (OrbitControls còn trôi)
     const motion = kicked || camMoved || moving();
     kicked = false;
-    if (!pf.uncap && lastDraw && !pacer.shouldDraw(ts, motion)) { if (perf) perf.skip(); return; }
+    // #uncap3d vẫn gọi pacer.shouldDraw (đo vsync → dt đúng ở màn > 60 Hz), chỉ bỏ qua kết quả
+    const go = pacer.shouldDraw(ts, motion);
+    if (!pf.uncap && lastDraw && !go) { if (perf) perf.skip(); return; }
     if (perf) perf.begin(ts);
     const dt = pacer.drew(ts);
     lastDraw = ts;

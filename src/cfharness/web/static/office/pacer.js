@@ -7,15 +7,17 @@
  *  1. ước lượng chu kỳ màn hình `vsync` = phân vị 20 của 60 khoảng rAF gần nhất (bỏ khoảng > 100 ms) — không trôi lên khi máy bận;
  *  2. chọn bội số d: động = base (màn 60 Hz → mọi vsync; 120/144 Hz → cách 1), yên = 2·base; rAF dưới 50 Hz (máy đã không theo kịp)
  *     → luôn d = 1, không bỏ rAF nào;
- *  3. bộ điều tiết quá tải: ≥ 4/30 khung động đến trễ (> 1,5·d·vsync) → khoá d = 2·base trong lockMs (2 s, khoá lại trong 1,5 s sau
- *     khi nhả thì nhân đôi tới 8 s; sạch 10 s về 2 s); nhả khoá = thử lại 60. Gai đơn lẻ (> 4 vsync), cửa sổ hitch() (việc nặng biết
+ *  3. bộ điều tiết quá tải: ≥ 9/60 khung động đến trễ (> 1,5·d·vsync) → khoá d = 2·base trong lockMs (2 s, khoá lại trong 1,5 s sau
+ *     khi nhả thì nhân đôi tới 4 s; sạch 10 s về 2 s); nhả khoá = thử lại 60. Gai đơn lẻ (> 4 vsync), cửa sổ hitch() (việc nặng biết
  *     trước: vào đi bộ, dựng lại World…) và lúc đứng yên không tính;
  *  4. dt lượng tử theo vsync → khung 16,7/33,4 cho dt đúng bội số, chuyển động không lệch theo độ trễ rAF.
  * Việc phụ (vẽ lại thẻ…) đặt qua onSkip(): chạy trong rAF bị bỏ qua (khung không vẽ), hoặc trên khung vẽ nếu đã chờ > 250 ms. */
 import { frameGate } from './util.js';
 
-const RING = 60, LATE_N = 30, LATE_MAX = 4;
-const LOCK_MIN = 2000, LOCK_MAX = 8000, RELOCK_WIN = 1500, CLEAN_MS = 10000;
+// khoá khi ≥ 9/60 khung động đến trễ (15 %): máy bận vừa (rAF trễ 2–4 %, có cụm) KHÔNG khoá — đo độc lập thấy 4/30 khoá nhầm ở n=19 CPU ×2
+// rồi nhân đôi tới 8 s, dính 30–40 FPS sang thao tác sau. Quá tải thật (16,7/33,4 xen kẽ ~30 %) vẫn khoá trong ~27 khung.
+const RING = 60, LATE_N = 60, LATE_MAX = 9;
+const LOCK_MIN = 2000, LOCK_MAX = 4000, RELOCK_WIN = 1500, CLEAN_MS = 10000;
 const MOTION_HOLD = 150, JOB_WAIT = 250;
 
 export function createPacer(opts) {
@@ -107,21 +109,22 @@ export function createPacer(opts) {
 // Watchdog chất lượng (đo theo nhịp rAF, đặt TRƯỚC cổng vẽ): trả 'ok' | 'low' (hạ tier) | 'slow' (tắt 3D, fallback).
 // Phase 1 coi "gap > 1 s sau khung bình thường" là khựng — nhưng sau khung đứng đầu tiên điều kiện đó sai, nên GPU/driver đứng
 // 27 s + 72 s rồi rAF 1 Hz (đo được ở n=19 ×2) bị tính là "máy chậm" → tier low vĩnh viễn → fallback "slow". Ở đây:
-//  - khoảng > 1000 ms = ĐỨNG (stall): bỏ cửa sổ đo, không đếm cho tới khi có 30 khoảng liên tiếp < 100 ms;
-//  - chỉ cửa sổ rAF ĐỀU mà chậm (phân vị 80 ≤ 1,5 × trung vị) mới được tính vào lowFps / slowFps;
+//  - khoảng > 1000 ms = ĐỨNG (stall): bỏ cửa sổ đo, không đếm cho tới khi có 10 khoảng liên tiếp < 500 ms (≥ 2 FPS — máy chậm 5–10 FPS
+//    sau một lần đứng vẫn hạ được; trước đây cần 30 khoảng < 100 ms nên máy < 10 FPS không bao giờ tới fallback nữa);
+//  - chỉ cửa sổ rAF ĐỀU mà chậm (phân vị 80 ≤ 2,1 × trung vị — 33/67 ms xen kẽ khi nghẽn GPU sát bội vsync vẫn tính) mới vào lowFps / slowFps;
 //  - không có focus: không đếm.
 // st = {} giữ trạng thái giữa các lần gọi; gap = khoảng rAF (ms, 0 ở khung đầu).
 export function watchdogStep(st, ts, gap, focused, lowFps, slowFps, tierHigh) {
-  if (!st.init) { st.init = true; st.start = ts + 2000; st.frames = 0; st.gaps = []; st.okRun = 30; st.low = 0; st.slow = 0; }
+  if (!st.init) { st.init = true; st.start = ts + 2000; st.frames = 0; st.gaps = []; st.okRun = 10; st.low = 0; st.slow = 0; }
   if (!focused || gap > 1000) {
     st.start = ts + 1000; st.frames = 0; st.gaps.length = 0;
     if (gap > 1000) { st.okRun = 0; st.low = 0; st.slow = 0; }
     if (!focused) { st.low = 0; st.slow = 0; }
     return 'ok';
   }
-  if (st.okRun < 30) {
-    st.okRun = gap > 0 && gap < 100 ? st.okRun + 1 : 0;
-    if (st.okRun < 30) return 'ok';
+  if (st.okRun < 10) {
+    st.okRun = gap > 0 && gap < 500 ? st.okRun + 1 : 0;
+    if (st.okRun < 10) return 'ok';
     st.start = ts; st.frames = 0; st.gaps.length = 0;
   }
   if (ts < st.start) return 'ok';
@@ -131,7 +134,7 @@ export function watchdogStep(st, ts, gap, focused, lowFps, slowFps, tierHigh) {
   const fps = st.frames / ((ts - st.start) / 1000);
   const g = st.gaps.slice().sort((a, b) => a - b), med = g[g.length >> 1] || 0, p80 = g[Math.floor(g.length * 0.8)] || 0;
   st.start = ts; st.frames = 0; st.gaps.length = 0;
-  if (!(med > 0 && p80 <= 1.5 * med)) return 'ok'; // không đều (giật/đứng xen kẽ) → không kết luận "chậm"
+  if (!(med > 0 && p80 <= 2.1 * med)) return 'ok'; // không đều (giật/đứng xen kẽ) → không kết luận "chậm"
   if (tierHigh) {
     st.low = fps < lowFps ? st.low + 1 : 0;
     if (st.low >= 2) { st.low = 0; st.slow = 0; return 'low'; }

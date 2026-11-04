@@ -62,6 +62,18 @@ const inWin = (a, t0, t1) => a.filter((t) => t >= t0 && t < t1).length;
   check(`quá tải 16,7/33,4: khoá sau ${at} khung (≤ 30), sau đó đều (sd ${sd(tiv).toFixed(2)} ms, TB ${mean.toFixed(1)} ms)`,
     at > 0 && at <= 30 && sd(tiv) <= 1 && Math.abs(mean - 33.3) < 1);
 }
+// máy bận vừa (đo được ở n=19 CPU ×2): rAF trễ ~4 % rải rác + cụm 4 khung trễ mỗi 2 s khi đang động → KHÔNG khoá (giữ 60)
+{
+  const V = 1000 / 60, p = createPacer({ now: () => 0 });
+  let t = 0, first = true, i = 0;
+  while (t < 8000) {
+    const m = t > 1000;
+    const lateHere = m && (i % 25 === 0 || i % 120 < 4);
+    t += lateHere ? 2 * V : V; i++;
+    if (first || p.shouldDraw(t, m)) { first = false; p.drew(t); }
+  }
+  check(`bận vừa (trễ ~4 % + cụm 4 mỗi 2 s): không khoá (locks ${p.state().locks})`, p.state().locks === 0);
+}
 // động/yên xen kẽ (bắt đầu kéo, dừng phím… liên tục) ở 60 Hz không quá tải: khoảng 33 ms lúc chuyển từ yên sang động không bị tính là trễ
 {
   const r = sim(even(60, 6000), (t) => Math.floor(t / 250) % 2 === 0);
@@ -85,7 +97,7 @@ const inWin = (a, t0, t1) => a.filter((t) => t >= t0 && t < t1).length;
   for (const x of [...lateT, ...rest]) if (p.shouldDraw(x, true)) p.drew(x);
   check(`hitch(500) + 5 khung trễ: không khoá (locks ${p.state().locks})`, p.state().locks === 0);
 }
-// khoá lại liên tiếp: lockMs 2000 → 4000 → 8000, sạch 10 s thì về 2000
+// khoá lại liên tiếp: lockMs 2000 → 4000 → 4000 (trần), sạch 10 s thì về 2000
 {
   const p = createPacer({ now: () => 0 });
   let t = 0; const step = (g, m) => { t += g; if (p.shouldDraw(t, m)) p.drew(t); };
@@ -103,7 +115,7 @@ const inWin = (a, t0, t1) => a.filter((t) => t >= t0 && t < t1).length;
   // sạch 10 s
   for (let i = 0; i < 660; i++) step(1000 / 60, true);
   const back = p.state().lockMs;
-  check(`khoá lại liên tiếp: lockMs ${seen.join(' → ')}, sạch 10 s → ${back}`, seen.join() === '2000,4000,8000' && back === 2000);
+  check(`khoá lại liên tiếp: lockMs ${seen.join(' → ')}, sạch 10 s → ${back}`, seen.join() === '2000,4000,4000' && back === 2000);
 }
 // dt lượng tử: vsync 16,67 ổn định, khung đến sau 17,9 ms → dt = 1/60; 34 ms → 2/60
 {
@@ -167,5 +179,16 @@ const wdRun = (segs, focused = true, high = true) => {
   // rAF đều 20 Hz nhưng có 1 lần đứng 3 s giữa chừng → vẫn hạ được khi chậm đều kéo dài (không bị chặn vĩnh viễn)
   const v2 = wdRun([[20, 6000], ['stall', 3000], [60, 1000], [20, 20000]]);
   check(`watchdog: chậm đều sau một lần đứng → vẫn 'low' (${JSON.stringify(v2)})`, v2.length === 1 && v2[0][1] === 'low');
+}
+{
+  // reviewer: một lần đứng 1,2 s lúc đầu (biên dịch shader trên Iris Xe) rồi chậm đều 150 ms → vẫn hạ 'low' rồi 'slow' (không tắt fallback vĩnh viễn)
+  const v = wdRun([['stall', 1200], [1000 / 150, 30000]]);
+  check(`watchdog: đứng 1,2 s rồi 6,7 Hz đều (tier high) → 'low' (${JSON.stringify(v)})`, v.length >= 1 && v[0][1] === 'low');
+  const vl = wdRun([['stall', 1200], [1000 / 150, 30000]], true, false);
+  check(`watchdog: đứng 1,2 s rồi 6,7 Hz đều (tier low) → 'slow' (${JSON.stringify(vl)})`, vl.length >= 1 && vl[0][1] === 'slow');
+  // GPU nghẽn sát bội vsync: 60 % 33 ms / 40 % 67 ms (~21 FPS) → hạ 'low'
+  const segs = []; for (let i = 0; i < 80; i++) segs.push([30, 1000 / 30 + 0.01], [15, 1000 / 15 + 0.01], [30, 1000 / 30 + 0.01], [15, 1000 / 15 + 0.01], [30, 1000 / 30 + 0.01]);
+  const v2 = wdRun(segs);
+  check(`watchdog: 33/67 ms xen kẽ (~21 FPS) → 'low' (${JSON.stringify(v2)})`, v2.length >= 1 && v2[0][1] === 'low');
 }
 process.exit(fails ? 1 : 0);

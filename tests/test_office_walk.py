@@ -121,7 +121,9 @@ def test_office_render_loop_perf_contract():
     assert "import { createPacer } from './office/pacer.js';" in office_js
     frame = office_js[office_js.index("function frame(ts)"):]
     # watchdog (hạ tier < 24, fallback < 10) đo TRƯỚC cổng nhịp vẽ → khung bỏ qua vì đứng yên vẫn được đếm
-    assert frame.index("fps < 24") < frame.index("pacer.shouldDraw(") and frame.index("fps < 10") < frame.index("pacer.shouldDraw(")
+    # vị trí của LỜI GỌI (không phải chú thích): mốc 24 / 10 truyền vào watchdogStep, đứng trước cổng nhịp vẽ
+    call = "watchdogStep(wd, ts, gap, document.hasFocus(), 24, 10, "
+    assert call in frame and frame.index(call) < frame.index("pacer.shouldDraw(")
     assert "if (rebuilt) warmShaders();" in office_js and "renderer.compile(scene, camera)" in office_js
     assert "compileAsync(" not in office_js  # thăm dò isReady() ném lỗi khi vật liệu bị dispose giữa chừng
     assert "updateChibiLod(camera, Math.max(1, host.clientHeight));" in office_js
