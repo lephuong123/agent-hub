@@ -7,14 +7,14 @@
  *  1. ước lượng chu kỳ màn hình `vsync` = phân vị 20 của 60 khoảng rAF gần nhất (bỏ khoảng > 100 ms) — không trôi lên khi máy bận;
  *  2. chọn bội số d: động = base (màn 60 Hz → mọi vsync; 120/144 Hz → cách 1), yên = 2·base; rAF dưới 50 Hz (máy đã không theo kịp)
  *     → luôn d = 1, không bỏ rAF nào;
- *  3. bộ điều tiết quá tải: ≥ 3/30 khung động đến trễ (> 1,5·d·vsync) → khoá d = 2·base trong lockMs (2 s, khoá lại trong 1,5 s sau
+ *  3. bộ điều tiết quá tải: ≥ 4/30 khung động đến trễ (> 1,5·d·vsync) → khoá d = 2·base trong lockMs (2 s, khoá lại trong 1,5 s sau
  *     khi nhả thì nhân đôi tới 8 s; sạch 10 s về 2 s); nhả khoá = thử lại 60. Gai đơn lẻ (> 4 vsync), cửa sổ hitch() (việc nặng biết
  *     trước: vào đi bộ, dựng lại World…) và lúc đứng yên không tính;
  *  4. dt lượng tử theo vsync → khung 16,7/33,4 cho dt đúng bội số, chuyển động không lệch theo độ trễ rAF.
  * Việc phụ (vẽ lại thẻ…) đặt qua onSkip(): chạy trong rAF bị bỏ qua (khung không vẽ), hoặc trên khung vẽ nếu đã chờ > 250 ms. */
 import { frameGate } from './util.js';
 
-const RING = 60, LATE_N = 30, LATE_MAX = 3;
+const RING = 60, LATE_N = 30, LATE_MAX = 4;
 const LOCK_MIN = 2000, LOCK_MAX = 8000, RELOCK_WIN = 1500, CLEAN_MS = 10000;
 const MOTION_HOLD = 150, JOB_WAIT = 250;
 
