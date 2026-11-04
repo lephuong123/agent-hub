@@ -36,6 +36,20 @@ export function armHit(grid, px, py, pz, dx, dy, dz, len) {
   }
   return ARM_FREE;
 }
+// kéo nhìn: rad mỗi pixel (ngang); dọc = 2/3
+export const LOOK_SENS = 0.006;
+// Kéo chuột/chạm để nhìn: down = {x, y, lx, ly, drag} (pointerdown). Chưa vượt ngưỡng thr px → null (còn là cú bấm). Lần đầu vượt
+// ngưỡng: lấy mốc NGAY điểm này (delta 0) — trước đây delta đầu gồm cả 5 px ngưỡng → camera nhảy 1,7° lúc bắt đầu kéo.
+export function lookDrag(down, x, y, thr) {
+  if (!down) return null;
+  if (!down.drag) {
+    if (Math.hypot(x - down.x, y - down.y) <= thr) return null;
+    down.drag = true; down.lx = x; down.ly = y;
+  }
+  const d = { dx: x - down.lx, dy: y - down.ly };
+  down.lx = x; down.ly = y;
+  return d;
+}
 const KEYS = {
   KeyW: [0, 1], ArrowUp: [0, 1], KeyS: [0, -1], ArrowDown: [0, -1],
   KeyA: [-1, 0], ArrowLeft: [-1, 0], KeyD: [1, 0], ArrowRight: [1, 0],
@@ -160,7 +174,7 @@ export class Walker {
     this.active = false; this.pov = 'third';
     this.world = null; this.pos = null; this.yaw = Math.PI; this.view = Math.PI; this.pitch = -0.12; this.dist = 3.4;
     this.keys = new Set(); this.run = false; this.path = [];
-    this.vel = { x: 0, z: 0 }; this.lookT = -1e9; this.t = 0;
+    this.vel = { x: 0, z: 0 }; this.lookT = -1e9; this.t = 0; this.lookAcc = { x: 0, y: 0 };
     this.camPos = new THREE.Vector3(); this.camInit = false;
     // spring-arm: hướng/khoảng cách đã làm mượt + giới hạn cần do va chạm; rigInit = false → lấy từ vị trí camera hiện tại (bay vào)
     this.camYaw = Math.PI; this.camPitch = -0.12; this.camDist = 3.4; this.armLim = ARM_FREE; this.rigInit = false; this.flyT = 1; this.raise = 0;
@@ -251,10 +265,17 @@ export class Walker {
     return true;
   }
   // kéo chuột/tay: dx, dy pixel
+  // kéo chuột/tay: dx, dy pixel — cộng dồn, áp một lần mỗi khung trong update() (nhiều pointermove/khung = một bước đều)
   look(dx, dy) {
     this.lookT = this.t; // vừa kéo nhìn: tự đi không xoay camera theo hướng đi trong 1 s
-    this.view -= dx * 0.006;
-    this.pitch = Math.max(-0.9, Math.min(this.pov === 'first' ? 0.7 : 0.25, this.pitch - dy * 0.004));
+    this.lookAcc.x += dx; this.lookAcc.y += dy;
+  }
+  _applyLook() {
+    const a = this.lookAcc;
+    if (!a.x && !a.y) return;
+    this.view -= a.x * LOOK_SENS;
+    this.pitch = Math.max(-0.9, Math.min(this.pov === 'first' ? 0.7 : 0.25, this.pitch - a.y * LOOK_SENS * (2 / 3)));
+    a.x = 0; a.y = 0;
   }
   zoom(dy) { this.dist = Math.max(1.8, Math.min(7, this.dist * (dy > 0 ? 1.1 : 1 / 1.1))); }
 
@@ -283,12 +304,14 @@ export class Walker {
     if (!this.active || !w || !this.pos) return;
     if (this.seated) {
       const c = this.chibi, s = this.seated;
+      this.lookAcc.x = 0; this.lookAcc.y = 0;
       c.walking = false; c.pose = 'type'; c.seatY = s.seatY || 0.37;
       c.animate(dt, t, reduced);
       c.group.position.set(s.x, 0, s.z); c.group.rotation.y = s.rot;
       return;
     }
     this.t = t;
+    this._applyLook();
     let mx = 0, mz = 0;
     for (const k of this.keys) { mx += KEYS[k][0]; mz += KEYS[k][1]; }
     // vận tốc mong muốn (m/s): phím → theo hướng camera; tự đi → pure pursuit

@@ -19,6 +19,7 @@ import { makeApi, Modals, createFlows } from './office/flows.js';
 import { createChat } from './office/chat.js';
 import { FONT, roundRect } from './office/util.js';
 import { Walker, walkBusy, hintShown, hintLayout, coordinatorOf, nearDesk } from './office/walk.js';
+import { lookDrag } from './office/walk.js';
 import { createTalk } from './office/talk.js';
 import { setTier, makeEnvironment } from './office/materials.js';
 import { createPerf, perfFlags } from './office/perf.js';
@@ -668,10 +669,8 @@ function main() {
     cvs.addEventListener('pointermove', (e) => {
       if (down || e.pointerType !== 'mouse') kick(); // đang kéo / chạm: vẽ theo màn hình
       if (!down || !walk.active || modals.open || chat.isOpen || talk.isOpen) return;
-      if (!down.drag && Math.hypot(e.clientX - down.x, e.clientY - down.y) <= 5) return;
-      down.drag = true;
-      walk.look(e.clientX - down.lx, e.clientY - down.ly);
-      down.lx = e.clientX; down.ly = e.clientY;
+      const d = lookDrag(down, e.clientX, e.clientY, 5); // vượt ngưỡng 5 px: mốc tại đây, không nhảy
+      if (d) walk.look(d.dx, d.dy);
     });
     cvs.addEventListener('pointerup', (e) => {
       if (!down || down.drag || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) { down = null; return; }
