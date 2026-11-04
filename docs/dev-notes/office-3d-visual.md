@@ -351,6 +351,10 @@ env + shadow tĩnh + DAYLIGHT mới + fog/nền/bệ; (3) hình khối từng kh
 B: (1) gộp khớp + vật liệu vinyl + blob (đo draw call); (2) tỉ lệ/mặt/tóc; (3) `toneMapped/fog` cho sprite + style nhãn/bong bóng/thẻ.
 Mỗi bước chạy lại §12. Chưa kiểm hình thật bằng trình duyệt thì ghi rõ "chưa kiểm hình" trong báo cáo (như `office-walk.md`).
 
+> **Cập nhật hiệu năng (2026-11-04, `office-3d-perf.md`)**: bỏ giới hạn cứng 30 FPS (động ≈ 60 / yên 30 — `frameGate`), watchdog §3 đếm
+> nhịp rAF thay vì khung đã vẽ (mốc < 24 / < 10 giữ nguyên), shader biên dịch trước khi dựng World, chibi có LOD xa (~¼ tam giác).
+> Các số "29,9 FPS (giới hạn 30)" bên dưới là đo trước thay đổi đó.
+
 ## 15. Ghi chú triển khai A (môi trường) — chỗ lệch spec
 - **Texture "chi tiết"**: `woodLight/walnut/plaster/carpet/fabric` vẽ trên nền TRẮNG (chỉ vân/hạt) — màu nằm ở vertex color, nên một vật liệu
   `wood`/`walnut` phủ được nhiều tông gỗ. `oakFloor/terrazzo/tiles` giữ màu trong texture (vertex trắng). UV box-projection theo mét, không dùng `repeat`.

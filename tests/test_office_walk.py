@@ -108,3 +108,25 @@ async def test_office_page_has_walk_toggle(env):  # noqa: F811
     # không handler inline (CSP 'self'), nút 2D vẫn còn
     assert not re.search(r"<button [^>]*\son\w+=", html)
     assert 'id="office-to-2d"' in html
+
+
+def test_office_render_loop_perf_contract():
+    """Nhịp vẽ + đo hiệu năng (docs/dev-notes/office-3d-perf.md): chuyển động → theo màn hình, đứng yên → 30 FPS (frameGate);
+    watchdog đếm nhịp rAF (không phụ thuộc giới hạn khung); shader biên dịch trước sau khi dựng World; LOD chibi mỗi khung;
+    perf.js chỉ chạy khi có #perf3d (không global, không log, không mạng)."""
+    office_js = (STATIC / "office.js").read_text(encoding="utf-8")
+    assert "1000 / 30" not in office_js  # bỏ giới hạn cứng 30 FPS
+    assert "frameGate(ts, lastDraw, gapEst, ts < activeUntil)" in office_js
+    frame = office_js[office_js.index("function frame(ts)"):]
+    # watchdog (hạ tier < 24, fallback < 10) đo TRƯỚC cổng nhịp vẽ → khung bỏ qua vì đứng yên vẫn được đếm
+    assert frame.index("fps < 24") < frame.index("frameGate(") and frame.index("fps < 10") < frame.index("frameGate(")
+    assert "if (rebuilt) warmShaders();" in office_js and "renderer.compile(scene, camera)" in office_js
+    assert "compileAsync(" not in office_js  # thăm dò isReady() ném lỗi khi vật liệu bị dispose giữa chừng
+    assert "updateChibiLod(camera, Math.max(1, host.clientHeight));" in office_js
+    # thả chuột ngoài canvas không được để `down` kẹt (moving() đúng mãi → vẽ 60 FPS mãi)
+    assert "window.addEventListener('pointerup', release);" in office_js and "window.addEventListener('pointercancel', release);" in office_js
+    assert "controls.dampingFactor = 1 - Math.pow(1 - DAMP_60, dt * 60);" in office_js
+    perf = (STATIC / "office" / "perf.js").read_text(encoding="utf-8")
+    assert "if (!perfFlags().perf || !renderer) return null;" in perf
+    for bad in ("console.", "fetch(", "localStorage", "innerHTML", "Worker", "blob:"):
+        assert bad not in perf, bad

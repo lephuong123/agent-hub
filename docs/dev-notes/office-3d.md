@@ -101,7 +101,7 @@ Trong cảnh (module `static/office/boards.js`):
 - 401 → biển đỏ "Phiên đăng nhập đã hết — chạy cfharness web --open" trong cảnh (chưa có văn phòng thì dựng trên một khoảnh sàn),
   ngừng SSE. Mất kết nối > 3 s → biển cam "Mất kết nối" (và HUD/`#office-hud` báo), tự kết nối lại.
 
-Bố cục văn phòng & hành vi: xem phần "Ánh xạ" bên dưới. Hiệu năng: dừng vẽ khi `document.hidden`, ≤ 30 FPS, `pixelRatio ≤ 1.5`,
+Bố cục văn phòng & hành vi: xem phần "Ánh xạ" bên dưới. Hiệu năng (`office-3d-perf.md`): dừng vẽ khi `document.hidden`, camera/cảnh đang động ≈ 60 FPS, đứng yên 30 FPS, `pixelRatio ≤ 1.5`,
 `prefers-reduced-motion` → dịch chuyển tức thời, không lắc lư.
 
 ## Ánh xạ trạng thái → nhân vật
