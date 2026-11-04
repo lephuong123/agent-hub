@@ -18,7 +18,8 @@ import { frameGate } from './util.js';
 // rồi nhân đôi tới 8 s, dính 30–40 FPS sang thao tác sau. Quá tải thật (16,7/33,4 xen kẽ ~30 %) vẫn khoá trong ~27 khung.
 const RING = 60, LATE_N = 60, LATE_MAX = 9;
 const LOCK_MIN = 2000, LOCK_MAX = 4000, RELOCK_WIN = 1500, CLEAN_MS = 10000;
-const MOTION_HOLD = 150, JOB_WAIT = 250;
+// giữ nhịp động 400 ms sau chuyển động (như ACTIVE_HOLD phase 1): đi-dừng-đi / nhả phím ngắn không lật 60→30→60 (bench stopgo: 10 lần đổi nhịp với 150 ms)
+const MOTION_HOLD = 400, JOB_WAIT = 250;
 
 export function createPacer(opts) {
   const o = opts || {};

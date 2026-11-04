@@ -126,11 +126,11 @@ const inWin = (a, t0, t1) => a.filter((t) => t >= t0 && t < t1).length;
   t += 34; p.shouldDraw(t, true); const d2 = p.drew(t);
   check(`dt lượng tử: 17,9 ms → ${d1.toFixed(4)} (1/60), 34 ms → ${d2.toFixed(4)} (2/60)`, Math.abs(d1 - 1 / 60) < 2e-4 && Math.abs(d2 - 2 / 60) < 4e-4);
 }
-// motion tắt: giữ nhịp động thêm ~150 ms rồi mới về 30 (không lật nhịp mỗi khung khi damping sắp tắt)
+// motion tắt: giữ nhịp động thêm ~400 ms rồi mới về 30 (không lật nhịp mỗi khung khi damping sắp tắt)
 {
   const r = sim(even(60, 2000), (t) => t < 1000 || (t > 1050 && t < 1060));
-  const h = inWin(r.drawn, 1000, 1150), id = inWin(r.drawn, 1300, 2000);
-  check(`hysteresis: 150 ms sau motion vẫn ~60 (${h} khung), sau đó 30 (${id}/700 ms)`, h >= 8 && id >= 20 && id <= 22);
+  const h = inWin(r.drawn, 1000, 1400), id = inWin(r.drawn, 1500, 2000);
+  check(`hysteresis: 400 ms sau motion vẫn ~60 (${h} khung), sau đó 30 (${id}/500 ms)`, h >= 22 && id >= 14 && id <= 16);
 }
 // onSkip: việc phụ chạy trong rAF bị bỏ; chờ > 250 ms (không có rAF bị bỏ) → chạy trên khung vẽ
 {

@@ -862,7 +862,7 @@ function main() {
   let raf = 0, lastDraw = 0, uiAt = 0, uiStep = -1, prevRaf = 0, wd = {};
   let kicked = false, camMoved = false;
   const tmp = new THREE.Vector3(), tmpUp = new THREE.Vector3(), camWas = new THREE.Matrix4();
-  // có tương tác (chuột/chạm/lăn/phím) → khung tới tính là chuyển động (pacer giữ nhịp động thêm 150 ms)
+  // có tương tác (chuột/chạm/lăn/phím) → khung tới tính là chuyển động (pacer giữ nhịp động thêm 400 ms)
   function kick() { kicked = true; }
   // cảnh "đang động" theo nghĩa người dùng nhìn thấy: camera dời/xoay (kể cả OrbitControls còn trôi), tween, đi bộ đang bước
   const moving = () => !!tween || (walk.active && (walk.keys.size > 0 || walk.path.length > 0)) || !!down;
