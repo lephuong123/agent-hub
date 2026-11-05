@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import os
 import plistlib
+import posixpath
 import subprocess
 import sys
 from pathlib import Path
@@ -157,12 +158,13 @@ class Autostart:
 
     def service_path(self) -> str:
         """PATH cho daemon chạy qua launchd/systemd: PATH lúc cài (launchd chỉ cho `/usr/bin:/bin:/usr/sbin:/sbin` → daemon không thấy
-        `claude` ở ~/.local/bin, homebrew, uv… — đã gặp thật). Bỏ mục tương đối/rỗng (sẽ tìm theo cwd = HUB_HOME), bỏ trùng, giữ thứ tự."""
+        `claude` ở ~/.local/bin, homebrew, uv… — đã gặp thật). Bỏ mục tương đối/rỗng (sẽ tìm theo cwd = HUB_HOME), bỏ trùng, giữ thứ tự.
+        Chỉ dùng cho launchd/systemd → luôn theo quy ước POSIX (`:` + posixpath), không theo OS đang chạy (Windows: `;`, `/usr/bin` không tuyệt đối)."""
         out: list[str] = []
-        for d in (self.env.get("PATH") or "").split(os.pathsep) + list(_SYSTEM_PATH):
-            if d and os.path.isabs(d) and d not in out:
+        for d in (self.env.get("PATH") or "").split(":") + list(_SYSTEM_PATH):
+            if d and posixpath.isabs(d) and d not in out:
                 out.append(d)
-        return os.pathsep.join(out)
+        return ":".join(out)
 
     def launchd_plist(self) -> bytes:
         log = str(self.paths.logs_dir / "daemon.out")
