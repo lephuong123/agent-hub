@@ -9,6 +9,7 @@
 3. Tự resume (`recovery.auto_resume`, trừ ESTOP/agent paused/agent đã xoá, chuỗi đã hết `recovery.auto_resume_max_attempts`): run mới `--resume <session>` cùng cwd với
    lời nhắc tiếp tục chuẩn; run chưa kịp có session (chưa start) → chạy lại prompt gốc.
 4. Run `queued` → xếp lại hàng đợi theo thứ tự cũ.
+5. `eval_runs` còn `running` (gate chạy trong daemon, đã chết theo) → `deferred_no_eval` + event `eval.completed`.
 
 Retention (hardening H-09, NFR-28/Q-10/Q-17) — `purge_retention(hub, now)`, gọi từ `purge_expired` (vòng nền ~30 s của
 approvals) tối đa 1 lần / `retention.interval_s`:
@@ -142,6 +143,7 @@ def reconcile(hub: "Hub") -> dict[str, Any]:
         if r and r["status"] == "interrupted" and not r.get("continued_in_run_id"):
             to_resume.append(r)
     store.state_set("pending_resume", [])
+    evals_closed = _close_stale_evals(hub)
     # agent 'working' cũ không còn đúng
     for a in store.list_agents(include_archived=True):
         if a["status"] == "working":
@@ -164,11 +166,34 @@ def reconcile(hub: "Hub") -> dict[str, Any]:
                 if nr:
                     resumed.append(nr["id"])
         runs.tick()
-    out = {"interrupted": interrupted, "orphans_killed": killed, "waiting_human": waiting, "resumed": resumed, "requeued": requeued}
-    if interrupted or resumed or requeued or waiting:
+    out = {"interrupted": interrupted, "orphans_killed": killed, "waiting_human": waiting, "resumed": resumed, "requeued": requeued, "evals_closed": evals_closed}
+    if interrupted or resumed or requeued or waiting or evals_closed:
         hub.publish(make_event("recovery.reconciled", None, out))
         log.info("khôi phục: %s", out)
     return out
+
+
+def _close_stale_evals(hub: "Hub") -> list[str]:
+    """Eval gate chạy trong tiến trình daemon: khởi động lại thì mọi `eval_runs` còn `running` đã chết theo (home tạm mất,
+    run eval bị huỷ ở trên) — đóng như nhánh CancelledError của gate (`deferred_no_eval`), không chấm lại. Không làm thì
+    hàng kẹt `running` mãi (ev_0dbd7d1cf4, 2026-11-04)."""
+    import json
+
+    from .evals.gate import GateVerdict
+
+    conn = hub.store.conn
+    closed: list[str] = []
+    for row in conn.execute("SELECT id, agent_id FROM eval_runs WHERE status='running'").fetchall():
+        eval_id, agent_id = row[0], row[1]
+        v = GateVerdict("deferred_no_eval", reason="interrupted: daemon khởi động lại khi eval đang chạy")
+        v.eval_id = eval_id
+        conn.execute("UPDATE eval_runs SET status=?, reason=?, finished_at=?, verdict=? WHERE id=? AND status='running'",
+                     (v.status, v.reason, now_iso(), json.dumps(v.to_dict(), ensure_ascii=False, default=str), eval_id))
+        hub.publish(make_event("eval.completed", agent_id, {"eval_id": eval_id, "status": v.status, "before": None, "after": None, "drop": None,
+                                                            "cost_usd": None, "reason": v.reason, "rolled_back": False}))
+        log.info("khôi phục: eval %s → deferred_no_eval (daemon khởi động lại)", eval_id)
+        closed.append(eval_id)
+    return closed
 
 
 def resume_interrupted(hub: "Hub", run: dict[str, Any]) -> dict[str, Any] | None:

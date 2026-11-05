@@ -138,3 +138,21 @@ def test_purge_requires_soft_delete_and_retention(hub_home):
     assert not os.path.exists(trash) and h.store.get_agent("a")["status"] == "purged"
     assert [e.type for e in h.store.query_events(types=["agent.purged"])] == ["agent.purged"]
     h.store.close()
+
+
+def test_reconcile_closes_stale_running_evals(hub_home):
+    h1 = Hub(hub_home, runtime=FakeRuntime())
+    h1.agents.create({"id": "a", "name": "A"})
+    ins = "INSERT INTO eval_runs (id, kind, agent_id, status, samples, created_at) VALUES (?,?,?,?,?,?)"
+    h1.store.conn.execute(ins, ("ev_stale", "post_apply", "a", "running", 2, now_iso()))
+    h1.store.conn.execute(ins, ("ev_done", "post_apply", "a", "passed", 2, now_iso()))
+    h1.store.close()
+    h2 = Hub(hub_home, runtime=FakeRuntime())
+    h2.start()
+    rows = {r[0]: r for r in h2.store.conn.execute("SELECT id, status, reason, finished_at FROM eval_runs").fetchall()}
+    assert rows["ev_stale"][1] == "deferred_no_eval" and "interrupted" in rows["ev_stale"][2] and rows["ev_stale"][3]
+    assert rows["ev_done"][1] == "passed" and rows["ev_done"][3] is None  # eval đã xong không bị đụng
+    ev = h2.store.query_events(types=["eval.completed", "recovery.reconciled"])
+    assert any(e.type == "eval.completed" and e.payload.get("eval_id") == "ev_stale" for e in ev)
+    assert any(e.type == "recovery.reconciled" and e.payload.get("evals_closed") == ["ev_stale"] for e in ev)
+    h2.store.close()
