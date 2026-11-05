@@ -827,6 +827,15 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS golden_suggestions_hash ON golden_suggestions(prompt_hash);
     CREATE INDEX IF NOT EXISTS golden_suggestions_status ON golden_suggestions(status, agent_id);
     """,
+    # v22 — hub đứng 3–14 s mỗi `manager.check_s` (docs/dev-notes/runs-live-index.md): câu "run đang sống của X" (`<cột>=? AND status IN
+    # (queued,running,waiting_human)`) chưa có ANALYZE nên SQLite chọn `runs_agent`/`runs_session`/`runs_team` → duyệt TOÀN BỘ lịch sử run
+    # của X, mỗi dòng đọc qua `prompt`+`argv_redacted` (> 1 trang 4 KB → trang tràn) để lấy `status`. Máy thiếu RAM → đọc đĩa ngẫu nhiên
+    # vài MB trên luồng event loop. Index (<cột>, status) → chỉ chạm các run đang sống, chi phí không tăng theo lịch sử.
+    """
+    CREATE INDEX IF NOT EXISTS runs_agent_status ON runs(agent_id, status);
+    CREATE INDEX IF NOT EXISTS runs_session_status ON runs(session_id, status);
+    CREATE INDEX IF NOT EXISTS runs_team_status ON runs(team_id, status);
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
