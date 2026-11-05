@@ -53,7 +53,13 @@ Xong thì mở giao diện web bằng `cfharness web --open` hoặc chat với �
 ### Cập nhật
 
 Mỗi bản phát hành là một tag `vX.Y.Z`, danh sách ở [Releases](https://github.com/lephuong123/agent-hub/releases).
-Cập nhật lên bản mới = cài đè đúng tag đó:
+
+Cách nhanh: bấm **Cập nhật lên vX.Y.Z** ở đầu trang *Cài đặt* của giao diện web, hoặc chạy `cfharness update`
+(`cfharness update --check` chỉ kiểm tra). Hub tự dừng daemon, cài bản mới nhất, rồi khởi động lại daemon (khoảng 1 phút);
+nhật ký ở `~/.cfharness/logs/update.log`. Sau đó tắt và mở lại `cfharness web` / `cfharness chat` đang mở để dùng bản mới.
+Chỉ dùng được với bản cài bằng `uv tool install git+…` như trên (bản cài từ mã nguồn thì cập nhật bằng `git pull`).
+
+Cập nhật bằng tay = cài đè đúng tag đó:
 
 ```bash
 cfharness daemon stop

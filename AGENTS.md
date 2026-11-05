@@ -541,3 +541,15 @@ Quality (PR quality): độ tin cậy CHỈ đổi theo KẾT QUẢ run (`graph_
 tuổi chỉ giảm HẠNG lúc đọc, không bao giờ xoá. `confidence` + `mem_fact_uses` ghi ngoài ledger (dẫn xuất, như `mem_vectors`). Consolidation chỉ
 ĐÓNG hiệu lực + liên kết thay thế (`invalidated_by`) qua pipeline (`created_by=curator`, không ăn suất agent), không bao giờ xoá episode, bỏ qua fact
 người pin. Golden memory (`checker.kind=memory_recall`) không chạy run/không gọi model; chỉ dùng cho lô entry graph.
+
+## Cập nhật cfharness — nút "Cập nhật hệ thống" (web Cài đặt) + `cfharness update`
+Chi tiết: `docs/dev-notes/update.md`. Không migration. Test: `tests/test_update.py` (không gọi mạng/uv thật).
+
+| Module | Vai trò |
+|---|---|
+| `updater.py` | `hub.updater`: bản mới nhất (GitHub Releases, cache 10 phút), kiểu cài (`uv-receipt.toml`: chỉ `uv_git` cập nhật được), `start` → chép helper, spawn, daemon tự dừng; RPC `update.check|status|start` |
+| `update_helper.py` | Tiến trình phụ CHỈ stdlib, chạy bằng python gốc ngoài venv (`-I`): chờ daemon thoát → `uv tool install --force … @<tag>` → `python -m cfharness daemon start` → `HUB_HOME/update/state.json`, `logs/update.log` |
+| `update_cli.py`, `web/update_pages.py` | `cfharness update [--check] [--yes] [--force] [--tag]`; thẻ đầu Cài đặt (`/partials/update`, poll khi đang cập nhật) + trang `/update`, thao tác `update_start` (xác nhận) |
+
+Bất biến: `update.start` ∈ HUMAN_ONLY (không ở MANAGER_ALLOWED), `cfharness update` ∈ `HUB_HUMAN_ONLY_CLI`; tag chỉ dạng `vX.Y.Z`, repo cố định
+(`updater.REPO`); có run chạy/chờ → từ chối trừ `force`. Helper không được import `cfharness` (venv bị cài đè trong lúc chạy).

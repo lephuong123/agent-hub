@@ -916,6 +916,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .session_search import add_parsers as _add_search_parsers
 
     _add_search_parsers(sub, common)
+
+    # cập nhật cfharness lên bản phát hành mới nhất: cfharness update [--check] (update_cli.py, updater.py)
+    from .update_cli import add_parsers as _add_update_parsers
+
+    _add_update_parsers(sub, common)
     return p
 
 

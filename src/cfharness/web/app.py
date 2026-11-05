@@ -1433,6 +1433,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_skill_routes(),
         *_memory_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
+        *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
     app = Starlette(routes=routes, exception_handlers={HTTPException: http_error, RpcError: rpc_error, DaemonUnavailable: rpc_error})
@@ -1458,5 +1459,10 @@ _mcpp.register_actions(ACTIONS, Action, _req)
 from . import slack_pages as _slack_pages  # noqa: E402
 
 _slack_pages.register_actions(ACTIONS, Action, _req)
+
+# Nút "Cập nhật hệ thống" (updater.py): update_start + thẻ ở đầu Cài đặt, trang /update
+from . import update_pages as _update_pages  # noqa: E402
+
+_update_pages.register_actions(ACTIONS, Action, _req)
 
 __all__ = ["create_app", "ACTIONS", "agent_changes", "replay_items", "WebState", "urlencode"]

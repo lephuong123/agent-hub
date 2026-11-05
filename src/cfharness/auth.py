@@ -97,6 +97,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # Lịch chạy tự động (schedules/): lịch = việc chạy lặp NGOÀI phiên người (tốn tiền, gửi tin) — chỉ người; điều phối viên qua
         # MANAGER_ALLOWED (create/pause/resume/rm/run_now lịch CỦA MÌNH, trần số lịch/tần suất/ngân sách — schedules.manager_check)
         "schedule.create", "schedule.update", "schedule.pause", "schedule.resume", "schedule.rm", "schedule.run_now",
+        # Cập nhật cfharness (updater.py): cài đè phần mềm + dừng/khởi động lại daemon NGOÀI sandbox — chỉ người
+        "update.start",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})
@@ -188,7 +190,7 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.curation.rpc", "MUTATING_CURATION"), ("cfharness.chat.rpc", "MUTATING_TELEGRAM"), ("cfharness.chat.slack.rpc", "MUTATING_SLACK"),
                       ("cfharness.manager.rpc", "MUTATING_MANAGER"),
                       ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS"),
-                      ("cfharness.schedules.rpc", "MUTATING_SCHEDULES")):
+                      ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE")):
         try:
             import importlib
 

@@ -115,6 +115,10 @@ class Daemon:
         from .schedules.rpc import register_rpc as _register_schedules
 
         _register_schedules(self)
+        # Cập nhật cfharness lên bản phát hành mới nhất: update.check|status|start (updater.py — tự bọc audit update.start)
+        from .updater import register_rpc as _register_update
+
+        _register_update(self)
         # M1 luồng A: thêm mcp.*/secret.*/audit.*/feedback.* và bọc audit các method thay đổi trạng thái.
         # GIỮ Ở CUỐI __init__ — method thêm sau dòng này sẽ không được audit tự động.
         from .mcp_server.rpc import register_rpc

@@ -3,6 +3,7 @@
 {% block title %}Cài đặt{% endblock %}
 {% block content %}
 <div class="page-head"><div class="ph-title"><h1>Cài đặt</h1><span class="sub">Dừng khẩn cấp, thông báo, secret và giới hạn của hub.</span></div></div>
+<div id="update" hx-get="/partials/update" hx-trigger="load" hx-swap="outerHTML"></div>
 <section class="card {{ 'attention' if estop.on }}" id="estop">
   <h2>{{ m.icon('power') }} Dừng khẩn cấp (ESTOP)</h2>
   {% if estop.on %}
