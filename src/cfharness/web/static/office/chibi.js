@@ -45,6 +45,11 @@ const _live = new Set(); // chibi đang sống — đổi tier áp cho cả chib
 // (trễ giữa hai mốc để không nhấp nháy). Toàn cảnh 20–40 agent: chibi cao ~40–70 px → hình xa; bay tới / đi bộ gần: hình gần.
 // viewH = chiều cao khung vẽ (CSS px). Gọi mỗi khung trước khi vẽ.
 const LOD_FAR_PX = 80, LOD_NEAR_PX = 96;
+// chế độ đi bộ (camera thấp, nhiều nhân vật ở tầm trung): mốc cao hơn → nhân vật cao < 160 px dùng hình xa (ít đỉnh skinning,
+// ít draw-time CPU/GPU); nhìn gần (> 190 px) vẫn hình gần
+const LOD_WALK = [160, 190];
+let _lod = [LOD_FAR_PX, LOD_NEAR_PX];
+export function setChibiLodWalk(on) { _lod = on ? LOD_WALK : [LOD_FAR_PX, LOD_NEAR_PX]; }
 export function updateChibiLod(camera, viewH) {
   const ppu = (1.4 * viewH) / (2 * Math.tan((camera.fov * Math.PI) / 360));
   const cam = camera.matrixWorld.elements;
@@ -52,11 +57,17 @@ export function updateChibiLod(camera, viewH) {
     if (!c.geoFar) continue;
     const e = c.group.matrixWorld.elements;
     const px = ppu / Math.max(0.1, Math.hypot(e[12] - cam[12], e[13] - cam[13], e[14] - cam[14]));
-    const far = c.far ? px < LOD_NEAR_PX : px < LOD_FAR_PX;
+    const far = c.far ? px < _lod[1] : px < _lod[0];
     if (far !== c.far) { c.far = far; c.mesh.geometry = far ? c.geoFar : c.geoNear; }
   }
 }
 
+// Tier high: World không dùng IBL (office-3d-visual.md §3, phase 2) — chỉ vật liệu vinyl của nhân vật giữ env map riêng (highlight).
+export function setChibiEnv(tex, intensity) {
+  const v = mats().vinyl;
+  if (v.envMap !== tex) { v.envMap = tex || null; v.needsUpdate = true; }
+  if (intensity != null) v.envMapIntensity = intensity;
+}
 // Tier chất lượng nhân vật: 'high' = vinyl PBR + rim, 'low' = Lambert vertex color. Gọi được trước khi có chibi nào và gọi lặp lại.
 export function setChibiQuality(tier) {
   const q = tier === 'low' ? 'low' : 'high';
@@ -362,7 +373,7 @@ export class Chibi {
     _live.add(this);
 
     // vòng dưới chân: đỏ = chờ bạn duyệt; cam = đang chọn
-    const ringO = { transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false, fog: false };
+    const ringO = { transparent: true, depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true, toneMapped: false, fog: false }; // 1 lượt: không tính lại program mỗi khung
     this.ringRed = new THREE.Mesh(geo('ringR', () => new THREE.RingGeometry(0.36, 0.46, 32)), basic('#e0443a', Object.assign({ opacity: 0.85 }, ringO)));
     this.ringRed.rotation.x = -Math.PI / 2; this.ringRed.position.y = 0.02; this.ringRed.visible = false; g.add(this.ringRed);
     this.ringSel = new THREE.Mesh(geo('ringS', () => new THREE.RingGeometry(0.5, 0.58, 40)), basic('#d97757', Object.assign({ opacity: 0.95 }, ringO)));

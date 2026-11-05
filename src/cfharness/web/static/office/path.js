@@ -39,19 +39,26 @@ export class Grid {
     this.minX = minX; this.minZ = minZ;
     this.cols = Math.ceil(w / this.cell); this.rows = Math.ceil(d / this.cell);
     this.block = new Uint8Array(this.cols * this.rows);
+    // chiều cao vật chặn mỗi ô (m) — camera đi bộ co cần khi vật cao hơn tia nhìn (walk.js armHit); tường mặc định 2,6
+    this.top = new Float32Array(this.cols * this.rows);
   }
+  topAt(c, r) { return this.inside(c, r) ? this.top[r * this.cols + c] : 99; }
   inside(c, r) { return c >= 0 && r >= 0 && c < this.cols && r < this.rows; }
   blocked(c, r) { return !this.inside(c, r) || this.block[r * this.cols + c] === 1; }
   cellOf(x, z) { return [Math.floor((x - this.minX) / this.cell), Math.floor((z - this.minZ) / this.cell)]; }
   center(c, r) { return [this.minX + (c + 0.5) * this.cell, this.minZ + (r + 0.5) * this.cell]; }
 
-  // Đánh dấu chướng ngại theo hình chữ nhật thế giới (mọi ô có tâm nằm trong vùng + đệm).
-  rect(x0, z0, x1, z1, pad, val) {
-    const p = pad == null ? 0.12 : pad, v = val == null ? 1 : val;
+  // Đánh dấu chướng ngại theo hình chữ nhật thế giới (mọi ô có tâm nằm trong vùng + đệm). h = chiều cao vật (mặc định 2,6 = tường).
+  rect(x0, z0, x1, z1, pad, val, h) {
+    const p = pad == null ? 0.12 : pad, v = val == null ? 1 : val, ht = h == null ? 2.6 : h;
     const [c0, r0] = this.cellOf(Math.min(x0, x1) - p, Math.min(z0, z1) - p);
     const [c1, r1] = this.cellOf(Math.max(x0, x1) + p, Math.max(z0, z1) + p);
     for (let r = Math.max(0, r0); r <= Math.min(this.rows - 1, r1); r++) {
-      for (let c = Math.max(0, c0); c <= Math.min(this.cols - 1, c1); c++) this.block[r * this.cols + c] = v;
+      for (let c = Math.max(0, c0); c <= Math.min(this.cols - 1, c1); c++) {
+        const i = r * this.cols + c;
+        this.block[i] = v;
+        this.top[i] = v === 1 ? Math.max(this.top[i], ht) : 0;
+      }
     }
   }
 
@@ -81,6 +88,14 @@ export class Grid {
       if (this.blocked(c, r)) return false;
     }
     return true;
+  }
+
+  // Đường đi được cho thân bán kính r: đường tâm + hai đường song song lệch ±r (kéo căng đường tự đi không lẹm góc).
+  lineFreeR(ax, az, bx, bz, r) {
+    const dx = bx - ax, dz = bz - az, len = Math.hypot(dx, dz);
+    if (len < 1e-6) return !this.blocked(...this.cellOf(ax, az));
+    const nx = (-dz / len) * r, nz = (dx / len) * r;
+    return this.lineFree(ax, az, bx, bz) && this.lineFree(ax + nx, az + nz, bx + nx, bz + nz) && this.lineFree(ax - nx, az - nz, bx - nx, bz - nz);
   }
 
   // Trả danh sách điểm {x, z} (không gồm điểm đầu), điểm cuối đúng (tx, tz).

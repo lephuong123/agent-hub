@@ -92,11 +92,30 @@ export const FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto
 export const EMOJI_FONT = '"Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif';
 
 // Cắt chữ cho vừa bề rộng (thêm "…"). Chỉ đo/vẽ — không diễn giải nội dung.
+// Tìm nhị phân độ dài cắt (≈ log₂ n lần measureText thay vì n lần — chuỗi dài từng tốn hàng chục ms mỗi lần vẽ gợi ý).
 export function fitText(ctx, text, maxW) {
-  let t = String(text == null ? '' : text).replace(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩]/g, '');
+  const t = String(text == null ? '' : text).replace(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩]/g, '');
   if (ctx.measureText(t).width <= maxW) return t;
-  while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
-  return t + '…';
+  let lo = 1, hi = t.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ctx.measureText(t.slice(0, mid) + '…').width <= maxW) lo = mid; else hi = mid - 1;
+  }
+  return t.slice(0, Math.max(1, lo)) + '…';
+}
+// Emoji vẽ một lần vào canvas nhỏ rồi drawImage (font emoji màu chậm hơn chữ thường nhiều lần).
+const _icons = new Map();
+export function iconCanvas(emoji, px) {
+  const k = emoji + '|' + px;
+  let c = _icons.get(k);
+  if (!c) {
+    c = document.createElement('canvas'); c.width = px; c.height = px;
+    const x = c.getContext('2d');
+    x.font = Math.round(px * 0.82) + 'px ' + EMOJI_FONT; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText(emoji, px / 2, px / 2 + px * 0.04);
+    _icons.set(k, c);
+  }
+  return c;
 }
 
 function texFromCanvas(c) {
@@ -183,6 +202,21 @@ export function textCanvas(w, h, draw) {
   return texFromCanvas(c);
 }
 
+// Tắt dần theo hàm mũ, độc lập dt: sau thời gian dt còn lại e^(−λ·dt) khoảng cách tới đích. λ = Infinity → tới đích ngay
+// (reduced-motion). Chuỗi khung 1/60 hay 1/30 đều cho cùng quỹ đạo theo thời gian (khác lerp(dt*k) phụ thuộc nhịp khung).
+export function damp(a, b, lambda, dt) {
+  if (lambda === Infinity) return b;
+  return a + (b - a) * (1 - Math.exp(-lambda * dt));
+}
+// Như damp cho góc (radian): đi đường ngắn nhất qua ±π.
+export function dampAngle(a, b, lambda, dt) {
+  let d = b - a;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  if (lambda === Infinity) return a + d;
+  return a + d * (1 - Math.exp(-lambda * dt));
+}
+
 export function lerpAngle(a, b, t) {
   let d = b - a;
   while (d > Math.PI) d -= Math.PI * 2;
@@ -208,11 +242,13 @@ export function declutter(items) {
   return out;
 }
 
-// Nhịp vẽ của văn phòng 3D (docs/dev-notes/office-3d-perf.md): `active` (camera/cảnh đang chuyển động) → MOTION_FPS, còn lại IDLE_FPS.
-// Vẽ khi đã qua (chu kỳ đích − nửa khoảng rAF `gapEst`) → khớp lưới vsync: màn 60 Hz động = mọi khung, yên = cách 1 khung (30 đều);
-// màn 120/144 Hz động = cách 1 khung (60/72). rAF chậm hơn chu kỳ đích (máy bận) → vẽ mọi rAF, không bỏ thêm khung.
+// Nhịp vẽ của văn phòng 3D (docs/dev-notes/office-3d-perf.md): cổng thuần dùng bởi office/pacer.js.
+// frameGate(ts, lastDraw, periodMs, vsync): vẽ khi đã qua (chu kỳ đích − nửa vsync − 0,5 ms) → khớp lưới vsync (chu kỳ = d·vsync:
+// d = 1 vẽ mọi rAF, d = 2 cách một rAF). Chữ ký cũ frameGate(ts, lastDraw, gapEst, active) (đối số thứ tư boolean) vẫn được hỗ trợ:
+// active → MOTION_FPS, không → IDLE_FPS; rAF chậm hơn chu kỳ đích (máy bận) → vẽ mọi rAF, không bỏ thêm khung.
 export const MOTION_FPS = 60, IDLE_FPS = 30;
-export function frameGate(ts, lastDraw, gapEst, active) {
-  const T = 1000 / (active ? MOTION_FPS : IDLE_FPS);
-  return ts - lastDraw >= T - gapEst / 2 - 0.5;
+export function frameGate(ts, lastDraw, a, b) {
+  let periodMs = a, vsync = b;
+  if (typeof b === 'boolean') { periodMs = 1000 / (b ? MOTION_FPS : IDLE_FPS); vsync = a; }
+  return ts - lastDraw >= periodMs - vsync / 2 - 0.5;
 }

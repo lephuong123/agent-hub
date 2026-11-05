@@ -19,23 +19,41 @@ KHÔNG dùng PointerLockControls — xoay bằng kéo chuột cho gọn, không 
 - Nút **🚶** (`#office-walk`, cạnh nút "2D"; `aria-pressed`) bật/tắt chế độ đi bộ; nút **👁** (`#office-pov`, chỉ hiện khi đang đi bộ) hoặc
   phím **V** đổi góc nhìn thứ ba ↔ thứ nhất. Hai nút `hidden` trong template, office.js bỏ `hidden` khi có WebGL (fallback → ẩn lại).
   Đây là ngoại lệ thứ hai của quy ước "chỉ canvas + nút 2D" (chủ hub yêu cầu nút chuyển) — xem `office-3d.md`.
-- **WASD / phím mũi tên** đi theo hướng camera (Shift chạy 4,2 m/s, thường 2,4 m/s); **kéo chuột / kéo tay** xoay hướng nhìn;
+- **WASD / phím mũi tên** đi theo hướng camera (Shift chạy 4,2 m/s, thường 2,4 m/s); **kéo chuột / kéo tay** xoay hướng nhìn
+  (`LOOK_SENS` 0,006 rad/px, dọc 2/3; vượt ngưỡng 5 px lấy mốc tại đó — `lookDrag`, không nhảy; chuột cộng dồn, áp một lần mỗi khung);
   **con lăn** đổi khoảng cách camera (1,8–7 m); **bấm / chạm sàn** → tự đi tới theo A* của `Grid` (bấm vào đồ đạc → dừng ở ô trống cuối).
   **E** tương tác; **Esc** đóng bảng/thẻ trước, lần sau ra toàn cảnh. Phím bị bỏ qua khi có bảng modal/chat mở, đang gõ chữ, hoặc có Ctrl/Alt/Meta.
 - Mobile: chạm sàn để đi + kéo để xoay (chọn thay joystick ảo để không thêm phần tử DOM nhìn thấy).
 
+## Động học (phase 2 — `office-3d-perf.md` §7)
+- Avatar có **vận tốc**: `vel` tiến tới vận tốc mong muốn bằng `damp` (util.js, độc lập dt) — tăng tốc λ 14, hãm λ 24, kèm trần gia tốc
+  28 m/s² (mỗi khung 60 Hz đổi tốc ≤ 0,47 m/s; dừng hẳn ~0,18–0,2 s sau khi nhả). `dt` kẹp 0,25 s, chia bước con ≤ 1/120 s → cùng quỹ đạo
+  dù khung 16,7 hay 33,4 ms. Mỗi bước con: `circleMove` rồi `vel = quãng thực / h` (mất phần đâm vào tường). Yaw thân `dampAngle` λ 16.
+- **Tự đi** (bấm sàn): đường A* kéo căng bằng `Grid.lineFreeR` (thân bán kính `WALK_R`), pure pursuit nhắm trước 0,6 m, bỏ đỉnh đã tới/đã
+  vượt, hãm dần trong 0,8 m cuối; đi bằng cùng bộ vận tốc + va chạm như phím (không gán vị trí trực tiếp). Camera theo hướng đi (λ 2,5) trừ khi
+  vừa kéo nhìn trong 1 s.
+- **reduced-motion**: mọi λ = ∞ (vận tốc/camera gán thẳng), bấm sàn dịch chuyển tức thời, không bay vào.
+
 ## Camera
-- Góc thứ ba: sau lưng avatar, cao ~2,5 m, nhìn vào đầu (y 1,0), bám mượt (lerp 8/s); giữ trong văn phòng (không lùi ra sau tường bắc/tây cao).
+- Góc thứ ba = **spring-arm** (phase 2): hướng `camYaw`/`camPitch` damp λ 30 (λ 6 trong 0,6 s đầu khi bay vào), khoảng cách zoom λ 12; đầu avatar
+  (pivot, y 1,0) gắn cứng — camera = pivot + d·len, luôn `lookAt(pivot)` (khoảng cách không còn co giãn 2,9–3,6 m, không trôi sau khi dừng).
+  **Cần co theo lưới có chiều cao** (`armHit`: đi lưới bước 0,1 m dọc tia; ô bị chặn có `Grid.top` > độ cao tia − 0,1 → cần ngắn lại, ≥ 0,6 m;
+  co ngay, dài lại λ 4); đồ cao sát sau lưng (cần < 1,2 m) → nâng cần dốc dần tới −1,3 rad thay vì dí camera vào đồ. Không raycast mesh.
+  Vào đi bộ / đóng bảng / đứng dậy: lấy hướng + khoảng cách từ vị trí camera hiện tại → bay vào bằng chính damping cầu (không tween riêng).
+  Trước phase 2: lerp vị trí 8/s.
   Tường/vách nằm giữa camera và avatar (raycast tới `World.occluders`: tường bắc/tây, vách phòng, kính, vách cafe) → gán tạm
   `World.fadeMat` (MỘT vật liệu riêng, mờ 0,18), trả vật liệu gốc khi hết che. Không đụng vật liệu bộ đệm `mat()`/`basic()`.
+- Tường mỏng còn chen giữa camera và avatar vẫn làm mờ như dưới (raycast `occluders`, mảng/Set dùng lại — không cấp phát mỗi khung).
 - Góc thứ nhất: mắt ở 1,02 m, ẩn avatar.
 - Khi xem bảng / chat (camera bay tới như chế độ toàn cảnh) walker nhường camera; đóng lại → camera lướt từ chỗ đang đứng về sau lưng avatar.
 - OrbitControls tắt trong chế độ đi bộ (kể cả `controls.update()`); ra khỏi chế độ → bay về toàn cảnh.
 
 ## Va chạm & đi đường (`office/walk.js`)
 - Dùng lưới chướng ngại sẵn có của `World` (ô 0,5 m; tường đệm 0,15, đồ đạc 0,02–0,1; ghế không chặn). Avatar bán kính `WALK_R = 0,12`
-  (nhỏ hơn đệm tường để qua cửa một ô lưới); `blockedAt` lấy mẫu tâm + 8 điểm; `slideMove` cắt bước ≤ 0,1 m và trượt theo trục khi
-  đâm tường. Bấm sàn: đi theo đường A* (đã là ô trống) không kiểm va chạm lại — giống nhân vật agent.
+  (nhỏ hơn đệm tường để qua cửa một ô lưới); `blockedAt` lấy mẫu tâm + 8 điểm. Phase 2: **`circleMove`** — va chạm hình tròn với AABB các ô
+  bị chặn (bước con ≤ r/2, đẩy ra theo pháp tuyến tới điểm gần nhất, 2 vòng) → trượt dọc tường liền mạch (trước: thử cả bước rồi từng trục,
+  tốc độ nhảy 2,4 → 0,57 → 2,05 m/s); `slideMove` giữ chữ ký, gọi `circleMove`. `Grid.top` (chiều cao vật chặn, tường 2,6; world.js truyền
+  chiều cao bàn/ghế/sofa/tủ/quầy/cây) dùng cho cần camera. Bấm sàn: đi bằng bộ vận tốc + `circleMove` như phím.
 - `World.rooms`: 8 phòng có tên + điểm `p` bên trong (server, thư viện, phòng họp, điều phối viên, cafe, pantry, phòng nghỉ, hàng ghế chờ);
   `roomAt(x, z)` → tên phòng trên dòng gợi ý; ngoài phòng = "Khu làm việc". Điểm vào của avatar: `spawnPoint(world)` = ô trống gần tâm khu
   làm việc nhất (giữa dãy phòng bắc và cafe, ngoài mọi phòng), nhìn về phía bắc. (Trước đây `(W − 1,4, D − 1,2)` sát cửa ra — xem "Sửa sau chạy thử".)
@@ -76,6 +94,9 @@ KHÔNG dùng PointerLockControls — xoay bằng kéo chuột cho gọn, không 
   dùng vật liệu riêng (`ownMats`, dispose cùng World).
 
 ## Kiểm tra
+- `tests/office_walk_motion_check.mjs` (phase 2, `test_walk_motion_headless`): trượt tường 20°, qua mọi cửa, 10 000 bước ngẫu nhiên không lẹm;
+  gia tốc ≤ 40 m/s² và dừng ≤ 0,25 s với dt đều / xen kẽ / gai; tự đi hãm dần, không lẹm; reduced dịch chuyển tức thời; camera đi thẳng/xoay
+  6 rad/s giữ 3,40 m, CV tốc độ ≤ 0,01 với dt xen kẽ; sát đồ cao không chui vào đồ; 120 khung không tạo Set mới.
 - `tests/office_layout_check.mjs` (commit theo finding Low của reviewer PR #52) + `tests/test_office_walk.py` gọi nó: dựng `World` thật
   (canvas giả) với 1/5/19/40/80 agent, có/không team: số chỗ cafe + giữ chỗ, không chồng lấn, A* bàn → cafe/pantry/quầy/ghế chờ/cửa ra,
   **avatar từ điểm vào tới được cả 8 phòng**, đi thẳng bằng phím qua cửa 4 phòng phía bắc, không xuyên vách server|thư viện, vách trước

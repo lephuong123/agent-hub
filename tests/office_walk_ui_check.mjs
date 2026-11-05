@@ -10,7 +10,7 @@ const ctx = new Proxy({}, {
   set: (t, k, v) => { t[k] = v; return true; },
 });
 globalThis.document = { createElement: () => ({ width: 0, height: 0, getContext: () => ctx, style: {} }) };
-const { walkBusy, hintShown, hintLayout } = await import(url('walk.js'));
+const { walkBusy, hintShown, hintLayout, lookDrag, LOOK_SENS } = await import(url('walk.js'));
 const { declutter, frameGate, MOTION_FPS, IDLE_FPS } = await import(url('util.js'));
 const { Chibi, updateChibiLod } = await import(url('chibi.js'));
 
@@ -41,6 +41,13 @@ for (let i = 0; i < 19; i++) crowd.push({ id: 'g' + i, x: 300 + (i % 5) * 12, y:
 const kc = declutter(crowd);
 check(`declutter: cụm 19 nhãn chồng → còn ít (${kc.size})`, kc.size >= 1 && kc.size <= 2);
 
+// kéo nhìn: dưới ngưỡng 5 px = còn là cú bấm; lần đầu vượt ngưỡng không nhảy (delta đầu ≤ 1 px), sau đó delta đúng từng bước
+{
+  const down = { x: 100, y: 100, lx: 100, ly: 100, drag: false };
+  const a = lookDrag(down, 103, 102, 5), b = lookDrag(down, 106, 101, 5), c = lookDrag(down, 110, 101, 5);
+  check(`kéo nhìn: dưới ngưỡng null, vượt ngưỡng: delta đầu ${b && Math.hypot(b.dx, b.dy)} px (≤ 1), sau đó ${c && c.dx} px`,
+    a === null && b && Math.hypot(b.dx, b.dy) <= 1 && down.drag && c && c.dx === 4 && c.dy === 0 && LOOK_SENS === 0.006);
+}
 // nhịp vẽ: mô phỏng rAF theo tần số màn hình, đếm khung được vẽ trong 1 s
 const drawn = (hz, active) => {
   const gap = 1000 / hz; let last = 0, n = 0;

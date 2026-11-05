@@ -30,6 +30,9 @@ const BLACK = '#26272b', ALU = '#a9aeb4', BACKF = '#34363c', LEAVES = ['#4f7d4a'
 const THEME = { light: { ground: '#faf9f5', plinth: '#cfc6b8' }, dark: { ground: '#262624', plinth: '#3a3732' } };
 // tier low không có env PMREM: bù phần sáng env bằng hemi (≈ cùng độ sáng high, không ngả nâu) — đo bằng so pixel sàn high/low
 const LOW_ENV_HEMI = 1.6;
+// tier high cũng không còn IBL cho World (PBR không env map — tiết kiệm sample PMREM mỗi pixel, đắt trên Iris Xe ở góc đi bộ):
+// bù bằng hemi như low, hệ số chọn bằng so độ sáng pixel sàn với bản có IBL (9h/14h/18h, theme tối)
+const HIGH_ENV_HEMI = 1.9;
 // chế độ đi bộ: shadow camera thu nhỏ quanh avatar (±SHADOW_NEAR m, tâm lệch FOCUS_AHEAD m về hướng nhìn) → texel nhỏ ~2,5× (hết bậc thang);
 // tâm lệch quá FOCUS_MOVE m mới vẽ lại bóng (1 khung)
 const SHADOW_NEAR = 11, FOCUS_AHEAD = 4.5, FOCUS_MOVE = 2.5;
@@ -175,7 +178,7 @@ export class World {
   // tấm chữ phẳng MeshBasic (biển kiến trúc) — vào this.signs (ẩn khi xem bảng), không userData.base (không phóng to)
   _plate(texture, w, h, x, y, z, rotY, opts) {
     const o = opts || {};
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: texture, toneMapped: false, transparent: !!o.transparent, depthWrite: !o.transparent, side: o.double ? THREE.DoubleSide : THREE.FrontSide }));
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: texture, toneMapped: false, transparent: !!o.transparent, depthWrite: !o.transparent, side: o.double ? THREE.DoubleSide : THREE.FrontSide, forceSinglePass: true }));
     m.position.set(x, y, z); m.rotation.y = rotY || 0; if (o.rx) m.rotation.x = o.rx;
     if (o.order) m.renderOrder = o.order;
     this.group.add(m); this.signs.push(m); this.textures.push(texture); this.ownMats.push(m.material); this.ownGeos.push(m.geometry);
@@ -238,13 +241,17 @@ export class World {
     this.dir.castShadow = true;
     const L = Math.hypot(W, D) * 0.62, sc = this.dir.shadow.camera;
     sc.left = -L; sc.right = L; sc.top = L; sc.bottom = -L; sc.near = 1; sc.far = 3 * Math.max(W, D); sc.updateProjectionMatrix();
-    this.dir.shadow.mapSize.set(2048, 2048); this.dir.shadow.bias = -0.0004; this.dir.shadow.normalBias = 0.03; this.dir.shadow.radius = 2.5;
+    this.dir.shadow.mapSize.set(1024, 1024); // 1024 cả toàn cảnh lẫn đi bộ (phase 2: refocus khi đi bộ rẻ hơn; không cấp lại render target)
+    this.dir.shadow.bias = -0.0004; this.dir.shadow.normalBias = 0.03; this.dir.shadow.radius = 2.5;
     this.dir.target.position.set(W / 2, 0, D / 2);
     this._shadowL = L; this._sunOff = new THREE.Vector3(); this._focus = null;
     this.shadowRefocus = false;  // office.js: true → vẽ lại shadow map 1 khung (tâm bóng đi theo avatar)
     this.fill = new THREE.DirectionalLight('#cfe0ff', 0.55);
     this.fill.target.position.set(W / 2, 0, D / 2);
-    g.add(this.hemi, this.dir, this.dir.target, this.fill, this.fill.target);
+    // bù phần sáng IBL đã bỏ (tier high): hemi RIÊNG màu trung tính-ấm như env PMREM (phòng xám nâu + đèn hộp trắng), KHÔNG theo màu trời —
+    // bù bằng chính hemi trời thì ban đêm (trời #9aa6d4, envInt 0,32) cả văn phòng ám tím-xanh, tối hơn ~10–16 % so với bản có IBL
+    this.envHemi = new THREE.HemisphereLight('#fff8ee', '#b89a7a', 0);
+    g.add(this.hemi, this.envHemi, this.dir, this.dir.target, this.fill, this.fill.target);
     this.hemiBase = this.hemi.color.clone(); this.dirBase = this.dir.color.clone(); this.fillBase = this.fill.color.clone();
     this.hemiInt = 1.1; this.dirInt = 3.0;
     this._sunKey = null;
@@ -282,13 +289,16 @@ export class World {
     pools.renderOrder = 2; g.add(pools); this.ownMats.push(this.poolMat); this.ownGeos.push(pools.geometry);
     // quầng neon cafe: 3 vật liệu (1/màu), màu chép từ rgbMats mỗi khung
     this.glowMats = this._glow.map((list) => {
-      const mat = new THREE.MeshBasicMaterial({ map: softTex('glow'), transparent: true, opacity: 0.4, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false });
+      const mat = new THREE.MeshBasicMaterial({ map: softTex('glow'), transparent: true, opacity: 0.4, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, toneMapped: false });
       if (list.length) { const m = new THREE.Mesh(quadGeo(list), mat); m.renderOrder = 2; g.add(m); this.ownGeos.push(m.geometry); }
       this.ownMats.push(mat);
       return mat;
     });
     // vệt nắng qua cửa sổ bắc (ban ngày)
-    this.sunShaftMat = new THREE.MeshBasicMaterial({ color: '#fff2d8', map: softTex('glow'), transparent: true, opacity: 0.1, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false });
+    // forceSinglePass: vật trong suốt DoubleSide mặc định vẽ 2 lượt (mặt sau rồi mặt trước) và three đặt needsUpdate giữa 2 lượt → tính lại
+    // program key (getParameters + getProgramCacheKey) MỖI khung cho từng vật liệu (đo: 60–120 lần/s mỗi cái). Cộng dồn / không ghi depth
+    // nên thứ tự mặt không đổi hình.
+    this.sunShaftMat = new THREE.MeshBasicMaterial({ color: '#fff2d8', map: softTex('glow'), transparent: true, opacity: 0.1, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, toneMapped: false });
     const sh = new THREE.Mesh(quadGeo(this._shafts), this.sunShaftMat); sh.renderOrder = 2; g.add(sh);
     this.ownMats.push(this.sunShaftMat); this.ownGeos.push(sh.geometry);
     this._ao = this._pools = this._glow = this._shafts = this._lampParts = null;
@@ -353,7 +363,10 @@ export class World {
   }
   _lightBase() {
     this.hemi.color.copy(this.hemiBase); this.dir.color.copy(this.dirBase); this.fill.color.copy(this.fillBase);
-    this.hemi.intensity = this.hemiInt + (getTier() === 'low' ? this.envInt * LOW_ENV_HEMI : 0); this.dir.intensity = this.dirInt;
+    const low = getTier() === 'low';
+    this.hemi.intensity = this.hemiInt + (low ? this.envInt * LOW_ENV_HEMI : 0); this.dir.intensity = this.dirInt;
+    this.envHemi.intensity = low ? 0 : this.envInt * HIGH_ENV_HEMI;
+    this.envHemi.color.set('#fff8ee');
   }
   // đặt đèn nắng + shadow camera: toàn cảnh = cả văn phòng; đi bộ (setShadowFocus) = ô vuông nhỏ quanh tâm bóng
   _applySun() {
@@ -443,7 +456,7 @@ export class World {
     B.box(0.7, 1.6, 0.5, rw - 0.6, 0, ROOM_D - 1.2, 'paint', '#e8edf0', { r: 0.03 });
     for (let k = 0; k < 6; k++) B.box(0.52, 0.012, 0.02, rw - 0.6, 1.1 + k * 0.06, ROOM_D - 0.945, 'metal', '#9aa5ad');
     this._aoq(rw - 0.6, ROOM_D - 1.2, 0.7, 0.5);
-    grid.rect(rw - 0.95, ROOM_D - 1.45, rw - 0.25, ROOM_D - 0.95, 0.1);
+    grid.rect(rw - 0.95, ROOM_D - 1.45, rw - 0.25, ROOM_D - 0.95, 0.1, 1, 1.6);
     sign(0, 'Phòng server', '#4f8fc0');
 
     // 1 — thư viện
@@ -486,7 +499,7 @@ export class World {
     B.cyl(0.05, 0.045, 0.1, tcx + 0.2, 0.6, tcz - 0.1, 'ceramic', '#f4f1ea', 14);
     B.box(0.22, 0.03, 0.3, tcx - 0.18, 0.6, tcz + 0.05, 'paint', '#b5473f', { rotY: 0.3 });
     this._aoq(tcx, tcz, 0.7, 0.7, true);
-    grid.rect(tcx - 0.5, tcz - 0.5, tcx + 0.5, tcz + 0.5, 0.05);
+    grid.rect(tcx - 0.5, tcz - 0.5, tcx + 0.5, tcz + 0.5, 0.05, 1, 0.75);
     for (const s of [-1, 1]) {
       const ax = tcx + s * 1.05, TEAL = '#5b8a8c', TD = darker(TEAL, 0.82);
       B.box(0.66, 0.24, 0.66, ax, 0.06, tcz, 'fabric', TD, { r: 0.05, seg: 2 });
@@ -496,7 +509,7 @@ export class World {
       for (const ox of [-0.26, 0.26]) for (const oz of [-0.26, 0.26]) B.cyl(0.02, 0.015, 0.06, ax + ox, 0, tcz + oz, 'walnut', WALNUT, 8);
       this._aoq(ax, tcz, 0.66, 0.66);
       this._spot('library', ax, tcz, s < 0 ? Math.PI / 2 : -Math.PI / 2, 'sitRead', 0.32);
-      grid.rect(ax - 0.31, tcz - 0.31, ax + 0.31, tcz + 0.31, 0.02);
+      grid.rect(ax - 0.31, tcz - 0.31, ax + 0.31, tcz + 0.31, 0.02, 1, 0.95);
     }
     this._plant(lx + rw - 0.6, ROOM_D - 0.7, 1);
     sign(1, 'Thư viện', '#7fb069');
@@ -508,7 +521,7 @@ export class World {
     for (const sx of [-1.0, 1.0]) { B.box(0.06, 0.58, 0.8, mcx + sx, 0.02, mcz, 'metal', BLACK); B.box(0.1, 0.02, 0.9, mcx + sx, 0, mcz, 'metal', BLACK); }
     B.box(1.9, 0.08, 0.04, mcx, 0.48, mcz, 'metal', BLACK);
     this._aoq(mcx, mcz, 2.7, 1.15);
-    grid.rect(mcx - 1.35, mcz - 0.58, mcx + 1.35, mcz + 0.58, 0.08);
+    grid.rect(mcx - 1.35, mcz - 0.58, mcx + 1.35, mcz + 0.58, 0.08, 1, 0.8);
     for (const side of [-1, 1]) for (const ox of [-0.85, 0, 0.85]) {
       const cz = mcz + side * 1.0;
       this._chair(mcx + ox, cz, side, '#b9705c');
@@ -532,7 +545,7 @@ export class World {
     for (const sx of [-0.88, 0.88]) B.box(0.06, 0.64, 0.8, ocx + sx, 0, 2.2, 'walnut', darker(WALNUT, 0.9));
     B.box(0.4, 0.5, 0.6, ocx + 0.55, 0.06, 2.2, 'walnut', darker(WALNUT, 0.95));
     this._aoq(ocx, 2.2, 1.9, 0.85);
-    grid.rect(ocx - 0.95, 1.78, ocx + 0.95, 2.62, 0.08);
+    grid.rect(ocx - 0.95, 1.78, ocx + 0.95, 2.62, 0.08, 1, 1.25);
     // ghế giám đốc (lưng cao) + màn hình hướng về ghế
     this._chair(ocx, 1.3, -1, '#3a3a40', { high: true });
     const mgrScreen = this._monitor(ocx, 2.4, -1, 0.69, 0.72);
@@ -548,7 +561,7 @@ export class World {
     B.box(0.45, 1.3, 1.2, ox0 + 0.4, 0, 2.4, 'walnut', WALNUT, { r: 0.02 });
     for (const oz of [-0.3, 0.3]) for (const y of [0.35, 0.8, 1.15]) B.box(0.02, 0.02, 0.18, ox0 + 0.635, y, 2.4 + oz, 'chrome', '#d0d4d8');
     this._aoq(ox0 + 0.4, 2.4, 0.45, 1.2);
-    grid.rect(ox0 + 0.15, 1.8, ox0 + 0.65, 3.0, 0.08);
+    grid.rect(ox0 + 0.15, 1.8, ox0 + 0.65, 3.0, 0.08, 1, 1.35);
     // màn hình chat với điều phối viên (giai đoạn 2): treo ở vách đông, quay vào trong phòng
     // đặt lệch về phía cửa (z 2.1…5.7) để điều phối viên (ngồi z≈1.3) đứng BÊN CẠNH màn hình, không che chữ
     B.box(0.1, 2.3, 3.9, this.W - 0.08, 0.4, 3.9, 'metal', '#2a2e38', { r: 0.02 });
@@ -642,11 +655,11 @@ export class World {
           if (id) this.seats.set(id, { zone: 'desk', x, z: c.cz + side * 1.35, rot: side < 0 ? 0 : Math.PI, pose: 'sit', seatY: 0.33, owner: id, screen, team: c.id, stand: { x, z: c.cz + side * 1.78 } });
         }
       }
-      this.grid.rect(deskX0 - 0.68, c.cz - 0.8, deskX0 + (c.k - 1) * 1.4 + 0.68, c.cz + 0.8, 0.08);
+      this.grid.rect(deskX0 - 0.68, c.cz - 0.8, deskX0 + (c.k - 1) * 1.4 + 0.68, c.cz + 0.8, 0.08, 1, 1.25); // bàn + màn hình
       // hiệu ứng ESTOP team: lớp đỏ trên sàn + đèn đỏ
       const ov = new THREE.Mesh(new THREE.BoxGeometry(c.w, 0.02, c.d), new THREE.MeshBasicMaterial({ color: '#ff3b30', transparent: true, opacity: 0.3, depthWrite: false }));
       ov.position.set(c.cx, 0.03, c.cz); g.add(ov);
-      const lamp = new THREE.Mesh(new THREE.ConeGeometry(Math.max(c.w, c.d) * 0.55, 3, 24, 1, true), new THREE.MeshBasicMaterial({ color: '#ff4d40', transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide }));
+      const lamp = new THREE.Mesh(new THREE.ConeGeometry(Math.max(c.w, c.d) * 0.55, 3, 24, 1, true), new THREE.MeshBasicMaterial({ color: '#ff4d40', transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true }));
       lamp.position.set(c.cx, 1.5, c.cz);
       ov.visible = lamp.visible = false; g.add(lamp);
       this.ownGeos.push(ov.geometry, lamp.geometry); this.ownMats.push(ov.material, lamp.material);
@@ -721,7 +734,7 @@ export class World {
     }
     B.sphere(0.12 * k, x, y + 0.72 * k, z, 'plant', LEAVES[1], 6, { rings: 4, scale: [1, 0.5, 1] });
     this._aoq(x, z, 0.32 * k, 0.32 * k, true);
-    if (!y0) this.grid.rect(x - 0.2 * k, z - 0.2 * k, x + 0.2 * k, z + 0.2 * k, 0.05);
+    if (!y0) this.grid.rect(x - 0.2 * k, z - 0.2 * k, x + 0.2 * k, z + 0.2 * k, 0.05, 1, 1.2 * k);
   }
 
   // ------------------------------------------------------------ khu cafe điện tử (agent rảnh ra ngồi chơi game)
@@ -793,7 +806,7 @@ export class World {
           this._spot('cafe', x, sz, side < 0 ? 0 : Math.PI, 'typeFast', 0.34, { screen, ph: i * 3.1 + j * 0.9 + (side > 0 ? 1.7 : 0), stand: { x, z: bz + side * 1.7 } });
         }
       }
-      grid.rect(first - 0.58, bz - 0.8, first + (c.k - 1) * CAFE_STEP + 0.58, bz + 0.8, 0.08);
+      grid.rect(first - 0.58, bz - 0.8, first + (c.k - 1) * CAFE_STEP + 0.58, bz + 0.8, 0.08, 1, 1.25);
       // cây cao ở hai đầu dãy, trên trục vách ngăn (chỉ khi còn ≥ 0,9 m trống — không chắn lối vòng quanh dãy)
       if ((sx1 - sx0 - span) / 2 >= 0.9) for (const px of [first - 0.95, first + (c.k - 1) * CAFE_STEP + 0.95]) this._plant(px, bz, 0.9);
     }
@@ -810,7 +823,7 @@ export class World {
       B.sphere(0.03, x0 + 0.84, 0.91, az + 0.1, 'emit', '#e9c46a', 8);
       this._aoq(x0 + 0.42, az, 0.6, 0.6);
     }
-    grid.rect(x0, cz - 0.75, x0 + 0.92, cz + 0.75, 0.05);
+    grid.rect(x0, cz - 0.75, x0 + 0.92, cz + 0.75, 0.05, 1, 1.1);
 
     // quầy nước nhỏ sát vách đông: quầy óc chó mặt terrazzo + tủ lạnh kính + ly; 2 chỗ đứng uống (zone cafeBar)
     const len = Math.min(2.4, z1 - z0 - 1.6), qx = x1 - 0.55;
@@ -887,7 +900,7 @@ export class World {
     for (let k = 0; k < 4; k++) B.box(0.01, 0.8, 0.9, 0.83, 0.03, zs + 1.38 + k * 0.95, 'walnut', darker(WALNUT, 0.85));
     B.box(0.82, 0.04, 3.85, 0.45, 0.86, zs + 2.8, 'ceramic', '#f1ede6', { r: 0.01, seg: 2 });
     this._aoq(0.45, zs + 2.8, 0.75, 3.8);
-    grid.rect(0, zs + 0.9, 0.85, zs + 4.7, 0.1);
+    grid.rect(0, zs + 0.9, 0.85, zs + 4.7, 0.1, 1, 2.0); // quầy + tủ treo
     B.box(0.42, 0.48, 0.38, 0.42, 0.9, zs + 1.6, 'paint', '#3a3a40', { r: 0.03 });
     B.box(0.3, 0.06, 0.2, 0.5, 1.2, zs + 1.6, 'chrome', '#c9ccd0');
     B.sphere(0.03, 0.64, 1.33, zs + 1.5, 'emit', '#ff5a4a', 8);
@@ -904,7 +917,7 @@ export class World {
     const hx = 4.0, hz = zs + 3.0;
     B.cyl(0.45, 0.45, 0.04, hx, 0.95, hz, 'wood', WOOD, 32); B.cyl(0.035, 0.035, 0.95, hx, 0, hz, 'metal', BLACK, 10); B.cyl(0.24, 0.26, 0.02, hx, 0, hz, 'metal', BLACK, 24);
     this._aoq(hx, hz, 0.6, 0.6, true);
-    grid.rect(hx - 0.45, hz - 0.45, hx + 0.45, hz + 0.45, 0.05);
+    grid.rect(hx - 0.45, hz - 0.45, hx + 0.45, hz + 0.45, 0.05, 1, 1.0);
     for (const s of [-1, 1]) {
       const sx = hx + s * 0.75;
       B.cyl(0.19, 0.18, 0.06, sx, 0.56, hz, 'fabric', '#d4a446', 20); B.cyl(0.02, 0.02, 0.56, sx, 0, hz, 'chrome', '#c9ccd0', 8);
@@ -917,7 +930,7 @@ export class World {
     // bình nước
     B.box(0.4, 0.9, 0.4, 6.8, 0, zs + 0.7, 'paint', '#dfe6ea', { r: 0.03 }); B.cyl(0.15, 0.15, 0.42, 6.8, 0.9, zs + 0.7, 'plastic', '#9fd3f0', 18);
     this._aoq(6.8, zs + 0.7, 0.4, 0.4);
-    grid.rect(6.6, zs + 0.5, 7.0, zs + 0.9, 0.08);
+    grid.rect(6.6, zs + 0.5, 7.0, zs + 0.9, 0.08, 1, 1.35);
 
     // phòng nghỉ (sofa)
     const lx0 = 8, lx1 = W - 8, lcx = (lx0 + lx1) / 2, lcz = zs + 3, rw2 = Math.min(6, lx1 - lx0 - 0.5);
@@ -936,7 +949,7 @@ export class World {
       B.box(0.36, 0.3, 0.12, lcx - 0.95, 0.42, z + side * 0.12, 'fabric', '#e9c46a', { r: 0.06, seg: 2, rx: side * 0.2, rotY: 0.2 });
       for (const sx of [-1.15, 1.15]) for (const oz of [-0.34, 0.34]) B.cyl(0.025, 0.018, 0.08, lcx + sx, 0, z + oz, 'walnut', WALNUT, 8);
       this._aoq(lcx, z, 2.5, 0.85);
-      grid.rect(lcx - 1.26, z - 0.43, lcx + 1.26, z + 0.43, 0.05);
+      grid.rect(lcx - 1.26, z - 0.43, lcx + 1.26, z + 0.43, 0.05, 1, 0.9);
       for (const sx of [-0.72, 0, 0.72]) this._spot('lounge', lcx + sx, z - side * 0.05, side < 0 ? 0 : Math.PI, 'relax', 0.4);
     };
     sofa(zs + 1.4, -1, '#6f97b0');
@@ -948,7 +961,7 @@ export class World {
     B.cyl(0.16, 0.08, 0.08, lcx + 0.35, 0.36, lcz + 0.1, 'ceramic', '#5b8a8c', 18);
     for (const [ox, oz, cc] of [[0.3, 0.08, '#e9b44c'], [0.4, 0.14, '#c8413a'], [0.36, 0.04, '#7fb069']]) B.sphere(0.05, lcx + ox, 0.46, lcz + oz, 'plastic', cc, 10);
     this._aoq(lcx, lcz, 1.5, 0.8);
-    grid.rect(lcx - 0.75, lcz - 0.4, lcx + 0.75, lcz + 0.4, 0.05);
+    grid.rect(lcx - 0.75, lcz - 0.4, lcx + 0.75, lcz + 0.4, 0.05, 1, 0.55);
     this._plant(lcx - 2.6, zs + 0.7, 1.2); this._plant(lcx + 2.6, zs + 5.3, 1.2);
     // đèn cây (chân đen, chao vải sáng) + vũng sáng ban đêm
     B.cyl(0.015, 0.015, 1.55, lcx + 2.7, 0.02, zs + 1.3, 'metal', BLACK, 8); B.cyl(0.14, 0.16, 0.02, lcx + 2.7, 0, zs + 1.3, 'metal', BLACK, 20);
@@ -966,7 +979,7 @@ export class World {
       for (const sx of [-1.2, 1.2]) { B.box(0.05, 0.28, 0.4, bx + sx, 0, bz, 'metal', BLACK); B.box(0.05, 0.4, 0.04, bx + sx, 0.3, bz - 0.24, 'metal', BLACK); }
       B.box(2.5, 0.03, 0.04, bx, 0.24, bz - 0.1, 'metal', BLACK);
       this._aoq(bx, bz, 2.6, 0.5);
-      grid.rect(bx - 1.3, bz - 0.27, bx + 1.3, bz + 0.25, 0.04);
+      grid.rect(bx - 1.3, bz - 0.27, bx + 1.3, bz + 0.25, 0.04, 1, 0.75);
       for (const sx of [-0.85, 0, 0.85]) this._spot('bench', bx + sx, bz, 0, 'sit', 0.35);
     }
     // thảm lối vào + bảng "Cần bạn" (đứng nghiêng như giá vẽ, quay về phía camera)
@@ -1101,6 +1114,7 @@ export class World {
       this.dir.color.set('#ff7b6e');
       this.fill.color.set('#ffb0a8');
       this.hemi.intensity = 1.0 + p * 0.4;
+      this.envHemi.color.copy(this.hemi.color); // ESTOP: phần bù IBL cũng đỏ (không pha loãng màu cảnh báo)
     }
     for (const fx of this.teamFx.values()) {
       if (!fx.on) continue;
@@ -1133,7 +1147,7 @@ export class World {
     this.batch.dispose();
     if (this.lampBatch) this.lampBatch.dispose();
     for (const im of [this.ledMesh, this.books]) if (im) { im.geometry.dispose(); im.material.dispose(); im.dispose(); }
-    // shadow map 2048² của đèn nắng (WebGLRenderTarget) — không dispose thì mỗi lần dựng lại World rò một render target
+    // shadow map 1024² của đèn nắng (WebGLRenderTarget) — không dispose thì mỗi lần dựng lại World rò một render target
     for (const l of [this.dir, this.fill, this.hemi]) if (l) l.dispose();
     this.group.removeFromParent();
   }

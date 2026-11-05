@@ -11,12 +11,17 @@ import { OrbitControls } from './vendor/three-0.169.0/OrbitControls.js';
 import { World, layoutKey } from './office/world.js';
 import { Actor, STATUS_VI } from './office/actors.js';
 import { setChibiQuality, updateChibiLod } from './office/chibi.js';
-import { NO_TEAM_COLOR, scaleLabel, declutter, frameGate } from './office/util.js';
+import { setChibiEnv, setChibiLodWalk } from './office/chibi.js';
+import { NO_TEAM_COLOR, scaleLabel, declutter } from './office/util.js';
+import { createPacer } from './office/pacer.js';
+import { watchdogStep } from './office/pacer.js';
 import { drawHud, drawKanban, drawRuns, drawNeeds, drawCard, drawApprovalTag, drawSign, TextSprite, fmtUsd } from './office/boards.js';
+import { drawCardStatus } from './office/boards.js';
 import { makeApi, Modals, createFlows } from './office/flows.js';
 import { createChat } from './office/chat.js';
-import { FONT, roundRect } from './office/util.js';
+import { FONT, roundRect, fitText, iconCanvas } from './office/util.js';
 import { Walker, walkBusy, hintShown, hintLayout, coordinatorOf, nearDesk } from './office/walk.js';
+import { lookDrag } from './office/walk.js';
 import { createTalk } from './office/talk.js';
 import { setTier, makeEnvironment } from './office/materials.js';
 import { createPerf, perfFlags } from './office/perf.js';
@@ -25,8 +30,7 @@ const $ = (id) => document.getElementById(id);
 const KCOL_VI = { ready: 'Sẵn sàng', running: 'Đang làm', review: 'Review', blocked: 'Kẹt' };
 // giờ địa phương (số thực) cho ánh sáng theo giờ thật
 const hourNow = () => { const d = new Date(); return d.getHours() + d.getMinutes() / 60; };
-// Nhịp vẽ (frameGate, util.js): camera/cảnh đang chuyển động → theo màn hình (≈ 60 FPS); đứng yên → 30 FPS. Giữ nhịp nhanh thêm ACTIVE_HOLD ms.
-const ACTIVE_HOLD = 400;
+// Nhịp vẽ: office/pacer.js — chuyển động → theo màn hình (≈ 60 FPS), đứng yên → 30 FPS, quá tải → khoá đều 30 (không 60/30 xen kẽ).
 // OrbitControls: hệ số tắt dần theo THỜI GIAN (0,08 mỗi 1/60 s) — không phụ thuộc số khung/giây
 const DAMP_60 = 0.08;
 
@@ -63,6 +67,8 @@ function main() {
   try {
     renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'low-power' });
     if (!renderer.getContext()) throw new Error('no ctx');
+    // kiểm lỗi shader (getProgramInfoLog/getShaderInfoLog đồng bộ — chờ driver link xong) chỉ khi gỡ lỗi
+    renderer.debug.checkShaderErrors = location.hash.indexOf('debug3d') >= 0;
   } catch (_) {
     renderer = null;
   }
@@ -102,8 +108,10 @@ function main() {
   let envTex = null;
   function applyEnv() {
     if (!renderer) return;
-    if (tier === 'high') { if (!envTex) envTex = makeEnvironment(renderer); scene.environment = envTex; }
-    else { scene.environment = null; if (envTex) { envTex.dispose(); envTex = null; } } // low: không giữ PMREM (render target) trên GPU
+    // World không dùng IBL ở mọi tier (bù sáng bằng hemi — world.js HIGH_ENV_HEMI); chỉ nhân vật (vinyl) nhận env map riêng ở tier high
+    scene.environment = null;
+    if (tier === 'high') { if (!envTex) envTex = makeEnvironment(renderer); setChibiEnv(envTex); }
+    else { setChibiEnv(null); if (envTex) { envTex.dispose(); envTex = null; } } // low: không giữ PMREM (render target) trên GPU
   }
   applyEnv();
   scene.fog = new THREE.Fog('#faf9f5', 60, 140);
@@ -120,6 +128,9 @@ function main() {
   const mqDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   if (mqDark && mqDark.addEventListener) mqDark.addEventListener('change', applyTheme);
 
+  // nhịp vẽ (office/pacer.js); #debug3d → window.__pacer() cho QA/bench (vsync, d, khoá…)
+  const pacer = createPacer();
+  if (location.hash.indexOf('debug3d') >= 0) window.__pacer = pacer.state;
   const actors = new Map();
   let selected = null, focusBoard = null;
   let conn = 'connecting', lostAt = 0;
@@ -130,6 +141,9 @@ function main() {
   // ------------------------------------------------------------ vật thể chữ trong cảnh
   const card = new TextSprite(640, 560, 2.7, { depthTest: false, order: 30 });
   card.sprite.visible = false; scene.add(card.sprite);
+  const cardSt = new TextSprite(640, 80, 2.7, { depthTest: false, order: 31 }); // dải trạng thái/tool trên thẻ
+  cardSt.sprite.visible = false; scene.add(cardSt.sprite);
+  let cardAt = -1;
   const sign = new TextSprite(1200, 320, 10, { depthTest: false, order: 40 });
   sign.sprite.visible = false; scene.add(sign.sprite);
   const tags = new Map(); // agentId → TextSprite thẻ đỏ "cần duyệt"
@@ -285,7 +299,7 @@ function main() {
   const walkBtn = $('office-walk'), povBtn = $('office-pov');
   const hint = new TextSprite(1100, 150, 1, { depthTest: false, order: 1900 });
   hint.sprite.visible = false; camera.add(hint.sprite);
-  let near = null, autoSel = false, walkHere = null, walkYield = true, nearAt = 0;
+  let near = null, autoSel = false, walkHere = null, walkYield = true, nearAt = 0, enterHold = false;
   // trạng thái giao diện cho chính sách đi bộ (walk.js): có bảng modal / chat / bảng đang xem → ẩn gợi ý, không tự chọn agent
   const ui = () => ({ walk: walk.active, modal: modals.open, chat: chat.isOpen || talk.isOpen, board: !!focusBoard });
   // nhân vật người dùng điều khiển = điều phối viên (nhãn + màu của agent is_manager); không có → "Bạn · chủ hub"
@@ -299,8 +313,10 @@ function main() {
   }
   function setWalk(on) {
     if (!world || !renderer || on === walk.active) return;
+    pacer.hitch(500); // khung đầu: shadow map tiêu điểm mới + vật hiện ra lần đầu — không tính là quá tải
     select(null); focusBoard = null; tween = null; near = null; autoSel = false;
-    if (on) { syncIdentity(); walk.enter(world); walkYield = true; }
+    // khung đầu sau khi bật: làm phần nặng (shadow map quanh avatar, nhân vật hiện ra) khi camera còn đứng yên; camera bay vào từ khung sau
+    if (on) { prebuildWalk(); syncIdentity(); walk.enter(world); walkYield = true; enterHold = true; }
     else {
       talk.close(); chat.close();
       walk.exit();
@@ -374,15 +390,29 @@ function main() {
     }
     const room = world.roomAt(p.x, p.z), t = walkTarget();
     walkHere = { room: room ? room.name : 'Khu làm việc', action: t ? t.label : '' };
-    hint.draw(JSON.stringify(walkHere) + walk.pov, (ctx, W, H) => {
+    drawHint(walkHere, !!walk.seated, walk.pov);
+  }
+  // dòng gợi ý: biểu tượng vẽ sẵn (iconCanvas) + chữ cắt bằng tìm nhị phân — vẽ lại chỉ khi nội dung đổi (sig)
+  function drawHint(here, seated, pov) {
+    hint.draw(JSON.stringify(here) + pov + seated, (ctx, W, H) => {
       ctx.fillStyle = 'rgba(31,30,29,0.78)'; roundRect(ctx, 6, 6, W - 12, H - 12, 36); ctx.fill();
+      ctx.drawImage(iconCanvas(seated ? '🪑' : '📍', 48), 30, 32);
       ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff'; ctx.font = '700 40px ' + FONT;
-      let top = (walk.seated ? '🪑 ' : '📍 ') + walkHere.room + (walkHere.action ? '   ·   [E] ' + walkHere.action : '');
-      while (top.length > 4 && ctx.measureText(top).width > W - 70) top = top.slice(0, -2) + '…';
-      ctx.fillText(top, 36, 56);
+      ctx.fillText(fitText(ctx, here.room + (here.action ? '   ·   [E] ' + here.action : ''), W - 130), 88, 56);
       ctx.fillStyle = '#d6d3c8'; ctx.font = '500 28px ' + FONT;
-      ctx.fillText('WASD/mũi tên: đi · Shift: chạy · kéo: xoay · bấm sàn: tự đi · V: ' + (walk.pov === 'third' ? 'góc thứ nhất' : 'góc thứ ba') + ' · Esc: ra', 36, 112);
+      ctx.fillText('WASD/mũi tên: đi · Shift: chạy · kéo: xoay · bấm sàn: tự đi · V: ' + (pov === 'third' ? 'góc thứ nhất' : 'góc thứ ba') + ' · Esc: ra', 36, 112);
     });
+  }
+  // Dựng sẵn khi rảnh (sau lần tải state đầu): nhân vật điều phối viên cho chế độ đi bộ + vẽ thử gợi ý (nạp font emoji) + làm ấm shader/
+  // texture của chúng — trước đây cả việc này rơi vào cú bấm 🚶 (mergeColored/toNonIndexed ~28 ms, gợi ý ~34 ms, shader/bóng lần đầu).
+  let prebuilt = false;
+  function prebuildWalk() {
+    if (prebuilt || !world || !renderer || noRender) return;
+    prebuilt = true;
+    if (!walk.active) syncIdentity();
+    drawHint({ room: 'Khu làm việc', action: '' }, false, walk.pov);
+    hint.sig = null; // vẽ thật khi vào đi bộ
+    warmShaders();
   }
 
   // ------------------------------------------------------------ áp dữ liệu /office/state
@@ -396,6 +426,7 @@ function main() {
     state = s;
     const key = layoutKey(s), rebuilt = key !== wkey || !world;
     if (rebuilt) {
+      pacer.hitch(500);
       const first = !world;
       if (world) world.dispose();
       world = new World(s);
@@ -408,7 +439,11 @@ function main() {
       if (walk.active) { walk.setWorld(world); near = null; }
       if (walkBtn && renderer && !noRender) walkBtn.hidden = false;
       fitCamera();
-      if (first) { camera.position.copy(overview.pos); controls.target.copy(overview.target); controls.update(); }
+      if (first) {
+        camera.position.copy(overview.pos); controls.target.copy(overview.target); controls.update();
+        const idle = window.requestIdleCallback ? (f) => window.requestIdleCallback(f, { timeout: 2000 }) : (f) => setTimeout(f, 500);
+        idle(() => prebuildWalk());
+      }
     }
     const seen = new Set(), now = perfNow(), initial = actors.size === 0;
     for (const ag of s.agents || []) {
@@ -452,6 +487,17 @@ function main() {
     const occ = world.occluders && world.occluders[0];
     if (occ) world.fade(new Set([occ])); // biến thể vật liệu mờ tường (chế độ đi bộ)
     try { renderer.compile(scene, camera); } catch (_) { /* bỏ qua: sẽ biên dịch khi vẽ như cũ */ }
+    // vẽ THẬT một lần vào ô 1×1 (scissor) kèm pass bóng: biên dịch program bóng (depth/skinning), cấp bone texture của nhân vật,
+    // upload texture canvas (gợi ý, thông báo, thẻ, biển) — để khung đầu khi vào đi bộ / chọn agent không phải làm việc này
+    try {
+      for (const ts of [hint, toastTs, card, cardSt, sign]) renderer.initTexture(ts.tex);
+      const sm = renderer.shadowMap, nu = sm.needsUpdate;
+      sm.needsUpdate = sm.enabled;
+      renderer.setScissorTest(true); renderer.setScissor(0, 0, 1, 1);
+      renderer.render(scene, camera);
+      renderer.setScissorTest(false);
+      sm.needsUpdate = nu; if (world) world.shadowDirty = true; // shadow map thật vẽ lại ở khung kế
+    } catch (_) { renderer.setScissorTest(false); }
     if (occ) world.fade(new Set());
     for (const o of shown) o.visible = false;
   }
@@ -578,11 +624,12 @@ function main() {
   function select(id, fly) {
     if (selected && actors.get(selected)) actors.get(selected).selected = false;
     selected = id && actors.has(id) ? id : null;
-    card.sprite.visible = !!selected && !!renderer;
+    card.sprite.visible = cardSt.sprite.visible = !!selected && !!renderer;
     if (selected) {
       focusBoard = null;
       const act = actors.get(selected);
       act.selected = true;
+      const ci = cardInfo(act); drawCard(card, ci); drawCardStatus(cardSt, ci); cardAt = perfNow(); // vẽ ngay khi chọn (không chờ)
       if (fly !== false) flyToActor(act);
     }
     renderList(); renderSrPanel();
@@ -660,10 +707,8 @@ function main() {
     cvs.addEventListener('pointermove', (e) => {
       if (down || e.pointerType !== 'mouse') kick(); // đang kéo / chạm: vẽ theo màn hình
       if (!down || !walk.active || modals.open || chat.isOpen || talk.isOpen) return;
-      if (!down.drag && Math.hypot(e.clientX - down.x, e.clientY - down.y) <= 5) return;
-      down.drag = true;
-      walk.look(e.clientX - down.lx, e.clientY - down.ly);
-      down.lx = e.clientX; down.ly = e.clientY;
+      const d = lookDrag(down, e.clientX, e.clientY, 5); // vượt ngưỡng 5 px: mốc tại đây, không nhảy
+      if (d) walk.look(d.dx, d.dy);
     });
     cvs.addEventListener('pointerup', (e) => {
       if (!down || down.drag || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) { down = null; return; }
@@ -794,7 +839,7 @@ function main() {
   // Hạ chất lượng (tự động khi FPS thấp): đổi tier vật liệu, tắt bóng/env, pixelRatio 1, dựng lại World theo đường layoutKey sẵn có.
   function setQuality(t) {
     if (!renderer || t === tier) return;
-    tier = t;
+    tier = t; pacer.hitch(500);
     setTier(t, { aniso: renderer.capabilities.getMaxAnisotropy() });
     setChibiQuality(t);
     if (t === 'low') { try { sessionStorage.setItem('cfh_office_q', 'low'); } catch (_) { /* bỏ qua */ } }
@@ -814,41 +859,33 @@ function main() {
   // đo hiệu năng chỉ khi gỡ lỗi (#perf3d / #uncap3d — office/perf.js); không bật thì perf = null
   const pf = perfFlags(), perf = createPerf(renderer, () => ({ tier, actors: actors.size, walk: walk.active }));
   // ------------------------------------------------------------ vòng vẽ (động ≈ 60 FPS / yên 30 FPS, dừng khi ẩn)
-  let raf = 0, last = 0, lastDraw = 0, fpsFrames = 0, fpsStart = 0, uiAt = 0, prevRaf = 0, prevGap = 0, slowWins = 0, lowWins = 0;
-  let gapEst = 1000 / 60, activeUntil = 0;
-  const tmp = new THREE.Vector3(), camWas = new THREE.Matrix4();
-  // có tương tác (chuột/chạm/lăn/phím) → vẽ theo màn hình trong ACTIVE_HOLD ms tới
-  function kick() { activeUntil = performance.now() + ACTIVE_HOLD; }
+  let raf = 0, lastDraw = 0, uiAt = 0, uiStep = -1, prevRaf = 0, wd = {};
+  let kicked = false, camMoved = false;
+  const tmp = new THREE.Vector3(), tmpUp = new THREE.Vector3(), camWas = new THREE.Matrix4();
+  // có tương tác (chuột/chạm/lăn/phím) → khung tới tính là chuyển động (pacer giữ nhịp động thêm 400 ms)
+  function kick() { kicked = true; }
   // cảnh "đang động" theo nghĩa người dùng nhìn thấy: camera dời/xoay (kể cả OrbitControls còn trôi), tween, đi bộ đang bước
   const moving = () => !!tween || (walk.active && (walk.keys.size > 0 || walk.path.length > 0)) || !!down;
   function frame(ts) {
     raf = requestAnimationFrame(frame);
-    // một lần khựng > 1 s sau khung hình bình thường (tab bị che/điều tiết, máy ngủ, GC, devtools…) không phải "máy chậm":
-    // bỏ cửa sổ đo đang dở, đo lại. Khung nào cũng > 1 s (chậm thật) thì vẫn đo bình thường → fallback.
+    // watchdog chất lượng (pacer.js watchdogStep) — đo theo NHỊP rAF, trước cổng vẽ (khung bỏ qua vì đứng yên vẫn được đếm):
+    // rAF đều mà chậm: fps < 24 hai cửa sổ 5 s liền → hạ tier low; fps < 10 ba cửa sổ liền → tắt 3D (fallback "slow").
+    // Đứng (khoảng > 1 s: GPU/driver đứng, máy ngủ, tab bị điều tiết) hoặc không có focus → bỏ cửa sổ, chờ 10 khoảng < 500 ms;
+    // rAF không đều (giật/đứng xen kẽ) không bị coi là "chậm" → một lần GPU đứng không còn thành hạ cấp vĩnh viễn.
     const gap = prevRaf ? ts - prevRaf : 0;
-    // cửa sổ không có focus (đang ở app khác): Chrome/Windows điều tiết rAF xuống ~1 FPS dù tab vẫn "visible" → không đo
-    if ((gap > 1000 && prevGap < 250) || !document.hasFocus()) { fpsStart = ts + 1000; fpsFrames = 0; slowWins = 0; lowWins = 0; }
-    prevRaf = ts; prevGap = gap;
-    if (gap > 0 && gap < 100) gapEst += (gap - gapEst) * 0.1; // khoảng rAF (≈ tần số màn hình)
-    // đo FPS theo nhịp rAF (cả khung bỏ qua vì đứng yên): máy theo kịp → rAF bằng tần số màn hình; vẽ nặng → rAF chậm theo.
-    // Không phụ thuộc giới hạn khung (trước: đếm khung đã vẽ, cap 30 → mốc < 24 sát nút, rAF lệch nhịp là tụt).
-    // Bỏ 2 s đầu, cửa sổ 5 s; chỉ tắt 3D khi CHẬM LIÊN TỤC 3 cửa sổ liền (15 s), một lần giật không tính
-    if (!fpsStart) fpsStart = ts + 2000;
-    if (ts >= fpsStart) {
-      fpsFrames++;
-      if (ts - fpsStart >= 5000) {
-        const fps = fpsFrames / ((ts - fpsStart) / 1000);
-        fpsFrames = 0; fpsStart = ts;
-        if (tier === 'high') { lowWins = fps < 24 ? lowWins + 1 : 0; if (lowWins >= 2) { lowWins = 0; slowWins = 0; setQuality('low'); fpsStart = 0; fpsFrames = 0; return; } }
-        slowWins = fps < 10 ? slowWins + 1 : 0;
-        if (slowWins >= 3) { disableRender('slow'); return; }
-      }
-    }
-    if (moving()) activeUntil = Math.max(activeUntil, ts + ACTIVE_HOLD);
-    if (!pf.uncap && lastDraw && !frameGate(ts, lastDraw, gapEst, ts < activeUntil)) { if (perf) perf.skip(); return; }
+    prevRaf = ts;
+    const verdict = watchdogStep(wd, ts, gap, document.hasFocus(), 24, 10, tier === 'high');
+    if (verdict === 'low') { setQuality('low'); return; }
+    if (verdict === 'slow') { disableRender('slow'); return; }
+    // "đang động" = tương tác vừa xảy ra, camera/tween/đi bộ đang dời, hoặc camera vừa đổi ở khung trước (OrbitControls còn trôi)
+    const motion = kicked || camMoved || moving();
+    kicked = false;
+    // #uncap3d vẫn gọi pacer.shouldDraw (đo vsync → dt đúng ở màn > 60 Hz), chỉ bỏ qua kết quả
+    const go = pacer.shouldDraw(ts, motion);
+    if (!pf.uncap && lastDraw && !go) { if (perf) perf.skip(); return; }
     if (perf) perf.begin(ts);
-    const dt = Math.min(0.1, last ? (ts - last) / 1000 : 0.016);
-    last = ts; lastDraw = ts;
+    const dt = pacer.drew(ts);
+    lastDraw = ts;
     const now = perfNow();
     const lf = walk.active ? 1 : Math.min(2.6, Math.max(1, camera.position.distanceTo(controls.target) / 20));
     if (world) {
@@ -878,7 +915,8 @@ function main() {
     if (walk.active && world) {
       // đi bộ: avatar luôn cập nhật; camera do walker lái trừ khi đang xem bảng / chat / bay camera (khi đó nhìn controls.target)
       walk.update(dt, now, reduced);
-      const yieldCam = !!tween || !!focusBoard || (chat.isOpen && !walk.seated);
+      const yieldCam = !!tween || !!focusBoard || (chat.isOpen && !walk.seated) || enterHold;
+      enterHold = false;
       if (yieldCam) { camera.lookAt(controls.target); world.fade(new Set()); }
       else { if (walkYield) walk.resume(reduced); walk.updateCamera(dt, reduced); }
       walkYield = yieldCam;
@@ -889,10 +927,18 @@ function main() {
       controls.update();
     }
     // thẻ nhân vật cạnh nhân vật (phía phải theo camera)
+    // thẻ: vị trí mỗi khung; nội dung tối đa 4 lần/s, vẽ trong rAF mà pacer bỏ qua (hoặc sau ≤ 250 ms)
     const act = selected && actors.get(selected);
     if (act && act.pos) {
-      drawCard(card, cardInfo(act));
+      if (now - cardAt > 0.25) {
+        cardAt = now;
+        const sel = selected;
+        pacer.onSkip(() => { const a = actors.get(sel); if (a && sel === selected) { const ci = cardInfo(a); drawCard(card, ci); drawCardStatus(cardSt, ci); } }, 'card');
+      }
       card.sprite.position.copy(cardPos(act));
+      // dải trạng thái ngay trên mép trên thẻ (sprite quay theo camera → dời theo trục "lên" của camera)
+      tmpUp.setFromMatrixColumn(camera.matrixWorld, 1);
+      cardSt.sprite.position.copy(card.sprite.position).addScaledVector(tmpUp, card.sprite.scale.y / 2 + cardSt.sprite.scale.y / 2 + 0.04);
     }
     for (const [id, ts2] of tags) {
       const a = actors.get(id), ap2 = a && a.puppet && walk.active ? walk.pos : a && a.pos; // thẻ đỏ của điều phối viên theo avatar
@@ -901,11 +947,14 @@ function main() {
       scaleLabel(ts2.sprite, Math.min(lf, 2));
       ts2.sprite.position.set(ap2.x, 2.55 + (lf - 1) * 0.5, ap2.z);
     }
-    if (now - uiAt > 1) {
-      uiAt = now;
-      if (world && state) drawRuns(world.boards.runs, state.runs || [], names, Date.now());
-      if (world) world.setDaylight(hourNow());
-      renderList(); renderSrPanel(); syncSign();
+    // việc mỗi giây chia ra nhiều khung (mỗi khung một việc; DOM ngoài rAF) — trước: dồn vào một khung (~6 ms khi CPU bị tranh)
+    if (uiStep < 0 && now - uiAt > 1) { uiAt = now; uiStep = 0; }
+    if (uiStep >= 0) {
+      const k = uiStep++;
+      if (k === 0) { if (world && state) drawRuns(world.boards.runs, state.runs || [], names, Date.now()); }
+      else if (k === 1) { if (world) world.setDaylight(hourNow()); }
+      else if (k === 2) syncSign();
+      else { uiStep = -1; setTimeout(() => { renderList(); renderSrPanel(); }, 0); }
     }
     modals.update();
     chat.update();
@@ -913,7 +962,7 @@ function main() {
     if (toastTs.sprite.visible && performance.now() > toastUntil) toastTs.sprite.visible = false;
     syncFog();
     if (world) {
-      scene.environmentIntensity = world.envInt;
+      if (envTex) setChibiEnv(envTex, world.envInt);
       // bóng tĩnh: vẽ lại shadow map vài khung sau khi World báo đổi (khung đầu sau khi dựng có thể chưa đủ — đo thực tế)
       // đi bộ (tier high): shadow camera thu nhỏ quanh avatar → bóng nét khi nhìn gần; tâm dời xa mới vẽ lại 1 khung
       if (tier === 'high') { if (walk.active && walk.pos) world.setShadowFocus(walk.pos.x, walk.pos.z, walk.view); else world.setShadowFocus(null); }
@@ -922,13 +971,15 @@ function main() {
       if (shadowFrames > 0) { shadowFrames--; renderer.shadowMap.needsUpdate = true; }
     }
     camera.updateMatrixWorld();
+    setChibiLodWalk(walk.active);
     updateChibiLod(camera, Math.max(1, host.clientHeight)); // chibi nhỏ trên màn hình → hình ít tam giác
     if (perf) perf.gpuBegin();
     renderer.render(scene, camera);
     if (perf) { perf.gpuEnd(); perf.end(); }
-    // camera vừa dời/xoay (OrbitControls còn trôi, bám nhân vật, walker lerp…) → giữ nhịp vẽ theo màn hình
+    // camera vừa dời/xoay (OrbitControls còn trôi, bám nhân vật, walker damping…) → khung sau vẫn là chuyển động
     const cm = camera.matrixWorld.elements, cw = camWas.elements;
-    for (let i = 0; i < 16; i++) if (Math.abs(cm[i] - cw[i]) > 1e-5) { activeUntil = ts + ACTIVE_HOLD; camWas.copy(camera.matrixWorld); break; }
+    camMoved = false;
+    for (let i = 0; i < 16; i++) if (Math.abs(cm[i] - cw[i]) > 1e-5) { camMoved = true; camWas.copy(camera.matrixWorld); break; }
     // gỡ lỗi cho QA: #debug3d → mỗi 2 s ghi số draw call / tam giác / FPS / tier vào data-office3d (không log, không chữ agent)
     dbgFrames++;
     if (ts - dbgAt >= 2000) {
@@ -974,9 +1025,9 @@ function main() {
       t.add(tmp); camera.position.add(tmp);
     }
   }
-  function start() { if (!raf && !stopped && !noRender && !ctxLost && renderer) { last = 0; lastDraw = 0; fpsStart = 0; fpsFrames = 0; prevRaf = 0; prevGap = 0; slowWins = 0; lowWins = 0; raf = requestAnimationFrame(frame); } }
+  function start() { if (!raf && !stopped && !noRender && !ctxLost && renderer) { pacer.reset(); lastDraw = 0; prevRaf = 0; wd = {}; raf = requestAnimationFrame(frame); } }
   function pause() { if (raf) cancelAnimationFrame(raf); raf = 0; }
-  document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); else start(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); else { pacer.hitch(500); start(); } });
 
   // Quá chậm / không WebGL: ngừng vẽ (thông báo DOM tối thiểu) nhưng vẫn cập nhật danh sách sr-only.
   let slowT = 0, ctxLost = false, lostT = 0;
@@ -992,7 +1043,7 @@ function main() {
   cvs.addEventListener('webglcontextrestored', () => {
     ctxLost = false; clearTimeout(lostT);
     if (envTex) { envTex.dispose(); envTex = null; }
-    applyEnv(); shadowFrames = 3;
+    applyEnv(); shadowFrames = 3; pacer.reset(); pacer.hitch(500);
     if (!document.hidden) start();
   });
   function disableRender(reason) {
