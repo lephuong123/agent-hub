@@ -140,7 +140,7 @@ def test_render_escapes_and_keeps_agent_inside_code():
 
 
 def test_render_agent_quote_links_clickable_but_safe():
-    """Trả lời điều phối viên (`<blockquote>`): trích dẫn gọn, markdown nhẹ, link http(s) bấm được; không mention/ping, không giả đích link."""
+    """Trả lời điều phối viên (`<blockquote>`): trích dẫn gọn, markdown nhẹ, link http(s) bấm được; không ping kênh, `<@…>` sai dạng ID không thành mention, không giả đích link."""
     from cfharness.notify.telegram import esc
     body = ("## Kết quả\n- Xem https://app.example.io/a?x=1&y=2. rồi [PR #57](https://github.com/o/r/pull/57)\n"
             "- giả: [https://good.com](https://evil.com) <!channel> <@U1> <http://x|bấm> javascript:alert(1)\n"
@@ -154,6 +154,19 @@ def test_render_agent_quote_links_clickable_but_safe():
     assert "<!channel>" not in sec and "<@U1>" not in sec and "<http://x|" not in sec and "<javascript" not in sec
     assert "> code https://no.link ˋxˋ" in sec and sec.endswith("> *xong*")  # trong khối mã: không link, không thoát được
     assert all(ln.startswith(">") for ln in sec.split("\n")[1:])  # mọi dòng agent nằm trong trích dẫn
+
+
+def test_render_agent_quote_user_mention_pings():
+    """Điều phối viên tag được MỘT người (`<@U…>` đúng dạng ID) — không broadcast, không nhãn giả, không trong code."""
+    from cfharness.notify.telegram import esc
+    body = ("<@U03KMLH8XNV> anh review giúp em PR\n"
+            "- khác: <@W0ABCDEF12> <!channel> <!here> <!subteam^S0ABCDEF12> <@U03KMLH8XNV|sếp> <@u03kmlh8xnv>\n"
+            "- `<@U03KMLH8XNV>`\n```\n<@U03KMLH8XNV>\n```")
+    sec = render.message(f"<b>📣 Điều phối viên báo</b>\n<blockquote>{esc(body)}</blockquote>", html=True)["blocks"][0]["text"]["text"]
+    assert "\n> <@U03KMLH8XNV> anh review giúp em PR\n" in sec and "<@W0ABCDEF12>" in sec
+    assert "<!channel>" not in sec and "<!here>" not in sec and "<!subteam" not in sec
+    assert "<@U03KMLH8XNV|" not in sec and "<@u03" not in sec
+    assert "> • `&lt;@U03KMLH8XNV&gt;`" in sec and "> &lt;@U03KMLH8XNV&gt;" in sec  # trong code: không ping
 
 
 def test_render_splits_long_quote_keeps_quote():

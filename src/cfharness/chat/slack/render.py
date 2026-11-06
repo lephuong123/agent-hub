@@ -4,7 +4,7 @@ An toàn (mrkdwn injection): Slack hiểu `<!channel>`, `<@U…>`, `<http://x|nh
 (`&amp; &lt; &gt;`, đúng như HTML). Chữ `html=True` của lõi ĐÃ escape bằng `esc` → chỉ còn thẻ `<b> <i> <pre> <code>` của hub; chữ
 thuần thì escape tại đây. Mọi khối chữ gửi với `verbatim: true` (Slack không tự biến tên kênh/URL/mention thành link).
 Nội dung agent nằm trong ``` (khối mã): dấu ` trong đó đổi thành ˋ để agent không thoát được khỏi khối mã. Riêng trả lời của điều phối
-viên (`<blockquote>`, bot.agent_frame) là trích dẫn `>` có markdown nhẹ + link http(s) bấm được — xem `quote_mrkdwn`.
+viên (`<blockquote>`, bot.agent_frame) là trích dẫn `>` có markdown nhẹ + link http(s) bấm được + tag người dùng `<@U…>` — xem `quote_mrkdwn`.
 """
 
 from __future__ import annotations
@@ -51,8 +51,9 @@ def html_to_mrkdwn(text: str) -> str:
 
 
 # ---------------------------------------------------------------- khung trả lời agent (`<blockquote>`, chỉ Slack sinh — bot.agent_frame)
-# Vào: chữ agent ĐÃ escape `& < >`. Ra: mrkdwn trong trích dẫn. Agent không tạo được `<…>` nào ngoài link do hàm này dựng
-# (chỉ http/https), nên không ping `<!channel>`/`<@U…>` được. Link có nhãn trông như URL/tên miền → hiện URL thật (không giả đích).
+# Vào: chữ agent ĐÃ escape `& < >`. Ra: mrkdwn trong trích dẫn. Agent chỉ tạo được `<…>` là link do hàm này dựng (chỉ http/https)
+# và mention MỘT người dùng đúng dạng `<@U…>`/`<@W…>` (điều phối viên cần tag người review) — KHÔNG `<!channel>`/`<!here>`/
+# `<!subteam^…>`, không `<@U…|nhãn>` giả tên. Link có nhãn trông như URL/tên miền → hiện URL thật (không giả đích).
 _BQ = re.compile(r"<blockquote>(.*?)</blockquote>", re.S)
 _SMALL = re.compile(r"\n?<small>(.*?)</small>\s*$", re.S)
 _URL_CH = r"(?:(?!&lt;|&gt;)[^\s|<>`*])"
@@ -61,6 +62,7 @@ _BARE = re.compile(r"(?<![<|\w])https?://" + _URL_CH + r"+")
 _INLINE = re.compile(r"(`[^`\n]+`)")
 _DOMAINISH = re.compile(r"://|^\s*(?:www\.)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?\s*$")
 _TRAIL = ".,;:!?'\")]"
+_USER_MENTION = re.compile(r"&lt;@([UW][A-Z0-9]{8,11})&gt;")
 
 
 def _bare_url(m: re.Match) -> str:
@@ -89,7 +91,7 @@ def _inline(seg: str) -> str:
         out.append(_md_link(m))
         pos = m.end()
     out.append(_BARE.sub(_bare_url, seg[pos:]))
-    return "".join(out)
+    return _USER_MENTION.sub(lambda m: f"<@{m.group(1)}>", "".join(out))
 
 
 def quote_mrkdwn(body: str) -> str:
