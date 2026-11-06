@@ -163,8 +163,9 @@ async def test_manager_marked_file_uploaded(make, sk):
     assert req["filename"] == "report.md" and sk.uploads[done[0]["files"][0]["id"]] == "# Báo cáo tuần\nổn\n".encode()
     framed = [sk.text_of(m) for m in sk.sent(DM_BOSS)[before:]]
     assert any("Đã xong." in t for t in framed) and not any("[[file:" in t for t in framed)
-    rows = d.hub.store.conn.execute("SELECT data FROM audit_log WHERE kind='slack.file_sent'").fetchall()
-    assert rows and "out/report.md" in rows[0]["data"]
+    # audit ghi SAU khi bot nhận phản hồi completeUploadExternal; fake ghi call lúc NHẬN request → phải chờ, không đọc ngay
+    rows = await until(lambda: d.hub.store.conn.execute("SELECT data FROM audit_log WHERE kind='slack.file_sent'").fetchall())
+    assert "out/report.md" in rows[0]["data"]
 
 
 async def test_manager_marked_files_refused_outside_or_unsafe(make, sk, tmp_path):

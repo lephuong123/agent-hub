@@ -20,6 +20,11 @@ from cfharness.tui.app import AgentFormScreen, AttachScreen, ConfirmScreen, Info
 from cfharness.tui.model import TopModel, activity_line
 from cfharness.tui.takeover import build_takeover_argv
 
+
+def info_ready(app) -> bool:
+    """InfoScreen đã lên VÀ đã mount xong nội dung: `app.screen` đổi trước khi compose mount `Static` (CI chậm → NoMatches)."""
+    return isinstance(app.screen, InfoScreen) and len(app.screen.query(Static)) > 0
+
 WIN = sys.platform == "win32"  # Windows: quyền POSIX (0600/0700) không áp dụng — hồ sơ người dùng bảo vệ bằng ACL
 
 SHOTS = os.environ.get("CFHARNESS_SCREENSHOTS")
@@ -415,7 +420,7 @@ async def test_takeover_print_and_record(daemon, hub_home):
     async with app.run_test(size=SIZE) as pilot:
         await until(lambda: "ag0" in table_rows(app), pilot=pilot)
         await pilot.press("T")
-        assert await until(lambda: isinstance(app.screen, InfoScreen), pilot=pilot)
+        assert await until(lambda: info_ready(app), pilot=pilot)
         txt = str(app.screen.text)
         assert f"--resume {run['session_id']}" in txt and "--strict-mcp-config" in txt
         shot(app, "08-takeover.svg")

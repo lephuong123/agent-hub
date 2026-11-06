@@ -19,6 +19,11 @@ from cfharness.tui.app import ConfirmScreen, InfoScreen, PromptScreen, TopApp
 from cfharness.tui.learnings import GoldenScreen, LearningsScreen, checker_to_spec, parse_checker_spec
 from test_tui import ISOLATED, SIZE, start_daemon, stop_daemon, until
 
+
+def info_ready(app) -> bool:
+    """InfoScreen đã lên VÀ đã mount xong nội dung: `app.screen` đổi trước khi compose mount `Static` (CI chậm → NoMatches)."""
+    return isinstance(app.screen, InfoScreen) and len(app.screen.query(Static)) > 0
+
 SHOTS = os.environ.get("CFHARNESS_SCREENSHOTS")
 
 
@@ -74,7 +79,7 @@ async def test_learnings_tab_feed_rollback_pin_digest_and_golden(daemon, hub_hom
     app = TopApp(hub_home.socket, takeover_exec=False)
     async with app.run_test(size=SIZE) as pilot:
         # digest lần đầu trong ngày bật lên khi mở TUI (FR-LN-13)
-        assert await until(lambda: isinstance(app.screen, InfoScreen), pilot=pilot)
+        assert await until(lambda: info_ready(app), pilot=pilot)
         assert "Digest học" in str(app.screen.query_one(Static).render())
         shot(app, "01-digest-first-open.svg")
         await pilot.press("escape")
@@ -117,7 +122,7 @@ async def test_learnings_tab_feed_rollback_pin_digest_and_golden(daemon, hub_hom
         assert all(x["type"] == "learning.applied" for i, x in enumerate(scr.items) if str(i) in [table.coordinate_to_cell_key((r, 0))[0].value for r in range(table.row_count)])
         # D: digest
         await pilot.press("D")
-        assert await until(lambda: isinstance(app.screen, InfoScreen), pilot=pilot)
+        assert await until(lambda: info_ready(app), pilot=pilot)
         await pilot.press("escape")
 
         # G: golden task — thêm từ run (thao tác NGƯỜI), xem, sửa rubric, xoá mềm
@@ -140,7 +145,7 @@ async def test_learnings_tab_feed_rollback_pin_digest_and_golden(daemon, hub_hom
         assert await until(lambda: gs.query_one("#golden", DataTable).row_count == 1, pilot=pilot)
         shot(app, "06-golden-list.svg")
         await pilot.press("enter")
-        assert await until(lambda: isinstance(app.screen, InfoScreen), pilot=pilot)
+        assert await until(lambda: info_ready(app), pilot=pilot)
         shot(app, "07-golden-view.svg")
         await pilot.press("escape")
         await pilot.press("e")
@@ -170,7 +175,7 @@ async def test_digest_popup_only_first_open_of_day(daemon, hub_home):
     hub.learning_ops.digest.run(since="2000-01-01T00:00:00Z", send=False)
     app = TopApp(hub_home.socket, takeover_exec=False)
     async with app.run_test(size=SIZE) as pilot:
-        assert await until(lambda: isinstance(app.screen, InfoScreen), pilot=pilot)
+        assert await until(lambda: info_ready(app), pilot=pilot)
     app2 = TopApp(hub_home.socket, takeover_exec=False)
     async with app2.run_test(size=SIZE) as pilot:
         await pilot.pause(0.8)
@@ -239,7 +244,7 @@ async def test_h16_learning_off_key_ledger_by_agent_feedback_and_learned_toast(d
 
     app.notify = _notify  # type: ignore[method-assign]
     async with app.run_test(size=SIZE) as pilot:
-        if await until(lambda: isinstance(app.screen, InfoScreen), timeout=1.0, pilot=pilot):
+        if await until(lambda: info_ready(app), timeout=1.0, pilot=pilot):
             await pilot.press("escape")
         # thông báo "X learned" khi có learning.applied (qua firehose)
         r = hub.learning.pipeline.propose(target="memory", op="add", agent_id="researcher", payload={"store": "memory", "action": "add", "content": "Reports go out on Fridays."}, created_by="review")

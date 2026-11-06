@@ -253,3 +253,25 @@ async def test_schedule_result_delivered_to_slack_dm(make, sk):
     await rpc(d, "schedule.run_now", {"id": s["id"]})
     m = await until(lambda: next((t for t in texts(sk, DM_BOSS) if "Kết quả lịch" in t), None), timeout=15)
     assert "Điều phối viên báo" in m and "Trả lời trong thread" in m
+
+
+async def test_cancelled_while_sending_still_clears_buttons(make, sk):
+    """Chạy đua như approval: câu hỏi bị huỷ ở kênh khác TRONG LÚC bot đang gửi cặp tin (trước khi ghi q_msgs) → vẫn gỡ nút."""
+    d, rid = await setup(make)
+    bot = d.hub.slack
+    orig = bot._send
+    box: dict = {}
+
+    async def send_then_cancel(*a, **kw):
+        res = await orig(*a, **kw)
+        markup = a[3] if len(a) > 3 else kw.get("markup")
+        if markup and box.get("id") and d.hub.questions.get(box["id"])["status"] == "open":
+            d.hub.questions.cancel(box["id"], reason="thôi", by="user", channel="cli")
+            await asyncio.sleep(0.2)  # như ngoài đời: quyết xảy ra trong lúc chờ phản hồi HTTP → handler gỡ nút chạy TRƯỚC khi bot ghi tin
+        return res
+
+    bot._send = send_then_cancel
+    box["id"] = ask(d, rid)["id"]
+    # nút bị gỡ ngay sau khi gửi (q_system không còn thấy tin có nút) → chờ thẳng lệnh sửa tin
+    ed = await until(lambda: [u for u in sk.calls_of("chat.update") if u.get("channel") == DM_BOSS and "Đã huỷ câu hỏi" in sk.text_of(u)])
+    assert not sk.buttons(ed[-1]) and q_system(sk, DM_BOSS, box["id"]) is None
