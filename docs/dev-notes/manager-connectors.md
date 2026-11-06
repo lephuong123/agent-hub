@@ -10,6 +10,20 @@ cfharness manager capabilities set --profile hermes --mcp trusted --connectors "
 cfharness manager capabilities set --connectors none     # tắt
 ```
 
+### Cho agent thường (`tool_policy.connectors`, 2026-11-06)
+
+```bash
+cfharness agent edit <id> --connectors "Atlassian,Slack"   # bật cho run của agent này
+cfharness agent edit <id> --connectors none                 # tắt
+```
+
+Lưu trong `tool_policy.connectors` (cột JSON có sẵn, không cần migration), chuẩn hoá về slug. Chỉ người đặt được: `agent.update`
+thuộc `HUMAN_ONLY`; điều phối viên bị chặn vì `connectors` không nằm trong `TOOL_POLICY_FIELDS`. Run thường dùng chung đường đi
+với run điều phối viên (`runs.run_connectors` cho cả spec lẫn `GuardContext`), nên cờ cô lập, tắt plugin user, `ToolSearch` và luật
+guard bên dưới áp y hệt. Cần `guard.enabled=true`; guard tắt thì run chạy như không có connector.
+
+### Điều kiện cho điều phối viên
+
 Điều kiện: `mcp=trusted`, `guard.enabled=true`. Thiếu một trong hai thì connector không được bật (có cảnh báo). Tên connector
 lấy theo tên trong Claude Code (`claude.ai Claude Docs` → `Claude Docs`). Hub chuẩn hoá về slug của tên tool (`Claude_Docs`).
 

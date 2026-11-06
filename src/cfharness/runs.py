@@ -434,9 +434,10 @@ class RunManager:
         if opts.get("hub_self") == "manager" and not is_mgr:
             opts["hub_self"] = None
         # connector claude.ai (manager.capabilities.connectors) — cần hook guard để chặn MCP lạ của ~/.claude (manager/connectors.py)
+        # + connector theo agent (tool_policy.connectors, chỉ người đặt) cho run thường
         conn: dict[str, Any] | None = None
-        if is_mgr and guard_on:
-            conns = tuple(hub.manager.perms.capabilities().get("connectors") or ())
+        if guard_on:
+            conns = run_connectors(hub, agent, is_mgr)
             if conns:
                 from .manager.connectors import run_setup
 
@@ -1326,3 +1327,12 @@ def _write_json_0600(path: Path, data: Any) -> None:
 def is_terminal_event(ev: HubEvent) -> bool:
     return ev.type in TERMINAL_RUN_EVENTS
 
+
+def run_connectors(hub: Any, agent: dict[str, Any], is_manager_run: bool) -> tuple[str, ...]:
+    """Slug connector claude.ai cho run: run điều phối viên → manager.capabilities.connectors; run thường → tool_policy.connectors
+    của agent. Dùng chung cho runs (spec) và guard (GuardContext) để hai lớp luôn khớp."""
+    if is_manager_run:
+        mgr = getattr(hub, "manager", None)
+        return tuple(mgr.perms.capabilities().get("connectors") or ()) if mgr is not None else ()
+    tp = agent.get("tool_policy") or {}
+    return tuple(dict.fromkeys(str(x) for x in (tp.get("connectors") or [])))
