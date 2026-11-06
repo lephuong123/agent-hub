@@ -254,15 +254,18 @@ class GuardService:
         )
 
     def _connector_ctx(self, run: dict[str, Any] | None) -> dict[str, Any]:
-        """Run điều phối viên có connector claude.ai → {connectors, run_mcp_servers} cho classify_mcp; còn lại {}."""
-        if not run or str((run.get("run_opts") or {}).get("hub_self") or "") != "manager":
+        """Run có connector claude.ai (điều phối viên: manager.capabilities.connectors; agent thường: tool_policy.connectors)
+        → {connectors, run_mcp_servers} cho classify_mcp; còn lại {}."""
+        if not run:
             return {}
-        mgr = getattr(self.hub, "manager", None)
-        if mgr is None:
+        from ..runs import run_connectors
+
+        is_mgr = str((run.get("run_opts") or {}).get("hub_self") or "") == "manager"
+        if is_mgr and getattr(self.hub, "manager", None) is None:
             return {}
         try:
-            conns = tuple(mgr.perms.capabilities().get("connectors") or ())
             agent = self.hub.store.get_agent(run.get("agent_id")) or {} if run.get("agent_id") else {}
+            conns = run_connectors(self.hub, agent, is_mgr)
         except Exception:  # lỗi đọc cấu hình = coi như run connector KHÔNG cho connector nào (fail-closed)
             return {"connectors": (), "run_mcp_servers": frozenset()}
         if not conns:
