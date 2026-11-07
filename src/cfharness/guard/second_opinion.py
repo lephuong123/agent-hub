@@ -180,7 +180,7 @@ class SecondOpinion:
         from ..runtime import ClaudeCliRuntime
 
         claude_cfg = self.hub.config.get("runtime.claude") or {}
-        return ClaudeCliRuntime({**claude_cfg, "binary": binary or claude_cfg.get("binary") or "claude"})
+        return ClaudeCliRuntime({**claude_cfg, "binary": binary or claude_cfg.get("binary") or "claude"}, secrets=getattr(self.hub, "secrets", None))
 
     async def ask(self, tool_name: str, tool_input: dict[str, Any], *, cwd: str, role: str, rule: str, why: str,
                   max_wait_s: float | None = None) -> Opinion:

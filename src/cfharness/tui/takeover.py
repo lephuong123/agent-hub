@@ -175,3 +175,24 @@ def record(hub: "Hub", ref: str, *, exit_code: int | None = None, started_at: st
         make_event("run.takeover", run["agent_id"], {"takeover_run_id": tid, "of_run_id": run["id"], "exit_code": exit_code}, run_id=tid, session_id=run["session_id"])
     )
     return hub.store.get_run(tid)  # type: ignore[return-value]
+
+
+def takeover_env(info: dict[str, Any], paths: Any = None) -> dict[str, str]:
+    """Env cho `claude --resume` tương tác (chạy trong tiến trình của NGƯỜI): bỏ `env_strip`; hub có `CLAUDE_CODE_OAUTH_TOKEN` trong
+    secret store → đặt vào env (người cùng user OS đọc file secret trực tiếp — token KHÔNG đi qua RPC)."""
+    import os
+
+    from ..runtime.claude_cli import OAUTH_TOKEN_SECRET, oauth_token
+
+    env = {k: v for k, v in os.environ.items() if k not in set(info.get("env_strip") or [])}
+    if paths is None:
+        from ..paths import HubPaths
+
+        paths = HubPaths.resolve()  # TUI: CFHARNESS_HOME (cli đặt khi --home) hoặc home mặc định
+    if paths is not None:
+        from ..secrets import SecretStore
+
+        tok = oauth_token(SecretStore(paths.home / "secrets", env_fallback=False))
+        if tok:
+            env[OAUTH_TOKEN_SECRET] = tok
+    return env

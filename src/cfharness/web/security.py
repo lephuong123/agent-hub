@@ -143,8 +143,10 @@ class Session:
 class WebAuth:
     """Khoá ký link + phiên trong RAM (server khởi động lại → đăng nhập lại bằng `cfharness web --open`)."""
 
-    def __init__(self, key: bytes | None = None) -> None:
+    def __init__(self, key: bytes | None = None, *, idle_s: int = SESSION_IDLE_S, max_s: int = SESSION_MAX_S) -> None:
         self.key = key or secrets.token_bytes(32)
+        self.idle_s = int(idle_s)  # `web.session_idle_s` / `web.session_max_age_s` (web-public.md)
+        self.max_s = int(max_s)
         self.sessions: dict[str, Session] = {}
         self._used: dict[str, int] = {}
 
@@ -178,7 +180,7 @@ class WebAuth:
         if s is None:
             return None
         now = now or time.time()
-        if now - s.last > SESSION_IDLE_S or now - s.created > SESSION_MAX_S:
+        if now - s.last > min(self.idle_s, self.max_s) or now - s.created > self.max_s:
             self.sessions.pop(sid, None)
             return None
         if touch:
@@ -203,7 +205,7 @@ def state_path(paths: HubPaths) -> Path:
     return paths.home / "auth" / "web.json"
 
 
-def write_state(paths: HubPaths, *, host: str, port: int, key: bytes, name: str = WEB_HOST) -> Path:
+def write_state(paths: HubPaths, *, host: str, port: int, key: bytes, name: str = WEB_HOST, public_origin: str | None = None) -> Path:
     d = paths.home / "auth"
     d.mkdir(parents=True, exist_ok=True)
     os.chmod(d, 0o700)
@@ -212,7 +214,8 @@ def write_state(paths: HubPaths, *, host: str, port: int, key: bytes, name: str 
     tmp.unlink(missing_ok=True)
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump({"v": 1, "pid": os.getpid(), "host": host, "name": name, "port": port, "key": key.hex(), "started_at": time.time()}, f)
+        json.dump({"v": 1, "pid": os.getpid(), "host": host, "name": name, "port": port, "key": key.hex(), "public_origin": public_origin,
+                   "started_at": time.time()}, f)
     os.replace(tmp, p)
     return p
 
@@ -246,6 +249,9 @@ def clear_state(paths: HubPaths, pid: int | None = None) -> None:
         pass
 
 
-def login_url(host: str, port: int, token: str) -> str:
+def login_url(host: str, port: int, token: str, public_origin: str | None = None) -> str:
+    """Link đăng nhập một lần; có `web.public_origin` → link qua tunnel (https)."""
+    if public_origin:
+        return f"{public_origin.rstrip('/')}/login?t={token}"
     h = f"[{host}]" if ":" in host and not host.startswith("[") else host
     return f"http://{h}:{port}/login?t={token}"

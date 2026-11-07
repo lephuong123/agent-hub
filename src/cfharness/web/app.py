@@ -14,7 +14,7 @@ import asyncio
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
@@ -37,7 +37,9 @@ from ..tui.client import AsyncHubClient, subscribe
 from ..tui.model import STATUS_ORDER
 from . import present as P
 from . import settings_schema as _settings
+from .public import LoginLimiter, client_ip, public_hosts
 from .security import KEY_FIELD, KEY_HEADER, WEB_HOST, Session, WebAuth, allowed_hosts, cookie_name, is_loopback
+from .totp import TotpStore
 
 log = logging.getLogger("cfharness.web")
 HERE = Path(__file__).parent
@@ -123,6 +125,15 @@ class WebState:
     client: AsyncHubClient
     templates: Jinja2Templates
     name: str = WEB_HOST  # host công khai (Host header + cookie host-only) — khác bind host (WT-1)
+    # web public qua tunnel TLS (web/public.py, docs/dev-notes/web-public.md): `https://host[:port]` đã chuẩn hoá, hoặc None
+    public_origin: str | None = None
+    ip_header: str = "x-forwarded-for"
+    limiter: LoginLimiter = field(default_factory=LoginLimiter)
+    totp: TotpStore | None = None
+
+    @property
+    def public_hosts(self) -> set[str]:
+        return public_hosts(self.public_origin)
 
     @property
     def cookie(self) -> str:
@@ -130,7 +141,10 @@ class WebState:
 
     @property
     def hosts(self) -> set[str]:
-        return allowed_hosts(self.name, self.port)
+        return allowed_hosts(self.name, self.port) | self.public_hosts
+
+    def is_public(self, host: str) -> bool:
+        return bool(self.public_origin) and host.lower() in self.public_hosts
 
     @property
     def base_url(self) -> str:
@@ -139,13 +153,16 @@ class WebState:
 
     @property
     def origins(self) -> set[str]:
-        return {f"http://{h}" for h in self.hosts}
+        out = {f"http://{h}" for h in allowed_hosts(self.name, self.port)}
+        if self.public_origin:
+            out |= {self.public_origin} | {f"https://{h}" for h in self.public_hosts}
+        return out
 
 
 class GuardMiddleware:
     """ASGI thuần (không đệm response → SSE chạy được): kiểm Host, gắn phiên, chặn khi chưa đăng nhập, thêm header bảo mật."""
 
-    PUBLIC = ("/login", "/favicon.ico", "/mcp/oauth/callback")  # callback OAuth: state là lớp bảo vệ (web/mcp_oauth.py)
+    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/mcp/oauth/callback")  # callback OAuth: state là lớp bảo vệ (web/mcp_oauth.py)
     # JSON do trang gọi bằng fetch (polling): chưa đăng nhập → 401 (không chuyển hướng), không gia hạn phiên — như /sse/, /partials/
     API = ("/office/state", "/office/approval/", "/office/question/", "/office/chat", "/office/do/")  # tiền tố
 
@@ -159,19 +176,22 @@ class GuardMiddleware:
             return
         headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers") or []}
         path = scope.get("path") or "/"
+        host = headers.get("host", "").lower()
+        hsts = self.state.is_public(host)  # web public chỉ https (tunnel TLS) → trình duyệt luôn dùng https cho host này
 
         async def send_headers(msg: dict) -> None:
             if msg["type"] == "http.response.start":
                 h = list(msg.get("headers") or [])
                 names = {k.lower() for k, _ in h}
                 h += [(k, v) for k, v in SECURITY_HEADERS if k not in names]
+                if hsts and b"strict-transport-security" not in names:
+                    h.append((b"strict-transport-security", b"max-age=31536000"))
                 if b"cache-control" not in names:
                     # tĩnh: luôn hỏi lại server (ETag → 304) để bản cập nhật có hiệu lực ngay; còn lại: không lưu
                     h.append((b"cache-control", b"no-cache" if path.startswith("/static/") else b"no-store"))
                 msg = {**msg, "headers": h}
             await send(msg)
 
-        host = headers.get("host", "").lower()
         if host not in self.state.hosts:
             hn, _, hp = host.rpartition(":")
             if scope.get("method") == "GET" and hp == str(self.state.port) and is_loopback(hn):
@@ -194,7 +214,7 @@ class GuardMiddleware:
             if scope.get("method") == "GET" and not poll and "hx-request" not in headers:
                 resp: Response = RedirectResponse("/login", status_code=303)
             else:
-                resp = PlainTextResponse("Chưa đăng nhập — chạy `cfharness web --open` trong terminal.", status_code=401)
+                resp = PlainTextResponse("Chưa đăng nhập — mở /login (mã TOTP) hoặc chạy `cfharness web --open` trên máy chạy hub.", status_code=401)
             await resp(scope, receive, send_headers)
             return
         await self.app(scope, receive, send_headers)
@@ -340,18 +360,82 @@ def _token_from(v: str) -> str:
 def _login_ok(request: Request, sess: Session) -> Response:
     # khoá phiên đi trong FRAGMENT (không gửi lên server, không vào log/Referer); app.js lưu vào localStorage rồi xoá khỏi URL
     resp = RedirectResponse(f"/#{KEY_FIELD}={sess.key}", status_code=303)
-    resp.set_cookie(ws(request).cookie, sess.sid, httponly=True, samesite="strict", path="/", secure=False)
+    # web public (tunnel TLS): cookie `Secure` — chỉ gửi qua https; host cục bộ http://cfharness.localhost giữ như cũ
+    secure = ws(request).is_public(request.headers.get("host", ""))
+    resp.set_cookie(ws(request).cookie, sess.sid, httponly=True, samesite="strict", path="/", secure=secure, max_age=ws(request).auth.max_s)
     return resp
+
+
+def _pre_session_origin_ok(request: Request) -> None:
+    """POST trước khi có phiên (đăng nhập/đăng ký): Origin cùng nguồn (không có CSRF vì chưa có phiên)."""
+    st = ws(request)
+    origin = request.headers.get("origin")
+    if (origin and origin not in st.origins) or (request.headers.get("sec-fetch-site") not in (None, "same-origin", "none")):
+        raise HTTPException(403, "Origin không hợp lệ")
+
+
+def _ip(request: Request) -> str:
+    st = ws(request)
+    return client_ip(request.scope, {k.lower(): v for k, v in request.headers.items()}, public=bool(st.public_origin), header=st.ip_header)
+
+
+async def _audit_login(request: Request, kind: str, data: dict[str, Any]) -> None:
+    """`web.login` / `web.login_failed` / `web.login_locked` / `web.totp_*` vào audit_log (kênh web). Daemon tắt → chỉ log."""
+    try:
+        await ws(request).client.call("audit.record", {"kind": kind, "actor": "user" if kind in ("web.login", "web.totp_confirmed") else "anonymous",
+                                                       "channel": CHANNEL, "summary": kind, "target": data.get("ip"), "data": data})
+    except Exception:  # noqa: BLE001 — không để lỗi audit chặn đăng nhập/khoá
+        log.warning("không ghi được audit %s (%s)", kind, data.get("ip"))
+
+
+def _lock_text(left: float) -> str:
+    return f"Đăng nhập tạm khoá do nhập sai quá nhiều lần — thử lại sau {max(1, int(left // 60) + 1)} phút."
+
+
+async def _code_attempt(request: Request, check: Callable[[], bool], method: str) -> tuple[bool, str | None, int]:
+    """Một lần thử mã TOTP qua bộ giới hạn tốc độ → (đúng?, lỗi hiển thị, mã HTTP)."""
+    st = ws(request)
+    ip = _ip(request)
+    lk = st.limiter.locked(ip)
+    if lk is not None:
+        await _audit_login(request, "web.login_failed", {"ip": ip, "method": method, "reason": f"locked_{lk[1]}"})
+        return False, _lock_text(lk[0]), 429
+    if check():
+        st.limiter.success(ip)
+        return True, None, 200
+    scope = st.limiter.fail(ip)
+    await _audit_login(request, "web.login_failed", {"ip": ip, "method": method, "reason": "bad_code"})
+    if scope is not None:
+        await _audit_login(request, "web.login_locked", {"ip": ip, "scope": scope})
+        lk = st.limiter.locked(ip)
+        return False, _lock_text(lk[0] if lk else st.limiter.lockout_s), 429
+    return False, "Mã không đúng hoặc đã dùng — đợi mã mới trên ứng dụng xác thực rồi thử lại.", 401
+
+
+def _login_page(request: Request, err: str | None, status: int) -> Response:
+    st = ws(request)
+    ctx = {"error": err, "htmx": HTMX, "badge": {}, "csrf": "", "flashes": [], "nav": "",
+           "totp": bool(st.totp and st.totp.enrolled()), "public": st.is_public(request.headers.get("host", ""))}
+    return st.templates.TemplateResponse(request, "login.html", ctx, status_code=status)
 
 
 async def login(request: Request) -> Response:
     st = ws(request)
     err = None
+    status = 200
+    tok = ""
     if request.method == "POST":
-        origin = request.headers.get("origin")
-        if (origin and origin not in st.origins) or (request.headers.get("sec-fetch-site") not in (None, "same-origin", "none")):
-            raise HTTPException(403, "Origin không hợp lệ")
+        _pre_session_origin_ok(request)
         form = await request.form()
+        code = str(form.get("code") or "").strip()
+        if code:  # đăng nhập bằng mã TOTP (web public — người dùng không có terminal trên máy chạy hub)
+            if st.totp is None or not st.totp.enrolled():
+                return _login_page(request, "Hub này chưa bật đăng nhập bằng mã (admin: `cfharness web totp enroll`).", 401)
+            ok, err, status = await _code_attempt(request, lambda: st.totp.verify(code), "totp")
+            if ok:
+                await _audit_login(request, "web.login", {"ip": _ip(request), "method": "totp"})
+                return _login_ok(request, st.auth.new_session())
+            return _login_page(request, err, status)
         tok = _token_from(str(form.get("link") or ""))
     else:
         tok = request.query_params.get("t") or ""
@@ -362,8 +446,47 @@ async def login(request: Request) -> Response:
         if sess is not None:
             return _login_ok(request, sess)
         err = "Link đăng nhập không hợp lệ, đã dùng rồi hoặc đã hết hạn. Chạy lại `cfharness web --open` để lấy link mới."
-    return st.templates.TemplateResponse(request, "login.html", {"error": err, "htmx": HTMX, "badge": {}, "csrf": "", "flashes": [], "nav": ""},
-                                         status_code=401 if err or request.method == "POST" else 200)
+    return _login_page(request, err, 401 if err or request.method == "POST" else status)
+
+
+async def enroll(request: Request) -> Response:
+    """Đăng ký app xác thực bằng link một lần do admin cấp (`cfharness web totp enroll`).
+
+    GET: chỉ hiện nút "Hiện mã" (không tiêu link — bộ xem trước link của chat không làm hỏng nó). POST `show`: hiện bí mật MỘT lần.
+    POST `confirm` + mã: kích hoạt, tiêu link, tạo phiên. Mã sai đi qua cùng bộ giới hạn tốc độ với đăng nhập."""
+    st = ws(request)
+    tpl = "enroll.html"
+    base = {"htmx": HTMX, "badge": {}, "csrf": "", "flashes": [], "nav": ""}
+    if st.totp is None:
+        raise HTTPException(404, "Không hỗ trợ")
+    if request.method == "GET":
+        tok = request.query_params.get("t") or ""
+        ok = st.totp.pending(tok) is not None
+        return st.templates.TemplateResponse(request, tpl, {**base, "stage": "start" if ok else "invalid", "t": tok if ok else ""},
+                                             status_code=200 if ok else 401)
+    _pre_session_origin_ok(request)
+    form = await request.form()
+    tok, act = str(form.get("t") or ""), str(form.get("action") or "")
+    if act == "show":
+        secret = st.totp.reveal(tok)
+        if secret is None:
+            await _audit_login(request, "web.login_failed", {"ip": _ip(request), "method": "enroll", "reason": "enroll_link_invalid_or_viewed"})
+            return st.templates.TemplateResponse(request, tpl, {**base, "stage": "invalid", "t": ""}, status_code=401)
+        from .totp import otpauth_uri
+
+        account = st.public_hosts and sorted(st.public_hosts)[0] or st.name
+        return st.templates.TemplateResponse(request, tpl, {**base, "stage": "show", "t": tok, "secret": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)),
+                                                            "uri": otpauth_uri(secret, account)})
+    if act == "confirm":
+        if st.totp.pending(tok) is None:
+            return st.templates.TemplateResponse(request, tpl, {**base, "stage": "invalid", "t": ""}, status_code=401)
+        code = str(form.get("code") or "")
+        ok, err, status = await _code_attempt(request, lambda: st.totp.confirm(tok, code), "enroll")
+        if ok:
+            await _audit_login(request, "web.totp_confirmed", {"ip": _ip(request)})
+            return _login_ok(request, st.auth.new_session())
+        return st.templates.TemplateResponse(request, tpl, {**base, "stage": "confirm", "t": tok, "error": err}, status_code=status)
+    raise HTTPException(400, "Thao tác không hợp lệ")
 
 
 async def logout(request: Request) -> Response:
@@ -1400,12 +1523,18 @@ def make_templates() -> Jinja2Templates:
     return t
 
 
-def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127.0.0.1", port: int = 8765, name: str = WEB_HOST) -> Starlette:
+def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127.0.0.1", port: int = 8765, name: str = WEB_HOST,
+               public_origin: str | None = None, ip_header: str = "x-forwarded-for", limiter: LoginLimiter | None = None) -> Starlette:
+    """`public_origin` (đã kiểm bằng `public.parse_public_origin`) = `web.public_origin` do CLI đọc qua RPC `config.get` lúc khởi động."""
+    from .public import parse_public_origin
+
     state = WebState(paths=paths, auth=auth or WebAuth(), host=host, port=port, client=AsyncHubClient(paths.socket, channel=CHANNEL, timeout=60.0),
-                     templates=make_templates(), name=name)
+                     templates=make_templates(), name=name, public_origin=parse_public_origin(public_origin), ip_header=ip_header,
+                     limiter=limiter or LoginLimiter(), totp=TotpStore(paths))
     routes = [
         Route("/", overview),
         Route("/login", login, methods=["GET", "POST"]),
+        Route("/enroll", enroll, methods=["GET", "POST"]),
         Route("/logout", logout, methods=["POST"]),
         Route("/favicon.ico", favicon),
         Route("/partials/overview", partial_overview),

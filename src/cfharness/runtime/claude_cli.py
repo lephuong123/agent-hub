@@ -295,12 +295,32 @@ def _fmt_usd(v: float) -> str:
     return s or "0"
 
 
-def child_env(claude_cfg: dict[str, Any], base: dict[str, str] | None = None) -> dict[str, str]:
+OAUTH_TOKEN_SECRET = "CLAUDE_CODE_OAUTH_TOKEN"  # token dài hạn của `claude setup-token` (tài khoản Claude dùng chung, không Keychain/GUI)
+
+
+def oauth_token(secrets: Any) -> str | None:
+    """Giá trị `CLAUDE_CODE_OAUTH_TOKEN` trong secret store của hub (KHÔNG theo env-fallback — env của daemon không phải nguồn)."""
+    if secrets is None:
+        return None
+    try:
+        v = secrets.get(OAUTH_TOKEN_SECRET)
+    except Exception:  # noqa: BLE001 — secret store hỏng → như chưa đặt
+        return None
+    v = (v or "").strip()
+    return v or None
+
+
+def child_env(claude_cfg: dict[str, Any], base: dict[str, str] | None = None, *, oauth_token: str | None = None) -> dict[str, str]:
+    """Env của tiến trình `claude`: bỏ `env_strip` (biến phiên Claude Code bao ngoài), thêm `env_extra`; có `oauth_token` (secret
+    store) → đặt `CLAUDE_CODE_OAUTH_TOKEN` — ngoại lệ DUY NHẤT với env_strip, và ghi đè giá trị cùng tên trong env daemon/env_extra.
+    Token chỉ đi qua env (không argv/DB/log; giá trị bị che theo giá trị — redact.py, SecretStore.preload)."""
     env = dict(os.environ if base is None else base)
     for k in claude_cfg.get("env_strip") or []:
         env.pop(k, None)
     for k, v in (claude_cfg.get("env_extra") or {}).items():
         env[str(k)] = str(v)
+    if oauth_token:
+        env[OAUTH_TOKEN_SECRET] = oauth_token
     return env
 
 
@@ -325,8 +345,19 @@ def claude_version(binary: str = "claude", cache_s: float = 600) -> str | None:
 class ClaudeCliRuntime(AgentRuntime):
     name = "claude"
 
-    def __init__(self, claude_cfg: dict[str, Any]) -> None:
+    def __init__(self, claude_cfg: dict[str, Any], *, secrets: Any = None) -> None:
         self.cfg = claude_cfg
+        self.secrets = secrets  # SecretStore của hub → CLAUDE_CODE_OAUTH_TOKEN (child_env)
+
+    def env(self) -> dict[str, str]:
+        return child_env(self.cfg, oauth_token=oauth_token(self.secrets))
+
+    def _run_env(self, spec: RunSpec) -> dict[str, str]:
+        env = {**child_env(self.cfg), **(spec.env_extra or {})}
+        tok = oauth_token(self.secrets)
+        if tok:  # token của hub thắng mọi giá trị cùng tên (env_extra của run không ghi đè được)
+            env[OAUTH_TOKEN_SECRET] = tok
+        return env
 
     def capabilities(self) -> dict[str, bool]:
         return {
@@ -346,7 +377,7 @@ class ClaudeCliRuntime(AgentRuntime):
         argv = exec_argv([self.cfg.get("binary") or "claude", "auth", "status"])
         try:
             proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-                                                        stderr=asyncio.subprocess.PIPE, env=child_env(self.cfg), **no_window_kwargs())
+                                                        stderr=asyncio.subprocess.PIPE, env=self.env(), **no_window_kwargs())
         except OSError:
             return None
         try:
@@ -385,7 +416,7 @@ class ClaudeCliRuntime(AgentRuntime):
             proc = None
             try:
                 proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                                                            stderr=asyncio.subprocess.PIPE, cwd=td, env=child_env(self.cfg), **no_window_kwargs())
+                                                            stderr=asyncio.subprocess.PIPE, cwd=td, env=self.env(), **no_window_kwargs())
                 out_b, err_b = await asyncio.wait_for(proc.communicate(req.prompt.encode("utf-8")), req.timeout_s)
                 rc = proc.returncode or 0
             except (asyncio.TimeoutError, OSError) as e:
@@ -421,7 +452,7 @@ class ClaudeCliRuntime(AgentRuntime):
                 stdin=asyncio.subprocess.PIPE if stdin_bytes is not None else asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=stderr_f,
-                env={**child_env(self.cfg), **(spec.env_extra or {})},
+                env=self._run_env(spec),
                 # process group riêng → dừng cả tiến trình con (MCP stdio). Windows: spawn treo, gán Job Object rồi mới chạy
                 **new_group_kwargs(suspended=IS_WINDOWS),
                 limit=STREAM_LIMIT,

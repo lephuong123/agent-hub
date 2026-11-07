@@ -270,6 +270,18 @@ DEFAULTS: dict[str, Any] = {
         # `${VAR}` không có trong secret store thì lấy biến môi trường của daemon (tương thích ~/.claude.json)
         "env_fallback": True,
     },
+    # Web public qua tunnel TLS (docs/dev-notes/web-public.md). Nhánh `web` ∈ integrity.SECURITY_KEYS; `config.set` chỉ người;
+    # KHÔNG có trong danh mục Cài đặt của web (settings_schema). Bind vẫn loopback — tunnel (cloudflared/tailscale) proxy về 127.0.0.1.
+    "web": {
+        "public_origin": None,  # vd "https://an.example.com" — chỉ https, không path; null = chỉ dùng trên máy này
+        "session_max_age_s": 12 * 3600,  # tuổi tối đa của phiên web (giây)
+        "session_idle_s": 3600,  # phiên không thao tác quá N giây → đăng nhập lại (polling/SSE không gia hạn)
+        # header IP thật của client — CHỈ đọc khi có public_origin VÀ request tới từ loopback (tunnel chạy trên máy này)
+        "client_ip_header": "x-forwarded-for",  # x-forwarded-for (phần tử CUỐI) | cf-connecting-ip | none
+        # chống dò mã TOTP: theo IP + toàn cục (mọi IP) + trần theo ngày
+        "login": {"ip_max_failures": 5, "global_max_failures": 10, "window_s": 900, "lockout_s": 900,
+                  "day_max_failures": 50, "day_lockout_s": 86400},
+    },
     # M1 luồng A — MCP server của hub (FR-MS-*)
     "mcp_server": {
         "http_port": MCP_HTTP_DEFAULT_PORT,  # Streamable HTTP chỉ bind 127.0.0.1 (Q-11, NFR-14); khác cổng web 8765
@@ -805,6 +817,10 @@ def validate_setting(key: str, value: Any) -> None:
         from .guard.profiles import validate_setting as _validate_profile
 
         _validate_profile(key, value)
+    if key == "web" or key.startswith("web."):
+        from .web.public import validate_setting as _validate_web_public
+
+        _validate_web_public(key, value)
     if key == "runtime.claude.chrome" or key.startswith("runtime.claude.chrome."):
         from .browser import validate_setting as _validate_chrome
 

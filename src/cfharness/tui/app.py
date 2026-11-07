@@ -1539,7 +1539,9 @@ class TopApp(App):
             t.append("\n\nKhi xong: cfharness takeover " + info["run_id"] + " --record", style=th.MUTED)
             self.push_screen(InfoScreen(t))
             return
-        env = {k: v for k, v in os.environ.items() if k not in set(info.get("env_strip") or [])}
+        from .takeover import takeover_env
+
+        env = takeover_env(info)  # tui/takeover.py: + CLAUDE_CODE_OAUTH_TOKEN của hub nếu có
         started = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"
         with self.suspend():
             print(f"\n[cfharness] takeover run {info['run_id']} — {info['command']}\n", flush=True)
