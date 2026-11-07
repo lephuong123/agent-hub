@@ -255,8 +255,26 @@ class GuardService:
             chrome_allowed=self.chrome_allowed(run),
             trusted_repo_scripts=bool(self.knob("guard.trusted_repo_scripts")),
             task_created_deletes=bool(self.knob("guard.task_created_deletes")),
+            **self._confine_ctx(c, run, roots),
             **self._connector_ctx(run),
         )
+
+    def _confine_ctx(self, cwd: str, run: dict[str, Any] | None, roots: tuple[str, ...]) -> dict[str, Any]:
+        """P2 (workspace.confine): gốc giam + gốc đọc/chặn cho classifier; hub home khác đã đăng ký (P2.4)."""
+        from .. import confine as _c
+
+        out: dict[str, Any] = {}
+        try:
+            out["other_hub_homes"] = tuple(_c.other_hub_homes(self.hub.paths.home))
+        except Exception:  # pragma: no cover
+            pass
+        conf = _c.of_hub(self.hub)
+        if conf is None:
+            return out
+        extra = list(self.run_extra_write_roots(run, roots)) if run else []
+        out.update(confine_root=conf.root, confine_read=tuple(_c.read_roots(conf, self.hub.paths.home, cwd=cwd, extra=extra)),
+                   confine_deny=tuple(_c.deny_read_roots(conf)))
+        return out
 
     def _connector_ctx(self, run: dict[str, Any] | None) -> dict[str, Any]:
         """Run điều phối viên có connector claude.ai → {connectors, run_mcp_servers} cho classify_mcp; còn lại {}."""
@@ -1267,11 +1285,19 @@ class GuardService:
 
     def _allow_trusted(self, run: dict[str, Any], channel: str, tool_name: str, tool_input: dict[str, Any], ctx: GuardContext,
                        trust: dict[str, Any]) -> dict[str, Any]:
-        """Agent trust full: cho phép mọi thao tác (kể cả forbidden/vùng hub). Vẫn phân loại để ghi guard_decisions + audit đúng mức."""
+        """Agent trust full: cho phép mọi thao tác (kể cả forbidden/vùng hub). Vẫn phân loại để ghi guard_decisions + audit đúng mức.
+        NGOẠI LỆ (P2, Q4): khi `workspace.confine` bật, đọc/ghi ngoài W vẫn bị cấm — trust chỉ bỏ hỏi duyệt BÊN TRONG W."""
         try:
             v = classify(tool_name, tool_input, ctx)
         except Exception as e:  # noqa: BLE001 — phân loại lỗi không chặn agent trust, chỉ ghi lại
             v = Verdict("uncertain", "classifier_error", None, f"phân loại lỗi: {type(e).__name__}")
+        from ..confine import CONFINE_RULES
+
+        if v.forbidden and (v.rule in CONFINE_RULES or v.rule == "other_hub_write" or (v.rule == "hub_secret_read" and ctx.confine_root)):
+            self._record(run, channel, tool_name, tool_input, v, "deny", classifier="trust")
+            self.hub.publish(make_event("guard.blocked", run["agent_id"], {"source": "runtime", "reason": "guard_rule", "rule": v.rule, "detail": v.reason,
+                                                                         "tool": tool_name, "preview": action_preview(tool_name, tool_input)}, run_id=run["id"]))
+            return {"decision": "deny", "reason": FORBIDDEN_MSG.format(reason=v.reason)}
         av = self.agent_web_check(run, tool_name, tool_input, v, trusted=True)  # allowlist domain theo agent là giới hạn người đặt riêng — trust không gỡ
         if av is not None:
             self._record(run, channel, tool_name, tool_input, av, "deny", classifier="trust")

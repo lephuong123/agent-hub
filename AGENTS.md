@@ -560,3 +560,13 @@ Chi tiết, thiết lập nhóm/thư mục, giới hạn: `docs/dev-notes/admin-
   `cfharness-admin`; RPC `admin.overview` (CHỈ ĐỌC, ∈ HUMAN_ONLY); CLI `cfharness admin overview` (`admin_cli.py`); web `/admin/overview` (`web/admin_pages.py`).
 - Bất biến: nội dung file CHỈ theo `SPEC` (số/bool/regex id-enum) — không bao giờ chữ tự do; thêm trường → `SPEC` + ca trong test. Người đọc coi
   file là dữ liệu không tin cậy (`O_NOFOLLOW`, trần cỡ, lọc lại `SPEC`, kiểm chủ file). Sandbox agent chặn đọc/ghi `/Users/Shared/cfharness`.
+
+## Giam agent trong workspace W — `workspace.confine` (P2 đa instance)
+Chi tiết, spike (claude 2.1.319: `allowRead` trong `denyRead` hoạt động, glob không mở lại), giới hạn: `docs/dev-notes/confine.md`,
+`docs/dev-notes/hardening-SEC.md` §1.1. Không migration. Test: `tests/test_confine.py`, ca `DESTRUCTIVE_CONFINE` trong `tests/test_guard_classifier.py`.
+- `confine.py`: đọc cấu hình, `read_roots`/`deny_read_roots`, `apply_sandbox` (denyRead `$HOME` + allowRead W/toolchain/workspace hub),
+  `confine_only_sandbox` (trust_full / sandbox tắt), `permission_deny_rules` (anh em của W), registry hub `~/.config/cfharness/hubs.json`
+  (env `CFHARNESS_HUBS_REGISTRY`; conftest đặt về thư mục tạm).
+- Bất biến: `workspace.confine` chỉ người (`config.set` HUMAN_ONLY, khoá ∈ `integrity.SECURITY_KEYS` — khoá con có dấu chấm được hỗ trợ);
+  khi bật, `trust_full` KHÔNG gỡ giam (Q4) và `guard.sandbox.enabled=false` vẫn để lại sandbox chỉ-giam; mọi workspace/cwd/worktree/
+  `extra_write_roots` phải trong W (`validate_workspace`, `check_path`). Không dùng glob trong `sandbox.filesystem.allowRead` (không mở lại).

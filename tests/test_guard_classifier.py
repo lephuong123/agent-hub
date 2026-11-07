@@ -407,3 +407,53 @@ def test_classifier_error_is_uncertain(env, monkeypatch):
     v = classify("Bash", {"command": "ls"}, env["ctx"])
     assert v.verdict == "uncertain" and v.rule == "classifier_error"
     assert classify("Bash", {"command": None}, env["ctx"]).verdict == "uncertain"
+
+
+# --------------------------------------------------------------------------- P2: giam trong workspace W (workspace.confine)
+# HOMEDIR = $HOME giả của env; workspace của run (env["ws"]) = W. Ca vi phạm phải `forbidden` (không hỏi duyệt).
+DESTRUCTIVE_CONFINE = [
+    ("Read", {"file_path": "HOMEDIR/Workspace/other/.env"}),
+    ("Read", {"file_path": "HOMEDIR/Documents/tax.pdf"}),
+    ("Grep", {"pattern": "API_KEY", "path": "HOMEDIR"}),
+    ("Glob", {"pattern": "HOMEDIR/**/*.pem"}),
+    ("LS", {"path": "HOMEDIR/Workspace"}),
+    ("NotebookRead", {"notebook_path": "HOMEDIR/Workspace/other/a.ipynb"}),
+    ("Write", {"file_path": "HOMEDIR/Workspace/other/x.py", "content": "x"}),
+    ("Edit", {"file_path": "HOMEDIR/Documents/notes.md", "old_string": "a", "new_string": "b"}),
+]
+
+
+@pytest.fixture(scope="module")
+def cenv(env):
+    ws = os.path.realpath(env["ws"])
+    home = os.path.realpath(env["home"])
+    old = env["ctx"]
+    ctx = GuardContext(
+        old.cwd, old.policy, run_since=old.run_since, mcp_annotations=old.mcp_annotations, hub_socket=old.hub_socket, git_probe=False,
+        confine_root=ws, confine_read=(ws, f"{home}/.npm", str(env["hub"]) + "/agents/a/workspaces"), confine_deny=(home,),
+    )
+    return {**env, "ctx": ctx}
+
+
+def test_confine_recall_forbidden(cenv):
+    missed = []
+    for tool, ti in DESTRUCTIVE_CONFINE:
+        v = classify(tool, _sub_input(cenv, ti), cenv["ctx"])
+        if not (v.forbidden and v.rule in ("read_outside_workspace", "write_outside_workspace")):
+            missed.append((tool, ti, v.verdict, v.rule))
+    assert not missed, missed
+
+
+def test_confine_false_positive_rate(cenv):
+    """Giam không làm tăng báo nhầm trên tập thường (Bash do sandbox giam, không phải classifier)."""
+    fps, total = [], 0
+    for c in SAFE_BASH:
+        total += 1
+        if held(bash(cenv, _sub(cenv, c))):
+            fps.append(c)
+    for tool, ti in SAFE_OTHER:
+        total += 1
+        v = classify(tool, _sub_input(cenv, ti), cenv["ctx"])
+        if held(v):
+            fps.append((tool, v.rule))
+    assert len(fps) / total <= 0.05, fps

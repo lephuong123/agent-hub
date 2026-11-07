@@ -140,6 +140,12 @@ class Hub:
         except Exception:  # pragma: no cover
             log.exception("không dọn được runtime/")
         self.integrity.start()  # SEC: so policy/ với bản chuẩn + vòng kiểm nền
+        try:  # P2.4: đăng ký HUB_HOME vào registry hub của user OS → hub khác chặn đọc/ghi home này
+            from .confine import register_home
+
+            register_home(self.paths.home)
+        except Exception:  # pragma: no cover
+            log.exception("không ghi được registry hub")
         self._warn_if_sandbox_disabled()
         try:  # R2-1(c): .pth/sitecustomize lạ trong venv của hub → cảnh báo đỏ
             from .guard.integrity import check_python_env

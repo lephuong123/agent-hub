@@ -555,6 +555,13 @@ DEFAULTS: dict[str, Any] = {
     "workspace": {
         # MGR-1: gốc người cho phép đặt workspace `dir`. Ngoài ra luôn cho vùng scratch/worktree/eval của hub. Người thêm gốc tại đây (chỉ người).
         "allowed_roots": ["~/Workspace"],
+        # P2 đa instance (docs/dev-notes/confine.md): giam agent trong MỘT workspace W — CHỈ người (config.set ∈ HUMAN_ONLY,
+        # `workspace.confine` ∈ integrity.SECURITY_KEYS). root null = tắt. read_allow = toolchain ngoài W được đọc.
+        "confine": {
+            "root": None,
+            "read_allow": ["~/.npm", "~/.cache", "~/.local/share/uv", "~/.cargo", "~/.rustup", "~/.nvm", "~/Library/Caches",
+                           "~/.pyenv", "~/.bun", "~/.gitconfig", "~/.config/git/config", "~/.config/git/ignore"],
+        },
         "checkpoint": True,  # FR-RT-12: checkpoint + diff cho run ghi vào workspace dir
         "max_file_bytes": 5_000_000,  # file lớn hơn: chỉ lưu hash (không revert được)
         "max_files": 20_000,
@@ -760,6 +767,10 @@ class HubConfig:
 
     def set(self, key: str, value: Any) -> Any:
         validate_setting(key, value)
+        if key == "workspace" or key.startswith("workspace.confine"):  # P2: root không được chứa/nằm trong HUB_HOME
+            from .confine import validate_setting as _validate_confine
+
+            _validate_confine(key, value, self.path.parent)
         self._maybe_reload()
         over = copy.deepcopy(self._overrides)
         set_path(over, key, value)
@@ -813,6 +824,10 @@ def validate_setting(key: str, value: Any) -> None:
         mode = value.get("mode", "human") if key == "gates" and isinstance(value, dict) else value
         if mode not in GATES_MODES:
             raise ValueError(f"gates.mode phải là {'|'.join(GATES_MODES)}")
+    if key == "workspace" or key.startswith("workspace.confine"):
+        from .confine import validate_setting as _validate_confine
+
+        _validate_confine(key, value)
     if key == "guard.trust_new_agents" and value not in ("off", "full"):
         raise ValueError("guard.trust_new_agents chỉ nhận 'off' hoặc 'full'")
     if key == "notify.reminder_max_count":
