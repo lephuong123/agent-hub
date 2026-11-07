@@ -214,6 +214,10 @@ async def test_slack_defaults_channels_on_reaction(make):
     assert d.hub.config.get("notify.slack.allow_channels") is True
     assert d.hub.config.get("notify.slack.busy_indicator") == "reaction"
     assert d.hub.config.get("notify.slack.channel_root_posts") is False
+    # tệp gửi vào: mặc định = trần cứng 10 MB của manager.chat (PDF/Office thường > 1 MB)
+    assert d.hub.config.get("notify.slack.document_max_bytes") == 10 * 1024 * 1024
+    assert d.hub.config.get("notify.telegram.document_max_bytes") == 10 * 1024 * 1024
+    assert d.hub.slack.media.doc_cap() == 10 * 1024 * 1024
     assert auth.slack_caller(d.hub, "C0TEAM001", BOSS).human
     assert not auth.slack_caller(d.hub, "C0TEAM001", STRANGER).human
 

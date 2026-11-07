@@ -76,7 +76,8 @@ async def test_stranger_files_never_downloaded(make, sk):
 async def test_oversize_and_unsupported_rejected_before_download(make, sk):
     d = await mk(make, sk)
     eid = sk.user_files(DM_BOSS, BOSS, [("to.png", PNG, "image/png"), ("cai-dat.exe", b"MZ\x90\x00binary", "application/octet-stream"),
-                                         ("big.txt", b"x" * 2_000_000, "text/plain")], sizes={"to.png": 6 * 1024 * 1024}, text="xem")
+                                         ("big.txt", b"x" * 1000, "text/plain")],
+                       sizes={"to.png": 6 * 1024 * 1024, "big.txt": 11 * 1024 * 1024}, text="xem")  # big.txt > mặc định 10 MB
     await deliver(sk, eid)
     err = await until(lambda: errors_text(sk))
     assert "to.png" in err and "quá lớn" in err and "cai-dat.exe" in err and "chưa hỗ trợ loại tệp" in err and "big.txt" in err

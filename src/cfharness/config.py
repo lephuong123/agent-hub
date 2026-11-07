@@ -187,7 +187,7 @@ DEFAULTS: dict[str, Any] = {
             "deliver_files": True,
             "deliver_max_bytes": 20971520,
             "deliver_max_files": 5,
-            "document_max_bytes": 1048576,  # tệp văn bản người gửi tối đa (trần cứng 10 MB ở manager.chat)
+            "document_max_bytes": 10485760,  # tệp văn bản/tài liệu người gửi tối đa (= trần cứng 10 MB ở manager.chat)
             "files_base": None,  # CHỈ cho test: gốc URL tải tệp thay https://files.slack.com/ (không bao giờ theo URL tuỳ ý)
             "modal_ttl_s": 3600,  # P2: hộp nhập (modal) còn hiệu lực — nonce phía hub `slack.modals`
             "busy_indicator": "reaction",  # "status" ("đang xử lý…" trong thread, lỗi → ⏳) | "reaction" (chỉ icon ⏳ trên tin người)
@@ -221,7 +221,7 @@ DEFAULTS: dict[str, Any] = {
             "result_max_chars": 1500,
             # Tệp/ảnh với điều phối viên: ảnh (PNG/JPEG/GIF/WebP ≤ 5 MB, ≤ 4/tin — cùng giới hạn TUI) + tệp VĂN BẢN người gửi;
             # tệp điều phối viên đánh dấu `[[file: …]]` trong trả lời → gửi thành document (chỉ trong cwd hội thoại)
-            "document_max_bytes": 1048576,  # tệp văn bản người gửi tối đa (trần cứng 10 MB ở manager.chat)
+            "document_max_bytes": 10485760,  # tệp văn bản/tài liệu người gửi tối đa (= trần cứng 10 MB ở manager.chat)
             "media_group_wait_s": 1.5,  # album (nhiều ảnh một lần) → gom thành MỘT tin cho điều phối viên
             "deliver_files": True,
             "deliver_max_bytes": 20971520,  # tệp gửi ra tối đa (Bot API cho tới 50 MB)
