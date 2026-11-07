@@ -456,7 +456,7 @@ def slack_caller(hub: "Hub", chat_id: Any, user_id: Any = None) -> Caller:
 
     Là NGƯỜI chỉ khi kênh 2 chiều bật (`notify.slack.enabled` + `interactive`), `chat_id` ∈ `notify.slack.allowed_chat_ids` VÀ người
     gửi/bấm (`user_id`, Slack đã xác thực qua kết nối Socket Mode) ∈ `allowed_user_ids`. Chat không phải DM (`D…`) chỉ khi
-    `allow_channels` bật rõ ràng — khi đó MỌI kênh có bot (không cần nằm trong `allowed_chat_ids`); thành viên khác của kênh vẫn
+    `allow_channels` bật (mặc định bật từ v0.2.3) — khi đó MỌI kênh có bot (không cần nằm trong `allowed_chat_ids`); thành viên khác của kênh vẫn
     không phải người. Workspace (`team_id`) được bot kiểm trước khi gọi.
     Allowlist chỉ người sửa được (`slack.allow` ∈ HUMAN_ONLY; nhánh `notify` của config.yaml được kiểm toàn vẹn). Kênh audit: `slack:<chat_id>`.
     """

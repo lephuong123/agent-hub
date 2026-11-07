@@ -119,8 +119,8 @@ async def test_oversize_and_unsupported_rejected_before_download(make, tg):
     await push(tg, BOSS, document=("cai-dat.exe", b"MZ\x90\x00binary", "application/octet-stream"), caption="xem exe")
     await until(lambda: any("chưa hỗ trợ loại tệp" in t for t in texts(tg, BOSS)))
     assert tg.calls_of("getFile") == [] and not boss_runs(d)
-    # tài liệu văn bản vượt `document_max_bytes`
-    await push(tg, BOSS, document=("big.txt", b"x" * 2_000_000, "text/plain"))
+    # tài liệu văn bản vượt `document_max_bytes` (mặc định 10 MB) — cỡ khai báo kiểm TRƯỚC getFile
+    await push(tg, BOSS, document=("big.txt", b"x" * 1000, "text/plain"), declared_size=11 * 1024 * 1024)
     await until(lambda: sum("quá lớn" in t for t in texts(tg, BOSS)) >= 2)
     assert tg.calls_of("getFile") == [] and not boss_runs(d)
 

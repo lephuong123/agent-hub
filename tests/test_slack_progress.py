@@ -14,10 +14,10 @@ from test_slack import BOSS, DM_BOSS, STRANGER, deliver, make, rpc, sk, until  #
 CH = "C0TEAM0001"
 
 
-async def mk(make, sk: FakeSlack, *, hold: bool = True, edit_s: float = 0.2):
+async def mk(make, sk: FakeSlack, *, hold: bool = True, edit_s: float = 0.2, busy: str = "status"):
     from cfharness.web import manager_stub
 
-    d = await make(chats=(DM_BOSS,), sl_cfg={"allow_channels": True, "manager_progress_edit_s": edit_s},
+    d = await make(chats=(DM_BOSS,), sl_cfg={"allow_channels": True, "manager_progress_edit_s": edit_s, "busy_indicator": busy},
                    runtime=FakeRuntime(hold=hold))
     manager_stub.install(d)
     d.hub.agents.create({"id": "boss", "name": "Điều phối", "model": "haiku", "tool_policy": {"tools": ["Read", "Grep", "Glob"]}})

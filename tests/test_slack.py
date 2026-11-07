@@ -198,7 +198,7 @@ async def test_silent_when_interactive_off(make, sk):
 
 
 async def test_slack_caller_gate(make):
-    d = await make(users=(BOSS,), chats=(DM_BOSS, "C0TEAM001"))
+    d = await make(users=(BOSS,), chats=(DM_BOSS, "C0TEAM001"), sl_cfg={"allow_channels": False})
     assert auth.slack_caller(d.hub, DM_BOSS, BOSS).human
     assert not auth.slack_caller(d.hub, DM_BOSS, STRANGER).human  # người lạ trong DM (không thể với DM thật) vẫn không phải người
     assert not auth.slack_caller(d.hub, DM_STRANGER, BOSS).human
@@ -206,6 +206,20 @@ async def test_slack_caller_gate(make):
     assert not auth.slack_caller(d.hub, "C0OTHER01", BOSS).human
     resp = await d.call_as(auth.slack_caller(d.hub, DM_STRANGER, STRANGER), "estop.set", {"on": True})
     assert resp["error"]["code"] == BLOCKED
+
+
+async def test_slack_defaults_channels_on_reaction(make):
+    """Mặc định (v0.2.3): tag bot trong kênh chung bật — vẫn chỉ người ∈ allowed_user_ids; báo bận bằng reaction ⏳."""
+    d = await make(users=(BOSS,), chats=(DM_BOSS,))
+    assert d.hub.config.get("notify.slack.allow_channels") is True
+    assert d.hub.config.get("notify.slack.busy_indicator") == "reaction"
+    assert d.hub.config.get("notify.slack.channel_root_posts") is False
+    # tệp gửi vào: mặc định = trần cứng 10 MB của manager.chat (PDF/Office thường > 1 MB)
+    assert d.hub.config.get("notify.slack.document_max_bytes") == 10 * 1024 * 1024
+    assert d.hub.config.get("notify.telegram.document_max_bytes") == 10 * 1024 * 1024
+    assert d.hub.slack.media.doc_cap() == 10 * 1024 * 1024
+    assert auth.slack_caller(d.hub, "C0TEAM001", BOSS).human
+    assert not auth.slack_caller(d.hub, "C0TEAM001", STRANGER).human
 
 
 async def test_stranger_ignored_and_audited(make, sk):

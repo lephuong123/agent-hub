@@ -209,7 +209,7 @@ class MediaBase:
         return default if v is None else v
 
     def doc_cap(self) -> int:
-        return min(int(self.cfg("document_max_bytes", 1048576)), 10 * 1024 * 1024)
+        return min(int(self.cfg("document_max_bytes", 10 * 1024 * 1024)), 10 * 1024 * 1024)
 
     # ------------------------------------------------------------------ vào
     async def collect(self, items: list[MediaItem], errors: list[str]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
