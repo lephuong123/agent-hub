@@ -171,8 +171,9 @@ class ManagerChat:
                         self.bot._spawn(self._deliver(c, None, None, str(p.get("text") or ""), notify=True, agent=ev.agent_id))
                 return  # hội thoại của kênh khác (web/cli/heartbeat)
             conv = p.get("conversation_id") or meta.get("conv")
-            reply_to = None if notify else meta.get("reply_to")
-            if reply_to is None and not self.bot.root_post_ok(chat):
+            root_sched = self.bot.schedule_root_ok(chat, p)  # kết quả lịch → tin mới ở kênh (người bật channel_root_posts)
+            reply_to = None if notify or root_sched else meta.get("reply_to")
+            if reply_to is None and not root_sched and not self.bot.root_post_ok(chat):
                 # run tiếp tục / notify_owner của chính cuộc → thread của cuộc. Hội thoại chỉ là ĐOÁN (notify_owner từ heartbeat
                 # rơi vào "cuộc người hoạt động gần nhất") → không chen vào thread của việc khác, gửi DM.
                 guessed = notify and bool(p.get("conversation_guessed"))

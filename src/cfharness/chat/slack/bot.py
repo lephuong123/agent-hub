@@ -465,6 +465,24 @@ class SlackBot(ChatBot):
     def root_post_ok(self, chat: Any) -> bool:
         return str(chat).startswith("D")  # kênh chung: bot chỉ nói trong thread người đã tag, không bao giờ đăng lên gốc kênh
 
+    def schedule_root_ok(self, chat: Any, payload: dict[str, Any]) -> bool:
+        """Kết quả lịch đăng thẳng lên kênh chung (không vào thread) — chỉ khi NGƯỜI bật `channel_root_posts` (+ `allow_channels`), lịch
+        còn sống và `deliver_to.channel` của lịch (đọc từ DB, không tin payload) đúng là kênh này. Trả lời chat thường, duyệt, câu hỏi
+        không đổi (thread / DM)."""
+        cid = str(chat)
+        c = self.cfg()
+        if cid.startswith("D") or not c.get("allow_channels") or not c.get("channel_root_posts"):
+            return False
+        sid = payload.get("schedule_id")
+        svc = getattr(self.hub, "schedules", None)
+        if not sid or svc is None:
+            return False
+        try:
+            r = svc.maybe(str(sid))
+        except Exception:  # pragma: no cover
+            return False
+        return r is not None and str((r.get("deliver_to") or {}).get("channel") or "") == f"{self.NAME}:{cid}"
+
     def _follow(self, chat: str, root: str, uid: str) -> None:
         """Người (đã qua cổng) tag bot trong thread → bot nghe tiếp tin không tag của người đó ở thread này."""
         th = self._state(self.THREAD_USERS)

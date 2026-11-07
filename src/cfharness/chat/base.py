@@ -882,6 +882,11 @@ class ChatBot:
         """Được đăng tin KHÔNG trả lời tin nào vào `chat` (Slack: chỉ DM — kênh chung chỉ nhận trả lời trong thread)."""
         return True
 
+    def schedule_root_ok(self, chat: Any, payload: dict[str, Any]) -> bool:
+        """Kết quả lịch (`manager.reply` mang `schedule_id`) được đăng thành tin MỚI ở `chat` dù `root_post_ok` sai (Slack: kênh chung
+        khi người bật `notify.slack.channel_root_posts`). Mặc định: không."""
+        return False
+
     def help_text(self) -> str:  # pragma: no cover - lớp con
         raise NotImplementedError
 

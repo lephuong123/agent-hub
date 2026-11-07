@@ -714,7 +714,9 @@ class ManagerService:
                     self._first_pending = None
         self.hub.publish(make_event("manager.reply", run["agent_id"], {"conversation_id": cid, "run_id": run["id"], "text": text[:TEXT_MAX],
                                                                        "channel": conv["channel"], "kind": "tick" if kind == "tick" else "reply", "ok": ok,
-                                                                       "outcome": outcome}, run_id=run["id"]))
+                                                                       "outcome": outcome,
+                                                                       **({"schedule_id": opts["schedule_id"]} if kind == "schedule" and opts.get("schedule_id") else {})},
+                                   run_id=run["id"]))
         if kind == "tick":
             tk = dict(self.hub.store.state_get("manager_tick") or {})
             tk.update({"last_result": text[:300], "last_outcome": outcome})

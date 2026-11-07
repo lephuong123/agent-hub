@@ -258,3 +258,10 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
 
 ## Chưa làm
 - Nghiệm thu trên workspace Slack thật: chưa chạy (cả tag trong kênh — P6, `setStatus`/tin tiến độ — P7, thread không tag + ngữ cảnh thread — P8) (modal `views.open`, tải `url_private` với `files:read`, tệp từ máy tính + điện thoại).
+
+## Báo cáo lịch đăng thẳng vào kênh chung — `notify.slack.channel_root_posts` (2026-11-07)
+Mặc định kênh chung chỉ nhận trả lời trong thread (`SlackBot.root_post_ok` = chỉ DM), nên lịch có `deliver_to.channel = slack:C…` rơi vào
+thread của hội thoại đã tạo lịch (không biết thread → DM). Bật `notify.slack.channel_root_posts` (cần cả `allow_channels`, chỉ người đặt)
+→ `manager.reply` mang `schedule_id` (lịch kind agent/task qua `ScheduleService._deliver`; kind manager qua `run_opts.schedule_id` →
+`ManagerService._finish_run`) được đăng thành tin MỚI ở kênh. `SlackBot.schedule_root_ok` đọc lịch từ DB (không tin payload): lịch còn sống
+và `deliver_to.channel` đúng kênh đó. Trả lời chat, duyệt, câu hỏi không đổi. Test: `tests/test_slack_schedule_root.py`.
