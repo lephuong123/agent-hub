@@ -172,7 +172,7 @@ DEFAULTS: dict[str, Any] = {
             "team_id": None,  # workspace ghim lúc setup — envelope từ workspace khác bị bỏ qua
             "allowed_chat_ids": [],  # DM (D…) được nhận thông báo + điều khiển hub
             "allowed_user_ids": [],  # người (U…) được phép — Slack xác thực qua kết nối Socket Mode
-            "allow_channels": False,  # kênh chung phải bật rõ ràng; mặc định chỉ DM
+            "allow_channels": True,  # tag bot trong kênh chung có bot (vẫn chỉ người ∈ allowed_user_ids + workspace ghim); tắt = chỉ DM
             "thread_followup": False,  # nói tiếp trong thread có bot KHÔNG cần tag (chỉ người đã tag; điều phối viên được im lặng)
             "channel_root_posts": False,  # kết quả LỊCH có deliver_to.channel = kênh chung này → đăng thành tin mới ở kênh (không vào thread)
             "thread_context": False,  # P8: tag bot giữa thread chưa có bot → đọc tin trước đó (conversations.replies) làm ngữ cảnh DỮ LIỆU
@@ -190,7 +190,7 @@ DEFAULTS: dict[str, Any] = {
             "document_max_bytes": 1048576,  # tệp văn bản người gửi tối đa (trần cứng 10 MB ở manager.chat)
             "files_base": None,  # CHỈ cho test: gốc URL tải tệp thay https://files.slack.com/ (không bao giờ theo URL tuỳ ý)
             "modal_ttl_s": 3600,  # P2: hộp nhập (modal) còn hiệu lực — nonce phía hub `slack.modals`
-            "busy_indicator": "status",  # "status" ("đang xử lý…" trong thread, lỗi → ⏳) | "reaction" (chỉ icon ⏳ trên tin người)
+            "busy_indicator": "reaction",  # "status" ("đang xử lý…" trong thread, lỗi → ⏳) | "reaction" (chỉ icon ⏳ trên tin người)
             "manager_progress": True,  # P7: tin tiến độ + nút Dừng khi điều phối viên làm việc cho tin Slack (chat/slack/progress.py)
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",

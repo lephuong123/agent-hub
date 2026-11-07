@@ -135,7 +135,7 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
 | `chat/questions_tg.py`, `chat/manager_chat.py`, `SlackChatNotifier.target` | tin chủ động (approval, câu hỏi, `notify_owner` khi chưa có hội thoại) dùng `broadcast_chats()` |
 | `web/app.py` | manifest 2 chiều thêm event `app_mention` + scope `app_mentions:read` |
 
-- **Bật**: `cfharness config set notify.slack.allow_channels true` → mời bot vào kênh (`/invite @cfharness`) → tag. KHÔNG ghép nối kênh:
+- **Bật** (mặc định bật từ v0.2.3; tắt: `… allow_channels false`): `cfharness config set notify.slack.allow_channels true` → mời bot vào kênh (`/invite @cfharness`) → tag. KHÔNG ghép nối kênh:
   khi `allow_channels` bật, `auth.slack_caller` nhận MỌI kênh (không phải DM) nếu người tag ∈ `allowed_user_ids` (workspace đã ghim);
   kênh được nhớ ở `hub_state slack.channels` lần đầu người đó tag để giao trả lời (`notify_chats`). DM vẫn phải ghép nối.
   App đã cài trước P6: dán lại manifest (hoặc thêm event + scope bằng tay) rồi **Reinstall** để Slack gửi `app_mention`.
@@ -249,7 +249,7 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
 - Test: `tests/test_slack_mentions.py` (run tiếp tục + notify → đúng thread; cuộc lạ → DM, kênh không nhận gì).
 
 ## Chế độ gọn: chỉ icon + kết quả
-- `notify.slack.busy_indicator: reaction` (mặc định `status`): bỏ "đang xử lý…" (setStatus), chỉ reaction ⏳ trên tin đã tag, gỡ khi có
+- `notify.slack.busy_indicator: reaction` (mặc định `reaction` từ v0.2.3; trước là `status`): bỏ "đang xử lý…" (setStatus), chỉ reaction ⏳ trên tin đã tag, gỡ khi có
   kết quả. Kết hợp `manager_progress: false` (không tin tiến độ) + `thread_followup: false` (chỉ trả lời khi được tag) → mỗi lần tag = ⏳
   rồi đúng MỘT tin kết quả trong thread.
 - Dòng cuối trả lời ở kênh chung (`ChatBot.continue_hint(chat)`) nói đúng cách nói tiếp: "Tag bot trong thread này…" khi tắt
