@@ -304,7 +304,7 @@ class GraphExtractor:
         if binary:
             from ..runtime import ClaudeCliRuntime
 
-            return ClaudeCliRuntime({**(self.hub.config.get("runtime.claude") or {}), "binary": str(binary)})
+            return ClaudeCliRuntime({**(self.hub.config.get("runtime.claude") or {}), "binary": str(binary)}, secrets=getattr(self.hub, "secrets", None))
         return self.hub.runs.runtime()
 
     # ------------------------------------------------------------------ trích xuất

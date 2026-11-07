@@ -119,7 +119,7 @@ class RunManager:
         return self.store.state_get("auth_block")
 
     def runtime(self) -> AgentRuntime:
-        return self._runtime or make_runtime(self.hub.config.data)
+        return self._runtime or make_runtime(self.hub.config.data, getattr(self.hub, "secrets", None))
 
     def running_count(self, agent_id: str | None = None, exclude_kind: str | None = None) -> int:
         return sum(1 for a in self.active.values() if (agent_id is None or a.agent_id == agent_id) and (exclude_kind is None or a.kind != exclude_kind))

@@ -326,6 +326,14 @@ tĩnh mới đặt trong `web/static/`. Không bao giờ đưa token người/kh
 Duyệt: hiện TOÀN BỘ thao tác (`present.action_view`, không cắt); lớp nặng (`notify.telegram.confirm_classes` + `file`, tài nguyên bảo vệ) cần bước 2. "Luôn cho phép" (`approve_always`) chỉ hiện khi `a.always_offer` và LUÔN cần bước 2 nêu luật. `config.set` chỉ khoá trong `SAFE_CONFIG`.
 Agent trong run: sandbox chặn TCP localhost (đã kiểm thật) + denyRead `HUB_HOME/auth` + `cfharness web` forbidden trong classifier.
 
+### Web public (tunnel TLS) + TOTP + LaunchDaemon + Claude dùng chung — `docs/dev-notes/web-public.md`
+`web/public.py` (`web.public_origin` chỉ https, `client_ip` chỉ tin header proxy khi có public_origin + peer loopback, `LoginLimiter` theo IP/toàn cục/ngày),
+`web/totp.py` (RFC 6238 stdlib, `HUB_HOME/auth/totp*.json` 0600), `/enroll` + ô mã ở `/login`, `cfharness web totp enroll|status|disable`, `web --no-link`.
+Bind VẪN loopback; nhánh config `web` ∈ `integrity.SECURITY_KEYS`, không có trong danh mục Cài đặt web; MCP HTTP KHÔNG public.
+`systems/autostart.LaunchDaemonPlan` + `cfharness admin install-daemon --user U [--web-port N] [--write]` (∈ `HUB_HUMAN_ONLY_CLI`).
+Secret `CLAUDE_CODE_OAUTH_TOKEN` → env của mọi tiến trình `claude` (`ClaudeCliRuntime(secrets=)`, `child_env(oauth_token=)` — tạo runtime mới phải truyền
+`secrets=hub.secrets`); không bao giờ vào argv/DB/plist. Test: `tests/test_web_public.py`.
+
 ## M7 luồng MGR-UI — Điều phối viên trên web + Telegram + terminal
 Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes/M7-ui.md`. Ảnh: `docs/screenshots/web/16-…18-*.png`, `docs/screenshots/m2/10-11-dieu-phoi*.svg`. Không migration, không RPC mới.
 

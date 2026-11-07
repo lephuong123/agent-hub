@@ -305,7 +305,13 @@ def cmd_doctor(ctx: Ctx) -> int:
         tested = ccfg.get("tested_versions") or []
         add("phiên bản claude", bool(v) and v in tested, f"{v} (đã kiểm: {', '.join(tested)})" + ("" if v in tested else " — phiên bản chưa kiểm"), "warning")
         try:
-            r = subprocess.run(exec_argv([binary, "auth", "status"]), capture_output=True, encoding="utf-8", errors="replace", timeout=30, **no_window_kwargs())
+            from .runtime.claude_cli import child_env, oauth_token
+            from .secrets import SecretStore
+
+            # cùng env với tiến trình claude của daemon (env_strip + CLAUDE_CODE_OAUTH_TOKEN từ secret store nếu có)
+            tok = oauth_token(SecretStore(ctx.paths.home / "secrets", env_fallback=False))
+            r = subprocess.run(exec_argv([binary, "auth", "status"]), capture_output=True, encoding="utf-8", errors="replace", timeout=30,
+                               env=child_env(ccfg, oauth_token=tok), **no_window_kwargs())
             try:
                 info = json.loads(r.stdout)
                 logged = bool(info.get("loggedIn", r.returncode == 0))

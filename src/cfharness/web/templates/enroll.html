@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Đăng ký ứng dụng xác thực{% endblock %}
+{% block content %}
+<div class="login-hero">{{ _m.icon('logo', 'hero-mark') }}<span class="wordmark">cfharness</span></div>
+<section class="card narrow login">
+  <h1>Đăng ký ứng dụng xác thực</h1>
+  {% if error %}<div class="flash error" role="alert">{{ error }}</div>{% endif %}
+  {% if stage == "invalid" %}
+  <div class="flash error" role="alert">Link đăng ký không hợp lệ, đã dùng hoặc đã hết hạn. Nhờ quản trị viên chạy lại <code>cfharness web totp enroll</code>.</div>
+  {% elif stage == "start" %}
+  <p>Link này chỉ hiện mã bí mật <strong>một lần</strong>. Chuẩn bị ứng dụng xác thực (Google Authenticator, 1Password, Authy…) rồi bấm nút dưới.</p>
+  <form method="post" action="/enroll" class="form">
+    <input type="hidden" name="t" value="{{ t }}"><input type="hidden" name="action" value="show">
+    <div class="row end"><button class="btn primary" type="submit">Hiện mã bí mật</button></div>
+  </form>
+  {% else %}
+  {% if stage == "show" %}
+  <p>Thêm tài khoản vào ứng dụng xác thực: bấm <a href="{{ uri }}">mở trong ứng dụng xác thực</a> (trên điện thoại), hoặc nhập tay khoá sau (loại: theo thời gian, 6 số, 30 giây):</p>
+  <pre class="cmd">{{ secret }}</pre>
+  <p class="muted small">Đừng tải lại trang này — mã chỉ hiện một lần. Mất trang trước khi xác nhận: nhờ quản trị viên cấp link mới.</p>
+  {% endif %}
+  <form method="post" action="/enroll" class="form">
+    <input type="hidden" name="t" value="{{ t }}"><input type="hidden" name="action" value="confirm">
+    <label>Nhập mã 6 số ứng dụng đang hiện để kích hoạt<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required autofocus></label>
+    <div class="row end"><button class="btn primary" type="submit">Kích hoạt và đăng nhập</button></div>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}
