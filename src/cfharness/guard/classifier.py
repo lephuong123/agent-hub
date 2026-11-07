@@ -116,10 +116,9 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "chat": None,  # M7 terminal: `cfharness chat` = ra lệnh điều phối viên (manager.chat ∈ HUMAN_ONLY)
     "system": {"scan", "add", "rm", "lock", "unlock", "pause", "resume", "restart"},  # job launchd chạy NGOÀI sandbox (system.* ∈ HUMAN_ONLY)
     "home": {"migrate"},  # đổi tên cfharness: chuyển HUB_HOME (dừng daemon, đổi thư mục, viết lại DB) — chỉ người
-    "admin": None,  # plan-multi-instance Q3: LaunchDaemon theo user (/Library, root) — lệnh của admin máy, agent gõ (kể cả chỉ in) đều chặn
+    "admin": None,  # plan-multi-instance: install-daemon (LaunchDaemon, root) + overview (admin.overview ∈ HUMAN_ONLY, lộ hoạt động user OS khác) — agent gõ đều chặn
     "update": None,  # cập nhật cfharness = cài đè phần mềm hub + khởi động lại daemon (update.start ∈ HUMAN_ONLY) — agent gõ, kể cả --check, đều chặn
     # Lịch chạy tự động (schedules/): schedule.* ghi ∈ HUMAN_ONLY — agent không tự đặt việc chạy lặp
-    "admin": None,  # tổng quan máy: admin.overview ∈ HUMAN_ONLY (lộ hoạt động của user OS khác) — admin_overview.py
     "schedule": {"add", "create", "edit", "update", "pause", "resume", "rm", "remove", "delete", "run-now", "run_now"},
 }
 

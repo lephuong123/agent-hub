@@ -32,10 +32,11 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
         p.add_argument("--reason", default="")
     s.set_defaults(fn=cmd_system)
 
-    # Q3 (plan-multi-instance §6b): hub chạy không cần phiên GUI — LaunchDaemon theo user (systems/autostart.LaunchDaemonPlan)
-    ad = sub.add_parser("admin", help="quản trị máy chạy nhiều hub (chỉ người): install-daemon|uninstall-daemon (LaunchDaemon, không cần đăng nhập màn hình)",
-                        parents=[common])
-    ads = ad.add_subparsers(dest="admin_action", required=True)
+
+def add_admin_daemon_parsers(ads: Any, common: Any) -> None:
+    """Lệnh con `cfharness admin install-daemon|uninstall-daemon` — nhóm `admin` do admin_cli.py tạo (dùng chung với `admin overview`).
+
+    Q3 (plan-multi-instance §6b): hub chạy không cần phiên GUI — LaunchDaemon theo user (systems/autostart.LaunchDaemonPlan)."""
     for name, hlp in (("install-daemon", "sinh plist /Library/LaunchDaemons/com.cfharness.daemon.<user>.plist (mặc định chỉ IN plist + lệnh sudo)"),
                       ("uninstall-daemon", "gỡ LaunchDaemon của user (mặc định chỉ in lệnh)")):
         p = ads.add_parser(name, help=hlp, parents=[common])
@@ -43,7 +44,7 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
         p.add_argument("--web-port", type=int, default=None, help="thêm job thứ hai giữ `cfharness web --port N` luôn chạy (cho tunnel)")
         p.add_argument("--program", default=None, help="đường dẫn lệnh cfharness của user (mặc định ~<user>/.local/bin/cfharness)")
         p.add_argument("--write", action="store_true", help="ghi /Library/LaunchDaemons + launchctl bootstrap (cần chạy bằng root)")
-    ad.set_defaults(fn=cmd_admin)
+        p.set_defaults(fn=cmd_admin, admin_action=name)
 
 
 def cmd_admin(ctx: Any) -> int:

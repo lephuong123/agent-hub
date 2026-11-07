@@ -1,4 +1,4 @@
-"""CLI `cfharness admin overview [--json]` — tổng quan mọi hub trên máy (admin_overview.py, docs/dev-notes/admin-overview.md).
+"""CLI `cfharness admin overview [--json]` (+ `install-daemon|uninstall-daemon` từ systems/cli.py) — tổng quan mọi hub trên máy (admin_overview.py, docs/dev-notes/admin-overview.md).
 
 Client thuần: RPC `admin.overview` (∈ HUMAN_ONLY) — daemon đọc thư mục trạng thái chung `admin_export.dir`.
 """
@@ -12,8 +12,11 @@ STATE_VI = {"ok": "đang chạy", "stale": "QUÁ HẠN", "stopped": "đã dừng
 
 
 def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
-    a = sub.add_parser("admin", help="quản trị máy nhiều người dùng (tổng quan mọi hub)", parents=[common])
+    from .systems.cli import add_admin_daemon_parsers
+
+    a = sub.add_parser("admin", help="quản trị máy nhiều người dùng (chỉ người): overview | install-daemon | uninstall-daemon", parents=[common])
     asub = a.add_subparsers(dest="admin_cmd", required=True)
+    add_admin_daemon_parsers(asub, common)
     o = asub.add_parser("overview", help="tổng quan mọi hub trên máy: chi phí, run, duyệt/câu hỏi, ESTOP (chỉ người)", parents=[common])
     o.set_defaults(fn=cmd_overview)
 
