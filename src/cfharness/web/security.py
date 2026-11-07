@@ -3,7 +3,8 @@
 Mô hình:
 - Server CHỈ bind loopback (`127.0.0.1`, `::1`, `localhost`); host khác → từ chối khi khởi động (`require_loopback`).
 - WT-1: trình duyệt dùng host riêng `cfharness.localhost:<port>` (cookie host-only, không gửi tới 127.0.0.1:*/localhost:* nơi dev
-  server agent viết chạy); 127.0.0.1/localhost → 303 sang host riêng, không đặt cookie. Cookie KHÔNG tách theo cổng nên còn lớp 2:
+  server agent viết chạy); 127.0.0.1/localhost → 303 sang host riêng, không đặt cookie. Tên cookie có hậu tố theo HUB_HOME
+  (`cookie_name`) để hai hub cùng host không đá phiên nhau. Cookie KHÔNG tách theo cổng nên còn lớp 2:
   mọi POST cần `Session.key` (bí mật ngoài cookie, trao qua fragment `#k=` lúc đăng nhập, JS giữ trong localStorage, không bao giờ
   nằm trong HTML). Phiên ngắn: idle 1 h (polling/SSE không gia hạn), tối đa 12 h.
 - Đăng nhập: `cfharness web` in/mở URL `/login?t=<link một lần>`. Link = HMAC(khoá phiên server, nonce|hạn) — dùng
@@ -36,7 +37,7 @@ from typing import Any
 from ..oscompat import owned_by_me, pid_alive
 from ..paths import HubPaths
 
-COOKIE = "ahub_web"
+COOKIE = "ahub_web"  # tiền tố; tên thật theo hub: `cookie_name(home)` (đa instance P1)
 KEY_FIELD = "k"  # bí mật phiên NGOÀI cookie (WT-1): form field / header X-Ahub-Key, trình duyệt giữ trong localStorage của origin web
 KEY_HEADER = "x-ahub-key"
 LOGIN_TTL_S = 300
@@ -46,6 +47,13 @@ LOOPBACK_NAMES = ("localhost",)
 # WT-1: tên host riêng → cookie host-only KHÔNG được gửi tới 127.0.0.1:* / localhost:* (dev server agent viết).
 # Chrome/Firefox/Safari + resolver macOS/glibc phân giải *.localhost về loopback (RFC 6761).
 WEB_HOST = "cfharness.localhost"
+
+
+def cookie_name(home: str | os.PathLike[str] | HubPaths) -> str:
+    """Tên cookie phiên RIÊNG theo hub: `ahub_web_<6 hex sha256(HUB_HOME)>`. Cookie không tách theo cổng — hai hub cùng host
+    `cfharness.localhost` (cổng khác nhau) dùng chung tên thì đăng nhập hub này đá phiên hub kia (C2, plan-multi-instance)."""
+    h = home.home if isinstance(home, HubPaths) else Path(home)
+    return f"{COOKIE}_{hashlib.sha256(str(Path(h).expanduser().resolve()).encode()).hexdigest()[:6]}"
 
 
 class NotLoopback(ValueError):

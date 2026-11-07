@@ -37,7 +37,7 @@ from ..tui.client import AsyncHubClient, subscribe
 from ..tui.model import STATUS_ORDER
 from . import present as P
 from . import settings_schema as _settings
-from .security import COOKIE, KEY_FIELD, KEY_HEADER, WEB_HOST, Session, WebAuth, allowed_hosts, is_loopback
+from .security import KEY_FIELD, KEY_HEADER, WEB_HOST, Session, WebAuth, allowed_hosts, cookie_name, is_loopback
 
 log = logging.getLogger("cfharness.web")
 HERE = Path(__file__).parent
@@ -125,6 +125,10 @@ class WebState:
     name: str = WEB_HOST  # host công khai (Host header + cookie host-only) — khác bind host (WT-1)
 
     @property
+    def cookie(self) -> str:
+        return cookie_name(self.paths.home)
+
+    @property
     def hosts(self) -> set[str]:
         return allowed_hosts(self.name, self.port)
 
@@ -179,7 +183,7 @@ class GuardMiddleware:
             # chống DNS rebinding: chỉ phục vụ đúng Host đã định
             await PlainTextResponse(f"Host không hợp lệ — mở {self.state.base_url}/", status_code=421)(scope, receive, send_headers)
             return
-        sid = cookie_parser(headers.get("cookie", "")).get(COOKIE)
+        sid = cookie_parser(headers.get("cookie", "")).get(self.state.cookie)
         # polling/SSE không gia hạn phiên — chỉ thao tác của người (trang, POST) mới gia hạn
         poll = path.startswith(("/sse/", "/partials/")) or path.startswith(self.API)
         # GET JSON của cảnh 3D không gia hạn; POST /office/do (thao tác của người) thì có
@@ -334,7 +338,7 @@ def _token_from(v: str) -> str:
 def _login_ok(request: Request, sess: Session) -> Response:
     # khoá phiên đi trong FRAGMENT (không gửi lên server, không vào log/Referer); app.js lưu vào localStorage rồi xoá khỏi URL
     resp = RedirectResponse(f"/#{KEY_FIELD}={sess.key}", status_code=303)
-    resp.set_cookie(COOKIE, sess.sid, httponly=True, samesite="strict", path="/", secure=False)
+    resp.set_cookie(ws(request).cookie, sess.sid, httponly=True, samesite="strict", path="/", secure=False)
     return resp
 
 
@@ -362,9 +366,10 @@ async def login(request: Request) -> Response:
 
 async def logout(request: Request) -> Response:
     await post_guard(request, need_key=False)
-    ws(request).auth.logout(request.cookies.get(COOKIE))
+    ck = ws(request).cookie
+    ws(request).auth.logout(request.cookies.get(ck))
     resp = RedirectResponse("/login", status_code=303)
-    resp.delete_cookie(COOKIE, path="/")
+    resp.delete_cookie(ck, path="/")
     return resp
 
 

@@ -27,6 +27,11 @@ _FLAGS_2_1_302: list[str] = [
     "--strict-mcp-config", "--system-prompt", "--system-prompt-snapshot", "--tools", "--verbose", "--worktree",
 ]
 
+# Đa instance P1: MCP HTTP mặc định KHÁC cổng web (8765) để hai dịch vụ của cùng hub không va nhau.
+MCP_HTTP_DEFAULT_PORT = 8766
+LEGACY_MCP_HTTP_PORT = 8765  # mặc định cũ — guard vẫn coi URL loopback cổng này là MCP của hub (cài đặt cũ đã đăng ký)
+MCP_OAUTH_CALLBACK_DEFAULT_PORT = 33418  # callback OAuth của CLI (`mcp login`) — cố định để bản đăng ký DCR dùng lại được
+
 DEFAULTS: dict[str, Any] = {
     "hub": {
         # FR-TK-07: giới hạn số run đồng thời toàn hub (giá trị khởi tạo 4)
@@ -255,13 +260,19 @@ DEFAULTS: dict[str, Any] = {
         "audit_ignore_servers": ["hub-guard"],
         "probe_timeout_s": 30,
     },
+    # Client OAuth của `cfharness mcp login` (mcp_client/oauth_cli.py)
+    "mcp_client": {
+        # cổng listener callback `http://127.0.0.1:<cổng>/callback`; 0 = OS chọn (mỗi lần một cổng → nhà cung cấp phải chấp nhận
+        # redirect loopback cổng bất kỳ, RFC 8252 §7.3; DCR sẽ đăng ký lại). Bận → cổng ngẫu nhiên.
+        "oauth_callback_port": MCP_OAUTH_CALLBACK_DEFAULT_PORT,
+    },
     "secrets": {
         # `${VAR}` không có trong secret store thì lấy biến môi trường của daemon (tương thích ~/.claude.json)
         "env_fallback": True,
     },
     # M1 luồng A — MCP server của hub (FR-MS-*)
     "mcp_server": {
-        "http_port": 8765,  # Streamable HTTP chỉ bind 127.0.0.1 (Q-11, NFR-14)
+        "http_port": MCP_HTTP_DEFAULT_PORT,  # Streamable HTTP chỉ bind 127.0.0.1 (Q-11, NFR-14); khác cổng web 8765
         "max_wait_s": 25,  # FR-MS-03: không giữ kết nối quá 25 s
         "max_events_per_call": 200,
     },
@@ -782,6 +793,10 @@ def validate_setting(key: str, value: Any) -> None:
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")
+    if key in ("mcp_server.http_port", "mcp_client.oauth_callback_port"):
+        lo = 0 if key == "mcp_client.oauth_callback_port" else 1
+        if not isinstance(value, int) or isinstance(value, bool) or not lo <= value <= 65535:
+            raise ValueError(f"{key} phải là số nguyên {lo}–65535")
     if key in ("gates", "gates.mode"):
         from .guard.profiles import GATES_MODES
 

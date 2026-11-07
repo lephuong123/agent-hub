@@ -11,6 +11,12 @@ from cfharness.runtime import default_fixture
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
+# Đa instance P1: biến môi trường chỉ-cho-test (CFHARNESS_EXTRA_WORKSPACE_ROOTS…) chỉ có hiệu lực khi cờ này bật.
+# Đặt ở mức module (os.environ) để daemon/tiến trình con mà test spawn kế thừa.
+import os as _os
+
+_os.environ["CFHARNESS_TESTING"] = "1"
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _allow_pytest_tmp_workspaces(tmp_path_factory):

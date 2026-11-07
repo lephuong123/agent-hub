@@ -286,6 +286,10 @@ def _daemon_logs(ctx: Ctx) -> int:
 
 # ============================================================================ doctor
 def cmd_doctor(ctx: Ctx) -> int:
+    if ctx.args.agent == "multi":  # `cfharness doctor multi` — kiểm đa instance (chỉ đọc, không cần daemon); "multi" ∈ RESERVED_IDS
+        from .doctor_multi import cmd_doctor_multi
+
+        return cmd_doctor_multi(ctx)
     checks: list[dict[str, Any]] = []
 
     def add(name: str, ok: bool, detail: str, level: str = "error") -> None:
@@ -734,7 +738,7 @@ def build_parser() -> argparse.ArgumentParser:
     d.set_defaults(fn=cmd_daemon)
 
     doc = sub.add_parser("doctor", help="kiểm sức khoẻ (không gọi model)", parents=[common])
-    doc.add_argument("agent", nargs="?")
+    doc.add_argument("agent", nargs="?", help="id agent cần kiểm, hoặc `multi` = kiểm sẵn sàng chạy nhiều hub trên một máy")
     doc.add_argument("--probe-timeout", type=float, default=20, help="giây chờ mỗi MCP server khi thử kết nối")
     doc.set_defaults(fn=cmd_doctor)
 

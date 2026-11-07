@@ -38,6 +38,14 @@ GIT_SAFE_ARGS = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
 _EXTRA_ALLOWED_ROOTS: list[str] = []  # CHỈ test (conftest) đặt; sản phẩm luôn rỗng
 
 
+def env_extra_roots() -> list[str]:
+    """Gốc workspace phụ từ `CFHARNESS_EXTRA_WORKSPACE_ROOTS` — CHỈ khi `CFHARNESS_TESTING=1` (tests/conftest.py đặt; daemon
+    tiến trình con của test kế thừa). Ngoài test biến này bị BỎ QUA: không ai nới được gốc workspace qua env (đa instance P1)."""
+    if os.environ.get("CFHARNESS_TESTING") != "1":
+        return []
+    return [r for r in (os.environ.get("CFHARNESS_EXTRA_WORKSPACE_ROOTS") or "").split(os.pathsep) if r]
+
+
 def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
     """MGR-1(a): workspace `dir` phải nằm TRONG một gốc người cho phép (`workspace.allowed_roots`, mặc định ~/Workspace +
     vùng scratch của hub) VÀ không trùng/chứa/nằm trong bất kỳ vùng bảo vệ cố định hoặc protected path nào. Cho CẢ người lẫn
@@ -69,9 +77,7 @@ def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
         roots = [uh / "Workspace"]
     roots += [hh / "agents", hh / "worktrees", hh / "evals", hh / "checkpoints"]
     roots += [Path(r) for r in _EXTRA_ALLOWED_ROOTS]  # test-only (conftest, cùng tiến trình); rỗng trong sản phẩm
-    env_extra = os.environ.get("CFHARNESS_EXTRA_WORKSPACE_ROOTS")  # test-only (daemon tiến trình con kế thừa env)
-    if env_extra:
-        roots += [Path(r).expanduser().resolve() for r in env_extra.split(os.pathsep) if r]
+    roots += [Path(r).expanduser().resolve() for r in env_extra_roots()]  # test-only (CFHARNESS_TESTING=1)
     if not any(p == r or p.is_relative_to(r) for r in roots):
         raise HubError(f"{what} '{p}' không nằm trong gốc workspace cho phép ({', '.join(str(r) for r in roots)}). "
                        f"Người có thể thêm gốc: `cfharness config set workspace.allowed_roots '[...]'`", code=-32003)

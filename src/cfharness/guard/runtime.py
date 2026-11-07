@@ -309,6 +309,9 @@ def fixed_protected_dirs(hub_home: Path, socket: Path, sb_cfg: dict[str, Any] | 
         out += [str(hp / n) for n in HUB_WRITE_DENY_NAMES]
         out += [f"{hp}/agents/*/{n}" for n in AGENT_WRITE_DENY_NAMES]
     out += [str(socket), str(token_path(socket))]
+    from ..paths import socket_private_dirs
+
+    out += socket_private_dirs(socket)  # đa instance P1: thư mục socket dự phòng /tmp/cfharness-<uid>/
     out += other_default_homes(hub_home)
     if sb_cfg.get("protect_hub_code", True):
         out.append(os.path.realpath(package_dir()))
@@ -364,6 +367,9 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
             pass
     tok = token_path(socket)
     deny_w += [str(socket), str(tok)]
+    from ..paths import socket_private_dirs
+
+    deny_w += socket_private_dirs(socket)  # đa instance P1
     if sb_cfg.get("protect_hub_code", True):
         deny_w.append(os.path.realpath(package_dir()))
     # V2-N2: nơi đặt thứ chạy trễ/chạy khi NGƯỜI dùng shell/git/claude — ngoài run, ngoài sandbox

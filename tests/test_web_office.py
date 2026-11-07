@@ -42,9 +42,7 @@ async def test_office_requires_login(env):
 
 async def test_office_state_polling_does_not_extend_session(env):
     await env.login()
-    from cfharness.web.security import COOKIE
-
-    sess = env.auth.sessions[env.client.cookies.get(COOKIE)]
+    sess = env.auth.sessions[env.client.cookies.get(env.cookie)]
     sess.last -= 100
     before = sess.last
     assert (await env.client.get("/office/state")).status_code == 200

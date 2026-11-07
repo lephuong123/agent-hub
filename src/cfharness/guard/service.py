@@ -98,7 +98,12 @@ def always_confirm_value(spec: dict[str, Any]) -> str:
     return str(spec.get("fingerprint") or spec.get("domain") or "")
 
 
-def is_hub_mcp_config(cfg: dict[str, Any], port: int = 8765) -> bool:
+def is_hub_mcp_config(cfg: dict[str, Any], port: int | None = None) -> bool:
+    """MCP server trỏ về CHÍNH hub? Theo lệnh, hoặc URL loopback cổng `port` (mặc định `mcp_server.http_port` mặc định)
+    HAY cổng mặc định cũ 8765 (cài đặt trước đa instance P1 có thể đã đăng ký URL đó)."""
+    from ..config import LEGACY_MCP_HTTP_PORT, MCP_HTTP_DEFAULT_PORT
+
+    ports = {MCP_HTTP_DEFAULT_PORT if port is None else int(port), LEGACY_MCP_HTTP_PORT}
     import re as _re
     from urllib.parse import urlparse
 
@@ -113,7 +118,7 @@ def is_hub_mcp_config(cfg: dict[str, Any], port: int = 8765) -> bool:
         try:
             u = urlparse(url)
             host = (u.hostname or "").lower()
-            if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0") and (u.port or (443 if u.scheme == "https" else 80)) == port:
+            if host in ("127.0.0.1", "localhost", "::1", "0.0.0.0") and (u.port or (443 if u.scheme == "https" else 80)) in ports:
                 return True
         except ValueError:
             return False
@@ -835,13 +840,15 @@ class GuardService:
     def hub_mcp_servers(self) -> frozenset[str]:
         """H-18: tên đăng ký của MCP server trỏ về CHÍNH hub — nhận theo lệnh (`cfharness mcp serve`, `-m cfharness.mcp_server`)
         hoặc URL loopback cổng `mcp_server.http_port`, không theo tên."""
+        from ..config import MCP_HTTP_DEFAULT_PORT
+
         reg = getattr(self.hub, "mcp", None)
         if reg is None or not hasattr(reg, "list"):
             return frozenset()
         try:
-            port = int(self.hub.config.get("mcp_server.http_port") or 8765)
+            port = int(self.hub.config.get("mcp_server.http_port") or MCP_HTTP_DEFAULT_PORT)
         except (KeyError, TypeError, ValueError):
-            port = 8765
+            port = MCP_HTTP_DEFAULT_PORT
         out: set[str] = set()
         try:
             rows = reg.list(include_deleted=False)

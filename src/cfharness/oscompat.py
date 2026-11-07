@@ -259,12 +259,27 @@ def uid_tag() -> str:
 
 
 # ============================================================================ spawn / dừng
+_CHILD_UMASK: int | None = None  # umask GỐC trước `set_private_umask` — trả lại cho tiến trình con (claude, công cụ của agent)
+
+
+def set_private_umask() -> None:
+    """Daemon (đa instance P1): umask 0o077 → file hub tự tạo (hub.db, logs, runs, prompts…) chỉ user này đọc được.
+    Tiến trình con spawn qua `new_group_kwargs` (claude của run) nhận lại umask gốc — file agent tạo trong workspace giữ quyền
+    như người tự tạo. Windows: không làm gì."""
+    global _CHILD_UMASK
+    if IS_WINDOWS:
+        return
+    old = os.umask(0o077)
+    if _CHILD_UMASK is None:
+        _CHILD_UMASK = old
+
+
 def new_group_kwargs(*, suspended: bool = False) -> dict[str, Any]:
     """kwargs cho Popen/create_subprocess_exec: tiến trình (và hậu duệ) thành một nhóm dừng được cùng nhau.
     POSIX: `start_new_session` (session = pid). Windows: process group mới (nhận CTRL_BREAK), tuỳ chọn spawn treo để
     gán Job Object trước khi tiến trình kịp sinh con (`WinJob.adopt`)."""
     if not IS_WINDOWS:
-        return {"start_new_session": True}
+        return {"start_new_session": True, **({"umask": _CHILD_UMASK} if _CHILD_UMASK is not None else {})}
     flags = CREATE_NEW_PROCESS_GROUP  # pragma: no cover
     if suspended:
         flags |= CREATE_SUSPENDED

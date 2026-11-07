@@ -33,6 +33,7 @@ STATUSES = ("idle", "working", "waiting", "paused", "error", "disabled")
 RESERVED_IDS = frozenset({
     "list", "show", "logs", "stop", "follow", "continue", "resume", "revert", "diff", "steer", "status", "all",
     "help", "detach", "wait", "takeover", "attach",
+    "multi",  # `cfharness doctor multi`
 })
 EDITABLE = (
     "name",
