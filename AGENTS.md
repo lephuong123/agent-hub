@@ -553,3 +553,10 @@ Chi tiết: `docs/dev-notes/update.md`. Không migration. Test: `tests/test_upda
 
 Bất biến: `update.start` ∈ HUMAN_ONLY (không ở MANAGER_ALLOWED), `cfharness update` ∈ `HUB_HUMAN_ONLY_CLI`; tag chỉ dạng `vX.Y.Z`, repo cố định
 (`updater.REPO`); có run chạy/chờ → từ chối trừ `force`. Helper không được import `cfharness` (venv bị cài đè trong lúc chạy).
+
+## Tổng quan máy (Q6) — mỗi hub xuất trạng thái số liệu, admin xem mọi hub
+Chi tiết, thiết lập nhóm/thư mục, giới hạn: `docs/dev-notes/admin-overview.md`. Không migration. Test: `tests/test_admin_overview.py`.
+- `admin_overview.py`: `hub.admin_export` (tắt mặc định, `admin_export.*` ∈ SECURITY_KEYS) ghi nguyên tử `<dir>/<user-os>.json` 0640 nhóm
+  `cfharness-admin`; RPC `admin.overview` (CHỈ ĐỌC, ∈ HUMAN_ONLY); CLI `cfharness admin overview` (`admin_cli.py`); web `/admin/overview` (`web/admin_pages.py`).
+- Bất biến: nội dung file CHỈ theo `SPEC` (số/bool/regex id-enum) — không bao giờ chữ tự do; thêm trường → `SPEC` + ca trong test. Người đọc coi
+  file là dữ liệu không tin cậy (`O_NOFOLLOW`, trần cỡ, lọc lại `SPEC`, kiểm chủ file). Sandbox agent chặn đọc/ghi `/Users/Shared/cfharness`.

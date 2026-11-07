@@ -99,6 +99,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "schedule.create", "schedule.update", "schedule.pause", "schedule.resume", "schedule.rm", "schedule.run_now",
         # Cập nhật cfharness (updater.py): cài đè phần mềm + dừng/khởi động lại daemon NGOÀI sandbox — chỉ người
         "update.start",
+        # Tổng quan máy (admin_overview.py): CHỈ ĐỌC nhưng lộ hoạt động của user OS khác trên máy (chi phí, số run) — chỉ người
+        "admin.overview",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})

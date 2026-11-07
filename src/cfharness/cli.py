@@ -921,6 +921,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .update_cli import add_parsers as _add_update_parsers
 
     _add_update_parsers(sub, common)
+
+    # tổng quan máy nhiều người dùng: cfharness admin overview (admin_cli.py, admin_overview.py)
+    from .admin_cli import add_parsers as _add_admin_parsers
+
+    _add_admin_parsers(sub, common)
     return p
 
 
