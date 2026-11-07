@@ -283,7 +283,8 @@ def home_persistence_dirs() -> list[str]:
 
 
 def other_default_homes(hub_home: Path) -> list[str]:
-    """Home mặc định dưới ~ (tên mới `.cfharness` + tên cũ `.cfharness`) KHÔNG phải/không chứa/không nằm trong home đang dùng."""
+    """Home mặc định dưới ~ (tên mới `.cfharness` + tên cũ `.cfharness`) + hub home đã đăng ký (registry) KHÔNG phải/không chứa/
+    không nằm trong home đang dùng."""
     from ..paths import default_homes
 
     cur = {_posix_form(hub_home).rstrip("/"), _posix_form(os.path.realpath(hub_home)).rstrip("/")}
@@ -293,6 +294,12 @@ def other_default_homes(hub_home: Path) -> list[str]:
         if o in cur or _posix_form(os.path.realpath(other)).rstrip("/") in cur or any(c.startswith(o + "/") or o.startswith(c + "/") for c in cur):
             continue
         out.append(str(other).rstrip("/"))
+    try:  # P2.4: mọi hub home KHÁC đã đăng ký (~/.config/cfharness/hubs.json) — nhiều hub chung một user OS
+        from ..confine import other_hub_homes
+
+        out += [h for h in other_hub_homes(hub_home) if h not in out]
+    except Exception:  # pragma: no cover
+        pass
     return out
 
 
@@ -335,7 +342,7 @@ def network_domains(sb_cfg: dict[str, Any], overrides: dict[str, Any] | None) ->
 
 
 def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cwd: Path | None = None,
-                     overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+                     overrides: dict[str, Any] | None = None, confine: Any = None) -> dict[str, Any]:
     """Khoá `sandbox` cho settings.json của run (Claude Code ≥ 2.1.302). Thuần ngoài việc liệt kê thư mục HUB_HOME."""
     from ..auth import token_path
     from .policy import package_dir
@@ -422,14 +429,21 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
         # ngoại lệ THEO AGENT do người đặt (spike 2.1.302): `allowLocalBinding` cho bind/listen cổng local VÀ kết nối loopback
         # (127.0.0.1/::1, kể cả curl qua proxy). KHÔNG nới filesystem, KHÔNG mở Unix socket (hub.sock vẫn bị chặn — đã kiểm thật).
         sb["network"]["allowLocalBinding"] = True
+    if confine is not None:  # P2: giam đọc trong W (denyRead $HOME + allowRead W/toolchain/workspace hub — spike 2.1.319)
+        from ..confine import apply_sandbox
+
+        sb = apply_sandbox(sb, confine, home, cwd=cwd, extra=aw)
     return sb
 
 
 def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_dir: Path, guard_cfg: dict[str, Any], approval_timeout_s: float,
-                   cwd: Path | None = None, sandbox_overrides: dict[str, Any] | None = None, hook: bool = True, trust_full: bool = False) -> dict[str, Any]:
+                   cwd: Path | None = None, sandbox_overrides: dict[str, Any] | None = None, hook: bool = True, trust_full: bool = False,
+                   confine: Any = None) -> dict[str, Any]:
     """`hook=False` (guard.enabled=false): bỏ hook PreToolUse (không phân loại/hỏi duyệt) nhưng GIỮ `permissions.deny` tĩnh + sandbox OS.
     `trust_full` (agent người đặt trust full): GIỮ hook (guard cho phép mọi thứ nhưng vẫn ghi audit, ESTOP vẫn chặn), BỎ `permissions.deny`
-    tĩnh của hub và sandbox OS (`sandbox.enabled=false` để Bash không bị bọc)."""
+    tĩnh của hub và sandbox OS (`sandbox.enabled=false` để Bash không bị bọc).
+    `confine` (`confine.Confine`, workspace.confine.root đặt): phần GIAM trong W luôn giữ — kể cả trust_full (Q4) và
+    guard.sandbox.enabled=false: sandbox chỉ-giam (đọc/ghi trong W, mạng mở) + `permissions.deny` anh em của W."""
     s = dict(base)
     if hook:
         cli_t, rpc_t = hook_timeouts(guard_cfg, approval_timeout_s)
@@ -438,24 +452,43 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
         pre.append({"matcher": "*", "hooks": [{"type": "command", "command": hook_command(run_id, socket, rpc_t, guard_cfg), "timeout": cli_t}]})
         hooks["PreToolUse"] = pre
         s["hooks"] = hooks
+    hub_home = Path(policy_dir).parent
+    sb_cfg0 = dict(guard_cfg.get("sandbox") or {})
+    if confine is not None:
+        from ..confine import permission_deny_rules, read_roots
+
+        conf_deny = permission_deny_rules(confine, read_roots(confine, hub_home, cwd=cwd))
     if trust_full:
-        s["sandbox"] = {"enabled": False}
+        if confine is None:
+            s["sandbox"] = {"enabled": False}
+            return s
+        from ..confine import confine_only_sandbox
+
+        perms = dict(s.get("permissions") or {})
+        perms["deny"] = list(perms.get("deny") or []) + conf_deny
+        s["permissions"] = perms
+        s["sandbox"] = confine_only_sandbox(confine, hub_home, Path(socket), sb_cfg0, cwd=cwd)
         return s
     perms = dict(s.get("permissions") or {})
-    hub_home = Path(policy_dir).parent
     user_prot = protected_write_paths(hub_home)  # R2-2: tài nguyên NGƯỜI khai báo (vd `.next` prod) → chặn tĩnh tool ghi + sandbox
     perms["deny"] = (list(perms.get("deny") or []) + policy_deny_rules(policy_dir) + secret_read_deny_rules(hub_home, Path(socket))
                      + exec_zone_deny_rules() + [f"{t}(/{rule_path(p)}{suf})" for p in user_prot for t in FILE_TOOLS for suf in ("/**", "")]
-                     + credential_deny_rules())
+                     + credential_deny_rules() + (conf_deny if confine is not None else []))
     s["permissions"] = perms
-    sb_cfg = dict(guard_cfg.get("sandbox") or {})
-    if sb_cfg.get("enabled", True):
+    sb_cfg = sb_cfg0
+    if not sb_cfg.get("enabled", True) and confine is not None:
+        from ..confine import confine_only_sandbox
+
+        s["sandbox"] = confine_only_sandbox(confine, hub_home, Path(socket), sb_cfg, cwd=cwd)
+    elif sb_cfg.get("enabled", True):
         user_sb = dict(s.get("sandbox") or {}) if isinstance(s.get("sandbox"), dict) else {}
         user_sb.pop("excludedCommands", None)  # lệnh loại khỏi sandbox = lỗ — không nhận từ cấu hình
         sb_cfg = {**sb_cfg, "extra_deny_write": list(sb_cfg.get("extra_deny_write") or []) + user_prot}
-        ours = sandbox_settings(hub_home, Path(socket), sb_cfg, cwd=cwd, overrides=sandbox_overrides)
+        ours = sandbox_settings(hub_home, Path(socket), sb_cfg, cwd=cwd, overrides=sandbox_overrides, confine=confine)
         fs = dict(user_sb.get("filesystem") or {})
-        for k in ("denyWrite", "denyRead"):
+        for k in ("denyWrite", "denyRead", "allowRead"):
+            if k not in ours["filesystem"]:
+                continue
             ours["filesystem"][k] = list(dict.fromkeys(list(fs.get(k) or []) + ours["filesystem"][k]))
         if fs.get("allowWrite"):
             ours["filesystem"]["allowWrite"] = list(dict.fromkeys(list(fs["allowWrite"]) + ours["filesystem"].get("allowWrite", [])))

@@ -58,6 +58,13 @@ def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
         raise HubError(f"{what}: đường dẫn không hợp lệ: {path!r}")
     hh = hub.paths.home.resolve()
     uh = Path(os.path.expanduser("~")).resolve()
+    from . import confine as _confine
+
+    conf = _confine.of_hub(hub)
+    if conf is not None:  # P2: giam trong W — chỉ W + vùng làm việc của hub (bỏ qua allowed_roots và gốc test)
+        croots = _confine.allowed_workspace_roots(hub, conf)
+        if not any(p == r or p.is_relative_to(r) for r in croots):
+            raise HubError(f"{what} '{p}' nằm ngoài workspace được giam ({conf.root}) — workspace.confine.root (chỉ người đổi)", code=-32003)
     # gốc cho phép: cấu hình + vùng scratch/workspace của hub + worktree của hub
     roots: list[Path] = []
     try:
@@ -67,6 +74,8 @@ def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
         pass
     if not roots:
         roots = [uh / "Workspace"]
+    if conf is not None:
+        roots.append(Path(conf.root))
     roots += [hh / "agents", hh / "worktrees", hh / "evals", hh / "checkpoints"]
     roots += [Path(r) for r in _EXTRA_ALLOWED_ROOTS]  # test-only (conftest, cùng tiến trình); rỗng trong sản phẩm
     env_extra = os.environ.get("CFHARNESS_EXTRA_WORKSPACE_ROOTS")  # test-only (daemon tiến trình con kế thừa env)

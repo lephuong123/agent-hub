@@ -443,12 +443,14 @@ class RunManager:
                 conn = run_setup(conns)
                 settings = {**settings, **conn["settings_patch"]}
         # trust full (người đặt theo agent — guard/service.trust_set): bypassPermissions, không sandbox OS, không mẫu chặn tĩnh của hub
+        # — TRỪ phần giam trong W khi workspace.confine bật (P2, Q4: docs/dev-notes/confine.md)
         trust = hub.guard.run_trusted({**run, "run_opts": opts})
         trusted = trust is not None
         if trusted:
             self.hub.publish(make_event("guard.decision", agent["id"], {"tool": "(argv)", "action": "trust_full", "until": trust.get("until"),
                                                                        "by": trust.get("by")}, run_id=run_id))
         # guard.enabled=false chỉ tắt hook phân loại/hỏi duyệt; permissions.deny tĩnh + sandbox OS vẫn áp (tắt riêng: guard.sandbox.enabled)
+        from . import confine as _confine
         from .guard import runtime as gr
 
         settings = gr.build_settings(
@@ -462,6 +464,7 @@ class RunManager:
             sandbox_overrides=hub.guard.run_sandbox_overrides(agent["id"]),  # SEC: ngoại lệ theo agent (chỉ người) + host MCP của agent
             hook=guard_on,
             trust_full=trusted,
+            confine=_confine.of_hub(hub),  # P2: giam trong workspace W — giữ cả khi trust full (Q4)
         )
         # hardening H-11 (FR-RT-17): hook QUAN SÁT fail-OPEN (PostToolUse/UserPromptSubmit/Stop) — hàm riêng, không đụng
         # phần guard (fail-closed) của settings; tắt bằng runtime.claude.observe_hooks.enabled=false

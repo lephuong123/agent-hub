@@ -89,8 +89,8 @@ def static_denied(cmd):
     return None
 
 
-def run_hook(tool_input, tool_use_id):
-    data = {"session_id": sid, "cwd": os.getcwd(), "hook_event_name": "PreToolUse", "tool_name": "Bash",
+def run_hook(tool_input, tool_use_id, tool_name="Bash"):
+    data = {"session_id": sid, "cwd": os.getcwd(), "hook_event_name": "PreToolUse", "tool_name": tool_name,
             "tool_input": tool_input, "tool_use_id": tool_use_id, "permission_mode": "default"}
     for h in hooks:
         try:
@@ -134,11 +134,32 @@ def bash(cmd):
     return None
 
 
+def other_tool(name, ti):
+    """Tool khác Bash (`TOOL: <Tên> <json input>` trong prompt): chỉ qua hook; được phép → ghi `TOOL <Tên> <json>` vào $FAKE_EXEC_LOG."""
+    global n_tool
+    n_tool += 1
+    tid = f"toolu_{n_tool}"
+    out({"type": "assistant", "message": {"id": f"m{n_tool}", "content": [{"type": "tool_use", "id": tid, "name": name, "input": ti}]}})
+    decision, reason = run_hook(ti, tid, name)
+    if decision == "deny":
+        denials.append({"tool_name": name, "tool_use_id": tid, "tool_input": ti})
+        out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "is_error": True, "content": reason}]}})
+        return reason
+    log = os.environ.get("FAKE_EXEC_LOG")
+    if log:
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(f"TOOL {name} {json.dumps(ti, sort_keys=True)}\n")
+    out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tid, "is_error": False, "content": "ok"}]}})
+    return None
+
+
 out({"type": "system", "subtype": "init", "model": "claude-haiku-5-5", "cwd": os.getcwd(), "tools": ["Bash"],
      "mcp_servers": [{"name": "hub-guard", "status": "connected"}] if opt("--permission-prompt-tool") else [],
      "plugins": [], "memory_paths": None, "claude_code_version": "2.1.302", "argv": args})
 cmds = [m.group(1).strip() for m in re.finditer(r"^BASH: (.+)$", prompt, re.M)]
 cmds += [m.group(1) for m in re.finditer(r"APPROVED \(request \S+\): Bash: `([^`]+)`", prompt)]
+for m in re.finditer(r"^TOOL: (\w+) (\{.*\})$", prompt, re.M):
+    other_tool(m.group(1), json.loads(m.group(2)))
 for c in cmds:
     reason = bash(c)
     if reason and ("pausing this session" in reason or "restart this session" in reason or "End your turn" in reason):

@@ -553,3 +553,13 @@ Chi tiết: `docs/dev-notes/update.md`. Không migration. Test: `tests/test_upda
 
 Bất biến: `update.start` ∈ HUMAN_ONLY (không ở MANAGER_ALLOWED), `cfharness update` ∈ `HUB_HUMAN_ONLY_CLI`; tag chỉ dạng `vX.Y.Z`, repo cố định
 (`updater.REPO`); có run chạy/chờ → từ chối trừ `force`. Helper không được import `cfharness` (venv bị cài đè trong lúc chạy).
+
+## Giam agent trong workspace W — `workspace.confine` (P2 đa instance)
+Chi tiết, spike (claude 2.1.319: `allowRead` trong `denyRead` hoạt động, glob không mở lại), giới hạn: `docs/dev-notes/confine.md`,
+`docs/dev-notes/hardening-SEC.md` §1.1. Không migration. Test: `tests/test_confine.py`, ca `DESTRUCTIVE_CONFINE` trong `tests/test_guard_classifier.py`.
+- `confine.py`: đọc cấu hình, `read_roots`/`deny_read_roots`, `apply_sandbox` (denyRead `$HOME` + allowRead W/toolchain/workspace hub),
+  `confine_only_sandbox` (trust_full / sandbox tắt), `permission_deny_rules` (anh em của W), registry hub `~/.config/cfharness/hubs.json`
+  (env `CFHARNESS_HUBS_REGISTRY`; conftest đặt về thư mục tạm).
+- Bất biến: `workspace.confine` chỉ người (`config.set` HUMAN_ONLY, khoá ∈ `integrity.SECURITY_KEYS` — khoá con có dấu chấm được hỗ trợ);
+  khi bật, `trust_full` KHÔNG gỡ giam (Q4) và `guard.sandbox.enabled=false` vẫn để lại sandbox chỉ-giam; mọi workspace/cwd/worktree/
+  `extra_write_roots` phải trong W (`validate_workspace`, `check_path`). Không dùng glob trong `sandbox.filesystem.allowRead` (không mở lại).

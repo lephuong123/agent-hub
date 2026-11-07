@@ -212,6 +212,11 @@ class ManagerPermissions:
         hh = self.hub.paths.home.resolve()
         if str(p) in ("/", str(home)):
             return f"{what} không được là '/' hoặc thư mục home của người ({p})"
+        from .. import confine as _confine
+
+        conf = _confine.of_hub(self.hub)
+        if conf is not None and not any(p == r or p.is_relative_to(r) for r in _confine.allowed_workspace_roots(self.hub, conf)):
+            return f"{what} nằm ngoài workspace được giam ({conf.root}) — workspace.confine (chỉ người đổi)"
         if p == hh or p.is_relative_to(hh):
             rel = p.relative_to(hh).parts if p != hh else ()
             if not (len(rel) >= 3 and rel[0] == "agents" and rel[2] == "workspaces"):

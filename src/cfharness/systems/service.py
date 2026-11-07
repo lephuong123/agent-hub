@@ -91,7 +91,10 @@ class SystemService:
         return self._lc
 
     def roots(self) -> list[str]:
-        r = self.hub.config.get("systems.roots") or self.hub.config.get("workspace.allowed_roots") or []
+        r = self.hub.config.get("systems.roots")
+        if not r:  # P2: hub giam trong W → mặc định chỉ W
+            conf = self.hub.config.get("workspace.confine") or {}
+            r = [conf["root"]] if isinstance(conf, dict) and conf.get("root") else self.hub.config.get("workspace.allowed_roots") or []
         return [os.path.normpath(os.path.expanduser(str(x))) for x in r]
 
     def _agents_dir(self) -> Path:
