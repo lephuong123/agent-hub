@@ -396,6 +396,11 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
     others = other_default_homes(home)
     deny_w += others
     deny_r += others
+    if not IS_WINDOWS:  # tổng quan máy (admin_overview.py): thư mục trạng thái chung của mọi hub — agent không đọc/ghi (giả mạo/do thám)
+        from ..admin_overview import SHARED_ROOT
+
+        deny_w.append(SHARED_ROOT)
+        deny_r.append(SHARED_ROOT)
     deny_r += [str(x) for x in sb_cfg.get("extra_deny_read") or []]
     socks = [str(x) for x in sb_cfg.get("allow_unix_sockets") or []]
     if sb_cfg.get("allow_ssh_agent", False) and os.environ.get("SSH_AUTH_SOCK"):

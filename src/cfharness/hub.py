@@ -97,6 +97,10 @@ class Hub:
         from .schedules import attach as _attach_schedules
 
         _attach_schedules(self)
+        # Tổng quan máy (Q6): xuất bản tóm tắt CHỈ SỐ LIỆU ra thư mục chung cho admin (`hub.admin_export`; tắt mặc định) — admin_overview.py
+        from .admin_overview import attach as _attach_admin_export
+
+        _attach_admin_export(self)
         self._bg: list[Any] = []
         # hardening SEC (H-02 lớp 3): toàn vẹn policy/ + config.yaml + hub.db (`hub.integrity`) — guard/integrity.py. GIỮ CUỐI __init__
         from .guard.integrity import attach as _attach_integrity

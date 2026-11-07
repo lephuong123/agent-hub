@@ -534,6 +534,14 @@ DEFAULTS: dict[str, Any] = {
         "manager_run_now_per_hour": 6,
         "manager_daily_budget_usd": None,
     },
+    # Tổng quan máy (admin_overview.py, docs/dev-notes/admin-overview.md): mỗi hub xuất bản tóm tắt CHỈ SỐ LIỆU ra thư mục chung để
+    # người quản trị xem mọi hub trên máy. Chỉ người đặt (`config.set` ∈ HUMAN_ONLY; nhánh ∈ integrity.SECURITY_KEYS).
+    "admin_export": {
+        "enabled": False,
+        "interval_s": 60,  # 10..3600
+        "dir": "/Users/Shared/cfharness/status",  # admin tạo sẵn (nhóm cfharness-admin); hub admin cũng ĐỌC thư mục này
+        "group": "cfharness-admin",  # nhóm của file 0640; không có → giữ nhóm hiện có + cảnh báo
+    },
     # Hệ thống ngoài hub (systems/): app trong thư mục gốc + job launchd (macOS) / task Task Scheduler (Windows) của chúng — người đăng ký, điều phối viên tạm dừng/bật lại/khởi động lại
     "systems": {
         "roots": None,  # null = theo workspace.allowed_roots
@@ -790,6 +798,8 @@ def validate_setting(key: str, value: Any) -> None:
         from .browser import validate_setting as _validate_chrome
 
         _validate_chrome(key, value)
+    if key == "admin_export" or key.startswith("admin_export."):
+        _validate_admin_export(key, value)
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")
@@ -835,3 +845,20 @@ def validate_setting(key: str, value: Any) -> None:
     elif key == "runtime.claude.default_permission_mode":
         if value is not None and value not in VALID_PERMISSION_MODES:
             raise ValueError(f"permission mode không hợp lệ; chọn một trong {VALID_PERMISSION_MODES}")
+
+
+def _validate_admin_export(key: str, value: Any) -> None:
+    import re as _re
+
+    vals = dict(value) if key == "admin_export" and isinstance(value, dict) else {key.split(".", 1)[1]: value} if "." in key else {}
+    if key == "admin_export" and not isinstance(value, dict):
+        raise ValueError("admin_export phải là object")
+    for k, v in vals.items():
+        if k == "enabled" and not isinstance(v, bool):
+            raise ValueError("admin_export.enabled phải là true/false")
+        if k == "interval_s" and (isinstance(v, bool) or not isinstance(v, (int, float)) or not 10 <= v <= 3600):
+            raise ValueError("admin_export.interval_s phải trong 10..3600")
+        if k == "dir" and (not isinstance(v, str) or not v.startswith(("/", "~")) or "\x00" in v):
+            raise ValueError("admin_export.dir phải là đường dẫn tuyệt đối")
+        if k == "group" and v is not None and (not isinstance(v, str) or not _re.match(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$", v)):
+            raise ValueError("admin_export.group không hợp lệ")

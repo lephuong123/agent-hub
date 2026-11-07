@@ -314,6 +314,8 @@ async def render(request: Request, name: str, ctx: dict[str, Any] | None = None,
                      "estop": bool((es or {}).get("on")), "questions": len(await questions(request, "open"))}
         except (RpcError, DaemonUnavailable, OSError):
             badge = {"down": True}
+        if not badge.get("down"):
+            badge["admin"] = await _admin_pages.nav_available(request)
     base = {"csrf": sess.csrf if sess else "", "flashes": sess.pop_flashes() if sess else [], "badge": badge, "nav": "", "htmx": HTMX,
             "path": request.url.path}
     return st.templates.TemplateResponse(request, name, {**base, **(ctx or {})}, status_code=status)
@@ -1439,6 +1441,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_memory_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
+        *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
     app = Starlette(routes=routes, exception_handlers={HTTPException: http_error, RpcError: rpc_error, DaemonUnavailable: rpc_error})
@@ -1469,5 +1472,8 @@ _slack_pages.register_actions(ACTIONS, Action, _req)
 from . import update_pages as _update_pages  # noqa: E402
 
 _update_pages.register_actions(ACTIONS, Action, _req)
+
+# Tổng quan máy (admin_overview.py): trang chỉ đọc /admin/overview, mục menu chỉ khi thư mục trạng thái chung tồn tại
+from . import admin_pages as _admin_pages  # noqa: E402
 
 __all__ = ["create_app", "ACTIONS", "agent_changes", "replay_items", "WebState", "urlencode"]

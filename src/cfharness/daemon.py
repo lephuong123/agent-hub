@@ -122,6 +122,10 @@ class Daemon:
         from .updater import register_rpc as _register_update
 
         _register_update(self)
+        # Tổng quan máy (Q6): admin.overview — đọc thư mục trạng thái chung, CHỈ ĐỌC, HUMAN_ONLY (admin_overview.py)
+        from .admin_overview import register_rpc as _register_admin
+
+        _register_admin(self)
         # M1 luồng A: thêm mcp.*/secret.*/audit.*/feedback.* và bọc audit các method thay đổi trạng thái.
         # GIỮ Ở CUỐI __init__ — method thêm sau dòng này sẽ không được audit tự động.
         from .mcp_server.rpc import register_rpc
