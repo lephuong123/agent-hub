@@ -74,6 +74,8 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
            choices=("status", "reaction")),
         _s("notify.slack.allow_channels", "Slack: cho tag bot trong kênh chung", "bool", "vẫn chỉ người trong allowlist"),
         _s("notify.slack.thread_followup", "Slack: nói tiếp trong thread không cần tag", "bool"),
+        _s("notify.slack.channel_root_posts", "Slack: báo cáo lịch đăng thẳng vào kênh (không vào thread)", "bool",
+           "chỉ kết quả lịch có nơi nhận là kênh đó; trả lời chat vẫn vào thread"),
         _s("notify.slack.thread_context", "Slack: đọc tin trước đó của thread làm ngữ cảnh", "bool"),
         _s("notify.slack.manager_progress", "Slack: tin tiến độ + nút Dừng cho điều phối viên", "bool"),
         _s("notify.slack.deliver_files", "Slack: gửi tệp kết quả", "bool"),

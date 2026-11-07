@@ -580,7 +580,8 @@ class ScheduleService:
                 if conv is None:
                     raise Blocked("chưa có điều phối viên")
                 conv_id = conv["id"]
-                run = mgr._submit(conv, schedule_prompt(r, conv, manual=manual), kind="schedule", budget=r.get("budget_usd"))
+                run = mgr._submit(conv, schedule_prompt(r, conv, manual=manual), kind="schedule", budget=r.get("budget_usd"),
+                                  extra_opts={"schedule_id": r["id"]})
                 run_id = run["id"]
                 mgr._add_msg(conv_id, "schedule", f"⏰ Lịch '{r['name']}' ({r.get('describe') or r['expr']}) chạy{' (chạy ngay)' if manual else ''}.", run_id)
                 self.conn.execute("UPDATE manager_conversations SET turns=turns+1 WHERE id=?", (conv_id,))
