@@ -11,13 +11,12 @@ Thông số dùng trong tài liệu (đổi nếu cần — giữ nhất quán):
 | HUB_HOME | `/Users/lamlinh/.cfharness` |
 | Workspace agent được phép (W) | `/Users/lamlinh/Workspace` (muốn giam vào đúng một dự án thì dùng `/Users/lamlinh/Workspace/<du-an>`) |
 | Cổng web / MCP | `8721` / `8722` (user thứ k → `87k1` / `87k2`; không trùng hub khác) |
-| Tên miền public | `lamlinh.<ten-mien>` — ví dụ `lamlinh.example.com` |
+| Tên miền public | `lamlinh.trungtamdhs.com` (miền `trungtamdhs.com` trên Cloudflare) |
 
 Tài liệu gốc: `plan-multi-instance.md` (quyết định), `multi-instance.md` (P1), `confine.md` (P2), `web-public.md` (P3),
 `admin-overview.md` (Q6).
 
-> **Điều kiện tiên quyết:** code đa instance đang ở nhánh `feat/multi-instance`, CHƯA phát hành. Trước khi gộp + có tag `vX.Y.Z`,
-> cài từ bản build (bước 2a). Sau khi phát hành, dùng bước 2b (cập nhật được bằng `cfharness update`).
+> Cần cfharness **v0.2.4** trở lên (bản có đa instance: giam workspace, web public + TOTP, LaunchDaemon, tổng quan admin).
 
 ---
 
@@ -41,25 +40,15 @@ sudo -u lamlinh -i bash -lc 'curl -fsSL https://claude.ai/install.sh | bash'
 sudo -u lamlinh -i bash -lc '~/.local/bin/claude --version'           # phải có phiên bản (máy admin đang 2.1.319)
 ```
 
-**2a. Trước khi phát hành** — build wheel từ nhánh rồi cài:
+Cài cfharness (cùng cách cài với mọi user — `cfharness update` chạy được về sau):
 
 ```bash
-cd /Users/phuonglq/Workspace/agent-hub && git switch feat/multi-instance && uv build --wheel
-sudo mkdir -p /Users/Shared/cfharness/dist && sudo cp dist/cfharness-*.whl /Users/Shared/cfharness/dist/
-sudo chmod 755 /Users/Shared/cfharness /Users/Shared/cfharness/dist && sudo chmod 644 /Users/Shared/cfharness/dist/*.whl
-sudo -u lamlinh -i bash -lc 'uv tool install --force /Users/Shared/cfharness/dist/cfharness-*.whl'
-```
-(Cài từ wheel thì `cfharness update` không chạy được — sau khi phát hành, cài lại bằng 2b.)
-
-**2b. Sau khi phát hành** (tag `vX.Y.Z`):
-
-```bash
-sudo -u lamlinh -i bash -lc 'uv tool install --force "git+https://github.com/lephuong123/agent-hub@vX.Y.Z"'
+sudo -u lamlinh -i bash -lc 'uv tool install --python 3.13 "git+https://github.com/lephuong123/agent-hub@v0.2.4"'
 ```
 
 Kiểm tra: `sudo -u lamlinh -i cfharness --help | head -3`.
 
-> Admin cũng phải cài bản mới trong user của mình nếu muốn dùng `cfharness admin overview` (bước 9).
+> Admin cũng cập nhật hub của mình lên v0.2.4 (`cfharness update`) để dùng `cfharness admin overview` (bước 9).
 
 ## Bước 3 — Tài khoản Claude dùng chung (không cần đăng nhập màn hình)
 
@@ -105,7 +94,7 @@ cloudflared tunnel login
 cloudflared tunnel create cfh-mini
 
 # mỗi user
-cloudflared tunnel route dns cfh-mini lamlinh.example.com
+cloudflared tunnel route dns cfh-mini lamlinh.trungtamdhs.com
 ```
 
 Thêm vào `~/.cloudflared/config.yml` của admin (giữ các hostname của user khác, `http_status:404` luôn ở CUỐI):
@@ -114,9 +103,9 @@ Thêm vào `~/.cloudflared/config.yml` của admin (giữ các hostname của us
 tunnel: cfh-mini
 credentials-file: /Users/phuonglq/.cloudflared/<uuid>.json
 ingress:
-  - hostname: lamlinh.example.com
+  - hostname: lamlinh.trungtamdhs.com
     service: http://127.0.0.1:8721
-  # - hostname: <user-khác>.example.com ...
+  # - hostname: <user-khác>.trungtamdhs.com ...
   - service: http_status:404
 ```
 
@@ -127,11 +116,11 @@ sudo cloudflared service install          # lần đầu; lần sau đổi confi
 Khai báo origin public cho hub:
 
 ```bash
-$L config set web.public_origin https://lamlinh.example.com
+$L config set web.public_origin https://lamlinh.trungtamdhs.com
 $L config set web.client_ip_header cf-connecting-ip
 ```
 
-**Khuyến nghị mạnh:** bật **Cloudflare Access** (Zero Trust → Access → Applications) cho `lamlinh.example.com`, chính sách
+**Khuyến nghị mạnh:** bật **Cloudflare Access** (Zero Trust → Access → Applications) cho `lamlinh.trungtamdhs.com`, chính sách
 "Emails = email của LamLinh". Khi đó có 2 lớp: email OTP của Cloudflare + mã TOTP của hub.
 
 ⛔ Không bao giờ trỏ tunnel vào cổng MCP `8722`.
@@ -157,19 +146,19 @@ Kiểm tra:
 sudo launchctl print system/com.cfharness.daemon.lamlinh | grep -E 'state|pid'
 sudo launchctl print system/com.cfharness.web.lamlinh   | grep -E 'state|pid'
 $L daemon status
-curl -sI -H 'Host: lamlinh.example.com' http://127.0.0.1:8721/login | head -1     # 200 hoặc 30x, KHÔNG phải 421
+curl -sI -H 'Host: lamlinh.trungtamdhs.com' http://127.0.0.1:8721/login | head -1     # 200 hoặc 30x, KHÔNG phải 421
 ```
 
 ## Bước 7 — Đăng ký mã đăng nhập (TOTP) cho LamLinh
 
 ```bash
-$L web totp enroll                # in link https://lamlinh.example.com/enroll?t=…  (hạn 24 h)
+$L web totp enroll                # in link https://lamlinh.trungtamdhs.com/enroll?t=…  (hạn 24 h)
 ```
 
 Gửi link cho LamLinh qua **kênh riêng** (tin nhắn trực tiếp, không dán vào nhóm). LamLinh:
 1. Mở link → bấm **"Hiện mã"** (chỉ hiện một lần) → quét QR/nhập bí mật vào app Authenticator.
 2. Nhập mã 6 số đang hiện trong app → vào thẳng web.
-3. Từ đó: mở `https://lamlinh.example.com` → nhập mã 6 số.
+3. Từ đó: mở `https://lamlinh.trungtamdhs.com` → nhập mã 6 số.
 
 ```bash
 $L web totp status                # phải báo đã kích hoạt
@@ -201,7 +190,7 @@ Sau ~1 phút: `ls -l /Users/Shared/cfharness/status` có `lamlinh.json` (`-rw-r-
 ## Kiểm tra cuối (checklist)
 
 - [ ] `$L doctor` và `$L doctor multi` không còn lỗi.
-- [ ] Từ điện thoại 4G (ngoài mạng nhà): `https://lamlinh.example.com` → (Cloudflare Access) → trang nhập mã → vào được.
+- [ ] Từ điện thoại 4G (ngoài mạng nhà): `https://lamlinh.trungtamdhs.com` → (Cloudflare Access) → trang nhập mã → vào được.
 - [ ] Nhập sai mã 5 lần → bị khoá 15 phút (đúng như thiết kế; admin gỡ bằng `sudo launchctl kickstart -k system/com.cfharness.web.lamlinh`).
 - [ ] Tạo một agent thử, chạy prompt `cat /Users/phuonglq/.zshrc` → bị chặn; `ls /Users/lamlinh/Workspace` → chạy được.
 - [ ] Khởi động lại Mac mini (không đăng nhập ai) → web của LamLinh vẫn vào được.
@@ -215,7 +204,7 @@ Sau ~1 phút: `ls -l /Users/Shared/cfharness/status` có `lamlinh.json` (`-rw-r-
 | Khởi động lại hub | `sudo launchctl kickstart -k system/com.cfharness.daemon.lamlinh` (web: `…web.lamlinh`) |
 | Dừng khẩn mọi agent | `$L estop on` (hoặc nút ESTOP trên web) |
 | Cấp lại mã đăng nhập (mất điện thoại) | `$L web totp disable` → `$L web totp enroll` → `sudo launchctl kickstart -k system/com.cfharness.web.lamlinh` (huỷ mọi phiên) |
-| Cập nhật cfharness (sau khi cài kiểu 2b) | `$L update --yes` |
+| Cập nhật cfharness | `$L update --yes` |
 
 ## Thu hồi / xoá LamLinh
 
