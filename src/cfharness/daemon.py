@@ -40,6 +40,9 @@ class Daemon:
         # KHÔNG ghi đè file khi socket đang có daemon sống: bản thứ hai (vd launchd thử tiếp quản trong lúc daemon chạy tay) sẽ
         # thoát ở `serve()`, nhưng nếu đã ghi file thì token trong file lệch với daemon đang chạy → mọi lệnh của người bị từ chối.
         self.auth_token: str | None = None
+        from .paths import ensure_socket_dir
+
+        ensure_socket_dir(paths.socket)  # đa instance P1: socket dự phòng trong thư mục riêng 0700 của user (UnsafeSocketDir → không khởi động)
         if not _live_daemon(paths.socket):
             try:
                 self.auth_token = _auth.issue_token(paths.socket)
@@ -119,6 +122,10 @@ class Daemon:
         from .updater import register_rpc as _register_update
 
         _register_update(self)
+        # Tổng quan máy (Q6): admin.overview — đọc thư mục trạng thái chung, CHỈ ĐỌC, HUMAN_ONLY (admin_overview.py)
+        from .admin_overview import register_rpc as _register_admin
+
+        _register_admin(self)
         # M1 luồng A: thêm mcp.*/secret.*/audit.*/feedback.* và bọc audit các method thay đổi trạng thái.
         # GIỮ Ở CUỐI __init__ — method thêm sau dòng này sẽ không được audit tự động.
         from .mcp_server.rpc import register_rpc
@@ -496,7 +503,11 @@ def _rotate_daemon_out(paths: HubPaths, ls: dict[str, Any]) -> None:
 
 
 def run_foreground(paths: HubPaths) -> None:
+    from .oscompat import set_private_umask
+
+    set_private_umask()  # đa instance P1: file daemon tạo (hub.db, logs/, runs/, prompts/…) chỉ user này đọc được; claude con nhận lại umask gốc
     paths.ensure()
+    tightened = paths.tighten_permissions()  # cài đặt cũ: siết HUB_HOME + mục cấp 1 (lỗi chỉ cảnh báo)
     ls = _log_settings(paths)
     if sys.stdout is None or sys.stderr is None:  # pythonw (dịch vụ tự khởi động trên Windows): không có console → ghi daemon.out
         _rotate_daemon_out(paths, ls)
@@ -507,6 +518,8 @@ def run_foreground(paths: HubPaths) -> None:
     setup_logging(paths.logs_dir, max_bytes=ls["max_bytes"], backup_count=ls["backup_count"], max_age_days=ls["max_age_days"])
     if console not in ("posix", "existing"):
         logging.getLogger("cfharness.daemon").info("không có console → đã lấy console ẩn (%s)", console)
+    if tightened:
+        log.info("đã siết quyền (bỏ group/other) cho %d mục trong HUB_HOME: %s", len(tightened), ", ".join(tightened))
     from .redact import install_log_filter, install_stderr_masking
 
     install_stderr_masking()  # H-12: log thư viện ra stderr (daemon.out) cũng che

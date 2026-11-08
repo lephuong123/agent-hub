@@ -17,6 +17,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from ..config import MCP_HTTP_DEFAULT_PORT
+
 EXIT_OK, EXIT_USER, EXIT_SYS = 0, 1, 2
 
 
@@ -90,7 +92,15 @@ def cmd_mcp_serve(ctx: Any) -> int:
     if a.http:
         from .http import serve_http
 
-        port = a.port or _config_get(ctx, "mcp_server.http_port", 8765)
+        port = int(a.port or _config_get(ctx, "mcp_server.http_port", MCP_HTTP_DEFAULT_PORT))
+        from ..web.cli import _port_busy
+        from ..web.security import is_loopback
+
+        if is_loopback(a.host) and _port_busy(a.host, port):
+            _eprint(f"lỗi: cổng {port} đang bận (web cfharness mặc định 8765, MCP mặc định {MCP_HTTP_DEFAULT_PORT}; hub khác trên máy?) — "
+                    f"chọn cổng khác: cfharness mcp serve --http --port {port + 1} "
+                    f"(hoặc cfharness config set mcp_server.http_port {port + 1})")
+            return 1
         _eprint(f"cfharness MCP (Streamable HTTP) tại http://{a.host}:{port}/mcp — token: `cfharness mcp token`")
         serve_http(caller, ctx.paths, host=a.host, port=int(port))
         return EXIT_OK
@@ -119,7 +129,7 @@ def cmd_mcp_snippet(ctx: Any) -> int:
     if a.http:
         from .http import ensure_tokens
 
-        port = a.port or _config_get(ctx, "mcp_server.http_port", 8765)
+        port = a.port or _config_get(ctx, "mcp_server.http_port", MCP_HTTP_DEFAULT_PORT)
         tok = ensure_tokens(ctx.paths)["read" if a.read_only else "control"]
         url = f"http://127.0.0.1:{port}/mcp"
         entry: dict[str, Any] = {"type": "http", "url": url, "headers": {"Authorization": f"Bearer {tok}"}}
@@ -493,7 +503,7 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     sv = ms.add_parser("serve", help="chạy MCP server của hub (stdio; --http = Streamable HTTP chỉ 127.0.0.1)", parents=[common])
     sv.add_argument("--http", action="store_true")
     sv.add_argument("--host", default="127.0.0.1", help="chỉ chấp nhận loopback")
-    sv.add_argument("--port", type=int)
+    sv.add_argument("--port", type=int, help=f"mặc định mcp_server.http_port ({MCP_HTTP_DEFAULT_PORT}, khác cổng web 8765)")
 
     sn = ms.add_parser("snippet", help="IN lệnh/JSON để thêm cfharness vào Claude Code (không tự sửa cấu hình)", parents=[common])
     sn.add_argument("--http", action="store_true")

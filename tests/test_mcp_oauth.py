@@ -329,7 +329,7 @@ async def _stop(d, task):
 
 async def test_web_connect_and_public_callback_flow(hub_home, fake):
     from cfharness.web.app import create_app
-    from cfharness.web.security import COOKIE, WebAuth
+    from cfharness.web.security import WebAuth, cookie_name
 
     d, task = await _daemon(hub_home)
     auth = WebAuth()
@@ -338,6 +338,7 @@ async def test_web_connect_and_public_callback_flow(hub_home, fake):
     anon = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=WEB_BASE)
     try:
         r = await c.get("/login?t=" + auth.mint())
+        COOKIE = cookie_name(hub_home.home)
         sid = r.cookies.get(COOKIE) or c.cookies.get(COOKIE)
         csrf, key = auth.sessions[sid].csrf, r.headers["location"].split("#k=", 1)[1]
         # thêm server http + ô "Đăng nhập OAuth" (không probe vì chưa có token) → về trang server

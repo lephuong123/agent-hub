@@ -51,7 +51,9 @@ def cmd_takeover(ctx: Any) -> int:
     if a.print_only or ctx.json:
         ctx.out(info, info["command"] + f"\n# khi xong: cfharness takeover {info['run_id']} --record")
         return 0
-    env = {k: v for k, v in os.environ.items() if k not in set(info.get("env_strip") or [])}
+    from .takeover import takeover_env
+
+    env = takeover_env(info, ctx.paths)
     print(f"[cfharness] takeover run {info['run_id']} (session {info['session_id']}) trong {info['cwd']}", flush=True)
     started = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"
     try:

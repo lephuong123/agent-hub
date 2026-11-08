@@ -178,9 +178,12 @@ READONLY: tuple[tuple[str, str], ...] = (
     ("manager.web_domains", "WebFetch của điều phối viên"),
     ("manager.allow_hermes_without_sandbox", "Khung rộng khi không có sandbox (Windows)"),
     ("workspace.allowed_roots", "Gốc workspace được phép"),
+    ("workspace.confine.root", "Giam agent trong workspace (W)"),
     ("runtime.kind", "Runtime"),
     ("runtime.claude.default_permission_mode", "Chế độ quyền mặc định"),
     ("runtime.claude.chrome.enabled", "Cho dùng Claude in Chrome"),
+    ("web.public_origin", "Địa chỉ web public (tunnel TLS)"),
+    ("web.session_max_age_s", "Tuổi tối đa phiên web (giây)"),
     ("telemetry.otel.endpoint", "Đích OTLP"),
     ("telemetry.otel.include_payloads", "Gửi kèm input tool"),
 )

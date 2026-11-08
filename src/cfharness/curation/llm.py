@@ -51,7 +51,7 @@ async def structured_call(hub: "Hub", *, agent_id: str, prompt: str, schema: dic
     # hardening H-20 (NFR-22): gọi model qua AgentRuntime.oneshot (ClaudeCliRuntime, binary = curation.binary nếu đặt)
     from ..runtime import ClaudeCliRuntime, OneShotRequest
 
-    rt = ClaudeCliRuntime({**claude_cfg, "binary": binary})
+    rt = ClaudeCliRuntime({**claude_cfg, "binary": binary}, secrets=getattr(hub, "secrets", None))
     r = await rt.oneshot(OneShotRequest(prompt=prompt, schema=schema, system=system, model=model, budget_usd=budget_usd, timeout_s=timeout, label=label))
     if not r.ok and not r.raw and r.error:
         _record(hub, run_id, agent_id, model, started, 0.0, "failed", f"curation LLM lỗi: {r.error}"[:300], label, curation_id)

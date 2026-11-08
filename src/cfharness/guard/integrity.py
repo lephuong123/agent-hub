@@ -41,7 +41,41 @@ log = logging.getLogger("cfharness.guard.integrity")
 
 POLICY = "policy"
 CONFIG = "config.yaml"
-SECURITY_KEYS = ("guard", "approval", "runtime", "secrets", "telemetry", "notify", "learning_guard", "manager", "schedules")  # M7 MGR-6: trần của điều phối viên
+SECURITY_KEYS = ("guard", "approval", "runtime", "secrets", "telemetry", "notify", "learning_guard", "manager", "schedules",
+                 "admin_export", "web", "workspace.confine")  # P2: khoá con có dấu chấm = chỉ nhánh con đó (giam agent trong W)
+
+
+_MISSING = object()
+
+
+def _dget(d: dict[str, Any], key: str) -> Any:
+    cur: Any = d
+    for part in key.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return _MISSING
+        cur = cur[part]
+    return cur
+
+
+def _dset(d: dict[str, Any], key: str, value: Any) -> None:
+    parts = key.split(".")
+    cur = d
+    for part in parts[:-1]:
+        if not isinstance(cur.get(part), dict):
+            cur[part] = {}
+        cur = cur[part]
+    cur[parts[-1]] = value
+
+
+def _dpop(d: dict[str, Any], key: str) -> None:
+    parts = key.split(".")
+    cur: Any = d
+    for part in parts[:-1]:
+        if not isinstance(cur, dict) or part not in cur:
+            return
+        cur = cur[part]
+    if isinstance(cur, dict):
+        cur.pop(parts[-1], None)  # M7 MGR-6: trần của điều phối viên
 MAX_FILE = 2_000_000
 
 
@@ -126,7 +160,7 @@ class IntegrityMonitor:
             return {"__unparseable__": True}
         if not isinstance(d, dict):
             return {"__unparseable__": True}
-        return {k: d.get(k) for k in SECURITY_KEYS if k in d}
+        return {k: v for k in SECURITY_KEYS if (v := _dget(d, k)) is not _MISSING}
 
     def _read_config(self) -> bytes | None:
         p = self.home / CONFIG
@@ -269,9 +303,9 @@ class IntegrityMonitor:
                             self._aside(CONFIG, stamp)
                         for k in SECURITY_KEYS:
                             if k in before:
-                                merged[k] = copy.deepcopy(before[k])
+                                _dset(merged, k, copy.deepcopy(before[k]))
                             else:
-                                merged.pop(k, None)
+                                _dpop(merged, k)
                         self._write(CONFIG, yaml.safe_dump(merged, allow_unicode=True, sort_keys=False).encode("utf-8"))
                         info["restored"] = True
                     except OSError:

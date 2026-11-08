@@ -5,6 +5,7 @@
 | Windows | Task Scheduler, trigger ONLOGON của CHÍNH user (đăng ký bằng XML — không cần quyền admin), chạy `pythonw` GUI + mồi `-c` (không cửa sổ console; mồi chạy lại daemon crash — xem `launcher()`) `… -m cfharness daemon run`, không giới hạn thời gian chạy | `HUB_HOME/service/<tên>.xml` |
 | Windows (dự phòng) | Nếu `schtasks /Create` lỗi: file `.cmd` trong thư mục Startup của user (`start "" pythonw …`) | `%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\<tên>.cmd` |
 | macOS | LaunchAgent (`RunAtLoad`, `KeepAlive.SuccessfulExit=false` = chỉ chạy lại khi crash), `launchctl bootstrap gui/<uid>` | `~/Library/LaunchAgents/<label>.plist` |
+| macOS, không phiên GUI | LaunchDaemon `UserName=<user>` (`LaunchDaemonPlan`, `cfharness admin install-daemon --user U`; chỉ in, `--write` cần root) | `/Library/LaunchDaemons/com.cfharness.{daemon,web}.<user>.plist` |
 | Linux | systemd `--user` (`Restart=on-failure`, `WantedBy=default.target`), `systemctl --user enable` | `~/.config/systemd/user/<tên>.service` |
 
 Tên gắn băm 8 ký tự của HUB_HOME → nhiều HUB_HOME cùng máy không đè nhau. Idempotent: định nghĩa trùng nội dung và đã đăng ký
@@ -18,6 +19,8 @@ import hashlib
 import os
 import plistlib
 import posixpath
+import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -467,3 +470,150 @@ def _systemd_quote(s: str) -> str:
     if s and not any(c in s for c in ' \t"\\\'$%;'):
         return s
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$") + '"'
+
+
+# ============================================================================ LaunchDaemon (Q3: chạy không cần phiên GUI)
+LAUNCH_DAEMONS_DIR = Path("/Library/LaunchDaemons")
+_USER_RE = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$")
+
+
+class LaunchDaemonPlan:
+    """`cfharness admin install-daemon --user <u>`: daemon (và tuỳ chọn `cfharness web`) của user `u` chạy bằng launchd HỆ THỐNG
+    (`/Library/LaunchDaemons`, `UserName=<u>`) — chạy từ lúc máy khởi động, KHÔNG cần user đăng nhập màn hình (LaunchAgent
+    `gui/<uid>` chỉ chạy khi có phiên GUI). Không dùng Keychain: đăng nhập Claude bằng `CLAUDE_CODE_OAUTH_TOKEN` trong secret store
+    (docs/dev-notes/web-public.md). Mặc định CHỈ in plist + lệnh sudo; `--write` (chạy bằng root) mới ghi /Library và bootstrap.
+
+    Thuần ngoài `apply`/`remove`: test dựng plist với `user_home` giả, `runner` giả — không gọi launchctl/sudo thật."""
+
+    def __init__(self, user: str, *, user_home: Path, home: Path | None = None, program: str | None = None,
+                 web_port: int | None = None, path_env: str | None = None, runner: Runner | None = None,
+                 directory: Path = LAUNCH_DAEMONS_DIR, timeout: float = 20.0) -> None:
+        if not _USER_RE.match(user or ""):
+            raise ValueError(f"tên user macOS không hợp lệ: {user!r}")
+        if user == "root":
+            raise ValueError("không chạy hub bằng root — mỗi người một user macOS thường")
+        if web_port is not None and not 1024 <= int(web_port) <= 65535:
+            raise ValueError("--web-port phải trong 1024..65535")
+        from ..paths import DEFAULT_HOME_DIRNAME
+
+        self.user = user
+        self.user_home = Path(user_home)
+        self.home = Path(home) if home else self.user_home / DEFAULT_HOME_DIRNAME
+        self.program = program or str(self.user_home / ".local" / "bin" / "cfharness")
+        self.web_port = int(web_port) if web_port else None
+        self.path_env = path_env or ":".join([str(self.user_home / ".local" / "bin"), "/opt/homebrew/bin", *_SYSTEM_PATH])
+        self.runner = runner or _default_runner
+        self.dir = Path(directory)
+        self.timeout = timeout
+
+    # ------------------------------------------------------------------ định danh
+    def label(self, kind: str = "daemon") -> str:
+        return f"com.cfharness.{kind}.{self.user}"
+
+    def path(self, kind: str = "daemon") -> Path:
+        return self.dir / f"{self.label(kind)}.plist"
+
+    def kinds(self) -> list[str]:
+        return ["daemon"] + (["web"] if self.web_port else [])
+
+    # ------------------------------------------------------------------ plist (thuần)
+    def argv(self, kind: str = "daemon") -> list[str]:
+        if kind == "web":
+            # --no-link: stdout vào file log (agent đọc được logs/) → không bao giờ in link đăng nhập một lần ở đây
+            return [self.program, "web", "--port", str(self.web_port), "--no-link", "--home", str(self.home)]
+        return [self.program, "daemon", "run", "--home", str(self.home)]
+
+    def plist(self, kind: str = "daemon") -> bytes:
+        log = str(self.home / "logs" / f"{kind}.out")
+        d = {
+            "Label": self.label(kind),
+            "UserName": self.user,
+            "InitGroups": True,
+            "ProgramArguments": self.argv(kind),
+            "EnvironmentVariables": {"CFHARNESS_HOME": str(self.home), "HOME": str(self.user_home), "USER": self.user,
+                                     "LOGNAME": self.user, "PATH": self.path_env},
+            "WorkingDirectory": str(self.home),
+            "RunAtLoad": True,
+            # daemon: chỉ chạy lại khi crash (`daemon stop` mã 0 thì thôi); web: luôn giữ chạy
+            "KeepAlive": {"SuccessfulExit": False} if kind == "daemon" else True,
+            "ThrottleInterval": 30,
+            "ProcessType": "Background",
+            "Umask": 0o077,
+            "StandardOutPath": log,
+            "StandardErrorPath": log,
+        }
+        return plistlib.dumps(d)
+
+    # ------------------------------------------------------------------ lệnh
+    def commands(self) -> list[str]:
+        """Lệnh sudo tương đương `--write` (admin chạy tay; `<plist>` = nội dung in ở trên, lưu ra file tạm)."""
+        out = [f"sudo -u {shlex.quote(self.user)} mkdir -p {shlex.quote(str(self.home / 'logs'))}"]
+        for k in self.kinds():
+            p = str(self.path(k))
+            out += [f"sudo install -m 0644 -o root -g wheel ./{self.label(k)}.plist {shlex.quote(p)}",
+                    f"sudo launchctl bootout system/{self.label(k)} 2>/dev/null || true",
+                    f"sudo launchctl bootstrap system {shlex.quote(p)}",
+                    f"sudo launchctl enable system/{self.label(k)}"]
+        return out
+
+    def uninstall_commands(self) -> list[str]:
+        out: list[str] = []
+        for k in ("daemon", "web"):
+            out += [f"sudo launchctl bootout system/{self.label(k)} 2>/dev/null || true", f"sudo rm -f {shlex.quote(str(self.path(k)))}"]
+        return out
+
+    def _run(self, argv: list[str]) -> tuple[int, str, str]:
+        return self.runner(argv, self.timeout)
+
+    @staticmethod
+    def _need_root(euid: int | None) -> None:
+        if (os.geteuid() if euid is None else euid) != 0:
+            raise PermissionError("--write cần chạy bằng root: sudo cfharness admin install-daemon --user … --write")
+
+    def apply(self, *, euid: int | None = None) -> list[str]:
+        """Ghi plist vào /Library/LaunchDaemons + bootstrap. CHỈ root (`sudo cfharness admin install-daemon … --write`)."""
+        self._need_root(euid)
+        done: list[str] = []
+        logs = self.home / "logs"
+        rc, out, err = self._run(["/usr/bin/sudo", "-u", self.user, "/bin/mkdir", "-p", str(logs)])
+        if rc != 0:
+            raise RuntimeError(f"không tạo được {logs} bằng user {self.user}: {(err or out).strip()[:300]}")
+        for k in self.kinds():
+            p = self.path(k)
+            tmp = p.with_name(f".{p.name}.tmp")
+            tmp.unlink(missing_ok=True)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+            with os.fdopen(fd, "wb") as f:
+                f.write(self.plist(k))
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, p)
+            done.append(f"ghi {p}")
+            self._run(["/bin/launchctl", "bootout", f"system/{self.label(k)}"])
+            rc, out, err = self._run(["/bin/launchctl", "bootstrap", "system", str(p)])
+            if rc != 0:
+                raise RuntimeError(f"launchctl bootstrap system {p} lỗi ({rc}): {(err or out).strip()[:300]}")
+            self._run(["/bin/launchctl", "enable", f"system/{self.label(k)}"])
+            done.append(f"launchctl bootstrap system {p}")
+        return done
+
+    def remove(self, *, euid: int | None = None) -> list[str]:
+        self._need_root(euid)
+        done: list[str] = []
+        for k in ("daemon", "web"):
+            p = self.path(k)
+            if self._run(["/bin/launchctl", "bootout", f"system/{self.label(k)}"])[0] == 0:
+                done.append(f"launchctl bootout system/{self.label(k)}")
+            if p.exists():
+                p.unlink()
+                done.append(f"xoá {p}")
+        return done
+
+
+def user_home_of(user: str) -> Path:
+    """Thư mục home của user macOS (pwd). Không có user → ValueError."""
+    import pwd
+
+    try:
+        return Path(pwd.getpwnam(user).pw_dir)
+    except KeyError:
+        raise ValueError(f"không có user macOS '{user}' (tạo bằng `sudo sysadminctl -addUser {user} …`)") from None

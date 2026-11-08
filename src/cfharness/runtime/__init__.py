@@ -20,11 +20,11 @@ __all__ = [
 ]
 
 
-def make_runtime(cfg: dict) -> AgentRuntime:
+def make_runtime(cfg: dict, secrets: object = None) -> AgentRuntime:
     """Tạo runtime từ cấu hình hub (`runtime.kind`)."""
     rt = cfg.get("runtime") or {}
     kind = rt.get("kind", "claude")
     if kind == "fake":
         f = rt.get("fake") or {}
         return FakeRuntime(f.get("fixture"), line_delay_s=float(f.get("line_delay_s") or 0.0))
-    return ClaudeCliRuntime(rt.get("claude") or {})
+    return ClaudeCliRuntime(rt.get("claude") or {}, secrets=secrets)

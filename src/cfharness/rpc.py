@@ -45,13 +45,45 @@ def encode(obj: dict[str, Any]) -> bytes:
     return (json.dumps(obj, ensure_ascii=False, default=str) + "\n").encode("utf-8")
 
 
+class UntrustedSocket(RpcError):
+    """Socket không phải của user hiện tại (hoặc không phải socket) — không gửi token người tới đó."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(SYSTEM_ERROR, message)
+
+
+def check_socket_owner(sock_path: Path | str) -> None:
+    """Đa instance P1: trước khi gửi token người, socket phải là Unix socket THẬT thuộc user hiện tại (`lstat`, không theo
+    symlink). Chặn kẻ chiếm trước đường dẫn socket (vd thư mục dự phòng trong /tmp) để hứng token. Windows: file endpoint
+    TCP — daemon kiểm cùng user ở phía nó (`transport.py`), bỏ qua ở đây."""
+    from .oscompat import IS_WINDOWS
+
+    if IS_WINDOWS:
+        return
+    import os
+    import stat
+
+    try:
+        st = os.lstat(sock_path)
+    except OSError as e:
+        raise UntrustedSocket(f"không kiểm được socket {sock_path}: {e} — không gửi token người") from None
+    if not stat.S_ISSOCK(st.st_mode):
+        raise UntrustedSocket(f"{sock_path} không phải Unix socket (có thể là symlink/file giả) — từ chối gửi token người. "
+                              "Dừng daemon, xoá đường dẫn này rồi khởi động lại (`cfharness daemon start`).")
+    if st.st_uid != os.getuid():
+        raise UntrustedSocket(f"socket {sock_path} thuộc user khác (uid {st.st_uid}) — từ chối gửi token người. "
+                              "Có thể ai đó chiếm trước đường dẫn socket; đặt CFHARNESS_SOCKET=<đường dẫn riêng> hoặc kiểm tra máy.")
+
+
 def with_auth(sock_path: Path | str, params: dict[str, Any] | None) -> dict[str, Any]:
-    """Gắn token người (nếu đọc được) vào params — dùng chung cho mọi client của người."""
+    """Gắn token người (nếu đọc được) vào params — dùng chung cho mọi client của người.
+    Có token thì kiểm chủ socket trước (`check_socket_owner`) — không bao giờ gửi token tới socket của user khác."""
     from .auth import AUTH_PARAM, load_token
 
     p = dict(params or {})
     tok = load_token(sock_path)
     if tok and AUTH_PARAM not in p:
+        check_socket_owner(sock_path)
         p[AUTH_PARAM] = tok
     return p
 

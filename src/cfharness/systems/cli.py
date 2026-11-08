@@ -33,6 +33,63 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     s.set_defaults(fn=cmd_system)
 
 
+def add_admin_daemon_parsers(ads: Any, common: Any) -> None:
+    """Lệnh con `cfharness admin install-daemon|uninstall-daemon` — nhóm `admin` do admin_cli.py tạo (dùng chung với `admin overview`).
+
+    Q3 (plan-multi-instance §6b): hub chạy không cần phiên GUI — LaunchDaemon theo user (systems/autostart.LaunchDaemonPlan)."""
+    for name, hlp in (("install-daemon", "sinh plist /Library/LaunchDaemons/com.cfharness.daemon.<user>.plist (mặc định chỉ IN plist + lệnh sudo)"),
+                      ("uninstall-daemon", "gỡ LaunchDaemon của user (mặc định chỉ in lệnh)")):
+        p = ads.add_parser(name, help=hlp, parents=[common])
+        p.add_argument("--user", required=True, help="user macOS sở hữu hub")
+        p.add_argument("--web-port", type=int, default=None, help="thêm job thứ hai giữ `cfharness web --port N` luôn chạy (cho tunnel)")
+        p.add_argument("--program", default=None, help="đường dẫn lệnh cfharness của user (mặc định ~<user>/.local/bin/cfharness)")
+        p.add_argument("--write", action="store_true", help="ghi /Library/LaunchDaemons + launchctl bootstrap (cần chạy bằng root)")
+        p.set_defaults(fn=cmd_admin, admin_action=name)
+
+
+def cmd_admin(ctx: Any) -> int:
+    """`--home` (tuỳ chọn) = HUB_HOME của user đích; mặc định ~<user>/.cfharness. Không gọi daemon (lệnh của admin, có thể chạy bằng root)."""
+    import plistlib
+
+    from .autostart import LaunchDaemonPlan, user_home_of
+
+    a = ctx.args
+    try:
+        uh = user_home_of(a.user)
+        plan = LaunchDaemonPlan(a.user, user_home=uh, home=getattr(a, "home", None), program=a.program, web_port=a.web_port)
+    except ValueError as e:
+        print(f"lỗi: {e}")
+        return 1
+    install = a.admin_action == "install-daemon"
+    if a.write:
+        try:
+            done = plan.apply() if install else plan.remove()
+        except (PermissionError, RuntimeError, OSError) as e:
+            print(f"lỗi: {e}")
+            return 1
+        ctx.out({"done": done}, "\n".join(done) or "không có gì để làm")
+        if install:
+            print(f"Xem log: {plan.home / 'logs'}/daemon.out — trạng thái: sudo launchctl print system/{plan.label()}")
+        return 0
+    if ctx.json:
+        ctx.out({"user": plan.user, "home": str(plan.home),
+                 "plists": {k: {"path": str(plan.path(k)), "content": plistlib.loads(plan.plist(k))} for k in plan.kinds()} if install else {},
+                 "commands": plan.commands() if install else plan.uninstall_commands()})
+        return 0
+    if install:
+        for k in plan.kinds():
+            print(f"# ---- {plan.path(k)} (lưu thành ./{plan.label(k)}.plist)")
+            print(plan.plist(k).decode("utf-8"))
+        print("# ---- lệnh (hoặc: sudo cfharness admin install-daemon --user "
+              f"{plan.user}{f' --web-port {plan.web_port}' if plan.web_port else ''} --write)")
+        print("\n".join(plan.commands()))
+        print("# Claude dùng chung không cần GUI/Keychain: chạy `claude setup-token` một lần rồi\n"
+              f"#   sudo -u {plan.user} cfharness secret set CLAUDE_CODE_OAUTH_TOKEN")
+    else:
+        print("\n".join(plan.uninstall_commands()))
+    return 0
+
+
 def _print_system(s: dict[str, Any], *, logs: bool = False) -> None:
     print(f"{s['id']}  —  {s.get('title') or ''}\n  {s['path']}")
     if not s["jobs"]:

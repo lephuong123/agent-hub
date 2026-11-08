@@ -3,7 +3,8 @@
 Mô hình:
 - Server CHỈ bind loopback (`127.0.0.1`, `::1`, `localhost`); host khác → từ chối khi khởi động (`require_loopback`).
 - WT-1: trình duyệt dùng host riêng `cfharness.localhost:<port>` (cookie host-only, không gửi tới 127.0.0.1:*/localhost:* nơi dev
-  server agent viết chạy); 127.0.0.1/localhost → 303 sang host riêng, không đặt cookie. Cookie KHÔNG tách theo cổng nên còn lớp 2:
+  server agent viết chạy); 127.0.0.1/localhost → 303 sang host riêng, không đặt cookie. Tên cookie có hậu tố theo HUB_HOME
+  (`cookie_name`) để hai hub cùng host không đá phiên nhau. Cookie KHÔNG tách theo cổng nên còn lớp 2:
   mọi POST cần `Session.key` (bí mật ngoài cookie, trao qua fragment `#k=` lúc đăng nhập, JS giữ trong localStorage, không bao giờ
   nằm trong HTML). Phiên ngắn: idle 1 h (polling/SSE không gia hạn), tối đa 12 h.
 - Đăng nhập: `cfharness web` in/mở URL `/login?t=<link một lần>`. Link = HMAC(khoá phiên server, nonce|hạn) — dùng
@@ -36,7 +37,7 @@ from typing import Any
 from ..oscompat import owned_by_me, pid_alive
 from ..paths import HubPaths
 
-COOKIE = "ahub_web"
+COOKIE = "ahub_web"  # tiền tố; tên thật theo hub: `cookie_name(home)` (đa instance P1)
 KEY_FIELD = "k"  # bí mật phiên NGOÀI cookie (WT-1): form field / header X-Ahub-Key, trình duyệt giữ trong localStorage của origin web
 KEY_HEADER = "x-ahub-key"
 LOGIN_TTL_S = 300
@@ -46,6 +47,13 @@ LOOPBACK_NAMES = ("localhost",)
 # WT-1: tên host riêng → cookie host-only KHÔNG được gửi tới 127.0.0.1:* / localhost:* (dev server agent viết).
 # Chrome/Firefox/Safari + resolver macOS/glibc phân giải *.localhost về loopback (RFC 6761).
 WEB_HOST = "cfharness.localhost"
+
+
+def cookie_name(home: str | os.PathLike[str] | HubPaths) -> str:
+    """Tên cookie phiên RIÊNG theo hub: `ahub_web_<6 hex sha256(HUB_HOME)>`. Cookie không tách theo cổng — hai hub cùng host
+    `cfharness.localhost` (cổng khác nhau) dùng chung tên thì đăng nhập hub này đá phiên hub kia (C2, plan-multi-instance)."""
+    h = home.home if isinstance(home, HubPaths) else Path(home)
+    return f"{COOKIE}_{hashlib.sha256(str(Path(h).expanduser().resolve()).encode()).hexdigest()[:6]}"
 
 
 class NotLoopback(ValueError):
@@ -135,8 +143,10 @@ class Session:
 class WebAuth:
     """Khoá ký link + phiên trong RAM (server khởi động lại → đăng nhập lại bằng `cfharness web --open`)."""
 
-    def __init__(self, key: bytes | None = None) -> None:
+    def __init__(self, key: bytes | None = None, *, idle_s: int = SESSION_IDLE_S, max_s: int = SESSION_MAX_S) -> None:
         self.key = key or secrets.token_bytes(32)
+        self.idle_s = int(idle_s)  # `web.session_idle_s` / `web.session_max_age_s` (web-public.md)
+        self.max_s = int(max_s)
         self.sessions: dict[str, Session] = {}
         self._used: dict[str, int] = {}
 
@@ -170,7 +180,7 @@ class WebAuth:
         if s is None:
             return None
         now = now or time.time()
-        if now - s.last > SESSION_IDLE_S or now - s.created > SESSION_MAX_S:
+        if now - s.last > min(self.idle_s, self.max_s) or now - s.created > self.max_s:
             self.sessions.pop(sid, None)
             return None
         if touch:
@@ -195,7 +205,7 @@ def state_path(paths: HubPaths) -> Path:
     return paths.home / "auth" / "web.json"
 
 
-def write_state(paths: HubPaths, *, host: str, port: int, key: bytes, name: str = WEB_HOST) -> Path:
+def write_state(paths: HubPaths, *, host: str, port: int, key: bytes, name: str = WEB_HOST, public_origin: str | None = None) -> Path:
     d = paths.home / "auth"
     d.mkdir(parents=True, exist_ok=True)
     os.chmod(d, 0o700)
@@ -204,7 +214,8 @@ def write_state(paths: HubPaths, *, host: str, port: int, key: bytes, name: str 
     tmp.unlink(missing_ok=True)
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump({"v": 1, "pid": os.getpid(), "host": host, "name": name, "port": port, "key": key.hex(), "started_at": time.time()}, f)
+        json.dump({"v": 1, "pid": os.getpid(), "host": host, "name": name, "port": port, "key": key.hex(), "public_origin": public_origin,
+                   "started_at": time.time()}, f)
     os.replace(tmp, p)
     return p
 
@@ -238,6 +249,9 @@ def clear_state(paths: HubPaths, pid: int | None = None) -> None:
         pass
 
 
-def login_url(host: str, port: int, token: str) -> str:
+def login_url(host: str, port: int, token: str, public_origin: str | None = None) -> str:
+    """Link đăng nhập một lần; có `web.public_origin` → link qua tunnel (https)."""
+    if public_origin:
+        return f"{public_origin.rstrip('/')}/login?t={token}"
     h = f"[{host}]" if ":" in host and not host.startswith("[") else host
     return f"http://{h}:{port}/login?t={token}"

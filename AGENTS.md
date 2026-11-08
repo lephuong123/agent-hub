@@ -326,6 +326,14 @@ tĩnh mới đặt trong `web/static/`. Không bao giờ đưa token người/kh
 Duyệt: hiện TOÀN BỘ thao tác (`present.action_view`, không cắt); lớp nặng (`notify.telegram.confirm_classes` + `file`, tài nguyên bảo vệ) cần bước 2. "Luôn cho phép" (`approve_always`) chỉ hiện khi `a.always_offer` và LUÔN cần bước 2 nêu luật. `config.set` chỉ khoá trong `SAFE_CONFIG`.
 Agent trong run: sandbox chặn TCP localhost (đã kiểm thật) + denyRead `HUB_HOME/auth` + `cfharness web` forbidden trong classifier.
 
+### Web public (tunnel TLS) + TOTP + LaunchDaemon + Claude dùng chung — `docs/dev-notes/web-public.md`
+`web/public.py` (`web.public_origin` chỉ https, `client_ip` chỉ tin header proxy khi có public_origin + peer loopback, `LoginLimiter` theo IP/toàn cục/ngày),
+`web/totp.py` (RFC 6238 stdlib, `HUB_HOME/auth/totp*.json` 0600), `/enroll` + ô mã ở `/login`, `cfharness web totp enroll|status|disable`, `web --no-link`.
+Bind VẪN loopback; nhánh config `web` ∈ `integrity.SECURITY_KEYS`, không có trong danh mục Cài đặt web; MCP HTTP KHÔNG public.
+`systems/autostart.LaunchDaemonPlan` + `cfharness admin install-daemon --user U [--web-port N] [--write]` (∈ `HUB_HUMAN_ONLY_CLI`).
+Secret `CLAUDE_CODE_OAUTH_TOKEN` → env của mọi tiến trình `claude` (`ClaudeCliRuntime(secrets=)`, `child_env(oauth_token=)` — tạo runtime mới phải truyền
+`secrets=hub.secrets`); không bao giờ vào argv/DB/plist. Test: `tests/test_web_public.py`.
+
 ## M7 luồng MGR-UI — Điều phối viên trên web + Telegram + terminal
 Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes/M7-ui.md`. Ảnh: `docs/screenshots/web/16-…18-*.png`, `docs/screenshots/m2/10-11-dieu-phoi*.svg`. Không migration, không RPC mới.
 
@@ -553,3 +561,20 @@ Chi tiết: `docs/dev-notes/update.md`. Không migration. Test: `tests/test_upda
 
 Bất biến: `update.start` ∈ HUMAN_ONLY (không ở MANAGER_ALLOWED), `cfharness update` ∈ `HUB_HUMAN_ONLY_CLI`; tag chỉ dạng `vX.Y.Z`, repo cố định
 (`updater.REPO`); có run chạy/chờ → từ chối trừ `force`. Helper không được import `cfharness` (venv bị cài đè trong lúc chạy).
+
+## Tổng quan máy (Q6) — mỗi hub xuất trạng thái số liệu, admin xem mọi hub
+Chi tiết, thiết lập nhóm/thư mục, giới hạn: `docs/dev-notes/admin-overview.md`. Không migration. Test: `tests/test_admin_overview.py`.
+- `admin_overview.py`: `hub.admin_export` (tắt mặc định, `admin_export.*` ∈ SECURITY_KEYS) ghi nguyên tử `<dir>/<user-os>.json` 0640 nhóm
+  `cfharness-admin`; RPC `admin.overview` (CHỈ ĐỌC, ∈ HUMAN_ONLY); CLI `cfharness admin overview` (`admin_cli.py`); web `/admin/overview` (`web/admin_pages.py`).
+- Bất biến: nội dung file CHỈ theo `SPEC` (số/bool/regex id-enum) — không bao giờ chữ tự do; thêm trường → `SPEC` + ca trong test. Người đọc coi
+  file là dữ liệu không tin cậy (`O_NOFOLLOW`, trần cỡ, lọc lại `SPEC`, kiểm chủ file). Sandbox agent chặn đọc/ghi `/Users/Shared/cfharness`.
+
+## Giam agent trong workspace W — `workspace.confine` (P2 đa instance)
+Chi tiết, spike (claude 2.1.319: `allowRead` trong `denyRead` hoạt động, glob không mở lại), giới hạn: `docs/dev-notes/confine.md`,
+`docs/dev-notes/hardening-SEC.md` §1.1. Không migration. Test: `tests/test_confine.py`, ca `DESTRUCTIVE_CONFINE` trong `tests/test_guard_classifier.py`.
+- `confine.py`: đọc cấu hình, `read_roots`/`deny_read_roots`, `apply_sandbox` (denyRead `$HOME` + allowRead W/toolchain/workspace hub),
+  `confine_only_sandbox` (trust_full / sandbox tắt), `permission_deny_rules` (anh em của W), registry hub `~/.config/cfharness/hubs.json`
+  (env `CFHARNESS_HUBS_REGISTRY`; conftest đặt về thư mục tạm).
+- Bất biến: `workspace.confine` chỉ người (`config.set` HUMAN_ONLY, khoá ∈ `integrity.SECURITY_KEYS` — khoá con có dấu chấm được hỗ trợ);
+  khi bật, `trust_full` KHÔNG gỡ giam (Q4) và `guard.sandbox.enabled=false` vẫn để lại sandbox chỉ-giam; mọi workspace/cwd/worktree/
+  `extra_write_roots` phải trong W (`validate_workspace`, `check_path`). Không dùng glob trong `sandbox.filesystem.allowRead` (không mở lại).

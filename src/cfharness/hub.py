@@ -97,6 +97,10 @@ class Hub:
         from .schedules import attach as _attach_schedules
 
         _attach_schedules(self)
+        # Tổng quan máy (Q6): xuất bản tóm tắt CHỈ SỐ LIỆU ra thư mục chung cho admin (`hub.admin_export`; tắt mặc định) — admin_overview.py
+        from .admin_overview import attach as _attach_admin_export
+
+        _attach_admin_export(self)
         self._bg: list[Any] = []
         # hardening SEC (H-02 lớp 3): toàn vẹn policy/ + config.yaml + hub.db (`hub.integrity`) — guard/integrity.py. GIỮ CUỐI __init__
         from .guard.integrity import attach as _attach_integrity
@@ -136,6 +140,12 @@ class Hub:
         except Exception:  # pragma: no cover
             log.exception("không dọn được runtime/")
         self.integrity.start()  # SEC: so policy/ với bản chuẩn + vòng kiểm nền
+        try:  # P2.4: đăng ký HUB_HOME vào registry hub của user OS → hub khác chặn đọc/ghi home này
+            from .confine import register_home
+
+            register_home(self.paths.home)
+        except Exception:  # pragma: no cover
+            log.exception("không ghi được registry hub")
         self._warn_if_sandbox_disabled()
         try:  # R2-1(c): .pth/sitecustomize lạ trong venv của hub → cảnh báo đỏ
             from .guard.integrity import check_python_env

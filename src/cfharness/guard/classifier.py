@@ -116,6 +116,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "chat": None,  # M7 terminal: `cfharness chat` = ra lệnh điều phối viên (manager.chat ∈ HUMAN_ONLY)
     "system": {"scan", "add", "rm", "lock", "unlock", "pause", "resume", "restart"},  # job launchd chạy NGOÀI sandbox (system.* ∈ HUMAN_ONLY)
     "home": {"migrate"},  # đổi tên cfharness: chuyển HUB_HOME (dừng daemon, đổi thư mục, viết lại DB) — chỉ người
+    "admin": None,  # plan-multi-instance: install-daemon (LaunchDaemon, root) + overview (admin.overview ∈ HUMAN_ONLY, lộ hoạt động user OS khác) — agent gõ đều chặn
     "update": None,  # cập nhật cfharness = cài đè phần mềm hub + khởi động lại daemon (update.start ∈ HUMAN_ONLY) — agent gõ, kể cả --check, đều chặn
     # Lịch chạy tự động (schedules/): schedule.* ghi ∈ HUMAN_ONLY — agent không tự đặt việc chạy lặp
     "schedule": {"add", "create", "edit", "update", "pause", "resume", "rm", "remove", "delete", "run-now", "run_now"},
@@ -137,7 +138,7 @@ _MOD = _names.alt(_names.HUB_MODULE_NAMES)
 _CLI = _names.alt(_names.HUB_CLI_NAMES)
 _ENV_HOME = _names.alt(_names.env_names("HOME"))
 _HOME_DIR = _names.alt(_names.HUB_HOME_DIRNAMES)
-HUB_SOCKET_RE = re.compile(rf"hub\.sock|{_SOCK_PFX}[^/\s'\"]*\.sock|\b{_names.alt(_names.env_names('SOCKET'))}\b|\.sock\.auth\b|human\.token|mcp_server/tokens\.json", re.I)
+HUB_SOCKET_RE = re.compile(rf"hub\.sock|{_SOCK_PFX}[^/\s'\"]*\.sock|(?:/private)?/tmp/{_SOCK_PFX}\d+(?![\w.-])|\b{_names.alt(_names.env_names('SOCKET'))}\b|\.sock\.auth\b|human\.token|mcp_server/tokens\.json", re.I)
 HUB_MODULE_RE = re.compile(rf"(\bimport\s+{_MOD}\b|\bfrom\s+{_MOD}\b|\b{_MOD}\.(rpc|cli|daemon|auth|approvals|guard|mcp_server|learning|evals|hub)\b|__import__\(\s*['\"]{_MOD}|import_module\(\s*['\"]{_MOD}|require\(['\"][^'\"]*{_CLI})")
 HUB_HOME_REF_RE = re.compile(rf"\b{_ENV_HOME}\b|{_HOME_DIR}\b")
 # R3-1: đọc thông tin xác thực từ keychain / credential helper / gh (sandbox KHÔNG chặn Mach IPC tới SecurityServer)
@@ -244,6 +245,11 @@ class GuardContext:
     chrome_allowed: bool | None = None
     trusted_repo_scripts: bool = False  # `node|python <file>` file được git track, sạch, commit trước mốc task → bỏ luật API xoá trong mã
     task_created_deletes: bool = False  # mốc "file run tự tạo" = run đầu của task (worktree_since); thư mục tạm hệ thống do task tạo
+    # P2 (workspace.confine): gốc W (realpath) — None = không giam; gốc được đọc (W, toolchain, workspace hub, cwd…); gốc bị chặn ($HOME…)
+    confine_root: str | None = None
+    confine_read: tuple[str, ...] = ()
+    confine_deny: tuple[str, ...] = ()
+    other_hub_homes: tuple[str, ...] = ()  # P2.4: hub home KHÁC đã đăng ký (cùng user OS) — cấm đọc + ghi
 
     @property
     def home(self) -> str:
@@ -548,6 +554,9 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
                 v = ti.get(k)
                 if isinstance(v, str) and v and sensitive_read(_abs(v, ctx.cwd), ctx):
                     return Verdict("destructive", "hub_secret_read", "hub", "agent không được đọc token người/secret/mcp.json của hub", [v], forbidden=True)
+            cv = confine_read_verdict(tool_name, ti, ctx)
+            if cv is not None:
+                return cv
             return Verdict("safe", "read_only_tool")
         if tool_name in SUBAGENT_TOOLS:
             return Verdict("write", "subagent_tool", reason="subagent/điều khiển task — tool con của nó đi qua hook riêng")
@@ -699,10 +708,54 @@ def _win_cred_dirs() -> tuple[str, ...]:
             "AppData/Local/Microsoft/Credentials", "AppData/Roaming/Microsoft/Protect", "AppData/Roaming/Microsoft/Crypto")
 
 
+def _glob_base(pattern: str) -> str:
+    """Phần thư mục không chứa ký tự glob của một mẫu (vd `/Users/x/**/*.env` → `/Users/x`)."""
+    parts = canon_path(pattern).split("/")
+    out = []
+    for x in parts:
+        if any(c in x for c in "*?[{"):
+            break
+        out.append(x)
+    return "/".join(out) or "/"
+
+
+def confine_read_verdict(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdict | None:
+    """P2: tool đọc (Read/Grep/Glob/LS/NotebookRead) khi giam — đường dẫn ngoài W ∪ allow → forbidden `read_outside_workspace`.
+    Không giam / đường dẫn nằm ngoài vùng bị chặn ($HOME…, vd /usr/include) → None."""
+    if not ctx.confine_root:
+        return None
+    from ..confine import outside
+
+    paths: list[str] = []
+    for k in READ_PATH_KEYS:
+        v = ti.get(k)
+        if isinstance(v, str) and v:
+            paths.append(_abs(v, ctx.cwd))
+    pat = ti.get("pattern")
+    if tool_name == "Glob" and isinstance(pat, str) and pat:
+        base = _glob_base(os.path.expanduser(pat))
+        if _isabs(base) or pat.startswith("~"):
+            paths.append(_abs(base, ctx.cwd))
+        elif ".." in pat.split("/"):
+            paths.append(_abs(_glob_base(pat), ctx.cwd))
+    for ap in paths:
+        if outside(ap, ctx.confine_root, ctx.confine_read, ctx.confine_deny):
+            return Verdict("destructive", "read_outside_workspace", "file",
+                           f"{tool_name} ngoài workspace được giam ({ctx.confine_root}): {ap} — workspace.confine (chỉ người đổi)", [ap], forbidden=True)
+    return None
+
+
+READ_PATH_KEYS = ("file_path", "path", "notebook_path")
+
+
 def sensitive_read(p: str, ctx: GuardContext) -> bool:
-    """Đường dẫn mà agent KHÔNG được đọc: token người cạnh socket, secrets/, mcp.json đã resolve, token MCP HTTP."""
+    """Đường dẫn mà agent KHÔNG được đọc: token người cạnh socket, secrets/, mcp.json đã resolve, token MCP HTTP,
+    mọi hub home KHÁC đã đăng ký (P2.4)."""
     homes = {_hub_home(ctx), _real(_hub_home(ctx))}
     cands = {canon_path(p), _real(p)}
+    for c in cands:
+        if any(_under(c, o) for o in ctx.other_hub_homes):
+            return True
     uh = canon_path(str(ctx.policy.user_home)).rstrip("/")
     for c in cands:  # R3-1: thông tin xác thực git/forge/keychain của người
         for x in (".config/gh", ".git-credentials", ".config/git/credentials", "Library/Keychains", ".netrc", ".ssh") + _win_cred_dirs():
@@ -842,14 +895,38 @@ def classify_file_write(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -
         r = protected_path(ctx, cand, op)
         if r:
             return Verdict("destructive", "protected_path", "file", f"{tool_name} vào tài nguyên được bảo vệ {r.selector} ({op})", [ap], r.id)
+    for cand in {ap, rp}:  # P2.4: hub home khác (cùng user OS)
+        if any(_under(cand, o) for o in ctx.other_hub_homes):
+            return Verdict("destructive", "other_hub_write", "hub", f"{tool_name} vào hub khác ({ap})", [ap], "hub-home", forbidden=True)
     # R2-1: ngoài workspace của run (+ tmp/add-dir) → chờ người (cùng mô hình sandbox Bash)
     roots = write_roots(ctx)
-    if not any(_under(c, r) for c in {ap, rp} for r in roots):
+    inside = any(_under(c, r) for c in {ap, rp} for r in roots)
+    if inside and ctx.confine_root:
+        # P2: trong W nhưng ngoài cwd/extra_write_roots → vẫn hỏi người, kể cả khi W tình cờ nằm trong thư mục tạm (/tmp trên Linux)
+        cr = canon_path(str(ctx.confine_root))
+        own = [canon_path(str(ctx.cwd)), _real(str(ctx.cwd))] + [canon_path(r) for r in ctx.extra_write_roots]
+        if any(_under(c, cr) for c in {ap, rp}) and not any(_under(c, r.rstrip("/")) for c in {ap, rp} for r in own if r):
+            inside = False
+    if ctx.confine_root and not _in_confine_write(ap, rp, ctx):
+        # P2: ngoài W ∪ vùng làm việc hub → CẤM (trust/duyệt không mở được). Thư mục tạm vẫn được — trừ khi nằm trong vùng bị chặn ($HOME…)
+        if not inside or any(_under(c, d) for c in {ap, rp} for d in ctx.confine_deny):
+            return Verdict("destructive", "write_outside_workspace", "file",
+                           f"{tool_name} ngoài workspace được giam ({ctx.confine_root}): {ap} — workspace.confine (chỉ người đổi)", [ap], forbidden=True)
+    if not inside:
         wt = own_worktree(ap, ctx) if ctx.own_worktree_writes else None
         if wt is not None:
             return Verdict("write", "own_worktree_write", "file", f"{tool_name} trong git worktree {wt} (cùng repo với workspace, do task/run này tạo)", [ap])
         return Verdict("destructive", "write_outside_workspace", "file", f"{tool_name} ngoài workspace của run ({ap}) — cần người duyệt", [ap])
     return Verdict("write", "file_write", "file", targets=[ap])
+
+
+def _in_confine_write(ap: str, rp: str, ctx: GuardContext) -> bool:
+    """P2: đích ghi nằm trong W hoặc vùng làm việc của hub (workspace/worktree/eval) — cả literal lẫn realpath."""
+    from ..confine import HUB_WORK_DIRS
+
+    hh = _hub_home(ctx)
+    bases = [ctx.confine_root] + [f"{h}/{n}" for h in {hh, _real(hh)} for n in HUB_WORK_DIRS if n != "checkpoints"]
+    return all(any(_under(c, b) for b in bases if b) for c in {ap, rp})
 
 
 def _git_out(cwd: str, *args: str) -> str | None:

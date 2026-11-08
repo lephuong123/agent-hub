@@ -286,6 +286,10 @@ def _daemon_logs(ctx: Ctx) -> int:
 
 # ============================================================================ doctor
 def cmd_doctor(ctx: Ctx) -> int:
+    if ctx.args.agent == "multi":  # `cfharness doctor multi` — kiểm đa instance (chỉ đọc, không cần daemon); "multi" ∈ RESERVED_IDS
+        from .doctor_multi import cmd_doctor_multi
+
+        return cmd_doctor_multi(ctx)
     checks: list[dict[str, Any]] = []
 
     def add(name: str, ok: bool, detail: str, level: str = "error") -> None:
@@ -305,7 +309,13 @@ def cmd_doctor(ctx: Ctx) -> int:
         tested = ccfg.get("tested_versions") or []
         add("phiên bản claude", bool(v) and v in tested, f"{v} (đã kiểm: {', '.join(tested)})" + ("" if v in tested else " — phiên bản chưa kiểm"), "warning")
         try:
-            r = subprocess.run(exec_argv([binary, "auth", "status"]), capture_output=True, encoding="utf-8", errors="replace", timeout=30, **no_window_kwargs())
+            from .runtime.claude_cli import child_env, oauth_token
+            from .secrets import SecretStore
+
+            # cùng env với tiến trình claude của daemon (env_strip + CLAUDE_CODE_OAUTH_TOKEN từ secret store nếu có)
+            tok = oauth_token(SecretStore(ctx.paths.home / "secrets", env_fallback=False))
+            r = subprocess.run(exec_argv([binary, "auth", "status"]), capture_output=True, encoding="utf-8", errors="replace", timeout=30,
+                               env=child_env(ccfg, oauth_token=tok), **no_window_kwargs())
             try:
                 info = json.loads(r.stdout)
                 logged = bool(info.get("loggedIn", r.returncode == 0))
@@ -734,7 +744,7 @@ def build_parser() -> argparse.ArgumentParser:
     d.set_defaults(fn=cmd_daemon)
 
     doc = sub.add_parser("doctor", help="kiểm sức khoẻ (không gọi model)", parents=[common])
-    doc.add_argument("agent", nargs="?")
+    doc.add_argument("agent", nargs="?", help="id agent cần kiểm, hoặc `multi` = kiểm sẵn sàng chạy nhiều hub trên một máy")
     doc.add_argument("--probe-timeout", type=float, default=20, help="giây chờ mỗi MCP server khi thử kết nối")
     doc.set_defaults(fn=cmd_doctor)
 
@@ -921,6 +931,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .update_cli import add_parsers as _add_update_parsers
 
     _add_update_parsers(sub, common)
+
+    # tổng quan máy nhiều người dùng: cfharness admin overview (admin_cli.py, admin_overview.py)
+    from .admin_cli import add_parsers as _add_admin_parsers
+
+    _add_admin_parsers(sub, common)
     return p
 
 

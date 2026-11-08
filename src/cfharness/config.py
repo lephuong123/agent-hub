@@ -27,6 +27,11 @@ _FLAGS_2_1_302: list[str] = [
     "--strict-mcp-config", "--system-prompt", "--system-prompt-snapshot", "--tools", "--verbose", "--worktree",
 ]
 
+# Đa instance P1: MCP HTTP mặc định KHÁC cổng web (8765) để hai dịch vụ của cùng hub không va nhau.
+MCP_HTTP_DEFAULT_PORT = 8766
+LEGACY_MCP_HTTP_PORT = 8765  # mặc định cũ — guard vẫn coi URL loopback cổng này là MCP của hub (cài đặt cũ đã đăng ký)
+MCP_OAUTH_CALLBACK_DEFAULT_PORT = 33418  # callback OAuth của CLI (`mcp login`) — cố định để bản đăng ký DCR dùng lại được
+
 DEFAULTS: dict[str, Any] = {
     "hub": {
         # FR-TK-07: giới hạn số run đồng thời toàn hub (giá trị khởi tạo 4)
@@ -255,13 +260,31 @@ DEFAULTS: dict[str, Any] = {
         "audit_ignore_servers": ["hub-guard"],
         "probe_timeout_s": 30,
     },
+    # Client OAuth của `cfharness mcp login` (mcp_client/oauth_cli.py)
+    "mcp_client": {
+        # cổng listener callback `http://127.0.0.1:<cổng>/callback`; 0 = OS chọn (mỗi lần một cổng → nhà cung cấp phải chấp nhận
+        # redirect loopback cổng bất kỳ, RFC 8252 §7.3; DCR sẽ đăng ký lại). Bận → cổng ngẫu nhiên.
+        "oauth_callback_port": MCP_OAUTH_CALLBACK_DEFAULT_PORT,
+    },
     "secrets": {
         # `${VAR}` không có trong secret store thì lấy biến môi trường của daemon (tương thích ~/.claude.json)
         "env_fallback": True,
     },
+    # Web public qua tunnel TLS (docs/dev-notes/web-public.md). Nhánh `web` ∈ integrity.SECURITY_KEYS; `config.set` chỉ người;
+    # KHÔNG có trong danh mục Cài đặt của web (settings_schema). Bind vẫn loopback — tunnel (cloudflared/tailscale) proxy về 127.0.0.1.
+    "web": {
+        "public_origin": None,  # vd "https://an.example.com" — chỉ https, không path; null = chỉ dùng trên máy này
+        "session_max_age_s": 12 * 3600,  # tuổi tối đa của phiên web (giây)
+        "session_idle_s": 3600,  # phiên không thao tác quá N giây → đăng nhập lại (polling/SSE không gia hạn)
+        # header IP thật của client — CHỈ đọc khi có public_origin VÀ request tới từ loopback (tunnel chạy trên máy này)
+        "client_ip_header": "x-forwarded-for",  # x-forwarded-for (phần tử CUỐI) | cf-connecting-ip | none
+        # chống dò mã TOTP: theo IP + toàn cục (mọi IP) + trần theo ngày
+        "login": {"ip_max_failures": 5, "global_max_failures": 10, "window_s": 900, "lockout_s": 900,
+                  "day_max_failures": 50, "day_lockout_s": 86400},
+    },
     # M1 luồng A — MCP server của hub (FR-MS-*)
     "mcp_server": {
-        "http_port": 8765,  # Streamable HTTP chỉ bind 127.0.0.1 (Q-11, NFR-14)
+        "http_port": MCP_HTTP_DEFAULT_PORT,  # Streamable HTTP chỉ bind 127.0.0.1 (Q-11, NFR-14); khác cổng web 8765
         "max_wait_s": 25,  # FR-MS-03: không giữ kết nối quá 25 s
         "max_events_per_call": 200,
     },
@@ -523,6 +546,14 @@ DEFAULTS: dict[str, Any] = {
         "manager_run_now_per_hour": 6,
         "manager_daily_budget_usd": None,
     },
+    # Tổng quan máy (admin_overview.py, docs/dev-notes/admin-overview.md): mỗi hub xuất bản tóm tắt CHỈ SỐ LIỆU ra thư mục chung để
+    # người quản trị xem mọi hub trên máy. Chỉ người đặt (`config.set` ∈ HUMAN_ONLY; nhánh ∈ integrity.SECURITY_KEYS).
+    "admin_export": {
+        "enabled": False,
+        "interval_s": 60,  # 10..3600
+        "dir": "/Users/Shared/cfharness/status",  # admin tạo sẵn (nhóm cfharness-admin); hub admin cũng ĐỌC thư mục này
+        "group": "cfharness-admin",  # nhóm của file 0640; không có → giữ nhóm hiện có + cảnh báo
+    },
     # Hệ thống ngoài hub (systems/): app trong thư mục gốc + job launchd (macOS) / task Task Scheduler (Windows) của chúng — người đăng ký, điều phối viên tạm dừng/bật lại/khởi động lại
     "systems": {
         "roots": None,  # null = theo workspace.allowed_roots
@@ -536,6 +567,13 @@ DEFAULTS: dict[str, Any] = {
     "workspace": {
         # MGR-1: gốc người cho phép đặt workspace `dir`. Ngoài ra luôn cho vùng scratch/worktree/eval của hub. Người thêm gốc tại đây (chỉ người).
         "allowed_roots": ["~/Workspace"],
+        # P2 đa instance (docs/dev-notes/confine.md): giam agent trong MỘT workspace W — CHỈ người (config.set ∈ HUMAN_ONLY,
+        # `workspace.confine` ∈ integrity.SECURITY_KEYS). root null = tắt. read_allow = toolchain ngoài W được đọc.
+        "confine": {
+            "root": None,
+            "read_allow": ["~/.npm", "~/.cache", "~/.local/share/uv", "~/.cargo", "~/.rustup", "~/.nvm", "~/Library/Caches",
+                           "~/.pyenv", "~/.bun", "~/.gitconfig", "~/.config/git/config", "~/.config/git/ignore"],
+        },
         "checkpoint": True,  # FR-RT-12: checkpoint + diff cho run ghi vào workspace dir
         "max_file_bytes": 5_000_000,  # file lớn hơn: chỉ lưu hash (không revert được)
         "max_files": 20_000,
@@ -741,6 +779,10 @@ class HubConfig:
 
     def set(self, key: str, value: Any) -> Any:
         validate_setting(key, value)
+        if key == "workspace" or key.startswith("workspace.confine"):  # P2: root không được chứa/nằm trong HUB_HOME
+            from .confine import validate_setting as _validate_confine
+
+            _validate_confine(key, value, self.path.parent)
         self._maybe_reload()
         over = copy.deepcopy(self._overrides)
         set_path(over, key, value)
@@ -775,19 +817,33 @@ def validate_setting(key: str, value: Any) -> None:
         from .guard.profiles import validate_setting as _validate_profile
 
         _validate_profile(key, value)
+    if key == "web" or key.startswith("web."):
+        from .web.public import validate_setting as _validate_web_public
+
+        _validate_web_public(key, value)
     if key == "runtime.claude.chrome" or key.startswith("runtime.claude.chrome."):
         from .browser import validate_setting as _validate_chrome
 
         _validate_chrome(key, value)
+    if key == "admin_export" or key.startswith("admin_export."):
+        _validate_admin_export(key, value)
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")
+    if key in ("mcp_server.http_port", "mcp_client.oauth_callback_port"):
+        lo = 0 if key == "mcp_client.oauth_callback_port" else 1
+        if not isinstance(value, int) or isinstance(value, bool) or not lo <= value <= 65535:
+            raise ValueError(f"{key} phải là số nguyên {lo}–65535")
     if key in ("gates", "gates.mode"):
         from .guard.profiles import GATES_MODES
 
         mode = value.get("mode", "human") if key == "gates" and isinstance(value, dict) else value
         if mode not in GATES_MODES:
             raise ValueError(f"gates.mode phải là {'|'.join(GATES_MODES)}")
+    if key == "workspace" or key.startswith("workspace.confine"):
+        from .confine import validate_setting as _validate_confine
+
+        _validate_confine(key, value)
     if key == "guard.trust_new_agents" and value not in ("off", "full"):
         raise ValueError("guard.trust_new_agents chỉ nhận 'off' hoặc 'full'")
     if key == "notify.reminder_max_count":
@@ -820,3 +876,20 @@ def validate_setting(key: str, value: Any) -> None:
     elif key == "runtime.claude.default_permission_mode":
         if value is not None and value not in VALID_PERMISSION_MODES:
             raise ValueError(f"permission mode không hợp lệ; chọn một trong {VALID_PERMISSION_MODES}")
+
+
+def _validate_admin_export(key: str, value: Any) -> None:
+    import re as _re
+
+    vals = dict(value) if key == "admin_export" and isinstance(value, dict) else {key.split(".", 1)[1]: value} if "." in key else {}
+    if key == "admin_export" and not isinstance(value, dict):
+        raise ValueError("admin_export phải là object")
+    for k, v in vals.items():
+        if k == "enabled" and not isinstance(v, bool):
+            raise ValueError("admin_export.enabled phải là true/false")
+        if k == "interval_s" and (isinstance(v, bool) or not isinstance(v, (int, float)) or not 10 <= v <= 3600):
+            raise ValueError("admin_export.interval_s phải trong 10..3600")
+        if k == "dir" and (not isinstance(v, str) or not v.startswith(("/", "~")) or "\x00" in v):
+            raise ValueError("admin_export.dir phải là đường dẫn tuyệt đối")
+        if k == "group" and v is not None and (not isinstance(v, str) or not _re.match(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$", v)):
+            raise ValueError("admin_export.group không hợp lệ")
