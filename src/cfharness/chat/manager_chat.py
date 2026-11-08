@@ -185,8 +185,8 @@ class ManagerChat:
                         self.bot._spawn(self._deliver(c, None, None, str(p.get("text") or ""), notify=True, agent=ev.agent_id,
                                                       failed=p.get("ok") is False))
                     return
-            self.bot._spawn(self._deliver(chat, conv, None if notify else run, str(p.get("text") or ""),
-                                          notify=notify, reply_to=reply_to, agent=ev.agent_id, failed=p.get("ok") is False))
+            self.bot._spawn(self._deliver(chat, conv, None if notify else run, str(p.get("text") or ""), notify=notify,
+                                          reply_to=reply_to, agent=ev.agent_id, failed=p.get("ok") is False, root_ok=root_sched))
         elif t in TERMINAL_RUN_EVENTS and ev.source == "hub" and ev.run_id and ev.run_id in self._st(self.RUNS):
             self.bot._spawn(self._no_reply(ev.run_id, t))
 
@@ -218,31 +218,51 @@ class ManagerChat:
         return out
 
     async def _deliver(self, chat: Any, conv: str | None, run_id: str | None, text: str, *, notify: bool = False, reply_to: Any = None,
-                       agent: str | None = None, failed: bool = False) -> None:
+                       agent: str | None = None, failed: bool = False, root_ok: bool = False) -> None:
+        """`root_ok`: được đăng lên gốc kênh dù `bot.root_post_ok` sai (chỉ kết quả lịch đã qua `bot.schedule_root_ok`). Kênh không
+        cho đăng gốc (Slack kênh chung) → MỌI phần của trả lời + báo lỗi + tệp `[[file:]]` ở cùng thread `reply_to`."""
+        from .base import _ROOT_POST, thread_scope
+
+        thread_scope(chat, reply_to)  # chạy từ listener bus — không thừa hưởng thread của việc khác qua context đã chép
+        _ROOT_POST.set(bool(root_ok))
+        keep_thread = not self.bot.root_post_ok(chat)  # Telegram / Slack DM: chỉ phần đầu trả lời tin người (như cũ)
         silent = not notify and not failed and text.strip().strip("`").strip() == SILENT
+        first_reply_to = reply_to
         if run_id:
             self._put(self.RUNS, run_id, None, cap=200)
-            await self.bot.manager_run_finished(run_id, chat=chat, reply_to=reply_to,
-                                                outcome="silent" if silent else ("failed" if failed else "completed"))
+        outcome = "silent" if silent else ("failed" if failed else "completed")
+
+        async def finish(sent: bool) -> None:
+            # tin tiến độ / icon ✅ CHỈ sau khi trả lời đã tới người (gửi lỗi hết → ❌, không giả "xong")
+            if run_id:
+                await self.bot.manager_run_finished(run_id, chat=chat, reply_to=first_reply_to, outcome=outcome if sent else "failed")
+
         if silent:
+            await finish(True)
             return
         api = self.bot.api()
         if api is None or str(chat) not in self.bot.notify_chats():
+            await finish(True)
             return
         from .media import extract_file_markers
 
         text, wanted = extract_file_markers(text)  # "deliverable mode": dòng `[[file: …]]` → gửi tệp sau phần chữ
         if wanted and not text.strip():
             text = "(gửi tệp kèm theo bên dưới)"
+        sent = False
         for msg in self.format_reply(text, agent=agent, notify=notify, failed=failed, chat=chat):
             try:
                 res = await self.bot._send(api, chat, msg, html=True, reply_to=reply_to)
             except Exception as e:
                 log.warning("không gửi được trả lời của điều phối viên: %s", clip(e))
+                await finish(sent)
                 return
-            reply_to = None
+            sent = True
+            if not keep_thread:
+                reply_to = None
             if conv and res.get("message_id") is not None:
                 self._put(self.MSGMAP, f"{chat}:{res['message_id']}", conv)
+        await finish(True)
         if conv:
             self._put(self.CONVCHAT, conv, str(chat))
         if wanted:
@@ -273,6 +293,9 @@ class ManagerChat:
             text = f"⚠️ Điều phối viên chưa trả lời được ({OUTCOME_VI.get(str(outcome), str(outcome))}). Thử gửi lại, hoặc xem chi tiết trên web."
         api = self.bot.api()
         if api is not None and str(meta.get("chat")) in self.bot.notify_chats():
+            from .base import thread_scope
+
+            thread_scope(meta.get("chat"), meta.get("reply_to"))
             try:
                 await self.bot._send(api, meta["chat"], text, reply_to=meta.get("reply_to"))
             except Exception as e:

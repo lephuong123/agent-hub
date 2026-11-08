@@ -273,3 +273,37 @@ thread của hội thoại đã tạo lịch (không biết thread → DM). Bậ
 → `manager.reply` mang `schedule_id` (lịch kind agent/task qua `ScheduleService._deliver`; kind manager qua `run_opts.schedule_id` →
 `ManagerService._finish_run`) được đăng thành tin MỚI ở kênh. `SlackBot.schedule_root_ok` đọc lịch từ DB (không tin payload): lịch còn sống
 và `deliver_to.channel` đúng kênh đó. Trả lời chat, duyệt, câu hỏi không đổi. Test: `tests/test_slack_schedule_root.py`.
+
+## Sửa: tag bot trong thread mà bot trả lời ra gốc kênh (2026-11-08)
+Nguồn rò (ngoài bản sửa trước): (1) `ManagerChat._deliver` bỏ `reply_to` sau phần đầu → trả lời dài phần 2+ lên gốc kênh; (2) tin hub
+không kèm `reply_to` khi đang xử lý tin trong thread (hướng dẫn "chưa có điều phối viên", lỗi `manager.chat`, `run.continue`, báo lỗi tệp,
+câu hỏi/modal…); (3) tệp `[[file:]]` tải lên không có `thread_ts`; (4) kết quả run theo dõi (`_report_run`) sau `run.continue` từ thread.
+- Chặn ở MỘT chỗ: `SlackBot._send`/`send_document` → `_thread_for`. Kênh chung (không phải DM) không có `reply_to` → thread của việc đang
+  xử lý (contextvar `chat/base._THREAD`, đặt bằng `thread_scope` ở `_on_message`/`_on_channel_message`/`_on_actions`, reset ở
+  `handle_envelope`); không có → `_off_root`: DM của người đang thao tác (`_UID`, nếu trong allowlist) hoặc bỏ + log. Không bao giờ gốc kênh,
+  trừ `_ROOT_POST` (chỉ `_deliver(root_ok=True)` = kết quả lịch đã qua `schedule_root_ok`).
+- Đường giao tin từ bus (không có context của handler, hoặc context đã chép của việc KHÁC) tự đặt lại thread: `_deliver` (`reply_to`),
+  `_no_reply`, `_report_run` + tiến độ `flows._progress` (`<bot>.watch_thread`: run_id → tin để trả lời, ghi ở `_watch` từ `_THREAD`,
+  run con resume/continue kế thừa).
+- `_deliver`: kênh không đăng gốc được (`root_post_ok` sai) → mọi phần giữ `reply_to`; Telegram / Slack DM giữ nguyên hành vi cũ.
+- Test: `tests/test_slack_thread_leak.py`.
+- `notify slack test` (`ChatBot.send_test`) là tin NGƯỜI bấm → đặt `_ROOT_POST` trong lúc gửi: vẫn tới gốc kênh chung như trước.
+
+## Rà soát 2026-11 — định tuyến thread, cắt section, 429 (2026-11-08)
+Test đỏ→xanh: `tests/test_slack_audit_fixes.py`.
+- `_candidates` GỘP RAM `_thread` + bản lưu `slack.threads` (bỏ trùng, ts mới nhất trước, gốc cuối): sau khởi động lại RAM chỉ có tin tag
+  mới → trước đây bỏ qua tin bot đã lưu → tag trong thread rơi vào cuộc hiện tại của kênh (của thread khác).
+- `_on_message`: tin trong thread KÊNH CHUNG mà `_on_thread_reply` không gắn được cuộc nào (tin lịch ở gốc kênh, msgmap đã bị cắt) →
+  `manager.new_conversation` trước `handle_text` (như `_on_channel_message`). DM không đổi.
+- `_on_mention` tag ở gốc kênh → `_remember(ts, ts)` ngay (RAM + `slack.threads`): thread được biết trước tin đầu của bot (chế độ
+  `manager_progress: false` không còn rơi tin nói tiếp không tag). Tag lần đầu trong thread lạ: khối ngữ cảnh đi qua `mgr_text`, `text`
+  giữ chữ người → tin chuyển tiếp có nhãn `Yêu cầu (tin tag bot): <chữ người>` (không còn `Yêu cầu: <khối ngữ cảnh>`).
+- Nhận subtype `thread_broadcast` ("gửi cả vào kênh") ở `_on_message`/`_on_channel_message`/`_thread_context` (`MSG_SUBTYPES`).
+- `_thread_context`: `conversations.replies` có `latest=<tin tag>&inclusive`, `oldest=<tin muộn nhất bot đã thấy>` (thread đã vào), theo
+  `next_cursor` ≤ `CTX_MAX_PAGES` trang, giữ cửa sổ `CTX_KEEP_MSGS` tin MỚI nhất (Slack trả tin CŨ trước — `limit` thôi thì mất tin mới).
+  Slack giả hỗ trợ `cursor`/`oldest`/`latest`/`inclusive`.
+- `render.split_sections`: dòng quá dài cắt ở dấu cách (nửa sau), lùi khỏi thực thể `&…;` dang dở và token `<…>`; phần tiếp của dòng trích
+  dẫn mang lại `> ` (chữ agent không thoát khỏi khung trích dẫn — WT-8).
+- `_send` → `_post`: 429 có `retry_after` ≤ 60 s → chờ (`self._sleep`, test thay) và thử lại ≤ 2 lần. `ManagerChat._deliver` gọi
+  `manager_run_finished` SAU khi gửi (✅ chỉ khi tin đã tới; gửi lỗi hết → outcome `failed` → ❌).
+- `_on_slash`: người ngoài `allowed_user_ids` (không phải tin ghép nối) bị bỏ + audit TRƯỚC `conversations.open`/ghi `slack.dms`.

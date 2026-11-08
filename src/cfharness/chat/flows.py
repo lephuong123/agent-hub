@@ -213,6 +213,9 @@ class ChatFlows:
             if pg is None or api is None:
                 return
             if pg["mid"] is None:
+                from .base import thread_scope
+
+                thread_scope(pg["chat"], self.bot.watch_thread(rid))  # listener bus: thread của việc đã giao run (Slack kênh chung)
                 res = await self.bot._send(api, pg["chat"], self._progress_text(rid, agent, pg), html=True)
                 pg["mid"] = res.get("message_id")
             else:

@@ -35,6 +35,20 @@ log = logging.getLogger("cfharness.chat")
 PENDING = ("open", "waiting_human")
 AGENT_FRAME = "▼ Agent viết:"  # tiền tố cố định (chữ hub) ngay trước `<pre>` nội dung agent — WT-8, rút gọn theo ux-plan §3.1
 _UID: contextvars.ContextVar[str | None] = contextvars.ContextVar("chat_from_id", default=None)
+# Thread của việc đang xử lý: (chat, tin để trả lời vào thread của nó). Slack (chat/slack/bot.py `_send`) dùng khi tin gửi vào kênh
+# chung không có `reply_to` — bot chỉ được nói trong thread đã tag nó. Đặt ở handler sự kiện Slack và ở các đường giao tin từ bus
+# (`thread_scope`). asyncio chép context lúc tạo task → tác vụ `_spawn` từ handler mang theo; listener bus phải tự đặt lại.
+_THREAD: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar("chat_thread", default=None)
+# Cho phép RÕ RÀNG đăng lên gốc kênh chung (chỉ kết quả lịch khi người bật `channel_root_posts` — `ManagerChat._deliver`).
+_ROOT_POST: contextvars.ContextVar[bool] = contextvars.ContextVar("chat_root_post", default=False)
+
+
+_FROM_CTX: Any = object()
+
+
+def thread_scope(chat: Any, reply_to: Any) -> None:
+    """Đặt thread của việc đang xử lý (`reply_to` None → xoá: không thừa hưởng thread của việc KHÁC qua context đã chép)."""
+    _THREAD.set((str(chat), str(reply_to)) if chat is not None and reply_to is not None else None)
 OUTCOME_VI = {
     "completed": "hoàn thành", "failed": "lỗi", "cancelled": "đã huỷ", "budget_exceeded": "vượt ngân sách", "timed_out": "quá giờ",
     "crashed": "tiến trình chết", "rate_limited": "bị giới hạn tốc độ", "blocked": "bị chặn", "protocol_violation": "vi phạm giao thức",
@@ -89,6 +103,7 @@ class ChatBot:
         self.hub = hub
         self.daemon: "Daemon | None" = None
         self.WATCH = f"{self.NAME}.watch"
+        self.WATCH_THREAD = f"{self.NAME}.watch_thread"  # run_id → tin để trả lời (thread của việc đã giao run)
         self.MSGMAP = f"{self.NAME}.msgmap"
         self.callbacks = CallbackStore(hub, self._callback_key, prefix=self.NAME)
         self.notifier = self._make_notifier()
@@ -204,10 +219,24 @@ class ChatBot:
         v = self.hub.store.state_get(key) or {}
         return v if isinstance(v, dict) else {}
 
-    def _watch(self, run_id: str, chat_id: Any) -> None:
+    def _watch(self, run_id: str, chat_id: Any, thread: Any = _FROM_CTX) -> None:
+        """Theo dõi run để báo kết quả vào `chat_id`. `thread`: tin để trả lời (Slack kênh chung: kết quả vào đúng thread) — không
+        truyền → thread của việc đang xử lý (`_THREAD`) nếu cùng chat."""
         w = self._state(self.WATCH)
         w[run_id] = str(chat_id)
         self.hub.store.state_set(self.WATCH, w)
+        if thread is _FROM_CTX:
+            ctx = _THREAD.get()
+            thread = ctx[1] if ctx and ctx[0] == str(chat_id) else None
+        if thread is not None:
+            th = self._state(self.WATCH_THREAD)
+            th[run_id] = str(thread)
+            for k in list(th)[: max(0, len(th) - 500)]:
+                th.pop(k, None)
+            self.hub.store.state_set(self.WATCH_THREAD, th)
+
+    def watch_thread(self, run_id: str) -> str | None:
+        return self._state(self.WATCH_THREAD).get(run_id)
 
     def _map_message(self, chat_id: Any, message_id: Any, run_id: str) -> None:
         m = self._state(self.MSGMAP)
@@ -235,7 +264,7 @@ class ChatBot:
             if parent and ev.run_id:
                 w = self._state(self.WATCH)
                 if parent in w:  # resume/continue sau duyệt hoặc gián đoạn → theo dõi tiếp run con
-                    self._watch(ev.run_id, w[parent])
+                    self._watch(ev.run_id, w[parent], self.watch_thread(parent))
         elif t in TERMINAL_RUN_EVENTS and ev.source == "hub" and ev.run_id and ev.run_id in self._state(self.WATCH):
             self._spawn(self._report_run(ev.run_id, t))
         elif t == "approval.resolved":
@@ -315,12 +344,16 @@ class ChatBot:
         if not chats:
             return {"sent": False, "chats": 0, "reason": self.empty_allowlist_hint()}
         n, errs = 0, []
-        for c in chats:
-            try:
-                await self._send(api, c, text)
-                n += 1
-            except Exception as e:
-                errs.append(f"{c}: {clip(e, 200)}")
+        tok = _ROOT_POST.set(True)  # tin thử do NGƯỜI bấm/gõ → được đăng ở gốc kênh chung (Slack), như trước khi chặn rò ra gốc kênh
+        try:
+            for c in chats:
+                try:
+                    await self._send(api, c, text)
+                    n += 1
+                except Exception as e:
+                    errs.append(f"{c}: {clip(e, 200)}")
+        finally:
+            _ROOT_POST.reset(tok)
         return {"sent": n > 0 and not errs, "chats": n, "reason": "; ".join(errs) or None}
 
     # ------------------------------------------------------------------ gọi hub thay mặt chat (cổng HUMAN_ONLY)
@@ -576,6 +609,7 @@ class ChatBot:
             return
         outcome = run.get("outcome") or run.get("status")
         api = self.api()
+        thread_scope(chat, self.watch_thread(run_id))  # listener bus: không thừa hưởng thread của việc khác
         if etype == "run.waiting_human" or outcome == "waiting_human":
             if api is not None:
                 await self._send(api, chat, f"⏸ {run.get('agent_id')} đang chờ bạn duyệt — xem tin duyệt hoặc gõ {self.cmd('approvals')}.")
