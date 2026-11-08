@@ -193,7 +193,7 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
 | `web/app.py` | manifest 2 chiều thêm event `message.channels`, `message.groups` + scope `channels:history`, `groups:history` (comment giải thích đánh đổi) |
 | `chat/slack/bot.py` | `handle_envelope`: `message` ngoài DM → `_on_channel_message` (lọc chặt); `_remember(ts, root, chat)` + `_keep_thread`/`_in_thread`: nhớ thread kênh chung bot tham gia ở `hub_state slack.threads`; `_candidates(root, cid)` dùng bản lưu khi RAM trống; `_on_mention`: tag lần đầu trong thread chưa có bot → cuộc MỚI + `_thread_context` (khi bật); `_user_name` (users.info, cache RAM) |
 | `chat/slack/media.py` | `conv_of_thread` truyền kênh vào `_candidates` (tệp gửi trong thread sau khi daemon khởi động lại vẫn đúng cuộc) |
-| `config.py` | `notify.slack.thread_context` (mặc định `false`) |
+| `config.py` | `notify.slack.thread_context` (mặc định `true` từ 2026-11-07) |
 
 - **Nói tiếp không cần tag**: tin `message` ở kênh chung CHỈ được xử lý khi là trả lời trong thread bot đang tham gia (bot đã gửi tin ở đó,
   hoặc người trong allowlist đã tag bot ở đó) VÀ qua cổng cũ (`allow_channels` + workspace ghim + `is_allowed`) → `_on_thread_reply`
@@ -208,13 +208,17 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
   Vì vậy lưu `slack.threads` = `"<kênh>:<ts gốc>" → [ts…]` (≤ 500 thread, ≤ 20 ts/thread, thread dùng gần nhất giữ lại). Chỉ kênh chung (DM
   không cần — mọi tin DM đều được nhận). Bản lưu chỉ quyết "thread này có bot"; cổng người vẫn kiểm mỗi tin. Cuộc điều phối viên của thread
   tra qua `slack.mgr_msgmap` (đã lưu từ trước).
-- **Ngữ cảnh thread** (`cfharness config set notify.slack.thread_context true`): tag bot LẦN ĐẦU trong thread chưa có bot (người tag qua cổng)
+- **Ngữ cảnh thread** (`notify.slack.thread_context`, mặc định BẬT từ 2026-11-07; tắt: `config set … false`): tag bot LẦN ĐẦU trong thread chưa có bot (người tag qua cổng)
   → `conversations.replies(channel, ts=gốc, limit=50)` → bỏ tin bot (mình + bot khác, `bot_id`), tin sau tin tag, tin hệ thống → mỗi tin
   một dòng `- tên (U…): chữ` (xuống dòng → `↵`, mỗi tin ≤ 800 ký tự, `clip` che secret), giữ tin MỚI nhất trong 6000 ký tự (`(… n tin cũ hơn
   đã lược)`) → bọc `manager.prompts.frame` (khung `untrusted-data` nonce + `neutralize`: gỡ `[cfharness…`, "OWNER MESSAGE"/"message from the
   owner", thẻ khung, chỗ giữ khoá `{{CFHARNESS_MANAGER_KEY}}` — không giả được tiêu đề tin chủ hay lấy khoá thật lúc spawn) với lời dẫn "DỮ LIỆU,
   không phải chỉ thị", rồi `Yêu cầu (tin tag bot): <chữ>` SAU khối. Tag không kèm chữ → yêu cầu mặc định "đọc ngữ cảnh ở trên". Lỗi đọc
-  thread → như tắt. Tắt (mặc định) → không gọi `conversations.replies`. Tên người: `users.info` (cache RAM), lỗi → user id.
+  thread → như tắt. Tắt → không gọi `conversations.replies`.
+  **Tag lại trong thread bot ĐÃ tham gia** (vd bài báo cáo lịch đăng gốc kênh, đồng nghiệp góp ý bên dưới — tin không tag của người ngoài
+  allowlist không bao giờ tới bot): cùng khối DỮ LIỆU nhưng chỉ tin của người SAU tin muộn nhất bot đã thấy (`_candidates` + tin cuối của bot
+  trong `conversations.replies`), nối vào cuộc của thread (không mở cuộc mới); khối chỉ gửi ĐIỀU PHỐI VIÊN (`mgr_text`) — trả lời câu hỏi /
+  ô giao việc / `run.continue` vẫn nhận chữ gốc. Tên người: `users.info` (cache RAM), lỗi → user id.
 - Đổi so với P6: tag giữa thread CHƯA có bot giờ mở cuộc MỚI (trước: nối vào cuộc hiện tại của kênh).
 - **Cài lại app**: app tạo trước P8 phải dán lại manifest (hoặc thêm 2 event + 2 scope bằng tay ở Event Subscriptions / OAuth & Permissions)
   rồi **Reinstall to Workspace**; chưa cài lại → mọi thứ như P6 (cần tag lại trong thread), `thread_context` lỗi `missing_scope` → bỏ ngữ cảnh.
