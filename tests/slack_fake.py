@@ -281,9 +281,12 @@ class FakeSlack:
             self._kick = True
 
     def user_message(self, channel: str, user: str, text: str, *, thread_ts: str | None = None, team: str | None = None,
-                     event_id: str | None = None, subtype: str | None = None, bot_id: str | None = None) -> str:
+                     event_id: str | None = None, subtype: str | None = None, bot_id: str | None = None,
+                     attachments: list[dict[str, Any]] | None = None) -> str:
         ts = self._ts()
         ev = {"type": "message", "channel": channel, "user": user, "text": text, "ts": ts, "channel_type": "im" if channel.startswith("D") else "channel"}
+        if attachments is not None:  # tin chuyển tiếp (Forward) như Slack thật: `attachments[].is_share`
+            ev["attachments"] = attachments
         if thread_ts:
             ev["thread_ts"] = thread_ts
         if subtype:
