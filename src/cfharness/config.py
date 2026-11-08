@@ -175,7 +175,7 @@ DEFAULTS: dict[str, Any] = {
             "allow_channels": True,  # tag bot trong kênh chung có bot (vẫn chỉ người ∈ allowed_user_ids + workspace ghim); tắt = chỉ DM
             "thread_followup": False,  # nói tiếp trong thread có bot KHÔNG cần tag (chỉ người đã tag; điều phối viên được im lặng)
             "channel_root_posts": False,  # kết quả LỊCH có deliver_to.channel = kênh chung này → đăng thành tin mới ở kênh (không vào thread)
-            "thread_context": False,  # P8: tag bot giữa thread chưa có bot → đọc tin trước đó (conversations.replies) làm ngữ cảnh DỮ LIỆU
+            "thread_context": True,  # P8: tag bot giữa thread (chưa có bot, hoặc bot đã tham gia → tin người khác sau tin cuối bot) → đọc tin trước đó (conversations.replies) làm ngữ cảnh DỮ LIỆU
             "slash_command": "/cfh",  # lệnh đăng ký trong manifest app (mỗi người một app → nên đặt riêng, vd /cfh-ten)
             "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp", "file"],
             "callback_ttl_s": 604800,

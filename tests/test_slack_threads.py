@@ -262,3 +262,38 @@ async def test_silent_reply_posts_nothing_and_removes_progress(make, sk):
     await until(lambda: [c for c in sk.calls_of("chat.delete") if c.get("ts") == mid])
     assert len(replies(sk, root)) == n  # không đăng trả lời
     assert rid not in (d.hub.store.state_get("slack.mgr_runs") or {})
+
+
+async def test_thread_context_known_thread_reads_others_since_bot(make, sk):
+    """Bot đã tham gia thread (vd bài báo cáo lịch) — đồng nghiệp ngoài allowlist góp ý bên dưới (không bao giờ tới bot); chủ tag bot
+    → điều phối viên nhận tin của người khác SAU tin cuối bot đã thấy, trong khối DỮ LIỆU, nối tiếp cuộc của thread."""
+    d = await mk(make, sk, ctx=True, follow=False)
+    root = await tagged_thread(d, sk)
+    conv1, before = conv_of(d), ids(d)
+    n_replies = len(sk.calls_of("conversations.replies"))
+    sk.history[CH].append({"type": "message", "user": STRANGER, "text": "đề xuất: chuyển báo cáo sang thứ Hai, thêm phần chi phí",
+                           "ts": sk._ts(), "thread_ts": root})
+    await deliver(sk, sk.mention(CH, BOSS, f"<@{BOT_USER}> làm theo đề xuất trên", thread_ts=root))
+    new = await until(lambda: [r for r in boss_runs(d) if r["id"] not in before])
+    p = owner_text(new[0]["prompt"])
+    assert len(sk.calls_of("conversations.replies")) == n_replies + 1
+    assert p.startswith("Ngữ cảnh thread Slack") and "sau tin cuối bot đã thấy" in p
+    assert "thêm phần chi phí" in p and STRANGER in p
+    assert "làm báo cáo tuần" not in p.split("Yêu cầu (tin tag bot):")[0]  # tin bot đã thấy không gửi lại
+    assert p.rstrip().endswith("Yêu cầu (tin tag bot): làm theo đề xuất trên")
+    assert conv_of(d) == conv1  # cùng cuộc của thread, không mở cuộc mới
+
+
+async def test_thread_context_known_thread_nothing_new_plain_text(make, sk):
+    d = await mk(make, sk, ctx=True, follow=False)
+    root = await tagged_thread(d, sk)
+    before = ids(d)
+    await deliver(sk, sk.mention(CH, BOSS, f"<@{BOT_USER}> thêm phần chi phí", thread_ts=root))
+    new = await until(lambda: [r for r in boss_runs(d) if r["id"] not in before])
+    assert owner_text(new[0]["prompt"]) == "thêm phần chi phí"  # không có tin mới của người khác → không khối ngữ cảnh
+
+
+def test_thread_context_default_on():
+    from cfharness.config import DEFAULTS
+
+    assert DEFAULTS["notify"]["slack"]["thread_context"] is True
