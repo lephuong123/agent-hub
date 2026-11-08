@@ -219,6 +219,10 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
   allowlist không bao giờ tới bot): cùng khối DỮ LIỆU nhưng chỉ tin của người SAU tin muộn nhất bot đã thấy (`_candidates` + tin cuối của bot
   trong `conversations.replies`), nối vào cuộc của thread (không mở cuộc mới); khối chỉ gửi ĐIỀU PHỐI VIÊN (`mgr_text`) — trả lời câu hỏi /
   ô giao việc / `run.continue` vẫn nhận chữ gốc. Tên người: `users.info` (cache RAM), lỗi → user id.
+- **Tin chuyển tiếp** (Forward / dán link tin Slack, 2026-11-08): Slack để nội dung ở `attachments[]` (`is_share`/`is_msg_unfurl`), `text`
+  chỉ là lời người chuyển tiếp — trước đây bị bỏ (tin không lời thì im lặng). `_shared_context` → khối DỮ LIỆU (`frame`, che secret, ≤ 5 tin
+  × 3000 ký tự, tên `author_name` hoặc `users.info`, tệp kèm chỉ ghi số lượng) trước `Yêu cầu: <lời>`; chỉ sau cổng người. Áp cho DM và tin tag
+  trong kênh (cùng `_on_message`). Test: `test_forward*` trong `tests/test_slack_threads.py`.
 - Đổi so với P6: tag giữa thread CHƯA có bot giờ mở cuộc MỚI (trước: nối vào cuộc hiện tại của kênh).
 - **Cài lại app**: app tạo trước P8 phải dán lại manifest (hoặc thêm 2 event + 2 scope bằng tay ở Event Subscriptions / OAuth & Permissions)
   rồi **Reinstall to Workspace**; chưa cài lại → mọi thứ như P6 (cần tag lại trong thread), `thread_context` lỗi `missing_scope` → bỏ ngữ cảnh.
