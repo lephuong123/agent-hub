@@ -86,32 +86,67 @@ Ghi chú:
 
 ## Bước 5 — Web public: tunnel Cloudflare
 
-Máy đã có `cloudflared` (`/opt/homebrew/bin/cloudflared`). Dùng **một tunnel chung** cho mọi user, mỗi user một hostname.
+Máy đã có `cloudflared` (`/opt/homebrew/bin/cloudflared`). cfharness dùng **tunnel RIÊNG `cfharness`** (đã tạo 2026-11-08, id
+`f9a56bcf-8698-4c3e-94f2-d45edba840a6`) — KHÔNG chung với `cchc-web`/`sangkien`. Một tunnel `cfharness` cho mọi user cfharness, mỗi user
+một hostname.
 
-```bash
-# (chỉ lần đầu cho cả máy)
-cloudflared tunnel login
-cloudflared tunnel create cfh-mini
+**DNS — tạo trong Cloudflare dashboard, KHÔNG dùng `cloudflared tunnel route dns`**: `~/.cloudflared/cert.pem` của máy thuộc zone
+`cchchn.com`, nên lệnh đó tạo nhầm `lamlinh.trungtamdhs.com.cchchn.com` (và đọc `config.yml` mặc định → gắn nhầm tunnel `sangkien`).
+Zone `trungtamdhs.com` → DNS → Add record:
 
-# mỗi user
-cloudflared tunnel route dns cfh-mini lamlinh.trungtamdhs.com
-```
+| Type | Name | Target | Proxy |
+|---|---|---|---|
+| CNAME | `lamlinh` | `f9a56bcf-8698-4c3e-94f2-d45edba840a6.cfargotunnel.com` | Proxied (mây cam) |
 
-Thêm vào `~/.cloudflared/config.yml` của admin (giữ các hostname của user khác, `http_status:404` luôn ở CUỐI):
+File cấu hình riêng `~/.cloudflared/cfharness-config.yml` của admin (thêm user mới = thêm một cặp hostname/service; `http_status:404`
+luôn ở CUỐI):
 
 ```yaml
-tunnel: cfh-mini
-credentials-file: /Users/phuonglq/.cloudflared/<uuid>.json
+tunnel: f9a56bcf-8698-4c3e-94f2-d45edba840a6
+credentials-file: /Users/phuonglq/.cloudflared/f9a56bcf-8698-4c3e-94f2-d45edba840a6.json
 ingress:
   - hostname: lamlinh.trungtamdhs.com
     service: http://127.0.0.1:8721
-  # - hostname: <user-khác>.trungtamdhs.com ...
+  # - hostname: <user-khác>.trungtamdhs.com
+  #   service: http://127.0.0.1:87k1
   - service: http_status:404
 ```
 
 ```bash
-sudo cloudflared service install          # lần đầu; lần sau đổi config → sudo launchctl kickstart -k system/com.cloudflare.cloudflared
+cloudflared tunnel --config ~/.cloudflared/cfharness-config.yml ingress validate
+cloudflared tunnel --config ~/.cloudflared/cfharness-config.yml ingress rule https://lamlinh.trungtamdhs.com   # → 127.0.0.1:8721
 ```
+
+Chạy tunnel bằng LaunchAgent riêng `~/Library/LaunchAgents/com.cfharness.tunnel.plist` (cùng kiểu `com.cchc.tunnel`; luôn chỉ rõ
+`--config` để không đọc nhầm `config.yml` mặc định):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.cfharness.tunnel</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/cloudflared</string><string>tunnel</string><string>--no-autoupdate</string>
+    <string>--config</string><string>/Users/phuonglq/.cloudflared/cfharness-config.yml</string>
+    <string>run</string><string>cfharness</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/phuonglq/Library/Logs/cfharness-tunnel.log</string>
+  <key>StandardErrorPath</key><string>/Users/phuonglq/Library/Logs/cfharness-tunnel.log</string>
+</dict>
+</plist>
+```
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cfharness.tunnel.plist     # lần đầu
+launchctl kickstart -k gui/$(id -u)/com.cfharness.tunnel                                  # sau khi sửa cfharness-config.yml
+cloudflared tunnel info cfharness                                                          # phải có connector
+```
+(LaunchAgent cần phiên đăng nhập của admin như các tunnel `cchc` hiện có. Muốn chạy cả khi admin không đăng nhập → chuyển thành
+LaunchDaemon `/Library/LaunchDaemons/` với `UserName=phuonglq`.)
 
 Khai báo origin public cho hub:
 

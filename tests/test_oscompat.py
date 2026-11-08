@@ -99,6 +99,7 @@ def test_long_hub_home_socket_falls_back_and_binds(tmp_path, monkeypatch):
     sock = _paths.HubPaths(home).socket
     assert str(sock).startswith("/tmp/") and len(str(sock)) <= 100
     assert _paths.HubPaths(home).socket == sock  # client và daemon tính giống nhau
+    _paths.ensure_socket_dir(sock)  # daemon tạo thư mục dự phòng 0700 trước khi bind (máy CI mới chưa có)
 
     async def main():
         server = await transport.start_server(lambda r, w: w.close(), sock, limit=1 << 16)

@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import stat
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -273,7 +274,9 @@ def test_classifier_write_outside_root_forbidden(cctx, fakehome, tmp_path):
     # không giam → hành vi cũ (destructive, duyệt được)
     plain = GuardContext(Path(cctx.confine_root), cctx.policy, git_probe=False)
     v = classify("Write", {"file_path": str(fakehome / "Workspace/du-an-B/x.py"), "content": "x"}, plain)
-    assert v.verdict == "destructive" and not v.forbidden
+    in_tmp = any(str(fakehome.resolve()).startswith(t.rstrip("/") + "/") for t in ("/tmp", "/private/tmp", os.path.realpath(tempfile.gettempdir())))
+    # không giam, ghi vào thư mục tạm = `write` như cũ (Linux: tmp_path nằm trong /tmp)
+    assert (v.verdict == "write") if in_tmp else (v.verdict == "destructive" and not v.forbidden)
     assert classify("Write", {"file_path": "src/new.py", "content": "x"}, cctx).verdict == "write"
     assert classify("Write", {"file_path": "/tmp/scratch.txt", "content": "x"}, cctx).verdict == "write"
 

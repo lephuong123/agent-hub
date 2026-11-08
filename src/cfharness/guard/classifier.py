@@ -901,6 +901,12 @@ def classify_file_write(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -
     # R2-1: ngoài workspace của run (+ tmp/add-dir) → chờ người (cùng mô hình sandbox Bash)
     roots = write_roots(ctx)
     inside = any(_under(c, r) for c in {ap, rp} for r in roots)
+    if inside and ctx.confine_root:
+        # P2: trong W nhưng ngoài cwd/extra_write_roots → vẫn hỏi người, kể cả khi W tình cờ nằm trong thư mục tạm (/tmp trên Linux)
+        cr = canon_path(str(ctx.confine_root))
+        own = [canon_path(str(ctx.cwd)), _real(str(ctx.cwd))] + [canon_path(r) for r in ctx.extra_write_roots]
+        if any(_under(c, cr) for c in {ap, rp}) and not any(_under(c, r.rstrip("/")) for c in {ap, rp} for r in own if r):
+            inside = False
     if ctx.confine_root and not _in_confine_write(ap, rp, ctx):
         # P2: ngoài W ∪ vùng làm việc hub → CẤM (trust/duyệt không mở được). Thư mục tạm vẫn được — trừ khi nằm trong vùng bị chặn ($HOME…)
         if not inside or any(_under(c, d) for c in {ap, rp} for d in ctx.confine_deny):
