@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .. import auth as _auth
-from .. import templates
+from .. import capacity, templates
 from ..errors import Blocked, HubError, NotFound
 from ..events import make_event
 from ..store import now_iso
@@ -142,6 +142,7 @@ class ManagerOps:
         for r in h.store.list_agents():
             agents.append({"id": r["id"], "name": r.get("name"), "role": r.get("role"), "description": (r.get("description") or "")[:240],
                            "model": r.get("model"), "status": r.get("status"), "cost_today_usd": round(h.store.cost_today(r["id"]), 4),
+                           "max_concurrent_runs": capacity.agent_limit(r), "free_slots": capacity.free_slots(h, r),
                            "manager": r["id"] == self.mid, "teams": self.svc.perms.teams_of(r["id"])})
         teams = [{"id": t["id"], "name": t.get("name"), "estop": bool(t.get("estop")), "counts": t.get("counts"),
                   "members": [{"agent_id": m.get("agent_id"), "role": m.get("role")} for m in t.get("members") or []]} for t in h.teams.list()]
@@ -155,7 +156,8 @@ class ManagerOps:
                 "open_tasks": open_tasks, "live_runs": runs, "approvals_waiting_human": aps,
                 "gates_mode": gates_mode(h.config),
                 "note": "Approvals with routed_to='manager' were delegated to YOU: decide them with approval_decide (or approval_escalate). "
-                        "All other approvals are decided ONLY by the human: use ask_owner_permission (approve_action) if one blocks progress."}
+                        "All other approvals are decided ONLY by the human: use ask_owner_permission (approve_action) if one blocks progress. "
+                        "An agent with free_slots=0 is busy: work sent to it waits. Send it to an idle agent of the same kind, or agent_clone one."}
 
     def op_agent_get(self, a: dict[str, Any]) -> dict[str, Any]:
         r = self.hub.agents.show(str(a.get("id") or ""))
@@ -274,6 +276,49 @@ class ManagerOps:
         return {"id": res.get("id"), "name": res.get("name"), "role": res.get("role"), "model": res.get("model"), "tool_policy": res.get("tool_policy"),
                 "mcp_servers": res.get("mcp_servers"), "config_revision": res.get("config_revision")}
 
+    async def op_agent_clone(self, a: dict[str, Any]) -> dict[str, Any]:
+        """Thêm một agent cùng loại khi agent đang bận: chép cấu hình (chỉ các trường điều phối viên được đặt — đi qua đúng cổng của
+        `agent_create`), SOUL và skill; mặc định vào mọi team của agent gốc cùng vai (lead → worker). Không chép memory."""
+        from pathlib import Path
+
+        from ..agents import _copy_tree
+        from .permissions import AGENT_FIELDS, TOOL_POLICY_FIELDS
+
+        src = str(a.get("src") or "").strip()
+        if not src:
+            raise HubError("agent_clone cần src (agent nguồn)")
+        if src in self.svc.perms.manager_ids():
+            self._denied("agent_clone", "agent.create", "không clone agent điều phối viên", a)
+        aid = str(a.get("id") or "").strip() or capacity.next_clone_id(self.hub, src)
+        row = self.hub.agents.get_row(src)
+        cfg = self.hub.agents.config_of(row).model_dump()
+        spec = {k: cfg[k] for k in AGENT_FIELDS if cfg.get(k) is not None}
+        tp = dict(spec.get("tool_policy") or {})
+        dropped = sorted(f"tool_policy.{k}" for k, v in tp.items() if k not in TOOL_POLICY_FIELDS and v not in (None, False, [], {}, ""))
+        spec["tool_policy"] = {k: v for k, v in tp.items() if k in TOOL_POLICY_FIELDS and v is not None}
+        # null trong limits = "bỏ giới hạn" — điều phối viên bị cấm đặt; bỏ trống để agent mới nhận mặc định/trần của hub
+        spec["limits"] = {k: v for k, v in dict(spec.get("limits") or {}).items() if v is not None}
+        spec["name"] = str(a.get("name") or aid)
+        home = Path(row["home_path"])
+        soul = (home / "SOUL.md").read_text(encoding="utf-8") if (home / "SOUL.md").exists() else None
+        out = await self.op_agent_create({"id": aid, "spec": spec, "soul": soul, "rationale": a.get("rationale") or f"clone of busy {src}"})
+        new_home = Path((self.hub.store.get_agent(aid) or {}).get("home_path") or "")
+        if new_home.name:
+            _copy_tree(home / "skills", new_home / "skills")
+        self.hub.store.update_agent(aid, {"cloned_from": src})
+        joined = []
+        if a.get("join_teams", True):
+            for team in self.svc.perms.teams_of(src):
+                m = self.hub.teams.member(team, src) or {}
+                role = "worker" if (m.get("role") or "worker") == "lead" else m.get("role")
+                await self.op_team_member_add({"team": team, "agent": aid, "role": role})
+                joined.append({"team": team, "role": role})
+        res = {**out, "cloned_from": src, "teams": joined}
+        if dropped:
+            res["not_copied"] = dropped
+            res["note"] = "owner-only settings were not copied; ask the owner if the clone needs them"
+        return res
+
     async def op_agent_update(self, a: dict[str, Any]) -> dict[str, Any]:
         from ..learning.ledger import Change
 
@@ -346,6 +391,30 @@ class ManagerOps:
         await self._rpc("team_restore", "team.restore", {"id": a.get("id")}, a, summary=f"khôi phục team {a.get('id')}")
         return {"id": a.get("id"), "restored": True}
 
+    # ------------------------------------------------------------------ agent bận → không xếp hàng lặng lẽ
+    def _busy_gate(self, op: str, a: dict[str, Any], agent: str, method: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        """Agent đích hết slot và người giao không nói rõ `if_busy='queue'` → KHÔNG giao, trả agent rảnh cùng loại + id gợi ý để clone.
+        Trước đây việc nằm `queued` sau run đang chạy trong khi agent cùng loại rảnh (người dùng dặn: bận thì tạo thêm agent).
+        Chạy SAU kiểm quyền: lời gọi sẽ bị từ chối (vd. giao cho điều phối viên) thì để `_rpc` từ chối + audit như cũ."""
+        if not agent or str(a.get("if_busy") or "").lower() == "queue":
+            return None
+        if self.svc.perms.check_rpc(self.caller, method, params) if method in _auth.MANAGER_ALLOWED else True:
+            return None
+        b = capacity.busy_info(self.hub, agent)
+        if b is None:
+            return None
+        alts = capacity.idle_alternatives(self.hub, agent, exclude=self.svc.perms.manager_ids())
+        clone_id = capacity.next_clone_id(self.hub, agent)
+        self._action(op, a, ok=False, error=f"agent_busy: {agent} đang chạy {b['active_runs']}/{b['max_concurrent_runs']} run — chưa giao")
+        return {
+            "started": False, "reason": "agent_busy", **b, "idle_alternatives": alts, "suggested_clone_id": clone_id,
+            "next": ("Nothing was queued. Do one of these now instead of waiting: "
+                     + ("(1) send it to an idle agent in idle_alternatives (prefer match=same_kind); " if alts else "")
+                     + f"(2) agent_clone src='{agent}' id='{clone_id}' and send it to the clone; "
+                     "(3) only when the work truly needs THIS agent (it must use the single shared Chrome session, or it needs this agent's "
+                     "own session/memory) call again with if_busy='queue' and tell the owner it is waiting."),
+        }
+
     async def op_task_create(self, a: dict[str, Any]) -> Any:
         t = {k: a[k] for k in ("title", "body", "team", "assignee", "role", "parents", "workspace", "priority", "budget_usd", "model", "decompose",
                                "extra_write_roots", "worktree") if a.get(k) is not None}
@@ -355,6 +424,10 @@ class ManagerOps:
             tm = self.svc.perms.teams_of(str(t["assignee"]))
             if len(tm) == 1:  # MGR-8: agent chỉ thuộc một team → gắn team đó; nhiều team → check_rpc từ chối, manager tự chọn
                 t["team"] = auto_team = tm[0]
+        if t.get("assignee") and not t.get("parents"):  # có task cha → còn chờ cha, lúc chạy agent có thể đã rảnh
+            busy = self._busy_gate("task_create", a, str(t["assignee"]), "task.create", {"task": t, "created_by": self.actor})
+            if busy is not None:
+                return busy
         res = await self._rpc("task_create", "task.create", {"task": t, "created_by": self.actor}, a,
                               summary=f"giao task '{str(a.get('title') or '')[:80]}' cho {a.get('assignee') or a.get('team')}")
         tr = dict(self.hub.store.state_get("manager_tracked") or {})
@@ -363,10 +436,24 @@ class ManagerOps:
         origin, guessed = self._target_conv()
         if origin and not guessed:  # kết quả task báo về đúng hội thoại (thread Slack) đã giao nó
             self.svc.remember_origin("task", res.get("id"), origin["id"])
+        warns = list(res.get("warnings") or [])
+        if auto_team:
+            warns.append(f"assignee is a member of team '{auto_team}' — task attached to that team (pass team= yourself next time)")
+        if t.get("team") and not t.get("assignee") and not t.get("parents") and not self._team_has_free_worker(str(t["team"])):
+            warns.append(f"every worker of team '{t['team']}' is busy, so this task waits: agent_clone one of them (it joins the team) "
+                         "so the task starts now")
         return {"task_id": res.get("id"), "status": res.get("status"), "team_id": res.get("team_id"), "assignee": res.get("assignee_agent_id"),
-                "warnings": (res.get("warnings") or []) + ([f"assignee is a member of team '{auto_team}' — task attached to that team "
-                                                           "(pass team= yourself next time)"] if auto_team else []),
+                "warnings": warns,
                 "next": "follow it with task_get until status is done"}
+
+    def _team_has_free_worker(self, team: str) -> bool:
+        for m in self.hub.teams.members(team):
+            if m.get("role") == "lead" or m.get("agent_archived_at"):
+                continue
+            row = self.hub.store.get_agent(m["agent_id"])
+            if row and row.get("status") != "paused" and capacity.free_slots(self.hub, row) > 0:
+                return True
+        return False
 
     async def op_task_cancel(self, a: dict[str, Any]) -> Any:
         return await self._rpc("task_cancel", "mcp.cancel_task", {"task_id": a.get("id"), "reason": a.get("reason")}, a, summary=f"huỷ task {a.get('id')}")
@@ -383,6 +470,9 @@ class ManagerOps:
     async def op_run_start(self, a: dict[str, Any]) -> Any:
         p = {k: a[k] for k in ("agent", "prompt", "cwd", "budget_usd", "model") if a.get(k) is not None}
         p["budget_usd"] = self._clamp_budget(p.get("budget_usd"))
+        busy = self._busy_gate("run_start", a, str(a.get("agent") or ""), "run.start", p)
+        if busy is not None:
+            return busy
         res = await self._rpc("run_start", "run.start", p, a, summary=f"chạy {a.get('agent')}: {str(a.get('prompt') or '')[:80]}")
         tr = dict(self.hub.store.state_get("manager_tracked") or {})
         tr["runs"] = (list(tr.get("runs") or []) + [res.get("id")])[-200:]

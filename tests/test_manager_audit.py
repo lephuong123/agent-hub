@@ -183,7 +183,7 @@ async def test_mgr6_budget_model_effort_clamped_to_config_bounds(env):
     # F4d: run/task do manager giao: budget kẹp
     r = await tool(d, rid, "run_start", {"agent": "w", "prompt": "x", "budget_usd": 1000})
     assert d.hub.store.get_run(r["run_id"])["max_budget_usd"] <= 5.0
-    t = await tool(d, rid, "task_create", {"title": "t", "body": "b", "assignee": "w"})
+    t = await tool(d, rid, "task_create", {"title": "t", "body": "b", "assignee": "w", "if_busy": "queue"})  # w có thể còn chạy run trên
     assert d.hub.tasks.row(t["task_id"])["overrides"]["budget_usd"] == 5.0
     with pytest.raises(HubError):  # lớp 2: gọi thẳng không budget → từ chối
         await rpc(d, "run.start", {"agent": "w", "prompt": "x", "budget_usd": 1000}, as_caller=auth.manager_caller("boss", res["run_id"]))

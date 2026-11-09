@@ -243,6 +243,8 @@ _O = {"type": "object"}
 _A = {"type": "array", "items": _S}
 _RO = {"readOnlyHint": True}
 _LIM = {"type": "integer", "minimum": 1, "maximum": 100}
+_IF_BUSY = {"type": "string", "enum": ["fail", "queue"],
+            "description": "target agent already running at its limit: fail (default) = nothing is queued, you get idle agents of the same kind + a clone id; queue = wait behind its current run (only when the work needs THIS agent, e.g. the single shared Chrome session)"}
 _DENIED = (" Anything outside your authority is refused by cfharness with a reason: never try another way — if the owner can grant it, use "
            "ask_owner_permission; otherwise tell the owner.")
 
@@ -281,6 +283,10 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                        "web_allow_domains: [domain globs] limiting WebFetch (null = any; on existing agents you can only narrow it)}, mcp_servers, limits, "
                        "workspace_default}. soul = full SOUL.md in English (optional). Write a precise `description`: tasks are routed by it." + _DENIED,
                        {"id": _S, "template": _S, "spec": _O, "soul": _S, "rationale": _S}, ["id"]),
+    "agent_clone": _t("Add another agent of the same kind when one is busy: copies src's config (fields you may set), SOUL and skills "
+                      "(not memory) into a new agent id (default: next free <src>-N) and adds it to src's teams with the same role "
+                      "(lead → worker). Then send the work to the clone." + _DENIED,
+                      {"src": _S, "id": _S, "name": _S, "join_teams": {"type": "boolean"}, "rationale": _S}, ["src"]),
     "agent_update": _t("Change another agent: changes = subset of {name, role, description, model, effort, fallback_model, tool_policy, mcp_servers, "
                        "limits, workspace_default}; soul = full new SOUL.md. Recorded in the ledger (rollback-able). You can ADD disallowed tool "
                        "patterns but never remove ones the human set." + _DENIED, {"id": _S, "changes": _O, "soul": _S, "rationale": _S}, ["id"]),
@@ -299,8 +305,9 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                       "to an agent (assignee). If the assignee belongs to a team, pass that team too (team + assignee) so the run gets the team's "
                       "charter and policies; it is attached automatically when the agent is in exactly one team and refused when in several. "
                       "parents = task ids it waits for (DAG). workspace = absolute path of a repo/dir (or 'scratch'). "
-                      "Follow it with task_get/task_list until done.",
-                      {"title": _S, "body": _S, "team": _S, "assignee": _S, "role": _S, "parents": _A, "workspace": _S, "priority": {"type": "integer"},
+                      "Follow it with task_get/task_list until done. A busy assignee (no free slot, no parents) is refused with "
+                      "reason=agent_busy unless if_busy='queue'.",
+                      {"title": _S, "body": _S, "team": _S, "assignee": _S, "if_busy": _IF_BUSY, "role": _S, "parents": _A, "workspace": _S, "priority": {"type": "integer"},
                        "budget_usd": {"type": "number"}, "model": _S, "decompose": {"type": "boolean"},
                        "extra_write_roots": {"type": "array", "items": _S, "maxItems": 5,
                                              "description": "extra absolute dirs (inside the allowed workspace roots) the task may write without "
@@ -317,8 +324,9 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                       "way to the owner.", {"id": _S, "reason": _S}, ["id"]),
     "task_retry": _t("Retry a blocked/failed task.", {"id": _S}, ["id"]),
     "task_comment": _t("Comment on a task (steer=true also sends it to the task's running run).", {"id": _S, "text": _S, "steer": {"type": "boolean"}}, ["id", "text"]),
-    "run_start": _t("Start an ad-hoc run of another agent with a prompt (optional cwd, budget_usd, model).",
-                    {"agent": _S, "prompt": _S, "cwd": _S, "budget_usd": {"type": "number"}, "model": _S}, ["agent", "prompt"]),
+    "run_start": _t("Start an ad-hoc run of another agent with a prompt (optional cwd, budget_usd, model). A busy agent is refused with "
+                    "reason=agent_busy (idle_alternatives + suggested_clone_id) unless if_busy='queue'.",
+                    {"agent": _S, "prompt": _S, "cwd": _S, "budget_usd": {"type": "number"}, "model": _S, "if_busy": _IF_BUSY}, ["agent", "prompt"]),
     "run_steer": _t("Send a message into another agent's running run.", {"id": _S, "text": _S}, ["id", "text"]),
     "run_stop": _t("Stop another agent's run.", {"id": _S}, ["id"]),
     "learn_propose": _t("Propose a knowledge/config change for ANOTHER agent through the learning pipeline (guard + eval + canary): "

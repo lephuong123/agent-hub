@@ -271,9 +271,20 @@ class IntegrationRpc:
             if run:
                 prev["status"] = run["status"]
             return prev
+        from .. import capacity
+
+        busy = capacity.busy_info(self.hub, str(_req(p, "agent")))
         run = self.hub.runs.submit(
             _req(p, "agent"), _req(p, "prompt"), cwd=p.get("cwd"), budget_usd=p.get("budget_usd"), model=p.get("model")
         )
+        warnings: list[str] = []
+        if busy is not None:  # trước đây chỉ trả `queued`, người gọi không biết run đang xếp sau run khác của agent
+            alts = [x["id"] for x in capacity.idle_alternatives(self.hub, busy["agent"])]
+            warnings.append(
+                f"agent '{busy['agent']}' is busy ({busy['active_runs']}/{busy['max_concurrent_runs']} runs: "
+                + ", ".join(x["run_id"] for x in busy["busy_with"]) + "), so this run waits behind them"
+                + (f"; idle agents of the same kind: {', '.join(alts)}" if alts else f"; no idle agent of the same kind — clone one (e.g. {capacity.next_clone_id(self.hub, busy['agent'])})")
+            )
         out = {
             "run_id": run["id"],
             "agent_id": run["agent_id"],
@@ -282,6 +293,7 @@ class IntegrationRpc:
             "epoch": run.get("epoch"),
             "after_seq": run.get("seq_before"),
             "idempotent_replay": False,
+            **({"warnings": warnings} if warnings else {}),
         }
         self._idem_put("run", key, "mcp.run", out)
         return out
