@@ -65,6 +65,8 @@ class ManagerStub:
         return {"conversation_id": cid, "run_id": run["id"]}
 
     def conversations(self, p: dict[str, Any]) -> list[dict[str, Any]]:
+        if p.get("archived"):  # stub không lưu trữ hội thoại
+            return []
         ch = p.get("channel")
         rows = [{k: v for k, v in c.items() if k != "messages"} | {"messages": len(c["messages"])} for c in self.convs.values()
                 if not ch or c["channel"] == ch]

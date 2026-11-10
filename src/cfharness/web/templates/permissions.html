@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Quyền đã cấp{% endblock %}
+{% block content %}
+<div class="page-head"><div class="ph-title"><h1>Quyền đã cấp</h1><span class="sub">Mọi chỗ bạn đã nới rào chắn cho agent — xem và gỡ ở một nơi. Gỡ quyền có hiệu lực ngay với guard; ngoại lệ sandbox áp từ run kế tiếp.</span></div></div>
+<div class="banner info">{{ m.icon('shield') }}<span>Cổng duyệt: <b>{{ {'human': 'người duyệt', 'manager': 'điều phối viên duyệt', 'off': 'TẮT'}.get(gates, gates) }}</b>{% if profile %} · hồ sơ phê duyệt <b>{{ profile }}</b>{% endif %} · đổi ở <a href="/settings">Cài đặt</a>. Chỉ người (web/CLI/chat của bạn) thay đổi được các quyền dưới đây — điều phối viên và agent thì không.</span></div>
+
+<section class="card flush" id="perm-trust">
+  <h2 class="pad">{{ m.icon('alert') }} Trust full theo agent</h2>
+  <p class="muted small pad">Agent trust full: hub cho phép MỌI tool call (kể cả vùng dữ liệu/chính sách của hub), run mới không sandbox OS. ESTOP vẫn chặn. Mặc định cho agent mới: <b>{{ 'trust full' if trust_new == 'full' else 'không' }}</b> (<code>guard.trust_new_agents</code>, đổi ở Cài đặt).</p>
+  {% if not trust %}{{ m.empty("Không agent nào đang trust full.", "shield", title="Không có") }}{% else %}
+  <table class="tbl stack">
+    <thead><tr><th>Agent</th><th>Hết hạn</th><th>Đặt bởi</th><th class="actions"><span class="sr-only">Thao tác</span></th></tr></thead>
+    <tbody>{% for aid, t in trust %}<tr id="trust-{{ aid }}">
+      <td data-label="Agent"><a href="/agents/{{ aid }}">{{ aid }}</a> <span class="pill danger">TRUST</span></td>
+      <td data-label="Hết hạn">{% if t.until %}{{ t.until|ts }}{% else %}không hạn{% endif %}</td>
+      <td data-label="Đặt bởi">{{ t.by or '—' }}{% if t.channel %} · {{ t.channel }}{% endif %}{% if t.at %} · {{ m.rel(t.at) }}{% endif %}</td>
+      <td class="actions">{{ m.act("perm_trust_off", "Tắt trust", {"agent": aid}, "btn sm danger", confirm="Tắt trust full của agent " ~ aid ~ "? Guard áp lại ngay.", next="/permissions", ic="x") }}</td>
+    </tr>{% endfor %}</tbody>
+  </table>{% endif %}
+</section>
+
+<section class="card flush" id="perm-grants">
+  <h2 class="pad">{{ m.icon('check') }} Không hỏi lại theo luật</h2>
+  <p class="muted small pad">Agent không bị hỏi duyệt lại khi thao tác khớp luật này (kể cả phá huỷ), ở mọi task/run. Tạo khi duyệt bằng «Luôn cho phép luật này».</p>
+  {% if not grants %}{{ m.empty("Chưa cho phép luật nào.", "check", title="Không có") }}{% else %}
+  <table class="tbl stack">
+    <thead><tr><th>Agent</th><th>Luật</th><th>Hết hạn</th><th>Đặt bởi</th><th class="actions"><span class="sr-only">Thao tác</span></th></tr></thead>
+    <tbody>{% for g in grants %}<tr id="grant-{{ g.agent_id }}-{{ g.rule }}">
+      <td data-label="Agent"><a href="/agents/{{ g.agent_id }}">{{ g.agent_id }}</a></td>
+      <td data-label="Luật"><code>{{ g.rule }}</code>{% if g.approval_id %}<div class="muted small">từ yêu cầu {{ g.approval_id }}</div>{% endif %}</td>
+      <td data-label="Hết hạn">{% if g.until %}{{ g.until|ts }}{% else %}không hạn{% endif %}</td>
+      <td data-label="Đặt bởi">{{ g.by or '—' }}{% if g.channel %} · {{ g.channel }}{% endif %}{% if g.at %} · {{ m.rel(g.at) }}{% endif %}</td>
+      <td class="actions">{{ m.act("perm_grant_rm", "Gỡ", {"agent": g.agent_id, "rule": g.rule}, "btn sm", confirm="Gỡ cho phép theo luật " ~ g.rule ~ " của " ~ g.agent_id ~ "? Thao tác khớp luật này lại chờ duyệt.", next="/permissions", ic="x") }}</td>
+    </tr>{% endfor %}</tbody>
+  </table>{% endif %}
+</section>
+
+<section class="card flush" id="perm-always">
+  <h2 class="pad">{{ m.icon('star') }} Luật luôn cho phép</h2>
+  <p class="muted small pad">Luật hẹp tạo khi duyệt bằng «Luôn cho phép»: đúng một thao tác, một tên miền web, hoặc một tool MCP của một agent. Gỡ = vô hiệu hoá (giữ lịch sử).</p>
+  {% if not always %}{{ m.empty("Chưa có luật luôn cho phép nào đang bật.", "star", title="Không có") }}{% else %}
+  <table class="tbl stack">
+    <thead><tr><th>Luật</th><th>Loại</th><th>Tạo</th><th class="actions"><span class="sr-only">Thao tác</span></th></tr></thead>
+    <tbody>{% for r in always %}<tr id="always-{{ r.id }}">
+      <td data-label="Luật">{{ r._view }}<div class="muted small"><span class="id">{{ r.id }}</span>{% if r.preview %} · <code>{{ r.preview|first(100) }}</code>{% endif %}</div></td>
+      <td data-label="Loại">{{ always_kind.get(r.kind, r.kind) }}</td>
+      <td data-label="Tạo">{{ r.by or '—' }}{% if r.channel %} · {{ r.channel }}{% endif %}{% if r.created_at %} · {{ m.rel(r.created_at) }}{% endif %}{% if r.approval_id %}<div class="muted small">từ yêu cầu {{ r.approval_id }}</div>{% endif %}</td>
+      <td class="actions">{{ m.act("perm_always_rm", "Gỡ", {"id": r.id, "summary": r._view}, "btn sm", confirm="Gỡ luật luôn cho phép " ~ r.id ~ "? Lần sau gặp thao tác này hub lại hỏi duyệt.", next="/permissions", ic="x") }}</td>
+    </tr>{% endfor %}</tbody>
+  </table>{% endif %}
+  {% if always_off %}<details class="pad small"><summary class="muted">Đã gỡ ({{ always_off|length }} gần nhất)</summary><ul>{% for r in always_off %}<li><span class="id">{{ r.id }}</span> — {{ r._view }} · gỡ {{ r.disabled_at|ts }} bởi {{ r.disabled_by or '—' }}</li>{% endfor %}</ul></details>{% endif %}
+</section>
+
+<section class="card flush" id="perm-sandbox">
+  <h2 class="pad">{{ m.icon('plug') }} Ngoại lệ sandbox theo agent</h2>
+  <p class="muted small pad">Mở localhost, domain mạng cho Bash, hoặc tin một host dev (WebFetch/Chrome tới IP nội bộ). Áp dụng từ run kế tiếp.</p>
+  {% if not sandbox %}{{ m.empty("Không agent nào có ngoại lệ sandbox.", "plug", title="Không có") }}{% else %}
+  <table class="tbl stack">
+    <thead><tr><th>Agent</th><th>Ngoại lệ</th><th>Đặt bởi</th><th class="actions"><span class="sr-only">Thao tác</span></th></tr></thead>
+    <tbody>{% for x in sandbox %}<tr>
+      <td data-label="Agent"><a href="/agents/{{ x.agent_id }}">{{ x.agent_id }}</a></td>
+      <td data-label="Ngoại lệ">{{ {'localhost': 'Localhost', 'domain': 'Domain mạng', 'dev_host': 'Host dev tin cậy'}[x.kind] }}: <code>{{ x.value }}</code></td>
+      <td data-label="Đặt bởi">{{ x.by or '—' }}{% if x.channel %} · {{ x.channel }}{% endif %}{% if x.at %} · {{ m.rel(x.at) }}{% endif %}</td>
+      <td class="actions">{% if x.kind == 'localhost' %}{{ m.act("perm_localhost_off", "Tắt", {"agent": x.agent_id}, "btn sm", confirm="Tắt ngoại lệ localhost của " ~ x.agent_id ~ "?", next="/permissions", ic="x") }}
+        {% elif x.kind == 'dev_host' %}{{ m.act("perm_dev_host_rm", "Gỡ", {"agent": x.agent_id, "value": x.value}, "btn sm", confirm="Bỏ tin host dev " ~ x.value ~ " của " ~ x.agent_id ~ "?", next="/permissions", ic="x") }}
+        {% else %}{{ m.act("perm_domain_rm", "Gỡ", {"agent": x.agent_id, "value": x.value}, "btn sm", confirm="Gỡ domain " ~ x.value ~ " khỏi ngoại lệ mạng của " ~ x.agent_id ~ "?", next="/permissions", ic="x") }}{% endif %}</td>
+    </tr>{% endfor %}</tbody>
+  </table>{% endif %}
+</section>
+
+<section class="card flush" id="perm-protected">
+  <h2 class="pad">{{ m.icon('shield') }} Tài nguyên bảo vệ</h2>
+  <p class="muted small pad">Thao tác của agent lên các đích này luôn chờ bạn duyệt. Mục mặc định của hub không gỡ được. Gỡ một mục là NỚI quyền nên cần xác nhận 2 lần.</p>
+  <table class="tbl stack">
+    <thead><tr><th>Đích</th><th>Loại</th><th>Bảo vệ khỏi</th><th>Ghi chú</th><th class="actions"><span class="sr-only">Thao tác</span></th></tr></thead>
+    <tbody>{% for r in protected %}<tr id="prot-{{ r.id }}">
+      <td data-label="Đích"><code>{{ r.selector }}</code><div class="muted small"><span class="id">{{ r.id }}</span>{% if r.builtin %} · <span class="pill muted">mặc định</span>{% endif %}</div></td>
+      <td data-label="Loại">{{ r.kind }}</td>
+      <td data-label="Bảo vệ khỏi">{{ (r.ops_protected or [])|join(', ') }}</td>
+      <td data-label="Ghi chú">{{ r.note or '' }}</td>
+      <td class="actions">{% if not r.builtin %}{{ m.act("perm_protect_rm", "Gỡ…", {"id": r.id, "selector": r.selector, "kind": r.kind}, "btn sm ghost danger-t", confirm="Gỡ tài nguyên bảo vệ " ~ r.selector ~ "? (bước 2 nêu rõ hệ quả)", next="/permissions", ic="trash") }}{% endif %}</td>
+    </tr>{% else %}<tr><td colspan="5" class="muted">Chưa có tài nguyên bảo vệ.</td></tr>{% endfor %}</tbody>
+  </table>
+  <form method="post" action="/do/perm_protect_add" class="form pad" id="perm-protect-add" data-confirm="Thêm tài nguyên bảo vệ? Thao tác của agent lên đích này sẽ luôn chờ bạn duyệt.">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/permissions">
+    <div class="fgrid">
+      <label>Loại <select name="kind">{% for k, label in kinds %}<option value="{{ k }}">{{ label }}</option>{% endfor %}</select></label>
+      <label>Đích <input name="selector" required placeholder="vd ~/Workspace/du-an/.env hoặc **/secrets/**" spellcheck="false"></label>
+      <fieldset class="span2"><legend>Bảo vệ khỏi</legend>{% for k, label in ops %}<label class="inline"><input type="checkbox" name="ops" value="{{ k }}" checked> {{ label }}</label> {% endfor %}</fieldset>
+      <label class="span2">Ghi chú (tuỳ chọn) <input name="note" maxlength="200"></label>
+    </div>
+    <div class="row end"><button class="btn" type="submit">{{ m.icon('plus') }}<span>Thêm tài nguyên bảo vệ</span></button></div>
+  </form>
+</section>
+{% endblock %}

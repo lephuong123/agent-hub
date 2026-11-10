@@ -116,9 +116,9 @@ Toàn bộ `uv run pytest -q`: **789 passed, 1 skipped** (trước thay đổi: 
 - Lỡ lượt: Hermes chạy bù theo receipt; ở đây chạy bù tối đa 1 lần trong `catchup_grace_s`.
 
 ## Việc dở
-- Web chưa có màn lịch (phiên web đang sửa `web/`): cần trang danh sách + nút tạm dừng/bật lại (ACTIONS có `confirm`), và hiển thị tin
-  role `schedule` trong hội thoại (hiện `present.mgr_message`/`chatview` bỏ qua role lạ — chỉ thấy trả lời).
-- Telegram chỉ đọc (`/lich`); nút tạm dừng/bật lại phải theo khung 2 bước của bot.
-- `schedule.update` của người không đổi `kind` ↔ đích phức tạp ngoài tham số đã có; chưa có `--clear` cho deliver_to.
+- ~~Web chưa có màn lịch; tin role `schedule` không hiện~~ — đã có `/schedules` (`web-extra-pages.md`), sửa lịch + lịch sử lượt
+  `/schedules/{id}`, tin `schedule` hiện thành dòng hệ thống (`web-permissions.md` #5).
+- ~~Telegram chỉ đọc (`/lich`)~~ — `/lich` (Telegram + Slack) có nút tạm dừng (một chạm) / bật lại (2 bước) ở tin riêng.
+- `schedule.update` của người không đổi `kind` ↔ đích phức tạp ngoài tham số đã có; ~~chưa có `--clear` cho deliver_to~~ — `schedule edit --clear-to`.
 - `last_status` của kind manager phụ thuộc outcome run (không đọc nội dung trả lời).
 - Ước tính $/ngày dùng `budget_usd` (trần), không dùng chi phí thật trung bình.

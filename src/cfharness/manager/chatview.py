@@ -83,6 +83,8 @@ def history_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         if m["kind"] == "user":
             out.append({"kind": "user", "text": m["text"], "ts": m.get("ts"), "run_id": m.get("run_id")})
+        elif m["kind"] == "note":  # tin hệ thống của hub (vd lịch chạy bắn vào hội thoại — role `schedule`)
+            out.append({"kind": "note", "text": m["text"], "ts": m.get("ts"), "run_id": m.get("run_id")})
         else:
             out.append({"kind": "notify" if m.get("notify") else "manager", "text": m["text"], "ts": m.get("ts"),
                         "ok": not str(m["text"] or "").startswith(FAIL_PREFIX), "run_id": m.get("run_id")})
@@ -94,7 +96,7 @@ def timeline(rows: list[dict[str, Any]], action_events: list[dict[str, Any]]) ->
     items = history_items(rows)
     runs = {r.get("run_id") for r in rows if isinstance(r, dict) and r.get("run_id")}
     acts = [mgr_action_item(e) for e in action_events if e.get("type") == "manager.action" and e.get("run_id") in runs]
-    order = {"user": 0, "action": 1, "approval": 1, "manager": 2, "notify": 2}
+    order = {"user": 0, "note": 0, "action": 1, "approval": 1, "manager": 2, "notify": 2}
     return sorted(items + acts, key=lambda it: (str(it.get("ts") or ""), order.get(str(it.get("kind")), 3)))
 
 

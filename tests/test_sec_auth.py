@@ -346,7 +346,10 @@ async def test_socket_caller_without_token_denied_even_if_not_in_run(home):
 
 def test_human_only_covers_sensitive_surface():
     for m in ("approval.approve", "approval.deny", "guard.protect.add", "guard.protect.rm", "config.set", "learn.propose", "learn.rollback",
-              "learn.retry", "learn.refine", "agent.update", "golden.add", "golden.rm", "learn.policy_set", "secret.set", "mcp.add", "estop.set"):
+              "learn.retry", "learn.refine", "agent.update", "golden.add", "golden.rm", "learn.policy_set", "secret.set", "mcp.add", "estop.set",
+              # web "Quyền đã cấp" / lịch / hội thoại điều phối viên (#3 #5 #7)
+              "guard.grant.rm", "guard.trust.set", "guard.sandbox.allow_domain", "guard.sandbox.dev_host", "schedule.update",
+              "manager.archive", "manager.unarchive", "manager.tick"):
         assert m in auth.HUMAN_ONLY, m
     assert "guard.check" not in auth.HUMAN_ONLY and "taskself.call" not in auth.HUMAN_ONLY  # hook/hub-self không bị chặn
 

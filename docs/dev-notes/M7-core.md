@@ -124,7 +124,8 @@ Tổng chi phí nghiệm thu: **$0.025** (gồm 2 review fork của vòng học)
 
 ## 6. Việc dở / gợi ý
 - Notifier Slack/Telegram cho `manager.reply{kind=notify}` khi người không mở web/chat (MGR-UI lo Telegram cho hội thoại `telegram:*`).
-- Hội thoại `archive`/xoá; giới hạn chi phí ngày riêng cho manager (hiện dùng `limits.budget_usd_per_day` của agent).
+- ~~Hội thoại `archive`~~ — `manager.archive|unarchive` (`web-permissions.md` #7); xoá cứng chưa có. Giới hạn chi phí ngày riêng cho manager
+  (hiện dùng `limits.budget_usd_per_day` của agent).
 
 ## 7. Sửa theo kiểm toán bảo mật (`docs/acceptance/security-manager.md`) — phần MGR-CORE
 Test: `tests/test_manager_audit.py` (kịch bản F* của kiểm toán). **Đỏ đã kiểm**: plugin tắt từng cơ chế mới (`is_issued`→True,

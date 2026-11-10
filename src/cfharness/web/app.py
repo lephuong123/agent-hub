@@ -983,6 +983,7 @@ class Action:
     note: str | None = None  # nhãn ô ghi chú trong hộp xác nhận (vd lý do từ chối)
     secret_fields: tuple[str, ...] = ()  # trường mang giá trị bí mật — KHÔNG đưa sang trang xác nhận
     call: Callable[[Request, dict[str, Any]], Awaitable[Any]] | None = None  # thao tác nhiều RPC (mặc định: một RPC `method`)
+    step2: Callable[[FormData], str] | str | None = None  # bước 2 BẮT BUỘC (thao tác NỚI quyền) — trang xác nhận lần 2 nêu rõ hệ quả
 
 
 def _run_goto(res: Any, form: FormData) -> str | None:
@@ -1284,6 +1285,9 @@ async def plan_action(request: Request, name: str, form: FormData, act: Action) 
         fields = [(k, v) for k, v in carry(form) if k not in act.secret_fields]  # giá trị secret không vào HTML
         return Plan("confirm", act, params, message=msg + ("\n(Nhập lại giá trị ở trang Cài đặt và tích ô xác nhận.)" if act.secret_fields else ""),
                     fields=fields)
+    if act.step2 and form.get("confirm2") != "yes":
+        # thao tác nới quyền (vd gỡ tài nguyên bảo vệ — web/perm_pages.py): bước 2 nêu rõ hệ quả, như "luôn cho phép"
+        return Plan("step2", act, params, kind="generic", message=act.step2(form) if callable(act.step2) else act.step2, fields=carry(form))
     if name == "approve_always" and form.get("confirm2") != "yes":
         # bước 2 BẮT BUỘC: trang nói rõ luật sẽ tạo (agent + tool + dấu vân tay / agent + host) — `always_offer` do daemon tính
         try:
@@ -1326,6 +1330,9 @@ async def do_action(request: Request) -> Response:
     if plan.step == "confirm":
         return await render(request, "confirm.html", {"message": plan.message, "fields": plan.fields, "action": f"/do/{name}", "danger": act.danger,
                                                       "back": back, "note": act.note})
+    if plan.step == "step2" and plan.kind == "generic":
+        return await render(request, "confirm.html", {"message": plan.message, "fields": [*(plan.fields or []), ("confirm2", "yes")], "action": f"/do/{name}",
+                                                      "danger": True, "back": back, "note": None, "heading": "Xác nhận lần 2"})
     if plan.step == "step2":
         ap = plan.ap or {}
         ctx = {"a": ap, "view": P.action_view(ap), "fields": plan.fields, "action": f"/do/{name}", "back": back}
@@ -1501,6 +1508,13 @@ def _memory_routes() -> list[Any]:
     return _r()
 
 
+def _perm_routes() -> list[Any]:
+    from . import perm_pages as _pp  # /permissions — "Quyền đã cấp" (grant/trust/luôn cho phép/sandbox/tài nguyên bảo vệ)
+
+    _pp.register_actions(ACTIONS, Action, _req)
+    return _pp.routes()
+
+
 def _mcp_routes() -> list[Any]:
     from .mcp_pages import routes as _r
 
@@ -1571,6 +1585,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/sse/firehose", sse_firehose),
         *_manager_routes(),
         *_extra_routes(),
+        *_perm_routes(),
         *_office_routes(),
         *_skill_routes(),
         *_memory_routes(),
