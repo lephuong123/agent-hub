@@ -219,6 +219,43 @@ async def test_commands_status_agents_runs_help_estop(make, tg):
     await stop(d)
 
 
+async def test_schedules_command_pause_one_tap_resume_two_steps(make, tg):
+    """/lich: danh sách (văn bản thuần) + tin RIÊNG có nút (nhãn chỉ id lịch, WT-8). Tạm dừng một chạm; bật lại 2 bước. Ghi qua
+    `bot.call` → cổng người + audit kênh telegram; nonce một lần (bấm lại → từ chối); người ngoài allowlist không tiêu nút."""
+    d = await make()
+    d.hub.agents.create({"id": "coder", "name": "Coder"})
+    s = d.hub.schedules.create({"kind": "agent", "target": "coder", "expr": "daily 08:00", "prompt": "x", "name": "Bấm <b>vào</b> đây"})
+    await until(lambda: tg.calls_of("getUpdates"))
+    await say(tg, BOSS, "/lich")
+    listing, panel = tg.sent(BOSS)[-2], tg.sent(BOSS)[-1]
+    assert "Bấm <b>vào</b> đây" in listing["text"] and not FakeTelegram.buttons(listing)  # tên do người/agent viết: không cùng tin với nút
+    btns = FakeTelegram.buttons(panel)
+    assert [b["text"] for b in btns] == [f"⏸ Tạm dừng {s['id']}"] and "vào" not in panel["text"]
+    # người ngoài allowlist bấm → bỏ qua, nút không bị tiêu
+    await press(tg, STRANGER, btns[0]["callback_data"])
+    assert d.hub.schedules.get(s["id"])["status"] == "active"
+    await press(tg, BOSS, btns[0]["callback_data"])
+    assert d.hub.schedules.get(s["id"])["status"] == "paused"
+    au = d.hub.audit.query(kind="schedule.pause")
+    assert au and au[0]["channel"] == f"telegram:{BOSS}" and au[0]["actor"] == "user"
+    assert "Đã tạm dừng lịch" in tg.edits(BOSS)[-1]["text"]
+    await press(tg, BOSS, btns[0]["callback_data"])  # dùng lại nonce → không làm gì
+    assert d.hub.schedules.get(s["id"])["status"] == "paused"
+    # bật lại: bước 1 chỉ hỏi xác nhận
+    await say(tg, BOSS, "/lich")
+    btns = FakeTelegram.buttons(tg.sent(BOSS)[-1])
+    assert [b["text"] for b in btns] == [f"▶️ Bật lại {s['id']}"]
+    await press(tg, BOSS, btns[0]["callback_data"])
+    assert d.hub.schedules.get(s["id"])["status"] == "paused"
+    step2 = tg.edits(BOSS)[-1]
+    b2 = [b for row in step2["reply_markup"]["inline_keyboard"] for b in row]
+    assert [b["text"] for b in b2] == ["Xác nhận BẬT LẠI", "Huỷ"] and "tốn tiền" in step2["text"]
+    await press(tg, BOSS, b2[0]["callback_data"])
+    assert d.hub.schedules.get(s["id"])["status"] == "active"
+    assert d.hub.audit.query(kind="schedule.resume")[0]["channel"] == f"telegram:{BOSS}"
+    await stop(d)
+
+
 async def test_run_command_returns_result_with_cost_then_reply_continues(make, tg):
     d = await make()
     d.hub.agents.create({"id": "coder", "name": "Coder"})

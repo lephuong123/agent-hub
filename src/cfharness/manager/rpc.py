@@ -9,8 +9,11 @@
   Không có `conversation_id` → hội thoại MỚI (trừ `reuse_latest=true`: hội thoại gần nhất của đúng kênh). Hội thoại đang có run
   chạy → tin được steer vào run đó (`steered=true`). `conversation_id` phải cùng `channel` (khác → Conflict); hội thoại của manager CŨ →
   tự chuyển sang hội thoại gần nhất/mới của manager hiện tại trên kênh đó (`switched_from`).
-- `manager.conversations {channel?, limit?, all?}` → `[Conv]` (mặc định chỉ hội thoại của manager HIỆN TẠI), Conv = `{id, channel, agent_id, session_id, turns, title, messages (số),
-  last_run_id, created_at, updated_at}`
+- `manager.conversations {channel?, limit?, all?, archived?}` → `[Conv]` (mặc định chỉ hội thoại của manager HIỆN TẠI, chưa lưu trữ;
+  `archived=true` → CHỈ hội thoại đã lưu trữ), Conv = `{id, channel, agent_id, session_id, turns, title, messages (số),
+  last_run_id, created_at, updated_at, archived_at}`
+- `manager.archive {conversation_id}` / `manager.unarchive {conversation_id}` (HUMAN_ONLY, audit) → Conv — xoá mềm qua `archived_at`;
+  tin/run/audit giữ nguyên; hội thoại đang có run chạy → Conflict; `manager.chat` vào hội thoại đã lưu trữ tự khôi phục nó.
 - `manager.history {conversation_id, limit?}` → `[{id, role: user|manager|notify|tick, text, run_id, ts}]` (cũ → mới)
 - `manager.tick {force?}` (HUMAN_ONLY) → `{run_id|null, skipped?, reason?, events?, conversation_id?}`
 - `managerself.call {run_id, op, args}` — tool hub-self của run manager (daemon ràng run ↔ người gọi).
@@ -30,8 +33,8 @@ from ..errors import HubError
 if TYPE_CHECKING:
     from ..daemon import Daemon
 
-MUTATING_MANAGER = ("manager.set", "manager.chat", "manager.tick", "managerself.call")
-_AUDITED = ("manager.set", "manager.chat", "manager.tick")  # managerself.call: từng thao tác bên trong tự audit
+MUTATING_MANAGER = ("manager.set", "manager.chat", "manager.tick", "manager.archive", "manager.unarchive", "managerself.call")
+_AUDITED = ("manager.set", "manager.chat", "manager.tick", "manager.archive", "manager.unarchive")  # managerself.call: từng thao tác bên trong tự audit
 
 
 def _req(p: dict[str, Any], key: str) -> Any:
@@ -61,7 +64,10 @@ def register_rpc(daemon: "Daemon") -> None:
         "manager.get": lambda p: m.get(),
         "manager.set": _set,
         "manager.chat": _chat,
-        "manager.conversations": lambda p: m.conversations(p.get("channel"), limit=int(p.get("limit") or 100), all_managers=bool(p.get("all"))),
+        "manager.conversations": lambda p: m.conversations(p.get("channel"), limit=int(p.get("limit") or 100), all_managers=bool(p.get("all")),
+                                                           archived=bool(p.get("archived"))),
+        "manager.archive": lambda p: m.archive(str(_req(p, "conversation_id")), on=True),
+        "manager.unarchive": lambda p: m.archive(str(_req(p, "conversation_id")), on=False),
         "manager.history": lambda p: m.history(str(_req(p, "conversation_id")), int(p.get("limit") or 100)),
         "manager.tick": lambda p: m.maybe_tick(force=bool(p.get("force", True))),
         "managerself.call": lambda p: m.self_call(str(_req(p, "run_id")), str(_req(p, "op")), p.get("args") or {}),

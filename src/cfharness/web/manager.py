@@ -13,6 +13,8 @@ RPC dùng (hợp đồng `docs/plan/M7-manager.md`, MGR-CORE cung cấp): `manag
   KHÔNG gửi gì. Giới hạn = của daemon (`manager/service.py`), daemon kiểm lại.
 - `GET /sse/manager?since=&epoch=`: luồng JSON `{t: delta|reply|action|run_end|tick}`; mục HTML vẽ phía server bằng macro autoescape.
 - `GET /partials/manager`: khung trạng thái (htmx làm mới).
+- #7 (docs/dev-notes/web-permissions.md): `ACTIONS` `manager_archive|manager_unarchive` (xoá mềm hội thoại), `manager_tick` (chạy nhịp ngay);
+  thanh bên có "Nhịp tự động" (hội thoại heartbeat) + "Đã lưu trữ"; hội thoại không thuộc kênh web (nhịp, cli, Telegram) chỉ xem.
 Mọi chữ của điều phối viên là DỮ LIỆU: autoescape + `white-space: pre-wrap`, không markdown/HTML thô (test XSS).
 """
 
@@ -32,6 +34,7 @@ from . import present as P
 from .app import CHANNEL, _stream, err_text, flash_redirect, post_guard, render, rpc, session_of, ws
 
 HISTORY_LIMIT = 200
+HEARTBEAT = "heartbeat"  # = manager.service.HEARTBEAT_CHANNEL (không import service ở web)
 ACTIONS_SCAN = 3000  # số event gần nhất của điều phối viên quét để lấy thẻ `manager.action`
 MAX_TEXT = 8000
 ATTACH_FIELD = "attach"
@@ -105,6 +108,16 @@ async def _web_convs(request: Request) -> list[dict[str, Any]]:
     return sorted([c for c in out if c["id"]], key=lambda c: str(c.get("updated_at") or ""), reverse=True)
 
 
+async def _convs(request: Request, params: dict[str, Any]) -> list[dict[str, Any]]:
+    """`manager.conversations` với tham số tuỳ ý (nhịp / đã lưu trữ) → mục chuẩn hoá (rỗng khi daemon cũ/lỗi)."""
+    try:
+        rows = await rpc(request, "manager.conversations", {"limit": 50, **params}) or []
+    except RpcError:
+        return []
+    out = [{**P.mgr_conv(c), "archived_at": c.get("archived_at")} for c in rows if isinstance(c, dict)]
+    return [c for c in out if c["id"]]
+
+
 async def _actions(request: Request, agent_id: str) -> list[dict[str, Any]]:
     """Thẻ `manager.action` gần nhất của điều phối viên (event lưu DB), cũ → mới."""
     try:
@@ -123,7 +136,7 @@ def _timeline(msgs: list[dict[str, Any]], acts: list[dict[str, Any]], qs: list[d
     items += [{"kind": "question", "q": q, "ts": q.get("created_at"), "run_id": q.get("run_id")} for q in qs or []]
 
     def key(it: dict[str, Any]) -> tuple[str, int]:
-        return (str(it.get("ts") or ""), {"user": 0, "action": 1, "manager": 2, "question": 3}.get(it["kind"], 4))
+        return (str(it.get("ts") or ""), {"user": 0, "note": 0, "action": 1, "manager": 2, "question": 3}.get(it["kind"], 4))
 
     out: list[dict[str, Any]] = []
     for it in sorted(items, key=key):
@@ -158,7 +171,7 @@ def question_from_event(ev: dict[str, Any]) -> dict[str, Any]:
 async def manager_page(request: Request) -> Response:
     q = request.query_params
     st = await mgr_state(request)
-    ctx: dict[str, Any] = {"nav": "manager", "m": st, "convs": [], "conv": None, "items": [], "side_actions": [], "pending": None,
+    ctx: dict[str, Any] = {"nav": "manager", "m": st, "convs": [], "beats": [], "archived": [], "cur": None, "readonly": False, "conv": None, "items": [], "side_actions": [], "pending": None,
                            "agents": [], "templates": []}
     status = await rpc(request, "hub.status")
     ctx.update({"since": status.get("last_seq") or 0, "epoch": status.get("epoch") or ""})
@@ -170,7 +183,12 @@ async def manager_page(request: Request) -> Response:
             pass
         return await render(request, "manager.html", ctx)
     convs = await _web_convs(request)
+    beats = await _convs(request, {"channel": HEARTBEAT})  # hội thoại nhịp tự động — chỉ xem
+    archived = await _convs(request, {"archived": True})  # mọi kênh — khôi phục được ở thanh bên
     cid = None if q.get("new") else (q.get("c") or (convs[0]["id"] if convs else None))
+    cur = next((c for c in convs + beats + archived if c["id"] == cid), None) if cid else None
+    # chỉ hội thoại kênh web mới gửi tin từ trang này được (nhịp/cli/Telegram: xem, không nhập)
+    readonly = bool(cur) and cur.get("channel") not in (None, CHANNEL)
     msgs: list[dict[str, Any]] = []
     if cid:
         try:
@@ -197,7 +215,7 @@ async def manager_page(request: Request) -> Response:
                 pending = run["id"]
         except RpcError:
             pass
-    ctx.update({"convs": convs, "conv": cid, "items": items, "side_actions": list(reversed(acts))[:12], "pending": pending,
+    ctx.update({"convs": convs, "beats": beats, "archived": archived, "cur": cur, "readonly": readonly, "conv": cid, "items": items, "side_actions": list(reversed(acts))[:12], "pending": pending,
                 "conv_runs": sorted({m["run_id"] for m in msgs if m.get("run_id")} | ({pending} if pending else set()))})
     return await render(request, "manager.html", ctx)
 
@@ -315,8 +333,36 @@ def mgr_set_confirm(f: Any) -> str:
             "xoá vĩnh viễn, tắt ESTOP, sửa cấu hình của chính nó, đặt bypassPermissions. Mọi thao tác ghi nhật ký `manager:" + aid + "` và rollback được.")
 
 
+def _tick_ok(r: Any, f: Any) -> str:
+    r = r or {}
+    if r.get("run_id"):
+        return f"Đã chạy một nhịp — run {r['run_id']} ({r.get('events', 0)} sự kiện đang chờ)"
+    return f"Nhịp không chạy: {TICK_SKIP.get(str(r.get('skipped') or ''), r.get('skipped') or '?')}"
+
+
+TICK_SKIP = {"no_manager": "chưa có điều phối viên", "estop": "ESTOP đang bật", "manager_missing": "agent điều phối viên không còn",
+             "manager_paused": "agent điều phối viên đang tạm dừng", "manager_busy": "điều phối viên đang bận một lượt khác — sự kiện giữ cho nhịp sau",
+             "heartbeat_off": "nhịp đang tắt (manager.heartbeat)", "nothing_to_do": "không có việc gì"}
+
+
 def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
     """Thêm thao tác ghi của trang Điều phối vào bảng `ACTIONS` (HUMAN_ONLY ở daemon; luôn qua hộp xác nhận)."""
+    # #7: lưu trữ / khôi phục hội thoại (xoá mềm `archived_at`, tin/run/audit giữ nguyên) + chạy nhịp ngay — đều HUMAN_ONLY, daemon tự audit
+    actions["manager_archive"] = Action(
+        "manager.archive", lambda f: {"conversation_id": _req(f, "conversation_id", "hội thoại")},
+        lambda r, f: f"Đã lưu trữ cuộc trò chuyện {f.get('conversation_id')} — khôi phục ở mục \"Đã lưu trữ\" bên trái",
+        confirm=lambda f: f"Lưu trữ cuộc trò chuyện {f.get('title') or f.get('conversation_id')}?\nCuộc trò chuyện biến khỏi danh sách; tin nhắn, "
+                          "lượt chạy và nhật ký vẫn giữ nguyên, khôi phục được bất cứ lúc nào.",
+        goto=lambda r, f: "/manager")
+    actions["manager_unarchive"] = Action(
+        "manager.unarchive", lambda f: {"conversation_id": _req(f, "conversation_id", "hội thoại")},
+        lambda r, f: f"Đã khôi phục cuộc trò chuyện {f.get('conversation_id')}",
+        goto=lambda r, f: f"/manager?c={(r or {}).get('id') or f.get('conversation_id')}" if (r or {}).get("channel") == CHANNEL else "/manager")
+    actions["manager_tick"] = Action(
+        "manager.tick", lambda f: {"force": True}, _tick_ok,
+        confirm="Chạy một nhịp của điều phối viên NGAY?\nĐiều phối viên xem các sự kiện đang chờ + việc còn mở và xử lý (một run thật, tốn tiền "
+                "như một nhịp thường). Không chạy khi ESTOP bật hoặc nó đang bận.",
+        goto=lambda r, f: f"/manager?c={r['conversation_id']}" if (r or {}).get("conversation_id") else "/manager")
     actions["manager_set"] = Action(
         "manager.set", lambda f: {"agent_id": _req(f, "agent_id", "agent")},
         lambda r, f: f"Đã chỉ định {f.get('agent_id')} làm điều phối viên", confirm=mgr_set_confirm, danger=True,

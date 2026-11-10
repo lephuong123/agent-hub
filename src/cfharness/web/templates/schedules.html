@@ -18,7 +18,7 @@
     <thead><tr><th>Lịch</th><th>Chạy gì</th><th>Khi nào</th><th>Lượt tới</th><th>Lượt trước</th><th>Trạng thái</th><th class="actions"><span class="sr-only">Thao tác</span></th></tr></thead>
     <tbody>
     {% for r in rows %}{% set st = sched_status.get(r.status, (r.status, 'muted', 'circle')) %}<tr id="sc-{{ r.id }}">
-      <td data-label="Lịch" class="title-cell"><span class="t">{{ r.name }}</span><span class="s"><span class="id">{{ r.id }}</span> · tạo bởi {{ r.created_by }}</span>
+      <td data-label="Lịch" class="title-cell"><a class="t" href="/schedules/{{ r.id }}">{{ r.name }}</a><span class="s"><span class="id">{{ r.id }}</span> · tạo bởi {{ r.created_by }}</span>
         <details class="small sched-prompt"><summary class="muted">Việc mỗi lượt</summary><div class="pre">{{ r.prompt }}</div><div class="muted">Kết quả → {{ r._dest }} · ${{ r.budget_usd if r.budget_usd is not none else '—' }}/lượt</div></details></td>
       <td data-label="Chạy gì">{% if r.kind == 'agent' and r.target %}<a href="/agents/{{ r.target }}">{{ r._target }}</a>{% else %}{{ r._target }}{% endif %}</td>
       <td data-label="Khi nào">{{ r.describe or r.expr }}<div class="muted small"><code>{{ r.expr }}</code></div></td>
@@ -27,7 +27,7 @@
         {% if r.last_run_id %}<div class="small"><a href="/runs/{{ r.last_run_id }}">xem run</a></div>{% elif r.last_task_id %}<div class="small"><a href="/tasks/{{ r.last_task_id }}">xem task</a></div>{% endif %}
         {% else %}<span class="muted">chưa chạy</span>{% endif %}{% if r.fail_count %}<div class="small danger-t">lỗi liên tiếp {{ r.fail_count }}</div>{% endif %}</td>
       <td data-label="Trạng thái"><span class="pill {{ st[1] }}">{{ m.icon(st[2]) }}{{ st[0] }}</span>{% if r.paused_reason %}<div class="muted small">{{ r.paused_reason }}</div>{% endif %}</td>
-      <td class="actions">
+      <td class="actions"><a class="btn sm ghost" href="/schedules/{{ r.id }}" title="Sửa lịch, xem lịch sử lượt">{{ m.icon("edit") }}<span>Sửa · lịch sử</span></a>
         {% if r.status == 'active' %}{{ m.act("schedule_pause", "Tạm dừng", {"id": r.id, "name": r.name}, "btn sm", confirm="Tạm dừng lịch '" ~ r.name ~ "'? Lịch không chạy cho tới khi bật lại.", next="/schedules", ic="pause") }}
         {% elif r.status == 'paused' %}{{ m.act("schedule_resume", "Bật lại", {"id": r.id, "name": r.name}, "btn sm", confirm="Bật lại lịch '" ~ r.name ~ "'? Mỗi lượt là một run thật (tốn tiền).", next="/schedules", ic="play") }}{% endif %}
         {% if r.status != 'done' %}{{ m.act("schedule_run_now", "Chạy ngay", {"id": r.id, "name": r.name}, "btn sm ghost", confirm="Chạy ngay MỘT lượt của lịch '" ~ r.name ~ "'? (tốn tiền như một lượt thường; không đổi mốc chạy kế tiếp)", next="/schedules", ic="zap") }}{% endif %}

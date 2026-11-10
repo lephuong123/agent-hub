@@ -55,9 +55,9 @@ Chạm file dùng chung (chỉ thêm): `web/app.py` (route, `overview` lấy `mg
   Đã xem lại từng ảnh.
 
 ## 5. Lệch / việc dở
-- Hội thoại `heartbeat` (nhịp) không hiện ở danh sách web (chỉ kênh `web`); kết quả nhịp xem ở cột "Hành động gần đây" + trang run.
+- ~~Hội thoại `heartbeat` (nhịp) không hiện ở danh sách web~~ — mục "Nhịp tự động" ở thanh bên, mở chỉ xem (`web-permissions.md` #7).
 - Thẻ hành động chỉ gắn vào dòng thời gian khi `run_id` thuộc hội thoại đang xem; quét tối đa 3000 event gần nhất của điều phối viên.
-- Không có nút "chạy nhịp ngay" trên web (`manager.tick` — dùng `cfharness manager tick`).
+- ~~Không có nút "chạy nhịp ngay" trên web~~ — nút "Chạy nhịp ngay" ở khung Điều phối viên (`manager_tick`, xác nhận).
 - Telegram: không gửi lại phần đã chạy chữ (chỉ trả lời cuối); "đang gõ…" (`sendChatAction`) chỉ gửi một lần.
 
 ## 6. Terminal — `cfharness chat` + TUI `top` → `m` (2026-10-19)

@@ -7,6 +7,10 @@
 <section class="side-recents" aria-label="Cuộc trò chuyện gần đây">
   <div class="nav-group">Gần đây</div>
   <ul class="mgr-convs">{% for c in convs[:30] %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}" title="{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}"><span class="ct">{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}</span><span class="cm">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></a></li>{% else %}<li class="muted small side-none">Chưa có cuộc trò chuyện nào.</li>{% endfor %}</ul>
+  {% if beats %}<div class="nav-group">Nhịp tự động</div>
+  <ul class="mgr-convs" id="mgr-beats">{% for c in beats %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}" title="Hội thoại nhịp (heartbeat) của điều phối viên — chỉ xem"><span class="ct">{{ mc.icon('clock', 'sm') }} Nhịp (heartbeat)</span><span class="cm">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></a></li>{% endfor %}</ul>{% endif %}
+  {% if archived %}<details class="mgr-archived" id="mgr-archived"{% if cur and cur.archived_at %} open{% endif %}><summary class="nav-group">Đã lưu trữ ({{ archived|length }})</summary>
+  <ul class="mgr-convs">{% for c in archived %}<li class="row between"><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}"><span class="ct">{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}</span><span class="cm">{{ c.channel }} · {{ c.updated_at|ago }}</span></a>{{ mc.act("manager_unarchive", "Khôi phục", {"conversation_id": c.id}, "btn ghost sm", next="/manager", title="Khôi phục cuộc trò chuyện vào danh sách") }}</li>{% endfor %}</ul></details>{% endif %}
 </section>
 {% endif %}{% endblock %}
 {% block content %}
@@ -33,7 +37,6 @@
   <p class="small muted">Nên dùng một agent riêng cho vai trò này{% if templates %} — <a href="/agents/new?template={{ templates[0].name }}">tạo từ mẫu {{ templates[0].name }}</a>{% else %} (model mạnh, mô tả rõ vai trò){% endif %}. Trong terminal: <code class="cmd">cfharness manager set &lt;agent&gt;</code>.</p>
 </section>
 {% else %}
-{%- set curl = (convs|selectattr('id', 'equalto', conv)|list) if conv else [] %}{%- set cur = curl[0] if curl else None %}
 <div class="mgr-grid" id="mgr-grid">
   <section class="mgr-chat">
     <header class="chat-head">
@@ -46,6 +49,7 @@
       </div>
       <div class="chat-tools">
         <span class="pill muted" id="mgr-live">đang kết nối…</span>
+        {% if conv and cur and not cur.archived_at and cur.channel != 'heartbeat' %}{{ mc.act("manager_archive", "Lưu trữ", {"conversation_id": conv, "title": cur.title or ''}, "btn ghost sm", confirm="Lưu trữ cuộc trò chuyện này? Tin nhắn, lượt chạy và nhật ký vẫn giữ nguyên, khôi phục được.", next="/manager?c=" ~ conv, title="Lưu trữ (ẩn khỏi danh sách, khôi phục được)", ic="inbox") }}{% endif %}
         <a class="btn ghost sm icon" href="/manager?new=1" title="Cuộc trò chuyện mới" aria-label="Cuộc trò chuyện mới">{{ mc.icon('pen-new') }}</a>
         <button type="button" class="btn ghost sm icon" id="mgr-info-toggle" aria-controls="mgr-side" title="Thông tin điều phối viên" aria-label="Thông tin điều phối viên">{{ mc.icon('panel') }}</button>
       </div>
@@ -54,6 +58,9 @@
       {% for it in items %}{{ mg.item(it) }}{% else %}<div class="empty mgr-hero" id="mgr-empty">{{ mc.icon('logo', 'hero-mark') }}<b>{{ 'Hôm nay giao việc gì cho đội?' if not conv else 'Chưa có tin nhắn' }}</b><span>Nói mục tiêu bằng lời — điều phối viên tự tạo agent/team, giao việc, theo dõi và báo lại. Ví dụ: “Tạo agent nghiên cứu để tóm tắt README của repo X rồi giao việc đó”.</span></div>{% endfor %}
       {% if pending %}{{ mg.pending(pending) }}{% endif %}
     </div>
+    {% if cur and cur.archived_at %}<div class="banner warn" id="mgr-archived-note">{{ mc.icon('inbox') }}<span>Cuộc trò chuyện đã lưu trữ{% if not readonly %} — nhắn tiếp sẽ tự khôi phục{% endif %}.</span>{{ mc.act("manager_unarchive", "Khôi phục", {"conversation_id": conv}, "btn sm", next="/manager?c=" ~ conv) }}</div>{% endif %}
+    {% if readonly %}<div class="banner info" id="mgr-readonly">{{ mc.icon('info') }}<span>{% if cur.channel == 'heartbeat' %}Hội thoại nhịp tự động (heartbeat): điều phối viên tự xem sự kiện và xử lý theo nhịp — chỉ xem. Chạy một nhịp ngay bằng nút ở khung "Điều phối viên".{% else %}Cuộc trò chuyện kênh {{ cur.channel }} — chỉ xem trên web; nhắn tiếp ở đúng kênh đó.{% endif %}</span></div>
+    {% else %}
     <div class="composer-wrap">
       <form method="post" action="/manager/send" class="mgr-form" id="mgr-form" enctype="multipart/form-data">
         <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="c" value="{{ conv or '' }}">
@@ -76,12 +83,14 @@
       <p class="mgr-err flash error" id="mgr-err" role="alert" hidden></p>
       <p class="chat-disclaimer">Điều phối viên là một agent và có thể nhầm. Thao tác phá huỷ luôn chờ bạn duyệt.</p>
     </div>
+    {% endif %}
   </section>
   <aside class="mgr-side" id="mgr-side" aria-label="Thông tin điều phối viên">
     <div class="mgr-side-head"><h2>Điều phối viên</h2><button type="button" class="btn ghost sm icon" id="mgr-info-close" title="Đóng" aria-label="Đóng">{{ mc.icon('x') }}</button></div>
     <section class="mgr-side-sec">
       <div id="mgr-status" hx-get="/partials/manager" hx-trigger="every 10s, mgr-tick from:body" hx-swap="innerHTML">{% include "_manager_status.html" %}</div>
       <div class="btn-row mgr-ctl">
+        {{ mc.act("manager_tick", "Chạy nhịp ngay", {}, "btn sm", confirm="Chạy một nhịp của điều phối viên NGAY? Nó xem sự kiện đang chờ + việc còn mở và xử lý (một run thật, tốn tiền).", next="/manager" ~ ("?c=" ~ conv if conv else ""), ic="zap", title="manager.tick — gom sự kiện đang chờ và cho điều phối viên xử lý ngay") }}
         {{ mc.act("manager_unset", "Huỷ chỉ định", {"current": m.agent_id}, "btn sm danger", confirm="Huỷ chỉ định điều phối viên " ~ m.agent_id ~ "? Agent vẫn còn, chỉ mất vai trò.", next="/manager") }}
       </div>
     </section>

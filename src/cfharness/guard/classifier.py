@@ -112,7 +112,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "answer": None,  # UX: trả lời câu hỏi = quyết định của người (agent không tự trả lời câu hỏi của mình/agent khác)
     "questions": {"answer", "escalate", "cancel"},
     "web": None,  # WEB: `cfharness web` sinh link đăng nhập = phiên NGƯỜI trên giao diện web
-    "manager": {"set", "chat", "tick", "capabilities"},  # M7: chỉ định/ra lệnh điều phối viên + khung quyền §9 = quyền người (manager.* ∈ HUMAN_ONLY)
+    "manager": {"set", "chat", "tick", "capabilities", "archive", "unarchive"},  # M7: chỉ định/ra lệnh điều phối viên + khung quyền §9 = quyền người (manager.* ∈ HUMAN_ONLY)
     "chat": None,  # M7 terminal: `cfharness chat` = ra lệnh điều phối viên (manager.chat ∈ HUMAN_ONLY)
     "system": {"scan", "add", "rm", "lock", "unlock", "pause", "resume", "restart"},  # job launchd chạy NGOÀI sandbox (system.* ∈ HUMAN_ONLY)
     "home": {"migrate"},  # đổi tên cfharness: chuyển HUB_HOME (dừng daemon, đổi thư mục, viết lại DB) — chỉ người

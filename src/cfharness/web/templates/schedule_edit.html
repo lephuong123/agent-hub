@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Lịch {{ r.name }}{% endblock %}
+{% block content %}
+{% set st = sched_status.get(r.status, (r.status, 'muted', 'circle')) %}
+<div class="page-head"><div class="ph-title"><h1>{{ r.name }}</h1><span class="sub"><a href="/schedules">{{ m.icon('arrow-left', 'sm') }} Lịch chạy</a> · <span class="id">{{ r.id }}</span> · {{ r._target }} · tạo bởi {{ r.created_by }} · <span class="pill {{ st[1] }}">{{ m.icon(st[2]) }}{{ st[0] }}</span></span></div>
+  <div class="btn-row">
+    {% if r.status == 'active' %}{{ m.act("schedule_pause", "Tạm dừng", {"id": r.id, "name": r.name}, "btn sm", confirm="Tạm dừng lịch '" ~ r.name ~ "'? Lịch không chạy cho tới khi bật lại.", next="/schedules/" ~ r.id, ic="pause") }}
+    {% elif r.status == 'paused' %}{{ m.act("schedule_resume", "Bật lại", {"id": r.id, "name": r.name}, "btn sm", confirm="Bật lại lịch '" ~ r.name ~ "'? Mỗi lượt là một run thật (tốn tiền).", next="/schedules/" ~ r.id, ic="play") }}{% endif %}
+    {% if r.status != 'done' %}{{ m.act("schedule_run_now", "Chạy ngay", {"id": r.id, "name": r.name}, "btn sm ghost", confirm="Chạy ngay MỘT lượt của lịch '" ~ r.name ~ "'? (tốn tiền như một lượt thường; không đổi mốc chạy kế tiếp)", next="/schedules/" ~ r.id, ic="zap") }}{% endif %}
+  </div>
+</div>
+{% if r.paused_reason %}<div class="banner warn">{{ m.icon('pause') }}<span>Tạm dừng: {{ r.paused_reason }}</span></div>{% endif %}
+
+<div class="grid2">
+<section class="card" id="sched-edit">
+  <h2>{{ m.icon('edit') }} Sửa lịch</h2>
+  {% if error %}<div class="banner danger" role="alert">{{ m.icon('alert') }}<span>{{ error }}</span></div>{% endif %}
+  <form method="post" action="/schedules/{{ r.id }}/save" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="fgrid">
+      <label>Chạy gì <input value="{{ r._target }}" disabled><span class="hint">Không đổi loại lịch — muốn đổi thì tạo lịch mới.</span></label>
+      <label>Tên <input name="name" value="{{ v.name or '' }}" maxlength="80"></label>
+      {% if r.kind == 'agent' %}<label>Agent chạy <select name="target" required>{% for a in agents %}<option value="{{ a }}" {{ 'selected' if v.target == a }}>{{ a }}</option>{% endfor %}{% if v.target and v.target not in agents %}<option value="{{ v.target }}" selected>{{ v.target }} (không còn)</option>{% endif %}</select></label>
+      {% elif r.kind == 'task' %}<label>Team / agent nhận task
+        <span class="row gap"><select name="team" aria-label="Team"><option value="">team —</option>{% for t in teams %}<option value="{{ t }}" {{ 'selected' if v.team == t }}>{{ t }}</option>{% endfor %}</select>
+        <select name="assignee" aria-label="Agent nhận task"><option value="">agent —</option>{% for a in agents %}<option value="{{ a }}" {{ 'selected' if v.assignee == a }}>{{ a }}</option>{% endfor %}</select></span></label>{% endif %}
+      <label class="span2">Khi nào <input name="expr" required value="{{ v.expr or '' }}" autocomplete="off" spellcheck="false">
+        <span class="hint">Hiện tại: {{ r.describe or r.expr }}. Cron 5 trường hoặc dạng chữ: {% for e in examples %}<code>{{ e }}</code>{{ ', ' if not loop.last }}{% endfor %}. Giờ máy.</span></label>
+      <label class="span2">Việc cần làm mỗi lượt <textarea name="prompt" rows="4" required>{{ v.prompt or '' }}</textarea></label>
+      <label>Ngân sách mỗi lượt ($) <input name="budget_usd" value="{{ v.budget_usd or '' }}" inputmode="decimal" placeholder="trống = mặc định của hub"></label>
+      <label>Nơi nhận kết quả <input name="deliver_to" value="{{ v.deliver_to or '' }}" placeholder="trống = hội thoại gần nhất của bạn" spellcheck="false">
+        <span class="hint">mc_… / web / cli / telegram:&lt;chat_id&gt; / slack:&lt;chat_id&gt;. Xoá trắng ô để bỏ nơi nhận đã đặt.</span></label>
+    </div>
+    <div class="row end"><button class="btn primary" type="submit">{{ m.icon('check') }}<span>Xem lại &amp; lưu</span></button></div>
+  </form>
+</section>
+<section class="card" id="sched-info">
+  <h2>{{ m.icon('info') }} Tình trạng</h2>
+  <dl class="kv one">
+    <div><dt>Lượt tới</dt><dd>{% if r.status == 'active' and r.next_run_local %}{{ r.next_run_local }}{% else %}<span class="muted">—</span>{% endif %}</dd></div>
+    <div><dt>Lượt trước</dt><dd>{% if r.last_run_at %}{{ m.rel(r.last_run_at) }}{% if r.last_status %} ({{ r.last_status }}){% endif %}{% else %}<span class="muted">chưa chạy</span>{% endif %}</dd></div>
+    <div><dt>Số lượt đã chạy</dt><dd>{{ r.run_count or 0 }}{% if r.fail_count %} · <span class="danger-t">lỗi liên tiếp {{ r.fail_count }}</span>{% endif %}</dd></div>
+    <div><dt>Kết quả gửi về</dt><dd>{{ r._dest }}</dd></div>
+    <div><dt>Ngân sách mỗi lượt</dt><dd>{% if r.budget_usd is not none %}${{ r.budget_usd }}{% else %}mặc định{% endif %}</dd></div>
+    <div><dt>Chi phí {{ fires|length }} lượt gần nhất</dt><dd>{{ spent|cost }}</dd></div>
+  </dl>
+</section>
+</div>
+
+<section class="card flush" id="sched-fires">
+  <h2 class="pad">{{ m.icon('clock') }} Lịch sử lượt <span class="muted small">({{ fires|length }} gần nhất, tối đa {{ fires_limit }})</span></h2>
+  {% if not fires %}{{ m.empty("Lịch chưa chạy lượt nào.", "calendar", title="Chưa có lượt") }}{% else %}
+  <table class="tbl stack">
+    <thead><tr><th>Bắt đầu</th><th>Mốc hẹn</th><th>Kết quả</th><th>Lượt</th><th>Chi phí</th><th>Kết thúc</th></tr></thead>
+    <tbody>{% for f in fires %}{% set fs = fire_status.get(f.status or '', (f.status or '?', 'muted')) %}<tr id="fire-{{ f.id }}">
+      <td data-label="Bắt đầu">{{ f.fired_at|ts }}{% if f.manual %} <span class="pill muted">chạy ngay</span>{% endif %}</td>
+      <td data-label="Mốc hẹn">{% if f.due_at %}{{ f.due_at|ts }}{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td data-label="Kết quả"><span class="pill {{ fs[1] }}">{{ fs[0] }}</span>{% if f.reason %}<div class="muted small">{{ f.reason }}</div>{% endif %}</td>
+      <td data-label="Lượt">{% if f.run_id %}<a href="/runs/{{ f.run_id }}">{{ f.run_id }}</a>{% elif f.task_id %}<a href="/tasks/{{ f.task_id }}">{{ f.task_id }}</a>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td data-label="Chi phí">{% if f.cost_usd is not none %}{{ f.cost_usd|cost }}{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td data-label="Kết thúc">{% if f.ended_at %}{{ f.ended_at|ts }}{% else %}<span class="muted">—</span>{% endif %}</td>
+    </tr>{% endfor %}</tbody>
+  </table>{% endif %}
+</section>
+{% endblock %}

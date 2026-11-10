@@ -270,6 +270,29 @@ async def test_estop_on_off_two_step(make, sk):
     assert d.hub.runs.estop.get("on") is not True
 
 
+async def test_schedules_pause_resume_buttons(make, sk):
+    """/cfh lich: nút ở tin riêng (nhãn chỉ id); tạm dừng một chạm, bật lại 2 bước — audit kênh slack."""
+    d = await make()
+    d.hub.agents.create({"id": "coder", "name": "Coder"})
+    s = d.hub.schedules.create({"kind": "agent", "target": "coder", "expr": "daily 08:00", "prompt": "x", "name": "Tóm tắt sáng"})
+    await deliver(sk, sk.slash(BOSS, "lich"))
+    m = sk.sent(DM_BOSS)[-1]
+    btn = next(b for b in sk.buttons(m) if s["id"] in b["text"]["text"])
+    assert "Tóm tắt sáng" not in sk.text_of(m)
+    await deliver(sk, sk.press(DM_BOSS, BOSS, btn["value"], m["_ts"]))
+    assert d.hub.schedules.get(s["id"])["status"] == "paused"
+    assert d.hub.audit.query(kind="schedule.pause")[0]["channel"] == f"slack:{DM_BOSS}"
+    await deliver(sk, sk.slash(BOSS, "lich"))
+    m = sk.sent(DM_BOSS)[-1]
+    btn = next(b for b in sk.buttons(m) if "Bật lại" in b["text"]["text"])
+    await deliver(sk, sk.press(DM_BOSS, BOSS, btn["value"], m["_ts"]))
+    assert d.hub.schedules.get(s["id"])["status"] == "paused"  # bước 1 chỉ hỏi
+    upd = sk.calls_of("chat.update")[-1]
+    ok = next(b for b in sk.buttons(upd) if b["text"]["text"] == "Xác nhận BẬT LẠI")
+    await deliver(sk, sk.press(DM_BOSS, BOSS, ok["value"], m["_ts"]))
+    assert d.hub.schedules.get(s["id"])["status"] == "active"
+
+
 # ============================================================================ duyệt bằng nút
 async def test_approval_buttons_two_step(make, sk):
     d = await make(runtime=FakeRuntime(hold=True))

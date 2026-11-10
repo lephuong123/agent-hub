@@ -624,3 +624,34 @@ async def test_service_gate_blocks_agent_even_without_daemon_check(env):
     finally:
         auth.CURRENT_CALLER.reset(tok)
     assert await rpc(d, "schedule.list") == []
+
+
+async def test_cli_edit_clear_to_removes_deliver_to(env):
+    """`cfharness schedule edit <id> --clear-to` (alias `--clear`) → `schedule.update{deliver_to: null}` → về hội thoại gần nhất."""
+    from cfharness.cli import build_parser
+    from cfharness.schedules.cli import cmd_schedule
+
+    d = env
+    s = await rpc(d, "schedule.create", {"kind": "agent", "target": "w1", "expr": "daily 08:00", "prompt": "x", "deliver_to": "telegram:42"})
+    calls: list[tuple[str, dict]] = []
+
+    class Ctx:
+        json = True
+
+        def __init__(self, argv: list[str]) -> None:
+            self.args = build_parser().parse_args(argv)
+
+        def call(self, method: str, params: dict | None = None):
+            calls.append((method, dict(params or {})))
+            return {}
+
+        def out(self, v) -> None:
+            pass
+
+    for flag in ("--clear-to", "--clear"):
+        ctx = Ctx(["schedule", "edit", s["id"], flag])
+        assert cmd_schedule(ctx) == 0
+        assert calls[-1] == ("schedule.update", {"id": s["id"], "deliver_to": None})
+    await rpc(d, "schedule.update", calls[-1][1])
+    assert (await rpc(d, "schedule.get", {"id": s["id"]}))["deliver_to"] == {}
+    assert cmd_schedule(Ctx(["schedule", "edit", s["id"], "--clear-to", "--to", "web"])) == 1  # mâu thuẫn → lỗi, không gọi
