@@ -8,7 +8,8 @@
   <h2>{{ m.icon('power') }} Dừng khẩn cấp (ESTOP)</h2>
   {% if estop.on %}
     <p><span class="pill danger strong">{{ m.icon('stop') }}ĐANG BẬT</span> {% if estop.reason %}— {{ estop.reason }}{% endif %} Không run mới nào được chạy.</p>
-    {{ m.act("estop", "Tắt ESTOP", {"on": "0"}, "btn primary", confirm="Tắt ESTOP — cho phép agent chạy lại?") }}
+    {% if estop.admin %}<p class="muted">ESTOP do người quản trị máy bật (xem <a href="/machine">Quản trị máy</a>) — bạn không gỡ được từ đây.</p>{% endif %}
+    {% if not estop.admin or estop.own_on %}{{ m.act("estop", "Tắt ESTOP", {"on": "0"}, "btn primary", confirm="Tắt ESTOP — cho phép agent chạy lại?") }}{% endif %}
   {% else %}
     <p class="muted">Bấm khi cần dừng toàn bộ hub ngay (agent làm sai, chi phí tăng bất thường…).</p>
     <div class="row gap wrap-row">

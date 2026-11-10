@@ -13,7 +13,8 @@ Cách làm: mỗi hub tự **xuất** bản tóm tắt CHỈ SỐ LIỆU ra mộ
 | `web/admin_pages.py` + `templates/admin_overview.html` | Trang "Tổng quan máy" `/admin/overview` (chỉ đọc); mục menu "Hệ thống → Tổng quan máy" chỉ hiện khi thư mục chung tồn tại |
 | `reports.outcome_counts` | Số run kết thúc theo outcome từ một mốc (dùng cho "lỗi hôm nay") |
 
-Không migration, không event mới. Test: `tests/test_admin_overview.py`.
+Phần mở rộng (nhóm `cfharness-users`, bố cục `status/<u>/<hub_id>.json`, schema 2, ESTOP admin, cảnh báo, chính sách root, audit
+metadata, lịch sử): `docs/dev-notes/admin-users.md`. Test: `tests/test_admin_overview.py`, `tests/test_admin_*.py`.
 
 ## Cấu hình (`admin_export.*`, chỉ người)
 
@@ -27,13 +28,17 @@ Không migration, không event mới. Test: `tests/test_admin_overview.py`.
 `config.set` ∈ HUMAN_ONLY; nhánh `admin_export` ∈ `integrity.SECURITY_KEYS` (agent sửa tay `config.yaml` → bị khôi phục). Có kiểm kiểu
 (`config.validate_setting`).
 
-## Nội dung file `<user>.json`
+## Nội dung file trạng thái (`<user>/<hub_id>.json`, cũ: `<user>.json`)
 
 Ghi nguyên tử: `mkstemp` (O_EXCL, tên ngẫu nhiên) trong cùng thư mục → `fchown` nhóm → `fchmod 0640` → `fsync` → `rename`. Bộ xuất KHÔNG tự
 tạo thư mục chung (thiếu → `last_error=dir_missing`, cảnh báo một lần). Daemon dừng → ghi lần cuối `daemon.up=false` (trạng thái "đã dừng").
 
 Danh sách trắng `SPEC` (cả lúc xuất lẫn lúc đọc): chỉ số nguyên/số thực ≥ 0, bool, và chuỗi khớp regex (tên user, `hub_id` hex, phiên bản
 `X.Y.Z`, mốc ISO). **Không bao giờ** có chữ tự do: prompt, summary, tiêu đề task, mô tả/tên/id agent, đường dẫn, hostname.
+
+Hub ghi `<dir>/<user>/<hub_id>.json` khi admin đã cấp thư mục riêng `<dir>/<user>/` (root tạo, chủ = user); chưa có → bố cục phẳng cũ
+`<dir>/<user>.json`. Bộ đọc nhận cả hai bố cục và cả schema 1 lẫn 2 (schema 2 thêm chi phí tháng, ngân sách, guard, claude, web, chat,
+lịch, đĩa, chính sách, ESTOP admin — danh sách đầy đủ ở `SPEC` và `admin-users.md`).
 
 ```json
 {"schema":1,"user":"an","hub_id":"<sha256(realpath HUB_HOME)[:16]>","version":"0.2.3",
@@ -60,59 +65,66 @@ khác; `cfharness admin` ∈ `HUB_HUMAN_ONLY_CLI`). File của người khác l�
 Trạng thái mỗi hub: `ok` · `stale` (quá 3× chu kỳ — daemon có thể đã chết) · `stopped` (daemon dừng êm) · `malformed` · `owner_mismatch`.
 Tổng cộng chi phí tính mọi hub có số liệu; run đang chạy/chờ chỉ cộng hub `ok`.
 
-## Thiết lập (admin làm một lần, cần sudo)
+## Thiết lập (admin làm một lần, cần sudo) — runbook mới (plan-admin-users)
+
+Tách hai nhóm: `cfharness-admin` (người QUẢN TRỊ — đọc trạng thái mọi user, bật/gỡ ESTOP) và `cfharness-users` (người được dùng hub).
+Người dùng thường KHÔNG vào `cfharness-admin` (biến thể 2770 cũ bắt mọi user vào nhóm admin → họ đọc được số liệu của nhau).
+`cfharness admin setup check` kiểm toàn bộ dưới đây và in lệnh sửa; `cfharness admin setup check --runbook` in nguyên bộ lệnh.
 
 ```bash
-# 1. Nhóm cfharness-admin + thêm người quản trị (ví dụ phuonglq)
-sudo dseditgroup -o create -r "cfharness admin overview" cfharness-admin
+# 1. Nhóm + người quản trị (ví dụ phuonglq)
+sudo dseditgroup -o create -r "cfharness quản trị máy" cfharness-admin
+sudo dseditgroup -o create -r "cfharness người dùng" cfharness-users
 sudo dseditgroup -o edit -a phuonglq -t user cfharness-admin
 
-# 2. Thư mục chung: chủ = admin, nhóm cfharness-admin, setgid (file mới thừa hưởng nhóm)
-sudo mkdir -p /Users/Shared/cfharness/status
-sudo chown phuonglq:cfharness-admin /Users/Shared/cfharness/status
-sudo chmod 2770 /Users/Shared/cfharness/status
+# 2. Thư mục chung (đường dẫn control/, policy/, admin-log/ là HẰNG SỐ trong code)
+R=/Users/Shared/cfharness
+sudo mkdir -p $R/status $R/audit $R/control $R/policy $R/admin-log
+sudo chown root:wheel $R $R/policy                 && sudo chmod 755 $R $R/policy
+sudo chown root:cfharness-admin $R/status $R/audit && sudo chmod 751 $R/status $R/audit   # admin liệt kê; user chỉ đi vào thư mục riêng
+sudo chown root:cfharness-admin $R/control $R/admin-log && sudo chmod 2775 $R/control $R/admin-log  # admin ghi; mọi user đọc
+
+# 3. Mỗi user (in lệnh; thêm --write khi chạy bằng sudo): nhóm users + status/<u>/ + audit/<u>/ (u:cfharness-admin 2750) + LaunchDaemon
+cfharness admin users add an
+sudo cfharness admin users add an --write
+sudo -u an cfharness config set admin_export.enabled true   # hoặc require.export trong chính sách
+
+# 4. Khởi động lại daemon của admin để tiến trình nhận nhóm mới (launchd InitGroups / đăng xuất-đăng nhập)
+cfharness admin users list     # hoặc web → Hệ thống → Người dùng máy
 ```
 
-Với `2770`, chỉ thành viên nhóm ghi được → **mỗi user chạy hub phải được thêm vào nhóm**:
+| Đường dẫn | Chủ:nhóm | Quyền | Ai ghi / ai đọc |
+|---|---|---|---|
+| `/Users/Shared/cfharness/` | root:wheel | 0755 | — |
+| `status/` | root:cfharness-admin | 0751 | admin liệt kê; user không liệt kê được, chỉ đi vào `status/<u>/` |
+| `status/<u>/<hub_id>.json` | `<u>`:cfharness-admin | 2750 / 0640 | hub của u ghi; admin đọc. Root tạo thư mục khi cấp quyền → không ai chiếm tên |
+| `audit/<u>/<ngày>.jsonl` | `<u>`:cfharness-admin | 2750 / 0640 | audit METADATA (P2) |
+| `control/estop`, `control/estop.<u>` | root:cfharness-admin | 2775 / 0644 | admin bật/gỡ (không cần sudo); hub user chỉ đọc |
+| `policy/{_machine,_default,<u>}.json` | root:wheel | 0755 / 0644 | CHỈ root ghi |
+| `admin-log/<u>.jsonl`, `_all.jsonl` | root:cfharness-admin | 2775 / 0664 | admin ghi khi bật/gỡ ESTOP, cấp/thu quyền; user ĐỌC được |
+
+### Chuyển từ bố cục Q6 cũ (`status/` 2770/3773, file phẳng `<u>.json`)
 
 ```bash
-sudo dseditgroup -o edit -a an -t user cfharness-admin
-sudo dseditgroup -o edit -a binh -t user cfharness-admin
+sudo chown root:cfharness-admin /Users/Shared/cfharness/status && sudo chmod 751 /Users/Shared/cfharness/status
+sudo dseditgroup -o edit -d an -t user cfharness-admin          # gỡ user thường khỏi nhóm admin
+sudo cfharness admin users add an --write --no-daemon           # tạo status/an/ + audit/an/ (và vào cfharness-users)
+sudo rm -f /Users/Shared/cfharness/status/an.json                # sau khi hub của an đã ghi status/an/<hub_id>.json
 ```
-
-Lưu ý riêng tư: khi đó mọi thành viên nhóm cũng ĐỌC được file của nhau (0640, nhóm đọc). Nội dung chỉ là số liệu, nhưng nếu không muốn
-người dùng thấy chi phí của nhau, dùng biến thể **sticky + chỉ ghi cho người khác** (user hub KHÔNG cần vào nhóm):
-
-```bash
-sudo chmod 3773 /Users/Shared/cfharness/status   # rwxrws-wt: người khác tạo được file nhưng không liệt kê/đọc;
-                                                 # sticky: không xoá/đổi tên/ghi đè file của người khác
-```
-
-macOS (BSD) cho file mới mang nhóm của thư mục bất kể user có thuộc nhóm hay không, nên file vẫn là `cfharness-admin` 0640 → chỉ chủ file
-+ admin đọc được. (Bộ xuất thử `chown` nhóm; không được thì giữ nhóm thừa hưởng, chỉ cảnh báo.)
-
-```bash
-# 3. Mỗi hub (kể cả hub admin nếu muốn tự xuất)
-cfharness config set admin_export.enabled true
-# tuỳ chọn: cfharness config set admin_export.interval_s 120
-
-# 4. Hub admin: xem
-cfharness admin overview          # hoặc web → Hệ thống → Tổng quan máy
-```
-
-Kiểm tra: `ls -l /Users/Shared/cfharness/status` → mỗi user một file `-rw-r----- <user> cfharness-admin`.
+Bộ đọc vẫn đọc file phẳng cũ trong lúc chuyển (cùng kiểm chủ file). Hub chỉ ghi bố cục mới khi `status/<u>/` đã tồn tại.
 
 ## An toàn với agent
 
 - Agent của MỌI hub không đọc/ghi được `/Users/Shared/cfharness` từ Bash (sandbox `denyRead` + `denyWrite`, `guard/runtime.sandbox_settings`).
-- RPC `admin.overview` ∈ HUMAN_ONLY; `cfharness admin …` bị classifier chặn thẳng với agent.
+- Tool Read/Grep/Glob/Edit/Write (không qua sandbox Bash): `permissions.deny` tĩnh `guard/runtime.admin_shared_deny_rules()` cho mọi hub, kể
+  cả agent trust_full; classifier `admin_shared` (forbidden) cho Read/Grep/Glob/Write/Edit/Bash chạm thư mục này.
+- RPC `admin.*` ∈ HUMAN_ONLY (+ nhóm `cfharness-admin` cho phía admin); `cfharness admin …` bị classifier chặn thẳng với agent.
 
 ## Giới hạn / việc dở
 
 - Đường thư mục khác mặc định (`admin_export.dir` tuỳ chỉnh) không tự vào sandbox — thêm vào `guard.sandbox.extra_deny_read|extra_deny_write`.
-- Tool Read/Grep của Claude (không qua sandbox Bash) chưa có luật deny riêng cho thư mục chung; agent của admin (user thuộc nhóm) về lý
-  thuyết đọc được các file số liệu này qua Read. Nội dung chỉ là số, không có chữ tự do.
-- Người trong nhóm `cfharness-admin` (biến thể 2770) có thể tạo file mang tên người khác — bị phát hiện bằng kiểm chủ file (`owner_mismatch`),
-  nhưng có thể chiếm chỗ tên file khiến hub thật không ghi đè được (`rename` bị chặn bởi sticky ở biến thể 3773; ở 2770 thì ghi đè được).
-- Chi phí "7 ngày" là cửa sổ trượt, không phải tuần lịch. Không có lịch sử — chỉ ảnh chụp mới nhất.
+- (Đã xử lý ở plan-admin-users) Read/Grep thư mục chung: luật deny + classifier. Chiếm tên file: bố cục `status/<u>/` do root tạo.
+  Lịch sử: bảng `admin_samples` của hub admin (90 ngày).
+- Bố cục phẳng cũ (`<u>.json`) vẫn có rủi ro chiếm tên ở biến thể 2770 — chuyển sang `status/<u>/`.
+- Chi phí "7 ngày" là cửa sổ trượt, không phải tuần lịch.
 - Windows: không có `pwd/grp` → bỏ kiểm chủ file/nhóm; tính năng này nhắm macOS.

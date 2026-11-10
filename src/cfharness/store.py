@@ -836,6 +836,27 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS runs_session_status ON runs(session_id, status);
     CREATE INDEX IF NOT EXISTS runs_team_status ON runs(team_id, status);
     """,
+    # v23 — quản trị máy (admin_watch.py, docs/dev-notes/admin-users.md): lịch sử số liệu các hub trên máy cho hub ADMIN (biểu đồ
+    # trang chi tiết user). CHỈ số/enum từ bản xuất đã lọc SPEC; giữ `admin_watch.history_days` (90) ngày — xoá bởi vòng nền của watcher.
+    """
+    CREATE TABLE IF NOT EXISTS admin_samples (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,
+        ts_epoch REAL NOT NULL,
+        user TEXT NOT NULL,
+        hub_id TEXT,
+        state TEXT NOT NULL,
+        cost_today REAL,
+        cost_month REAL,
+        running INTEGER,
+        queued INTEGER,
+        failed_today INTEGER,
+        approvals_open INTEGER,
+        day_pct REAL
+    );
+    CREATE INDEX IF NOT EXISTS admin_samples_user_ts ON admin_samples(user, ts_epoch);
+    CREATE INDEX IF NOT EXISTS admin_samples_ts ON admin_samples(ts_epoch);
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.

@@ -562,12 +562,27 @@ Chi tiết: `docs/dev-notes/update.md`. Không migration. Test: `tests/test_upda
 Bất biến: `update.start` ∈ HUMAN_ONLY (không ở MANAGER_ALLOWED), `cfharness update` ∈ `HUB_HUMAN_ONLY_CLI`; tag chỉ dạng `vX.Y.Z`, repo cố định
 (`updater.REPO`); có run chạy/chờ → từ chối trừ `force`. Helper không được import `cfharness` (venv bị cài đè trong lúc chạy).
 
-## Tổng quan máy (Q6) — mỗi hub xuất trạng thái số liệu, admin xem mọi hub
-Chi tiết, thiết lập nhóm/thư mục, giới hạn: `docs/dev-notes/admin-overview.md`. Không migration. Test: `tests/test_admin_overview.py`.
-- `admin_overview.py`: `hub.admin_export` (tắt mặc định, `admin_export.*` ∈ SECURITY_KEYS) ghi nguyên tử `<dir>/<user-os>.json` 0640 nhóm
-  `cfharness-admin`; RPC `admin.overview` (CHỈ ĐỌC, ∈ HUMAN_ONLY); CLI `cfharness admin overview` (`admin_cli.py`); web `/admin/overview` (`web/admin_pages.py`).
-- Bất biến: nội dung file CHỈ theo `SPEC` (số/bool/regex id-enum) — không bao giờ chữ tự do; thêm trường → `SPEC` + ca trong test. Người đọc coi
-  file là dữ liệu không tin cậy (`O_NOFOLLOW`, trần cỡ, lọc lại `SPEC`, kiểm chủ file). Sandbox agent chặn đọc/ghi `/Users/Shared/cfharness`.
+## Tổng quan máy (Q6) + quản trị user trên cùng máy — mỗi hub xuất số liệu, admin xem/cảnh báo/ESTOP/chính sách
+Chi tiết: `docs/dev-notes/admin-overview.md` (Q6 + RUNBOOK nhóm/thư mục), `docs/dev-notes/admin-users.md` (plan-admin-users P1+P2: bất biến,
+lệch kế hoạch, việc dở). Migration **v23** (`admin_samples`). Test: `tests/test_admin_overview.py`, `tests/test_admin_{control,policy,watch,users,audit}.py`,
+`tests/test_web_admin.py`.
+
+| Module | Vai trò |
+|---|---|
+| `admin_overview.py` | `hub.admin_export` (tắt mặc định, `admin_export.*` ∈ SECURITY_KEYS; `require.export` của chính sách ép bật) ghi nguyên tử `status/<u>/<hub_id>.json` (thư mục root cấp; chưa có → file phẳng cũ `<u>.json`) 0640; SPEC **schema 2** (bộ đọc nhận 1 và 2, cả hai bố cục); RPC `admin.overview` |
+| `admin_control.py` | Nhóm `cfharness-admin` (quản trị) / `cfharness-users` (người dùng), `is_admin()`; ESTOP admin = file cờ `control/estop[.<u>]` (có mặt = bật kể cả hỏng; chỉ `reason_code` enum), `hub.admin_control` kiểm 5 s + trước submit, `RunManager.estop` gộp (user `estop off` không gỡ được), event `hub.admin_estop`; admin-log |
+| `admin_policy.py` | `policy/{_machine,_default,<u>}.json` root-owned → lấy giá trị CHẶT HƠN (scope ngân sách `admin`, trần mỗi run, đồng thời, `require.*`, `min_version`, `models.allow`); hỏng = fail-open + cảnh báo, fail-closed khi `_machine.json` có `policy_required` |
+| `admin_watch.py` | `hub.admin_watch` (chỉ daemon thuộc `cfharness-admin`): event `admin.alert{user, hub_id, code, state on|resolved}` (chống trùng, báo hồi phục, qua notifier Telegram/Slack sẵn có) + lịch sử `admin_samples` (90 ngày) |
+| `admin_users.py`, `admin_audit.py`, `admin_rpc.py`, `admin_cli.py` | `admin users list|show|add|revoke` (add/revoke mặc định in lệnh, `--write` cần root), `setup check`; audit METADATA `audit/<u>/<ngày>.jsonl` (30 ngày); RPC `admin.*`; CLI `cfharness admin …` |
+| `web/admin_pages.py` | `/admin/overview|users|users/<u>|alerts|audit` (admin; biểu đồ SVG trong template) + `/machine` "Quản trị máy" (phía user, chỉ đọc); ghi duy nhất = ESTOP admin (`admin_estop_on|off`, xác nhận) |
+
+Bất biến: nội dung file/dòng/cờ/cảnh báo CHỈ theo danh sách trắng (`SPEC`, `AUDIT_SPEC`, `ADMIN_LOG_SPEC`, `POLICY_SPEC`, `REASON_CODES`,
+`ALERT_CODES`) — không bao giờ chữ tự do (hai chiều); thêm trường → spec + ca trong test. Người đọc coi file là dữ liệu không tin cậy
+(`O_NOFOLLOW`, trần cỡ, lọc lại, kiểm chủ file; chính sách phải chủ uid 0 + không ghi được bởi nhóm/khác). Đường dẫn `control/`, `policy/`,
+`admin-log/` là HẰNG SỐ (`admin_control.SHARED_ROOT`; chỉ test đổi qua `CFHARNESS_TEST_SHARED_ROOT`). Mọi RPC `admin.*` ∈ HUMAN_ONLY, không ở
+MANAGER_ALLOWED (phía admin còn `require_admin`); `cfharness admin` ∈ `HUB_HUMAN_ONLY_CLI`; `admin_watch.*` ∈ SECURITY_KEYS. Agent không đọc/ghi
+`/Users/Shared/cfharness`: sandbox + `permissions.deny` Read/Grep/Glob/Edit/Write (mọi hub, kể cả trust_full) + classifier `admin_shared` (forbidden).
+Thay đổi `runs.py` gói trong `_admin_gate`/`_admin_policy()` (một dòng gọi ở mỗi chỗ). Test giả nhóm bằng fixture `as_admin` (mặc định không thuộc nhóm).
 
 ## Giam agent trong workspace W — `workspace.confine` (P2 đa instance)
 Chi tiết, spike (claude 2.1.319: `allowRead` trong `denyRead` hoạt động, glob không mở lại), giới hạn: `docs/dev-notes/confine.md`,

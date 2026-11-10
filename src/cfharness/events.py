@@ -65,6 +65,10 @@ EVENT_LEVELS: dict[str, str] = {
     "subagent.spawn": "summary",
     # Hub
     "hub.estop": "summary",
+    # quản trị máy (admin_control.py): cờ ESTOP admin bật/gỡ — {on, scope all|user, reason_code (enum), since}; user không gỡ được
+    "hub.admin_estop": "summary",
+    # quản trị máy (admin_watch.py, chỉ hub của admin): cảnh báo theo user/hub — {user, hub_id, code (enum ALERT_CODES), state on|resolved}
+    "admin.alert": "summary",
     "hub.started": "summary",
     "hub.stopping": "summary",
     "hub.config_changed": "summary",

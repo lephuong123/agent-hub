@@ -165,6 +165,21 @@ def exec_zone_deny_rules() -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def admin_shared_deny_rules() -> list[str]:
+    """Quản trị máy (plan-admin-users §4): tool Read/Grep/Glob/Edit/Write… của Claude KHÔNG qua sandbox Bash → luật tĩnh riêng cho
+    thư mục chung (trạng thái/audit/chính sách/cờ ESTOP/admin-log của MỌI user). Áp cho mọi hub, kể cả agent trust_full."""
+    if IS_WINDOWS:
+        return []
+    from ..admin_overview import SHARED_ROOT
+
+    out: list[str] = []
+    roots = list(dict.fromkeys([SHARED_ROOT, os.path.realpath(SHARED_ROOT)]))
+    for r in roots:
+        for t in ("Read", "Grep", "Glob", *FILE_TOOLS):
+            out += [f"{t}(/{rule_path(r)}/**)", f"{t}(/{rule_path(r)})"]
+    return list(dict.fromkeys(out))
+
+
 def secret_read_deny_rules(hub_home: Path, socket: Path) -> list[str]:
     """`permissions.deny` cho tool Read/Grep/Glob: token người, secret, mcp.json đã resolve, token MCP HTTP."""
     from ..auth import token_path
@@ -470,6 +485,9 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
 
         conf_deny = permission_deny_rules(confine, read_roots(confine, hub_home, cwd=cwd))
     if trust_full:
+        perms = dict(s.get("permissions") or {})
+        perms["deny"] = list(perms.get("deny") or []) + admin_shared_deny_rules()  # dữ liệu của user KHÁC: không phải quyền của người này để trao
+        s["permissions"] = perms
         if confine is None:
             s["sandbox"] = {"enabled": False}
             return s
@@ -484,7 +502,7 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
     user_prot = protected_write_paths(hub_home)  # R2-2: tài nguyên NGƯỜI khai báo (vd `.next` prod) → chặn tĩnh tool ghi + sandbox
     perms["deny"] = (list(perms.get("deny") or []) + policy_deny_rules(policy_dir) + secret_read_deny_rules(hub_home, Path(socket))
                      + exec_zone_deny_rules() + [f"{t}(/{rule_path(p)}{suf})" for p in user_prot for t in FILE_TOOLS for suf in ("/**", "")]
-                     + credential_deny_rules() + (conf_deny if confine is not None else []))
+                     + credential_deny_rules() + admin_shared_deny_rules() + (conf_deny if confine is not None else []))
     s["permissions"] = perms
     sb_cfg = sb_cfg0
     if not sb_cfg.get("enabled", True) and confine is not None:
