@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .agents import load_mcp_registry
+from .cost_guard import COST_BASIS_ESTIMATED, estimated_run_cost, flag_once, manager_budget_scope
 from .errors import Blocked, HubError, NotFound
 from .events import TERMINAL_RUN_EVENTS, HubEvent, make_event
 from .logs import run_logger, set_run_context
@@ -156,6 +157,9 @@ class RunManager:
         lim = (ag.get("limits") or {}).get("budget_usd_per_day")
         if lim:
             out.append(("agent", agent_id, self.store.cost_today(agent_id), float(lim)))
+        mgr = manager_budget_scope(self.hub, agent_id)  # trần ngày riêng của điều phối viên (cost-guardrails.md)
+        if mgr:
+            out.append(mgr)
         return out
 
     def _budget_warn(self, agent_id: str, team_id: str | None) -> None:
@@ -169,7 +173,7 @@ class RunManager:
             if lim and used >= pct * lim and flags.get(f"warn:{scope}:{owner}") != day:
                 flags[f"warn:{scope}:{owner}"] = day
                 changed = True
-                ev = make_event("budget.warning", agent_id if scope == "agent" else None, {"scope": scope, "owner": owner, "used": round(used, 6), "limit": lim, "pct": round(100 * used / lim, 1)})
+                ev = make_event("budget.warning", agent_id if scope in ("agent", "manager") else None, {"scope": scope, "owner": owner, "used": round(used, 6), "limit": lim, "pct": round(100 * used / lim, 1)})
                 ev.team_id = team_id if scope == "team" else None
                 self.hub.publish(ev)
         if changed:
@@ -298,7 +302,7 @@ class RunManager:
         Chi phí của run chỉ vào `cost_today` lúc kết thúc → không trừ phần này thì nhiều run song song vượt trần."""
         where = "status IN ('queued','running') AND max_budget_usd IS NOT NULL"
         args: tuple[Any, ...] = ()
-        if scope == "agent":
+        if scope in ("agent", "manager"):
             where += " AND agent_id=?"
             args = (owner,)
         elif scope == "team":
@@ -317,15 +321,16 @@ class RunManager:
                 continue
             reserved = self.reserved_budget(scope, owner)
             if used < float(day) and round(float(day) - used - reserved, 6) <= 0:
-                label = {"agent": f"agent '{owner}'", "team": f"team '{owner}'", "hub": "toàn hub"}[scope]
+                label = {"agent": f"agent '{owner}'", "team": f"team '{owner}'", "hub": "toàn hub", "manager": f"điều phối viên '{owner}'"}[scope]
                 raise Blocked(f"{label}: ngân sách ngày còn lại (${float(day) - used:.4f}) đang được giữ chỗ cho run đang chạy — chờ run kết thúc",
                               data={"scope": scope, "owner": owner, "reserved": round(reserved, 6), "reason": "budget_reserved"})
             remaining = round(float(day) - used - reserved, 6)
             if remaining <= 0:
-                ev = make_event("budget.exceeded", agent["id"] if scope == "agent" else None, {"scope": scope, "owner": owner, "used": used, "limit": day})
-                ev.team_id = team_id if scope == "team" else None
-                self.hub.publish(ev)
-                label = {"agent": f"agent '{owner}'", "team": f"team '{owner}'", "hub": "toàn hub"}[scope]
+                if flag_once(self.store, f"exceeded:{scope}:{owner}"):  # một lần/ngày/scope (không spam notify khi bị chặn lặp)
+                    ev = make_event("budget.exceeded", agent["id"] if scope in ("agent", "manager") else None, {"scope": scope, "owner": owner, "used": used, "limit": day})
+                    ev.team_id = team_id if scope == "team" else None
+                    self.hub.publish(ev)
+                label = {"agent": f"agent '{owner}'", "team": f"team '{owner}'", "hub": "toàn hub", "manager": f"điều phối viên '{owner}'"}[scope]
                 raise Blocked(f"{label} đã dùng hết ngân sách ngày (${used:.4f}/${day})", data={"scope": scope, "owner": owner})
             per_run = min(float(per_run), remaining) if per_run else remaining
         return round(float(per_run), 4) if per_run else None
@@ -921,6 +926,7 @@ class RunManager:
         if outcome == "completed" and sig.get("op") == "block":
             outcome = "blocked"  # agent gọi hub-self task_block (FR-TK-03)
         error = None
+        est_cost = estimated_run_cost(h) if res is None else None  # cost-guardrails: không có result → ước lượng, không bỏ trống
         if res is None and outcome in ("failed", "crashed"):
             error = f"tiến trình kết thúc (exit={h.exit_code}) không có event result. stderr: {h.stderr_tail[-800:]}"
         elif res is not None and outcome != "completed":
@@ -935,6 +941,8 @@ class RunManager:
             "isolation_violations": ar.violations or None,
             "raw_log_path": str(h.raw_log_final) if h.raw_log_final else None,
         }
+        if est_cost is not None:
+            data.update({"cost_usd": est_cost, "cost_basis": COST_BASIS_ESTIMATED})
         if res is not None:
             # total_cost_usd luỹ kế theo session (spike A-03) → chi phí run = chênh lệch so với mốc trước
             c = self._record_cost(h, res)
@@ -973,12 +981,14 @@ class RunManager:
             "isolation_violations": ar.violations,
             "exit_code": h.exit_code,
         }
+        if est_cost is not None:
+            payload.update({"cost_usd": est_cost, "cost_basis": COST_BASIS_ESTIMATED})
         etype = {"completed": "run.completed", "blocked": "run.completed", "cancelled": "run.cancelled"}.get(outcome, "run.failed")
         fin = make_event(etype, ar.agent_id, payload, run_id=ar.run_id, session_id=h.spec.session_id)
         fin.task_id, fin.team_id = ar.task_id, ar.team_id
         self.hub.publish(fin)
         self._set_agent_after(ar.agent_id, ar.run_id, outcome)
-        if res is not None:
+        if res is not None or est_cost is not None:
             self._budget_warn(ar.agent_id, ar.team_id)
         if outcome in ("failed", "crashed"):
             self._check_repeated_failure(ar.agent_id, ar.run_id, error)
@@ -1034,7 +1044,11 @@ class RunManager:
             self.store.update_run(ar.run_id, {"status": "waiting_human", "ended_at": now_iso(), "waiting_approval_id": aid, "error": error})
             self.hub.publish(make_event("run.waiting_human", ar.agent_id, {"outcome": "waiting_human", "approval_id": aid, "error": error}, run_id=ar.run_id))
             return
-        self.store.update_run(ar.run_id, {"status": outcome, "outcome": outcome, "ended_at": now_iso(), "error": error})
+        data: dict[str, Any] = {"status": outcome, "outcome": outcome, "ended_at": now_iso(), "error": error}
+        est = estimated_run_cost(ar.handle) if ar.handle is not None and ar.result is None else None
+        if est is not None:  # cost-guardrails: tiến trình bị dừng giữa chừng vẫn đã tiêu tiền
+            data.update({"cost_usd": est, "cost_basis": COST_BASIS_ESTIMATED})
+        self.store.update_run(ar.run_id, data)
         etype = "run.interrupted" if outcome == "interrupted" else "run.failed"
         self.hub.publish(make_event(etype, ar.agent_id, {"outcome": outcome, "error": error}, run_id=ar.run_id))
         self._set_agent_after(ar.agent_id, ar.run_id, outcome)

@@ -130,6 +130,7 @@ EVENT_LEVELS: dict[str, str] = {
     "task.signal": "summary",  # agent gọi hub-self task_complete/task_block/task_request_review
     "task.decomposed": "summary",
     "task.circuit_open": "summary",
+    "task.requeue_exhausted": "summary",  # cost-guardrails: quá trần requeue run interrupted → task blocked
     "run.protocol_violation": "summary",
     "run.reverted": "summary",
     "workspace.checkpoint": "debug",

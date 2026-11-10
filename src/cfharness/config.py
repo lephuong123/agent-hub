@@ -200,7 +200,8 @@ DEFAULTS: dict[str, Any] = {
             "manager_progress": True,  # P7: tin tiến độ + nút Dừng khi điều phối viên làm việc cho tin Slack (chat/slack/progress.py)
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
-                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],  # M4-B: digest + nhắc chọn golden task (Q-23)
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
+                       "budget.warning", "budget.exceeded"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,
             "backoff_base_s": 2,
             "timeout_s": 10,
@@ -218,7 +219,8 @@ DEFAULTS: dict[str, Any] = {
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
-                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
+                       "budget.warning", "budget.exceeded"],
             "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp", "file"],  # nhãn "THAO TÁC NẶNG" (mọi cho phép đều 2 bước — WT-5)
             "callback_ttl_s": 604800,  # nút duyệt còn hiệu lực 7 ngày (waiting_human có thể chờ lâu)
             "pair_ttl_s": 600,
@@ -300,6 +302,9 @@ DEFAULTS: dict[str, Any] = {
         "max_pending_events": 40,  # trần sự kiện đưa vào một prompt tick (cũ hơn bị gộp đếm)
         "tick_budget_usd": 0.5,  # trần chi phí mỗi run tick
         "chat_budget_usd": None,  # trần mỗi run hội thoại (null = theo limits của agent)
+        # cost-guardrails: trần NGÀY riêng của điều phối viên (mọi run của agent manager: chat/tick/lịch…), áp CÙNG limits của agent.
+        # CHỈ người (config.set ∈ HUMAN_ONLY, nhánh `manager` kiểm toàn vẹn). null = không trần riêng.
+        "budget_usd_per_day": None,
         "rotate_after_turns": 80,  # sau N lượt cùng session → session mới (mang theo tóm tắt), ngoài autocompact của CLI
         # xoay session sớm (ManagerService.rotate_reason): resume nạp lại cả lịch sử, cache nguội = trả giá ghi cache cho cả khối
         "rotate_session_cost_usd": 3.0,  # chi phí luỹ kế session ≥ N $ → session mới (0 = tắt)
@@ -335,6 +340,9 @@ DEFAULTS: dict[str, Any] = {
         "rate_limit_reset_max_s": 691200,  # resetsAt xa hơn 8 ngày → không tin, dùng backoff
         "max_subtasks": 20,
         "review_budget_usd": None,  # trần chi phí run review (null = như run thường)
+        # cost-guardrails: run task `interrupted` (daemon dừng) được requeue không tính lỗi; quá N lần LIÊN TIẾP → task blocked
+        # + event task.requeue_exhausted (0 = không giới hạn, như trước)
+        "max_interrupted_requeues": 5,
     },
     "ratelimit": {
         "throttle_utilization": 0.9,  # FR-RT-16: ≥ 90% → giảm đồng thời
@@ -546,6 +554,10 @@ DEFAULTS: dict[str, Any] = {
         "min_interval_s": 900,
         "manager_run_now_per_hour": 6,
         "manager_daily_budget_usd": None,
+        # ước tính $/ngày của lịch = số lượt/ngày × chi phí THẬT trung bình ≤ N lượt gần nhất (cần ≥ estimate_min_fires lượt có
+        # cost_usd); chưa đủ lịch sử → dùng budget_usd (trần) như trước
+        "estimate_recent_fires": 10,
+        "estimate_min_fires": 3,
     },
     # Tổng quan máy (admin_overview.py, docs/dev-notes/admin-overview.md): mỗi hub xuất bản tóm tắt CHỈ SỐ LIỆU ra thư mục chung để
     # người quản trị xem mọi hub trên máy. Chỉ người đặt (`config.set` ∈ HUMAN_ONLY; nhánh ∈ integrity.SECURITY_KEYS).
@@ -809,6 +821,10 @@ def validate_setting(key: str, value: Any) -> None:
                 validate_capabilities("manager.capabilities", value["capabilities"])
         else:
             validate_capabilities(key, value)
+    if key in ("manager", "manager.budget_usd_per_day"):  # cost-guardrails: trần ngày riêng của điều phối viên
+        v = value.get("budget_usd_per_day") if key == "manager" and isinstance(value, dict) else (None if key == "manager" else value)
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0):
+            raise ValueError("manager.budget_usd_per_day phải > 0 hoặc null (null = không trần riêng)")
     if key in ("guard", "manager", "manager.web_domains") or key.startswith(("guard.web", "guard.second_opinion")):
         from .guard.url_safety import validate_setting as _validate_web
 
@@ -856,6 +872,12 @@ def validate_setting(key: str, value: Any) -> None:
     elif key == "runtime.kind":
         if value not in ("claude", "fake"):
             raise ValueError("runtime.kind chỉ nhận 'claude' hoặc 'fake'")
+    elif key == "tasks.max_interrupted_requeues":
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 1000:
+            raise ValueError("tasks.max_interrupted_requeues phải là số nguyên 0..1000 (0 = không giới hạn)")
+    elif key in ("schedules.estimate_recent_fires", "schedules.estimate_min_fires"):
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 1000:
+            raise ValueError(f"{key} phải là số nguyên 0..1000")
     elif key == "runs.default_max_budget_usd":
         if value is not None and (not isinstance(value, (int, float)) or value <= 0):
             raise ValueError("runs.default_max_budget_usd phải > 0 hoặc null")

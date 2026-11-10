@@ -358,7 +358,7 @@ class TaskDispatcher:
         for scope, owner, used, limit in rm.budget_scopes(agent_id, team_id):
             if limit is not None and used >= float(limit):
                 if self._flag_once(f"exceeded:{scope}:{owner}"):
-                    ev = make_event("budget.exceeded", agent_id if scope == "agent" else None, {"scope": scope, "owner": owner, "used": round(used, 6), "limit": limit})
+                    ev = make_event("budget.exceeded", agent_id if scope in ("agent", "manager") else None, {"scope": scope, "owner": owner, "used": round(used, 6), "limit": limit})
                     ev.team_id = team_id if scope == "team" else None
                     self.hub.publish(ev)
                 return f"budget:{scope}"
@@ -699,6 +699,8 @@ class TaskDispatcher:
                 self.tasks.set_status(t["id"], "blocked", reason=f"run {run['id']} gián đoạn và {len(changed)} file của nó đã bị sửa tiếp ({', '.join(changed[:5])}) — không tự chạy lại", current_run_id=None)
                 self._refresh_root(t)
                 return
+            if oc == "interrupted" and self._interrupted_exhausted(t, run):
+                return
             if oc == "interrupted" or self._estop_block(t):
                 # dừng do ESTOP/daemon: chờ chạy lại (resume), không tính lỗi
                 self.tasks.set_status(t["id"], "ready", reason=f"run {oc} — sẽ chạy lại", current_run_id=None, retry_from_run_id=run["id"])
@@ -711,6 +713,24 @@ class TaskDispatcher:
             self._refresh_root(t)
             return
         self._on_failure(t, run, oc)
+
+    def _interrupted_exhausted(self, t: dict[str, Any], run: dict[str, Any]) -> bool:
+        """cost-guardrails: run `interrupted` (daemon dừng) không tính lỗi nên trước đây được requeue MÃI. Quá
+        `tasks.max_interrupted_requeues` lần LIÊN TIẾP (chuỗi `parent_run_id`) → task `blocked` + `task.requeue_exhausted`."""
+        from ..cost_guard import interrupted_streak
+
+        cap = int(self.cfg("max_interrupted_requeues") or 0)
+        if cap <= 0:
+            return False
+        n = interrupted_streak(self.store, run)
+        if n <= cap:
+            return False
+        self.tasks.set_status(t["id"], "blocked", current_run_id=None,
+                              reason=f"run bị gián đoạn {n} lần liên tiếp (trần tasks.max_interrupted_requeues={cap}) — không tự chạy lại")
+        self.tasks.publish("task.requeue_exhausted", self.tasks.row(t["id"]), {"run_id": run["id"], "interrupted": n, "limit": cap},
+                           agent_id=run.get("agent_id"))
+        self._refresh_root(t)
+        return True
 
     def _on_failure(self, t: dict[str, Any], run: dict[str, Any], oc: str, *, back_to: str | None = None) -> None:
         n = int(t.get("consecutive_failures") or 0) + 1
