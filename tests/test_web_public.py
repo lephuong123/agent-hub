@@ -276,6 +276,11 @@ async def test_enroll_flow_one_time(env):
     assert r.status_code == 401
     r = await c.post("/enroll", data={"t": token, "action": "show"}, headers=ORIG_HDR)
     assert r.status_code == 200 and "otpauth://" in r.text
+    # mã QR để quét bằng Authenticator: SVG nội tuyến do server sinh, không style/script (CSP 'self'), trang không cache
+    assert '<div class="totp-qr"><svg role="img"' in r.text and "<path" in r.text
+    qr = r.text.split('<div class="totp-qr">', 1)[1].split("</div>", 1)[0]
+    assert "style=" not in qr and "<script" not in qr and "href" not in qr
+    assert r.headers.get("cache-control") == "no-store"
     r2 = await c.post("/enroll", data={"t": token, "action": "show"}, headers=ORIG_HDR)
     assert r2.status_code == 401 and "otpauth://" not in r2.text  # chỉ hiện MỘT lần
     secret = store._read("totp_enroll.json")["secret"]
@@ -434,3 +439,33 @@ def test_takeover_env_reads_local_secret(hub_home):
     assert takeover_env(info, hub_home).get("CLAUDE_CODE_OAUTH_TOKEN") == os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
     SecretStore(hub_home.home / "secrets").set("CLAUDE_CODE_OAUTH_TOKEN", TOKEN)
     assert takeover_env(info, hub_home)["CLAUDE_CODE_OAUTH_TOKEN"] == TOKEN
+
+
+def test_totp_qr_encodes_exact_uri():
+    """QR phải mã hoá ĐÚNG URI otpauth (so khớp ma trận segno sinh lại từ URI với SVG đã vẽ)."""
+    import re
+
+    import segno
+
+    from cfharness.web.totp import qr_svg
+
+    uri = otpauth_uri("JBSWY3DPEHPK3PXP", "an.example.com")
+    svg = qr_svg(uri)
+    assert svg and svg.startswith('<svg role="img"') and "viewBox" in svg and "width=" not in svg.split(">", 1)[0]
+    q = segno.make(uri, error="m")
+    n = len(q.matrix)
+    dark = set()  # dựng lại ô tối từ path "M x y h a m b c ..." (segno vẽ theo hàng, nét ngang)
+    path = re.search(r'class="qrline"[^>]* d="([^"]+)"', svg).group(1)
+    x = y = 0.0
+    for cmd, a, b in re.findall(r"([Mmh])(-?[\d.]+)(?:\s(-?[\d.]+))?", path):
+        a = float(a)
+        if cmd == "M":
+            x, y = a, float(b)
+        elif cmd == "m":
+            x, y = x + a, y + float(b)
+        else:
+            for i in range(int(a)):
+                dark.add((int(y - 0.5) - 4, int(x + i) - 4))
+            x += a
+    want = {(r, c) for r in range(n) for c in range(n) if q.matrix[r][c] & 1}
+    assert dark == want

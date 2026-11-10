@@ -555,6 +555,8 @@ progress.bar::-moz-progress-bar { background: var(--accent); border-radius: 99px
 .dlg textarea { margin: 6px 0 14px; }
 .dlg label { font-size: var(--fs-sm); font-weight: 600; }
 .login .cmd { font-size: 1rem; }
+.totp-qr { width: min(260px, 100%); margin: var(--s3) auto; padding: 8px; background: #fff; border-radius: 8px; }
+.totp-qr svg { display: block; width: 100%; height: auto; }
 .login h1 { margin-bottom: var(--s3); font-size: 22px; }
 .login-hero { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 48px auto -8px; text-align: center; }
 .login-hero .wordmark { font-size: 34px; color: var(--text); }

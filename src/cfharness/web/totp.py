@@ -75,6 +75,18 @@ def otpauth_uri(secret_b32: str, account: str, issuer: str = ISSUER) -> str:
     return f"otpauth://totp/{label}?" + urlencode({"secret": secret_b32, "issuer": issuer, "algorithm": "SHA1", "digits": DIGITS, "period": STEP})
 
 
+def qr_svg(uri: str) -> str | None:
+    """Mã QR (SVG nội tuyến, chỉ `<svg>/<path>` thuộc tính trình bày — không `style`/script, hợp CSP `'self'`) cho URI
+    `otpauth://`, để quét bằng Google Authenticator/Authy/1Password. Sinh ở server (`segno`, Python thuần, không CDN, bí mật
+    không rời trang). Không có `segno` → None (trang chỉ hiện khoá nhập tay)."""
+    try:
+        import segno
+    except ImportError:  # pragma: no cover
+        return None
+    svg = segno.make(uri, error="m").svg_inline(scale=1, border=4, dark="#000", light="#fff", omitsize=True)
+    return svg.replace("<svg ", '<svg role="img" aria-label="Mã QR đăng ký ứng dụng xác thực" ', 1)
+
+
 def _sha(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()
 

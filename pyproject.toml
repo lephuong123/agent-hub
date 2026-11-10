@@ -1,6 +1,6 @@
 [project]
 name = "cfharness"
-version = "0.2.5"
+version = "0.2.6"
 description = "cfharness — hub điều phối đội agent chạy trên `claude` CLI (mốc M0: lõi chạy 1 agent)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -10,6 +10,7 @@ dependencies = [
     "prompt-toolkit>=3.0.40",
     "pydantic>=2.7",
     "pyyaml>=6.0",
+    "segno>=1.6",
     "starlette>=0.40",
     "textual>=1.0",
     "tzdata>=2026.5 ; sys_platform == 'win32'",
