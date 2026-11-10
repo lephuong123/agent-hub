@@ -869,6 +869,10 @@ class ChatBot:
         """Chat nhận tin chủ động KHÔNG có chat gốc (approval, câu hỏi, thông báo của run từ web/lịch/nền) — mặc định = `notify_chats()`."""
         return self.notify_chats()
 
+    def security_chats(self) -> list[str]:
+        """Nơi gửi tin vào/ra web + thiết bị tin cậy (`web.*`, web_events.py) — mặc định = `broadcast_chats()`; Telegram: nhóm riêng của hub."""
+        return sorted(self.broadcast_chats())
+
     ORIGIN_DEPTH = 8  # số bậc `parent_run_id` tối đa khi lần chat gốc
 
     def origin_chat(self, run_id: str | None = None, conversation_id: str | None = None) -> str | None:

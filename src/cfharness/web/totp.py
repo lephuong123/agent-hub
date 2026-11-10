@@ -8,6 +8,7 @@ trước link của Slack/Telegram không làm hỏng nó), thêm vào app xác 
 File (thư mục `HUB_HOME/auth/` 0700 — sandbox run `denyRead`/`denyWrite`, `permissions.deny` Read/Grep/Glob):
 - `auth/totp.json` (0600): `{secret, last_step, created_at}` — bí mật ĐANG dùng; `last_step` chống dùng lại mã.
 - `auth/totp_enroll.json` (0600): `{secret, token_sha256, expires, viewed}` — đăng ký đang chờ; link chỉ lưu dạng băm.
+- Tắt (`disable`) / kích hoạt bí mật mới (`confirm`, `enroll(activate=True)`) → xoá mọi thiết bị tin cậy (`web/devices.py`).
 Thông số: SHA-1, 6 chữ số, bước 30 s, chấp nhận lệch ±1 bước (mã cũ hơn/bằng bước đã dùng bị từ chối).
 """
 
@@ -95,7 +96,15 @@ class TotpStore:
     """Đọc/ghi bí mật TOTP trong `HUB_HOME/auth/`. Dùng bởi tiến trình web (đăng nhập) và CLI của người (đăng ký)."""
 
     def __init__(self, paths: HubPaths) -> None:
+        self.paths = paths
         self.dir: Path = paths.home / "auth"
+        self.devices_forgotten = 0  # số thiết bị tin cậy vừa bị xoá ở lần disable/confirm/enroll(activate) gần nhất
+
+    def _forget_devices(self) -> None:
+        """Bí mật TOTP đổi / bị tắt → mọi thiết bị tin cậy hết hiệu lực (web/devices.py; `totp_fp` là lớp dự phòng)."""
+        from .devices import forget_all
+
+        self.devices_forgotten = forget_all(self.paths)
 
     # ------------------------------------------------------------------ file
     def _write(self, name: str, data: dict[str, Any]) -> None:
@@ -124,6 +133,11 @@ class TotpStore:
     def enrolled(self) -> bool:
         return self._read(ACTIVE) is not None
 
+    def fingerprint(self) -> str | None:
+        """`sha256(bí mật đang dùng)[:16]` — thiết bị tin cậy gắn với giá trị này (đổi bí mật = mọi thiết bị vô hiệu). None nếu chưa bật."""
+        a = self._read(ACTIVE)
+        return _sha(str(a["secret"]))[:16] if a else None
+
     def status(self, now: float | None = None) -> dict[str, Any]:
         now = time.time() if now is None else now
         a, p = self._read(ACTIVE), self._read(PENDING)
@@ -139,6 +153,7 @@ class TotpStore:
                 gone = True
             except FileNotFoundError:
                 pass
+        self._forget_devices()
         return gone
 
     # ------------------------------------------------------------------ đăng ký
@@ -149,6 +164,7 @@ class TotpStore:
         self._write(PENDING, {"v": 1, "secret": secret, "token_sha256": _sha(token), "expires": now + ttl_s, "viewed": False, "created_at": now})
         if activate:
             self._write(ACTIVE, {"v": 1, "secret": secret, "last_step": -1, "created_at": now})
+            self._forget_devices()
         return secret, token
 
     def pending(self, token: Any, now: float | None = None) -> dict[str, Any] | None:
@@ -180,6 +196,7 @@ class TotpStore:
             return False
         self._write(ACTIVE, {"v": 1, "secret": p["secret"], "last_step": st, "created_at": now})
         (self.dir / PENDING).unlink(missing_ok=True)
+        self._forget_devices()
         return True
 
     # ------------------------------------------------------------------ đăng nhập

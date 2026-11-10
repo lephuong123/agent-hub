@@ -128,6 +128,11 @@ class TelegramBot(ChatBot):
         """Tin chủ động không có chat gốc → chỉ chat riêng; nhóm chỉ nhận tin của việc giao từ chính nhóm đó (`route_chats`)."""
         return {c for c in self.notify_chats() if not c.startswith("-")}
 
+    def security_chats(self) -> list[str]:
+        """Tin vào/ra web + thiết bị tin cậy (`web.*`): NHÓM chat riêng của hub (nhóm trong allowlist, `allow_groups`); chưa có nhóm → chat riêng."""
+        groups = sorted(c for c in self.notify_chats() if c.startswith("-"))
+        return groups or sorted(self.broadcast_chats())
+
     def help_text(self) -> str:
         return HELP
 

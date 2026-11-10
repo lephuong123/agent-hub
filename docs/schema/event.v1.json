@@ -286,6 +286,13 @@
     "turn.start": "detail",
     "usage.tick": "summary",
     "user.message": "summary",
+    "web.device_reuse_detected": "summary",
+    "web.device_revoked": "summary",
+    "web.device_trusted": "summary",
+    "web.devices_revoked_all": "summary",
+    "web.login": "summary",
+    "web.login_locked": "summary",
+    "web.logout": "summary",
     "workspace.checkpoint": "debug",
     "workspace.diff": "summary"
   },

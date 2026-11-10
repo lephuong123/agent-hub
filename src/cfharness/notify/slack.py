@@ -31,6 +31,10 @@ log = logging.getLogger("cfharness.notify")
 def format_message(ev: HubEvent) -> str | None:
     """Tin ngắn cho người đọc nhanh: AI — CẦN GÌ — LÀM GÌ. Không id run/luật; lệnh CLI chỉ khi đó là cách duy nhất để xử lý
     (kênh một chiều: webhook Slack). Telegram dùng lại qua `to_plain` (bỏ `*`, `` ` ``)."""
+    if ev.type.startswith("web."):  # vào/ra web + thiết bị tin cậy — chỉ metadata đã lọc (web_events.py)
+        from ..web_events import format_text as _web_text
+
+        return _web_text(ev)
     p = ev.payload or {}
     agent = ev.agent_id or "agent"
     rid = p.get("request_id")

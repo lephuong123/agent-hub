@@ -101,6 +101,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "update.start",
         # Tổng quan máy (admin_overview.py): CHỈ ĐỌC nhưng lộ hoạt động của user OS khác trên máy (chi phí, số run) — chỉ người
         "admin.overview",
+        # Vào/ra web + thiết bị tin cậy (web_events.py): ghi audit + phát event → Telegram — agent không được giả "đăng nhập"/"thu hồi"
+        "web.notify",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})
@@ -192,7 +194,8 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.curation.rpc", "MUTATING_CURATION"), ("cfharness.chat.rpc", "MUTATING_TELEGRAM"), ("cfharness.chat.slack.rpc", "MUTATING_SLACK"),
                       ("cfharness.manager.rpc", "MUTATING_MANAGER"),
                       ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS"),
-                      ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE")):
+                      ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE"),
+                      ("cfharness.web_events", "MUTATING_WEB")):
         try:
             import importlib
 
