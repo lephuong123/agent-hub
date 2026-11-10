@@ -333,6 +333,9 @@ Bind VẪN loopback; nhánh config `web` ∈ `integrity.SECURITY_KEYS`, không c
 `systems/autostart.LaunchDaemonPlan` + `cfharness admin install-daemon --user U [--web-port N] [--write]` (∈ `HUB_HUMAN_ONLY_CLI`).
 Secret `CLAUDE_CODE_OAUTH_TOKEN` → env của mọi tiến trình `claude` (`ClaudeCliRuntime(secrets=)`, `child_env(oauth_token=)` — tạo runtime mới phải truyền
 `secrets=hub.secrets`); không bao giờ vào argv/DB/plist. Test: `tests/test_web_public.py`.
+Thiết bị tin cậy (`web/devices.py`, `auth/trusted_devices.json` chỉ hash, cookie `__Host-…_dev`): CHỈ host public https (không bao giờ `cfharness.localhost`),
+hạn tuyệt đối, xoay + phát hiện dùng lại, gắn `totp_fp`; thu hồi = `cfharness web devices …`/Cài đặt (phiên của thiết bị chết ngay qua `WebAuth.device_ok`).
+Vào/ra web + thiết bị → RPC `web.notify` (HUMAN_ONLY, `web_events.py` lọc metadata theo danh sách trắng) → event `web.*` → Telegram nhóm riêng (`security_chats`). Test: `tests/test_web_devices.py`.
 
 ## M7 luồng MGR-UI — Điều phối viên trên web + Telegram + terminal
 Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes/M7-ui.md`. Ảnh: `docs/screenshots/web/16-…18-*.png`, `docs/screenshots/m2/10-11-dieu-phoi*.svg`. Không migration, không RPC mới.

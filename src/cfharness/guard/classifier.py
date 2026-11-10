@@ -149,7 +149,7 @@ SECURITY_READ_SUBS = re.compile(r"^(find-(generic|internet)-password|find-certif
                                 r"export-key|unlock-keychain|set-keychain-settings|show-keychain-info|dump-trust-settings|authorizationdb|"
                                 r"set-generic-password-partition-list|set-key-partition-list|add-(generic|internet)-password)$")
 # WT-3: dấu hiệu đường dẫn trỏ vào vùng nhạy cảm của HUB_HOME (dùng cho đích động không giải được)
-SENSITIVE_HINT = re.compile(rf"(^|/)(auth|secrets)(/|$)|/(web|tokens)\.json$|\.sock(\.auth)?$|/hub\.db|{_ENV_HOME}|{_HOME_DIR}")
+SENSITIVE_HINT = re.compile(rf"(^|/)(auth|secrets)(/|$)|/(web|tokens|trusted_devices)\.json$|\.sock(\.auth)?$|/hub\.db|{_ENV_HOME}|{_HOME_DIR}")
 UNIX_SOCKET_RE = re.compile(r"\bAF_UNIX\b|UNIX-CONNECT|UNIX-CLIENT|\bcreateConnection\s*\(\s*\{?\s*path|\bnet\.connect\s*\(\s*\{?\s*path|\bnet\.connect\s*\(\s*['\"]/|UNIXSocket|socket\.AF_UNIX|IO::Socket::UNIX|\bunix:/", re.I)
 LIST_ARGV_RE = re.compile(r"""\[\s*((?:(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*,\s*)*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'))\s*,?\s*\]""")
 JS_SPAWN_RE = re.compile(r"""\b(?:spawn|spawnSync|execFile|execFileSync|Deno\.Command|Bun\.spawn)\s*\(\s*(["'])([^"']+)\1\s*,\s*\[([^\]]*)\]""")

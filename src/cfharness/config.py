@@ -218,7 +218,10 @@ DEFAULTS: dict[str, Any] = {
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
-                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
+                       # vào/ra web + thiết bị tin cậy (web_events.py) — chỉ metadata, gửi vào nhóm chat riêng của hub nếu có
+                       "web.login", "web.logout", "web.login_locked", "web.device_trusted", "web.device_reuse_detected", "web.device_revoked",
+                       "web.devices_revoked_all"],
             "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp", "file"],  # nhãn "THAO TÁC NẶNG" (mọi cho phép đều 2 bước — WT-5)
             "callback_ttl_s": 604800,  # nút duyệt còn hiệu lực 7 ngày (waiting_human có thể chờ lâu)
             "pair_ttl_s": 600,
@@ -282,6 +285,10 @@ DEFAULTS: dict[str, Any] = {
         # chống dò mã TOTP: theo IP + toàn cục (mọi IP) + trần theo ngày
         "login": {"ip_max_failures": 5, "global_max_failures": 10, "window_s": 900, "lockout_s": 900,
                   "day_max_failures": 50, "day_lockout_s": 86400},
+        # "Tin cậy thiết bị này" khi đăng nhập TOTP (web/devices.py): CHỈ trên host public https; hạn TUYỆT ĐỐI (1..90 ngày);
+        # tối đa N thiết bị (1..20); token xoay mỗi lần dùng, token cũ còn hợp lệ rotate_grace_s (0..300). `allow_port`: bật cả khi
+        # public_origin có cổng ≠ 443 (Funnel nhiều hub cùng host — cookie không tách cổng nên mặc định tắt). Đổi → khởi động lại web.
+        "trusted_devices": {"enabled": True, "ttl_days": 30, "max_devices": 5, "rotate_grace_s": 60, "allow_port": False},
     },
     # M1 luồng A — MCP server của hub (FR-MS-*)
     "mcp_server": {

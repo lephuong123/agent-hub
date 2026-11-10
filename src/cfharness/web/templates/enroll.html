@@ -28,6 +28,7 @@
   <form method="post" action="/enroll" class="form">
     <input type="hidden" name="t" value="{{ t }}"><input type="hidden" name="action" value="confirm">
     <label>Nhập mã 6 số ứng dụng đang hiện để kích hoạt<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required autofocus></label>
+    {% if devices %}<label class="check small"><input type="checkbox" name="trust" value="1"> Tin cậy thiết bị này{% if device_days %} trong {{ device_days }} ngày{% endif %} — lần sau không cần nhập mã. Đừng chọn trên máy dùng chung.</label>{% endif %}
     <div class="row end"><button class="btn primary" type="submit">Kích hoạt và đăng nhập</button></div>
   </form>
   {% endif %}

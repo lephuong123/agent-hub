@@ -98,6 +98,14 @@ EVENT_LEVELS: dict[str, str] = {
     "guard.blocked": "summary",
     "guard.tamper_detected": "summary",  # hardening SEC: policy/config/hub.db bị ghi NGOÀI RPC (guard/integrity.py) → khôi phục + Slack
     "auth.denied": "summary",  # hardening SEC: method chỉ-người bị gọi từ tiến trình run/thiếu token (auth.py)
+    # web: vào/ra + thiết bị tin cậy (web_events.py, RPC `web.notify` HUMAN_ONLY) — chỉ metadata (cách đăng nhập, nhãn trình duyệt, IP)
+    "web.login": "summary",
+    "web.logout": "summary",
+    "web.login_locked": "summary",
+    "web.device_trusted": "summary",
+    "web.device_reuse_detected": "summary",
+    "web.device_revoked": "summary",
+    "web.devices_revoked_all": "summary",
     "guard.env_tamper": "summary",  # hardening SEC R2-1: .pth/sitecustomize trong venv của hub bị thêm/sửa (chạy ngoài sandbox)
     "guard.trust": "summary",  # người bật/tắt trust full cho agent (guard/service.trust_set)
     "guard.rule_grant": "summary",  # người luôn cho phép / gỡ cho phép agent theo luật (guard/service.rule_grant_set|rm)

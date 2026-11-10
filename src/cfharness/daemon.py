@@ -127,6 +127,10 @@ class Daemon:
         from .admin_overview import register_rpc as _register_admin
 
         _register_admin(self)
+        # Vào/ra web + thiết bị tin cậy: web.notify (HUMAN_ONLY, tự audit + phát event → Telegram/Slack) — web_events.py
+        from .web_events import register_rpc as _register_web_events
+
+        _register_web_events(self)
         # M1 luồng A: thêm mcp.*/secret.*/audit.*/feedback.* và bọc audit các method thay đổi trạng thái.
         # GIỮ Ở CUỐI __init__ — method thêm sau dòng này sẽ không được audit tự động.
         from .mcp_server.rpc import register_rpc
