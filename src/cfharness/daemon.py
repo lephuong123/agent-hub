@@ -52,6 +52,7 @@ class Daemon:
         self._mutating: frozenset[str] = frozenset()
         self.server: asyncio.base_events.Server | None = None
         self.stopping = asyncio.Event()
+        self.exit_code = 0  # ≠ 0 khi dừng để launchd chạy lại (cập nhật dưới LaunchAgent/LaunchDaemon — `SUPERVISED_RESTART_CODE`)
         self.methods: dict[str, Handler] = {
             "hub.ping": lambda p: {"pong": True, "pid": os.getpid()},
             "hub.status": lambda p: self.hub.status(),
@@ -507,6 +508,7 @@ def run_foreground(paths: HubPaths) -> None:
 
     set_private_umask()  # đa instance P1: file daemon tạo (hub.db, logs/, runs/, prompts/…) chỉ user này đọc được; claude con nhận lại umask gốc
     paths.ensure()
+    _hold_while_updating(paths)
     global _INSTANCE_LOCK
     _INSTANCE_LOCK = acquire_instance_lock(paths, wait_s=3.0)
     if _INSTANCE_LOCK is None:
@@ -532,7 +534,59 @@ def run_foreground(paths: HubPaths) -> None:
     install_stderr_masking()  # H-12: log thư viện ra stderr (daemon.out) cũng che
     install_log_filter()  # H-12: log của daemon che theo giá trị secret
     install_log_filter(logging.getLogger("cfharness"))
-    asyncio.run(Daemon(paths).serve())
+    d = Daemon(paths)
+    asyncio.run(d.serve())
+    if d.exit_code:
+        raise SystemExit(d.exit_code)
+
+
+# ---- chạy dưới launchd (LaunchAgent `daemon install-service` / LaunchDaemon `admin install-daemon`, cùng KeepAlive SuccessfulExit=false)
+SUPERVISED_RESTART_CODE = 75  # EX_TEMPFAIL: thoát ≠ 0 → launchd chạy lại daemon (mã 0 = dừng hẳn)
+SUPERVISOR_LABEL_PREFIX = "com.cfharness.daemon."
+_UPDATE_BUSY_PHASES = ("starting", "waiting_daemon", "installing")
+_IS_MACOS = sys.platform == "darwin"
+
+
+def supervisor() -> str | None:
+    """"launchd" khi tiến trình này là job daemon do cfharness cài (launchd đặt `XPC_SERVICE_NAME` = Label của job), ngược lại None.
+    Chỉ nhận nhãn của chính cfharness: shell Terminal cũng có `XPC_SERVICE_NAME` (giá trị khác)."""
+    if _IS_MACOS and os.environ.get("XPC_SERVICE_NAME", "").startswith(SUPERVISOR_LABEL_PREFIX):
+        return "launchd"
+    return None
+
+
+def _update_busy(paths: HubPaths) -> bool:
+    try:
+        st = json.loads((paths.home / "update" / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if st.get("state") not in ("starting", "running") or st.get("phase", "starting") not in _UPDATE_BUSY_PHASES:
+        return False
+    return time.time() - float(st.get("updated_at") or st.get("started_at") or 0) < 1200  # helper treo quá 20 phút → bỏ qua
+
+
+def _hold_while_updating(paths: HubPaths, *, poll_s: float = 1.0, max_s: float = 1200.0) -> None:
+    """launchd chạy lại daemon NGAY khi bản cũ thoát để cập nhật — lúc đó `uv` còn đang cài đè venv. Bản này chờ cài xong rồi thoát
+    `SUPERVISED_RESTART_CODE` để launchd chạy lại bằng mã MỚI (module đã nạp trong tiến trình này là bản cũ)."""
+    if not _update_busy(paths):
+        return
+    print("daemon: đang cập nhật cfharness — chờ cài xong rồi để launchd chạy lại bằng bản mới", file=sys.stderr)
+    deadline = time.monotonic() + max_s
+    while _update_busy(paths) and time.monotonic() < deadline:
+        time.sleep(poll_s)
+    raise SystemExit(SUPERVISED_RESTART_CODE)
+
+
+def wait_supervised(paths: HubPaths, wait_s: float) -> int | None:
+    """Chờ launchd tự chạy lại daemon (không tự bật bản thứ hai). Trả pid khi daemon trả lời, None khi hết giờ."""
+    client = RpcClient(paths.socket, timeout=2)
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline:
+        try:
+            return int(client.call("hub.ping").get("pid") or 0)
+        except DaemonUnavailable:
+            time.sleep(0.5)
+    return None
 
 
 def spawn_background(paths: HubPaths, wait_s: float = 15.0) -> int:

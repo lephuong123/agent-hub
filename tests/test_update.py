@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -205,3 +206,97 @@ async def test_web_card_editable_install_has_no_button(hub_home):
         assert "Không cập nhật tự động được" in card and "/do/update_start" not in card
     finally:
         await _stop(env)
+
+
+# ------------------------------------------------------------------ chạy dưới launchd (LaunchAgent/LaunchDaemon)
+# Sự cố thật (hub lamlinh, LaunchDaemon): cập nhật dừng daemon (mã 0 → launchd không chạy lại) rồi helper tự bật daemon NGOÀI launchd.
+def test_supervisor_detects_only_cfharness_launchd_jobs(monkeypatch):
+    from cfharness import daemon as D
+
+    monkeypatch.setattr(D, "_IS_MACOS", True)
+    for v, want in (("com.cfharness.daemon.lamlinh", "launchd"), ("com.cfharness.daemon.a1b2c3", "launchd"),
+                    ("application.com.apple.Terminal.123", None), ("0", None), ("com.cfharness.web.lamlinh", None)):
+        monkeypatch.setenv("XPC_SERVICE_NAME", v)
+        assert D.supervisor() == want, v
+    monkeypatch.delenv("XPC_SERVICE_NAME")
+    assert D.supervisor() is None
+    monkeypatch.setattr(D, "_IS_MACOS", False)
+    monkeypatch.setenv("XPC_SERVICE_NAME", "com.cfharness.daemon.x")
+    assert D.supervisor() is None
+
+
+def test_plan_supervised_waits_for_launchd(hub_home):
+    from cfharness.updater import SUPERVISOR_WAIT_S
+
+    up, spawned = make_updater(hub_home)
+    up.start(supervised=True)
+    argv, _ = spawned[0]
+    assert json.loads(argv[argv.index("--restart") + 1]) == ["/venv/bin/python", "-m", "cfharness", "daemon", "start",
+                                                            "--wait-supervisor", str(SUPERVISOR_WAIT_S)]
+    assert SUPERVISOR_WAIT_S < helper.RESTART_TIMEOUT_S
+
+
+@pytest.mark.parametrize("label", ["com.cfharness.daemon.lamlinh", None])
+async def test_rpc_update_under_launchd_exits_for_restart(hub_home, monkeypatch, label):
+    from m7_fake import close, make_daemon, rpc
+
+    from cfharness import daemon as D
+
+    monkeypatch.setattr(D, "_IS_MACOS", True)
+    if label:
+        monkeypatch.setenv("XPC_SERVICE_NAME", label)
+    else:
+        monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
+    d = await make_daemon(hub_home)
+    try:
+        spawned = patch_updater(d.hub.updater)
+        await rpc(d, "update.start", {})
+        argv, opts = spawned[0]
+        restart = json.loads(argv[argv.index("--restart") + 1])
+        assert "XPC_SERVICE_NAME" not in opts["env"]  # daemon helper có thể tự bật không được tưởng mình là job launchd
+        if label:
+            assert d.exit_code == D.SUPERVISED_RESTART_CODE and "--wait-supervisor" in restart
+        else:
+            assert d.exit_code == 0 and "--wait-supervisor" not in restart
+    finally:
+        await close(d)
+
+
+def test_daemon_holds_while_installing_then_exits_for_restart(tmp_path):
+    """launchd chạy lại daemon ngay khi bản cũ thoát — lúc uv còn cài đè venv: bản đó chờ cài xong rồi thoát 75 (chạy lại bằng mã mới)."""
+    import threading
+
+    from cfharness import daemon as D
+    from cfharness.paths import HubPaths
+
+    hp = HubPaths(tmp_path / "hub")
+    hp.ensure()
+    D._hold_while_updating(hp)  # không có cập nhật → đi tiếp ngay
+    state = hp.home / "update" / "state.json"
+    state.parent.mkdir()
+    helper.write_state(state, {"state": "running", "phase": "installing", "updated_at": time.time()})
+
+    def done():
+        time.sleep(0.4)
+        helper.write_state(state, {"state": "running", "phase": "restarting", "updated_at": time.time()})
+
+    threading.Thread(target=done).start()
+    t0 = time.monotonic()
+    with pytest.raises(SystemExit) as ei:
+        D._hold_while_updating(hp, poll_s=0.05)
+    assert ei.value.code == D.SUPERVISED_RESTART_CODE and time.monotonic() - t0 >= 0.3
+    helper.write_state(state, {"state": "running", "phase": "installing", "updated_at": time.time() - 5000})  # helper treo → bỏ qua
+    D._hold_while_updating(hp)
+
+
+def test_wait_supervised_returns_pid_or_none(hub_home):
+    from cfharness import daemon as D
+
+    assert D.wait_supervised(hub_home, 0.3) is None
+    D.spawn_background(hub_home)
+    try:
+        assert D.wait_supervised(hub_home, 5) > 0
+    finally:
+        from cfharness.rpc import RpcClient
+
+        RpcClient(hub_home.socket, timeout=5).call("hub.shutdown")

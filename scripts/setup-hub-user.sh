@@ -11,7 +11,7 @@ FULL="${2:-Lam Linh}"
 WEB="${3:-8721}"
 MCP="${4:-8722}"
 DOMAIN="trungtamdhs.com"
-VER="${VER:-v0.2.6}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
+VER="${VER:-v0.2.7}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
 H="/Users/$U"
 WS="$H/Workspace"
 ADMIN="${SUDO_USER:-}"
@@ -48,19 +48,40 @@ as_u "$H/.local/bin/uv" tool install --force --python 3.13 "git+https://github.c
 ok "uv $(as_u "$H/.local/bin/uv" --version | awk '{print $2}') · claude $(as_u "$H/.local/bin/claude" --version | awk '{print $1}') · $(cfh --version 2>/dev/null || echo cfharness)"
 
 step "3/8 Token Claude dùng chung (CLAUDE_CODE_OAUTH_TOKEN)"
-if cfh secret list 2>/dev/null | grep -q CLAUDE_CODE_OAUTH_TOKEN; then ok "hub đã có token"; else
-  echo "Dán token sk-ant-oat01-… (không hiện ra màn hình). Chưa có → nhấn Enter để tạo bằng 'claude setup-token':"
-  read -rs TOKEN; echo
+# Token `claude setup-token` dài ~108 ký tự và thường bị Terminal XUỐNG DÒNG khi in → dán vào `read` một dòng sẽ CẮT CỤT
+# (vẫn bắt đầu bằng sk-ant- nên trước đây lọt kiểm tra → run lỗi 401 "OAuth access token is invalid"). Đọc nhiều dòng, bỏ
+# khoảng trắng, rồi GỌI THỬ claude bằng token trước khi lưu.
+TOKFILE="$H/.cfharness/secrets/CLAUDE_CODE_OAUTH_TOKEN"
+token_ok() {  # $1 = token → claude trả lời được không (một câu rất ngắn, chạy dưới user $U)
+  local out
+  out="$(cd "$WS" && as_u env CLAUDE_CODE_OAUTH_TOKEN="$1" "$H/.local/bin/claude" -p --max-turns 1 --setting-sources "" "Reply with just: OK" 2>&1 || true)"
+  case "$out" in *OK*) return 0;; *) printf '  claude: %s\n' "$(printf '%s' "$out" | tail -1 | cut -c1-160)"; return 1;; esac
+}
+read_token() {  # đọc tới khi đủ dài (ghép các dòng bị xuống dòng), bỏ mọi khoảng trắng
+  local line t=""
+  while IFS= read -rs line; do
+    t+="${line//[[:space:]]/}"
+    [ -z "$line" ] && [ -z "$t" ] && break   # Enter trên dòng trống đầu tiên = chưa có token
+    [ ${#t} -ge 100 ] && break
+  done
+  echo
+  TOKEN="$t"
+}
+if [ -s "$TOKFILE" ] && token_ok "$(cat "$TOKFILE")"; then ok "hub đã có token (đã gọi thử claude: OK)"; else
+  [ -s "$TOKFILE" ] && warn "token đang lưu trong hub KHÔNG dùng được — nhập lại"
+  echo "Dán token sk-ant-oat01-… (không hiện ra màn hình; dán cả khi bị xuống dòng). Chưa có → nhấn Enter để tạo bằng 'claude setup-token':"
+  read_token
   if [ -z "$TOKEN" ]; then
     sudo -u "$ADMIN" -H "/Users/$ADMIN/.local/bin/claude" setup-token
     echo "Dán token vừa in ở trên (sk-ant-oat01-…):"
-    read -rs TOKEN; echo
+    read_token
     printf '\033[3J\033[H\033[2J'   # xoá màn hình + scrollback: token vừa hiện ra không nằm lại trong Terminal
   fi
   case "$TOKEN" in sk-ant-*) ;; *) echo "Token không đúng dạng sk-ant-…"; exit 1;; esac
+  token_ok "$TOKEN" || { echo "Token bị Claude từ chối (dán thiếu? hết hạn?) — chạy lại script"; exit 1; }
   printf '%s' "$TOKEN" | cfh secret set CLAUDE_CODE_OAUTH_TOKEN --value-stdin >/dev/null
   unset TOKEN
-  ok "đã lưu token vào secret store của $U (nhớ lưu token ở nơi an toàn để dùng cho user sau)"
+  ok "đã lưu token — đã gọi thử claude: OK. Nhớ cất token ở nơi an toàn cho user sau"
 fi
 
 step "4/8 Cấu hình hub"
