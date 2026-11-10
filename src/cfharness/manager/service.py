@@ -193,6 +193,13 @@ class ManagerService:
         hub.bus.add_listener(self._on_event)
 
     # ------------------------------------------------------------------ cấu hình
+    def _slack_reply_mode(self) -> str:
+        """`notify.slack.mention_reply`: "full" (mặc định) | "result" (tag trong kênh → chỉ kết quả, ngắn). Lỗi đọc → "full"."""
+        try:
+            return str(self.hub.config.get("notify.slack.mention_reply") or "full")
+        except Exception:
+            return "full"
+
     def cfg(self, key: str, default: Any = None) -> Any:
         try:
             v = self.hub.config.get(f"manager.{key}")
@@ -546,6 +553,7 @@ class ManagerService:
             text = f"{text}\n📎 {len(saved_imgs)} ảnh: " + ", ".join(f.rsplit("/", 1)[-1] for f in saved_imgs)
         if saved_docs:
             text = f"{text}\n📎 {len(saved_docs)} tệp: " + ", ".join(f.rsplit("/", 1)[-1] for f in saved_docs)
+        ro = prompts.result_only(channel, self._slack_reply_mode())
         busy = self._active_runs(aid, conv["id"])
         if busy and busy[0]["status"] != "running":
             r = busy[0]
@@ -559,12 +567,12 @@ class ManagerService:
 
             r = busy[0]
             try:
-                res = await steer(self.hub, r["id"], self.render_prompt(r["id"], prompts.chat_prompt(channel, conv["id"], prompt_text)), by="user", channel=channel)
+                res = await steer(self.hub, r["id"], self.render_prompt(r["id"], prompts.chat_prompt(channel, conv["id"], prompt_text, result_only=ro)), by="user", channel=channel)
             except Conflict:
                 raise Conflict(f"điều phối viên đang kết thúc lượt trả lời trước (run {r['id']}) — gửi lại sau giây lát") from None
             self._add_msg(conv["id"], "user", text, r["id"])
             return {"conversation_id": conv["id"], "run_id": r["id"], "steered": True, "seq": (res or {}).get("seq")}
-        run = self._submit(conv, prompts.chat_prompt(channel, conv["id"], prompt_text), kind="chat", budget=self.cfg("chat_budget_usd"))
+        run = self._submit(conv, prompts.chat_prompt(channel, conv["id"], prompt_text, result_only=ro), kind="chat", budget=self.cfg("chat_budget_usd"))
         self._add_msg(conv["id"], "user", text, run["id"])
         self.conn.execute("UPDATE manager_conversations SET turns=turns+1 WHERE id=?", (conv["id"],))
         out = {"conversation_id": conv["id"], "run_id": run["id"], "session_id": run["session_id"], "resumed": bool(run.get("resumed_from_session"))}
@@ -892,7 +900,7 @@ class ManagerService:
             except NotFound:
                 pass
         prompt = prompts.tick_prompt(events, dropped=dropped, reason=reason, open_work=open_work, gates=gates_mode(self.hub.config),
-                                     conv_channels=conv_channels)
+                                     conv_channels=conv_channels, result_mode=self._slack_reply_mode())
         try:
             run = self._submit(conv, prompt, kind="tick", budget=self.cfg("tick_budget_usd"),
                                extra_opts={"tick_convs": tick_convs} if tick_convs else None)
