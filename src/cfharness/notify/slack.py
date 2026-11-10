@@ -63,6 +63,17 @@ def format_message(ev: HubEvent) -> str | None:
         return f"⛔ Đã chặn *{agent}* dùng `{p.get('method')}` — thao tác này chỉ người được làm."
     if ev.type == "run.repeated_failure":
         return f"❌ *{agent}* lỗi {p.get('count')} lần liên tiếp: {_clip(p.get('error'), 200)}"
+    # cost-guardrails: cảnh báo/vượt ngân sách ngày — phát một lần/ngày/scope (runs._budget_warn, cost_guard.flag_once)
+    if ev.type in ("budget.warning", "budget.exceeded"):
+        scope = {"hub": "toàn hub", "team": "team", "agent": "agent", "manager": "điều phối viên"}.get(str(p.get("scope")), str(p.get("scope")))
+        owner = "" if p.get("scope") == "hub" else f" *{_clip(p.get('owner'), 60)}*"
+        try:
+            used, lim = float(p.get("used") or 0), float(p.get("limit") or 0)
+        except (TypeError, ValueError):
+            used, lim = 0.0, 0.0
+        if ev.type == "budget.warning":
+            return f"💰 {scope}{owner} đã dùng ${used:.2f}/${lim:.2f} ngân sách hôm nay ({p.get('pct')}%)."
+        return f"💸 {scope}{owner} đã hết ngân sách hôm nay (${used:.2f}/${lim:.2f}) — run mới bị chặn tới ngày mai; việc đang chờ duyệt vẫn giữ."
     if ev.type == "learning.rolled_back":
         return f"↩️ Đã hoàn tác một thay đổi tự học của *{agent}*: {_clip(p.get('reason'), 200)}"
     # M4-B: digest hằng ngày (FR-LN-13) — nội dung do learning_ops/digest.py dựng (đã tóm tắt, không chứa dữ liệu MCP)

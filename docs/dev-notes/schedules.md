@@ -65,7 +65,8 @@ Kiểm của điều phối viên (`ScheduleService.manager_check`) chạy ở *
 - trần (nhánh config `schedules` — đã thêm vào `integrity.SECURITY_KEYS`, chỉ người đổi): `manager_max_active` 10 lịch đang bật (kể cả
   khi resume), khoảng ngắn nhất giữa 2 lượt ≥ `min_interval_s` 900 s (xét ~200 mốc tới, nên `*/10 8-17 * * *` cũng bị bắt), `budget_usd`
   bắt buộc và ≤ `config_bounds.max_budget_usd_per_run` (lớp 1 kẹp về trần như `run_start`; lớp 2 không kẹp), ước tính $/ngày (số lượt
-  ngày nhiều nhất trong 7 ngày × budget) của lịch + các lịch manager khác ≤ `manager_daily_budget_usd` (null = `config_bounds.budget_usd_per_day`),
+  ngày nhiều nhất trong 7 ngày × $/lượt — $/lượt = chi phí THẬT trung bình ≤ `estimate_recent_fires` lượt gần nhất khi đã có ≥ `estimate_min_fires`
+  lượt có `cost_usd`, kẹp ≤ budget; chưa đủ lịch sử → budget; xem `cost-guardrails.md`) của lịch + các lịch manager khác ≤ `manager_daily_budget_usd` (null = `config_bounds.budget_usd_per_day`),
   chạy-ngay ≤ `manager_run_now_per_hour` 6, không đặt `model` (như Hermes: model của job là của người).
 - đích theo luật sẵn có: kind agent → `check_rpc("run.start")` (không agent manager, không thành viên team ESTOP/team có review), kind task →
   `check_rpc("task.create")` (assignee không phải manager, ESTOP, review, workspace, budget); kind manager → `deliver_to` phải là hội thoại
