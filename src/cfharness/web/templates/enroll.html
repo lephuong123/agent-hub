@@ -15,7 +15,13 @@
   </form>
   {% else %}
   {% if stage == "show" %}
+  {% if qr %}
+  <p>Mở ứng dụng xác thực (Google Authenticator, Microsoft Authenticator, Authy, 1Password…) trên điện thoại → <strong>Thêm</strong> → <strong>Quét mã QR</strong>:</p>
+  <div class="totp-qr">{{ qr }}</div>
+  <p class="muted small">Đang mở trang này trên chính điện thoại? Bấm <a href="{{ uri }}">mở trong ứng dụng xác thực</a>, hoặc nhập tay khoá dưới (loại: theo thời gian, 6 số, 30 giây):</p>
+  {% else %}
   <p>Thêm tài khoản vào ứng dụng xác thực: bấm <a href="{{ uri }}">mở trong ứng dụng xác thực</a> (trên điện thoại), hoặc nhập tay khoá sau (loại: theo thời gian, 6 số, 30 giây):</p>
+  {% endif %}
   <pre class="cmd">{{ secret }}</pre>
   <p class="muted small">Đừng tải lại trang này — mã chỉ hiện một lần. Mất trang trước khi xác nhận: nhờ quản trị viên cấp link mới.</p>
   {% endif %}

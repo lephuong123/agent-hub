@@ -472,11 +472,17 @@ async def enroll(request: Request) -> Response:
         if secret is None:
             await _audit_login(request, "web.login_failed", {"ip": _ip(request), "method": "enroll", "reason": "enroll_link_invalid_or_viewed"})
             return st.templates.TemplateResponse(request, tpl, {**base, "stage": "invalid", "t": ""}, status_code=401)
-        from .totp import otpauth_uri
+        from markupsafe import Markup
+
+        from .totp import otpauth_uri, qr_svg
 
         account = st.public_hosts and sorted(st.public_hosts)[0] or st.name
-        return st.templates.TemplateResponse(request, tpl, {**base, "stage": "show", "t": tok, "secret": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)),
-                                                            "uri": otpauth_uri(secret, account)})
+        uri = otpauth_uri(secret, account)
+        qr = qr_svg(uri)  # SVG do server tự sinh từ URI của chính hub (không có dữ liệu người dùng/agent) → an toàn để chèn nguyên
+        resp = st.templates.TemplateResponse(request, tpl, {**base, "stage": "show", "t": tok, "uri": uri, "qr": Markup(qr) if qr else None,
+                                                            "secret": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4))})
+        resp.headers["Cache-Control"] = "no-store"  # trang mang bí mật: không lưu vào cache trình duyệt/proxy
+        return resp
     if act == "confirm":
         if st.totp.pending(tok) is None:
             return st.templates.TemplateResponse(request, tpl, {**base, "stage": "invalid", "t": ""}, status_code=401)
