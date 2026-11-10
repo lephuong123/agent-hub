@@ -69,5 +69,7 @@ def render(name: str, agent_id: str, overrides: dict[str, Any] | None = None) ->
     cfg = _merge(t.get("config") or {}, overrides or {})
     cfg["id"] = agent_id
     cfg.setdefault("name", agent_id)
-    soul = str(t.get("soul") or "").format(name=cfg["name"], role=cfg.get("role") or "general assistant")
+    # Chỉ thay `{name}`/`{role}` — KHÔNG dùng str.format: SOUL có ngoặc nhọn thật (vd `{repo, branch, base}` của manager)
+    # làm format ném KeyError khi tạo agent.
+    soul = str(t.get("soul") or "").replace("{name}", str(cfg["name"])).replace("{role}", str(cfg.get("role") or "general assistant"))
     return cfg, soul
