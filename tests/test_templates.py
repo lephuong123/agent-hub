@@ -27,6 +27,15 @@ def test_render_and_overrides():
         templates.render("nope", "x")
 
 
+@pytest.mark.parametrize("name", templates.names())
+def test_every_template_renders(name):
+    """Mọi template dựng được SOUL — kể cả khi có ngoặc nhọn thật (manager: `{repo, branch, base}` từng làm KeyError)."""
+    cfg, soul = templates.render(name, "a1", {"name": "Tên {x}"})
+    assert soul.startswith("# Tên {x}") and "{name}" not in soul and "{role}" not in soul
+    if name == "manager":
+        assert "{repo, branch, base}" in soul
+
+
 @pytest.mark.parametrize("name", ["researcher", "coder", "reviewer", "ops"])
 async def test_agent_from_template_runs_immediately(hub_home, name):
     """Agent tạo từ template hợp lệ với AgentConfig và chạy được run đầu tiên ngay (G-1: ≤ 1 phút)."""

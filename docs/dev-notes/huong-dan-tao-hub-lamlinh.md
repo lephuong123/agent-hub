@@ -18,7 +18,7 @@ Tài liệu gốc: `plan-multi-instance.md` (quyết định), `multi-instance.m
 
 > Cần cfharness **v0.2.5** trở lên (bản có đa instance: giam workspace, web public + TOTP, LaunchDaemon, tổng quan admin).
 
-**Cách nhanh — một lệnh:** `scripts/setup-hub-user.sh` làm bước 1–8 dưới đây (chạy lại được, bước đã xong thì bỏ qua). Mở
+**Cách nhanh — một lệnh:** `scripts/setup-hub-user.sh` làm bước 1–8 dưới đây + tạo sẵn điều phối viên `dieu-phoi` (mẫu `manager`, `manager set`) (chạy lại được, bước đã xong thì bỏ qua). Mở
 **Terminal.app** (cần TTY để nhập mật khẩu sudo + dán token):
 
 ```bash
@@ -194,6 +194,14 @@ sudo launchctl print system/com.cfharness.web.lamlinh   | grep -E 'state|pid'
 $L daemon status
 curl -sI -H 'Host: lamlinh.trungtamdhs.com' http://127.0.0.1:8721/login | head -1     # 200 hoặc 30x, KHÔNG phải 421
 ```
+
+## Bước 6b — Điều phối viên
+
+```bash
+$L agent create dieu-phoi --template manager --name "Điều phối viên"
+$L manager set dieu-phoi                 # tạo từ mẫu KHÔNG cấp quyền — phải set
+```
+Khung quyền mặc định strict (Read/Grep/Glob). Muốn rộng hơn: `$L manager capabilities set --profile hermes --sync-agent`.
 
 ## Bước 7 — Đăng ký mã đăng nhập (TOTP) cho LamLinh
 
