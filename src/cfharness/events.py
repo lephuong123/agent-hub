@@ -96,7 +96,9 @@ EVENT_LEVELS: dict[str, str] = {
     "approval.escalated": "summary",
     "guard.decision": "debug",
     "guard.blocked": "summary",
-    "guard.tamper_detected": "summary",  # hardening SEC: policy/config/hub.db bị ghi NGOÀI RPC (guard/integrity.py) → khôi phục + Slack
+    "guard.tamper_detected": "summary",
+    "backup.created": "summary",  # bản sao lưu HUB_HOME mới (backup.py): {id, kind, size, pruned}
+    "backup.failed": "summary",  # sao lưu tự động lỗi: {kind, error}  # hardening SEC: policy/config/hub.db bị ghi NGOÀI RPC (guard/integrity.py) → khôi phục + Slack
     "auth.denied": "summary",  # hardening SEC: method chỉ-người bị gọi từ tiến trình run/thiếu token (auth.py)
     # web: vào/ra + thiết bị tin cậy (web_events.py, RPC `web.notify` HUMAN_ONLY) — chỉ metadata (cách đăng nhập, nhãn trình duyệt, IP)
     "web.login": "summary",

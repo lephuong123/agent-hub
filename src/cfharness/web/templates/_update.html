@@ -21,8 +21,10 @@
     {% if busy %}
       <p><b>{{ phase }}</b> → {{ st.tag }} …</p>
     {% elif st and st.state in ('done', 'failed') %}
-      {% if st.state == 'done' %}<p class="small"><span class="pill ok">{{ m.icon('check') }}đã cập nhật</span> {{ st.version_before }} → {{ st.version_after or st.tag }} {{ m.rel(st.finished_at) }}</p>
-      {% else %}<p class="small"><span class="pill danger">{{ m.icon('alert') }}cập nhật lỗi</span> {{ m.rel(st.finished_at) }} — {{ st.error }}</p>{% endif %}
+      {% if st.state == 'done' and st.kind == 'rollback' %}<p class="small"><span class="pill ok">{{ m.icon('undo') }}đã quay về</span> {{ st.version_after or st.tag }}{% if st.rollback and st.rollback.db_restored %} + hub.db trước cập nhật{% endif %} {{ m.rel(st.finished_at) }}</p>
+      {% elif st.state == 'done' %}<p class="small"><span class="pill ok">{{ m.icon('check') }}đã cập nhật</span> {{ st.version_before }} → {{ st.version_after or st.tag }} {{ m.rel(st.finished_at) }}</p>
+        {% if st.version_before %}<p class="small muted">Bản mới có vấn đề? Quay về {{ st.version_before }}{% if st.backup %} (+ hub.db trước cập nhật nếu schema đã tăng){% endif %}: <code>cfharness update --rollback</code></p>{% endif %}
+      {% else %}<p class="small"><span class="pill danger">{{ m.icon('alert') }}{{ 'đã tự quay về' if st.rolled_back else 'cập nhật lỗi' }}</span> {{ m.rel(st.finished_at) }} — {{ st.error }}</p>{% endif %}
     {% endif %}
     {% if web_stale %}
       <p class="small"><span class="pill warn">{{ m.icon('alert') }}giao diện web đang chạy bản cũ {{ web_version }}</span> Tắt <code>cfharness web</code> (Ctrl+C) rồi chạy lại <code>cfharness web --open</code> để dùng giao diện mới.</p>

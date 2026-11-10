@@ -565,6 +565,18 @@ Chi tiết: `docs/dev-notes/update.md`. Không migration. Test: `tests/test_upda
 Bất biến: `update.start` ∈ HUMAN_ONLY (không ở MANAGER_ALLOWED), `cfharness update` ∈ `HUB_HUMAN_ONLY_CLI`; tag chỉ dạng `vX.Y.Z`, repo cố định
 (`updater.REPO`); có run chạy/chờ → từ chối trừ `force`. Helper không được import `cfharness` (venv bị cài đè trong lúc chạy).
 
+## Sao lưu / khôi phục HUB_HOME + cập nhật có lưới an toàn — `backup.py`
+Chi tiết, danh sách gồm/bỏ, giới hạn: `docs/dev-notes/backup.md`. Không migration. Test: `tests/test_backup.py`, `tests/test_sec_auth.py::test_backup_*`.
+- `backup.py`: archive `HUB_HOME/backups/<id>.tar.gz` (0600, thư mục 0700) + `<id>.json`; hub.db bằng SQLite online backup API (kết nối chỉ đọc
+  riêng), KHÔNG chép file thô; bỏ `secrets/`, `auth/`, `mcp_server/` (không mã hoá). `hub.backups` (vòng nền `backup.schedule`, mặc định
+  `daily 03:30`, giữ `backup.keep`), RPC `backup.list|create|verify|restore_plan`, CLI `backup create|list|verify|restore` (`backup_cli.py`),
+  thẻ "Sao lưu" ở Cài đặt (`web/backup_pages.py`, ACTIONS `backup_create`).
+- Bất biến: khôi phục KHÔNG có RPC — chỉ CLI của người, daemon dừng (giữ `daemon.lock`), xác nhận 2 bước, chụp `pre-restore` trước, ghi lại
+  `integrity_baseline` sau (`rebaseline_offline`). `backup.create|verify|restore_plan`, `update.rollback` ∈ HUMAN_ONLY; `backup` ∈ HUB_HUMAN_ONLY_CLI;
+  sandbox denyRead/denyWrite `backups/`. Thêm thư mục cấp 1 mới vào HUB_HOME → quyết định rõ thuộc `INCLUDE_DIRS` hay `EXCLUDED`.
+- Cập nhật: `update.start` tạo bản `pre-update` trước khi chạy helper; helper (chỉ stdlib) dò `hub.ping`, không lên → cài lại bản cũ + khôi phục hub.db
+  khi `user_version` đã tăng; `cfharness update --rollback` (RPC `update.rollback`). Pha mới của helper mà daemon phải chờ → `daemon._UPDATE_BUSY_PHASES`.
+
 ## Tổng quan máy (Q6) — mỗi hub xuất trạng thái số liệu, admin xem mọi hub
 Chi tiết, thiết lập nhóm/thư mục, giới hạn: `docs/dev-notes/admin-overview.md`. Không migration. Test: `tests/test_admin_overview.py`.
 - `admin_overview.py`: `hub.admin_export` (tắt mặc định, `admin_export.*` ∈ SECURITY_KEYS) ghi nguyên tử `<dir>/<user-os>.json` 0640 nhóm

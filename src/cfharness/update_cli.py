@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Any
 
 PHASES = {"starting": "chuẩn bị", "waiting_daemon": "chờ daemon dừng", "installing": "đang tải + cài bản mới",
-          "restarting": "khởi động lại daemon", "verifying": "kiểm tra phiên bản", "finished": "xong"}
+          "restarting": "khởi động lại daemon", "health": "chờ daemon trả lời", "rolling_back": "quay về bản trước (cài lại + hub.db nếu cần)",
+          "rollback_restarting": "khởi động lại daemon bản trước", "verifying": "kiểm tra phiên bản", "finished": "xong"}
 
 
 def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
@@ -23,6 +24,8 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     u.add_argument("--yes", "-y", action="store_true", help="không hỏi lại")
     u.add_argument("--force", action="store_true", help="cập nhật cả khi đang có run chạy (run bị ngắt sẽ tự tiếp tục) hoặc cài lại cùng bản")
     u.add_argument("--tag", default=None, help="cài đúng tag vX.Y.Z thay vì bản mới nhất")
+    u.add_argument("--rollback", action="store_true",
+                   help="quay về bản trước lần cập nhật gần nhất (+ hub.db trước cập nhật nếu schema đã tăng)")
     u.set_defaults(fn=cmd_update)
 
 
@@ -56,6 +59,11 @@ def _follow(ctx: Any, timeout: float = 1200.0) -> int:
             last = st.get("phase")
             print(f"  … {PHASES.get(str(last), last)}", flush=True)
         if st.get("state") in ("done", "failed"):
+            if st["state"] == "done" and st.get("kind") == "rollback":
+                rb = st.get("rollback") or {}
+                print(f"đã quay về {st.get('version_after') or st.get('tag')}" + (" + hub.db trước cập nhật" if rb.get("db_restored") else "")
+                      + " · daemon đã chạy lại")
+                return 0
             if st["state"] == "done":
                 print(f"đã cập nhật {st.get('version_before')} → {st.get('version_after') or st.get('tag')} · daemon đã chạy lại")
                 print("Giao diện web / `cfharness chat` đang mở vẫn là bản cũ — tắt và mở lại.")
@@ -67,8 +75,52 @@ def _follow(ctx: Any, timeout: float = 1200.0) -> int:
     return 1
 
 
+def cmd_rollback(ctx: Any) -> int:
+    """`update --rollback`: qua daemon (RPC `update.rollback`); daemon không lên được (bản mới hỏng) → chạy helper tại chỗ từ state.json."""
+    from .errors import HubError, exit_code_for
+    from .rpc import DaemonUnavailable
+    from .updater import Updater
+
+    a = ctx.args
+    up = Updater(ctx.paths)
+    try:
+        tgt = up.rollback_target()
+    except HubError as e:
+        print(f"lỗi: {e}", file=sys.stderr)
+        return exit_code_for(e.code)
+    bk = tgt.get("backup") or {}
+    print(f"Quay về {tgt['tag']} (đang chạy {tgt['from']}, lần cập nhật lên {tgt.get('rollback_of')}).")
+    print(f"hub.db: khôi phục từ bản sao lưu {bk['id']} NẾU schema đã tăng (dữ liệu ghi sau lúc đó được giữ riêng ở backups/)"
+          if bk.get("id") else "hub.db: giữ nguyên (không có bản sao lưu trước cập nhật)")
+    if not a.yes:
+        if not sys.stdin.isatty():
+            print("lỗi: cần --yes khi không chạy trong terminal", file=sys.stderr)
+            return 1
+        if input("Daemon sẽ dừng rồi chạy lại bằng bản trước. Tiếp tục? [y/N] ").strip().lower() not in ("y", "yes", "c", "co", "có"):
+            print("đã huỷ")
+            return 0
+    try:
+        ctx.client(autostart=False)
+        r = ctx.call("update.rollback", {"force": a.force})
+    except DaemonUnavailable:
+        import os
+
+        env = dict(os.environ)
+        env["CFHARNESS_HOME"] = str(ctx.paths.home)
+        env.pop("XPC_SERVICE_NAME", None)
+        try:
+            r = up.rollback(force=True, env=env)
+        except HubError as e:
+            print(f"lỗi: {e}", file=sys.stderr)
+            return exit_code_for(e.code)
+    print(f"bắt đầu quay về → {r.get('tag')} (log: {r.get('log')})", flush=True)
+    return _follow(ctx)
+
+
 def cmd_update(ctx: Any) -> int:
     a = ctx.args
+    if a.rollback:
+        return cmd_rollback(ctx)
     c = ctx.call("update.check", {"refresh": True})
     if a.check or (ctx.json and not a.yes):
         ctx.out(c, _summary(c))

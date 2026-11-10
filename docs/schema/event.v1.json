@@ -162,6 +162,8 @@
     "auth.cleared": "summary",
     "auth.denied": "summary",
     "auth.transient": "summary",
+    "backup.created": "summary",
+    "backup.failed": "summary",
     "budget.exceeded": "summary",
     "budget.warning": "summary",
     "cache.warning": "summary",

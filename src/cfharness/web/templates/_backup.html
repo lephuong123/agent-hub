@@ -1,0 +1,43 @@
+{#- Thẻ "Sao lưu" (web/backup_pages.py) — RPC đọc backup.list; tạo ngay qua ACTIONS backup_create; khôi phục chỉ bằng CLI. -#}
+{% import "_macros.html" as m with context %}
+<section class="card" id="backup">
+  <div class="card-head"><h2>{{ m.icon('shield') }} Sao lưu</h2>
+    {% if data and data.schedule.enabled %}<span class="pill ok">{{ m.icon('clock') }}tự động: {{ data.schedule.expr }}</span>
+    {% elif data %}<span class="pill warn">tự động: tắt</span>{% endif %}
+  </div>
+  {% if down %}
+    <p class="muted">Daemon không trả lời — không đọc được danh sách bản sao lưu.</p>
+  {% elif error %}
+    <p class="muted">Không đọc được danh sách bản sao lưu: {{ error }}</p>
+  {% else %}
+    <p class="small muted">Gồm <code>hub.db</code> (chụp trực tuyến), cấu hình, chính sách, tri thức agent/team/global, ledger. KHÔNG gồm
+      secret, đăng nhập web, runs, checkpoints, log. Thư mục <code>{{ data.dir }}</code> — {{ data.backups|length }} bản, tổng {{ size(data.total_size) }}.
+      {% if data.schedule.enabled and data.schedule.next_at %}Lần tự động tới: {{ m.rel(data.schedule.next_at) }}.{% endif %}</p>
+    {% if data.schedule.error %}<p class="small"><span class="pill danger">{{ m.icon('alert') }}lịch sao lưu lỗi</span> {{ data.schedule.error }}</p>{% endif %}
+    {% if data.last_error %}<p class="small"><span class="pill danger">{{ m.icon('alert') }}lần sao lưu tự động gần nhất lỗi</span> {{ data.last_error }}</p>{% endif %}
+    <div class="row gap wrap-row">
+      {{ m.act("backup_create", "Tạo bản sao lưu ngay", {}, "btn primary", next="/settings#backup", ic="plus") }}
+    </div>
+    {% if data.backups %}
+    <table class="tbl">
+      <thead><tr><th>Bản sao lưu · lệnh khôi phục (terminal)</th><th>Loại</th><th>Lúc tạo</th><th class="num">Cỡ</th></tr></thead>
+      <tbody>
+      {% for b in data.backups %}
+        <tr>
+          <td><code>{{ b.id }}</code>{% if b.broken %} <span class="pill danger">hỏng</span>{% endif %}
+            <span class="small muted">· {{ b.cfharness_version or '?' }} · schema v{{ b.user_version }}</span><br>
+            <code class="small">cfharness backup restore {{ b.id }} --stop</code></td>
+          <td>{{ kinds.get(b.kind, b.kind) }}</td>
+          <td>{{ m.rel(b.created_at) }}</td>
+          <td class="num">{{ size(b.size) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="small muted">Khôi phục chỉ làm ở terminal: daemon dừng, xác nhận 2 bước, hiện trạng được chụp thành bản "trước khôi phục" trước khi ghi đè.
+      Kiểm một bản: <code>cfharness backup verify &lt;id&gt;</code>.</p>
+    {% else %}
+    <p class="muted small">Chưa có bản sao lưu nào.</p>
+    {% endif %}
+  {% endif %}
+</section>

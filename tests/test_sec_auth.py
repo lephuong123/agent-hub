@@ -369,3 +369,30 @@ async def test_second_daemon_does_not_overwrite_human_token(home):
     finally:
         await _stop(d, srv)
 
+
+async def test_backup_restore_and_update_rollback_human_only(home, monkeypatch):
+    """Sao lưu/khôi phục + quay về bản cập nhật (backup.py, updater.py): agent trong run — kể cả đọc trộm token người — bị từ chối;
+    CLI `backup …`/`update --rollback` bị classifier chặn thẳng; khôi phục ngoại tuyến từ chối trong run."""
+    from cfharness import backup as B
+    from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI
+
+    for m in ("backup.create", "backup.verify", "backup.restore_plan", "update.rollback"):
+        assert m in auth.HUMAN_ONLY, m
+    assert HUB_HUMAN_ONLY_CLI["backup"] is None and HUB_HUMAN_ONLY_CLI["update"] is None
+    d, srv = await _start(home)
+    try:
+        for m, prm in (("backup.create", {}), ("backup.restore_plan", {"id": "20260101T000000-manual"}), ("update.rollback", {})):
+            run_n, proc_n, go_n = await _start_run(d)
+            rr = await _in_run(go_n, _client_py(home, m, prm, steal_token=True))
+            resp = json.loads(rr["out"].strip().splitlines()[-1])
+            assert resp.get("error", {}).get("code") == -32003, (m, resp)
+            proc_n.wait(5)
+        assert not B.list_backups(home) and not (home.home / "update" / "state.json").exists()
+        r = await asyncio.to_thread(RpcClient(home.socket).call, "backup.create", {})  # người (client có token) tạo được
+        assert r["id"] and B.list_backups(home)
+    finally:
+        await _stop(d, srv)
+    monkeypatch.setenv(auth.ENV_RUN_ID, "r_agent")
+    with pytest.raises(Exception, match="chỉ người"):
+        B.restore(home, r["id"])
+
