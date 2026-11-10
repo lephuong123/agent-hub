@@ -263,6 +263,11 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
 - Dòng cuối trả lời ở kênh chung (`ChatBot.continue_hint(chat)`) nói đúng cách nói tiếp: "Tag bot trong thread này…" khi tắt
   `thread_followup` (trước luôn ghi "Trả lời trong thread" + `/cfh moi`, sai ở kênh).
 - Test: `tests/test_slack_progress.py::test_quiet_mode_only_reaction_and_result`.
+- **Nội dung trả lời chỉ có kết quả** (`cfharness config set notify.slack.mention_reply result`, mặc định `full`; có ở trang Cài đặt): tin
+  tag bot trong kênh chung (`slack:C…`/`slack:G…`) → `prompts.chat_prompt(result_only=True)` thay câu dặn "nói đã giao việc gì" bằng
+  `RESULT_ONLY_NOTE`: trả lời thẳng/nêu kết quả 1-5 dòng, không kể bước, tool, agent, task, không mở đầu/tóm lại/mời thêm. Tin báo kết
+  quả task sau đó (heartbeat → `notify_owner` vào thread) cũng được dặn như vậy (`_origin_note`). DM giữ như cũ. Đây là lời dặn trong prompt,
+  hub không cắt bớt chữ. Test: `tests/test_slack_mentions.py::test_result_only_*`, `::test_mention_reply_result_mode_*`.
 
 ## Chưa làm
 - Nghiệm thu trên workspace Slack thật: chưa chạy (cả tag trong kênh — P6, `setStatus`/tin tiến độ — P7, thread không tag + ngữ cảnh thread — P8) (modal `views.open`, tải `url_private` với `files:read`, tệp từ máy tính + điện thoại).

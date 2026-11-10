@@ -67,14 +67,33 @@ def frame(lines: list[str], key: str | None = None) -> str:
     return f"<untrusted-data id={n}>\n{body}\n</untrusted-data id={n}>"
 
 
-def chat_prompt(channel: str, conversation_id: str, text: str, *, key: str = KEY_PLACEHOLDER) -> str:
+# `notify.slack.mention_reply = "result"`: tag bot trong kênh Slack → chỉ trả KẾT QUẢ, ngắn, đúng trọng tâm (không kể cách xử lý)
+RESULT_ONLY_NOTE = (
+    "\n(Reply style for this Slack thread: RESULT ONLY. Answer the question or state the outcome directly, in as few lines as it "
+    "takes (aim for 1-5). Do not describe how you worked it out: no steps, tools, agents or tasks you used, no plan, no preamble, "
+    "no recap of the request, no closing offers. If work is still running, one line: what will be delivered. If you cannot answer, "
+    "one line why.)"
+)
+
+
+def result_only(channel: Any, mode: Any) -> bool:
+    """Có áp kiểu trả lời "chỉ kết quả" không: CHỈ thread kênh chung Slack (tin tag bot, C…/G…) khi mode == "result"; DM giữ như cũ."""
+    ch = str(channel or "")
+    return mode == "result" and ch.startswith("slack:") and ch[6:7] in ("C", "G")
+
+
+def chat_prompt(channel: str, conversation_id: str, text: str, *, key: str = KEY_PLACEHOLDER, result_only: bool = False) -> str:
+    if result_only:
+        tail = ("(Your final message in this turn is posted in the thread as your reply: Vietnamese. If something needs the owner's "
+                "permission, ask with ask_owner_permission / ask_owner — never ask them to type commands. Never write your owner key "
+                "anywhere.)" + RESULT_ONLY_NOTE)
+    else:
+        tail = ("(Your final message in this turn is delivered to the owner as your reply: Vietnamese, short. "
+                "If you started work, say what you assigned and that you will follow it until done. If something needs the owner's "
+                "permission, ask with ask_owner_permission / ask_owner — never ask them to type commands. Never write your owner key anywhere.)")
     return (
         f"[cfharness · OWNER MESSAGE · key {key} · channel {channel} · conversation {conversation_id} · {iso()}]\n"
-        f"{text.strip()}\n\n"
-        "(Your final message in this turn is delivered to the owner as your reply: Vietnamese, short. "
-        "If you started work, say what you assigned and that you will follow it until done. If something needs the owner's permission, "
-        "ask with ask_owner_permission / ask_owner — never ask them to type commands. Never write your owner key anywhere.)"
-        + deliverables_note(channel)
+        f"{text.strip()}\n\n" + tail + deliverables_note(channel)
     )
 
 
@@ -157,21 +176,25 @@ def shared_audience(channel: str | None) -> str | None:
     return None
 
 
-def _origin_note(cid: Any, conv_channels: dict[str, str]) -> str:
+def _origin_note(cid: Any, conv_channels: dict[str, str], result_mode: Any = None) -> str:
     note = " (owner asked in conversation " + str(cid)
-    aud = shared_audience(conv_channels.get(str(cid)))
+    ch = conv_channels.get(str(cid))
+    aud = shared_audience(ch)
     if aud:
         note += (f" — {aud}: notify_owner with this task_id posts the text straight INTO it, read by everyone there. Write it as the "
                  "reply for that thread itself; never say it has not been posted there or ask whether to post it")
+    if result_only(ch, result_mode):
+        note += ("; RESULT ONLY there: state the outcome in a few lines, no description of how it was done (no steps, agents, "
+                 "tasks or tools)")
     return note + ")"
 
 
 def tick_prompt(events: list[dict[str, Any]], *, dropped: int, reason: str, open_work: int, key: str = KEY_PLACEHOLDER,
-                gates: str = "human", conv_channels: dict[str, str] | None = None) -> str:
+                gates: str = "human", conv_channels: dict[str, str] | None = None, result_mode: Any = None) -> str:
     head = f"[cfharness heartbeat · key {key} · {iso()} · reason: {reason}]"
     conv_channels = conv_channels or {}
     if events:
-        lines = [f"- [{e.get('kind')}] {e.get('summary')}" + (_origin_note(e["conversation_id"], conv_channels)
+        lines = [f"- [{e.get('kind')}] {e.get('summary')}" + (_origin_note(e["conversation_id"], conv_channels, result_mode)
                                                               if e.get("conversation_id") else "") for e in events]
         if dropped:
             lines.append(f"- (+{dropped} older events not listed — use hub_overview)")
