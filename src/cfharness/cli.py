@@ -141,6 +141,14 @@ def cmd_daemon(ctx: Ctx) -> int:
             return EXIT_OK
         except DaemonUnavailable:
             pass
+        if getattr(a, "wait_supervisor", None):  # cập nhật dưới launchd: launchd tự chạy lại daemon — chờ, chỉ tự bật khi hết giờ
+            from .daemon import wait_supervised
+
+            pid = wait_supervised(ctx.paths, float(a.wait_supervisor))
+            if pid is not None:
+                ctx.out({"running": True, "pid": pid, "supervisor": "launchd"}, f"daemon đã chạy lại dưới launchd (pid {pid})")
+                return EXIT_OK
+            eprint(f"launchd chưa chạy lại daemon sau {a.wait_supervisor:g} s — tự khởi động")
         if a.foreground:
             from .daemon import run_foreground
 
@@ -737,6 +745,7 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("action", choices=["start", "stop", "status", "run", "logs", "install-service", "uninstall-service"],
                    help="install-service/uninstall-service: tự khởi động daemon khi đăng nhập (Windows Task Scheduler, macOS LaunchAgent, Linux systemd --user)")
     d.add_argument("--foreground", action="store_true", help="chạy daemon ở tiền cảnh")
+    d.add_argument("--wait-supervisor", type=float, default=None, help=argparse.SUPPRESS)  # bộ cập nhật: chờ launchd chạy lại daemon
     d.add_argument("--dry-run", action="store_true", help="install-service/uninstall-service: chỉ in kế hoạch, không thay đổi gì")
     d.add_argument("--lines", "-n", type=int, default=50, help="logs: số dòng cuối")
     d.add_argument("--run", help="logs: chỉ dòng có run_id này")
