@@ -113,7 +113,9 @@ class RunManager:
 
     @property
     def estop(self) -> dict[str, Any]:
-        return self.store.state_get("estop", {"on": False})
+        from .admin_control import merge_estop  # ESTOP quản trị máy (cờ file của admin) gộp vào — user `estop off` không gỡ được
+
+        return merge_estop(self.store.state_get("estop", {"on": False}), self.store.state_get("admin_estop"))
 
     @property
     def auth_block(self) -> dict[str, Any] | None:
@@ -136,6 +138,7 @@ class RunManager:
         rl = self.store.state_get("rate_limit", {}) or {}
         if rl.get("throttled"):
             limit = min(limit, int(self.hub.config.get("ratelimit.throttle_concurrency") or 1))
+        limit = self._admin_policy().cap_concurrency(self.hub, limit)  # chính sách quản trị máy: lấy giá trị chặt hơn
         return max(1, limit)
 
     def capacity_left(self) -> int:
@@ -160,7 +163,20 @@ class RunManager:
         mgr = manager_budget_scope(self.hub, agent_id)  # trần ngày riêng của điều phối viên (cost-guardrails.md)
         if mgr:
             out.append(mgr)
+        out += self._admin_policy().budget_scope(self.hub)  # scope `admin`: hạn mức ngày của chính sách quản trị máy (toàn hub)
         return out
+
+    @staticmethod
+    def _admin_policy() -> Any:
+        from . import admin_policy
+
+        return admin_policy
+
+    def _admin_gate(self, agent: dict[str, Any], model: str | None) -> None:
+        """Quản trị máy (admin_control.py/admin_policy.py): ESTOP admin + chính sách root (require.*, min_version, models.allow)."""
+        from .admin_control import submit_gate
+
+        submit_gate(self.hub, agent, model)
 
     def _budget_warn(self, agent_id: str, team_id: str | None) -> None:
         pct = float(self.hub.config.get("budget.warn_pct") or 80) / 100.0
@@ -233,6 +249,7 @@ class RunManager:
         if est is not None:
             raise Blocked(f"agent '{agent_id}' thuộc team '{est[0]}' đang ESTOP — không khởi chạy run nào của agent này. Lý do: {est[1] or '(không ghi)'}",
                           data={"team_estop": est[0]})
+        self._admin_gate(agent, model)
         es = self.estop
         if es.get("on"):
             raise Blocked(f"ESTOP đang bật — không khởi chạy run mới. Lý do: {es.get('reason') or '(không ghi)'}", data={"estop": es})
@@ -316,12 +333,13 @@ class RunManager:
         Phần còn lại TRỪ phần đang giữ chỗ của run chưa kết thúc (H-19) → tổng trần các run song song ≤ hạn mức ngày."""
         limits = agent.get("limits") or {}
         per_run = budget_usd or limits.get("max_budget_usd_per_run") or self.hub.config.get("runs.default_max_budget_usd")
+        per_run = self._admin_policy().cap_per_run(self.hub, per_run)  # trần mỗi run của chính sách quản trị máy
         for scope, owner, used, day in self.budget_scopes(agent["id"], team_id):
             if not day:
                 continue
             reserved = self.reserved_budget(scope, owner)
             if used < float(day) and round(float(day) - used - reserved, 6) <= 0:
-                label = {"agent": f"agent '{owner}'", "team": f"team '{owner}'", "hub": "toàn hub", "manager": f"điều phối viên '{owner}'"}[scope]
+                label = {"agent": f"agent '{owner}'", "team": f"team '{owner}'", "hub": "toàn hub", "manager": f"điều phối viên '{owner}'", "admin": "chính sách quản trị máy"}[scope]
                 raise Blocked(f"{label}: ngân sách ngày còn lại (${float(day) - used:.4f}) đang được giữ chỗ cho run đang chạy — chờ run kết thúc",
                               data={"scope": scope, "owner": owner, "reserved": round(reserved, 6), "reason": "budget_reserved"})
             remaining = round(float(day) - used - reserved, 6)
@@ -330,7 +348,7 @@ class RunManager:
                     ev = make_event("budget.exceeded", agent["id"] if scope in ("agent", "manager") else None, {"scope": scope, "owner": owner, "used": used, "limit": day})
                     ev.team_id = team_id if scope == "team" else None
                     self.hub.publish(ev)
-                label = {"agent": f"agent '{owner}'", "team": f"team '{owner}'", "hub": "toàn hub", "manager": f"điều phối viên '{owner}'"}[scope]
+                label = {"agent": f"agent '{owner}'", "team": f"team '{owner}'", "hub": "toàn hub", "manager": f"điều phối viên '{owner}'", "admin": "chính sách quản trị máy"}[scope]
                 raise Blocked(f"{label} đã dùng hết ngân sách ngày (${used:.4f}/${day})", data={"scope": scope, "owner": owner})
             per_run = min(float(per_run), remaining) if per_run else remaining
         return round(float(per_run), 4) if per_run else None

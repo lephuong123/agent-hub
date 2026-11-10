@@ -199,7 +199,7 @@ DEFAULTS: dict[str, Any] = {
             "busy_indicator": "reaction",  # "status" ("đang xử lý…" trong thread, lỗi → ⏳) | "reaction" (chỉ icon ⏳ trên tin người)
             "manager_progress": True,  # P7: tin tiến độ + nút Dừng khi điều phối viên làm việc cho tin Slack (chat/slack/progress.py)
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
-            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
+            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
                        "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
                        "budget.warning", "budget.exceeded"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,
@@ -218,7 +218,7 @@ DEFAULTS: dict[str, Any] = {
             "allowed_chat_ids": [],  # CHỈ các chat này được nhận thông báo + điều khiển hub
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
-            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
+            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
                        "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
                        "budget.warning", "budget.exceeded",
                        # vào/ra web + thiết bị tin cậy (web_events.py) — chỉ metadata, gửi vào nhóm chat riêng của hub nếu có
@@ -584,6 +584,16 @@ DEFAULTS: dict[str, Any] = {
         "dir": "/Users/Shared/cfharness/status",  # admin tạo sẵn (nhóm cfharness-admin); hub admin cũng ĐỌC thư mục này
         "group": "cfharness-admin",  # nhóm của file 0640; không có → giữ nhóm hiện có + cảnh báo
     },
+    # Quản trị máy — cảnh báo + lịch sử ở hub của ADMIN (admin_watch.py, docs/dev-notes/admin-users.md). Chỉ có tác dụng khi daemon thuộc
+    # nhóm cfharness-admin. Chỉ người đặt; nhánh ∈ integrity.SECURITY_KEYS.
+    "admin_watch": {
+        "enabled": True,
+        "interval_s": 60,  # 15..3600 — nhịp đánh giá cảnh báo
+        "approval_wait_s": 1800,  # approval chờ lâu hơn → cảnh báo approval_waiting_long (0 = tắt)
+        "budget_warn_pct": 80,  # ≥ % ngân sách ngày → budget_80
+        "sample_interval_s": 300,  # 60..86400 — mẫu lịch sử (bảng admin_samples)
+        "history_days": 90,  # 1..365 — giữ lịch sử
+    },
     # Hệ thống ngoài hub (systems/): app trong thư mục gốc + job launchd (macOS) / task Task Scheduler (Windows) của chúng — người đăng ký, điều phối viên tạm dừng/bật lại/khởi động lại
     "systems": {
         "roots": None,  # null = theo workspace.allowed_roots
@@ -865,6 +875,8 @@ def validate_setting(key: str, value: Any) -> None:
         from .backup import validate_setting as _validate_backup
 
         _validate_backup(key, value)
+    if key == "admin_watch" or key.startswith("admin_watch."):
+        _validate_admin_watch(key, value)
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")
@@ -920,6 +932,26 @@ def validate_setting(key: str, value: Any) -> None:
     elif key == "runtime.claude.default_permission_mode":
         if value is not None and value not in VALID_PERMISSION_MODES:
             raise ValueError(f"permission mode không hợp lệ; chọn một trong {VALID_PERMISSION_MODES}")
+
+
+_ADMIN_WATCH_NUM = {"interval_s": (15, 3600), "approval_wait_s": (0, 7 * 86400), "budget_warn_pct": (1, 100),
+                    "sample_interval_s": (60, 86400), "history_days": (1, 365)}
+
+
+def _validate_admin_watch(key: str, value: Any) -> None:
+    if key == "admin_watch" and not isinstance(value, dict):
+        raise ValueError("admin_watch phải là object")
+    vals = dict(value) if key == "admin_watch" else {key.split(".", 1)[1]: value}
+    for k, v in vals.items():
+        if k == "enabled":
+            if not isinstance(v, bool):
+                raise ValueError("admin_watch.enabled phải là true/false")
+        elif k in _ADMIN_WATCH_NUM:
+            lo, hi = _ADMIN_WATCH_NUM[k]
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not lo <= v <= hi:
+                raise ValueError(f"admin_watch.{k} phải trong {lo}..{hi}")
+        else:
+            raise ValueError(f"admin_watch.{k}: khoá không có")
 
 
 def _validate_admin_export(key: str, value: Any) -> None:

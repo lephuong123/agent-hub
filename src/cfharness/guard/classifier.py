@@ -397,7 +397,7 @@ NET_BLOCK_RULES = frozenset({"webfetch_local", "ssrf_metadata", "ssrf_private_ip
 # đánh dấu cần duyệt, lỗi bộ phân loại/không phân tích được đích, run không hoạt động/ESTOP
 NEVER_DOWNGRADE_RULES = NET_BLOCK_RULES | frozenset({
     "url_dns_failed", "web_domain_denied", "web_domain_not_allowed", "sandbox_network_not_allowed", "sandbox_network_bad_host", "mcp_require_approval", "classifier_error", "unknown_run", "estop",
-    "nesting_too_deep", "hub_secret_read", "self_approval",
+    "nesting_too_deep", "hub_secret_read", "self_approval", "admin_shared",
 })
 NEVER_DOWNGRADE_KLASS = frozenset({"hub", "policy", "guard"})
 
@@ -554,6 +554,8 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
         if tool_name in READ_ONLY_TOOLS:
             for k in ("file_path", "path", "notebook_path"):
                 v = ti.get(k)
+                if isinstance(v, str) and v and admin_shared(_abs(v, ctx.cwd)):
+                    return Verdict("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [v], forbidden=True)
                 if isinstance(v, str) and v and sensitive_read(_abs(v, ctx.cwd), ctx):
                     return Verdict("destructive", "hub_secret_read", "hub", "agent không được đọc token người/secret/mcp.json của hub", [v], forbidden=True)
             cv = confine_read_verdict(tool_name, ti, ctx)
@@ -750,6 +752,19 @@ def confine_read_verdict(tool_name: str, ti: dict[str, Any], ctx: GuardContext) 
 READ_PATH_KEYS = ("file_path", "path", "notebook_path")
 
 
+def admin_shared(p: str) -> bool:
+    """Thư mục chung của quản trị máy (trạng thái/audit/chính sách/cờ ESTOP/admin-log của MỌI user) — agent không đọc/ghi (plan-admin-users §4)."""
+    if IS_WINDOWS:
+        return False
+    from ..admin_overview import SHARED_ROOT
+
+    roots = {SHARED_ROOT, _real(SHARED_ROOT)}
+    return any(_under(c, r) for c in {canon_path(p), _real(p)} for r in roots)
+
+
+ADMIN_SHARED_REASON = "agent không được đọc/ghi thư mục chung của quản trị máy (dữ liệu của mọi user trên máy)"
+
+
 def sensitive_read(p: str, ctx: GuardContext) -> bool:
     """Đường dẫn mà agent KHÔNG được đọc: token người cạnh socket, secrets/, mcp.json đã resolve, token MCP HTTP,
     mọi hub home KHÁC đã đăng ký (P2.4)."""
@@ -885,6 +900,8 @@ def classify_file_write(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -
     ap = _abs(p, ctx.cwd)
     rp = _real(ap)
     op = "overwrite" if tool_name == "Write" and os.path.exists(ap) else "write"
+    if admin_shared(ap):
+        return Verdict("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [ap], forbidden=True)
     for cand in {ap, rp}:
         if _under(cand, canon_path(str(ctx.policy.policy_dir))):
             return Verdict("destructive", "policy_write", "policy", "agent không được ghi chính sách an toàn (FR-SG-05)", [ap], "hub-policy")
@@ -1244,6 +1261,11 @@ class BashAnalyzer:
         hh = _hub_home(self.ctx)
         if _contains(norm, hh + "/auth") or _contains(norm, hh + "/secrets"):
             self.hit("destructive", "hub_secret_read", "hub", "agent đụng token người/secret store của hub", forbidden=True)
+        if not IS_WINDOWS:
+            from ..admin_overview import SHARED_ROOT
+
+            if re.search(re.escape(SHARED_ROOT) + r"(?![A-Za-z0-9_.\-])", norm):
+                self.hit("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [SHARED_ROOT], forbidden=True)
         for pat in self.ctx.policy.bash_patterns:
             try:
                 if re.search(pat["pattern"], norm):

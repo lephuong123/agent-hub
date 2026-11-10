@@ -108,6 +108,10 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "admin.overview",
         # Vào/ra web + thiết bị tin cậy (web_events.py): ghi audit + phát event → Telegram — agent không được giả "đăng nhập"/"thu hồi"
         "web.notify",
+        # Quản trị máy (admin_rpc.py, docs/dev-notes/admin-users.md): đọc trạng thái/audit/chính sách user khác (admin), bật/gỡ ESTOP admin,
+        # trang minh bạch phía user — mọi method admin.* chỉ người; phía admin còn kiểm nhóm cfharness-admin (admin_control.require_admin)
+        "admin.users", "admin.user", "admin.estop_list", "admin.estop_set", "admin.alerts", "admin.audit", "admin.policy",
+        "admin.nav", "admin.self", "admin.setup_check",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})
@@ -201,7 +205,8 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS"),
                       ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE"),
                       ("cfharness.web_events", "MUTATING_WEB"),
-                      ("cfharness.backup", "MUTATING_BACKUP")):
+                      ("cfharness.backup", "MUTATING_BACKUP"),
+                      ("cfharness.admin_rpc", "MUTATING_ADMIN")):
         try:
             import importlib
 

@@ -18,8 +18,10 @@ Quy tắc:
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -89,7 +91,47 @@ class SecretStore:
         os.chmod(tmp, 0o600)
         tmp.replace(p)
         register_secret_values(value)  # H-12: che theo giá trị ở mọi đầu ra
+        self._meta_update(n, time.time())
         return n
+
+    # -- metadata (plan-admin-users: tuổi token OAuth Claude cho tổng quan máy) — CHỈ thời điểm đặt, không giá trị
+    META = ".meta.json"
+
+    def _meta(self) -> dict[str, Any]:
+        try:
+            d = json.loads((self.dir / self.META).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return d if isinstance(d, dict) else {}
+
+    def _meta_update(self, name: str, set_at: float | None) -> None:
+        try:
+            m = self._meta()
+            if set_at is None:
+                m.pop(name, None)
+            else:
+                m[name] = {"set_at": round(float(set_at), 3)}
+            tmp = self.dir / f".{self.META}.tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(m, f)
+            tmp.replace(self.dir / self.META)
+        except OSError:  # pragma: no cover — metadata không bao giờ làm hỏng secret.set
+            pass
+
+    def set_at(self, name: str) -> float | None:
+        """Thời điểm (epoch) secret được đặt lần cuối; secret cũ chưa có metadata → mtime của file."""
+        try:
+            n = normalize_name(name)
+        except HubError:
+            return None
+        rec = self._meta().get(n)
+        if isinstance(rec, dict) and isinstance(rec.get("set_at"), (int, float)):
+            return float(rec["set_at"])
+        try:
+            return (self.dir / n).stat().st_mtime
+        except OSError:
+            return None
 
     def get(self, name: str) -> str | None:
         p = self._path(name)
@@ -109,6 +151,7 @@ class SecretStore:
         p = self._path(name)
         if p.is_file():
             p.unlink()
+            self._meta_update(p.name, None)
             return True
         return False
 

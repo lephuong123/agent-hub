@@ -399,3 +399,31 @@ async def test_backup_restore_and_update_rollback_human_only(home, monkeypatch):
     with pytest.raises(Exception, match="chỉ người"):
         B.restore(home, r["id"])
 
+
+def test_admin_methods_human_only_not_manager():
+    """plan-admin-users: mọi RPC admin.* ∈ HUMAN_ONLY, KHÔNG ∈ MANAGER_ALLOWED; method ghi admin.estop_set đã phân loại + bọc audit."""
+    from cfharness.admin_rpc import MUTATING_ADMIN, READ_ADMIN
+
+    for m in (*READ_ADMIN, *MUTATING_ADMIN):
+        assert m in auth.HUMAN_ONLY, m
+        assert m not in auth.MANAGER_ALLOWED, m
+    assert set(MUTATING_ADMIN) <= auth.all_mutating()
+
+
+def test_admin_shared_permission_deny_every_hub(tmp_path):
+    """Tool Read/Grep/Glob/Edit/Write không qua sandbox Bash → permissions.deny riêng cho thư mục chung, kể cả agent trust_full."""
+    import sys
+
+    if sys.platform == "win32":
+        pytest.skip("macOS/Linux")
+    from cfharness.admin_overview import SHARED_ROOT
+    from cfharness.guard.runtime import build_settings
+
+    home = tmp_path / "hub"
+    (home / "policy").mkdir(parents=True)
+    for trust in (False, True):
+        s = build_settings({}, run_id="r1", socket=tmp_path / "hub.sock", policy_dir=home / "policy", guard_cfg={"enabled": True},
+                           approval_timeout_s=60, cwd=tmp_path, trust_full=trust)
+        deny = s["permissions"]["deny"]
+        for t in ("Read", "Grep", "Glob", "Edit", "Write"):
+            assert f"{t}(/{SHARED_ROOT}/**)" in deny, (trust, t)  # "//abs" = đường dẫn tuyệt đối trong luật Claude Code

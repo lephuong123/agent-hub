@@ -23,7 +23,7 @@
   ("Làm việc", [("manager", "/manager", "chat", "Điều phối"), ("inbox", "/inbox", "inbox", "Cần bạn"), ("overview", "/", "home", "Tổng quan"), ("search", "/search", "search", "Tìm kiếm")]),
   ("Đội ngũ", [("agents", "/agents", "bot", "Agent"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("runs", "/runs", "run", "Lượt chạy"), ("schedules", "/schedules", "calendar", "Lịch chạy")]),
   ("Học & chất lượng", [("learnings", "/learnings", "learn", "Tự học"), ("skills", "/skills", "star", "Skill"), ("memory", "/memory", "graph", "Memory")]),
-  ("Hệ thống", [("mcp", "/mcp", "plug", "MCP"), ("costs", "/costs", "dollar", "Chi phí")] + ([("admin", "/admin/overview", "terminal", "Tổng quan máy")] if badge.admin else []) + [("permissions", "/permissions", "shield", "Quyền đã cấp"), ("audit", "/audit", "log", "Nhật ký"), ("settings", "/settings", "settings", "Cài đặt")]),
+  ("Hệ thống", [("mcp", "/mcp", "plug", "MCP"), ("costs", "/costs", "dollar", "Chi phí")] + ([("admin", "/admin/overview", "terminal", "Tổng quan máy"), ("admin_users", "/admin/users", "team", "Người dùng máy")] if badge.admin else []) + ([("machine", "/machine", "shield", "Quản trị máy")] if badge.machine else []) + [("permissions", "/permissions", "shield", "Quyền đã cấp"), ("audit", "/audit", "log", "Nhật ký"), ("settings", "/settings", "settings", "Cài đặt")]),
 ] %}
 <div class="shell{{ ' noside' if not csrf }}">
   {% if csrf %}
@@ -45,7 +45,8 @@
     </nav>
     {% block side_extra %}{% endblock %}
     <div class="side-foot">
-      {% if badge.estop %}<a href="/settings#estop" class="btn danger solid sm side-btn" title="Dừng khẩn cấp đang bật">{{ _m.icon('stop') }}<span class="lbl">ESTOP đang bật</span></a>{% endif %}
+      {% if badge.admin_estop %}<a href="/machine" class="btn danger solid sm side-btn" title="Người quản trị máy đã bật ESTOP — chỉ họ gỡ được">{{ _m.icon('stop') }}<span class="lbl">ESTOP quản trị máy</span></a>
+      {% elif badge.estop %}<a href="/settings#estop" class="btn danger solid sm side-btn" title="Dừng khẩn cấp đang bật">{{ _m.icon('stop') }}<span class="lbl">ESTOP đang bật</span></a>{% endif %}
       <div class="side-user">
         <span class="side-av" aria-hidden="true">B</span>
         <div class="side-user-t lbl"><span class="nm">Bạn</span><span class="daemon-st {{ 'down' if badge.down }}" title="{{ 'Không kết nối được daemon' if badge.down else 'Daemon đang chạy' }}">{{ _m.icon('dot') }}<span>{{ 'daemon tắt' if badge.down else 'daemon đang chạy' }}</span></span></div>
@@ -61,7 +62,8 @@
       <div class="mtop-right">
         {{ view_toggle('view-toggle-m', 'view-toggle') }}
         <a class="btn ghost sm icon" href="/manager?new=1" title="Cuộc trò chuyện mới" aria-label="Cuộc trò chuyện mới">{{ _m.icon('pen-new') }}</a>
-        {% if badge.estop %}<a href="/settings#estop" class="pill danger strong">{{ _m.icon('stop') }}ESTOP</a>{% endif %}
+        {% if badge.admin_estop %}<a href="/machine" class="pill danger strong">{{ _m.icon('stop') }}ESTOP quản trị</a>
+        {% elif badge.estop %}<a href="/settings#estop" class="pill danger strong">{{ _m.icon('stop') }}ESTOP</a>{% endif %}
         {% if badge.down %}<span class="pill danger">daemon tắt</span>{% endif %}
       </div>
     </header>
@@ -79,7 +81,7 @@
   <details class="tab-more">
     <summary>{{ _m.icon('menu') }}<span>Thêm</span></summary>
     <div class="tab-sheet">
-      {% for key, href, ic, label in [("overview", "/", "home", "Tổng quan"), ("search", "/search", "search", "Tìm kiếm"), ("schedules", "/schedules", "calendar", "Lịch chạy"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("learnings", "/learnings", "learn", "Tự học"), ("skills", "/skills", "star", "Skill"), ("memory", "/memory", "graph", "Memory"), ("mcp", "/mcp", "plug", "MCP"), ("costs", "/costs", "dollar", "Chi phí")] + ([("admin", "/admin/overview", "terminal", "Tổng quan máy")] if badge.admin else []) + [("permissions", "/permissions", "shield", "Quyền đã cấp"), ("audit", "/audit", "log", "Nhật ký"), ("settings", "/settings", "settings", "Cài đặt")] %}
+      {% for key, href, ic, label in [("overview", "/", "home", "Tổng quan"), ("search", "/search", "search", "Tìm kiếm"), ("schedules", "/schedules", "calendar", "Lịch chạy"), ("teams", "/teams", "team", "Team"), ("tasks", "/tasks", "task", "Công việc"), ("learnings", "/learnings", "learn", "Tự học"), ("skills", "/skills", "star", "Skill"), ("memory", "/memory", "graph", "Memory"), ("mcp", "/mcp", "plug", "MCP"), ("costs", "/costs", "dollar", "Chi phí")] + ([("admin", "/admin/overview", "terminal", "Tổng quan máy"), ("admin_users", "/admin/users", "team", "Người dùng máy")] if badge.admin else []) + ([("machine", "/machine", "shield", "Quản trị máy")] if badge.machine else []) + [("permissions", "/permissions", "shield", "Quyền đã cấp"), ("audit", "/audit", "log", "Nhật ký"), ("settings", "/settings", "settings", "Cài đặt")] %}
       <a href="{{ href }}" class="{{ 'on' if navkey == key }}">{{ _m.icon(ic) }}<span>{{ label }}</span></a>
       {% endfor %}
       <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn ghost" type="submit">{{ _m.icon('logout') }}<span>Thoát</span></button></form>

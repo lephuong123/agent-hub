@@ -348,11 +348,12 @@ async def render(request: Request, name: str, ctx: dict[str, Any] | None = None,
             pend = await rpc(request, "approval.list", {"limit": 500})
             es = await rpc(request, "estop.get")
             badge = {"approvals": len(pend or []), "waiting_human": sum(1 for a in pend or [] if a.get("status") == "waiting_human"),
-                     "estop": bool((es or {}).get("on")), "questions": len(await questions(request, "open"))}
+                     "estop": bool((es or {}).get("on")), "admin_estop": bool((es or {}).get("admin")),
+                     "questions": len(await questions(request, "open"))}
         except (RpcError, DaemonUnavailable, OSError):
             badge = {"down": True}
         if not badge.get("down"):
-            badge["admin"] = await _admin_pages.nav_available(request)
+            badge.update(await _admin_pages.nav_badges(request))
     base = {"csrf": sess.csrf if sess else "", "flashes": sess.pop_flashes() if sess else [], "badge": badge, "nav": "", "htmx": HTMX,
             "path": request.url.path}
     return st.templates.TemplateResponse(request, name, {**base, **(ctx or {})}, status_code=status)
@@ -1824,7 +1825,10 @@ from . import backup_pages as _backup_pages  # noqa: E402
 
 _backup_pages.register_actions(ACTIONS, Action, _req)
 
-# Tổng quan máy (admin_overview.py): trang chỉ đọc /admin/overview, mục menu chỉ khi thư mục trạng thái chung tồn tại
+# Quản trị máy (admin_overview.py, admin_rpc.py): /admin/overview|users|alerts|audit (nhóm cfharness-admin) + /machine (phía user);
+# ghi DUY NHẤT = ESTOP admin (admin_estop_on|off, có xác nhận); chính sách chỉ hiện lệnh sudo
 from . import admin_pages as _admin_pages  # noqa: E402
+
+_admin_pages.register_actions(ACTIONS, Action, _req)
 
 __all__ = ["create_app", "ACTIONS", "agent_changes", "replay_items", "WebState", "urlencode"]

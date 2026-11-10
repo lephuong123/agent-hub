@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from typing import Any
 
 ICON = {"running": "●", "idle": "○", "paused": "⏸", "not_loaded": "·", "error": "✗"}
@@ -44,6 +45,9 @@ def add_admin_daemon_parsers(ads: Any, common: Any) -> None:
         p.add_argument("--web-port", type=int, default=None, help="thêm job thứ hai giữ `cfharness web --port N` luôn chạy (cho tunnel)")
         p.add_argument("--program", default=None, help="đường dẫn lệnh cfharness của user (mặc định ~<user>/.local/bin/cfharness)")
         p.add_argument("--write", action="store_true", help="ghi /Library/LaunchDaemons + launchctl bootstrap (cần chạy bằng root)")
+        if name == "install-daemon":
+            p.add_argument("--system-install", action="store_true",
+                           help="chạy bản cài root-owned /opt/cfharness (in kèm lệnh cài; user không sửa được mã hub mà LaunchDaemon chạy)")
         p.set_defaults(fn=cmd_admin, admin_action=name)
 
 
@@ -56,12 +60,16 @@ def cmd_admin(ctx: Any) -> int:
     a = ctx.args
     try:
         uh = user_home_of(a.user)
-        plan = LaunchDaemonPlan(a.user, user_home=uh, home=getattr(a, "home", None), program=a.program, web_port=a.web_port)
+        plan = LaunchDaemonPlan(a.user, user_home=uh, home=getattr(a, "home", None), program=a.program, web_port=a.web_port,
+                                system_install=bool(getattr(a, "system_install", False)))
     except ValueError as e:
         print(f"lỗi: {e}")
         return 1
     install = a.admin_action == "install-daemon"
     if a.write:
+        if install and plan.system_install and not os.path.isfile(plan.program):
+            print(f"lỗi: chưa có {plan.program} — cài bản root-owned trước:\n" + "\n".join(plan.system_install_commands()))
+            return 1
         try:
             done = plan.apply() if install else plan.remove()
         except (PermissionError, RuntimeError, OSError) as e:

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Audit metadata{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Audit metadata</h1><span class="muted">7 ngày · loại thao tác, người làm (loại), kênh, kết quả — KHÔNG có nội dung{% if user %} · user <code>{{ user }}</code>{% endif %}</span></div>
+<p class="row gap"><a class="btn ghost sm" href="/admin/users">← Người dùng máy</a>{% if user %}<a class="btn ghost sm" href="/admin/audit">Mọi user</a>{% endif %}</p>
+{% if not r.exists %}
+{{ m.empty("Thư mục audit " ~ r.dir ~ " chưa có (root tạo audit/<user>/ khi cấp quyền: cfharness admin users add).", "info", title="Chưa thiết lập") }}
+{% else %}
+<section class="card">
+  {% if r.errors %}<p class="muted">Bỏ qua: {{ r.errors|join(", ") }}</p>{% endif %}
+  {% if not r.rows %}<p class="muted">Không có dòng nào.</p>{% else %}
+  <table class="tbl"><thead><tr><th>Lúc</th><th>User</th><th>Thao tác</th><th>Người làm</th><th>Kênh</th><th>Kết quả</th><th>Khoá cấu hình</th></tr></thead><tbody>
+  {% for x in r.rows %}<tr><td>{{ m.rel(x.ts) }}</td><td><a href="/admin/audit?user={{ x.user }}"><code>{{ x.user }}</code></a></td><td><code>{{ x.kind }}</code></td>
+    <td>{{ x.actor or "—" }}</td><td>{{ x.channel or "—" }}</td><td>{{ x.outcome or "—" }}</td><td>{% if x.key %}<code>{{ x.key }}</code>{% else %}—{% endif %}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

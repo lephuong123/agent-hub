@@ -143,6 +143,7 @@
   ],
   "additionalProperties": false,
   "x-event-types": {
+    "admin.alert": "summary",
     "agent.archived": "summary",
     "agent.cloned": "summary",
     "agent.created": "summary",
@@ -198,6 +199,7 @@
     "hook.event": "debug",
     "hook.observed": "debug",
     "hook.timeout": "summary",
+    "hub.admin_estop": "summary",
     "hub.config_changed": "summary",
     "hub.estop": "summary",
     "hub.started": "summary",
