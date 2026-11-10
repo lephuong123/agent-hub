@@ -16,7 +16,18 @@ Thông số dùng trong tài liệu (đổi nếu cần — giữ nhất quán):
 Tài liệu gốc: `plan-multi-instance.md` (quyết định), `multi-instance.md` (P1), `confine.md` (P2), `web-public.md` (P3),
 `admin-overview.md` (Q6).
 
-> Cần cfharness **v0.2.4** trở lên (bản có đa instance: giam workspace, web public + TOTP, LaunchDaemon, tổng quan admin).
+> Cần cfharness **v0.2.5** trở lên (bản có đa instance: giam workspace, web public + TOTP, LaunchDaemon, tổng quan admin).
+
+**Cách nhanh — một lệnh:** `scripts/setup-hub-user.sh` làm bước 1–8 dưới đây (chạy lại được, bước đã xong thì bỏ qua). Mở
+**Terminal.app** (cần TTY để nhập mật khẩu sudo + dán token):
+
+```bash
+sudo bash scripts/setup-hub-user.sh lamlinh "Lam Linh" 8721 8722
+```
+
+Bước 5 (tunnel + DNS) vẫn làm tay một lần cho mỗi tên miền con. Đừng `| tee` ra file: màn hình có token Claude và link đăng ký.
+Đã gặp khi chạy thật (2026-11-10): v0.2.4 có thể bật 2 daemon cùng lúc (LaunchDaemon + lệnh tự khởi động) và `totp enroll` in bí
+mật `otpauth://` — đã sửa ở v0.2.5 (`multi-instance.md` §1b, `web-public.md`).
 
 ---
 
@@ -43,12 +54,12 @@ sudo -u lamlinh -i bash -lc '~/.local/bin/claude --version'           # phải c
 Cài cfharness (cùng cách cài với mọi user — `cfharness update` chạy được về sau):
 
 ```bash
-sudo -u lamlinh -i bash -lc 'uv tool install --python 3.13 "git+https://github.com/lephuong123/agent-hub@v0.2.4"'
+sudo -u lamlinh -i bash -lc 'uv tool install --python 3.13 "git+https://github.com/lephuong123/agent-hub@v0.2.5"'
 ```
 
 Kiểm tra: `sudo -u lamlinh -i cfharness --help | head -3`.
 
-> Admin cũng cập nhật hub của mình lên v0.2.4 (`cfharness update`) để dùng `cfharness admin overview` (bước 9).
+> Admin cũng cập nhật hub của mình lên v0.2.5 (`cfharness update`) để dùng `cfharness admin overview` (bước 9).
 
 ## Bước 3 — Tài khoản Claude dùng chung (không cần đăng nhập màn hình)
 

@@ -389,3 +389,122 @@ def test_multi_is_reserved_agent_id():
     from cfharness.agents import RESERVED_IDS
 
     assert "multi" in RESERVED_IDS
+
+
+# ============================================================================ 1b. một daemon cho mỗi HUB_HOME (daemon.lock)
+def _daemon_env(hp: P.HubPaths) -> dict[str, str]:
+    import sys as _sys
+
+    env = dict(os.environ)
+    env["CFHARNESS_HOME"] = str(hp.home)
+    return env | {"PYTHONPATH": os.pathsep.join(p for p in _sys.path if p)}
+
+
+@posix
+def test_daemon_lock_exclusive_and_released(tmp_path):
+    from cfharness import daemon as D
+
+    hp = P.HubPaths(tmp_path / "hub")
+    hp.ensure()
+    h = D.acquire_instance_lock(hp)
+    assert h is not None and _mode(D.instance_lock_path(hp)) == 0o600
+    assert D.acquire_instance_lock(hp) is None  # bản thứ hai không lấy được
+    assert D.instance_lock_held(hp)
+    D.release_instance_lock(h)
+    assert not D.instance_lock_held(hp)
+    D.release_instance_lock(D.acquire_instance_lock(hp))
+
+
+@posix
+def test_daemon_lock_second_daemon_exits(tmp_path):
+    """Sự cố lamlinh: bản daemon thứ hai trên CÙNG HUB_HOME phải thoát (mã ≠ 0), không mở hub.db/socket."""
+    import subprocess
+    import sys as _sys
+
+    from cfharness import daemon as D
+
+    hp = P.HubPaths(tmp_path / "hub")
+    hp.ensure()
+    h = D.acquire_instance_lock(hp)  # giả một daemon đang khởi động (chưa có socket)
+    try:
+        r = subprocess.run([_sys.executable, "-m", "cfharness", "daemon", "run"], env=_daemon_env(hp),
+                           capture_output=True, text=True, timeout=60)
+    finally:
+        D.release_instance_lock(h)
+    assert r.returncode == 1 and "daemon đã chạy" in r.stderr
+    assert not hp.socket.exists() and not hp.db.exists()
+
+
+@posix
+def test_daemon_lock_spawn_waits_instead_of_second_daemon(tmp_path, monkeypatch):
+    """Tự khởi động (CLI/doctor) khi daemon khác đang giữ khoá: chờ, KHÔNG bật thêm tiến trình."""
+    from cfharness import daemon as D
+
+    hp = P.HubPaths(tmp_path / "hub")
+    hp.ensure()
+
+    def boom(*a, **k):
+        raise AssertionError("không được bật daemon thứ hai")
+
+    monkeypatch.setattr(D.subprocess, "Popen", boom)
+    h = D.acquire_instance_lock(hp)
+    try:
+        with pytest.raises(RuntimeError, match="không sẵn sàng"):
+            D.spawn_background(hp, wait_s=0.5)
+    finally:
+        D.release_instance_lock(h)
+
+
+@posix
+def test_daemon_lock_two_concurrent_daemons_one_survives(tmp_path):
+    import subprocess
+    import sys as _sys
+    import time as _time
+
+    from cfharness.rpc import DaemonUnavailable, RpcClient
+
+    hp = P.HubPaths(tmp_path / "hub")
+    hp.ensure()
+    cmd = [_sys.executable, "-m", "cfharness", "daemon", "run"]
+    procs = [subprocess.Popen(cmd, env=_daemon_env(hp), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE) for _ in range(2)]
+    try:
+        c = RpcClient(hp.socket, timeout=2)
+        deadline = _time.monotonic() + 30
+        pid = None
+        while _time.monotonic() < deadline:
+            try:
+                pid = c.call("hub.ping")["pid"]
+                break
+            except DaemonUnavailable:
+                _time.sleep(0.1)
+        assert pid in {p.pid for p in procs}
+        loser = next(p for p in procs if p.pid != pid)
+        assert loser.wait(timeout=30) == 1
+        assert procs[0 if procs[0].pid == pid else 1].poll() is None  # bản thắng vẫn chạy
+        c.call("hub.shutdown")
+    finally:
+        for p in procs:
+            if p.poll() is None:
+                p.terminate()
+            p.wait(timeout=30)
+            if p.stderr:
+                p.stderr.close()
+
+
+def test_totp_enroll_hides_secret_uri_by_default(tmp_path, capsys):
+    from cfharness.web.cli import cmd_totp
+
+    hp = P.HubPaths(tmp_path / "hub")
+    hp.ensure()
+
+    def ctx(show: bool) -> SimpleNamespace:
+        def call(*a, **k):
+            raise RuntimeError("không có daemon")
+
+        return SimpleNamespace(paths=hp, call=call, args=SimpleNamespace(ttl=None, activate=False, show_uri=show))
+
+    assert cmd_totp(ctx(False), ["totp", "enroll"]) == 0
+    out = capsys.readouterr().out
+    assert "otpauth://" not in out and "secret=" not in out and "/enroll?t=" in out
+    assert cmd_totp(ctx(True), ["totp", "enroll"]) == 0
+    assert "otpauth://" in capsys.readouterr().out
