@@ -88,7 +88,8 @@ def cmd_totp(ctx: Any, words: list[str]) -> int:
     link = f"{base}/enroll?t={token}"
     _audit(ctx, "web.totp_enrolled", {"activate": bool(a.activate), "ttl_s": ttl})
     print("Đăng ký đăng nhập TOTP cho web của hub này.")
-    print(f"URI cho ứng dụng xác thực (BÍ MẬT — chỉ trao tận tay người dùng, đừng dán vào chat/log):\n  {otpauth_uri(secret, account)}")
+    if getattr(a, "show_uri", False):  # mặc định KHÔNG in bí mật: màn hình/log/scrollback hay bị chép vào chat — link /enroll đã đủ
+        print(f"URI cho ứng dụng xác thực (BÍ MẬT — chỉ trao tận tay người dùng, đừng dán vào chat/log):\n  {otpauth_uri(secret, account)}")
     print(f"Link đăng ký MỘT LẦN (hết hạn sau {ttl // 3600 or 1} giờ; hiện mã đúng một lần, người dùng nhập mã để kích hoạt):\n  {link}")
     if a.activate:
         print("--activate: mã TOTP có hiệu lực NGAY (thay mã cũ nếu có).")
@@ -180,4 +181,5 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     w.add_argument("words", nargs="*", help="`totp enroll|status|disable`: đăng nhập bằng mã TOTP cho web public (chỉ người)")
     w.add_argument("--ttl", type=int, default=None, help="totp enroll: hạn của link đăng ký (giây, mặc định 86400)")
     w.add_argument("--activate", action="store_true", help="totp enroll: dùng mã mới NGAY (không chờ người dùng xác nhận qua link)")
+    w.add_argument("--show-uri", action="store_true", help="totp enroll: in cả URI otpauth:// (chứa BÍ MẬT) — mặc định chỉ in link đăng ký một lần")
     w.set_defaults(fn=cmd_web)

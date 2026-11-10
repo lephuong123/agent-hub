@@ -12,7 +12,7 @@ không `claude`, không launchctl/sudo thật).
 | Cookie / HSTS | `web/app.py` `_login_ok`, `GuardMiddleware` | Request tới host public → cookie `Secure` + `Max-Age = web.session_max_age_s`; header `Strict-Transport-Security`. Host cục bộ `cfharness.localhost` giữ như cũ |
 | Phiên | `web/security.py` `WebAuth(idle_s, max_s)` | `web.session_max_age_s` (mặc định 12 h), `web.session_idle_s` (1 h). Khoá phiên `k` ngoài cookie, CSRF, CSP giữ nguyên |
 | TOTP | `web/totp.py` | RFC 6238 bằng `hmac` stdlib: SHA-1, 6 số, 30 s, lệch ±1 bước; chống dùng lại (`last_step`). File `HUB_HOME/auth/totp.json` + `totp_enroll.json` (0600, thư mục 0700 — đã nằm trong `denyRead`/`denyWrite` của sandbox + `permissions.deny`) |
-| Đăng ký | `cfharness web totp enroll [--ttl S] [--activate]`, `status`, `disable` (`web/cli.py`); trang `/enroll` (`templates/enroll.html`) | In URI `otpauth://` + link đăng ký MỘT LẦN (`<public_origin>/enroll?t=…`, chỉ lưu băm). GET chỉ hiện nút (bộ xem trước link của chat không tiêu link/không thấy bí mật); POST "Hiện mã" hiện bí mật ĐÚNG MỘT lần; nhập mã đúng → kích hoạt + vào phiên. Mã cũ vẫn dùng tới khi mã mới được kích hoạt (trừ `--activate`) |
+| Đăng ký | `cfharness web totp enroll [--ttl S] [--activate] [--show-uri]`, `status`, `disable` (`web/cli.py`); trang `/enroll` (`templates/enroll.html`) | In link đăng ký MỘT LẦN (URI `otpauth://` chứa bí mật CHỈ in khi `--show-uri`) (`<public_origin>/enroll?t=…`, chỉ lưu băm). GET chỉ hiện nút (bộ xem trước link của chat không tiêu link/không thấy bí mật); POST "Hiện mã" hiện bí mật ĐÚNG MỘT lần; nhập mã đúng → kích hoạt + vào phiên. Mã cũ vẫn dùng tới khi mã mới được kích hoạt (trừ `--activate`) |
 | Đăng nhập | `/login` (`templates/login.html`) | Ô mã 6 số khi đã bật TOTP. Link một lần cũ vẫn chạy (cả trên host public). Trên host public không hiện hướng dẫn `cfharness web --open` |
 | Chống dò | `web/public.py` `LoginLimiter`, `client_ip` | Theo IP (5 sai/15 phút → khoá 15 phút), TOÀN CỤC mọi IP (10 sai/15 phút → khoá mọi người 15 phút), trần ngày (50 sai/24 h → khoá 24 h). Cấu hình `web.login.*`. Đang khoá thì mã ĐÚNG cũng bị từ chối (429). Audit `web.login_failed` / `web.login_locked` / `web.login` / `web.totp_confirmed` (kênh `web`), `web.totp_enrolled|disabled` (kênh `cli`) |
 | IP thật | `client_ip` | Header proxy CHỈ tin khi có `public_origin` VÀ peer là loopback (tunnel chạy trên máy). `web.client_ip_header`: `x-forwarded-for` (mặc định, lấy phần tử CUỐI — do proxy gần nhất thêm) / `cf-connecting-ip` (chỉ khi chắc chắn là Cloudflare) / `none` |
@@ -103,7 +103,8 @@ tunnel (`ssh -L 8712:127.0.0.1:8712 an@mini`). Lý do: token `control` = toàn q
 - Khoá tạm và phiên chỉ trong RAM của tiến trình web: khởi động lại web = mất phiên + mất khoá (cố ý: là cách "mở khoá").
 - `web.public_origin` đọc qua RPC `config.get` lúc `cfharness web` khởi động → đổi cấu hình phải khởi động lại job web.
 - Link đăng ký: ai mở và bấm "Hiện mã" trước sẽ có bí mật — gửi qua kênh riêng; người dùng thật thấy "đã dùng" thì báo admin cấp lại.
-  Lệnh `enroll` cũng in URI ra terminal của admin (admin thấy bí mật — chấp nhận, admin vốn có quyền root trên máy).
+  Lệnh `enroll` mặc định KHÔNG in URI `otpauth://` (bí mật hay bị chép vào chat/log qua scrollback hoặc `tee`); `--show-uri` để in
+  khi admin trao tận tay (admin thấy bí mật — chấp nhận, admin vốn có quyền root trên máy).
 - LaunchDaemon: chưa kiểm thật trên Mac mini (cần root) — test chỉ dựng plist + runner giả. Không dùng Keychain (`claude` qua token);
   thứ khác cần Keychain trong phiên không GUI (vd MCP lưu credential vào Keychain) có thể không chạy.
 - Khi đã có LaunchAgent cũ (`cfharness daemon install-service`) cho cùng HUB_HOME: gỡ trước (`cfharness daemon uninstall-service`) để

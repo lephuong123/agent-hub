@@ -18,6 +18,16 @@ Test: `tests/test_multi_instance.py` (22 ca, không gọi `claude`, không cần
   khác; lỗi chmod chỉ cảnh báo; daemon log danh sách mục đã siết.
 - In-process (test, `Daemon(...)` trực tiếp) KHÔNG đổi umask của tiến trình gọi — chỉ `run_foreground`.
 
+### 1b. Một daemon cho mỗi HUB_HOME (khoá `daemon.lock`)
+- Sự cố thật khi tạo hub `lamlinh` (2026-11-10): LaunchDaemon vừa bật daemon, chưa kịp mở socket thì `cfharness doctor` thấy socket
+  chưa trả lời → tự khởi động bản thứ hai. `serve()` chỉ kiểm socket SỐNG nên cả hai cùng chạy, cùng ghi `hub.db`.
+- `daemon.run_foreground` lấy khoá độc quyền `HUB_HOME/daemon.lock` (0600; `flock` / `msvcrt.locking`) TRƯỚC khi mở hub, giữ suốt
+  đời tiến trình (hệ điều hành tự nhả khi chết, kể cả SIGKILL). Không lấy được sau 3 s → thoát mã 1 (launchd `KeepAlive
+  SuccessfulExit=false` thử lại sau `ThrottleInterval`). Chờ 3 s để một lần dò trùng lúc không làm daemon thật bỏ cuộc.
+- `spawn_background` (tự khởi động của CLI/MCP/web, `daemon start`): khoá đang bị giữ → CHỜ bản đang khởi động trả lời `hub.ping`,
+  không bật thêm; bản mình bật thua khoá → cũng chờ bản thắng. Trả pid của daemon ĐANG phục vụ.
+- Test: `tests/test_multi_instance.py::test_daemon_lock_*`.
+
 ### 2. Socket dự phòng + kiểm chủ socket
 - Khi `HUB_HOME/hub.sock` quá dài cho AF_UNIX: trước `/tmp/cfharness-<uid>-<hash>.sock` (đoán được, nằm thẳng trong /tmp dùng
   chung) → nay `/tmp/cfharness-<uid>/cfharness-<hash>.sock`. Thư mục tạo 0700, kiểm chủ = user hiện tại, không symlink

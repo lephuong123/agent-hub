@@ -1,8 +1,8 @@
 """Đăng nhập TOTP cho web public (RFC 6238 / RFC 4226, chỉ stdlib `hmac`) — docs/dev-notes/web-public.md.
 
 Người dùng không có phiên trên máy chạy hub (không đăng nhập màn hình, không SSH) nên không mở được link một lần của
-`cfharness web --open`. Thay vào đó: admin chạy `sudo -u <user> cfharness web totp enroll` qua SSH → in URI `otpauth://`
-+ link đăng ký MỘT LẦN; người dùng mở link trên điện thoại, bấm "Hiện mã" (một lần duy nhất — GET không tiêu link nên bộ xem
+`cfharness web --open`. Thay vào đó: admin chạy `sudo -u <user> cfharness web totp enroll` qua SSH → in link đăng ký MỘT LẦN
+(URI `otpauth://` chứa bí mật chỉ in khi `--show-uri`); người dùng mở link trên điện thoại, bấm "Hiện mã" (một lần duy nhất — GET không tiêu link nên bộ xem
 trước link của Slack/Telegram không làm hỏng nó), thêm vào app xác thực, nhập mã để kích hoạt → có phiên web.
 
 File (thư mục `HUB_HOME/auth/` 0700 — sandbox run `denyRead`/`denyWrite`, `permissions.deny` Read/Grep/Glob):
