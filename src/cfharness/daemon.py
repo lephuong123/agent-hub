@@ -127,6 +127,10 @@ class Daemon:
         from .admin_overview import register_rpc as _register_admin
 
         _register_admin(self)
+        # Sao lưu: backup.list|create|verify|restore_plan (backup.py — tự bọc audit backup.create; khôi phục chỉ ngoại tuyến từ CLI)
+        from .backup import register_rpc as _register_backup
+
+        _register_backup(self)
         # M1 luồng A: thêm mcp.*/secret.*/audit.*/feedback.* và bọc audit các method thay đổi trạng thái.
         # GIỮ Ở CUỐI __init__ — method thêm sau dòng này sẽ không được audit tự động.
         from .mcp_server.rpc import register_rpc
@@ -543,7 +547,7 @@ def run_foreground(paths: HubPaths) -> None:
 # ---- chạy dưới launchd (LaunchAgent `daemon install-service` / LaunchDaemon `admin install-daemon`, cùng KeepAlive SuccessfulExit=false)
 SUPERVISED_RESTART_CODE = 75  # EX_TEMPFAIL: thoát ≠ 0 → launchd chạy lại daemon (mã 0 = dừng hẳn)
 SUPERVISOR_LABEL_PREFIX = "com.cfharness.daemon."
-_UPDATE_BUSY_PHASES = ("starting", "waiting_daemon", "installing")
+_UPDATE_BUSY_PHASES = ("starting", "waiting_daemon", "installing", "rolling_back")  # rolling_back: helper thay hub.db + cài lại bản cũ
 _IS_MACOS = sys.platform == "darwin"
 
 

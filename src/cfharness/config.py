@@ -547,6 +547,16 @@ DEFAULTS: dict[str, Any] = {
         "manager_run_now_per_hour": 6,
         "manager_daily_budget_usd": None,
     },
+    # Sao lưu HUB_HOME (backup.py, docs/dev-notes/backup.md). Bật mặc định hằng ngày: ledger/audit/tri thức nằm trên MỘT file SQLite
+    # giữ vĩnh viễn — một bản/ngày (nén, bỏ runs/checkpoints/logs/secrets) rẻ hơn nhiều so với mất dữ liệu. "off" = tắt lịch.
+    "backup": {
+        "schedule": "daily 03:30",  # cú pháp schedules/cron.py; máy ngủ lúc đó → chạy bù một lần ở nhịp kế tiếp
+        "keep": 7,  # số bản manual+auto giữ lại
+        "keep_safety": 3,  # số bản pre-update+pre-restore giữ lại (bản update --rollback cần luôn được giữ)
+        "before_update": True,  # update.start tạo bản pre-update trước khi cài (để tự quay về DB khi migration đã tăng)
+        "compresslevel": 5,
+        "tick_s": 60,
+    },
     # Tổng quan máy (admin_overview.py, docs/dev-notes/admin-overview.md): mỗi hub xuất bản tóm tắt CHỈ SỐ LIỆU ra thư mục chung để
     # người quản trị xem mọi hub trên máy. Chỉ người đặt (`config.set` ∈ HUMAN_ONLY; nhánh ∈ integrity.SECURITY_KEYS).
     "admin_export": {
@@ -828,6 +838,10 @@ def validate_setting(key: str, value: Any) -> None:
         _validate_chrome(key, value)
     if key == "admin_export" or key.startswith("admin_export."):
         _validate_admin_export(key, value)
+    if key == "backup" or key.startswith("backup."):
+        from .backup import validate_setting as _validate_backup
+
+        _validate_backup(key, value)
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")

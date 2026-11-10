@@ -117,7 +117,9 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "system": {"scan", "add", "rm", "lock", "unlock", "pause", "resume", "restart"},  # job launchd chạy NGOÀI sandbox (system.* ∈ HUMAN_ONLY)
     "home": {"migrate"},  # đổi tên cfharness: chuyển HUB_HOME (dừng daemon, đổi thư mục, viết lại DB) — chỉ người
     "admin": None,  # plan-multi-instance: install-daemon (LaunchDaemon, root) + overview (admin.overview ∈ HUMAN_ONLY, lộ hoạt động user OS khác) — agent gõ đều chặn
-    "update": None,  # cập nhật cfharness = cài đè phần mềm hub + khởi động lại daemon (update.start ∈ HUMAN_ONLY) — agent gõ, kể cả --check, đều chặn
+    "update": None,
+    # Sao lưu (backup.py): khôi phục ghi đè hub.db/policy/tri thức; tạo/kiểm đọc + ghi toàn bộ dữ liệu hub — agent gõ, kể cả list, đều chặn
+    "backup": None,  # cập nhật cfharness = cài đè phần mềm hub + khởi động lại daemon (update.start ∈ HUMAN_ONLY) — agent gõ, kể cả --check, đều chặn
     # Lịch chạy tự động (schedules/): schedule.* ghi ∈ HUMAN_ONLY — agent không tự đặt việc chạy lặp
     "schedule": {"add", "create", "edit", "update", "pause", "resume", "rm", "remove", "delete", "run-now", "run_now"},
 }
@@ -767,7 +769,7 @@ def sensitive_read(p: str, ctx: GuardContext) -> bool:
         if ctx.hub_socket and _same(c, ctx.hub_socket + ".auth"):
             return True
         for h in homes:
-            if _under(c, h + "/secrets") or _under(c, h + "/auth") or _same(c, h + "/mcp_server/tokens.json"):
+            if _under(c, h + "/secrets") or _under(c, h + "/auth") or _under(c, h + "/backups") or _same(c, h + "/mcp_server/tokens.json"):
                 return True
             parts = [x.lower() for x in _rel_parts(c, h)] if IS_WINDOWS else _rel_parts(c, h)
             if len(parts) >= 3 and parts[0] == "agents" and parts[2] == "runtime":

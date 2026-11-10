@@ -98,7 +98,10 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # MANAGER_ALLOWED (create/pause/resume/rm/run_now lịch CỦA MÌNH, trần số lịch/tần suất/ngân sách — schedules.manager_check)
         "schedule.create", "schedule.update", "schedule.pause", "schedule.resume", "schedule.rm", "schedule.run_now",
         # Cập nhật cfharness (updater.py): cài đè phần mềm + dừng/khởi động lại daemon NGOÀI sandbox — chỉ người
-        "update.start",
+        "update.start", "update.rollback",
+        # Sao lưu (backup.py): tạo = ghi file lớn vào HUB_HOME; kiểm/kế hoạch khôi phục = đọc bản sao chứa toàn bộ dữ liệu hub — chỉ người.
+        # Khôi phục không có RPC (daemon phải dừng; CLI `backup restore` ∈ HUB_HUMAN_ONLY_CLI)
+        "backup.create", "backup.verify", "backup.restore_plan",
         # Tổng quan máy (admin_overview.py): CHỈ ĐỌC nhưng lộ hoạt động của user OS khác trên máy (chi phí, số run) — chỉ người
         "admin.overview",
     }
@@ -192,7 +195,8 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.curation.rpc", "MUTATING_CURATION"), ("cfharness.chat.rpc", "MUTATING_TELEGRAM"), ("cfharness.chat.slack.rpc", "MUTATING_SLACK"),
                       ("cfharness.manager.rpc", "MUTATING_MANAGER"),
                       ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS"),
-                      ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE")):
+                      ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE"),
+                      ("cfharness.backup", "MUTATING_BACKUP")):
         try:
             import importlib
 

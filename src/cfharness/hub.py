@@ -101,6 +101,10 @@ class Hub:
         from .admin_overview import attach as _attach_admin_export
 
         _attach_admin_export(self)
+        # Sao lưu HUB_HOME (`hub.backups`: tạo/kiểm/liệt kê, vòng nền theo backup.schedule) — backup.py, docs/dev-notes/backup.md
+        from .backup import attach as _attach_backup
+
+        _attach_backup(self)
         self._bg: list[Any] = []
         # hardening SEC (H-02 lớp 3): toàn vẹn policy/ + config.yaml + hub.db (`hub.integrity`) — guard/integrity.py. GIỮ CUỐI __init__
         from .guard.integrity import attach as _attach_integrity

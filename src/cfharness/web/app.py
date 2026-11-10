@@ -1576,6 +1576,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_memory_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
+        *_backup_pages.routes(),  # /partials/backup — thẻ "Sao lưu" ở Cài đặt (backup.py)
         *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
@@ -1607,6 +1608,11 @@ _slack_pages.register_actions(ACTIONS, Action, _req)
 from . import update_pages as _update_pages  # noqa: E402
 
 _update_pages.register_actions(ACTIONS, Action, _req)
+
+# Thẻ "Sao lưu" (backup.py): backup_create + /partials/backup; khôi phục chỉ hiện lệnh CLI
+from . import backup_pages as _backup_pages  # noqa: E402
+
+_backup_pages.register_actions(ACTIONS, Action, _req)
 
 # Tổng quan máy (admin_overview.py): trang chỉ đọc /admin/overview, mục menu chỉ khi thư mục trạng thái chung tồn tại
 from . import admin_pages as _admin_pages  # noqa: E402

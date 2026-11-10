@@ -96,7 +96,9 @@ EVENT_LEVELS: dict[str, str] = {
     "approval.escalated": "summary",
     "guard.decision": "debug",
     "guard.blocked": "summary",
-    "guard.tamper_detected": "summary",  # hardening SEC: policy/config/hub.db bị ghi NGOÀI RPC (guard/integrity.py) → khôi phục + Slack
+    "guard.tamper_detected": "summary",
+    "backup.created": "summary",  # bản sao lưu HUB_HOME mới (backup.py): {id, kind, size, pruned}
+    "backup.failed": "summary",  # sao lưu tự động lỗi: {kind, error}  # hardening SEC: policy/config/hub.db bị ghi NGOÀI RPC (guard/integrity.py) → khôi phục + Slack
     "auth.denied": "summary",  # hardening SEC: method chỉ-người bị gọi từ tiến trình run/thiếu token (auth.py)
     "guard.env_tamper": "summary",  # hardening SEC R2-1: .pth/sitecustomize trong venv của hub bị thêm/sửa (chạy ngoài sandbox)
     "guard.trust": "summary",  # người bật/tắt trust full cho agent (guard/service.trust_set)

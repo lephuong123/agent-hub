@@ -20,7 +20,15 @@
 - Process `cfharness web` / `cfharness chat` đang mở vẫn chạy code cũ: thẻ báo "giao diện web đang chạy bản cũ" khi phiên bản
   web ≠ daemon. Chưa tự khởi động lại web (khoá phiên trong RAM — mở lại = đăng nhập lại).
 - Windows: chưa kiểm thật (uv có thể không ghi đè được `cfharness.exe` nếu `cfharness web` còn chạy).
-- Không có rollback tự động; cài lỗi → daemon chạy lại bằng venv còn lại, `state.json` ghi lỗi; cài tay theo README.
+- ~~Không có rollback tự động~~ → có từ lưới an toàn (dưới).
+
+## Lưới an toàn (chi tiết: `docs/dev-notes/backup.md` § "Cập nhật có lưới an toàn")
+- Trước khi chạy helper, `update.start` tạo bản sao lưu `pre-update` (`backup.before_update`, mặc định bật; lỗi → huỷ cập nhật). `state.json.backup`.
+- Helper thêm pha `health` (`hub.ping` qua socket, ≤ 60 s + kiểm lại sau 3 s). Không lên → `rolling_back`: dừng daemon còn sót, khôi phục hub.db
+  từ bản pre-update NẾU `user_version` đã tăng (DB đã migrate giữ ở `backups/hub.db.replaced-*`), cài lại bản đang chạy, khởi động lại, kiểm lại.
+  `state.json`: `rolled_back`, `rollback{ok, db_restored, …}`; thẻ web hiện "đã tự quay về".
+- `cfharness update --rollback [-y] [--force]` → RPC `update.rollback` (HUMAN_ONLY, audit): quay về `v<version_before>` + DB trước (nếu schema tăng).
+  Daemon không trả lời → CLI chạy helper tại chỗ. Không quay tiếp sau một lần quay về.
 
 ## Cập nhật khi daemon chạy dưới launchd (LaunchAgent `daemon install-service` / LaunchDaemon `admin install-daemon`)
 
