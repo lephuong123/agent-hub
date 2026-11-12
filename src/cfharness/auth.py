@@ -88,6 +88,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "slack.setup", "slack.pending", "slack.allow", "slack.revoke", "slack.disable", "slack.test",
         # M7: chỉ định điều phối viên (cấp quyền manager), nhắn/tick manager (agent khác không được "ra lệnh" cho manager)
         "manager.set", "manager.chat", "manager.tick",
+        # luồng việc + sửa hội thoại (đổi tên/gắn luồng/lưu trữ): người; điều phối viên dùng tool hub-self workstream_* (managerself.call)
+        "manager.conversation_update", "manager.conversation_read", "workstream.create", "workstream.update",
         # UX: trả lời/chuyển/huỷ câu hỏi của agent — agent không tự trả lời câu hỏi (của mình hay agent khác). Điều phối viên trả lời/
         # chuyển lên người qua MANAGER_ALLOWED, chỉ khi câu hỏi đang `with_manager` (manager/permissions.check_rpc)
         "question.answer", "question.escalate", "question.cancel",

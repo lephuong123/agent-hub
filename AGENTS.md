@@ -443,6 +443,14 @@ Bất biến: `created_by` lấy từ người gọi. Điều phối viên chỉ
 `_gate` (lần 3). Nội dung lịch do điều phối viên viết vào prompt trong khung `<untrusted-data>`, tiêu đề `[cfharness · SCHEDULED JOB · key …]`
 (không bao giờ thành "tin người"). Thêm luật/ trần → ca đỏ→xanh trong `tests/test_schedules.py`.
 
+## Luồng việc (workstream) — mỗi epic một luồng cho điều phối viên
+Chi tiết: `docs/dev-notes/workstreams.md`. Bảng `workstreams` (v24) + `workstream_id` trên `manager_conversations`/`tasks`; service
+`manager/workstreams.py` (`hub.manager.ws`). Session mới của hội thoại trong luồng nạp STATE.md + task mở (`context_block`); Sảnh nạp
+danh sách luồng. Tick xử lý MỘT luồng mỗi lượt trong hội thoại nhịp riêng của luồng. `notify_owner` của task thuộc luồng → hội thoại
+của luồng. Tool `workstream_*`, `conversation_set_workstream`, `task_create(workstream)`. RPC người `workstream.create|update`,
+`manager.conversation_update|read` (HUMAN_ONLY). Web `/manager?w=` + thanh bên Sảnh/Luồng; REPL `/ws`.
+Test: `tests/test_manager_workstreams.py`, `tests/test_web_workstreams.py`.
+
 ## Hồ sơ phê duyệt — `approval.profile` strict|balanced|autonomous, giao điều phối viên duyệt
 Chi tiết, dữ liệu hub thật, bảng profile, ranh giới, lưu ý cài đặt cũ: `docs/dev-notes/approval-profiles.md`. Migration **v18**
 (`approval_requests.routed_to…timeout_action`). Test: `tests/test_approval_profiles.py`.

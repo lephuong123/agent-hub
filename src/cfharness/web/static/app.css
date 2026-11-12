@@ -573,6 +573,38 @@ progress.bar::-moz-progress-bar { background: var(--accent); border-radius: 99px
 .mgr-convs .cm { display: block; color: var(--muted); font-size: var(--fs-xs); }
 .mgr-convs-m { display: none; }
 .mgr-convs-m .menu-pop { left: 0; right: auto; width: min(320px, calc(100vw - 32px)); max-height: 60vh; overflow: auto; }
+/* Luồng việc (docs/dev-notes/workstreams.md): Sảnh + danh sách luồng ở thanh bên, chip luồng ở đầu chat, STATE/task ở panel phải */
+.ws-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.ws-add { color: var(--muted); padding: 0 6px; border-radius: 6px; }
+.ws-add:hover { background: var(--surface-3); text-decoration: none; color: var(--text); }
+.side-recents .ws-list .cm, .menu-pop .ws-list .cm { display: block; }
+.ws-list .ct { display: flex; align-items: center; gap: 6px; }
+.ws-key { font-weight: 600; color: var(--text); font-size: var(--fs-xs); }
+.ws-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.ws-dot.ok { background: var(--ok, #2f9e44); }
+.ws-dot.danger { background: var(--danger, #c8413a); }
+.ws-dot.done { background: var(--muted); }
+.ws-unread { margin-left: auto; flex: none; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent, #c8413a); color: #fff;
+  font-size: 11px; line-height: 18px; text-align: center; font-weight: 600; }
+.mgr-convs .ct .ws-unread { display: inline-block; margin-left: 6px; }
+.ws-new, .ws-closed { margin: 6px 4px; font-size: var(--fs-sm); }
+.ws-new summary, .ws-closed summary { cursor: pointer; color: var(--muted); padding: 4px 6px; list-style: none; }
+.ws-new summary:hover, .ws-closed summary:hover { color: var(--text); }
+.ws-form { display: flex; flex-direction: column; gap: 6px; padding: 6px; }
+.ws-form label { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-xs); color: var(--muted); }
+.ws-form input, .ws-form select, .ws-form textarea { font: inherit; font-size: var(--fs-sm); }
+.ws-form textarea { min-height: 180px; font-family: var(--mono, monospace); }
+.conv-menu .menu-pop { right: 0; left: auto; width: min(300px, calc(100vw - 32px)); }
+.ws-chip { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs);
+  color: var(--text-2); background: var(--surface-3); border-radius: 6px; padding: 1px 8px; margin-bottom: 2px; }
+.ws-chip.closed { opacity: .7; }
+.ws-chip .danger-t { color: var(--danger, #c8413a); }
+.ws-state-pre { white-space: pre-wrap; word-break: break-word; font-size: var(--fs-xs); background: var(--surface-2, var(--surface-3)); border-radius: 8px;
+  padding: 8px 10px; margin: 6px 0; max-height: 320px; overflow: auto; }
+.ws-state > summary, .ws-edit > summary { list-style: none; cursor: pointer; display: inline-block; }
+.ws-tasks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-sm); }
+.ws-tasks li.done { opacity: .65; }
+.ws-edit { margin-top: 10px; }
 
 /* Bố cục: trang chat chiếm trọn chiều cao, log cuộn bên trong, ô nhập dính đáy */
 .chat-page .main { height: 100vh; height: 100dvh; }
