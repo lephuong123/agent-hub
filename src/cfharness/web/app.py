@@ -1009,6 +1009,26 @@ class Action:
     call: Callable[[Request, dict[str, Any]], Awaitable[Any]] | None = None  # thao tác nhiều RPC (mặc định: một RPC `method`)
 
 
+async def _config_set(request: Request, p: dict[str, Any]) -> Any:
+    """`config.set` từ trang Cài đặt. `files.*` NỚI LỎNG (thêm đuôi được mở, bớt mẫu bí mật, bật tải qua cloud, tăng trần) chỉ nhận
+    khi web dùng trên CHÍNH máy chạy hub — phiên qua link public chỉ được siết (docs/dev-notes/file-open.md)."""
+    key = str(p.get("key") or "")
+    if key.startswith("files."):
+        from ..config import get_path
+        from ..fileview import loosens
+        from .file_pages import is_local_request
+
+        if not is_local_request(request):
+            try:
+                old = get_path(await rpc(request, "config.get") or {}, key)
+            except KeyError:
+                old = None
+            if loosens(key, old, p.get("value")):
+                raise RpcError(-32003, "Thay đổi này nới lỏng bảo vệ file — chỉ đổi được khi dùng web trên chính máy chạy hub "
+                                       "(hoặc `cfharness config set` trong terminal). Qua link public chỉ được siết lại.")
+    return await rpc(request, "config.set", p, audit=True)
+
+
 def _run_goto(res: Any, form: FormData) -> str | None:
     rid = (res or {}).get("id") or (res or {}).get("run_id")
     return f"/runs/{rid}" if rid else None
@@ -1196,7 +1216,7 @@ ACTIONS: dict[str, Action] = {
                         danger=True),
     "config_set": Action("config.set", lambda f: dict(zip(("key", "value"), _settings.parse_form(f))),
                          lambda r, f: f"Đã đặt {f.get('key')} = {json.dumps((r or {}).get(f.get('key')), ensure_ascii=False)}",
-                         confirm=lambda f: f"Đổi cấu hình {f.get('key')} thành '{_settings.show(_settings.parse_form(f)[1])}'?"),
+                         confirm=lambda f: f"Đổi cấu hình {f.get('key')} thành '{_settings.show(_settings.parse_form(f)[1])}'?", call=_config_set),
     "secret_set": Action("secret.set", lambda f: {"name": _req(f, "name", "tên secret"), "value": _req(f, "value", "giá trị")},
                          lambda r, f: f"Đã lưu secret {r.get('name')} (giá trị không bao giờ hiển thị lại)",
                          confirm=lambda f: f"Lưu secret {f.get('name')}? Nếu đã có secret cùng tên, giá trị cũ bị GHI ĐÈ.", danger=True, secret_fields=("value",)),

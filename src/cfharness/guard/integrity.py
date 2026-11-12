@@ -42,7 +42,7 @@ log = logging.getLogger("cfharness.guard.integrity")
 POLICY = "policy"
 CONFIG = "config.yaml"
 SECURITY_KEYS = ("guard", "approval", "runtime", "secrets", "telemetry", "notify", "learning_guard", "manager", "schedules",
-                 "admin_export", "web", "workspace.confine")  # P2: khoá con có dấu chấm = chỉ nhánh con đó (giam agent trong W)
+                 "admin_export", "web", "workspace.confine", "files")  # P2: khoá con có dấu chấm = chỉ nhánh con đó (giam agent trong W)
 
 
 _MISSING = object()

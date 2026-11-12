@@ -347,3 +347,85 @@ async def test_files_js_and_css_served(env):
     assert "/static/files.js" in page.text and "/static/files.css" in page.text
     js = await env.client.get("/static/files.js")
     assert js.status_code == 200 and "/files/open" in js.text and "innerHTML" not in js.text
+
+
+# =========================================================================== cấu hình `files.*` (trang Cài đặt)
+def test_files_settings_validate_and_loosens():
+    from cfharness.config import validate_setting
+
+    validate_setting("files.open_extensions", [".txt", ".PDF"])
+    for bad in ([".exe"], [".html"], ["pdf"], [".docm"], "x", [1]):
+        with pytest.raises(ValueError):
+            validate_setting("files.open_extensions", bad)
+    for bad in (["a/b"], ["a\b"], [""], "x"):
+        with pytest.raises(ValueError):
+            validate_setting("files.secret_patterns", bad)
+    for bad in (0, 51, True, "10"):
+        with pytest.raises(ValueError):
+            validate_setting("files.max_download_mb", bad)
+    with pytest.raises(ValueError):
+        validate_setting("files.la", 1)
+    assert fileview.loosens("files.open_extensions", [".txt"], [".txt", ".pdf"])
+    assert not fileview.loosens("files.open_extensions", [".txt", ".pdf"], [".txt"])
+    assert fileview.loosens("files.secret_patterns", [".env", "*.pem"], [".env"])
+    assert not fileview.loosens("files.secret_patterns", [".env"], [".env", "*.pem"])
+    assert fileview.loosens("files.secret_allow", ["*.pub"], ["*.pub", ".env"])
+    assert fileview.loosens("files.cloud_download", False, True) and not fileview.loosens("files.cloud_download", True, False)
+    assert fileview.loosens("files.max_download_mb", 10, 20) and not fileview.loosens("files.max_download_mb", 10, 5)
+    assert fileview.loosens("files.max_download_mb", None, 20)  # chưa đặt = mặc định 10
+
+
+def test_files_settings_drive_secret_and_open():
+    cfg = {"secret_patterns": ["*.secret"], "secret_allow": [], "open_extensions": [".txt", ".exe"]}
+    assert secret_name("a.SECRET", cfg) and not secret_name(".env", cfg)
+    assert can_open("x.txt", cfg) and not can_open("x.pdf", cfg)
+    assert not can_open("x.exe", cfg)  # NEVER_OPEN thắng cả khi cấu hình lỡ có
+
+
+async def test_cloud_download_toggle_and_size_cap(env, ws):
+    await env.login()
+    rid = await run_in(env, ws)
+    cloud = {"x-forwarded-for": "203.0.113.9"}
+    assert (await env.client.get(f"/files/raw?{q(rid, 'blob.bin', dl='1')}", headers=cloud)).status_code == 200  # mặc định: cho tải
+    env.hub.config.set("files.cloud_download", False)
+    r = await env.client.get(f"/files/view?{q(rid, 'notes.md')}", headers=cloud)
+    assert r.status_code == 200 and "nội dung tiếng Việt" in r.text and "dl=1" not in r.text  # vẫn xem, không có nút tải
+    assert (await env.client.get(f"/files/raw?{q(rid, 'blob.bin', dl='1')}", headers=cloud)).status_code in (400, 403)
+    assert (await env.client.get(f"/files/raw?{q(rid, 'blob.bin')}", headers=cloud)).status_code == 403  # nhị phân = tải về
+    assert (await env.client.get(f"/files/raw?{q(rid, 'img.png')}", headers=cloud)).status_code == 200  # ảnh xem inline vẫn được
+    assert (await env.client.get(f"/files/raw?{q(rid, 'blob.bin', dl='1')}")).status_code == 200  # dùng trên máy: luôn tải được
+    (ws / "big.bin").write_bytes(b"\x01" * 1_500_000)
+    env.hub.config.set("files.max_download_mb", 1)
+    assert (await env.client.get(f"/files/raw?{q(rid, 'big.bin', dl='1')}")).status_code != 200
+    env.hub.config.set("files.max_download_mb", 2)
+    assert (await env.client.get(f"/files/raw?{q(rid, 'big.bin', dl='1')}")).status_code == 200
+
+
+async def test_settings_page_files_group_and_public_can_only_tighten(env):
+    await env.login()
+    r = await env.client.get("/settings")
+    assert r.status_code == 200 and "files.open_extensions" in r.text and "Xem / mở file" in r.text and "<textarea" in r.text
+    cloud = {"x-forwarded-for": "203.0.113.9"}
+
+    async def put(key, value, headers=None):
+        data = {"key": key, "value": value, "confirm": "yes", "next": "/settings"}
+        return await env.post("/do/config_set", data, headers=headers)
+
+    # siết qua link public: được
+    await put("files.max_download_mb", "5", cloud)
+    assert env.hub.config.get("files.max_download_mb") == 5
+    cur = env.hub.config.get("files.secret_patterns")
+    await put("files.secret_patterns", "\n".join(cur + ["custom.txt"]), cloud)  # thêm mẫu bí mật = siết
+    assert "custom.txt" in env.hub.config.get("files.secret_patterns")
+    await put("files.secret_patterns", ".env", cloud)  # bỏ bớt mẫu = nới → từ chối
+    assert "*.pem" in env.hub.config.get("files.secret_patterns")
+    # nới qua link public: bị từ chối, giá trị không đổi
+    await put("files.max_download_mb", "20", cloud)
+    assert env.hub.config.get("files.max_download_mb") == 5
+    await put("files.open_extensions", ".txt, .pdf, .stl", cloud)
+    assert ".stl" not in (env.hub.config.get("files.open_extensions") or [])
+    # trên chính máy: nới được; đuôi chương trình vẫn bị từ chối
+    await put("files.open_extensions", ".txt, .pdf, .stl")
+    assert env.hub.config.get("files.open_extensions") == [".txt", ".pdf", ".stl"]
+    await put("files.open_extensions", ".txt\n.exe")
+    assert ".exe" not in env.hub.config.get("files.open_extensions")

@@ -93,21 +93,22 @@ async def file_view(request: Request) -> Response:
         lines = text.split("\n")
         if lines and lines[-1] == "" and len(lines) > 1:
             lines.pop()
+    local = is_local_request(request)
     return await A.render(request, "file_view.html", {
-        "nav": "runs" if p.get("run_id") else "agents", "f": info, "lines": lines, "q": qs(p), "p": p, "local": is_local_request(request),
-        "view_max": VIEW_MAX})
+        "nav": "runs" if p.get("run_id") else "agents", "f": info, "lines": lines, "q": qs(p), "p": p, "local": local,
+        "can_download": local or info.get("cloud_download", True), "view_max": VIEW_MAX})
 
 
 async def file_raw(request: Request) -> Response:
     from . import app as A
-    from ..fileview import RAW_MAX
-
     p = file_params(request.query_params)
-    info = await A.rpc(request, "file.read", {**p, "max_bytes": RAW_MAX, "whole": True}, audit=True)
+    local = is_local_request(request)
+    dl = request.query_params.get("dl") == "1"
+    # max_bytes bỏ trống: daemon dùng trần `files.max_download_mb`. channel/download để daemon áp `files.cloud_download`.
+    info = await A.rpc(request, "file.read", {**p, "whole": True, "channel": "local" if local else "cloud", "download": dl}, audit=True)
     data = base64.b64decode(info.get("data_b64") or "")
     mime, kind = str(info.get("mime") or ""), info.get("kind")
     name = str(info.get("name") or "file")
-    dl = request.query_params.get("dl") == "1"
     headers = {"x-content-type-options": "nosniff", "cache-control": "no-store", "cross-origin-resource-policy": "same-origin"}
     ascii_name = "".join(ch if 32 < ord(ch) < 127 and ch not in '"\\;' else "_" for ch in name) or "file"
     from urllib.parse import quote
@@ -122,6 +123,8 @@ async def file_raw(request: Request) -> Response:
         ctype, disp = "application/pdf", "inline"
     else:
         ctype, disp = "application/octet-stream", "attachment"
+    if disp == "attachment" and not local and not info.get("cloud_download", True):  # loại không xem inline được = tải về
+        raise HTTPException(403, "Tải file về qua link public đang tắt (Cài đặt → Xem / mở file) — vẫn xem được trong trình duyệt")
     if disp == "attachment" and "content-security-policy" not in headers:
         headers["content-security-policy"] = RAW_CSP
     headers["content-disposition"] = f"{disp}; {disp_name}"

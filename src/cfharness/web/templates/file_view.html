@@ -13,7 +13,7 @@
   <div class="fview-path" title="{{ f.path }}">{{ f.path }}</div>
   <div class="fview-meta"><span>{{ '{:,}'.format(f.size or 0) }} byte</span>{% if f.mtime_s %}<span>sửa lúc {{ f.mtime_s }}</span>{% endif %}<span>trong <code>{{ f.root }}</code></span></div>
   <div class="fview-actions">
-    <a class="btn sm" href="/files/raw?{{ q }}&amp;dl=1">{{ m.icon('arrow-up') }}<span>Tải về</span></a>
+    {% if can_download %}<a class="btn sm" href="/files/raw?{{ q }}&amp;dl=1">{{ m.icon('arrow-up') }}<span>Tải về</span></a>{% endif %}
     {% if f.kind in ('image', 'pdf') %}<a class="btn ghost sm" href="/files/raw?{{ q }}" target="_blank" rel="noopener">{{ m.icon('external') }}<span>Mở bản gốc</span></a>{% endif %}
     {% if local %}
     <span class="fview-open" data-path="{{ p.path }}"{% if p.run_id %} data-run="{{ p.run_id }}"{% else %} data-agent="{{ p.agent_id }}"{% endif %}>
@@ -28,14 +28,14 @@
 </section>
 <section class="card">
 {% if f.kind == 'text' %}
-  {% if f.truncated %}<div class="banner warn">{{ m.icon('info') }}<span>File lớn — chỉ hiển thị {{ '{:,}'.format(view_max) }} byte đầu. Tải về để xem đủ.</span></div>{% endif %}
+  {% if f.truncated %}<div class="banner warn">{{ m.icon('info') }}<span>File lớn — chỉ hiển thị {{ '{:,}'.format(view_max) }} byte đầu. {% if can_download %}Tải về để xem đủ.{% endif %}</span></div>{% endif %}
   {% if lines %}<pre class="fview-code" tabindex="0">{% for ln in lines %}<span class="ln">{{ ln }}</span>{% endfor %}</pre>{% else %}<p class="muted">File rỗng.</p>{% endif %}
 {% elif f.kind == 'image' %}
   <img class="fview-img" src="/files/raw?{{ q }}" alt="{{ f.name }}">
 {% elif f.kind == 'pdf' %}
-  <p>{{ m.icon('info') }} PDF — <a href="/files/raw?{{ q }}" target="_blank" rel="noopener">mở trong tab mới</a> (trình xem PDF của trình duyệt) hoặc <a href="/files/raw?{{ q }}&amp;dl=1">tải về</a>.</p>
+  <p>{{ m.icon('info') }} PDF — <a href="/files/raw?{{ q }}" target="_blank" rel="noopener">mở trong tab mới</a> (trình xem PDF của trình duyệt){% if can_download %} hoặc <a href="/files/raw?{{ q }}&amp;dl=1">tải về</a>{% endif %}.</p>
 {% else %}
-  {{ m.empty("File nhị phân — không hiển thị nội dung. Dùng \"Tải về\".", "info") }}
+  {{ m.empty("File nhị phân — không hiển thị nội dung." ~ (" Dùng \"Tải về\"." if can_download else " Tải về qua link public đang tắt."), "info") }}
 {% endif %}
 </section>
 {% endblock %}

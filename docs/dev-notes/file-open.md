@@ -78,3 +78,22 @@ thay mục tại chỗ — `tool.complete` không mang input), và khối "Thay 
 - Trang task: chưa hiện đường dẫn file nào nên chưa có chip.
 - Danh sách `OPEN_EXTS`/`SECRET_NAMES` là lựa chọn mặc định cứng — nếu cần chỉnh theo người dùng thì thêm khoá cấu hình (chỉ người đặt).
 - Web public: có nên cho TẢI VỀ file nhị phân lớn qua tunnel không, hay chỉ xem? Hiện cho tải ≤ 10 MB (đã audit).
+
+## Cấu hình `files.*` (trang Cài đặt → "Xem / mở file") — chủ sản phẩm 2026-11-12
+Chủ sản phẩm chốt: qua cloud (link public) **cho cả xem lẫn tải về**; danh sách loại file được mở và tên file bí mật **đưa vào Cài đặt**.
+
+| Khoá | Mặc định | Ý nghĩa |
+|---|---|---|
+| `files.cloud_download` | `true` | Cho tải về khi dùng web qua link public. Tắt → vẫn xem (văn bản, ảnh, PDF inline), nút "Tải về" ẩn, `/files/raw` loại phải tải (nhị phân, `dl=1`) → 403 (web) / `Blocked` (daemon, `file.read{channel:"cloud", download:true}`). Trên chính máy luôn tải được. |
+| `files.max_download_mb` | `10` | Trần tải về / ảnh / PDF, 1–50 MB (trần cứng `DOWNLOAD_MB_MAX`, base64 qua RPC). |
+| `files.open_extensions` | danh sách cũ `OPEN_EXTS` | Đuôi được mở bằng app mặc định. `NEVER_OPEN` (chương trình, script, HTML/SVG, Office có macro/định dạng cũ, ảnh đĩa) **không bao giờ** thêm được: `validate_setting` từ chối, và `can_open` vẫn chặn nếu lỡ lọt vào file cấu hình. |
+| `files.secret_patterns` | mẫu glob tương đương regex cũ | Tên file coi là bí mật (không xem/mở/tải qua web). So khớp `fnmatch`, không phân biệt hoa thường. |
+| `files.secret_allow` | `.env.example` … `*.pub` | Ngoại lệ của `secret_patterns`. |
+
+Bảo vệ:
+- Nhánh `files` ∈ `integrity.SECURITY_KEYS` (agent sửa tay `config.yaml` → bị khôi phục); `config.set` vẫn HUMAN_ONLY.
+- Web: action `config_set` gọi `_config_set` — thay đổi `files.*` mà `fileview.loosens()` coi là **nới lỏng** (thêm đuôi được mở,
+  bớt mẫu bí mật, thêm ngoại lệ, bật tải qua cloud, tăng trần) **chỉ nhận khi `is_local_request`**. Qua link public chỉ được siết;
+  nới thì dùng web trên chính máy hoặc `cfharness config set`.
+- Kiểu ô mới `list` trong `settings_schema` (textarea; mỗi dòng hoặc dấu phẩy một mục; bỏ trùng, bỏ dòng trống).
+- Daemon đọc cấu hình mỗi lời gọi (`FileAccess.cfg()`, theo mtime như mọi setting); cấu hình hỏng → mặc định (bản chặt).
