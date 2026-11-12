@@ -30,7 +30,7 @@ _ITEM = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 class Setting:
     key: str
     label: str
-    kind: str  # int | float | bool | choice | multi | time | text
+    kind: str  # int | float | bool | choice | multi | time | text | list (mỗi dòng / dấu phẩy một mục)
     hint: str = ""
     choices: tuple[str, ...] = ()
     nullable: bool = False  # để trống / chọn "(mặc định)" = null
@@ -161,6 +161,18 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
     )),
 )
 
+# `files.*`: sửa được trên web, nhưng thay đổi NỚI LỎNG (fileview.loosens) chỉ nhận khi dùng web trên chính máy chạy hub
+# (kiểm ở action `config_set` của app.py) — qua link public chỉ được siết.
+FILES_GROUP = ("files", "Xem / mở file", (
+    _s("files.cloud_download", "Cho tải file về khi dùng web qua link public (cloud)", "bool", "xem trong trình duyệt luôn được"),
+    _s("files.max_download_mb", "Dung lượng tối đa khi tải về / xem ảnh, PDF (MB)", "int", "1–50", min=1),
+    _s("files.open_extensions", "Loại file được mở bằng ứng dụng (máy chạy hub)", "list",
+       "mỗi dòng một đuôi, vd .pdf — chương trình/script/HTML/Office có macro luôn bị từ chối"),
+    _s("files.secret_patterns", "Tên file coi là bí mật (không xem/mở/tải qua web)", "list", "mỗi dòng một tên hoặc mẫu glob, vd .env, *.pem"),
+    _s("files.secret_allow", "Ngoại lệ (không coi là bí mật)", "list", "vd .env.example, *.pub"),
+))
+GROUPS = GROUPS + (FILES_GROUP,)
+
 # Khoá nới lỏng bảo vệ: web chỉ hiện giá trị + lệnh CLI.
 READONLY: tuple[tuple[str, str], ...] = (
     ("gates.mode", "Cổng duyệt toàn hệ thống (thẻ Cổng duyệt ở trên)"),
@@ -209,6 +221,9 @@ def parse_form(form: FormData) -> tuple[str, Any]:
     s = BY_KEY.get(key)
     if s is None:
         raise ValueError(f"khoá '{key}' không sửa được từ web — dùng `cfharness config set` trong terminal")
+    if s.kind == "list":
+        items = [x.strip() for x in str(form.get("value") or "").replace(",", "\n").split("\n")]
+        return key, list(dict.fromkeys(x for x in items if x))
     if s.kind == "multi":
         picked = [str(v) for v in form.getlist("value") if str(v)]
         bad = [v for v in picked if v not in s.choices and not _ITEM.match(v)]
@@ -267,6 +282,8 @@ def view(cfg: dict[str, Any]) -> dict[str, Any]:
                 cur: Any = [str(x) for x in (v or [])]
                 extra = [x for x in cur if x not in s.choices]  # giá trị người đặt tay ngoài danh mục: vẫn hiện, bỏ tích = gỡ
                 rows.append({"s": s, "value": cur, "choices": list(s.choices) + extra})
+            elif s.kind == "list":
+                rows.append({"s": s, "value": "\n".join(str(x) for x in (v or [])), "count": len(v or [])})
             elif s.kind == "bool":
                 rows.append({"s": s, "value": "" if v is None else ("true" if v else "false")})
             else:

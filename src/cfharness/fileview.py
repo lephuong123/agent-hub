@@ -18,6 +18,7 @@ nội bộ HUB_HOME (trừ `agents/*/workspaces/**`, `worktrees/**`), token ngư
 from __future__ import annotations
 
 import base64
+import fnmatch
 import mimetypes
 import os
 import re
@@ -41,32 +42,101 @@ PATH_MAX = 4096
 IMAGE_EXTS = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
               ".bmp": "image/bmp", ".ico": "image/x-icon", ".svg": "image/svg+xml", ".avif": "image/avif"}
 PDF_EXTS = {".pdf"}
-# Mở bằng app mặc định: DANH SÁCH CHO PHÉP (an toàn hơn danh sách cấm — đuôi lạ có thể gắn với trình thông dịch). Không có: mã nguồn
-# chạy được (.py .js .sh .ps1 .rb .pl .php …), .html/.htm/.svg (trình duyệt chạy JS từ file://), Office có macro (.docm .xlsm …,
-# .doc/.xls/.ppt cũ), mọi chương trình/lối tắt (.exe .bat .cmd .com .msi .lnk .scr .hta .reg .app .jar …).
-OPEN_EXTS = frozenset({
-    ".txt", ".md", ".markdown", ".rst", ".log", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
-    ".xml", ".diff", ".patch",
-    ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".avif",
-    ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".rtf", ".pages", ".numbers", ".key",
-    ".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm", ".mkv", ".avi",
-    ".zip",
+# Mở bằng app mặc định: DANH SÁCH CHO PHÉP (an toàn hơn danh sách cấm — đuôi lạ có thể gắn với trình thông dịch), lấy từ
+# `files.open_extensions` (mặc định ở config.DEFAULTS). `NEVER_OPEN`: không bao giờ được thêm vào danh sách đó (cấu hình bị từ chối,
+# và có lỡ lọt vào thì `can_open` vẫn chặn): chương trình/lối tắt, script chạy được, HTML/SVG (trình duyệt chạy JS từ file://),
+# Office có macro / định dạng cũ, ảnh đĩa.
+NEVER_OPEN = frozenset({
+    ".exe", ".bat", ".cmd", ".com", ".msi", ".msp", ".msc", ".lnk", ".url", ".pif", ".scr", ".hta", ".reg", ".cpl", ".scf", ".inf",
+    ".gadget", ".appref-ms", ".application", ".appx", ".msix", ".jar", ".app", ".command", ".workflow", ".applescript", ".scpt",
+    ".ps1", ".psm1", ".psd1", ".ps1xml", ".vbs", ".vbe", ".js", ".jse", ".mjs", ".cjs", ".wsf", ".wsh", ".ws", ".sh", ".bash", ".zsh",
+    ".fish", ".csh", ".ksh", ".py", ".pyw", ".pyc", ".pl", ".rb", ".php", ".lua", ".tcl", ".r",
+    ".html", ".htm", ".xhtml", ".xht", ".mht", ".mhtml", ".svg", ".chm", ".hlp",
+    ".docm", ".dotm", ".xlsm", ".xltm", ".xlam", ".pptm", ".potm", ".ppam", ".ppsm", ".sldm", ".doc", ".dot", ".xls", ".xlt", ".ppt",
+    ".pps", ".iso", ".img", ".vhd", ".vhdx", ".dmg", ".pkg", ".deb", ".rpm",
 })
-_SECRET_RE = re.compile(
-    r"^(\.env(\..+)?|\.netrc|_netrc|\.npmrc|\.pypirc|\.git-credentials|\.pgpass|id_(rsa|dsa|ecdsa|ed25519)(_sk)?|"
-    r".+\.(pem|key|p12|pfx|jks|keystore|kdbx|ppk)|credentials(\.json)?|.*secrets?\.(json|ya?ml|toml|env))$", re.I)
-_SECRET_OK = re.compile(r"^\.env\.(example|sample|template|dist|defaults?)$", re.I)
+_EXT_RE = re.compile(r"^\.[a-z0-9][a-z0-9-]{0,15}$")
+_GLOB_RE = re.compile(r"^[^/\\\x00-\x1f]{1,100}$")
+DOWNLOAD_MB_MAX = 50  # trần cứng (base64 qua RPC)
+
+
+def _defaults() -> dict[str, Any]:
+    from .config import DEFAULTS
+
+    return DEFAULTS["files"]
+
+
+def settings(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Nhánh `files` đã chuẩn hoá (thiếu/sai kiểu → mặc định)."""
+    d, c = _defaults(), (cfg or {})
+    out: dict[str, Any] = {}
+    for k in ("open_extensions", "secret_patterns", "secret_allow"):
+        v = c.get(k)
+        out[k] = [str(x).lower() for x in (v if isinstance(v, list) else d[k])]
+    out["cloud_download"] = c.get("cloud_download") if isinstance(c.get("cloud_download"), bool) else d["cloud_download"]
+    mb = c.get("max_download_mb")
+    out["max_download_mb"] = mb if isinstance(mb, int) and not isinstance(mb, bool) and 1 <= mb <= DOWNLOAD_MB_MAX else d["max_download_mb"]
+    return out
+
+
+def validate_setting(key: str, value: Any) -> None:
+    """Kiểm `files.*` trước khi ghi (config.validate_setting gọi)."""
+    if key == "files":
+        if not isinstance(value, dict):
+            raise ValueError("files phải là một nhánh (dict)")
+        for k, v in value.items():
+            validate_setting(f"files.{k}", v)
+        return
+    sub = key.split(".", 1)[1]
+    if sub == "open_extensions":
+        if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+            raise ValueError("files.open_extensions phải là danh sách đuôi file, vd [\".txt\", \".pdf\"]")
+        bad = [x for x in value if not _EXT_RE.match(x.lower())]
+        if bad:
+            raise ValueError(f"files.open_extensions: đuôi không hợp lệ {', '.join(bad[:5])} (dạng .txt)")
+        never = [x for x in value if x.lower() in NEVER_OPEN]
+        if never:
+            raise ValueError(f"files.open_extensions: không cho mở trực tiếp {', '.join(never[:8])} (chương trình/script/HTML/Office có macro)")
+    elif sub in ("secret_patterns", "secret_allow"):
+        if not isinstance(value, list) or not all(isinstance(x, str) and _GLOB_RE.match(x) for x in value):
+            raise ValueError(f"files.{sub} phải là danh sách tên file / mẫu glob (vd .env, *.pem), không chứa / hay \\")
+    elif sub == "cloud_download":
+        if not isinstance(value, bool):
+            raise ValueError("files.cloud_download phải là true/false")
+    elif sub == "max_download_mb":
+        if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= DOWNLOAD_MB_MAX:
+            raise ValueError(f"files.max_download_mb phải là số nguyên 1–{DOWNLOAD_MB_MAX}")
+    else:
+        raise ValueError(f"khoá lạ '{key}' (có: open_extensions, secret_patterns, secret_allow, cloud_download, max_download_mb)")
+
+
+def loosens(key: str, old: Any, new: Any) -> bool:
+    """Thay đổi `files.*` có NỚI LỎNG bảo vệ không (web qua link public chỉ được siết)."""
+    sub = key.split(".", 1)[1] if "." in key else ""
+    o = settings({sub: old}) if sub else settings(old if isinstance(old, dict) else None)
+    n = settings({sub: new}) if sub else settings(new if isinstance(new, dict) else None)
+    if set(n["open_extensions"]) - set(o["open_extensions"]):
+        return True
+    if set(o["secret_patterns"]) - set(n["secret_patterns"]) or set(n["secret_allow"]) - set(o["secret_allow"]):
+        return True
+    if n["cloud_download"] and not o["cloud_download"]:
+        return True
+    return n["max_download_mb"] > o["max_download_mb"]
+
+
+OPEN_EXTS = frozenset(_defaults()["open_extensions"])  # bản MẶC ĐỊNH (giữ tên cũ); cấu hình thật: settings(cfg)
+
+
+def secret_name(name: str, cfg: dict[str, Any] | None = None) -> bool:
+    """Tên file thường chứa bí mật (.env, khoá riêng, credentials…) → không cho xem/mở qua web. `cfg` = nhánh `files` (None = mặc định)."""
+    st = settings(cfg)
+    n = name.strip().lower()
+    if any(fnmatch.fnmatchcase(n, g) for g in st["secret_allow"]):
+        return False
+    return any(fnmatch.fnmatchcase(n, g) for g in st["secret_patterns"])
+
+
 _WIN_DEVICES = re.compile(r"^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)(\..*)?$", re.I)
-
-
-def secret_name(name: str) -> bool:
-    """Tên file thường chứa bí mật (.env, khoá riêng, credentials…) → không cho xem/mở qua web."""
-    n = name.strip()
-    if _SECRET_OK.match(n):
-        return False
-    if n.endswith(".pub"):  # khoá CÔNG KHAI ssh
-        return False
-    return bool(_SECRET_RE.match(n))
 
 
 def _norm(p: str) -> str:
@@ -120,7 +190,8 @@ def _hub_forbidden(real: str, hub_home: Path, socket: Path | None) -> str | None
     return None
 
 
-def resolve_in_roots(path: str, roots: list[str], *, hub_home: Path, socket: Path | None = None) -> tuple[str, str]:
+def resolve_in_roots(path: str, roots: list[str], *, hub_home: Path, socket: Path | None = None,
+                     cfg: dict[str, Any] | None = None) -> tuple[str, str]:
     """`path` (tuyệt đối hoặc tương đối theo một gốc) → (realpath, gốc chứa nó). Từ chối nếu ngoài mọi gốc / nội bộ hub / bí mật.
 
     Thuần về logic (chỉ đọc hệ thống file) — test trực tiếp. Gốc nào không tồn tại thì bỏ qua."""
@@ -156,7 +227,7 @@ def resolve_in_roots(path: str, roots: list[str], *, hub_home: Path, socket: Pat
         why = _hub_forbidden(real, hub_home, socket)
         if why:
             raise Blocked(f"không xem/mở được {why}")
-        if secret_name(os.path.basename(real)):
+        if secret_name(os.path.basename(real), cfg):
             raise Blocked(f"file có thể chứa bí mật ({os.path.basename(real)}) — không xem/mở qua web; mở trực tiếp trên máy nếu cần")
         if not os.path.exists(real):
             last_err = NotFound(f"file không còn tồn tại: {s}")
@@ -227,8 +298,9 @@ def _launch(real: str, reveal: bool) -> None:  # pragma: no cover — chạy app
 OPENER: Callable[[str, bool], None] = _launch  # test gán lại để không bao giờ mở ứng dụng thật
 
 
-def can_open(name: str) -> bool:
-    return os.path.splitext(name)[1].lower() in OPEN_EXTS
+def can_open(name: str, cfg: dict[str, Any] | None = None) -> bool:
+    ext = os.path.splitext(name)[1].lower()
+    return ext not in NEVER_OPEN and ext in settings(cfg)["open_extensions"]
 
 
 class FileAccess:
@@ -236,6 +308,14 @@ class FileAccess:
 
     def __init__(self, hub: "Hub") -> None:
         self.hub = hub
+
+    def cfg(self) -> dict[str, Any]:
+        """Nhánh `files` hiện tại (đọc lại theo mtime như mọi setting)."""
+        try:
+            v = self.hub.config.get("files")
+        except Exception:  # noqa: BLE001 — cấu hình hỏng → mặc định (an toàn: mặc định là bản chặt)
+            v = None
+        return v if isinstance(v, dict) else {}
 
     def roots(self, p: dict[str, Any]) -> list[str]:
         store = self.hub.store
@@ -265,26 +345,31 @@ class FileAccess:
         return out
 
     def resolve(self, p: dict[str, Any]) -> tuple[str, str]:
-        return resolve_in_roots(p.get("path"), self.roots(p), hub_home=self.hub.paths.home, socket=self.hub.paths.socket)
+        return resolve_in_roots(p.get("path"), self.roots(p), hub_home=self.hub.paths.home, socket=self.hub.paths.socket, cfg=self.cfg())
 
     def read(self, p: dict[str, Any]) -> dict[str, Any]:
+        cfg = self.cfg()
+        st = settings(cfg)
+        if p.get("download") and p.get("channel") == "cloud" and not st["cloud_download"]:
+            raise Blocked("tải file về qua link public đang tắt (Cài đặt → Xem / mở file) — vẫn xem được trong trình duyệt")
         real, root = self.resolve(p)
         whole = bool(p.get("whole"))
+        cap = st["max_download_mb"] * 1_000_000 if whole else RAW_MAX
         try:
-            mb = int(p.get("max_bytes") or (RAW_MAX if whole else VIEW_MAX))
+            mb = int(p.get("max_bytes") or (cap if whole else VIEW_MAX))
         except (TypeError, ValueError):
             mb = VIEW_MAX
-        mb = max(1, min(mb, RAW_MAX))
+        mb = max(1, min(mb, cap))
         out = read_file(real, max_bytes=mb, whole=whole)
         return {"path": real, "root": root, "rel": os.path.relpath(real, root).replace("\\", "/"), "name": os.path.basename(real),
-                "can_open": can_open(real), **out}
+                "can_open": can_open(real, cfg), "cloud_download": st["cloud_download"], **out}
 
     def open(self, p: dict[str, Any]) -> dict[str, Any]:
         real, root = self.resolve(p)
         reveal = bool(p.get("reveal"))
         if not os.path.isfile(real):
             raise Blocked("chỉ mở được file thường")
-        if not reveal and not can_open(real):
+        if not reveal and not can_open(real, self.cfg()):
             raise Blocked(f"không mở trực tiếp loại file '{os.path.splitext(real)[1] or '(không đuôi)'}' (có thể là chương trình/script) — "
                           "dùng \"Mở thư mục\" hoặc \"Xem\"")
         try:
@@ -329,5 +414,5 @@ def register_rpc(daemon: "Daemon") -> None:
     daemon.methods.update({"file.read": wrap("file.read", fa.read), "file.open": wrap("file.open", fa.open)})
 
 
-__all__ = ["FileAccess", "MUTATING_FILES", "OPEN_EXTS", "RAW_MAX", "VIEW_MAX", "can_open", "check_raw_path", "kind_of", "open_command",
+__all__ = ["FileAccess", "MUTATING_FILES", "NEVER_OPEN", "OPEN_EXTS", "loosens", "settings", "validate_setting", "RAW_MAX", "VIEW_MAX", "can_open", "check_raw_path", "kind_of", "open_command",
            "read_file", "register_rpc", "resolve_in_roots", "secret_name"]

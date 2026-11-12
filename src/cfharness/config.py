@@ -565,6 +565,31 @@ DEFAULTS: dict[str, Any] = {
         "timeout_s": 15,  # mỗi lệnh launchctl / schtasks
         "log_tail_bytes": 6000,  # system_get: đuôi log stdout/stderr mỗi job (đã che secret)
     },
+    # Xem / mở file agent đã thao tác qua web (docs/dev-notes/file-open.md). Nhánh `files` ∈ integrity.SECURITY_KEYS; `config.set` chỉ người.
+    # Đổi qua web: NỚI LỎNG (thêm đuôi được mở, bớt mẫu bí mật, bật tải qua cloud, tăng trần) chỉ khi dùng web trên CHÍNH máy chạy hub.
+    "files": {
+        # đuôi được mở bằng app mặc định (danh sách CHO PHÉP); đuôi chương trình/script/HTML/Office có macro luôn bị từ chối
+        "open_extensions": [
+            ".txt", ".md", ".markdown", ".rst", ".log", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+            ".xml", ".diff", ".patch",
+            ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".avif",
+            ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".rtf", ".pages", ".numbers", ".key",
+            ".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm", ".mkv", ".avi",
+            ".zip",
+        ],
+        # tên file (glob, không phân biệt hoa thường) coi là chứa bí mật → không xem/mở/tải qua web
+        "secret_patterns": [
+            ".env", ".env.*", ".netrc", "_netrc", ".npmrc", ".pypirc", ".git-credentials", ".pgpass",
+            "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_*_sk",
+            "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", "*.kdbx", "*.ppk",
+            "credentials", "credentials.json", "*secret.json", "*secrets.json", "*secret.yaml", "*secrets.yaml", "*secret.yml",
+            "*secrets.yml", "*secret.toml", "*secrets.toml", "*secret.env", "*secrets.env",
+        ],
+        # ngoại lệ của secret_patterns (mẫu .env, khoá CÔNG KHAI)
+        "secret_allow": [".env.example", ".env.sample", ".env.template", ".env.dist", ".env.default", ".env.defaults", "*.pub"],
+        "cloud_download": True,  # cho tải file về khi dùng web qua link public (xem trong trình duyệt luôn được)
+        "max_download_mb": 10,  # trần tải về / ảnh / PDF (1–50 MB)
+    },
     "workspace": {
         # MGR-1: gốc người cho phép đặt workspace `dir`. Ngoài ra luôn cho vùng scratch/worktree/eval của hub. Người thêm gốc tại đây (chỉ người).
         "allowed_roots": ["~/Workspace"],
@@ -828,6 +853,10 @@ def validate_setting(key: str, value: Any) -> None:
         _validate_chrome(key, value)
     if key == "admin_export" or key.startswith("admin_export."):
         _validate_admin_export(key, value)
+    if key == "files" or key.startswith("files."):
+        from .fileview import validate_setting as _validate_files
+
+        _validate_files(key, value)
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")
