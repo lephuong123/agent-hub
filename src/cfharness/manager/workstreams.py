@@ -29,6 +29,17 @@ STATE_MAX = 12000
 TITLE_MAX = 120
 KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,39}$")
 STATUSES = ("active", "closed")
+# Tên đặt sẵn khi người mở luồng không nhập tên
+RANDOM_WORDS = ("Mây", "Sao", "Gió", "Sen", "Trúc", "Tùng", "Cam", "Lam", "Ngọc", "Đào", "Biển", "Núi", "Sông", "Nắng", "Trăng", "Hồng")
+# Tên bắt đầu bằng mã Jira ("LH-55166 Monitor", "LH-55166: Monitor") → tách mã ra `key`
+LEAD_KEY_RE = re.compile(r"^([A-Za-z][A-Za-z0-9]+-\d+)(?:\s*[:·|–—-]\s*|\s+|$)(.*)$")
+
+
+def split_key(title: str) -> tuple[str | None, str]:
+    m = LEAD_KEY_RE.match(title.strip())
+    if not m:
+        return None, title.strip()
+    return m.group(1).upper(), m.group(2).strip()
 OPEN_TASK = ("triage", "todo", "ready", "running", "review", "blocked")
 
 
@@ -131,11 +142,13 @@ class Workstreams:
 
     def create(self, title: Any, *, key: Any = None, sprint: Any = None, state: Any = None, by: str = "user") -> dict[str, Any]:
         title = " ".join(str(title or "").split())[:TITLE_MAX]
+        if not key and title:
+            k, rest = split_key(title)
+            if k:
+                key, title = k, rest
         key = self._check_key(key)
         if not title:
-            if not key:
-                raise HubError("luồng việc cần tên (title) hoặc mã (key)")
-            title = key
+            title = key or self._random_title()
         wid = "ws_" + secrets.token_hex(4)
         now = now_iso()
         st = str(state or "")[:STATE_MAX] or None
@@ -146,11 +159,24 @@ class Workstreams:
         self._publish(w, "created", by)
         return self.out(w, full=True)
 
+    def _random_title(self) -> str:
+        used = {r[0] for r in self.conn.execute("SELECT title FROM workstreams WHERE status='active'")}
+        for _ in range(50):
+            t = f"Luồng {secrets.choice(RANDOM_WORDS)} {secrets.randbelow(90) + 10}"
+            if t not in used:
+                return t
+        return "Luồng " + secrets.token_hex(2)
+
     def update(self, ref: Any, changes: dict[str, Any], *, by: str = "user") -> dict[str, Any]:
         w = self.row(ref)
         sets: dict[str, Any] = {}
         if "title" in changes and changes["title"] is not None:
             t = " ".join(str(changes["title"]).split())[:TITLE_MAX]
+            if "key" not in changes:  # đổi tên kiểu "LH-1 Tên mới" → cập nhật cả mã
+                k, rest = split_key(t)
+                if k:
+                    sets["key"] = self._check_key(k, exclude=w["id"])
+                    t = rest or k
             if not t:
                 raise HubError("tên luồng không được rỗng")
             sets["title"] = t

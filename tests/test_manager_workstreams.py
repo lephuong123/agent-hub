@@ -51,6 +51,20 @@ async def test_workstream_crud_key_lookup_and_conflicts(d):
     assert evs[0] == "created" and "closed" in evs and "state" in evs
 
 
+async def test_create_name_only_random_and_key_from_title(d):
+    await _boss(d)
+    w = await rpc(d, "workstream.create", {"title": "LH-55166: Monitor page"})
+    assert (w["key"], w["title"]) == ("LH-55166", "Monitor page")
+    r = await rpc(d, "workstream.create", {})
+    assert r["title"].startswith("Luồng ") and r["key"] is None
+    r2 = await rpc(d, "workstream.create", {"title": ""})
+    assert r2["title"] != r["title"]
+    up = await rpc(d, "workstream.update", {"id": w["id"], "title": "LH-55166 · Monitor v2"})
+    assert (up["key"], up["title"]) == ("LH-55166", "Monitor v2")
+    up = await rpc(d, "workstream.update", {"id": r["id"], "title": "Release 5.13"})
+    assert (up["key"], up["title"]) == (None, "Release 5.13")
+
+
 def test_workstream_rpcs_are_human_only():
     for m in ("workstream.create", "workstream.update", "manager.conversation_update"):
         assert m in auth.HUMAN_ONLY

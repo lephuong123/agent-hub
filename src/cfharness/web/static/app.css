@@ -573,38 +573,59 @@ progress.bar::-moz-progress-bar { background: var(--accent); border-radius: 99px
 .mgr-convs .cm { display: block; color: var(--muted); font-size: var(--fs-xs); }
 .mgr-convs-m { display: none; }
 .mgr-convs-m .menu-pop { left: 0; right: auto; width: min(320px, calc(100vw - 32px)); max-height: 60vh; overflow: auto; }
-/* Luồng việc (docs/dev-notes/workstreams.md): Sảnh + danh sách luồng ở thanh bên, chip luồng ở đầu chat, STATE/task ở panel phải */
+/* Luồng việc (docs/dev-notes/workstreams.md): hàng tab luồng trên khung chat, hội thoại của luồng ở thanh bên, tiến độ/ghi chú ở panel phải */
 .ws-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.ws-add { color: var(--muted); padding: 0 6px; border-radius: 6px; }
+.ws-add { color: var(--muted); padding: 0 6px; border-radius: 6px; font-size: var(--fs-sm); }
 .ws-add:hover { background: var(--surface-3); text-decoration: none; color: var(--text); }
-.side-recents .ws-list .cm, .menu-pop .ws-list .cm { display: block; }
-.ws-list .ct { display: flex; align-items: center; gap: 6px; }
-.ws-key { font-weight: 600; color: var(--text); font-size: var(--fs-xs); }
-.ws-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
-.ws-dot.ok { background: var(--ok, #2f9e44); }
-.ws-dot.danger { background: var(--danger, #c8413a); }
-.ws-dot.done { background: var(--muted); }
-.ws-unread { margin-left: auto; flex: none; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent, #c8413a); color: #fff;
+.ws-bar { display: flex; align-items: center; gap: 6px; padding: 6px 16px 8px; border-bottom: 1px solid var(--line); position: relative; }
+.ws-tabs { display: flex; gap: 4px; overflow-x: auto; min-width: 0; flex: 0 1 auto; scrollbar-width: none; }
+.ws-tabs::-webkit-scrollbar { display: none; }
+.ws-tab { display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 220px; padding: 5px 12px; border-radius: 999px;
+  font-size: var(--fs-sm); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+  border: 1px solid transparent; list-style: none; }
+.ws-tab::-webkit-details-marker { display: none; }
+.ws-tab:hover { background: var(--surface-3); text-decoration: none; color: var(--text); }
+.ws-tab.on { background: var(--surface-3); color: var(--text); font-weight: 500; border-color: var(--line); }
+.ws-tab.closed { opacity: .7; }
+.ws-tab.add { color: var(--accent-text); }
+.ws-tab.more { color: var(--muted); }
+.ws-pop-wrap { flex: none; position: relative; }
+.ws-pop-wrap > .ws-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; width: min(340px, calc(100vw - 32px)); }
+.ws-pop { display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / .12); }
+.ws-pop.ws-inline { flex-direction: row; }
+.ws-pop .mgr-convs { max-height: 50vh; overflow: auto; }
+.ws-inline { display: flex; gap: 6px; align-items: center; }
+.ws-inline input, .ws-inline select { flex: 1 1 auto; min-width: 0; font: inherit; font-size: var(--fs-sm); padding: 6px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+.ws-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
+.ws-dot.ok { background: var(--ok); }
+.ws-dot.danger { background: var(--danger); }
+.ws-dot.done { background: var(--muted); opacity: .6; }
+.ws-unread { flex: none; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--on-accent);
   font-size: 11px; line-height: 18px; text-align: center; font-weight: 600; }
 .mgr-convs .ct .ws-unread { display: inline-block; margin-left: 6px; }
-.ws-new, .ws-closed { margin: 6px 4px; font-size: var(--fs-sm); }
-.ws-new summary, .ws-closed summary { cursor: pointer; color: var(--muted); padding: 4px 6px; list-style: none; }
-.ws-new summary:hover, .ws-closed summary:hover { color: var(--text); }
-.ws-form { display: flex; flex-direction: column; gap: 6px; padding: 6px; }
-.ws-form label { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-xs); color: var(--muted); }
-.ws-form input, .ws-form select, .ws-form textarea { font: inherit; font-size: var(--fs-sm); }
-.ws-form textarea { min-height: 180px; font-family: var(--mono, monospace); }
-.conv-menu .menu-pop { right: 0; left: auto; width: min(300px, calc(100vw - 32px)); }
-.ws-chip { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs);
-  color: var(--text-2); background: var(--surface-3); border-radius: 6px; padding: 1px 8px; margin-bottom: 2px; }
-.ws-chip.closed { opacity: .7; }
-.ws-chip .danger-t { color: var(--danger, #c8413a); }
-.ws-state-pre { white-space: pre-wrap; word-break: break-word; font-size: var(--fs-xs); background: var(--surface-2, var(--surface-3)); border-radius: 8px;
-  padding: 8px 10px; margin: 6px 0; max-height: 320px; overflow: auto; }
-.ws-state > summary, .ws-edit > summary { list-style: none; cursor: pointer; display: inline-block; }
-.ws-tasks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-sm); }
-.ws-tasks li.done { opacity: .65; }
-.ws-edit { margin-top: 10px; }
+.conv-menu .menu-pop { right: 0; left: auto; }
+.ws-side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; list-style: none; cursor: default; }
+.ws-side-head h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-state > summary { cursor: pointer; }
+.ws-state > summary::-webkit-details-marker { display: none; }
+.ws-state[open] .btn { display: none; }
+.ws-progress { width: 100%; height: 6px; margin: 10px 0 4px; appearance: none; border: 0; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+.ws-progress::-webkit-progress-bar { background: var(--surface-3); }
+.ws-progress::-webkit-progress-value { background: var(--ok); }
+.ws-progress::-moz-progress-bar { background: var(--ok); }
+.ws-form { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.ws-form textarea { font-family: var(--mono, monospace); font-size: var(--fs-xs); min-height: 160px; }
+.ws-state-pre { white-space: pre-wrap; word-break: break-word; font-size: var(--fs-xs); background: var(--surface-3); border-radius: 8px;
+  padding: 8px 10px; margin: 8px 0 0; max-height: 280px; overflow: auto; }
+.ws-tasks { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-sm); }
+.ws-tasks li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ws-tasks li a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-tasks li.done { opacity: .6; }
+.ws-side .btn-row { margin-top: 8px; }
+.danger-t { color: var(--danger); }
+@media (max-width: 720px) { .ws-bar { padding: 6px 10px 8px; } .ws-pop-wrap { position: static; } .ws-pop-wrap > .ws-pop { left: 10px; right: 10px; width: auto; } }
 
 /* Bố cục: trang chat chiếm trọn chiều cao, log cuộn bên trong, ô nhập dính đáy */
 .chat-page .main { height: 100vh; height: 100dvh; }
