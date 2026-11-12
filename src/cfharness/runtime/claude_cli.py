@@ -38,7 +38,7 @@ _FLAGS_WITH_VALUE = frozenset({
     "--input-format", "--output-format", "--resume", "--session-id", "--name", "--append-system-prompt", "--system-prompt",
     "--system-prompt-snapshot", "--model", "--effort", "--fallback-model", "--max-budget-usd", "--mcp-config", "--settings",
     "--setting-sources", "--permission-mode", "--permission-prompts", "--permission-prompt-tool", "--add-dir", "--json-schema",
-    "--agents", "--worktree",
+    "--agents", "--worktree", "--plugin-dir",
 })
 
 
@@ -201,6 +201,8 @@ def build_argv(spec: RunSpec,claude_cfg: dict[str, Any], cli_version: str | None
 
     for d in spec.add_dirs:
         argv += ["--add-dir", str(d)]
+    for d in spec.plugin_dirs:  # plugin của agent (plugins.py): nạp được cả khi --setting-sources "" (kiểm 2.1.322)
+        argv += ["--plugin-dir", str(d)]
 
     # M3: output có cấu trúc (FR-RT-14), subagent động (FR-RT-13), worktree (FR-RT-12)
     if spec.json_schema:

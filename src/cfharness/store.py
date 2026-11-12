@@ -836,6 +836,10 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS runs_session_status ON runs(session_id, status);
     CREATE INDEX IF NOT EXISTS runs_team_status ON runs(team_id, status);
     """,
+    # v23 — plugin Claude Code của agent (`--plugin-dir`, docs/dev-notes/agent-plugins.md)
+    """
+    ALTER TABLE agents ADD COLUMN plugins TEXT;
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
@@ -846,7 +850,7 @@ def is_py_migration(sql: str) -> bool:
     return sql.startswith(PY_MIGRATION_PREFIXES) and not any(c.isspace() for c in sql)
 
 JSON_COLS = {
-    "agents": ("tool_policy", "mcp_servers", "limits", "subagents", "result_schema"),
+    "agents": ("tool_policy", "mcp_servers", "limits", "subagents", "result_schema", "plugins"),
     "runs": ("argv_redacted", "usage", "model_usage", "permission_denials", "isolation_violations",
              "run_opts", "checkpoint", "diff", "result_json", "subagent_stats", "task_signal"),  # M3: 6 cột cuối
     # M3

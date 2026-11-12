@@ -243,6 +243,13 @@ class RunManager:
             raise Blocked(f"agent '{agent_id}' đang paused — `cfharness agent resume {agent_id}` trước")
         if cwd is not None and not Path(cwd).expanduser().is_dir():
             raise HubError(f"cwd không tồn tại: {cwd}")
+        if agent.get("plugins"):  # báo sớm plugin chưa cài thay vì để run hỏng lúc spawn
+            from .plugins import PluginError, resolve as _resolve_plugins
+
+            try:
+                _resolve_plugins(list(agent["plugins"]))
+            except PluginError as e:
+                raise HubError(str(e), data={"field": "plugins"}) from e
         max_budget = self._budget_for(agent, budget_usd, team_id)
         run_id = "r_" + uuid.uuid4().hex[:12]
         session_id = resume_session_id or str(uuid.uuid4())
@@ -492,6 +499,18 @@ class RunManager:
         env_extra: dict[str, str] = {}
         allowed_hooks = list(iso.get("allowed_hooks") or []) + observe_events + list((conn or {}).get("allowed_hooks") or [])
         allowed_mcp = list(agent.get("mcp_servers") or []) + list(iso.get("allowed_mcp_servers") or []) + list((conn or {}).get("allowed_mcp") or [])
+        # plugin Claude Code của agent (plugins.py): `--plugin-dir`; tên plugin + sự kiện hook của plugin là "đã biết" cho kiểm cô lập
+        from .plugins import PluginError, resolve as _resolve_plugins
+
+        try:
+            plugins = _resolve_plugins(list(agent.get("plugins") or []))
+        except PluginError as e:
+            raise RuntimeError_(str(e)) from e
+        allowed_plugins = list(iso.get("allowed_plugin_prefixes") or []) if iso.get("allowed_plugin_prefixes") is not None else None
+        if plugins:
+            if allowed_plugins is not None:
+                allowed_plugins += [p.name for p in plugins]
+            allowed_hooks += [ev for p in plugins for ev in p.hook_events]
         # Claude in Chrome (browser.py): chế độ hiệu lực (kill switch của người) → build_argv thêm --chrome; `chrome` bỏ Playwright khỏi run
         from .browser import CHROME_MODES, CHROME_SERVER, effective_mode, is_playwright_server
 
@@ -602,7 +621,8 @@ class RunManager:
             workspace_kind=wkind,  # type: ignore[arg-type]
             allowed_hooks=allowed_hooks,
             allowed_mcp_servers=allowed_mcp,
-            allowed_plugin_prefixes=list(iso.get("allowed_plugin_prefixes") or []) if iso.get("allowed_plugin_prefixes") is not None else None,
+            allowed_plugin_prefixes=allowed_plugins,
+            plugin_dirs=[p.path for p in plugins],
             require_no_auto_memory=bool(iso.get("require_no_auto_memory")),
             permission_prompt_tool=perm_tool,
             env_extra=env_extra,
