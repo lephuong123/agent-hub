@@ -16,7 +16,7 @@ Chủ sản phẩm (2026-10-29): thêm chế độ 3D thể hiện toàn bộ h�
   lối vào (approval + câu hỏi) + thẻ đỏ trên đầu agent có approval, biển "hết phiên"/"mất kết nối". Danh sách chữ chỉ cho trình đọc màn hình
   (`sr-only`). Ngoại lệ DUY NHẤT dùng chữ DOM: không có WebGL / quá chậm (`#office-fallback`, tối thiểu).
 - Cảnh 3D **không có link sang trang 2D** (bấm vật thể chỉ để camera tập trung/giải thích, không bao giờ điều hướng tới `/agents`, `/runs`…).
-  Thao tác ghi (duyệt/dừng) chưa làm; khi làm thì PHẢI qua `ACTIONS` + `post_guard` + xác nhận như phần còn lại.
+  Thao tác ghi (duyệt, trả lời, nói chuyện, tạm dừng/tiếp tục agent, dừng run) PHẢI qua `ACTIONS` + `post_guard` + xác nhận như phần còn lại.
 
 ## Nút chuyển chế độ (localStorage)
 - Khoá `cfh_view`: `"3d"` = chế độ 3D; không có = 2D.
@@ -49,7 +49,10 @@ Trang `office.html` — tài liệu ĐỘC LẬP (`<html>/<head>` riêng: charse
     "task": "Sửa lỗi đăng nhập",  // dòng đầu, ≤ 80 ký tự — DỮ LIỆU agent, client chỉ textContent/fillText
     "run_id": "r_…",              // run đang chạy/xếp hàng hoặc null
     "approvals": 0,
-    "is_manager": false
+    "is_manager": false,
+    // bảng quản lý agent (office-agent-board.md): chỉ số / cờ / id / giờ
+    "paused": false, "run_status": "running|queued|null", "started_at": "ISO|null", "run_cost_usd": 0.12,
+    "cost_today_usd": 0.42, "questions": 0
   }],
   "task_counts": {"ready": 2, "running": 1, "review": 0, "blocked": 0},
   "tasks": {"ready": [{"id": "tk_…", "title": "≤ 60 ký tự", "assignee": "lap-trinh|null"}], "running": […], "review": […], "blocked": […]},
@@ -95,6 +98,8 @@ Trong cảnh (module `static/office/boards.js`):
 - Màn hình HUD lớn trên tường bắc: đang chạy, xếp hàng, chờ bạn duyệt, chi phí hôm nay, ESTOP, giới hạn tốc độ, kết nối, đếm task.
 - Bấm nhân vật → thẻ thông tin (sprite cạnh nhân vật; màn dọc: phía trên): tên, id, trạng thái tiếng Việt, vị trí, vai trò, team,
   task, tool, run id, approval đang chờ. Camera bay mượt tới và bám theo khi nhân vật đi. Esc / bấm sàn trống → về toàn cảnh.
+- **Bảng quản lý agent** (giá vẽ mép nam phòng nghỉ): mọi agent theo team, đèn trạng thái, việc, tool, thời gian run, chi phí hôm nay,
+  huy hiệu cần bạn, nút Tạm dừng/Tiếp tục/Dừng run (xác nhận 3D), bấm hàng → tới nhân vật — `office-agent-board.md`.
 - Bảng kanban (tường tây), màn hình phòng server, bảng "Cần bạn" (lối vào), màn hình HUD: bấm → camera bay tới nhìn thẳng (biển phòng/
   team/nhãn tên tạm ẩn để không che chữ).
 - Thẻ đỏ (cam nếu chưa tới người) trên đầu agent có approval: tool + [klass] + preview.
@@ -140,7 +145,8 @@ xác nhận + bước 2. Không có đường ghi nào "nhẹ" hơn 2D.
 
 ### Thao tác: `POST /office/do/{name}` → JSON
 - `name` ∈ danh sách trắng `OFFICE_ACTIONS` = `approve`, `deny`, `approve_always`, `approve_rule`, `answer` (dùng đúng `Action` trong
-  `app.ACTIONS`). Tên khác → 404.
+  `app.ACTIONS`); + `steer`, `run_continue`, `run_start` (`office-coordinator.md`); + `agent_pause`, `agent_resume`, `stop` (bảng quản lý
+  agent, `office-agent-board.md` — Action có `confirm` nên luôn hỏi xác nhận trước). Tên khác → 404.
 - Logic cổng (confirm → bước 2 heavy/always/grant) TÁCH khỏi `do_action` thành hàm dùng chung `plan_action(request, name, form)`
   trả "quyết định"; `do_action` (2D) vẽ `confirm.html`/`approve2.html`/redirect như cũ, `/office/do` trả JSON:
   - `{"need":"confirm","message":str,"danger":bool,"note_label":str|null}` — khi chưa có `confirm=yes`

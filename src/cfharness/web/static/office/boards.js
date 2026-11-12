@@ -4,7 +4,7 @@
 import * as THREE from '../vendor/three-0.169.0/three.module.min.js';
 import { FONT, fitText, roundRect } from './util.js';
 
-const STATUS_COLOR = {
+export const STATUS_COLOR = {
   working: '#4d7c43', waiting: '#a86414', waiting_human: '#c4483a', asking: '#7b5ea7', idle: '#73726c',
   error: '#c4483a', paused: '#73726c', queued: '#3f6d8c',
 };

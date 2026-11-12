@@ -82,7 +82,7 @@ async def test_talk_whitelist_still_excludes_other_run_actions(held):
     env = held
     await env.login()
     run = await running_run(env)
-    for name in ("stop", "run_resume", "feedback"):
+    for name in ("run_resume", "feedback"):  # `stop` có từ bảng quản lý agent (test_office_agent_board.py)
         r = await office_post(env, name, {"id": run["id"], "confirm": "yes"})
         assert r.status_code == 404, name
     assert env.hub.store.get_run(run["id"])["status"] == "running"
