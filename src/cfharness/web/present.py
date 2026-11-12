@@ -144,6 +144,20 @@ def md(text: str | None) -> str:
 
 
 # ============================================================================ transcript
+FILE_TOOLS = ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit")
+
+
+def file_ref(name: str, inp: Any, run_id: Any) -> dict[str, str] | None:
+    """Tool đọc/ghi file → `{run, path, name}` cho chip file (xem/mở — web/file_pages.py). Đường dẫn chỉ là DỮ LIỆU hiển thị: daemon tự
+    kiểm nó nằm trong workspace của run khi người bấm (file.read/file.open)."""
+    if name not in FILE_TOOLS or not isinstance(inp, dict) or not run_id:
+        return None
+    path = inp.get("file_path") or inp.get("notebook_path")
+    if not isinstance(path, str) or not path.strip() or len(path) > 4096:
+        return None
+    return {"run": str(run_id), "path": path, "name": path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] or path}
+
+
 def _diff_lines(name: str, inp: Any) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     if not isinstance(inp, dict):
@@ -182,7 +196,7 @@ def transcript_item(ev: dict[str, Any]) -> dict[str, Any] | None:
     if t == "tool.start":
         name = p.get("name") or "?"
         return {**base, "kind": "tool", "dom": f"tool-{p.get('tool_id') or ev.get('seq')}", "name": short_tool(name), "summary": p.get("args_preview") or "",
-                "running": True, "diff": _diff_lines(name, p.get("input") or {})}
+                "running": True, "diff": _diff_lines(name, p.get("input") or {}), "file": file_ref(name, p.get("input"), ev.get("run_id"))}
     if t == "tool.complete":
         name = p.get("name") or "?"
         prev = (p.get("result_preview") or "").strip()

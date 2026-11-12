@@ -780,6 +780,7 @@ def replay_items(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if dom and dom in idx:
             prev = out[idx[dom]]
             it["diff"] = prev.get("diff") or it.get("diff")
+            it["file"] = prev.get("file") or it.get("file")  # chip file (tool.complete không mang input)
             it["summary"] = it.get("summary") or prev.get("summary")
             out[idx[dom]] = it
             continue
@@ -1423,6 +1424,7 @@ async def _stream(request: Request, params: dict[str, Any], convert: Callable[[d
 
 def _run_converter(templates: Jinja2Templates) -> Callable[[dict[str, Any]], list[dict[str, Any]]]:
     mod = templates.env.get_template("_items.html").module
+    files: dict[str, Any] = {}  # dom tool → chip file của tool.start (tool.complete thay mục tại chỗ nhưng không mang input)
 
     def conv(ev: dict[str, Any]) -> list[dict[str, Any]]:
         t = ev.get("type")
@@ -1436,6 +1438,11 @@ def _run_converter(templates: Jinja2Templates) -> Callable[[dict[str, Any]], lis
         if s:
             out.append({"t": "stats", **s})
         it = P.transcript_item(ev)
+        if it is not None and it.get("kind") == "tool" and it.get("dom"):
+            if it.get("file"):
+                files[it["dom"]] = it["file"]
+            elif it["dom"] in files:
+                it["file"] = files.pop(it["dom"])
         if it is not None:
             out.append({"t": "item", "kind": it["kind"], "dom": it.get("dom"), "seq": ev.get("seq"), "html": str(mod.item(it))})
         if t in ("approval.open", "approval.waiting_human", "approval.resolved", "user.message", "steer.ack") or (t or "").startswith(("run.", "question.")):
@@ -1631,6 +1638,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
         *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
+        *_file_pages.routes(),  # /files/view|raw|open — xem/mở file agent đã thao tác (web/file_pages.py, docs/dev-notes/file-open.md)
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
     app = Starlette(routes=routes, exception_handlers={HTTPException: http_error, RpcError: rpc_error, DaemonUnavailable: rpc_error})
@@ -1664,5 +1672,8 @@ _update_pages.register_actions(ACTIONS, Action, _req)
 
 # Tổng quan máy (admin_overview.py): trang chỉ đọc /admin/overview, mục menu chỉ khi thư mục trạng thái chung tồn tại
 from . import admin_pages as _admin_pages  # noqa: E402
+
+# Xem/mở file agent đã thao tác (chip file): /files/view, /files/raw, POST /files/open — RPC file.read|file.open của daemon
+from . import file_pages as _file_pages  # noqa: E402
 
 __all__ = ["create_app", "ACTIONS", "agent_changes", "replay_items", "WebState", "urlencode"]

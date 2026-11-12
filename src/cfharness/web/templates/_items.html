@@ -10,7 +10,7 @@
 <div class="ti start" data-seq="{{ it.seq }}"><span>{{ it.text }}{% if it.mcp %} · MCP: {{ it.mcp|join(', ') }}{% endif %} · {{ it.ts }}</span></div>
 {%- elif it.kind == 'tool' -%}
 <div class="ti tool{{ ' running' if it.running }}{{ ' err' if it.error }}{{ ' sub' if it.sub }}" id="{{ it.dom }}" data-seq="{{ it.seq }}">
-<div class="tool-line">{{ m.icon('x' if it.error else ('clock' if it.running else 'terminal')) }}<span class="tool-name">{{ it.name }}</span>{% if it.summary %}<span class="tool-args">{{ it.summary }}</span>{% endif %}
+<div class="tool-line">{{ m.icon('x' if it.error else ('clock' if it.running else 'terminal')) }}<span class="tool-name">{{ it.name }}</span>{% if it.summary %}<span class="tool-args">{{ it.summary }}</span>{% endif %}{% if it.file %}{{ m.file_chip(it.file) }}{% endif %}
 {%- if it.running %} <span class="spin" aria-label="đang chạy">đang chạy…</span>{% elif it.dur is not none %} <span class="muted xs">{{ '%.1f'|format(it.dur) }}s</span>{% endif %}</div>
 {%- if it.diff %}<pre class="diff">{% for k, ln in it.diff %}<span class="{{ k }}">{{ '+ ' if k == 'add' else '- ' if k == 'del' else '' }}{{ ln }}</span>
 {% endfor %}</pre>{% endif %}
