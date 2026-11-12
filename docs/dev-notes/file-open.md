@@ -63,7 +63,9 @@ thay mục tại chỗ — `tool.complete` không mang input), và khối "Thay 
 ủy quyền sự kiện (chạy cả với mục đổ vào qua SSE), không inline script (CSP), thông báo gán bằng `textContent`. CSS riêng `static/files.css`.
 
 ## 5. Kiểm chứng
-- `uv run pytest -q` xanh (trừ `tests/test_admin_overview.py` — import `grp`, chỉ chạy trên POSIX, lỗi sẵn có trên Windows, không liên quan).
+- `uv run pytest -q` trên Windows 11: 2155 passed, 28 skipped; 13 failed (`test_confine.py`, `test_guard_classifier::test_confine_recall_forbidden`,
+  `test_update::test_start_validates…`, `test_web_public::test_launchdaemon_*`) + `test_admin_overview.py` không import được (`grp`) — đều
+  lỗi Y HỆT trên commit gốc `ac0e1b6` (đường dẫn/tính năng POSIX), không liên quan thay đổi này. `tests/test_web_files.py` xanh.
 - Chạy thật trên Windows 11: demo web (`web.demo` + script bọc thêm một run có Read/Edit/Write và diff, `CFHARNESS_HOME` tạm) + Chromium
   headless: 4 chip trên dòng tool, 2 chip ở "Thay đổi file" (file đã xoá không có chip), nút Mở/Thư mục hiện trên `cfharness.localhost`;
   bấm "Mở" với `.env` → toast "Bị chặn: file có thể chứa bí mật"; trình xem mã hiện 6 dòng có số, `<script>` hiện dạng chữ; ảnh PNG tải
