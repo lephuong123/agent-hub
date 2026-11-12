@@ -524,6 +524,9 @@ legend { font-weight: 680; margin-bottom: var(--s2); font-size: var(--fs-md); pa
 .kanban h3 { margin: 2px 2px 10px; display: flex; justify-content: space-between; align-items: center; font-size: var(--fs-sm); }
 .tcard { display: flex; flex-direction: column; gap: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; margin-bottom: 8px; color: var(--text); box-shadow: var(--shadow-sm); transition: border-color .12s, transform .12s; }
 .tcard:hover { border-color: var(--accent); text-decoration: none; }
+.tcard.tcard-changed { border-color: var(--accent); animation: tcard-flash 1.6s ease-out; }  /* thẻ vừa đổi (bảng realtime, app.js) */
+@keyframes tcard-flash { from { box-shadow: 0 0 0 3px var(--accent); } to { box-shadow: var(--shadow-sm); } }
+@media (prefers-reduced-motion: reduce) { .tcard.tcard-changed { animation: none; outline: 2px solid var(--accent); outline-offset: -1px; } }
 .tcard-title { font-weight: 620; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 .tcard .meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: var(--fs-xs); }
 .tcard .ask-t { color: var(--ask); font-weight: 600; font-size: var(--fs-xs); display: flex; gap: 4px; align-items: center; }
