@@ -42,6 +42,16 @@ Chủ hub (2026-11-12): "một sprint nhiều epic, cứ nhắn vào một chỗ
   Panel phải: tiến độ (thanh `<progress>` — CSP cấm style inline) + task, "Ghi chú luồng" (STATE.md, nút Sửa), đổi tên / đóng luồng.
   Action: `ws_create|ws_edit (chỉ tên)|ws_state|ws_close|ws_reopen|conv_rename|conv_move|conv_archive`. Daemon cũ không có `workstream.*`
   → trang như trước.
+- **Bản 3 (2026-11-12 — chủ hub: "chuyển luồng phải load lại cả browser; mỗi tab cần biết đang chạy hay đã xong")**:
+  - Đổi tab / hội thoại KHÔNG tải lại trang: app.js bắt click link `/manager?…`, `fetch` trang, thay `#mgr-grid` + `.side-recents`,
+    `pushState` (Back/Forward chạy qua `popstate`), khởi động lại SSE + ô nhập (`initManager`). Giữ bản nháp ô nhập theo hội thoại/luồng
+    (bộ nhớ trang). Lỗi / bị chuyển hướng (hết phiên) → điều hướng thường. Đo trên demo: ~80–110 ms mỗi lần đổi.
+  - Chấm trạng thái mỗi tab (cả Sảnh) = `web/manager.py::tab_state`: `danger` cần bạn (task bị chặn / câu hỏi mở) > `run` đang chạy
+    (lượt điều phối viên còn sống trong luồng — `manager.conversations[].running` — hoặc task của luồng đang chạy; chấm nhấp nháy) >
+    `idle` còn task chờ > `done` đã xong (✓). Tooltip + chữ cho trình đọc màn hình nói rõ. Hội thoại đang chạy cũng có chấm ở thanh bên.
+  - Hàng tab là partial `_manager_tabs.html` (`GET /partials/manager/tabs?w=&c=`), app.js tải lại khi SSE báo `status` (run.queued/started,
+    workstream.updated), `run_end`, `reply`, `tick`, và mỗi 20 s (task của agent khác không đi qua SSE điều phối viên). `c` = hội thoại
+    đang mở → đánh dấu đã đọc (trả lời tới lúc đang xem không hiện "chưa đọc").
 - **Terminal** (`cfharness chat`): `/ws` (danh sách), `/ws <mã>` (sang hội thoại cli của luồng / mở mới), `/ws new <mã> <tên>`,
   `/ws state`, `/ws attach <mã>`, `/ws close`.
 

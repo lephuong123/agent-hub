@@ -336,7 +336,18 @@ class ManagerService:
             raise NotFound(f"không có hội thoại '{cid}'")
         return dict(r)
 
-    def _conv_out(self, c: dict[str, Any]) -> dict[str, Any]:
+    def _live_by_conv(self) -> dict[str, dict[str, Any]]:
+        """Hội thoại → run điều phối viên còn sống (queued/running/waiting_human) — để web biết tab nào "đang chạy"."""
+        out: dict[str, dict[str, Any]] = {}
+        for r in self._active_runs(self.agent_id()):
+            cid = (r.get("run_opts") or {}).get("manager_conversation")
+            if cid and cid not in out:
+                out[cid] = {"id": r.get("id"), "status": r.get("status")}
+        return out
+
+    def _conv_out(self, c: dict[str, Any], live: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+        if live is None:
+            live = self._live_by_conv()
         n = self.conn.execute("SELECT COUNT(*) FROM manager_messages WHERE conversation_id=?", (c["id"],)).fetchone()[0]
         unread = 0
         upto = int(c.get("read_upto") or 0)
@@ -345,7 +356,8 @@ class ManagerService:
                                            (c["id"], upto)).fetchone()[0])
         return {"id": c["id"], "channel": c["channel"], "agent_id": c["agent_id"], "session_id": c.get("session_id"), "turns": c.get("turns"),
                 "title": c.get("title"), "messages": int(n), "last_run_id": c.get("last_run_id"), "created_at": c["created_at"], "updated_at": c["updated_at"],
-                "workstream_id": c.get("workstream_id"), "unread": unread, "archived_at": c.get("archived_at")}
+                "workstream_id": c.get("workstream_id"), "unread": unread, "archived_at": c.get("archived_at"),
+                "running": live.get(c["id"])}
 
     def conversations(self, channel: str | None = None, *, limit: int = 100, all_managers: bool = False, workstream: str | None = None,
                       lobby: bool = False, archived: bool = False) -> list[dict[str, Any]]:
@@ -367,7 +379,8 @@ class ManagerService:
             args.append(HEARTBEAT_CHANNEL)
         sql += " ORDER BY updated_at DESC LIMIT ?"
         args.append(int(limit))
-        return [self._conv_out(dict(r)) for r in self.conn.execute(sql, args)]
+        live = self._live_by_conv()
+        return [self._conv_out(dict(r), live) for r in self.conn.execute(sql, args)]
 
     def history(self, cid: str, limit: int = 100) -> list[dict[str, Any]]:
         self._conv_row(cid)
