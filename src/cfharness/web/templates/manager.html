@@ -3,35 +3,15 @@
 {% import "_manager.html" as mg with context %}
 {% block title %}Điều phối{% endblock %}
 {% block bodyclass %}{{ 'chat-page' if m.available and m.agent_id }}{% endblock %}
-{% macro conv_link(c, unread=0) -%}
-<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}" title="{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}"><span class="ct">{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}{% if unread %}<span class="ws-unread" title="{{ unread }} tin chưa đọc">{{ unread }}</span>{% endif %}</span><span class="cm">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></a></li>
-{%- endmacro %}
-{% macro ws_nav(limit=30) -%}
-{% if wsd and wsd.enabled %}
-  <div class="nav-group ws-head"><span>Sảnh</span><a class="ws-add" href="/manager?new=1" title="Hội thoại mới ở Sảnh" aria-label="Hội thoại mới ở Sảnh">＋</a></div>
-  <ul class="mgr-convs">{% for c in wsd.lobby[:8] %}{{ conv_link(c, c.unread) }}{% else %}<li class="muted small side-none">Tin chưa thuộc luồng nào nhắn ở đây.</li>{% endfor %}</ul>
-  <div class="nav-group ws-head"><span>Luồng việc</span></div>
-  <ul class="mgr-convs ws-list">{% for w in wsd.active[:limit] %}<li><a href="/manager?w={{ w.id }}" class="{{ 'on' if wsx and wsx.id == w.id }}" title="{{ w.label }}{% if w.sprint %} · {{ w.sprint }}{% endif %}">
-      <span class="ct"><span class="ws-dot {{ w.dot }}" aria-hidden="true"></span>{% if w.key %}<b class="ws-key">{{ w.key }}</b> {% endif %}{{ w.title }}{% if w.unread %}<span class="ws-unread" title="{{ w.unread }} tin chưa đọc">{{ w.unread }}</span>{% endif %}</span>
-      <span class="cm">task {{ w.tasks.done }}/{{ w.tasks.total }}{% if w.tasks.blocked %} · {{ w.tasks.blocked }} bị chặn{% endif %}{% if w.needs_human %} · {{ w.needs_human }} cần bạn{% endif %}</span></a></li>{% else %}<li class="muted small side-none">Chưa có luồng nào. Mỗi epic một luồng → không lẫn việc.</li>{% endfor %}</ul>
-  <details class="ws-new"><summary>＋ Luồng mới</summary>
-    <form method="post" action="/do/ws_create" class="ws-form">
-      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/manager">
-      <label>Mã (Jira epic, tuỳ chọn)<input name="key" maxlength="40" placeholder="LH-55166" autocomplete="off"></label>
-      <label>Tên<input name="title" maxlength="120" placeholder="Monitor page" required></label>
-      <label>Sprint<input name="sprint" maxlength="40" placeholder="S216" autocomplete="off"></label>
-      <button class="btn sm primary" type="submit">Mở luồng</button>
-    </form>
-  </details>
-  {% if wsd.closed %}<details class="ws-closed"><summary>Đã đóng ({{ wsd.closed|length }})</summary><ul class="mgr-convs">{% for w in wsd.closed %}<li><a href="/manager?w={{ w.id }}" class="{{ 'on' if wsx and wsx.id == w.id }}"><span class="ct">{% if w.key %}<b class="ws-key">{{ w.key }}</b> {% endif %}{{ w.title }}</span></a></li>{% endfor %}</ul></details>{% endif %}
-{% else %}
-  <div class="nav-group">Gần đây</div>
-  <ul class="mgr-convs">{% for c in convs[:limit] %}{{ conv_link(c) }}{% else %}<li class="muted small side-none">Chưa có cuộc trò chuyện nào.</li>{% endfor %}</ul>
-{% endif %}
+{% macro conv_list(limit=30) -%}
+{%- set rows = (ws_web_convs if wsx else (wsd.lobby if wsd and wsd.enabled else convs)) -%}
+  <div class="nav-group ws-head"><span>{{ ('Hội thoại · ' ~ wsx.title) if wsx else ('Hội thoại ở Sảnh' if wsd and wsd.enabled else 'Gần đây') }}</span>
+    <a class="ws-add" href="{{ ('/manager?w=' ~ wsx.id ~ '&new=1') if wsx else '/manager?new=1' }}" title="Hội thoại mới" aria-label="Hội thoại mới">＋</a></div>
+  <ul class="mgr-convs">{% for c in rows[:limit] %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}" title="{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}"><span class="ct">{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}{% if c.unread %}<span class="ws-unread">{{ c.unread }}</span>{% endif %}</span><span class="cm">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></a></li>{% else %}<li class="muted small side-none">Chưa có hội thoại — gõ tin để bắt đầu.</li>{% endfor %}</ul>
 {%- endmacro %}
 {% block side_extra %}{% if m.available and m.agent_id %}
-<section class="side-recents" aria-label="Sảnh và luồng việc">
-{{ ws_nav() }}
+<section class="side-recents" aria-label="Hội thoại">
+{{ conv_list() }}
 </section>
 {% endif %}{% endblock %}
 {% block content %}
@@ -62,30 +42,44 @@
 <div class="mgr-grid" id="mgr-grid">
   <section class="mgr-chat">
     <header class="chat-head">
-      {% if convs or (wsd and wsd.enabled) %}<details class="mgr-convs-m menu"><summary class="btn ghost sm icon" title="Sảnh và luồng việc" aria-label="Sảnh và luồng việc">{{ mc.icon('menu') }}</summary>
-        <div class="menu-pop">{{ ws_nav(15) }}</div></details>{% endif %}
+      <details class="mgr-convs-m menu"><summary class="btn ghost sm icon" title="Hội thoại" aria-label="Hội thoại">{{ mc.icon('menu') }}</summary>
+        <div class="menu-pop">{{ conv_list(15) }}</div></details>
       <div class="chat-title">
         <h1 class="sr-only">Trò chuyện với điều phối viên</h1>
-        {% if wsx %}<span class="ws-chip{{ ' closed' if wsx.status == 'closed' }}">{% if wsx.key %}<b>{{ wsx.key }}</b> {% endif %}{{ wsx.title }}{% if wsx.sprint %} · {{ wsx.sprint }}{% endif %} · task {{ wsx.tasks.done }}/{{ wsx.tasks.total }}{% if wsx.tasks.blocked %} · <span class="danger-t">{{ wsx.tasks.blocked }} bị chặn</span>{% endif %}{% if wsx.status == 'closed' %} · đã đóng{% endif %}</span>{% endif %}
-        <span class="ct">{{ (cur.title if cur and cur.title else ('Cuộc trò chuyện ' ~ (cur.created_at|ts) if cur else ('Hội thoại mới trong luồng' if wsx else 'Cuộc trò chuyện mới'))) }}</span>
-        <span class="chat-sub">{% if wsx %}luồng việc · {% elif wsd and wsd.enabled %}Sảnh · {% endif %}với điều phối viên <a href="/agents/{{ m.agent_id }}">{{ (m.row.name if m.row else m.agent_id) }}</a></span>
+        <span class="ct">{{ (cur.title if cur and cur.title else ('Cuộc trò chuyện ' ~ (cur.created_at|ts) if cur else 'Cuộc trò chuyện mới')) }}</span>
+        <span class="chat-sub">{% if wsx %}trong luồng {{ wsx.title }}{% elif wsd and wsd.enabled %}ở Sảnh{% else %}với điều phối viên <a href="/agents/{{ m.agent_id }}">{{ (m.row.name if m.row else m.agent_id) }}</a>{% endif %}</span>
       </div>
       <div class="chat-tools">
         <span class="pill muted" id="mgr-live">đang kết nối…</span>
-        {% if conv and wsd and wsd.enabled %}<details class="menu conv-menu"><summary class="btn ghost sm icon" title="Hội thoại: đổi tên, chuyển luồng, lưu trữ" aria-label="Thao tác hội thoại">⋯</summary>
-          <div class="menu-pop ws-form">
-            <form method="post" action="/do/conv_rename"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="conversation_id" value="{{ conv }}"><input type="hidden" name="next" value="/manager?c={{ conv }}">
-              <label>Tên hội thoại<input name="title" maxlength="80" value="{{ cur_title or '' }}" required></label><button class="btn sm" type="submit">Đổi tên</button></form>
-            <form method="post" action="/do/conv_move"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="conversation_id" value="{{ conv }}"><input type="hidden" name="next" value="/manager?c={{ conv }}">
-              <label>Thuộc luồng<select name="workstream"><option value="">— Sảnh (không thuộc luồng) —</option>{% for w in wsd.active %}<option value="{{ w.id }}"{{ ' selected' if wsx and wsx.id == w.id }}>{{ w.label }}</option>{% endfor %}</select></label><button class="btn sm" type="submit">Chuyển</button></form>
-            {{ mc.act("conv_archive", "Lưu trữ hội thoại", {"conversation_id": conv, "w": wsx.id if wsx else ""}, "btn sm danger", confirm="Lưu trữ hội thoại này?", next="/manager") }}
+        {% if conv and wsd and wsd.enabled %}<details class="menu conv-menu"><summary class="btn ghost sm icon" title="Đổi tên, chuyển luồng, lưu trữ" aria-label="Thao tác hội thoại">⋯</summary>
+          <div class="menu-pop ws-pop">
+            <form method="post" action="/do/conv_rename" class="ws-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="conversation_id" value="{{ conv }}"><input type="hidden" name="next" value="/manager?c={{ conv }}">
+              <input name="title" maxlength="80" value="{{ cur_title or '' }}" required aria-label="Tên hội thoại" placeholder="Tên hội thoại"><button class="btn sm" type="submit">Đổi tên</button></form>
+            <form method="post" action="/do/conv_move" class="ws-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="conversation_id" value="{{ conv }}"><input type="hidden" name="next" value="/manager?c={{ conv }}">
+              <select name="workstream" aria-label="Chuyển sang luồng"><option value="">Sảnh</option>{% for w in wsd.active %}<option value="{{ w.id }}"{{ ' selected' if wsx and wsx.id == w.id }}>{{ w.label }}</option>{% endfor %}</select><button class="btn sm" type="submit">Chuyển</button></form>
+            {{ mc.act("conv_archive", "Lưu trữ hội thoại", {"conversation_id": conv, "w": wsx.id if wsx else ""}, "btn sm ghost danger-t", confirm="Lưu trữ hội thoại này?", next="/manager") }}
           </div></details>{% endif %}
-        <a class="btn ghost sm icon" href="{{ ('/manager?w=' ~ wsx.id ~ '&new=1') if wsx else '/manager?new=1' }}" title="{{ 'Hội thoại mới trong luồng' if wsx else 'Cuộc trò chuyện mới' }}" aria-label="Cuộc trò chuyện mới">{{ mc.icon('pen-new') }}</a>
-        <button type="button" class="btn ghost sm icon" id="mgr-info-toggle" aria-controls="mgr-side" title="Thông tin điều phối viên" aria-label="Thông tin điều phối viên">{{ mc.icon('panel') }}</button>
+        <a class="btn ghost sm icon" href="{{ ('/manager?w=' ~ wsx.id ~ '&new=1') if wsx else '/manager?new=1' }}" title="Hội thoại mới" aria-label="Hội thoại mới">{{ mc.icon('pen-new') }}</a>
+        <button type="button" class="btn ghost sm icon" id="mgr-info-toggle" aria-controls="mgr-side" title="Thông tin" aria-label="Thông tin">{{ mc.icon('panel') }}</button>
       </div>
     </header>
+    {% if wsd and wsd.enabled %}
+    <nav class="ws-bar" aria-label="Luồng việc">
+      <div class="ws-tabs">
+        <a class="ws-tab{{ ' on' if not wsx }}" href="/manager">Sảnh{% if wsd.lobby_unread %}<span class="ws-unread">{{ wsd.lobby_unread }}</span>{% endif %}</a>
+        {% for w in wsd.active %}<a class="ws-tab{{ ' on' if wsx and wsx.id == w.id }}" href="/manager?w={{ w.id }}" title="{{ w.label }} — task {{ w.tasks.done }}/{{ w.tasks.total }}{% if w.tasks.blocked %}, {{ w.tasks.blocked }} bị chặn{% endif %}"><span class="ws-dot {{ w.dot }}" aria-hidden="true"></span>{{ w.title }}{% if w.unread %}<span class="ws-unread">{{ w.unread }}</span>{% endif %}</a>{% endfor %}
+        {% if wsx and wsx.status == 'closed' %}<a class="ws-tab on closed" href="/manager?w={{ wsx.id }}">{{ wsx.title }} · đã đóng</a>{% endif %}
+      </div>
+      <details class="ws-pop-wrap" id="ws-new"><summary class="ws-tab add" title="Mở luồng mới (mỗi epic một luồng)">＋ Luồng</summary>
+        <form method="post" action="/do/ws_create" class="ws-pop ws-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/manager">
+          <input name="title" maxlength="120" placeholder="Tên luồng (bỏ trống = tự đặt)" aria-label="Tên luồng" autocomplete="off"><button class="btn sm primary" type="submit">Mở</button></form>
+      </details>
+      {% if wsd.closed %}<details class="ws-pop-wrap"><summary class="ws-tab more" title="Luồng đã đóng">Đã đóng {{ wsd.closed|length }}</summary>
+        <div class="ws-pop"><ul class="mgr-convs">{% for w in wsd.closed %}<li><a href="/manager?w={{ w.id }}"><span class="ct">{{ w.label }}</span></a></li>{% endfor %}</ul></div></details>{% endif %}
+    </nav>
+    {% endif %}
     <div class="mgr-log" id="mgr-log" data-sse-manager="/sse/manager?since={{ since }}&amp;epoch={{ epoch }}" data-conv="{{ conv or '' }}" data-runs="{{ (conv_runs or [])|join(' ') }}" aria-live="polite">
-      {% for it in items %}{{ mg.item(it) }}{% else %}<div class="empty mgr-hero" id="mgr-empty">{{ mc.icon('logo', 'hero-mark') }}<b>{{ ('Luồng ' ~ (wsx.key or wsx.title) ~ ': nhắn gì cũng thuộc luồng này') if wsx and not conv else ('Hôm nay giao việc gì cho đội?' if not conv else 'Chưa có tin nhắn') }}</b><span>Nói mục tiêu bằng lời — điều phối viên tự tạo agent/team, giao việc, theo dõi và báo lại. Ví dụ: “Tạo agent nghiên cứu để tóm tắt README của repo X rồi giao việc đó”.</span></div>{% endfor %}
+      {% for it in items %}{{ mg.item(it) }}{% else %}<div class="empty mgr-hero" id="mgr-empty">{{ mc.icon('logo', 'hero-mark') }}<b>{{ wsx.title if wsx and not conv else ('Hôm nay giao việc gì cho đội?' if not conv else 'Chưa có tin nhắn') }}</b><span>{% if wsx and not conv %}Nhắn gì ở đây cũng thuộc luồng này. Điều phối viên nhớ luồng qua ghi chú ở panel bên phải.{% else %}Nói mục tiêu bằng lời — điều phối viên tự tạo agent/team, giao việc, theo dõi và báo lại. Mỗi epic nên mở một luồng (＋ Luồng) để việc không lẫn vào nhau.{% endif %}</span></div>{% endfor %}
       {% if pending %}{{ mg.pending(pending) }}{% endif %}
     </div>
     <div class="composer-wrap">
@@ -93,7 +87,7 @@
         <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="c" value="{{ conv or '' }}"><input type="hidden" name="w" value="{{ wsx.id if wsx and not conv else '' }}">
         <label class="sr-only" for="mgr-text">Tin nhắn cho điều phối viên</label>
         <ul class="mgr-files" id="mgr-files" hidden aria-label="Tệp đính kèm"></ul>
-        <textarea id="mgr-text" name="text" rows="1" maxlength="8000" placeholder="{{ ('Nhắn vào luồng ' ~ (wsx.key or wsx.title) ~ '…') if wsx else 'Nhắn điều phối viên…' }}"></textarea>
+        <textarea id="mgr-text" name="text" rows="1" maxlength="8000" placeholder="{{ ('Nhắn trong ' ~ (wsx.key or wsx.title) ~ '…') if wsx else 'Nhắn điều phối viên…' }}"></textarea>
         <div class="composer-bar">
           <input type="file" id="mgr-file" name="attach" multiple class="sr-only" tabindex="-1">
           <label for="mgr-file" class="btn ghost sm icon attach" id="mgr-attach" title="Đính kèm ảnh, tệp văn bản, PDF/Excel/Word/PowerPoint (hoặc kéo–thả, dán ảnh)" tabindex="0" role="button">{{ mc.icon('clip') }}<span class="sr-only">Đính kèm tệp</span></label>
@@ -128,32 +122,24 @@
     </section>
     {% if wsx %}
     <section class="mgr-side-sec ws-side">
-      <h3>STATE.md · {{ wsx.label }}</h3>
-      <p class="muted small">Ghi chú của luồng — điều phối viên đọc lại mỗi session mới và tự cập nhật.{% if wsx.state_updated_at %} Cập nhật {{ mc.rel(wsx.state_updated_at) }} bởi {{ wsx.state_by }}.{% endif %}</p>
-      {% if wsx.state %}<pre class="ws-state-pre">{{ wsx.state }}</pre>{% else %}<p class="muted small">(trống)</p>{% endif %}
-      <details class="ws-state"><summary class="btn sm ghost">{{ 'Sửa STATE' if wsx.state else 'Viết STATE' }}</summary>
-        <form method="post" action="/do/ws_state" class="ws-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ wsx.id }}"><input type="hidden" name="next" value="/manager?w={{ wsx.id }}">
-          <textarea name="state" rows="12" maxlength="12000" placeholder="Mục tiêu, quyết định, nhánh/PR, câu hỏi mở, bước tiếp…">{{ wsx.state }}</textarea>
-          <button class="btn sm primary" type="submit">Lưu STATE</button></form>
-      </details>
+      <div class="ws-side-head"><h3>{{ wsx.title }}</h3>{% if wsx.key %}<span class="pill muted">{{ wsx.key }}</span>{% endif %}</div>
+      <progress class="ws-progress" max="{{ wsx.tasks.total or 1 }}" value="{{ wsx.tasks.done }}" aria-label="Tiến độ task"></progress>
+      <p class="muted small">{{ wsx.tasks.done }}/{{ wsx.tasks.total }} task xong{% if wsx.tasks.blocked %} · <span class="danger-t">{{ wsx.tasks.blocked }} bị chặn</span>{% endif %}{% if wsx.needs_human %} · {{ wsx.needs_human }} cần bạn{% endif %}</p>
+      <ul class="ws-tasks">{% for t in wsx.open_tasks %}<li><span class="ws-dot {{ 'danger' if t.status == 'blocked' else 'ok' if t.status == 'running' else 'idle' }}" title="{{ t.status }}"></span><a href="/tasks/{{ t.id }}">{{ t.title }}</a></li>{% endfor %}
+      {% for t in wsx.recent_done|reverse %}<li class="done"><span class="ws-dot done" title="done"></span><a href="/tasks/{{ t.id }}">{{ t.title }}</a></li>{% endfor %}</ul>
     </section>
-    <section class="mgr-side-sec">
-      <h3>Task của luồng ({{ wsx.open_tasks|length }} đang mở)</h3>
-      <ul class="ws-tasks">{% for t in wsx.open_tasks %}<li><span class="pill {{ 'danger' if t.status == 'blocked' else 'ok' if t.status == 'running' else 'muted' }}">{{ t.status }}</span> <a href="/tasks/{{ t.id }}">{{ t.title }}</a>{% if t.block_reason %}<div class="muted small">{{ t.block_reason }}</div>{% endif %}</li>{% else %}<li class="muted small">Không có task đang mở.</li>{% endfor %}
-      {% for t in wsx.recent_done|reverse %}<li class="done"><span class="pill muted">done</span> <a href="/tasks/{{ t.id }}">{{ t.title }}</a></li>{% endfor %}</ul>
+    <section class="mgr-side-sec ws-side">
+      <details class="ws-state"><summary class="ws-side-head"><h3>Ghi chú luồng</h3><span class="btn sm ghost">Sửa</span></summary>
+      <form method="post" action="/do/ws_state" class="ws-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ wsx.id }}"><input type="hidden" name="next" value="/manager?w={{ wsx.id }}">
+        <textarea name="state" rows="10" maxlength="12000" aria-label="Ghi chú luồng">{{ wsx.state }}</textarea>
+        <button class="btn sm primary" type="submit">Lưu</button></form></details>
+      {% if wsx.state %}<pre class="ws-state-pre">{{ wsx.state }}</pre>{% else %}<p class="muted small">Chưa có. Điều phối viên tự ghi quyết định, PR, việc tiếp theo vào đây và đọc lại mỗi khi bắt đầu session mới.</p>{% endif %}
     </section>
-    <section class="mgr-side-sec">
-      <h3>Hội thoại của luồng</h3>
-      <ul class="ws-tasks">{% for c in ws_convs %}<li>{% if c.channel == 'web' %}<a href="/manager?c={{ c.id }}">{{ c.title or c.id }}</a>{% else %}<span>{{ c.title or c.id }}</span>{% endif %} <span class="muted small">· {{ c.channel }} · {{ c.updated_at|ago }}</span></li>{% else %}<li class="muted small">Chưa có.</li>{% endfor %}</ul>
-      <details class="ws-edit"><summary class="small">Sửa / đóng luồng</summary>
-        <form method="post" action="/do/ws_edit" class="ws-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ wsx.id }}"><input type="hidden" name="next" value="/manager?w={{ wsx.id }}">
-          <label>Mã<input name="key" maxlength="40" value="{{ wsx.key or '' }}"></label>
-          <label>Tên<input name="title" maxlength="120" value="{{ wsx.title }}" required></label>
-          <label>Sprint<input name="sprint" maxlength="40" value="{{ wsx.sprint or '' }}"></label>
-          <button class="btn sm" type="submit">Lưu</button></form>
-        {% if wsx.status == 'active' %}{{ mc.act("ws_close", "Đóng luồng", {"id": wsx.id, "label": wsx.label}, "btn sm danger", confirm="Đóng luồng " ~ wsx.label ~ "?", next="/manager") }}
-        {% else %}{{ mc.act("ws_reopen", "Mở lại luồng", {"id": wsx.id}, "btn sm", next="/manager?w=" ~ wsx.id) }}{% endif %}
-      </details>
+    <section class="mgr-side-sec ws-side">
+      <form method="post" action="/do/ws_edit" class="ws-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ wsx.id }}"><input type="hidden" name="next" value="/manager?w={{ wsx.id }}">
+        <input name="title" maxlength="120" value="{{ wsx.label }}" required aria-label="Tên luồng"><button class="btn sm" type="submit">Đổi tên</button></form>
+      <div class="btn-row">{% if wsx.status == 'active' %}{{ mc.act("ws_close", "Đóng luồng", {"id": wsx.id, "label": wsx.label}, "btn sm ghost", confirm="Đóng luồng " ~ wsx.label ~ "? Mở lại được bất cứ lúc nào.", next="/manager") }}
+        {% else %}{{ mc.act("ws_reopen", "Mở lại luồng", {"id": wsx.id}, "btn sm", next="/manager?w=" ~ wsx.id) }}{% endif %}</div>
     </section>
     {% endif %}
     <section class="mgr-side-sec">

@@ -25,24 +25,32 @@ def _side(html: str) -> str:
     return re.search(r'<section class="side-recents".*?</section>', html, re.S).group(0)
 
 
+def _bar(html: str) -> str:
+    return re.search(r'<nav class="ws-bar".*?</nav>', html, re.S).group(0)
+
+
 async def test_sidebar_groups_lobby_and_workstreams_and_create(wenv):
     await wenv.login()
     await designate(wenv)
     r = await wenv.client.get("/manager")
-    side = _side(r.text)
-    assert "Sảnh" in side and "Luồng việc" in side and 'action="/do/ws_create"' in side
-    # tạo luồng từ thanh bên → chuyển vào luồng
-    r = await wenv.post("/do/ws_create", {"key": "LH-55166", "title": "Monitor <b>x</b>", "sprint": "S216", "next": "/manager"})
+    bar = _bar(r.text)
+    assert "Sảnh" in bar and 'action="/do/ws_create"' in bar and "Hội thoại ở Sảnh" in _side(r.text)
+    # mở luồng chỉ cần tên; tên bắt đầu bằng mã Jira → tách mã
+    r = await wenv.post("/do/ws_create", {"title": "LH-55166 Monitor <b>x</b>", "next": "/manager"})
     assert r.status_code == 303
     loc = r.headers["location"]
     assert loc.startswith("/manager?w=ws_")
     wid = loc.split("w=", 1)[1]
     r = await wenv.client.get(loc)
-    assert "LH-55166" in _side(r.text) and "Monitor &lt;b&gt;x&lt;/b&gt;" in r.text  # tên luồng là dữ liệu: escape
-    assert "<b>x</b>" not in r.text
-    assert 'class="ws-chip' in r.text and "Hội thoại mới trong luồng" in r.text
+    assert "Monitor &lt;b&gt;x&lt;/b&gt;" in _bar(r.text) and "<b>x</b>" not in r.text  # tên luồng là dữ liệu: escape
+    assert 'class="ws-tab on"' in r.text and "LH-55166" in r.text
     assert f'name="w" value="{wid}"' in r.text  # tin đầu tiên mở hội thoại trong luồng
-    assert "STATE.md" in r.text and 'action="/do/ws_state"' in r.text
+    assert "Ghi chú luồng" in r.text and 'action="/do/ws_state"' in r.text
+    # tên trống → hub tự đặt tên
+    r = await wenv.post("/do/ws_create", {"title": "", "next": "/manager"})
+    assert r.status_code == 303
+    w2 = await mgr_rpc(wenv, "workstream.get", {"id": r.headers["location"].split("w=", 1)[1]})
+    assert w2["title"].startswith("Luồng ") and w2["key"] is None
 
 
 async def test_send_in_workstream_files_conversation_and_lobby_stays_separate(wenv):
@@ -59,10 +67,10 @@ async def test_send_in_workstream_files_conversation_and_lobby_stays_separate(we
     # mở hội thoại của luồng: chip + STATE + panel task; Sảnh chỉ có hội thoại không thuộc luồng
     r = await wenv.client.get(f"/manager?c={cid}")
     assert "PR #712 chờ QA" in r.text and "LH-55815" in r.text
-    side = _side(r.text)
-    lobby_part = side.split("Luồng việc", 1)[0]
-    assert f"?c={lob['conversation_id']}" in lobby_part
-    assert f"?c={cid}" not in lobby_part
+    side = _side(r.text)  # trong luồng: thanh bên chỉ có hội thoại của luồng
+    assert f"?c={cid}" in side and f"?c={lob['conversation_id']}" not in side
+    side = _side((await wenv.client.get("/manager")).text)  # Sảnh
+    assert f"?c={lob['conversation_id']}" in side and f"?c={cid}" not in side
     # ?w=<mã> → hội thoại gần nhất của luồng
     r = await wenv.client.get("/manager?w=LH-55815")
     assert f'name="c" value="{cid}"' in r.text
@@ -93,6 +101,6 @@ async def test_state_edit_rename_move_archive_close(wenv):
     r = await wenv.post("/do/ws_close", {"id": w["id"], "confirm": "yes", "next": "/manager"})
     assert r.status_code == 303
     r = await wenv.client.get("/manager")
-    assert "Đã đóng (1)" in _side(r.text)
+    assert "Đã đóng 1" in _bar(r.text)
     actions = [row["kind"] for row in wenv.hub.store.conn.execute("SELECT kind FROM audit_log")]
     assert "workstream.update" in actions and "manager.conversation_update" in actions

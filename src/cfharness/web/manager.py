@@ -129,7 +129,7 @@ async def _workstreams(request: Request) -> dict[str, Any]:
     lobby = sorted([P.mgr_conv(c) | {"unread": int(c.get("unread") or 0)} for c in convs
                     if isinstance(c, dict) and c.get("channel") == CHANNEL and not c.get("workstream_id")],
                    key=lambda c: str(c.get("updated_at") or ""), reverse=True)
-    return {"enabled": True, "active": active, "closed": closed, "lobby": lobby,
+    return {"enabled": True, "active": active, "closed": closed, "lobby": lobby, "lobby_unread": sum(c["unread"] for c in lobby),
             "by_id": {w["id"]: w for w in active + closed}, "convs": {c["id"]: c for c in convs if isinstance(c, dict)}}
 
 
@@ -263,6 +263,8 @@ async def manager_page(request: Request) -> Response:
     ctx.update({"convs": convs, "conv": cid, "items": items, "side_actions": list(reversed(acts))[:12], "pending": pending,
                 "conv_runs": sorted({m["run_id"] for m in msgs if m.get("run_id")} | ({pending} if pending else set())),
                 "wsd": wsd, "wsx": wsx, "ws_convs": ws_convs, "cur_conv": cur_conv,
+                "ws_web_convs": [c | {"unread": 0 if c["id"] == cid else int(((wsd.get("convs") or {}).get(c["id"]) or {}).get("unread") or 0)}
+                                 for c in ws_convs if c.get("channel") == CHANNEL],
                 "cur_title": (cur_conv or {}).get("title")})
     return await render(request, "manager.html", ctx)
 
@@ -401,10 +403,10 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
     """Thêm thao tác ghi của trang Điều phối vào bảng `ACTIONS` (HUMAN_ONLY ở daemon). Chỉ định/huỷ, đóng luồng, lưu trữ hội thoại
     qua hộp xác nhận; tạo/sửa luồng, STATE, đổi tên/chuyển hội thoại làm ngay (dễ sửa lại)."""
     actions["ws_create"] = Action(
-        "workstream.create", lambda f: {"title": _opt(f, "title") or _req(f, "key", "mã hoặc tên"), "key": _opt(f, "key"), "sprint": _opt(f, "sprint")},
+        "workstream.create", lambda f: {"title": _opt(f, "title"), "key": _opt(f, "key"), "sprint": _opt(f, "sprint")},  # tên trống → hub tự đặt
         lambda r, f: f"Đã mở luồng {(r or {}).get('label') or ''}", goto=_ws_goto)
     actions["ws_edit"] = Action(
-        "workstream.update", lambda f: {"id": _req(f, "id", "luồng"), "title": _opt(f, "title"), "key": _opt(f, "key") or "", "sprint": _opt(f, "sprint") or ""},
+        "workstream.update", lambda f: {"id": _req(f, "id", "luồng"), "title": _req(f, "title", "tên luồng")},  # "LH-1 Tên" → đổi cả mã
         "Đã lưu luồng", goto=_ws_goto)
     actions["ws_state"] = Action(
         "workstream.update", lambda f: {"id": _req(f, "id", "luồng"), "state": str(f.get("state") or "")},

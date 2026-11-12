@@ -35,11 +35,13 @@ Chủ hub (2026-11-12): "một sprint nhiều epic, cứ nhắn vào một chỗ
   `manager.chat{workstream}` = hội thoại MỚI trong luồng. Event `workstream.updated`.
 
 ## Bề mặt
-- **Web `/manager`**: thanh bên = Sảnh (hội thoại web không thuộc luồng) + Luồng việc (chấm: đỏ bị chặn/cần người, xanh đang chạy, xám
-  xong; số tin chưa đọc gộp mọi kênh) + "＋ Luồng mới" + "Đã đóng". `?w=<id|mã>` mở hội thoại web gần nhất của luồng (chưa có → ô nhập
-  mang `w`, tin đầu tạo hội thoại trong luồng). Đầu chat: chip luồng; menu ⋯ đổi tên / chuyển luồng / lưu trữ. Panel phải: STATE.md (sửa
-  được), task của luồng, hội thoại kênh khác, sửa/đóng luồng. Gợi ý nhanh theo luồng. Action: `ws_create|ws_edit|ws_state|ws_close|ws_reopen|
-  conv_rename|conv_move|conv_archive` (đóng luồng, lưu trữ hội thoại có xác nhận). Daemon cũ không có `workstream.*` → trang như trước.
+- **Web `/manager`** (bản 2, 2026-11-12 — chủ hub: "xấu, rối"): hàng TAB luồng ngay trên khung chat (Sảnh · các luồng: chấm trạng thái
+  đỏ bị chặn/cần người, xanh đang chạy, xám xong; số tin chưa đọc) + "＋ Luồng" (chỉ MỘT ô tên; bỏ trống → hub đặt "Luồng <từ> <số>";
+  tên bắt đầu bằng mã Jira "LH-55166 Monitor" → tách `key`) + "Đã đóng N". Thanh bên trái chỉ còn hội thoại của tab đang chọn.
+  `?w=<id|mã>` mở hội thoại web gần nhất của luồng (chưa có → ô nhập mang `w`). Menu ⋯ đầu chat: đổi tên / chuyển luồng / lưu trữ.
+  Panel phải: tiến độ (thanh `<progress>` — CSP cấm style inline) + task, "Ghi chú luồng" (STATE.md, nút Sửa), đổi tên / đóng luồng.
+  Action: `ws_create|ws_edit (chỉ tên)|ws_state|ws_close|ws_reopen|conv_rename|conv_move|conv_archive`. Daemon cũ không có `workstream.*`
+  → trang như trước.
 - **Terminal** (`cfharness chat`): `/ws` (danh sách), `/ws <mã>` (sang hội thoại cli của luồng / mở mới), `/ws new <mã> <tên>`,
   `/ws state`, `/ws attach <mã>`, `/ws close`.
 
