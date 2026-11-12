@@ -104,3 +104,54 @@ async def test_state_edit_rename_move_archive_close(wenv):
     assert "Đã đóng 1" in _bar(r.text)
     actions = [row["kind"] for row in wenv.hub.store.conn.execute("SELECT kind FROM audit_log")]
     assert "workstream.update" in actions and "manager.conversation_update" in actions
+
+
+def test_tab_state_priority():
+    from cfharness.web.manager import tab_state
+
+    assert tab_state({"blocked": 1, "running": 2, "open": 3}, 0, 1, True)[0] == "danger"  # cần người thắng đang chạy
+    assert tab_state({}, 2, 0, True)[0] == "danger"
+    dot, label = tab_state({"running": 0, "open": 1}, 0, 1, True)
+    assert dot == "run" and "điều phối viên đang xử lý" in label
+    assert tab_state({"running": 2, "open": 2}, 0, 0, True)[0] == "run"
+    assert tab_state({"open": 2, "total": 3}, 0, 0, True)[0] == "idle"
+    assert tab_state({"open": 0, "total": 3, "done": 3}, 0, 0, False)[0] == "done"
+    assert tab_state({}, 0, 0, True) == ("done", "Đã xong — không có gì đang chạy")
+    assert tab_state({}, 0, 0, False)[0] == "none"
+
+
+async def test_tabs_partial_shows_running_then_done(wenv):
+    import asyncio
+
+    await wenv.login()
+    await designate(wenv)
+    w = await mgr_rpc(wenv, "workstream.create", {"title": "Dreem shot", "key": "LH-55815"})
+    r = await wenv.post("/manager/send", {"text": "làm đi", "w": w["id"]}, headers={"X-Ahub-Fetch": "1"})
+    res = r.json()
+    run_id, cid = res["run_id"], res["conversation_id"]
+    for _ in range(200):  # FakeRuntime xong rất nhanh
+        if (wenv.hub.store.get_run(run_id) or {}).get("status") not in ("queued", "running"):
+            break
+        await asyncio.sleep(0.05)
+
+    def tab(html: str) -> str:
+        return re.search(rf'<a class="ws-tab[^"]*" href="/manager\?w={w["id"]}".*?</a>', html, re.S).group(0)
+
+    # giả lập lượt điều phối viên còn đang chạy trong luồng
+    wenv.hub.store.conn.execute("UPDATE runs SET status='running' WHERE id=?", (run_id,))
+    convs = await mgr_rpc(wenv, "manager.conversations", {"workstream": w["id"]})
+    assert convs[0]["running"] == {"id": run_id, "status": "running"}
+    r = await wenv.client.get(f"/partials/manager/tabs?w={w['id']}")
+    assert r.status_code == 200 and r.text.lstrip().startswith('<div class="ws-tabs" id="ws-tabs"')
+    t = tab(r.text)
+    assert 'ws-dot run' in t and "Đang chạy" in t and "ws-tab on" in t
+    page = (await wenv.client.get(f"/manager?c={cid}")).text
+    assert 'ws-dot run' in _side(page)  # hội thoại đang chạy có chấm ở thanh bên
+    # xong → dấu "đã xong"
+    wenv.hub.store.conn.execute("UPDATE runs SET status='completed' WHERE id=?", (run_id,))
+    t = tab((await wenv.client.get("/partials/manager/tabs")).text)
+    assert 'ws-dot done' in t and "Đã xong" in t and "ws-tab on" not in t
+    # trả lời tới trong lúc đang xem hội thoại: làm mới hàng tab kèm c=<hội thoại> → không hiện "chưa đọc"
+    wenv.hub.store.conn.execute("UPDATE manager_conversations SET read_upto=0 WHERE id=?", (cid,))
+    assert '<span class="ws-unread">' in tab((await wenv.client.get(f"/partials/manager/tabs?w={w['id']}")).text)
+    assert '<span class="ws-unread">' not in tab((await wenv.client.get(f"/partials/manager/tabs?w={w['id']}&c={cid}")).text)

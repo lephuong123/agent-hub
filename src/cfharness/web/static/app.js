@@ -103,11 +103,11 @@
       root.classList.toggle("mgr-info-open", open === undefined ? !root.classList.contains("mgr-info-open") : open);
     }
   }
-  var infoBtn = document.getElementById("mgr-info-toggle");
-  if (infoBtn) infoBtn.addEventListener("click", function (e) { e.stopPropagation(); mgrInfo(); });
-  var infoX = document.getElementById("mgr-info-close");
-  if (infoX) infoX.addEventListener("click", function () { mgrInfo(false); });
+  // uỷ quyền ở document: khung chat được thay khi đổi tab (không tải lại trang) nên không gắn trực tiếp vào nút
   document.addEventListener("click", function (e) {
+    var t = e.target && e.target.closest ? e.target : null;
+    if (t && t.closest("#mgr-info-toggle")) { mgrInfo(); return; }
+    if (t && t.closest("#mgr-info-close")) { mgrInfo(false); return; }
     if (!root.classList.contains("mgr-info-open")) return;
     var side = document.getElementById("mgr-side");
     if (side && !side.contains(e.target)) root.classList.remove("mgr-info-open");
@@ -115,8 +115,10 @@
 
   // ------------------------------------------------------------ ô nhập tự giãn (chat, steer)
   function autoGrow(t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight + 2, 240) + "px"; }
-  var grows = document.querySelectorAll(".mgr-form textarea, .composer textarea");
-  for (var g = 0; g < grows.length; g++) grows[g].addEventListener("input", function () { autoGrow(this); });
+  document.addEventListener("input", function (e) {
+    var t = e.target;
+    if (t && t.matches && t.matches(".mgr-form textarea, .composer textarea")) autoGrow(t);
+  });
 
   // ------------------------------------------------------------ khoá phiên ngoài cookie (WT-1)
   // Server trao khoá MỘT lần qua fragment `#k=…` lúc đăng nhập (fragment không gửi lên server). Giữ trong localStorage của origin
@@ -361,8 +363,93 @@
   })();
   // ------------------------------------------------------------ Điều phối (trò chuyện với điều phối viên)
   // Mục HTML do server vẽ sẵn (autoescape) — chữ chạy (delta) chỉ gán bằng textContent. Không bao giờ dựng HTML từ chữ của agent.
-  var ml = document.querySelector("[data-sse-manager]");
-  if (ml) {
+  // Đổi tab luồng / hội thoại KHÔNG tải lại cả trang: tải /manager?… bằng fetch, thay #mgr-grid + danh sách hội thoại ở thanh bên,
+  // pushState; luồng SSE + ô nhập khởi động lại qua mgrBoot(). Lỗi/không phải trang điều phối → điều hướng thường (an toàn).
+  var mgrStop = null, mgrNav = null, mgrDrafts = {};
+  function mgrBoot() {
+    if (mgrStop) { mgrStop(); mgrStop = null; }
+    var el = document.querySelector("[data-sse-manager]");
+    if (el) mgrStop = initManager(el);
+  }
+  function draftKey() {
+    var f = document.getElementById("mgr-form");
+    if (!f) return "";
+    var c = f.querySelector('input[name="c"]'), w = f.querySelector('input[name="w"]');
+    return (c && c.value) ? "c:" + c.value : "w:" + (w ? w.value : "");
+  }
+  function mgrUrlOk(a) {
+    if (!a || a.target || a.hasAttribute("download")) return null;
+    var u;
+    try { u = new URL(a.getAttribute("href"), location.href); } catch (_) { return null; }
+    return u.origin === location.origin && u.pathname === "/manager" ? u.pathname + u.search : null;
+  }
+  function mgrGo(url, push, a) {
+    var grid = document.getElementById("mgr-grid");
+    if (!grid || !window.fetch || !window.DOMParser) { location.href = url; return; }
+    var tx = document.getElementById("mgr-text");
+    if (tx) { var dk = draftKey(); if (tx.value.trim()) mgrDrafts[dk] = tx.value; else delete mgrDrafts[dk]; }
+    if (mgrNav && mgrNav.abort) mgrNav.abort();
+    var ctl = window.AbortController ? new AbortController() : {};
+    mgrNav = ctl;
+    grid.classList.add("mgr-loading");
+    if (a && a.classList.contains("ws-tab")) {  // đánh dấu tab ngay, không chờ server
+      var tabs = document.querySelectorAll("#ws-tabs .ws-tab");
+      for (var i = 0; i < tabs.length; i++) tabs[i].classList.toggle("on", tabs[i] === a);
+    }
+    var open = document.querySelectorAll("details[open]");
+    for (var j = 0; j < open.length; j++) if (!open[j].closest(".mgr-side")) open[j].removeAttribute("open");
+    root.classList.remove("mgr-info-open");
+    fetch(url, { credentials: "same-origin", signal: ctl.signal })
+      .then(function (r) {
+        if (!r.ok || new URL(r.url, location.href).pathname !== "/manager") throw new Error("nav");
+        return r.text();
+      })
+      .then(function (html) {
+        if (mgrNav !== ctl) return;
+        mgrNav = null;
+        var doc = new DOMParser().parseFromString(html, "text/html");
+        var ng = doc.getElementById("mgr-grid"), cur = document.getElementById("mgr-grid");
+        if (!ng || !cur) throw new Error("nav");
+        if (push) history.pushState({ mgr: 1 }, "", url);
+        document.title = doc.title;
+        cur.replaceWith(document.importNode(ng, true));
+        var os = document.querySelector(".side-recents"), ns = doc.querySelector(".side-recents");
+        if (os && ns) os.replaceWith(document.importNode(ns, true));
+        var ot = document.getElementById("toasts"), nt = doc.getElementById("toasts");
+        if (ot && nt) for (var k = 0; k < nt.children.length; k++) ot.appendChild(document.importNode(nt.children[k], true));
+        var g = document.getElementById("mgr-grid");
+        if (window.htmx) window.htmx.process(g);
+        refreshTimes(g);
+        var on = document.querySelector("#ws-tabs .ws-tab.on");
+        if (on && on.scrollIntoView) on.scrollIntoView({ block: "nearest", inline: "nearest" });
+        mgrBoot();
+        var t2 = document.getElementById("mgr-text"), d = mgrDrafts[draftKey()];
+        if (t2 && d) { t2.value = d; autoGrow(t2); }
+        if (t2 && window.matchMedia && window.matchMedia("(pointer: fine)").matches) t2.focus({ preventScroll: true });
+      })
+      .catch(function (err) {
+        if (err && err.name === "AbortError") return;
+        location.href = url;
+      });
+  }
+  document.addEventListener("click", function (e) {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (!document.getElementById("mgr-grid")) return;
+    var a = e.target.closest && e.target.closest("a[href]");
+    var url = mgrUrlOk(a);
+    if (!url) return;
+    e.preventDefault();
+    mgrGo(url, true, a);
+  });
+  if (document.getElementById("mgr-grid")) {
+    try { history.replaceState({ mgr: 1 }, "", location.pathname + location.search); } catch (_) {}
+    window.addEventListener("popstate", function () {
+      if (location.pathname === "/manager" && document.getElementById("mgr-grid")) mgrGo(location.pathname + location.search, false);
+    });
+  }
+
+  function initManager(ml) {
+    var mes = null, tabsT = null, tabsPoll = null;
     var mform = document.getElementById("mgr-form");
     var mtext = document.getElementById("mgr-text");
     var merr = document.getElementById("mgr-err");
@@ -383,6 +470,8 @@
     function put(node, atBottom) { if (!node) return; dropEmpty(); ml.appendChild(node); if (atBottom) ml.scrollTop = ml.scrollHeight; }
     function handle(m) {
       var r = m.run, s = stick();
+      if (m.t === "tick" || m.t === "status" || m.t === "run_end" || m.t === "reply") tabsSoon();
+      if (m.t === "status") return;
       if (m.t === "tick") { document.body.dispatchEvent(new Event("mgr-tick")); return; }
       if (m.t === "question") {
         if (!conv || m.conv !== conv) return;  // câu hỏi của cuộc trò chuyện khác
@@ -453,8 +542,26 @@
       var q = early[r] || []; delete early[r];
       for (var i = 0; i < q.length; i++) handle(q[i]);
     }
+    // hàng tab luồng: chấm "đang chạy / cần bạn / đã xong" — làm mới khi SSE báo run bắt đầu/kết thúc, và hỏi lại mỗi 20 s
+    // (task của agent khác không đi qua luồng SSE của điều phối viên)
+    function tabsSoon(ms) { if (!tabsT) tabsT = setTimeout(tabsLoad, ms == null ? 500 : ms); }
+    function tabsLoad() {
+      tabsT = null;
+      var el = document.getElementById("ws-tabs");
+      if (!el || !window.fetch) return;
+      fetch("/partials/manager/tabs?w=" + encodeURIComponent(el.getAttribute("data-w") || "") + (conv ? "&c=" + encodeURIComponent(conv) : ""), { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.text() : null; })
+        .then(function (html) {
+          var cur = document.getElementById("ws-tabs"), n = html && fromHTML(html);
+          if (!cur || !n || n.id !== "ws-tabs" || mgrNav) return;  // đang chuyển tab → trang mới tự mang hàng tab mới
+          var x = cur.scrollLeft;
+          cur.replaceWith(n);
+          n.scrollLeft = x;
+        }, function () {});
+    }
+    tabsPoll = setInterval(function () { if (!document.hidden) tabsSoon(0); }, 20000);
     if (window.EventSource) {
-      var mes = new EventSource(ml.getAttribute("data-sse-manager"));
+      mes = new EventSource(ml.getAttribute("data-sse-manager"));
       mes.onopen = function () { if (mlive) { mlive.textContent = "● trực tiếp"; mlive.className = "pill ok live-dot"; } };
       mes.onerror = function () { if (mlive) { mlive.textContent = "↻ đang nối lại…"; mlive.className = "pill warn"; } };
       mes.onmessage = function (ev) { var m; try { m = JSON.parse(ev.data); } catch (_) { return; } if (m.t === "end") { mes.close(); return; } handle(m); };
@@ -580,5 +687,11 @@
           .then(function () { if (btn) btn.disabled = false; mtext.focus(); });
       });
     }
+    return function stop() {
+      if (mes) mes.close();
+      clearInterval(tabsPoll);
+      clearTimeout(tabsT);
+    };
   }
+  mgrBoot();
 })();

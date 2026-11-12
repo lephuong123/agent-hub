@@ -17,6 +17,9 @@ RPC dùng (hợp đồng `docs/plan/M7-manager.md`, MGR-CORE cung cấp): `manag
   KHÔNG gửi gì. Giới hạn = của daemon (`manager/service.py`), daemon kiểm lại.
 - `GET /sse/manager?since=&epoch=`: luồng JSON `{t: delta|reply|action|run_end|tick}`; mục HTML vẽ phía server bằng macro autoescape.
 - `GET /partials/manager`: khung trạng thái (htmx làm mới).
+- `GET /partials/manager/tabs?w=&c=`: hàng tab luồng (`c` = hội thoại đang mở → đánh dấu đã đọc) — chấm "đang chạy / cần bạn / đang chờ / đã xong" mỗi luồng (app.js làm mới khi SSE báo
+  `status`/`run_end`/`reply`/`tick`, và hỏi lại mỗi 20 s vì task của agent khác không đi qua luồng SSE này).
+- Đổi tab/hội thoại không tải lại cả trang: app.js tải `/manager?…` bằng fetch, thay `#mgr-grid` + danh sách hội thoại, `pushState`.
 Mọi chữ của điều phối viên là DỮ LIỆU: autoescape + `white-space: pre-wrap`, không markdown/HTML thô (test XSS).
 """
 
@@ -119,18 +122,43 @@ async def _workstreams(request: Request) -> dict[str, Any]:
     except RpcError:
         return {"enabled": False, "active": [], "closed": [], "lobby": []}
     unread: dict[str, int] = {}
+    busy: dict[str | None, int] = {}  # luồng (None = Sảnh) → số hội thoại có lượt điều phối viên đang chạy (kể cả nhịp của luồng)
     for c in convs:
-        if isinstance(c, dict) and c.get("workstream_id") and c.get("channel") != "heartbeat":
+        if not isinstance(c, dict):
+            continue
+        if c.get("running") and (c.get("workstream_id") or c.get("channel") != "heartbeat"):
+            busy[c.get("workstream_id")] = busy.get(c.get("workstream_id"), 0) + 1
+        if c.get("workstream_id") and c.get("channel") != "heartbeat":
             unread[c["workstream_id"]] = unread.get(c["workstream_id"], 0) + int(c.get("unread") or 0)
-    for w in active:
+    for w in active + closed:
         w["unread"] = unread.get(w["id"], 0)
-        t = w.get("tasks") or {}
-        w["dot"] = "danger" if t.get("blocked") or w.get("needs_human") else "ok" if t.get("running") else "done" if t.get("total") and not t.get("open") else "idle"
-    lobby = sorted([P.mgr_conv(c) | {"unread": int(c.get("unread") or 0)} for c in convs
+        w["dot"], w["dot_label"] = tab_state(w.get("tasks") or {}, int(w.get("needs_human") or 0), busy.get(w["id"], 0), bool(w.get("conversations")))
+    lobby = sorted([P.mgr_conv(c) | {"unread": int(c.get("unread") or 0), "running": bool(c.get("running"))} for c in convs
                     if isinstance(c, dict) and c.get("channel") == CHANNEL and not c.get("workstream_id")],
                    key=lambda c: str(c.get("updated_at") or ""), reverse=True)
+    ldot, lstate = tab_state({}, 0, busy.get(None, 0), bool(lobby))
     return {"enabled": True, "active": active, "closed": closed, "lobby": lobby, "lobby_unread": sum(c["unread"] for c in lobby),
+            "lobby_dot": ldot, "lobby_state": lstate,
             "by_id": {w["id"]: w for w in active + closed}, "convs": {c["id"]: c for c in convs if isinstance(c, dict)}}
+
+
+def tab_state(tasks: dict[str, Any], needs_human: int, busy: int, has_convs: bool) -> tuple[str, str]:
+    """Trạng thái một tab luồng → (lớp chấm, chữ cho tooltip/đọc màn hình). Ưu tiên: cần người > đang chạy > còn task chờ > xong.
+    "Đang chạy" = điều phối viên đang trả lời/xử lý trong luồng HOẶC có task của luồng đang chạy."""
+    running = int(tasks.get("running") or 0)
+    if tasks.get("blocked") or needs_human:
+        parts = [f"{tasks['blocked']} task bị chặn"] if tasks.get("blocked") else []
+        parts += [f"{needs_human} việc cần bạn"] if needs_human else []
+        return "danger", "Cần bạn — " + ", ".join(parts)
+    if busy or running:
+        parts = ["điều phối viên đang xử lý"] if busy else []
+        parts += [f"{running} task đang chạy"] if running else []
+        return "run", "Đang chạy — " + ", ".join(parts)
+    if tasks.get("open"):
+        return "idle", f"Đang chờ — {tasks['open']} task chưa xong, không có gì đang chạy"
+    if tasks.get("total") or has_convs:
+        return "done", "Đã xong — không có gì đang chạy"
+    return "none", "Chưa có việc"
 
 
 async def _actions(request: Request, agent_id: str) -> list[dict[str, Any]]:
@@ -257,7 +285,7 @@ async def manager_page(request: Request) -> Response:
         except (RpcError, DaemonUnavailable):
             pass
     cur_conv = (wsd.get("convs") or {}).get(cid) if cid else None
-    ws_convs = [P.mgr_conv(c) | {"channel": c.get("channel")} for c in (wsd.get("convs") or {}).values()
+    ws_convs = [P.mgr_conv(c) | {"channel": c.get("channel"), "running": bool(c.get("running"))} for c in (wsd.get("convs") or {}).values()
                 if wsx and c.get("workstream_id") == wsx["id"] and c.get("channel") != "heartbeat"]
     ws_convs.sort(key=lambda c: str(c.get("updated_at") or ""), reverse=True)
     ctx.update({"convs": convs, "conv": cid, "items": items, "side_actions": list(reversed(acts))[:12], "pending": pending,
@@ -267,6 +295,22 @@ async def manager_page(request: Request) -> Response:
                                  for c in ws_convs if c.get("channel") == CHANNEL],
                 "cur_title": (cur_conv or {}).get("title")})
     return await render(request, "manager.html", ctx)
+
+
+async def partial_tabs(request: Request) -> Response:
+    """Hàng tab luồng (htmx/app.js làm mới khi có run bắt đầu/kết thúc, tin trả lời, luồng đổi — và hỏi lại định kỳ cho task)."""
+    cid = str(request.query_params.get("c") or "").strip()
+    if cid:  # hội thoại đang mở trên màn hình: tin mới tới trong lúc xem không tính là chưa đọc (giống lúc tải trang)
+        try:
+            await rpc(request, "manager.conversation_read", {"conversation_id": cid})
+        except (RpcError, DaemonUnavailable):
+            pass
+    wsd = await _workstreams(request)
+    wid = str(request.query_params.get("w") or "").strip()
+    wsx = (wsd.get("by_id") or {}).get(wid) if wid else None
+    sess = session_of(request)
+    return ws(request).templates.TemplateResponse(request, "_manager_tabs.html", {"wsd": wsd, "wsx": wsx, "csrf": sess.csrf if sess else ""},
+                                                  headers={"Cache-Control": "no-store"})
 
 
 async def partial_status(request: Request) -> Response:
@@ -363,6 +407,8 @@ def _converter(request: Request) -> Any:
             return [{"t": "run_end", "run": rid, "ok": outcome == "completed", "html": str(mod.item(note))}]
         if t.startswith("manager.tick"):
             return [{"t": "tick"}]
+        if t in ("run.queued", "run.started", "workstream.updated"):
+            return [{"t": "status", "run": rid}]
         return []
 
     return conv
@@ -444,6 +490,7 @@ def routes() -> list[Any]:
         Route("/manager", manager_page),
         Route("/manager/send", manager_send, methods=["POST"]),
         Route("/partials/manager", partial_status),
+        Route("/partials/manager/tabs", partial_tabs),
         Route("/sse/manager", sse_manager),
     ]
 

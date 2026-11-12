@@ -7,7 +7,7 @@
 {%- set rows = (ws_web_convs if wsx else (wsd.lobby if wsd and wsd.enabled else convs)) -%}
   <div class="nav-group ws-head"><span>{{ ('Hội thoại · ' ~ wsx.title) if wsx else ('Hội thoại ở Sảnh' if wsd and wsd.enabled else 'Gần đây') }}</span>
     <a class="ws-add" href="{{ ('/manager?w=' ~ wsx.id ~ '&new=1') if wsx else '/manager?new=1' }}" title="Hội thoại mới" aria-label="Hội thoại mới">＋</a></div>
-  <ul class="mgr-convs">{% for c in rows[:limit] %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}" title="{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}"><span class="ct">{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}{% if c.unread %}<span class="ws-unread">{{ c.unread }}</span>{% endif %}</span><span class="cm">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></a></li>{% else %}<li class="muted small side-none">Chưa có hội thoại — gõ tin để bắt đầu.</li>{% endfor %}</ul>
+  <ul class="mgr-convs">{% for c in rows[:limit] %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}" title="{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}"><span class="ct">{% if c.running %}<span class="ws-dot run" title="Đang chạy" aria-hidden="true"></span><span class="sr-only">Đang chạy. </span>{% endif %}{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}{% if c.unread %}<span class="ws-unread">{{ c.unread }}</span>{% endif %}</span><span class="cm">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></a></li>{% else %}<li class="muted small side-none">Chưa có hội thoại — gõ tin để bắt đầu.</li>{% endfor %}</ul>
 {%- endmacro %}
 {% block side_extra %}{% if m.available and m.agent_id %}
 <section class="side-recents" aria-label="Hội thoại">
@@ -65,11 +65,7 @@
     </header>
     {% if wsd and wsd.enabled %}
     <nav class="ws-bar" aria-label="Luồng việc">
-      <div class="ws-tabs">
-        <a class="ws-tab{{ ' on' if not wsx }}" href="/manager">Sảnh{% if wsd.lobby_unread %}<span class="ws-unread">{{ wsd.lobby_unread }}</span>{% endif %}</a>
-        {% for w in wsd.active %}<a class="ws-tab{{ ' on' if wsx and wsx.id == w.id }}" href="/manager?w={{ w.id }}" title="{{ w.label }} — task {{ w.tasks.done }}/{{ w.tasks.total }}{% if w.tasks.blocked %}, {{ w.tasks.blocked }} bị chặn{% endif %}"><span class="ws-dot {{ w.dot }}" aria-hidden="true"></span>{{ w.title }}{% if w.unread %}<span class="ws-unread">{{ w.unread }}</span>{% endif %}</a>{% endfor %}
-        {% if wsx and wsx.status == 'closed' %}<a class="ws-tab on closed" href="/manager?w={{ wsx.id }}">{{ wsx.title }} · đã đóng</a>{% endif %}
-      </div>
+      {% include "_manager_tabs.html" %}
       <details class="ws-pop-wrap" id="ws-new"><summary class="ws-tab add" title="Mở luồng mới (mỗi epic một luồng)">＋ Luồng</summary>
         <form method="post" action="/do/ws_create" class="ws-pop ws-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/manager">
           <input name="title" maxlength="120" placeholder="Tên luồng (bỏ trống = tự đặt)" aria-label="Tên luồng" autocomplete="off"><button class="btn sm primary" type="submit">Mở</button></form>
@@ -125,7 +121,7 @@
       <div class="ws-side-head"><h3>{{ wsx.title }}</h3>{% if wsx.key %}<span class="pill muted">{{ wsx.key }}</span>{% endif %}</div>
       <progress class="ws-progress" max="{{ wsx.tasks.total or 1 }}" value="{{ wsx.tasks.done }}" aria-label="Tiến độ task"></progress>
       <p class="muted small">{{ wsx.tasks.done }}/{{ wsx.tasks.total }} task xong{% if wsx.tasks.blocked %} · <span class="danger-t">{{ wsx.tasks.blocked }} bị chặn</span>{% endif %}{% if wsx.needs_human %} · {{ wsx.needs_human }} cần bạn{% endif %}</p>
-      <ul class="ws-tasks">{% for t in wsx.open_tasks %}<li><span class="ws-dot {{ 'danger' if t.status == 'blocked' else 'ok' if t.status == 'running' else 'idle' }}" title="{{ t.status }}"></span><a href="/tasks/{{ t.id }}">{{ t.title }}</a></li>{% endfor %}
+      <ul class="ws-tasks">{% for t in wsx.open_tasks %}<li><span class="ws-dot {{ 'danger' if t.status == 'blocked' else 'run' if t.status == 'running' else 'idle' }}" title="{{ t.status }}"></span><a href="/tasks/{{ t.id }}">{{ t.title }}</a></li>{% endfor %}
       {% for t in wsx.recent_done|reverse %}<li class="done"><span class="ws-dot done" title="done"></span><a href="/tasks/{{ t.id }}">{{ t.title }}</a></li>{% endfor %}</ul>
     </section>
     <section class="mgr-side-sec ws-side">

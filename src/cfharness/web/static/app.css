@@ -605,6 +605,17 @@ progress.bar::-moz-progress-bar { background: var(--accent); border-radius: 99px
 .ws-dot.ok { background: var(--ok); }
 .ws-dot.danger { background: var(--danger); }
 .ws-dot.done { background: var(--muted); opacity: .6; }
+/* đang chạy: chấm xanh có vòng lan ra; đã xong: dấu ✓ nhỏ; chưa có việc: không chấm */
+.ws-dot.run { background: var(--ok); box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); animation: ws-ping 1.4s ease-out infinite; }
+.ws-dot.done { width: 9px; height: 9px; background: none; opacity: 1; position: relative; }
+.ws-dot.done::after { content: ""; position: absolute; left: 2px; top: 0; width: 3px; height: 6px; border: solid var(--muted);
+  border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.ws-dot.none { display: none; }
+.mgr-convs .ct .ws-dot { display: inline-block; margin-right: 6px; vertical-align: middle; }
+@keyframes ws-ping { 70% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--ok) 0%, transparent); } 100% { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .ws-dot.run { animation: none; } }
+/* đổi tab/hội thoại không tải lại trang: mờ khung chat trong lúc chờ */
+.mgr-grid.mgr-loading .mgr-log, .mgr-grid.mgr-loading .mgr-side { opacity: .45; transition: opacity .15s .1s; pointer-events: none; }
 .ws-unread { flex: none; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--on-accent);
   font-size: 11px; line-height: 18px; text-align: center; font-weight: 600; }
 .mgr-convs .ct .ws-unread { display: inline-block; margin-left: 6px; }
