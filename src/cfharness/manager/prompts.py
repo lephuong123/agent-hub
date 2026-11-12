@@ -82,7 +82,16 @@ def result_only(channel: Any, mode: Any) -> bool:
     return mode == "result" and ch.startswith("slack:") and ch[6:7] in ("C", "G")
 
 
-def chat_prompt(channel: str, conversation_id: str, text: str, *, key: str = KEY_PLACEHOLDER, result_only: bool = False) -> str:
+def _ws_tag(workstream: str | None) -> str:
+    """Nhãn luồng việc trong tiêu đề tin (tên do người/điều phối viên đặt → gỡ ký tự khung, cắt ngắn)."""
+    if not workstream:
+        return ""
+    w = neutralize(workstream).replace("[", "(").replace("]", ")")
+    return f" · workstream {w[:100]}"
+
+
+def chat_prompt(channel: str, conversation_id: str, text: str, *, key: str = KEY_PLACEHOLDER, result_only: bool = False,
+                workstream: str | None = None) -> str:
     if result_only:
         tail = ("(Your final message in this turn is posted in the thread as your reply: Vietnamese. If something needs the owner's "
                 "permission, ask with ask_owner_permission / ask_owner — never ask them to type commands. Never write your owner key "
@@ -92,7 +101,7 @@ def chat_prompt(channel: str, conversation_id: str, text: str, *, key: str = KEY
                 "If you started work, say what you assigned and that you will follow it until done. If something needs the owner's "
                 "permission, ask with ask_owner_permission / ask_owner — never ask them to type commands. Never write your owner key anywhere.)")
     return (
-        f"[cfharness · OWNER MESSAGE · key {key} · channel {channel} · conversation {conversation_id} · {iso()}]\n"
+        f"[cfharness · OWNER MESSAGE · key {key} · channel {channel} · conversation {conversation_id}{_ws_tag(workstream)} · {iso()}]\n"
         f"{text.strip()}\n\n" + tail + deliverables_note(channel)
     )
 
@@ -190,8 +199,9 @@ def _origin_note(cid: Any, conv_channels: dict[str, str], result_mode: Any = Non
 
 
 def tick_prompt(events: list[dict[str, Any]], *, dropped: int, reason: str, open_work: int, key: str = KEY_PLACEHOLDER,
-                gates: str = "human", conv_channels: dict[str, str] | None = None, result_mode: Any = None) -> str:
-    head = f"[cfharness heartbeat · key {key} · {iso()} · reason: {reason}]"
+                gates: str = "human", conv_channels: dict[str, str] | None = None, result_mode: Any = None,
+                workstream: str | None = None) -> str:
+    head = f"[cfharness heartbeat · key {key}{_ws_tag(workstream)} · {iso()} · reason: {reason}]"
     conv_channels = conv_channels or {}
     if events:
         lines = [f"- [{e.get('kind')}] {e.get('summary')}" + (_origin_note(e["conversation_id"], conv_channels, result_mode)
@@ -202,6 +212,9 @@ def tick_prompt(events: list[dict[str, Any]], *, dropped: int, reason: str, open
     else:
         body = "No new events. Periodic check."
     body += f"\nTasks you assigned that are not finished yet: {open_work}."
+    if workstream:
+        body += ("\nThese events all belong to this workstream. Update its STATE.md (workstream_state_set) when a task finishes, a PR/"
+                 "branch appears or a decision is made. notify_owner with a task_id lands in that workstream's conversation.")
     if gates != "human":
         body += "\n" + GATES_NOTE.format(mode=gates)
     return (

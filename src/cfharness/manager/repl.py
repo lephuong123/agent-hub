@@ -115,6 +115,7 @@ class ChatSession:
         self.new = new
         self.replay = replay
         self.pasted: dict[int, A.Attachment] = {}  # ảnh dán bằng Ctrl-V, theo số `[Ảnh #n]` trong dòng đang gõ
+        self.next_workstream: str | None = None  # /ws: hội thoại MỚI kế tiếp mở trong luồng này
         self.pasted_text: dict[int, str] = {}  # chữ dán dài/nhiều dòng, theo số `[Pasted text #n …]` trong dòng đang gõ
         self.state: V.ChatState | None = None
         self.changed = asyncio.Event()
@@ -553,6 +554,86 @@ class ChatSession:
         convs = await self.client.call("manager.conversations", {"channel": V.CHANNEL, "limit": 500}) or []
         return next((c for c in convs if c.get("id") == cid), None)
 
+    # ------------------------------------------------------------------ luồng việc (/ws)
+    async def _current_ws(self) -> str | None:
+        st = self.state
+        if st is None or not st.conversation_id:
+            return self.next_workstream
+        conv = await self._find_conv(st.conversation_id)
+        return (conv or {}).get("workstream_id")
+
+    async def _open_ws(self, ws: dict[str, Any]) -> None:
+        """Sang hội thoại cli gần nhất của luồng; chưa có → tin kế tiếp mở hội thoại mới trong luồng."""
+        st = self.state
+        assert st is not None
+        rows = await self.client.call("manager.conversations", {"channel": V.CHANNEL, "workstream": ws["id"], "limit": 1}) or []
+        label = ws.get("label") or ws.get("title")
+        if not rows:
+            st.switch(None)
+            self.next_workstream = ws["id"]
+            self._emit({"kind": "note", "text": f"luồng {label} — tin tiếp theo mở hội thoại mới trong luồng này"})
+            return
+        conv = rows[0]
+        st.switch(conv["id"])
+        self.next_workstream = None
+        hist = await self.client.call("manager.history", {"conversation_id": conv["id"], "limit": max(self.replay, 10)}) or []
+        items = V.history_items(hist)
+        self.banner(st.manager_id, conv["id"], title=f"[{label}] {conv.get('title') or ''}".strip(), resumed=len(items))
+        for it in items:
+            self._emit(it)
+        await self._resume(hist)
+
+    async def cmd_ws(self, arg: str) -> None:
+        sub, _, rest = arg.partition(" ")
+        sub, rest = sub.strip(), rest.strip()
+        cur = await self._current_ws()
+        if not sub:
+            rows = await self.client.call("workstream.list", {"status": "active"}) or []
+            if not rows:
+                self._emit({"kind": "note", "text": "chưa có luồng nào — /ws new <mã> <tên> (vd /ws new LH-55166 Monitor)"})
+                return
+            lines = []
+            for w in rows:
+                t = w.get("tasks") or {}
+                mark = "▸" if w["id"] == cur else " "
+                extra = (f" · {t.get('blocked')} bị chặn" if t.get("blocked") else "") + (f" · ❗{w['needs_human']} cần bạn" if w.get("needs_human") else "")
+                lines.append(f"{mark} {w.get('key') or w['id']:<14} {one_line(w['title'], 40):<40} task {t.get('done', 0)}/{t.get('total', 0)}{extra}")
+            self._emit({"kind": "note", "text": "Luồng việc đang mở (/ws <mã> để chuyển):\n" + "\n".join(lines)})
+            return
+        if sub == "new":
+            key, _, title = rest.partition(" ")
+            if not key:
+                self._emit({"kind": "note", "text": "cần mã: /ws new <mã> <tên>", "tone": "warn"})
+                return
+            w = await self.client.call("workstream.create", {"key": key, "title": title or key}, audit=True)
+            self._emit({"kind": "note", "text": f"đã mở luồng {w['label']}"})
+            await self._open_ws(w)
+            return
+        if sub in ("state", "close", "attach"):
+            ref = rest if sub == "attach" else (rest or cur)
+            if not ref:
+                self._emit({"kind": "note", "text": "hội thoại này chưa thuộc luồng nào (/ws <mã> hoặc /ws attach <mã>)", "tone": "warn"})
+                return
+            if sub == "state":
+                w = await self.client.call("workstream.get", {"id": ref}) or {}
+                self._emit({"kind": "note", "text": f"STATE.md · {w.get('label')} (cập nhật {str(w.get('state_updated_at') or '-')[:16]})\n"
+                                                    + (w.get("state") or "(trống — điều phối viên sẽ ghi khi có quyết định/PR)")})
+            elif sub == "close":
+                w = await self.client.call("workstream.update", {"id": ref, "status": "closed"}, audit=True) or {}
+                self._emit({"kind": "note", "text": f"đã đóng luồng {w.get('label')}"})
+            else:
+                st = self.state
+                assert st is not None
+                if not st.conversation_id:
+                    self.next_workstream = (await self.client.call("workstream.get", {"id": ref}) or {}).get("id")
+                    self._emit({"kind": "note", "text": "tin tiếp theo mở hội thoại mới trong luồng đó"})
+                    return
+                await self.client.call("manager.conversation_update", {"conversation_id": st.conversation_id, "workstream": ref}, audit=True)
+                self._emit({"kind": "note", "text": f"đã gắn hội thoại {st.conversation_id} vào luồng {ref}"})
+            return
+        w = await self.client.call("workstream.get", {"id": sub}) or {}
+        await self._open_ws(w)
+
     # ------------------------------------------------------------------ luồng event
     async def _pump(self) -> None:
         st = self.state
@@ -622,6 +703,8 @@ class ChatSession:
             params["images"] = [a.wire() for a in parsed.images]
         if st.conversation_id:
             params["conversation_id"] = st.conversation_id
+        elif self.next_workstream:
+            params["workstream"] = self.next_workstream
         self._inflight += 1
         try:
             res = await self.client.call("manager.chat", params, audit=True) or {}
@@ -631,6 +714,8 @@ class ChatSession:
         finally:
             self._inflight -= 1
             held, self._held = self._held, []
+        if res.get("conversation_id"):
+            self.next_workstream = None
         for it in st.sent(res, text):
             self._emit(it)
         for ev in held:
@@ -687,6 +772,7 @@ class ChatSession:
                 self.out.write(V.help_text())
             elif cmd == "/new":
                 st.switch(None)
+                self.next_workstream = None
                 self._emit({"kind": "note", "text": "hội thoại mới — tin tiếp theo sẽ mở hội thoại mới"})
             elif cmd in ("/list", "/ls"):
                 rows = await self.client.call("manager.conversations", {"channel": V.CHANNEL}) or []
@@ -706,6 +792,8 @@ class ChatSession:
                 for it in items:
                     self._emit(it)
                 await self._resume(rows)
+            elif cmd == "/ws":
+                await self.cmd_ws(arg)
             elif cmd == "/history":
                 if not st.conversation_id:
                     self._emit({"kind": "note", "text": "hội thoại mới — chưa có lịch sử"})

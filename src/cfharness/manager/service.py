@@ -190,6 +190,9 @@ class ManagerService:
         self._tick_lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
         self._run_keys: dict[str, str] = {}
+        from .workstreams import Workstreams
+
+        self.ws = Workstreams(self)
         hub.bus.add_listener(self._on_event)
 
     # ------------------------------------------------------------------ cấu hình
@@ -335,17 +338,33 @@ class ManagerService:
 
     def _conv_out(self, c: dict[str, Any]) -> dict[str, Any]:
         n = self.conn.execute("SELECT COUNT(*) FROM manager_messages WHERE conversation_id=?", (c["id"],)).fetchone()[0]
+        unread = 0
+        upto = int(c.get("read_upto") or 0)
+        if c["channel"] != HEARTBEAT_CHANNEL:
+            unread = int(self.conn.execute("SELECT COUNT(*) FROM manager_messages WHERE conversation_id=? AND id>? AND role IN ('manager','notify')",
+                                           (c["id"], upto)).fetchone()[0])
         return {"id": c["id"], "channel": c["channel"], "agent_id": c["agent_id"], "session_id": c.get("session_id"), "turns": c.get("turns"),
-                "title": c.get("title"), "messages": int(n), "last_run_id": c.get("last_run_id"), "created_at": c["created_at"], "updated_at": c["updated_at"]}
+                "title": c.get("title"), "messages": int(n), "last_run_id": c.get("last_run_id"), "created_at": c["created_at"], "updated_at": c["updated_at"],
+                "workstream_id": c.get("workstream_id"), "unread": unread, "archived_at": c.get("archived_at")}
 
-    def conversations(self, channel: str | None = None, *, limit: int = 100, all_managers: bool = False) -> list[dict[str, Any]]:
-        sql, args = "SELECT * FROM manager_conversations WHERE archived_at IS NULL", []
+    def conversations(self, channel: str | None = None, *, limit: int = 100, all_managers: bool = False, workstream: str | None = None,
+                      lobby: bool = False, archived: bool = False) -> list[dict[str, Any]]:
+        """Hội thoại (mới → cũ). `workstream` = chỉ hội thoại của luồng đó (id/mã); `lobby` = chỉ hội thoại SẢNH (không gắn luồng,
+        không tính nhịp); `archived` = hội thoại đã lưu trữ thay vì đang mở."""
+        sql = "SELECT * FROM manager_conversations WHERE " + ("archived_at IS NOT NULL" if archived else "archived_at IS NULL")
+        args: list[Any] = []
         if not all_managers:  # MGR-11: mặc định chỉ hội thoại của điều phối viên HIỆN TẠI (web/Telegram không mở nhầm hội thoại cũ)
             sql += " AND agent_id=?"
             args.append(self.agent_id() or "")
         if channel:
             sql += " AND channel=?"
             args.append(channel)
+        if workstream:
+            sql += " AND workstream_id=?"
+            args.append(self.ws.row(workstream)["id"])
+        elif lobby:
+            sql += " AND workstream_id IS NULL AND channel != ?"
+            args.append(HEARTBEAT_CHANNEL)
         sql += " ORDER BY updated_at DESC LIMIT ?"
         args.append(int(limit))
         return [self._conv_out(dict(r)) for r in self.conn.execute(sql, args)]
@@ -356,12 +375,39 @@ class ManagerService:
                                  (cid, int(limit))).fetchall()
         return [{"id": r["id"], "role": r["role"], "text": r["text"], "run_id": r["run_id"], "ts": r["ts"]} for r in rows]
 
-    def _new_conv(self, channel: str, agent_id: str, title: str | None) -> dict[str, Any]:
+    def _new_conv(self, channel: str, agent_id: str, title: str | None, *, workstream_id: str | None = None) -> dict[str, Any]:
         cid = "mc_" + secrets.token_hex(5)
         now = now_iso()
-        self.conn.execute("INSERT INTO manager_conversations (id, channel, agent_id, title, created_at, updated_at) VALUES (?,?,?,?,?,?)",
-                          (cid, channel, agent_id, (title or "")[:80] or None, now, now))
+        self.conn.execute("INSERT INTO manager_conversations (id, channel, agent_id, title, created_at, updated_at, workstream_id) VALUES (?,?,?,?,?,?,?)",
+                          (cid, channel, agent_id, (title or "")[:80] or None, now, now, workstream_id))
+        self.ws.touch(workstream_id)
         return self._conv_row(cid)
+
+    def update_conversation(self, cid: str, *, title: Any = None, workstream: Any = None, archived: bool | None = None,
+                            read: bool = False, by: str = "user") -> dict[str, Any]:
+        """Người sửa hội thoại: đổi tên, gắn/bỏ luồng (`workstream` = id/mã, "" = về sảnh), lưu trữ/mở lại, đánh dấu đã đọc."""
+        c = self._conv_row(cid)
+        if title is not None:
+            t = " ".join(str(title).split())[:80]
+            if not t:
+                raise HubError("tên hội thoại không được rỗng")
+            self.conn.execute("UPDATE manager_conversations SET title=? WHERE id=?", (t, cid))
+        if workstream is not None:
+            self.ws.attach_conversation(cid, workstream or None, by=by)
+        if archived is not None:
+            if archived and c["channel"] == HEARTBEAT_CHANNEL:
+                raise HubError("không lưu trữ hội thoại nhịp tự động")
+            if archived and self._active_runs(c["agent_id"], cid):
+                raise Conflict("hội thoại đang có lượt chạy — đợi xong rồi lưu trữ")
+            self.conn.execute("UPDATE manager_conversations SET archived_at=? WHERE id=?", (now_iso() if archived else None, cid))
+        if read:
+            self.mark_read(cid)
+        return self._conv_out(self._conv_row(cid))
+
+    def mark_read(self, cid: str) -> None:
+        last = self.conn.execute("SELECT MAX(id) FROM manager_messages WHERE conversation_id=?", (cid,)).fetchone()[0]
+        if last:
+            self.conn.execute("UPDATE manager_conversations SET read_upto=? WHERE id=? AND COALESCE(read_upto, 0) < ?", (int(last), cid, int(last)))
 
     def _add_msg(self, cid: str, role: str, text: str, run_id: str | None) -> None:
         cur = self.conn.execute("INSERT INTO manager_messages (conversation_id, role, text, run_id, ts) VALUES (?,?,?,?,?)",
@@ -504,7 +550,18 @@ class ManagerService:
             resume = None
         if not resume and int(conv.get("turns") or 0) > 0:
             carry = prompts.carry_over(self.history(conv["id"], limit=6))
+        if not resume:  # session mới: luồng → STATE.md + task mở; sảnh (hội thoại người) → danh sách luồng đang mở
+            wid = conv.get("workstream_id")
+            try:
+                if wid:
+                    carry = self.ws.context_block(str(wid), prompts.KEY_PLACEHOLDER) + carry
+                elif conv["channel"] != HEARTBEAT_CHANNEL:
+                    carry = self.ws.lobby_block(prompts.KEY_PLACEHOLDER) + carry
+            except Exception:  # pragma: no cover - ngữ cảnh luồng không được chặn lượt điều phối viên
+                log.exception("không dựng được ngữ cảnh luồng cho hội thoại %s", conv["id"])
         opts = {"hub_self": "manager", "manager_conversation": conv["id"], "manager_kind": kind, **(extra_opts or {})}
+        if conv.get("workstream_id"):
+            opts["manager_workstream"] = conv["workstream_id"]
         if rotated:
             opts["manager_rotated"] = rotated
         run = self.hub.runs.submit(aid, carry + prompt, cwd=self._conv_cwd(aid, conv["id"]), budget_usd=budget, kind="manager",
@@ -516,7 +573,8 @@ class ManagerService:
         return run
 
     async def chat(self, channel: str, text: str, *, conversation_id: str | None = None, reuse_latest: bool = False,
-                   images: list[dict[str, Any]] | None = None, files: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                   images: list[dict[str, Any]] | None = None, files: list[dict[str, Any]] | None = None,
+                   workstream: str | None = None) -> dict[str, Any]:
         aid = self.agent_id()
         if not aid:
             raise Conflict("chưa có điều phối viên — chỉ định bằng `cfharness manager set <agent>`")
@@ -532,6 +590,7 @@ class ManagerService:
             raise HubError("kênh 'heartbeat' dành cho nhịp tự động")
         conv = None
         switched_from = None
+        ws_id = self.ws.row(workstream)["id"] if workstream else None  # hội thoại MỚI tạo trong luồng này (web: "＋" trong luồng)
         if conversation_id:
             conv = self._conv_row(conversation_id)
             if conv["channel"] != channel:
@@ -540,11 +599,16 @@ class ManagerService:
                 # MGR-11: đã đổi điều phối viên → chuyển sang hội thoại của manager mới trên cùng kênh (UI dùng conversation_id trả về)
                 switched_from, conv, reuse_latest = conversation_id, None, True
         if conv is None and reuse_latest:
-            r = self.conn.execute("SELECT id FROM manager_conversations WHERE channel=? AND agent_id=? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1",
-                                  (channel, aid)).fetchone()
+            sql = "SELECT id FROM manager_conversations WHERE channel=? AND agent_id=? AND archived_at IS NULL"
+            args: list[Any] = [channel, aid]
+            if ws_id:
+                sql += " AND workstream_id=?"
+                args.append(ws_id)
+            r = self.conn.execute(sql + " ORDER BY updated_at DESC LIMIT 1", args).fetchone()
             conv = self._conv_row(r[0]) if r else None
         if conv is None:
-            conv = self._new_conv(channel, aid, text.splitlines()[0])
+            conv = self._new_conv(channel, aid, text.splitlines()[0], workstream_id=ws_id)
+        self.ws.touch(conv.get("workstream_id"))
         saved_imgs = self._save_images(aid, conv["id"], imgs) if imgs else []
         saved_docs, extracted = self._save_files(aid, conv["id"], docs) if docs else ([], {})
         files = saved_imgs + saved_docs
@@ -554,6 +618,8 @@ class ManagerService:
         if saved_docs:
             text = f"{text}\n📎 {len(saved_docs)} tệp: " + ", ".join(f.rsplit("/", 1)[-1] for f in saved_docs)
         ro = prompts.result_only(channel, self._slack_reply_mode())
+        _w = self.ws.maybe(conv.get("workstream_id")) if conv.get("workstream_id") else None
+        wsl = self.ws.label(_w) if _w else None
         busy = self._active_runs(aid, conv["id"])
         if busy and busy[0]["status"] != "running":
             r = busy[0]
@@ -567,15 +633,19 @@ class ManagerService:
 
             r = busy[0]
             try:
-                res = await steer(self.hub, r["id"], self.render_prompt(r["id"], prompts.chat_prompt(channel, conv["id"], prompt_text, result_only=ro)), by="user", channel=channel)
+                res = await steer(self.hub, r["id"], self.render_prompt(r["id"], prompts.chat_prompt(channel, conv["id"], prompt_text, result_only=ro, workstream=wsl)), by="user", channel=channel)
             except Conflict:
                 raise Conflict(f"điều phối viên đang kết thúc lượt trả lời trước (run {r['id']}) — gửi lại sau giây lát") from None
             self._add_msg(conv["id"], "user", text, r["id"])
-            return {"conversation_id": conv["id"], "run_id": r["id"], "steered": True, "seq": (res or {}).get("seq")}
-        run = self._submit(conv, prompts.chat_prompt(channel, conv["id"], prompt_text, result_only=ro), kind="chat", budget=self.cfg("chat_budget_usd"))
+            self.mark_read(conv["id"])
+            return {"conversation_id": conv["id"], "run_id": r["id"], "steered": True, "seq": (res or {}).get("seq"),
+                    "workstream_id": conv.get("workstream_id")}
+        run = self._submit(conv, prompts.chat_prompt(channel, conv["id"], prompt_text, result_only=ro, workstream=wsl), kind="chat", budget=self.cfg("chat_budget_usd"))
         self._add_msg(conv["id"], "user", text, run["id"])
+        self.mark_read(conv["id"])
         self.conn.execute("UPDATE manager_conversations SET turns=turns+1 WHERE id=?", (conv["id"],))
-        out = {"conversation_id": conv["id"], "run_id": run["id"], "session_id": run["session_id"], "resumed": bool(run.get("resumed_from_session"))}
+        out = {"conversation_id": conv["id"], "run_id": run["id"], "session_id": run["session_id"], "resumed": bool(run.get("resumed_from_session")),
+               "workstream_id": conv.get("workstream_id")}
         if switched_from:
             out["switched_from"] = switched_from
         return out
@@ -649,6 +719,8 @@ class ManagerService:
         kết quả báo về đúng hội thoại đó (Slack: đúng thread người đã tag), không phải "cuộc hoạt động gần nhất"."""
         if not item_id or not conv_id:
             return
+        if kind == "task":  # v24: cột trên task là nguồn chính (không trần); bản đồ hub_state giữ cho run + tương thích
+            self.conn.execute("UPDATE tasks SET manager_conversation_id=? WHERE id=?", (str(conv_id), str(item_id)))
         key = "task_conv" if kind == "task" else "run_conv"
         tr = dict(self.hub.store.state_get("manager_tracked") or {})
         m = {k: v for k, v in dict(tr.get(key) or {}).items() if k != str(item_id)}
@@ -666,11 +738,13 @@ class ManagerService:
         tc = tr.get("task_conv") or {}
         tid, seen = (str(task_id) if task_id else None), set()
         while tid and tid not in seen and len(seen) < 8:
+            r = self.conn.execute("SELECT manager_conversation_id, origin_task_id FROM tasks WHERE id=?", (tid,)).fetchone()
+            if r and r[0]:
+                return str(r[0])
             if tc.get(tid):
                 return str(tc[tid])
             seen.add(tid)
-            t = self.hub.tasks.maybe(tid)
-            tid = str(t["origin_task_id"]) if t and t.get("origin_task_id") else None
+            tid = str(r[1]) if r and r[1] else None
         return None
 
     def _home_conversation(self) -> dict[str, Any] | None:
@@ -741,9 +815,15 @@ class ManagerService:
             conv = None
         if conv:
             data["conversation_id"] = conv
+        try:  # luồng của sự kiện: luồng của task, không thì luồng của hội thoại gốc → tick riêng theo luồng
+            wid = self.ws.of_task(data.get("task_id")) or self.ws.of_conversation(conv)
+        except Exception:  # pragma: no cover
+            wid = None
+        if wid:
+            data["workstream_id"] = wid
         if self._first_pending is None:
             self._first_pending = time.monotonic()
-        self.pending.append({"kind": kind, "summary": summary[:300], "ts": now_iso(), **data})
+        self.pending.append({"kind": kind, "summary": summary[:300], "ts": now_iso(), "_key": key, **data})
 
     def wake_soon(self) -> None:
         """Sự kiện cần điều phối viên xử lý sớm (approval giao cho nó): bỏ thời gian gom `event_debounce_s` — vòng nền (`check_s`)
@@ -883,12 +963,31 @@ class ManagerService:
                 return {"run_id": None, "skipped": "nothing_to_do"}
             return self._tick(aid, tk, reason="events" if self.pending else ("forced" if force else "periodic"), open_work=work)
 
+    def _heartbeat_conv(self, aid: str, wid: str | None) -> dict[str, Any]:
+        """Hội thoại nhịp: một cuộc chung (sự kiện không thuộc luồng nào) + một cuộc mỗi luồng (session riêng, ngữ cảnh = STATE luồng)."""
+        if wid:
+            r = self.conn.execute("SELECT id FROM manager_conversations WHERE channel=? AND agent_id=? AND workstream_id=? AND archived_at IS NULL "
+                                  "ORDER BY updated_at DESC LIMIT 1", (HEARTBEAT_CHANNEL, aid, wid)).fetchone()
+        else:
+            r = self.conn.execute("SELECT id FROM manager_conversations WHERE channel=? AND agent_id=? AND workstream_id IS NULL AND archived_at IS NULL "
+                                  "ORDER BY updated_at DESC LIMIT 1", (HEARTBEAT_CHANNEL, aid)).fetchone()
+        if r:
+            return self._conv_row(r[0])
+        w = self.ws.maybe(wid) if wid else None
+        return self._new_conv(HEARTBEAT_CHANNEL, aid, f"heartbeat · {self.ws.label(w)}" if w else "heartbeat", workstream_id=wid if w else None)
+
     def _tick(self, aid: str, tk: dict[str, Any], *, reason: str, open_work: int) -> dict[str, Any]:
         cap = int(self.cfg("max_pending_events", 40))
-        events, dropped = self.pending[:cap], max(0, len(self.pending) - cap)
-        r = self.conn.execute("SELECT id FROM manager_conversations WHERE channel=? AND agent_id=? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1",
-                              (HEARTBEAT_CHANNEL, aid)).fetchone()
-        conv = self._conv_row(r[0]) if r else self._new_conv(HEARTBEAT_CHANNEL, aid, "heartbeat")
+        # MỘT luồng mỗi lượt (luồng của sự kiện cũ nhất): sự kiện luồng khác chờ lượt sau (khoá chống chồng giữ một run nhịp mỗi lúc)
+        wid = self.pending[0].get("workstream_id") if self.pending else None
+        if wid and self.ws.maybe(wid) is None:
+            wid = None
+        if wid:
+            group = [e for e in self.pending if e.get("workstream_id") == wid]
+        else:  # nhóm chung: sự kiện không thuộc luồng nào (hoặc luồng đã mất)
+            group = [e for e in self.pending if not e.get("workstream_id") or self.ws.maybe(e["workstream_id"]) is None]
+        events, dropped = group[:cap], max(0, len(group) - cap)
+        conv = self._heartbeat_conv(aid, wid)
         from ..guard.profiles import gates_mode
 
         # hội thoại gốc (của người) của các sự kiện — notify_owner/câu hỏi trong lượt này về đúng cuộc đó thay vì đoán
@@ -900,22 +999,28 @@ class ManagerService:
             except NotFound:
                 pass
         prompt = prompts.tick_prompt(events, dropped=dropped, reason=reason, open_work=open_work, gates=gates_mode(self.hub.config),
-                                     conv_channels=conv_channels, result_mode=self._slack_reply_mode())
+                                     conv_channels=conv_channels, result_mode=self._slack_reply_mode(),
+                                     workstream=self.ws.label(self.ws.row(wid)) if wid else None)
         try:
             run = self._submit(conv, prompt, kind="tick", budget=self.cfg("tick_budget_usd"),
                                extra_opts={"tick_convs": tick_convs} if tick_convs else None)
         except HubError as e:
             self.hub.publish(make_event("manager.tick", aid, {"status": "failed", "reason": e.message[:200]}))
             return self._skip("submit_failed: " + e.message[:80])
-        self.pending, self._pending_keys, self._first_pending = [], set(), None
+        done = {id(e) for e in group}
+        self.pending = [e for e in self.pending if id(e) not in done]
+        self._pending_keys = {str(e.get("_key")) for e in self.pending if e.get("_key")}
+        if not self.pending:
+            self._first_pending = None
         self._add_msg(conv["id"], "tick", prompts.tick_digest(events, dropped, reason), run["id"])
         self.conn.execute("UPDATE manager_conversations SET turns=turns+1 WHERE id=?", (conv["id"],))
         now = iso()
         tk.update({"last_tick": now, "last_check": now, "last_run_id": run["id"], "last_reason": reason, "last_skip": None, "events": len(events)})
         self.hub.store.state_set("manager_tick", tk)
         self.hub.publish(make_event("manager.tick", aid, {"status": "started", "reason": reason, "events": len(events), "dropped": dropped,
-                                                         "conversation_id": conv["id"]}, run_id=run["id"]))
-        return {"run_id": run["id"], "conversation_id": conv["id"], "reason": reason, "events": len(events)}
+                                                         "conversation_id": conv["id"], "workstream_id": wid}, run_id=run["id"]))
+        return {"run_id": run["id"], "conversation_id": conv["id"], "reason": reason, "events": len(events), "workstream_id": wid,
+                "pending_events": len(self.pending)}
 
     def run_socket_block(self, caller: "_auth.Caller", method: str) -> str | None:
         """§9: tiến trình con của run điều phối viên (Bash, script… — khung hermes) gọi THẲNG socket hub (khi sandbox không chặn) →

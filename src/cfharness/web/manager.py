@@ -4,8 +4,12 @@ RPC dùng (hợp đồng `docs/plan/M7-manager.md`, MGR-CORE cung cấp): `manag
 `manager.reply{conversation_id, run_id, text}`, `manager.action{tool, target, summary, audit_id}`; cộng `events.subscribe`
 (agent = điều phối viên, level detail) cho chữ chạy (`message.delta`) và kết thúc run.
 
-- `GET /manager[?c=<conv>|?new=1][&run=<run>]`: lịch sử + thẻ hành động + nhịp tick + ô nhập. Chưa có điều phối viên → hướng dẫn
-  + form chỉ định (action `manager_set`, HUMAN_ONLY, hộp xác nhận).
+- `GET /manager[?c=<conv>|?new=1][&w=<luồng>][&run=<run>]`: lịch sử + thẻ hành động + nhịp tick + ô nhập. Chưa có điều phối viên →
+  hướng dẫn + form chỉ định (action `manager_set`, HUMAN_ONLY, hộp xác nhận).
+- Luồng việc (docs/dev-notes/workstreams.md): thanh bên = Sảnh (hội thoại web không gắn luồng) + các luồng đang mở (chấm trạng thái,
+  số tin chưa đọc) + luồng đã đóng. `?w=<luồng>` mở hội thoại web gần nhất của luồng (chưa có → hội thoại mới trong luồng, ô nhập
+  mang `w`). Panel phải trong luồng = STATE.md (sửa được) + task của luồng + hội thoại kênh khác. Thao tác: `ws_create|ws_edit|ws_close|
+  ws_reopen|ws_state|conv_rename|conv_move|conv_archive` (HUMAN_ONLY ở daemon). Mở hội thoại → `manager.conversation_read`.
 - `POST /manager/send`: `post_guard` (CSRF + Origin + khoá phiên WT-1) → `manager.chat(channel=web)` (`_audit.channel=web`).
   Có header `X-Ahub-Fetch` (app.js) → JSON (mục đã vẽ sẵn phía server); không → 303 về trang (form thuần).
   Đính kèm (multipart, trường `attach`, chọn bằng nút 📎 / kéo–thả / dán ảnh): ảnh PNG/JPEG/GIF/WebP (nhận theo magic bytes) → `images`,
@@ -105,6 +109,30 @@ async def _web_convs(request: Request) -> list[dict[str, Any]]:
     return sorted([c for c in out if c["id"]], key=lambda c: str(c.get("updated_at") or ""), reverse=True)
 
 
+async def _workstreams(request: Request) -> dict[str, Any]:
+    """Dữ liệu thanh bên luồng việc: luồng đang mở (+ số tin chưa đọc gộp mọi kênh), số luồng đã đóng, hội thoại SẢNH (web).
+    Daemon cũ chưa có `workstream.*` → rỗng (trang vẫn chạy như trước)."""
+    try:
+        active = await rpc(request, "workstream.list", {"status": "active"}) or []
+        closed = await rpc(request, "workstream.list", {"status": "closed", "limit": 50}) or []
+        convs = await rpc(request, "manager.conversations", {"limit": 500}) or []
+    except RpcError:
+        return {"enabled": False, "active": [], "closed": [], "lobby": []}
+    unread: dict[str, int] = {}
+    for c in convs:
+        if isinstance(c, dict) and c.get("workstream_id") and c.get("channel") != "heartbeat":
+            unread[c["workstream_id"]] = unread.get(c["workstream_id"], 0) + int(c.get("unread") or 0)
+    for w in active:
+        w["unread"] = unread.get(w["id"], 0)
+        t = w.get("tasks") or {}
+        w["dot"] = "danger" if t.get("blocked") or w.get("needs_human") else "ok" if t.get("running") else "done" if t.get("total") and not t.get("open") else "idle"
+    lobby = sorted([P.mgr_conv(c) | {"unread": int(c.get("unread") or 0)} for c in convs
+                    if isinstance(c, dict) and c.get("channel") == CHANNEL and not c.get("workstream_id")],
+                   key=lambda c: str(c.get("updated_at") or ""), reverse=True)
+    return {"enabled": True, "active": active, "closed": closed, "lobby": lobby,
+            "by_id": {w["id"]: w for w in active + closed}, "convs": {c["id"]: c for c in convs if isinstance(c, dict)}}
+
+
 async def _actions(request: Request, agent_id: str) -> list[dict[str, Any]]:
     """Thẻ `manager.action` gần nhất của điều phối viên (event lưu DB), cũ → mới."""
     try:
@@ -170,7 +198,24 @@ async def manager_page(request: Request) -> Response:
             pass
         return await render(request, "manager.html", ctx)
     convs = await _web_convs(request)
-    cid = None if q.get("new") else (q.get("c") or (convs[0]["id"] if convs else None))
+    wsd = await _workstreams(request)
+    ws_id = str(q.get("w") or "").strip() or None
+    if q.get("c") and not ws_id:  # hội thoại thuộc luồng → hiện trong ngữ cảnh luồng
+        ws_id = (wsd.get("convs", {}).get(q.get("c")) or {}).get("workstream_id")
+    if ws_id and ws_id not in wsd.get("by_id", {}):
+        try:  # tra theo mã (vd ?w=LH-55166)
+            ws_id = (await rpc(request, "workstream.get", {"id": ws_id}) or {}).get("id")
+        except RpcError:
+            ws_id = None
+    if ws_id and not q.get("c") and not q.get("new"):  # ?w= → hội thoại web gần nhất của luồng (chưa có → mới trong luồng)
+        try:
+            wc = await rpc(request, "manager.conversations", {"channel": CHANNEL, "workstream": ws_id, "limit": 1}) or []
+        except RpcError:
+            wc = []
+        cid = wc[0]["id"] if wc else None
+    else:
+        lobby = wsd.get("lobby") if wsd.get("enabled") else convs
+        cid = None if q.get("new") else (q.get("c") or (lobby[0]["id"] if lobby else None))
     msgs: list[dict[str, Any]] = []
     if cid:
         try:
@@ -197,8 +242,28 @@ async def manager_page(request: Request) -> Response:
                 pending = run["id"]
         except RpcError:
             pass
+    wsx = None
+    if ws_id:
+        try:
+            wsx = await rpc(request, "workstream.get", {"id": ws_id})
+        except RpcError:
+            wsx = None
+    if cid:
+        try:
+            await rpc(request, "manager.conversation_read", {"conversation_id": cid})
+            for c in wsd.get("lobby") or []:
+                if c["id"] == cid:
+                    c["unread"] = 0
+        except (RpcError, DaemonUnavailable):
+            pass
+    cur_conv = (wsd.get("convs") or {}).get(cid) if cid else None
+    ws_convs = [P.mgr_conv(c) | {"channel": c.get("channel")} for c in (wsd.get("convs") or {}).values()
+                if wsx and c.get("workstream_id") == wsx["id"] and c.get("channel") != "heartbeat"]
+    ws_convs.sort(key=lambda c: str(c.get("updated_at") or ""), reverse=True)
     ctx.update({"convs": convs, "conv": cid, "items": items, "side_actions": list(reversed(acts))[:12], "pending": pending,
-                "conv_runs": sorted({m["run_id"] for m in msgs if m.get("run_id")} | ({pending} if pending else set()))})
+                "conv_runs": sorted({m["run_id"] for m in msgs if m.get("run_id")} | ({pending} if pending else set())),
+                "wsd": wsd, "wsx": wsx, "ws_convs": ws_convs, "cur_conv": cur_conv,
+                "cur_title": (cur_conv or {}).get("title")})
     return await render(request, "manager.html", ctx)
 
 
@@ -220,7 +285,8 @@ async def manager_send(request: Request) -> Response:
     want_json = bool(request.headers.get("x-ahub-fetch"))
     text = str(form.get("text") or "").strip()
     cid = str(form.get("c") or "").strip() or None
-    back = "/manager" + (f"?c={cid}" if cid else "")
+    wsid = str(form.get("w") or "").strip() or None
+    back = "/manager" + (f"?c={cid}" if cid else f"?w={wsid}&new=1" if wsid else "")
 
     def fail(msg: str, code: int = 400) -> Response:
         if want_json:
@@ -237,6 +303,8 @@ async def manager_send(request: Request) -> Response:
     params: dict[str, Any] = {"channel": CHANNEL, "text": text}
     if cid:
         params["conversation_id"] = cid
+    elif wsid:
+        params["workstream"] = wsid
     if images:
         params["images"] = images
     if files:
@@ -315,8 +383,48 @@ def mgr_set_confirm(f: Any) -> str:
             "xoá vĩnh viễn, tắt ESTOP, sửa cấu hình của chính nó, đặt bypassPermissions. Mọi thao tác ghi nhật ký `manager:" + aid + "` và rollback được.")
 
 
+def _ws_goto(res: Any, f: Any) -> str:
+    wid = (res or {}).get("id") or f.get("id")
+    return f"/manager?w={wid}" if wid else "/manager"
+
+
+def _conv_goto(res: Any, f: Any) -> str:
+    return f"/manager?c={(res or {}).get('id') or f.get('conversation_id')}"
+
+
+def _opt(f: Any, k: str) -> str | None:
+    v = str(f.get(k) or "").strip()
+    return v or None
+
+
 def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
-    """Thêm thao tác ghi của trang Điều phối vào bảng `ACTIONS` (HUMAN_ONLY ở daemon; luôn qua hộp xác nhận)."""
+    """Thêm thao tác ghi của trang Điều phối vào bảng `ACTIONS` (HUMAN_ONLY ở daemon). Chỉ định/huỷ, đóng luồng, lưu trữ hội thoại
+    qua hộp xác nhận; tạo/sửa luồng, STATE, đổi tên/chuyển hội thoại làm ngay (dễ sửa lại)."""
+    actions["ws_create"] = Action(
+        "workstream.create", lambda f: {"title": _opt(f, "title") or _req(f, "key", "mã hoặc tên"), "key": _opt(f, "key"), "sprint": _opt(f, "sprint")},
+        lambda r, f: f"Đã mở luồng {(r or {}).get('label') or ''}", goto=_ws_goto)
+    actions["ws_edit"] = Action(
+        "workstream.update", lambda f: {"id": _req(f, "id", "luồng"), "title": _opt(f, "title"), "key": _opt(f, "key") or "", "sprint": _opt(f, "sprint") or ""},
+        "Đã lưu luồng", goto=_ws_goto)
+    actions["ws_state"] = Action(
+        "workstream.update", lambda f: {"id": _req(f, "id", "luồng"), "state": str(f.get("state") or "")},
+        "Đã lưu STATE.md — điều phối viên đọc lại ở session mới", goto=_ws_goto)
+    actions["ws_close"] = Action(
+        "workstream.update", lambda f: {"id": _req(f, "id", "luồng"), "status": "closed"}, "Đã đóng luồng",
+        confirm=lambda f: f"Đóng luồng {f.get('label') or f.get('id')}?\nTask đang chạy vẫn chạy tiếp; luồng chuyển xuống mục Đã đóng và mở lại được.",
+        goto=lambda r, f: "/manager")
+    actions["ws_reopen"] = Action(
+        "workstream.update", lambda f: {"id": _req(f, "id", "luồng"), "status": "active"}, "Đã mở lại luồng", goto=_ws_goto)
+    actions["conv_rename"] = Action(
+        "manager.conversation_update", lambda f: {"conversation_id": _req(f, "conversation_id", "hội thoại"), "title": _req(f, "title", "tên")},
+        "Đã đổi tên hội thoại", goto=_conv_goto)
+    actions["conv_move"] = Action(
+        "manager.conversation_update", lambda f: {"conversation_id": _req(f, "conversation_id", "hội thoại"), "workstream": str(f.get("workstream") or "")},
+        lambda r, f: "Đã chuyển hội thoại " + ("về Sảnh" if not f.get("workstream") else "sang luồng"), goto=_conv_goto)
+    actions["conv_archive"] = Action(
+        "manager.conversation_update", lambda f: {"conversation_id": _req(f, "conversation_id", "hội thoại"), "archived": True},
+        "Đã lưu trữ hội thoại", confirm="Lưu trữ hội thoại này? Nó biến khỏi danh sách (lịch sử vẫn giữ trong hub).",
+        goto=lambda r, f: f"/manager?w={f.get('w')}" if f.get("w") else "/manager")
     actions["manager_set"] = Action(
         "manager.set", lambda f: {"agent_id": _req(f, "agent_id", "agent")},
         lambda r, f: f"Đã chỉ định {f.get('agent_id')} làm điều phối viên", confirm=mgr_set_confirm, danger=True,

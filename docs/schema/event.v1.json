@@ -286,7 +286,8 @@
     "usage.tick": "summary",
     "user.message": "summary",
     "workspace.checkpoint": "debug",
-    "workspace.diff": "summary"
+    "workspace.diff": "summary",
+    "workstream.updated": "summary"
   },
   "x-not-persisted": [
     "message.delta",
