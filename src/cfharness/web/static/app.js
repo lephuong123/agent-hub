@@ -292,6 +292,73 @@
       while (fh.children.length > 120) fh.removeChild(fh.lastChild);
     };
   }
+  // ------------------------------------------------------------ Công việc realtime (SSE /sse/tasks → tải lại partial)
+  // Server chỉ gửi {"t":"refresh"}; ở đây gom loạt (400 ms), tải /partials/... cùng query lọc, thay đúng khung (outerHTML).
+  // SSE chết (daemon tắt, mạng) → tự nối lại có giãn; trong lúc chưa nối được thì hỏi lại mỗi 15 s (chỉ khi SSE KHÔNG mở → không tải đôi).
+  var tb = document.querySelector("[data-sse-tasks]");
+  if (tb && window.EventSource && window.htmx) (function () {
+    var boxId = tb.id, sseUrl = tb.getAttribute("data-sse-tasks"), partUrl = tb.getAttribute("data-refresh") + location.search;
+    var timer = null, busy = false, again = false, es = null, live = false, poll = null, backoff = 2000, everOpen = false;
+    function box() { return document.getElementById(boxId); }
+    function snap(el) {  // id → "trạng thái|chữ" để biết thẻ nào vừa đổi
+      var m = {}, cs = el ? el.querySelectorAll("[data-id]") : [];
+      for (var i = 0; i < cs.length; i++) m[cs[i].getAttribute("data-id")] = (cs[i].getAttribute("data-status") || "") + "|" + cs[i].textContent;
+      return m;
+    }
+    function editing(el) {  // người đang thao tác trong khung (gõ câu trả lời, hộp xác nhận mở) → hoãn, không làm mất chữ
+      if (document.querySelector("dialog[open]")) return true;
+      var a = document.activeElement;
+      if (a && el.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return true;
+      var fs = el.querySelectorAll("textarea, input[type=text], input:not([type])");
+      for (var i = 0; i < fs.length; i++) if (fs[i].value !== fs[i].defaultValue) return true;
+      return false;
+    }
+    function refresh() {
+      timer = null;
+      var el = box();
+      if (!el) return;
+      if (busy || editing(el)) { again = true; if (!busy) schedule(3000); return; }
+      busy = true; again = false;
+      var before = snap(el), focusId = null, a = document.activeElement;
+      if (a && el.contains(a)) { var c = a.closest("[data-id]"); focusId = c && c.getAttribute("data-id"); }
+      window.htmx.ajax("GET", partUrl, { target: el, swap: "outerHTML" }).then(function () {
+        var now = box();
+        if (!now) return;
+        refreshTimes(now);
+        var after = now.querySelectorAll("[data-id]");
+        for (var i = 0; i < after.length; i++) {
+          var id = after[i].getAttribute("data-id"), sig = (after[i].getAttribute("data-status") || "") + "|" + after[i].textContent;
+          if (before[id] !== sig && after[i].classList.contains("tcard")) {
+            after[i].classList.add("tcard-changed");
+            setTimeout((function (n) { return function () { n.classList.remove("tcard-changed"); }; })(after[i]), 2500);
+          }
+          if (focusId && id === focusId) after[i].focus({ preventScroll: true });
+        }
+      }, function () {}).then(function () { busy = false; if (again) schedule(400); });
+    }
+    function schedule(ms) { if (!timer) timer = setTimeout(refresh, ms); }
+    function startPoll() { if (!poll) poll = setInterval(function () { if (!live) schedule(0); }, 15000); }
+    function connect() {
+      es = new EventSource(sseUrl);
+      es.onopen = function () {
+        live = true; backoff = 2000;
+        if (everOpen) schedule(0);  // nối lại: server không phát lại (since = seq hiện tại) → tải lại một lần cho chắc
+        everOpen = true;
+      };
+      es.onmessage = function (ev) {
+        var m;
+        try { m = JSON.parse(ev.data); } catch (_) { return; }
+        if (m.t === "refresh") schedule(400);
+        else if (m.t === "end") { es.close(); live = false; startPoll(); setTimeout(connect, backoff); }
+      };
+      es.onerror = function () {
+        live = false; startPoll();
+        if (es.readyState === 2) { backoff = Math.min(backoff * 2, 60000); setTimeout(connect, backoff); }  // CLOSED (401/5xx): trình duyệt bỏ cuộc → tự nối lại
+      };
+    }
+    connect();
+    window.addEventListener("pagehide", function () { if (es) es.close(); });
+  })();
   // ------------------------------------------------------------ Điều phối (trò chuyện với điều phối viên)
   // Mục HTML do server vẽ sẵn (autoescape) — chữ chạy (delta) chỉ gán bằng textContent. Không bao giờ dựng HTML từ chữ của agent.
   var ml = document.querySelector("[data-sse-manager]");

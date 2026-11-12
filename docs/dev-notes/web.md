@@ -193,3 +193,7 @@ HUB_HOME tạm; Playwright Chromium 1280×860 đăng nhập bằng dòng `LOGIN`
 Module `web/memory_pages.py` + `static/memory_graph.js` (đồ thị SVG tự viết, CSP-safe) + RPC chỉ đọc mới `learn.graph_view`
 (learning/graph_view.py, HUMAN_ONLY, phạm vi + quét lúc nạp như `memory.recall`). Ghi qua `learn.propose` (created_by=user) / `knowledge.pin` /
 `learn.rollback` / `learn.graph_consolidate`, audit kênh web. Chi tiết: `docs/dev-notes/web-memory.md`. Test `tests/test_web_memory.py`.
+
+## Công việc realtime (`/sse/tasks`, `/partials/tasks`, `/partials/task/<id>`, 2026-11-12)
+Bảng kanban và trang một task tự cập nhật khi task/câu hỏi/run của task đổi (SSE chỉ báo "refresh", trình duyệt gom loạt rồi tải partial).
+Chi tiết, quyết định (không poll khi SSE sống, không ghi đè khi đang gõ): `docs/dev-notes/tasks-realtime.md`. Test `tests/test_web_tasks_realtime.py`.

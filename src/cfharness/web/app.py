@@ -31,6 +31,7 @@ from starlette.templating import Jinja2Templates
 
 from .. import auth as _auth
 from ..errors import BLOCKED
+from ..events import TERMINAL_RUN_EVENTS
 from ..paths import HubPaths
 from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
 from ..tui.client import AsyncHubClient, subscribe
@@ -847,7 +848,8 @@ async def approvals_page(request: Request) -> Response:
     return await render(request, "approvals.html", {"nav": "approvals", "pend": sorted(pend, key=lambda a: a.get("opened_at") or ""), "hist": hist})
 
 
-async def tasks_page(request: Request) -> Response:
+async def _tasks_board(request: Request) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Dữ liệu bảng kanban (dùng chung cho trang /tasks và partial /partials/tasks — cùng tham số team, all)."""
     q = request.query_params
     params: dict[str, Any] = {"limit": 500}
     if q.get("team"):
@@ -859,16 +861,37 @@ async def tasks_page(request: Request) -> Response:
     cols = {c: [t for t in tasks if t.get("status") == c] for c in P.TASK_COLUMNS}
     if not q.get("all"):
         cols["done"] = cols["done"][:15]
+    return tasks, {"cols": cols, "q": dict(q)}
+
+
+async def tasks_page(request: Request) -> Response:
+    tasks, board = await _tasks_board(request)
     teams = await rpc(request, "team.list", {})
     agents = [a["id"] for a in await rpc(request, "agent.list", {})]
     open_tasks = [t for t in tasks if t.get("status") not in ("done", "archived")]
-    return await render(request, "tasks.html", {"nav": "tasks", "cols": cols, "teams": teams, "agents": agents, "open_tasks": open_tasks, "q": dict(q)})
+    return await render(request, "tasks.html", {"nav": "tasks", **board, "teams": teams, "agents": agents, "open_tasks": open_tasks})
+
+
+async def partial_tasks(request: Request) -> Response:
+    _, board = await _tasks_board(request)
+    sess = session_of(request)
+    return ws(request).templates.TemplateResponse(request, "_tasks_board.html", {**board, "csrf": sess.csrf if sess else ""})
+
+
+async def _task_ctx(request: Request) -> dict[str, Any]:
+    t = await rpc(request, "task.get", {"id": request.path_params["id"]})
+    qs = await questions(request, "all", task_id=t["id"])
+    return {"nav": "tasks", "t": t, "task_questions": [q for q in qs if q["status"] in ("open", "with_manager")]}
 
 
 async def task_page(request: Request) -> Response:
-    t = await rpc(request, "task.get", {"id": request.path_params["id"]})
-    qs = await questions(request, "all", task_id=t["id"])
-    return await render(request, "task.html", {"nav": "tasks", "t": t, "task_questions": [q for q in qs if q["status"] in ("open", "with_manager")]})
+    return await render(request, "task.html", await _task_ctx(request))
+
+
+async def partial_task(request: Request) -> Response:
+    ctx = await _task_ctx(request)
+    sess = session_of(request)
+    return ws(request).templates.TemplateResponse(request, "_task_main.html", {**ctx, "csrf": sess.csrf if sess else "", "oob": True})
 
 
 async def teams_page(request: Request) -> Response:
@@ -1442,6 +1465,34 @@ async def sse_firehose(request: Request) -> Response:
     return StreamingResponse(_stream(request, params, conv), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
+# Bảng Công việc realtime (docs/dev-notes/tasks-realtime.md): chỉ báo "vẽ lại", trình duyệt gom loạt rồi tải /partials/tasks
+TASK_REFRESH_RUN_EVENTS = frozenset({"run.started", *TERMINAL_RUN_EVENTS})
+
+
+def tasks_refresh(ev: dict[str, Any], task_ids: frozenset[str] | None = None) -> bool:
+    """Event có làm đổi thẻ/cột trên bảng Công việc (hoặc trang một task khi có `task_ids`) không — hàm thuần."""
+    t = ev.get("type") or ""
+    tid = ev.get("task_id") or (ev.get("payload") or {}).get("task_id")
+    if t.startswith("task.") and t != "task.background":  # task.background = tool Task của claude (detail), không phải task hub
+        hit = True
+    elif t.startswith("question.") or t in TASK_REFRESH_RUN_EVENTS:  # câu hỏi/run chỉ liên quan khi gắn task (chi phí, "chờ bạn")
+        hit = tid is not None
+    else:
+        return False
+    return hit and (task_ids is None or tid in task_ids)
+
+
+async def sse_tasks(request: Request) -> Response:
+    ids = frozenset(x for x in (request.query_params.get("task") or "").split(",") if x) or None
+
+    def conv(ev: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"t": "refresh"}] if tasks_refresh(ev, ids) else []
+
+    st = await rpc(request, "hub.status")  # không phát lại: trang vừa vẽ (hoặc nối lại → client tự tải lại một lần)
+    params = {"level": "summary", "since_seq": int(st.get("last_seq") or 0), "epoch": st.get("epoch")}
+    return StreamingResponse(_stream(request, params, conv), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 # ============================================================================ lỗi
 async def http_error(request: Request, exc: Exception) -> Response:
     code = getattr(exc, "status_code", 500)
@@ -1557,6 +1608,8 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/approvals", approvals_page),
         Route("/tasks", tasks_page),
         Route("/tasks/{id}", task_page),
+        Route("/partials/tasks", partial_tasks),
+        Route("/partials/task/{id}", partial_task),
         Route("/teams", teams_page),
         Route("/learnings", learnings_page),
         Route("/learnings/{id}", ledger_entry),
@@ -1569,6 +1622,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/do/{name}", do_action, methods=["POST"]),
         Route("/sse/run/{id}", sse_run),
         Route("/sse/firehose", sse_firehose),
+        Route("/sse/tasks", sse_tasks),
         *_manager_routes(),
         *_extra_routes(),
         *_office_routes(),
