@@ -10,7 +10,8 @@
 
 Giai đoạn 2 (duyệt + chat ngay trong 3D):
 - `POST /office/do/{name}` → JSON: chỉ `OFFICE_ACTIONS` (approve, deny, approve_always, approve_rule, answer; nói chuyện với agent: steer,
-  run_continue, run_start — trả thêm `run_id`, câu trả lời stream qua `/sse/run/{id}` sẵn có) — dùng ĐÚNG `Action` trong
+  run_continue, run_start — trả thêm `run_id`, câu trả lời stream qua `/sse/run/{id}` sẵn có; bảng quản lý agent: agent_pause,
+  agent_resume, stop) — dùng ĐÚNG `Action` trong
   `app.ACTIONS` và CÙNG cổng `app.plan_action` với web 2D (xác nhận → bước 2 nặng / luôn cho phép / theo luật), sau `post_guard`
   (Origin, CSRF, khoá phiên `k`). Không gọi RPC ghi nào khi chưa có `confirm=yes` (và `confirm2=yes` khi có bước 2) — kể cả thao tác
   mà 2D không hỏi xác nhận (trả lời câu hỏi, cho phép theo luật): bấm nhầm trong cảnh 3D dễ hơn trên form.
@@ -171,6 +172,10 @@ def build_state(snap: dict[str, Any], qs: list[dict[str, Any]], teams: list[dict
     """Thuần: gộp kết quả RPC thành JSON `/office/state` (chỉ các khoá trong hợp đồng; chữ tự do đã cắt)."""
     h = snap.get("hub") or {}
     asking = {q.get("agent_id") for q in qs or [] if isinstance(q, dict)}
+    q_count: dict[str, int] = {}
+    for q in qs or []:
+        if isinstance(q, dict) and q.get("agent_id"):
+            q_count[q["agent_id"]] = q_count.get(q["agent_id"], 0) + 1
     membership: dict[str, tuple[str, str]] = {}
     task_counts = dict.fromkeys(TASK_KEYS, 0)
     team_rows = []
@@ -206,6 +211,13 @@ def build_state(snap: dict[str, Any], qs: list[dict[str, Any]], teams: list[dict
             "run_id": safe_id(r.get("current_run_id")),
             "approvals": len(r.get("pending_approvals") or []),
             "is_manager": bool(manager_id) and aid == manager_id,
+            # bảng quản lý agent (office-agent-board.md): chỉ số / cờ / id / giờ — không chữ tự do mới
+            "paused": bool(r.get("paused")),
+            "run_status": _word(r.get("run_status")) if r.get("current_run_id") else None,
+            "started_at": one_line(r.get("run_started_at"), 40),
+            "run_cost_usd": _num(r.get("run_cost_usd")),
+            "cost_today_usd": _num(r.get("cost_today_usd")),
+            "questions": q_count.get(r.get("id"), 0),
         })
     es = h.get("estop")
     return {
@@ -317,7 +329,10 @@ async def sse_office(request: Request) -> Response:
 # tên 3D → tên trong `app.ACTIONS` (cùng Action, cùng cổng `plan_action` với 2D)
 OFFICE_ACTIONS = {"approve": "approve", "deny": "deny", "approve_always": "approve_always", "approve_rule": "approve_rule", "answer": "question_answer",
                   # nói chuyện với agent trong chế độ đi bộ (office-coordinator.md): CHỈ 3 action run sẵn có của 2D, cùng Action/cổng
-                  "steer": "steer", "run_continue": "run_continue", "run_start": "run_start"}
+                  "steer": "steer", "run_continue": "run_continue", "run_start": "run_start",
+                  # bảng quản lý agent (office-agent-board.md): tạm dừng / tiếp tục agent, dừng run — Action 2D đã có `confirm` nên
+                  # `plan_action` LUÔN trả bước xác nhận trước khi có `confirm=yes`
+                  "agent_pause": "agent_pause", "agent_resume": "agent_resume", "stop": "stop"}
 # thao tác chạy run: trả thêm `run_id` để cảnh 3D mở /sse/run/{id} (stream câu trả lời) — run mới (start/continue) hoặc run được chỉ đạo
 RUN_ACTIONS = {"steer", "run_continue", "run_start"}
 # thao tác 2D không có hộp xác nhận → cảnh 3D vẫn hỏi (bước `confirm`) trước khi gọi RPC. Gửi tin cho agent = có thể tốn tiền:

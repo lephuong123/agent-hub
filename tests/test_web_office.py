@@ -103,7 +103,8 @@ async def test_office_state_shape(env):
     assert d["approvals"] == [] and d["questions"] == [] and d["runs"] == []
     assert [t["id"] for t in d["teams"]] == ["toa-soan", "zz-team"]
     ag = {a["id"]: a for a in d["agents"]}
-    keys = {"id", "name", "role", "team", "team_role", "status", "tool", "task", "run_id", "approvals", "is_manager"}
+    keys = {"id", "name", "role", "team", "team_role", "status", "tool", "task", "run_id", "approvals", "is_manager",
+            "paused", "run_status", "started_at", "run_cost_usd", "cost_today_usd", "questions"}
     assert all(set(a) == keys for a in d["agents"])
     lt = ag["lap-trinh"]
     assert lt["team"] == "toa-soan" and lt["team_role"] == "worker"  # nhiều team → team đầu tiên
@@ -361,7 +362,7 @@ async def test_office_do_guard_rejects_missing_csrf_key_or_cross_origin(held):
         r = await env.client.post("/office/do/approve", data=c["data"], headers=c["headers"])
         assert r.status_code == 403 and r.json()["ok"] is False, c
     assert env.hub.approvals.get(ap["id"])["status"] == "open"
-    r = await office_post(env, "stop", {"id": run["id"], "confirm": "yes"})  # ngoài danh sách trắng
+    r = await office_post(env, "run_resume", {"id": run["id"], "confirm": "yes"})  # ngoài danh sách trắng
     assert r.status_code == 404 and r.json()["ok"] is False
     r = await office_post(env, "estop", {"on": "1", "confirm": "yes"})
     assert r.status_code == 404 and not env.hub.runs.estop.get("on")

@@ -9,6 +9,9 @@ import { Panel, COLORS as C, MONO, lineItems, clean } from './ui.js';
 import { fmtDur } from './boards.js';
 
 const GRANT_LABEL = { '': 'Không hạn', '8h': '8 giờ', '24h': '24 giờ', '7d': '7 ngày', '30d': '30 ngày' };
+// thao tác điều khiển agent từ bảng quản lý agent (office-agent-board.md) + biểu tượng bật lên trên đầu nhân vật khi xong
+export const CONTROLS = new Set(['agent_pause', 'agent_resume', 'stop']);
+const CONTROL_POP = { agent_pause: '💤', agent_resume: '▶️', stop: '⏹' };
 const STATUS_AP = { open: 'đang chờ', waiting_human: 'chờ bạn', allowed: 'đã cho phép', denied: 'đã từ chối', cancelled: 'đã huỷ' };
 
 // ------------------------------------------------------------------ gọi server (CSRF + khoá phiên)
@@ -128,7 +131,7 @@ export function createFlows(o) {
     if (d.need === 'confirm2') { step2(name, fields, d, ctx); return; }
     if (d.ok) {
       o.toast(d.message || 'Đã xong', true);
-      if (ctx.agent) o.pop(ctx.agent, name === 'deny' ? '❌' : '✅');
+      if (ctx.agent) o.pop(ctx.agent, CONTROL_POP[name] || (name === 'deny' ? '❌' : '✅'));
       modals.clear();
       o.refresh();
       return;
@@ -154,7 +157,7 @@ export function createFlows(o) {
         }
         const bw = Math.min(300, (W - 2 * pad - 24) / 2), by = H - 110;
         ui.button('cancel', W - pad - 2 * bw - 24, by, bw, 72, 'Huỷ', { onClick: () => modals.pop(p) });
-        ui.button('yes', W - pad - bw, by, bw, 72, d.danger ? 'Đồng ý từ chối' : 'Đồng ý', {
+        ui.button('yes', W - pad - bw, by, bw, 72, d.danger ? (name === 'deny' ? 'Đồng ý từ chối' : name === 'stop' ? 'Dừng run' : 'Đồng ý') : 'Đồng ý', {
           kind: d.danger ? 'danger' : 'primary',
           // NGƯỜI bấm → mới gửi confirm=yes
           onClick: () => {
@@ -377,5 +380,17 @@ export function createFlows(o) {
     });
   }
 
-  return { openApproval, openQuestion, openLogout, ask };
+  // Bảng quản lý agent / thẻ nhân vật: tạm dừng, tiếp tục agent, dừng run. Lần gửi đầu KHÔNG có confirm → server (Action 2D có `confirm`)
+  // trả need:"confirm" với thông điệp của nó → bảng xác nhận 3D; chỉ nút "Đồng ý"/"Dừng run" do NGƯỜI bấm mới gửi confirm=yes.
+  async function control(name, id, agent) {
+    if (!CONTROLS.has(name) || !id) return;
+    const fields = { id };
+    const res = await api.post('/office/do/' + encodeURIComponent(name), fields);
+    if (res.error) { o.toast(errorOf(res), false); return; }
+    const d = res.data || {};
+    if (d.need === 'confirm') { confirmStep(name, fields, d, { agent }); return; }
+    o.toast('Phản hồi không rõ từ hub', false); // server luôn hỏi xác nhận trước — không bao giờ "ok" ngay
+  }
+
+  return { openApproval, openQuestion, openLogout, ask, control };
 }
