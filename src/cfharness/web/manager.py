@@ -44,6 +44,7 @@ from .app import CHANNEL, _stream, err_text, flash_redirect, post_guard, render,
 
 HISTORY_LIMIT = 200
 ACTIONS_SCAN = 3000  # số event gần nhất của điều phối viên quét để lấy thẻ `manager.action`
+PENDING_SCAN = 5000  # event tối đa của MỘT lượt đang chạy đọc lại khi tải trang (tool đang dùng + checklist)
 MAX_TEXT = 8000
 ATTACH_FIELD = "attach"
 
@@ -196,7 +197,50 @@ def _timeline(msgs: list[dict[str, Any]], acts: list[dict[str, Any]], qs: list[d
             out.append({"kind": "actions", "run_id": it.get("run_id"), "items": [it], "ok": it["ok"], "ts": it.get("ts")})
             continue
         out.append(it)
+    return with_days(out)
+
+
+def with_days(items: list[dict[str, Any]], today: Any = None) -> list[dict[str, Any]]:
+    """P2: vạch ngăn theo ngày ("Hôm nay", "Hôm qua", "Thứ Hai, 10/11/2026") trước mục ĐẦU TIÊN của mỗi ngày (mục không có giờ giữ ngày
+    trước). Tin tới qua SSE sau nửa đêm không tự thêm vạch (tải lại trang thì có)."""
+    out: list[dict[str, Any]] = []
+    cur = ""
+    for it in items:
+        key, lab = P.day_label(it.get("ts"), today)
+        if key and key != cur:
+            out.append({"kind": "day", "key": key, "text": lab})
+            cur = key
+        out.append(it)
     return out
+
+
+def pending_info(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """P2: tải lại trang khi lượt điều phối viên CÒN chạy → khung "đang trả lời" hiện ngay tool đang dùng (hoặc vừa dùng) và checklist
+    TodoWrite gần nhất, lấy từ event đã lưu (`events.query` theo run). Chữ thuần (template autoescape)."""
+    open_: dict[str, str] = {}
+    last = ""
+    todo: dict[str, Any] | None = None
+    for ev in sorted(events, key=lambda e: (str(e.get("ts") or ""), int(e.get("seq") or 0))):
+        if ev.get("subagent_id"):
+            continue
+        t = ev.get("type")
+        p = ev.get("payload") or {}
+        if t == "tool.start":
+            ti = P.todo_item(ev)
+            if ti:
+                todo = ti
+                continue
+            inp = p.get("input") if isinstance(p.get("input"), dict) else None
+            v = P.tool_view(str(p.get("name") or "?"), inp, summary=str(p.get("args_preview") or ""))
+            last = " ".join(x for x in (v.get("verb"), v.get("target")) if x)[:120] or short_tool(str(p.get("name") or "?"))
+            open_[str(p.get("tool_id") or "")] = last
+        elif t == "tool.complete":
+            open_.pop(str(p.get("tool_id") or ""), None)
+    if open_:
+        label = "Đang dùng " + list(open_.values())[-1] + (f" (+{len(open_) - 1})" if len(open_) > 1 else "") + "…"
+    else:
+        label = f"Vừa dùng {last}" if last else ""
+    return {"tool": label, "todo": todo}
 
 
 def question_from_event(ev: dict[str, Any]) -> dict[str, Any]:
@@ -266,12 +310,14 @@ async def manager_page(request: Request) -> Response:
     items = _timeline(msgs, acts, conv_qs)
     # tin cuối của người chưa có trả lời + run còn chạy → khung "đang trả lời" (chữ chạy tới qua SSE)
     pending = None
+    pinfo: dict[str, Any] = {}
     want = q.get("run") or next((m.get("run_id") for m in reversed(msgs) if m["kind"] == "user"), None)
     if want and not any(m["kind"] == "manager" and m.get("run_id") == want for m in msgs):
         try:
             run = await rpc(request, "run.get", {"id": want})
             if P.is_live_run(run):
                 pending = run["id"]
+                pinfo = pending_info(await rpc(request, "events.query", {"run_id": pending, "limit": PENDING_SCAN}) or [])
         except RpcError:
             pass
     wsx = None
@@ -292,7 +338,7 @@ async def manager_page(request: Request) -> Response:
     ws_convs = [P.mgr_conv(c) | {"channel": c.get("channel"), "running": bool(c.get("running"))} for c in (wsd.get("convs") or {}).values()
                 if wsx and c.get("workstream_id") == wsx["id"] and c.get("channel") != "heartbeat"]
     ws_convs.sort(key=lambda c: str(c.get("updated_at") or ""), reverse=True)
-    ctx.update({"convs": convs, "conv": cid, "items": items, "side_actions": list(reversed(acts))[:12], "pending": pending,
+    ctx.update({"convs": convs, "conv": cid, "items": items, "side_actions": list(reversed(acts))[:12], "pending": pending, "pinfo": pinfo,
                 "conv_runs": sorted({m["run_id"] for m in msgs if m.get("run_id")} | ({pending} if pending else set())),
                 "wsd": wsd, "wsx": wsx, "ws_convs": ws_convs, "cur_conv": cur_conv,
                 "ws_web_convs": [c | {"unread": 0 if c["id"] == cid else int(((wsd.get("convs") or {}).get(c["id"]) or {}).get("unread") or 0)}
@@ -499,8 +545,13 @@ def _converter(request: Request, clock: Any = None) -> Any:
             inp = p.get("input") if isinstance(p.get("input"), dict) else None
             v = P.tool_view(name, inp, summary=str(p.get("args_preview") or "")) if t == "tool.start" else {}
             label = " ".join(x for x in (v.get("verb"), v.get("target")) if x)[:120]
-            return [{"t": "tool", "run": rid, "id": str(p.get("tool_id") or ""), "name": short_tool(name), "label": label or short_tool(name),
+            msgs = [{"t": "tool", "run": rid, "id": str(p.get("tool_id") or ""), "name": short_tool(name), "label": label or short_tool(name),
                      "done": t == "tool.complete", "error": bool(p.get("is_error"))}]
+            todo = P.todo_item(ev)
+            if todo:  # P2: checklist TodoWrite trong khung "đang trả lời" — HTML do server vẽ (macro tx_todo, autoescape)
+                txm = ws(request).templates.env.get_template("_transcript.html").module
+                msgs.append({"t": "todo", "run": rid, "html": str(txm.tx_todo(todo))})
+            return msgs
         if t == "manager.reply":
             run = p.get("run_id") or rid
             notify = p.get("kind") == "notify" or bool(p.get("notify"))
@@ -511,7 +562,8 @@ def _converter(request: Request, clock: Any = None) -> Any:
                 streamed = full(b)
                 if streamed.strip():
                     text = streamed if _norm(text) in _norm(streamed) else streamed + "\n\n" + text
-            it = {"kind": "manager", "text": text, "ts": ev.get("ts"), "run_id": run, "notify": notify, "tick": p.get("kind") == "tick"}
+            it = {"kind": "manager", "text": text, "ts": ev.get("ts"), "run_id": run, "notify": notify, "tick": p.get("kind") == "tick",
+                  "cut": P.cut_note("Tin", len(str(p.get("text") or "")), run) if p.get("truncated") else ""}
             return [{"t": "reply", "run": run, "conv": p.get("conversation_id"), "notify": notify, "html": str(mod.item(it))}]
         if t == "manager.action":
             it = P.mgr_action_item(ev)

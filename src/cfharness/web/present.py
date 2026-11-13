@@ -24,7 +24,7 @@ __all__ = [
     "md", "transcript_item", "parse_ts", "wait_reason", "activity_item", "agent_status", "run_status", "is_live_run", "first_line", "tokens_of",
     "run_title", "question_view", "QUESTION_STATUS", "avatar_tone", "iso_ts",
     "tool_view", "merge_tool", "Transcript", "mark_final", "same_text", "url_host", "code_html", "highlight",
-    "group_items", "group_view", "group_dom",
+    "group_items", "group_view", "group_dom", "todo_view", "todo_item", "cut_note", "vi_num", "block_seq", "page_blocks", "day_label",
 ]
 
 # (icon trong /static/icons.svg, nhãn, tông màu CSS)
@@ -365,14 +365,18 @@ def transcript_item(ev: dict[str, Any]) -> dict[str, Any] | None:
     t = ev.get("type", "")
     p = ev.get("payload") or {}
     base = {"seq": ev.get("seq"), "ts": fmt_ts(ev.get("ts"), date=False), "iso": iso_ts(ev.get("ts")) if ev.get("ts") else "",
-            "sub": bool(ev.get("subagent_id")), "sid": ev.get("subagent_id") or None}
+            "sub": bool(ev.get("subagent_id")), "sid": ev.get("subagent_id") or None, "run": ev.get("run_id") or ""}
     if ev.get("subagent_id") and t in ("message.delta", "reasoning.delta", "message.complete", "reasoning.progress", "reasoning.complete"):
         return None
     if t == "message.complete":
         text = p.get("text") or ""
-        return {**base, "kind": "msg", "html": md(text), "text": text} if text.strip() else None
+        if not text.strip():
+            return None
+        return {**base, "kind": "msg", "html": md(text), "text": text, "cut": cut_note("Tin", len(text), ev.get("run_id")) if p.get("truncated") else ""}
     if t == "reasoning.complete":
-        return {**base, "kind": "reasoning", "text": p.get("text") or ("(suy nghĩ bị ẩn)" if p.get("redacted") else "")}
+        text = p.get("text") or ""
+        return {**base, "kind": "reasoning", "text": text or ("(suy nghĩ bị ẩn)" if p.get("redacted") else ""),
+                "cut": cut_note("Suy nghĩ", len(text), ev.get("run_id")) if p.get("truncated") else ""}
     if t == "run.queued":
         budget = p.get("max_budget_usd")
         return {**base, "kind": "prompt", "dom": f"ev-prompt-{ev.get('seq')}", "text": p.get("prompt_preview") or "",
@@ -439,6 +443,17 @@ def transcript_item(ev: dict[str, Any]) -> dict[str, Any] | None:
     if t == "run.takeover":
         return {**base, "kind": "note", "tone": "info", "text": "Người tiếp quản bằng Claude Code"}
     return None
+
+
+def vi_num(n: int) -> str:
+    """8000 → "8.000" (dấu chấm ngăn nghìn kiểu Việt)."""
+    return f"{int(n):,}".replace(",", ".")
+
+
+def cut_note(what: str, n: int, run_id: Any = None) -> str:
+    """Báo rõ khi hub chỉ giữ phần đầu (P2): "Tin bị cắt ở 8.000 ký tự — xem đủ bằng `cfharness runs logs <id>`" (log thô của run giữ
+    nguyên văn stdout của CLI). Chữ thuần — template autoescape; lệnh nằm trong `<code>` (macro `tx_cut`)."""
+    return f"{what} bị cắt ở {vi_num(n)} ký tự" + (" — xem đủ bằng" if run_id else "")
 
 
 # ---------------------------------------------------------------------------- dòng tool kiểu Claude (P0-7)
@@ -545,6 +560,40 @@ def merge_tool(prev: dict[str, Any], it: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------- TodoWrite → checklist (P2)
+TODO_STATUS = {"completed": "xong", "in_progress": "đang làm", "pending": "chưa làm"}
+TODO_MAX = 50  # mục tối đa vẽ ra (phần sau → "… còn N mục")
+
+
+def todo_view(todos: Any) -> dict[str, Any]:
+    """`input.todos` của TodoWrite ([{content, status, activeForm}]) → checklist: mục đang làm hiện `activeForm` ("Đang chạy test"),
+    mục khác hiện `content`. Mọi chữ là DỮ LIỆU (template autoescape). `current` = việc đang làm (tiêu đề khi gập)."""
+    rows: list[dict[str, Any]] = []
+    for t in todos if isinstance(todos, list) else []:
+        if not isinstance(t, dict):
+            continue
+        st = str(t.get("status") or "pending")
+        st = st if st in TODO_STATUS else "pending"
+        text = str((t.get("activeForm") if st == "in_progress" else None) or t.get("content") or t.get("activeForm") or "")
+        rows.append({"text": " ".join(text.split())[:TARGET_MAX], "status": st, "label": TODO_STATUS[st]})
+    done = sum(1 for r in rows if r["status"] == "completed")
+    cur = next((r["text"] for r in rows if r["status"] == "in_progress"), "")
+    return {"rows": rows[:TODO_MAX], "more": max(0, len(rows) - TODO_MAX), "n": len(rows), "done": done, "current": cur}
+
+
+def todo_item(ev: dict[str, Any]) -> dict[str, Any] | None:
+    """`tool.start` của TodoWrite (cấp ngoài) → MỘT mục "Việc cần làm" mỗi run (`dom = todo-<run>`): lần cập nhật sau thay tại chỗ."""
+    p = ev.get("payload") or {}
+    if ev.get("type") != "tool.start" or p.get("name") != "TodoWrite" or ev.get("subagent_id"):
+        return None
+    inp = p.get("input") if isinstance(p.get("input"), dict) else {}
+    if not isinstance(inp.get("todos"), list):
+        return None
+    return {"kind": "todo", "dom": f"todo-{ev.get('run_id') or 'run'}", "seq": ev.get("seq"), "ts": fmt_ts(ev.get("ts"), date=False),
+            "iso": iso_ts(ev.get("ts")) if ev.get("ts") else "", "sub": False, "sid": None, "run": ev.get("run_id") or "",
+            "todo": todo_view(inp["todos"])}
+
+
 # ---------------------------------------------------------------------------- gom tool liên tiếp (P1-2) — hàm thuần, dùng lại được
 GROUP_CLOSE_AT = 3  # nhóm đã xong, không lỗi, từ N tool trở lên → gập sẵn
 NEST_KINDS = ("tool", "note")  # mục của subagent được lồng vào mục tool Task/Agent cha; duyệt/câu hỏi luôn ở cấp ngoài
@@ -615,12 +664,31 @@ class Transcript:
         self.nodes = 0  # số khối cấp ngoài đã nối (mục không phải tool + nhóm mới) — live biết khi nào client mở khối mới
         self._prompt: dict[str, Any] | None = None
         self._steer: dict[str, Any] | None = None
+        self._todo_ids: set[Any] = set()  # tool_id của các lần gọi TodoWrite đã thành checklist
+        self.think_tokens: int | None = None  # ước lượng token suy nghĩ gần nhất (`reasoning.progress`) — gắn vào khối suy nghĩ kế
 
     def feed(self, ev: dict[str, Any]) -> list[dict[str, Any]]:
-        it = transcript_item(ev)
+        t = ev.get("type")
+        p = ev.get("payload") or {}
+        if t == "reasoning.progress":  # P2: "Đã suy nghĩ · ~1.2k token" trên khối suy nghĩ
+            if not ev.get("subagent_id") and isinstance(p.get("estimated_tokens"), (int, float)):
+                self.think_tokens = int(p["estimated_tokens"])
+            return []
+        it = todo_item(ev)
+        if it is not None:  # P2: TodoWrite → một checklist mỗi run, cập nhật tại chỗ (không thành dòng tool)
+            self._todo_ids.add(p.get("tool_id"))
+        elif t == "tool.complete" and p.get("tool_id") in self._todo_ids and not ev.get("subagent_id"):
+            if not p.get("is_error"):
+                return []
+            it = transcript_item(ev)  # lỗi: vẫn hiện dòng tool lỗi
+        else:
+            it = transcript_item(ev)
         if it is None:
             return []
         k = it["kind"]
+        if k == "reasoning" and not it.get("sub"):
+            it["tokens"] = fmt_tokens(self.think_tokens) if self.think_tokens else ""
+            self.think_tokens = None
         if k == "start" and self._prompt is not None and not self._prompt.get("start"):
             self._prompt["start"] = it
             return [self._prompt]
@@ -640,8 +708,10 @@ class Transcript:
                     it[key] = prev[key]
                 else:
                     it.pop(key, None)
+            it["seq0"] = prev.get("seq0")
             self.items[i] = it
         else:
+            it["seq0"] = it.get("seq")  # seq của event TẠO mục (giữ khi thay tại chỗ) — mốc phân trang run dài (`?before=`)
             i = len(self.items)
             if dom:
                 self._at[dom] = i
@@ -694,6 +764,51 @@ class Transcript:
         return chain
 
 
+# ---------------------------------------------------------------------------- run dài (P2): chỉ vẽ phần cuối, tải dần phần trước
+LONG_RUN = 300  # trên N khối cấp ngoài → chỉ vẽ LONG_PAGE khối cuối + nút "Hiện các mục trước"
+LONG_PAGE = 150
+
+
+def block_seq(b: dict[str, Any]) -> Any:
+    """Mốc của một khối cấp ngoài = seq của event TẠO nó (nhóm → tool đầu nhóm). Nhóm không bao giờ bị cắt đôi."""
+    first = (b.get("tools") or [b])[0] if b.get("kind") == "group" else b
+    return first.get("seq0") if first.get("seq0") is not None else first.get("seq")
+
+
+def page_blocks(blocks: list[dict[str, Any]], before: int | None = None) -> tuple[list[dict[str, Any]], Any, int]:
+    """Phân trang KHỐI (nhóm tool giữ nguyên): trả (khối cần vẽ, mốc `before` cho nút tải phần trước hoặc None, số khối còn ẩn).
+    `before=None` (mở trang): ≤ LONG_RUN khối → vẽ hết; nhiều hơn → LONG_PAGE khối cuối. `before=<seq>` (partial): các khối TRƯỚC khối
+    có mốc đó, tối đa LONG_PAGE khối cuối của phần ấy (mốc không có → rỗng)."""
+    if before is not None:
+        idx = next((i for i, b in enumerate(blocks) if block_seq(b) == before), None)
+        if idx is None:
+            return [], None, 0
+        blocks = blocks[:idx]
+        if len(blocks) <= LONG_PAGE:
+            return blocks, None, 0
+    elif len(blocks) <= LONG_RUN:
+        return blocks, None, 0
+    shown = blocks[-LONG_PAGE:]
+    return shown, block_seq(shown[0]), len(blocks) - len(shown)
+
+
+def day_label(ts: Any, today: Any = None) -> tuple[str, str]:
+    """(khoá ngày "YYYY-MM-DD", nhãn): "Hôm nay" / "Hôm qua" / "Thứ Hai, 10/11/2026" — vạch ngăn theo ngày (giờ máy chủ). ("", "") nếu
+    không đọc được thời gian."""
+    t = parse_ts(ts)
+    if t is None:
+        return "", ""
+    d = datetime.fromtimestamp(t).date()
+    now = today or datetime.now().date()
+    if d == now:
+        lab = "Hôm nay"
+    elif (now - d).days == 1:
+        lab = "Hôm qua"
+    else:
+        lab = ("Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ nhật")[d.weekday()] + d.strftime(", %d/%m/%Y")
+    return d.isoformat(), lab
+
+
 def mark_final(items: list[dict[str, Any]]) -> str:
     """Đánh dấu tin agent CUỐI (`final`) và trả chữ gốc của nó ("" nếu không có)."""
     for it in reversed(items):
@@ -711,8 +826,8 @@ def same_text(a: str | None, b: str | None) -> bool:
 
 def stats_of(ev: dict[str, Any]) -> dict[str, Any] | None:
     p = ev.get("payload") or {}
-    if ev.get("type") == "usage.tick":
-        return {"tokens": fmt_tokens(p.get("total_tokens")), "cost": fmt_cost(p.get("cost_usd"))}
+    if ev.get("type") == "usage.tick":  # `out` = token đầu ra (dòng trạng thái "✳ Đang nghĩ… 12s · 3.4k token")
+        return {"tokens": fmt_tokens(p.get("total_tokens")), "cost": fmt_cost(p.get("cost_usd")), "out": fmt_tokens(p.get("output_tokens"))}
     return None
 
 
@@ -955,8 +1070,14 @@ def mgr_message(m: dict[str, Any]) -> dict[str, Any] | None:
         kind = "manager"
     else:
         return None
-    return {"kind": kind, "text": str(text or ""), "ts": m.get("ts") or m.get("created_at"), "run_id": m.get("run_id"),
-            "notify": role == "notify" or bool(m.get("notify")), "tick": role == "tick"}
+    text = str(text or "")
+    cut = kind == "manager" and (bool(m.get("truncated")) or len(text) >= MGR_TEXT_MAX)
+    return {"kind": kind, "text": text, "ts": m.get("ts") or m.get("created_at"), "run_id": m.get("run_id"),
+            "notify": role == "notify" or bool(m.get("notify")), "tick": role == "tick",
+            "cut": cut_note("Tin", len(text), m.get("run_id")) if cut else ""}
+
+
+MGR_TEXT_MAX = 20_000  # = manager.service.TEXT_MAX (trần chữ trả lời lưu DB) — chạm trần ⇒ đã bị cắt
 
 
 def mgr_conv(c: dict[str, Any]) -> dict[str, Any]:

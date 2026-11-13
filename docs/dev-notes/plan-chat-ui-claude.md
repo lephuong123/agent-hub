@@ -89,12 +89,14 @@ Mọi ràng buộc an toàn hiện có vẫn giữ nguyên:
 | P1-11 | Duyệt và câu hỏi chỉ hiện đầy đủ một chỗ (trong transcript chỉ còn một dòng link tới thẻ) | S |
 
 ### Đợt 3 — P2: hoàn thiện
-- TodoWrite thành checklist cập nhật tại chỗ.
-- Báo rõ khi tin bị cắt.
-- Ẩn bớt khi run trên 300 mục.
-- Spinner "✳ Đang nghĩ… 12s · 3.4k token".
-- Vạch ngăn theo ngày.
-- Mobile: vùng an toàn và `visualViewport`.
+Trạng thái phần web: xem mục 7, PR `feat/chat-ui-polish`.
+- ✅ TodoWrite thành checklist cập nhật tại chỗ.
+- ✅ Báo rõ khi tin bị cắt.
+- ✅ Ẩn bớt khi run trên 300 mục.
+- ✅ Spinner "✳ Đang nghĩ… 12s · 3.4k token".
+- ✅ Vạch ngăn theo ngày.
+- ✅ Mobile: vùng an toàn và `visualViewport` (chưa thử trên máy thật).
+- ✅ (thêm) Sao chép cả tin / output tool; ✅ `.udiff` trang diff không còn dòng trống; ⏭ gom tool của điều phối viên bằng `tx_group` — bỏ (lý do ở mục 7).
 - ~~`<blockquote expandable>` cho Telegram.~~ Xong (sau cờ, mặc định tắt) — PR `feat/style-eval-telegram`, mục 7.
 - ~~Golden eval chấm phong cách trả lời: không có id `t_…`, fence có ngôn ngữ, độ dài, tiếng Việt.~~ Xong — PR `feat/style-eval-telegram`, mục 7.
 
@@ -253,3 +255,37 @@ These rules apply to free-text replies a person reads. When you are asked for st
   - Telegram: `notify.telegram.expandable_details` (mặc định tắt) + `/lệnh` vô hiệu ở mọi vị trí — chi tiết ở `telegram.md` mục cuối.
   - Test: `tests/test_style_eval.py` (mẫu tốt/xấu tiếng Việt, checker, `eval.style` chỉ đọc, CLI), `tests/test_mdconv.py`,
     `tests/tg_html.py`; cập nhật 3 test Telegram (`</thẻ>` của agent giờ có U+2060 sau "/"). Chưa kiểm trên Telegram thật.
+- **P2 phần web (PR `feat/chat-ui-polish`)**:
+  - TodoWrite → MỘT mục "Việc cần làm" mỗi run (`todo-<run>`, `present.todo_item`/`todo_view`, macro `tx_todo`): `tool.start` của TodoWrite
+    cấp ngoài không thành dòng tool nữa; lần cập nhật sau thay tại chỗ (giữ chỗ lần đầu xuất hiện, `Transcript` đổi theo `dom`); ô tích
+    `disabled`, mục đang làm hiện `activeForm`; `tool.complete` lỗi vẫn hiện dòng tool lỗi; TodoWrite của subagent giữ dạng tool lồng.
+    Màn rộng: khối dính đầu vùng cuộn (sticky); điện thoại không dính (che quá nhiều). Điều phối: SSE `{t:"todo", html}` → checklist trong
+    khung đang trả lời (mất khi câu trả lời cuối thay khung).
+  - Báo cắt: `present.cut_note` + macro `tx_cut` — "Tin/Suy nghĩ/Output bị cắt ở N ký tự — xem đủ bằng `cfharness runs logs <id>`" (log thô
+    của run giữ nguyên văn stdout CLI) cho `message.complete.truncated`, `reasoning.complete.truncated`, output tool chạm trần 2.000; tin điều
+    phối viên có `truncated` (SSE) hoặc dài đúng trần 20.000 (lịch sử).
+  - Run dài: `present.page_blocks` — trên 300 KHỐI cấp ngoài (nhóm tool tính là một khối, không bao giờ cắt đôi) chỉ vẽ 150 khối cuối +
+    nút "Hiện các mục trước (N mục)" → `GET /partials/run/<id>/items?before=<seq>` (htmx outerHTML, cần đăng nhập, cùng `replay_tx` + macro;
+    `before` = `seq0` = seq của event TẠO khối, giữ nguyên khi thay tại chỗ; mốc lạ → rỗng; không phải số → 400). Lệch: đếm khối chứ không
+    đếm mục. Mốc theo seq có thể trùng giữa hai epoch (daemon khởi động lại giữa run) — hiếm, chấp nhận.
+  - Sao chép: nút `.tx-copy.tx-copy-src` + `<template class="tx-src">` (văn bản gốc, autoescape) dưới mỗi tin agent và ở tiêu đề Output
+    của tool; handler `.tx-copy` sẵn có đọc `template.content.textContent` (không bao giờ `data-*`). Giờ của tin nằm trong hàng thao tác.
+  - Dòng trạng thái: `#tx-status` dưới transcript run live — "✳ Đang nghĩ… 12s · 3.4k token"; giây đếm phía client từ `data-start`
+    (`started_at`), chữ từ SSE `{t:"status", state, label}` (`app.run_status_line`: `turn.start`, `tool.generating`, `tool.start`
+    "Chạy npm test…", duyệt/câu hỏi "Chờ…") hoặc loại delta đang tới ("Đang viết…"), token = `stats.out` (output_tokens của `usage.tick`).
+    `reasoning.progress` → `{t:"status", think_tokens:"~1.2k"}` (tiêu đề khối suy nghĩ live) và, khi phát lại, `Transcript.think_tokens`
+    gắn vào khối suy nghĩ kế tiếp: "Đã suy nghĩ · ~1.2k token". Không message nào mang HTML.
+  - Điều phối: `manager.with_days` chèn vạch ngày ("Hôm nay"/"Hôm qua"/"Thứ Hai, 10/11/2026", giờ máy chủ) trước mục đầu mỗi ngày (tin SSE
+    sau nửa đêm không tự thêm vạch). Tải lại khi lượt còn chạy: `manager.pending_info(events.query run_id)` → khung đang trả lời hiện
+    "Đang dùng Đọc STATE.md…" (hoặc "Vừa dùng …") + checklist gần nhất.
+    **Bỏ**: gom tool của điều phối viên bằng `group_items`/`tx_group` — tool của điều phối viên chủ yếu là MCP hub (`agent_create`,
+    `task_create`…) mà mỗi lời gọi đã thành thẻ `manager.action` trong chip "Đã làm N việc"; vẽ thêm nhóm tool sẽ lặp cùng một việc hai lần
+    với tên kỹ thuật. Giữ chip + dòng "Đang dùng …".
+  - Mobile: `.composer-wrap`/`.run-dock` đệm `env(safe-area-inset-bottom)` (màn hẹp: thanh tab đáy đã chừa, chỉ khi bàn phím mở);
+    `visualViewport` (trang chat/run) → `--vvh` + `html.kb-open` (`.main` cao bằng phần nhìn thấy, ẩn thanh tab, `scrollTo(0,0)`) — chỉ
+    CSSOM, không `style=`; hàng thao tác (`.tx-acts`, `.mm-foot`) luôn hiện trên `(hover:none)`; code/bảng cuộn ngang trong khối
+    (đã có, kiểm lại ở 390 px). Chưa thử bàn phím ảo trên iPhone/Android thật.
+  - `.udiff` trang diff run (`_run_diff.html`): có "\n" giữa các `<span class="dl">` (display:block) trong `<pre>` → dòng trống giữa MỌI hàng;
+    đã bỏ.
+  - Test: `tests/test_web_polish.py`; cập nhật `test_web_questions.py` (vạch ngày). Kiểm bằng `web.demo` + sự kiện giả + Playwright
+    (1280/390, sáng/tối): không tràn ngang, không lỗi console/CSP.

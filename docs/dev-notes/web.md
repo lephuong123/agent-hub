@@ -221,3 +221,7 @@ Chi tiết, quyết định (không poll khi SSE sống, không ghi đè khi đa
   `disabled` thật khi trống; autosize lấy trần từ `max-height` CSS; `#mgr-log` bỏ `aria-live`, thêm `#mgr-status-live` (`role=status`, ẩn)
   báo "Điều phối viên đã trả lời". Log `overflow-anchor: none`, không `scroll-behavior: smooth`; nút `#mgr-jump` "Tin mới nhất" (cuộn mượt)
   hiện khi người đã cuộn lên mà có nội dung mới.
+- **P2 hoàn thiện** (chi tiết: `plan-chat-ui-claude.md` mục 7): checklist TodoWrite `todo-<run>` thay tại chỗ; báo cắt kèm
+  `cfharness runs logs <id>`; run > 300 khối → 150 khối cuối + `GET /partials/run/<id>/items?before=<seq>` (`_run_items.html`); Sao chép cả
+  tin/output (`<template class="tx-src">`); dòng trạng thái `#tx-status` (SSE `{t:"status"}`, `stats.out`); vạch ngày + khung đang trả lời
+  khôi phục tool/checklist khi tải lại ở Điều phối; safe-area + `visualViewport` (`--vvh`, `html.kb-open`). Test `tests/test_web_polish.py`.

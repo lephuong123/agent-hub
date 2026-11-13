@@ -1215,3 +1215,61 @@ a.tx-line-a:hover { text-decoration: none; } a.tx-line-a:hover b { text-decorati
   .run-composer .btn-t { display: none; }
   .tx-line-a { white-space: normal; }
 }
+
+/* ============================================================ P2 hoàn thiện (docs/dev-notes/plan-chat-ui-claude.md Đợt 3) */
+/* TodoWrite → checklist "Việc cần làm": một khối mỗi run, thay tại chỗ; dính đầu vùng cuộn khi đọc phần phía dưới */
+.ti.tx-todo { z-index: 1; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 0; font-size: var(--fs-sm); }
+@media (min-width: 761px) { .run-page .ti.tx-todo { position: sticky; top: 0; } .run-page .tx-todo-list { max-height: 9.5rem; } }  /* điện thoại: không dính (che quá nhiều) */
+.tx-todo-sum { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 6px 10px; cursor: pointer; list-style: none; color: var(--text-2); }
+.tx-todo-sum::-webkit-details-marker { display: none; }
+.tx-todo-h { flex: none; font-weight: 650; color: var(--text); }
+.tx-todo-cur { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--info); }
+.tx-todo[open] > .tx-todo-sum .tx-chev { transform: rotate(180deg); }
+.tx-todo-sum .tx-time { margin-left: auto; }
+.tx-todo-list { list-style: none; margin: 0; padding: 2px 10px 8px; max-height: 16rem; overflow-y: auto; }
+.tx-todo-list .td { display: flex; align-items: flex-start; gap: 8px; padding: 2px 0; color: var(--text-2); }
+.tx-todo-list .td input { margin: 3px 0 0; flex: none; accent-color: var(--ok); }
+.tx-todo-list .td.completed > span { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line-2); }
+.tx-todo-list .td.in_progress > span { color: var(--text); font-weight: 600; }
+.tx-todo-now { flex: none; color: var(--info); font-size: var(--fs-xs); }
+.tx-todo-list .td.more { color: var(--muted); font-size: var(--fs-xs); }
+.mm.pending .tx-todo { position: static; margin: 4px 0 8px; }
+
+/* báo rõ khi hub chỉ giữ phần đầu */
+.tx-cutnote { display: flex; align-items: flex-start; gap: 6px; margin: 6px 0 0; color: var(--warn); font-size: var(--fs-xs); }
+.tx-cutnote .ic { flex: none; margin-top: 1px; }
+.tx-cutnote code { overflow-wrap: anywhere; }
+
+/* Sao chép cả tin / output tool (văn bản gốc trong <template class="tx-src">) */
+.tx-acts { display: flex; align-items: center; gap: 2px; margin-top: 2px; min-height: 26px; opacity: 0; transition: opacity .15s; }
+.tx-acts .tx-time { opacity: 1; margin-left: auto; }
+.ti.msg:hover > .tx-acts, .ti.msg:focus-within > .tx-acts, .ti.msg.final > .tx-acts { opacity: 1; }
+.tx-copy.tx-copy-src { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-xs); min-height: 26px; }
+.tx-copy.tx-copy-src.done { color: var(--ok); }
+.tx-io-h .tx-copy.tx-copy-src { margin-left: 6px; min-height: 22px; padding: 1px 6px; font-weight: 500; vertical-align: middle; }
+@media (hover: none) { .tx-acts { opacity: 1; } }
+
+/* dòng trạng thái live "✳ Đang nghĩ… 12s · 3.4k token" */
+.tx-status { display: flex; align-items: baseline; gap: 4px; margin: 10px 0 0; padding: 0 4px; color: var(--accent-text); font-size: var(--fs-sm); min-width: 0; }
+.tx-status[hidden] { display: none; }
+.tx-status-ic { flex: none; display: inline-block; color: var(--accent-mark); animation: think-spin 2.4s linear infinite; }
+.tx-status-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.tx-status-m { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* run dài: nút tải phần trước */
+.tx-older { align-self: center; }
+
+/* Điều phối: vạch ngăn theo ngày */
+.mm-day { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
+.mm-day::before, .mm-day::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+/* mobile: vùng an toàn (iPhone không nút home) cho hai ô nhập; bàn phím ảo → .main cao bằng visual viewport (app.js đặt --vvh) */
+.composer-wrap, .run-dock { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+html.kb-open body.chat-page .main, html.kb-open body.run-page .main { height: var(--vvh, 100dvh); padding-bottom: 0; }
+html.kb-open .tabbar { display: none; }
+.md, .tx-msg { min-width: 0; max-width: 100%; }
+@media (max-width: 760px) {
+  .composer-wrap, .run-dock { padding-bottom: 8px; }  /* thanh tab đáy đã chừa vùng an toàn */
+  html.kb-open .composer-wrap, html.kb-open .run-dock { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+}
+.ti.msg > .md > :last-child { margin-bottom: 0; }

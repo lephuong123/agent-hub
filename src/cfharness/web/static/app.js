@@ -44,6 +44,25 @@
   refreshTimes();
   setInterval(refreshTimes, 30000);
   document.body.addEventListener("htmx:afterSwap", function (e) { refreshTimes(e.target); });
+  document.body.addEventListener("htmx:load", function (e) { refreshTimes(e.target); });  // phần tử mới (vd "Hiện các mục trước", swap outerHTML)
+
+  // P2 mobile: bàn phím ảo — trên iOS (và Chrome Android mặc định) bàn phím chỉ thu nhỏ VISUAL viewport, 100dvh không đổi → ô nhập bị che.
+  // Trang chat/run: đặt --vvh = chiều cao visual viewport + lớp `kb-open` (CSS cho .main cao đúng phần nhìn thấy, ẩn thanh tab đáy).
+  // Chỉ CSSOM (style.setProperty) — không có thuộc tính style= trong HTML (CSP).
+  if (window.visualViewport && (document.body.classList.contains("chat-page") || document.body.classList.contains("run-page"))) (function () {
+    var vv = window.visualViewport, root = document.documentElement, raf = 0;
+    function fit() {
+      raf = 0;
+      var kb = window.innerHeight - vv.height > 120;
+      root.classList.toggle("kb-open", kb);
+      if (kb) { root.style.setProperty("--vvh", Math.round(vv.height) + "px"); if (window.scrollY || vv.offsetTop) window.scrollTo(0, 0); }
+      else root.style.removeProperty("--vvh");
+    }
+    function soon() { if (!raf) raf = requestAnimationFrame(fit); }
+    vv.addEventListener("resize", soon);
+    vv.addEventListener("scroll", soon);
+    fit();
+  })();
 
   // ------------------------------------------------------------ menu "⋯" + sheet "Thêm": đóng khi bấm ra ngoài / Esc
   document.addEventListener("click", function (e) {
@@ -345,6 +364,17 @@
   document.addEventListener("click", function (e) {
     var b = e.target && e.target.closest ? e.target.closest(".tx-copy") : null;
     if (!b) return;
+    // P2: cả tin / output tool — văn bản GỐC nằm trong <template class="tx-src"> ngay cạnh nút (không phải chữ đã vẽ)
+    if (b.classList.contains("tx-copy-src")) {
+      e.preventDefault();  // nút nằm trong <summary>/<details> → không đóng/mở khung
+      var tpl = b.nextElementSibling;
+      if (!tpl || tpl.tagName !== "TEMPLATE") return;
+      var t = b.querySelector(".tx-copy-t");
+      copyText(tpl.content.textContent).then(function () { b.classList.add("done"); if (t) t.textContent = "Đã chép"; },
+        function () { if (t) t.textContent = "Không chép được"; })
+        .then(function () { setTimeout(function () { b.classList.remove("done"); if (t) t.textContent = "Sao chép"; }, 1500); });
+      return;
+    }
     var box = b.closest(".tx-code"), pre = box && box.querySelector("pre");
     if (!pre) return;
     var label = b.getAttribute("data-label") || b.textContent;
@@ -390,21 +420,50 @@
         if (t && draft.trim()) t.value = draft;  // chữ đang gõ dở trong ô steer chuyển sang ô "Nói tiếp"
       });
     }
+    // P2: dòng trạng thái kiểu Claude Code "✳ Đang nghĩ… 12s · 3.4k token" — giây đếm từ lúc run bắt đầu (data-start), chữ từ SSE
+    // `status` (server) hoặc loại delta đang tới; token = `stats.out`. Chỉ textContent.
+    var stl = document.getElementById("tx-status");
+    var stT = stl && stl.querySelector(".tx-status-t"), stM = stl && stl.querySelector(".tx-status-m");
+    var st0 = stl ? Date.parse(stl.getAttribute("data-start") || "") : NaN, stTok = "", thinkTok = "";
+    if (stl && isNaN(st0)) st0 = Date.now();
+    function fmtSec(s) { s = Math.max(0, Math.floor(s)); return s < 60 ? s + "s" : Math.floor(s / 60) + "m " + ("0" + (s % 60)).slice(-2) + "s"; }
+    function paintStatus() {
+      if (!stM) return;
+      stM.textContent = fmtSec((Date.now() - st0) / 1000) + (stTok ? " · " + stTok + " token" : "");
+    }
+    function setStatus(label) { if (stT && label && stT.textContent !== label) stT.textContent = label; paintStatus(); }
+    var stTimer = stl ? setInterval(paintStatus, 1000) : null;
+    paintStatus();
     es.onmessage = function (ev) {
       var m;
       try { m = JSON.parse(ev.data); } catch (_) { return; }
       if (m.t === "delta" || m.t === "item" || m.t === "part") {
         var node = txAppend(tr, m);
         if (node && jump && !tr._tx.stuck) jump.hidden = false;
+        if (m.t === "delta") {
+          setStatus(m.k === "text" ? "Đang viết…" : "Đang nghĩ…");
+          var th = m.k !== "text" && tr._tx && tr._tx.think;
+          if (th && thinkTok) { var ts0 = th.querySelector("summary"); if (ts0) ts0.textContent = "Suy nghĩ… · " + thinkTok + " token"; }
+        }
+      } else if (m.t === "status") {
+        if (m.think_tokens) {
+          thinkTok = m.think_tokens;
+          var lt = tr._tx && tr._tx.think, ls = lt && lt.querySelector("summary");
+          if (ls) ls.textContent = "Suy nghĩ… · " + thinkTok + " token";
+        }
+        if (m.label) { setStatus(m.label); if (m.state !== "think") thinkTok = ""; }
       } else if (m.t === "stats") {
         var c = document.getElementById("st-cost"), k = document.getElementById("st-tok");
         if (c) c.textContent = m.cost;
         if (k) k.textContent = m.tokens;
+        if (m.out) { stTok = m.out; paintStatus(); }
       } else if (m.t === "refresh") {
         var bar = document.getElementById("runbar");
         if (bar && window.htmx && bar.getAttribute("hx-get")) window.htmx.ajax("GET", bar.getAttribute("hx-get"), { target: bar, swap: "innerHTML" });
       } else if (m.t === "end") {
         es.close();
+        if (stTimer) clearInterval(stTimer);
+        if (stl) stl.hidden = true;
         if (state) { state.textContent = "đã kết thúc"; state.className = "pill muted"; }
         setTimeout(finishRun, 300);
       }
@@ -725,6 +784,14 @@
         var left = Object.keys(on);
         q.tool.hidden = !left.length;
         if (left.length) q.toolT.textContent = "Đang dùng " + on[left[left.length - 1]] + (left.length > 1 ? " (+" + (left.length - 1) + ")" : "") + "…";
+        after(s);
+      } else if (m.t === "todo") {
+        // P2: checklist TodoWrite (HTML server vẽ, macro tx_todo) — một khối trong khung đang trả lời, thay tại chỗ
+        if (!p) return;
+        var td = fromHTML(m.html || ""), oldTd = p.querySelector(".tx-todo");
+        if (!td) return;
+        if (oldTd) { if (!oldTd.open) td.open = false; oldTd.replaceWith(td); }
+        else { var lv = p.querySelector(".mm-live"); if (lv) p.insertBefore(td, lv); else p.appendChild(td); }
         after(s);
       } else if (m.t === "reply" && m.notify) {
         var nn = fromHTML(m.html);  // báo chủ động giữa lượt: chèn trước khung "đang trả lời", không thay nó

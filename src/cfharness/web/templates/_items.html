@@ -7,6 +7,8 @@
 {{ tx.tx_group(it) }}
 {%- elif it.kind == 'reasoning' -%}
 {{ tx.tx_thinking(it) }}
+{%- elif it.kind == 'todo' -%}
+{{ tx.tx_todo(it) }}
 {%- elif it.kind == 'prompt' -%}
 <div class="ti prompt"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}"><div class="ti-label">{{ m.icon('send', 'sm') }}Yêu cầu <span class="muted">· {{ it.meta }}</span>{{ tx.tx_time(it) }}</div><div class="pre">{{ it.text }}</div>
 {%- if it.start %}<div class="tx-start">{{ it.start.text }}{% if it.start.mcp %} · MCP: {{ it.start.mcp|join(', ') }}{% endif %} · {{ it.start.ts }}</div>{% endif %}</div>
@@ -35,6 +37,11 @@
 {%- else -%}
 <div class="ti note {{ it.tone }}"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}"><span>{{ it.text }}</span>{% if it.iso %}{{ tx.tx_time(it) }}{% else %} <span class="faint xs">{{ it.ts }}</span>{% endif %}</div>
 {%- endif -%}
+{%- endmacro %}
+
+{#- P2: run dài — nút tải phần trước (partial /partials/run/<id>/items?before=<seq>, cùng bộ render; nhóm tool không bị cắt đôi) -#}
+{% macro older(run_id, before, hidden) -%}
+<button type="button" class="btn ghost sm tx-older" hx-get="/partials/run/{{ run_id }}/items?before={{ before }}" hx-target="this" hx-swap="outerHTML">Hiện các mục trước <span class="muted">({{ hidden }} mục)</span></button>
 {%- endmacro %}
 
 {% macro line(it) -%}
