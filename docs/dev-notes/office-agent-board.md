@@ -62,3 +62,39 @@ Không lấy: điều khiển hàng loạt (broadcast `/clear`, kill tất cả)
 - Không có số hàng đợi theo agent (snapshot không có); `run_status = queued` hiện "· xếp hàng" dưới tên.
 - Thời gian run đổi theo phút (cố ý, đỡ upload texture); màn hình phòng server vẫn hiện m:ss.
 - Bảng chỉ đổi trang bằng nút (không cuộn bằng con lăn).
+
+## 6. Bản 2 — "Điều khiển agent" thành bảng 2D (2026-11-12)
+Chủ hub: "phần Điều khiển agent 3D cần làm dạng 2D thôi ở góc màn hình, có mọi quyền thao tác để control".
+- **Bỏ khỏi cảnh**: giá vẽ "Bảng quản lý agent" (world.js), vùng bấm/phân trang trên canvas, mục [E] khi đi bộ, nút sr-only "Xem bảng quản lý
+  agent", và nút ⏸/▶/■ trên thẻ nhân vật. `roster.js` chỉ còn hàm THUẦN (`rosterItems`, `rosterSummary`, `rowControls`, `agentActions`, `fmtAge`).
+- **Bảng 2D** `static/office/dock.js` (DOM, góc trên trái; ≤ 640 px: đáy màn hình, cao ≤ 48vh). Thanh tiêu đề luôn hiện số agent + "N cần bạn";
+  bấm để thu gọn/mở (nhớ bằng localStorage). Mỗi hàng: đèn trạng thái, tên (bấm → camera bay tới nhân vật + thẻ), trạng thái · vai trò, việc,
+  tool · thời gian run · chi phí hôm nay, và **mọi nút**: 🛡 Duyệt, ❓ Trả lời, 💬 Nhắn (agent thường → bảng hội thoại talk.js) / 💬 Chat (điều phối
+  viên), ⏸ Tạm dừng / ▶ Tiếp tục, ■ Dừng run. Chọn nhân vật trong cảnh → hàng của nó được đánh dấu + cuộn tới.
+- **Ghi**: tạm dừng/tiếp tục/dừng run như cũ — lần gửi đầu KHÔNG có `confirm` → server trả thông điệp xác nhận → hộp xác nhận DOM trong bảng;
+  chỉ nút do người bấm mới gửi `confirm=yes` (Esc / Huỷ = thôi). Duyệt / trả lời / nhắn mở đúng bảng 3D sẵn có (đọc đủ lệnh, bước 2…).
+  Không thêm endpoint/RPC/quyền; `OFFICE_ACTIONS` giữ nguyên (ESTOP, xoá agent vẫn chỉ ở 2D).
+- Khi bảng 3D (duyệt / câu hỏi / chat / nhắn) đang mở: thân bảng 2D ẩn, chỉ còn thanh tiêu đề (không che bảng). Không có WebGL: bảng 2D vẫn
+  chạy, chỉ còn nút tạm dừng/tiếp tục/dừng run.
+- Chữ agent chỉ qua `textContent`; không style inline (CSP) — màu theo class `st-<trạng thái>` trong office.css.
+- Kiểm: `tests/office_roster_check.mjs` (nút mỗi hàng, World không còn bảng agent), `test_dock_static_rules`; chạy tay hub demo (Chromium):
+  Tạm dừng → hộp "Tạm dừng agent review?" → Đồng ý → hàng đổi "Tạm dừng" + nút "▶ Tiếp tục"; Duyệt → bảng duyệt 3D, bảng 2D thu lại. 0 lỗi console.
+
+## 7. Bản 3 — UX + mọi quyền điều khiển (2026-11-13)
+Chủ hub: "làm UI/UX tốt, phải điều khiển cả những agent đang chưa làm gì — nếu trong team thì chia theo team"; chọn thêm ESTOP + xoá agent.
+- **Nhóm theo team**: Điều phối viên → từng team (thứ tự `team.list`) → Không team. Tiêu đề nhóm bấm để thu gọn (nhớ localStorage), dính đầu
+  khi cuộn, có chấm đếm (cần bạn / đang làm / lỗi / rảnh / tạm dừng). Team có nút **⛔ Dừng team** / **▶ Chạy lại** (`team_estop`); team đang
+  dừng khẩn được viền đỏ + dòng chú thích.
+- **Agent rảnh điều khiển được**: nút **▶ Giao việc** (mở bảng hội thoại → run mới, vẫn hỏi xác nhận), Tạm dừng, menu ⋯ → 🗑 Xoá agent.
+  Agent đang chạy: 💬 Nhắn (chen vào run) + ■ Dừng run. Hàng không có việc ghi "Chưa có việc".
+- **Lọc + tìm**: chip Tất cả / Cần bạn / Đang làm / Rảnh / Tạm dừng / Lỗi (kèm số, ẩn chip rỗng); ô tìm (tên/id/việc) khi ≥ 6 agent.
+- **ESTOP toàn hub** (`estop`): nút ⛔ ESTOP → chọn mức (chỉ chặn run mới / chặn + dừng run đang chạy) → xác nhận → bước 2. Khi bật: dải đỏ
+  "ESTOP đang bật" + "▶ Cho chạy lại", viền bảng đỏ, nhãn ESTOP trên thanh tiêu đề (thấy cả khi thu gọn).
+- **Bước 2 mới ở server** (`OFFICE_CONFIRM2` trong web/office.py) cho `estop`, `team_estop`, `agent_delete` (bật lẫn tắt): sau hộp xác nhận của
+  Action 2D, `/office/do` trả `need:"confirm2", kind:"check", check:"Tôi hiểu: …"`; chỉ khi có `confirm2=yes` mới gọi RPC. Bảng 2D: phải tích ô
+  mới bấm "Xác nhận lần 2".
+- **Xoá agent trong team**: daemon chặn xoá thành viên team → Action `agent_delete` nhận thêm `detach_teams=1` (2D không gửi → như cũ); bảng 2D
+  gửi khi agent có team, hộp xác nhận nói rõ "sẽ được gỡ khỏi mọi team trước". Điều phối viên không có nút xoá.
+- Kiểm: `test_estop_two_steps_then_audited`, `test_team_estop_and_agent_delete_two_steps`, `test_dock_static_rules`, Node `office_roster_check.mjs`
+  (nút mỗi hàng, nhóm/tóm tắt, lọc/tìm). Chạy tay hub demo: Dừng team → chọn mức → xác nhận → tích ô → team viền đỏ + "▶ Chạy lại"; xoá agent
+  trong team qua ⋯ → 2 bước → biến khỏi bảng; ESTOP hub → dải đỏ. Màn 390 px: bảng ở đáy, ≤ 55vh. 0 lỗi console.

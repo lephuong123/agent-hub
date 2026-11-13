@@ -1,8 +1,7 @@
-// Kiểm "Bảng quản lý agent" KHÔNG cần trình duyệt (Node ≥ 18) — docs/dev-notes/office-agent-board.md:
+// Kiểm "Điều khiển agent" KHÔNG cần trình duyệt (Node ≥ 18) — docs/dev-notes/office-agent-board.md:
 // - hàm thuần của static/office/roster.js: nhóm (điều phối viên trước, team theo thứ tự team.list, không team cuối), thứ tự trong nhóm
-//   (lead → cần bạn → tên), chia trang (không mất / lặp agent, tiêu đề nhóm không đứng một mình cuối trang), nút điều khiển, fmtAge;
-// - vẽ bằng canvas giả: chỉ fillText (không HTML), vùng bấm hàng / nút / trang đúng loại, nút trang chỉ khi có trang kế;
-// - vị trí trong World thật: giá vẽ ở mép nam phòng nghỉ, quay về camera, không chồng bảng "Cần bạn", camera nhìn thẳng không bị vật che.
+//   (lead → cần bạn → tên), nút điều khiển + MỌI nút của một hàng (agentActions), fmtAge, tóm tắt;
+// - bảng điều khiển là 2D (DOM, office/dock.js): World thật KHÔNG còn bảng quản lý agent trong cảnh.
 // In một dòng mỗi ca; lỗi → exit 1. Chạy: node tests/office_roster_check.mjs <thư mục gốc repo>
 const calls = [];
 const ctx = new Proxy({}, {
@@ -41,19 +40,6 @@ ok(JSON.stringify(order) === JSON.stringify(['mgr', 'b1', 'l1', 'w2', 'w1', 'y',
 ok(R.rosterItems([], [], null).length === 0, 'không agent → không mục');
 ok(R.rosterItems([{ id: 'q', status: 'idle' }], [], null)[0].label === 'Agent', 'chỉ agent không team → nhóm "Agent"');
 
-// ---- chia trang
-for (const n of [0, 1, 7, 8, 9, 25, 80]) {
-  const ag = [{ id: 'm', is_manager: true, status: 'idle' }];
-  for (let i = 0; i < n; i++) ag.push({ id: 'a' + i, team: ['t1', 't2', 't3', null][i % 4], status: 'idle' });
-  const it = R.rosterItems(ag, [{ id: 't1' }, { id: 't2' }, { id: 't3' }], 'm');
-  const pages = R.rosterPages(it);
-  const seen = pages.flat().filter((i) => i.kind === 'agent').map((i) => i.a.id);
-  const lonely = pages.some((p) => p.length && p[p.length - 1].kind === 'group');
-  const headless = pages.some((p) => p.length && p[0].kind !== 'group');
-  ok(seen.length === ag.length && new Set(seen).size === ag.length && !lonely && !headless,
-    `trang n=${n}: ${pages.length} trang, đủ ${seen.length}/${ag.length} agent, không tiêu đề mồ côi, mỗi trang mở bằng tiêu đề nhóm`);
-}
-
 // ---- nút điều khiển
 ok(JSON.stringify(R.rowControls({ id: 'a', paused: false, run_id: null }).map((c) => c.name)) === '["agent_pause"]', 'rảnh: chỉ Tạm dừng');
 const rc = R.rowControls({ id: 'a', paused: true, run_id: 'r_1' });
@@ -65,49 +51,28 @@ ok(R.fmtAge(5) === '<1 ph' && R.fmtAge(61) === '1 ph' && R.fmtAge(3725) === '1h0
 const s = R.rosterSummary(agents);
 ok(s.working === 1 && s.need === 1 && s.error === 1 && s.paused === 1 && s.idle === 3, 'tóm tắt: ' + JSON.stringify(s));
 
-// ---- vẽ: vùng bấm + chỉ fillText
-const many = [{ id: 'm', is_manager: true, status: 'working', run_id: 'r_m', started_at: new Date(Date.now() - 125000).toISOString(), cost_today_usd: 0.5, run_cost_usd: 0.25 }];
-for (let i = 0; i < 30; i++) many.push({ id: 'a' + i, name: '<b>tên ' + i + '</b>', team: 't', status: 'idle', task: 'việc ' + i, tool: 'Bash', approvals: i % 3, questions: i % 2 });
-const board = { draw(sig, fn) { if (sig === this.sig) return; this.sig = sig; fn(ctx, R.ROSTER_W, R.ROSTER_H); }, sig: null };
-calls.length = 0;
-let r = R.drawRoster(board, { agents: many, teams: [{ id: 't', name: 'T' }], manager_id: 'm', nowMs: Date.now(), page: 0 });
-const kinds = (k) => board.hits.filter((h) => h.kind === k);
-ok(r.page === 0 && r.pages > 1, 'nhiều agent → nhiều trang (' + r.pages + ')');
-ok(kinds('agent').length >= 8 && kinds('ctl').length >= kinds('agent').length, 'trang 1: hàng + nút (' + kinds('agent').length + ' hàng)');
-ok(kinds('page').length === 1 && kinds('page')[0].dir === 1, 'trang 1: chỉ nút "Sau"');
-ok(kinds('ctl').some((h) => h.name === 'stop' && h.id === 'r_m' && h.agent === 'm'), 'nút Dừng run mang id run + id agent');
-ok(calls.some((t) => t.includes('<b>tên')), 'tên agent vẽ nguyên văn bằng fillText (là DỮ LIỆU, không HTML)');
-ok(calls.includes('2 ph') && calls.includes('$0.75'), 'thời gian run (phút) + chi phí hôm nay = đã xong + run đang chạy');
-r = R.drawRoster(board, { agents: many, teams: [], manager_id: 'm', nowMs: Date.now(), page: 99 });
-ok(r.page === r.pages - 1 && kinds('page').length === 1 && kinds('page')[0].dir === -1, 'trang vượt → trang cuối, chỉ nút "Trước"');
-for (const h of board.hits) if (h.x < 0 || h.y < 0 || h.x + h.w > R.ROSTER_W || h.y + h.h > R.ROSTER_H) { ok(false, 'vùng bấm ra ngoài canvas ' + JSON.stringify(h)); break; }
+// ---- mọi nút của một hàng (bảng 2D) — kể cả agent rảnh: Giao việc (run mới); xoá nằm trong menu ⋯
+const acts = (a, ap, q) => R.agentActions(a, ap, q).map((x) => (x.menu ? '⋯' : '') + x.act + (x.name ? ':' + x.name : '') + '=' + x.id).join(',');
+ok(acts({ id: 'w', name: 'W' }) === 'talk=w,control:agent_pause=w,⋯control:agent_delete=w', 'rảnh: Giao việc + Tạm dừng; Xoá trong menu');
+ok(R.agentActions({ id: 'w' })[0].label.includes('Giao việc'), 'rảnh: nút đầu là "Giao việc"');
+ok(acts({ id: 'w', paused: true, run_id: 'r_1' }, { id: 'ap_1' }, { id: 'q_1' }) === 'approval=ap_1,question=q_1,talk=w,control:agent_resume=w,control:stop=r_1,⋯control:agent_delete=w',
+  'chờ duyệt + hỏi + tạm dừng + có run: Duyệt, Trả lời, Nhắn, Tiếp tục, Dừng run, ⋯Xoá');
+ok(R.agentActions({ id: 'w', run_id: 'r' })[0].label.includes('Nhắn'), 'đang chạy: "Nhắn" (chen vào run)');
+ok(acts({ id: 'm', is_manager: true }) === 'chat=m,control:agent_pause=m', 'điều phối viên: Chat, không có Xoá');
+ok(R.agentActions({ id: 'w', name: '<b>x</b>', run_id: 'r' }).every((x) => x.sr && x.label), 'mọi nút có nhãn cho trình đọc màn hình');
 
-// ---- vị trí trong World thật: giá vẽ ở mép nam phòng nghỉ, quay về camera, không chồng bảng "Cần bạn"; camera nhìn thẳng (như
-// flyToFrame) thấy được MỌI điểm của mặt bảng — không vật nào che (lỗi cũ: treo tường tây dải cafe → 2 máy arcade che nửa dưới)
-const THREE = await import(url('../vendor/three-0.169.0/three.module.min.js'));
-for (const n of [1, 5, 19, 40, 80]) {
-  const ag = [{ id: 'mgr', is_manager: true }];
-  for (let i = 0; i < n; i++) ag.push({ id: 'ag' + i, team: i % 2 ? 'a' : 'b' });
-  const w = new World({ teams: [{ id: 'a' }, { id: 'b' }], agents: ag, manager_id: 'mgr' });
-  w.group.updateMatrixWorld(true);
-  const b = w.boards.agents, f = b.frame(), room = w.roomAt(f.center.x, f.center.z - 0.3);
-  const nf = w.boards.needs.frame();
-  const apart = Math.abs(f.center.x - nf.center.x) > (b.w + w.boards.needs.w) / 2;
-  const lounge = w.rooms.find((r) => r.key === 'lounge');
-  const inside = f.center.x - b.w / 2 >= lounge.x0 && f.center.x + b.w / 2 <= lounge.x1;
-  const dist = (b.h / 2) / Math.tan((50 * Math.PI) / 360) * 1.32;
-  const eye = f.center.clone().addScaledVector(f.normal, dist).add(new THREE.Vector3(0, dist * 0.22, 0));
-  const ray = new THREE.Raycaster();
-  let blocked = 0;
-  const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), f.normal).normalize();
-  const up = new THREE.Vector3().crossVectors(f.normal, right).normalize();
-  for (const u of [-0.45, 0, 0.45]) for (const v of [-0.45, 0, 0.45]) {
-    const p = f.center.clone().addScaledVector(right, u * b.w).addScaledVector(up, v * b.h);
-    const dir = p.clone().sub(eye); const len = dir.length(); dir.normalize();
-    ray.set(eye, dir); ray.far = len - 0.02;
-    if (ray.intersectObject(w.group, true).some((h) => h.object !== b.mesh && h.object.visible !== false)) blocked++;
-  }
-  ok(room && room.key === 'lounge' && inside && apart && f.normal.z > 0.9 && f.center.y + b.h / 2 < 2.8 && w.focusables.includes(b.mesh) && !blocked,
-    `vị trí n=${n}: phòng nghỉ x ${(f.center.x - b.w / 2).toFixed(1)}…${(f.center.x + b.w / 2).toFixed(1)}, quay nam, không che (${blocked}/9 tia bị chặn)`);
-}
+// ---- nhóm mang id team + tóm tắt; lọc + tìm
+const g = items.filter((i) => i.kind === 'group');
+ok(g.map((x) => x.key).join(',') === 'mgr,t:b,t:a,loose' && g[2].team === 'a' && g[2].sum.need === 1, 'nhóm: key/team/tóm tắt theo nhóm');
+ok(items.filter((i) => i.kind === 'agent').every((i) => g.some((x) => x.key === i.group)), 'mỗi agent biết nhóm của mình');
+const f1 = R.filterItems(items, 'need', '');
+ok(f1.filter((i) => i.kind === 'agent').map((i) => i.a.id).join(',') === 'w2' && f1[0].kind === 'group' && f1[0].shown === 1, 'lọc "cần bạn": chỉ w2, giữ tiêu đề nhóm của nó');
+ok(R.filterItems(items, 'idle', '').filter((i) => i.kind === 'group').every((x) => x.shown > 0), 'lọc: không giữ nhóm rỗng');
+ok(R.filterItems(items, 'all', 'zed').filter((i) => i.kind === 'agent').map((i) => i.a.id).join(',') === 'w1', 'tìm theo tên');
+ok(R.filterItems(items, 'all', '').length === items.length, 'không lọc → giữ nguyên');
+
+// ---- World thật: không còn bảng quản lý agent trong cảnh (điều khiển agent là bảng 2D góc màn hình)
+const w = new World({ teams: [{ id: 'a' }], agents: [{ id: 'mgr', is_manager: true }, { id: 'x', team: 'a' }], manager_id: 'mgr' });
+ok(!('agents' in w.boards) && w.focusables.length === 4 && Object.keys(w.boards).sort().join(',') === 'hud,kanban,needs,runs',
+  'World: chỉ còn hud/kanban/needs/runs — ' + Object.keys(w.boards).join(','));
 process.exit(fails ? 1 : 0);

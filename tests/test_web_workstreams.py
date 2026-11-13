@@ -155,3 +155,29 @@ async def test_tabs_partial_shows_running_then_done(wenv):
     wenv.hub.store.conn.execute("UPDATE manager_conversations SET read_upto=0 WHERE id=?", (cid,))
     assert '<span class="ws-unread">' in tab((await wenv.client.get(f"/partials/manager/tabs?w={w['id']}")).text)
     assert '<span class="ws-unread">' not in tab((await wenv.client.get(f"/partials/manager/tabs?w={w['id']}&c={cid}")).text)
+
+
+async def test_manage_menu_info_rename_and_delete(wenv):
+    """Menu "⚙ Luồng này": thông tin luồng + đổi tên + xoá (xác nhận trước, rồi về Sảnh)."""
+    await wenv.login()
+    await designate(wenv)
+    w = await mgr_rpc(wenv, "workstream.create", {"title": "Monitor", "key": "LH-55166", "sprint": "S216"})
+    html = (await wenv.client.get(f"/manager?w={w['id']}")).text
+    menu = re.search(r'<details class="ws-pop-wrap" id="ws-manage">.*?</details>', html, re.S).group(0)
+    for s in ("Đang mở", "LH-55166", "S216", "0/0 xong", w["id"], 'action="/do/ws_edit"', 'action="/do/ws_close"', 'action="/do/ws_delete"'):
+        assert s in menu, s
+    assert 'id="ws-manage"' not in (await wenv.client.get("/manager")).text  # Sảnh: không có menu luồng
+    r = await wenv.post("/do/ws_edit", {"id": w["id"], "title": "LH-55167 Monitor mới", "next": "/manager"})
+    assert r.status_code == 303
+    got = await mgr_rpc(wenv, "workstream.get", {"id": w["id"]})
+    assert (got["key"], got["title"]) == ("LH-55167", "Monitor mới")
+    # xoá: lần đầu chỉ hỏi xác nhận, chưa xoá
+    r = await wenv.post("/do/ws_delete", {"id": w["id"], "label": "LH-55167 · Monitor mới", "next": "/manager"})
+    assert r.status_code == 200 and "XOÁ HẲN luồng" in r.text
+    assert (await mgr_rpc(wenv, "workstream.get", {"id": w["id"]}))["id"] == w["id"]
+    r = await wenv.post("/do/ws_delete", {"id": w["id"], "confirm": "yes", "next": "/manager"})
+    assert r.status_code == 303 and r.headers["location"].startswith("/manager")
+    assert await mgr_rpc(wenv, "workstream.list", {"status": "all"}) == []
+    assert "Monitor mới" not in _bar((await wenv.client.get("/manager")).text)
+    row = wenv.hub.store.conn.execute("SELECT channel FROM audit_log WHERE kind='workstream.delete'").fetchone()
+    assert row and row[0] == "web"

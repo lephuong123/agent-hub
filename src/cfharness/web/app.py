@@ -1132,8 +1132,10 @@ ACTIONS: dict[str, Action] = {
                           confirm=lambda f: f"Tạm dừng agent {f.get('id')}?"),
     "agent_resume": Action("agent.resume", lambda f: {"id": _req(f, "id")}, "Agent đã hoạt động lại",
                            confirm=lambda f: f"Cho agent {f.get('id')} hoạt động lại (nhận việc mới)?"),
-    "agent_delete": Action("agent.delete", lambda f: {"id": _req(f, "id")}, lambda r, f: f"Đã chuyển agent {f.get('id')} vào thùng rác (khôi phục được)",
-                           confirm=lambda f: f"Xoá agent {f.get('id')}? (xoá mềm — vào thùng rác, khôi phục được trong thời hạn giữ)", danger=True,
+    "agent_delete": Action("agent.delete", lambda f: {"id": _req(f, "id"), **({"detach_teams": True} if f.get("detach_teams") == "1" else {})},
+                           lambda r, f: f"Đã chuyển agent {f.get('id')} vào thùng rác (khôi phục được)",
+                           confirm=lambda f: f"Xoá agent {f.get('id')}? (xoá mềm — vào thùng rác, khôi phục được trong thời hạn giữ)"
+                           + (" Agent sẽ được gỡ khỏi mọi team trước." if f.get("detach_teams") == "1" else ""), danger=True,
                            goto=lambda r, f: "/agents"),
     "agent_restore": Action("trash.restore", lambda f: {"id": _req(f, "id"), "kind": "agent"}, lambda r, f: f"Đã khôi phục agent {f.get('id')}",
                             confirm=lambda f: f"Khôi phục agent {f.get('id')} từ thùng rác (kèm cấu hình, quyền, MCP cũ)?",

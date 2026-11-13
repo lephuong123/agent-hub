@@ -7,7 +7,6 @@
 import * as THREE from '../vendor/three-0.169.0/three.module.min.js';
 import { Grid } from './path.js';
 import { Board } from './boards.js';
-import { ROSTER_W, ROSTER_H } from './roster.js';
 import { TEAM_COLORS, NO_TEAM_COLOR, seeded, hashStr, textCanvas, roundRect, FONT, fitText, scaleLabel } from './util.js';
 import { Batch, surface, solidMesh, roundedBoxGeo, mergeGeometries, litMaterial, tex, softTex, getTier } from './materials.js';
 
@@ -18,7 +17,6 @@ export const ZONE_NAMES = {
 };
 
 const ROOM_D = 6;
-const ROSTER_BW = 3.9; // bề rộng (m) bảng quản lý agent (giá vẽ ở mép nam phòng nghỉ)
 const WALL_H = 2.6;
 // khu cafe điện tử (mét): lối đi hai bên ngoài vách, lối vào phía tây trong phòng, quầy nước phía đông,
 // bề rộng một máy, khoảng vách → tâm dãy máy, khoảng cách hai dãy, độ dày dải vách, số máy tối thiểu
@@ -1034,23 +1032,9 @@ export class World {
     B.box(9.3, 2.5, 0.14, W / 2, 2.72, -0.05, 'metal', '#1d2026', { r: 0.03 });
     for (const sx of [-3.5, 3.5]) B.box(0.18, 0.5, 0.3, W / 2 + sx, 2.4, -0.1, 'metal', BLACK);
     hud.mesh.position.set(W / 2, 3.97, 0.03); g.add(hud.mesh);
-    // "Bảng quản lý agent" (office-agent-board.md): giá vẽ đứng ở mép nam phòng nghỉ, quay về phía camera như bảng "Cần bạn" — không
-    // chung chỗ với kanban/đồng hồ (tường tây), màn hình phòng server, HUD; mặt bảng không bị vật nào che khi camera nhìn thẳng
-    // (đặt ở tường tây dải cafe thì 2 máy arcade chắn nửa dưới bảng).
-    const agents = new Board(ROSTER_BW, ROSTER_BW * ROSTER_H / ROSTER_W, ROSTER_W, 'agents', 'bảng quản lý agent');
-    {
-      const ah = agents.h, az = this.D - 0.45;
-      const ag = new THREE.Group(); ag.position.set(lcx, 0, az); g.add(ag);
-      const tilt = new THREE.Group(); tilt.position.y = 0.3; tilt.rotation.x = -0.22; ag.add(tilt);
-      const tm = new THREE.Matrix4().makeTranslation(lcx, 0.3, az).multiply(new THREE.Matrix4().makeRotationX(-0.22));
-      B.box(ROSTER_BW + 0.18, ah + 0.17, 0.08, 0, -0.08, -0.06, 'walnut', WALNUT, { r: 0.015, m: tm });
-      agents.mesh.position.set(0, ah / 2, 0.0); tilt.add(agents.mesh);
-      for (const sx of [-1.75, 1.75]) B.box(0.07, 0.75, 0.07, lcx + sx, 0, this.D - 0.65, 'metal', BLACK);
-      this._aoq(lcx, this.D - 0.6, ROSTER_BW + 0.2, 0.4, true);
-      grid.rect(lcx - ROSTER_BW / 2 - 0.1, this.D - 0.7, lcx + ROSTER_BW / 2 + 0.1, this.D - 0.2, 0.05);
-    }
-    this.boards = { kanban, runs, hud, needs, agents };
-    this.focusables = [kanban.mesh, runs.mesh, hud.mesh, needs.mesh, agents.mesh];
+    // "Bảng quản lý agent" KHÔNG còn trong cảnh: điều khiển agent là bảng 2D (DOM) ở góc màn hình — office/dock.js, office-agent-board.md
+    this.boards = { kanban, runs, hud, needs };
+    this.focusables = [kanban.mesh, runs.mesh, hud.mesh, needs.mesh];
     const cz = kz + 2.6;
     const face = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.06, 40), new THREE.MeshBasicMaterial({ color: '#fffdf6', toneMapped: false }));
     face.rotation.z = Math.PI / 2; face.position.set(0.06, 1.95, cz); g.add(face);

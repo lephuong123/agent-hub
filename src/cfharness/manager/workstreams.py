@@ -205,6 +205,33 @@ class Workstreams:
         self._publish(w, action, by)
         return self.out(w, full=True)
 
+    def delete(self, ref: Any, *, by: str = "user") -> dict[str, Any]:
+        """Xoá HẲN một luồng (chỉ người — RPC `workstream.delete` ∈ HUMAN_ONLY). KHÔNG xoá hội thoại hay task: hội thoại của người về
+        Sảnh, task bỏ gắn luồng, hội thoại nhịp riêng của luồng được lưu trữ. Trả bản chụp luồng (cả STATE.md) — RPC audit giữ bản này
+        nên ghi chú luồng vẫn tra lại được trong nhật ký sau khi xoá."""
+        w = self.row(ref)
+        wid = w["id"]
+        snap = self.out(w, full=True)
+        now = now_iso()
+        n_conv = self.conn.execute("UPDATE manager_conversations SET workstream_id=NULL WHERE workstream_id=? AND channel != 'heartbeat'", (wid,)).rowcount
+        self.conn.execute("UPDATE manager_conversations SET workstream_id=NULL, archived_at=COALESCE(archived_at, ?) WHERE workstream_id=? "
+                          "AND channel = 'heartbeat'", (now, wid))
+        n_task = self.conn.execute("UPDATE tasks SET workstream_id=NULL WHERE workstream_id=?", (wid,)).rowcount
+        self.conn.execute("DELETE FROM workstreams WHERE id=?", (wid,))
+        # bản chụp (kể cả STATE.md) vào audit append-only — xoá rồi vẫn tra lại được ghi chú luồng
+        try:
+            self.hub.audit.record("workstream.snapshot", None, None,
+                                  {"workstream": {k: w.get(k) for k in ("id", "key", "title", "sprint", "status", "created_by", "created_at")},
+                                   "state_md": w.get("state_md") or "", "tasks": snap.get("tasks"),
+                                   "detached": {"conversations": int(n_conv or 0), "tasks": int(n_task or 0)}},
+                                  actor=by, channel="hub", target=f"workstream:{wid}", summary=f"xoá luồng {self.label(w)}"[:200])
+        except Exception:  # pragma: no cover — audit lỗi không che thao tác đã xong
+            pass
+        self._publish(w, "deleted", by)
+        return {"id": wid, "key": w.get("key"), "title": w.get("title"), "label": self.label(w), "deleted": True,
+                "detached": {"conversations": int(n_conv or 0), "tasks": int(n_task or 0)}, "state": snap.get("state") or "",
+                "status": w.get("status"), "created_at": w.get("created_at")}
+
     def set_state(self, ref: Any, text: Any, *, by: str = "user") -> dict[str, Any]:
         return self.update(ref, {"state": str(text or "")}, by=by)
 

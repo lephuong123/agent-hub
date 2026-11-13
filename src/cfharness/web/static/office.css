@@ -36,3 +36,118 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); c
 .office-switch.office-pov { right: calc(max(12px, env(safe-area-inset-right)) + 112px); font-size: 20px; }
 .office-switch.office-walk[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, var(--surface)); }
 .office-switch:is(button) { cursor: pointer; padding: 0; font-family: inherit; }
+
+/* "Điều khiển agent" — bảng 2D nổi góc trên trái (office/dock.js, docs/dev-notes/office-agent-board.md). Màu đèn = STATUS_COLOR của cảnh. */
+.office-dock { --ok: #4d7c43; --bad: #c4483a; --ask: #7b5ea7; --warn: #a86414; --q: #3f6d8c; --pause: #9aa3b5;
+  position: absolute; z-index: 4; top: max(12px, env(safe-area-inset-top)); left: max(12px, env(safe-area-inset-left));
+  width: min(420px, calc(100vw - 24px - 180px)); max-height: calc(100vh - 24px); display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--surface) 95%, transparent);
+  box-shadow: 0 8px 28px rgba(40, 30, 20, .22); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); overflow: hidden; font-size: 13px; }
+.office-dock.closed, .office-dock.blocked { width: auto; }
+.office-dock.estop { border-color: var(--bad); }
+.office-dock.busy { cursor: progress; }
+:where(.office-dock button) { font: inherit; }
+.office-dock :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* tiêu đề */
+.dock-head { flex: none; }
+.dock-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; border: 0; background: none; color: var(--text);
+  font-weight: 650; font-size: 14px; cursor: pointer; text-align: left; }
+.dock-toggle:hover .dock-title { color: var(--accent); }
+.dock-title { flex: 1 1 auto; white-space: nowrap; }
+.dock-count { flex: none; min-width: 22px; padding: 0 7px; border-radius: 999px; background: color-mix(in srgb, var(--muted) 18%, transparent);
+  color: var(--muted); font-size: 12px; text-align: center; font-variant-numeric: tabular-nums; }
+.dock-need, .dock-estop-pill { flex: none; padding: 0 8px; border-radius: 999px; background: var(--bad); color: #fff; font-size: 12px; white-space: nowrap; }
+.dock-estop-pill { background: #1f1e1d; }
+.dock-caret { flex: none; color: var(--muted); width: 12px; text-align: center; }
+/* thân */
+.dock-body { display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--line); }
+.dock-banner { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; flex: none;
+  background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); font-weight: 650; }
+.dock-tools { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px 4px 12px; flex: none; }
+.dock-filters { display: flex; flex-wrap: wrap; gap: 5px; flex: 1 1 auto; min-width: 0; }
+.dock-filter { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line);
+  background: none; color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.dock-filter::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.dock-filter.st-all::before { display: none; }
+.dock-filter.st-working::before { background: var(--ok); }
+.dock-filter.st-need::before, .dock-filter.st-error::before { background: var(--bad); }
+.dock-filter.st-paused::before { background: var(--pause); }
+.dock-filter:hover { border-color: var(--accent); color: var(--text); }
+.dock-filter.on { background: var(--text); border-color: var(--text); color: var(--surface); }
+.dock-estop { flex: none; }
+.dock-search { flex: none; margin: 4px 12px 6px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg);
+  color: var(--text); font: inherit; }
+.dock-list { overflow-y: auto; min-height: 0; flex: 1 1 auto; padding: 2px 6px 10px; overscroll-behavior: contain; }
+.dock-empty { margin: 14px 8px; color: var(--muted); text-align: center; }
+/* nhóm (team) */
+.dock-group { margin-top: 6px; border-radius: 12px; }
+.dock-group.estop { background: color-mix(in srgb, var(--bad) 7%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 40%, transparent); }
+.dock-ghead { display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 2px; position: sticky; top: 0; z-index: 1;
+  background: color-mix(in srgb, var(--surface) 96%, transparent); border-radius: 10px; }
+.dock-gbtn { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; padding: 3px 4px; border: 0; background: none;
+  color: var(--text); cursor: pointer; text-align: left; border-radius: 8px; }
+.dock-gbtn:hover { background: color-mix(in srgb, var(--muted) 10%, transparent); }
+.dock-glabel { font-size: 12px; font-weight: 750; letter-spacing: .03em; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-gn { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.dock-gsum { display: flex; gap: 3px; flex: none; }
+.dock-gdot { min-width: 18px; padding: 0 5px; border-radius: 999px; color: #fff; font-size: 11px; line-height: 16px; text-align: center; background: var(--muted); }
+.dock-gdot.st-working { background: var(--ok); }
+.dock-gdot.st-need, .dock-gdot.st-error { background: var(--bad); }
+.dock-gdot.st-paused { background: var(--pause); }
+.dock-gnote { margin: 0 8px 4px 24px; color: var(--bad); font-size: 12px; }
+.dock-rows { list-style: none; margin: 0 0 0 8px; padding: 0 0 0 10px; border-left: 2px solid color-mix(in srgb, var(--line) 80%, transparent); }
+/* hàng agent */
+.dock-row { padding: 7px 8px; border-radius: 10px; display: flex; flex-direction: column; gap: 4px; }
+.dock-row + .dock-row { margin-top: 2px; }
+.dock-row:hover { background: color-mix(in srgb, var(--muted) 8%, transparent); }
+.dock-row.focus { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
+.dock-row.st-waiting_human, .dock-row.st-asking, .dock-row.st-error { background: color-mix(in srgb, var(--bad) 9%, transparent); }
+.dock-top { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.dock-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: #73726c; }
+.dock-dot.st-working { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 30%, transparent); }
+.dock-dot.st-waiting { background: var(--warn); }
+.dock-dot.st-waiting_human, .dock-dot.st-error { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 30%, transparent); }
+.dock-dot.st-asking { background: var(--ask); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ask) 30%, transparent); }
+.dock-dot.st-queued { background: var(--q); }
+.dock-dot.st-paused { background: var(--pause); }
+.dock-name { flex: 0 1 auto; min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font-weight: 650;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; text-align: left; }
+.dock-name:hover { color: var(--accent); text-decoration: underline; }
+.dock-sub { flex: 0 1 auto; min-width: 0; margin-left: auto; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-meta { display: flex; gap: 8px; min-width: 0; padding-left: 16px; font-size: 12px; color: var(--muted); }
+.dock-task { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); opacity: .85; }
+.dock-task.none { color: var(--muted); font-style: italic; opacity: 1; }
+.dock-nums { flex: none; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
+.dock-acts { display: flex; flex-wrap: wrap; gap: 5px; padding-left: 16px; }
+.dock-menu { display: flex; flex-wrap: wrap; gap: 5px; margin-left: 16px; padding: 6px; border-radius: 8px; border: 1px dashed var(--line); }
+/* nút */
+.dock-btn { padding: 3px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text);
+  font-size: 12px; line-height: 1.6; cursor: pointer; white-space: nowrap; }
+.dock-btn.sm { padding: 1px 8px; font-size: 11.5px; }
+.dock-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.dock-btn:disabled { opacity: .5; cursor: not-allowed; }
+.dock-btn.ghost { background: none; }
+.dock-btn.primary, .dock-btn.go { background: var(--ok); border-color: var(--ok); color: #fff; }
+.dock-btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+.dock-btn.ask { background: var(--ask); border-color: var(--ask); color: #fff; }
+.dock-btn:is(.primary, .go, .danger, .ask):hover:not(:disabled) { color: #fff; filter: brightness(1.08); }
+.dock-more { padding: 3px 8px; letter-spacing: .1em; }
+/* hộp chọn / xác nhận */
+.dock-confirm { padding: 14px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+.dock-confirm-title { margin: 0; font-weight: 750; font-size: 14px; }
+.dock-confirm-title.danger { color: var(--bad); }
+.dock-confirm-msg { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
+.dock-confirm-msg.muted { color: var(--muted); font-size: 12px; }
+.dock-note { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.dock-note textarea { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); resize: vertical; }
+.dock-check { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--bad) 9%, transparent); cursor: pointer; }
+.dock-check input { margin-top: 3px; accent-color: var(--bad); }
+.dock-confirm-btns { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.dock-confirm-btns.col { flex-direction: column; align-items: stretch; }
+.dock-confirm-btns .dock-btn { padding: 6px 14px; font-size: 13px; }
+@media (max-width: 640px) {
+  .office-dock { top: auto; bottom: max(10px, env(safe-area-inset-bottom)); left: 8px; right: 8px; width: auto; max-height: 55vh; }
+  .office-dock.closed, .office-dock.blocked { right: auto; }
+  .dock-btn { padding: 5px 11px; font-size: 13px; } /* vùng chạm lớn hơn */
+}
+@media (prefers-reduced-motion: no-preference) { .dock-row, .dock-btn, .dock-filter { transition: background-color .15s, border-color .15s; } }
