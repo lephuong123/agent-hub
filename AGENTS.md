@@ -339,7 +339,7 @@ Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes
 
 | Module | Vai trò |
 |---|---|
-| `web/manager.py` | Trang "Điều phối" (`/manager`, đầu menu): chat theo conversation kênh `web` (`manager.chat/history/conversations`), SSE `/sse/manager` (agent = điều phối viên: delta/reply/action/run_end/tick), `/partials/manager`, `POST /manager/send`; `ACTIONS` `manager_set`/`manager_unset` (xác nhận) |
+| `web/manager.py` | Trang "Điều phối" (`/manager`, đầu menu): chat theo conversation kênh `web` (`manager.chat/history/conversations`), SSE `/sse/manager` (agent = điều phối viên: delta/draft/seg/think/tool/reply/action/run_end/tick, mọi message mang `seq` → client bỏ trùng + tự nối lại `since=<seq cuối>`), `/partials/manager`, `POST /manager/send`, `POST /manager/stop` (nút Dừng: chỉ run của điều phối viên thuộc hội thoại điều phối, `run.stop` audit `web`); `ACTIONS` `manager_set`/`manager_unset` (xác nhận) |
 | `web/present.py` (`mgr_*`) | Thuần: đích `manager.action` → link NỘI BỘ (loại đã biết + id an toàn), chuẩn hoá history/conversation |
 | `chat/manager_chat.py` | `hub.telegram.manager`: tin không `/` → `manager.chat(channel=telegram:<chat>)`, reply → đúng conversation (`hub_state telegram.mgr_*`), `/moi`, `manager.reply` (theo `channel`) → khung WT-8 |
 | `web/manager_stub.py` | Stub `manager.*` cùng chữ ký — CHỈ test/demo (`install(daemon, force=)`) |
@@ -349,8 +349,11 @@ Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes
 | `tui/manager.py` | `ManagerScreen` (phím `m` ở `top`): hội thoại + "Hành động" (Enter → Attach/Tasks, chỉ đích hợp lệ) + transcript `RichLog(markup=False)` + ô nhập; Ctrl-N mới, Ctrl-T dừng lượt. Hội thoại kênh `cli` DÙNG CHUNG với `cfharness chat`; audit kênh `tui` |
 | `termsafe.py` | `clean()`/`one_line()`: bỏ ANSI/OSC/C1, điều khiển, bidi, zero-width trước khi in chữ agent ra terminal |
 
-Bất biến: chữ của điều phối viên (trả lời, tóm tắt/đích hành động) là DỮ LIỆU — web vẽ bằng autoescape + `pre-wrap` (không markdown, không `|safe`,
-không link do agent đặt; HTML qua SSE vẽ phía server, delta gán `textContent`); Telegram chỉ sau tiền tố cố định (markdown → HTML whitelist, `chat/mdconv.py`), không bao giờ kèm nút.
+Bất biến: chữ của điều phối viên (trả lời, tóm tắt/đích hành động) là DỮ LIỆU. Web: câu trả lời/báo vẽ bằng `present.md()` đã cứng hoá
+(chủ repo chốt Q1 2026-11-13 — `docs/dev-notes/plan-chat-ui-claude.md`: `html=False`, không `<img>`, link ngoài `rel=nofollow noopener noreferrer`
++ tên miền, `javascript:`/`data:` không thành link, không `style=`) — đầu ra của `md()` là thứ DUY NHẤT được `|safe`/innerHTML (`draft`/`reply` qua
+SSE); tóm tắt/đích hành động, suy nghĩ, tên tool, tin của NGƯỜI vẫn là autoescape/`textContent` (`pre-wrap`); link nội bộ chỉ từ `mgr_target`;
+delta gán `textContent`; Telegram chỉ sau tiền tố cố định (markdown → HTML whitelist, `chat/mdconv.py`), không bao giờ kèm nút.
 Mọi ghi từ web qua `post_guard` (CSRF + khoá phiên WT-1) với `_audit.channel=web`; từ Telegram qua `bot.call` (cổng người + allowlist from.id, audit
 `telegram:<id>`). Terminal (REPL/TUI): chữ agent qua `termsafe.clean` + `rich.Text` (không markup, không OSC 8 link); `cfharness chat` ∈ `HUB_HUMAN_ONLY_CLI`.
 Ngoại lệ (chủ repo quyết 2026-10-26, giống Claude Code): `cfharness chat` fullscreen + màn xem agent vẽ lời agent bằng MARKDOWN qua `tui/cc_render.markdown_text`

@@ -96,11 +96,13 @@
         <div class="ws-pop"><ul class="mgr-convs">{% for w in wsd.closed %}<li><a href="/manager?w={{ w.id }}"><span class="ct">{{ w.label }}</span></a></li>{% endfor %}</ul></div></details>{% endif %}
     </nav>
     {% endif %}
-    <div class="mgr-log" id="mgr-log" data-sse-manager="/sse/manager?since={{ since }}&amp;epoch={{ epoch }}" data-conv="{{ conv or '' }}" data-runs="{{ (conv_runs or [])|join(' ') }}" aria-live="polite">
+    <div class="mgr-log" id="mgr-log" data-sse-manager="/sse/manager?since={{ since }}&amp;epoch={{ epoch }}" data-conv="{{ conv or '' }}" data-runs="{{ (conv_runs or [])|join(' ') }}">
       {% for it in items %}{{ mg.item(it) }}{% else %}<div class="empty mgr-hero" id="mgr-empty">{{ mc.icon('logo', 'hero-mark') }}<b>{{ wsx.title if wsx and not conv else ('Hôm nay giao việc gì cho đội?' if not conv else 'Chưa có tin nhắn') }}</b><span>{% if wsx and not conv %}Nhắn gì ở đây cũng thuộc luồng này. Điều phối viên nhớ luồng qua ghi chú ở panel bên phải.{% else %}Nói mục tiêu bằng lời — điều phối viên tự tạo agent/team, giao việc, theo dõi và báo lại. Mỗi epic nên mở một luồng (＋ Luồng) để việc không lẫn vào nhau.{% endif %}</span></div>{% endfor %}
       {% if pending %}{{ mg.pending(pending) }}{% endif %}
     </div>
+    <p class="sr-only" id="mgr-status-live" role="status"></p>
     <div class="composer-wrap">
+      <button type="button" class="mgr-jump" id="mgr-jump" hidden title="Về tin mới nhất" aria-label="Về tin mới nhất">{{ mc.icon('chev-down', 'sm') }}<span>Tin mới nhất</span></button>
       <form method="post" action="/manager/send" class="mgr-form" id="mgr-form" enctype="multipart/form-data">
         <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="c" value="{{ conv or '' }}"><input type="hidden" name="w" value="{{ wsx.id if wsx and not conv else '' }}">
         <label class="sr-only" for="mgr-text">Tin nhắn cho điều phối viên</label>
@@ -109,8 +111,8 @@
         <div class="composer-bar">
           <input type="file" id="mgr-file" name="attach" multiple class="sr-only" tabindex="-1">
           <label for="mgr-file" class="btn ghost sm icon attach" id="mgr-attach" title="Đính kèm ảnh, tệp văn bản, PDF/Excel/Word/PowerPoint (hoặc kéo–thả, dán ảnh)" tabindex="0" role="button">{{ mc.icon('clip') }}<span class="sr-only">Đính kèm tệp</span></label>
-          <span class="composer-hint">Enter để gửi · Shift+Enter xuống dòng · kéo–thả hoặc dán ảnh để đính kèm</span>
-          <button class="btn primary send" type="submit" title="Gửi" aria-label="Gửi">{{ mc.icon('arrow-up') }}<span class="sr-only">Gửi</span></button>
+          <span class="composer-hint">Enter để gửi · Shift+Enter xuống dòng · Esc dừng · kéo–thả hoặc dán ảnh để đính kèm</span>
+          <button class="btn primary send" type="submit" id="mgr-send" title="Gửi" aria-label="Gửi">{{ mc.icon('arrow-up', 'i-send') }}{{ mc.icon('stop', 'i-stop') }}</button>
         </div>
       </form>
       <div class="mgr-suggest" id="mgr-suggest">

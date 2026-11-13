@@ -202,3 +202,19 @@ These rules apply to free-text replies a person reads. When you are asked for st
   `chatview.FAIL_PREFIX` để lịch sử/TUI vẫn nhận ra lỗi (TUI `failure_text` hiểu cả dạng mới). WT-8 nới ghi ở `telegram.md`.
   Test: `tests/test_mdconv.py`, `tests/tg_html.py`, cập nhật `test_telegram*.py`, `test_slack*.py`, `test_manager.py`.
   Chưa kiểm hiển thị trên Telegram/Slack thật.
+- **P0-4 + P0-5 + P0-6 + P1-1 (Điều phối) + P1-3 (chip) + P1-4 + P1-5 + P1-6 (nút "Tin mới nhất" ở Điều phối) + P1-8 (PR `feat/manager-chat-claude`)**:
+  - SSE `/sse/manager`: mọi message mang `seq`; client bỏ trùng (`seq < lastSeq`, hoặc `== lastSeq` từ kết nối khác), tự nối lại có giãn
+    1→30 s cả sau `end`/lỗi với `since=lastSeq&epoch=` (đóng EventSource để nó không tự nối bằng `since` cũ); epoch đổi → đếm lại từ 0.
+    `message.complete` không subagent → `seg`; `draft{html: md(toàn bộ chữ đã chạy)}` mỗi ≥ 150 ms + cuối đoạn, > 24 KB thôi nháp;
+    `reasoning.delta` → `think{text}`, `tool.start/complete` → `tool{name: short_tool, label, done}` (không có `html`). `reply` = markdown
+    của toàn bộ chữ đã chạy nếu nó chứa câu trả lời cuối (lời dẫn không mất; tải lại trang thì chỉ còn bản DB = `summary`).
+  - Markdown cho tin điều phối viên qua `tx_msg` + filter `md`; tin người vẫn chữ thô; `<template class="mm-src">` cho Sao chép/Sửa.
+    Cập nhật bất biến AGENTS.md (M7 MGR-UI), `M7-ui.md` §3, `web.md`; test `test_manager_content_is_hardened_markdown_user_text_plain`,
+    `test_sse_streams_reply_action_markdown_hardened_with_seq`, `test_sse_seg_think_tool_have_no_html_and_subagent_ignored`,
+    `test_draft_throttled_sanitized_and_capped`, `test_stop_button_route_guards_scope_and_audit`.
+  - `POST /manager/stop`: `post_guard`, `run.get` → agent = điều phối viên + run thuộc hội thoại điều phối (`run_opts.manager_conversation`;
+    daemon cũ/stub: run nằm trong lịch sử hội thoại `c`) → `run.stop` audit `web`. Nút gửi ⇄ Dừng; Esc trong ô trống.
+  - Lệch kế hoạch: message nháp tên `draft` (mục 2 gọi `part`); không đổi `_stream`/`app.py` (không thêm `id:` SSE — client tự nối lại với
+    `since`); Điều phối không dùng `txAppend` (khung đang trả lời có cấu trúc riêng: suy nghĩ / dòng tool / nháp + đuôi) nhưng dùng chung
+    `tx_msg`, `.tx-code`, nút chép, `copyText`, `nearBottom`, `fromHTML`; dòng tên chỉ ẩn khi hai tin điều phối viên liền nhau (CSS `+`).
+    Ảnh `16-dieu-phoi.png`, `17-dieu-phoi-dang-tra-loi.png` chụp lại (web.demo + sự kiện giả).

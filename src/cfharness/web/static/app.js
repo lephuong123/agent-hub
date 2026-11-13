@@ -114,7 +114,11 @@
   });
 
   // ------------------------------------------------------------ ô nhập tự giãn (chat, steer)
-  function autoGrow(t) { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight + 2, 240) + "px"; }
+  // trần = max-height CSS của chính ô (vd .mgr-form textarea 15rem) — một nguồn duy nhất, không lệch số giữa JS và CSS
+  function autoGrow(t) {
+    var cap = parseFloat(window.getComputedStyle ? getComputedStyle(t).maxHeight : "") || 240;
+    t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight + 2, cap) + "px";
+  }
   document.addEventListener("input", function (e) {
     var t = e.target;
     if (t && t.matches && t.matches(".mgr-form textarea, .composer textarea")) autoGrow(t);
@@ -418,7 +422,12 @@
   // Mục HTML do server vẽ sẵn (autoescape) — chữ chạy (delta) chỉ gán bằng textContent. Không bao giờ dựng HTML từ chữ của agent.
   // Đổi tab luồng / hội thoại KHÔNG tải lại cả trang: tải /manager?… bằng fetch, thay #mgr-grid + danh sách hội thoại ở thanh bên,
   // pushState; luồng SSE + ô nhập khởi động lại qua mgrBoot(). Lỗi/không phải trang điều phối → điều hướng thường (an toàn).
-  var mgrStop = null, mgrNav = null, mgrDrafts = {};
+  var mgrStop = null, mgrNav = null;
+  // bản nháp ô nhập theo hội thoại/luồng — sessionStorage (giữ khi đổi tab và khi tải lại trang; riêng từng tab trình duyệt)
+  function draftGet(k) { try { return sessionStorage.getItem("cfh_mgr_draft:" + k) || ""; } catch (_) { return ""; } }
+  function draftSet(k, v) {
+    try { if (v && v.trim()) sessionStorage.setItem("cfh_mgr_draft:" + k, v); else sessionStorage.removeItem("cfh_mgr_draft:" + k); } catch (_) {}
+  }
   function mgrBoot() {
     if (mgrStop) { mgrStop(); mgrStop = null; }
     var el = document.querySelector("[data-sse-manager]");
@@ -440,7 +449,7 @@
     var grid = document.getElementById("mgr-grid");
     if (!grid || !window.fetch || !window.DOMParser) { location.href = url; return; }
     var tx = document.getElementById("mgr-text");
-    if (tx) { var dk = draftKey(); if (tx.value.trim()) mgrDrafts[dk] = tx.value; else delete mgrDrafts[dk]; }
+    if (tx) draftSet(draftKey(), tx.value);
     if (mgrNav && mgrNav.abort) mgrNav.abort();
     var ctl = window.AbortController ? new AbortController() : {};
     mgrNav = ctl;
@@ -476,8 +485,7 @@
         var on = document.querySelector("#ws-tabs .ws-tab.on");
         if (on && on.scrollIntoView) on.scrollIntoView({ block: "nearest", inline: "nearest" });
         mgrBoot();
-        var t2 = document.getElementById("mgr-text"), d = mgrDrafts[draftKey()];
-        if (t2 && d) { t2.value = d; autoGrow(t2); }
+        var t2 = document.getElementById("mgr-text");  // bản nháp: initManager tự khôi phục từ sessionStorage
         if (t2 && window.matchMedia && window.matchMedia("(pointer: fine)").matches) t2.focus({ preventScroll: true });
       })
       .catch(function (err) {
@@ -502,25 +510,87 @@
   }
 
   function initManager(ml) {
-    var mes = null, tabsT = null, tabsPoll = null;
+    var mes = null, tabsT = null, tabsPoll = null, retryT = null, backoff = 1000, dead = false;
     var mform = document.getElementById("mgr-form");
     var mtext = document.getElementById("mgr-text");
     var merr = document.getElementById("mgr-err");
     var mlive = document.getElementById("mgr-live");
+    var msend = document.getElementById("mgr-send");
+    var mjump = document.getElementById("mgr-jump");
+    var mstatus = document.getElementById("mgr-status-live");
     var conv = ml.getAttribute("data-conv") || "";
     var runs = {};
     (ml.getAttribute("data-runs") || "").split(" ").forEach(function (r) { if (r) runs[r] = true; });
     var pend = {};       // run → phần tử "đang trả lời"
     var early = {};      // run → [tin SSE tới trước khi fetch trả run id]
     var replied = {};
+    var picked = [];
     var p0 = ml.querySelector("[data-pending]");
     if (p0) pend[p0.getAttribute("data-pending")] = p0;
-    ml.scrollTop = ml.scrollHeight;
-    window.addEventListener("load", function () { ml.scrollTop = ml.scrollHeight; });
-    setTimeout(function () { ml.scrollTop = ml.scrollHeight; }, 300);
+    // P0-4: bỏ trùng theo seq của event gốc. Nhiều message của CÙNG một event (delta + draft) có cùng seq → seq == lastSeq chỉ bị bỏ khi
+    // tới từ một kết nối KHÁC (nối lại với since=lastSeq thì daemon chỉ phát seq > lastSeq — đây là chốt chặn phụ).
+    var lastSeq = 0, lastConn = 0, connN = 0, epoch = "";
+    try {
+      var u0 = new URL(ml.getAttribute("data-sse-manager"), location.href);
+      lastSeq = parseInt(u0.searchParams.get("since") || "0", 10) || 0;
+      epoch = u0.searchParams.get("epoch") || "";
+    } catch (_) {}
+    function bottom() { ml.scrollTop = ml.scrollHeight; }
+    bottom();
+    window.addEventListener("load", bottom);
+    setTimeout(bottom, 300);
     function dropEmpty() { var e = document.getElementById("mgr-empty"); if (e) e.remove(); }
     function stick() { return nearBottom(ml); }
-    function put(node, atBottom) { if (!node) return; dropEmpty(); ml.appendChild(node); if (atBottom) ml.scrollTop = ml.scrollHeight; }
+    // nút "↓ Tin mới nhất": hiện khi người đã cuộn lên mà có nội dung mới tới; cuộn mượt CHỈ khi bấm nút
+    var unseen = false;
+    function jumpPaint() { if (mjump) mjump.hidden = !(unseen && !stick()); }
+    function after(s) { if (s) bottom(); else { unseen = true; jumpPaint(); } }
+    ml.addEventListener("scroll", function () { if (stick()) unseen = false; jumpPaint(); }, { passive: true });
+    if (mjump) mjump.addEventListener("click", function () {
+      unseen = false; mjump.hidden = true;
+      try { ml.scrollTo({ top: ml.scrollHeight, behavior: "smooth" }); } catch (_) { bottom(); }
+    });
+    function put(node, s) { if (!node) return; dropEmpty(); ml.appendChild(node); refreshTimes(node); after(s); }
+    function announce(t) { if (mstatus) { mstatus.textContent = ""; setTimeout(function () { mstatus.textContent = t; }, 60); } }
+    // chỉ tin điều phối viên CUỐI có nút "Thử lại"
+    function markLast() {
+      var ms = ml.querySelectorAll(".mm.mgr:not(.pending):not(.notify)");
+      for (var i = 0; i < ms.length; i++) ms[i].classList.toggle("last", i === ms.length - 1);
+    }
+    markLast();
+    function pendingRun() { var ks = Object.keys(pend); return ks.length ? ks[ks.length - 1] : null; }
+    // P0-6: nút gửi = nút Dừng khi có lượt đang trả lời và ô nhập trống; có chữ → gửi (steer). Trống + không chạy → disabled thật.
+    function paintSend() {
+      if (!msend || !mtext) return;
+      var has = !!mtext.value.trim() || picked.length > 0, stopMode = !has && !!pendingRun();
+      msend.classList.toggle("stop", stopMode);
+      msend.disabled = !has && !stopMode;
+      msend.title = stopMode ? "Dừng trả lời (Esc)" : "Gửi";
+      msend.setAttribute("aria-label", stopMode ? "Dừng trả lời" : "Gửi");
+    }
+    function busyChips(r, on) {
+      var cs = ml.querySelectorAll(".mm-acts");
+      for (var i = 0; i < cs.length; i++) if (cs[i].getAttribute("data-run") === r) cs[i].classList.toggle("running", !!on);
+    }
+    function settle(r) { delete pend[r]; busyChips(r, false); paintSend(); }
+    function parts(p) {
+      return { md: p.querySelector(".mm-live .md"), tail: p.querySelector(".mm-tail"), think: p.querySelector(".mm-think"),
+               tool: p.querySelector(".mm-tool"), toolT: p.querySelector(".mm-tool-t") };
+    }
+    function stopRun() {
+      var r = pendingRun();
+      if (!r || !mform || !window.fetch) return;
+      var p = pend[r], fd = new FormData();
+      var cs = mform.querySelector('input[name="csrf"]');
+      fd.append("csrf", cs ? cs.value : ""); fd.append("k", getKey()); fd.append("run", r); fd.append("c", conv);
+      var st = p && p.querySelector(".mm-state .spin");
+      if (st) st.textContent = "đang dừng…";
+      fetch("/manager/stop", { method: "POST", body: fd, credentials: "same-origin", headers: { "X-Ahub-Fetch": "1" } })
+        .then(function (resp) { return resp.json().catch(function () { return { error: "Lỗi " + resp.status }; }); })
+        .then(function (j) { if (j.error && merr) { merr.textContent = j.error; merr.hidden = false; } }, function () {
+          if (merr) { merr.textContent = "Không dừng được — kiểm tra kết nối rồi thử lại."; merr.hidden = false; }
+        });
+    }
     function handle(m) {
       var r = m.run, s = stick();
       if (m.t === "tick" || m.t === "status" || m.t === "run_end" || m.t === "reply") tabsSoon();
@@ -540,7 +610,6 @@
         var qn = fromHTML(m.html);
         if (!qn) return;
         if (ex) ex.replaceWith(qn); else put(qn, s);
-        refreshTimes(qn);
         return;
       }
       if (m.t === "action") {
@@ -553,40 +622,79 @@
       }
       var mine = m.t === "reply" && m.conv && conv && m.conv === conv;  // tin của đúng cuộc trò chuyện này (vd notify từ lượt nhịp)
       if (r && !runs[r] && !mine) { (early[r] = early[r] || []).push(m); if (early[r].length > 400) early[r].shift(); return; }
-      if (m.t === "delta") {
-        var p = pend[r];
-        if (p) { p.querySelector(".mm-text").textContent += m.text; if (s) ml.scrollTop = ml.scrollHeight; }
+      var p = pend[r], q = p ? parts(p) : null;
+      if (m.t === "delta" || m.t === "draft" || m.t === "seg") {
+        if (!q) return;
+        // chữ chạy: delta thô → textContent ở đuôi; `draft` = HTML của present.md() do SERVER vẽ → thay phần đã render, xoá đuôi
+        if (m.t === "delta") q.tail.textContent += m.text || "";
+        else if (m.t === "seg") { if (q.tail.textContent) q.tail.textContent += "\n\n"; }
+        else { q.md.innerHTML = m.html || ""; q.tail.textContent = ""; }
+        if (q.tail.textContent || q.md.firstChild) p.classList.add("has-text");
+        after(s);
+      } else if (m.t === "think") {
+        if (!q) return;
+        q.think.hidden = false;
+        q.think.querySelector("pre").textContent += m.text || "";
+        after(s);
+      } else if (m.t === "tool") {
+        if (!q) return;
+        var on = p._tools || (p._tools = {});
+        var id = m.id || m.name;
+        if (m.done) delete on[id]; else on[id] = m.label || m.name;
+        var left = Object.keys(on);
+        q.tool.hidden = !left.length;
+        if (left.length) q.toolT.textContent = "Đang dùng " + on[left[left.length - 1]] + (left.length > 1 ? " (+" + (left.length - 1) + ")" : "") + "…";
+        after(s);
       } else if (m.t === "reply" && m.notify) {
         var nn = fromHTML(m.html);  // báo chủ động giữa lượt: chèn trước khung "đang trả lời", không thay nó
-        if (pend[r]) { dropEmpty(); ml.insertBefore(nn, pend[r]); } else put(nn, s);
-        if (s) ml.scrollTop = ml.scrollHeight;
+        if (!nn) return;
+        if (p) { dropEmpty(); ml.insertBefore(nn, p); refreshTimes(nn); after(s); } else put(nn, s);
       } else if (m.t === "reply") {
+        var dup = r && ml.querySelector('.mm.mgr:not(.pending):not(.notify)[data-run="' + r + '"]');
+        if (replied[r] && dup) return;  // phát lại (daemon khởi động lại / nối lại) — đã có câu trả lời
         replied[r] = true;
         var node = fromHTML(m.html);
-        if (pend[r]) { pend[r].replaceWith(node); delete pend[r]; if (s) ml.scrollTop = ml.scrollHeight; }
-        else put(node, s);
+        if (!node) return;
+        if (p) {
+          var th = q.think;  // giữ khối suy nghĩ (chữ đã gán bằng textContent) trong câu trả lời cuối
+          if (th && !th.hidden && th.querySelector("pre").textContent) {
+            var who = node.querySelector(".mm-who");
+            th.querySelector("summary").textContent = "Suy nghĩ";
+            if (who) who.after(th); else node.insertBefore(th, node.firstChild);
+          }
+          p.replaceWith(node); refreshTimes(node); after(s);
+        } else put(node, s);
+        settle(r); markLast();
+        announce("Điều phối viên đã trả lời");
       } else if (m.t === "action") {
         // gom vào khối "Đã làm N việc" của cùng lượt nếu khối đó là mục cuối (trước khung "đang trả lời")
-        var anchor = pend[r] || null;
-        var last = anchor ? anchor.previousElementSibling : ml.lastElementChild;
+        var last = p ? p.previousElementSibling : ml.lastElementChild;
         if (last && last.classList.contains("mm-acts") && last.getAttribute("data-run") === r) {
-          var one = fromHTML(m.one);
-          if (one) last.appendChild(one);
+          var one = fromHTML(m.one), list = last.querySelector(".mm-acts-list") || last;
+          if (one) list.appendChild(one);
           var n = last.querySelector(".n"); if (n) n.textContent = String(last.querySelectorAll(".mm-act").length);
+          var lt = last.querySelector(".mm-acts-last"), sum = one && one.querySelector(".mm-act-sum");
+          if (lt && sum) lt.textContent = sum.textContent.length > 60 ? sum.textContent.slice(0, 59) + "…" : sum.textContent;
           if (!m.ok) last.classList.add("err");
         } else {
           var a = fromHTML(m.html);
-          if (anchor) { dropEmpty(); ml.insertBefore(a, anchor); } else put(a, s);
+          if (!a) return;
+          if (p) { dropEmpty(); ml.insertBefore(a, p); } else put(a, s);
+          last = a;
         }
-        if (s) ml.scrollTop = ml.scrollHeight;
+        if (p && last) last.classList.add("running");
+        after(s);
       } else if (m.t === "run_end") {
+        busyChips(r, false);
         setTimeout(function () {
           if (replied[r]) return;
-          var n = fromHTML(m.html);
-          if (pend[r]) {
-            if (m.ok) { pend[r].querySelector(".mm-who").textContent = "Điều phối viên · đã xong — tải lại trang nếu chưa thấy trả lời"; }
-            else { pend[r].replaceWith(n); delete pend[r]; }
-          } else if (!m.ok) put(n, stick());
+          var n2 = fromHTML(m.html), p2 = pend[r];
+          if (p2) {
+            p2.removeAttribute("aria-busy");
+            if (m.ok) { var w = p2.querySelector(".mm-state"); if (w) w.textContent = " · đã xong — tải lại trang nếu chưa thấy trả lời"; }
+            else if (n2) p2.replaceWith(n2);
+            settle(r);
+          } else if (!m.ok) put(n2, stick());
         }, 2500);
       }
     }
@@ -613,23 +721,86 @@
         }, function () {});
     }
     tabsPoll = setInterval(function () { if (!document.hidden) tabsSoon(0); }, 20000);
-    if (window.EventSource) {
-      mes = new EventSource(ml.getAttribute("data-sse-manager"));
-      mes.onopen = function () { if (mlive) { mlive.textContent = "● trực tiếp"; mlive.className = "pill ok live-dot"; } };
-      mes.onerror = function () { if (mlive) { mlive.textContent = "↻ đang nối lại…"; mlive.className = "pill warn"; } };
-      mes.onmessage = function (ev) { var m; try { m = JSON.parse(ev.data); } catch (_) { return; } if (m.t === "end") { mes.close(); return; } handle(m); };
+    // P0-4: SSE tự nối lại có giãn (cả sau `end`) với since = seq cuối đã nhận → không lặp chữ, không chết luồng
+    function liveState(ok) {
+      if (!mlive) return;
+      mlive.textContent = ok ? "● trực tiếp" : "↻ đang nối lại…";
+      mlive.className = ok ? "pill ok live-dot" : "pill warn";
     }
+    function reconnect() {
+      if (dead) return;
+      liveState(false);
+      clearTimeout(retryT);
+      retryT = setTimeout(connect, backoff);
+      backoff = Math.min(backoff * 2, 30000);
+    }
+    function connect() {
+      if (dead || !window.EventSource) return;
+      var my = ++connN;
+      var es = mes = new EventSource("/sse/manager?since=" + lastSeq + "&epoch=" + encodeURIComponent(epoch));
+      es.onopen = function () { if (my === connN) { backoff = 1000; liveState(true); } };
+      es.onerror = function () { if (my !== connN) return; es.close(); reconnect(); };  // tự nối (trình duyệt sẽ dùng lại since CŨ)
+      es.onmessage = function (ev) {
+        if (my !== connN) return;
+        var m;
+        try { m = JSON.parse(ev.data); } catch (_) { return; }
+        if (m.t === "hello") {
+          if (m.epoch && epoch && m.epoch !== epoch) { lastSeq = 0; lastConn = my; }  // daemon khởi động lại: seq đếm lại từ đầu
+          if (m.epoch) epoch = m.epoch;
+          return;
+        }
+        if (m.t === "end") { es.close(); reconnect(); return; }
+        if (typeof m.seq === "number") {
+          if (m.seq < lastSeq || (m.seq === lastSeq && lastConn !== my)) return;
+          lastSeq = m.seq; lastConn = my;
+        }
+        handle(m);
+      };
+    }
+    connect();
+    // ---- ô nhập
+    function saveDraft() { if (mtext) draftSet(draftKey(), mtext.value); }
+    function fill(text, send) {
+      if (!mtext) return;
+      mtext.value = text; autoGrow(mtext); saveDraft(); paintSend();
+      mtext.focus();
+      try { mtext.setSelectionRange(mtext.value.length, mtext.value.length); } catch (_) {}
+      if (send && mform) { if (mform.requestSubmit) mform.requestSubmit(); else mform.dispatchEvent(new Event("submit", { cancelable: true })); }
+    }
+    function srcOf(el) { var t = el && el.querySelector("template.mm-src"); return t ? t.content.textContent : ""; }
+    // P1-5: thao tác dưới tin (uỷ quyền): Sao chép (văn bản gốc trong <template>), Thử lại (tin cuối), Sửa (tin của người)
+    ml.addEventListener("click", function (e) {
+      var b = e.target.closest && e.target.closest("[data-mm]");
+      if (!b || !ml.contains(b)) return;
+      var msg = b.closest(".mm"), act = b.getAttribute("data-mm");
+      if (act === "copy") {
+        copyText(srcOf(msg)).then(function () { b.classList.add("done"); b.title = "Đã chép"; }, function () { b.title = "Không chép được"; })
+          .then(function () { setTimeout(function () { b.classList.remove("done"); b.title = "Sao chép"; }, 1500); });
+      } else if (act === "edit") {
+        fill(srcOf(msg), false);
+      } else if (act === "retry") {
+        var prev = msg.previousElementSibling;
+        while (prev && !prev.classList.contains("user")) prev = prev.previousElementSibling;
+        if (prev && !pendingRun()) fill(srcOf(prev), true);
+      }
+    });
+    if (mtext) {
+      var dv = draftGet(draftKey());
+      if (dv && !mtext.value) { mtext.value = dv; autoGrow(mtext); }
+      mtext.addEventListener("input", function () { saveDraft(); paintSend(); });
+    }
+    paintSend();
     if (mform && window.fetch && window.FormData) {
       // ---- đính kèm: nút 📎 (input file), kéo–thả vào ô nhập, dán ảnh. Giới hạn = của daemon; server kiểm lại theo nội dung.
       var IMG_TYPES = { "image/png": 1, "image/jpeg": 1, "image/gif": 1, "image/webp": 1 };
       var MAX_IMG = 4, MAX_DOC = 4, IMG_BYTES = 5 * 1024 * 1024, DOC_BYTES = 10 * 1024 * 1024;
-      var picked = [];
       var finput = document.getElementById("mgr-file");
       var flist = document.getElementById("mgr-files");
-      function isImg(f) { return !!IMG_TYPES[(f.type || "").toLowerCase()]; }
-      function human(n) { return n < 1024 ? n + " B" : n < 1048576 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB"; }
-      function showErr(msg) { if (merr) { merr.textContent = msg; merr.hidden = !msg; } }
-      function drawFiles() {
+      var isImg = function (f) { return !!IMG_TYPES[(f.type || "").toLowerCase()]; };
+      var human = function (n) { return n < 1024 ? n + " B" : n < 1048576 ? Math.round(n / 1024) + " KB" : (n / 1048576).toFixed(1) + " MB"; };
+      var showErr = function (msg) { if (merr) { merr.textContent = msg; merr.hidden = !msg; } };
+      var drawFiles = function () {
+        paintSend();
         if (!flist) return;
         flist.textContent = "";
         flist.hidden = !picked.length;
@@ -651,8 +822,8 @@
           li.appendChild(x);
           flist.appendChild(li);
         });
-      }
-      function addFiles(list) {
+      };
+      var addFiles = function (list) {
         var errs = [];
         for (var i = 0; i < list.length; i++) {
           var f = list[i];
@@ -666,7 +837,7 @@
         }
         drawFiles();
         showErr(errs.join("; "));
-      }
+      };
       if (finput) finput.addEventListener("change", function () { addFiles(finput.files); finput.value = ""; });
       var attachBtn = document.getElementById("mgr-attach");
       if (attachBtn && finput) attachBtn.addEventListener("keydown", function (e) {
@@ -697,22 +868,25 @@
         }
         addFiles(out);
       });
+      var coarse = window.matchMedia ? window.matchMedia("(pointer: coarse)") : null;
       if (mtext) mtext.addEventListener("keydown", function (e) {
-        // Enter gửi; Shift+Enter xuống dòng; không gửi khi đang gõ dấu (IME)
-        if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); if (mform.requestSubmit) mform.requestSubmit(); else mform.submit(); }
+        // Esc (ô trống): dừng lượt đang trả lời. Enter gửi; Shift+Enter xuống dòng; màn cảm ứng: Enter = xuống dòng (gửi bằng nút);
+        // không gửi khi đang gõ dấu (IME)
+        if (e.key === "Escape" && pendingRun() && !mtext.value.trim()) { e.preventDefault(); stopRun(); return; }
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !(coarse && coarse.matches)) {
+          e.preventDefault(); if (mform.requestSubmit) mform.requestSubmit(); else mform.submit();
+        }
       });
       var sug = document.getElementById("mgr-suggest");
       if (sug && mtext) sug.addEventListener("click", function (e) {
         var b = e.target.closest("button[data-fill]");
         if (!b) return;
-        mtext.value = b.getAttribute("data-fill"); mtext.focus(); autoGrow(mtext);
-        try { mtext.setSelectionRange(mtext.value.length, mtext.value.length); } catch (_) {}
+        fill(b.getAttribute("data-fill"), false);
       });
       mform.addEventListener("submit", function (e) {
         e.preventDefault();  // khoá phiên `k` đã được gắn ở pha capture (trên)
-        if (!mtext.value.trim() && !picked.length) return;
-        var btn = mform.querySelector("button[type=submit]");
-        if (btn) btn.disabled = true;
+        if (!mtext.value.trim() && !picked.length) { if (pendingRun()) stopRun(); return; }
+        if (msend) msend.disabled = true;
         if (merr) merr.hidden = true;
         var fd = new FormData(mform);
         fd.delete("attach");
@@ -721,6 +895,7 @@
           .then(function (resp) { return resp.json().catch(function () { return { error: "Lỗi " + resp.status }; }); })
           .then(function (j) {
             if (j.error) { if (merr) { merr.textContent = j.error; merr.hidden = false; } return; }
+            draftSet(draftKey(), "");
             if (j.conversation_id && j.conversation_id !== conv) {
               conv = j.conversation_id;
               var ci = mform.querySelector('input[name="c"]'); if (ci) ci.value = conv;
@@ -737,11 +912,13 @@
             picked = []; drawFiles();
           })
           .catch(function () { if (merr) { merr.textContent = "Không gửi được — kiểm tra kết nối rồi thử lại."; merr.hidden = false; } })
-          .then(function () { if (btn) btn.disabled = false; mtext.focus(); });
+          .then(function () { paintSend(); mtext.focus(); });
       });
     }
     return function stop() {
+      dead = true;
       if (mes) mes.close();
+      clearTimeout(retryT);
       clearInterval(tabsPoll);
       clearTimeout(tabsT);
     };
