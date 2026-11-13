@@ -15,8 +15,8 @@
         {% if f.modified %}<span class="pill danger">đã bị sửa tiếp</span>{% endif %}</summary>
       {% if f.binary %}<p class="muted small">File nhị phân — không hiển thị nội dung.</p>
       {% elif not f.has_patch %}<p class="muted small">{{ 'Không có nội dung diff (workspace không phải git).' if dv.kind != 'git' else 'Không hiển thị được nội dung (patch đã bị cắt hoặc thiếu).' }}</p>
-      {% else %}<pre class="udiff" tabindex="0">{% for cls, t in f.lines %}<span class="dl {{ cls }}">{{ t }}</span>
-{% endfor %}{% if f.more %}<span class="dl meta">… còn {{ f.more }} dòng — xem đủ: cfharness run diff {{ run.id }} --patch</span>{% endif %}</pre>{% endif %}
+      {#- mỗi dòng là <span class="dl"> display:block — KHÔNG để "\n" giữa các span: trong <pre> nó thành một dòng trống giữa mọi hàng -#}
+      {% else %}<pre class="udiff" tabindex="0">{% for cls, t in f.lines %}<span class="dl {{ cls }}">{{ t }}</span>{% endfor %}{% if f.more %}<span class="dl meta">… còn {{ f.more }} dòng — xem đủ: cfharness run diff {{ run.id }} --patch</span>{% endif %}</pre>{% endif %}
     </details>
   {% endfor %}
   </div>

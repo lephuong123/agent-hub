@@ -812,9 +812,27 @@ async def run_page(request: Request) -> Response:
     qs = await questions(request, "all", run_id=run["id"])
     tx = replay_tx(events)
     final_text = P.mark_final(tx.items)
-    return await render(request, "run.html", {**ctx, "nav": "runs", "items": tx.blocks(), "since": since, "epoch": epoch, "children": children,
-                                              "run_questions": [q for q in qs if q["status"] in ("open", "with_manager")],
-                                              "summary_dup": P.same_text(ctx["run"].get("summary"), final_text)})
+    blocks, before, hidden = P.page_blocks(tx.blocks())  # P2: run dài → chỉ vẽ phần cuối + nút "Hiện các mục trước"
+    return await render(request, "run.html", {**ctx, "nav": "runs", "items": blocks, "older": before, "older_n": hidden, "since": since, "epoch": epoch,
+                                              "children": children, "run_questions": [q for q in qs if q["status"] in ("open", "with_manager")],
+                                              "summary_dup": P.same_text(ctx["run"].get("summary"), final_text),
+                                              "started_iso": P.iso_ts(ctx["run"].get("started_at") or ctx["run"].get("created_at"))})
+
+
+async def partial_run_items(request: Request) -> Response:
+    """P2: phần transcript TRƯỚC mốc `before` (seq của event tạo khối đầu tiên đang hiện) của run dài — cùng bộ gộp + macro với trang run
+    (nhóm tool nguyên vẹn, subagent lồng). Cần đăng nhập như mọi trang (GuardMiddleware). Mốc không hợp lệ → 400."""
+    rid = request.path_params["id"]
+    try:
+        before = int(request.query_params.get("before") or "")
+    except ValueError:
+        return Response("before phải là số", status_code=400)
+    run = await rpc(request, "run.get", {"id": rid, "events": True})
+    tx = replay_tx(run.pop("events", []) or [])
+    P.mark_final(tx.items)
+    blocks, more, hidden = P.page_blocks(tx.blocks(), before)
+    return ws(request).templates.TemplateResponse(request, "_run_items.html", {"items": blocks, "before": more, "hidden": hidden, "run_id": run["id"]},
+                                                  headers={"Cache-Control": "no-store"})
 
 
 async def partial_run(request: Request) -> Response:
@@ -1459,6 +1477,37 @@ PART_EVERY_CHARS = 400  # …hoặc khi đã thêm từng này ký tự
 PART_MAX = 8000  # khối dài hơn → thôi gửi `part` (client vẫn nối chữ thô; message.complete thay bằng bản cuối)
 
 
+def run_status_line(ev: dict[str, Any]) -> dict[str, Any] | None:
+    """P2: dòng trạng thái kiểu Claude Code ở đáy transcript live ("✳ Đang nghĩ… 12s · 3.4k token"). Message
+    `{t:"status", state, label}` (state: think|tool|wait) hoặc `{t:"status", think_tokens}` (ước lượng token suy nghĩ, `reasoning.progress`).
+    Không bao giờ có HTML — client gán textContent; số giây do client đếm từ lúc run bắt đầu, token lấy từ `stats.out`."""
+    t = ev.get("type")
+    p = ev.get("payload") or {}
+    sub = bool(ev.get("subagent_id"))
+    if t == "turn.start" and not sub:
+        return {"t": "status", "state": "think", "label": "Đang nghĩ…"}
+    if t == "reasoning.progress" and not sub and isinstance(p.get("estimated_tokens"), (int, float)):
+        return {"t": "status", "think_tokens": "~" + P.fmt_tokens(p["estimated_tokens"])}
+    if t == "tool.generating":
+        return {"t": "status", "state": "tool", "label": ("Subagent · " if sub else "") + f"Đang soạn lệnh {P.short_tool(str(p.get('name') or '?'))}…"}
+    if t == "tool.start":
+        inp = p.get("input") if isinstance(p.get("input"), dict) else None
+        v = P.tool_view(str(p.get("name") or "?"), inp, summary=str(p.get("args_preview") or ""))
+        label = " ".join(x for x in (v.get("verb"), v.get("target")) if x)[:100]
+        return {"t": "status", "state": "tool", "label": ("Subagent · " if sub else "") + label + "…"}
+    if t == "tool.complete" and not sub:
+        return {"t": "status", "state": "think", "label": "Đang nghĩ…"}
+    if t == "approval.waiting_human":
+        return {"t": "status", "state": "wait", "label": "Chờ bạn duyệt…"}
+    if t == "approval.open":
+        return {"t": "status", "state": "wait", "label": "Chờ duyệt…"}
+    if t == "question.open" or t == "question.escalated":
+        return {"t": "status", "state": "wait", "label": "Chờ câu trả lời…"}
+    if t in ("approval.resolved", "question.answered"):
+        return {"t": "status", "state": "think", "label": "Đang nghĩ…"}
+    return None
+
+
 def _run_converter(templates: Jinja2Templates, clock: Callable[[], float] = time.monotonic,
                    prime: list[dict[str, Any]] | None = None) -> Callable[[dict[str, Any]], list[dict[str, Any]]]:
     """event → message SSE của trang run. Hợp đồng (client `txAppend` trong app.js):
@@ -1503,6 +1552,9 @@ def _run_converter(templates: Jinja2Templates, clock: Callable[[], float] = time
         s = P.stats_of(ev)
         if s:
             out.append({"t": "stats", **s})
+        st = run_status_line(ev)
+        if st:
+            out.append(st)
         nodes = tx.nodes
         items = tx.feed(ev)
         if tx.nodes != nodes or (t == "message.complete" and not ev.get("subagent_id")):
@@ -1657,7 +1709,7 @@ def make_templates() -> Jinja2Templates:
     env.autoescape = True
     env.globals.update({"agent_status": P.agent_status, "run_status": P.run_status, "task_status": lambda s: P.TASK_STATUS.get(s or "", (s or "—", "muted")),
                         "is_live_run": P.is_live_run, "action_view": P.action_view, "wait_reason": P.wait_reason, "tokens_of": P.tokens_of, "TASK_COLUMNS": P.TASK_COLUMNS,
-                        "question_view": P.question_view, "run_title": P.run_title, "static": static_url})
+                        "question_view": P.question_view, "run_title": P.run_title, "static": static_url, "cut_note": P.cut_note})
     env.filters.update({"cost": P.fmt_cost, "tok": P.fmt_tokens, "dur": P.fmt_dur, "ts": P.fmt_ts, "ago": P.ago, "first": P.first_line,
                         "tool": P.short_tool, "md": lambda s: Markup(P.md(s)), "usd": lambda v: "—" if v is None else f"${float(v):.4f}",
                         "j": lambda v: json.dumps(v, ensure_ascii=False, indent=2, default=str), "iso": P.iso_ts, "avatar": P.avatar_tone})
@@ -1689,6 +1741,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/runs/{id}", run_page),
         Route("/partials/run/{id}", partial_run),
         Route("/partials/run/{id}/result", partial_run_result),
+        Route("/partials/run/{id}/items", partial_run_items),
         Route("/inbox", inbox_page),
         Route("/approvals", approvals_page),
         Route("/tasks", tasks_page),

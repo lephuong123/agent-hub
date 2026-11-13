@@ -19,9 +19,12 @@
 <section class="run-tx" aria-labelledby="run-tx-h">
   <div class="run-tx-head"><h2 id="run-tx-h">{{ m.icon('run') }} Diễn biến</h2>{% if live_run %}<span class="pill ok live-dot" id="live-state">{{ m.icon('dot', 'pulse') }}trực tiếp</span>{% endif %}</div>
   <div id="transcript" class="transcript"{% if live_run %} data-sse-run="/sse/run/{{ run.id }}?since={{ since }}&amp;epoch={{ epoch }}"{% endif %}>
+    {% if older_n %}{{ ti.older(run.id, older, older_n) }}{% endif %}
     {% for it in items %}{{ ti.item(it) }}{% endfor %}
     {% if not items %}{{ m.empty("Chưa có diễn biến nào" ~ (" — run đang chờ slot" if run.status == 'queued' else "") ~ ".", "clock") }}{% endif %}
   </div>
+  {#- P2: dòng trạng thái kiểu Claude Code (app.js đếm giây từ data-start, chữ/token từ SSE `status`/`stats`; chỉ textContent) -#}
+  {% if live_run %}<div class="tx-status" id="tx-status" data-start="{{ started_iso }}"><span class="tx-status-ic" aria-hidden="true">✳</span> <span class="tx-status-t">{{ 'Đang chờ slot…' if run.status == 'queued' else ('Chờ bạn duyệt…' if run.status == 'waiting_human' else 'Đang nghĩ…') }}</span> <span class="tx-status-m"></span></div>{% endif %}
 </section>
 
 {% if live_run %}<div id="run-tail"></div>{% else %}{% include "_run_result.html" %}{% endif %}
