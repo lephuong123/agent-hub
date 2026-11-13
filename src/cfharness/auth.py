@@ -101,6 +101,10 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "schedule.create", "schedule.update", "schedule.pause", "schedule.resume", "schedule.rm", "schedule.run_now",
         # Cập nhật cfharness (updater.py): cài đè phần mềm + dừng/khởi động lại daemon NGOÀI sandbox — chỉ người
         "update.start",
+        # Tài khoản Claude (accounts/): token = quyền dùng tài khoản Claude của người; đổi tài khoản CHỈ do người (không tự đổi, không
+        # MANAGER_ALLOWED) — agent không được tự thêm/đổi/xoá/kiểm tài khoản hay mở phiên `claude setup-token`
+        "account.login_start", "account.login_finish", "account.login_cancel", "account.add_token", "account.use", "account.rename",
+        "account.rm", "account.check",
         # Tổng quan máy (admin_overview.py): CHỈ ĐỌC nhưng lộ hoạt động của user OS khác trên máy (chi phí, số run) — chỉ người
         "admin.overview",
         # Xem/mở file trong workspace của run/agent (fileview.py): đọc ngoài sandbox của agent gọi (workspace agent KHÁC) + mở app trên máy
@@ -197,7 +201,7 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.manager.rpc", "MUTATING_MANAGER"),
                       ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS"),
                       ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE"),
-                      ("cfharness.fileview", "MUTATING_FILES")):
+                      ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):
         try:
             import importlib
 
