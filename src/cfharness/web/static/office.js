@@ -1,6 +1,6 @@
 /* cfharness web — chế độ "Văn phòng 3D" (/office). Chế độ 3D = TOÀN TRANG 3D: trang độc lập, thấy được chỉ có canvas + nút "2D".
  * Mọi thông tin vẽ TRONG cảnh: màn hình HUD trên tường, kanban, màn hình phòng server, bảng "Cần bạn", thẻ nhân vật, thẻ đỏ cần duyệt,
- * biển hết phiên/mất kết nối. Danh sách chữ chỉ cho trình đọc màn hình (sr-only). Cảnh 3D không có link sang trang 2D.
+ * biển hết phiên/mất kết nối. NGOẠI LỆ: "Điều khiển agent" là bảng 2D (DOM) ở góc trên trái — office/dock.js, office-agent-board.md. Danh sách chữ chỉ cho trình đọc màn hình (sr-only). Cảnh 3D không có link sang trang 2D.
  * Dữ liệu: GET data-state (JSON, chữ tự do đã cắt ở server) + SSE data-sse (khung mỏng: chỉ id/tên tool/trạng thái).
  * Chữ của agent là DỮ LIỆU: trong DOM chỉ textContent, trên cảnh chỉ fillText. Không innerHTML. Hợp đồng: docs/dev-notes/office-3d.md.
  * Giai đoạn 2: duyệt / trả lời câu hỏi / chat với điều phối viên / đăng xuất NGAY TRONG CẢNH (office/flows.js, office/chat.js, office/ui.js),
@@ -18,7 +18,7 @@ import { watchdogStep } from './office/pacer.js';
 import { drawHud, drawKanban, drawRuns, drawNeeds, drawCard, drawApprovalTag, drawSign, TextSprite, fmtUsd } from './office/boards.js';
 import { drawCardStatus } from './office/boards.js';
 import { makeApi, Modals, createFlows } from './office/flows.js';
-import { drawRoster } from './office/roster.js';
+import { createDock } from './office/dock.js';
 import { createChat } from './office/chat.js';
 import { FONT, roundRect, fitText, iconCanvas } from './office/util.js';
 import { Walker, walkBusy, hintShown, hintLayout, coordinatorOf, nearDesk } from './office/walk.js';
@@ -134,7 +134,6 @@ function main() {
   if (location.hash.indexOf('debug3d') >= 0) window.__pacer = pacer.state;
   const actors = new Map();
   let selected = null, focusBoard = null;
-  let rosterPage = 0; // trang đang xem của bảng quản lý agent
   let conn = 'connecting', lostAt = 0;
   const t0 = performance.now();
   const perfNow = () => (performance.now() - t0) / 1000;
@@ -222,7 +221,21 @@ function main() {
       syncControls(); renderSrPanel();
     },
   });
-  function syncControls() { controls.enabled = !walk.active && !modals.open && !chat.isOpen && !talk.isOpen; }
+  // Điều khiển agent: bảng 2D (DOM) ở góc màn hình — office/dock.js (thay bảng quản lý agent vẽ trong cảnh)
+  const dock = createDock({
+    root, api, toast, onExpired: () => onExpired(),
+    statusOf: (id) => { const act = actors.get(id); return act ? statusKey(act) : null; },
+    select: (id) => { autoSel = false; select(id, !walk.active); },
+    openApproval: (id) => flows.openApproval(id), openQuestion: (id) => flows.openQuestion(id),
+    talk: (id) => talk.open(id), chat: () => chat.open(),
+    refresh: () => { clearTimeout(refetchT); refetchT = setTimeout(() => fetchState(), 300); },
+    pop: (id, emoji) => { const a = actors.get(id); if (a) a.pop = { emoji, until: perfNow() + 3 }; },
+    can3d: () => !!renderer && !noRender,
+  });
+  function syncControls() {
+    controls.enabled = !walk.active && !modals.open && !chat.isOpen && !talk.isOpen;
+    dock.setBlocked(modals.open || chat.isOpen || talk.isOpen);
+  }
   // khi chưa có văn phòng (vd. hết phiên ngay lần tải đầu): biển dựng trên một khoảnh sàn nhỏ cho ra cảnh 3D
   const signStand = new THREE.Group();
   {
@@ -345,8 +358,7 @@ function main() {
     if (walk.isCoordinator && room && room.key === 'mgr' && nearDesk(world, p)) return { kind: 'sit', label: 'Ngồi vào bàn (ra lệnh)' };
     if (room && room.key === 'mgr' && Math.hypot(a.x - p.x, a.z - p.z) < 2.8) return { kind: 'chat', label: 'Chat với điều phối viên' };
     const v = new THREE.Vector3();
-    for (const [k, label] of [['kanban', 'Xem bảng công việc'], ['runs', 'Xem màn hình phòng server'], ['needs', 'Xem bảng Cần bạn'], ['hud', 'Xem màn hình trạng thái'],
-      ['agents', 'Xem bảng quản lý agent']]) {
+    for (const [k, label] of [['kanban', 'Xem bảng công việc'], ['runs', 'Xem màn hình phòng server'], ['needs', 'Xem bảng Cần bạn'], ['hud', 'Xem màn hình trạng thái']]) {
       const b = world.boards[k];
       b.mesh.getWorldPosition(v);
       if (Math.hypot(v.x - p.x, v.z - p.z) < (k === 'hud' ? 3.2 : 2.6)) return { kind: 'board', board: b, label };
@@ -512,19 +524,8 @@ function main() {
     drawKanban(b.kanban, state.task_counts, state.tasks, names);
     drawRuns(b.runs, state.runs || [], names, Date.now());
     drawNeeds(b.needs, state.approvals || [], state.questions || [], names);
-    drawAgentsBoard();
+    dock.render(state);
   }
-  // bảng quản lý agent (office/roster.js): trạng thái hiển thị = trạng thái của nhân vật (như thẻ), thời gian run đổi theo phút
-  function drawAgentsBoard() {
-    if (!world || !state || !world.boards.agents) return;
-    const ags = (state.agents || []).map((a) => {
-      const act = actors.get(a.id);
-      return Object.assign({}, a, { status: act ? statusKey(act) : a.status, is_manager: !!a.is_manager || a.id === state.manager_id });
-    });
-    const r = drawRoster(world.boards.agents, { agents: ags, teams: state.teams || [], manager_id: state.manager_id, nowMs: Date.now(), page: rosterPage, statusVi: STATUS_VI });
-    rosterPage = r.page;
-  }
-
   // thẻ đỏ trên đầu agent có approval đang chờ (approval đầu tiên của agent)
   function syncTags() {
     const by = new Map();
@@ -547,7 +548,7 @@ function main() {
   if (list && list.parentNode) {
     const views = el('ul');
     for (const [k, label] of [['overview', 'Toàn cảnh văn phòng'], ['hud', 'Xem màn hình trạng thái hub'], ['kanban', 'Xem bảng công việc'],
-      ['runs', 'Xem màn hình phòng server'], ['needs', 'Xem bảng Cần bạn'], ['agents', 'Xem bảng quản lý agent']]) {
+      ['runs', 'Xem màn hình phòng server'], ['needs', 'Xem bảng Cần bạn']]) {
       const li = el('li'), btn = el('button', label);
       btn.type = 'button';
       btn.addEventListener('click', () => { if (k === 'overview') toOverview(); else if (world) showBoard(world.boards[k]); });
@@ -563,11 +564,7 @@ function main() {
     const rows = [];
     for (const a of (state && state.approvals) || []) rows.push(['ap', a.id, 'Mở bảng duyệt: ' + (names(a.agent) || a.agent || '?') + ' · ' + (a.tool || '?') + (a.preview ? ' — ' + a.preview : '')]);
     for (const q of (state && state.questions) || []) rows.push(['q', q.id, 'Trả lời câu hỏi của ' + (names(q.agent) || q.agent || '?') + (q.text ? ': ' + q.text : '')]);
-    for (const a of (state && state.agents) || []) { // bảng quản lý agent: cùng thao tác (có hộp xác nhận 3D)
-      const nm = a.name || a.id;
-      rows.push(a.paused ? ['resume', a.id, 'Cho ' + nm + ' hoạt động lại'] : ['pause', a.id, 'Tạm dừng ' + nm]);
-      if (a.run_id) rows.push(['stop', a.run_id, 'Dừng run đang chạy của ' + nm]);
-    }
+    // tạm dừng / tiếp tục / dừng run: bảng "Điều khiển agent" 2D (nhìn thấy + bàn phím) — không lặp ở đây
     rows.push(['chat', '', 'Mở chat với điều phối viên']);
     rows.push(['logout', '', 'Thoát (đăng xuất)']);
     const sig = JSON.stringify(rows);
@@ -586,9 +583,9 @@ function main() {
     else if (k === 'q') flows.openQuestion(id);
     else if (k === 'chat') chat.open();
     else if (k === 'logout') flows.openLogout();
-    else if (k === 'pause') flows.control('agent_pause', id, id);
-    else if (k === 'resume') flows.control('agent_resume', id, id);
-    else if (k === 'stop') { const a = ((state && state.agents) || []).find((x) => x.run_id === id); flows.control('stop', id, a ? a.id : null); }
+    else if (k === 'pause') dock.control('agent_pause', id, id);
+    else if (k === 'resume') dock.control('agent_resume', id, id);
+    else if (k === 'stop') { const a = ((state && state.agents) || []).find((x) => x.run_id === id); dock.control('stop', id, a ? a.id : null); }
   }
 
   function renderList() {
@@ -632,12 +629,6 @@ function main() {
       } else if (k === 'needs') {
         t = 'Cần bạn. ' + (state.approvals || []).map((a) => 'Phê duyệt ' + (names(a.agent) || '') + ' ' + (a.tool || '') + ': ' + (a.preview || '')).join('. ') +
           ' ' + (state.questions || []).map((q) => 'Câu hỏi ' + (names(q.agent) || '') + ': ' + (q.text || '')).join('. ');
-      } else if (k === 'agents') {
-        t = 'Bảng quản lý agent. ' + ((state.agents || []).map((a) => {
-          const act = actors.get(a.id);
-          return (a.name || a.id) + ': ' + (act ? statusText(act) : a.status) + (a.task ? ', việc ' + a.task : '') + (a.tool ? ', tool ' + a.tool : '') +
-            (a.approvals ? ', ' + a.approvals + ' chờ duyệt' : '') + (a.questions ? ', ' + a.questions + ' câu hỏi' : '') + (a.paused ? ', đang tạm dừng' : '');
-        }).join('. ') || 'Chưa có agent.') + '.';
       } else if (k === 'runs') {
         t = 'Lượt chạy đang chạy: ' + ((state.runs || []).map((r) => (names(r.agent) || r.agent) + ' ' + fmtUsd(r.cost_usd)).join(', ') || 'không có') + '.';
       } else t = srHud ? srHud.textContent : '';
@@ -660,6 +651,7 @@ function main() {
       const ci = cardInfo(act); drawCard(card, ci); drawCardStatus(cardSt, ci); cardAt = perfNow(); // vẽ ngay khi chọn (không chờ)
       if (fly !== false) flyToActor(act);
     }
+    dock.focusAgent(selected);
     renderList(); renderSrPanel();
   }
   function showBoard(b) {
@@ -687,9 +679,7 @@ function main() {
     if (ap) out.push({ key: 'ap:' + ap.id, label: 'Duyệt…', kind: 'danger' });
     if (q) out.push({ key: 'q:' + q.id, label: 'Trả lời…', kind: 'ask' });
     if (act.isManager) out.push({ key: 'chat:', label: 'Chat', kind: 'primary' });
-    const a = act.agent; // điều khiển agent (như bảng quản lý agent) — luôn qua hộp xác nhận 3D
-    out.push(a.paused ? { key: 'resume:' + act.id, label: '▶ Tiếp tục', kind: 'primary' } : { key: 'pause:' + act.id, label: '⏸ Tạm dừng', kind: 'primary' });
-    if (a.run_id) out.push({ key: 'stop:' + a.run_id, label: '■ Dừng run', kind: 'danger' });
+    // tạm dừng / tiếp tục / dừng run: ở bảng "Điều khiển agent" 2D góc màn hình (hàng của agent được đánh dấu khi chọn)
     return out;
   }
 
@@ -723,9 +713,7 @@ function main() {
         if (b.hits && h.uv) {
           const px = { x: h.uv.x * b.canvas.width, y: (1 - h.uv.y) * b.canvas.height };
           const it = b.hits.find((r) => px.x >= r.x && px.x <= r.x + r.w && px.y >= r.y && px.y <= r.y + r.h);
-          // bảng quản lý agent: hàng / nút / phân trang chỉ nhận khi đang xem thẳng bảng (bấm từ xa = bay tới bảng trước)
-          if (it && o.userData.focus.kind === 'agents') { if (focusBoard === b) return { roster: it }; }
-          else if (it) return it.kind === 'approval' ? { approval: it.id } : { question: it.id };
+          if (it) return it.kind === 'approval' ? { approval: it.id } : { question: it.id };
         }
         return { board: b };
       }
@@ -756,12 +744,6 @@ function main() {
       }
       const p = pick(e);
       if (p && p.cardAct) { const i = p.cardAct.indexOf(':'); doAct(p.cardAct.slice(0, i), p.cardAct.slice(i + 1)); }
-      else if (p && p.roster) {
-        const it = p.roster;
-        if (it.kind === 'page') { rosterPage += it.dir; drawAgentsBoard(); renderSrPanel(); }
-        else if (it.kind === 'agent') { autoSel = false; select(it.id, !walk.active); }
-        else if (it.kind === 'ctl') flows.control(it.name, it.id, it.agent);
-      }
       else if (p && p.approval) flows.openApproval(p.approval);
       else if (p && p.question) flows.openQuestion(p.question);
       else if (p && p.exit) flows.openLogout();
@@ -990,10 +972,10 @@ function main() {
     if (uiStep < 0 && now - uiAt > 1) { uiAt = now; uiStep = 0; }
     if (uiStep >= 0) {
       const k = uiStep++;
-      if (k === 0) { if (world && state) { drawRuns(world.boards.runs, state.runs || [], names, Date.now()); drawAgentsBoard(); } }
+      if (k === 0) { if (world && state) { drawRuns(world.boards.runs, state.runs || [], names, Date.now()); } }
       else if (k === 1) { if (world) world.setDaylight(hourNow()); }
       else if (k === 2) syncSign();
-      else { uiStep = -1; setTimeout(() => { renderList(); renderSrPanel(); }, 0); }
+      else { uiStep = -1; setTimeout(() => { renderList(); renderSrPanel(); dock.render(); }, 0); }
     }
     modals.update();
     chat.update();

@@ -66,6 +66,28 @@
     {% if wsd and wsd.enabled %}
     <nav class="ws-bar" aria-label="Luồng việc">
       {% include "_manager_tabs.html" %}
+      {% if wsx %}
+      <details class="ws-pop-wrap" id="ws-manage"><summary class="ws-tab more" title="Thông tin, đổi tên, đóng, xoá luồng {{ wsx.label }}">⚙ Luồng này</summary>
+        <div class="ws-pop ws-info">
+          <div class="ws-side-head"><h3>{{ wsx.title }}</h3>{% if wsx.key %}<span class="pill muted">{{ wsx.key }}</span>{% endif %}</div>
+          <dl class="ws-meta">
+            <dt>Trạng thái</dt><dd>{{ 'Đang mở' if wsx.status == 'active' else 'Đã đóng' }}{% if wsx.closed_at %} · {{ mc.rel(wsx.closed_at) }}{% endif %}</dd>
+            <dt>Mã</dt><dd>{{ wsx.key or '—' }}</dd>
+            {% if wsx.sprint %}<dt>Sprint</dt><dd>{{ wsx.sprint }}</dd>{% endif %}
+            <dt>Task</dt><dd>{{ wsx.tasks.done }}/{{ wsx.tasks.total }} xong{% if wsx.tasks.running %} · {{ wsx.tasks.running }} đang chạy{% endif %}{% if wsx.tasks.blocked %} · <span class="danger-t">{{ wsx.tasks.blocked }} bị chặn</span>{% endif %}</dd>
+            <dt>Cần bạn</dt><dd>{{ wsx.needs_human or 0 }}</dd>
+            <dt>Hội thoại</dt><dd>{{ wsx.conversations|length if wsx.conversations is not number else wsx.conversations }}</dd>
+            <dt>Tạo</dt><dd>{{ mc.rel(wsx.created_at) }} · {{ 'bạn' if wsx.created_by in ('user', None) else ('điều phối viên' if (wsx.created_by or '').startswith('manager') else wsx.created_by) }}</dd>
+            <dt>Hoạt động cuối</dt><dd>{{ mc.rel(wsx.last_activity) }}</dd>
+            <dt>Ghi chú luồng</dt><dd>{% if wsx.state_updated_at %}sửa {{ mc.rel(wsx.state_updated_at) }}{% else %}chưa có{% endif %}</dd>
+            <dt>ID</dt><dd><code>{{ wsx.id }}</code></dd>
+          </dl>
+          <form method="post" action="/do/ws_edit" class="ws-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ wsx.id }}"><input type="hidden" name="next" value="/manager?w={{ wsx.id }}">
+            <input name="title" maxlength="120" value="{{ wsx.label }}" required aria-label="Tên luồng mới" title="Bắt đầu bằng mã Jira (LH-1 Tên) để đổi cả mã"><button class="btn sm" type="submit">Đổi tên</button></form>
+          <div class="btn-row">{% if wsx.status == 'active' %}{{ mc.act("ws_close", "Đóng luồng", {"id": wsx.id, "label": wsx.label}, "btn sm ghost", confirm="Đóng luồng " ~ wsx.label ~ "? Mở lại được bất cứ lúc nào.", next="/manager") }}
+            {% else %}{{ mc.act("ws_reopen", "Mở lại luồng", {"id": wsx.id}, "btn sm", next="/manager?w=" ~ wsx.id) }}{% endif %}
+            {{ mc.act("ws_delete", "Xoá luồng…", {"id": wsx.id, "label": wsx.label}, "btn sm danger", confirm="XOÁ HẲN luồng " ~ wsx.label ~ "? Hội thoại về Sảnh, task bỏ gắn luồng (không bị xoá). Không hoàn tác được.", next="/manager") }}</div>
+        </div></details>{% endif %}
       <details class="ws-pop-wrap" id="ws-new"><summary class="ws-tab add" title="Mở luồng mới (mỗi epic một luồng)">＋ Luồng</summary>
         <form method="post" action="/do/ws_create" class="ws-pop ws-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/manager">
           <input name="title" maxlength="120" placeholder="Tên luồng (bỏ trống = tự đặt)" aria-label="Tên luồng" autocomplete="off"><button class="btn sm primary" type="submit">Mở</button></form>
@@ -135,7 +157,8 @@
       <form method="post" action="/do/ws_edit" class="ws-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ wsx.id }}"><input type="hidden" name="next" value="/manager?w={{ wsx.id }}">
         <input name="title" maxlength="120" value="{{ wsx.label }}" required aria-label="Tên luồng"><button class="btn sm" type="submit">Đổi tên</button></form>
       <div class="btn-row">{% if wsx.status == 'active' %}{{ mc.act("ws_close", "Đóng luồng", {"id": wsx.id, "label": wsx.label}, "btn sm ghost", confirm="Đóng luồng " ~ wsx.label ~ "? Mở lại được bất cứ lúc nào.", next="/manager") }}
-        {% else %}{{ mc.act("ws_reopen", "Mở lại luồng", {"id": wsx.id}, "btn sm", next="/manager?w=" ~ wsx.id) }}{% endif %}</div>
+        {% else %}{{ mc.act("ws_reopen", "Mở lại luồng", {"id": wsx.id}, "btn sm", next="/manager?w=" ~ wsx.id) }}{% endif %}
+        {{ mc.act("ws_delete", "Xoá luồng…", {"id": wsx.id, "label": wsx.label}, "btn sm danger", confirm="XOÁ HẲN luồng " ~ wsx.label ~ "? Hội thoại về Sảnh, task bỏ gắn luồng (không bị xoá). Không hoàn tác được.", next="/manager") }}</div>
     </section>
     {% endif %}
     <section class="mgr-side-sec">

@@ -41,6 +41,118 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     ch = sub.add_parser("chat", help="chat qua lại với điều phối viên trên terminal (kênh cli, dùng chung với TUI `top` → m)", parents=[common])
     _chat_args(ch)
     ch.set_defaults(fn=cmd_chat)
+    _ws_parsers(sub, common)
+
+
+def _ws_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
+    """`cfharness ws list|show|new|rename|close|reopen|rm` — CRUD luồng việc (docs/dev-notes/workstreams.md). Ghi = RPC HUMAN_ONLY, audit."""
+    ws = sub.add_parser("ws", help="luồng việc của điều phối viên (mỗi epic một luồng): tạo, xem, đổi tên, đóng, xoá", parents=[common])
+    wa = ws.add_subparsers(dest="ws_action", required=True)
+    ls = wa.add_parser("list", help="liệt kê luồng", parents=[common])
+    ls.add_argument("--status", choices=["active", "closed", "all"], default="active")
+    sh = wa.add_parser("show", help="thông tin đầy đủ một luồng (STATE.md, task, hội thoại)", parents=[common])
+    sh.add_argument("ref", help="id ws_… hoặc mã (vd. LH-55166)")
+    nw = wa.add_parser("new", help='mở luồng mới: cfharness ws new "LH-55166 Monitor" (bỏ trống = hub tự đặt tên)', parents=[common])
+    nw.add_argument("title", nargs="*")
+    nw.add_argument("--key", help="mã epic (mặc định: tách từ đầu tên nếu là mã Jira)")
+    nw.add_argument("--sprint")
+    rn = wa.add_parser("rename", help='đổi tên: cfharness ws rename <ref> "Tên mới" ("LH-1 Tên" đổi cả mã)', parents=[common])
+    rn.add_argument("ref")
+    rn.add_argument("title", nargs="+")
+    for name, hlp in (("close", "đóng luồng (mở lại được)"), ("reopen", "mở lại luồng đã đóng")):
+        x = wa.add_parser(name, help=hlp, parents=[common])
+        x.add_argument("ref")
+    rm = wa.add_parser("rm", help="XOÁ hẳn luồng — hội thoại về Sảnh, task bỏ gắn luồng (không xoá), STATE.md giữ trong audit", parents=[common])
+    rm.add_argument("ref")
+    rm.add_argument("--yes", "-y", action="store_true", help="không hỏi lại")
+    ws.set_defaults(fn=cmd_ws)
+
+
+def _ws_line(w: dict[str, Any]) -> str:
+    t = w.get("tasks") or {}
+    bits = [f"task {t.get('done', 0)}/{t.get('total', 0)}"]
+    if t.get("blocked"):
+        bits.append(f"{t['blocked']} bị chặn")
+    if w.get("needs_human"):
+        bits.append(f"{w['needs_human']} cần bạn")
+    conv = w.get("conversations")
+    bits.append(f"{len(conv) if isinstance(conv, list) else conv or 0} hội thoại")
+    return f"{w['id']}  {(w.get('key') or '-'):<12} {w.get('status', ''):<7} {w.get('title') or ''}  · {' · '.join(bits)}"
+
+
+def _print_ws(w: dict[str, Any]) -> None:
+    from ..termsafe import clean
+
+    print(_ws_line(w))
+    for k, label in (("sprint", "sprint"), ("created_by", "tạo bởi"), ("created_at", "tạo lúc"), ("updated_at", "cập nhật"),
+                     ("closed_at", "đóng lúc"), ("last_activity", "hoạt động cuối"), ("state_updated_at", "STATE sửa lúc"), ("state_by", "STATE sửa bởi")):
+        if w.get(k):
+            print(f"  {label}: {w[k]}")
+    for t in w.get("open_tasks") or []:
+        print(f"  [{t.get('status')}] {t.get('id')}  {clean(t.get('title') or '')}")
+    for c in w.get("conversations") or [] if isinstance(w.get("conversations"), list) else []:
+        print(f"  hội thoại {c.get('id')}  {c.get('channel')}  {clean(c.get('title') or '')}")
+    st = (w.get("state") or "").strip()
+    body = "".join("\n    " + clean(x) for x in st.splitlines())
+    print("  STATE.md:" + (body if st else " (trống)"))
+
+
+def cmd_ws(ctx: Any) -> int:
+    from ..cli import eprint
+
+    a = ctx.args
+    act = a.ws_action
+    if act == "list":
+        rows = ctx.call("workstream.list", {"status": a.status})
+        if ctx.json:
+            ctx.out(rows)
+        else:
+            for w in rows:
+                print(_ws_line(w))
+            if not rows:
+                print("(chưa có luồng nào — `cfharness ws new \"LH-1 Tên\"`)")
+        return 0
+    if act == "show":
+        w = ctx.call("workstream.get", {"id": a.ref})
+        ctx.out(w) if ctx.json else _print_ws(w)
+        return 0
+    if act == "new":
+        w = ctx.call("workstream.create", {"title": " ".join(a.title) or None, "key": a.key, "sprint": a.sprint})
+        ctx.out(w, f"đã mở luồng {w['label']} ({w['id']})")
+        return 0
+    if act == "rename":
+        w = ctx.call("workstream.update", {"id": a.ref, "title": " ".join(a.title)})
+        ctx.out(w, f"đã đổi tên: {w['label']} ({w['id']})")
+        return 0
+    if act in ("close", "reopen"):
+        w = ctx.call("workstream.update", {"id": a.ref, "status": "closed" if act == "close" else "active"})
+        ctx.out(w, f"{'đã đóng' if act == 'close' else 'đã mở lại'} luồng {w['label']}")
+        return 0
+    if act == "rm":
+        w = ctx.call("workstream.get", {"id": a.ref})
+        if not a.yes:
+            if not sys.stdin.isatty():
+                eprint("lỗi: xoá luồng cần --yes khi không chạy tương tác")
+                return 1
+            try:
+                ans = _ask_delete(w)
+            except (EOFError, KeyboardInterrupt):
+                ans = ""
+            if ans.strip().lower() not in ("xoa", "xoá"):
+                eprint("đã huỷ")
+                return 1
+        res = ctx.call("workstream.delete", {"id": w["id"]})
+        d = res.get("detached") or {}
+        ctx.out(res, f"đã xoá luồng {res['label']} — {d.get('conversations', 0)} hội thoại về Sảnh, {d.get('tasks', 0)} task bỏ gắn luồng")
+        return 0
+    eprint(f"lỗi: không rõ thao tác {act}")
+    return 1
+
+
+def _ask_delete(w: dict[str, Any]) -> str:
+    n = w.get("conversations")
+    return input(f"Xoá hẳn luồng {w['label']} ({w['id']})? {len(n) if isinstance(n, list) else n} hội thoại về Sảnh, "
+                 f"{(w.get('tasks') or {}).get('total', 0)} task bỏ gắn luồng (không xoá). Gõ 'xoa' để xác nhận: ")
 
 
 def _chat_args(c: argparse.ArgumentParser) -> None:

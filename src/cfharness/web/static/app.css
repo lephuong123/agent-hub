@@ -622,6 +622,10 @@ progress.bar::-moz-progress-bar { background: var(--accent); border-radius: 99px
 .conv-menu .menu-pop { right: 0; left: auto; }
 .ws-side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; list-style: none; cursor: default; }
 .ws-side-head h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-info { gap: 10px; }
+.ws-meta { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: var(--fs-sm); }
+.ws-meta dt { color: var(--muted); }
+.ws-meta dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .ws-state > summary { cursor: pointer; }
 .ws-state > summary::-webkit-details-marker { display: none; }
 .ws-state[open] .btn { display: none; }

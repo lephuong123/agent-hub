@@ -8,7 +8,7 @@ RPC dùng (hợp đồng `docs/plan/M7-manager.md`, MGR-CORE cung cấp): `manag
   hướng dẫn + form chỉ định (action `manager_set`, HUMAN_ONLY, hộp xác nhận).
 - Luồng việc (docs/dev-notes/workstreams.md): thanh bên = Sảnh (hội thoại web không gắn luồng) + các luồng đang mở (chấm trạng thái,
   số tin chưa đọc) + luồng đã đóng. `?w=<luồng>` mở hội thoại web gần nhất của luồng (chưa có → hội thoại mới trong luồng, ô nhập
-  mang `w`). Panel phải trong luồng = STATE.md (sửa được) + task của luồng + hội thoại kênh khác. Thao tác: `ws_create|ws_edit|ws_close|
+  mang `w`). Panel phải trong luồng = STATE.md (sửa được) + task của luồng + hội thoại kênh khác. Thao tác: `ws_create|ws_edit|ws_close|ws_delete|
   ws_reopen|ws_state|conv_rename|conv_move|conv_archive` (HUMAN_ONLY ở daemon). Mở hội thoại → `manager.conversation_read`.
 - `POST /manager/send`: `post_guard` (CSRF + Origin + khoá phiên WT-1) → `manager.chat(channel=web)` (`_audit.channel=web`).
   Có header `X-Ahub-Fetch` (app.js) → JSON (mục đã vẽ sẵn phía server); không → 303 về trang (form thuần).
@@ -461,6 +461,13 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
         "workstream.update", lambda f: {"id": _req(f, "id", "luồng"), "status": "closed"}, "Đã đóng luồng",
         confirm=lambda f: f"Đóng luồng {f.get('label') or f.get('id')}?\nTask đang chạy vẫn chạy tiếp; luồng chuyển xuống mục Đã đóng và mở lại được.",
         goto=lambda r, f: "/manager")
+    actions["ws_delete"] = Action(
+        "workstream.delete", lambda f: {"id": _req(f, "id", "luồng")},
+        lambda r, f: f"Đã xoá luồng {(r or {}).get('label') or ''} — {((r or {}).get('detached') or {}).get('conversations', 0)} hội thoại về Sảnh, "
+                     f"{((r or {}).get('detached') or {}).get('tasks', 0)} task bỏ gắn luồng",
+        confirm=lambda f: (f"XOÁ HẲN luồng {f.get('label') or f.get('id')}?\nHội thoại của luồng chuyển về Sảnh, task giữ nguyên nhưng bỏ gắn luồng. "
+                           "Ghi chú luồng (STATE.md) chỉ còn trong nhật ký audit. Không hoàn tác được — muốn cất đi thì dùng Đóng luồng."),
+        danger=True, goto=lambda r, f: "/manager")
     actions["ws_reopen"] = Action(
         "workstream.update", lambda f: {"id": _req(f, "id", "luồng"), "status": "active"}, "Đã mở lại luồng", goto=_ws_goto)
     actions["conv_rename"] = Action(

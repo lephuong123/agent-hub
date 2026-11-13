@@ -66,9 +66,44 @@ async def test_create_name_only_random_and_key_from_title(d):
 
 
 def test_workstream_rpcs_are_human_only():
-    for m in ("workstream.create", "workstream.update", "manager.conversation_update"):
+    for m in ("workstream.create", "workstream.update", "workstream.delete", "manager.conversation_update"):
         assert m in auth.HUMAN_ONLY
-    assert {"workstream.create", "workstream.update", "manager.conversation_update"} <= auth.all_mutating()
+    assert {"workstream.create", "workstream.update", "workstream.delete", "manager.conversation_update"} <= auth.all_mutating()
+
+
+async def test_workstream_delete_detaches_conversations_and_tasks(d):
+    """Xoá luồng: hội thoại người về Sảnh, hội thoại nhịp của luồng lưu trữ, task bỏ gắn luồng (KHÔNG xoá), STATE.md vào audit."""
+    await _boss(d)
+    d.hub.agents.create({"id": "w1", "name": "w1"})
+    w = await rpc(d, "workstream.create", {"title": "Vulns", "key": "LH-54698", "state": "Goal: fix CVEs"})
+    m = d.hub.manager
+    conv = m._new_conv("web", "boss", "chat luồng", workstream_id=w["id"])
+    beat = m._new_conv("heartbeat", "boss", "nhịp", workstream_id=w["id"])
+    t = d.hub.tasks.create({"assignee": "w1", "title": "fix", "body": "x"}, created_by="human")
+    d.hub.store.conn.execute("UPDATE tasks SET workstream_id=? WHERE id=?", (w["id"], t["id"]))
+    info = await rpc(d, "workstream.get", {"id": "LH-54698"})
+    assert info["tasks"]["total"] == 1 and [c["id"] for c in info["conversations"]] == [conv["id"]]
+    res = await rpc(d, "workstream.delete", {"id": "lh-54698"})
+    assert res["deleted"] is True and res["id"] == w["id"] and res["detached"] == {"conversations": 1, "tasks": 1}
+    assert res["state"] == "Goal: fix CVEs"
+    with pytest.raises(HubError):
+        await rpc(d, "workstream.get", {"id": w["id"]})
+    assert await rpc(d, "workstream.list", {"status": "all"}) == []
+    row = d.hub.store.conn.execute("SELECT workstream_id, archived_at FROM manager_conversations WHERE id=?", (conv["id"],)).fetchone()
+    assert row[0] is None and row[1] is None  # về Sảnh, vẫn hiện
+    row = d.hub.store.conn.execute("SELECT workstream_id, archived_at FROM manager_conversations WHERE id=?", (beat["id"],)).fetchone()
+    assert row[0] is None and row[1]  # nhịp riêng của luồng: lưu trữ
+    tk = d.hub.tasks.get(t["id"])
+    assert tk["workstream_id"] is None and tk["status"] != "archived"  # task còn nguyên
+    snap = d.hub.store.conn.execute("SELECT data FROM audit_log WHERE kind='workstream.snapshot'").fetchone()
+    assert snap and "Goal: fix CVEs" in snap[0]
+    assert "workstream.delete" in [r[0] for r in d.hub.store.conn.execute("SELECT kind FROM audit_log")]
+    evs = [e.payload["action"] for e in d.hub.store.query_events(types=["workstream.updated"])]
+    assert evs[-1] == "deleted"
+    # mã dùng lại được ngay
+    assert (await rpc(d, "workstream.create", {"title": "Vulns 2", "key": "LH-54698"}))["key"] == "LH-54698"
+    with pytest.raises(HubError):
+        await rpc(d, "workstream.delete", {"id": "ws_khongco"})
 
 
 # ------------------------------------------------------------------ hội thoại trong luồng + ngữ cảnh session mới

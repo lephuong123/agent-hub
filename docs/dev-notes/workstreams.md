@@ -55,8 +55,17 @@ Chủ hub (2026-11-12): "một sprint nhiều epic, cứ nhắn vào một chỗ
 - **Terminal** (`cfharness chat`): `/ws` (danh sách), `/ws <mã>` (sang hội thoại cli của luồng / mở mới), `/ws new <mã> <tên>`,
   `/ws state`, `/ws attach <mã>`, `/ws close`.
 
+## Bản 4 — đủ CRUD luồng (2026-11-12 — chủ hub: "chưa có đủ CRUD luồng: tạo, lấy thông tin, update name và xoá")
+- **Xoá**: `Workstreams.delete` / RPC `workstream.delete {id}` (HUMAN_ONLY, MUTATING, audit). Xoá HẲN dòng `workstreams`; KHÔNG xoá hội thoại hay
+  task: hội thoại của người về Sảnh, hội thoại nhịp riêng của luồng được lưu trữ, task bỏ gắn luồng. Bản chụp (kể cả STATE.md) ghi audit
+  `workstream.snapshot`; event `workstream.updated{action: deleted}`. Điều phối viên KHÔNG có tool xoá (chỉ người).
+- **Web**: nút "⚙ Luồng này" trên hàng tab (khi đang ở một luồng): thông tin (trạng thái, mã, sprint, task, cần bạn, số hội thoại, tạo lúc/bởi,
+  hoạt động cuối, ghi chú sửa lúc, id) + đổi tên + đóng/mở lại + "Xoá luồng…" (hộp xác nhận, action `ws_delete`, danger). Panel phải cũng có nút xoá.
+- **CLI**: `cfharness ws list [--status] | show <ref> | new [tên] [--key --sprint] | rename <ref> <tên> | close | reopen | rm <ref> [--yes]`
+  (rm hỏi gõ "xoa"; không tương tác cần `--yes`). REPL chat: `/ws rename <tên>`, `/ws rm <mã> xoa`.
+
 ## Chưa làm
 - Telegram forum topic ↔ luồng; Slack: lưu ánh xạ thread ↔ hội thoại vào DB (hiện `hub_state` 500 mục) và đặt tên thread theo luồng.
 - Sảnh tự phân loại tin bằng model (hiện điều phối viên tự gán qua `task_create(workstream)` theo `lobby_block`).
-- Digest sprint đầu ngày; văn phòng 3D (`office/chat.js`) chưa nhóm theo luồng; chưa có lệnh CLI `cfharness ws …` ngoài REPL.
+- Digest sprint đầu ngày; văn phòng 3D (`office/chat.js`) chưa nhóm theo luồng; 
 - Hội thoại cũ (trước v24) đều ở Sảnh — người chuyển bằng menu ⋯ / `/ws attach`.

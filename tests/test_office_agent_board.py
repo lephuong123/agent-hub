@@ -3,8 +3,8 @@
 - `/office/state`: trường mới theo agent (paused, run_status, started_at, run_cost_usd, cost_today_usd, questions) — chỉ số/cờ/id/giờ.
 - `POST /office/do/{agent_pause,agent_resume,stop}`: ĐÚNG Action 2D (`app.ACTIONS`) qua `post_guard` (Origin/CSRF/khoá phiên `k`);
   Action có `confirm` nên LUÔN trả `need: "confirm"` trước — không gọi RPC ghi nào khi chưa có `confirm=yes`; audit kênh `web`.
-- Node (`tests/office_roster_check.mjs`): nhóm/thứ tự/chia trang/vùng bấm/vị trí bảng trong World thật. Không có Node → skip.
-- Tĩnh: roster.js không dựng HTML, `flows.control` không tự gửi `confirm=yes`.
+- Node (`tests/office_roster_check.mjs`): nhóm/thứ tự/nút của mỗi hàng; World thật không còn bảng agent trong cảnh. Không có Node → skip.
+- Tĩnh: roster.js thuần (không DOM/mạng); dock.js (bảng 2D) chỉ textContent, lần gửi đầu KHÔNG có `confirm=yes`.
 """
 
 from __future__ import annotations
@@ -109,9 +109,51 @@ async def test_stop_run_confirm_first_then_stops(held):
 def test_whitelist_names_map_to_2d_actions():
     from cfharness.web.app import ACTIONS
 
-    for name in ("agent_pause", "agent_resume", "stop"):
+    for name in ("agent_pause", "agent_resume", "stop", "estop", "team_estop", "agent_delete"):
         assert O.OFFICE_ACTIONS[name] == name and ACTIONS[name].confirm, name  # có confirm → plan_action luôn hỏi trước
-    assert "estop" not in O.OFFICE_ACTIONS and "agent_delete" not in O.OFFICE_ACTIONS and "run_resume" not in O.OFFICE_ACTIONS
+    assert set(O.OFFICE_CONFIRM2) == {"estop", "team_estop", "agent_delete"}  # ảnh hưởng rộng → bước 2
+    assert "run_resume" not in O.OFFICE_ACTIONS and "agent_purge" not in O.OFFICE_ACTIONS and "gates_mode" not in O.OFFICE_ACTIONS
+
+
+async def test_estop_two_steps_then_audited(held):
+    env = held
+    await env.login()
+    j = (await office_post(env, "estop", {"on": "1", "stop_running": "0"})).json()
+    assert j["need"] == "confirm" and "ESTOP" in j["message"]
+    j = (await office_post(env, "estop", {"on": "1", "stop_running": "0", "confirm": "yes"})).json()
+    assert j["need"] == "confirm2" and j["kind"] == "check" and "KHÔNG run mới" in j["check"]
+    assert env.hub.runs.estop["on"] is False  # chưa qua bước 2 → chưa ghi
+    j = (await office_post(env, "estop", {"on": "1", "stop_running": "0", "confirm": "yes", "confirm2": "yes"})).json()
+    assert j["ok"] is True and env.hub.runs.estop["on"] is True
+    assert audit_rows(env, "estop.set")[-1]["channel"] == "web"
+    assert (await env.client.get("/office/state")).json()["hub"]["estop"] is True
+    j = (await office_post(env, "estop", {"on": "0", "confirm": "yes"})).json()
+    assert j["need"] == "confirm2" and env.hub.runs.estop["on"] is True  # tắt cũng 2 bước
+    j = (await office_post(env, "estop", {"on": "0", "confirm": "yes", "confirm2": "yes"})).json()
+    assert j["ok"] is True and env.hub.runs.estop["on"] is False
+
+
+async def test_team_estop_and_agent_delete_two_steps(held):
+    env = held
+    await env.login()
+    env.hub.agents.create({"id": "ag9", "name": "ag9", "model": "haiku"})
+    t = env.hub.teams.create({"id": "docs", "name": "Docs", "members": [{"agent_id": "ag9", "role": "worker"}]})
+    tid = t["id"]
+    j = (await office_post(env, "team_estop", {"id": tid, "on": "1", "confirm": "yes"})).json()
+    assert j["need"] == "confirm2" and tid in j["check"]
+    j = (await office_post(env, "team_estop", {"id": tid, "on": "1", "confirm": "yes", "confirm2": "yes"})).json()
+    assert j["ok"] is True
+    st = (await env.client.get("/office/state")).json()
+    assert [x["estop"] for x in st["teams"] if x["id"] == tid] == [True]
+    f = {"id": "ag9", "detach_teams": "1"}  # bảng 2D gửi kèm khi agent đang trong team
+    j = (await office_post(env, "agent_delete", f)).json()
+    assert j["need"] == "confirm" and j["danger"] is True and "gỡ khỏi mọi team" in j["message"]
+    j = (await office_post(env, "agent_delete", {**f, "confirm": "yes"})).json()
+    assert j["need"] == "confirm2" and "thùng rác" in j["check"] and "gỡ khỏi team" in j["check"]
+    assert env.hub.agents.get_row("ag9", allow_archived=True).get("deleted_at") is None
+    j = (await office_post(env, "agent_delete", {**f, "confirm": "yes", "confirm2": "yes"})).json()
+    assert j["ok"] is True, j
+    assert env.hub.agents.get_row("ag9", allow_archived=True).get("deleted_at")
 
 
 # =========================================================================== client
@@ -120,15 +162,27 @@ def test_roster_board_headless():
     r = subprocess.run([NODE, str(ROOT / "tests" / "office_roster_check.mjs"), str(ROOT)], capture_output=True, text=True,
                        encoding="utf-8", timeout=180)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "FAIL" not in r.stdout and r.stdout.count("ok ") >= 25, r.stdout
+    assert "FAIL" not in r.stdout and r.stdout.count("ok ") >= 12, r.stdout
 
 
-def test_roster_static_rules():
-    src = (STATIC / "office" / "roster.js").read_text(encoding="utf-8")
-    assert not re.search(r"innerHTML|outerHTML|insertAdjacentHTML|createElement|fetch\(|location", src)
-    flows = (STATIC / "office" / "flows.js").read_text(encoding="utf-8")
-    body = flows[flows.index("async function control("):flows.index("return { openApproval")]
-    assert "confirm: 'yes'" not in body and "confirm=yes" not in body.replace("gửi confirm=yes", "")  # chỉ nút do người bấm mới gửi
-    assert "'/office/do/'" in body
+def test_dock_static_rules():
+    """Điều khiển agent = bảng 2D DOM (office/dock.js): chữ agent chỉ qua textContent, không HTML/style inline; lần gửi đầu không có
+    confirm; confirm=yes chỉ trong trình xử lý nút "Đồng ý" do người bấm."""
+    roster = (STATIC / "office" / "roster.js").read_text(encoding="utf-8")
+    assert not re.search(r"innerHTML|outerHTML|insertAdjacentHTML|createElement|fetch\(|location|document", roster)
+    dock = (STATIC / "office" / "dock.js").read_text(encoding="utf-8")
+    assert not re.search(r"innerHTML|outerHTML|insertAdjacentHTML|\.style\b|setAttribute\('style'|fetch\(", dock)
+    first = dock[dock.index("async function control("):dock.index("function askConfirm(")]
+    assert "confirm: 'yes'" not in first and "'/office/do/'" in first
+    yes = dock[dock.index("function askConfirm("):dock.index("function yesLabel(")]
+    assert yes.count("confirm: 'yes'") == 1 and "button(" in yes  # chỉ trong nút "Đồng ý" do người bấm
+    two = dock[dock.index("function askConfirm2("):dock.index("async function send(")]
+    assert two.count("confirm2: 'yes'") == 1 and "cb.checked" in two  # bước 2: phải tích ô
+    assert "confirm:" not in dock[dock.index("function estopChoice("):dock.index("async function control(")]  # chọn mức ≠ xác nhận
     js = (STATIC / "office.js").read_text(encoding="utf-8")
-    assert "flows.control(" in js and "focusBoard === b" in js  # hàng/nút chỉ nhận khi đang xem thẳng bảng
+    assert "createDock(" in js and "drawRoster" not in js and "flows.control(" not in js
+    assert "dock.control('agent_pause'" in js
+    flows = (STATIC / "office" / "flows.js").read_text(encoding="utf-8")
+    assert "function control(" not in flows
+    world = (STATIC / "office" / "world.js").read_text(encoding="utf-8")
+    assert "'agents'" not in world and "ROSTER" not in world

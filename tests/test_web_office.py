@@ -364,8 +364,8 @@ async def test_office_do_guard_rejects_missing_csrf_key_or_cross_origin(held):
     assert env.hub.approvals.get(ap["id"])["status"] == "open"
     r = await office_post(env, "run_resume", {"id": run["id"], "confirm": "yes"})  # ngoài danh sách trắng
     assert r.status_code == 404 and r.json()["ok"] is False
-    r = await office_post(env, "estop", {"on": "1", "confirm": "yes"})
-    assert r.status_code == 404 and not env.hub.runs.estop.get("on")
+    r = await office_post(env, "estop", {"on": "1", "confirm": "yes"})  # bảng 2D: có, nhưng còn bước 2 — chưa ghi
+    assert r.json()["need"] == "confirm2" and not env.hub.runs.estop.get("on")
 
 
 async def test_office_approve_needs_confirm_then_heavy_step2(held):

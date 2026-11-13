@@ -359,6 +359,7 @@ HELP = [
     ("/ws [mã]", "luồng việc (mỗi epic một luồng): không mã = danh sách; có mã = sang hội thoại của luồng"),
     ("/ws new <mã> <tên>", "mở luồng mới (vd /ws new LH-55166 Monitor) và chuyển sang"),
     ("/ws state | attach <mã> | close", "STATE.md của luồng hiện tại · gắn hội thoại này vào luồng · đóng luồng"),
+    ("/ws rename <tên> | rm <mã> xoa", "đổi tên luồng hiện tại · xoá hẳn luồng (hội thoại về Sảnh, task bỏ gắn luồng)"),
     ("/history [n]", "in lại n tin gần nhất (mặc định 20)"),
     ("/stop [agent|run]", "dừng lượt điều phối viên; kèm agent/run = dừng run đó (y/N)"),
     ("/agents", "bảng mọi agent: trạng thái, task, tool, token, $ (= /ps)"),

@@ -609,6 +609,25 @@ class ChatSession:
             self._emit({"kind": "note", "text": f"đã mở luồng {w['label']}"})
             await self._open_ws(w)
             return
+        if sub == "rename":
+            if not cur or not rest:
+                self._emit({"kind": "note", "text": "dùng trong hội thoại của luồng: /ws rename <tên mới> (\"LH-1 Tên\" đổi cả mã)", "tone": "warn"})
+                return
+            w = await self.client.call("workstream.update", {"id": cur, "title": rest}, audit=True) or {}
+            self._emit({"kind": "note", "text": f"đã đổi tên luồng: {w.get('label')}"})
+            return
+        if sub == "rm":
+            ref, _, word = rest.partition(" ")
+            if not ref or word.strip().lower() not in ("xoa", "xoá"):
+                self._emit({"kind": "note", "text": "xoá hẳn luồng: /ws rm <mã> xoa — hội thoại về Sảnh, task bỏ gắn luồng (không xoá), "
+                                                    "STATE.md chỉ còn trong audit. Muốn cất đi thì /ws close.", "tone": "warn"})
+                return
+            res = await self.client.call("workstream.delete", {"id": ref}, audit=True) or {}
+            d = res.get("detached") or {}
+            if res.get("id") == cur:
+                self.next_workstream = None
+            self._emit({"kind": "note", "text": f"đã xoá luồng {res.get('label')} — {d.get('conversations', 0)} hội thoại về Sảnh, {d.get('tasks', 0)} task bỏ gắn luồng"})
+            return
         if sub in ("state", "close", "attach"):
             ref = rest if sub == "attach" else (rest or cur)
             if not ref:
