@@ -119,6 +119,10 @@ class Daemon:
         from .schedules.rpc import register_rpc as _register_schedules
 
         _register_schedules(self)
+        # Tài khoản Claude: account.list|login_start|login_finish|login_cancel|add_token|use|rename|rm|check (accounts/rpc.py — tự bọc audit method ghi)
+        from .accounts.rpc import register_rpc as _register_accounts
+
+        _register_accounts(self)
         # Cập nhật cfharness lên bản phát hành mới nhất: update.check|status|start (updater.py — tự bọc audit update.start)
         from .updater import register_rpc as _register_update
 

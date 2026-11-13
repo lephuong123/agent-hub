@@ -866,6 +866,25 @@ MIGRATIONS: list[str] = [
     ALTER TABLE tasks ADD COLUMN manager_conversation_id TEXT;
     CREATE INDEX tasks_workstream ON tasks(workstream_id, status);
     """,
+    # v25 — danh sách tài khoản Claude (accounts/, docs/dev-notes/plan-claude-accounts.md): token ở secret store `CLAUDE_ACCT_<ID>`, bảng
+    # chỉ giữ nhãn + sha256 của token (nhận diện token đang dùng = tài khoản nào) + kết quả kiểm gần nhất. `runs.account_id` = tài khoản
+    # đang dùng lúc spawn (`hub_state.claude_account_active`) — luồng rate-limit gắn hạn mức theo tài khoản.
+    """
+    CREATE TABLE claude_accounts (
+        id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        token_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT,
+        last_used_at TEXT,
+        status TEXT NOT NULL DEFAULT 'unknown',
+        last_error TEXT,
+        checked_at TEXT
+    );
+    CREATE UNIQUE INDEX claude_accounts_hash ON claude_accounts(token_hash);
+    ALTER TABLE runs ADD COLUMN account_id TEXT;
+    CREATE INDEX runs_account ON runs(account_id, ended_at);
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
