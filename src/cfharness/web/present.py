@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import re as _re
@@ -23,6 +24,7 @@ __all__ = [
     "md", "transcript_item", "parse_ts", "wait_reason", "activity_item", "agent_status", "run_status", "is_live_run", "first_line", "tokens_of",
     "run_title", "question_view", "QUESTION_STATUS", "avatar_tone", "iso_ts",
     "tool_view", "merge_tool", "Transcript", "mark_final", "same_text", "url_host", "code_html", "highlight",
+    "group_items", "group_view", "group_dom",
 ]
 
 # (icon trong /static/icons.svg, nhãn, tông màu CSS)
@@ -299,28 +301,71 @@ def file_ref(name: str, inp: Any, run_id: Any) -> dict[str, str] | None:
     return {"run": str(run_id), "path": path, "name": path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] or path}
 
 
-def _diff_lines(name: str, inp: Any) -> list[tuple[str, str]]:
+DIFF_CTX = 3  # dòng ngữ cảnh quanh mỗi thay đổi (P1-7)
+DIFF_MAX = 200  # dòng diff tối đa hiển thị cho một lời gọi tool; phần sau → "… còn N dòng"
+DIFF_IN_MAX = 4000  # dòng tối đa mỗi phía đưa vào difflib (chặn chi phí với chuỗi rất dài)
+WRITE_HEAD = 20  # Write: hiện N dòng đầu, phần còn lại gập trong <details>
+
+
+def _udiff(old: str, new: str) -> tuple[list[tuple[str, str]], int, int]:
+    """difflib.unified_diff của hai chuỗi → [(lớp, dòng)] (lớp = add/del/hunk/ctx) + số dòng thêm/bớt. Bỏ 2 dòng tiêu đề ---/+++."""
     out: list[tuple[str, str]] = []
+    adds = dels = 0
+    lines = difflib.unified_diff(old.splitlines()[:DIFF_IN_MAX], new.splitlines()[:DIFF_IN_MAX], lineterm="", n=DIFF_CTX)
+    for i, ln in enumerate(lines):
+        if i < 2 and ln.startswith(("---", "+++")):
+            continue
+        if ln.startswith("@@"):
+            out.append(("hunk", ln))
+        elif ln.startswith("+"):
+            adds += 1
+            out.append(("add", ln))
+        elif ln.startswith("-"):
+            dels += 1
+            out.append(("del", ln))
+        else:
+            out.append(("ctx", ln))
+    return out, adds, dels
+
+
+def _diff_lines(name: str, inp: Any) -> dict[str, Any]:
+    """Diff hiển thị của Edit/MultiEdit (unified, `DIFF_CTX` dòng ngữ cảnh) và Write (`WRITE_HEAD` dòng đầu + phần gập). `{}` = không có.
+    Kết quả: `lines` [(lớp, segs)] (segs = `highlight(…, danger=False)` → ký tự ẩn/bidi lộ ra), `rest` (Write: phần gập), `more`
+    (số dòng bị bỏ do trần `DIFF_MAX`), `adds`/`dels` (đếm trên TOÀN BỘ diff — nuôi "Sửa a.py +3 −1")."""
     if not isinstance(inp, dict):
-        return out
+        return {}
+    rows: list[tuple[str, str]] = []
+    rest: list[tuple[str, str]] = []
+    adds = dels = more = 0
     if name in ("Edit", "MultiEdit"):
-        edits = inp.get("edits") or [{"old_string": inp.get("old_string"), "new_string": inp.get("new_string")}]
-        for e in edits[:3]:
-            out += [("del", ln) for ln in str(e.get("old_string") or "").splitlines()[:8]]
-            out += [("add", ln) for ln in str(e.get("new_string") or "").splitlines()[:8]]
-    elif name == "Write" and inp.get("content"):
-        lines = str(inp["content"]).splitlines()
-        out += [("add", ln) for ln in lines[:8]]
-        if len(lines) > 8:
-            out.append(("more", f"… (+{len(lines) - 8} dòng)"))
-    return out
+        edits = inp.get("edits") if isinstance(inp.get("edits"), list) else [inp]
+        for i, e in enumerate(x for x in edits if isinstance(x, dict) and ("old_string" in x or "new_string" in x)):
+            d, a, r = _udiff(str(e.get("old_string") or ""), str(e.get("new_string") or ""))
+            if i and d:
+                rows.append(("meta", f"— chỗ sửa thứ {i + 1} —"))
+            rows += d
+            adds += a
+            dels += r
+        more = max(0, len(rows) - DIFF_MAX)
+        rows = rows[:DIFF_MAX]
+    elif name == "Write" and isinstance(inp.get("content"), str):
+        lines = inp["content"].splitlines()
+        adds = len(lines)
+        rows = [("add", "+" + ln) for ln in lines[:WRITE_HEAD]]
+        rest = [("add", "+" + ln) for ln in lines[WRITE_HEAD:DIFF_MAX]]
+        more = max(0, len(lines) - DIFF_MAX)
+    if not rows:
+        return {}
+    return {"lines": [(k, highlight(t, False)) for k, t in rows], "rest": [(k, highlight(t, False)) for k, t in rest],
+            "more": more, "adds": adds, "dels": dels}
 
 
 def transcript_item(ev: dict[str, Any]) -> dict[str, Any] | None:
     """Một event → một mục hiển thị (None = bỏ qua). `dom` (nếu có) = id phần tử để thay tại chỗ (tool đang chạy → xong)."""
     t = ev.get("type", "")
     p = ev.get("payload") or {}
-    base = {"seq": ev.get("seq"), "ts": fmt_ts(ev.get("ts"), date=False), "sub": bool(ev.get("subagent_id"))}
+    base = {"seq": ev.get("seq"), "ts": fmt_ts(ev.get("ts"), date=False), "iso": iso_ts(ev.get("ts")) if ev.get("ts") else "",
+            "sub": bool(ev.get("subagent_id")), "sid": ev.get("subagent_id") or None}
     if ev.get("subagent_id") and t in ("message.delta", "reasoning.delta", "message.complete", "reasoning.progress", "reasoning.complete"):
         return None
     if t == "message.complete":
@@ -339,15 +384,14 @@ def transcript_item(ev: dict[str, Any]) -> dict[str, Any] | None:
         name = p.get("name") or "?"
         inp = p.get("input") if isinstance(p.get("input"), dict) else None
         it = {**base, "kind": "tool", "dom": f"tool-{p.get('tool_id') or ev.get('seq')}", "tool": name, "name": short_tool(name), "summary": p.get("args_preview") or "",
-              "running": True, "dur": None, "error": False, "result": "", "input": inp, "diff": _diff_lines(name, inp or {}),
-              "file": file_ref(name, inp, ev.get("run_id"))}
+              "running": True, "dur": None, "error": False, "result": "", "input": inp, "file": file_ref(name, inp, ev.get("run_id"))}
         it["view"] = tool_view(name, inp, "", False, None, summary=it["summary"])
         return it
     if t == "tool.complete":
         name = p.get("name") or "?"
         prev = (p.get("result_preview") or "").strip()
         it = {**base, "kind": "tool", "dom": f"tool-{p.get('tool_id') or ev.get('seq')}", "tool": name, "name": short_tool(name), "summary": p.get("args_preview") or "",
-              "running": False, "dur": p.get("duration_s"), "error": bool(p.get("is_error")), "result": prev[:TOOL_OUT_MAX], "input": None, "diff": [], "file": None}
+              "running": False, "dur": p.get("duration_s"), "error": bool(p.get("is_error")), "result": prev[:TOOL_OUT_MAX], "input": None, "file": None}
         it["view"] = tool_view(name, None, it["result"], it["error"], it["dur"], summary=it["summary"])
         return it
     if t == "subagent.spawn":  # P0-8: bỏ dòng riêng — mục tool `Task`/`Agent` đã nói việc giao cho subagent
@@ -356,25 +400,26 @@ def transcript_item(ev: dict[str, Any]) -> dict[str, Any] | None:
         # một yêu cầu = MỘT mục (dom theo id): waiting_human thay tại chỗ mục approval.open (không lặp 2–3 lần)
         aid = p.get("request_id") or p.get("approval_id")
         return {**base, "kind": "approval", "dom": f"ev-ap-{aid}" if aid else None, "human": t == "approval.waiting_human", "tool": p.get("tool") or "",
-                "preview": p.get("preview") or "", "rule": p.get("matched_rule") or "", "reason": p.get("reason") or "", "id": aid}
+                "preview": p.get("preview") or "", "short": highlight(first_line(p.get("preview"), 100), False), "rule": p.get("matched_rule") or "", "reason": p.get("reason") or "", "id": aid}
     if t == "approval.resolved":
         dec = p.get("decision")
         label = {"allowed": "Đã cho phép", "denied": "Đã từ chối", "cancelled": "Đã huỷ yêu cầu duyệt"}.get(dec, str(dec))
         aid = p.get("request_id")
         return {**base, "kind": "approval", "resolved": True, "decision": dec, "dom": f"ev-ap-{aid}" if aid else None, "tool": p.get("tool") or "",
-                "preview": p.get("preview") or "", "id": aid,
+                "preview": p.get("preview") or "", "short": highlight(first_line(p.get("preview"), 100), False), "id": aid,
                 "label": f"{label} bởi {p.get('by') or '?'} qua {p.get('channel') or '?'}" + (f" — {p['note']}" if p.get("note") else "")}
     if t in ("question.open", "question.escalated", "question.reminder"):
         qid = p.get("question_id")
         who = "điều phối viên" if p.get("routed_to") == "manager" else "bạn"
-        return {**base, "kind": "question", "dom": f"ev-q-{qid}" if qid else None, "id": qid, "text": p.get("text") or "", "answered": False,
+        return {**base, "kind": "question", "dom": f"ev-q-{qid}" if qid else None, "id": qid, "text": p.get("text") or "", "short": highlight(first_line(p.get("text"), 140), False), "answered": False,
                 "label": f"Agent hỏi {who}" + (" (điều phối viên chuyển lên bạn)" if t == "question.escalated" else "")}
     if t == "question.answered":
         qid = p.get("question_id")
         pick = "; ".join(f"{k}. {lbl}" for k, lbl in zip(p.get("keys") or [], p.get("labels") or []))
         who = "điều phối viên" if str(p.get("by") or "").startswith("manager:") else "bạn"
+        text = " — ".join(x for x in (pick, p.get("text") or "") if x)
         return {**base, "kind": "question", "dom": f"ev-q-{qid}" if qid else None, "id": qid, "answered": True,
-                "label": f"Đã được {who} trả lời qua {p.get('channel') or '?'}", "text": " — ".join(x for x in (pick, p.get("text") or "") if x)}
+                "label": f"Đã được {who} trả lời qua {p.get('channel') or '?'}", "text": text, "short": highlight(first_line(text, 140), False)}
     if t == "question.cancelled":
         qid = p.get("question_id")
         return {**base, "kind": "note", "tone": "muted", "dom": f"ev-q-{qid}" if qid else None, "text": f"Câu hỏi đã huỷ ({p.get('reason') or ''})"}
@@ -423,6 +468,7 @@ def tool_view(name: str | None, inp: Any, result: str | None = "", is_error: boo
         return v if isinstance(v, str) else ("" if v is None else str(v))
 
     verb, target, meta = name, "", ""
+    diff = _diff_lines(name, d) if d else {}
     if name == "Read":
         verb, target = "Đọc", _base(s("file_path"))
         if isinstance(d.get("offset"), int) or isinstance(d.get("limit"), int):
@@ -433,11 +479,10 @@ def tool_view(name: str | None, inp: Any, result: str | None = "", is_error: boo
         target = s("description").strip() or (s("command").strip().splitlines() or [""])[0]
     elif name in ("Edit", "MultiEdit"):
         verb, target = "Sửa", _base(s("file_path"))
-        edits = d.get("edits") if isinstance(d.get("edits"), list) else [d]
-        if d:
-            adds = sum(_nlines(e.get("new_string")) for e in edits if isinstance(e, dict))
-            dels = sum(_nlines(e.get("old_string")) for e in edits if isinstance(e, dict))
-            meta = f"+{adds} −{dels}"
+        if diff:
+            meta = f"+{diff['adds']} −{diff['dels']}"
+        elif "old_string" in d or "new_string" in d:
+            meta = "+0 −0"
     elif name == "NotebookEdit":
         verb, target = "Sửa", _base(s("notebook_path"))
     elif name == "Write":
@@ -480,16 +525,19 @@ def tool_view(name: str | None, inp: Any, result: str | None = "", is_error: boo
     return {"verb": verb, "target": target, "target_segs": tsegs, "target_title": "".join(t for _, t in tsegs), "meta": meta,
             "input_text": text, "input_segs": highlight(text, False), "input_cut": in_cut,
             "output_text": out, "output_segs": highlight(out, False), "truncated": len(result or "") >= TOOL_OUT_MAX,
-            "error": bool(is_error), "dur": dur}
+            "error": bool(is_error), "dur": dur, "diff": diff}
 
 
 def merge_tool(prev: dict[str, Any], it: dict[str, Any]) -> dict[str, Any]:
     """Gộp mục `tool.start` (có input/diff/chip file) với mục mới cùng `dom` (thường là `tool.complete`, không mang input).
     Dùng CHUNG cho phát lại và live → live không còn mất args/diff/tóm tắt khi tool xong."""
     out = dict(it)
-    for k in ("input", "diff", "file", "summary"):
+    for k in ("input", "file", "summary"):
         if not out.get(k):
             out[k] = prev.get(k)
+    for k in ("ts", "iso"):  # giờ của dòng tool = lúc BẮT ĐẦU
+        if prev.get(k):
+            out[k] = prev[k]
     if out.get("tool") in (None, "?") and prev.get("tool"):
         out["tool"], out["name"] = prev["tool"], prev.get("name")
     out["view"] = tool_view(out.get("tool"), out.get("input"), out.get("result") or "", bool(out.get("error")), out.get("dur"),
@@ -497,15 +545,74 @@ def merge_tool(prev: dict[str, Any], it: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# ---------------------------------------------------------------------------- gom tool liên tiếp (P1-2) — hàm thuần, dùng lại được
+GROUP_CLOSE_AT = 3  # nhóm đã xong, không lỗi, từ N tool trở lên → gập sẵn
+NEST_KINDS = ("tool", "note")  # mục của subagent được lồng vào mục tool Task/Agent cha; duyệt/câu hỏi luôn ở cấp ngoài
+
+
+def group_dom(first: dict[str, Any]) -> str:
+    """id DOM của nhóm = theo tool ĐẦU TIÊN của nhóm (ổn định giữa phát lại và live)."""
+    return f"grp-{first.get('dom') or first.get('seq')}"
+
+
+def group_view(tools: list[dict[str, Any]]) -> dict[str, Any]:
+    """Tóm tắt một nhóm tool: "Đã dùng 5 công cụ" + "Đọc ×3, Chạy ×2" + dòng đang chạy mới nhất. `open` = trạng thái mở MẶC ĐỊNH
+    (đang chạy hoặc có lỗi → mở; xong và ≥ GROUP_CLOSE_AT tool → gập; nhóm 1–2 tool → mở). `solo` = nhóm 1 tool (không hiện tiêu đề)."""
+    counts: dict[str, int] = {}
+    for t in tools:
+        v = (t.get("view") or {}).get("verb") or t.get("name") or "?"
+        counts[v] = counts.get(v, 0) + 1
+    verbs = ", ".join(f"{v} ×{c}" for v, c in list(counts.items())[:4]) + (", …" if len(counts) > 4 else "")
+    running = [t for t in tools if t.get("running")]
+    error = any(t.get("error") for t in tools)
+    latest = ""
+    if running:
+        v = running[-1].get("view") or {}
+        latest = " ".join(x for x in (v.get("verb") or running[-1].get("name") or "", v.get("target") or "") if x)
+    n = len(tools)
+    return {"n": n, "label": f"Đã dùng {n} công cụ", "verbs": verbs, "running": bool(running), "error": error, "latest": latest,
+            "latest_segs": highlight(latest[:TARGET_MAX], False) if latest else [],
+            "open": bool(running) or error or n < GROUP_CLOSE_AT, "solo": n == 1}
+
+
+def group_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Danh sách mục phẳng → khối: các mục `tool` LIỀN NHAU (không có tin/duyệt/… xen giữa) gộp thành
+    `{"kind": "group", "dom", "tools": [...], **group_view(tools)}`; mục khác giữ nguyên. Vẽ bằng `_transcript.html` `tx_group(g)`.
+    Thuần — trang Điều phối dùng lại được (truyền mục có `kind`/`view`/`running`/`error`/`dom`)."""
+    out: list[dict[str, Any]] = []
+    cur: dict[str, Any] | None = None
+    for it in items:
+        if it.get("kind") == "tool":
+            if cur is None:
+                cur = {"kind": "group", "dom": group_dom(it), "tools": []}
+                out.append(cur)
+            cur["tools"].append(it)
+        else:
+            cur = None
+            out.append(it)
+    for b in out:
+        if b.get("kind") == "group":
+            b.update(group_view(b["tools"]))
+    return out
+
+
 class Transcript:
     """Gộp event → mục transcript, DÙNG CHUNG cho phát lại từ DB (`replay_items`) và luồng SSE (`_run_converter`) → cùng HTML.
     `feed(ev)` trả các mục mới/được thay (cùng `dom` → client thay tại chỗ):
     - tool.start + tool.complete cùng id → một mục (`merge_tool`); approval/question cùng id → một mục;
-    - `run.started` → dòng meta nhỏ dưới yêu cầu; `steer.ack` → ✓ trên mục chỉ đạo gần nhất (P0-8)."""
+    - `run.started` → dòng meta nhỏ dưới yêu cầu; `steer.ack` → ✓ trên mục chỉ đạo gần nhất (P0-8);
+    - P1-2: tool cấp ngoài mang `grp` (= `group_dom` của tool đầu dãy liền nhau — cùng quy tắc với `group_items`);
+    - P1-3: mục của subagent (`subagent_id` = id tool Task/Agent cha, xem claude_adapter) mang `parent` = `tool-<id>` và nằm TRONG
+      mục cha (`tree(it)["children"]`); cha chưa có trong transcript → ở cấp ngoài như cũ.
+    `blocks()` = cây để vẽ (phát lại); `heads(it)` = các khung chứa mục (nhóm, tool cha — ngoài vào trong) để live cập nhật tiêu đề."""
 
     def __init__(self) -> None:
         self.items: list[dict[str, Any]] = []
         self._at: dict[str, int] = {}
+        self._kids: dict[str, list[int]] = {}
+        self._groups: dict[str, list[int]] = {}
+        self._last: tuple[str, str | None] = ("", None)  # (kind, grp) của mục cấp ngoài vừa NỐI THÊM
+        self.nodes = 0  # số khối cấp ngoài đã nối (mục không phải tool + nhóm mới) — live biết khi nào client mở khối mới
         self._prompt: dict[str, Any] | None = None
         self._steer: dict[str, Any] | None = None
 
@@ -528,16 +635,63 @@ class Transcript:
             prev = self.items[i]
             if k == "tool" and prev.get("kind") == "tool":
                 it = merge_tool(prev, it)
+            for key in ("parent", "grp"):  # vị trí trong cây không đổi khi thay tại chỗ
+                if prev.get(key):
+                    it[key] = prev[key]
+                else:
+                    it.pop(key, None)
             self.items[i] = it
         else:
+            i = len(self.items)
             if dom:
-                self._at[dom] = len(self.items)
+                self._at[dom] = i
+            pdom = f"tool-{it['sid']}" if it.get("sid") and k in NEST_KINDS else None
+            if pdom and pdom in self._at and pdom != dom:
+                it["parent"] = pdom
+                self._kids.setdefault(pdom, []).append(i)
+            else:
+                kind, grp = self._last
+                if k == "tool":
+                    it["grp"] = grp if kind == "tool" and grp else group_dom(it)
+                    self._groups.setdefault(it["grp"], []).append(i)
+                if k != "tool" or it["grp"] != grp:
+                    self.nodes += 1
+                self._last = (k, it.get("grp"))
             self.items.append(it)
         if k == "prompt":
             self._prompt = it
         elif k == "steer":
             self._steer = it
         return [it]
+
+    def tree(self, it: dict[str, Any]) -> dict[str, Any]:
+        """Mục tool kèm `children` (mục subagent lồng, đệ quy), `kids_n` (số tool con). Mục khác trả nguyên (cùng đối tượng)."""
+        if it.get("kind") != "tool":
+            return it
+        kids = [self.tree(self.items[j]) for j in self._kids.get(str(it.get("dom")), [])]
+        return {**it, "children": kids, "kids_n": sum(1 for c in kids if c.get("kind") == "tool")}
+
+    def group(self, gid: str) -> dict[str, Any]:
+        tools = [self.tree(self.items[j]) for j in self._groups.get(gid, [])]
+        return {"kind": "group", "dom": gid, "tools": tools, **group_view(tools)}
+
+    def blocks(self) -> list[dict[str, Any]]:
+        """Cây để vẽ: mục cấp ngoài, tool liền nhau gộp nhóm (`group_items`), mục subagent nằm trong tool cha."""
+        return group_items([self.tree(it) for it in self.items if not it.get("parent")])
+
+    def heads(self, it: dict[str, Any]) -> list[dict[str, Any]]:
+        """Các khung chứa `it`, NGOÀI → TRONG: nhóm của tool cấp ngoài cùng, rồi từng tool cha (dạng `tree`). Mục cấp ngoài không
+        phải tool → []. Live dùng để tạo nhóm còn thiếu và cập nhật tiêu đề ("Đã dùng N công cụ", "Đang chạy… (n công cụ)")."""
+        chain: list[dict[str, Any]] = []
+        cur = it
+        seen = 0
+        while cur.get("parent") and seen < 64:
+            p = self.items[self._at[cur["parent"]]]
+            chain.insert(0, self.tree(p))
+            cur, seen = p, seen + 1
+        if cur.get("grp"):
+            chain.insert(0, self.group(cur["grp"]))
+        return chain
 
 
 def mark_final(items: list[dict[str, Any]]) -> str:

@@ -218,3 +218,24 @@ These rules apply to free-text replies a person reads. When you are asked for st
     `since`); Điều phối không dùng `txAppend` (khung đang trả lời có cấu trúc riêng: suy nghĩ / dòng tool / nháp + đuôi) nhưng dùng chung
     `tx_msg`, `.tx-code`, nút chép, `copyText`, `nearBottom`, `fromHTML`; dòng tên chỉ ẩn khi hai tin điều phối viên liền nhau (CSS `+`).
     Ảnh `16-dieu-phoi.png`, `17-dieu-phoi-dang-tra-loi.png` chụp lại (web.demo + sự kiện giả).
+- **P1-1 + P1-2 + P1-3 + P1-6 (trang run) + P1-7 + P1-11 (PR `feat/run-transcript-claude`)**:
+  - P1-1: `_run_converter` giữ bộ đệm khối chữ đang chạy, gửi `{t:"part", k:"text", html: md(buffer)}` mỗi ≥250 ms hoặc ≥400 ký tự
+    (trần 8000, dùng LRU của `md()`); client thay nội dung khối bằng HTML server, delta sau đó nối vào `.tx-tail` (textContent, nằm trong
+    đoạn `<p>` cuối). Đoạn chữ sau `part` cuối vẫn thô tới khi `message.complete` thay bằng bản cuối.
+  - P1-2: `present.group_items(items)` (thuần, dùng lại được cho Điều phối) + `group_view(tools)` + `group_dom(first)`; `Transcript` gán
+    `grp` cho tool cấp ngoài cùng quy tắc → `blocks()` (phát lại) và live ra cùng cây. `tx_group(g, shell=False)`: "Đã dùng N công cụ ·
+    Đọc ×3, Chạy ×2" + dòng đang chạy; mở khi đang chạy/lỗi/≤2 tool, gập khi xong ≥3; nhóm 1 tool (`solo`) không hiện tiêu đề.
+    `data-auto` = trạng thái mở mặc định: client chỉ tự đóng/mở khi người chưa tự bấm.
+  - P1-3: mục có `subagent_id` (tool + note) nằm trong tool cha `tool-<id>` (`Transcript.tree(it)` → `children`/`kids_n`), tiêu đề
+    "Đang chạy… (n công cụ)" / "Xong (n công cụ · 3.2s)"; Input/Output của Task gập trong `tx-io`. Fixture tổng hợp `claude-subagent.jsonl`.
+  - Giao thức live: `{t:"item", dom, html, parent?, heads?}` — `parent` = id khung (`grp-…`/`tool-…`, ô con `#<parent>-k`), `heads` = khung
+    ngoài→trong dạng rỗng (`tx_group(g, True)` / `tx_tool(t, head=True)`) để tạo nhóm mới + cập nhật tiêu đề. `sse_run` nạp các event
+    ≤ since vào bộ gộp (`prime`) → tool xong sau khi mở trang vẫn giữ input, tool mới nối đúng nhóm đang có.
+  - P1-6: trang run một cột (`body.run-page`): một vùng cuộn `#run-scroll`, ô steer / "Nói tiếp" ở `#run-dock` NGOÀI vùng cuộn (không bao
+    giờ đè transcript); runbar thành header gọn; nút "↓ Có mục mới"; run xong: partial thay `#run-tail`, ô "Nói tiếp" vào dock bằng
+    `hx-swap-oob` (`_run_continue.html`). `<time class="tx-time">` mỗi mục, hiện khi hover/focus.
+  - P1-7: `_diff_lines` = `difflib.unified_diff` 3 dòng ngữ cảnh, trần 200 dòng + "… còn N dòng", đếm +/− nuôi "Sửa a.py +3 −1";
+    Write: 20 dòng đầu + phần gập; dùng `.udiff .dl`; ký tự ẩn/bidi lộ ra. Diff nằm trong `view.diff` (bỏ khoá `diff` của mục).
+  - P1-11: duyệt/câu hỏi trong transcript = một dòng link `#ap-<id>`/`#q-<id>` (thẻ không có trên trang → `/inbox#…`); nút duyệt chỉ ở thẻ.
+  - Chưa làm: chưa nối `group_items`/`tx_group` vào trang Điều phối (đợt P2); `part` cuối không tự đẩy khi chữ dừng mà chưa có `message.complete`.
+    Test: `tests/test_web_run_transcript.py` (mô phỏng `txAppend` trên cây DOM → phát lại == live). Ảnh: `v2/04-run-live*.png`, `v2/11-run-xong.png`.

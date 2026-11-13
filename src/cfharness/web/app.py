@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
@@ -768,12 +769,17 @@ async def task_titles(request: Request, runs: list[dict[str, Any]]) -> dict[str,
         return {}
 
 
-def replay_items(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Phát lại từ DB — cùng bộ gộp `P.Transcript` với luồng live (`_run_converter`), nên HTML cuối giống hệt."""
+def replay_tx(events: list[dict[str, Any]]) -> P.Transcript:
+    """Phát lại từ DB — cùng bộ gộp `P.Transcript` với luồng live (`_run_converter`), nên HTML cuối giống hệt.
+    `.items` = danh sách phẳng; `.blocks()` = cây để vẽ (nhóm tool P1-2, subagent lồng P1-3)."""
     tx = P.Transcript()
     for ev in sorted(events, key=lambda e: (e.get("ts") or "", int(e.get("seq") or 0))):
         tx.feed(ev)
-    return tx.items
+    return tx
+
+
+def replay_items(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return replay_tx(events).items
 
 
 async def _run_ctx(request: Request, rid: str) -> dict[str, Any]:
@@ -804,9 +810,9 @@ async def run_page(request: Request) -> Response:
     ctx = await _run_ctx(request, run["id"])
     children = [r for r in (await rpc(request, "run.list", {"agent": run["agent_id"], "limit": 50}) or []) if r.get("parent_run_id") == run["id"]]
     qs = await questions(request, "all", run_id=run["id"])
-    items = replay_items(events)
-    final_text = P.mark_final(items)
-    return await render(request, "run.html", {**ctx, "nav": "runs", "items": items, "since": since, "epoch": epoch, "children": children,
+    tx = replay_tx(events)
+    final_text = P.mark_final(tx.items)
+    return await render(request, "run.html", {**ctx, "nav": "runs", "items": tx.blocks(), "since": since, "epoch": epoch, "children": children,
                                               "run_questions": [q for q in qs if q["status"] in ("open", "with_manager")],
                                               "summary_dup": P.same_text(ctx["run"].get("summary"), final_text)})
 
@@ -828,7 +834,7 @@ async def partial_run_result(request: Request) -> Response:
         return Response(status_code=204)
     final_text = P.mark_final(replay_items(run.pop("events", []) or []))
     sess = session_of(request)
-    return ws(request).templates.TemplateResponse(request, "_run_result.html", {"run": run, "csrf": sess.csrf if sess else "",
+    return ws(request).templates.TemplateResponse(request, "_run_result.html", {"run": run, "csrf": sess.csrf if sess else "", "oob": True,
                                                                                "summary_dup": P.same_text(run.get("summary"), final_text)})
 
 
@@ -1448,9 +1454,31 @@ async def _stream(request: Request, params: dict[str, Any], convert: Callable[[d
         task.cancel()
 
 
-def _run_converter(templates: Jinja2Templates) -> Callable[[dict[str, Any]], list[dict[str, Any]]]:
+PART_EVERY_S = 0.25  # P1-1: markdown của khối đang chạy chữ render lại tối đa mỗi 250 ms…
+PART_EVERY_CHARS = 400  # …hoặc khi đã thêm từng này ký tự
+PART_MAX = 8000  # khối dài hơn → thôi gửi `part` (client vẫn nối chữ thô; message.complete thay bằng bản cuối)
+
+
+def _run_converter(templates: Jinja2Templates, clock: Callable[[], float] = time.monotonic,
+                   prime: list[dict[str, Any]] | None = None) -> Callable[[dict[str, Any]], list[dict[str, Any]]]:
+    """event → message SSE của trang run. Hợp đồng (client `txAppend` trong app.js):
+    - `{t:"delta", k:"text"|"reasoning", text}`: chữ thô nối bằng textContent;
+    - `{t:"part", k:"text", html}` (P1-1): markdown của CẢ khối đang chạy chữ do server render (`P.md`, có điều tiết) — client thay
+      nội dung khối bằng HTML này rồi tiếp tục nối delta sau nó;
+    - `{t:"item", kind, dom, html, parent?, heads?}`: HTML server vẽ. `parent` = id khung chứa (nhóm `grp-…` hoặc tool cha `tool-…`);
+      `heads` = [{dom, html}] các khung NGOÀI → TRONG (bản rỗng/chỉ tiêu đề) để tạo nhóm còn thiếu + cập nhật tiêu đề (P1-2/P1-3).
+    `prime` = các event trang đã vẽ sẵn (≤ since): nạp vào bộ gộp mà KHÔNG phát gì → tool.complete live vẫn gộp với tool.start cũ
+    (giữ input/đích), tool mới nối vào đúng nhóm đang có trên trang, mục subagent tìm được tool cha."""
     mod = templates.env.get_template("_items.html").module
+    txm = templates.env.get_template("_transcript.html").module
     tx = P.Transcript()  # cùng bộ gộp với replay_items: tool.complete giữ input/diff/chip của tool.start, steer.ack → ✓ …
+    for pev in sorted(prime or [], key=lambda e: (e.get("ts") or "", int(e.get("seq") or 0))):
+        tx.feed(pev)
+    buf = {"text": "", "at": 0.0, "sent": 0}
+
+    def head(h: dict[str, Any]) -> dict[str, Any]:
+        html = txm.tx_group(h, True) if h.get("kind") == "group" else txm.tx_tool(h, True)
+        return {"dom": h.get("dom"), "html": str(html)}
 
     def conv(ev: dict[str, Any]) -> list[dict[str, Any]]:
         t = ev.get("type")
@@ -1458,13 +1486,34 @@ def _run_converter(templates: Jinja2Templates) -> Callable[[dict[str, Any]], lis
         if t in ("message.delta", "reasoning.delta"):
             if ev.get("subagent_id"):
                 return []
-            return [{"t": "delta", "k": "text" if t == "message.delta" else "reasoning", "text": p.get("text") or "", "seq": ev.get("seq")}]
+            text = p.get("text") or ""
+            out_d: list[dict[str, Any]] = [{"t": "delta", "k": "text" if t == "message.delta" else "reasoning", "text": text, "seq": ev.get("seq")}]
+            if t == "reasoning.delta":
+                if buf["text"]:  # suy nghĩ mới sau chữ trả lời → client mở khối mới; khối chữ sau đó cũng là khối mới
+                    buf.update(text="", sent=0)
+                return out_d
+            buf["text"] += text
+            n = len(buf["text"])
+            now = clock()
+            if n <= PART_MAX and (now - buf["at"] >= PART_EVERY_S or n - buf["sent"] >= PART_EVERY_CHARS):
+                buf.update(at=now, sent=n)
+                out_d.append({"t": "part", "k": "text", "html": P.md(buf["text"]), "seq": ev.get("seq")})
+            return out_d
         out: list[dict[str, Any]] = []
         s = P.stats_of(ev)
         if s:
             out.append({"t": "stats", **s})
-        for it in tx.feed(ev):
-            out.append({"t": "item", "kind": it["kind"], "dom": it.get("dom"), "seq": ev.get("seq"), "html": str(mod.item(it))})
+        nodes = tx.nodes
+        items = tx.feed(ev)
+        if tx.nodes != nodes or (t == "message.complete" and not ev.get("subagent_id")):
+            buf.update(text="", sent=0)  # client cũng mở khối chữ mới khi có khối cấp ngoài mới (txAppend)
+        for it in items:
+            msg: dict[str, Any] = {"t": "item", "kind": it["kind"], "dom": it.get("dom"), "seq": ev.get("seq"), "html": str(mod.item(tx.tree(it)))}
+            heads = tx.heads(it)
+            if heads:
+                msg["parent"] = heads[-1]["dom"]
+                msg["heads"] = [head(h) for h in heads]
+            out.append(msg)
         if t in ("approval.open", "approval.waiting_human", "approval.resolved", "user.message", "steer.ack") or (t or "").startswith(("run.", "question.")):
             out.append({"t": "refresh"})
         return out
@@ -1475,8 +1524,16 @@ def _run_converter(templates: Jinja2Templates) -> Callable[[dict[str, Any]], lis
 async def sse_run(request: Request) -> Response:
     rid = request.path_params["id"]
     q = request.query_params
-    params = {"run_id": rid, "since_seq": int(q.get("since") or 0), "epoch": q.get("epoch") or None, "level": "detail", "until_run_end": True}
-    return StreamingResponse(_stream(request, params, _run_converter(ws(request).templates)), media_type="text/event-stream",
+    since, epoch = int(q.get("since") or 0), q.get("epoch") or None
+    params = {"run_id": rid, "since_seq": since, "epoch": epoch, "level": "detail", "until_run_end": True}
+    prime: list[dict[str, Any]] = []
+    if since:  # trang đã vẽ các event ≤ since — nạp lại vào bộ gộp live (xem _run_converter)
+        try:
+            evs = (await rpc(request, "run.get", {"id": rid, "events": True}) or {}).get("events") or []
+        except RpcError:
+            evs = []
+        prime = [e for e in evs if not (str(e.get("epoch")) == str(epoch) and int(e.get("seq") or 0) > since)]
+    return StreamingResponse(_stream(request, params, _run_converter(ws(request).templates, prime=prime)), media_type="text/event-stream",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
