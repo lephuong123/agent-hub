@@ -689,6 +689,8 @@ class ManagerOps:
         return conv["id"] if conv else None
 
     def op_notify_owner(self, a: dict[str, Any]) -> Any:
+        from .service import TEXT_MAX
+
         text = str(a.get("text") or "").strip()
         if not text:
             raise HubError("notify_owner cần text")
@@ -701,7 +703,8 @@ class ManagerOps:
         kind = str(a.get("kind") or "info")
         audit_id = self.hub.audit.record("manager.notify", self.mid, self.run["id"], {"text": text[:1000], "kind": kind, "conversation_id": cid},
                                          actor=self.actor, channel="manager", target=cid, summary="manager.notify")
-        self.hub.publish(make_event("manager.reply", self.mid, {"conversation_id": cid, "run_id": self.run["id"], "text": text[:4000],
+        self.hub.publish(make_event("manager.reply", self.mid, {"conversation_id": cid, "run_id": self.run["id"], "text": text[:TEXT_MAX],
+                                                               **({"truncated": True} if len(text) > TEXT_MAX else {}),
                                                                "channel": conv["channel"] if conv else None, "kind": "notify", "notify_kind": kind, "ok": True,
                                                                "conversation_guessed": bool(conv) and guessed},
                                     run_id=self.run["id"]))

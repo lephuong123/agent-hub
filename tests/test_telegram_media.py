@@ -157,7 +157,7 @@ async def test_manager_marked_file_sent_as_document(make, tg):
     docs = await until(lambda: tg.documents(BOSS))
     assert docs[0]["filename"] == "report.md" and "Báo cáo tuần".encode() in docs[0]["_raw"]
     assert docs[0]["caption"].startswith("📎 Tệp từ điều phối viên") and "reply_markup" not in docs[0]["_raw"].decode("utf-8", "replace")
-    framed = [m for m in tg.sent(BOSS)[before:] if "<pre>" in (m.get("text") or "")]
+    framed = [m for m in tg.sent(BOSS)[before:] if "▼ Agent viết:" in (m.get("text") or "")]  # khung chữ agent (AGENT_FRAME)
     assert framed and "Đã xong báo cáo." in framed[0]["text"] and "[[file:" not in framed[0]["text"]
     assert not framed[0].get("reply_markup")  # chữ agent KHÔNG cùng tin với nút
     mm = d.hub.store.state_get("telegram.mgr_msgmap")

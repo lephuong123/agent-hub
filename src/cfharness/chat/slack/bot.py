@@ -303,6 +303,19 @@ class SlackBot(ChatBot):
     def reply_here(self) -> str:
         return "trả lời trong thread của tin này"
 
+    def agent_render(self) -> str:
+        """Kết quả `/run` + câu hỏi giữ khối mã ``` (render.html_to_mrkdwn); trả lời điều phối viên luôn là trích dẫn markdown
+        (`agent_frame` dưới đây — chat/mdconv.py)."""
+        return "pre"
+
+    def reply_markdown(self) -> bool:
+        return True  # P1-9: chia theo khối markdown (khối mã vắt qua hai tin được đóng/mở lại)
+
+    def agent_measure(self, md: str) -> int:
+        from ..mdconv import slack_len
+
+        return slack_len(md)
+
     def agent_frame(self, title: str, body: str, tail: list[str]) -> str:
         """Slack: chữ agent trong trích dẫn (thanh xám bên trái = ranh giới với chữ hub), markdown nhẹ + link http(s) bấm được
         (render.quote_mrkdwn — vẫn escape `& < >`, không mention/`<!channel>`); dòng hướng dẫn của hub thành chữ nhỏ (context)."""

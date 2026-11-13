@@ -66,6 +66,8 @@ INPUT_BORDER_FOCUS = "#8A8A8A"
 PLACEHOLDER = "Nhắn điều phối viên… (gõ / để xem lệnh)"
 USER_BG = "#373737"  # dải nền tin người, như Claude Code
 _FAIL = re.compile(r"^" + re.escape(V.FAIL_PREFIX) + r" run (\S+) kết thúc '([^']*)'(?: — (.*))?\)$", re.S)
+# dạng mới (P1-10, manager/service._finish_run): "(… không trả lời được: <kết quả tiếng Việt>[ — lý do])" — không ghép run id
+_FAIL_VI = re.compile(r"^" + re.escape(V.FAIL_PREFIX) + r" ([^—)]+?)(?: — (.*))?\)$", re.S)
 
 CSS = f"""
 ChatScreen {{ layout: vertical; background: $background; }}
@@ -168,7 +170,7 @@ def item_text(it: dict[str, Any]) -> Text:
         return cc.user_text(it.get("text"))
     if k == "manager":
         if it.get("ok", True) is False:
-            return failure_text(it.get("text"))
+            return failure_text(it.get("text"), run_id=it.get("run_id"))
         return cc.assistant_text(it.get("text"))
     if k == "notify":
         head = Text().append("● ✉ ", style=cc.WARN)
@@ -193,19 +195,30 @@ def item_text(it: dict[str, Any]) -> Text:
     return flatten(V.render(it))
 
 
-def failure_text(text: Any) -> Text:
+def failure_text(text: Any, *, run_id: Any = None) -> Text:
     """Lượt điều phối viên không xong (`FAIL_PREFIX…`): dừng → `  ⎿  Đã dừng lượt` (như `Interrupted` của Claude Code);
     lỗi khác → `✗ Điều phối viên không trả lời được (outcome)`; lý do + run id mờ ở dòng dưới."""
     m = _FAIL.match(clean(text).strip())
-    if m is None:
-        return _bullet_lines(text or "không trả lời được", Text().append("● ", style=cc.ERR))
-    rid, outcome, why = m.groups()
+    if m is not None:
+        rid, outcome, why = m.groups()
+    else:
+        m = _FAIL_VI.match(clean(text).strip())
+        if m is None:
+            return _bullet_lines(text or "không trả lời được", Text().append("● ", style=cc.ERR))
+        outcome, why = m.group(1).strip(), m.group(2)
+        rid = str(run_id) if run_id else ""
+        if outcome == "đã huỷ":
+            outcome = "cancelled"
     if outcome == "cancelled":
         t = Text(cc.GUTTER, style=cc.DIM)
         t.append("Đã dừng lượt", style=cc.ERR)
     else:
         t = Text().append(f"✗ Điều phối viên không trả lời được ({one_line(outcome, 30)})", style=cc.ERR)
-    t.append(f"\n{cc.INDENT}{one_line(why, 200) + ' · ' if why else ''}run {one_line(rid, 40)}", style=cc.DIM)
+    foot = [one_line(why, 200)] if why else []
+    if rid:
+        foot.append(f"run {one_line(rid, 40)}")
+    if foot:
+        t.append(f"\n{cc.INDENT}{' · '.join(foot)}", style=cc.DIM)
     return t
 
 

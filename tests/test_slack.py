@@ -184,6 +184,35 @@ def test_render_splits_long_code_block():
     assert all(p.count("```") % 2 == 0 for p in parts)  # mỗi đoạn tự đóng khối mã
 
 
+def test_render_agent_quote_table_italic_hr():
+    """P1-9 (chat/mdconv.py): bảng không còn `|` thô, `*nghiêng*` → `_nghiêng_` (không thành đậm), `---` bỏ."""
+    from cfharness.notify.telegram import esc
+    body = ("Một chữ *nghiêng* và **đậm**.\n\n---\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n"
+            "| Dịch vụ | Trạng thái | Ghi chú | Chủ |\n|---|---|---|---|\n| web | chạy | ổn | Phương |")
+    sec = render.message(f"<b>💬 Điều phối viên</b>\n<blockquote>{esc(body)}</blockquote>", html=True)["blocks"][0]["text"]["text"]
+    assert "> Một chữ _nghiêng_ và *đậm*." in sec and "---" not in sec and "|" not in sec
+    assert "> ```\n> A  B\n> ─  ─\n> 1  2\n> ```" in sec and "> • *web*: Trạng thái: chạy · Ghi chú: ổn · Chủ: Phương" in sec
+    assert all(ln.startswith(">") for ln in sec.split("\n")[1:])
+
+
+def test_manager_reply_fence_across_messages_reopened(hub_home):
+    """P1-9: trả lời dài chia TRƯỚC khi render theo khối markdown — khối mã vắt qua hai tin được đóng ở tin trước và mở lại ở tin sau
+    (trước đây cắt cứng 3500 ký tự → tin sau mất khối mã, ``` lệch)."""
+    from cfharness.hub import Hub
+
+    h = Hub(hub_home, runtime=FakeRuntime())
+    code = "\n".join(f"buoc_{i} = chay('việc số {i}')  # ghi chú" for i in range(200))
+    md = "Kế hoạch:\n\n```python\n" + code + "\n```\n\nXong."
+    msgs = h.slack.manager.format_reply(md, agent=None, chat="D1")
+    assert len(msgs) >= 2
+    for m in msgs:
+        body = render.message(m, html=True)
+        text = "\n".join(b["text"]["text"] for b in body["blocks"] if b["type"] == "section")
+        assert "buoc_" in text and text.count("```") % 2 == 0
+        assert all(ln.startswith(">") for ln in text.split("\n")[1:])  # chữ agent luôn trong trích dẫn
+    h.store.close()
+
+
 # ============================================================================ cổng người
 async def test_silent_when_not_configured(make, sk):
     d = await make(token=False)
