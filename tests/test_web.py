@@ -568,7 +568,7 @@ def test_present_transcript_and_markdown_safety():
     items = replay_items(evs)
     assert [i["kind"] for i in items] == ["prompt", "tool", "msg", "end"]
     tool = items[1]
-    assert tool["running"] is False and tool["dur"] == 0.4 and tool["diff"] == [("add", "dòng 1"), ("add", "dòng 2")]
+    assert tool["running"] is False and tool["dur"] == 0.4 and [(k, "".join(t for _, t in s)) for k, s in tool["view"]["diff"]["lines"]] == [("add", "+dòng 1"), ("add", "+dòng 2")]
     assert (tool["view"]["verb"], tool["view"]["meta"], tool["view"]["output_text"]) == ("Ghi", "2 dòng", "ok")  # P0-7: dòng tool kiểu Claude
     assert "Xong" in items[3]["text"]
     assert P.agent_status("waiting_human")[1] == "Chờ bạn duyệt"

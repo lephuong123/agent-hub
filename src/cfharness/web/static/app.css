@@ -1111,7 +1111,6 @@ details.flagged > summary { cursor: pointer; }
 .tx-in, .tx-out { margin: 0; max-height: 22rem; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
 .tx-tool.err .tx-out { background: var(--danger-soft); color: var(--danger); }
 .tx-in mark.ctl, .tx-out mark.ctl, .tx-target mark.ctl { background: var(--danger); color: #fff; border-radius: 3px; padding: 0 2px; }
-.tx-group > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-sm); padding: 3px 6px; }
 
 /* P0-8: dòng meta "Bắt đầu" dưới yêu cầu, ✓ trên chỉ đạo, chân run gọn (khung màu chỉ khi lỗi) */
 .ti.prompt .tx-start { margin-top: 6px; color: var(--muted); font-size: var(--fs-xs); }
@@ -1131,4 +1130,88 @@ details.flagged > summary { cursor: pointer; }
   .tx-target { flex: 1 1 5em; }
   .tx-tool-sum .fchip { order: 10; flex-basis: 100%; padding-left: 23px; }
   .tx-tool-body { margin-left: 8px; padding-left: 8px; }
+}
+
+/* ============================================================ P1-1/2/3/6/7/11 (docs/dev-notes/plan-chat-ui-claude.md) */
+/* P1-1: khối đang chạy chữ đã có markdown (`part`) — HTML bình thường, đuôi chữ thô giữ xuống dòng */
+.ti.msg.streaming.parted .md { white-space: normal; }
+.tx-tail { white-space: pre-wrap; }
+/* P1-2: nhóm tool liền nhau — một dòng "Đã dùng N công cụ · Đọc ×3, Chạy ×2"; nhóm 1 tool: không tiêu đề */
+.tx-group { border-radius: var(--r-sm); }
+.tx-group > summary.tx-group-sum { display: flex; align-items: center; gap: 7px; min-width: 0; cursor: pointer; list-style: none; padding: 3px 6px;
+  border-radius: var(--r-sm); color: var(--muted); font-size: var(--fs-sm); }
+.tx-group > summary.tx-group-sum::-webkit-details-marker { display: none; }
+.tx-group > summary.tx-group-sum:hover { background: var(--surface-2); }
+.tx-gl { flex: none; font-weight: 600; color: var(--text-2); }
+.tx-group .tx-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.tx-glive { color: var(--info); }
+.tx-group.err > summary .tx-st, .tx-group.err > summary .tx-gl { color: var(--danger); }
+.tx-group[open] > .tx-group-sum .tx-chev { transform: rotate(180deg); }
+.tx-group > .tx-kids { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 2px 13px; padding-left: 8px; border-left: 2px solid var(--line); }
+.tx-group.solo > summary { display: none; }
+.tx-group.solo > .tx-kids { margin: 0; padding: 0; border: 0; }
+/* P1-3: subagent lồng trong tool Task/Agent */
+.tx-tool.nest > .tx-tool-body > .tx-kids { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
+.tx-tool.nest > .tx-tool-body > .tx-kids:empty { display: none; }
+.tx-kids .ti.note { font-size: var(--fs-xs); }
+.tx-tool.nest > .tx-tool-body > .tx-kids > .ti.tool.tx-tool.sub { margin-left: 0; padding-left: 0; border-left: 0; }
+.tx-kids-n { color: var(--muted); }
+.tx-tool.running .tx-kids-n { color: var(--info); }
+.tx-io > summary, .tx-more > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-xs); font-weight: 600; margin: 4px 0; }
+/* P1-7: diff Edit/Write trong thân tool — dùng lại .udiff .dl của trang diff run */
+.udiff.tx-diff { border: 1px solid var(--line); border-radius: var(--r-sm); max-height: 26rem; margin: 4px 0 6px; }
+.udiff .dl.ctx { color: var(--text-2); }
+.udiff mark.ctl { background: var(--danger); color: #fff; border-radius: 3px; padding: 0 2px; }
+/* P1-11: duyệt/câu hỏi trong transcript = một dòng trỏ tới thẻ (thao tác chỉ ở thẻ) */
+.ti.tx-line { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: var(--fs-sm); min-width: 0; }
+.ti.tx-line .ic { flex: none; margin: 0; }
+.tx-line-a { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+a.tx-line-a:hover { text-decoration: none; } a.tx-line-a:hover b { text-decoration: underline; }
+.tx-line-a code { font-size: 12px; }
+.tx-go { color: var(--muted); }
+.xcard.tcard-changed { animation: tcard-flash 1.6s ease-out; }
+/* P1-6: giờ của từng mục — hiện khi hover/focus */
+.tx-time { flex: none; margin-left: 8px; color: var(--faint); font-size: var(--fs-xs); font-weight: 450; font-style: normal; font-variant-numeric: tabular-nums;
+  opacity: 0; transition: opacity .12s; white-space: nowrap; }
+.ti:hover > .tx-time, .ti:focus-within > .tx-time, .ti:hover > summary .tx-time, .ti:focus-within > summary .tx-time, .ti:hover > .ti-label .tx-time,
+.ti:focus-within > .ti-label .tx-time, .tx-time:focus { opacity: 1; }
+.ti.msg > .tx-time { display: block; margin: 2px 0 0; text-align: right; }
+.tx-tool-sum .tx-time { margin-left: auto; }
+.tx-tool-sum .tx-time + .tx-chev { margin-left: 4px; }
+@media (hover: none) { .tx-time { display: none; } }
+
+/* P1-6: trang run = cột đọc một cột, MỘT vùng cuộn (#run-scroll); ô chỉ đạo / "Nói tiếp" nằm DƯỚI vùng cuộn (#run-dock) */
+.run-page .main { height: 100vh; height: 100dvh; }
+.run-page .wrap { max-width: none; padding: 0; flex: 1 1 auto; min-height: 0; display: flex; }
+.run-col { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; width: 100%; }
+.run-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.run-read { width: 100%; max-width: calc(var(--read-w) + 40px); margin: 0 auto; padding: 18px 20px 24px; display: flex; flex-direction: column; gap: 14px; }
+.run-read > .card, .run-read #run-result > .card, .run-read .need { margin-bottom: 0; }
+.run-read #run-result { display: flex; flex-direction: column; gap: 14px; }
+.run-read .crumbs { margin-bottom: 0; }
+.run-bar { padding: 0 0 12px; border-bottom: 1px solid var(--line); }
+.run-bar .run-head { gap: 8px; }
+.run-bar .run-title .who { font-size: var(--fs); }
+.run-bar .chips-kv .chip { height: 24px; font-size: var(--fs-xs); background: transparent; }
+.run-bar .need-run { margin-top: 12px; }
+.run-tx-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.run-tx-head h2 { margin: 0; font-size: var(--fs-sm); color: var(--muted); font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.run-page .transcript { max-height: none; overflow: visible; padding: 0; gap: 12px; scroll-behavior: auto; }
+.run-dock { flex: 0 0 auto; position: relative; z-index: 2; padding: 8px max(16px, calc((100% - var(--read-w)) / 2)) 10px; background: var(--bg);
+  border-top: 1px solid var(--line); }
+.run-dock:empty { display: none; }
+.run-composer .composer { box-shadow: var(--shadow-composer); }
+.run-dock-hint { margin: 4px 6px 0; color: var(--faint); font-size: var(--fs-xs); }
+.tx-jump { position: absolute; left: 50%; bottom: calc(100% + 10px); transform: translateX(-50%); display: inline-flex; align-items: center; gap: 4px;
+  height: 32px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--surface); color: var(--text); font: inherit;
+  font-size: var(--fs-sm); font-weight: 600; box-shadow: var(--shadow-lg); cursor: pointer; }
+.tx-jump[hidden] { display: none; }
+@media (max-width: 760px) {
+  .run-page .main { padding-bottom: calc(var(--tab-h) + env(safe-area-inset-bottom)); }
+  .run-page .mtop { position: static; }
+  .run-read { padding: 12px 16px 20px; }
+  .run-dock { padding: 6px 10px 8px; }
+  .run-dock-hint { display: none; }
+  .run-composer .btn-t { display: none; }
+  .tx-line-a { white-space: normal; }
 }

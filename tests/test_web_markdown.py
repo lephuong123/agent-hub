@@ -46,7 +46,7 @@ def _safe(html: str, icons: bool = False) -> None:
         for k, v in attrs.items():
             assert k != "style" and not k.startswith("on"), (tag, k, v)
             if k in ("href", "src", "action", "formaction", "xlink:href"):
-                assert re.match(r"^(https?://|mailto:|/(?!/))", v or ""), (tag, k, v)
+                assert re.match(r"^(https?://|mailto:|/(?!/)|#[A-Za-z0-9_.:-]+$)", v or ""), (tag, k, v)  # "#…": neo tới thẻ trên trang (P1-11)
     assert not re.search(r"<[a-z][^>]*\sstyle\s*=", html, re.I)  # chuỗi thô: không thẻ nào mang style=
 
 
@@ -222,7 +222,7 @@ def test_replay_and_live_render_the_same_final_html():
     steer = next(i for i in items if i["kind"] == "steer")
     assert steer["acked"] and "agent đã nhận" in by_key[steer["dom"]]
     tool = next(i for i in items if i["kind"] == "tool" and i["tool"] == "Edit")
-    assert tool["view"]["meta"] == "+2 −1" and tool["diff"] and tool["input"]["file_path"] == "/w/a.py" and not tool["running"]
+    assert tool["view"]["meta"] == "+2 −1" and tool["view"]["diff"]["lines"] and tool["input"]["file_path"] == "/w/a.py" and not tool["running"]
     assert "&lt;b&gt;X&lt;/b&gt;" in joined and "<b>X</b>" not in joined and "&lt;i&gt;kỹ&lt;/i&gt;" in joined
 
 

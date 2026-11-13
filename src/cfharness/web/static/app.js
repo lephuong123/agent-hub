@@ -218,49 +218,116 @@
     t.innerHTML = html.trim();
     return t.content.firstElementChild;
   }
+  // vùng cuộn của transcript: phần tử tổ tiên gần nhất có [data-tx-scroll] (trang run), không có → chính container (Điều phối)
+  function txScroller(c) { return (c.closest && c.closest("[data-tx-scroll]")) || c; }
+  function byIdIn(container, id) {
+    var el = id ? document.getElementById(id) : null;
+    return el && container.contains(el) ? el : null;
+  }
+  // <details> có `data-auto` (trạng thái mở mặc định do server tính): người CHƯA tự bấm (open == auto) → theo server; đã bấm → giữ.
+  function keepOpen(old, node) {
+    function one(o, n) {
+      if (!o || !n || o.tagName !== "DETAILS" || n.tagName !== "DETAILS") return;
+      var a = o.getAttribute("data-auto");
+      if (a !== null) { if (o.open !== (a === "1")) n.open = o.open; } else if (o.open) n.open = true;
+    }
+    one(old, node);
+    var ds = node.querySelectorAll ? node.querySelectorAll("details[id]") : [];
+    for (var i = 0; i < ds.length; i++) one(document.getElementById(ds[i].id), ds[i]);
+  }
+  // cập nhật tiêu đề một khung chứa (nhóm tool / tool cha) từ bản rỗng server gửi: class, data-auto, <summary>
+  function syncHead(el, sh) {
+    var was = el.getAttribute("data-auto"), auto = sh.getAttribute("data-auto");
+    if (was !== null && auto !== null && was !== auto && el.open === (was === "1")) el.open = auto === "1";
+    if (auto !== null) el.setAttribute("data-auto", auto);
+    el.className = sh.className;
+    var a = el.querySelector(":scope > summary"), b = sh.querySelector(":scope > summary");
+    if (a && b) a.replaceWith(b);
+  }
   /* txAppend(container, msg) — áp MỘT message SSE dạng transcript vào `container`, trả phần tử vừa chèn/thay (hoặc null):
    *   {t:"delta", k:"text"|"reasoning", text}  → nối vào khối đang chạy chữ bằng textContent (không bao giờ là HTML);
-   *   {t:"item", kind, dom?, html}             → HTML do SERVER vẽ: thay khối đang chạy chữ cùng loại (msg/reasoning),
-   *                                              thay phần tử cùng id `dom` (giữ trạng thái mở của <details>), không thì nối cuối.
-   * Giữ vị trí cuộn: chỉ bám đáy khi người đang ở gần đáy. Trạng thái khối đang chạy chữ nằm trên container (`_tx`). */
+   *   {t:"part", k:"text", html}               → (P1-1) markdown của cả khối đang chạy chữ do SERVER render (md()) → thay nội dung
+   *                                              khối; delta sau đó nối vào đuôi `.tx-tail` (textContent) tới `part` kế;
+   *   {t:"item", kind, dom?, html, parent?, heads?} → HTML do SERVER vẽ: thay khối đang chạy chữ cùng loại (msg/reasoning), thay
+   *       phần tử cùng id `dom` (giữ trạng thái mở của <details>), không thì nối vào ô con `#<parent>-k` (nhóm tool / tool cha của
+   *       subagent) hoặc cuối container. `heads` [{dom, html}] (ngoài → trong): khung chứa — có rồi → cập nhật tiêu đề, chưa có
+   *       (nhóm mới) → nối cuối container.
+   * Giữ vị trí cuộn: chỉ bám đáy khi người đang ở gần đáy (`container._tx.stuck` cho biết). Trạng thái khối đang chạy chữ: `_tx`. */
   function txAppend(container, m) {
-    var st = container._tx || (container._tx = { text: null, think: null });
-    var stick = nearBottom(container), node = null;
+    var st = container._tx || (container._tx = { text: null, think: null, tail: null, stuck: true });
+    var sc = txScroller(container);
+    var stick = nearBottom(sc), node = null;
+    function reset() { st.text = null; st.think = null; st.tail = null; }
     var empty = container.querySelector(".empty");
     if (empty && empty.parentNode === container) empty.remove();
     if (m.t === "delta") {
       var key = m.k === "text" ? "text" : "think";
       // suy nghĩ mới SAU chữ trả lời → khối suy nghĩ mới (khối cũ vẫn chờ `reasoning.complete` thay tại chỗ nếu có)
-      if (key === "think" && st.text) { st.think = null; st.text = null; }
+      if (key === "think" && st.text) reset();
       if (!st[key]) {
         st[key] = fromHTML(key === "text" ? '<div class="ti msg tx-msg streaming"><div class="md"></div></div>'
           : '<details class="ti reasoning tx-thinking live"><summary>Suy nghĩ…</summary><pre></pre></details>');
+        if (key === "text") st.tail = null;
         container.appendChild(st[key]);
       }
       node = st[key];
-      (key === "text" ? node.querySelector(".md") : node.querySelector("pre")).textContent += m.text || "";
+      var box = key === "text" ? (st.tail || node.querySelector(".md")) : node.querySelector("pre");
+      box.textContent += m.text || "";
+    } else if (m.t === "part" && m.html) {
+      if (!st.text) return null;
+      var md = st.text.querySelector(".md"), tpl = document.createElement("template");
+      tpl.innerHTML = m.html;  // đầu ra md() của server (đã cứng hoá) — như mọi mục `item`
+      md.replaceChildren(tpl.content);
+      st.tail = document.createElement("span");
+      st.tail.className = "tx-tail";
+      // đuôi chữ nối tiếp đoạn văn cuối (không tách dòng giữa câu); khối khác (code, bảng, list) → sau khối
+      var lastEl = md.lastElementChild;
+      (lastEl && lastEl.tagName === "P" ? lastEl : md).appendChild(st.tail);
+      st.text.classList.add("parted");
+      node = st.text;
     } else if (m.t === "item" && m.html) {
       node = fromHTML(m.html);
       if (!node) return null;
-      var old = m.dom ? document.getElementById(m.dom) : null;
-      if (old && !container.contains(old)) old = null;
+      var heads = m.heads || [];
+      for (var i = 0; i < heads.length; i++) {
+        var sh = fromHTML(heads[i].html || ""), hel = byIdIn(container, heads[i].dom);
+        if (!sh) continue;
+        if (hel) syncHead(hel, sh);
+        else if (i === 0 && sh.classList.contains("tx-group")) { reset(); container.appendChild(sh); }
+      }
+      var old = byIdIn(container, m.dom);
       var live = m.kind === "msg" ? st.text : (m.kind === "reasoning" ? st.think : null);
       if (live && live.parentNode && !old) {
         if (live.tagName === "DETAILS" && live.open && node.tagName === "DETAILS") node.open = true;
         live.replaceWith(node);
-        if (m.kind === "msg") st.text = null; else st.think = null;
+        if (m.kind === "msg") { st.text = null; st.tail = null; } else st.think = null;
       } else if (old) {
-        if (old.tagName === "DETAILS" && old.open && node.tagName === "DETAILS") node.open = true;
+        keepOpen(old, node);
         old.replaceWith(node);
       } else {
-        st.text = null; st.think = null;
-        container.appendChild(node);
+        var slot = m.parent ? byIdIn(container, m.parent + "-k") : null;
+        if (slot) slot.appendChild(node);
+        else { reset(); container.appendChild(node); }
       }
+      refreshTimes(node);
     }
-    if (stick) container.scrollTop = container.scrollHeight;
+    st.stuck = stick;
+    if (stick) sc.scrollTop = sc.scrollHeight;
     return node;
   }
-  window.cfhTx = { append: txAppend, fromHTML: fromHTML, nearBottom: nearBottom };
+  window.cfhTx = { append: txAppend, fromHTML: fromHTML, nearBottom: nearBottom, scroller: txScroller };
+
+  // P1-11: dòng duyệt/câu hỏi trong transcript trỏ tới thẻ (#ap-… / #q-…); thẻ không có trên trang (vd câu hỏi mới mở khi đang xem)
+  // → sang trang Cần bạn (`data-alt`, đường dẫn nội bộ do server dựng từ id)
+  document.addEventListener("click", function (e) {
+    var a = e.target && e.target.closest ? e.target.closest("a.tx-line-a[data-alt]") : null;
+    if (!a) return;
+    var id = (a.getAttribute("href") || "").slice(1);
+    var card = id ? document.getElementById(id) : null;
+    if (card) { e.preventDefault(); card.scrollIntoView({ block: "center" }); card.classList.add("tcard-changed"); setTimeout(function () { card.classList.remove("tcard-changed"); }, 2000); return; }
+    var alt = a.getAttribute("data-alt") || "";
+    if (alt.charAt(0) === "/" && alt.charAt(1) !== "/") { e.preventDefault(); location.href = alt; }
+  });
 
   // nút "Sao chép" của khối code (md()): một handler uỷ quyền; trang không phải secure context → textarea ẩn + execCommand
   function copyText(text) {
@@ -288,33 +355,47 @@
 
   // ------------------------------------------------------------ live run
   var tr = document.querySelector("[data-sse-run]");
+  var runScroll = document.getElementById("run-scroll");
+  // trang run (cả run đã xong): mở trang → xuống cuối transcript, như một cuộc chat
+  if (runScroll && location.hash === "") {
+    var toEnd = function () { runScroll.scrollTop = runScroll.scrollHeight; };
+    toEnd();
+    window.addEventListener("load", toEnd);
+  }
   if (tr && window.EventSource) {
     var es = new EventSource(tr.getAttribute("data-sse-run"));
     var state = document.getElementById("live-state");
-    tr.scrollTop = tr.scrollHeight;
-    window.addEventListener("load", function () { tr.scrollTop = tr.scrollHeight; });
-    // run xong: thay ô steer bằng thẻ Kết quả (partial) — KHÔNG tải lại trang, transcript (khối đang mở, suy nghĩ live) giữ nguyên
+    // P1-6: nút "↓ Có mục mới" — hiện khi có mục mới lúc người đang cuộn lên đọc; bấm → xuống cuối; tự ẩn khi đã ở gần cuối
+    var jump = document.getElementById("tx-jump");
+    var sc = txScroller(tr);
+    if (jump) {
+      jump.addEventListener("click", function () { sc.scrollTo({ top: sc.scrollHeight, behavior: "smooth" }); jump.hidden = true; });
+      sc.addEventListener("scroll", function () { if (!jump.hidden && nearBottom(sc)) jump.hidden = true; }, { passive: true });
+    }
+    // run xong: thay #run-tail bằng thẻ Kết quả (partial) + ô steer → ô "Nói tiếp" (hx-swap-oob) — KHÔNG tải lại trang,
+    // transcript (khối đang mở, suy nghĩ live) giữ nguyên
     var finishTries = 0;
     function finishRun() {
       var msgs = tr.querySelectorAll(".tx-msg:not(.sub)");
       for (var i = 0; i < msgs.length; i++) msgs[i].classList.toggle("final", i === msgs.length - 1);
-      var card = document.getElementById("steer-card");
-      if (!card || !window.htmx) return;
+      var card = document.getElementById("steer-card"), tail = document.getElementById("run-tail");
+      if (!card || !tail || !window.htmx) return;
       var box = card.querySelector("textarea"), draft = box ? box.value : "";
-      window.htmx.ajax("GET", card.getAttribute("data-result"), { target: card, swap: "outerHTML" }).then(function () {
-        if (document.getElementById("steer-card")) {  // 204: daemon chưa ghi trạng thái cuối → thử lại
+      window.htmx.ajax("GET", card.getAttribute("data-result"), { target: tail, swap: "outerHTML" }).then(function () {
+        if (document.getElementById("run-tail")) {  // 204: daemon chưa ghi trạng thái cuối → thử lại
           if (++finishTries < 5) setTimeout(finishRun, 1200);
           return;
         }
-        var t = document.querySelector('#run-result textarea[name="prompt"]');
+        var t = document.querySelector('#run-dock textarea[name="prompt"]');
         if (t && draft.trim()) t.value = draft;  // chữ đang gõ dở trong ô steer chuyển sang ô "Nói tiếp"
       });
     }
     es.onmessage = function (ev) {
       var m;
       try { m = JSON.parse(ev.data); } catch (_) { return; }
-      if (m.t === "delta" || m.t === "item") {
-        txAppend(tr, m);
+      if (m.t === "delta" || m.t === "item" || m.t === "part") {
+        var node = txAppend(tr, m);
+        if (node && jump && !tr._tx.stuck) jump.hidden = false;
       } else if (m.t === "stats") {
         var c = document.getElementById("st-cost"), k = document.getElementById("st-tok");
         if (c) c.textContent = m.cost;

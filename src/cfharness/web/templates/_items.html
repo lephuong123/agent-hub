@@ -3,30 +3,37 @@
 {% macro item(it) -%}
 {%- if it.kind == 'msg' -%}
 {{ tx.tx_msg(it) }}
+{%- elif it.kind == 'group' -%}
+{{ tx.tx_group(it) }}
 {%- elif it.kind == 'reasoning' -%}
 {{ tx.tx_thinking(it) }}
 {%- elif it.kind == 'prompt' -%}
-<div class="ti prompt"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}"><div class="ti-label">{{ m.icon('send', 'sm') }}Yêu cầu <span class="muted">· {{ it.meta }}</span></div><div class="pre">{{ it.text }}</div>
+<div class="ti prompt"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}"><div class="ti-label">{{ m.icon('send', 'sm') }}Yêu cầu <span class="muted">· {{ it.meta }}</span>{{ tx.tx_time(it) }}</div><div class="pre">{{ it.text }}</div>
 {%- if it.start %}<div class="tx-start">{{ it.start.text }}{% if it.start.mcp %} · MCP: {{ it.start.mcp|join(', ') }}{% endif %} · {{ it.start.ts }}</div>{% endif %}</div>
 {%- elif it.kind == 'start' -%}
 <div class="ti start tx-start" data-seq="{{ it.seq }}">{{ it.text }}{% if it.mcp %} · MCP: {{ it.mcp|join(', ') }}{% endif %} · {{ it.ts }}</div>
 {%- elif it.kind == 'tool' -%}
 {{ tx.tx_tool(it) }}
 {%- elif it.kind == 'approval' -%}
-{%- if it.resolved -%}
-<div class="ti approval-ti resolved"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}">{{ m.icon('check' if it.decision == 'allowed' else 'x') }}<div class="ti-body"><b>{{ it.label }}</b>{% if it.preview %} · <code>{{ it.preview }}</code>{% endif %}</div></div>
-{%- else -%}
-<div class="ti approval-ti{{ ' human' if it.human }}"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}">{{ m.icon('pause' if it.human else 'shield') }}<div class="ti-body"><b>{{ 'Chờ bạn duyệt' if it.human else 'Xin duyệt' }}</b>{% if it.tool %} {{ it.tool }}{% endif %}{% if it.preview %} · <code>{{ it.preview }}</code>{% endif %}
-<div class="muted small">{% if it.rule %}luật {{ it.rule }}{% if it.reason %} · {{ it.reason }}{% endif %} — {% endif %}duyệt ở khung phía trên</div></div></div>
-{%- endif -%}
+{#- P1-11: một dòng; thao tác đầy đủ + nút duyệt CHỈ ở thẻ duyệt (#ap-<id>: thanh run phía trên, hoặc trang Cần bạn) -#}
+{%- set link = not it.resolved and it.id -%}
+<div class="ti approval-ti tx-line{{ ' resolved' if it.resolved }}{{ ' human' if it.human and not it.resolved }}"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}">{{ m.icon(('check' if it.decision == 'allowed' else 'x') if it.resolved else ('pause' if it.human else 'shield'), 'sm') }}
+{%- if link %}<a class="tx-line-a" href="#ap-{{ it.id }}" data-alt="/inbox#ap-{{ it.id }}">{% else %}<span class="tx-line-a">{% endif -%}
+<b>{{ it.label if it.resolved else ('Chờ bạn duyệt' if it.human else 'Xin duyệt') }}</b>{% if it.tool %} {{ it.tool }}{% endif %}{% if it.short %} · <code>{{ tx.tx_segs(it.short) }}</code>{% endif %}
+{%- if link %} <span class="tx-go">— xem thẻ duyệt</span></a>{% else %}</span>{% endif %}{{ tx.tx_time(it) }}</div>
 {%- elif it.kind == 'question' -%}
-<div class="ti question-ti{{ ' answered' if it.answered }}"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}">{{ m.icon('check' if it.answered else 'question') }}<div class="ti-body"><b>{{ it.label }}</b>{% if it.text %}<div class="pre">{{ it.text }}</div>{% endif %}{% if not it.answered %}<div class="muted small">trả lời ở khung phía trên hoặc trang Cần bạn</div>{% endif %}</div></div>
+{#- P1-11: một dòng; câu hỏi đầy đủ + ô trả lời CHỈ ở thẻ câu hỏi (#q-<id>) -#}
+{%- set link = not it.answered and it.id -%}
+<div class="ti question-ti tx-line{{ ' answered' if it.answered }}"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}">{{ m.icon('check' if it.answered else 'question', 'sm') }}
+{%- if link %}<a class="tx-line-a" href="#q-{{ it.id }}" data-alt="/inbox#q-{{ it.id }}">{% else %}<span class="tx-line-a">{% endif -%}
+<b>{{ it.label }}</b>{% if it.short %} · <span class="tx-line-t">{{ tx.tx_segs(it.short) }}</span>{% endif %}
+{%- if link %} <span class="tx-go">— trả lời ở thẻ câu hỏi</span></a>{% else %}</span>{% endif %}{{ tx.tx_time(it) }}</div>
 {%- elif it.kind == 'steer' -%}
-<div class="ti steer"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}"><div class="ti-label">{{ m.icon('chat', 'sm') }}Bạn chỉ đạo <span class="muted">· {{ it.meta }} · {{ it.ts }}</span>{% if it.acked %}<span class="tx-ack">{{ m.icon('check', 'sm') }}agent đã nhận</span>{% endif %}</div><div class="pre">{{ it.text }}</div></div>
+<div class="ti steer"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}"><div class="ti-label">{{ m.icon('chat', 'sm') }}Bạn chỉ đạo <span class="muted">· {{ it.meta }}</span>{{ tx.tx_time(it) }}{% if it.acked %}<span class="tx-ack">{{ m.icon('check', 'sm') }}agent đã nhận</span>{% endif %}</div><div class="pre">{{ it.text }}</div></div>
 {%- elif it.kind == 'end' -%}
-<div class="ti end tx-end {{ it.tone }}" data-seq="{{ it.seq }}">{{ m.icon('check' if it.tone == 'ok' else ('alert' if it.tone in ('danger', 'warn') else 'stop'), 'sm') }}<div><span>{{ it.text }}</span>{% if it.error %}<div class="small">{{ it.error }}</div>{% endif %}</div></div>
+<div class="ti end tx-end {{ it.tone }}" data-seq="{{ it.seq }}">{{ m.icon('check' if it.tone == 'ok' else ('alert' if it.tone in ('danger', 'warn') else 'stop'), 'sm') }}<div><span>{{ it.text }}</span>{% if it.error %}<div class="small">{{ it.error }}</div>{% endif %}</div>{{ tx.tx_time(it) }}</div>
 {%- else -%}
-<div class="ti note {{ it.tone }}"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}"><span>{{ it.text }}</span> <span class="faint xs">{{ it.ts }}</span></div>
+<div class="ti note {{ it.tone }}"{% if it.dom %} id="{{ it.dom }}"{% endif %} data-seq="{{ it.seq }}"><span>{{ it.text }}</span>{% if it.iso %}{{ tx.tx_time(it) }}{% else %} <span class="faint xs">{{ it.ts }}</span>{% endif %}</div>
 {%- endif -%}
 {%- endmacro %}
 

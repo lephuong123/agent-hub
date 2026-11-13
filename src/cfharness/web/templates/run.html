@@ -2,35 +2,48 @@
 {% import "_macros.html" as m with context %}
 {% import "_items.html" as ti %}
 {% block title %}Run {{ run.id }}{% endblock %}
+{% block bodyclass %}run-page{% endblock %}
+{#- P1-6: bố cục chat một cột — MỘT vùng cuộn (#run-scroll), ô chỉ đạo / "Nói tiếp" nằm NGOÀI vùng cuộn (#run-dock) nên không bao
+    giờ đè lên transcript; nút "↓ Có mục mới" khi đang cuộn lên mà có mục mới (app.js). -#}
 {% block content %}
 {% set live_run = is_live_run(run) %}
+<div class="run-col">
+<div class="run-scroll" id="run-scroll" data-tx-scroll>
+<div class="run-read">
 <nav class="crumbs"><a href="/runs">Lượt chạy</a>{{ m.icon('chev-right') }}<span>{{ run_title(run, {run.task_id: run.task_title} if run.task_title else None, 60) }}</span>{% if run.parent_run_id %}<span>· tiếp nối <a href="/runs/{{ run.parent_run_id }}">{{ run.parent_run_id }}</a></span>{% endif %}</nav>
-<section class="card" id="runbar"{% if live_run %} hx-get="/partials/run/{{ run.id }}" hx-trigger="every 2s" hx-swap="innerHTML"{% endif %}>
+<header class="run-bar" id="runbar"{% if live_run %} hx-get="/partials/run/{{ run.id }}" hx-trigger="every 2s" hx-swap="innerHTML"{% endif %}>
 {% include "_run_bar.html" %}
-</section>
-{% if run_questions %}<div class="need">{% for q in run_questions %}{{ m.question_card(q, "/runs/" ~ run.id) }}{% endfor %}</div><div class="section-title"></div>{% endif %}
+</header>
+{% if run_questions %}<div class="need">{% for q in run_questions %}{{ m.question_card(q, "/runs/" ~ run.id) }}{% endfor %}</div>{% endif %}
 
-<section class="card">
-  <div class="card-head"><h2>{{ m.icon('run') }} Diễn biến</h2>{% if live_run %}<span class="pill ok live-dot" id="live-state">{{ m.icon('dot', 'pulse') }}trực tiếp</span>{% endif %}</div>
+<section class="run-tx" aria-labelledby="run-tx-h">
+  <div class="run-tx-head"><h2 id="run-tx-h">{{ m.icon('run') }} Diễn biến</h2>{% if live_run %}<span class="pill ok live-dot" id="live-state">{{ m.icon('dot', 'pulse') }}trực tiếp</span>{% endif %}</div>
   <div id="transcript" class="transcript"{% if live_run %} data-sse-run="/sse/run/{{ run.id }}?since={{ since }}&amp;epoch={{ epoch }}"{% endif %}>
     {% for it in items %}{{ ti.item(it) }}{% endfor %}
     {% if not items %}{{ m.empty("Chưa có diễn biến nào" ~ (" — run đang chờ slot" if run.status == 'queued' else "") ~ ".", "clock") }}{% endif %}
   </div>
 </section>
 
-{% if live_run %}
-<section class="card sticky-bottom" id="steer-card" data-result="/partials/run/{{ run.id }}/result">
-  <h2>{{ m.icon('chat') }} Chỉ đạo agent (steer)</h2>
-  <form method="post" action="/do/steer" class="composer" id="steer-form">
-    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ run.id }}"><input type="hidden" name="next" value="/runs/{{ run.id }}">
-    <textarea name="text" rows="1" required placeholder="Đưa vào ngữ cảnh agent ở lượt kế tiếp — vd: Chỉ xem thư mục src/, bỏ qua tests/" aria-label="Nội dung chỉ đạo"></textarea>
-    <button class="btn primary" type="submit">{{ m.icon('send') }}Gửi chỉ đạo</button>
-  </form>
-</section>
-{% else %}
-{% include "_run_result.html" %}
-{% endif %}
+{% if live_run %}<div id="run-tail"></div>{% else %}{% include "_run_result.html" %}{% endif %}
 {% if children %}
 <section class="card"><h2>Run tiếp nối</h2><ul>{% for c in children %}<li><a href="/runs/{{ c.id }}">{{ c.id }}</a> {{ m.run_pill(c.status) }} <span class="muted small">{{ run_title(c, None, 80) }}</span></li>{% endfor %}</ul></section>
 {% endif %}
+</div>
+</div>
+{% if live_run %}
+<div class="run-dock" id="run-dock">
+  <button type="button" class="tx-jump" id="tx-jump" hidden>{{ m.icon('chev-down', 'sm') }}Có mục mới</button>
+  <section id="steer-card" class="run-composer" data-result="/partials/run/{{ run.id }}/result">
+    <form method="post" action="/do/steer" class="composer" id="steer-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ run.id }}"><input type="hidden" name="next" value="/runs/{{ run.id }}">
+      <textarea name="text" rows="1" required placeholder="Chỉ đạo agent — vd: Chỉ xem thư mục src/, bỏ qua tests/" aria-label="Chỉ đạo agent (steer)"></textarea>
+      <button class="btn primary" type="submit">{{ m.icon('send') }}<span class="btn-t">Gửi chỉ đạo</span></button>
+    </form>
+    <p class="run-dock-hint">Chỉ đạo agent (steer): đưa vào ngữ cảnh agent ở lượt kế tiếp.</p>
+  </section>
+</div>
+{% else %}
+{% include "_run_continue.html" %}
+{% endif %}
+</div>
 {% endblock %}

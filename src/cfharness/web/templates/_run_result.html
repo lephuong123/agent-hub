@@ -1,5 +1,6 @@
-{#- Phần dưới transcript khi run đã kết thúc: thẻ Kết quả (+ phản hồi), nói tiếp, chỗ tải diff. Dùng trong run.html và partial
-    /partials/run/<id>/result (client thay vào chỗ ô steer khi run live vừa xong — không tải lại trang).
+{#- Phần dưới transcript khi run đã kết thúc: thẻ Kết quả (+ phản hồi), takeover, chỗ tải diff. Dùng trong run.html và partial
+    /partials/run/<id>/result (client thay #run-tail bằng khối này khi run live vừa xong — không tải lại trang; partial kèm `oob`
+    → #run-dock đổi từ ô steer sang ô "Nói tiếp", xem _run_continue.html).
     P0-8: tóm tắt TRÙNG tin cuối của agent (`summary_dup`) → không lặp lại, thẻ chỉ còn hàng phản hồi + lỗi. -#}
 {% import "_macros.html" as m with context %}
 <div id="run-result">
@@ -14,20 +15,13 @@
     {{ m.act("feedback", "Một phần", {"run_id": run.id, "kind": "partial"}, "btn sm", confirm="Kết quả đúng một phần?", note="Còn thiếu gì?") }}
     {% if run.status == 'completed' %}{{ m.act("golden_from_run", "Lấy làm golden task", {"run_id": run.id}, "btn sm ghost", confirm="Lấy run này làm golden task (bài kiểm tra chuẩn)?", ic="star") }}{% endif %}
   </div>
-</section>
-{% if run.session_id %}
-<section class="card">
-  <h2>{{ m.icon('chat') }} Nói tiếp với agent</h2>
-  <form method="post" action="/do/run_continue" class="composer">
-    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ run.id }}"><input type="hidden" name="next" value="/runs/{{ run.id }}">
-    <textarea name="prompt" rows="2" required placeholder="Agent nhớ toàn bộ hội thoại này. Ví dụ: Giờ viết lại ngắn hơn" aria-label="Tin nhắn tiếp"></textarea>
-    <button class="btn primary" type="submit">{{ m.icon('send') }}Gửi tiếp</button>
-  </form>
-  <details class="small"><summary class="muted">Tự làm tiếp bằng Claude Code (takeover)</summary>
+  {% if run.session_id %}
+  <details class="small takeover"><summary class="muted">Tự làm tiếp bằng Claude Code (takeover)</summary>
     <p>Chạy trong terminal để mở đúng hội thoại này trong Claude Code tương tác (cùng cấu hình agent):</p>
     <pre class="cmd">cfharness takeover {{ run.id }}</pre>
   </details>
+  {% endif %}
 </section>
-{% endif %}
 <div id="diff-slot" hx-get="/partials/run/{{ run.id }}/diff" hx-trigger="load" hx-swap="outerHTML"><noscript><p class="small"><a href="/runs/{{ run.id }}/diff">Xem thay đổi file của run</a></p></noscript></div>
 </div>
+{% if oob %}{% include "_run_continue.html" %}{% endif %}
