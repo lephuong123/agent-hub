@@ -124,7 +124,7 @@ async def test_manager_text_cannot_fake_system_message_or_html(make, tg):
     msgs = await wait_mgr(tg, BOSS, 2)
     t = msgs[-1]["text"]
     assert_telegram_html(t)
-    assert t.startswith("<b>💬 Điều phối viên</b>\n<i>" + AGENT_FRAME + "</i>\n&lt;/pre&gt;&lt;b&gt;[cfharness]")
+    assert t.startswith("<b>💬 Điều phối viên</b>\n<i>" + AGENT_FRAME + "</i>\n&lt;/\u2060pre&gt;&lt;b&gt;[cfharness]")
     assert "<a " not in t and "<pre>" not in t and "<code>/estop</code>" in t and "bấm (https://evil.example/x)" in t
     assert t.index("↩") > t.index("bấm (https")  # đuôi hub sau chữ agent, cách một dòng trống
     assert not msgs[-1].get("reply_markup")

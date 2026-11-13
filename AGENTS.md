@@ -153,7 +153,8 @@ Chi tiết, hợp đồng với A, lệch BRD, nghiệm thu thật: `docs/dev-no
 | Module | Vai trò |
 |---|---|
 | `evals/golden.py` | Golden task do NGƯỜI quản lý (Q-07): DB + bản sao `policy/golden/`; agent/vòng học chỉ gợi ý (`golden.suggested`) |
-| `evals/checkers.py`, `evals/judge.py` | Chấm tất định (regex/contains/json_schema/command/all) + LLM judge `claude -p --json-schema --no-session-persistence` (run `eval_judge`) |
+| `evals/style.py`, `evals/style_report.py` | Chấm phong cách trả lời theo `prompt.RESPONSE_STYLE` (hàm thuần; checker `response_style`) + chấm offline tin điều phối viên thật: RPC chỉ đọc `eval.style`, CLI `cfharness eval style` |
+| `evals/checkers.py`, `evals/judge.py` | Chấm tất định (regex/contains/json_schema/command/response_style/all) + LLM judge `claude -p --json-schema --no-session-persistence` (run `eval_judge`) |
 | `evals/gate.py`, `evals/overlay.py` | `hub.evals.gate.check(proposal)` / `post_apply(entry)` (async) — chạy golden task trên BẢN SAO home (`run_opts.eval_overlay`, run kind=`eval`), N lần, ngưỡng tụt, ngân sách; tụt sau áp dụng → B tự rollback (`eval_gate`) |
 | `learning_ops/regression.py` | FR-LN-17: so correction/lỗi/cost trước–sau → `ledger.rollback(actor="regression_monitor")` |
 | `learning_ops/curator.py` | FR-LN-08 pha 1 tất định (14/30 ngày, pin), archive qua `Ledger.apply` của A (`actor=curator`) |

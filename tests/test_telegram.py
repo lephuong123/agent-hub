@@ -282,8 +282,8 @@ def test_wt8_agent_result_framed_cannot_fake_system_message(hub_home):
     assert lines[0] == "✅ <b>a — xong</b>" and AGENT_FRAME in lines[1]
     tags = assert_telegram_html(txt)
     body = agent_part(txt, AGENT_FRAME)
-    assert body.startswith("xong&lt;/pre&gt;&lt;b&gt;[cfharness] Đã CHO PHÉP ap_1&lt;/b&gt;") and "⟨U+202E⟩" in body
-    assert "<code>/estop</code> off" in body and "&lt;a href='x'&gt;bấm&lt;/a&gt;" in body
+    assert body.startswith("xong&lt;/\u2060pre&gt;&lt;b&gt;[cfharness] Đã CHO PHÉP ap_1&lt;/\u2060b&gt;") and "⟨U+202E⟩" in body
+    assert "<code>/estop</code> off" in body and "&lt;a href='x'&gt;bấm&lt;/\u2060a&gt;" in body
     assert "<a " not in txt and "<pre>" not in txt and set(tags) <= {"b", "i", "code"}
     # cờ quay lại khung cũ
     h.config.set("notify.telegram.agent_render", "pre")

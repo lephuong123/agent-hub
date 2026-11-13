@@ -10,6 +10,10 @@ Tất định (không gọi model):
                   `"score_from_stdout": true` → dòng số cuối cùng (0..1) của stdout là điểm.
 LLM judge (gọi `claude -p --json-schema --no-session-persistence`, xem `judge.py`):
 - `llm_judge`   : `{"kind":"llm_judge","rubric":"<rubric người viết>","model":"haiku","pass_threshold":0.7}`
+Phong cách trả lời (`style.py`, theo `prompt.RESPONSE_STYLE` — yêu cầu = prompt golden task):
+- `response_style`: `{"kind":"response_style","short_budget":700,"short_request_chars":160,"min_vi_ratio":0.2,"skip":["length"]}` —
+                  không id nội bộ / dòng `[cfharness` / NO_ACTION / đường kẻ ngang, khối mã có ngôn ngữ, hỏi ngắn → trả lời ngắn,
+                  hỏi tiếng Việt → trả lời tiếng Việt. Điểm = tỉ lệ luật đạt; đạt khi không vi phạm.
 Tổ hợp:
 - `all`         : `{"kind":"all","checks":[...]}` — điểm = trung bình, đạt khi mọi check đạt.
 Graph memory (không chạy run, không gọi model — `memory_golden.py`):
@@ -35,7 +39,7 @@ from typing import Any
 from ..errors import HubError
 from ..oscompat import no_window_kwargs
 
-KINDS = ("regex", "contains", "json_schema", "command", "llm_judge", "all", "memory_recall")
+KINDS = ("regex", "contains", "json_schema", "command", "llm_judge", "all", "memory_recall", "response_style")
 _FLAG_MAP = {"i": re.IGNORECASE, "m": re.MULTILINE, "s": re.DOTALL, "x": re.VERBOSE}
 
 
@@ -104,6 +108,13 @@ def validate_checker(spec: Any, *, _depth: int = 0) -> dict[str, Any]:
         thr = s.get("pass_threshold", 0.7)
         if not isinstance(thr, (int, float)) or not 0 <= float(thr) <= 1:
             raise HubError("checker llm_judge: pass_threshold phải trong [0, 1]")
+    elif kind == "response_style":
+        from .style import validate_spec
+
+        try:
+            s = validate_spec(s)
+        except ValueError as e:
+            raise HubError(f"checker response_style: {e}") from None
     elif kind == "memory_recall":
         if _depth:
             raise HubError("checker memory_recall chỉ dùng ở mức ngoài (không lồng trong 'all')")
@@ -195,6 +206,11 @@ def grade_deterministic(spec: dict[str, Any], out: EvalOutput) -> Grade:
         return Grade(1.0 if ok else 0.0, ok, {"kind": kind, "errors": [e.message[:200] for e in errs[:5]]})
     if kind == "command":
         return _run_command(spec, out)
+    if kind == "response_style":
+        from .style import StyleOptions, check_style
+
+        r = check_style(text, out.prompt, StyleOptions.from_spec(spec))
+        return Grade(r.score, r.passed, {"kind": kind, "violations": [x.__dict__ for x in r.violations], "checked": r.checked, "stats": r.stats})
     raise HubError(f"checker {kind} không phải tất định")
 
 

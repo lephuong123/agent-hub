@@ -6,7 +6,12 @@ gian (`parse`) → `to_telegram_html` / `to_slack_mrkdwn`. Mọi chữ agent đ�
 Hợp đồng an toàn (WT-8 nới có kiểm soát — docs/dev-notes/telegram.md, slack.md):
 - Telegram: chỉ thẻ `b i s code pre` (+ `code class="language-x"` với tên ngôn ngữ đã lọc). KHÔNG `<a>`: link http(s) hiện dạng chữ
   `nhãn (URL)` (nhãn trùng URL / trông như tên miền → chỉ URL thật); link khác (javascript:, mailto:, đường dẫn…) → chỉ nhãn.
-  Chữ `/lệnh` của agent nằm trong `<code>` (Telegram không biến thành lệnh bấm được). Không dùng `<blockquote>` (trích dẫn → `▎ `).
+  Chữ `/lệnh` của agent nằm trong `<code>` (Telegram không biến thành lệnh bấm được) — ở MỌI vị trí Telegram có thể nhận là lệnh
+  (`_TG_CMD`: mọi `/` + chữ ASCII/số/`_` không dính chữ cái/số đứng trước, kể cả sau `>`, `<`, ngoặc, `:`, `-`, `.`, `/`), trừ bên
+  trong URL; áp cho cả tiêu đề, ô bảng, nhãn link. Trích dẫn markdown → `▎ ` (không `<blockquote>`).
+  Tuỳ chọn `expandable=True` (cờ `notify.telegram.expandable_details`, mặc định tắt — CHƯA kiểm trên Telegram thật): sau "màn đầu"
+  (`EXPAND_FIRST_SCREEN` ký tự thấy được), chuỗi đoạn văn/danh sách/trích dẫn liền nhau dài ≥ `EXPAND_MIN` và KHÔNG chứa `pre`/`code`
+  được gói trong MỘT `<blockquote expandable>` ở cấp ngoài cùng (không lồng; Telegram cấm `pre`/`code`/`a` trong blockquote).
 - Slack: escape `& < >`; chỉ link `<http(s)…|nhãn>` do hàm này dựng + mention MỘT người `<@U…>`; không `<!channel>`; dấu ` trong
   code đổi thành ˋ (agent không thoát khỏi khối mã); cả khối nằm trong trích dẫn `> `.
 - `split_md` chia TRƯỚC khi render (mỗi phần render hợp lệ), theo khối; khối mã bị chia được mở lại đúng ngôn ngữ ở phần sau.
@@ -26,10 +31,18 @@ from markdown_it.tree import SyntaxTreeNode
 NBSP = " "
 _LANG = re.compile(r"^[A-Za-z0-9_+.#-]{1,24}$")
 _DOMAINISH = re.compile(r"://|^\s*(?:www\.)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?\s*$")
-_TG_CMD = re.compile(r"(?<![\w/:.~<-])/[A-Za-z][^\s<>]*")  # "/lệnh" không dính chữ trước (cả đường dẫn /usr/bin) → <code>
+# "/lệnh" mà Telegram CÓ THỂ biến thành lệnh bấm được → <code>. Luật Telegram (tdlib `match_bot_commands`, tdesktop
+# `RegExpBotCommand`): "/" + [A-Za-z0-9_]{1,64}, ký tự TRƯỚC không phải chữ/số/`_` (tdlib còn loại `/ < >`, tdesktop thì KHÔNG — nên
+# ở đây chỉ loại chữ/số/`_`: phủ cả hai). Lấy cả cụm tới khoảng trắng (đường dẫn /usr/bin, /a/b) để không còn đoạn nào bấm được.
+_TG_CMD = re.compile(r"(?<!\w)/[A-Za-z0-9_][^\s<>]*")
+WJ = "⁠"  # word joiner: chèn sau "/" của `</thẻ>` agent viết (bọc <code> sẽ xấu: `<`/b`>`)
+_TG_URL = re.compile(r"(?i)\b(?:https?|ftp)://[^\s<>]*|\bwww\.[^\s<>]*")  # trong URL: Telegram ưu tiên thực thể URL → không bọc
 _CMD_TRAIL = ".,;:!?'\")]”’"
 TABLE_PRE_COLS = 3
 TABLE_PRE_WIDTH = 34  # bảng hẹp (≤ 3 cột, ≤ ~34 ký tự/dòng) → <pre> căn cột; rộng hơn → mỗi hàng một gạch đầu dòng
+EXPAND_FIRST_SCREEN = 500  # expandable: số ký tự thấy được luôn hiện trước khi bắt đầu gập
+EXPAND_MIN = 300  # expandable: chỉ gập chuỗi khối dài ít nhất ngần này ký tự thấy được (ngắn hơn → hiện luôn)
+EXPAND_KINDS = ("para", "list", "quote")
 
 
 @lru_cache(maxsize=1)
@@ -195,6 +208,10 @@ class _Renderer:
     def bold_plain(self, s: str) -> str:  # pragma: no cover - lớp con
         raise NotImplementedError
 
+    def label(self, s: str) -> str:
+        """Chữ agent ngắn ngoài đoạn văn (tên cột bảng)."""
+        return self.esc(s)
+
     # ---------------------------------------------------------------- inline
     def inline(self, inl: list[tuple]) -> str:
         out = []
@@ -291,7 +308,7 @@ class _Renderer:
                 if not val:
                     continue
                 name = head[j] if j < len(head) else ""
-                rest.append(f"{self.esc(name)}: {val}" if name else val)
+                rest.append(f"{self.label(name)}: {val}" if name else val)
             line = "• " + first
             if rest:
                 line += (": " if first else "") + " · ".join(rest)
@@ -306,16 +323,31 @@ class _Telegram(_Renderer):
 
     def text(self, s: str) -> str:
         out, pos = [], 0
+        for u in _TG_URL.finditer(s):  # URL giữ nguyên (thực thể URL của Telegram che lệnh bên trong)
+            out.append(self._cmds(s[pos:u.start()]))
+            out.append(self.esc(u.group(0)))
+            pos = u.end()
+        out.append(self._cmds(s[pos:]))
+        return "".join(out)
+
+    def _cmds(self, s: str) -> str:
+        out, pos = [], 0
         for m in _TG_CMD.finditer(s):
             tok = m.group(0)
             cut = len(tok)
-            while cut > 1 and tok[cut - 1] in _CMD_TRAIL:
+            while cut > 2 and tok[cut - 1] in _CMD_TRAIL:
                 cut -= 1
             out.append(self.esc(s[pos:m.start()]))
-            out.append(f"<code>{self.esc(tok[:cut])}</code>{self.esc(tok[cut:])}")
+            if m.start() and s[m.start() - 1] == "<":  # trông như thẻ HTML đóng `</b>` → chèn WORD JOINER sau "/" (không hiện, vẫn
+                out.append(self.esc(tok[0] + WJ + tok[1:]))  # đọc như cũ; "/" không còn liền chữ cái → không thành lệnh)
+            else:
+                out.append(f"<code>{self.esc(tok[:cut])}</code>{self.esc(tok[cut:])}")
             pos = m.end()
         out.append(self.esc(s[pos:]))
         return "".join(out)
+
+    def label(self, s: str) -> str:
+        return self.text(s)
 
     def wrap(self, kind: str, inner: str) -> str:
         return f"<{kind}>{inner}</{kind}>"
@@ -333,7 +365,7 @@ class _Telegram(_Renderer):
         return f"{self.text(lab)} ({self.esc(url)})"
 
     def heading(self, inl: list[tuple]) -> str:
-        return f"<b>{self.esc(plain(inl).strip())}</b>"
+        return f"<b>{self.text(plain(inl).strip())}</b>"
 
     def code_block(self, lang: str, text: str) -> str:
         if lang:
@@ -344,7 +376,45 @@ class _Telegram(_Renderer):
         return f"<pre>{self.esc(chr(10).join(lines))}</pre>"
 
     def bold_plain(self, s: str) -> str:
-        return f"<b>{self.esc(s)}</b>"
+        return f"<b>{self.text(s)}</b>"
+
+    def blocks_expandable(self, blocks: list[dict[str, Any]]) -> str:
+        """Như `blocks` (cấp ngoài cùng) nhưng gói chuỗi khối chữ dài sau màn đầu trong `<blockquote expandable>`."""
+        rendered = [(b["t"], s) for b in blocks if (s := self.block(b, 0)) is not None]
+        out: list[tuple[str, str]] = []
+        run: list[str] = []
+        seen = 0
+
+        def flush() -> None:
+            if run and sum(_vis_len(h) for h in run) >= EXPAND_MIN:
+                out.append(("detail", "<blockquote expandable>" + "\n\n".join(run) + "</blockquote>"))
+            else:
+                out.extend(("para", h) for h in run)
+            run.clear()
+
+        for t, h in rendered:
+            if seen >= EXPAND_FIRST_SCREEN and t in EXPAND_KINDS and not _NO_QUOTE.search(h):
+                run.append(h)
+            else:
+                flush()
+                out.append((t, h))
+            seen += _vis_len(h)
+        flush()
+        parts: list[str] = []
+        prev = None
+        for t, h in out:
+            if parts:
+                parts.append("\n" if prev == "heading" else "\n\n")
+            parts.append(h)
+            prev = t
+        return "".join(parts)
+
+
+_NO_QUOTE = re.compile(r"<(?:pre|code|a|blockquote)\b")  # Telegram cấm trong blockquote
+
+
+def _vis_len(h: str) -> int:
+    return len(_html.unescape(_TAG.sub("", h)).encode("utf-16-le")) // 2
 
 
 # ============================================================================ Slack (mrkdwn)
@@ -414,9 +484,11 @@ _TG = _Telegram()
 _SL = _Slack()
 
 
-def to_telegram_html(md: str) -> str:
-    """Markdown → HTML Telegram (parse_mode=HTML). Mọi chữ agent đã escape; chỉ thẻ trong whitelist."""
-    return _TG.blocks(parse(md)).strip("\n")
+def to_telegram_html(md: str, *, expandable: bool = False) -> str:
+    """Markdown → HTML Telegram (parse_mode=HTML). Mọi chữ agent đã escape; chỉ thẻ trong whitelist.
+    `expandable=True`: chi tiết dài sau màn đầu gập trong `<blockquote expandable>` (cờ `notify.telegram.expandable_details`)."""
+    blocks = parse(md)
+    return (_TG.blocks_expandable(blocks) if expandable else _TG.blocks(blocks)).strip("\n")
 
 
 def to_slack_mrkdwn(md: str, *, quote: bool = True) -> str:

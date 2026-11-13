@@ -228,6 +228,9 @@ DEFAULTS: dict[str, Any] = {
             # Chữ agent (trả lời điều phối viên, kết quả /run, câu hỏi): "markdown" = markdown → HTML Telegram (đậm/nghiêng/code/khối mã,
             # link thành chữ "nhãn (URL)", không <a>) — P0-10; "pre" = khung cũ (TRỌN trong <pre>, cắt cứng) để quay lại nhanh.
             "agent_render": "markdown",
+            # Chữ agent dài (agent_render=markdown): đoạn văn/danh sách sau màn đầu (~500 ký tự) gập trong <blockquote expandable>.
+            # Mặc định TẮT — chưa kiểm trên bot Telegram thật (docs/dev-notes/telegram.md).
+            "expandable_details": False,
             # Tệp/ảnh với điều phối viên: ảnh (PNG/JPEG/GIF/WebP ≤ 5 MB, ≤ 4/tin — cùng giới hạn TUI) + tệp VĂN BẢN người gửi;
             # tệp điều phối viên đánh dấu `[[file: …]]` trong trả lời → gửi thành document (chỉ trong cwd hội thoại)
             "document_max_bytes": 10485760,  # tệp văn bản/tài liệu người gửi tối đa (= trần cứng 10 MB ở manager.chat)
