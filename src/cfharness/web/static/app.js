@@ -247,7 +247,7 @@
       } else if (m.t === "item") {
         var node = fromHTML(m.html);
         if (!node) return;
-        if (m.kind === "msg" && curKind === "text" && cur) {
+        if ((m.kind === "msg" && curKind === "text" || m.kind === "reasoning" && curKind === "reasoning") && cur) {
           cur.replaceWith(node); endBlock();
         } else if (m.dom && document.getElementById(m.dom)) {
           document.getElementById(m.dom).replaceWith(node);

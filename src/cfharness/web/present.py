@@ -180,13 +180,13 @@ def transcript_item(ev: dict[str, Any]) -> dict[str, Any] | None:
     t = ev.get("type", "")
     p = ev.get("payload") or {}
     base = {"seq": ev.get("seq"), "ts": fmt_ts(ev.get("ts"), date=False), "sub": bool(ev.get("subagent_id"))}
-    if ev.get("subagent_id") and t in ("message.delta", "reasoning.delta", "message.complete", "reasoning.progress"):
+    if ev.get("subagent_id") and t in ("message.delta", "reasoning.delta", "message.complete", "reasoning.progress", "reasoning.complete"):
         return None
     if t == "message.complete":
         text = p.get("text") or ""
         return {**base, "kind": "msg", "html": md(text)} if text.strip() else None
     if t == "reasoning.complete":
-        return {**base, "kind": "reasoning", "text": p.get("text") or ""}
+        return {**base, "kind": "reasoning", "text": p.get("text") or ("(suy nghĩ bị ẩn)" if p.get("redacted") else "")}
     if t == "run.queued":
         budget = p.get("max_budget_usd")
         return {**base, "kind": "prompt", "text": p.get("prompt_preview") or "", "meta": f"{p.get('kind') or 'adhoc'} · ngân sách {'$' + str(budget) if budget else '—'}" + (" · tiếp tục phiên cũ" if p.get("resume") else "")}

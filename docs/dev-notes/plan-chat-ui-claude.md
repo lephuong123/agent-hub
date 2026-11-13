@@ -167,3 +167,11 @@ These rules apply to free-text replies a person reads. When you are asked for st
   dạng markdown; SOUL mẫu `manager.yaml` bỏ "(agent, task id)" (chỉ ảnh hưởng điều phối viên tạo mới — điều phối viên cũ đã có
   khối style đứng sau SOUL). Hệ quả: mọi agent đổi `system_prompt_hash` một lần; session đang resume giữ prompt cũ cho tới khi xoay,
   ghi chú kênh vẫn áp ngay. Test: `tests/test_prompt_style.py`.
+- **P0-9 (PR `feat/persist-thinking`)**: `_on_assistant` phát `reasoning.complete` (level `detail`, CÓ ghi DB) cho khối `thinking`
+  (text qua `redact`, cắt ở `runtime.claude.thinking_max_chars` = 8000 + cờ `truncated`, giữ `subagent_id`) và `redacted_thinking`
+  (`redacted: true`, text rỗng — bản mã hoá không lưu). Khối thinking rỗng (CLI 2.1.310+ thường chỉ gửi chữ ký) bị bỏ qua.
+  `runtime.claude.persist_thinking=false` → không phát/không ghi (vẫn có `reasoning.delta` trực tiếp). Web: `present.transcript_item`
+  ẩn `reasoning.complete` của subagent như `message.complete`, `redacted` hiện "(suy nghĩ bị ẩn)"; `app.js` thay khối "Suy nghĩ…"
+  đang chạy bằng mục `reasoning` (như `msg` thay khối chữ) để không hiện đôi. Lưu ý: fixture thật 2.1.310 có `thinking` rỗng → với
+  CLI hiện tại có thể ít khi có nội dung để lưu. Test: fixture `tests/fixtures/claude-thinking.jsonl` (tổng hợp theo dạng thật),
+  `tests/test_adapter.py`, `tests/test_persist_thinking.py` (FakeRuntime → DB → `replay_items`), snapshot `docs/schema/event.v1.json`.

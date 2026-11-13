@@ -154,3 +154,39 @@ def test_hub_real_isolated_run_fixture_clean():
     assert "raw.unknown" not in t and "raw.invalid" not in t
     done = next(e for e in evs if e.type == "run.completed")
     assert done.payload["cost_usd"] == 0.00379252
+
+
+# ---- P0-9: khối thinking → reasoning.complete (ghi DB, phát lại sau khi tải lại trang) ----
+def test_thinking_fixture_emits_reasoning_complete_redacted():
+    from cfharness.events import EVENT_LEVELS, NOT_PERSISTED
+
+    evs = adapt_lines("a", load("claude-thinking.jsonl"), run_id="r1", **ISO)
+    t = types(evs)
+    assert "raw.unknown" not in t and "raw.invalid" not in t
+    rc = [e for e in evs if e.type == "reasoning.complete"]
+    assert [e.payload["redacted"] for e in rc] == [False, True]
+    think, hidden = rc
+    assert think.payload["text"] == "The user asks for the sum. Key in env is ***, never echo it."  # đã che secret
+    assert "sk-ant-" not in json.dumps(think.payload) and think.payload["truncated"] is False
+    assert think.payload["message_id"] == "msg_01ThinkFixture0000000001" and think.subagent_id is None
+    assert hidden.payload["text"] == "" and "data" not in hidden.payload  # bản mã hoá KHÔNG được lưu
+    assert EVENT_LEVELS["reasoning.complete"] == "detail" and "reasoning.complete" not in NOT_PERSISTED and think.persisted
+    # thứ tự: delta suy nghĩ → reasoning.complete → chữ trả lời
+    assert t.index("reasoning.delta") < t.index("reasoning.complete") < t.index("message.complete")
+
+
+def test_thinking_truncated_subagent_and_empty():
+    ad = ClaudeStreamAdapter("a", thinking_max=10)
+    msg = {"type": "assistant", "parent_tool_use_id": "toolu_p", "message": {"id": "m", "content": [
+        {"type": "thinking", "thinking": "x" * 25, "signature": "s"},
+        {"type": "thinking", "thinking": "", "signature": "s"},  # CLI thường gửi thinking rỗng (chỉ chữ ký) → bỏ qua
+    ]}}
+    evs = ad.feed(json.dumps(msg))
+    assert len(evs) == 1
+    assert evs[0].payload["text"] == "x" * 10 and evs[0].payload["truncated"] is True and evs[0].subagent_id == "toolu_p"
+
+
+def test_persist_thinking_off_emits_nothing():
+    evs = adapt_lines("a", load("claude-thinking.jsonl"), persist_thinking=False, **ISO)
+    t = types(evs)
+    assert "reasoning.complete" not in t and "reasoning.delta" in t  # vẫn hiện trực tiếp, chỉ không ghi DB

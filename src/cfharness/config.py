@@ -627,6 +627,11 @@ DEFAULTS: dict[str, Any] = {
             # Đang chặn vì "chưa đăng nhập": cứ mỗi N giây kiểm lại `claude auth status`, thấy đăng nhập thì tự gỡ chặn (0 = tắt)
             "auth_recheck_s": 300,
             "include_partial_messages": True,
+            # P0-9 (docs/dev-notes/plan-chat-ui-claude.md Q4): ghi khối thinking của assistant thành `reasoning.complete` (DB) để
+            # trang run phát lại "Suy nghĩ" sau khi tải lại. Text đã che (redact) và cắt ở `thinking_max_chars` (cờ truncated);
+            # `redacted_thinking` chỉ ghi dấu "bị ẩn". false = không phát/không ghi (vẫn có reasoning.delta trực tiếp).
+            "persist_thinking": True,
+            "thinking_max_chars": 8000,
             # Spike A-04: bật để kiểm hậu nghiệm không có hook lạ (hook Serena…) trong stream
             "include_hook_events": True,
             # "stream-json": prompt gửi qua stdin dạng dòng user message (+ --replay-user-messages),

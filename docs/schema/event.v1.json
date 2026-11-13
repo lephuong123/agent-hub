@@ -232,6 +232,7 @@
     "ratelimit.update": "summary",
     "raw.invalid": "debug",
     "raw.unknown": "debug",
+    "reasoning.complete": "detail",
     "reasoning.delta": "detail",
     "reasoning.progress": "detail",
     "recovery.reconciled": "summary",
