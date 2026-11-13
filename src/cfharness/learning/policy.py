@@ -28,15 +28,16 @@ POLICY_DEFAULTS: dict[str, Any] = {
     # {agent_id: {enabled: bool, auto_apply: bool, shared_memory_write: bool}} — shared_memory_write: tool `memory` của agent được ghi
     # tầng team/global (mặc định chỉ lead ghi tầng team của mình, điều phối viên ghi mọi tầng)
     "agents": {},
-    # Q-20 — biên cấu hình vòng học được tự đặt (FR-LN-19)
+    # Q-20 — biên cấu hình vòng học / điều phối viên được tự đặt (FR-LN-19). Mặc định KHÔNG giới hạn: models [] = mọi model,
+    # null = không trần, max_effort "max". Người muốn hãm thì đặt qua `cfharness learn policy set config_bounds.<khoá> …`.
     "config_bounds": {
-        "models": ["opus", "sonnet", "haiku"],
-        "max_budget_usd_per_run": 5.0,
-        "budget_usd_per_day": 20.0,
-        "max_concurrent_runs": 3,
-        "max_effort": "high",
+        "models": [],
+        "max_budget_usd_per_run": None,
+        "budget_usd_per_day": None,
+        "max_concurrent_runs": None,
+        "max_effort": "max",
     },
-    # Q-19 — giới hạn tần suất (FR-LN-18)
+    # Q-19 — giới hạn tần suất (FR-LN-18): rào chắn chống vòng học tự sửa dồn dập/lật qua lật lại (không phải hạn mức dùng) → giữ
     "rate": {
         "max_changes_per_agent_per_day": 5,
         "max_config_changes_per_agent_per_week": 2,

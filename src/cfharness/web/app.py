@@ -575,7 +575,7 @@ async def _agent_form_ctx(request: Request, agent: dict[str, Any] | None, values
             "tools": ", ".join(tp.get("tools") or []), "mcp": list(agent.get("mcp_servers") or []),
             "web_allow_domains": ", ".join(tp.get("web_allow_domains") or []),
             "max_budget_usd_per_run": lim.get("max_budget_usd_per_run") or "", "budget_usd_per_day": lim.get("budget_usd_per_day") or "",
-            "max_runtime_s": lim.get("max_runtime_s") or "", "max_concurrent_runs": lim.get("max_concurrent_runs") or 1,
+            "max_runtime_s": lim.get("max_runtime_s") or "", "max_concurrent_runs": lim.get("max_concurrent_runs") or "",
             "workspace_default": agent.get("workspace_default") or "", "soul": agent.get("soul") or "",
         }
     v.setdefault("mcp", [])
@@ -647,7 +647,7 @@ def agent_changes(form: FormData, *, creating: bool, from_template: bool) -> dic
     for k, kind, label in (("max_budget_usd_per_run", float, "Ngân sách mỗi run"), ("budget_usd_per_day", float, "Ngân sách mỗi ngày"),
                            ("max_runtime_s", int, "Thời gian chạy tối đa"), ("max_concurrent_runs", int, "Số run đồng thời")):
         val = _num(form.get(k), kind, label)
-        if val is not None or (not sparse and k != "max_concurrent_runs"):
+        if val is not None or not sparse:  # form đầy đủ: để trống = không giới hạn
             lim[k] = val
     if lim:
         ch["limits"] = lim

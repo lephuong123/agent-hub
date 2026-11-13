@@ -26,6 +26,7 @@ async def d(hub_home):
 
 
 def _mk(d, aid: str, role: str = "Software engineer", **kw) -> None:
+    kw.setdefault("limits", {"max_concurrent_runs": 1})  # mặc định không giới hạn — test "agent bận" đặt trần 1
     d.hub.agents.create({"id": aid, "name": aid, "role": role, "description": f"{aid} does web work", **kw}, f"# {aid} soul\n")
 
 

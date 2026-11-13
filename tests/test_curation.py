@@ -213,7 +213,7 @@ async def test_tick_respects_idle_and_budget(team_hub):
     assert "cross_agent" not in await hub.curation.tick()  # chưa tới interval_h
     with pytest.raises(HubError, match="pha 2 đang tắt"):
         hub.curation.phase2("b")
-    hub.config.set("curation.daily_budget_usd", 0)
+    hub.config.set("curation.daily_budget_usd", 0.001)  # null/0 = không trần; trần nhỏ hơn 0.01 → coi như hết
     with pytest.raises(HubError, match="ngân sách"):
         hub.curation.phase2("b", force=True)
 

@@ -152,6 +152,7 @@ async def test_office_state_lists_running_run_and_tasks(held):
     """Daemon thật: run đang chạy xuất hiện ở `runs` (chỉ id/agent/giờ bắt đầu/chi phí); task.list → cột kanban, tiêu đề đã cắt."""
     env = held
     await env.login()
+    env.hub.agents.create({"id": "ag0", "name": "ag0", "model": "haiku", "limits": {"max_concurrent_runs": 1}})  # task không chiếm run thứ 2
     run = await running_run(env, "ag0", "dòng đầu\nprompt chi tiết không được gửi")
     env.hub.teams.create({"id": "t1", "name": "T1", "members": [{"agent_id": "ag0", "role": "worker"}]})
     env.hub.tasks.create({"team": "t1", "title": "Việc " + "z" * 100, "body": "thân task bí mật", "assignee": "ag0"})

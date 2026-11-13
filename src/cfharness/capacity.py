@@ -26,15 +26,19 @@ def kind_key(agent_id: str) -> str:
     return _SUFFIX.sub("", s)
 
 
-def agent_limit(row: dict[str, Any]) -> int:
+def agent_limit(row: dict[str, Any]) -> int | None:
+    """`limits.max_concurrent_runs` của agent; None = không giới hạn (mặc định)."""
     try:
-        return max(1, int((row.get("limits") or {}).get("max_concurrent_runs") or 1))
+        v = (row.get("limits") or {}).get("max_concurrent_runs")
+        return max(1, int(v)) if v else None
     except (TypeError, ValueError):
-        return 1
+        return None
 
 
-def free_slots(hub: Hub, row: dict[str, Any]) -> int:
-    return max(0, agent_limit(row) - hub.runs.active_runs(row["id"]))
+def free_slots(hub: Hub, row: dict[str, Any]) -> int | None:
+    """Số slot còn trống của agent; None = không giới hạn (luôn nhận việc)."""
+    limit = agent_limit(row)
+    return None if limit is None else max(0, limit - hub.runs.active_runs(row["id"]))
 
 
 def _teams_of(hub: Hub, agent_id: str) -> set[str]:
@@ -49,7 +53,7 @@ def busy_info(hub: Hub, agent_id: str) -> dict[str, Any] | None:
         return None
     limit = agent_limit(row)
     active = hub.runs.active_runs(agent_id)
-    if active < limit:
+    if limit is None or active < limit:
         return None
     holding = []
     for st in ("running", "queued"):
@@ -68,7 +72,7 @@ def idle_alternatives(hub: Hub, agent_id: str, *, exclude: set[str] | frozenset[
         if aid == agent_id or aid in exclude or r.get("status") == "paused":
             continue
         slots = free_slots(hub, r)
-        if slots <= 0:
+        if slots is not None and slots <= 0:
             continue
         match, score = [], 0
         if kind_key(aid) == key or r.get("cloned_from") == agent_id or root == aid or (root and r.get("cloned_from") == root):

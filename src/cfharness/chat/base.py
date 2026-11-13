@@ -478,7 +478,7 @@ class ChatBot:
         est = s.get("estop") or {}
         return "\n".join([
             f"cfharness {s.get('version')} — ESTOP: {'BẬT' + (' (' + str(est.get('reason')) + ')' if est.get('reason') else '') if est.get('on') else 'tắt'}",
-            f"Run đang chạy: {s.get('running')} · đang chờ: {s.get('queued')} (tối đa {s.get('max_concurrent_runs')})",
+            f"Run đang chạy: {s.get('running')} · đang chờ: {s.get('queued')} (tối đa {s.get('max_concurrent_runs') or 'không giới hạn'})",
             f"Agent: {s.get('agents')} · chi phí hôm nay: ${float(s.get('cost_today_usd') or 0):.4f}",
             f"Yêu cầu chờ duyệt: {len(pend or [])}" + (f" — gõ {self.cmd('approvals')}" if pend else ""),
         ])

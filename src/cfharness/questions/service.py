@@ -191,8 +191,8 @@ class QuestionService:
             multi, allow_free_text = False, True  # không có lựa chọn → chỉ trả lời bằng chữ
         if len(opts) < 2:
             multi = False
-        cap = int(self.cfg("max_open_per_run", 3))
-        if run.get("id") and len(self.list("pending", run_id=run["id"])) >= cap:
+        cap = self.cfg("max_open_per_run")  # null = không giới hạn
+        if cap is not None and run.get("id") and len(self.list("pending", run_id=run["id"])) >= int(cap):
             raise Conflict(f"run này đã có {cap} câu hỏi đang chờ — kết thúc lượt và chờ trả lời")
         task_id = task_id or run.get("task_id")
         from ..guard.profiles import gates_mode

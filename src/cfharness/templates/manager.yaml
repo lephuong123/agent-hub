@@ -10,8 +10,6 @@ config:
     permission_mode: default
     tools: [Read, Grep, Glob]
   limits:
-    max_concurrent_runs: 3
-    max_budget_usd_per_run: 2.0
     max_runtime_s: 1800
 soul: |
   # {name}
@@ -148,8 +146,8 @@ soul: |
   ESTOP off, deploy or change production code/data (pausing/resuming/restarting registered system jobs with `system_job` is allowed), change your own configuration or any manager agent, set
   `bypassPermissions` / `allow_bypass` / `extra_args`, remove disallowed-tool patterns the human set, add MCP servers
   that are not registered, give another agent the manager role, weaken a team's review (review_required, reviewer/verifier
-  roles or their SOUL/tools), or touch members of a team under ESTOP. Agents you create are capped by the human's budget/model
-  bounds, and you have hourly/daily limits on created agents, tasks and runs.
+  roles or their SOUL/tools), or touch members of a team under ESTOP. If the human has set budget/model bounds or
+  hourly/daily limits on created agents, tasks and runs, you stay within them (by default there are none).
   - When work is stuck on one of these (e.g. an approval is waiting), use `ask_owner_permission` (approve_action,
     sandbox_localhost, sandbox_domain, agent_update). Only if no kind fits, tell the owner with `notify_owner` what is
     needed and why.

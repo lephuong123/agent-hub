@@ -162,8 +162,21 @@ class CurationService:
         r = self.conn.execute("SELECT COALESCE(SUM(cost_usd),0) FROM runs WHERE kind='curator' AND queued_at>=?", (start,)).fetchone()
         return float(r[0] or 0)
 
-    def budget_left(self) -> float:
-        return max(0.0, float(self.cfg("daily_budget_usd") or 0) - self.spent_today())
+    def budget_left(self) -> float | None:
+        """Phần còn lại của ngân sách ngày; None = không trần (`curation.daily_budget_usd` null/0 — mặc định)."""
+        daily = self.cfg("daily_budget_usd")
+        if not daily:
+            return None
+        return max(0.0, float(daily) - self.spent_today())
+
+    def run_budget(self) -> float | None:
+        """--max-budget-usd cho một run/lần gọi curator = min(run_budget_usd, phần còn lại của ngày); None = không trần."""
+        per = self.cfg("run_budget_usd")
+        caps = [float(per)] if per else []
+        left = self.budget_left()
+        if left is not None:
+            caps.append(left)
+        return min(caps) if caps else None
 
     def idle_minutes(self) -> float:
         if self.hub.runs.active or self.hub.runs.queue:
@@ -246,8 +259,8 @@ class CurationService:
             merged = merge_deterministic(c["members"], int(self.hub.knowledge.limits().get("skill_desc_chars") or 60))
             item["merge"] = "deterministic"
             if use_llm and not dry_run:
-                budget = min(float(self.cfg("run_budget_usd") or 0.3), self.budget_left())
-                if budget < 0.01:
+                budget = self.run_budget()
+                if budget is not None and budget < 0.01:
                     item["llm_skipped"] = "hết ngân sách curation hôm nay → gộp tất định"
                 else:
                     from .llm import structured_call
@@ -418,8 +431,8 @@ class CurationService:
         if dry_run:
             rec.update(status="dry_run", summary=f"{len(skills)} ứng viên; prompt {len(prompt)} ký tự (không chạy)", prompt_preview=prompt[-2000:])
             return self.save(rec)
-        budget = min(float(self.cfg("run_budget_usd") or 0.3), self.budget_left())
-        if budget < 0.01:
+        budget = self.run_budget()
+        if budget is not None and budget < 0.01:
             raise HubError(f"hết ngân sách curation hôm nay (curation.daily_budget_usd, đã dùng ${self.spent_today():.4f})", code=-32003)
         rec["snapshot"] = self.bulk_snapshot(agent_id)
         run = self.hub.runs.submit(agent_id, prompt, budget_usd=budget, model=self.cfg("model") or None, kind="curator",
@@ -638,7 +651,8 @@ class CurationService:
         if cx.get("enabled", True) and (last is None or now - last >= timedelta(hours=float(cx.get("interval_h") or 24))):
             out["cross_agent"] = (await self.cross_agent())["id"]
         p2 = c.get("phase2") or {}
-        if p2.get("enabled") and self.budget_left() >= min(0.05, float(c.get("run_budget_usd") or 0.3)):
+        left = self.budget_left()
+        if p2.get("enabled") and (left is None or left >= min(0.05, float(c.get("run_budget_usd") or 0.05))):
             lastp = st.get("phase2_last") or {}
             for a in self.hub.agents.list():
                 t = _parse(lastp.get(a["id"]))
@@ -655,7 +669,7 @@ class CurationService:
         return out
 
     def status(self) -> dict[str, Any]:
-        return {"config": self.cfg(), "state": self.state(), "spent_today_usd": round(self.spent_today(), 6), "budget_left_usd": round(self.budget_left(), 6),
+        return {"config": self.cfg(), "state": self.state(), "spent_today_usd": round(self.spent_today(), 6), "budget_left_usd": (None if (bl := self.budget_left()) is None else round(bl, 6)),
                 "idle_min": round(min(self.idle_minutes(), 1e6), 1), "busy": self._busy, "recent": self.list(limit=10),
                 "pending_promotions": {k.split(":", 1)[1]: v for k, v in self._index().items() if k.startswith("proposal:") and not v.get("archived")}}
 

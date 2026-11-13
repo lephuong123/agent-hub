@@ -181,7 +181,7 @@ def daemon_status(st: dict[str, Any], mode: Mode | None = None, *, width: int | 
     run_line.append(f"{st.get('running', 0)} đang chạy", style=th.OK if st.get("running") else "")
     run_line.append(_sep(mode), style=th.MUTED)
     run_line.append(f"{st.get('queued', 0)} chờ", style=th.WARN if st.get("queued") else "")
-    run_line.append(f"  (tối đa {st.get('max_concurrent_runs')})", style=th.MUTED)
+    run_line.append(f"  (tối đa {st.get('max_concurrent_runs') or 'không giới hạn'})", style=th.MUTED)
     estop = Text(" ESTOP BẬT ", style=th.ALARM) if es.get("on") else Text("tắt", style=th.MUTED)
     if es.get("on") and es.get("reason"):
         estop.append(f"  {th.clean(es.get('reason'))}", style=th.ERR)
