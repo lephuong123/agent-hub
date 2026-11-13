@@ -633,6 +633,8 @@ class RunManager:
             isolation_overrides=(conn or {}).get("isolation_overrides"),
             allowed_mcp_prefixes=(conn or {}).get("allowed_mcp_prefixes"),
             trust_full=trusted and tp.get("permission_mode") == "bypassPermissions",
+            persist_thinking=bool(claude_cfg.get("persist_thinking", True)),
+            thinking_max_chars=int(claude_cfg.get("thinking_max_chars") or 8000),
         )
 
     def _agent_mcp_servers(self, agent: dict[str, Any]) -> dict[str, Any]:

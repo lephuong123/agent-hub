@@ -24,6 +24,9 @@ Adapter có trạng thái: tool đang mở (để tính `duration_s`), usage lu�
   stream_event content_block_delta text/thinking → message.delta / reasoning.delta
   stream_event message_delta     → usage.tick (throttle)
   assistant text                 → message.complete
+  assistant thinking             → reasoning.complete{text (đã che, cắt thinking_max), truncated, redacted:false}  (P0-9)
+  assistant redacted_thinking    → reasoning.complete{text:"", redacted:true}  (không nội dung)
+                                   cả hai tắt khi `runtime.claude.persist_thinking=false`
   assistant tool_use             → tool.start (+ subagent.spawn với Task/Agent)
   user tool_result               → tool.complete
   rate_limit_event               → ratelimit.update
@@ -118,6 +121,8 @@ class ClaudeStreamAdapter:
         clock: Callable[[], float] = time.monotonic,
         now: Callable[[], datetime] | None = None,
         usage_tick_interval_s: float = 1.0,
+        persist_thinking: bool = True,
+        thinking_max: int = MESSAGE_COMPLETE_MAX,
     ) -> None:
         self.agent_id = agent_id
         self.run_id = run_id
@@ -126,6 +131,8 @@ class ClaudeStreamAdapter:
         self.allowed_plugin_prefixes = tuple(allowed_plugin_prefixes) if allowed_plugin_prefixes is not None else None
         self.allowed_mcp_prefixes = tuple(allowed_mcp_prefixes or ())  # run connector: "claude.ai " (hook guard chặn tool ở lớp dưới)
         self.require_no_auto_memory = require_no_auto_memory
+        self.persist_thinking = persist_thinking  # P0-9: phát reasoning.complete (ghi DB) cho khối thinking
+        self.thinking_max = max(0, int(thinking_max))
         self.result_count = 0
         self.init_count = 0  # số `system/init` (lượt mới do thông báo task nền sau `result` → init thứ 2+)
         self.replay_count = 0  # số tin user CLI phát lại (`isReplay`): #1 là prompt, các tin sau là steer
@@ -433,6 +440,20 @@ class ClaudeStreamAdapter:
                         {"text": text[:MESSAGE_COMPLETE_MAX], "truncated": len(text) > MESSAGE_COMPLETE_MAX, "message_id": msg.get("id")},
                         subagent_id=sub,
                     )
+                )
+            elif bt == "thinking" and self.persist_thinking and block.get("thinking"):
+                text = redact(str(block["thinking"]))
+                out.append(
+                    self._ev(
+                        "reasoning.complete",
+                        {"text": text[: self.thinking_max], "truncated": len(text) > self.thinking_max, "redacted": False, "message_id": msg.get("id")},
+                        subagent_id=sub,
+                    )
+                )
+            elif bt == "redacted_thinking" and self.persist_thinking:
+                # CLI chỉ gửi bản mã hoá (`data`) — KHÔNG lưu, chỉ đánh dấu "suy nghĩ bị ẩn"
+                out.append(
+                    self._ev("reasoning.complete", {"text": "", "truncated": False, "redacted": True, "message_id": msg.get("id")}, subagent_id=sub)
                 )
         return out
 

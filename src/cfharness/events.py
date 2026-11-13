@@ -50,6 +50,9 @@ EVENT_LEVELS: dict[str, str] = {
     "message.delta": "detail",
     "reasoning.delta": "detail",
     "reasoning.progress": "detail",
+    # khối `thinking`/`redacted_thinking` trọn vẹn của assistant (P0-9): text (đã che, cắt theo `runtime.claude.thinking_max_chars`),
+    # truncated, redacted (true = CLI chỉ gửi bản mã hoá → không có nội dung), message_id. Ghi DB để phát lại sau khi tải lại trang.
+    "reasoning.complete": "detail",
     "message.complete": "summary",
     # Tool
     "tool.generating": "detail",
