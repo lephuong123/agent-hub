@@ -125,10 +125,11 @@ class AutoResumer:
     # -- listener
     def _on_bus(self, ev: HubEvent) -> None:
         if ev.type == "account.switched":
+            p = ev.payload or {}
             try:
-                asyncio.get_running_loop().call_soon(self.on_account_switched)
+                asyncio.get_running_loop().call_soon(self.on_account_switched, p.get("from"), p.get("to"))
             except RuntimeError:
-                self.on_account_switched()
+                self.on_account_switched(p.get("from"), p.get("to"))
             return
         if ev.type != "run.failed" or not ev.run_id or ev.source != "hub":
             return
@@ -152,7 +153,7 @@ class AutoResumer:
         att = chain_attempts(self.hub.store, run)
         delay = min(float(self.cfg("auto_resume_backoff_s") or 0) * (2 ** att), float(self.cfg("auto_resume_backoff_max_s") or 0))
         if cause == "rate_limit":
-            reset, _ = self.hub.dispatcher._run_reset(run)
+            reset, _ = self.hub.dispatcher.resume_reset(run)  # run của tài khoản cũ (người đã đổi) → không chờ reset của nó
             if reset is not None:
                 delay = max(delay, (reset - datetime.now(timezone.utc)).total_seconds())
         self._persist(run_id, time.time() + delay)
@@ -181,9 +182,15 @@ class AutoResumer:
         except RuntimeError:
             pass
 
-    def on_account_switched(self) -> list[str]:
+    def on_account_switched(self, from_: Any = None, to: Any = None) -> list[str]:
         """NGƯỜI vừa đổi tài khoản Claude (event `account.switched`): lượt tự resume đang hẹn vì `rate_limit` chạy NGAY
-        (tài khoản mới không bị hạn mức của tài khoản cũ). Các nguyên nhân khác giữ lịch cũ. KHÔNG tự đổi tài khoản."""
+        (tài khoản mới không bị hạn mức của tài khoản cũ). Các nguyên nhân khác giữ lịch cũ. KHÔNG tự đổi tài khoản.
+        Không kéo sớm khi chọn lại đúng tài khoản đang dùng (from == to) hoặc cổng hạn mức của tài khoản mới còn đóng — chạy
+        vào hạn mức đã biết chỉ đốt lượt tự resume."""
+        if to is not None and from_ == to:
+            return []
+        if self.hub.dispatcher.gate_peek() is not None:
+            return []
         now = time.time()
         moved: list[str] = []
         for rid, due in self._pending().items():

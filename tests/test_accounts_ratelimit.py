@@ -265,3 +265,72 @@ async def test_switch_brings_rate_limit_auto_resume_forward(make_hub):
     # lượt hẹn vì nguyên nhân khác giữ lịch cũ
     assert r2["id"] in (hub.store.state_get("auto_resume_pending") or {})
     assert not hub.store.get_run(r2["id"]).get("continued_in_run_id")
+
+
+# ============================================================================ run của tài khoản cũ sau khi người đổi
+async def test_null_account_run_belongs_to_default_not_new_account(make_hub):
+    """Run spawn lúc CHƯA cấu hình (account_id NULL) kết thúc sau lần đổi đầu tiên → hạn mức ghi cho `_default`, không đóng
+    cổng của tài khoản mới."""
+    hub, _ = make_hub(lambda spec: {"text": "ok"}, active=None)
+    hub.agents.create({"id": "solo", "name": "solo"})
+    r = hub.runs.submit("solo", "adhoc")
+    await hub.runs.wait(r["id"], 5)
+    assert hub.store.get_run(r["id"])["account_id"] is None
+    switch(hub, "a_new", frm=None)
+    await asyncio.sleep(0.05)
+    assert hub.dispatcher.account_of_run(r["id"]) == "_default"
+    rl_update(hub, r["id"], {"status": "rejected", "resetsAt": int(time.time()) + 3600})
+    assert set(hub.store.state_get("rate_limit_gates")) == {"_default"}
+    assert hub.dispatcher.gate_until() is None
+    assert hub.store.state_get("rate_limit") is None and hub.store.state_get(RL_GATE_KEY) is None
+
+
+async def test_rate_limited_run_of_old_account_does_not_wait_for_old_reset(make_hub):
+    """Run của a_one kết thúc rate_limited SAU khi người đổi sang a_two: cổng a_one được ghi, nhưng task chạy lại theo a_two
+    (không hẹn tới lúc a_one reset)."""
+    hub, _ = make_hub(lambda spec: {"text": "ok"}, active="a_two")
+    mk_team(hub)
+    hub.agents.create({"id": "solo", "name": "solo"})
+    r = hub.runs.submit("solo", "adhoc")
+    await hub.runs.wait(r["id"], 5)
+    hub.store.update_run(r["id"], {"account_id": "a_one"})
+    hub.runs.shutting_down = True
+    reset = datetime.now(timezone.utc) + timedelta(hours=3)
+    hub.store.state_set("rate_limit_gates", {"a_one": {"until": iso(reset), "source": "event", "run_id": None, "set_at": iso(reset)}})
+    assert hub.dispatcher.resume_reset(hub.store.get_run(r["id"])) == (None, "")
+    t = hub.tasks.create({"team": "docs", "assignee": "writer", "title": "x", "body": "x"})
+    hub.dispatcher._on_rate_limited(hub.tasks.row(t["id"]), hub.store.get_run(r["id"]), "ready")
+    row = hub.tasks.row(t["id"])
+    assert row["wait_reason"] == "backoff" and row["rate_limit_hits"] == 1
+    assert datetime.fromisoformat(row["not_before"].replace("Z", "+00:00")) < datetime.now(timezone.utc) + timedelta(minutes=5)
+    assert "a_one" in hub.store.state_get("rate_limit_gates") and hub.dispatcher.gate_until() is None
+
+    # tài khoản đang dùng cũng đang bị chặn → chờ cổng của NÓ
+    until2 = datetime.now(timezone.utc) + timedelta(minutes=30)
+    gates = hub.store.state_get("rate_limit_gates")
+    gates["a_two"] = {"until": iso(until2), "source": "event", "run_id": None, "set_at": iso(until2)}
+    hub.store.state_set("rate_limit_gates", gates)
+    got, _ = hub.dispatcher.resume_reset(hub.store.get_run(r["id"]))
+    assert got is not None and abs((got - until2).total_seconds()) < 1
+
+
+async def test_switch_to_same_or_gated_account_keeps_rate_limit_resume(make_hub):
+    """Chọn lại đúng tài khoản đang dùng, hoặc đổi sang tài khoản còn bị chặn → lượt tự resume vì rate_limit GIỮ lịch."""
+    reset = int(time.time()) + 3600
+    hub, _ = make_hub(lambda spec: {**RL_ERR, "rate_limit": {"status": "rejected", "resetsAt": reset}}, active="a_one",
+                      **{"recovery.auto_resume_backoff_s": 300, "recovery.auto_resume_backoff_max_s": 600})
+    hub.agents.create({"id": "a", "name": "A"})
+    r1 = hub.runs.submit("a", "rl")
+    await hub.runs.wait(r1["id"], 5)
+    await settle(lambda: r1["id"] in (hub.store.state_get("auto_resume_pending", {}) or {}))
+    due = hub.store.state_get("auto_resume_pending")[r1["id"]]
+
+    assert hub.auto_resume.on_account_switched("a_one", "a_one") == []
+    until = datetime.now(timezone.utc) + timedelta(hours=1)
+    gates = dict(hub.store.state_get("rate_limit_gates") or {})
+    gates["a_two"] = {"until": iso(until), "source": "event", "run_id": None, "set_at": iso(until)}
+    hub.store.state_set("rate_limit_gates", gates)
+    switch(hub, "a_two")
+    await asyncio.sleep(0.2)
+    assert hub.store.state_get("auto_resume_pending")[r1["id"]] == due
+    assert not hub.store.get_run(r1["id"]).get("continued_in_run_id")

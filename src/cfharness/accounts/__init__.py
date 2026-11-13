@@ -24,6 +24,8 @@ def attach(hub: "Hub") -> None:
     hub.accounts = AccountService(hub)  # type: ignore[attr-defined]
     try:  # lần đầu: CLAUDE_CODE_OAUTH_TOKEN sẵn có → tài khoản "Mặc định"
         hub.accounts.migrate_legacy()  # type: ignore[attr-defined]
+        if hub.store.state_get("claude_account_active") == "machine":  # người đã chọn đăng nhập của máy → bỏ token trong env daemon
+            AccountService.drop_env_token()
     except Exception:  # pragma: no cover — migrate lỗi không được chặn hub khởi động
         import logging
 

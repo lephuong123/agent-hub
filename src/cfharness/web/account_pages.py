@@ -192,7 +192,11 @@ def _check_ok(r: Any, f: FormData) -> str:
 
 
 def _use_ok(r: Any, f: FormData) -> str:
-    return f"Đã chuyển sang tài khoản {_who(f)} — run mới dùng tài khoản này, việc đang chờ hạn mức sẽ chạy lại"
+    msg = f"Đã chuyển sang tài khoản {_who(f)} — run mới dùng tài khoản này, việc đang chờ hạn mức sẽ chạy lại"
+    saved = r.get("saved_custom") if isinstance(r, dict) else None
+    if saved:
+        msg += f". Token tự đặt trước đó đã được lưu thành tài khoản «{saved.get('label')}»"
+    return msg
 
 
 def _use_confirm(f: FormData) -> str:

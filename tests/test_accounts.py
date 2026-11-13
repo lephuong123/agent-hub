@@ -319,3 +319,65 @@ async def test_run_records_account_id(d):
     assert r["account_id"] == a
     acc = (await rpc(d, "account.list", {}))["accounts"][0]
     assert acc["last_used_at"]
+
+
+async def test_use_from_custom_saves_token_first(d):
+    """Token tự đặt (`custom`) đang dùng: đổi đi (sang tài khoản khác hoặc machine) không được làm mất nó — lưu vào danh sách."""
+    a = (await rpc(d, "account.add_token", {"label": "A", "token": TOK_A}))["account"]["id"]
+    await rpc(d, "account.use", {"id": a})
+    d.hub.secrets.set("CLAUDE_CODE_OAUTH_TOKEN", TOK_X)  # `cfharness secret set` tay
+    assert (await rpc(d, "account.list", {}))["active"] == "custom"
+    r = await rpc(d, "account.use", {"id": "machine"})
+    assert r["active"] == "machine" and r["previous"] == "custom"
+    saved = r["saved_custom"]
+    assert saved["id"].startswith("a_") and "Token tự đặt" in saved["label"] and TOK_X not in json.dumps(r)
+    assert d.hub.secrets.get(secret_name(saved["id"])) == TOK_X
+    # đổi lại được về token đó
+    await rpc(d, "account.use", {"id": saved["id"]})
+    assert d.hub.secrets.get("CLAUDE_CODE_OAUTH_TOKEN") == TOK_X
+
+
+async def test_use_from_unsavable_custom_refuses(d):
+    """Token tự đặt không lưu được (sai dạng) → từ chối đổi, token vẫn nguyên."""
+    a = (await rpc(d, "account.add_token", {"label": "A", "token": TOK_A}))["account"]["id"]
+    d.hub.secrets.set("CLAUDE_CODE_OAUTH_TOKEN", "ngan")
+    with pytest.raises(HubError):
+        await rpc(d, "account.use", {"id": a})
+    assert d.hub.secrets.get("CLAUDE_CODE_OAUTH_TOKEN") == "ngan"
+
+
+async def test_use_machine_drops_daemon_env_token(d, monkeypatch):
+    """Daemon khởi động từ shell có export CLAUDE_CODE_OAUTH_TOKEN: chọn machine → run mới không còn token đó trong env."""
+    from cfharness.runtime.claude_cli import child_env
+
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", TOK_B)
+    a = (await rpc(d, "account.add_token", {"label": "A", "token": TOK_A}))["account"]["id"]
+    await rpc(d, "account.use", {"id": a})
+    await rpc(d, "account.use", {"id": "machine"})
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in child_env({}, oauth_token=None)
+
+
+def test_attach_drops_env_token_when_machine_selected(hub_home, monkeypatch):
+    from cfharness.hub import Hub
+
+    h = Hub(hub_home)
+    h.store.state_set("claude_account_active", "machine")
+    h.store.close()
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", TOK_B)
+    h = Hub(hub_home)
+    try:
+        import os
+
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in os.environ
+    finally:
+        h.store.close()
+
+
+def test_cli_add_takes_no_token_in_argv():
+    """Token không đi qua argv: không có `--token`, chỉ nhập ẩn hoặc `--token-stdin`."""
+    from cfharness.cli import build_parser
+
+    p = build_parser()
+    assert p.parse_args(["account", "add", "Work", "--token-stdin"]).token_stdin is True
+    with pytest.raises(SystemExit):
+        p.parse_args(["account", "add", "Work", "--token", TOK_A])

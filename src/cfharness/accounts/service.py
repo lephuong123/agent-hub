@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -259,16 +260,20 @@ class AccountService:
         `account.switched`, xếp lại hàng đợi. Run đang chạy giữ tài khoản cũ."""
         account_id = str(account_id or "").strip()
         previous = self.active_id()
-        if account_id == MACHINE:
-            self.secrets.delete(OAUTH_SECRET)
-        elif account_id == CUSTOM:
+        if account_id == CUSTOM:
             raise HubError("'custom' là token đặt tay ngoài danh sách — thêm nó bằng `cfharness account add` rồi chọn tài khoản đó")
-        else:
+        tok: str | None = None
+        if account_id != MACHINE:
             self._require_row(account_id)
             tok = (self.secrets.get(secret_name(account_id)) or "").strip()
             if not tok:
                 raise HubError(f"thiếu token của tài khoản '{account_id}' trong secret store — xoá rồi thêm lại tài khoản",
                                data={"secret": secret_name(account_id)})
+        saved = self._save_custom() if previous == CUSTOM else None  # token tự đặt sắp bị ghi đè/xoá → lưu vào danh sách trước
+        if tok is None:
+            self.secrets.delete(OAUTH_SECRET)
+            self.drop_env_token()
+        else:
             self.secrets.set(OAUTH_SECRET, tok)
             self.store.conn.execute("UPDATE claude_accounts SET last_used_at=? WHERE id=?", (iso(), account_id))
         self.store.state_set(ACTIVE_KEY, account_id)
@@ -278,7 +283,30 @@ class AccountService:
             self.hub.runs.tick()  # run ad-hoc đang xếp hàng chạy ngay bằng tài khoản mới
         except RuntimeError:  # pragma: no cover — ngoài event loop (CLI/test đồng bộ)
             pass
-        return {"active": account_id, "previous": previous}
+        out: dict[str, Any] = {"active": account_id, "previous": previous}
+        if saved is not None:
+            out["saved_custom"] = {"id": saved["id"], "label": saved["label"]}
+        return out
+
+    def _save_custom(self) -> dict[str, Any]:
+        """Token tự đặt (`custom`, không có trong danh sách) đang dùng → thêm thành tài khoản để đổi đi không làm mất nó.
+        Token không hợp lệ để lưu → TỪ CHỐI đổi (không xoá credential duy nhất của người)."""
+        tok = self._current_token()
+        if tok is None:  # pragma: no cover — active_id() vừa thấy token
+            raise HubError("không đọc được token tự đặt đang dùng")
+        label = f"{CUSTOM_LABEL} (lưu {datetime.now().astimezone().strftime('%Y-%m-%d %H:%M')})"
+        try:
+            return self.add_token(label, tok, expires_at=None)
+        except HubError as e:
+            raise HubError(f"không lưu được token tự đặt đang dùng vào danh sách ({e.message}) — đổi tài khoản sẽ làm mất nó; "
+                           "thêm token đó bằng `cfharness account add` (hoặc xoá bằng `cfharness secret rm CLAUDE_CODE_OAUTH_TOKEN`) "
+                           "rồi đổi lại") from e
+
+    @staticmethod
+    def drop_env_token() -> None:
+        """Đăng nhập của máy = KHÔNG có `CLAUDE_CODE_OAUTH_TOKEN`: bỏ cả biến cùng tên trong env của daemon (daemon khởi động từ
+        shell có export) — nếu không, `child_env` chép os.environ và run vẫn dùng token đó."""
+        os.environ.pop(OAUTH_SECRET, None)
 
     def rename(self, account_id: str, label: Any) -> dict[str, Any]:
         if account_id in (MACHINE, CUSTOM):

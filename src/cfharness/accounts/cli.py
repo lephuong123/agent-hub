@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import sys
 from typing import Any
 
 STATUS_VI = {"ok": "ổn", "auth_error": "lỗi đăng nhập", "rate_limited": "hết hạn mức", "expiring": "sắp hết hạn", "unknown": "chưa kiểm"}
@@ -16,9 +17,10 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     s = sub.add_parser("account", help="tài khoản Claude của hub: thêm, xem, chọn tài khoản đang dùng (đổi do người, không tự đổi)", parents=[common])
     ss = s.add_subparsers(dest="acct_action")
     ss.add_parser("list", help="danh sách tài khoản + tài khoản đang dùng", parents=[common])
-    ad = ss.add_parser("add", help="thêm tài khoản bằng token `claude setup-token` (không có --token: nhập ẩn)", parents=[common])
+    ad = ss.add_parser("add", help="thêm tài khoản bằng token `claude setup-token` (nhập ẩn, hoặc --token-stdin)", parents=[common])
     ad.add_argument("label")
-    ad.add_argument("--token", default=None, help="token sk-ant-oat01-… (nên bỏ trống để nhập ẩn — tránh lộ qua lịch sử shell)")
+    # KHÔNG nhận token qua argv (lộ qua `ps`/lịch sử shell — hợp đồng: token không đi qua argv)
+    ad.add_argument("--token-stdin", action="store_true", help="đọc token sk-ant-oat01-… từ stdin (không hỏi)")
     lg = ss.add_parser("login", help="thêm tài khoản bằng cách đăng nhập: mở link, đăng nhập, dán code", parents=[common])
     lg.add_argument("label")
     us = ss.add_parser("use", help="dùng tài khoản này cho run mới (`machine` = đăng nhập sẵn của máy)", parents=[common])
@@ -62,7 +64,7 @@ def cmd_account(ctx: Any) -> int:
             print("Chưa chọn tài khoản — claude dùng đăng nhập sẵn của máy. Thêm: `cfharness account login <tên>`.")
         return 0
     if act == "add":
-        token = a.token or getpass.getpass("Token (sk-ant-oat01-…, không hiện khi gõ): ")
+        token = sys.stdin.readline().strip() if a.token_stdin else getpass.getpass("Token (sk-ant-oat01-…, không hiện khi gõ): ")
         r = ctx.call("account.add_token", {"label": a.label, "token": token})
         acc = r["account"]
         ctx.out(r) if ctx.json else print(f"Đã thêm tài khoản {acc['id']} ({acc['label']}). Dùng: `cfharness account use {acc['id']}`.")
@@ -89,6 +91,9 @@ def cmd_account(ctx: Any) -> int:
         r = ctx.call("account.use", {"id": a.id})
         ctx.out(r) if ctx.json else print(f"Đang dùng tài khoản {r['active']} (trước: {r['previous'] or 'chưa chọn'}). Run mới dùng tài khoản này; "
                                           "run đang chạy giữ tài khoản cũ.")
+        if not ctx.json and r.get("saved_custom"):
+            sc = r["saved_custom"]
+            print(f"Token tự đặt trước đó đã được lưu thành tài khoản {sc['id']} ({sc['label']}).")
         return 0
     if act == "rename":
         r = ctx.call("account.rename", {"id": a.id, "label": a.label})
