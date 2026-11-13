@@ -38,7 +38,6 @@ import logging
 import os
 import random
 import re
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -264,13 +263,9 @@ class TaskDispatcher:
         return self.store.state_get(ACTIVE_ACCOUNT_KEY) or DEFAULT_ACCOUNT
 
     def account_of_run(self, run_id: str | None) -> str:
-        """Tài khoản của một run: `runs.account_id` (ghi lúc spawn) → tài khoản đang dùng nếu không biết.
-        Cột chưa có (DB cũ) → tài khoản đang dùng."""
+        """Tài khoản của một run: `runs.account_id` (ghi lúc spawn, migration v25) → tài khoản đang dùng nếu không biết."""
         if run_id:
-            try:
-                row = self.conn.execute("SELECT account_id FROM runs WHERE id=?", (run_id,)).fetchone()
-            except sqlite3.OperationalError:  # chưa có migration `runs.account_id`
-                row = None
+            row = self.conn.execute("SELECT account_id FROM runs WHERE id=?", (run_id,)).fetchone()
             if row is not None and row[0]:
                 return str(row[0])
         return self.active_account()

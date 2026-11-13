@@ -73,7 +73,22 @@ duyệt trên máy daemon, đọc URL/token bằng regex chịu mã ANSI + xuố
 - task `blocked` với lý do "claude chưa đăng nhập" → `ready`.
 - dispatcher chỉ xét cổng của tài khoản đang dùng.
 
-## Chưa làm
+## Đã làm (gộp 4 luồng vào `feat/claude-accounts`, 2026-11-13)
+- core: `accounts/{__init__,service,rpc,cli}.py`, migration v25 (`claude_accounts`, `runs.account_id`), event `account.*`,
+  `hub.status.account`, CLI `cfharness account list|add|login|use|rename|rm|check` (+ `HUB_HUMAN_ONLY_CLI["account"]`).
+- login: `accounts/login.py` (POSIX `pty` / Windows pywinpty). Spike thật: URL ở `https://claude.com/cai/oauth/authorize…` (không phải claude.ai).
+- ratelimit: `dispatcher.py` cổng/trạng thái theo tài khoản, nghe `account.switched`; `auto_resume.py` đưa lượt `rate_limit` lên ngay.
+- web: khối "Tài khoản Claude" ở Cài đặt (`web/account_pages.py`, `_accounts.html`), banner "Đổi sang tài khoản…", thẻ Sức khoẻ.
+- Gộp: bỏ fallback "chưa có cột `runs.account_id`" (dispatcher + test), test core dùng `login.py` thật (thay `start_login`), web không
+  hiện "Đổi tên" cho `machine` (core từ chối), tài khoản đang dùng đọc thêm cổng theo con trỏ (`_default` khi chưa đặt).
+  Test đầu-cuối: `tests/test_accounts_e2e.py`.
+
+## Chưa làm / còn mở
 - Tự đổi tài khoản (cố ý không làm).
 - Lệnh `/account` trên Telegram/Slack.
+- Chưa chạy thật: nộp code + nhận token qua PTY (ConPTY → Ink), màn lỗi code sai; nhánh PTY POSIX chưa chạy (máy dev chỉ Windows) —
+  CI Linux/macOS cần chạy `tests/test_accounts_login.py`.
 - Chưa kiểm: `claude --resume` session của tài khoản A bằng tài khoản B (cần 2 tài khoản thật).
+- Code sai → phiên đăng nhập đóng, người phải bấm thêm tài khoản lại (không thử lại trên cùng phiên).
+- `runs.account_id` = con trỏ người chọn; ai đặt tay `CLAUDE_CODE_OAUTH_TOKEN` (hiện `custom`) thì run vẫn ghi con trỏ cũ.
+- Task `wait_reason=backoff` (rate limit không rõ giờ reset) không được đánh thức khi đổi tài khoản — chờ backoff ngắn như cũ.

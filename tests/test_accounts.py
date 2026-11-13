@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
-import types
 
 import pytest
 
@@ -253,12 +251,9 @@ def fake_login(monkeypatch):
         calls.append((binary, env))
         return FakeHandle(env)
 
-    mod = types.ModuleType("cfharness.accounts.login")
-    mod.start_login = start_login  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "cfharness.accounts.login", mod)
-    import cfharness.accounts as pkg
+    from cfharness.accounts import login as login_mod
 
-    monkeypatch.setattr(pkg, "login", mod, raising=False)
+    monkeypatch.setattr(login_mod, "start_login", start_login)  # service nạp `start_login` trễ từ module thật
     return calls
 
 

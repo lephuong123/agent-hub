@@ -210,6 +210,7 @@ async def test_list_renders_without_token(env):
     assert "lỗi đăng nhập" in bad and "token bị thu hồi" in bad
     mach = re.search(r'<tr id="acct-machine">.*?</tr>', s, re.S).group(0)
     assert 'action="/do/account_rm"' not in mach and 'action="/do/account_use"' in mach
+    assert 'action="/do/account_rename"' not in mach  # core không đổi tên được machine
     # form thêm: 2 tab, ô token password không value
     assert 'action="/do/account_login_start"' in s and 'action="/do/account_add_token"' in s and "Dán token" in s
     tag = re.search(r'<input name="token"[^>]*>', s).group(0)

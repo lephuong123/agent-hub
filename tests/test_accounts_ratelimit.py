@@ -65,13 +65,6 @@ def mk_team(hub):
                              "members": [{"agent_id": "writer", "role": "worker"}, {"agent_id": "researcher", "role": "worker"}]})
 
 
-def ensure_account_col(hub):
-    """Cột `runs.account_id` do luồng lõi thêm bằng migration; trên nhánh này có thể chưa có → thêm tạm cho test."""
-    cols = {r[1] for r in hub.store.conn.execute("PRAGMA table_info(runs)")}
-    if "account_id" not in cols:
-        hub.store.conn.execute("ALTER TABLE runs ADD COLUMN account_id TEXT")
-
-
 def switch(hub, to, frm=None):
     """Như core: đổi con trỏ rồi phát `account.switched {from, to, by}`."""
     frm = frm if frm is not None else hub.store.state_get("claude_account_active")
@@ -91,7 +84,6 @@ def iso(dt):
 async def test_event_of_other_account_does_not_gate_active(make_hub):
     """Run của a_one bị rejected nhưng người đang dùng a_two → cổng ghi cho a_one, dispatcher vẫn claim; khoá cũ = bản a_two."""
     hub, _ = make_hub(lambda spec: {"text": "ok"}, active="a_two")
-    ensure_account_col(hub)
     mk_team(hub)
     hub.agents.create({"id": "solo", "name": "solo"})
     r = hub.runs.submit("solo", "adhoc")

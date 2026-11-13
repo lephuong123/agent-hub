@@ -66,7 +66,7 @@ def _view(a: dict[str, Any]) -> dict[str, Any]:
     label, tone = status_chip(a)
     kind = a.get("kind") or "token"
     return {**a, "chip": label, "tone": tone, "kind_label": KIND_LABEL.get(kind, ""), "can_use": kind in ("token", "machine") and not a.get("active"),
-            "can_rm": kind == "token" and not a.get("active"), "can_rename": kind in ("token", "machine")}
+            "can_rm": kind == "token" and not a.get("active"), "can_rename": kind == "token"}  # core từ chối đổi tên machine/custom
 
 
 def gate_closed(status: dict[str, Any] | None, now: float | None = None) -> str | None:

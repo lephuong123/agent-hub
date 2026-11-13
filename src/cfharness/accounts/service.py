@@ -36,6 +36,7 @@ CHECKS_KEY = "claude_account_checks"  # kết quả kiểm của tài khoản �
 MIGRATED_KEY = "claude_accounts_migrated"
 GATES_KEY = "rate_limit_gates"  # luồng rate-limit ghi: {<account_key>: {until, source, run_id, set_at}}
 RL_BY_ACCOUNT_KEY = "rate_limit_by_account"  # luồng rate-limit ghi: {<account_key>: <state rate_limit>}
+DEFAULT_GATE_KEY = "_default"  # khoá cổng của dispatcher khi chưa cấu hình tài khoản
 OAUTH_SECRET = "CLAUDE_CODE_OAUTH_TOKEN"
 MACHINE = "machine"
 CUSTOM = "custom"
@@ -192,9 +193,12 @@ class AccountService:
                  last_used_at: str | None, status: str | None, last_error: str | None) -> dict[str, Any]:
         cost, last_run = self._usage(aid)
         last_used = max([x for x in (last_used_at, last_run) if x], default=None)
-        rate_limit = self._rate_limit(aid)
-        st = status or "unknown"
         is_active = active == aid
+        rate_limit = self._rate_limit(aid)
+        if rate_limit is None and is_active:  # dispatcher khoá cổng theo con trỏ `claude_account_active` ("_default" khi chưa đặt)
+            ptr = self.store.state_get(ACTIVE_KEY) or DEFAULT_GATE_KEY
+            rate_limit = self._rate_limit(ptr) if ptr != aid else None
+        st = status or "unknown"
         ab = self.hub.runs.auth_block if is_active else None
         if rate_limit is not None:
             st = "rate_limited"
