@@ -8,7 +8,9 @@ HUB_HOME mặc định `~/.cfharness`, ghi đè bằng biến môi trường `CF
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +23,48 @@ DEFAULT_HOME_DIRNAME = ".cfharness"
 SOCKET_PREFIX = "cfharness-"
 # macOS giới hạn đường dẫn AF_UNIX ~104 byte.
 _MAX_SOCK_PATH = 100
+# Mục trong HUB_HOME phải riêng tư với user OS khác (đa instance P1, `docs/dev-notes/multi-instance.md`).
+PRIVATE_ENTRIES = ("hub.db", "hub.db-wal", "hub.db-shm", "config.yaml", "logs", "runs", "prompts", "agents", "secrets", "auth",
+                   "mcp_server", "checkpoints", "workspaces", "worktrees", "evals", "trash", "policy")
+
+log = logging.getLogger("cfharness.paths")
+
+
+class UnsafeSocketDir(RuntimeError):
+    """Thư mục socket dự phòng không an toàn (của user khác / symlink / quyền rộng)."""
+
+
+def fallback_socket_dir() -> Path:
+    """Thư mục RIÊNG của user cho socket dự phòng: `/tmp/cfharness-<uid>/` (0700, chủ = user hiện tại).
+
+    Không dùng `$TMPDIR`: biến này không ổn định giữa phiên GUI, SSH và LaunchDaemon (client và daemon phải tính RA CÙNG
+    một đường dẫn), còn thư mục `/var/folders/…/T` bị macOS dọn định kỳ. Tên thư mục đoán được nhưng chủ + quyền được kiểm
+    (`ensure_socket_dir`) và client kiểm chủ socket trước khi gửi token (`rpc.with_auth`)."""
+    return Path("/tmp") / f"{SOCKET_PREFIX}{uid_tag()}"
+
+
+def socket_private_dirs(sock: str | os.PathLike[str]) -> list[str]:
+    """Thư mục socket dự phòng riêng (nếu socket nằm trong đó) — sandbox cấm ghi cả thư mục (agent không xoá/thay socket)."""
+    d = Path(sock).parent
+    return [str(d)] if not IS_WINDOWS and d == fallback_socket_dir() else []
+
+
+def ensure_socket_dir(sock: Path) -> None:
+    """Tạo thư mục chứa socket dự phòng (0700) và kiểm nó thuộc user hiện tại, không phải symlink.
+    Không đụng tới thư mục khác (HUB_HOME, `CFHARNESS_SOCKET` do người đặt)."""
+    d = sock.parent
+    if IS_WINDOWS or d != fallback_socket_dir():
+        return
+    try:
+        d.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    st = os.lstat(d)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        raise UnsafeSocketDir(f"thư mục socket {d} không thuộc user hiện tại hoặc là symlink — không dùng. "
+                              f"Xoá nó (nếu là của bạn) hoặc đặt CFHARNESS_SOCKET=<đường dẫn riêng>.")
+    if stat.S_IMODE(st.st_mode) & 0o077:
+        os.chmod(d, 0o700)
 
 
 def resolve_home(home: str | os.PathLike[str] | None = None) -> Path:
@@ -79,7 +123,8 @@ class HubPaths:
     @property
     def socket(self) -> Path:
         """Đường dẫn Unix socket điều khiển. Nếu `HUB_HOME/hub.sock` quá dài cho AF_UNIX
-        thì dùng `/tmp/cfharness-<hash>.sock` (xác định theo HUB_HOME, client và daemon tính giống nhau)."""
+        thì dùng `/tmp/cfharness-<uid>/cfharness-<hash>.sock` (thư mục riêng 0700 — `fallback_socket_dir`; xác định theo
+        HUB_HOME, client và daemon tính giống nhau; tên file giữ tiền tố để guard nhận diện)."""
         for name in dict.fromkeys((ENV_SOCKET, _names.LEGACY_ENV_SOCKET)):
             env = os.environ.get(name)
             if env:
@@ -88,7 +133,7 @@ class HubPaths:
         if IS_WINDOWS or len(str(p)) <= _MAX_SOCK_PATH:  # Windows: file endpoint TCP (transport.py), không giới hạn độ dài
             return p
         digest = hashlib.sha256(str(self.home).encode()).hexdigest()[:12]
-        return Path("/tmp") / f"{SOCKET_PREFIX}{uid_tag()}-{digest}.sock"
+        return fallback_socket_dir() / f"{SOCKET_PREFIX}{digest}.sock"
 
     @property
     def agents_dir(self) -> Path:
@@ -125,7 +170,30 @@ class HubPaths:
             self.home / "secrets",
         ):
             d.mkdir(parents=True, exist_ok=True)
-        try:
-            os.chmod(self.home / "secrets", 0o700)
-        except OSError:
-            pass
+        for d in (self.home, self.home / "secrets"):
+            try:
+                os.chmod(d, 0o700)
+            except OSError as e:  # pragma: no cover — FS không hỗ trợ chmod: chạy tiếp, báo
+                log.warning("không đặt được quyền 0700 cho %s: %s", d, e)
+
+    def tighten_permissions(self) -> list[str]:
+        """Cài đặt cũ (trước P1: HUB_HOME 0755, hub.db/logs 0644): bỏ quyền group/other của HUB_HOME và các mục cấp 1 nhạy cảm.
+        Không đệ quy (HUB_HOME 0700 đã chặn đi vào); lỗi chmod chỉ log cảnh báo. Trả danh sách mục đã siết."""
+        if IS_WINDOWS:
+            return []
+        fixed: list[str] = []
+        for p in (self.home, *(self.home / n for n in PRIVATE_ENTRIES)):
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            if stat.S_ISLNK(st.st_mode) or st.st_uid != os.getuid():
+                continue
+            mode = stat.S_IMODE(st.st_mode)
+            if mode & 0o077:
+                try:
+                    os.chmod(p, mode & ~0o077)
+                    fixed.append(str(p))
+                except OSError as e:
+                    log.warning("không siết được quyền %s: %s", p, e)
+        return fixed

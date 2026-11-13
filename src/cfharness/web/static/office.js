@@ -1,6 +1,6 @@
 /* cfharness web — chế độ "Văn phòng 3D" (/office). Chế độ 3D = TOÀN TRANG 3D: trang độc lập, thấy được chỉ có canvas + nút "2D".
  * Mọi thông tin vẽ TRONG cảnh: màn hình HUD trên tường, kanban, màn hình phòng server, bảng "Cần bạn", thẻ nhân vật, thẻ đỏ cần duyệt,
- * biển hết phiên/mất kết nối. Danh sách chữ chỉ cho trình đọc màn hình (sr-only). Cảnh 3D không có link sang trang 2D.
+ * biển hết phiên/mất kết nối. NGOẠI LỆ: "Điều khiển agent" là bảng 2D (DOM) ở góc trên trái — office/dock.js, office-agent-board.md. Danh sách chữ chỉ cho trình đọc màn hình (sr-only). Cảnh 3D không có link sang trang 2D.
  * Dữ liệu: GET data-state (JSON, chữ tự do đã cắt ở server) + SSE data-sse (khung mỏng: chỉ id/tên tool/trạng thái).
  * Chữ của agent là DỮ LIỆU: trong DOM chỉ textContent, trên cảnh chỉ fillText. Không innerHTML. Hợp đồng: docs/dev-notes/office-3d.md.
  * Giai đoạn 2: duyệt / trả lời câu hỏi / chat với điều phối viên / đăng xuất NGAY TRONG CẢNH (office/flows.js, office/chat.js, office/ui.js),
@@ -18,6 +18,7 @@ import { watchdogStep } from './office/pacer.js';
 import { drawHud, drawKanban, drawRuns, drawNeeds, drawCard, drawApprovalTag, drawSign, TextSprite, fmtUsd } from './office/boards.js';
 import { drawCardStatus } from './office/boards.js';
 import { makeApi, Modals, createFlows } from './office/flows.js';
+import { createDock } from './office/dock.js';
 import { createChat } from './office/chat.js';
 import { FONT, roundRect, fitText, iconCanvas } from './office/util.js';
 import { Walker, walkBusy, hintShown, hintLayout, coordinatorOf, nearDesk } from './office/walk.js';
@@ -220,7 +221,21 @@ function main() {
       syncControls(); renderSrPanel();
     },
   });
-  function syncControls() { controls.enabled = !walk.active && !modals.open && !chat.isOpen && !talk.isOpen; }
+  // Điều khiển agent: bảng 2D (DOM) ở góc màn hình — office/dock.js (thay bảng quản lý agent vẽ trong cảnh)
+  const dock = createDock({
+    root, api, toast, onExpired: () => onExpired(),
+    statusOf: (id) => { const act = actors.get(id); return act ? statusKey(act) : null; },
+    select: (id) => { autoSel = false; select(id, !walk.active); },
+    openApproval: (id) => flows.openApproval(id), openQuestion: (id) => flows.openQuestion(id),
+    talk: (id) => talk.open(id), chat: () => chat.open(),
+    refresh: () => { clearTimeout(refetchT); refetchT = setTimeout(() => fetchState(), 300); },
+    pop: (id, emoji) => { const a = actors.get(id); if (a) a.pop = { emoji, until: perfNow() + 3 }; },
+    can3d: () => !!renderer && !noRender,
+  });
+  function syncControls() {
+    controls.enabled = !walk.active && !modals.open && !chat.isOpen && !talk.isOpen;
+    dock.setBlocked(modals.open || chat.isOpen || talk.isOpen);
+  }
   // khi chưa có văn phòng (vd. hết phiên ngay lần tải đầu): biển dựng trên một khoảnh sàn nhỏ cho ra cảnh 3D
   const signStand = new THREE.Group();
   {
@@ -509,8 +524,8 @@ function main() {
     drawKanban(b.kanban, state.task_counts, state.tasks, names);
     drawRuns(b.runs, state.runs || [], names, Date.now());
     drawNeeds(b.needs, state.approvals || [], state.questions || [], names);
+    dock.render(state);
   }
-
   // thẻ đỏ trên đầu agent có approval đang chờ (approval đầu tiên của agent)
   function syncTags() {
     const by = new Map();
@@ -549,6 +564,7 @@ function main() {
     const rows = [];
     for (const a of (state && state.approvals) || []) rows.push(['ap', a.id, 'Mở bảng duyệt: ' + (names(a.agent) || a.agent || '?') + ' · ' + (a.tool || '?') + (a.preview ? ' — ' + a.preview : '')]);
     for (const q of (state && state.questions) || []) rows.push(['q', q.id, 'Trả lời câu hỏi của ' + (names(q.agent) || q.agent || '?') + (q.text ? ': ' + q.text : '')]);
+    // tạm dừng / tiếp tục / dừng run: bảng "Điều khiển agent" 2D (nhìn thấy + bàn phím) — không lặp ở đây
     rows.push(['chat', '', 'Mở chat với điều phối viên']);
     rows.push(['logout', '', 'Thoát (đăng xuất)']);
     const sig = JSON.stringify(rows);
@@ -567,6 +583,9 @@ function main() {
     else if (k === 'q') flows.openQuestion(id);
     else if (k === 'chat') chat.open();
     else if (k === 'logout') flows.openLogout();
+    else if (k === 'pause') dock.control('agent_pause', id, id);
+    else if (k === 'resume') dock.control('agent_resume', id, id);
+    else if (k === 'stop') { const a = ((state && state.agents) || []).find((x) => x.run_id === id); dock.control('stop', id, a ? a.id : null); }
   }
 
   function renderList() {
@@ -632,6 +651,7 @@ function main() {
       const ci = cardInfo(act); drawCard(card, ci); drawCardStatus(cardSt, ci); cardAt = perfNow(); // vẽ ngay khi chọn (không chờ)
       if (fly !== false) flyToActor(act);
     }
+    dock.focusAgent(selected);
     renderList(); renderSrPanel();
   }
   function showBoard(b) {
@@ -659,6 +679,7 @@ function main() {
     if (ap) out.push({ key: 'ap:' + ap.id, label: 'Duyệt…', kind: 'danger' });
     if (q) out.push({ key: 'q:' + q.id, label: 'Trả lời…', kind: 'ask' });
     if (act.isManager) out.push({ key: 'chat:', label: 'Chat', kind: 'primary' });
+    // tạm dừng / tiếp tục / dừng run: ở bảng "Điều khiển agent" 2D góc màn hình (hàng của agent được đánh dấu khi chọn)
     return out;
   }
 
@@ -722,7 +743,7 @@ function main() {
         chat.close(); return;
       }
       const p = pick(e);
-      if (p && p.cardAct) { const [k, id] = p.cardAct.split(':'); doAct(k, id); }
+      if (p && p.cardAct) { const i = p.cardAct.indexOf(':'); doAct(p.cardAct.slice(0, i), p.cardAct.slice(i + 1)); }
       else if (p && p.approval) flows.openApproval(p.approval);
       else if (p && p.question) flows.openQuestion(p.question);
       else if (p && p.exit) flows.openLogout();
@@ -951,10 +972,10 @@ function main() {
     if (uiStep < 0 && now - uiAt > 1) { uiAt = now; uiStep = 0; }
     if (uiStep >= 0) {
       const k = uiStep++;
-      if (k === 0) { if (world && state) drawRuns(world.boards.runs, state.runs || [], names, Date.now()); }
+      if (k === 0) { if (world && state) { drawRuns(world.boards.runs, state.runs || [], names, Date.now()); } }
       else if (k === 1) { if (world) world.setDaylight(hourNow()); }
       else if (k === 2) syncSign();
-      else { uiStep = -1; setTimeout(() => { renderList(); renderSrPanel(); }, 0); }
+      else { uiStep = -1; setTimeout(() => { renderList(); renderSrPanel(); dock.render(); }, 0); }
     }
     modals.update();
     chat.update();

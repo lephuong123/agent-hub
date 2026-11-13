@@ -381,8 +381,8 @@ class TaskDispatcher:
             return "agent_missing"
         if ag["status"] == "paused":
             return "agent_paused"
-        limit = int((ag.get("limits") or {}).get("max_concurrent_runs") or 1)
-        if self.hub.runs.active_runs(agent_id) >= limit:
+        limit = (ag.get("limits") or {}).get("max_concurrent_runs")  # null = không giới hạn
+        if limit and self.hub.runs.active_runs(agent_id) >= int(limit):
             return "agent_busy"
         return None
 
@@ -480,8 +480,9 @@ class TaskDispatcher:
             return False
         return True
 
-    def _capacity_left(self) -> int:
-        return self.hub.runs.capacity_left()
+    def _capacity_left(self) -> float:
+        left = self.hub.runs.capacity_left()
+        return float("inf") if left is None else left
 
     def _dispatch_triage(self) -> None:
         gate = self.gate_until()
@@ -776,7 +777,7 @@ class TaskDispatcher:
             if existing and run.get("result_json") is None:
                 subs = []
             else:
-                subs = validate_plan(run.get("result_json"), members, lead=lead, max_subtasks=int(self.cfg("max_subtasks") or 20))
+                subs = validate_plan(run.get("result_json"), members, lead=lead, max_subtasks=int(self.cfg("max_subtasks") or 0) or None)
         except PlanError as e:
             self.store.update_run(run["id"], {"status": "protocol_violation", "outcome": "protocol_violation", "error": f"kế hoạch không hợp lệ: {e}", "schema_valid": 0})
             self.hub.publish(make_event("run.protocol_violation", run["agent_id"], {"error": str(e)}, run_id=run["id"]))

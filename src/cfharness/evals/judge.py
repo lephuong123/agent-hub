@@ -97,7 +97,7 @@ async def judge(
     # hardening NFR-22/H-20: gọi model qua AgentRuntime.oneshot (cùng cô lập settings/MCP, kiểm ma trận cờ) — không spawn `claude` ở đây
     from ..runtime import ClaudeCliRuntime, OneShotRequest
 
-    rt = ClaudeCliRuntime({**claude_cfg, "binary": binary})
+    rt = ClaudeCliRuntime({**claude_cfg, "binary": binary}, secrets=getattr(hub, "secrets", None))
     r = await rt.oneshot(OneShotRequest(prompt=text, schema=JUDGE_SCHEMA, system=JUDGE_SYSTEM, model=model, budget_usd=budget_usd,
                                         timeout_s=timeout, label=f"eval_judge:{golden_task_id or ''}"))
     cost = float(r.cost_usd or 0.0)

@@ -157,7 +157,17 @@ class FakeSlack:
             root = str(p.get("ts") or "")
             with self.cond:
                 msgs = [dict(m) for m in self.history.get(str(p.get("channel")), []) if m.get("ts") == root or m.get("thread_ts") == root]
-            return {"ok": True, "messages": msgs[: int(p.get("limit") or 1000)], "has_more": False}
+            # như Slack thật: tin CŨ trước; `oldest`/`latest` (loại trừ, `inclusive` → gồm), phân trang `cursor` → `next_cursor`
+            lo, hi, inc = p.get("oldest"), p.get("latest"), str(p.get("inclusive")).lower() in ("true", "1")
+            if lo:
+                msgs = [m for m in msgs if float(m["ts"]) > float(lo) or (inc and float(m["ts"]) == float(lo))]
+            if hi:
+                msgs = [m for m in msgs if float(m["ts"]) < float(hi) or (inc and float(m["ts"]) == float(hi))]
+            start = int(p.get("cursor") or 0)
+            n = int(p.get("limit") or 1000)
+            page, more = msgs[start:start + n], start + n < len(msgs)
+            self.replies_calls = getattr(self, "replies_calls", 0) + 1
+            return {"ok": True, "messages": page, "has_more": more, "response_metadata": {"next_cursor": str(start + n) if more else ""}}
         if method == "views.open":
             if self.fail_views or not p.get("trigger_id"):
                 return {"ok": False, "error": "expired_trigger_id"}
@@ -281,9 +291,12 @@ class FakeSlack:
             self._kick = True
 
     def user_message(self, channel: str, user: str, text: str, *, thread_ts: str | None = None, team: str | None = None,
-                     event_id: str | None = None, subtype: str | None = None, bot_id: str | None = None) -> str:
+                     event_id: str | None = None, subtype: str | None = None, bot_id: str | None = None,
+                     attachments: list[dict[str, Any]] | None = None) -> str:
         ts = self._ts()
         ev = {"type": "message", "channel": channel, "user": user, "text": text, "ts": ts, "channel_type": "im" if channel.startswith("D") else "channel"}
+        if attachments is not None:  # tin chuyển tiếp (Forward) như Slack thật: `attachments[].is_share`
+            ev["attachments"] = attachments
         if thread_ts:
             ev["thread_ts"] = thread_ts
         if subtype:

@@ -154,7 +154,7 @@ export function createFlows(o) {
         }
         const bw = Math.min(300, (W - 2 * pad - 24) / 2), by = H - 110;
         ui.button('cancel', W - pad - 2 * bw - 24, by, bw, 72, 'Huỷ', { onClick: () => modals.pop(p) });
-        ui.button('yes', W - pad - bw, by, bw, 72, d.danger ? 'Đồng ý từ chối' : 'Đồng ý', {
+        ui.button('yes', W - pad - bw, by, bw, 72, d.danger ? (name === 'deny' ? 'Đồng ý từ chối' : 'Đồng ý') : 'Đồng ý', {
           kind: d.danger ? 'danger' : 'primary',
           // NGƯỜI bấm → mới gửi confirm=yes
           onClick: () => {

@@ -62,7 +62,7 @@ def test_list_show_edit_revisions(hub):
     assert [r["id"] for r in hub.agents.list()] == ["a", "b"]
     ag = hub.agents.update("a", {"model": "haiku", "limits": {"budget_usd_per_day": 1.5}, "tool_policy": {"allowed_tools": ["Read", "Grep"]}})
     assert ag["config_revision"] == 2 and ag["model"] == "haiku"
-    assert ag["limits"]["budget_usd_per_day"] == 1.5 and ag["limits"]["max_concurrent_runs"] == 1
+    assert ag["limits"]["budget_usd_per_day"] == 1.5 and ag["limits"]["max_concurrent_runs"] is None
     ag = hub.agents.update("a", {}, soul="# new soul")
     assert ag["config_revision"] == 3 and hub.agents.soul("a") == "# new soul"
     revs = hub.store.list_revisions("a")

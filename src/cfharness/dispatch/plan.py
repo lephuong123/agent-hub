@@ -46,14 +46,14 @@ class PlanError(ValueError):
     pass
 
 
-def validate_plan(plan: Any, members: list[dict[str, Any]], *, lead: str | None, max_subtasks: int = 20) -> list[dict[str, Any]]:
+def validate_plan(plan: Any, members: list[dict[str, Any]], *, lead: str | None, max_subtasks: int | None = None) -> list[dict[str, Any]]:
     """Trả danh sách subtask đã chuẩn hoá theo thứ tự topo: {key, title, body, assignee|None, role|None, parents:[key]}."""
     if not isinstance(plan, dict):
         raise PlanError("output của lead không phải object JSON (thiếu structured_output)")
     subs = plan.get("subtasks")
     if not isinstance(subs, list) or not subs:
         raise PlanError("kế hoạch không có subtasks")
-    if len(subs) > max_subtasks:
+    if max_subtasks and len(subs) > max_subtasks:
         raise PlanError(f"kế hoạch có {len(subs)} subtask > giới hạn {max_subtasks}")
     member_ids = {m["agent_id"]: m for m in members}
     out: list[dict[str, Any]] = []

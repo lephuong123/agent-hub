@@ -136,7 +136,8 @@ class QuestionChat:
             body += [f"{o['key']}. {o['label']}" + (f" — {o['description']}" if o.get("description") else "") for o in opts]
         if q.get("escalation_note"):
             body += ["", f"(ghi chú của điều phối viên: {q['escalation_note']})"]
-        lines += [f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(visible(chr(10).join(body)))}</pre>"]
+        # chữ agent sau tiền tố cố định, qua `bot.agent_body` (Telegram: markdown → HTML whitelist; `agent_render: pre`/Slack: <pre>)
+        lines += [f"<i>{esc(AGENT_FRAME)}</i>", self.bot.agent_body(visible(chr(10).join(body)))]
         return "\n".join(lines)
 
     def system_text(self, q: dict[str, Any], sel: list[str] | None = None, *, confirm_cancel: bool = False) -> str:

@@ -45,6 +45,7 @@ RELEASES_URL = f"{GIT_URL}/releases"
 API = f"https://api.github.com/repos/{REPO}"
 TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 CHECK_TTL_S = 600.0
+SUPERVISOR_WAIT_S = 75  # < RESTART_TIMEOUT_S (90) của helper: launchd chạy lại sau ≤ ThrottleInterval (30 s) + thời gian khởi động
 MUTATING_UPDATE = ("update.start",)
 
 Fetcher = Callable[[float], dict[str, Any]]
@@ -197,16 +198,19 @@ class Updater:
             return ""
 
     # ------------------------------------------------------------------ cập nhật
-    def plan(self, tag: str) -> dict[str, list[str]]:
+    def plan(self, tag: str, supervised: bool = False) -> dict[str, list[str]]:
         pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
+        restart = [self.python, "-m", "cfharness", "daemon", "start"]
+        if supervised:  # daemon chạy dưới launchd: launchd tự chạy lại (thoát mã 75) — helper chỉ chờ, hết giờ mới tự bật
+            restart += ["--wait-supervisor", str(SUPERVISOR_WAIT_S)]
         return {
             "install": [str(self.uv()), "tool", "install", "--force", "--python", pyver, f"git+{GIT_URL}@{tag}"],
-            "restart": [self.python, "-m", "cfharness", "daemon", "start"],
+            "restart": restart,
             "verify": [self.python, "-m", "cfharness", "--version"],
         }
 
     def start(self, *, tag: str | None = None, force: bool = False, busy: int = 0, wait_pid: int | None = None,
-              env: dict[str, str] | None = None, by: str = "user") -> dict[str, Any]:
+              env: dict[str, str] | None = None, by: str = "user", supervised: bool = False) -> dict[str, Any]:
         if self.in_progress():
             raise Conflict("đang có một lần cập nhật chạy — chờ xong rồi thử lại", data={"state": self.state()})
         chk = self.check(refresh=True)
@@ -224,7 +228,7 @@ class Updater:
         if busy and not force:
             raise Conflict(f"đang có {busy} run chạy/chờ — cập nhật sẽ dừng daemon và ngắt chúng (tự tiếp tục sau khi khởi động lại). "
                            "Chờ xong, hoặc cập nhật dù vậy (force)", data={"busy": busy})
-        plan = self.plan(tag)
+        plan = self.plan(tag, supervised=supervised)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
         helper = self.dir / "helper.py"
@@ -270,8 +274,14 @@ def register_rpc(daemon: "Daemon") -> None:
         busy = int(st.get("running") or 0) + int(st.get("queued") or 0)
         env = dict(os.environ)
         env["CFHARNESS_HOME"] = str(daemon.paths.home)
+        from .daemon import SUPERVISED_RESTART_CODE, supervisor
+
+        supervised = supervisor() == "launchd"
+        env.pop("XPC_SERVICE_NAME", None)  # helper + daemon nó có thể tự bật (hết giờ chờ) KHÔNG được tưởng mình là job launchd
         res = await asyncio.to_thread(up.start, tag=p.get("tag") or None, force=bool(p.get("force")), busy=busy, wait_pid=os.getpid(), env=env,
-                                      by=f"manager:{c.manager}" if c is not None and c.manager else "user")
+                                      by=f"manager:{c.manager}" if c is not None and c.manager else "user", supervised=supervised)
+        if supervised:  # thoát ≠ 0 để launchd (KeepAlive SuccessfulExit=false) chạy lại daemon — không để helper bật bản ngoài launchd
+            daemon.exit_code = SUPERVISED_RESTART_CODE
         asyncio.get_running_loop().call_later(0.5, daemon.stopping.set)  # trả lời RPC trước, rồi dừng để helper cài đè
         return res
 

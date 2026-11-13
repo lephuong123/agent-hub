@@ -102,7 +102,7 @@ Test: `tests/test_telegram_questions.py` (10 ca: cặp tin + nhãn độc chỉ 
 Theo phản hồi "tin khó hiểu, nhiều ký tự đặc biệt": mỗi tin chỉ còn AI — CẦN GÌ — BẤM GÌ.
 - Bỏ tiền tố `[cfharness]`, id run/yêu cầu/câu hỏi, tên luật/lớp, lệnh CLI dự phòng (`cfharness approve|deny|answer|runs show`) khỏi tin Telegram/Slack 2 chiều.
   Lệnh CLI chỉ còn ở kênh MỘT chiều (webhook Slack, `notify/slack.format_message`) vì đó là cách duy nhất để xử lý.
-- `AGENT_FRAME` rút còn "▼ Agent viết:" (ux-plan §3.1). WT-8 giữ nguyên: chữ agent vẫn TRỌN trong `<pre>` sau tiền tố cố định, không chung tin với nút.
+- `AGENT_FRAME` rút còn "▼ Agent viết:" (ux-plan §3.1). WT-8 giữ nguyên: chữ agent vẫn TRỌN trong `<pre>` sau tiền tố cố định, không chung tin với nút. (Từ 2026-11-13: markdown thay `<pre>` — mục cuối.)
 - Duyệt: tin nội dung `⏸ <agent> muốn chạy:` + `<pre>lệnh</pre>` + `<pre>Vì sao hỏi / Ảnh hưởng tới</pre>`; tin nút `❓ Cho phép <agent> chạy thao tác ở tin trên?`
   (+ "⚠️ Thao tác nặng" khi cần). Bước 2: "Chắc chắn cho phép?". Kết quả sửa tại chỗ: "✅ Đã cho phép — bởi bạn qua Telegram."
 - Kết quả run: `✅ <agent> — xong · 12 giây · $0.004` + khung agent + "↩ Trả lời tin này để giao thêm cho agent này."
@@ -118,3 +118,48 @@ Nay mỗi tin chủ động gắn với một run/hội thoại đi qua `ChatBot
 - Áp ở `TelegramNotifier._send`, `SlackChatNotifier._send`, `QuestionChat.chats_for`. `notify test` vẫn gửi mọi chat.
 - Lưu ý Slack: trước đây mọi DM trong allowlist đều nhận; nay việc giao từ một DM chỉ về DM đó.
 Test: `tests/test_telegram.py::test_route_to_origin_chat_only`.
+
+
+## Chữ agent dạng markdown — nới WT-8 có kiểm soát (2026-11-13, P0-10 — plan-chat-ui-claude.md Q2/Q3)
+Quyết định chủ repo (Q3): bỏ khung `<pre>` cho chữ agent, chuyển markdown → HTML Telegram, có cờ quay lại. Tiền lệ: Slack đã nới
+cho trả lời điều phối viên (slack.md — trích dẫn + link). Áp cho trả lời/tin chủ động của điều phối viên (`ManagerChat`), kết quả
+`/run` (`ChatBot.format_result`) và câu hỏi của agent (`questions_tg.content_text`). Tin duyệt (`⏸ … muốn chạy:`) GIỮ `<pre>` — đó là
+lệnh, phải hiện nguyên văn.
+- Bộ chuyển: `chat/mdconv.py` (markdown-it-py `commonmark` + `table`, `strikethrough`, `html=False` → khối trung gian →
+  `to_telegram_html`). Mọi chữ agent escape `& < >`; CHỈ bộ chuyển sinh thẻ: `b i s code pre` (+ `<code class="language-x">` với
+  tên ngôn ngữ lọc `^[A-Za-z0-9_+.#-]{1,24}$`). Tiêu đề → dòng `<b>`; danh sách `• `/`1. ` thụt bằng NBSP; bảng hẹp (≤ 3 cột,
+  ≤ ~34 ký tự/dòng) → `<pre>` căn cột, rộng hơn → mỗi hàng một dòng `• <b>cột1</b>: tên: giá trị · …`; `---` bỏ; trích dẫn → `▎ `
+  (không dùng `<blockquote>` — Telegram cấm `pre`/`code`/`a` bên trong).
+- Link (Q2): KHÔNG `<a>`. Link http(s) → chữ `nhãn (URL)`; nhãn trùng URL hoặc trông như URL/tên miền → chỉ URL thật (không giả
+  đích); link khác (`javascript:`, `mailto:`, đường dẫn) → chỉ nhãn. Ảnh → `alt (URL)`, không nhúng.
+- Lệnh: chữ `/lệnh` (không dính chữ đứng trước) nằm trong `<code>` → Telegram không biến thành lệnh bấm được.
+- Bất biến còn giữ: dòng hub (tiêu đề in đậm + tiền tố `AGENT_FRAME`) LUÔN đứng trước chữ agent; chữ agent không nằm chung tin với
+  nút; đuôi hub (`↩ …`, "đã cắt") cách một dòng trống, in nghiêng. Cái agent làm được: in đậm/nghiêng một dòng trông "giống" chữ hub —
+  chấp nhận (luôn nằm dưới tiền tố, không kèm nút, không link/lệnh bấm được), như Slack.
+- Chia tin: `split_md` chia markdown TRƯỚC khi render, theo khối (đoạn, mục danh sách, dòng mã), rồi xuống dòng, rồi dấu cách — đo
+  độ dài SAU khi render (`telegram_len`, đơn vị UTF-16). Khối mã bị chia → tin sau mở lại cùng ngôn ngữ; bảng bị chia → lặp tiêu đề.
+  Quá `MAX_CHUNKS` (4) tin → gửi thêm bản đầy đủ thành tệp `.md` (`send_document`). Điều phối viên trả lời dài: `manager/service.TEXT_MAX`
+  nâng 4000 → 20000 (= trần DB); bị cắt → payload `truncated: true`, kênh ghi "hub đã cắt bớt".
+- Lọc (P1-10, `manager_chat.sanitize_reply`): gỡ dòng `[cfharness…`, dòng chỉ có `NO_ACTION`, thẻ `<untrusted-data…>` sót lại.
+- Cờ: `notify.telegram.agent_render: markdown|pre` (mặc định `markdown`; `pre` = khung cũ y nguyên: TRỌN `<pre>`, cắt cứng 3500).
+- Test: `tests/test_mdconv.py` (whitelist thẻ + cân thẻ bằng `html.parser` — `tests/tg_html.py`), `tests/test_telegram.py`
+  (WT-8 hai chế độ), `tests/test_telegram_manager.py` (chia khối, `.md`, `truncated`, lọc). Chưa kiểm trên Telegram thật.
+
+## `/lệnh` không bấm được ở MỌI vị trí + `<blockquote expandable>` (2026-11-13, P2 — plan-chat-ui-claude.md)
+- Luật Telegram nhận `/lệnh` (thực thể `bot_command`): "/" + `[A-Za-z0-9_]{1,64}` (+ `@bot`). tdlib (`match_bot_commands`): ký tự
+  TRƯỚC không phải chữ/số/`_` và không phải `/ < >`. tdesktop (`RegExpBotCommand`): ký tự trước là đầu dòng hoặc dấu ngăn — gồm cả
+  `< > /`. Không biết server/ứng dụng nào áp luật nào → `mdconv._TG_CMD` lấy HỢP: mọi `/` + chữ ASCII/số/`_` mà ký tự trước không
+  phải chữ/số/`_` (Unicode) đều bị vô hiệu — sau `>`, `<`, ngoặc, `:`, `-`, `.`, `~`, `/`, emoji, dấu nháy, đầu dòng.
+  Cách vô hiệu: bọc `<code>` cả cụm tới khoảng trắng (bấm vào = chép; đường dẫn `/usr/bin/x` một khối). Riêng `</thẻ>` (agent viết
+  thẻ HTML thô) → chèn WORD JOINER U+2060 sau "/" (không hiện, chữ y nguyên; bọc `<code>` sẽ thành `<`/b`>` khó đọc). Bên trong URL
+  (`https?://…`, `www.…`) không đụng: Telegram ưu tiên thực thể URL. Áp cả tiêu đề, ô/tên cột bảng, nhãn link (trước đây chỉ đoạn văn).
+- `<blockquote expandable>` (Bot API 7.4) — cờ `notify.telegram.expandable_details` (mặc định **false**, CHƯA kiểm trên bot thật).
+  Bật: `mdconv.to_telegram_html(md, expandable=True)` giữ nguyên "màn đầu" (`EXPAND_FIRST_SCREEN` = 500 ký tự thấy được), sau đó
+  chuỗi khối liền nhau loại đoạn văn/danh sách/trích dẫn (`▎`) dài ≥ `EXPAND_MIN` (300) được gói trong MỘT `<blockquote expandable>`
+  ở cấp ngoài cùng. Khối có `pre`/`code` (khối mã, `mã` nội dòng, `/lệnh` đã bọc) cắt chuỗi và hiện bình thường — Telegram cấm
+  `pre`/`code`/`a` trong blockquote và cấm blockquote lồng nhau. Chữ thấy được y hệt bản không gập (chỉ thêm thẻ) → `telegram_len`/
+  `split_md` không đổi. Mỗi phần sau `split_md` có màn đầu riêng.
+- Test: `tests/test_mdconv.py` (14 vị trí `/lệnh`, tiêu đề/bảng/nhãn link, chữ trông giống lệnh không bị bọc; expandable tắt mặc
+  định, bật thì hợp lệ + cùng chữ thấy được + bỏ qua khối có code + nối đúng cờ), `tests/tg_html.py` (thêm: `blockquote` chỉ ở cấp
+  ngoài cùng, thuộc tính `expandable` không giá trị; `tappable_commands(html)` tìm `/lệnh` còn bấm được trên chữ thấy được, ngoài
+  `pre`/`code`/URL). Chưa kiểm trên Telegram thật: hiển thị expandable, và việc U+2060 chặn được lệnh trên mọi ứng dụng.

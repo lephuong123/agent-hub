@@ -23,21 +23,5 @@
     <div class="row end"><button class="btn primary" type="submit">Tạo công việc</button></div>
   </form>
 </details>
-<div class="kanban">
-  {% for c in TASK_COLUMNS %}{% set ts = task_status(c) %}
-  <section class="col">
-    <h3><span class="pill {{ ts[1] }}">{{ ts[0] }}</span> <span class="muted small">{{ cols[c]|length }}</span></h3>
-    {% for t in cols[c] %}
-      <a class="tcard" href="/tasks/{{ t.id }}">
-        <span class="tcard-title">{{ t.title|first(80) }}</span>
-        <span class="meta">{{ m.icon('bot', 'sm') }}{{ t.assignee_agent_id or t.team_id or '—' }}{% if t.parents %} · sau {{ t.parents|length }} task{% endif %}{% if t.cost_usd %} · {{ t.cost_usd|cost }}{% endif %}</span>
-        {% if t.question %}<span class="ask-t">{{ m.icon('question', 'sm') }}{{ 'Hỏi điều phối viên' if t.question.status == 'with_manager' else 'Chờ bạn trả lời' }}</span>
-        {% elif t.block_reason %}<span class="small danger-t">{{ t.block_reason|first(60) }}</span>{% endif %}
-        {% if t.wait_reason %}<span class="xs warn-t">chờ: {{ wait_reason(t.wait_reason) }}</span>{% endif %}
-      </a>
-    {% else %}<div class="muted small empty-col">—</div>{% endfor %}
-    {% if c == 'done' and not q.all and cols[c]|length >= 15 %}<a class="small" href="/tasks?all=1">xem tất cả…</a>{% endif %}
-  </section>
-  {% endfor %}
-</div>
+{% include "_tasks_board.html" %}
 {% endblock %}

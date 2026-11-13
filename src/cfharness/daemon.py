@@ -40,6 +40,9 @@ class Daemon:
         # KHÔNG ghi đè file khi socket đang có daemon sống: bản thứ hai (vd launchd thử tiếp quản trong lúc daemon chạy tay) sẽ
         # thoát ở `serve()`, nhưng nếu đã ghi file thì token trong file lệch với daemon đang chạy → mọi lệnh của người bị từ chối.
         self.auth_token: str | None = None
+        from .paths import ensure_socket_dir
+
+        ensure_socket_dir(paths.socket)  # đa instance P1: socket dự phòng trong thư mục riêng 0700 của user (UnsafeSocketDir → không khởi động)
         if not _live_daemon(paths.socket):
             try:
                 self.auth_token = _auth.issue_token(paths.socket)
@@ -49,6 +52,7 @@ class Daemon:
         self._mutating: frozenset[str] = frozenset()
         self.server: asyncio.base_events.Server | None = None
         self.stopping = asyncio.Event()
+        self.exit_code = 0  # ≠ 0 khi dừng để launchd chạy lại (cập nhật dưới LaunchAgent/LaunchDaemon — `SUPERVISED_RESTART_CODE`)
         self.methods: dict[str, Handler] = {
             "hub.ping": lambda p: {"pong": True, "pid": os.getpid()},
             "hub.status": lambda p: self.hub.status(),
@@ -119,6 +123,14 @@ class Daemon:
         from .updater import register_rpc as _register_update
 
         _register_update(self)
+        # Tổng quan máy (Q6): admin.overview — đọc thư mục trạng thái chung, CHỈ ĐỌC, HUMAN_ONLY (admin_overview.py)
+        from .admin_overview import register_rpc as _register_admin
+
+        _register_admin(self)
+        # Xem/mở file agent đã thao tác (web chip file): file.read (chỉ đọc) + file.open (tác dụng phụ) — HUMAN_ONLY, tự audit (fileview.py)
+        from .fileview import register_rpc as _register_files
+
+        _register_files(self)
         # M1 luồng A: thêm mcp.*/secret.*/audit.*/feedback.* và bọc audit các method thay đổi trạng thái.
         # GIỮ Ở CUỐI __init__ — method thêm sau dòng này sẽ không được audit tự động.
         from .mcp_server.rpc import register_rpc
@@ -496,7 +508,19 @@ def _rotate_daemon_out(paths: HubPaths, ls: dict[str, Any]) -> None:
 
 
 def run_foreground(paths: HubPaths) -> None:
+    from .oscompat import set_private_umask
+
+    set_private_umask()  # đa instance P1: file daemon tạo (hub.db, logs/, runs/, prompts/…) chỉ user này đọc được; claude con nhận lại umask gốc
     paths.ensure()
+    _hold_while_updating(paths)
+    global _INSTANCE_LOCK
+    _INSTANCE_LOCK = acquire_instance_lock(paths, wait_s=3.0)
+    if _INSTANCE_LOCK is None:
+        # Bản khác đang chạy/đang khởi động trên CÙNG HUB_HOME (vd LaunchDaemon vừa bật + lệnh CLI tự khởi động cùng lúc):
+        # thoát mã ≠ 0 để launchd (KeepAlive SuccessfulExit=false) thử lại sau, không bao giờ chạy 2 daemon ghi một hub.db.
+        print(f"daemon đã chạy cho {paths.home} (khoá {instance_lock_path(paths)}) — thoát", file=sys.stderr)
+        raise SystemExit(1)
+    tightened = paths.tighten_permissions()  # cài đặt cũ: siết HUB_HOME + mục cấp 1 (lỗi chỉ cảnh báo)
     ls = _log_settings(paths)
     if sys.stdout is None or sys.stderr is None:  # pythonw (dịch vụ tự khởi động trên Windows): không có console → ghi daemon.out
         _rotate_daemon_out(paths, ls)
@@ -507,12 +531,66 @@ def run_foreground(paths: HubPaths) -> None:
     setup_logging(paths.logs_dir, max_bytes=ls["max_bytes"], backup_count=ls["backup_count"], max_age_days=ls["max_age_days"])
     if console not in ("posix", "existing"):
         logging.getLogger("cfharness.daemon").info("không có console → đã lấy console ẩn (%s)", console)
+    if tightened:
+        log.info("đã siết quyền (bỏ group/other) cho %d mục trong HUB_HOME: %s", len(tightened), ", ".join(tightened))
     from .redact import install_log_filter, install_stderr_masking
 
     install_stderr_masking()  # H-12: log thư viện ra stderr (daemon.out) cũng che
     install_log_filter()  # H-12: log của daemon che theo giá trị secret
     install_log_filter(logging.getLogger("cfharness"))
-    asyncio.run(Daemon(paths).serve())
+    d = Daemon(paths)
+    asyncio.run(d.serve())
+    if d.exit_code:
+        raise SystemExit(d.exit_code)
+
+
+# ---- chạy dưới launchd (LaunchAgent `daemon install-service` / LaunchDaemon `admin install-daemon`, cùng KeepAlive SuccessfulExit=false)
+SUPERVISED_RESTART_CODE = 75  # EX_TEMPFAIL: thoát ≠ 0 → launchd chạy lại daemon (mã 0 = dừng hẳn)
+SUPERVISOR_LABEL_PREFIX = "com.cfharness.daemon."
+_UPDATE_BUSY_PHASES = ("starting", "waiting_daemon", "installing")
+_IS_MACOS = sys.platform == "darwin"
+
+
+def supervisor() -> str | None:
+    """"launchd" khi tiến trình này là job daemon do cfharness cài (launchd đặt `XPC_SERVICE_NAME` = Label của job), ngược lại None.
+    Chỉ nhận nhãn của chính cfharness: shell Terminal cũng có `XPC_SERVICE_NAME` (giá trị khác)."""
+    if _IS_MACOS and os.environ.get("XPC_SERVICE_NAME", "").startswith(SUPERVISOR_LABEL_PREFIX):
+        return "launchd"
+    return None
+
+
+def _update_busy(paths: HubPaths) -> bool:
+    try:
+        st = json.loads((paths.home / "update" / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if st.get("state") not in ("starting", "running") or st.get("phase", "starting") not in _UPDATE_BUSY_PHASES:
+        return False
+    return time.time() - float(st.get("updated_at") or st.get("started_at") or 0) < 1200  # helper treo quá 20 phút → bỏ qua
+
+
+def _hold_while_updating(paths: HubPaths, *, poll_s: float = 1.0, max_s: float = 1200.0) -> None:
+    """launchd chạy lại daemon NGAY khi bản cũ thoát để cập nhật — lúc đó `uv` còn đang cài đè venv. Bản này chờ cài xong rồi thoát
+    `SUPERVISED_RESTART_CODE` để launchd chạy lại bằng mã MỚI (module đã nạp trong tiến trình này là bản cũ)."""
+    if not _update_busy(paths):
+        return
+    print("daemon: đang cập nhật cfharness — chờ cài xong rồi để launchd chạy lại bằng bản mới", file=sys.stderr)
+    deadline = time.monotonic() + max_s
+    while _update_busy(paths) and time.monotonic() < deadline:
+        time.sleep(poll_s)
+    raise SystemExit(SUPERVISED_RESTART_CODE)
+
+
+def wait_supervised(paths: HubPaths, wait_s: float) -> int | None:
+    """Chờ launchd tự chạy lại daemon (không tự bật bản thứ hai). Trả pid khi daemon trả lời, None khi hết giờ."""
+    client = RpcClient(paths.socket, timeout=2)
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline:
+        try:
+            return int(client.call("hub.ping").get("pid") or 0)
+        except DaemonUnavailable:
+            time.sleep(0.5)
+    return None
 
 
 def spawn_background(paths: HubPaths, wait_s: float = 15.0) -> int:
@@ -522,6 +600,8 @@ def spawn_background(paths: HubPaths, wait_s: float = 15.0) -> int:
     out = open(paths.logs_dir / "daemon.out", "ab")
     env = dict(os.environ)
     env["CFHARNESS_HOME"] = str(paths.home)
+    if instance_lock_held(paths):  # bản khác đang khởi động (chưa mở socket) → chờ nó, không bật thêm bản thứ hai
+        return _wait_ready(paths, wait_s, None)
     proc = subprocess.Popen(
         [sys.executable, "-m", "cfharness", "daemon", "run"],
         stdin=subprocess.DEVNULL,
@@ -531,14 +611,80 @@ def spawn_background(paths: HubPaths, wait_s: float = 15.0) -> int:
         env=env,
         close_fds=True,
     )
+    return _wait_ready(paths, wait_s, proc)
+
+
+def _wait_ready(paths: HubPaths, wait_s: float, proc: subprocess.Popen[bytes] | None) -> int:
+    """Chờ socket trả lời `hub.ping`; trả pid của daemon ĐANG phục vụ (có thể là bản khác thắng khoá, không phải `proc`)."""
     client = RpcClient(paths.socket, timeout=2)
     deadline = time.monotonic() + wait_s
     while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"daemon thoát sớm (mã {proc.returncode}); xem {paths.logs_dir / 'daemon.out'}")
+        if proc is not None and proc.poll() is not None:
+            if not instance_lock_held(paths):
+                raise RuntimeError(f"daemon thoát sớm (mã {proc.returncode}); xem {paths.logs_dir / 'daemon.out'}")
+            proc = None  # thua khoá: bản khác đang khởi động → chờ bản đó
         try:
-            client.call("hub.ping")
-            return proc.pid
+            st = client.call("hub.ping")
+            return int(st.get("pid") or (proc.pid if proc else 0))
         except DaemonUnavailable:
             time.sleep(0.1)
     raise RuntimeError(f"daemon không sẵn sàng sau {wait_s}s; xem {paths.logs_dir / 'daemon.out'}")
+
+
+# ---- một daemon cho mỗi HUB_HOME (đa instance): khoá file độc quyền giữ suốt đời tiến trình daemon
+_INSTANCE_LOCK: Any = None
+
+
+def instance_lock_path(paths: HubPaths) -> Path:
+    return paths.home / "daemon.lock"
+
+
+def acquire_instance_lock(paths: HubPaths, wait_s: float = 0.0) -> Any:
+    """Lấy khoá độc quyền `HUB_HOME/daemon.lock` (flock / msvcrt). Trả handle (giữ mở = giữ khoá; hệ điều hành tự nhả khi
+    tiến trình chết, kể cả SIGKILL) hoặc None nếu bản khác đang giữ sau `wait_s` giây. Chờ ngắn để một lần dò
+    (`instance_lock_held`) trùng lúc không làm daemon thật bỏ cuộc."""
+    path = instance_lock_path(paths)
+    deadline = time.monotonic() + wait_s
+    while True:
+        f = os.fdopen(os.open(path, os.O_RDWR | os.O_CREAT, 0o600), "r+b")
+        try:
+            if IS_WINDOWS:  # pragma: no cover — chỉ chạy trên Windows
+                import msvcrt
+
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return f
+        except OSError:
+            f.close()
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.1)
+
+
+def release_instance_lock(handle: Any) -> None:
+    if handle is None:
+        return
+    try:
+        if IS_WINDOWS:  # pragma: no cover
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    except OSError:  # pragma: no cover
+        pass
+    handle.close()  # flock nhả khi đóng fd
+
+
+def instance_lock_held(paths: HubPaths) -> bool:
+    """Có daemon (đang chạy hoặc đang khởi động) giữ khoá của HUB_HOME này không."""
+    if not instance_lock_path(paths).exists():
+        return False
+    h = acquire_instance_lock(paths)
+    if h is None:
+        return True
+    release_instance_lock(h)
+    return False

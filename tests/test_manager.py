@@ -342,3 +342,34 @@ async def test_done_events_seen_by_chat_run_do_not_cost_a_tick(d):
     await wait_status(d, res["run_id"], ("completed",))
     await asyncio.sleep(0.05)
     assert [p["kind"] for p in d.hub.manager.pending] == ["task_blocked"]
+
+
+async def test_reply_text_cap_truncated_flag_and_failure_text_without_run_id(d):
+    """P0-10: trả lời dài không còn bị cắt lặng lẽ ở 4000 — trần `TEXT_MAX` (= trần DB) + `truncated: true` khi cắt.
+    P1-10: chữ hub khi điều phối viên không trả lời được không ghép run id (vẫn giữ tiền tố `chatview.FAIL_PREFIX`)."""
+    from cfharness.manager import chatview
+    from cfharness.manager.service import TEXT_MAX
+    from cfharness.tui.chat import failure_text
+
+    assert TEXT_MAX >= 14000
+    d.script.hold_manager = False
+    d.script.reply = "chữ " * 3000  # 12000 ký tự: trước đây bị cắt còn 4000
+    d.hub.agents.create({"id": "boss", "name": "boss", "tool_policy": {"tools": ["Read", "Grep", "Glob"]}})
+    await rpc(d, "manager.set", {"agent_id": "boss"})
+    r1 = await rpc(d, "manager.chat", {"channel": "telegram:42", "text": "viết dài"})
+    await wait_status(d, r1["run_id"], ("completed",))
+    await asyncio.sleep(0.05)
+    p = [e.payload for e in _events(d, "manager.reply") if e.payload["run_id"] == r1["run_id"]][0]
+    assert p["text"] == d.script.reply.strip() and "truncated" not in p
+    run = dict(d.hub.store.get_run(r1["run_id"]))
+    run.update(summary="x" * (TEXT_MAX + 50))
+    d.hub.manager._finish_run(run)
+    p = [e.payload for e in _events(d, "manager.reply") if e.payload["run_id"] == r1["run_id"]][-1]
+    assert len(p["text"]) == TEXT_MAX and p["truncated"] is True
+    run.update(outcome="budget_exceeded", status="budget_exceeded", error="hết ngân sách")
+    d.hub.manager._finish_run(run)
+    p = [e.payload for e in _events(d, "manager.reply") if e.payload["run_id"] == r1["run_id"]][-1]
+    assert p["ok"] is False and p["text"] == "(Điều phối viên không trả lời được: vượt ngân sách — hết ngân sách)"
+    assert r1["run_id"] not in p["text"] and p["text"].startswith(chatview.FAIL_PREFIX)
+    assert failure_text(p["text"], run_id="r_9").plain == "✗ Điều phối viên không trả lời được (vượt ngân sách)\n     hết ngân sách · run r_9"
+    assert failure_text("(Điều phối viên không trả lời được: đã huỷ)").plain == "  ⎿  Đã dừng lượt"

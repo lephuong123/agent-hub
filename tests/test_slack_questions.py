@@ -187,8 +187,8 @@ async def test_manager_wording_is_slack(make, sk):
     # Telegram giữ nguyên từng byte (lời dẫn mặc định của ChatBot)
     tgb = d.hub.telegram
     assert guide_text(tgb) == GUIDE and unavailable_text(tgb) == UNAVAILABLE
-    assert tgb.manager.format_reply("x", agent=None)[-1].endswith(
-        "↩ Trả lời (reply) tin này để nói tiếp · /moi để bắt đầu chủ đề mới.")
+    assert tgb.manager.format_reply("x", agent=None)[-1].endswith(  # đuôi hub in nghiêng, cách chữ agent một dòng (P0-10)
+        "\n\n<i>↩ Trả lời (reply) tin này để nói tiếp · /moi để bắt đầu chủ đề mới.</i>")
     assert "trả lời (reply) tin này" in tgb.questions.system_text(
         {"id": "q_1", "agent_id": "a", "options": [], "multi": False, "allow_free_text": True})
     # hội thoại của kênh khác không lên Slack

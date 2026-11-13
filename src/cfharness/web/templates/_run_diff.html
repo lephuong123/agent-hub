@@ -10,13 +10,13 @@
   <div class="dfiles">
   {% for f in dv.files %}
     <details class="dfile{{ ' touched' if f.modified }}"{% if dv.open_all %} open{% endif %}>
-      <summary><span class="pill {{ f.status_view[1] }}">{{ f.status_view[0] }}</span><code class="dpath">{{ f.path }}</code>
+      <summary><span class="pill {{ f.status_view[1] }}">{{ f.status_view[0] }}</span><code class="dpath">{{ f.path }}</code>{% if f.status != 'deleted' %}{{ m.file_chip({"run": run.id, "path": f.path, "name": f.path}) }}{% endif %}
         {% if f.has_patch and not f.binary %}<span class="small"><span class="ok-t">+{{ f.adds }}</span> <span class="danger-t">−{{ f.dels }}</span></span>{% endif %}
         {% if f.modified %}<span class="pill danger">đã bị sửa tiếp</span>{% endif %}</summary>
       {% if f.binary %}<p class="muted small">File nhị phân — không hiển thị nội dung.</p>
       {% elif not f.has_patch %}<p class="muted small">{{ 'Không có nội dung diff (workspace không phải git).' if dv.kind != 'git' else 'Không hiển thị được nội dung (patch đã bị cắt hoặc thiếu).' }}</p>
-      {% else %}<pre class="udiff" tabindex="0">{% for cls, t in f.lines %}<span class="dl {{ cls }}">{{ t }}</span>
-{% endfor %}{% if f.more %}<span class="dl meta">… còn {{ f.more }} dòng — xem đủ: cfharness run diff {{ run.id }} --patch</span>{% endif %}</pre>{% endif %}
+      {#- mỗi dòng là <span class="dl"> display:block — KHÔNG để "\n" giữa các span: trong <pre> nó thành một dòng trống giữa mọi hàng -#}
+      {% else %}<pre class="udiff" tabindex="0">{% for cls, t in f.lines %}<span class="dl {{ cls }}">{{ t }}</span>{% endfor %}{% if f.more %}<span class="dl meta">… còn {{ f.more }} dòng — xem đủ: cfharness run diff {{ run.id }} --patch</span>{% endif %}</pre>{% endif %}
     </details>
   {% endfor %}
   </div>

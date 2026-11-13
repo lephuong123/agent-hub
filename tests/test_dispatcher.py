@@ -57,9 +57,21 @@ async def test_global_limit(make_hub):
     assert all(hub.store.get_run(r["id"])["outcome"] == "completed" for r in runs)
 
 
+async def test_per_agent_default_unlimited(make_hub):
+    hub, rt = make_hub(hold=True)
+    hub.agents.create({"id": "free", "name": "F"})
+    assert hub.store.get_agent("free")["limits"]["max_concurrent_runs"] is None
+    r1, r2 = hub.runs.submit("free", "one"), hub.runs.submit("free", "two")
+    await settle()
+    assert hub.store.get_run(r1["id"])["status"] == "running" and hub.store.get_run(r2["id"])["status"] == "running"
+    rt.release()
+    for r in (r1, r2):
+        await hub.runs.wait(r["id"], 5)
+
+
 async def test_per_agent_limit(make_hub):
     hub, rt = make_hub(hold=True)
-    hub.agents.create({"id": "solo", "name": "S"})  # max_concurrent_runs mặc định 1
+    hub.agents.create({"id": "solo", "name": "S", "limits": {"max_concurrent_runs": 1}})  # mặc định không giới hạn — đặt trần rõ
     r1 = hub.runs.submit("solo", "one")
     r2 = hub.runs.submit("solo", "two")
     await settle()

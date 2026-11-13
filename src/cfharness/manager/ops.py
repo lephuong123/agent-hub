@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .. import auth as _auth
-from .. import templates
+from .. import capacity, templates
 from ..errors import Blocked, HubError, NotFound
 from ..events import make_event
 from ..store import now_iso
@@ -49,7 +49,8 @@ class ManagerOps:
             from .prompts import UNTRUSTED_NOTE, neutralize_obj
 
             # MGR-5: mọi dữ liệu đọc về (kết quả agent con, bình luận, dữ liệu MCP) là KHÔNG tin cậy — gỡ tiêu đề giả + ghi chú
-            out = neutralize_obj(_trunc(await self._maybe_await(fn(args)), 1200), self.svc.run_key(self.run["id"], create=False))
+            out = neutralize_obj(_trunc(await self._maybe_await(fn(args)), 13000 if op == "workstream_get" else 1200),
+                                 self.svc.run_key(self.run["id"], create=False))  # STATE.md luồng: đủ dài để viết lại
             if isinstance(out, dict):
                 out["_untrusted"] = UNTRUSTED_NOTE
             return out
@@ -85,6 +86,10 @@ class ManagerOps:
             return (f"approval:{ident}" if args.get("kind") == "approve_action" else f"agent:{ident}") if ident else None
         if op == "system_job":
             return f"system:{args.get('label')}" if args.get("label") else None
+        if op.startswith("workstream_") or op == "conversation_set_workstream":
+            r = res if isinstance(res, dict) else {}
+            ident = r.get("workstream_id") or r.get("id") or args.get("id") or args.get("workstream")
+            return f"workstream:{ident}" if ident else None
         if op in ("team_member_add", "team_member_rm"):
             return f"team:{args.get('team')}" if args.get("team") else None
         kind = op.split("_", 1)[0]
@@ -142,20 +147,28 @@ class ManagerOps:
         for r in h.store.list_agents():
             agents.append({"id": r["id"], "name": r.get("name"), "role": r.get("role"), "description": (r.get("description") or "")[:240],
                            "model": r.get("model"), "status": r.get("status"), "cost_today_usd": round(h.store.cost_today(r["id"]), 4),
+                           "max_concurrent_runs": capacity.agent_limit(r), "free_slots": capacity.free_slots(h, r),
                            "manager": r["id"] == self.mid, "teams": self.svc.perms.teams_of(r["id"])})
         teams = [{"id": t["id"], "name": t.get("name"), "estop": bool(t.get("estop")), "counts": t.get("counts"),
                   "members": [{"agent_id": m.get("agent_id"), "role": m.get("role")} for m in t.get("members") or []]} for t in h.teams.list()]
-        open_tasks = [{k: t.get(k) for k in ("id", "title", "team_id", "assignee_agent_id", "status", "wait_reason", "block_reason", "created_by", "updated_at")}
-                      for t in h.tasks.list(status=["triage", "todo", "ready", "running", "review", "blocked"], limit=40)]
+        wsf = self.svc.ws.row(a["workstream"])["id"] if a.get("workstream") else None
+        open_tasks = [{k: t.get(k) for k in ("id", "title", "team_id", "assignee_agent_id", "status", "wait_reason", "block_reason", "created_by", "updated_at",
+                                             "workstream_id")}
+                      for t in h.tasks.list(status=["triage", "todo", "ready", "running", "review", "blocked"], limit=40, workstream=wsf)]
+        workstreams = [{"id": w["id"], "key": w.get("key"), "title": w["title"], "sprint": w.get("sprint"), "tasks": w["tasks"],
+                        "needs_human": w["needs_human"]} for w in self.svc.ws.list("active", limit=30)]
         runs = [{k: r.get(k) for k in ("id", "agent_id", "kind", "status", "task_id", "queued_at", "started_at")}
                 for st in ("running", "queued", "waiting_human") for r in h.store.list_runs(status=st, limit=20)]
         aps = [{"id": x["id"], "agent_id": x.get("agent_id"), "run_id": x.get("run_id"), "tool": x.get("tool_name"), "preview": str(x.get("preview") or "")[:200],
                 "status": x.get("status"), "opened_at": x.get("opened_at"), "routed_to": x.get("routed_to")} for x in h.approvals.list("pending", limit=20)]
         return {"now": now_iso(), "you": self.mid, "estop": h.runs.estop, "cost_today_usd": round(h.store.cost_today(), 4), "agents": agents, "teams": teams,
+                "workstreams": workstreams, "current_workstream": self._current_ws(),
                 "open_tasks": open_tasks, "live_runs": runs, "approvals_waiting_human": aps,
                 "gates_mode": gates_mode(h.config),
                 "note": "Approvals with routed_to='manager' were delegated to YOU: decide them with approval_decide (or approval_escalate). "
-                        "All other approvals are decided ONLY by the human: use ask_owner_permission (approve_action) if one blocks progress."}
+                        "All other approvals are decided ONLY by the human: use ask_owner_permission (approve_action) if one blocks progress. "
+                        "An agent with free_slots=0 is busy: work sent to it waits. Send it to an idle agent of the same kind, or agent_clone one. "
+                        "free_slots=null / max_concurrent_runs=null means no limit."}
 
     def op_agent_get(self, a: dict[str, Any]) -> dict[str, Any]:
         r = self.hub.agents.show(str(a.get("id") or ""))
@@ -170,9 +183,10 @@ class ManagerOps:
         return self.hub.teams.show(str(a.get("id") or ""))
 
     def op_task_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
-        rows = self.hub.tasks.list(team=a.get("team"), status=a.get("status"), assignee=a.get("assignee"), limit=int(a.get("limit") or 30))
+        wsf = self.svc.ws.row(a["workstream"])["id"] if a.get("workstream") else None
+        rows = self.hub.tasks.list(team=a.get("team"), status=a.get("status"), assignee=a.get("assignee"), limit=int(a.get("limit") or 30), workstream=wsf)
         return [{k: t.get(k) for k in ("id", "title", "team_id", "assignee_agent_id", "status", "wait_reason", "block_reason", "result_summary", "created_by",
-                                         "updated_at", "parents", "children")} for t in rows]
+                                         "updated_at", "parents", "children", "workstream_id")} for t in rows]
 
     def op_task_get(self, a: dict[str, Any]) -> dict[str, Any]:
         t = self.hub.tasks.get(str(a.get("id") or ""))
@@ -274,6 +288,49 @@ class ManagerOps:
         return {"id": res.get("id"), "name": res.get("name"), "role": res.get("role"), "model": res.get("model"), "tool_policy": res.get("tool_policy"),
                 "mcp_servers": res.get("mcp_servers"), "config_revision": res.get("config_revision")}
 
+    async def op_agent_clone(self, a: dict[str, Any]) -> dict[str, Any]:
+        """Thêm một agent cùng loại khi agent đang bận: chép cấu hình (chỉ các trường điều phối viên được đặt — đi qua đúng cổng của
+        `agent_create`), SOUL và skill; mặc định vào mọi team của agent gốc cùng vai (lead → worker). Không chép memory."""
+        from pathlib import Path
+
+        from ..agents import _copy_tree
+        from .permissions import AGENT_FIELDS, TOOL_POLICY_FIELDS
+
+        src = str(a.get("src") or "").strip()
+        if not src:
+            raise HubError("agent_clone cần src (agent nguồn)")
+        if src in self.svc.perms.manager_ids():
+            self._denied("agent_clone", "agent.create", "không clone agent điều phối viên", a)
+        aid = str(a.get("id") or "").strip() or capacity.next_clone_id(self.hub, src)
+        row = self.hub.agents.get_row(src)
+        cfg = self.hub.agents.config_of(row).model_dump()
+        spec = {k: cfg[k] for k in AGENT_FIELDS if cfg.get(k) is not None}
+        tp = dict(spec.get("tool_policy") or {})
+        dropped = sorted(f"tool_policy.{k}" for k, v in tp.items() if k not in TOOL_POLICY_FIELDS and v not in (None, False, [], {}, ""))
+        spec["tool_policy"] = {k: v for k, v in tp.items() if k in TOOL_POLICY_FIELDS and v is not None}
+        # null trong limits = "bỏ giới hạn" — điều phối viên bị cấm đặt; bỏ trống để agent mới nhận mặc định/trần của hub
+        spec["limits"] = {k: v for k, v in dict(spec.get("limits") or {}).items() if v is not None}
+        spec["name"] = str(a.get("name") or aid)
+        home = Path(row["home_path"])
+        soul = (home / "SOUL.md").read_text(encoding="utf-8") if (home / "SOUL.md").exists() else None
+        out = await self.op_agent_create({"id": aid, "spec": spec, "soul": soul, "rationale": a.get("rationale") or f"clone of busy {src}"})
+        new_home = Path((self.hub.store.get_agent(aid) or {}).get("home_path") or "")
+        if new_home.name:
+            _copy_tree(home / "skills", new_home / "skills")
+        self.hub.store.update_agent(aid, {"cloned_from": src})
+        joined = []
+        if a.get("join_teams", True):
+            for team in self.svc.perms.teams_of(src):
+                m = self.hub.teams.member(team, src) or {}
+                role = "worker" if (m.get("role") or "worker") == "lead" else m.get("role")
+                await self.op_team_member_add({"team": team, "agent": aid, "role": role})
+                joined.append({"team": team, "role": role})
+        res = {**out, "cloned_from": src, "teams": joined}
+        if dropped:
+            res["not_copied"] = dropped
+            res["note"] = "owner-only settings were not copied; ask the owner if the clone needs them"
+        return res
+
     async def op_agent_update(self, a: dict[str, Any]) -> dict[str, Any]:
         from ..learning.ledger import Change
 
@@ -346,15 +403,52 @@ class ManagerOps:
         await self._rpc("team_restore", "team.restore", {"id": a.get("id")}, a, summary=f"khôi phục team {a.get('id')}")
         return {"id": a.get("id"), "restored": True}
 
+    # ------------------------------------------------------------------ agent bận → không xếp hàng lặng lẽ
+    def _busy_gate(self, op: str, a: dict[str, Any], agent: str, method: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        """Agent đích hết slot và người giao không nói rõ `if_busy='queue'` → KHÔNG giao, trả agent rảnh cùng loại + id gợi ý để clone.
+        Trước đây việc nằm `queued` sau run đang chạy trong khi agent cùng loại rảnh (người dùng dặn: bận thì tạo thêm agent).
+        Chạy SAU kiểm quyền: lời gọi sẽ bị từ chối (vd. giao cho điều phối viên) thì để `_rpc` từ chối + audit như cũ."""
+        if not agent or str(a.get("if_busy") or "").lower() == "queue":
+            return None
+        if self.svc.perms.check_rpc(self.caller, method, params) if method in _auth.MANAGER_ALLOWED else True:
+            return None
+        b = capacity.busy_info(self.hub, agent)
+        if b is None:
+            return None
+        alts = capacity.idle_alternatives(self.hub, agent, exclude=self.svc.perms.manager_ids())
+        clone_id = capacity.next_clone_id(self.hub, agent)
+        self._action(op, a, ok=False, error=f"agent_busy: {agent} đang chạy {b['active_runs']}/{b['max_concurrent_runs']} run — chưa giao")
+        return {
+            "started": False, "reason": "agent_busy", **b, "idle_alternatives": alts, "suggested_clone_id": clone_id,
+            "next": ("Nothing was queued. Do one of these now instead of waiting: "
+                     + ("(1) send it to an idle agent in idle_alternatives (prefer match=same_kind); " if alts else "")
+                     + f"(2) agent_clone src='{agent}' id='{clone_id}' and send it to the clone; "
+                     "(3) only when the work truly needs THIS agent (it must use the single shared Chrome session, or it needs this agent's "
+                     "own session/memory) call again with if_busy='queue' and tell the owner it is waiting."),
+        }
+
     async def op_task_create(self, a: dict[str, Any]) -> Any:
         t = {k: a[k] for k in ("title", "body", "team", "assignee", "role", "parents", "workspace", "priority", "budget_usd", "model", "decompose",
                                "extra_write_roots", "worktree") if a.get(k) is not None}
         t["budget_usd"] = self._clamp_budget(t.get("budget_usd"))
+        ws_arg = a.get("workstream")
+        if ws_arg is not None and str(ws_arg).strip().lower() in ("", "none", "lobby"):
+            ws_id = None  # điều phối viên chủ động để task ngoài luồng
+        elif ws_arg:
+            ws_id = self.svc.ws.row(ws_arg)["id"]  # NotFound → lỗi rõ cho điều phối viên
+        else:
+            ws_id = self._current_ws()  # mặc định: luồng của hội thoại / nhịp đang chạy
+        if ws_id:
+            t["workstream_id"] = ws_id
         auto_team = None
         if t.get("assignee") and not t.get("team"):
             tm = self.svc.perms.teams_of(str(t["assignee"]))
             if len(tm) == 1:  # MGR-8: agent chỉ thuộc một team → gắn team đó; nhiều team → check_rpc từ chối, manager tự chọn
                 t["team"] = auto_team = tm[0]
+        if t.get("assignee") and not t.get("parents"):  # có task cha → còn chờ cha, lúc chạy agent có thể đã rảnh
+            busy = self._busy_gate("task_create", a, str(t["assignee"]), "task.create", {"task": t, "created_by": self.actor})
+            if busy is not None:
+                return busy
         res = await self._rpc("task_create", "task.create", {"task": t, "created_by": self.actor}, a,
                               summary=f"giao task '{str(a.get('title') or '')[:80]}' cho {a.get('assignee') or a.get('team')}")
         tr = dict(self.hub.store.state_get("manager_tracked") or {})
@@ -363,10 +457,26 @@ class ManagerOps:
         origin, guessed = self._target_conv()
         if origin and not guessed:  # kết quả task báo về đúng hội thoại (thread Slack) đã giao nó
             self.svc.remember_origin("task", res.get("id"), origin["id"])
+        warns = list(res.get("warnings") or [])
+        if auto_team:
+            warns.append(f"assignee is a member of team '{auto_team}' — task attached to that team (pass team= yourself next time)")
+        if t.get("team") and not t.get("assignee") and not t.get("parents") and not self._team_has_free_worker(str(t["team"])):
+            warns.append(f"every worker of team '{t['team']}' is busy, so this task waits: agent_clone one of them (it joins the team) "
+                         "so the task starts now")
+        w = self.svc.ws.maybe(ws_id) if ws_id else None
         return {"task_id": res.get("id"), "status": res.get("status"), "team_id": res.get("team_id"), "assignee": res.get("assignee_agent_id"),
-                "warnings": (res.get("warnings") or []) + ([f"assignee is a member of team '{auto_team}' — task attached to that team "
-                                                           "(pass team= yourself next time)"] if auto_team else []),
+                "workstream": self.svc.ws.label(w) if w else None,
+                "warnings": warns,
                 "next": "follow it with task_get until status is done"}
+
+    def _team_has_free_worker(self, team: str) -> bool:
+        for m in self.hub.teams.members(team):
+            if m.get("role") == "lead" or m.get("agent_archived_at"):
+                continue
+            row = self.hub.store.get_agent(m["agent_id"])
+            if row and row.get("status") != "paused" and (capacity.free_slots(self.hub, row) is None or capacity.free_slots(self.hub, row) > 0):
+                return True
+        return False
 
     async def op_task_cancel(self, a: dict[str, Any]) -> Any:
         return await self._rpc("task_cancel", "mcp.cancel_task", {"task_id": a.get("id"), "reason": a.get("reason")}, a, summary=f"huỷ task {a.get('id')}")
@@ -383,6 +493,9 @@ class ManagerOps:
     async def op_run_start(self, a: dict[str, Any]) -> Any:
         p = {k: a[k] for k in ("agent", "prompt", "cwd", "budget_usd", "model") if a.get(k) is not None}
         p["budget_usd"] = self._clamp_budget(p.get("budget_usd"))
+        busy = self._busy_gate("run_start", a, str(a.get("agent") or ""), "run.start", p)
+        if busy is not None:
+            return busy
         res = await self._rpc("run_start", "run.start", p, a, summary=f"chạy {a.get('agent')}: {str(a.get('prompt') or '')[:80]}")
         tr = dict(self.hub.store.state_get("manager_tracked") or {})
         tr["runs"] = (list(tr.get("runs") or []) + [res.get("id")])[-200:]
@@ -529,23 +642,47 @@ class ManagerOps:
             return None
         return c
 
+    def _current_ws(self) -> str | None:
+        """Luồng của lượt này: luồng của hội thoại chat / hội thoại nhịp của luồng (run_opts.manager_workstream). Luồng đã đóng vẫn tính."""
+        opts = self.run.get("run_opts") or {}
+        wid = opts.get("manager_workstream") or self.svc.ws.of_conversation(opts.get("manager_conversation"))
+        return str(wid) if wid and self.svc.ws.maybe(wid) else None
+
+    def _ws_conv(self, wid: str | None) -> dict[str, Any] | None:
+        if not wid:
+            return None
+        try:
+            return self._human_conv((self.svc.ws.home_conversation(str(wid)) or {}).get("id"))
+        except Exception:  # pragma: no cover - định tuyến không được làm hỏng lượt
+            return None
+
     def _target_conv(self, task_id: Any = None) -> tuple[dict[str, Any] | None, bool]:
         """Hội thoại nhận tin chủ động / câu hỏi của run này → (hội thoại, có_phải_đoán).
-        1) run chat: chính hội thoại của nó. 2) lượt heartbeat: hội thoại đã giao `task_id` (hub tra, không tin chữ của agent).
-        3) mọi sự kiện của lượt cùng MỘT hội thoại gốc (`run_opts.tick_convs`). 4) đoán: cuộc người hoạt động gần nhất (`guessed`)."""
+        1) run chat: chính hội thoại của nó. 2) lượt heartbeat: hội thoại đã giao `task_id` (hub tra, không tin chữ của agent) — nếu
+        task thuộc LUỒNG mà hội thoại đó không thuộc luồng ấy (giao từ sảnh) → hội thoại của luồng. 3) mọi sự kiện của lượt cùng MỘT
+        hội thoại gốc (`run_opts.tick_convs`). 4) nhịp của một luồng → hội thoại của luồng. 5) đoán: cuộc người hoạt động gần nhất (`guessed`)."""
         opts = self.run.get("run_opts") or {}
         own = self._human_conv(opts.get("manager_conversation"))
         if own:
             return own, False
         if task_id:
+            wid = self.svc.ws.of_task(task_id)
             c = self._human_conv(self.svc.origin_conversation(task_id=task_id))
+            if c and (not wid or c.get("workstream_id") == wid):
+                return c, False
+            c2 = self._ws_conv(wid)
+            if c2:
+                return c2, False
             if c:
                 return c, False
         tc = [x for x in (opts.get("tick_convs") or []) if x]
         if len(tc) == 1:
             c = self._human_conv(tc[0])
-            if c:
+            if c and (not opts.get("manager_workstream") or c.get("workstream_id") == opts.get("manager_workstream")):
                 return c, False
+        c = self._ws_conv(opts.get("manager_workstream"))
+        if c:
+            return c, False
         return self.svc._home_conversation(), True
 
     def _owner_conversation(self) -> str | None:
@@ -553,6 +690,8 @@ class ManagerOps:
         return conv["id"] if conv else None
 
     def op_notify_owner(self, a: dict[str, Any]) -> Any:
+        from .service import TEXT_MAX
+
         text = str(a.get("text") or "").strip()
         if not text:
             raise HubError("notify_owner cần text")
@@ -565,13 +704,70 @@ class ManagerOps:
         kind = str(a.get("kind") or "info")
         audit_id = self.hub.audit.record("manager.notify", self.mid, self.run["id"], {"text": text[:1000], "kind": kind, "conversation_id": cid},
                                          actor=self.actor, channel="manager", target=cid, summary="manager.notify")
-        self.hub.publish(make_event("manager.reply", self.mid, {"conversation_id": cid, "run_id": self.run["id"], "text": text[:4000],
+        self.hub.publish(make_event("manager.reply", self.mid, {"conversation_id": cid, "run_id": self.run["id"], "text": text[:TEXT_MAX],
+                                                               **({"truncated": True} if len(text) > TEXT_MAX else {}),
                                                                "channel": conv["channel"] if conv else None, "kind": "notify", "notify_kind": kind, "ok": True,
                                                                "conversation_guessed": bool(conv) and guessed},
                                     run_id=self.run["id"]))
         self._action("notify_owner", a, summary=f"báo người: {text[:120]}", audit_id=audit_id)
         return {"delivered_to": conv["channel"] if conv else None, "conversation_id": cid, "note": None if conv else "no human conversation yet — stored as event only"}
 
+
+    # ================================================================== LUỒNG VIỆC (workstreams.py)
+    def op_workstream_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
+        return self.svc.ws.list(str(a.get("status") or "active"), limit=int(a.get("limit") or 50))
+
+    def op_workstream_get(self, a: dict[str, Any]) -> dict[str, Any]:
+        ref = a.get("id") or self._current_ws()
+        if not ref:
+            raise HubError("workstream_get cần id (hội thoại này không thuộc luồng nào)")
+        return self.svc.ws.get(ref)
+
+    def _ws_audit(self, op: str, a: dict[str, Any], res: dict[str, Any], summary: str) -> None:
+        aid = self.hub.audit.record("manager.workstream", self.mid, self.run["id"], {"op": op, "args": _trunc(a, 300), "workstream_id": res.get("id")},
+                                    actor=self.actor, channel="manager", target=f"workstream:{res.get('id')}", summary=summary[:200])
+        self._action(op, a, summary=summary, audit_id=aid, res=res)
+
+    def op_workstream_create(self, a: dict[str, Any]) -> dict[str, Any]:
+        res = self.svc.ws.create(a.get("title"), key=a.get("key"), sprint=a.get("sprint"), state=a.get("state"), by=self.actor)
+        self._ws_audit("workstream_create", a, res, f"mở luồng {res['label']}")
+        return {**{k: res.get(k) for k in ("id", "key", "title", "sprint", "status", "label")},
+                "next": "file tasks under it with task_create(workstream=...); if this conversation is about it, conversation_set_workstream"}
+
+    def op_workstream_update(self, a: dict[str, Any]) -> dict[str, Any]:
+        ref = a.get("id") or self._current_ws()
+        if not ref:
+            raise HubError("workstream_update cần id")
+        ch = {k: a[k] for k in ("title", "key", "sprint", "status") if k in a and a[k] is not None}
+        res = self.svc.ws.update(ref, ch, by=self.actor)
+        verb = "đóng" if ch.get("status") == "closed" else "mở lại" if ch.get("status") == "active" else "sửa"
+        self._ws_audit("workstream_update", a, res, f"{verb} luồng {res['label']}")
+        return {k: res.get(k) for k in ("id", "key", "title", "sprint", "status", "label")}
+
+    def op_workstream_state_set(self, a: dict[str, Any]) -> dict[str, Any]:
+        ref = a.get("id") or self._current_ws()
+        if not ref:
+            raise HubError("workstream_state_set cần id (hội thoại này không thuộc luồng nào)")
+        text = str(a.get("text") or "").strip()
+        if not text:
+            raise HubError("workstream_state_set cần text (toàn bộ STATE.md mới)")
+        res = self.svc.ws.set_state(ref, text, by=self.actor)
+        self._ws_audit("workstream_state_set", a | {"text": f"({len(text)} chars)"}, res, f"cập nhật STATE luồng {res['label']}")
+        return {"id": res["id"], "label": res["label"], "state_chars": len(res.get("state") or ""), "state_updated_at": res.get("state_updated_at")}
+
+    def op_conversation_set_workstream(self, a: dict[str, Any]) -> dict[str, Any]:
+        opts = self.run.get("run_opts") or {}
+        conv = self._human_conv(opts.get("manager_conversation"))
+        if conv is None:
+            raise HubError("chỉ dùng trong hội thoại với người (không phải lượt nhịp)")
+        w = self.svc.ws.row(a.get("workstream"))
+        if conv.get("workstream_id") and conv["workstream_id"] != w["id"]:
+            self._denied("conversation_set_workstream", None, "hội thoại đã thuộc luồng khác — chỉ người chuyển hội thoại giữa các luồng", a)
+        out = self.svc.ws.attach_conversation(conv["id"], w["id"], by=self.actor)
+        res = {"id": w["id"], "workstream_id": w["id"], "conversation_id": conv["id"], "label": self.svc.ws.label(w)}
+        self._ws_audit("conversation_set_workstream", a, res, f"gắn hội thoại {conv['id']} vào luồng {res['label']}")
+        return {**res, "conversation": {k: out.get(k) for k in ("id", "channel", "title")},
+                "note": "From your next turn this conversation is about that workstream; tasks you create here are filed under it."}
 
     # ================================================================== LỊCH CHẠY TỰ ĐỘNG (schedules/)
     _SCHED_KEEP = ("id", "name", "kind", "target", "options", "expr", "describe", "status", "paused_reason", "deliver_to", "budget_usd", "created_by",

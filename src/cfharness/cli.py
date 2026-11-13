@@ -141,6 +141,14 @@ def cmd_daemon(ctx: Ctx) -> int:
             return EXIT_OK
         except DaemonUnavailable:
             pass
+        if getattr(a, "wait_supervisor", None):  # cập nhật dưới launchd: launchd tự chạy lại daemon — chờ, chỉ tự bật khi hết giờ
+            from .daemon import wait_supervised
+
+            pid = wait_supervised(ctx.paths, float(a.wait_supervisor))
+            if pid is not None:
+                ctx.out({"running": True, "pid": pid, "supervisor": "launchd"}, f"daemon đã chạy lại dưới launchd (pid {pid})")
+                return EXIT_OK
+            eprint(f"launchd chưa chạy lại daemon sau {a.wait_supervisor:g} s — tự khởi động")
         if a.foreground:
             from .daemon import run_foreground
 
@@ -183,7 +191,7 @@ def cmd_daemon(ctx: Ctx) -> int:
         text = (
             f"daemon đang chạy · v{st['version']} · HUB_HOME={st['home']}\n"
             f"epoch {st['epoch']} · seq {st['last_seq']} · runtime={st['runtime']}\n"
-            f"run: {st['running']} đang chạy / {st['queued']} chờ (giới hạn {st['max_concurrent_runs']}) · agent: {st['agents']}\n"
+            f"run: {st['running']} đang chạy / {st['queued']} chờ (giới hạn {st['max_concurrent_runs'] or 'không'}) · agent: {st['agents']}\n"
             f"chi phí hôm nay: {_fmt_usd(st['cost_today_usd'])}\n"
             f"ESTOP: {'BẬT — ' + str(es.get('reason') or '') if es.get('on') else 'tắt'}"
         )
@@ -286,6 +294,10 @@ def _daemon_logs(ctx: Ctx) -> int:
 
 # ============================================================================ doctor
 def cmd_doctor(ctx: Ctx) -> int:
+    if ctx.args.agent == "multi":  # `cfharness doctor multi` — kiểm đa instance (chỉ đọc, không cần daemon); "multi" ∈ RESERVED_IDS
+        from .doctor_multi import cmd_doctor_multi
+
+        return cmd_doctor_multi(ctx)
     checks: list[dict[str, Any]] = []
 
     def add(name: str, ok: bool, detail: str, level: str = "error") -> None:
@@ -305,7 +317,13 @@ def cmd_doctor(ctx: Ctx) -> int:
         tested = ccfg.get("tested_versions") or []
         add("phiên bản claude", bool(v) and v in tested, f"{v} (đã kiểm: {', '.join(tested)})" + ("" if v in tested else " — phiên bản chưa kiểm"), "warning")
         try:
-            r = subprocess.run(exec_argv([binary, "auth", "status"]), capture_output=True, encoding="utf-8", errors="replace", timeout=30, **no_window_kwargs())
+            from .runtime.claude_cli import child_env, oauth_token
+            from .secrets import SecretStore
+
+            # cùng env với tiến trình claude của daemon (env_strip + CLAUDE_CODE_OAUTH_TOKEN từ secret store nếu có)
+            tok = oauth_token(SecretStore(ctx.paths.home / "secrets", env_fallback=False))
+            r = subprocess.run(exec_argv([binary, "auth", "status"]), capture_output=True, encoding="utf-8", errors="replace", timeout=30,
+                               env=child_env(ccfg, oauth_token=tok), **no_window_kwargs())
             try:
                 info = json.loads(r.stdout)
                 logged = bool(info.get("loggedIn", r.returncode == 0))
@@ -353,6 +371,14 @@ def cmd_doctor(ctx: Ctx) -> int:
 
                 AgentConfig(id=ag["id"], **{k: ag[k] for k in ("name", "role", "description", "model", "effort", "fallback_model", "tool_policy", "mcp_servers", "limits", "workspace_default") if ag.get(k) is not None})
                 add(f"cấu hình agent {ag['id']}", True, f"model={ag['model']} rev={ag['config_revision']}")
+                if ag.get("plugins"):
+                    from .plugins import PluginError, resolve as _resolve_plugins
+
+                    try:
+                        found = _resolve_plugins(list(ag["plugins"]))
+                        add("plugin", True, ", ".join(f"{x.name} ({x.path})" for x in found))
+                    except PluginError as e:
+                        add("plugin", False, str(e))
                 reg = load_mcp_registry(ctx.paths)
                 for s in ag.get("mcp_servers") or []:
                     if s not in reg:
@@ -413,6 +439,8 @@ def _agent_payload(a: argparse.Namespace, *, creating: bool) -> dict[str, Any]:
         d["tool_policy"] = tp
     if a.mcp is not None:
         d["mcp_servers"] = _split_list(a.mcp)
+    if getattr(a, "plugin", None) is not None:  # "none" = bỏ hết plugin
+        d["plugins"] = [] if [x.strip() for x in a.plugin] == ["none"] else _split_list(a.plugin)
     lim: dict[str, Any] = {}
     for src, dst in (("budget_per_run", "max_budget_usd_per_run"), ("budget_per_day", "budget_usd_per_day"), ("max_concurrent", "max_concurrent_runs"), ("max_runtime", "max_runtime_s")):
         v = getattr(a, src, None)
@@ -458,6 +486,7 @@ def _agent_text(ag: dict[str, Any]) -> str:
         f"  mcp: {','.join(ag.get('mcp_servers') or []) or '-'}",
         f"  connector claude.ai: {','.join(tp.get('connectors') or []) or '-'}"
         + ("  (run nạp cấu hình user ~/.claude; cần guard bật)" if tp.get("connectors") else ""),
+        f"  plugins: {', '.join(ag.get('plugins') or []) or '-'}",
         f"  limits: {json.dumps(lim, ensure_ascii=False)}",
         f"  workspace: {ag.get('workspace_default') or '(scratch theo run)'}",
         f"  home: {ag['home_path']}",
@@ -732,6 +761,7 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("action", choices=["start", "stop", "status", "run", "logs", "install-service", "uninstall-service"],
                    help="install-service/uninstall-service: tự khởi động daemon khi đăng nhập (Windows Task Scheduler, macOS LaunchAgent, Linux systemd --user)")
     d.add_argument("--foreground", action="store_true", help="chạy daemon ở tiền cảnh")
+    d.add_argument("--wait-supervisor", type=float, default=None, help=argparse.SUPPRESS)  # bộ cập nhật: chờ launchd chạy lại daemon
     d.add_argument("--dry-run", action="store_true", help="install-service/uninstall-service: chỉ in kế hoạch, không thay đổi gì")
     d.add_argument("--lines", "-n", type=int, default=50, help="logs: số dòng cuối")
     d.add_argument("--run", help="logs: chỉ dòng có run_id này")
@@ -739,7 +769,7 @@ def build_parser() -> argparse.ArgumentParser:
     d.set_defaults(fn=cmd_daemon)
 
     doc = sub.add_parser("doctor", help="kiểm sức khoẻ (không gọi model)", parents=[common])
-    doc.add_argument("agent", nargs="?")
+    doc.add_argument("agent", nargs="?", help="id agent cần kiểm, hoặc `multi` = kiểm sẵn sàng chạy nhiều hub trên một máy")
     doc.add_argument("--probe-timeout", type=float, default=20, help="giây chờ mỗi MCP server khi thử kết nối")
     doc.set_defaults(fn=cmd_doctor)
 
@@ -762,6 +792,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--mcp", action="append", help="tên MCP server trong registry")
         sp.add_argument("--connectors", help="connector claude.ai cho agent, phân cách dấu phẩy (vd \"Atlassian,Slack\"); 'none' = tắt. "
                         "Bật = run nạp cấu hình user ~/.claude; cần guard bật; tool ghi KHÔNG hỏi duyệt, chỉ xoá mới hỏi")
+        sp.add_argument("--plugin", action="append", help="plugin Claude Code nạp cho run (tên@marketplace đã `claude plugin install`, "
+                        "hoặc đường dẫn tuyệt đối); lặp lại hoặc phân tách dấu phẩy; 'none' = bỏ hết")
         sp.add_argument("--browser", choices=["chrome", "playwright", "auto", "none", "default"],
                         help="trình duyệt: chrome = Claude in Chrome (Chrome THẬT của bạn, bỏ Playwright), auto = Chrome trước rồi Playwright, "
                              "playwright/none = không --chrome, default = theo runtime.claude.chrome.default_mode của hub (mặc định auto)")
@@ -928,6 +960,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .update_cli import add_parsers as _add_update_parsers
 
     _add_update_parsers(sub, common)
+
+    # tổng quan máy nhiều người dùng: cfharness admin overview (admin_cli.py, admin_overview.py)
+    from .admin_cli import add_parsers as _add_admin_parsers
+
+    _add_admin_parsers(sub, common)
     return p
 
 

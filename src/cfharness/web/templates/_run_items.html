@@ -1,0 +1,3 @@
+{#- P2: phần transcript TRƯỚC của run dài (/partials/run/<id>/items?before=<seq>) — cùng macro với trang run; còn nữa → nút ở đầu -#}
+{% import "_items.html" as ti %}
+{% if hidden %}{{ ti.older(run_id, before, hidden) }}{% endif %}{% for it in items %}{{ ti.item(it) }}{% endfor %}

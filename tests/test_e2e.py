@@ -29,7 +29,7 @@ def test_e2e_daemon_run_follow(daemon, capsys):
     paths = daemon
     code, out, _ = cli(capsys, "daemon", "status", "--json")
     st = json.loads(out)
-    assert code == 0 and st["daemon_running"] and st["runtime"] == "fake" and st["max_concurrent_runs"] == 4
+    assert code == 0 and st["daemon_running"] and st["runtime"] == "fake" and st["max_concurrent_runs"] is None
 
     code, out, _ = cli(capsys, "agent", "create", "researcher", "--role", "Nghiên cứu", "--model", "haiku", "--budget-per-run", "0.2")
     assert code == 0, out

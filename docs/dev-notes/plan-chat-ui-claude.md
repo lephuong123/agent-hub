@@ -1,0 +1,291 @@
+# Kế hoạch: câu trả lời của AI + giao diện hiển thị giống Claude chat
+
+Ngày: 2026-11-13. Trạng thái: **đề xuất, chờ chốt 4 quyết định ở mục 1**. Ba agent đã đọc code để viết kế hoạch này, chưa sửa file nào:
+(A) trang Điều phối `/manager`, (B) transcript trang run, (C) nội dung câu trả lời và các kênh TUI/Telegram/Slack.
+
+Mọi ràng buộc an toàn hiện có vẫn giữ nguyên:
+- CSP `'self'`, không CDN, không script/style inline.
+- Nội dung agent là DỮ LIỆU.
+- Client chỉ chèn HTML do server vẽ hoặc dùng `textContent`.
+- WT-8, cổng HUMAN_ONLY.
+
+---
+
+## 0. Chẩn đoán ngắn
+
+| # | Vấn đề | Bằng chứng |
+|---|---|---|
+| D1 | Chữ của điều phối viên là văn bản thô `pre-wrap`, không có markdown, khối code nằm lẫn trong đoạn văn | `_manager.html:1,7`, `app.css:674`, ảnh `16-dieu-phoi.png` |
+| D2 | `md()` dùng preset `commonmark`: không có bảng hay gạch ngang, `![](…)` vẫn ra `<img>`, link không có `rel`, code không tô màu và không có nút copy | `present.py:128-143` |
+| D3 | Live run: khi tool xong thì mất args/diff; khi run kết thúc thì `location.reload()` xoá thinking và các khối đang mở | `app.py:1449-1467`, `app.js:267-271` |
+| D4 | Thinking chỉ thấy lúc live; khối `thinking` trong `assistant` không được ánh xạ nên `reasoning.complete` không bao giờ phát | `claude_adapter.py:396-435` |
+| D5 | SSE Điều phối: nối lại thì chữ bị nhân đôi (không có `id`/`seq`); nhận `end` là chết luồng; lời dẫn biến mất khi `reply` tới; nhiều lượt dính chữ vào nhau | `app.py:1399`, `app.js:503-567`, `manager.py:375-414` |
+| D6 | Không có nút Dừng ở Điều phối; không có Copy/Retry; không có nút "về tin mới nhất" | `manager.html:103-131` |
+| D7 | Tool hiển thị dạng hộp to, tên kỹ thuật; không xem được input; output bị cắt ở 600 ký tự dù adapter giữ 2000; không gom tool liên tiếp; subagent không lồng | `_items.html:11-18`, `present.py:204` |
+| D8 | Kết quả lặp hai lần (Diễn biến + thẻ Kết quả); nhiều dòng hệ thống gây nhiễu; ô steer đè lên transcript | `run.html:31-42`, ảnh `11-run-xong.png`, `04-run-live.png` |
+| D9 | Prompt yêu cầu *"plain-text summary"*; SOUL điều phối viên **yêu cầu** nêu task id; không có quy tắc ngôn ngữ hay cách trình bày | `prompt.py:21`, `templates/manager.yaml`, `tasks.py:518` |
+| D10 | Telegram đặt cả câu trả lời trong `<pre>`, nên markdown hiện thô; chia tin cắt cứng 3500 ký tự làm vỡ code fence (cả Slack); `TEXT_MAX=4000` cắt mà không báo | `manager_chat.py:200-218`, `service.py:158,810` |
+
+---
+
+## 1. Quyết định cần chủ repo chốt trước
+
+| # | Câu hỏi | Đề xuất |
+|---|---|---|
+| Q1 | Bỏ bất biến "Điều phối: không markdown" (AGENTS.md M7, M7-ui §3, test `test_manager_content_is_escaped_never_raw_html`)? | **Bỏ.** Chỉ cho phép đầu ra của `md()` đã cứng hoá được `\|safe`. Tin người dùng vẫn để thô. Đã có tiền lệ TUI `cc_render.markdown_text` (2026-10-26). |
+| Q2 | Link ngoài do agent viết hiển thị thế nào? | Web: link thật, có `rel="nofollow noopener noreferrer"` `target=_blank` và hiện tên miền thật bên cạnh. Telegram: dạng chữ `nhãn (URL)`. Link nội bộ vẫn chỉ đến từ `mgr_target`. |
+| Q3 | Telegram bỏ `<pre>` và chuyển markdown sang HTML (nới WT-8 giống Slack)? | **Có**, kèm cờ `notify.telegram.agent_render: markdown\|pre` để quay lại khung cũ nhanh. Dòng hub vẫn đứng trước `AGENT_FRAME`. |
+| Q4 | Lưu thinking vào DB (`reasoning.complete`)? | **Có.** Qua `redact`, cắt ở 8000 ký tự, cờ `runtime.claude.persist_thinking` (mặc định bật), dùng retention có sẵn. |
+
+---
+
+## 2. Kiến trúc: một bộ render dùng chung
+
+Ý chính của kế hoạch: trang run và trang Điều phối **dùng chung một bộ render**, thay vì mỗi trang tự làm một kiểu như hiện nay.
+
+- **`present.py`** (hàm thuần):
+  - `md()` đã cứng hoá: preset commonmark cộng `table`, `strikethrough`, `tasklists`; `html=False`; ảnh thành link chữ; `link_open` có `rel` và tên miền; fence có header (ngôn ngữ do pygments xác định, nút Sao chép); pygments chỉ dùng **class**, không dùng `style=`; LRU cache.
+  - `tool_view()`, `merge_tool()`, `group_items()`.
+- **`templates/_transcript.html`** (mới): các macro `tx_msg`, `tx_tool`, `tx_group`, `tx_thinking`. `_items.html` và `_manager.html` đều import file này.
+- **CSS `.tx-*`**: hợp nhất `.ti.*` (run) với `.mm*`/`.mm-acts` (Điều phối).
+- **JS `txAppend(container, msg)`**: gộp các phần delta→`textContent`, thay theo `dom`, gom nhóm, giữ vị trí cuộn, copy. Cả `initManager` và live run đều gọi hàm này.
+- **SSE**: các loại `delta` / `part` (HTML server vẽ, có điều tiết) / `item` / `seg` / `think` / `tool`, có kèm `seq` để chống trùng.
+- **`chat/mdconv.py`** (mới): markdown → khối trung gian → `to_telegram_html()` / `to_slack_mrkdwn()` + `split_md()` chia tin theo khối.
+- Khai báo rõ trong `pyproject.toml`: `markdown-it-py`, `mdit-py-plugins`, `pygments`. Hiện chúng chỉ có mặt gián tiếp qua rich/textual.
+
+---
+
+## 3. Lộ trình
+
+### Đợt 1 — P0: sửa lỗi + nền tảng (1 PR mỗi gạch đầu dòng)
+
+| ID | Việc | File chính | Công |
+|---|---|---|---|
+| P0-1 | **Prompt "Response style"**: bỏ "plain-text"; thêm khối `RESPONSE_STYLE` (tiếng Anh) sau SOUL/charter, trước khối tri thức; ghi chú theo kênh `format_note(channel)` trong tin user (không đổi hash); định dạng kết quả task cho worker/resume | `prompt.py`, `manager/prompts.py`, `tasks.py:518,526`, `runs.py:1281` | S |
+| P0-2 | **Cứng hoá + nâng cấp `md()`**, khối code có header, nút copy, pygments dùng class | `present.py`, `app.css`, `app.js`, `pyproject.toml` | M |
+| P0-3 | **Sửa live run**: converter nhớ đủ mục `tool.start` (`merge_tool` dùng chung với `replay_items`); bỏ `location.reload()`, thay bằng partial `/partials/run/<id>/result` | `app.py`, `present.py`, `app.js` | S |
+| P0-4 | **Sửa SSE Điều phối**: kèm `seq` và bỏ trùng, tự nối lại có backoff (cả khi nhận `end`), `seg` ở `message.complete`, bỏ `scroll-behavior: smooth` trên log | `manager.py`, `app.js`, `app.css` | M |
+| P0-5 | **Markdown cho Điều phối** (sau khi Q1 được chốt) qua `tx_msg` dùng chung | `_manager.html`, `manager.py`, `_transcript.html` | S |
+| P0-6 | **Nút Dừng** ở Điều phối: `POST /manager/stop`, nút gửi biến thành nút dừng khi đang chạy và ô nhập trống, không hộp xác nhận, có audit kênh `web` | `manager.py`, `manager.html`, `app.js` | S/M |
+| P0-7 | **Tool một dòng kiểu Claude**: "Đọc a.py", "Chạy `npm test`", "Sửa x +3 −1"…; mở ra xem Input/Output đầy đủ (2000 ký tự); lỗi màu đỏ và mở sẵn | `present.py` (`tool_view`), `_transcript.html`, `app.css` | M |
+| P0-8 | **Bỏ kết quả lặp + giảm nhiễu**: thẻ Kết quả chỉ còn phản hồi khi trùng tin cuối; dòng start, steer.ack, subagent và end thu gọn | `run.html`, `present.py`, `replay_items` | S |
+| P0-9 | **Lưu thinking** (sau khi Q4 được chốt): nhánh `thinking`/`redacted_thinking` trong adapter, `EVENT_LEVELS`, fixture + contract test | `claude_adapter.py`, `events.py`, `config.py` | M |
+| P0-10 | **Telegram markdown** (sau khi Q3 được chốt): dùng `mdconv`; bảng hẹp thành `<pre>`, bảng rộng thành list; `split_md` theo khối; `TEXT_MAX` lên ~14000 và có cờ `truncated`; tin quá dài gửi kèm tệp `.md` | `chat/mdconv.py`, `manager_chat.py`, `chat/base.py`, `manager/service.py` | M |
+
+### Đợt 2 — P1: cảm giác Claude
+
+| ID | Việc | Công |
+|---|---|---|
+| P1-1 | Hiện markdown ngay khi đang chạy chữ: server render có điều tiết (~150–250 ms), gửi `{t:"part", html}`, ngưỡng 8–24 KB | M |
+| P1-2 | Gom các tool liên tiếp: "Đã dùng 5 công cụ · Đọc ×3, Chạy ×2"; mở sẵn khi lỗi hoặc đang chạy; dùng chung cho chip "Đã làm N việc" của Điều phối | M |
+| P1-3 | Subagent lồng trong mục tool `Agent(mô tả)` | M |
+| P1-4 | Thinking gập lại + dòng "Đang dùng …" trong khung chờ của Điều phối (SSE `think`/`tool`, chỉ dùng `textContent`) | M |
+| P1-5 | Hàng thao tác dưới tin: Copy (văn bản gốc nằm trong `<template>`), Thử lại, Sửa tin người; giờ hiện khi hover | S/M |
+| P1-6 | Bố cục chat một cột cho trang run (dùng lại `.mgr-log` / `.composer-wrap`), ô steer không đè nội dung, nút "↓ tin mới nhất" ở cả hai trang | M |
+| P1-7 | Diff Edit/Write dùng `difflib` có ngữ cảnh, dùng lại `.udiff` | S/M |
+| P1-8 | Ô nhập + trợ năng: Enter xuống dòng trên màn cảm ứng, Esc để dừng, bản nháp lưu `sessionStorage`, bỏ `aria-live` trên log và thay bằng vùng `role=status` | S |
+| P1-9 | Slack dùng `mdconv` (bảng, `*nghiêng*`, `hr`, sửa fence vắt qua tin) | M |
+| P1-10 | SOUL `manager.yaml` bỏ "(agent, task id)"; `sanitize_reply` gỡ `[cfharness…`/`NO_ACTION`; chữ hub tại `service.py:796` không ghép id | S |
+| P1-11 | Duyệt và câu hỏi chỉ hiện đầy đủ một chỗ (trong transcript chỉ còn một dòng link tới thẻ) | S |
+
+### Đợt 3 — P2: hoàn thiện
+Trạng thái phần web: xem mục 7, PR `feat/chat-ui-polish`.
+- ✅ TodoWrite thành checklist cập nhật tại chỗ.
+- ✅ Báo rõ khi tin bị cắt.
+- ✅ Ẩn bớt khi run trên 300 mục.
+- ✅ Spinner "✳ Đang nghĩ… 12s · 3.4k token".
+- ✅ Vạch ngăn theo ngày.
+- ✅ Mobile: vùng an toàn và `visualViewport` (chưa thử trên máy thật).
+- ✅ (thêm) Sao chép cả tin / output tool; ✅ `.udiff` trang diff không còn dòng trống; ⏭ gom tool của điều phối viên bằng `tx_group` — bỏ (lý do ở mục 7).
+- ~~`<blockquote expandable>` cho Telegram.~~ Xong (sau cờ, mặc định tắt) — PR `feat/style-eval-telegram`, mục 7.
+- ~~Golden eval chấm phong cách trả lời: không có id `t_…`, fence có ngôn ngữ, độ dài, tiếng Việt.~~ Xong — PR `feat/style-eval-telegram`, mục 7.
+
+**Thứ tự gợi ý:** P0-1 → P0-2 → P0-3 → P0-4 → (tách `_transcript.html`) → P0-5 → P0-6 → P0-7 → P0-8 → P0-9 → P0-10 → P1.
+
+---
+
+## 4. Bản nháp khối `RESPONSE_STYLE` (gửi agent, tiếng Anh)
+
+```
+# Response style
+These rules apply to free-text replies a person reads. When you are asked for structured output (a JSON schema), follow the schema exactly instead. Per-message channel notes take precedence over the length guidance here.
+- Language: write in the language of the request (Vietnamese unless the owner wrote in another one). Keep code, commands, paths, identifiers and quoted errors unchanged.
+- Lead with the answer or outcome in the first sentence. No preamble, no restating the request, no closing offers.
+- Match length to the question: a simple question gets 1-3 sentences; a report gets a short structure.
+- Light Markdown: short paragraphs; bullets only for 3+ parallel items; **bold** sparingly; `##` headings only with 3+ sections; a table only to compare items across 2+ attributes (max 4 short columns); code, commands and logs in fenced blocks with a language tag; inline `code` for names and paths; no horizontal rules, no decorative emoji.
+- After multi-step work, close with: what was done, what is still open, what you need from the person.
+- Do not expose internals: no hub headers, no task/run/conversation/workstream ids, no tool names, no raw JSON, no NO_ACTION — unless the person asks for them.
+- Never invent results. Say plainly what you have not verified.
+```
+
+Ảnh hưởng tới hash:
+- Mọi agent đổi `system_prompt_hash` một lần, nên prompt cache cũng mất một lần.
+- Session đang resume giữ prompt cũ (`learning/runtime.py:51-57`). Ghi chú theo kênh trong tin user (P0-1) giúp áp dụng ngay cho các hội thoại đang chạy.
+
+---
+
+## 5. Test và kiểm chứng
+- **XSS markdown** (`tests/test_web_markdown.py` mới):
+  - fence info `"><script>`;
+  - `javascript:` viết bằng entity;
+  - autolink `<javascript:…>`;
+  - ref-link trỏ tới `javascript:`;
+  - `data:` URL;
+  - HTML nằm trong ô bảng;
+  - ảnh không được ra `<img`;
+  - kết quả không chứa `style=`.
+- **Đồng nhất replay/live**: cùng một chuỗi event đi qua `replay_items` và `_run_converter` phải ra cùng HTML.
+- **SSE**: các message có `seq`; `message.complete` sinh ra `seg`; `draft`/`part.html` đã được sanitize.
+- **Prompt** (`tests/test_prompt_style.py`):
+  - `RESPONSE_STYLE` nằm đúng vị trí và hash ổn định;
+  - lead/review không có dòng định dạng kết quả;
+  - ghi chú kênh có cho Telegram/Slack, không có cho web.
+- **`tests/test_mdconv.py`**:
+  - chỉ ra thẻ thuộc whitelist Telegram và thẻ cân;
+  - không có `pre`/`code` nằm trong `blockquote`;
+  - `split_md` không vượt ngân sách và mở lại fence đúng ngôn ngữ.
+- **Cập nhật test**: `test_web_manager.py`, `test_web.py:557-569`, `test_web_files.py:177-191`, `test_telegram*.py` (WT-8 với bất biến mới), `test_slack.py`.
+- **Thủ công**:
+  - `uv run pytest -q`;
+  - `web.demo` + Playwright (sáng, tối, 390 px; `scrollWidth == clientWidth`; không có lỗi CSP);
+  - chụp lại ảnh `16`, `17`, `v2/04`, `v2/11`.
+
+## 6. Rủi ro
+- XSS qua markdown hoặc tên ngôn ngữ của khối code: giảm bằng bộ test ở mục 5, và chỉ `md()` được `|safe`.
+- CSP chặn `style=` từ pygments: chỉ dùng class.
+- Tốn CPU khi render lại markdown lúc chữ đang chạy: điều tiết + LRU + ngưỡng kích thước.
+- Lưu thinking làm DB lớn hơn và có thể lộ dữ liệu: `redact`, cắt bớt, có cờ cấu hình.
+- Đổi id DOM làm hỏng test hoặc JS: giữ nguyên `runbar`, `transcript`, `live-state`, `steer-form`, `st-cost`, `st-tok`, `.mm mgr`, `.mm-acts`, `data-run`.
+
+---
+
+## 7. Nhật ký thi công
+
+- **2026-11-13 — chốt Q1–Q4: đồng ý cả 4 đề xuất** (markdown cho Điều phối; link ngoài có `rel` + tên miền / Telegram `nhãn (URL)`;
+  Telegram bỏ `<pre>` có cờ quay lại; lưu thinking có redact + cắt + cờ).
+- **P0-1 (PR `feat/response-style`)**: `prompt.RESPONSE_STYLE` ghép sau SOUL/charter, trước khối tri thức; bỏ "plain-text" khỏi
+  `HUB_CONVENTIONS`; `manager/prompts.format_note(channel)` cho Telegram/Slack (trong tin user → không đổi hash); `tick_prompt`
+  nhắc notify_owner theo Response style (NO_ACTION vẫn là tín hiệu nhịp, không bị khối style cấm); worker/resume task trả kết quả
+  dạng markdown; SOUL mẫu `manager.yaml` bỏ "(agent, task id)" (chỉ ảnh hưởng điều phối viên tạo mới — điều phối viên cũ đã có
+  khối style đứng sau SOUL). Hệ quả: mọi agent đổi `system_prompt_hash` một lần; session đang resume giữ prompt cũ cho tới khi xoay,
+  ghi chú kênh vẫn áp ngay. Test: `tests/test_prompt_style.py`.
+- **P0-9 (PR `feat/persist-thinking`)**: `_on_assistant` phát `reasoning.complete` (level `detail`, CÓ ghi DB) cho khối `thinking`
+  (text qua `redact`, cắt ở `runtime.claude.thinking_max_chars` = 8000 + cờ `truncated`, giữ `subagent_id`) và `redacted_thinking`
+  (`redacted: true`, text rỗng — bản mã hoá không lưu). Khối thinking rỗng (CLI 2.1.310+ thường chỉ gửi chữ ký) bị bỏ qua.
+  `runtime.claude.persist_thinking=false` → không phát/không ghi (vẫn có `reasoning.delta` trực tiếp). Web: `present.transcript_item`
+  ẩn `reasoning.complete` của subagent như `message.complete`, `redacted` hiện "(suy nghĩ bị ẩn)"; `app.js` thay khối "Suy nghĩ…"
+  đang chạy bằng mục `reasoning` (như `msg` thay khối chữ) để không hiện đôi. Lưu ý: fixture thật 2.1.310 có `thinking` rỗng → với
+  CLI hiện tại có thể ít khi có nội dung để lưu. Test: fixture `tests/fixtures/claude-thinking.jsonl` (tổng hợp theo dạng thật),
+  `tests/test_adapter.py`, `tests/test_persist_thinking.py` (FakeRuntime → DB → `replay_items`), snapshot `docs/schema/event.v1.json`.
+- **P0-2 + P0-3 + P0-7 + P0-8 + bộ render dùng chung (PR `feat/web-render-core`)**:
+  - `present.md()`: commonmark + `table`/`strikethrough` + tasklists (ô tích disabled), `html=False`, `validateLink` giữ nguyên;
+    link `rel="nofollow noopener noreferrer" target=_blank class=ext title=URL` + `<span class="ext-host">(tên miền)</span>` (IDN → punycode,
+    autolink không lặp tên miền); ảnh → link chữ "ảnh: alt" (không bao giờ `<img>`); bảng trong `.tx-table`; căn cột `style=` của
+    markdown-it đổi thành class `al-*`; fence → `.tx-code` (tên = alias lexer pygments, không nhận ra → `text`), pygments chỉ class `tk-*`,
+    bỏ tô màu khi code > 20k ký tự; LRU 256 theo blake2b; đầu vào cắt ở 100k ký tự. Khai báo `markdown-it-py`, `mdit-py-plugins`, `pygments`.
+  - `present.Transcript` (bộ gộp event → mục) dùng chung cho `replay_items` và `_run_converter` → live giữ input/diff/chip khi tool xong;
+    `merge_tool(prev, it)`; partial `/partials/run/<id>/result` (204 khi còn chạy) thay `location.reload()`; `/partials/run/<id>` trả 286
+    cho htmx khi run đã xong (ngừng poll).
+  - `tool_view(name, input, result, is_error, dur, *, summary)`; template `_transcript.html` (`tx_msg`, `tx_tool`, `tx_thinking`,
+    `tx_group` bản đơn giản, `tx_segs`); JS `txAppend(container, msg)` (+ `window.cfhTx`), nút Sao chép uỷ quyền.
+  - P0-8: thẻ Kết quả trùng tin cuối → chỉ hàng phản hồi + lỗi; `final` trên tin cuối; `run.started` → dòng meta trong khung yêu cầu;
+    `steer.ack` → "✓ agent đã nhận" trên chỉ đạo gần nhất; bỏ dòng `subagent.spawn`; chân run gọn, khung màu chỉ khi danger/warn.
+  - Lệch kế hoạch: động từ `Task`/`Agent` = "Giao subagent", `TodoWrite` = "Cập nhật danh sách việc"; `highlight()` thêm tham số
+    `danger` (dòng tool chỉ lộ ký tự ẩn/bidi, không tô "nguy hiểm"); chip file vẫn mang `data-path` như trước (test file-open dựa vào).
+    Test: `tests/test_web_markdown.py`.
+- **P0-10 + P1-9 + P1-10 (PR `feat/channel-markdown`)**: `chat/mdconv.py` mới (markdown-it `commonmark`+`table`+`strikethrough`,
+  `html=False` → khối trung gian → `to_telegram_html` / `to_slack_mrkdwn`; `split_md` chia theo khối TRƯỚC khi render, đo SAU khi render,
+  mở lại fence cùng ngôn ngữ, lặp tiêu đề bảng). Telegram: trả lời điều phối viên, kết quả `/run`, câu hỏi agent dùng markdown → HTML
+  whitelist (`b i s code pre`), link thành chữ `nhãn (URL)` (không `<a>`), `/lệnh` trong `<code>`; dòng hub + `AGENT_FRAME` luôn đứng
+  trước, đuôi hub in nghiêng cách một dòng; tin duyệt giữ `<pre>`. Cờ `notify.telegram.agent_render: markdown|pre`. Quá 4 tin → kèm tệp
+  `.md`. `manager/service.TEXT_MAX` 4000 → 20000 (= trần DB) + `truncated: true` (cả `notify_owner`). Slack: `quote_mrkdwn` gọi mdconv
+  (bảng, `*nghiêng*`, bỏ `---`, fence vắt hai tin). `manager_chat.sanitize_reply` gỡ `[cfharness…`/`NO_ACTION`/`<untrusted-data>`;
+  chữ lỗi của hub "(Điều phối viên không trả lời được: <kết quả tiếng Việt>[ — lý do])" không ghép run id — giữ tiền tố
+  `chatview.FAIL_PREFIX` để lịch sử/TUI vẫn nhận ra lỗi (TUI `failure_text` hiểu cả dạng mới). WT-8 nới ghi ở `telegram.md`.
+  Test: `tests/test_mdconv.py`, `tests/tg_html.py`, cập nhật `test_telegram*.py`, `test_slack*.py`, `test_manager.py`.
+  Chưa kiểm hiển thị trên Telegram/Slack thật.
+- **P0-4 + P0-5 + P0-6 + P1-1 (Điều phối) + P1-3 (chip) + P1-4 + P1-5 + P1-6 (nút "Tin mới nhất" ở Điều phối) + P1-8 (PR `feat/manager-chat-claude`)**:
+  - SSE `/sse/manager`: mọi message mang `seq`; client bỏ trùng (`seq < lastSeq`, hoặc `== lastSeq` từ kết nối khác), tự nối lại có giãn
+    1→30 s cả sau `end`/lỗi với `since=lastSeq&epoch=` (đóng EventSource để nó không tự nối bằng `since` cũ); epoch đổi → đếm lại từ 0.
+    `message.complete` không subagent → `seg`; `draft{html: md(toàn bộ chữ đã chạy)}` mỗi ≥ 150 ms + cuối đoạn, > 24 KB thôi nháp;
+    `reasoning.delta` → `think{text}`, `tool.start/complete` → `tool{name: short_tool, label, done}` (không có `html`). `reply` = markdown
+    của toàn bộ chữ đã chạy nếu nó chứa câu trả lời cuối (lời dẫn không mất; tải lại trang thì chỉ còn bản DB = `summary`).
+  - Markdown cho tin điều phối viên qua `tx_msg` + filter `md`; tin người vẫn chữ thô; `<template class="mm-src">` cho Sao chép/Sửa.
+    Cập nhật bất biến AGENTS.md (M7 MGR-UI), `M7-ui.md` §3, `web.md`; test `test_manager_content_is_hardened_markdown_user_text_plain`,
+    `test_sse_streams_reply_action_markdown_hardened_with_seq`, `test_sse_seg_think_tool_have_no_html_and_subagent_ignored`,
+    `test_draft_throttled_sanitized_and_capped`, `test_stop_button_route_guards_scope_and_audit`.
+  - `POST /manager/stop`: `post_guard`, `run.get` → agent = điều phối viên + run thuộc hội thoại điều phối (`run_opts.manager_conversation`;
+    daemon cũ/stub: run nằm trong lịch sử hội thoại `c`) → `run.stop` audit `web`. Nút gửi ⇄ Dừng; Esc trong ô trống.
+  - Lệch kế hoạch: message nháp tên `draft` (mục 2 gọi `part`); không đổi `_stream`/`app.py` (không thêm `id:` SSE — client tự nối lại với
+    `since`); Điều phối không dùng `txAppend` (khung đang trả lời có cấu trúc riêng: suy nghĩ / dòng tool / nháp + đuôi) nhưng dùng chung
+    `tx_msg`, `.tx-code`, nút chép, `copyText`, `nearBottom`, `fromHTML`; dòng tên chỉ ẩn khi hai tin điều phối viên liền nhau (CSS `+`).
+    Ảnh `16-dieu-phoi.png`, `17-dieu-phoi-dang-tra-loi.png` chụp lại (web.demo + sự kiện giả).
+- **P1-1 + P1-2 + P1-3 + P1-6 (trang run) + P1-7 + P1-11 (PR `feat/run-transcript-claude`)**:
+  - P1-1: `_run_converter` giữ bộ đệm khối chữ đang chạy, gửi `{t:"part", k:"text", html: md(buffer)}` mỗi ≥250 ms hoặc ≥400 ký tự
+    (trần 8000, dùng LRU của `md()`); client thay nội dung khối bằng HTML server, delta sau đó nối vào `.tx-tail` (textContent, nằm trong
+    đoạn `<p>` cuối). Đoạn chữ sau `part` cuối vẫn thô tới khi `message.complete` thay bằng bản cuối.
+  - P1-2: `present.group_items(items)` (thuần, dùng lại được cho Điều phối) + `group_view(tools)` + `group_dom(first)`; `Transcript` gán
+    `grp` cho tool cấp ngoài cùng quy tắc → `blocks()` (phát lại) và live ra cùng cây. `tx_group(g, shell=False)`: "Đã dùng N công cụ ·
+    Đọc ×3, Chạy ×2" + dòng đang chạy; mở khi đang chạy/lỗi/≤2 tool, gập khi xong ≥3; nhóm 1 tool (`solo`) không hiện tiêu đề.
+    `data-auto` = trạng thái mở mặc định: client chỉ tự đóng/mở khi người chưa tự bấm.
+  - P1-3: mục có `subagent_id` (tool + note) nằm trong tool cha `tool-<id>` (`Transcript.tree(it)` → `children`/`kids_n`), tiêu đề
+    "Đang chạy… (n công cụ)" / "Xong (n công cụ · 3.2s)"; Input/Output của Task gập trong `tx-io`. Fixture tổng hợp `claude-subagent.jsonl`.
+  - Giao thức live: `{t:"item", dom, html, parent?, heads?}` — `parent` = id khung (`grp-…`/`tool-…`, ô con `#<parent>-k`), `heads` = khung
+    ngoài→trong dạng rỗng (`tx_group(g, True)` / `tx_tool(t, head=True)`) để tạo nhóm mới + cập nhật tiêu đề. `sse_run` nạp các event
+    ≤ since vào bộ gộp (`prime`) → tool xong sau khi mở trang vẫn giữ input, tool mới nối đúng nhóm đang có.
+  - P1-6: trang run một cột (`body.run-page`): một vùng cuộn `#run-scroll`, ô steer / "Nói tiếp" ở `#run-dock` NGOÀI vùng cuộn (không bao
+    giờ đè transcript); runbar thành header gọn; nút "↓ Có mục mới"; run xong: partial thay `#run-tail`, ô "Nói tiếp" vào dock bằng
+    `hx-swap-oob` (`_run_continue.html`). `<time class="tx-time">` mỗi mục, hiện khi hover/focus.
+  - P1-7: `_diff_lines` = `difflib.unified_diff` 3 dòng ngữ cảnh, trần 200 dòng + "… còn N dòng", đếm +/− nuôi "Sửa a.py +3 −1";
+    Write: 20 dòng đầu + phần gập; dùng `.udiff .dl`; ký tự ẩn/bidi lộ ra. Diff nằm trong `view.diff` (bỏ khoá `diff` của mục).
+  - P1-11: duyệt/câu hỏi trong transcript = một dòng link `#ap-<id>`/`#q-<id>` (thẻ không có trên trang → `/inbox#…`); nút duyệt chỉ ở thẻ.
+  - Chưa làm: chưa nối `group_items`/`tx_group` vào trang Điều phối (đợt P2); `part` cuối không tự đẩy khi chữ dừng mà chưa có `message.complete`.
+    Test: `tests/test_web_run_transcript.py` (mô phỏng `txAppend` trên cây DOM → phát lại == live). Ảnh: `v2/04-run-live*.png`, `v2/11-run-xong.png`.
+- **P2: golden eval phong cách + Telegram `<blockquote expandable>` + `/lệnh` không bấm được (PR `feat/style-eval-telegram`)**:
+  - `evals/style.py` (hàm thuần `check_style(reply, request, StyleOptions)`): luật `internal_id` (id hub `t_`/`r_`/`c_`/`mc_`/`conv_`/
+    `ws_`/`q_`/`ap_`/`gs_`… + 8–12 hex; tha id có trong yêu cầu hoặc khi người hỏi "id"/"mã run…"), `hub_header` (dòng `[cfharness`),
+    `no_action`, `fence_lang` (fence không tên ngôn ngữ), `length` (yêu cầu ≤ 160 ký tự → trả lời ≤ 700 ký tự không tính khối mã),
+    `language` (yêu cầu tiếng Việt — hoặc không có yêu cầu — thì tỉ lệ từ có dấu tiếng Việt trên phần chữ, bỏ mã/URL/đường dẫn,
+    ≥ 0.2; yêu cầu không dấu/tiếng Anh → bỏ luật), `hr`. Điểm = tỉ lệ luật đạt; mọi ngưỡng chỉnh được, `skip` bỏ luật.
+  - Checker golden mới `{"kind": "response_style", …}` (`checkers.py`; lồng được trong `all`), CLI `golden add … --style`.
+  - Chấm câu trả lời THẬT (chỉ đọc DB): RPC `eval.style` (không audit, không ghi) → `cfharness eval style [run] [--since 7d]
+    [--agent] [--conversation] [--short-budget N] [--skip length,…] [-v] [--json]`. Nguồn: tin `manager`/`notify` của điều phối viên
+    (yêu cầu = tin `user` cùng run; bỏ tin lỗi của hub và nhịp chỉ `NO_ACTION`); `run` không phải điều phối viên → `runs.summary`
+    với yêu cầu = `runs.prompt`. Lưu ý: chấm chữ THÔ trong DB (trước `sanitize_reply` của kênh) — đúng thứ model viết.
+  - Telegram: `notify.telegram.expandable_details` (mặc định tắt) + `/lệnh` vô hiệu ở mọi vị trí — chi tiết ở `telegram.md` mục cuối.
+  - Test: `tests/test_style_eval.py` (mẫu tốt/xấu tiếng Việt, checker, `eval.style` chỉ đọc, CLI), `tests/test_mdconv.py`,
+    `tests/tg_html.py`; cập nhật 3 test Telegram (`</thẻ>` của agent giờ có U+2060 sau "/"). Chưa kiểm trên Telegram thật.
+- **P2 phần web (PR `feat/chat-ui-polish`)**:
+  - TodoWrite → MỘT mục "Việc cần làm" mỗi run (`todo-<run>`, `present.todo_item`/`todo_view`, macro `tx_todo`): `tool.start` của TodoWrite
+    cấp ngoài không thành dòng tool nữa; lần cập nhật sau thay tại chỗ (giữ chỗ lần đầu xuất hiện, `Transcript` đổi theo `dom`); ô tích
+    `disabled`, mục đang làm hiện `activeForm`; `tool.complete` lỗi vẫn hiện dòng tool lỗi; TodoWrite của subagent giữ dạng tool lồng.
+    Màn rộng: khối dính đầu vùng cuộn (sticky); điện thoại không dính (che quá nhiều). Điều phối: SSE `{t:"todo", html}` → checklist trong
+    khung đang trả lời (mất khi câu trả lời cuối thay khung).
+  - Báo cắt: `present.cut_note` + macro `tx_cut` — "Tin/Suy nghĩ/Output bị cắt ở N ký tự — xem đủ bằng `cfharness runs logs <id>`" (log thô
+    của run giữ nguyên văn stdout CLI) cho `message.complete.truncated`, `reasoning.complete.truncated`, output tool chạm trần 2.000; tin điều
+    phối viên có `truncated` (SSE) hoặc dài đúng trần 20.000 (lịch sử).
+  - Run dài: `present.page_blocks` — trên 300 KHỐI cấp ngoài (nhóm tool tính là một khối, không bao giờ cắt đôi) chỉ vẽ 150 khối cuối +
+    nút "Hiện các mục trước (N mục)" → `GET /partials/run/<id>/items?before=<seq>` (htmx outerHTML, cần đăng nhập, cùng `replay_tx` + macro;
+    `before` = `seq0` = seq của event TẠO khối, giữ nguyên khi thay tại chỗ; mốc lạ → rỗng; không phải số → 400). Lệch: đếm khối chứ không
+    đếm mục. Mốc theo seq có thể trùng giữa hai epoch (daemon khởi động lại giữa run) — hiếm, chấp nhận.
+  - Sao chép: nút `.tx-copy.tx-copy-src` + `<template class="tx-src">` (văn bản gốc, autoescape) dưới mỗi tin agent và ở tiêu đề Output
+    của tool; handler `.tx-copy` sẵn có đọc `template.content.textContent` (không bao giờ `data-*`). Giờ của tin nằm trong hàng thao tác.
+  - Dòng trạng thái: `#tx-status` dưới transcript run live — "✳ Đang nghĩ… 12s · 3.4k token"; giây đếm phía client từ `data-start`
+    (`started_at`), chữ từ SSE `{t:"status", state, label}` (`app.run_status_line`: `turn.start`, `tool.generating`, `tool.start`
+    "Chạy npm test…", duyệt/câu hỏi "Chờ…") hoặc loại delta đang tới ("Đang viết…"), token = `stats.out` (output_tokens của `usage.tick`).
+    `reasoning.progress` → `{t:"status", think_tokens:"~1.2k"}` (tiêu đề khối suy nghĩ live) và, khi phát lại, `Transcript.think_tokens`
+    gắn vào khối suy nghĩ kế tiếp: "Đã suy nghĩ · ~1.2k token". Không message nào mang HTML.
+  - Điều phối: `manager.with_days` chèn vạch ngày ("Hôm nay"/"Hôm qua"/"Thứ Hai, 10/11/2026", giờ máy chủ) trước mục đầu mỗi ngày (tin SSE
+    sau nửa đêm không tự thêm vạch). Tải lại khi lượt còn chạy: `manager.pending_info(events.query run_id)` → khung đang trả lời hiện
+    "Đang dùng Đọc STATE.md…" (hoặc "Vừa dùng …") + checklist gần nhất.
+    **Bỏ**: gom tool của điều phối viên bằng `group_items`/`tx_group` — tool của điều phối viên chủ yếu là MCP hub (`agent_create`,
+    `task_create`…) mà mỗi lời gọi đã thành thẻ `manager.action` trong chip "Đã làm N việc"; vẽ thêm nhóm tool sẽ lặp cùng một việc hai lần
+    với tên kỹ thuật. Giữ chip + dòng "Đang dùng …".
+  - Mobile: `.composer-wrap`/`.run-dock` đệm `env(safe-area-inset-bottom)` (màn hẹp: thanh tab đáy đã chừa, chỉ khi bàn phím mở);
+    `visualViewport` (trang chat/run) → `--vvh` + `html.kb-open` (`.main` cao bằng phần nhìn thấy, ẩn thanh tab, `scrollTo(0,0)`) — chỉ
+    CSSOM, không `style=`; hàng thao tác (`.tx-acts`, `.mm-foot`) luôn hiện trên `(hover:none)`; code/bảng cuộn ngang trong khối
+    (đã có, kiểm lại ở 390 px). Chưa thử bàn phím ảo trên iPhone/Android thật.
+  - `.udiff` trang diff run (`_run_diff.html`): có "\n" giữa các `<span class="dl">` (display:block) trong `<pre>` → dòng trống giữa MỌI hàng;
+    đã bỏ.
+  - Test: `tests/test_web_polish.py`; cập nhật `test_web_questions.py` (vạch ngày). Kiểm bằng `web.demo` + sự kiện giả + Playwright
+    (1280/390, sáng/tối): không tràn ngang, không lỗi console/CSP.

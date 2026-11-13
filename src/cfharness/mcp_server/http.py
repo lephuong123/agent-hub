@@ -71,7 +71,7 @@ def build_http_app(caller: Any, tokens: dict[str, str], *, host: str = "127.0.0.
     return BearerAuth(app, tokens)
 
 
-def serve_http(caller: Any, paths: HubPaths, *, host: str = "127.0.0.1", port: int = 8765) -> None:
+def serve_http(caller: Any, paths: HubPaths, *, host: str = "127.0.0.1", port: int = 8766) -> None:  # = config.MCP_HTTP_DEFAULT_PORT
     import uvicorn
 
     tokens = ensure_tokens(paths)

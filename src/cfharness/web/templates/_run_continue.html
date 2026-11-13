@@ -1,0 +1,17 @@
+{#- Ô "Nói tiếp" của run đã kết thúc, nằm ở #run-dock dưới vùng cuộn (P1-6). `oob` = true khi trả trong partial
+    /partials/run/<id>/result: htmx thay #run-dock (ô steer) bằng khối này (hx-swap-oob) — luôn trả khối, kể cả rỗng. -#}
+{% import "_macros.html" as m with context %}
+{% if run.session_id or oob %}
+<div class="run-dock" id="run-dock"{% if oob %} hx-swap-oob="true"{% endif %}>
+{% if run.session_id %}
+  <section class="run-composer" id="continue-card">
+    <form method="post" action="/do/run_continue" class="composer">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ run.id }}"><input type="hidden" name="next" value="/runs/{{ run.id }}">
+      <textarea name="prompt" rows="1" required placeholder="Nói tiếp — agent nhớ toàn bộ hội thoại này. Ví dụ: Giờ viết lại ngắn hơn" aria-label="Nói tiếp với agent"></textarea>
+      <button class="btn primary" type="submit">{{ m.icon('send') }}<span class="btn-t">Gửi tiếp</span></button>
+    </form>
+    <p class="run-dock-hint">Nói tiếp với agent: mở một run mới tiếp nối hội thoại này.</p>
+  </section>
+{% endif %}
+</div>
+{% endif %}

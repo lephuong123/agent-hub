@@ -25,7 +25,7 @@ from cfharness.runtime import FakeRuntime
 from cfharness.web import present as P
 from cfharness.web.app import agent_changes, create_app, replay_items
 from cfharness.web.security import (
-    COOKIE, NotLoopback, WebAuth, check_login_token, login_url, mint_login_token, read_state, require_loopback, state_path, write_state,
+    NotLoopback, cookie_name, WebAuth, check_login_token, login_url, mint_login_token, read_state, require_loopback, state_path, write_state,
 )
 
 WIN = sys.platform == "win32"  # Windows: quyền POSIX (0600/0700) không áp dụng — hồ sơ người dùng bảo vệ bằng ACL
@@ -42,13 +42,14 @@ class Env:
         self.auth = WebAuth()
         self.app = create_app(paths, auth=self.auth, port=PORT)
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url=BASE)
+        self.cookie = cookie_name(paths.home)  # tên cookie theo hub (đa instance P1)
         self.csrf = ""
         self.key = ""
 
     async def login(self) -> str:
         r = await self.client.get("/login?t=" + self.auth.mint())
         assert r.status_code == 303, r.text
-        sid = r.cookies.get(COOKIE) or self.client.cookies.get(COOKIE)
+        sid = r.cookies.get(self.cookie) or self.client.cookies.get(self.cookie)
         self.csrf = self.auth.sessions[sid].csrf
         loc = r.headers["location"]
         assert loc.startswith("/#k=")  # khoá phiên chỉ đi trong fragment (trình duyệt không gửi lên server)
@@ -143,7 +144,7 @@ async def test_unauthenticated_requests_are_blocked(env):
     r = await c.get("/login")
     assert r.status_code == 200 and "cfharness web --open" in r.text
     # cookie giả không có tác dụng
-    c.cookies.set(COOKIE, "khong-hop-le")
+    c.cookies.set(env.cookie, "khong-hop-le")
     assert (await c.get("/")).status_code == 303
 
 
@@ -158,7 +159,7 @@ async def test_one_time_login_link_sets_strict_httponly_cookie(env):
     # dùng lại link → từ chối (một lần)
     c2 = httpx.AsyncClient(transport=httpx.ASGITransport(app=env.app), base_url=BASE)
     r = await c2.get("/login?t=" + tok)
-    assert r.status_code == 401 and COOKIE not in r.cookies
+    assert r.status_code == 401 and env.cookie not in r.cookies
     # link giả / sai chữ ký / hết hạn
     assert (await c2.get("/login?t=abc.1.def")).status_code == 401
     forged = mint_login_token(os.urandom(32))
@@ -171,7 +172,7 @@ async def test_one_time_login_link_sets_strict_httponly_cookie(env):
     await c2.aclose()
     # đăng xuất: phiên bị huỷ
     await env.login()
-    sid = env.client.cookies.get(COOKIE)
+    sid = env.client.cookies.get(env.cookie)
     r = await env.post("/logout", {})
     assert r.status_code == 303 and sid not in env.auth.sessions
 
@@ -567,7 +568,8 @@ def test_present_transcript_and_markdown_safety():
     items = replay_items(evs)
     assert [i["kind"] for i in items] == ["prompt", "tool", "msg", "end"]
     tool = items[1]
-    assert tool["running"] is False and tool["dur"] == 0.4 and tool["diff"] == [("add", "dòng 1"), ("add", "dòng 2")]
+    assert tool["running"] is False and tool["dur"] == 0.4 and [(k, "".join(t for _, t in s)) for k, s in tool["view"]["diff"]["lines"]] == [("add", "+dòng 1"), ("add", "+dòng 2")]
+    assert (tool["view"]["verb"], tool["view"]["meta"], tool["view"]["output_text"]) == ("Ghi", "2 dòng", "ok")  # P0-7: dòng tool kiểu Claude
     assert "Xong" in items[3]["text"]
     assert P.agent_status("waiting_human")[1] == "Chờ bạn duyệt"
     assert P.wait_reason("agent_busy") == "agent đang bận"
@@ -610,7 +612,7 @@ async def test_wt1_stolen_cookie_and_csrf_cannot_write(held):
     assert env.key not in html
     r = await env.post("/do/stop", {"id": run["id"]})
     assert "Xác nhận" in r.text and env.key not in r.text
-    evil = httpx.AsyncClient(transport=httpx.ASGITransport(app=env.app), base_url=BASE, cookies={COOKIE: env.client.cookies.get(COOKIE)})
+    evil = httpx.AsyncClient(transport=httpx.ASGITransport(app=env.app), base_url=BASE, cookies={env.cookie: env.client.cookies.get(env.cookie)})
     for path, data in (("/do/approve", {"csrf": csrf, "id": ap["id"], "confirm": "yes", "confirm2": "yes"}),
                        ("/do/estop", {"csrf": csrf, "on": "1", "confirm": "yes"}),
                        ("/do/mcp_add", {"csrf": csrf, "name": "x", "command": "touch /tmp/pwn", "confirm": "yes"}),
@@ -630,7 +632,7 @@ async def test_wt1_short_session_polling_does_not_extend(env):
     import cfharness.web.security as S
 
     await env.login()
-    sid = env.client.cookies.get(COOKIE)
+    sid = env.client.cookies.get(env.cookie)
     sess = env.auth.sessions[sid]
     assert S.SESSION_IDLE_S <= 3600 and S.SESSION_MAX_S <= 12 * 3600
     sess.last -= 100

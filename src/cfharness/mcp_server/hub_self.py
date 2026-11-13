@@ -243,6 +243,8 @@ _O = {"type": "object"}
 _A = {"type": "array", "items": _S}
 _RO = {"readOnlyHint": True}
 _LIM = {"type": "integer", "minimum": 1, "maximum": 100}
+_IF_BUSY = {"type": "string", "enum": ["fail", "queue"],
+            "description": "target agent already running at its limit: fail (default) = nothing is queued, you get idle agents of the same kind + a clone id; queue = wait behind its current run (only when the work needs THIS agent, e.g. the single shared Chrome session)"}
 _DENIED = (" Anything outside your authority is refused by cfharness with a reason: never try another way — if the owner can grant it, use "
            "ask_owner_permission; otherwise tell the owner.")
 
@@ -256,11 +258,13 @@ def _t(desc: str, props: dict[str, Any] | None = None, req: list[str] | None = N
 
 MANAGER_TOOLS: dict[str, dict[str, Any]] = {
     # ---- đọc
-    "hub_overview": _t("Snapshot of the whole hub: agents (role, description, status, model, cost today), teams + members, open tasks, "
-                       "running runs, approvals waiting for the human, cost today, ESTOP state. Start here.", ro=True),
+    "hub_overview": _t("Snapshot of the whole hub: agents (role, description, status, model, cost today), teams + members, open "
+                       "workstreams, open tasks (workstream=<key> narrows them to one workstream), running runs, approvals waiting for "
+                       "the human, cost today, ESTOP state. Start here.", {"workstream": _S}, ro=True),
     "agent_get": _t("One agent: config (role, description, model, tools, MCP, limits, workspace), SOUL, skills, recent runs.", {"id": _S}, ["id"], ro=True),
     "team_get": _t("One team: charter, policies, members (role, status), task counts, cost.", {"id": _S}, ["id"], ro=True),
-    "task_list": _t("List tasks (filters: team, status, assignee).", {"team": _S, "status": _S, "assignee": _S, "limit": _LIM}, ro=True),
+    "task_list": _t("List tasks (filters: team, status, assignee, workstream).", {"team": _S, "status": _S, "assignee": _S, "workstream": _S,
+                                                                                   "limit": _LIM}, ro=True),
     "task_get": _t("One task: body, status, result, comments, subtasks, runs.", {"id": _S}, ["id"], ro=True),
     "run_list": _t("Recent runs (filters: agent, status).", {"agent": _S, "status": _S, "limit": _LIM}, ro=True),
     "run_get": _t("One run: status/outcome, cost, prompt (truncated), final result text (truncated), error.", {"id": _S}, ["id"], ro=True),
@@ -281,6 +285,10 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                        "web_allow_domains: [domain globs] limiting WebFetch (null = any; on existing agents you can only narrow it)}, mcp_servers, limits, "
                        "workspace_default}. soul = full SOUL.md in English (optional). Write a precise `description`: tasks are routed by it." + _DENIED,
                        {"id": _S, "template": _S, "spec": _O, "soul": _S, "rationale": _S}, ["id"]),
+    "agent_clone": _t("Add another agent of the same kind when one is busy: copies src's config (fields you may set), SOUL and skills "
+                      "(not memory) into a new agent id (default: next free <src>-N) and adds it to src's teams with the same role "
+                      "(lead → worker). Then send the work to the clone." + _DENIED,
+                      {"src": _S, "id": _S, "name": _S, "join_teams": {"type": "boolean"}, "rationale": _S}, ["src"]),
     "agent_update": _t("Change another agent: changes = subset of {name, role, description, model, effort, fallback_model, tool_policy, mcp_servers, "
                        "limits, workspace_default}; soul = full new SOUL.md. Recorded in the ledger (rollback-able). You can ADD disallowed tool "
                        "patterns but never remove ones the human set." + _DENIED, {"id": _S, "changes": _O, "soul": _S, "rationale": _S}, ["id"]),
@@ -299,8 +307,11 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                       "to an agent (assignee). If the assignee belongs to a team, pass that team too (team + assignee) so the run gets the team's "
                       "charter and policies; it is attached automatically when the agent is in exactly one team and refused when in several. "
                       "parents = task ids it waits for (DAG). workspace = absolute path of a repo/dir (or 'scratch'). "
-                      "Follow it with task_get/task_list until done.",
-                      {"title": _S, "body": _S, "team": _S, "assignee": _S, "role": _S, "parents": _A, "workspace": _S, "priority": {"type": "integer"},
+                      "Follow it with task_get/task_list until done. A busy assignee (no free slot, no parents) is refused with "
+                      "reason=agent_busy unless if_busy='queue'. workstream = key/id of the workstream (epic) it belongs to; default: "
+                      "the workstream of this conversation/heartbeat; 'none' keeps it outside any workstream.",
+                      {"title": _S, "body": _S, "team": _S, "assignee": _S, "if_busy": _IF_BUSY, "role": _S, "parents": _A, "workspace": _S, "priority": {"type": "integer"},
+                       "workstream": _S,
                        "budget_usd": {"type": "number"}, "model": _S, "decompose": {"type": "boolean"},
                        "extra_write_roots": {"type": "array", "items": _S, "maxItems": 5,
                                              "description": "extra absolute dirs (inside the allowed workspace roots) the task may write without "
@@ -317,8 +328,9 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
                       "way to the owner.", {"id": _S, "reason": _S}, ["id"]),
     "task_retry": _t("Retry a blocked/failed task.", {"id": _S}, ["id"]),
     "task_comment": _t("Comment on a task (steer=true also sends it to the task's running run).", {"id": _S, "text": _S, "steer": {"type": "boolean"}}, ["id", "text"]),
-    "run_start": _t("Start an ad-hoc run of another agent with a prompt (optional cwd, budget_usd, model).",
-                    {"agent": _S, "prompt": _S, "cwd": _S, "budget_usd": {"type": "number"}, "model": _S}, ["agent", "prompt"]),
+    "run_start": _t("Start an ad-hoc run of another agent with a prompt (optional cwd, budget_usd, model). A busy agent is refused with "
+                    "reason=agent_busy (idle_alternatives + suggested_clone_id) unless if_busy='queue'.",
+                    {"agent": _S, "prompt": _S, "cwd": _S, "budget_usd": {"type": "number"}, "model": _S, "if_busy": _IF_BUSY}, ["agent", "prompt"]),
     "run_steer": _t("Send a message into another agent's running run.", {"id": _S, "text": _S}, ["id", "text"]),
     "run_stop": _t("Stop another agent's run.", {"id": _S}, ["id"]),
     "learn_propose": _t("Propose a knowledge/config change for ANOTHER agent through the learning pipeline (guard + eval + canary): "
@@ -397,6 +409,26 @@ MANAGER_TOOLS.update({
     "schedule_rm": _t("Delete one of YOUR scheduled jobs (history kept). To change a job: delete it and create a new one.", {"id": _S}, ["id"]),
     "schedule_run_now": _t("Fire one of YOUR jobs once now (e.g. to show the owner a sample). Refused while its previous fire runs.",
                            {"id": _S}, ["id"]),
+})
+# Luồng việc (manager/workstreams.py): mỗi epic một luồng — hội thoại + task + STATE.md riêng
+MANAGER_TOOLS.update({
+    "workstream_list": _t("Workstreams (one per epic / large piece of work): key, title, sprint, task counts, items needing the human. "
+                          "status active (default) | closed | all.", {"status": _S, "limit": _LIM}, ro=True),
+    "workstream_get": _t("One workstream (default: this conversation's): STATE.md, open tasks, recently done tasks, conversations.",
+                         {"id": _S}, ro=True),
+    "workstream_create": _t("Open a workstream for an epic or large piece of work the owner starts (title in the owner's words; key = the "
+                            "Jira epic/ticket key when there is one, e.g. LH-55166; sprint optional; state = initial STATE.md: goal, scope, "
+                            "repos/branches). Then file its tasks with task_create(workstream=key).",
+                            {"title": _S, "key": _S, "sprint": _S, "state": _S}, ["title"]),
+    "workstream_update": _t("Rename / re-key / change sprint of a workstream, or close it (status=closed) when its goal is done and nothing "
+                            "is open; status=active reopens it. id defaults to this conversation's workstream.",
+                            {"id": _S, "title": _S, "key": _S, "sprint": _S, "status": {"type": "string", "enum": ["active", "closed"]}}),
+    "workstream_state_set": _t("Replace the workstream's STATE.md (default: this conversation's) — your durable notes for it, reloaded into "
+                               "every fresh session: goal, decisions made, branches/PRs, task ids, open questions, next step. Keep it short "
+                               "(≤ ~60 lines), current, in English; the owner can read and edit it.", {"id": _S, "text": _S}, ["text"]),
+    "conversation_set_workstream": _t("Attach THIS conversation (a lobby conversation with the owner) to a workstream when the owner says it is "
+                                      "about that epic. Only the owner moves a conversation between two workstreams.",
+                                      {"workstream": _S}, ["workstream"]),
 })
 MANAGER_READ_TOOLS = frozenset(n for n, t in MANAGER_TOOLS.items() if (t.get("annotations") or {}).get("readOnlyHint"))
 _KNOW = ("skills_list", "skill_view")

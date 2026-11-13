@@ -40,8 +40,9 @@ STATUSES = ("active", "paused", "done")
 LIVE = ("queued", "running", "waiting_human")
 CHANNEL_RE = re.compile(r"^(web|cli|tui|telegram:-?\d{1,20}|slack:[CDG][A-Z0-9]{2,20})$")  # slack: DM (D…) / kênh (C…, G…)
 DEFAULTS: dict[str, Any] = {
-    "enabled": True, "tick_s": 15, "catchup_grace_s": 3600, "max_failures": 3, "default_budget_usd": 0.5, "prompt_max_chars": 4000,
-    "min_interval_s": 900, "manager_max_active": 10, "manager_run_now_per_hour": 6, "manager_daily_budget_usd": None,
+    # hạn mức (ngân sách, độ dài prompt, trần của điều phối viên): null = không giới hạn — người đặt trong Cài đặt nếu muốn
+    "enabled": True, "tick_s": 15, "catchup_grace_s": 3600, "max_failures": 3, "default_budget_usd": None, "prompt_max_chars": None,
+    "min_interval_s": None, "manager_max_active": None, "manager_run_now_per_hour": None, "manager_daily_budget_usd": None,
 }
 
 
@@ -150,8 +151,8 @@ class ScheduleService:
         prompt = str(p.get("prompt") if p.get("prompt") is not None else cur.get("prompt") or "").strip()
         if not prompt:
             raise HubError("thiếu 'prompt' (việc cần làm mỗi lượt)")
-        mx = int(self.cfg("prompt_max_chars"))
-        if len(prompt) > mx:
+        mx = self.cfg("prompt_max_chars")
+        if mx is not None and len(prompt) > int(mx):
             raise HubError(f"prompt dài {len(prompt)} ký tự > {mx}")
         expr_in = p.get("expr") or p.get("schedule") or cur.get("expr")
         tzname = cur.get("tz") or cron.local_tz_name()
@@ -224,7 +225,10 @@ class ScheduleService:
             if method == "schedule.resume":
                 return self._manager_spec_problem(caller, {}, existing=r)
             if method == "schedule.run_now":
-                cap = int(self.cfg("manager_run_now_per_hour"))
+                cap = self.cfg("manager_run_now_per_hour")
+                if cap is None:  # không giới hạn
+                    return None
+                cap = int(cap)
                 since = iso(self.now() - timedelta(hours=1))
                 n = self.conn.execute("SELECT COUNT(*) FROM audit_log WHERE kind='schedule.run_now' AND actor LIKE 'manager:%' AND ts>=?", (since,)).fetchone()[0]
                 if int(n) >= cap:
@@ -249,16 +253,16 @@ class ScheduleService:
         except cron.CronError:
             return None  # lỗi cú pháp — service báo HubError rõ ràng (không phải vi phạm quyền)
         gap = cron.min_interval_s(spec, now=self.now(), tz=tz)
-        floor = float(self.cfg("min_interval_s"))
-        if gap is not None and gap < floor:
+        floor = self.cfg("min_interval_s")
+        if gap is not None and floor is not None and gap < float(floor):
             return f"lịch chạy dày hơn mức tối thiểu cho điều phối viên: {int(gap)} s < {int(floor)} s (`schedules.min_interval_s`, chỉ người đổi)"
         cap = perms.bounds().get("max_budget_usd_per_run")
         b = merged.get("budget_usd")
-        if b is None or (cap is not None and float(b) > float(cap)):
+        if cap is not None and (b is None or float(b) > float(cap)):
             return f"budget_usd mỗi lượt phải có và ≤ config_bounds.max_budget_usd_per_run={cap}"
         active = [r for r in self.list(status="active", created_by="manager:%", limit=1000) if r["id"] != (existing or {}).get("id")]
-        mx = int(self.cfg("manager_max_active"))
-        if len(active) >= mx:
+        mx = self.cfg("manager_max_active")
+        if mx is not None and len(active) >= int(mx):
             return f"đã có {len(active)}/{mx} lịch đang bật do điều phối viên tạo (`schedules.manager_max_active`, chỉ người đổi) — xoá bớt lịch cũ"
         day_cap = self.cfg("manager_daily_budget_usd")
         if day_cap is None:
@@ -580,7 +584,8 @@ class ScheduleService:
                 if conv is None:
                     raise Blocked("chưa có điều phối viên")
                 conv_id = conv["id"]
-                run = mgr._submit(conv, schedule_prompt(r, conv, manual=manual), kind="schedule", budget=r.get("budget_usd"))
+                run = mgr._submit(conv, schedule_prompt(r, conv, manual=manual), kind="schedule", budget=r.get("budget_usd"),
+                                  extra_opts={"schedule_id": r["id"]})
                 run_id = run["id"]
                 mgr._add_msg(conv_id, "schedule", f"⏰ Lịch '{r['name']}' ({r.get('describe') or r['expr']}) chạy{' (chạy ngay)' if manual else ''}.", run_id)
                 self.conn.execute("UPDATE manager_conversations SET turns=turns+1 WHERE id=?", (conv_id,))

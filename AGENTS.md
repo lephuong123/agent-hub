@@ -153,7 +153,8 @@ Chi tiết, hợp đồng với A, lệch BRD, nghiệm thu thật: `docs/dev-no
 | Module | Vai trò |
 |---|---|
 | `evals/golden.py` | Golden task do NGƯỜI quản lý (Q-07): DB + bản sao `policy/golden/`; agent/vòng học chỉ gợi ý (`golden.suggested`) |
-| `evals/checkers.py`, `evals/judge.py` | Chấm tất định (regex/contains/json_schema/command/all) + LLM judge `claude -p --json-schema --no-session-persistence` (run `eval_judge`) |
+| `evals/style.py`, `evals/style_report.py` | Chấm phong cách trả lời theo `prompt.RESPONSE_STYLE` (hàm thuần; checker `response_style`) + chấm offline tin điều phối viên thật: RPC chỉ đọc `eval.style`, CLI `cfharness eval style` |
+| `evals/checkers.py`, `evals/judge.py` | Chấm tất định (regex/contains/json_schema/command/response_style/all) + LLM judge `claude -p --json-schema --no-session-persistence` (run `eval_judge`) |
 | `evals/gate.py`, `evals/overlay.py` | `hub.evals.gate.check(proposal)` / `post_apply(entry)` (async) — chạy golden task trên BẢN SAO home (`run_opts.eval_overlay`, run kind=`eval`), N lần, ngưỡng tụt, ngân sách; tụt sau áp dụng → B tự rollback (`eval_gate`) |
 | `learning_ops/regression.py` | FR-LN-17: so correction/lỗi/cost trước–sau → `ledger.rollback(actor="regression_monitor")` |
 | `learning_ops/curator.py` | FR-LN-08 pha 1 tất định (14/30 ngày, pin), archive qua `Ledger.apply` của A (`actor=curator`) |
@@ -282,7 +283,7 @@ Chi tiết, lý do chọn `httpx2`, test chứng minh, việc dở: `docs/dev-no
 | `chat/media.py` | `bot.media` (`MediaBase` dùng chung mọi kênh; `MediaChat` = Telegram, Slack: `chat/slack/media.py`): ảnh/tệp văn bản người gửi (tải SAU allowlist, kiểm cỡ trước `getFile`, album gom một tin) → `manager.chat{images, files}`; thoại → báo chưa hỗ trợ; dòng `[[file: <tương đối>]]` trong trả lời điều phối viên → `sendDocument` (chỉ tệp thường trong cwd hội thoại, không symlink, ≤ `deliver_max_bytes`, không chứa secret). Test: `tests/test_telegram_media.py` |
 
 Bất biến: lệnh/nút từ chat CHỈ đi qua `Daemon.call_as(auth.telegram_caller(hub, chat_id), …)` (cổng HUMAN_ONLY + audit kênh `telegram:<chat_id>`);
-`telegram_caller(hub, chat_id, from_id)` là người chỉ khi bot bật VÀ chat ∈ `allowed_chat_ids` VÀ người gửi/bấm được phép (chat riêng: from.id = chat; nhóm: `allow_groups` + from.id ∈ `allowed_user_ids`). Nội dung agent (lệnh, kết quả) chỉ trong `<pre>` sau tiền tố cố định, KHÔNG BAO GIỜ cùng tin với nút; mọi "Cho phép" 2 bước. Chat
+`telegram_caller(hub, chat_id, from_id)` là người chỉ khi bot bật VÀ chat ∈ `allowed_chat_ids` VÀ người gửi/bấm được phép (chat riêng: from.id = chat; nhóm: `allow_groups` + from.id ∈ `allowed_user_ids`). Nội dung agent chỉ đứng SAU tiền tố cố định, KHÔNG BAO GIỜ cùng tin với nút: lệnh (tin duyệt) trong `<pre>`; trả lời/kết quả/câu hỏi là markdown → HTML whitelist qua `chat/mdconv.py` (không `<a>`, link thành chữ `nhãn (URL)`, `/lệnh` trong `<code>`; cờ `notify.telegram.agent_render: pre` quay lại `<pre>` — docs/dev-notes/telegram.md mục 2026-11-13); mọi "Cho phép" 2 bước. Chat
 ngoài allowlist: không trả lời, audit `telegram.ignored`. Nút "Luôn cho phép…" chỉ khi approval có `always_offer` (daemon tính,
 cùng kiểm tra với `always_prepare` — LLM-2 trong `docs/dev-notes/hardening-SEC.md`), 2 bước, bước 2 nêu luật sẽ tạo. Nonce nút bị tiêu (cả nhóm) TRƯỚC khi gọi RPC; offset `getUpdates` lưu TRƯỚC khi xử lý.
 Token bot chỉ ở secret store (không đọc env, không in, không trả qua RPC). Thêm lệnh chat ghi trạng thái → gọi qua `self.call(...)` (không gọi
@@ -326,12 +327,20 @@ tĩnh mới đặt trong `web/static/`. Không bao giờ đưa token người/kh
 Duyệt: hiện TOÀN BỘ thao tác (`present.action_view`, không cắt); lớp nặng (`notify.telegram.confirm_classes` + `file`, tài nguyên bảo vệ) cần bước 2. "Luôn cho phép" (`approve_always`) chỉ hiện khi `a.always_offer` và LUÔN cần bước 2 nêu luật. `config.set` chỉ khoá trong `SAFE_CONFIG`.
 Agent trong run: sandbox chặn TCP localhost (đã kiểm thật) + denyRead `HUB_HOME/auth` + `cfharness web` forbidden trong classifier.
 
+### Web public (tunnel TLS) + TOTP + LaunchDaemon + Claude dùng chung — `docs/dev-notes/web-public.md`
+`web/public.py` (`web.public_origin` chỉ https, `client_ip` chỉ tin header proxy khi có public_origin + peer loopback, `LoginLimiter` theo IP/toàn cục/ngày),
+`web/totp.py` (RFC 6238 stdlib, `HUB_HOME/auth/totp*.json` 0600), `/enroll` + ô mã ở `/login`, `cfharness web totp enroll|status|disable`, `web --no-link`.
+Bind VẪN loopback; nhánh config `web` ∈ `integrity.SECURITY_KEYS`, không có trong danh mục Cài đặt web; MCP HTTP KHÔNG public.
+`systems/autostart.LaunchDaemonPlan` + `cfharness admin install-daemon --user U [--web-port N] [--write]` (∈ `HUB_HUMAN_ONLY_CLI`).
+Secret `CLAUDE_CODE_OAUTH_TOKEN` → env của mọi tiến trình `claude` (`ClaudeCliRuntime(secrets=)`, `child_env(oauth_token=)` — tạo runtime mới phải truyền
+`secrets=hub.secrets`); không bao giờ vào argv/DB/plist. Test: `tests/test_web_public.py`.
+
 ## M7 luồng MGR-UI — Điều phối viên trên web + Telegram + terminal
 Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes/M7-ui.md`. Ảnh: `docs/screenshots/web/16-…18-*.png`, `docs/screenshots/m2/10-11-dieu-phoi*.svg`. Không migration, không RPC mới.
 
 | Module | Vai trò |
 |---|---|
-| `web/manager.py` | Trang "Điều phối" (`/manager`, đầu menu): chat theo conversation kênh `web` (`manager.chat/history/conversations`), SSE `/sse/manager` (agent = điều phối viên: delta/reply/action/run_end/tick), `/partials/manager`, `POST /manager/send`; `ACTIONS` `manager_set`/`manager_unset` (xác nhận) |
+| `web/manager.py` | Trang "Điều phối" (`/manager`, đầu menu): chat theo conversation kênh `web` (`manager.chat/history/conversations`), SSE `/sse/manager` (agent = điều phối viên: delta/draft/seg/think/tool/reply/action/run_end/tick, mọi message mang `seq` → client bỏ trùng + tự nối lại `since=<seq cuối>`), `/partials/manager`, `POST /manager/send`, `POST /manager/stop` (nút Dừng: chỉ run của điều phối viên thuộc hội thoại điều phối, `run.stop` audit `web`); `ACTIONS` `manager_set`/`manager_unset` (xác nhận) |
 | `web/present.py` (`mgr_*`) | Thuần: đích `manager.action` → link NỘI BỘ (loại đã biết + id an toàn), chuẩn hoá history/conversation |
 | `chat/manager_chat.py` | `hub.telegram.manager`: tin không `/` → `manager.chat(channel=telegram:<chat>)`, reply → đúng conversation (`hub_state telegram.mgr_*`), `/moi`, `manager.reply` (theo `channel`) → khung WT-8 |
 | `web/manager_stub.py` | Stub `manager.*` cùng chữ ký — CHỈ test/demo (`install(daemon, force=)`) |
@@ -341,8 +350,11 @@ Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes
 | `tui/manager.py` | `ManagerScreen` (phím `m` ở `top`): hội thoại + "Hành động" (Enter → Attach/Tasks, chỉ đích hợp lệ) + transcript `RichLog(markup=False)` + ô nhập; Ctrl-N mới, Ctrl-T dừng lượt. Hội thoại kênh `cli` DÙNG CHUNG với `cfharness chat`; audit kênh `tui` |
 | `termsafe.py` | `clean()`/`one_line()`: bỏ ANSI/OSC/C1, điều khiển, bidi, zero-width trước khi in chữ agent ra terminal |
 
-Bất biến: chữ của điều phối viên (trả lời, tóm tắt/đích hành động) là DỮ LIỆU — web vẽ bằng autoescape + `pre-wrap` (không markdown, không `|safe`,
-không link do agent đặt; HTML qua SSE vẽ phía server, delta gán `textContent`); Telegram chỉ trong `<pre>` sau tiền tố cố định, không bao giờ kèm nút.
+Bất biến: chữ của điều phối viên (trả lời, tóm tắt/đích hành động) là DỮ LIỆU. Web: câu trả lời/báo vẽ bằng `present.md()` đã cứng hoá
+(chủ repo chốt Q1 2026-11-13 — `docs/dev-notes/plan-chat-ui-claude.md`: `html=False`, không `<img>`, link ngoài `rel=nofollow noopener noreferrer`
++ tên miền, `javascript:`/`data:` không thành link, không `style=`) — đầu ra của `md()` là thứ DUY NHẤT được `|safe`/innerHTML (`draft`/`reply` qua
+SSE); tóm tắt/đích hành động, suy nghĩ, tên tool, tin của NGƯỜI vẫn là autoescape/`textContent` (`pre-wrap`); link nội bộ chỉ từ `mgr_target`;
+delta gán `textContent`; Telegram chỉ sau tiền tố cố định (markdown → HTML whitelist, `chat/mdconv.py`), không bao giờ kèm nút.
 Mọi ghi từ web qua `post_guard` (CSRF + khoá phiên WT-1) với `_audit.channel=web`; từ Telegram qua `bot.call` (cổng người + allowlist from.id, audit
 `telegram:<id>`). Terminal (REPL/TUI): chữ agent qua `termsafe.clean` + `rich.Text` (không markup, không OSC 8 link); `cfharness chat` ∈ `HUB_HUMAN_ONLY_CLI`.
 Ngoại lệ (chủ repo quyết 2026-10-26, giống Claude Code): `cfharness chat` fullscreen + màn xem agent vẽ lời agent bằng MARKDOWN qua `tui/cc_render.markdown_text`
@@ -384,7 +396,7 @@ Kế hoạch, quyết định, tiến độ: `docs/dev-notes/ux-plan.md`. Migrat
 
 Bất biến: không bao giờ tự trả lời thay người (không `expired`). Agent không trả lời/chuyển/huỷ câu hỏi (HUMAN_ONLY + classifier). Điều phối viên chỉ
 `question.answer|escalate` khi câu hỏi `with_manager` và không phải của chính nó — luật ở `manager/permissions.check_rpc` (cả 2 lớp). Nội dung câu hỏi
-và nhãn lựa chọn là DỮ LIỆU agent (đã che secret, bỏ ký tự điều khiển/vô hình): Telegram đặt trong `<pre>`, nút chỉ mang số (WT-8).
+và nhãn lựa chọn là DỮ LIỆU agent (đã che secret, bỏ ký tự điều khiển/vô hình): Telegram đặt sau tiền tố cố định (markdown đã escape, `bot.agent_body`), nút chỉ mang số (WT-8).
 
 ## Đổi tên cfharness — tên mới + tên cũ, `home migrate`
 Chi tiết, cách áp, việc người dùng phải làm, lệch BRD: `docs/dev-notes/rename-cfharness.md`. Test: `tests/test_rename_cfharness.py`.
@@ -434,6 +446,14 @@ Bất biến: `created_by` lấy từ người gọi. Điều phối viên chỉ
 `schedules.*` (kiểm toàn vẹn), không từ lượt của lịch; luật ở `ScheduleService.manager_check`, gọi từ `manager/permissions.check_rpc` (2 lớp) và
 `_gate` (lần 3). Nội dung lịch do điều phối viên viết vào prompt trong khung `<untrusted-data>`, tiêu đề `[cfharness · SCHEDULED JOB · key …]`
 (không bao giờ thành "tin người"). Thêm luật/ trần → ca đỏ→xanh trong `tests/test_schedules.py`.
+
+## Luồng việc (workstream) — mỗi epic một luồng cho điều phối viên
+Chi tiết: `docs/dev-notes/workstreams.md`. Bảng `workstreams` (v24) + `workstream_id` trên `manager_conversations`/`tasks`; service
+`manager/workstreams.py` (`hub.manager.ws`). Session mới của hội thoại trong luồng nạp STATE.md + task mở (`context_block`); Sảnh nạp
+danh sách luồng. Tick xử lý MỘT luồng mỗi lượt trong hội thoại nhịp riêng của luồng. `notify_owner` của task thuộc luồng → hội thoại
+của luồng. Tool `workstream_*`, `conversation_set_workstream`, `task_create(workstream)`. RPC người `workstream.create|update`,
+`manager.conversation_update|read` (HUMAN_ONLY). Web `/manager?w=` + thanh bên Sảnh/Luồng; REPL `/ws`.
+Test: `tests/test_manager_workstreams.py`, `tests/test_web_workstreams.py`.
 
 ## Hồ sơ phê duyệt — `approval.profile` strict|balanced|autonomous, giao điều phối viên duyệt
 Chi tiết, dữ liệu hub thật, bảng profile, ranh giới, lưu ý cài đặt cũ: `docs/dev-notes/approval-profiles.md`. Migration **v18**
@@ -553,3 +573,20 @@ Chi tiết: `docs/dev-notes/update.md`. Không migration. Test: `tests/test_upda
 
 Bất biến: `update.start` ∈ HUMAN_ONLY (không ở MANAGER_ALLOWED), `cfharness update` ∈ `HUB_HUMAN_ONLY_CLI`; tag chỉ dạng `vX.Y.Z`, repo cố định
 (`updater.REPO`); có run chạy/chờ → từ chối trừ `force`. Helper không được import `cfharness` (venv bị cài đè trong lúc chạy).
+
+## Tổng quan máy (Q6) — mỗi hub xuất trạng thái số liệu, admin xem mọi hub
+Chi tiết, thiết lập nhóm/thư mục, giới hạn: `docs/dev-notes/admin-overview.md`. Không migration. Test: `tests/test_admin_overview.py`.
+- `admin_overview.py`: `hub.admin_export` (tắt mặc định, `admin_export.*` ∈ SECURITY_KEYS) ghi nguyên tử `<dir>/<user-os>.json` 0640 nhóm
+  `cfharness-admin`; RPC `admin.overview` (CHỈ ĐỌC, ∈ HUMAN_ONLY); CLI `cfharness admin overview` (`admin_cli.py`); web `/admin/overview` (`web/admin_pages.py`).
+- Bất biến: nội dung file CHỈ theo `SPEC` (số/bool/regex id-enum) — không bao giờ chữ tự do; thêm trường → `SPEC` + ca trong test. Người đọc coi
+  file là dữ liệu không tin cậy (`O_NOFOLLOW`, trần cỡ, lọc lại `SPEC`, kiểm chủ file). Sandbox agent chặn đọc/ghi `/Users/Shared/cfharness`.
+
+## Giam agent trong workspace W — `workspace.confine` (P2 đa instance)
+Chi tiết, spike (claude 2.1.319: `allowRead` trong `denyRead` hoạt động, glob không mở lại), giới hạn: `docs/dev-notes/confine.md`,
+`docs/dev-notes/hardening-SEC.md` §1.1. Không migration. Test: `tests/test_confine.py`, ca `DESTRUCTIVE_CONFINE` trong `tests/test_guard_classifier.py`.
+- `confine.py`: đọc cấu hình, `read_roots`/`deny_read_roots`, `apply_sandbox` (denyRead `$HOME` + allowRead W/toolchain/workspace hub),
+  `confine_only_sandbox` (trust_full / sandbox tắt), `permission_deny_rules` (anh em của W), registry hub `~/.config/cfharness/hubs.json`
+  (env `CFHARNESS_HUBS_REGISTRY`; conftest đặt về thư mục tạm).
+- Bất biến: `workspace.confine` chỉ người (`config.set` HUMAN_ONLY, khoá ∈ `integrity.SECURITY_KEYS` — khoá con có dấu chấm được hỗ trợ);
+  khi bật, `trust_full` KHÔNG gỡ giam (Q4) và `guard.sandbox.enabled=false` vẫn để lại sandbox chỉ-giam; mọi workspace/cwd/worktree/
+  `extra_write_roots` phải trong W (`validate_workspace`, `check_path`). Không dùng glob trong `sandbox.filesystem.allowRead` (không mở lại).

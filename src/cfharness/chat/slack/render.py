@@ -51,72 +51,22 @@ def html_to_mrkdwn(text: str) -> str:
 
 
 # ---------------------------------------------------------------- khung trả lời agent (`<blockquote>`, chỉ Slack sinh — bot.agent_frame)
-# Vào: chữ agent ĐÃ escape `& < >`. Ra: mrkdwn trong trích dẫn. Agent chỉ tạo được `<…>` là link do hàm này dựng (chỉ http/https)
-# và mention MỘT người dùng đúng dạng `<@U…>`/`<@W…>` (điều phối viên cần tag người review) — KHÔNG `<!channel>`/`<!here>`/
-# `<!subteam^…>`, không `<@U…|nhãn>` giả tên. Link có nhãn trông như URL/tên miền → hiện URL thật (không giả đích).
+# Vào: chữ agent ĐÃ escape `& < >` (bot.agent_frame). Ra: mrkdwn trong trích dẫn — chat/mdconv.py (markdown-it, P1-9): tiêu đề → đậm,
+# danh sách → •, `**`/`*`/`~~` → `*`/`_`/`~`, bảng → khối mã căn cột hoặc mỗi hàng một dòng, `---` bỏ. Agent chỉ tạo được `<…>` là link
+# do mdconv dựng (chỉ http/https) và mention MỘT người dùng đúng dạng `<@U…>`/`<@W…>` (điều phối viên cần tag người review) — KHÔNG
+# `<!channel>`/`<!here>`/`<!subteam^…>`, không `<@U…|nhãn>` giả tên. Link có nhãn trông như URL/tên miền → hiện URL thật.
 _BQ = re.compile(r"<blockquote>(.*?)</blockquote>", re.S)
 _SMALL = re.compile(r"\n?<small>(.*?)</small>\s*$", re.S)
-_URL_CH = r"(?:(?!&lt;|&gt;)[^\s|<>`*])"
-_MDLINK = re.compile(r"\[([^\]\n]{1,200})\]\((https?://" + _URL_CH + r"+?)\)")
-_BARE = re.compile(r"(?<![<|\w])https?://" + _URL_CH + r"+")
-_INLINE = re.compile(r"(`[^`\n]+`)")
-_DOMAINISH = re.compile(r"://|^\s*(?:www\.)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?\s*$")
-_TRAIL = ".,;:!?'\")]"
-_USER_MENTION = re.compile(r"&lt;@([UW][A-Z0-9]{8,11})&gt;")
 
 
-def _bare_url(m: re.Match) -> str:
-    url, tail = m.group(0), ""
-    while url and url[-1] in _TRAIL:
-        if url[-1] == ")" and url.count("(") >= url.count(")"):
-            break
-        url, tail = url[:-1], url[-1] + tail
-    return f"<{url}>{tail}" if url.split("://", 1)[1] else m.group(0)
-
-
-def _md_link(m: re.Match) -> str:
-    label, url = m.group(1).strip(), m.group(2)
-    if not label or _DOMAINISH.search(label):
-        return f"<{url}>"
-    return f"<{url}|{label.replace('|', '¦')}>"
-
-
-def _inline(seg: str) -> str:
-    """Một đoạn dòng ngoài `code`: markdown thường gặp → mrkdwn, rồi link."""
-    seg = re.sub(r"\*\*(.+?)\*\*|__(.+?)__", lambda m: f"*{m.group(1) or m.group(2)}*", seg)
-    seg = re.sub(r"~~(.+?)~~", r"~\1~", seg)
-    out, pos = [], 0
-    for m in _MDLINK.finditer(seg):
-        out.append(_BARE.sub(_bare_url, seg[pos:m.start()]))
-        out.append(_md_link(m))
-        pos = m.end()
-    out.append(_BARE.sub(_bare_url, seg[pos:]))
-    return _USER_MENTION.sub(lambda m: f"<@{m.group(1)}>", "".join(out))
+def _unescape(s: str) -> str:
+    return s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
 def quote_mrkdwn(body: str) -> str:
-    lines: list[str] = []
-    fence = False
-    for raw in body.split("\n"):
-        line = raw.rstrip()
-        if line.lstrip().startswith("```"):
-            fence = not fence
-            lines.append("> ```")
-            continue
-        if fence:
-            lines.append("> " + _code_safe(line))
-            continue
-        h = re.match(r"\s{0,3}#{1,6}\s+(.*)", line)
-        if h:
-            line = f"**{h.group(1).strip().strip('*')}**"
-        line = re.sub(r"^(\s*)[-*+]\s+", r"\1• ", line)
-        line = "".join(p if p.startswith("`") and p.endswith("`") and len(p) > 1 else _inline(p) for p in _INLINE.split(line))
-        lines.append("> " + line if line.strip() else ">")
-    if fence:
-        lines.append("> ```")
-    while lines and lines[-1] == ">":
-        lines.pop()
-    return "\n".join(lines) or "> "
+    from ..mdconv import to_slack_mrkdwn
+
+    return to_slack_mrkdwn(_unescape(body))
 
 
 def to_mrkdwn(text: str, *, html: bool) -> str:
@@ -131,6 +81,25 @@ def to_mrkdwn(text: str, *, html: bool) -> str:
     return "".join(out)
 
 
+_OPEN_ENT = re.compile(r"&[a-z]{0,4}$")
+
+
+def _cut_at(line: str, n: int, keep: int) -> int:
+    """Vị trí cắt dòng dài ≤ `n`: dấu cách gần nhất (nửa sau), lùi khỏi thực thể `&amp;`/`&lt;`/`&gt;` dang dở và token `<…>` (link,
+    mention) chưa đóng. `keep`: tiền tố của phần tiếp (trích dẫn) — điểm cắt luôn > `keep` để vòng cắt luôn tiến."""
+    cut = n
+    sp = line.rfind(" ", keep + 1, n + 1)
+    if sp > n // 2:
+        cut = sp
+    m = _OPEN_ENT.search(line, 0, cut)
+    if m and m.start() > keep:
+        cut = m.start()
+    lt, gt = line.rfind("<", 0, cut), line.rfind(">", 0, cut)
+    if lt > gt and lt > keep and ">" in line[cut:]:
+        cut = lt
+    return max(cut, keep + 1)
+
+
 def split_sections(mrkdwn: str, limit: int = SECTION_MAX) -> list[str]:
     """Chia theo dòng thành các đoạn ≤ `limit`; khối ``` bị cắt ngang được đóng/mở lại ở ranh giới."""
     parts: list[str] = []
@@ -139,8 +108,10 @@ def split_sections(mrkdwn: str, limit: int = SECTION_MAX) -> list[str]:
     in_code = False
     fence = "```"  # khối mã trong trích dẫn (quote_mrkdwn) đóng/mở lại bằng "> ```" để không rơi khỏi trích dẫn
     for line in mrkdwn.split("\n"):
-        while len(line) > limit:  # dòng quá dài (hiếm) → cắt cứng
-            head, line = line[:limit - 8], line[limit - 8:]
+        while len(line) > limit:  # dòng quá dài (hiếm) → cắt (ưu tiên ở dấu cách, không bao giờ giữa thực thể / `<…>`)
+            quote = "> " if line.startswith(">") else ""  # dòng trích dẫn (`quote_mrkdwn`): phần sau vẫn trong trích dẫn (WT-8)
+            cut = _cut_at(line, limit - 8, len(quote))
+            head, line = line[:cut], quote + line[cut:].lstrip(" ")
             if cur:
                 parts.append("\n".join(cur) + ("\n" + fence if in_code else ""))
                 cur, size = ([fence] if in_code else []), (len(fence) + 1 if in_code else 0)

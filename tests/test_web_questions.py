@@ -199,8 +199,8 @@ def test_manager_timeline_groups_consecutive_actions_and_places_questions():
     acts.append({"kind": "action", "summary": "khác", "ts": "2026-10-19T01:00:12Z", "run_id": "r9", "ok": True, "target": {}})  # run khác hội thoại → bỏ
     qs = [{"id": "q1", "created_at": "2026-10-19T01:00:40Z", "status": "open", "run_id": "r1"}]
     tl = _timeline(msgs, acts, qs)
-    assert [x["kind"] for x in tl] == ["user", "actions", "manager", "question"]
-    assert len(tl[1]["items"]) == 3 and tl[1]["ok"] is False
+    assert [x["kind"] for x in tl] == ["day", "user", "actions", "manager", "question"]  # P2: vạch ngăn ngày trước mục đầu của ngày
+    assert len(tl[2]["items"]) == 3 and tl[2]["ok"] is False
     q = question_from_event({"type": "question.answered", "agent_id": "boss", "ts": "t",
                              "payload": {"question_id": "q1", "keys": ["2"], "labels": ["B"], "text": "note", "by": "user", "conversation_id": "mc1"}})
     assert q["status"] == "answered" and q["answer"] == {"keys": ["2"], "labels": ["B"], "text": "note"} and q["conversation_id"] == "mc1"

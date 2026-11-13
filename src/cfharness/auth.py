@@ -88,6 +88,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "slack.setup", "slack.pending", "slack.allow", "slack.revoke", "slack.disable", "slack.test",
         # M7: chỉ định điều phối viên (cấp quyền manager), nhắn/tick manager (agent khác không được "ra lệnh" cho manager)
         "manager.set", "manager.chat", "manager.tick",
+        # luồng việc + sửa hội thoại (đổi tên/gắn luồng/lưu trữ): người; điều phối viên dùng tool hub-self workstream_* (managerself.call)
+        "manager.conversation_update", "manager.conversation_read", "workstream.create", "workstream.update", "workstream.delete",
         # UX: trả lời/chuyển/huỷ câu hỏi của agent — agent không tự trả lời câu hỏi (của mình hay agent khác). Điều phối viên trả lời/
         # chuyển lên người qua MANAGER_ALLOWED, chỉ khi câu hỏi đang `with_manager` (manager/permissions.check_rpc)
         "question.answer", "question.escalate", "question.cancel",
@@ -99,6 +101,10 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "schedule.create", "schedule.update", "schedule.pause", "schedule.resume", "schedule.rm", "schedule.run_now",
         # Cập nhật cfharness (updater.py): cài đè phần mềm + dừng/khởi động lại daemon NGOÀI sandbox — chỉ người
         "update.start",
+        # Tổng quan máy (admin_overview.py): CHỈ ĐỌC nhưng lộ hoạt động của user OS khác trên máy (chi phí, số run) — chỉ người
+        "admin.overview",
+        # Xem/mở file trong workspace của run/agent (fileview.py): đọc ngoài sandbox của agent gọi (workspace agent KHÁC) + mở app trên máy
+        "file.read", "file.open",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})
@@ -190,7 +196,8 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.curation.rpc", "MUTATING_CURATION"), ("cfharness.chat.rpc", "MUTATING_TELEGRAM"), ("cfharness.chat.slack.rpc", "MUTATING_SLACK"),
                       ("cfharness.manager.rpc", "MUTATING_MANAGER"),
                       ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS"),
-                      ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE")):
+                      ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE"),
+                      ("cfharness.fileview", "MUTATING_FILES")):
         try:
             import importlib
 
@@ -456,7 +463,7 @@ def slack_caller(hub: "Hub", chat_id: Any, user_id: Any = None) -> Caller:
 
     Là NGƯỜI chỉ khi kênh 2 chiều bật (`notify.slack.enabled` + `interactive`), `chat_id` ∈ `notify.slack.allowed_chat_ids` VÀ người
     gửi/bấm (`user_id`, Slack đã xác thực qua kết nối Socket Mode) ∈ `allowed_user_ids`. Chat không phải DM (`D…`) chỉ khi
-    `allow_channels` bật rõ ràng — khi đó MỌI kênh có bot (không cần nằm trong `allowed_chat_ids`); thành viên khác của kênh vẫn
+    `allow_channels` bật (mặc định bật từ v0.2.3) — khi đó MỌI kênh có bot (không cần nằm trong `allowed_chat_ids`); thành viên khác của kênh vẫn
     không phải người. Workspace (`team_id`) được bot kiểm trước khi gọi.
     Allowlist chỉ người sửa được (`slack.allow` ∈ HUMAN_ONLY; nhánh `notify` của config.yaml được kiểm toàn vẹn). Kênh audit: `slack:<chat_id>`.
     """

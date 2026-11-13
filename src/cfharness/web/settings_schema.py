@@ -30,7 +30,7 @@ _ITEM = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 class Setting:
     key: str
     label: str
-    kind: str  # int | float | bool | choice | multi | time | text
+    kind: str  # int | float | bool | choice | multi | time | text | list (mỗi dòng / dấu phẩy một mục)
     hint: str = ""
     choices: tuple[str, ...] = ()
     nullable: bool = False  # để trống / chọn "(mặc định)" = null
@@ -44,7 +44,7 @@ def _s(key: str, label: str, kind: str, hint: str = "", **kw: Any) -> Setting:
 
 GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
     ("runs", "Run & ngân sách", (
-        _s("hub.max_concurrent_runs", "Số run chạy đồng thời tối đa (toàn hub)", "int", "vd 4", min=1),
+        _s("hub.max_concurrent_runs", "Số run chạy đồng thời tối đa (toàn hub)", "int", "để trống = không giới hạn; vd 4", nullable=True, min=1),
         _s("runs.default_max_budget_usd", "Ngân sách mặc định mỗi run ($)", "float", "để trống = không giới hạn; vd 1.5", nullable=True, min=0),
         _s("runs.stop_grace_s", "Thời gian chờ dừng êm (giây)", "int", "vd 10", min=0),
         _s("budget.hub_usd_per_day", "Ngân sách ngày toàn hub ($)", "float", "để trống = không giới hạn", nullable=True, min=0),
@@ -60,7 +60,7 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
            choices=ON_TIMEOUT),
         _s("questions.via_manager", "Agent hỏi điều phối viên trước khi hỏi người", "bool"),
         _s("questions.manager_timeout_s", "Điều phối viên không trả lời sau (giây) → chuyển người", "int", "vd 900", min=1),
-        _s("questions.max_open_per_run", "Số câu hỏi mở tối đa mỗi run", "int", "vd 3", min=1),
+        _s("questions.max_open_per_run", "Số câu hỏi mở tối đa mỗi run", "int", "để trống = không giới hạn; vd 3", nullable=True, min=1),
     )),
     ("notify", "Thông báo", (
         _s("notify.reminder_interval_s", "Nhắc lại yêu cầu duyệt mỗi (giây)", "int", "vd 900, giãn dần", min=1),
@@ -74,6 +74,10 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
            choices=("status", "reaction")),
         _s("notify.slack.allow_channels", "Slack: cho tag bot trong kênh chung", "bool", "vẫn chỉ người trong allowlist"),
         _s("notify.slack.thread_followup", "Slack: nói tiếp trong thread không cần tag", "bool"),
+        _s("notify.slack.channel_root_posts", "Slack: báo cáo lịch đăng thẳng vào kênh (không vào thread)", "bool",
+           "chỉ kết quả lịch có nơi nhận là kênh đó; trả lời chat vẫn vào thread"),
+        _s("notify.slack.mention_reply", "Slack: kiểu trả lời khi được tag trong kênh", "choice",
+           "full = như cũ (nói đã giao việc gì…); result = chỉ kết quả, ngắn gọn, không kể cách xử lý", choices=("full", "result")),
         _s("notify.slack.thread_context", "Slack: đọc tin trước đó của thread làm ngữ cảnh", "bool"),
         _s("notify.slack.manager_progress", "Slack: tin tiến độ + nút Dừng cho điều phối viên", "bool"),
         _s("notify.slack.deliver_files", "Slack: gửi tệp kết quả", "bool"),
@@ -86,32 +90,35 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
     ("manager", "Điều phối viên", (
         _s("manager.heartbeat", "Nhịp heartbeat (tự tick)", "bool", "tắt = chỉ chạy khi người nhắn"),
         _s("manager.tick_interval_s", "Tick định kỳ dự phòng (giây)", "int", "vd 1800", min=1),
-        _s("manager.tick_budget_usd", "Trần chi phí mỗi tick ($)", "float", "vd 0.5", min=0),
+        _s("manager.tick_budget_usd", "Trần chi phí mỗi tick ($)", "float", "để trống = không giới hạn; vd 0.5", nullable=True, min=0),
         _s("manager.chat_budget_usd", "Trần chi phí mỗi lượt hội thoại ($)", "float", "để trống = theo agent", nullable=True, min=0),
         _s("manager.rotate_after_turns", "Đổi session sau (lượt)", "int", "vd 80", min=1),
         _s("manager.rotate_session_cost_usd", "Đổi session khi chi phí luỹ kế ≥ ($)", "float", "vd 3; 0 = tắt", min=0),
         _s("manager.rotate_context_tokens", "Session lớn từ (token ngữ cảnh)", "int", "vd 40000; tick/lịch luôn đổi session lớn", min=0),
         _s("manager.rotate_idle_s", "Đổi session lớn khi nghỉ ≥ (giây)", "int", "vd 3600 (cache nguội); 0 = tắt", min=0),
-        _s("manager.max_agents_created_per_day", "Tạo agent tối đa / ngày", "int", min=0),
-        _s("manager.max_tasks_per_hour", "Tạo task tối đa / giờ", "int", min=0),
-        _s("manager.max_runs_per_hour", "Chạy run tối đa / giờ", "int", min=0),
-        _s("manager.max_system_ops_per_hour", "Thao tác hệ thống ngoài tối đa / giờ", "int", min=0),
+        _s("manager.max_agents_created_per_day", "Tạo agent tối đa / ngày", "int", "để trống = không giới hạn", nullable=True, min=0),
+        _s("manager.max_tasks_per_hour", "Tạo task tối đa / giờ", "int", "để trống = không giới hạn", nullable=True, min=0),
+        _s("manager.max_runs_per_hour", "Chạy run tối đa / giờ", "int", "để trống = không giới hạn", nullable=True, min=0),
+        _s("manager.max_system_ops_per_hour", "Thao tác hệ thống ngoài tối đa / giờ", "int", "để trống = không giới hạn", nullable=True, min=0),
     )),
     ("tasks", "Task & team", (
         _s("tasks.failure_limit", "Số lần lỗi tối đa mỗi task", "int", "task không thuộc team", min=1),
         _s("tasks.require_completion_call", "Bắt agent gọi task_complete/task_block", "bool"),
-        _s("tasks.max_subtasks", "Số task con tối đa", "int", min=1),
+        _s("tasks.max_subtasks", "Số task con tối đa", "int", "để trống = không giới hạn", nullable=True, min=1),
         _s("tasks.review_budget_usd", "Trần chi phí run review ($)", "float", "để trống = như run thường", nullable=True, min=0),
         _s("runtime.claude.chrome.default_mode", "Trình duyệt mặc định của agent", "choice", "chrome/auto = Chrome THẬT của bạn",
            choices=BROWSER_MODES),
+        _s("runtime.claude.chrome.max_concurrent_runs", "Số run dùng Chrome cùng lúc", "int", "để trống = không giới hạn; vd 1 (Chrome thật dùng chung)",
+           nullable=True, min=1),
     )),
     ("schedules", "Lịch chạy", (
         _s("schedules.enabled", "Bật lịch chạy tự động", "bool", "tắt = không bắn lịch nào (lịch vẫn giữ)"),
         _s("schedules.catchup_grace_s", "Chạy bù nếu trễ không quá (giây)", "int", "vd 3600", min=0),
         _s("schedules.max_failures", "Lỗi liên tiếp → tự tạm dừng", "int", "vd 3", min=1),
-        _s("schedules.default_budget_usd", "Trần mỗi lượt khi lịch không đặt ($)", "float", "vd 0.5", min=0),
-        _s("schedules.manager_max_active", "Điều phối viên: số lịch đang bật tối đa", "int", min=0),
-        _s("schedules.min_interval_s", "Điều phối viên: khoảng tối thiểu giữa 2 lượt (giây)", "int", min=0),
+        _s("schedules.default_budget_usd", "Trần mỗi lượt khi lịch không đặt ($)", "float", "để trống = không giới hạn; vd 0.5", nullable=True, min=0),
+        _s("schedules.manager_max_active", "Điều phối viên: số lịch đang bật tối đa", "int", "để trống = không giới hạn", nullable=True, min=0),
+        _s("schedules.min_interval_s", "Điều phối viên: khoảng tối thiểu giữa 2 lượt (giây)", "int", "để trống = không giới hạn", nullable=True, min=0),
+        _s("schedules.manager_run_now_per_hour", "Điều phối viên: chạy-ngay tối đa / giờ", "int", "để trống = không giới hạn", nullable=True, min=0),
     )),
     ("learning", "Học & đánh giá", (
         _s("learning.review_budget_usd", "Trần chi phí review học ($)", "float", "để trống = không trần riêng", nullable=True, min=0),
@@ -121,15 +128,15 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
         _s("learning.review_scope", "Phạm vi review", "choice", "graph = review trích fact vào graph memory", choices=("combined", "skill", "memory", "graph")),
         _s("learning.graph_extract", "Trích xuất graph memory cuối session", "bool", "một lần gọi LLM rẻ mỗi session"),
         _s("learning.graph_mirror_memory", "Mirror MEMORY.md/USER.md vào graph", "bool", "mục memory mới → fact graph cùng tầng; mục mất → đóng fact"),
-        _s("learning.graph_extract_budget_usd", "Trần mỗi lần trích xuất graph ($)", "float", min=0),
-        _s("learning.graph_extract_daily_usd_per_agent", "Trần trích xuất graph / agent / ngày ($)", "float", min=0),
-        _s("learning.review_max_per_agent_per_day", "Review tối đa / agent / ngày", "int", min=0),
+        _s("learning.graph_extract_budget_usd", "Trần mỗi lần trích xuất graph ($)", "float", "để trống = không giới hạn", nullable=True, min=0),
+        _s("learning.graph_extract_daily_usd_per_agent", "Trần trích xuất graph / agent / ngày ($)", "float", "để trống = không giới hạn", nullable=True, min=0),
+        _s("learning.review_max_per_agent_per_day", "Review tối đa / agent / ngày", "int", "để trống = không giới hạn", nullable=True, min=0),
         _s("learning.canary_runs", "Canary: số run", "int", min=1),
         _s("learning.canary_hours", "Canary: số giờ", "int", min=1),
         _s("eval.enabled", "Bật eval trước khi áp dụng", "bool"),
         _s("eval.samples", "Số lần chạy mỗi golden task", "int", min=1),
-        _s("eval.budget_usd", "Trần chi phí một lần gate ($)", "float", min=0),
-        _s("eval.run_budget_usd", "Trần mỗi run eval ($)", "float", min=0),
+        _s("eval.budget_usd", "Trần chi phí một lần gate ($)", "float", "để trống = không giới hạn", nullable=True, min=0),
+        _s("eval.run_budget_usd", "Trần mỗi run eval ($)", "float", "để trống = không giới hạn", nullable=True, min=0),
         _s("eval.batch_enabled", "Eval theo lô hằng ngày", "bool"),
         _s("eval.batch_time", "Giờ chạy eval theo lô (giờ máy)", "time"),
         _s("eval.judge.model", "Model chấm điểm (judge)", "choice", choices=MODELS),
@@ -137,7 +144,7 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
         _s("curator.interval_days", "Curator chạy mỗi (ngày)", "int", min=1),
         _s("curation.enabled", "Bật curation liên agent", "bool"),
         _s("curation.model", "Model curation", "choice", choices=MODELS),
-        _s("curation.daily_budget_usd", "Trần chi phí curation / ngày ($)", "float", min=0),
+        _s("curation.daily_budget_usd", "Trần chi phí curation / ngày ($)", "float", "để trống = không giới hạn", nullable=True, min=0),
         _s("curation.cross_agent.llm_merge", "Gộp skill bằng LLM", "bool"),
         _s("curation.phase2.enabled", "Curator pha 2 (LLM)", "bool"),
         _s("digest.enabled", "Bật bản tin học hằng ngày", "bool"),
@@ -156,6 +163,18 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
         _s("telemetry.otel.exporter", "Exporter", "choice", choices=("otlp_http", "file")),
     )),
 )
+
+# `files.*`: sửa được trên web, nhưng thay đổi NỚI LỎNG (fileview.loosens) chỉ nhận khi dùng web trên chính máy chạy hub
+# (kiểm ở action `config_set` của app.py) — qua link public chỉ được siết.
+FILES_GROUP = ("files", "Xem / mở file", (
+    _s("files.cloud_download", "Cho tải file về khi dùng web qua link public (cloud)", "bool", "xem trong trình duyệt luôn được"),
+    _s("files.max_download_mb", "Dung lượng tối đa khi tải về / xem ảnh, PDF (MB)", "int", "1–50", min=1),
+    _s("files.open_extensions", "Loại file được mở bằng ứng dụng (máy chạy hub)", "list",
+       "mỗi dòng một đuôi, vd .pdf — chương trình/script/HTML/Office có macro luôn bị từ chối"),
+    _s("files.secret_patterns", "Tên file coi là bí mật (không xem/mở/tải qua web)", "list", "mỗi dòng một tên hoặc mẫu glob, vd .env, *.pem"),
+    _s("files.secret_allow", "Ngoại lệ (không coi là bí mật)", "list", "vd .env.example, *.pub"),
+))
+GROUPS = GROUPS + (FILES_GROUP,)
 
 # Khoá nới lỏng bảo vệ: web chỉ hiện giá trị + lệnh CLI.
 READONLY: tuple[tuple[str, str], ...] = (
@@ -176,9 +195,12 @@ READONLY: tuple[tuple[str, str], ...] = (
     ("manager.web_domains", "WebFetch của điều phối viên"),
     ("manager.allow_hermes_without_sandbox", "Khung rộng khi không có sandbox (Windows)"),
     ("workspace.allowed_roots", "Gốc workspace được phép"),
+    ("workspace.confine.root", "Giam agent trong workspace (W)"),
     ("runtime.kind", "Runtime"),
     ("runtime.claude.default_permission_mode", "Chế độ quyền mặc định"),
     ("runtime.claude.chrome.enabled", "Cho dùng Claude in Chrome"),
+    ("web.public_origin", "Địa chỉ web public (tunnel TLS)"),
+    ("web.session_max_age_s", "Tuổi tối đa phiên web (giây)"),
     ("telemetry.otel.endpoint", "Đích OTLP"),
     ("telemetry.otel.include_payloads", "Gửi kèm input tool"),
 )
@@ -202,6 +224,9 @@ def parse_form(form: FormData) -> tuple[str, Any]:
     s = BY_KEY.get(key)
     if s is None:
         raise ValueError(f"khoá '{key}' không sửa được từ web — dùng `cfharness config set` trong terminal")
+    if s.kind == "list":
+        items = [x.strip() for x in str(form.get("value") or "").replace(",", "\n").split("\n")]
+        return key, list(dict.fromkeys(x for x in items if x))
     if s.kind == "multi":
         picked = [str(v) for v in form.getlist("value") if str(v)]
         bad = [v for v in picked if v not in s.choices and not _ITEM.match(v)]
@@ -260,6 +285,8 @@ def view(cfg: dict[str, Any]) -> dict[str, Any]:
                 cur: Any = [str(x) for x in (v or [])]
                 extra = [x for x in cur if x not in s.choices]  # giá trị người đặt tay ngoài danh mục: vẫn hiện, bỏ tích = gỡ
                 rows.append({"s": s, "value": cur, "choices": list(s.choices) + extra})
+            elif s.kind == "list":
+                rows.append({"s": s, "value": "\n".join(str(x) for x in (v or [])), "count": len(v or [])})
             elif s.kind == "bool":
                 rows.append({"s": s, "value": "" if v is None else ("true" if v else "false")})
             else:

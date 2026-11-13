@@ -45,6 +45,15 @@ def _rt_dir(agent: dict[str, Any], run_id: str) -> Path:
     return Path(agent["home_path"]) / "runtime" / f"takeover-{run_id}"
 
 
+def _plugin_dirs(agent: dict[str, Any]) -> list[Path]:
+    from ..plugins import PluginError, resolve
+
+    try:
+        return [p.path for p in resolve(list(agent.get("plugins") or []))]
+    except PluginError as e:
+        raise HubError(str(e)) from e
+
+
 def build_takeover_argv(
     *,
     binary: str,
@@ -55,6 +64,7 @@ def build_takeover_argv(
     model: str | None,
     tool_policy: dict[str, Any],
     isolation: dict[str, Any],
+    plugin_dirs: list[Path] | None = None,
 ) -> list[str]:
     """argv `claude --resume …` tương tác (hàm thuần, test được)."""
     argv = [binary, "--resume", session_id]
@@ -70,6 +80,8 @@ def build_takeover_argv(
         argv += ["--append-system-prompt", system_prompt]
     if model:
         argv += ["--model", model]
+    for d in plugin_dirs or []:  # plugin của agent (plugins.py) — như run headless
+        argv += ["--plugin-dir", str(d)]
     pm = tool_policy.get("permission_mode")
     if pm and pm != "bypassPermissions":
         argv += ["--permission-mode", pm]
@@ -120,6 +132,7 @@ def prepare(hub: "Hub", ref: str) -> dict[str, Any]:
         model=run.get("model") or agent.get("model"),
         tool_policy=tp,
         isolation=iso,
+        plugin_dirs=_plugin_dirs(agent),
     )
     cwd = run.get("cwd") or str(Path(agent["home_path"]) / "workspaces" / run["id"])
     shown = redact_argv(argv)
@@ -175,3 +188,24 @@ def record(hub: "Hub", ref: str, *, exit_code: int | None = None, started_at: st
         make_event("run.takeover", run["agent_id"], {"takeover_run_id": tid, "of_run_id": run["id"], "exit_code": exit_code}, run_id=tid, session_id=run["session_id"])
     )
     return hub.store.get_run(tid)  # type: ignore[return-value]
+
+
+def takeover_env(info: dict[str, Any], paths: Any = None) -> dict[str, str]:
+    """Env cho `claude --resume` tương tác (chạy trong tiến trình của NGƯỜI): bỏ `env_strip`; hub có `CLAUDE_CODE_OAUTH_TOKEN` trong
+    secret store → đặt vào env (người cùng user OS đọc file secret trực tiếp — token KHÔNG đi qua RPC)."""
+    import os
+
+    from ..runtime.claude_cli import OAUTH_TOKEN_SECRET, oauth_token
+
+    env = {k: v for k, v in os.environ.items() if k not in set(info.get("env_strip") or [])}
+    if paths is None:
+        from ..paths import HubPaths
+
+        paths = HubPaths.resolve()  # TUI: CFHARNESS_HOME (cli đặt khi --home) hoặc home mặc định
+    if paths is not None:
+        from ..secrets import SecretStore
+
+        tok = oauth_token(SecretStore(paths.home / "secrets", env_fallback=False))
+        if tok:
+            env[OAUTH_TOKEN_SECRET] = tok
+    return env

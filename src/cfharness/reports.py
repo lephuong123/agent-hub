@@ -50,6 +50,12 @@ def cost_breakdown(conn, since: datetime, by: str = "agent") -> list[dict[str, A
     return [{by: r[0], "runs": r[1], "cost_usd": round(float(r[2]), 8)} for r in rows]
 
 
+def outcome_counts(conn, since: datetime) -> dict[str, int]:
+    """Số run đã KẾT THÚC từ `since` theo outcome (tổng quan máy — admin_overview.py)."""
+    return {str(r[0]): int(r[1]) for r in conn.execute(
+        "SELECT COALESCE(outcome, status), COUNT(*) FROM runs WHERE ended_at >= ? GROUP BY 1", (_iso(since),))}
+
+
 def report(conn, since: datetime, *, top: int = 10) -> dict[str, Any]:
     s = _iso(since)
     out: dict[str, Any] = {"since": s, "until": _iso(datetime.now(timezone.utc))}

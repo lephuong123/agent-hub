@@ -184,6 +184,35 @@ def test_render_splits_long_code_block():
     assert all(p.count("```") % 2 == 0 for p in parts)  # mỗi đoạn tự đóng khối mã
 
 
+def test_render_agent_quote_table_italic_hr():
+    """P1-9 (chat/mdconv.py): bảng không còn `|` thô, `*nghiêng*` → `_nghiêng_` (không thành đậm), `---` bỏ."""
+    from cfharness.notify.telegram import esc
+    body = ("Một chữ *nghiêng* và **đậm**.\n\n---\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n"
+            "| Dịch vụ | Trạng thái | Ghi chú | Chủ |\n|---|---|---|---|\n| web | chạy | ổn | Phương |")
+    sec = render.message(f"<b>💬 Điều phối viên</b>\n<blockquote>{esc(body)}</blockquote>", html=True)["blocks"][0]["text"]["text"]
+    assert "> Một chữ _nghiêng_ và *đậm*." in sec and "---" not in sec and "|" not in sec
+    assert "> ```\n> A  B\n> ─  ─\n> 1  2\n> ```" in sec and "> • *web*: Trạng thái: chạy · Ghi chú: ổn · Chủ: Phương" in sec
+    assert all(ln.startswith(">") for ln in sec.split("\n")[1:])
+
+
+def test_manager_reply_fence_across_messages_reopened(hub_home):
+    """P1-9: trả lời dài chia TRƯỚC khi render theo khối markdown — khối mã vắt qua hai tin được đóng ở tin trước và mở lại ở tin sau
+    (trước đây cắt cứng 3500 ký tự → tin sau mất khối mã, ``` lệch)."""
+    from cfharness.hub import Hub
+
+    h = Hub(hub_home, runtime=FakeRuntime())
+    code = "\n".join(f"buoc_{i} = chay('việc số {i}')  # ghi chú" for i in range(200))
+    md = "Kế hoạch:\n\n```python\n" + code + "\n```\n\nXong."
+    msgs = h.slack.manager.format_reply(md, agent=None, chat="D1")
+    assert len(msgs) >= 2
+    for m in msgs:
+        body = render.message(m, html=True)
+        text = "\n".join(b["text"]["text"] for b in body["blocks"] if b["type"] == "section")
+        assert "buoc_" in text and text.count("```") % 2 == 0
+        assert all(ln.startswith(">") for ln in text.split("\n")[1:])  # chữ agent luôn trong trích dẫn
+    h.store.close()
+
+
 # ============================================================================ cổng người
 async def test_silent_when_not_configured(make, sk):
     d = await make(token=False)
@@ -198,7 +227,7 @@ async def test_silent_when_interactive_off(make, sk):
 
 
 async def test_slack_caller_gate(make):
-    d = await make(users=(BOSS,), chats=(DM_BOSS, "C0TEAM001"))
+    d = await make(users=(BOSS,), chats=(DM_BOSS, "C0TEAM001"), sl_cfg={"allow_channels": False})
     assert auth.slack_caller(d.hub, DM_BOSS, BOSS).human
     assert not auth.slack_caller(d.hub, DM_BOSS, STRANGER).human  # người lạ trong DM (không thể với DM thật) vẫn không phải người
     assert not auth.slack_caller(d.hub, DM_STRANGER, BOSS).human
@@ -206,6 +235,20 @@ async def test_slack_caller_gate(make):
     assert not auth.slack_caller(d.hub, "C0OTHER01", BOSS).human
     resp = await d.call_as(auth.slack_caller(d.hub, DM_STRANGER, STRANGER), "estop.set", {"on": True})
     assert resp["error"]["code"] == BLOCKED
+
+
+async def test_slack_defaults_channels_on_reaction(make):
+    """Mặc định (v0.2.3): tag bot trong kênh chung bật — vẫn chỉ người ∈ allowed_user_ids; báo bận bằng reaction ⏳."""
+    d = await make(users=(BOSS,), chats=(DM_BOSS,))
+    assert d.hub.config.get("notify.slack.allow_channels") is True
+    assert d.hub.config.get("notify.slack.busy_indicator") == "reaction"
+    assert d.hub.config.get("notify.slack.channel_root_posts") is False
+    # tệp gửi vào: mặc định = trần cứng 10 MB của manager.chat (PDF/Office thường > 1 MB)
+    assert d.hub.config.get("notify.slack.document_max_bytes") == 10 * 1024 * 1024
+    assert d.hub.config.get("notify.telegram.document_max_bytes") == 10 * 1024 * 1024
+    assert d.hub.slack.media.doc_cap() == 10 * 1024 * 1024
+    assert auth.slack_caller(d.hub, "C0TEAM001", BOSS).human
+    assert not auth.slack_caller(d.hub, "C0TEAM001", STRANGER).human
 
 
 async def test_stranger_ignored_and_audited(make, sk):

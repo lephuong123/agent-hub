@@ -28,6 +28,31 @@ hub-self vẫn nói chuyện được với daemon. Giới hạn: sandbox chỉ 
 Linux cần bubblewrap/socat (thiếu → run lỗi, không chạy không sandbox); thao tác người đã duyệt mà ghi ngoài cwd/tmp vẫn bị sandbox chặn
 (thêm `guard.sandbox.extra_allow_write`).
 
+### 1.1 Spike 2026-11-07 — chặn đọc `$HOME`, mở lại W (claude 2.1.319, haiku, 3 lần gọi, tổng ≈ $0.007)
+Mục đích: chọn phương án A/B cho P2 "giam agent trong workspace W" (`plan-multi-instance.md`, `confine.md`).
+Schema settings của binary 2.1.319 có `sandbox.filesystem.allowRead` — mô tả trong binary: "Paths to re-allow reading within denyRead
+regions. Takes precedence over denyRead for matching paths"; chỉ nhận từ tầng tin cậy (managed hoặc `--settings`), bị bỏ qua nếu đến từ
+project/local settings (hub dùng `--settings` + `--setting-sources ""` → hợp lệ). Cách chạy: thư mục thử `~/.cfh-confine-spike/{W,W/sub,
+W-sibling,other}` (file giả, không secret thật, đã xoá sau spike), script `W/probe.sh` in rc từng thao tác; `claude -p … --model haiku
+--setting-sources "" --settings <file> --strict-mcp-config --mcp-config <rỗng> --allowedTools Bash --no-session-persistence`, cwd = W,
+env bỏ `CLAUDECODE`/`CLAUDE_CODE_*`; sandbox `autoAllowBashIfSandboxed: true`, `allowWrite: [W]`. Script ở scratchpad phiên (`spike/`).
+
+| Thao tác (Bash trong sandbox) | `denyRead:[spike]` + `allowRead:[W]` | `denyRead:[$HOME]` + `allowRead:[W]` | `denyRead:[$HOME, W/sub]` + `allowRead:[W, spike/*-sibling, ~/.gitconfig]` |
+|---|---|---|---|
+| `cat W/a.txt` | OK | OK | OK |
+| `cat W/sub/b.txt` | OK | OK | **EPERM** (deny cụ thể hơn thắng allow) |
+| `cat other/…`, `cat W-sibling/…`, `ls spike/` | EPERM | EPERM | EPERM (**glob trong allowRead KHÔNG mở lại**) |
+| `ls ~`, `ls ~/Documents`, đọc `~/.zshrc`, `ls ~/.claude` | OK | EPERM | EPERM |
+| `git --version` | OK | **lỗi 128: không đọc được `~/.gitconfig`** | OK (nhờ allowRead `~/.gitconfig`) |
+| `python3 -c …` (/usr/bin), `~/.local/bin/uv --version` (binary) | OK | OK | OK |
+| ghi W / ghi `other/` | OK / EPERM | OK / EPERM | OK / EPERM |
+
+Kết luận → **phương án A**: `denyRead: [$HOME]` + `allowRead: [W, read_allow, workspace của hub, cwd, bin trên PATH]`. Lưu ý thiết kế rút ra:
+(1) không dùng glob trong `allowRead` — hub liệt kê `agents/<id>/workspaces` lúc dựng settings; (2) secret/token của hub (`secrets/`, `auth/`,
+`agents/*/runtime`) vẫn bị chặn kể cả khi nằm dưới một gốc được đọc vì mục deny cụ thể hơn thắng; (3) git cần `~/.gitconfig` (đưa vào
+`read_allow` mặc định; credential vẫn denyRead riêng); (4) Bash của CLI không cần đọc `~/.claude` (shell snapshot) để chạy. Binary 2.1.319 còn có
+`permissions.blockReadsOutsideWorkingDirectories` (chưa dùng: phụ thuộc phiên bản, và chính binary ghi rằng chế độ đó bỏ mọi `denyRead` khi bọc).
+
 ## 2. Từng mã H
 
 | Mã | Đã sửa | Test chứng minh |

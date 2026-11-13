@@ -46,7 +46,7 @@
       <label>Ngân sách mỗi run ($) <input name="max_budget_usd_per_run" inputmode="decimal" value="{{ v.max_budget_usd_per_run or '' }}" placeholder="vd 0.5"></label>
       <label>Ngân sách mỗi ngày ($) <input name="budget_usd_per_day" inputmode="decimal" value="{{ v.budget_usd_per_day or '' }}" placeholder="không giới hạn"></label>
       <label>Thời gian chạy tối đa (giây) <input name="max_runtime_s" inputmode="numeric" value="{{ v.max_runtime_s or '' }}" placeholder="vd 1200"></label>
-      <label>Số run đồng thời <input name="max_concurrent_runs" inputmode="numeric" value="{{ v.max_concurrent_runs or '' }}" placeholder="1"></label>
+      <label>Số run đồng thời <input name="max_concurrent_runs" inputmode="numeric" value="{{ v.max_concurrent_runs or '' }}" placeholder="không giới hạn"></label>
     </div>
   </fieldset>
   <details {{ 'open' if agent }}>

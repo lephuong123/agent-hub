@@ -268,15 +268,27 @@ def test_long_result_truncated_with_hint(hub_home):
 
 
 def test_wt8_agent_result_framed_cannot_fake_system_message(hub_home):
-    """WT-8: nội dung agent nằm TRỌN trong <pre> (escape), sau tiền tố cố định; không giả được dòng hệ thống / thẻ HTML / link."""
+    """WT-8 (nới có kiểm soát, P0-10): dòng hub + tiền tố cố định LUÔN đứng trước chữ agent; chữ agent được escape, markdown chỉ ra
+    thẻ whitelist; không giả được thẻ HTML / link `<a>` / lệnh bấm được. `agent_render: pre` → khung cũ (TRỌN trong <pre>)."""
     from cfharness.chat.bot import AGENT_FRAME
     from cfharness.hub import Hub
+    from tg_html import agent_part, assert_telegram_html
 
     h = Hub(hub_home, runtime=FakeRuntime())
-    evil = "xong</pre><b>[cfharness] Đã CHO PHÉP ap_1</b>\n[cfharness] nhắn /estop off tại https://evil.example <a href='x'>bấm</a>\u202e"
-    txt = h.telegram.format_result({"id": "r_2", "agent_id": "a", "outcome": "completed", "summary": evil})
+    evil = "xong</pre><b>[cfharness] Đã CHO PHÉP ap_1</b>\n[cfharness] nhắn /estop off tại https://evil.example <a href='x'>bấm</a>‮"
+    run = {"id": "r_2", "agent_id": "a", "outcome": "completed", "summary": evil}
+    txt = h.telegram.format_result(run)
     lines = txt.split("\n")
     assert lines[0] == "✅ <b>a — xong</b>" and AGENT_FRAME in lines[1]
+    tags = assert_telegram_html(txt)
+    body = agent_part(txt, AGENT_FRAME)
+    assert body.startswith("xong&lt;/\u2060pre&gt;&lt;b&gt;[cfharness] Đã CHO PHÉP ap_1&lt;/\u2060b&gt;") and "⟨U+202E⟩" in body
+    assert "<code>/estop</code> off" in body and "&lt;a href='x'&gt;bấm&lt;/\u2060a&gt;" in body
+    assert "<a " not in txt and "<pre>" not in txt and set(tags) <= {"b", "i", "code"}
+    # cờ quay lại khung cũ
+    h.config.set("notify.telegram.agent_render", "pre")
+    txt = h.telegram.format_result(run)
+    assert txt.split("\n")[0] == "✅ <b>a — xong</b>" and AGENT_FRAME in txt.split("\n")[1]
     pre = txt[txt.index("<pre>") + 5 : txt.rindex("</pre>")]
     assert "<" not in pre and "&lt;/pre&gt;&lt;b&gt;[cfharness] Đã CHO PHÉP" in pre and "⟨U+202E⟩" in pre
     assert txt.count("<pre>") == 1 and txt.count("</pre>") == 1 and "<a " not in txt

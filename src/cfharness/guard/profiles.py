@@ -157,9 +157,7 @@ def allowed_roots(hub: Any) -> list[str]:
         roots = [os.path.join(os.path.expanduser("~"), "Workspace")]
     hh = Path(hub.paths.home)
     cand = [str(r) for r in roots] + [str(hh / "agents"), str(hh / "worktrees")] + list(_ws._EXTRA_ALLOWED_ROOTS)
-    env_extra = os.environ.get("CFHARNESS_EXTRA_WORKSPACE_ROOTS")  # test-only (như validate_workspace)
-    if env_extra:
-        cand += [r for r in env_extra.split(os.pathsep) if r]
+    cand += _ws.env_extra_roots()  # test-only (CFHARNESS_TESTING=1, như validate_workspace)
     for r in cand:
         try:
             out.append(_canon(os.path.realpath(os.path.expanduser(r))))

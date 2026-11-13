@@ -174,3 +174,30 @@ async def test_channel_reply_with_no_known_thread_goes_to_dm(make, sk):
                                                        "channel": f"slack:{CH}", "kind": "notify", "ok": True}, run_id="r_x00000001"))
     await until(lambda: [m for m in sk.sent(DM_BOSS) if "báo xong" in sk.text_of(m)], timeout=10)
     assert not sk.sent(CH)
+
+
+def test_result_only_prompt_scoped_to_slack_channels():
+    from cfharness.manager import prompts
+
+    assert prompts.result_only("slack:C0TEAM0001", "result") and prompts.result_only("slack:G0PRIV0001", "result")
+    assert not prompts.result_only("slack:D0BOSS001", "result")  # DM giữ như cũ
+    assert not prompts.result_only("telegram:-100123", "result") and not prompts.result_only("slack:C0TEAM0001", "full")
+    short = prompts.chat_prompt("slack:C0TEAM0001", "mc_1", "hi", result_only=True)
+    assert "RESULT ONLY" in short and "say what you assigned" not in short and "[[file:" in short
+    assert "RESULT ONLY" not in prompts.chat_prompt("slack:C0TEAM0001", "mc_1", "hi")
+    ev = [{"kind": "task_done", "summary": "t_1 done", "conversation_id": "mc_t"}]
+    tick = prompts.tick_prompt(ev, dropped=0, reason="events", open_work=0, conv_channels={"mc_t": "slack:C0TEAM0001"}, result_mode="result")
+    assert "RESULT ONLY" in next(x for x in tick.splitlines() if "t_1 done" in x)
+    assert "RESULT ONLY" not in prompts.tick_prompt(ev, dropped=0, reason="events", open_work=0, conv_channels={"mc_t": "slack:C0TEAM0001"})
+
+
+async def test_mention_reply_result_mode_reaches_manager_prompt(make, sk):
+    d = await mk(make, sk)
+    await deliver(sk, sk.mention(CH, BOSS, f"<@{BOT_USER}> số lỗi hôm nay?"))
+    assert "RESULT ONLY" not in (await until(lambda: boss_runs(d)))[0]["prompt"]  # mặc định "full" — như cũ
+    d.hub.config.set("notify.slack.mention_reply", "result")
+    before = ids(d)
+    await deliver(sk, sk.mention(CH, BOSS, f"<@{BOT_USER}> số lỗi tuần này?"))
+    new = await until(lambda: ids(d) - before)
+    run = next(r for r in boss_runs(d) if r["id"] in new)
+    assert "RESULT ONLY" in run["prompt"] and "say what you assigned" not in run["prompt"]

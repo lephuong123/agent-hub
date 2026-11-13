@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Tổng quan máy{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Tổng quan máy</h1><span class="muted">Mọi hub trên máy này · chỉ số liệu, không có nội dung công việc</span></div>
+{% if not ov.exists %}
+{{ m.empty("Thư mục trạng thái chung " ~ ov.dir ~ " chưa có. Xem docs/dev-notes/admin-overview.md để tạo nhóm cfharness-admin và thư mục, rồi bật admin_export.enabled ở từng hub.", "info", title="Chưa thiết lập") }}
+{% else %}
+{% set t = ov.totals %}
+<section class="stats">
+  <div class="stat"><div class="stat-n">{{ t.hubs }}</div><div class="stat-l">hub ({{ t.ok }} đang chạy{% if t.stale %}, {{ t.stale }} quá hạn{% endif %}{% if t.bad %}, {{ t.bad }} file lỗi{% endif %})</div></div>
+  <div class="stat"><div class="stat-n">{{ t.cost_today_usd|usd }}</div><div class="stat-l">chi phí hôm nay</div></div>
+  <div class="stat"><div class="stat-n">{{ t.cost_week_usd|usd }}</div><div class="stat-l">chi phí 7 ngày</div></div>
+  <div class="stat"><div class="stat-n">{{ t.running }} / {{ t.queued }}</div><div class="stat-l">run đang chạy / chờ</div></div>
+  <div class="stat"><div class="stat-n">{{ t.failed_today }}</div><div class="stat-l">run lỗi hôm nay</div></div>
+  <div class="stat"><div class="stat-n">{{ t.approvals_open }} / {{ t.questions_open }}</div><div class="stat-l">chờ duyệt / câu hỏi</div></div>
+</section>
+<section class="card">
+  <h2>Từng hub</h2>
+  {% if not ov.hubs %}{{ m.empty("Chưa có hub nào xuất trạng thái vào " ~ ov.dir ~ ".") }}{% else %}
+  <table class="tbl"><thead><tr><th>User</th><th>Trạng thái</th><th>Phiên bản</th><th class="num">Hôm nay</th><th class="num">7 ngày</th>
+    <th class="num">Chạy</th><th class="num">Chờ</th><th class="num">Lỗi hôm nay</th><th class="num">Chờ duyệt</th><th class="num">Câu hỏi</th>
+    <th class="num">Agent</th><th>ESTOP</th><th>Cập nhật</th></tr></thead><tbody>
+  {% for h in ov.hubs %}{% set d = h.data or {} %}{% set lbl = states.get(h.state, (h.state, "muted")) %}
+  <tr><td><code>{{ h.user }}</code></td><td><span class="pill {{ lbl[1] }}">{{ lbl[0] }}</span>{% if h.error and not d %} <span class="muted">{{ h.error }}</span>{% endif %}</td>
+  {% if d %}
+    <td>{{ d.version or "—" }}</td><td class="num">{{ (d.cost_usd or {}).today|usd }}</td><td class="num">{{ (d.cost_usd or {}).week|usd }}</td>
+    <td class="num">{{ (d.runs or {}).running or 0 }}</td><td class="num">{{ (d.runs or {}).queued or 0 }}</td><td class="num">{{ (d.runs or {}).today_failed or 0 }}</td>
+    <td class="num">{{ (d.approvals or {}).open or 0 }}</td><td class="num">{{ (d.questions or {}).open or 0 }}</td><td class="num">{{ (d.agents or {}).total or 0 }}</td>
+    <td>{% if (d.estop or {}).on %}<span class="pill danger">BẬT</span>{% else %}—{% endif %}</td>
+    <td>{{ d.generated_at|ago }}</td>
+  {% else %}<td colspan="11" class="muted">—</td>{% endif %}</tr>
+  {% endfor %}
+  </tbody></table>{% endif %}
+</section>
+{% endif %}
+{% set me = ov.self or {} %}
+<p class="muted">Hub này ({{ me.user }}): {% if me.enabled %}đang xuất trạng thái{% if me.last_error %} — lỗi {{ me.last_error }}{% elif me.last_ok %}, lần cuối {{ me.last_ok|ago }}{% endif %}{% else %}chưa xuất trạng thái (admin_export.enabled = false){% endif %}.</p>
+{% endblock %}

@@ -121,7 +121,7 @@ async def test_run_events_flow_idempotency_feedback(daemon):
 async def test_events_long_poll_waits(daemon):
     """Không có event mới → chờ đủ wait_s rồi trả events=[] (không lỗi timeout)."""
     rpc = RpcClient(daemon.socket)
-    rpc.call("agent.create", {"config": {"id": "a1", "name": "a1"}})
+    rpc.call("agent.create", {"config": {"id": "a1", "name": "a1", "limits": {"max_concurrent_runs": 1}}})  # mặc định không giới hạn
     rid = rpc.call("run.start", {"agent": "a1", "prompt": "x"})["id"]
     rpc.call("run.wait", {"id": rid, "timeout": 20})
     srv = build_server(caller_for(daemon))

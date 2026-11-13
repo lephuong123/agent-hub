@@ -33,6 +33,7 @@ STATUSES = ("idle", "working", "waiting", "paused", "error", "disabled")
 RESERVED_IDS = frozenset({
     "list", "show", "logs", "stop", "follow", "continue", "resume", "revert", "diff", "steer", "status", "all",
     "help", "detach", "wait", "takeover", "attach",
+    "multi",  # `cfharness doctor multi`
 })
 EDITABLE = (
     "name",
@@ -48,6 +49,8 @@ EDITABLE = (
     # M3: subagent của Claude Code → `--agents` (FR-RT-13); schema output → `--json-schema` (FR-RT-14)
     "subagents",
     "result_schema",
+    # plugin Claude Code nạp cho run qua `--plugin-dir` (plugins.py) — chỉ người đặt (không có trong manager AGENT_FIELDS)
+    "plugins",
 )
 
 DEFAULT_SOUL = """# {name}
@@ -116,7 +119,8 @@ class ToolPolicy(BaseModel):
 
 
 class Limits(BaseModel):
-    max_concurrent_runs: int = Field(default=1, ge=1)
+    # null = không giới hạn (mặc định). Người muốn hãm thì đặt trong cấu hình agent
+    max_concurrent_runs: int | None = Field(default=None, ge=1)
     max_budget_usd_per_run: float | None = Field(default=None, gt=0)
     budget_usd_per_day: float | None = Field(default=None, gt=0)
     max_runtime_s: int | None = Field(default=None, gt=0)
@@ -136,6 +140,22 @@ class AgentConfig(BaseModel):
     workspace_default: str | None = None
     subagents: dict[str, dict[str, Any]] | None = None
     result_schema: dict[str, Any] | None = None
+    plugins: list[str] = Field(default_factory=list)
+
+    @field_validator("plugins", mode="before")
+    @classmethod
+    def _plugins(cls, v: Any) -> list[str]:
+        from .plugins import valid_spec
+
+        if v is None:
+            return []
+        if isinstance(v, str):
+            v = [v]
+        out = list(dict.fromkeys(str(x).strip() for x in v if str(x).strip()))
+        bad = [x for x in out if not valid_spec(x)]
+        if bad:
+            raise ValueError(f"plugin không hợp lệ: {', '.join(bad)} (dùng tên@marketplace, tên, hoặc đường dẫn tuyệt đối)")
+        return out
 
     @field_validator("id")
     @classmethod

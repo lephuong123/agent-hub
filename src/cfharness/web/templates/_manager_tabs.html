@@ -1,0 +1,7 @@
+{#- Hàng tab luồng (manager.html + /partials/manager/tabs). Chấm: run = đang chạy (nhấp nháy), danger = cần bạn, idle = còn task chờ, done = đã xong. -#}
+{%- macro dot(cls, state) -%}<span class="ws-dot {{ cls }}" title="{{ state }}" aria-hidden="true"></span><span class="sr-only">{{ state }}. </span>{%- endmacro -%}
+<div class="ws-tabs" id="ws-tabs" data-w="{{ wsx.id if wsx else '' }}">
+  <a class="ws-tab{{ ' on' if not wsx }}" href="/manager" title="Sảnh — {{ wsd.lobby_state }}">{{ dot(wsd.lobby_dot, wsd.lobby_state) }}Sảnh{% if wsd.lobby_unread %}<span class="ws-unread">{{ wsd.lobby_unread }}</span>{% endif %}</a>
+  {% for w in wsd.active %}<a class="ws-tab{{ ' on' if wsx and wsx.id == w.id }}" href="/manager?w={{ w.id }}" data-ws="{{ w.id }}" title="{{ w.label }} — {{ w.dot_label }} · task {{ w.tasks.done }}/{{ w.tasks.total }}">{{ dot(w.dot, w.dot_label) }}{{ w.title }}{% if w.unread %}<span class="ws-unread">{{ w.unread }}</span>{% endif %}</a>{% endfor %}
+  {% if wsx and wsx.status == 'closed' %}{% set wc = wsd.by_id.get(wsx.id) or wsx %}<a class="ws-tab on closed" href="/manager?w={{ wsx.id }}" title="{{ wc.dot_label or '' }}">{% if wc.dot %}{{ dot(wc.dot, wc.dot_label) }}{% endif %}{{ wsx.title }} · đã đóng</a>{% endif %}
+</div>

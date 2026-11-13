@@ -836,6 +836,36 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS runs_session_status ON runs(session_id, status);
     CREATE INDEX IF NOT EXISTS runs_team_status ON runs(team_id, status);
     """,
+    # v23 — plugin Claude Code của agent (`--plugin-dir`, docs/dev-notes/agent-plugins.md)
+    """
+    ALTER TABLE agents ADD COLUMN plugins TEXT;
+    """,
+    # v24 — luồng việc (workstream, docs/dev-notes/workstreams.md): mỗi epic một luồng — hội thoại điều phối viên + task gắn luồng,
+    # STATE.md của luồng (nạp lại khi session xoay), tick theo luồng. `tasks.manager_conversation_id` thay bản đồ `hub_state`
+    # 200 mục (`manager_tracked.task_conv`) làm nguồn "hội thoại đã giao task". `read_upto` = id tin cuối người đã xem (web: chưa đọc).
+    """
+    CREATE TABLE workstreams (
+        id TEXT PRIMARY KEY,
+        key TEXT,
+        title TEXT NOT NULL,
+        sprint TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        state_md TEXT,
+        state_updated_at TEXT,
+        state_by TEXT,
+        created_by TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        closed_at TEXT
+    );
+    CREATE INDEX workstreams_status ON workstreams(status, updated_at);
+    ALTER TABLE manager_conversations ADD COLUMN workstream_id TEXT;
+    ALTER TABLE manager_conversations ADD COLUMN read_upto INTEGER;
+    CREATE INDEX manager_conversations_ws ON manager_conversations(workstream_id);
+    ALTER TABLE tasks ADD COLUMN workstream_id TEXT;
+    ALTER TABLE tasks ADD COLUMN manager_conversation_id TEXT;
+    CREATE INDEX tasks_workstream ON tasks(workstream_id, status);
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
@@ -846,7 +876,7 @@ def is_py_migration(sql: str) -> bool:
     return sql.startswith(PY_MIGRATION_PREFIXES) and not any(c.isspace() for c in sql)
 
 JSON_COLS = {
-    "agents": ("tool_policy", "mcp_servers", "limits", "subagents", "result_schema"),
+    "agents": ("tool_policy", "mcp_servers", "limits", "subagents", "result_schema", "plugins"),
     "runs": ("argv_redacted", "usage", "model_usage", "permission_denials", "isolation_violations",
              "run_opts", "checkpoint", "diff", "result_json", "subagent_stats", "task_signal"),  # M3: 6 cột cuối
     # M3

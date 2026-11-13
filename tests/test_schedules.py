@@ -197,7 +197,7 @@ async def test_create_validates_and_computes_next(env):
                                          "deliver_to": "telegram:42"})
     assert s["created_by"] == "user" and s["status"] == "active" and s["tz"] == "Asia/Ho_Chi_Minh"
     assert s["next_run_at"].startswith("2026-10-19T01:00") and s["deliver_to"] == {"channel": "telegram:42"}
-    assert s["budget_usd"] == 0.5 and s["describe"] == "hằng ngày 08:00"
+    assert s["budget_usd"] is None and s["describe"] == "hằng ngày 08:00"  # mặc định không trần
     assert s["next_run_local"] == "2026-10-19 08:00"
     assert evs(d, "schedule.created")[-1]["schedule_id"] == s["id"]
     assert d.hub.audit.query(kind="schedule.create")
@@ -444,6 +444,12 @@ def _denials(d) -> list[dict]:
 
 @pytest.fixture
 async def mgr(env):
+    # mặc định không giới hạn — test trần của điều phối viên đặt rõ các trần cũ
+    env.hub.config.set("schedules.min_interval_s", 900)
+    env.hub.config.set("schedules.manager_max_active", 10)
+    env.hub.config.set("schedules.manager_run_now_per_hour", 6)
+    env.hub.learning.policy.set("config_bounds.max_budget_usd_per_run", 5.0)
+    env.hub.learning.policy.set("config_bounds.budget_usd_per_day", 20.0)
     res = await manager_run(env)
     return env, res["run_id"], res["conversation_id"]
 

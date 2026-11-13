@@ -46,7 +46,7 @@ async def env(hub_home, tmp_path, monkeypatch):
     cfg = {
         "runtime": {"kind": "claude", "claude": {"binary": str(fake_bin), "env_extra": {"FAKE_CLAUDE_PROJECTS": str(proj)}}},
         "guard": {"git_probe": False},
-        "learning": {"review_debounce_s": 0.3, "tick_s": 0.2},
+        "learning": {"review_debounce_s": 0.3, "tick_s": 0.2, "review_budget_usd": 0.2, "review_budget_max_usd": 1.5},  # mặc định không trần
     }
     hub_home.config.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     d = Daemon(hub_home)
@@ -126,7 +126,7 @@ async def test_correction_review_fork_patch_then_no_repeat(env):
 
 
 async def test_review_budget_null_means_no_cap(env):
-    """learning.review_budget_usd chưa đặt → 0.20 (mặc định); null → review không có --max-budget-usd (agent không limits)."""
+    """learning.review_budget_usd đặt 0.20 (fixture; mặc định là null); null → review không có --max-budget-usd (agent không limits)."""
     d, proj, mp = env
     h = d.hub
     assert h.config.get("learning.review_budget_usd") == 0.2

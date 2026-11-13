@@ -35,6 +35,20 @@ log = logging.getLogger("cfharness.chat")
 PENDING = ("open", "waiting_human")
 AGENT_FRAME = "▼ Agent viết:"  # tiền tố cố định (chữ hub) ngay trước `<pre>` nội dung agent — WT-8, rút gọn theo ux-plan §3.1
 _UID: contextvars.ContextVar[str | None] = contextvars.ContextVar("chat_from_id", default=None)
+# Thread của việc đang xử lý: (chat, tin để trả lời vào thread của nó). Slack (chat/slack/bot.py `_send`) dùng khi tin gửi vào kênh
+# chung không có `reply_to` — bot chỉ được nói trong thread đã tag nó. Đặt ở handler sự kiện Slack và ở các đường giao tin từ bus
+# (`thread_scope`). asyncio chép context lúc tạo task → tác vụ `_spawn` từ handler mang theo; listener bus phải tự đặt lại.
+_THREAD: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar("chat_thread", default=None)
+# Cho phép RÕ RÀNG đăng lên gốc kênh chung (chỉ kết quả lịch khi người bật `channel_root_posts` — `ManagerChat._deliver`).
+_ROOT_POST: contextvars.ContextVar[bool] = contextvars.ContextVar("chat_root_post", default=False)
+
+
+_FROM_CTX: Any = object()
+
+
+def thread_scope(chat: Any, reply_to: Any) -> None:
+    """Đặt thread của việc đang xử lý (`reply_to` None → xoá: không thừa hưởng thread của việc KHÁC qua context đã chép)."""
+    _THREAD.set((str(chat), str(reply_to)) if chat is not None and reply_to is not None else None)
 OUTCOME_VI = {
     "completed": "hoàn thành", "failed": "lỗi", "cancelled": "đã huỷ", "budget_exceeded": "vượt ngân sách", "timed_out": "quá giờ",
     "crashed": "tiến trình chết", "rate_limited": "bị giới hạn tốc độ", "blocked": "bị chặn", "protocol_violation": "vi phạm giao thức",
@@ -89,6 +103,7 @@ class ChatBot:
         self.hub = hub
         self.daemon: "Daemon | None" = None
         self.WATCH = f"{self.NAME}.watch"
+        self.WATCH_THREAD = f"{self.NAME}.watch_thread"  # run_id → tin để trả lời (thread của việc đã giao run)
         self.MSGMAP = f"{self.NAME}.msgmap"
         self.callbacks = CallbackStore(hub, self._callback_key, prefix=self.NAME)
         self.notifier = self._make_notifier()
@@ -204,10 +219,24 @@ class ChatBot:
         v = self.hub.store.state_get(key) or {}
         return v if isinstance(v, dict) else {}
 
-    def _watch(self, run_id: str, chat_id: Any) -> None:
+    def _watch(self, run_id: str, chat_id: Any, thread: Any = _FROM_CTX) -> None:
+        """Theo dõi run để báo kết quả vào `chat_id`. `thread`: tin để trả lời (Slack kênh chung: kết quả vào đúng thread) — không
+        truyền → thread của việc đang xử lý (`_THREAD`) nếu cùng chat."""
         w = self._state(self.WATCH)
         w[run_id] = str(chat_id)
         self.hub.store.state_set(self.WATCH, w)
+        if thread is _FROM_CTX:
+            ctx = _THREAD.get()
+            thread = ctx[1] if ctx and ctx[0] == str(chat_id) else None
+        if thread is not None:
+            th = self._state(self.WATCH_THREAD)
+            th[run_id] = str(thread)
+            for k in list(th)[: max(0, len(th) - 500)]:
+                th.pop(k, None)
+            self.hub.store.state_set(self.WATCH_THREAD, th)
+
+    def watch_thread(self, run_id: str) -> str | None:
+        return self._state(self.WATCH_THREAD).get(run_id)
 
     def _map_message(self, chat_id: Any, message_id: Any, run_id: str) -> None:
         m = self._state(self.MSGMAP)
@@ -235,7 +264,7 @@ class ChatBot:
             if parent and ev.run_id:
                 w = self._state(self.WATCH)
                 if parent in w:  # resume/continue sau duyệt hoặc gián đoạn → theo dõi tiếp run con
-                    self._watch(ev.run_id, w[parent])
+                    self._watch(ev.run_id, w[parent], self.watch_thread(parent))
         elif t in TERMINAL_RUN_EVENTS and ev.source == "hub" and ev.run_id and ev.run_id in self._state(self.WATCH):
             self._spawn(self._report_run(ev.run_id, t))
         elif t == "approval.resolved":
@@ -315,12 +344,16 @@ class ChatBot:
         if not chats:
             return {"sent": False, "chats": 0, "reason": self.empty_allowlist_hint()}
         n, errs = 0, []
-        for c in chats:
-            try:
-                await self._send(api, c, text)
-                n += 1
-            except Exception as e:
-                errs.append(f"{c}: {clip(e, 200)}")
+        tok = _ROOT_POST.set(True)  # tin thử do NGƯỜI bấm/gõ → được đăng ở gốc kênh chung (Slack), như trước khi chặn rò ra gốc kênh
+        try:
+            for c in chats:
+                try:
+                    await self._send(api, c, text)
+                    n += 1
+                except Exception as e:
+                    errs.append(f"{c}: {clip(e, 200)}")
+        finally:
+            _ROOT_POST.reset(tok)
         return {"sent": n > 0 and not errs, "chats": n, "reason": "; ".join(errs) or None}
 
     # ------------------------------------------------------------------ gọi hub thay mặt chat (cổng HUMAN_ONLY)
@@ -445,7 +478,7 @@ class ChatBot:
         est = s.get("estop") or {}
         return "\n".join([
             f"cfharness {s.get('version')} — ESTOP: {'BẬT' + (' (' + str(est.get('reason')) + ')' if est.get('reason') else '') if est.get('on') else 'tắt'}",
-            f"Run đang chạy: {s.get('running')} · đang chờ: {s.get('queued')} (tối đa {s.get('max_concurrent_runs')})",
+            f"Run đang chạy: {s.get('running')} · đang chờ: {s.get('queued')} (tối đa {s.get('max_concurrent_runs') or 'không giới hạn'})",
             f"Agent: {s.get('agents')} · chi phí hôm nay: ${float(s.get('cost_today_usd') or 0):.4f}",
             f"Yêu cầu chờ duyệt: {len(pend or [])}" + (f" — gõ {self.cmd('approvals')}" if pend else ""),
         ])
@@ -500,8 +533,9 @@ class ChatBot:
 
     # ------------------------------------------------------------------ kết quả run
     def format_result(self, run: dict[str, Any]) -> str:
-        """Tin kết quả (HTML). Phần do agent viết nằm TRỌN trong `<pre>` (escape, nền tảng không tạo link/lệnh bấm được bên
-        trong), sau tiền tố cố định — agent không giả được dòng hệ thống. Không bao giờ kèm nút (WT-8)."""
+        """Tin kết quả (HTML). Phần do agent viết đứng SAU dòng hệ thống + tiền tố cố định (agent không đứng trước chữ hub) và chỉ
+        qua `agent_body` (escape; markdown → thẻ whitelist, không link/lệnh bấm được — WT-8). Không bao giờ kèm nút.
+        `agent_render: pre` → khung cũ (nội dung agent TRỌN trong `<pre>`)."""
         from ..redact import redact_str
         from ..notify.telegram import visible
 
@@ -515,14 +549,20 @@ class ChatBot:
         head = f"{icon} <b>{esc(run.get('agent_id'))} — {esc(word)}</b>" + (f" · {esc(' · '.join(meta))}" if meta else "")
         body = visible(redact_str(str(run.get("summary") or run.get("error") or "(không có nội dung kết quả)")))
         n = min(int(self.cfg().get("result_max_chars") or 1500), CHUNK)
-        cut = len(body) > n
-        if cut:
-            body = body[:n]
-        lines = [head, f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(body)}</pre>"]
-        if cut:
-            lines.append("…(đã cắt — xem đầy đủ trên web)")
-        lines.append("↩ " + self.reply_hint("giao thêm cho agent này"))
-        return "\n".join(lines)
+        if self.agent_render() == "pre":
+            cut = len(body) > n
+            if cut:
+                body = body[:n]
+            lines = [head, f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(body)}</pre>"]
+            if cut:
+                lines.append("…(đã cắt — xem đầy đủ trên web)")
+            lines.append("↩ " + self.reply_hint("giao thêm cho agent này"))
+            return "\n".join(lines)
+        from .mdconv import split_md
+
+        parts = split_md(body, n, self.agent_measure)
+        tail = (["…(đã cắt — xem đầy đủ trên web)"] if len(parts) > 1 else []) + ["↩ " + self.reply_hint("giao thêm cho agent này")]
+        return self.agent_frame(head, parts[0], tail)
 
     def reply_hint(self, what: str) -> str:
         """Chỉ dẫn "trả lời tin này để …" theo cách của nền tảng (Telegram: reply; Slack: trả lời trong thread)."""
@@ -545,10 +585,40 @@ class ChatBot:
         """"trả lời tin này" (chữ thường, giữa câu) — Telegram: reply; Slack: trả lời trong thread."""
         return "trả lời (reply) tin này"
 
+    def agent_render(self) -> str:
+        """Cách hiện chữ agent ở kênh này: `markdown` (mặc định, P0-10 — markdown → HTML whitelist) | `pre` (khung cũ: TRỌN trong
+        `<pre>`, cờ `notify.<kênh>.agent_render` để quay lại nhanh). Slack ghi đè (kết quả `/run`, câu hỏi giữ khối mã)."""
+        return "pre" if str(self.cfg().get("agent_render") or "markdown").strip().lower() == "pre" else "markdown"
+
+    def reply_markdown(self) -> bool:
+        """Trả lời của điều phối viên: chia theo khối markdown (`mdconv.split_md`) thay vì cắt cứng (khung `pre`)."""
+        return self.agent_render() != "pre"
+
+    def agent_measure(self, md: str) -> int:
+        """Độ dài kênh tính cho một phần markdown của agent SAU khi render (để `split_md` không vượt trần tin)."""
+        from .mdconv import telegram_len
+
+        return telegram_len(md)
+
+    def agent_body(self, body: str) -> str:
+        """Chữ agent THÔ → HTML của kênh: `markdown` → `mdconv.to_telegram_html` (escape mọi chữ; chỉ thẻ b/i/s/code/pre; link thành
+        chữ `nhãn (URL)`); `pre` → `<pre>` (escape) như cũ. Cờ `notify.<kênh>.expandable_details` (mặc định tắt, chưa kiểm trên
+        Telegram thật): chi tiết dài sau màn đầu gập trong `<blockquote expandable>` (mdconv)."""
+        if self.agent_render() == "pre":
+            return f"<pre>{esc(body)}</pre>"
+        from .mdconv import to_telegram_html
+
+        return to_telegram_html(body, expandable=bool(self.cfg().get("expandable_details"))) or esc(body)
+
     def agent_frame(self, title: str, body: str, tail: list[str]) -> str:
         """Khung kết quả agent (WT-8): `title`/`tail` = chữ hub đã escape; `body` = chữ agent THÔ (hàm này escape).
-        Mặc định (Telegram): tiền tố cố định + `<pre>` — Telegram không tạo link/lệnh bấm được bên trong. Slack ghi đè (trích dẫn + link)."""
-        return "\n".join([title, f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(body)}</pre>", *tail])
+        Dòng hub (tiêu đề + tiền tố cố định) LUÔN đứng trước nội dung agent; nội dung agent qua `agent_body` (không trong blockquote);
+        đuôi của hub cách một dòng trống, in nghiêng. `agent_render: pre` → khung cũ y nguyên (tiền tố + `<pre>` + đuôi).
+        Slack ghi đè (trích dẫn + link)."""
+        if self.agent_render() == "pre":
+            return "\n".join([title, f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(body)}</pre>", *tail])
+        out = "\n".join([title, f"<i>{esc(AGENT_FRAME)}</i>", self.agent_body(body)])
+        return out + ("\n\n<i>" + "\n".join(tail) + "</i>" if tail else "")
 
     def continue_hint(self, chat: Any = None) -> str:
         """Dòng cuối trả lời của điều phối viên: cách nói tiếp / mở chủ đề mới ở `chat`."""
@@ -576,6 +646,7 @@ class ChatBot:
             return
         outcome = run.get("outcome") or run.get("status")
         api = self.api()
+        thread_scope(chat, self.watch_thread(run_id))  # listener bus: không thừa hưởng thread của việc khác
         if etype == "run.waiting_human" or outcome == "waiting_human":
             if api is not None:
                 await self._send(api, chat, f"⏸ {run.get('agent_id')} đang chờ bạn duyệt — xem tin duyệt hoặc gõ {self.cmd('approvals')}.")
@@ -881,6 +952,11 @@ class ChatBot:
     def root_post_ok(self, chat: Any) -> bool:
         """Được đăng tin KHÔNG trả lời tin nào vào `chat` (Slack: chỉ DM — kênh chung chỉ nhận trả lời trong thread)."""
         return True
+
+    def schedule_root_ok(self, chat: Any, payload: dict[str, Any]) -> bool:
+        """Kết quả lịch (`manager.reply` mang `schedule_id`) được đăng thành tin MỚI ở `chat` dù `root_post_ok` sai (Slack: kênh chung
+        khi người bật `notify.slack.channel_root_posts`). Mặc định: không."""
+        return False
 
     def help_text(self) -> str:  # pragma: no cover - lớp con
         raise NotImplementedError

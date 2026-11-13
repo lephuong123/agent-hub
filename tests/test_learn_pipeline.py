@@ -115,6 +115,10 @@ def test_memory_limit_requires_consolidation(hub):
 
 def test_policy_touch_and_self_escalation_and_bounds(hub):
     P = hub.learning.pipeline
+    # mặc định config_bounds không giới hạn — người đặt biên thì vòng học bị chặn theo biên
+    for k, v in (("models", ["opus", "sonnet", "haiku"]), ("max_effort", "high"), ("max_budget_usd_per_run", 5.0), ("budget_usd_per_day", 20.0),
+                 ("max_concurrent_runs", 3)):
+        hub.learning.policy.set(f"config_bounds.{k}", v)
     new_skill(hub)
     cfg = lambda ch, soul=None: P.propose(target="config", op="patch", agent_id="r1", payload={"changes": ch, "soul": soul}, created_by="review")  # noqa: E731
     r = cfg({"learning": {"enabled": True}})

@@ -11,6 +11,12 @@ from cfharness.runtime import default_fixture
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
+# Đa instance P1: biến môi trường chỉ-cho-test (CFHARNESS_EXTRA_WORKSPACE_ROOTS…) chỉ có hiệu lực khi cờ này bật.
+# Đặt ở mức module (os.environ) để daemon/tiến trình con mà test spawn kế thừa.
+import os as _os
+
+_os.environ["CFHARNESS_TESTING"] = "1"
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _allow_pytest_tmp_workspaces(tmp_path_factory):
@@ -44,6 +50,22 @@ def _plain_cli_output(monkeypatch):
     và làm lệch các assert trên chuỗi thuần — test nào cần chế độ có kiểu tự đặt lại (tests/test_cli_design.py)."""
     for k in ("FORCE_COLOR", "CFHARNESS_PLAIN", "CFHARNESS_ASCII"):
         monkeypatch.delenv(k, raising=False)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _hubs_registry(tmp_path_factory):
+    """P2.4: registry hub (`~/.config/cfharness/hubs.json`) KHÔNG BAO GIỜ ghi vào home thật trong test (cả daemon tiến trình con)."""
+    import os
+
+    prev = os.environ.get("CFHARNESS_HUBS_REGISTRY")
+    os.environ["CFHARNESS_HUBS_REGISTRY"] = str(tmp_path_factory.mktemp("hubs-registry") / "hubs.json")
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("CFHARNESS_HUBS_REGISTRY", None)
+        else:
+            os.environ["CFHARNESS_HUBS_REGISTRY"] = prev
 
 
 @pytest.fixture(autouse=True)

@@ -1032,6 +1032,7 @@ export class World {
     B.box(9.3, 2.5, 0.14, W / 2, 2.72, -0.05, 'metal', '#1d2026', { r: 0.03 });
     for (const sx of [-3.5, 3.5]) B.box(0.18, 0.5, 0.3, W / 2 + sx, 2.4, -0.1, 'metal', BLACK);
     hud.mesh.position.set(W / 2, 3.97, 0.03); g.add(hud.mesh);
+    // "Bảng quản lý agent" KHÔNG còn trong cảnh: điều khiển agent là bảng 2D (DOM) ở góc màn hình — office/dock.js, office-agent-board.md
     this.boards = { kanban, runs, hud, needs };
     this.focusables = [kanban.mesh, runs.mesh, hud.mesh, needs.mesh];
     const cz = kz + 2.6;

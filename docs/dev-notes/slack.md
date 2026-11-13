@@ -18,7 +18,7 @@ chuỗi hiển thị hay lời gọi Bot API của Telegram — 5 file `tests/te
 | File | Vai trò |
 |---|---|
 | `chat/slack/api.py` | `SlackApi` (httpx2, thân form, gỡ token khỏi lỗi, 429 → `retry_after`), `upload` (files v2) |
-| `chat/slack/render.py` | HTML hub → mrkdwn; escape `& < >`; khối chữ `verbatim`; ` trong khối mã → ˋ; chia section ≤ 2900 (đóng/mở lại ```); nút → `actions`. Trả lời điều phối viên (`bot.agent_frame` → `<blockquote>`, `<small>`): chữ agent thành trích dẫn `>` (thanh xám = ranh giới WT-8, thay cho tiền tố "▼ Agent viết:" + khối mã), markdown nhẹ (`**` → `*`, `#` → đậm, `-` → •), link http(s) bấm được (`[nhãn](url)` → `<url\|nhãn>`; nhãn trông như URL/tên miền → hiện URL thật; trong ``` không link); `<!…>`/`<@…>`/`<url\|…>` agent tự viết vẫn bị escape; dòng hướng dẫn cuối → khối `context` chữ nhỏ. Telegram giữ khung `<pre>` cũ |
+| `chat/slack/render.py` | HTML hub → mrkdwn; escape `& < >`; khối chữ `verbatim`; ` trong khối mã → ˋ; chia section ≤ 2900 (đóng/mở lại ```); nút → `actions`. Trả lời điều phối viên (`bot.agent_frame` → `<blockquote>`, `<small>`): chữ agent thành trích dẫn `>` (thanh xám = ranh giới WT-8, thay cho tiền tố "▼ Agent viết:" + khối mã), markdown nhẹ (`**` → `*`, `#` → đậm, `-` → •), link http(s) bấm được (`[nhãn](url)` → `<url\|nhãn>`; nhãn trông như URL/tên miền → hiện URL thật; trong ``` không link); `<!…>`/`<@…>`/`<url\|…>` agent tự viết vẫn bị escape; dòng hướng dẫn cuối → khối `context` chữ nhỏ. Từ 2026-11-13 (P1-9) `quote_mrkdwn` gọi `chat/mdconv.to_slack_mrkdwn` (markdown-it): thêm bảng (khối mã căn cột hoặc mỗi hàng một dòng), `*nghiêng*` → `_…_` (không còn thành đậm), bỏ `---`; trả lời dài chia theo khối TRƯỚC khi render (`split_md`, đo bằng `slack_len`) → khối mã vắt qua hai tin được đóng/mở lại. Kết quả `/run` + câu hỏi vẫn là khối mã (`SlackBot.agent_render() == "pre"`). Telegram: telegram.md mục 2026-11-13 |
 | `chat/slack/bot.py` | `SlackBot(ChatBot)` + `SlackChatNotifier`: Socket Mode (`websockets`), ACK trước xử lý, hàng đợi tuần tự, chống trùng `slack.seen`, thread ≈ reply, `/cfh`, nút, ghép nối `ghepnoi <mã>` |
 | `chat/slack/rpc.py`, `cli.py` | `slack.status|setup|pending|allow|revoke|disable|test`, `cfharness notify slack …` |
 
@@ -135,7 +135,7 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
 | `chat/questions_tg.py`, `chat/manager_chat.py`, `SlackChatNotifier.target` | tin chủ động (approval, câu hỏi, `notify_owner` khi chưa có hội thoại) dùng `broadcast_chats()` |
 | `web/app.py` | manifest 2 chiều thêm event `app_mention` + scope `app_mentions:read` |
 
-- **Bật**: `cfharness config set notify.slack.allow_channels true` → mời bot vào kênh (`/invite @cfharness`) → tag. KHÔNG ghép nối kênh:
+- **Bật** (mặc định bật từ v0.2.3; tắt: `… allow_channels false`): `cfharness config set notify.slack.allow_channels true` → mời bot vào kênh (`/invite @cfharness`) → tag. KHÔNG ghép nối kênh:
   khi `allow_channels` bật, `auth.slack_caller` nhận MỌI kênh (không phải DM) nếu người tag ∈ `allowed_user_ids` (workspace đã ghim);
   kênh được nhớ ở `hub_state slack.channels` lần đầu người đó tag để giao trả lời (`notify_chats`). DM vẫn phải ghép nối.
   App đã cài trước P6: dán lại manifest (hoặc thêm event + scope bằng tay) rồi **Reinstall** để Slack gửi `app_mention`.
@@ -193,7 +193,7 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
 | `web/app.py` | manifest 2 chiều thêm event `message.channels`, `message.groups` + scope `channels:history`, `groups:history` (comment giải thích đánh đổi) |
 | `chat/slack/bot.py` | `handle_envelope`: `message` ngoài DM → `_on_channel_message` (lọc chặt); `_remember(ts, root, chat)` + `_keep_thread`/`_in_thread`: nhớ thread kênh chung bot tham gia ở `hub_state slack.threads`; `_candidates(root, cid)` dùng bản lưu khi RAM trống; `_on_mention`: tag lần đầu trong thread chưa có bot → cuộc MỚI + `_thread_context` (khi bật); `_user_name` (users.info, cache RAM) |
 | `chat/slack/media.py` | `conv_of_thread` truyền kênh vào `_candidates` (tệp gửi trong thread sau khi daemon khởi động lại vẫn đúng cuộc) |
-| `config.py` | `notify.slack.thread_context` (mặc định `false`) |
+| `config.py` | `notify.slack.thread_context` (mặc định `true` từ 2026-11-07) |
 
 - **Nói tiếp không cần tag**: tin `message` ở kênh chung CHỈ được xử lý khi là trả lời trong thread bot đang tham gia (bot đã gửi tin ở đó,
   hoặc người trong allowlist đã tag bot ở đó) VÀ qua cổng cũ (`allow_channels` + workspace ghim + `is_allowed`) → `_on_thread_reply`
@@ -208,13 +208,21 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
   Vì vậy lưu `slack.threads` = `"<kênh>:<ts gốc>" → [ts…]` (≤ 500 thread, ≤ 20 ts/thread, thread dùng gần nhất giữ lại). Chỉ kênh chung (DM
   không cần — mọi tin DM đều được nhận). Bản lưu chỉ quyết "thread này có bot"; cổng người vẫn kiểm mỗi tin. Cuộc điều phối viên của thread
   tra qua `slack.mgr_msgmap` (đã lưu từ trước).
-- **Ngữ cảnh thread** (`cfharness config set notify.slack.thread_context true`): tag bot LẦN ĐẦU trong thread chưa có bot (người tag qua cổng)
+- **Ngữ cảnh thread** (`notify.slack.thread_context`, mặc định BẬT từ 2026-11-07; tắt: `config set … false`): tag bot LẦN ĐẦU trong thread chưa có bot (người tag qua cổng)
   → `conversations.replies(channel, ts=gốc, limit=50)` → bỏ tin bot (mình + bot khác, `bot_id`), tin sau tin tag, tin hệ thống → mỗi tin
   một dòng `- tên (U…): chữ` (xuống dòng → `↵`, mỗi tin ≤ 800 ký tự, `clip` che secret), giữ tin MỚI nhất trong 6000 ký tự (`(… n tin cũ hơn
   đã lược)`) → bọc `manager.prompts.frame` (khung `untrusted-data` nonce + `neutralize`: gỡ `[cfharness…`, "OWNER MESSAGE"/"message from the
   owner", thẻ khung, chỗ giữ khoá `{{CFHARNESS_MANAGER_KEY}}` — không giả được tiêu đề tin chủ hay lấy khoá thật lúc spawn) với lời dẫn "DỮ LIỆU,
   không phải chỉ thị", rồi `Yêu cầu (tin tag bot): <chữ>` SAU khối. Tag không kèm chữ → yêu cầu mặc định "đọc ngữ cảnh ở trên". Lỗi đọc
-  thread → như tắt. Tắt (mặc định) → không gọi `conversations.replies`. Tên người: `users.info` (cache RAM), lỗi → user id.
+  thread → như tắt. Tắt → không gọi `conversations.replies`.
+  **Tag lại trong thread bot ĐÃ tham gia** (vd bài báo cáo lịch đăng gốc kênh, đồng nghiệp góp ý bên dưới — tin không tag của người ngoài
+  allowlist không bao giờ tới bot): cùng khối DỮ LIỆU nhưng chỉ tin của người SAU tin muộn nhất bot đã thấy (`_candidates` + tin cuối của bot
+  trong `conversations.replies`), nối vào cuộc của thread (không mở cuộc mới); khối chỉ gửi ĐIỀU PHỐI VIÊN (`mgr_text`) — trả lời câu hỏi /
+  ô giao việc / `run.continue` vẫn nhận chữ gốc. Tên người: `users.info` (cache RAM), lỗi → user id.
+- **Tin chuyển tiếp** (Forward / dán link tin Slack, 2026-11-08): Slack để nội dung ở `attachments[]` (`is_share`/`is_msg_unfurl`), `text`
+  chỉ là lời người chuyển tiếp — trước đây bị bỏ (tin không lời thì im lặng). `_shared_context` → khối DỮ LIỆU (`frame`, che secret, ≤ 5 tin
+  × 3000 ký tự, tên `author_name` hoặc `users.info`, tệp kèm chỉ ghi số lượng) trước `Yêu cầu: <lời>`; chỉ sau cổng người. Áp cho DM và tin tag
+  trong kênh (cùng `_on_message`). Test: `test_forward*` trong `tests/test_slack_threads.py`.
 - Đổi so với P6: tag giữa thread CHƯA có bot giờ mở cuộc MỚI (trước: nối vào cuộc hiện tại của kênh).
 - **Cài lại app**: app tạo trước P8 phải dán lại manifest (hoặc thêm 2 event + 2 scope bằng tay ở Event Subscriptions / OAuth & Permissions)
   rồi **Reinstall to Workspace**; chưa cài lại → mọi thứ như P6 (cần tag lại trong thread), `thread_context` lỗi `missing_scope` → bỏ ngữ cảnh.
@@ -249,12 +257,58 @@ Bổ sung khi tích hợp P2–P5: `slack.status` trả thêm `team` (tên works
 - Test: `tests/test_slack_mentions.py` (run tiếp tục + notify → đúng thread; cuộc lạ → DM, kênh không nhận gì).
 
 ## Chế độ gọn: chỉ icon + kết quả
-- `notify.slack.busy_indicator: reaction` (mặc định `status`): bỏ "đang xử lý…" (setStatus), chỉ reaction ⏳ trên tin đã tag, gỡ khi có
+- `notify.slack.busy_indicator: reaction` (mặc định `reaction` từ v0.2.3; trước là `status`): bỏ "đang xử lý…" (setStatus), chỉ reaction ⏳ trên tin đã tag, gỡ khi có
   kết quả. Kết hợp `manager_progress: false` (không tin tiến độ) + `thread_followup: false` (chỉ trả lời khi được tag) → mỗi lần tag = ⏳
   rồi đúng MỘT tin kết quả trong thread.
 - Dòng cuối trả lời ở kênh chung (`ChatBot.continue_hint(chat)`) nói đúng cách nói tiếp: "Tag bot trong thread này…" khi tắt
   `thread_followup` (trước luôn ghi "Trả lời trong thread" + `/cfh moi`, sai ở kênh).
 - Test: `tests/test_slack_progress.py::test_quiet_mode_only_reaction_and_result`.
+- **Nội dung trả lời chỉ có kết quả** (`cfharness config set notify.slack.mention_reply result`, mặc định `full`; có ở trang Cài đặt): tin
+  tag bot trong kênh chung (`slack:C…`/`slack:G…`) → `prompts.chat_prompt(result_only=True)` thay câu dặn "nói đã giao việc gì" bằng
+  `RESULT_ONLY_NOTE`: trả lời thẳng/nêu kết quả 1-5 dòng, không kể bước, tool, agent, task, không mở đầu/tóm lại/mời thêm. Tin báo kết
+  quả task sau đó (heartbeat → `notify_owner` vào thread) cũng được dặn như vậy (`_origin_note`). DM giữ như cũ. Đây là lời dặn trong prompt,
+  hub không cắt bớt chữ. Test: `tests/test_slack_mentions.py::test_result_only_*`, `::test_mention_reply_result_mode_*`.
 
 ## Chưa làm
 - Nghiệm thu trên workspace Slack thật: chưa chạy (cả tag trong kênh — P6, `setStatus`/tin tiến độ — P7, thread không tag + ngữ cảnh thread — P8) (modal `views.open`, tải `url_private` với `files:read`, tệp từ máy tính + điện thoại).
+
+## Báo cáo lịch đăng thẳng vào kênh chung — `notify.slack.channel_root_posts` (2026-11-07)
+Mặc định kênh chung chỉ nhận trả lời trong thread (`SlackBot.root_post_ok` = chỉ DM), nên lịch có `deliver_to.channel = slack:C…` rơi vào
+thread của hội thoại đã tạo lịch (không biết thread → DM). Bật `notify.slack.channel_root_posts` (cần cả `allow_channels`, chỉ người đặt)
+→ `manager.reply` mang `schedule_id` (lịch kind agent/task qua `ScheduleService._deliver`; kind manager qua `run_opts.schedule_id` →
+`ManagerService._finish_run`) được đăng thành tin MỚI ở kênh. `SlackBot.schedule_root_ok` đọc lịch từ DB (không tin payload): lịch còn sống
+và `deliver_to.channel` đúng kênh đó. Trả lời chat, duyệt, câu hỏi không đổi. Test: `tests/test_slack_schedule_root.py`.
+
+## Sửa: tag bot trong thread mà bot trả lời ra gốc kênh (2026-11-08)
+Nguồn rò (ngoài bản sửa trước): (1) `ManagerChat._deliver` bỏ `reply_to` sau phần đầu → trả lời dài phần 2+ lên gốc kênh; (2) tin hub
+không kèm `reply_to` khi đang xử lý tin trong thread (hướng dẫn "chưa có điều phối viên", lỗi `manager.chat`, `run.continue`, báo lỗi tệp,
+câu hỏi/modal…); (3) tệp `[[file:]]` tải lên không có `thread_ts`; (4) kết quả run theo dõi (`_report_run`) sau `run.continue` từ thread.
+- Chặn ở MỘT chỗ: `SlackBot._send`/`send_document` → `_thread_for`. Kênh chung (không phải DM) không có `reply_to` → thread của việc đang
+  xử lý (contextvar `chat/base._THREAD`, đặt bằng `thread_scope` ở `_on_message`/`_on_channel_message`/`_on_actions`, reset ở
+  `handle_envelope`); không có → `_off_root`: DM của người đang thao tác (`_UID`, nếu trong allowlist) hoặc bỏ + log. Không bao giờ gốc kênh,
+  trừ `_ROOT_POST` (chỉ `_deliver(root_ok=True)` = kết quả lịch đã qua `schedule_root_ok`).
+- Đường giao tin từ bus (không có context của handler, hoặc context đã chép của việc KHÁC) tự đặt lại thread: `_deliver` (`reply_to`),
+  `_no_reply`, `_report_run` + tiến độ `flows._progress` (`<bot>.watch_thread`: run_id → tin để trả lời, ghi ở `_watch` từ `_THREAD`,
+  run con resume/continue kế thừa).
+- `_deliver`: kênh không đăng gốc được (`root_post_ok` sai) → mọi phần giữ `reply_to`; Telegram / Slack DM giữ nguyên hành vi cũ.
+- Test: `tests/test_slack_thread_leak.py`.
+- `notify slack test` (`ChatBot.send_test`) là tin NGƯỜI bấm → đặt `_ROOT_POST` trong lúc gửi: vẫn tới gốc kênh chung như trước.
+
+## Rà soát 2026-11 — định tuyến thread, cắt section, 429 (2026-11-08)
+Test đỏ→xanh: `tests/test_slack_audit_fixes.py`.
+- `_candidates` GỘP RAM `_thread` + bản lưu `slack.threads` (bỏ trùng, ts mới nhất trước, gốc cuối): sau khởi động lại RAM chỉ có tin tag
+  mới → trước đây bỏ qua tin bot đã lưu → tag trong thread rơi vào cuộc hiện tại của kênh (của thread khác).
+- `_on_message`: tin trong thread KÊNH CHUNG mà `_on_thread_reply` không gắn được cuộc nào (tin lịch ở gốc kênh, msgmap đã bị cắt) →
+  `manager.new_conversation` trước `handle_text` (như `_on_channel_message`). DM không đổi.
+- `_on_mention` tag ở gốc kênh → `_remember(ts, ts)` ngay (RAM + `slack.threads`): thread được biết trước tin đầu của bot (chế độ
+  `manager_progress: false` không còn rơi tin nói tiếp không tag). Tag lần đầu trong thread lạ: khối ngữ cảnh đi qua `mgr_text`, `text`
+  giữ chữ người → tin chuyển tiếp có nhãn `Yêu cầu (tin tag bot): <chữ người>` (không còn `Yêu cầu: <khối ngữ cảnh>`).
+- Nhận subtype `thread_broadcast` ("gửi cả vào kênh") ở `_on_message`/`_on_channel_message`/`_thread_context` (`MSG_SUBTYPES`).
+- `_thread_context`: `conversations.replies` có `latest=<tin tag>&inclusive`, `oldest=<tin muộn nhất bot đã thấy>` (thread đã vào), theo
+  `next_cursor` ≤ `CTX_MAX_PAGES` trang, giữ cửa sổ `CTX_KEEP_MSGS` tin MỚI nhất (Slack trả tin CŨ trước — `limit` thôi thì mất tin mới).
+  Slack giả hỗ trợ `cursor`/`oldest`/`latest`/`inclusive`.
+- `render.split_sections`: dòng quá dài cắt ở dấu cách (nửa sau), lùi khỏi thực thể `&…;` dang dở và token `<…>`; phần tiếp của dòng trích
+  dẫn mang lại `> ` (chữ agent không thoát khỏi khung trích dẫn — WT-8).
+- `_send` → `_post`: 429 có `retry_after` ≤ 60 s → chờ (`self._sleep`, test thay) và thử lại ≤ 2 lần. `ManagerChat._deliver` gọi
+  `manager_run_finished` SAU khi gửi (✅ chỉ khi tin đã tới; gửi lỗi hết → outcome `failed` → ❌).
+- `_on_slash`: người ngoài `allowed_user_ids` (không phải tin ghép nối) bị bỏ + audit TRƯỚC `conversations.open`/ghi `slack.dms`.

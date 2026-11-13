@@ -36,7 +36,7 @@ Mở terminal mới sau khi cài, để lệnh `uv` có trong PATH.
 **3. Cài cfharness:**
 
 ```bash
-uv tool install --python 3.13 git+https://github.com/lephuong123/agent-hub@v0.2.2
+uv tool install --python 3.13 git+https://github.com/lephuong123/agent-hub@v0.2.8
 uv tool update-shell        # đưa lệnh `cfharness` vào PATH (chỉ cần lần đầu), rồi mở terminal mới
 cfharness doctor            # kiểm claude, đăng nhập, sandbox… — không tốn tiền
 ```
@@ -63,7 +63,7 @@ Cập nhật bằng tay = cài đè đúng tag đó:
 
 ```bash
 cfharness daemon stop
-uv tool install --force --python 3.13 git+https://github.com/lephuong123/agent-hub@v0.2.2   # thay bằng tag mới nhất
+uv tool install --force --python 3.13 git+https://github.com/lephuong123/agent-hub@v0.2.8   # thay bằng tag mới nhất
 cfharness --version
 ```
 

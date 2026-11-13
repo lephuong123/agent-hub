@@ -1,16 +1,26 @@
 {% extends "base.html" %}
 {% block title %}Đăng nhập{% endblock %}
 {% block content %}
-<div class="login-hero">{{ _m.icon('logo', 'hero-mark') }}<span class="wordmark">cfharness</span><p class="login-tag">Điều phối cả đội agent của bạn — ngay trên máy này.</p></div>
+<div class="login-hero">{{ _m.icon('logo', 'hero-mark') }}<span class="wordmark">cfharness</span><p class="login-tag">Điều phối cả đội agent của bạn{% if not public %} — ngay trên máy này{% endif %}.</p></div>
 <section class="card narrow login">
   <h1>Đăng nhập cfharness</h1>
   {% if error %}<div class="flash error" role="alert">{{ error }}</div>{% endif %}
-  <p>Giao diện web chỉ dùng được trên chính máy này. Để đăng nhập, chạy lệnh sau trong terminal — trình duyệt sẽ tự mở và đăng nhập:</p>
+  {% if totp %}
+  <form method="post" action="/login" class="form">
+    <label>Mã 6 số trên ứng dụng xác thực<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required autofocus></label>
+    <div class="row end"><button class="btn primary" type="submit">Đăng nhập</button></div>
+  </form>
+  {% elif public %}
+  <p>Hub này chưa bật đăng nhập bằng mã. Nhờ quản trị viên chạy <code>cfharness web totp enroll</code> và gửi bạn link đăng ký.</p>
+  {% endif %}
+  {% if not public %}
+  <p>{% if totp %}Hoặc trên chính máy chạy hub, {% else %}Giao diện web chỉ dùng được trên chính máy này. Để đăng nhập, {% endif %}chạy lệnh sau trong terminal — trình duyệt sẽ tự mở và đăng nhập:</p>
   <pre class="cmd">cfharness web --open</pre>
   <p class="muted small">Link đăng nhập chỉ dùng được một lần và hết hạn sau vài phút. Nếu trình duyệt không tự mở, dán link mà lệnh in ra vào ô dưới:</p>
+  {% endif %}
   <form method="post" action="/login" class="form">
-    <label>Link đăng nhập<input name="link" autocomplete="off" placeholder="http://127.0.0.1:…/login?t=…" required></label>
-    <div class="row end"><button class="btn primary" type="submit">Đăng nhập</button></div>
+    <label>Link đăng nhập một lần<input name="link" autocomplete="off" placeholder="…/login?t=…" required></label>
+    <div class="row end"><button class="btn {% if totp %}ghost{% else %}primary{% endif %}" type="submit">Đăng nhập bằng link</button></div>
   </form>
 </section>
 {% endblock %}

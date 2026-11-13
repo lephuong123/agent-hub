@@ -17,8 +17,26 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-DEFAULT_PORT = 33418
+DEFAULT_PORT = 33418  # = config.MCP_OAUTH_CALLBACK_DEFAULT_PORT; đổi bằng `config set mcp_client.oauth_callback_port N` (0 = OS chọn)
 WAIT_S = 600
+
+
+def callback_port(ctx: Any) -> int:
+    """Cổng listener: `--port` > `mcp_client.oauth_callback_port` > 33418. 0 = OS chọn. Cố định (mặc định) để `redirect_uri` ổn
+    định → bản đăng ký DCR dùng lại được; hub thứ hai cùng user OS có thể đặt cổng khác (đa instance P1)."""
+    a = ctx.args
+    if getattr(a, "port", None) is not None:
+        return int(a.port)
+    try:
+        from ..config import HubConfig
+
+        v = HubConfig(ctx.paths.config).get("mcp_client.oauth_callback_port")
+    except Exception:
+        v = None
+    try:
+        return DEFAULT_PORT if v is None or isinstance(v, bool) else max(0, min(65535, int(v)))
+    except (TypeError, ValueError):
+        return DEFAULT_PORT
 
 
 def _bind(port: int) -> HTTPServer:
@@ -74,7 +92,7 @@ def cmd_login(ctx: Any) -> int:
     if s.get("oauth_status") is None:
         print(f"lỗi: MCP server '{a.name}' chưa bật OAuth — `cfharness mcp edit {a.name} --oauth`", file=sys.stderr)
         return 1
-    httpd = _bind(int(a.port or DEFAULT_PORT))
+    httpd = _bind(callback_port(ctx))
     httpd.timeout = 1.0
     httpd.result = None  # type: ignore[attr-defined]
     httpd.call = ctx.call  # type: ignore[attr-defined]
@@ -121,7 +139,7 @@ def add_parsers(ms: Any, common: Any) -> None:
     lg = ms.add_parser("login", help="đăng nhập OAuth cho MCP server http/sse (mở trình duyệt, chờ callback ở 127.0.0.1)", parents=[common])
     lg.add_argument("name")
     lg.add_argument("--no-browser", action="store_true", help="chỉ in link, không tự mở trình duyệt")
-    lg.add_argument("--port", type=int, default=None, help=f"cổng callback loopback (mặc định {DEFAULT_PORT}; bận → ngẫu nhiên)")
+    lg.add_argument("--port", type=int, default=None, help=f"cổng callback loopback (mặc định mcp_client.oauth_callback_port = {DEFAULT_PORT}; 0 = OS chọn; bận → ngẫu nhiên)")
     lg.add_argument("--timeout", type=float, default=None, help="giây chờ (mặc định 600)")
     lo = ms.add_parser("logout", help="ngắt kết nối OAuth (thu hồi token nếu được, xoá khỏi secret store)", parents=[common])
     lo.add_argument("name")

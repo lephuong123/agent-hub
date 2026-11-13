@@ -95,7 +95,7 @@ class BrowserLock:
     def _save(self, d: dict[str, dict[str, Any]]) -> None:
         self.store.state_set(BROWSER_STATE_KEY, d)
 
-    def acquire(self, run_id: str, agent_id: str | None, limit: int, is_active: Any = None) -> dict[str, dict[str, Any]] | None:
+    def acquire(self, run_id: str, agent_id: str | None, limit: int | None, is_active: Any = None) -> dict[str, dict[str, Any]] | None:
         """None = run giữ khoá (mới lấy hoặc đã có); dict = các run đang giữ (đã đủ `limit`)."""
         d = self._all()
         if run_id in d:
@@ -103,7 +103,7 @@ class BrowserLock:
         n = len(d)
         if is_active is not None:
             d = {rid: h for rid, h in d.items() if is_active(rid)}
-        if len(d) >= max(1, int(limit)):
+        if limit is not None and len(d) >= max(1, int(limit)):
             if len(d) != n:
                 self._save(d)
             return d
