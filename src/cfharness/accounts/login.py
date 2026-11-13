@@ -33,7 +33,7 @@ from collections.abc import Callable
 from typing import Any
 
 from cfharness.errors import HubError, SystemFailure
-from cfharness.oscompat import IS_WINDOWS, exec_argv, kill_tree
+from cfharness.oscompat import IS_WINDOWS, exec_argv, kill_tree, no_window_kwargs
 
 log = logging.getLogger(__name__)
 
@@ -210,7 +210,8 @@ class _PosixPty(_Pty):  # pragma: no cover — POSIX
         try:
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", PTY_ROWS, PTY_COLS, 0, 0))
             self.proc = await asyncio.create_subprocess_exec(
-                *argv, stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True, close_fds=True
+                *argv, stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True, close_fds=True,
+                **no_window_kwargs(),  # nhánh POSIX → {}; giữ để test_windows_no_console nhận ra
             )
         except BaseException:
             os.close(master)
