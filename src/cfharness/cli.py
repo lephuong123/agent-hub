@@ -428,6 +428,9 @@ def _agent_payload(a: argparse.Namespace, *, creating: bool) -> dict[str, Any]:
         if not w.strip(", "):  # chuỗi rỗng dễ là gõ nhầm → không âm thầm chặn hết; chặn hết phải ghi rõ 'none'
             raise ValueError("--web-domains rỗng: dùng 'none' để chặn mọi WebFetch, 'any' để bỏ giới hạn")
         tp["web_allow_domains"] = None if w == "any" else [] if w == "none" else _split_list([w])
+    if getattr(a, "connectors", None) is not None:  # "none" = tắt
+        names = [x.strip() for x in a.connectors.split(",") if x.strip()]
+        tp["connectors"] = None if names in ([], ["none"]) else names
     for src, dst in (("allowed_tools", "allowed_tools"), ("disallowed_tools", "disallowed_tools"), ("tools", "tools")):
         v = _split_list(getattr(a, src, None))
         if v is not None:
@@ -481,6 +484,8 @@ def _agent_text(ag: dict[str, Any]) -> str:
         f"  browser: {tp.get('browser') or '(mặc định hub: runtime.claude.chrome.default_mode)'}  (Claude in Chrome: chrome|auto — docs/dev-notes/chrome.md)",
         f"  web_allow_domains: {_web_domains_text(tp)}",
         f"  mcp: {','.join(ag.get('mcp_servers') or []) or '-'}",
+        f"  connector claude.ai: {','.join(tp.get('connectors') or []) or '-'}"
+        + ("  (run nạp cấu hình user ~/.claude; cần guard bật)" if tp.get("connectors") else ""),
         f"  plugins: {', '.join(ag.get('plugins') or []) or '-'}",
         f"  limits: {json.dumps(lim, ensure_ascii=False)}",
         f"  workspace: {ag.get('workspace_default') or '(scratch theo run)'}",
@@ -785,6 +790,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--web-domains", help="allowlist domain WebFetch, phân tách dấu phẩy (vd docs.python.org,*.github.io); "
                         "'any' = không giới hạn, 'none' = chặn mọi WebFetch")
         sp.add_argument("--mcp", action="append", help="tên MCP server trong registry")
+        sp.add_argument("--connectors", help="connector claude.ai cho agent, phân cách dấu phẩy (vd \"Atlassian,Slack\"); 'none' = tắt. "
+                        "Bật = run nạp cấu hình user ~/.claude; cần guard bật; tool ghi KHÔNG hỏi duyệt, chỉ xoá mới hỏi")
         sp.add_argument("--plugin", action="append", help="plugin Claude Code nạp cho run (tên@marketplace đã `claude plugin install`, "
                         "hoặc đường dẫn tuyệt đối); lặp lại hoặc phân tách dấu phẩy; 'none' = bỏ hết")
         sp.add_argument("--browser", choices=["chrome", "playwright", "auto", "none", "default"],

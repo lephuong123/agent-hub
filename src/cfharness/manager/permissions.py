@@ -396,7 +396,7 @@ class ManagerPermissions:
                 return "tool_policy phải là object"
             bad = sorted(k for k in tp if k not in TOOL_POLICY_FIELDS)
             if bad:
-                return f"tool_policy: không được đặt {', '.join(bad)} (chỉ người: allow_bypass, permission_prompts)"
+                return f"tool_policy: không được đặt {', '.join(bad)} (chỉ người: allow_bypass, permission_prompts, connectors)"
             if tp.get("permission_mode") in FORBIDDEN_MODES:
                 return "permission_mode=bypassPermissions bị cấm với điều phối viên (NFR-15)"
             if "browser" in tp and tp["browser"] not in BROWSER_VALUES:
