@@ -1000,3 +1000,94 @@ details.flagged > summary { cursor: pointer; }
 .mg-f-text { display: block; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
 @media (max-width: 1100px) { .mg-wrap { grid-template-columns: 1fr; } .mg-side { position: static; max-height: none; } .mg-canvas { height: 56vh; } }
 .mem-tiers code { white-space: nowrap; }
+
+/* ============================================================ transcript dùng chung (.tx-*) — trang run, sau này cả Điều phối
+   (docs/dev-notes/plan-chat-ui-claude.md mục 2). Màu token code = CLASS pygments `tk-*` (CSP chặn style=). */
+:root {
+  --tk-kw: #8a3ffc; --tk-str: #2f7d32; --tk-com: #8a877c; --tk-num: #b5540b; --tk-fn: #1f5f99; --tk-type: #0f766e;
+  --tk-builtin: #a1386b; --tk-op: #5c5a52; --tk-tag: #b0332b; --tk-attr: #8a6d0b; --tk-err: #b5412f;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --tk-kw: #c4a7ff; --tk-str: #9fd28f; --tk-com: #8f8c82; --tk-num: #f0a868; --tk-fn: #8cc4f2; --tk-type: #72d3c4;
+    --tk-builtin: #f09ac4; --tk-op: #c9c6bb; --tk-tag: #f0907c; --tk-attr: #e8c872; --tk-err: #f08a78;
+  }
+}
+.tx-code { margin: .55rem 0; border: 1px solid var(--line); border-radius: var(--r); background: var(--code-bg); overflow: hidden; font-family: var(--sans); }
+.tx-code-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 6px 4px 12px; border-bottom: 1px solid var(--line);
+  font-size: var(--fs-xs); color: var(--muted); }
+.tx-lang { font-family: var(--mono); }
+.tx-copy { border: 0; background: transparent; color: var(--muted); font: inherit; padding: 3px 8px; border-radius: 6px; cursor: pointer; min-height: 26px; }
+.tx-copy:hover, .tx-copy:focus-visible { background: var(--surface-3); color: var(--text); }
+.tx-code pre { margin: 0; border-radius: 0; background: transparent; white-space: pre; word-break: normal; overflow-x: auto; padding: 10px 12px; font-size: 12.5px; line-height: 1.55; }
+.tx-code pre code { background: transparent; padding: 0; color: inherit; font-size: inherit; overflow-wrap: normal; }
+.tx-code [class^="tk-k"] { color: var(--tk-kw); }
+.tx-code [class^="tk-s"], .tx-code .tk-dl { color: var(--tk-str); }
+.tx-code [class^="tk-c"], .tx-code .tk-ch, .tx-code .tk-cm { color: var(--tk-com); font-style: italic; }
+.tx-code [class^="tk-m"], .tx-code .tk-il { color: var(--tk-num); }
+.tx-code .tk-nf, .tx-code .tk-fm, .tx-code .tk-nd { color: var(--tk-fn); }
+.tx-code .tk-nc, .tx-code .tk-nn, .tx-code .tk-kt { color: var(--tk-type); }
+.tx-code .tk-nb, .tx-code .tk-bp, .tx-code .tk-nv, .tx-code .tk-vg, .tx-code .tk-vi { color: var(--tk-builtin); }
+.tx-code .tk-o, .tx-code .tk-ow { color: var(--tk-op); }
+.tx-code .tk-nt { color: var(--tk-tag); }
+.tx-code .tk-na, .tx-code .tk-nl { color: var(--tk-attr); }
+.tx-code .tk-err { color: var(--tk-err); }
+.tx-code .tk-gi { color: var(--ok); } .tx-code .tk-gd { color: var(--danger); } .tx-code .tk-gh, .tx-code .tk-gu { color: var(--info); font-weight: 650; }
+.tx-code .tk-ge { font-style: italic; } .tx-code .tk-gs { font-weight: 650; }
+.tx-table { overflow-x: auto; margin: .55rem 0; max-width: 100%; }
+.tx-table table { border-collapse: collapse; font-family: var(--sans); font-size: var(--fs-sm); }
+.tx-table th, .tx-table td { border: 1px solid var(--line); padding: .3rem .6rem; vertical-align: top; }
+.tx-table th { background: var(--surface-2); font-weight: 650; text-align: left; }
+.tx-table .al-left { text-align: left; } .tx-table .al-right { text-align: right; } .tx-table .al-center { text-align: center; }
+.md a.ext { text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.md .ext-host { color: var(--muted); font-family: var(--sans); font-size: var(--fs-xs); }
+.md .contains-task-list { list-style: none; padding-left: .4rem; }
+.md .task-list-item-checkbox { margin: 0 .4rem 0 0; vertical-align: -1px; }
+.md s { color: var(--muted); }
+.md blockquote { margin: .5rem 0; padding: 0 0 0 .9rem; border-left: 3px solid var(--line-2); color: var(--text-2); }
+.tx-cut { color: var(--muted); font-size: var(--fs-xs); font-weight: 450; }
+.tx-copy-buf { position: fixed; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; }
+
+/* dòng tool một dòng kiểu Claude: <details class="tx-tool"><summary> trạng thái · động từ · đích · meta · thời gian · chip file */
+.ti.tool.tx-tool { background: transparent; border: 0; padding: 0; font-size: var(--fs-sm); border-radius: var(--r-sm); }
+.ti.tool.tx-tool.sub { margin-left: 22px; padding-left: 10px; border-left: 2px solid var(--line); border-radius: 0; }
+.tx-tool-sum { display: flex; align-items: center; gap: 7px; min-width: 0; cursor: pointer; list-style: none; padding: 3px 6px; border-radius: var(--r-sm); color: var(--text-2); }
+.tx-tool-sum::-webkit-details-marker { display: none; }
+.tx-tool-sum:hover { background: var(--surface-2); }
+.tx-st { flex: none; display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center; color: var(--muted); }
+.tx-st .ic { width: 13px; height: 13px; }
+.tx-tool.err .tx-st, .tx-tool.err .tx-verb { color: var(--danger); }
+.tx-spin { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--info-line); border-top-color: var(--info); animation: think-spin 1s linear infinite; }
+.tx-verb { flex: none; font-weight: 650; color: var(--text); }
+.tx-target { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12.5px; color: var(--text-2); }
+.tx-meta, .tx-dur { flex: none; color: var(--muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.tx-dur.spin { color: var(--info); }
+.tx-tool-sum .fchip { flex: none; }
+.tx-chev { flex: none; margin-left: auto; width: 14px; height: 14px; color: var(--faint); transition: transform .15s; }
+.tx-tool[open] > .tx-tool-sum .tx-chev { transform: rotate(180deg); }
+.tx-tool-body { margin: 2px 0 6px 23px; padding: 6px 0 2px 12px; border-left: 2px solid var(--line); }
+.tx-io-h { font-size: var(--fs-xs); font-weight: 650; color: var(--muted); margin: 6px 0 3px; }
+.tx-in, .tx-out { margin: 0; max-height: 22rem; overflow: auto; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.tx-tool.err .tx-out { background: var(--danger-soft); color: var(--danger); }
+.tx-in mark.ctl, .tx-out mark.ctl, .tx-target mark.ctl { background: var(--danger); color: #fff; border-radius: 3px; padding: 0 2px; }
+.tx-group > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-sm); padding: 3px 6px; }
+
+/* P0-8: dòng meta "Bắt đầu" dưới yêu cầu, ✓ trên chỉ đạo, chân run gọn (khung màu chỉ khi lỗi) */
+.ti.prompt .tx-start { margin-top: 6px; color: var(--muted); font-size: var(--fs-xs); }
+.ti.start.tx-start { display: block; color: var(--muted); font-size: var(--fs-xs); font-weight: 450; padding: 0 4px; }
+.ti.start.tx-start::before, .ti.start.tx-start::after { content: none; }
+.tx-ack { display: inline-flex; align-items: center; gap: 3px; color: var(--ok); font-weight: 600; }
+.ti.end.tx-end { background: transparent; border: 0; padding: 2px 4px; font-weight: 500; font-size: var(--fs-xs); color: var(--muted); gap: 6px; }
+.ti.end.tx-end .ic { width: 13px; height: 13px; }
+.ti.end.tx-end.ok .ic { color: var(--ok); }
+.ti.end.tx-end.danger, .ti.end.tx-end.warn { padding: 8px 12px; font-size: var(--fs-sm); font-weight: 600; border: 1px solid; }
+.ti.end.tx-end.danger { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
+.ti.end.tx-end.warn { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }
+.tx-thinking.live > summary { color: var(--info); }
+.result-card.compact h2 { margin-bottom: 4px; }
+@media (max-width: 640px) {
+  .tx-tool-sum { flex-wrap: wrap; row-gap: 2px; }
+  .tx-target { flex: 1 1 5em; }
+  .tx-tool-sum .fchip { order: 10; flex-basis: 100%; padding-left: 23px; }
+  .tx-tool-body { margin-left: 8px; padding-left: 8px; }
+}

@@ -207,56 +207,110 @@
     for (var i = 0; i < bs.length; i++) bs[i].disabled = false;
   });
 
-  // ------------------------------------------------------------ live run
+  // ------------------------------------------------------------ transcript dùng chung (trang run; trang Điều phối sẽ dùng lại)
   function nearBottom(el) { return el.scrollHeight - el.scrollTop - el.clientHeight < 120; }
   function fromHTML(html) {
     var t = document.createElement("template");
     t.innerHTML = html.trim();
     return t.content.firstElementChild;
   }
+  /* txAppend(container, msg) — áp MỘT message SSE dạng transcript vào `container`, trả phần tử vừa chèn/thay (hoặc null):
+   *   {t:"delta", k:"text"|"reasoning", text}  → nối vào khối đang chạy chữ bằng textContent (không bao giờ là HTML);
+   *   {t:"item", kind, dom?, html}             → HTML do SERVER vẽ: thay khối đang chạy chữ cùng loại (msg/reasoning),
+   *                                              thay phần tử cùng id `dom` (giữ trạng thái mở của <details>), không thì nối cuối.
+   * Giữ vị trí cuộn: chỉ bám đáy khi người đang ở gần đáy. Trạng thái khối đang chạy chữ nằm trên container (`_tx`). */
+  function txAppend(container, m) {
+    var st = container._tx || (container._tx = { text: null, think: null });
+    var stick = nearBottom(container), node = null;
+    var empty = container.querySelector(".empty");
+    if (empty && empty.parentNode === container) empty.remove();
+    if (m.t === "delta") {
+      var key = m.k === "text" ? "text" : "think";
+      // suy nghĩ mới SAU chữ trả lời → khối suy nghĩ mới (khối cũ vẫn chờ `reasoning.complete` thay tại chỗ nếu có)
+      if (key === "think" && st.text) { st.think = null; st.text = null; }
+      if (!st[key]) {
+        st[key] = fromHTML(key === "text" ? '<div class="ti msg tx-msg streaming"><div class="md"></div></div>'
+          : '<details class="ti reasoning tx-thinking live"><summary>Suy nghĩ…</summary><pre></pre></details>');
+        container.appendChild(st[key]);
+      }
+      node = st[key];
+      (key === "text" ? node.querySelector(".md") : node.querySelector("pre")).textContent += m.text || "";
+    } else if (m.t === "item" && m.html) {
+      node = fromHTML(m.html);
+      if (!node) return null;
+      var old = m.dom ? document.getElementById(m.dom) : null;
+      if (old && !container.contains(old)) old = null;
+      var live = m.kind === "msg" ? st.text : (m.kind === "reasoning" ? st.think : null);
+      if (live && live.parentNode && !old) {
+        if (live.tagName === "DETAILS" && live.open && node.tagName === "DETAILS") node.open = true;
+        live.replaceWith(node);
+        if (m.kind === "msg") st.text = null; else st.think = null;
+      } else if (old) {
+        if (old.tagName === "DETAILS" && old.open && node.tagName === "DETAILS") node.open = true;
+        old.replaceWith(node);
+      } else {
+        st.text = null; st.think = null;
+        container.appendChild(node);
+      }
+    }
+    if (stick) container.scrollTop = container.scrollHeight;
+    return node;
+  }
+  window.cfhTx = { append: txAppend, fromHTML: fromHTML, nearBottom: nearBottom };
 
+  // nút "Sao chép" của khối code (md()): một handler uỷ quyền; trang không phải secure context → textarea ẩn + execCommand
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+    return new Promise(function (ok, fail) {
+      var ta = document.createElement("textarea");
+      ta.value = text; ta.setAttribute("readonly", ""); ta.className = "tx-copy-buf";
+      document.body.appendChild(ta); ta.select();
+      var done = false;
+      try { done = document.execCommand("copy"); } catch (_) { done = false; }
+      ta.remove();
+      if (done) ok(); else fail(new Error("copy"));
+    });
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target && e.target.closest ? e.target.closest(".tx-copy") : null;
+    if (!b) return;
+    var box = b.closest(".tx-code"), pre = box && box.querySelector("pre");
+    if (!pre) return;
+    var label = b.getAttribute("data-label") || b.textContent;
+    b.setAttribute("data-label", label);
+    copyText(pre.textContent).then(function () { b.textContent = "Đã chép"; }, function () { b.textContent = "Không chép được"; })
+      .then(function () { setTimeout(function () { b.textContent = label; }, 1500); });
+  });
+
+  // ------------------------------------------------------------ live run
   var tr = document.querySelector("[data-sse-run]");
   if (tr && window.EventSource) {
     var es = new EventSource(tr.getAttribute("data-sse-run"));
-    var cur = null, curKind = null;
     var state = document.getElementById("live-state");
-    var empty = tr.querySelector(".empty");
     tr.scrollTop = tr.scrollHeight;
     window.addEventListener("load", function () { tr.scrollTop = tr.scrollHeight; });
-    function scrollMaybe(stick) { if (stick) tr.scrollTop = tr.scrollHeight; }
-    function endBlock() { cur = null; curKind = null; }
+    // run xong: thay ô steer bằng thẻ Kết quả (partial) — KHÔNG tải lại trang, transcript (khối đang mở, suy nghĩ live) giữ nguyên
+    var finishTries = 0;
+    function finishRun() {
+      var msgs = tr.querySelectorAll(".tx-msg:not(.sub)");
+      for (var i = 0; i < msgs.length; i++) msgs[i].classList.toggle("final", i === msgs.length - 1);
+      var card = document.getElementById("steer-card");
+      if (!card || !window.htmx) return;
+      var box = card.querySelector("textarea"), draft = box ? box.value : "";
+      window.htmx.ajax("GET", card.getAttribute("data-result"), { target: card, swap: "outerHTML" }).then(function () {
+        if (document.getElementById("steer-card")) {  // 204: daemon chưa ghi trạng thái cuối → thử lại
+          if (++finishTries < 5) setTimeout(finishRun, 1200);
+          return;
+        }
+        var t = document.querySelector('#run-result textarea[name="prompt"]');
+        if (t && draft.trim()) t.value = draft;  // chữ đang gõ dở trong ô steer chuyển sang ô "Nói tiếp"
+      });
+    }
     es.onmessage = function (ev) {
       var m;
       try { m = JSON.parse(ev.data); } catch (_) { return; }
-      var stick = nearBottom(tr);
-      if (empty) { empty.remove(); empty = null; }
-      if (m.t === "delta") {
-        if (curKind !== m.k) {
-          if (m.k === "text") {
-            cur = fromHTML('<div class="ti msg streaming"><div class="md"></div></div>');
-            tr.appendChild(cur);
-          } else {
-            cur = fromHTML('<details class="ti reasoning"><summary>Suy nghĩ…</summary><pre></pre></details>');
-            tr.appendChild(cur);
-          }
-          curKind = m.k;
-        }
-        var tgt = m.k === "text" ? cur.querySelector(".md") : cur.querySelector("pre");
-        tgt.textContent += m.text;
-        scrollMaybe(stick);
-      } else if (m.t === "item") {
-        var node = fromHTML(m.html);
-        if (!node) return;
-        if ((m.kind === "msg" && curKind === "text" || m.kind === "reasoning" && curKind === "reasoning") && cur) {
-          cur.replaceWith(node); endBlock();
-        } else if (m.dom && document.getElementById(m.dom)) {
-          document.getElementById(m.dom).replaceWith(node);
-          if (curKind) endBlock();
-        } else {
-          if (curKind) endBlock();
-          tr.appendChild(node);
-        }
-        scrollMaybe(stick);
+      if (m.t === "delta" || m.t === "item") {
+        txAppend(tr, m);
       } else if (m.t === "stats") {
         var c = document.getElementById("st-cost"), k = document.getElementById("st-tok");
         if (c) c.textContent = m.cost;
@@ -267,8 +321,7 @@
       } else if (m.t === "end") {
         es.close();
         if (state) { state.textContent = "đã kết thúc"; state.className = "pill muted"; }
-        var box = document.querySelector("#steer-form textarea");
-        if (!box || !box.value.trim()) setTimeout(function () { location.reload(); }, 800);
+        setTimeout(finishRun, 300);
       }
     };
     es.onerror = function () { if (state) { state.textContent = "đang nối lại…"; state.className = "pill warn"; } };

@@ -175,3 +175,19 @@ These rules apply to free-text replies a person reads. When you are asked for st
   đang chạy bằng mục `reasoning` (như `msg` thay khối chữ) để không hiện đôi. Lưu ý: fixture thật 2.1.310 có `thinking` rỗng → với
   CLI hiện tại có thể ít khi có nội dung để lưu. Test: fixture `tests/fixtures/claude-thinking.jsonl` (tổng hợp theo dạng thật),
   `tests/test_adapter.py`, `tests/test_persist_thinking.py` (FakeRuntime → DB → `replay_items`), snapshot `docs/schema/event.v1.json`.
+- **P0-2 + P0-3 + P0-7 + P0-8 + bộ render dùng chung (PR `feat/web-render-core`)**:
+  - `present.md()`: commonmark + `table`/`strikethrough` + tasklists (ô tích disabled), `html=False`, `validateLink` giữ nguyên;
+    link `rel="nofollow noopener noreferrer" target=_blank class=ext title=URL` + `<span class="ext-host">(tên miền)</span>` (IDN → punycode,
+    autolink không lặp tên miền); ảnh → link chữ "ảnh: alt" (không bao giờ `<img>`); bảng trong `.tx-table`; căn cột `style=` của
+    markdown-it đổi thành class `al-*`; fence → `.tx-code` (tên = alias lexer pygments, không nhận ra → `text`), pygments chỉ class `tk-*`,
+    bỏ tô màu khi code > 20k ký tự; LRU 256 theo blake2b; đầu vào cắt ở 100k ký tự. Khai báo `markdown-it-py`, `mdit-py-plugins`, `pygments`.
+  - `present.Transcript` (bộ gộp event → mục) dùng chung cho `replay_items` và `_run_converter` → live giữ input/diff/chip khi tool xong;
+    `merge_tool(prev, it)`; partial `/partials/run/<id>/result` (204 khi còn chạy) thay `location.reload()`; `/partials/run/<id>` trả 286
+    cho htmx khi run đã xong (ngừng poll).
+  - `tool_view(name, input, result, is_error, dur, *, summary)`; template `_transcript.html` (`tx_msg`, `tx_tool`, `tx_thinking`,
+    `tx_group` bản đơn giản, `tx_segs`); JS `txAppend(container, msg)` (+ `window.cfhTx`), nút Sao chép uỷ quyền.
+  - P0-8: thẻ Kết quả trùng tin cuối → chỉ hàng phản hồi + lỗi; `final` trên tin cuối; `run.started` → dòng meta trong khung yêu cầu;
+    `steer.ack` → "✓ agent đã nhận" trên chỉ đạo gần nhất; bỏ dòng `subagent.spawn`; chân run gọn, khung màu chỉ khi danger/warn.
+  - Lệch kế hoạch: động từ `Task`/`Agent` = "Giao subagent", `TodoWrite` = "Cập nhật danh sách việc"; `highlight()` thêm tham số
+    `danger` (dòng tool chỉ lộ ký tự ẩn/bidi, không tô "nguy hiểm"); chip file vẫn mang `data-path` như trước (test file-open dựa vào).
+    Test: `tests/test_web_markdown.py`.

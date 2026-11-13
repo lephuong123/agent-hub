@@ -7,7 +7,7 @@ Nguồn: `docs/plan/web-telegram.md` (quyền sở hữu, nguyên tắc), BRD FR
 |---|---|
 | `web/security.py` | Chỉ loopback (`require_loopback`), link đăng nhập một lần (HMAC khoá RAM + `HUB_HOME/auth/web.json` 0600, dir 0700), phiên RAM (cookie `ahub_web` HttpOnly/SameSite=Strict/Path=/, idle 12 h, tối đa 7 ngày), CSRF theo phiên, `allowed_hosts` |
 | `web/app.py` | Starlette: `GuardMiddleware` ASGI thuần (Host → 421, chưa đăng nhập → 303 /login hoặc 401, header CSP/XFO/no-referrer/no-store; không đệm nên SSE chạy); trang; `POST /do/<action>` bảng `ACTIONS`; SSE |
-| `web/present.py` | Thuần: nhãn tiếng Việt (agent/run/task/lý do chờ), `transcript_item(ev)` (event → mục), `activity_item` (dùng lại `tui.model.activity_line`), `md()` an toàn (markdown-it, HTML thô bị escape, link chỉ http/https/mailto) |
+| `web/present.py` | Thuần: nhãn tiếng Việt (agent/run/task/lý do chờ), `transcript_item(ev)` (event → mục), `activity_item` (dùng lại `tui.model.activity_line`), `md()` an toàn (markdown-it + bảng/gạch ngang/tasklist, HTML thô bị escape, link chỉ http/https/mailto có `rel` + tên miền, ảnh → link chữ, code tô màu bằng class pygments + nút Sao chép), `Transcript`/`merge_tool`/`tool_view` dùng chung cho phát lại và live (`templates/_transcript.html`) |
 | `web/cli.py` | `cfharness web [--host] [--port 8765] [--open] [--url]` — đã có server chạy thì chỉ cấp link mới |
 | `web/demo.py` | `python -m cfharness.web.demo --home <tmp> --port 8799`: daemon thật + FakeRuntime + dữ liệu mẫu (run giữ, approval waiting_human) — dùng chụp ảnh |
 | `web/templates/`, `web/static/` | Jinja2; `htmx-2.0.4.min.js` vendored (sha384 `HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+`, 0BSD), `app.css`, `app.js` (hộp xác nhận, EventSource) |
