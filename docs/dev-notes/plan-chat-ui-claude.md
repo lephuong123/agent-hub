@@ -191,3 +191,14 @@ These rules apply to free-text replies a person reads. When you are asked for st
   - Lệch kế hoạch: động từ `Task`/`Agent` = "Giao subagent", `TodoWrite` = "Cập nhật danh sách việc"; `highlight()` thêm tham số
     `danger` (dòng tool chỉ lộ ký tự ẩn/bidi, không tô "nguy hiểm"); chip file vẫn mang `data-path` như trước (test file-open dựa vào).
     Test: `tests/test_web_markdown.py`.
+- **P0-10 + P1-9 + P1-10 (PR `feat/channel-markdown`)**: `chat/mdconv.py` mới (markdown-it `commonmark`+`table`+`strikethrough`,
+  `html=False` → khối trung gian → `to_telegram_html` / `to_slack_mrkdwn`; `split_md` chia theo khối TRƯỚC khi render, đo SAU khi render,
+  mở lại fence cùng ngôn ngữ, lặp tiêu đề bảng). Telegram: trả lời điều phối viên, kết quả `/run`, câu hỏi agent dùng markdown → HTML
+  whitelist (`b i s code pre`), link thành chữ `nhãn (URL)` (không `<a>`), `/lệnh` trong `<code>`; dòng hub + `AGENT_FRAME` luôn đứng
+  trước, đuôi hub in nghiêng cách một dòng; tin duyệt giữ `<pre>`. Cờ `notify.telegram.agent_render: markdown|pre`. Quá 4 tin → kèm tệp
+  `.md`. `manager/service.TEXT_MAX` 4000 → 20000 (= trần DB) + `truncated: true` (cả `notify_owner`). Slack: `quote_mrkdwn` gọi mdconv
+  (bảng, `*nghiêng*`, bỏ `---`, fence vắt hai tin). `manager_chat.sanitize_reply` gỡ `[cfharness…`/`NO_ACTION`/`<untrusted-data>`;
+  chữ lỗi của hub "(Điều phối viên không trả lời được: <kết quả tiếng Việt>[ — lý do])" không ghép run id — giữ tiền tố
+  `chatview.FAIL_PREFIX` để lịch sử/TUI vẫn nhận ra lỗi (TUI `failure_text` hiểu cả dạng mới). WT-8 nới ghi ở `telegram.md`.
+  Test: `tests/test_mdconv.py`, `tests/tg_html.py`, cập nhật `test_telegram*.py`, `test_slack*.py`, `test_manager.py`.
+  Chưa kiểm hiển thị trên Telegram/Slack thật.

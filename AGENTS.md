@@ -282,7 +282,7 @@ Chi tiết, lý do chọn `httpx2`, test chứng minh, việc dở: `docs/dev-no
 | `chat/media.py` | `bot.media` (`MediaBase` dùng chung mọi kênh; `MediaChat` = Telegram, Slack: `chat/slack/media.py`): ảnh/tệp văn bản người gửi (tải SAU allowlist, kiểm cỡ trước `getFile`, album gom một tin) → `manager.chat{images, files}`; thoại → báo chưa hỗ trợ; dòng `[[file: <tương đối>]]` trong trả lời điều phối viên → `sendDocument` (chỉ tệp thường trong cwd hội thoại, không symlink, ≤ `deliver_max_bytes`, không chứa secret). Test: `tests/test_telegram_media.py` |
 
 Bất biến: lệnh/nút từ chat CHỈ đi qua `Daemon.call_as(auth.telegram_caller(hub, chat_id), …)` (cổng HUMAN_ONLY + audit kênh `telegram:<chat_id>`);
-`telegram_caller(hub, chat_id, from_id)` là người chỉ khi bot bật VÀ chat ∈ `allowed_chat_ids` VÀ người gửi/bấm được phép (chat riêng: from.id = chat; nhóm: `allow_groups` + from.id ∈ `allowed_user_ids`). Nội dung agent (lệnh, kết quả) chỉ trong `<pre>` sau tiền tố cố định, KHÔNG BAO GIỜ cùng tin với nút; mọi "Cho phép" 2 bước. Chat
+`telegram_caller(hub, chat_id, from_id)` là người chỉ khi bot bật VÀ chat ∈ `allowed_chat_ids` VÀ người gửi/bấm được phép (chat riêng: from.id = chat; nhóm: `allow_groups` + from.id ∈ `allowed_user_ids`). Nội dung agent chỉ đứng SAU tiền tố cố định, KHÔNG BAO GIỜ cùng tin với nút: lệnh (tin duyệt) trong `<pre>`; trả lời/kết quả/câu hỏi là markdown → HTML whitelist qua `chat/mdconv.py` (không `<a>`, link thành chữ `nhãn (URL)`, `/lệnh` trong `<code>`; cờ `notify.telegram.agent_render: pre` quay lại `<pre>` — docs/dev-notes/telegram.md mục 2026-11-13); mọi "Cho phép" 2 bước. Chat
 ngoài allowlist: không trả lời, audit `telegram.ignored`. Nút "Luôn cho phép…" chỉ khi approval có `always_offer` (daemon tính,
 cùng kiểm tra với `always_prepare` — LLM-2 trong `docs/dev-notes/hardening-SEC.md`), 2 bước, bước 2 nêu luật sẽ tạo. Nonce nút bị tiêu (cả nhóm) TRƯỚC khi gọi RPC; offset `getUpdates` lưu TRƯỚC khi xử lý.
 Token bot chỉ ở secret store (không đọc env, không in, không trả qua RPC). Thêm lệnh chat ghi trạng thái → gọi qua `self.call(...)` (không gọi
@@ -350,7 +350,7 @@ Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes
 | `termsafe.py` | `clean()`/`one_line()`: bỏ ANSI/OSC/C1, điều khiển, bidi, zero-width trước khi in chữ agent ra terminal |
 
 Bất biến: chữ của điều phối viên (trả lời, tóm tắt/đích hành động) là DỮ LIỆU — web vẽ bằng autoescape + `pre-wrap` (không markdown, không `|safe`,
-không link do agent đặt; HTML qua SSE vẽ phía server, delta gán `textContent`); Telegram chỉ trong `<pre>` sau tiền tố cố định, không bao giờ kèm nút.
+không link do agent đặt; HTML qua SSE vẽ phía server, delta gán `textContent`); Telegram chỉ sau tiền tố cố định (markdown → HTML whitelist, `chat/mdconv.py`), không bao giờ kèm nút.
 Mọi ghi từ web qua `post_guard` (CSRF + khoá phiên WT-1) với `_audit.channel=web`; từ Telegram qua `bot.call` (cổng người + allowlist from.id, audit
 `telegram:<id>`). Terminal (REPL/TUI): chữ agent qua `termsafe.clean` + `rich.Text` (không markup, không OSC 8 link); `cfharness chat` ∈ `HUB_HUMAN_ONLY_CLI`.
 Ngoại lệ (chủ repo quyết 2026-10-26, giống Claude Code): `cfharness chat` fullscreen + màn xem agent vẽ lời agent bằng MARKDOWN qua `tui/cc_render.markdown_text`
@@ -392,7 +392,7 @@ Kế hoạch, quyết định, tiến độ: `docs/dev-notes/ux-plan.md`. Migrat
 
 Bất biến: không bao giờ tự trả lời thay người (không `expired`). Agent không trả lời/chuyển/huỷ câu hỏi (HUMAN_ONLY + classifier). Điều phối viên chỉ
 `question.answer|escalate` khi câu hỏi `with_manager` và không phải của chính nó — luật ở `manager/permissions.check_rpc` (cả 2 lớp). Nội dung câu hỏi
-và nhãn lựa chọn là DỮ LIỆU agent (đã che secret, bỏ ký tự điều khiển/vô hình): Telegram đặt trong `<pre>`, nút chỉ mang số (WT-8).
+và nhãn lựa chọn là DỮ LIỆU agent (đã che secret, bỏ ký tự điều khiển/vô hình): Telegram đặt sau tiền tố cố định (markdown đã escape, `bot.agent_body`), nút chỉ mang số (WT-8).
 
 ## Đổi tên cfharness — tên mới + tên cũ, `home migrate`
 Chi tiết, cách áp, việc người dùng phải làm, lệch BRD: `docs/dev-notes/rename-cfharness.md`. Test: `tests/test_rename_cfharness.py`.

@@ -155,7 +155,8 @@ def is_text_bytes(data: bytes) -> bool:
 
 
 LIVE = ("queued", "running", "waiting_human")
-TEXT_MAX = 4000
+MSG_MAX = 20000  # tin hội thoại lưu DB (manager_messages)
+TEXT_MAX = MSG_MAX  # chữ trả lời trong event `manager.reply` (kênh chia tin/gửi tệp .md); cắt → payload `truncated: true` để kênh báo
 
 
 def _parse(ts: str | None) -> datetime | None:
@@ -424,7 +425,7 @@ class ManagerService:
 
     def _add_msg(self, cid: str, role: str, text: str, run_id: str | None) -> None:
         cur = self.conn.execute("INSERT INTO manager_messages (conversation_id, role, text, run_id, ts) VALUES (?,?,?,?,?)",
-                                (cid, role, text[:20000], run_id, now_iso()))
+                                (cid, role, text[:MSG_MAX], run_id, now_iso()))
         self.conn.execute("UPDATE manager_conversations SET updated_at=? WHERE id=?", (now_iso(), cid))
         try:  # v17: chỉ mục hội thoại (session_search.py) — đã che secret trước khi vào FTS
             from ..session_search import indexer_for
@@ -793,7 +794,11 @@ class ManagerService:
         if ok:
             text = str(run.get("summary") or "").strip() or "(không có nội dung)"
         else:
-            text = f"(Điều phối viên không trả lời được: run {run['id']} kết thúc '{outcome}'" + (f" — {str(run.get('error'))[:300]}" if run.get("error") else "") + ")"
+            from ..chat.base import OUTCOME_VI
+
+            # chữ hub cho người (P1-10): không ghép run id (đã có ở payload `run_id`); giữ tiền tố `chatview.FAIL_PREFIX`
+            text = (f"(Điều phối viên không trả lời được: {OUTCOME_VI.get(str(outcome), str(outcome))}"
+                    + (f" — {str(run.get('error'))[:300]}" if run.get("error") else "") + ")")
         self._add_msg(cid, "manager", text, run["id"])
         sess = run.get("session_id") if ok or outcome == "cancelled" else None  # lỗi → session mới lần sau (mang theo tóm tắt)
         self.conn.execute("UPDATE manager_conversations SET session_id=?, session_turns=session_turns+1, last_run_id=?, updated_at=? WHERE id=?",
@@ -808,6 +813,7 @@ class ManagerService:
                 if not keep:
                     self._first_pending = None
         self.hub.publish(make_event("manager.reply", run["agent_id"], {"conversation_id": cid, "run_id": run["id"], "text": text[:TEXT_MAX],
+                                                                       **({"truncated": True} if len(text) > TEXT_MAX else {}),
                                                                        "channel": conv["channel"], "kind": "tick" if kind == "tick" else "reply", "ok": ok,
                                                                        "outcome": outcome,
                                                                        **({"schedule_id": opts["schedule_id"]} if kind == "schedule" and opts.get("schedule_id") else {})},

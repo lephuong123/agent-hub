@@ -225,6 +225,9 @@ DEFAULTS: dict[str, Any] = {
             "poll_timeout_s": 25,
             "idle_check_s": 15,  # chưa cấu hình → kiểm lại sau mỗi chừng này giây
             "result_max_chars": 1500,
+            # Chữ agent (trả lời điều phối viên, kết quả /run, câu hỏi): "markdown" = markdown → HTML Telegram (đậm/nghiêng/code/khối mã,
+            # link thành chữ "nhãn (URL)", không <a>) — P0-10; "pre" = khung cũ (TRỌN trong <pre>, cắt cứng) để quay lại nhanh.
+            "agent_render": "markdown",
             # Tệp/ảnh với điều phối viên: ảnh (PNG/JPEG/GIF/WebP ≤ 5 MB, ≤ 4/tin — cùng giới hạn TUI) + tệp VĂN BẢN người gửi;
             # tệp điều phối viên đánh dấu `[[file: …]]` trong trả lời → gửi thành document (chỉ trong cwd hội thoại)
             "document_max_bytes": 10485760,  # tệp văn bản/tài liệu người gửi tối đa (= trần cứng 10 MB ở manager.chat)
