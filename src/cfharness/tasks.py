@@ -515,7 +515,9 @@ class TaskService:
                 "- When done, call the tool `mcp__hub-self__task_complete` with a concise summary (and `result` if useful).",
                 "- If you cannot proceed without a human decision, call `mcp__hub-self__task_block` with the reason.",
             ]
-        proto.append("- Finish your final message with a short summary of what you did (this is the task result).")
+        proto.append("- End your final message with the task result as Markdown (it is shown to people): first line = the outcome in "
+                     "one sentence; then only what the reader needs (changes with file paths, findings, assumptions, open issues) as "
+                     "short bullets; code or commands in fenced blocks with a language tag. No narration of your process, no tool names.")
         lines += proto
         return "\n".join(lines)
 
@@ -523,7 +525,8 @@ class TaskService:
         return (
             f"[cfharness task {t['id']}] Your previous attempt at this task ended unexpectedly (outcome: {outcome}). "
             "Continue the task from where you left off. Re-check the current state (files, results) before repeating any action "
-            "that may already have run, then finish with a short summary of the whole task result."
+            "that may already have run, then finish with the whole task result in the same format: the outcome in one sentence, then short "
+            "bullets for what the reader needs."
         )
 
     def lead_prompt(self, t: dict[str, Any], lead_id: str) -> str:
