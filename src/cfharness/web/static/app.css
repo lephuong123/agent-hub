@@ -663,8 +663,10 @@ html.mgr-info-closed .mgr-side { display: none; }
 .chat-tools .btn.icon:hover { color: var(--text); }
 #mgr-live { margin-right: 4px; }
 
-.mgr-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 22px;
-  padding: 20px max(20px, calc((100% - var(--read-w)) / 2)) 28px; scroll-behavior: smooth; }
+/* KHÔNG scroll-behavior: smooth trên log (giật khi chữ chạy) — cuộn mượt chỉ ở nút "↓ Tin mới nhất"; overflow-anchor: none để
+   trình duyệt không tự neo cuộn khi khung "đang trả lời" lớn dần (app.js tự bám đáy khi người đang ở đáy) */
+.mgr-log { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-anchor: none; display: flex; flex-direction: column; gap: 22px;
+  padding: 20px max(20px, calc((100% - var(--read-w)) / 2)) 28px; }
 .mgr-log > *, .transcript > * { flex-shrink: 0; }
 
 /* tin nhắn: người = bong bóng xám ấm căn phải; điều phối viên = không bong bóng, chữ serif */
@@ -674,15 +676,40 @@ html.mgr-info-closed .mgr-side { display: none; }
 .mm-text { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .mm.user { align-self: flex-end; max-width: min(85%, 640px); display: flex; flex-direction: column; align-items: flex-end; }
 .mm.user .mm-text { background: var(--bubble); color: var(--text); border-radius: 18px; padding: 10px 16px; font-size: 15px; line-height: 1.55; }
-.mm.user .mm-who { opacity: 0; transition: opacity .15s; margin: 0 6px 4px; }
-.mm.user:hover .mm-who, .mm.user:focus-within .mm-who { opacity: 1; }
 .mm.mgr { align-self: stretch; }
-.mm.mgr .mm-text { font-family: var(--serif); font-size: 16.5px; line-height: 1.7; color: var(--text); }
+/* P0-5: chữ điều phối viên = markdown (present.md) trong tx_msg; tin liên tiếp của điều phối viên không lặp dòng tên */
+.mm-md .md, .mm-live .mm-tail { font-family: var(--serif); font-size: 16.5px; line-height: 1.7; color: var(--text); }
+.mm-md { padding: 0; }
+.mm.mgr + .mm.mgr:not(.notify) > .mm-who { display: none; }
+/* P1-5: hàng thao tác dưới tin — hiện khi rê chuột/focus; tin cuối và màn cảm ứng luôn hiện */
+.mm-foot { display: flex; align-items: center; gap: 2px; margin-top: 4px; min-height: 28px; font-size: var(--fs-xs); color: var(--muted); opacity: 0; transition: opacity .15s; }
+.mm-foot > time, .mm-foot > a { padding: 0 6px; white-space: nowrap; }
+.mm-foot > a { color: inherit; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; }
+.mm:hover > .mm-foot, .mm:focus-within > .mm-foot, .mm.mgr.last > .mm-foot { opacity: 1; }
+@media (hover: none) { .mm-foot { opacity: 1; } }
+.mm.user > .mm-foot { flex-direction: row-reverse; margin-right: 2px; }
+.mm-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; padding: 0; }
+.mm-btn:hover, .mm-btn:focus-visible { background: var(--surface-3); color: var(--text); }
+.mm-btn.done { color: var(--ok); }
+.mm-retry { display: none; }
+.mm.mgr.last .mm-retry { display: inline-flex; }
+.mm-src { display: none; }
 .mm-mark { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; color: var(--accent-mark); margin-right: 2px; }
 .mm-mark .ic { width: 18px; height: 18px; }
 .mm.mgr.notify { border-left: 3px solid var(--warn); padding-left: 14px; }
-.mm.pending .mm-text:empty { display: none; }
-.mm.pending .mm-text:not(:empty)::after { content: ""; display: inline-block; width: .55em; height: 1.05em; margin-left: 2px; vertical-align: -.15em; border-radius: 2px; background: var(--accent-mark); animation: caret 1s steps(2) infinite; }
+/* khung "đang trả lời": suy nghĩ gập (P1-4), chữ chạy (nháp markdown do server vẽ + đuôi delta thô), dòng "Đang dùng …" */
+.mm-live .md:empty, .mm-tail:empty { display: none; }
+.mm-tail { white-space: pre-wrap; overflow-wrap: anywhere; }
+.mm.pending:not(.has-text) .mm-live { display: none; }
+.mm.pending.has-text .mm-state { display: none; }
+.mm.pending.has-text .mm-live::after { content: ""; display: inline-block; width: .55em; height: 1.05em; margin-left: 2px; vertical-align: -.15em; border-radius: 2px; background: var(--accent-mark); animation: caret 1s steps(2) infinite; }
+.mm-think { margin: 2px 0 8px; font-size: var(--fs-sm); color: var(--muted); }
+.mm-think > summary { cursor: pointer; width: fit-content; padding: 2px 8px 2px 0; }
+.mm-think > summary:hover { color: var(--text); }
+.mm-think pre { margin: 6px 0 0; padding: 4px 0 4px 12px; border-left: 2px solid var(--line-2); background: transparent; color: var(--muted); font-family: var(--sans); font-size: var(--fs-sm); white-space: pre-wrap; max-height: 16rem; overflow: auto; }
+.mm-tool { display: flex; align-items: center; gap: 8px; margin-top: 6px; color: var(--muted); font-size: var(--fs-sm); min-width: 0; }
+.mm-tool[hidden] { display: none; }
+.mm-tool-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .mm-mark.thinking .ic { animation: think-spin 2.4s cubic-bezier(.45, .05, .55, .95) infinite; }
 .mm.pending .mm-who { font-size: var(--fs-sm); }
 .mm.pending .spin { color: var(--muted); font-size: var(--fs-sm); background: linear-gradient(90deg, var(--muted) 30%, var(--text) 50%, var(--muted) 70%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: shimmer 1.8s linear infinite; }
@@ -690,20 +717,26 @@ html.mgr-info-closed .mgr-side { display: none; }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 @keyframes caret { 50% { opacity: 0; } }
 
-/* thẻ hành động gom "Đã làm N việc" */
-.mm-acts { align-self: flex-start; max-width: 100%; min-width: min(420px, 100%); border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); font-size: var(--fs-sm); overflow: hidden; }
-.mm-acts > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 9px 14px; color: var(--text-2); font-weight: 550; }
-.mm-acts > summary:hover { background: var(--surface-2); }
+/* P1-3: chip "✓ Đã làm N việc ›" không viền; mở ra = danh sách gọn có vạch trái; đang chạy = vòng quay + việc mới nhất */
+.mm-acts { align-self: flex-start; max-width: 100%; font-size: var(--fs-sm); }
+.mm-acts > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 10px 4px 6px; margin-left: -6px; border-radius: 999px; color: var(--muted); }
+.mm-acts > summary:hover { background: var(--surface-2); color: var(--text-2); }
 .mm-acts > summary::-webkit-details-marker { display: none; }
-.mm-acts > summary > span:first-of-type { white-space: nowrap; }
-.mm-acts > summary > .muted { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; font-weight: 400; }
-.mm-acts > summary .ic { color: var(--ok); }
-.mm-acts.err > summary .ic { color: var(--danger); }
-.mm-acts[open] > summary { border-bottom: 1px solid var(--line); }
-.mm-acts .chev { margin-left: auto; color: var(--muted); transition: transform .15s; }
-.mm-acts[open] .chev { transform: rotate(180deg); }
-.mm-act { display: flex; gap: 9px; align-items: flex-start; padding: 9px 14px; border-top: 1px solid var(--line); }
-.mm-acts .mm-act:first-of-type { border-top: 0; }
+.mm-acts-ic { display: inline-flex; align-items: center; color: var(--ok); }
+.mm-acts.err .mm-acts-ic { color: var(--danger); }
+.mm-acts-ic .tx-spin { display: none; }
+.mm-acts.running .mm-acts-ic .tx-spin { display: inline-block; }
+.mm-acts.running .mm-acts-ic .ic { display: none; }
+.mm-acts-n { white-space: nowrap; font-weight: 550; }
+.mm-acts-last { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-acts-last:empty { display: none; }
+.mm-acts-last::before { content: "· "; }
+.mm-acts:not(.running)[open] .mm-acts-last { display: none; }
+.mm-acts .chev { flex: 0 0 auto; transition: transform .15s; }
+.mm-acts[open] .chev { transform: rotate(90deg); }
+.mm-acts-list { margin: 6px 0 2px 9px; padding-left: 14px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.mm-act { display: flex; gap: 9px; align-items: flex-start; padding: 9px 14px; }
+.mm-acts-list .mm-act { padding: 0; }
 .mm-act-ic { color: var(--ok); margin-top: 2px; } .mm-act.err .mm-act-ic { color: var(--danger); }
 .mm-act-body { min-width: 0; flex: 1; }
 .mm-act-sum { overflow-wrap: anywhere; font-weight: 500; }
@@ -745,7 +778,15 @@ html.mgr-info-closed .mgr-side { display: none; }
 .btn.send { width: 34px; height: 34px; padding: 0; border-radius: 50%; flex: 0 0 auto; box-shadow: none; margin-left: auto; }
 .btn.send .ic { width: 18px; height: 18px; }
 .btn.send[disabled] { opacity: .45; }
-.mgr-form:has(textarea:placeholder-shown) .btn.send { opacity: .5; }
+/* P0-6: nút gửi biến thành nút Dừng (ô trống + đang trả lời) */
+.btn.send .i-stop { display: none; }
+.btn.send.stop .i-send { display: none; }
+.btn.send.stop .i-stop { display: inline-block; width: 14px; height: 14px; }
+.btn.send.stop { background: var(--text); border-color: var(--text); color: var(--bg); }
+/* nút "↓ Tin mới nhất" nổi trên ô nhập */
+.mgr-jump { position: absolute; left: 50%; top: -42px; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px 6px 10px; border: 1px solid var(--line-2); border-radius: 999px; background: var(--composer); color: var(--text-2); font: inherit; font-size: var(--fs-sm); box-shadow: var(--shadow-composer); cursor: pointer; white-space: nowrap; }
+.mgr-jump:hover { color: var(--text); }
+.mgr-jump[hidden] { display: none; }
 .mgr-suggest { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; padding: 14px 0 0; }
 .mgr-suggest button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-2); background: var(--surface); color: var(--text-2); border-radius: 999px; padding: 6px 13px; font: inherit; font-size: var(--fs-sm); font-weight: 450; cursor: pointer; transition: background .12s, border-color .12s; }
 .mgr-suggest button .ic { color: var(--muted); }

@@ -36,7 +36,13 @@ Chạm file dùng chung (chỉ thêm): `web/app.py` (route, `overview` lấy `mg
 - **XSS** (`test_manager_content_is_escaped_never_raw_html`, `test_sse_streams_reply_action_and_escapes`): trả lời/tóm tắt/tin người chứa
   `<script>`, `<img onerror>`, link markdown `javascript:`, `<a href=http://evil>` → HTML chỉ có bản escape, không `href="javascript:`, đích
   `javascript:alert(3)` / `agent:../../logout` → không có link; SSE trả HTML đã escape, delta là chữ thuần (client gán `textContent`).
-  Nội dung điều phối viên KHÔNG qua markdown (`pre-wrap`), khác lời agent trong trang run. CSP `script-src 'self'` giữ nguyên.
+  Từ 2026-11-13 (Q1, `plan-chat-ui-claude.md`): trả lời/báo của điều phối viên vẽ bằng `present.md()` đã cứng hoá giống lời agent ở trang
+  run (`test_manager_content_is_hardened_markdown_user_text_plain`, `test_sse_streams_reply_action_markdown_hardened_with_seq`): XSS vẫn ra
+  bản escape, `![](…)` → link chữ (không `<img`), link ngoài có `rel` + tên miền, `javascript:` không là link, không `on*=`. Tin của NGƯỜI,
+  tóm tắt/đích hành động, `think`/`tool` qua SSE vẫn là chữ thô (`pre-wrap`/`textContent`; `think`/`tool` không có khoá `html`). Văn bản gốc
+  cho nút Sao chép nằm trong `<template class="mm-src">` (autoescape). CSP `script-src 'self'` giữ nguyên.
+- **Nút Dừng** (`POST /manager/stop`, `test_stop_button_route_guards_scope_and_audit`): `post_guard` (thiếu khoá phiên/CSRF → 403),
+  run của agent khác hoặc ngoài hội thoại điều phối → 403 không gọi `run.stop`; đúng lượt → `run.stop` audit kênh `web`, actor `user`.
 - **WT-1**: `POST /manager/send` và `/do/manager_set` thiếu khoá phiên → 403; thiếu CSRF → 403; chưa đăng nhập → 401
   (`test_send_guards_and_errors`, `test_designate_needs_confirmation_session_key_and_is_human_only`). Chỉ định/huỷ luôn có xác nhận
   (JS dialog / trang xác nhận nêu rõ quyền); với MGR-CORE thật: audit `manager.set` kênh `web`, actor `user`.
