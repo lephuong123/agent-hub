@@ -602,12 +602,13 @@ class ChatBot:
 
     def agent_body(self, body: str) -> str:
         """Chữ agent THÔ → HTML của kênh: `markdown` → `mdconv.to_telegram_html` (escape mọi chữ; chỉ thẻ b/i/s/code/pre; link thành
-        chữ `nhãn (URL)`); `pre` → `<pre>` (escape) như cũ."""
+        chữ `nhãn (URL)`); `pre` → `<pre>` (escape) như cũ. Cờ `notify.<kênh>.expandable_details` (mặc định tắt, chưa kiểm trên
+        Telegram thật): chi tiết dài sau màn đầu gập trong `<blockquote expandable>` (mdconv)."""
         if self.agent_render() == "pre":
             return f"<pre>{esc(body)}</pre>"
         from .mdconv import to_telegram_html
 
-        return to_telegram_html(body) or esc(body)
+        return to_telegram_html(body, expandable=bool(self.cfg().get("expandable_details"))) or esc(body)
 
     def agent_frame(self, title: str, body: str, tail: list[str]) -> str:
         """Khung kết quả agent (WT-8): `title`/`tail` = chữ hub đã escape; `body` = chữ agent THÔ (hàm này escape).

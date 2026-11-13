@@ -164,7 +164,7 @@ async def test_with_manager_not_sent_until_escalated(make, tg):
     assert q_content(tg, BOSS, q["id"]) is None and "1 câu đang chờ điều phối viên" in texts(tg, BOSS)[-1]
     d.hub.questions.escalate(q["id"], by="manager:boss", note="<i>liên quan dữ liệu khách</i>")
     c = await until(lambda: q_content(tg, BOSS, q["id"]))
-    assert "Điều phối viên không tự quyết được" in c["text"] and "&lt;i&gt;liên quan dữ liệu khách&lt;/i&gt;" in agent_part(c["text"], AGENT_FRAME)
+    assert "Điều phối viên không tự quyết được" in c["text"] and "&lt;i&gt;liên quan dữ liệu khách&lt;/\u2060i&gt;" in agent_part(c["text"], AGENT_FRAME)
     assert await until(lambda: q_system(tg, BOSS, q["id"])) is not None  # tin hệ thống gửi ngay SAU tin nội dung
     await stop(d)
 

@@ -144,3 +144,22 @@ lệnh, phải hiện nguyên văn.
 - Cờ: `notify.telegram.agent_render: markdown|pre` (mặc định `markdown`; `pre` = khung cũ y nguyên: TRỌN `<pre>`, cắt cứng 3500).
 - Test: `tests/test_mdconv.py` (whitelist thẻ + cân thẻ bằng `html.parser` — `tests/tg_html.py`), `tests/test_telegram.py`
   (WT-8 hai chế độ), `tests/test_telegram_manager.py` (chia khối, `.md`, `truncated`, lọc). Chưa kiểm trên Telegram thật.
+
+## `/lệnh` không bấm được ở MỌI vị trí + `<blockquote expandable>` (2026-11-13, P2 — plan-chat-ui-claude.md)
+- Luật Telegram nhận `/lệnh` (thực thể `bot_command`): "/" + `[A-Za-z0-9_]{1,64}` (+ `@bot`). tdlib (`match_bot_commands`): ký tự
+  TRƯỚC không phải chữ/số/`_` và không phải `/ < >`. tdesktop (`RegExpBotCommand`): ký tự trước là đầu dòng hoặc dấu ngăn — gồm cả
+  `< > /`. Không biết server/ứng dụng nào áp luật nào → `mdconv._TG_CMD` lấy HỢP: mọi `/` + chữ ASCII/số/`_` mà ký tự trước không
+  phải chữ/số/`_` (Unicode) đều bị vô hiệu — sau `>`, `<`, ngoặc, `:`, `-`, `.`, `~`, `/`, emoji, dấu nháy, đầu dòng.
+  Cách vô hiệu: bọc `<code>` cả cụm tới khoảng trắng (bấm vào = chép; đường dẫn `/usr/bin/x` một khối). Riêng `</thẻ>` (agent viết
+  thẻ HTML thô) → chèn WORD JOINER U+2060 sau "/" (không hiện, chữ y nguyên; bọc `<code>` sẽ thành `<`/b`>` khó đọc). Bên trong URL
+  (`https?://…`, `www.…`) không đụng: Telegram ưu tiên thực thể URL. Áp cả tiêu đề, ô/tên cột bảng, nhãn link (trước đây chỉ đoạn văn).
+- `<blockquote expandable>` (Bot API 7.4) — cờ `notify.telegram.expandable_details` (mặc định **false**, CHƯA kiểm trên bot thật).
+  Bật: `mdconv.to_telegram_html(md, expandable=True)` giữ nguyên "màn đầu" (`EXPAND_FIRST_SCREEN` = 500 ký tự thấy được), sau đó
+  chuỗi khối liền nhau loại đoạn văn/danh sách/trích dẫn (`▎`) dài ≥ `EXPAND_MIN` (300) được gói trong MỘT `<blockquote expandable>`
+  ở cấp ngoài cùng. Khối có `pre`/`code` (khối mã, `mã` nội dòng, `/lệnh` đã bọc) cắt chuỗi và hiện bình thường — Telegram cấm
+  `pre`/`code`/`a` trong blockquote và cấm blockquote lồng nhau. Chữ thấy được y hệt bản không gập (chỉ thêm thẻ) → `telegram_len`/
+  `split_md` không đổi. Mỗi phần sau `split_md` có màn đầu riêng.
+- Test: `tests/test_mdconv.py` (14 vị trí `/lệnh`, tiêu đề/bảng/nhãn link, chữ trông giống lệnh không bị bọc; expandable tắt mặc
+  định, bật thì hợp lệ + cùng chữ thấy được + bỏ qua khối có code + nối đúng cờ), `tests/tg_html.py` (thêm: `blockquote` chỉ ở cấp
+  ngoài cùng, thuộc tính `expandable` không giá trị; `tappable_commands(html)` tìm `/lệnh` còn bấm được trên chữ thấy được, ngoài
+  `pre`/`code`/URL). Chưa kiểm trên Telegram thật: hiển thị expandable, và việc U+2060 chặn được lệnh trên mọi ứng dụng.

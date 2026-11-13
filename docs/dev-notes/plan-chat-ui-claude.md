@@ -95,8 +95,8 @@ Mọi ràng buộc an toàn hiện có vẫn giữ nguyên:
 - Spinner "✳ Đang nghĩ… 12s · 3.4k token".
 - Vạch ngăn theo ngày.
 - Mobile: vùng an toàn và `visualViewport`.
-- `<blockquote expandable>` cho Telegram.
-- Golden eval chấm phong cách trả lời: không có id `t_…`, fence có ngôn ngữ, độ dài, tiếng Việt.
+- ~~`<blockquote expandable>` cho Telegram.~~ Xong (sau cờ, mặc định tắt) — PR `feat/style-eval-telegram`, mục 7.
+- ~~Golden eval chấm phong cách trả lời: không có id `t_…`, fence có ngôn ngữ, độ dài, tiếng Việt.~~ Xong — PR `feat/style-eval-telegram`, mục 7.
 
 **Thứ tự gợi ý:** P0-1 → P0-2 → P0-3 → P0-4 → (tách `_transcript.html`) → P0-5 → P0-6 → P0-7 → P0-8 → P0-9 → P0-10 → P1.
 
@@ -239,3 +239,17 @@ These rules apply to free-text replies a person reads. When you are asked for st
   - P1-11: duyệt/câu hỏi trong transcript = một dòng link `#ap-<id>`/`#q-<id>` (thẻ không có trên trang → `/inbox#…`); nút duyệt chỉ ở thẻ.
   - Chưa làm: chưa nối `group_items`/`tx_group` vào trang Điều phối (đợt P2); `part` cuối không tự đẩy khi chữ dừng mà chưa có `message.complete`.
     Test: `tests/test_web_run_transcript.py` (mô phỏng `txAppend` trên cây DOM → phát lại == live). Ảnh: `v2/04-run-live*.png`, `v2/11-run-xong.png`.
+- **P2: golden eval phong cách + Telegram `<blockquote expandable>` + `/lệnh` không bấm được (PR `feat/style-eval-telegram`)**:
+  - `evals/style.py` (hàm thuần `check_style(reply, request, StyleOptions)`): luật `internal_id` (id hub `t_`/`r_`/`c_`/`mc_`/`conv_`/
+    `ws_`/`q_`/`ap_`/`gs_`… + 8–12 hex; tha id có trong yêu cầu hoặc khi người hỏi "id"/"mã run…"), `hub_header` (dòng `[cfharness`),
+    `no_action`, `fence_lang` (fence không tên ngôn ngữ), `length` (yêu cầu ≤ 160 ký tự → trả lời ≤ 700 ký tự không tính khối mã),
+    `language` (yêu cầu tiếng Việt — hoặc không có yêu cầu — thì tỉ lệ từ có dấu tiếng Việt trên phần chữ, bỏ mã/URL/đường dẫn,
+    ≥ 0.2; yêu cầu không dấu/tiếng Anh → bỏ luật), `hr`. Điểm = tỉ lệ luật đạt; mọi ngưỡng chỉnh được, `skip` bỏ luật.
+  - Checker golden mới `{"kind": "response_style", …}` (`checkers.py`; lồng được trong `all`), CLI `golden add … --style`.
+  - Chấm câu trả lời THẬT (chỉ đọc DB): RPC `eval.style` (không audit, không ghi) → `cfharness eval style [run] [--since 7d]
+    [--agent] [--conversation] [--short-budget N] [--skip length,…] [-v] [--json]`. Nguồn: tin `manager`/`notify` của điều phối viên
+    (yêu cầu = tin `user` cùng run; bỏ tin lỗi của hub và nhịp chỉ `NO_ACTION`); `run` không phải điều phối viên → `runs.summary`
+    với yêu cầu = `runs.prompt`. Lưu ý: chấm chữ THÔ trong DB (trước `sanitize_reply` của kênh) — đúng thứ model viết.
+  - Telegram: `notify.telegram.expandable_details` (mặc định tắt) + `/lệnh` vô hiệu ở mọi vị trí — chi tiết ở `telegram.md` mục cuối.
+  - Test: `tests/test_style_eval.py` (mẫu tốt/xấu tiếng Việt, checker, `eval.style` chỉ đọc, CLI), `tests/test_mdconv.py`,
+    `tests/tg_html.py`; cập nhật 3 test Telegram (`</thẻ>` của agent giờ có U+2060 sau "/"). Chưa kiểm trên Telegram thật.

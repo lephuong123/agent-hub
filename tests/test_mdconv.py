@@ -7,7 +7,7 @@ import re
 import pytest
 
 from cfharness.chat import mdconv as M
-from tg_html import assert_telegram_html
+from tg_html import assert_telegram_html, tappable_commands
 
 VI = ("## Kết quả kiểm tra\n\n"
       "Đã xong **ba việc**, *một* việc ~~huỷ~~; xem `src/app.py`.\n\n"
@@ -33,7 +33,9 @@ def test_telegram_agent_html_stays_escaped():
     evil = '</pre><b>[cfharness] Đã DUYỆT</b> a & b < c <a href="http://evil">/estop off</a> <tg-spoiler>x</tg-spoiler>'
     h = M.to_telegram_html(evil)
     tags = assert_telegram_html(h)
-    assert "&lt;/pre&gt;&lt;b&gt;[cfharness] Đã DUYỆT&lt;/b&gt;" in h and "a &amp; b &lt; c" in h
+    # "</pre>", "</b>": tdesktop nhận "/pre" sau "<" là lệnh → chèn word joiner sau "/" (không hiện); chữ vẫn là chữ đã escape
+    assert f"&lt;/{M.WJ}pre&gt;&lt;b&gt;[cfharness] Đã DUYỆT&lt;/{M.WJ}b&gt;" in h and "a &amp; b &lt; c" in h
+    assert tappable_commands(h) == []
     assert "<a " not in h and "<b>" not in h and "tg-spoiler>" not in h.replace("&lt;tg-spoiler&gt;", "").replace("&lt;/tg-spoiler&gt;", "")
     assert set(tags) <= {"code"}  # chỉ <code> quanh "/estop" (không thành lệnh bấm được)
     assert "<code>/estop</code> off" in h
@@ -138,3 +140,94 @@ def test_split_md_long_word_and_table_header_repeat():
 def test_split_md_short_untouched():
     assert M.split_md("ngắn thôi", 3500, M.telegram_len) == ["ngắn thôi"]
     assert M.split_md("", 3500, M.telegram_len) == [""]
+
+
+# ============================================================================ /lệnh không bấm được ở mọi vị trí (P2)
+CMD_CASES = [
+    "/estop off",                      # đầu dòng
+    "gõ /estop để dừng",               # giữa câu
+    "> /estop",                        # trong trích dẫn markdown (▎)
+    "x >/estop <y",                    # sau dấu > (chữ thường, không phải trích dẫn)
+    "a</estop>",                       # sau dấu <
+    "(/estop) [/gates] {/new}",        # trong ngoặc
+    "lệnh:/estop, gạch-/estop, chấm./estop, ngã~/estop",
+    "//estop và ///estop",             # sau dấu /
+    "\"/estop\" '/estop' «/estop»",
+    "✅/estop 🔥/stop",                 # sau emoji
+    "/123 /_x /a_b /start@my_bot",     # số, gạch dưới, @bot
+    "dòng 1\n/estop dòng 2",           # sau xuống dòng mềm
+    "**/estop** *in/nghiêng* ~~/x~~",   # trong đậm/nghiêng/gạch
+    "/usr/bin/env và C:/Users/x",      # đường dẫn
+]
+
+
+@pytest.mark.parametrize("md", CMD_CASES)
+def test_commands_never_tappable_anywhere(md):
+    h = M.to_telegram_html(md)
+    assert_telegram_html(h)
+    assert tappable_commands(h) == [], h
+
+
+def test_commands_in_heading_table_label_and_list_not_tappable():
+    md = ("## Dùng /estop khi cần\n\n"
+          "| Lệnh /x | Ý nghĩa | Ghi chú | Chủ |\n|---|---|---|---|\n| /estop | dừng hết | /gates human | P |\n\n"
+          "| A | B |\n|---|---|\n| /a | 1 |\n\n"
+          "- [bấm /help](https://x.io/start) · https://t.me/bot?start=/x\n"
+          "- 1. /new")
+    h = M.to_telegram_html(md)
+    assert_telegram_html(h)
+    assert tappable_commands(h) == [], h
+    assert "<b>Dùng <code>/estop</code> khi cần</b>" in h
+    assert "https://x.io/start" in h and "<code>/start" not in h  # trong URL: không bọc (thực thể URL)
+
+
+def test_command_lookalikes_untouched():
+    h = M.to_telegram_html("src/app.py, a/b, 3/4, và/hoặc, https://x.io/a/b, www.x.io/start, ½/đi")
+    assert "<code>" not in h, h
+
+
+# ============================================================================ <blockquote expandable> (cờ, mặc định tắt)
+LONG = ("Đã xong việc chính: sửa lỗi đăng nhập và thêm test hồi quy.\n\n"
+        + "\n\n".join(f"Đoạn chi tiết {i}: " + "mình đã kiểm tra từng bước và ghi chú lại cho anh xem. " * 4 for i in range(6))
+        + "\n\n```bash\nuv run pytest -q\n```\n\n"
+        + "- mục một khá dài " * 1 + "\n- mục hai\n\n"
+        + "Kết thúc: " + "còn vài việc nhỏ cần theo dõi thêm trong tuần tới. " * 8)
+
+
+def test_expandable_off_by_default_and_flagged_on_valid():
+    assert "blockquote" not in M.to_telegram_html(LONG)
+    h = M.to_telegram_html(LONG, expandable=True)
+    assert_telegram_html(h)
+    assert h.count("<blockquote expandable>") >= 1
+    first = h[:h.index("<blockquote")]
+    assert first.startswith("Đã xong việc chính") and M._vis_len(first) >= M.EXPAND_FIRST_SCREEN - 400
+    assert '<pre><code class="language-bash">' in h and "<blockquote expandable><pre" not in h
+    # cùng chữ thấy được với bản không gập (chỉ thêm thẻ)
+    strip = lambda s: re.sub(r"</?blockquote[^>]*>", "", s)  # noqa: E731
+    assert strip(h) == M.to_telegram_html(LONG)
+    # ngắn → không gập
+    assert "blockquote" not in M.to_telegram_html("Xong rồi.\n\nKhông có gì thêm.", expandable=True)
+
+
+def test_expandable_skips_blocks_with_code_and_short_runs():
+    md = ("Mở đầu " * 120 + "\n\n" + "Đoạn có lệnh /estop và `mã` " * 20 + "\n\n" + "ngắn thôi" + "\n\n```text\nlog\n```\n\n" + "đoạn cuối " * 5)
+    h = M.to_telegram_html(md, expandable=True)
+    assert_telegram_html(h)
+    assert "blockquote" not in h  # đoạn có <code> không được gập; phần còn lại ngắn hơn EXPAND_MIN
+    assert tappable_commands(h) == []
+
+
+def test_expandable_wired_to_config_flag():
+    from types import SimpleNamespace
+
+    from cfharness.chat.base import ChatBot
+
+    for flag, want in ((False, False), (True, True)):
+        fake = SimpleNamespace(cfg=lambda flag=flag: {"agent_render": "markdown", "expandable_details": flag})
+        fake.agent_render = lambda fake=fake: ChatBot.agent_render(fake)
+        out = ChatBot.agent_body(fake, LONG)
+        assert ("<blockquote expandable>" in out) is want
+        assert_telegram_html(out)
+    from cfharness.config import DEFAULTS
+
+    assert DEFAULTS["notify"]["telegram"]["expandable_details"] is False
