@@ -322,7 +322,7 @@ class MemoryMirror:
         model = str(self.cfg("graph_extract_model", "haiku") or "haiku")
         r = await self.ge._runtime().oneshot(OneShotRequest(
             prompt=prompt, schema=EXTRACT_SCHEMA, system=EXTRACT_SYSTEM, model=model,
-            budget_usd=float(self.cfg("graph_extract_budget_usd", 0.05) or 0) or None,
+            budget_usd=float(self.cfg("graph_extract_budget_usd") or 0) or None,
             timeout_s=float(self.cfg("graph_extract_timeout_s", 180) or 180), label=f"graph_mirror:{agent}"))
         cost = float(r.cost_usd or 0.0)
         out = r.output if r.ok and isinstance(r.output, dict) else None

@@ -167,7 +167,8 @@ class ManagerOps:
                 "gates_mode": gates_mode(h.config),
                 "note": "Approvals with routed_to='manager' were delegated to YOU: decide them with approval_decide (or approval_escalate). "
                         "All other approvals are decided ONLY by the human: use ask_owner_permission (approve_action) if one blocks progress. "
-                        "An agent with free_slots=0 is busy: work sent to it waits. Send it to an idle agent of the same kind, or agent_clone one."}
+                        "An agent with free_slots=0 is busy: work sent to it waits. Send it to an idle agent of the same kind, or agent_clone one. "
+                        "free_slots=null / max_concurrent_runs=null means no limit."}
 
     def op_agent_get(self, a: dict[str, Any]) -> dict[str, Any]:
         r = self.hub.agents.show(str(a.get("id") or ""))
@@ -473,7 +474,7 @@ class ManagerOps:
             if m.get("role") == "lead" or m.get("agent_archived_at"):
                 continue
             row = self.hub.store.get_agent(m["agent_id"])
-            if row and row.get("status") != "paused" and capacity.free_slots(self.hub, row) > 0:
+            if row and row.get("status") != "paused" and (capacity.free_slots(self.hub, row) is None or capacity.free_slots(self.hub, row) > 0):
                 return True
         return False
 

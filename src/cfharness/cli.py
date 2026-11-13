@@ -191,7 +191,7 @@ def cmd_daemon(ctx: Ctx) -> int:
         text = (
             f"daemon đang chạy · v{st['version']} · HUB_HOME={st['home']}\n"
             f"epoch {st['epoch']} · seq {st['last_seq']} · runtime={st['runtime']}\n"
-            f"run: {st['running']} đang chạy / {st['queued']} chờ (giới hạn {st['max_concurrent_runs']}) · agent: {st['agents']}\n"
+            f"run: {st['running']} đang chạy / {st['queued']} chờ (giới hạn {st['max_concurrent_runs'] or 'không'}) · agent: {st['agents']}\n"
             f"chi phí hôm nay: {_fmt_usd(st['cost_today_usd'])}\n"
             f"ESTOP: {'BẬT — ' + str(es.get('reason') or '') if es.get('on') else 'tắt'}"
         )

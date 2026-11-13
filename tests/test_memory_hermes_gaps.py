@@ -13,6 +13,9 @@ from cfharness.learning.runtime import system_prompt_for
 def hub(hub_home):
     h = Hub(hub_home)
     h.agents.create({"id": "r1", "name": "R1", "model": "sonnet"})
+    # mặc định không trần — test logic co giãn ngân sách đặt rõ trần cũ
+    h.config.set("learning.review_budget_usd", 0.2)
+    h.config.set("learning.review_budget_max_usd", 1.5)
     yield h
     h.store.close()
 

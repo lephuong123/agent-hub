@@ -129,16 +129,21 @@ class RunManager:
         return queued + self.running_count(agent_id)
 
     # ------------------------------------------------------------------ M3: sức chứa, rate limit, ngân sách ngày
-    def effective_limit(self) -> int:
-        """`hub.max_concurrent_runs`, giảm còn `ratelimit.throttle_concurrency` khi gần chạm hạn mức (FR-RT-16)."""
-        limit = int(self.hub.config.get("hub.max_concurrent_runs"))
+    def effective_limit(self) -> int | None:
+        """`hub.max_concurrent_runs` (null = không giới hạn → None), giảm còn `ratelimit.throttle_concurrency` khi gần chạm
+        hạn mức (FR-RT-16)."""
+        raw = self.hub.config.get("hub.max_concurrent_runs")
+        limit = int(raw) if raw else None
         rl = self.store.state_get("rate_limit", {}) or {}
         if rl.get("throttled"):
-            limit = min(limit, int(self.hub.config.get("ratelimit.throttle_concurrency") or 1))
-        return max(1, limit)
+            t = int(self.hub.config.get("ratelimit.throttle_concurrency") or 1)
+            limit = t if limit is None else min(limit, t)
+        return None if limit is None else max(1, limit)
 
-    def capacity_left(self) -> int:
-        return self.effective_limit() - len(self.active) - len(self.queue)
+    def capacity_left(self) -> int | None:
+        """Số slot còn trống toàn hub; None = không giới hạn."""
+        limit = self.effective_limit()
+        return None if limit is None else limit - len(self.active) - len(self.queue)
 
     def budget_scopes(self, agent_id: str, team_id: str | None) -> list[tuple[str, str, float, float | None]]:
         """[(scope, owner, đã dùng hôm nay, hạn mức ngày)] cho hub → team → agent (FR-OB-03)."""
@@ -345,7 +350,7 @@ class RunManager:
             return started
         limit = self.effective_limit()  # M3: điều tiết theo rate limit (FR-RT-16)
         skipped: list[str] = []
-        while self.queue and len(self.active) < limit:
+        while self.queue and (limit is None or len(self.active) < limit):
             rid = self.queue.popleft()
             run = self.store.get_run(rid)
             if run is None or run["status"] != "queued":
@@ -358,9 +363,9 @@ class RunManager:
                 from .evals.overlay import apply_overlay
 
                 agent = apply_overlay(agent, run["run_opts"]["eval_overlay"])
-            agent_limit = int((agent.get("limits") or {}).get("max_concurrent_runs") or 1)
+            agent_limit = (agent.get("limits") or {}).get("max_concurrent_runs")  # null = không giới hạn
             is_review = run.get("kind") == "review"  # M4-A: review fork không chiếm slot của agent (run mới không bị chặn)
-            if agent["status"] == "paused" or (not is_review and self.running_count(agent["id"], exclude_kind="review") >= agent_limit):
+            if agent["status"] == "paused" or (not is_review and agent_limit and self.running_count(agent["id"], exclude_kind="review") >= int(agent_limit)):
                 skipped.append(rid)
                 continue
             lock_key = self._lock_key(run, agent)

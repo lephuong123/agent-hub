@@ -515,14 +515,16 @@ class ManagerPermissions:
         try:
             return dict(self.hub.learning.policy.get("config_bounds") or {})
         except Exception:  # pragma: no cover
-            return {"models": ["opus", "sonnet", "haiku"], "max_budget_usd_per_run": 5.0, "budget_usd_per_day": 20.0, "max_concurrent_runs": 3, "max_effort": "high"}
+            return {"models": [], "max_budget_usd_per_run": None, "budget_usd_per_day": None, "max_concurrent_runs": None, "max_effort": "max"}
 
     def rate_block(self, method: str) -> str | None:
         rl = RATE_LIMITS.get(method)
         if rl is None:
             return None
-        limit = int(self._cfg(rl[0], {"max_agents_created_per_day": 5, "max_tasks_per_hour": 20, "max_runs_per_hour": 10,
-                                       "max_system_ops_per_hour": 10}[rl[0]]))
+        raw = self._cfg(rl[0], None)
+        if raw is None:  # null = không giới hạn (mặc định)
+            return None
+        limit = int(raw)
         since = (datetime.now(timezone.utc) - timedelta(seconds=rl[1])).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         n = self.hub.store.conn.execute("SELECT COUNT(*) FROM audit_log WHERE kind=? AND actor LIKE 'manager:%' AND ts>=?", (method, since)).fetchone()[0]
         if int(n) >= limit:
@@ -533,9 +535,9 @@ class ManagerPermissions:
         """Agent do manager tạo: ngân sách run/ngày + đồng thời luôn có trần ≤ config_bounds (kể cả khi để trống)."""
         b = self.bounds()
         out = dict(limits or {})
-        for k, bk, dflt in (("max_budget_usd_per_run", "max_budget_usd_per_run", 5.0), ("budget_usd_per_day", "budget_usd_per_day", 20.0),
-                            ("max_concurrent_runs", "max_concurrent_runs", 3)):
-            cap = b.get(bk, dflt)
+        for k, bk in (("max_budget_usd_per_run", "max_budget_usd_per_run"), ("budget_usd_per_day", "budget_usd_per_day"),
+                      ("max_concurrent_runs", "max_concurrent_runs")):
+            cap = b.get(bk)
             if cap is None:
                 continue
             v = out.get(k)
@@ -550,7 +552,7 @@ class ManagerPermissions:
             if m and models and m not in models:
                 return f"{k} '{m}' ngoài config_bounds.models {models} (chỉ người đổi: `cfharness learn policy`)"
         eff = spec.get("effort")
-        mx = b.get("max_effort") or "high"
+        mx = b.get("max_effort") or "max"
         if eff and (eff not in EFFORT_ORDER or (mx in EFFORT_ORDER and EFFORT_ORDER.index(eff) > EFFORT_ORDER.index(mx))):
             return f"effort '{eff}' vượt trần config_bounds.max_effort '{mx}'"
         lim = spec.get("limits")

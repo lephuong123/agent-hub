@@ -169,7 +169,10 @@ async def test_mgr6_rate_limits(env):
 async def test_mgr6_budget_model_effort_clamped_to_config_bounds(env):
     d, res = env
     rid = res["run_id"]
-    # F4c: agent do manager tạo luôn bị kẹp, kể cả khi để trống / đặt quá
+    # F4c: khi người đặt config_bounds, agent do manager tạo luôn bị kẹp, kể cả khi để trống / đặt quá (mặc định không trần)
+    for k, v in (("max_budget_usd_per_run", 5.0), ("budget_usd_per_day", 20.0), ("max_concurrent_runs", 3), ("max_effort", "high"),
+                 ("models", ["opus", "sonnet", "haiku"])):
+        d.hub.learning.policy.set(f"config_bounds.{k}", v)
     await tool(d, rid, "agent_create", {"id": "big", "spec": {"limits": {"max_budget_usd_per_run": 1000, "budget_usd_per_day": None, "max_concurrent_runs": 50}}})
     lim = d.hub.store.get_agent("big")["limits"]
     assert lim["max_budget_usd_per_run"] == 5.0 and lim["budget_usd_per_day"] == 20.0 and lim["max_concurrent_runs"] == 3

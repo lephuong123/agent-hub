@@ -368,6 +368,7 @@ async def test_browser_lock_two_runs(hub):
     _agent(hub, "a1", "chrome")
     _agent(hub, "a2", "auto")
     hub.agents.update("a1", {"limits": {"max_concurrent_runs": 2}})
+    hub.config.set("runtime.claude.chrome.max_concurrent_runs", 1)  # mặc định không giới hạn — người đặt trần
     r1, r2 = await _running(hub, "a1"), await _running(hub, "a2")
 
     async def chk(run, tool, ti=None):

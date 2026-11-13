@@ -99,7 +99,8 @@ class ToolPolicy(BaseModel):
 
 
 class Limits(BaseModel):
-    max_concurrent_runs: int = Field(default=1, ge=1)
+    # null = không giới hạn (mặc định). Người muốn hãm thì đặt trong cấu hình agent
+    max_concurrent_runs: int | None = Field(default=None, ge=1)
     max_budget_usd_per_run: float | None = Field(default=None, gt=0)
     budget_usd_per_day: float | None = Field(default=None, gt=0)
     max_runtime_s: int | None = Field(default=None, gt=0)
