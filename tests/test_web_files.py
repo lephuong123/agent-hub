@@ -191,6 +191,7 @@ def test_transcript_file_chip_replay_and_live():
     conv = _run_converter(t)
     live = [m for ev in (start, done) for m in conv(ev) if m["t"] == "item"]
     assert len(live) == 2 and all("/files/view?run=r-1" in m["html"] for m in live)  # tool.complete thay tại chỗ vẫn giữ chip
+    assert "Đọc" in live[-1]["html"] and "a&amp;b.py" in live[-1]["html"] and "file_path" in live[-1]["html"]  # P0-3: live giữ input khi tool xong
 
 
 # =========================================================================== web thật

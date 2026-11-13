@@ -19,7 +19,7 @@
 </section>
 
 {% if live_run %}
-<section class="card sticky-bottom">
+<section class="card sticky-bottom" id="steer-card" data-result="/partials/run/{{ run.id }}/result">
   <h2>{{ m.icon('chat') }} Chỉ đạo agent (steer)</h2>
   <form method="post" action="/do/steer" class="composer" id="steer-form">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ run.id }}"><input type="hidden" name="next" value="/runs/{{ run.id }}">
@@ -28,34 +28,8 @@
   </form>
 </section>
 {% else %}
-<section class="card">
-  <h2>{{ m.icon('check') }} Kết quả</h2>
-  {% if run.error and run.status != 'completed' %}<div class="banner danger">{{ m.icon('alert') }}<span>{{ run.error }}</span></div>{% endif %}
-  {% if run.summary %}<div class="md result">{{ run.summary|md }}</div>{% else %}<p class="muted">Không có tóm tắt kết quả.</p>{% endif %}
-  <div class="btn-row">
-    <span class="muted small">Kết quả thế nào? (giúp agent tự học)</span>
-    {{ m.act("feedback", "Tốt", {"run_id": run.id, "kind": "good"}, "btn sm", ic="thumb-up") }}
-    {{ m.act("feedback", "Sai", {"run_id": run.id, "kind": "wrong"}, "btn sm danger", confirm="Đánh dấu kết quả này là SAI?", note="Sai ở đâu? (giúp agent sửa lần sau)", ic="thumb-down") }}
-    {{ m.act("feedback", "Một phần", {"run_id": run.id, "kind": "partial"}, "btn sm", confirm="Kết quả đúng một phần?", note="Còn thiếu gì?") }}
-    {% if run.status == 'completed' %}{{ m.act("golden_from_run", "Lấy làm golden task", {"run_id": run.id}, "btn sm ghost", confirm="Lấy run này làm golden task (bài kiểm tra chuẩn)?", ic="star") }}{% endif %}
-  </div>
-</section>
-{% if run.session_id %}
-<section class="card">
-  <h2>{{ m.icon('chat') }} Nói tiếp với agent</h2>
-  <form method="post" action="/do/run_continue" class="composer">
-    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ run.id }}"><input type="hidden" name="next" value="/runs/{{ run.id }}">
-    <textarea name="prompt" rows="2" required placeholder="Agent nhớ toàn bộ hội thoại này. Ví dụ: Giờ viết lại ngắn hơn" aria-label="Tin nhắn tiếp"></textarea>
-    <button class="btn primary" type="submit">{{ m.icon('send') }}Gửi tiếp</button>
-  </form>
-  <details class="small"><summary class="muted">Tự làm tiếp bằng Claude Code (takeover)</summary>
-    <p>Chạy trong terminal để mở đúng hội thoại này trong Claude Code tương tác (cùng cấu hình agent):</p>
-    <pre class="cmd">cfharness takeover {{ run.id }}</pre>
-  </details>
-</section>
+{% include "_run_result.html" %}
 {% endif %}
-{% endif %}
-{% if not live_run %}<div id="diff-slot" hx-get="/partials/run/{{ run.id }}/diff" hx-trigger="load" hx-swap="outerHTML"><noscript><p class="small"><a href="/runs/{{ run.id }}/diff">Xem thay đổi file của run</a></p></noscript></div>{% endif %}
 {% if children %}
 <section class="card"><h2>Run tiếp nối</h2><ul>{% for c in children %}<li><a href="/runs/{{ c.id }}">{{ c.id }}</a> {{ m.run_pill(c.status) }} <span class="muted small">{{ run_title(c, None, 80) }}</span></li>{% endfor %}</ul></section>
 {% endif %}

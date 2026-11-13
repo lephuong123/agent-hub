@@ -769,25 +769,11 @@ async def task_titles(request: Request, runs: list[dict[str, Any]]) -> dict[str,
 
 
 def replay_items(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Phát lại từ DB: gộp tool.start + tool.complete cùng id thành một mục (như TUI)."""
-    out: list[dict[str, Any]] = []
-    idx: dict[str, int] = {}
+    """Phát lại từ DB — cùng bộ gộp `P.Transcript` với luồng live (`_run_converter`), nên HTML cuối giống hệt."""
+    tx = P.Transcript()
     for ev in sorted(events, key=lambda e: (e.get("ts") or "", int(e.get("seq") or 0))):
-        it = P.transcript_item(ev)
-        if it is None:
-            continue
-        dom = it.get("dom")
-        if dom and dom in idx:
-            prev = out[idx[dom]]
-            it["diff"] = prev.get("diff") or it.get("diff")
-            it["file"] = prev.get("file") or it.get("file")  # chip file (tool.complete không mang input)
-            it["summary"] = it.get("summary") or prev.get("summary")
-            out[idx[dom]] = it
-            continue
-        if dom:
-            idx[dom] = len(out)
-        out.append(it)
-    return out
+        tx.feed(ev)
+    return tx.items
 
 
 async def _run_ctx(request: Request, rid: str) -> dict[str, Any]:
@@ -818,14 +804,32 @@ async def run_page(request: Request) -> Response:
     ctx = await _run_ctx(request, run["id"])
     children = [r for r in (await rpc(request, "run.list", {"agent": run["agent_id"], "limit": 50}) or []) if r.get("parent_run_id") == run["id"]]
     qs = await questions(request, "all", run_id=run["id"])
-    return await render(request, "run.html", {**ctx, "nav": "runs", "items": replay_items(events), "since": since, "epoch": epoch, "children": children,
-                                              "run_questions": [q for q in qs if q["status"] in ("open", "with_manager")]})
+    items = replay_items(events)
+    final_text = P.mark_final(items)
+    return await render(request, "run.html", {**ctx, "nav": "runs", "items": items, "since": since, "epoch": epoch, "children": children,
+                                              "run_questions": [q for q in qs if q["status"] in ("open", "with_manager")],
+                                              "summary_dup": P.same_text(ctx["run"].get("summary"), final_text)})
 
 
 async def partial_run(request: Request) -> Response:
     ctx = await _run_ctx(request, request.path_params["id"])
     sess = session_of(request)
-    return ws(request).templates.TemplateResponse(request, "_run_bar.html", {**ctx, "csrf": sess.csrf if sess else ""})
+    # run đã xong + htmx đang poll → 286: htmx vẽ lần cuối rồi NGỪNG poll (trang không còn tải lại khi run kết thúc)
+    done = request.headers.get("hx-request") == "true" and not P.is_live_run(ctx["run"])
+    return ws(request).templates.TemplateResponse(request, "_run_bar.html", {**ctx, "csrf": sess.csrf if sess else ""}, status_code=286 if done else 200)
+
+
+async def partial_run_result(request: Request) -> Response:
+    """Thẻ Kết quả (+ nói tiếp, chỗ tải diff) khi run live vừa kết thúc — client thay vào chỗ ô steer, KHÔNG tải lại trang
+    (giữ thinking live và các khối đang mở trong transcript). Run còn chạy → 204 (chưa có gì để thay)."""
+    rid = request.path_params["id"]
+    run = await rpc(request, "run.get", {"id": rid, "events": True})
+    if P.is_live_run(run):
+        return Response(status_code=204)
+    final_text = P.mark_final(replay_items(run.pop("events", []) or []))
+    sess = session_of(request)
+    return ws(request).templates.TemplateResponse(request, "_run_result.html", {"run": run, "csrf": sess.csrf if sess else "",
+                                                                               "summary_dup": P.same_text(run.get("summary"), final_text)})
 
 
 async def inbox_page(request: Request) -> Response:
@@ -1446,7 +1450,7 @@ async def _stream(request: Request, params: dict[str, Any], convert: Callable[[d
 
 def _run_converter(templates: Jinja2Templates) -> Callable[[dict[str, Any]], list[dict[str, Any]]]:
     mod = templates.env.get_template("_items.html").module
-    files: dict[str, Any] = {}  # dom tool → chip file của tool.start (tool.complete thay mục tại chỗ nhưng không mang input)
+    tx = P.Transcript()  # cùng bộ gộp với replay_items: tool.complete giữ input/diff/chip của tool.start, steer.ack → ✓ …
 
     def conv(ev: dict[str, Any]) -> list[dict[str, Any]]:
         t = ev.get("type")
@@ -1459,13 +1463,7 @@ def _run_converter(templates: Jinja2Templates) -> Callable[[dict[str, Any]], lis
         s = P.stats_of(ev)
         if s:
             out.append({"t": "stats", **s})
-        it = P.transcript_item(ev)
-        if it is not None and it.get("kind") == "tool" and it.get("dom"):
-            if it.get("file"):
-                files[it["dom"]] = it["file"]
-            elif it["dom"] in files:
-                it["file"] = files.pop(it["dom"])
-        if it is not None:
+        for it in tx.feed(ev):
             out.append({"t": "item", "kind": it["kind"], "dom": it.get("dom"), "seq": ev.get("seq"), "html": str(mod.item(it))})
         if t in ("approval.open", "approval.waiting_human", "approval.resolved", "user.message", "steer.ack") or (t or "").startswith(("run.", "question.")):
             out.append({"t": "refresh"})
@@ -1633,6 +1631,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/runs", runs_page),
         Route("/runs/{id}", run_page),
         Route("/partials/run/{id}", partial_run),
+        Route("/partials/run/{id}/result", partial_run_result),
         Route("/inbox", inbox_page),
         Route("/approvals", approvals_page),
         Route("/tasks", tasks_page),

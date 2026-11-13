@@ -1,0 +1,44 @@
+{#- Bộ render transcript DÙNG CHUNG (trang run; trang Điều phối sẽ import file này — docs/dev-notes/plan-chat-ui-claude.md mục 2).
+    Mọi chữ agent là DỮ LIỆU: autoescape; chỉ `it.html` (đầu ra của present.md(), đã cứng hoá) được |safe.
+    Không đặt input của agent vào thuộc tính data-*; ký tự ẩn/bidi được lộ ra qua *_segs (present.highlight(..., danger=False)).
+    Macro:
+      tx_msg(it, cls='')        it = {html, seq?, sub?, final?}      — tin agent (markdown đã render)
+      tx_tool(it)               it = mục tool của present.Transcript (view = present.tool_view(...))
+      tx_thinking(it, live=False) it = {text}                       — khối suy nghĩ gập
+      tx_group(tools, label=None)                                   — nhóm nhiều tool liên tiếp (P1-2; hiện là bản đơn giản)
+      tx_segs(segs)             đoạn (loại, chữ) → chữ, ký tự ẩn bọc <mark class="ctl"> -#}
+{% import "_macros.html" as m %}
+
+{% macro tx_segs(segs) -%}
+{%- for k, t in segs or [] %}{% if k == 'ctl' %}<mark class="ctl">{{ t }}</mark>{% elif k == 'hit' %}<mark>{{ t }}</mark>{% else %}{{ t }}{% endif %}{% endfor -%}
+{%- endmacro %}
+
+{% macro tx_msg(it, cls='') -%}
+<div class="ti msg tx-msg{{ ' sub' if it.sub }}{{ ' final' if it.final }}{{ ' ' ~ cls if cls }}"{% if it.seq is not none %} data-seq="{{ it.seq }}"{% endif %}><div class="md">{{ it.html|safe }}</div></div>
+{%- endmacro %}
+
+{% macro tx_thinking(it, live=False) -%}
+<details class="ti reasoning tx-thinking"{% if live %} open{% endif %}><summary>{{ 'Suy nghĩ…' if live else 'Suy nghĩ' }}</summary><pre>{{ it.text }}</pre></details>
+{%- endmacro %}
+
+{% macro tx_tool(it) -%}
+{%- set v = it.view or {} -%}
+<details class="ti tool tx-tool{{ ' running' if it.running }}{{ ' err' if it.error }}{{ ' sub' if it.sub }}"{% if it.dom %} id="{{ it.dom }}"{% endif %}{% if it.seq is not none %} data-seq="{{ it.seq }}"{% endif %}{% if it.error %} open{% endif %}>
+<summary class="tx-tool-sum"><span class="tx-st" aria-label="{{ 'đang chạy' if it.running else ('lỗi' if it.error else 'xong') }}">{% if it.running %}<span class="tx-spin"></span>{% elif it.error %}{{ m.icon('x', 'sm') }}{% else %}{{ m.icon('check', 'sm') }}{% endif %}</span>
+<span class="tx-verb">{{ v.verb or it.name }}</span>
+{%- if v.target %} <span class="tx-target" title="{{ v.target_title }}">{{ tx_segs(v.target_segs) }}</span>{% endif %}
+{%- if v.meta %} <span class="tx-meta">{{ v.meta }}</span>{% endif %}
+{%- if it.running %} <span class="tx-dur spin">đang chạy…</span>{% elif it.dur is not none %} <span class="tx-dur">{{ '%.1f'|format(it.dur) }}s</span>{% endif %}
+{%- if it.file %} {{ m.file_chip(it.file) }}{% endif %}{{ m.icon('chev-down', 'tx-chev') }}</summary>
+<div class="tx-tool-body">
+{%- if it.diff %}<pre class="diff">{% for k, ln in it.diff %}<span class="{{ k }}">{{ '+ ' if k == 'add' else '- ' if k == 'del' else '' }}{{ ln }}</span>
+{% endfor %}</pre>{% endif %}
+<div class="tx-io-h">Input{% if v.input_cut %} <span class="tx-cut">· đã cắt</span>{% endif %}</div><pre class="tx-in">{{ tx_segs(v.input_segs) }}</pre>
+{%- if v.output_text %}<div class="tx-io-h">Output{% if v.truncated %} <span class="tx-cut">· đã cắt (hub chỉ giữ {{ v.output_text|length }} ký tự đầu)</span>{% endif %}</div><pre class="tx-out">{{ tx_segs(v.output_segs) }}</pre>
+{%- elif not it.running %}<div class="tx-io-h">Output <span class="tx-cut">· trống</span></div>{% endif %}
+</div></details>
+{%- endmacro %}
+
+{% macro tx_group(tools, label=None) -%}
+<details class="tx-group{{ ' err' if tools|selectattr('error')|list }}"><summary>{{ label or ('Đã dùng ' ~ tools|length ~ ' công cụ') }}</summary>{% for t in tools %}{{ tx_tool(t) }}{% endfor %}</details>
+{%- endmacro %}
