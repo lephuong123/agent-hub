@@ -742,6 +742,10 @@
       return { md: p.querySelector(".mm-live .md"), tail: p.querySelector(".mm-tail"), think: p.querySelector(".mm-think"),
                tool: p.querySelector(".mm-tool"), toolT: p.querySelector(".mm-tool-t") };
     }
+    // sự kiện cho static/voice.js (chế độ hội thoại giọng nói) — chỉ id run + nút DOM đã vẽ, không thêm đường dữ liệu mới
+    function emit(name, detail) { try { document.dispatchEvent(new CustomEvent("mgr:" + name, { detail: detail })); } catch (_) {} }
+    function onVoiceStop() { stopRun(); }
+    document.addEventListener("mgr:stop", onVoiceStop);
     function stopRun() {
       var r = pendingRun();
       if (!r || !mform || !window.fetch) return;
@@ -807,6 +811,7 @@
         var id = m.id || m.name;
         if (m.done) delete on[id]; else on[id] = m.label || m.name;
         var left = Object.keys(on);
+        emit("tool", { run: r, label: left.length ? on[left[left.length - 1]] : "" });
         q.tool.hidden = !left.length;
         if (left.length) q.toolT.textContent = "Đang dùng " + on[left[left.length - 1]] + (left.length > 1 ? " (+" + (left.length - 1) + ")" : "") + "…";
         after(s);
@@ -839,6 +844,7 @@
         } else put(node, s);
         settle(r); markLast();
         announce("Điều phối viên đã trả lời");
+        emit("reply", { run: r, node: node, conv: conv });
       } else if (m.t === "action") {
         // gom vào khối "Đã làm N việc" của cùng lượt nếu khối đó là mục cuối (trước khung "đang trả lời")
         var last = p ? p.previousElementSibling : ml.lastElementChild;
@@ -859,6 +865,7 @@
         after(s);
       } else if (m.t === "run_end") {
         busyChips(r, false);
+        emit("run_end", { run: r, ok: !!m.ok });
         setTimeout(function () {
           if (replied[r]) return;
           var n2 = fromHTML(m.html), p2 = pend[r];
@@ -1067,7 +1074,7 @@
         fetch(mform.getAttribute("action"), { method: "POST", body: fd, credentials: "same-origin", headers: { "X-Ahub-Fetch": "1" } })
           .then(function (resp) { return resp.json().catch(function () { return { error: "Lỗi " + resp.status }; }); })
           .then(function (j) {
-            if (j.error) { if (merr) { merr.textContent = j.error; merr.hidden = false; } return; }
+            if (j.error) { if (merr) { merr.textContent = j.error; merr.hidden = false; } emit("send_error", { error: j.error }); return; }
             draftSet(draftKey(), "");
             if (j.conversation_id && j.conversation_id !== conv) {
               conv = j.conversation_id;
@@ -1083,13 +1090,18 @@
             }
             mtext.value = ""; autoGrow(mtext);
             picked = []; drawFiles();
+            emit("sent", { run: j.run_id || "", steered: !!j.steered, conv: conv });
           })
-          .catch(function () { if (merr) { merr.textContent = "Không gửi được — kiểm tra kết nối rồi thử lại."; merr.hidden = false; } })
+          .catch(function () {
+            if (merr) { merr.textContent = "Không gửi được — kiểm tra kết nối rồi thử lại."; merr.hidden = false; }
+            emit("send_error", { error: "Không gửi được — kiểm tra kết nối." });
+          })
           .then(function () { paintSend(); mtext.focus(); });
       });
     }
     return function stop() {
       dead = true;
+      document.removeEventListener("mgr:stop", onVoiceStop);
       if (mes) mes.close();
       clearTimeout(retryT);
       clearInterval(tabsPoll);

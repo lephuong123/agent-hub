@@ -398,6 +398,9 @@ async def manager_send(request: Request) -> Response:
     if len(text) > MAX_TEXT:
         return fail(f"Tin quá dài ({len(text)} ký tự, tối đa {MAX_TEXT})")
     params: dict[str, Any] = {"channel": CHANNEL, "text": text}
+    voice = str(form.get("voice") or "").strip()
+    if voice in ("dictation", "conversation"):  # tin nói bằng giọng (static/voice.js) — daemon bỏ phím tắt duyệt, thêm ghi chú
+        params["voice"] = voice
     if cid:
         params["conversation_id"] = cid
     elif wsid:

@@ -56,6 +56,7 @@ _YES = {"ok", "oke", "okay", "okee", "yes", "y", "có", "co", "đồng ý", "don
         "được", "duoc", "ừ", "uh", "làm đi", "ok làm đi", "approve tiếp đi", "duyệt tiếp đi", "đồng ý đi", "cho phép đi"}
 _NO = {"không", "khong", "no", "n", "deny", "từ chối", "tu choi", "thôi", "thoi", "đừng", "dung", "không cho", "khong cho"}
 # duyệt KHÔNG kèm mã: chỉ khi CẢ tin là một câu duyệt ngắn (không bắt "duyệt giúp t kế hoạch này")
+VOICE_MODES = ("dictation", "conversation")  # tin đến từ giọng nói (web): đọc chép rồi người tự gửi / chế độ hội thoại giọng nói
 _APPROVE_ONLY = {"duyệt", "duyet", "duyệt đi", "duyet di", "duyệt tiếp", "duyệt tiếp đi", "duyệt luôn", "ok duyệt", "ok duyệt đi", "approve",
                  "approve đi", "approve tiếp", "approve tiếp đi", "approve it", "cho phép", "cho phep", "cho phép đi", "cho phép tiếp đi"}
 _IMAGE_MAGIC = ((b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpg"), (b"GIF87a", "gif"), (b"GIF89a", "gif"))
@@ -605,8 +606,9 @@ class ManagerService:
 
     async def chat(self, channel: str, text: str, *, conversation_id: str | None = None, reuse_latest: bool = False,
                    images: list[dict[str, Any]] | None = None, files: list[dict[str, Any]] | None = None,
-                   workstream: str | None = None) -> dict[str, Any]:
+                   workstream: str | None = None, voice: str | None = None) -> dict[str, Any]:
         aid = self.agent_id()
+        voice = voice if voice in VOICE_MODES else None
         if not aid:
             raise Conflict("chưa có điều phối viên — chỉ định bằng `cfharness manager set <agent>`")
         text = str(text or "").strip()
@@ -658,9 +660,11 @@ class ManagerService:
         if busy and busy[0]["status"] != "running":
             r = busy[0]
             raise Conflict(f"điều phối viên đang xử lý tin trước của hội thoại này (run {r['id']}, {r['status']}) — thử lại sau")
-        note = await self._owner_shortcut(channel, conv, text) if not files else None
+        note = await self._owner_shortcut(channel, conv, text, voice=bool(voice)) if not files else None
         if note:
             prompt_text = f"{prompt_text}\n\n{note}"
+        if voice:
+            prompt_text = f"{prompt_text}\n\n{prompts.voice_note(voice)}"
         if busy:
             # run của hội thoại đang chạy → gửi tin vào run đó (steer) thay vì chồng run thứ hai cùng session
             from ..steer import steer
@@ -685,11 +689,17 @@ class ManagerService:
         return out
 
     # ------------------------------------------------------------------ phím tắt của người trong chat
-    async def _owner_shortcut(self, channel: str, conv: dict[str, Any], text: str) -> str | None:
+    async def _owner_shortcut(self, channel: str, conv: dict[str, Any], text: str, *, voice: bool = False) -> str | None:
         """Tin NGƯỜI là câu trả lời ngắn cho câu hỏi đang mở của hội thoại ("1", "ok", "không", nhãn phương án) hoặc lệnh duyệt
-        (`approve ap_…`, `duyệt`) → hub làm NGAY với quyền người, trả ghi chú (chữ của HUB) gắn vào lượt chat. Không khớp → None."""
+        (`approve ap_…`, `duyệt`) → hub làm NGAY với quyền người, trả ghi chú (chữ của HUB) gắn vào lượt chat. Không khớp → None.
+
+        `voice` (tin đọc bằng giọng nói, web): nhận dạng giọng nói có thể nghe nhầm ("ok", "duyệt" lọt vào câu khác) → KHÔNG BAO GIỜ
+        duyệt approval hay chốt câu hỏi xin phép (`action`) bằng phím tắt; chỉ trả câu hỏi thường. Tin giống lệnh duyệt → ghi chú
+        bảo điều phối viên hỏi lại bằng nút (`docs/dev-notes/voice.md`)."""
         low = " ".join(text.lower().split()).rstrip(".!")
         try:
+            if voice:
+                return await self._voice_shortcut(channel, conv, text, low)
             m = _APPROVE_RE.match(text)
             if m:
                 return await self._decide_approval(m.group(2), m.group(1).lower(), m.group(3).strip(), channel)
@@ -713,6 +723,22 @@ class ManagerService:
                             + ". Hỏi người cái nào bằng ask_owner_permission (kind approve_action) cho từng yêu cầu.")
         except HubError as e:
             return f"[hub] Không xử lý được lệnh của người: {e.message}"
+        return None
+
+    async def _voice_shortcut(self, channel: str, conv: dict[str, Any], text: str, low: str) -> str | None:
+        approve_like = bool(_APPROVE_RE.match(text) or _ANSWER_RE.match(text)) or low in _APPROVE_ONLY
+        if len(low) <= 40 and not approve_like:
+            qs = [q for q in self.hub.questions.list("open", limit=50) if q.get("conversation_id") == conv["id"]]
+            if len(qs) == 1 and not qs[0].get("action"):
+                keys = self._keys_for(qs[0], low)
+                if keys:
+                    return await self.hub.questions.answer_in_chat(qs[0]["id"], keys, channel=channel)
+            if len(qs) == 1 and qs[0].get("action") and (low in _YES or low in _NO or _KEYS_RE.match(low)):
+                approve_like = True
+        if approve_like:
+            return ("[hub] The owner said this BY VOICE and it looks like an approval/permission answer. The hub never approves or answers "
+                    "permission requests from speech (it may be misheard). Do not treat it as approval: if the owner really wants to allow "
+                    "something, use ask_owner_permission (or point to the pending approval) so they confirm with a button.")
         return None
 
     @staticmethod

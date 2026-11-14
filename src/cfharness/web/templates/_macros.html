@@ -90,7 +90,7 @@
       {% for o in v.options %}<label class="q-opt"><input type="{{ 'checkbox' if q.multi else 'radio' }}" name="keys" value="{{ o.key }}"><span class="q-opt-k">{{ o.key }}</span><span class="q-opt-body"><span class="q-opt-l">{{ o.label }}</span>{% if o.description %}<span class="q-opt-d">{{ o.description }}</span>{% endif %}</span></label>{% endfor %}
     </fieldset>
     {% endif %}
-    {% if q.allow_free_text %}<div class="q-free"><label>{{ 'Câu trả lời khác hoặc ghi chú thêm (tuỳ chọn)' if v.options else 'Câu trả lời của bạn' }}<textarea name="text" rows="2" maxlength="4000"{% if not v.options %} required{% endif %} placeholder="{{ 'Câu trả lời khác…' if v.options else 'Nhập câu trả lời…' }}"></textarea></label></div>{% endif %}
+    {% if q.allow_free_text %}<div class="q-free"><label>{{ 'Câu trả lời khác hoặc ghi chú thêm (tuỳ chọn)' if v.options else 'Câu trả lời của bạn' }}<textarea data-voice name="text" rows="2" maxlength="4000"{% if not v.options %} required{% endif %} placeholder="{{ 'Câu trả lời khác…' if v.options else 'Nhập câu trả lời…' }}"></textarea></label></div>{% endif %}
     <div class="xcard-actions">
       <button class="btn primary" type="submit">{{ icon('send') }}<span>Gửi câu trả lời</span></button>
       <span class="spacer"></span>

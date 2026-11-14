@@ -23,7 +23,7 @@
         <input type="hidden" name="csrf" value="{{ csrf }}">
         {% if mgr.web_conv %}<input type="hidden" name="c" value="{{ mgr.web_conv }}">{% endif %}
         <label class="sr-only" for="mgr-quick">Gửi nhanh cho điều phối viên</label>
-        <textarea id="mgr-quick" name="text" rows="2" required maxlength="8000" placeholder="Vd: “Có việc gì đang kẹt không?”"></textarea>
+        <textarea data-voice id="mgr-quick" name="text" rows="2" required maxlength="8000" placeholder="Vd: “Có việc gì đang kẹt không?”"></textarea>
         <button class="btn primary icon send" type="submit" title="Gửi" aria-label="Gửi">{{ mc.icon('arrow-up') }}</button>
       </form>
       {% elif mgr and mgr.available %}
@@ -38,7 +38,7 @@
       <form method="post" action="/do/run_start" class="form">
         <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/">
         <label>Agent<select name="agent" required>{% for a in agents %}<option value="{{ a }}">{{ a }}</option>{% endfor %}</select></label>
-        <label>Việc cần làm<textarea name="prompt" rows="3" required placeholder="Ví dụ: Tóm tắt README.md thành 5 gạch đầu dòng"></textarea></label>
+        <label>Việc cần làm<textarea data-voice name="prompt" rows="3" required placeholder="Ví dụ: Tóm tắt README.md thành 5 gạch đầu dòng"></textarea></label>
         <div class="form-actions"><button class="btn primary" type="submit">{{ mc.icon('play') }}Giao việc</button></div>
       </form>
       {% else %}<p class="muted">Tạo agent trước, rồi giao việc ở đây.</p>{% endif %}

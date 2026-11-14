@@ -114,7 +114,7 @@ SECURITY_HEADERS = [
     (b"referrer-policy", b"same-origin"),  # no-referrer làm Chrome gửi `Origin: null` cho form POST
     (b"cross-origin-opener-policy", b"same-origin"),
     (b"cross-origin-resource-policy", b"same-origin"),
-    (b"permissions-policy", b"camera=(), microphone=(), geolocation=()"),
+    (b"permissions-policy", b"camera=(), microphone=(self), geolocation=()"),  # micro: chỉ cùng origin — nhập bằng giọng nói (static/voice.js)
 ]
 
 

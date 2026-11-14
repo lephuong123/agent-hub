@@ -152,6 +152,19 @@ def deliverables_note(channel: str) -> str:
     return ""
 
 
+VOICE_DICTATION_NOTE = ("[hub] The owner dictated this message by voice (speech-to-text, usually Vietnamese). Words may be misheard "
+                        "(names, ids, numbers, English terms): read it charitably, and ask one short question if a key detail is unclear.")
+VOICE_CONVERSATION_NOTE = (VOICE_DICTATION_NOTE + " You are in VOICE MODE: your reply is read aloud by the owner's browser. Start with a "
+                           "short spoken answer (1-3 sentences, natural Vietnamese, no tables, code, ids or URLs). Put any detail that must be "
+                           "seen (ids, links, lists) after that, briefly. Never ask the owner to approve anything by voice.")
+
+
+def voice_note(mode: str) -> str:
+    """Ghi chú cho tin nói bằng giọng (web): `dictation` = người đọc chép rồi tự gửi; `conversation` = chế độ hội thoại giọng nói
+    (trả lời được đọc to → ngắn, nói được)."""
+    return VOICE_CONVERSATION_NOTE if mode == "conversation" else VOICE_DICTATION_NOTE
+
+
 def images_note(files: list[str]) -> str:
     """Ảnh người gửi kèm tin (đã lưu trong cwd hội thoại) — điều phối viên xem bằng Read."""
     return ("\n\n[The owner attached " + str(len(files)) + " image(s), saved in your working directory. Look at each with the Read tool "
