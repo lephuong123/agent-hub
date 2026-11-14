@@ -1137,7 +1137,8 @@ async def settings_page(request: Request) -> Response:
         gates = "human"
     st = ws(request)
     slack2 = await _slack_pages.slack_ctx(request)  # khối "Slack 2 chiều" (web/slack_pages.py)
-    return await render(request, "settings.html", {**slack2, "nav": "settings", "estop": es, "cfg": cfg_view, "secrets": secrets_, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names,
+    accts = await _account_pages.accounts_ctx(request, status)  # khối "Tài khoản Claude" (web/account_pages.py)
+    return await render(request, "settings.html", {**slack2, **accts, "nav": "settings", "estop": es, "cfg": cfg_view, "secrets": secrets_, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names,
                                                    "slack_webhook": SLACK_WEBHOOK_SECRET in names, "slack_create_url": SLACK_CREATE_URL,
                                                    "telegram": "TELEGRAM_BOT_TOKEN" in names, "tg_chats": tg_chats, "integ": integ, "status": status, "gates": gates,
                                                    "web": {"host": st.host, "port": st.port, "sessions": len(st.auth.sessions)},
@@ -2007,6 +2008,11 @@ _mcpp.register_actions(ACTIONS, Action, _req)
 from . import slack_pages as _slack_pages  # noqa: E402
 
 _slack_pages.register_actions(ACTIONS, Action, _req)
+
+# Tài khoản Claude (docs/dev-notes/plan-claude-accounts.md): account_use / rename / rm / check / login_* / add_token + khối ở Cài đặt
+from . import account_pages as _account_pages  # noqa: E402
+
+_account_pages.register_actions(ACTIONS, Action, _req)
 
 # Nút "Cập nhật hệ thống" (updater.py): update_start + thẻ ở đầu Cài đặt, trang /update
 from . import update_pages as _update_pages  # noqa: E402

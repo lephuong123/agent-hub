@@ -22,6 +22,11 @@ Kết quả run (listener bus → `call_soon`, idempotent vì chỉ xử lý khi
   "limit reached|<epoch>") → hẹn thử lại đúng lúc reset (+ jitter) và đóng CỔNG toàn hub (`hub_state.rate_limit_gate`,
   event `ratelimit.gate`): tới lúc reset dispatcher không claim task nào (`wait_reason=rate_limit_reset`). Không biết → backoff
   30 s nhân đôi tới 10 phút như cũ.
+- Nhiều tài khoản Claude (`docs/dev-notes/plan-claude-accounts.md`): cổng và trạng thái hạn mức tính THEO TÀI KHOẢN
+  (`hub_state.rate_limit_gates` / `rate_limit_by_account`, khoá = `runs.account_id` của run hoặc tài khoản đang dùng,
+  `"_default"` khi chưa cấu hình). Dispatcher chỉ xét cổng của tài khoản ĐANG dùng; khoá cũ `rate_limit` / `rate_limit_gate`
+  luôn là bản của tài khoản đang dùng. KHÔNG tự đổi tài khoản: chỉ phản ứng khi NGƯỜI đổi (event `account.switched`) —
+  task chờ hạn mức reset chạy lại ngay, task `blocked` vì "claude chưa đăng nhập" về `ready`.
 - `budget_exceeded` / lỗi auth → `blocked` ngay.
 """
 
@@ -54,7 +59,13 @@ RESUMABLE = ("crashed", "timed_out", "rate_limited")
 FAILURES = ("crashed", "timed_out", "failed", "protocol_violation")
 LIVE_RUN = ("queued", "running", "waiting_human")
 WRITE_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
-RL_GATE_KEY = "rate_limit_gate"
+RL_GATE_KEY = "rate_limit_gate"  # bản của tài khoản đang dùng (tương thích hub.status/admin/web)
+RL_STATE_KEY = "rate_limit"  # như trên
+RL_GATES_KEY = "rate_limit_gates"  # {account_key: {until, source, run_id, set_at}}
+RL_BY_ACCOUNT_KEY = "rate_limit_by_account"  # {account_key: state rate_limit}
+ACTIVE_ACCOUNT_KEY = "claude_account_active"
+DEFAULT_ACCOUNT = "_default"
+AUTH_BLOCK_REASON = "claude chưa đăng nhập"
 # "… limit reached|1792324800" (CLI cũ) và "… resets 6am" / "resets 6:30pm (Asia/Saigon)" (CLI mới)
 _RESET_EPOCH = re.compile(r"limit reached\|(\d{10})", re.I)
 _RESET_CLOCK = re.compile(r"resets\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s*\(([^)]+)\))?", re.I)
@@ -75,6 +86,10 @@ def _parse(s: str | None) -> datetime | None:
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _strip_account(g: dict[str, Any] | None) -> dict[str, Any] | None:
+    return {k: v for k, v in g.items() if k != "account"} if g else g
 
 
 def reset_from_text(text: str | None, now: datetime | None = None) -> datetime | None:
@@ -208,6 +223,12 @@ class TaskDispatcher:
         loop.call_soon(_go)
 
     def _on_bus(self, ev: HubEvent) -> None:
+        if ev.type == "account.switched":
+            try:
+                asyncio.get_running_loop().call_soon(self._safe_switched, ev)
+            except RuntimeError:
+                self._safe_switched(ev)
+            return
         if ev.source != "hub" or not ev.run_id:
             if ev.type == "ratelimit.update":
                 self._on_rate_limit(ev)
@@ -236,6 +257,54 @@ class TaskDispatcher:
             run = {}
         return run_logger(log, run_id, run.get("agent_id"), task_id=run.get("task_id"))
 
+    # ------------------------------------------------------------------ tài khoản Claude
+    def active_account(self) -> str:
+        """Khoá tài khoản đang dùng (`claude_account_active`, `"_default"` khi chưa cấu hình)."""
+        return self.store.state_get(ACTIVE_ACCOUNT_KEY) or DEFAULT_ACCOUNT
+
+    def account_of_run(self, run_id: str | None) -> str:
+        """Tài khoản của một run: `runs.account_id` (ghi lúc spawn, migration v25). NULL = spawn lúc CHƯA cấu hình tài khoản
+        (con trỏ None) → `"_default"`, KHÔNG phải tài khoản đang dùng bây giờ (người có thể đã đổi sau khi run spawn). Chỉ khi
+        không có run (event không gắn run / run không tồn tại) mới coi là tài khoản đang dùng."""
+        if run_id:
+            row = self.conn.execute("SELECT account_id FROM runs WHERE id=?", (run_id,)).fetchone()
+            if row is not None:
+                return str(row[0]) if row[0] else DEFAULT_ACCOUNT
+        return self.active_account()
+
+    def resume_reset(self, run: dict[str, Any]) -> tuple[datetime | None, str]:
+        """Thời điểm nên chạy lại việc của một run kết thúc `rate_limited`. Lượt chạy lại dùng tài khoản ĐANG dùng: run thuộc
+        tài khoản khác (người đã đổi sau khi spawn) → chỉ chờ cổng của tài khoản đang dùng (None nếu cổng mở), không chờ
+        hạn mức reset của tài khoản cũ."""
+        if self.account_of_run(run["id"]) != self.active_account():
+            g = self.gate_until()
+            return (g, "hub") if g is not None else (None, "")
+        return self._run_reset(run)
+
+    def _gates(self) -> dict[str, Any]:
+        g = self.store.state_get(RL_GATES_KEY)
+        if g is None:  # DB trước khi có nhiều tài khoản: cổng cũ là của tài khoản đang dùng
+            legacy = self.store.state_get(RL_GATE_KEY)
+            return {self.active_account(): _strip_account(legacy)} if legacy else {}
+        return dict(g)
+
+    def _by_account(self) -> dict[str, Any]:
+        b = self.store.state_get(RL_BY_ACCOUNT_KEY)
+        if b is None:
+            legacy = self.store.state_get(RL_STATE_KEY)
+            return {self.active_account(): legacy} if legacy else {}
+        return dict(b)
+
+    def _sync_legacy(self) -> None:
+        """Khoá cũ `rate_limit_gate` / `rate_limit` = bản của tài khoản ĐANG dùng."""
+        key = self.active_account()
+        gates, by_account = self._gates(), self._by_account()
+        self.store.state_set(RL_GATES_KEY, gates)
+        self.store.state_set(RL_BY_ACCOUNT_KEY, by_account)
+        g = gates.get(key)
+        self.store.state_set(RL_GATE_KEY, {**g, "account": key} if g else None)
+        self.store.state_set(RL_STATE_KEY, by_account.get(key))
+
     # ------------------------------------------------------------------ rate limit (FR-RT-16)
     def _on_rate_limit(self, ev: HubEvent) -> None:
         info = (ev.payload or {}).get("rate_limit_info") or {}
@@ -247,40 +316,117 @@ class TaskDispatcher:
             util = max(util, float(info["utilization"]))
         thr = float(self.hub.config.get("ratelimit.throttle_utilization") or 0.9)
         throttled = info.get("status") not in (None, "allowed", "allowed_warning") or util >= thr
-        prev = self.store.state_get("rate_limit", {}) or {}
+        key = self.account_of_run(ev.run_id)
+        by_account = self._by_account()
+        prev = by_account.get(key) or {}
         state = {"status": info.get("status"), "utilization": round(util, 4), "resets_at": info.get("resetsAt"), "type": info.get("rateLimitType"),
                  "throttled": throttled, "at": now_iso()}
-        self.store.state_set("rate_limit", state)
+        by_account[key] = state
+        self.store.state_set(RL_BY_ACCOUNT_KEY, by_account)
+        if key == self.active_account():
+            self.store.state_set(RL_STATE_KEY, state)
         if bool(prev.get("throttled")) != throttled:
-            self.hub.publish(make_event("ratelimit.throttle", None, state))
+            self.hub.publish(make_event("ratelimit.throttle", None, {**state, "account": key}))
         reset = reset_from_info(info)
         if reset is not None:
-            self._close_gate(reset, source="event", run_id=ev.run_id)
+            self._close_gate(reset, source="event", run_id=ev.run_id, account=key)
 
-    # ------------------------------------------------------------------ cổng rate limit toàn hub
-    def gate_until(self) -> datetime | None:
-        """Thời điểm hạn mức reset nếu cổng đang đóng (dispatcher không claim gì tới lúc đó); hết hạn → tự mở + event."""
-        g = self.store.state_get(RL_GATE_KEY) or {}
+    # ------------------------------------------------------------------ cổng rate limit theo tài khoản
+    def _adopt_legacy_gate(self, gates: dict[str, Any], key: str) -> dict[str, Any]:
+        """Khoá cũ `rate_limit_gate` bị ghi từ ngoài (bản cũ, sửa tay) cho tài khoản đang dùng → nhận vào `rate_limit_gates`.
+        Bản mang `account` khác tài khoản đang dùng (vừa đổi, chưa làm mới) thì bỏ qua."""
+        legacy = self.store.state_get(RL_GATE_KEY)
+        if not legacy or (legacy.get("account") or key) != key:
+            return gates
+        g = _strip_account(legacy)
+        if gates.get(key) != g:
+            gates[key] = g
+            self.store.state_set(RL_GATES_KEY, gates)
+        return gates
+
+    def gate_until(self, account: str | None = None) -> datetime | None:
+        """Thời điểm hạn mức reset nếu cổng của tài khoản (mặc định: đang dùng) đang đóng (dispatcher không claim gì tới lúc
+        đó); hết hạn → tự mở + event. Cổng của tài khoản KHÁC không chặn dispatcher."""
+        active = self.active_account()
+        key = account or active
+        gates = self._gates()
+        if key == active:
+            gates = self._adopt_legacy_gate(gates, key)
+        g = gates.get(key) or {}
         until = _parse(g.get("until")) if g else None
         if until is None:
             return None
         if until > _now():
             return until
-        self.store.state_set(RL_GATE_KEY, None)
-        self.hub.publish(make_event("ratelimit.gate", None, {"open": True, "until": g.get("until"), "source": g.get("source")}))
+        gates.pop(key, None)
+        self.store.state_set(RL_GATES_KEY, gates)
+        if key == active:
+            self.store.state_set(RL_GATE_KEY, None)
+        self.hub.publish(make_event("ratelimit.gate", None, {"open": True, "until": g.get("until"), "source": g.get("source"), "account": key}))
         return None
 
-    def _close_gate(self, reset: datetime, *, source: str, run_id: str | None = None) -> None:
+    def gate_peek(self, account: str | None = None) -> datetime | None:
+        """Như `gate_until` nhưng CHỈ ĐỌC (không mở cổng hết hạn, không nhận khoá cũ, không phát event) — an toàn để gọi từ
+        listener khác ngay sau `account.switched`, trước khi dispatcher chuyển khoá cũ. DB chưa có `rate_limit_gates`: khoá
+        cũ thuộc tài khoản trước khi đổi → coi như cổng của tài khoản mới đang mở."""
+        key = account or self.active_account()
+        gates = self.store.state_get(RL_GATES_KEY) or {}
+        g = gates.get(key) if isinstance(gates, dict) else None
+        until = _parse(g.get("until")) if isinstance(g, dict) else None
+        return until if until is not None and until > _now() else None
+
+    def _close_gate(self, reset: datetime, *, source: str, run_id: str | None = None, account: str | None = None) -> None:
         now = _now()
         if reset <= now or (reset - now).total_seconds() > float(self.cfg("rate_limit_reset_max_s") or 8 * 86400):
             return  # đã qua hoặc xa vô lý → không tin
-        g = self.store.state_get(RL_GATE_KEY) or {}
+        key = account or self.account_of_run(run_id)
+        gates = self._gates()
+        g = gates.get(key) or {}
         cur = _parse(g.get("until")) if g else None
         if cur is not None and cur >= reset:
             return
         state = {"until": _iso(reset), "source": source, "run_id": run_id, "set_at": now_iso()}
-        self.store.state_set(RL_GATE_KEY, state)
-        self.hub.publish(make_event("ratelimit.gate", None, {"open": False, **state}, run_id=run_id))
+        gates[key] = state
+        self.store.state_set(RL_GATES_KEY, gates)
+        if key == self.active_account():
+            self.store.state_set(RL_GATE_KEY, {**state, "account": key})
+        self.hub.publish(make_event("ratelimit.gate", None, {"open": False, **state, "account": key}, run_id=run_id))
+
+    # ------------------------------------------------------------------ người đổi tài khoản
+    def _safe_switched(self, ev: HubEvent) -> None:
+        try:
+            self.on_account_switched(ev.payload or {})
+        except Exception:  # pragma: no cover
+            log.exception("xử lý account.switched lỗi")
+        self.kick()
+
+    def on_account_switched(self, payload: dict[str, Any]) -> dict[str, int]:
+        """NGƯỜI vừa đổi tài khoản Claude (event `account.switched {from, to, by}`): việc đang chờ hạn mức reset chạy lại ngay
+        (giữ `rate_limit_hits`), task `blocked` vì chưa đăng nhập về `ready`, khoá cũ theo tài khoản mới. KHÔNG tự đổi."""
+        prev = payload.get("from") or DEFAULT_ACCOUNT
+        # DB chưa có bản theo tài khoản: khoá cũ thuộc tài khoản TRƯỚC khi đổi, không phải tài khoản mới
+        if self.store.state_get(RL_GATES_KEY) is None:
+            legacy = self.store.state_get(RL_GATE_KEY)
+            self.store.state_set(RL_GATES_KEY, {(legacy.get("account") or prev): _strip_account(legacy)} if legacy else {})
+        if self.store.state_get(RL_BY_ACCOUNT_KEY) is None:
+            legacy = self.store.state_get(RL_STATE_KEY)
+            self.store.state_set(RL_BY_ACCOUNT_KEY, {prev: legacy} if legacy else {})
+        self._sync_legacy()
+        now = _iso(_now())
+        woke = 0
+        for t in self._rows("SELECT * FROM tasks WHERE wait_reason='rate_limit_reset' AND status IN ('ready','triage','review') "
+                            "AND current_run_id IS NULL AND deleted_at IS NULL"):
+            self.tasks.update(t["id"], {"not_before": now})
+            woke += 1
+        unblocked = 0
+        for t in self._rows("SELECT * FROM tasks WHERE status='blocked' AND block_reason LIKE ? AND current_run_id IS NULL AND deleted_at IS NULL",
+                            (f"%{AUTH_BLOCK_REASON}%",)):
+            self.tasks.set_status(t["id"], "ready", reason=f"đổi tài khoản Claude ({payload.get('from')} → {payload.get('to')}) — chạy lại",
+                                  block_reason=None, not_before=None)
+            unblocked += 1
+        if woke or unblocked:
+            log.info("đổi tài khoản Claude %s → %s: %d task chạy lại sớm, %d task hết blocked", payload.get("from"), payload.get("to"), woke, unblocked)
+        return {"woken": woke, "unblocked": unblocked}
 
     def _run_reset(self, run: dict[str, Any]) -> tuple[datetime | None, str]:
         """Thời điểm reset cho một run kết thúc `rate_limited`: event `ratelimit.update` cuối của run → cổng/trạng thái toàn hub → chữ lỗi."""
@@ -294,10 +440,11 @@ class TaskDispatcher:
                 dt = None
             if dt is not None and dt > now:
                 return dt, "run_event"
-        g = self.gate_until()
+        key = self.account_of_run(run["id"])
+        g = self.gate_until(key)
         if g is not None:
             return g, "hub"
-        rl = self.store.state_get("rate_limit", {}) or {}
+        rl = self._by_account().get(key) or {}
         if rl.get("status") == "rejected":
             dt = _epoch_dt(rl.get("resets_at"))
             if dt is not None and dt > now:
@@ -311,9 +458,13 @@ class TaskDispatcher:
         """Run bị giới hạn tốc độ (task/lead/review): KHÔNG tính lỗi. Biết lúc reset → hẹn đúng lúc đó (+ jitter) + đóng cổng
         toàn hub; không biết → backoff nhân đôi (`rate_limit_backoff_s` … `rate_limit_backoff_max_s`)."""
         hits = int(t.get("rate_limit_hits") or 0) + 1
+        run_acct = self.account_of_run(run["id"])
         reset, src = self._run_reset(run)
         if reset is not None:
-            self._close_gate(reset, source=src, run_id=run["id"])
+            self._close_gate(reset, source=src, run_id=run["id"], account=run_acct)  # ghi hạn mức cho đúng tài khoản của run
+        if run_acct != self.active_account():  # người đã đổi tài khoản sau khi run spawn → chạy lại theo tài khoản đang dùng
+            reset, src = self.resume_reset(run)
+        if reset is not None:
             jitter = float(self.cfg("rate_limit_reset_jitter_s") or 0)
             when = reset + timedelta(seconds=random.uniform(min(5.0, jitter), jitter) if jitter > 0 else 0)
             reason = f"rate_limited — chờ hạn mức reset lúc {when.astimezone().strftime('%Y-%m-%d %H:%M')}"

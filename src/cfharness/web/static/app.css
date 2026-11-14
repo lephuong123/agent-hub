@@ -973,6 +973,14 @@ html.mgr-info-closed .mgr-side { display: none; }
 .pairbox .pair-code code { font-size: 1.25em; font-weight: 700; letter-spacing: .06em; user-select: all; }
 .slack2-setup { margin-top: var(--s3); }
 .slack2-setup > summary { cursor: pointer; color: var(--text-2); font-size: var(--fs-sm); font-weight: 600; }
+/* Tài khoản Claude (Cài đặt, _accounts.html) */
+.acct-rename > summary { list-style: none; display: inline-flex; }
+.acct-rename > summary::-webkit-details-marker { display: none; }
+.acct-rename[open] > form { margin-top: var(--s2); }
+.acct-rename input[name="label"] { min-width: 0; width: 14em; max-width: 100%; }
+.acct-login { border: 1px solid var(--line); border-radius: var(--r); padding: var(--s3); background: var(--surface); }
+#acct-switch select { max-width: 100%; }
+@media (max-width: 760px) { #acct-switch form { width: 100%; } #acct-switch select { flex: 1 1 auto; } }
 
 /* ---- quản lý skill (web/skill_pages.py) ---- */
 .skill-src { max-height: 70vh; font-size: 12.5px; }

@@ -95,6 +95,7 @@ Chi tiết, lệch BRD, việc dở, kết quả kiểm chứng `claude` thật:
 | `notify/slack.py` | Listener bus → Slack webhook/bot (secret), tin đã che, backoff, `notify.failed`; tắt êm khi chưa cấu hình |
 | `recovery.py` | Đối soát `(pid, start_time)` khi daemon khởi động, dừng mồ côi, `interrupted` → tự resume (trừ waiting_human); purge retention |
 | `auto_resume.py` | Tự resume CÓ TRẦN run ad-hoc dừng vì lỗi tạm thời (crashed/timed_out/rate_limited/mạng; trần chung với restart), backoff, event `run.auto_resume` + audit; `hang_stats` cho thẻ Sức khoẻ (`report.hangs`). `docs/dev-notes/run-auto-resume.md` |
+| `accounts/` | Danh sách tài khoản Claude, NGƯỜI bấm đổi (không tự đổi). `service.py` `AccountService` (`hub.accounts`; token ở secret `CLAUDE_ACCT_<ID>`, đổi = chép vào `CLAUDE_CODE_OAUTH_TOKEN`), `rpc.py` `account.*` (ghi ∈ HUMAN_ONLY, `MUTATING_ACCOUNTS`, gỡ `token`/`code` trước audit), `login.py` `claude setup-token` qua PTY (pywinpty trên Windows), `cli.py` `cfharness account`. Cổng rate limit theo tài khoản ở `dispatch/dispatcher.py`; web: `web/account_pages.py`. `docs/dev-notes/plan-claude-accounts.md` |
 
 Bất biến: thao tác phá huỷ KHÔNG BAO GIỜ tự từ chối do hết giờ; hook/hub-guard lỗi = deny; agent không ghi được `policy/`
 (settings `permissions.deny` + classifier) và không tự duyệt (`cfharness approve`, socket hub, `mcp__*__hub_approve` = forbidden).
@@ -592,7 +593,7 @@ Chi tiết, danh sách gồm/bỏ, giới hạn: `docs/dev-notes/backup.md`. Kh�
 
 ## Tổng quan máy (Q6) + quản trị user trên cùng máy — mỗi hub xuất số liệu, admin xem/cảnh báo/ESTOP/chính sách
 Chi tiết: `docs/dev-notes/admin-overview.md` (Q6 + RUNBOOK nhóm/thư mục), `docs/dev-notes/admin-users.md` (plan-admin-users P1+P2: bất biến,
-lệch kế hoạch, việc dở). Migration **v25** (`admin_samples`). Test: `tests/test_admin_overview.py`, `tests/test_admin_{control,policy,watch,users,audit}.py`,
+lệch kế hoạch, việc dở). Migration **v26** (`admin_samples`). Test: `tests/test_admin_overview.py`, `tests/test_admin_{control,policy,watch,users,audit}.py`,
 `tests/test_web_admin.py`.
 
 | Module | Vai trò |

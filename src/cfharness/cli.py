@@ -946,6 +946,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_schedule_parsers(sub, common)
 
+    # Tài khoản Claude: cfharness account list|add|login|use|rename|rm|check (accounts/cli.py)
+    from .accounts.cli import add_parsers as _add_account_parsers
+
+    _add_account_parsers(sub, common)
+
     # đổi tên cfharness: home status|migrate (home_migrate.py)
     from .home_migrate import add_parsers as _add_home_parsers
 

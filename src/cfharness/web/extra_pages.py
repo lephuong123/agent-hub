@@ -449,12 +449,17 @@ async def partial_health(request: Request) -> Response:
         st = await rpc(request, "hub.status") or {}
         add("Daemon", True, f"đang chạy · phiên bản {st.get('version')} · {st.get('running', 0)} run chạy, {st.get('queued', 0)} chờ")
         add("Đăng nhập claude", not st.get("auth_block"), "bình thường" if not st.get("auth_block") else
-            "claude chưa đăng nhập — run bị chặn (chạy `claude auth login` rồi `cfharness doctor`)")
+            "claude chưa đăng nhập — run bị chặn: đổi sang tài khoản khác ở mục Tài khoản Claude (nút Dùng), "
+            "hoặc chạy `claude auth login` rồi `cfharness doctor`")
+        acct = st.get("account") if isinstance(st.get("account"), dict) else None
+        if acct:
+            add("Tài khoản Claude", True, f"đang dùng {acct.get('label') or acct.get('id')}")
         add("Sandbox OS cho Bash", bool(st.get("sandbox_enabled")), "bật" if st.get("sandbox_enabled") else "đang TẮT (guard.sandbox.enabled)", "warning")
         add("Dừng khẩn cấp", not st.get("estop"), "tắt" if not st.get("estop") else "ĐANG BẬT — không run mới nào chạy", "warning")
         rl = st.get("rate_limit")
         if rl:
-            add("Giới hạn tốc độ", False, "đang bị giới hạn" + (f" tới {rl.get('until')}" if isinstance(rl, dict) and rl.get("until") else ""), "warning")
+            add("Giới hạn tốc độ", False, "đang bị giới hạn" + (f" tới {rl.get('until')}" if isinstance(rl, dict) and rl.get("until") else "")
+                + " — muốn chạy tiếp ngay: đổi sang tài khoản khác ở mục Tài khoản Claude (nút Dùng)", "warning")
         compat = await _opt(request, "hub.compat", {}, {}) or {}
         cli = compat.get("cli") or {}
         if cli:

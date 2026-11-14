@@ -1,6 +1,6 @@
 {% import "_macros.html" as m with context %}
 {% if hub.estop and hub.estop.on %}<div class="banner danger">{{ m.icon('stop') }}<span><b>Dừng khẩn cấp (ESTOP) đang BẬT</b>{% if hub.estop.reason %} — {{ hub.estop.reason }}{% endif %}. Không run mới nào được chạy.</span> <a href="/settings#estop">Tắt ở Cài đặt</a></div>{% endif %}
-{% if hub.auth_block %}<div class="banner danger">{{ m.icon('alert') }}<span><code>claude</code> chưa đăng nhập — chạy <code>claude</code> trong terminal để đăng nhập, rồi bấm</span> {{ m.act("auth_reset", "Thử lại", {}, "btn sm", next="/") }}</div>{% endif %}
+{% if hub.auth_block %}<div class="banner danger">{{ m.icon('alert') }}<span><code>claude</code> chưa đăng nhập — chạy <code>claude</code> trong terminal để đăng nhập, rồi bấm</span> {{ m.act("auth_reset", "Thử lại", {}, "btn sm", next="/") }} <a href="/settings#accounts">Đổi sang tài khoản khác</a></div>{% endif %}
 {% if hub.cli_untested %}<div class="banner warn">{{ m.icon('alert') }}<span>Phiên bản Claude Code {{ hub.cli_version }} chưa được kiểm với hub.</span></div>{% endif %}
 {% set need = (hub.approvals_pending or 0) + (questions|length) %}
 <section class="stats">

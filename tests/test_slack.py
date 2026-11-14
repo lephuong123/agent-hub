@@ -502,3 +502,20 @@ async def test_resolved_while_sending_still_clears_buttons(make, sk):
     open_approval(d, rid)
     upd = await until(lambda: [u for u in sk.calls_of("chat.update") if "Đã từ chối" in sk.text_of(u)])
     assert not sk.buttons(upd[-1])
+
+
+async def test_slash_taikhoan_switches_account(make, sk):
+    tok_a, tok_b = "sk-ant-oat01-" + "A" * 40, "sk-ant-oat01-" + "B" * 40
+    d = await make()
+    a = d.hub.accounts.add_token("Công việc", tok_a)["id"]
+    b = d.hub.accounts.add_token("Cá nhân", tok_b)["id"]
+    d.hub.accounts.use(a)
+    await deliver(sk, sk.slash(BOSS, "taikhoan"))
+    m = sk.sent(DM_BOSS)[-1]
+    blob = str(m)
+    assert "Cá nhân" in blob and tok_a not in blob and tok_b not in blob
+    btn = next(x for x in sk.buttons(m) if x["text"]["text"] == "Dùng 2")
+    await deliver(sk, sk.press(DM_BOSS, BOSS, btn["value"], m["_ts"]))
+    assert d.hub.accounts.active_id() == b
+    au = d.hub.audit.query(kind="account.use", limit=5)
+    assert au and au[0]["channel"] == f"slack:{DM_BOSS}"

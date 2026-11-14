@@ -123,6 +123,7 @@ def help_text(slash: str) -> str:
 {c} stop [run] — dừng run
 {c} estop on [lý do] | {c} estop off — dừng khẩn cấp toàn hub (tắt cần xác nhận)
 {c} digest — tóm tắt học 24 giờ qua
+{c} taikhoan — tài khoản Claude: xem trạng thái, bấm Dùng để đổi khi hết hạn mức
 {c} lich — lịch chạy tự động (xem)
 {c} moi — mở cuộc trò chuyện mới với điều phối viên
 {c} help — trợ giúp

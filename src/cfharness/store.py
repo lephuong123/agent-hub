@@ -866,7 +866,26 @@ MIGRATIONS: list[str] = [
     ALTER TABLE tasks ADD COLUMN manager_conversation_id TEXT;
     CREATE INDEX tasks_workstream ON tasks(workstream_id, status);
     """,
-    # v25 — quản trị máy (admin_watch.py, docs/dev-notes/admin-users.md): lịch sử số liệu các hub trên máy cho hub ADMIN (biểu đồ
+    # v25 — danh sách tài khoản Claude (accounts/, docs/dev-notes/plan-claude-accounts.md): token ở secret store `CLAUDE_ACCT_<ID>`, bảng
+    # chỉ giữ nhãn + sha256 của token (nhận diện token đang dùng = tài khoản nào) + kết quả kiểm gần nhất. `runs.account_id` = tài khoản
+    # đang dùng lúc spawn (`hub_state.claude_account_active`) — luồng rate-limit gắn hạn mức theo tài khoản.
+    """
+    CREATE TABLE claude_accounts (
+        id TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        token_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT,
+        last_used_at TEXT,
+        status TEXT NOT NULL DEFAULT 'unknown',
+        last_error TEXT,
+        checked_at TEXT
+    );
+    CREATE UNIQUE INDEX claude_accounts_hash ON claude_accounts(token_hash);
+    ALTER TABLE runs ADD COLUMN account_id TEXT;
+    CREATE INDEX runs_account ON runs(account_id, ended_at);
+    """,
+    # v26 — quản trị máy (admin_watch.py, docs/dev-notes/admin-users.md): lịch sử số liệu các hub trên máy cho hub ADMIN (biểu đồ
     # trang chi tiết user). CHỈ số/enum từ bản xuất đã lọc SPEC; giữ `admin_watch.history_days` (90) ngày — xoá bởi vòng nền của watcher.
     """
     CREATE TABLE IF NOT EXISTS admin_samples (

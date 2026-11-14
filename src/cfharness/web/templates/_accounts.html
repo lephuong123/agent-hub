@@ -1,0 +1,83 @@
+{#- Khối "Tài khoản Claude" ở Cài đặt (web/account_pages.py). Token/code KHÔNG BAO GIỜ được đưa vào trang: ô password, không value. -#}
+{% import "_macros.html" as m with context %}
+<section class="card {{ 'attention' if acct_blocked }}" id="accounts">
+  <div class="card-head"><h2>{{ m.icon('bot') }} Tài khoản Claude</h2>
+    {% if acct_current %}<span class="pill accent">đang dùng: {{ acct_current.label or acct_current.id }}</span>{% endif %}</div>
+  <p class="muted small">Hub giữ nhiều tài khoản Claude; agent chạy bằng tài khoản <b>Đang dùng</b>. Khi tài khoản hết hạn mức hoặc lỗi đăng nhập,
+    bấm <b>Dùng</b> ở tài khoản khác — hàng đợi chạy tiếp ngay. Hub <b>không tự đổi</b> tài khoản. Run đang chạy giữ tài khoản cũ tới khi xong.</p>
+  {% if accounts is none %}
+    <p class="banner warn">{{ m.icon('alert') }} Daemon chưa có quản lý tài khoản (<code>account.list</code>) — cập nhật cfharness rồi khởi động lại daemon.</p>
+  {% else %}
+  {% if acct_blocked %}
+  <div class="banner {{ 'danger' if acct_auth_block else 'warn' }}" id="acct-switch">{{ m.icon('alert') }}
+    <span>{% if acct_auth_block %}<code>claude</code> lỗi đăng nhập — run đang bị chặn.{% else %}Tài khoản đang dùng hết hạn mức{% if acct_gate_until %} tới {{ acct_gate_until }}{% endif %} — việc mới đang chờ.{% endif %}</span>
+    {% if acct_switch %}
+    <form method="post" action="/do/account_use" class="row gap wrap-row" data-confirm="Chuyển sang tài khoản đã chọn? Run mới dùng tài khoản này; run đang chạy giữ tài khoản cũ.">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#accounts">
+      <select name="id" aria-label="Tài khoản Claude">{% for a in acct_switch %}<option value="{{ a.id }}">{{ a.label or a.id }} ({{ a.chip }})</option>{% endfor %}</select>
+      <button class="btn sm primary" type="submit">{{ m.icon('refresh') }}<span>Đổi sang tài khoản…</span></button>
+    </form>
+    {% else %}<span>Chưa có tài khoản khác — <a href="#acct-add">thêm tài khoản</a> rồi bấm Dùng.</span>{% endif %}
+  </div>
+  {% endif %}
+  <table class="tbl stack acct"><thead><tr><th>Tài khoản</th><th>Trạng thái</th><th>Dùng lần cuối</th><th>Chi phí hôm nay</th><th></th></tr></thead><tbody>
+    {% for a in accounts %}<tr id="acct-{{ a.id }}">
+      <td data-label="Tài khoản"><b>{{ a.label or a.id }}</b>{% if a.active %} <span class="pill ok strong">{{ m.icon('check') }}Đang dùng</span>{% endif %}
+        {% if a.kind_label %}<div class="muted small">{{ a.kind_label }}</div>{% endif %}</td>
+      <td data-label="Trạng thái"><span class="pill {{ a.tone }}">{{ a.chip }}</span>{% if a.last_error and a.status != 'ok' %}<div class="small danger-t">{{ a.last_error }}</div>{% endif %}</td>
+      <td data-label="Dùng lần cuối">{{ m.rel(a.last_used_at) }}</td>
+      <td data-label="Chi phí hôm nay">{{ (a.cost_today_usd or 0)|cost }}</td>
+      <td class="actions"><div class="row gap wrap-row">
+        {% if a.can_use %}{{ m.act("account_use", "Dùng", {"id": a.id, "name": a.label or a.id}, "btn sm primary", confirm="Chuyển sang tài khoản " ~ (a.label or a.id) ~ "? Run mới dùng tài khoản này; run đang chạy giữ tài khoản cũ.", next="/settings#accounts") }}{% endif %}
+        {% if a.kind != 'custom' %}{{ m.act("account_check", "Kiểm tra", {"id": a.id, "name": a.label or a.id}, "btn sm", next="/settings#accounts") }}{% endif %}
+        {% if a.can_rm %}{{ m.act("account_rm", "Xoá", {"id": a.id, "name": a.label or a.id}, "btn sm ghost", confirm="Xoá tài khoản " ~ (a.label or a.id) ~ "? Token bị xoá khỏi secret store.", next="/settings#accounts") }}{% endif %}
+        {% if a.can_rename %}<details class="acct-rename"><summary class="btn sm ghost">Đổi tên</summary>
+          <form method="post" action="/do/account_rename" class="row gap" autocomplete="off">
+            <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ a.id }}"><input type="hidden" name="next" value="/settings#accounts">
+            <input name="label" value="{{ a.label }}" required maxlength="60" aria-label="Tên mới">
+            <button class="btn sm" type="submit">Lưu</button></form></details>{% endif %}
+      </div></td></tr>
+    {% else %}<tr><td class="muted" colspan="5">Chưa có tài khoản nào — hub dùng đăng nhập sẵn có của máy. Thêm tài khoản bên dưới.</td></tr>{% endfor %}
+  </tbody></table>
+  {% if accounts|selectattr('kind', 'equalto', 'custom')|list %}<p class="muted small">Token đang dùng không khớp tài khoản nào trong danh sách (đặt bằng tay ở secret <code>CLAUDE_CODE_OAUTH_TOKEN</code>).</p>{% endif %}
+
+  <h3 class="small" id="acct-add">Thêm tài khoản</h3>
+  {% if acct_login %}
+  <div class="acct-login">
+    <p class="small"><b>Bước 2/2 — {{ acct_login.label }}:</b> mở trang đăng nhập (tab mới), đăng nhập đúng tài khoản Claude, bấm <b>Authorize</b>,
+      copy code hiện ra rồi dán vào đây.</p>
+    <p><a class="btn primary" href="{{ acct_login.url }}" target="_blank" rel="noopener noreferrer">{{ m.icon('external') }}<span>Mở trang đăng nhập</span></a></p>
+    <form method="post" action="/do/account_login_finish" class="form" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="login_id" value="{{ acct_login.login_id }}"><input type="hidden" name="next" value="/settings#accounts">
+      <label>Code <input name="code" type="password" required autocomplete="off" spellcheck="false" placeholder="dán code sau khi đăng nhập"></label>
+      <div class="row end gap">
+        <button class="btn" type="submit">Hoàn tất</button>
+      </div>
+    </form>
+    {{ m.act("account_login_cancel", "Huỷ", {"login_id": acct_login.login_id}, "btn sm ghost", next="/settings#accounts") }}
+  </div>
+  {% else %}
+  <details class="cfg-group" name="acct-add" open>
+    <summary>Đăng nhập (khuyên dùng)</summary>
+    <form method="post" action="/do/account_login_start" class="form" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#accounts">
+      <label>Tên tài khoản <input name="label" required maxlength="60" placeholder="VD: Công ty, Cá nhân" autocomplete="off"></label>
+      <p class="muted small">Bước 1/2: hub mở lượt đăng nhập (<code>claude setup-token</code>) và đưa bạn link trang đăng nhập.</p>
+      <div class="row end"><button class="btn" type="submit">Tiếp tục</button></div>
+    </form>
+  </details>
+  <details class="cfg-group" name="acct-add">
+    <summary>Dán token</summary>
+    <form method="post" action="/do/account_add_token" class="form" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#accounts">
+      <div class="fgrid">
+        <label>Tên tài khoản <input name="label" required maxlength="60" autocomplete="off"></label>
+        <label>Token <input name="token" type="password" required autocomplete="off" spellcheck="false" placeholder="sk-ant-oat01-…"></label>
+      </div>
+      <p class="muted small">Token lấy bằng <code>claude setup-token</code> trong terminal. Lưu vào secret store — không hiện lại, agent không đọc được.</p>
+      <div class="row end"><button class="btn" type="submit">Thêm tài khoản</button></div>
+    </form>
+  </details>
+  {% endif %}
+  {% endif %}
+</section>

@@ -23,7 +23,7 @@ root `--system-install`, token riêng).
 | `systems/autostart.py` | `LaunchDaemonPlan(system_install=True)` → chạy `/opt/cfharness/bin/cfharness` + in lệnh cài root-owned; `cfharness admin install-daemon --system-install` |
 | `secrets.py` | metadata `secrets/.meta.json` `{NAME: {set_at}}` (không giá trị) → `SecretStore.set_at()` → `claude.oauth_token_age_d` |
 
-Migration **v25** (`admin_samples`). Event mới: `hub.admin_estop`, `admin.alert` (EVENT_LEVELS + `docs/schema/event.v1.json`).
+Migration **v26** (`admin_samples`). Event mới: `hub.admin_estop`, `admin.alert` (EVENT_LEVELS + `docs/schema/event.v1.json`).
 Config mới: nhánh `admin_watch.*` (∈ `integrity.SECURITY_KEYS`, có kiểm kiểu). `notify.{slack,telegram}.events` mặc định thêm
 `admin.alert`, `hub.admin_estop` (cấu hình đã ghi đè danh sách thì phải tự thêm).
 

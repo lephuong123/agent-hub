@@ -97,6 +97,10 @@ class Hub:
         from .schedules import attach as _attach_schedules
 
         _attach_schedules(self)
+        # Danh sách tài khoản Claude (`hub.accounts`: token setup-token nhiều tài khoản, NGƯỜI bấm đổi — không tự đổi) — accounts/service.py
+        from .accounts import attach as _attach_accounts
+
+        _attach_accounts(self)
         # Tổng quan máy (Q6): xuất bản tóm tắt CHỈ SỐ LIỆU ra thư mục chung cho admin (`hub.admin_export`; tắt mặc định) — admin_overview.py
         from .admin_overview import attach as _attach_admin_export
 
@@ -198,6 +202,7 @@ class Hub:
         self.auto_resume.stop()  # lịch hẹn vẫn ở hub_state, lần khởi động sau chạy tiếp
         await self.manager.stop()  # M7
         await self.questions.stop()
+        await self.accounts.close_all_logins()  # type: ignore[attr-defined]  # kill tiến trình `claude setup-token` đang chờ code
         await self.runs.shutdown()
         self.integrity.stop()
         for t in self._bg:
@@ -225,6 +230,13 @@ class Hub:
         except Exception:  # pragma: no cover
             pass
 
+    def _account_brief(self) -> dict[str, Any] | None:
+        try:
+            return self.accounts.active_brief()  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover — hub.status không được hỏng vì secret store
+            log.exception("không đọc được tài khoản Claude đang dùng")
+            return None
+
     def status(self) -> dict[str, Any]:
         cfg = self.config.data
         return {
@@ -241,6 +253,7 @@ class Hub:
             "rate_limit_gate": self.store.state_get("rate_limit_gate"),  # dispatcher không claim tới `until` (hạn mức đã rejected)
             "teams_estop": [r[0] for r in self.store.conn.execute("SELECT id FROM teams WHERE estop=1 AND archived_at IS NULL")],  # M3
             "auth_block": self.runs.auth_block,
+            "account": self._account_brief(),  # tài khoản Claude đang dùng {id, label} | None (accounts/)
             "agents": len(self.store.list_agents()),
             "cost_today_usd": round(self.store.cost_today(), 8),
             "epoch_usage": self.aggregator.snapshot(),
