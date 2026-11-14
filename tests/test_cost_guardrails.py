@@ -269,3 +269,60 @@ async def test_schedule_estimate_uses_recent_real_cost(hub_home):
         assert sch.fire_cost_estimate(a["id"], 0.05) == pytest.approx(0.05)
     finally:
         await close(d)
+
+
+# ============================================================================ 6. lượt chạy tiếp sau khi NGƯỜI duyệt: miễn trần ngày
+async def _paused_with_decision(hub, by: str, *, decision: str = "allowed"):
+    """Run của agent `a` đang waiting_human với 1 approval đã được quyết bởi `by`; ngân sách ngày của agent đã hết."""
+    hub.agents.create({"id": "a", "name": "a", "limits": {"budget_usd_per_day": 0.01}})
+    r = hub.runs.submit("a", "work", budget_usd=0.005)
+    await until(lambda: hub.store.get_run(r["id"])["status"] in ("completed", "failed"))
+    hub.store.update_run(r["id"], {"status": "waiting_human", "outcome": None, "cost_usd": 0.02})  # vượt trần ngày 0.01
+    ap = hub.approvals.open(hub.store.get_run(r["id"]), tool_name="Bash", tool_input={"command": "rm -rf build"}, tool_use_id="tu1",
+                            fingerprint="fp1", verdict={"klass": "destructive", "rule": "rm_rf", "reason": "test"}, channel="hook")
+    hub.approvals._update(ap["id"], {"status": decision, "resolved_by": by, "resolved_channel": "web", "resolved_at": "2026-11-14T00:00:00Z"})
+    with pytest.raises(Blocked):
+        hub.runs.submit("a", "run mới bình thường")  # run mới vẫn bị chặn
+    return r["id"]
+
+
+@pytest.mark.parametrize("decision", ["allowed", "denied"])
+async def test_human_approved_continue_exempt_from_daily_budget(make_hub, decision):
+    hub, _ = make_hub()
+    rid = await _paused_with_decision(hub, "user", decision=decision)
+    new = hub.runs.on_approval_resolved(rid)
+    assert new is not None and new["resume_reason"] == "approval"
+    assert new["max_budget_usd"] == pytest.approx(0.005)  # trần mỗi run kế thừa run gốc, không phải "phần còn lại" âm
+    assert hub.store.get_run(rid)["status"] == "resumed"
+    rows = [r for r in hub.audit.query(limit=50) if r["kind"] == "budget.exempt_approved"]
+    assert len(rows) == 1 and rows[0]["run_id"] == new["id"] and rows[0]["data"]["from_run_id"] == rid
+    with pytest.raises(Blocked):
+        hub.runs.submit("a", "vẫn chặn run mới")  # miễn trừ chỉ cho đúng lượt chạy tiếp
+
+
+async def test_manager_decided_continue_not_exempt(make_hub):
+    hub, _ = make_hub()
+    rid = await _paused_with_decision(hub, "manager:boss")
+    assert hub.runs.on_approval_resolved(rid) is None
+    err = [e for e in evs(hub, "error") if e.payload.get("code") == "resume_failed"]
+    assert err and "ngân sách ngày" in err[-1].payload["message"]
+    assert hub.store.get_run(rid)["status"] == "waiting_human"
+
+
+async def test_human_approved_continue_still_bound_by_admin_policy(make_hub, monkeypatch):
+    hub, _ = make_hub()
+    rid = await _paused_with_decision(hub, "user")
+    pol = hub.runs._admin_policy()
+    monkeypatch.setattr(pol, "budget_scope", lambda h: [("admin", "machine", 5.0, 1.0)])
+    assert hub.runs.on_approval_resolved(rid) is None  # chính sách root không được miễn
+    assert hub.store.get_run(rid)["status"] == "waiting_human"
+
+
+def test_human_decided_classifier():
+    from cfharness.runs import human_decided
+
+    assert human_decided({"status": "allowed", "resolved_by": "user"})
+    assert human_decided({"status": "denied", "resolved_by": "telegram:123"})
+    assert not human_decided({"status": "allowed", "resolved_by": "manager:boss"})
+    assert not human_decided({"status": "cancelled", "resolved_by": "hub"})
+    assert not human_decided({"status": "allowed", "resolved_by": ""})

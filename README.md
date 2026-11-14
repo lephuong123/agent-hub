@@ -36,7 +36,7 @@ Mở terminal mới sau khi cài, để lệnh `uv` có trong PATH.
 **3. Cài cfharness:**
 
 ```bash
-uv tool install --python 3.13 git+https://github.com/lephuong123/agent-hub@v0.2.9
+uv tool install --python 3.13 git+https://github.com/lephuong123/agent-hub@v0.2.10
 uv tool update-shell        # đưa lệnh `cfharness` vào PATH (chỉ cần lần đầu), rồi mở terminal mới
 cfharness doctor            # kiểm claude, đăng nhập, sandbox… — không tốn tiền
 ```
@@ -52,7 +52,7 @@ Xong thì mở giao diện web bằng `cfharness web --open` hoặc chat với �
 
 ### Cập nhật
 
-Mỗi bản phát hành là một tag `vX.Y.Z`, danh sách ở [Releases](https://github.com/lephuong123/agent-hub/releases).
+Mỗi bản phát hành là một tag `vX.Y.Z`, danh sách ở [Releases](https://github.com/lephuong123/agent-hub/releases); có gì mới ở từng bản: [CHANGELOG.md](CHANGELOG.md).
 
 Cách nhanh: bấm **Cập nhật lên vX.Y.Z** ở đầu trang *Cài đặt* của giao diện web, hoặc chạy `cfharness update`
 (`cfharness update --check` chỉ kiểm tra). Hub tự dừng daemon, cài bản mới nhất, rồi khởi động lại daemon (khoảng 1 phút);
@@ -63,7 +63,7 @@ Cập nhật bằng tay = cài đè đúng tag đó:
 
 ```bash
 cfharness daemon stop
-uv tool install --force --python 3.13 git+https://github.com/lephuong123/agent-hub@v0.2.9   # thay bằng tag mới nhất
+uv tool install --force --python 3.13 git+https://github.com/lephuong123/agent-hub@v0.2.10   # thay bằng tag mới nhất
 cfharness --version
 ```
 

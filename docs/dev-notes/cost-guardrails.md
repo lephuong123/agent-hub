@@ -51,3 +51,12 @@ crashed có cost ước lượng + vào `cost_today` + `chain_budget_left`; cras
 - Trang Cài đặt web chưa có ô cho `manager.budget_usd_per_day` (nhánh `manager` là khoá an toàn, không trong `SAFE_CONFIG`) — dùng CLI.
 - Resume sau approval vẫn đi `RunManager.submit` nên bị chặn khi hết ngân sách ngày (hành vi sẵn có cho mọi scope: approval đã quyết
   không bị huỷ, nhưng lượt tiếp tục báo `resume_failed`); có nên miễn trần cho lượt tiếp tục có vé không — chưa quyết.
+
+## Miễn trần ngày cho lượt chạy tiếp sau khi người duyệt (chủ repo quyết 2026-11-14)
+- `RunManager.on_approval_resolved`: nếu MỌI approval đã quyết của run là do NGƯỜI (`runs.human_decided`: có `resolved_by`, không phải
+  `hub`, không phải `manager:*`) → `submit(budget_exempt=True)` → `_budget_for(exempt_day=True)` bỏ qua trần ngày hub/team/agent/điều
+  phối viên (kể cả "đang giữ chỗ"). Cả "cho phép" lẫn "từ chối" đều được miễn (người đã quyết, agent cần chạy tiếp để kết thúc gọn).
+- Vẫn áp: trần mỗi run (`max_budget_usd` kế thừa run gốc) và scope `admin` (chính sách root — user không tự miễn được).
+- Điều phối viên/hub quyết → không miễn (lượt chạy tiếp bị chặn như cũ, event `error{code: resume_failed}`).
+- Khi thực sự dùng miễn trừ (có scope ngày đã hết) → audit `budget.exempt_approved{from_run_id, approvals, by, max_budget_usd}`.
+- Run mới bình thường vẫn bị chặn; miễn trừ chỉ cho đúng lượt chạy tiếp đó. Test: `tests/test_cost_guardrails.py` mục 6.

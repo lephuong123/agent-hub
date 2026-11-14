@@ -37,6 +37,15 @@ phát trong `RunManager._finalize` sau khi ghi DB (event `run.completed` của a
 - Hook lỗi/timeout là fail-OPEN — hook guard của M1 phải tự fail-closed.
 - Biến môi trường phiên Claude Code bao ngoài (`CLAUDECODE`, `CLAUDE_CODE_*`…) bị loại khỏi tiến trình con (`runtime.claude.env_strip`).
 
+## Phát hành — viết release note TRƯỚC
+Release note theo từng phiên bản ở `CHANGELOG.md` (gốc repo, tiếng Việt, mục mới nhất trên cùng). Quy trình bắt buộc khi phát hành `vX.Y.Z`:
+1. **Trước tiên** viết release note: đổi mục "Chưa phát hành" thành `## vX.Y.Z — <YYYY-MM-DD>`, bổ sung đủ mọi PR/thay đổi kể từ tag trước
+   (`git log --first-parent <tag trước>..HEAD`), nhóm theo chức năng, viết theo góc nhìn người dùng, ghi số PR, có mục "Lưu ý khi cập nhật"
+   nếu có migration / cấu hình phải sửa tay. Chưa có release note thì KHÔNG nâng phiên bản, KHÔNG tạo tag/GitHub Release.
+2. Sau đó mới nâng `version` (`pyproject.toml`, `src/cfharness/__init__.py`, `uv.lock`), tag ở README và `scripts/setup-hub-user.sh`.
+3. Thân GitHub Release = chép nguyên mục của phiên bản đó trong `CHANGELOG.md` (không dùng "Generate release notes" thay thế).
+Trong lúc làm việc: PR có thay đổi người dùng thấy được thì thêm một dòng vào mục "Chưa phát hành".
+
 ## Lệnh
 ```bash
 uv sync
@@ -622,3 +631,10 @@ Chi tiết, spike (claude 2.1.319: `allowRead` trong `denyRead` hoạt động, 
 - Bất biến: `workspace.confine` chỉ người (`config.set` HUMAN_ONLY, khoá ∈ `integrity.SECURITY_KEYS` — khoá con có dấu chấm được hỗ trợ);
   khi bật, `trust_full` KHÔNG gỡ giam (Q4) và `guard.sandbox.enabled=false` vẫn để lại sandbox chỉ-giam; mọi workspace/cwd/worktree/
   `extra_write_roots` phải trong W (`validate_workspace`, `check_path`). Không dùng glob trong `sandbox.filesystem.allowRead` (không mở lại).
+
+## Giọng nói trên web — đọc chép + hội thoại giọng nói với điều phối viên
+Chi tiết, an toàn, việc dở: `docs/dev-notes/voice.md`. Không migration. Test: `tests/test_voice.py`.
+- `web/static/voice.js` (Web Speech API, `vi-VN` mặc định): nút micro cho mọi `textarea[data-voice]` + `#mgr-mic`; nút sóng âm `#mgr-voice` = chế độ
+  hội thoại (tự gửi khi im, đọc to trả lời). Chỉ nghe sự kiện `mgr:*` do `app.js initManager` phát; chữ agent chỉ qua `textContent`/`speechSynthesis`.
+- Bất biến: tin giọng nói mang `voice=dictation|conversation` → `manager.chat{voice}` → `_owner_shortcut` KHÔNG BAO GIỜ duyệt approval/chốt câu hỏi
+  xin phép từ giọng nói (`_voice_shortcut`). Header `microphone=(self)` — không nới thêm (camera/geolocation vẫn `()`).
