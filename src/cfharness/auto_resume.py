@@ -12,6 +12,7 @@ Chính sách (`hub.auto_resume`, listener bus):
   `auto_resume:*` hoặc `daemon_restart`). Hết lượt → event `run.auto_resume{status: exhausted}` + audit, dừng.
 - Backoff: `auto_resume_backoff_s * 2^attempt` (trần `auto_resume_backoff_max_s`); rate limit thì chờ tới thời điểm reset
   đã biết (`dispatcher._run_reset`). Lịch hẹn lưu ở `hub_state.auto_resume_pending` → daemon khởi động lại vẫn chạy tiếp.
+  NGƯỜI đổi tài khoản Claude (event `account.switched`) → lượt hẹn vì `rate_limit` chạy ngay (không bao giờ tự đổi tài khoản).
 - Lúc tới hạn kiểm lại: ESTOP, agent tạm dừng/đã xoá, session đang bận hoặc đã có run mới hơn (người `run continue`), run đã
   được tiếp tục (`continued_in_run_id`), chuỗi hết ngân sách → bỏ (idempotent: daemon là luồng đơn, kiểm-tạo-ghi không có `await` xen giữa). Ngân sách/đồng thời: `RunManager.submit`
   (chặn ngân sách → `skipped`), run mới vào hàng đợi chung. Cả chuỗi chung MỘT ngân sách run gốc (`chain_budget_left`).
@@ -123,6 +124,13 @@ class AutoResumer:
 
     # -- listener
     def _on_bus(self, ev: HubEvent) -> None:
+        if ev.type == "account.switched":
+            p = ev.payload or {}
+            try:
+                asyncio.get_running_loop().call_soon(self.on_account_switched, p.get("from"), p.get("to"))
+            except RuntimeError:
+                self.on_account_switched(p.get("from"), p.get("to"))
+            return
         if ev.type != "run.failed" or not ev.run_id or ev.source != "hub":
             return
         try:
@@ -145,7 +153,7 @@ class AutoResumer:
         att = chain_attempts(self.hub.store, run)
         delay = min(float(self.cfg("auto_resume_backoff_s") or 0) * (2 ** att), float(self.cfg("auto_resume_backoff_max_s") or 0))
         if cause == "rate_limit":
-            reset, _ = self.hub.dispatcher._run_reset(run)
+            reset, _ = self.hub.dispatcher.resume_reset(run)  # run của tài khoản cũ (người đã đổi) → không chờ reset của nó
             if reset is not None:
                 delay = max(delay, (reset - datetime.now(timezone.utc)).total_seconds())
         self._persist(run_id, time.time() + delay)
@@ -173,6 +181,30 @@ class AutoResumer:
             self._handles[run_id] = asyncio.get_running_loop().call_later(max(0.0, delay), self.fire, run_id)
         except RuntimeError:
             pass
+
+    def on_account_switched(self, from_: Any = None, to: Any = None) -> list[str]:
+        """NGƯỜI vừa đổi tài khoản Claude (event `account.switched`): lượt tự resume đang hẹn vì `rate_limit` chạy NGAY
+        (tài khoản mới không bị hạn mức của tài khoản cũ). Các nguyên nhân khác giữ lịch cũ. KHÔNG tự đổi tài khoản.
+        Không kéo sớm khi chọn lại đúng tài khoản đang dùng (from == to) hoặc cổng hạn mức của tài khoản mới còn đóng — chạy
+        vào hạn mức đã biết chỉ đốt lượt tự resume."""
+        if to is not None and from_ == to:
+            return []
+        if self.hub.dispatcher.gate_peek() is not None:
+            return []
+        now = time.time()
+        moved: list[str] = []
+        for rid, due in self._pending().items():
+            if float(due) <= now:
+                continue
+            run = self.hub.store.get_run(rid)
+            if run is None or transient_cause(run) != "rate_limit":
+                continue
+            self._persist(rid, now)
+            self._arm(rid, 0)
+            moved.append(rid)
+        if moved:
+            log.info("đổi tài khoản Claude: %d lượt tự resume (rate_limit) chạy sớm", len(moved))
+        return moved
 
     def start(self) -> None:
         """Hub.start: hẹn lại các lượt resume đã lên lịch trước khi daemon dừng."""

@@ -143,6 +143,10 @@
   ],
   "additionalProperties": false,
   "x-event-types": {
+    "account.added": "summary",
+    "account.removed": "summary",
+    "account.renamed": "summary",
+    "account.switched": "summary",
     "agent.archived": "summary",
     "agent.cloned": "summary",
     "agent.created": "summary",

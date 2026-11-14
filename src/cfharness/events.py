@@ -193,6 +193,11 @@ EVENT_LEVELS: dict[str, str] = {
     "schedule.skipped": "summary",  # reason: estop|overlap|missed|agent_paused|agent_archived|team_estop|no_manager|blocked: …
     "schedule.failed": "summary",  # reason, fail_count
     "schedule.paused": "summary",  # by (user|manager:<id>|hub — tự dừng sau lỗi liên tiếp), reason
+    # Tài khoản Claude (accounts/, docs/dev-notes/plan-claude-accounts.md) — payload KHÔNG BAO GIỜ có token. Đổi tài khoản chỉ do NGƯỜI.
+    "account.added": "summary",  # id, label
+    "account.removed": "summary",  # id
+    "account.renamed": "summary",  # id, label
+    "account.switched": "summary",  # from, to, by — luồng rate-limit/dispatcher nghe để đưa việc đang chờ chạy lại
 }
 
 # Không ghi vào bảng `events` (chỉ ring buffer + stdout thô) — FR-OB-01.

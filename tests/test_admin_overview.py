@@ -5,7 +5,6 @@ Không gọi `claude` thật (FakeRuntime), không gọi dseditgroup/chgrp thậ
 
 from __future__ import annotations
 
-import grp
 import json
 import os
 import stat
@@ -13,6 +12,8 @@ import time
 from pathlib import Path
 
 import pytest
+
+grp = pytest.importorskip("grp", reason="tổng quan máy dùng nhóm POSIX (grp) — không có trên Windows")
 
 from cfharness import admin_overview as ao
 from cfharness import auth

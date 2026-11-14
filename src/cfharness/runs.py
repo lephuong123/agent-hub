@@ -240,7 +240,8 @@ class RunManager:
         ab = self.auth_block
         if ab:
             raise Blocked(
-                "claude chưa đăng nhập — chạy `claude auth login`, rồi `cfharness doctor` để mở khoá. "
+                "claude chưa đăng nhập — chạy `claude auth login`, rồi `cfharness doctor` để mở khoá; hoặc đổi sang tài khoản Claude khác "
+                "(`cfharness account use <id>`, web: Cài đặt → Tài khoản Claude, chat: lệnh taikhoan) — đổi tài khoản tự mở khoá. "
                 f"Chi tiết: {ab.get('message', '')[:200]}",
                 data={"auth_block": ab},
             )
@@ -777,6 +778,8 @@ class RunManager:
                     "model": spec.model,
                     "raw_log_path": str(spec.raw_log_path) + ".gz",
                     "stderr_log_path": str(spec.stderr_log_path),
+                    # tài khoản Claude đang dùng lúc spawn (accounts/; None = chưa cấu hình) — rate-limit/chi phí theo tài khoản
+                    "account_id": hub.store.state_get("claude_account_active"),
                 },
             )
             hub.store.upsert_session(spec.session_id, agent_id, run_id, forked_from=spec.resume_session_id if spec.fork else None)

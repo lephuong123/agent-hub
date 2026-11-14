@@ -680,3 +680,28 @@ async def test_rule_grant_button_two_steps(make, tg):
     g = d.hub.guard.rule_grants()[got["agent_id"]][ap["matched_rule"]]
     assert g["until"] and g["channel"] == f"telegram:{BOSS}"
     await stop(d)
+
+
+# ============================================================================ /taikhoan (tài khoản Claude)
+async def test_accounts_command_lists_and_switches_by_button(make, tg):
+    tok_a, tok_b = "sk-ant-oat01-" + "A" * 40, "sk-ant-oat01-" + "B" * 40
+    d = await make()
+    a = d.hub.accounts.add_token("Công việc", tok_a)["id"]
+    b = d.hub.accounts.add_token("Cá nhân <x>", tok_b)["id"]
+    d.hub.accounts.use(a)
+    await until(lambda: tg.calls_of("getUpdates"))
+    await say(tg, BOSS, "/taikhoan")
+    msg = tg.sent(BOSS)[-1]
+    assert "Tài khoản Claude" in msg["text"] and "Công việc" in msg["text"] and "Cá nhân &lt;x&gt;" in msg["text"]
+    assert tok_a not in msg["text"] and tok_b not in msg["text"] and "đang dùng" in msg["text"]
+    btns = FakeTelegram.buttons(msg)
+    assert [x["text"] for x in btns] == ["Dùng 2", "Dùng 3"]  # tài khoản đang dùng không có nút; 3 = đăng nhập của máy
+    await press(tg, BOSS, btns[0]["callback_data"])
+    assert d.hub.accounts.active_id() == b and d.hub.secrets.get("CLAUDE_CODE_OAUTH_TOKEN") == tok_b
+    au = d.hub.audit.query(kind="account.use")
+    assert au and au[0]["channel"] == f"telegram:{BOSS}" and au[0]["actor"] == "user"
+    assert any("Đã chuyển sang tài khoản" in t for t in texts(tg, BOSS) + [m.get("text", "") for _, m in tg.calls if _ == "editMessageText"])
+    # người ngoài allowlist: không đổi được
+    resp = await d.call_as(auth.telegram_caller(d.hub, STRANGER, STRANGER), "account.use", {"id": a})
+    assert resp["error"]["code"] == BLOCKED and d.hub.accounts.active_id() == b
+    await stop(d)

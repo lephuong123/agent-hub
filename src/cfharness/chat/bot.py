@@ -57,6 +57,7 @@ HELP = """cfharness qua Telegram — lệnh (bấm / để xem menu):
 /stop [run] — dừng run (không ghi run → chọn bằng nút)
 /estop on [lý do] | /estop off — dừng khẩn cấp toàn hub (tắt cần xác nhận)
 /digest — tóm tắt học 24 giờ qua
+/taikhoan (/account) — tài khoản Claude: xem trạng thái, bấm Dùng để đổi khi hết hạn mức
 /lich — lịch chạy tự động (xem; tạo/tắt: nhắn điều phối viên)
 /moi — mở cuộc trò chuyện mới với điều phối viên
 /help — trợ giúp
@@ -73,6 +74,7 @@ BOT_COMMANDS = [
     ("moi", "Cuộc trò chuyện mới với điều phối viên"), ("digest", "Tóm tắt học 24 giờ qua"), ("estop", "Dừng khẩn cấp: /estop on|off"),
     ("help", "Trợ giúp"),
     ("lich", "Lịch chạy tự động (xem)"),
+    ("taikhoan", "Tài khoản Claude: xem / đổi"),
 ]
 # T-A: bàn phím nhanh (chat riêng) — bấm = gửi đúng chữ này → lệnh tương ứng
 QUICK_KEYS = {"📋 Cần bạn": "/canban", "📊 Trạng thái": "/trangthai", "➕ Giao việc": "/giaoviec", "🤖 Agent": "/agent"}
