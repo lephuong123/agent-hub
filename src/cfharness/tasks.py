@@ -466,6 +466,42 @@ class TaskService:
             for s in self.subtasks(t["id"]):
                 if s["status"] in OPEN or s["status"] == "blocked":
                     await self.archive(s["id"], reason=f"task gốc {t['id']} archived", stop_running=stop_running)
+        if t.get("origin_task_id"):
+            # task con bị huỷ có thể là task con CUỐI còn mở → xét lại task gốc (trước đây chỉ xét khi task con xong → task gốc
+            # kẹt `running` mãi; sự cố 2026-11-14: t_b477adfb82, t_c9acb8faf7)
+            disp = getattr(self.hub, "dispatcher", None)
+            if disp is not None:
+                disp._refresh_root(self.row(t["id"]))
+        return out
+
+    def reassign(self, task_id: str, assignee: str, *, by: str | None = None, reason: str | None = None) -> dict[str, Any]:
+        """Đổi người làm task CHƯA CHẠY (todo/ready/blocked) mà GIỮ nguyên vị trí trong DAG/task gốc — thay cho "huỷ rồi tạo lại"
+        (làm task gốc mất task con). Task đang chạy/review/xong/đã huỷ, hoặc task gốc → từ chối."""
+        t = self.row(task_id)
+        if t["kind"] == "root":
+            raise HubError(f"task {t['id']} là task gốc — đổi người làm ở từng task con")
+        if t["status"] not in ("todo", "ready", "blocked"):
+            raise Conflict(f"task {t['id']} đang {t['status']} — chỉ đổi người làm được task chưa chạy (todo/ready/blocked)",
+                           data={"status": t["status"]})
+        if t.get("current_run_id"):
+            raise Conflict(f"task {t['id']} đang có run {t['current_run_id']}", data={"run_id": t["current_run_id"]})
+        assignee = str(assignee or "").strip()
+        if not assignee:
+            raise HubError("thiếu assignee")
+        row = self.hub.agents.get_row(assignee)  # NotFound / đã archive → lỗi
+        if row.get("archived_at"):
+            raise HubError(f"agent '{assignee}' đã bị xoá mềm")
+        if t.get("team_id") and not self.hub.teams.member(t["team_id"], assignee):
+            raise HubError(f"agent '{assignee}' không thuộc team '{t['team_id']}' — `cfharness team member add {t['team_id']} {assignee}` trước")
+        prev = t.get("assignee_agent_id")
+        if prev == assignee:
+            return t
+        self.update(t["id"], {"assignee_agent_id": assignee, "not_before": None})
+        out = self.row(t["id"])
+        self.publish("task.reassigned", out, {"from": prev, "to": assignee, "by": by, "reason": reason})
+        disp = getattr(self.hub, "dispatcher", None)
+        if disp is not None:
+            disp.kick()
         return out
 
     # ------------------------------------------------------------------ prompt

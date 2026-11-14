@@ -299,6 +299,7 @@ class OrchestrationRpc:
             "task.unblock": lambda p: h.tasks.unblock(_req(p, "id")),
             "task.retry": lambda p: h.tasks.retry(_req(p, "id")),
             "task.archive": self.task_archive,
+            "task.reassign": lambda p: h.tasks.reassign(_req(p, "id"), _req(p, "assignee"), by=p.get("by"), reason=p.get("reason")),
             "task.link": lambda p: h.tasks.link(_req(p, "parent"), _req(p, "child")),
             "task.events": lambda p: self.task_events({**p, "task_id": p.get("task_id") or p.get("id")}),
             "taskself.call": self.taskself_call,

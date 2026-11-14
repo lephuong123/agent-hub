@@ -795,6 +795,13 @@ class ManagerPermissions:
                         return why
             return (self.check_path(t.get("workspace"), "workspace của task", agent_id=str(t.get("assignee") or "") or None)
                     or self.check_run_budget(t))
+        if method == "task.reassign":
+            who = str(p.get("assignee") or "")
+            if who in mgrs:
+                return "không giao task cho agent điều phối viên"
+            if who and self.estop_teams_of(who):
+                return f"'{who}' thuộc team đang ESTOP — không giao việc"
+            return None
         if method == "run.start":
             if str(p.get("agent") or "") in mgrs:
                 return "không chạy run cho agent điều phối viên"

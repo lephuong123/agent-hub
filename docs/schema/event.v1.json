@@ -278,6 +278,7 @@
     "task.created": "summary",
     "task.decomposed": "summary",
     "task.linked": "summary",
+    "task.reassigned": "summary",
     "task.requeue_exhausted": "summary",
     "task.signal": "summary",
     "task.status": "summary",

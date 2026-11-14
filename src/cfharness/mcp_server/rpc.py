@@ -45,7 +45,7 @@ MUTATING = frozenset(
         "run.steer", "agent.create_from_template", "run.takeover_record",
         # M3
         "team.create", "team.update", "team.member_set", "team.member_rm", "team.archive", "team.restore", "team.estop",
-        "task.create", "task.comment", "task.block", "task.unblock", "task.retry", "task.archive", "task.link",
+        "task.create", "task.comment", "task.block", "task.unblock", "task.retry", "task.archive", "task.reassign", "task.link",
         "run.revert", "agent.clone", "agent.export", "agent.import", "mcp.team_run",
         # M4-A (learning/rpc.py)
         "learn.signal_add", "learn.refine", "learn.review_cancel", "learn.propose", "learn.retry", "learn.rollback", "learn.policy_set", "knowledge.pin",

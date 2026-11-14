@@ -325,7 +325,11 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
     "task_cancel": _t("Cancel a task: stop its running runs and archive it plus its unfinished subtasks, so nothing of it runs or "
                       "reports later (also tasks still waiting, e.g. on a workspace lock). Check `status` in the result: 'cancelled' "
                       "lists archived_tasks; 'already_done' means it finished before you cancelled — its result may already be on its "
-                      "way to the owner.", {"id": _S, "reason": _S}, ["id"]),
+                      "way to the owner. To move a not-started task to another agent (assignee busy), use task_reassign instead: "
+                      "cancelling a subtask and creating a new task detaches the work from its root task.", {"id": _S, "reason": _S}, ["id"]),
+    "task_reassign": _t("Move a task that has not started (todo/ready/blocked, not a root task) to another agent, keeping its place in "
+                        "its root task and its dependencies. Use it when the assignee is busy or wrong — never cancel + re-create a "
+                        "subtask. The new assignee must be in the task's team.", {"id": _S, "assignee": _S, "reason": _S}, ["id", "assignee"]),
     "task_retry": _t("Retry a blocked/failed task.", {"id": _S}, ["id"]),
     "task_comment": _t("Comment on a task (steer=true also sends it to the task's running run).", {"id": _S, "text": _S, "steer": {"type": "boolean"}}, ["id", "text"]),
     "run_start": _t("Start an ad-hoc run of another agent with a prompt (optional cwd, budget_usd, model). A busy agent is refused with "
