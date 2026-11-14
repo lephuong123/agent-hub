@@ -2,6 +2,7 @@
 # Tạo một hub cfharness cho một user macOS (mặc định: lamlinh) — docs/dev-notes/huong-dan-tao-hub-lamlinh.md
 # Chạy trong Terminal.app của admin (cần TTY để nhập mật khẩu sudo + dán token; không chạy qua `!` của Claude Code):
 #   sudo bash scripts/setup-hub-user.sh [user] ["Họ tên"] [cổng web] [cổng mcp]
+#   Tên miền con khác tên user: sudo SUB=admin bash scripts/setup-hub-user.sh hubadmin "Hub Admin" 8723 8724
 # Đừng `| tee` ra file: màn hình có token Claude (bước 3) và link đăng ký TOTP (bước 8).
 # Chạy lại được (bỏ qua bước đã xong).
 set -euo pipefail
@@ -11,6 +12,8 @@ FULL="${2:-Lam Linh}"
 WEB="${3:-8721}"
 MCP="${4:-8722}"
 DOMAIN="trungtamdhs.com"
+SUB="${SUB:-$U}"        # tên miền con: https://$SUB.$DOMAIN
+HOST="$SUB.$DOMAIN"
 VER="${VER:-v0.2.8}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
 H="/Users/$U"
 WS="$H/Workspace"
@@ -89,17 +92,17 @@ cfh config set mcp_server.http_port "$MCP" >/dev/null
 cfh config set workspace.allowed_roots "[\"$WS\"]" >/dev/null
 cfh config set workspace.confine.root "$WS" >/dev/null
 cfh config set systems.roots "[\"$WS\"]" >/dev/null
-cfh config set web.public_origin "https://$U.$DOMAIN" >/dev/null
+cfh config set web.public_origin "https://$HOST" >/dev/null
 cfh config set web.client_ip_header cf-connecting-ip >/dev/null
 cfh config set admin_export.enabled true >/dev/null
-ok "cổng MCP $MCP · agent chỉ làm trong $WS · web public https://$U.$DOMAIN"
+ok "cổng MCP $MCP · agent chỉ làm trong $WS · web public https://$HOST"
 
 step "5/9 Tự chạy khi máy khởi động (LaunchDaemon: daemon + web :$WEB)"
 cfh daemon stop >/dev/null 2>&1 || true
 cfh daemon uninstall-service >/dev/null 2>&1 || true
 CFHARNESS_HOME="$(mktemp -d)" "$H/.local/bin/cfharness" admin install-daemon --user "$U" --web-port "$WEB" --write
 for i in $(seq 1 30); do
-  code="$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $U.$DOMAIN" "http://127.0.0.1:$WEB/login" || true)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $HOST" "http://127.0.0.1:$WEB/login" || true)"
   [ "$code" = 200 ] || [ "${code:0:1}" = 3 ] && break; sleep 1
 done
 [ "${code:-000}" = 200 ] || [ "${code:0:1}" = 3 ] && ok "web :$WEB trả $code" || warn "web :$WEB chưa lên (mã $code) — xem $H/.cfharness/logs/web.out"
@@ -129,5 +132,5 @@ step "9/9 Mã đăng nhập web (TOTP) cho $U"
 cfh web totp enroll
 
 printf '\n\033[1;32mXONG.\033[0m Gửi link /enroll ở trên cho %s qua kênh riêng.\n' "$FULL"
-echo "Sau khi đăng ký: https://$U.$DOMAIN → nhập mã 6 số."
+echo "Sau khi đăng ký: https://$HOST → nhập mã 6 số."
 echo "Log: sudo -u $U tail -f $H/.cfharness/logs/daemon.out   ·   Khởi động lại web: sudo launchctl kickstart -k system/com.cfharness.web.$U"
