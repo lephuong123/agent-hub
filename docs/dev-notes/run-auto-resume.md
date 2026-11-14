@@ -50,6 +50,8 @@ cũ hơn trong session không chặn, `run.stop` huỷ lượt đã hẹn + audi
 - `api_error_status`/stderr không lưu thành cột riêng của `runs`: mạng chỉ nhận qua `error` (summary của result lỗi, hoặc
   stderr khi không có result). `error` của result lỗi vẫn là chữ CLI viết (không phải agent), nhưng nếu agent in đúng chuỗi lỗi
   rồi CLI lấy làm `result` thì vẫn có thể khớp — rủi ro thấp (có trần + ngân sách chung).
-- Chi phí run đang chạy dở khi chết (`crashed` không có result) không có `cost_usd` → ngân sách chuỗi tính thiếu phần đó.
-- Run của task: dispatcher vẫn requeue `interrupted` không giới hạn (không tính lỗi); có nên áp trần chung không?
+- ~~Chi phí run đang chạy dở khi chết không có `cost_usd`~~ — run kết thúc không có `result` giờ ghi `cost_usd` ƯỚC LƯỢNG
+  (`cost_basis=estimated_no_result`, từ usage stream của adapter) → ngân sách chuỗi/ngày không hở (`cost-guardrails.md`).
+- ~~Run của task: dispatcher requeue `interrupted` không giới hạn~~ — trần `tasks.max_interrupted_requeues` (5) lần liên tiếp →
+  task `blocked` + `task.requeue_exhausted` (`cost-guardrails.md`). Trần riêng, không dùng chung với `recovery.auto_resume_max_attempts`.
 - `timed_out` được coi là tạm thời (đa số do treo mạng/tool); nếu run quá giờ vì việc quá lớn sẽ tốn tối đa 3 lượt nữa.

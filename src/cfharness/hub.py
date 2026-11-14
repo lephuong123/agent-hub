@@ -105,6 +105,21 @@ class Hub:
         from .admin_overview import attach as _attach_admin_export
 
         _attach_admin_export(self)
+        # Sao lưu HUB_HOME (`hub.backups`: tạo/kiểm/liệt kê, vòng nền theo backup.schedule) — backup.py, docs/dev-notes/backup.md
+        from .backup import attach as _attach_backup
+
+        _attach_backup(self)
+        # Quản trị máy (plan-admin-users): ESTOP admin bằng file cờ (`hub.admin_control`), chính sách root (`hub.admin_policy`), audit metadata
+        # (`hub.admin_audit`), cảnh báo + lịch sử cho hub của admin (`hub.admin_watch`) — admin_control.py, admin_policy.py, admin_audit.py, admin_watch.py
+        from .admin_audit import attach as _attach_admin_audit
+        from .admin_control import attach as _attach_admin_control
+        from .admin_policy import attach as _attach_admin_policy
+        from .admin_watch import attach as _attach_admin_watch
+
+        _attach_admin_control(self)
+        _attach_admin_policy(self)
+        _attach_admin_audit(self)
+        _attach_admin_watch(self)
         self._bg: list[Any] = []
         # hardening SEC (H-02 lớp 3): toàn vẹn policy/ + config.yaml + hub.db (`hub.integrity`) — guard/integrity.py. GIỮ CUỐI __init__
         from .guard.integrity import attach as _attach_integrity

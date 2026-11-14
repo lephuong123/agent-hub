@@ -43,6 +43,7 @@ from . import present as P
 from .app import CHANNEL, _stream, err_text, flash_redirect, post_guard, render, rpc, session_of, ws
 
 HISTORY_LIMIT = 200
+HEARTBEAT = "heartbeat"  # = manager.service.HEARTBEAT_CHANNEL (không import service ở web)
 ACTIONS_SCAN = 3000  # số event gần nhất của điều phối viên quét để lấy thẻ `manager.action`
 PENDING_SCAN = 5000  # event tối đa của MỘT lượt đang chạy đọc lại khi tải trang (tool đang dùng + checklist)
 MAX_TEXT = 8000
@@ -184,7 +185,7 @@ def _timeline(msgs: list[dict[str, Any]], acts: list[dict[str, Any]], qs: list[d
     items += [{"kind": "question", "q": q, "ts": q.get("created_at"), "run_id": q.get("run_id")} for q in qs or []]
 
     def key(it: dict[str, Any]) -> tuple[str, int]:
-        return (str(it.get("ts") or ""), {"user": 0, "action": 1, "manager": 2, "question": 3}.get(it["kind"], 4))
+        return (str(it.get("ts") or ""), {"user": 0, "note": 0, "action": 1, "manager": 2, "question": 3}.get(it["kind"], 4))
 
     out: list[dict[str, Any]] = []
     for it in sorted(items, key=key):
@@ -608,6 +609,18 @@ def mgr_set_confirm(f: Any) -> str:
             "xoá vĩnh viễn, tắt ESTOP, sửa cấu hình của chính nó, đặt bypassPermissions. Mọi thao tác ghi nhật ký `manager:" + aid + "` và rollback được.")
 
 
+def _tick_ok(r: Any, f: Any) -> str:
+    r = r or {}
+    if r.get("run_id"):
+        return f"Đã chạy một nhịp — run {r['run_id']} ({r.get('events', 0)} sự kiện đang chờ)"
+    return f"Nhịp không chạy: {TICK_SKIP.get(str(r.get('skipped') or ''), r.get('skipped') or '?')}"
+
+
+TICK_SKIP = {"no_manager": "chưa có điều phối viên", "estop": "ESTOP đang bật", "manager_missing": "agent điều phối viên không còn",
+             "manager_paused": "agent điều phối viên đang tạm dừng", "manager_busy": "điều phối viên đang bận một lượt khác — sự kiện giữ cho nhịp sau",
+             "heartbeat_off": "nhịp đang tắt (manager.heartbeat)", "nothing_to_do": "không có việc gì"}
+
+
 def _ws_goto(res: Any, f: Any) -> str:
     wid = (res or {}).get("id") or f.get("id")
     return f"/manager?w={wid}" if wid else "/manager"
@@ -625,6 +638,12 @@ def _opt(f: Any, k: str) -> str | None:
 def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
     """Thêm thao tác ghi của trang Điều phối vào bảng `ACTIONS` (HUMAN_ONLY ở daemon). Chỉ định/huỷ, đóng luồng, lưu trữ hội thoại
     qua hộp xác nhận; tạo/sửa luồng, STATE, đổi tên/chuyển hội thoại làm ngay (dễ sửa lại)."""
+    # chạy nhịp ngay (manager.tick force) — HUMAN_ONLY, daemon tự audit; một run thật nên luôn qua hộp xác nhận
+    actions["manager_tick"] = Action(
+        "manager.tick", lambda f: {"force": True}, _tick_ok,
+        confirm="Chạy một nhịp của điều phối viên NGAY?\nĐiều phối viên xem các sự kiện đang chờ + việc còn mở và xử lý (một run thật, tốn tiền "
+                "như một nhịp thường). Không chạy khi ESTOP bật hoặc nó đang bận.",
+        goto=lambda r, f: f"/manager?c={r['conversation_id']}" if (r or {}).get("conversation_id") else "/manager")
     actions["ws_create"] = Action(
         "workstream.create", lambda f: {"title": _opt(f, "title"), "key": _opt(f, "key"), "sprint": _opt(f, "sprint")},  # tên trống → hub tự đặt
         lambda r, f: f"Đã mở luồng {(r or {}).get('label') or ''}", goto=_ws_goto)

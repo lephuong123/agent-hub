@@ -30,6 +30,8 @@ class AuditLog:
     def __init__(self, store: "Store", *, mask: Callable[[str], str] | None = None) -> None:
         self.store = store
         self.mask = mask or (lambda s: s)
+        # người nghe sau mỗi dòng (vd admin_audit: bản METADATA cho người quản trị máy) — lỗi của tap không ảnh hưởng ghi audit
+        self.taps: list[Callable[[str, str, str, dict[str, Any]], None]] = []
 
     def record(
         self,
@@ -55,6 +57,11 @@ class AuditLog:
             "INSERT INTO audit_log (ts, kind, actor, channel, agent_id, run_id, target, summary, data) VALUES (?,?,?,?,?,?,?,?,?)",
             (now_iso(), kind, actor, channel, agent_id, run_id, target, self.mask(summary or "")[:500] or None, payload),
         )
+        for tap in self.taps:
+            try:
+                tap(kind, actor, channel, data)
+            except Exception:  # pragma: no cover
+                log.exception("audit tap lỗi")
         return int(cur.lastrowid or 0)
 
     def query(

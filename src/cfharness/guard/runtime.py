@@ -165,16 +165,33 @@ def exec_zone_deny_rules() -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def admin_shared_deny_rules() -> list[str]:
+    """Quản trị máy (plan-admin-users §4): tool Read/Grep/Glob/Edit/Write… của Claude KHÔNG qua sandbox Bash → luật tĩnh riêng cho
+    thư mục chung (trạng thái/audit/chính sách/cờ ESTOP/admin-log của MỌI user). Áp cho mọi hub, kể cả agent trust_full."""
+    if IS_WINDOWS:
+        return []
+    from ..admin_overview import SHARED_ROOT
+
+    out: list[str] = []
+    roots = list(dict.fromkeys([SHARED_ROOT, os.path.realpath(SHARED_ROOT)]))
+    for r in roots:
+        for t in ("Read", "Grep", "Glob", *FILE_TOOLS):
+            out += [f"{t}(/{rule_path(r)}/**)", f"{t}(/{rule_path(r)})"]
+    return list(dict.fromkeys(out))
+
+
 def secret_read_deny_rules(hub_home: Path, socket: Path) -> list[str]:
     """`permissions.deny` cho tool Read/Grep/Glob: token người, secret, mcp.json đã resolve, token MCP HTTP."""
     from ..auth import token_path
 
     out: list[str] = []
     # WEB: `auth/` giữ khoá ký link đăng nhập web (auth/web.json) — sandbox đã denyRead cả thư mục, đây là lớp Read/Grep/Glob
-    targets = [str(token_path(socket)), f"{hub_home}/secrets/**", f"{hub_home}/agents/*/runtime/**", f"{hub_home}/mcp_server/tokens.json", f"{hub_home}/auth/**"]
+    # backups/: bản sao lưu chứa toàn bộ hub.db + tri thức mọi agent (backup.py)
+    targets = [str(token_path(socket)), f"{hub_home}/secrets/**", f"{hub_home}/agents/*/runtime/**", f"{hub_home}/mcp_server/tokens.json", f"{hub_home}/auth/**",
+               f"{hub_home}/backups/**"]
     real = os.path.realpath(hub_home)
     if real != str(hub_home):
-        targets += [f"{real}/secrets/**", f"{real}/agents/*/runtime/**", f"{real}/mcp_server/tokens.json", f"{real}/auth/**"]
+        targets += [f"{real}/secrets/**", f"{real}/agents/*/runtime/**", f"{real}/mcp_server/tokens.json", f"{real}/auth/**", f"{real}/backups/**"]
     toks = [str(token_path(socket))]
     if IS_WINDOWS:  # CLI báo file_path dạng tên dài — thêm biến thể realpath (vd `LEQUYP~1` → tên thật)
         toks.append(os.path.realpath(toks[0]))
@@ -192,6 +209,7 @@ AGENT_HOME_KEEP = ("workspaces",)
 HUB_WRITE_DENY_NAMES = (
     "policy", "hub.db", "hub.db-wal", "hub.db-shm", "hub.db-journal", "config.yaml", "secrets", "mcp", "mcp_server", "ledger",
     "snapshots", "audit", "trash", "runs", "logs", "prompts", "checkpoints", "global", "teams", "hub.pid", "hub.sock", "auth",
+    "backups", "update",  # bản sao lưu HUB_HOME (backup.py) + trạng thái/helper cập nhật (updater.py)
 )
 AGENT_WRITE_DENY_NAMES = ("config.yaml", "SOUL.md", "MEMORY.md", "USER.md", "skills", ".archive", "runtime", "home", ".tier_overlay")
 
@@ -389,7 +407,7 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
     deny_w += [str(x) for x in sb_cfg.get("extra_deny_write") or []]
     deny_r: list[str] = [str(tok)]
     for h in homes:
-        deny_r += [f"{h}/secrets", f"{h}/agents/*/runtime", f"{h}/mcp_server/tokens.json", f"{h}/auth"]
+        deny_r += [f"{h}/secrets", f"{h}/agents/*/runtime", f"{h}/mcp_server/tokens.json", f"{h}/auth", f"{h}/backups"]
         try:
             for a in (Path(h) / "agents").iterdir():
                 deny_r.append(str(a / "runtime"))
@@ -470,6 +488,9 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
 
         conf_deny = permission_deny_rules(confine, read_roots(confine, hub_home, cwd=cwd))
     if trust_full:
+        perms = dict(s.get("permissions") or {})
+        perms["deny"] = list(perms.get("deny") or []) + admin_shared_deny_rules()  # dữ liệu của user KHÁC: không phải quyền của người này để trao
+        s["permissions"] = perms
         if confine is None:
             s["sandbox"] = {"enabled": False}
             return s
@@ -484,7 +505,7 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
     user_prot = protected_write_paths(hub_home)  # R2-2: tài nguyên NGƯỜI khai báo (vd `.next` prod) → chặn tĩnh tool ghi + sandbox
     perms["deny"] = (list(perms.get("deny") or []) + policy_deny_rules(policy_dir) + secret_read_deny_rules(hub_home, Path(socket))
                      + exec_zone_deny_rules() + [f"{t}(/{rule_path(p)}{suf})" for p in user_prot for t in FILE_TOOLS for suf in ("/**", "")]
-                     + credential_deny_rules() + (conf_deny if confine is not None else []))
+                     + credential_deny_rules() + admin_shared_deny_rules() + (conf_deny if confine is not None else []))
     s["permissions"] = perms
     sb_cfg = sb_cfg0
     if not sb_cfg.get("enabled", True) and confine is not None:

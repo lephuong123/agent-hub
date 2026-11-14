@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}User {{ r.user }}{% endblock %}
+{% macro chart(c, title, unit) -%}
+<figure class="admin-chart">
+  <figcaption>{{ title }}</figcaption>
+  {% if not c.bars %}<p class="muted">Chưa có mẫu lịch sử.</p>{% else %}
+  <svg viewBox="0 0 {{ c.width }} {{ c.height }}" role="img" aria-label="{{ title }}" class="chart-svg">
+    <line x1="{{ c.pad }}" y1="{{ c.height - c.pad }}" x2="{{ c.width }}" y2="{{ c.height - c.pad }}" class="chart-axis"></line>
+    <text x="0" y="12" class="chart-lbl">{{ unit }}{{ "%.2f"|format(c.top) }}</text>
+    {% for b in c.bars %}
+    <rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" class="chart-bar"><title>{{ b.label }}: {{ unit }}{{ "%.4f"|format(b.value) }}</title></rect>
+    {% if b.tick %}<text x="{{ b.x }}" y="{{ c.height - 6 }}" class="chart-lbl">{{ b.label[-5:] }}</text>{% endif %}
+    {% endfor %}
+  </svg>
+  <ul class="sr-only">{% for b in c.bars %}<li>{{ b.label }}: {{ b.value }}</li>{% endfor %}</ul>
+  {% endif %}
+</figure>
+{%- endmacro %}
+{% block content %}
+{% set row = r.row or {} %}
+<div class="page-head"><h1>User <code>{{ r.user }}</code></h1><span class="pill {{ tones.get(row.state, 'muted') }}">{{ row.state_vi }}</span></div>
+<p class="row gap"><a class="btn ghost sm" href="/admin/users">← Người dùng máy</a><a class="btn ghost sm" href="/admin/audit?user={{ r.user }}">Audit metadata</a></p>
+<section class="stats">
+  <div class="stat"><div class="stat-n">{{ row.cost_today_usd|usd }}</div><div class="stat-l">chi phí hôm nay</div></div>
+  <div class="stat"><div class="stat-n">{{ row.cost_month_usd|usd }}</div><div class="stat-l">chi phí tháng</div></div>
+  <div class="stat"><div class="stat-n">{{ row.running }}</div><div class="stat-l">run đang chạy</div></div>
+  <div class="stat"><div class="stat-n">{{ row.hubs }}</div><div class="stat-l">hub</div></div>
+</section>
+<section class="card">
+  <h2>Lịch sử ({{ days }} ngày)</h2>
+  {{ chart(charts.cost, "Chi phí theo ngày", "$") }}
+  {{ chart(charts.running, "Run đang chạy (24 giờ qua, theo giờ)", "") }}
+</section>
+<section class="card">
+  <h2>Hub</h2>
+  {% if not r.hubs %}<p class="muted">Chưa có file trạng thái.</p>{% else %}
+  <table class="tbl"><thead><tr><th>Hub</th><th>Trạng thái</th><th>Phiên bản</th><th class="num">Hôm nay</th><th class="num">Ngân sách ngày</th><th>Guard</th><th>Claude</th><th>Chính sách</th><th>Cập nhật</th></tr></thead><tbody>
+  {% for h in r.hubs %}{% set d = h.data or {} %}{% set lbl = states.get(h.state, (h.state, "muted")) %}
+  <tr><td><code>{{ h.hub_id or "—" }}</code></td><td><span class="pill {{ lbl[1] }}">{{ lbl[0] }}</span>{% if h.error and not d %} <span class="muted">{{ h.error }}</span>{% endif %}</td>
+    <td>{{ d.version or "—" }}</td><td class="num">{{ (d.cost_usd or {}).today|usd }}</td>
+    <td class="num">{% if (d.budget or {}).day_pct is number %}{{ (d.budget or {}).day_pct }}%{% else %}—{% endif %}</td>
+    <td>{% set g = d.guard or {} %}{{ "sandbox" if g.sandbox else "KHÔNG sandbox" }}{% if g.tamper_today %} · <span class="pill danger">tamper {{ g.tamper_today }}</span>{% endif %}</td>
+    <td>{% set c = d.claude or {} %}{{ c.cli_version or "?" }}{% if c.auth_ok is sameas false %} · <span class="pill danger">chưa đăng nhập</span>{% endif %}{% if c.oauth_token_age_d is number %} · token {{ c.oauth_token_age_d|round(0)|int }} ngày{% endif %}</td>
+    <td>{% set p = d.policy or {} %}rev {{ p.rev_applied if p.rev_applied is number else "—" }}{% if p.valid is sameas false %} · <span class="pill warn">không hợp lệ</span>{% endif %}</td>
+    <td>{{ d.generated_at|ago if d.generated_at else "—" }}</td></tr>
+  {% endfor %}</tbody></table>{% endif %}
+</section>
+<section class="card">
+  <h2>Cảnh báo</h2>
+  {% if not r.alerts %}<p class="muted">Không có.</p>{% else %}<ul>{% for a in r.alerts %}<li>{{ alert_vi.get(a.code, a.code) }}{% if a.hub_id %} (hub <code>{{ a.hub_id }}</code>){% endif %} <span class="muted">từ {{ m.rel(a.since) }}</span></li>{% endfor %}</ul>{% endif %}
+</section>
+<section class="card {{ 'attention' if (r.estop or {}).on }}">
+  <h2>ESTOP quản trị máy</h2>
+  {% set es = r.estop or {} %}
+  {% if es.on %}
+    <p><span class="pill danger strong">ĐANG BẬT</span> {{ "mọi user" if es.scope == "all" else "riêng user này" }} · mã {{ es.reason_code }} · từ {{ m.rel(es.since) }}</p>
+    {% if es.scope == "user" %}{{ m.act("admin_estop_off", "Gỡ ESTOP cho " ~ r.user, {"user": r.user}, "btn primary", confirm="Gỡ ESTOP quản trị máy cho " ~ r.user ~ "?") }}{% endif %}
+  {% else %}
+  <form method="post" action="/do/admin_estop_on" class="row gap">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="user" value="{{ r.user }}"><input type="hidden" name="next" value="/admin/users/{{ r.user }}">
+    <label>Mã lý do <select name="reason_code">{% for c in reasons %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select></label>
+    <button type="submit" class="btn danger">Bật ESTOP cho {{ r.user }}</button>
+  </form>
+  {% endif %}
+</section>
+<section class="card">
+  <h2>Chính sách có hiệu lực</h2>
+  {% set pol = r.policy or {} %}
+  <p class="muted">Nguồn: {{ (pol.sources or [])|join(", ") or "—" }} · rev {{ pol.rev if pol.rev is number else "—" }}{% if pol.errors %} · <span class="pill warn">lỗi {{ pol.errors|join(", ") }}</span>{% endif %}{% if pol.blocked %} · <span class="pill danger">CHẶN run (policy_required)</span>{% endif %}</p>
+  <pre class="code">{{ policy_json }}</pre>
+  <p class="muted">Sửa chính sách cần root: <code>cfharness admin policy template</code> rồi <code>sudo install -m 0644 -o root -g wheel ./policy.json {{ pol.dir }}/{{ r.user }}.json</code></p>
+</section>
+<section class="card">
+  <h2>Admin-log (user thấy được)</h2>
+  {% if not r.admin_log %}<p class="muted">Chưa có.</p>{% else %}
+  <table class="tbl"><thead><tr><th>Lúc</th><th>Bởi</th><th>Thao tác</th><th>Phạm vi</th><th>Mã</th></tr></thead><tbody>
+  {% for x in r.admin_log %}<tr><td>{{ m.rel(x.ts) }}</td><td><code>{{ x.by }}</code></td><td>{{ x.action }}</td><td>{{ x.scope }}</td><td>{{ x.reason_code or "—" }}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+{% endblock %}

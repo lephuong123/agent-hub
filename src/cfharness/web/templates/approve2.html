@@ -6,10 +6,10 @@
   {% if grant %}<h1>Xác nhận lần 2 — luôn cho phép theo luật</h1>
   <p>Cho phép thao tác dưới đây lần này <b>VÀ từ nay không hỏi lại agent {{ a.agent_id }} với luật {{ a.matched_rule }}</b>
     {% if a.reason %}({{ a.reason }}){% endif %} — <b>kể cả thao tác phá huỷ khác cùng luật</b>, ở mọi task. Các yêu cầu đang chờ cùng agent + luật
-    cũng được cho phép luôn. Gỡ bất cứ lúc nào: <code>cfharness guard grant rm {{ a.agent_id }} {{ a.matched_rule }}</code>.</p>
+    cũng được cho phép luôn. Gỡ bất cứ lúc nào ở trang <a href="/permissions">Quyền đã cấp</a> hoặc <code>cfharness guard grant rm {{ a.agent_id }} {{ a.matched_rule }}</code>.</p>
   {% elif always %}<h1>Xác nhận lần 2 — luôn cho phép</h1>
   <p>Cho phép thao tác dưới đây của agent <b>{{ a.agent_id }}</b> lần này <b>VÀ tạo {{ always.summary }}</b>.
-    Lần sau gặp đúng thao tác đó hub tự cho phép, không hỏi bạn. Gỡ bất cứ lúc nào: <code>cfharness guard always rm &lt;id luật&gt;</code>.</p>
+    Lần sau gặp đúng thao tác đó hub tự cho phép, không hỏi bạn. Gỡ bất cứ lúc nào ở trang <a href="/permissions">Quyền đã cấp</a> hoặc <code>cfharness guard always rm &lt;id luật&gt;</code>.</p>
   {% else %}<h1>Xác nhận lần 2 — thao tác phá huỷ nặng</h1>
   <p>Agent <b>{{ a.agent_id }}</b> muốn chạy thao tác dưới đây{% if a.protected_resource_id %}, chạm <b>tài nguyên được bảo vệ</b>{% endif %}
     (lớp <b>{{ a.destructive_class or '?' }}</b>, luật <b>{{ a.matched_rule or '?' }}</b>{% if a.reason %} — {{ a.reason }}{% endif %}).

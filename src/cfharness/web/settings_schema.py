@@ -201,6 +201,8 @@ READONLY: tuple[tuple[str, str], ...] = (
     ("runtime.claude.chrome.enabled", "Cho dùng Claude in Chrome"),
     ("web.public_origin", "Địa chỉ web public (tunnel TLS)"),
     ("web.session_max_age_s", "Tuổi tối đa phiên web (giây)"),
+    ("web.trusted_devices.enabled", "Cho tin cậy thiết bị (web public + TOTP)"),
+    ("web.trusted_devices.ttl_days", "Hạn thiết bị tin cậy (ngày, tuyệt đối)"),
     ("telemetry.otel.endpoint", "Đích OTLP"),
     ("telemetry.otel.include_payloads", "Gửi kèm input tool"),
 )

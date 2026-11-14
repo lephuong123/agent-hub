@@ -1101,9 +1101,13 @@ def mgr_action_item(ev: dict[str, Any]) -> dict[str, Any]:
 
 
 def mgr_message(m: dict[str, Any]) -> dict[str, Any] | None:
-    """Mục `manager.history` → {kind: user|manager, text, ts, run_id}. Chấp nhận vài tên khoá (role/author, text/content)."""
+    """Mục `manager.history` → {kind: user|manager|note, text, ts, run_id}. Chấp nhận vài tên khoá (role/author, text/content).
+    Role `schedule` (hub ghi khi một lịch bắn vào hội thoại — schedules/service.py) → mục `note` (dòng hệ thống, chữ hub + tên lịch)."""
     role = str(m.get("role") or m.get("author") or m.get("kind") or "").lower()
     text = m.get("text") if m.get("text") is not None else m.get("content")
+    if role == "schedule":
+        return {"kind": "note", "tone": "info", "text": str(text or ""), "ts": m.get("ts") or m.get("created_at"), "run_id": m.get("run_id"),
+                "schedule": True}
     if role in ("user", "human", "owner"):
         kind = "user"
     elif role in ("manager", "assistant", "agent", "notify", "reply", "tick"):

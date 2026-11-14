@@ -27,7 +27,7 @@ SORT_LABEL = {"status": "trạng thái", "cost": "$", "time": "thời gian chạ
 SNAPSHOT_TRIGGERS = (
     "run.queued", "run.started", "run.completed", "run.failed", "run.cancelled", "run.interrupted", "run.waiting_human",
     "run.resumed", "run.takeover", "approval.open", "approval.resolved", "approval.waiting_human", "agent.created",
-    "agent.updated", "agent.archived", "agent.deleted", "agent.restored", "hub.estop", "auth.blocked",
+    "agent.updated", "agent.archived", "agent.deleted", "agent.restored", "hub.estop", "auth.blocked", "hub.admin_estop",
 )
 
 
@@ -281,7 +281,10 @@ def header_text(m: TopModel, *, now: float | None = None) -> Text:
     t.append(" rate limit: ", style=th.MUTED)
     t.append(str(rl_status or "—"), style=th.ERR_STRONG if rl_status and rl_status not in ("allowed", "ok") else th.MUTED)
     es = h.get("estop") or {}
-    if es.get("on"):
+    if es.get("on") and es.get("admin"):  # ESTOP quản trị máy (admin_control.py) — user không gỡ được
+        t.append("  ■ ESTOP QUẢN TRỊ MÁY ", style=th.ALARM)
+        t.append(f" mã {(es.get('admin') or {}).get('reason_code') or '?'} — chỉ người quản trị máy gỡ được", style=th.ERR)
+    elif es.get("on"):
         t.append("  ■ ESTOP BẬT ", style=th.ALARM)
         if es.get("reason"):
             t.append(f" {es['reason']}", style=th.ERR)
@@ -352,6 +355,8 @@ def activity_line(ev: dict[str, Any], names: dict[str, str]) -> Text | None:
         body = Text(f"✎ {t}", style="magenta")
     elif t.startswith(("task.", "team.")):
         body = Text(f"▣ {t} {p.get('task_id') or ''} {p.get('from') or ''}→{p.get('to') or ''}".rstrip("→ "), style="magenta")
+    elif t == "hub.admin_estop":
+        body = Text(f"■ ESTOP QUẢN TRỊ MÁY {'BẬT' if p.get('on') else 'đã gỡ'} {p.get('reason_code') or ''}", style=th.ERR_STRONG if p.get("on") else th.OK)
     elif t in ("hub.estop",):
         body = Text(f"■ ESTOP {'BẬT' if p.get('on') else 'tắt'} {p.get('reason') or ''}", style=th.ERR_STRONG if p.get("on") else th.OK)
     elif t == "run.takeover":

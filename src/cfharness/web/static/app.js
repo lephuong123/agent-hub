@@ -148,18 +148,43 @@
   // web (origin khác — kể cả cổng khác cùng host — không đọc được) và gắn vào mọi form POST. HTML không bao giờ chứa khoá.
   var KEY = "ahub_k";
   function getKey() { try { return localStorage.getItem(KEY) || ""; } catch (_) { return ""; } }
+  // `&d=1`: phiên gắn thiết bị tin cậy (cookie `__Host-…_dev` HttpOnly nên JS không tự biết) → nhớ để trang /login tự tiếp tục lần sau
+  var DEV = "cfh_dev", DEV_PAUSE = "cfh_dev_pause";
   (function takeKey() {
-    var m = /^#k=([A-Za-z0-9_\-]+)$/.exec(location.hash || "");
+    var m = /^#k=([A-Za-z0-9_\-]+)(&d=1)?$/.exec(location.hash || "");
     if (!m) return;
-    try { localStorage.setItem(KEY, m[1]); } catch (_) {}
+    try { localStorage.setItem(KEY, m[1]); if (m[2]) localStorage.setItem(DEV, "1"); sessionStorage.removeItem(DEV_PAUSE); } catch (_) {}
     history.replaceState(null, "", location.pathname + location.search);
+  })();
+  // ------------------------------------------------------------ "tiếp tục bằng thiết bị tin cậy" (trang /login, chỉ host public)
+  // SameSite=Strict: mở link từ Telegram/Slack không mang cookie → tự POST một lần (POST cùng nguồn thì mang). Vừa đăng xuất trong tab
+  // này → không tự vào lại (chỉ hiện nút). Server trả `data-failed` → quên dấu "đã tin cậy".
+  (function deviceLogin() {
+    var f = document.getElementById("device-login");
+    if (!f) return;
+    var trusted = false, paused = false;
+    try {
+      if (f.getAttribute("data-failed") === "1") localStorage.removeItem(DEV);
+      trusted = localStorage.getItem(DEV) === "1";
+      paused = sessionStorage.getItem(DEV_PAUSE) === "1";
+    } catch (_) {}
+    if (!trusted) return;
+    f.hidden = false;
+    if (f.getAttribute("data-auto") === "1" && !paused) f.submit();
   })();
   document.addEventListener("submit", function (e) {
     var form = e.target;
     if (!(form instanceof HTMLFormElement) || (form.method || "").toLowerCase() !== "post") return;
     var action = form.getAttribute("action") || "";
     if (action === "/login") return;
-    if (action === "/logout") { try { localStorage.removeItem(KEY); localStorage.removeItem("cfh_view"); } catch (_) {} return; }
+    if (action === "/logout") {
+      try {
+        localStorage.removeItem(KEY); localStorage.removeItem("cfh_view");
+        var fg = form.querySelector('input[name="forget"]');
+        if (fg && fg.value === "1") localStorage.removeItem(DEV); else sessionStorage.setItem(DEV_PAUSE, "1");
+      } catch (_) {}
+      return;
+    }
     var inp = form.querySelector('input[name="k"]');
     if (!inp) { inp = document.createElement("input"); inp.type = "hidden"; inp.name = "k"; form.appendChild(inp); }
     inp.value = getKey();

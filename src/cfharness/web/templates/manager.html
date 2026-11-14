@@ -137,6 +137,7 @@
     <section class="mgr-side-sec">
       <div id="mgr-status" hx-get="/partials/manager" hx-trigger="every 10s, mgr-tick from:body" hx-swap="innerHTML">{% include "_manager_status.html" %}</div>
       <div class="btn-row mgr-ctl">
+        {{ mc.act("manager_tick", "Chạy nhịp ngay", {}, "btn sm", confirm="Chạy một nhịp của điều phối viên NGAY? Nó xem sự kiện đang chờ + việc còn mở và xử lý (một run thật, tốn tiền).", next="/manager" ~ ("?c=" ~ conv if conv else ""), ic="zap", title="manager.tick — gom sự kiện đang chờ và cho điều phối viên xử lý ngay") }}
         {{ mc.act("manager_unset", "Huỷ chỉ định", {"current": m.agent_id}, "btn sm danger", confirm="Huỷ chỉ định điều phối viên " ~ m.agent_id ~ "? Agent vẫn còn, chỉ mất vai trò.", next="/manager") }}
       </div>
     </section>

@@ -200,8 +200,9 @@ DEFAULTS: dict[str, Any] = {
             "busy_indicator": "reaction",  # "status" ("đang xử lý…" trong thread, lỗi → ⏳) | "reaction" (chỉ icon ⏳ trên tin người)
             "manager_progress": True,  # P7: tin tiến độ + nút Dừng khi điều phối viên làm việc cho tin Slack (chat/slack/progress.py)
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
-            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
-                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],  # M4-B: digest + nhắc chọn golden task (Q-23)
+            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
+                       "budget.warning", "budget.exceeded"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,
             "backoff_base_s": 2,
             "timeout_s": 10,
@@ -218,8 +219,12 @@ DEFAULTS: dict[str, Any] = {
             "allowed_chat_ids": [],  # CHỈ các chat này được nhận thông báo + điều khiển hub
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
-            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back",
-                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper"],
+            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
+                       "budget.warning", "budget.exceeded",
+                       # vào/ra web + thiết bị tin cậy (web_events.py) — chỉ metadata, gửi vào nhóm chat riêng của hub nếu có
+                       "web.login", "web.logout", "web.login_locked", "web.device_trusted", "web.device_reuse_detected", "web.device_revoked",
+                       "web.devices_revoked_all"],
             "confirm_classes": ["db", "git", "system", "hub", "policy", "mcp", "file"],  # nhãn "THAO TÁC NẶNG" (mọi cho phép đều 2 bước — WT-5)
             "callback_ttl_s": 604800,  # nút duyệt còn hiệu lực 7 ngày (waiting_human có thể chờ lâu)
             "pair_ttl_s": 600,
@@ -289,6 +294,10 @@ DEFAULTS: dict[str, Any] = {
         # chống dò mã TOTP: theo IP + toàn cục (mọi IP) + trần theo ngày
         "login": {"ip_max_failures": 5, "global_max_failures": 10, "window_s": 900, "lockout_s": 900,
                   "day_max_failures": 50, "day_lockout_s": 86400},
+        # "Tin cậy thiết bị này" khi đăng nhập TOTP (web/devices.py): CHỈ trên host public https; hạn TUYỆT ĐỐI (1..90 ngày);
+        # tối đa N thiết bị (1..20); token xoay mỗi lần dùng, token cũ còn hợp lệ rotate_grace_s (0..300). `allow_port`: bật cả khi
+        # public_origin có cổng ≠ 443 (Funnel nhiều hub cùng host — cookie không tách cổng nên mặc định tắt). Đổi → khởi động lại web.
+        "trusted_devices": {"enabled": True, "ttl_days": 30, "max_devices": 5, "rotate_grace_s": 60, "allow_port": False},
     },
     # M1 luồng A — MCP server của hub (FR-MS-*)
     "mcp_server": {
@@ -307,6 +316,9 @@ DEFAULTS: dict[str, Any] = {
         "max_pending_events": 40,  # trần sự kiện đưa vào một prompt tick (cũ hơn bị gộp đếm)
         "tick_budget_usd": None,  # trần chi phí mỗi run tick (null = không giới hạn)
         "chat_budget_usd": None,  # trần mỗi run hội thoại (null = theo limits của agent)
+        # cost-guardrails: trần NGÀY riêng của điều phối viên (mọi run của agent manager: chat/tick/lịch…), áp CÙNG limits của agent.
+        # CHỈ người (config.set ∈ HUMAN_ONLY, nhánh `manager` kiểm toàn vẹn). null = không trần riêng.
+        "budget_usd_per_day": None,
         "rotate_after_turns": 80,  # sau N lượt cùng session → session mới (mang theo tóm tắt), ngoài autocompact của CLI
         # xoay session sớm (ManagerService.rotate_reason): resume nạp lại cả lịch sử, cache nguội = trả giá ghi cache cho cả khối
         "rotate_session_cost_usd": 3.0,  # chi phí luỹ kế session ≥ N $ → session mới (0 = tắt)
@@ -343,6 +355,9 @@ DEFAULTS: dict[str, Any] = {
         "rate_limit_reset_max_s": 691200,  # resetsAt xa hơn 8 ngày → không tin, dùng backoff
         "max_subtasks": None,  # null = không giới hạn
         "review_budget_usd": None,  # trần chi phí run review (null = như run thường)
+        # cost-guardrails: run task `interrupted` (daemon dừng) được requeue không tính lỗi; quá N lần LIÊN TIẾP → task blocked
+        # + event task.requeue_exhausted (0 = không giới hạn, như trước)
+        "max_interrupted_requeues": 5,
     },
     "ratelimit": {
         "throttle_utilization": 0.9,  # FR-RT-16: ≥ 90% → giảm đồng thời
@@ -555,6 +570,20 @@ DEFAULTS: dict[str, Any] = {
         "min_interval_s": None,
         "manager_run_now_per_hour": None,
         "manager_daily_budget_usd": None,
+        # ước tính $/ngày của lịch = số lượt/ngày × chi phí THẬT trung bình ≤ N lượt gần nhất (cần ≥ estimate_min_fires lượt có
+        # cost_usd); chưa đủ lịch sử → dùng budget_usd (trần) như trước
+        "estimate_recent_fires": 10,
+        "estimate_min_fires": 3,
+    },
+    # Sao lưu HUB_HOME (backup.py, docs/dev-notes/backup.md). Bật mặc định hằng ngày: ledger/audit/tri thức nằm trên MỘT file SQLite
+    # giữ vĩnh viễn — một bản/ngày (nén, bỏ runs/checkpoints/logs/secrets) rẻ hơn nhiều so với mất dữ liệu. "off" = tắt lịch.
+    "backup": {
+        "schedule": "daily 03:30",  # cú pháp schedules/cron.py; máy ngủ lúc đó → chạy bù một lần ở nhịp kế tiếp
+        "keep": 7,  # số bản manual+auto giữ lại
+        "keep_safety": 3,  # số bản pre-update+pre-restore giữ lại (bản update --rollback cần luôn được giữ)
+        "before_update": True,  # update.start tạo bản pre-update trước khi cài (để tự quay về DB khi migration đã tăng)
+        "compresslevel": 5,
+        "tick_s": 60,
     },
     # Tổng quan máy (admin_overview.py, docs/dev-notes/admin-overview.md): mỗi hub xuất bản tóm tắt CHỈ SỐ LIỆU ra thư mục chung để
     # người quản trị xem mọi hub trên máy. Chỉ người đặt (`config.set` ∈ HUMAN_ONLY; nhánh ∈ integrity.SECURITY_KEYS).
@@ -563,6 +592,16 @@ DEFAULTS: dict[str, Any] = {
         "interval_s": 60,  # 10..3600
         "dir": "/Users/Shared/cfharness/status",  # admin tạo sẵn (nhóm cfharness-admin); hub admin cũng ĐỌC thư mục này
         "group": "cfharness-admin",  # nhóm của file 0640; không có → giữ nhóm hiện có + cảnh báo
+    },
+    # Quản trị máy — cảnh báo + lịch sử ở hub của ADMIN (admin_watch.py, docs/dev-notes/admin-users.md). Chỉ có tác dụng khi daemon thuộc
+    # nhóm cfharness-admin. Chỉ người đặt; nhánh ∈ integrity.SECURITY_KEYS.
+    "admin_watch": {
+        "enabled": True,
+        "interval_s": 60,  # 15..3600 — nhịp đánh giá cảnh báo
+        "approval_wait_s": 1800,  # approval chờ lâu hơn → cảnh báo approval_waiting_long (0 = tắt)
+        "budget_warn_pct": 80,  # ≥ % ngân sách ngày → budget_80
+        "sample_interval_s": 300,  # 60..86400 — mẫu lịch sử (bảng admin_samples)
+        "history_days": 90,  # 1..365 — giữ lịch sử
     },
     # Hệ thống ngoài hub (systems/): app trong thư mục gốc + job launchd (macOS) / task Task Scheduler (Windows) của chúng — người đăng ký, điều phối viên tạm dừng/bật lại/khởi động lại
     "systems": {
@@ -848,6 +887,10 @@ def validate_setting(key: str, value: Any) -> None:
                 validate_capabilities("manager.capabilities", value["capabilities"])
         else:
             validate_capabilities(key, value)
+    if key in ("manager", "manager.budget_usd_per_day"):  # cost-guardrails: trần ngày riêng của điều phối viên
+        v = value.get("budget_usd_per_day") if key == "manager" and isinstance(value, dict) else (None if key == "manager" else value)
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0):
+            raise ValueError("manager.budget_usd_per_day phải > 0 hoặc null (null = không trần riêng)")
     if key in ("guard", "manager", "manager.web_domains") or key.startswith(("guard.web", "guard.second_opinion")):
         from .guard.url_safety import validate_setting as _validate_web
 
@@ -867,6 +910,12 @@ def validate_setting(key: str, value: Any) -> None:
         _validate_chrome(key, value)
     if key == "admin_export" or key.startswith("admin_export."):
         _validate_admin_export(key, value)
+    if key == "backup" or key.startswith("backup."):
+        from .backup import validate_setting as _validate_backup
+
+        _validate_backup(key, value)
+    if key == "admin_watch" or key.startswith("admin_watch."):
+        _validate_admin_watch(key, value)
     if key == "files" or key.startswith("files."):
         from .fileview import validate_setting as _validate_files
 
@@ -899,6 +948,12 @@ def validate_setting(key: str, value: Any) -> None:
     elif key == "runtime.kind":
         if value not in ("claude", "fake"):
             raise ValueError("runtime.kind chỉ nhận 'claude' hoặc 'fake'")
+    elif key == "tasks.max_interrupted_requeues":
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 1000:
+            raise ValueError("tasks.max_interrupted_requeues phải là số nguyên 0..1000 (0 = không giới hạn)")
+    elif key in ("schedules.estimate_recent_fires", "schedules.estimate_min_fires"):
+        if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 1000:
+            raise ValueError(f"{key} phải là số nguyên 0..1000")
     elif key == "runs.default_max_budget_usd":
         if value is not None and (not isinstance(value, (int, float)) or value <= 0):
             raise ValueError("runs.default_max_budget_usd phải > 0 hoặc null")
@@ -920,6 +975,26 @@ def validate_setting(key: str, value: Any) -> None:
     elif key == "runtime.claude.default_permission_mode":
         if value is not None and value not in VALID_PERMISSION_MODES:
             raise ValueError(f"permission mode không hợp lệ; chọn một trong {VALID_PERMISSION_MODES}")
+
+
+_ADMIN_WATCH_NUM = {"interval_s": (15, 3600), "approval_wait_s": (0, 7 * 86400), "budget_warn_pct": (1, 100),
+                    "sample_interval_s": (60, 86400), "history_days": (1, 365)}
+
+
+def _validate_admin_watch(key: str, value: Any) -> None:
+    if key == "admin_watch" and not isinstance(value, dict):
+        raise ValueError("admin_watch phải là object")
+    vals = dict(value) if key == "admin_watch" else {key.split(".", 1)[1]: value}
+    for k, v in vals.items():
+        if k == "enabled":
+            if not isinstance(v, bool):
+                raise ValueError("admin_watch.enabled phải là true/false")
+        elif k in _ADMIN_WATCH_NUM:
+            lo, hi = _ADMIN_WATCH_NUM[k]
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not lo <= v <= hi:
+                raise ValueError(f"admin_watch.{k} phải trong {lo}..{hi}")
+        else:
+            raise ValueError(f"admin_watch.{k}: khoá không có")
 
 
 def _validate_admin_export(key: str, value: Any) -> None:

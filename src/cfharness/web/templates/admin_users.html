@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Người dùng máy{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Người dùng máy</h1><span class="muted">Nhóm cfharness-users · LaunchDaemon · thư mục đã cấp · trạng thái hub — chỉ số liệu</span></div>
+<p class="row gap"><a class="btn ghost sm" href="/admin/overview">Tổng quan máy</a><a class="btn ghost sm" href="/admin/alerts">Cảnh báo</a><a class="btn ghost sm" href="/admin/audit">Audit metadata</a></p>
+{% if not r.exists %}
+{{ m.empty("Thư mục trạng thái chung " ~ r.dir ~ " chưa có. Chạy `cfharness admin setup check` để xem lệnh thiết lập.", "info", title="Chưa thiết lập") }}
+{% else %}
+{% if r.flags %}
+<section class="card attention"><h2>ESTOP quản trị máy đang bật</h2>
+  <ul>{% for f in r.flags %}<li><b>{{ f.user or "MỌI USER" }}</b> — mã {{ f.reason_code }} · từ {{ m.rel(f.since) }}
+    {{ m.act("admin_estop_off", "Gỡ", {"user": f.user or "*"}, "btn sm", confirm="Gỡ ESTOP quản trị máy cho " ~ (f.user or "MỌI user") ~ "?") }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+<section class="card">
+  <h2>Người dùng ({{ r.users|length }})</h2>
+  {% if not r.users %}{{ m.empty("Chưa có user nào trong nhóm / thư mục trạng thái.") }}{% else %}
+  <table class="tbl"><thead><tr><th>User</th><th>Trạng thái</th><th>Nhóm</th><th>LaunchDaemon</th><th>Thư mục</th><th class="num">Hub</th>
+    <th class="num">Hôm nay</th><th class="num">Tháng</th><th class="num">Chạy</th><th>Phiên bản</th></tr></thead><tbody>
+  {% for u in r.users %}
+  <tr><td><a href="/admin/users/{{ u.user }}"><code>{{ u.user }}</code></a></td><td><span class="pill {{ tones.get(u.state, 'muted') }}">{{ u.state_vi }}</span></td>
+    <td>{{ "có" if u.member else "—" }}</td><td>{{ "có" if u.plist else "—" }}</td><td>{{ "có" if u.granted else "—" }}</td><td class="num">{{ u.hubs }}</td>
+    <td class="num">{{ u.cost_today_usd|usd }}</td><td class="num">{{ u.cost_month_usd|usd }}</td><td class="num">{{ u.running }}</td><td>{{ u.version or "—" }}</td></tr>
+  {% endfor %}
+  </tbody></table>{% endif %}
+</section>
+<section class="card">
+  <h2>Cảnh báo đang mở ({{ r.alerts|length }})</h2>
+  {% if not r.alerts %}<p class="muted">Không có cảnh báo.</p>{% else %}
+  <ul>{% for a in r.alerts %}<li><code>{{ a.user }}</code>{% if a.hub_id %} / <code>{{ a.hub_id }}</code>{% endif %}: {{ alert_vi.get(a.code, a.code) }} <span class="muted">từ {{ m.rel(a.since) }}</span></li>{% endfor %}</ul>
+  {% endif %}
+</section>
+<section class="card">
+  <h2>ESTOP mọi user</h2>
+  <form method="post" action="/do/admin_estop_on" class="row gap">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="user" value="*"><input type="hidden" name="next" value="/admin/users">
+    <label>Mã lý do <select name="reason_code">{% for c in reasons %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select></label>
+    <button type="submit" class="btn danger">Bật ESTOP cho MỌI user</button>
+  </form>
+  <p class="muted">Chính sách (ngân sách, đồng thời, bắt buộc sandbox…) chỉ root sửa: <code>cfharness admin policy template</code> in mẫu + lệnh sudo.</p>
+</section>
+{% endif %}
+{% endblock %}

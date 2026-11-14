@@ -25,7 +25,7 @@ SOCKET_PREFIX = "cfharness-"
 _MAX_SOCK_PATH = 100
 # Mục trong HUB_HOME phải riêng tư với user OS khác (đa instance P1, `docs/dev-notes/multi-instance.md`).
 PRIVATE_ENTRIES = ("hub.db", "hub.db-wal", "hub.db-shm", "config.yaml", "logs", "runs", "prompts", "agents", "secrets", "auth",
-                   "mcp_server", "checkpoints", "workspaces", "worktrees", "evals", "trash", "policy")
+                   "mcp_server", "checkpoints", "workspaces", "worktrees", "evals", "trash", "policy", "backups", "update")
 
 log = logging.getLogger("cfharness.paths")
 

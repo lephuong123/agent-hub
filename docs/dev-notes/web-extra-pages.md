@@ -54,7 +54,7 @@ Hàm thuần (`split_patch` với dòng giống header, trần/điều kiện ho
 sửa tiếp (không ghi đè), hoàn tác thật + audit, trạng thái "Đã hoàn tác"; thẻ sức khoẻ.
 
 ## Chưa làm
-- Sửa lịch (`schedule.update`) từ web — dùng `cfharness schedule edit`. Xem chi tiết các lượt (`schedule.get{fires}`) — chỉ hiện lượt gần nhất.
+- ~~Sửa lịch (`schedule.update`) từ web; xem chi tiết các lượt~~ — `/schedules/{id}` (`web-permissions.md` #5).
 - Tìm kiếm chế độ `around`/`read`/`browse`, gom kết quả theo luồng.
 - `run.diff` luôn trả cả patch qua RPC (chưa có tham số giới hạn kích thước phía daemon); web chỉ cắt khi vẽ.
 - Chưa chụp ảnh màn hình mới vào `docs/screenshots/web/`.

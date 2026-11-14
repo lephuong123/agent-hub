@@ -40,6 +40,8 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     ed.add_argument("--expr")
     ed.add_argument("--prompt")
     _common_fields(ed, add=False)
+    ed.add_argument("--clear-to", "--clear", dest="clear_to", action="store_true",
+                    help="bỏ nơi nhận kết quả đã đặt (--to) → về hội thoại gần nhất của bạn")
     pa = ss.add_parser("pause", help="tạm dừng lịch", parents=[common])
     pa.add_argument("id")
     pa.add_argument("--reason", default="")
@@ -132,6 +134,13 @@ def cmd_schedule(ctx: Any) -> int:
                 p[k] = v
         if a.budget is not None:
             p["budget_usd"] = a.budget
+        if act == "edit" and getattr(a, "clear_to", False):
+            if a.deliver_to:
+                from ..cli import eprint
+
+                eprint("lỗi: --to và --clear-to không dùng cùng lúc")
+                return 1
+            p["deliver_to"] = None  # schedule.update: deliver_to=null → xoá nơi nhận
         r = ctx.call("schedule.create" if act == "add" else "schedule.update", p)
         if ctx.json:
             ctx.out(r)

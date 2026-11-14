@@ -20,6 +20,8 @@
   sprint?, status?: active|closed, state?}` (HUMAN_ONLY), `workstream.delete {id}` (HUMAN_ONLY, audit; xoá hẳn luồng — hội thoại về Sảnh,
   task bỏ gắn luồng, bản chụp + STATE.md vào audit `workstream.snapshot`) → `{id, label, deleted, detached:{conversations, tasks}, state}`. WS = `{id, key, title, label, sprint, status, tasks:{open, running, blocked, done, total},
   needs_human, conversations, last_activity, …}`. Event `workstream.updated{workstream_id, key, title, status, action, by}`.
+- `manager.archive {conversation_id}` / `manager.unarchive {conversation_id}` (HUMAN_ONLY, audit) → Conv — xoá mềm qua `archived_at`;
+  tin/run/audit giữ nguyên; hội thoại đang có run chạy → Conflict; `manager.chat` vào hội thoại đã lưu trữ tự khôi phục nó.
 - `manager.history {conversation_id, limit?}` → `[{id, role: user|manager|notify|tick, text, run_id, ts}]` (cũ → mới)
 - `manager.tick {force?}` (HUMAN_ONLY) → `{run_id|null, skipped?, reason?, events?, conversation_id?}`
 - `managerself.call {run_id, op, args}` — tool hub-self của run manager (daemon ràng run ↔ người gọi).
@@ -40,9 +42,9 @@ if TYPE_CHECKING:
     from ..daemon import Daemon
 
 MUTATING_MANAGER = ("manager.set", "manager.chat", "manager.tick", "managerself.call", "manager.conversation_update", "manager.conversation_read",
-                    "workstream.create", "workstream.update", "workstream.delete")
+                    "workstream.create", "workstream.update", "workstream.delete", "manager.archive", "manager.unarchive")
 _AUDITED = ("manager.set", "manager.chat", "manager.tick", "manager.conversation_update", "workstream.create", "workstream.update",
-            "workstream.delete")  # managerself.call: từng thao tác bên trong tự audit
+            "workstream.delete", "manager.archive", "manager.unarchive")  # managerself.call: từng thao tác bên trong tự audit
 
 
 def _req(p: dict[str, Any], key: str) -> Any:
@@ -96,6 +98,8 @@ def register_rpc(daemon: "Daemon") -> None:
         "workstream.create": lambda p: m.ws.create(p.get("title"), key=p.get("key"), sprint=p.get("sprint"), state=p.get("state"), by="user"),
         "workstream.update": _ws_update,
         "workstream.delete": lambda p: m.ws.delete(_req(p, "id"), by="user"),
+        "manager.archive": lambda p: m.archive(str(_req(p, "conversation_id")), on=True),
+        "manager.unarchive": lambda p: m.archive(str(_req(p, "conversation_id")), on=False),
         "manager.history": lambda p: m.history(str(_req(p, "conversation_id")), int(p.get("limit") or 100)),
         "manager.tick": lambda p: m.maybe_tick(force=bool(p.get("force", True))),
         "managerself.call": lambda p: m.self_call(str(_req(p, "run_id")), str(_req(p, "op")), p.get("args") or {}),

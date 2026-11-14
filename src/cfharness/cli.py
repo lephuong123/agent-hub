@@ -966,6 +966,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_update_parsers(sub, common)
 
+    # sao lưu / khôi phục HUB_HOME: cfharness backup create|list|verify|restore (backup_cli.py, backup.py)
+    from .backup_cli import add_parsers as _add_backup_parsers
+
+    _add_backup_parsers(sub, common)
+
     # tổng quan máy nhiều người dùng: cfharness admin overview (admin_cli.py, admin_overview.py)
     from .admin_cli import add_parsers as _add_admin_parsers
 

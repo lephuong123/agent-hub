@@ -65,7 +65,8 @@ Kiểm của điều phối viên (`ScheduleService.manager_check`) chạy ở *
 - trần (nhánh config `schedules` — đã thêm vào `integrity.SECURITY_KEYS`, chỉ người đổi): `manager_max_active` 10 lịch đang bật (kể cả
   khi resume), khoảng ngắn nhất giữa 2 lượt ≥ `min_interval_s` 900 s (xét ~200 mốc tới, nên `*/10 8-17 * * *` cũng bị bắt), `budget_usd`
   bắt buộc và ≤ `config_bounds.max_budget_usd_per_run` (lớp 1 kẹp về trần như `run_start`; lớp 2 không kẹp), ước tính $/ngày (số lượt
-  ngày nhiều nhất trong 7 ngày × budget) của lịch + các lịch manager khác ≤ `manager_daily_budget_usd` (null = `config_bounds.budget_usd_per_day`),
+  ngày nhiều nhất trong 7 ngày × $/lượt — $/lượt = chi phí THẬT trung bình ≤ `estimate_recent_fires` lượt gần nhất khi đã có ≥ `estimate_min_fires`
+  lượt có `cost_usd`, kẹp ≤ budget; chưa đủ lịch sử → budget; xem `cost-guardrails.md`) của lịch + các lịch manager khác ≤ `manager_daily_budget_usd` (null = `config_bounds.budget_usd_per_day`),
   chạy-ngay ≤ `manager_run_now_per_hour` 6, không đặt `model` (như Hermes: model của job là của người).
 - đích theo luật sẵn có: kind agent → `check_rpc("run.start")` (không agent manager, không thành viên team ESTOP/team có review), kind task →
   `check_rpc("task.create")` (assignee không phải manager, ESTOP, review, workspace, budget); kind manager → `deliver_to` phải là hội thoại
@@ -116,9 +117,9 @@ Toàn bộ `uv run pytest -q`: **789 passed, 1 skipped** (trước thay đổi: 
 - Lỡ lượt: Hermes chạy bù theo receipt; ở đây chạy bù tối đa 1 lần trong `catchup_grace_s`.
 
 ## Việc dở
-- Web chưa có màn lịch (phiên web đang sửa `web/`): cần trang danh sách + nút tạm dừng/bật lại (ACTIONS có `confirm`), và hiển thị tin
-  role `schedule` trong hội thoại (hiện `present.mgr_message`/`chatview` bỏ qua role lạ — chỉ thấy trả lời).
-- Telegram chỉ đọc (`/lich`); nút tạm dừng/bật lại phải theo khung 2 bước của bot.
-- `schedule.update` của người không đổi `kind` ↔ đích phức tạp ngoài tham số đã có; chưa có `--clear` cho deliver_to.
+- ~~Web chưa có màn lịch; tin role `schedule` không hiện~~ — đã có `/schedules` (`web-extra-pages.md`), sửa lịch + lịch sử lượt
+  `/schedules/{id}`, tin `schedule` hiện thành dòng hệ thống (`web-permissions.md` #5).
+- ~~Telegram chỉ đọc (`/lich`)~~ — `/lich` (Telegram + Slack) có nút tạm dừng (một chạm) / bật lại (2 bước) ở tin riêng.
+- `schedule.update` của người không đổi `kind` ↔ đích phức tạp ngoài tham số đã có; ~~chưa có `--clear` cho deliver_to~~ — `schedule edit --clear-to`.
 - `last_status` của kind manager phụ thuộc outcome run (không đọc nội dung trả lời).
 - Ước tính $/ngày dùng `budget_usd` (trần), không dùng chi phí thật trung bình.

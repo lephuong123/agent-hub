@@ -196,8 +196,10 @@ def test_read_dir_missing(tmp_path):
 
 
 # ------------------------------------------------------------------ RPC + quyền + CLI
-async def test_rpc_human_only(hub_home, tmp_path):
+async def test_rpc_human_only(hub_home, tmp_path, monkeypatch):
     from m7_fake import close, make_daemon, rpc
+
+    import cfharness.admin_control as ac
 
     d = await make_daemon(hub_home)
     try:
@@ -205,6 +207,12 @@ async def test_rpc_human_only(hub_home, tmp_path):
         status.mkdir()
         _put(status, f"{ME}.json", _sample())
         d.hub.config.set("admin_export.dir", str(status))
+        # người nhưng KHÔNG thuộc nhóm cfharness-admin → từ chối (plan-admin-users: is_admin ở RPC)
+        with pytest.raises(HubError) as ei:
+            await rpc(d, "admin.overview", {})
+        assert ei.value.code == BLOCKED and "cfharness-admin" in str(ei.value)
+        monkeypatch.setattr(ac, "_GETGRNAM", lambda n: type("G", (), {"gr_gid": 4242, "gr_mem": []})())
+        monkeypatch.setattr(ac, "_GETGROUPS", lambda: [4242])
         r = await rpc(d, "admin.overview", {})
         assert r["exists"] and r["hubs"][0]["user"] == ME and r["self"]["enabled"] is False
         assert "admin.overview" in auth.HUMAN_ONLY
@@ -247,9 +255,10 @@ def test_sandbox_denies_shared_status_dir(tmp_path):
 
 
 # ------------------------------------------------------------------ web
-async def test_web_page_renders_and_menu_only_when_dir_exists(hub_home, tmp_path):
+async def test_web_page_renders_and_menu_only_for_admin(hub_home, tmp_path, as_admin):
     from test_web import ISOLATED, _start, _stop
 
+    import cfharness.admin_control as ac
     from cfharness.runtime import FakeRuntime
 
     env = await _start(hub_home, FakeRuntime(ISOLATED))
@@ -257,8 +266,15 @@ async def test_web_page_renders_and_menu_only_when_dir_exists(hub_home, tmp_path
         status = tmp_path / "status"
         env.hub.config.set("admin_export.dir", str(status))
         await env.login()
-        html = (await env.client.get("/costs")).text
-        assert "/admin/overview" not in html  # chưa có thư mục → không có mục menu
+        grnam, groups = ac._GETGRNAM, ac._GETGROUPS
+        ac._GETGROUPS = lambda: []  # không thuộc nhóm admin → không có mục menu, trang 403
+        try:
+            html = (await env.client.get("/costs")).text
+            assert "/admin/overview" not in html and "/admin/users" not in html
+            assert (await env.client.get("/admin/overview")).status_code == 403
+        finally:
+            ac._GETGRNAM, ac._GETGROUPS = grnam, groups
+            env.app.state.web._admin_nav = None
         page = (await env.client.get("/admin/overview")).text
         assert "Chưa thiết lập" in page
         status.mkdir()

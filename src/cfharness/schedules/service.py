@@ -136,10 +136,21 @@ class ScheduleService:
         spec = self._spec(r)
         return cron.next_after(spec, after, tz=cron.get_tz(r.get("tz")), anchor=_parse_ts(r.get("anchor_at") or r.get("created_at")))
 
-    def estimate_daily_usd(self, expr: str, budget: float | None, *, tzname: str | None = None) -> float:
+    def fire_cost_estimate(self, schedule_id: str | None, budget: float | None) -> float:
+        """$ ước tính MỘT lượt: chi phí thật trung bình các lượt gần đây (cost-guardrails.md), không vượt `budget`;
+        chưa đủ lịch sử (`schedules.estimate_min_fires`) → `budget` (trần) như trước."""
+        from ..cost_guard import schedule_fire_cost
+
+        real = schedule_fire_cost(self.conn, schedule_id, recent=int(self.cfg("estimate_recent_fires") or 0),
+                                  min_fires=int(self.cfg("estimate_min_fires") or 1))
+        if real is None:
+            return float(budget or 0)
+        return min(real, float(budget)) if budget is not None else real
+
+    def estimate_daily_usd(self, expr: str, budget: float | None, *, tzname: str | None = None, schedule_id: str | None = None) -> float:
         tz = cron.get_tz(tzname)
         spec = cron.parse(expr, now=self.now(), tz=tz)
-        return round(cron.runs_per_day(spec, now=self.now(), tz=tz) * float(budget or 0), 4)
+        return round(cron.runs_per_day(spec, now=self.now(), tz=tz) * self.fire_cost_estimate(schedule_id, budget), 4)
 
     # ------------------------------------------------------------------ kiểm dữ liệu (mọi người gọi)
     def _validate(self, p: dict[str, Any], *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -268,8 +279,8 @@ class ScheduleService:
         if day_cap is None:
             day_cap = perms.bounds().get("budget_usd_per_day")
         if day_cap is not None:
-            est = cron.runs_per_day(spec, now=self.now(), tz=tz) * float(b)
-            others = sum(self.estimate_daily_usd(r["expr"], r.get("budget_usd"), tzname=r.get("tz")) for r in active)
+            est = cron.runs_per_day(spec, now=self.now(), tz=tz) * self.fire_cost_estimate((existing or {}).get("id"), float(b))
+            others = sum(self.estimate_daily_usd(r["expr"], r.get("budget_usd"), tzname=r.get("tz"), schedule_id=r["id"]) for r in active)
             if est + others > float(day_cap):
                 return (f"ước tính chi phí ngày của lịch ${est:.2f} (+ ${others:.2f} lịch khác của điều phối viên) vượt ${float(day_cap):.2f}/ngày — "
                         "giảm tần suất hoặc budget_usd")

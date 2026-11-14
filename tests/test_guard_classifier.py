@@ -7,6 +7,7 @@ Mỗi ca phá huỷ phải ra `destructive|uncertain` (đều bị GIỮ chờ n
 from __future__ import annotations
 
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -457,3 +458,29 @@ def test_confine_false_positive_rate(cenv):
         if held(v):
             fps.append((tool, v.rule))
     assert len(fps) / total <= 0.05, fps
+
+
+# ------------------------------------------------------------------ quản trị máy (plan-admin-users §4): thư mục chung của mọi user
+DESTRUCTIVE_ADMIN_SHARED = [
+    ("Read", {"file_path": "/Users/Shared/cfharness/status/an/0123456789abcdef.json"}),
+    ("Grep", {"pattern": "cost", "path": "/Users/Shared/cfharness"}),
+    ("Glob", {"pattern": "**/*.json", "path": "/Users/Shared/cfharness/audit"}),
+    ("Write", {"file_path": "/Users/Shared/cfharness/control/estop", "content": "{}"}),
+    ("Edit", {"file_path": "/Users/Shared/cfharness/policy/_default.json", "old_string": "a", "new_string": "b"}),
+    ("Bash", {"command": "cat /Users/Shared/cfharness/status/an/x.json"}),
+    ("Bash", {"command": "rm -f /Users/Shared/cfharness/control/estop.an"}),
+    ("Bash", {"command": "echo '{}' > \"/Users/Shared/cfharness/admin-log/an.jsonl\""}),
+]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS/Linux")
+def test_admin_shared_forbidden(env):
+    missed = []
+    for tool, ti in DESTRUCTIVE_ADMIN_SHARED:
+        v = classify(tool, ti, env["ctx"])
+        if not (v.forbidden and v.rule == "admin_shared"):
+            missed.append((tool, ti, v.verdict, v.rule))
+    assert not missed, missed
+    # tên gần giống KHÔNG bị chặn nhầm
+    assert classify("Bash", {"command": "ls /Users/Shared/cfharness-other"}, env["ctx"]).rule != "admin_shared"
+    assert classify("Read", {"file_path": "/Users/Shared/cfharnessx/a"}, env["ctx"]).rule != "admin_shared"

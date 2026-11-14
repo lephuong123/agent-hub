@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Quản trị máy{% endblock %}
+{% block content %}
+{% set exp = r.export or {} %}{% set es = r.admin_estop or {} %}{% set pol = r.policy or {} %}
+<div class="page-head"><h1>Quản trị máy</h1><span class="muted">Người quản trị máy thấy gì về hub của bạn ({{ r.user }}) và đã làm gì — chỉ đọc</span></div>
+<section class="card {{ 'attention' if es.on }}">
+  <h2>ESTOP quản trị máy</h2>
+  {% if es.on %}<p><span class="pill danger strong">{{ m.icon('stop') }}ĐANG BẬT</span> {{ "cho mọi user trên máy" if es.scope == "all" else "riêng hub của bạn" }} · mã <b>{{ es.reason_code }}</b> · từ {{ m.rel(es.since) }}.
+    Run mới bị chặn; chỉ người quản trị máy gỡ được.</p>
+  {% else %}<p class="muted">Không bật.</p>{% endif %}
+</section>
+<section class="card">
+  <h2>Hub này xuất cho admin</h2>
+  <p>{% if exp.enabled %}<span class="pill ok">Đang xuất</span> → <code>{{ exp.file }}</code>{% if exp.last_ok %} · lần cuối {{ m.rel(exp.last_ok) }}{% endif %}{% if exp.last_error %} · <span class="pill warn">lỗi {{ exp.last_error }}</span>{% endif %}
+     {% else %}<span class="pill muted">Không xuất</span>{% endif %}
+     · audit metadata: {{ "bật" if (r.audit or {}).enabled else "tắt" }}</p>
+  <p class="muted">Chỉ số liệu (không prompt, kết quả, tên agent, đường dẫn). Đây là ĐÚNG nội dung lần xuất tiếp theo:</p>
+  <pre class="code">{{ preview_json }}</pre>
+</section>
+<section class="card">
+  <h2>Chính sách quản trị có hiệu lực</h2>
+  {% if not pol.exists %}<p class="muted">Máy chưa có chính sách.</p>{% else %}
+  <p class="muted">Nguồn: {{ (pol.sources or [])|join(", ") or "—" }} · rev {{ pol.rev if pol.rev is number else "—" }}{% if pol.errors %} · <span class="pill warn">bỏ qua file lỗi: {{ pol.errors|join(", ") }}</span>{% endif %}{% if pol.blocked %} · <span class="pill danger">CHẶN run</span>{% endif %}</p>
+  <pre class="code">{{ policy_json }}</pre>
+  <p class="muted">Hub áp giá trị CHẶT HƠN giữa chính sách này và cấu hình của bạn (ngân sách, trần mỗi run, số run đồng thời, sandbox…).</p>
+  {% endif %}
+</section>
+<section class="card">
+  <h2>Thao tác của người quản trị</h2>
+  {% if not r.admin_log %}<p class="muted">Chưa có.</p>{% else %}
+  <table class="tbl"><thead><tr><th>Lúc</th><th>Bởi</th><th>Thao tác</th><th>Phạm vi</th><th>Mã</th></tr></thead><tbody>
+  {% for x in r.admin_log %}<tr><td>{{ m.rel(x.ts) }}</td><td><code>{{ x.by }}</code></td><td>{{ x.action }}</td><td>{{ "mọi user" if x.scope == "all" else "bạn" }}</td><td>{{ x.reason_code or "—" }}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+{% endblock %}

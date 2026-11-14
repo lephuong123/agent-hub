@@ -164,6 +164,12 @@ class ClaudeStreamAdapter:
     def terminal(self) -> bool:
         return self.result is not None
 
+    def estimated_cost_usd(self) -> float:
+        """$ ước lượng đã tiêu của tiến trình này (cùng công thức `usage.tick` estimated) — dùng khi run kết thúc KHÔNG có
+        `result` (crashed/bị giết), để ngân sách chuỗi/ngày không tính thiếu (docs/dev-notes/cost-guardrails.md)."""
+        in_p, out_p = _price_for(self.model)
+        return round(self._cost_est + (self._cur_in * in_p * 0.3 + self._cur_out * out_p) / 1e6, 6)
+
     # ------------------------------------------------------------------ helpers
     def _ev(self, type_: str, payload: dict[str, Any], *, subagent_id: str | None = None) -> HubEvent:
         return make_event(

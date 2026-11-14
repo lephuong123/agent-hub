@@ -108,7 +108,7 @@ Test: `test_sandbox_localhost_badge_and_toggle`.
   Tạo lại: chạy `web.demo`, rồi script Playwright (đăng nhập bằng link ký từ `auth/web.json`, chụp các trang).
 
 ## 6. Lệch / việc dở
-- Chưa có: trang guard policy/protect (dùng CLI `cfharness guard`), purge vĩnh viễn, sửa golden checker, journey học, canary chi tiết,
+- ~~Chưa có trang guard policy/protect~~ — đã có trang "Quyền đã cấp" `/permissions` (`web-permissions.md`). Chưa có: purge vĩnh viễn, sửa golden checker, journey học, canary chi tiết,
   takeover chạy từ web (chỉ hiện lệnh `cfharness takeover <run>` — cần terminal tương tác), nhập MCP có bước xem trước (hiện nhập thẳng sau xác nhận).
 - Phiên lưu RAM: khởi động lại web → đăng nhập lại. Một server web/HUB_HOME (`auth/web.json`).
 - Reasoning chỉ hiện khi xem live (delta không lưu DB) — giống TUI.
