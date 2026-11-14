@@ -682,6 +682,10 @@ html.mgr-info-closed .mgr-side { display: none; }
 .mm-md { padding: 0; }
 .mm.mgr + .mm.mgr:not(.notify) > .mm-who { display: none; }
 /* P1-5: hàng thao tác dưới tin — hiện khi rê chuột/focus; tin cuối và màn cảm ứng luôn hiện */
+/* tệp điều phối viên nhắc tới (đường dẫn tuyệt đối trong chữ) → chip Xem/Mở/Thư mục — file-open.md §6 */
+.mm-files { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; }
+.mm-file { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.mm-file > code { font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; }
 .mm-foot { display: flex; align-items: center; gap: 2px; margin-top: 4px; min-height: 28px; font-size: var(--fs-xs); color: var(--muted); opacity: 0; transition: opacity .15s; }
 .mm-foot > time, .mm-foot > a { padding: 0 6px; white-space: nowrap; }
 .mm-foot > a { color: inherit; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 2px; }

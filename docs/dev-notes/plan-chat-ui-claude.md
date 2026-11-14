@@ -1,7 +1,8 @@
 # Kế hoạch: câu trả lời của AI + giao diện hiển thị giống Claude chat
 
-Ngày: 2026-11-13. Trạng thái: **đề xuất, chờ chốt 4 quyết định ở mục 1**. Ba agent đã đọc code để viết kế hoạch này, chưa sửa file nào:
-(A) trang Điều phối `/manager`, (B) transcript trang run, (C) nội dung câu trả lời và các kênh TUI/Telegram/Slack.
+Ngày: 2026-11-13. Trạng thái: **đã làm xong P0, P1, P2** (Q1–Q4 chốt 2026-11-13; nhật ký thi công ở mục 7). Kiểm thật trang Điều phối
+2026-11-14: render, luồng trực tiếp, tải lại trang đều đúng. Còn mở: mục 8.
+Phạm vi: (A) trang Điều phối `/manager`, (B) transcript trang run, (C) nội dung câu trả lời và các kênh TUI/Telegram/Slack.
 
 Mọi ràng buộc an toàn hiện có vẫn giữ nguyên:
 - CSP `'self'`, không CDN, không script/style inline.
@@ -289,3 +290,15 @@ These rules apply to free-text replies a person reads. When you are asked for st
     đã bỏ.
   - Test: `tests/test_web_polish.py`; cập nhật `test_web_questions.py` (vạch ngày). Kiểm bằng `web.demo` + sự kiện giả + Playwright
     (1280/390, sáng/tối): không tràn ngang, không lỗi console/CSP.
+
+---
+
+## 8. Còn mở (sau kiểm thật 2026-11-14)
+- **Đã sửa (PR `feat/manager-cli-ref`)**: điều phối viên bịa lệnh CLI (`cfharness run list` thay vì `cfharness runs list`) vì
+  không có danh sách lệnh nào. Thêm khối `# cfharness CLI reference` (`manager/cli_ref.py`, sinh từ `cli.build_parser`, chỉ điều phối
+  viên, sau `RESPONSE_STYLE`) + quy tắc: dữ liệu đọc được bằng tool hub thì lấy luôn, chỉ đưa lệnh khi người phải tự chạy, không đoán
+  lệnh/cờ. Test: `tests/test_manager_cli_ref.py` (mọi đường lệnh trong khối parse được).
+- Chưa kiểm trên Telegram/Slack thật; chưa thử bàn phím ảo trên iPhone/Android thật.
+- Trang run: đoạn chữ sau `part` cuối chỉ thành markdown khi `message.complete` tới.
+- Trang Điều phối mở qua nửa đêm: tin SSE mới không tự thêm vạch ngày.
+

@@ -2,7 +2,7 @@
 
 Thứ tự ổn định (để giữ prompt cache): (1) quy ước hub (+ khối trình duyệt Claude in Chrome theo `tool_policy.browser`) → (2) SOUL → (3) charter team (hardening H-15: run có `team_id`;
 trước đây nằm trong tin nhắn user) → (3b) `RESPONSE_STYLE` (cách trình bày câu trả lời kiểu Claude chat; đặt SAU SOUL để thắng các SOUL cũ
-còn bảo nêu task id, TRƯỚC khối tri thức để phần đầu ổn định) → (4) memory global/team/agent → (5) chỉ mục skill + (6) hướng dẫn đọc skill qua
+còn bảo nêu task id, TRƯỚC khối tri thức để phần đầu ổn định) → (3c) danh sách lệnh CLI (CHỈ điều phối viên, `manager/cli_ref.py`) → (4) memory global/team/agent → (5) chỉ mục skill + (6) hướng dẫn đọc skill qua
 `skill_view` (M4, `knowledge/prompt_blocks.py`). Charter ổn định theo (agent, team) → hash ổn định giữa các run cùng team.
 Nội dung động (task, comment, vai trò trong task) KHÔNG vào đây mà vào tin nhắn user.
 Persona/prompt viết bằng tiếng Anh (Q-14).
@@ -50,7 +50,7 @@ def charter_block(team_id: str, team_name: str, charter: str) -> str:
 
 
 def build_system_prompt(agent_id: str, soul: str, knowledge_blocks: list[str] | None = None, charter: str | None = None,
-                        browser: str | None = None) -> str:
+                        browser: str | None = None, cli_ref: str | None = None) -> str:
     parts = [HUB_CONVENTIONS.format(agent_id=agent_id).strip()]
     if browser:
         from .browser import prompt_block
@@ -63,6 +63,8 @@ def build_system_prompt(agent_id: str, soul: str, knowledge_blocks: list[str] | 
     if charter and charter.strip():
         parts.append(charter.strip())
     parts.append(RESPONSE_STYLE)
+    if cli_ref and cli_ref.strip():
+        parts.append(cli_ref.strip())  # chỉ điều phối viên (manager/cli_ref.py); sinh từ parser → ổn định giữa các run
     parts.extend(b.strip() for b in knowledge_blocks or [] if b and b.strip())
     return "\n\n".join(parts) + "\n"
 

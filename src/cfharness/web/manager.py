@@ -564,6 +564,7 @@ def _converter(request: Request, clock: Any = None) -> Any:
                 if streamed.strip():
                     text = streamed if _norm(text) in _norm(streamed) else streamed + "\n\n" + text
             it = {"kind": "manager", "text": text, "ts": ev.get("ts"), "run_id": run, "notify": notify, "tick": p.get("kind") == "tick",
+                  "agent": ev.get("agent_id"),
                   "cut": P.cut_note("Tin", len(str(p.get("text") or "")), run) if p.get("truncated") else ""}
             return [{"t": "reply", "run": run, "conv": p.get("conversation_id"), "notify": notify, "html": str(mod.item(it))}]
         if t == "manager.action":

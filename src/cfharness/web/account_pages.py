@@ -30,6 +30,8 @@ NEXT = "/settings#accounts"
 LOGIN_TTL_S = 600.0
 LABEL_MAX = 60
 KIND_LABEL = {"machine": "Đăng nhập của máy", "custom": "Token tự đặt"}
+# dòng phụ khi nhãn đã trùng loại: nói rõ tài khoản ảo này là gì thay vì lặp tên
+KIND_HINT = {"machine": "đăng nhập sẵn của claude trên máy chạy hub", "custom": "đặt tay ở secret CLAUDE_CODE_OAUTH_TOKEN"}
 
 
 # ============================================================================ trình bày
@@ -65,7 +67,10 @@ def status_chip(a: dict[str, Any]) -> tuple[str, str]:
 def _view(a: dict[str, Any]) -> dict[str, Any]:
     label, tone = status_chip(a)
     kind = a.get("kind") or "token"
-    return {**a, "chip": label, "tone": tone, "kind_label": KIND_LABEL.get(kind, ""), "can_use": kind in ("token", "machine") and not a.get("active"),
+    kl = KIND_LABEL.get(kind, "")
+    if kl and kl == (a.get("label") or ""):  # tài khoản ảo có nhãn trùng loại ("Đăng nhập của máy") → không hiện hai lần
+        kl = KIND_HINT.get(kind, "")
+    return {**a, "chip": label, "tone": tone, "kind_label": kl, "can_use": kind in ("token", "machine") and not a.get("active"),
             "can_rm": kind == "token" and not a.get("active"), "can_rename": kind == "token"}  # core từ chối đổi tên machine/custom
 
 
