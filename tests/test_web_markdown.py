@@ -283,3 +283,22 @@ async def test_run_result_partial_204_while_live(hub_home):
     finally:
         rt.release()
         await _stop(e)
+
+
+# ============================================================================ link trần + đường dẫn file (kiểm thật 2026-11-14)
+def test_bare_url_becomes_hardened_link_but_fuzzy_names_stay_text():
+    h = P.md("Link: https://creativeforce-io.atlassian.net/browse/LH-55763 và STATE.md, a.py, www.example.com, javascript:alert(1)")
+    assert re.search(r'<a href="https://creativeforce-io\.atlassian\.net/browse/LH-55763"[^>]*rel="nofollow noopener noreferrer"[^>]*target="_blank"', h)
+    assert h.count("<a ") == 1  # STATE.md (.md), a.py (.py), www.… không có scheme → không thành link
+    assert "javascript:" not in re.findall(r'href="([^"]*)"', h)[0]
+    assert 'class="ext-host"' not in h  # chữ hiển thị đã là URL → không lặp tên miền
+
+
+def test_mentioned_paths_only_absolute_files():
+    t = (r"Thư mục `C:\Users\Le\.cfharness\agents\dp\workspaces\conv-1` có `C:\Users\Le\.cfharness\agents\dp\workspaces\conv-1\notes.md`. "
+         "Linux: /home/u/repo/STATE.md, link https://x.atlassian.net/browse/LH-1/a.md, tương đối STATE.md, ../x.md, "
+         r"C:\a\..\b.txt, ~/n/todo.md, /home/u/repo/STATE.md.")
+    assert P.mentioned_paths(t) == [r"C:\Users\Le\.cfharness\agents\dp\workspaces\conv-1\notes.md", "/home/u/repo/STATE.md"]
+    assert P.path_name(r"C:\a\b\notes.md") == "notes.md" and P.path_name("/home/u/STATE.md") == "STATE.md"
+    many = " ".join(f"/tmp/f{i}.txt" for i in range(9))
+    assert len(P.mentioned_paths(many)) == P.PATHS_MAX

@@ -99,7 +99,9 @@ def install_info(prefix: str | Path | None = None) -> dict[str, Any]:
     req = next((r for r in reqs if isinstance(r, dict) and r.get("name") == "cfharness"), {})
     if req.get("editable"):
         return {"kind": "editable", "prefix": str(base), "source": str(req["editable"]),
-                "reason": f"cài dạng editable từ mã nguồn {req['editable']} — cập nhật bằng `git pull` trong thư mục đó"}
+                "reason": f"cài dạng editable từ mã nguồn {req['editable']} — cập nhật bằng `git pull` trong thư mục đó, rồi "
+                          "`uv tool install --editable . --force` (cài dependency mới cho venv của tool; dừng daemon trước) "
+                          "và khởi động lại daemon"}
     if req.get("git"):
         return {"kind": "uv_git", "prefix": str(base), "source": str(req["git"])}
     return {"kind": "uv_other", "prefix": str(base), "source": str(req.get("path") or req.get("url") or ""),

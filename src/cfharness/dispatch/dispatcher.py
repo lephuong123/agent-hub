@@ -908,7 +908,12 @@ class TaskDispatcher:
         root = self.tasks.maybe(rid)
         if root is None or not root.get("decomposed") or root["status"] in ("done", "archived"):
             return
-        subs = [s for s in self.tasks.subtasks(rid) if s["status"] != "archived"]
+        every = self.tasks.subtasks(rid)
+        subs = [s for s in every if s["status"] != "archived"]
+        if every and not subs:  # mọi task con đã bị huỷ → không còn gì để chờ: báo người thay vì treo `running` im lặng
+            if root["status"] != "blocked":
+                self.tasks.set_status(rid, "blocked", reason=f"mọi task con ({len(every)}) đã bị huỷ — giao lại, đóng hoặc archive task gốc")
+            return
         if subs and all(s["status"] == "done" for s in subs):
             parts, res = [], []
             for s in subs:

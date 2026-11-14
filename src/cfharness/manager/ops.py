@@ -481,6 +481,12 @@ class ManagerOps:
     async def op_task_cancel(self, a: dict[str, Any]) -> Any:
         return await self._rpc("task_cancel", "mcp.cancel_task", {"task_id": a.get("id"), "reason": a.get("reason")}, a, summary=f"huỷ task {a.get('id')}")
 
+    async def op_task_reassign(self, a: dict[str, Any]) -> Any:
+        res = await self._rpc("task_reassign", "task.reassign", {"id": a.get("id"), "assignee": a.get("assignee"), "by": self.actor,
+                                                                 "reason": a.get("reason")}, a,
+                              summary=f"giao task {a.get('id')} cho {a.get('assignee')}")
+        return {k: (res or {}).get(k) for k in ("id", "status", "assignee_agent_id", "origin_task_id")}
+
     async def op_task_retry(self, a: dict[str, Any]) -> Any:
         res = await self._rpc("task_retry", "task.retry", {"id": a.get("id")}, a, summary=f"thử lại task {a.get('id')}")
         return {"id": (res or {}).get("id"), "status": (res or {}).get("status")}

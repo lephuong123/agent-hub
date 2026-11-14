@@ -81,7 +81,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "run.revert", "run.takeover", "run.takeover_record",
         "team.create", "team.update", "team.archive", "team.restore", "team.member_set", "team.member_rm",
         # V2-N1: bề mặt quản trị luồng CLI thêm sau (revert về revision cũ = nâng quyền; purge = xoá vĩnh viễn; archive/pause = DoS)
-        "agent.archive", "agent.revert", "agent.pause", "agent.resume", "trash.restore", "trash.purge", "task.archive",
+        "agent.archive", "agent.revert", "agent.pause", "agent.resume", "trash.restore", "trash.purge", "task.archive", "task.reassign",
         # Telegram (chat/rpc.py): token bot, allowlist chat, gửi tin — agent không được tự ghép chat của nó vào allowlist
         "telegram.setup", "telegram.pending", "telegram.allow", "telegram.revoke", "telegram.disable", "telegram.test",
         # Slack 2 chiều (chat/slack/rpc.py): như Telegram — token bot/app, allowlist DM + người, gửi tin
@@ -181,6 +181,7 @@ MANAGER_ALLOWED: dict[str, str] = {
     "task.create": "giao việc (created_by=manager:<id>)",
     "task.comment": "bình luận task",
     "task.retry": "thử lại task",
+    "task.reassign": "đổi người làm task chưa chạy (giữ task trong task gốc — thay cho huỷ rồi tạo lại)",
     "mcp.cancel_task": "huỷ task (dừng run + archive task và task con chưa xong)",
     "run.start": "run ad-hoc cho agent khác",
     "run.steer": "gửi tin vào run của agent khác",
