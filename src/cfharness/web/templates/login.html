@@ -5,9 +5,17 @@
 <section class="card narrow login">
   <h1>Đăng nhập cfharness</h1>
   {% if error %}<div class="flash error" role="alert">{{ error }}</div>{% endif %}
+  {% if devices %}
+  {# thiết bị tin cậy: app.js tự gửi form này MỘT lần nếu trình duyệt đã được tin cậy (SameSite=Strict — link từ chat không mang cookie) #}
+  <form method="post" action="/login" class="form" id="device-login" hidden{% if device_auto %} data-auto="1"{% endif %}{% if device_failed %} data-failed="1"{% endif %}>
+    <input type="hidden" name="device" value="1">
+    <div class="row end"><button class="btn primary" type="submit">Tiếp tục bằng thiết bị tin cậy</button></div>
+  </form>
+  {% endif %}
   {% if totp %}
   <form method="post" action="/login" class="form">
     <label>Mã 6 số trên ứng dụng xác thực<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required autofocus></label>
+    {% if devices %}<label class="check small"><input type="checkbox" name="trust" value="1"> Tin cậy thiết bị này{% if device_days %} trong {{ device_days }} ngày{% endif %} — lần sau không cần nhập mã. Đừng chọn trên máy dùng chung.</label>{% endif %}
     <div class="row end"><button class="btn primary" type="submit">Đăng nhập</button></div>
   </form>
   {% elif public %}

@@ -372,7 +372,8 @@ class TelegramNotifier(QueuedNotifier):
         api: TelegramApi = target["api"]
         n = 0
         p = ev.payload or {}
-        for chat in self.bot.route_chats(ev.run_id or p.get("run_id"), p.get("conversation_id")):
+        chats = self.bot.security_chats() if ev.type.startswith("web.") else self.bot.route_chats(ev.run_id or p.get("run_id"), p.get("conversation_id"))
+        for chat in chats:
             if chat in msg["done"]:
                 continue
             aid = msg.get("approval_id")

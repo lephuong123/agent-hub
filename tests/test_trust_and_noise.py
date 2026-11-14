@@ -318,7 +318,10 @@ async def test_trusted_spec_bypass_no_sandbox_on_real_repo(hub, tmp_path):
     spec = hub.runs._prepare_spec(run, hub.store.get_agent("w"))
     assert spec.workspace_kind == "dir" and spec.trust_full and spec.tool_policy["permission_mode"] == "bypassPermissions"
     st = json.loads(spec.settings_path.read_text(encoding="utf-8"))
-    assert st["sandbox"] == {"enabled": False} and not (st.get("permissions") or {}).get("deny")
+    # trust_full: bỏ permissions.deny tĩnh của hub — CHỈ giữ luật thư mục chung quản trị máy (dữ liệu của user khác, plan-admin-users)
+    from cfharness.guard.runtime import admin_shared_deny_rules
+
+    assert st["sandbox"] == {"enabled": False} and (st.get("permissions") or {}).get("deny", []) == admin_shared_deny_rules()
     assert "PreToolUse" in (st.get("hooks") or {})  # hook vẫn chạy: ghi quyết định + ESTOP
     assert not any("push --force" in x for x in spec.tool_policy.get("disallowed_tools") or [])
     argv, _ = build_argv(spec, hub.config.get("runtime.claude"))

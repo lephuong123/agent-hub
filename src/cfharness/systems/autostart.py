@@ -474,6 +474,9 @@ def _systemd_quote(s: str) -> str:
 
 # ============================================================================ LaunchDaemon (Q3: chạy không cần phiên GUI)
 LAUNCH_DAEMONS_DIR = Path("/Library/LaunchDaemons")
+# plan-admin-users P2 `--system-install`: bản cài ROOT-OWNED dùng chung (user không sửa được mã hub mà LaunchDaemon của mình chạy)
+SYSTEM_PREFIX = "/opt/cfharness"
+SYSTEM_PROGRAM = f"{SYSTEM_PREFIX}/bin/cfharness"
 _USER_RE = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$")
 
 
@@ -487,7 +490,7 @@ class LaunchDaemonPlan:
 
     def __init__(self, user: str, *, user_home: Path, home: Path | None = None, program: str | None = None,
                  web_port: int | None = None, path_env: str | None = None, runner: Runner | None = None,
-                 directory: Path = LAUNCH_DAEMONS_DIR, timeout: float = 20.0) -> None:
+                 directory: Path = LAUNCH_DAEMONS_DIR, timeout: float = 20.0, system_install: bool = False) -> None:
         if not _USER_RE.match(user or ""):
             raise ValueError(f"tên user macOS không hợp lệ: {user!r}")
         if user == "root":
@@ -499,9 +502,11 @@ class LaunchDaemonPlan:
         self.user = user
         self.user_home = Path(user_home)
         self.home = Path(home) if home else self.user_home / DEFAULT_HOME_DIRNAME
-        self.program = program or str(self.user_home / ".local" / "bin" / "cfharness")
+        self.system_install = bool(system_install or program == SYSTEM_PROGRAM)
+        self.program = program or (SYSTEM_PROGRAM if self.system_install else str(self.user_home / ".local" / "bin" / "cfharness"))
         self.web_port = int(web_port) if web_port else None
-        self.path_env = path_env or ":".join([str(self.user_home / ".local" / "bin"), "/opt/homebrew/bin", *_SYSTEM_PATH])
+        first = f"{SYSTEM_PREFIX}/bin" if self.system_install else str(self.user_home / ".local" / "bin")
+        self.path_env = path_env or ":".join([first, "/opt/homebrew/bin", *_SYSTEM_PATH])
         self.runner = runner or _default_runner
         self.dir = Path(directory)
         self.timeout = timeout
@@ -547,7 +552,8 @@ class LaunchDaemonPlan:
     # ------------------------------------------------------------------ lệnh
     def commands(self) -> list[str]:
         """Lệnh sudo tương đương `--write` (admin chạy tay; `<plist>` = nội dung in ở trên, lưu ra file tạm)."""
-        out = [f"sudo -u {shlex.quote(self.user)} mkdir -p {shlex.quote(str(self.home / 'logs'))}"]
+        out = self.system_install_commands() if self.system_install else []
+        out += [f"sudo -u {shlex.quote(self.user)} mkdir -p {shlex.quote(str(self.home / 'logs'))}"]
         for k in self.kinds():
             p = str(self.path(k))
             out += [f"sudo install -m 0644 -o root -g wheel ./{self.label(k)}.plist {shlex.quote(p)}",
@@ -555,6 +561,19 @@ class LaunchDaemonPlan:
                     f"sudo launchctl bootstrap system {shlex.quote(p)}",
                     f"sudo launchctl enable system/{self.label(k)}"]
         return out
+
+    @staticmethod
+    def system_install_commands(tag: str | None = None) -> list[str]:
+        """Cài cfharness vào /opt/cfharness (root:wheel, user không ghi được). `cfharness update` của user KHÔNG nâng được bản này —
+        admin nâng bằng chính lệnh dưới (đổi tag)."""
+        from .. import __version__
+        from ..updater import REPO
+
+        ref = tag or f"v{__version__}"
+        p = shlex.quote(SYSTEM_PREFIX)
+        return [f"sudo mkdir -p {p}/tools {p}/bin", f"sudo chown -R root:wheel {p}", f"sudo chmod 755 {p} {p}/tools {p}/bin",
+                f"sudo env UV_TOOL_DIR={p}/tools UV_TOOL_BIN_DIR={p}/bin uv tool install --force 'git+https://github.com/{REPO}@{ref}'",
+                f"ls -l {p}/bin/cfharness   # phải là root:wheel, không ghi được bởi nhóm/khác"]
 
     def uninstall_commands(self) -> list[str]:
         out: list[str] = []

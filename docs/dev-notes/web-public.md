@@ -87,6 +87,37 @@ Mỗi máy chỉ có một tên `*.ts.net` → nhiều user dùng cổng khác n
 **Cần kiểm chứng trên máy thật** (chưa làm trong luồng này): Funnel giữ Host gốc — nếu web trả 421, xem log `logs/web.out`.
 Không đặt `web.client_ip_header cf-connecting-ip` với Funnel (client tự gửi được header này).
 
+## 3b. Thiết bị tin cậy + báo Telegram vào/ra web (kế hoạch: `plan-trusted-device.md`, quyết định §8)
+- Ô "Tin cậy thiết bị này" (mặc định KHÔNG tick) ở form mã TOTP của `/login` và bước kích hoạt của `/enroll` → cookie
+  `__Host-<cookie phiên>_dev` (HttpOnly, Secure, SameSite=Strict, Path=/, Max-Age = hạn còn lại). Cookie thiết bị thay ĐÚNG bước nhập mã:
+  POST `/login device=1` → xoay token → phiên mới bình thường (cookie phiên + `k` mới qua `#k=…&d=1`). Link một lần không cấp cookie thiết bị.
+- SameSite=Strict: mở link từ Telegram/Slack không mang cookie → `app.js` tự POST "tiếp tục bằng thiết bị" MỘT lần trên `/login` nếu trình
+  duyệt đã được tin cậy (dấu `cfh_dev` trong localStorage, đặt khi fragment có `d=1`); vừa đăng xuất trong tab → chỉ hiện nút, không tự vào.
+- CHỈ bật trên host public https. Không bao giờ trên `http://cfharness.localhost` (cookie không tách cổng → dev server agent ở cổng khác
+  nhận cookie → đổi được thành phiên kèm `k` → phá WT-1). `public_origin` có cổng ≠ 443 (Funnel nhiều hub cùng host) → tắt trừ khi
+  `web.trusted_devices.allow_port: true`.
+- `HUB_HOME/auth/trusted_devices.json` (0600, khoá `auth/.devices.lock`): `did`, `sha256(secret)` (+ hash trước + hạn grace), hạn
+  TUYỆT ĐỐI, lần dùng cuối, IP, `ua_label` (nhãn từ danh sách cố định — không lưu UA nguyên văn), `totp_fp`. Symlink/file người khác → rỗng.
+- Cấu hình `web.trusted_devices.{enabled=true, ttl_days=30 (1..90), max_devices=5 (1..20), rotate_grace_s=60 (0..300), allow_port=false}`
+  (nhánh `web` ∈ `SECURITY_KEYS`; đổi → khởi động lại job web). Vượt `max_devices` → loại thiết bị lâu không dùng nhất.
+- Token xoay mỗi lần dùng; token cũ sau grace → THU HỒI thiết bị + `web.device_reuse_detected`. Token sai: KHÔNG cộng vào `LoginLimiter`
+  (256 bit không dò nổi — người thật vào được kể cả khi đang bị khoá do dò mã), xoá cookie, audit `web.device_rejected` (≤ 1 dòng/IP/phút).
+  Đổi họ trình duyệt/OS → chỉ audit `web.device_ua_changed` (không chặn).
+- Thu hồi: `cfharness web devices list [--json] | revoke <id> | revoke-all`; khối "Thiết bị tin cậy" ở Cài đặt (`device_revoke`,
+  `device_revoke_all` — xác nhận + CSRF + `k`); "Đăng xuất và quên thiết bị này" (đăng xuất thường GIỮ thiết bị). `totp disable` /
+  kích hoạt bí mật mới (`confirm`, `enroll --activate`) xoá mọi thiết bị; `totp_fp` lệch là lớp dự phòng. Phiên tạo trên thiết bị bị thu
+  hồi chết ngay ở request kế tiếp (`WebAuth.device_ok` → `DeviceStore.valid`, cache theo mtime — kể cả khi CLI thu hồi từ tiến trình khác).
+- Thông báo: tiến trình web/CLI gọi RPC `web.notify {kind, data, channel}` (∈ `HUMAN_ONLY` — agent không giả được). Daemon chỉ nhận
+  `web.login{method link|totp|device|enroll, trusted}`, `web.logout{forget}`, `web.login_locked{scope}`, `web.device_trusted`,
+  `web.device_reuse_detected`, `web.device_revoked{reason}`, `web.devices_revoked_all{count, reason}`; lọc `data` theo danh sách trắng
+  (`web_events.sanitize`: IP parse lại, nhãn một dòng ≤ 60, id regex, enum) → audit + event cùng tên. Mặc định có trong
+  `notify.telegram.events`; Telegram gửi văn bản thuần, không nút, vào NHÓM chat riêng của hub (nhóm trong allowlist + `allow_groups`);
+  chưa có nhóm → chat riêng. Slack dùng chung định dạng nhưng phải tự thêm loại `web.*` vào `notify.slack.events`.
+- Rủi ro còn lại: cookie thiết bị bị đánh cắp (malware trên máy người dùng) dùng được tới khi xoay — người thật dùng lại sẽ kích hoạt
+  phát hiện dùng lại và thu hồi; nếu kẻ trộm dùng trước rồi người thật không mở web nữa thì chỉ còn Telegram (`web.login` method device
+  + IP lạ) để phát hiện. Máy dùng chung: ô mặc định không tick + cảnh báo. Sandbox tắt: agent ghi được `auth/` (cùng loại rủi ro `web.json`)
+  — classifier coi `trusted_devices.json` là vùng nhạy cảm. Step-up TOTP cho thao tác cực nhạy: ngoài phạm vi.
+
 ## 4. MCP HTTP — KHÔNG public
 `cfharness mcp serve --http` vẫn chỉ bind 127.0.0.1 + bearer token; không thêm Host/Origin public, không đưa qua tunnel. Dùng từ xa: SSH
 tunnel (`ssh -L 8712:127.0.0.1:8712 an@mini`). Lý do: token `control` = toàn quyền người, không có OAuth/giới hạn tốc độ như web.

@@ -92,13 +92,17 @@ def validate_setting(key: str, value: Any) -> None:
             raise ValueError("web.login phải là mapping")
         for k, v in value.items():
             validate_setting(f"web.login.{k}", v)
+    elif key == "web.trusted_devices" or key.startswith("web.trusted_devices."):
+        from .devices import validate_setting as _dev
+
+        _dev(key, value)
     elif key.startswith("web.login."):
         sub = key.split(".", 2)[2]
         if sub not in LOGIN_KEYS:
             raise ValueError(f"khoá lạ {key} (có: {', '.join(LOGIN_KEYS)})")
         _int(key, value, 1, 30 * 86400)
     else:
-        raise ValueError(f"khoá lạ {key} (web.public_origin | session_max_age_s | session_idle_s | client_ip_header | login.*)")
+        raise ValueError(f"khoá lạ {key} (web.public_origin | session_max_age_s | session_idle_s | client_ip_header | login.* | trusted_devices.*)")
 
 
 # ============================================================================ IP thật của client

@@ -70,7 +70,7 @@ in giá trị cũ → mới và hỏi y/N. `/trust … full` và `/profile auton
 | `/reminders on\|off\|once\|<n>` | `config.set notify.reminder_max_count` |
 
 CLI tương ứng: `cfharness guard sandbox dev-host <agent> <host> [--remove]`, `cfharness guard trust <agent> full|off [--for 4h]`,
-`cfharness guard trust list`.
+`cfharness guard trust list`. Web: trang "Quyền đã cấp" `/permissions` xem + gỡ trust/grant/luật luôn cho phép/ngoại lệ sandbox (`web-permissions.md`).
 
 ## Chưa làm
 - Telegram/Slack chưa có các lệnh này (kênh từ xa cần nút xác nhận riêng).

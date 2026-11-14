@@ -320,6 +320,7 @@ Chi tiết, kiểm chứng sandbox thật, việc dở: `docs/dev-notes/web.md`.
 | `web/app.py` | Starlette + Jinja2 + htmx vendored + SSE. `GuardMiddleware` ASGI thuần (không dùng BaseHTTPMiddleware — làm hỏng SSE). Ghi = `POST /do/<action>` (bảng `ACTIONS`) hoặc form agent |
 | `web/present.py` | Thuần: nhãn tiếng Việt, `transcript_item`, `activity_item`, `md()` an toàn |
 | `web/cli.py`, `web/demo.py` | `cfharness web [--port] [--open] [--url]`; hub demo FakeRuntime để chụp ảnh |
+| `web/perm_pages.py` | `/permissions` "Quyền đã cấp": xem + gỡ trust/grant theo luật/luật luôn cho phép/ngoại lệ sandbox, thêm/gỡ tài nguyên bảo vệ (RPC `guard.*` có sẵn, service tự audit kênh web). Thu hẹp quyền = 1 bước; NỚI quyền = `Action.step2` (bước 2 bắt buộc, `plan_action`). Cùng nhánh: sửa lịch + lịch sử lượt `/schedules/{id}`, nút `/lich` Telegram/Slack, `manager.archive\|unarchive` + "Chạy nhịp ngay"/xem nhịp ở `/manager` — `docs/dev-notes/web-permissions.md` |
 | `web/memory_pages.py`, `static/memory_graph.js` | `/memory…`: memory mọi tầng (thêm/sửa/xoá/ghim mục qua `learn.propose`/`knowledge.pin`), graph memory (tìm, fact/thực thể, rollback, ghim, consolidation, đồ thị SVG tự viết). RPC chỉ đọc `learn.graph_view` (`learning/graph_view.py`, HUMAN_ONLY). Chi tiết: `docs/dev-notes/web-memory.md`, test `tests/test_web_memory.py` |
 
 Quy tắc: web là CLIENT thuần (RPC qua `AsyncHubClient(channel="web")`), không đụng `hub.db`. Thao tác ghi mới → thêm vào `ACTIONS`
@@ -335,6 +336,9 @@ Bind VẪN loopback; nhánh config `web` ∈ `integrity.SECURITY_KEYS`, không c
 `systems/autostart.LaunchDaemonPlan` + `cfharness admin install-daemon --user U [--web-port N] [--write]` (∈ `HUB_HUMAN_ONLY_CLI`).
 Secret `CLAUDE_CODE_OAUTH_TOKEN` → env của mọi tiến trình `claude` (`ClaudeCliRuntime(secrets=)`, `child_env(oauth_token=)` — tạo runtime mới phải truyền
 `secrets=hub.secrets`); không bao giờ vào argv/DB/plist. Test: `tests/test_web_public.py`.
+Thiết bị tin cậy (`web/devices.py`, `auth/trusted_devices.json` chỉ hash, cookie `__Host-…_dev`): CHỈ host public https (không bao giờ `cfharness.localhost`),
+hạn tuyệt đối, xoay + phát hiện dùng lại, gắn `totp_fp`; thu hồi = `cfharness web devices …`/Cài đặt (phiên của thiết bị chết ngay qua `WebAuth.device_ok`).
+Vào/ra web + thiết bị → RPC `web.notify` (HUMAN_ONLY, `web_events.py` lọc metadata theo danh sách trắng) → event `web.*` → Telegram nhóm riêng (`security_chats`). Test: `tests/test_web_devices.py`.
 
 ## M7 luồng MGR-UI — Điều phối viên trên web + Telegram + terminal
 Chi tiết, hợp đồng dùng, test chứng minh, việc dở: `docs/dev-notes/M7-ui.md`. Ảnh: `docs/screenshots/web/16-…18-*.png`, `docs/screenshots/m2/10-11-dieu-phoi*.svg`. Không migration, không RPC mới.
@@ -575,12 +579,39 @@ Chi tiết: `docs/dev-notes/update.md`. Không migration. Test: `tests/test_upda
 Bất biến: `update.start` ∈ HUMAN_ONLY (không ở MANAGER_ALLOWED), `cfharness update` ∈ `HUB_HUMAN_ONLY_CLI`; tag chỉ dạng `vX.Y.Z`, repo cố định
 (`updater.REPO`); có run chạy/chờ → từ chối trừ `force`. Helper không được import `cfharness` (venv bị cài đè trong lúc chạy).
 
-## Tổng quan máy (Q6) — mỗi hub xuất trạng thái số liệu, admin xem mọi hub
-Chi tiết, thiết lập nhóm/thư mục, giới hạn: `docs/dev-notes/admin-overview.md`. Không migration. Test: `tests/test_admin_overview.py`.
-- `admin_overview.py`: `hub.admin_export` (tắt mặc định, `admin_export.*` ∈ SECURITY_KEYS) ghi nguyên tử `<dir>/<user-os>.json` 0640 nhóm
-  `cfharness-admin`; RPC `admin.overview` (CHỈ ĐỌC, ∈ HUMAN_ONLY); CLI `cfharness admin overview` (`admin_cli.py`); web `/admin/overview` (`web/admin_pages.py`).
-- Bất biến: nội dung file CHỈ theo `SPEC` (số/bool/regex id-enum) — không bao giờ chữ tự do; thêm trường → `SPEC` + ca trong test. Người đọc coi
-  file là dữ liệu không tin cậy (`O_NOFOLLOW`, trần cỡ, lọc lại `SPEC`, kiểm chủ file). Sandbox agent chặn đọc/ghi `/Users/Shared/cfharness`.
+## Sao lưu / khôi phục HUB_HOME + cập nhật có lưới an toàn — `backup.py`
+Chi tiết, danh sách gồm/bỏ, giới hạn: `docs/dev-notes/backup.md`. Không migration. Test: `tests/test_backup.py`, `tests/test_sec_auth.py::test_backup_*`.
+- `backup.py`: archive `HUB_HOME/backups/<id>.tar.gz` (0600, thư mục 0700) + `<id>.json`; hub.db bằng SQLite online backup API (kết nối chỉ đọc
+  riêng), KHÔNG chép file thô; bỏ `secrets/`, `auth/`, `mcp_server/` (không mã hoá). `hub.backups` (vòng nền `backup.schedule`, mặc định
+  `daily 03:30`, giữ `backup.keep`), RPC `backup.list|create|verify|restore_plan`, CLI `backup create|list|verify|restore` (`backup_cli.py`),
+  thẻ "Sao lưu" ở Cài đặt (`web/backup_pages.py`, ACTIONS `backup_create`).
+- Bất biến: khôi phục KHÔNG có RPC — chỉ CLI của người, daemon dừng (giữ `daemon.lock`), xác nhận 2 bước, chụp `pre-restore` trước, ghi lại
+  `integrity_baseline` sau (`rebaseline_offline`). `backup.create|verify|restore_plan`, `update.rollback` ∈ HUMAN_ONLY; `backup` ∈ HUB_HUMAN_ONLY_CLI;
+  sandbox denyRead/denyWrite `backups/`. Thêm thư mục cấp 1 mới vào HUB_HOME → quyết định rõ thuộc `INCLUDE_DIRS` hay `EXCLUDED`.
+- Cập nhật: `update.start` tạo bản `pre-update` trước khi chạy helper; helper (chỉ stdlib) dò `hub.ping`, không lên → cài lại bản cũ + khôi phục hub.db
+  khi `user_version` đã tăng; `cfharness update --rollback` (RPC `update.rollback`). Pha mới của helper mà daemon phải chờ → `daemon._UPDATE_BUSY_PHASES`.
+
+## Tổng quan máy (Q6) + quản trị user trên cùng máy — mỗi hub xuất số liệu, admin xem/cảnh báo/ESTOP/chính sách
+Chi tiết: `docs/dev-notes/admin-overview.md` (Q6 + RUNBOOK nhóm/thư mục), `docs/dev-notes/admin-users.md` (plan-admin-users P1+P2: bất biến,
+lệch kế hoạch, việc dở). Migration **v26** (`admin_samples`). Test: `tests/test_admin_overview.py`, `tests/test_admin_{control,policy,watch,users,audit}.py`,
+`tests/test_web_admin.py`.
+
+| Module | Vai trò |
+|---|---|
+| `admin_overview.py` | `hub.admin_export` (tắt mặc định, `admin_export.*` ∈ SECURITY_KEYS; `require.export` của chính sách ép bật) ghi nguyên tử `status/<u>/<hub_id>.json` (thư mục root cấp; chưa có → file phẳng cũ `<u>.json`) 0640; SPEC **schema 2** (bộ đọc nhận 1 và 2, cả hai bố cục); RPC `admin.overview` |
+| `admin_control.py` | Nhóm `cfharness-admin` (quản trị) / `cfharness-users` (người dùng), `is_admin()`; ESTOP admin = file cờ `control/estop[.<u>]` (có mặt = bật kể cả hỏng; chỉ `reason_code` enum), `hub.admin_control` kiểm 5 s + trước submit, `RunManager.estop` gộp (user `estop off` không gỡ được), event `hub.admin_estop`; admin-log |
+| `admin_policy.py` | `policy/{_machine,_default,<u>}.json` root-owned → lấy giá trị CHẶT HƠN (scope ngân sách `admin`, trần mỗi run, đồng thời, `require.*`, `min_version`, `models.allow`); hỏng = fail-open + cảnh báo, fail-closed khi `_machine.json` có `policy_required` |
+| `admin_watch.py` | `hub.admin_watch` (chỉ daemon thuộc `cfharness-admin`): event `admin.alert{user, hub_id, code, state on|resolved}` (chống trùng, báo hồi phục, qua notifier Telegram/Slack sẵn có) + lịch sử `admin_samples` (90 ngày) |
+| `admin_users.py`, `admin_audit.py`, `admin_rpc.py`, `admin_cli.py` | `admin users list|show|add|revoke` (add/revoke mặc định in lệnh, `--write` cần root), `setup check`; audit METADATA `audit/<u>/<ngày>.jsonl` (30 ngày); RPC `admin.*`; CLI `cfharness admin …` |
+| `web/admin_pages.py` | `/admin/overview|users|users/<u>|alerts|audit` (admin; biểu đồ SVG trong template) + `/machine` "Quản trị máy" (phía user, chỉ đọc); ghi duy nhất = ESTOP admin (`admin_estop_on|off`, xác nhận) |
+
+Bất biến: nội dung file/dòng/cờ/cảnh báo CHỈ theo danh sách trắng (`SPEC`, `AUDIT_SPEC`, `ADMIN_LOG_SPEC`, `POLICY_SPEC`, `REASON_CODES`,
+`ALERT_CODES`) — không bao giờ chữ tự do (hai chiều); thêm trường → spec + ca trong test. Người đọc coi file là dữ liệu không tin cậy
+(`O_NOFOLLOW`, trần cỡ, lọc lại, kiểm chủ file; chính sách phải chủ uid 0 + không ghi được bởi nhóm/khác). Đường dẫn `control/`, `policy/`,
+`admin-log/` là HẰNG SỐ (`admin_control.SHARED_ROOT`; chỉ test đổi qua `CFHARNESS_TEST_SHARED_ROOT`). Mọi RPC `admin.*` ∈ HUMAN_ONLY, không ở
+MANAGER_ALLOWED (phía admin còn `require_admin`); `cfharness admin` ∈ `HUB_HUMAN_ONLY_CLI`; `admin_watch.*` ∈ SECURITY_KEYS. Agent không đọc/ghi
+`/Users/Shared/cfharness`: sandbox + `permissions.deny` Read/Grep/Glob/Edit/Write (mọi hub, kể cả trust_full) + classifier `admin_shared` (forbidden).
+Thay đổi `runs.py` gói trong `_admin_gate`/`_admin_policy()` (một dòng gọi ở mỗi chỗ). Test giả nhóm bằng fixture `as_admin` (mặc định không thuộc nhóm).
 
 ## Giam agent trong workspace W — `workspace.confine` (P2 đa instance)
 Chi tiết, spike (claude 2.1.319: `allowRead` trong `denyRead` hoạt động, glob không mở lại), giới hạn: `docs/dev-notes/confine.md`,

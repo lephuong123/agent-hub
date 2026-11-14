@@ -518,3 +518,39 @@ def test_mgr_target_links_only_internal_and_safe():
     m = P.mgr_message({"role": "assistant", "content": "hi", "run_id": "r1"})
     assert m["kind"] == "manager" and m["text"] == "hi"
     assert P.mgr_message({"role": "system", "text": "x"}) is None
+    s = P.mgr_message({"role": "schedule", "text": "⏰ Lịch 'Sáng' (hằng ngày 08:00) chạy.", "run_id": "r2"})
+    assert s["kind"] == "note" and s["schedule"] and s["run_id"] == "r2"
+
+
+# =========================================================================== #7: chạy nhịp ngay, tin lịch (lưu trữ: conv_archive + test_manager_archive.py)
+async def _replied(e, conv: str) -> None:
+    for _ in range(200):
+        h = await mgr_rpc(e, "manager.history", {"conversation_id": conv, "limit": 50})
+        if any(m["role"] == "manager" for m in h):
+            runs = [e.hub.store.get_run(m["run_id"]) for m in h if m.get("run_id")]
+            if all(r and r["status"] not in ("queued", "running") for r in runs):
+                return
+        await asyncio.sleep(0.05)
+    raise AssertionError("điều phối viên chưa trả lời")
+
+
+async def test_tick_now_from_web(menv):
+    await menv.login()
+    await designate(menv)
+    r = await menv.client.get("/manager")
+    assert "/do/manager_tick" in r.text and "Chạy nhịp ngay" in r.text
+    r = await menv.post("/do/manager_tick", {"next": "/manager"})
+    assert r.status_code == 200 and "Chạy một nhịp" in r.text  # xác nhận trước (tốn tiền)
+    r = await menv.post("/do/manager_tick", {"next": "/manager", "confirm": "yes"})
+    assert r.status_code == 303 and r.headers["location"].startswith("/manager?c=mc_")
+    assert audit_rows(menv, "manager.tick")[-1]["channel"] == "web"
+
+
+async def test_schedule_message_shown_in_conversation(menv):
+    await menv.login()
+    await designate(menv)
+    conv = (await send(menv, "xin chào"))["conversation_id"]
+    await _replied(menv, conv)
+    menv.hub.manager._add_msg(conv, "schedule", "⏰ Lịch 'Nhắc <b>uống nước</b>' (mỗi 15 phút) chạy.", None)
+    r = await menv.client.get(f"/manager?c={conv}")
+    assert 'class="mm-note info"' in r.text and "Nhắc &lt;b&gt;uống nước&lt;/b&gt;" in r.text

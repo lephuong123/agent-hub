@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Cảnh báo máy{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Cảnh báo máy</h1><span class="muted">Đánh giá lần cuối {{ m.rel(r.last_tick) }} · gửi qua Telegram/Slack của hub này</span></div>
+<p class="row gap"><a class="btn ghost sm" href="/admin/users">← Người dùng máy</a></p>
+<section class="card">
+  <h2>Đang mở ({{ r.active|length }})</h2>
+  {% if not r.active %}<p class="muted">Không có.</p>{% else %}
+  <table class="tbl"><thead><tr><th>User</th><th>Hub</th><th>Cảnh báo</th><th>Từ</th></tr></thead><tbody>
+  {% for a in r.active %}<tr><td><a href="/admin/users/{{ a.user }}"><code>{{ a.user }}</code></a></td><td><code>{{ a.hub_id or "—" }}</code></td><td>{{ alert_vi.get(a.code, a.code) }}</td><td>{{ m.rel(a.since) }}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+<section class="card">
+  <h2>Gần đây</h2>
+  {% if not r.recent %}<p class="muted">Chưa có.</p>{% else %}
+  <table class="tbl"><thead><tr><th>Lúc</th><th>User</th><th>Hub</th><th>Cảnh báo</th><th></th></tr></thead><tbody>
+  {% for x in r.recent %}<tr><td>{{ m.rel(x.ts) }}</td><td><code>{{ x.user }}</code></td><td><code>{{ x.hub_id or "—" }}</code></td><td>{{ alert_vi.get(x.code, x.code) }}</td>
+    <td>{% if x.state == "resolved" %}<span class="pill ok">hồi phục</span>{% else %}<span class="pill warn">bật</span>{% endif %}</td></tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+{% endblock %}

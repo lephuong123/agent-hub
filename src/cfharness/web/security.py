@@ -32,7 +32,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..oscompat import owned_by_me, pid_alive
 from ..paths import HubPaths
@@ -130,6 +130,7 @@ class Session:
     key: str = ""  # bí mật NGOÀI cookie, không bao giờ nằm trong HTML (WT-1)
     flashes: list[tuple[str, str]] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)  # trạng thái UI ngắn hạn theo phiên (vd mã ghép nối Slack vừa tạo) — chỉ RAM
+    device_id: str = ""  # phiên tạo trên thiết bị tin cậy (web/devices.py) — thiết bị bị thu hồi → phiên chết ngay (`WebAuth.device_ok`)
 
     def flash(self, kind: str, text: str) -> None:
         self.flashes.append((kind, text))
@@ -149,6 +150,8 @@ class WebAuth:
         self.max_s = int(max_s)
         self.sessions: dict[str, Session] = {}
         self._used: dict[str, int] = {}
+        # thiết bị tin cậy còn hiệu lực? (`DeviceStore.valid`, cache theo mtime) — None = không kiểm (tính năng tắt)
+        self.device_ok: Callable[[str], bool] | None = None
 
     def mint(self) -> str:
         return mint_login_token(self.key)
@@ -167,9 +170,10 @@ class WebAuth:
         self._used[nonce] = exp
         return self.new_session(now)
 
-    def new_session(self, now: float | None = None) -> Session:
+    def new_session(self, now: float | None = None, *, device_id: str = "") -> Session:
         now = now or time.time()
-        s = Session(sid=secrets.token_urlsafe(32), csrf=secrets.token_urlsafe(24), created=now, last=now, key=secrets.token_urlsafe(32))
+        s = Session(sid=secrets.token_urlsafe(32), csrf=secrets.token_urlsafe(24), created=now, last=now, key=secrets.token_urlsafe(32),
+                    device_id=device_id)
         self.sessions[s.sid] = s
         return s
 
@@ -183,6 +187,9 @@ class WebAuth:
         if now - s.last > min(self.idle_s, self.max_s) or now - s.created > self.max_s:
             self.sessions.pop(sid, None)
             return None
+        if s.device_id and (self.device_ok is None or not self.device_ok(s.device_id)):
+            self.sessions.pop(sid, None)  # thiết bị đã bị thu hồi / hết hạn / TOTP đổi → phiên của nó chết ngay
+            return None
         if touch:
             s.last = now
         return s
@@ -190,6 +197,13 @@ class WebAuth:
     def logout(self, sid: str | None) -> None:
         if sid:
             self.sessions.pop(sid, None)
+
+    def drop_device(self, did: str) -> int:
+        """Huỷ mọi phiên tạo trên thiết bị `did` (thu hồi ngay trong tiến trình web, không chờ request sau)."""
+        dead = [k for k, s in self.sessions.items() if s.device_id and s.device_id == did]
+        for k in dead:
+            self.sessions.pop(k, None)
+        return len(dead)
 
     @staticmethod
     def key_ok(session: Session, given: Any) -> bool:

@@ -7,6 +7,8 @@
   subtype: str            — "success" | "error_during_execution" | "error_max_budget_usd" …
   error_text: str         — text lỗi (vd "rate limit exceeded")
   crash: bool             — không phát `result` (tiến trình chết)
+  stream_usage: dict      — phát stream_event message_start/message_delta với usage này ({input, output}) trước result/crash
+                            (adapter ước lượng chi phí — cost-guardrails: run crashed vẫn có cost_usd ước lượng)
   hold: bool              — giữ trước dòng result tới khi `release(run_id)`
   files: {rel: str|None}  — ghi/xoá file trong cwd của run lúc start (mô phỏng agent sửa repo)
   rate_limit: dict        — phát rate_limit_event với rate_limit_info này
@@ -57,6 +59,11 @@ class ScriptedRuntime(FakeRuntime):
              "plugins": [], "memory_paths": None, "claude_code_version": "2.1.302"},
             {"type": "assistant", "session_id": sid, "message": {"id": "m1", "content": [{"type": "text", "text": b.get("text", "done")}]}},
         ]
+        if b.get("stream_usage"):
+            u = b["stream_usage"]
+            out.append({"type": "stream_event", "session_id": sid, "event": {"type": "message_start", "message": {
+                "model": "claude-sonnet-5", "usage": {"input_tokens": int(u.get("input", 0)), "output_tokens": 0}}}})
+            out.append({"type": "stream_event", "session_id": sid, "event": {"type": "message_delta", "usage": {"output_tokens": int(u.get("output", 0))}}})
         if b.get("rate_limit"):
             out.append({"type": "rate_limit_event", "session_id": sid, "rate_limit_info": b["rate_limit"]})
         if not b.get("crash"):

@@ -31,6 +31,10 @@ log = logging.getLogger("cfharness.notify")
 def format_message(ev: HubEvent) -> str | None:
     """Tin ngắn cho người đọc nhanh: AI — CẦN GÌ — LÀM GÌ. Không id run/luật; lệnh CLI chỉ khi đó là cách duy nhất để xử lý
     (kênh một chiều: webhook Slack). Telegram dùng lại qua `to_plain` (bỏ `*`, `` ` ``)."""
+    if ev.type.startswith("web."):  # vào/ra web + thiết bị tin cậy — chỉ metadata đã lọc (web_events.py)
+        from ..web_events import format_text as _web_text
+
+        return _web_text(ev)
     p = ev.payload or {}
     agent = ev.agent_id or "agent"
     rid = p.get("request_id")
@@ -59,10 +63,40 @@ def format_message(ev: HubEvent) -> str | None:
         done = "đã khôi phục bản chuẩn" if (p.get("restored") or p.get("moved")) else "cần bạn kiểm tra"
         return (f"🚨 `{what}` bị sửa ngoài hub — {done}: `{_clip(', '.join(str(f) for f in files if f) or str(p), 300)}`\n"
                 "Nếu chính bạn sửa: `cfharness guard integrity accept`")
+    if ev.type == "admin.alert":  # quản trị máy (admin_watch.py): payload chỉ id/enum — lọc lại trước khi in
+        from ..admin_overview import USER_RE
+        from ..admin_watch import ALERT_VI
+
+        code = p.get("code") if p.get("code") in ALERT_VI else None
+        user = p.get("user") if isinstance(p.get("user"), str) and USER_RE.match(p["user"]) else "?"
+        if code is None:
+            return None
+        hub = f" (hub {str(p.get('hub_id'))[:16]})" if isinstance(p.get("hub_id"), str) and p["hub_id"].isalnum() else ""
+        if p.get("state") == "resolved":
+            return f"✅ Quản trị máy — *{user}*{hub}: đã hết cảnh báo «{ALERT_VI[code]}»"
+        return f"🛎 Quản trị máy — *{user}*{hub}: {ALERT_VI[code]}\nXem: `cfharness admin users show {user}`"
+    if ev.type == "hub.admin_estop":
+        from ..admin_control import REASON_CODES
+
+        rc = p.get("reason_code") if p.get("reason_code") in REASON_CODES else "unknown"
+        if p.get("on"):
+            return f"🛑 Người quản trị máy đã BẬT ESTOP cho hub của bạn (mã: {rc}) — run mới bị chặn, run đang chạy đã dừng."
+        return "▶️ Người quản trị máy đã gỡ ESTOP — hub chạy lại bình thường."
     if ev.type == "auth.denied":
         return f"⛔ Đã chặn *{agent}* dùng `{p.get('method')}` — thao tác này chỉ người được làm."
     if ev.type == "run.repeated_failure":
         return f"❌ *{agent}* lỗi {p.get('count')} lần liên tiếp: {_clip(p.get('error'), 200)}"
+    # cost-guardrails: cảnh báo/vượt ngân sách ngày — phát một lần/ngày/scope (runs._budget_warn, cost_guard.flag_once)
+    if ev.type in ("budget.warning", "budget.exceeded"):
+        scope = {"hub": "toàn hub", "team": "team", "agent": "agent", "manager": "điều phối viên"}.get(str(p.get("scope")), str(p.get("scope")))
+        owner = "" if p.get("scope") == "hub" else f" *{_clip(p.get('owner'), 60)}*"
+        try:
+            used, lim = float(p.get("used") or 0), float(p.get("limit") or 0)
+        except (TypeError, ValueError):
+            used, lim = 0.0, 0.0
+        if ev.type == "budget.warning":
+            return f"💰 {scope}{owner} đã dùng ${used:.2f}/${lim:.2f} ngân sách hôm nay ({p.get('pct')}%)."
+        return f"💸 {scope}{owner} đã hết ngân sách hôm nay (${used:.2f}/${lim:.2f}) — run mới bị chặn tới ngày mai; việc đang chờ duyệt vẫn giữ."
     if ev.type == "learning.rolled_back":
         return f"↩️ Đã hoàn tác một thay đổi tự học của *{agent}*: {_clip(p.get('reason'), 200)}"
     # M4-B: digest hằng ngày (FR-LN-13) — nội dung do learning_ops/digest.py dựng (đã tóm tắt, không chứa dữ liệu MCP)

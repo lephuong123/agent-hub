@@ -317,3 +317,18 @@ async def test_allowed_changes_still_work(env):
     await tool(d, rid, "agent_archive", {"id": "w1"})
     await tool(d, rid, "agent_restore", {"id": "w1"})
     assert d.hub.store.get_agent("w1")["archived_at"] is None
+
+
+# ------------------------------------------------------------------ RPC ghi của web "Quyền đã cấp" / lịch / hội thoại (#3 #5 #7)
+async def test_manager_cannot_manage_grants_conversations_or_edit_schedules(env):
+    """Gỡ/đặt quyền đã cấp, lưu trữ hội thoại, sửa lịch: chỉ người — điều phối viên bị chặn ở lớp 2 (ngoài MANAGER_ALLOWED)."""
+    d, rid = env
+    d.hub.guard.rule_grant_set("w1", "delete_not_run_created")
+    d.hub.guard.trust_set("w1", "full")
+    for m, p in (("guard.grant.rm", {"id": "w1", "rule": "delete_not_run_created"}), ("guard.grant.set", {"id": "w1", "rule": "x"}),
+                 ("guard.trust.set", {"id": "w1", "mode": "off"}), ("guard.sandbox.allow_domain", {"id": "w1", "domain": "x.com", "remove": True}),
+                 ("guard.sandbox.dev_host", {"id": "w1", "host": "dev.local", "remove": True}),
+                 ("manager.archive", {"conversation_id": "mc_x"}), ("manager.unarchive", {"conversation_id": "mc_x"}),
+                 ("schedule.update", {"id": "sc_x", "deliver_to": None})):
+        await _deny_rpc(d, rid, m, p)
+    assert d.hub.guard.rule_grants().get("w1") and d.hub.guard.trust_of("w1")

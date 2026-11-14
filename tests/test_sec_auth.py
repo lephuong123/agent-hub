@@ -346,7 +346,10 @@ async def test_socket_caller_without_token_denied_even_if_not_in_run(home):
 
 def test_human_only_covers_sensitive_surface():
     for m in ("approval.approve", "approval.deny", "guard.protect.add", "guard.protect.rm", "config.set", "learn.propose", "learn.rollback",
-              "learn.retry", "learn.refine", "agent.update", "golden.add", "golden.rm", "learn.policy_set", "secret.set", "mcp.add", "estop.set"):
+              "learn.retry", "learn.refine", "agent.update", "golden.add", "golden.rm", "learn.policy_set", "secret.set", "mcp.add", "estop.set",
+              # web "Quyền đã cấp" / lịch / hội thoại điều phối viên (#3 #5 #7)
+              "guard.grant.rm", "guard.trust.set", "guard.sandbox.allow_domain", "guard.sandbox.dev_host", "schedule.update",
+              "manager.archive", "manager.unarchive", "manager.tick"):
         assert m in auth.HUMAN_ONLY, m
     assert "guard.check" not in auth.HUMAN_ONLY and "taskself.call" not in auth.HUMAN_ONLY  # hook/hub-self không bị chặn
 
@@ -369,3 +372,58 @@ async def test_second_daemon_does_not_overwrite_human_token(home):
     finally:
         await _stop(d, srv)
 
+
+async def test_backup_restore_and_update_rollback_human_only(home, monkeypatch):
+    """Sao lưu/khôi phục + quay về bản cập nhật (backup.py, updater.py): agent trong run — kể cả đọc trộm token người — bị từ chối;
+    CLI `backup …`/`update --rollback` bị classifier chặn thẳng; khôi phục ngoại tuyến từ chối trong run."""
+    from cfharness import backup as B
+    from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI
+
+    for m in ("backup.create", "backup.verify", "backup.restore_plan", "update.rollback"):
+        assert m in auth.HUMAN_ONLY, m
+    assert HUB_HUMAN_ONLY_CLI["backup"] is None and HUB_HUMAN_ONLY_CLI["update"] is None
+    d, srv = await _start(home)
+    try:
+        for m, prm in (("backup.create", {}), ("backup.restore_plan", {"id": "20260101T000000-manual"}), ("update.rollback", {})):
+            run_n, proc_n, go_n = await _start_run(d)
+            rr = await _in_run(go_n, _client_py(home, m, prm, steal_token=True))
+            resp = json.loads(rr["out"].strip().splitlines()[-1])
+            assert resp.get("error", {}).get("code") == -32003, (m, resp)
+            proc_n.wait(5)
+        assert not B.list_backups(home) and not (home.home / "update" / "state.json").exists()
+        r = await asyncio.to_thread(RpcClient(home.socket).call, "backup.create", {})  # người (client có token) tạo được
+        assert r["id"] and B.list_backups(home)
+    finally:
+        await _stop(d, srv)
+    monkeypatch.setenv(auth.ENV_RUN_ID, "r_agent")
+    with pytest.raises(Exception, match="chỉ người"):
+        B.restore(home, r["id"])
+
+
+def test_admin_methods_human_only_not_manager():
+    """plan-admin-users: mọi RPC admin.* ∈ HUMAN_ONLY, KHÔNG ∈ MANAGER_ALLOWED; method ghi admin.estop_set đã phân loại + bọc audit."""
+    from cfharness.admin_rpc import MUTATING_ADMIN, READ_ADMIN
+
+    for m in (*READ_ADMIN, *MUTATING_ADMIN):
+        assert m in auth.HUMAN_ONLY, m
+        assert m not in auth.MANAGER_ALLOWED, m
+    assert set(MUTATING_ADMIN) <= auth.all_mutating()
+
+
+def test_admin_shared_permission_deny_every_hub(tmp_path):
+    """Tool Read/Grep/Glob/Edit/Write không qua sandbox Bash → permissions.deny riêng cho thư mục chung, kể cả agent trust_full."""
+    import sys
+
+    if sys.platform == "win32":
+        pytest.skip("macOS/Linux")
+    from cfharness.admin_overview import SHARED_ROOT
+    from cfharness.guard.runtime import build_settings
+
+    home = tmp_path / "hub"
+    (home / "policy").mkdir(parents=True)
+    for trust in (False, True):
+        s = build_settings({}, run_id="r1", socket=tmp_path / "hub.sock", policy_dir=home / "policy", guard_cfg={"enabled": True},
+                           approval_timeout_s=60, cwd=tmp_path, trust_full=trust)
+        deny = s["permissions"]["deny"]
+        for t in ("Read", "Grep", "Glob", "Edit", "Write"):
+            assert f"{t}(/{SHARED_ROOT}/**)" in deny, (trust, t)  # "//abs" = đường dẫn tuyệt đối trong luật Claude Code

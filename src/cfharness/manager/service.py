@@ -383,6 +383,23 @@ class ManagerService:
         live = self._live_by_conv()
         return [self._conv_out(dict(r), live) for r in self.conn.execute(sql, args)]
 
+    def archive(self, cid: str, *, on: bool = True) -> dict[str, Any]:
+        """Lưu trữ (xoá mềm) / khôi phục một hội thoại: chỉ đặt/xoá `archived_at`. Tin nhắn, run, audit giữ nguyên; hội thoại đã lưu trữ
+        biến khỏi danh sách và không được "dùng lại gần nhất" (Telegram/CLI mở cuộc mới). Hội thoại đang có run chạy → Conflict.
+        Nhắn thẳng vào hội thoại đã lưu trữ (`manager.chat{conversation_id}`) tự khôi phục nó. Chỉ người (HUMAN_ONLY + cổng service)."""
+        _auth.require_human("lưu trữ hội thoại điều phối viên")
+        c = self._conv_row(str(cid))
+        if on:
+            if c.get("archived_at"):
+                return self._conv_out(c)
+            busy = self._active_runs(c["agent_id"], c["id"])
+            if busy:
+                raise Conflict(f"hội thoại {c['id']} đang có run chạy ({busy[0]['id']}) — chờ xong hoặc dừng run rồi lưu trữ")
+            self.conn.execute("UPDATE manager_conversations SET archived_at=? WHERE id=?", (now_iso(), c["id"]))
+        elif c.get("archived_at"):
+            self.conn.execute("UPDATE manager_conversations SET archived_at=NULL WHERE id=?", (c["id"],))
+        return self._conv_out(self._conv_row(c["id"]))
+
     def history(self, cid: str, limit: int = 100) -> list[dict[str, Any]]:
         self._conv_row(cid)
         rows = self.conn.execute("SELECT * FROM (SELECT * FROM manager_messages WHERE conversation_id=? ORDER BY id DESC LIMIT ?) ORDER BY id",
@@ -612,6 +629,9 @@ class ManagerService:
             if conv["agent_id"] != aid:
                 # MGR-11: đã đổi điều phối viên → chuyển sang hội thoại của manager mới trên cùng kênh (UI dùng conversation_id trả về)
                 switched_from, conv, reuse_latest = conversation_id, None, True
+            elif conv.get("archived_at"):  # người nhắn tiếp vào hội thoại đã lưu trữ → khôi phục (không mất tin của người)
+                self.conn.execute("UPDATE manager_conversations SET archived_at=NULL WHERE id=?", (conv["id"],))
+                conv["archived_at"] = None
         if conv is None and reuse_latest:
             sql = "SELECT id FROM manager_conversations WHERE channel=? AND agent_id=? AND archived_at IS NULL"
             args: list[Any] = [channel, aid]

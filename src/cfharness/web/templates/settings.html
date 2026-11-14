@@ -4,11 +4,13 @@
 {% block content %}
 <div class="page-head"><div class="ph-title"><h1>Cài đặt</h1><span class="sub">Dừng khẩn cấp, thông báo, secret và giới hạn của hub.</span></div></div>
 <div id="update" hx-get="/partials/update" hx-trigger="load" hx-swap="outerHTML"></div>
+<div id="backup" hx-get="/partials/backup" hx-trigger="load" hx-swap="outerHTML"></div>
 <section class="card {{ 'attention' if estop.on }}" id="estop">
   <h2>{{ m.icon('power') }} Dừng khẩn cấp (ESTOP)</h2>
   {% if estop.on %}
     <p><span class="pill danger strong">{{ m.icon('stop') }}ĐANG BẬT</span> {% if estop.reason %}— {{ estop.reason }}{% endif %} Không run mới nào được chạy.</p>
-    {{ m.act("estop", "Tắt ESTOP", {"on": "0"}, "btn primary", confirm="Tắt ESTOP — cho phép agent chạy lại?") }}
+    {% if estop.admin %}<p class="muted">ESTOP do người quản trị máy bật (xem <a href="/machine">Quản trị máy</a>) — bạn không gỡ được từ đây.</p>{% endif %}
+    {% if not estop.admin or estop.own_on %}{{ m.act("estop", "Tắt ESTOP", {"on": "0"}, "btn primary", confirm="Tắt ESTOP — cho phép agent chạy lại?") }}{% endif %}
   {% else %}
     <p class="muted">Bấm khi cần dừng toàn bộ hub ngay (agent làm sai, chi phí tăng bất thường…).</p>
     <div class="row gap wrap-row">
@@ -168,6 +170,32 @@
       <div class="row end"><button class="btn" type="submit">Kiểm tra + kết nối</button></div>
     </form>
   </details>
+  {% endif %}
+</section>
+<section class="card" id="devices">
+  <h2>{{ m.icon('shield') }} Thiết bị tin cậy</h2>
+  {% if not trusted.enabled %}
+  <p class="muted small">Chỉ dùng khi web mở qua Internet (<code>web.public_origin</code>, https) và đăng nhập bằng mã TOTP. Tắt/bật: <code>cfharness config set web.trusted_devices.enabled true|false</code>.</p>
+  {% else %}
+  <p class="muted small">Trình duyệt đã chọn "Tin cậy thiết bị này" lúc nhập mã TOTP đăng nhập lại không cần mã trong {{ trusted.ttl_days }} ngày (hạn cố định, tối đa {{ trusted.max }} thiết bị).
+    Tắt TOTP hoặc đăng ký lại TOTP thu hồi tất cả. Terminal: <code>cfharness web devices list|revoke &lt;id&gt;|revoke-all</code>.</p>
+  {% if trusted.rows %}
+  <table class="tbl stack"><thead><tr><th>Thiết bị</th><th>Dùng lần cuối</th><th>IP</th><th>Hết hạn</th><th></th></tr></thead><tbody>
+  {% for r in trusted.rows %}<tr>
+    <td data-label="Thiết bị"><b>{{ r.ua_label }}</b>{% if r.current %} <span class="pill ok">thiết bị này</span>{% endif %}<div class="muted small"><code>{{ r.did }}</code> · tin cậy từ {{ r.created }}</div></td>
+    <td data-label="Dùng lần cuối">{{ r.used }}</td><td data-label="IP"><code>{{ r.last_ip }}</code></td><td data-label="Hết hạn">{{ r.expires }}</td>
+    <td data-label="">{{ m.act("device_revoke", "Thu hồi", {"did": r.did}, "btn danger sm", confirm="Thu hồi thiết bị " ~ r.did ~ "?", next="/settings#devices") }}</td>
+  </tr>{% endfor %}
+  </tbody></table>
+  <div class="row gap wrap-row">
+    {{ m.act("device_revoke_all", "Thu hồi tất cả", {}, "btn danger", confirm="Thu hồi MỌI thiết bị tin cậy?", next="/settings#devices") }}
+    {% if trusted.rows|selectattr("current")|list %}
+    <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="forget" value="1"><button class="btn ghost" type="submit">{{ m.icon('logout') }}<span>Đăng xuất và quên thiết bị này</span></button></form>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="muted">Chưa có thiết bị nào được tin cậy.</p>
+  {% endif %}
   {% endif %}
 </section>
 <div id="health-slot" hx-get="/partials/health" hx-trigger="load" hx-swap="outerHTML"></div>

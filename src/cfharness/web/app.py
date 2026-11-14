@@ -41,6 +41,7 @@ from . import present as P
 from . import settings_schema as _settings
 from .public import LoginLimiter, client_ip, public_hosts
 from .security import KEY_FIELD, KEY_HEADER, WEB_HOST, Session, WebAuth, allowed_hosts, cookie_name, is_loopback
+from .devices import DeviceStore
 from .totp import TotpStore
 
 log = logging.getLogger("cfharness.web")
@@ -132,10 +133,26 @@ class WebState:
     ip_header: str = "x-forwarded-for"
     limiter: LoginLimiter = field(default_factory=LoginLimiter)
     totp: TotpStore | None = None
+    devices: DeviceStore | None = None  # "Tin cậy thiết bị này" (web/devices.py) — chỉ dùng trên host public https
+    _dev_rejects: dict[str, float] = field(default_factory=dict)  # giới hạn ghi audit `web.device_rejected` theo IP
 
     @property
     def public_hosts(self) -> set[str]:
         return public_hosts(self.public_origin)
+
+    @property
+    def dev_cookie(self) -> str:
+        """`__Host-` = trình duyệt chỉ nhận khi Secure + Path=/ + không Domain (không bị subdomain/http ghi đè)."""
+        return f"__Host-{self.cookie}_dev"
+
+    def devices_on(self, host: str, *, need_totp: bool = True) -> bool:
+        """Thiết bị tin cậy CHỈ trên host public https (không bao giờ trên cfharness.localhost — cookie không tách cổng, WT-1);
+        public_origin có cổng ≠ 443 (nhiều hub cùng host) → tắt trừ khi người bật `web.trusted_devices.allow_port`."""
+        d = self.devices
+        if d is None or not d.cfg["enabled"] or not self.is_public(host) or (need_totp and not (self.totp and self.totp.enrolled())):
+            return False
+        port = urlsplit(self.public_origin or "").port
+        return port in (None, 443) or bool(d.cfg["allow_port"])
 
     @property
     def cookie(self) -> str:
@@ -333,11 +350,12 @@ async def render(request: Request, name: str, ctx: dict[str, Any] | None = None,
             pend = await rpc(request, "approval.list", {"limit": 500})
             es = await rpc(request, "estop.get")
             badge = {"approvals": len(pend or []), "waiting_human": sum(1 for a in pend or [] if a.get("status") == "waiting_human"),
-                     "estop": bool((es or {}).get("on")), "questions": len(await questions(request, "open"))}
+                     "estop": bool((es or {}).get("on")), "admin_estop": bool((es or {}).get("admin")),
+                     "questions": len(await questions(request, "open"))}
         except (RpcError, DaemonUnavailable, OSError):
             badge = {"down": True}
         if not badge.get("down"):
-            badge["admin"] = await _admin_pages.nav_available(request)
+            badge.update(await _admin_pages.nav_badges(request))
     base = {"csrf": sess.csrf if sess else "", "flashes": sess.pop_flashes() if sess else [], "badge": badge, "nav": "", "htmx": HTMX,
             "path": request.url.path}
     return st.templates.TemplateResponse(request, name, {**base, **(ctx or {})}, status_code=status)
@@ -359,13 +377,24 @@ def _token_from(v: str) -> str:
     return v
 
 
-def _login_ok(request: Request, sess: Session) -> Response:
+def _login_ok(request: Request, sess: Session, *, device: tuple[str, float] | None = None) -> Response:
+    """`device` = (token thiết bị, hạn tuyệt đối) → đặt cookie `__Host-…_dev`; fragment thêm `d=1` để app.js nhớ "trình duyệt này
+    có thiết bị tin cậy" (tự đăng nhập lần sau — cookie HttpOnly nên JS không tự biết)."""
+    import time as _t
+
     # khoá phiên đi trong FRAGMENT (không gửi lên server, không vào log/Referer); app.js lưu vào localStorage rồi xoá khỏi URL
-    resp = RedirectResponse(f"/#{KEY_FIELD}={sess.key}", status_code=303)
+    resp = RedirectResponse(f"/#{KEY_FIELD}={sess.key}" + ("&d=1" if device or sess.device_id else ""), status_code=303)
     # web public (tunnel TLS): cookie `Secure` — chỉ gửi qua https; host cục bộ http://cfharness.localhost giữ như cũ
     secure = ws(request).is_public(request.headers.get("host", ""))
     resp.set_cookie(ws(request).cookie, sess.sid, httponly=True, samesite="strict", path="/", secure=secure, max_age=ws(request).auth.max_s)
+    if device is not None:
+        resp.set_cookie(ws(request).dev_cookie, device[0], httponly=True, samesite="strict", path="/", secure=True,
+                        max_age=max(1, int(device[1] - _t.time())))
     return resp
+
+
+def _forget_device_cookie(request: Request, resp: Response) -> None:
+    resp.delete_cookie(ws(request).dev_cookie, path="/", secure=True, httponly=True, samesite="strict")
 
 
 def _pre_session_origin_ok(request: Request) -> None:
@@ -390,6 +419,30 @@ async def _audit_login(request: Request, kind: str, data: dict[str, Any]) -> Non
         log.warning("không ghi được audit %s (%s)", kind, data.get("ip"))
 
 
+async def _web_notify(request: Request, kind: str, data: dict[str, Any]) -> None:
+    """Sự kiện vào/ra web + thiết bị tin cậy → RPC `web.notify` (HUMAN_ONLY: audit + event → Telegram). Chỉ METADATA — daemon lọc lại
+    theo danh sách trắng (web_events.sanitize). Daemon cũ/tắt → ghi audit thường / chỉ log, không chặn đăng nhập."""
+    try:
+        await ws(request).client.call("web.notify", {"kind": kind, "data": data, "channel": CHANNEL})
+    except RpcError as e:
+        if getattr(e, "code", None) == METHOD_NOT_FOUND:
+            await _audit_login(request, kind, data)
+        else:
+            log.warning("không gửi được web.notify %s: %s", kind, e)
+    except Exception:  # noqa: BLE001
+        log.warning("không gửi được web.notify %s (%s)", kind, data.get("ip"))
+
+
+def _ua(request: Request) -> str:
+    return request.headers.get("user-agent", "")
+
+
+def _ua_label(request: Request) -> str:
+    from .devices import ua_label
+
+    return ua_label(_ua(request))
+
+
 def _lock_text(left: float) -> str:
     return f"Đăng nhập tạm khoá do nhập sai quá nhiều lần — thử lại sau {max(1, int(left // 60) + 1)} phút."
 
@@ -408,17 +461,73 @@ async def _code_attempt(request: Request, check: Callable[[], bool], method: str
     scope = st.limiter.fail(ip)
     await _audit_login(request, "web.login_failed", {"ip": ip, "method": method, "reason": "bad_code"})
     if scope is not None:
-        await _audit_login(request, "web.login_locked", {"ip": ip, "scope": scope})
+        await _web_notify(request, "web.login_locked", {"ip": ip, "scope": scope})
         lk = st.limiter.locked(ip)
         return False, _lock_text(lk[0] if lk else st.limiter.lockout_s), 429
     return False, "Mã không đúng hoặc đã dùng — đợi mã mới trên ứng dụng xác thực rồi thử lại.", 401
 
 
-def _login_page(request: Request, err: str | None, status: int) -> Response:
+def _login_page(request: Request, err: str | None, status: int, *, device_failed: bool = False) -> Response:
     st = ws(request)
+    host = request.headers.get("host", "")
+    dev = st.devices_on(host)
     ctx = {"error": err, "htmx": HTMX, "badge": {}, "csrf": "", "flashes": [], "nav": "",
-           "totp": bool(st.totp and st.totp.enrolled()), "public": st.is_public(request.headers.get("host", ""))}
+           "totp": bool(st.totp and st.totp.enrolled()), "public": st.is_public(host), "devices": dev,
+           "device_days": st.devices.cfg["ttl_days"] if st.devices else 0,
+           # app.js tự POST "tiếp tục bằng thiết bị" MỘT lần — chỉ trên trang GET (phản hồi POST không có → không lặp)
+           "device_auto": dev and request.method == "GET" and not err, "device_failed": device_failed}
     return st.templates.TemplateResponse(request, "login.html", ctx, status_code=status)
+
+
+async def _trust_device(request: Request) -> tuple[str, float, str] | None:
+    """Tin cậy thiết bị vừa nhập mã TOTP đúng (ô "Tin cậy thiết bị này") → (token, hạn, did); thông báo thiết bị mới / bị loại."""
+    st = ws(request)
+    if st.devices is None:
+        return None
+    ip = _ip(request)
+    try:
+        token, pub, evicted = st.devices.trust(ip=ip, ua=_ua(request))
+    except (ValueError, OSError) as e:
+        log.warning("không tin cậy được thiết bị: %s", e)
+        return None
+    for did in evicted:
+        st.auth.drop_device(did)
+        await _web_notify(request, "web.device_revoked", {"did": did, "reason": "evicted", "ip": ip})
+    await _web_notify(request, "web.device_trusted", {"did": pub["did"], "ip": ip, "ua_label": pub["ua_label"]})
+    return token, float(pub["expires_at"]), pub["did"]
+
+
+async def _device_login(request: Request) -> Response:
+    """POST /login `device=1` (app.js tự gửi; SameSite=Strict nên link từ chat không mang cookie khi mở trang): cookie thiết bị hợp lệ →
+    xoay token → phiên mới. KHÔNG đi qua bộ giới hạn mã TOTP (token 256 bit không dò nổi — người thật vào được kể cả khi đang bị khoá)."""
+    import time as _t
+
+    st = ws(request)
+    host = request.headers.get("host", "")
+    tok = request.cookies.get(st.dev_cookie)
+    if not st.devices_on(host) or st.devices is None or not tok:
+        return _login_page(request, None, 200, device_failed=True)
+    ip = _ip(request)
+    status, new, pub = st.devices.redeem_and_rotate(tok, ip=ip, ua=_ua(request))
+    if status == "ok" and new and pub:
+        sess = st.auth.new_session(device_id=pub["did"])
+        await _web_notify(request, "web.login", {"method": "device", "ip": ip, "ua_label": pub["ua_label"], "did": pub["did"]})
+        if pub.get("ua_changed_from"):
+            await _audit_login(request, "web.device_ua_changed", {"ip": ip, "did": pub["did"], "from": pub["ua_changed_from"], "to": pub["ua_label"]})
+        return _login_ok(request, sess, device=(new, float(pub["expires_at"])))
+    if status == "reuse" and pub:
+        st.auth.drop_device(pub["did"])
+        await _web_notify(request, "web.device_reuse_detected", {"did": pub["did"], "ip": ip, "ua_label": pub["ua_label"]})
+    else:
+        now = _t.time()
+        if now - st._dev_rejects.get(ip, 0.0) > 60:  # tối đa 1 dòng audit / IP / phút (cookie rác không làm phình audit)
+            if len(st._dev_rejects) > 5000:
+                st._dev_rejects.clear()
+            st._dev_rejects[ip] = now
+            await _audit_login(request, "web.device_rejected", {"ip": ip, "reason": status, "did": DeviceStore.did_of(tok)})
+    resp = _login_page(request, "Thiết bị này không còn được tin cậy — đăng nhập lại bằng mã.", 401, device_failed=True)
+    _forget_device_cookie(request, resp)
+    return resp
 
 
 async def login(request: Request) -> Response:
@@ -430,13 +539,16 @@ async def login(request: Request) -> Response:
         _pre_session_origin_ok(request)
         form = await request.form()
         code = str(form.get("code") or "").strip()
+        if not code and form.get("device") == "1":
+            return await _device_login(request)
         if code:  # đăng nhập bằng mã TOTP (web public — người dùng không có terminal trên máy chạy hub)
             if st.totp is None or not st.totp.enrolled():
                 return _login_page(request, "Hub này chưa bật đăng nhập bằng mã (admin: `cfharness web totp enroll`).", 401)
             ok, err, status = await _code_attempt(request, lambda: st.totp.verify(code), "totp")
             if ok:
-                await _audit_login(request, "web.login", {"ip": _ip(request), "method": "totp"})
-                return _login_ok(request, st.auth.new_session())
+                dev = await _trust_device(request) if form.get("trust") == "1" and st.devices_on(request.headers.get("host", "")) else None
+                await _web_notify(request, "web.login", {"ip": _ip(request), "method": "totp", "ua_label": _ua_label(request), "trusted": dev is not None})
+                return _login_ok(request, st.auth.new_session(device_id=dev[2] if dev else ""), device=dev[:2] if dev else None)
             return _login_page(request, err, status)
         tok = _token_from(str(form.get("link") or ""))
     else:
@@ -446,6 +558,7 @@ async def login(request: Request) -> Response:
     if tok:
         sess = st.auth.redeem(tok)
         if sess is not None:
+            await _web_notify(request, "web.login", {"ip": _ip(request), "method": "link", "ua_label": _ua_label(request)})
             return _login_ok(request, sess)
         err = "Link đăng nhập không hợp lệ, đã dùng rồi hoặc đã hết hạn. Chạy lại `cfharness web --open` để lấy link mới."
     return _login_page(request, err, 401 if err or request.method == "POST" else status)
@@ -482,6 +595,8 @@ async def enroll(request: Request) -> Response:
         uri = otpauth_uri(secret, account)
         qr = qr_svg(uri)  # SVG do server tự sinh từ URI của chính hub (không có dữ liệu người dùng/agent) → an toàn để chèn nguyên
         resp = st.templates.TemplateResponse(request, tpl, {**base, "stage": "show", "t": tok, "uri": uri, "qr": Markup(qr) if qr else None,
+                                                            "devices": st.devices_on(request.headers.get("host", ""), need_totp=False),
+                                                            "device_days": st.devices.cfg["ttl_days"] if st.devices else 0,
                                                             "secret": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4))})
         resp.headers["Cache-Control"] = "no-store"  # trang mang bí mật: không lưu vào cache trình duyệt/proxy
         return resp
@@ -492,17 +607,34 @@ async def enroll(request: Request) -> Response:
         ok, err, status = await _code_attempt(request, lambda: st.totp.confirm(tok, code), "enroll")
         if ok:
             await _audit_login(request, "web.totp_confirmed", {"ip": _ip(request)})
-            return _login_ok(request, st.auth.new_session())
-        return st.templates.TemplateResponse(request, tpl, {**base, "stage": "confirm", "t": tok, "error": err}, status_code=status)
+            dev = await _trust_device(request) if form.get("trust") == "1" and st.devices_on(request.headers.get("host", "")) else None
+            await _web_notify(request, "web.login", {"ip": _ip(request), "method": "enroll", "ua_label": _ua_label(request), "trusted": dev is not None})
+            return _login_ok(request, st.auth.new_session(device_id=dev[2] if dev else ""), device=dev[:2] if dev else None)
+        return st.templates.TemplateResponse(request, tpl, {**base, "stage": "confirm", "t": tok, "error": err,
+                                                            "devices": st.devices_on(request.headers.get("host", ""), need_totp=False)},
+                                             status_code=status)
     raise HTTPException(400, "Thao tác không hợp lệ")
 
 
 async def logout(request: Request) -> Response:
-    await post_guard(request, need_key=False)
-    ck = ws(request).cookie
-    ws(request).auth.logout(request.cookies.get(ck))
+    """Đăng xuất GIỮ thiết bị tin cậy (lần sau không cần mã); `forget=1` ("Đăng xuất và quên thiết bị này") → thu hồi + xoá cookie thiết bị."""
+    _, form = await post_guard(request, need_key=False)
+    st = ws(request)
+    ck = st.cookie
+    st.auth.logout(request.cookies.get(ck))
     resp = RedirectResponse("/login", status_code=303)
     resp.delete_cookie(ck, path="/")
+    forget = form.get("forget") == "1"
+    ip = _ip(request)
+    if forget:
+        did = DeviceStore.did_of(request.cookies.get(st.dev_cookie))
+        if did and st.devices is not None:
+            pub = st.devices.revoke(did)
+            st.auth.drop_device(did)
+            if pub:
+                await _web_notify(request, "web.device_revoked", {"did": did, "reason": "logout_forget", "ip": ip, "ua_label": pub["ua_label"]})
+        _forget_device_cookie(request, resp)
+    await _web_notify(request, "web.logout", {"ip": ip, "ua_label": _ua_label(request), "forget": forget})
     return resp
 
 
@@ -1009,7 +1141,61 @@ async def settings_page(request: Request) -> Response:
     return await render(request, "settings.html", {**slack2, **accts, "nav": "settings", "estop": es, "cfg": cfg_view, "secrets": secrets_, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names,
                                                    "slack_webhook": SLACK_WEBHOOK_SECRET in names, "slack_create_url": SLACK_CREATE_URL,
                                                    "telegram": "TELEGRAM_BOT_TOKEN" in names, "tg_chats": tg_chats, "integ": integ, "status": status, "gates": gates,
-                                                   "web": {"host": st.host, "port": st.port, "sessions": len(st.auth.sessions)}})
+                                                   "web": {"host": st.host, "port": st.port, "sessions": len(st.auth.sessions)},
+                                                   "trusted": _devices_view(request)})
+
+
+def _devices_view(request: Request) -> dict[str, Any]:
+    """Khối "Thiết bị tin cậy" ở Cài đặt: danh sách (không hash/token), đánh dấu thiết bị đang dùng (cookie chỉ gửi trên host public)."""
+    from datetime import datetime
+
+    st = ws(request)
+    if st.devices is None:
+        return {"enabled": False, "rows": []}
+    cur = DeviceStore.did_of(request.cookies.get(st.dev_cookie))
+
+    def _t(v: Any) -> str:
+        try:
+            return datetime.fromtimestamp(float(v)).strftime("%d/%m/%Y %H:%M")
+        except (TypeError, ValueError, OSError):
+            return "—"
+
+    rows = [{**r, "current": r["did"] == cur, "created": _t(r.get("created_at")), "expires": _t(r.get("expires_at")),
+             "used": _t(r.get("last_used_at"))} for r in st.devices.list()]
+    return {"enabled": bool(st.devices.cfg["enabled"]) and bool(st.public_origin), "rows": rows, "ttl_days": st.devices.cfg["ttl_days"],
+            "max": st.devices.cfg["max_devices"], "here": st.devices_on(request.headers.get("host", ""))}
+
+
+async def _device_revoke(request: Request, p: dict[str, Any]) -> dict[str, Any]:
+    """Thu hồi MỘT thiết bị (cục bộ trong tiến trình web — file `auth/` không qua daemon) + huỷ phiên của nó + thông báo."""
+    st = ws(request)
+    if st.devices is None:
+        raise RpcError(-32000, "tính năng thiết bị tin cậy không bật")
+    pub = st.devices.revoke(p["did"])
+    if pub is None:
+        raise RpcError(-32000, f"không có thiết bị {p['did']}")
+    st.auth.drop_device(p["did"])
+    await _web_notify(request, "web.device_revoked", {"did": p["did"], "reason": "user", "ip": _ip(request), "ua_label": pub["ua_label"]})
+    return pub
+
+
+async def _device_revoke_all(request: Request, p: dict[str, Any]) -> dict[str, Any]:
+    st = ws(request)
+    if st.devices is None:
+        raise RpcError(-32000, "tính năng thiết bị tin cậy không bật")
+    dids = [r["did"] for r in st.devices.list()]
+    n = st.devices.revoke_all()
+    for did in dids:
+        st.auth.drop_device(did)
+    await _web_notify(request, "web.devices_revoked_all", {"count": n, "reason": "user", "ip": _ip(request)})
+    return {"count": n}
+
+
+def _did(f: FormData) -> str:
+    v = _req(f, "did", "thiết bị")
+    if DeviceStore.did_of(v + ".x") != v:
+        raise ValueError("mã thiết bị không hợp lệ")
+    return v
 
 
 # ============================================================================ thao tác (POST /do/<tên>)
@@ -1036,6 +1222,7 @@ class Action:
     note: str | None = None  # nhãn ô ghi chú trong hộp xác nhận (vd lý do từ chối)
     secret_fields: tuple[str, ...] = ()  # trường mang giá trị bí mật — KHÔNG đưa sang trang xác nhận
     call: Callable[[Request, dict[str, Any]], Awaitable[Any]] | None = None  # thao tác nhiều RPC (mặc định: một RPC `method`)
+    step2: Callable[[FormData], str] | str | None = None  # bước 2 BẮT BUỘC (thao tác NỚI quyền) — trang xác nhận lần 2 nêu rõ hệ quả
 
 
 async def _config_set(request: Request, p: dict[str, Any]) -> Any:
@@ -1119,6 +1306,13 @@ def _grant_ok(r: Any) -> str:
 
 
 ACTIONS: dict[str, Action] = {
+    # ---- thiết bị tin cậy (web/devices.py): file `auth/` do tiến trình web ghi trực tiếp (`call=`), thông báo qua `web.notify`
+    "device_revoke": Action("web.notify", lambda f: {"did": _did(f)}, lambda r, f: f"Đã thu hồi thiết bị {f.get('did')}",
+                            confirm=lambda f: f"Thu hồi thiết bị tin cậy {f.get('did')}? Phiên đang mở trên thiết bị đó bị đăng xuất ngay.",
+                            danger=True, audit=False, call=_device_revoke),
+    "device_revoke_all": Action("web.notify", lambda f: {}, lambda r, f: f"Đã thu hồi {(r or {}).get('count', 0)} thiết bị tin cậy",
+                                confirm="Thu hồi MỌI thiết bị tin cậy? Mọi phiên mở từ thiết bị tin cậy (kể cả trình duyệt này) bị đăng xuất ngay.",
+                                danger=True, audit=False, call=_device_revoke_all),
     # ---- duyệt thao tác phá huỷ (FR-UI-04) — approval.* tự ghi audit theo `channel`
     "approve": Action("approval.approve", lambda f: {"id": _req(f, "id"), "channel": CHANNEL, "by": "user", "note": f.get("note") or None},
                       "Đã cho phép thao tác", confirm=lambda f: f"Cho phép agent thực hiện thao tác phá huỷ này MỘT lần?\n{f.get('preview') or ''}", audit=False),
@@ -1359,6 +1553,9 @@ async def plan_action(request: Request, name: str, form: FormData, act: Action) 
         fields = [(k, v) for k, v in carry(form) if k not in act.secret_fields]  # giá trị secret không vào HTML
         return Plan("confirm", act, params, message=msg + ("\n(Nhập lại giá trị ở trang Cài đặt và tích ô xác nhận.)" if act.secret_fields else ""),
                     fields=fields)
+    if act.step2 and form.get("confirm2") != "yes":
+        # thao tác nới quyền (vd gỡ tài nguyên bảo vệ — web/perm_pages.py): bước 2 nêu rõ hệ quả, như "luôn cho phép"
+        return Plan("step2", act, params, kind="generic", message=act.step2(form) if callable(act.step2) else act.step2, fields=carry(form))
     if name == "approve_always" and form.get("confirm2") != "yes":
         # bước 2 BẮT BUỘC: trang nói rõ luật sẽ tạo (agent + tool + dấu vân tay / agent + host) — `always_offer` do daemon tính
         try:
@@ -1401,6 +1598,9 @@ async def do_action(request: Request) -> Response:
     if plan.step == "confirm":
         return await render(request, "confirm.html", {"message": plan.message, "fields": plan.fields, "action": f"/do/{name}", "danger": act.danger,
                                                       "back": back, "note": act.note})
+    if plan.step == "step2" and plan.kind == "generic":
+        return await render(request, "confirm.html", {"message": plan.message, "fields": [*(plan.fields or []), ("confirm2", "yes")], "action": f"/do/{name}",
+                                                      "danger": True, "back": back, "note": None, "heading": "Xác nhận lần 2"})
     if plan.step == "step2":
         ap = plan.ap or {}
         ctx = {"a": ap, "view": P.action_view(ap), "fields": plan.fields, "action": f"/do/{name}", "back": back}
@@ -1689,6 +1889,13 @@ def _memory_routes() -> list[Any]:
     return _r()
 
 
+def _perm_routes() -> list[Any]:
+    from . import perm_pages as _pp  # /permissions — "Quyền đã cấp" (grant/trust/luôn cho phép/sandbox/tài nguyên bảo vệ)
+
+    _pp.register_actions(ACTIONS, Action, _req)
+    return _pp.routes()
+
+
 def _mcp_routes() -> list[Any]:
     from .mcp_pages import routes as _r
 
@@ -1718,13 +1925,16 @@ def make_templates() -> Jinja2Templates:
 
 
 def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127.0.0.1", port: int = 8765, name: str = WEB_HOST,
-               public_origin: str | None = None, ip_header: str = "x-forwarded-for", limiter: LoginLimiter | None = None) -> Starlette:
-    """`public_origin` (đã kiểm bằng `public.parse_public_origin`) = `web.public_origin` do CLI đọc qua RPC `config.get` lúc khởi động."""
+               public_origin: str | None = None, ip_header: str = "x-forwarded-for", limiter: LoginLimiter | None = None,
+               trusted_devices: dict[str, Any] | None = None) -> Starlette:
+    """`public_origin` (đã kiểm bằng `public.parse_public_origin`) = `web.public_origin` do CLI đọc qua RPC `config.get` lúc khởi động;
+    `trusted_devices` = nhánh `web.trusted_devices` (web/devices.py)."""
     from .public import parse_public_origin
 
     state = WebState(paths=paths, auth=auth or WebAuth(), host=host, port=port, client=AsyncHubClient(paths.socket, channel=CHANNEL, timeout=60.0),
                      templates=make_templates(), name=name, public_origin=parse_public_origin(public_origin), ip_header=ip_header,
-                     limiter=limiter or LoginLimiter(), totp=TotpStore(paths))
+                     limiter=limiter or LoginLimiter(), totp=TotpStore(paths), devices=DeviceStore(paths, trusted_devices))
+    state.auth.device_ok = state.devices.valid if state.devices is not None else None
     routes = [
         Route("/", overview),
         Route("/login", login, methods=["GET", "POST"]),
@@ -1764,11 +1974,13 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/sse/tasks", sse_tasks),
         *_manager_routes(),
         *_extra_routes(),
+        *_perm_routes(),
         *_office_routes(),
         *_skill_routes(),
         *_memory_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
+        *_backup_pages.routes(),  # /partials/backup — thẻ "Sao lưu" ở Cài đặt (backup.py)
         *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
         *_file_pages.routes(),  # /files/view|raw|open — xem/mở file agent đã thao tác (web/file_pages.py, docs/dev-notes/file-open.md)
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
@@ -1807,9 +2019,16 @@ from . import update_pages as _update_pages  # noqa: E402
 
 _update_pages.register_actions(ACTIONS, Action, _req)
 
-# Tổng quan máy (admin_overview.py): trang chỉ đọc /admin/overview, mục menu chỉ khi thư mục trạng thái chung tồn tại
+# Thẻ "Sao lưu" (backup.py): backup_create + /partials/backup; khôi phục chỉ hiện lệnh CLI
+from . import backup_pages as _backup_pages  # noqa: E402
+
+_backup_pages.register_actions(ACTIONS, Action, _req)
+
+# Quản trị máy (admin_overview.py, admin_rpc.py): /admin/overview|users|alerts|audit (nhóm cfharness-admin) + /machine (phía user);
+# ghi DUY NHẤT = ESTOP admin (admin_estop_on|off, có xác nhận); chính sách chỉ hiện lệnh sudo
 from . import admin_pages as _admin_pages  # noqa: E402
 
+_admin_pages.register_actions(ACTIONS, Action, _req)
 # Xem/mở file agent đã thao tác (chip file): /files/view, /files/raw, POST /files/open — RPC file.read|file.open của daemon
 from . import file_pages as _file_pages  # noqa: E402
 

@@ -88,6 +88,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "slack.setup", "slack.pending", "slack.allow", "slack.revoke", "slack.disable", "slack.test",
         # M7: chỉ định điều phối viên (cấp quyền manager), nhắn/tick manager (agent khác không được "ra lệnh" cho manager)
         "manager.set", "manager.chat", "manager.tick",
+        # lưu trữ/khôi phục hội thoại điều phối viên (xoá mềm `archived_at`) — dọn lịch sử của người, agent/điều phối viên không được
+        "manager.archive", "manager.unarchive",
         # luồng việc + sửa hội thoại (đổi tên/gắn luồng/lưu trữ): người; điều phối viên dùng tool hub-self workstream_* (managerself.call)
         "manager.conversation_update", "manager.conversation_read", "workstream.create", "workstream.update", "workstream.delete",
         # UX: trả lời/chuyển/huỷ câu hỏi của agent — agent không tự trả lời câu hỏi (của mình hay agent khác). Điều phối viên trả lời/
@@ -100,13 +102,22 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # MANAGER_ALLOWED (create/pause/resume/rm/run_now lịch CỦA MÌNH, trần số lịch/tần suất/ngân sách — schedules.manager_check)
         "schedule.create", "schedule.update", "schedule.pause", "schedule.resume", "schedule.rm", "schedule.run_now",
         # Cập nhật cfharness (updater.py): cài đè phần mềm + dừng/khởi động lại daemon NGOÀI sandbox — chỉ người
-        "update.start",
+        "update.start", "update.rollback",
+        # Sao lưu (backup.py): tạo = ghi file lớn vào HUB_HOME; kiểm/kế hoạch khôi phục = đọc bản sao chứa toàn bộ dữ liệu hub — chỉ người.
+        # Khôi phục không có RPC (daemon phải dừng; CLI `backup restore` ∈ HUB_HUMAN_ONLY_CLI)
+        "backup.create", "backup.verify", "backup.restore_plan",
         # Tài khoản Claude (accounts/): token = quyền dùng tài khoản Claude của người; đổi tài khoản CHỈ do người (không tự đổi, không
         # MANAGER_ALLOWED) — agent không được tự thêm/đổi/xoá/kiểm tài khoản hay mở phiên `claude setup-token`
         "account.login_start", "account.login_finish", "account.login_cancel", "account.add_token", "account.use", "account.rename",
         "account.rm", "account.check",
         # Tổng quan máy (admin_overview.py): CHỈ ĐỌC nhưng lộ hoạt động của user OS khác trên máy (chi phí, số run) — chỉ người
         "admin.overview",
+        # Vào/ra web + thiết bị tin cậy (web_events.py): ghi audit + phát event → Telegram — agent không được giả "đăng nhập"/"thu hồi"
+        "web.notify",
+        # Quản trị máy (admin_rpc.py, docs/dev-notes/admin-users.md): đọc trạng thái/audit/chính sách user khác (admin), bật/gỡ ESTOP admin,
+        # trang minh bạch phía user — mọi method admin.* chỉ người; phía admin còn kiểm nhóm cfharness-admin (admin_control.require_admin)
+        "admin.users", "admin.user", "admin.estop_list", "admin.estop_set", "admin.alerts", "admin.audit", "admin.policy",
+        "admin.nav", "admin.self", "admin.setup_check",
         # Xem/mở file trong workspace của run/agent (fileview.py): đọc ngoài sandbox của agent gọi (workspace agent KHÁC) + mở app trên máy
         "file.read", "file.open",
     }
@@ -201,6 +212,9 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.manager.rpc", "MUTATING_MANAGER"),
                       ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS"),
                       ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE"),
+                      ("cfharness.web_events", "MUTATING_WEB"),
+                      ("cfharness.backup", "MUTATING_BACKUP"),
+                      ("cfharness.admin_rpc", "MUTATING_ADMIN"),
                       ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):
         try:
             import importlib

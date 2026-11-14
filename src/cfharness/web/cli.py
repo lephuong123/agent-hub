@@ -7,6 +7,8 @@ Host khác loopback bị từ chối (Q-11). Link chỉ in ra terminal của ng�
 - `--no-link`: không in link (chạy làm dịch vụ — stdout vào file log mà agent có thể đọc).
 - `web.public_origin` (nếu người đã đặt) được đọc qua RPC `config.get` lúc khởi động: link in ra dùng origin công khai (https qua tunnel).
 - `cfharness web totp enroll|status|disable`: đăng nhập bằng mã TOTP cho web public (web/totp.py, docs/dev-notes/web-public.md).
+- `cfharness web devices list [--json] | revoke <id> | revoke-all`: thiết bị tin cậy (web/devices.py) — phiên web đang mở trên thiết bị bị
+  thu hồi chết ngay ở request kế tiếp (server web đọc lại file theo mtime). Tắt / đăng ký lại TOTP cũng thu hồi mọi thiết bị.
 """
 
 from __future__ import annotations
@@ -70,6 +72,8 @@ def cmd_totp(ctx: Any, words: list[str]) -> int:
     if act == "disable":
         gone = store.disable()
         _audit(ctx, "web.totp_disabled")
+        if store.devices_forgotten:
+            _notify(ctx, "web.devices_revoked_all", {"count": store.devices_forgotten, "reason": "totp_disabled"})
         ctx.out({"disabled": gone}, "đã tắt đăng nhập TOTP (phiên web đang mở vẫn còn tới khi hết hạn — khởi động lại web để huỷ ngay)"
                 if gone else "TOTP chưa bật")
         return 0
@@ -87,6 +91,8 @@ def cmd_totp(ctx: Any, words: list[str]) -> int:
     base = origin or (f"http://{st.get('name') or st['host']}:{st['port']}" if st else f"http://{WEB_HOST}:{DEFAULT_PORT}")
     link = f"{base}/enroll?t={token}"
     _audit(ctx, "web.totp_enrolled", {"activate": bool(a.activate), "ttl_s": ttl})
+    if store.devices_forgotten:
+        _notify(ctx, "web.devices_revoked_all", {"count": store.devices_forgotten, "reason": "totp_reenrolled"})
     print("Đăng ký đăng nhập TOTP cho web của hub này.")
     if getattr(a, "show_uri", False):  # mặc định KHÔNG in bí mật: màn hình/log/scrollback hay bị chép vào chat — link /enroll đã đủ
         print(f"URI cho ứng dụng xác thực (BÍ MẬT — chỉ trao tận tay người dùng, đừng dán vào chat/log):\n  {otpauth_uri(secret, account)}")
@@ -98,6 +104,53 @@ def cmd_totp(ctx: Any, words: list[str]) -> int:
     if not origin:
         print("Lưu ý: chưa đặt web.public_origin — link trên chỉ mở được trên máy này (`cfharness config set web.public_origin https://…`).")
     return 0
+
+
+def _notify(ctx: Any, kind: str, data: dict[str, Any]) -> None:
+    """`web.notify` (HUMAN_ONLY: audit + event → Telegram). Daemon cũ (chưa có method) → audit thường."""
+    try:
+        ctx.call("web.notify", {"kind": kind, "data": data, "channel": "cli"})
+    except Exception:  # noqa: BLE001
+        _audit(ctx, kind, data)
+
+
+def cmd_devices(ctx: Any, words: list[str]) -> int:
+    import time as _t
+    from datetime import datetime
+
+    from .devices import DID_RE, DeviceStore
+
+    act = words[1] if len(words) > 1 else "list"
+    store = DeviceStore(ctx.paths)
+    if act == "list":
+        rows = store.list()
+
+        def _d(v: Any) -> str:
+            return datetime.fromtimestamp(float(v)).strftime("%d/%m/%Y %H:%M") if v else "—"
+
+        lines = [f"{r['did']}  {r['ua_label']:<24}  dùng {_d(r.get('last_used_at'))}  IP {r.get('last_ip') or '?'}  hết hạn {_d(r.get('expires_at'))}"
+                 for r in rows]
+        ctx.out(rows, "\n".join(lines) if lines else "chưa có thiết bị tin cậy nào")
+        return 0
+    if act == "revoke":
+        did = words[2] if len(words) > 2 else ""
+        if not DID_RE.match(did):
+            print("lỗi: dùng `cfharness web devices revoke <id>` (id từ `cfharness web devices list`)", file=sys.stderr)
+            return 1
+        pub = store.revoke(did)
+        if pub is None:
+            print(f"lỗi: không có thiết bị {did}", file=sys.stderr)
+            return 1
+        _notify(ctx, "web.device_revoked", {"did": did, "reason": "user", "ua_label": pub.get("ua_label")})
+        ctx.out(pub, f"đã thu hồi thiết bị {did} ({pub.get('ua_label')}) — phiên web đang mở trên thiết bị đó bị đăng xuất ngay")
+        return 0
+    if act == "revoke-all":
+        n = store.revoke_all()
+        _notify(ctx, "web.devices_revoked_all", {"count": n, "reason": "user"})
+        ctx.out({"count": n, "at": _t.time()}, f"đã thu hồi {n} thiết bị tin cậy")
+        return 0
+    print("lỗi: dùng `cfharness web devices list|revoke <id>|revoke-all`", file=sys.stderr)
+    return 1
 
 
 def _audit(ctx: Any, kind: str, data: dict[str, Any] | None = None) -> None:
@@ -113,7 +166,10 @@ def cmd_web(ctx: Any) -> int:
     if words:
         if words[0] == "totp":
             return cmd_totp(ctx, words)
-        print(f"lỗi: lệnh con lạ `{words[0]}` — dùng `cfharness web [--open]` hoặc `cfharness web totp enroll|status|disable`", file=sys.stderr)
+        if words[0] == "devices":
+            return cmd_devices(ctx, words)
+        print(f"lỗi: lệnh con lạ `{words[0]}` — dùng `cfharness web [--open]`, `cfharness web totp enroll|status|disable` hoặc "
+              "`cfharness web devices list|revoke <id>|revoke-all`", file=sys.stderr)
         return 1
     try:
         host = require_loopback(a.host)
@@ -153,7 +209,8 @@ def cmd_web(ctx: Any) -> int:
     origin = _public_origin(cfg)
     auth = WebAuth(idle_s=int(cfg.get("session_idle_s") or 3600), max_s=int(cfg.get("session_max_age_s") or 12 * 3600))
     app = create_app(ctx.paths, auth=auth, host=host, port=a.port, name=name, public_origin=origin,
-                     ip_header=str(cfg.get("client_ip_header") or "x-forwarded-for"), limiter=LoginLimiter.from_config(cfg.get("login")))
+                     ip_header=str(cfg.get("client_ip_header") or "x-forwarded-for"), limiter=LoginLimiter.from_config(cfg.get("login")),
+                     trusted_devices=cfg.get("trusted_devices") if isinstance(cfg.get("trusted_devices"), dict) else None)
     write_state(ctx.paths, host=host, port=a.port, key=auth.key, name=name, public_origin=origin)
     print(f"cfharness web: http://{name}:{a.port}/  (nghe trên {host}:{a.port}, chỉ máy này; Ctrl+C để dừng)")
     if origin:
@@ -178,7 +235,8 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     w.add_argument("--open", action="store_true", help="mở trình duyệt và đăng nhập tự động")
     w.add_argument("--url", action="store_true", help="chỉ in link đăng nhập mới của server đang chạy")
     w.add_argument("--no-link", action="store_true", help="không in link đăng nhập (chạy làm dịch vụ: stdout vào file log)")
-    w.add_argument("words", nargs="*", help="`totp enroll|status|disable`: đăng nhập bằng mã TOTP cho web public (chỉ người)")
+    w.add_argument("words", nargs="*", help="`totp enroll|status|disable`: đăng nhập bằng mã TOTP cho web public; "
+                   "`devices list|revoke <id>|revoke-all`: thiết bị tin cậy (chỉ người)")
     w.add_argument("--ttl", type=int, default=None, help="totp enroll: hạn của link đăng ký (giây, mặc định 86400)")
     w.add_argument("--activate", action="store_true", help="totp enroll: dùng mã mới NGAY (không chờ người dùng xác nhận qua link)")
     w.add_argument("--show-uri", action="store_true", help="totp enroll: in cả URI otpauth:// (chứa BÍ MẬT) — mặc định chỉ in link đăng ký một lần")

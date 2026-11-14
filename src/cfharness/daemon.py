@@ -131,6 +131,14 @@ class Daemon:
         from .admin_overview import register_rpc as _register_admin
 
         _register_admin(self)
+        # Vào/ra web + thiết bị tin cậy: web.notify (HUMAN_ONLY, tự audit + phát event → Telegram/Slack) — web_events.py
+        from .web_events import register_rpc as _register_web_events
+
+        _register_web_events(self)
+        # Sao lưu: backup.list|create|verify|restore_plan (backup.py — tự bọc audit backup.create; khôi phục chỉ ngoại tuyến từ CLI)
+        from .backup import register_rpc as _register_backup
+
+        _register_backup(self)
         # Xem/mở file agent đã thao tác (web chip file): file.read (chỉ đọc) + file.open (tác dụng phụ) — HUMAN_ONLY, tự audit (fileview.py)
         from .fileview import register_rpc as _register_files
 
@@ -551,7 +559,7 @@ def run_foreground(paths: HubPaths) -> None:
 # ---- chạy dưới launchd (LaunchAgent `daemon install-service` / LaunchDaemon `admin install-daemon`, cùng KeepAlive SuccessfulExit=false)
 SUPERVISED_RESTART_CODE = 75  # EX_TEMPFAIL: thoát ≠ 0 → launchd chạy lại daemon (mã 0 = dừng hẳn)
 SUPERVISOR_LABEL_PREFIX = "com.cfharness.daemon."
-_UPDATE_BUSY_PHASES = ("starting", "waiting_daemon", "installing")
+_UPDATE_BUSY_PHASES = ("starting", "waiting_daemon", "installing", "rolling_back")  # rolling_back: helper thay hub.db + cài lại bản cũ
 _IS_MACOS = sys.platform == "darwin"
 
 

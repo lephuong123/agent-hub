@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import re
 import secrets as _secrets
 import time
 from datetime import datetime, timedelta, timezone
@@ -33,6 +34,8 @@ if TYPE_CHECKING:
 log = logging.getLogger("cfharness.chat")
 
 PENDING = ("open", "waiting_human")
+SCHED_ID_RE = re.compile(r"sc_[A-Za-z0-9]{4,32}")  # id lịch do hub sinh — chỉ id dạng này mới lên nhãn nút
+SCHED_BUTTONS_MAX = 10
 AGENT_FRAME = "▼ Agent viết:"  # tiền tố cố định (chữ hub) ngay trước `<pre>` nội dung agent — WT-8, rút gọn theo ux-plan §3.1
 _UID: contextvars.ContextVar[str | None] = contextvars.ContextVar("chat_from_id", default=None)
 # Thread của việc đang xử lý: (chat, tin để trả lời vào thread của nó). Slack (chat/slack/bot.py `_send`) dùng khi tin gửi vào kênh
@@ -433,9 +436,10 @@ class ChatBot:
         if out:
             await self._send(api, cid, out)
 
-    async def _c_schedules(self, cid: str, rest: str, api: Any) -> str:
-        """Lịch chạy tự động (CHỈ ĐỌC, qua `self.call` → cổng người + allowlist). Văn bản thuần (không HTML, không nút); tên/lịch có thể
-        do điều phối viên viết → bỏ ký tự điều khiển/vô hình."""
+    async def _c_schedules(self, cid: str, rest: str, api: Any) -> str | None:
+        """Lịch chạy tự động (đọc qua `self.call` → cổng người + allowlist). Tin danh sách là văn bản thuần (tên/lịch có thể do điều phối
+        viên viết → bỏ ký tự điều khiển/vô hình). Nút Tạm dừng / Bật lại nằm ở tin RIÊNG (WT-8: chữ agent không bao giờ cùng tin với nút),
+        nhãn nút chỉ mang id lịch do hub sinh. Tạm dừng = một chạm (an toàn, đảo ngược được); bật lại = 2 bước (mỗi lượt tốn tiền)."""
         from ..notify.telegram import visible
 
         rows = await self.call(cid, "schedule.list", {"limit": 30})
@@ -453,8 +457,30 @@ class ChatBot:
             lines.append(f"{icon.get(r.get('status'), '?')} {r['id']} · {visible(str(r.get('name') or ''))[:50]}\n"
                          f"   {visible(str(r.get('describe') or r.get('expr') or ''))[:60]} · lượt tới {nxt} · tạo bởi {who}"
                          + (f" · lỗi {r['fail_count']}" if r.get("fail_count") else ""))
-        lines.append("Tắt/bật: nhắn điều phối viên, hoặc `cfharness schedule pause|resume <id>`.")
-        return fit("\n".join(lines))
+        lines.append("Tắt/bật: nút bên dưới, nhắn điều phối viên, trang web Lịch chạy, hoặc `cfharness schedule pause|resume <id>`.")
+        await self._send(api, cid, fit("\n".join(lines)))
+        btns = [("sp", r["id"], f"⏸ Tạm dừng {r['id']}") if r.get("status") == "active" else ("sr", r["id"], f"▶️ Bật lại {r['id']}")
+                for r in rows if r.get("status") in ("active", "paused") and SCHED_ID_RE.fullmatch(str(r.get("id") or ""))][:SCHED_BUTTONS_MAX]
+        if btns:
+            markup, _ = self.callbacks.issue_rows([[b] for b in btns], cid, ttl=min(self._ttl(), 86400))
+            await self._send(api, cid, "⏰ Tạm dừng / bật lại lịch:", markup)
+        return None
+
+    async def _schedule_action(self, cid: str, action: str, sid: str) -> tuple[str, str | None, dict[str, Any] | None]:
+        """Nút lịch → RPC HUMAN_ONLY qua `call` (cổng người + allowlist from.id + audit `<kênh>:<chat>`). Bật lại: bước 2 sửa tại chỗ."""
+        if action == "sp":
+            r = await self.call(cid, "schedule.pause", {"id": sid, "reason": f"người tạm dừng qua {self.LABEL}"})
+            return f"Đã tạm dừng {sid}.", f"⏸ <b>Đã tạm dừng lịch</b> <code>{esc(sid)}</code> — bởi {esc(who_label(_UID.get()))} qua {esc(self.LABEL)}. " \
+                                          f"Bật lại: {esc(self.cmd('lich'))}.", None
+        if action == "sr":
+            markup, _ = self.callbacks.issue([("src", sid, "Xác nhận BẬT LẠI"), ("scx", sid, "Huỷ")], cid, ttl=min(self._ttl(), 3600))
+            return "Cần xác nhận bước 2 — xem tin này.", (f"⚠️ <b>Bật lại lịch</b> <code>{esc(sid)}</code>? Mỗi lượt là một run thật (tốn tiền), "
+                                                         "chạy theo lịch cho tới khi tạm dừng lại."), markup
+        if action == "src":
+            r = await self.call(cid, "schedule.resume", {"id": sid})
+            nxt = str((r or {}).get("next_run_local") or "—")
+            return f"Đã bật lại {sid}.", f"▶️ <b>Đã bật lại lịch</b> <code>{esc(sid)}</code> — lượt tới {esc(nxt)}.", None
+        return "Đã huỷ — lịch vẫn tạm dừng.", f"⏸ <b>Đã huỷ</b> — lịch <code>{esc(sid)}</code> vẫn tạm dừng.", None
 
     async def _c_help(self, cid: str, rest: str, api: Any) -> str | None:
         return self.help_text()
@@ -812,6 +838,8 @@ class ChatBot:
                 text, edit, markup = await self._decide(cid, a, ref, api)
             elif a in ("gsa", "gsr"):  # đề xuất golden: một chạm; `golden.suggestion_decided` sửa tin ở MỌI chat
                 text, edit = await self._golden_decide(cid, a, ref)
+            elif a in ("sp", "sr", "src", "scx"):  # lịch chạy (/lich): tạm dừng một chạm, bật lại 2 bước
+                text, edit, markup = await self._schedule_action(cid, a, ref)
             elif a == "eo":
                 await self.call(cid, "estop.set", {"on": False, "reason": f"{self.LABEL} {cid}"})
                 text = "Đã TẮT ESTOP — hub chạy run trở lại."
@@ -875,7 +903,8 @@ class ChatBot:
             markup, _ = self.callbacks.issue([("aac", approval_id, "Xác nhận LUÔN CHO PHÉP"), ("cx", approval_id, "Huỷ")], cid,
                                              ttl=min(self._ttl(), 3600))
             text = (f"⚠️ <b>Chắc chắn LUÔN cho phép?</b> Cho phép lần này, và {self.always_rule_text(offer)}.\n"
-                    "Đọc lại thao tác ở tin trên trước khi xác nhận. Gỡ sau: cfharness guard always rm &lt;id luật&gt;.")
+                    "Đọc lại thao tác ở tin trên trước khi xác nhận. Gỡ sau: trang web «Quyền đã cấp» (/permissions) hoặc "
+                    "cfharness guard always rm &lt;id luật&gt;.")
             return "Cần xác nhận bước 2 — xem tin này.", text, markup
         if action == "aac":  # daemon kiểm lại (`always_prepare`): không đủ điều kiện → lỗi, approval giữ nguyên
             res = await self.call(cid, "approval.approve", {"id": approval_id, "channel": ch, "by": "user", "always": True,
@@ -889,7 +918,7 @@ class ChatBot:
                                               ("cx", approval_id, "Huỷ")], cid, ttl=min(self._ttl(), 3600))
             text = (f"⚠️ <b>Chắc chắn không hỏi lại?</b> Cho phép lần này, và từ nay {esc(ap.get('agent_id'))} không bị hỏi lại với luật "
                     f"<code>{esc(ap.get('matched_rule'))}</code> — kể cả thao tác phá huỷ khác cùng luật. Yêu cầu đang chờ cùng luật cũng được cho phép.\n"
-                    f"Gỡ sau: cfharness guard grant rm {esc(ap.get('agent_id'))} {esc(ap.get('matched_rule'))}.")
+                    f"Gỡ sau: trang web «Quyền đã cấp» (/permissions) hoặc cfharness guard grant rm {esc(ap.get('agent_id'))} {esc(ap.get('matched_rule'))}.")
             return "Cần xác nhận bước 2 — xem tin này.", text, markup
         if action in ("arc", "arh"):
             res = await self.call(cid, "approval.approve", {"id": approval_id, "channel": ch, "by": "user", "grant_rule": True,
@@ -950,6 +979,10 @@ class ChatBot:
     def broadcast_chats(self) -> set[str]:
         """Chat nhận tin chủ động KHÔNG có chat gốc (approval, câu hỏi, thông báo của run từ web/lịch/nền) — mặc định = `notify_chats()`."""
         return self.notify_chats()
+
+    def security_chats(self) -> list[str]:
+        """Nơi gửi tin vào/ra web + thiết bị tin cậy (`web.*`, web_events.py) — mặc định = `broadcast_chats()`; Telegram: nhóm riêng của hub."""
+        return sorted(self.broadcast_chats())
 
     ORIGIN_DEPTH = 8  # số bậc `parent_run_id` tối đa khi lần chat gốc
 

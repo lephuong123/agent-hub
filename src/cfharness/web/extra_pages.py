@@ -2,6 +2,7 @@
 
 - **Lịch chạy** `/schedules`: danh sách `schedule.list`, tạo (`schedule.preview` kiểm biểu thức + hộp xác nhận phía server → `schedule.create`),
   tạm dừng / bật lại / chạy ngay / xoá (mềm) qua `ACTIONS` (`schedule.*` HUMAN_ONLY, daemon tự audit theo `_audit.channel=web`).
+  `/schedules/{id}`: sửa lịch (form điền sẵn → trang xác nhận nêu thay đổi + mốc chạy tới → `schedule.update`) + lịch sử lượt (`schedule.get{fires}`).
 - **Tìm kiếm hội thoại** `/search`: `session.search` (FTS5) — lọc agent / khoảng thời gian / vai trò, đoạn trích tô `«…»` thành `<mark>`
   (không dùng `|safe`: tách đoạn ở server, template autoescape từng đoạn).
 - **Thay đổi file của run**: `/partials/run/{id}/diff` (trang run tải lười bằng htmx) + `/runs/{id}/diff` (không cần JS) — `run.diff{patch}`,
@@ -133,6 +134,97 @@ async def schedule_create(request: Request) -> Response:
     except (RpcError, ValueError) as e:
         return await schedules_page(request, values=values, error=err_text(e), status=400)
     return flash_redirect(request, "/schedules", "ok", f"Đã tạo lịch '{res.get('name')}' ({res.get('id')}) — lượt tới {res.get('next_run_local') or '—'}")
+
+
+def schedule_edit_params(form: Any, cur: dict[str, Any]) -> dict[str, Any]:
+    """Form sửa lịch → tham số `schedule.update` (không đổi `kind`). Ô ngân sách trống = mặc định của hub; ô nơi nhận trống = XOÁ nơi nhận
+    (về "hội thoại gần nhất"). Kiểm biểu thức/đích để service làm (một nguồn sự thật)."""
+    from .app import _num, _req
+
+    p: dict[str, Any] = {"id": str(cur["id"]), "expr": _req(form, "expr", "biểu thức lịch"), "prompt": _req(form, "prompt", "việc cần làm mỗi lượt")}
+    name = str(form.get("name") or "").strip()
+    if name:
+        p["name"] = name
+    kind = cur.get("kind")
+    if kind == "agent":
+        p["target"] = _req(form, "target", "agent chạy")
+    elif kind == "task":
+        team, assignee = str(form.get("team") or "").strip(), str(form.get("assignee") or "").strip()
+        if not team and not assignee:
+            raise ValueError("lịch kiểu task cần team hoặc agent nhận task")
+        p.update({"team": team or None, "assignee": assignee or None})
+    p["budget_usd"] = _num(form.get("budget_usd"), float, "Ngân sách mỗi lượt")
+    p["deliver_to"] = str(form.get("deliver_to") or "").strip() or None
+    return p
+
+
+def sched_form_values(r: dict[str, Any]) -> dict[str, Any]:
+    o = r.get("options") or {}
+    dt = r.get("deliver_to") or {}
+    return {"name": r.get("name") or "", "expr": r.get("expr") or "", "prompt": r.get("prompt") or "", "target": r.get("target") or "",
+            "team": o.get("team") or "", "assignee": o.get("assignee") or "",
+            "budget_usd": "" if r.get("budget_usd") is None else format(float(r["budget_usd"]), "g"),
+            "deliver_to": str(dt.get("conversation_id") or dt.get("channel") or "")}
+
+
+FIRES_LIMIT = 50
+EDIT_LABELS = (("name", "Tên"), ("expr", "Lịch"), ("prompt", "Việc mỗi lượt"), ("target", "Agent"), ("team", "Team"), ("assignee", "Agent nhận task"),
+               ("budget_usd", "Ngân sách mỗi lượt"), ("deliver_to", "Nơi nhận kết quả"))
+
+
+def edit_changes(cur: dict[str, Any], p: dict[str, Any]) -> list[str]:
+    """Các dòng "cũ → mới" cho trang xác nhận sửa lịch (thuần)."""
+    old = sched_form_values(cur)
+    new = dict(old)
+    for k, v in p.items():
+        if k in old:
+            new[k] = "" if v is None else (format(v, "g") if isinstance(v, float) else str(v))
+    empty = {"budget_usd": "(mặc định của hub)", "deliver_to": "(hội thoại gần nhất)"}
+    return [f"- {lb}: {(old[k] or empty.get(k, '(trống)'))[:80]} → {(new[k] or empty.get(k, '(trống)'))[:80]}"
+            for k, lb in EDIT_LABELS if (old.get(k) or "") != (new.get(k) or "")]
+
+
+async def schedule_page(request: Request, *, values: dict[str, Any] | None = None, error: str | None = None, status: int = 200) -> Response:
+    """Chi tiết một lịch: form sửa (điền sẵn) + lịch sử các lượt (`schedule_fires`, ≤ 50 gần nhất)."""
+    sid = request.path_params["id"]
+    r = await rpc(request, "schedule.get", {"id": sid, "fires": FIRES_LIMIT})
+    r["_target"], r["_dest"] = sched_target(r), sched_dest(r)
+    agents = [a["id"] for a in await _opt(request, "agent.list", {}, []) if not a.get("archived_at")]
+    teams = [t["id"] for t in await _opt(request, "team.list", {}, []) if not t.get("archived_at")]
+    fires = r.get("fires") or []
+    spent = sum(float(f.get("cost_usd") or 0) for f in fires)
+    return await render(request, "schedule_edit.html", {"nav": "schedules", "r": r, "fires": fires, "spent": spent, "v": values or sched_form_values(r),
+                                                        "agents": agents, "teams": teams, "error": error, "examples": EXPR_EXAMPLES,
+                                                        "sched_status": SCHED_STATUS, "fire_status": FIRE_STATUS, "fires_limit": FIRES_LIMIT},
+                        status=status)
+
+
+async def schedule_get(request: Request) -> Response:
+    return await schedule_page(request)
+
+
+async def schedule_save(request: Request) -> Response:
+    """Sửa lịch: lần 1 kiểm biểu thức (`schedule.preview`) + trang xác nhận nêu thay đổi; lần 2 (`confirm=yes`) gọi `schedule.update`
+    (HUMAN_ONLY, daemon tự audit kênh web). Lỗi → vẽ lại form với giá trị đã nhập (400)."""
+    _, form = await post_guard(request)
+    sid = request.path_params["id"]
+    values = {k: form.get(k) for k in form.keys() if k not in ("csrf", "k", "confirm")}
+    cur = await rpc(request, "schedule.get", {"id": sid, "fires": 0})  # không có lịch → trang lỗi 404 chung
+    try:
+        p = schedule_edit_params(form, cur)
+        if form.get("confirm") != "yes":
+            pv = await rpc(request, "schedule.preview", {"expr": p["expr"], "count": 3})
+            nxt = ", ".join(str(t)[:16].replace("T", " ") for t in pv.get("next") or []) or "không có mốc nào"
+            changed = edit_changes(cur, p)
+            msg = (f"Lưu thay đổi lịch '{cur.get('name')}' ({cur['id']})?\n" + ("\n".join(changed) if changed else "Không có thay đổi nào.")
+                   + f"\nLịch hiểu là: {pv.get('describe') or pv.get('expr')} (~{pv.get('runs_per_day') or 0:g} lượt/ngày, giờ máy {pv.get('tz') or '?'})"
+                   f"\nCác lượt tới: {nxt}")
+            return await render(request, "confirm.html", {"nav": "schedules", "message": msg, "fields": carry(form), "action": f"/schedules/{cur['id']}/save",
+                                                          "danger": False, "back": f"/schedules/{cur['id']}", "note": None})
+        res = await rpc(request, "schedule.update", p, audit=True)
+    except (RpcError, ValueError) as e:
+        return await schedule_page(request, values=values, error=err_text(e), status=400)
+    return flash_redirect(request, f"/schedules/{res['id']}", "ok", f"Đã lưu lịch '{res.get('name')}' — lượt tới {res.get('next_run_local') or '—'}")
 
 
 # ============================================================================ tìm kiếm hội thoại
@@ -431,6 +523,8 @@ def routes() -> list[Any]:
     return [
         Route("/schedules", schedules_get),
         Route("/schedules/create", schedule_create, methods=["POST"]),
+        Route("/schedules/{id}", schedule_get),
+        Route("/schedules/{id}/save", schedule_save, methods=["POST"]),
         Route("/search", search_page),
         Route("/runs/{id}/diff", run_diff_page),
         Route("/partials/run/{id}/diff", partial_run_diff),
@@ -438,4 +532,5 @@ def routes() -> list[Any]:
     ]
 
 
-__all__ = ["register_actions", "routes", "split_patch", "diff_view", "snippet_parts", "schedule_params", "sched_target"]
+__all__ = ["register_actions", "routes", "split_patch", "diff_view", "snippet_parts", "schedule_params", "schedule_edit_params", "edit_changes",
+           "sched_target"]

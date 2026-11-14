@@ -112,12 +112,14 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "answer": None,  # UX: trả lời câu hỏi = quyết định của người (agent không tự trả lời câu hỏi của mình/agent khác)
     "questions": {"answer", "escalate", "cancel"},
     "web": None,  # WEB: `cfharness web` sinh link đăng nhập = phiên NGƯỜI trên giao diện web
-    "manager": {"set", "chat", "tick", "capabilities"},  # M7: chỉ định/ra lệnh điều phối viên + khung quyền §9 = quyền người (manager.* ∈ HUMAN_ONLY)
+    "manager": {"set", "chat", "tick", "capabilities", "archive", "unarchive"},  # M7: chỉ định/ra lệnh điều phối viên + khung quyền §9 = quyền người (manager.* ∈ HUMAN_ONLY)
     "chat": None,  # M7 terminal: `cfharness chat` = ra lệnh điều phối viên (manager.chat ∈ HUMAN_ONLY)
     "system": {"scan", "add", "rm", "lock", "unlock", "pause", "resume", "restart"},  # job launchd chạy NGOÀI sandbox (system.* ∈ HUMAN_ONLY)
     "home": {"migrate"},  # đổi tên cfharness: chuyển HUB_HOME (dừng daemon, đổi thư mục, viết lại DB) — chỉ người
     "admin": None,  # plan-multi-instance: install-daemon (LaunchDaemon, root) + overview (admin.overview ∈ HUMAN_ONLY, lộ hoạt động user OS khác) — agent gõ đều chặn
-    "update": None,  # cập nhật cfharness = cài đè phần mềm hub + khởi động lại daemon (update.start ∈ HUMAN_ONLY) — agent gõ, kể cả --check, đều chặn
+    "update": None,
+    # Sao lưu (backup.py): khôi phục ghi đè hub.db/policy/tri thức; tạo/kiểm đọc + ghi toàn bộ dữ liệu hub — agent gõ, kể cả list, đều chặn
+    "backup": None,  # cập nhật cfharness = cài đè phần mềm hub + khởi động lại daemon (update.start ∈ HUMAN_ONLY) — agent gõ, kể cả --check, đều chặn
     # Lịch chạy tự động (schedules/): schedule.* ghi ∈ HUMAN_ONLY — agent không tự đặt việc chạy lặp
     "schedule": {"add", "create", "edit", "update", "pause", "resume", "rm", "remove", "delete", "run-now", "run_now"},
     # Tài khoản Claude (accounts/, luồng core): account.* ghi ∈ HUMAN_ONLY — agent không tự thêm/đổi/xoá tài khoản Claude
@@ -151,7 +153,7 @@ SECURITY_READ_SUBS = re.compile(r"^(find-(generic|internet)-password|find-certif
                                 r"export-key|unlock-keychain|set-keychain-settings|show-keychain-info|dump-trust-settings|authorizationdb|"
                                 r"set-generic-password-partition-list|set-key-partition-list|add-(generic|internet)-password)$")
 # WT-3: dấu hiệu đường dẫn trỏ vào vùng nhạy cảm của HUB_HOME (dùng cho đích động không giải được)
-SENSITIVE_HINT = re.compile(rf"(^|/)(auth|secrets)(/|$)|/(web|tokens)\.json$|\.sock(\.auth)?$|/hub\.db|{_ENV_HOME}|{_HOME_DIR}")
+SENSITIVE_HINT = re.compile(rf"(^|/)(auth|secrets)(/|$)|/(web|tokens|trusted_devices)\.json$|\.sock(\.auth)?$|/hub\.db|{_ENV_HOME}|{_HOME_DIR}")
 UNIX_SOCKET_RE = re.compile(r"\bAF_UNIX\b|UNIX-CONNECT|UNIX-CLIENT|\bcreateConnection\s*\(\s*\{?\s*path|\bnet\.connect\s*\(\s*\{?\s*path|\bnet\.connect\s*\(\s*['\"]/|UNIXSocket|socket\.AF_UNIX|IO::Socket::UNIX|\bunix:/", re.I)
 LIST_ARGV_RE = re.compile(r"""\[\s*((?:(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*,\s*)*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'))\s*,?\s*\]""")
 JS_SPAWN_RE = re.compile(r"""\b(?:spawn|spawnSync|execFile|execFileSync|Deno\.Command|Bun\.spawn)\s*\(\s*(["'])([^"']+)\1\s*,\s*\[([^\]]*)\]""")
@@ -397,7 +399,7 @@ NET_BLOCK_RULES = frozenset({"webfetch_local", "ssrf_metadata", "ssrf_private_ip
 # đánh dấu cần duyệt, lỗi bộ phân loại/không phân tích được đích, run không hoạt động/ESTOP
 NEVER_DOWNGRADE_RULES = NET_BLOCK_RULES | frozenset({
     "url_dns_failed", "web_domain_denied", "web_domain_not_allowed", "sandbox_network_not_allowed", "sandbox_network_bad_host", "mcp_require_approval", "classifier_error", "unknown_run", "estop",
-    "nesting_too_deep", "hub_secret_read", "self_approval",
+    "nesting_too_deep", "hub_secret_read", "self_approval", "admin_shared",
 })
 NEVER_DOWNGRADE_KLASS = frozenset({"hub", "policy", "guard"})
 
@@ -554,6 +556,8 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
         if tool_name in READ_ONLY_TOOLS:
             for k in ("file_path", "path", "notebook_path"):
                 v = ti.get(k)
+                if isinstance(v, str) and v and admin_shared(_abs(v, ctx.cwd)):
+                    return Verdict("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [v], forbidden=True)
                 if isinstance(v, str) and v and sensitive_read(_abs(v, ctx.cwd), ctx):
                     return Verdict("destructive", "hub_secret_read", "hub", "agent không được đọc token người/secret/mcp.json của hub", [v], forbidden=True)
             cv = confine_read_verdict(tool_name, ti, ctx)
@@ -750,6 +754,19 @@ def confine_read_verdict(tool_name: str, ti: dict[str, Any], ctx: GuardContext) 
 READ_PATH_KEYS = ("file_path", "path", "notebook_path")
 
 
+def admin_shared(p: str) -> bool:
+    """Thư mục chung của quản trị máy (trạng thái/audit/chính sách/cờ ESTOP/admin-log của MỌI user) — agent không đọc/ghi (plan-admin-users §4)."""
+    if IS_WINDOWS:
+        return False
+    from ..admin_overview import SHARED_ROOT
+
+    roots = {SHARED_ROOT, _real(SHARED_ROOT)}
+    return any(_under(c, r) for c in {canon_path(p), _real(p)} for r in roots)
+
+
+ADMIN_SHARED_REASON = "agent không được đọc/ghi thư mục chung của quản trị máy (dữ liệu của mọi user trên máy)"
+
+
 def sensitive_read(p: str, ctx: GuardContext) -> bool:
     """Đường dẫn mà agent KHÔNG được đọc: token người cạnh socket, secrets/, mcp.json đã resolve, token MCP HTTP,
     mọi hub home KHÁC đã đăng ký (P2.4)."""
@@ -769,7 +786,7 @@ def sensitive_read(p: str, ctx: GuardContext) -> bool:
         if ctx.hub_socket and _same(c, ctx.hub_socket + ".auth"):
             return True
         for h in homes:
-            if _under(c, h + "/secrets") or _under(c, h + "/auth") or _same(c, h + "/mcp_server/tokens.json"):
+            if _under(c, h + "/secrets") or _under(c, h + "/auth") or _under(c, h + "/backups") or _same(c, h + "/mcp_server/tokens.json"):
                 return True
             parts = [x.lower() for x in _rel_parts(c, h)] if IS_WINDOWS else _rel_parts(c, h)
             if len(parts) >= 3 and parts[0] == "agents" and parts[2] == "runtime":
@@ -885,6 +902,8 @@ def classify_file_write(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -
     ap = _abs(p, ctx.cwd)
     rp = _real(ap)
     op = "overwrite" if tool_name == "Write" and os.path.exists(ap) else "write"
+    if admin_shared(ap):
+        return Verdict("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [ap], forbidden=True)
     for cand in {ap, rp}:
         if _under(cand, canon_path(str(ctx.policy.policy_dir))):
             return Verdict("destructive", "policy_write", "policy", "agent không được ghi chính sách an toàn (FR-SG-05)", [ap], "hub-policy")
@@ -1244,6 +1263,11 @@ class BashAnalyzer:
         hh = _hub_home(self.ctx)
         if _contains(norm, hh + "/auth") or _contains(norm, hh + "/secrets"):
             self.hit("destructive", "hub_secret_read", "hub", "agent đụng token người/secret store của hub", forbidden=True)
+        if not IS_WINDOWS:
+            from ..admin_overview import SHARED_ROOT
+
+            if re.search(re.escape(SHARED_ROOT) + r"(?![A-Za-z0-9_.\-])", norm):
+                self.hit("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [SHARED_ROOT], forbidden=True)
         for pat in self.ctx.policy.bash_patterns:
             try:
                 if re.search(pat["pattern"], norm):

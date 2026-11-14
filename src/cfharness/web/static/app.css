@@ -1050,6 +1050,13 @@ details.flagged > summary { cursor: pointer; }
 @media (max-width: 1100px) { .mg-wrap { grid-template-columns: 1fr; } .mg-side { position: static; max-height: none; } .mg-canvas { height: 56vh; } }
 .mem-tiers code { white-space: nowrap; }
 
+/* quản trị máy (web/admin_pages.py): biểu đồ SVG vẽ phía server — không script, không style inline */
+.admin-chart { margin: 0 0 var(--s4); }
+.admin-chart figcaption { color: var(--muted); font-size: var(--fs-sm); margin-bottom: 4px; }
+.chart-svg { width: 100%; max-width: 720px; height: auto; display: block; }
+.chart-bar { fill: var(--accent); }
+.chart-axis { stroke: var(--line-2); stroke-width: 1; }
+.chart-lbl { fill: var(--muted); font-size: 10px; }
 /* ============================================================ transcript dùng chung (.tx-*) — trang run, sau này cả Điều phối
    (docs/dev-notes/plan-chat-ui-claude.md mục 2). Màu token code = CLASS pygments `tk-*` (CSP chặn style=). */
 :root {

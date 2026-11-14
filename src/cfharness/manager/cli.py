@@ -25,6 +25,11 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     t.add_argument("--if-due", action="store_true", help="chỉ chạy nếu tới hạn/có sự kiện (như vòng nền)")
     cv = ms.add_parser("conversations", help="liệt kê hội thoại", parents=[common])
     cv.add_argument("--channel")
+    cv.add_argument("--archived", action="store_true", help="chỉ hội thoại đã lưu trữ")
+    for name, hlp in (("archive", "lưu trữ (ẩn) một hội thoại — tin/run/audit giữ nguyên (chỉ người)"),
+                      ("unarchive", "khôi phục hội thoại đã lưu trữ (chỉ người)")):
+        ar = ms.add_parser(name, help=hlp, parents=[common])
+        ar.add_argument("conversation")
     h = ms.add_parser("history", help="lịch sử một hội thoại", parents=[common])
     h.add_argument("conversation")
     h.add_argument("--limit", type=int, default=30)
@@ -198,12 +203,20 @@ def cmd_manager(ctx: Any) -> int:
             _print_get(g)
         return 0
     if act == "conversations":
-        rows = ctx.call("manager.conversations", {"channel": a.channel})
+        rows = ctx.call("manager.conversations", {"channel": a.channel, "archived": bool(a.archived)})
         if ctx.json:
             ctx.out(rows)
         else:
             for c in rows:
                 print(f"{c['id']}  {c['channel']:<14} {c.get('messages', 0):>3} tin · {c['updated_at']}  {c.get('title') or ''}")
+        return 0
+    if act in ("archive", "unarchive"):
+        c = ctx.call(f"manager.{act}", {"conversation_id": a.conversation})
+        if ctx.json:
+            ctx.out(c)
+        else:
+            print(f"Đã {'lưu trữ' if act == 'archive' else 'khôi phục'} hội thoại {c['id']} ({c['channel']}, {c.get('messages', 0)} tin)."
+                  + (f" Khôi phục: cfharness manager unarchive {c['id']}" if act == "archive" else ""))
         return 0
     if act == "history":
         rows = ctx.call("manager.history", {"conversation_id": a.conversation, "limit": a.limit})

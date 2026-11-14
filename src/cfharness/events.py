@@ -68,6 +68,10 @@ EVENT_LEVELS: dict[str, str] = {
     "subagent.spawn": "summary",
     # Hub
     "hub.estop": "summary",
+    # quản trị máy (admin_control.py): cờ ESTOP admin bật/gỡ — {on, scope all|user, reason_code (enum), since}; user không gỡ được
+    "hub.admin_estop": "summary",
+    # quản trị máy (admin_watch.py, chỉ hub của admin): cảnh báo theo user/hub — {user, hub_id, code (enum ALERT_CODES), state on|resolved}
+    "admin.alert": "summary",
     "hub.started": "summary",
     "hub.stopping": "summary",
     "hub.config_changed": "summary",
@@ -99,8 +103,18 @@ EVENT_LEVELS: dict[str, str] = {
     "approval.escalated": "summary",
     "guard.decision": "debug",
     "guard.blocked": "summary",
-    "guard.tamper_detected": "summary",  # hardening SEC: policy/config/hub.db bị ghi NGOÀI RPC (guard/integrity.py) → khôi phục + Slack
+    "guard.tamper_detected": "summary",
+    "backup.created": "summary",  # bản sao lưu HUB_HOME mới (backup.py): {id, kind, size, pruned}
+    "backup.failed": "summary",  # sao lưu tự động lỗi: {kind, error}  # hardening SEC: policy/config/hub.db bị ghi NGOÀI RPC (guard/integrity.py) → khôi phục + Slack
     "auth.denied": "summary",  # hardening SEC: method chỉ-người bị gọi từ tiến trình run/thiếu token (auth.py)
+    # web: vào/ra + thiết bị tin cậy (web_events.py, RPC `web.notify` HUMAN_ONLY) — chỉ metadata (cách đăng nhập, nhãn trình duyệt, IP)
+    "web.login": "summary",
+    "web.logout": "summary",
+    "web.login_locked": "summary",
+    "web.device_trusted": "summary",
+    "web.device_reuse_detected": "summary",
+    "web.device_revoked": "summary",
+    "web.devices_revoked_all": "summary",
     "guard.env_tamper": "summary",  # hardening SEC R2-1: .pth/sitecustomize trong venv của hub bị thêm/sửa (chạy ngoài sandbox)
     "guard.trust": "summary",  # người bật/tắt trust full cho agent (guard/service.trust_set)
     "guard.rule_grant": "summary",  # người luôn cho phép / gỡ cho phép agent theo luật (guard/service.rule_grant_set|rm)
@@ -133,6 +147,7 @@ EVENT_LEVELS: dict[str, str] = {
     "task.signal": "summary",  # agent gọi hub-self task_complete/task_block/task_request_review
     "task.decomposed": "summary",
     "task.circuit_open": "summary",
+    "task.requeue_exhausted": "summary",  # cost-guardrails: quá trần requeue run interrupted → task blocked
     "run.protocol_violation": "summary",
     "run.reverted": "summary",
     "workspace.checkpoint": "debug",

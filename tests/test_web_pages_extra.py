@@ -9,7 +9,7 @@ import subprocess
 
 import pytest
 
-from cfharness.web.extra_pages import diff_view, schedule_params, snippet_parts, split_patch
+from cfharness.web.extra_pages import diff_view, edit_changes, schedule_edit_params, schedule_params, snippet_parts, split_patch
 from cfharness.workspace import compute_diff, take_checkpoint
 from test_web import ISOLATED, _start, _stop, audit_rows, until  # noqa: F401 — dùng lại khung test web
 
@@ -180,6 +180,57 @@ async def test_schedule_create_confirm_validate_and_actions(env):
     assert r.status_code == 303 and env.hub.schedules.list() == []
     assert env.hub.store.conn.execute("SELECT deleted_at FROM schedules WHERE id=?", (s["id"],)).fetchone()[0]
     assert audit_rows(env, "schedule.rm")[-1]["channel"] == "web"
+
+
+def test_schedule_edit_params_and_changes():
+    cur = {"id": "sc_1", "kind": "agent", "name": "A", "expr": "daily 08:00", "prompt": "x", "target": "ag0", "budget_usd": 0.5,
+           "deliver_to": {"channel": "telegram:42"}, "options": {}}
+    p = schedule_edit_params({"expr": "daily 09:00", "prompt": "y", "target": "ag0", "budget_usd": "", "deliver_to": ""}, cur)
+    assert p == {"id": "sc_1", "expr": "daily 09:00", "prompt": "y", "target": "ag0", "budget_usd": None, "deliver_to": None}
+    ch = edit_changes(cur, p)
+    assert any("- Lịch: daily 08:00 → daily 09:00" == c for c in ch) and any("telegram:42 → (hội thoại gần nhất)" in c for c in ch)
+    assert any("0.5 → (mặc định của hub)" in c for c in ch) and not any(c.startswith("- Tên") for c in ch)
+    with pytest.raises(ValueError):
+        schedule_edit_params({"expr": "daily 09:00", "prompt": "y"}, cur)  # kind agent cần target
+    with pytest.raises(ValueError):
+        schedule_edit_params({"expr": "daily 09:00", "prompt": "y"}, {**cur, "kind": "task"})
+
+
+async def test_schedule_edit_confirm_and_fire_history(env):
+    await env.login()
+    env.hub.agents.create({"id": "ag0", "name": "ag0", "model": "haiku"})
+    env.hub.agents.create({"id": "ag1", "name": "ag1", "model": "haiku"})
+    s = env.hub.schedules.create({"kind": "agent", "target": "ag0", "expr": "daily 08:00", "prompt": "Tóm tắt <b>góp ý</b>", "name": "Sáng",
+                                  "deliver_to": "telegram:42", "budget_usd": 0.3})
+    # danh sách có link sang trang sửa
+    assert f'href="/schedules/{s["id"]}"' in (await env.client.get("/schedules")).text
+    r = await env.client.get(f"/schedules/{s['id']}")
+    assert r.status_code == 200 and "Sửa lịch" in r.text and 'value="telegram:42"' in r.text and "Chưa có lượt" in r.text
+    assert "<b>góp ý</b>" not in r.text and "&lt;b&gt;góp ý&lt;/b&gt;" in r.text  # prompt là dữ liệu — autoescape
+    assert (await env.client.get("/schedules/sc_khongco")).status_code == 404
+    # lần 1: trang xác nhận nêu thay đổi, chưa ghi
+    form = {"name": "Sáng", "expr": "weekdays 09:30", "prompt": "Tóm tắt <b>góp ý</b>", "target": "ag1", "budget_usd": "", "deliver_to": ""}
+    r = await env.post(f"/schedules/{s['id']}/save", form)
+    assert r.status_code == 200 and "Lưu thay đổi lịch" in r.text and "→ weekdays 09:30" in r.text and "ag0 → ag1" in r.text
+    assert "telegram:42 → (hội thoại gần nhất)" in r.text
+    assert env.hub.schedules.get(s["id"])["target"] == "ag0"
+    # biểu thức sai → 400, giữ giá trị, không ghi
+    r = await env.post(f"/schedules/{s['id']}/save", {**form, "expr": "khi nào rảnh", "confirm": "yes"})
+    assert r.status_code == 400 and "không hợp lệ" in r.text and 'value="khi nào rảnh"' in r.text
+    # xác nhận → schedule.update + audit kênh web; nơi nhận đã xoá, ngân sách về mặc định
+    r = await env.post(f"/schedules/{s['id']}/save", {**form, "confirm": "yes"})
+    assert r.status_code == 303 and r.headers["location"] == f"/schedules/{s['id']}"
+    row = env.hub.schedules.get(s["id"])
+    assert row["describe"] == "thứ 2–6 lúc 09:30" and row["target"] == "ag1" and row["deliver_to"] == {} and row["budget_usd"] != 0.3
+    assert audit_rows(env, "schedule.update")[-1]["channel"] == "web"
+    # lịch sử lượt: chạy ngay → một dòng có link run
+    r = await env.post("/do/schedule_run_now", {"id": s["id"], "next": f"/schedules/{s['id']}", "confirm": "yes"})
+    rid = r.headers["location"].rsplit("/", 1)[1]
+    r = await env.client.get(f"/schedules/{s['id']}")
+    assert f'href="/runs/{rid}"' in r.text and "chạy ngay" in r.text and 'id="sched-fires"' in r.text
+    # thiếu khoá phiên → 403
+    r = await env.client.post(f"/schedules/{s['id']}/save", data={**form, "confirm": "yes", "csrf": env.csrf})
+    assert r.status_code == 403
 
 
 # =========================================================================== tìm kiếm hội thoại

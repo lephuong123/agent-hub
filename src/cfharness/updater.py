@@ -13,6 +13,10 @@ Luồng (`hub.updater.start`, RPC `update.start` ∈ HUMAN_ONLY, tự audit):
 3. Daemon tự dừng (exit 0 → launchd/systemd không chạy lại); helper chờ daemon thoát → cài → `python -m cfharness daemon start` → ghi
    `HUB_HOME/update/state.json` (`done|failed`), log `HUB_HOME/logs/update.log`.
 
+Lưới an toàn (docs/dev-notes/update.md, backup.py): trước khi helper chạy, `update.start` tạo bản sao lưu `pre-update` (`backup.before_update`,
+lỗi → huỷ cập nhật) và ghi vào state.json; helper chờ daemon trả lời `hub.ping` — không lên → cài lại bản đang chạy + khôi phục hub.db nếu
+`user_version` đã tăng. `update.rollback` (∈ HUMAN_ONLY, tự audit; CLI `cfharness update --rollback`) quay về tag trước theo state.json.
+
 Giao diện web (`cfharness web`) và `cfharness chat` đang mở vẫn chạy code cũ cho tới khi mở lại — trang Cài đặt báo điều này.
 """
 
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -46,7 +51,7 @@ API = f"https://api.github.com/repos/{REPO}"
 TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 CHECK_TTL_S = 600.0
 SUPERVISOR_WAIT_S = 75  # < RESTART_TIMEOUT_S (90) của helper: launchd chạy lại sau ≤ ThrottleInterval (30 s) + thời gian khởi động
-MUTATING_UPDATE = ("update.start",)
+MUTATING_UPDATE = ("update.start", "update.rollback")
 
 Fetcher = Callable[[float], dict[str, Any]]
 Spawner = Callable[[list[str], dict[str, Any]], int]
@@ -198,19 +203,49 @@ class Updater:
             return ""
 
     # ------------------------------------------------------------------ cập nhật
-    def plan(self, tag: str, supervised: bool = False) -> dict[str, list[str]]:
+    def install_argv(self, tag: str) -> list[str]:
+        if not TAG_RE.match(str(tag)):  # repo cố định + tag chỉ vX.Y.Z: không bao giờ cài nguồn/nhánh tuỳ ý
+            raise HubError(f"tag '{tag}' không hợp lệ — dạng vX.Y.Z", code=-32602)
         pyver = f"{sys.version_info.major}.{sys.version_info.minor}"
+        return [str(self.uv()), "tool", "install", "--force", "--python", pyver, f"git+{GIT_URL}@{tag}"]
+
+    def plan(self, tag: str, supervised: bool = False) -> dict[str, list[str]]:
         restart = [self.python, "-m", "cfharness", "daemon", "start"]
         if supervised:  # daemon chạy dưới launchd: launchd tự chạy lại (thoát mã 75) — helper chỉ chờ, hết giờ mới tự bật
             restart += ["--wait-supervisor", str(SUPERVISOR_WAIT_S)]
-        return {
-            "install": [str(self.uv()), "tool", "install", "--force", "--python", pyver, f"git+{GIT_URL}@{tag}"],
-            "restart": restart,
-            "verify": [self.python, "-m", "cfharness", "--version"],
-        }
+        out = {"install": self.install_argv(tag), "restart": restart, "verify": [self.python, "-m", "cfharness", "--version"]}
+        cur = parse_version(__version__)
+        if cur:  # lưới an toàn: daemon không lên sau cập nhật → helper cài lại đúng bản đang chạy
+            out["rollback_install"] = self.install_argv("v%d.%d.%d" % cur)
+        return out
+
+    def _helper_argv(self, cmd: str, plan: dict[str, list[str]], *, install: list[str], wait_pid: int | None,
+                     backup: dict[str, Any] | None) -> list[str]:
+        helper = self.dir / "helper.py"
+        shutil.copyfile(Path(__file__).with_name("update_helper.py"), helper)
+        argv = [self.base_python, "-I", str(helper), cmd, "--state", str(self.state_path), "--log", str(self.log_path),
+                "--home", str(self.paths.home), "--install", json.dumps(install), "--restart", json.dumps(plan["restart"]),
+                "--verify", json.dumps(plan["verify"])]
+        if os.name != "nt":
+            argv += ["--socket", str(self.paths.socket)]
+        if cmd == "apply" and plan.get("rollback_install"):
+            argv += ["--rollback-install", json.dumps(plan["rollback_install"])]
+        if backup and backup.get("path") and isinstance(backup.get("user_version"), int):
+            argv += ["--db-backup", str(backup["path"]), "--db-version", str(backup["user_version"])]
+        if wait_pid:
+            argv += ["--wait-pid", str(wait_pid)]
+        return argv
+
+    def _write_state(self, st: dict[str, Any]) -> None:
+        self.dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.state_path.with_name("state.json.tmp")
+        tmp.write_text(json.dumps(st, ensure_ascii=False, indent=1), encoding="utf-8")
+        tmp.replace(self.state_path)
 
     def start(self, *, tag: str | None = None, force: bool = False, busy: int = 0, wait_pid: int | None = None,
-              env: dict[str, str] | None = None, by: str = "user", supervised: bool = False) -> dict[str, Any]:
+              env: dict[str, str] | None = None, by: str = "user", supervised: bool = False,
+              backup: Callable[[], dict[str, Any] | None] | None = None) -> dict[str, Any]:
+        """`backup`: tạo bản sao lưu pre-update SAU khi mọi kiểm tra qua, TRƯỚC khi helper chạy (lỗi → huỷ cập nhật)."""
         if self.in_progress():
             raise Conflict("đang có một lần cập nhật chạy — chờ xong rồi thử lại", data={"state": self.state()})
         chk = self.check(refresh=True)
@@ -231,29 +266,73 @@ class Updater:
         plan = self.plan(tag, supervised=supervised)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
-        helper = self.dir / "helper.py"
-        shutil.copyfile(Path(__file__).with_name("update_helper.py"), helper)
-        st = {"state": "starting", "phase": "starting", "tag": tag, "version_before": __version__, "started_at": time.time(),
-              "updated_at": time.time(), "by": by, "forced": bool(force), "plan": plan}
-        tmp = self.state_path.with_name("state.json.tmp")
-        tmp.write_text(json.dumps(st, ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(self.state_path)
-        argv = [self.base_python, "-I", str(helper), "apply", "--state", str(self.state_path), "--log", str(self.log_path),
-                "--home", str(self.paths.home), "--install", json.dumps(plan["install"]), "--restart", json.dumps(plan["restart"]),
-                "--verify", json.dumps(plan["verify"])]
-        if wait_pid:
-            argv += ["--wait-pid", str(wait_pid)]
+        bk = None
+        if backup is not None:
+            try:
+                b = backup()
+            except Exception as e:
+                raise HubError(f"không tạo được bản sao lưu trước cập nhật: {e} — cập nhật đã huỷ (tắt bước này: "
+                               "cfharness config set backup.before_update false)") from e
+            if b:
+                bk = {"id": b.get("id"), "path": b.get("path"), "user_version": b.get("user_version")}
+        st = {"state": "starting", "phase": "starting", "kind": "update", "tag": tag, "version_before": __version__, "started_at": time.time(),
+              "updated_at": time.time(), "by": by, "forced": bool(force), "plan": plan, "backup": bk}
+        self._write_state(st)
+        argv = self._helper_argv("apply", plan, install=plan["install"], wait_pid=wait_pid, backup=bk)
         pid = self.spawn(argv, {"log": str(self.paths.logs_dir / "update.out"), "cwd": str(self.paths.home), "env": env})
         st["helper_pid"] = pid
-        return {"started": True, "tag": tag, "from": __version__, "helper_pid": pid, "log": str(self.log_path),
+        return {"started": True, "tag": tag, "from": __version__, "helper_pid": pid, "log": str(self.log_path), "backup": (bk or {}).get("id"),
                 "note": "daemon sẽ dừng rồi tự khởi động lại bằng bản mới (thường < 1 phút)"}
+
+    def rollback_target(self) -> dict[str, Any]:
+        """Bản để quay về theo `update/state.json` của lần cập nhật gần nhất. Ném lỗi khi không quay về được."""
+        st = self.state() or {}
+        if st.get("kind") == "rollback":
+            raise Conflict("lần gần nhất đã là quay về — không quay tiếp (cài đúng bản muốn bằng: cfharness update --tag vX.Y.Z --force)")
+        if st.get("rolled_back"):
+            raise Conflict(f"lần cập nhật lên {st.get('tag')} đã tự quay về {st.get('version_before')} rồi")
+        prev = parse_version(st.get("version_before"))
+        if not st or not prev:
+            raise HubError("chưa có lần cập nhật nào để quay về (không có update/state.json)")
+        tag = "v%d.%d.%d" % prev
+        if prev == parse_version(__version__):
+            raise Conflict(f"đang chạy đúng bản trước ({__version__}) rồi — không có gì để quay về")
+        bk = st.get("backup") if isinstance(st.get("backup"), dict) else None
+        if bk and not Path(str(bk.get("path") or "")).is_file():
+            bk = None
+        return {"tag": tag, "from": __version__, "rollback_of": st.get("tag"), "backup": bk}
+
+    def rollback(self, *, force: bool = False, busy: int = 0, wait_pid: int | None = None, env: dict[str, str] | None = None,
+                 by: str = "user", supervised: bool = False) -> dict[str, Any]:
+        """`cfharness update --rollback`: cài lại tag trước + khôi phục hub.db pre-update nếu schema đã tăng (helper `rollback`)."""
+        if self.in_progress():
+            raise Conflict("đang có một lần cập nhật chạy — chờ xong rồi thử lại", data={"state": self.state()})
+        info = self.info()
+        if info["kind"] != "uv_git":
+            raise HubError(f"không quay về tự động được: {info.get('reason')}", data={"install": info})
+        if not self.uv():
+            raise HubError("không quay về tự động được: không tìm thấy lệnh `uv`")
+        tgt = self.rollback_target()
+        if busy and not force:
+            raise Conflict(f"đang có {busy} run chạy/chờ — quay về sẽ dừng daemon và ngắt chúng. Chờ xong, hoặc dùng --force", data={"busy": busy})
+        plan = self.plan(tgt["tag"], supervised=supervised)
+        plan.pop("rollback_install", None)
+        self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
+        st = {"state": "starting", "phase": "starting", "kind": "rollback", "tag": tgt["tag"], "version_before": __version__,
+              "rollback_of": tgt["rollback_of"], "started_at": time.time(), "updated_at": time.time(), "by": by, "forced": bool(force),
+              "plan": plan, "backup": tgt["backup"]}
+        self._write_state(st)
+        argv = self._helper_argv("rollback", plan, install=plan["install"], wait_pid=wait_pid, backup=tgt["backup"])
+        pid = self.spawn(argv, {"log": str(self.paths.logs_dir / "update.out"), "cwd": str(self.paths.home), "env": env})
+        return {"started": True, "rollback": True, "tag": tgt["tag"], "from": __version__, "helper_pid": pid, "log": str(self.log_path),
+                "db_backup": (tgt["backup"] or {}).get("id"),
+                "note": "daemon sẽ dừng, cài lại bản trước (+ hub.db trước cập nhật nếu schema đã tăng) rồi tự khởi động lại"}
 
 
 # ============================================================================ RPC
 def register_rpc(daemon: "Daemon") -> None:
-    """`update.check {refresh?}` (đọc), `update.status {lines?}` (đọc), `update.start {tag?, force?}` (HUMAN_ONLY, tự audit)."""
-    import os
-
+    """`update.check {refresh?}` (đọc), `update.status {lines?}` (đọc), `update.start {tag?, force?}` / `update.rollback {force?}`
+    (HUMAN_ONLY, tự audit)."""
     from .mcp_server.rpc import wrap_with_audit
 
     hub = daemon.hub
@@ -266,7 +345,7 @@ def register_rpc(daemon: "Daemon") -> None:
     def _status(p: dict[str, Any]) -> dict[str, Any]:
         return {"state": up.state(), "in_progress": up.in_progress(), "log_tail": up.log_tail(int(p.get("lines") or 40)), "current": __version__}
 
-    async def _start(p: dict[str, Any]) -> dict[str, Any]:
+    async def _launch(p: dict[str, Any], rollback: bool) -> dict[str, Any]:
         from .auth import current_caller
 
         c = current_caller()
@@ -278,15 +357,32 @@ def register_rpc(daemon: "Daemon") -> None:
 
         supervised = supervisor() == "launchd"
         env.pop("XPC_SERVICE_NAME", None)  # helper + daemon nó có thể tự bật (hết giờ chờ) KHÔNG được tưởng mình là job launchd
-        res = await asyncio.to_thread(up.start, tag=p.get("tag") or None, force=bool(p.get("force")), busy=busy, wait_pid=os.getpid(), env=env,
-                                      by=f"manager:{c.manager}" if c is not None and c.manager else "user", supervised=supervised)
+        by = f"manager:{c.manager}" if c is not None and c.manager else "user"
+        if rollback:
+            res = await asyncio.to_thread(up.rollback, force=bool(p.get("force")), busy=busy, wait_pid=os.getpid(), env=env, by=by,
+                                          supervised=supervised)
+        else:
+            bsvc = getattr(hub, "backups", None)
+            make_backup = None
+            if bsvc is not None and bool(hub.config.get("backup.before_update")):
+                def make_backup() -> dict[str, Any]:  # lưới an toàn: chụp hub.db + tri thức trước khi cài (bản pre-update)
+                    return bsvc.create(kind="pre-update", label=str(p.get("tag") or "latest"), by=by)
+            res = await asyncio.to_thread(up.start, tag=p.get("tag") or None, force=bool(p.get("force")), busy=busy, wait_pid=os.getpid(), env=env,
+                                          by=by, supervised=supervised, backup=make_backup)
         if supervised:  # thoát ≠ 0 để launchd (KeepAlive SuccessfulExit=false) chạy lại daemon — không để helper bật bản ngoài launchd
             daemon.exit_code = SUPERVISED_RESTART_CODE
         asyncio.get_running_loop().call_later(0.5, daemon.stopping.set)  # trả lời RPC trước, rồi dừng để helper cài đè
         return res
 
-    methods: dict[str, Callable[[dict[str, Any]], Any]] = {"update.check": _check, "update.status": _status, "update.start": _start}
-    methods["update.start"] = wrap_with_audit(hub, "update.start", methods["update.start"])
+    async def _start(p: dict[str, Any]) -> dict[str, Any]:
+        return await _launch(p, rollback=False)
+
+    async def _rollback(p: dict[str, Any]) -> dict[str, Any]:
+        return await _launch(p, rollback=True)
+
+    methods: dict[str, Callable[[dict[str, Any]], Any]] = {"update.check": _check, "update.status": _status,
+                                                           "update.start": wrap_with_audit(hub, "update.start", _start),
+                                                           "update.rollback": wrap_with_audit(hub, "update.rollback", _rollback)}
     daemon.methods.update(methods)
 
 

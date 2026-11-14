@@ -22,7 +22,8 @@ from ..rpc import DaemonUnavailable, RpcError
 from .app import render, rpc, session_of, ws
 
 PHASES = {"starting": "Chuẩn bị", "waiting_daemon": "Chờ daemon dừng", "installing": "Đang tải và cài bản mới",
-          "restarting": "Khởi động lại daemon", "verifying": "Kiểm tra phiên bản", "finished": "Xong"}
+          "restarting": "Khởi động lại daemon", "health": "Chờ daemon trả lời", "rolling_back": "Quay về bản trước",
+          "rollback_restarting": "Khởi động lại bản trước", "verifying": "Kiểm tra phiên bản", "finished": "Xong"}
 
 
 async def _ctx(request: Request, refresh: bool = False) -> dict[str, Any]:
@@ -55,7 +56,8 @@ async def update_page(request: Request) -> Response:
 
 
 def _start_confirm(f: Any) -> str:
-    base = f"Cập nhật cfharness lên {f.get('tag') or 'bản mới nhất'}?\nDaemon sẽ dừng khoảng 1 phút để cài bản mới rồi tự chạy lại."
+    base = (f"Cập nhật cfharness lên {f.get('tag') or 'bản mới nhất'}?\nDaemon sẽ dừng khoảng 1 phút để cài bản mới rồi tự chạy lại."
+            "\nTrước khi cài, hub tạo một bản sao lưu; daemon không lên được thì tự quay về bản đang chạy.")
     if f.get("force") == "1":
         base += "\nRun đang chạy sẽ bị NGẮT (tự tiếp tục sau khi daemon chạy lại)."
     return base
