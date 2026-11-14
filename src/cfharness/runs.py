@@ -220,6 +220,7 @@ class RunManager:
         run_opts: dict[str, Any] | None = None,
         max_runtime_s: float | None = None,
         manager_issue: bool = False,
+        budget_exempt: bool = False,
     ) -> dict[str, Any]:
         if not prompt or not prompt.strip():
             raise HubError("prompt rỗng")
@@ -277,7 +278,7 @@ class RunManager:
                 _resolve_plugins(list(agent["plugins"]))
             except PluginError as e:
                 raise HubError(str(e), data={"field": "plugins"}) from e
-        max_budget = self._budget_for(agent, budget_usd, team_id)
+        max_budget = self._budget_for(agent, budget_usd, team_id, exempt_day=budget_exempt)
         run_id = "r_" + uuid.uuid4().hex[:12]
         session_id = resume_session_id or str(uuid.uuid4())
         if resume_session_id and (run_opts or {}).get("fork"):  # M4-A: fork → session MỚI, session gốc không đổi
@@ -341,14 +342,17 @@ class RunManager:
         r = self.store.conn.execute(f"SELECT COALESCE(SUM(MAX(max_budget_usd - COALESCE(cost_usd, 0), 0)), 0) FROM runs WHERE {where}", args).fetchone()
         return float(r[0] or 0)
 
-    def _budget_for(self, agent: dict[str, Any], budget_usd: float | None, team_id: str | None = None) -> float | None:
+    def _budget_for(self, agent: dict[str, Any], budget_usd: float | None, team_id: str | None = None, *,
+                    exempt_day: bool = False) -> float | None:
         """Trần `--max-budget-usd` của run = min(ngân sách run, phần còn lại của ngày ở hub/team/agent) (FR-OB-03).
-        Phần còn lại TRỪ phần đang giữ chỗ của run chưa kết thúc (H-19) → tổng trần các run song song ≤ hạn mức ngày."""
+        Phần còn lại TRỪ phần đang giữ chỗ của run chưa kết thúc (H-19) → tổng trần các run song song ≤ hạn mức ngày.
+        `exempt_day` (lượt chạy tiếp sau khi NGƯỜI quyết approval — chủ repo quyết 2026-11-14): bỏ qua trần ngày của
+        hub/team/agent/điều phối viên; trần mỗi run (kế thừa từ run gốc) và scope `admin` (chính sách root) vẫn áp."""
         limits = agent.get("limits") or {}
         per_run = budget_usd or limits.get("max_budget_usd_per_run") or self.hub.config.get("runs.default_max_budget_usd")
         per_run = self._admin_policy().cap_per_run(self.hub, per_run)  # trần mỗi run của chính sách quản trị máy
         for scope, owner, used, day in self.budget_scopes(agent["id"], team_id):
-            if not day:
+            if not day or (exempt_day and scope != "admin"):
                 continue
             reserved = self.reserved_budget(scope, owner)
             if used < float(day) and round(float(day) - used - reserved, 6) <= 0:
@@ -1324,20 +1328,36 @@ class RunManager:
             + "\nThen continue the original task from where you stopped and finish with a short summary."
         )
         ticket = next((a["id"] for a in decided if a["status"] == "allowed"), None)
+        # Người vừa quyết → lượt chạy tiếp không bị trần NGÀY chặn (không thì quyết định của người thành vô ích). Chỉ khi
+        # MỌI quyết định là của người: điều phối viên (`manager:*`) / hub tự quyết không được miễn.
+        exempt = all(human_decided(a) for a in decided)
         try:
             new = self.submit(
                 run["agent_id"], prompt, cwd=run.get("cwd"), budget_usd=run.get("max_budget_usd"), model=run.get("model"),
                 kind=run.get("kind") or "adhoc", resume_session_id=run["session_id"], parent_run_id=run_id,
-                resume_reason="approval", resume_ticket_id=ticket, check_paused=False,
+                resume_reason="approval", resume_ticket_id=ticket, check_paused=False, budget_exempt=exempt,
             )
         except HubError as e:
             self.hub.publish(make_event("error", run["agent_id"], {"code": "resume_failed", "message": e.message}, run_id=run_id))
             return None
         self.store.update_run(run_id, {"status": "resumed", "outcome": "resumed", "continued_in_run_id": new["id"]})
+        if exempt and self._day_exhausted(run["agent_id"], new.get("team_id")):
+            from . import audit as _audit
+
+            _audit.record("budget.exempt_approved", run["agent_id"], new["id"],
+                         {"from_run_id": run_id, "approvals": [a["id"] for a in decided], "by": [a.get("resolved_by") for a in decided],
+                          "max_budget_usd": new.get("max_budget_usd"), "actor": "hub"})
         for a in decided:
             self.hub.approvals._update(a["id"], {"resume_run_id": new["id"]})
         self.hub.publish(make_event("run.resumed", run["agent_id"], {"from_run_id": run_id, "run_id": new["id"], "reason": "approval", "ticket": ticket}, run_id=run_id, session_id=run["session_id"]))
         return new
+
+    def _day_exhausted(self, agent_id: str, team_id: str | None) -> bool:
+        """Có scope ngày (ngoài `admin`) đã hết hoặc đang bị giữ chỗ hết → lượt vừa tạo thực sự dùng miễn trừ (để ghi audit)."""
+        for scope, owner, used, day in self.budget_scopes(agent_id, team_id):
+            if day and scope != "admin" and round(float(day) - used - self.reserved_budget(scope, owner), 6) <= 0:
+                return True
+        return False
 
     def continue_run(self, ref: str, prompt: str, *, reason: str = "continue", budget_usd: float | None = None) -> dict[str, Any]:
         """FR-TK-14: run mới cùng agent, `--resume <session>` (không fork), cùng cwd. `ref` = id run (tiền tố) hoặc session."""
@@ -1358,6 +1378,12 @@ class RunManager:
             run["agent_id"], prompt, cwd=run.get("cwd"), budget_usd=budget_usd, model=run.get("model"), kind=run.get("kind") or "adhoc",
             resume_session_id=run["session_id"], parent_run_id=run["id"], resume_reason=reason,
         )
+
+
+def human_decided(a: dict[str, Any]) -> bool:
+    """Approval do NGƯỜI quyết (cùng cách phân loại `approval_stats.decider`): có `resolved_by`, không phải hub/điều phối viên."""
+    by = str(a.get("resolved_by") or "")
+    return a.get("status") in ("allowed", "denied") and bool(by) and by != "hub" and not by.startswith("manager:")
 
 
 # M7 MGR-3: khoá run_opts của vai trò manager + lý do tiếp nối NỘI BỘ của hub được giữ vai trò
