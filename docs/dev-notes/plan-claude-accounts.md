@@ -82,10 +82,11 @@ duyệt trên máy daemon, đọc URL/token bằng regex chịu mã ANSI + xuố
 - Gộp: bỏ fallback "chưa có cột `runs.account_id`" (dispatcher + test), test core dùng `login.py` thật (thay `start_login`), web không
   hiện "Đổi tên" cho `machine` (core từ chối), tài khoản đang dùng đọc thêm cổng theo con trỏ (`_default` khi chưa đặt).
   Test đầu-cuối: `tests/test_accounts_e2e.py`.
+- chat: lệnh `/taikhoan` (alias `/account`, Slack `/cfh taikhoan`) ở `chat/base.py` — danh sách (chữ hub, không token) + nút
+  `Dùng n` → `account.use` qua cổng người (audit kênh chat, nonce một lần). Thêm/xoá/đăng nhập vẫn chỉ ở web/CLI (không dán token qua chat).
 
 ## Chưa làm / còn mở
 - Tự đổi tài khoản (cố ý không làm).
-- Lệnh `/account` trên Telegram/Slack.
 - Chưa chạy thật: nộp code + nhận token qua PTY (ConPTY → Ink), màn lỗi code sai; nhánh PTY POSIX chưa chạy (máy dev chỉ Windows) —
   CI Linux/macOS cần chạy `tests/test_accounts_login.py`.
 - Chưa kiểm: `claude --resume` session của tài khoản A bằng tài khoản B (cần 2 tài khoản thật).

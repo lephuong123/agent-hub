@@ -241,7 +241,7 @@ class RunManager:
         if ab:
             raise Blocked(
                 "claude chưa đăng nhập — chạy `claude auth login`, rồi `cfharness doctor` để mở khoá; hoặc đổi sang tài khoản Claude khác "
-                "(`cfharness account use <id>`, web: Cài đặt → Tài khoản Claude) — đổi tài khoản tự mở khoá. "
+                "(`cfharness account use <id>`, web: Cài đặt → Tài khoản Claude, chat: lệnh taikhoan) — đổi tài khoản tự mở khoá. "
                 f"Chi tiết: {ab.get('message', '')[:200]}",
                 data={"auth_block": ab},
             )

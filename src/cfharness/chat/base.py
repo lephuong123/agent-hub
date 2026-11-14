@@ -59,6 +59,8 @@ STATUS_VI = {
     "interrupted": "⏸ gián đoạn", "resumed": "↪ đã tiếp tục", "rate_limited": "🐢 giới hạn tốc độ", "blocked": "⛔ bị chặn",
     "protocol_violation": "⚠️ vi phạm giao thức",
 }
+ACCOUNT_STATUS_VI = {"ok": "✅ dùng được", "auth_error": "❌ lỗi đăng nhập", "rate_limited": "🐢 hết hạn mức", "expiring": "⚠️ token sắp hết hạn",
+                     "unknown": "• chưa kiểm"}
 AGENT_STATUS_VI = {"idle": "🟢 rảnh", "working": "▶️ đang làm", "waiting": "⏸ chờ duyệt", "paused": "⏸ tạm dừng", "error": "❌ lỗi"}
 DECISION_VI = {"allowed": ("✅", "cho phép"), "denied": ("⛔", "từ chối"), "cancelled": ("⏹", "huỷ")}
 CHANNEL_LABELS = {"telegram": "Telegram", "slack": "Slack"}
@@ -416,6 +418,7 @@ class ChatBot:
             "estop": self._c_estop, "digest": self._c_digest, "moi": self._c_new, "new": self._c_new,
             "hoi": self._c_questions, "questions": self._c_questions, "canban": self._c_inbox,
             "lich": self._c_schedules, "schedules": self._c_schedules,
+            "taikhoan": self._c_accounts, "account": self._c_accounts, "accounts": self._c_accounts,
         }
 
     async def run_command(self, cid: str, name: str, rest: str, api: Any) -> None:
@@ -504,6 +507,38 @@ class ChatBot:
         st = await self.call(cid, "estop.get")
         e = self.cmd("estop")
         return f"ESTOP: {'BẬT' if (st or {}).get('on') else 'tắt'}. Cú pháp: {e} on [lý do] | {e} off"
+
+    async def _c_accounts(self, cid: str, rest: str, api: Any) -> str | None:
+        """Tài khoản Claude (plan-claude-accounts.md): danh sách (chữ hub, KHÔNG token) + nút `Dùng n` đổi tài khoản — đổi do NGƯỜI bấm
+        (`account.use` ∈ HUMAN_ONLY, audit kênh chat). Thêm/xoá/đăng nhập: CLI hoặc web (cần dán token/code — không qua chat)."""
+        res = await self.call(cid, "account.list") or {}
+        accs = [a for a in (res.get("accounts") or []) if a.get("kind") != "custom" or a.get("active")]
+        lines = ["🔑 <b>Tài khoản Claude</b>"]
+        btns: list[tuple[str, str, str]] = []
+        for i, a in enumerate(accs[:20], 1):
+            st = ACCOUNT_STATUS_VI.get(str(a.get("status")), str(a.get("status") or ""))
+            rl = a.get("rate_limit") or {}
+            if rl.get("until"):
+                try:
+                    st += " tới " + datetime.fromisoformat(str(rl["until"]).replace("Z", "+00:00")).astimezone().strftime("%d/%m %H:%M")
+                except ValueError:
+                    pass
+            name = "Đăng nhập của máy" if a.get("kind") == "machine" else str(a.get("label") or a.get("id"))
+            lines.append(f"{i}. {'▶️ ' if a.get('active') else ''}<b>{esc(name)}</b> — {esc(st)}"
+                         + (f" · hôm nay ${float(a.get('cost_today_usd') or 0):.4f}" if a.get("cost_today_usd") else "")
+                         + (" · <i>đang dùng</i>" if a.get("active") else ""))
+            if not a.get("active") and a.get("kind") != "custom":
+                btns.append(("acu", str(a["id"]), f"Dùng {i}"))
+        if res.get("active") is None:
+            lines.append("Chưa chọn tài khoản — hub dùng đăng nhập sẵn có của máy.")
+        if btns:
+            lines.append("Dùng n = chuyển sang tài khoản số n; việc đang chờ hạn mức chạy tiếp ngay (lượt đang chạy giữ tài khoản cũ).")
+        lines.append("Thêm/xoá tài khoản: web (Cài đặt → Tài khoản Claude) hoặc `cfharness account`.")
+        markup = None
+        if btns:
+            markup, _ = self.callbacks.issue_rows([btns[i : i + 5] for i in range(0, len(btns), 5)], cid, ttl=min(self._ttl(), 3600))
+        await self._send(api, cid, "\n".join(lines), markup, html=True)
+        return None
 
     async def _c_new(self, cid: str, rest: str, api: Any) -> str | None:
         msg = await self.manager.new_conversation(cid, api)
@@ -787,6 +822,16 @@ class ChatBot:
                 if ap.get("status") in PENDING:
                     edit, markup = self.approval_sys_text(ap, kind="approvals.list"), self.approval_markup(ref, cid, ap)
                     self.callbacks.add_message(ref, cid, mid)
+            elif a == "acu":
+                r = await self.call(cid, "account.use", {"id": ref}) or {}
+                lst = await self.call(cid, "account.list") or {}
+                acc = next((x for x in lst.get("accounts") or [] if x.get("id") == r.get("active")), {})
+                name = "Đăng nhập của máy" if acc.get("kind") == "machine" else str(acc.get("label") or ref)
+                text = f"Đã chuyển sang tài khoản {clip(name, 60)}."
+                edit = (f"🔑 <b>Đã chuyển sang tài khoản {esc(name)}</b> — bởi {esc(who_label(_UID.get()))} qua {esc(self.LABEL)}. "
+                        "Việc đang chờ chạy tiếp bằng tài khoản này.")
+                if r.get("saved_custom"):
+                    edit += f"\nToken tự đặt trước đó đã được lưu thành tài khoản «{esc(r['saved_custom'].get('label'))}»."
             elif a == "cx0":
                 text = "Đã huỷ — ESTOP vẫn BẬT."
                 edit = "🛑 <b>Đã huỷ</b> — dừng khẩn cấp vẫn BẬT."
