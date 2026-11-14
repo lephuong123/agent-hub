@@ -25,7 +25,7 @@ CHROME_DEFAULTS: dict[str, Any] = {
     "enabled": True,
     # chế độ cho agent KHÔNG đặt tool_policy.browser (đặt rõ trên agent thì thắng)
     "default_mode": "auto",
-    "max_concurrent_runs": 1,
+    "max_concurrent_runs": None,  # null = không giới hạn
     # truyền `--no-chrome` cho run KHÔNG dùng Chrome khi phiên bản CLI có cờ này trong flag_matrix (chặn cả khi người bật
     # Chrome mặc định trong ~/.claude.json)
     "pass_no_chrome": True,
@@ -45,7 +45,7 @@ def chrome_cfg(config: Any) -> dict[str, Any]:
     if not isinstance(out.get("enabled"), bool):
         out["enabled"] = False
     n = out.get("max_concurrent_runs")
-    out["max_concurrent_runs"] = n if isinstance(n, int) and not isinstance(n, bool) and n >= 1 else 1
+    out["max_concurrent_runs"] = n if isinstance(n, int) and not isinstance(n, bool) and n >= 1 else None
     out["pass_no_chrome"] = out.get("pass_no_chrome") is not False
     out["default_mode"] = out["default_mode"] if out.get("default_mode") in BROWSER_MODES else "none"
     out["annotations"] = out["annotations"] if isinstance(out.get("annotations"), dict) else {}
@@ -97,8 +97,8 @@ def validate_setting(key: str, value: Any) -> None:
         if value not in BROWSER_MODES:
             raise ValueError(f"runtime.claude.chrome.default_mode phải là một trong {list(BROWSER_MODES)}")
     elif key == "runtime.claude.chrome.max_concurrent_runs":
-        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-            raise ValueError("runtime.claude.chrome.max_concurrent_runs phải là số nguyên ≥ 1")
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
+            raise ValueError("runtime.claude.chrome.max_concurrent_runs phải là số nguyên ≥ 1 hoặc null (không giới hạn)")
     elif key == "runtime.claude.chrome.annotations":
         if not isinstance(value, dict) or not all(
                 isinstance(k, str) and isinstance(v, dict) and set(v) <= {"destructiveHint", "readOnlyHint"} and all(isinstance(b, bool) for b in v.values())

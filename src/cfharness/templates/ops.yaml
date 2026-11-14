@@ -7,7 +7,6 @@ config:
     permission_mode: default
     tools: [Bash, Read, Grep, Glob]
   limits:
-    max_budget_usd_per_run: 0.3
     max_runtime_s: 900
 soul: |
   # {name}

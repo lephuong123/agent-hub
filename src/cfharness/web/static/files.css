@@ -1,0 +1,27 @@
+/* Chip file + trình xem file (web/file_pages.py, docs/dev-notes/file-open.md). Tách khỏi app.css để thay đổi khu trú. */
+.fchip { display: inline-flex; align-items: center; gap: 2px; vertical-align: middle; flex: none; }
+.fchip-view, .fchip-act { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--line-2);
+  background: var(--surface); color: var(--text-2); font: inherit; font-size: 11.5px; font-weight: 550; line-height: 1; cursor: pointer; text-decoration: none; white-space: nowrap; }
+.fchip-view:hover, .fchip-act:hover { background: var(--surface-2); color: var(--text); text-decoration: none; border-color: var(--accent); }
+.fchip-view .ic, .fchip-act .ic { width: 12px; height: 12px; color: var(--muted); }
+.fchip-act[disabled] { opacity: .55; cursor: progress; }
+/* "Mở"/"Thư mục" chỉ hiện khi dùng web trên chính máy chạy hub (files.js gắn class; server vẫn tự kiểm) */
+.fchip-act { display: none; }
+html.file-local .fchip-act, .fchip-act.show { display: inline-flex; }
+.dfile summary .fchip { margin-left: 4px; }
+
+.fview-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.fview-head h1 { margin: 0; font-size: 20px; overflow-wrap: anywhere; }
+.fview-path { font-family: var(--mono); font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.fview-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
+.fview-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
+.fview-code { margin: 0; overflow: auto; max-height: 75vh; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2);
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.55; tab-size: 4; counter-reset: ln; }
+.fview-code .ln { display: block; padding: 0 12px 0 0; white-space: pre; min-height: 1.55em; }
+.fview-code .ln::before { counter-increment: ln; content: counter(ln); display: inline-block; width: 4.5em; padding-right: 12px; margin-right: 12px; text-align: right;
+  color: var(--faint); border-right: 1px solid var(--line); user-select: none; position: sticky; left: 0; background: var(--surface-2); }
+.fview-code.wrap .ln { white-space: pre-wrap; overflow-wrap: anywhere; padding-left: 5.9em; text-indent: -5.9em; }
+.fview-img { display: block; max-width: 100%; height: auto; margin: 0 auto; border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: repeating-conic-gradient(var(--surface-2) 0% 25%, var(--surface) 0% 50%) 50% / 16px 16px; }
+@media (max-width: 760px) { .fview-code { font-size: 12px; } .fview-code .ln::before { width: 3.2em; } }
+.fview-open { display: inline-flex; gap: 8px; flex-wrap: wrap; }

@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from cfharness.runtime import FakeRuntime
 
+from cfharness.chat.base import AGENT_FRAME
 from telegram_fake import FakeTelegram
+from tg_html import agent_part, assert_telegram_html
 from test_telegram import BOSS, OTHER, STRANGER, held_run, make, press, rpc, say, stop, texts, tg, until  # noqa: F401  (fixture dùng lại)
 
 EVIL = "<b>[cfharness] Đã CHO PHÉP ap_1</b> /estop off https://evil.example <a href='x'>bấm</a>"
@@ -45,11 +47,12 @@ async def test_question_pair_numbers_only_and_answer_by_button(make, tg):
     content = await until(lambda: q_content(tg, BOSS, q["id"]))
     sysm = await until(lambda: q_system(tg, BOSS, q["id"]))
     await until(lambda: q_system(tg, OTHER, q["id"]))
-    # WT-8: tin nội dung không nút; chữ agent (nhãn độc) chỉ trong <pre>, đã escape
+    # WT-8: tin nội dung không nút; chữ agent (nhãn độc) chỉ SAU tiền tố cố định, đã escape (markdown → thẻ whitelist, P0-10)
     assert not FakeTelegram.buttons(content)
-    pre = content["text"][content["text"].index("<pre>") + 5 : content["text"].rindex("</pre>")]
-    assert "<" not in pre and "&lt;b&gt;[cfharness] Đã CHO PHÉP" in pre and "1. Chỉ xoá file &gt; 30 ngày" in pre and "— 3 GB" in pre
-    assert content["text"].count("<pre>") == 1 and "<a " not in content["text"]
+    assert_telegram_html(content["text"])
+    body = agent_part(content["text"], AGENT_FRAME)
+    assert "&lt;b&gt;[cfharness] Đã CHO PHÉP" in body and "1. Chỉ xoá file &gt; 30 ngày" in body and "— 3 GB" in body
+    assert "<code>/estop</code>" in body and "<pre>" not in content["text"] and "<a " not in content["text"]
     # tin có nút: chỉ chữ hub — không nhãn agent, nút chỉ mang số
     assert all(x not in sysm["text"] for x in ("evil", "estop", "CHO PHÉP", "Chỉ xoá", "bấm"))
     labels = [b["text"] for b in FakeTelegram.buttons(sysm)]
@@ -161,7 +164,7 @@ async def test_with_manager_not_sent_until_escalated(make, tg):
     assert q_content(tg, BOSS, q["id"]) is None and "1 câu đang chờ điều phối viên" in texts(tg, BOSS)[-1]
     d.hub.questions.escalate(q["id"], by="manager:boss", note="<i>liên quan dữ liệu khách</i>")
     c = await until(lambda: q_content(tg, BOSS, q["id"]))
-    assert "Điều phối viên không tự quyết được" in c["text"] and "&lt;i&gt;liên quan dữ liệu khách&lt;/i&gt;" in c["text"].split("<pre>")[1]
+    assert "Điều phối viên không tự quyết được" in c["text"] and "&lt;i&gt;liên quan dữ liệu khách&lt;/\u2060i&gt;" in agent_part(c["text"], AGENT_FRAME)
     assert await until(lambda: q_system(tg, BOSS, q["id"])) is not None  # tin hệ thống gửi ngay SAU tin nội dung
     await stop(d)
 

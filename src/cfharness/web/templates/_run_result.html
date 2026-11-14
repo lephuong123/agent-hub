@@ -1,0 +1,27 @@
+{#- Phần dưới transcript khi run đã kết thúc: thẻ Kết quả (+ phản hồi), takeover, chỗ tải diff. Dùng trong run.html và partial
+    /partials/run/<id>/result (client thay #run-tail bằng khối này khi run live vừa xong — không tải lại trang; partial kèm `oob`
+    → #run-dock đổi từ ô steer sang ô "Nói tiếp", xem _run_continue.html).
+    P0-8: tóm tắt TRÙNG tin cuối của agent (`summary_dup`) → không lặp lại, thẻ chỉ còn hàng phản hồi + lỗi. -#}
+{% import "_macros.html" as m with context %}
+<div id="run-result">
+<section class="card result-card{{ ' compact' if summary_dup }}">
+  <h2>{{ m.icon('check') }} Kết quả</h2>
+  {% if run.error and run.status != 'completed' %}<div class="banner danger">{{ m.icon('alert') }}<span>{{ run.error }}</span></div>{% endif %}
+  {% if summary_dup %}{% elif run.summary %}<div class="md result">{{ run.summary|md }}</div>{% else %}<p class="muted">Không có tóm tắt kết quả.</p>{% endif %}
+  <div class="btn-row">
+    <span class="muted small">{{ 'Kết quả ở tin cuối phía trên — thế nào?' if summary_dup else 'Kết quả thế nào?' }} (giúp agent tự học)</span>
+    {{ m.act("feedback", "Tốt", {"run_id": run.id, "kind": "good"}, "btn sm", ic="thumb-up") }}
+    {{ m.act("feedback", "Sai", {"run_id": run.id, "kind": "wrong"}, "btn sm danger", confirm="Đánh dấu kết quả này là SAI?", note="Sai ở đâu? (giúp agent sửa lần sau)", ic="thumb-down") }}
+    {{ m.act("feedback", "Một phần", {"run_id": run.id, "kind": "partial"}, "btn sm", confirm="Kết quả đúng một phần?", note="Còn thiếu gì?") }}
+    {% if run.status == 'completed' %}{{ m.act("golden_from_run", "Lấy làm golden task", {"run_id": run.id}, "btn sm ghost", confirm="Lấy run này làm golden task (bài kiểm tra chuẩn)?", ic="star") }}{% endif %}
+  </div>
+  {% if run.session_id %}
+  <details class="small takeover"><summary class="muted">Tự làm tiếp bằng Claude Code (takeover)</summary>
+    <p>Chạy trong terminal để mở đúng hội thoại này trong Claude Code tương tác (cùng cấu hình agent):</p>
+    <pre class="cmd">cfharness takeover {{ run.id }}</pre>
+  </details>
+  {% endif %}
+</section>
+<div id="diff-slot" hx-get="/partials/run/{{ run.id }}/diff" hx-trigger="load" hx-swap="outerHTML"><noscript><p class="small"><a href="/runs/{{ run.id }}/diff">Xem thay đổi file của run</a></p></noscript></div>
+</div>
+{% if oob %}{% include "_run_continue.html" %}{% endif %}

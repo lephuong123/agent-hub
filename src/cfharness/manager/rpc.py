@@ -9,9 +9,17 @@
   Không có `conversation_id` → hội thoại MỚI (trừ `reuse_latest=true`: hội thoại gần nhất của đúng kênh). Hội thoại đang có run
   chạy → tin được steer vào run đó (`steered=true`). `conversation_id` phải cùng `channel` (khác → Conflict); hội thoại của manager CŨ →
   tự chuyển sang hội thoại gần nhất/mới của manager hiện tại trên kênh đó (`switched_from`).
-- `manager.conversations {channel?, limit?, all?, archived?}` → `[Conv]` (mặc định chỉ hội thoại của manager HIỆN TẠI, chưa lưu trữ;
-  `archived=true` → CHỈ hội thoại đã lưu trữ), Conv = `{id, channel, agent_id, session_id, turns, title, messages (số),
-  last_run_id, created_at, updated_at, archived_at}`
+- `manager.conversations {channel?, limit?, all?}` → `[Conv]` (mặc định chỉ hội thoại của manager HIỆN TẠI), Conv = `{id, channel, agent_id, session_id, turns, title, messages (số),
+  last_run_id, created_at, updated_at}`
+- `manager.conversations` nhận thêm `workstream?` (id/mã luồng), `lobby?` (chỉ hội thoại sảnh), `archived?`; Conv thêm `workstream_id, unread, archived_at`.
+- `manager.conversation_update {conversation_id, title?, workstream? ("" = về sảnh), archived?, read?}` (HUMAN_ONLY) → Conv.
+- `manager.conversation_read {conversation_id}` (HUMAN_ONLY, không audit) — đánh dấu đã xem tới tin cuối (`unread` = 0).
+- `manager.chat` nhận thêm `workstream?` (hội thoại MỚI tạo trong luồng đó; với `reuse_latest` = hội thoại gần nhất của luồng trên kênh).
+- Luồng việc (manager/workstreams.py): `workstream.list {status?: active|closed|all}` → `[WS]`, `workstream.get {id}` → WS đầy đủ (state,
+  open_tasks, recent_done, conversations), `workstream.create {title, key?, sprint?, state?}` (HUMAN_ONLY), `workstream.update {id, title?, key?,
+  sprint?, status?: active|closed, state?}` (HUMAN_ONLY), `workstream.delete {id}` (HUMAN_ONLY, audit; xoá hẳn luồng — hội thoại về Sảnh,
+  task bỏ gắn luồng, bản chụp + STATE.md vào audit `workstream.snapshot`) → `{id, label, deleted, detached:{conversations, tasks}, state}`. WS = `{id, key, title, label, sprint, status, tasks:{open, running, blocked, done, total},
+  needs_human, conversations, last_activity, …}`. Event `workstream.updated{workstream_id, key, title, status, action, by}`.
 - `manager.archive {conversation_id}` / `manager.unarchive {conversation_id}` (HUMAN_ONLY, audit) → Conv — xoá mềm qua `archived_at`;
   tin/run/audit giữ nguyên; hội thoại đang có run chạy → Conflict; `manager.chat` vào hội thoại đã lưu trữ tự khôi phục nó.
 - `manager.history {conversation_id, limit?}` → `[{id, role: user|manager|notify|tick, text, run_id, ts}]` (cũ → mới)
@@ -33,8 +41,10 @@ from ..errors import HubError
 if TYPE_CHECKING:
     from ..daemon import Daemon
 
-MUTATING_MANAGER = ("manager.set", "manager.chat", "manager.tick", "manager.archive", "manager.unarchive", "managerself.call")
-_AUDITED = ("manager.set", "manager.chat", "manager.tick", "manager.archive", "manager.unarchive")  # managerself.call: từng thao tác bên trong tự audit
+MUTATING_MANAGER = ("manager.set", "manager.chat", "manager.tick", "managerself.call", "manager.conversation_update", "manager.conversation_read",
+                    "workstream.create", "workstream.update", "workstream.delete", "manager.archive", "manager.unarchive")
+_AUDITED = ("manager.set", "manager.chat", "manager.tick", "manager.conversation_update", "workstream.create", "workstream.update",
+            "workstream.delete", "manager.archive", "manager.unarchive")  # managerself.call: từng thao tác bên trong tự audit
 
 
 def _req(p: dict[str, Any], key: str) -> Any:
@@ -58,14 +68,36 @@ def register_rpc(daemon: "Daemon") -> None:
 
     async def _chat(p: dict[str, Any]) -> dict[str, Any]:
         return await m.chat(str(_req(p, "channel")), str(p.get("text") or ""), conversation_id=p.get("conversation_id"),
-                            reuse_latest=bool(p.get("reuse_latest")), images=p.get("images"), files=p.get("files"))
+                            reuse_latest=bool(p.get("reuse_latest")), images=p.get("images"), files=p.get("files"),
+                            workstream=p.get("workstream") or None)
+
+    def _conv_update(p: dict[str, Any]) -> dict[str, Any]:
+        arch = p.get("archived")
+        return m.update_conversation(str(_req(p, "conversation_id")), title=p.get("title"), workstream=p.get("workstream"),
+                                     archived=None if arch is None else bool(arch), read=bool(p.get("read")))
+
+    def _ws_update(p: dict[str, Any]) -> dict[str, Any]:
+        ch = dict(p.get("changes") or {})
+        for k in ("title", "key", "sprint", "status", "state"):
+            if k in p and k not in ch:
+                ch[k] = p[k]
+        return m.ws.update(_req(p, "id"), ch, by="user")
 
     methods: dict[str, Callable[[dict[str, Any]], Any]] = {
         "manager.get": lambda p: m.get(),
         "manager.set": _set,
         "manager.chat": _chat,
         "manager.conversations": lambda p: m.conversations(p.get("channel"), limit=int(p.get("limit") or 100), all_managers=bool(p.get("all")),
+                                                           workstream=p.get("workstream") or None, lobby=bool(p.get("lobby")),
                                                            archived=bool(p.get("archived"))),
+        "manager.conversation_update": _conv_update,
+        # đánh dấu đã xem (web mở hội thoại) — ghi nhẹ, KHÔNG audit (mỗi lần xem trang)
+        "manager.conversation_read": lambda p: m.mark_read(str(_req(p, "conversation_id"))) or {"ok": True},
+        "workstream.list": lambda p: m.ws.list(str(p.get("status") or "active"), limit=int(p.get("limit") or 100)),
+        "workstream.get": lambda p: m.ws.get(_req(p, "id")),
+        "workstream.create": lambda p: m.ws.create(p.get("title"), key=p.get("key"), sprint=p.get("sprint"), state=p.get("state"), by="user"),
+        "workstream.update": _ws_update,
+        "workstream.delete": lambda p: m.ws.delete(_req(p, "id"), by="user"),
         "manager.archive": lambda p: m.archive(str(_req(p, "conversation_id")), on=True),
         "manager.unarchive": lambda p: m.archive(str(_req(p, "conversation_id")), on=False),
         "manager.history": lambda p: m.history(str(_req(p, "conversation_id")), int(p.get("limit") or 100)),

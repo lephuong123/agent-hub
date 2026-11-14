@@ -7,7 +7,7 @@ Nguồn: `docs/plan/web-telegram.md` (quyền sở hữu, nguyên tắc), BRD FR
 |---|---|
 | `web/security.py` | Chỉ loopback (`require_loopback`), link đăng nhập một lần (HMAC khoá RAM + `HUB_HOME/auth/web.json` 0600, dir 0700), phiên RAM (cookie `ahub_web` HttpOnly/SameSite=Strict/Path=/, idle 12 h, tối đa 7 ngày), CSRF theo phiên, `allowed_hosts` |
 | `web/app.py` | Starlette: `GuardMiddleware` ASGI thuần (Host → 421, chưa đăng nhập → 303 /login hoặc 401, header CSP/XFO/no-referrer/no-store; không đệm nên SSE chạy); trang; `POST /do/<action>` bảng `ACTIONS`; SSE |
-| `web/present.py` | Thuần: nhãn tiếng Việt (agent/run/task/lý do chờ), `transcript_item(ev)` (event → mục), `activity_item` (dùng lại `tui.model.activity_line`), `md()` an toàn (markdown-it, HTML thô bị escape, link chỉ http/https/mailto) |
+| `web/present.py` | Thuần: nhãn tiếng Việt (agent/run/task/lý do chờ), `transcript_item(ev)` (event → mục), `activity_item` (dùng lại `tui.model.activity_line`), `md()` an toàn (markdown-it + bảng/gạch ngang/tasklist, HTML thô bị escape, link chỉ http/https/mailto có `rel` + tên miền, ảnh → link chữ, code tô màu bằng class pygments + nút Sao chép), `Transcript`/`merge_tool`/`tool_view` dùng chung cho phát lại và live (`templates/_transcript.html`) |
 | `web/cli.py` | `cfharness web [--host] [--port 8765] [--open] [--url]` — đã có server chạy thì chỉ cấp link mới |
 | `web/demo.py` | `python -m cfharness.web.demo --home <tmp> --port 8799`: daemon thật + FakeRuntime + dữ liệu mẫu (run giữ, approval waiting_human) — dùng chụp ảnh |
 | `web/templates/`, `web/static/` | Jinja2; `htmx-2.0.4.min.js` vendored (sha384 `HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+`, 0BSD), `app.css`, `app.js` (hộp xác nhận, EventSource) |
@@ -159,7 +159,7 @@ Yêu cầu: "UI UX của web làm như claude — logo chế cái mới nhìn gi
   hội thoại điều phối viên khi ở trang Điều phối — block `side_extra`, đáy: người dùng + trạng thái daemon + Thoát). Thu gọn thành dải icon
   bằng nút (`html.side-min`, nhớ ở `localStorage cfh_side` — tiện ích theo người xem; `static/early.js` đặt class trong `<head>` để không nháy).
 - **Điều phối** (`body.chat-page`): chiếm trọn chiều cao, `#mgr-log` cuộn bên trong, cột đọc `--read-w 768px`; tin người = bong bóng xám ấm
-  căn phải, trả lời điều phối viên không bong bóng, serif, vẫn `pre-wrap` + autoescape; ô nhập bo tròn lớn dính đáy với nút gửi tròn cam;
+  căn phải, trả lời điều phối viên không bong bóng, serif (từ 2026-11-13: markdown qua `present.md()` — xem mục "Điều phối kiểu Claude"); ô nhập bo tròn lớn dính đáy với nút gửi tròn cam;
   "đang nghĩ…" = logo xoay + chữ ánh lướt + con trỏ khi chữ chạy; màn trống = logo + lời chào serif lớn giữa màn, ô nhập + chip gợi ý dồn lên
   giữa (`:has(#mgr-empty)`). Khung "Điều phối viên" (trạng thái + hành động gần đây) là cột phải ≥ 1280 px (nút ẩn/hiện, nhớ `cfh_mgr_info`),
   ngăn kéo bên phải khi hẹp hơn. Giữ nguyên mọi id/attr mà `app.js`/htmx/SSE/test dùng.
@@ -193,3 +193,35 @@ HUB_HOME tạm; Playwright Chromium 1280×860 đăng nhập bằng dòng `LOGIN`
 Module `web/memory_pages.py` + `static/memory_graph.js` (đồ thị SVG tự viết, CSP-safe) + RPC chỉ đọc mới `learn.graph_view`
 (learning/graph_view.py, HUMAN_ONLY, phạm vi + quét lúc nạp như `memory.recall`). Ghi qua `learn.propose` (created_by=user) / `knowledge.pin` /
 `learn.rollback` / `learn.graph_consolidate`, audit kênh web. Chi tiết: `docs/dev-notes/web-memory.md`. Test `tests/test_web_memory.py`.
+
+## Công việc realtime (`/sse/tasks`, `/partials/tasks`, `/partials/task/<id>`, 2026-11-12)
+Bảng kanban và trang một task tự cập nhật khi task/câu hỏi/run của task đổi (SSE chỉ báo "refresh", trình duyệt gom loạt rồi tải partial).
+Chi tiết, quyết định (không poll khi SSE sống, không ghi đè khi đang gõ): `docs/dev-notes/tasks-realtime.md`. Test `tests/test_web_tasks_realtime.py`.
+
+## Điều phối kiểu Claude (2026-11-13, `plan-chat-ui-claude.md` P0-4/5/6, P1-1/3/4/5/8)
+- **Markdown** cho trả lời/báo của điều phối viên: `_manager.html` → `tx_msg` (`_transcript.html`) với `it.text|md` (đầu ra `present.md()` đã
+  cứng hoá — thứ DUY NHẤT `|safe`). Tin người, tóm tắt hành động: autoescape `pre-wrap`. Tin liên tiếp của điều phối viên ẩn dòng tên (CSS `+`).
+- **SSE** `/sse/manager`: mọi message có `seq` (event gốc). Client: `lastSeq` + kết nối nào nhận nó; bỏ `seq < lastSeq` và `seq == lastSeq`
+  từ kết nối khác; tự nối lại có giãn 1→30 s (cả sau `end`, cả lỗi) với `since=lastSeq&epoch=` (không để EventSource tự nối bằng `since` cũ);
+  `hello.epoch` đổi → seq đếm lại từ 0. `#mgr-live` "● trực tiếp"/"↻ đang nối lại…".
+- **Chữ chạy**: `delta` (thô → `textContent` ở `.mm-tail`), `draft{html}` mỗi ≥ 150 ms và ở cuối mỗi đoạn (`md(toàn bộ chữ đã chạy)`, thay
+  `.md` bằng innerHTML, xoá đuôi); > 24 KB thôi gửi nháp. `message.complete` (không subagent) → `seg` (xuống đoạn). `reply` = markdown của
+  TOÀN BỘ chữ đã chạy nếu nó chứa câu trả lời cuối (`run.summary` thường chỉ là đoạn cuối) — lời dẫn không biến mất; tải lại trang thì chỉ
+  còn bản lưu DB (= `summary`).
+- **Khung đang trả lời**: `reasoning.delta` → `think{text}` vào `<details class="mm-think">` gập; `tool.start/complete` (không subagent) →
+  `tool{name, label, done}` → dòng "Đang dùng …"; "đang nghĩ…" ẩn khi có chữ (`.has-text`); `aria-busy`. Không message nào trong số này có `html`.
+- **Nút Dừng**: nút gửi thành nút Dừng (icon `stop`) khi có lượt đang trả lời và ô nhập trống (gõ chữ → lại là Gửi = steer); Esc trong ô
+  trống cũng dừng; `POST /manager/stop` (JSON với `X-Ahub-Fetch`, không thì 303). Không hộp xác nhận.
+- **Chip "✓ Đã làm N việc ›"** không viền; mở ra = danh sách gọn có vạch trái; lượt đang chạy → vòng quay + việc mới nhất. Giữ `.mm-acts`,
+  `.n`, `data-run` (thêm `.mm-acts-list`, `.mm-acts-last`).
+- **Thao tác dưới tin** (`.mm-foot`, `data-mm` uỷ quyền): Sao chép (markdown gốc trong `<template class="mm-src">`, fallback execCommand khi
+  không phải secure context), Thử lại (chỉ tin cuối — `.last`; đưa tin người trước đó vào ô nhập + `requestSubmit`), giờ tương đối, "xem lượt
+  chạy"; dưới tin người: Sao chép + Sửa (đưa vào ô nhập). Hiện khi hover/focus; luôn hiện ở tin cuối và `(hover: none)`.
+- **Ô nhập + a11y**: `(pointer: coarse)` Enter = xuống dòng; nháp lưu `sessionStorage` (`cfh_mgr_draft:<c:…|w:…>`, try/catch); nút gửi
+  `disabled` thật khi trống; autosize lấy trần từ `max-height` CSS; `#mgr-log` bỏ `aria-live`, thêm `#mgr-status-live` (`role=status`, ẩn)
+  báo "Điều phối viên đã trả lời". Log `overflow-anchor: none`, không `scroll-behavior: smooth`; nút `#mgr-jump` "Tin mới nhất" (cuộn mượt)
+  hiện khi người đã cuộn lên mà có nội dung mới.
+- **P2 hoàn thiện** (chi tiết: `plan-chat-ui-claude.md` mục 7): checklist TodoWrite `todo-<run>` thay tại chỗ; báo cắt kèm
+  `cfharness runs logs <id>`; run > 300 khối → 150 khối cuối + `GET /partials/run/<id>/items?before=<seq>` (`_run_items.html`); Sao chép cả
+  tin/output (`<template class="tx-src">`); dòng trạng thái `#tx-status` (SSE `{t:"status"}`, `stats.out`); vạch ngày + khung đang trả lời
+  khôi phục tool/checklist khi tải lại ở Điều phối; safe-area + `visualViewport` (`--vvh`, `html.kb-open`). Test `tests/test_web_polish.py`.

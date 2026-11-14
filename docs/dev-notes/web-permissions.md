@@ -42,10 +42,10 @@ Chat: bước 2 "Luôn cho phép…"/"Không hỏi lại luật này…" (Telegr
   `manager.conversations{archived: true}` → CHỈ hội thoại đã lưu trữ; Conv có thêm `archived_at`. ∈ HUMAN_ONLY + `MUTATING_MANAGER` (tự audit),
   ngoài `MANAGER_ALLOWED`; cổng service `require_human`. CLI `cfharness manager archive|unarchive <conv>`, `manager conversations --archived`
   (∈ `HUB_HUMAN_ONLY_CLI`).
-- **Web `/manager`**: nút "Lưu trữ" trên đầu khung chat (xác nhận), mục "Đã lưu trữ (N)" ở thanh bên (mọi kênh, nút "Khôi phục"), banner trên
-  hội thoại đã lưu trữ; mục "Nhịp tự động" → hội thoại heartbeat (CHỈ XEM: không ô nhập, banner); hội thoại kênh khác (cli/Telegram) mở trên web
-  cũng chỉ xem. Nút "Chạy nhịp ngay" ở khung Điều phối viên → `manager.tick{force}` (xác nhận, tốn tiền) → chuyển tới hội thoại nhịp; nhịp bị
-  bỏ (ESTOP, bận…) → toast nêu lý do.
+- **Web `/manager`** (sau khi gộp main có "luồng việc", 2026-11-14): giao diện lưu trữ dùng bản của main (`conv_archive` →
+  `manager.conversation_update{archived}`, menu ⋯ của hội thoại); nhánh này chỉ còn thêm nút "Chạy nhịp ngay" (`manager_tick`, xác nhận)
+  ở thanh thông tin. RPC `manager.archive|unarchive` giữ làm lối gọi CLI/RPC (Conflict khi hội thoại đang chạy). Mục "Nhịp tự động" và
+  banner chỉ xem của bản nhánh đã bỏ.
 
 ## Test
 `tests/test_web_permissions.py`, `tests/test_manager_archive.py`, ca mới trong `test_web_pages_extra.py`, `test_web_manager.py`,
@@ -54,4 +54,4 @@ Chat: bước 2 "Luôn cho phép…"/"Không hỏi lại luật này…" (Telegr
 ## Chưa làm
 - Thêm grant/trust/ngoại lệ sandbox mới từ trang Quyền đã cấp (chỉ gỡ); mẫu chặn theo repo (`guard.repo_deny`) chưa hiện.
 - Telegram/Slack chưa có nút "Chạy ngay"/sửa lịch; `/lich` chỉ nút cho ≤ 10 lịch đầu.
-- Xoá cứng hội thoại (chỉ lưu trữ); danh sách "Đã lưu trữ" giới hạn 50 mục.
+- Xoá cứng hội thoại (chỉ lưu trữ).

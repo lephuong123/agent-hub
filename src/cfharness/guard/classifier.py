@@ -1028,7 +1028,7 @@ def classify_connector(server: str, tool: str, ctx: GuardContext) -> Verdict:
         return Verdict("destructive", "mcp_delete_name", "mcp", f"tên tool khớp mẫu xoá ({', '.join(sorted(hit))})", [f"{server}/{tool}"])
     if _CONNECTOR_READ_RE.match(tool):
         return Verdict("safe", "claude_connector_read")
-    return Verdict("write", "claude_connector_write", "mcp", "tool connector claude.ai (người cho phép ở manager.capabilities.connectors)", [f"{server}/{tool}"])
+    return Verdict("write", "claude_connector_write", "mcp", "tool connector claude.ai (người cho phép ở manager.capabilities.connectors / tool_policy.connectors của agent)", [f"{server}/{tool}"])
 
 
 def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdict:

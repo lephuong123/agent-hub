@@ -48,6 +48,8 @@ def checker_from_args(a: argparse.Namespace, *, required: bool = True) -> dict[s
         checks.append({"kind": "json_schema", "schema": _load_obj(a.json_schema)})
     if getattr(a, "cmd", None):
         checks.append({"kind": "command", "cmd": a.cmd, "timeout_s": a.cmd_timeout})
+    if getattr(a, "style", False):
+        checks.append({"kind": "response_style"})
     rubric = None
     if getattr(a, "judge_file", None):
         rubric = Path(a.judge_file).read_text(encoding="utf-8")
@@ -60,7 +62,7 @@ def checker_from_args(a: argparse.Namespace, *, required: bool = True) -> dict[s
         checks.append(j)
     if not checks:
         if required:
-            raise ValueError("cần ít nhất một cách chấm: --regex/--not-regex/--contains/--json-schema/--cmd/--judge/--checker")
+            raise ValueError("cần ít nhất một cách chấm: --regex/--not-regex/--contains/--json-schema/--cmd/--style/--judge/--checker")
         return None
     return checks[0] if len(checks) == 1 else {"kind": "all", "checks": checks}
 
@@ -78,6 +80,7 @@ def _add_checker_args(x: argparse.ArgumentParser) -> None:
     g.add_argument("--judge-file", help="file rubric cho LLM judge")
     g.add_argument("--judge-model", help="model của judge (mặc định eval.judge.model)")
     g.add_argument("--pass-threshold", type=float, default=0.7, help="ngưỡng đạt của judge (0..1)")
+    g.add_argument("--style", action="store_true", help="chấm phong cách trả lời theo RESPONSE_STYLE (không id nội bộ, fence có ngôn ngữ, độ dài, tiếng Việt)")
     g.add_argument("--checker", help="checker đầy đủ (file hoặc chuỗi JSON/YAML)")
 
 
@@ -185,6 +188,28 @@ def cmd_golden(ctx: Any) -> int:
     return 0
 
 
+def _style_text(r: dict[str, Any], *, verbose: bool = False) -> str:
+    s = r["summary"]
+    if not s["n"]:
+        sk = ", ".join(f"{k}={v}" for k, v in sorted((s.get("skipped") or {}).items()))
+        return "(không có câu trả lời nào để chấm)" + (f" — bỏ qua: {sk}" if sk else "")
+    lines = [f"{s['passed']}/{s['n']} câu trả lời đạt phong cách — điểm trung bình {s['avg_score']}"]
+    if s["by_rule"]:
+        lines.append("vi phạm: " + ", ".join(f"{k}={v}" for k, v in s["by_rule"].items()))
+    if s.get("skipped"):
+        lines.append("bỏ qua: " + ", ".join(f"{k}={v}" for k, v in sorted(s["skipped"].items())))
+    for it in r["items"]:
+        if it["passed"] and not verbose:
+            continue
+        where = it.get("run_id") or "-"
+        lines.append(f"\n{'✓' if it['passed'] else '✗'} {it.get('ts') or ''}  {it.get('role') or it.get('kind') or ''}  run {where}  "
+                     f"điểm {it['score']}  {it['chars']} ký tự")
+        lines.append(f"  {it['preview']}")
+        for v in it["violations"]:
+            lines.append(f"  - {v['rule']}: {v['detail']}" + (f" ({', '.join(v['samples'])})" if v.get("samples") else ""))
+    return "\n".join(lines)
+
+
 def cmd_eval(ctx: Any) -> int:
     a = ctx.args
     act = a.action
@@ -218,6 +243,13 @@ def cmd_eval(ctx: Any) -> int:
         r = ctx.call("eval.list", {"agent_id": a.agent, "limit": a.limit})
         ctx.out(r, _table([[e["id"], e["kind"], e["agent_id"], e["status"], e.get("before_score"), e.get("after_score"), _usd(e.get("cost_usd")), e["created_at"][:19], (e.get("reason") or "")[:50]] for e in r],
                           ["ID", "LOẠI", "AGENT", "KẾT QUẢ", "TRƯỚC", "SAU", "CHI PHÍ", "LÚC", "LÝ DO"]) if r else "(chưa có eval)")
+    elif act == "style":
+        opts: dict[str, Any] = {k: getattr(a, k) for k in ("short_budget", "short_request_chars", "min_vi_ratio") if getattr(a, k) is not None}
+        if a.skip:
+            opts["skip"] = [x.strip() for s in a.skip for x in s.split(",") if x.strip()]
+        r = ctx.call("eval.style", {"run_id": a.run, "since": a.since, "agent_id": a.agent, "conversation_id": a.conversation,
+                                    "limit": a.limit, "options": opts})
+        ctx.out(r, _style_text(r, verbose=a.verbose))
     elif act == "show":
         d = ctx.call("eval.show", {"id": a.id})
         lines = [f"{d['id']}  {d['kind']}  agent={d['agent_id']}  {d['status']}  {d.get('before_score')} → {d.get('after_score')}  {_usd(d.get('cost_usd'))}", f"lý do: {d.get('reason')}"]
@@ -329,6 +361,17 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     x.add_argument("agent", nargs="?")
     x.add_argument("--limit", type=int, default=30)
     es.add_parser("show", parents=[common]).add_argument("id")
+    x = es.add_parser("style", parents=[common], help="chấm phong cách câu trả lời thật của điều phối viên/agent (chỉ đọc, không gọi model)")
+    x.add_argument("run", nargs="?", help="chỉ chấm câu trả lời của run này (bỏ trống = tin điều phối viên trong --since)")
+    x.add_argument("--since", help="7d, 24h, 2026-11-01 (mặc định 7d)")
+    x.add_argument("--agent", help="chỉ hội thoại của điều phối viên này")
+    x.add_argument("--conversation", help="chỉ một hội thoại (id hoặc tiền tố)")
+    x.add_argument("--limit", type=int, default=50)
+    x.add_argument("--short-budget", type=int, help="trần ký tự cho câu hỏi ngắn (mặc định 700)")
+    x.add_argument("--short-request-chars", type=int, help="yêu cầu ≤ ngần này ký tự = câu hỏi ngắn (mặc định 160)")
+    x.add_argument("--min-vi-ratio", type=float, help="tỉ lệ từ có dấu tiếng Việt tối thiểu (mặc định 0.2)")
+    x.add_argument("--skip", action="append", help="bỏ luật: internal_id,hub_header,no_action,fence_lang,length,language,hr")
+    x.add_argument("-v", "--verbose", action="store_true", help="in cả câu trả lời đạt")
     ep.set_defaults(fn=cmd_eval)
 
     dp = sub.add_parser("digest", help="digest học (FR-LN-13) — cũng gọi được bằng `learn digest`", parents=[common])

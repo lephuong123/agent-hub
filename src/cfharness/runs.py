@@ -132,17 +132,22 @@ class RunManager:
         return queued + self.running_count(agent_id)
 
     # ------------------------------------------------------------------ M3: sức chứa, rate limit, ngân sách ngày
-    def effective_limit(self) -> int:
-        """`hub.max_concurrent_runs`, giảm còn `ratelimit.throttle_concurrency` khi gần chạm hạn mức (FR-RT-16)."""
-        limit = int(self.hub.config.get("hub.max_concurrent_runs"))
+    def effective_limit(self) -> int | None:
+        """`hub.max_concurrent_runs` (null = không giới hạn → None), giảm còn `ratelimit.throttle_concurrency` khi gần chạm
+        hạn mức (FR-RT-16)."""
+        raw = self.hub.config.get("hub.max_concurrent_runs")
+        limit = int(raw) if raw else None
         rl = self.store.state_get("rate_limit", {}) or {}
         if rl.get("throttled"):
-            limit = min(limit, int(self.hub.config.get("ratelimit.throttle_concurrency") or 1))
+            t = int(self.hub.config.get("ratelimit.throttle_concurrency") or 1)
+            limit = t if limit is None else min(limit, t)
         limit = self._admin_policy().cap_concurrency(self.hub, limit)  # chính sách quản trị máy: lấy giá trị chặt hơn
-        return max(1, limit)
+        return None if limit is None else max(1, limit)
 
-    def capacity_left(self) -> int:
-        return self.effective_limit() - len(self.active) - len(self.queue)
+    def capacity_left(self) -> int | None:
+        """Số slot còn trống toàn hub; None = không giới hạn."""
+        limit = self.effective_limit()
+        return None if limit is None else limit - len(self.active) - len(self.queue)
 
     def budget_scopes(self, agent_id: str, team_id: str | None) -> list[tuple[str, str, float, float | None]]:
         """[(scope, owner, đã dùng hôm nay, hạn mức ngày)] cho hub → team → agent (FR-OB-03)."""
@@ -264,6 +269,13 @@ class RunManager:
             raise Blocked(f"agent '{agent_id}' đang paused — `cfharness agent resume {agent_id}` trước")
         if cwd is not None and not Path(cwd).expanduser().is_dir():
             raise HubError(f"cwd không tồn tại: {cwd}")
+        if agent.get("plugins"):  # báo sớm plugin chưa cài thay vì để run hỏng lúc spawn
+            from .plugins import PluginError, resolve as _resolve_plugins
+
+            try:
+                _resolve_plugins(list(agent["plugins"]))
+            except PluginError as e:
+                raise HubError(str(e), data={"field": "plugins"}) from e
         max_budget = self._budget_for(agent, budget_usd, team_id)
         run_id = "r_" + uuid.uuid4().hex[:12]
         session_id = resume_session_id or str(uuid.uuid4())
@@ -361,7 +373,7 @@ class RunManager:
             return started
         limit = self.effective_limit()  # M3: điều tiết theo rate limit (FR-RT-16)
         skipped: list[str] = []
-        while self.queue and len(self.active) < limit:
+        while self.queue and (limit is None or len(self.active) < limit):
             rid = self.queue.popleft()
             run = self.store.get_run(rid)
             if run is None or run["status"] != "queued":
@@ -374,9 +386,9 @@ class RunManager:
                 from .evals.overlay import apply_overlay
 
                 agent = apply_overlay(agent, run["run_opts"]["eval_overlay"])
-            agent_limit = int((agent.get("limits") or {}).get("max_concurrent_runs") or 1)
+            agent_limit = (agent.get("limits") or {}).get("max_concurrent_runs")  # null = không giới hạn
             is_review = run.get("kind") == "review"  # M4-A: review fork không chiếm slot của agent (run mới không bị chặn)
-            if agent["status"] == "paused" or (not is_review and self.running_count(agent["id"], exclude_kind="review") >= agent_limit):
+            if agent["status"] == "paused" or (not is_review and agent_limit and self.running_count(agent["id"], exclude_kind="review") >= int(agent_limit)):
                 skipped.append(rid)
                 continue
             lock_key = self._lock_key(run, agent)
@@ -457,9 +469,10 @@ class RunManager:
         if opts.get("hub_self") == "manager" and not is_mgr:
             opts["hub_self"] = None
         # connector claude.ai (manager.capabilities.connectors) — cần hook guard để chặn MCP lạ của ~/.claude (manager/connectors.py)
+        # + connector theo agent (tool_policy.connectors, chỉ người đặt) cho run thường
         conn: dict[str, Any] | None = None
-        if is_mgr and guard_on:
-            conns = tuple(hub.manager.perms.capabilities().get("connectors") or ())
+        if guard_on:
+            conns = run_connectors(hub, agent, is_mgr)
             if conns:
                 from .manager.connectors import run_setup
 
@@ -515,6 +528,18 @@ class RunManager:
         env_extra: dict[str, str] = {}
         allowed_hooks = list(iso.get("allowed_hooks") or []) + observe_events + list((conn or {}).get("allowed_hooks") or [])
         allowed_mcp = list(agent.get("mcp_servers") or []) + list(iso.get("allowed_mcp_servers") or []) + list((conn or {}).get("allowed_mcp") or [])
+        # plugin Claude Code của agent (plugins.py): `--plugin-dir`; tên plugin + sự kiện hook của plugin là "đã biết" cho kiểm cô lập
+        from .plugins import PluginError, resolve as _resolve_plugins
+
+        try:
+            plugins = _resolve_plugins(list(agent.get("plugins") or []))
+        except PluginError as e:
+            raise RuntimeError_(str(e)) from e
+        allowed_plugins = list(iso.get("allowed_plugin_prefixes") or []) if iso.get("allowed_plugin_prefixes") is not None else None
+        if plugins:
+            if allowed_plugins is not None:
+                allowed_plugins += [p.name for p in plugins]
+            allowed_hooks += [ev for p in plugins for ev in p.hook_events]
         # Claude in Chrome (browser.py): chế độ hiệu lực (kill switch của người) → build_argv thêm --chrome; `chrome` bỏ Playwright khỏi run
         from .browser import CHROME_MODES, CHROME_SERVER, effective_mode, is_playwright_server
 
@@ -625,7 +650,8 @@ class RunManager:
             workspace_kind=wkind,  # type: ignore[arg-type]
             allowed_hooks=allowed_hooks,
             allowed_mcp_servers=allowed_mcp,
-            allowed_plugin_prefixes=list(iso.get("allowed_plugin_prefixes") or []) if iso.get("allowed_plugin_prefixes") is not None else None,
+            allowed_plugin_prefixes=allowed_plugins,
+            plugin_dirs=[p.path for p in plugins],
             require_no_auto_memory=bool(iso.get("require_no_auto_memory")),
             permission_prompt_tool=perm_tool,
             env_extra=env_extra,
@@ -636,6 +662,8 @@ class RunManager:
             isolation_overrides=(conn or {}).get("isolation_overrides"),
             allowed_mcp_prefixes=(conn or {}).get("allowed_mcp_prefixes"),
             trust_full=trusted and tp.get("permission_mode") == "bypassPermissions",
+            persist_thinking=bool(claude_cfg.get("persist_thinking", True)),
+            thinking_max_chars=int(claude_cfg.get("thinking_max_chars") or 8000),
         )
 
     def _agent_mcp_servers(self, agent: dict[str, Any]) -> dict[str, Any]:
@@ -1361,3 +1389,12 @@ def _write_json_0600(path: Path, data: Any) -> None:
 def is_terminal_event(ev: HubEvent) -> bool:
     return ev.type in TERMINAL_RUN_EVENTS
 
+
+def run_connectors(hub: Any, agent: dict[str, Any], is_manager_run: bool) -> tuple[str, ...]:
+    """Slug connector claude.ai cho run: run điều phối viên → manager.capabilities.connectors; run thường → tool_policy.connectors
+    của agent. Dùng chung cho runs (spec) và guard (GuardContext) để hai lớp luôn khớp."""
+    if is_manager_run:
+        mgr = getattr(hub, "manager", None)
+        return tuple(mgr.perms.capabilities().get("connectors") or ()) if mgr is not None else ()
+    tp = agent.get("tool_policy") or {}
+    return tuple(dict.fromkeys(str(x) for x in (tp.get("connectors") or [])))

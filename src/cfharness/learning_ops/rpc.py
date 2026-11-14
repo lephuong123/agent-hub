@@ -123,6 +123,20 @@ class LearningOpsRpc:
             x["detail"] = json.loads(x["detail"] or "{}")
         return d
 
+    def eval_style(self, p: dict[str, Any]) -> dict[str, Any]:
+        from ..evals.style_report import score_replies
+
+        opts = p.get("options") if isinstance(p.get("options"), dict) else {}
+        if opts:
+            from ..evals.style import validate_spec
+
+            try:
+                validate_spec(opts)
+            except ValueError as e:
+                raise HubError(f"eval.style: {e}", code=-32602) from None
+        return score_replies(self.hub.store, run_id=p.get("run_id"), since=p.get("since"), agent_id=p.get("agent_id"),
+                             conversation_id=p.get("conversation_id"), limit=int(p.get("limit") or 50), options=opts)
+
     def _proposal(self, pid: str) -> dict[str, Any]:
         learning = getattr(self.hub, "learning", None)
         for name in ("get_proposal", "proposal"):
@@ -157,6 +171,7 @@ class LearningOpsRpc:
             "eval.batch": self.eval_batch,
             "eval.list": self.eval_list,
             "eval.show": self.eval_show,
+            "eval.style": self.eval_style,  # CHỈ ĐỌC: chấm phong cách câu trả lời thật (evals/style_report.py)
             "digest.run": lambda p: self.ops.digest.run(since=p.get("since"), agent_id=p.get("agent_id"), send=not p.get("no_send")),
             "digest.list": lambda p: self.ops.digest.list(int(p.get("limit") or 20)),
             "digest.show": lambda p: self.ops.digest.get(p.get("id")) or {},

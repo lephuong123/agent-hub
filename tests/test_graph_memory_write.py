@@ -47,6 +47,8 @@ class FakeExtractor:
 def hub(hub_home):
     h = make_hub(hub_home)
     h.config.set("learning.graph_extract_min_chars", 10)
+    # mặc định không trần — test logic co giãn ngân sách đặt rõ trần cũ
+    h.config.set("learning.graph_extract_budget_usd", 0.05)
     yield h
     h.store.close()
 

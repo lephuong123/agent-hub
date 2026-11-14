@@ -197,9 +197,12 @@ def cap_per_run(hub: "Hub", per_run: Any) -> Any:
     return min(float(per_run), float(cap)) if per_run else float(cap)
 
 
-def cap_concurrency(hub: "Hub", limit: int) -> int:
+def cap_concurrency(hub: "Hub", limit: int | None) -> int | None:
+    """`limit=None` = hub không đặt trần (mặc định từ v0.2.9) → trần của chính sách (nếu có) thành trần duy nhất."""
     cap = (_pol(hub).get("runs") or {}).get("max_concurrent")
-    return max(1, min(int(limit), int(cap))) if cap else limit
+    if not cap:
+        return limit
+    return max(1, int(cap) if limit is None else min(int(limit), int(cap)))
 
 
 def require_export(hub: "Hub") -> bool:

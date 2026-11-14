@@ -234,12 +234,13 @@ class LearningGuard:
             return Block("guard_rule", "config_key", f"vòng học không sửa được trường: {', '.join(unknown)} (được: {', '.join(CONFIG_KEYS)})")
         b = self.hub.learning.policy.get("config_bounds")
         cur = plan.get("current_config") or {}
-        if "model" in ch and ch["model"] not in (b.get("models") or []):
+        models = b.get("models") or []  # [] = mọi model
+        if "model" in ch and models and ch["model"] not in models:
             return Block("bounds", "model", f"model '{ch['model']}' ngoài config_bounds.models {b.get('models')}")
-        if ch.get("fallback_model") and ch["fallback_model"] not in (b.get("models") or []):
+        if ch.get("fallback_model") and models and ch["fallback_model"] not in models:
             return Block("bounds", "fallback_model", f"fallback_model '{ch['fallback_model']}' ngoài config_bounds.models")
         if ch.get("effort"):
-            mx = b.get("max_effort") or "high"
+            mx = b.get("max_effort") or "max"
             if ch["effort"] not in EFFORT_ORDER or EFFORT_ORDER.index(ch["effort"]) > EFFORT_ORDER.index(mx):
                 return Block("bounds", "effort", f"effort '{ch['effort']}' vượt trần '{mx}'")
         lim = ch.get("limits") or {}

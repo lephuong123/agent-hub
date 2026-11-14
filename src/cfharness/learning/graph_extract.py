@@ -287,11 +287,11 @@ class GraphExtractor:
                                     (agent_id, RUN_KIND, since)).fetchone()
         held = int(self._reserved.get(agent_id, 0))
         n = int(n) + held
-        mx = int(self.cfg("graph_extract_max_per_agent_per_day", 12) or 0)
+        mx = int(self.cfg("graph_extract_max_per_agent_per_day") or 0)
         if mx and int(n) >= mx:
             return f"đã trích xuất graph {n} lần hôm nay (learning.graph_extract_max_per_agent_per_day={mx})"
-        daily = float(self.cfg("graph_extract_daily_usd_per_agent", 0.5) or 0)
-        per = float(self.cfg("graph_extract_budget_usd", 0.05) or 0)
+        daily = float(self.cfg("graph_extract_daily_usd_per_agent") or 0)
+        per = float(self.cfg("graph_extract_budget_usd") or 0)
         cost = float(cost) + held * per  # lần đang chạy tính theo mức trần mỗi lần (budget_usd) cho tới khi có chi phí thật
         if daily and float(cost) + per > daily + 1e-9:
             return f"vượt trần chi phí trích xuất graph/ngày ${daily:g} (đã dùng ${float(cost):.4f})"
@@ -350,7 +350,7 @@ class GraphExtractor:
             max_facts=max_facts, transcript="\n".join(m["line"] for m in win),
             known=("\nKnown entities (reuse these exact names): " + "; ".join(known) + "\n") if known else "")
         model = str(self.cfg("graph_extract_model", "haiku") or "haiku")
-        budget = float(self.cfg("graph_extract_budget_usd", 0.05) or 0) or None
+        budget = float(self.cfg("graph_extract_budget_usd") or 0) or None
         timeout = float(self.cfg("graph_extract_timeout_s", 180) or 180)
         from ..runtime import OneShotRequest
 

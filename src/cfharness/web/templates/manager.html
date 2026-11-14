@@ -3,14 +3,15 @@
 {% import "_manager.html" as mg with context %}
 {% block title %}Điều phối{% endblock %}
 {% block bodyclass %}{{ 'chat-page' if m.available and m.agent_id }}{% endblock %}
+{% macro conv_list(limit=30) -%}
+{%- set rows = (ws_web_convs if wsx else (wsd.lobby if wsd and wsd.enabled else convs)) -%}
+  <div class="nav-group ws-head"><span>{{ ('Hội thoại · ' ~ wsx.title) if wsx else ('Hội thoại ở Sảnh' if wsd and wsd.enabled else 'Gần đây') }}</span>
+    <a class="ws-add" href="{{ ('/manager?w=' ~ wsx.id ~ '&new=1') if wsx else '/manager?new=1' }}" title="Hội thoại mới" aria-label="Hội thoại mới">＋</a></div>
+  <ul class="mgr-convs">{% for c in rows[:limit] %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}" title="{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}"><span class="ct">{% if c.running %}<span class="ws-dot run" title="Đang chạy" aria-hidden="true"></span><span class="sr-only">Đang chạy. </span>{% endif %}{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}{% if c.unread %}<span class="ws-unread">{{ c.unread }}</span>{% endif %}</span><span class="cm">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></a></li>{% else %}<li class="muted small side-none">Chưa có hội thoại — gõ tin để bắt đầu.</li>{% endfor %}</ul>
+{%- endmacro %}
 {% block side_extra %}{% if m.available and m.agent_id %}
-<section class="side-recents" aria-label="Cuộc trò chuyện gần đây">
-  <div class="nav-group">Gần đây</div>
-  <ul class="mgr-convs">{% for c in convs[:30] %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}" title="{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}"><span class="ct">{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}</span><span class="cm">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></a></li>{% else %}<li class="muted small side-none">Chưa có cuộc trò chuyện nào.</li>{% endfor %}</ul>
-  {% if beats %}<div class="nav-group">Nhịp tự động</div>
-  <ul class="mgr-convs" id="mgr-beats">{% for c in beats %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}" title="Hội thoại nhịp (heartbeat) của điều phối viên — chỉ xem"><span class="ct">{{ mc.icon('clock', 'sm') }} Nhịp (heartbeat)</span><span class="cm">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></a></li>{% endfor %}</ul>{% endif %}
-  {% if archived %}<details class="mgr-archived" id="mgr-archived"{% if cur and cur.archived_at %} open{% endif %}><summary class="nav-group">Đã lưu trữ ({{ archived|length }})</summary>
-  <ul class="mgr-convs">{% for c in archived %}<li class="row between"><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}"><span class="ct">{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}</span><span class="cm">{{ c.channel }} · {{ c.updated_at|ago }}</span></a>{{ mc.act("manager_unarchive", "Khôi phục", {"conversation_id": c.id}, "btn ghost sm", next="/manager", title="Khôi phục cuộc trò chuyện vào danh sách") }}</li>{% endfor %}</ul></details>{% endif %}
+<section class="side-recents" aria-label="Hội thoại">
+{{ conv_list() }}
 </section>
 {% endif %}{% endblock %}
 {% block content %}
@@ -37,53 +38,99 @@
   <p class="small muted">Nên dùng một agent riêng cho vai trò này{% if templates %} — <a href="/agents/new?template={{ templates[0].name }}">tạo từ mẫu {{ templates[0].name }}</a>{% else %} (model mạnh, mô tả rõ vai trò){% endif %}. Trong terminal: <code class="cmd">cfharness manager set &lt;agent&gt;</code>.</p>
 </section>
 {% else %}
+{%- set curl = (convs|selectattr('id', 'equalto', conv)|list) if conv else [] %}{%- set cur = curl[0] if curl else None %}
 <div class="mgr-grid" id="mgr-grid">
   <section class="mgr-chat">
     <header class="chat-head">
-      {% if convs %}<details class="mgr-convs-m menu"><summary class="btn ghost sm icon" title="Cuộc trò chuyện ({{ convs|length }})" aria-label="Cuộc trò chuyện">{{ mc.icon('menu') }}</summary>
-        <div class="menu-pop"><ul class="mgr-convs">{% for c in convs[:15] %}<li><a href="/manager?c={{ c.id }}" class="{{ 'on' if c.id == conv }}"><span class="ct">{{ c.title or ('Cuộc trò chuyện ' ~ (c.created_at|ts)) }}</span><span class="cm">{{ c.updated_at|ago }}</span></a></li>{% endfor %}</ul></div></details>{% endif %}
+      <details class="mgr-convs-m menu"><summary class="btn ghost sm icon" title="Hội thoại" aria-label="Hội thoại">{{ mc.icon('menu') }}</summary>
+        <div class="menu-pop">{{ conv_list(15) }}</div></details>
       <div class="chat-title">
         <h1 class="sr-only">Trò chuyện với điều phối viên</h1>
         <span class="ct">{{ (cur.title if cur and cur.title else ('Cuộc trò chuyện ' ~ (cur.created_at|ts) if cur else 'Cuộc trò chuyện mới')) }}</span>
-        <span class="chat-sub">với điều phối viên <a href="/agents/{{ m.agent_id }}">{{ (m.row.name if m.row else m.agent_id) }}</a></span>
+        <span class="chat-sub">{% if wsx %}trong luồng {{ wsx.title }}{% elif wsd and wsd.enabled %}ở Sảnh{% else %}với điều phối viên <a href="/agents/{{ m.agent_id }}">{{ (m.row.name if m.row else m.agent_id) }}</a>{% endif %}</span>
       </div>
       <div class="chat-tools">
         <span class="pill muted" id="mgr-live">đang kết nối…</span>
-        {% if conv and cur and not cur.archived_at and cur.channel != 'heartbeat' %}{{ mc.act("manager_archive", "Lưu trữ", {"conversation_id": conv, "title": cur.title or ''}, "btn ghost sm", confirm="Lưu trữ cuộc trò chuyện này? Tin nhắn, lượt chạy và nhật ký vẫn giữ nguyên, khôi phục được.", next="/manager?c=" ~ conv, title="Lưu trữ (ẩn khỏi danh sách, khôi phục được)", ic="inbox") }}{% endif %}
-        <a class="btn ghost sm icon" href="/manager?new=1" title="Cuộc trò chuyện mới" aria-label="Cuộc trò chuyện mới">{{ mc.icon('pen-new') }}</a>
-        <button type="button" class="btn ghost sm icon" id="mgr-info-toggle" aria-controls="mgr-side" title="Thông tin điều phối viên" aria-label="Thông tin điều phối viên">{{ mc.icon('panel') }}</button>
+        {% if conv and wsd and wsd.enabled %}<details class="menu conv-menu"><summary class="btn ghost sm icon" title="Đổi tên, chuyển luồng, lưu trữ" aria-label="Thao tác hội thoại">⋯</summary>
+          <div class="menu-pop ws-pop">
+            <form method="post" action="/do/conv_rename" class="ws-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="conversation_id" value="{{ conv }}"><input type="hidden" name="next" value="/manager?c={{ conv }}">
+              <input name="title" maxlength="80" value="{{ cur_title or '' }}" required aria-label="Tên hội thoại" placeholder="Tên hội thoại"><button class="btn sm" type="submit">Đổi tên</button></form>
+            <form method="post" action="/do/conv_move" class="ws-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="conversation_id" value="{{ conv }}"><input type="hidden" name="next" value="/manager?c={{ conv }}">
+              <select name="workstream" aria-label="Chuyển sang luồng"><option value="">Sảnh</option>{% for w in wsd.active %}<option value="{{ w.id }}"{{ ' selected' if wsx and wsx.id == w.id }}>{{ w.label }}</option>{% endfor %}</select><button class="btn sm" type="submit">Chuyển</button></form>
+            {{ mc.act("conv_archive", "Lưu trữ hội thoại", {"conversation_id": conv, "w": wsx.id if wsx else ""}, "btn sm ghost danger-t", confirm="Lưu trữ hội thoại này?", next="/manager") }}
+          </div></details>{% endif %}
+        <a class="btn ghost sm icon" href="{{ ('/manager?w=' ~ wsx.id ~ '&new=1') if wsx else '/manager?new=1' }}" title="Hội thoại mới" aria-label="Hội thoại mới">{{ mc.icon('pen-new') }}</a>
+        <button type="button" class="btn ghost sm icon" id="mgr-info-toggle" aria-controls="mgr-side" title="Thông tin" aria-label="Thông tin">{{ mc.icon('panel') }}</button>
       </div>
     </header>
-    <div class="mgr-log" id="mgr-log" data-sse-manager="/sse/manager?since={{ since }}&amp;epoch={{ epoch }}" data-conv="{{ conv or '' }}" data-runs="{{ (conv_runs or [])|join(' ') }}" aria-live="polite">
-      {% for it in items %}{{ mg.item(it) }}{% else %}<div class="empty mgr-hero" id="mgr-empty">{{ mc.icon('logo', 'hero-mark') }}<b>{{ 'Hôm nay giao việc gì cho đội?' if not conv else 'Chưa có tin nhắn' }}</b><span>Nói mục tiêu bằng lời — điều phối viên tự tạo agent/team, giao việc, theo dõi và báo lại. Ví dụ: “Tạo agent nghiên cứu để tóm tắt README của repo X rồi giao việc đó”.</span></div>{% endfor %}
-      {% if pending %}{{ mg.pending(pending) }}{% endif %}
+    {% if wsd and wsd.enabled %}
+    <nav class="ws-bar" aria-label="Luồng việc">
+      {% include "_manager_tabs.html" %}
+      {% if wsx %}
+      <details class="ws-pop-wrap" id="ws-manage"><summary class="ws-tab more" title="Thông tin, đổi tên, đóng, xoá luồng {{ wsx.label }}">⚙ Luồng này</summary>
+        <div class="ws-pop ws-info">
+          <div class="ws-side-head"><h3>{{ wsx.title }}</h3>{% if wsx.key %}<span class="pill muted">{{ wsx.key }}</span>{% endif %}</div>
+          <dl class="ws-meta">
+            <dt>Trạng thái</dt><dd>{{ 'Đang mở' if wsx.status == 'active' else 'Đã đóng' }}{% if wsx.closed_at %} · {{ mc.rel(wsx.closed_at) }}{% endif %}</dd>
+            <dt>Mã</dt><dd>{{ wsx.key or '—' }}</dd>
+            {% if wsx.sprint %}<dt>Sprint</dt><dd>{{ wsx.sprint }}</dd>{% endif %}
+            <dt>Task</dt><dd>{{ wsx.tasks.done }}/{{ wsx.tasks.total }} xong{% if wsx.tasks.running %} · {{ wsx.tasks.running }} đang chạy{% endif %}{% if wsx.tasks.blocked %} · <span class="danger-t">{{ wsx.tasks.blocked }} bị chặn</span>{% endif %}</dd>
+            <dt>Cần bạn</dt><dd>{{ wsx.needs_human or 0 }}</dd>
+            <dt>Hội thoại</dt><dd>{{ wsx.conversations|length if wsx.conversations is not number else wsx.conversations }}</dd>
+            <dt>Tạo</dt><dd>{{ mc.rel(wsx.created_at) }} · {{ 'bạn' if wsx.created_by in ('user', None) else ('điều phối viên' if (wsx.created_by or '').startswith('manager') else wsx.created_by) }}</dd>
+            <dt>Hoạt động cuối</dt><dd>{{ mc.rel(wsx.last_activity) }}</dd>
+            <dt>Ghi chú luồng</dt><dd>{% if wsx.state_updated_at %}sửa {{ mc.rel(wsx.state_updated_at) }}{% else %}chưa có{% endif %}</dd>
+            <dt>ID</dt><dd><code>{{ wsx.id }}</code></dd>
+          </dl>
+          <form method="post" action="/do/ws_edit" class="ws-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ wsx.id }}"><input type="hidden" name="next" value="/manager?w={{ wsx.id }}">
+            <input name="title" maxlength="120" value="{{ wsx.label }}" required aria-label="Tên luồng mới" title="Bắt đầu bằng mã Jira (LH-1 Tên) để đổi cả mã"><button class="btn sm" type="submit">Đổi tên</button></form>
+          <div class="btn-row">{% if wsx.status == 'active' %}{{ mc.act("ws_close", "Đóng luồng", {"id": wsx.id, "label": wsx.label}, "btn sm ghost", confirm="Đóng luồng " ~ wsx.label ~ "? Mở lại được bất cứ lúc nào.", next="/manager") }}
+            {% else %}{{ mc.act("ws_reopen", "Mở lại luồng", {"id": wsx.id}, "btn sm", next="/manager?w=" ~ wsx.id) }}{% endif %}
+            {{ mc.act("ws_delete", "Xoá luồng…", {"id": wsx.id, "label": wsx.label}, "btn sm danger", confirm="XOÁ HẲN luồng " ~ wsx.label ~ "? Hội thoại về Sảnh, task bỏ gắn luồng (không bị xoá). Không hoàn tác được.", next="/manager") }}</div>
+        </div></details>{% endif %}
+      <details class="ws-pop-wrap" id="ws-new"><summary class="ws-tab add" title="Mở luồng mới (mỗi epic một luồng)">＋ Luồng</summary>
+        <form method="post" action="/do/ws_create" class="ws-pop ws-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/manager">
+          <input name="title" maxlength="120" placeholder="Tên luồng (bỏ trống = tự đặt)" aria-label="Tên luồng" autocomplete="off"><button class="btn sm primary" type="submit">Mở</button></form>
+      </details>
+      {% if wsd.closed %}<details class="ws-pop-wrap"><summary class="ws-tab more" title="Luồng đã đóng">Đã đóng {{ wsd.closed|length }}</summary>
+        <div class="ws-pop"><ul class="mgr-convs">{% for w in wsd.closed %}<li><a href="/manager?w={{ w.id }}"><span class="ct">{{ w.label }}</span></a></li>{% endfor %}</ul></div></details>{% endif %}
+    </nav>
+    {% endif %}
+    <div class="mgr-log" id="mgr-log" data-sse-manager="/sse/manager?since={{ since }}&amp;epoch={{ epoch }}" data-conv="{{ conv or '' }}" data-runs="{{ (conv_runs or [])|join(' ') }}">
+      {% for it in items %}{{ mg.item(it) }}{% else %}<div class="empty mgr-hero" id="mgr-empty">{{ mc.icon('logo', 'hero-mark') }}<b>{{ wsx.title if wsx and not conv else ('Hôm nay giao việc gì cho đội?' if not conv else 'Chưa có tin nhắn') }}</b><span>{% if wsx and not conv %}Nhắn gì ở đây cũng thuộc luồng này. Điều phối viên nhớ luồng qua ghi chú ở panel bên phải.{% else %}Nói mục tiêu bằng lời — điều phối viên tự tạo agent/team, giao việc, theo dõi và báo lại. Mỗi epic nên mở một luồng (＋ Luồng) để việc không lẫn vào nhau.{% endif %}</span></div>{% endfor %}
+      {% if pending %}{{ mg.pending(pending, pinfo) }}{% endif %}
     </div>
-    {% if cur and cur.archived_at %}<div class="banner warn" id="mgr-archived-note">{{ mc.icon('inbox') }}<span>Cuộc trò chuyện đã lưu trữ{% if not readonly %} — nhắn tiếp sẽ tự khôi phục{% endif %}.</span>{{ mc.act("manager_unarchive", "Khôi phục", {"conversation_id": conv}, "btn sm", next="/manager?c=" ~ conv) }}</div>{% endif %}
-    {% if readonly %}<div class="banner info" id="mgr-readonly">{{ mc.icon('info') }}<span>{% if cur.channel == 'heartbeat' %}Hội thoại nhịp tự động (heartbeat): điều phối viên tự xem sự kiện và xử lý theo nhịp — chỉ xem. Chạy một nhịp ngay bằng nút ở khung "Điều phối viên".{% else %}Cuộc trò chuyện kênh {{ cur.channel }} — chỉ xem trên web; nhắn tiếp ở đúng kênh đó.{% endif %}</span></div>
-    {% else %}
+    <p class="sr-only" id="mgr-status-live" role="status"></p>
     <div class="composer-wrap">
+      <button type="button" class="mgr-jump" id="mgr-jump" hidden title="Về tin mới nhất" aria-label="Về tin mới nhất">{{ mc.icon('chev-down', 'sm') }}<span>Tin mới nhất</span></button>
       <form method="post" action="/manager/send" class="mgr-form" id="mgr-form" enctype="multipart/form-data">
-        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="c" value="{{ conv or '' }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="c" value="{{ conv or '' }}"><input type="hidden" name="w" value="{{ wsx.id if wsx and not conv else '' }}">
         <label class="sr-only" for="mgr-text">Tin nhắn cho điều phối viên</label>
         <ul class="mgr-files" id="mgr-files" hidden aria-label="Tệp đính kèm"></ul>
-        <textarea id="mgr-text" name="text" rows="1" maxlength="8000" placeholder="Nhắn điều phối viên…"></textarea>
+        <textarea id="mgr-text" name="text" rows="1" maxlength="8000" placeholder="{{ ('Nhắn trong ' ~ (wsx.key or wsx.title) ~ '…') if wsx else 'Nhắn điều phối viên…' }}"></textarea>
         <div class="composer-bar">
           <input type="file" id="mgr-file" name="attach" multiple class="sr-only" tabindex="-1">
           <label for="mgr-file" class="btn ghost sm icon attach" id="mgr-attach" title="Đính kèm ảnh, tệp văn bản, PDF/Excel/Word/PowerPoint (hoặc kéo–thả, dán ảnh)" tabindex="0" role="button">{{ mc.icon('clip') }}<span class="sr-only">Đính kèm tệp</span></label>
-          <span class="composer-hint">Enter để gửi · Shift+Enter xuống dòng · kéo–thả hoặc dán ảnh để đính kèm</span>
-          <button class="btn primary send" type="submit" title="Gửi" aria-label="Gửi">{{ mc.icon('arrow-up') }}<span class="sr-only">Gửi</span></button>
+          <span class="composer-hint">Enter để gửi · Shift+Enter xuống dòng · Esc dừng · kéo–thả hoặc dán ảnh để đính kèm</span>
+          <button class="btn primary send" type="submit" id="mgr-send" title="Gửi" aria-label="Gửi">{{ mc.icon('arrow-up', 'i-send') }}{{ mc.icon('stop', 'i-stop') }}</button>
         </div>
       </form>
       <div class="mgr-suggest" id="mgr-suggest">
+        {% if wsx %}
+        <button type="button" data-fill="Tình hình luồng này: task nào xong, đang chạy, bị chặn? PR/nhánh đến đâu?">{{ mc.icon('home', 'sm') }}Tình hình luồng</button>
+        <button type="button" data-fill="Trong luồng này còn gì kẹt cần tôi quyết không?">{{ mc.icon('inbox', 'sm') }}Còn gì kẹt?</button>
+        <button type="button" data-fill="Cập nhật STATE.md của luồng này cho đúng hiện trạng (quyết định, PR, câu hỏi mở, bước tiếp).">{{ mc.icon('task', 'sm') }}Cập nhật STATE</button>
+        <button type="button" data-fill="Giao việc mới trong luồng này: ">{{ mc.icon('task', 'sm') }}Giao việc mới…</button>
+        {% else %}
         <button type="button" data-fill="Có việc gì đang kẹt cần tôi không?">{{ mc.icon('inbox', 'sm') }}Có gì cần tôi?</button>
         <button type="button" data-fill="Tóm tắt tình hình các agent và task hôm nay.">{{ mc.icon('home', 'sm') }}Tình hình hôm nay</button>
         <button type="button" data-fill="Chi phí tuần này của từng team là bao nhiêu?">{{ mc.icon('dollar', 'sm') }}Chi phí tuần này</button>
         <button type="button" data-fill="Giao việc mới: ">{{ mc.icon('task', 'sm') }}Giao việc mới…</button>
+        {% endif %}
       </div>
       <p class="mgr-err flash error" id="mgr-err" role="alert" hidden></p>
       <p class="chat-disclaimer">Điều phối viên là một agent và có thể nhầm. Thao tác phá huỷ luôn chờ bạn duyệt.</p>
     </div>
-    {% endif %}
   </section>
   <aside class="mgr-side" id="mgr-side" aria-label="Thông tin điều phối viên">
     <div class="mgr-side-head"><h2>Điều phối viên</h2><button type="button" class="btn ghost sm icon" id="mgr-info-close" title="Đóng" aria-label="Đóng">{{ mc.icon('x') }}</button></div>
@@ -94,6 +141,29 @@
         {{ mc.act("manager_unset", "Huỷ chỉ định", {"current": m.agent_id}, "btn sm danger", confirm="Huỷ chỉ định điều phối viên " ~ m.agent_id ~ "? Agent vẫn còn, chỉ mất vai trò.", next="/manager") }}
       </div>
     </section>
+    {% if wsx %}
+    <section class="mgr-side-sec ws-side">
+      <div class="ws-side-head"><h3>{{ wsx.title }}</h3>{% if wsx.key %}<span class="pill muted">{{ wsx.key }}</span>{% endif %}</div>
+      <progress class="ws-progress" max="{{ wsx.tasks.total or 1 }}" value="{{ wsx.tasks.done }}" aria-label="Tiến độ task"></progress>
+      <p class="muted small">{{ wsx.tasks.done }}/{{ wsx.tasks.total }} task xong{% if wsx.tasks.blocked %} · <span class="danger-t">{{ wsx.tasks.blocked }} bị chặn</span>{% endif %}{% if wsx.needs_human %} · {{ wsx.needs_human }} cần bạn{% endif %}</p>
+      <ul class="ws-tasks">{% for t in wsx.open_tasks %}<li><span class="ws-dot {{ 'danger' if t.status == 'blocked' else 'run' if t.status == 'running' else 'idle' }}" title="{{ t.status }}"></span><a href="/tasks/{{ t.id }}">{{ t.title }}</a></li>{% endfor %}
+      {% for t in wsx.recent_done|reverse %}<li class="done"><span class="ws-dot done" title="done"></span><a href="/tasks/{{ t.id }}">{{ t.title }}</a></li>{% endfor %}</ul>
+    </section>
+    <section class="mgr-side-sec ws-side">
+      <details class="ws-state"><summary class="ws-side-head"><h3>Ghi chú luồng</h3><span class="btn sm ghost">Sửa</span></summary>
+      <form method="post" action="/do/ws_state" class="ws-form"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ wsx.id }}"><input type="hidden" name="next" value="/manager?w={{ wsx.id }}">
+        <textarea name="state" rows="10" maxlength="12000" aria-label="Ghi chú luồng">{{ wsx.state }}</textarea>
+        <button class="btn sm primary" type="submit">Lưu</button></form></details>
+      {% if wsx.state %}<pre class="ws-state-pre">{{ wsx.state }}</pre>{% else %}<p class="muted small">Chưa có. Điều phối viên tự ghi quyết định, PR, việc tiếp theo vào đây và đọc lại mỗi khi bắt đầu session mới.</p>{% endif %}
+    </section>
+    <section class="mgr-side-sec ws-side">
+      <form method="post" action="/do/ws_edit" class="ws-inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ wsx.id }}"><input type="hidden" name="next" value="/manager?w={{ wsx.id }}">
+        <input name="title" maxlength="120" value="{{ wsx.label }}" required aria-label="Tên luồng"><button class="btn sm" type="submit">Đổi tên</button></form>
+      <div class="btn-row">{% if wsx.status == 'active' %}{{ mc.act("ws_close", "Đóng luồng", {"id": wsx.id, "label": wsx.label}, "btn sm ghost", confirm="Đóng luồng " ~ wsx.label ~ "? Mở lại được bất cứ lúc nào.", next="/manager") }}
+        {% else %}{{ mc.act("ws_reopen", "Mở lại luồng", {"id": wsx.id}, "btn sm", next="/manager?w=" ~ wsx.id) }}{% endif %}
+        {{ mc.act("ws_delete", "Xoá luồng…", {"id": wsx.id, "label": wsx.label}, "btn sm danger", confirm="XOÁ HẲN luồng " ~ wsx.label ~ "? Hội thoại về Sảnh, task bỏ gắn luồng (không bị xoá). Không hoàn tác được.", next="/manager") }}</div>
+    </section>
+    {% endif %}
     <section class="mgr-side-sec">
       <h3>Hành động gần đây</h3>
       <ol class="feed" id="mgr-actions">{% for it in side_actions %}{{ mg.side_action(it) }}{% else %}<li class="empty" id="mgr-actions-empty">Chưa có hành động nào.</li>{% endfor %}</ol>

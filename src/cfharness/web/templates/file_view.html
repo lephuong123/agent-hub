@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{#- Trình xem file chỉ đọc (web/file_pages.py). Nội dung file là DỮ LIỆU: autoescape, không |safe, không markdown. -#}
+{% block title %}{{ f.name }}{% endblock %}
+{% block content %}
+<nav class="crumbs">
+  {% if p.run_id %}<a href="/runs">Lượt chạy</a>{{ m.icon('chev-right') }}<a href="/runs/{{ p.run_id }}">{{ p.run_id }}</a>{% else %}<a href="/agents">Agent</a>{{ m.icon('chev-right') }}<a href="/agents/{{ p.agent_id }}">{{ p.agent_id }}</a>{% endif %}
+  {{ m.icon('chev-right') }}<span>{{ f.name }}</span>
+</nav>
+<section class="card">
+  <div class="fview-head"><h1>{{ f.name }}</h1>
+    <span class="pill {{ 'info' if f.kind == 'text' else 'muted' }}">{{ {'text': 'văn bản', 'image': 'ảnh', 'pdf': 'PDF', 'binary': 'nhị phân'}.get(f.kind, f.kind) }}</span></div>
+  <div class="fview-path" title="{{ f.path }}">{{ f.path }}</div>
+  <div class="fview-meta"><span>{{ '{:,}'.format(f.size or 0) }} byte</span>{% if f.mtime_s %}<span>sửa lúc {{ f.mtime_s }}</span>{% endif %}<span>trong <code>{{ f.root }}</code></span></div>
+  <div class="fview-actions">
+    {% if can_download %}<a class="btn sm" href="/files/raw?{{ q }}&amp;dl=1">{{ m.icon('arrow-up') }}<span>Tải về</span></a>{% endif %}
+    {% if f.kind in ('image', 'pdf') %}<a class="btn ghost sm" href="/files/raw?{{ q }}" target="_blank" rel="noopener">{{ m.icon('external') }}<span>Mở bản gốc</span></a>{% endif %}
+    {% if local %}
+    <span class="fview-open" data-path="{{ p.path }}"{% if p.run_id %} data-run="{{ p.run_id }}"{% else %} data-agent="{{ p.agent_id }}"{% endif %}>
+      {% if f.can_open %}<button type="button" class="btn sm" data-fopen="open" title="Mở bằng ứng dụng mặc định trên máy này">{{ m.icon('clip') }}<span>Mở bằng ứng dụng</span></button>{% endif %}
+      <button type="button" class="btn ghost sm" data-fopen="reveal" title="Mở thư mục chứa file trong Explorer/Finder">{{ m.icon('inbox') }}<span>Mở thư mục</span></button>
+    </span>
+    {% if not f.can_open %}<span class="muted small">{{ m.icon('info') }} Loại file này (script/chương trình/mã nguồn) không mở trực tiếp bằng ứng dụng — chỉ xem hoặc mở thư mục.</span>{% endif %}
+    {% else %}
+    <span class="muted small">{{ m.icon('info') }} Đang dùng web qua link public: chỉ xem/tải về được, không mở ứng dụng trên máy chạy hub.</span>
+    {% endif %}
+  </div>
+</section>
+<section class="card">
+{% if f.kind == 'text' %}
+  {% if f.truncated %}<div class="banner warn">{{ m.icon('info') }}<span>File lớn — chỉ hiển thị {{ '{:,}'.format(view_max) }} byte đầu. {% if can_download %}Tải về để xem đủ.{% endif %}</span></div>{% endif %}
+  {% if lines %}<pre class="fview-code" tabindex="0">{% for ln in lines %}<span class="ln">{{ ln }}</span>{% endfor %}</pre>{% else %}<p class="muted">File rỗng.</p>{% endif %}
+{% elif f.kind == 'image' %}
+  <img class="fview-img" src="/files/raw?{{ q }}" alt="{{ f.name }}">
+{% elif f.kind == 'pdf' %}
+  <p>{{ m.icon('info') }} PDF — <a href="/files/raw?{{ q }}" target="_blank" rel="noopener">mở trong tab mới</a> (trình xem PDF của trình duyệt){% if can_download %} hoặc <a href="/files/raw?{{ q }}&amp;dl=1">tải về</a>{% endif %}.</p>
+{% else %}
+  {{ m.empty("File nhị phân — không hiển thị nội dung." ~ (" Dùng \"Tải về\"." if can_download else " Tải về qua link public đang tắt."), "info") }}
+{% endif %}
+</section>
+{% endblock %}

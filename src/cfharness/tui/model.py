@@ -268,7 +268,7 @@ def header_text(m: TopModel, *, now: float | None = None) -> Text:
     t.append(f"{h.get('running', 0)} đang chạy", style=th.STATUS["agent"]["working"].style)
     if h.get("queued"):
         t.append(f" · {h['queued']} chờ slot", style=th.WARN)
-    t.append(f" (tối đa {h.get('max_concurrent_runs', '?')})  ", style=th.MUTED)
+    t.append(f" (tối đa {h.get('max_concurrent_runs') or 'không giới hạn'})  ", style=th.MUTED)
     n = h.get("approvals_pending", 0)
     if n:
         t.append(f" ⚠ {n} thao tác phá huỷ chờ người · lâu nhất {fmt_dur(h.get('approvals_longest_wait_s'))} ", style=th.ALARM)

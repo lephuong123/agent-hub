@@ -135,6 +135,10 @@ class Daemon:
         from .backup import register_rpc as _register_backup
 
         _register_backup(self)
+        # Xem/mở file agent đã thao tác (web chip file): file.read (chỉ đọc) + file.open (tác dụng phụ) — HUMAN_ONLY, tự audit (fileview.py)
+        from .fileview import register_rpc as _register_files
+
+        _register_files(self)
         # M1 luồng A: thêm mcp.*/secret.*/audit.*/feedback.* và bọc audit các method thay đổi trạng thái.
         # GIỮ Ở CUỐI __init__ — method thêm sau dòng này sẽ không được audit tự động.
         from .mcp_server.rpc import register_rpc

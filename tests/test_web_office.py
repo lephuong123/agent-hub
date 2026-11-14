@@ -103,7 +103,8 @@ async def test_office_state_shape(env):
     assert d["approvals"] == [] and d["questions"] == [] and d["runs"] == []
     assert [t["id"] for t in d["teams"]] == ["toa-soan", "zz-team"]
     ag = {a["id"]: a for a in d["agents"]}
-    keys = {"id", "name", "role", "team", "team_role", "status", "tool", "task", "run_id", "approvals", "is_manager"}
+    keys = {"id", "name", "role", "team", "team_role", "status", "tool", "task", "run_id", "approvals", "is_manager",
+            "paused", "run_status", "started_at", "run_cost_usd", "cost_today_usd", "questions"}
     assert all(set(a) == keys for a in d["agents"])
     lt = ag["lap-trinh"]
     assert lt["team"] == "toa-soan" and lt["team_role"] == "worker"  # nhiều team → team đầu tiên
@@ -151,6 +152,7 @@ async def test_office_state_lists_running_run_and_tasks(held):
     """Daemon thật: run đang chạy xuất hiện ở `runs` (chỉ id/agent/giờ bắt đầu/chi phí); task.list → cột kanban, tiêu đề đã cắt."""
     env = held
     await env.login()
+    env.hub.agents.create({"id": "ag0", "name": "ag0", "model": "haiku", "limits": {"max_concurrent_runs": 1}})  # task không chiếm run thứ 2
     run = await running_run(env, "ag0", "dòng đầu\nprompt chi tiết không được gửi")
     env.hub.teams.create({"id": "t1", "name": "T1", "members": [{"agent_id": "ag0", "role": "worker"}]})
     env.hub.tasks.create({"team": "t1", "title": "Việc " + "z" * 100, "body": "thân task bí mật", "assignee": "ag0"})
@@ -361,10 +363,10 @@ async def test_office_do_guard_rejects_missing_csrf_key_or_cross_origin(held):
         r = await env.client.post("/office/do/approve", data=c["data"], headers=c["headers"])
         assert r.status_code == 403 and r.json()["ok"] is False, c
     assert env.hub.approvals.get(ap["id"])["status"] == "open"
-    r = await office_post(env, "stop", {"id": run["id"], "confirm": "yes"})  # ngoài danh sách trắng
+    r = await office_post(env, "run_resume", {"id": run["id"], "confirm": "yes"})  # ngoài danh sách trắng
     assert r.status_code == 404 and r.json()["ok"] is False
-    r = await office_post(env, "estop", {"on": "1", "confirm": "yes"})
-    assert r.status_code == 404 and not env.hub.runs.estop.get("on")
+    r = await office_post(env, "estop", {"on": "1", "confirm": "yes"})  # bảng 2D: có, nhưng còn bước 2 — chưa ghi
+    assert r.json()["need"] == "confirm2" and not env.hub.runs.estop.get("on")
 
 
 async def test_office_approve_needs_confirm_then_heavy_step2(held):

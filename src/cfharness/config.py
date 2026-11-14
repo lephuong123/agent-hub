@@ -1,6 +1,7 @@
 """Cấu hình cấp hub: `HUB_HOME/config.yaml`.
 
-Mọi giới hạn là SETTING (Q-02), không trần cứng trong code. Daemon đọc lại cấu hình
+Mọi giới hạn là SETTING (Q-02), không trần cứng trong code. Hạn mức dùng (chi phí, số run đồng thời, tần suất,
+số lượng) mặc định là null = KHÔNG giới hạn; người muốn đặt trần thì vào Cài đặt (web) hoặc `cfharness config set`. Daemon đọc lại cấu hình
 mỗi lần cần (dispatcher, spawn) nên `config set` có hiệu lực ngay, không cần restart.
 
 Các cờ cô lập/permission của `claude` nằm dưới `runtime.claude.*` — CẤU HÌNH ĐƯỢC vì
@@ -34,8 +35,8 @@ MCP_OAUTH_CALLBACK_DEFAULT_PORT = 33418  # callback OAuth của CLI (`mcp login`
 
 DEFAULTS: dict[str, Any] = {
     "hub": {
-        # FR-TK-07: giới hạn số run đồng thời toàn hub (giá trị khởi tạo 4)
-        "max_concurrent_runs": 4,
+        # FR-TK-07: giới hạn số run đồng thời toàn hub. Mặc định KHÔNG giới hạn (null); người muốn trần thì đặt trong Cài đặt
+        "max_concurrent_runs": None,
     },
     "runs": {
         # ngân sách mặc định cho một run khi agent không khai báo (null = không truyền --max-budget-usd)
@@ -153,7 +154,7 @@ DEFAULTS: dict[str, Any] = {
     "questions": {
         "via_manager": True,  # agent trong task hỏi điều phối viên trước; không chốt được → người
         "manager_timeout_s": 900,  # điều phối viên không xử lý trong N giây → tự chuyển lên người
-        "max_open_per_run": 3,
+        "max_open_per_run": None,  # null = không giới hạn
         "check_s": 30,  # chu kỳ vòng nền (chuyển lên người khi quá hạn, nhắc lại)
     },
     "notify": {
@@ -230,6 +231,12 @@ DEFAULTS: dict[str, Any] = {
             "poll_timeout_s": 25,
             "idle_check_s": 15,  # chưa cấu hình → kiểm lại sau mỗi chừng này giây
             "result_max_chars": 1500,
+            # Chữ agent (trả lời điều phối viên, kết quả /run, câu hỏi): "markdown" = markdown → HTML Telegram (đậm/nghiêng/code/khối mã,
+            # link thành chữ "nhãn (URL)", không <a>) — P0-10; "pre" = khung cũ (TRỌN trong <pre>, cắt cứng) để quay lại nhanh.
+            "agent_render": "markdown",
+            # Chữ agent dài (agent_render=markdown): đoạn văn/danh sách sau màn đầu (~500 ký tự) gập trong <blockquote expandable>.
+            # Mặc định TẮT — chưa kiểm trên bot Telegram thật (docs/dev-notes/telegram.md).
+            "expandable_details": False,
             # Tệp/ảnh với điều phối viên: ảnh (PNG/JPEG/GIF/WebP ≤ 5 MB, ≤ 4/tin — cùng giới hạn TUI) + tệp VĂN BẢN người gửi;
             # tệp điều phối viên đánh dấu `[[file: …]]` trong trả lời → gửi thành document (chỉ trong cwd hội thoại)
             "document_max_bytes": 10485760,  # tệp văn bản/tài liệu người gửi tối đa (= trần cứng 10 MB ở manager.chat)
@@ -307,7 +314,7 @@ DEFAULTS: dict[str, Any] = {
         "approval_wait_min": 2,  # approval chờ người lâu hơn N phút → sự kiện cho tick (điều phối viên xin phép người bằng nút)
         "crash_repeat": 2,  # run crashed/failed lặp ≥ N lần/giờ cùng agent → sự kiện
         "max_pending_events": 40,  # trần sự kiện đưa vào một prompt tick (cũ hơn bị gộp đếm)
-        "tick_budget_usd": 0.5,  # trần chi phí mỗi run tick
+        "tick_budget_usd": None,  # trần chi phí mỗi run tick (null = không giới hạn)
         "chat_budget_usd": None,  # trần mỗi run hội thoại (null = theo limits của agent)
         # cost-guardrails: trần NGÀY riêng của điều phối viên (mọi run của agent manager: chat/tick/lịch…), áp CÙNG limits của agent.
         # CHỈ người (config.set ∈ HUMAN_ONLY, nhánh `manager` kiểm toàn vẹn). null = không trần riêng.
@@ -318,10 +325,11 @@ DEFAULTS: dict[str, Any] = {
         "rotate_context_tokens": 40000,  # ngữ cảnh ước lượng ≥ N token = session "lớn": tick/lịch luôn xoay; chat xoay khi đã nghỉ lâu
         "rotate_idle_s": 3600,  # nghỉ ≥ N giây (cache prompt nguội) + session lớn → session mới (0 = tắt)
         # MGR-6: trần tần suất thao tác của manager (nhánh config được kiểm toàn vẹn; ngân sách/model/effort kẹp theo learn policy config_bounds)
-        "max_agents_created_per_day": 20,
-        "max_tasks_per_hour": 60,
-        "max_runs_per_hour": 30,
-        "max_system_ops_per_hour": 10,  # tạm dừng/bật lại/khởi động lại job launchd/Task Scheduler của hệ thống đã đăng ký
+        # null = không giới hạn (mặc định); người đặt số trong Cài đặt nếu muốn hãm điều phối viên
+        "max_agents_created_per_day": None,
+        "max_tasks_per_hour": None,
+        "max_runs_per_hour": None,
+        "max_system_ops_per_hour": None,  # tạm dừng/bật lại/khởi động lại job launchd/Task Scheduler của hệ thống đã đăng ký
         # §9 M7-core.md: khung quyền của điều phối viên (CHỈ người: config.set ∈ HUMAN_ONLY, nhánh `manager` kiểm toàn vẹn).
         # profile strict = Read/Grep/Glob (như MGR-8); hermes = Bash/Read/Write/Edit/Grep/Glob/TodoWrite + Web + MCP trusted (chỉ đọc),
         # VẪN dưới hook guard + sandbox OS + approval. null = theo profile. `cfharness manager capabilities show|set`.
@@ -345,7 +353,7 @@ DEFAULTS: dict[str, Any] = {
         "rate_limit_backoff_max_s": 600,  # …tới 10 phút (chỉ khi KHÔNG biết thời điểm reset)
         "rate_limit_reset_jitter_s": 30,  # biết resetsAt → thử lại lúc reset + ngẫu nhiên 5..N giây (tránh dồn cục)
         "rate_limit_reset_max_s": 691200,  # resetsAt xa hơn 8 ngày → không tin, dùng backoff
-        "max_subtasks": 20,
+        "max_subtasks": None,  # null = không giới hạn
         "review_budget_usd": None,  # trần chi phí run review (null = như run thường)
         # cost-guardrails: run task `interrupted` (daemon dừng) được requeue không tính lỗi; quá N lần LIÊN TIẾP → task blocked
         # + event task.requeue_exhausted (0 = không giới hạn, như trước)
@@ -362,11 +370,11 @@ DEFAULTS: dict[str, Any] = {
     # M4-A — lõi học (FR-LN-*). Công tắc học, config_bounds, rate là CHÍNH SÁCH AN TOÀN → `policy/learning.yaml`
     # (cfharness learn policy …), KHÔNG ở đây.
     "learning": {
-        "review_budget_usd": 0.20,  # FR-LN-03 phần khám phá của --max-budget-usd review fork (null = không trần riêng, như run thường)
+        "review_budget_usd": None,  # FR-LN-03 phần khám phá của --max-budget-usd review fork (null = không trần riêng, như run thường)
         # fork nạp lại TOÀN BỘ ngữ cảnh session gốc ở lượt API đầu (ghi cache): trần thật = review_budget_usd + token ngữ cảnh lần
         # cuối của session × giá dưới đây, chặn trên ở review_budget_max_usd (null = không chặn trên)
         "review_reload_usd_per_mtok": 10.0,  # giá ghi cache ước tính ($/1M token; Opus ghi cache 1 giờ = $10)
-        "review_budget_max_usd": 1.5,
+        "review_budget_max_usd": None,
         "review_rate_limit_retries": 5,  # review kết thúc rate_limited → xếp lại (Signal giữ nguyên), tối đa N lần
         "review_retry_backoff_s": 300,  # backoff lần đầu sau rate_limited, nhân đôi mỗi lần (≤ 1 giờ)
         "review_budget_retries": 1,  # budget_exceeded khi CHƯA có proposal → thử lại N lần với trần review_budget_max_usd
@@ -382,9 +390,9 @@ DEFAULTS: dict[str, Any] = {
         # điều phối viên. Chỉ đọc lượt người + câu trả lời agent (không output tool/web). Ghi qua pipeline (graph_write, created_by=review).
         "graph_extract": True,
         "graph_extract_model": "haiku",
-        "graph_extract_budget_usd": 0.05,  # --max-budget-usd mỗi lần (trần cứng một lần)
-        "graph_extract_max_per_agent_per_day": 12,
-        "graph_extract_daily_usd_per_agent": 0.5,  # tổng chi phí trích xuất / agent / ngày (0 = không trần)
+        "graph_extract_budget_usd": None,  # --max-budget-usd mỗi lần (null = không trần)
+        "graph_extract_max_per_agent_per_day": None,  # null/0 = không giới hạn
+        "graph_extract_daily_usd_per_agent": None,  # tổng chi phí trích xuất / agent / ngày (null/0 = không trần)
         "graph_extract_debounce_s": 30,  # run kết thúc → chờ N giây (resume ngay thì gộp vào lần sau); PreCompact/xoay session: ngay
         "graph_extract_min_chars": 200,  # hội thoại mới ngắn hơn → chưa trích (để dồn)
         "graph_extract_max_chars": 30_000,  # cửa sổ tin mới nhất đưa vào một lần (phần cũ hơn bị bỏ)
@@ -397,7 +405,7 @@ DEFAULTS: dict[str, Any] = {
         "graph_mirror_debounce_s": 20,
         "graph_mirror_interval_s": 300,
         "review_debounce_s": 10,  # gom tín hiệu: review chạy ≥ N giây sau Signal cuối (newest-wins)
-        "review_max_per_agent_per_day": 10,
+        "review_max_per_agent_per_day": None,  # null/0 = không giới hạn
         "review_timeout_s": 600,
         "trigger_turns": 10,  # FR-LN-02: số turn người kể từ lần review gần nhất
         "trigger_tool_rounds": 10,  # FR-LN-02: số vòng tool
@@ -467,8 +475,8 @@ DEFAULTS: dict[str, Any] = {
         "enabled": True,  # tắt → gate trả deferred_no_eval (L3 hoãn), post-apply gắn unevaluated
         "samples": 2,  # FR-LN-10: mỗi golden task chạy N lần, lấy trung bình
         "drop_threshold": 0.10,  # tụt > 10% điểm trung bình → eval_failed / rollback
-        "budget_usd": 1.0,  # eval_budget_usd: trần chi phí MỘT lần gate (mọi run eval + judge); agent ghi đè bằng agents.learning.eval_budget_usd
-        "run_budget_usd": 0.30,  # --max-budget-usd mỗi run eval
+        "budget_usd": None,  # eval_budget_usd (null = không trần): trần chi phí MỘT lần gate (mọi run eval + judge); agent ghi đè bằng agents.learning.eval_budget_usd
+        "run_budget_usd": None,  # --max-budget-usd mỗi run eval (null = không trần)
         "run_timeout_s": 600,
         "baseline_cache_h": 24,  # dùng lại điểm baseline cùng dấu vân tay cấu hình+tri thức trong N giờ
         "min_score_abs": 0.5,  # post-apply không dựng được mốc trước: đạt nếu điểm ≥ ngưỡng này
@@ -481,7 +489,7 @@ DEFAULTS: dict[str, Any] = {
                            "min_prompt_chars": 20, "min_result_chars": 20},
         "keep_tmp": False,  # giữ bản sao home tạm (gỡ lỗi)
         "ops_tick_s": 30,  # chu kỳ vòng nền M4-B (digest/curator/eval lô/hồi quy)
-        "judge": {"model": "haiku", "budget_usd": 0.05, "timeout_s": 180, "binary": None},  # LLM judge (null binary = runtime.claude.binary)
+        "judge": {"model": "haiku", "budget_usd": None, "timeout_s": 180, "binary": None},  # LLM judge (null binary = runtime.claude.binary)
         "regression": {  # FR-LN-17
             "watch_runs": 10,
             "baseline_days": 7,
@@ -512,8 +520,8 @@ DEFAULTS: dict[str, Any] = {
         "enabled": True,  # vòng nền (pha liên agent tất định mặc định bật; pha 2 LLM bật riêng)
         "tick_s": 300,
         "min_idle_min": 30,  # chỉ chạy khi không run nào đang chạy ≥ N phút
-        "daily_budget_usd": 0.5,  # trần chi phí LLM của curation mỗi ngày (giờ máy)
-        "run_budget_usd": 0.3,  # --max-budget-usd mỗi run curator
+        "daily_budget_usd": None,  # trần chi phí LLM của curation mỗi ngày (giờ máy; null = không trần)
+        "run_budget_usd": None,  # --max-budget-usd mỗi run curator (null = không trần)
         "model": "haiku",
         "timeout_s": 600,
         "binary": None,  # null = runtime.claude.binary (gộp LLM liên agent gọi `claude -p --json-schema`)
@@ -553,13 +561,14 @@ DEFAULTS: dict[str, Any] = {
         "tick_s": 15,  # chu kỳ vòng nền
         "catchup_grace_s": 3600,  # daemon tắt/máy ngủ: chạy bù MỘT lần nếu mốc gần nhất trễ ≤ N giây, còn lại bỏ (`skipped: missed`)
         "max_failures": 3,  # lỗi liên tiếp ≥ N → tự tạm dừng + báo người
-        "default_budget_usd": 0.5,  # trần mỗi lượt khi lịch không đặt budget_usd
-        "prompt_max_chars": 4000,
+        "default_budget_usd": None,  # trần mỗi lượt khi lịch không đặt budget_usd (null = không trần)
+        "prompt_max_chars": None,  # null = không giới hạn
         # trần của ĐIỀU PHỐI VIÊN (chỉ người đổi): số lịch đang bật, khoảng tối thiểu giữa 2 lượt, chạy-ngay/giờ, $/ngày ước tính
         # (null = learn policy config_bounds.budget_usd_per_day)
-        "manager_max_active": 10,
-        "min_interval_s": 900,
-        "manager_run_now_per_hour": 6,
+        # null = không giới hạn (mặc định)
+        "manager_max_active": None,
+        "min_interval_s": None,
+        "manager_run_now_per_hour": None,
         "manager_daily_budget_usd": None,
         # ước tính $/ngày của lịch = số lượt/ngày × chi phí THẬT trung bình ≤ N lượt gần nhất (cần ≥ estimate_min_fires lượt có
         # cost_usd); chưa đủ lịch sử → dùng budget_usd (trần) như trước
@@ -604,6 +613,31 @@ DEFAULTS: dict[str, Any] = {
         "timeout_s": 15,  # mỗi lệnh launchctl / schtasks
         "log_tail_bytes": 6000,  # system_get: đuôi log stdout/stderr mỗi job (đã che secret)
     },
+    # Xem / mở file agent đã thao tác qua web (docs/dev-notes/file-open.md). Nhánh `files` ∈ integrity.SECURITY_KEYS; `config.set` chỉ người.
+    # Đổi qua web: NỚI LỎNG (thêm đuôi được mở, bớt mẫu bí mật, bật tải qua cloud, tăng trần) chỉ khi dùng web trên CHÍNH máy chạy hub.
+    "files": {
+        # đuôi được mở bằng app mặc định (danh sách CHO PHÉP); đuôi chương trình/script/HTML/Office có macro luôn bị từ chối
+        "open_extensions": [
+            ".txt", ".md", ".markdown", ".rst", ".log", ".csv", ".tsv", ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+            ".xml", ".diff", ".patch",
+            ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".avif",
+            ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".rtf", ".pages", ".numbers", ".key",
+            ".mp3", ".wav", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm", ".mkv", ".avi",
+            ".zip",
+        ],
+        # tên file (glob, không phân biệt hoa thường) coi là chứa bí mật → không xem/mở/tải qua web
+        "secret_patterns": [
+            ".env", ".env.*", ".netrc", "_netrc", ".npmrc", ".pypirc", ".git-credentials", ".pgpass",
+            "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_*_sk",
+            "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", "*.kdbx", "*.ppk",
+            "credentials", "credentials.json", "*secret.json", "*secrets.json", "*secret.yaml", "*secrets.yaml", "*secret.yml",
+            "*secrets.yml", "*secret.toml", "*secrets.toml", "*secret.env", "*secrets.env",
+        ],
+        # ngoại lệ của secret_patterns (mẫu .env, khoá CÔNG KHAI)
+        "secret_allow": [".env.example", ".env.sample", ".env.template", ".env.dist", ".env.default", ".env.defaults", "*.pub"],
+        "cloud_download": True,  # cho tải file về khi dùng web qua link public (xem trong trình duyệt luôn được)
+        "max_download_mb": 10,  # trần tải về / ảnh / PDF (1–50 MB)
+    },
     "workspace": {
         # MGR-1: gốc người cho phép đặt workspace `dir`. Ngoài ra luôn cho vùng scratch/worktree/eval của hub. Người thêm gốc tại đây (chỉ người).
         "allowed_roots": ["~/Workspace"],
@@ -641,6 +675,11 @@ DEFAULTS: dict[str, Any] = {
             # Đang chặn vì "chưa đăng nhập": cứ mỗi N giây kiểm lại `claude auth status`, thấy đăng nhập thì tự gỡ chặn (0 = tắt)
             "auth_recheck_s": 300,
             "include_partial_messages": True,
+            # P0-9 (docs/dev-notes/plan-chat-ui-claude.md Q4): ghi khối thinking của assistant thành `reasoning.complete` (DB) để
+            # trang run phát lại "Suy nghĩ" sau khi tải lại. Text đã che (redact) và cắt ở `thinking_max_chars` (cờ truncated);
+            # `redacted_thinking` chỉ ghi dấu "bị ẩn". false = không phát/không ghi (vẫn có reasoning.delta trực tiếp).
+            "persist_thinking": True,
+            "thinking_max_chars": 8000,
             # Spike A-04: bật để kiểm hậu nghiệm không có hook lạ (hook Serena…) trong stream
             "include_hook_events": True,
             # "stream-json": prompt gửi qua stdin dạng dòng user message (+ --replay-user-messages),
@@ -716,7 +755,7 @@ DEFAULTS: dict[str, Any] = {
             "chrome": {
                 "enabled": True,
                 "default_mode": "auto",  # agent KHÔNG đặt tool_policy.browser dùng chế độ này (none|playwright|chrome|auto)
-                "max_concurrent_runs": 1,  # Chrome THẬT của người dùng chung → số run dùng tool chrome cùng lúc
+                "max_concurrent_runs": None,  # Chrome THẬT của người dùng chung → số run dùng tool chrome cùng lúc (null = không giới hạn)
                 "pass_no_chrome": True,  # run không dùng Chrome nhận --no-chrome (khi phiên bản CLI có cờ)
                 "annotations": {},  # ghi đè của người: {glob: {destructiveHint?, readOnlyHint?}} (`mcp annotate claude-in-chrome …`)
             },
@@ -877,6 +916,10 @@ def validate_setting(key: str, value: Any) -> None:
         _validate_backup(key, value)
     if key == "admin_watch" or key.startswith("admin_watch."):
         _validate_admin_watch(key, value)
+    if key == "files" or key.startswith("files."):
+        from .fileview import validate_setting as _validate_files
+
+        _validate_files(key, value)
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")
@@ -900,8 +943,8 @@ def validate_setting(key: str, value: Any) -> None:
         if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
             raise ValueError("notify.reminder_max_count phải là số nguyên ≥ 0 hoặc null")
     if key == "hub.max_concurrent_runs":
-        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-            raise ValueError("hub.max_concurrent_runs phải là số nguyên ≥ 1")
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
+            raise ValueError("hub.max_concurrent_runs phải là số nguyên ≥ 1 hoặc null (không giới hạn)")
     elif key == "runtime.kind":
         if value not in ("claude", "fake"):
             raise ValueError("runtime.kind chỉ nhận 'claude' hoặc 'fake'")

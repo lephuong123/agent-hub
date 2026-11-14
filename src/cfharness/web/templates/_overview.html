@@ -7,7 +7,7 @@
   <div class="stat tone-ok">
     <div class="stat-top"><span class="stat-l">Đang chạy</span><span class="stat-ic">{{ m.icon('run') }}</span></div>
     <div class="stat-n">{{ hub.running or 0 }}<span class="muted small"> / {{ hub.agents or 0 }} agent</span></div>
-    <div class="stat-s">{% if hub.queued %}{{ hub.queued }} chờ slot{% else %}tối đa {{ hub.max_concurrent_runs or '—' }} cùng lúc{% endif %}</div>
+    <div class="stat-s">{% if hub.queued %}{{ hub.queued }} chờ slot{% else %}{% if hub.max_concurrent_runs %}tối đa {{ hub.max_concurrent_runs }} cùng lúc{% else %}không giới hạn run cùng lúc{% endif %}{% endif %}</div>
   </div>
   <a class="stat {{ 'alert' if hub.approvals_pending else ('tone-ask' if need else '') }}" href="/inbox">
     <div class="stat-top"><span class="stat-l">Cần bạn</span><span class="stat-ic">{{ m.icon('inbox') }}</span></div>

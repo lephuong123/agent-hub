@@ -48,7 +48,7 @@ Client: `static/office.js`, `static/office/{walk,actors,chibi,chat,flows,talk}.j
 - `OFFICE_ACTIONS` thêm `steer`, `run_continue`, `run_start` → ĐÚNG `app.ACTIONS` cùng tên, cùng `post_guard` (Origin/Sec-Fetch-Site + CSRF +
   khoá phiên `k`, chỉ phiên người đăng nhập) và `plan_action`. 2D không hỏi xác nhận cho 3 action này; 3D LUÔN trả `need: "confirm"` trước khi
   có `confirm=yes` (fail closed: không có RPC ghi nào). `OFFICE_CONFIRM` nhận hàm `(form) → str` (nêu agent / run). Thành công trả thêm
-  `run_id` (`RUN_ACTIONS`). `stop`, `run_resume`, `feedback`… vẫn ngoài danh sách (404).
+  `run_id` (`RUN_ACTIONS`). `run_resume`, `feedback`… vẫn ngoài danh sách (404); `stop` có từ bảng quản lý agent (`office-agent-board.md`).
 
 ## 4. Agent ngồi ở team của mình, ít đi lại (`office/actors.js`, hằng số đầu file)
 | Hằng | Giá trị | Ý nghĩa |

@@ -1,0 +1,101 @@
+{#- Bộ render transcript DÙNG CHUNG (trang run; trang Điều phối sẽ import file này — docs/dev-notes/plan-chat-ui-claude.md mục 2).
+    Mọi chữ agent là DỮ LIỆU: autoescape; chỉ `it.html` (đầu ra của present.md(), đã cứng hoá) được |safe.
+    Không đặt input của agent vào thuộc tính data-*; ký tự ẩn/bidi được lộ ra qua *_segs (present.highlight(..., danger=False)).
+    Macro:
+      tx_msg(it, cls='')        it = {html, seq?, sub?, final?, iso?}  — tin agent (markdown đã render)
+      tx_tool(it, head=False)   it = mục tool của present.Transcript (`tree(it)`: + children/kids_n); head=True → chỉ <summary>
+                                (live cập nhật tiêu đề tool cha mà không gửi lại cả thân)
+      tx_thinking(it, live=False) it = {text, tokens?, cut?}           — khối suy nghĩ gập ("Đã suy nghĩ · ~1.2k token")
+      tx_todo(it)               it = mục `todo` (present.todo_item)     — checklist TodoWrite, một mục mỗi run (P2)
+      tx_copy(text) / tx_cut(note, run)                                 — nút Sao chép văn bản gốc / dòng báo bị cắt (P2)
+      tx_group(g, shell=False)  g = khối "group" của present.group_items / Transcript.group (P1-2); shell=True → khung rỗng
+      tx_time(it)               <time> theo `it.iso` (hiện khi hover/focus; app.js đổi sang giờ tương đối)
+      tx_segs(segs)             đoạn (loại, chữ) → chữ, ký tự ẩn bọc <mark class="ctl">
+    Khung chứa con (nhóm, tool Task/Agent) có ô `<div class="tx-kids" id="<dom>-k">`; `data-auto` = trạng thái mở mặc định (client
+    chỉ tự đóng/mở khi người chưa tự bấm). -#}
+{% import "_macros.html" as m %}
+
+{% macro tx_segs(segs) -%}
+{%- for k, t in segs or [] %}{% if k == 'ctl' %}<mark class="ctl">{{ t }}</mark>{% elif k == 'hit' %}<mark>{{ t }}</mark>{% else %}{{ t }}{% endif %}{% endfor -%}
+{%- endmacro %}
+
+{% macro tx_time(it) -%}
+{%- if it.iso %}<time class="tx-time" datetime="{{ it.iso }}" data-rel title="{{ it.ts }}">{{ it.ts }}</time>{% endif -%}
+{%- endmacro %}
+
+{#- P2: báo rõ khi hub chỉ giữ phần đầu — `note` = present.cut_note(...) (chữ thuần), lệnh xem đủ trong <code> -#}
+{% macro tx_cut(note, run) -%}
+{%- if note %}<p class="tx-cutnote">{{ m.icon('info', 'sm') }}<span>{{ note }}{% if run %} <code>cfharness runs logs {{ run }}</code>{% endif %}</span></p>{% endif -%}
+{%- endmacro %}
+
+{#- P2: nút Sao chép văn bản GỐC — nằm cạnh <template class="tx-src"> (autoescape; app.js đọc template.content.textContent).
+    Văn bản gốc không bao giờ nằm trong data-*. -#}
+{% macro tx_copy(text, label='Sao chép') -%}
+<button type="button" class="tx-copy tx-copy-src" title="{{ label }}" aria-label="{{ label }}">{{ m.icon('copy', 'sm') }}<span class="tx-copy-t">Sao chép</span></button><template class="tx-src">{{ text }}</template>
+{%- endmacro %}
+
+{% macro tx_msg(it, cls='') -%}
+<div class="ti msg tx-msg{{ ' sub' if it.sub }}{{ ' final' if it.final }}{{ ' ' ~ cls if cls }}"{% if it.seq is not none %} data-seq="{{ it.seq }}"{% endif %}><div class="md">{{ it.html|safe }}</div>{{ tx_cut(it.cut, it.run) }}
+{%- if it.text %}<div class="tx-acts">{{ tx_copy(it.text, 'Sao chép tin') }}{{ tx_time(it) }}</div>{% else %}{{ tx_time(it) }}{% endif %}</div>
+{%- endmacro %}
+
+{% macro tx_thinking(it, live=False) -%}
+<details class="ti reasoning tx-thinking"{% if live %} open{% endif %}><summary>{% if live %}Suy nghĩ…{% elif it.tokens %}Đã suy nghĩ · ~{{ it.tokens }} token{% else %}Suy nghĩ{% endif %}{{ tx_time(it) }}</summary><pre>{{ it.text }}</pre>{{ tx_cut(it.cut, it.run) }}</details>
+{%- endmacro %}
+
+{#- P2: TodoWrite → MỘT checklist mỗi run (`todo-<run>`), thay tại chỗ mỗi lần agent cập nhật; ô tích chỉ để xem (disabled) -#}
+{% macro tx_todo(it) -%}
+{%- set d = it.todo or {} -%}
+<details class="ti tx-todo" id="{{ it.dom }}"{% if it.seq is not none %} data-seq="{{ it.seq }}"{% endif %} data-auto="1" open>
+<summary class="tx-todo-sum"><span class="tx-todo-h">Việc cần làm</span> <span class="tx-meta">{{ d.done }}/{{ d.n }} xong</span>
+{%- if d.current %} <span class="tx-todo-cur">· {{ d.current }}</span>{% endif %}{{ tx_time(it) }}{{ m.icon('chev-down', 'tx-chev') }}</summary>
+<ul class="tx-todo-list">{% for r in d.rows %}<li class="td {{ r.status }}"><input type="checkbox" disabled{% if r.status == 'completed' %} checked{% endif %} aria-label="{{ r.label }}"><span>{{ r.text }}</span>{% if r.status == 'in_progress' %} <span class="tx-todo-now">đang làm</span>{% endif %}</li>{% endfor %}
+{%- if d.more %}<li class="td more">… còn {{ d.more }} mục</li>{% endif %}</ul></details>
+{%- endmacro %}
+
+{% macro tx_diff(d) -%}
+{#- mỗi dòng là <span class="dl"> display:block — KHÔNG thêm "\n" giữa các span (trong <pre> sẽ thành dòng trống) -#}
+{%- if d.lines %}<pre class="udiff tx-diff" tabindex="0">{% for k, segs in d.lines %}<span class="dl {{ k }}">{{ tx_segs(segs) }}</span>{% endfor %}
+{%- if d.more and not d.rest %}<span class="dl meta">… còn {{ d.more }} dòng</span>{% endif %}</pre>
+{%- if d.rest %}<details class="tx-more"><summary>Xem thêm {{ d.rest|length }} dòng</summary><pre class="udiff tx-diff" tabindex="0">{% for k, segs in d.rest %}<span class="dl {{ k }}">{{ tx_segs(segs) }}</span>{% endfor %}
+{%- if d.more %}<span class="dl meta">… còn {{ d.more }} dòng</span>{% endif %}</pre></details>{% endif %}
+{%- endif %}
+{%- endmacro %}
+
+{% macro tx_kid(c) -%}
+{%- if c.kind == 'tool' %}{{ tx_tool(c) }}{% else %}<div class="ti note {{ c.tone }}"{% if c.dom %} id="{{ c.dom }}"{% endif %}{% if c.seq is not none %} data-seq="{{ c.seq }}"{% endif %}><span>{{ c.text }}</span>{{ tx_time(c) }}</div>{% endif -%}
+{%- endmacro %}
+
+{% macro tx_tool(it, head=False) -%}
+{%- set v = it.view or {} -%}
+{%- set nest = it.tool in ('Task', 'Agent') or it.children -%}
+{%- set auto = it.error or (nest and it.running) -%}
+<details class="ti tool tx-tool{{ ' running' if it.running }}{{ ' err' if it.error }}{{ ' sub' if it.sub }}{{ ' nest' if nest }}"{% if it.dom %} id="{{ it.dom }}"{% endif %}{% if it.seq is not none %} data-seq="{{ it.seq }}"{% endif %} data-auto="{{ 1 if auto else 0 }}"{% if auto %} open{% endif %}>
+<summary class="tx-tool-sum"><span class="tx-st" aria-label="{{ 'đang chạy' if it.running else ('lỗi' if it.error else 'xong') }}">{% if it.running %}<span class="tx-spin"></span>{% elif it.error %}{{ m.icon('x', 'sm') }}{% else %}{{ m.icon('check', 'sm') }}{% endif %}</span>
+<span class="tx-verb">{{ v.verb or it.name }}</span>
+{%- if v.target %} <span class="tx-target" title="{{ v.target_title }}">{{ tx_segs(v.target_segs) }}</span>{% endif %}
+{%- if v.meta %} <span class="tx-meta">{{ v.meta }}</span>{% endif %}
+{%- if nest %} <span class="tx-meta tx-kids-n">{% if it.running %}Đang chạy… ({{ it.kids_n or 0 }} công cụ){% else %}Xong ({{ it.kids_n or 0 }} công cụ{% if it.dur is not none %} · {{ '%.1f'|format(it.dur) }}s{% endif %}){% endif %}</span>
+{%- elif it.running %} <span class="tx-dur spin">đang chạy…</span>{% elif it.dur is not none %} <span class="tx-dur">{{ '%.1f'|format(it.dur) }}s</span>{% endif %}
+{%- if it.file %} {{ m.file_chip(it.file) }}{% endif %}{{ tx_time(it) }}{{ m.icon('chev-down', 'tx-chev') }}</summary>
+{%- if not head %}
+<div class="tx-tool-body">
+{%- if nest %}<div class="tx-kids" id="{{ it.dom }}-k">{% for c in it.children or [] %}{{ tx_kid(c) }}{% endfor %}</div><details class="tx-io"><summary>Input / Output</summary>{% endif %}
+{{- tx_diff(v.diff or {}) }}
+<div class="tx-io-h">Input{% if v.input_cut %} <span class="tx-cut">· đã cắt</span>{% endif %}</div><pre class="tx-in">{{ tx_segs(v.input_segs) }}</pre>
+{%- if v.output_text %}<div class="tx-io-h">Output {{ tx_copy(v.output_text, 'Sao chép output') }}</div><pre class="tx-out">{{ tx_segs(v.output_segs) }}</pre>
+{%- if v.truncated %}{{ tx_cut(cut_note('Output', v.output_text|length, it.run), it.run) }}{% endif %}
+{%- elif not it.running %}<div class="tx-io-h">Output <span class="tx-cut">· trống</span></div>{% endif %}
+{%- if nest %}</details>{% endif %}
+</div>
+{%- endif %}</details>
+{%- endmacro %}
+
+{% macro tx_group(g, shell=False) -%}
+{%- set auto = g.open or g.solo -%}
+<details class="tx-group{{ ' solo' if g.solo }}{{ ' running' if g.running }}{{ ' err' if g.error }}" id="{{ g.dom }}" data-auto="{{ 1 if auto else 0 }}"{% if auto %} open{% endif %}>
+<summary class="tx-group-sum"><span class="tx-st" aria-label="{{ 'đang chạy' if g.running else ('có lỗi' if g.error else 'xong') }}">{% if g.running %}<span class="tx-spin"></span>{% elif g.error %}{{ m.icon('x', 'sm') }}{% else %}{{ m.icon('check', 'sm') }}{% endif %}</span>
+<span class="tx-gl">{{ g.label }}</span>{% if g.verbs %} <span class="tx-meta">· {{ g.verbs }}</span>{% endif %}
+{%- if g.latest_segs %} <span class="tx-target tx-glive">{{ tx_segs(g.latest_segs) }}</span>{% endif %}{{ m.icon('chev-down', 'tx-chev') }}</summary>
+<div class="tx-kids" id="{{ g.dom }}-k">{% if not shell %}{% for t in g.tools %}{{ tx_tool(t) }}{% endfor %}{% endif %}</div></details>
+{%- endmacro %}

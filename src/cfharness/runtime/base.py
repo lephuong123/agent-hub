@@ -60,9 +60,14 @@ class RunSpec:
     allowed_mcp_prefixes: list[str] | None = None
     # agent được người đặt trust full (guard/service.trust_set): cho phép `bypassPermissions` trên mọi workspace (ngoại lệ NFR-15 do người chọn)
     trust_full: bool = False
+    # plugin Claude Code của agent (plugins.py) → `--plugin-dir <thư mục>` mỗi plugin
+    plugin_dirs: list[Path] = field(default_factory=list)
     # CLI 2.1.303+: bộ quyết định cho `control_request can_use_tool` (vd SandboxNetworkAccess) — async (request, request_id) →
     # {behavior: allow|deny, message?, updatedInput?}. RunManager gắn (đi qua guard); None → runtime từ chối (fail-closed)
     control_handler: Any = None
+    # P0-9: ghi khối thinking (reasoning.complete) vào DB — `runtime.claude.persist_thinking` / `thinking_max_chars`
+    persist_thinking: bool = True
+    thinking_max_chars: int = 8000
 
 
 @dataclass
@@ -188,4 +193,6 @@ def make_adapter(spec: RunSpec) -> ClaudeStreamAdapter:
         allowed_plugin_prefixes=spec.allowed_plugin_prefixes,
         require_no_auto_memory=spec.require_no_auto_memory,
         allowed_mcp_prefixes=spec.allowed_mcp_prefixes,
+        persist_thinking=spec.persist_thinking,
+        thinking_max=spec.thinking_max_chars,
     )

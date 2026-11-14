@@ -50,6 +50,9 @@ EVENT_LEVELS: dict[str, str] = {
     "message.delta": "detail",
     "reasoning.delta": "detail",
     "reasoning.progress": "detail",
+    # khối `thinking`/`redacted_thinking` trọn vẹn của assistant (P0-9): text (đã che, cắt theo `runtime.claude.thinking_max_chars`),
+    # truncated, redacted (true = CLI chỉ gửi bản mã hoá → không có nội dung), message_id. Ghi DB để phát lại sau khi tải lại trang.
+    "reasoning.complete": "detail",
     "message.complete": "summary",
     # Tool
     "tool.generating": "detail",
@@ -188,6 +191,7 @@ EVENT_LEVELS: dict[str, str] = {
     "manager.reply": "summary",  # trả lời/ thông báo của manager tới kênh người (conversation_id, run_id, text, kind)
     "manager.tick": "summary",  # nhịp heartbeat: started|skipped (reason, events)
     "manager.designated": "summary",  # người chỉ định/huỷ chỉ định manager (agent_id, previous)
+    "workstream.updated": "summary",  # luồng việc (manager/workstreams.py): created|updated|state|closed|reopened|deleted|conversation (workstream_id, key, title, by)
     # UX — câu hỏi có lựa chọn (questions/): agent hỏi → điều phối viên (routed_to=manager) hoặc người (routed_to=human)
     "question.open": "summary",  # question_id, routed_to, text, options[{key,label,description}], multi, allow_free_text, source
     "question.escalated": "summary",  # điều phối viên không chốt được / quá hạn → người (question_id, by, note)

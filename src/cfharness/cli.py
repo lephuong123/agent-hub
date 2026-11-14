@@ -191,7 +191,7 @@ def cmd_daemon(ctx: Ctx) -> int:
         text = (
             f"daemon đang chạy · v{st['version']} · HUB_HOME={st['home']}\n"
             f"epoch {st['epoch']} · seq {st['last_seq']} · runtime={st['runtime']}\n"
-            f"run: {st['running']} đang chạy / {st['queued']} chờ (giới hạn {st['max_concurrent_runs']}) · agent: {st['agents']}\n"
+            f"run: {st['running']} đang chạy / {st['queued']} chờ (giới hạn {st['max_concurrent_runs'] or 'không'}) · agent: {st['agents']}\n"
             f"chi phí hôm nay: {_fmt_usd(st['cost_today_usd'])}\n"
             f"ESTOP: {'BẬT — ' + str(es.get('reason') or '') if es.get('on') else 'tắt'}"
         )
@@ -371,6 +371,14 @@ def cmd_doctor(ctx: Ctx) -> int:
 
                 AgentConfig(id=ag["id"], **{k: ag[k] for k in ("name", "role", "description", "model", "effort", "fallback_model", "tool_policy", "mcp_servers", "limits", "workspace_default") if ag.get(k) is not None})
                 add(f"cấu hình agent {ag['id']}", True, f"model={ag['model']} rev={ag['config_revision']}")
+                if ag.get("plugins"):
+                    from .plugins import PluginError, resolve as _resolve_plugins
+
+                    try:
+                        found = _resolve_plugins(list(ag["plugins"]))
+                        add("plugin", True, ", ".join(f"{x.name} ({x.path})" for x in found))
+                    except PluginError as e:
+                        add("plugin", False, str(e))
                 reg = load_mcp_registry(ctx.paths)
                 for s in ag.get("mcp_servers") or []:
                     if s not in reg:
@@ -420,6 +428,9 @@ def _agent_payload(a: argparse.Namespace, *, creating: bool) -> dict[str, Any]:
         if not w.strip(", "):  # chuỗi rỗng dễ là gõ nhầm → không âm thầm chặn hết; chặn hết phải ghi rõ 'none'
             raise ValueError("--web-domains rỗng: dùng 'none' để chặn mọi WebFetch, 'any' để bỏ giới hạn")
         tp["web_allow_domains"] = None if w == "any" else [] if w == "none" else _split_list([w])
+    if getattr(a, "connectors", None) is not None:  # "none" = tắt
+        names = [x.strip() for x in a.connectors.split(",") if x.strip()]
+        tp["connectors"] = None if names in ([], ["none"]) else names
     for src, dst in (("allowed_tools", "allowed_tools"), ("disallowed_tools", "disallowed_tools"), ("tools", "tools")):
         v = _split_list(getattr(a, src, None))
         if v is not None:
@@ -428,6 +439,8 @@ def _agent_payload(a: argparse.Namespace, *, creating: bool) -> dict[str, Any]:
         d["tool_policy"] = tp
     if a.mcp is not None:
         d["mcp_servers"] = _split_list(a.mcp)
+    if getattr(a, "plugin", None) is not None:  # "none" = bỏ hết plugin
+        d["plugins"] = [] if [x.strip() for x in a.plugin] == ["none"] else _split_list(a.plugin)
     lim: dict[str, Any] = {}
     for src, dst in (("budget_per_run", "max_budget_usd_per_run"), ("budget_per_day", "budget_usd_per_day"), ("max_concurrent", "max_concurrent_runs"), ("max_runtime", "max_runtime_s")):
         v = getattr(a, src, None)
@@ -471,6 +484,9 @@ def _agent_text(ag: dict[str, Any]) -> str:
         f"  browser: {tp.get('browser') or '(mặc định hub: runtime.claude.chrome.default_mode)'}  (Claude in Chrome: chrome|auto — docs/dev-notes/chrome.md)",
         f"  web_allow_domains: {_web_domains_text(tp)}",
         f"  mcp: {','.join(ag.get('mcp_servers') or []) or '-'}",
+        f"  connector claude.ai: {','.join(tp.get('connectors') or []) or '-'}"
+        + ("  (run nạp cấu hình user ~/.claude; cần guard bật)" if tp.get("connectors") else ""),
+        f"  plugins: {', '.join(ag.get('plugins') or []) or '-'}",
         f"  limits: {json.dumps(lim, ensure_ascii=False)}",
         f"  workspace: {ag.get('workspace_default') or '(scratch theo run)'}",
         f"  home: {ag['home_path']}",
@@ -774,6 +790,10 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--web-domains", help="allowlist domain WebFetch, phân tách dấu phẩy (vd docs.python.org,*.github.io); "
                         "'any' = không giới hạn, 'none' = chặn mọi WebFetch")
         sp.add_argument("--mcp", action="append", help="tên MCP server trong registry")
+        sp.add_argument("--connectors", help="connector claude.ai cho agent, phân cách dấu phẩy (vd \"Atlassian,Slack\"); 'none' = tắt. "
+                        "Bật = run nạp cấu hình user ~/.claude; cần guard bật; tool ghi KHÔNG hỏi duyệt, chỉ xoá mới hỏi")
+        sp.add_argument("--plugin", action="append", help="plugin Claude Code nạp cho run (tên@marketplace đã `claude plugin install`, "
+                        "hoặc đường dẫn tuyệt đối); lặp lại hoặc phân tách dấu phẩy; 'none' = bỏ hết")
         sp.add_argument("--browser", choices=["chrome", "playwright", "auto", "none", "default"],
                         help="trình duyệt: chrome = Claude in Chrome (Chrome THẬT của bạn, bỏ Playwright), auto = Chrome trước rồi Playwright, "
                              "playwright/none = không --chrome, default = theo runtime.claude.chrome.default_mode của hub (mặc định auto)")

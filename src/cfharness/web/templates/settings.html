@@ -50,6 +50,9 @@
         {% elif s.kind == 'multi' %}
           <details class="msel"><summary aria-label="{{ s.label }}">{{ r.value|length }}/{{ r.choices|length }} đã chọn</summary>
             <div class="msel-list">{% for c in r.choices %}<label class="check small"><input type="checkbox" name="value" value="{{ c }}" {{ 'checked' if c in r.value }}> <code>{{ c }}</code></label>{% endfor %}</div></details>
+        {% elif s.kind == 'list' %}
+          <details class="msel"><summary aria-label="{{ s.label }}">{{ r.count }} mục</summary>
+            <textarea name="value" rows="8" spellcheck="false" aria-label="{{ s.label }}" placeholder="{{ s.hint }}">{{ r.value }}</textarea></details>
         {% elif s.kind == 'time' %}
           <input type="time" name="value" value="{{ r.value }}" required aria-label="{{ s.label }}">
         {% elif s.kind in ('int', 'float') %}

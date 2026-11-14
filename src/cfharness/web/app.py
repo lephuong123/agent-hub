@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
@@ -31,6 +32,7 @@ from starlette.templating import Jinja2Templates
 
 from .. import auth as _auth
 from ..errors import BLOCKED
+from ..events import TERMINAL_RUN_EVENTS
 from ..paths import HubPaths
 from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
 from ..tui.client import AsyncHubClient, subscribe
@@ -706,7 +708,7 @@ async def _agent_form_ctx(request: Request, agent: dict[str, Any] | None, values
             "tools": ", ".join(tp.get("tools") or []), "mcp": list(agent.get("mcp_servers") or []),
             "web_allow_domains": ", ".join(tp.get("web_allow_domains") or []),
             "max_budget_usd_per_run": lim.get("max_budget_usd_per_run") or "", "budget_usd_per_day": lim.get("budget_usd_per_day") or "",
-            "max_runtime_s": lim.get("max_runtime_s") or "", "max_concurrent_runs": lim.get("max_concurrent_runs") or 1,
+            "max_runtime_s": lim.get("max_runtime_s") or "", "max_concurrent_runs": lim.get("max_concurrent_runs") or "",
             "workspace_default": agent.get("workspace_default") or "", "soul": agent.get("soul") or "",
         }
     v.setdefault("mcp", [])
@@ -778,7 +780,7 @@ def agent_changes(form: FormData, *, creating: bool, from_template: bool) -> dic
     for k, kind, label in (("max_budget_usd_per_run", float, "Ngân sách mỗi run"), ("budget_usd_per_day", float, "Ngân sách mỗi ngày"),
                            ("max_runtime_s", int, "Thời gian chạy tối đa"), ("max_concurrent_runs", int, "Số run đồng thời")):
         val = _num(form.get(k), kind, label)
-        if val is not None or (not sparse and k != "max_concurrent_runs"):
+        if val is not None or not sparse:  # form đầy đủ: để trống = không giới hạn
             lim[k] = val
     if lim:
         ch["limits"] = lim
@@ -899,25 +901,17 @@ async def task_titles(request: Request, runs: list[dict[str, Any]]) -> dict[str,
         return {}
 
 
-def replay_items(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Phát lại từ DB: gộp tool.start + tool.complete cùng id thành một mục (như TUI)."""
-    out: list[dict[str, Any]] = []
-    idx: dict[str, int] = {}
+def replay_tx(events: list[dict[str, Any]]) -> P.Transcript:
+    """Phát lại từ DB — cùng bộ gộp `P.Transcript` với luồng live (`_run_converter`), nên HTML cuối giống hệt.
+    `.items` = danh sách phẳng; `.blocks()` = cây để vẽ (nhóm tool P1-2, subagent lồng P1-3)."""
+    tx = P.Transcript()
     for ev in sorted(events, key=lambda e: (e.get("ts") or "", int(e.get("seq") or 0))):
-        it = P.transcript_item(ev)
-        if it is None:
-            continue
-        dom = it.get("dom")
-        if dom and dom in idx:
-            prev = out[idx[dom]]
-            it["diff"] = prev.get("diff") or it.get("diff")
-            it["summary"] = it.get("summary") or prev.get("summary")
-            out[idx[dom]] = it
-            continue
-        if dom:
-            idx[dom] = len(out)
-        out.append(it)
-    return out
+        tx.feed(ev)
+    return tx
+
+
+def replay_items(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return replay_tx(events).items
 
 
 async def _run_ctx(request: Request, rid: str) -> dict[str, Any]:
@@ -948,14 +942,50 @@ async def run_page(request: Request) -> Response:
     ctx = await _run_ctx(request, run["id"])
     children = [r for r in (await rpc(request, "run.list", {"agent": run["agent_id"], "limit": 50}) or []) if r.get("parent_run_id") == run["id"]]
     qs = await questions(request, "all", run_id=run["id"])
-    return await render(request, "run.html", {**ctx, "nav": "runs", "items": replay_items(events), "since": since, "epoch": epoch, "children": children,
-                                              "run_questions": [q for q in qs if q["status"] in ("open", "with_manager")]})
+    tx = replay_tx(events)
+    final_text = P.mark_final(tx.items)
+    blocks, before, hidden = P.page_blocks(tx.blocks())  # P2: run dài → chỉ vẽ phần cuối + nút "Hiện các mục trước"
+    return await render(request, "run.html", {**ctx, "nav": "runs", "items": blocks, "older": before, "older_n": hidden, "since": since, "epoch": epoch,
+                                              "children": children, "run_questions": [q for q in qs if q["status"] in ("open", "with_manager")],
+                                              "summary_dup": P.same_text(ctx["run"].get("summary"), final_text),
+                                              "started_iso": P.iso_ts(ctx["run"].get("started_at") or ctx["run"].get("created_at"))})
+
+
+async def partial_run_items(request: Request) -> Response:
+    """P2: phần transcript TRƯỚC mốc `before` (seq của event tạo khối đầu tiên đang hiện) của run dài — cùng bộ gộp + macro với trang run
+    (nhóm tool nguyên vẹn, subagent lồng). Cần đăng nhập như mọi trang (GuardMiddleware). Mốc không hợp lệ → 400."""
+    rid = request.path_params["id"]
+    try:
+        before = int(request.query_params.get("before") or "")
+    except ValueError:
+        return Response("before phải là số", status_code=400)
+    run = await rpc(request, "run.get", {"id": rid, "events": True})
+    tx = replay_tx(run.pop("events", []) or [])
+    P.mark_final(tx.items)
+    blocks, more, hidden = P.page_blocks(tx.blocks(), before)
+    return ws(request).templates.TemplateResponse(request, "_run_items.html", {"items": blocks, "before": more, "hidden": hidden, "run_id": run["id"]},
+                                                  headers={"Cache-Control": "no-store"})
 
 
 async def partial_run(request: Request) -> Response:
     ctx = await _run_ctx(request, request.path_params["id"])
     sess = session_of(request)
-    return ws(request).templates.TemplateResponse(request, "_run_bar.html", {**ctx, "csrf": sess.csrf if sess else ""})
+    # run đã xong + htmx đang poll → 286: htmx vẽ lần cuối rồi NGỪNG poll (trang không còn tải lại khi run kết thúc)
+    done = request.headers.get("hx-request") == "true" and not P.is_live_run(ctx["run"])
+    return ws(request).templates.TemplateResponse(request, "_run_bar.html", {**ctx, "csrf": sess.csrf if sess else ""}, status_code=286 if done else 200)
+
+
+async def partial_run_result(request: Request) -> Response:
+    """Thẻ Kết quả (+ nói tiếp, chỗ tải diff) khi run live vừa kết thúc — client thay vào chỗ ô steer, KHÔNG tải lại trang
+    (giữ thinking live và các khối đang mở trong transcript). Run còn chạy → 204 (chưa có gì để thay)."""
+    rid = request.path_params["id"]
+    run = await rpc(request, "run.get", {"id": rid, "events": True})
+    if P.is_live_run(run):
+        return Response(status_code=204)
+    final_text = P.mark_final(replay_items(run.pop("events", []) or []))
+    sess = session_of(request)
+    return ws(request).templates.TemplateResponse(request, "_run_result.html", {"run": run, "csrf": sess.csrf if sess else "", "oob": True,
+                                                                               "summary_dup": P.same_text(run.get("summary"), final_text)})
 
 
 async def inbox_page(request: Request) -> Response:
@@ -979,7 +1009,8 @@ async def approvals_page(request: Request) -> Response:
     return await render(request, "approvals.html", {"nav": "approvals", "pend": sorted(pend, key=lambda a: a.get("opened_at") or ""), "hist": hist})
 
 
-async def tasks_page(request: Request) -> Response:
+async def _tasks_board(request: Request) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Dữ liệu bảng kanban (dùng chung cho trang /tasks và partial /partials/tasks — cùng tham số team, all)."""
     q = request.query_params
     params: dict[str, Any] = {"limit": 500}
     if q.get("team"):
@@ -991,16 +1022,37 @@ async def tasks_page(request: Request) -> Response:
     cols = {c: [t for t in tasks if t.get("status") == c] for c in P.TASK_COLUMNS}
     if not q.get("all"):
         cols["done"] = cols["done"][:15]
+    return tasks, {"cols": cols, "q": dict(q)}
+
+
+async def tasks_page(request: Request) -> Response:
+    tasks, board = await _tasks_board(request)
     teams = await rpc(request, "team.list", {})
     agents = [a["id"] for a in await rpc(request, "agent.list", {})]
     open_tasks = [t for t in tasks if t.get("status") not in ("done", "archived")]
-    return await render(request, "tasks.html", {"nav": "tasks", "cols": cols, "teams": teams, "agents": agents, "open_tasks": open_tasks, "q": dict(q)})
+    return await render(request, "tasks.html", {"nav": "tasks", **board, "teams": teams, "agents": agents, "open_tasks": open_tasks})
+
+
+async def partial_tasks(request: Request) -> Response:
+    _, board = await _tasks_board(request)
+    sess = session_of(request)
+    return ws(request).templates.TemplateResponse(request, "_tasks_board.html", {**board, "csrf": sess.csrf if sess else ""})
+
+
+async def _task_ctx(request: Request) -> dict[str, Any]:
+    t = await rpc(request, "task.get", {"id": request.path_params["id"]})
+    qs = await questions(request, "all", task_id=t["id"])
+    return {"nav": "tasks", "t": t, "task_questions": [q for q in qs if q["status"] in ("open", "with_manager")]}
 
 
 async def task_page(request: Request) -> Response:
-    t = await rpc(request, "task.get", {"id": request.path_params["id"]})
-    qs = await questions(request, "all", task_id=t["id"])
-    return await render(request, "task.html", {"nav": "tasks", "t": t, "task_questions": [q for q in qs if q["status"] in ("open", "with_manager")]})
+    return await render(request, "task.html", await _task_ctx(request))
+
+
+async def partial_task(request: Request) -> Response:
+    ctx = await _task_ctx(request)
+    sess = session_of(request)
+    return ws(request).templates.TemplateResponse(request, "_task_main.html", {**ctx, "csrf": sess.csrf if sess else "", "oob": True})
 
 
 async def teams_page(request: Request) -> Response:
@@ -1172,6 +1224,26 @@ class Action:
     step2: Callable[[FormData], str] | str | None = None  # bước 2 BẮT BUỘC (thao tác NỚI quyền) — trang xác nhận lần 2 nêu rõ hệ quả
 
 
+async def _config_set(request: Request, p: dict[str, Any]) -> Any:
+    """`config.set` từ trang Cài đặt. `files.*` NỚI LỎNG (thêm đuôi được mở, bớt mẫu bí mật, bật tải qua cloud, tăng trần) chỉ nhận
+    khi web dùng trên CHÍNH máy chạy hub — phiên qua link public chỉ được siết (docs/dev-notes/file-open.md)."""
+    key = str(p.get("key") or "")
+    if key.startswith("files."):
+        from ..config import get_path
+        from ..fileview import loosens
+        from .file_pages import is_local_request
+
+        if not is_local_request(request):
+            try:
+                old = get_path(await rpc(request, "config.get") or {}, key)
+            except KeyError:
+                old = None
+            if loosens(key, old, p.get("value")):
+                raise RpcError(-32003, "Thay đổi này nới lỏng bảo vệ file — chỉ đổi được khi dùng web trên chính máy chạy hub "
+                                       "(hoặc `cfharness config set` trong terminal). Qua link public chỉ được siết lại.")
+    return await rpc(request, "config.set", p, audit=True)
+
+
 def _run_goto(res: Any, form: FormData) -> str | None:
     rid = (res or {}).get("id") or (res or {}).get("run_id")
     return f"/runs/{rid}" if rid else None
@@ -1282,8 +1354,10 @@ ACTIONS: dict[str, Action] = {
                           confirm=lambda f: f"Tạm dừng agent {f.get('id')}?"),
     "agent_resume": Action("agent.resume", lambda f: {"id": _req(f, "id")}, "Agent đã hoạt động lại",
                            confirm=lambda f: f"Cho agent {f.get('id')} hoạt động lại (nhận việc mới)?"),
-    "agent_delete": Action("agent.delete", lambda f: {"id": _req(f, "id")}, lambda r, f: f"Đã chuyển agent {f.get('id')} vào thùng rác (khôi phục được)",
-                           confirm=lambda f: f"Xoá agent {f.get('id')}? (xoá mềm — vào thùng rác, khôi phục được trong thời hạn giữ)", danger=True,
+    "agent_delete": Action("agent.delete", lambda f: {"id": _req(f, "id"), **({"detach_teams": True} if f.get("detach_teams") == "1" else {})},
+                           lambda r, f: f"Đã chuyển agent {f.get('id')} vào thùng rác (khôi phục được)",
+                           confirm=lambda f: f"Xoá agent {f.get('id')}? (xoá mềm — vào thùng rác, khôi phục được trong thời hạn giữ)"
+                           + (" Agent sẽ được gỡ khỏi mọi team trước." if f.get("detach_teams") == "1" else ""), danger=True,
                            goto=lambda r, f: "/agents"),
     "agent_restore": Action("trash.restore", lambda f: {"id": _req(f, "id"), "kind": "agent"}, lambda r, f: f"Đã khôi phục agent {f.get('id')}",
                             confirm=lambda f: f"Khôi phục agent {f.get('id')} từ thùng rác (kèm cấu hình, quyền, MCP cũ)?",
@@ -1366,7 +1440,7 @@ ACTIONS: dict[str, Action] = {
                         danger=True),
     "config_set": Action("config.set", lambda f: dict(zip(("key", "value"), _settings.parse_form(f))),
                          lambda r, f: f"Đã đặt {f.get('key')} = {json.dumps((r or {}).get(f.get('key')), ensure_ascii=False)}",
-                         confirm=lambda f: f"Đổi cấu hình {f.get('key')} thành '{_settings.show(_settings.parse_form(f)[1])}'?"),
+                         confirm=lambda f: f"Đổi cấu hình {f.get('key')} thành '{_settings.show(_settings.parse_form(f)[1])}'?", call=_config_set),
     "secret_set": Action("secret.set", lambda f: {"name": _req(f, "name", "tên secret"), "value": _req(f, "value", "giá trị")},
                          lambda r, f: f"Đã lưu secret {r.get('name')} (giá trị không bao giờ hiển thị lại)",
                          confirm=lambda f: f"Lưu secret {f.get('name')}? Nếu đã có secret cùng tên, giá trị cũ bị GHI ĐÈ.", danger=True, secret_fields=("value",)),
@@ -1598,8 +1672,62 @@ async def _stream(request: Request, params: dict[str, Any], convert: Callable[[d
         task.cancel()
 
 
-def _run_converter(templates: Jinja2Templates) -> Callable[[dict[str, Any]], list[dict[str, Any]]]:
+PART_EVERY_S = 0.25  # P1-1: markdown của khối đang chạy chữ render lại tối đa mỗi 250 ms…
+PART_EVERY_CHARS = 400  # …hoặc khi đã thêm từng này ký tự
+PART_MAX = 8000  # khối dài hơn → thôi gửi `part` (client vẫn nối chữ thô; message.complete thay bằng bản cuối)
+
+
+def run_status_line(ev: dict[str, Any]) -> dict[str, Any] | None:
+    """P2: dòng trạng thái kiểu Claude Code ở đáy transcript live ("✳ Đang nghĩ… 12s · 3.4k token"). Message
+    `{t:"status", state, label}` (state: think|tool|wait) hoặc `{t:"status", think_tokens}` (ước lượng token suy nghĩ, `reasoning.progress`).
+    Không bao giờ có HTML — client gán textContent; số giây do client đếm từ lúc run bắt đầu, token lấy từ `stats.out`."""
+    t = ev.get("type")
+    p = ev.get("payload") or {}
+    sub = bool(ev.get("subagent_id"))
+    if t == "turn.start" and not sub:
+        return {"t": "status", "state": "think", "label": "Đang nghĩ…"}
+    if t == "reasoning.progress" and not sub and isinstance(p.get("estimated_tokens"), (int, float)):
+        return {"t": "status", "think_tokens": "~" + P.fmt_tokens(p["estimated_tokens"])}
+    if t == "tool.generating":
+        return {"t": "status", "state": "tool", "label": ("Subagent · " if sub else "") + f"Đang soạn lệnh {P.short_tool(str(p.get('name') or '?'))}…"}
+    if t == "tool.start":
+        inp = p.get("input") if isinstance(p.get("input"), dict) else None
+        v = P.tool_view(str(p.get("name") or "?"), inp, summary=str(p.get("args_preview") or ""))
+        label = " ".join(x for x in (v.get("verb"), v.get("target")) if x)[:100]
+        return {"t": "status", "state": "tool", "label": ("Subagent · " if sub else "") + label + "…"}
+    if t == "tool.complete" and not sub:
+        return {"t": "status", "state": "think", "label": "Đang nghĩ…"}
+    if t == "approval.waiting_human":
+        return {"t": "status", "state": "wait", "label": "Chờ bạn duyệt…"}
+    if t == "approval.open":
+        return {"t": "status", "state": "wait", "label": "Chờ duyệt…"}
+    if t == "question.open" or t == "question.escalated":
+        return {"t": "status", "state": "wait", "label": "Chờ câu trả lời…"}
+    if t in ("approval.resolved", "question.answered"):
+        return {"t": "status", "state": "think", "label": "Đang nghĩ…"}
+    return None
+
+
+def _run_converter(templates: Jinja2Templates, clock: Callable[[], float] = time.monotonic,
+                   prime: list[dict[str, Any]] | None = None) -> Callable[[dict[str, Any]], list[dict[str, Any]]]:
+    """event → message SSE của trang run. Hợp đồng (client `txAppend` trong app.js):
+    - `{t:"delta", k:"text"|"reasoning", text}`: chữ thô nối bằng textContent;
+    - `{t:"part", k:"text", html}` (P1-1): markdown của CẢ khối đang chạy chữ do server render (`P.md`, có điều tiết) — client thay
+      nội dung khối bằng HTML này rồi tiếp tục nối delta sau nó;
+    - `{t:"item", kind, dom, html, parent?, heads?}`: HTML server vẽ. `parent` = id khung chứa (nhóm `grp-…` hoặc tool cha `tool-…`);
+      `heads` = [{dom, html}] các khung NGOÀI → TRONG (bản rỗng/chỉ tiêu đề) để tạo nhóm còn thiếu + cập nhật tiêu đề (P1-2/P1-3).
+    `prime` = các event trang đã vẽ sẵn (≤ since): nạp vào bộ gộp mà KHÔNG phát gì → tool.complete live vẫn gộp với tool.start cũ
+    (giữ input/đích), tool mới nối vào đúng nhóm đang có trên trang, mục subagent tìm được tool cha."""
     mod = templates.env.get_template("_items.html").module
+    txm = templates.env.get_template("_transcript.html").module
+    tx = P.Transcript()  # cùng bộ gộp với replay_items: tool.complete giữ input/diff/chip của tool.start, steer.ack → ✓ …
+    for pev in sorted(prime or [], key=lambda e: (e.get("ts") or "", int(e.get("seq") or 0))):
+        tx.feed(pev)
+    buf = {"text": "", "at": 0.0, "sent": 0}
+
+    def head(h: dict[str, Any]) -> dict[str, Any]:
+        html = txm.tx_group(h, True) if h.get("kind") == "group" else txm.tx_tool(h, True)
+        return {"dom": h.get("dom"), "html": str(html)}
 
     def conv(ev: dict[str, Any]) -> list[dict[str, Any]]:
         t = ev.get("type")
@@ -1607,14 +1735,37 @@ def _run_converter(templates: Jinja2Templates) -> Callable[[dict[str, Any]], lis
         if t in ("message.delta", "reasoning.delta"):
             if ev.get("subagent_id"):
                 return []
-            return [{"t": "delta", "k": "text" if t == "message.delta" else "reasoning", "text": p.get("text") or "", "seq": ev.get("seq")}]
+            text = p.get("text") or ""
+            out_d: list[dict[str, Any]] = [{"t": "delta", "k": "text" if t == "message.delta" else "reasoning", "text": text, "seq": ev.get("seq")}]
+            if t == "reasoning.delta":
+                if buf["text"]:  # suy nghĩ mới sau chữ trả lời → client mở khối mới; khối chữ sau đó cũng là khối mới
+                    buf.update(text="", sent=0)
+                return out_d
+            buf["text"] += text
+            n = len(buf["text"])
+            now = clock()
+            if n <= PART_MAX and (now - buf["at"] >= PART_EVERY_S or n - buf["sent"] >= PART_EVERY_CHARS):
+                buf.update(at=now, sent=n)
+                out_d.append({"t": "part", "k": "text", "html": P.md(buf["text"]), "seq": ev.get("seq")})
+            return out_d
         out: list[dict[str, Any]] = []
         s = P.stats_of(ev)
         if s:
             out.append({"t": "stats", **s})
-        it = P.transcript_item(ev)
-        if it is not None:
-            out.append({"t": "item", "kind": it["kind"], "dom": it.get("dom"), "seq": ev.get("seq"), "html": str(mod.item(it))})
+        st = run_status_line(ev)
+        if st:
+            out.append(st)
+        nodes = tx.nodes
+        items = tx.feed(ev)
+        if tx.nodes != nodes or (t == "message.complete" and not ev.get("subagent_id")):
+            buf.update(text="", sent=0)  # client cũng mở khối chữ mới khi có khối cấp ngoài mới (txAppend)
+        for it in items:
+            msg: dict[str, Any] = {"t": "item", "kind": it["kind"], "dom": it.get("dom"), "seq": ev.get("seq"), "html": str(mod.item(tx.tree(it)))}
+            heads = tx.heads(it)
+            if heads:
+                msg["parent"] = heads[-1]["dom"]
+                msg["heads"] = [head(h) for h in heads]
+            out.append(msg)
         if t in ("approval.open", "approval.waiting_human", "approval.resolved", "user.message", "steer.ack") or (t or "").startswith(("run.", "question.")):
             out.append({"t": "refresh"})
         return out
@@ -1625,8 +1776,16 @@ def _run_converter(templates: Jinja2Templates) -> Callable[[dict[str, Any]], lis
 async def sse_run(request: Request) -> Response:
     rid = request.path_params["id"]
     q = request.query_params
-    params = {"run_id": rid, "since_seq": int(q.get("since") or 0), "epoch": q.get("epoch") or None, "level": "detail", "until_run_end": True}
-    return StreamingResponse(_stream(request, params, _run_converter(ws(request).templates)), media_type="text/event-stream",
+    since, epoch = int(q.get("since") or 0), q.get("epoch") or None
+    params = {"run_id": rid, "since_seq": since, "epoch": epoch, "level": "detail", "until_run_end": True}
+    prime: list[dict[str, Any]] = []
+    if since:  # trang đã vẽ các event ≤ since — nạp lại vào bộ gộp live (xem _run_converter)
+        try:
+            evs = (await rpc(request, "run.get", {"id": rid, "events": True}) or {}).get("events") or []
+        except RpcError:
+            evs = []
+        prime = [e for e in evs if not (str(e.get("epoch")) == str(epoch) and int(e.get("seq") or 0) > since)]
+    return StreamingResponse(_stream(request, params, _run_converter(ws(request).templates, prime=prime)), media_type="text/event-stream",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
@@ -1639,6 +1798,34 @@ async def sse_firehose(request: Request) -> Response:
 
     st = await rpc(request, "hub.status")
     params = {"level": "summary", "since_seq": max(0, int(st.get("last_seq") or 0) - 300), "epoch": st.get("epoch")}
+    return StreamingResponse(_stream(request, params, conv), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+# Bảng Công việc realtime (docs/dev-notes/tasks-realtime.md): chỉ báo "vẽ lại", trình duyệt gom loạt rồi tải /partials/tasks
+TASK_REFRESH_RUN_EVENTS = frozenset({"run.started", *TERMINAL_RUN_EVENTS})
+
+
+def tasks_refresh(ev: dict[str, Any], task_ids: frozenset[str] | None = None) -> bool:
+    """Event có làm đổi thẻ/cột trên bảng Công việc (hoặc trang một task khi có `task_ids`) không — hàm thuần."""
+    t = ev.get("type") or ""
+    tid = ev.get("task_id") or (ev.get("payload") or {}).get("task_id")
+    if t.startswith("task.") and t != "task.background":  # task.background = tool Task của claude (detail), không phải task hub
+        hit = True
+    elif t.startswith("question.") or t in TASK_REFRESH_RUN_EVENTS:  # câu hỏi/run chỉ liên quan khi gắn task (chi phí, "chờ bạn")
+        hit = tid is not None
+    else:
+        return False
+    return hit and (task_ids is None or tid in task_ids)
+
+
+async def sse_tasks(request: Request) -> Response:
+    ids = frozenset(x for x in (request.query_params.get("task") or "").split(",") if x) or None
+
+    def conv(ev: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"t": "refresh"}] if tasks_refresh(ev, ids) else []
+
+    st = await rpc(request, "hub.status")  # không phát lại: trang vừa vẽ (hoặc nối lại → client tự tải lại một lần)
+    params = {"level": "summary", "since_seq": int(st.get("last_seq") or 0), "epoch": st.get("epoch")}
     return StreamingResponse(_stream(request, params, conv), media_type="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
@@ -1729,7 +1916,7 @@ def make_templates() -> Jinja2Templates:
     env.autoescape = True
     env.globals.update({"agent_status": P.agent_status, "run_status": P.run_status, "task_status": lambda s: P.TASK_STATUS.get(s or "", (s or "—", "muted")),
                         "is_live_run": P.is_live_run, "action_view": P.action_view, "wait_reason": P.wait_reason, "tokens_of": P.tokens_of, "TASK_COLUMNS": P.TASK_COLUMNS,
-                        "question_view": P.question_view, "run_title": P.run_title, "static": static_url})
+                        "question_view": P.question_view, "run_title": P.run_title, "static": static_url, "cut_note": P.cut_note})
     env.filters.update({"cost": P.fmt_cost, "tok": P.fmt_tokens, "dur": P.fmt_dur, "ts": P.fmt_ts, "ago": P.ago, "first": P.first_line,
                         "tool": P.short_tool, "md": lambda s: Markup(P.md(s)), "usd": lambda v: "—" if v is None else f"${float(v):.4f}",
                         "j": lambda v: json.dumps(v, ensure_ascii=False, indent=2, default=str), "iso": P.iso_ts, "avatar": P.avatar_tone})
@@ -1763,10 +1950,14 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/runs", runs_page),
         Route("/runs/{id}", run_page),
         Route("/partials/run/{id}", partial_run),
+        Route("/partials/run/{id}/result", partial_run_result),
+        Route("/partials/run/{id}/items", partial_run_items),
         Route("/inbox", inbox_page),
         Route("/approvals", approvals_page),
         Route("/tasks", tasks_page),
         Route("/tasks/{id}", task_page),
+        Route("/partials/tasks", partial_tasks),
+        Route("/partials/task/{id}", partial_task),
         Route("/teams", teams_page),
         Route("/learnings", learnings_page),
         Route("/learnings/{id}", ledger_entry),
@@ -1779,6 +1970,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/do/{name}", do_action, methods=["POST"]),
         Route("/sse/run/{id}", sse_run),
         Route("/sse/firehose", sse_firehose),
+        Route("/sse/tasks", sse_tasks),
         *_manager_routes(),
         *_extra_routes(),
         *_perm_routes(),
@@ -1789,6 +1981,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
         *_backup_pages.routes(),  # /partials/backup — thẻ "Sao lưu" ở Cài đặt (backup.py)
         *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
+        *_file_pages.routes(),  # /files/view|raw|open — xem/mở file agent đã thao tác (web/file_pages.py, docs/dev-notes/file-open.md)
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
     app = Starlette(routes=routes, exception_handlers={HTTPException: http_error, RpcError: rpc_error, DaemonUnavailable: rpc_error})
@@ -1830,5 +2023,7 @@ _backup_pages.register_actions(ACTIONS, Action, _req)
 from . import admin_pages as _admin_pages  # noqa: E402
 
 _admin_pages.register_actions(ACTIONS, Action, _req)
+# Xem/mở file agent đã thao tác (chip file): /files/view, /files/raw, POST /files/open — RPC file.read|file.open của daemon
+from . import file_pages as _file_pages  # noqa: E402
 
 __all__ = ["create_app", "ACTIONS", "agent_changes", "replay_items", "WebState", "urlencode"]

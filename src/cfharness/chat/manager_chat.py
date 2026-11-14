@@ -9,8 +9,10 @@
 - Chưa có điều phối viên (hoặc daemon chưa có `manager.*`) → trả hướng dẫn, không tạo gì.
 - Trả lời (`manager.reply{kind: reply}`) và tin chủ động (`notify_owner` → `manager.reply{kind: notify}`) của hội thoại kênh
   `telegram:<chat_id>` (theo `payload.channel`) gửi trong
-  KHUNG KẾT QUẢ AGENT (WT-8): dòng hệ thống in đậm do hub sinh, tiền tố cố định, nội dung agent TRỌN trong `<pre>` (escape),
-  KHÔNG BAO GIỜ kèm nút. Dài → nhiều tin "phần i/n" (tối đa `MAX_CHUNKS`), quá nữa → cắt + chỉ dẫn xem trên web.
+  KHUNG KẾT QUẢ AGENT (WT-8): dòng hệ thống in đậm do hub sinh, tiền tố cố định, rồi nội dung agent (markdown → HTML whitelist qua
+  `chat/mdconv.py`, đã escape; `agent_render: pre` → TRỌN trong `<pre>` như cũ), KHÔNG BAO GIỜ kèm nút. Dài → chia theo khối
+  markdown (`split_md`) thành nhiều tin "i/n" (tối đa `MAX_CHUNKS`), quá nữa → cắt + gửi kèm bản đầy đủ thành tệp `.md`.
+  Trước khi gửi: `sanitize_reply` gỡ dòng `[cfharness…`, dòng `NO_ACTION`, thẻ `<untrusted-data>` sót lại (P1-10).
 - Tệp/ảnh người gửi (chat/media.py) → `manager.chat{images, files}`; dòng `[[file: <đường dẫn tương đối>]]` trong trả lời → gỡ khỏi
   chữ và gửi tệp thành document (chỉ tệp thường trong cwd hội thoại, không symlink, trong trần kích thước, không chứa secret).
 - Run của điều phối viên kết thúc mà không có trả lời (lỗi, bị chặn, vượt ngân sách…) → báo ngắn (chữ của hub).
@@ -26,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from ..events import TERMINAL_RUN_EVENTS, HubEvent
@@ -61,6 +64,21 @@ UNAVAILABLE = _UNAVAILABLE.format(run="/run", help="/help")
 NO_REPLY_WAIT_S = 3.0
 TYPING_EVERY_S = 4.0  # Telegram tự tắt "đang gõ…" sau ~5 s
 TYPING_MAX_S = 180.0
+
+
+# P1-10: dấu vết nội bộ lọt vào trả lời (tiêu đề hub `[cfharness …]`, tín hiệu nhịp NO_ACTION, thẻ bọc dữ liệu không tin cậy) —
+# không phải chữ cho người. Regex tối giản như `web/present._HUB_HEAD` nhưng gỡ cả dòng.
+_HUB_LINE = re.compile(r"^[ \t]*\[cfharness[^\]\n]*\].*(?:\n|$)", re.M)
+_NO_ACTION_LINE = re.compile(r"^[ \t]*`?NO_ACTION`?[ \t.]*(?:\n|$)", re.M)
+_UNTRUSTED_TAG = re.compile(r"</?untrusted-data\b[^>\n]*>", re.I)
+
+
+def sanitize_reply(text: str) -> str:
+    """Gỡ dòng bắt đầu bằng `[cfharness`, dòng chỉ có `NO_ACTION`, thẻ `<untrusted-data…>`/`</untrusted-data>` còn sót."""
+    s = _UNTRUSTED_TAG.sub("", str(text or ""))
+    s = _HUB_LINE.sub("", s)
+    s = _NO_ACTION_LINE.sub("", s)
+    return re.sub(r"\n{3,}", "\n\n", s).strip()
 
 
 class ManagerChat:
@@ -168,7 +186,8 @@ class ManagerChat:
             if chat is None:
                 if notify and not p.get("channel"):  # notify_owner khi chưa có hội thoại nào của người → mọi chat nhận thông báo
                     for c in sorted(self.bot.broadcast_chats()):
-                        self.bot._spawn(self._deliver(c, None, None, str(p.get("text") or ""), notify=True, agent=ev.agent_id))
+                        self.bot._spawn(self._deliver(c, None, None, str(p.get("text") or ""), notify=True, agent=ev.agent_id,
+                                                      truncated=bool(p.get("truncated"))))
                 return  # hội thoại của kênh khác (web/cli/heartbeat)
             conv = p.get("conversation_id") or meta.get("conv")
             root_sched = self.bot.schedule_root_ok(chat, p)  # kết quả lịch → tin mới ở kênh (người bật channel_root_posts)
@@ -183,10 +202,11 @@ class ManagerChat:
                         self._put(self.RUNS, run, None, cap=200)
                     for c in sorted(self.bot.broadcast_chats()):
                         self.bot._spawn(self._deliver(c, None, None, str(p.get("text") or ""), notify=True, agent=ev.agent_id,
-                                                      failed=p.get("ok") is False))
+                                                      failed=p.get("ok") is False, truncated=bool(p.get("truncated"))))
                     return
             self.bot._spawn(self._deliver(chat, conv, None if notify else run, str(p.get("text") or ""), notify=notify,
-                                          reply_to=reply_to, agent=ev.agent_id, failed=p.get("ok") is False, root_ok=root_sched))
+                                          reply_to=reply_to, agent=ev.agent_id, failed=p.get("ok") is False, root_ok=root_sched,
+                                          truncated=bool(p.get("truncated"))))
         elif t in TERMINAL_RUN_EVENTS and ev.source == "hub" and ev.run_id and ev.run_id in self._st(self.RUNS):
             self.bot._spawn(self._no_reply(ev.run_id, t))
 
@@ -197,12 +217,24 @@ class ManagerChat:
         conv = p.get("conversation_id")
         return self._st(self.CONVCHAT).get(conv) if conv else None
 
-    def format_reply(self, text: str, *, agent: str | None, notify: bool = False, failed: bool = False, chat: Any = None) -> list[str]:
+    def format_reply(self, text: str, *, agent: str | None, notify: bool = False, failed: bool = False, chat: Any = None,
+                     truncated: bool = False) -> list[str]:
         """Khung kết quả agent (WT-8): dòng hệ thống (chữ của hub) + nội dung agent trong khung của kênh (`bot.agent_frame`). Không nút."""
+        return self.render_reply(text, agent=agent, notify=notify, failed=failed, chat=chat, truncated=truncated)[0]
+
+    def render_reply(self, text: str, *, agent: str | None, notify: bool = False, failed: bool = False, chat: Any = None,
+                     truncated: bool = False) -> tuple[list[str], bool]:
+        """→ (các tin, có bị cắt bớt vì quá `MAX_CHUNKS` không). Markdown (mặc định): chia theo khối (`mdconv.split_md`, đo SAU khi
+        render) — không cắt giữa từ/khối mã; `agent_render: pre` → cắt cứng `CHUNK` ký tự trong `<pre>` như cũ."""
         from ..notify.telegram import visible
         from ..redact import redact_str
         body = visible(redact_str(text or "")) or "(không có nội dung)"
-        chunks = split_chunks(body, CHUNK)
+        if self.bot.reply_markdown():
+            from .mdconv import split_md
+
+            chunks = split_md(body, CHUNK, self.bot.agent_measure)
+        else:
+            chunks = split_chunks(body, CHUNK)
         cut = len(chunks) > MAX_CHUNKS
         chunks = chunks[:MAX_CHUNKS]
         title = "📣 Điều phối viên báo" if notify else ("⚠️ Điều phối viên chưa trả lời được (lỗi)" if failed else "💬 Điều phối viên")
@@ -212,13 +244,15 @@ class ManagerChat:
             tail: list[str] = []
             if i == len(chunks) - 1:
                 if cut:
-                    tail.append("…(đã cắt — xem đầy đủ trên web, trang Điều phối)")
+                    tail.append("…(đã cắt — đầy đủ ở tệp .md đính kèm, hoặc xem trên web, trang Điều phối)")
+                elif truncated:
+                    tail.append("…(trả lời quá dài, hub đã cắt bớt — xem đầy đủ trên web, trang Điều phối)")
                 tail.append("↩ " + esc(self.bot.continue_hint(chat)))
             out.append(self.bot.agent_frame(f"<b>{esc(title)}{part}</b>", ch, tail))
-        return out
+        return out, cut
 
     async def _deliver(self, chat: Any, conv: str | None, run_id: str | None, text: str, *, notify: bool = False, reply_to: Any = None,
-                       agent: str | None = None, failed: bool = False, root_ok: bool = False) -> None:
+                       agent: str | None = None, failed: bool = False, root_ok: bool = False, truncated: bool = False) -> None:
         """`root_ok`: được đăng lên gốc kênh dù `bot.root_post_ok` sai (chỉ kết quả lịch đã qua `bot.schedule_root_ok`). Kênh không
         cho đăng gốc (Slack kênh chung) → MỌI phần của trả lời + báo lỗi + tệp `[[file:]]` ở cùng thread `reply_to`."""
         from .base import _ROOT_POST, thread_scope
@@ -227,6 +261,8 @@ class ManagerChat:
         _ROOT_POST.set(bool(root_ok))
         keep_thread = not self.bot.root_post_ok(chat)  # Telegram / Slack DM: chỉ phần đầu trả lời tin người (như cũ)
         silent = not notify and not failed and text.strip().strip("`").strip() == SILENT
+        if not silent:
+            text = sanitize_reply(text)
         first_reply_to = reply_to
         if run_id:
             self._put(self.RUNS, run_id, None, cap=200)
@@ -250,7 +286,8 @@ class ManagerChat:
         if wanted and not text.strip():
             text = "(gửi tệp kèm theo bên dưới)"
         sent = False
-        for msg in self.format_reply(text, agent=agent, notify=notify, failed=failed, chat=chat):
+        msgs, overflow = self.render_reply(text, agent=agent, notify=notify, failed=failed, chat=chat, truncated=truncated)
+        for msg in msgs:
             try:
                 res = await self.bot._send(api, chat, msg, html=True, reply_to=reply_to)
             except Exception as e:
@@ -265,6 +302,16 @@ class ManagerChat:
         await finish(True)
         if conv:
             self._put(self.CONVCHAT, conv, str(chat))
+        if overflow:  # quá MAX_CHUNKS tin → kèm bản đầy đủ thành tệp .md (đã che secret)
+            from ..notify.telegram import visible
+            from ..redact import redact_str
+
+            try:
+                await self.bot.send_document(api, chat, f"dieu-phoi-{run_id or conv or 'tra-loi'}.md",
+                                             visible(redact_str(text)).encode("utf-8"),
+                                             "Trả lời đầy đủ của điều phối viên (do agent viết)", mime="text/markdown")
+            except Exception as e:
+                log.warning("không gửi được tệp trả lời đầy đủ: %s", clip(e))
         if wanted:
             try:
                 await self.bot.media.deliver_files(api, chat, conv, wanted)

@@ -236,6 +236,7 @@
     "ratelimit.update": "summary",
     "raw.invalid": "debug",
     "raw.unknown": "debug",
+    "reasoning.complete": "detail",
     "reasoning.delta": "detail",
     "reasoning.progress": "detail",
     "recovery.reconciled": "summary",
@@ -298,7 +299,8 @@
     "web.login_locked": "summary",
     "web.logout": "summary",
     "workspace.checkpoint": "debug",
-    "workspace.diff": "summary"
+    "workspace.diff": "summary",
+    "workstream.updated": "summary"
   },
   "x-not-persisted": [
     "message.delta",

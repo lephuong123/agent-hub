@@ -504,7 +504,7 @@ class ChatBot:
         est = s.get("estop") or {}
         return "\n".join([
             f"cfharness {s.get('version')} — ESTOP: {'BẬT' + (' (' + str(est.get('reason')) + ')' if est.get('reason') else '') if est.get('on') else 'tắt'}",
-            f"Run đang chạy: {s.get('running')} · đang chờ: {s.get('queued')} (tối đa {s.get('max_concurrent_runs')})",
+            f"Run đang chạy: {s.get('running')} · đang chờ: {s.get('queued')} (tối đa {s.get('max_concurrent_runs') or 'không giới hạn'})",
             f"Agent: {s.get('agents')} · chi phí hôm nay: ${float(s.get('cost_today_usd') or 0):.4f}",
             f"Yêu cầu chờ duyệt: {len(pend or [])}" + (f" — gõ {self.cmd('approvals')}" if pend else ""),
         ])
@@ -559,8 +559,9 @@ class ChatBot:
 
     # ------------------------------------------------------------------ kết quả run
     def format_result(self, run: dict[str, Any]) -> str:
-        """Tin kết quả (HTML). Phần do agent viết nằm TRỌN trong `<pre>` (escape, nền tảng không tạo link/lệnh bấm được bên
-        trong), sau tiền tố cố định — agent không giả được dòng hệ thống. Không bao giờ kèm nút (WT-8)."""
+        """Tin kết quả (HTML). Phần do agent viết đứng SAU dòng hệ thống + tiền tố cố định (agent không đứng trước chữ hub) và chỉ
+        qua `agent_body` (escape; markdown → thẻ whitelist, không link/lệnh bấm được — WT-8). Không bao giờ kèm nút.
+        `agent_render: pre` → khung cũ (nội dung agent TRỌN trong `<pre>`)."""
         from ..redact import redact_str
         from ..notify.telegram import visible
 
@@ -574,14 +575,20 @@ class ChatBot:
         head = f"{icon} <b>{esc(run.get('agent_id'))} — {esc(word)}</b>" + (f" · {esc(' · '.join(meta))}" if meta else "")
         body = visible(redact_str(str(run.get("summary") or run.get("error") or "(không có nội dung kết quả)")))
         n = min(int(self.cfg().get("result_max_chars") or 1500), CHUNK)
-        cut = len(body) > n
-        if cut:
-            body = body[:n]
-        lines = [head, f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(body)}</pre>"]
-        if cut:
-            lines.append("…(đã cắt — xem đầy đủ trên web)")
-        lines.append("↩ " + self.reply_hint("giao thêm cho agent này"))
-        return "\n".join(lines)
+        if self.agent_render() == "pre":
+            cut = len(body) > n
+            if cut:
+                body = body[:n]
+            lines = [head, f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(body)}</pre>"]
+            if cut:
+                lines.append("…(đã cắt — xem đầy đủ trên web)")
+            lines.append("↩ " + self.reply_hint("giao thêm cho agent này"))
+            return "\n".join(lines)
+        from .mdconv import split_md
+
+        parts = split_md(body, n, self.agent_measure)
+        tail = (["…(đã cắt — xem đầy đủ trên web)"] if len(parts) > 1 else []) + ["↩ " + self.reply_hint("giao thêm cho agent này")]
+        return self.agent_frame(head, parts[0], tail)
 
     def reply_hint(self, what: str) -> str:
         """Chỉ dẫn "trả lời tin này để …" theo cách của nền tảng (Telegram: reply; Slack: trả lời trong thread)."""
@@ -604,10 +611,40 @@ class ChatBot:
         """"trả lời tin này" (chữ thường, giữa câu) — Telegram: reply; Slack: trả lời trong thread."""
         return "trả lời (reply) tin này"
 
+    def agent_render(self) -> str:
+        """Cách hiện chữ agent ở kênh này: `markdown` (mặc định, P0-10 — markdown → HTML whitelist) | `pre` (khung cũ: TRỌN trong
+        `<pre>`, cờ `notify.<kênh>.agent_render` để quay lại nhanh). Slack ghi đè (kết quả `/run`, câu hỏi giữ khối mã)."""
+        return "pre" if str(self.cfg().get("agent_render") or "markdown").strip().lower() == "pre" else "markdown"
+
+    def reply_markdown(self) -> bool:
+        """Trả lời của điều phối viên: chia theo khối markdown (`mdconv.split_md`) thay vì cắt cứng (khung `pre`)."""
+        return self.agent_render() != "pre"
+
+    def agent_measure(self, md: str) -> int:
+        """Độ dài kênh tính cho một phần markdown của agent SAU khi render (để `split_md` không vượt trần tin)."""
+        from .mdconv import telegram_len
+
+        return telegram_len(md)
+
+    def agent_body(self, body: str) -> str:
+        """Chữ agent THÔ → HTML của kênh: `markdown` → `mdconv.to_telegram_html` (escape mọi chữ; chỉ thẻ b/i/s/code/pre; link thành
+        chữ `nhãn (URL)`); `pre` → `<pre>` (escape) như cũ. Cờ `notify.<kênh>.expandable_details` (mặc định tắt, chưa kiểm trên
+        Telegram thật): chi tiết dài sau màn đầu gập trong `<blockquote expandable>` (mdconv)."""
+        if self.agent_render() == "pre":
+            return f"<pre>{esc(body)}</pre>"
+        from .mdconv import to_telegram_html
+
+        return to_telegram_html(body, expandable=bool(self.cfg().get("expandable_details"))) or esc(body)
+
     def agent_frame(self, title: str, body: str, tail: list[str]) -> str:
         """Khung kết quả agent (WT-8): `title`/`tail` = chữ hub đã escape; `body` = chữ agent THÔ (hàm này escape).
-        Mặc định (Telegram): tiền tố cố định + `<pre>` — Telegram không tạo link/lệnh bấm được bên trong. Slack ghi đè (trích dẫn + link)."""
-        return "\n".join([title, f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(body)}</pre>", *tail])
+        Dòng hub (tiêu đề + tiền tố cố định) LUÔN đứng trước nội dung agent; nội dung agent qua `agent_body` (không trong blockquote);
+        đuôi của hub cách một dòng trống, in nghiêng. `agent_render: pre` → khung cũ y nguyên (tiền tố + `<pre>` + đuôi).
+        Slack ghi đè (trích dẫn + link)."""
+        if self.agent_render() == "pre":
+            return "\n".join([title, f"<i>{esc(AGENT_FRAME)}</i>", f"<pre>{esc(body)}</pre>", *tail])
+        out = "\n".join([title, f"<i>{esc(AGENT_FRAME)}</i>", self.agent_body(body)])
+        return out + ("\n\n<i>" + "\n".join(tail) + "</i>" if tail else "")
 
     def continue_hint(self, chat: Any = None) -> str:
         """Dòng cuối trả lời của điều phối viên: cách nói tiếp / mở chủ đề mới ở `chat`."""

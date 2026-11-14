@@ -90,6 +90,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "manager.set", "manager.chat", "manager.tick",
         # lưu trữ/khôi phục hội thoại điều phối viên (xoá mềm `archived_at`) — dọn lịch sử của người, agent/điều phối viên không được
         "manager.archive", "manager.unarchive",
+        # luồng việc + sửa hội thoại (đổi tên/gắn luồng/lưu trữ): người; điều phối viên dùng tool hub-self workstream_* (managerself.call)
+        "manager.conversation_update", "manager.conversation_read", "workstream.create", "workstream.update", "workstream.delete",
         # UX: trả lời/chuyển/huỷ câu hỏi của agent — agent không tự trả lời câu hỏi (của mình hay agent khác). Điều phối viên trả lời/
         # chuyển lên người qua MANAGER_ALLOWED, chỉ khi câu hỏi đang `with_manager` (manager/permissions.check_rpc)
         "question.answer", "question.escalate", "question.cancel",
@@ -112,6 +114,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # trang minh bạch phía user — mọi method admin.* chỉ người; phía admin còn kiểm nhóm cfharness-admin (admin_control.require_admin)
         "admin.users", "admin.user", "admin.estop_list", "admin.estop_set", "admin.alerts", "admin.audit", "admin.policy",
         "admin.nav", "admin.self", "admin.setup_check",
+        # Xem/mở file trong workspace của run/agent (fileview.py): đọc ngoài sandbox của agent gọi (workspace agent KHÁC) + mở app trên máy
+        "file.read", "file.open",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})
@@ -206,7 +210,8 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE"),
                       ("cfharness.web_events", "MUTATING_WEB"),
                       ("cfharness.backup", "MUTATING_BACKUP"),
-                      ("cfharness.admin_rpc", "MUTATING_ADMIN")):
+                      ("cfharness.admin_rpc", "MUTATING_ADMIN"),
+                      ("cfharness.fileview", "MUTATING_FILES")):
         try:
             import importlib
 

@@ -27,7 +27,7 @@ OPEN = ("triage", "todo", "ready", "running", "review")
 LIST_KEYS = (
     "id", "team_id", "assignee_agent_id", "role", "kind", "title", "status", "priority", "created_by", "origin_task_id", "decomposed",
     "current_run_id", "consecutive_failures", "attempts", "block_reason", "wait_reason", "not_before", "result_summary",
-    "created_at", "updated_at", "started_at", "done_at",
+    "created_at", "updated_at", "started_at", "done_at", "workstream_id",
 )
 WORKSPACE_KINDS = ("dir", "scratch", "worktree")
 
@@ -99,7 +99,7 @@ class TaskService:
 
     def list(
         self, *, team: str | None = None, status: str | list[str] | None = None, assignee: str | None = None, origin: str | None = None,
-        include_archived: bool = False, limit: int = 200,
+        include_archived: bool = False, limit: int = 200, workstream: str | None = None,
     ) -> list[dict[str, Any]]:
         where, args = ["deleted_at IS NULL"], []
         if team:
@@ -117,6 +117,9 @@ class TaskService:
         if origin:
             where.append("origin_task_id=?")
             args.append(origin)
+        if workstream:
+            where.append("workstream_id=?")
+            args.append(workstream)
         sql = "SELECT * FROM tasks WHERE " + " AND ".join(where) + " ORDER BY priority DESC, created_at ASC LIMIT ?"
         args.append(int(limit))
         return [self._list_row(self.store._row("tasks", r)) for r in self.conn.execute(sql, args)]  # type: ignore[arg-type]
@@ -299,6 +302,10 @@ class TaskService:
             if data.get(k) is not None:
                 overrides[k] = data[k]
         origin = data.get("origin_task_id")
+        ws_id = self.resolve_workstream(data.get("workstream_id") or data.get("workstream"))
+        if ws_id is None and origin:  # task con (lead tách) thuộc luồng của task gốc
+            r = self.conn.execute("SELECT workstream_id FROM tasks WHERE id=?", (origin,)).fetchone()
+            ws_id = r[0] if r and r[0] else None
         decompose = data.get("decompose")
         lead = self.hub.teams.lead(team_id) if team_id else None
         if decompose is None:
@@ -317,7 +324,7 @@ class TaskService:
             "title": title, "body": body, "status": status, "priority": int(data.get("priority") or 0), "created_by": created_by,
             "workspace": ws, "overrides": overrides or None, "result_schema": data.get("result_schema"),
             "max_retries": data.get("max_retries"), "idempotency_key": key, "origin_task_id": origin, "plan_key": data.get("plan_key"),
-            "created_at": now, "updated_at": now,
+            "created_at": now, "updated_at": now, "workstream_id": ws_id,
         }
         with self.store.tx():
             self.store._insert("tasks", row)
@@ -330,6 +337,17 @@ class TaskService:
         out["warnings"] = warnings
         out["idempotent_replay"] = False
         return out
+
+    def resolve_workstream(self, ref: Any) -> str | None:
+        """Mã luồng (`ws_…`) hoặc khoá (vd. `LH-55166`, không phân biệt hoa thường) → id luồng. Rỗng → None; không có → NotFound."""
+        ref = str(ref or "").strip()
+        if not ref:
+            return None
+        r = self.conn.execute("SELECT id FROM workstreams WHERE id=? OR (key IS NOT NULL AND lower(key)=lower(?)) "
+                              "ORDER BY (status='active') DESC, updated_at DESC LIMIT 1", (ref, ref)).fetchone()
+        if r is None:
+            raise NotFound(f"không có luồng việc '{ref}'")
+        return str(r[0])
 
     def link(self, parent_id: str, child_id: str) -> dict[str, Any]:
         p, c = self.row(parent_id), self.row(child_id)
@@ -497,7 +515,9 @@ class TaskService:
                 "- When done, call the tool `mcp__hub-self__task_complete` with a concise summary (and `result` if useful).",
                 "- If you cannot proceed without a human decision, call `mcp__hub-self__task_block` with the reason.",
             ]
-        proto.append("- Finish your final message with a short summary of what you did (this is the task result).")
+        proto.append("- End your final message with the task result as Markdown (it is shown to people): first line = the outcome in "
+                     "one sentence; then only what the reader needs (changes with file paths, findings, assumptions, open issues) as "
+                     "short bullets; code or commands in fenced blocks with a language tag. No narration of your process, no tool names.")
         lines += proto
         return "\n".join(lines)
 
@@ -505,7 +525,8 @@ class TaskService:
         return (
             f"[cfharness task {t['id']}] Your previous attempt at this task ended unexpectedly (outcome: {outcome}). "
             "Continue the task from where you left off. Re-check the current state (files, results) before repeating any action "
-            "that may already have run, then finish with a short summary of the whole task result."
+            "that may already have run, then finish with the whole task result in the same format: the outcome in one sentence, then short "
+            "bullets for what the reader needs."
         )
 
     def lead_prompt(self, t: dict[str, Any], lead_id: str) -> str:
