@@ -5,7 +5,9 @@
   (link Release), nút **Cập nhật lên vX.Y.Z** (hộp xác nhận). Có run chạy/chờ → nút đổi thành "Cập nhật dù vậy" (force: run bị
   ngắt, tự tiếp tục khi daemon chạy lại — recovery.py). Sau khi bấm → trang `/update` tự poll 3 s, hiện bước + nhật ký.
 - **CLI**: `cfharness update --check`, `cfharness update [-y] [--force] [--tag vX.Y.Z]` (theo dõi tới khi xong).
-- Bản cài editable/từ mã nguồn: thẻ hiện lý do, không có nút (cập nhật bằng `git pull`).
+- Bản cài editable/từ mã nguồn: thẻ hiện lý do, không có nút (cập nhật bằng `git pull`). Editable (`uv tool install --editable .`):
+  code theo repo nhưng dependency KHÔNG tự theo — thêm dependency mới (vd `pywinpty` của tài khoản Claude) thì phải dừng daemon,
+  `uv tool install --editable . --force`, rồi chạy lại daemon; thiếu bước này daemon báo lỗi thiếu gói khi dùng tới.
 
 ## Luồng
 1. RPC `update.start` (HUMAN_ONLY, audit kênh gọi) → `Updater.start`: kiểm kiểu cài (`uv-receipt.toml` có `git`), tag `vX.Y.Z` mới

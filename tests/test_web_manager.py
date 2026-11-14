@@ -260,7 +260,8 @@ async def test_manager_content_is_hardened_markdown_user_text_plain(stubbed):
     e.hub.publish(make_event("manager.action", "boss", {"tool": "agent_update", "target": "agent:../../logout", "summary": "x"}, run_id=run))
     for path in (f"/manager?c={conv}", "/"):
         t = (await e.client.get(path)).text
-        assert "<script>alert" not in t and "<img src=x" not in t and 'href="http://evil"' not in t
+        # thẻ <a> THÔ của agent không lọt qua (URL trần trong chữ đã escape được linkify thành link cứng hoá class="ext" — hợp lệ)
+        assert "<script>alert" not in t and "<img src=x" not in t and '<a href="http://evil">' not in t
         assert not re.search(r'href="\s*javascript:', t, re.I)
     r = await e.client.get(f"/manager?c={conv}")
     t = r.text
@@ -518,3 +519,25 @@ def test_mgr_target_links_only_internal_and_safe():
     m = P.mgr_message({"role": "assistant", "content": "hi", "run_id": "r1"})
     assert m["kind"] == "manager" and m["text"] == "hi"
     assert P.mgr_message({"role": "system", "text": "x"}) is None
+
+
+async def test_manager_reply_mentioned_files_get_view_open_chips(stubbed):
+    """Đường dẫn file tuyệt đối trong chữ điều phối viên → chip Xem/Mở/Thư mục theo agent điều phối viên (file-open.md §6).
+    Link trần → link thật. Tin của người: không gắn chip."""
+    e = stubbed
+    await e.login()
+    await designate(e)
+    j = await send(e, r"file C:\Users\x\note.md đâu?")
+    conv, run = j["conversation_id"], j["run_id"]
+    assert await until(lambda: run not in e.stub.run_conv)
+    text = (r"Ở đây: `C:\Users\x\.cfharness\agents\boss\workspaces\conv-1\notes.md`. Thư mục `C:\Users\x\ws` "
+            "và https://jira.example/browse/LH-1")
+    e.stub.convs[conv]["messages"].append({"role": "manager", "text": text, "ts": "2099-01-01T00:00:00+00:00", "run_id": run})
+    log = _log_html((await e.client.get(f"/manager?c={conv}")).text)
+    mgr = log[log.index('class="mm mgr'):]
+    user = log[log.index('class="mm user"'):log.index('class="mm mgr')]
+    assert 'class="mm-files"' in mgr and mgr.count('class="fchip"') == 1  # thư mục không có chip
+    assert "/files/view?agent=boss&amp;path=C%3A%5CUsers%5Cx%5C.cfharness%5Cagents%5Cboss%5Cworkspaces%5Cconv-1%5Cnotes.md" in mgr
+    assert 'data-fopen="open"' in mgr and 'data-fopen="reveal"' in mgr
+    assert re.search(r'<a href="https://jira\.example/browse/LH-1"[^>]*rel="nofollow noopener noreferrer"', mgr)
+    assert "fchip" not in user

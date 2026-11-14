@@ -201,12 +201,52 @@ def code_html(code: str, info: str | None) -> str:
             f'<button type="button" class="tx-copy">Sao chép</button></div><pre><code>{body}</code></pre></div>\n')
 
 
+try:
+    import linkify_it  # noqa: F401  — khai báo trong pyproject (linkify-it-py)
+
+    _HAS_LINKIFY = True
+except ImportError:  # pragma: no cover
+    _HAS_LINKIFY = False
+
+# Đường dẫn TUYỆT ĐỐI trong chữ của agent (cho chip Xem/Mở ở chat Điều phối — file-open.md §6). Chỉ là gợi ý hiển thị: daemon tự kiểm
+# đường dẫn nằm trong workspace của agent khi người bấm (file.read/file.open). URL bị gỡ trước để `/browse/LH-1` không thành đường dẫn.
+_URL_RE = _re.compile(r"[a-z][a-z0-9+.-]*://\S+", _re.I)
+_WIN_PATH_RE = _re.compile(r"(?<![\w/\\])[A-Za-z]:\\(?:[^\s`'\"<>|*?\\]+\\)*[^\s`'\"<>|*?\\]+")
+_POSIX_PATH_RE = _re.compile(r"(?<![\w/.:~-])/(?:home|Users|tmp|var|opt|srv|mnt|root|private|Volumes|workspace|data)(?:/[\w.@+-]+)+")
+_FILE_NAME_RE = _re.compile(r"[^\\/]*[^.\\/]\.[A-Za-z0-9]{1,8}$")  # tên có đuôi → file (thư mục: Xem/Mở luôn lỗi → không gắn chip)
+PATHS_MAX = 5
+
+
+def mentioned_paths(text: str | None) -> list[str]:
+    """Đường dẫn FILE tuyệt đối (Windows `C:\\…`, POSIX `/home/…`, `/Users/…`…) nhắc tới trong chữ — tối đa `PATHS_MAX`, không trùng,
+    bỏ dấu câu cuối. Bỏ: `..` (daemon chặn), thư mục (tên không có đuôi), `~/…` (daemon coi là tương đối)."""
+    s = _URL_RE.sub(" ", str(text or "")[:MD_MAX])
+    out: list[str] = []
+    for m in sorted([*_WIN_PATH_RE.finditer(s), *_POSIX_PATH_RE.finditer(s)], key=lambda m: m.start()):
+        p = m.group(0).rstrip(".,;:)]}»")
+        if (len(p) < 4 or len(p) > 1024 or ".." in p.replace("\\", "/").split("/") or p in out
+                or not _FILE_NAME_RE.search(p)):
+            continue
+        out.append(p)
+        if len(out) >= PATHS_MAX:
+            break
+    return out
+
+
+def path_name(path: str) -> str:
+    return _re.split(r"[\\/]", path.rstrip("\\/"))[-1] or path
+
+
 def _md_parser() -> Any:
     from markdown_it import MarkdownIt
     from markupsafe import escape
     from mdit_py_plugins.tasklists import tasklists_plugin
 
-    m = MarkdownIt("commonmark", {"html": False, "linkify": False, "typographer": False}).enable(["table", "strikethrough"])
+    m = MarkdownIt("commonmark", {"html": False, "linkify": _HAS_LINKIFY, "typographer": False}).enable(["table", "strikethrough"])
+    if _HAS_LINKIFY:
+        # URL trần (https://…) thành link — CHỈ có scheme: tắt nhận diện "mờ" (`STATE.md` sẽ thành tên miền .md, `a.py` thành .py)
+        m.enable("linkify")
+        m.linkify.set({"fuzzy_link": False, "fuzzy_email": False, "fuzzy_ip": False})
     m.use(tasklists_plugin)  # enabled=False → ô tích bị disabled (chỉ hiển thị)
     m.validateLink = _safe_url  # type: ignore[method-assign]
 

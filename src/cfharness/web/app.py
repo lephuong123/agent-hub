@@ -1713,7 +1713,8 @@ def make_templates() -> Jinja2Templates:
                         "question_view": P.question_view, "run_title": P.run_title, "static": static_url, "cut_note": P.cut_note})
     env.filters.update({"cost": P.fmt_cost, "tok": P.fmt_tokens, "dur": P.fmt_dur, "ts": P.fmt_ts, "ago": P.ago, "first": P.first_line,
                         "tool": P.short_tool, "md": lambda s: Markup(P.md(s)), "usd": lambda v: "—" if v is None else f"${float(v):.4f}",
-                        "j": lambda v: json.dumps(v, ensure_ascii=False, indent=2, default=str), "iso": P.iso_ts, "avatar": P.avatar_tone})
+                        "j": lambda v: json.dumps(v, ensure_ascii=False, indent=2, default=str), "iso": P.iso_ts, "avatar": P.avatar_tone,
+                        "fpaths": P.mentioned_paths, "pname": P.path_name})
     return t
 
 

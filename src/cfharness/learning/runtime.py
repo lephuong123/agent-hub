@@ -72,9 +72,26 @@ def system_prompt_for(hub: "Hub", run: dict[str, Any], agent: dict[str, Any]) ->
             logging.getLogger("cfharness.learning").exception("không dựng được khối tri thức cho %s", agent["id"])
     from ..browser import effective_mode
 
-    text = build_system_prompt(agent["id"], soul, blocks, charter=team_charter(hub, run.get("team_id")), browser=effective_mode(agent, hub.config))
+    text = build_system_prompt(agent["id"], soul, blocks, charter=team_charter(hub, run.get("team_id")), browser=effective_mode(agent, hub.config),
+                               cli_ref=_manager_cli_ref(hub, agent["id"]))
     save_prompt(hub, text)
     return text, info
+
+
+def _manager_cli_ref(hub: "Hub", agent_id: str) -> str | None:
+    """Điều phối viên nhận khối danh sách lệnh CLI thật (không bịa lệnh khi đưa lệnh cho người). Agent khác: không."""
+    mgr = getattr(hub, "manager", None)
+    try:
+        if mgr is None or not mgr.is_manager(agent_id):
+            return None
+        from ..manager.cli_ref import cli_reference
+
+        return cli_reference()
+    except Exception:  # pragma: no cover - khối phụ hỏng không chặn run
+        import logging
+
+        logging.getLogger("cfharness.learning").exception("không dựng được khối CLI cho điều phối viên")
+        return None
 
 
 def team_charter(hub: "Hub", team_id: str | None) -> str:

@@ -199,6 +199,7 @@ async def test_list_renders_without_token(env):
     assert r.status_code == 200
     s = section(r.text)
     assert "Tài khoản Claude" in s and "Công ty" in s and "Cá nhân" in s and "Đăng nhập của máy" in s
+    assert "đăng nhập sẵn của claude trên máy chạy hub" in s  # dòng phụ của machine không lặp lại tên
     row = re.search(r'<tr id="acct-a_11111111">.*?</tr>', s, re.S).group(0)
     assert "Đang dùng" in row and "hết hạn mức tới" in row and "1.25" in row
     assert 'action="/do/account_use"' not in row and 'action="/do/account_rm"' not in row  # đang dùng: không Dùng/Xoá
