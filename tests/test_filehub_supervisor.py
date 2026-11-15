@@ -94,6 +94,9 @@ async def test_restart_with_backoff_then_graceful_sigterm(env):
     sv.restart()
     await until(lambda: sv.state == "running" and sv.proc is not None and sv.proc.returncode is None)
     proc = sv.proc
+    # chờ binary ghi status với pid của nó (đã cài handler SIGTERM) — tránh race SIGTERM tới trước khi interpreter sẵn sàng (CI chậm)
+    st = d.hub.filehub.status_path
+    await until(lambda: st.exists() and json.loads(st.read_text() or "{}").get("pid") == proc.pid, timeout=15)
     await d.hub.filehub.stop()
     assert proc.returncode == 0 and (d.hub.filehub.profile_dir / "stopped.txt").exists()
     assert json.loads(sv.pidfile.read_text())["pid"] is None

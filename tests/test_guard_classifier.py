@@ -560,6 +560,10 @@ def test_filehub_outside_write_roots_unchanged(fhenv, env, monkeypatch):
     """Run KHÔNG được giao thư mục chung (cwd ở repo khác): xoá tệp có sẵn trong thư mục chung vẫn hỏi người như cũ; ghi vẫn ngoài workspace."""
     import tempfile
 
+    from cfharness.guard.classifier import TMP_PREFIXES
+
+    if fhenv["fh"].startswith(TMP_PREFIXES):  # Linux: thư mục tạm của pytest nằm dưới /tmp — vốn là vùng ghi tự do, ca này chỉ có nghĩa trên macOS
+        pytest.skip("thư mục chung giả nằm dưới /tmp")
     monkeypatch.setattr(tempfile, "tempdir", "/nonexistent-cfh-tmp")  # thư mục tạm của pytest chứa cả thư mục chung giả — không coi là vùng tạm
     old = fhenv["ctx"]
     ctx = GuardContext(env["ws"], old.policy, run_since=old.run_since, hub_socket=old.hub_socket, git_probe=False, filehub_roots=old.filehub_roots)
