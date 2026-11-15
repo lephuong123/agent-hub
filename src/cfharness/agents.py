@@ -487,10 +487,20 @@ class AgentService:
             status = "paused"
         else:
             status = "working" if self.active_runs(agent_id) else "idle"
+            self._clear_import_pause(agent_id)
             if row["status"] != "paused":
                 return self.show(agent_id)
         self.set_status(agent_id, status, current_run_id=row.get("current_run_id"), force=True)
         return self.show(agent_id)
+
+    def _clear_import_pause(self, agent_id: str) -> None:
+        """Người `agent resume` → bỏ lý do "[hub] workspace chưa có trên máy này" do `hub import` đặt (transfer_repos.PAUSED_KEY)."""
+        from .transfer_repos import PAUSED_KEY
+
+        cur = self.store.state_get(PAUSED_KEY)
+        if isinstance(cur, dict) and agent_id in cur:
+            cur.pop(agent_id)
+            self.store.state_set(PAUSED_KEY, cur)
 
     def set_status(
         self, agent_id: str, status: str, *, current_run_id: str | None = None, reason: str | None = None, force: bool = False

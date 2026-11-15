@@ -969,8 +969,12 @@ class ManagerService:
                 pass
 
     async def _loop(self) -> None:
+        from ..runs import export_quiesced
+
         while True:
             await asyncio.sleep(max(1.0, float(self.cfg("check_s", 10))))
+            if export_quiesced(self.hub):  # đang xuất gói hub → bỏ lượt (hub_transfer)
+                continue
             try:
                 await self.maybe_tick()
             except asyncio.CancelledError:

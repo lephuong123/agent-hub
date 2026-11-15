@@ -32,6 +32,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from .. import auth as _auth
+from ..hub_freeze import frozen
 from ..notify.base import clip
 from ..notify.telegram import TelegramApi, TelegramError, TelegramNotifier, fit
 # lõi chung (chat/base.py) — giữ tên cũ ở đây cho mã/test đang import từ chat.bot
@@ -100,6 +101,8 @@ class TelegramBot(ChatBot):
     def token(self, *, ignore_enabled: bool = False) -> str | None:
         c = self.cfg()
         if not ignore_enabled and not c.get("enabled", True):
+            return None
+        if not ignore_enabled and frozen(self.hub):  # hub đã chuyển nhà (hub_freeze): máy mới giữ bot — không long poll (409), không gửi
             return None
         # CHỈ secret store (không lấy biến môi trường như Slack): bot chỉ chạy sau `notify telegram setup` có chủ đích
         sec = getattr(self.hub, "secrets", None)

@@ -349,7 +349,9 @@ def test_human_only_covers_sensitive_surface():
               "learn.retry", "learn.refine", "agent.update", "golden.add", "golden.rm", "learn.policy_set", "secret.set", "mcp.add", "estop.set",
               # web "Quyền đã cấp" / lịch / hội thoại điều phối viên (#3 #5 #7)
               "guard.grant.rm", "guard.trust.set", "guard.sandbox.allow_domain", "guard.sandbox.dev_host", "schedule.update",
-              "manager.archive", "manager.unarchive", "manager.tick"):
+              "manager.archive", "manager.unarchive", "manager.tick",
+              "hub.export",  # xuất toàn bộ hub (hub_transfer.py)
+              "hub.freeze", "hub.unfreeze", "hub.doctor"):  # chuyển nhà: đóng băng/gỡ (hub_freeze.py), doctor lộ đường dẫn/tên secret
         assert m in auth.HUMAN_ONLY, m
     assert "guard.check" not in auth.HUMAN_ONLY and "taskself.call" not in auth.HUMAN_ONLY  # hook/hub-self không bị chặn
 
@@ -398,6 +400,29 @@ async def test_backup_restore_and_update_rollback_human_only(home, monkeypatch):
     monkeypatch.setenv(auth.ENV_RUN_ID, "r_agent")
     with pytest.raises(Exception, match="chỉ người"):
         B.restore(home, r["id"])
+
+
+async def test_hub_transfer_web_rpcs_human_only(home):
+    """Xuất/nhập hub từ web (hub_transfer_web.py, PR6): agent trong run — kể cả đọc trộm token người — không gọi được RPC mới
+    (xuất gói chứa mọi thứ / nhập đè hub.db / đọc kế hoạch lộ đường dẫn); không có trong MANAGER_ALLOWED; method ghi được bọc audit."""
+    from cfharness import hub_transfer_web as W
+
+    for m in W.HUMAN_ONLY_TRANSFER_WEB:
+        assert m in auth.HUMAN_ONLY and m not in auth.MANAGER_ALLOWED, m
+    assert set(W.MUTATING_TRANSFER_WEB) <= auth.all_mutating()
+    d, srv = await _start(home)
+    try:
+        for m, prm in (("hub.export_start", {"profile": "core", "secrets": False}), ("hub.import_start", {"upload": "up-0000000000000000"}),
+                       ("hub.import_plan", {"upload": "up-0000000000000000"}), ("hub.transfer_status", {})):
+            run_n, proc_n, go_n = await _start_run(d)
+            rr = await _in_run(go_n, _client_py(home, m, prm, steal_token=True))
+            resp = json.loads(rr["out"].strip().splitlines()[-1])
+            assert resp.get("error", {}).get("code") == -32003, (m, resp)
+            proc_n.wait(5)
+        assert d.hub.transfer_web.job is None
+        assert not list((home.home / "exports").glob("*.cfhx")) if (home.home / "exports").exists() else True
+    finally:
+        await _stop(d, srv)
 
 
 def test_admin_methods_human_only_not_manager():

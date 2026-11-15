@@ -61,7 +61,8 @@ INCLUDE_DIRS = ("policy", "agents", "global", "teams", "ledger", "snapshots", "m
 # Trong agents/<id>/: thư mục chạy/tạm — không sao lưu, và khôi phục không đụng tới
 AGENT_SKIP = ("runtime", "workspaces", ".tier_overlay")
 EXCLUDED = ("secrets", "auth", "mcp_server", "runs", "checkpoints", "logs", "workspaces", "worktrees", "evals", "models", "update",
-            BACKUP_DIRNAME, "hub.sock", "hub.sock.auth", "hub.pid", "daemon.lock", "cli_history",
+            BACKUP_DIRNAME, "exports", "imports",  # gói xuất/nhập toàn bộ hub (hub_transfer.py) — lớn, đã là bản sao
+            "hub.sock", "hub.sock.auth", "hub.pid", "daemon.lock", "cli_history",
             "filehub")  # profile/base/status của binary sync Không gian số — tái tạo được (cấu hình filehub.* nằm trong config.yaml, được sao lưu)
 ID_RE = re.compile(r"^(\d{8}T\d{6})-(manual|auto|pre-update|pre-restore)(?:-([a-z0-9][a-z0-9-]{0,30}))?$")
 LABEL_RE = re.compile(r"[^a-z0-9-]+")
@@ -751,9 +752,15 @@ class BackupService:
             self._task = None
 
     async def _loop(self) -> None:
+        from .runs import exporting
+
         while True:
             try:
                 await asyncio.sleep(max(5.0, float(self.cfg().get("tick_s") or 60)))
+                # đang xuất gói hub → bỏ lượt (hub_transfer). Hub ĐÓNG BĂNG (chuyển nhà, hub_freeze) thì VẪN sao lưu: không tạo run,
+                # không chạm kênh ngoài — người có thể `hub unfreeze` dùng lại máy này, bản sao lưu là lưới an toàn
+                if exporting(self.hub):
+                    continue
                 await self.tick()
             except asyncio.CancelledError:
                 raise

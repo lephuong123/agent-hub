@@ -50,6 +50,9 @@ AUTO_ROLLBACK_CALLERS = frozenset({"regression_monitor", "eval_gate", "canary"})
 AUTO_CHANGE_ACTORS = frozenset({"learning", "review", "agent", "curator"})
 # M7: thay đổi do điều phối viên (actor `manager:<agent>`) là thay đổi TỰ ĐỘNG (không phải của người) → được tự rollback.
 MANAGER_ACTOR_PREFIX = "manager:"
+# Hub clone PR5 (import_followups.py): viết lại đường dẫn máy cũ trong tri thức sau `hub import`. Do NGƯỜI khởi xướng (lệnh nhập) →
+# CỐ Ý không thuộc AUTO_CHANGE_ACTORS: regression monitor/eval gate/canary không bao giờ tự rollback; người rollback được như mọi entry.
+IMPORT_ACTOR = "import"
 
 
 def is_auto_change_actor(actor: Any) -> bool:
@@ -298,7 +301,8 @@ class Ledger:
         elif ch.kind == "graph":
             self.graph().write_rows(ch.graph_rows, eid)
         elif ch.kind == "config":
-            rev_actor = "rollback" if ch.op == "rollback" else (ch.actor if str(ch.actor).startswith(MANAGER_ACTOR_PREFIX) else "learning")
+            rev_actor = "rollback" if ch.op == "rollback" else (ch.actor if str(ch.actor).startswith(MANAGER_ACTOR_PREFIX) or ch.actor == IMPORT_ACTOR
+                                                                 else "learning")
             res = self.hub.agents.update(ch.agent_id or "", dict(ch.config_changes or {}), soul=ch.soul, actor=rev_actor)
             revision = res.get("config_revision")
         else:

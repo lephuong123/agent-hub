@@ -8,6 +8,7 @@
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="confirm" value="yes">
     {% for k, v in fields %}{% if not (note and k == 'note') %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endif %}{% endfor %}
     {% if note %}<label>{{ note }}<textarea name="note" rows="2"></textarea></label>{% endif %}
+    {% for name, label, kind in reenter or [] %}<label>{{ label }}<input type="{{ 'password' if kind == 'password' else 'text' }}" name="{{ name }}" required autocomplete="{{ 'new-password' if kind == 'password' else 'off' }}" spellcheck="false"></label>{% endfor %}
     <div class="row end gap"><a class="btn ghost" href="{{ back }}">Huỷ</a><button class="btn {{ 'danger' if danger else 'primary' }}" type="submit">Đồng ý</button></div>
   </form>
 </section>

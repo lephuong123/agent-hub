@@ -94,6 +94,26 @@ class SecretStore:
         self._meta_update(n, time.time())
         return n
 
+    def set_bytes(self, name: str, data: bytes, *, set_at: float | None = None) -> str:
+        """Ghi secret ĐÚNG TỪNG BYTE (nhập hub từ gói — `transfer_secrets.apply`): cùng cách ghi nguyên tử 0600 như `set`, giữ thời điểm
+        đặt gốc nếu có (tuổi token ở tổng quan máy)."""
+        if not isinstance(data, bytes) or not data:
+            raise HubError("giá trị secret rỗng")
+        n = normalize_name(name)
+        self._ensure_dir()
+        tmp = self.dir / f".{n}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, 0o600)
+        tmp.replace(self.dir / n)
+        try:
+            register_secret_values(data.decode("utf-8"))
+        except UnicodeDecodeError:  # pragma: no cover — secret của hub là chữ
+            pass
+        self._meta_update(n, set_at if set_at is not None else time.time())
+        return n
+
     # -- metadata (plan-admin-users: tuổi token OAuth Claude cho tổng quan máy) — CHỈ thời điểm đặt, không giá trị
     META = ".meta.json"
 

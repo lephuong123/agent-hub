@@ -102,6 +102,9 @@ class RunManager:
         self._warned_versions: set[str] = set()
         self._auth_watch: asyncio.Task | None = None
         self.shutting_down = False
+        # Làm lặng hub khi xuất gói (hub_transfer.py): khác None → không khởi chạy run trong hàng đợi (run mới vẫn xếp hàng,
+        # chạy khi xuất xong). Chỉ trong RAM — không bao giờ vào hub.db (gói xuất không mang trạng thái này)
+        self.quiesced: str | None = None
         from .workspace import WorkspaceLocks
 
         self.locks = WorkspaceLocks(hub.store, hub)  # M3: khoá theo gốc repo (FR-RT-12), thay bản tối thiểu M1-B
@@ -116,6 +119,13 @@ class RunManager:
         from .admin_control import merge_estop  # ESTOP quản trị máy (cờ file của admin) gộp vào — user `estop off` không gỡ được
 
         return merge_estop(self.store.state_get("estop", {"on": False}), self.store.state_get("admin_estop"))
+
+    @property
+    def frozen(self) -> dict[str, Any] | None:
+        """`hub_state.migrated_to` khi hub đã `hub export --for move` (hub_freeze.py) — bền qua restart, chỉ người gỡ."""
+        from .hub_freeze import frozen
+
+        return frozen(self.hub)
 
     @property
     def auth_block(self) -> dict[str, Any] | None:
@@ -224,6 +234,11 @@ class RunManager:
     ) -> dict[str, Any]:
         if not prompt or not prompt.strip():
             raise HubError("prompt rỗng")
+        mig = self.frozen
+        if mig:  # hub đã chuyển nhà sang máy khác (hub_freeze.py): MỌI kind run đều bị từ chối tới khi người `hub unfreeze`
+            from .hub_freeze import blocked_error
+
+            raise blocked_error(mig)
         agent = self.hub.agents.get_row(agent_id)
         if not cwd and str(agent.get("workspace_default") or "").startswith("filehub:"):
             cwd = agent["workspace_default"]  # workspace mặc định của agent là thư mục chung → như run --cwd filehub:…
@@ -274,7 +289,9 @@ class RunManager:
                 data={"auth_block": ab},
             )
         if agent["status"] == "paused" and check_paused:
-            raise Blocked(f"agent '{agent_id}' đang paused — `cfharness agent resume {agent_id}` trước")
+            why = (self.store.state_get("import_paused") or {}).get(agent_id) or {}  # hub import: workspace chưa có ở máy này (transfer_repos)
+            extra = f" ({why.get('reason')}: {why.get('workspace')} — tạo/clone repo trước)" if isinstance(why, dict) and why.get("reason") else ""
+            raise Blocked(f"agent '{agent_id}' đang paused{extra} — `cfharness agent resume {agent_id}` trước")
         if cwd is not None and not Path(cwd).expanduser().is_dir():
             raise HubError(f"cwd không tồn tại: {cwd}")
         if agent.get("plugins"):  # báo sớm plugin chưa cài thay vì để run hỏng lúc spawn
@@ -385,7 +402,7 @@ class RunManager:
     def tick(self) -> list[str]:
         """Khởi chạy các run trong hàng đợi khi đủ điều kiện. Trả danh sách run vừa khởi chạy."""
         started: list[str] = []
-        if self.shutting_down or self.estop.get("on"):
+        if self.shutting_down or self.quiesced or self.estop.get("on") or self.frozen:
             return started
         limit = self.effective_limit()  # M3: điều tiết theo rate limit (FR-RT-16)
         skipped: list[str] = []
@@ -1409,6 +1426,22 @@ class RunManager:
             run["agent_id"], prompt, cwd=run.get("cwd"), budget_usd=budget_usd, model=run.get("model"), kind=run.get("kind") or "adhoc",
             resume_session_id=run["session_id"], parent_run_id=run["id"], resume_reason=reason,
         )
+
+
+def export_quiesced(hub: Any) -> bool:
+    """Hub đang xuất gói (`hub_transfer.export_in_daemon` đặt `RunManager.quiesced`) HOẶC đã đóng băng vì chuyển nhà (`hub_freeze`,
+    `hub_state.migrated_to`): các vòng nền GHI tri thức/DB bỏ lượt (kiểm ở đầu mỗi tick). Lượt ĐANG chạy dở (đang `await`) không bị cắt —
+    xem giới hạn ở docstring hub_transfer. Sao lưu KHÔNG dùng hàm này khi đóng băng (vẫn chạy — `exporting`)."""
+    if exporting(hub):
+        return True
+    from .hub_freeze import frozen
+
+    return frozen(hub) is not None
+
+
+def exporting(hub: Any) -> bool:
+    """CHỈ đang xuất gói (làm lặng trong RAM) — không tính đóng băng."""
+    return bool(getattr(getattr(hub, "runs", None), "quiesced", None))
 
 
 def human_decided(a: dict[str, Any]) -> bool:

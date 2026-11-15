@@ -130,6 +130,23 @@ def _hubs_registry(tmp_path_factory):
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _claude_home_for_transfer(tmp_path_factory):
+    """Hub clone PR3: `hub export|import` đọc/ghi session Claude Code ở `<claude home>/projects` — test KHÔNG BAO GIỜ đụng ~/.claude thật
+    (thư mục tạm rỗng; chỉ có hiệu lực khi CFHARNESS_TESTING=1). Test nào cần thì monkeypatch biến này."""
+    import os
+
+    prev = os.environ.get("CFHARNESS_TEST_CLAUDE_HOME")
+    os.environ["CFHARNESS_TEST_CLAUDE_HOME"] = str(tmp_path_factory.mktemp("claude-home"))
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("CFHARNESS_TEST_CLAUDE_HOME", None)
+        else:
+            os.environ["CFHARNESS_TEST_CLAUDE_HOME"] = prev
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _admin_shared_root(tmp_path_factory):
     """Quản trị máy: cờ ESTOP admin / chính sách / admin-log đọc từ thư mục chung HẰNG SỐ (/Users/Shared/cfharness). Test (kể cả daemon
     tiến trình con) dùng thư mục tạm RỖNG — máy dev có cờ ESTOP thật không làm đỏ test (chỉ có hiệu lực khi CFHARNESS_TESTING=1)."""

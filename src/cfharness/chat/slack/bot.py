@@ -38,6 +38,7 @@ import secrets as _secrets
 import time
 from typing import TYPE_CHECKING, Any
 
+from ...hub_freeze import frozen
 from ... import auth as _auth
 from ...events import HubEvent
 from ...notify.base import QueuedNotifier, clip
@@ -236,6 +237,8 @@ class SlackBot(ChatBot):
     def token(self, *, ignore_enabled: bool = False) -> str | None:
         c = self.cfg()
         if not ignore_enabled and not (c.get("enabled", True) and c.get("interactive")):
+            return None
+        if not ignore_enabled and frozen(self.hub):  # hub đã chuyển nhà (hub_freeze): máy mới giữ Socket Mode — tránh chia sự kiện
             return None
         return self._secret(c.get("bot_token_secret") or "SLACK_BOT_TOKEN")
 

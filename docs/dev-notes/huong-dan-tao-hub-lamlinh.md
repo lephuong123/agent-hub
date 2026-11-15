@@ -18,7 +18,7 @@ Tài liệu gốc: `plan-multi-instance.md` (quyết định), `multi-instance.m
 
 > Cần cfharness **v0.2.5** trở lên (bản có đa instance: giam workspace, web public + TOTP, LaunchDaemon, tổng quan admin).
 
-**Cách nhanh — một lệnh:** `scripts/setup-hub-user.sh` làm bước 1–8 dưới đây + tạo sẵn điều phối viên `dieu-phoi` (mẫu `manager`, `manager set`) (chạy lại được, bước đã xong thì bỏ qua). Mở
+**Cách nhanh — một lệnh (bắt buộc dùng cách này, 2026-11-15):** `scripts/setup-hub-user.sh` làm bước 1–8 dưới đây, CẢ bước 5 (ingress tunnel + DNS — DNS tự tạo khi miền là zone của `cert.pem` = `cchchn.com`, miền khác script in hướng dẫn CNAME) và nối thư mục chung Không gian số khi đặt `KGS=<URL>` (`docs/dev-notes/filehub.md`) + tạo sẵn điều phối viên `dieu-phoi` (mẫu `manager`, `manager set`) (chạy lại được, bước đã xong thì bỏ qua). Mở
 **Terminal.app** (cần TTY để nhập mật khẩu sudo + dán token):
 
 ```bash

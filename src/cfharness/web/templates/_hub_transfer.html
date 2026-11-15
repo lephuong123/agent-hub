@@ -1,0 +1,78 @@
+{#- Trạng thái chuyển hub (web/transfer_pages.py): đóng băng, đã nhập từ đâu, tác vụ xuất, lần nhập đang theo dõi. Poll 2 s khi bận / daemon đang dừng để nhập. -#}
+{% import "_macros.html" as m with context %}
+<div id="hub-transfer-status"{% if polling %} hx-get="/partials/hub-transfer{{ ('?import=' ~ track) if track }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+{% if track %}
+  {% set busy = down or imp_down or (imp and imp.state in ('starting', 'running')) or not imp %}
+  <section class="card {{ 'attention' if busy or (imp and imp.state == 'failed') }}" id="import-status">
+    <div class="card-head"><h2>{{ m.icon('arrow-left') }} Nhập gói{% if imp and imp.package_id %} {{ imp.package_id }}{% endif %}</h2>
+      {% if down or imp_down %}<span class="pill warn">{{ m.icon('clock') }}daemon đang dừng để nhập…</span>
+      {% elif imp and imp.state == 'done' %}<span class="pill ok">{{ m.icon('check') }}đã nhập</span>
+      {% elif imp and imp.state == 'failed' %}<span class="pill danger">{{ m.icon('alert') }}nhập lỗi</span>
+      {% else %}<span class="pill warn">{{ m.icon('clock') }}{{ phases_import.get(imp.phase, imp.phase) if imp else 'đang chuẩn bị' }}</span>{% endif %}</div>
+    {% if down or imp_down %}
+      <p>Hub đang tạm dừng trong lúc ghi đè dữ liệu — thường vài phút. Trang tự cập nhật, đừng đóng tab (phiên đăng nhập web vẫn giữ).</p>
+      <p class="small muted">Quá 15 phút chưa xong: xem <code>imports/{{ track }}/state.json</code> và <code>logs/import-job.out</code> trong HUB_HOME, rồi <code>cfharness daemon start</code>.</p>
+    {% elif imp_error %}<p class="muted">Không đọc được trạng thái nhập: {{ imp_error }}</p>
+    {% elif imp and imp.state in ('starting', 'running') %}
+      <p><b>{{ phases_import.get(imp.phase, imp.phase) }}</b>…</p><progress class="meter" max="100" value="{{ imp.progress or 0 }}"></progress>
+    {% elif imp and imp.state == 'done' %}
+      {% set r = imp.report or {} %}
+      <p>Đã nhập <b>{{ r.imported }}</b> (chế độ {{ r.mode }}): {{ r.files_written }} file{% if r.pre_restore %} · hiện trạng trước đó lưu ở bản sao lưu <code>{{ r.pre_restore }}</code>{% endif %}.{% if imp.restarted %} Daemon đã chạy lại.{% endif %}</p>
+      <ul class="plain small">
+        {% if r.secrets and r.secrets.imported %}<li>{{ m.icon('check') }} Secret đã nhập: {{ r.secrets.imported|length }}</li>{% endif %}
+        {% if r.secrets and r.secrets.skipped_mode %}<li>{{ m.icon('info') }} Bỏ theo chế độ nhân bản (bot/OAuth của máy nguồn): {{ r.secrets.skipped_mode|join(', ') }} — cài bot riêng, đăng nhập lại MCP OAuth</li>{% endif %}
+        {% if r.missing_secrets %}<li>{{ m.icon('alert') }} Secret phải đặt lại: {{ r.missing_secrets|join(', ') }} (<code>cfharness secret set &lt;TÊN&gt;</code>)</li>{% endif %}
+        {% if r.mode == 'clone' %}<li>{{ m.icon('info') }} Nhân bản: Telegram/Slack đã tắt, {{ r.schedules_paused or 0 }} lịch tạm dừng, {{ r.tasks_blocked or 0 }} task bị chặn — bật lại phần cần chạy ở máy này.</li>{% endif %}
+        {% if r.claude_sessions %}<li>{{ m.icon('chat') }} Session Claude Code: {{ r.claude_sessions.written }} đã ghi{% if r.claude_sessions.conflicts %}, {{ r.claude_sessions.conflicts }} trùng id (giữ của máy này){% endif %}</li>{% endif %}
+        {% for c in r.repos_cloned or [] %}<li>{{ m.icon('check' if c.ok else 'x') }} {{ 'đã clone' if c.ok else 'không clone được' }} {{ c.to }}{% if c.error %}: {{ c.error }}{% endif %}</li>{% endfor %}
+        {% if r.filehub %}<li>{{ m.icon('alert') }} Thư mục Không gian số cần đăng nhập lại: <code>{{ r.filehub.command }}</code> — đồng bộ đang TẮT ở máy này{% if r.filehub.mode == 'clone' and r.filehub.folders %} (nhân bản: đã gỡ thư mục chung {{ r.filehub.folders|map(attribute='name')|join(', ') }}){% endif %}</li>{% endif %}
+        {% if r.agents_paused %}<li>{{ m.icon('pause') }} Agent tạm dừng vì workspace chưa có ở máy này: {{ r.agents_paused|join(', ') }}</li>{% endif %}
+      </ul>
+      {% if imp.error %}<p class="small"><span class="pill warn">{{ m.icon('alert') }}lưu ý</span> {{ imp.error }}</p>{% endif %}
+      <div hx-get="/partials/hub-transfer/doctor" hx-trigger="load" hx-swap="outerHTML"></div>
+    {% elif imp and imp.state == 'failed' %}
+      <p>{{ imp.error }}</p>
+      <p class="small muted">Hub giữ nguyên hoặc đã tự hoàn tác về hiện trạng trước khi nhập.{% if imp.restarted %} Daemon đã chạy lại.{% endif %}</p>
+    {% endif %}
+  </section>
+{% endif %}
+{% if down and not track %}
+  <section class="card attention"><p>Daemon cfharness không chạy — chạy <code>cfharness daemon start</code> rồi tải lại trang.</p></section>
+{% elif error %}
+  <section class="card"><p class="muted">Không đọc được trạng thái: {{ error }}</p></section>
+{% elif st %}
+  {% if st.migrated_to %}
+  <section class="card attention" id="frozen">
+    <div class="card-head"><h2>{{ m.icon('stop') }} Hub này đã chuyển sang máy khác</h2><span class="pill danger strong">đóng băng</span></div>
+    <p>Xuất để chuyển nhà lúc {{ m.rel(st.migrated_to.at) }} (gói <code>{{ st.migrated_to.export_id }}</code>). Máy này không chạy run, lịch, Telegram/Slack.</p>
+    {{ m.act("hub_unfreeze", "Mở lại hub này", {"export_id": st.migrated_to.export_id}, "btn danger", next="/hub-transfer", ic="undo") }}
+  </section>
+  {% endif %}
+  {% if st.imported_from %}{% set f = st.imported_from %}
+  <section class="card" id="imported-from"><p class="small">{{ m.icon('info') }} Hub này được nhập từ gói <code>{{ f.export_id }}</code> (máy {{ f.source_host or '?' }}, cfharness {{ f.source_version or '?' }}, chế độ {{ f.mode }}) {{ m.rel(f.at) }}.</p></section>
+  {% endif %}
+  {% set e = st.export or {} %}
+  {% if e.state %}
+  <section class="card {{ 'attention' if e.state == 'failed' }}" id="export-status">
+    <div class="card-head"><h2>{{ m.icon('arrow-up') }} Xuất hub</h2>
+      {% if e.state == 'running' %}<span class="pill warn">{{ m.icon('clock') }}{{ phases_export.get(e.phase, e.phase) }}</span>
+      {% elif e.state == 'done' %}<span class="pill ok">{{ m.icon('check') }}xong</span>{% else %}<span class="pill danger">{{ m.icon('alert') }}lỗi</span>{% endif %}</div>
+    {% if e.state == 'running' %}
+      <progress class="meter" max="100" value="{{ e.progress or 0 }}"></progress>
+      <p class="small muted">{{ phases_export.get(e.phase, e.phase) }}{% if e.written %} — đã ghi {{ size(e.written) }}{% endif %}… Hub vẫn chạy; run mới chờ tới khi xuất xong.</p>
+    {% elif e.state == 'done' %}{% set r = e.result or {} %}
+      <p>Gói <code>{{ r.file }}</code> — {{ size(r.size) }}, profile {{ r.profile }}{% if r.sealed %}, {{ r.secret_names }} secret đã mã hoá{% endif %}{% if r.stopped_runs %}, đã dừng {{ r.stopped_runs }} run{% endif %}.</p>
+      <p class="small muted">sha256 <code>{{ r.sha256 }}</code></p>
+      {% if r.missing_secrets %}<p class="small">{{ m.icon('alert') }} KHÔNG mang {{ r.missing_secrets|length }} secret ({{ r.missing_secrets[:8]|join(', ') }}) — đặt lại ở máy kia.</p>{% endif %}
+      {% for d in r.repos_dirty or [] %}<p class="small">{{ m.icon('alert') }} Repo {{ d.path }} có {{ d.uncommitted }} file chưa commit — không đi theo gói (commit + push trước).</p>{% endfor %}
+      {% if r.migrated_to %}<p class="small"><span class="pill danger">đóng băng</span> Máy này đã đóng băng — nhập gói ở máy mới với chế độ <b>chuyển nhà</b>.</p>{% endif %}
+      <form method="post" action="/hub-transfer/download" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="btn primary" type="submit">{{ m.icon('arrow-right') }}<span>Tải về</span></button></form>
+      <p class="small muted">Link tải dùng MỘT lần, hết hạn sau 10 phút. Chép file sang máy kia rồi mở trang này ở đó → "Nhập hub từ máy khác" (hoặc <code>cfharness hub import {{ r.file }} --dry-run</code>). File vẫn nằm trong <code>exports/</code> của hub này.</p>
+    {% else %}
+      <p>{{ e.error }}</p>
+    {% endif %}
+  </section>
+  {% endif %}
+{% endif %}
+</div>

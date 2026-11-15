@@ -17,7 +17,8 @@ cfharness KHÔNG cầm token sync (binary tự ghi `--tokens`), KHÔNG gọi API
 
 Tệp: `HUB_HOME/filehub/{profile/, status.json, control.json, ignore.txt, supervisor.json}` (thư mục 0700; sandbox denyRead/denyWrite +
 `permissions.deny` Read/Grep/Glob; classifier `filehub_metadata` = cấm), token `HUB_HOME/secrets/filehub/tokens.json` (0600). Backup bỏ
-`filehub/` (tái tạo được); cấu hình `filehub.*` nằm trong `config.yaml` (được sao lưu, ∈ `integrity.SECURITY_KEYS`).
+`filehub/` (tái tạo được); cấu hình `filehub.*` nằm trong `config.yaml` (được sao lưu, ∈ `integrity.SECURITY_KEYS`). Xuất/nhập hub
+(`hub-clone.md` §2.1b): token + `filehub/` không bao giờ đi theo gói; nhập → `filehub.enabled=false` tới khi người `filehub setup` lại.
 
 ## Luồng
 
