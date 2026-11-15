@@ -653,7 +653,7 @@ def cmd_run(ctx: Ctx) -> int:
         run = None
     params: dict[str, Any] = {"agent": a.agent, "prompt": a.prompt}
     if a.cwd:
-        params["cwd"] = str(Path(a.cwd).expanduser().resolve())
+        params["cwd"] = a.cwd if a.cwd.startswith("filehub:") else str(Path(a.cwd).expanduser().resolve())  # filehub:<tên>[/<con>] — daemon giải
     if a.budget is not None:
         params["budget_usd"] = a.budget
     if a.model:
