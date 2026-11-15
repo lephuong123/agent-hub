@@ -62,6 +62,10 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     dr = hs.add_parser("doctor", allow_abbrev=False, help="kiểm hub sau khi nhập (chỉ đọc, gợi ý lệnh; chạy được khi daemon dừng)", parents=[common])
     dr.add_argument("--probe", action="store_true", help="thử thật: `claude auth status`, kết nối MCP (cần daemon chạy) — không gọi model")
     dr.set_defaults(fn=cmd_doctor)
+    ij = hs.add_parser("import-job", allow_abbrev=False, help="(nội bộ) tiến trình nhập do trang web /hub-transfer chạy — đừng gọi tay", parents=[common])
+    ij.add_argument("upload", help="mã gói tải lên (up-…)")
+    ij.add_argument("--supervised", action="store_true", help=argparse.SUPPRESS)
+    ij.set_defaults(fn=cmd_import_job)
 
 
 def _size(n: Any) -> str:
@@ -487,3 +491,17 @@ def _doctor(ctx: Any) -> int:
     rep = D.run(ctx.paths, probe=bool(a.probe), mcp_probe=probe)
     ctx.out(rep, D.text(rep))
     return 0 if rep["ok"] else 1
+
+
+def cmd_import_job(ctx: Any) -> int:
+    return _wrap(_import_job, ctx)
+
+
+def _import_job(ctx: Any) -> int:
+    """PR6 (web): chạy lần nhập mà daemon đã chuẩn bị (`hub.import_start` → `imports/<upload>/job.json` + `pass`). Không hỏi gì — người đã
+    xác nhận 2 bước trên web. Ghi `imports/<upload>/state.json`, khởi động lại daemon ở cuối (kể cả lỗi)."""
+    from .hub_transfer_web import run_import_job
+
+    st = run_import_job(ctx.paths, ctx.args.upload, supervised=bool(ctx.args.supervised))
+    print(f"nhập hub (web): {st.get('state')}" + (f" — {st['error']}" if st.get("error") else ""))
+    return 0 if st.get("state") == "done" else 1

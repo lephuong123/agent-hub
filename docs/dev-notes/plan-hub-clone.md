@@ -1,6 +1,6 @@
 # Plan — Xuất / nhập toàn bộ hub sang máy khác (`cfharness hub export|import`)
 
-Trạng thái: **ĐANG LÀM — PR1–PR5 xong** (còn PR6 web) (xem "Tiến độ" cuối file; plan 2026-11-15; quyết định của chủ repo đã chốt ở mục 10). Mục tiêu: đóng gói MỌI thứ của một hub
+Trạng thái: **XONG — PR1–PR6** (tài liệu tổng hợp: `docs/dev-notes/hub-clone.md`) (xem "Tiến độ" cuối file; plan 2026-11-15; quyết định của chủ repo đã chốt ở mục 10). Mục tiêu: đóng gói MỌI thứ của một hub
 cfharness thành MỘT file, mang sang máy khác (macOS ↔ Linux ↔ Windows), nhập vào và chạy tiếp — agent, team, task, hội thoại điều
 phối viên, tri thức/học, lịch, quyền đã cấp, kết nối MCP/Telegram/Slack, tài khoản Claude, lịch sử run/audit.
 Trải nghiệm người dùng chỉ có 2 bước: `cfharness hub export` ra một file → chép file sang máy kia bằng cách nào cũng được →
@@ -304,4 +304,16 @@ Không migration DB (trạng thái ở `hub_state`). Ước lượng: PR1 lớn 
   summary{errors, warnings, total}}`. `import_plan` trả thêm `repos[{from, to, exists, git, remote, branch, head, dirty, uncommitted, used_by,
   hint, head_match?}]`, `agents_paused{id: {reason, workspace}}`; `import_package(clone_repos=)` → `repos_cloned[{to, ok, error?, warning?}]`,
   `agents_unpaused[]`. Web PR6 dùng `hub.doctor` cho trang sau nhập; banner đóng băng đã có ở `base.html`.
-
+- **PR6** (2026-11-15): web — `hub_transfer_web.py` (RPC + tiến trình `hub import-job` + chờ/dọn lúc daemon khởi động), `web/transfer_pages.py`
+  (`/hub-transfer`, kế hoạch nhập, tải lên/tải về), `static/transfer.js`, thẻ Cài đặt + thẻ trang chủ khi hub trống; test
+  `tests/test_web_hub_transfer.py` + `tests/test_sec_auth.py::test_hub_transfer_web_rpcs_human_only`. Tài liệu: `docs/dev-notes/hub-clone.md`.
+  Lệch/chốt so với §7b: (1) passphrase KHÔNG có ở form đầu — gõ 2 ô ở bước 2 (`Action.reenter`), vì "form 2 ô + nhập lại ở bước 2" là hai lần gõ
+  không so được với nhau (server không giữ lần đầu); POST cuối là chỗ duy nhất passphrase rời trình duyệt. (2) RPC đặt tên `hub.export_start` /
+  `hub.import_start` (+ `hub.transfer_status`, `hub.export_status`, `hub.import_status`) — `hub.import_plan` nhận `upload` (id file tải lên), không
+  nhận đường dẫn tuỳ ý. (3) Web đụng FILE GÓI trực tiếp ở hai chỗ (tải lên ghi `imports/`, tải về đọc `exports/<ID_RE>.cfhx`) — gói hàng GB
+  không qua JSON-RPC được; web không bao giờ đụng hub.db; web KHÔNG đọc `state.json` khi daemon dừng (như `update_pages`: báo "đang dừng", poll).
+  (4) "Hub trống" cho web = `hub_fresh` (không agent/team/task/run/lịch/secret) vì daemon đang chạy luôn có hub.db (`home_blank` luôn sai) — nhập
+  vẫn chụp `pre-restore` (job tự tính `replace = not home_blank`). (5) Gói tải lên bị xoá sau khi nhập thành công (giữ khi lỗi để thử lại; daemon
+  dọn sau 24 giờ). (6) `transfer.max_upload_mb` không vào danh mục Cài đặt web. (7) Tiến độ chỉ theo pha (+ số byte đã ghi khi đóng gói).
+  Chưa kiểm: job + `spawn_background` trên Windows thật; dưới launchd thật (daemon thoát 75, daemon mới chờ `hold_while_importing`) mới có test
+  đơn vị.

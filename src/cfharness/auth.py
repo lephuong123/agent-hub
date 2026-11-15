@@ -112,6 +112,9 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # Chuyển nhà (hub_freeze.py): gỡ đóng băng = cho máy cũ chạy lại run/lịch/bot song song máy mới (409 Telegram, chia sự kiện Slack,
         # OAuth xoay vòng) — chỉ người. hub.doctor (hub_doctor.py) chỉ đọc nhưng lộ đường dẫn/tên secret/repo của người — chỉ người.
         "hub.freeze", "hub.unfreeze", "hub.doctor",
+        # Xuất/nhập hub từ web (hub_transfer_web.py, PR6): nhận passphrase, đọc gói tải lên, dừng daemon để nhập đè hub.db, lộ đường
+        # dẫn/tên secret — chỉ người (kể cả các method chỉ đọc)
+        "hub.transfer_status", "hub.export_start", "hub.export_status", "hub.import_plan", "hub.import_start", "hub.import_status",
         # Tài khoản Claude (accounts/): token = quyền dùng tài khoản Claude của người; đổi tài khoản CHỈ do người (không tự đổi, không
         # MANAGER_ALLOWED) — agent không được tự thêm/đổi/xoá/kiểm tài khoản hay mở phiên `claude setup-token`
         "account.login_start", "account.login_finish", "account.login_cancel", "account.add_token", "account.use", "account.rename",
@@ -221,7 +224,7 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE"),
                       ("cfharness.web_events", "MUTATING_WEB"),
                       ("cfharness.backup", "MUTATING_BACKUP"), ("cfharness.hub_transfer", "MUTATING_TRANSFER"),
-                      ("cfharness.hub_freeze", "MUTATING_FREEZE"),
+                      ("cfharness.hub_freeze", "MUTATING_FREEZE"), ("cfharness.hub_transfer_web", "MUTATING_TRANSFER_WEB"),
                       ("cfharness.admin_rpc", "MUTATING_ADMIN"),
                       ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):
         try:

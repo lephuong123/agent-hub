@@ -585,6 +585,10 @@ DEFAULTS: dict[str, Any] = {
         "compresslevel": 5,
         "tick_s": 60,
     },
+    # Xuất/nhập hub (hub_transfer_web.py, web /hub-transfer): trần cỡ gói tải lên qua web (MB) — kiểm Content-Length trước khi nhận
+    "transfer": {
+        "max_upload_mb": 4096,
+    },
     # Tổng quan máy (admin_overview.py, docs/dev-notes/admin-overview.md): mỗi hub xuất bản tóm tắt CHỈ SỐ LIỆU ra thư mục chung để
     # người quản trị xem mọi hub trên máy. Chỉ người đặt (`config.set` ∈ HUMAN_ONLY; nhánh ∈ integrity.SECURITY_KEYS).
     "admin_export": {

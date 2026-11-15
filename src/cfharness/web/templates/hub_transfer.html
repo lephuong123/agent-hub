@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Chuyển hub{% endblock %}
+{% block content %}
+<div class="page-head"><div class="ph-title"><h1>Chuyển hub sang máy khác</h1><span class="sub">Xuất TOÀN BỘ hub thành một file <code>.cfhx</code> rồi nhập ở máy kia — agent, team, task, tri thức, lịch, lịch sử run, session Claude Code, secret (mã hoá bằng passphrase).</span></div></div>
+{% include "_hub_transfer.html" %}
+{% if st %}
+<div class="grid2">
+  <section class="card" id="export">
+    <div class="card-head"><h2>{{ m.icon('arrow-up') }} Xuất hub này</h2></div>
+    <form method="post" action="/do/hub_export" class="form">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/hub-transfer">
+      <input type="hidden" name="has_secrets" value="{{ '1' if st.has_secrets else '0' }}">
+      <fieldset class="plain"><legend class="small muted">Gồm những gì</legend>
+        <label class="check"><input type="radio" name="profile" value="full" checked> <span><b>Đầy đủ</b> (full) — thêm stdout thô của run cũ + mọi session Claude Code của hub</span></label>
+        <label class="check"><input type="radio" name="profile" value="core"> <span><b>Gọn</b> (core) — như sao lưu + session đang dở (điều phối viên, task chưa xong, run dở)</span></label>
+      </fieldset>
+      <fieldset class="plain"><legend class="small muted">Mục đích</legend>
+        <label class="check"><input type="radio" name="for" value="clone" checked> <span><b>Nhân bản</b> — máy này vẫn chạy bình thường</span></label>
+        <label class="check"><input type="radio" name="for" value="move"> <span><b>Chuyển nhà</b> — sau khi xuất, máy này ĐÓNG BĂNG (không run/lịch/Telegram/Slack) tới khi mở lại</span></label>
+      </fieldset>
+      {% if st.has_secrets %}
+      <label class="check"><input type="checkbox" name="secrets" value="1" checked> <span>Mang secret (mã hoá bằng passphrase — hỏi ở bước xác nhận cuối)</span></label>
+      <label class="check"><input type="checkbox" name="with_totp" value="1"> <span>Mang cả mã TOTP đăng nhập web</span></label>
+      <label class="check"><input type="checkbox" name="with_mcp_tokens" value="1"> <span>Mang cả token MCP HTTP của hub</span></label>
+      {% else %}<p class="small muted">Hub chưa có secret nào — gói không cần passphrase.</p>{% endif %}
+      {% if st.running or st.queued %}<label class="check"><input type="checkbox" name="stop" value="1"> <span>Dừng {{ st.running }} run đang chạy trước khi xuất (không tick: từ chối khi có run đang chạy)</span></label>{% endif %}
+      <p class="small muted">Gói ghi vào <code>exports/</code> của hub (quyền 0600). Phần ngoài secret KHÔNG mã hoá: memory, transcript, nhật ký kiểm toán — giữ riêng tư.</p>
+      <div class="form-actions"><button class="btn primary" type="submit"{% if st.export and st.export.state == 'running' %} disabled{% endif %}>{{ m.icon('arrow-up') }}<span>Xuất hub…</span></button></div>
+    </form>
+  </section>
+  <section class="card" id="import">
+    <div class="card-head"><h2>{{ m.icon('arrow-left') }} Nhập hub từ máy khác</h2>{% if st.fresh %}<span class="pill ok">hub này đang trống</span>{% endif %}</div>
+    <form id="hub-upload" class="form" data-upload="/hub-transfer/upload" data-max-mb="{{ st.max_upload_mb }}" data-csrf="{{ csrf }}">
+      <label>File gói <code>.cfhx</code> (≤ {{ st.max_upload_mb }} MB)<input type="file" id="hub-upload-file" accept=".cfhx" required></label>
+      <progress class="meter" id="hub-upload-bar" max="100" value="0" hidden></progress>
+      <p class="small muted" id="hub-upload-msg" aria-live="polite"></p>
+      <div class="form-actions"><button class="btn primary" type="submit" id="hub-upload-btn">{{ m.icon('clip') }}<span>Tải lên &amp; xem kế hoạch</span></button></div>
+    </form>
+    <p class="small muted">Chưa ghi gì cho tới khi bạn xem toàn bộ kế hoạch và xác nhận 2 bước. {% if not st.fresh %}Hub này đã có dữ liệu: nhập sẽ THAY THẾ hub hiện có (chụp bản sao lưu <code>pre-restore</code> trước).{% endif %}
+      Gói lớn hơn trần: <code>cfharness hub import &lt;file&gt;</code> ở terminal.</p>
+  </section>
+</div>
+<div id="hub-doctor">
+  <section class="card"><div class="card-head"><h2>{{ m.icon('shield') }} Kiểm tra hub (doctor)</h2>
+    <button class="btn sm" type="button" hx-get="/partials/hub-transfer/doctor" hx-target="#hub-doctor" hx-swap="innerHTML"{% if st.imported_from %} hx-trigger="load, click"{% endif %}>{{ m.icon('refresh') }}<span>Chạy kiểm tra</span></button></div>
+    <p class="small muted">Việc còn phải làm ở máy này sau khi nhập: <code>claude</code> đã đăng nhập, secret còn thiếu, MCP, repo workspace, lịch đang tạm dừng… (chỉ đọc).</p></section>
+</div>
+{% endif %}
+<p class="small"><a href="/settings">← Cài đặt</a></p>
+{% endblock %}

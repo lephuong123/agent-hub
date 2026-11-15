@@ -600,9 +600,10 @@ Chi tiết, danh sách gồm/bỏ, giới hạn: `docs/dev-notes/backup.md`. Kh�
 - Cập nhật: `update.start` tạo bản `pre-update` trước khi chạy helper; helper (chỉ stdlib) dò `hub.ping`, không lên → cài lại bản cũ + khôi phục hub.db
   khi `user_version` đã tăng; `cfharness update --rollback` (RPC `update.rollback`). Pha mới của helper mà daemon phải chờ → `daemon._UPDATE_BUSY_PHASES`.
 
-## Xuất / nhập toàn bộ hub sang máy khác — `hub_transfer.py` (PR1–PR5 của `docs/dev-notes/plan-hub-clone.md`)
-Không migration. Test: `tests/test_hub_transfer.py`, `tests/test_hub_transfer_secrets.py`, `tests/test_hub_transfer_sessions.py`,
-`tests/test_hub_transfer_cross_os.py`, `tests/test_hub_transfer_move.py`.
+## Xuất / nhập toàn bộ hub sang máy khác — `hub_transfer.py` (PR1–PR6 của `docs/dev-notes/plan-hub-clone.md`)
+Tài liệu tổng hợp (người dùng + kỹ thuật + giới hạn): `docs/dev-notes/hub-clone.md`. Không migration. Test: `tests/test_hub_transfer.py`,
+`tests/test_hub_transfer_secrets.py`, `tests/test_hub_transfer_sessions.py`, `tests/test_hub_transfer_cross_os.py`, `tests/test_hub_transfer_move.py`,
+`tests/test_web_hub_transfer.py`, `tests/test_sec_auth.py::test_hub_transfer_web_rpcs_human_only`.
 - `hub_transfer.py`: gói `.cfhx` (tar không nén ngoài, từng phần tử gzip riêng, `MANIFEST.json` cuối, sha256 nội dung gốc, `sections` có `prefix`
   — phần mới thêm sau là mục `sections` mới, bản cũ bỏ qua phần `optional`). Xuất = RPC `hub.export` (HUMAN_ONLY, tự audit; làm lặng bằng
   `RunManager.quiesced` rồi thả trong `finally`) hoặc ngoại tuyến (giữ `daemon.lock`); chỉ ghi vào `HUB_HOME/exports/`. Nhập CHỈ ngoại tuyến từ CLI
@@ -658,7 +659,21 @@ Không migration. Test: `tests/test_hub_transfer.py`, `tests/test_hub_transfer_s
 - PR5 `hub_doctor.py`: `cfharness hub doctor [--probe] [--json]` + RPC `hub.doctor` (HUMAN_ONLY, chỉ đọc, không probe mạng) — đọc DB chỉ đọc,
   config, TÊN secret (không bao giờ giá trị); không gọi `claude` ngoài `--version` (và `auth status` khi `--probe`). Tự chạy sau `hub import`.
   `HUB_HUMAN_ONLY_CLI["hub"] = None` (mọi lệnh con `hub …` chặn với agent).
-- Bất biến: gói không bao giờ chứa `checkpoints/`, `auth/web.json`/thiết bị, `secrets/` dạng rõ, session Claude không thuộc hub; thêm trạng thái gắn với máy vào `hub_state` →
+- PR6 web — `hub_transfer_web.py` (daemon) + `web/transfer_pages.py` (`/hub-transfer`, thẻ ở Cài đặt, thẻ "Nhập hub từ máy khác" ở trang chủ khi
+  `hub_fresh`) + `static/transfer.js`. RPC `hub.transfer_status|export_start|export_status|import_plan|import_start|import_status` (∈ HUMAN_ONLY,
+  `HUMAN_ONLY_TRANSFER_WEB`; ghi = `MUTATING_TRANSFER_WEB`, tự audit, `passphrase` bị pop trước khi chạy). Xuất NỀN trong daemon (`ExportJobs`:
+  `export_in_daemon` → `seal_package` TRONG daemon → freeze/unfreeze như CLI). Passphrase web CHỈ ở bước 2 (`Action.reenter` — ô password trống;
+  `Action.secret_fields` lọc cả trang bước 1 và bước 2 khỏi `carry()`). Tải lên = XHR thân thô (`origin_guard` + CSRF/khoá qua header, Content-Length
+  ≤ `transfer.max_upload_mb` trước khi đọc, `.part` 0600 → rename, lỗi → xoá); tải về = token một lần trong RAM web (gắn `Session.sid`, 10 phút)
+  → stream `exports/<id>.cfhx` (`ID_RE`, `O_NOFOLLOW`) — hai chỗ DUY NHẤT web đụng file của hub (gói, không bao giờ hub.db). Nhập: `hub.import_start`
+  kiểm nhanh (id gõ lại, passphrase, hub trống|replace, run|stop) → `imports/<id>/job.json` (không passphrase) + `pass` 0600 → spawn
+  `python -m cfharness hub import-job <id>` → daemon tự dừng; job xoá `pass` ngay khi đọc, chờ `daemon.lock`, gọi `import_package`, LUÔN khởi
+  động lại daemon, ghi `state.json` (danh sách trắng `STATE_KEYS`/`REPORT_KEYS`). `daemon.run_foreground` → `hold_while_importing` (job sống →
+  daemon mới chờ); `register_rpc` → `cleanup` (`pass` sót, job chết → failed, gói tải lên > 24 h). Web không đọc `state.json` trực tiếp (như
+  `update_pages`: daemon dừng → "đang dừng", poll). Thêm RPC web → `HUMAN_ONLY_TRANSFER_WEB` (+ `MUTATING_…`) + ca trong 2 file test trên; khoá
+  mới của state/kết quả → danh sách trắng; pha job mà daemon phải chờ → `IMPORT_BUSY_PHASES`.
+- Bất biến: gói không bao giờ chứa `checkpoints/`, `auth/web.json`/thiết bị, `secrets/` dạng rõ, session Claude không thuộc hub; passphrase không bao giờ vào
+  argv/env/audit/log/DB/`job.json`/`state.json`/HTML; thêm trạng thái gắn với máy vào `hub_state` →
   thêm khoá vào `hub_transfer.MACHINE_STATE` (hoặc `CLONE_STATE`) + ca trong test. `exports/`/`imports/` ∈ `backup.EXCLUDED`, sandbox
   denyRead/denyWrite, `sensitive_read`.
 

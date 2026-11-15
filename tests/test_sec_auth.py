@@ -402,6 +402,29 @@ async def test_backup_restore_and_update_rollback_human_only(home, monkeypatch):
         B.restore(home, r["id"])
 
 
+async def test_hub_transfer_web_rpcs_human_only(home):
+    """Xuất/nhập hub từ web (hub_transfer_web.py, PR6): agent trong run — kể cả đọc trộm token người — không gọi được RPC mới
+    (xuất gói chứa mọi thứ / nhập đè hub.db / đọc kế hoạch lộ đường dẫn); không có trong MANAGER_ALLOWED; method ghi được bọc audit."""
+    from cfharness import hub_transfer_web as W
+
+    for m in W.HUMAN_ONLY_TRANSFER_WEB:
+        assert m in auth.HUMAN_ONLY and m not in auth.MANAGER_ALLOWED, m
+    assert set(W.MUTATING_TRANSFER_WEB) <= auth.all_mutating()
+    d, srv = await _start(home)
+    try:
+        for m, prm in (("hub.export_start", {"profile": "core", "secrets": False}), ("hub.import_start", {"upload": "up-0000000000000000"}),
+                       ("hub.import_plan", {"upload": "up-0000000000000000"}), ("hub.transfer_status", {})):
+            run_n, proc_n, go_n = await _start_run(d)
+            rr = await _in_run(go_n, _client_py(home, m, prm, steal_token=True))
+            resp = json.loads(rr["out"].strip().splitlines()[-1])
+            assert resp.get("error", {}).get("code") == -32003, (m, resp)
+            proc_n.wait(5)
+        assert d.hub.transfer_web.job is None
+        assert not list((home.home / "exports").glob("*.cfhx")) if (home.home / "exports").exists() else True
+    finally:
+        await _stop(d, srv)
+
+
 def test_admin_methods_human_only_not_manager():
     """plan-admin-users: mọi RPC admin.* ∈ HUMAN_ONLY, KHÔNG ∈ MANAGER_ALLOWED; method ghi admin.estop_set đã phân loại + bọc audit."""
     from cfharness.admin_rpc import MUTATING_ADMIN, READ_ADMIN
