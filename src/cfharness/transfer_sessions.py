@@ -23,6 +23,10 @@ theo cùng bản đồ của hub + cặp claude home nguồn → đích → dump
 đè: sid đã có ở bất kỳ project nào của đích → bỏ + cảnh báo. File 0600 (`O_EXCL`), thư mục MỚI 0700. Trả nhật ký `created` để hoàn tác
 khi lần nhập hỏng (`rollback`). Chế độ `clone` cũng nhập session (để hội thoại điều phối viên tiếp tục ở máy mới — hai hub từ đó độc lập).
 
+Khác OS (PR4): cwd/đường dẫn trong transcript đổi kiểu theo `pathmap` (POSIX ↔ Windows); `encode_cwd` cùng một quy tắc cho cả hai
+(`C:\\Users\\x` → `C--Users-x` — SUY TỪ MÃ, chưa kiểm trên Windows thật); claude home đích trên Windows = `%USERPROFILE%\\.claude`
+(`Path.home()`), hoặc `CLAUDE_CONFIG_DIR`.
+
 `encode_cwd` = quy tắc của Claude Code (đọc từ binary 2.1.325, khớp 3.655/3.655 thư mục thật trên máy dev): mọi đơn vị UTF-16 không phải
 `[A-Za-z0-9]` → `-`; dài > 200 → 200 ký tự đầu + `-` + base36(|hash kiểu Java|) — Claude Code tìm thư mục dài theo TIỀN TỐ 200 ký tự rồi
 kiểm cwd, nên hash lệch (bản build khác) vẫn tìm được; `install` dùng lại thư mục cùng tiền tố đã có ở đích nếu cwd khớp.
@@ -39,7 +43,7 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
-from .pathmap import PathMap
+from .pathmap import PathMap, is_abs
 
 SECTION = "claude"
 PREFIX = "claude/"
@@ -449,7 +453,7 @@ def session_map(pm: PathMap, idx: dict[str, Any], target: Path) -> PathMap:
     """Bản đồ đường dẫn cho transcript: bản đồ của hub + claude home nguồn → claude home đích."""
     pairs = list(pm.pairs)
     src = idx.get("claude_home")
-    if isinstance(src, str) and os.path.isabs(src):
+    if isinstance(src, str) and is_abs(src):  # PR4: claude home nguồn có thể là `C:\\Users\\x\\.claude`
         pairs.append((src, str(target)))
     return PathMap(pairs)
 
@@ -501,7 +505,7 @@ def _run(stage_claude: Path, target: Path, pm: PathMap, *, apply: bool) -> tuple
             if sid in existing:
                 rep["conflicts"].append(sid)
                 continue
-            cwd = e.get("cwd") if isinstance(e.get("cwd"), str) and os.path.isabs(e.get("cwd") or "") else None
+            cwd = e.get("cwd") if isinstance(e.get("cwd"), str) and is_abs(e.get("cwd") or "") else None
             if cwd is None:
                 rep["cwd_unknown"].append(sid)
                 pd = str(e.get("project_dir") or "")
@@ -509,7 +513,7 @@ def _run(stage_claude: Path, target: Path, pm: PathMap, *, apply: bool) -> tuple
                     continue
                 dest_dir = root / pd
             else:
-                dest_dir = project_dir_for(root, spm.rewrite(cwd))
+                dest_dir = project_dir_for(root, spm.rewrite(cwd, syntax="text"))
             rep["sessions"] += 1
             for r in rels:
                 src = Path(stage_claude).joinpath(*r.split("/"))

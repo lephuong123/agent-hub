@@ -32,7 +32,8 @@ blob/file trên đĩa lúc quét file (rollback ở máy đích còn đủ blob)
 trong gói. Một thay đổi lọt giữa hai lần chụp chỉ làm file MỚI hơn DB một bước — ledger coi là sửa ngoài ledger (không tự rollback đè).
 
 NHẬP CHỈ ngoại tuyến từ CLI của người (không có RPC): daemon đích dừng (giữ `daemon.lock` suốt quá trình), không trong run của agent →
-kiểm gói (tên phần tử an toàn, sha256 từng phần, `user_version` ≤ mã đang chạy, cùng kiểu đường dẫn hệ điều hành) → home đích phải trống
+kiểm gói (tên phần tử an toàn, sha256 từng phần, `user_version` ≤ mã đang chạy; PR4: tên file tạo được ở máy đích — `transfer_os`, khác
+hệ điều hành được: `pathmap` đổi kiểu đường dẫn POSIX ↔ Windows) → home đích phải trống
 (hoặc `replace` → chụp bản `pre-restore` bằng backup trước) → giải nén vào `HUB_HOME/.import-<id>/` (stage) → viết lại đường dẫn TRÊN STAGE
 bằng `pathmap` (HUB_HOME nguồn → đích, `$HOME` nguồn → đích, `--map-path`; bảng append-only + cột lịch sử giữ nguyên; bảng tri thức graph
 `mem_*` không sửa tay) → dọn trạng thái của máy cũ (`MACHINE_STATE`), run `running|queued` → `interrupted`, áp chế độ (`clone` mặc định:
@@ -70,9 +71,10 @@ from typing import TYPE_CHECKING, Any, BinaryIO, Iterable, Iterator
 
 from . import __version__
 from . import backup as B
+from . import transfer_os as TO
 from . import transfer_sessions as TS
 from .errors import Conflict, HubError, NotFound
-from .pathmap import SCAN_SKIP_DIRS, PathMap, db_count_matches, db_rewrite, rewrite_files, scan_files
+from .pathmap import SCAN_SKIP_DIRS, PathMap, db_count_matches, db_rewrite, is_abs, rewrite_files, scan_files
 from .paths import HubPaths
 from .secrets import NAME_RE as SECRET_RE  # tên secret thật (không tính `.meta.json`, file tạm)
 
@@ -503,14 +505,19 @@ def check_manifest(m: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
                       f"lên ≥ {src.get('cfharness_version') or 'bản của máy nguồn'} trước")
     elif not isinstance(uv, int):
         errors.append("manifest: thiếu user_version của hub.db")
-    if src.get("sep") not in (None, os.sep):
-        errors.append(f"gói xuất từ hệ điều hành khác ({src.get('os')}) — nhập khác hệ điều hành chưa hỗ trợ ở bản này")
+    if src.get("sep") not in (None, "/", "\\"):
+        errors.append("manifest: source.sep không hợp lệ")
     return errors, warnings, skip_prefixes
 
 
-def verify_package(pkg: Path, *, extract_to: Path | None = None, tmp_parent: Path | None = None) -> dict[str, Any]:
+def verify_package(pkg: Path, *, extract_to: Path | None = None, tmp_parent: Path | None = None, renames: dict[str, str] | None = None,
+                   no_extract: Iterable[str] = ()) -> dict[str, Any]:
     """Kiểm gói: manifest hợp lệ, MỌI phần tử là file thường có tên an toàn + có trong manifest, sha256 nội dung gốc khớp, không
-    thiếu/thừa, `hub.db` qua `PRAGMA integrity_check` và `user_version` khớp manifest. `extract_to`: giải nén luôn (stage)."""
+    thiếu/thừa, `hub.db` qua `PRAGMA integrity_check` và `user_version` khớp manifest. `extract_to`: giải nén luôn (stage).
+    PR4: `renames` (đường dẫn trong stage → tên mới hợp lệ ở máy đích) và `no_extract` (đường dẫn trong stage KHÔNG ghi ra — tên không
+    tạo được ở đích) theo `transfer_os.plan_names`; phần tử vẫn được đọc + kiểm sha256 như thường."""
+    renames = renames or {}
+    skip_rel = set(no_extract)
     pkg = Path(pkg)
     if not pkg.is_file():
         raise NotFound(f"không có file gói {pkg}")
@@ -570,7 +577,12 @@ def verify_package(pkg: Path, *, extract_to: Path | None = None, tmp_parent: Pat
                 if mem.name == DB_MEMBER:
                     dest: Path | None = db_tmp
                 else:
-                    dest = (extract_to.joinpath(*dest_rel.parts)) if extract_to is not None else None
+                    rel_s = dest_rel.as_posix()
+                    if rel_s in skip_rel:
+                        dest = None
+                    else:
+                        dest_rel = PurePosixPath(renames.get(rel_s, rel_s))
+                        dest = (extract_to.joinpath(*dest_rel.parts)) if extract_to is not None else None
                 ok = _copy_member(src, bool(meta.get("gz")), int(meta.get("size") or 0), dest)
                 if ok is None:
                     errors.append(f"nội dung giải nén lớn hơn manifest khai báo: {mem.name}")
@@ -637,23 +649,26 @@ def parse_map_paths(items: Iterable[str]) -> list[tuple[str, str]]:
             raise ValueError(f"--map-path phải dạng CŨ=MỚI: {it!r}")
         old, new = str(it).split("=", 1)
         old, new = old.strip(), new.strip()
-        if not os.path.isabs(old) or not os.path.isabs(new):
+        if not is_abs(old) or not is_abs(new):  # PR4: cả kiểu POSIX lẫn Windows (`C:\\…`), bất kể máy đang chạy
             raise ValueError(f"--map-path cần đường dẫn tuyệt đối ở cả hai phía: {it!r}")
         out.append((old, new))
     return out
 
 
-def build_pathmap(manifest: dict[str, Any], home: Path, user_home: Path, maps: Iterable[tuple[str, str]] = ()) -> PathMap:
-    """`$HOME` nguồn → `$HOME` đích, HUB_HOME nguồn (cả realpath) → HUB_HOME đích, rồi `--map-path` (ghi đè cặp trùng)."""
+def build_pathmap(manifest: dict[str, Any], home: Path | str, user_home: Path | str, maps: Iterable[tuple[str, str]] = (),
+                  extra: Iterable[tuple[str, str]] = ()) -> PathMap:
+    """`$HOME` nguồn → `$HOME` đích, HUB_HOME nguồn (cả realpath) → HUB_HOME đích, `extra` (mục đổi tên do tên file không hợp lệ ở
+    đích — PR4), rồi `--map-path` (ghi đè cặp trùng). Mỗi phía có thể là POSIX hoặc Windows (`pathmap` tự đổi kiểu phần đuôi)."""
     roots = manifest.get("path_roots") if isinstance(manifest.get("path_roots"), dict) else {}
     pairs: list[tuple[str, str]] = []
     uh = str(roots.get("user_home") or "")
-    if uh and os.path.isabs(uh):
+    if uh and is_abs(uh):
         pairs.append((uh, str(user_home)))
     for k in ("hub_home", "hub_home_real"):
         v = str(roots.get(k) or "")
-        if v and os.path.isabs(v):
+        if v and is_abs(v):
             pairs.append((v, str(home)))
+    pairs += list(extra)
     pairs += list(maps)
     return PathMap(pairs)
 
@@ -798,44 +813,45 @@ def _adjust_config(stage: Path, mode: str, *, apply: bool) -> list[str]:
     return changed
 
 
-def _mcp_missing_commands(db: Path, pm: PathMap) -> list[dict[str, str]]:
-    """MCP stdio có `command` không tìm thấy ở máy này (sau khi đổi đường dẫn) — chỉ báo, không sửa."""
-    out: list[dict[str, str]] = []
-    try:
-        c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    except sqlite3.Error:  # pragma: no cover
-        return out
-    try:
-        if "mcp_servers" not in _tables(c):
-            return out
-        cols = {x[1] for x in c.execute("PRAGMA table_info(mcp_servers)")}
-        if not {"name", "config"} <= cols:
-            return out
-        where = " WHERE deleted_at IS NULL" if "deleted_at" in cols else ""
-        rows = c.execute(f"SELECT name, config FROM mcp_servers{where}").fetchall()
-    except sqlite3.Error:
-        return out
-    finally:
-        c.close()
-    for name, conf in rows:
-        try:
-            cmd = (json.loads(conf) or {}).get("command")
-        except (TypeError, ValueError):
+def _stage_rels(manifest: dict[str, Any]) -> list[str]:
+    """Đường dẫn trong stage của mọi phần tử sẽ giải nén (theo manifest) — đầu vào kiểm tên file ở máy đích (PR4)."""
+    out: list[str] = []
+    for f in manifest.get("files") or []:
+        name = f.get("path") if isinstance(f, dict) else None
+        if not isinstance(name, str) or name in (DB_MEMBER, SECRETS_MEMBER):
             continue
-        if not cmd or not isinstance(cmd, str):
-            continue
-        cmd2 = pm.rewrite(cmd)
-        found = os.path.exists(cmd2) if os.path.isabs(cmd2) else shutil.which(cmd2) is not None
-        if not found:
-            out.append({"server": str(name), "command": cmd2})
+        d = _member_dest(name)
+        if d is not None:
+            out.append(d.as_posix())
     return out
 
 
+def _target(paths: HubPaths, target_os: str | None, case_insensitive: bool | None) -> tuple[str, bool]:
+    tos = TO.default_target_os(target_os)
+    ci = TO.fs_case_insensitive(paths.home) if case_insensitive is None else bool(case_insensitive)
+    return tos, ci
+
+
+def _import_map(m: dict[str, Any], paths: HubPaths, user_home: Path | str, maps: list[tuple[str, str]],
+                names: dict[str, Any]) -> PathMap:
+    """Bản đồ đường dẫn của lần nhập + cặp cho mục bị đổi tên (đích tính theo chính bản đồ: `--map-path` cho HUB_HOME cũng áp)."""
+    pm = build_pathmap(m, paths.home, user_home, maps)
+    if not names.get("renames"):
+        return pm
+    src_home = str((m.get("path_roots") or {}).get("hub_home") or "")
+    if not is_abs(src_home):
+        return pm
+    extra = TO.rename_pairs(names["renames"], src_home, pm.rewrite(src_home, syntax="text"))
+    return build_pathmap(m, paths.home, user_home, maps, extra=extra)
+
+
 def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *, apply: bool, extra: dict[str, Any] | None = None,
-                claude_target: Path | None = None) -> dict[str, Any]:
+                claude_target: Path | None = None, target_os: str = "posix", names: dict[str, Any] | None = None) -> dict[str, Any]:
     """Phần dùng chung giữa dry-run và nhập thật — trên STAGE (đã giải nén, đã kiểm sha). Session Claude (PR3) chỉ LẬP KẾ HOẠCH ở đây
-    (đếm, sid trùng); ghi thật ở `import_package` sau khi hub.db đã vào chỗ."""
+    (đếm, sid trùng); ghi thật ở `import_package` sau khi hub.db đã vào chỗ. PR4: đổi tên skill (DB + frontmatter) theo `names`, đánh dấu
+    MCP stdio thiếu lệnh (`transfer_os`)."""
     db = stage / DB_MEMBER
+    names = names or {}
     rep: dict[str, Any] = {}
     rep["claude_sessions"] = TS.plan(stage / TS.STAGE_DIR, claude_target if claude_target is not None else TS.claude_home(), pm)
     rep["db_rewrite"] = db_rewrite(db, pm, apply=apply, skip_tables=KNOWLEDGE_TABLES)
@@ -845,12 +861,27 @@ def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *
     rep["review"] = review
     if apply and files_rw:
         rewrite_files(stage, files_rw, pm, db=db)
+    renamed = [{"from": k, "to": v} for k, v in sorted((names.get("renames") or {}).items())]
+    rep["renamed"] = renamed
+    rep["skills_renamed"] = list(names.get("skills") or [])
+    rep["names_skipped"] = list(names.get("skipped") or [])
+    if apply and rep["skills_renamed"]:
+        TO.apply_skill_renames(stage, db, rep["skills_renamed"])
     rep["config_changed"] = _adjust_config(stage, mode, apply=apply)
-    rep["mcp_missing"] = _mcp_missing_commands(db, pm)
+    rep["mcp_missing"] = TO.mcp_missing(db, None if apply else pm, target_os=target_os)  # type: ignore[arg-type]
+    if apply:
+        TO.mark_mcp(db, rep["mcp_missing"])
     followups = None
-    if review or rep["knowledge_rows_with_old_paths"]:
+    if review or rep["knowledge_rows_with_old_paths"] or renamed or rep["mcp_missing"]:
         followups = {"files": review, "graph_rows": rep["knowledge_rows_with_old_paths"], "map": pm.as_list(), "status": "pending",
                      "note": "tri thức thuộc ledger còn đường dẫn máy cũ — chưa tự viết lại (người sửa qua ledger)"}
+        if renamed:
+            followups["renamed"] = renamed
+            followups["skills_renamed"] = [{k: s[k] for k in ("scope", "owner", "old", "new")} for s in rep["skills_renamed"]]
+            followups["renamed_note"] = ("tên file/skill không hợp lệ ở máy đích — đã đổi trong lúc nhập (KHÔNG qua ledger: hàng ledger/lịch sử "
+                                         "giữ tên cũ); tham chiếu theo tên cũ trong SKILL.md/memory cần người sửa")
+        if rep["mcp_missing"]:
+            followups["mcp_missing"] = rep["mcp_missing"]
     rep.update(_adjust_db(db, mode=mode, apply=apply, manifest=manifest, followups=followups, extra=extra))
     return rep
 
@@ -913,27 +944,79 @@ def _secrets_plan(m: dict[str, Any], blob: bytes | None, mode: str, passphrase: 
     return out
 
 
+def _names(pkg: Path, target_os: str, ci: bool) -> dict[str, Any]:
+    """Kế hoạch tên file ở máy đích (`transfer_os.plan_names`) từ manifest — TRƯỚC khi giải nén. Manifest hỏng → rỗng (verify báo lỗi)."""
+    try:
+        m = read_manifest(Path(pkg))
+    except (HubError, OSError):
+        m = {}
+    return TO.plan_names(_stage_rels(m), target_os=target_os, case_insensitive=ci)  # type: ignore[arg-type]
+
+
+def _no_extract(names: dict[str, Any]) -> list[str]:
+    return [x["path"] for x in (*names["refused"], *names["skipped"])]
+
+
+def _names_blockers(names: dict[str, Any]) -> list[str]:
+    ref = names["refused"]
+    if not ref:
+        return []
+    where = "Windows" if names["checked"]["windows"] else "máy này (hệ thống file không phân biệt hoa/thường)"
+    head = "; ".join(x["reason"] for x in ref[:5]) + (f"; … (+{len(ref) - 5})" if len(ref) > 5 else "")
+    return [f"{len(ref)} file có tên không tạo được trên {where} và không thuộc tri thức đổi tên được: {head} — đổi tên ở máy nguồn rồi xuất lại"]
+
+
+def _names_warnings(names: dict[str, Any]) -> list[str]:
+    out = []
+    if names["renames"]:
+        sk = names["skills"]
+        out.append(f"{len(names['renames'])} file tri thức có tên không hợp lệ ở máy này → đổi tên khi nhập"
+                   + (f" (skill: {', '.join(s['old'] + ' → ' + s['new'] for s in sk[:5])})" if sk else "")
+                   + " — ghi vào hub_state.import_followups.renamed")
+    if names["skipped"]:
+        out.append(f"bỏ {len(names['skipped'])} file session Claude có tên không tạo được ở máy này: "
+                   + "; ".join(x["reason"] for x in names["skipped"][:3]))
+    return out
+
+
+def _stage_config(stage: Path) -> Any:
+    try:
+        from .config import HubConfig
+
+        return HubConfig(stage / "config.yaml")
+    except Exception:  # config.yaml hỏng không được chặn kế hoạch
+        return None
+
+
 def import_plan(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] = (), mode: str = DEFAULT_MODE,
                 user_home: Path | None = None, passphrase: str | None = None, skip_secrets: bool = False,
-                claude_home: Path | None = None) -> dict[str, Any]:
+                claude_home: Path | None = None, target_os: str | None = None, case_insensitive: bool | None = None) -> dict[str, Any]:
     """Kế hoạch nhập (KHÔNG ghi gì vào home đích): kiểm gói, bản đồ đường dẫn, số giá trị/file sẽ viết lại, trạng thái sẽ dọn,
     run/task/lịch bị ảnh hưởng, MCP thiếu lệnh, secret phải đặt lại, home đích có trống không. Giải nén vào thư mục tạm riêng.
-    `passphrase` → thử giải mã `secrets.enc` (sai → blocker). Không bao giờ trả giá trị secret."""
+    `passphrase` → thử giải mã `secrets.enc` (sai → blocker). Không bao giờ trả giá trị secret.
+    PR4: `target_os` ("posix"|"windows", mặc định OS đang chạy) + `case_insensitive` (mặc định dò hệ thống file của home đích, không ghi)
+    → kiểm tên file (đổi tên tri thức / từ chối file khác), MCP thiếu lệnh, cảnh báo theo OS (`transfer_os`)."""
     if mode not in MODES:
         raise HubError(f"--mode '{mode}' không hợp lệ (clone|move)", code=-32602)
     pkg = Path(pkg).expanduser()
     maps = list(maps)
+    tos, ci = _target(paths, target_os, case_insensitive)
+    names = _names(pkg, tos, ci)
+    uh = user_home or Path.home()
     tmp = Path(tempfile.mkdtemp(prefix="cfharness-import-plan-"))
     os.chmod(tmp, 0o700)
     try:
-        v = verify_package(pkg, extract_to=tmp)
+        v = verify_package(pkg, extract_to=tmp, renames=names["renames"], no_extract=_no_extract(names))
         m = v.get("manifest") or {}
         blockers = list(v["errors"])
         warnings = list(v["warnings"])
-        pm = build_pathmap(m, paths.home, user_home or Path.home(), maps)
+        blockers += _names_blockers(names)
+        warnings += _names_warnings(names)
+        pm = _import_map(m, paths, uh, maps, names)
         work: dict[str, Any] = {}
         if v["ok"]:
-            work = _stage_work(tmp, m, pm, mode, apply=False, claude_target=claude_home)
+            work = _stage_work(tmp, m, pm, mode, apply=False, claude_target=claude_home, target_os=tos, names=names)
+            warnings += TO.os_warnings(m, target_os=tos, pm=pm, home=paths.home, user_home=Path(uh), config=_stage_config(tmp))
             cs = work.get("claude_sessions") or {}
             if cs.get("conflicts"):
                 warnings.append(f"{len(cs['conflicts'])} session Claude đã có ở máy này (trùng id) — giữ bản của máy này, không nhập bản trong gói")
@@ -965,14 +1048,16 @@ def import_plan(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] =
                 "created_at": m.get("created_at"), "mode": mode, "target_home": str(paths.home), "home_blank": blank,
                 "verify": {k: v[k] for k in ("ok", "errors", "warnings", "files", "integrity", "user_version") if k in v},
                 "path_map": pm.as_list(), "blockers": blockers, "warnings": warnings, "missing_secrets": sec["missing"], "secrets": sec,
-                "machine_state": list(MACHINE_STATE), "space_needed": need, **work}
+                "machine_state": list(MACHINE_STATE), "space_needed": need, "target_os": tos, "case_insensitive": ci,
+                "names_refused": names["refused"], **work}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] = (), mode: str = DEFAULT_MODE, replace: bool = False,
                    user_home: Path | None = None, cfg: dict[str, Any] | None = None, passphrase: str | None = None,
-                   skip_secrets: bool = False, claude_home: Path | None = None) -> dict[str, Any]:
+                   skip_secrets: bool = False, claude_home: Path | None = None, target_os: str | None = None,
+                   case_insensitive: bool | None = None) -> dict[str, Any]:
     """Nhập gói vào `paths.home`. Gọi từ CLI của người khi daemon đích ĐÃ dừng (giữ `daemon.lock` suốt quá trình).
 
     Gói có `secrets.enc`: cần `passphrase` (hoặc `skip_secrets`) — giải mã NGAY sau khi kiểm gói, TRƯỚC mọi ghi vào home (sai → từ chối,
@@ -980,7 +1065,9 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
     Session Claude Code (PR3, phần `claude/`) ghi vào `<claude home>/projects/<encode_cwd(cwd mới)>/` SAU khi hub.db vào chỗ, TRƯỚC secret —
     cả ở chế độ `clone` (hội thoại điều phối viên tiếp tục ở máy mới); sid đã có → giữ của máy này.
     Lỗi bất kỳ sau khi bắt đầu ghi vào home → tự hoàn tác (gồm cả file session vừa ghi): `replace` → khôi phục bản `pre-restore` vừa chụp; home trống → gỡ những gì đã
-    ghi. Báo lỗi kèm `data.rolled_back` (và lệnh khôi phục tay nếu chính bước hoàn tác hỏng)."""
+    ghi. Báo lỗi kèm `data.rolled_back` (và lệnh khôi phục tay nếu chính bước hoàn tác hỏng).
+    PR4 (khác OS / hệ thống file): tên file kiểm TRƯỚC khi giải nén (`target_os`, `case_insensitive` như `import_plan`) — file không tạo
+    được ở đích mà không thuộc tri thức → từ chối, chưa ghi gì; tri thức → đổi tên trong stage."""
     from . import transfer_secrets as S
     from .daemon import acquire_instance_lock, release_instance_lock
 
@@ -1000,9 +1087,14 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
         if not blank and not replace:
             raise Conflict(f"home đích {paths.home} không trống (đã có hub.db/tri thức/secret) — dùng --replace (hiện trạng được chụp "
                            "thành bản sao lưu pre-restore trước khi ghi đè) hoặc chọn --home khác")
+        tos, ci = _target(paths, target_os, case_insensitive)
+        names = _names(pkg, tos, ci)
+        nb = _names_blockers(names)
+        if nb:
+            raise HubError("gói không nhập được vào máy này: " + nb[0], data={"names_refused": names["refused"]})
         stage = Path(tempfile.mkdtemp(prefix=".import-", dir=paths.home))
         try:
-            v = verify_package(pkg, extract_to=stage)
+            v = verify_package(pkg, extract_to=stage, renames=names["renames"], no_extract=_no_extract(names))
             if not v["ok"]:
                 raise HubError("gói không qua kiểm tra: " + "; ".join(v["errors"][:3]), data={"verify": {k: v[k] for k in ("errors", "warnings")}})
             m = v["manifest"]
@@ -1012,10 +1104,10 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
                 if passphrase is None:
                     raise HubError("gói có secret mã hoá — cần passphrase (hoặc --skip-secrets để nhập phần còn lại)", code=-32602)
                 payload = S.decrypt(m, v["secrets_blob"], passphrase)  # sai → HubError, chưa ghi gì vào home
-            pm = build_pathmap(m, paths.home, user_home or Path.home(), maps)
+            pm = _import_map(m, paths, user_home or Path.home(), maps, names)
             info = {"secrets_imported": len(sec["import"]), "secrets_skipped_mode": len(sec["skip_mode"]), "secrets_missing": sec["missing"]}
             chome = Path(claude_home) if claude_home is not None else TS.claude_home()
-            rep = _stage_work(stage, m, pm, mode, apply=True, extra=info, claude_target=chome)
+            rep = _stage_work(stage, m, pm, mode, apply=True, extra=info, claude_target=chome, target_os=tos, names=names)
             c = sqlite3.connect(str(stage / DB_MEMBER))
             try:
                 integ = str(c.execute("PRAGMA integrity_check").fetchone()[0])
@@ -1043,6 +1135,7 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
                 sess_rep, sess_created = TS.install(stage / TS.STAGE_DIR, chome, pm)
                 if payload is not None:
                     sec_rep, undo = S.apply(paths.home, payload, mode=mode)
+                paths.tighten_permissions()  # POSIX: bỏ quyền group/other còn sót; Windows: không làm gì (ACL hồ sơ người dùng — oscompat)
             except BaseException as e:
                 S.rollback(undo)
                 TS.rollback(sess_created)
@@ -1059,7 +1152,7 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
             "secrets": {"imported": sec_rep["imported"], "skipped_mode": sec_rep["skipped_mode"], "kept_target": sec_rep["kept_target"],
                         "missing": sec["missing"], "skipped": bool(skip_secrets and sec["present"]),
                         "totp": bool(sec_rep.get("totp")), "mcp_tokens": bool(sec_rep.get("mcp_tokens"))}, **rep,
-            "claude_sessions": sess_rep}
+            "claude_sessions": sess_rep, "target_os": tos, "case_insensitive": ci}
 
 
 def _rollback_import(paths: HubPaths, pre: dict[str, Any] | None, blank: bool, runs_moved: list[Path], err: BaseException) -> None:

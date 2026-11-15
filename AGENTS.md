@@ -600,8 +600,9 @@ Chi tiết, danh sách gồm/bỏ, giới hạn: `docs/dev-notes/backup.md`. Kh�
 - Cập nhật: `update.start` tạo bản `pre-update` trước khi chạy helper; helper (chỉ stdlib) dò `hub.ping`, không lên → cài lại bản cũ + khôi phục hub.db
   khi `user_version` đã tăng; `cfharness update --rollback` (RPC `update.rollback`). Pha mới của helper mà daemon phải chờ → `daemon._UPDATE_BUSY_PHASES`.
 
-## Xuất / nhập toàn bộ hub sang máy khác — `hub_transfer.py` (PR1–PR3 của `docs/dev-notes/plan-hub-clone.md`)
-Không migration. Test: `tests/test_hub_transfer.py`, `tests/test_hub_transfer_secrets.py`, `tests/test_hub_transfer_sessions.py`.
+## Xuất / nhập toàn bộ hub sang máy khác — `hub_transfer.py` (PR1–PR4 của `docs/dev-notes/plan-hub-clone.md`)
+Không migration. Test: `tests/test_hub_transfer.py`, `tests/test_hub_transfer_secrets.py`, `tests/test_hub_transfer_sessions.py`,
+`tests/test_hub_transfer_cross_os.py`.
 - `hub_transfer.py`: gói `.cfhx` (tar không nén ngoài, từng phần tử gzip riêng, `MANIFEST.json` cuối, sha256 nội dung gốc, `sections` có `prefix`
   — phần mới thêm sau là mục `sections` mới, bản cũ bỏ qua phần `optional`). Xuất = RPC `hub.export` (HUMAN_ONLY, tự audit; làm lặng bằng
   `RunManager.quiesced` rồi thả trong `finally`) hoặc ngoại tuyến (giữ `daemon.lock`); chỉ ghi vào `HUB_HOME/exports/`. Nhập CHỈ ngoại tuyến từ CLI
@@ -626,6 +627,16 @@ Không migration. Test: `tests/test_hub_transfer.py`, `tests/test_hub_transfer_s
   `CFHARNESS_TEST_CLAUDE_HOME` (conftest trỏ thư mục tạm — test KHÔNG đụng `~/.claude` thật). Nhập: `encode_cwd(pathmap(cwd))` (quy tắc
   Claude Code: đơn vị UTF-16 ngoài `[A-Za-z0-9]` → `-`, > 200 → cắt + `-`base36(hash Java); đổi quy tắc → sửa `encode_cwd` + fixture tên
   thật trong test), viết lại từng dòng JSON, `O_EXCL` 0600 / thư mục mới 0700, sid trùng → bỏ; ghi SAU hub.db, TRƯỚC secret, có hoàn tác.
+- PR4 khác OS (§5b): `pathmap.PathMap` biết CẢ HAI kiểu bất kể OS đang chạy (kiểu suy từ chuỗi: `path_style`; KHÔNG dùng `IS_WINDOWS`);
+  cặp Windows khớp dạng thô/JSON-escape/`C:/…`, ổ đĩa không phân biệt hoa/thường; khác kiểu → sau tiền tố đổi dấu phân cách CHỈ ở phần đuôi
+  của token đường dẫn (`_tail_end`: dừng ở khoảng trắng — trừ đoạn tương đối kiểu `Application Support/x` —, nháy, `<>|,;:&`, `\` lạ,
+  ngoặc đóng lẻ); POSIX → Windows trong JSON (giá trị DB là JSON hợp lệ, file `.json`) / nháy kép YAML → dạng `\\`. POSIX → POSIX giữ
+  đúng hành vi cũ (`home migrate`). Kiểm tuyệt đối đa kiểu: `pathmap.is_abs` (không `os.path.isabs`). `transfer_os.py`: mọi hàm nhận
+  `target_os` làm THAM SỐ (test mô phỏng Windows trên macOS); `plan_names` kiểm tên phần tử TRƯỚC khi giải nén (Windows: `<>:"|?*`, điều
+  khiển, CON/NUL/COM1…, đuôi `.`/khoảng trắng; ổ không phân biệt hoa/thường — `fs_case_insensitive` dò không ghi): tri thức (bên trong
+  `skills/`, `.archive/`, mục `trash/`) → đổi tên tất định trong STAGE (thư mục skill giữ `NAME_RE`: `con` → `con-skill`; `skills.name|path`,
+  frontmatter; KHÔNG qua ledger) + `import_followups.renamed`; `claude/` → bỏ file; còn lại → từ chối cả gói trước khi ghi. MCP stdio thiếu
+  lệnh (mọi lần nhập) → `probe_error` "[hub] …" (không có cột bật/tắt). Thêm vùng tri thức đổi tên được → `transfer_os._kind` + ca test.
 - Bất biến: gói không bao giờ chứa `checkpoints/`, `auth/web.json`/thiết bị, `secrets/` dạng rõ, session Claude không thuộc hub; thêm trạng thái gắn với máy vào `hub_state` →
   thêm khoá vào `hub_transfer.MACHINE_STATE` (hoặc `CLONE_STATE`) + ca trong test. `exports/`/`imports/` ∈ `backup.EXCLUDED`, sandbox
   denyRead/denyWrite, `sensitive_read`.

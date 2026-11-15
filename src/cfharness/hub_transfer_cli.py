@@ -208,8 +208,17 @@ def _plan_text(p: dict[str, Any]) -> str:
             out.append(f"  {len(cs['cwd_unknown'])} session không rõ thư mục làm việc gốc — đặt vào thư mục project cũ")
     if p.get("approvals_cancelled") or p.get("questions_cancelled"):
         out.append(f"Huỷ (nhân bản — chưa chạy lại): {p.get('approvals_cancelled', 0)} yêu cầu duyệt, {p.get('questions_cancelled', 0)} câu hỏi đang chờ")
+    if p.get("target_os"):
+        out.append(f"Máy đích: {p['target_os']}" + (" · hệ thống file KHÔNG phân biệt hoa/thường" if p.get("case_insensitive") else ""))
+    for r in (p.get("renamed") or [])[:10]:
+        out.append(f"  đổi tên (tên không hợp lệ ở máy này): {r['from']} → {r['to']}")
+    if len(p.get("renamed") or []) > 10:
+        out.append(f"  … và {len(p['renamed']) - 10} file khác")
+    for r in (p.get("names_refused") or [])[:10]:
+        out.append(f"  ✗ {r['reason']}")
     for m in p.get("mcp_missing") or []:
-        out.append(f"! MCP '{m['server']}': không thấy lệnh {m['command']} ở máy này — sửa bằng `cfharness mcp edit {m['server']}`")
+        out.append(f"! MCP '{m['server']}': lệnh {m['command']} ({m.get('reason') or 'không thấy ở máy này'}) — nhập ở trạng thái ĐÁNH DẤU lỗi; "
+                   f"sửa bằng `cfharness mcp edit {m['server']}`")
     for w in p.get("warnings") or []:
         out.append(f"! {w}")
     return "\n".join(out)
@@ -319,6 +328,11 @@ def _import(ctx: Any) -> int:
     if r["mode"] == "clone":
         lines.append("Nhân bản: Telegram/Slack đã tắt (cần bot RIÊNG cho máy này: `cfharness notify telegram setup`), lịch đã tạm dừng "
                      "(`cfharness schedule list` rồi bật lịch cần chạy), task đang dở đã bị chặn (`cfharness task unblock <id>`).")
+    if r.get("renamed"):
+        lines.append(f"Đổi tên {len(r['renamed'])} file tri thức không hợp lệ ở máy này (xem hub_state.import_followups.renamed)"
+                     + (": skill " + ", ".join(f"{s['old']} → {s['new']}" for s in r.get("skills_renamed") or []) if r.get("skills_renamed") else ""))
+    if r.get("mcp_missing"):
+        lines.append("MCP thiếu lệnh (đã đánh dấu lỗi): " + ", ".join(f"cfharness mcp edit {m['server']}" for m in r["mcp_missing"][:6]))
     if r.get("review"):
         lines.append(f"Tri thức còn đường dẫn máy cũ (chưa tự sửa): {', '.join(r['review'][:5])}{'…' if len(r['review']) > 5 else ''}")
     if running:

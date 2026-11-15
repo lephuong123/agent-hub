@@ -257,3 +257,22 @@ Không migration DB (trạng thái ở `hub_state`). Ước lượng: PR1 lớn 
   dạng thô trong file không phải JSON lines không bị che. (3) File ngoài `.jsonl` trong cây `<sid>/` (tool-results) chép nguyên, không đổi
   đường dẫn. (4) Không có cờ `--no-sessions`. (5) Không kiểm `claude --resume` thật (fake_claude không mô phỏng tra file) — có hàm hợp đồng
   `find_session` + test; nghiệm thu thật với claude chưa làm. Windows (`C:\…` → `C--…`) mới suy từ mã, chờ spike PR4.
+- **PR4** (2026-11-15): khác hệ điều hành, hai chiều — `pathmap.py` (hai phía), `transfer_os.py` (tên file, MCP, cảnh báo theo OS).
+  Bộ viết lại: mỗi cặp `cũ → mới` sinh các DẠNG của đường dẫn cũ (POSIX: một dạng; Windows: thô `C:\a`, JSON-escape `C:\\a`, `C:/a`, ổ đĩa
+  không phân biệt hoa/thường), một regex hợp mọi dạng (dài trước, ranh giới như cũ); khớp dạng KHÁC kiểu với đích → quét tiếp phần đuôi của
+  token đường dẫn (`_tail_end`) và chỉ đổi dấu phân cách trong đó. POSIX → Windows cần biết ngữ cảnh: chuỗi là JSON hợp lệ / file `.json` →
+  dạng `\\`; YAML → `\\` khi trong nháy kép; còn lại dạng thô. DB/file cấu hình/transcript dùng chung bộ này. Không đổi format gói.
+  Lệch/chốt so với plan: (1) đổi tên skill/tri thức KHÔNG qua ledger — đổi trong stage (thư mục, `skills.name|path`, `name:` frontmatter)
+  + `import_followups.renamed|skills_renamed`: rename qua ledger = xoá + tạo lại skill (mất use_count/pin, hàng ledger cũ trỏ tên cũ) — quá
+  lớn cho trường hợp hiếm này; ledger/lịch sử giữ tên cũ, tham chiếu theo tên cũ trong nội dung SKILL.md/memory người tự sửa.
+  (2) "nhập ở trạng thái tắt" cho MCP: registry không có trạng thái bật/tắt (thêm = migration) → ĐÁNH DẤU `probe_error` + followups +
+  gợi ý `mcp edit`; agent dùng server đó vẫn chạy (Claude Code báo MCP không kết nối). (3) Tên không hợp lệ trong `claude/` → bỏ file
+  (phần optional), không chặn. (4) Quyền file Windows: không có ACL riêng — dùng mô hình sẵn có của `oscompat` (hồ sơ người dùng NTFS),
+  `paths.tighten_permissions()` sau nhập (POSIX siết, Windows bỏ qua) + cảnh báo khi HUB_HOME Windows nằm ngoài hồ sơ. (5) Không có tham số
+  CLI `--target-os` (luôn là OS đang chạy); `import_plan|import_package(target_os=, case_insensitive=)` chỉ cho test/web sau này.
+  (6) Không chạy CI Windows ở PR này.
+  **CHƯA kiểm trên Windows thật**: quy tắc thư mục session `C:\Users\x\…` → `C--Users-x-…` (suy từ mã Claude Code, không spike `claude`
+  Windows); `claude --resume` thật sau khi nhập sang Windows; giải nén/đổi tên trên NTFS (test chỉ mô phỏng: đích Windows = tham số +
+  `--map-path` sang `C:\Users\b\…`, file vẫn ghi vào thư mục tạm macOS; ca `skipif` `test_invalid_reason_agrees_with_real_windows_fs` chỉ
+  chạy trên Windows); `shutil.which` của lệnh MCP trần trên Windows (PATHEXT `.cmd`); đường dẫn UNC `\\máy\share` mới có test đơn vị; giới
+  hạn MAX_PATH 260 ký tự không kiểm; hub đích Windows đọc cấu hình YAML có đường dẫn `C:\…` dạng thô (đã kiểm `yaml.safe_load` trên macOS).
