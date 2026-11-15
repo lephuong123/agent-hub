@@ -427,3 +427,34 @@ def test_admin_shared_permission_deny_every_hub(tmp_path):
         deny = s["permissions"]["deny"]
         for t in ("Read", "Grep", "Glob", "Edit", "Write"):
             assert f"{t}(/{SHARED_ROOT}/**)" in deny, (trust, t)  # "//abs" = đường dẫn tuyệt đối trong luật Claude Code
+
+
+async def test_filehub_writes_human_only(home):
+    """Thư mục chung Không gian số (filehub/): agent trong run — kể cả đọc trộm token người — không setup/thêm/gỡ/tạm dừng được;
+    method ghi đã phân loại + bọc audit; CLI ghi bị classifier chặn; đọc trạng thái thì được."""
+    from cfharness.filehub.rpc import MUTATING_FILEHUB
+    from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI
+
+    for m in MUTATING_FILEHUB:
+        assert m in auth.HUMAN_ONLY and m not in auth.MANAGER_ALLOWED, m
+    assert set(MUTATING_FILEHUB) <= auth.all_mutating()
+    assert {"setup", "login", "add", "remove", "pause", "resume"} <= HUB_HUMAN_ONLY_CLI["filehub"]
+    for m in ("filehub.status", "filehub.list", "filehub.link"):
+        assert m not in auth.HUMAN_ONLY
+    d, srv = await _start(home)
+    try:
+        for m, prm in (("filehub.setup", {"server": "https://x.example", "binary": "/bin/sh"}), ("filehub.add", {"root_id": "r1", "local_path": "/tmp/x"}),
+                       ("filehub.pause", {})):
+            run_n, proc_n, go_n = await _start_run(d)
+            rr = await _in_run(go_n, _client_py(home, m, prm, steal_token=True))
+            resp = json.loads(rr["out"].strip().splitlines()[-1])
+            assert resp.get("error", {}).get("code") == -32003, (m, resp)
+            proc_n.wait(5)
+        run_n, proc_n, go_n = await _start_run(d)
+        rr = await _in_run(go_n, _client_py(home, "filehub.status", {}, steal_token=False))
+        assert "result" in json.loads(rr["out"].strip().splitlines()[-1])
+        proc_n.wait(5)
+        assert not d.hub.filehub.folders() and not d.hub.store.state_get("filehub.paused")
+        assert d.hub.config.get("filehub.server") is None
+    finally:
+        await _stop(d, srv)
