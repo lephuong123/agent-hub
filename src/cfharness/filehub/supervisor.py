@@ -194,10 +194,11 @@ class SyncSupervisor:
             self._task = None
         self.proc = None
         self.state = "stopped"
-        try:
-            self._save_pid(None, None)
-        except OSError:  # pragma: no cover
-            pass
+        if self.pidfile.exists():  # hub chưa từng bật filehub → không tạo HUB_HOME/filehub
+            try:
+                self._save_pid(None, None)
+            except OSError:  # pragma: no cover
+                pass
 
     def _backoff(self) -> float:
         lo, hi = (self.svc.cfg("restart_backoff_s") or [1, 300])[:2]
