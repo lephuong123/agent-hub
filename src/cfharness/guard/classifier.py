@@ -435,16 +435,17 @@ def match_always_mcp_tool(tool_name: str, ctx: GuardContext) -> dict[str, Any] |
 
 
 def match_always(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardContext) -> dict[str, Any] | None:
-    """Luật `exact`: cùng agent + cùng tool + cùng `action_fingerprint` (lệnh đã chuẩn hoá). Không có wildcard."""
+    """Luật `exact`: cùng agent (bắt buộc có agent_id) + cùng tool + cùng `action_fingerprint` (lệnh đã chuẩn hoá, kèm cwd với Bash).
+    Không có wildcard."""
     fp = None
     for r in ctx.always_allow:
         if not isinstance(r, dict) or r.get("kind") != "exact" or r.get("disabled"):
             continue
-        if r.get("agent_id") and r.get("agent_id") != ctx.agent_id:
-            continue
+        if not r.get("agent_id") or r.get("agent_id") != ctx.agent_id:
+            continue  # A3: luật thiếu agent_id (dữ liệu cũ/sửa tay) KHÔNG khớp agent nào
         if r.get("tool") != tool_name:
             continue
-        fp = fp or action_fingerprint(tool_name, tool_input)
+        fp = fp or action_fingerprint(tool_name, tool_input, ctx.cwd)
         if r.get("fingerprint") == fp:
             return r
     return None
@@ -1545,6 +1546,13 @@ class BashAnalyzer:
                 elif t in ("-S", "--split-string") and i + 1 < len(args):
                     self.merge(self.sub(args[i + 1].literal + " " + " ".join(_q(w.literal) for w in args[i + 2 :])))
                     return None
+                elif t.startswith("--split-string=") or (t.startswith("-S") and len(t) > 2):
+                    lit = args[i].literal
+                    self.merge(self.sub((lit.split("=", 1)[1] if lit.startswith("--") else lit[2:]) + " " + " ".join(_q(w.literal) for w in args[i + 1 :])))
+                    return None
+                elif t.startswith("-") and not t.startswith("--") and "S" in t[1:]:
+                    self.hit("uncertain", "env_split_string", None, "env -S (cụm cờ) chạy chuỗi lệnh")
+                    return None
                 elif t.startswith("-") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t):
                     i += 1
                 else:
@@ -1908,12 +1916,115 @@ class BashAnalyzer:
             else:
                 self.hit("write", "network_cmd", None, "")
             return
-        if base in READ_ONLY_CMDS:
-            if base == "echo" or base == "printf":
-                return
+        if base in READ_ONLY_CMDS or base in ("gawk", "nawk", "mawk"):
+            self.readonly_flags(base, args)
             return
         # lệnh chung: kiểm đối số đường dẫn chạm tài nguyên được bảo vệ
         self.generic(base, args, unknown_targets)
+
+    def _opt_values(self, args: list[shell.Word], short: str | None, long: str) -> list[shell.Word | str]:
+        """Giá trị của tuỳ chọn `-X v`, `-Xv`, cụm `-abX v`, `--long v`, `--long=v` (giá trị là Word hoặc chuỗi đã tách)."""
+        out: list[shell.Word | str] = []
+        for i, a in enumerate(args):
+            t = a.text
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if t == long:
+                out.append(nxt if nxt is not None else "")
+            elif t.startswith(long + "="):
+                out.append(t[len(long) + 1 :])
+            elif short and t.startswith("-") and not t.startswith("--") and short in t[1:]:
+                tail = t[t.index(short, 1) + 1 :]
+                out.append(tail if tail else (nxt if nxt is not None else ""))
+        return out
+
+    def _out_file(self, v: shell.Word | str, what: str) -> None:
+        p = self.path(v) if (v.text if isinstance(v, shell.Word) else v) else None
+        if p is None:
+            self.hit("uncertain", "readonly_output_dynamic", "file", f"{what}: đích ghi động")
+        else:
+            self.check_overwrite_target(p, what)
+
+    _AWK_EXEC = re.compile(r"\bsystem\s*\(|\|&?\s*getline\b|\bprintf?\b[^;{}]*\|")  # không bắt `FS="|"` (chỉ là ký tự)
+    _AWK_REDIR = re.compile(r"\bprintf?\b[^;{}]*?>>?\s*(\"([^\"]*)\"|[^\s;}]+)")
+
+    def readonly_flags(self, base: str, args: list[shell.Word]) -> None:
+        """A1: lệnh "chỉ đọc" nhưng có cờ ghi file / chạy lệnh tuỳ ý (sort -o, awk system()/>, git --output/-c core.pager,
+        diff --output, rg --pre, man -P, env -S, yq -i) — không được rơi vào `safe`; ghi file vẫn qua kiểm protected path."""
+        texts = [a.text for a in args]
+        if base == "sort":
+            for v in self._opt_values(args, "o", "--output"):
+                self._out_file(v, "sort -o")
+        elif base == "diff":
+            for v in self._opt_values(args, None, "--output"):
+                self._out_file(v, "diff --output")
+        elif base == "rg":
+            if self._opt_values(args, None, "--pre"):
+                self.hit("uncertain", "readonly_exec_flag", None, "rg --pre chạy lệnh tuỳ ý trên từng file")
+        elif base == "man":
+            if self._opt_values(args, "P", "--pager") or self._opt_values(args, "H", "--html"):
+                self.hit("uncertain", "readonly_exec_flag", None, "man -P/--pager/-H chạy chương trình tuỳ ý")
+        elif base == "yq":
+            if any(t in ("-i", "--inplace") or t.startswith("--inplace=") or (t.startswith("-") and not t.startswith("--") and "i" in t[1:]) for t in texts):
+                for a in args:
+                    if a.text.startswith("-") or not a.text or a.dynamic:
+                        continue
+                    p = self.path(a)
+                    if p and os.path.exists(p):
+                        self.check_write_target(p, "yq -i", "overwrite")
+                self.hit("write", "inplace_edit", "file", "yq -i")
+        elif base in ("awk", "gawk", "nawk", "mawk"):
+            self.awk(args)
+
+    def awk(self, args: list[shell.Word]) -> None:
+        """awk: chương trình có system()/pipe tới lệnh → uncertain; `print > "file"` → ghi file; `-i inplace` → sửa tại chỗ."""
+        i, prog, inplace = 0, None, False
+        while i < len(args):
+            t = args[i].text
+            if t in ("-f", "--file", "-E", "--exec"):
+                self.hit("uncertain", "awk_program_file", None, "awk -f: chương trình từ file, không kiểm được")
+                return
+            if t in ("-i", "--include", "-l", "--load") or t.startswith(("--include=", "--load=")) or (t.startswith(("-i", "-l")) and len(t) > 2):
+                val = t.split("=", 1)[1] if "=" in t and t.startswith("--") else (t[2:] if not t.startswith("--") and len(t) > 2 else (args[i + 1].text if i + 1 < len(args) else ""))
+                if val in ("inplace", "inplace.awk"):
+                    inplace = True
+                else:
+                    self.hit("uncertain", "awk_load", None, f"awk nạp thư viện/extension {val!r}")
+                i += 1 if (len(t) > 2 and not t.startswith("--")) or "=" in t else 2
+                continue
+            if t in ("-v", "-F", "--assign", "--field-separator"):
+                i += 2
+                continue
+            if t == "--":
+                i += 1
+                break
+            if t.startswith("-") and t != "-":
+                i += 1
+                continue
+            break
+        if i < len(args):
+            prog = args[i]
+            files = args[i + 1 :]
+        else:
+            files = []
+        if prog is not None:
+            code = prog.literal
+            if prog.dynamic:
+                self.hit("uncertain", "awk_dynamic", None, "chương trình awk động")
+            if self._AWK_EXEC.search(code):
+                self.hit("uncertain", "awk_exec", None, "awk chạy lệnh (system()/pipe)")
+            for m in self._AWK_REDIR.finditer(code):
+                if m.group(2) is not None:
+                    self._out_file(m.group(2), "awk print >")
+                else:
+                    self.hit("uncertain", "readonly_output_dynamic", "file", "awk print > đích động")
+        if inplace:
+            for a in files:
+                if a.text.startswith("-") or "=" in a.text or a.dynamic:
+                    continue
+                p = self.path(a)
+                if p:
+                    self.check_write_target(p, "awk -i inplace", "overwrite")
+            self.hit("write", "inplace_edit", "file", "awk -i inplace")
 
     def windows_cmd(self, base: str, args: list[shell.Word], sc: shell.SimpleCommand) -> bool:
         """Lệnh Windows (agent gọi từ Git Bash của Claude Code trên Windows): Task Scheduler / dịch vụ / registry / WMI = lịch chạy
@@ -2872,6 +2983,15 @@ class BashAnalyzer:
             return
         self.hit("write", "hub_cli", "hub", "cfharness")
 
+    _GIT_EXEC_CFG = re.compile(r"^(core\.(pager|editor|sshcommand|fsmonitor|hookspath|askpass|gitproxy)|pager\.|alias\.|diff\.|merge\.|filter\.|"
+                               r"sequence\.editor|gpg\.|credential\.|uploadpack\.|receivepack\.|protocol\.|url\.|include|interactive\.difffilter|"
+                               r"remote\..*\.(uploadpack|receivepack|proxy)|http\.|ssh\.)", re.I)
+
+    def _git_config_flag(self, kv: str) -> None:
+        """A1: `git -c core.pager=…`/`alias.x=!cmd`/… cho phép chạy chương trình tuỳ ý → không còn là lệnh chỉ đọc."""
+        if shell.DYN in kv or self._GIT_EXEC_CFG.match(kv.split("=", 1)[0].strip()):
+            self.hit("uncertain", "git_config_exec", "git", f"git -c {kv.split('=', 1)[0]}: cấu hình có thể chạy lệnh tuỳ ý")
+
     def git(self, args: list[shell.Word]) -> None:
         cwd = self.cwd
         i = 0
@@ -2880,13 +3000,26 @@ class BashAnalyzer:
             if texts[i] == "-C" and i + 1 < len(texts):
                 cwd = self.path(args[i + 1])
                 i += 2
-            elif texts[i] in ("-c", "--git-dir", "--work-tree", "--namespace", "--exec-path") and i + 1 < len(texts):
+            elif texts[i] in ("-c", "--config-env") and i + 1 < len(texts):
+                self._git_config_flag(texts[i + 1])
+                i += 2
+            elif texts[i].startswith("--config-env="):
+                self._git_config_flag(texts[i].split("=", 1)[1])
+                i += 1
+            elif texts[i] in ("--git-dir", "--work-tree", "--namespace", "--exec-path") and i + 1 < len(texts):
                 i += 2
             else:
+                if texts[i] in ("-p", "--paginate"):
+                    self.hit("uncertain", "git_pager", "git", "git --paginate chạy pager theo cấu hình (core.pager) — có thể là lệnh tuỳ ý")
                 i += 1
         if i >= len(texts):
             return
         sub, rest = texts[i], texts[i + 1 :]
+        # A1: cờ ghi file / chạy chương trình ngoài ở mọi lệnh con "chỉ đọc" (diff/log/show…)
+        for v in self._opt_values(args[i + 1 :], None, "--output"):
+            self._out_file(v, f"git {sub} --output")
+        if "--ext-diff" in rest:
+            self.hit("uncertain", "git_ext_diff", "git", "git --ext-diff chạy diff.external (lệnh tuỳ ý theo cấu hình)")
         flags = [t for t in rest if t.startswith("-")]
         pos = [t for t in rest if not t.startswith("-")]
         # R2-2: chuẩn hoá (bỏ -C/-c/--no-pager/--git-dir, đường dẫn tuyệt đối tới git) rồi khớp mẫu chặn của REPO ĐÍCH
@@ -3147,14 +3280,55 @@ def _q(s: str) -> str:
     return shlex.quote(s)
 
 
-def action_fingerprint(tool_name: str, tool_input: dict[str, Any] | None) -> str:
-    """Dấu vân tay thao tác cho vé cho phép một lần (FR-SG-04): tool + input chuẩn hoá (bỏ mô tả/timeout)."""
+def _collapse_ws_outside_quotes(cmd: str) -> str:
+    """Gộp khoảng trắng liên tiếp thành một dấu cách, NHƯNG giữ nguyên trong '…' / "…" (`touch 'a b'` ≠ `touch 'a  b'`)."""
+    out: list[str] = []
+    q: str | None = None
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if q is None:
+            if c.isspace():
+                j = i
+                while j < n and cmd[j].isspace():
+                    j += 1
+                out.append(" ")
+                i = j
+                continue
+            if c == "\\" and i + 1 < n:
+                out.append(cmd[i : i + 2])
+                i += 2
+                continue
+            if c in ("'", '"'):
+                q = c
+        elif c == q:
+            q = None
+        elif q == '"' and c == "\\" and i + 1 < n:
+            out.append(cmd[i : i + 2])
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out).strip()
+
+
+def action_fingerprint(tool_name: str, tool_input: dict[str, Any] | None, cwd: str | os.PathLike[str] | None = None) -> str:
+    """Dấu vân tay thao tác cho vé cho phép một lần / luật `exact` (FR-SG-04): tool + input chuẩn hoá (bỏ mô tả/timeout).
+    A2: `dangerouslyDisableSandbox` (chạy NGOÀI sandbox) là thao tác khác; khoảng trắng chỉ gộp ngoài dấu nháy; với Bash, `cwd`
+    (đã chuẩn hoá) thuộc fingerprint vì cùng lệnh tương đối ở thư mục khác là thao tác khác."""
     import hashlib
 
     ti = dict(tool_input or {})
-    for k in ("description", "timeout", "run_in_background", "dangerouslyDisableSandbox"):
+    for k in ("description", "timeout", "run_in_background"):
         ti.pop(k, None)
+    if not ti.get("dangerouslyDisableSandbox"):
+        ti.pop("dangerouslyDisableSandbox", None)  # false/thiếu = trong sandbox: giữ fingerprint cũ
+    else:
+        ti["dangerouslyDisableSandbox"] = True
     if tool_name == "Bash" and isinstance(ti.get("command"), str):
-        ti["command"] = re.sub(r"\s+", " ", shell.normalize(ti["command"])).strip()
-    blob = json.dumps({"tool": tool_name, "input": ti}, sort_keys=True, ensure_ascii=False)
+        ti["command"] = _collapse_ws_outside_quotes(shell.normalize(ti["command"]))
+    doc: dict[str, Any] = {"tool": tool_name, "input": ti}
+    if tool_name == "Bash" and cwd:
+        doc["cwd"] = os.path.normpath(os.path.abspath(os.path.expanduser(str(cwd))))
+    blob = json.dumps(doc, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]

@@ -334,6 +334,35 @@ async def test_manager_cannot_manage_grants_conversations_or_edit_schedules(env)
     assert d.hub.guard.rule_grants().get("w1") and d.hub.guard.trust_of("w1")
 
 
+async def test_task_create_alias_keys_checked_like_canonical(env):
+    """B5: `TaskService.create` nhận alias `assignee_agent_id`/`team_id` → kiểm quyền (lớp 2 `check_rpc` của điều phối viên và cổng MGR-3
+    `agent_target_block` cho agent thường) phải chuẩn hoá alias, không chỉ nhìn `assignee`/`team`."""
+    d, rid = env
+    d.hub.teams.create({"id": "tx", "name": "tx"})
+    d.hub.teams.member_set("tx", "w1", "worker")
+    await d.hub.teams.set_estop("tx", True, reason="test")
+    for params, match in (({"title": "t", "body": "b", "assignee_agent_id": "boss"}, "điều phối viên"),
+                          ({"task": {"title": "t", "body": "b", "assignee_agent_id": "boss"}}, "điều phối viên"),
+                          ({"title": "t", "body": "b", "team_id": "tx"}, "ESTOP"),
+                          ({"title": "t", "body": "b", "assignee_agent_id": "w1"}, "ESTOP")):
+        await _deny_rpc(d, rid, "task.create", params, match=match)
+    assert not d.hub.store.conn.execute("SELECT COUNT(*) FROM tasks WHERE assignee_agent_id='boss'").fetchone()[0]
+    # MGR-3: agent thường (không phải người) không giao task cho điều phối viên qua alias
+    agent = auth.Caller(via="socket", pid=1, token_ok=False, run_id="r_x", agent_id="w1", evidence=["env:CFHARNESS_RUN_ID"])
+    assert d.hub.manager.agent_target_block("task.create", {"title": "t", "assignee_agent_id": "boss"})
+    resp = await d.call_as(agent, "task.create", {"title": "t", "body": "b", "assignee_agent_id": "boss"})
+    assert "error" in resp and "điều phối viên" in resp["error"]["message"], resp
+    # task.reassign: handler chỉ đọc `assignee` (không alias) — đường chuẩn vẫn bị chặn
+    await _deny_rpc(d, rid, "task.reassign", {"id": "t_none", "assignee": "boss"}, match="điều phối viên")
+
+
+async def test_learn_refine_checks_the_key_handler_reads(env):
+    """S3: handler `learn.refine` chỉ đọc `agent`; check_rpc từng đọc `id or agent` → {id: <agent thường>, agent: <manager>} lách được."""
+    d, rid = env
+    await _deny_rpc(d, rid, "learn.refine", {"id": "w1", "agent": "boss"}, match="điều phối viên")
+    await _deny_rpc(d, rid, "learn.refine", {"agent": "boss"}, match="điều phối viên")
+    assert d.hub.manager.perms.check_rpc(auth.manager_caller("boss", rid), "learn.refine", {"id": "boss", "agent": "w1"}) is None
+
 # ------------------------------------------------------------------ thư mục chung Không gian số (filehub/)
 async def test_manager_filehub_read_and_assign_but_no_writes(env, tmp_path):
     """Điều phối viên: ĐỌC thư mục chung (filehub_list|filehub_link) + giao việc workspace `filehub:`; không setup|login|add|remove|

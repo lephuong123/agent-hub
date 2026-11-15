@@ -973,9 +973,14 @@ class Store:
         return str(self.conn.execute("PRAGMA journal_mode").fetchone()[0])
 
     def migrate(self) -> int:
-        cur = self.schema_version
-        for i, sql in enumerate(MIGRATIONS[cur:], start=cur + 1):
+        """Chạy các migration còn thiếu. Phiên bản được đọc LẠI bên trong `BEGIN IMMEDIATE` của từng bước: nhiều tiến trình
+        cùng mở một DB cũ thì tiến trình đến sau thấy `user_version` đã nâng và bỏ qua, không chạy lại migration."""
+        while True:
             with self.tx():
+                cur = self.schema_version
+                if cur >= len(MIGRATIONS):
+                    break
+                i, sql = cur + 1, MIGRATIONS[cur]
                 if is_py_migration(sql):  # migration bằng Python (v17, v19): "module.hàm" trong gói cfharness
                     import importlib
 

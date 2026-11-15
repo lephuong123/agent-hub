@@ -36,7 +36,7 @@ from ..errors import Blocked, Conflict, HubError, NotFound
 from ..events import TERMINAL_RUN_EVENTS, HubEvent, iso, make_event
 from ..store import now_iso
 from . import prompts
-from .permissions import ManagerPermissions
+from .permissions import ManagerPermissions, task_spec
 
 if TYPE_CHECKING:
     from ..daemon import Daemon
@@ -275,7 +275,7 @@ class ManagerService:
         if method in ("run.start", "mcp.run", "mcp.agent_run") and str(p.get("agent") or p.get("agent_id") or "") in mids:
             return "chỉ người được khởi chạy run cho điều phối viên (dùng manager.chat)"
         if method in ("task.create", "mcp.team_run"):
-            t = p.get("task") if isinstance(p.get("task"), dict) else p
+            t = task_spec(p)
             if str(t.get("assignee") or "") in mids:
                 return "không giao task cho điều phối viên"
         return None

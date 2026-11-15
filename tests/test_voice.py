@@ -111,3 +111,19 @@ async def test_dictation_textareas_marked(menv):
     r = await menv.client.get("/")
     assert r.status_code == 200
     assert "data-voice" in r.text
+
+
+def test_voice_flag_cleared_after_send_static():
+    """E17: sau khi gửi thành công, cờ `voice` (dictation/conversation) phải được xoá — nếu không, tin GÕ TAY kế tiếp vẫn bị gửi
+    như tin giọng nói (daemon xử lý khác: không coi "ok/duyệt" là trả lời câu hỏi quyền). Kiểm tĩnh JS (không có trình duyệt)."""
+    import re
+    from pathlib import Path
+
+    static = Path(__file__).resolve().parents[1] / "src" / "cfharness" / "web" / "static"
+    app = (static / "app.js").read_text(encoding="utf-8")
+    m = re.search(r'mtext\.value = "";(?P<body>.*?)emit\("sent"', app, re.S)
+    assert m, "không thấy nhánh gửi thành công trong app.js"
+    assert re.search(r'mtext\.dispatchEvent\(new Event\("input"', m.group("body")), "app.js không báo input sau khi xoá ô nhập"
+    voice = (static / "voice.js").read_text(encoding="utf-8")
+    # trình nghe mgr:sent ở mức trang (không chỉ trong chế độ hội thoại) gọi clearVoice
+    assert re.search(r'addEventListener\("mgr:sent", function \(\) \{ clearVoice\(', voice), "voice.js không xoá cờ voice khi mgr:sent"

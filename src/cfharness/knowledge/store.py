@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 ENTRY_DELIMITER = "\n§\n"
 SKILL_FILE = "SKILL.md"
 SUPPORT_DIRS = ("references", "templates", "scripts", "assets")
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
+NAME_RE = re.compile(r"\A[a-z0-9][a-z0-9-]{1,62}\Z")  # \Z: "$" khớp cả trước "\n" cuối
 SCOPES = ("agent", "team", "global")
 MEMORY_HEADERS = {"memory": "# Memory", "user": "# User profile"}
 

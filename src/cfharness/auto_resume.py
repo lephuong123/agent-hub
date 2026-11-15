@@ -70,19 +70,27 @@ def transient_cause(run: dict[str, Any]) -> str | None:
     return None
 
 
-def chain_runs(store: Any, run: dict[str, Any], limit: int = 50) -> list[dict[str, Any]]:
-    """Chuỗi tự resume đi tới `run`: [run, cha, …, run gốc] (đi ngược `parent_run_id`, dừng ở run không do tự resume)."""
+def chain_runs(store: Any, run: dict[str, Any], limit: int | None = None) -> list[dict[str, Any]]:
+    """Chuỗi tự resume đi tới `run`: [run, cha, …, run gốc] (đi ngược `parent_run_id`, dừng ở run không do tự resume).
+    Không cắt độ sâu cố định (trước đây 50 làm trần `auto_resume_max_attempts` > 50 không bao giờ chạm); chống vòng lặp bằng
+    tập id đã thăm. Run cha không còn trong DB (đã purge) → dừng ở run cũ nhất còn lại, KHÔNG thêm bản ghi rỗng."""
     out, cur = [run], run
-    for _ in range(limit):
+    seen = {run.get("id")}
+    while limit is None or len(out) <= limit:
         reason = cur.get("resume_reason") or ""
-        if not (reason.startswith(AUTO_REASON) or reason == "daemon_restart") or not cur.get("parent_run_id"):
+        pid = cur.get("parent_run_id")
+        if not (reason.startswith(AUTO_REASON) or reason == "daemon_restart") or not pid or pid in seen:
             break
-        cur = store.get_run(cur["parent_run_id"]) or {}
-        out.append(cur)
+        parent = store.get_run(pid)
+        if parent is None:
+            break
+        seen.add(pid)
+        out.append(parent)
+        cur = parent
     return out
 
 
-def chain_attempts(store: Any, run: dict[str, Any], limit: int = 50) -> int:
+def chain_attempts(store: Any, run: dict[str, Any], limit: int | None = None) -> int:
     """Số lần tự resume liên tiếp đã làm để đi tới `run`."""
     return len(chain_runs(store, run, limit)) - 1
 
@@ -91,6 +99,7 @@ def chain_budget_left(store: Any, run: dict[str, Any]) -> float | None:
     """Ngân sách còn lại của CẢ chuỗi = `max_budget_usd` của run gốc − chi phí mọi run trong chuỗi; None = không giới hạn.
     Cả chuỗi tiêu tối đa một ngân sách run (không phải (1+trần)× như khi mỗi lượt nhận lại ngân sách đầy)."""
     runs = chain_runs(store, run)
+    # run gốc đã bị purge → run cũ nhất còn lại; trần của nó (= phần ngân sách còn lại lúc tạo) vẫn đúng cho phần chuỗi phía sau
     cap = runs[-1].get("max_budget_usd")
     if cap is None:
         return None

@@ -1234,7 +1234,7 @@ class GuardService:
             self._record(run, channel, tool_name, tool_input, v, "allow", classifier=auto["by"], extra={"auto_reason": auto["reason"]})
             return {"decision": "allow", "reason": f"[cfharness] allowed automatically ({auto['by']}): {auto['reason']}", "verdict": v.verdict,
                     "decided_by": auto["by"]}
-        fp = action_fingerprint(tool_name, tool_input)
+        fp = action_fingerprint(tool_name, tool_input, ctx.cwd)
         ap = self.hub.approvals
         # LLM thứ hai (tắt mặc định): CHỈ hạ uncertain đủ điều kiện → safe/write; mọi kết quả khác → giữ chờ người như cũ
         if always_eligible(v) and self.second.enabled() and ap.find_pending(run_id, fp) is None:
@@ -1371,7 +1371,7 @@ class GuardService:
 
         hold = self.needs_human(v)
         auto = self.auto_allow(run, tool, ti, v, ctx) if (run and hold) else None
-        return {**v.to_dict(), "hold": hold and auto is None, "fingerprint": action_fingerprint(tool, ti), "cwd": str(ctx.cwd),
+        return {**v.to_dict(), "hold": hold and auto is None, "fingerprint": action_fingerprint(tool, ti, ctx.cwd), "cwd": str(ctx.cwd),
                 "profile": profile(self.hub.config), "auto_allow": auto,
                 "never_automatic": never_automatic(v, tool_name=tool, tool_input=ti, roots=list(ctx.allowed_roots), cwd=str(ctx.cwd)) if hold else None}
 

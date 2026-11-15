@@ -519,3 +519,17 @@ async def test_slash_taikhoan_switches_account(make, sk):
     assert d.hub.accounts.active_id() == b
     au = d.hub.audit.query(kind="account.use", limit=5)
     assert au and au[0]["channel"] == f"slack:{DM_BOSS}"
+
+
+async def test_team_ok_fail_closed_when_workspace_not_pinned(make):
+    """S7: chưa ghim `notify.slack.team_id` (token đặt tay, không qua `slack setup`) → không nhận envelope của MỌI workspace:
+    dùng workspace của token (`auth.test`); chưa biết workspace nào → từ chối."""
+    d = await make(sl_cfg={"team_id": None}, token=False, connect=False)
+    bot = d.hub.slack
+    bot.info["team_id"] = None
+    assert not bot.team_ok("T_OTHER") and not bot.team_ok(None)
+    bot.info["team_id"] = TEAM
+    assert bot.team_ok(TEAM) and not bot.team_ok("T_OTHER")
+    d.hub.config.set("notify.slack.team_id", TEAM)
+    bot.info["team_id"] = None
+    assert bot.team_ok(TEAM) and not bot.team_ok("T_OTHER")
