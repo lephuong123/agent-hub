@@ -195,6 +195,10 @@ def cmd_daemon(ctx: Ctx) -> int:
             f"chi phí hôm nay: {_fmt_usd(st['cost_today_usd'])}\n"
             f"ESTOP: {'BẬT — ' + str(es.get('reason') or '') if es.get('on') else 'tắt'}"
         )
+        if st.get("migrated_to"):  # chuyển nhà (hub_freeze.py)
+            from .hub_freeze import banner
+
+            text += "\nĐÓNG BĂNG: " + banner(st["migrated_to"])
         if st.get("auth_block"):
             text += "\nCẢNH BÁO: claude chưa đăng nhập — spawn bị chặn (chạy `claude auth login` rồi `cfharness doctor`)"
         try:  # H-10: kiểm phiên bản lúc daemon khởi động + cảnh báo raw.unknown
@@ -975,6 +979,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .backup_cli import add_parsers as _add_backup_parsers
 
     _add_backup_parsers(sub, common)
+
+    # xuất / nhập toàn bộ hub sang máy khác: cfharness hub export|import (hub_transfer_cli.py, hub_transfer.py)
+    from .hub_transfer_cli import add_parsers as _add_hub_transfer_parsers
+
+    _add_hub_transfer_parsers(sub, common)
 
     # tổng quan máy nhiều người dùng: cfharness admin overview (admin_cli.py, admin_overview.py)
     from .admin_cli import add_parsers as _add_admin_parsers

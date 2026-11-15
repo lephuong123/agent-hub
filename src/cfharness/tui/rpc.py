@@ -209,6 +209,7 @@ def snapshot(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
         "rate_limit": hub.aggregator.rate_limit,
         "estop": st["estop"],
         "auth_block": st["auth_block"],
+        "migrated_to": st.get("migrated_to"),  # chuyển nhà (hub_freeze.py)
         "runtime": st["runtime"],
         "cli_version": cli_version,
         "cli_untested": bool(cli_version and st["runtime"] != "fake" and cli_version not in tested),

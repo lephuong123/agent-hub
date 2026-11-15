@@ -203,7 +203,7 @@ def _close_stale_evals(hub: "Hub") -> list[str]:
 def resume_interrupted(hub: "Hub", run: dict[str, Any]) -> dict[str, Any] | None:
     from .runs import RESUME_INTERRUPTED_PROMPT
 
-    if hub.runs.estop.get("on"):
+    if hub.runs.estop.get("on") or hub.runs.frozen:  # đóng băng (chuyển nhà, hub_freeze): run dở chạy tiếp ở MÁY MỚI, không ở đây
         return None
     if run.get("kind") == "eval":  # M4-B: run eval --no-session-persistence, home tạm đã mất → không resume
         return None

@@ -505,7 +505,7 @@ def wrap_with_audit(hub: "Hub", method: str, fn: Callable[[dict[str, Any]], Any]
         if asyncio.iscoroutine(res):
             res = await res
         try:
-            params = {k: v for k, v in p.items() if k not in ("value", "soul")}
+            params = {k: v for k, v in p.items() if k not in ("value", "soul", "passphrase")}  # passphrase: gói hub (hub_transfer), phòng hờ
             if method.startswith("mcp.oauth_"):  # code/state/iss của callback OAuth là thông tin đăng nhập một lần — không vào audit
                 params = {k: v for k, v in params.items() if k in ("name", "redirect_uri", "error")}
             if "soul" in p:

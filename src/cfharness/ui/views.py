@@ -199,6 +199,10 @@ def daemon_status(st: dict[str, Any], mode: Mode | None = None, *, width: int | 
             r.append(f"  {float(rl['utilization']) * 100:.0f}% {rl.get('type') or ''}".rstrip(), style=th.MUTED)
         pairs.append(("rate limit", r))
     pairs.append(("ESTOP", estop))
+    mig = st.get("migrated_to") or {}
+    if mig:  # chuyển nhà (hub_freeze.py): máy này đóng băng
+        pairs.append(("đã chuyển nhà", Text(f" ĐÓNG BĂNG — chuyển sang máy khác lúc {mig.get('at') or '?'} (gói {mig.get('export_id') or '?'}); "
+                                            "`cfharness hub unfreeze` để dùng lại ", style=th.ALARM)))
     teams = [t for t in (st.get("teams_estop") or []) if t]
     if teams:
         pairs.append(("ESTOP team", Text(", ".join(str(t.get("id") if isinstance(t, dict) else t) for t in teams), style=th.ERR_STRONG)))

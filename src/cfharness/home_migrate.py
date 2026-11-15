@@ -15,27 +15,20 @@ Các bước (chạy lại được: nếu thư mục đã chuyển mà còn đ�
 from __future__ import annotations
 
 import argparse
-import fnmatch
-import hashlib
 import os
-import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .oscompat import IS_WINDOWS
+from .pathmap import APPEND_ONLY, HISTORY_COLS, REWRITE_FILES, SCAN_SKIP_DIRS, PathMap  # noqa: F401 — lõi dùng chung (pathmap.py)
+from .pathmap import db_rewrite as _pm_db_rewrite
+from .pathmap import rewrite_files as _pm_rewrite_files
+from .pathmap import scan_files as _pm_scan_files
 from .paths import HubPaths, legacy_default_home, legacy_home_in_use, resolve_home
 
-APPEND_ONLY = frozenset({"events", "audit_log", "guard_decisions", "snapshots", "ledger_entries", "integrity_baseline", "sqlite_sequence",
-                         "session_messages"})  # v17: văn bản hội thoại là lịch sử; FTS chỉ đồng bộ theo INSERT/DELETE
-HISTORY_COLS = frozenset({("runs", "argv_redacted"), ("runs", "diff")})
-REWRITE_FILES = ("config.yaml", "policy/*.yaml", "policy/golden/*", "mcp/registry.yaml", "checkpoints/*/checkpoint.json")
-SCAN_SKIP_DIRS = ("checkpoints", "runs", "logs", "snapshots", "ledger", "prompts", "policy/history", "trash/tamper", "worktrees", "evals", ".git")
 STALE = ("hub.sock", "hub.sock.auth", "hub.pid")
-_TEXT_SUFFIX = (".yaml", ".yml", ".json", ".md", ".txt", ".toml")
-_MAX_SCAN = 2 * 1024 * 1024
 
 
 @dataclass
@@ -53,32 +46,12 @@ class Plan:
                 "review": self.review, "baseline": self.baseline}
 
 
-def _pattern(old: str) -> re.Pattern[str]:
-    # đúng đường dẫn cũ (không khớp `<cũ>2`): theo sau là hết chuỗi, `/`, dấu nháy, khoảng trắng, phân cách JSON
-    # (Windows: thêm cả dấu gạch ngược — phân cách đường dẫn)
-    sep = r"/\\" if IS_WINDOWS else "/"
-    return re.compile(re.escape(old) + r"(?=$|[" + sep + r"\"'\s,}\]:;)])")
-
-
-def _variants(old: str, new: str) -> list[tuple[str, str]]:
-    """Cặp (cũ, mới) cần thay. Windows: thêm dạng JSON-escape (`\\` trong cột JSON của DB) và dạng `/`."""
-    out = [(old, new)]
-    if IS_WINDOWS:
-        bs = chr(92)
-        out += [(old.replace(bs, bs * 2), new.replace(bs, bs * 2)), (old.replace(bs, "/"), new.replace(bs, "/"))]
-    return list(dict.fromkeys(out))
-
-
-def _needles(olds: list[str]) -> list[str]:
-    """Mọi dạng đường dẫn cũ cần tìm (LIKE trong DB, bytes trong file)."""
-    return list(dict.fromkeys(vo for o in olds for vo, _ in _variants(o, "")))
+def _pm(olds: list[str], new: str) -> PathMap:
+    return PathMap((o, new) for o in olds)
 
 
 def rewrite_text(s: str, olds: list[str], new: str) -> str:
-    for o in olds:
-        for vo, vn in _variants(o, new):
-            s = _pattern(vo).sub(lambda _m, vn=vn: vn, s)  # hàm thay: `new` có `\U…` (Windows) không bị hiểu là escape regex
-    return s
+    return _pm(olds, new).rewrite(s)
 
 
 def _olds(src: Path) -> list[str]:
@@ -89,120 +62,18 @@ def _olds(src: Path) -> list[str]:
     return sorted(out, key=len, reverse=True)
 
 
-def _db_targets(conn: sqlite3.Connection) -> list[tuple[str, str]]:
-    out: list[tuple[str, str]] = []
-    tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
-    # bảng ảo (FTS5) + bảng bóng của nó (`<tên>_data|_idx|_config…`, có bảng WITHOUT ROWID) — không ghi tay vào chỉ mục
-    virtual = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND sql LIKE 'CREATE VIRTUAL%'")]
-    for t in tables:
-        if t in APPEND_ONLY or any(t == v or t.startswith(v + "_") for v in virtual):
-            continue
-        for col in conn.execute(f'PRAGMA table_info("{t}")'):
-            name, decl = col[1], (col[2] or "").upper()
-            if (t, name) in HISTORY_COLS or any(x in decl for x in ("INT", "REAL", "BLOB")):
-                continue
-            out.append((t, name))
-    return out
-
-
 def _db_rewrite(db: Path, olds: list[str], new: str, *, apply: bool) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    if not db.exists():
-        return counts
-    conn = sqlite3.connect(str(db), isolation_level=None)
-    try:
-        if apply:
-            conn.execute("BEGIN IMMEDIATE")
-        for t, c in _db_targets(conn):
-            needles = _needles(olds)
-            like = " OR ".join(f'"{c}" LIKE ?' for _ in needles)
-            rows = conn.execute(f'SELECT rowid, "{c}" FROM "{t}" WHERE typeof("{c}")=\'text\' AND ({like})', [f"%{o}%" for o in needles]).fetchall()
-            n = 0
-            for rowid, val in rows:
-                nv = rewrite_text(val, olds, new)
-                if nv != val:
-                    n += 1
-                    if apply:
-                        conn.execute(f'UPDATE "{t}" SET "{c}"=? WHERE rowid=?', (nv, rowid))
-            if n:
-                counts[f"{t}.{c}"] = n
-        if apply:
-            conn.execute("COMMIT")
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    except Exception:
-        if apply and conn.in_transaction:
-            conn.execute("ROLLBACK")
-        raise
-    finally:
-        conn.close()
-    return counts
-
-
-def _rel_matches(rel: str, pats: tuple[str, ...]) -> bool:
-    return any(fnmatch.fnmatchcase(rel, p) for p in pats)
+    return _pm_db_rewrite(db, _pm(olds, new), apply=apply)
 
 
 def _scan_files(home: Path, olds: list[str]) -> tuple[list[str], list[str]]:
     """(file cấp hub sẽ viết lại, file khác chứa đường dẫn cũ) — tương đối với `home`."""
-    rewrite: list[str] = []
-    review: list[str] = []
-    needles = [o.encode() for o in _needles(olds)]
-    for dirpath, dirnames, filenames in os.walk(home, followlinks=False):
-        rel_dir = os.path.relpath(dirpath, home).replace(os.sep, "/")  # rel luôn dạng `/` (khớp REWRITE_FILES, baseline)
-        rel_dir = "" if rel_dir == "." else rel_dir
-        for fn in filenames:
-            rel = f"{rel_dir}/{fn}" if rel_dir else fn
-            full = Path(dirpath) / fn
-            is_target = _rel_matches(rel, REWRITE_FILES) and not rel.startswith("policy/history/")
-            if not is_target:
-                if not fn.endswith(_TEXT_SUFFIX) or any(rel == d or rel.startswith(d + "/") for d in SCAN_SKIP_DIRS):
-                    continue
-            try:
-                if full.is_symlink() or full.stat().st_size > _MAX_SCAN:
-                    continue
-                b = full.read_bytes()
-            except OSError:
-                continue
-            if any(n in b for n in needles):
-                (rewrite if is_target else review).append(rel)
-    return sorted(rewrite), sorted(review)
-
-
-def _sha(b: bytes) -> str:
-    return hashlib.sha256(b).hexdigest()
+    return _pm_scan_files(home, _pm(olds, ""))
 
 
 def _rewrite_files(home: Path, rels: list[str], olds: list[str], new: str) -> list[str]:
     """Viết lại file; cập nhật integrity_baseline cho file đang khớp bản chuẩn. Trả danh sách bản chuẩn đã cập nhật."""
-    db = home / "hub.db"
-    conn = sqlite3.connect(str(db), isolation_level=None) if db.exists() else None
-    updated: list[str] = []
-    try:
-        for rel in rels:
-            p = home / rel
-            raw = p.read_bytes()
-            try:
-                text = raw.decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-            nb = rewrite_text(text, olds, new).encode("utf-8")
-            if nb == raw:
-                continue
-            mode = p.stat().st_mode & 0o777
-            tmp = p.with_name(p.name + ".migrate-tmp")
-            tmp.write_bytes(nb)
-            os.chmod(tmp, mode)
-            os.replace(tmp, p)
-            if conn is not None:
-                row = conn.execute("SELECT sha256 FROM integrity_baseline WHERE path=?", (rel,)).fetchone()
-                if row is not None and row[0] == _sha(raw):
-                    conn.execute("UPDATE integrity_baseline SET sha256=?, content=?, updated_at=? WHERE path=?",
-                                 (_sha(nb), nb, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), rel))
-                    updated.append(rel)
-    finally:
-        if conn is not None:
-            conn.close()
-    return updated
+    return _pm_rewrite_files(home, rels, _pm(olds, new))
 
 
 def daemon_running(home: Path) -> int | None:

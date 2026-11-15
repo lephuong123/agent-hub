@@ -120,6 +120,9 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "update": None,
     # Sao lưu (backup.py): khôi phục ghi đè hub.db/policy/tri thức; tạo/kiểm đọc + ghi toàn bộ dữ liệu hub — agent gõ, kể cả list, đều chặn
     "backup": None,  # cập nhật cfharness = cài đè phần mềm hub + khởi động lại daemon (update.start ∈ HUMAN_ONLY) — agent gõ, kể cả --check, đều chặn
+    # Xuất/nhập toàn bộ hub (hub_transfer.py): gói chứa toàn bộ dữ liệu hub; nhập ghi đè hub.db/tri thức; `hub unfreeze` gỡ đóng băng
+    # chuyển nhà (hub_freeze.py); `hub doctor` lộ đường dẫn/tên secret — agent gõ, MỌI lệnh con, đều chặn
+    "hub": None,
     # Lịch chạy tự động (schedules/): schedule.* ghi ∈ HUMAN_ONLY — agent không tự đặt việc chạy lặp
     "schedule": {"add", "create", "edit", "update", "pause", "resume", "rm", "remove", "delete", "run-now", "run_now"},
     # Tài khoản Claude (accounts/, luồng core): account.* ghi ∈ HUMAN_ONLY — agent không tự thêm/đổi/xoá tài khoản Claude
@@ -817,7 +820,7 @@ def sensitive_read(p: str, ctx: GuardContext) -> bool:
             return True
         for h in homes:
             if (_under(c, h + "/secrets") or _under(c, h + "/auth") or _under(c, h + "/backups") or _under(c, h + "/filehub")
-                    or _same(c, h + "/mcp_server/tokens.json")):
+                    or _under(c, h + "/exports") or _under(c, h + "/imports") or _same(c, h + "/mcp_server/tokens.json")):
                 return True
             parts = [x.lower() for x in _rel_parts(c, h)] if IS_WINDOWS else _rel_parts(c, h)
             if len(parts) >= 3 and parts[0] == "agents" and parts[2] == "runtime":

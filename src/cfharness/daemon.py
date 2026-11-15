@@ -139,6 +139,21 @@ class Daemon:
         from .backup import register_rpc as _register_backup
 
         _register_backup(self)
+        # Xuất toàn bộ hub sang máy khác: hub.export (hub_transfer.py — làm lặng hub, ghi gói .cfhx, tự bọc audit; nhập chỉ ngoại tuyến từ CLI)
+        from .hub_transfer import register_rpc as _register_hub_transfer
+
+        _register_hub_transfer(self)
+        # Chuyển nhà: hub.frozen (đọc) + hub.freeze|unfreeze (hub_freeze.py, HUMAN_ONLY, tự audit); hub.doctor (hub_doctor.py, chỉ đọc, HUMAN_ONLY)
+        from .hub_doctor import register_rpc as _register_hub_doctor
+        from .hub_freeze import register_rpc as _register_hub_freeze
+
+        _register_hub_freeze(self)
+        _register_hub_doctor(self)
+        # Xuất/nhập hub từ WEB (PR6): hub.transfer_status|export_start|export_status|import_plan|import_start|import_status
+        # (hub_transfer_web.py — HUMAN_ONLY; export_start/import_start tự bọc audit, gỡ passphrase; nhập = tiến trình `hub import-job` tách rời)
+        from .hub_transfer_web import register_rpc as _register_hub_transfer_web
+
+        _register_hub_transfer_web(self)
         # Xem/mở file agent đã thao tác (web chip file): file.read (chỉ đọc) + file.open (tác dụng phụ) — HUMAN_ONLY, tự audit (fileview.py)
         from .fileview import register_rpc as _register_files
         from .filehub.rpc import register_rpc as _register_filehub
@@ -528,6 +543,9 @@ def run_foreground(paths: HubPaths) -> None:
     set_private_umask()  # đa instance P1: file daemon tạo (hub.db, logs/, runs/, prompts/…) chỉ user này đọc được; claude con nhận lại umask gốc
     paths.ensure()
     _hold_while_updating(paths)
+    from .hub_transfer_web import hold_while_importing
+
+    hold_while_importing(paths)  # nhập hub từ web: job `hub import-job` đang ghi đè hub.db → chờ nó xong (nó tự khởi động lại daemon)
     global _INSTANCE_LOCK
     _INSTANCE_LOCK = acquire_instance_lock(paths, wait_s=3.0)
     if _INSTANCE_LOCK is None:

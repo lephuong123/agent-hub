@@ -6,6 +6,13 @@
   <div class="ph-title"><h1>Tổng quan</h1><span class="sub">Agent nào đang làm gì, việc gì đang chờ bạn.</span></div>
   <div class="btn-row"><a class="btn" href="#quick">{{ mc.icon('send') }}Giao việc nhanh</a></div>
 </div>
+{% if fresh %}
+<section class="card attention" id="fresh-import">
+  <div class="card-head"><h2>{{ mc.icon('arrow-left') }} Nhập hub từ máy khác</h2><a class="btn primary" href="/hub-transfer#import">Nhập gói .cfhx{{ mc.icon('chev-right') }}</a></div>
+  <p>Hub này đang trống. Đã có hub cfharness ở máy khác? Xuất ở máy đó (Cài đặt → Chuyển hub, hoặc <code>cfharness hub export</code>) rồi tải file lên đây —
+    agent, team, task, tri thức, lịch, lịch sử và session Claude đi theo. Hoặc bắt đầu mới: tạo agent ở trang <a href="/agents">Agent</a>.</p>
+</section>
+{% endif %}
 <div id="overview" hx-get="/partials/overview" hx-trigger="every 3s" hx-swap="innerHTML">
 {% include "_overview.html" %}
 </div>

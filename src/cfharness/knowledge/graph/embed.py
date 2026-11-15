@@ -265,10 +265,15 @@ async def run_vector_loop(hub: Any) -> None:
     batch = int(_cfg(hub, "vector.batch", 32) or 32)
     interval = float(_cfg(hub, "vector.interval_s", 60) or 60)
     failures = 0
+    from ...runs import export_quiesced
+
     while True:
         emb = get_embedder(hub)
         if emb is None:
             return
+        if export_quiesced(hub):  # đang xuất gói hub → bỏ lượt (hub_transfer)
+            await asyncio.sleep(1.0)
+            continue
         try:
             items = pending(hub, emb, batch)
             kind = "fact"

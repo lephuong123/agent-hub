@@ -431,9 +431,13 @@ class ScheduleService:
             self._task = None
 
     async def _loop(self) -> None:
+        from ..runs import export_quiesced
+
         while True:
             try:
                 await asyncio.sleep(max(1.0, float(self.cfg("tick_s"))))
+                if export_quiesced(self.hub):  # đang xuất gói hub → bỏ lượt (hub_transfer)
+                    continue
                 self.tick()
             except asyncio.CancelledError:
                 raise
