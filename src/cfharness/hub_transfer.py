@@ -4,19 +4,29 @@ Gói `.cfhx` = MỘT file tar KHÔNG nén ngoài (0600); từng phần tử nén
 - `hub.db` — chụp bằng SQLite online backup API (`backup.snapshot_db`), không bao giờ chép file thô.
 - `home/<rel>` — đúng tập sao lưu của `backup.py` (`backup.iter_included`: cấu hình, chính sách, tri thức, ledger, prompt đóng băng…).
 - `extra/runs/<rel>` — profile `full`: stdout/stderr thô của run.
+- `secrets.enc` — (PR2, mặc định có) `secrets/*` (+ tuỳ chọn `auth/totp.json`, `mcp_server/tokens.json`) mã hoá scrypt → AES-256-GCM, AAD
+  ràng buộc id gói + sha256 phần còn lại của manifest (`transfer_secrets.py`). Gắn bởi `seal_package` trong tiến trình CLI của người
+  SAU khi daemon đóng gói phần không mật — passphrase không bao giờ qua RPC. `--no-secrets` → chỉ ghi TÊN vào `missing_secrets`.
 - `MANIFEST.json` — phần tử CUỐI: `format=cfharness-export`, `schema`, `id`, `profile`, `mode_hint`, `source{home, home_real, user_home,
   os, sep, arch, host, cfharness_version, user_version, hub_id}`, `path_roots{hub_home, hub_home_real, user_home, workspaces[]}`,
   `sections{tên: {prefix, count, bytes, optional}}`, `files[{path, size, sha256, gz, packed}]` (sha256 của nội dung GỐC), `missing_secrets`
-  (chỉ TÊN secret — giá trị không bao giờ vào gói ở bản này).
+  (TÊN secret KHÔNG mang theo), `secrets{cipher, kdf, nonce, names, totp, mcp_tokens}` khi có `secrets.enc`.
 Luôn bỏ: `checkpoints/` (chủ repo chốt), `secrets/`, `auth/`, `mcp_server/`, `logs/`, `workspaces/`, `worktrees/`, `evals/`, `models/`,
-`update/`, `backups/`, `exports/`, `imports/`, socket/pid/lock. Phần mở rộng (bản sau, không đổi format): `secrets.enc` (PR2),
-`claude/…` session Claude Code (PR3), `repos.json` (PR5) — mỗi phần là một mục `sections` có `prefix`; bản cũ gặp mục lạ `optional`
+`update/`, `backups/`, `exports/`, `imports/`, socket/pid/lock (`secrets/` chỉ đi qua `secrets.enc`; KHÔNG BAO GIỜ `auth/web.json`, thiết bị tin
+cậy, `<socket>.auth`). Phần mở rộng (bản sau, không đổi format): `claude/…` session Claude Code (PR3), `repos.json` (PR5) — mỗi phần là một mục `sections` có `prefix`; bản cũ gặp mục lạ `optional`
 thì bỏ qua kèm cảnh báo, mục lạ không `optional` → từ chối.
 
 XUẤT chạy trong daemon (RPC `hub.export`, HUMAN_ONLY, tự audit) hoặc ngoại tuyến (CLI giữ `daemon.lock` khi daemon dừng). Một RPC duy
 nhất làm cả "làm lặng" (`RunManager.quiesced`: không khởi chạy run trong hàng đợi) → dừng run đang chạy nếu `stop` → chụp → ghi nguyên tử
 (`.part` → rename) → kiểm lại → thả "làm lặng" trong `finally` — không có cặp prepare/release để một client chết giữa chừng làm hub kẹt
 lặng mãi. Daemon chỉ ghi vào `HUB_HOME/exports/` (0700); muốn đặt chỗ khác thì CLI của người tự chép sau khi RPC trả về.
+Làm lặng (PR2): ngoài hàng đợi run, mọi vòng nền GHI tri thức/DB (learning, learning_ops = curator/regression/graph quality/digest,
+curation, schedules, manager tick, backup, dispatcher, vector graph) kiểm `runs.export_quiesced(hub)` ở ĐẦU mỗi lượt và bỏ lượt khi đang
+xuất — một cờ có sẵn, mỗi vòng một dòng. GIỚI HẠN: lượt đã bắt đầu trước khi làm lặng và đang `await` (vd gate eval chờ run, trích xuất
+graph cuối run) không bị cắt và có thể ghi tiếp trong lúc chụp. Thứ tự chụp giữ như PR1: `hub.db` TRƯỚC (online backup — nhất quán tự
+thân) rồi file tri thức SAU: `Ledger.apply` ghi blob snapshot → file → hàng `ledger_entries`, nên mọi entry có trong DB đã chụp đều có
+blob/file trên đĩa lúc quét file (rollback ở máy đích còn đủ blob); chiều ngược (chụp file trước) có thể để lại entry trỏ blob không có
+trong gói. Một thay đổi lọt giữa hai lần chụp chỉ làm file MỚI hơn DB một bước — ledger coi là sửa ngoài ledger (không tự rollback đè).
 
 NHẬP CHỈ ngoại tuyến từ CLI của người (không có RPC): daemon đích dừng (giữ `daemon.lock` suốt quá trình), không trong run của agent →
 kiểm gói (tên phần tử an toàn, sha256 từng phần, `user_version` ≤ mã đang chạy, cùng kiểu đường dẫn hệ điều hành) → home đích phải trống
@@ -26,6 +36,9 @@ bằng `pathmap` (HUB_HOME nguồn → đích, `$HOME` nguồn → đích, `--ma
 tắt Telegram/Slack, pause mọi lịch, task đang chạy/chờ chạy → `blocked` + bình luận "[hub] …") → `PRAGMA integrity_check` → chuyển vào chỗ
 → `backup.rebaseline_offline` → `hub_state.imported_from`. File tri thức thuộc ledger còn đường dẫn cũ được ghi vào
 `hub_state.import_followups` (bản này chỉ liệt kê, KHÔNG ghi file trực tiếp).
+Chế độ `clone` còn huỷ approval/câu hỏi đang chờ của hub nguồn (`cancelled` + "[hub] nhân bản — chưa chạy lại" — không phải từ chối, không
+`expired`; run tương ứng → `interrupted`, không tự resume). Secret (PR2) giải mã ngay sau khi kiểm gói (sai passphrase → từ chối, chưa ghi
+gì) và ghi SAU CÙNG. Lỗi giữa chừng sau khi đã ghi vào home → tự hoàn tác (bản `pre-restore` khi `replace`; home trống → gỡ phần đã ghi).
 """
 
 from __future__ import annotations
@@ -57,6 +70,7 @@ from . import backup as B
 from .errors import Conflict, HubError, NotFound
 from .pathmap import PathMap, db_count_matches, db_rewrite, rewrite_files, scan_files
 from .paths import HubPaths
+from .secrets import NAME_RE as SECRET_RE  # tên secret thật (không tính `.meta.json`, file tạm)
 
 if TYPE_CHECKING:
     from .daemon import Daemon
@@ -78,7 +92,9 @@ MODES = ("clone", "move")
 DEFAULT_PROFILE = "full"
 DEFAULT_MODE = "clone"
 # Phần (section) bản này đọc được. Thêm phần mới (secrets/claude/repos) = thêm vào đây + luật tên phần tử ở `_member_dest`.
-KNOWN_SECTIONS = ("db", "home", "runs")
+KNOWN_SECTIONS = ("db", "home", "runs", "secrets")
+SECRETS_MEMBER = "secrets.enc"  # = transfer_secrets.MEMBER (PR2: secret mã hoá bằng passphrase)
+MAX_SECRETS_BLOB = 48 * 1024 * 1024
 # Bảng tri thức thuộc ledger: không viết lại đường dẫn tay (chỉ đếm, báo cáo) — rollback/ghim canary phải còn khớp blob ledger
 KNOWLEDGE_TABLES = ("mem_*",)
 # Trạng thái gắn với MÁY cũ trong hub_state — luôn xoá khi nhập (khoá, rate limit, phiên bản CLI, đăng nhập claude, job launchd, offset bot…)
@@ -94,9 +110,13 @@ CLONE_NOTE = "[hub] nhân bản từ máy khác — task chưa chạy lại ở 
 CLONE_SCHEDULE_NOTE = "[hub] nhân bản từ máy khác — bật lại lịch cần chạy ở máy này"
 CLONE_CONFIG = (("notify.telegram.enabled", False), ("notify.slack.enabled", False), ("notify.slack.interactive", False))
 IMPORT_RUN_NOTE = "[hub] run đang dở lúc xuất gói — nhập sang máy khác"
-NO_GZ_SUFFIX = (".gz", ".zst", ".zip", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf", ".xz", ".bz2")
+# clone: run dở (kể cả đang chờ người duyệt) → interrupted; approval/câu hỏi đang chờ → cancelled (KHÔNG `expired`, không từ chối)
+CLONE_RUN_STATUSES = ("running", "queued", "waiting_human")
+APPROVAL_PENDING = ("open", "waiting_human")  # = approvals.PENDING
+QUESTION_PENDING = ("with_manager", "open")  # = questions.service.PENDING
+CLONE_PENDING_NOTE = "[hub] nhân bản — chưa chạy lại"
+NO_GZ_SUFFIX = (".enc", ".gz", ".zst", ".zip", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".pdf", ".xz", ".bz2")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}-\d{8}-\d{6}$")
-SECRET_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 MUTATING_TRANSFER = ("hub.export",)
 MAX_MANIFEST = 64 * 1024 * 1024
 _LOCK = threading.Lock()
@@ -219,7 +239,7 @@ def _restore_dirs(home: Path, dirs: Any) -> None:
 
 def _secret_names(home: Path) -> list[str]:
     try:
-        return sorted(n for n in os.listdir(home / "secrets") if SECRET_NAME_RE.match(n) and (home / "secrets" / n).is_file())
+        return sorted(n for n in os.listdir(home / "secrets") if SECRET_RE.match(n) and (home / "secrets" / n).is_file())
     except OSError:
         return []
 
@@ -337,6 +357,55 @@ def _export(paths: HubPaths, profile: str, by: str, level: int) -> dict[str, Any
             "duration_s": round(time.monotonic() - t0, 2)}
 
 
+def seal_package(pkg: Path, home: Path, passphrase: str, *, with_totp: bool = False, with_mcp_tokens: bool = False) -> dict[str, Any]:
+    """Gắn phần `secrets.enc` (transfer_secrets) vào gói VỪA xuất: đọc secret của `home`, mã hoá với AAD ràng buộc manifest, cắt gói tại
+    phần tử MANIFEST (luôn cuối) rồi ghi `secrets.enc` + manifest mới, kiểm lại gói + thử giải mã. Gọi trong tiến trình CLI của người
+    (passphrase không qua RPC). Lỗi bất kỳ sau khi đã cắt → xoá gói (bản xuất hỏng không được để lại). Không có secret nào → không đổi gói."""
+    from . import transfer_secrets as S
+
+    _require_human_process("xuất hub")
+    pkg = Path(pkg)
+    m = read_manifest(pkg)
+    errs, _w, _s = check_manifest(m)
+    if errs:
+        raise HubError("gói không hợp lệ: " + "; ".join(errs[:3]))
+    if any(isinstance(f, dict) and f.get("path") == SECRETS_MEMBER for f in m.get("files") or []):
+        raise Conflict("gói đã có phần secrets.enc")
+    items = S.collect(home, with_totp=with_totp, with_mcp_tokens=with_mcp_tokens)
+    if not items:
+        return {"sealed": False, "names": [], "totp": False, "mcp_tokens": False}
+    m2, ct = S.encrypt(m, items, passphrase)
+    m2.setdefault("sections", {})[S.SECTION] = {"prefix": SECRETS_MEMBER, "count": len(S.names_of(items)), "bytes": len(ct), "optional": True}
+    entry = {"path": SECRETS_MEMBER, "size": len(ct), "sha256": hashlib.sha256(ct).hexdigest(), "gz": False, "packed": len(ct)}
+    m2["files"] = [*m2.get("files", []), entry]
+    mb = json.dumps(m2, ensure_ascii=False, indent=1).encode("utf-8")
+    with tarfile.open(pkg, "r:") as tf:
+        mems = tf.getmembers()
+    if not mems or mems[-1].name != MANIFEST:
+        raise HubError("gói hỏng: MANIFEST không ở cuối")
+    cut = mems[-1].offset
+    try:
+        with open(pkg, "r+b") as raw:
+            raw.truncate(cut)
+            raw.seek(cut)
+            with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as tf:
+                tf.addfile(_tarinfo(SECRETS_MEMBER, len(ct)), io.BytesIO(ct))
+                tf.addfile(_tarinfo(MANIFEST, len(mb)), io.BytesIO(mb))
+            raw.flush()
+            os.fsync(raw.fileno())
+        os.chmod(pkg, 0o600)
+        v = verify_package(pkg, tmp_parent=pkg.parent)
+        if not v["ok"] or v.get("secrets_blob") is None:
+            raise HubError("gói sau khi gắn secret không qua kiểm tra: " + "; ".join(v["errors"][:3]))
+        S.decrypt(v["manifest"], v["secrets_blob"], passphrase)  # chứng minh mở lại được bằng đúng passphrase
+    except BaseException:
+        pkg.unlink(missing_ok=True)
+        raise
+    s = m2[S.SECTION]
+    return {"sealed": True, "names": s["names"], "totp": s["totp"], "mcp_tokens": s["mcp_tokens"], "size": pkg.stat().st_size,
+            "sha256": B._sha_file(pkg), "missing_secrets": m2.get("missing_secrets") or []}
+
+
 # ============================================================================ đọc / kiểm
 def read_manifest(pkg: Path) -> dict[str, Any]:
     try:
@@ -367,8 +436,8 @@ def _member_dest(name: str) -> PurePosixPath | None:
     parts = _safe_parts(name)
     if parts is None:
         return None
-    if name == DB_MEMBER:
-        return PurePosixPath(DB_MEMBER)
+    if name in (DB_MEMBER, SECRETS_MEMBER):
+        return PurePosixPath(name)
     if name.startswith(HOME_PREFIX) and len(parts) >= 2:
         rel = PurePosixPath(*parts[1:])
         return rel if B.included(rel) else None
@@ -403,6 +472,12 @@ def check_manifest(m: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
             skip_prefixes.append(prefix)
         else:
             errors.append(f"gói có phần bắt buộc '{name}' mà bản cfharness này chưa hỗ trợ — cập nhật cfharness trước")
+    if "secrets" in secs:
+        from . import transfer_secrets as S
+
+        if (secs.get("secrets") or {}).get("prefix") != SECRETS_MEMBER:
+            errors.append("manifest: phần secrets khai báo sai")
+        errors += S.check_meta(m)
     src = m.get("source") if isinstance(m.get("source"), dict) else {}
     uv = src.get("user_version")
     latest = B.latest_schema_version()
@@ -437,6 +512,7 @@ def verify_package(pkg: Path, *, extract_to: Path | None = None, tmp_parent: Pat
             continue
         expect[f["path"]] = f
     seen: set[str] = set()
+    secrets_blob: bytes | None = None
     integrity = None
     uv = None
     work = Path(tempfile.mkdtemp(prefix=".verify-", dir=tmp_parent)) if extract_to is None else None
@@ -463,6 +539,17 @@ def verify_package(pkg: Path, *, extract_to: Path | None = None, tmp_parent: Pat
                 if src is None:  # pragma: no cover
                     errors.append(f"không đọc được {mem.name}")
                     continue
+                if mem.name == SECRETS_MEMBER:  # bản mã nhỏ → giữ trong RAM (không ghi ra stage), kiểm sha như mọi phần tử
+                    if meta.get("gz") or mem.size > MAX_SECRETS_BLOB or "secrets" not in (m.get("sections") or {}):
+                        errors.append("phần secrets.enc không hợp lệ")
+                    else:
+                        blob = src.read(MAX_SECRETS_BLOB + 1)
+                        if hashlib.sha256(blob).hexdigest() != meta.get("sha256") or len(blob) != int(meta.get("size") or -1):
+                            errors.append(f"sha256 không khớp: {mem.name}")
+                        else:
+                            secrets_blob = blob
+                    seen.add(mem.name)
+                    continue
                 if mem.name == DB_MEMBER:
                     dest: Path | None = db_tmp
                 else:
@@ -478,6 +565,8 @@ def verify_package(pkg: Path, *, extract_to: Path | None = None, tmp_parent: Pat
     missing = [k for k in expect if k not in seen and not any(k.startswith(p) for p in skip_prefixes)]
     if missing:
         errors.append(f"thiếu {len(missing)} phần tử so với manifest (vd {missing[0]})")
+    if "secrets" in (m.get("sections") or {}) and SECRETS_MEMBER not in expect:
+        errors.append("manifest khai báo phần secrets nhưng không có secrets.enc")
     if DB_MEMBER not in expect:
         errors.append("gói không có hub.db")
     elif db_tmp.is_file() and not errors:
@@ -496,7 +585,8 @@ def verify_package(pkg: Path, *, extract_to: Path | None = None, tmp_parent: Pat
     if work is not None:
         shutil.rmtree(work, ignore_errors=True)
     return {"ok": not errors, "errors": errors, "warnings": warnings, "manifest": m, "files": len(expect), "integrity": integrity,
-            "user_version": uv if uv is not None else (m.get("source") or {}).get("user_version")}
+            "user_version": uv if uv is not None else (m.get("source") or {}).get("user_version"),
+            "secrets_blob": secrets_blob if not errors else None}
 
 
 def _copy_member(src: BinaryIO, gz: bool, size: int, dest: Path | None) -> str | None:
@@ -570,11 +660,17 @@ def _state_keys(conn: sqlite3.Connection, mode: str) -> list[str]:
     return sorted(k for k in keys if k in drop or (mode == "clone" and k.startswith(CLONE_STATE_PREFIXES)))
 
 
-def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], followups: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Dọn trạng thái máy cũ + áp chế độ trên DB của STAGE (daemon chưa chạy). `apply=False` chỉ đếm (dry-run)."""
+def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], followups: dict[str, Any] | None = None,
+               extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Dọn trạng thái máy cũ + áp chế độ trên DB của STAGE (daemon chưa chạy). `apply=False` chỉ đếm (dry-run).
+
+    `clone`: run `running|queued|waiting_human` → `interrupted` (không tự resume — `pending_resume` bị xoá); approval đang chờ
+    (`open|waiting_human`) và câu hỏi đang chờ (`with_manager|open`) → `cancelled` kèm ghi chú "[hub] nhân bản — chưa chạy lại" (HUỶ do
+    nhân bản, không phải từ chối/hết giờ: không có `expired`, không signal reject; máy nguồn vẫn hỏi người như cũ). `move`: giữ nguyên."""
     from .store import _dumps, now_iso
 
-    out: dict[str, Any] = {"state_cleared": [], "runs_interrupted": 0, "runs_pending_resume": 0, "tasks_blocked": 0, "schedules_paused": 0}
+    out: dict[str, Any] = {"state_cleared": [], "runs_interrupted": 0, "runs_pending_resume": 0, "tasks_blocked": 0, "schedules_paused": 0,
+                           "approvals_cancelled": 0, "questions_cancelled": 0}
     conn = sqlite3.connect(str(db), isolation_level=None)
     try:
         tabs = _tables(conn)
@@ -587,7 +683,7 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
                 conn.executemany("DELETE FROM hub_state WHERE key=?", [(k,) for k in keys])
         now = now_iso()
         if "runs" in tabs:
-            sts = ("running", "queued") if mode == "clone" else ("running",)
+            sts = CLONE_RUN_STATUSES if mode == "clone" else ("running",)
             rows = conn.execute(f"SELECT id FROM runs WHERE status IN ({','.join('?' * len(sts))})", sts).fetchall()
             out["runs_interrupted"] = len(rows)
             if apply and rows:
@@ -613,6 +709,19 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
 
                     conn.executemany("INSERT INTO task_comments(id, task_id, author, kind, text, run_id, created_at) VALUES (?,?,?,?,?,?,?)",
                                      [("c_" + uuid.uuid4().hex[:10], r[0], "hub", "comment", CLONE_NOTE, None, now) for r in rows])
+        if mode == "clone" and "approval_requests" in tabs:
+            rows = conn.execute(f"SELECT id FROM approval_requests WHERE status IN ({','.join('?' * len(APPROVAL_PENDING))})",
+                                APPROVAL_PENDING).fetchall()
+            out["approvals_cancelled"] = len(rows)
+            if apply and rows:
+                conn.executemany("UPDATE approval_requests SET status='cancelled', resolved_at=?, resolved_by='hub', resolved_channel='import', "
+                                 "note=? WHERE id=?", [(now, CLONE_PENDING_NOTE, r[0]) for r in rows])
+        if mode == "clone" and "questions" in tabs:
+            rows = conn.execute(f"SELECT id FROM questions WHERE status IN ({','.join('?' * len(QUESTION_PENDING))})", QUESTION_PENDING).fetchall()
+            out["questions_cancelled"] = len(rows)
+            if apply and rows:
+                conn.executemany("UPDATE questions SET status='cancelled', answered_by='hub', answered_channel='import', answered_at=?, "
+                                 "escalation_note=? WHERE id=?", [(now, CLONE_PENDING_NOTE, r[0]) for r in rows])
         if mode == "clone" and "schedules" in tabs:
             rows = conn.execute("SELECT id FROM schedules WHERE status='active' AND deleted_at IS NULL").fetchall()
             out["schedules_paused"] = len(rows)
@@ -622,7 +731,7 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
         if apply and "hub_state" in tabs:
             src = manifest.get("source") or {}
             info = {"export_id": manifest.get("id"), "source_hub_id": src.get("hub_id"), "source_host": src.get("host"),
-                    "source_version": src.get("cfharness_version"), "profile": manifest.get("profile"), "mode": mode, "at": now}
+                    "source_version": src.get("cfharness_version"), "profile": manifest.get("profile"), "mode": mode, "at": now, **(extra or {})}
             rows_state = [("imported_from", info)]
             if mode == "clone":
                 rows_state.append(("cloned_from", {"hub_id": src.get("hub_id"), "export_id": manifest.get("id"), "at": now}))
@@ -633,7 +742,9 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
                              "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", (k, _dumps(v), now))
             if "audit_log" in tabs:
                 data = {"export_id": manifest.get("id"), "source_hub_id": src.get("hub_id"), "mode": mode, "profile": manifest.get("profile"),
-                        "runs_interrupted": out["runs_interrupted"], "tasks_blocked": out["tasks_blocked"], "schedules_paused": out["schedules_paused"]}
+                        "runs_interrupted": out["runs_interrupted"], "tasks_blocked": out["tasks_blocked"], "schedules_paused": out["schedules_paused"],
+                        "approvals_cancelled": out["approvals_cancelled"], "questions_cancelled": out["questions_cancelled"],
+                        **{k: (len(v) if isinstance(v, list) else v) for k, v in (extra or {}).items()}}
                 conn.execute("INSERT INTO audit_log (ts, kind, actor, channel, data) VALUES (?,?,?,?,?)",
                              (now, "hub.imported", "user", "cli", json.dumps(data, ensure_ascii=False)))
         if apply:
@@ -703,7 +814,7 @@ def _mcp_missing_commands(db: Path, pm: PathMap) -> list[dict[str, str]]:
     return out
 
 
-def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *, apply: bool) -> dict[str, Any]:
+def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *, apply: bool, extra: dict[str, Any] | None = None) -> dict[str, Any]:
     """Phần dùng chung giữa dry-run và nhập thật — trên STAGE (đã giải nén, đã kiểm sha)."""
     db = stage / DB_MEMBER
     rep: dict[str, Any] = {}
@@ -720,14 +831,73 @@ def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *
     if review or rep["knowledge_rows_with_old_paths"]:
         followups = {"files": review, "graph_rows": rep["knowledge_rows_with_old_paths"], "map": pm.as_list(), "status": "pending",
                      "note": "tri thức thuộc ledger còn đường dẫn máy cũ — chưa tự viết lại (người sửa qua ledger)"}
-    rep.update(_adjust_db(db, mode=mode, apply=apply, manifest=manifest, followups=followups))
+    rep.update(_adjust_db(db, mode=mode, apply=apply, manifest=manifest, followups=followups, extra=extra))
     return rep
 
 
+def has_secrets(manifest: dict[str, Any]) -> bool:
+    return "secrets" in (manifest.get("sections") or {})
+
+
+def check_passphrase(pkg: Path, passphrase: str) -> list[str]:
+    """Thử passphrase NHANH (chỉ đọc manifest + `secrets.enc`, không giải nén cả gói): đúng → danh sách tên secret; sai / gói bị tráo
+    (sha256 phần tử, AAD) → HubError. Dùng ở CLI trước bước xác nhận; `import_package` vẫn kiểm đầy đủ."""
+    from . import transfer_secrets as S
+
+    m = read_manifest(Path(pkg))
+    errs, _w, _s = check_manifest(m)
+    if errs:
+        raise HubError("gói không hợp lệ: " + "; ".join(errs[:3]))
+    if not has_secrets(m):
+        return []
+    meta = next((f for f in m.get("files") or [] if isinstance(f, dict) and f.get("path") == SECRETS_MEMBER), None)
+    if meta is None:
+        raise HubError("manifest khai báo phần secrets nhưng không có secrets.enc")
+    with tarfile.open(pkg, "r:") as tf:
+        try:
+            mem = tf.getmember(SECRETS_MEMBER)
+        except KeyError:
+            raise HubError("gói thiếu secrets.enc") from None
+        f = tf.extractfile(mem)
+        if f is None or not mem.isreg() or mem.size > MAX_SECRETS_BLOB:
+            raise HubError("phần secrets.enc không hợp lệ")
+        blob = f.read(MAX_SECRETS_BLOB + 1)
+    if hashlib.sha256(blob).hexdigest() != meta.get("sha256"):
+        raise HubError("sha256 không khớp: secrets.enc")
+    S.decrypt(m, blob, passphrase)
+    return list((m.get(S.SECTION) or {}).get("names") or [])
+
+
+def _secrets_plan(m: dict[str, Any], blob: bytes | None, mode: str, passphrase: str | None, skip: bool) -> dict[str, Any]:
+    """Phần secret của kế hoạch nhập — chỉ TÊN. Có passphrase → thử giải mã luôn (sai → `error`, người gọi chặn trước khi ghi gì)."""
+    from . import transfer_secrets as S
+
+    missing = list(m.get("missing_secrets") or [])
+    if not has_secrets(m):
+        return {"present": False, "names": [], "import": [], "skip_mode": [], "unlocked": None, "error": None, "missing": missing}
+    meta = m.get(S.SECTION) or {}
+    names = list(meta.get("names") or [])
+    split = S.plan_names(names, mode)
+    out: dict[str, Any] = {"present": True, "names": names, "totp": bool(meta.get("totp")), "mcp_tokens": bool(meta.get("mcp_tokens")),
+                           "skipped": bool(skip), "unlocked": None, "error": None, **split}
+    if skip:
+        out.update({"import": [], "missing": sorted(set(missing) | set(split["import"]))})
+        return out
+    out["missing"] = missing
+    if passphrase is not None and blob is not None:
+        try:
+            S.decrypt(m, blob, passphrase)
+            out["unlocked"] = True
+        except HubError as e:
+            out["unlocked"], out["error"] = False, str(e)
+    return out
+
+
 def import_plan(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] = (), mode: str = DEFAULT_MODE,
-                user_home: Path | None = None) -> dict[str, Any]:
+                user_home: Path | None = None, passphrase: str | None = None, skip_secrets: bool = False) -> dict[str, Any]:
     """Kế hoạch nhập (KHÔNG ghi gì vào home đích): kiểm gói, bản đồ đường dẫn, số giá trị/file sẽ viết lại, trạng thái sẽ dọn,
-    run/task/lịch bị ảnh hưởng, MCP thiếu lệnh, secret phải đặt lại, home đích có trống không. Giải nén vào thư mục tạm riêng."""
+    run/task/lịch bị ảnh hưởng, MCP thiếu lệnh, secret phải đặt lại, home đích có trống không. Giải nén vào thư mục tạm riêng.
+    `passphrase` → thử giải mã `secrets.enc` (sai → blocker). Không bao giờ trả giá trị secret."""
     if mode not in MODES:
         raise HubError(f"--mode '{mode}' không hợp lệ (clone|move)", code=-32602)
     pkg = Path(pkg).expanduser()
@@ -746,8 +916,15 @@ def import_plan(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] =
         blank = home_blank(paths)
         if m.get("profile") == "core":
             warnings.append("gói profile core — không có stdout thô của run cũ (runs/)")
-        if m.get("missing_secrets"):
-            warnings.append(f"{len(m['missing_secrets'])} secret KHÔNG nằm trong gói — đặt lại bằng `cfharness secret set <TÊN>` sau khi nhập")
+        sec = _secrets_plan(m, v.get("secrets_blob"), mode, passphrase, skip_secrets) if v["ok"] else \
+            {"present": has_secrets(m), "names": [], "import": [], "skip_mode": [], "missing": list(m.get("missing_secrets") or [])}
+        if sec.get("error"):
+            blockers.append(sec["error"])
+        if sec["missing"]:
+            warnings.append(f"{len(sec['missing'])} secret KHÔNG được nhập — đặt lại bằng `cfharness secret set <TÊN>` sau khi nhập")
+        if sec.get("skip_mode"):
+            warnings.append(f"chế độ clone: bỏ {len(sec['skip_mode'])} secret bot Telegram/Slack + OAuth MCP (máy này cần bot riêng, "
+                            "đăng nhập lại MCP OAuth)")
         if mode == "clone":
             warnings.append("chế độ clone: Telegram/Slack tắt, lịch tạm dừng, task đang chạy bị chặn — máy nguồn vẫn chạy bình thường")
         size = pkg.stat().st_size if pkg.is_file() else 0
@@ -761,15 +938,22 @@ def import_plan(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] =
         return {"package": str(pkg), "size": size, "id": m.get("id"), "profile": m.get("profile"), "source": m.get("source") or {},
                 "created_at": m.get("created_at"), "mode": mode, "target_home": str(paths.home), "home_blank": blank,
                 "verify": {k: v[k] for k in ("ok", "errors", "warnings", "files", "integrity", "user_version") if k in v},
-                "path_map": pm.as_list(), "blockers": blockers, "warnings": warnings, "missing_secrets": m.get("missing_secrets") or [],
+                "path_map": pm.as_list(), "blockers": blockers, "warnings": warnings, "missing_secrets": sec["missing"], "secrets": sec,
                 "machine_state": list(MACHINE_STATE), "space_needed": need, **work}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] = (), mode: str = DEFAULT_MODE, replace: bool = False,
-                   user_home: Path | None = None, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Nhập gói vào `paths.home`. Gọi từ CLI của người khi daemon đích ĐÃ dừng (giữ `daemon.lock` suốt quá trình)."""
+                   user_home: Path | None = None, cfg: dict[str, Any] | None = None, passphrase: str | None = None,
+                   skip_secrets: bool = False) -> dict[str, Any]:
+    """Nhập gói vào `paths.home`. Gọi từ CLI của người khi daemon đích ĐÃ dừng (giữ `daemon.lock` suốt quá trình).
+
+    Gói có `secrets.enc`: cần `passphrase` (hoặc `skip_secrets`) — giải mã NGAY sau khi kiểm gói, TRƯỚC mọi ghi vào home (sai → từ chối,
+    home không đổi). Secret được ghi SAU CÙNG (theo chế độ — `transfer_secrets.classify`), có nhật ký hoàn tác.
+    Lỗi bất kỳ sau khi bắt đầu ghi vào home → tự hoàn tác: `replace` → khôi phục bản `pre-restore` vừa chụp; home trống → gỡ những gì đã
+    ghi. Báo lỗi kèm `data.rolled_back` (và lệnh khôi phục tay nếu chính bước hoàn tác hỏng)."""
+    from . import transfer_secrets as S
     from .daemon import acquire_instance_lock, release_instance_lock
 
     _require_human_process("nhập hub")
@@ -794,8 +978,15 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
             if not v["ok"]:
                 raise HubError("gói không qua kiểm tra: " + "; ".join(v["errors"][:3]), data={"verify": {k: v[k] for k in ("errors", "warnings")}})
             m = v["manifest"]
+            payload: dict[str, bytes] | None = None
+            sec = _secrets_plan(m, v.get("secrets_blob"), mode, None, skip_secrets)
+            if sec["present"] and not skip_secrets:
+                if passphrase is None:
+                    raise HubError("gói có secret mã hoá — cần passphrase (hoặc --skip-secrets để nhập phần còn lại)", code=-32602)
+                payload = S.decrypt(m, v["secrets_blob"], passphrase)  # sai → HubError, chưa ghi gì vào home
             pm = build_pathmap(m, paths.home, user_home or Path.home(), maps)
-            rep = _stage_work(stage, m, pm, mode, apply=True)
+            info = {"secrets_imported": len(sec["import"]), "secrets_skipped_mode": len(sec["skip_mode"]), "secrets_missing": sec["missing"]}
+            rep = _stage_work(stage, m, pm, mode, apply=True, extra=info)
             c = sqlite3.connect(str(stage / DB_MEMBER))
             try:
                 integ = str(c.execute("PRAGMA integrity_check").fetchone()[0])
@@ -806,30 +997,81 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
             pre = None
             if not blank:
                 pre = B._create(paths, "pre-restore", f"before-import-{str(m.get('id') or '')[:12].lower()}", cfg, "user")
-            removed, written = B._apply_stage(paths, stage)
-            runs_written = _move_runs(stage, paths)
-            _restore_dirs(paths.home, m.get("dirs"))
-            for suffix in ("-wal", "-shm", "-journal"):
-                Path(f"{paths.db}{suffix}").unlink(missing_ok=True)
-            os.replace(stage / DB_MEMBER, paths.db)
-            os.chmod(paths.db, 0o600)
-            baseline = B.rebaseline_offline(paths)
+            runs_moved: list[Path] = []
+            undo: list[tuple[Path, bytes | None]] = []
+            sec_rep: dict[str, Any] = {"imported": [], "skipped_mode": [], "kept_target": []}
+            try:
+                removed, written = B._apply_stage(paths, stage)
+                _move_runs(stage, paths, runs_moved)
+                _restore_dirs(paths.home, m.get("dirs"))
+                for suffix in ("-wal", "-shm", "-journal"):
+                    Path(f"{paths.db}{suffix}").unlink(missing_ok=True)
+                os.replace(stage / DB_MEMBER, paths.db)
+                os.chmod(paths.db, 0o600)
+                baseline = B.rebaseline_offline(paths)
+                if payload is not None:
+                    sec_rep, undo = S.apply(paths.home, payload, mode=mode)
+            except BaseException as e:
+                S.rollback(undo)
+                _rollback_import(paths, pre, blank, runs_moved, e)
+                raise  # pragma: no cover — _rollback_import luôn ném
         finally:
             shutil.rmtree(stage, ignore_errors=True)
     finally:
         release_instance_lock(lock)
-    log.info("đã nhập gói %s vào %s (chế độ %s, %d file)", m.get("id"), paths.home, mode, written)
+    log.info("đã nhập gói %s vào %s (chế độ %s, %d file, %d secret)", m.get("id"), paths.home, mode, written, len(sec_rep["imported"]))
     return {"imported": m.get("id"), "mode": mode, "home": str(paths.home), "files_written": written, "files_removed": removed,
-            "runs_files": runs_written, "pre_restore": (pre or {}).get("id"), "integrity_baseline_rows": baseline, "path_map": pm.as_list(),
-            "user_version": v.get("user_version"), "missing_secrets": m.get("missing_secrets") or [], **rep}
+            "runs_files": len(runs_moved), "pre_restore": (pre or {}).get("id"), "integrity_baseline_rows": baseline, "path_map": pm.as_list(),
+            "user_version": v.get("user_version"), "missing_secrets": sec["missing"],
+            "secrets": {"imported": sec_rep["imported"], "skipped_mode": sec_rep["skipped_mode"], "kept_target": sec_rep["kept_target"],
+                        "missing": sec["missing"], "skipped": bool(skip_secrets and sec["present"]),
+                        "totp": bool(sec_rep.get("totp")), "mcp_tokens": bool(sec_rep.get("mcp_tokens"))}, **rep}
 
 
-def _move_runs(stage: Path, paths: HubPaths) -> int:
-    """`extra/runs/*` → `HUB_HOME/runs/` — không ghi đè file đã có (run của hub đích)."""
+def _rollback_import(paths: HubPaths, pre: dict[str, Any] | None, blank: bool, runs_moved: list[Path], err: BaseException) -> None:
+    """Hoàn tác một lần nhập hỏng giữa chừng (vẫn giữ `daemon.lock`) rồi NÉM lỗi gốc đã bọc. `pre` = bản pre-restore vừa chụp."""
+    for p in runs_moved:  # file stdout run do lần nhập này thêm (chưa từng có ở đích)
+        p.unlink(missing_ok=True)
+    bid = (pre or {}).get("id")
+    try:
+        if bid:
+            stage = Path(tempfile.mkdtemp(prefix=f".rollback-{bid}-", dir=B.ensure_dir(paths)))
+            try:
+                v = B.verify(paths, bid, extract_to=stage)
+                if not v["ok"]:
+                    raise HubError("bản pre-restore không qua kiểm tra: " + "; ".join(v["errors"][:2]))
+                B._apply_stage(paths, stage)
+                if (stage / DB_MEMBER).is_file():
+                    for suffix in ("-wal", "-shm", "-journal"):
+                        Path(f"{paths.db}{suffix}").unlink(missing_ok=True)
+                    os.replace(stage / DB_MEMBER, paths.db)
+                    os.chmod(paths.db, 0o600)
+                B.rebaseline_offline(paths)
+            finally:
+                shutil.rmtree(stage, ignore_errors=True)
+        elif blank:  # home trống trước khi nhập → gỡ phần đã ghi, trả về trống
+            empty = Path(tempfile.mkdtemp(prefix=".rollback-empty-", dir=paths.home))
+            try:
+                B._apply_stage(paths, empty)
+            finally:
+                shutil.rmtree(empty, ignore_errors=True)
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                Path(f"{paths.db}{suffix}").unlink(missing_ok=True)
+    except Exception as e2:
+        log.exception("hoàn tác lần nhập hỏng thất bại")
+        hint = f" — khôi phục tay: cfharness backup restore {bid} --stop" if bid else ""
+        raise HubError(f"nhập lỗi giữa chừng ({err}) VÀ hoàn tác cũng lỗi ({e2}){hint}",
+                       data={"rolled_back": False, "pre_restore": bid}) from err
+    where = f"đã khôi phục hiện trạng trước khi nhập (bản {bid})" if bid else "đã gỡ phần đã ghi, home đích trở lại trống"
+    log.warning("nhập lỗi giữa chừng, %s: %s", where, err)
+    raise HubError(f"nhập lỗi giữa chừng: {err} — {where}", data={"rolled_back": True, "pre_restore": bid}) from err
+
+
+def _move_runs(stage: Path, paths: HubPaths, out: list[Path]) -> list[Path]:
+    """`extra/runs/*` → `HUB_HOME/runs/` — không ghi đè file đã có (run của hub đích). Thêm vào `out` từng file đã chuyển (để hoàn tác)."""
     src_root = stage / "runs"
     if not src_root.is_dir():
-        return 0
-    n = 0
+        return out
     dst_root = _private_dir(paths.home / "runs")
     for dirpath, _dirnames, filenames in os.walk(src_root):
         for fn in filenames:
@@ -840,8 +1082,8 @@ def _move_runs(stage: Path, paths: HubPaths) -> int:
                 continue
             dst.parent.mkdir(parents=True, exist_ok=True)
             os.replace(src, dst)
-            n += 1
-    return n
+            out.append(dst)
+    return out
 
 
 # ============================================================================ trong daemon
@@ -910,6 +1152,6 @@ def register_rpc(daemon: "Daemon") -> None:
     daemon.methods.update({"hub.export": wrap_with_audit(hub, "hub.export", _export)})
 
 
-__all__ = ["export_package", "export_in_daemon", "export_offline", "verify_package", "read_manifest", "check_manifest", "import_plan",
+__all__ = ["seal_package", "check_passphrase", "has_secrets", "export_package", "export_in_daemon", "export_offline", "verify_package", "read_manifest", "check_manifest", "import_plan",
            "import_package", "build_pathmap", "parse_map_paths", "home_blank", "register_rpc", "MACHINE_STATE", "CLONE_STATE",
            "MUTATING_TRANSFER", "PROFILES", "MODES", "EXT", "exports_dir", "imports_dir"]

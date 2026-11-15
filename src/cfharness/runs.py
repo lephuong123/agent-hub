@@ -1383,6 +1383,12 @@ class RunManager:
         )
 
 
+def export_quiesced(hub: Any) -> bool:
+    """Hub đang xuất gói (`hub_transfer.export_in_daemon` đặt `RunManager.quiesced`): các vòng nền GHI tri thức/DB bỏ lượt (kiểm ở đầu
+    mỗi tick) để chụp DB + file tri thức nhất quán. Lượt ĐANG chạy dở (đang `await`) không bị cắt — xem giới hạn ở docstring hub_transfer."""
+    return bool(getattr(getattr(hub, "runs", None), "quiesced", None))
+
+
 def human_decided(a: dict[str, Any]) -> bool:
     """Approval do NGƯỜI quyết (cùng cách phân loại `approval_stats.decider`): có `resolved_by`, không phải hub/điều phối viên."""
     by = str(a.get("resolved_by") or "")

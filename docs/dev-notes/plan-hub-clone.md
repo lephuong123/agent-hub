@@ -1,6 +1,6 @@
 # Plan — Xuất / nhập toàn bộ hub sang máy khác (`cfharness hub export|import`)
 
-Trạng thái: **ĐỀ XUẤT, chưa làm** (2026-11-15; quyết định của chủ repo đã chốt ở mục 10). Mục tiêu: đóng gói MỌI thứ của một hub
+Trạng thái: **ĐANG LÀM — PR1, PR2 xong** (xem "Tiến độ" cuối file; plan 2026-11-15; quyết định của chủ repo đã chốt ở mục 10). Mục tiêu: đóng gói MỌI thứ của một hub
 cfharness thành MỘT file, mang sang máy khác (macOS ↔ Linux ↔ Windows), nhập vào và chạy tiếp — agent, team, task, hội thoại điều
 phối viên, tri thức/học, lịch, quyền đã cấp, kết nối MCP/Telegram/Slack, tài khoản Claude, lịch sử run/audit.
 Trải nghiệm người dùng chỉ có 2 bước: `cfharness hub export` ra một file → chép file sang máy kia bằng cách nào cũng được →
@@ -234,3 +234,15 @@ Không migration DB (trạng thái ở `hub_state`). Ước lượng: PR1 lớn 
 4. **Bỏ `checkpoints/`** khỏi gói (mọi profile).
 5. **Không** có kênh truyền (SSH…): người dùng chỉ export ra một file và import file đó.
 6. **Web làm được cả xuất lẫn nhập** (mục 7b).
+
+## Tiến độ
+- **PR1** (447dfad): lõi gói `.cfhx` + nhập `clone`/`move` cùng OS — `hub_transfer.py`, `pathmap.py`.
+- **PR2** (2026-11-15): secret mã hoá — `transfer_secrets.py` + `hub_transfer.seal_package|check_passphrase`, `cryptography>=42` trực tiếp.
+  Lệch/chốt so với mục 5: (1) passphrase CHỈ ở tiến trình CLI — daemon đóng gói phần không mật (RPC `hub.export` không nhận passphrase), CLI
+  gắn `secrets.enc` bằng cách cắt gói tại MANIFEST rồi ghi `secrets.enc` + manifest mới (không chép lại gói); PR6 (web) sẽ phải gọi
+  `seal_package` trong daemon — `wrap_with_audit` đã gỡ `passphrase`. (2) Chỉ mang `auth/totp.json` (không `totp_enroll.json`). (3) TOTP/token
+  MCP ở đích đã có và khác gói → giữ của đích, báo. (4) `clone` bỏ mọi `SLACK_*` (kể cả webhook một chiều) — đúng yêu cầu PR2.
+  Sửa chỗ hở PR1: `clone` huỷ approval/câu hỏi đang chờ + run `waiting_human` → `interrupted`; nhập lỗi giữa chừng → tự hoàn tác (pre-restore
+  hoặc home trống); làm lặng vòng nền ghi tri thức/DB (`runs.export_quiesced`) — lượt đang `await` dở không bị cắt (ghi rõ ở docstring
+  `hub_transfer`), thứ tự chụp giữ DB trước rồi file (blob ledger luôn có đủ cho entry trong DB). PR1 tính nhầm `secrets/.meta.json` là
+  secret thiếu — đã sửa (dùng `secrets.NAME_RE`).

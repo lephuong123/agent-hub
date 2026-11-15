@@ -751,9 +751,13 @@ class BackupService:
             self._task = None
 
     async def _loop(self) -> None:
+        from .runs import export_quiesced
+
         while True:
             try:
                 await asyncio.sleep(max(5.0, float(self.cfg().get("tick_s") or 60)))
+                if export_quiesced(self.hub):  # đang xuất gói hub → bỏ lượt (hub_transfer)
+                    continue
                 await self.tick()
             except asyncio.CancelledError:
                 raise

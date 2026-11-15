@@ -137,6 +137,7 @@ name = "cfharness"
 version = "0.2.10"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "jinja2" },
     { name = "linkify-it-py" },
     { name = "markdown-it-py" },
@@ -169,6 +170,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=42" },
     { name = "fastembed", marker = "extra == 'vector'", specifier = ">=0.7" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "linkify-it-py", specifier = ">=2.0" },

@@ -288,7 +288,8 @@ def test_import_refuses_tampered_or_unsafe_packages(tmp_path, monkeypatch):
     # gói từ cfharness mới hơn (schema DB) / định dạng mới hơn / phần bắt buộc lạ
     for fn, msg in ((lambda m: {**m, "source": {**m["source"], "user_version": B.latest_schema_version() + 5}}, "mới hơn"),
                     (lambda m: {**m, "schema": 99}, "mới hơn"),
-                    (lambda m: {**m, "sections": {**m["sections"], "secrets": {"prefix": "secrets.enc"}}}, "bắt buộc"),
+                    (lambda m: {**m, "sections": {**m["sections"], "repos": {"prefix": "repos.json"}}}, "bắt buộc"),
+                    (lambda m: {**m, "sections": {**m["sections"], "secrets": {"prefix": "secrets.enc"}}}, "thiếu khối secrets"),
                     (lambda m: {**m, "format": "cfharness-backup"}, "format")):
         pkg = fresh()
         _rewrite_pkg(pkg, manifest_fn=fn)
@@ -339,13 +340,18 @@ def test_cli_export_to_file_and_import_dry_run_then_apply(tmp_path, monkeypatch,
 
     src, _ = make_source(tmp_path, monkeypatch)
     out = tmp_path / "moved" / "hub.cfhx"
-    assert main(["hub", "export", str(out), "--profile", "core", "--home", str(src.home)]) == 0
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    assert main(["hub", "export", str(out), "--profile", "core", "--home", str(src.home)]) == 1  # có secret, không TTY, không passphrase
+    assert not out.exists() and not list((src.home / "exports").glob("*.cfhx"))  # từ chối TRƯỚC khi đóng gói
+    capsys.readouterr()
+    assert main(["hub", "export", str(out), "--profile", "core", "--no-secrets", "--home", str(src.home)]) == 0
     text = capsys.readouterr().out
     assert out.is_file() and stat.S_IMODE(os.stat(out).st_mode) == 0o600 and "API_KEY" in text and "KHÔNG mã hoá" in text
-    assert main(["hub", "export", str(out), "--home", str(src.home)]) == 1  # không ghi đè
+    assert main(["hub", "export", str(out), "--no-secrets", "--home", str(src.home)]) == 1  # không ghi đè
     capsys.readouterr()
     monkeypatch.setenv("HOME", str(tmp_path / "userB"))
     dst_home = tmp_path / "userB" / ".cfharness"
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
     assert main(["hub", "import", str(out), "--dry-run", "--home", str(dst_home)]) == 0
     text = capsys.readouterr().out
     assert "dry-run" in text and "Bản đồ đường dẫn" in text and "agents.home_path" in text and not (dst_home / "hub.db").exists()

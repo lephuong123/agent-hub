@@ -194,9 +194,13 @@ class TaskDispatcher:
             self._loop_task.cancel()
 
     async def _loop(self) -> None:
+        from ..runs import export_quiesced
+
         while True:
             try:
                 await asyncio.sleep(float(self.cfg("tick_s") or 5))
+                if export_quiesced(self.hub):  # đang xuất gói hub → bỏ lượt (hub_transfer)
+                    continue
                 self.tick()
             except asyncio.CancelledError:
                 raise
