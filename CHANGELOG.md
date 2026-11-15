@@ -22,6 +22,12 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   duyệt/câu hỏi/run đang chạy/ESTOP — không gia hạn phiên) cho app desktop.
 - Nhập bằng giọng nói dùng được trong app desktop: `voice.js` dùng bộ nhận dạng giọng nói của máy (cầu nối `window.cfhNative.speech`) khi có,
   vẫn giữ quy tắc tin giọng nói không bao giờ duyệt/chốt.
+- **Directory hub** cho app desktop (hub của người quản trị máy): `cfharness admin directory token [--rotate]` in một lần URL
+  `/.well-known/cfharness-directory?t=…` — app nhập một lần danh sách hub có địa chỉ công khai (tên, user, origin; không cấp quyền đăng nhập).
+  `cfharness admin directory export [--out]`, `… status`; cấu hình mới `admin_directory.name`. Token sai → 404, thử sai liên tục → 429.
+- Bản tóm tắt gửi người quản trị (`admin_export`) lên schema 3: thêm `web.public_origin` và `web.display_name` (bộ đọc vẫn nhận schema 1/2).
+- Agent không đọc/ghi được thư mục dữ liệu của app desktop (`io.cfharness.desktop` — cookie phiên, token directory): chặn bằng sandbox,
+  luật quyền tĩnh (kể cả agent trust full) và bộ phân loại.
 
 ### Chi phí
 - Lượt chạy tiếp sau khi **người** duyệt/từ chối approval không bị trần ngân sách ngày chặn (trước đây báo `resume_failed`, quyết định của người

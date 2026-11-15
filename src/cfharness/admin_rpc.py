@@ -173,5 +173,9 @@ def register_rpc(daemon: "Daemon") -> None:
 
         daemon.methods["estop.set"] = estop_set_user
 
+    from .admin_directory import register_rpc as _directory
+
+    _directory(daemon)  # admin.directory* — directory hub cho app desktop (C5)
+
 
 __all__ = ["MUTATING_ADMIN", "READ_ADMIN", "register_rpc"]

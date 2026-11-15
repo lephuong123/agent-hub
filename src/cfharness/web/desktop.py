@@ -7,6 +7,8 @@ Hợp đồng (C1–C4, C7):
 - C2 `GET /.well-known/cfharness.json` — công khai, CHỈ `{kind, schema, app_api}` (không phiên bản, không tên). Host vẫn bị kiểm.
 - C3 `GET /app/badge` — cần phiên (401 JSON), không gia hạn phiên (nằm trong `GuardMiddleware.API`), chỉ số nguyên/bool/phiên bản.
 - C4 cầu nối giọng nói `window.cfhNative.speech` — phía trang (`static/voice.js`), không có code server.
+- C5 `GET /.well-known/cfharness-directory?t=<token>` — công khai có token (hub admin): danh mục hub (admin_directory.py); sai → 404 JSON,
+  sai liên tục → 429; token chỉ so ở daemon (băm, thời gian hằng).
 - C7 User-Agent có hậu tố ` CfharnessDesktop/<ver>` → chỉ ghi log (một lần mỗi phiên bản), KHÔNG đổi giao diện.
 """
 
@@ -83,10 +85,79 @@ async def app_badge(request: Request) -> Response:
     return JSONResponse(badge_from(pend, qs, st, es), headers=NO_STORE)
 
 
+# ============================================================================ C5: directory hub (hub admin)
+DIRECTORY_PATH = "/.well-known/cfharness-directory"
+NOT_FOUND_BODY = {"error": "not_found"}
+
+
+def directory_limiter() -> Any:
+    """Giới hạn lần SAI token (theo IP + toàn cục + ngày) — riêng với giới hạn đăng nhập; chỉ RAM của tiến trình web."""
+    from .public import LoginLimiter
+
+    return LoginLimiter(ip_max_failures=10, global_max_failures=30, window_s=600, lockout_s=600, day_max_failures=200, day_lockout_s=3600)
+
+
+class SuccessWindow:
+    """Trần số lần trả danh mục (token đúng) mỗi phút — theo IP và toàn cục (chống dùng URL bị lộ để dội tải)."""
+
+    def __init__(self, per_ip: int = 30, total: int = 120, window_s: float = 60.0, clock: Any = time.monotonic) -> None:
+        self.per_ip, self.total, self.window_s, self.clock = per_ip, total, window_s, clock
+        self._ip: dict[str, list[float]] = {}
+        self._all: list[float] = []
+
+    def allow(self, ip: str) -> bool:
+        now = self.clock()
+        cut = now - self.window_s
+        self._all = [t for t in self._all if t >= cut]
+        q = [t for t in self._ip.get(ip, []) if t >= cut]
+        if len(self._all) >= self.total or len(q) >= self.per_ip:
+            self._ip[ip] = q
+            return False
+        q.append(now)
+        self._all.append(now)
+        self._ip[ip] = q
+        if len(self._ip) > 5000:
+            self._ip = {k: v for k, v in self._ip.items() if v and v[-1] >= cut}
+        return True
+
+
+async def directory(request: Request) -> Response:
+    """`GET /.well-known/cfharness-directory?t=<token>` — công khai nhưng có token. Token sai/thiếu/chưa tạo, hub không phải admin, daemon
+    không trả lời → 404 JSON (không phân biệt lý do). Sai liên tục → 429. Token so khớp ở daemon (băm + compare_digest)."""
+    from ..rpc import DaemonUnavailable, RpcError
+    from .app import _ip, ws
+
+    st = ws(request)
+    lim = getattr(st, "dir_limiter", None)
+    win = getattr(st, "dir_window", None)
+    ip = _ip(request)
+    if lim is not None:
+        lk = lim.locked(ip)
+        if lk is not None:
+            return JSONResponse({"error": "rate_limited"}, status_code=429, headers={**NO_STORE, "Retry-After": str(int(lk[0]) + 1)})
+    token = request.query_params.get("t") or ""
+    try:
+        doc = await st.client.call("admin.directory_serve", {"token": token[:256]})
+    except (RpcError, DaemonUnavailable, OSError):
+        doc = None
+    if not isinstance(doc, dict):
+        if lim is not None:
+            lim.fail(ip)
+        return JSONResponse(dict(NOT_FOUND_BODY), status_code=404, headers=NO_STORE)
+    if lim is not None:
+        lim.success(ip)
+    if win is not None and not win.allow(ip):
+        return JSONResponse({"error": "rate_limited"}, status_code=429, headers={**NO_STORE, "Retry-After": "60"})
+    from ..admin_directory import document
+
+    # lọc lại ở web (phòng daemon cũ/khác phiên bản): đúng hợp đồng C5, không trường nào khác
+    return JSONResponse(document(doc.get("name"), doc.get("hubs") if isinstance(doc.get("hubs"), list) else []), headers=NO_STORE)
+
+
 def routes() -> list[Any]:
     from starlette.routing import Route
 
-    return [Route(WELL_KNOWN_PATH, well_known), Route(BADGE_PATH, app_badge)]
+    return [Route(WELL_KNOWN_PATH, well_known), Route(BADGE_PATH, app_badge), Route(DIRECTORY_PATH, directory)]
 
 
 # ============================================================================ C7: nhận diện app (chỉ log)

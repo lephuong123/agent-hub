@@ -597,6 +597,11 @@ DEFAULTS: dict[str, Any] = {
         "dir": "/Users/Shared/cfharness/status",  # admin tạo sẵn (nhóm cfharness-admin); hub admin cũng ĐỌC thư mục này
         "group": "cfharness-admin",  # nhóm của file 0640; không có → giữ nhóm hiện có + cảnh báo
     },
+    # Directory hub cho app desktop (admin_directory.py, C5 — docs/dev-notes/desktop-app.md): hub của ADMIN phát danh mục hub có origin công
+    # khai ở `/.well-known/cfharness-directory?t=<token>`. Chỉ người đặt; nhánh ∈ integrity.SECURITY_KEYS.
+    "admin_directory": {
+        "name": None,  # tên danh mục (một dòng ≤ 60); null = "cfharness"
+    },
     # Quản trị máy — cảnh báo + lịch sử ở hub của ADMIN (admin_watch.py, docs/dev-notes/admin-users.md). Chỉ có tác dụng khi daemon thuộc
     # nhóm cfharness-admin. Chỉ người đặt; nhánh ∈ integrity.SECURITY_KEYS.
     "admin_watch": {
@@ -918,6 +923,10 @@ def validate_setting(key: str, value: Any) -> None:
         from .backup import validate_setting as _validate_backup
 
         _validate_backup(key, value)
+    if key == "admin_directory" or key.startswith("admin_directory."):
+        from .admin_directory import validate_setting as _validate_directory
+
+        _validate_directory(key, value)
     if key == "admin_watch" or key.startswith("admin_watch."):
         _validate_admin_watch(key, value)
     if key == "files" or key.startswith("files."):

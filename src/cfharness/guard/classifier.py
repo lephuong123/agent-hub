@@ -399,7 +399,7 @@ NET_BLOCK_RULES = frozenset({"webfetch_local", "ssrf_metadata", "ssrf_private_ip
 # đánh dấu cần duyệt, lỗi bộ phân loại/không phân tích được đích, run không hoạt động/ESTOP
 NEVER_DOWNGRADE_RULES = NET_BLOCK_RULES | frozenset({
     "url_dns_failed", "web_domain_denied", "web_domain_not_allowed", "sandbox_network_not_allowed", "sandbox_network_bad_host", "mcp_require_approval", "classifier_error", "unknown_run", "estop",
-    "nesting_too_deep", "hub_secret_read", "self_approval", "admin_shared",
+    "nesting_too_deep", "hub_secret_read", "self_approval", "admin_shared", "desktop_app_data",
 })
 NEVER_DOWNGRADE_KLASS = frozenset({"hub", "policy", "guard"})
 
@@ -558,8 +558,13 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
                 v = ti.get(k)
                 if isinstance(v, str) and v and admin_shared(_abs(v, ctx.cwd)):
                     return Verdict("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [v], forbidden=True)
+                if isinstance(v, str) and v and desktop_app_data(_abs(v, ctx.cwd)):
+                    return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [v], forbidden=True)
                 if isinstance(v, str) and v and sensitive_read(_abs(v, ctx.cwd), ctx):
                     return Verdict("destructive", "hub_secret_read", "hub", "agent không được đọc token người/secret/mcp.json của hub", [v], forbidden=True)
+            pat = ti.get("pattern") if tool_name == "Glob" else None  # Glob có thể chỉ mang đường dẫn tuyệt đối trong pattern
+            if isinstance(pat, str) and pat.startswith(("/", "~")) and desktop_app_data(_abs(pat.split("*", 1)[0] or "/", ctx.cwd)):
+                return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [pat], forbidden=True)
             cv = confine_read_verdict(tool_name, ti, ctx)
             if cv is not None:
                 return cv
@@ -767,6 +772,16 @@ def admin_shared(p: str) -> bool:
 ADMIN_SHARED_REASON = "agent không được đọc/ghi thư mục chung của quản trị máy (dữ liệu của mọi user trên máy)"
 
 
+def desktop_app_data(p: str) -> bool:
+    """Thư mục dữ liệu app desktop cfharness (C6 — desktop_app.py): cookie phiên WebView + token directory của mọi hub."""
+    from ..desktop_app import is_app_data
+
+    return is_app_data(canon_path(p)) or is_app_data(p)
+
+
+DESKTOP_APP_REASON = "agent không được đọc/ghi thư mục dữ liệu của app desktop cfharness (cookie phiên, token directory của mọi hub)"
+
+
 def sensitive_read(p: str, ctx: GuardContext) -> bool:
     """Đường dẫn mà agent KHÔNG được đọc: token người cạnh socket, secrets/, mcp.json đã resolve, token MCP HTTP,
     mọi hub home KHÁC đã đăng ký (P2.4)."""
@@ -904,6 +919,8 @@ def classify_file_write(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -
     op = "overwrite" if tool_name == "Write" and os.path.exists(ap) else "write"
     if admin_shared(ap):
         return Verdict("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [ap], forbidden=True)
+    if desktop_app_data(ap):
+        return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [ap], forbidden=True)
     for cand in {ap, rp}:
         if _under(cand, canon_path(str(ctx.policy.policy_dir))):
             return Verdict("destructive", "policy_write", "policy", "agent không được ghi chính sách an toàn (FR-SG-05)", [ap], "hub-policy")
@@ -1268,6 +1285,10 @@ class BashAnalyzer:
 
             if re.search(re.escape(SHARED_ROOT) + r"(?![A-Za-z0-9_.\-])", norm):
                 self.hit("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [SHARED_ROOT], forbidden=True)
+        from ..desktop_app import APP_ID, shell_mentions
+
+        if shell_mentions(norm) or shell_mentions(script):
+            self.hit("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [APP_ID], forbidden=True)
         for pat in self.ctx.policy.bash_patterns:
             try:
                 if re.search(pat["pattern"], norm):

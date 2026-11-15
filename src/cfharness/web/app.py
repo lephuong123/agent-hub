@@ -136,6 +136,9 @@ class WebState:
     totp: TotpStore | None = None
     devices: DeviceStore | None = None  # "Tin cậy thiết bị này" (web/devices.py) — chỉ dùng trên host public https
     _dev_rejects: dict[str, float] = field(default_factory=dict)  # giới hạn ghi audit `web.device_rejected` theo IP
+    # directory hub (C5, web/desktop.py): giới hạn lần sai token + trần lần trả danh mục — chỉ RAM
+    dir_limiter: Any = field(default_factory=lambda: _desktop.directory_limiter())
+    dir_window: Any = field(default_factory=lambda: _desktop.SuccessWindow())
 
     @property
     def public_hosts(self) -> set[str]:
@@ -183,7 +186,8 @@ class GuardMiddleware:
     """ASGI thuần (không đệm response → SSE chạy được): kiểm Host, gắn phiên, chặn khi chưa đăng nhập, thêm header bảo mật."""
 
     # callback OAuth: state là lớp bảo vệ (web/mcp_oauth.py); well-known: app desktop nhận diện hub (chỉ {kind, schema, app_api})
-    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/mcp/oauth/callback", "/.well-known/cfharness.json")
+    # directory: công khai nhưng có token (C5, hub admin — web/desktop.directory: sai → 404, giới hạn tốc độ)
+    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/mcp/oauth/callback", "/.well-known/cfharness.json", "/.well-known/cfharness-directory")
     # JSON do trang gọi bằng fetch (polling): chưa đăng nhập → 401 (không chuyển hướng), không gia hạn phiên — như /sse/, /partials/
     # `/app/` = API cho app desktop (web/desktop.py: /app/badge) — 401 dạng JSON
     API = ("/office/state", "/office/approval/", "/office/question/", "/office/chat", "/office/do/", "/app/")  # tiền tố

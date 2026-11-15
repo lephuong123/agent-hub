@@ -180,6 +180,21 @@ def admin_shared_deny_rules() -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def app_data_deny_rules() -> list[str]:
+    """App desktop (C6, desktop_app.py): Read/Grep/Glob/Edit/Write… KHÔNG vào thư mục dữ liệu của app (cookie phiên WebView + token directory
+    của mọi hub). Áp cho mọi hub, kể cả agent trust_full — dữ liệu đăng nhập của app không phải quyền của hub để trao."""
+    from ..desktop_app import app_data_dirs
+
+    out: list[str] = []
+    roots: list[str] = []
+    for d in app_data_dirs():
+        roots += [d, os.path.realpath(d)]
+    for r in dict.fromkeys(roots):
+        for t in ("Read", "Grep", "Glob", *FILE_TOOLS):
+            out += [f"{t}(/{rule_path(r)}/**)", f"{t}(/{rule_path(r)})"]
+    return list(dict.fromkeys(out))
+
+
 def secret_read_deny_rules(hub_home: Path, socket: Path) -> list[str]:
     """`permissions.deny` cho tool Read/Grep/Glob: token người, secret, mcp.json đã resolve, token MCP HTTP."""
     from ..auth import token_path
@@ -341,6 +356,9 @@ def fixed_protected_dirs(hub_home: Path, socket: Path, sb_cfg: dict[str, Any] | 
     if sb_cfg.get("protect_hub_code", True):
         out.append(os.path.realpath(package_dir()))
     out += home_persistence_dirs() + path_bin_dirs() + executable_zones()
+    from ..desktop_app import app_data_dirs
+
+    out += app_data_dirs()  # C6: thư mục dữ liệu app desktop — workspace không được nằm trong
     out += [str(x) for x in sb_cfg.get("extra_deny_write") or []]
     return list(dict.fromkeys(out))
 
@@ -426,6 +444,10 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
 
         deny_w.append(SHARED_ROOT)
         deny_r.append(SHARED_ROOT)
+    from ..desktop_app import app_data_dirs  # C6: thư mục dữ liệu app desktop (cookie phiên WebView, token directory) — không đọc/ghi
+
+    deny_w += app_data_dirs()
+    deny_r += app_data_dirs()
     deny_r += [str(x) for x in sb_cfg.get("extra_deny_read") or []]
     socks = [str(x) for x in sb_cfg.get("allow_unix_sockets") or []]
     if sb_cfg.get("allow_ssh_agent", False) and os.environ.get("SSH_AUTH_SOCK"):
@@ -489,7 +511,8 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
         conf_deny = permission_deny_rules(confine, read_roots(confine, hub_home, cwd=cwd))
     if trust_full:
         perms = dict(s.get("permissions") or {})
-        perms["deny"] = list(perms.get("deny") or []) + admin_shared_deny_rules()  # dữ liệu của user KHÁC: không phải quyền của người này để trao
+        # dữ liệu của user KHÁC / phiên đăng nhập của app desktop: không phải quyền của người này để trao
+        perms["deny"] = list(perms.get("deny") or []) + admin_shared_deny_rules() + app_data_deny_rules()
         s["permissions"] = perms
         if confine is None:
             s["sandbox"] = {"enabled": False}
@@ -505,7 +528,7 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
     user_prot = protected_write_paths(hub_home)  # R2-2: tài nguyên NGƯỜI khai báo (vd `.next` prod) → chặn tĩnh tool ghi + sandbox
     perms["deny"] = (list(perms.get("deny") or []) + policy_deny_rules(policy_dir) + secret_read_deny_rules(hub_home, Path(socket))
                      + exec_zone_deny_rules() + [f"{t}(/{rule_path(p)}{suf})" for p in user_prot for t in FILE_TOOLS for suf in ("/**", "")]
-                     + credential_deny_rules() + admin_shared_deny_rules() + (conf_deny if confine is not None else []))
+                     + credential_deny_rules() + admin_shared_deny_rules() + app_data_deny_rules() + (conf_deny if confine is not None else []))
     s["permissions"] = perms
     sb_cfg = sb_cfg0
     if not sb_cfg.get("enabled", True) and confine is not None:

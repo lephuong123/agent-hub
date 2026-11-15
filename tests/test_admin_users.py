@@ -60,7 +60,7 @@ def test_exporter_prefers_user_dir(hub_home, tmp_path):
         p = hub.admin_export.export_once()
         assert p == d / ME / f"{ao.hub_id(hub_home.home)}.json"
         data = json.loads(p.read_text())
-        assert data["schema"] == 2 and ao.sanitize(data) == data
+        assert data["schema"] == ao.SCHEMA and ao.sanitize(data) == data
         for sec in ("guard", "claude", "web", "chat", "disk", "policy", "admin_estop"):
             assert sec in data, sec
         assert ao.read_dir(d)["hubs"][0]["state"] in ("ok", "stopped")

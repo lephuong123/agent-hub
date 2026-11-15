@@ -87,7 +87,7 @@ async def test_machine_page_user_side(hub_home, shared):
         assert (await env.client.get("/admin/users")).status_code == 403
         page = (await env.client.get("/machine")).text
         assert "ĐANG BẬT" in page and "security" in page and "boss" in page and "estop_on" in page
-        assert "&#34;schema&#34;: 2" in page or '"schema": 2' in page  # đúng JSON sẽ xuất
+        assert "&#34;schema&#34;: 3" in page or '"schema": 3' in page  # đúng JSON sẽ xuất
         settings = (await env.client.get("/settings")).text
         assert "người quản trị máy" in settings and "Tắt ESTOP" not in settings  # không có nút gỡ giả
     finally:

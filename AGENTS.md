@@ -640,16 +640,24 @@ Chi tiết, an toàn, việc dở: `docs/dev-notes/voice.md`. Không migration. 
   xin phép từ giọng nói (`_voice_shortcut`). Header `microphone=(self)` — không nới thêm (camera/geolocation vẫn `()`).
 
 ## Desktop app — hỗ trợ phía hub
-Hợp đồng chung hub ↔ app (C1–C7), việc đã làm/còn lại, test: `docs/dev-notes/desktop-app.md`. Không migration, không RPC mới. Test: `tests/test_desktop_hub.py`
-(+ `tests/js/voice_native_harness.js` chạy `voice.js` bằng node với DOM giả).
+Hợp đồng chung hub ↔ app (C1–C7), việc đã làm/còn lại, test: `docs/dev-notes/desktop-app.md`. Không migration. Test: `tests/test_desktop_hub.py`
+(+ `tests/js/voice_native_harness.js` chạy `voice.js` bằng node với DOM giả), `tests/test_desktop_directory.py` (C5 + C6).
 
 | Module | Vai trò |
 |---|---|
 | `web/desktop.py` | `GET /.well-known/cfharness.json` (công khai, CHỈ `{kind, schema, app_api}`), `GET /app/badge` (cần phiên, `badge_from` thuần: chỉ int/bool/phiên bản), `note_app_ua` (UA `CfharnessDesktop/<ver>` → chỉ log), chọn cổng theo hub, spawn web tách tiến trình, `probe`/`wait_ready`/`info` cho C1 |
 | `web/cli.py` `cmd_web_app` | `cfharness web --json [--ensure] [--port N] [--wait S]`: một dòng JSON `{ok, origin, login_url, hub_id, version, name, started}` / `{ok:false, error, message}` mã 1; `--ensure` khởi động web nền (`--no-link`, log `HUB_HOME/logs/web.log` 0600). Cấu hình `web.port`, `web.display_name` |
 | `web/static/voice.js` | Dò `window.cfhNative.speech` (đủ `available/start/stop/on`, `available()` = true) TRƯỚC Web Speech API; `NativeListener` cùng giao diện `Listener` |
+| `admin_directory.py` | C5 directory hub (hub ADMIN): mục `{id, name, user, origin}` lọc từ file trạng thái `admin_overview` (SPEC schema 3: `public_origin` qua `parse_public_origin`, `display_name` một dòng ≤ 60), ≤ 200 mục; token băm SHA-256 ở `HUB_HOME/auth/directory.json` (0600), so `compare_digest`; RPC `admin.directory\|directory_status\|directory_token{rotate}\|directory_serve{token}`; CLI `cfharness admin directory export [--out]\|token [--rotate]\|status`; cấu hình `admin_directory.name` |
+| `web/desktop.py` `directory` | `GET /.well-known/cfharness-directory?t=` công khai có token: sai/thiếu/chưa tạo/không phải admin → 404 JSON `{"error":"not_found"}`; sai liên tục → 429 (`directory_limiter`, theo IP + toàn cục); trần lần trả (`SuccessWindow`); lọc lại bằng `admin_directory.document` |
+| `desktop_app.py` | C6 thư mục dữ liệu app (`io.cfharness.desktop`: macOS Application Support + WebKit/HTTPStorages/Caches, Windows `%APPDATA%`/`%LOCALAPPDATA%`, Linux XDG) → sandbox denyRead/denyWrite + vùng cố định (`fixed_protected_dirs`), `permissions.deny` (`guard/runtime.app_data_deny_rules`, mọi hub kể cả trust_full), classifier `desktop_app_data` (forbidden, ∈ `NEVER_DOWNGRADE_RULES`) |
 
 Bất biến: JSON của C1 không bao giờ chứa token người hay khoá ký (`login_url` = link một lần 300 s, như `--url`); well-known không thêm trường (không
 phiên bản/tên); `/app/` ∈ `GuardMiddleware.API` (GET không gia hạn phiên, chưa đăng nhập → 401 JSON) và không bao giờ trả chữ tự do — thêm trường
 badge = số/bool + ca trong test. UA của app không đổi giao diện. Cầu nối giọng nói dùng CHUNG luồng `mgr:*` + `voice=dictation|conversation`; không
 nới CSP/Permissions-Policy, không `innerHTML`/`eval`. `cfharness web …` (mọi biến thể) vẫn forbidden với agent. Luồng cũ `cfharness web` (không `--json`/`--ensure`) giữ nguyên.
+Directory (C5): mọi RPC `admin.directory*` ∈ HUMAN_ONLY (không ở MANAGER_ALLOWED) + `require_admin`; chỉ `admin.directory_token` là ghi (bọc audit; token/URL
+không vào audit — `_result_brief`); token chỉ hiện MỘT lần, file chỉ giữ băm. Danh mục KHÔNG cấp quyền đăng nhập và không bao giờ có trường ngoài `{id, name,
+user, origin}` (không chi phí/trạng thái/đường dẫn) — thêm trường = sửa hợp đồng ở cả hai repo + ca trong test. Nhánh `admin_directory` ∈ `integrity.SECURITY_KEYS`;
+`cfharness admin …` forbidden với agent. Route trả 404 cho MỌI lỗi (không phân biệt lý do). Thư mục app (C6): thêm biến thể đường dẫn → `desktop_app.app_data_dirs`
++ ca trong `tests/test_desktop_directory.py`/`tests/test_guard_classifier.py`; KHÔNG chặn chuỗi identifier đứng một mình (agent làm việc trên repo app).

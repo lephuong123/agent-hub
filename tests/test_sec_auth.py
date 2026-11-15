@@ -427,3 +427,24 @@ def test_admin_shared_permission_deny_every_hub(tmp_path):
         deny = s["permissions"]["deny"]
         for t in ("Read", "Grep", "Glob", "Edit", "Write"):
             assert f"{t}(/{SHARED_ROOT}/**)" in deny, (trust, t)  # "//abs" = đường dẫn tuyệt đối trong luật Claude Code
+
+
+def test_desktop_app_data_denied_every_hub(tmp_path):
+    """C6 (app desktop): Read/Grep/Glob/Edit/Write không vào thư mục dữ liệu app — kể cả agent trust_full; sandbox chặn đọc/ghi."""
+    from cfharness.desktop_app import app_data_dirs
+    from cfharness.guard.runtime import build_settings, rule_path
+
+    home = tmp_path / "hub"
+    (home / "policy").mkdir(parents=True)
+    for trust in (False, True):
+        s = build_settings({}, run_id="r1", socket=tmp_path / "hub.sock", policy_dir=home / "policy", guard_cfg={"enabled": True},
+                           approval_timeout_s=60, cwd=tmp_path, trust_full=trust)
+        deny = s["permissions"]["deny"]
+        for d in app_data_dirs():
+            for t in ("Read", "Grep", "Glob", "Edit", "Write"):
+                assert f"{t}(/{rule_path(d)}/**)" in deny, (trust, t, d)
+        if not trust and s.get("sandbox", {}).get("enabled"):
+            fs = s["sandbox"]["filesystem"]
+            for d in app_data_dirs():
+                assert any(x.rstrip("/") == d.replace("\\", "/") for x in fs["denyRead"]), d
+                assert any(x.rstrip("/") == d.replace("\\", "/") for x in fs["denyWrite"]), d

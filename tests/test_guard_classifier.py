@@ -484,3 +484,29 @@ def test_admin_shared_forbidden(env):
     # tên gần giống KHÔNG bị chặn nhầm
     assert classify("Bash", {"command": "ls /Users/Shared/cfharness-other"}, env["ctx"]).rule != "admin_shared"
     assert classify("Read", {"file_path": "/Users/Shared/cfharnessx/a"}, env["ctx"]).rule != "admin_shared"
+
+
+# App desktop (C6, desktop_app.py — docs/dev-notes/desktop-app.md): thư mục dữ liệu app (cookie phiên WebView, token directory) = cấm thẳng
+_HOME = os.path.expanduser("~")
+_APP = "io.cfharness.desktop"
+DESTRUCTIVE_DESKTOP_APP = [
+    ("Read", {"file_path": f"{_HOME}/Library/Application Support/{_APP}/hubs.json"}),
+    ("Grep", {"pattern": "t=", "path": f"{_HOME}/Library/Application Support/{_APP}"}),
+    ("Glob", {"pattern": "**", "path": f"{_HOME}/Library/WebKit/{_APP}"}),
+    ("Write", {"file_path": f"{_HOME}/Library/Application Support/{_APP}/hubs.json", "content": "{}"}),
+    ("Edit", {"file_path": f"{_HOME}/Library/HTTPStorages/{_APP}/x", "old_string": "a", "new_string": "b"}),
+    ("Bash", {"command": f"cat ~/Library/Application\\ Support/{_APP}/hubs.json"}),
+    ("Bash", {"command": f"cp -r \"$HOME/Library/WebKit/{_APP}\" /tmp/x"}),
+    ("Bash", {"command": f"type %APPDATA%\\{_APP}\\hubs.json"}),
+]
+
+
+def test_desktop_app_data_forbidden(env):
+    missed = []
+    for tool, ti in DESTRUCTIVE_DESKTOP_APP:
+        v = classify(tool, ti, env["ctx"])
+        if not (v.forbidden and v.rule == "desktop_app_data"):
+            missed.append((tool, ti, v.verdict, v.rule))
+    assert not missed, missed
+    assert classify("Bash", {"command": f"grep -n {_APP} src-tauri/tauri.conf.json"}, env["ctx"]).rule != "desktop_app_data"
+    assert classify("Read", {"file_path": f"{_HOME}/Library/Application Support/{_APP}-old/a"}, env["ctx"]).rule != "desktop_app_data"
