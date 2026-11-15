@@ -448,3 +448,57 @@ def test_desktop_app_data_denied_every_hub(tmp_path):
             for d in app_data_dirs():
                 assert any(x.rstrip("/") == d.replace("\\", "/") for x in fs["denyRead"]), d
                 assert any(x.rstrip("/") == d.replace("\\", "/") for x in fs["denyWrite"]), d
+
+
+async def test_agent_cannot_forge_audit_record(home):
+    """B4: RPC `audit.record` nhận actor/channel/summary do người gọi tự khai → chỉ người (web/CLI). Agent trong run gọi
+    (kể cả đã đọc trộm token) bị từ chối, không ghi được dòng audit giả "user duyệt"; người vẫn ghi được."""
+    assert "audit.record" in auth.HUMAN_ONLY and "audit.record" not in auth.MANAGER_ALLOWED
+    d, srv = await _start(home)
+    try:
+        forged = {"kind": "approval.approve", "actor": "user", "channel": "web", "summary": "người duyệt rm -rf", "data": {"approval_id": "ap_1"}}
+        agent = auth.Caller(via="socket", pid=1, token_ok=False, run_id="r_x", agent_id="a1", evidence=["env:CFHARNESS_RUN_ID"])
+        r = await d.call_as(agent, "audit.record", dict(forged))
+        assert r.get("error", {}).get("code") == -32003, r
+        run, proc, go = await _start_run(d)
+        rr = await _in_run(go, _client_py(home, "audit.record", dict(forged), steal_token=True))
+        resp = json.loads(rr["out"].strip().splitlines()[-1])
+        assert resp.get("error", {}).get("code") == -32003, resp
+        proc.wait(5)
+        n = d.hub.store.conn.execute("SELECT COUNT(*) FROM audit_log WHERE kind='approval.approve' AND actor='user'").fetchone()[0]
+        assert n == 0
+        r = await asyncio.to_thread(RpcClient(home.socket).call, "audit.record", {"kind": "web.login", "actor": "user", "channel": "web"})
+        assert r["id"]
+    finally:
+        await _stop(d, srv)
+
+
+async def test_filehub_writes_human_only(home):
+    """Thư mục chung Không gian số (filehub/): agent trong run — kể cả đọc trộm token người — không setup/thêm/gỡ/tạm dừng được;
+    method ghi đã phân loại + bọc audit; CLI ghi bị classifier chặn; đọc trạng thái thì được."""
+    from cfharness.filehub.rpc import MUTATING_FILEHUB
+    from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI
+
+    for m in MUTATING_FILEHUB:
+        assert m in auth.HUMAN_ONLY and m not in auth.MANAGER_ALLOWED, m
+    assert set(MUTATING_FILEHUB) <= auth.all_mutating()
+    assert {"setup", "login", "add", "remove", "pause", "resume"} <= HUB_HUMAN_ONLY_CLI["filehub"]
+    for m in ("filehub.status", "filehub.list", "filehub.link"):
+        assert m not in auth.HUMAN_ONLY
+    d, srv = await _start(home)
+    try:
+        for m, prm in (("filehub.setup", {"server": "https://x.example", "binary": "/bin/sh"}), ("filehub.add", {"root_id": "r1", "local_path": "/tmp/x"}),
+                       ("filehub.pause", {})):
+            run_n, proc_n, go_n = await _start_run(d)
+            rr = await _in_run(go_n, _client_py(home, m, prm, steal_token=True))
+            resp = json.loads(rr["out"].strip().splitlines()[-1])
+            assert resp.get("error", {}).get("code") == -32003, (m, resp)
+            proc_n.wait(5)
+        run_n, proc_n, go_n = await _start_run(d)
+        rr = await _in_run(go_n, _client_py(home, "filehub.status", {}, steal_token=False))
+        assert "result" in json.loads(rr["out"].strip().splitlines()[-1])
+        proc_n.wait(5)
+        assert not d.hub.filehub.folders() and not d.hub.store.state_get("filehub.paused")
+        assert d.hub.config.get("filehub.server") is None
+    finally:
+        await _stop(d, srv)

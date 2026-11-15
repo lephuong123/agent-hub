@@ -72,6 +72,8 @@ def always_view(rule: dict[str, Any]) -> str:
         return f"{who} mở trang trên {rule.get('domain')} (không gồm tên miền con)"
     if k == "mcp_tool":
         return f"{who} gọi tool {rule.get('tool')}"
+    if not rule.get("agent_id"):  # A3: luật exact thiếu agent_id (dữ liệu cũ) không còn khớp agent nào
+        return f"(luật cũ thiếu agent — không áp dụng) thao tác {rule.get('tool') or ''} (vân tay {str(rule.get('fingerprint') or '')[:12]})"
     return f"{who} chạy lại ĐÚNG thao tác {rule.get('tool') or ''} (vân tay {str(rule.get('fingerprint') or '')[:12]})"
 
 

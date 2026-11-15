@@ -360,8 +360,8 @@ class PolicyStore:
         if rule["kind"] == "mcp_tool" and (not rule.get("agent_id") or not str(rule.get("tool") or "").startswith("mcp__")
                                            or any(c in str(rule.get("tool")) for c in "*?[]")):
             raise ValueError("luật mcp_tool cần agent_id + tên tool mcp__<server>__<tool> chính xác (không glob)")
-        if rule["kind"] == "exact" and not (rule.get("tool") and rule.get("fingerprint")):
-            raise ValueError("luật exact cần tool + fingerprint")
+        if rule["kind"] == "exact" and not (rule.get("tool") and rule.get("fingerprint") and rule.get("agent_id")):
+            raise ValueError("luật exact cần agent_id + tool + fingerprint")
         if rule["kind"] == "web_domain" and (not rule.get("domain") or any(c in str(rule["domain"]) for c in "*?[]")):
             raise ValueError("luật web_domain cần host chính xác (không wildcard)")
         self.ensure()

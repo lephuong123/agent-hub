@@ -130,7 +130,7 @@ class ScheduleService:
 
     # ------------------------------------------------------------------ biểu thức
     def _spec(self, r: dict[str, Any]) -> cron.Spec:
-        return cron.parse(r["expr"], tz=cron.get_tz(r.get("tz")))
+        return cron.parse(r["expr"], tz=cron.get_tz(r.get("tz")), strict=False)  # bản ghi cũ: không làm hỏng list/tick
 
     def _next(self, r: dict[str, Any], after: datetime) -> datetime | None:
         spec = self._spec(r)

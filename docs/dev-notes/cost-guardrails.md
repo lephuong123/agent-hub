@@ -58,5 +58,7 @@ crashed có cost ước lượng + vào `cost_today` + `chain_budget_left`; cras
   phối viên (kể cả "đang giữ chỗ"). Cả "cho phép" lẫn "từ chối" đều được miễn (người đã quyết, agent cần chạy tiếp để kết thúc gọn).
 - Vẫn áp: trần mỗi run (`max_budget_usd` kế thừa run gốc) và scope `admin` (chính sách root — user không tự miễn được).
 - Điều phối viên/hub quyết → không miễn (lượt chạy tiếp bị chặn như cũ, event `error{code: resume_failed}`).
+  Khi lượt chạy tiếp bị chặn (`Blocked`/`HubError` bất kỳ): run cũ → `failed` (`error` = "không resume được sau khi duyệt: …"), nhả khoá
+  session, event `run.failed` — không còn kẹt `waiting_human` khi mọi approval đã quyết (QA S5). Người chạy tiếp bằng `cfharness run continue`.
 - Khi thực sự dùng miễn trừ (có scope ngày đã hết) → audit `budget.exempt_approved{from_run_id, approvals, by, max_budget_usd}`.
 - Run mới bình thường vẫn bị chặn; miễn trừ chỉ cho đúng lượt chạy tiếp đó. Test: `tests/test_cost_guardrails.py` mục 6.

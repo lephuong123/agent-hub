@@ -118,12 +118,15 @@
 
 {#- Chip file (web/file_pages.py, docs/dev-notes/file-open.md): "Xem" = trình xem chỉ đọc (máy này lẫn web public); "Mở"/"Thư mục" =
     mở bằng app mặc định trên MÁY CHẠY HUB — nút ẩn tới khi static/files.js thấy đang dùng web cục bộ (server vẫn tự kiểm, 403 nếu không).
-    f = {run|agent, path, name?}. Đường dẫn là dữ liệu: autoescape + urlencode; daemon kiểm phạm vi khi bấm. -#}
+    f = {run|agent, path, name?, fh?} (fh = tệp trong thư mục chung → thêm "Không gian số" → /filehub/open). Đường dẫn là dữ liệu: autoescape + urlencode; daemon kiểm phạm vi khi bấm. -#}
 {% macro file_chip(f, show_open=False) -%}
 {%- set q = ("run=" ~ (f.run|urlencode)) if f.run else ("agent=" ~ (f.agent|urlencode)) -%}
 <span class="fchip" data-path="{{ f.path }}"{% if f.run %} data-run="{{ f.run }}"{% else %} data-agent="{{ f.agent }}"{% endif %}>
 <a class="fchip-view" href="/files/view?{{ q }}&amp;path={{ f.path|urlencode }}" target="_blank" rel="noopener" title="Xem {{ f.path }} trong trình duyệt (chỉ đọc — dùng được cả qua link public)">{{ icon('external', 'sm') }}<span>Xem</span></a>
 <button type="button" class="fchip-act{{ ' show' if show_open }}" data-fopen="open" title="Mở {{ f.name or f.path }} bằng ứng dụng mặc định trên máy chạy hub (chỉ khi dùng web trên chính máy đó)">{{ icon('clip', 'sm') }}<span>Mở</span></button>
 <button type="button" class="fchip-act{{ ' show' if show_open }}" data-fopen="reveal" title="Mở thư mục chứa file trong Explorer/Finder trên máy chạy hub">{{ icon('inbox', 'sm') }}<span>Thư mục</span></button>
+{%- if f.fh %}
+<a class="fchip-view fchip-fh" href="/filehub/open?{{ q }}&amp;path={{ f.path|urlencode }}" target="_blank" rel="noopener noreferrer" title="Mở {{ f.path }} trên Không gian số (xem/sửa, phiên bản, thùng rác)">{{ icon('external', 'sm') }}<span>Không gian số</span></a>
+{%- endif %}
 </span>
 {%- endmacro %}

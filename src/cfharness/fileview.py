@@ -337,7 +337,14 @@ class FileAccess:
             if ag is None:
                 raise NotFound(f"không tìm thấy agent '{aid}'")
             if ag.get("workspace_default"):
-                out.append(str(ag["workspace_default"]))
+                wd = str(ag["workspace_default"])
+                if wd.startswith("filehub:") and getattr(self.hub, "filehub", None) is not None:
+                    try:
+                        wd = self.hub.filehub.resolve_ref(wd, must_exist=False)[0]
+                    except HubError:
+                        wd = ""
+                if wd:
+                    out.append(wd)
             if ag.get("home_path"):
                 out.append(str(Path(ag["home_path"]) / "workspaces"))
         if not rid and not aid:

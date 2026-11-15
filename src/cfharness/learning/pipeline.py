@@ -321,6 +321,10 @@ class Pipeline:
                 fm, _ = parse_skill(new)
                 desc = " ".join(str(fm.get("description") or "").split())
                 skill_chars = len(new)
+            elif new is not None:  # file hỗ trợ: cùng trần mỗi file như `_support_files` (trước đây patch file hỗ trợ không bị giới hạn)
+                lim = self.ks.limits()["skill_chars"]
+                if len(new) > lim:
+                    raise KnowledgeError(f"file '{rel}' {len(new)} > {lim} ký tự", "skill_limit")
             files: dict[str, bytes | None] = {rel: None if new is None else new.encode("utf-8")}
             replace_tree = bool(pl.get("replace_tree"))
             if pl.get("files") is not None or replace_tree:
@@ -633,12 +637,26 @@ class Pipeline:
         except Exception as e:
             log.warning("eval gate tầng team/global lỗi cho %s: %r", prop["id"], e)
             v = {"status": "deferred_no_eval", "reason": f"eval_error: {e!r}"[:300]}
-        try:
-            plan = self.plan(dict(prop, payload=prop["payload"]))
-        except (KnowledgeError, NotFound) as e:
-            self._block(prop, Block("guard_rule", getattr(e, "reason", "not_found"), e.message))
+        plan = self._replan_checked(prop)
+        if plan is None:
             return
         self._on_tier_gate(prop, plan, v)
+
+    def _replan_checked(self, prop: dict[str, Any]) -> dict[str, Any] | None:
+        """Sau eval gate BẤT ĐỒNG BỘ: dựng lại kế hoạch (đích có thể đã đổi trong lúc chấm) VÀ chạy lại `guard.check`
+        (pin người vừa đặt, hạn mức, read-before-write theo bằng chứng đã lưu) trước khi áp dụng. Bị chặn → None."""
+        p = dict(prop, payload=prop["payload"])
+        p["_read_evidence"] = {**dict((prop.get("payload") or {}).get(READ_EVIDENCE) or {}), **dict(prop.get("_read_new") or {})}
+        try:
+            plan = self.plan(p)
+        except (KnowledgeError, NotFound) as e:
+            self._block(prop, Block("guard_rule", getattr(e, "reason", "not_found"), e.message))
+            return None
+        b = self.svc.guard.check(p, plan)
+        if b is not None:
+            self._block(prop, b)
+            return None
+        return plan
 
     def _on_tier_gate(self, prop: dict[str, Any], plan: dict[str, Any], v: dict[str, Any]) -> dict[str, Any]:
         if v.get("status") != "passed":
@@ -655,10 +673,8 @@ class Pipeline:
         except Exception as e:  # lỗi hạ tầng eval → hoãn, không áp dụng
             log.warning("eval gate lỗi cho %s: %r", prop["id"], e)
             v = {"status": "deferred_no_eval", "reason": f"eval_error: {e!r}"[:300]}
-        try:
-            plan = self.plan(dict(prop, payload=prop["payload"]))  # dựng lại: đích có thể đã đổi trong lúc chấm
-        except (KnowledgeError, NotFound) as e:
-            self._block(prop, Block("guard_rule", getattr(e, "reason", "not_found"), e.message))
+        plan = self._replan_checked(prop)  # dựng lại + guard lại: đích/pin có thể đã đổi trong lúc chấm
+        if plan is None:
             return
         self._on_gate(prop, plan, v)
 

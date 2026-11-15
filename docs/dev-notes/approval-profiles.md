@@ -118,3 +118,12 @@ Từ chối sau → không làm gì thêm.
 - `extra_write_roots` không lấy khoá repo cho thư mục thêm.
 - Điều phối viên là LLM: dữ liệu approval (lệnh, đích) là dữ liệu agent; giới hạn cứng là lớp + danh sách "không bao giờ", không phải
   phán đoán của nó. Thu hẹp bằng `approval.delegate_to_manager.classes` hoặc tắt `enabled`.
+
+## Luật `exact` và fingerprint (QA vòng 1: A2/A3)
+- `action_fingerprint(tool, input, cwd)`: `dangerouslyDisableSandbox=true` thuộc fingerprint (false/thiếu thì như cũ); khoảng trắng chỉ gộp
+  NGOÀI dấu nháy; với Bash có thêm cwd đã chuẩn hoá (cwd của `GuardContext` — cwd hook gửi lên, hoặc cwd của run).
+- **Tương thích ngược**: luật `exact` Bash tạo trước thay đổi này (fingerprint không có cwd) không còn khớp → agent sẽ bị hỏi lại một lần,
+  duyệt `--always` lại để tạo luật mới. Vé một lần đang treo (approval mở trước khi nâng cấp) cũng có thể bị hỏi lại. Hướng an toàn: hỏi
+  thêm, không bao giờ cho qua thừa. Vé dùng ở lượt resume khớp khi cwd hook của lượt resume trùng cwd lúc duyệt.
+- `always_add` kind `exact` bắt buộc `agent_id`; `match_always` bỏ qua luật thiếu `agent_id` (trước đây khớp MỌI agent). Luật cũ sửa tay
+  thiếu agent vẫn nằm trong `policy/always_allow.yaml` nhưng vô hiệu (web ghi "không áp dụng") — gỡ hoặc tạo lại kèm agent.

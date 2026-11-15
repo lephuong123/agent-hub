@@ -330,6 +330,8 @@
     var t = e.target;
     if (t && t.tagName === "TEXTAREA" && !t.value.trim() && !(dict && dict.ta === t)) clearVoice(t.form);
   });
+  // E17: gửi xong (kể cả khi đang đọc chép) → cờ voice chỉ áp cho tin VỪA gửi, không dính sang tin gõ tay kế tiếp
+  document.addEventListener("mgr:sent", function () { clearVoice(document.getElementById("mgr-form")); });
   // ô nhập Điều phối: giữ Space khi ô trống = nói-thả (như Claude Code)
   var spaceHold = false;
   document.addEventListener("keydown", function (e) {

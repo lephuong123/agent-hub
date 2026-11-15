@@ -35,7 +35,7 @@ def test_pure_helpers():
     sb = sandbox_rows({"ag0": {"allow_localhost": True, "allow_domains": ["api.x.com", "dev.local"], "dev_hosts": ["dev.local"], "by": "user"}})
     assert [(r["kind"], r["value"]) for r in sb] == [("localhost", "127.0.0.1 / ::1"), ("dev_host", "dev.local"), ("domain", "api.x.com")]
     assert "docs.example.com" in always_view({"kind": "web_domain", "agent_id": "ag0", "domain": "docs.example.com"})
-    assert "mọi agent" in always_view({"kind": "exact", "tool": "Bash", "fingerprint": "abc"})
+    assert "không áp dụng" in always_view({"kind": "exact", "tool": "Bash", "fingerprint": "abc"})  # A3: không còn "mọi agent"
 
 
 # =========================================================================== xác thực / menu

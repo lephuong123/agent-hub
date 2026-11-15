@@ -664,3 +664,23 @@ user, origin}` (không chi phí/trạng thái/đường dẫn) — thêm trườ
 Trust full KHÔNG gỡ `desktop_app_data`/`admin_shared`/`other_hub_write` (`guard/service.TRUST_NEVER_RULES` — thêm rule "không phải quyền của hub để trao"
 → thêm vào đây + ca trong `tests/test_trust_and_noise.py`). Glob kiểm ký tự đại diện ở mọi vị trí (`desktop_app.glob_may_touch`). Bản xuất `admin_overview`
 chỉ ghi schema mới khi có trường mới (tương thích admin cũ). `--ensure` luôn giữ khoá ensure khi spawn; `started` theo nonce.
+
+## Thư mục dùng chung với "Không gian số" — `filehub/`
+Chi tiết, luồng, lệch plan, giới hạn, việc dở: `docs/dev-notes/filehub.md`; plan + hợp đồng 3 repo: `docs/dev-notes/plan-cloud-files.md` (§7, §8).
+Không migration (cấu hình `filehub.*` ∈ `integrity.SECURITY_KEYS`, trạng thái ở `HUB_HOME/filehub/` + `hub_state filehub.paused`).
+
+| Module | Vai trò |
+|---|---|
+| `filehub/supervisor.py` | `tang-thu-sync-headless` là tiến trình con của daemon: `--version` ≥ `filehub.sync_min_version`, env danh sách trắng (`ENV_KEEP`), backoff, SIGTERM dừng êm, đối soát `(pid, start_time)` (`HUB_HOME/filehub/supervisor.json`) |
+| `filehub/service.py` | `hub.filehub`: status.json → `filehub.state|conflict|blocked`; index/<root>.json → link; control.json → presence + `resume_push`; steer `by="hub"` khi `recent` chiều `down` lúc run giữ khoá gốc; sau run `filehub.changed|deleted|secret_warning`; `resolve_ref("filehub:<tên>[/<con>]")` |
+| `filehub/rpc.py`, `filehub/cli.py` | RPC `filehub.status|list|link` (đọc) + `setup|login|add|remove|pause|resume` (HUMAN_ONLY, `MUTATING_FILEHUB` tự audit); CLI `cfharness filehub …` (∈ `HUB_HUMAN_ONLY_CLI` trừ `status`) |
+| `web/filehub_pages.py` | Thẻ "Không gian số" ở Cài đặt (thao tác chỉ khi `is_local_request`), `/filehub/open` → `<server>/files/<folder_id>?file=<file_id>`; chip tệp `fh` |
+
+Bất biến: workspace `filehub:` khoá theo GỐC thư mục chung (`WorkspaceLocks(store, hub)`), checkpoint luôn `_walk`, `run revert` từ chối
+(`FILEHUB_NO_REVERT`); bản sao cục bộ phải trong `workspace.confine` W và không trong/chứa HUB_HOME. Xoá/di chuyển/ghi đè TRONG thư mục chung mà
+run được ghi = `write` (không hỏi, chỉ báo sau run — §7.3); `.tangthu*` + `HUB_HOME/filehub` = cấm (`filehub_metadata`, sandbox deny, `sensitive_read`).
+Mọi run được ĐỌC thư mục chung (allowRead khi giam + khối prompt "Shared folder" — nội dung là DỮ LIỆU). Không đưa token người/secret/`CLAUDE*` vào
+env tiến trình sync; cfharness không cầm token sync. Event filehub chỉ mang tên/đường dẫn tương đối/id — không nội dung tệp. Điều phối viên chỉ đọc
+(`filehub_list|filehub_link`) + giao việc `filehub:`; thêm thao tác ghi filehub → HUMAN_ONLY + ca trong `tests/test_sec_auth.py`/`test_manager_security.py`.
+Test dùng binary GIẢ `tests/fake_tangthu_sync.py` (đúng hợp đồng §8.3) + `tests/fh_fake.py`: `test_filehub_supervisor.py`, `test_filehub_workspace.py`,
+`test_filehub_concurrency.py`, `test_web_filehub.py`, ca `*_FILEHUB` trong `test_guard_classifier.py`. Đổi hợp đồng với binary → sửa CẢ binary giả.

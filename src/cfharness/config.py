@@ -202,7 +202,8 @@ DEFAULTS: dict[str, Any] = {
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
                        "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
-                       "budget.warning", "budget.exceeded"],  # M4-B: digest + nhắc chọn golden task (Q-23)
+                       "budget.warning", "budget.exceeded",
+                       "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,
             "backoff_base_s": 2,
             "timeout_s": 10,
@@ -222,6 +223,8 @@ DEFAULTS: dict[str, Any] = {
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
                        "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
                        "budget.warning", "budget.exceeded",
+                       # thư mục chung Không gian số (filehub/): run đổi/xoá tệp, bản xung đột, tệp có thể chứa bí mật, chiều đẩy lên bị chặn
+                       "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked",
                        # vào/ra web + thiết bị tin cậy (web_events.py) — chỉ metadata, gửi vào nhóm chat riêng của hub nếu có
                        "web.login", "web.logout", "web.login_locked", "web.device_trusted", "web.device_reuse_detected", "web.device_revoked",
                        "web.devices_revoked_all"],
@@ -646,6 +649,27 @@ DEFAULTS: dict[str, Any] = {
         "secret_allow": [".env.example", ".env.sample", ".env.template", ".env.dist", ".env.default", ".env.defaults", "*.pub"],
         "cloud_download": True,  # cho tải file về khi dùng web qua link public (xem trong trình duyệt luôn được)
         "max_download_mb": 10,  # trần tải về / ảnh / PDF (1–50 MB)
+    },
+    # Thư mục dùng chung với "Không gian số" (docs/dev-notes/filehub.md): binary `tang-thu-sync-headless` chạy dưới daemon, đồng bộ 2 chiều
+    # ~/KhongGianSo/<tên> ↔ thư mục người là Owner. Nhánh `filehub` ∈ integrity.SECURITY_KEYS — chỉ người đổi (CLI `cfharness filehub …`).
+    "filehub": {
+        "enabled": False,  # `cfharness filehub setup` bật
+        "server": None,  # vd https://thumucai.trungtamdhs.com
+        "sync_binary": None,  # đường dẫn tuyệt đối tang-thu-sync-headless
+        "sync_min_version": "0.1.0",  # `--version` thấp hơn → không chạy, báo ở thẻ Cài đặt
+        "device_name": None,  # null = "cfharness · <tên máy>"
+        "local_parent": "~/KhongGianSo",  # thư mục cha của bản sao cục bộ (phải trong workspace.confine nếu bật giam; không trong HUB_HOME)
+        "folders": [],  # [{name, root_id, ws_id, local_path}] — do `filehub setup|add|remove` ghi
+        "poll_s": None,  # --poll của binary (null = mặc định của binary)
+        "max_delete_batch": 0,  # --max-delete-batch: 0 = tắt; > 0 → xoá quá ngưỡng thì dừng chiều đẩy lên chờ `filehub resume --root`
+        "extra_ignore": [],  # mẫu bỏ qua thêm (kiểu .gitignore) cho chiều đẩy lên — cộng vào ignore.txt sinh từ files.secret_patterns
+        "restart_backoff_s": [1, 300],  # restart tiến trình sync: min..max giây (luỹ thừa 2)
+        "stop_grace_s": 15,  # SIGTERM → chờ → SIGKILL
+        "tick_s": 1.0,  # nhịp đọc status.json
+        "presence_ttl_s": 600,  # dải "cfharness đang làm việc" trên Không gian số — hub làm mới trước khi hết hạn
+        "steer_on_cloud_change": True,  # người sửa tệp trên Không gian số trong lúc run giữ khoá → steer câu cố định
+        "secret_scan_max_bytes": 5000000,  # quét GIÁ TRỊ secret trên tệp mới/sửa sau run (tệp lớn hơn bỏ qua)
+        "login_url_timeout_s": 30,
     },
     "workspace": {
         # MGR-1: gốc người cho phép đặt workspace `dir`. Ngoài ra luôn cho vùng scratch/worktree/eval của hub. Người thêm gốc tại đây (chỉ người).

@@ -256,9 +256,18 @@ class GuardService:
             chrome_allowed=self.chrome_allowed(run),
             trusted_repo_scripts=bool(self.knob("guard.trusted_repo_scripts")),
             task_created_deletes=bool(self.knob("guard.task_created_deletes")),
+            filehub_roots=self._filehub_roots(),
             **self._confine_ctx(c, run, roots),
             **self._connector_ctx(run),
         )
+
+    def _filehub_roots(self) -> tuple[str, ...]:
+        try:
+            from ..filehub.service import local_roots
+
+            return tuple(local_roots(self.hub))
+        except Exception:  # pragma: no cover
+            return ()
 
     def _confine_ctx(self, cwd: str, run: dict[str, Any] | None, roots: tuple[str, ...]) -> dict[str, Any]:
         """P2 (workspace.confine): gốc giam + gốc đọc/chặn cho classifier; hub home khác đã đăng ký (P2.4)."""
@@ -273,6 +282,7 @@ class GuardService:
         if conf is None:
             return out
         extra = list(self.run_extra_write_roots(run, roots)) if run else []
+        extra += list(self._filehub_roots())  # mọi run được ĐỌC thư mục chung (plan-cloud-files §7.4)
         out.update(confine_root=conf.root, confine_read=tuple(_c.read_roots(conf, self.hub.paths.home, cwd=cwd, extra=extra)),
                    confine_deny=tuple(_c.deny_read_roots(conf)))
         return out
@@ -1225,7 +1235,7 @@ class GuardService:
             self._record(run, channel, tool_name, tool_input, v, "allow", classifier=auto["by"], extra={"auto_reason": auto["reason"]})
             return {"decision": "allow", "reason": f"[cfharness] allowed automatically ({auto['by']}): {auto['reason']}", "verdict": v.verdict,
                     "decided_by": auto["by"]}
-        fp = action_fingerprint(tool_name, tool_input)
+        fp = action_fingerprint(tool_name, tool_input, ctx.cwd)
         ap = self.hub.approvals
         # LLM thứ hai (tắt mặc định): CHỈ hạ uncertain đủ điều kiện → safe/write; mọi kết quả khác → giữ chờ người như cũ
         if always_eligible(v) and self.second.enabled() and ap.find_pending(run_id, fp) is None:
@@ -1364,7 +1374,7 @@ class GuardService:
 
         hold = self.needs_human(v)
         auto = self.auto_allow(run, tool, ti, v, ctx) if (run and hold) else None
-        return {**v.to_dict(), "hold": hold and auto is None, "fingerprint": action_fingerprint(tool, ti), "cwd": str(ctx.cwd),
+        return {**v.to_dict(), "hold": hold and auto is None, "fingerprint": action_fingerprint(tool, ti, ctx.cwd), "cwd": str(ctx.cwd),
                 "profile": profile(self.hub.config), "auto_allow": auto,
                 "never_automatic": never_automatic(v, tool_name=tool, tool_input=ti, roots=list(ctx.allowed_roots), cwd=str(ctx.cwd)) if hold else None}
 
