@@ -7,6 +7,7 @@ event `manager.action`. Từ chối → audit `manager.denied` + `manager.action
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any
 
 from .. import auth as _auth
@@ -247,6 +248,19 @@ class ManagerOps:
                 continue
             out.append({"name": m["name"], "description": (m.get("description") or "")[:200], "transport": (m.get("config") or {}).get("type") or m.get("transport")})
         return out
+
+    def op_filehub_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
+        fh = getattr(self.hub, "filehub", None)
+        return fh.list() if fh is not None else []
+
+    def op_filehub_link(self, a: dict[str, Any]) -> dict[str, Any]:
+        fh = getattr(self.hub, "filehub", None)
+        if fh is None:
+            raise HubError("thư mục chung chưa bật")
+        p = str(a.get("path") or "")
+        if not os.path.isabs(p):
+            raise HubError("path phải là đường dẫn tuyệt đối trong thư mục chung")
+        return fh.link({"path": p})
 
     def op_system_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
         return self.hub.systems.list()  # type: ignore[attr-defined]

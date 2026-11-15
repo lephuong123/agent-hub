@@ -653,7 +653,7 @@ def cmd_run(ctx: Ctx) -> int:
         run = None
     params: dict[str, Any] = {"agent": a.agent, "prompt": a.prompt}
     if a.cwd:
-        params["cwd"] = str(Path(a.cwd).expanduser().resolve())
+        params["cwd"] = a.cwd if a.cwd.startswith("filehub:") else str(Path(a.cwd).expanduser().resolve())  # filehub:<tên>[/<con>] — daemon giải
     if a.budget is not None:
         params["budget_usd"] = a.budget
     if a.model:
@@ -935,6 +935,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .questions.cli import add_parsers as _add_question_parsers
 
     _add_question_parsers(sub, common)
+
+    # Thư mục chung Không gian số: cfharness filehub setup|login|status|add|remove|pause|resume (filehub/cli.py)
+    from .filehub.cli import add_parsers as _add_filehub_parsers
+
+    _add_filehub_parsers(sub, common)
 
     # Hệ thống ngoài hub: cfharness system scan|list|show|add|rm|lock|unlock|pause|resume|restart (systems/cli.py)
     from .systems.cli import add_parsers as _add_system_parsers

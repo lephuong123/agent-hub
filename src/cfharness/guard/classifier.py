@@ -124,6 +124,8 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "schedule": {"add", "create", "edit", "update", "pause", "resume", "rm", "remove", "delete", "run-now", "run_now"},
     # Tài khoản Claude (accounts/, luồng core): account.* ghi ∈ HUMAN_ONLY — agent không tự thêm/đổi/xoá tài khoản Claude
     "account": {"add", "login", "use", "rename", "rm", "remove", "delete", "check"},
+    # Thư mục chung Không gian số (filehub/): filehub.* ghi ∈ HUMAN_ONLY — đăng nhập thiết bị, thêm/gỡ thư mục, tạm dừng đồng bộ
+    "filehub": {"setup", "login", "add", "remove", "rm", "pause", "resume"},
 }
 
 # H-03: API dạng phương thức (`Path(..).unlink()`) đứng sau `)`/`]` nên KHÔNG dùng `\b` trước dấu chấm
@@ -254,6 +256,9 @@ class GuardContext:
     confine_read: tuple[str, ...] = ()
     confine_deny: tuple[str, ...] = ()
     other_hub_homes: tuple[str, ...] = ()  # P2.4: hub home KHÁC đã đăng ký (cùng user OS) — cấm đọc + ghi
+    # thư mục chung Không gian số (filehub/): gốc bản sao cục bộ (realpath). Xoá/di chuyển/ghi đè TRONG gốc mà run được ghi = `write`
+    # (không hỏi — plan-cloud-files §7.3: hub báo người sau run, khôi phục ở thùng rác/phiên bản Không gian số); metadata sync = cấm
+    filehub_roots: tuple[str, ...] = ()
 
     @property
     def home(self) -> str:
@@ -754,6 +759,30 @@ def confine_read_verdict(tool_name: str, ti: dict[str, Any], ctx: GuardContext) 
 
 READ_PATH_KEYS = ("file_path", "path", "notebook_path")
 
+FILEHUB_META_PREFIX = ".tangthu"
+FILEHUB_META_REASON = "agent không được ghi metadata/profile của tiến trình đồng bộ Không gian số (.tangthu*, HUB_HOME/filehub)"
+
+
+def filehub_root(p: str, ctx: GuardContext) -> str | None:
+    """Gốc thư mục chung (filehub) chứa `p` (literal hoặc realpath), None nếu không thuộc thư mục chung nào."""
+    for c in {canon_path(p), _real(p)}:
+        for r in ctx.filehub_roots:
+            if _under(c, canon_path(r)):
+                return canon_path(r)
+    return None
+
+
+def filehub_meta(p: str, ctx: GuardContext) -> bool:
+    """Metadata/base của sync: `.tangthu*` trong thư mục chung, hoặc profile/status/control ở HUB_HOME/filehub."""
+    hh = _hub_home(ctx)
+    for c in {canon_path(p), _real(p)}:
+        if any(_under(c, h + "/filehub") for h in {hh, _real(hh)}):
+            return True
+        root = filehub_root(c, ctx)
+        if root is not None and any(part.lower().startswith(FILEHUB_META_PREFIX) for part in _rel_parts(c, root)):
+            return True
+    return False
+
 
 def admin_shared(p: str) -> bool:
     """Thư mục chung của quản trị máy (trạng thái/audit/chính sách/cờ ESTOP/admin-log của MỌI user) — agent không đọc/ghi (plan-admin-users §4)."""
@@ -787,7 +816,8 @@ def sensitive_read(p: str, ctx: GuardContext) -> bool:
         if ctx.hub_socket and _same(c, ctx.hub_socket + ".auth"):
             return True
         for h in homes:
-            if _under(c, h + "/secrets") or _under(c, h + "/auth") or _under(c, h + "/backups") or _same(c, h + "/mcp_server/tokens.json"):
+            if (_under(c, h + "/secrets") or _under(c, h + "/auth") or _under(c, h + "/backups") or _under(c, h + "/filehub")
+                    or _same(c, h + "/mcp_server/tokens.json")):
                 return True
             parts = [x.lower() for x in _rel_parts(c, h)] if IS_WINDOWS else _rel_parts(c, h)
             if len(parts) >= 3 and parts[0] == "agents" and parts[2] == "runtime":
@@ -905,6 +935,8 @@ def classify_file_write(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -
     op = "overwrite" if tool_name == "Write" and os.path.exists(ap) else "write"
     if admin_shared(ap):
         return Verdict("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [ap], forbidden=True)
+    if filehub_meta(ap, ctx):
+        return Verdict("destructive", "filehub_metadata", "hub", FILEHUB_META_REASON, [ap], forbidden=True)
     for cand in {ap, rp}:
         if _under(cand, canon_path(str(ctx.policy.policy_dir))):
             return Verdict("destructive", "policy_write", "policy", "agent không được ghi chính sách an toàn (FR-SG-05)", [ap], "hub-policy")
@@ -1197,6 +1229,8 @@ class BashAnalyzer:
         return protected_path(self.ctx, p, op)
 
     def check_delete_target(self, p: str, what: str, recursive: bool = True) -> None:
+        if self.filehub_meta_hit(p, what):
+            return
         if _critical(p, self.ctx.home) or _same(p, os.path.dirname(self.ctx.home)):
             self.hit("destructive", "delete_critical", "system", f"{what} thư mục hệ thống/home {p}", [p])
             return
@@ -1205,6 +1239,8 @@ class BashAnalyzer:
             r = self.ctx.policy.protected_under(p)
         if r is not None:
             self.hit("destructive", "protected_delete", "file", f"{what} chạm tài nguyên được bảo vệ {r.selector}", [p], r)
+            return
+        if self.filehub_write(p, what):
             return
         if not created_by_run(p, self.ctx):
             if self.checkpointed(p):
@@ -1220,6 +1256,8 @@ class BashAnalyzer:
         if DISK_DEV.match(p):
             self.hit("destructive", "write_block_device", "system", f"{what} ghi thẳng thiết bị đĩa {p}", [p])
             return
+        if self.filehub_meta_hit(p, what):
+            return
         exists = os.path.lexists(p)
         r = self.protected(p, "overwrite" if exists else "write")
         if r is not None:
@@ -1228,6 +1266,8 @@ class BashAnalyzer:
         if _tmp_scratch(p, self.ctx) or not exists or os.path.isdir(p):
             self.hit("write", "write_file", "file", what, [p])
             return
+        if self.filehub_write(p, what):
+            return
         if not created_by_run(p, self.ctx):
             if self.checkpointed(p):
                 self.hit("write", "overwrite_checkpointed", "file", f"{what} {p} — có checkpoint của run (revert được)", [p])
@@ -1235,6 +1275,30 @@ class BashAnalyzer:
             self.hit("destructive", "overwrite_existing", "file", f"{what} ghi đè file có sẵn {p} (không phải file run tự tạo)", [p])
         else:
             self.hit("write", "overwrite_run_created", "file", what, [p])
+
+    def filehub_meta_hit(self, p: str, what: str) -> bool:
+        if self.ctx.filehub_roots and filehub_meta(p, self.ctx) or _under(canon_path(p), _hub_home(self.ctx) + "/filehub"):
+            self.hit("destructive", "filehub_metadata", "hub", f"{what}: {FILEHUB_META_REASON}", [p], forbidden=True)
+            return True
+        return False
+
+    def filehub_write(self, p: str, what: str) -> bool:
+        """Xoá/ghi đè/di chuyển TRONG thư mục chung mà run được ghi (cwd/extra_write_roots) → `write`, không hỏi duyệt (§7.3);
+        gốc thư mục chung chính nó → phá huỷ (mất cả sync root); metadata sync → cấm. Trả True nếu đã quyết."""
+        root = filehub_root(p, self.ctx)
+        if root is None:
+            return False
+        if self.filehub_meta_hit(p, what):
+            return True
+        if any(_same(c, root) for c in {canon_path(p), _real(p)}):
+            self.hit("destructive", "filehub_root_delete", "file", f"{what} chính gốc thư mục chung {root} (mất cả thư mục đồng bộ)", [p])
+            return True
+        roots = write_roots(self.ctx)
+        if not any(_under(c, r) for c in {canon_path(p), _real(p)} for r in roots):
+            return False
+        self.hit("write", "filehub_delete" if what.startswith(tuple(DELETE_CMDS) + ("rmdir", "mv", "gmv", "find")) else "filehub_overwrite", "file",
+                 f"{what} trong thư mục chung {root} — hub báo người sau run; khôi phục ở thùng rác/phiên bản Không gian số", [p])
+        return True
 
     def checkpointed(self, p: str) -> bool:
         """File THƯỜNG đã được git track trong repo có checkpoint của run → `cfharness run revert` khôi phục được."""
@@ -1245,6 +1309,8 @@ class BashAnalyzer:
         return r is not None and r.returncode == 0
 
     def check_write_target(self, p: str, what: str, op: str = "write") -> None:
+        if self.filehub_meta_hit(p, what):
+            return
         r = self.protected(p, op)
         if r is not None:
             self.hit("destructive", "protected_write", "file", f"{what} vào tài nguyên được bảo vệ {r.selector}", [p], r)
@@ -1264,6 +1330,8 @@ class BashAnalyzer:
         hh = _hub_home(self.ctx)
         if _contains(norm, hh + "/auth") or _contains(norm, hh + "/secrets"):
             self.hit("destructive", "hub_secret_read", "hub", "agent đụng token người/secret store của hub", forbidden=True)
+        if _contains(norm, hh + "/filehub"):
+            self.hit("destructive", "filehub_metadata", "hub", FILEHUB_META_REASON, forbidden=True)
         if not IS_WINDOWS:
             from ..admin_overview import SHARED_ROOT
 
@@ -2270,7 +2338,9 @@ class BashAnalyzer:
                 else:
                     dp0 = self.path(dst)
                     root = canon_path(str(self.ctx.cwd)).rstrip("/")
-                    if os.path.lexists(sp) and _under(sp, root) and dp0 is not None and not _under(dp0, root) and not created_by_run(sp, self.ctx):
+                    if filehub_root(sp, self.ctx) is not None and self.filehub_write(sp, "mv"):
+                        pass  # di chuyển trong/ra khỏi thư mục chung = xoá ở đó → `write` (§7.3); đích vẫn kiểm bên dưới
+                    elif os.path.lexists(sp) and _under(sp, root) and dp0 is not None and not _under(dp0, root) and not created_by_run(sp, self.ctx):
                         # H-03: chuyển file/thư mục CÓ SẴN ra khỏi workspace = xoá khỏi repo của người
                         self.hit("destructive", "move_out_existing", "file", f"mv {sp} ra ngoài workspace (file có sẵn)", [sp])
         dp = self.path(dst)

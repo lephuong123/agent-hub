@@ -27,6 +27,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..errors import HubError
+
 if TYPE_CHECKING:
     from ..auth import Caller
     from ..hub import Hub
@@ -213,7 +215,15 @@ class ManagerPermissions:
         if isinstance(path, dict):
             if path.get("kind") in ("scratch", "worktree") and not path.get("path"):
                 return None
-            path = path.get("path")
+            path = path.get("ref") if path.get("kind") == "filehub" and path.get("ref") else path.get("path")
+        if isinstance(path, str) and path.startswith("filehub:"):  # thư mục chung Không gian số → kiểm đường dẫn cục bộ đã giải
+            fh = getattr(self.hub, "filehub", None)
+            if fh is None:
+                return f"{what}: thư mục chung chưa bật"
+            try:
+                path = fh.resolve_ref(path, must_exist=False)[0]
+            except HubError as e:
+                return f"{what}: {e.message}"
         try:
             p = Path(str(path)).expanduser().resolve()
         except (OSError, RuntimeError):

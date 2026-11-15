@@ -73,9 +73,21 @@ def system_prompt_for(hub: "Hub", run: dict[str, Any], agent: dict[str, Any]) ->
     from ..browser import effective_mode
 
     text = build_system_prompt(agent["id"], soul, blocks, charter=team_charter(hub, run.get("team_id")), browser=effective_mode(agent, hub.config),
-                               cli_ref=_manager_cli_ref(hub, agent["id"]))
+                               cli_ref=_manager_cli_ref(hub, agent["id"]), shared_folders=_shared_folders(hub))
     save_prompt(hub, text)
     return text, info
+
+
+def _shared_folders(hub: "Hub") -> list[tuple[str, str]]:
+    """Thư mục chung Không gian số đã bật (filehub/) — mọi run được đọc (plan-cloud-files §7.4)."""
+    try:
+        from ..filehub.service import config_folders
+
+        if not hub.config.get("filehub.enabled"):
+            return []
+        return [(str(f["name"]), str(f["local_path"])) for f in config_folders(hub.config)]
+    except Exception:  # pragma: no cover - khối phụ hỏng không chặn run
+        return []
 
 
 def _manager_cli_ref(hub: "Hub", agent_id: str) -> str | None:

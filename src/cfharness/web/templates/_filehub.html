@@ -1,0 +1,55 @@
+{#- Thẻ "Không gian số" (web/filehub_pages.py) — RPC đọc filehub.status; tạm dừng/chạy lại chỉ khi web dùng trên chính máy chạy hub. -#}
+{% import "_macros.html" as m with context %}
+<section class="card" id="filehub">
+  <div class="card-head"><h2>{{ m.icon('inbox') }} Không gian số — thư mục dùng chung</h2>
+    {% if data %}{% set sv = states.get(data.state, (data.state, '')) %}<span class="pill {{ sv[1] }}">{{ sv[0] }}</span>{% endif %}
+  </div>
+  {% if down %}
+    <p class="muted">Daemon không trả lời — không đọc được trạng thái đồng bộ.</p>
+  {% elif error %}
+    <p class="muted">Không đọc được trạng thái đồng bộ: {{ error }}</p>
+  {% elif not data.enabled or not data.folders %}
+    <p class="small muted">Chưa thiết lập. Thư mục dùng chung đồng bộ 2 chiều giữa máy này và Không gian số: bạn sửa trên web/điện thoại, agent làm
+      việc trên bản sao cục bộ. Thiết lập ở terminal: <code>cfharness filehub setup --server https://… --binary /đường/dẫn/tang-thu-sync-headless</code></p>
+  {% else %}
+    <p class="small muted">Máy chủ <code>{{ data.server }}</code> · thiết bị «{{ data.device }}»{% if data.sync_version %} · {{ data.sync_version }}{% endif %}
+      {% if data.updated_at %} · cập nhật {{ m.rel(data.updated_at) }}{% endif %}.
+      Giao việc cho agent với workspace <code>filehub:&lt;tên&gt;</code>. Xoá của agent không cần duyệt — hub báo bạn sau run, khôi phục ở thùng rác Không gian số.</p>
+    {% if data.state in ('error', 'version_mismatch') and data.supervisor.last_error %}<p class="small"><span class="pill danger">{{ m.icon('alert') }}lỗi</span> {{ data.supervisor.last_error }}</p>{% endif %}
+    {% if data.state == 'auth_expired' %}<p class="small"><span class="pill danger">{{ m.icon('alert') }}hết phiên</span> Đăng nhập lại ở terminal: <code>cfharness filehub login</code></p>{% endif %}
+    <table class="tbl">
+      <thead><tr><th>Thư mục</th><th>Bản sao trên máy</th><th>Hàng đợi</th><th></th></tr></thead>
+      <tbody>
+      {% for f in data.folders %}
+        <tr>
+          <td><strong>{{ f.name }}</strong><br><code class="small">filehub:{{ f.name }}</code>
+            {% if f.lock %}<br><span class="pill info">run {{ f.lock.run_id }} đang ghi</span>{% endif %}</td>
+          <td><code class="small">{{ f.local_path }}</code></td>
+          <td class="num">{% if f.pending_up or f.pending_down %}⬆{{ f.pending_up or 0 }} ⬇{{ f.pending_down or 0 }}{% else %}—{% endif %}</td>
+          <td>{% if f.url %}<a href="{{ f.url }}" target="_blank" rel="noopener noreferrer">Mở trên Không gian số</a>{% endif %}</td>
+        </tr>
+        {% if f.blocked %}
+        <tr><td colspan="4"><span class="pill danger">{{ m.icon('alert') }}đã dừng đẩy lên ({{ f.blocked }})</span>
+          {% if local %}{{ m.act("filehub_resume_push", "Cho đẩy tiếp", {"root_id": f.root_id}, "btn", next="/settings#filehub") }}{% else %}<span class="small muted">— xử lý trên máy chạy hub: <code>cfharness filehub resume --root {{ f.root_id }}</code></span>{% endif %}</td></tr>
+        {% endif %}
+        {% for c in f.conflicts %}
+        <tr><td colspan="4" class="small"><span class="pill warn">bản xung đột</span> <code>{{ c.path }}</code>{% if c.created_at %} · {{ m.rel(c.created_at) }}{% endif %}</td></tr>
+        {% endfor %}
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="row gap wrap-row">
+      {% if local %}
+        {% if data.paused %}{{ m.act("filehub_resume", "Chạy lại đồng bộ", {}, "btn primary", next="/settings#filehub", ic="play") }}
+        {% else %}{{ m.act("filehub_pause", "Tạm dừng đồng bộ", {}, "btn ghost", next="/settings#filehub") }}{% endif %}
+      {% else %}
+        <span class="small muted">Qua link public chỉ xem trạng thái — thao tác làm trên máy chạy hub.</span>
+      {% endif %}
+    </div>
+    {% if data.recent %}
+    <details class="small"><summary>Thay đổi gần đây</summary>
+      <ul>{% for e in data.recent|reverse %}<li>{{ '⬇' if e.dir == 'down' else '⬆' }} {{ e.op }} <code>{{ e.path }}</code></li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+  {% endif %}
+</section>

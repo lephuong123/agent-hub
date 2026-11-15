@@ -362,3 +362,28 @@ async def test_learn_refine_checks_the_key_handler_reads(env):
     await _deny_rpc(d, rid, "learn.refine", {"id": "w1", "agent": "boss"}, match="điều phối viên")
     await _deny_rpc(d, rid, "learn.refine", {"agent": "boss"}, match="điều phối viên")
     assert d.hub.manager.perms.check_rpc(auth.manager_caller("boss", rid), "learn.refine", {"id": "boss", "agent": "w1"}) is None
+
+# ------------------------------------------------------------------ thư mục chung Không gian số (filehub/)
+async def test_manager_filehub_read_and_assign_but_no_writes(env, tmp_path):
+    """Điều phối viên: ĐỌC thư mục chung (filehub_list|filehub_link) + giao việc workspace `filehub:`; không setup|login|add|remove|
+    pause|resume (HUMAN_ONLY, không thuộc MANAGER_ALLOWED) — kiểm cả lớp 1 (tool) lẫn lớp 2 (gọi thẳng daemon)."""
+    from cfharness.filehub.rpc import MUTATING_FILEHUB
+    from fh_fake import configure
+
+    d, rid = env
+    local = configure(d.hub, tmp_path)
+    d.hub.config.set("filehub.sync_binary", None)
+    (local / "Báo cáo").mkdir()
+    rows = await tool(d, rid, "filehub_list")
+    assert rows[0]["workspace"] == "filehub:chung" and rows[0]["local_path"] == str(local)
+    for op in ("filehub_setup", "filehub_add", "filehub_pause"):
+        await _deny_tool(d, rid, op, {}, match="không có trong bộ tool")
+    for m in MUTATING_FILEHUB:
+        assert m in auth.HUMAN_ONLY and m not in auth.MANAGER_ALLOWED
+        await _deny_rpc(d, rid, m, {"root_id": "r_x", "name": "chung", "server": "https://x", "binary": "/bin/sh"})
+    assert d.hub.filehub.folders()[0]["name"] == "chung" and not d.hub.filehub.paused()
+    t = await tool(d, rid, "task_create", {"title": "báo cáo", "body": "viết", "assignee": "w1", "workspace": "filehub:chung/Báo cáo"})
+    tk = d.hub.store.conn.execute("SELECT workspace FROM tasks WHERE id=?", (t.get("id") or t.get("task_id"),)).fetchone()
+    assert json.loads(tk[0])["path"] == str(local / "Báo cáo")
+    await _deny_tool(d, rid, "task_create", {"title": "x", "body": "y", "assignee": "w1", "workspace": "filehub:chung/../.."})
+    await _deny_tool(d, rid, "task_create", {"title": "x", "body": "y", "assignee": "w1", "workspace": "filehub:khong-co"})
