@@ -6,6 +6,7 @@ Mỗi ca phá huỷ phải ra `destructive|uncertain` (đều bị GIỮ chờ n
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -484,3 +485,97 @@ def test_admin_shared_forbidden(env):
     # tên gần giống KHÔNG bị chặn nhầm
     assert classify("Bash", {"command": "ls /Users/Shared/cfharness-other"}, env["ctx"]).rule != "admin_shared"
     assert classify("Read", {"file_path": "/Users/Shared/cfharnessx/a"}, env["ctx"]).rule != "admin_shared"
+
+
+# ------------------------------------------------------------------ thư mục chung Không gian số (filehub/, plan-cloud-files §7.3)
+# FH = gốc bản sao cục bộ = cwd của run. Xoá/di chuyển/ghi đè TRONG thư mục chung = `write` (không hỏi — hub báo người sau run, khôi phục ở
+# thùng rác Không gian số); metadata sync (.tangthu*, HUB_HOME/filehub) = CẤM; xoá chính gốc = phá huỷ (mất cả thư mục đồng bộ).
+SAFE_FILEHUB = [
+    ("Bash", {"command": "rm FH/Báo cáo/cu.docx"}),
+    ("Bash", {"command": "rm -rf FH/Báo cáo/nhap"}),
+    ("Bash", {"command": "rm -r 'Báo cáo/nhap'"}),
+    ("Bash", {"command": "mv FH/Báo cáo/cu.docx FH/Lưu trữ/cu.docx"}),
+    ("Bash", {"command": "mv FH/Báo cáo/cu.docx /tmp/cu.docx"}),
+    ("Bash", {"command": "echo x > FH/Báo cáo/cu.docx"}),
+    ("Bash", {"command": "cp /tmp/moi.docx FH/Báo cáo/cu.docx"}),
+    ("Bash", {"command": "rmdir FH/Lưu trữ"}),
+    ("Write", {"file_path": "FH/Báo cáo/cu.docx", "content": "x"}),
+    ("Edit", {"file_path": "FH/Báo cáo/cu.docx", "old_string": "a", "new_string": "b"}),
+    ("Read", {"file_path": "FH/Báo cáo/cu.docx"}),
+]
+DESTRUCTIVE_FILEHUB = [  # (tool, input, cấm?)
+    ("Bash", {"command": "rm -rf FH"}, False),
+    ("Bash", {"command": "rm FH/.tangthu.db"}, True),
+    ("Bash", {"command": "echo x > FH/.tangthu-base/state"}, True),
+    ("Write", {"file_path": "FH/.tangthu.db", "content": "x"}, True),
+    ("Edit", {"file_path": "FH/Báo cáo/.tangthu-tmp", "old_string": "a", "new_string": "b"}, True),
+    ("Write", {"file_path": "HUB/filehub/control.json", "content": "{}"}, True),
+    ("Bash", {"command": "cat HUB/filehub/profile/index/r1.json"}, True),
+    ("Bash", {"command": "rm -rf HUB/filehub/profile"}, True),
+    ("Read", {"file_path": "HUB/filehub/status.json"}, True),
+]
+
+
+@pytest.fixture(scope="module")
+def fhenv(env, tmp_path_factory):
+    fh = tmp_path_factory.mktemp("kgs") / "chung"
+    (fh / "Báo cáo" / "nhap").mkdir(parents=True)
+    (fh / "Báo cáo" / "cu.docx").write_text("của người")  # có từ TRƯỚC run
+    (fh / "Lưu trữ").mkdir()
+    (fh / ".tangthu.db").write_text("")
+    old = env["ctx"]
+    real = os.path.realpath(fh)
+    ctx = GuardContext(Path(real), old.policy, run_since=old.run_since + 10_000, hub_socket=old.hub_socket, git_probe=False, filehub_roots=(real,))
+    return {**env, "ctx": ctx, "fh": real}
+
+
+def _fh(fhenv, ti):
+    return json.loads(json.dumps(ti).replace("FH", fhenv["fh"]).replace("HUB", str(fhenv["hub"])))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS/Linux")
+def test_filehub_delete_move_overwrite_is_write(fhenv):
+    bad = []
+    for tool, ti in SAFE_FILEHUB:
+        v = classify(tool, _fh(fhenv, ti), fhenv["ctx"])
+        if held(v):
+            bad.append((tool, ti, v.verdict, v.rule))
+    assert not bad, bad
+    v = classify("Bash", _fh(fhenv, {"command": "rm -rf FH/Báo cáo/nhap"}), fhenv["ctx"])
+    assert v.verdict == "write" and v.rule == "filehub_delete"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS/Linux")
+def test_filehub_metadata_forbidden_root_delete_destructive(fhenv):
+    missed = []
+    for tool, ti, forbid in DESTRUCTIVE_FILEHUB:
+        v = classify(tool, _fh(fhenv, ti), fhenv["ctx"])
+        if not held(v) or bool(v.forbidden) != forbid:
+            missed.append((tool, ti, v.verdict, v.rule, v.forbidden))
+    assert not missed, missed
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="macOS/Linux")
+def test_filehub_outside_write_roots_unchanged(fhenv, env, monkeypatch):
+    """Run KHÔNG được giao thư mục chung (cwd ở repo khác): xoá tệp có sẵn trong thư mục chung vẫn hỏi người như cũ; ghi vẫn ngoài workspace."""
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", "/nonexistent-cfh-tmp")  # thư mục tạm của pytest chứa cả thư mục chung giả — không coi là vùng tạm
+    old = fhenv["ctx"]
+    ctx = GuardContext(env["ws"], old.policy, run_since=old.run_since, hub_socket=old.hub_socket, git_probe=False, filehub_roots=old.filehub_roots)
+    v = classify("Bash", {"command": f"rm '{fhenv['fh']}/Báo cáo/cu.docx'"}, ctx)
+    assert v.verdict == "destructive" and v.rule == "delete_not_run_created"
+    v = classify("Write", {"file_path": f"{fhenv['fh']}/Báo cáo/cu.docx", "content": "x"}, ctx)
+    assert v.verdict == "destructive" and v.rule == "write_outside_workspace"
+    # được cấp qua extra_write_roots → như workspace
+    ctx2 = GuardContext(env["ws"], old.policy, run_since=old.run_since, hub_socket=old.hub_socket, git_probe=False, filehub_roots=old.filehub_roots,
+                        extra_write_roots=(fhenv["fh"],))
+    assert classify("Bash", {"command": f"rm '{fhenv['fh']}/Báo cáo/cu.docx'"}, ctx2).rule == "filehub_delete"
+
+
+def test_filehub_cli_human_only(env):
+    for cmd in ("cfharness filehub setup --server https://x --binary /b", "cfharness filehub login", "cfharness filehub add r1",
+                "cfharness filehub remove chung", "cfharness filehub pause", "cfharness filehub resume --root r1"):
+        v = bash(env, cmd)
+        assert v.forbidden, (cmd, v.rule)
+    assert not bash(env, "cfharness filehub status").forbidden
