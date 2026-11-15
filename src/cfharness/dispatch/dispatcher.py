@@ -566,6 +566,7 @@ class TaskDispatcher:
             return
         self._ticking = True
         try:
+            self._reconcile_claims()
             self._reconcile_running()
             self._promote()
             self._dispatch_triage()
@@ -576,6 +577,31 @@ class TaskDispatcher:
 
     def _rows(self, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
         return [self.store._row("tasks", r) for r in self.conn.execute(sql, args)]  # type: ignore[misc]
+
+    def _reconcile_claims(self) -> None:
+        """Gỡ claim '__claiming__' đã cũ. `_start` chạy đồng bộ và chỉ được gọi trong `tick` (không tái nhập), nên lúc bắt đầu
+        tick mọi task còn mang CLAIMING là claim bỏ dở (daemon chết giữa claim và submit, lỗi bất ngờ...). Nếu đã có run sống
+        của task thì gắn lại run đó; nếu không thì trả task về trạng thái chờ (root → triage, còn lại → ready; review giữ review)."""
+        for t in self._rows("SELECT * FROM tasks WHERE current_run_id = ?", (CLAIMING,)):
+            if t["status"] == "review":
+                back = "review"
+            elif t["status"] == "running":
+                back = "triage" if t.get("kind") == "root" and not t.get("decomposed") else "ready"
+            else:
+                back = t["status"]
+            log.warning("gỡ claim bỏ dở của task %s (%s → %s)", t["id"], t["status"], back)
+            self._release_claim(t["id"], back)
+
+    def _release_claim(self, task_id: str, back: str) -> None:
+        """Trả claim CLAIMING: nếu run của task đã được tạo (lỗi xảy ra SAU submit) thì gắn run đó, không tạo run trùng."""
+        live = self.conn.execute(
+            "SELECT id FROM runs WHERE task_id=? AND status IN ('queued','running','waiting_human') ORDER BY queued_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if live is not None:
+            self.tasks.update(task_id, {"current_run_id": live[0]})
+        else:
+            self.tasks.update(task_id, {"status": back, "current_run_id": None})
 
     def _reconcile_running(self) -> None:
         ttl = float(self.cfg("lease_ttl_s") or 120)
@@ -739,6 +765,25 @@ class TaskDispatcher:
             )
             if cur.rowcount != 1:
                 return None
+        try:
+            return self._submit_claimed(t, agent_id, kind=kind, from_status=from_status, to_status=to_status, prompt=prompt,
+                                        json_schema=json_schema, read_only=read_only, retry=retry, parent_run=parent_run,
+                                        hub_self=hub_self, now=now)
+        except Exception:
+            # lỗi bất ngờ (OS/sqlite/bug) sau khi claim: trả claim lại, không để task kẹt '__claiming__' vĩnh viễn
+            cur_row = self.tasks.maybe(t["id"])
+            if cur_row is not None and cur_row.get("current_run_id") == CLAIMING:
+                try:
+                    self._release_claim(t["id"], from_status)
+                except Exception:  # pragma: no cover - tick sau sẽ gỡ qua _reconcile_claims
+                    log.exception("không trả được claim của task %s", t["id"])
+            raise
+
+    def _submit_claimed(
+        self, t: dict[str, Any], agent_id: str, *, kind: str, from_status: str, to_status: str, prompt: str, json_schema: dict | None,
+        read_only: bool, retry: dict[str, Any] | None, parent_run: dict[str, Any] | None, hub_self: str, now: str,
+    ) -> dict[str, Any] | None:
+        """Phần sau claim của `_start`: dựng tuỳ chọn, submit run, ghi run vào task."""
         path, wkind = self._workspace(t)
         ov = t.get("overrides") or {}
         opts = {"json_schema": json_schema, "read_only": read_only, "hub_self": hub_self if self.cfg("hub_self_mcp") else None, "workspace_kind": wkind}

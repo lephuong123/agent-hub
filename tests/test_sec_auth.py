@@ -427,3 +427,26 @@ def test_admin_shared_permission_deny_every_hub(tmp_path):
         deny = s["permissions"]["deny"]
         for t in ("Read", "Grep", "Glob", "Edit", "Write"):
             assert f"{t}(/{SHARED_ROOT}/**)" in deny, (trust, t)  # "//abs" = đường dẫn tuyệt đối trong luật Claude Code
+
+
+async def test_agent_cannot_forge_audit_record(home):
+    """B4: RPC `audit.record` nhận actor/channel/summary do người gọi tự khai → chỉ người (web/CLI). Agent trong run gọi
+    (kể cả đã đọc trộm token) bị từ chối, không ghi được dòng audit giả "user duyệt"; người vẫn ghi được."""
+    assert "audit.record" in auth.HUMAN_ONLY and "audit.record" not in auth.MANAGER_ALLOWED
+    d, srv = await _start(home)
+    try:
+        forged = {"kind": "approval.approve", "actor": "user", "channel": "web", "summary": "người duyệt rm -rf", "data": {"approval_id": "ap_1"}}
+        agent = auth.Caller(via="socket", pid=1, token_ok=False, run_id="r_x", agent_id="a1", evidence=["env:CFHARNESS_RUN_ID"])
+        r = await d.call_as(agent, "audit.record", dict(forged))
+        assert r.get("error", {}).get("code") == -32003, r
+        run, proc, go = await _start_run(d)
+        rr = await _in_run(go, _client_py(home, "audit.record", dict(forged), steal_token=True))
+        resp = json.loads(rr["out"].strip().splitlines()[-1])
+        assert resp.get("error", {}).get("code") == -32003, resp
+        proc.wait(5)
+        n = d.hub.store.conn.execute("SELECT COUNT(*) FROM audit_log WHERE kind='approval.approve' AND actor='user'").fetchone()[0]
+        assert n == 0
+        r = await asyncio.to_thread(RpcClient(home.socket).call, "audit.record", {"kind": "web.login", "actor": "user", "channel": "web"})
+        assert r["id"]
+    finally:
+        await _stop(d, srv)

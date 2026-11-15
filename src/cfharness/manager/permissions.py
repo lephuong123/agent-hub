@@ -183,6 +183,16 @@ def _deep_keys(obj: Any, prefix: str = "") -> list[str]:
     return out
 
 
+def task_spec(p: dict[str, Any]) -> dict[str, Any]:
+    """Đặc tả task như `TaskService.create` sẽ đọc (`dispatch/rpc.task_create` lấy `p["task"]` hoặc chính `p`), đã chuẩn hoá alias
+    `assignee_agent_id`→`assignee`, `team_id`→`team` — kiểm quyền phải nhìn đúng giá trị handler dùng, không chỉ tên khoá chuẩn."""
+    raw = p.get("task") or p
+    t = dict(raw) if isinstance(raw, dict) else {}
+    t["assignee"] = t.get("assignee") or t.get("assignee_agent_id")
+    t["team"] = t.get("team") or t.get("team_id")
+    return t
+
+
 class ManagerPermissions:
     def __init__(self, hub: "Hub") -> None:
         self.hub = hub
@@ -699,7 +709,9 @@ class ManagerPermissions:
                         "chỉ đổi qua learn_propose (eval/canary) hoặc bởi người")
             return None
         if method in ("agent.archive", "agent.restore", "learn.refine"):
-            aid = str(p.get("id") or p.get("agent") or "")
+            # kiểm ĐÚNG khoá handler đọc: learn.refine chỉ đọc `agent` (learning/rpc.py), agent.archive|restore đọc `id` — không
+            # `id or agent` (manager đặt id=<agent thường>, agent=<manager> sẽ lách)
+            aid = str(p.get("agent") or "") if method == "learn.refine" else str(p.get("id") or "")
             if aid in mgrs:
                 return f"'{aid}' là agent điều phối viên — không được tác động"
             if method == "agent.archive" and self.review_roles(aid):
@@ -764,7 +776,7 @@ class ManagerPermissions:
                     return f"'{aid}' thuộc team có review ({', '.join(rv)}) — không đưa sang team không review"
             return None
         if method == "task.create":
-            t = dict(p.get("task") or p)
+            t = task_spec(p)
             if str(t.get("assignee") or "") in mgrs:
                 return "không giao task cho agent điều phối viên"
             if t.get("assignee") and self.estop_teams_of(str(t["assignee"])):

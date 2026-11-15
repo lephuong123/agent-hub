@@ -1089,6 +1089,8 @@
               track(j.run_id);
             }
             mtext.value = ""; autoGrow(mtext);
+            // E17: ô đã trống sau khi gửi → báo "input" để voice.js xoá cờ voice (tin gõ tay sau đó không bị gắn nhãn giọng nói)
+            try { mtext.dispatchEvent(new Event("input", { bubbles: true })); } catch (_) {}
             picked = []; drawFiles();
             emit("sent", { run: j.run_id || "", steered: !!j.steered, conv: conv });
           })

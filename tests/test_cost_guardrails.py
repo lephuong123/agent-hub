@@ -306,7 +306,9 @@ async def test_manager_decided_continue_not_exempt(make_hub):
     assert hub.runs.on_approval_resolved(rid) is None
     err = [e for e in evs(hub, "error") if e.payload.get("code") == "resume_failed"]
     assert err and "ngân sách ngày" in err[-1].payload["message"]
-    assert hub.store.get_run(rid)["status"] == "waiting_human"
+    # không miễn trần (giữ nguyên quyết định); run kết thúc failed thay vì kẹt waiting_human với approval đã quyết (QA S5)
+    r = hub.store.get_run(rid)
+    assert r["status"] == "failed" and not r.get("continued_in_run_id") and "không resume được sau khi duyệt" in r["error"]
 
 
 async def test_human_approved_continue_still_bound_by_admin_policy(make_hub, monkeypatch):
@@ -315,7 +317,7 @@ async def test_human_approved_continue_still_bound_by_admin_policy(make_hub, mon
     pol = hub.runs._admin_policy()
     monkeypatch.setattr(pol, "budget_scope", lambda h: [("admin", "machine", 5.0, 1.0)])
     assert hub.runs.on_approval_resolved(rid) is None  # chính sách root không được miễn
-    assert hub.store.get_run(rid)["status"] == "waiting_human"
+    assert hub.store.get_run(rid)["status"] == "failed"  # QA S5: không kẹt waiting_human
 
 
 def test_human_decided_classifier():

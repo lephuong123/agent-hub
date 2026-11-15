@@ -306,20 +306,25 @@ class RunManager:
             "max_runtime_s": max_runtime_s,
         }
         self.store.insert_run(row)
-        if mgr_keep:
-            self.hub.manager.mark_issued(run_id, (run_opts or {}).get("manager_conversation"))
-        if task_id:
-            self.hub.dispatcher.on_run_submitted(task_id, run_id, parent_run_id)
-        seq_before = self.hub.bus.last_seq
-        self.hub.publish(
-            make_event(
-                "run.queued",
-                agent_id,
-                {"kind": kind, "session_id": session_id, "max_budget_usd": max_budget, "prompt_preview": prompt[:200], "resume": bool(resume_session_id), "parent_run_id": parent_run_id, "resume_reason": resume_reason},
-                run_id=run_id,
-                session_id=session_id,
+        try:
+            if mgr_keep:
+                self.hub.manager.mark_issued(run_id, (run_opts or {}).get("manager_conversation"))
+            if task_id:
+                self.hub.dispatcher.on_run_submitted(task_id, run_id, parent_run_id)
+            seq_before = self.hub.bus.last_seq
+            self.hub.publish(
+                make_event(
+                    "run.queued",
+                    agent_id,
+                    {"kind": kind, "session_id": session_id, "max_budget_usd": max_budget, "prompt_preview": prompt[:200], "resume": bool(resume_session_id), "parent_run_id": parent_run_id, "resume_reason": resume_reason},
+                    run_id=run_id,
+                    session_id=session_id,
+                )
             )
-        )
+        except Exception as e:
+            # run đã ghi DB nhưng chưa vào hàng đợi: đóng nó lại, không để run 'queued' ma giữ chỗ ngân sách (reserved_budget) mãi
+            self.store.update_run(run_id, {"status": "failed", "outcome": "failed", "ended_at": now_iso(), "error": f"lỗi khi xếp hàng run: {e}"[:500]})
+            raise
         self.queue.append(run_id)
         self.waiters[run_id] = asyncio.Event()
         self.tick()
@@ -1047,10 +1052,17 @@ class RunManager:
             self._check_repeated_failure(ar.agent_id, ar.run_id, error)
 
     def _record_cost(self, h: RunHandle, res: dict[str, Any]) -> dict[str, Any]:
-        total = float(res.get("cost_usd") or 0.0)
+        """Chi phí run = luỹ kế session mới − luỹ kế đã ghi. Luỹ kế session KHÔNG BAO GIỜ đi lùi: `total_cost_usd` thiếu (lượt
+        lỗi sớm) hoặc nhỏ hơn luỹ kế đã ghi → run tính 0 và giữ nguyên luỹ kế (trước đây ghi đè bằng số nhỏ hơn làm lượt sau
+        bị cộng lại phần đã tính)."""
+        raw = res.get("cost_usd")
         sess = self.store.get_session(h.spec.resume_session_id if h.spec.fork else h.spec.session_id)  # M4-A: fork luỹ kế từ session gốc
-        prev = float(sess["cumulative_cost_usd"]) if sess and h.spec.resume_session_id else 0.0
-        run_cost = round(max(0.0, total - prev), 8) if total >= prev else total
+        prev = float(sess["cumulative_cost_usd"] or 0.0) if sess and h.spec.resume_session_id else 0.0
+        total = float(raw) if raw is not None else prev
+        if total < prev:
+            log.warning("run %s: total_cost_usd %.6f nhỏ hơn luỹ kế session %.6f — giữ luỹ kế, run tính 0", getattr(h, "run_id", "?"), total, prev)
+            total = prev
+        run_cost = round(total - prev, 8)
         self.store.set_session_cost(h.spec.session_id, total)
         return {"cost_usd": run_cost, "session_cost_total_usd": total}
 
@@ -1337,8 +1349,15 @@ class RunManager:
                 kind=run.get("kind") or "adhoc", resume_session_id=run["session_id"], parent_run_id=run_id,
                 resume_reason="approval", resume_ticket_id=ticket, check_paused=False, budget_exempt=exempt,
             )
-        except HubError as e:
+        except HubError as e:  # gồm Blocked (ESTOP, ngân sách…)
+            # approval đã quyết hết mà không resume được → kết thúc run (failed), không để kẹt waiting_human mãi;
+            # người chạy tiếp bằng `cfharness run continue` khi hết lý do chặn.
+            err = f"không resume được sau khi duyệt: {e.message}"
+            self.store.update_run(run_id, {"status": "failed", "outcome": "failed", "error": err, "ended_at": run.get("ended_at") or now_iso()})
+            self.locks.release_session(run.get("session_id"))
             self.hub.publish(make_event("error", run["agent_id"], {"code": "resume_failed", "message": e.message}, run_id=run_id))
+            self.hub.publish(make_event("run.failed", run["agent_id"], {"outcome": "failed", "error": err}, run_id=run_id, session_id=run.get("session_id")))
+            self._set_agent_after(run["agent_id"], run_id, "failed")
             return None
         self.store.update_run(run_id, {"status": "resumed", "outcome": "resumed", "continued_in_run_id": new["id"]})
         if exempt and self._day_exhausted(run["agent_id"], new.get("team_id")):

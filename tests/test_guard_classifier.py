@@ -225,6 +225,30 @@ DESTRUCTIVE_BASH = [
     "docker volume prune -f",
     "docker compose down -v",
     "curl -X DELETE https://api.example.com/items/1",
+    # --- A1: lệnh "chỉ đọc" có cờ ghi file (đè file có sẵn / được bảo vệ) hoặc chạy lệnh tuỳ ý
+    "sort -o README.md README.md",
+    "sort -o /etc/passwd x",
+    "sort --output=.env x",
+    "awk 'BEGIN{system(\"rm -rf docs\")}'",
+    "awk '{print | \"sh\"}' README.md",
+    "awk '\"rm -rf docs\" | getline' README.md",
+    "awk 'BEGIN{print \"x\" > \"README.md\"}'",
+    "awk -i inplace '{print}' .env",
+    "gawk -i inplace '{print}' HOMEDIR/.zshrc",
+    "git diff --output=README.md",
+    "git log --output README.md",
+    "git show --output=.env",
+    "git -c core.pager='rm -rf docs' log",
+    "git -c alias.x='!rm -rf docs' x",
+    "git --paginate log",
+    "git log --ext-diff",
+    "diff --output=README.md a b",
+    "rg x --pre 'rm -rf docs'",
+    "rg --pre=sh x",
+    "man -P 'rm -rf docs' ls",
+    "env --split-string='rm -rf docs'",
+    "env -S'rm -rf docs'",
+    "yq -i . .env",
 ]
 
 DESTRUCTIVE_OTHER = [
@@ -267,7 +291,28 @@ SAFE_BASH = [
     "python3 -m pytest", "black src", "ruff check src --fix", "prettier --write src", "go fmt ./...",
     "mkdir -p build/x && cp src/app.py build/x/", "cat src/app.py | grep print", "echo 'DROP TABLE x' > notes-sql.txt",
     "grep -r 'DELETE FROM' src", "git log --grep='rm -rf'", "echo 'rm -rf is dangerous'",
+    # A1: cách dùng thường của các lệnh đã siết cờ — vẫn không bị giữ
+    "awk '$1 > 5 {print}' README.md", "awk '/foo|bar/' README.md", "awk 'BEGIN{FS=\"|\"} {print $1}' README.md", "awk -F, '{print $2}' README.md",
+    "awk '$1==\"a\" || $2==\"b\"' README.md", "sort -n README.md", "sort -o tmp-run.log tmp-run.log", "git log -p -3",
+    "git -c color.ui=always log", "rg -n foo src", "man ls", "env -u FOO printenv", "yq . README.md", "diff -u a b",
 ]
+
+# A1: ghi vào file do run tạo → `write` (không còn `safe`)
+WRITE_READONLY_FLAGS = [
+    "sort -o tmp-run.log tmp-run.log",
+    "awk -i inplace '{print}' build/out.js",
+    "yq -i . build/out.js",
+    "git diff --output=build/out.js",
+    "diff --output=build/new.patch a b",
+    "awk 'BEGIN{print 1 > \"build/x.txt\"}'",
+    "awk -i inplace '{print}' README.md",  # như `sed -i` trên file người dùng: write, kèm kiểm protected path
+]
+
+
+@pytest.mark.parametrize("cmd", WRITE_READONLY_FLAGS)
+def test_readonly_cmd_write_flags_not_safe(env, cmd):
+    v = bash(env, cmd)
+    assert v.verdict == "write", (cmd, v.verdict, v.rule)
 
 SAFE_OTHER = [
     ("Read", {"file_path": "README.md"}),

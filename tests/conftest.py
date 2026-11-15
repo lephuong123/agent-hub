@@ -17,6 +17,67 @@ import os as _os
 
 _os.environ["CFHARNESS_TESTING"] = "1"
 
+# F18: biến môi trường của một lượt chạy agent (khi pytest chạy BÊN TRONG một run cfharness) không được rò vào test —
+# CFHARNESS_HOME trỏ tới hub thật, CFHARNESS_RUN_ID làm auth/hook coi tiến trình test là agent. Xoá ở mức module để daemon/tiến
+# trình con test spawn cũng không kế thừa; fixture `_strip_run_env` xoá lại trước mỗi test (phòng test trước lỡ đặt).
+RUN_ENV_VARS = (
+    "CFHARNESS_HOME",
+    "CFHARNESS_RUN_ID",
+    "CFHARNESS_SOCKET",
+    "CFHARNESS_MANAGER_KEY",
+    "CFHARNESS_EVAL_RUN_ID",
+    "CFHARNESS_OUTPUT_FILE",
+    "CFHARNESS_OUTPUT_JSON",
+    "CFHARNESS_CLIP_OUT",
+    "AGENT_HUB_RUN_ID",  # tên cũ (names.LEGACY_ENV_RUN_ID) — auth vẫn đọc
+    "AGENT_HUB_HOME",
+)
+for _k in RUN_ENV_VARS:
+    _os.environ.pop(_k, None)
+
+
+def pytest_configure(config):
+    """F18: daemon (kể cả tiến trình con) nhận diện người gọi qua env KHỞI TẠO của pid client do kernel giữ — xoá os.environ không
+    đủ. Nếu env khởi tạo của pytest còn biến của lượt agent bao ngoài → chạy lại chính pytest (execve) với env đã xoá, một lần."""
+    if _os.environ.get("CFHARNESS_TEST_REEXEC") or not getattr(sys, "orig_argv", None):
+        return
+    import cfharness.auth as _auth
+
+    try:
+        kenv = _auth.proc_environ(_os.getpid()) or {}
+    except Exception:  # pragma: no cover
+        return
+    if not any(k in kenv for k in RUN_ENV_VARS):
+        return
+    env = {k: v for k, v in _os.environ.items() if k not in RUN_ENV_VARS}
+    env["CFHARNESS_TEST_REEXEC"] = "1"
+    capman = config.pluginmanager.getplugin("capturemanager")
+    if capman is not None:
+        capman.stop_global_capturing()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    _os.execve(sys.executable, [sys.executable, *sys.orig_argv[1:]], env)
+
+
+@pytest.fixture(autouse=True)
+def _strip_run_env(monkeypatch):
+    """F18: mỗi test bắt đầu không có biến môi trường của lượt chạy agent (test cần thì tự `monkeypatch.setenv`)."""
+    for k in RUN_ENV_VARS:
+        monkeypatch.delenv(k, raising=False)
+    # Xoá os.environ KHÔNG đổi env khởi tạo mà kernel giữ (macOS KERN_PROCARGS2 / Linux /proc/<pid>/environ): daemon in-process
+    # của test đọc env của CHÍNH pytest qua `auth.proc_environ` sẽ thấy CFHARNESS_RUN_ID của lượt agent bao ngoài và coi người gọi
+    # là agent. Với pid của chính pytest, trả env hiện tại (đã xoá); tiến trình khác vẫn đọc thật.
+    import cfharness.auth as _auth
+
+    real = _auth.proc_environ
+
+    def proc_environ(pid):
+        if pid == _os.getpid():
+            return dict(_os.environ)
+        return real(pid)
+
+    monkeypatch.setattr(_auth, "proc_environ", proc_environ)
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _allow_pytest_tmp_workspaces(tmp_path_factory):

@@ -123,6 +123,21 @@ def _field(src: str, lo: int, hi: int, names: dict[str, int], what: str) -> tupl
     return frozenset(v % 7 if is_dow else v for v in out), src.startswith("*")
 
 
+_MONTH_DAYS = {1: 31, 2: 29, 3: 31, 4: 30, 5: 31, 6: 30, 7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
+
+
+def _fmt_set(v: frozenset[int]) -> str:
+    return ",".join(str(x) for x in sorted(v))
+
+
+def check_reachable(s: Spec) -> Spec:
+    """CronError nếu lịch cron không bao giờ chạy (vd '0 0 30 2 *': ngày 30 không có trong tháng 2). Tháng 2 tính 29 ngày
+    (năm nhuận). Khi cả ngày lẫn thứ cùng bị giới hạn thì khớp theo HOẶC → thứ luôn cứu được, không kiểm."""
+    if s.kind == "cron" and not s.dom_star and s.dow_star and not any(d <= _MONTH_DAYS[m] for m in s.months for d in s.doms):
+        raise CronError(f"lịch không bao giờ chạy: ngày {_fmt_set(s.doms)} không có trong tháng {_fmt_set(s.months)}")
+    return s
+
+
 def parse_cron(expr: str) -> Spec:
     parts = expr.split()
     if len(parts) != 5:
@@ -169,8 +184,13 @@ _VI = ((r"^(hằng|hang|mỗi|moi)\s+(ngày|ngay)\s+(?=\d)", "daily "), (r"^(m�
        (r"^cuối\s+tuần\s+", "weekends "), (r"^(lúc|luc|vào|vao)\s+", "at "), (r"^(sau|trong)\s+", "in "))
 
 
-def parse(expr: str, *, now: datetime | None = None, tz: tzinfo | None = None) -> Spec:
-    """Biểu thức → Spec. `at`/`in` được quy về mốc tuyệt đối theo `now` (mặc định giờ hiện tại)."""
+def parse(expr: str, *, now: datetime | None = None, tz: tzinfo | None = None, strict: bool = True) -> Spec:
+    """Biểu thức → Spec. `at`/`in` được quy về mốc tuyệt đối theo `now` (mặc định giờ hiện tại).
+    `strict` (mặc định): từ chối lịch cron không bao giờ chạy (`check_reachable`); đọc lại bản ghi cũ trong DB dùng strict=False."""
+    return check_reachable(_parse(expr, now=now, tz=tz)) if strict else _parse(expr, now=now, tz=tz)
+
+
+def _parse(expr: str, *, now: datetime | None = None, tz: tzinfo | None = None) -> Spec:
     raw = " ".join(str(expr or "").split())
     if not raw:
         raise CronError("thiếu biểu thức lịch")
