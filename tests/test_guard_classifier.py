@@ -203,6 +203,8 @@ DESTRUCTIVE_BASH = [
     "cfharness agent purge coder --confirm coder",
     "cfharness config set approval.timeout_s 1",
     "cfharness secret set X y",
+    "cfharness hub export --stop",  # xuất toàn bộ hub (hub_transfer.py) — chỉ người
+    "cfharness hub import /tmp/x.cfhx --yes --replace --stop",
     "sqlite3 ~/.cfharness/hub.db 'select 1'".replace("~/.cfharness", "HUBHOME"),
     "rm -rf HUBHOME/ledger",
     "sed -i 's/rm/xx/' HUBHOME/policy/catalog.yaml",

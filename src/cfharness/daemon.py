@@ -139,6 +139,10 @@ class Daemon:
         from .backup import register_rpc as _register_backup
 
         _register_backup(self)
+        # Xuất toàn bộ hub sang máy khác: hub.export (hub_transfer.py — làm lặng hub, ghi gói .cfhx, tự bọc audit; nhập chỉ ngoại tuyến từ CLI)
+        from .hub_transfer import register_rpc as _register_hub_transfer
+
+        _register_hub_transfer(self)
         # Xem/mở file agent đã thao tác (web chip file): file.read (chỉ đọc) + file.open (tác dụng phụ) — HUMAN_ONLY, tự audit (fileview.py)
         from .fileview import register_rpc as _register_files
 

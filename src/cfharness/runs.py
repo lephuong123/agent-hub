@@ -102,6 +102,9 @@ class RunManager:
         self._warned_versions: set[str] = set()
         self._auth_watch: asyncio.Task | None = None
         self.shutting_down = False
+        # Làm lặng hub khi xuất gói (hub_transfer.py): khác None → không khởi chạy run trong hàng đợi (run mới vẫn xếp hàng,
+        # chạy khi xuất xong). Chỉ trong RAM — không bao giờ vào hub.db (gói xuất không mang trạng thái này)
+        self.quiesced: str | None = None
         from .workspace import WorkspaceLocks
 
         self.locks = WorkspaceLocks(hub.store)  # M3: khoá theo gốc repo (FR-RT-12), thay bản tối thiểu M1-B
@@ -374,7 +377,7 @@ class RunManager:
     def tick(self) -> list[str]:
         """Khởi chạy các run trong hàng đợi khi đủ điều kiện. Trả danh sách run vừa khởi chạy."""
         started: list[str] = []
-        if self.shutting_down or self.estop.get("on"):
+        if self.shutting_down or self.quiesced or self.estop.get("on"):
             return started
         limit = self.effective_limit()  # M3: điều tiết theo rate limit (FR-RT-16)
         skipped: list[str] = []

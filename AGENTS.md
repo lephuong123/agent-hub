@@ -600,6 +600,19 @@ Chi tiết, danh sách gồm/bỏ, giới hạn: `docs/dev-notes/backup.md`. Kh�
 - Cập nhật: `update.start` tạo bản `pre-update` trước khi chạy helper; helper (chỉ stdlib) dò `hub.ping`, không lên → cài lại bản cũ + khôi phục hub.db
   khi `user_version` đã tăng; `cfharness update --rollback` (RPC `update.rollback`). Pha mới của helper mà daemon phải chờ → `daemon._UPDATE_BUSY_PHASES`.
 
+## Xuất / nhập toàn bộ hub sang máy khác — `hub_transfer.py` (PR1 của `docs/dev-notes/plan-hub-clone.md`)
+Không migration. Test: `tests/test_hub_transfer.py`.
+- `hub_transfer.py`: gói `.cfhx` (tar không nén ngoài, từng phần tử gzip riêng, `MANIFEST.json` cuối, sha256 nội dung gốc, `sections` có `prefix`
+  — phần mới thêm sau là mục `sections` mới, bản cũ bỏ qua phần `optional`). Xuất = RPC `hub.export` (HUMAN_ONLY, tự audit; làm lặng bằng
+  `RunManager.quiesced` rồi thả trong `finally`) hoặc ngoại tuyến (giữ `daemon.lock`); chỉ ghi vào `HUB_HOME/exports/`. Nhập CHỈ ngoại tuyến từ CLI
+  (`hub import`, không RPC): kiểm gói → stage `HUB_HOME/.import-*` → `pathmap` trên stage → dọn `MACHINE_STATE` → áp chế độ (`clone` mặc định)
+  → chuyển vào chỗ (`backup._apply_stage`) → `rebaseline_offline`. `hub_transfer_cli.py`: `cfharness hub export|import` (∈ `HUB_HUMAN_ONLY_CLI`).
+- `pathmap.py`: viết lại đường dẫn nhiều cặp trong MỘT lượt (dùng chung với `home_migrate`). Bảng append-only/`HISTORY_COLS` giữ nguyên; tri thức
+  thuộc ledger (file MEMORY/SKILL/config agent, bảng `mem_*`) KHÔNG viết lại tay — chỉ ghi `hub_state.import_followups`.
+- Bất biến: gói không bao giờ chứa `checkpoints/`, `secrets/`, `auth/`, `mcp_server/` (bản này); thêm trạng thái gắn với máy vào `hub_state` →
+  thêm khoá vào `hub_transfer.MACHINE_STATE` (hoặc `CLONE_STATE`) + ca trong test. `exports/`/`imports/` ∈ `backup.EXCLUDED`, sandbox
+  denyRead/denyWrite, `sensitive_read`.
+
 ## Tổng quan máy (Q6) + quản trị user trên cùng máy — mỗi hub xuất số liệu, admin xem/cảnh báo/ESTOP/chính sách
 Chi tiết: `docs/dev-notes/admin-overview.md` (Q6 + RUNBOOK nhóm/thư mục), `docs/dev-notes/admin-users.md` (plan-admin-users P1+P2: bất biến,
 lệch kế hoạch, việc dở). Migration **v26** (`admin_samples`). Test: `tests/test_admin_overview.py`, `tests/test_admin_{control,policy,watch,users,audit}.py`,

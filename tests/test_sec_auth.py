@@ -349,7 +349,8 @@ def test_human_only_covers_sensitive_surface():
               "learn.retry", "learn.refine", "agent.update", "golden.add", "golden.rm", "learn.policy_set", "secret.set", "mcp.add", "estop.set",
               # web "Quyền đã cấp" / lịch / hội thoại điều phối viên (#3 #5 #7)
               "guard.grant.rm", "guard.trust.set", "guard.sandbox.allow_domain", "guard.sandbox.dev_host", "schedule.update",
-              "manager.archive", "manager.unarchive", "manager.tick"):
+              "manager.archive", "manager.unarchive", "manager.tick",
+              "hub.export"):  # xuất toàn bộ hub (hub_transfer.py)
         assert m in auth.HUMAN_ONLY, m
     assert "guard.check" not in auth.HUMAN_ONLY and "taskself.call" not in auth.HUMAN_ONLY  # hook/hub-self không bị chặn
 

@@ -971,6 +971,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_backup_parsers(sub, common)
 
+    # xuất / nhập toàn bộ hub sang máy khác: cfharness hub export|import (hub_transfer_cli.py, hub_transfer.py)
+    from .hub_transfer_cli import add_parsers as _add_hub_transfer_parsers
+
+    _add_hub_transfer_parsers(sub, common)
+
     # tổng quan máy nhiều người dùng: cfharness admin overview (admin_cli.py, admin_overview.py)
     from .admin_cli import add_parsers as _add_admin_parsers
 

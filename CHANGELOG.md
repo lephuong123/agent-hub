@@ -20,6 +20,12 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   thành vô ích). Vẫn áp trần mỗi run và chính sách root của admin. Điều phối viên/hub tự quyết thì không được miễn.
   Khi miễn trừ thực sự được dùng → audit `budget.exempt_approved`.
 
+### Chuyển hub sang máy khác
+- `cfharness hub export` đóng gói toàn bộ hub (agent, team, task, tri thức/ledger, lịch, lịch sử run) thành MỘT file `.cfhx`;
+  `cfharness hub import <file> [--dry-run] [--map-path CŨ=MỚI]` nhập vào máy khác, tự đổi đường dẫn HUB_HOME/`$HOME`. Mặc định chế độ
+  **nhân bản** (hai máy cùng chạy): Telegram/Slack tắt, lịch tạm dừng, task đang dở bị chặn ở máy mới. Bản này chưa mang secret và session
+  Claude Code (đặt lại secret tay sau khi nhập); cùng hệ điều hành.
+
 ---
 
 ## v0.2.9 — 2026-11-14

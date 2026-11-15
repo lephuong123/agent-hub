@@ -106,6 +106,9 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # Sao lưu (backup.py): tạo = ghi file lớn vào HUB_HOME; kiểm/kế hoạch khôi phục = đọc bản sao chứa toàn bộ dữ liệu hub — chỉ người.
         # Khôi phục không có RPC (daemon phải dừng; CLI `backup restore` ∈ HUB_HUMAN_ONLY_CLI)
         "backup.create", "backup.verify", "backup.restore_plan",
+        # Xuất toàn bộ hub (hub_transfer.py): gói chứa hub.db + tri thức + transcript MỌI agent, dừng run đang chạy — chỉ người.
+        # Nhập không có RPC (daemon đích phải dừng; CLI `hub import` ∈ HUB_HUMAN_ONLY_CLI)
+        "hub.export",
         # Tài khoản Claude (accounts/): token = quyền dùng tài khoản Claude của người; đổi tài khoản CHỈ do người (không tự đổi, không
         # MANAGER_ALLOWED) — agent không được tự thêm/đổi/xoá/kiểm tài khoản hay mở phiên `claude setup-token`
         "account.login_start", "account.login_finish", "account.login_cancel", "account.add_token", "account.use", "account.rename",
@@ -214,7 +217,7 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS"),
                       ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE"),
                       ("cfharness.web_events", "MUTATING_WEB"),
-                      ("cfharness.backup", "MUTATING_BACKUP"),
+                      ("cfharness.backup", "MUTATING_BACKUP"), ("cfharness.hub_transfer", "MUTATING_TRANSFER"),
                       ("cfharness.admin_rpc", "MUTATING_ADMIN"),
                       ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):
         try:
