@@ -20,6 +20,8 @@ import json
 import logging
 import os
 import socket
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -38,7 +40,10 @@ REF_PREFIX = "filehub:"
 STATUS_MAX_BYTES = 4_000_000
 STATES = ("idle", "syncing", "conflict", "offline", "auth_expired", "error", "paused", "not_configured", "version_mismatch", "starting")
 STEER_TEXT = "[cfharness] The human changed {rel} on Không gian số while you were working. Re-Read it before editing."
-IGNORE_BASE = (".git/", "node_modules/", ".DS_Store", "Thumbs.db", "*.tmp", "*.swp", "~$*", ".~lock.*", ".tangthu*")
+IGNORE_BASE = (".git/", "node_modules/", ".DS_Store", "Thumbs.db", "*.tmp", "*.swp", "~$*", ".~lock.*", ".tangthu*",
+               # tệp nội bộ của claude CLI trong cwd của run (vd `.claude/.cc-writes`, settings.local.json) — không bao giờ lên cloud
+               ".claude/", ".claude.json", ".cc-writes")
+DEVICE_NAME_MAX = 40
 META_PREFIX = ".tangthu"
 
 
@@ -76,6 +81,46 @@ def root_of(hub: Any, path: str) -> str | None:
         if _under(rp, r):
             return r
     return None
+
+
+def _is_ip(s: str) -> bool:
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(s)
+        return True
+    except ValueError:
+        return False
+
+
+def friendly_host(host: str) -> str:
+    """Tên máy từ hostname: IP giữ nguyên (không cắt ở dấu chấm), `may.local`/FQDN → phần đầu; giới hạn độ dài."""
+    h = (host or "").strip()
+    if not h:
+        return "máy"
+    if not _is_ip(h):
+        h = h.split(".")[0] or h
+    return h[:DEVICE_NAME_MAX]
+
+
+_MACHINE: str | None = None
+
+
+def machine_name() -> str:
+    """Tên máy thân thiện cho thiết bị sync: macOS `scutil --get ComputerName` (vd "MacBook của An"), không có → hostname."""
+    global _MACHINE
+    if _MACHINE is not None:
+        return _MACHINE
+    name = ""
+    if sys.platform == "darwin":
+        try:
+            r = subprocess.run(["scutil", "--get", "ComputerName"], capture_output=True, text=True, timeout=3, **no_window_kwargs())
+            if r.returncode == 0:
+                name = " ".join(r.stdout.split())[:DEVICE_NAME_MAX]
+        except (OSError, subprocess.TimeoutExpired):
+            name = ""
+    _MACHINE = name or friendly_host(socket.gethostname())
+    return _MACHINE
 
 
 def valid_name(name: str) -> bool:
@@ -134,7 +179,7 @@ class FilehubService:
         return self.hub.paths.home / "secrets" / "filehub" / "tokens.json"
 
     def device_name(self) -> str:
-        return str(self.cfg("device_name") or f"cfharness · {socket.gethostname().split('.')[0]}")[:64]
+        return str(self.cfg("device_name") or f"cfharness · {machine_name()}")[:64]
 
     def folders(self) -> list[dict[str, Any]]:
         return config_folders(self.hub.config)
@@ -404,6 +449,9 @@ class FilehubService:
     def tick(self) -> None:
         st = self.read_status()
         state = self.overall_state(st)
+        # syncing↔idle là nhịp thường của đồng bộ — không phát/ghi event mỗi vòng; chỉ khi vào/ra trạng thái có ý nghĩa
+        # (offline, auth_expired, error, conflict, paused, version_mismatch…). Trạng thái thật vẫn có ở filehub.status.
+        state = "idle" if state == "syncing" else state
         if state != self._last_state:
             prev, self._last_state = self._last_state, state
             if prev is not None or state not in ("not_configured", "starting"):

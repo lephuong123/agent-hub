@@ -99,3 +99,13 @@ Nếu bật `workspace.confine`, `filehub.local_parent` phải nằm trong W tr�
 
 - Nghiệm thu thật (§5 plan) khi có binary S1–S3 + T1/T3 phía Không gian số.
 - Kiểm sha256/tải binary theo tag; `filehub.resync`; báo sau run cho `extra_write_roots`; chặn đẩy tệp có secret TRƯỚC khi lên cloud (cần hook sync-core).
+
+## Sửa sau nghiệm thu thật (2026-11-15)
+
+Nghiệm thu với binary thật + Không gian số dev + claude haiku thật đạt (setup, 2 chiều, `.env` bỏ qua, xoá không hỏi + `filehub.deleted`,
+thùng rác cloud, presence, steer by=hub). Bốn lỗi đã sửa:
+1. `workspace_default` của agent nhận `filehub:<tên>[/<con>]` (`validate_workspace` giải ref; `RunManager.submit` dùng ref khi run không có cwd →
+   run có `run_opts.filehub` như `--cwd filehub:…`; `WorkspaceLocks.key_for`/`fileview` giải ref).
+2. `ignore.txt` mặc định thêm `.claude/`, `.claude.json`, `.cc-writes` (Claude Code ghi `.claude/.cc-writes` trong cwd của run).
+3. `filehub.state` không phát/ghi mỗi vòng syncing↔idle (syncing gộp vào idle cho event); trạng thái thật vẫn ở `filehub.status`.
+4. Tên thiết bị: macOS `scutil --get ComputerName`, không có → hostname (IP giữ nguyên, không cắt ở dấu chấm), ≤ 40 ký tự.

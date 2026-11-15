@@ -165,3 +165,60 @@ def test_workspace_kind_listed():
     from cfharness.tasks import WORKSPACE_KINDS
 
     assert "filehub" in WORKSPACE_KINDS
+
+
+# ------------------------------------------------------------------ sửa sau nghiệm thu thật (2026-11-15)
+async def test_agent_workspace_default_filehub_ref(env):
+    """#1: `agent create --workspace "filehub:<tên>/<con>"` — trước đây coi là đường dẫn tương đối (lỗi vùng bảo vệ)."""
+    d, s, local, _ = env
+    await rpc(d, "agent.create", {"config": {"id": "w3", "name": "w3", "workspace_default": "filehub:chung/Báo cáo"}})
+    assert d.hub.store.get_agent("w3")["workspace_default"] == "filehub:chung/Báo cáo"
+    r = await rpc(d, "run.start", {"agent": "w3", "prompt": "x"})
+    run = await until(lambda: (d.hub.store.get_run(r["id"]) or {}).get("diff") and d.hub.store.get_run(r["id"]))
+    assert run["cwd"] == str(local / "Báo cáo") and run["run_opts"]["filehub"] == "chung" and run["workspace_key"] == str(local)
+    await rpc(d, "agent.update", {"id": "w3", "changes": {"workspace_default": "filehub:chung/Khác"}})
+    assert d.hub.runs.locks.key_for("filehub:chung/Khác", "dir") == str(local)
+    with pytest.raises(HubError, match="không hợp lệ"):
+        await rpc(d, "agent.update", {"id": "w3", "changes": {"workspace_default": "filehub:chung/../x"}})
+
+
+def test_ignore_has_claude_internal_files(env):
+    """#2: Claude Code ghi `.claude/.cc-writes` trong cwd của run — không được đẩy lên Không gian số."""
+    d, *_ = env
+    lines = d.hub.filehub.ignore_lines()
+    assert ".claude/" in lines and ".cc-writes" in lines
+
+
+def test_state_event_not_emitted_for_syncing_idle_flapping(env):
+    """#3: syncing↔idle mỗi vòng không phát/ghi `filehub.state`; vào/ra trạng thái có ý nghĩa thì có."""
+    d, *_ = env
+    fh = d.hub.filehub
+    fh.prepare_files()
+
+    def st(state):
+        fh.status_path.write_text(json.dumps({"version": "0.3.0", "state": state, "roots": [], "recent": []}))
+        fh.tick()
+
+    st("idle")
+    n0 = len(events(d.hub, "filehub.state"))
+    for _ in range(5):
+        st("syncing")
+        st("idle")
+    assert len(events(d.hub, "filehub.state")) == n0
+    st("offline")
+    st("syncing")
+    assert [e.payload["state"] for e in events(d.hub, "filehub.state")][n0:] == ["offline", "idle"]
+
+
+def test_device_name_keeps_ip_hostname(monkeypatch, env):
+    """#4: hostname "192.168.2.51" → không cắt thành "192"; tên thân thiện có giới hạn độ dài."""
+    from cfharness.filehub import service as S
+
+    assert S.friendly_host("192.168.2.51") == "192.168.2.51" and S.friendly_host("an-mac.local") == "an-mac"
+    assert len(S.friendly_host("x" * 200)) == S.DEVICE_NAME_MAX
+    monkeypatch.setattr(S, "_MACHINE", None)
+    monkeypatch.setattr(S.sys, "platform", "linux")
+    monkeypatch.setattr(S.socket, "gethostname", lambda: "192.168.2.51")
+    d, *_ = env
+    assert d.hub.filehub.device_name() == "cfharness · 192.168.2.51"
+    monkeypatch.setattr(S, "_MACHINE", None)

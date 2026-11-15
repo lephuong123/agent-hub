@@ -61,6 +61,11 @@ def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
         path = path.get("path")
     if not path:
         return
+    if str(path).startswith("filehub:"):  # thư mục chung Không gian số → kiểm đường dẫn cục bộ đã giải
+        fh = getattr(hub, "filehub", None)
+        if fh is None:
+            raise HubError(f"{what}: thư mục chung (filehub) chưa bật")
+        path = fh.resolve_ref(str(path))[0]
     from .guard.runtime import fixed_protected_dirs
 
     try:
@@ -292,6 +297,11 @@ class WorkspaceLocks(RepoLocks):
         return git_root(cwd) or os.path.realpath(os.path.expanduser(cwd))
 
     def _key_for_hub(self, cwd: str | None, workspace_kind: str) -> str | None:
+        if cwd and str(cwd).startswith("filehub:"):  # workspace_default của agent dạng filehub:<tên>[/<con>]
+            try:
+                cwd = self.hub.filehub.resolve_ref(str(cwd), must_exist=False)[0]
+            except HubError:
+                return None
         if cwd and workspace_kind == "dir":
             from .filehub.service import root_of
 

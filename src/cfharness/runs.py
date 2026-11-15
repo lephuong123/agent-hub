@@ -225,6 +225,8 @@ class RunManager:
         if not prompt or not prompt.strip():
             raise HubError("prompt rỗng")
         agent = self.hub.agents.get_row(agent_id)
+        if not cwd and str(agent.get("workspace_default") or "").startswith("filehub:"):
+            cwd = agent["workspace_default"]  # workspace mặc định của agent là thư mục chung → như run --cwd filehub:…
         if cwd and str(cwd).startswith("filehub:"):  # thư mục chung Không gian số: `filehub:<tên>[/<con>]` → bản sao cục bộ
             fh_path, fh_folder, _sub = self.hub.filehub.resolve_ref(str(cwd))  # type: ignore[attr-defined]
             cwd = fh_path
@@ -443,7 +445,9 @@ class RunManager:
             if _in_agent_workspaces(cwd, home):  # M7: thư mục cố định trong workspaces/ của agent (hội thoại manager) = scratch
                 wkind = "scratch"
         elif agent.get("workspace_default"):
-            cwd, wkind = Path(agent["workspace_default"]).expanduser(), "dir"
+            wd = str(agent["workspace_default"])
+            cwd = Path(hub.filehub.resolve_ref(wd)[0] if wd.startswith("filehub:") else wd).expanduser()  # type: ignore[attr-defined]
+            wkind = "dir"
         else:
             cwd, wkind = home / "workspaces" / run_id, "scratch"
         if wkind in ("dir", "worktree") and cwd.exists():  # R2-5 (SEC): kiểm lại lúc spawn — chống TOCTOU (đổi thành symlink sau khi đặt)
