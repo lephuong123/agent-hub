@@ -672,6 +672,8 @@ Tài liệu tổng hợp (người dùng + kỹ thuật + giới hạn): `docs/d
   daemon mới chờ); `register_rpc` → `cleanup` (`pass` sót, job chết → failed, gói tải lên > 24 h). Web không đọc `state.json` trực tiếp (như
   `update_pages`: daemon dừng → "đang dừng", poll). Thêm RPC web → `HUMAN_ONLY_TRANSFER_WEB` (+ `MUTATING_…`) + ca trong 2 file test trên; khoá
   mới của state/kết quả → danh sách trắng; pha job mà daemon phải chờ → `IMPORT_BUSY_PHASES`.
+- filehub (Không gian số): token thiết bị `secrets/filehub/` + `filehub/` KHÔNG BAO GIỜ vào gói (cả move); nhập (`_adjust_filehub`) → `filehub.enabled=false`,
+  `device_name=null`, clone gỡ `folders` (move giữ, đã pathmap), `hub_state.import_filehub` (∈ MACHINE_STATE, xoá khi `filehub` đăng nhập xong) → báo cáo/doctor nhắc `cfharness filehub setup`; đóng băng KHÔNG dừng filehub.
 - Bất biến: gói không bao giờ chứa `checkpoints/`, `auth/web.json`/thiết bị, `secrets/` dạng rõ, session Claude không thuộc hub; passphrase không bao giờ vào
   argv/env/audit/log/DB/`job.json`/`state.json`/HTML; thêm trạng thái gắn với máy vào `hub_state` →
   thêm khoá vào `hub_transfer.MACHINE_STATE` (hoặc `CLONE_STATE`) + ca trong test. `exports/`/`imports/` ∈ `backup.EXCLUDED`, sandbox

@@ -66,7 +66,7 @@ STATE_KEYS = ("state", "phase", "progress", "upload", "package_id", "mode", "rep
               "finished_at", "job_pid", "error", "report", "restarted", "supervised")
 REPORT_KEYS = ("imported", "mode", "files_written", "files_removed", "runs_files", "pre_restore", "missing_secrets", "runs_interrupted",
                "tasks_blocked", "schedules_paused", "approvals_cancelled", "questions_cancelled", "agents_paused", "agents_unpaused",
-               "repos_cloned", "secrets", "claude_sessions")
+               "repos_cloned", "secrets", "claude_sessions", "filehub")
 EXPORT_KEYS = ("state", "phase", "progress", "error", "started_at", "finished_at", "profile", "for", "stop", "secrets", "result", "written")
 FRESH_TABLES = ("agents", "teams", "tasks", "runs", "schedules")
 
@@ -249,6 +249,10 @@ def _brief_report(rep: dict[str, Any]) -> dict[str, Any]:
     cs = out.get("claude_sessions")
     if isinstance(cs, dict):
         out["claude_sessions"] = {"written": len(cs.get("written") or []), "conflicts": len(cs.get("conflicts") or []), "target": cs.get("target")}
+    fh = out.get("filehub")
+    if isinstance(fh, dict):  # danh sách trắng: chế độ, tên thư mục chung, lệnh đăng nhập lại, agent dùng workspace filehub:
+        out["filehub"] = {"mode": fh.get("mode"), "command": fh.get("command"), "agents": list(fh.get("agents") or [])[:20],
+                          "folders": [{"name": f.get("name")} for f in fh.get("folders") or [] if isinstance(f, dict)][:20]}
     if isinstance(out.get("agents_paused"), dict):
         out["agents_paused"] = sorted(out["agents_paused"])
     return out

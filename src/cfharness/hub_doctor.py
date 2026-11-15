@@ -4,7 +4,8 @@
 Kiểm: `claude` trên PATH + phiên bản so `runtime.claude.tested_versions` + đăng nhập (secret `CLAUDE_CODE_OAUTH_TOKEN`/`CLAUDE_ACCT_*`, cờ
 `auth_block`; `--probe` mới chạy `claude auth status` — không bao giờ gọi model), `${NAME}` trong config.yaml + cấu hình MCP có secret/env,
 MCP (đánh dấu thiếu lệnh của lần nhập, OAuth chưa kết nối; `--probe` + daemon chạy → `mcp.probe` từng server), Telegram/Slack bật + có token,
-repo workspace (có chưa, HEAD khớp `repos.json` của gói), agent bị tạm dừng vì thiếu workspace, lịch đang tạm dừng (clone), việc viết lại
+thư mục chung Không gian số (filehub: cần đăng nhập lại sau nhập, chưa đăng nhập, binary sync thiếu), repo workspace (có chưa, HEAD khớp
+`repos.json` của gói), agent bị tạm dừng vì thiếu workspace, lịch đang tạm dừng (clone), việc viết lại
 tri thức còn dở (`import_followups`), `imported_from`/`cloned_from`/`migrated_to`, tự khởi động (gợi ý đúng OS), `cfharness[vector]`,
 quyền file (POSIX). Kết quả `{ok, home, checks[{id, check, ok, level ok|info|warning|error, detail, fix?}], summary}`.
 
@@ -100,6 +101,7 @@ def run(paths: "HubPaths", *, probe: bool = False, claude_binary: str | None = N
         _secret_refs(ck, paths, c, secrets)
         _mcp(ck, c, secrets, mcp_probe if probe else None)
         _channels(ck, cfg, secrets)
+        _filehub(ck, cfg, c, home)
         _repos(ck, c)
         _schedules(ck, c)
         _followups(ck, c)
@@ -235,6 +237,38 @@ def _channels(ck: _Checks, cfg: dict[str, Any], secrets: set[str]) -> None:
         ck.add("slack", "Slack", True, "có token nhưng đang TẮT", "info")
     else:
         ck.add("slack", "Slack", True, "chưa cấu hình", "info")
+
+
+def _filehub(ck: _Checks, cfg: dict[str, Any], c: sqlite3.Connection | None, home: Path) -> None:
+    """Thư mục chung Không gian số: cấu hình có nhưng thiết bị máy này chưa đăng nhập (token `secrets/filehub/tokens.json` không đi theo
+    gói xuất), lần nhập còn chờ đăng nhập lại (`hub_state.import_filehub`), binary sync không có ở máy này. Chỉ đọc — không chạy binary."""
+    fh = (cfg.get("filehub") or {}) if cfg else {}
+    imp = _state(c, "import_filehub")
+    folders = [f for f in fh.get("folders") or [] if isinstance(f, dict) and f.get("name")]
+    if not fh.get("enabled") and not folders and not imp:
+        ck.add("filehub", "Không gian số", True, "chưa thiết lập", "info")
+        return
+    from .hub_transfer import filehub_command
+
+    binary = str(fh.get("sync_binary") or "")
+    bpath = os.path.expanduser(binary) if binary else ""
+    binary_ok = bool(bpath) and os.path.isfile(bpath) and os.access(bpath, os.X_OK)
+    info = {"folders": folders or ((imp or {}).get("folders") if isinstance(imp, dict) else None) or [], "binary": binary,
+            "server": fh.get("server")}
+    cmd = filehub_command(info, binary_ok=binary_ok)
+    tokens = (home / "secrets" / "filehub" / "tokens.json").is_file()
+    if imp:
+        ck.add("filehub", "Không gian số", False, "hub nhập từ máy khác — đồng bộ TẮT, thiết bị máy này chưa đăng nhập (token thiết bị không đi "
+               "theo gói)", "warning", fix=cmd)
+    elif fh.get("enabled") and not tokens:
+        ck.add("filehub", "Không gian số", False, "có cấu hình nhưng máy này chưa đăng nhập", "warning",
+               fix="cfharness filehub login" if folders and binary_ok else cmd)
+    else:
+        ck.add("filehub", "Không gian số", True, ("bật" if fh.get("enabled") else "TẮT") + f", {len(folders)} thư mục chung"
+               + (", đã đăng nhập" if tokens else ""), "ok" if fh.get("enabled") else "info")
+    if binary and not binary_ok:
+        ck.add("filehub_binary", "binary sync Không gian số", False, f"không có/không chạy được ở máy này: {binary}", "warning",
+               fix="cfharness filehub setup --binary /đường/dẫn/tang-thu-sync-headless")
 
 
 def _repos(ck: _Checks, c: sqlite3.Connection | None) -> None:
@@ -377,7 +411,16 @@ def _perms(ck: _Checks, paths: "HubPaths") -> None:
         chk(dp, 0o700)
         try:
             for f in os.listdir(dp):
-                chk(dp / f, 0o600)
+                fp = dp / f
+                if fp.is_dir() and not fp.is_symlink():  # vd secrets/filehub/ (token thiết bị Không gian số): thư mục 0700, file 0600
+                    chk(fp, 0o700)
+                    try:
+                        for g in os.listdir(fp):
+                            chk(fp / g, 0o600)
+                    except OSError:
+                        pass
+                else:
+                    chk(fp, 0o600)
         except OSError:
             pass
     ck.add("perms", "quyền file (secrets/auth/hub.db chỉ chủ)", not bad, "đúng" if not bad else "rộng hơn cần: " + ", ".join(bad[:8]),

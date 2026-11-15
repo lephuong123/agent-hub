@@ -10,7 +10,10 @@ Bản rõ = một tar nhỏ trong RAM, CHỈ các đường dẫn trong danh sá
 - `auth/totp.json` khi xuất với `--with-totp` (bí mật TOTP đang dùng — KHÔNG mang `totp_enroll.json`: link đăng ký gắn máy cũ);
 - `mcp_server/tokens.json` khi xuất với `--with-mcp-tokens`.
 KHÔNG BAO GIỜ: `auth/web.json` (khoá ký phiên web), `auth/trusted_devices.json`, `<socket>.auth` — kể cả khi gói bị sửa tay để chứa
-chúng: bộ đọc từ chối mọi đường dẫn ngoài danh sách trắng.
+chúng: bộ đọc từ chối mọi đường dẫn ngoài danh sách trắng. Cũng KHÔNG BAO GIỜ (cả clone lẫn move): thư mục con của `secrets/`, cụ thể
+`secrets/filehub/tokens.json` — token THIẾT BỊ Không gian số (`--device "cfharness · <máy>"`, binary sync tự ghi): mang sang máy khác = hai
+máy đồng bộ dưới CÙNG một thiết bị. `collect` chỉ lấy file thường tên `NAME_RE` ngay trong `secrets/` → thư mục con bị bỏ qua sạch (không
+lỗi, không tính là secret thiếu — `missing_secrets` cũng chỉ đếm tên `NAME_RE`); máy mới đăng nhập lại (`cfharness filehub setup`).
 
 Passphrase CHỈ sống trong tiến trình CLI của người: CLI hỏi (getpass, TTY) hoặc đọc `--passphrase-file` (phải 0600, của chính user) → daemon
 đóng gói phần không mật như PR1 (RPC `hub.export` không nhận passphrase) → CLI tự đọc `HUB_HOME/secrets/` (cùng user OS) và `seal_package`
@@ -65,7 +68,7 @@ AAD_LABEL = b"cfharness-export/secrets/v1\n"
 TOTP_FILE = "auth/totp.json"
 MCP_TOKENS_FILE = "mcp_server/tokens.json"
 META_FILE = "secrets/.meta.json"
-NEVER = ("auth/web.json", "auth/trusted_devices.json", "auth/totp_enroll.json")  # tài liệu + test: không bao giờ vào gói
+NEVER = ("auth/web.json", "auth/trusted_devices.json", "auth/totp_enroll.json", "secrets/filehub/tokens.json")  # tài liệu + test: không bao giờ vào gói
 
 # Phân loại theo chế độ nhập (mục 2 plan). Thêm loại secret mới của hub → khai báo ở đây + ca trong tests/test_hub_transfer_secrets.py
 CLONE_SKIP_PREFIXES: tuple[tuple[str, str], ...] = (
@@ -270,7 +273,7 @@ def collect(home: Path, *, with_totp: bool = False, with_mcp_tokens: bool = Fals
     except OSError:
         listing = []
     for n in listing:
-        if not NAME_RE.match(n):
+        if not NAME_RE.match(n):  # gồm thư mục con `filehub/` (token thiết bị Không gian số — không bao giờ mang theo)
             continue
         data = _read(sd / n)
         if data:  # secret rỗng không hợp lệ (SecretStore từ chối) — bỏ

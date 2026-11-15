@@ -111,7 +111,15 @@ MACHINE_STATE = ("repo_locks", "browser_locks", "rate_limit", "rate_limit_gate",
                  "pyenv_baseline", "cli_compat", "cli_unknown_rate", "auth_block", "claude_account_checks", "admin_watch.active",
                  "systems.registry", "systems.paused", "telegram.offset", "slack.seen",
                  # PR5: đóng băng chuyển nhà của máy NGUỒN (gói xuất lại từ hub đã đóng băng) + kết quả lần nhập trước của chính nguồn
-                 "migrated_to", "import_paused", "import_repos")
+                 "migrated_to", "import_paused", "import_repos",
+                 # filehub (Không gian số): tạm dừng đồng bộ là của MÁY cũ; lần nhập trước của chính nguồn (cần đăng nhập lại)
+                 "filehub.paused", "import_filehub")
+# filehub: thư mục chung Không gian số — token THIẾT BỊ (`secrets/filehub/tokens.json`, `--device "cfharness · <máy>"`) KHÔNG BAO GIỜ đi theo
+# gói (cả clone lẫn move: `transfer_secrets.collect` chỉ lấy `secrets/<NAME>` dạng `NAME_RE`, thư mục con bị bỏ qua sạch). Khi nhập (mọi chế độ):
+# `filehub.enabled=false` + `device_name=null` (tên thiết bị là của máy) → daemon đích không spawn binary sync tới khi người
+# `cfharness filehub setup` (đăng nhập thiết bị MỚI). `clone`: gỡ `filehub.folders` (2 hub độc lập — không tự đồng bộ chung một root);
+# `move`: giữ folders (local_path đã qua pathmap) để đăng nhập lại là đồng bộ tiếp đúng root. `hub_state.import_filehub` → doctor/báo cáo.
+FILEHUB_STATE = "import_filehub"
 # Thêm cho `clone` (2 hub cùng chạy): trạng thái kênh chat của bot máy nguồn (nút/tin/map hội thoại) + run hẹn tự resume
 CLONE_STATE = ("pending_resume", "auto_resume_pending")
 CLONE_STATE_PREFIXES = ("telegram.", "slack.")
@@ -275,6 +283,22 @@ def _workspace_roots(db: Path) -> list[str]:
     return sorted(out)
 
 
+def _filehub_roots(paths: HubPaths) -> list[str]:
+    """Bản sao cục bộ của thư mục chung Không gian số — KHÔNG phải repo workspace (binary sync tải lại ở máy mới sau khi đăng nhập):
+    loại khỏi `repos.json` để kế hoạch nhập không gợi ý clone/không báo thiếu."""
+    try:
+        from .config import HubConfig
+        from .filehub.service import config_folders
+
+        out = []
+        for f in config_folders(HubConfig(paths.config)):
+            lp = os.path.expanduser(str(f["local_path"]))
+            out += [lp, os.path.realpath(lp)]
+        return list(dict.fromkeys(out))
+    except Exception:  # cấu hình hỏng không được chặn xuất
+        return []
+
+
 # ============================================================================ xuất
 def export_package(paths: HubPaths, *, profile: str = DEFAULT_PROFILE, by: str = "user", compresslevel: int = 6,
                    claude_home: Path | None = None) -> dict[str, Any]:
@@ -342,7 +366,7 @@ def _export(paths: HubPaths, profile: str, by: str, level: int, chome: Path | No
                     sections[TS.SECTION] = csec
                 # PR5: repos.json (optional) — repo workspace NGOÀI HUB_HOME: remote (đã che), nhánh, HEAD, dirty. Không đóng gói repo
                 try:
-                    repos = TR.collect(db_copy, [str(paths.home), os.path.realpath(paths.home)])
+                    repos = TR.collect(db_copy, [str(paths.home), os.path.realpath(paths.home), *_filehub_roots(paths)])
                 except Exception as e:  # git hỏng/thiếu không được chặn xuất — phần optional
                     log.warning("không thu được repos.json: %s", e)
                     repos = []
@@ -711,7 +735,8 @@ def _state_keys(conn: sqlite3.Connection, mode: str) -> list[str]:
 
 
 def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], followups: dict[str, Any] | None = None,
-               extra: dict[str, Any] | None = None, repos: list[dict[str, Any]] | None = None, pm: PathMap | None = None) -> dict[str, Any]:
+               extra: dict[str, Any] | None = None, repos: list[dict[str, Any]] | None = None, pm: PathMap | None = None,
+               filehub: dict[str, Any] | None = None) -> dict[str, Any]:
     """Dọn trạng thái máy cũ + áp chế độ trên DB của STAGE (daemon chưa chạy). `apply=False` chỉ đếm (dry-run).
 
     `clone`: run `running|queued|waiting_human` → `interrupted` (không tự resume — `pending_resume` bị xoá); approval đang chờ
@@ -791,6 +816,9 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
                 rows_state.append(("import_followups", followups))
             if out["agents_paused"]:
                 rows_state.append((TR.PAUSED_KEY, out["agents_paused"]))
+            if filehub:
+                rows_state.append((FILEHUB_STATE, {k: filehub.get(k) for k in ("mode", "server", "binary", "folders", "folders_kept", "agents",
+                                                                                 "command", "needs_login")} | {"at": now}))
             if repos:
                 rows_state.append((TR.REPOS_KEY, [{k: r.get(k) for k in ("from", "to", "git", "remote", "branch", "head", "dirty", "uncommitted")}
                                                   for r in repos]))
@@ -837,6 +865,97 @@ def _adjust_config(stage: Path, mode: str, *, apply: bool) -> list[str]:
     if apply and p.exists():
         os.chmod(p, 0o600)
     return changed
+
+
+def filehub_command(info: dict[str, Any], *, binary_ok: bool | None = None) -> str:
+    """Lệnh đăng nhập lại thư mục Không gian số ở máy này (gợi ý cho báo cáo nhập/dry-run/doctor)."""
+    names = [f.get("name") for f in info.get("folders") or [] if f.get("name")]
+    cmd = "cfharness filehub setup" + (f" --name {_shq(str(names[0]))}" if names else "")
+    b = info.get("binary")
+    if binary_ok is None:
+        binary_ok = bool(b) and os.path.isfile(os.path.expanduser(str(b))) and os.access(os.path.expanduser(str(b)), os.X_OK)
+    if not binary_ok:
+        cmd += " --binary /đường/dẫn/tang-thu-sync-headless"
+    if not info.get("server"):
+        cmd += " --server https://<Không gian số>"
+    return cmd
+
+
+def _shq(s: str) -> str:
+    import shlex
+
+    return shlex.quote(s)
+
+
+def filehub_note(info: dict[str, Any]) -> str:
+    """Một dòng cho báo cáo nhập + dry-run (không chứa token — chỉ tên thư mục/lệnh)."""
+    names = [str(f.get("name")) for f in info.get("folders") or [] if f.get("name")]
+    head = f"Thư mục Không gian số cần đăng nhập lại: `{info.get('command') or filehub_command(info)}`"
+    if info.get("mode") == "move":
+        tail = (f" — giữ thư mục chung {', '.join(names)} (đường dẫn đã đổi theo máy này); đồng bộ TẮT tới khi đăng nhập thiết bị mới. "
+                "Máy cũ vẫn đồng bộ (đóng băng không dừng filehub) — `cfharness filehub pause` ở máy cũ nếu không dùng nữa") if names else                " — đồng bộ TẮT tới khi đăng nhập thiết bị mới"
+    else:
+        tail = (f" — nhân bản: đã gỡ thư mục chung {', '.join(names)} khỏi hub này (máy nguồn vẫn đồng bộ); setup cùng tên để workspace "
+                f"`filehub:{names[0]}` của agent/task chạy lại") if names else " — nhân bản: đồng bộ TẮT"
+    if info.get("agents"):
+        tail += f"; agent dùng workspace filehub: {', '.join(info['agents'][:5])}"
+    return head + tail
+
+
+def _adjust_filehub(stage: Path, mode: str, pm: PathMap, *, apply: bool) -> dict[str, Any] | None:
+    """filehub (Không gian số) ở máy đích sau khi nhập: TẮT, chưa đăng nhập (token thiết bị không đi theo gói), không tên thiết bị cũ.
+    `clone` gỡ `folders`; `move` giữ (local_path đã viết lại bởi pathmap). None = nguồn chưa từng thiết lập filehub."""
+    from .config import HubConfig
+    from .filehub.service import config_folders
+
+    p = stage / "config.yaml"
+    if not p.is_file():
+        return None
+    cfg = HubConfig(p)
+
+    def g(k: str) -> Any:
+        try:
+            return cfg.get(f"filehub.{k}")
+        except KeyError:
+            return None
+
+    folders = config_folders(cfg)
+    enabled = bool(g("enabled"))
+    if not enabled and not folders and not g("server"):
+        return None
+    keep = mode == "move"
+    out_f = []
+    for f in folders:
+        lp = str(f.get("local_path") or "")
+        out_f.append({"name": f.get("name"), "local_path": lp if apply else pm.rewrite(lp, syntax="text")})
+    binary = g("sync_binary")
+    if binary and not apply:
+        binary = pm.rewrite(str(binary), syntax="text")
+    changed = [k for k, cond in (("filehub.enabled", enabled), ("filehub.device_name", bool(g("device_name"))),
+                                 ("filehub.folders", bool(folders) and not keep)) if cond]
+    if apply:
+        if enabled:
+            cfg.set("filehub.enabled", False)
+        if g("device_name"):
+            cfg.set("filehub.device_name", None)
+        if folders and not keep:
+            cfg.set("filehub.folders", [])
+        os.chmod(p, 0o600)
+    agents: list[str] = []
+    db = stage / DB_MEMBER
+    if db.is_file():
+        c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            agents = [r[0] for r in c.execute("SELECT id FROM agents WHERE archived_at IS NULL AND workspace_default LIKE 'filehub:%' "
+                                              "ORDER BY id LIMIT 20")]
+        except sqlite3.Error:
+            agents = []
+        finally:
+            c.close()
+    info = {"mode": mode, "was_enabled": enabled, "server": g("server"), "binary": binary, "folders": out_f, "folders_kept": keep and bool(folders),
+            "config_changed": changed, "agents": agents, "needs_login": True}
+    info["command"] = filehub_command(info)
+    return info
 
 
 def _stage_rels(manifest: dict[str, Any]) -> list[str]:
@@ -894,6 +1013,7 @@ def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *
     if apply and rep["skills_renamed"]:
         TO.apply_skill_renames(stage, db, rep["skills_renamed"])
     rep["config_changed"] = _adjust_config(stage, mode, apply=apply)
+    rep["filehub"] = _adjust_filehub(stage, mode, pm, apply=apply)  # mọi chế độ: TẮT, đăng nhập lại thiết bị mới
     rp = TR.plan(stage, pm)  # PR5: repo workspace (repos.json) — thiếu → gợi ý clone, dirty → cảnh báo
     rep["repos"] = rp["repos"]
     rep["repos_warnings"] = rp["warnings"]
@@ -911,7 +1031,8 @@ def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *
                                          "giữ tên cũ); tham chiếu theo tên cũ trong SKILL.md/memory cần người sửa")
         if rep["mcp_missing"]:
             followups["mcp_missing"] = rep["mcp_missing"]
-    rep.update(_adjust_db(db, mode=mode, apply=apply, manifest=manifest, followups=followups, extra=extra, repos=rp["repos"], pm=pm))
+    rep.update(_adjust_db(db, mode=mode, apply=apply, manifest=manifest, followups=followups, extra=extra, repos=rp["repos"], pm=pm,
+                          filehub=rep["filehub"]))
     return rep
 
 
@@ -1069,6 +1190,8 @@ def import_plan(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] =
                             "đăng nhập lại MCP OAuth)")
         if mode == "clone":
             warnings.append("chế độ clone: Telegram/Slack tắt, lịch tạm dừng, task đang chạy bị chặn — máy nguồn vẫn chạy bình thường")
+        if work.get("filehub"):
+            warnings.append(filehub_note(work["filehub"]))
         size = pkg.stat().st_size if pkg.is_file() else 0
         try:
             free = shutil.disk_usage(paths.home if paths.home.exists() else paths.home.parent).free

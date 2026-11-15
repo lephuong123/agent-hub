@@ -140,7 +140,7 @@ def test_export_package_format_private_and_excludes(tmp_path, monkeypatch):
     # profile core: không có runs/
     core = T.export_offline(src, profile="core")
     assert not any(n.startswith("extra/runs/") for n in _members(Path(core["path"])))
-    assert "exports" in B.EXCLUDED and "imports" in B.EXCLUDED  # bản sao lưu không nhét gói xuất
+    assert {"exports", "imports", "filehub"} <= set(B.EXCLUDED)  # bản sao lưu không nhét gói xuất, profile sync Không gian số
 
 
 def test_export_refused_inside_run_and_while_daemon_lock_held(tmp_path, monkeypatch):
@@ -419,11 +419,11 @@ def test_auth_classifier_and_sandbox_protect_transfer(tmp_path):
         v = classify("Bash", {"command": cmd}, ctx)
         assert v.forbidden, cmd
     home = str(ctx.policy.hub_home)
-    for sub in ("exports", "imports"):
+    for sub in ("exports", "imports", "filehub"):  # filehub/ (main) và exports/imports/ (hub clone) cùng có sau khi gộp nhánh
         assert sensitive_read(f"{home}/{sub}/a-20261115-120000.cfhx", ctx)
         assert sub in HUB_WRITE_DENY_NAMES
     sb = sandbox_settings(Path(home), Path(home) / "hub.sock", {})
     fs = sb["filesystem"]
-    for sub in ("exports", "imports"):
+    for sub in ("exports", "imports", "filehub"):
         assert any(x.rstrip("/").endswith(f"/{sub}") for x in fs["denyRead"]) and any(x.rstrip("/").endswith(f"/{sub}") for x in fs["denyWrite"])
         assert any(f"{sub}/**" in r and r.startswith("Read(") for r in secret_read_deny_rules(Path(home), Path(home) / "hub.sock"))

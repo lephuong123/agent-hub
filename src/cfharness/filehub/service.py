@@ -396,6 +396,7 @@ class FilehubService:
             "updated_at": (st or {}).get("updated_at"), "folders": out_f, "recent": recent,
             "login": {k: v for k, v in self.login_state.items() if k in ("state", "url", "roots", "error", "started_at", "finished_at")},
             "tokens": self.tokens_path.exists(), "local_parent": str(self.cfg("local_parent") or ""),
+            "relogin_after_import": bool(self.hub.store.state_get("import_filehub")),
         }
 
     def list(self) -> list[dict[str, Any]]:
@@ -809,6 +810,8 @@ class FilehubService:
         except OSError:
             pass
         self.login_state.update(state="done", roots=roots, finished_at=time.time())
+        if self.hub.store.state_get("import_filehub"):  # hub nhập từ máy khác (hub_transfer): thiết bị máy này đã đăng nhập → hết nhắc
+            self.hub.store.state_set("import_filehub", None)
         added = None
         if auto_add and roots and not self.folders():
             r = roots[0]

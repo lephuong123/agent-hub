@@ -35,6 +35,10 @@ chụp thành bản sao lưu `pre-restore` trước, lỗi giữa chừng tự k
 - **Không bao giờ**: `checkpoints/` (`run revert` của run cũ không chạy ở máy mới), repo (clone lại — `--clone-repos` / ô tick trên web),
   thay đổi chưa commit, khoá ký phiên web `auth/web.json`, thiết bị tin cậy, token người `<socket>.auth`, `logs/`, `backups/`, session Claude
   Code bạn tự chạy ngoài hub, job launchd/LaunchDaemon (cài lại trên máy mới — doctor gợi ý).
+- **Thư mục Không gian số** (filehub): cấu hình `filehub.*` đi theo (đường dẫn bản sao cục bộ đổi theo máy mới), token THIẾT BỊ thì
+  không bao giờ. Sau khi nhập, đồng bộ ở máy mới **TẮT** — đăng nhập thiết bị mới: `cfharness filehub setup --name <tên>` (thêm
+  `--binary …` nếu binary sync ở chỗ khác). Nhân bản: thư mục chung bị gỡ khỏi hub mới (setup cùng tên để workspace `filehub:<tên>` chạy lại);
+  chuyển nhà: giữ thư mục chung, đăng nhập xong là đồng bộ tiếp. Máy cũ đóng băng vẫn đồng bộ tệp (`cfharness filehub pause` nếu thôi dùng).
 - Gói ngoài phần secret **KHÔNG mã hoá**: chứa memory, transcript, nhật ký kiểm toán — giữ riêng tư.
 - Quên passphrase = mất phần secret; phần còn lại vẫn nhập được (`--skip-secrets` / ô "bỏ qua secret"), rồi `cfharness secret set <TÊN>`.
 
@@ -90,12 +94,44 @@ không tạo được ở máy đích → tri thức đổi tên an toàn, file 
   nhập…", poll 2 s; daemon lên → `hub.import_status` + `hub.doctor`. Phiên web sống sót (RAM tiến trình web; gói không chứa `auth/web.json`).
 - `/hub-transfer` là trang 2D thường (chế độ 3D chuyển `/office` như mọi trang). Không script/style inline; `transfer.js` chỉ gán `textContent`.
 
+### 2.1b filehub (thư mục chung Không gian số — tích hợp sau khi gộp `main`, 2026-11-15)
+Kiểm trên code thật sau merge (`docs/dev-notes/filehub.md`):
+- **Token thiết bị** `HUB_HOME/secrets/filehub/tokens.json` (thư mục CON của `secrets/`; binary sync tự ghi, `--device "cfharness · <máy>"`):
+  `transfer_secrets.collect` chỉ lấy file thường tên `NAME_RE` ngay trong `secrets/` → thư mục con bị bỏ qua SẠCH (không lỗi), `missing_secrets`
+  (`_secret_names`) cũng chỉ đếm tên `NAME_RE` → không báo nhầm thiếu secret. Đã đúng từ trước; nay thành quyết định có ghi + test (cả clone
+  lẫn move): mang token sang = hai máy đồng bộ dưới CÙNG một thiết bị. Gói sửa tay chứa `secrets/filehub/…` → `allowed_payload_path` từ chối
+  (`transfer_secrets.NEVER`). `filehub/` (profile/base/status) ∉ `backup.INCLUDE_DIRS` (+ ∈ `EXCLUDED`) → không vào gói; nhập chỉ đồng bộ tập
+  INCLUDE (`backup._apply_stage`) → `filehub/` + `secrets/filehub/` của máy đích giữ nguyên (cả `--replace`, cả hoàn tác).
+- **Cấu hình** (`filehub.*` ∈ `integrity.SECURITY_KEYS`, đi theo config.yaml): cơ chế bật thật = `filehub.enabled` — `FilehubService.start()`
+  (ở `hub.started`) thoát ngay khi tắt, `configured()` cần enabled + server + binary + folders + không `filehub.paused`. Trước khi sửa, gói nhập
+  vào để nguyên `enabled=true` + folders + `device_name` của máy cũ → daemon đích spawn binary (không token → `auth_expired`, hoặc binary đường dẫn
+  cũ → lỗi) và `filehub login` sẽ đăng ký thiết bị mang TÊN máy cũ. Nay `_adjust_filehub` (mọi chế độ, trên stage, sau pathmap): `enabled=false`,
+  `device_name=null`; `clone` gỡ `folders` (hai hub độc lập — không tự đồng bộ chung một root; người muốn dùng chung thì tự chọn root đó lúc đồng ý
+  thiết bị — thiết bị KHÁC), `move` giữ `folders` (local_path + `local_parent` + `sync_binary` đã qua pathmap như mọi file cấu hình) → `filehub setup`
+  (= bật + `login`; có folders thì không auto_add, `_finish_login` → `_apply_change` chạy tiếp đúng root). `server` giữ (không phải thiết bị).
+  `hub_state.import_filehub {mode, server, binary, folders, folders_kept, agents, command, needs_login}` (∈ `MACHINE_STATE`) → báo cáo nhập,
+  `--dry-run` (cảnh báo "Thư mục Không gian số cần đăng nhập lại: `cfharness filehub setup …`"), web (`REPORT_KEYS` + `_brief_report` lọc khoá),
+  doctor; xoá khi `_finish_login` thành công; `filehub.status.relogin_after_import`. `filehub.paused` ∈ `MACHINE_STATE`.
+- **Xuất**: bản sao cục bộ thư mục chung không phải repo → loại khỏi `repos.json` (`_filehub_roots` → `TR.collect` hub_roots), tránh gợi ý clone/
+  "thiếu workspace" cho cwd run dở trong `~/KhongGianSo/<tên>`. Agent `workspace_default: filehub:<tên>` không bị `pause_missing` (không phải đường
+  dẫn) — báo cáo liệt kê (`agents`); run của chúng bị từ chối rõ ("filehub chưa bật") tới khi setup lại cùng tên.
+- **Doctor** (`_filehub`): `import_filehub` còn → warning + lệnh setup; bật mà chưa có `secrets/filehub/tokens.json` → warning `filehub login`;
+  `filehub.sync_binary` không có/không chạy được → warning `--binary`. Sửa kèm: kiểm quyền `secrets/` báo nhầm thư mục con `filehub/` (0700) là
+  "rộng hơn 0600" — thư mục con nay kiểm 0700 + file bên trong 0600.
+- **Đóng băng move**: filehub VẪN chạy (như sao lưu) — đồng bộ tệp của người, không tạo run/tốn tiền, không chung bot/OAuth với máy mới (máy mới
+  là thiết bị khác); event `filehub.*` không ra kênh (QueuedNotifier bỏ khi đóng băng), steer/presence không xảy ra (không có run). Ghi ở `hub_freeze`.
+- **Sandbox/classifier**: sau merge `HUB_WRITE_DENY_NAMES`, denyRead sandbox, `secret_read_deny_rules`, `sensitive_read` có đủ `filehub` +
+  `exports` + `imports` — test `test_hub_transfer.py::…` lặp cả ba. Main không thêm migration/thư mục cấp 1 nào khác; khoá `hub_state` mới duy nhất
+  `filehub.paused` (đã xử lý); `recovery` giữ `pending_resume` khi chưa có loop (không ảnh hưởng nhập: move ghi `pending_resume` trên stage).
+- Test: `tests/test_hub_transfer_filehub.py`.
+
 ### 2.2 Bất biến (toàn tính năng)
 - Xuất/nhập chỉ người: RPC ∈ `HUMAN_ONLY` (không `MANAGER_ALLOWED`), `HUB_HUMAN_ONLY_CLI["hub"] = None` (mọi lệnh con, kể cả `import-job`), từ chối khi có
   `CFHARNESS_RUN_ID`; sandbox denyRead/denyWrite `exports/` + `imports/`; `exports/`/`imports/` ∈ `backup.EXCLUDED`.
 - Passphrase không bao giờ vào argv, env, RPC audit, log, DB, `job.json`, `state.json`, HTML; file `pass` 0600 sống tới khi job đọc (hoặc daemon dọn).
 - Nhập không bao giờ ghi đè hub có dữ liệu mà không có `pre-restore`; lỗi giữa chừng tự hoàn tác; không bao giờ ghi vào repo/thư mục đã có.
-- Gói không bao giờ chứa `checkpoints/`, `auth/web.json`/thiết bị, `secrets/` dạng rõ, session Claude không thuộc hub.
+- Gói không bao giờ chứa `checkpoints/`, `auth/web.json`/thiết bị, `secrets/` dạng rõ, session Claude không thuộc hub, token thiết bị/profile
+  Không gian số (`secrets/filehub/`, `filehub/`); nhập không bao giờ để filehub bật (người `cfharness filehub setup` ở máy mới).
 - Tri thức bị viết lại đường dẫn đi qua ledger (actor `import`, rollback được, không bị tự rollback).
 - `move`: nguồn đóng băng tới khi người gỡ.
 
@@ -109,7 +145,7 @@ không tạo được ở máy đích → tri thức đổi tên an toàn, file 
 
 ### 2.4 Test
 `tests/test_hub_transfer.py` (PR1), `test_hub_transfer_secrets.py` (PR2), `test_hub_transfer_sessions.py` (PR3), `test_hub_transfer_cross_os.py` (PR4),
-`test_hub_transfer_move.py` (PR5), `test_web_hub_transfer.py` (PR6: CSRF/khoá/Origin → 403, chưa đăng nhập → /login|401, 413/411 không để file dở,
+`test_hub_transfer_move.py` (PR5), `test_hub_transfer_filehub.py` (filehub), `test_web_hub_transfer.py` (PR6: CSRF/khoá/Origin → 403, chưa đăng nhập → /login|401, 413/411 không để file dở,
 xuất 2 bước + passphrase không lọt HTML/log/audit/DB, link tải dùng lại/hết hạn/phiên khác → 404, nhập end-to-end: kế hoạch → bước 2 → spawn
 bị thay → daemon dừng → `run_import_job` thật → daemon mới → phiên web cũ thấy báo cáo; job chờ lock, lỗi vẫn khởi động lại; daemon chờ job;
 dọn `pass`/job chết/gói quá hạn), `test_sec_auth.py::test_hub_transfer_web_rpcs_human_only` (agent đọc trộm token người vẫn bị từ chối).

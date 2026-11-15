@@ -25,6 +25,7 @@
         {% if r.mode == 'clone' %}<li>{{ m.icon('info') }} Nhân bản: Telegram/Slack đã tắt, {{ r.schedules_paused or 0 }} lịch tạm dừng, {{ r.tasks_blocked or 0 }} task bị chặn — bật lại phần cần chạy ở máy này.</li>{% endif %}
         {% if r.claude_sessions %}<li>{{ m.icon('chat') }} Session Claude Code: {{ r.claude_sessions.written }} đã ghi{% if r.claude_sessions.conflicts %}, {{ r.claude_sessions.conflicts }} trùng id (giữ của máy này){% endif %}</li>{% endif %}
         {% for c in r.repos_cloned or [] %}<li>{{ m.icon('check' if c.ok else 'x') }} {{ 'đã clone' if c.ok else 'không clone được' }} {{ c.to }}{% if c.error %}: {{ c.error }}{% endif %}</li>{% endfor %}
+        {% if r.filehub %}<li>{{ m.icon('alert') }} Thư mục Không gian số cần đăng nhập lại: <code>{{ r.filehub.command }}</code> — đồng bộ đang TẮT ở máy này{% if r.filehub.mode == 'clone' and r.filehub.folders %} (nhân bản: đã gỡ thư mục chung {{ r.filehub.folders|map(attribute='name')|join(', ') }}){% endif %}</li>{% endif %}
         {% if r.agents_paused %}<li>{{ m.icon('pause') }} Agent tạm dừng vì workspace chưa có ở máy này: {{ r.agents_paused|join(', ') }}</li>{% endif %}
       </ul>
       {% if imp.error %}<p class="small"><span class="pill warn">{{ m.icon('alert') }}lưu ý</span> {{ imp.error }}</p>{% endif %}
