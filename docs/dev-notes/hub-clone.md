@@ -117,7 +117,7 @@ dọn `pass`/job chết/gói quá hạn), `test_sec_auth.py::test_hub_transfer_w
 ## 3. Giới hạn / việc dở
 - **Windows thật chưa kiểm**: thư mục session `C:\…` → `C--…` (suy từ mã Claude Code), `claude --resume` sau khi nhập, NTFS, `shutil.which` + PATHEXT,
   UNC, MAX_PATH; job `import-job` + `spawn_background` trên Windows chưa chạy thật (dùng `oscompat.detached_kwargs` như updater).
-- **`claude --resume` thật** sau khi nhập chưa nghiệm thu (fake_claude không mô phỏng tra file session).
+- **`claude --resume` thật — ĐÃ nghiệm thu trên macOS (2026-11-15, claude 2.1.325)**: session tạo ở thư mục A, đưa qua `transfer_sessions.install` sang thư mục B (map A→B, xoá file gốc), `claude -p --resume <sid>` chạy ở B nhớ đúng nội dung lượt trước. Windows thật vẫn chưa kiểm (mục trên).
 - Web không có tiến độ % thật khi đóng gói (chỉ pha + số byte đã ghi) và khi nhập (pha); trang nhập chỉ đọc trạng thái qua RPC — daemon không lên
   lại được thì trang chỉ báo "đang dừng" (xem `HUB_HOME/imports/<id>/state.json`, `logs/import-job.out`, rồi `cfharness daemon start`).
 - Web không xoá gói đã xuất trong `exports/` (CLI cũng không) — người tự xoá sau khi đã chép sang máy mới.
