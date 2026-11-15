@@ -549,6 +549,10 @@ DESTRUCTIVE_DESKTOP_APP = [
     ("Bash", {"command": f"cat ~/Library/Application\\ Support/{_APP}/hubs.json"}),
     ("Bash", {"command": f"cp -r \"$HOME/Library/WebKit/{_APP}\" /tmp/x"}),
     ("Bash", {"command": f"type %APPDATA%\\{_APP}\\hubs.json"}),
+    # bản dev không đóng gói (`npm run tauri dev`): WebKit lấy tên binary `cfharness-desktop`
+    ("Read", {"file_path": f"{_HOME}/Library/WebKit/cfharness-desktop/WebsiteDataStore/x/cookies.db"}),
+    ("Glob", {"pattern": "**", "path": f"{_HOME}/Library/HTTPStorages/cfharness-desktop"}),
+    ("Bash", {"command": "sqlite3 ~/Library/Caches/cfharness-desktop/Cache.db .dump"}),
 ]
 
 
@@ -561,6 +565,9 @@ def test_desktop_app_data_forbidden(env):
     assert not missed, missed
     assert classify("Bash", {"command": f"grep -n {_APP} src-tauri/tauri.conf.json"}, env["ctx"]).rule != "desktop_app_data"
     assert classify("Read", {"file_path": f"{_HOME}/Library/Application Support/{_APP}-old/a"}, env["ctx"]).rule != "desktop_app_data"
+    # repo tên `cfharness-desktop` ngoài Library vẫn đọc/sửa được
+    assert classify("Read", {"file_path": f"{_HOME}/Workspace/cfharness-desktop/src/x.rs"}, env["ctx"]).rule != "desktop_app_data"
+    assert classify("Bash", {"command": "cat ~/Workspace/cfharness-desktop/src/x.rs"}, env["ctx"]).rule != "desktop_app_data"
 
 
 # ------------------------------------------------------------------ thư mục chung Không gian số (filehub/, plan-cloud-files §7.3)

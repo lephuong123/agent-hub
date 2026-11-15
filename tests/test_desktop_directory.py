@@ -310,6 +310,25 @@ def test_app_data_dirs_cover_mac_windows():
     assert not glob_may_touch("/Users/an/work/**/*.py", "/Users/an", env0)
 
 
+def test_app_data_dirs_cover_unbundled_dev_run():
+    """`npm run tauri dev` không có bundle id → WebKit giữ cookie phiên hub ở `~/Library/{WebKit,HTTPStorages,Caches}/cfharness-desktop`."""
+    from cfharness.desktop_app import DEV_NAME, glob_may_touch
+
+    assert DEV_NAME == "cfharness-desktop"
+    dirs = app_data_dirs("/Users/an", {})
+    for parent in ("WebKit", "HTTPStorages", "Caches"):
+        assert f"/Users/an/Library/{parent}/{DEV_NAME}" in dirs
+        assert is_app_data(f"/Users/an/Library/{parent}/{DEV_NAME}/WebsiteDataStore/x", "/Users/an", {})
+    assert not is_app_data(f"/Users/an/Library/Application Support/{DEV_NAME}/x", "/Users/an", {})  # app_data_dir dùng identifier cả khi dev
+    assert not is_app_data(f"/Users/an/Library/WebKit/{DEV_NAME}-old/x", "/Users/an", {})
+    assert not is_app_data(f"/Users/an/Workspace/{DEV_NAME}/src/x.rs", "/Users/an", {})
+    assert glob_may_touch(f"/Users/an/Library/*/{DEV_NAME}/**", "/Users/an", {})
+    assert not glob_may_touch(f"/Users/an/Workspace/{DEV_NAME}/**/*.rs", "/Users/an", {})
+    assert shell_mentions(f"cd ~/Library/WebKit && cp -r {DEV_NAME} /tmp/x")
+    assert not shell_mentions(f"cd ~/Workspace/{DEV_NAME} && cargo build")
+    assert not shell_mentions(f"git clone git@example.com:org/{DEV_NAME}.git")
+
+
 H = os.path.expanduser("~")
 APPDIR = f"{H}/Library/Application Support/{APP_ID}"
 DESTRUCTIVE_APP_DATA = [
@@ -332,6 +351,13 @@ DESTRUCTIVE_APP_DATA = [
     ("Bash", {"command": f"type %APPDATA%\\{APP_ID}\\hubs.json"}),
     ("Bash", {"command": f"Get-Content $env:LOCALAPPDATA\\{APP_ID}\\EBWebView\\Default\\Cookies"}),
     ("Bash", {"command": f"rm -rf ~/.local/share/{APP_ID}"}),
+    # bản dev không đóng gói (không bundle id → tên binary `cfharness-desktop`)
+    ("Read", {"file_path": f"{H}/Library/WebKit/cfharness-desktop/WebsiteDataStore/x/Cookies.binarycookies"}),
+    ("Grep", {"pattern": "session", "path": f"{H}/Library/HTTPStorages/cfharness-desktop"}),
+    ("Glob", {"pattern": "~/Library/WebKit/cfharness-deskto?/**"}),
+    ("Write", {"file_path": f"{H}/Library/Caches/cfharness-desktop/x", "content": ""}),
+    ("Bash", {"command": "cp -r ~/Library/WebKit/cfharness-desktop /tmp/x"}),
+    ("Bash", {"command": "cd ~/Library/HTTPStorages && tar czf /tmp/x.tgz cfharness-desktop"}),
 ]
 
 
@@ -349,7 +375,10 @@ def test_desktop_app_data_forbidden(tmp_path):
                      ("Bash", {"command": "ls ~/Library/Application\\ Support/Code"}),
                      ("Glob", {"pattern": "~/Library/Application Support/*"}),  # chỉ tên thư mục cấp trên, không vào trong thư mục app
                      ("Glob", {"pattern": "src/**/*.py"}),
-                     ("Glob", {"pattern": "**/*.rs", "path": f"{H}/Workspace/cfharness-desktop"})):
+                     ("Glob", {"pattern": "**/*.rs", "path": f"{H}/Workspace/cfharness-desktop"}),
+                     ("Read", {"file_path": f"{H}/Workspace/cfharness-desktop/src/x.rs"}),
+                     ("Edit", {"file_path": f"{H}/Workspace/cfharness-desktop/src/x.rs", "old_string": "a", "new_string": "b"}),
+                     ("Bash", {"command": "cd ~/Workspace/cfharness-desktop && npm run tauri dev"})):
         assert classify(tool, ti, ctx).rule != "desktop_app_data", ti
     assert not shell_mentions(f"echo {APP_ID}")
 
@@ -367,6 +396,7 @@ def test_permissions_deny_every_hub_including_trust_full(tmp_path):
         deny = s["permissions"]["deny"]
         for t in ("Read", "Grep", "Glob", "Edit", "Write"):
             assert f"{t}(/{rule_path(APPDIR)}/**)" in deny, (trust, t)
+            assert f"{t}(/{rule_path(H + '/Library/WebKit/cfharness-desktop')}/**)" in deny, (trust, t)  # bản dev không đóng gói
 
 
 @pytest.mark.skipif(WIN, reason="sandbox macOS/Linux")

@@ -8,6 +8,9 @@ Lớp `permissions.deny` áp cho MỌI hub kể cả agent trust_full (dữ li�
 Thư mục (hàm THUẦN theo `home`/env — test truyền giá trị giả):
 - macOS: `~/Library/Application Support/io.cfharness.desktop` (Tauri app_data_dir) + nơi WKWebView giữ cookie/bộ nhớ của app:
   `~/Library/WebKit/io.cfharness.desktop`, `~/Library/HTTPStorages/io.cfharness.desktop`, `~/Library/Caches/io.cfharness.desktop`.
+  Bản chạy dev KHÔNG đóng gói (`npm run tauri dev`) không có bundle id → WebKit lấy tên binary: `~/Library/{WebKit,HTTPStorages,Caches}/
+  cfharness-desktop` (cookie phiên hub thật). Chỉ chặn đúng các đường dẫn Library này — chuỗi `cfharness-desktop` đứng một mình (vd repo
+  `~/Workspace/cfharness-desktop`) KHÔNG bị chặn.
 - Windows: `%APPDATA%\\io.cfharness.desktop` (app_data_dir) + `%LOCALAPPDATA%\\io.cfharness.desktop` (dữ liệu WebView2 `EBWebView`).
 - Linux: `~/.local/share/io.cfharness.desktop` (+ `$XDG_DATA_HOME`), `~/.cache/io.cfharness.desktop`, `~/.config/io.cfharness.desktop`.
 Không phụ thuộc nền tảng đang chạy: mọi biến thể đều được liệt kê (thừa thì vô hại), riêng Windows chỉ thêm khi biết `%APPDATA%`.
@@ -20,6 +23,8 @@ import re
 from pathlib import Path
 
 APP_ID = "io.cfharness.desktop"
+DEV_NAME = "cfharness-desktop"  # tên binary của bản dev không đóng gói — WebKit dùng làm tên thư mục khi thiếu bundle id (chỉ macOS)
+_MAC_DEV_PARENTS = ("WebKit", "HTTPStorages", "Caches")
 REASON = "agent không được đọc/ghi thư mục dữ liệu của app desktop cfharness (cookie phiên, token directory của mọi hub)"
 RULE = "desktop_app_data"
 
@@ -30,6 +35,8 @@ SHELL_RE = re.compile(
     r"|\.local[/\\]+share|\$\{?xdg_(?:data|config|cache)_home\}?|\.cache|\.config"
     r"|library[/\\]+(?:webkit|httpstorages|caches|cookies|preferences|saved\s*application\s*state))[/\\]+"
     + re.escape(APP_ID) + r"(?![A-Za-z0-9_\-])"
+    # bản dev không đóng gói: CHỈ dưới Library/{WebKit,HTTPStorages,Caches} (không chặn `cfharness-desktop` đứng một mình)
+    + r"|library[/\\]+(?:webkit|httpstorages|caches)[/\\]+" + re.escape(DEV_NAME) + r"(?![A-Za-z0-9_.\-])"
 )
 
 
@@ -39,6 +46,7 @@ def app_data_dirs(home: str | Path | None = None, env: dict[str, str] | None = N
     e = os.environ if env is None else env
     out = [f"{h}/Library/Application Support/{APP_ID}", f"{h}/Library/WebKit/{APP_ID}", f"{h}/Library/HTTPStorages/{APP_ID}",
            f"{h}/Library/Caches/{APP_ID}", f"{h}/.local/share/{APP_ID}", f"{h}/.cache/{APP_ID}", f"{h}/.config/{APP_ID}"]
+    out += [f"{h}/Library/{d}/{DEV_NAME}" for d in _MAC_DEV_PARENTS]  # macOS, bản dev không đóng gói (không bundle id)
     xdg = e.get("XDG_DATA_HOME")
     if xdg and os.path.isabs(xdg):
         out.append(f"{xdg.rstrip('/')}/{APP_ID}")
@@ -102,9 +110,15 @@ _BASE_RE = re.compile(r"(?i)application[\s\\\"']*support|appdata|library[/\\]+(?
                       r"|xdg_(?:data|config|cache)_home|(?:~|home\}?)[/\\]+\.(?:cache|config)\b")
 
 
+# cùng kiểu tách đôi cho tên dev (`cd ~/Library/WebKit && cp -r cfharness-desktop /tmp`) — gốc chỉ là Library/{WebKit,HTTPStorages,Caches}
+_DEV_ID_RE = re.compile(r"(?<![A-Za-z0-9_.\-])" + re.escape(DEV_NAME) + r"(?![A-Za-z0-9_.\-])", re.I)
+_DEV_BASE_RE = re.compile(r"(?i)library[/\\]+(?:webkit|httpstorages|caches)\b")
+
+
 def shell_mentions(script: str) -> bool:
     s = script or ""
-    return bool(SHELL_RE.search(s)) or (bool(_ID_RE.search(s)) and bool(_BASE_RE.search(s)))
+    return (bool(SHELL_RE.search(s)) or (bool(_ID_RE.search(s)) and bool(_BASE_RE.search(s)))
+            or (bool(_DEV_ID_RE.search(s)) and bool(_DEV_BASE_RE.search(s))))
 
 
-__all__ = ["APP_ID", "REASON", "RULE", "SHELL_RE", "app_data_dirs", "glob_may_touch", "is_app_data", "shell_mentions"]
+__all__ = ["APP_ID", "DEV_NAME", "REASON", "RULE", "SHELL_RE", "app_data_dirs", "glob_may_touch", "is_app_data", "shell_mentions"]

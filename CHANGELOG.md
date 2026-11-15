@@ -41,7 +41,8 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   `cfharness admin directory export [--out]`, `… status`; cấu hình mới `admin_directory.name`. Token sai → 404, thử sai liên tục → 429.
 - Bản tóm tắt gửi người quản trị (`admin_export`) thêm `web.public_origin` (đã chuẩn hoá) và `web.display_name` (schema 3); hub chưa đặt hai
   khoá này vẫn ghi schema 2 (bộ đọc nhận schema 1/2/3).
-- Agent không đọc/ghi được thư mục dữ liệu của app desktop (`io.cfharness.desktop` — cookie phiên, token directory): chặn bằng sandbox,
+- Agent không đọc/ghi được thư mục dữ liệu của app desktop (`io.cfharness.desktop`, và `~/Library/{WebKit,HTTPStorages,Caches}/cfharness-desktop`
+  của bản dev chưa đóng gói — cookie phiên, token directory): chặn bằng sandbox,
   luật quyền tĩnh và bộ phân loại — agent trust full cũng bị chặn, kể cả qua Bash và Glob dùng ký tự đại diện.
 - `cfharness web --json --ensure` gọi cùng lúc (app mở + gõ lệnh) chỉ bật một server web; `started` báo đúng trên Windows.
 - **Lưu ý khi cập nhật**: máy nhiều user — nâng cấp **hub của người quản trị trước**. Hub đã đặt `web.public_origin`/`web.display_name` ghi bản tóm tắt schema 3 — hub

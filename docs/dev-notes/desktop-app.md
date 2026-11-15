@@ -129,6 +129,10 @@ App chạy cùng user OS với agent của hub local; thư mục data giữ cook
 (thuần theo home/env, liệt kê mọi nền tảng — thừa vô hại):
 - macOS: `~/Library/Application Support/io.cfharness.desktop` (Tauri app_data_dir) + `~/Library/WebKit/…`, `~/Library/HTTPStorages/…`,
   `~/Library/Caches/…` (nơi WKWebView giữ cookie/bộ nhớ theo bundle id — rộng hơn hợp đồng, cần vì cookie phiên nằm ở đây).
+  Bản dev KHÔNG đóng gói (`npm run tauri dev`) không có bundle id → WebKit lấy tên binary: thêm `~/Library/WebKit/cfharness-desktop`,
+  `~/Library/HTTPStorages/cfharness-desktop`, `~/Library/Caches/cfharness-desktop` (`desktop_app.DEV_NAME`; giữ data store theo hub = cookie
+  phiên hub thật). Chỉ đúng các đường dẫn Library đó — chuỗi `cfharness-desktop` đứng một mình (repo `~/Workspace/cfharness-desktop`) KHÔNG bị chặn;
+  Bash tách đôi chỉ tính khi có cả tên dev và gốc `Library/{WebKit,HTTPStorages,Caches}`.
 - Windows: `%APPDATA%\io.cfharness.desktop` + `%LOCALAPPDATA%\io.cfharness.desktop` (WebView2 `EBWebView`); thiếu biến → `~/AppData/{Roaming,Local}`.
 - Linux: `~/.local/share/…` (+ `$XDG_DATA_HOME`), `~/.cache/…`, `~/.config/…`.
 
@@ -181,7 +185,8 @@ Bash không sandbox OS, và thư mục app cùng chủ OS với agent nên khôn
   do/đường dẫn; Host lạ → 421; 10 lần sai → 429 (token đúng cũng 429 khi đang khoá); `SuccessWindow` trần theo IP/toàn cục.
 - Cấu hình `admin_directory.name` hợp lệ/sai; `admin_directory` ∈ SECURITY_KEYS; RPC ∈ HUMAN_ONLY, ∉ MANAGER_ALLOWED; classifier cấm
   `cfharness admin directory …`.
-- C6: `app_data_dirs` mac/Windows/Linux, so không phân biệt hoa/thường; 13 ca forbidden (Read/Grep/Glob/Write/Edit/Bash mac/Windows/Linux, lệnh
+- C6: `app_data_dirs` mac/Windows/Linux (+ tên dev `cfharness-desktop` dưới Library — `test_app_data_dirs_cover_unbundled_dev_run`, ca
+  dev trong `DESTRUCTIVE_APP_DATA`/`DESTRUCTIVE_DESKTOP_APP`, ca âm `~/Workspace/cfharness-desktop/src/x.rs`), so không phân biệt hoa/thường; 13 ca forbidden (Read/Grep/Glob/Write/Edit/Bash mac/Windows/Linux, lệnh
   tách `cd … &&`); không chặn nhầm grep identifier / thư mục tên gần giống; `permissions.deny` cả trust_full; sandbox denyRead/denyWrite + vùng cố
   định. Ca thêm: `tests/test_guard_classifier.py::test_desktop_app_data_forbidden`, `tests/test_sec_auth.py::test_desktop_app_data_denied_every_hub`;
   `tests/test_trust_and_noise.py` cập nhật (deny của trust_full = admin_shared + app_data).
