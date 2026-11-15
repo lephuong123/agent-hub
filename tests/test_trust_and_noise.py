@@ -231,6 +231,23 @@ async def test_trust_full_allows_everything_but_estop(hub, tmp_path):
     assert r["decision"] == "deny"  # forbidden lại như thường
 
 
+async def test_trust_full_never_grants_desktop_app_data_or_admin_shared(hub):
+    """C6/H5: trust full gỡ mọi forbidden khác nhưng KHÔNG gỡ dữ liệu app desktop (cùng user OS) và thư mục chung của admin."""
+    run = await _run(hub, "w")
+    hub.guard.trust_set("w", "full")
+    for tool, ti in [
+        ("Bash", {"command": 'cat "$HOME/Library/Application Support/io.cfharness.desktop/hubs.json"'}),
+        ("Bash", {"command": "sqlite3 ~/Library/HTTPStorages/io.cfharness.desktop/httpstorages.sqlite .dump"}),
+        ("Read", {"file_path": os.path.expanduser("~/Library/Application Support/io.cfharness.desktop/hubs.json")}),
+        ("Bash", {"command": "cat /Users/Shared/cfharness/status/x.json"}),
+    ]:
+        r = await check(hub, run, tool, ti)
+        assert r["decision"] == "deny", (tool, ti, r)
+    rules = {x[0] for x in hub.store.conn.execute("SELECT matched_rule FROM guard_decisions WHERE run_id=? AND action='deny'", (run["id"],))}
+    assert "desktop_app_data" in rules and "admin_shared" in rules
+    assert (await check(hub, run, "Bash", {"command": "git push --force origin main"}))["decision"] == "allow"  # trust vẫn có hiệu lực
+
+
 async def test_trust_expiry_review_runs_and_human_only(hub):
     hub.agents.create({"id": "w", "name": "W"})
     r = hub.guard.trust_set("w", "full", for_s=3600)
@@ -319,9 +336,11 @@ async def test_trusted_spec_bypass_no_sandbox_on_real_repo(hub, tmp_path):
     assert spec.workspace_kind == "dir" and spec.trust_full and spec.tool_policy["permission_mode"] == "bypassPermissions"
     st = json.loads(spec.settings_path.read_text(encoding="utf-8"))
     # trust_full: bỏ permissions.deny tĩnh của hub — CHỈ giữ luật thư mục chung quản trị máy (dữ liệu của user khác, plan-admin-users)
-    from cfharness.guard.runtime import admin_shared_deny_rules
+    # + thư mục dữ liệu app desktop (C6: cookie phiên/token directory — docs/dev-notes/desktop-app.md)
+    from cfharness.guard.runtime import admin_shared_deny_rules, app_data_deny_rules
 
-    assert st["sandbox"] == {"enabled": False} and (st.get("permissions") or {}).get("deny", []) == admin_shared_deny_rules()
+    assert st["sandbox"] == {"enabled": False}
+    assert (st.get("permissions") or {}).get("deny", []) == admin_shared_deny_rules() + app_data_deny_rules()
     assert "PreToolUse" in (st.get("hooks") or {})  # hook vẫn chạy: ghi quyết định + ESTOP
     assert not any("push --force" in x for x in spec.tool_policy.get("disallowed_tools") or [])
     argv, _ = build_argv(spec, hub.config.get("runtime.claude"))

@@ -25,7 +25,7 @@ from starlette.applications import Starlette
 from starlette.datastructures import FormData
 from starlette.exceptions import HTTPException
 from starlette.requests import Request, cookie_parser
-from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
@@ -37,6 +37,7 @@ from ..paths import HubPaths
 from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
 from ..tui.client import AsyncHubClient, subscribe
 from ..tui.model import STATUS_ORDER
+from . import desktop as _desktop
 from . import present as P
 from . import settings_schema as _settings
 from .public import LoginLimiter, client_ip, public_hosts
@@ -135,6 +136,9 @@ class WebState:
     totp: TotpStore | None = None
     devices: DeviceStore | None = None  # "Tin cậy thiết bị này" (web/devices.py) — chỉ dùng trên host public https
     _dev_rejects: dict[str, float] = field(default_factory=dict)  # giới hạn ghi audit `web.device_rejected` theo IP
+    # directory hub (C5, web/desktop.py): giới hạn lần sai token + trần lần trả danh mục — chỉ RAM
+    dir_limiter: Any = field(default_factory=lambda: _desktop.directory_limiter())
+    dir_window: Any = field(default_factory=lambda: _desktop.SuccessWindow())
 
     @property
     def public_hosts(self) -> set[str]:
@@ -181,9 +185,12 @@ class WebState:
 class GuardMiddleware:
     """ASGI thuần (không đệm response → SSE chạy được): kiểm Host, gắn phiên, chặn khi chưa đăng nhập, thêm header bảo mật."""
 
-    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/mcp/oauth/callback")  # callback OAuth: state là lớp bảo vệ (web/mcp_oauth.py)
+    # callback OAuth: state là lớp bảo vệ (web/mcp_oauth.py); well-known: app desktop nhận diện hub (chỉ {kind, schema, app_api})
+    # directory: công khai nhưng có token (C5, hub admin — web/desktop.directory: sai → 404, giới hạn tốc độ)
+    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/mcp/oauth/callback", "/.well-known/cfharness.json", "/.well-known/cfharness-directory")
     # JSON do trang gọi bằng fetch (polling): chưa đăng nhập → 401 (không chuyển hướng), không gia hạn phiên — như /sse/, /partials/
-    API = ("/office/state", "/office/approval/", "/office/question/", "/office/chat", "/office/do/")  # tiền tố
+    # `/app/` = API cho app desktop (web/desktop.py: /app/badge) — 401 dạng JSON
+    API = ("/office/state", "/office/approval/", "/office/question/", "/office/chat", "/office/do/", "/app/")  # tiền tố
 
     def __init__(self, app: Any, state: WebState) -> None:
         self.app = app
@@ -222,6 +229,8 @@ class GuardMiddleware:
             # chống DNS rebinding: chỉ phục vụ đúng Host đã định
             await PlainTextResponse(f"Host không hợp lệ — mở {self.state.base_url}/", status_code=421)(scope, receive, send_headers)
             return
+        if "cfharnessdesktop/" in headers.get("user-agent", "").lower():
+            _desktop.note_app_ua(headers.get("user-agent", ""))  # C7: chỉ ghi log, không đổi giao diện
         sid = cookie_parser(headers.get("cookie", "")).get(self.state.cookie)
         # polling/SSE không gia hạn phiên — chỉ thao tác của người (trang, POST) mới gia hạn
         poll = path.startswith(("/sse/", "/partials/")) or path.startswith(self.API)
@@ -232,6 +241,8 @@ class GuardMiddleware:
         if sess is None and not public:
             if scope.get("method") == "GET" and not poll and "hx-request" not in headers:
                 resp: Response = RedirectResponse("/login", status_code=303)
+            elif path.startswith("/app/"):
+                resp = JSONResponse({"error": "unauthenticated"}, status_code=401)
             else:
                 resp = PlainTextResponse("Chưa đăng nhập — mở /login (mã TOTP) hoặc chạy `cfharness web --open` trên máy chạy hub.", status_code=401)
             await resp(scope, receive, send_headers)
@@ -2003,6 +2014,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_backup_pages.routes(),  # /partials/backup — thẻ "Sao lưu" ở Cài đặt (backup.py)
         *_transfer_pages.routes(),  # /hub-transfer — xuất/nhập toàn bộ hub (hub_transfer_web.py, web/transfer_pages.py)
         *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
+        *_desktop.routes(),  # /.well-known/cfharness.json + /app/badge — app desktop (web/desktop.py, docs/dev-notes/desktop-app.md)
         *_file_pages.routes(),  # /files/view|raw|open — xem/mở file agent đã thao tác (web/file_pages.py, docs/dev-notes/file-open.md)
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]

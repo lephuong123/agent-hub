@@ -1,6 +1,7 @@
 """CLI `cfharness admin …` — quản trị máy nhiều người dùng (admin_overview.py, admin_rpc.py; docs/dev-notes/admin-overview.md, admin-users.md).
 
 - `overview` · `users list|show|add|revoke` · `estop on|off|list` · `alerts` · `audit` · `policy show|check|template` · `setup check`
+  · `directory export|token|status` (directory hub cho app desktop — admin_directory.py)
   (phía admin) · `me` (phía user: trang minh bạch — đúng những gì hub này xuất cho admin, chính sách, ESTOP admin, admin-log).
 - Đọc/ESTOP: client thuần qua RPC `admin.*` (∈ HUMAN_ONLY; phía admin daemon còn kiểm nhóm cfharness-admin).
 - `users add|revoke`, `setup check`, `policy template`: KHÔNG gọi daemon — mặc định chỉ IN lệnh sudo; `--write` (root) mới chạy.
@@ -22,7 +23,7 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     from .admin_control import REASON_CODES
     from .systems.cli import add_admin_daemon_parsers
 
-    a = sub.add_parser("admin", help="quản trị máy nhiều người dùng (chỉ người): overview | users | estop | alerts | audit | policy | setup | me | install-daemon",
+    a = sub.add_parser("admin", help="quản trị máy nhiều người dùng (chỉ người): overview | users | estop | alerts | audit | policy | setup | directory | me | install-daemon",
                        parents=[common])
     asub = a.add_subparsers(dest="admin_cmd", required=True)
     add_admin_daemon_parsers(asub, common)
@@ -79,6 +80,15 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     sc = ss.add_parser("check", help="kiểm nhóm cfharness-admin/cfharness-users + chủ/quyền thư mục chung, in lệnh sửa", parents=[common])
     sc.add_argument("--runbook", action="store_true", help="in toàn bộ lệnh thiết lập một lần")
     sc.set_defaults(fn=cmd_setup_check)
+    di = asub.add_parser("directory", help="directory hub cho app desktop: export [--out F] | token [--rotate] | status (hub admin)", parents=[common])
+    ds = di.add_subparsers(dest="directory_cmd", required=True)
+    ex = ds.add_parser("export", help="in (hoặc ghi --out) danh mục JSON các hub có origin công khai", parents=[common])
+    ex.add_argument("--out", default=None, help="ghi ra file (0600) thay vì in")
+    ex.set_defaults(fn=cmd_directory_export)
+    tk = ds.add_parser("token", help="tạo token và in URL directory MỘT lần (token chỉ lưu dạng băm)", parents=[common])
+    tk.add_argument("--rotate", action="store_true", help="tạo token mới — token cũ mất hiệu lực ngay")
+    tk.set_defaults(fn=cmd_directory_token)
+    ds.add_parser("status", help="tên danh mục, số hub, token đã tạo chưa, origin phục vụ", parents=[common]).set_defaults(fn=cmd_directory_status)
     asub.add_parser("me", help="phía user: hub này xuất gì cho admin, chính sách, ESTOP admin, admin-log",
                     parents=[common]).set_defaults(fn=cmd_me)
 
@@ -318,6 +328,44 @@ def cmd_setup_check(ctx: Any) -> int:
         lines += [f"         {f}" for f in c["fix"]]
     ctx.out(r, "\n".join(lines))
     return 0 if r["level"] != "fail" else 1
+
+
+def cmd_directory_export(ctx: Any) -> int:
+    import os
+
+    r = ctx.call("admin.directory", {})
+    text = json.dumps(r, ensure_ascii=False, indent=2)
+    out = ctx.args.out
+    if not out:
+        ctx.out(r, text)
+        return 0
+    p = Path(out).expanduser()
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text + "\n")
+    ctx.out({"out": str(p), "hubs": len(r.get("hubs") or [])}, f"Đã ghi {p} ({len(r.get('hubs') or [])} hub)")
+    return 0
+
+
+def cmd_directory_token(ctx: Any) -> int:
+    r = ctx.call("admin.directory_token", {"rotate": bool(ctx.args.rotate)})
+    lines = [r["url"], "", "URL này chỉ hiện MỘT lần (hub chỉ lưu băm của token). Gửi cho người dùng app desktop qua kênh riêng — "
+             "ai có URL đều đọc được danh mục (tên, user, origin của các hub; không cấp quyền đăng nhập)."]
+    if r.get("rotated"):
+        lines.append("Token cũ đã mất hiệu lực.")
+    if not r.get("public"):
+        lines.append("Lưu ý: hub này chưa đặt web.public_origin — URL trên chỉ mở được trên chính máy này.")
+    ctx.out(r, "\n".join(lines))
+    return 0
+
+
+def cmd_directory_status(ctx: Any) -> int:
+    r = ctx.call("admin.directory_status", {})
+    lines = [f"Directory '{r.get('name')}': {r.get('hubs')} hub có origin công khai" + (f" · {r['dropped']} mục bị bỏ (không hợp lệ/trùng)" if r.get("dropped") else ""),
+             f"Phục vụ ở: {r.get('origin')}{r.get('path')}?t=…" + ("" if r.get("public") else " (chỉ trên máy này — chưa có web.public_origin)"),
+             f"Token: {'đã tạo ' + str(r.get('token_created_at')) + ' (lần ' + str(r.get('token_rev')) + ')' if r.get('token') else 'CHƯA tạo — cfharness admin directory token'}"]
+    ctx.out(r, "\n".join(lines))
+    return 0
 
 
 def cmd_me(ctx: Any) -> int:

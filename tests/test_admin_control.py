@@ -177,7 +177,7 @@ async def test_admin_self_transparency(hub_home, shared):
         assert r["admin_log"][0]["action"] == "estop_on" and r["admin_log"][0]["by"] == "boss"
         from cfharness.admin_overview import sanitize
 
-        assert sanitize(r["export"]["preview"]) == r["export"]["preview"] and r["export"]["preview"]["schema"] == 2
+        assert sanitize(r["export"]["preview"]) == r["export"]["preview"] and r["export"]["preview"]["schema"] == 2  # chưa đặt origin/tên → schema 2 (admin cũ đọc được)
         assert r["is_admin"] is False  # user thường vẫn xem được trang minh bạch của chính mình
         nav = await rpc(d, "admin.nav")
         assert nav["is_admin"] is False and nav["admin_estop"]["on"]

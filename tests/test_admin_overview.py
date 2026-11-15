@@ -109,7 +109,7 @@ async def test_export_content_allowlist_atomic_mode_and_no_secret(hub_home, tmp_
         assert SECRET not in text and "an-secret-agent" not in text and "du-an-B" not in text
         assert str(hub_home.home) not in text and os.uname().nodename not in text
         assert ao.sanitize(data) == data  # chỉ khoá SPEC
-        assert data["schema"] == ao.SCHEMA and data["user"] == ME and data["hub_id"] == ao.hub_id(hub_home.home)
+        assert data["schema"] == 2 and data["user"] == ME and data["hub_id"] == ao.hub_id(hub_home.home)
         assert data["agents"]["total"] == 1 and data["runs"]["today_total"] >= 1 and data["daemon"]["up"] is True
         assert data["interval_s"] == 60 and "cost_usd" in data and "approvals" in data
         # nhóm có thật (nhóm chính của user test) → không cảnh báo; ghi đè nguyên tử giữ 0640

@@ -48,8 +48,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("cfharness.admin_overview")
 
-SCHEMA = 2
-SCHEMAS_READ = (1, 2)  # bộ đọc nhận cả bản xuất cũ (hub chưa nâng cấp)
+SCHEMA = 3
+SCHEMAS_READ = (1, 2, 3)  # bộ đọc nhận cả bản xuất cũ (hub chưa nâng cấp)
 DEFAULT_DIR = "/Users/Shared/cfharness/status"
 SHARED_ROOT = "/Users/Shared/cfharness"  # agent của hub không đọc/ghi được (sandbox — guard/runtime.sandbox_settings)
 DEFAULT_GROUP = "cfharness-admin"
@@ -100,7 +100,12 @@ SPEC: dict[str, Any] = {
     "disk": {"free_gb": "num"},
     "policy": {"rev_applied": "int", "machine_rev": "int", "valid": "bool", "required": "bool", "blocked": "bool"},
     "admin_estop": {"seen": "bool", "on": "bool"},
+    # schema 3 (app desktop — directory hub, admin_directory.py): CHỈ do người đặt (`web.public_origin`, `web.display_name` — nhánh `web`
+    # ∈ SECURITY_KEYS); origin kiểm bằng `web/public.parse_public_origin`, tên một dòng ≤ 60 đã bỏ ký tự điều khiển/bidi/vô hình
+    "public_origin": "origin",
+    "display_name": "name",
 }
+NAME_MAX = 60
 
 
 # ============================================================================ thuần
@@ -118,8 +123,34 @@ def _valid(kind: str, v: Any) -> Any:
             return None
         items = [x for x in (_valid(kind[5:], x) for x in v[:LIST_MAX]) if x is not None]
         return items
+    if kind == "origin":
+        return _origin(v)
+    if kind == "name":
+        return _name(v)
     rx = _RE.get(kind)
     return v if rx is not None and isinstance(v, str) and rx.match(v) else None
+
+
+def _origin(v: Any) -> str | None:
+    """`https://host[:port]` hợp lệ (parse_public_origin) và đã ở dạng chuẩn — không chấp nhận bản "gần đúng" từ file lạ."""
+    if not isinstance(v, str) or len(v) > 300:
+        return None
+    from .web.public import parse_public_origin
+
+    try:
+        return v if parse_public_origin(v) == v else None
+    except ValueError:
+        return None
+
+
+def _name(v: Any) -> str | None:
+    """Tên hiển thị một dòng ≤ NAME_MAX: bỏ ký tự điều khiển/bidi/zero-width, gộp khoảng trắng; rỗng → None."""
+    if not isinstance(v, str) or len(v) > 4 * NAME_MAX:
+        return None
+    from .termsafe import one_line
+
+    s = one_line(v, NAME_MAX)
+    return s or None
 
 
 def sanitize(obj: Any, spec: dict[str, Any] = SPEC) -> dict[str, Any]:
@@ -302,6 +333,12 @@ def collect(hub: "Hub", *, up: bool = True, interval_s: float = 60, now: datetim
         "agents": {"total": int(st.get("agents") or 0)},
         "flags": {"auth_block": bool(st.get("auth_block")), "rate_limited": bool(st.get("rate_limit")), "sandbox_enabled": bool(st.get("sandbox_enabled"))},
     }
+    try:  # schema 3: origin công khai + tên hiển thị (người đặt) cho directory hub của app desktop
+        wcfg = hub.config.get("web") or {}
+        raw["public_origin"] = _canon_origin(wcfg.get("public_origin"))  # config lưu chuỗi người gõ (vd `https://An.Example.com/`) → dạng chuẩn
+        raw["display_name"] = wcfg.get("display_name")
+    except Exception:  # pragma: no cover
+        pass
     raw["estop"]["on"] = bool((store.state_get("estop") or {}).get("on"))  # ESTOP của chính user (ESTOP admin ở admin_estop)
     raw["runs"].update({k: int(oc.get(k[6:], 0)) for k in ("today_crashed", "today_timed_out", "today_budget_exceeded", "today_rate_limited")})
     for sec, fn in (("v2", _collect_v2),):
@@ -310,7 +347,20 @@ def collect(hub: "Hub", *, up: bool = True, interval_s: float = 60, now: datetim
                 raw[k] = {**raw[k], **v} if isinstance(raw.get(k), dict) and isinstance(v, dict) else v
         except Exception:  # pragma: no cover — số liệu phụ không bao giờ chặn bản xuất
             log.exception("admin_export: thu số liệu %s lỗi", sec)
-    return sanitize(raw)
+    out = sanitize(raw)
+    if not (out.get("public_origin") or out.get("display_name")):
+        # không có trường schema 3 → ghi schema 2 để admin hub chưa nâng cấp (SCHEMAS_READ cũ = 1, 2) vẫn đọc được
+        out["schema"] = 2
+    return out
+
+
+def _canon_origin(v: Any) -> str | None:
+    from .web.public import parse_public_origin
+
+    try:
+        return parse_public_origin(v)
+    except ValueError:
+        return None
 
 
 def write_atomic(directory: Path, name: str, data: dict[str, Any], *, group: str | None = DEFAULT_GROUP, mode: int = 0o640) -> list[str]:

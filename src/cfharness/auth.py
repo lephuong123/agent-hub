@@ -130,6 +130,9 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # trang minh bạch phía user — mọi method admin.* chỉ người; phía admin còn kiểm nhóm cfharness-admin (admin_control.require_admin)
         "admin.users", "admin.user", "admin.estop_list", "admin.estop_set", "admin.alerts", "admin.audit", "admin.policy",
         "admin.nav", "admin.self", "admin.setup_check",
+        # Directory hub cho app desktop (admin_directory.py, C5 — docs/dev-notes/desktop-app.md): danh mục hub của MỌI user trên máy, token
+        # directory (xoay = ghi), `admin.directory_serve` do web gọi sau khi nhận token từ route công khai — chỉ người + nhóm cfharness-admin
+        "admin.directory", "admin.directory_status", "admin.directory_token", "admin.directory_serve",
         # Xem/mở file trong workspace của run/agent (fileview.py): đọc ngoài sandbox của agent gọi (workspace agent KHÁC) + mở app trên máy
         "file.read", "file.open",
         # Thư mục chung Không gian số (filehub/): đăng nhập thiết bị, thêm/gỡ thư mục, tạm dừng đồng bộ — chỉ người (không MANAGER_ALLOWED)
@@ -230,7 +233,7 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.web_events", "MUTATING_WEB"),
                       ("cfharness.backup", "MUTATING_BACKUP"), ("cfharness.hub_transfer", "MUTATING_TRANSFER"),
                       ("cfharness.hub_freeze", "MUTATING_FREEZE"), ("cfharness.hub_transfer_web", "MUTATING_TRANSFER_WEB"),
-                      ("cfharness.admin_rpc", "MUTATING_ADMIN"),
+                      ("cfharness.admin_rpc", "MUTATING_ADMIN"), ("cfharness.admin_directory", "MUTATING_DIRECTORY"),
                       ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.filehub.rpc", "MUTATING_FILEHUB"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):
         try:
             import importlib

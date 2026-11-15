@@ -80,6 +80,14 @@ def validate_setting(key: str, value: Any) -> None:
         return
     if key == "web.public_origin":
         parse_public_origin(value)
+    elif key == "web.port":
+        if value is not None:
+            _int(key, value, 1024, 65535)
+    elif key == "web.display_name":
+        if value is not None and (not isinstance(value, str) or len(value) > 60 or not value.strip()
+                                  or any(ord(c) < 32 or 0x7F <= ord(c) < 0xA0 or c in "\u200b\u200c\u200d\u2060\ufeff" or 0x202A <= ord(c) <= 0x202E
+                                         or 0x2066 <= ord(c) <= 0x2069 for c in value)):
+            raise ValueError("web.display_name phải là chuỗi một dòng 1..60 ký tự (không ký tự điều khiển/vô hình) hoặc null")
     elif key == "web.session_max_age_s":
         _int(key, value, 300, 30 * 86400)
     elif key == "web.session_idle_s":
@@ -102,7 +110,7 @@ def validate_setting(key: str, value: Any) -> None:
             raise ValueError(f"khoá lạ {key} (có: {', '.join(LOGIN_KEYS)})")
         _int(key, value, 1, 30 * 86400)
     else:
-        raise ValueError(f"khoá lạ {key} (web.public_origin | session_max_age_s | session_idle_s | client_ip_header | login.* | trusted_devices.*)")
+        raise ValueError(f"khoá lạ {key} (web.public_origin | port | display_name | session_max_age_s | session_idle_s | client_ip_header | login.* | trusted_devices.*)")
 
 
 # ============================================================================ IP thật của client
