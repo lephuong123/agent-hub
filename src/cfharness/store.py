@@ -906,6 +906,29 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS admin_samples_user_ts ON admin_samples(user, ts_epoch);
     CREATE INDEX IF NOT EXISTS admin_samples_ts ON admin_samples(ts_epoch);
     """,
+    # v27 — ledger write-ahead (S8-B, docs/dev-notes/M4-A.md §"Ledger an toàn khi crash"): ý định ghi TRƯỚC khi đụng đích. `Ledger.apply`
+    # ghi hàng này (cùng snapshot before) → ghi đích → commit entry + xoá hàng trong MỘT transaction. Hàng còn sót = daemon chết giữa chừng;
+    # `Ledger.recover_pending` (Hub.start) đối chiếu: đích == after → hoàn tất entry; == before → bỏ; khác → `state='flagged'` + cảnh báo.
+    # KHÔNG append-only (hàng bị xoá khi xong); `ledger_entries` vẫn append-only như cũ.
+    """
+    CREATE TABLE IF NOT EXISTS ledger_pending (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        path TEXT,
+        agent_id TEXT,
+        snapshot_id TEXT,
+        before_blob TEXT,
+        after_known INTEGER NOT NULL DEFAULT 1,
+        after_sha TEXT,
+        entry TEXT NOT NULL,
+        change TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'pending',
+        detail TEXT,
+        created_at TEXT NOT NULL,
+        flagged_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ledger_pending_state ON ledger_pending(state, created_at);
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
@@ -926,6 +949,7 @@ JSON_COLS = {
     "review_jobs": ("signal_ids", "result"),
     "proposals": ("payload", "evidence_signal_ids", "eval"),
     "ledger_entries": ("flags",),
+    "ledger_pending": ("entry", "change"),
     # M5-A
     "tier_canaries": ("watch_agents", "eval", "observed", "baseline"),
     # UX — câu hỏi

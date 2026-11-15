@@ -66,6 +66,11 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - Rollback memory không gỡ được mục (mục đã bị sửa tiếp sau entry) giờ báo `partial` kèm số mục bỏ qua thay vì báo thành công im lặng.
 - Tên skill có ký tự xuống dòng ở cuối (`"my-skill\n"`) bị từ chối.
 - Rollback không còn khôi phục từ blob ledger hỏng/bị sửa: blob sai sha256 bị từ chối kèm lỗi.
+- Nhập/nhân bản agent (`agent import`, `agent clone`) giờ đi qua quét an toàn tri thức (threat scan) như mọi thay đổi memory/skill:
+  nội dung trúng mẫu nguy hiểm thì bị từ chối và không ghi gì vào hub.
+- Áp dụng thay đổi học (memory/skill/cấu hình/graph) an toàn khi daemon chết giữa chừng: hub ghi ý định trước, khởi động lại thì tự hoàn tất
+  hoặc bỏ thay đổi dở dang; trường hợp không xác định được thì cảnh báo (`learning.ledger_recovery`) và giữ bản trước để khôi phục tay.
+  Thêm migration v27 (bảng `ledger_pending`) — tự chạy khi cập nhật.
 
 ---
 

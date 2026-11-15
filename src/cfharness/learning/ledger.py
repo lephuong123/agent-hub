@@ -4,6 +4,8 @@
   JSON `{config, soul}`). `HUB_HOME/ledger`, `snapshots` thuộc tài nguyên bảo vệ mặc định (guard M1) — agent không xoá được.
 - TRƯỚC mỗi thay đổi: chụp snapshot đích (bảng `snapshots`, trỏ blob) → áp dụng → `ledger_entries` (append-only,
   trigger chặn DELETE và sửa trường lõi; chỉ `rolled_back_by`/`eval_*`/`flags` được cập nhật).
+- Write-ahead (S8-B): snapshot + `ledger_pending` commit TRƯỚC khi ghi đích; entry (+ hàng graph) + xoá pending trong MỘT transaction;
+  `recover_pending` (Hub.start) hoàn tất / bỏ / gắn cờ pending sót khi daemon chết giữa chừng (docs/dev-notes/M4-A.md).
 - Rollback từng entry tạo entry MỚI (`op=rollback`, `rollback_of`); rollback của rollback cũng được. Có entry sau cùng
   đích chưa rollback → `Conflict` + gợi ý chuỗi (`chain=True` rollback ngược thời gian). Đích bị sửa ngoài ledger → Conflict
   (trừ `force`). Rollback KHÔNG bị giới hạn tần suất (FR-LN-18).
@@ -27,9 +29,12 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import shutil
 import tarfile
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -40,6 +45,8 @@ from ..store import now_iso
 
 if TYPE_CHECKING:
     from ..hub import Hub
+
+log = logging.getLogger(__name__)
 
 CONFIG_FIELDS = ("model", "effort", "fallback_model", "tool_policy", "mcp_servers", "limits",
                  # M7: điều phối viên sửa cả các trường mô tả/workspace qua ledger (rollback được); entry cũ không có khoá → không đổi
@@ -101,13 +108,15 @@ class Blobs:
 def tar_dir(path: Path) -> bytes | None:
     if not path.is_dir():
         return None
+    return tar_from_files({str(p.relative_to(path)): p.read_bytes() for p in path.rglob("*") if not p.is_symlink() and p.is_file()})
+
+
+def tar_from_files(files: dict[str, bytes]) -> bytes:
+    """Tar tất định từ {rel: nội dung} — CÙNG byte với `tar_dir` của cây có đúng các file đó (dùng để biết trước hash after)."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tf:
-        for p in sorted(path.rglob("*")):
-            if p.is_symlink() or not p.is_file():
-                continue
-            rel = str(p.relative_to(path))
-            data = p.read_bytes()
+        for rel in sorted(files, key=Path):
+            data = files[rel]
             ti = tarfile.TarInfo(rel)
             ti.size, ti.mtime, ti.mode, ti.uid, ti.gid, ti.uname, ti.gname = len(data), 0, 0o644, 0, 0, "", ""
             tf.addfile(ti, io.BytesIO(data))
@@ -252,17 +261,72 @@ class Ledger:
             return tar_dir(path)
         return path.read_bytes() if path.exists() else None
 
-    # ------------------------------------------------------------------ áp dụng (duy nhất)
+    # ------------------------------------------------------------------ áp dụng (duy nhất) — write-ahead (S8-B)
     def apply(self, ch: Change) -> dict[str, Any]:
-        ks = self.hub.knowledge
+        """Áp dụng một Change, an toàn khi daemon chết giữa chừng (write-ahead):
+        1. ghi ý định: snapshot + hàng `ledger_pending` (blob before đã lưu, hash after dự kiến) — commit;
+        2. ghi đích (file: tmp + rename; cây; cấu hình qua `agents.update`; graph: không làm gì ở bước này);
+        3. MỘT transaction: (graph: ghi hàng graph) + đăng ký skill + INSERT `ledger_entries` + xoá hàng pending.
+        Chết ở bất kỳ đâu → `recover_pending` lúc Hub khởi động hoàn tất / bỏ / gắn cờ hàng pending còn sót."""
         eid = "le_" + uuid.uuid4().hex[:12]
         before = self.state_bytes(ch)
         before_sha = self.blobs.put(before)
         snap_id = "sn_" + uuid.uuid4().hex[:12]
-        self.conn.execute("INSERT INTO snapshots (id, kind, scope, owner_id, target, target_ref, blob, created_at) VALUES (?,?,?,?,?,?,?,?)",
-                          (snap_id, ch.kind, ch.scope, ch.owner_id, ch.target, ch.target_ref, before_sha, now_iso()))
-        revision = None
-        archived_to = None
+        after_known, after_sha = self._expected_after(ch, before)
+        row = {
+            "id": eid, "proposal_id": ch.proposal_id, "scope": ch.scope, "owner_id": ch.owner_id, "agent_id": ch.agent_id,
+            "target": ch.target, "target_ref": ch.target_ref, "op": ch.op, "risk_class": ch.risk_class, "snapshot_id": snap_id,
+            "before_blob": before_sha, "blob_kind": ch.kind, "actor": ch.actor, "reason": ch.reason,
+            "summary": (ch.summary or "")[:2000], "flags": ch.flags or [], "rollback_of": ch.rollback_of,
+        }
+        with self._atomic():  # bước 1: ý định
+            self.conn.execute("INSERT INTO snapshots (id, kind, scope, owner_id, target, target_ref, blob, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                              (snap_id, ch.kind, ch.scope, ch.owner_id, ch.target, ch.target_ref, before_sha, now_iso()))
+            self.hub.store._insert("ledger_pending", {
+                "id": eid, "kind": ch.kind, "path": str(ch.path) if ch.path else None, "agent_id": ch.agent_id, "snapshot_id": snap_id,
+                "before_blob": before_sha, "after_known": 1 if after_known else 0, "after_sha": after_sha, "entry": row,
+                "change": {"archive": ch.archive, "created_by": ch.created_by,
+                           "graph_keys": [f"{m['table']}:{m['id']}" for m in ch.graph_rows] if ch.kind == "graph" else []},
+                "state": "pending", "created_at": now_iso()})
+        try:
+            revision, archived_to = self._write_target(ch)  # bước 2
+            self._commit(ch, row, archived_to=archived_to, revision=revision)  # bước 3
+        except Exception:
+            self._abandon_if_untouched(eid)  # lỗi thường (không phải chết): đích chưa đổi → bỏ ý định ngay
+            raise
+        return self.get(eid)
+
+    def _expected_after(self, ch: Change, before: bytes | None) -> tuple[bool, str | None]:
+        """(biết trước?, sha256 trạng thái SAU dự kiến). Graph ghi trong cùng transaction với entry → không cần đoán (False)."""
+        def sha(b: bytes | None) -> str | None:
+            return hashlib.sha256(b).hexdigest() if b is not None else None
+
+        if ch.kind == "file":
+            return True, sha(ch.after)
+        if ch.kind == "tree":
+            if ch.archive:
+                return True, None
+            files = {} if ch.replace_tree else tar_files(before)
+            for rel, data in ch.files.items():
+                if data is None:
+                    files.pop(rel, None)
+                else:
+                    files[rel] = data
+            return True, sha(tar_from_files(files))
+        if ch.kind == "config":
+            st = json.loads((before or b"{}").decode("utf-8"))
+            cfg = dict(st.get("config") or {})
+            cfg.update({k: v for k, v in (ch.config_changes or {}).items() if k in CONFIG_FIELDS})
+            st["config"] = cfg
+            if ch.soul is not None:
+                st["soul"] = ch.soul
+            return True, sha(json.dumps(st, sort_keys=True, ensure_ascii=False).encode("utf-8"))
+        return False, None
+
+    def _write_target(self, ch: Change) -> tuple[int | None, str | None]:
+        """Bước 2: ghi đích → (config_revision, archived_to). Graph không ghi ở đây (ghi trong transaction của entry)."""
+        ks = self.hub.knowledge
+        revision = archived_to = None
         if ch.kind == "file":
             assert ch.path is not None
             ch.path.parent.mkdir(parents=True, exist_ok=True)
@@ -280,42 +344,129 @@ class Ledger:
                     from ..knowledge.store import move_to_archive
 
                     archived_to = str(move_to_archive(ch.path, ks.archive_dir(ch.scope, ch.owner_id)))
-                ks.mark_archived(ch.scope, ch.owner_id, ch.target_ref, archived_to)
+            elif ch.replace_tree:
+                write_tree(ch.path, {k: v for k, v in ch.files.items() if v is not None})
             else:
-                if ch.replace_tree:
-                    write_tree(ch.path, {k: v for k, v in ch.files.items() if v is not None})
-                else:
-                    ch.path.mkdir(parents=True, exist_ok=True)
-                    for rel, data in ch.files.items():
-                        p = ch.path / rel
-                        if data is None:
-                            if p.exists():
-                                p.unlink()
-                        else:
-                            p.parent.mkdir(parents=True, exist_ok=True)
-                            p.write_bytes(data)
-                self._register_tree(ch)
-        elif ch.kind == "graph":
-            self.graph().write_rows(ch.graph_rows, eid)
+                ch.path.mkdir(parents=True, exist_ok=True)
+                for rel, data in ch.files.items():
+                    p = ch.path / rel
+                    if data is None:
+                        if p.exists():
+                            p.unlink()
+                    else:
+                        p.parent.mkdir(parents=True, exist_ok=True)
+                        p.write_bytes(data)
         elif ch.kind == "config":
             rev_actor = "rollback" if ch.op == "rollback" else (ch.actor if str(ch.actor).startswith(MANAGER_ACTOR_PREFIX) else "learning")
             res = self.hub.agents.update(ch.agent_id or "", dict(ch.config_changes or {}), soul=ch.soul, actor=rev_actor)
             revision = res.get("config_revision")
-        else:
+        elif ch.kind != "graph":
             raise HubError(f"kind thay đổi không hợp lệ: {ch.kind}")
-        after = self.state_bytes(ch) if not ch.archive else None
-        after_sha = self.blobs.put(after)
-        row = {
-            "id": eid, "proposal_id": ch.proposal_id, "scope": ch.scope, "owner_id": ch.owner_id, "agent_id": ch.agent_id,
-            "target": ch.target, "target_ref": ch.target_ref, "op": ch.op, "risk_class": ch.risk_class, "snapshot_id": snap_id,
-            "before_blob": before_sha, "after_blob": after_sha, "blob_kind": ch.kind, "actor": ch.actor, "reason": ch.reason,
-            "summary": (ch.summary or "")[:2000] + (f" → {archived_to}" if archived_to else ""), "applied_at": now_iso(),
-            "flags": ch.flags or [], "rollback_of": ch.rollback_of, "config_revision": revision,
-        }
-        self.hub.store._insert("ledger_entries", row)
-        if ch.rollback_of:
-            self.conn.execute("UPDATE ledger_entries SET rolled_back_by=? WHERE id=?", (eid, ch.rollback_of))
-        return self.get(eid)
+        return revision, archived_to
+
+    def _commit(self, ch: Change, row: dict[str, Any], *, archived_to: str | None, revision: int | None, recovered: bool = False) -> None:
+        """Bước 3: MỘT transaction — hàng graph (nếu có) + đăng ký skill + entry + đánh dấu rollback_of + xoá pending."""
+        eid = row["id"]
+        with self._atomic():
+            if ch.kind == "graph" and not recovered:
+                self.graph().write_rows(ch.graph_rows, eid)
+            if ch.kind == "tree":
+                if ch.archive:
+                    self.hub.knowledge.mark_archived(ch.scope, ch.owner_id, ch.target_ref, archived_to)
+                else:
+                    self._register_tree(ch)
+            after = self.state_bytes(ch) if not ch.archive else None
+            entry = {**row, "after_blob": self.blobs.put(after), "applied_at": now_iso(), "config_revision": revision,
+                     "summary": (row.get("summary") or "") + (f" → {archived_to}" if archived_to else "")}
+            if recovered:
+                entry["flags"] = list(entry.get("flags") or []) + ["recovered"]
+            self.hub.store._insert("ledger_entries", entry)
+            if row.get("rollback_of"):
+                self.conn.execute("UPDATE ledger_entries SET rolled_back_by=? WHERE id=?", (eid, row["rollback_of"]))
+            self.conn.execute("DELETE FROM ledger_pending WHERE id=?", (eid,))
+
+    @contextmanager
+    def _atomic(self) -> Iterator[None]:
+        """Transaction riêng; nếu bên gọi đã mở transaction thì dùng SAVEPOINT (lồng được)."""
+        if not self.conn.in_transaction:
+            with self.hub.store.tx():
+                yield
+            return
+        sp = "ledger_" + uuid.uuid4().hex[:8]
+        self.conn.execute(f"SAVEPOINT {sp}")
+        try:
+            yield
+        except BaseException:
+            self.conn.execute(f"ROLLBACK TO {sp}")
+            self.conn.execute(f"RELEASE {sp}")
+            raise
+        self.conn.execute(f"RELEASE {sp}")
+
+    # ------------------------------------------------------------------ khôi phục sau crash (S8-B)
+    def pending(self, state: str | None = None) -> list[dict[str, Any]]:
+        sql, args = "SELECT * FROM ledger_pending", ()
+        if state:
+            sql, args = sql + " WHERE state=?", (state,)
+        return [self.hub.store._row("ledger_pending", r) for r in self.conn.execute(sql + " ORDER BY created_at, rowid", args)]  # type: ignore[misc]
+
+    def _pending_change(self, p: dict[str, Any]) -> Change:
+        e, c = p["entry"], p["change"] or {}
+        ch = Change(scope=e["scope"], owner_id=e.get("owner_id"), target=e["target"], target_ref=e.get("target_ref") or "", op=e["op"],
+                    actor=e["actor"], kind=p["kind"], path=Path(p["path"]) if p.get("path") else None, agent_id=e.get("agent_id"),
+                    archive=bool(c.get("archive")), created_by=str(c.get("created_by") or "agent"), rollback_of=e.get("rollback_of"))
+        ch.graph_rows = [{"table": k.split(":", 1)[0], "id": k.split(":", 1)[1]} for k in c.get("graph_keys") or []]
+        return ch
+
+    def _abandon_if_untouched(self, pid: str) -> None:
+        try:
+            p = next((x for x in self.pending() if x["id"] == pid), None)
+            if p is not None:
+                cur = self.state_bytes(self._pending_change(p))
+                if (hashlib.sha256(cur).hexdigest() if cur is not None else None) == p.get("before_blob"):
+                    self.conn.execute("DELETE FROM ledger_pending WHERE id=?", (pid,))
+        except Exception:  # pragma: no cover — để recover_pending lúc khởi động xử lý
+            log.exception("không kiểm được đích của ledger_pending %s", pid)
+
+    def recover_pending(self) -> dict[str, list[str]]:
+        """Đối chiếu từng hàng `ledger_pending` còn sót (daemon chết giữa `apply`) — gọi trong `Hub.start`:
+        đích == after dự kiến → hoàn tất entry (cờ `recovered`); == before → bỏ ý định (chưa ghi gì); khác → `state='flagged'`,
+        GIỮ snapshot before và phát `learning.ledger_recovery{flagged}` để người tự khôi phục. Không bao giờ tự ghi đè đích."""
+        out: dict[str, list[str]] = {"completed": [], "discarded": [], "flagged": []}
+        for p in self.pending("pending"):
+            try:
+                ch = self._pending_change(p)
+                cur = self.state_bytes(ch)
+                cur_sha = hashlib.sha256(cur).hexdigest() if cur is not None else None
+                if p.get("after_known") and cur_sha == p.get("after_sha"):
+                    archived_to = None
+                    if ch.archive and ch.path is not None:
+                        cands = sorted(self.hub.knowledge.archive_dir(ch.scope, ch.owner_id).glob(f"{ch.path.name}__*"))
+                        archived_to = str(cands[-1]) if cands else None
+                    revision = None
+                    if ch.kind == "config":
+                        revision = self.hub.agents.get_row(ch.agent_id or "")["config_revision"]
+                    self._commit(ch, p["entry"], archived_to=archived_to, revision=revision, recovered=True)
+                    outcome = "completed"
+                elif cur_sha == p.get("before_blob"):
+                    self.conn.execute("DELETE FROM ledger_pending WHERE id=?", (p["id"],))
+                    outcome = "discarded"
+                else:
+                    detail = f"đích hiện tại ({(cur_sha or 'vắng')[:12]}) không khớp trước/sau thay đổi — bản TRƯỚC giữ ở snapshot {p.get('snapshot_id')}"
+                    self.conn.execute("UPDATE ledger_pending SET state='flagged', detail=?, flagged_at=? WHERE id=?", (detail, now_iso(), p["id"]))
+                    outcome = "flagged"
+            except Exception as e:  # noqa: BLE001 — một hàng lỗi không chặn các hàng khác — gắn cờ để người xem
+                detail = f"không khôi phục được: {e}"
+                self.conn.execute("UPDATE ledger_pending SET state='flagged', detail=?, flagged_at=? WHERE id=?", (detail[:500], now_iso(), p["id"]))
+                outcome = "flagged"
+            out[outcome].append(p["id"])
+            e = p["entry"]
+            payload = {"pending_id": p["id"], "outcome": outcome, "kind": p["kind"], "scope": e["scope"], "target": e["target"],
+                       "target_ref": e.get("target_ref"), "path": p.get("path"), "snapshot_id": p.get("snapshot_id"), "before_blob": p.get("before_blob")}
+            if outcome == "flagged":
+                payload.update(warning=True, hint=f"khôi phục tay từ snapshot {p.get('snapshot_id')} (HUB_HOME/ledger/blobs/{p.get('before_blob') or '—'}; "
+                                                  "before_blob rỗng = đích chưa tồn tại trước thay đổi)")
+            self.hub.publish(make_event("learning.ledger_recovery", e.get("agent_id"), payload))
+        return out
 
     def _register_tree(self, ch: Change) -> None:
         from ..knowledge.store import SKILL_FILE, parse_skill

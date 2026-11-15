@@ -165,6 +165,7 @@ EVENT_LEVELS: dict[str, str] = {
     "learning.deferred": "summary",  # hoãn: rate_limited | no_eval
     "learning.eval_failed": "summary",  # L3 tụt eval → không áp dụng
     "learning.rolled_back": "summary",  # rollback entry: actor user/eval_gate/regression_monitor/canary
+    "learning.ledger_recovery": "summary",  # S8-B: Hub.start đối chiếu ledger_pending sót do crash — outcome completed|discarded|flagged (flagged: warning=true, hint)
     "learning.canary": "summary",  # (M5)
     "learning.promoted": "summary",  # (M5)
     "cache.warning": "summary",  # FR-OB-04: hash system prompt đổi > N lần/ngày

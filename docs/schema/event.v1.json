@@ -220,6 +220,7 @@
     "learning.deferred": "summary",
     "learning.digest": "summary",
     "learning.eval_failed": "summary",
+    "learning.ledger_recovery": "summary",
     "learning.promoted": "summary",
     "learning.proposal": "summary",
     "learning.rolled_back": "summary",
