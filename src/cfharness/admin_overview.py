@@ -335,7 +335,7 @@ def collect(hub: "Hub", *, up: bool = True, interval_s: float = 60, now: datetim
     }
     try:  # schema 3: origin công khai + tên hiển thị (người đặt) cho directory hub của app desktop
         wcfg = hub.config.get("web") or {}
-        raw["public_origin"] = wcfg.get("public_origin")
+        raw["public_origin"] = _canon_origin(wcfg.get("public_origin"))  # config lưu chuỗi người gõ (vd `https://An.Example.com/`) → dạng chuẩn
         raw["display_name"] = wcfg.get("display_name")
     except Exception:  # pragma: no cover
         pass
@@ -347,7 +347,20 @@ def collect(hub: "Hub", *, up: bool = True, interval_s: float = 60, now: datetim
                 raw[k] = {**raw[k], **v} if isinstance(raw.get(k), dict) and isinstance(v, dict) else v
         except Exception:  # pragma: no cover — số liệu phụ không bao giờ chặn bản xuất
             log.exception("admin_export: thu số liệu %s lỗi", sec)
-    return sanitize(raw)
+    out = sanitize(raw)
+    if not (out.get("public_origin") or out.get("display_name")):
+        # không có trường schema 3 → ghi schema 2 để admin hub chưa nâng cấp (SCHEMAS_READ cũ = 1, 2) vẫn đọc được
+        out["schema"] = 2
+    return out
+
+
+def _canon_origin(v: Any) -> str | None:
+    from .web.public import parse_public_origin
+
+    try:
+        return parse_public_origin(v)
+    except ValueError:
+        return None
 
 
 def write_atomic(directory: Path, name: str, data: dict[str, Any], *, group: str | None = DEFAULT_GROUP, mode: int = 0o640) -> list[str]:

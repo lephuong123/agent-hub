@@ -70,6 +70,32 @@ def is_app_data(path: str, home: str | Path | None = None, env: dict[str, str] |
     return any(c == r or c.startswith(r + "/") for c in cands for r in roots)
 
 
+_BRACE_RE = re.compile(r"\{[^{}]*\}")
+
+
+def glob_may_touch(pattern: str, home: str | Path | None = None, env: dict[str, str] | None = None) -> bool:
+    """Mẫu Glob TUYỆT ĐỐI có thể khớp tệp BÊN TRONG một thư mục dữ liệu của app (kể cả khi tên thư mục app bị viết bằng ký tự đại diện:
+    `…/io.cfharness.deskto?/**`, `…/[i]o.cfharness.desktop/*`, `…/{io,x}.cfharness.desktop/**`). So từng thành phần đường dẫn bằng fnmatch,
+    không phân biệt hoa/thường; `**` hoặc `{…}` (coi là `*`) trước khi hết đường dẫn thư mục app → coi là khớp (thà chặn nhầm)."""
+    import fnmatch
+
+    psegs = _canon(pattern).split("/")
+    for root in app_data_dirs(home, env):
+        rsegs = _canon(root).split("/")
+        for i, rs in enumerate(rsegs):
+            if i >= len(psegs):
+                break
+            ps = _BRACE_RE.sub("*", psegs[i])
+            if "**" in ps:
+                return True
+            if not fnmatch.fnmatchcase(rs, ps):
+                break
+        else:
+            if len(psegs) > len(rsegs):
+                return True
+    return False
+
+
 # lệnh tách đôi (vd `cd ~/Library/Application\ Support && cat io.cfharness.desktop/…`): có identifier VÀ có gốc thư mục app ở đâu đó
 _ID_RE = re.compile(r"(?<![A-Za-z0-9_\-])" + re.escape(APP_ID) + r"(?![A-Za-z0-9_\-])", re.I)
 _BASE_RE = re.compile(r"(?i)application[\s\\\"']*support|appdata|library[/\\]+(?:webkit|httpstorages|caches|cookies)|\.local[/\\]+share"
@@ -81,4 +107,4 @@ def shell_mentions(script: str) -> bool:
     return bool(SHELL_RE.search(s)) or (bool(_ID_RE.search(s)) and bool(_BASE_RE.search(s)))
 
 
-__all__ = ["APP_ID", "REASON", "RULE", "SHELL_RE", "app_data_dirs", "is_app_data", "shell_mentions"]
+__all__ = ["APP_ID", "REASON", "RULE", "SHELL_RE", "app_data_dirs", "glob_may_touch", "is_app_data", "shell_mentions"]

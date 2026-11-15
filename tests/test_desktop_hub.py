@@ -239,6 +239,94 @@ def _kill(pid: int) -> None:
         time.sleep(0.05)
 
 
+class _FakeProc:
+    """Tiến trình giả của `spawn_web`: pid KHÁC pid ghi trong web.json (giống launcher venv trên Windows)."""
+
+    pid = 999_999_999
+
+    def __init__(self) -> None:
+        self.code: int | None = None
+
+    def poll(self) -> int | None:
+        return self.code
+
+
+def _fake_spawn(hub_home, calls, delay=0.3):
+    import threading
+
+    def spawn(paths, *, port, host, name, nonce=None):
+        calls.append(nonce)
+        proc = _FakeProc()
+
+        def later():
+            time.sleep(delay)  # server "đang khởi động" — lần --ensure thứ hai phải chờ khoá, không bật bản thứ hai
+            write_state(paths, host=host, port=port, key=os.urandom(32), name=name, nonce=nonce)
+
+        threading.Thread(target=later, daemon=True).start()
+        return proc
+
+    return spawn
+
+
+def test_ensure_concurrent_calls_spawn_once(hub_home, capsys, monkeypatch):
+    """Hai `--ensure` cùng lúc: khoá `auth/web.ensure.lock` → chỉ MỘT server được bật; lần sau dùng server đó (started=false, cùng khoá ký)."""
+    import threading
+
+    from cfharness.cli import main
+
+    calls: list = []
+    monkeypatch.setattr(D, "spawn_web", _fake_spawn(hub_home, calls))
+    monkeypatch.setattr(D, "probe", lambda *a, **k: True)
+    port = _free_port()
+    codes: list = []
+    ts = [threading.Thread(target=lambda: codes.append(main(["web", "--json", "--ensure", "--port", str(port), "--wait", "10"]))) for _ in range(2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(30)
+    out = [json.loads(x) for x in capsys.readouterr().out.strip().splitlines()]
+    assert codes == [0, 0] and len(calls) == 1, (codes, calls, out)
+    assert sorted(j["started"] for j in out) == [False, True]
+    key = bytes.fromhex(read_state(hub_home)["key"])
+    assert all(check_login_token(key, j["login_url"].split("?t=", 1)[1]) for j in out)  # cả hai link ký bằng khoá của server đang phục vụ
+    assert D.ensure_lock_path(hub_home).exists() and (D.ensure_lock_path(hub_home).stat().st_mode & 0o777) == 0o600
+    state_path(hub_home).unlink()
+
+
+def test_ensure_started_by_nonce_not_pid(hub_home, capsys, monkeypatch):
+    """`started` theo nonce trong web.json, không theo pid (Windows: python thật là con của launcher, pid khác proc.pid)."""
+    from cfharness.cli import main
+
+    calls: list = []
+    monkeypatch.setattr(D, "spawn_web", _fake_spawn(hub_home, calls, delay=0.05))
+    monkeypatch.setattr(D, "probe", lambda *a, **k: True)
+    assert main(["web", "--json", "--ensure", "--port", str(_free_port())]) == 0
+    j = _json_out(capsys)
+    st = read_state(hub_home)
+    assert j["started"] is True and st["pid"] != _FakeProc.pid and st["nonce"] == calls[0]
+    assert st["nonce"] not in json.dumps(j)
+    state_path(hub_home).unlink()
+
+
+def test_wait_ready_ignores_foreign_state_while_own_proc_alive(hub_home, monkeypatch):
+    """State của server KHÁC (khoá ký khác) không được tin khi tiến trình của mình còn đang khởi động; chỉ nhận sau khi nó thoát."""
+    monkeypatch.setattr(D, "probe", lambda *a, **k: True)
+    write_state(hub_home, host="127.0.0.1", port=8711, key=os.urandom(32), nonce="ab" * 16)
+    proc = _FakeProc()
+    assert D.wait_ready(hub_home, proc, 0.4, nonce="cd" * 16) is None
+    proc.code = 1  # thua cuộc bind cổng → server kia đang phục vụ hub này
+    st = D.wait_ready(hub_home, proc, 2.0, nonce="cd" * 16)
+    assert st is not None and st["nonce"] == "ab" * 16
+    state_path(hub_home).unlink()
+
+
+def test_take_nonce_env(monkeypatch):
+    monkeypatch.setenv(D.NONCE_ENV, "ab" * 16)
+    assert D.take_nonce_env() == "ab" * 16 and D.NONCE_ENV not in os.environ
+    monkeypatch.setenv(D.NONCE_ENV, "không-hợp-lệ")
+    assert D.take_nonce_env() is None
+
+
 @pytest.mark.skipif(WIN, reason="kiểm session POSIX; nhánh Windows dùng DETACHED_PROCESS (không fork)")
 def test_ensure_starts_detached_server(hub_home):
     """`--ensure` khởi động server web TÁCH tiến trình, sống sau khi CLI thoát; lần sau chỉ trả link (started=false)."""

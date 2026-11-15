@@ -225,8 +225,70 @@ def pick_port(paths: HubPaths, host: str = "127.0.0.1", tries: int = 50) -> int 
 WIN_DETACH_FLAGS = 0x00000008 | 0x00000200
 
 
-def spawn_web(paths: HubPaths, *, port: int, host: str, name: str) -> subprocess.Popen[bytes]:
-    """`python -m cfharness web --no-link` tách tiến trình; stdout/stderr → `HUB_HOME/logs/web.log` (0600). Không in link."""
+# Nhận diện server do CHÍNH lần `--ensure` này bật: nonce ngẫu nhiên qua env → tiến trình web ghi vào `auth/web.json`. Không so pid vì trên
+# Windows `sys.executable` của venv/uv tool là launcher, python thật là tiến trình CON khác pid. Nonce không phải bí mật.
+NONCE_ENV = "CFHARNESS_WEB_NONCE"
+_NONCE_RE = re.compile(r"^[0-9a-f]{16,64}$")
+
+
+def take_nonce_env() -> str | None:
+    """Nonce do `--ensure` truyền (gỡ khỏi env để tiến trình con của server web không thừa hưởng); sai dạng → None."""
+    v = os.environ.pop(NONCE_ENV, None)
+    return v if isinstance(v, str) and _NONCE_RE.match(v) else None
+
+
+def ensure_lock_path(paths: HubPaths) -> Path:
+    return paths.home / "auth" / "web.ensure.lock"
+
+
+def acquire_ensure_lock(paths: HubPaths, wait_s: float) -> Any:
+    """Khoá độc quyền `HUB_HOME/auth/web.ensure.lock` (flock / msvcrt) cho đường `--ensure`: hai lần gọi cùng lúc (app mở + người gõ lệnh)
+    không bật hai server ghi đè `auth/web.json` của nhau. Giữ handle = giữ khoá; hệ điều hành tự nhả khi tiến trình chết. None nếu hết giờ."""
+    d = paths.home / "auth"
+    d.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(d, 0o700)
+    except OSError:  # pragma: no cover
+        pass
+    path = ensure_lock_path(paths)
+    deadline = time.monotonic() + max(0.0, wait_s)
+    while True:
+        f = os.fdopen(os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600), "r+b")
+        try:
+            if IS_WINDOWS:  # pragma: no cover — chỉ chạy trên Windows
+                import msvcrt
+
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return f
+        except OSError:
+            f.close()
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.1)
+
+
+def release_ensure_lock(handle: Any) -> None:
+    if handle is None:
+        return
+    try:
+        if IS_WINDOWS:  # pragma: no cover
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    except OSError:  # pragma: no cover
+        pass
+    handle.close()
+
+
+def spawn_web(paths: HubPaths, *, port: int, host: str, name: str, nonce: str | None = None) -> subprocess.Popen[bytes]:
+    """`python -m cfharness web --no-link` tách tiến trình; stdout/stderr → `HUB_HOME/logs/web.log` (0600). Không in link.
+    `nonce` → env `CFHARNESS_WEB_NONCE`, server ghi lại vào `auth/web.json` (để `wait_ready` biết state là của server vừa bật)."""
     logs = paths.home / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     logf = logs / "web.log"
@@ -234,6 +296,9 @@ def spawn_web(paths: HubPaths, *, port: int, host: str, name: str) -> subprocess
     out = os.fdopen(fd, "ab")
     env = dict(os.environ)
     env["CFHARNESS_HOME"] = str(paths.home)
+    env.pop(NONCE_ENV, None)
+    if nonce:
+        env[NONCE_ENV] = nonce
     argv = [sys.executable, "-m", "cfharness", "web", "--no-link", "--host", host, "--port", str(port), "--host-name", name]
     try:
         # server web sống sau khi CLI thoát: POSIX session mới; Windows tách khỏi console + nhóm tiến trình mới
@@ -258,15 +323,18 @@ def probe(host: str, port: int, name: str, timeout: float = 1.0) -> bool:
         return False
 
 
-def wait_ready(paths: HubPaths, proc: subprocess.Popen[bytes] | None, wait_s: float) -> dict[str, Any] | None:
-    """Chờ `auth/web.json` của server đang sống + server trả lời. Trả state; None khi hết giờ / tiến trình thoát mà không ai phục vụ."""
+def wait_ready(paths: HubPaths, proc: subprocess.Popen[bytes] | None, wait_s: float, nonce: str | None = None) -> dict[str, Any] | None:
+    """Chờ `auth/web.json` của server đang sống + server trả lời. Trả state; None khi hết giờ / tiến trình thoát mà không ai phục vụ.
+    `nonce` (server vừa bật): chỉ tin state mang đúng nonce đó — khoá ký trong state khác (server khác đang khởi động) sẽ cho link đăng nhập
+    hỏng; state của server KHÁC chỉ được nhận sau khi tiến trình của mình đã thoát (vd thua cuộc bind cổng) và server kia trả lời."""
     from .security import read_state
 
     deadline = time.monotonic() + wait_s
     exited_at: float | None = None
     while time.monotonic() < deadline:
         st = read_state(paths)
-        if st is not None and probe(st["host"], int(st["port"]), st.get("name") or st["host"]):
+        mine = nonce is None or (st is not None and st.get("nonce") == nonce) or exited_at is not None
+        if st is not None and mine and probe(st["host"], int(st["port"]), st.get("name") or st["host"]):
             return st
         if proc is not None and exited_at is None and proc.poll() is not None:
             exited_at = time.monotonic()
@@ -301,4 +369,4 @@ def local_web_cfg(paths: HubPaths) -> dict[str, Any]:
 
 
 __all__ = ["WELL_KNOWN", "WELL_KNOWN_PATH", "BADGE_PATH", "badge_from", "routes", "note_app_ua", "display_name", "preferred_port", "pick_port",
-           "spawn_web", "wait_ready", "info", "local_web_cfg", "probe"]
+           "spawn_web", "wait_ready", "info", "local_web_cfg", "probe", "acquire_ensure_lock", "release_ensure_lock", "take_nonce_env", "NONCE_ENV"]

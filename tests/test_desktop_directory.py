@@ -85,12 +85,18 @@ def test_spec_schema3_origin_and_name_validated():
 async def test_collect_exports_public_origin_and_display_name(env):
     hub = env.hub
     data = ao.collect(hub)
-    assert data["schema"] == 3 and "public_origin" not in data and "display_name" not in data
+    # không có trường schema 3 → ghi schema 2: admin hub chưa nâng cấp (SCHEMAS_READ = 1, 2) vẫn đọc được
+    assert data["schema"] == 2 and "public_origin" not in data and "display_name" not in data
     hub.config.set("web.public_origin", "https://an.example.com")
     hub.config.set("web.display_name", "Hub An")
     data = ao.collect(hub)
+    assert data["schema"] == 3
     assert data["public_origin"] == "https://an.example.com" and data["display_name"] == "Hub An"
     assert ao.sanitize(data) == data
+    hub.config.set("web.display_name", None)
+    hub.config.set("web.public_origin", "https://An.Example.com/")  # hợp lệ nhưng chưa chuẩn → xuất dạng chuẩn, không bị loại khỏi danh mục
+    data = ao.collect(hub)
+    assert data["schema"] == 3 and data["public_origin"] == "https://an.example.com" and "display_name" not in data
 
 
 # =========================================================================== C5: lọc mục (thuần)
@@ -296,6 +302,12 @@ def test_app_data_dirs_cover_mac_windows():
     assert is_app_data(f"/Users/an/Library/Application Support/IO.CFHARNESS.DESKTOP/x", "/Users/an", env0)  # APFS không phân biệt hoa/thường
     assert not is_app_data(f"/Users/an/Library/Application Support/{APP_ID}x/a", "/Users/an", env0)
     assert not is_app_data("/Users/an/work/cfharness-desktop/src-tauri/tauri.conf.json", "/Users/an", env0)
+    from cfharness.desktop_app import glob_may_touch
+
+    assert glob_may_touch("C:/Users/an/AppData/Roaming/io.cfharness.deskto?/*", "/Users/an", env0)
+    assert glob_may_touch("/Users/an/Library/WebKit/IO.CFHARNESS.*/**", "/Users/an", env0)
+    assert not glob_may_touch("/Users/an/Library/WebKit/io.cfharness.deskto?", "/Users/an", env0)  # chỉ chính tên thư mục, không vào trong
+    assert not glob_may_touch("/Users/an/work/**/*.py", "/Users/an", env0)
 
 
 H = os.path.expanduser("~")
@@ -306,6 +318,12 @@ DESTRUCTIVE_APP_DATA = [
     ("Grep", {"pattern": "token", "path": APPDIR}),
     ("Glob", {"pattern": "**/*", "path": f"{H}/Library/HTTPStorages/{APP_ID}"}),
     ("Glob", {"pattern": f"{APPDIR}/**/*.json"}),
+    # ký tự đại diện NGAY trong tên thư mục app (không chỉ sau `*` đầu tiên) — Glob không bị sandbox OS bọc
+    ("Glob", {"pattern": "~/Library/Application Support/io.cfharness.deskto?/**"}),
+    ("Glob", {"pattern": f"{H}/Library/Application Support/[i]o.cfharness.desktop/*"}),
+    ("Glob", {"pattern": "~/Library/Application Support/{io,x}.cfharness.desktop/*"}),
+    ("Glob", {"pattern": "~/Library/*/io.cfharness.desktop/*.json"}),
+    ("Glob", {"pattern": "io.cfharness.deskto?/**", "path": f"{H}/Library/Application Support"}),
     ("Write", {"file_path": f"{APPDIR}/hubs.json", "content": "{}"}),
     ("Edit", {"file_path": f"{APPDIR}/hubs.json", "old_string": "a", "new_string": "b"}),
     ("Bash", {"command": f"cat ~/Library/Application\\ Support/{APP_ID}/hubs.json"}),
@@ -328,7 +346,10 @@ def test_desktop_app_data_forbidden(tmp_path):
     # agent làm việc trên repo app (identifier trong tauri.conf.json) KHÔNG bị chặn nhầm
     for tool, ti in (("Bash", {"command": f"grep -rn {APP_ID} src-tauri/tauri.conf.json"}),
                      ("Read", {"file_path": f"{H}/Library/Application Support/{APP_ID}x/a"}),
-                     ("Bash", {"command": "ls ~/Library/Application\\ Support/Code"})):
+                     ("Bash", {"command": "ls ~/Library/Application\\ Support/Code"}),
+                     ("Glob", {"pattern": "~/Library/Application Support/*"}),  # chỉ tên thư mục cấp trên, không vào trong thư mục app
+                     ("Glob", {"pattern": "src/**/*.py"}),
+                     ("Glob", {"pattern": "**/*.rs", "path": f"{H}/Workspace/cfharness-desktop"})):
         assert classify(tool, ti, ctx).rule != "desktop_app_data", ti
     assert not shell_mentions(f"echo {APP_ID}")
 

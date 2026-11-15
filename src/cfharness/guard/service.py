@@ -51,6 +51,7 @@ NET_CONTINUE_MSG = (
     "[cfharness] Nobody approved this network connection (request {aid}) within {timeout}s, so it is DENIED for now and your run continues. "
     "Do not retry the same host now; work without it, or clearly report in your final summary what could not be fetched and why."
 )
+TRUST_NEVER_RULES = frozenset({"other_hub_write", "admin_shared", "desktop_app_data"})  # forbidden mà trust full KHÔNG gỡ
 FORBIDDEN_MSG = "[cfharness] Blocked by hub safety policy: {reason}. Agents may not approve their own requests or change safety policy."
 RESTART_MSG = (
     "[cfharness] A human APPROVED this action (request {aid}), but a static safety rule blocks it in this process. "
@@ -1296,7 +1297,9 @@ class GuardService:
             v = Verdict("uncertain", "classifier_error", None, f"phân loại lỗi: {type(e).__name__}")
         from ..confine import CONFINE_RULES
 
-        if v.forbidden and (v.rule in CONFINE_RULES or v.rule == "other_hub_write" or (v.rule == "hub_secret_read" and ctx.confine_root)):
+        # dữ liệu của user KHÁC (`admin_shared`) và phiên đăng nhập của app desktop (`desktop_app_data`, cùng user OS — không có quyền file nào
+        # chặn hộ) không phải quyền của hub để trao: trust full vẫn cấm, kể cả qua Bash (sandbox OS tắt khi trust)
+        if v.forbidden and (v.rule in CONFINE_RULES or v.rule in TRUST_NEVER_RULES or (v.rule == "hub_secret_read" and ctx.confine_root)):
             self._record(run, channel, tool_name, tool_input, v, "deny", classifier="trust")
             self.hub.publish(make_event("guard.blocked", run["agent_id"], {"source": "runtime", "reason": "guard_rule", "rule": v.rule, "detail": v.reason,
                                                                          "tool": tool_name, "preview": action_preview(tool_name, tool_input)}, run_id=run["id"]))

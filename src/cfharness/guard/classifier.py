@@ -563,11 +563,14 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
                 if isinstance(v, str) and v and sensitive_read(_abs(v, ctx.cwd), ctx):
                     return Verdict("destructive", "hub_secret_read", "hub", "agent không được đọc token người/secret/mcp.json của hub", [v], forbidden=True)
             pat = ti.get("pattern") if tool_name == "Glob" else None  # Glob có thể chỉ mang đường dẫn tuyệt đối trong pattern
-            if isinstance(pat, str) and pat.startswith(("/", "~")) and desktop_app_data(_abs(pat.split("*", 1)[0] or "/", ctx.cwd)):
+            gm = glob_app_data(pat, ti.get("path"), ctx) if isinstance(pat, str) and pat else None
+            if gm == "literal":
                 return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [pat], forbidden=True)
             cv = confine_read_verdict(tool_name, ti, ctx)
             if cv is not None:
                 return cv
+            if gm == "wildcard":  # khớp nhờ ký tự đại diện (vd `~/**`): sau luật giam (cụ thể hơn), vẫn forbidden
+                return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [pat], forbidden=True)
             return Verdict("safe", "read_only_tool")
         if tool_name in SUBAGENT_TOOLS:
             return Verdict("write", "subagent_tool", reason="subagent/điều khiển task — tool con của nó đi qua hook riêng")
@@ -770,6 +773,23 @@ def admin_shared(p: str) -> bool:
 
 
 ADMIN_SHARED_REASON = "agent không được đọc/ghi thư mục chung của quản trị máy (dữ liệu của mọi user trên máy)"
+
+
+def glob_app_data(pattern: str, path: Any, ctx: GuardContext) -> str | None:
+    """"literal"/"wildcard"/None — Glob có thể liệt kê tên tệp trong thư mục dữ liệu app desktop: mẫu (nối vào `path`/cwd nếu tương đối) — ký tự đại diện ở BẤT KỲ đâu
+    (`* ? [ {`), không chỉ phần trước `*` đầu tiên (`desktop_app.glob_may_touch`)."""
+    from ..desktop_app import glob_may_touch
+
+    base = path if isinstance(path, str) and path else str(ctx.cwd)
+    full = os.path.expanduser(pattern)
+    if not _isabs(full):
+        full = os.path.join(os.path.expanduser(base), full)
+    full = canon_path(full) if IS_WINDOWS else full
+    cut = re.split(r"[*?\[{]", full, maxsplit=1)[0]
+    lit = cut if cut == full else (cut.rsplit("/", 1)[0] or "/")
+    if desktop_app_data(lit):
+        return "literal"
+    return "wildcard" if glob_may_touch(full) else None
 
 
 def desktop_app_data(p: str) -> bool:

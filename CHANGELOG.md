@@ -25,9 +25,15 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - **Directory hub** cho app desktop (hub của người quản trị máy): `cfharness admin directory token [--rotate]` in một lần URL
   `/.well-known/cfharness-directory?t=…` — app nhập một lần danh sách hub có địa chỉ công khai (tên, user, origin; không cấp quyền đăng nhập).
   `cfharness admin directory export [--out]`, `… status`; cấu hình mới `admin_directory.name`. Token sai → 404, thử sai liên tục → 429.
-- Bản tóm tắt gửi người quản trị (`admin_export`) lên schema 3: thêm `web.public_origin` và `web.display_name` (bộ đọc vẫn nhận schema 1/2).
+- Bản tóm tắt gửi người quản trị (`admin_export`) thêm `web.public_origin` (đã chuẩn hoá) và `web.display_name` (schema 3); hub chưa đặt hai
+  khoá này vẫn ghi schema 2 (bộ đọc nhận schema 1/2/3).
 - Agent không đọc/ghi được thư mục dữ liệu của app desktop (`io.cfharness.desktop` — cookie phiên, token directory): chặn bằng sandbox,
-  luật quyền tĩnh (kể cả agent trust full) và bộ phân loại.
+  luật quyền tĩnh và bộ phân loại — agent trust full cũng bị chặn, kể cả qua Bash và Glob dùng ký tự đại diện.
+- `cfharness web --json --ensure` gọi cùng lúc (app mở + gõ lệnh) chỉ bật một server web; `started` báo đúng trên Windows.
+
+### Lưu ý khi cập nhật
+- Máy nhiều user: nâng cấp **hub của người quản trị trước**. Hub đã đặt `web.public_origin`/`web.display_name` ghi bản tóm tắt schema 3 — hub
+  admin bản cũ sẽ báo `unsupported_schema` cho hub đó cho tới khi được nâng cấp.
 
 ### Chi phí
 - Lượt chạy tiếp sau khi **người** duyệt/từ chối approval không bị trần ngân sách ngày chặn (trước đây báo `resume_failed`, quyết định của người

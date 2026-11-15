@@ -28,7 +28,7 @@ App desktop (Tauri) là vỏ native hiển thị CHÍNH giao diện web của t�
 
 Lỗi: `{"ok":false,"error":"<mã>","message":"<tiếng Việt>"}` + mã thoát 1. Mã lỗi: `web_not_running` (không `--ensure`, chưa có server),
 `web_not_responding` (pid còn sống mà không trả lời), `port_busy` (cổng chỉ định bận), `no_free_port`, `web_start_failed`, `bad_port`,
-`bad_host`, `bad_host_name`.
+`bad_host`, `bad_host_name`, `web_busy` (một lần `--ensure` khác giữ khoá quá `--wait` mà vẫn chưa có server trả lời).
 
 - "Server đang chạy" = `HUB_HOME/auth/web.json` hợp lệ (pid sống, file của mình) VÀ server trả lời `/.well-known/cfharness.json` với Host
   đúng tên riêng (`desktop.probe`).
@@ -36,6 +36,12 @@ Lỗi: `{"ok":false,"error":"<mã>","message":"<tiếng Việt>"}` + mã thoát 
   `start_new_session`; Windows không fork: `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`), stdin = DEVNULL, stdout/stderr nối vào
   `HUB_HOME/logs/web.log` (0600). Chờ tối đa `--wait` (mặc định 30 s) tới khi server trả lời rồi in JSON (`started: true` khi chính lần
   gọi này khởi động server). Tiến trình con tự khởi động daemon nếu chưa chạy (hành vi sẵn có của `cfharness web`).
+- Hai `--ensure` cùng lúc (app mở + người gõ lệnh): khoá độc quyền `HUB_HOME/auth/web.ensure.lock` (flock / msvcrt, 0600, OS tự nhả khi tiến
+  trình chết) từ lúc đọc lại state tới khi server sẵn sàng → chỉ MỘT server được bật, lần kia chờ khoá rồi dùng server đó (`started:false`).
+- Nhận diện "server do chính lần này bật" bằng NONCE (env `CFHARNESS_WEB_NONCE` → tiến trình web ghi vào `auth/web.json`, gỡ khỏi env của nó),
+  KHÔNG bằng pid: trên Windows `sys.executable` của venv/uv tool là launcher, python thật là tiến trình con khác pid. `wait_ready(nonce=)` chỉ
+  tin state đúng nonce (state của server khác mang khoá ký khác → link đăng nhập hỏng) — state lạ chỉ được nhận sau khi tiến trình của mình đã
+  thoát (thua cuộc bind cổng) và server kia trả lời. Nonce không phải bí mật, không bao giờ in ra JSON.
 - Cổng: `--port` → `web.port` → cổng TẤT ĐỊNH theo hub: home mặc định (`~/.cfharness`) = 8765; hub khác = `8770 + hub_id mod 1000`, bận thì
   dò tiếp trong dải (bỏ 8766 = MCP HTTP). Cổng chỉ định (`--port`/`web.port`) mà bận → `port_busy` (không tự đổi).
 - `login_url` = link đăng nhập MỘT LẦN (HMAC, hạn 300 s), giống `cfharness web --url`. KHÔNG BAO GIỜ in token người (`<socket>.auth`) hay
@@ -93,8 +99,10 @@ vẫn đòi đăng nhập riêng.
 - **Nguồn**: file trạng thái `admin_overview` (thư mục chung, bộ đọc `read_dir` — mở `O_NOFOLLOW`, kiểm chủ file, lọc qua `SPEC`). SPEC lên
   **schema 3**: thêm `public_origin` (kiểu `origin`: phải đúng dạng chuẩn của `web/public.parse_public_origin` — https, tên miền, không IP/path/
   userinfo; bản "gần đúng" như chữ hoa bị BỎ, bộ đọc không sửa hộ file lạ) và `display_name` (kiểu `name`: `termsafe.one_line` ≤ 60 — bỏ ANSI,
-  điều khiển, bidi, zero-width). Bộ xuất lấy từ `web.public_origin` / `web.display_name` (người đặt, nhánh `web` ∈ SECURITY_KEYS). Bộ đọc nhận
-  schema 1, 2, 3.
+  điều khiển, bidi, zero-width). Bộ xuất lấy từ `web.public_origin` (CHUẨN HOÁ bằng `parse_public_origin` trước khi xuất — config lưu chuỗi
+  người gõ, vd `https://An.Example.com/` → `https://an.example.com`) / `web.display_name` (người đặt, nhánh `web` ∈ SECURITY_KEYS). Bộ đọc nhận
+  schema 1, 2, 3. Bộ xuất ghi `schema: 3` CHỈ khi có ít nhất một trong hai trường mới; không có → `schema: 2` để hub admin chưa nâng cấp
+  (`SCHEMAS_READ = (1, 2)`) vẫn đọc được. Hub đặt origin/tên mà admin chưa nâng cấp → admin thấy `unsupported_schema` (Lưu ý khi cập nhật).
 - **Lọc mục** (`admin_directory.entry`, thuần): chỉ hub đọc được (ok/stale/stopped) có `public_origin`; id hex ≤ 16, user khớp `USER_RE` và
   ≤ 32, name một dòng ≤ 60 (thiếu → user), origin kiểm lại; trùng origin → bỏ mục sau; ≤ 200 mục. Đúng 4 khoá mỗi mục, không gì khác. Route
   web lọc lại lần nữa bằng `document()` (phòng daemon khác phiên bản).
@@ -130,6 +138,27 @@ kể cả trust_full; (3) classifier rule `desktop_app_data` (forbidden, klass `
 tuyệt đối), tool ghi, Bash (`desktop_app.shell_mentions`: dạng đường dẫn `Application Support/…`, `%APPDATA%\…`, `$env:LOCALAPPDATA\…`,
 `Library/WebKit/…`, `.local/share/…`, hoặc identifier + gốc thư mục app cùng xuất hiện như `cd ~/Library/Application\ Support && cat io.cfharness.desktop/…`).
 So sánh không phân biệt hoa/thường (APFS/NTFS) + realpath. KHÔNG chặn identifier đứng một mình (agent làm việc trên repo app grep `tauri.conf.json`).
+Glob (không bị sandbox OS bọc; `permissions.deny` Glob chỉ khớp `path`): mẫu nối vào `path`/cwd nếu tương đối, cắt ở ký tự đại diện ĐẦU TIÊN bất kỳ
+(`* ? [ {`), rồi `desktop_app.glob_may_touch` so từng thành phần với mỗi thư mục app bằng fnmatch (`{…}` coi là `*`, `**` trước khi hết đường dẫn
+thư mục app = khớp) → chặn cả `…/io.cfharness.deskto?/**`, `…/[i]o.cfharness.desktop/*`, `~/Library/*/io.cfharness.desktop/*`; liệt kê tên ở thư mục
+cấp trên (`~/Library/Application Support/*`) không bị chặn.
+**Trust full không gỡ** rule `desktop_app_data` (cùng `admin_shared`, `other_hub_write` — `guard/service.TRUST_NEVER_RULES`): agent trust full chạy
+Bash không sandbox OS, và thư mục app cùng chủ OS với agent nên không có quyền file nào chặn hộ — classifier là lớp chặn Bash duy nhất.
+
+## Sửa theo review (phần 3)
+- **trust_full + Bash** đọc được thư mục app (classifier ghi nhận rồi `_allow_trusted` vẫn cho) → `TRUST_NEVER_RULES` = `other_hub_write`,
+  `admin_shared`, `desktop_app_data`: trust full vẫn deny + `guard.blocked`. Không bật lại sandbox tối thiểu cho trust_full (sandbox Claude bật là
+  chặn ghi ngoài cwd/mạng — trái nghĩa trust full); classifier đủ cho đường dẫn viết trong lệnh.
+- **origin chưa chuẩn** (`https://An.Example.com/`) bị bỏ im lặng khỏi danh mục → `collect` xuất dạng chuẩn.
+- **schema 3 cho mọi hub** làm admin cũ báo `unsupported_schema` → chỉ ghi 3 khi có trường mới, kèm "Lưu ý khi cập nhật" trong CHANGELOG.
+- **`--ensure` đồng thời** ghi đè `auth/web.json` của nhau / link ký bằng khoá server khác → khoá `auth/web.ensure.lock` + nonce.
+- **`started` sai trên Windows** (pid launcher ≠ pid python thật) → so nonce.
+- **Glob ký tự đại diện trong tên thư mục app** lọt classifier → cắt ở `* ? [ {` + `glob_may_touch`.
+- Test: `tests/test_trust_and_noise.py::test_trust_full_never_grants_desktop_app_data_or_admin_shared` (đỏ trước khi sửa);
+  `tests/test_desktop_directory.py` (collect schema 2/3 + origin chưa chuẩn; 5 ca Glob forbidden + 3 ca không chặn nhầm; `glob_may_touch` thuần
+  mac/Windows); `tests/test_desktop_hub.py::test_ensure_concurrent_calls_spawn_once` (2 luồng `main([...--ensure])`, spawn giả chậm → spawn 1 lần,
+  started true/false, cả hai link ký bằng khoá server đang phục vụ, khoá 0600), `test_ensure_started_by_nonce_not_pid`,
+  `test_wait_ready_ignores_foreign_state_while_own_proc_alive`, `test_take_nonce_env`; `tests/test_admin_overview.py` (bản xuất không origin = schema 2).
 
 ## Đã làm (PR phần 2)
 - `src/cfharness/admin_directory.py` (mới), `src/cfharness/desktop_app.py` (mới).

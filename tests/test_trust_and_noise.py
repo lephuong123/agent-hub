@@ -231,6 +231,23 @@ async def test_trust_full_allows_everything_but_estop(hub, tmp_path):
     assert r["decision"] == "deny"  # forbidden lại như thường
 
 
+async def test_trust_full_never_grants_desktop_app_data_or_admin_shared(hub):
+    """C6/H5: trust full gỡ mọi forbidden khác nhưng KHÔNG gỡ dữ liệu app desktop (cùng user OS) và thư mục chung của admin."""
+    run = await _run(hub, "w")
+    hub.guard.trust_set("w", "full")
+    for tool, ti in [
+        ("Bash", {"command": 'cat "$HOME/Library/Application Support/io.cfharness.desktop/hubs.json"'}),
+        ("Bash", {"command": "sqlite3 ~/Library/HTTPStorages/io.cfharness.desktop/httpstorages.sqlite .dump"}),
+        ("Read", {"file_path": os.path.expanduser("~/Library/Application Support/io.cfharness.desktop/hubs.json")}),
+        ("Bash", {"command": "cat /Users/Shared/cfharness/status/x.json"}),
+    ]:
+        r = await check(hub, run, tool, ti)
+        assert r["decision"] == "deny", (tool, ti, r)
+    rules = {x[0] for x in hub.store.conn.execute("SELECT matched_rule FROM guard_decisions WHERE run_id=? AND action='deny'", (run["id"],))}
+    assert "desktop_app_data" in rules and "admin_shared" in rules
+    assert (await check(hub, run, "Bash", {"command": "git push --force origin main"}))["decision"] == "allow"  # trust vẫn có hiệu lực
+
+
 async def test_trust_expiry_review_runs_and_human_only(hub):
     hub.agents.create({"id": "w", "name": "W"})
     r = hub.guard.trust_set("w", "full", for_s=3600)

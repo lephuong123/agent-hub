@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import socket
 import sys
 import webbrowser
@@ -218,7 +219,9 @@ def cmd_web(ctx: Any) -> int:
     app = create_app(ctx.paths, auth=auth, host=host, port=a.port, name=name, public_origin=origin,
                      ip_header=str(cfg.get("client_ip_header") or "x-forwarded-for"), limiter=LoginLimiter.from_config(cfg.get("login")),
                      trusted_devices=cfg.get("trusted_devices") if isinstance(cfg.get("trusted_devices"), dict) else None)
-    write_state(ctx.paths, host=host, port=a.port, key=auth.key, name=name, public_origin=origin)
+    from .desktop import take_nonce_env
+
+    write_state(ctx.paths, host=host, port=a.port, key=auth.key, name=name, public_origin=origin, nonce=take_nonce_env())
     print(f"cfharness web: http://{name}:{a.port}/  (nghe trên {host}:{a.port}, chỉ máy này; Ctrl+C để dừng)")
     if origin:
         print(f"Web public (qua tunnel TLS): {origin}/  — đăng nhập bằng mã TOTP (`cfharness web totp enroll`)")
@@ -278,6 +281,25 @@ def cmd_web_app(ctx: Any) -> int:
         if st is not None:
             return fail("web_not_responding", f"server web (pid {st['pid']}) không trả lời — xem {ctx.paths.home / 'logs' / 'web.log'}")
         return fail("web_not_running", "chưa có server web nào chạy cho hub này — chạy `cfharness web --json --ensure`")
+    # hai lần `--ensure` cùng lúc (app mở + người gõ lệnh): khoá độc quyền từ lúc đọc state tới khi server sẵn sàng — lần sau chờ rồi dùng
+    # server lần trước vừa bật, không bật bản thứ hai ghi đè `auth/web.json`
+    lock = D.acquire_ensure_lock(ctx.paths, float(a.wait))
+    try:
+        if lock is None:
+            ready = D.wait_ready(ctx.paths, None, 5.0)
+            if ready is None:
+                return fail("web_busy", "một lần khởi động web khác của hub này chưa xong — thử lại sau")
+            return done(D.info(ctx.paths, ready, cfg, started=False))
+        return _ensure_locked(ctx, D, host, name, cfg, fail, done)
+    finally:
+        D.release_ensure_lock(lock)
+
+
+def _ensure_locked(ctx: Any, D: Any, host: str, name: str, cfg: dict[str, Any], fail: Any, done: Any) -> int:
+    a = ctx.args
+    st = read_state(ctx.paths)
+    if st is not None and D.probe(st["host"], int(st["port"]), st.get("name") or st["host"]):
+        return done(D.info(ctx.paths, st, cfg, started=False))
     if st is not None:  # tiến trình còn sống nhưng chưa trả lời (đang khởi động) → chờ, không bật bản thứ hai
         ready = D.wait_ready(ctx.paths, None, float(a.wait))
         if ready is None:
@@ -298,14 +320,16 @@ def cmd_web_app(ctx: Any) -> int:
         if found is None:
             return fail("no_free_port", "không tìm được cổng trống cho web của hub này — đặt `cfharness config set web.port <cổng>`")
         port = found
+    nonce = secrets.token_hex(16)
     try:
-        proc = D.spawn_web(ctx.paths, port=port, host=host, name=name)
+        proc = D.spawn_web(ctx.paths, port=port, host=host, name=name, nonce=nonce)
     except OSError as e:
         return fail("web_start_failed", f"không khởi động được server web: {e}")
-    ready = D.wait_ready(ctx.paths, proc, float(a.wait))
+    ready = D.wait_ready(ctx.paths, proc, float(a.wait), nonce=nonce)
     if ready is None:
         return fail("web_start_failed", f"server web không sẵn sàng sau {a.wait:g}s — xem {ctx.paths.home / 'logs' / 'web.log'}")
-    return done(D.info(ctx.paths, ready, cfg, started=int(ready.get("pid") or 0) == proc.pid))
+    # theo nonce, không theo pid: Windows venv/uv tool chạy python thật làm tiến trình CON của launcher (pid khác proc.pid)
+    return done(D.info(ctx.paths, ready, cfg, started=ready.get("nonce") == nonce))
 
 
 def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:

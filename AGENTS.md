@@ -645,7 +645,7 @@ Hợp đồng chung hub ↔ app (C1–C7), việc đã làm/còn lại, test: `d
 
 | Module | Vai trò |
 |---|---|
-| `web/desktop.py` | `GET /.well-known/cfharness.json` (công khai, CHỈ `{kind, schema, app_api}`), `GET /app/badge` (cần phiên, `badge_from` thuần: chỉ int/bool/phiên bản), `note_app_ua` (UA `CfharnessDesktop/<ver>` → chỉ log), chọn cổng theo hub, spawn web tách tiến trình, `probe`/`wait_ready`/`info` cho C1 |
+| `web/desktop.py` | `GET /.well-known/cfharness.json` (công khai, CHỈ `{kind, schema, app_api}`), `GET /app/badge` (cần phiên, `badge_from` thuần: chỉ int/bool/phiên bản), `note_app_ua` (UA `CfharnessDesktop/<ver>` → chỉ log), chọn cổng theo hub, spawn web tách tiến trình, khoá `auth/web.ensure.lock` + nonce `CFHARNESS_WEB_NONCE` (nhận diện server vừa bật, không theo pid), `probe`/`wait_ready`/`info` cho C1 |
 | `web/cli.py` `cmd_web_app` | `cfharness web --json [--ensure] [--port N] [--wait S]`: một dòng JSON `{ok, origin, login_url, hub_id, version, name, started}` / `{ok:false, error, message}` mã 1; `--ensure` khởi động web nền (`--no-link`, log `HUB_HOME/logs/web.log` 0600). Cấu hình `web.port`, `web.display_name` |
 | `web/static/voice.js` | Dò `window.cfhNative.speech` (đủ `available/start/stop/on`, `available()` = true) TRƯỚC Web Speech API; `NativeListener` cùng giao diện `Listener` |
 | `admin_directory.py` | C5 directory hub (hub ADMIN): mục `{id, name, user, origin}` lọc từ file trạng thái `admin_overview` (SPEC schema 3: `public_origin` qua `parse_public_origin`, `display_name` một dòng ≤ 60), ≤ 200 mục; token băm SHA-256 ở `HUB_HOME/auth/directory.json` (0600), so `compare_digest`; RPC `admin.directory\|directory_status\|directory_token{rotate}\|directory_serve{token}`; CLI `cfharness admin directory export [--out]\|token [--rotate]\|status`; cấu hình `admin_directory.name` |
@@ -661,3 +661,6 @@ không vào audit — `_result_brief`); token chỉ hiện MỘT lần, file ch�
 user, origin}` (không chi phí/trạng thái/đường dẫn) — thêm trường = sửa hợp đồng ở cả hai repo + ca trong test. Nhánh `admin_directory` ∈ `integrity.SECURITY_KEYS`;
 `cfharness admin …` forbidden với agent. Route trả 404 cho MỌI lỗi (không phân biệt lý do). Thư mục app (C6): thêm biến thể đường dẫn → `desktop_app.app_data_dirs`
 + ca trong `tests/test_desktop_directory.py`/`tests/test_guard_classifier.py`; KHÔNG chặn chuỗi identifier đứng một mình (agent làm việc trên repo app).
+Trust full KHÔNG gỡ `desktop_app_data`/`admin_shared`/`other_hub_write` (`guard/service.TRUST_NEVER_RULES` — thêm rule "không phải quyền của hub để trao"
+→ thêm vào đây + ca trong `tests/test_trust_and_noise.py`). Glob kiểm ký tự đại diện ở mọi vị trí (`desktop_app.glob_may_touch`). Bản xuất `admin_overview`
+chỉ ghi schema mới khi có trường mới (tương thích admin cũ). `--ensure` luôn giữ khoá ensure khi spawn; `started` theo nonce.
