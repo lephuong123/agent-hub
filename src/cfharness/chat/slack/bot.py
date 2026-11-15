@@ -342,8 +342,10 @@ class SlackBot(ChatBot):
         return "Trả lời trong thread của tin vừa gửi."
 
     def team_ok(self, team: Any) -> bool:
-        pinned = self.cfg().get("team_id")
-        return not pinned or str(team or "") == str(pinned)
+        # chưa ghim (token đặt tay, không qua `slack setup`) → workspace của token theo `auth.test`; chưa biết workspace → từ chối
+        # (fail-closed: trước đây nhận envelope của MỌI workspace)
+        pinned = self.cfg().get("team_id") or self.info.get("team_id")
+        return bool(pinned) and str(team or "") == str(pinned)
 
     # ------------------------------------------------------------------ Socket Mode
     async def _loop(self) -> None:

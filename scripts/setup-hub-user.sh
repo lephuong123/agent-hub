@@ -3,6 +3,7 @@
 # Chạy trong Terminal.app của admin (cần TTY để nhập mật khẩu sudo + dán token; không chạy qua `!` của Claude Code):
 #   sudo bash scripts/setup-hub-user.sh [user] ["Họ tên"] [cổng web] [cổng mcp]
 #   Tên miền con khác tên user: sudo SUB=admin bash scripts/setup-hub-user.sh hubadmin "Hub Admin" 8723 8724
+#   Miền khác trungtamdhs.com:  sudo SUB=admin DOMAIN=cchchn.com bash scripts/setup-hub-user.sh cchcadmin "Admin CCHC" 8725 8726
 # Đừng `| tee` ra file: màn hình có token Claude (bước 3) và link đăng ký TOTP (bước 8).
 # Chạy lại được (bỏ qua bước đã xong).
 set -euo pipefail
@@ -11,7 +12,7 @@ U="${1:-lamlinh}"
 FULL="${2:-Lam Linh}"
 WEB="${3:-8721}"
 MCP="${4:-8722}"
-DOMAIN="trungtamdhs.com"
+DOMAIN="${DOMAIN:-trungtamdhs.com}"   # miền gốc (zone Cloudflare): https://$SUB.$DOMAIN
 SUB="${SUB:-$U}"        # tên miền con: https://$SUB.$DOMAIN
 HOST="$SUB.$DOMAIN"
 VER="${VER:-v0.2.10}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)

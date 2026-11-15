@@ -1999,6 +1999,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_memory_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
+        *_filehub_pages.routes(),  # /partials/filehub + /filehub/open — thẻ "Không gian số" ở Cài đặt (filehub/)
         *_backup_pages.routes(),  # /partials/backup — thẻ "Sao lưu" ở Cài đặt (backup.py)
         *_transfer_pages.routes(),  # /hub-transfer — xuất/nhập toàn bộ hub (hub_transfer_web.py, web/transfer_pages.py)
         *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
@@ -2048,6 +2049,11 @@ _backup_pages.register_actions(ACTIONS, Action, _req)
 from . import transfer_pages as _transfer_pages  # noqa: E402
 
 _transfer_pages.register_actions(ACTIONS, Action, _req)
+
+# Thẻ "Không gian số" (filehub/): filehub_pause|resume|resume_push (chỉ web cục bộ) + link "Mở trên Không gian số"
+from . import filehub_pages as _filehub_pages  # noqa: E402
+
+_filehub_pages.register_actions(ACTIONS, Action, _req)
 
 # Quản trị máy (admin_overview.py, admin_rpc.py): /admin/overview|users|alerts|audit (nhóm cfharness-admin) + /machine (phía user);
 # ghi DUY NHẤT = ESTOP admin (admin_estop_on|off, có xác nhận); chính sách chỉ hiện lệnh sudo

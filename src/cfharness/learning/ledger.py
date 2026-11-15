@@ -95,7 +95,10 @@ class Blobs:
         p = self.base / sha
         if not p.exists():
             raise HubError(f"thiếu blob {sha[:12]} trong ledger/blobs")
-        return p.read_bytes()
+        data = p.read_bytes()
+        if hashlib.sha256(data).hexdigest() != sha:  # blob hỏng/bị sửa → không bao giờ khôi phục nội dung sai một cách im lặng
+            raise HubError(f"blob {sha[:12]} trong ledger/blobs không khớp sha256 (hỏng hoặc bị sửa) — không dùng được")
+        return data
 
 
 def tar_dir(path: Path) -> bytes | None:
@@ -494,9 +497,15 @@ class Ledger:
             current = self._current_bytes(kind, path, e.get("agent_id"))
             after = self.blobs.get(e.get("after_blob"))
             store = "user" if e["target_ref"] == "USER.md" else "memory"
-            ch.after = render_memory(invert_memory(parse_memory((before or b"").decode("utf-8", "replace")),
-                                                   parse_memory((after or b"").decode("utf-8", "replace")),
-                                                   parse_memory((current or b"").decode("utf-8", "replace"))), store).encode("utf-8")
+            b_ent = parse_memory((before or b"").decode("utf-8", "replace"))
+            a_ent = parse_memory((after or b"").decode("utf-8", "replace"))
+            c_ent = parse_memory((current or b"").decode("utf-8", "replace"))
+            ch.after = render_memory(invert_memory(b_ent, a_ent, c_ent), store).encode("utf-8")
+            # mục entry thêm/sửa đã bị sửa tiếp sau entry → invert bỏ qua: báo partial thay vì im lặng "thành công"
+            skipped = [x for x in a_ent if x not in set(b_ent) and x not in set(c_ent)]
+            if skipped:
+                ch.flags = ["partial"]
+                ch.summary = f"{ch.summary} — bỏ qua {len(skipped)} mục đã bị sửa sau entry (không gỡ được)"
         else:
             current = self._current_bytes(kind, path, e.get("agent_id"))
             cur_sha = hashlib.sha256(current).hexdigest() if current is not None else None

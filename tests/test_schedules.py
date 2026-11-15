@@ -52,7 +52,8 @@ def test_parse_forms(expr, norm):
 
 @pytest.mark.parametrize("bad", ["", "* * * *", "61 * * * *", "* 24 * * *", "0 0 0 * *", "0 0 * 13 *", "0 0 * * 8", "*/0 * * * *",
                                  "5-1 * * * *", "every 30s", "every abc", "daily 25:00", "weekly xyz 09:00", "monthly 40 09:00",
-                                 "at hôm nay", "@sometimes", "1,,2 * * * *"])
+                                 "at hôm nay", "@sometimes", "1,,2 * * * *",
+                                 "0 0 30 2 *", "0 0 31 4,6,9,11 *", "0 9 30,31 2 *"])
 def test_parse_errors(bad):
     with pytest.raises(cron.CronError):
         cron.parse(bad)
@@ -80,7 +81,8 @@ def test_next_after_daily_weekdays_dom_dow_or():
     assert cron.next_after(o, L(2026, 10, 27, 9, 0), tz=VN) == L(2026, 11, 1, 8, 0)
     leap = cron.parse("0 9 29 2 *")
     assert cron.next_after(leap, now, tz=VN) == L(2028, 2, 29, 9, 0)
-    assert cron.next_after(cron.parse("0 0 31 2 *"), now, tz=VN) is None  # không bao giờ có → None, không treo
+    # không bao giờ có → None, không treo (lúc tạo bị từ chối; bản ghi cũ đọc lại bằng strict=False)
+    assert cron.next_after(cron.parse("0 0 31 2 *", strict=False), now, tz=VN) is None
 
 
 def test_every_and_once():

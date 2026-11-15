@@ -171,7 +171,8 @@ def cmd_task(ctx: Any) -> int:
                              "budget_usd": a.budget, "model": a.model, "max_runtime_s": a.max_runtime, "max_retries": a.max_retries,
                              "idempotency_key": a.key, "created_by": "human"}
         if a.workspace:
-            p["workspace"] = {"kind": "dir", "path": str(Path(a.workspace).expanduser().resolve())}
+            p["workspace"] = ({"kind": "filehub", "ref": a.workspace} if a.workspace.startswith("filehub:")  # thư mục chung Không gian số
+                              else {"kind": "dir", "path": str(Path(a.workspace).expanduser().resolve())})
             if getattr(a, "extra_write_root", None):
                 p["workspace"]["extra_write_roots"] = [str(Path(x).expanduser().resolve()) for x in a.extra_write_root]
         if getattr(a, "worktree_branch", None):
@@ -325,7 +326,7 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     c.add_argument("--assignee")
     c.add_argument("--parent", action="append", help="id task cha (lặp lại)")
     c.add_argument("--priority", type=int, default=0)
-    c.add_argument("--workspace", help="repo/thư mục làm việc (ghi thẳng, có khoá + checkpoint + diff)")
+    c.add_argument("--workspace", help="repo/thư mục làm việc (ghi thẳng, có khoá + checkpoint + diff) hoặc filehub:<tên>[/<con>] (thư mục chung Không gian số)")
     c.add_argument("--extra-write-root", action="append", help="thư mục NGOÀI workspace được ghi không cần duyệt (vd worktree của ticket; "
                                                                  "phải nằm trong workspace.allowed_roots; lặp lại)")
     c.add_argument("--worktree-branch", help="chạy trong git worktree riêng của --workspace (hub tạo ngay) trên nhánh này — "

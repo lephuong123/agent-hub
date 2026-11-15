@@ -109,6 +109,10 @@ class Hub:
         from .backup import attach as _attach_backup
 
         _attach_backup(self)
+        # Thư mục dùng chung với "Không gian số" (`hub.filehub`: giám sát binary sync, trạng thái, presence, steer, báo sau run) — filehub/
+        from .filehub import attach as _attach_filehub
+
+        _attach_filehub(self)
         # Quản trị máy (plan-admin-users): ESTOP admin bằng file cờ (`hub.admin_control`), chính sách root (`hub.admin_policy`), audit metadata
         # (`hub.admin_audit`), cảnh báo + lịch sử cho hub của admin (`hub.admin_watch`) — admin_control.py, admin_policy.py, admin_audit.py, admin_watch.py
         from .admin_audit import attach as _attach_admin_audit
@@ -208,6 +212,7 @@ class Hub:
         self.auto_resume.stop()  # lịch hẹn vẫn ở hub_state, lần khởi động sau chạy tiếp
         await self.manager.stop()  # M7
         await self.questions.stop()
+        await self.filehub.stop()  # type: ignore[attr-defined]  # SIGTERM tiến trình sync (dừng êm, không bỏ dở commit)
         await self.accounts.close_all_logins()  # type: ignore[attr-defined]  # kill tiến trình `claude setup-token` đang chờ code
         await self.runs.shutdown()
         self.integrity.stop()

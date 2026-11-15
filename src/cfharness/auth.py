@@ -123,12 +123,17 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "admin.overview",
         # Vào/ra web + thiết bị tin cậy (web_events.py): ghi audit + phát event → Telegram — agent không được giả "đăng nhập"/"thu hồi"
         "web.notify",
+        # Ghi audit tuỳ ý (mcp_server/rpc.py audit.record): actor/channel/summary do người gọi tự khai — chỉ web/CLI của người dùng;
+        # agent/hook/hub-self không cần (audit của agent do daemon tự ghi khi bọc MUTATING, actor=agent) → agent không giả "user duyệt"
+        "audit.record",
         # Quản trị máy (admin_rpc.py, docs/dev-notes/admin-users.md): đọc trạng thái/audit/chính sách user khác (admin), bật/gỡ ESTOP admin,
         # trang minh bạch phía user — mọi method admin.* chỉ người; phía admin còn kiểm nhóm cfharness-admin (admin_control.require_admin)
         "admin.users", "admin.user", "admin.estop_list", "admin.estop_set", "admin.alerts", "admin.audit", "admin.policy",
         "admin.nav", "admin.self", "admin.setup_check",
         # Xem/mở file trong workspace của run/agent (fileview.py): đọc ngoài sandbox của agent gọi (workspace agent KHÁC) + mở app trên máy
         "file.read", "file.open",
+        # Thư mục chung Không gian số (filehub/): đăng nhập thiết bị, thêm/gỡ thư mục, tạm dừng đồng bộ — chỉ người (không MANAGER_ALLOWED)
+        "filehub.setup", "filehub.login", "filehub.add", "filehub.remove", "filehub.pause", "filehub.resume",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})
@@ -226,7 +231,7 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.backup", "MUTATING_BACKUP"), ("cfharness.hub_transfer", "MUTATING_TRANSFER"),
                       ("cfharness.hub_freeze", "MUTATING_FREEZE"), ("cfharness.hub_transfer_web", "MUTATING_TRANSFER_WEB"),
                       ("cfharness.admin_rpc", "MUTATING_ADMIN"),
-                      ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):
+                      ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.filehub.rpc", "MUTATING_FILEHUB"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):
         try:
             import importlib
 

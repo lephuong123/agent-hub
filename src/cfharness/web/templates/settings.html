@@ -9,6 +9,7 @@
   <div class="card-head"><h2>{{ m.icon('arrow-right') }} Chuyển hub sang máy khác</h2><a class="btn sm" href="/hub-transfer">Mở{{ m.icon('chev-right') }}</a></div>
   <p class="small muted">Xuất TOÀN BỘ hub thành một file <code>.cfhx</code> (agent, tri thức, lịch, lịch sử run, session Claude, secret mã hoá) để tải về, hoặc tải gói từ máy khác lên và nhập vào đây.</p>
 </section>
+<div id="filehub" hx-get="/partials/filehub" hx-trigger="load" hx-swap="outerHTML"></div>
 <section class="card {{ 'attention' if estop.on }}" id="estop">
   <h2>{{ m.icon('power') }} Dừng khẩn cấp (ESTOP)</h2>
   {% if estop.on %}

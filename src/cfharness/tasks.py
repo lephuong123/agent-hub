@@ -29,7 +29,7 @@ LIST_KEYS = (
     "current_run_id", "consecutive_failures", "attempts", "block_reason", "wait_reason", "not_before", "result_summary",
     "created_at", "updated_at", "started_at", "done_at", "workstream_id",
 )
-WORKSPACE_KINDS = ("dir", "scratch", "worktree")
+WORKSPACE_KINDS = ("dir", "scratch", "worktree", "filehub")
 
 
 def _trunc(s: Any, n: int) -> Any:
@@ -164,8 +164,8 @@ class TaskService:
         raw = ws.get("extra_write_roots")
         if raw in (None, []):
             return []
-        if ws.get("kind") not in ("dir", "worktree"):
-            raise HubError("extra_write_roots chỉ dùng với workspace dir|worktree")
+        if ws.get("kind") not in ("dir", "worktree", "scratch", "filehub"):
+            raise HubError("extra_write_roots chỉ dùng với workspace dir|worktree|scratch|filehub")
         if not isinstance(raw, list) or not all(isinstance(x, str) and x.strip() for x in raw) or len(raw) > self.MAX_EXTRA_WRITE_ROOTS:
             raise HubError(f"extra_write_roots phải là danh sách ≤ {self.MAX_EXTRA_WRITE_ROOTS} đường dẫn tuyệt đối")
         roots = []
@@ -206,7 +206,7 @@ class TaskService:
                 ws = json.loads(r[1]) if isinstance(r[1], str) else (r[1] or {})
             except ValueError:
                 continue
-            wp = (ws or {}).get("path") if (ws or {}).get("kind") == "dir" else None
+            wp = (ws or {}).get("path") if (ws or {}).get("kind") in ("dir", "filehub") else None
             if not wp:
                 continue
             if wp not in keys:
@@ -243,7 +243,10 @@ class TaskService:
         parents = [self.row(p)["id"] for p in (data.get("parents") or [])]
         ws = data.get("workspace")
         if isinstance(ws, str):
-            ws = {"kind": "dir", "path": ws} if ws not in WORKSPACE_KINDS else {"kind": ws}
+            if ws.startswith("filehub:"):
+                ws = {"kind": "filehub", "ref": ws}
+            else:
+                ws = {"kind": "dir", "path": ws} if ws not in WORKSPACE_KINDS else {"kind": ws}
         if ws is None and team is not None:
             ws = self.hub.teams.policies(team).workspace
         warnings: list[str] = []
@@ -265,7 +268,7 @@ class TaskService:
             ws = {**ws, "extra_write_roots": data["extra_write_roots"]}
         if ws:
             if ws.get("kind") not in WORKSPACE_KINDS:
-                raise HubError("workspace.kind phải là dir|scratch|worktree")
+                raise HubError("workspace.kind phải là dir|scratch|worktree|filehub")
             if ws.get("kind") == "worktree" and ws.get("path"):
                 # worktree của repo `path` (claude --worktree tạo trong repo) — repo phải nằm trong gốc người cho phép
                 from pathlib import Path
@@ -277,6 +280,15 @@ class TaskService:
                     raise HubError(f"workspace worktree: repo không tồn tại: {ws.get('path')}")
                 validate_workspace(self.hub, {"kind": "dir", "path": str(wp)}, "repo của workspace worktree")
                 ws = {**ws, "path": str(wp.resolve())}
+            if ws.get("kind") == "filehub":  # thư mục chung Không gian số: `filehub:<tên>[/<con>]` → bản sao cục bộ (khoá theo gốc thư mục chung)
+                ref = str(ws.get("ref") or ws.get("path") or "")
+                if not ref.startswith("filehub:"):
+                    ref = "filehub:" + ref
+                fpath, folder, _sub = self.hub.filehub.resolve_ref(ref)  # type: ignore[attr-defined]
+                from .workspace import validate_workspace
+
+                validate_workspace(self.hub, {"kind": "dir", "path": fpath}, "workspace thư mục chung")
+                ws = {**ws, "ref": ref, "path": fpath, "folder": folder["name"]}
             if ws.get("extra_write_roots") is not None:
                 ws = {**ws, "extra_write_roots": self._extra_write_roots(ws)}
             if ws.get("kind") == "dir":
