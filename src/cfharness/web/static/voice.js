@@ -5,12 +5,24 @@
  *     (tiếng Việt) → nghe tiếp. Chạm quả cầu để ngắt lời / tạm dừng; nói "dừng lại" để dừng lượt đang chạy, "kết thúc" để thoát.
  * Nhận dạng + đọc dùng Web Speech API của trình duyệt (không thêm thư viện/CDN, CSP không đổi). Chrome/Edge gửi âm thanh tới dịch vụ
  * nhận dạng của nhà cung cấp trình duyệt — ghi rõ trong bảng. Tin gửi bằng giọng mang `voice=dictation|conversation`: daemon KHÔNG
- * duyệt thao tác/chốt xin phép bằng phím tắt từ tin giọng nói. Chữ của agent chỉ đi qua textContent / speechSynthesis. */
+ * duyệt thao tác/chốt xin phép bằng phím tắt từ tin giọng nói. Chữ của agent chỉ đi qua textContent / speechSynthesis.
+ * App desktop (docs/dev-notes/desktop-app.md, C4): WebView không có SpeechRecognition → app tiêm `window.cfhNative.speech`
+ * {available, start, stop, on("result"|"end"|"error")}; có cầu nối và available() = true thì dùng nó TRƯỚC Web Speech API, cùng luồng
+ * (cùng sự kiện mgr:*, cùng voice=dictation|conversation). */
 (function () {
   "use strict";
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   var TTS = window.speechSynthesis || null;
   var CAN_LISTEN = !!SR && window.isSecureContext !== false;
+  // cầu nối nhận dạng native của app desktop (C4) — chỉ dùng khi đủ hàm; available() quyết định trước khi gắn nút
+  var NATIVE = (function () {
+    var n = window.cfhNative && window.cfhNative.speech;
+    return n && typeof n.available === "function" && typeof n.start === "function" && typeof n.stop === "function" && typeof n.on === "function" ? n : null;
+  })();
+  var USE_NATIVE = false;
+  var nativeReady = NATIVE ? Promise.resolve().then(function () { return NATIVE.available(); }).then(function (ok) {
+    if (ok === true) { USE_NATIVE = true; CAN_LISTEN = true; nativeBind(); }
+  }, function () {}) : null;
   var PREF_KEY = "cfh_voice";
   var SILENCE_MS = 1300, INTERIM_SILENCE_MS = 2400, IDLE_PAUSE_MS = 60000, HOLD_MS = 350;
 
@@ -38,6 +50,9 @@
     return s;
   }
   function errText(code) {
+    if (USE_NATIVE && (code === "not-allowed" || code === "service-not-allowed"))
+      return "App chưa được cấp quyền micro / nhận dạng giọng nói — mở Cài đặt hệ thống → Quyền riêng tư, cho phép cfharness rồi thử lại.";
+    if (USE_NATIVE && code === "network") return "Nhận dạng giọng nói của máy cần kết nối mạng.";
     switch (code) {
       case "not-allowed": case "service-not-allowed":
         return "Trình duyệt đang chặn micro — bấm biểu tượng ổ khoá trên thanh địa chỉ, cho phép Micro rồi thử lại.";
@@ -82,6 +97,71 @@
     active = this;
     try { rec.start(); } catch (err) { stopped = true; active = null; setTimeout(function () { opts.onEnd("error", "start"); }, 0); }
   }
+
+  // ------------------------------------------------------------------ nhận dạng qua cầu nối native (app desktop, C4)
+  // Cùng giao diện với Listener: onText(finals, interim), onEnd("stopped"|"error", code), onSpeech(); stop/abort/reset.
+  // Cầu nối chỉ có MỘT bộ đăng ký sự kiện (không có off) → đăng ký một lần, chuyển cho phiên đang chạy (nativeCur).
+  var nativeCur = null, nativeBound = false, nativeChain = Promise.resolve();
+  function nativeBind() {
+    if (nativeBound) return;
+    nativeBound = true;
+    NATIVE.on("result", function (d) { if (nativeCur) nativeCur._result(d || {}); });
+    NATIVE.on("end", function () { if (nativeCur) nativeCur._end(); });
+    NATIVE.on("error", function (d) { if (nativeCur) nativeCur._error(d && typeof d.code === "string" ? d.code : "native"); });
+  }
+  // start/stop nối tiếp nhau (stop của phiên cũ xong rồi mới start phiên mới)
+  function nativeCall(name, arg) {
+    nativeChain = nativeChain.then(null, function () {}).then(function () { return name === "start" ? NATIVE.start(arg) : NATIVE.stop(); });
+    return nativeChain;
+  }
+  function NativeListener(opts) {
+    var self = this, stopped = false, live = false, done = false, finals = "", spoke = false, restarts = 0;
+    function finish(why, code) {
+      if (done) return;
+      done = true; live = false;
+      if (nativeCur === self) nativeCur = null;
+      if (active === self) active = null;
+      opts.onEnd(why, code);
+    }
+    function begin() {
+      nativeCall("start", { lang: opts.lang, interim: true }).then(function () { if (!stopped) live = true; },
+        function (err) { if (!stopped) { stopped = true; finish("error", err && typeof err.code === "string" ? err.code : "start"); } });
+    }
+    this._result = function (d) {
+      if (stopped || !live) return;
+      var t = typeof d.text === "string" ? d.text : "";
+      if (t && !spoke) { spoke = true; if (opts.onSpeech) opts.onSpeech(); }
+      if (d.final === true) {
+        if (t) finals += (finals && !/\s$/.test(finals) && !/^\s/.test(t) ? " " : "") + t;
+        opts.onText(finals.trim(), "");
+      } else opts.onText(finals.trim(), t.trim());
+    };
+    this._error = function (code) {
+      if (stopped) return;
+      if (code === "no-speech" || code === "aborted") return;  // như Web Speech: im lặng / tự dừng — "end" xử lý
+      stopped = true;
+      nativeCall("stop").then(null, function () {});
+      finish("error", code.slice(0, 40));
+    };
+    this._end = function () {
+      if (stopped || !live) return;  // phiên đã dừng (stop() tự kết thúc) / "end" muộn của phiên trước
+      live = false;
+      if (++restarts > 20) { stopped = true; finish("stopped"); return; }
+      begin();  // máy tự kết thúc sau một lúc → nghe tiếp (như Chrome)
+    };
+    this.stop = function () {
+      if (stopped) return;
+      stopped = true;
+      nativeCall("stop").then(function () { finish("stopped"); }, function () { finish("stopped"); });
+    };
+    this.abort = this.stop;
+    this.reset = function () { finals = ""; };
+    if (active && active !== this) active.stop();
+    active = this;
+    nativeCur = this;
+    begin();
+  }
+  function makeListener(opts) { return USE_NATIVE ? new NativeListener(opts) : new Listener(opts); }
 
   // ------------------------------------------------------------------ đọc to (speechSynthesis)
   var voiceCache = null;
@@ -171,7 +251,7 @@
     var state = { ta: ta, btn: btn, listener: null };
     dict = state;
     btn.classList.add("on"); btn.setAttribute("aria-pressed", "true"); btn.title = "Đang nghe — bấm để dừng";
-    state.listener = new Listener({
+    state.listener = makeListener({
       lang: p.lang,
       onText: function (fin, interim) {
         ta.value = base + fin + (interim ? (fin ? " " : "") + interim : "");
@@ -298,7 +378,8 @@
     var stopB = el("button", "btn sm voice-stoprun", "Dừng lượt này"); stopB.type = "button"; stopB.hidden = true;
     var endB = el("button", "btn sm", "Kết thúc"); endB.type = "button";
     ctl.appendChild(stopB); ctl.appendChild(endB);
-    var note = el("p", "voice-note", "Nhận dạng và đọc giọng do trình duyệt thực hiện (Chrome/Edge gửi âm thanh tới dịch vụ nhận dạng của hãng). " +
+    var note = el("p", "voice-note", (USE_NATIVE ? "Nhận dạng giọng nói do app cfharness trên máy thực hiện; đọc giọng do WebView của hệ điều hành. "
+                                                 : "Nhận dạng và đọc giọng do trình duyệt thực hiện (Chrome/Edge gửi âm thanh tới dịch vụ nhận dạng của hãng). ") +
       "Nói “dừng lại” để dừng lượt đang chạy, “kết thúc” để thoát. Hub không bao giờ duyệt thao tác bằng giọng nói — duyệt bằng nút.");
     ov.appendChild(top); ov.appendChild(stage); ov.appendChild(ctl); ov.appendChild(note);
     document.body.appendChild(ov);
@@ -328,7 +409,7 @@
       setState("listening", "Đang nghe…");
       clearTimeout(idleT);
       idleT = setTimeout(function () { if (state === "listening" && !heard) pause("Đã tạm dừng nghe — chạm quả cầu để nói tiếp."); }, IDLE_PAUSE_MS);
-      listener = new Listener({
+      listener = makeListener({
         lang: p.lang,
         onSpeech: function () { ov.classList.add("hearing"); },
         onText: function (fin, interim) {
@@ -475,6 +556,11 @@
 
   // ------------------------------------------------------------------ khởi động + nội dung htmx / chuyển tab Điều phối
   function boot(root) {
+    if (nativeReady) {  // app desktop: chờ available() rồi mới quyết dùng native / Web Speech / ẩn nút
+      var p = nativeReady;
+      p.then(function () { if (nativeReady === p) nativeReady = null; boot(root); });
+      return;
+    }
     if (!CAN_LISTEN) {
       var why = !SR ? "Trình duyệt này chưa hỗ trợ nhận dạng giọng nói — dùng Chrome, Edge hoặc Safari."
                     : "Nhập bằng giọng nói cần kết nối an toàn (https hoặc localhost).";
@@ -498,5 +584,6 @@
     var start = function () { mo.observe(document.body, { childList: true, subtree: true }); };
     if (document.body) start(); else document.addEventListener("DOMContentLoaded", start);
   }
-  window.cfhVoice = { speakable: speakable, chunks: chunks };  // cho test trình duyệt
+  window.cfhVoice = { speakable: speakable, chunks: chunks,  // cho test trình duyệt / test node (tests/test_desktop_hub.py)
+                      engine: function () { return USE_NATIVE ? "native" : (CAN_LISTEN ? "web" : "none"); } };
 })();

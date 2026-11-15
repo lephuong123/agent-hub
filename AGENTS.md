@@ -638,3 +638,18 @@ Chi tiết, an toàn, việc dở: `docs/dev-notes/voice.md`. Không migration. 
   hội thoại (tự gửi khi im, đọc to trả lời). Chỉ nghe sự kiện `mgr:*` do `app.js initManager` phát; chữ agent chỉ qua `textContent`/`speechSynthesis`.
 - Bất biến: tin giọng nói mang `voice=dictation|conversation` → `manager.chat{voice}` → `_owner_shortcut` KHÔNG BAO GIỜ duyệt approval/chốt câu hỏi
   xin phép từ giọng nói (`_voice_shortcut`). Header `microphone=(self)` — không nới thêm (camera/geolocation vẫn `()`).
+
+## Desktop app — hỗ trợ phía hub
+Hợp đồng chung hub ↔ app (C1–C7), việc đã làm/còn lại, test: `docs/dev-notes/desktop-app.md`. Không migration, không RPC mới. Test: `tests/test_desktop_hub.py`
+(+ `tests/js/voice_native_harness.js` chạy `voice.js` bằng node với DOM giả).
+
+| Module | Vai trò |
+|---|---|
+| `web/desktop.py` | `GET /.well-known/cfharness.json` (công khai, CHỈ `{kind, schema, app_api}`), `GET /app/badge` (cần phiên, `badge_from` thuần: chỉ int/bool/phiên bản), `note_app_ua` (UA `CfharnessDesktop/<ver>` → chỉ log), chọn cổng theo hub, spawn web tách tiến trình, `probe`/`wait_ready`/`info` cho C1 |
+| `web/cli.py` `cmd_web_app` | `cfharness web --json [--ensure] [--port N] [--wait S]`: một dòng JSON `{ok, origin, login_url, hub_id, version, name, started}` / `{ok:false, error, message}` mã 1; `--ensure` khởi động web nền (`--no-link`, log `HUB_HOME/logs/web.log` 0600). Cấu hình `web.port`, `web.display_name` |
+| `web/static/voice.js` | Dò `window.cfhNative.speech` (đủ `available/start/stop/on`, `available()` = true) TRƯỚC Web Speech API; `NativeListener` cùng giao diện `Listener` |
+
+Bất biến: JSON của C1 không bao giờ chứa token người hay khoá ký (`login_url` = link một lần 300 s, như `--url`); well-known không thêm trường (không
+phiên bản/tên); `/app/` ∈ `GuardMiddleware.API` (GET không gia hạn phiên, chưa đăng nhập → 401 JSON) và không bao giờ trả chữ tự do — thêm trường
+badge = số/bool + ca trong test. UA của app không đổi giao diện. Cầu nối giọng nói dùng CHUNG luồng `mgr:*` + `voice=dictation|conversation`; không
+nới CSP/Permissions-Policy, không `innerHTML`/`eval`. `cfharness web …` (mọi biến thể) vẫn forbidden với agent. Luồng cũ `cfharness web` (không `--json`/`--ensure`) giữ nguyên.

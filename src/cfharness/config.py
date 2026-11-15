@@ -287,6 +287,10 @@ DEFAULTS: dict[str, Any] = {
     # KHÔNG có trong danh mục Cài đặt của web (settings_schema). Bind vẫn loopback — tunnel (cloudflared/tailscale) proxy về 127.0.0.1.
     "web": {
         "public_origin": None,  # vd "https://an.example.com" — chỉ https, không path; null = chỉ dùng trên máy này
+        # cổng cố định của web hub này (`cfharness web --json --ensure`, app desktop); null = 8765 cho home mặc định, hub khác
+        # cổng riêng tất định theo hub (web/desktop.py — tránh hai hub cùng cổng)
+        "port": None,
+        "display_name": None,  # tên hiển thị của hub (app desktop, ≤ 60 ký tự một dòng); null = tên thư mục HUB_HOME
         "session_max_age_s": 12 * 3600,  # tuổi tối đa của phiên web (giây)
         "session_idle_s": 3600,  # phiên không thao tác quá N giây → đăng nhập lại (polling/SSE không gia hạn)
         # header IP thật của client — CHỈ đọc khi có public_origin VÀ request tới từ loopback (tunnel chạy trên máy này)

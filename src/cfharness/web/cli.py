@@ -5,6 +5,8 @@
 - `--url`: chỉ in link (không khởi động server, không mở trình duyệt) — lỗi nếu chưa có server.
 Host khác loopback bị từ chối (Q-11). Link chỉ in ra terminal của người chạy lệnh — không ghi vào log (access log tắt).
 - `--no-link`: không in link (chạy làm dịch vụ — stdout vào file log mà agent có thể đọc).
+- `--json [--ensure] [--port N]` (app desktop, web/desktop.py — docs/dev-notes/desktop-app.md): một dòng JSON {ok, origin, login_url, hub_id,
+  version, name, started}; `--ensure` khởi động web TÁCH tiến trình nếu chưa chạy (cổng: --port → web.port → cổng riêng theo hub).
 - `web.public_origin` (nếu người đã đặt) được đọc qua RPC `config.get` lúc khởi động: link in ra dùng origin công khai (https qua tunnel).
 - `cfharness web totp enroll|status|disable`: đăng nhập bằng mã TOTP cho web public (web/totp.py, docs/dev-notes/web-public.md).
 - `cfharness web devices list [--json] | revoke <id> | revoke-all`: thiết bị tin cậy (web/devices.py) — phiên web đang mở trên thiết bị bị
@@ -14,6 +16,7 @@ Host khác loopback bị từ chối (Q-11). Link chỉ in ra terminal của ng�
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import socket
 import sys
@@ -171,6 +174,10 @@ def cmd_web(ctx: Any) -> int:
         print(f"lỗi: lệnh con lạ `{words[0]}` — dùng `cfharness web [--open]`, `cfharness web totp enroll|status|disable` hoặc "
               "`cfharness web devices list|revoke <id>|revoke-all`", file=sys.stderr)
         return 1
+    if ctx.json or getattr(a, "ensure", False):
+        return cmd_web_app(ctx)
+    if a.port is None:
+        a.port = DEFAULT_PORT
     try:
         host = require_loopback(a.host)
     except NotLoopback as e:
@@ -227,13 +234,90 @@ def cmd_web(ctx: Any) -> int:
     return 0
 
 
+def _json_line(obj: dict[str, Any]) -> None:
+    print(json.dumps(obj, ensure_ascii=False, separators=(",", ":")), flush=True)
+
+
+def cmd_web_app(ctx: Any) -> int:
+    """`cfharness web --json [--ensure] [--port N]` (C1, app desktop — web/desktop.py). `--json` → MỘT dòng JSON; không `--json`
+    (chỉ `--ensure`) → chữ cho người. Không bao giờ in token người/khoá ký; `login_url` là link một lần (300 s)."""
+    from . import desktop as D
+
+    a = ctx.args
+    as_json = bool(ctx.json)
+
+    def fail(code: str, msg: str) -> int:
+        if as_json:
+            _json_line({"ok": False, "error": code, "message": msg})
+        else:
+            print(f"lỗi: {msg}", file=sys.stderr)
+        return 1
+
+    def done(obj: dict[str, Any]) -> int:
+        if as_json:
+            _json_line(obj)
+        else:
+            print(f"Giao diện web của hub “{obj['name']}”: {obj['origin']}/" + (" (vừa khởi động)" if obj["started"] else ""))
+            print(f"Link đăng nhập một lần (hết hạn sau 5 phút):\n  {obj['login_url']}")
+            if a.open:
+                _open(obj["login_url"])
+        return 0
+
+    try:
+        host = require_loopback(a.host)
+    except NotLoopback as e:
+        return fail("bad_host", str(e))
+    name = (a.host_name or WEB_HOST).strip().lower()
+    if not valid_web_name(name):
+        return fail("bad_host_name", f"--host-name phải là *.localhost (mặc định {WEB_HOST}) hoặc loopback")
+    cfg = D.local_web_cfg(ctx.paths)
+    st = read_state(ctx.paths)
+    if st is not None and D.probe(st["host"], int(st["port"]), st.get("name") or st["host"]):
+        return done(D.info(ctx.paths, st, cfg, started=False))
+    if not getattr(a, "ensure", False):
+        if st is not None:
+            return fail("web_not_responding", f"server web (pid {st['pid']}) không trả lời — xem {ctx.paths.home / 'logs' / 'web.log'}")
+        return fail("web_not_running", "chưa có server web nào chạy cho hub này — chạy `cfharness web --json --ensure`")
+    if st is not None:  # tiến trình còn sống nhưng chưa trả lời (đang khởi động) → chờ, không bật bản thứ hai
+        ready = D.wait_ready(ctx.paths, None, float(a.wait))
+        if ready is None:
+            return fail("web_not_responding", f"server web (pid {st['pid']}) không trả lời — xem {ctx.paths.home / 'logs' / 'web.log'}")
+        return done(D.info(ctx.paths, ready, cfg, started=False))
+    explicit = a.port if a.port is not None else cfg.get("port")
+    if explicit is not None:
+        try:
+            port = int(explicit)
+        except (TypeError, ValueError):
+            return fail("bad_port", f"cổng không hợp lệ: {explicit!r}")
+        if not 1 <= port <= 65535:
+            return fail("bad_port", f"cổng không hợp lệ: {port}")
+        if D.port_busy(port, host):
+            return fail("port_busy", f"cổng {port} đang bận — chọn cổng khác (--port hoặc `cfharness config set web.port <cổng>`)")
+    else:
+        found = D.pick_port(ctx.paths, host)
+        if found is None:
+            return fail("no_free_port", "không tìm được cổng trống cho web của hub này — đặt `cfharness config set web.port <cổng>`")
+        port = found
+    try:
+        proc = D.spawn_web(ctx.paths, port=port, host=host, name=name)
+    except OSError as e:
+        return fail("web_start_failed", f"không khởi động được server web: {e}")
+    ready = D.wait_ready(ctx.paths, proc, float(a.wait))
+    if ready is None:
+        return fail("web_start_failed", f"server web không sẵn sàng sau {a.wait:g}s — xem {ctx.paths.home / 'logs' / 'web.log'}")
+    return done(D.info(ctx.paths, ready, cfg, started=int(ready.get("pid") or 0) == proc.pid))
+
+
 def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     w = sub.add_parser("web", help="giao diện web (trình duyệt) — chỉ localhost, đăng nhập bằng link một lần", parents=[common])
     w.add_argument("--host", default="127.0.0.1", help="địa chỉ bind — CHỈ loopback (127.0.0.1 / ::1 / localhost)")
-    w.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"cổng (mặc định {DEFAULT_PORT})")
+    w.add_argument("--port", type=int, default=None, help=f"cổng (mặc định {DEFAULT_PORT}; với --ensure: web.port hoặc cổng riêng theo hub)")
     w.add_argument("--host-name", default=None, help=f"tên host trên trình duyệt (mặc định {WEB_HOST} — cookie tách khỏi app khác ở 127.0.0.1)")
     w.add_argument("--open", action="store_true", help="mở trình duyệt và đăng nhập tự động")
     w.add_argument("--url", action="store_true", help="chỉ in link đăng nhập mới của server đang chạy")
+    w.add_argument("--ensure", action="store_true", help="chưa có server web cho hub này → khởi động TÁCH tiến trình (log: HUB_HOME/logs/web.log) "
+                   "rồi in link đăng nhập; dùng với --json cho app desktop")
+    w.add_argument("--wait", type=float, default=30.0, help="--ensure: chờ server sẵn sàng tối đa N giây (mặc định 30)")
     w.add_argument("--no-link", action="store_true", help="không in link đăng nhập (chạy làm dịch vụ: stdout vào file log)")
     w.add_argument("words", nargs="*", help="`totp enroll|status|disable`: đăng nhập bằng mã TOTP cho web public; "
                    "`devices list|revoke <id>|revoke-all`: thiết bị tin cậy (chỉ người)")
