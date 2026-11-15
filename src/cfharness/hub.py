@@ -154,6 +154,10 @@ class Hub:
     # -- lifecycle
     def start(self) -> None:
         n = self.runs.reconcile_on_start()
+        try:  # S8-B: ledger write-ahead — hoàn tất / bỏ / gắn cờ thay đổi học dở dang khi daemon chết giữa Ledger.apply
+            self.learning.ledger.recover_pending()
+        except Exception:  # pragma: no cover
+            log.exception("không khôi phục được ledger_pending")
         try:  # H-12: mcp.json (secret đã resolve) của run cũ còn sót khi daemon chết → xoá
             from .guard.integrity import cleanup_runtime_dirs
 
