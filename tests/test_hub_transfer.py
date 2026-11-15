@@ -132,7 +132,7 @@ def test_export_package_format_private_and_excludes(tmp_path, monkeypatch):
     assert m["format"] == "cfharness-export" and m["schema"] == 1 and m["profile"] == "full" and m["mode_hint"] == "clone"
     assert m["source"]["home"] == str(src.home) and m["source"]["user_home"] == str(tmp_path / "userA") and m["source"]["sep"] == os.sep
     assert m["source"]["user_version"] == B.latest_schema_version() and len(m["source"]["hub_id"]) == 16
-    assert m["missing_secrets"] == ["API_KEY"] and set(m["sections"]) == {"db", "home", "runs"}
+    assert m["missing_secrets"] == ["API_KEY"] and set(m["sections"]) == {"db", "home", "runs", "repos"}
     assert any(f["path"] == "hub.db" and f["gz"] for f in m["files"]) and "checkpoints" in m["excluded"]
     assert m["path_roots"]["workspaces"] == [str(tmp_path / "userA" / "Workspace" / "proj")]
     v = T.verify_package(pkg)
@@ -288,7 +288,8 @@ def test_import_refuses_tampered_or_unsafe_packages(tmp_path, monkeypatch):
     # gói từ cfharness mới hơn (schema DB) / định dạng mới hơn / phần bắt buộc lạ
     for fn, msg in ((lambda m: {**m, "source": {**m["source"], "user_version": B.latest_schema_version() + 5}}, "mới hơn"),
                     (lambda m: {**m, "schema": 99}, "mới hơn"),
-                    (lambda m: {**m, "sections": {**m["sections"], "repos": {"prefix": "repos.json"}}}, "bắt buộc"),
+                    (lambda m: {**m, "sections": {**m["sections"], "future2": {"prefix": "future2.json"}}}, "bắt buộc"),
+                    (lambda m: {**m, "sections": {**m["sections"], "repos": {"prefix": "other.json", "optional": True}}}, "repos khai báo sai"),
                     (lambda m: {**m, "sections": {**m["sections"], "secrets": {"prefix": "secrets.enc"}}}, "thiếu khối secrets"),
                     (lambda m: {**m, "format": "cfharness-backup"}, "format")):
         pkg = fresh()
@@ -410,7 +411,7 @@ def test_auth_classifier_and_sandbox_protect_transfer(tmp_path):
     from cfharness.guard.runtime import HUB_WRITE_DENY_NAMES, sandbox_settings, secret_read_deny_rules
 
     assert "hub.export" in auth.HUMAN_ONLY and "hub.export" in auth.all_mutating() and "hub.export" not in auth.MANAGER_ALLOWED
-    assert HUB_HUMAN_ONLY_CLI["hub"] >= {"export", "import"}
+    assert HUB_HUMAN_ONLY_CLI["hub"] is None  # mọi lệnh con (export|import|unfreeze|doctor)
     hub = tmp_path / "h"
     ctx = GuardContext(cwd=tmp_path, policy=PolicyStore(hub).load())
     for cmd in ("cfharness hub export --stop", "cfharness hub import /tmp/x.cfhx --yes --replace --stop", "uv run cfharness hub export /tmp/a.cfhx",

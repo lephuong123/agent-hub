@@ -159,6 +159,12 @@ class Hub:
         except Exception:  # pragma: no cover
             log.exception("không dọn được runtime/")
         self.integrity.start()  # SEC: so policy/ với bản chuẩn + vòng kiểm nền
+        try:  # hub clone PR5: lần đầu lên sau `hub import` → viết lại đường dẫn máy cũ trong tri thức qua Ledger (actor import)
+            from .import_followups import process as _import_followups
+
+            _import_followups(self)
+        except Exception:  # pragma: no cover — không chặn daemon khởi động; còn `status != done` → thử lại lần sau
+            log.exception("không xử lý được import_followups")
         try:  # P2.4: đăng ký HUB_HOME vào registry hub của user OS → hub khác chặn đọc/ghi home này
             from .confine import register_home
 
@@ -259,4 +265,5 @@ class Hub:
             "epoch_usage": self.aggregator.snapshot(),
             "subscribers": self.bus.subscriber_count,
             "sandbox_enabled": bool((self.config.get("guard.sandbox") or {}).get("enabled", True)),
+            "migrated_to": self.runs.frozen,  # chuyển nhà (hub_freeze.py): hub đóng băng — banner ở CLI/TUI/web
         }

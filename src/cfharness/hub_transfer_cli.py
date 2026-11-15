@@ -10,6 +10,9 @@ Lệnh chỉ người: `hub export|import` ∈ HUB_HUMAN_ONLY_CLI (agent gõ b�
   [--passphrase-file F | --skip-secrets]`: CHỈ ngoại tuyến — in kế hoạch → (gói có secret) hỏi passphrase + thử giải mã ngay (sai → dừng,
   chưa ghi gì; dry-run thử khi có `--passphrase-file`) → xác nhận (y/N; `--replace` thêm bước 2 gõ lại id gói) → dừng daemon nếu `--stop` → nhập → chạy lại daemon nếu
   lệnh đã dừng nó. Không có TTY: cần `--yes` (và `--confirm-id` khi `--replace`).
+  PR5: `--clone-repos` (git clone repo workspace thiếu, sau khi nhập); in `hub doctor` sau khi nhập.
+- PR5 `export --for move [--yes]`: chuyển nhà — gói qua kiểm tra → hub này ĐÓNG BĂNG (`hub_freeze.py`); `unfreeze [--yes]`: gỡ (y/N);
+  `doctor [--probe] [--json]`: kiểm hub sau khi nhập (`hub_doctor.py`, chỉ đọc, chạy được khi daemon dừng).
 """
 
 from __future__ import annotations
@@ -35,6 +38,9 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     e.add_argument("--passphrase-file", default=None, metavar="FILE", help="đọc passphrase từ file (quyền 0600) thay vì hỏi — cho môi trường không TTY")
     e.add_argument("--with-totp", action="store_true", help="mang cả bí mật TOTP đăng nhập web (auth/totp.json)")
     e.add_argument("--with-mcp-tokens", action="store_true", help="mang cả token MCP HTTP của hub (mcp_server/tokens.json)")
+    e.add_argument("--yes", "-y", dest="yes_move", action="store_true", help="bỏ qua xác nhận đóng băng của --for move")
+    e.add_argument("--for", dest="purpose", choices=["clone", "move"], default="clone",
+                   help="move = chuyển nhà: sau khi gói qua kiểm tra, ĐÓNG BĂNG hub này (không chạy run/lịch/Telegram/Slack) tới khi `hub unfreeze`")
     e.set_defaults(fn=cmd_export)
     i = hs.add_parser("import", allow_abbrev=False, help="nhập gói .cfhx vào HUB_HOME (daemon phải dừng; mặc định chế độ clone)", parents=[common])
     i.add_argument("file", help="file gói .cfhx")
@@ -48,7 +54,14 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     i.add_argument("--confirm-id", default=None, help="xác nhận bước 2 khi --replace (phải trùng id gói)")
     i.add_argument("--passphrase-file", default=None, metavar="FILE", help="đọc passphrase của phần secret từ file (quyền 0600)")
     i.add_argument("--skip-secrets", action="store_true", help="không nhập secret (quên passphrase) — nhập phần còn lại, liệt kê secret cần đặt lại")
+    i.add_argument("--clone-repos", action="store_true", help="tự `git clone` repo workspace chưa có ở máy này (sau khi nhập; không bao giờ vào thư mục đã có)")
     i.set_defaults(fn=cmd_import)
+    u = hs.add_parser("unfreeze", allow_abbrev=False, help="gỡ đóng băng sau `hub export --for move` — máy này chạy lại run/lịch/kênh", parents=[common])
+    u.add_argument("--yes", "-y", action="store_true", help="bỏ qua xác nhận")
+    u.set_defaults(fn=cmd_unfreeze)
+    dr = hs.add_parser("doctor", allow_abbrev=False, help="kiểm hub sau khi nhập (chỉ đọc, gợi ý lệnh; chạy được khi daemon dừng)", parents=[common])
+    dr.add_argument("--probe", action="store_true", help="thử thật: `claude auth status`, kết nối MCP (cần daemon chạy) — không gọi model")
+    dr.set_defaults(fn=cmd_doctor)
 
 
 def _size(n: Any) -> str:
@@ -112,18 +125,42 @@ def _export(ctx: Any) -> int:
                 print(f"Gói sẽ mang secret của hub, mã hoá bằng passphrase (≥ {S.MIN_PASSPHRASE} ký tự). Quên passphrase = mất phần secret "
                       "(phần còn lại vẫn nhập được với --skip-secrets).")
                 pw = S.prompt_passphrase(confirm=True)
-    if daemon_running(ctx.paths.home) is not None:
-        r = ctx.call("hub.export", {"profile": a.profile, "stop": bool(a.stop), "secrets": pw is not None}, timeout=3600)
+    move = a.purpose == "move"
+    online = daemon_running(ctx.paths.home) is not None
+    if move and not a.yes_move and not sys.stdin.isatty():
+        print("lỗi: --for move đóng băng hub này sau khi xuất — không chạy trong terminal nên cần --yes", file=sys.stderr)
+        return 1
+    if move and not a.yes_move:
+        ans = input("--for move: sau khi xuất, hub này bị ĐÓNG BĂNG (không chạy run/lịch/Telegram/Slack) cho tới `cfharness hub unfreeze`. "
+                    "Tiếp tục? [y/N] ").strip().lower()
+        if ans not in ("y", "yes", "c", "co", "có"):
+            print("đã huỷ")
+            return 0
+    if online:
+        r = ctx.call("hub.export", {"profile": a.profile, "stop": bool(a.stop), "secrets": pw is not None, "for": a.purpose}, timeout=3600)
     else:
-        r = T.export_offline(ctx.paths, profile=a.profile)
+        r = T.export_offline(ctx.paths, profile=a.profile, for_move=move)
     path = Path(r["path"])
     sealed: dict = {}
     if pw is not None:
-        sealed = T.seal_package(path, ctx.paths.home, pw, with_totp=a.with_totp, with_mcp_tokens=a.with_mcp_tokens)
+        try:
+            sealed = T.seal_package(path, ctx.paths.home, pw, with_totp=a.with_totp, with_mcp_tokens=a.with_mcp_tokens)
+        except BaseException:
+            if move:  # gói đã bị xoá → không có gì để mang sang máy mới: gỡ đóng băng vừa đặt
+                _unfreeze_after_failure(ctx, r["id"], online)
+            raise
         pw = None
         if sealed.get("sealed"):
             r.update(size=sealed["size"], sha256=sealed["sha256"], missing_secrets=sealed["missing_secrets"])
             r.setdefault("sections", {})["secrets"] = {"count": len(sealed["names"]), "bytes": None}
+            if move:  # sha256 của gói ĐÃ gắn secret vào bản ghi đóng băng (cùng export_id)
+                info = {"export_id": r["id"], "sha256": sealed["sha256"], "sealed": True}
+                if online:
+                    r["migrated_to"] = ctx.call("hub.freeze", info)
+                else:
+                    from .hub_freeze import freeze_offline
+
+                    r["migrated_to"] = freeze_offline(ctx.paths, info)
     r["secrets"] = {k: sealed.get(k) for k in ("sealed", "names", "totp", "mcp_tokens")} if sealed else {"sealed": False, "names": []}
     if dest is not None:
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -147,9 +184,40 @@ def _export(ctx: Any) -> int:
                      f"{'…' if len(r['missing_secrets']) > 8 else ''}) — đặt lại trên máy kia bằng `cfharness secret set <TÊN>`")
     lines.append(("  ! ngoài phần secret, gói KHÔNG mã hoá" if sealed.get("sealed") else "  ! gói KHÔNG mã hoá")
                  + ": chứa memory, transcript, audit của hub — giữ riêng tư (file 0600), đừng đưa lên nơi công khai")
-    lines.append(f"Chép file này sang máy kia rồi chạy: cfharness hub import {path.name} --dry-run  (rồi bỏ --dry-run)")
+    for rp in r.get("repos") or []:
+        if rp.get("dirty"):
+            lines.append(f"  ! repo {rp['path']} có {rp.get('uncommitted')} file chưa commit — thay đổi chưa commit KHÔNG đi theo gói (commit + push trước)")
+    if r.get("repos"):
+        lines.append(f"  repo workspace: {len(r['repos'])} (chỉ ghi remote/nhánh/HEAD — repo KHÔNG nằm trong gói; máy kia clone lại"
+                     + (", URL đã bỏ thông tin đăng nhập" if any(x.get("remote_masked") for x in r["repos"]) else "") + ")")
+    if r.get("migrated_to"):
+        from .hub_freeze import banner
+
+        lines.append(f"  ■ {banner(r['migrated_to'])}")
+        lines.append(f"Chép file này sang máy mới rồi chạy: cfharness hub import {path.name} --mode move --dry-run  (rồi bỏ --dry-run)")
+    else:
+        lines.append(f"Chép file này sang máy kia rồi chạy: cfharness hub import {path.name} --dry-run  (rồi bỏ --dry-run)")
     ctx.out(r, "\n".join(lines))
     return 0
+
+
+def _unfreeze_after_failure(ctx: Any, export_id: str, online: bool) -> None:
+    try:
+        if online:
+            ctx.call("hub.unfreeze", {"export_id": export_id})
+        else:
+            import sqlite3
+
+            from .hub_freeze import KEY
+
+            c = sqlite3.connect(str(ctx.paths.db), isolation_level=None)
+            try:
+                c.execute("DELETE FROM hub_state WHERE key=? AND json_extract(value, '$.export_id')=?", (KEY, export_id))
+            finally:
+                c.close()
+        print("gắn secret lỗi — gói đã bị xoá, đã gỡ đóng băng (hub này chạy bình thường)", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"gắn secret lỗi VÀ không gỡ được đóng băng ({e}) — chạy `cfharness hub unfreeze`", file=sys.stderr)
 
 
 # ============================================================================ import
@@ -219,6 +287,15 @@ def _plan_text(p: dict[str, Any]) -> str:
     for m in p.get("mcp_missing") or []:
         out.append(f"! MCP '{m['server']}': lệnh {m['command']} ({m.get('reason') or 'không thấy ở máy này'}) — nhập ở trạng thái ĐÁNH DẤU lỗi; "
                    f"sửa bằng `cfharness mcp edit {m['server']}`")
+    repos = p.get("repos") or []
+    if repos:
+        out.append(f"Repo workspace: {len(repos)} ({sum(1 for r in repos if not r.get('exists'))} chưa có ở máy này)"
+                   + (" — sẽ tự clone (--clone-repos)" if p.get("clone_repos") else ""))
+        for r in repos[:10]:
+            out.append(f"  {'✓' if r.get('exists') else '✗'} {r['to']}" + (f" ← {r['remote']}" if r.get("remote") else "")
+                       + (f" [{r.get('branch')}]" if r.get("branch") else ""))
+    if p.get("agents_paused"):
+        out.append(f"Agent nhập ở trạng thái paused (workspace chưa có): {', '.join(sorted(p['agents_paused']))}")
     for w in p.get("warnings") or []:
         out.append(f"! {w}")
     return "\n".join(out)
@@ -244,6 +321,7 @@ def _import(ctx: Any) -> int:
 
         pw = S.read_passphrase_file(a.passphrase_file)
     plan = T.import_plan(ctx.paths, pkg, maps=maps, mode=a.mode, passphrase=pw if a.dry_run else None, skip_secrets=a.skip_secrets)
+    plan["clone_repos"] = bool(a.clone_repos)
     if ctx.json and a.dry_run:
         ctx.out(plan)
         return 1 if plan["blockers"] else 0
@@ -301,7 +379,8 @@ def _import(ctx: Any) -> int:
         cfg = HubConfig(ctx.paths.config).get("backup") if ctx.paths.config.exists() else None
     except Exception:  # config.yaml hỏng không được chặn nhập
         pass
-    r = T.import_package(ctx.paths, pkg, maps=maps, mode=a.mode, replace=a.replace, cfg=cfg, passphrase=pw, skip_secrets=a.skip_secrets)
+    r = T.import_package(ctx.paths, pkg, maps=maps, mode=a.mode, replace=a.replace, cfg=cfg, passphrase=pw, skip_secrets=a.skip_secrets,
+                         clone_repos=a.clone_repos)
     pw = None
     lines = [f"đã nhập {r['imported']} vào {r['home']} (chế độ {r['mode']}): {r['files_written']} file, hub.db đã thay"
              + (f", {r['runs_files']} file stdout run" if r.get("runs_files") else "")
@@ -333,8 +412,17 @@ def _import(ctx: Any) -> int:
                      + (": skill " + ", ".join(f"{s['old']} → {s['new']}" for s in r.get("skills_renamed") or []) if r.get("skills_renamed") else ""))
     if r.get("mcp_missing"):
         lines.append("MCP thiếu lệnh (đã đánh dấu lỗi): " + ", ".join(f"cfharness mcp edit {m['server']}" for m in r["mcp_missing"][:6]))
-    if r.get("review"):
-        lines.append(f"Tri thức còn đường dẫn máy cũ (chưa tự sửa): {', '.join(r['review'][:5])}{'…' if len(r['review']) > 5 else ''}")
+    if r.get("review") or r.get("knowledge_rows_with_old_paths"):
+        lines.append(f"Tri thức còn đường dẫn máy cũ ({len(r.get('review') or [])} file, {r.get('knowledge_rows_with_old_paths') or 0} hàng graph) — "
+                     "daemon tự viết lại qua ledger (actor import, rollback được) ở lần lên đầu tiên")
+    for c in r.get("repos_cloned") or []:
+        lines.append(f"{'✓ đã clone' if c.get('ok') else '✗ không clone được'} {c.get('to')}" + (f": {c['error']}" if c.get("error") else "")
+                     + (f" ({c['warning']})" if c.get("warning") else ""))
+    if r.get("agents_unpaused"):
+        lines.append(f"Agent đã có workspace sau khi clone → bỏ paused: {', '.join(r['agents_unpaused'])}")
+    still = sorted(set(r.get("agents_paused") or {}) - set(r.get("agents_unpaused") or []))
+    if still:
+        lines.append(f"Agent paused vì workspace chưa có ở máy này: {', '.join(still)} — tạo/clone repo rồi `cfharness agent resume <id>`")
     if running:
         from .daemon import spawn_background
 
@@ -342,5 +430,60 @@ def _import(ctx: Any) -> int:
         lines.append(f"daemon đã chạy lại (pid {pid})")
     else:
         lines.append("chạy daemon: cfharness daemon start")
+    from . import hub_doctor as D
+
+    try:  # sau khi nhập: doctor (chỉ đọc) — việc còn phải làm ở máy này
+        doc = D.run(ctx.paths)
+        r["doctor"] = doc
+        lines += ["", D.text(doc)]
+    except Exception as e:  # noqa: BLE001 — doctor lỗi không làm hỏng lần nhập đã xong
+        lines.append(f"(không chạy được hub doctor: {e} — chạy `cfharness hub doctor`)")
     ctx.out(r, "\n".join(lines))
     return 0
+
+
+# ============================================================================ unfreeze / doctor
+def cmd_unfreeze(ctx: Any) -> int:
+    return _wrap(_unfreeze, ctx)
+
+
+def _unfreeze(ctx: Any) -> int:
+    from .hub_freeze import banner
+
+    a = ctx.args
+    st = ctx.call("hub.frozen") or {}
+    mig = st.get("migrated_to")
+    if not mig:
+        ctx.out({"unfrozen": False, "migrated_to": None}, "hub không đóng băng — không có gì để gỡ")
+        return 0
+    print(banner(mig))
+    if not a.yes:
+        if not sys.stdin.isatty():
+            print("lỗi: không chạy trong terminal — cần --yes", file=sys.stderr)
+            return 1
+        ans = input("Gỡ đóng băng? Máy này sẽ chạy lại run/lịch/Telegram/Slack — nếu máy mới cũng đang chạy, hai hub sẽ tranh bot/OAuth "
+                    "(Telegram 409, Slack chia sự kiện). [y/N] ").strip().lower()
+        if ans not in ("y", "yes", "c", "co", "có"):
+            print("đã huỷ")
+            return 0
+    r = ctx.call("hub.unfreeze", {"export_id": mig.get("export_id")})
+    ctx.out(r, "đã gỡ đóng băng — hub này chạy lại bình thường")
+    return 0
+
+
+def cmd_doctor(ctx: Any) -> int:
+    return _wrap(_doctor, ctx)
+
+
+def _doctor(ctx: Any) -> int:
+    from . import hub_doctor as D
+    from .home_migrate import daemon_running
+
+    a = ctx.args
+    probe = None
+    if a.probe and daemon_running(ctx.paths.home) is not None:
+        def probe(name: str) -> dict:
+            return ctx.call("mcp.probe", {"name": name, "timeout_s": 20})
+    rep = D.run(ctx.paths, probe=bool(a.probe), mcp_probe=probe)
+    ctx.out(rep, D.text(rep))
+    return 0 if rep["ok"] else 1

@@ -109,6 +109,9 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # Xuất toàn bộ hub (hub_transfer.py): gói chứa hub.db + tri thức + transcript MỌI agent, dừng run đang chạy — chỉ người.
         # Nhập không có RPC (daemon đích phải dừng; CLI `hub import` ∈ HUB_HUMAN_ONLY_CLI)
         "hub.export",
+        # Chuyển nhà (hub_freeze.py): gỡ đóng băng = cho máy cũ chạy lại run/lịch/bot song song máy mới (409 Telegram, chia sự kiện Slack,
+        # OAuth xoay vòng) — chỉ người. hub.doctor (hub_doctor.py) chỉ đọc nhưng lộ đường dẫn/tên secret/repo của người — chỉ người.
+        "hub.freeze", "hub.unfreeze", "hub.doctor",
         # Tài khoản Claude (accounts/): token = quyền dùng tài khoản Claude của người; đổi tài khoản CHỈ do người (không tự đổi, không
         # MANAGER_ALLOWED) — agent không được tự thêm/đổi/xoá/kiểm tài khoản hay mở phiên `claude setup-token`
         "account.login_start", "account.login_finish", "account.login_cancel", "account.add_token", "account.use", "account.rename",
@@ -218,6 +221,7 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE"),
                       ("cfharness.web_events", "MUTATING_WEB"),
                       ("cfharness.backup", "MUTATING_BACKUP"), ("cfharness.hub_transfer", "MUTATING_TRANSFER"),
+                      ("cfharness.hub_freeze", "MUTATING_FREEZE"),
                       ("cfharness.admin_rpc", "MUTATING_ADMIN"),
                       ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):
         try:

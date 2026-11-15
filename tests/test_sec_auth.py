@@ -350,7 +350,8 @@ def test_human_only_covers_sensitive_surface():
               # web "Quyền đã cấp" / lịch / hội thoại điều phối viên (#3 #5 #7)
               "guard.grant.rm", "guard.trust.set", "guard.sandbox.allow_domain", "guard.sandbox.dev_host", "schedule.update",
               "manager.archive", "manager.unarchive", "manager.tick",
-              "hub.export"):  # xuất toàn bộ hub (hub_transfer.py)
+              "hub.export",  # xuất toàn bộ hub (hub_transfer.py)
+              "hub.freeze", "hub.unfreeze", "hub.doctor"):  # chuyển nhà: đóng băng/gỡ (hub_freeze.py), doctor lộ đường dẫn/tên secret
         assert m in auth.HUMAN_ONLY, m
     assert "guard.check" not in auth.HUMAN_ONLY and "taskself.call" not in auth.HUMAN_ONLY  # hook/hub-self không bị chặn
 

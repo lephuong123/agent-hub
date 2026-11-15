@@ -600,9 +600,9 @@ Chi tiết, danh sách gồm/bỏ, giới hạn: `docs/dev-notes/backup.md`. Kh�
 - Cập nhật: `update.start` tạo bản `pre-update` trước khi chạy helper; helper (chỉ stdlib) dò `hub.ping`, không lên → cài lại bản cũ + khôi phục hub.db
   khi `user_version` đã tăng; `cfharness update --rollback` (RPC `update.rollback`). Pha mới của helper mà daemon phải chờ → `daemon._UPDATE_BUSY_PHASES`.
 
-## Xuất / nhập toàn bộ hub sang máy khác — `hub_transfer.py` (PR1–PR4 của `docs/dev-notes/plan-hub-clone.md`)
+## Xuất / nhập toàn bộ hub sang máy khác — `hub_transfer.py` (PR1–PR5 của `docs/dev-notes/plan-hub-clone.md`)
 Không migration. Test: `tests/test_hub_transfer.py`, `tests/test_hub_transfer_secrets.py`, `tests/test_hub_transfer_sessions.py`,
-`tests/test_hub_transfer_cross_os.py`.
+`tests/test_hub_transfer_cross_os.py`, `tests/test_hub_transfer_move.py`.
 - `hub_transfer.py`: gói `.cfhx` (tar không nén ngoài, từng phần tử gzip riêng, `MANIFEST.json` cuối, sha256 nội dung gốc, `sections` có `prefix`
   — phần mới thêm sau là mục `sections` mới, bản cũ bỏ qua phần `optional`). Xuất = RPC `hub.export` (HUMAN_ONLY, tự audit; làm lặng bằng
   `RunManager.quiesced` rồi thả trong `finally`) hoặc ngoại tuyến (giữ `daemon.lock`); chỉ ghi vào `HUB_HOME/exports/`. Nhập CHỈ ngoại tuyến từ CLI
@@ -637,6 +637,27 @@ Không migration. Test: `tests/test_hub_transfer.py`, `tests/test_hub_transfer_s
   `skills/`, `.archive/`, mục `trash/`) → đổi tên tất định trong STAGE (thư mục skill giữ `NAME_RE`: `con` → `con-skill`; `skills.name|path`,
   frontmatter; KHÔNG qua ledger) + `import_followups.renamed`; `claude/` → bỏ file; còn lại → từ chối cả gói trước khi ghi. MCP stdio thiếu
   lệnh (mọi lần nhập) → `probe_error` "[hub] …" (không có cột bật/tắt). Thêm vùng tri thức đổi tên được → `transfer_os._kind` + ca test.
+- PR5 chuyển nhà `hub_freeze.py`: `hub export --for move` → sau khi gói qua kiểm tra, `hub_state.migrated_to {at, export_id, sha256, sealed…}`
+  (trong daemon: NGAY trong cửa sổ làm lặng; ngoại tuyến: trước khi nhả `daemon.lock`; CLI gắn `secrets.enc` xong → `hub.freeze` cập nhật sha256
+  cùng export_id, gắn hỏng → tự gỡ). Đóng băng = `RunManager.frozen`: `submit` từ chối MỌI kind (`Blocked` + `data.migrated_to`), `tick` không khởi
+  chạy hàng đợi, `recovery.resume_interrupted` không resume, `runs.export_quiesced` = đang xuất HOẶC đóng băng (mọi vòng nền ghi bỏ lượt) — RIÊNG
+  sao lưu dùng `runs.exporting` (vẫn chạy khi đóng băng). Telegram/Slack: `token()` trả None khi đóng băng (trừ `ignore_enabled` của người),
+  `QueuedNotifier` bỏ mọi tin; freeze/unfreeze `kick()` vòng nhận. Banner: `hub.status.migrated_to`, `tui.snapshot.hub.migrated_to`, web
+  `base.html` (RPC đọc `hub.frozen`). Gỡ CHỈ người: `hub.unfreeze` (HUMAN_ONLY, tự audit) ← `cfharness hub unfreeze` (y/N). Event `hub.frozen|unfrozen`.
+  Thêm đường tạo run/kênh gửi ra ngoài mới → phải đi qua `RunManager.submit` / `token()` / `QueuedNotifier` (hoặc tự kiểm `hub_freeze.frozen`).
+- PR5 `transfer_repos.py`: phần `repos.json` (optional) — repo workspace NGOÀI HUB_HOME (agent `workspace_default`, team `policies.workspace`, task
+  mở, `cwd` run chưa xong): gốc git, remote ĐÃ CHE (`mask_remote`: bỏ userinfo URL, token query, che theo giá trị secret), nhánh, HEAD, dirty;
+  git qua `GIT_SAFE_ARGS`/`GIT_ENV`. KHÔNG BAO GIỜ đóng gói repo. Nhập: `plan` (thiếu → lệnh `git clone`, dirty → cảnh báo), `pause_missing` trên
+  stage DB (agent thiếu workspace → `paused` + `hub_state.import_paused`; `agents.set_paused(False)` gỡ lý do), `--clone-repos` SAU khi hub.db vào
+  chỗ (không bao giờ vào thư mục đã có, lỗi không hoàn tác lần nhập) → `unpause_present`. `hub_state.import_repos` cho doctor.
+- PR5 `import_followups.py` (gọi ở `Hub.start`): `hub_state.import_followups` → viết lại đường dẫn bằng `map` của lần nhập qua `Ledger.apply` actor
+  `ledger.IMPORT_ACTOR="import"` — memory (file, rollback theo mục), skill (tree), SOUL (config), graph fact/thực thể SỐNG (graph, sửa hàng tại
+  chỗ, rollback theo hàng); config.yaml agent dựng lại từ DB; episode/fact đã đóng/`.archive/` = lịch sử, giữ nguyên. `import` KHÔNG thuộc
+  `AUTO_CHANGE_ACTORS` (do người khởi xướng → không bao giờ bị tự rollback). Idempotent, lỗi từng mục → `status=partial` + `retry` (thử lại lần
+  daemon lên sau), audit `hub.import_followups`.
+- PR5 `hub_doctor.py`: `cfharness hub doctor [--probe] [--json]` + RPC `hub.doctor` (HUMAN_ONLY, chỉ đọc, không probe mạng) — đọc DB chỉ đọc,
+  config, TÊN secret (không bao giờ giá trị); không gọi `claude` ngoài `--version` (và `auth status` khi `--probe`). Tự chạy sau `hub import`.
+  `HUB_HUMAN_ONLY_CLI["hub"] = None` (mọi lệnh con `hub …` chặn với agent).
 - Bất biến: gói không bao giờ chứa `checkpoints/`, `auth/web.json`/thiết bị, `secrets/` dạng rõ, session Claude không thuộc hub; thêm trạng thái gắn với máy vào `hub_state` →
   thêm khoá vào `hub_transfer.MACHINE_STATE` (hoặc `CLONE_STATE`) + ca trong test. `exports/`/`imports/` ∈ `backup.EXCLUDED`, sandbox
   denyRead/denyWrite, `sensitive_read`.

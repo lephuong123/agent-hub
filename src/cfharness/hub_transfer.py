@@ -16,8 +16,9 @@ Gói `.cfhx` = MỘT file tar KHÔNG nén ngoài (0600); từng phần tử nén
   (TÊN secret KHÔNG mang theo), `secrets{cipher, kdf, nonce, names, totp, mcp_tokens}` khi có `secrets.enc`.
 Luôn bỏ: `checkpoints/` (chủ repo chốt), `secrets/`, `auth/`, `mcp_server/`, `logs/`, `workspaces/`, `worktrees/`, `evals/`, `models/`,
 `update/`, `backups/`, `exports/`, `imports/`, socket/pid/lock (`secrets/` chỉ đi qua `secrets.enc`; KHÔNG BAO GIỜ `auth/web.json`, thiết bị tin
-cậy, `<socket>.auth`). Phần mở rộng (bản sau, không đổi format): `repos.json` (PR5) — mỗi phần là một mục `sections` có `prefix`; bản cũ gặp mục lạ `optional`
-thì bỏ qua kèm cảnh báo, mục lạ không `optional` → từ chối.
+cậy, `<socket>.auth`). `repos.json` (PR5, phần optional — `transfer_repos.py`): repo workspace ngoài HUB_HOME (remote đã che, nhánh, HEAD,
+dirty) — KHÔNG BAO GIỜ đóng gói repo. Mỗi phần là một mục `sections` có `prefix`; bản cũ gặp mục lạ `optional` thì bỏ qua kèm cảnh báo, mục lạ
+không `optional` → từ chối. Xuất `for=move` (PR5) → đóng băng hub nguồn sau khi gói qua kiểm tra (`hub_freeze.py`).
 
 XUẤT chạy trong daemon (RPC `hub.export`, HUMAN_ONLY, tự audit) hoặc ngoại tuyến (CLI giữ `daemon.lock` khi daemon dừng). Một RPC duy
 nhất làm cả "làm lặng" (`RunManager.quiesced`: không khởi chạy run trong hàng đợi) → dừng run đang chạy nếu `stop` → chụp → ghi nguyên tử
@@ -39,7 +40,8 @@ bằng `pathmap` (HUB_HOME nguồn → đích, `$HOME` nguồn → đích, `--ma
 `mem_*` không sửa tay) → dọn trạng thái của máy cũ (`MACHINE_STATE`), run `running|queued` → `interrupted`, áp chế độ (`clone` mặc định:
 tắt Telegram/Slack, pause mọi lịch, task đang chạy/chờ chạy → `blocked` + bình luận "[hub] …") → `PRAGMA integrity_check` → chuyển vào chỗ
 → `backup.rebaseline_offline` → `hub_state.imported_from`. File tri thức thuộc ledger còn đường dẫn cũ được ghi vào
-`hub_state.import_followups` (bản này chỉ liệt kê, KHÔNG ghi file trực tiếp).
+`hub_state.import_followups` (lúc nhập chỉ liệt kê, KHÔNG ghi file trực tiếp; daemon lên lần đầu viết lại qua Ledger actor `import` —
+`import_followups.py`, PR5). PR5: agent có workspace chưa có ở máy đích → `paused` (`transfer_repos.pause_missing`); `clone_repos` → git clone.
 Chế độ `clone` còn huỷ approval/câu hỏi đang chờ của hub nguồn (`cancelled` + "[hub] nhân bản — chưa chạy lại" — không phải từ chối, không
 `expired`; run tương ứng → `interrupted`, không tự resume). Secret (PR2) giải mã ngay sau khi kiểm gói (sai passphrase → từ chối, chưa ghi
 gì) và ghi SAU CÙNG. Lỗi giữa chừng sau khi đã ghi vào home → tự hoàn tác (bản `pre-restore` khi `replace`; home trống → gỡ phần đã ghi).
@@ -72,6 +74,7 @@ from typing import TYPE_CHECKING, Any, BinaryIO, Iterable, Iterator
 from . import __version__
 from . import backup as B
 from . import transfer_os as TO
+from . import transfer_repos as TR
 from . import transfer_sessions as TS
 from .errors import Conflict, HubError, NotFound
 from .pathmap import SCAN_SKIP_DIRS, PathMap, db_count_matches, db_rewrite, is_abs, rewrite_files, scan_files
@@ -98,7 +101,7 @@ MODES = ("clone", "move")
 DEFAULT_PROFILE = "full"
 DEFAULT_MODE = "clone"
 # Phần (section) bản này đọc được. Thêm phần mới (secrets/claude/repos) = thêm vào đây + luật tên phần tử ở `_member_dest`.
-KNOWN_SECTIONS = ("db", "home", "runs", "secrets", "claude")
+KNOWN_SECTIONS = ("db", "home", "runs", "secrets", "claude", "repos")
 SECRETS_MEMBER = "secrets.enc"  # = transfer_secrets.MEMBER (PR2: secret mã hoá bằng passphrase)
 MAX_SECRETS_BLOB = 48 * 1024 * 1024
 # Bảng tri thức thuộc ledger: không viết lại đường dẫn tay (chỉ đếm, báo cáo) — rollback/ghim canary phải còn khớp blob ledger
@@ -106,7 +109,9 @@ KNOWLEDGE_TABLES = ("mem_*",)
 # Trạng thái gắn với MÁY cũ trong hub_state — luôn xoá khi nhập (khoá, rate limit, phiên bản CLI, đăng nhập claude, job launchd, offset bot…)
 MACHINE_STATE = ("repo_locks", "browser_locks", "rate_limit", "rate_limit_gate", "rate_limit_gates", "rate_limit_by_account",
                  "pyenv_baseline", "cli_compat", "cli_unknown_rate", "auth_block", "claude_account_checks", "admin_watch.active",
-                 "systems.registry", "systems.paused", "telegram.offset", "slack.seen")
+                 "systems.registry", "systems.paused", "telegram.offset", "slack.seen",
+                 # PR5: đóng băng chuyển nhà của máy NGUỒN (gói xuất lại từ hub đã đóng băng) + kết quả lần nhập trước của chính nguồn
+                 "migrated_to", "import_paused", "import_repos")
 # Thêm cho `clone` (2 hub cùng chạy): trạng thái kênh chat của bot máy nguồn (nút/tin/map hội thoại) + run hẹn tự resume
 CLONE_STATE = ("pending_resume", "auto_resume_pending")
 CLONE_STATE_PREFIXES = ("telegram.", "slack.")
@@ -335,6 +340,16 @@ def _export(paths: HubPaths, profile: str, by: str, level: int, chome: Path | No
                 skipped += cskip
                 if csec is not None:
                     sections[TS.SECTION] = csec
+                # PR5: repos.json (optional) — repo workspace NGOÀI HUB_HOME: remote (đã che), nhánh, HEAD, dirty. Không đóng gói repo
+                try:
+                    repos = TR.collect(db_copy, [str(paths.home), os.path.realpath(paths.home)])
+                except Exception as e:  # git hỏng/thiếu không được chặn xuất — phần optional
+                    log.warning("không thu được repos.json: %s", e)
+                    repos = []
+                if repos:
+                    meta = _add_member(tf, TR.MEMBER, io.BytesIO(TR.payload(repos)), tmpdir, level=level)
+                    files.append(meta)
+                    sections[TR.SECTION] = {"prefix": TR.MEMBER, "count": len(repos), "bytes": meta["size"], "optional": True}
                 home = str(paths.home)
                 user_home = str(Path.home())
                 manifest = {
@@ -367,6 +382,7 @@ def _export(paths: HubPaths, profile: str, by: str, level: int, chome: Path | No
     sha = B._sha_file(final)
     log.info("đã xuất hub thành %s (%d phần tử, %d byte, %.1f s)", final.name, len(files), size, time.monotonic() - t0)
     return {"id": eid, "path": str(final), "size": size, "sha256": sha, "profile": profile, "files": len(files), "skipped": len(skipped),
+            "repos": [{k: r.get(k) for k in ("path", "git", "remote", "remote_masked", "branch", "dirty", "uncommitted")} for r in repos],
             "user_version": uv, "sections": {k: {"count": s["count"], "bytes": s["bytes"]} for k, s in sections.items()},
             "missing_secrets": manifest["missing_secrets"], "verify": {"ok": True, "warnings": v["warnings"]},
             "duration_s": round(time.monotonic() - t0, 2)}
@@ -451,7 +467,7 @@ def _member_dest(name: str) -> PurePosixPath | None:
     parts = _safe_parts(name)
     if parts is None:
         return None
-    if name in (DB_MEMBER, SECRETS_MEMBER):
+    if name in (DB_MEMBER, SECRETS_MEMBER, TR.MEMBER):
         return PurePosixPath(name)
     if name.startswith(HOME_PREFIX) and len(parts) >= 2:
         rel = PurePosixPath(*parts[1:])
@@ -497,6 +513,8 @@ def check_manifest(m: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
         errors += S.check_meta(m)
     if TS.SECTION in secs and (secs.get(TS.SECTION) or {}).get("prefix") != TS.PREFIX:
         errors.append("manifest: phần claude khai báo sai")
+    if TR.SECTION in secs and (secs.get(TR.SECTION) or {}).get("prefix") != TR.MEMBER:
+        errors.append("manifest: phần repos khai báo sai")
     src = m.get("source") if isinstance(m.get("source"), dict) else {}
     uv = src.get("user_version")
     latest = B.latest_schema_version()
@@ -693,7 +711,7 @@ def _state_keys(conn: sqlite3.Connection, mode: str) -> list[str]:
 
 
 def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], followups: dict[str, Any] | None = None,
-               extra: dict[str, Any] | None = None) -> dict[str, Any]:
+               extra: dict[str, Any] | None = None, repos: list[dict[str, Any]] | None = None, pm: PathMap | None = None) -> dict[str, Any]:
     """Dọn trạng thái máy cũ + áp chế độ trên DB của STAGE (daemon chưa chạy). `apply=False` chỉ đếm (dry-run).
 
     `clone`: run `running|queued|waiting_human` → `interrupted` (không tự resume — `pending_resume` bị xoá); approval đang chờ
@@ -702,7 +720,7 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
     from .store import _dumps, now_iso
 
     out: dict[str, Any] = {"state_cleared": [], "runs_interrupted": 0, "runs_pending_resume": 0, "tasks_blocked": 0, "schedules_paused": 0,
-                           "approvals_cancelled": 0, "questions_cancelled": 0}
+                           "approvals_cancelled": 0, "questions_cancelled": 0, "agents_paused": {}}
     conn = sqlite3.connect(str(db), isolation_level=None)
     try:
         tabs = _tables(conn)
@@ -760,6 +778,8 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
             if apply and rows:
                 conn.executemany("UPDATE schedules SET status='paused', paused_reason=?, paused_by='import', updated_at=? WHERE id=?",
                                  [(CLONE_SCHEDULE_NOTE, now, r[0]) for r in rows])
+        if "agents" in tabs:  # PR5: agent có workspace chưa có ở máy này → paused + lý do (người `agent resume` khi đã có repo)
+            out["agents_paused"] = TR.pause_missing(conn, apply=apply, now=now, pm=None if apply else pm)
         if apply and "hub_state" in tabs:
             src = manifest.get("source") or {}
             info = {"export_id": manifest.get("id"), "source_hub_id": src.get("hub_id"), "source_host": src.get("host"),
@@ -769,6 +789,11 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
                 rows_state.append(("cloned_from", {"hub_id": src.get("hub_id"), "export_id": manifest.get("id"), "at": now}))
             if followups:
                 rows_state.append(("import_followups", followups))
+            if out["agents_paused"]:
+                rows_state.append((TR.PAUSED_KEY, out["agents_paused"]))
+            if repos:
+                rows_state.append((TR.REPOS_KEY, [{k: r.get(k) for k in ("from", "to", "git", "remote", "branch", "head", "dirty", "uncommitted")}
+                                                  for r in repos]))
             for k, v in rows_state:
                 conn.execute("INSERT INTO hub_state(key, value, updated_at) VALUES (?,?,?) "
                              "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", (k, _dumps(v), now))
@@ -776,6 +801,7 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
                 data = {"export_id": manifest.get("id"), "source_hub_id": src.get("hub_id"), "mode": mode, "profile": manifest.get("profile"),
                         "runs_interrupted": out["runs_interrupted"], "tasks_blocked": out["tasks_blocked"], "schedules_paused": out["schedules_paused"],
                         "approvals_cancelled": out["approvals_cancelled"], "questions_cancelled": out["questions_cancelled"],
+                        "agents_paused": len(out["agents_paused"]), "repos": len(repos or []),
                         **{k: (len(v) if isinstance(v, list) else v) for k, v in (extra or {}).items()}}
                 conn.execute("INSERT INTO audit_log (ts, kind, actor, channel, data) VALUES (?,?,?,?,?)",
                              (now, "hub.imported", "user", "cli", json.dumps(data, ensure_ascii=False)))
@@ -856,7 +882,7 @@ def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *
     rep["claude_sessions"] = TS.plan(stage / TS.STAGE_DIR, claude_target if claude_target is not None else TS.claude_home(), pm)
     rep["db_rewrite"] = db_rewrite(db, pm, apply=apply, skip_tables=KNOWLEDGE_TABLES)
     rep["knowledge_rows_with_old_paths"] = db_count_matches(db, pm, KNOWLEDGE_TABLES)
-    files_rw, review = scan_files(stage, pm, skip_dirs=(*SCAN_SKIP_DIRS, TS.STAGE_DIR))
+    files_rw, review = scan_files(stage, pm, skip_dirs=(*SCAN_SKIP_DIRS, TS.STAGE_DIR, TR.MEMBER))
     rep["files_rewrite"] = files_rw
     rep["review"] = review
     if apply and files_rw:
@@ -868,6 +894,9 @@ def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *
     if apply and rep["skills_renamed"]:
         TO.apply_skill_renames(stage, db, rep["skills_renamed"])
     rep["config_changed"] = _adjust_config(stage, mode, apply=apply)
+    rp = TR.plan(stage, pm)  # PR5: repo workspace (repos.json) — thiếu → gợi ý clone, dirty → cảnh báo
+    rep["repos"] = rp["repos"]
+    rep["repos_warnings"] = rp["warnings"]
     rep["mcp_missing"] = TO.mcp_missing(db, None if apply else pm, target_os=target_os)  # type: ignore[arg-type]
     if apply:
         TO.mark_mcp(db, rep["mcp_missing"])
@@ -882,7 +911,7 @@ def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *
                                          "giữ tên cũ); tham chiếu theo tên cũ trong SKILL.md/memory cần người sửa")
         if rep["mcp_missing"]:
             followups["mcp_missing"] = rep["mcp_missing"]
-    rep.update(_adjust_db(db, mode=mode, apply=apply, manifest=manifest, followups=followups, extra=extra))
+    rep.update(_adjust_db(db, mode=mode, apply=apply, manifest=manifest, followups=followups, extra=extra, repos=rp["repos"], pm=pm))
     return rep
 
 
@@ -1017,6 +1046,10 @@ def import_plan(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] =
         if v["ok"]:
             work = _stage_work(tmp, m, pm, mode, apply=False, claude_target=claude_home, target_os=tos, names=names)
             warnings += TO.os_warnings(m, target_os=tos, pm=pm, home=paths.home, user_home=Path(uh), config=_stage_config(tmp))
+            warnings += work.get("repos_warnings") or []
+            if work.get("agents_paused"):
+                warnings.append(f"{len(work['agents_paused'])} agent có workspace chưa có ở máy này → nhập ở trạng thái paused "
+                                f"({', '.join(sorted(work['agents_paused'])[:5])}) — tạo/clone repo rồi `cfharness agent resume <id>`")
             cs = work.get("claude_sessions") or {}
             if cs.get("conflicts"):
                 warnings.append(f"{len(cs['conflicts'])} session Claude đã có ở máy này (trùng id) — giữ bản của máy này, không nhập bản trong gói")
@@ -1057,7 +1090,7 @@ def import_plan(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] =
 def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] = (), mode: str = DEFAULT_MODE, replace: bool = False,
                    user_home: Path | None = None, cfg: dict[str, Any] | None = None, passphrase: str | None = None,
                    skip_secrets: bool = False, claude_home: Path | None = None, target_os: str | None = None,
-                   case_insensitive: bool | None = None) -> dict[str, Any]:
+                   case_insensitive: bool | None = None, clone_repos: bool = False) -> dict[str, Any]:
     """Nhập gói vào `paths.home`. Gọi từ CLI của người khi daemon đích ĐÃ dừng (giữ `daemon.lock` suốt quá trình).
 
     Gói có `secrets.enc`: cần `passphrase` (hoặc `skip_secrets`) — giải mã NGAY sau khi kiểm gói, TRƯỚC mọi ghi vào home (sai → từ chối,
@@ -1067,7 +1100,9 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
     Lỗi bất kỳ sau khi bắt đầu ghi vào home → tự hoàn tác (gồm cả file session vừa ghi): `replace` → khôi phục bản `pre-restore` vừa chụp; home trống → gỡ những gì đã
     ghi. Báo lỗi kèm `data.rolled_back` (và lệnh khôi phục tay nếu chính bước hoàn tác hỏng).
     PR4 (khác OS / hệ thống file): tên file kiểm TRƯỚC khi giải nén (`target_os`, `case_insensitive` như `import_plan`) — file không tạo
-    được ở đích mà không thuộc tri thức → từ chối, chưa ghi gì; tri thức → đổi tên trong stage."""
+    được ở đích mà không thuộc tri thức → từ chối, chưa ghi gì; tri thức → đổi tên trong stage.
+    PR5: `clone_repos` → SAU khi mọi thứ đã vào chỗ (vẫn giữ `daemon.lock`), `git clone` repo thiếu có remote (`transfer_repos.clone`), rồi
+    bỏ paused cho agent mà workspace nay đã có. Lỗi clone KHÔNG hoàn tác lần nhập — chỉ báo trong `repos_cloned`."""
     from . import transfer_secrets as S
     from .daemon import acquire_instance_lock, release_instance_lock
 
@@ -1141,6 +1176,17 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
                 TS.rollback(sess_created)
                 _rollback_import(paths, pre, blank, runs_moved, e)
                 raise  # pragma: no cover — _rollback_import luôn ném
+            cloned: list[dict[str, Any]] = []
+            unpaused: list[str] = []
+            if clone_repos and any(not r.get("exists") for r in rep.get("repos") or []):
+                from .store import now_iso
+
+                try:  # lỗi ở đây KHÔNG hoàn tác lần nhập (hub đã vào chỗ đầy đủ) — chỉ báo
+                    cloned = TR.clone(rep.get("repos") or [])
+                    unpaused = TR.unpause_present(paths.db, now_iso())
+                except Exception as e:  # pragma: no cover
+                    log.exception("clone repo sau khi nhập lỗi")
+                    cloned.append({"to": None, "ok": False, "error": str(e)[:300]})
         finally:
             shutil.rmtree(stage, ignore_errors=True)
     finally:
@@ -1152,7 +1198,7 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
             "secrets": {"imported": sec_rep["imported"], "skipped_mode": sec_rep["skipped_mode"], "kept_target": sec_rep["kept_target"],
                         "missing": sec["missing"], "skipped": bool(skip_secrets and sec["present"]),
                         "totp": bool(sec_rep.get("totp")), "mcp_tokens": bool(sec_rep.get("mcp_tokens"))}, **rep,
-            "claude_sessions": sess_rep, "target_os": tos, "case_insensitive": ci}
+            "claude_sessions": sess_rep, "target_os": tos, "case_insensitive": ci, "repos_cloned": cloned, "agents_unpaused": unpaused}
 
 
 def _rollback_import(paths: HubPaths, pre: dict[str, Any] | None, blank: bool, runs_moved: list[Path], err: BaseException) -> None:
@@ -1215,9 +1261,12 @@ def _move_runs(stage: Path, paths: HubPaths, out: list[Path]) -> list[Path]:
 
 # ============================================================================ trong daemon
 async def export_in_daemon(hub: "Hub", *, profile: str = DEFAULT_PROFILE, stop: bool = False, stop_wait_s: float = 60.0,
-                           by: str = "user") -> dict[str, Any]:
+                           by: str = "user", for_move: bool = False, channel: str = "cli") -> dict[str, Any]:
     """Làm lặng hub (không khởi chạy run trong hàng đợi) → run đang chạy: `stop` thì dừng và chờ, không thì từ chối → chụp + ghi gói
-    trong luồng phụ → thả lặng (luôn, kể cả lỗi)."""
+    trong luồng phụ → thả lặng (luôn, kể cả lỗi).
+    PR5 `for_move` (`hub export --for move`): gói đã qua kiểm tra → ĐÓNG BĂNG hub (`hub_freeze.freeze`, `hub_state.migrated_to`) NGAY trong
+    cửa sổ làm lặng — không có khe nào để run/lịch chạy chen giữa lúc chụp và lúc đóng băng. CLI gắn `secrets.enc` sau đó gọi `hub.freeze`
+    cập nhật sha256 (cùng export_id); gắn hỏng → CLI gọi `hub.unfreeze` (gói đã bị xoá)."""
     _require_human_process("xuất hub")
     if profile not in PROFILES:
         raise HubError(f"profile '{profile}' không hợp lệ (core|full)", code=-32602)
@@ -1242,7 +1291,15 @@ async def export_in_daemon(hub: "Hub", *, profile: str = DEFAULT_PROFILE, stop: 
             await asyncio.sleep(0.1)
         if runs.active:
             raise Conflict(f"run vẫn chưa dừng sau {stop_wait_s:.0f}s: {', '.join(sorted(runs.active)[:5])} — thử lại sau")
+        if for_move and hub.runs.frozen:
+            raise Conflict("hub đã đóng băng (chuyển nhà) — `cfharness hub unfreeze` trước nếu muốn xuất lại để chuyển nhà",
+                           data={"migrated_to": hub.runs.frozen})
         res = await asyncio.to_thread(export_package, hub.paths, profile=profile, by=by)
+        if for_move:
+            from .hub_freeze import freeze
+
+            res["migrated_to"] = freeze(hub, {"export_id": res["id"], "sha256": res["sha256"], "profile": profile, "sealed": False, "by": by,
+                                              "channel": channel})
     finally:
         runs.quiesced = None
         try:
@@ -1252,29 +1309,49 @@ async def export_in_daemon(hub: "Hub", *, profile: str = DEFAULT_PROFILE, stop: 
     return {**res, "stopped_runs": stopped}
 
 
-def export_offline(paths: HubPaths, *, profile: str = DEFAULT_PROFILE) -> dict[str, Any]:
-    """Xuất khi daemon KHÔNG chạy: giữ `daemon.lock` (daemon không thể khởi động chen) trong lúc chụp."""
+def export_offline(paths: HubPaths, *, profile: str = DEFAULT_PROFILE, for_move: bool = False) -> dict[str, Any]:
+    """Xuất khi daemon KHÔNG chạy: giữ `daemon.lock` (daemon không thể khởi động chen) trong lúc chụp. `for_move` (PR5) → đóng băng
+    (`hub_freeze.freeze_offline`) trước khi nhả lock — daemon lên sau đó thấy ngay trạng thái đóng băng."""
     from .daemon import acquire_instance_lock, release_instance_lock
+    from .hub_freeze import KEY as FROZEN_KEY, freeze_offline
 
     _require_human_process("xuất hub")
     lock = acquire_instance_lock(paths)
     if lock is None:
         raise Conflict("daemon đang chạy — xuất qua daemon (bỏ chế độ ngoại tuyến)")
     try:
-        return export_package(paths, profile=profile, by="user")
+        if for_move and paths.db.is_file():
+            c = sqlite3.connect(f"file:{paths.db}?mode=ro", uri=True)
+            try:
+                cur = c.execute("SELECT value FROM hub_state WHERE key=?", (FROZEN_KEY,)).fetchone()
+            except sqlite3.Error:
+                cur = None
+            finally:
+                c.close()
+            if cur:
+                raise Conflict("hub đã đóng băng (chuyển nhà) — `cfharness hub unfreeze` trước nếu muốn xuất lại để chuyển nhà")
+        res = export_package(paths, profile=profile, by="user")
+        if for_move:
+            res["migrated_to"] = freeze_offline(paths, {"export_id": res["id"], "sha256": res["sha256"], "profile": profile, "sealed": False,
+                                                       "by": "user", "channel": "cli"})
+        return res
     finally:
         release_instance_lock(lock)
 
 
 def register_rpc(daemon: "Daemon") -> None:
-    """`hub.export {profile?, stop?}` (HUMAN_ONLY, tự audit). Nhập KHÔNG có RPC: daemon đích phải dừng → CLI của người."""
+    """`hub.export {profile?, stop?, for?: clone|move}` (HUMAN_ONLY, tự audit; `for=move` → đóng băng hub sau khi gói qua kiểm tra — PR5).
+    Nhập KHÔNG có RPC: daemon đích phải dừng → CLI của người."""
     from .mcp_server.rpc import wrap_with_audit
 
     hub = daemon.hub
 
     async def _export(p: dict[str, Any]) -> dict[str, Any]:
         profile = str(p.get("profile") or DEFAULT_PROFILE)
-        return await export_in_daemon(hub, profile=profile, stop=bool(p.get("stop")), by="user")
+        purpose = str(p.get("for") or "clone")
+        if purpose not in MODES:
+            raise HubError(f"for '{purpose}' không hợp lệ (clone|move)", code=-32602)
+        return await export_in_daemon(hub, profile=profile, stop=bool(p.get("stop")), by="user", for_move=purpose == "move")
 
     daemon.methods.update({"hub.export": wrap_with_audit(hub, "hub.export", _export)})
 

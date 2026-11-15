@@ -751,12 +751,14 @@ class BackupService:
             self._task = None
 
     async def _loop(self) -> None:
-        from .runs import export_quiesced
+        from .runs import exporting
 
         while True:
             try:
                 await asyncio.sleep(max(5.0, float(self.cfg().get("tick_s") or 60)))
-                if export_quiesced(self.hub):  # đang xuất gói hub → bỏ lượt (hub_transfer)
+                # đang xuất gói hub → bỏ lượt (hub_transfer). Hub ĐÓNG BĂNG (chuyển nhà, hub_freeze) thì VẪN sao lưu: không tạo run,
+                # không chạm kênh ngoài — người có thể `hub unfreeze` dùng lại máy này, bản sao lưu là lưới an toàn
+                if exporting(self.hub):
                     continue
                 await self.tick()
             except asyncio.CancelledError:

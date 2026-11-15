@@ -143,6 +143,12 @@ class Daemon:
         from .hub_transfer import register_rpc as _register_hub_transfer
 
         _register_hub_transfer(self)
+        # Chuyển nhà: hub.frozen (đọc) + hub.freeze|unfreeze (hub_freeze.py, HUMAN_ONLY, tự audit); hub.doctor (hub_doctor.py, chỉ đọc, HUMAN_ONLY)
+        from .hub_doctor import register_rpc as _register_hub_doctor
+        from .hub_freeze import register_rpc as _register_hub_freeze
+
+        _register_hub_freeze(self)
+        _register_hub_doctor(self)
         # Xem/mở file agent đã thao tác (web chip file): file.read (chỉ đọc) + file.open (tác dụng phụ) — HUMAN_ONLY, tự audit (fileview.py)
         from .fileview import register_rpc as _register_files
 

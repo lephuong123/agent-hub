@@ -205,6 +205,9 @@ DESTRUCTIVE_BASH = [
     "cfharness secret set X y",
     "cfharness hub export --stop",  # xuất toàn bộ hub (hub_transfer.py) — chỉ người
     "cfharness hub import /tmp/x.cfhx --yes --replace --stop",
+    "cfharness hub unfreeze --yes",  # gỡ đóng băng chuyển nhà (hub_freeze.py) — chỉ người
+    "cfharness hub doctor --json",  # lộ đường dẫn/tên secret của người
+    "cfharness hub export --for move -y",
     "sqlite3 ~/.cfharness/hub.db 'select 1'".replace("~/.cfharness", "HUBHOME"),
     "rm -rf HUBHOME/ledger",
     "sed -i 's/rm/xx/' HUBHOME/policy/catalog.yaml",

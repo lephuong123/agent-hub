@@ -70,6 +70,7 @@
     </header>
     {% endif %}
     <main class="wrap" id="main">
+      {% if badge.migrated_to %}<div class="flash error" role="alert" id="migrated-banner">{{ _m.icon('stop') }} Hub này ĐÃ CHUYỂN sang máy khác lúc {{ badge.migrated_to.at }} (gói {{ badge.migrated_to.export_id }}) — đang đóng băng: không chạy run, lịch, Telegram/Slack. Dùng lại máy này: <code>cfharness hub unfreeze</code></div>{% endif %}
       {% block content %}{% endblock %}
     </main>
   </div>

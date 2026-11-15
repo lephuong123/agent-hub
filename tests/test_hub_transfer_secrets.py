@@ -506,8 +506,10 @@ def test_background_loops_skip_while_export_quiesced():
     assert export_quiesced(SimpleNamespace(runs=SimpleNamespace(quiesced="export")))
     assert not export_quiesced(SimpleNamespace(runs=SimpleNamespace(quiesced=None))) and not export_quiesced(SimpleNamespace())
     for fn in (LearningService.loop, LearningOps.loop, CurationService.loop, ScheduleService._loop, ManagerService._loop,
-               backup.BackupService._loop, TaskDispatcher._loop, embed.run_vector_loop):
+               TaskDispatcher._loop, embed.run_vector_loop):
         assert "export_quiesced(" in inspect.getsource(fn), fn.__qualname__
+    # PR5: sao lưu chỉ bỏ lượt khi ĐANG XUẤT (`exporting`), vẫn chạy khi hub đóng băng vì chuyển nhà (hub_freeze)
+    assert "exporting(" in inspect.getsource(backup.BackupService._loop)
 
 
 async def test_schedule_loop_does_not_tick_while_quiesced(monkeypatch):

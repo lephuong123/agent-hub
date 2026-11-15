@@ -352,6 +352,10 @@ async def render(request: Request, name: str, ctx: dict[str, Any] | None = None,
             badge = {"approvals": len(pend or []), "waiting_human": sum(1 for a in pend or [] if a.get("status") == "waiting_human"),
                      "estop": bool((es or {}).get("on")), "admin_estop": bool((es or {}).get("admin")),
                      "questions": len(await questions(request, "open"))}
+            try:  # chuyển nhà (hub_freeze.py): banner "đã chuyển sang máy khác" — daemon cũ chưa có method thì bỏ qua
+                badge["migrated_to"] = ((await rpc(request, "hub.frozen")) or {}).get("migrated_to")
+            except RpcError:
+                badge["migrated_to"] = None
         except (RpcError, DaemonUnavailable, OSError):
             badge = {"down": True}
         if not badge.get("down"):

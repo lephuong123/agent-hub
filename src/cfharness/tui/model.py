@@ -28,6 +28,7 @@ SNAPSHOT_TRIGGERS = (
     "run.queued", "run.started", "run.completed", "run.failed", "run.cancelled", "run.interrupted", "run.waiting_human",
     "run.resumed", "run.takeover", "approval.open", "approval.resolved", "approval.waiting_human", "agent.created",
     "agent.updated", "agent.archived", "agent.deleted", "agent.restored", "hub.estop", "auth.blocked", "hub.admin_estop",
+    "hub.frozen", "hub.unfrozen",  # chuyển nhà (hub_freeze.py): banner "đã chuyển sang máy khác"
 )
 
 
@@ -288,6 +289,9 @@ def header_text(m: TopModel, *, now: float | None = None) -> Text:
         t.append("  ■ ESTOP BẬT ", style=th.ALARM)
         if es.get("reason"):
             t.append(f" {es['reason']}", style=th.ERR)
+    mig = h.get("migrated_to") or {}
+    if mig:  # chuyển nhà (hub_freeze.py): máy này đóng băng — không chạy run/lịch/kênh
+        t.append(f"  ■ ĐÃ CHUYỂN SANG MÁY KHÁC lúc {mig.get('at') or '?'} — đóng băng (`cfharness hub unfreeze`) ", style=th.ALARM)
     if h.get("auth_block"):
         t.append("  ✖ claude chưa đăng nhập", style=th.ERR_STRONG)
     t.append(f"  · CLI {h.get('cli_version') or '?'}", style=th.MUTED)

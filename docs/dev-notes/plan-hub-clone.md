@@ -1,6 +1,6 @@
 # Plan — Xuất / nhập toàn bộ hub sang máy khác (`cfharness hub export|import`)
 
-Trạng thái: **ĐANG LÀM — PR1, PR2, PR3 xong** (xem "Tiến độ" cuối file; plan 2026-11-15; quyết định của chủ repo đã chốt ở mục 10). Mục tiêu: đóng gói MỌI thứ của một hub
+Trạng thái: **ĐANG LÀM — PR1–PR5 xong** (còn PR6 web) (xem "Tiến độ" cuối file; plan 2026-11-15; quyết định của chủ repo đã chốt ở mục 10). Mục tiêu: đóng gói MỌI thứ của một hub
 cfharness thành MỘT file, mang sang máy khác (macOS ↔ Linux ↔ Windows), nhập vào và chạy tiếp — agent, team, task, hội thoại điều
 phối viên, tri thức/học, lịch, quyền đã cấp, kết nối MCP/Telegram/Slack, tài khoản Claude, lịch sử run/audit.
 Trải nghiệm người dùng chỉ có 2 bước: `cfharness hub export` ra một file → chép file sang máy kia bằng cách nào cũng được →
@@ -276,3 +276,32 @@ Không migration DB (trạng thái ở `hub_state`). Ước lượng: PR1 lớn 
   `--map-path` sang `C:\Users\b\…`, file vẫn ghi vào thư mục tạm macOS; ca `skipif` `test_invalid_reason_agrees_with_real_windows_fs` chỉ
   chạy trên Windows); `shutil.which` của lệnh MCP trần trên Windows (PATHEXT `.cmd`); đường dẫn UNC `\\máy\share` mới có test đơn vị; giới
   hạn MAX_PATH 260 ký tự không kiểm; hub đích Windows đọc cấu hình YAML có đường dẫn `C:\…` dạng thô (đã kiểm `yaml.safe_load` trên macOS).
+- **PR5** (2026-11-15): chuyển nhà + repo + tri thức + doctor — `hub_freeze.py`, `transfer_repos.py`, `import_followups.py`, `hub_doctor.py`;
+  test `tests/test_hub_transfer_move.py`.
+  Quyết định: (1) **Sao lưu VẪN chạy khi đóng băng** (`runs.exporting` thay `export_quiesced` ở `backup.py`): không tạo run, không chạm kênh
+  ngoài, không đổi dữ liệu; hub đóng băng vẫn là dữ liệu của người (có thể `unfreeze`) — tắt sao lưu chỉ làm mất lưới an toàn. Mọi vòng nền
+  ghi khác bỏ lượt qua `export_quiesced` (= đang xuất HOẶC đóng băng). (2) Đóng băng ghi NGAY trong cửa sổ làm lặng của `hub.export {for:move}`
+  (sha256 gói chưa gắn secret, `sealed:false`) → không có khe để run/lịch chạy chen; CLI gắn `secrets.enc` xong gọi `hub.freeze` (CHỈ cập nhật
+  cùng export_id: sha256 + `sealed:true`), gắn hỏng (gói bị xoá) → CLI tự `hub.unfreeze`. Ngoại tuyến: `freeze_offline` trước khi nhả lock.
+  Xuất `--for move` khi đã đóng băng → từ chối; xuất clone từ hub đóng băng được; `migrated_to` ∈ `MACHINE_STATE` (gói không mang đóng băng
+  sang máy mới). `--for move` cần xác nhận y/N (không TTY: `--yes`). (3) Telegram/Slack: chặn ở `token()` (không long poll/Socket Mode/gửi;
+  `ignore_enabled` của người — `notify … test|setup` — vẫn chạy) + `QueuedNotifier` (cả webhook một chiều); freeze/unfreeze `kick()` vòng nhận.
+  (4) Lý do tạm dừng agent thiếu workspace ở `hub_state.import_paused` (bảng agents không có cột lý do → không migration), hiện trong lỗi
+  `submit` + doctor; `agent resume` gỡ. Áp cho MỌI agent có `workspace_default` không tồn tại sau khi nhập (không chỉ repo trong repos.json),
+  cả `clone` lẫn `move`. (5) Actor `import` KHÔNG thuộc `AUTO_CHANGE_ACTORS` (do người khởi xướng) → không cần sửa danh sách actor nào khác;
+  revision agent ghi actor `import`. (6) Graph: chỉ sửa fact/thực thể SỐNG tại chỗ (một entry graph mỗi tầng); `mem_episodes` (bằng chứng gốc),
+  fact đã đóng hiệu lực, `.archive/` = lịch sử → giữ chữ cũ. `config.yaml` của agent = bản sao của hàng DB (đã viết lại lúc nhập) → dựng lại từ
+  DB, không qua ledger. (7) `hub.doctor` HUMAN_ONLY (lộ đường dẫn/tên secret/repo), chỉ đọc, không audit, KHÔNG probe mạng trong RPC; CLI chạy
+  tại chỗ (DB chỉ đọc) kể cả khi daemon dừng; `claude --version` luôn chạy, `claude auth status` + `mcp.probe` chỉ với `--probe`.
+  `HUB_HUMAN_ONLY_CLI["hub"] = None` (mọi lệnh con).
+  Lệch plan: không có `--include-dirty-patch` (§4.4) — chỉ cảnh báo dirty; doctor chưa kiểm `hubs.json`, `home status`, `web totp enroll`,
+  Telegram/Slack `test` thật (chỉ bật/tắt + có token); `--clone-repos` dùng remote ĐÃ CHE (repo https riêng tư cần đăng nhập git ở máy mới —
+  `GIT_TERMINAL_PROMPT=0` → báo lỗi, người clone tay); không kiểm `claude --resume` thật (như PR3).
+  **Chữ ký RPC cho PR6 (web)**: `hub.export {profile, stop, for: clone|move}` → `{id, path, size, sha256, …, repos[{path, git, remote,
+  remote_masked, branch, dirty, uncommitted}], migrated_to?}`; `hub.frozen {}` → `{migrated_to|null, banner}` (đọc, mọi người gọi);
+  `hub.freeze {export_id, sha256, sealed}` (HUMAN_ONLY, chỉ cập nhật đóng băng cùng export_id); `hub.unfreeze {export_id?}` (HUMAN_ONLY) →
+  `{unfrozen, migrated_to}`; `hub.doctor {}` (HUMAN_ONLY) → `{ok, home, checks[{id, check, ok, level ok|info|warning|error, detail, fix}],
+  summary{errors, warnings, total}}`. `import_plan` trả thêm `repos[{from, to, exists, git, remote, branch, head, dirty, uncommitted, used_by,
+  hint, head_match?}]`, `agents_paused{id: {reason, workspace}}`; `import_package(clone_repos=)` → `repos_cloned[{to, ok, error?, warning?}]`,
+  `agents_unpaused[]`. Web PR6 dùng `hub.doctor` cho trang sau nhập; banner đóng băng đã có ở `base.html`.
+
