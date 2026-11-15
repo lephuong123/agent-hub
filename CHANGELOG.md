@@ -8,17 +8,24 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ---
 
-## Chưa phát hành (dự kiến v0.2.10)
+## Chưa phát hành
+
+_(chưa có thay đổi)_
+
+---
+
+## v0.2.10 — 2026-11-15
 
 ### Cài đặt hub cho user
-- `scripts/setup-hub-user.sh` làm trọn trong một lệnh: thêm ingress tunnel + DNS cho tên miền con (biến `DOMAIN`, #108), nối thư mục chung Không gian số khi đặt `KGS=<URL>`.
+- `scripts/setup-hub-user.sh` làm trọn trong một lệnh: thêm ingress tunnel + DNS cho tên miền con (biến `DOMAIN`, #108), nối thư mục chung Không gian số khi đặt `KGS=<URL>` (#109).
 
 ### Điều phối viên
 - Biết danh sách lệnh CLI thật của `cfharness`; link trần trong câu trả lời bấm được; file được nhắc tới có chip **Xem/Mở** (#103).
 - **Nhập bằng giọng nói** trên web (nút micro ở ô chat Điều phối, ô "Nói tiếp" của run, ô giao việc): chế độ đọc chép và chế độ hội thoại.
-  Tin nói bằng giọng không bao giờ duyệt approval hay trả lời câu hỏi xin phép (có thể nghe nhầm) — điều phối viên phải hỏi lại bằng nút.
+  Tin nói bằng giọng không bao giờ duyệt approval hay trả lời câu hỏi xin phép (có thể nghe nhầm) — điều phối viên phải hỏi lại bằng nút (#105).
+- Đổi người làm task mà vẫn giữ task trong task gốc: tool `task_reassign` của điều phối viên / RPC `task.reassign` (#104).
 
-### Thư mục dùng chung với "Không gian số"
+### Thư mục dùng chung với "Không gian số" (#106)
 - Thư mục đồng bộ 2 chiều giữa máy chạy hub và Không gian số: bạn thêm/sửa/xoá tệp trên web hoặc điện thoại, agent làm việc trên bản sao cục bộ
   (`~/KhongGianSo/<tên>`). Thiết lập: `cfharness filehub setup --server https://… --binary /đường/dẫn/tang-thu-sync-headless` (đồng ý thiết bị,
   thư mục rỗng tạo ngay ở trang đồng ý); trạng thái: `cfharness filehub status` hoặc thẻ "Không gian số" ở Cài đặt web (qua link public chỉ xem).
@@ -29,7 +36,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - Chip tệp của run trên thư mục chung có thêm "Không gian số" (mở thẳng tệp trên web Không gian số).
 - **Lưu ý khi cập nhật**: cần binary `tang-thu-sync-headless` (≥ `filehub.sync_min_version`); tắt mặc định, không có migration.
 
-### App desktop (hỗ trợ phía hub)
+### App desktop (hỗ trợ phía hub) (#110)
 - `cfharness web --json [--ensure] [--port N]`: in một dòng JSON (địa chỉ, link đăng nhập một lần, mã hub, phiên bản, tên); `--ensure` tự
   khởi động web chạy nền (cổng riêng theo hub, log ở `HUB_HOME/logs/web.log`). Cấu hình mới `web.port`, `web.display_name`.
 - Endpoint `GET /.well-known/cfharness.json` (công khai, chỉ cho biết đây là hub cfharness) và `GET /app/badge` (cần đăng nhập, chỉ số
@@ -51,9 +58,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 ### Chi phí
 - Lượt chạy tiếp sau khi **người** duyệt/từ chối approval không bị trần ngân sách ngày chặn (trước đây báo `resume_failed`, quyết định của người
   thành vô ích). Vẫn áp trần mỗi run và chính sách root của admin. Điều phối viên/hub tự quyết thì không được miễn.
-  Khi miễn trừ thực sự được dùng → audit `budget.exempt_approved`.
+  Khi miễn trừ thực sự được dùng → audit `budget.exempt_approved` (#105).
 
-### Chuyển hub sang máy khác
+### Chuyển hub sang máy khác (#111)
 - `cfharness hub export` đóng gói toàn bộ hub (agent, team, task, tri thức/ledger, lịch, lịch sử run) thành MỘT file `.cfhx`;
   `cfharness hub import <file> [--dry-run] [--map-path CŨ=MỚI]` nhập vào máy khác, tự đổi đường dẫn HUB_HOME/`$HOME`. Mặc định chế độ
   **nhân bản** (hai máy cùng chạy): Telegram/Slack tắt, lịch tạm dừng, task đang dở bị chặn, yêu cầu duyệt/câu hỏi đang chờ của máy nguồn
@@ -94,7 +101,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - `cfharness hub doctor [--probe] [--json]`: kiểm hub sau khi nhập (claude + phiên bản + đăng nhập, secret được tham chiếu, MCP, Telegram/Slack,
   repo + HEAD, agent/lịch đang tạm dừng, việc viết lại tri thức, tự khởi động, `cfharness[vector]`, quyền file) và gợi ý lệnh sửa; tự chạy sau
   `hub import`. Chỉ đọc, chạy được khi daemon dừng; `--probe` thử thật `claude auth status` + kết nối MCP (không gọi model).
-### An toàn (guard)
+### An toàn (guard) (#107)
 - Lệnh "chỉ đọc" có cờ ghi file hoặc chạy lệnh tuỳ ý không còn được cho qua như an toàn: `sort -o`, `awk` (`system()`, `print > file`,
   pipe tới lệnh, `-i inplace`), `git --output`/`-c core.pager=…`/`--paginate`/`--ext-diff`, `diff --output`, `rg --pre`, `man -P`,
   `env -S`/`--split-string=`, `yq -i` — giờ là ghi/cần duyệt và vẫn kiểm đường dẫn được bảo vệ.
@@ -102,16 +109,17 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   dấu nháy và thư mục chạy (cwd) của Bash — duyệt lệnh ở thư mục này không còn áp cho thư mục khác.
 - Luật "luôn cho phép" `exact` bắt buộc gắn agent; luật cũ thiếu agent (sửa tay) không còn áp cho mọi agent (trang Quyền ghi "không áp dụng").
 
-### Web
+### Web (#107)
 - Sau khi gửi tin đọc bằng giọng nói, tin gõ tay kế tiếp không còn bị gắn nhãn giọng nói.
 
-### An toàn (quyền agent / điều phối viên / Slack)
+### An toàn (quyền agent / điều phối viên / Slack) (#107)
 - Agent không còn tự ghi được dòng audit giả danh người (`actor=user`, kênh web…): RPC `audit.record` giờ chỉ người gọi được.
 - Điều phối viên/agent không còn giao task cho điều phối viên hoặc team đang ESTOP bằng tên khoá phụ `assignee_agent_id`/`team_id`.
 - Điều phối viên không còn yêu cầu học/tinh chỉnh agent điều phối viên bằng cách gửi kèm `id` của agent khác (`learn.refine`).
 - Bot Slack chưa ghim workspace (token đặt tay) chỉ nhận tin từ workspace của chính token, không còn nhận từ mọi workspace.
 
-### Run, task và lịch (sửa lỗi)
+### Run, task và lịch (sửa lỗi) (#104, #107)
+- Task gốc không còn kẹt "đang chạy" khi task con cuối bị huỷ: còn task con xong → task gốc xong; không còn task con nào → task gốc `blocked` kèm lý do (hiện ở "Cần bạn") (#104).
 - Task không còn kẹt vĩnh viễn ở trạng thái "đang nhận" (`__claiming__`) khi khởi chạy run gặp lỗi bất ngờ hay daemon dừng giữa chừng.
 - Tự resume: chuỗi có run gốc đã bị dọn vẫn bị giới hạn ngân sách (trước đây thành không giới hạn); `recovery.auto_resume_max_attempts` > 50 nay có hiệu lực.
 - Chi phí luỹ kế của session không còn bị tụt khi một lượt resume thiếu `total_cost_usd` — chi phí lượt sau không bị cộng hai lần.
@@ -120,7 +128,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - Approval đã quyết nhưng lượt chạy tiếp bị chặn (ESTOP, ngân sách…): run chuyển `failed` thay vì kẹt "chờ duyệt"; chạy tiếp bằng `cfharness run continue`.
 - Gửi run lỗi giữa chừng không còn để lại run "đang xếp hàng" ma giữ chỗ ngân sách ngày.
 
-### Học và tri thức (sửa lỗi)
+### Học và tri thức (sửa lỗi) (#107)
 - Thay đổi học chờ eval gate (L3) được kiểm guard lại trước khi áp dụng: ghim/hạn mức/đọc-trước-khi-ghi người vừa đặt trong lúc chấm không còn bị bỏ qua.
 - Quét an toàn nội dung tri thức quét toàn bộ nội dung (trước đây chỉ 64K đầu, SKILL.md được tới 100K — injection đặt sau mốc 64K lọt qua).
 - Sửa file hỗ trợ của skill (`references/`…) bị giới hạn cùng trần `skill_chars` như SKILL.md (trước đây không giới hạn).
@@ -134,6 +142,15 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - Áp dụng thay đổi học (memory/skill/cấu hình/graph) an toàn khi daemon chết giữa chừng: hub ghi ý định trước, khởi động lại thì tự hoàn tất
   hoặc bỏ thay đổi dở dang; trường hợp không xác định được thì cảnh báo (`learning.ledger_recovery`) và giữ bản trước để khôi phục tay.
   Thêm migration v27 (bảng `ledger_pending`) — tự chạy khi cập nhật.
+
+### Lưu ý khi cập nhật
+- Không có migration mới (vẫn v26).
+- Máy nhiều user: nâng cấp **hub của người quản trị trước** — hub đã đặt `web.public_origin`/`web.display_name` ghi bản tóm tắt schema 3,
+  hub admin bản cũ sẽ báo `unsupported_schema`.
+- Thư mục chung Không gian số tắt mặc định; muốn dùng cần binary `tang-thu-sync-headless` (≥ `filehub.sync_min_version`) rồi `cfharness filehub setup`.
+- Sau khi nhập hub từ máy khác: tự khởi động daemon không đi theo gói (`cfharness daemon install-service`), Không gian số phải `filehub setup` lại;
+  chạy `cfharness hub doctor` để xem việc còn phải làm.
+- Luật "luôn cho phép" `exact` sửa tay mà thiếu agent sẽ không còn áp dụng — tạo lại luật gắn agent (trang Quyền).
 
 ---
 

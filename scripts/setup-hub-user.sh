@@ -17,11 +17,10 @@ MCP="${4:-8722}"
 DOMAIN="${DOMAIN:-trungtamdhs.com}"   # miền gốc (zone Cloudflare): https://$SUB.$DOMAIN
 SUB="${SUB:-$U}"        # tên miền con: https://$SUB.$DOMAIN
 HOST="$SUB.$DOMAIN"
-VER_SET="${VER:+1}"
 VER="${VER:-v0.2.10}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
 KGS="${KGS:-}"          # URL Không gian số để nối thư mục chung (trống = bỏ qua bước 10)
 KGS_FOLDER="${KGS_FOLDER:-cfharness}"
-if [ -n "$KGS" ] && [ -z "$VER_SET" ]; then VER=main; fi   # filehub có từ main (#106), chưa có tag
+# filehub có từ v0.2.10 nên tag mặc định đã đủ cho bước 10 (KGS)
 TUNNEL_CFG="${TUNNEL_CFG:-}"   # mặc định /Users/<admin>/.cloudflared/cfharness-config.yml
 CERT_ZONE="${CERT_ZONE:-cchchn.com}"   # zone của ~/.cloudflared/cert.pem: chỉ miền này tạo DNS tự động được
 SYNC_BIN=/usr/local/bin/tang-thu-sync-headless
