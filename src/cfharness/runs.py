@@ -104,7 +104,7 @@ class RunManager:
         self.shutting_down = False
         from .workspace import WorkspaceLocks
 
-        self.locks = WorkspaceLocks(hub.store)  # M3: khoá theo gốc repo (FR-RT-12), thay bản tối thiểu M1-B
+        self.locks = WorkspaceLocks(hub.store, hub)  # M3: khoá theo gốc repo (FR-RT-12), thay bản tối thiểu M1-B
 
     # ------------------------------------------------------------------ state
     @property
@@ -225,6 +225,12 @@ class RunManager:
         if not prompt or not prompt.strip():
             raise HubError("prompt rỗng")
         agent = self.hub.agents.get_row(agent_id)
+        if not cwd and str(agent.get("workspace_default") or "").startswith("filehub:"):
+            cwd = agent["workspace_default"]  # workspace mặc định của agent là thư mục chung → như run --cwd filehub:…
+        if cwd and str(cwd).startswith("filehub:"):  # thư mục chung Không gian số: `filehub:<tên>[/<con>]` → bản sao cục bộ
+            fh_path, fh_folder, _sub = self.hub.filehub.resolve_ref(str(cwd))  # type: ignore[attr-defined]
+            cwd = fh_path
+            run_opts = {**(run_opts or {}), "workspace_kind": "filehub", "filehub": fh_folder["name"]}
         if cwd:  # MGR-1: workspace ad-hoc phải trong gốc cho phép, không trong vùng bảo vệ
             from .workspace import validate_workspace
             validate_workspace(self.hub, cwd, "cwd của run")
@@ -439,7 +445,9 @@ class RunManager:
             if _in_agent_workspaces(cwd, home):  # M7: thư mục cố định trong workspaces/ của agent (hội thoại manager) = scratch
                 wkind = "scratch"
         elif agent.get("workspace_default"):
-            cwd, wkind = Path(agent["workspace_default"]).expanduser(), "dir"
+            wd = str(agent["workspace_default"])
+            cwd = Path(hub.filehub.resolve_ref(wd)[0] if wd.startswith("filehub:") else wd).expanduser()  # type: ignore[attr-defined]
+            wkind = "dir"
         else:
             cwd, wkind = home / "workspaces" / run_id, "scratch"
         if wkind in ("dir", "worktree") and cwd.exists():  # R2-5 (SEC): kiểm lại lúc spawn — chống TOCTOU (đổi thành symlink sau khi đặt)
@@ -885,7 +893,11 @@ class RunManager:
 
         wc = self.hub.config.get("workspace")
         try:
-            cp = await asyncio.to_thread(take_checkpoint, spec.cwd, self.checkpoint_dir(ar.run_id), max_file_bytes=int(wc["max_file_bytes"]), max_files=int(wc["max_files"]))
+            fh = (run.get("run_opts") or {}).get("filehub")
+            cp = await asyncio.to_thread(take_checkpoint, spec.cwd, self.checkpoint_dir(ar.run_id), max_file_bytes=int(wc["max_file_bytes"]), max_files=int(wc["max_files"]),
+                                         force_walk=bool(fh))
+            if fh:
+                cp["filehub"] = str(fh)
         except Exception as e:  # checkpoint lỗi không chặn run, nhưng ghi lại (không revert được)
             run_logger(log, ar.run_id, ar.agent_id).warning("checkpoint run %s lỗi: %r", ar.run_id, e)
             self.store.update_run(ar.run_id, {"checkpoint": {"kind": "error", "error": repr(e)[:300]}, "workspace_key": ar.lock_key})

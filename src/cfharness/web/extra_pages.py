@@ -373,6 +373,8 @@ def diff_view(res: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
         why_not = "none"
     elif res.get("reverted_at"):
         why_not = "Đã hoàn tác lúc " + str(res["reverted_at"])[:19].replace("T", " ") + "."
+    elif d.get("filehub") or (run.get("run_opts") or {}).get("filehub"):
+        why_not = ("Thư mục dùng chung Không gian số — hoàn tác bằng phiên bản/thùng rác trên Không gian số (bấm \"Không gian số\" cạnh từng tệp).")
     elif kind != "git":
         why_not = "Workspace không phải repo git — hub chỉ ghi lại danh sách file bị đổi, không có bản trước để hoàn tác."
     elif d.get("checkpoint_purged_at"):
@@ -388,7 +390,7 @@ def diff_view(res: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
             "hidden_files": max(0, len(d.get("files") or []) - MAX_FILES), "cut_patch": cut_patch, "stat": stat, "modified": modified,
             "commits_made": bool(d.get("commits_made")), "head_before": (d.get("head_before") or "")[:10], "head_after": (d.get("head_after") or "")[:10],
             "truncated": bool(d.get("truncated")), "can_revert": why_not is None and not modified, "why_not": why_not, "reverted_at": res.get("reverted_at"),
-            "open_all": len(files) <= OPEN_IF_FEWER}
+            "open_all": len(files) <= OPEN_IF_FEWER, "filehub": bool(d.get("filehub") or (run.get("run_opts") or {}).get("filehub"))}
 
 
 async def _diff_ctx(request: Request) -> dict[str, Any]:

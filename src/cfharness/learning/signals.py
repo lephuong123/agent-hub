@@ -108,7 +108,7 @@ class SignalCollector:
 
     def on_event(self, ev: HubEvent) -> None:
         t = ev.type
-        if t == "user.message" and ev.payload.get("steer") and ev.agent_id:
+        if t == "user.message" and ev.payload.get("steer") and ev.agent_id and ev.payload.get("by") != "hub":  # steer của hub (filehub) ≠ correction
             rx = self._correction_rx()
             text = str(ev.payload.get("text") or "")
             if rx and rx.search(text):

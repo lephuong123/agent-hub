@@ -542,6 +542,8 @@ class TaskDispatcher:
         Trước đây path của `worktree` bị bỏ → run chạy ở scratch, worktree không bao giờ được tạo."""
         ws = t.get("workspace") or {}
         kind = ws.get("kind") or "scratch"
+        if kind == "filehub":  # thư mục chung: khoá/checkpoint như `dir` (gốc khoá = gốc thư mục chung — WorkspaceLocks)
+            return ws.get("path"), "dir"
         return (ws.get("path") if kind in ("dir", "worktree") else None), kind
 
     def _lock_block(self, t: dict[str, Any], agent_id: str, session_id: str | None, read_only: bool) -> str | None:
@@ -744,8 +746,11 @@ class TaskDispatcher:
         opts = {"json_schema": json_schema, "read_only": read_only, "hub_self": hub_self if self.cfg("hub_self_mcp") else None, "workspace_kind": wkind}
         if wkind == "worktree":
             opts["worktree"] = (t.get("workspace") or {}).get("name") or t["id"]
+        if (t.get("workspace") or {}).get("kind") == "filehub":
+            opts["workspace_kind"] = "filehub"
+            opts["filehub"] = (t.get("workspace") or {}).get("folder")
         extra = (t.get("workspace") or {}).get("extra_write_roots") or []
-        if extra and wkind in ("dir", "worktree"):
+        if extra and wkind in ("dir", "worktree", "scratch"):
             opts["extra_write_roots"] = [str(x) for x in extra][:5]  # đã kiểm lúc tạo task; guard kiểm lại theo workspace.allowed_roots
         if read_only:
             opts["disallowed_tools"] = WRITE_TOOLS

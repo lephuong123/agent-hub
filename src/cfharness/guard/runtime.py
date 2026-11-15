@@ -187,11 +187,13 @@ def secret_read_deny_rules(hub_home: Path, socket: Path) -> list[str]:
     out: list[str] = []
     # WEB: `auth/` giữ khoá ký link đăng nhập web (auth/web.json) — sandbox đã denyRead cả thư mục, đây là lớp Read/Grep/Glob
     # backups/: bản sao lưu chứa toàn bộ hub.db + tri thức mọi agent (backup.py)
+    # filehub/: profile + base của binary sync (Không gian số), control.json — như secrets/ (docs/dev-notes/filehub.md)
     targets = [str(token_path(socket)), f"{hub_home}/secrets/**", f"{hub_home}/agents/*/runtime/**", f"{hub_home}/mcp_server/tokens.json", f"{hub_home}/auth/**",
-               f"{hub_home}/backups/**"]
+               f"{hub_home}/backups/**", f"{hub_home}/filehub/**"]
     real = os.path.realpath(hub_home)
     if real != str(hub_home):
-        targets += [f"{real}/secrets/**", f"{real}/agents/*/runtime/**", f"{real}/mcp_server/tokens.json", f"{real}/auth/**", f"{real}/backups/**"]
+        targets += [f"{real}/secrets/**", f"{real}/agents/*/runtime/**", f"{real}/mcp_server/tokens.json", f"{real}/auth/**", f"{real}/backups/**",
+                    f"{real}/filehub/**"]
     toks = [str(token_path(socket))]
     if IS_WINDOWS:  # CLI báo file_path dạng tên dài — thêm biến thể realpath (vd `LEQUYP~1` → tên thật)
         toks.append(os.path.realpath(toks[0]))
@@ -210,6 +212,7 @@ HUB_WRITE_DENY_NAMES = (
     "policy", "hub.db", "hub.db-wal", "hub.db-shm", "hub.db-journal", "config.yaml", "secrets", "mcp", "mcp_server", "ledger",
     "snapshots", "audit", "trash", "runs", "logs", "prompts", "checkpoints", "global", "teams", "hub.pid", "hub.sock", "auth",
     "backups", "update",  # bản sao lưu HUB_HOME (backup.py) + trạng thái/helper cập nhật (updater.py)
+    "filehub",  # profile/base/status/control của binary sync Không gian số (filehub/)
 )
 AGENT_WRITE_DENY_NAMES = ("config.yaml", "SOUL.md", "MEMORY.md", "USER.md", "skills", ".archive", "runtime", "home", ".tier_overlay")
 
@@ -407,7 +410,7 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
     deny_w += [str(x) for x in sb_cfg.get("extra_deny_write") or []]
     deny_r: list[str] = [str(tok)]
     for h in homes:
-        deny_r += [f"{h}/secrets", f"{h}/agents/*/runtime", f"{h}/mcp_server/tokens.json", f"{h}/auth", f"{h}/backups"]
+        deny_r += [f"{h}/secrets", f"{h}/agents/*/runtime", f"{h}/mcp_server/tokens.json", f"{h}/auth", f"{h}/backups", f"{h}/filehub"]
         try:
             for a in (Path(h) / "agents").iterdir():
                 deny_r.append(str(a / "runtime"))

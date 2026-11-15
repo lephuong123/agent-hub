@@ -141,6 +141,9 @@ class Daemon:
         _register_backup(self)
         # Xem/mở file agent đã thao tác (web chip file): file.read (chỉ đọc) + file.open (tác dụng phụ) — HUMAN_ONLY, tự audit (fileview.py)
         from .fileview import register_rpc as _register_files
+        from .filehub.rpc import register_rpc as _register_filehub
+
+        _register_filehub(self)  # thư mục chung Không gian số: filehub.status|list|link (đọc) + setup|login|add|remove|pause|resume (HUMAN_ONLY, tự audit)
 
         _register_files(self)
         # M1 luồng A: thêm mcp.*/secret.*/audit.*/feedback.* và bọc audit các method thay đổi trạng thái.
