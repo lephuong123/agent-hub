@@ -93,6 +93,15 @@ def mask_file_inplace(path: Any, limit: int = 50_000_000) -> bool:
         return False
 
 
+def contains_secret_value(data: bytes | str) -> bool:
+    """Dữ liệu có chứa GIÁ TRỊ secret đã đăng ký không (quét tệp trong thư mục chung sau run — filehub/service.after_run)."""
+    with _lock:
+        rx, rxb = _rx, _rx_bytes
+    if isinstance(data, str):
+        return rx is not None and rx.search(data) is not None
+    return rxb is not None and rxb.search(data) is not None
+
+
 def mask_obj(obj: Any) -> Any:
     """Che theo GIÁ TRỊ trong cấu trúc lồng (không đổi khoá/kiểu). Không có secret nào → trả nguyên obj."""
     if _rx is None:

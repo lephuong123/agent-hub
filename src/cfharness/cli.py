@@ -936,6 +936,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_question_parsers(sub, common)
 
+    # Thư mục chung Không gian số: cfharness filehub setup|login|status|add|remove|pause|resume (filehub/cli.py)
+    from .filehub.cli import add_parsers as _add_filehub_parsers
+
+    _add_filehub_parsers(sub, common)
+
     # Hệ thống ngoài hub: cfharness system scan|list|show|add|rm|lock|unlock|pause|resume|restart (systems/cli.py)
     from .systems.cli import add_parsers as _add_system_parsers
 
