@@ -299,11 +299,11 @@ def test_import_refuses_tampered_or_unsafe_packages(tmp_path, monkeypatch):
             T.import_package(dst, pkg)
     # phần lạ `optional` (bản sau thêm) → bỏ qua kèm cảnh báo, vẫn nhập được
     pkg = fresh()
-    ti = tarfile.TarInfo("claude/s1.jsonl")
+    ti = tarfile.TarInfo("future/s1.jsonl")
     ti.size = 2
-    _rewrite_pkg(pkg, extra=[(ti, b"{}")], manifest_fn=lambda m: {**m, "sections": {**m["sections"], "claude": {"prefix": "claude/", "optional": True}}})
+    _rewrite_pkg(pkg, extra=[(ti, b"{}")], manifest_fn=lambda m: {**m, "sections": {**m["sections"], "future": {"prefix": "future/", "optional": True}}})
     v = T.verify_package(pkg)
-    assert v["ok"] and any("claude" in w for w in v["warnings"]), v
+    assert v["ok"] and any("future" in w for w in v["warnings"]), v
     assert not dst.db.exists()
 
 

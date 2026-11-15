@@ -29,7 +29,7 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     hs = h.add_subparsers(dest="hub_cmd", required=True)
     e = hs.add_parser("export", allow_abbrev=False, help="đóng gói toàn bộ hub thành một file .cfhx (mặc định HUB_HOME/exports/)", parents=[common])
     e.add_argument("file", nargs="?", default=None, help="nơi đặt gói (mặc định HUB_HOME/exports/<máy>-<ngày>.cfhx)")
-    e.add_argument("--profile", choices=["core", "full"], default="full", help="core = như sao lưu; full = + stdout thô của run (mặc định)")
+    e.add_argument("--profile", choices=["core", "full"], default="full", help="core = như sao lưu + session Claude Code đang dở (điều phối viên, task chưa xong, run dở); full = + stdout thô của run + mọi session Claude của hub (mặc định)")
     e.add_argument("--stop", action="store_true", help="dừng run đang chạy trước khi xuất (không thì từ chối khi có run đang chạy)")
     e.add_argument("--no-secrets", action="store_true", help="KHÔNG mang secret (chỉ ghi tên để đặt lại ở máy kia)")
     e.add_argument("--passphrase-file", default=None, metavar="FILE", help="đọc passphrase từ file (quyền 0600) thay vì hỏi — cho môi trường không TTY")
@@ -197,6 +197,15 @@ def _plan_text(p: dict[str, Any]) -> str:
             out.append(f"  bỏ theo chế độ {p.get('mode')} (bot/OAuth của máy nguồn): {', '.join(sec['skip_mode'])}")
     if p.get("missing_secrets"):
         out.append(f"Secret phải đặt lại sau khi nhập: {', '.join(p['missing_secrets'][:8])}{'…' if len(p['missing_secrets']) > 8 else ''}")
+    cs = p.get("claude_sessions") or {}
+    if cs.get("present"):
+        out.append(f"Session Claude Code: {cs.get('sessions', 0)} session ({cs.get('files', 0)} file, {_size(cs.get('bytes'))}) → {cs.get('target')}/projects"
+                   + (" — transcript đã che secret" if cs.get("redacted") else "")
+                   + (" (cả ở chế độ clone: hội thoại điều phối viên tiếp tục ở máy này)" if p.get("mode") == "clone" else ""))
+        if cs.get("conflicts"):
+            out.append(f"  trùng id với session đã có ở máy này (giữ của máy này): {', '.join(cs['conflicts'][:5])}{'…' if len(cs['conflicts']) > 5 else ''}")
+        if cs.get("cwd_unknown"):
+            out.append(f"  {len(cs['cwd_unknown'])} session không rõ thư mục làm việc gốc — đặt vào thư mục project cũ")
     if p.get("approvals_cancelled") or p.get("questions_cancelled"):
         out.append(f"Huỷ (nhân bản — chưa chạy lại): {p.get('approvals_cancelled', 0)} yêu cầu duyệt, {p.get('questions_cancelled', 0)} câu hỏi đang chờ")
     for m in p.get("mcp_missing") or []:
@@ -303,6 +312,10 @@ def _import(ctx: Any) -> int:
     if r.get("approvals_cancelled") or r.get("questions_cancelled"):
         lines.append(f"Đã huỷ {r.get('approvals_cancelled', 0)} yêu cầu duyệt + {r.get('questions_cancelled', 0)} câu hỏi đang chờ của máy nguồn "
                      "(nhân bản — người trả lời ở máy nguồn)")
+    cs = r.get("claude_sessions") or {}
+    if cs.get("written") or cs.get("conflicts"):
+        lines.append(f"Session Claude Code: {len(cs.get('written') or [])} đã ghi vào {cs.get('target')}/projects (file 0600)"
+                     + (f", bỏ {len(cs['conflicts'])} trùng id" if cs.get("conflicts") else ""))
     if r["mode"] == "clone":
         lines.append("Nhân bản: Telegram/Slack đã tắt (cần bot RIÊNG cho máy này: `cfharness notify telegram setup`), lịch đã tạm dừng "
                      "(`cfharness schedule list` rồi bật lịch cần chạy), task đang dở đã bị chặn (`cfharness task unblock <id>`).")

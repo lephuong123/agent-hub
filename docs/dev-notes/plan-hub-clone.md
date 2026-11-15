@@ -1,6 +1,6 @@
 # Plan — Xuất / nhập toàn bộ hub sang máy khác (`cfharness hub export|import`)
 
-Trạng thái: **ĐANG LÀM — PR1, PR2 xong** (xem "Tiến độ" cuối file; plan 2026-11-15; quyết định của chủ repo đã chốt ở mục 10). Mục tiêu: đóng gói MỌI thứ của một hub
+Trạng thái: **ĐANG LÀM — PR1, PR2, PR3 xong** (xem "Tiến độ" cuối file; plan 2026-11-15; quyết định của chủ repo đã chốt ở mục 10). Mục tiêu: đóng gói MỌI thứ của một hub
 cfharness thành MỘT file, mang sang máy khác (macOS ↔ Linux ↔ Windows), nhập vào và chạy tiếp — agent, team, task, hội thoại điều
 phối viên, tri thức/học, lịch, quyền đã cấp, kết nối MCP/Telegram/Slack, tài khoản Claude, lịch sử run/audit.
 Trải nghiệm người dùng chỉ có 2 bước: `cfharness hub export` ra một file → chép file sang máy kia bằng cách nào cũng được →
@@ -246,3 +246,14 @@ Không migration DB (trạng thái ở `hub_state`). Ước lượng: PR1 lớn 
   hoặc home trống); làm lặng vòng nền ghi tri thức/DB (`runs.export_quiesced`) — lượt đang `await` dở không bị cắt (ghi rõ ở docstring
   `hub_transfer`), thứ tự chụp giữ DB trước rồi file (blob ledger luôn có đủ cho entry trong DB). PR1 tính nhầm `secrets/.meta.json` là
   secret thiếu — đã sửa (dùng `secrets.NAME_RE`).
+- **PR3** (2026-11-15): session Claude Code — `transfer_sessions.py` + phần `claude/` (optional) của gói; nhập ghi vào
+  `<claude home>/projects/<encode_cwd(cwd mới)>/`, viết lại đường dẫn từng dòng JSON, hoàn tác cùng lần nhập.
+  Quy tắc mã hoá cwd XÁC NHẬN: đọc hàm `WH`/`k` trong binary Claude Code 2.1.325 (`replace(/[^a-zA-Z0-9]/g,"-")`, > 200 ký tự → 200 đầu +
+  `-` + `Math.abs(hashJava).toString(36)`; tra thư mục dài theo tiền tố 200 ký tự + kiểm cwd) và đối chiếu 3.655/3.655 thư mục thật
+  `~/.claude/projects` trên máy dev (có `.`, `_`, khoảng trắng, ngoặc, chữ Việt NFC); giá trị thư mục dài kiểm bằng chính hàm JS trên node.
+  Lệch/chốt so với plan: (1) mục 4.3 nói lấy cả `manager_conversations` cho mọi profile — `core` chỉ lấy hội thoại CHƯA lưu trữ;
+  run dở = `running|queued|waiting_human|interrupted` chưa có `continued_in_run_id` + `pending_resume`/`auto_resume_pending`.
+  (2) Che secret theo giá trị trong transcript lúc xuất (mặc định, không tắt được) — resume vẫn chạy, model thấy `***`; giá trị nhiều dòng
+  dạng thô trong file không phải JSON lines không bị che. (3) File ngoài `.jsonl` trong cây `<sid>/` (tool-results) chép nguyên, không đổi
+  đường dẫn. (4) Không có cờ `--no-sessions`. (5) Không kiểm `claude --resume` thật (fake_claude không mô phỏng tra file) — có hàm hợp đồng
+  `find_session` + test; nghiệm thu thật với claude chưa làm. Windows (`C:\…` → `C--…`) mới suy từ mã, chờ spike PR4.

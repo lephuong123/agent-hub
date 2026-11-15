@@ -4,6 +4,9 @@ Gói `.cfhx` = MỘT file tar KHÔNG nén ngoài (0600); từng phần tử nén
 - `hub.db` — chụp bằng SQLite online backup API (`backup.snapshot_db`), không bao giờ chép file thô.
 - `home/<rel>` — đúng tập sao lưu của `backup.py` (`backup.iter_included`: cấu hình, chính sách, tri thức, ledger, prompt đóng băng…).
 - `extra/runs/<rel>` — profile `full`: stdout/stderr thô của run.
+- `claude/<sid>.jsonl`, `claude/<sid>/…`, `claude/index.json` — (PR3, phần optional) session Claude Code của hub để `--resume` chạy tiếp
+  ở máy mới: `core` = hội thoại điều phối viên + task chưa xong + run dở/`pending_resume`; `full` = mọi session hub biết. Đã che secret
+  theo giá trị; nhập = đổi thư mục `projects/<encode_cwd(cwd mới)>/` + viết lại đường dẫn trong từng dòng (`transfer_sessions.py`).
 - `secrets.enc` — (PR2, mặc định có) `secrets/*` (+ tuỳ chọn `auth/totp.json`, `mcp_server/tokens.json`) mã hoá scrypt → AES-256-GCM, AAD
   ràng buộc id gói + sha256 phần còn lại của manifest (`transfer_secrets.py`). Gắn bởi `seal_package` trong tiến trình CLI của người
   SAU khi daemon đóng gói phần không mật — passphrase không bao giờ qua RPC. `--no-secrets` → chỉ ghi TÊN vào `missing_secrets`.
@@ -13,7 +16,7 @@ Gói `.cfhx` = MỘT file tar KHÔNG nén ngoài (0600); từng phần tử nén
   (TÊN secret KHÔNG mang theo), `secrets{cipher, kdf, nonce, names, totp, mcp_tokens}` khi có `secrets.enc`.
 Luôn bỏ: `checkpoints/` (chủ repo chốt), `secrets/`, `auth/`, `mcp_server/`, `logs/`, `workspaces/`, `worktrees/`, `evals/`, `models/`,
 `update/`, `backups/`, `exports/`, `imports/`, socket/pid/lock (`secrets/` chỉ đi qua `secrets.enc`; KHÔNG BAO GIỜ `auth/web.json`, thiết bị tin
-cậy, `<socket>.auth`). Phần mở rộng (bản sau, không đổi format): `claude/…` session Claude Code (PR3), `repos.json` (PR5) — mỗi phần là một mục `sections` có `prefix`; bản cũ gặp mục lạ `optional`
+cậy, `<socket>.auth`). Phần mở rộng (bản sau, không đổi format): `repos.json` (PR5) — mỗi phần là một mục `sections` có `prefix`; bản cũ gặp mục lạ `optional`
 thì bỏ qua kèm cảnh báo, mục lạ không `optional` → từ chối.
 
 XUẤT chạy trong daemon (RPC `hub.export`, HUMAN_ONLY, tự audit) hoặc ngoại tuyến (CLI giữ `daemon.lock` khi daemon dừng). Một RPC duy
@@ -67,8 +70,9 @@ from typing import TYPE_CHECKING, Any, BinaryIO, Iterable, Iterator
 
 from . import __version__
 from . import backup as B
+from . import transfer_sessions as TS
 from .errors import Conflict, HubError, NotFound
-from .pathmap import PathMap, db_count_matches, db_rewrite, rewrite_files, scan_files
+from .pathmap import SCAN_SKIP_DIRS, PathMap, db_count_matches, db_rewrite, rewrite_files, scan_files
 from .paths import HubPaths
 from .secrets import NAME_RE as SECRET_RE  # tên secret thật (không tính `.meta.json`, file tạm)
 
@@ -92,7 +96,7 @@ MODES = ("clone", "move")
 DEFAULT_PROFILE = "full"
 DEFAULT_MODE = "clone"
 # Phần (section) bản này đọc được. Thêm phần mới (secrets/claude/repos) = thêm vào đây + luật tên phần tử ở `_member_dest`.
-KNOWN_SECTIONS = ("db", "home", "runs", "secrets")
+KNOWN_SECTIONS = ("db", "home", "runs", "secrets", "claude")
 SECRETS_MEMBER = "secrets.enc"  # = transfer_secrets.MEMBER (PR2: secret mã hoá bằng passphrase)
 MAX_SECRETS_BLOB = 48 * 1024 * 1024
 # Bảng tri thức thuộc ledger: không viết lại đường dẫn tay (chỉ đếm, báo cáo) — rollback/ghim canary phải còn khớp blob ledger
@@ -265,7 +269,8 @@ def _workspace_roots(db: Path) -> list[str]:
 
 
 # ============================================================================ xuất
-def export_package(paths: HubPaths, *, profile: str = DEFAULT_PROFILE, by: str = "user", compresslevel: int = 6) -> dict[str, Any]:
+def export_package(paths: HubPaths, *, profile: str = DEFAULT_PROFILE, by: str = "user", compresslevel: int = 6,
+                   claude_home: Path | None = None) -> dict[str, Any]:
     """Ghi gói `.cfhx` vào `HUB_HOME/exports/` rồi kiểm lại. Daemon: gọi trong luồng phụ khi hub đã lặng; ngoại tuyến: người gọi giữ
     `daemon.lock`. Trả tóm tắt (id, path, size, sha256, profile, files, user_version, verify)."""
     if profile not in PROFILES:
@@ -275,14 +280,15 @@ def export_package(paths: HubPaths, *, profile: str = DEFAULT_PROFILE, by: str =
     if not _LOCK.acquire(blocking=False):
         raise Conflict("đang xuất một gói khác — chờ xong rồi thử lại")
     try:
-        return _export(paths, profile, by, max(1, min(int(compresslevel), 9)))
+        return _export(paths, profile, by, max(1, min(int(compresslevel), 9)), claude_home)
     finally:
         _LOCK.release()
 
 
-def _export(paths: HubPaths, profile: str, by: str, level: int) -> dict[str, Any]:
+def _export(paths: HubPaths, profile: str, by: str, level: int, chome: Path | None = None) -> dict[str, Any]:
     from .admin_overview import hub_id
 
+    chome = Path(chome) if chome is not None else TS.claude_home()
     d = _private_dir(exports_dir(paths))
     t0 = time.monotonic()
     eid = _new_id(p.name[: -len(EXT)] for p in d.glob(f"*{EXT}"))
@@ -320,6 +326,13 @@ def _export(paths: HubPaths, profile: str, by: str, level: int) -> dict[str, Any
                         continue
                     files.append(meta)
                     _sec(sec, HOME_PREFIX if sec == "home" else RUNS_PREFIX, meta)
+                # PR3: session Claude Code của hub (`claude/`, phần optional) — chọn theo profile từ DB ĐÃ chụp, che secret theo giá trị
+                cfiles, csec, cskip = TS.export_into(lambda n, f: _add_member(tf, n, f, tmpdir, level=level), db_copy, paths.home, profile,
+                                                     tmpdir, chome=chome)
+                files += cfiles
+                skipped += cskip
+                if csec is not None:
+                    sections[TS.SECTION] = csec
                 home = str(paths.home)
                 user_home = str(Path.home())
                 manifest = {
@@ -328,7 +341,7 @@ def _export(paths: HubPaths, profile: str, by: str, level: int) -> dict[str, Any
                                "sep": os.sep, "arch": platform.machine(), "host": _host_label(), "cfharness_version": __version__,
                                "user_version": uv, "hub_id": hub_id(paths.home)},
                     "path_roots": {"hub_home": home, "hub_home_real": os.path.realpath(home), "user_home": user_home,
-                                   "workspaces": _workspace_roots(db_copy)},
+                                   "workspaces": _workspace_roots(db_copy), "claude_home": str(chome)},
                     "sections": sections, "files": files, "skipped": skipped,
                     "missing_secrets": _secret_names(paths.home), "dirs": _policy_dirs(paths.home),
                     "excluded": sorted({*B.EXCLUDED, EXPORTS_DIRNAME, IMPORTS_DIRNAME, *(("runs",) if profile == "core" else ())}),
@@ -443,6 +456,8 @@ def _member_dest(name: str) -> PurePosixPath | None:
         return rel if B.included(rel) else None
     if name.startswith(RUNS_PREFIX) and len(parts) >= 3:
         return PurePosixPath("runs", *parts[2:])
+    if name.startswith(TS.PREFIX):
+        return TS.member_dest(parts)
     return None
 
 
@@ -478,6 +493,8 @@ def check_manifest(m: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
         if (secs.get("secrets") or {}).get("prefix") != SECRETS_MEMBER:
             errors.append("manifest: phần secrets khai báo sai")
         errors += S.check_meta(m)
+    if TS.SECTION in secs and (secs.get(TS.SECTION) or {}).get("prefix") != TS.PREFIX:
+        errors.append("manifest: phần claude khai báo sai")
     src = m.get("source") if isinstance(m.get("source"), dict) else {}
     uv = src.get("user_version")
     latest = B.latest_schema_version()
@@ -814,13 +831,16 @@ def _mcp_missing_commands(db: Path, pm: PathMap) -> list[dict[str, str]]:
     return out
 
 
-def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *, apply: bool, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Phần dùng chung giữa dry-run và nhập thật — trên STAGE (đã giải nén, đã kiểm sha)."""
+def _stage_work(stage: Path, manifest: dict[str, Any], pm: PathMap, mode: str, *, apply: bool, extra: dict[str, Any] | None = None,
+                claude_target: Path | None = None) -> dict[str, Any]:
+    """Phần dùng chung giữa dry-run và nhập thật — trên STAGE (đã giải nén, đã kiểm sha). Session Claude (PR3) chỉ LẬP KẾ HOẠCH ở đây
+    (đếm, sid trùng); ghi thật ở `import_package` sau khi hub.db đã vào chỗ."""
     db = stage / DB_MEMBER
     rep: dict[str, Any] = {}
+    rep["claude_sessions"] = TS.plan(stage / TS.STAGE_DIR, claude_target if claude_target is not None else TS.claude_home(), pm)
     rep["db_rewrite"] = db_rewrite(db, pm, apply=apply, skip_tables=KNOWLEDGE_TABLES)
     rep["knowledge_rows_with_old_paths"] = db_count_matches(db, pm, KNOWLEDGE_TABLES)
-    files_rw, review = scan_files(stage, pm)
+    files_rw, review = scan_files(stage, pm, skip_dirs=(*SCAN_SKIP_DIRS, TS.STAGE_DIR))
     rep["files_rewrite"] = files_rw
     rep["review"] = review
     if apply and files_rw:
@@ -894,7 +914,8 @@ def _secrets_plan(m: dict[str, Any], blob: bytes | None, mode: str, passphrase: 
 
 
 def import_plan(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] = (), mode: str = DEFAULT_MODE,
-                user_home: Path | None = None, passphrase: str | None = None, skip_secrets: bool = False) -> dict[str, Any]:
+                user_home: Path | None = None, passphrase: str | None = None, skip_secrets: bool = False,
+                claude_home: Path | None = None) -> dict[str, Any]:
     """Kế hoạch nhập (KHÔNG ghi gì vào home đích): kiểm gói, bản đồ đường dẫn, số giá trị/file sẽ viết lại, trạng thái sẽ dọn,
     run/task/lịch bị ảnh hưởng, MCP thiếu lệnh, secret phải đặt lại, home đích có trống không. Giải nén vào thư mục tạm riêng.
     `passphrase` → thử giải mã `secrets.enc` (sai → blocker). Không bao giờ trả giá trị secret."""
@@ -912,7 +933,12 @@ def import_plan(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] =
         pm = build_pathmap(m, paths.home, user_home or Path.home(), maps)
         work: dict[str, Any] = {}
         if v["ok"]:
-            work = _stage_work(tmp, m, pm, mode, apply=False)
+            work = _stage_work(tmp, m, pm, mode, apply=False, claude_target=claude_home)
+            cs = work.get("claude_sessions") or {}
+            if cs.get("conflicts"):
+                warnings.append(f"{len(cs['conflicts'])} session Claude đã có ở máy này (trùng id) — giữ bản của máy này, không nhập bản trong gói")
+            if cs.get("present") and cs.get("redacted"):
+                warnings.append("transcript session Claude trong gói đã che secret theo giá trị (***) — resume vẫn chạy, model thấy *** chỗ token cũ")
         blank = home_blank(paths)
         if m.get("profile") == "core":
             warnings.append("gói profile core — không có stdout thô của run cũ (runs/)")
@@ -946,12 +972,14 @@ def import_plan(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] =
 
 def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]] = (), mode: str = DEFAULT_MODE, replace: bool = False,
                    user_home: Path | None = None, cfg: dict[str, Any] | None = None, passphrase: str | None = None,
-                   skip_secrets: bool = False) -> dict[str, Any]:
+                   skip_secrets: bool = False, claude_home: Path | None = None) -> dict[str, Any]:
     """Nhập gói vào `paths.home`. Gọi từ CLI của người khi daemon đích ĐÃ dừng (giữ `daemon.lock` suốt quá trình).
 
     Gói có `secrets.enc`: cần `passphrase` (hoặc `skip_secrets`) — giải mã NGAY sau khi kiểm gói, TRƯỚC mọi ghi vào home (sai → từ chối,
     home không đổi). Secret được ghi SAU CÙNG (theo chế độ — `transfer_secrets.classify`), có nhật ký hoàn tác.
-    Lỗi bất kỳ sau khi bắt đầu ghi vào home → tự hoàn tác: `replace` → khôi phục bản `pre-restore` vừa chụp; home trống → gỡ những gì đã
+    Session Claude Code (PR3, phần `claude/`) ghi vào `<claude home>/projects/<encode_cwd(cwd mới)>/` SAU khi hub.db vào chỗ, TRƯỚC secret —
+    cả ở chế độ `clone` (hội thoại điều phối viên tiếp tục ở máy mới); sid đã có → giữ của máy này.
+    Lỗi bất kỳ sau khi bắt đầu ghi vào home → tự hoàn tác (gồm cả file session vừa ghi): `replace` → khôi phục bản `pre-restore` vừa chụp; home trống → gỡ những gì đã
     ghi. Báo lỗi kèm `data.rolled_back` (và lệnh khôi phục tay nếu chính bước hoàn tác hỏng)."""
     from . import transfer_secrets as S
     from .daemon import acquire_instance_lock, release_instance_lock
@@ -986,7 +1014,8 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
                 payload = S.decrypt(m, v["secrets_blob"], passphrase)  # sai → HubError, chưa ghi gì vào home
             pm = build_pathmap(m, paths.home, user_home or Path.home(), maps)
             info = {"secrets_imported": len(sec["import"]), "secrets_skipped_mode": len(sec["skip_mode"]), "secrets_missing": sec["missing"]}
-            rep = _stage_work(stage, m, pm, mode, apply=True, extra=info)
+            chome = Path(claude_home) if claude_home is not None else TS.claude_home()
+            rep = _stage_work(stage, m, pm, mode, apply=True, extra=info, claude_target=chome)
             c = sqlite3.connect(str(stage / DB_MEMBER))
             try:
                 integ = str(c.execute("PRAGMA integrity_check").fetchone()[0])
@@ -999,6 +1028,8 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
                 pre = B._create(paths, "pre-restore", f"before-import-{str(m.get('id') or '')[:12].lower()}", cfg, "user")
             runs_moved: list[Path] = []
             undo: list[tuple[Path, bytes | None]] = []
+            sess_created: list[Path] = []
+            sess_rep: dict[str, Any] = rep.get("claude_sessions") or {}
             sec_rep: dict[str, Any] = {"imported": [], "skipped_mode": [], "kept_target": []}
             try:
                 removed, written = B._apply_stage(paths, stage)
@@ -1009,10 +1040,12 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
                 os.replace(stage / DB_MEMBER, paths.db)
                 os.chmod(paths.db, 0o600)
                 baseline = B.rebaseline_offline(paths)
+                sess_rep, sess_created = TS.install(stage / TS.STAGE_DIR, chome, pm)
                 if payload is not None:
                     sec_rep, undo = S.apply(paths.home, payload, mode=mode)
             except BaseException as e:
                 S.rollback(undo)
+                TS.rollback(sess_created)
                 _rollback_import(paths, pre, blank, runs_moved, e)
                 raise  # pragma: no cover — _rollback_import luôn ném
         finally:
@@ -1025,7 +1058,8 @@ def import_package(paths: HubPaths, pkg: Path, *, maps: Iterable[tuple[str, str]
             "user_version": v.get("user_version"), "missing_secrets": sec["missing"],
             "secrets": {"imported": sec_rep["imported"], "skipped_mode": sec_rep["skipped_mode"], "kept_target": sec_rep["kept_target"],
                         "missing": sec["missing"], "skipped": bool(skip_secrets and sec["present"]),
-                        "totp": bool(sec_rep.get("totp")), "mcp_tokens": bool(sec_rep.get("mcp_tokens"))}, **rep}
+                        "totp": bool(sec_rep.get("totp")), "mcp_tokens": bool(sec_rep.get("mcp_tokens"))}, **rep,
+            "claude_sessions": sess_rep}
 
 
 def _rollback_import(paths: HubPaths, pre: dict[str, Any] | None, blank: bool, runs_moved: list[Path], err: BaseException) -> None:
