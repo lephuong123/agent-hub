@@ -46,6 +46,7 @@ from ..events import HubEvent, make_event
 from ..logs import RunLogger, run_logger
 from ..oscompat import pid_alive
 from ..store import now_iso
+from ..task_report import compose_root, pick_summary
 from . import routing
 from .plan import PLAN_SCHEMA, REVIEW_SCHEMA, PlanError, validate_plan, validate_review
 
@@ -880,7 +881,7 @@ class TaskDispatcher:
             if oc == "completed" and not op and self.cfg("require_completion_call"):
                 self.store.update_run(run["id"], {"status": "protocol_violation", "outcome": "protocol_violation", "error": "kết thúc mà không gọi task_complete/task_block"})
                 return self._on_failure(t, run, "protocol_violation")
-            summary = sig.get("summary") or run.get("summary") or ""
+            summary = pick_summary(sig.get("summary"), run.get("summary"))  # bản đầy đủ hơn: tin nhắn cuối hay summary của task_complete
             result = sig.get("result") if sig.get("result") is not None else run.get("result_json")
             data = {"result_summary": summary, "result_json": result, "consecutive_failures": 0, "current_run_id": None, "rate_limit_hits": 0}
             needs_review = op == "request_review" or (t.get("team_id") and self.teams.policies(t["team_id"]).review_required) or (t.get("overrides") or {}).get("review")
@@ -969,14 +970,13 @@ class TaskDispatcher:
                 self.tasks.set_status(rid, "blocked", reason=f"mọi task con ({len(every)}) đã bị huỷ — giao lại, đóng hoặc archive task gốc")
             return
         if subs and all(s["status"] == "done" for s in subs):
-            parts, res = [], []
+            res = []
             for s in subs:
-                parts.append(f"## {s['title']} ({s['id']}, {s.get('assignee_agent_id') or '-'})\n{s.get('result_summary') or ''}".rstrip())
                 res.append({"task_id": s["id"], "key": s.get("plan_key"), "title": s["title"], "assignee": s.get("assignee_agent_id"),
                             "summary": s.get("result_summary"), "result": s.get("result_json")})
             leaves = [s for s in subs if not self.tasks.children(s["id"])]
             final = "\n\n".join((s.get("result_summary") or "") for s in leaves).strip()
-            self.tasks.set_status(rid, "done", reason="mọi task con đã done", result_summary="\n\n".join(parts),
+            self.tasks.set_status(rid, "done", reason="mọi task con đã done", result_summary=compose_root(subs),  # gộp Đã làm/Còn mở/Cần bạn của task con
                                   result_json={"subtasks": res, "final": final})
             return
         blocked = [s for s in subs if s["status"] == "blocked"]
@@ -1126,7 +1126,8 @@ class TaskDispatcher:
                 sig = {"op": "complete" if op == "task_complete" else "request_review", "summary": str(args.get("summary") or ""), "result": args.get("result")}
             self.store.update_run(run_id, {"task_signal": sig})
             self.tasks.publish("task.signal", t, {"op": sig["op"], "run_id": run_id, "summary": (sig.get("summary") or sig.get("reason") or "")[:300]}, agent_id=run["agent_id"])
-            return {"ok": True, "task_id": tid, "recorded": sig["op"], "note": "Recorded. Finish your turn now with a short summary."}
+            return {"ok": True, "task_id": tid, "recorded": sig["op"], "note": "Recorded. Now end your turn: your final message is the task report "
+                    "(outcome line, then Đã làm / Còn mở / Cần bạn) — the owner reads it."}
         if op in ("task_create", "task_link", "team_roster"):
             if not is_lead:
                 raise HubError(f"{op} chỉ dành cho lead của team")

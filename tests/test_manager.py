@@ -373,3 +373,49 @@ async def test_reply_text_cap_truncated_flag_and_failure_text_without_run_id(d):
     assert r1["run_id"] not in p["text"] and p["text"].startswith(chatview.FAIL_PREFIX)
     assert failure_text(p["text"], run_id="r_9").plain == "✗ Điều phối viên không trả lời được (vượt ngân sách)\n     hết ngân sách · run r_9"
     assert failure_text("(Điều phối viên không trả lời được: đã huỷ)").plain == "  ⎿  Đã dừng lượt"
+
+
+async def test_task_done_report_posted_to_assigning_conversation_by_hub(d):
+    """Task người giao xong → hub TỰ gửi báo cáo (Đã làm / Còn mở / Cần bạn) về hội thoại đã giao, không chờ tick của điều phối viên
+    (trước đây tick hay NO_ACTION → người không nghe gì). Sự kiện cho tick ghi rõ đã báo để điều phối viên không lặp lại."""
+    res = await manager_run(d, text="sửa login")
+    d.hub.agents.create({"id": "w1", "name": "w1"})
+    ta = await tool(d, res["run_id"], "task_create", {"title": "Sửa login", "body": "làm", "assignee": "w1"})
+    d.hub.runs.runtime().release()
+    await wait_status(d, res["run_id"], ("completed",))
+    m = d.hub.manager
+    m.pending.clear()
+    m._pending_keys.clear()
+    report = "Đã sửa lỗi login.\n\n**Đã làm**\n- Sửa `auth.py`\n\n**Còn mở**\n- Không có\n\n**Cần bạn**\n- Duyệt PR #12"
+    d.hub.tasks.set_status(ta["task_id"], "done", reason="ok", result_summary=report)
+    reps = [e.payload for e in _events(d, "manager.reply") if e.payload.get("auto_report")]
+    assert len(reps) == 1 and reps[0]["conversation_id"] == res["conversation_id"] and reps[0]["kind"] == "notify"
+    assert reps[0]["notify_kind"] == "need_human" and "Sửa login" in reps[0]["text"] and "Duyệt PR #12" in reps[0]["text"]
+    hist = await rpc(d, "manager.history", {"conversation_id": res["conversation_id"]})
+    assert [x for x in hist if x["role"] == "notify" and "Duyệt PR #12" in x["text"]]
+    ev = [p for p in m.pending if p["kind"] == "task_done"][0]
+    assert ev["reported"] and "ALREADY POSTED" in ev["summary"] and "Needs owner: - Duyệt PR #12" in ev["summary"]
+    # tắt cấu hình → như cũ: không tự gửi, điều phối viên lo
+    d.hub.config.set("manager.auto_report_tasks", False)
+    tb = d.hub.tasks.create({"assignee": "w1", "title": "B", "body": "làm"}, created_by="manager:boss")
+    m.remember_origin("task", tb["id"], res["conversation_id"])
+    d.hub.tasks.set_status(tb["id"], "done", reason="ok", result_summary="xong B")
+    assert len([e for e in _events(d, "manager.reply") if e.payload.get("auto_report")]) == 1
+    assert not [p for p in m.pending if p.get("task_id") == tb["id"]][0]["reported"]
+
+
+async def test_task_done_without_origin_conversation_is_not_auto_reported(d):
+    await manager_run(d)
+    d.hub.agents.create({"id": "w1", "name": "w1"})
+    t = d.hub.tasks.create({"assignee": "w1", "title": "x", "body": "y"}, created_by="manager:boss")
+    d.hub.tasks.set_status(t["id"], "done", reason="ok", result_summary="xong")
+    assert not [e for e in _events(d, "manager.reply") if e.payload.get("auto_report")]
+    ev = [p for p in d.hub.manager.pending if p["kind"] == "task_done"][0]
+    assert not ev["reported"] and "ALREADY POSTED" not in ev["summary"]
+
+
+def test_tick_prompt_requires_report_for_task_done():
+    from cfharness.manager import prompts
+
+    p = prompts.tick_prompt([{"kind": "task_done", "summary": "t done"}], dropped=0, reason="events", open_work=0)
+    assert "MUST call notify_owner" in p and "ALREADY POSTED" in p
