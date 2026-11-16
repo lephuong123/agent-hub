@@ -187,7 +187,7 @@ Plan + quyết định W1–W7: `plan-filehub-workspace-root.md`. Hợp đồng 
 Lệch plan/hợp đồng (H7):
 - Plan §4 "Chuyển chế độ" gỡ root cũ TRƯỚC khi đăng nhập; làm SAU khi đăng nhập thành công (lỗi đăng nhập không làm mất thư mục chung đang chạy).
 - `cfharness filehub rename` (đổi tên cục bộ) chưa làm (plan để sau).
-- `filehub.sync_min_version` chưa nâng — TODO khi S5 phát hành.
+- `filehub.sync_min_version` giữ nguyên: headless S5 vẫn báo `--version` 0.1.1 (phiên bản workspace = phiên bản app desktop, chưa phát hành) — hub nhận diện bản mới theo tính năng (binary cũ + chế độ workspace → "chưa hỗ trợ").
 
 Test: `test_filehub_supervisor.py` (workspace 5 cột + `--root-kind`, 4 cột / account rỗng, binary cũ 3 cột, relay state một lần/hết hạn/lỗi/code chèn dòng, switch, remote setup),
 `test_filehub_workspace.py` (`filehub:<ws>/<cấp 1>/…` trong W, bí danh tên mới, prompt, revoked), `test_web_filehub.py` (thao tác qua link public,

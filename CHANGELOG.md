@@ -10,6 +10,12 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+---
+
+## v0.2.14 — 2026-11-16
+
+Thư mục dùng chung với Không gian số giờ là **cả workspace** của domain, và đăng nhập được ngay trên web hub kể cả qua link public (#122).
+
 ### Thư mục dùng chung với "Không gian số": cả workspace + cài đặt trên web
 - Thư mục chung giờ có thể là **toàn bộ một workspace** Không gian số (mặc định khi `cfharness filehub setup`; tài khoản đăng nhập phải là
   Workspace Admin): đường dẫn trên máy = đường dẫn bạn thấy trên web tính từ workspace, thư mục cấp 1 tạo sau tự về máy. Chế độ một thư mục cũ
@@ -26,6 +32,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   `web.public_origin`) — trước đây link đồng ý mở qua link public không đăng nhập xong được. Qua link public không đổi được máy chủ/binary đã
   đặt; binary tự tìm lần đầu phải là bản quản trị cài (người dùng hub không ghi được). Web trên chính máy chạy hub đăng nhập trực tiếp như terminal.
 - Lệnh mới `cfharness filehub switch-to-workspace`: chuyển thư mục chung đang dùng sang toàn bộ workspace (giữ nguyên tệp cũ).
+- Bị gỡ quyền admin rồi được cấp lại → đồng bộ tự chạy tiếp, không phải đăng nhập lại; workspace bị xoá trên web → báo "workspace đã bị xoá".
+- Thư mục đã gỡ khỏi hub (hoặc bản cũ sau khi chuyển chế độ) không còn âm thầm đồng bộ tiếp.
+- `scripts/setup-hub-user.sh` bước Không gian số mặc định đồng bộ toàn bộ workspace (`KGS_WS=` chọn sẵn tên; một thư mục: `KGS_SCOPE=folder`).
 
 ### Lưu ý khi cập nhật
 - Hub đang đồng bộ MỘT thư mục vẫn chạy như cũ. Muốn chuyển sang cả workspace: `cfharness filehub switch-to-workspace` (hoặc nút "Chuyển sang
@@ -33,7 +42,8 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   thiết bị cũ ở Không gian số › Hồ sơ › Thiết bị.
 - Chế độ workspace và đăng nhập qua link public cần `tang-thu-sync-headless` bản mới (có `--root-mode`/`--redirect-uri`) và Không gian số
   bản có gốc workspace. Binary cũ: thiết lập chế độ workspace báo "binary sync chưa hỗ trợ…" — dùng `--scope folder` hoặc cập nhật binary.
-  `filehub.sync_min_version` sẽ được nâng khi bản sync mới phát hành (TODO: số phiên bản chưa chốt).
+  Bản sync mới vẫn báo `--version` 0.1.1 (chưa phát hành app desktop mới) nên `filehub.sync_min_version` giữ nguyên — hub nhận diện bản mới
+  theo tính năng. Máy chủ Không gian số (thumucai.trungtamdhs.com, trungtamai.cchchn.com) đã chạy bản có gốc workspace từ 2026-11-16.
 - Đăng nhập Không gian số qua link public cần đặt `web.public_origin` (https) ở terminal.
 
 ---
