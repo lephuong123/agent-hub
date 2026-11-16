@@ -403,6 +403,8 @@ async def test_switch_to_workspace_keeps_old_files(env, monkeypatch):
     d, old = await _started(make, tmp, env={"FAKE_TT_WS_NAME": "chung"})  # cố ý trùng tên với thư mục cũ → bản sao mới phải khác
     (old / "giu-lai.txt").write_text("x")
     fh = d.hub.filehub
+    old_root = fh.folders()[0]["root_id"]
+    await until(lambda: any(r.get("id") == old_root for r in (fh.read_status() or {}).get("roots") or []))
     monkeypatch.setattr(d.hub.runs.locks, "holder", lambda p: {"run_id": "run_x"})
     with pytest.raises(HubError, match="đang có run"):
         await rpc(d, "filehub.switch_to_workspace", {"no_browser": True})
@@ -419,6 +421,11 @@ async def test_switch_to_workspace_keeps_old_files(env, monkeypatch):
         await rpc(d, "filehub.switch_to_workspace", {})
     assert [r["kind"] for r in d.hub.audit.query(kind="filehub.switch_to_workspace")]
     await until(lambda: any(r.get("id") == f["root_id"] for r in (fh.read_status() or {}).get("roots") or []))
+    # e2e 2026-11-16: root cũ phải RỜI hồ sơ của binary (không đồng bộ song song bản sao cũ — nó nằm trong workspace mới)
+    await until(lambda: not any(r.get("id") == old_root for r in (fh.read_status() or {}).get("roots") or []))
+    argvs = [json.loads(x)["argv"] for x in (fh.profile_dir / "argv.jsonl").read_text().splitlines()]
+    assert any("--remove-root" in a and a[a.index("--remove-root") + 1] == old_root for a in argvs)
+    assert fh.stale_roots() == [] and (old / "giu-lai.txt").exists()
 
 
 async def test_switch_server_without_workspace_keeps_old_config(env):

@@ -60,7 +60,11 @@
           <td>{% if f.url %}<a href="{{ f.url }}" target="_blank" rel="noopener noreferrer">Mở trên Không gian số</a><br>{% endif %}
             {{ m.act("filehub_remove", "Gỡ khỏi hub", {"name": f.name}, "btn ghost sm", next="/settings#filehub") }}</td>
         </tr>
-        {% if f.revoked %}
+        {% if f.workspace_deleted %}
+        <tr><td colspan="4" class="small"><span class="pill danger">{{ m.icon('alert') }}workspace đã bị xoá</span> Workspace
+          «{{ f.server_name or f.name }}» đã bị xoá trên Không gian số — đồng bộ đã ngắt, tệp trên máy giữ nguyên{% if f.disconnected_path %}
+          (nay ở <code class="small">{{ f.disconnected_path }}</code>){% endif %}. Đăng nhập lại không khôi phục được — gỡ thư mục khỏi hub.</td></tr>
+        {% elif f.revoked %}
         <tr><td colspan="4" class="small"><span class="pill danger">{{ m.icon('alert') }}mất quyền</span> Tài khoản <b>{{ f.account or '(không rõ)' }}</b>
           không còn quyền với {{ f.display or f.name }} (vd không còn là admin của workspace) —
           {% if f.revoked_temporary %}đồng bộ tạm dừng, tệp trên máy giữ nguyên. Cấp lại quyền admin cho tài khoản này là tự chạy tiếp (không cần

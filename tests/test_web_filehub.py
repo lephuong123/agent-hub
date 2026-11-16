@@ -102,6 +102,12 @@ async def test_card_workspace_account_root_files_revoked_rename(env):
         "roots": [{"id": "ws_9", "name": "admin harness", "kind": "workspace", "state": "error", "last_error": "root_revoked", "conflicts": []}]}))
     card = (await e.client.get("/partials/filehub")).text
     assert "mất quyền" in card and "không cần" in card and "Cấp lại quyền admin" in card
+    e.hub.filehub.status_path.write_text(json.dumps({
+        "version": "0.4.0", "state": "idle",
+        "roots": [{"id": "ws_9", "name": "admin harness", "kind": "workspace", "state": "disconnected", "last_error": "workspace_deleted",
+                   "local_path": str(local) + " (đã ngắt đồng bộ)", "conflicts": []}]}))
+    card = (await e.client.get("/partials/filehub")).text
+    assert "workspace đã bị xoá" in card and "(đã ngắt đồng bộ)" in card and "Cấp lại quyền admin" not in card
 
 
 def _fh_bin(e, tmp, **env):

@@ -172,3 +172,14 @@ chọn một, chế độ một thư mục cũ. Hai lỗi đã sửa:
 2. **Lỗi trang đồng ý đổ cho tài khoản hub đang dùng**: `not_ws_admin`/`super_not_member`/`device_limit` chỉ có mã, không biết tài khoản nào vừa
    đồng ý — chữ cũ "Tài khoản «<tài khoản hub>» không phải Workspace Admin" sai đúng lúc người đăng nhập nhầm tài khoản. Nay: "Tài khoản bạn vừa
    dùng ở trang đồng ý …" + "Hub hiện đăng nhập bằng «x»" làm ngữ cảnh.
+
+Vòng 2 (cùng ngày): `switch-to-workspace` đạt — có run giữ khoá gốc (run claude GIẢ `tests/fake_claude.py` "hang") → từ chối, exit 1; đồng ý lỗi
+(`not_ws_admin`) / huỷ (`access_denied`) → cấu hình + đồng bộ thư mục cũ giữ nguyên; thành công → thư mục cũ gỡ khỏi cấu hình, tệp giữ, gốc workspace
+đồng bộ. Hai lỗi đã sửa:
+3. **Bản sao cũ vẫn đồng bộ sau khi gỡ** (cả `filehub remove`): hub chỉ sửa cấu hình, hồ sơ của binary còn root → binary đồng bộ hai chiều bản cũ
+   song song với gốc workspace (thư mục cũ nằm trong workspace → hai bản trên máy). Nay supervisor truyền `--remove-root <id,…>` cho root có trong
+   `status.roots` mà không còn trong `filehub.folders` (`FilehubService.stale_roots`, binary S5 mới).
+4. **Workspace bị xoá báo như mất quyền**: binary S5 nay báo `last_error=workspace_deleted` (khi server nói rõ — DELETE phát WebSocket
+   `root_revoked workspace_deleted`); hub: `folders[].workspace_deleted` + `disconnected_path` (bản trên máy đổi tên `<tên> (đã ngắt đồng bộ)`) →
+   thẻ/CLI "workspace đã bị xoá — gỡ khỏi hub" (không bảo đăng nhập lại). Đặt `status='deleting'` thẳng trong DB (không qua DELETE) không phát
+   WebSocket → binary chỉ biết ở lượt feed kế tiếp (feed 404 → `disconnected` chung).

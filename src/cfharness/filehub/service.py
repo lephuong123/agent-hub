@@ -90,7 +90,7 @@ def error_code(v: Any) -> str:
     """Mã lỗi từ query `?error=` của trang đồng ý → chuyển cho binary (`ERROR <mã>\t<state>`): chỉ [a-z0-9_], ≤ 64, khác → other."""
     s = str(v or "")
     return s if 0 < len(s) <= 64 and all(c in _ERR_CODE_CHARS for c in s) else "other"
-REVOKED_ERRORS = ("root_revoked", "disconnected")
+REVOKED_ERRORS = ("root_revoked", "disconnected", "workspace_deleted")
 
 
 def _real(p: str | Path) -> str:
@@ -350,6 +350,19 @@ class FilehubService:
         have = {r.get("id") for r in st.get("roots") or [] if isinstance(r, dict)}
         return next((f for f in self.folders() if f.get("root_id") and f["root_id"] not in have), None)
 
+    def stale_roots(self) -> list[str]:
+        """Root binary còn đồng bộ (status.json) mà KHÔNG còn trong `filehub.folders` — `filehub remove` / chuyển sang workspace chỉ sửa cấu
+        hình; hồ sơ của binary vẫn giữ root nên nó tiếp tục đồng bộ bản sao cũ (chuyển sang workspace: thư mục cũ nằm TRONG workspace mới →
+        hai bản trên máy của cùng một thư mục server, người xoá bản cũ như được dặn là xoá trên server). Truyền `--remove-root` (e2e 2026-11-16)."""
+        st = self.read_status() or {}
+        mine = {str(f.get("root_id")) for f in self.folders() if f.get("root_id")}
+        out = []
+        for r in st.get("roots") or []:
+            rid = str((r or {}).get("id") or "") if isinstance(r, dict) else ""
+            if rid and rid not in mine and all(c.isalnum() or c in "-_" for c in rid):
+                out.append(rid)
+        return list(dict.fromkeys(out))
+
     # ------------------------------------------------------------------ tệp phụ
     def prepare_files(self) -> None:
         for d in (self.dir, self.profile_dir, self.tokens_path.parent):
@@ -546,6 +559,11 @@ class FilehubService:
                 "root_files": root_files, "unpushable": other_unpushable, "revoked": root_revoked(r),
                 # gốc workspace mất admin (binary S5 `last_error=root_revoked`, không ngắt): cấp lại quyền → tự chạy tiếp, không đăng nhập lại
                 "revoked_temporary": root_revoked(r) and str(r.get("last_error") or "") == "root_revoked" and str(r.get("state") or "") != "disconnected",
+                # workspace bị xoá trên server (binary S5 `last_error=workspace_deleted`): ngắt hẳn, binary đổi tên bản trên máy
+                # `<tên> (đã ngắt đồng bộ)` — đăng nhập lại không giúp gì; `disconnected_path` = chỗ tệp nằm bây giờ
+                "workspace_deleted": str(r.get("last_error") or "") == "workspace_deleted",
+                "disconnected_path": (str(r["local_path"]) if root_revoked(r) and r.get("local_path")
+                                      and _real(str(r["local_path"])) != _real(f["local_path"]) else None),
                 "pending_up": r.get("pending_up"), "pending_down": r.get("pending_down"), "blocked": r.get("blocked"),
                 "conflicts": [{"path": str(c.get("path"))[:300], "created_at": c.get("created_at")} for c in (r.get("conflicts") or [])[:50] if isinstance(c, dict)],
                 "last_error": r.get("last_error"),

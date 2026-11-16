@@ -61,13 +61,19 @@ def _print_status(r: dict[str, Any]) -> None:
     for f in r.get("folders") or []:
         lock = f.get("lock")
         print(f"  • {f.get('display') or f['name']}" + (f" · đăng nhập bằng {f['account']}" if f.get("account") else ""))
-        if f.get("revoked") and f.get("revoked_temporary"):
+        if f.get("workspace_deleted"):
+            print(f"    ⛔ workspace «{f.get('server_name') or f['name']}» đã bị xoá trên Không gian số — đồng bộ đã ngắt, tệp trên máy giữ nguyên"
+                  + (f" (bản trên máy nay ở {f['disconnected_path']})" if f.get("disconnected_path") else "")
+                  + f"; gỡ khỏi hub: `cfharness filehub remove {f['name']}`")
+        elif f.get("revoked") and f.get("revoked_temporary"):
             print(f"    ⛔ tài khoản {f.get('account') or '(không rõ)'} không còn quyền với {f.get('display') or f['name']} (vd không còn là admin) — "
                   "đồng bộ tạm dừng, tệp trên máy giữ nguyên; cấp lại quyền admin cho tài khoản này là tự chạy tiếp (không cần đăng nhập lại), "
                   "hoặc đăng nhập bằng tài khoản admin khác: `cfharness filehub login`")
         elif f.get("revoked"):
             print(f"    ⛔ tài khoản {f.get('account') or '(không rõ)'} không còn quyền với {f.get('display') or f['name']} — đăng nhập lại bằng "
                   "tài khoản admin: `cfharness filehub login`")
+            if f.get("disconnected_path"):
+                print(f"    (đã ngắt đồng bộ — bản trên máy nay ở {f['disconnected_path']}, tệp giữ nguyên)")
         if f.get("renamed"):
             print(f"    (trên web đã đổi tên thành «{f['server_name']}» — trên máy giữ tên/đường dẫn cũ; filehub:{f['server_name']} cũng khớp)")
         print(f"    {f['name']}  →  {f['local_path']}  (workspace filehub:{f['name']})"

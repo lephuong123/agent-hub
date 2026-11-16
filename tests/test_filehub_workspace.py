@@ -292,3 +292,19 @@ def test_revoked_temporary_workspace_root(env):
     fh.status_path.write_text(json.dumps({"state": "idle", "roots": [{"id": "r_chung", "state": "idle", "last_error": None}]}))
     st = fh.status()
     assert st["state"] == "idle" and not st["folders"][0]["revoked"] and not st["folders"][0]["revoked_temporary"]
+
+
+def test_workspace_deleted_disconnects_with_reason(env):
+    """Binary S5 khi workspace bị xoá trên server (WebSocket `root_revoked workspace_deleted`): root NGẮT, `last_error=workspace_deleted`,
+    bản trên máy đổi tên `<tên> (đã ngắt đồng bộ)` → status nêu rõ (không phải "mất quyền tạm thời") + chỗ tệp nằm bây giờ (e2e 2026-11-16)."""
+    d, *_ = env
+    fh = d.hub.filehub
+    fh.prepare_files()
+    f0 = fh.folders()[0]
+    moved = f0["local_path"] + " (đã ngắt đồng bộ)"
+    fh.status_path.write_text(json.dumps({"state": "idle", "roots": [{"id": f0["root_id"], "state": "disconnected", "last_error": "workspace_deleted",
+                                                                      "local_path": moved}]}))
+    st = fh.status()
+    f = st["folders"][0]
+    assert st["state"] == "revoked" and f["revoked"] and f["workspace_deleted"] and not f["revoked_temporary"]
+    assert f["disconnected_path"] == moved

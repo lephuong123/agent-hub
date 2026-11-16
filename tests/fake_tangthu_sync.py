@@ -3,7 +3,7 @@
 + gốc workspace (plan-filehub-workspace-root.md §3 — S5): `login --root-mode single|workspace`, dòng `ROOT <id>\t<wsId>\t<name>\t<kind>\t<account>`,
 relay `--redirect-uri https://<host>/filehub/oauth/cb` (in LOGIN_URL có state rồi đọc MỘT dòng `CODE <code>\t<state>` hoặc `ERROR <mã>\t<state>`
 từ stdin; state sai → `ERROR state_mismatch`; `ERROR <mã>` khớp state → `ERROR <mã>`; EOF → `ERROR stdin_closed` — đều exit 1), chạy với
-`--add-root … --root-kind folder|workspace` (thiếu = folder), status `roots[].kind|server_name|unpushable[{path, kind}]`, index `root_kind`;
+`--add-root … --root-kind folder|workspace` (thiếu = folder), `--remove-root <id>[,<id>…]`, status `roots[].kind|server_name|unpushable[{path, kind}]`, index `root_kind`;
 tệp ở gốc workspace KHÔNG đẩy lên (`unpushable` kind `root_files`). Đúng `tang-thu-sync/docs/headless-cfharness.md` (S5, commit 9869ede).
 
 Không gọi mạng. "Cloud" là thư mục `<profile>/cloud/<rootId>/`; thay đổi từ cloud được bơm qua `<profile>/inject.jsonl`
@@ -171,6 +171,12 @@ class Main:
     def _load_roots(self) -> list[dict[str, str]]:
         p = self.profile / "roots.json"
         roots = json.loads(p.read_text()) if p.exists() else []
+        if self.a.get("remove-root"):  # S5: ngừng đồng bộ (tệp giữ nguyên), bỏ khỏi hồ sơ — gỡ trước khi thêm
+            drop = {x for x in str(self.a["remove-root"]).split(",") if x}
+            if str(self.a.get("add-root") or "") in drop:
+                print("ERROR usage", flush=True)
+                sys.exit(2)
+            roots = [r for r in roots if r["id"] not in drop]
         if self.a.get("add-root"):
             rid = str(self.a["add-root"])
             if not any(r["id"] == rid for r in roots):
