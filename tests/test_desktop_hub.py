@@ -116,6 +116,26 @@ async def test_app_user_agent_logged_not_rendered(env, caplog):
     assert D.note_app_ua("x CfharnessDesktop/1.2.3-beta") == "1.2.3-beta"
 
 
+# =========================================================================== Tải app desktop từ web của hub
+async def test_settings_has_desktop_download_links(env):
+    await env.login()
+    r = await env.client.get("/settings")
+    assert r.status_code == 200
+    html = r.text
+    assert 'id="desktop-app"' in html
+    for url in D.DOWNLOADS.values():
+        assert url in html
+    # Link tải là hằng số trỏ repo app cố định, tên tệp cố định của mỗi release (không lấy từ cấu hình).
+    assert D.DOWNLOADS["mac"].startswith("https://github.com/lephuong123/cfharness-desktop/releases/latest/download/")
+    assert D.DOWNLOADS["mac"].endswith("/Cfharness-Desktop-macOS.dmg")
+    assert D.DOWNLOADS["windows"].endswith("/Cfharness-Desktop-Windows-setup.exe")
+    # Mọi trang đã đăng nhập có link nhanh ở chân thanh bên; biểu tượng có trong sprite.
+    home = await env.client.get("/")
+    assert 'href="/settings#desktop-app"' in home.text
+    sprite = await env.client.get("/static/icons.svg")
+    assert 'id="i-download"' in sprite.text
+
+
 # =========================================================================== C1: cfharness web --json [--ensure]
 def _json_out(capsys) -> dict:
     out = capsys.readouterr().out.strip().splitlines()

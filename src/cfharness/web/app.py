@@ -1162,7 +1162,7 @@ async def settings_page(request: Request) -> Response:
     st = ws(request)
     slack2 = await _slack_pages.slack_ctx(request)  # khối "Slack 2 chiều" (web/slack_pages.py)
     accts = await _account_pages.accounts_ctx(request, status)  # khối "Tài khoản Claude" (web/account_pages.py)
-    return await render(request, "settings.html", {**slack2, **accts, "nav": "settings", "estop": es, "cfg": cfg_view, "secrets": secrets_, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names,
+    return await render(request, "settings.html", {**slack2, **accts, "nav": "settings", "desktop_dl": _desktop.DOWNLOADS, "estop": es, "cfg": cfg_view, "secrets": secrets_, "slack": SLACK_WEBHOOK_SECRET in names or "SLACK_BOT_TOKEN" in names,
                                                    "slack_webhook": SLACK_WEBHOOK_SECRET in names, "slack_create_url": SLACK_CREATE_URL,
                                                    "telegram": "TELEGRAM_BOT_TOKEN" in names, "tg_chats": tg_chats, "integ": integ, "status": status, "gates": gates,
                                                    "web": {"host": st.host, "port": st.port, "sessions": len(st.auth.sessions)},
