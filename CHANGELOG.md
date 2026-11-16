@@ -10,15 +10,21 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+---
+
+## v0.2.12 — 2026-11-16
+
+Tải app máy tính ngay trên web, task xong luôn có báo cáo về người giao việc, và sửa cập nhật trên Windows khi web UI đang mở.
+
 ### Tính năng mới
 - **Tải app máy tính ngay trên web**: trang Cài đặt có thẻ "Ứng dụng máy tính (Cfharness Desktop)" với nút tải macOS (.dmg) / Windows (.exe)
-  bản mới nhất + hướng dẫn mở app chưa ký; chân thanh bên có link "Tải app máy tính".
+  bản mới nhất + hướng dẫn mở app chưa ký; chân thanh bên có link "Tải app máy tính" (#117).
 
 ### Thay đổi
 - **Task xong luôn có báo cáo gửi về người giao việc**: trước đây chỉ điều phối viên báo (khi nó chạy nền và tự quyết gọi
   `notify_owner`), và nó hay kết thúc bằng `NO_ACTION` nên người không nghe gì. Giờ khi một task người giao xong, hub tự gửi báo cáo về
   đúng hội thoại/thread đã giao việc, theo khung cố định **Đã làm / Còn mở / Cần bạn** (tắt bằng `manager.auto_report_tasks: false`).
-  Task không gắn hội thoại nào (tạo từ CLI/web) thì điều phối viên bắt buộc phải báo, không được bỏ qua.
+  Task không gắn hội thoại nào (tạo từ CLI/web) thì điều phối viên bắt buộc phải báo, không được bỏ qua (#118).
 - Agent làm task kết thúc bằng báo cáo theo khung trên. Kết quả lưu vào task là bản **đầy đủ hơn** giữa tin nhắn cuối và `summary` của
   `task_complete`; trước đây `summary` ngắn luôn thắng nên báo cáo bị mất chi tiết.
 - Task gốc tách thành task con: kết quả được gộp lại theo cùng khung (mỗi task con một dòng, gom "Còn mở"/"Cần bạn" của các task con),
@@ -29,7 +35,11 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - **Cập nhật trên Windows làm hub chết hẳn khi web UI đang mở**: `cfharness web` (và tiến trình khác chạy từ bản cài) giữ file trong venv
   → `uv tool install` lỗi "Access is denied" giữa chừng, venv bị xoá dở, bước quay về bản cũ cũng lỗi theo. Tiến trình cập nhật giờ dừng
   mọi tiến trình chạy từ bản cài trước khi cài, thử cài lại một lần nếu file vẫn bị khoá, và bật lại web UI sau khi xong (không mở tab
-  trình duyệt mới). macOS/Linux không đổi. Có hiệu lực từ lần cập nhật **sau** khi hub đã chạy bản có sửa lỗi này.
+  trình duyệt mới). macOS/Linux không đổi. Có hiệu lực từ lần cập nhật **sau** khi hub đã chạy bản có sửa lỗi này (#116).
+
+### Lưu ý khi cập nhật
+- Không có migration. Báo cáo task tự động bật sẵn; tắt bằng `cfharness config set manager.auto_report_tasks false`.
+- Windows: bản sửa cập nhật (#116) chỉ có tác dụng từ lần cập nhật **sau** v0.2.12 — lần này nếu web UI đang mở, đóng nó trước khi bấm cập nhật.
 
 ---
 

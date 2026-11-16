@@ -17,7 +17,7 @@ MCP="${4:-8722}"
 DOMAIN="${DOMAIN:-trungtamdhs.com}"   # miền gốc (zone Cloudflare): https://$SUB.$DOMAIN
 SUB="${SUB:-$U}"        # tên miền con: https://$SUB.$DOMAIN
 HOST="$SUB.$DOMAIN"
-VER="${VER:-v0.2.11}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
+VER="${VER:-v0.2.12}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
 KGS="${KGS:-}"          # URL Không gian số để nối thư mục chung (trống = bỏ qua bước 10)
 KGS_FOLDER="${KGS_FOLDER:-cfharness}"
 # filehub có từ v0.2.10 nên tag mặc định đã đủ cho bước 10 (KGS)
