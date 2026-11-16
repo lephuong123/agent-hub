@@ -1,0 +1,13 @@
+{# Tải app desktop (repo riêng lephuong123/cfharness-desktop). Link CỐ ĐỊNH tới bản ổn định mới nhất trên GitHub Releases
+   (mỗi release đăng thêm tệp tên cố định) — hằng số trong desktop.DOWNLOADS, không lấy từ cấu hình/người dùng. #}
+<section class="card" id="desktop-app">
+  <div class="card-head"><h2>{{ m.icon('download') }} Ứng dụng máy tính (Cfharness Desktop)</h2></div>
+  <p class="small muted">Dùng hub này (và các hub khác trên cloud) trong một app riêng cho macOS và Windows: chuyển nhanh giữa nhiều hub, thông báo + badge, giọng nói. Chức năng giống hệt web.</p>
+  <div class="row gap wrap-row">
+    <a class="btn primary" href="{{ desktop_dl.mac }}" rel="noopener noreferrer">{{ m.icon('download') }} macOS (.dmg)</a>
+    <a class="btn" href="{{ desktop_dl.windows }}" rel="noopener noreferrer">{{ m.icon('download') }} Windows (.exe)</a>
+    <a class="btn ghost" href="{{ desktop_dl.page }}" target="_blank" rel="noopener noreferrer">Hướng dẫn cài {{ m.icon('external') }}</a>
+  </div>
+  <p class="small muted">macOS 14+ (Apple Silicon và Intel) · Windows 10 21H2+. App chưa có chứng chỉ ký nên lần mở đầu hệ điều hành cảnh báo:
+    macOS → mở app một lần, rồi <b>Cài đặt hệ thống → Quyền riêng tư &amp; Bảo mật → Vẫn mở</b>; Windows → <b>Thông tin thêm → Vẫn chạy</b>. Sau đó app tự cập nhật (bản cập nhật có chữ ký).</p>
+</section>

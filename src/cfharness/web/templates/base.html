@@ -48,6 +48,7 @@
     <div class="side-foot">
       {% if badge.admin_estop %}<a href="/machine" class="btn danger solid sm side-btn" title="Người quản trị máy đã bật ESTOP — chỉ họ gỡ được">{{ _m.icon('stop') }}<span class="lbl">ESTOP quản trị máy</span></a>
       {% elif badge.estop %}<a href="/settings#estop" class="btn danger solid sm side-btn" title="Dừng khẩn cấp đang bật">{{ _m.icon('stop') }}<span class="lbl">ESTOP đang bật</span></a>{% endif %}
+      <a href="/settings#desktop-app" class="side-dl" title="Tải ứng dụng máy tính Cfharness Desktop (macOS, Windows)">{{ _m.icon('download') }}<span class="lbl">Tải app máy tính</span></a>
       <div class="side-user">
         <span class="side-av" aria-hidden="true">B</span>
         <div class="side-user-t lbl"><span class="nm">Bạn</span><span class="daemon-st {{ 'down' if badge.down }}" title="{{ 'Không kết nối được daemon' if badge.down else 'Daemon đang chạy' }}">{{ _m.icon('dot') }}<span>{{ 'daemon tắt' if badge.down else 'daemon đang chạy' }}</span></span></div>

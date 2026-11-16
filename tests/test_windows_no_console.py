@@ -35,6 +35,8 @@ ALLOWLIST = {
     ("tui/bench.py", "_ps"): "`ps` — bench bỏ qua trên Windows (unsupported_reason)",
     ("systems/launchd.py", "default_runner"): "launchctl/systemctl — chỉ macOS/Linux (Windows dùng taskscheduler.default_runner)",
     ("systems/launchd.py", "parse_plist"): "/usr/bin/plutil — chỉ macOS",
+    ("update_helper.py", "_process_table"): "`ps` — chỉ nhánh POSIX (nhánh Windows đã dùng no_window_kwargs)",
+    ("update_helper.py", "start_detached"): "helper CHỈ stdlib, không import được oscompat — tự đặt CREATE_NO_WINDOW|DETACHED_PROCESS",
 }
 
 
