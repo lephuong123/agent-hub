@@ -352,6 +352,8 @@ legend { font-weight: 680; margin-bottom: var(--s2); font-size: var(--fs-md); pa
 .banner.info { background: var(--info-soft); color: var(--info); border-color: var(--info-line); }
 .banner.ok { background: var(--ok-soft); color: var(--ok); border-color: var(--ok-line); }
 .banner a { color: inherit; font-weight: 650; text-decoration: underline; }
+.banner a.btn { text-decoration: none; }
+.banner a.btn.primary { color: var(--on-accent); }
 .banner form { display: inline; }
 
 /* ============================================================ "Cần bạn": duyệt + câu hỏi */

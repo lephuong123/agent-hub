@@ -1,6 +1,16 @@
-{#- Thẻ "Không gian số" (web/filehub_pages.py) — RPC đọc filehub.status; tạm dừng/chạy lại chỉ khi web dùng trên chính máy chạy hub. -#}
+{#- Thẻ "Không gian số" (web/filehub_pages.py) — RPC đọc filehub.status; thiết lập/đăng nhập/thêm/gỡ/tạm dừng qua ACTIONS (cả qua link public).
+    Đường dẫn bản sao trên máy chỉ sửa được khi web dùng trên chính máy chạy hub (`local`). Binary sync không bao giờ nhập từ web. -#}
 {% import "_macros.html" as m with context %}
-<section class="card" id="filehub">
+{% macro add_form(r) -%}
+<form method="post" action="/do/filehub_add" class="row gap wrap-row" autocomplete="off" data-confirm="Thêm thư mục này làm thư mục chung (đồng bộ 2 chiều về máy chạy hub)?">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#filehub">
+  <input type="hidden" name="root_id" value="{{ r.id }}">
+  <label class="small">Tên <input name="name" required maxlength="80" value="{{ r.name }}" spellcheck="false"></label>
+  {% if local %}<label class="small">Bản sao trên máy (tuỳ chọn) <input name="local_path" spellcheck="false" placeholder="{{ data.local_parent or '~/KhongGianSo' }}/{{ r.name }}"></label>{% endif %}
+  <button type="submit" class="btn sm">{{ m.icon('plus') }}<span>Thêm</span></button>
+</form>
+{%- endmacro %}
+<section class="card" id="filehub"{% if polling %} hx-get="/partials/filehub" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
   <div class="card-head"><h2>{{ m.icon('inbox') }} Không gian số — thư mục dùng chung</h2>
     {% if data %}{% set sv = states.get(data.state, (data.state, '')) %}<span class="pill {{ sv[1] }}">{{ sv[0] }}</span>{% endif %}
   </div>
@@ -8,48 +18,97 @@
     <p class="muted">Daemon không trả lời — không đọc được trạng thái đồng bộ.</p>
   {% elif error %}
     <p class="muted">Không đọc được trạng thái đồng bộ: {{ error }}</p>
-  {% elif not data.enabled or not data.folders %}
-    <p class="small muted">Chưa thiết lập. Thư mục dùng chung đồng bộ 2 chiều giữa máy này và Không gian số: bạn sửa trên web/điện thoại, agent làm
-      việc trên bản sao cục bộ. Thiết lập ở terminal: <code>cfharness filehub setup --server https://… --binary /đường/dẫn/tang-thu-sync-headless</code></p>
   {% else %}
-    <p class="small muted">Máy chủ <code>{{ data.server }}</code> · thiết bị «{{ data.device }}»{% if data.sync_version %} · {{ data.sync_version }}{% endif %}
-      {% if data.updated_at %} · cập nhật {{ m.rel(data.updated_at) }}{% endif %}.
-      Giao việc cho agent với workspace <code>filehub:&lt;tên&gt;</code>. Xoá của agent không cần duyệt — hub báo bạn sau run, khôi phục ở thùng rác Không gian số.</p>
-    {% if data.state in ('error', 'version_mismatch') and data.supervisor.last_error %}<p class="small"><span class="pill danger">{{ m.icon('alert') }}lỗi</span> {{ data.supervisor.last_error }}</p>{% endif %}
-    {% if data.state == 'auth_expired' %}<p class="small"><span class="pill danger">{{ m.icon('alert') }}hết phiên</span> Đăng nhập lại ở terminal: <code>cfharness filehub login</code></p>{% endif %}
-    <table class="tbl">
-      <thead><tr><th>Thư mục</th><th>Bản sao trên máy</th><th>Hàng đợi</th><th></th></tr></thead>
-      <tbody>
-      {% for f in data.folders %}
-        <tr>
-          <td><strong>{{ f.name }}</strong><br><code class="small">filehub:{{ f.name }}</code>
-            {% if f.lock %}<br><span class="pill info">run {{ f.lock.run_id }} đang ghi</span>{% endif %}</td>
-          <td><code class="small">{{ f.local_path }}</code></td>
-          <td class="num">{% if f.pending_up or f.pending_down %}⬆{{ f.pending_up or 0 }} ⬇{{ f.pending_down or 0 }}{% else %}—{% endif %}</td>
-          <td>{% if f.url %}<a href="{{ f.url }}" target="_blank" rel="noopener noreferrer">Mở trên Không gian số</a>{% endif %}</td>
-        </tr>
-        {% if f.blocked %}
-        <tr><td colspan="4"><span class="pill danger">{{ m.icon('alert') }}đã dừng đẩy lên ({{ f.blocked }})</span>
-          {% if local %}{{ m.act("filehub_resume_push", "Cho đẩy tiếp", {"root_id": f.root_id}, "btn", next="/settings#filehub") }}{% else %}<span class="small muted">— xử lý trên máy chạy hub: <code>cfharness filehub resume --root {{ f.root_id }}</code></span>{% endif %}</td></tr>
-        {% endif %}
-        {% for c in f.conflicts %}
-        <tr><td colspan="4" class="small"><span class="pill warn">bản xung đột</span> <code>{{ c.path }}</code>{% if c.created_at %} · {{ m.rel(c.created_at) }}{% endif %}</td></tr>
+    {#- ---- đăng nhập thiết bị đang chờ người đồng ý ---- -#}
+    {% if polling %}
+      <div class="banner info"><div>
+        <p><strong>{{ m.icon('clock') }} Chờ bạn đồng ý trên Không gian số</strong></p>
+        {% if login_url %}
+        <ol class="small">
+          <li>Bấm <a class="btn primary sm" href="{{ login_url }}" target="_blank" rel="noopener noreferrer">Mở trang đồng ý</a> (mở tab mới).</li>
+          <li>Đăng nhập tài khoản Không gian số của bạn.</li>
+          <li>Chọn thư mục (nơi bạn là Chủ sở hữu) hoặc tạo thư mục rỗng ngay trên trang đó, rồi bấm <b>Cho phép</b>.</li>
+        </ol>
+        <p class="small muted">Thẻ này tự cập nhật khi xong. Link dùng một lần cho thiết bị «{{ data.device }}».</p>
+        {% else %}<p class="small muted">Đang tạo link đồng ý…</p>{% endif %}
+      </div></div>
+    {% elif data.login and data.login.state == 'error' %}
+      <p class="small"><span class="pill danger">{{ m.icon('alert') }}đăng nhập lỗi</span> {{ data.login.error }} — thử lại bên dưới.</p>
+    {% endif %}
+
+    {% if not data.folders %}
+      {#- ---- chưa có thư mục: form nối ---- -#}
+      {% if not polling %}
+      <p class="small muted">Thư mục dùng chung đồng bộ 2 chiều giữa máy chạy hub và Không gian số: bạn sửa tệp trên web/điện thoại, agent làm việc
+        trên bản sao ở máy (workspace <code>filehub:&lt;tên&gt;</code>). Đăng nhập một lần bằng tài khoản Không gian số của bạn.</p>
+      {% if data.relogin_after_import %}<p class="small"><span class="pill warn">hub vừa chuyển máy</span> Thiết bị máy này chưa đăng nhập Không gian số — nối lại bên dưới.</p>{% endif %}
+      {% if available %}
+        <p class="small">Đã đăng nhập — chọn thư mục để nối:</p>
+        {% for r in available %}{{ add_form(r) }}{% endfor %}
+      {% elif not data.binary %}
+        <p class="small"><span class="pill danger">{{ m.icon('alert') }}thiếu binary sync</span> Máy chạy hub chưa cài <code>tang-thu-sync-headless</code>.
+          Nhờ admin cài vào <code>/usr/local/bin</code> (bước «Thư mục chung Không gian số» của <code>scripts/setup-hub-user.sh</code>) rồi tải lại trang.</p>
+      {% else %}
+      <form method="post" action="/do/filehub_setup" class="form" autocomplete="off"
+            data-confirm="Nối hub với Không gian số? Bước tiếp theo: mở link đồng ý, đăng nhập, chọn thư mục rồi bấm Cho phép.">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#filehub">
+        <div class="fgrid">
+          <label>Địa chỉ Không gian số <input name="server" type="url" required pattern="https://.+" spellcheck="false"
+                 value="{{ data.server or '' }}" placeholder="địa chỉ https của Không gian số"></label>
+          <label>Tên thư mục <input name="name" required maxlength="80" value="cfharness" spellcheck="false"></label>
+          {% if local %}<label>Thư mục cha trên máy <input name="local_parent" spellcheck="false" value="{{ data.local_parent }}" placeholder="~/KhongGianSo"></label>{% endif %}
+        </div>
+        <p class="small muted">Bản sao trên máy: <code>{{ data.local_parent or '~/KhongGianSo' }}/&lt;tên&gt;</code>{% if not local %} (đổi chỗ khi dùng web trên chính máy chạy hub){% endif %}.</p>
+        <button type="submit" class="btn primary">{{ m.icon('play') }}<span>Đăng nhập &amp; nối thư mục</span></button>
+      </form>
+      {% endif %}
+      {% endif %}
+    {% else %}
+      {#- ---- đã có thư mục ---- -#}
+      <p class="small muted">Máy chủ <code>{{ data.server }}</code> · thiết bị «{{ data.device }}»{% if data.sync_version %} · {{ data.sync_version }}{% endif %}
+        {% if data.updated_at %} · cập nhật {{ m.rel(data.updated_at) }}{% endif %}.
+        Giao việc cho agent với workspace <code>filehub:&lt;tên&gt;</code> (đặt làm workspace mặc định ở trang agent). Xoá của agent không cần duyệt — hub báo bạn sau run, khôi phục ở thùng rác Không gian số.</p>
+      {% if data.state in ('error', 'version_mismatch') and data.supervisor.last_error %}<p class="small"><span class="pill danger">{{ m.icon('alert') }}lỗi</span> {{ data.supervisor.last_error }}</p>{% endif %}
+      {% if (data.state == 'auth_expired' or data.relogin_after_import or not data.tokens) and not polling %}
+        <p class="small"><span class="pill danger">{{ m.icon('alert') }}cần đăng nhập lại</span>
+          {{ m.act("filehub_login", "Đăng nhập lại Không gian số", {}, "btn primary sm", confirm="Tạo link đồng ý thiết bị mới để đăng nhập lại Không gian số?", next="/settings#filehub") }}</p>
+      {% endif %}
+      <table class="tbl">
+        <thead><tr><th>Thư mục</th><th>Bản sao trên máy</th><th>Hàng đợi</th><th></th></tr></thead>
+        <tbody>
+        {% for f in data.folders %}
+          <tr>
+            <td><strong>{{ f.name }}</strong><br><code class="small">filehub:{{ f.name }}</code>
+              {% if f.lock %}<br><span class="pill info">run {{ f.lock.run_id }} đang ghi</span>{% endif %}</td>
+            <td><code class="small">{{ f.local_path }}</code></td>
+            <td class="num">{% if f.pending_up or f.pending_down %}⬆{{ f.pending_up or 0 }} ⬇{{ f.pending_down or 0 }}{% else %}—{% endif %}</td>
+            <td>{% if f.url %}<a href="{{ f.url }}" target="_blank" rel="noopener noreferrer">Mở trên Không gian số</a>{% endif %}
+              {% if not f.lock %}{{ m.act("filehub_remove", "Gỡ", {"name": f.name}, "btn ghost sm", confirm="Gỡ thư mục chung «" ~ f.name ~ "» khỏi hub? Tệp trên máy và trên Không gian số được giữ nguyên.", next="/settings#filehub") }}{% endif %}</td>
+          </tr>
+          {% if f.blocked %}
+          <tr><td colspan="4"><span class="pill danger">{{ m.icon('alert') }}đã dừng đẩy lên ({{ f.blocked }})</span>
+            {{ m.act("filehub_resume_push", "Cho đẩy tiếp", {"root_id": f.root_id}, "btn", next="/settings#filehub") }}</td></tr>
+          {% endif %}
+          {% for c in f.conflicts %}
+          <tr><td colspan="4" class="small"><span class="pill warn">bản xung đột</span> <code>{{ c.path }}</code>{% if c.created_at %} · {{ m.rel(c.created_at) }}{% endif %}</td></tr>
+          {% endfor %}
         {% endfor %}
-      {% endfor %}
-      </tbody>
-    </table>
-    <div class="row gap wrap-row">
-      {% if local %}
+        </tbody>
+      </table>
+      {% if available %}
+        <p class="small">Thư mục khác đã cấp lúc đăng nhập — thêm làm thư mục chung:</p>
+        {% for r in available %}{{ add_form(r) }}{% endfor %}
+      {% endif %}
+      <div class="row gap wrap-row">
         {% if data.paused %}{{ m.act("filehub_resume", "Chạy lại đồng bộ", {}, "btn primary", next="/settings#filehub", ic="play") }}
         {% else %}{{ m.act("filehub_pause", "Tạm dừng đồng bộ", {}, "btn ghost", next="/settings#filehub") }}{% endif %}
-      {% else %}
-        <span class="small muted">Qua link public chỉ xem trạng thái — thao tác làm trên máy chạy hub.</span>
+        {% if not polling %}{{ m.act("filehub_login", "Thêm thư mục khác…", {}, "btn ghost", confirm="Mở lại trang đồng ý thiết bị để cấp thêm thư mục? (đăng nhập lại Không gian số)", next="/settings#filehub", title="Đăng nhập lại để chọn/tạo thêm thư mục trên Không gian số") }}{% endif %}
+      </div>
+      {% if data.recent %}
+      <details class="small"><summary>Thay đổi gần đây</summary>
+        <ul>{% for e in data.recent|reverse %}<li>{{ '⬇' if e.dir == 'down' else '⬆' }} {{ e.op }} <code>{{ e.path }}</code></li>{% endfor %}</ul>
+      </details>
       {% endif %}
-    </div>
-    {% if data.recent %}
-    <details class="small"><summary>Thay đổi gần đây</summary>
-      <ul>{% for e in data.recent|reverse %}<li>{{ '⬇' if e.dir == 'down' else '⬆' }} {{ e.op }} <code>{{ e.path }}</code></li>{% endfor %}</ul>
-    </details>
     {% endif %}
   {% endif %}
 </section>

@@ -67,7 +67,8 @@ Tệp: `HUB_HOME/filehub/{profile/, status.json, control.json, ignore.txt, super
 
 - RPC ghi `filehub.*` ∈ `auth.HUMAN_ONLY`, `MUTATING_FILEHUB` ∈ `auth.all_mutating()` (bọc audit), KHÔNG ∈ `MANAGER_ALLOWED`. Điều phối viên có tool
   chỉ đọc `filehub_list|filehub_link` và giao việc workspace `filehub:` (`manager/permissions.check_path` giải ref rồi kiểm như đường dẫn thường).
-- Web: tạm dừng/chạy lại/cho đẩy tiếp chỉ khi `is_local_request` (qua link public chỉ xem); thiết lập/đăng nhập/thêm/gỡ chỉ ở terminal.
+- Web (2026-11-16, xem § Web): thiết lập/đăng nhập/thêm/gỡ/tạm dừng/chạy lại/cho đẩy tiếp làm được cả qua link public; chỉ đường dẫn bản sao
+  trên máy (`local_parent`, `local_path`) là `is_local_request`; đường dẫn binary không bao giờ từ web.
 
 ## Lệch plan / hợp đồng
 
@@ -78,6 +79,28 @@ Tệp: `HUB_HOME/filehub/{profile/, status.json, control.json, ignore.txt, super
   không có diff ở thư mục đó → không có báo (thay đổi vẫn hiện ở `recent`/Không gian số).
 - Steer chỉ cho run GIỮ KHOÁ gốc (workspace `filehub:`), không cho run chỉ đọc hay run dùng `extra_write_roots`.
 - Kiểm sha256 binary (S3) chưa làm: `filehub.sync_binary` là đường dẫn người đặt; hub chỉ kiểm `--version`.
+
+## Web — tự thiết lập qua link public (2026-11-16)
+
+Trước đây thẻ Cài đặt qua link public chỉ xem, và `setup-hub-user.sh` bắt admin mở link đồng ý TRÊN máy chủ. Nay người dùng hub tự làm trên web:
+
+1. Thẻ "Không gian số" (chưa có thư mục) hiện form: địa chỉ Không gian số (`https://`), tên thư mục (mặc định `cfharness`); web cục bộ thêm ô
+   thư mục cha. Thiếu binary (`detect_binary` không thấy) → thẻ báo nhờ admin cài, không hiện form.
+2. `filehub_setup` → RPC `filehub.setup{server, name, no_browser: true}` → thẻ hiện nút "Mở trang đồng ý" (URL `LOGIN_URL` của binary, chỉ
+   `http(s)://`, `rel=noopener noreferrer`) và tự poll `/partials/filehub` 3 s/lần khi `login.state ∈ starting|waiting`.
+3. Người đồng ý → `_finish_login` tự thêm root đầu tiên (như CLI). Root khác cấp lúc đăng nhập → form "Thêm" (`filehub_add`). "Thêm thư mục
+   khác…" / "Đăng nhập lại" = `filehub_login` (luôn `no_browser`). "Gỡ" = `filehub_remove` (xác nhận, giữ tệp).
+
+Ranh giới:
+- `filehub.detect_binary`: cấu hình `filehub.sync_binary` → `BINARY_CANDIDATES` (chỗ cài cố định), KHÔNG dò PATH. Web không bao giờ gửi
+  `binary` (bộ dựng tham số bỏ trường này) → web không chạy được tệp tuỳ ý.
+- Đường dẫn trên máy (`local_parent`, `local_path`) từ phiên public → từ chối trước khi gọi RPC (`_guard_local`). Qua cloud, bản sao đặt ở
+  `<local_parent>/<tên>`, vẫn qua `_validate_local` (không trong/chứa HUB_HOME, trong W khi giam…).
+- Mọi thao tác qua `ACTIONS` (CSRF + Origin + khoá phiên, có bước xác nhận) → RPC HUMAN_ONLY, audit kênh `web`.
+- Lệch plan-cloud-files §3.6 "qua cloud chỉ xem": chủ repo quyết 2026-11-16 cho người dùng hub tự nối Không gian số từ cloud. Quyết định 1
+  (web cfharness không ghi TỆP qua cloud) giữ nguyên.
+
+Test: `tests/test_web_filehub.py::test_setup_login_and_add_folder_over_public_link`, `::test_pause_remove_over_public_link`.
 
 ## Test (không mạng, không claude)
 
