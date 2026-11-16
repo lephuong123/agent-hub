@@ -15,7 +15,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   (`cfharness web`, gồm cả web chạy bằng LaunchDaemon) vẫn chạy code cũ nhưng đọc giao diện mới → trang nào dùng thông tin mới (thẻ
   "Ứng dụng máy tính" ở Cài đặt) báo lỗi. Giờ web tự chạy lại sang bản mới khi bản cài đổi (khoảng 30 giây), và daemon bản mới khi lên
   sẽ dừng web còn chạy code cũ để launchd bật lại (không có launchd thì daemon tự chạy lại đúng lệnh cũ). Sau khi web chạy lại cần đăng
-  nhập lại (#PR).
+  nhập lại (#120).
 
 ### Lưu ý khi cập nhật
 - Không có migration, không có cấu hình phải sửa.
