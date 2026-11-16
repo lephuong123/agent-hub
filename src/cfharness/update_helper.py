@@ -5,7 +5,10 @@ Lý do: `uv tool install --force` xoá + tạo lại venv của tool — tiến 
 
 Các bước (trạng thái ghi nguyên tử vào `--state`, log nối vào `--log`):
 1. `waiting_daemon`: chờ pid daemon thoát (≤ 60 s, quá thì SIGTERM, thêm 15 s).
-2. `installing`: chạy `--install` (argv JSON), timeout 15 phút.
+1b. `stopping_holders`: dừng MỌI tiến trình khác còn chạy từ venv của tool (`--venv`: web UI `cfharness web`, `mcp serve`, TUI…).
+   Windows không cho xoá file đang mở → `uv tool install --force` lỗi "Access is denied" giữa chừng, venv bị xoá dở, quay về cũng lỗi
+   theo và hub chết hẳn (sự cố khi lên v0.2.11). Tiến trình `cfharness web` bị dừng được chạy lại sau cập nhật (bỏ `--open`).
+2. `installing`: chạy `--install` (argv JSON), timeout 15 phút. Lỗi vì file bị khoá → dừng tiến trình giữ venv lần nữa, cài lại một lần.
 3. `restarting`: chạy `--restart` (argv JSON — khởi động lại daemon) — LUÔN chạy, kể cả khi cài lỗi (venv cũ có thể còn dùng được).
 4. `health`: chờ daemon trả lời `hub.ping` qua `--socket` (≤ `--health-timeout` s, rồi kiểm lại sau `STABLE_S` s — không trả lời
    = daemon không lên). Không có `--socket` (Windows) → dựa vào mã thoát của lệnh khởi động lại.
@@ -23,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import signal
 import socket
@@ -146,6 +150,121 @@ def db_user_version(db: Path) -> int | None:
             c.close()
     except sqlite3.Error:
         return None
+
+
+# ---------------------------------------------------------------- tiến trình khác đang chạy từ venv của tool
+LOCKED_MARKERS = ("access is denied", "os error 5)", "os error 32)", "being used by another process", "permission denied")
+
+
+def _windows() -> bool:
+    return os.name == "nt"
+
+
+def _process_table() -> list[tuple[int, int, str]]:
+    """(pid, ppid, exe + dòng lệnh) mọi tiến trình. Không đọc được → rỗng (không chặn cập nhật)."""
+    rows: list[tuple[int, int, str]] = []
+    try:
+        if os.name == "nt":  # pragma: no cover - chỉ chạy trên Windows
+            ps = ("Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine "
+                  "| ConvertTo-Json -Compress")
+            r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=60, **no_window_kwargs())
+            data = json.loads(r.stdout or "[]")
+            for d in data if isinstance(data, list) else [data]:
+                rows.append((int(d.get("ProcessId") or 0), int(d.get("ParentProcessId") or 0),
+                             f"{d.get('ExecutablePath') or ''} {d.get('CommandLine') or ''}"))
+        else:
+            r = subprocess.run(["ps", "-eo", "pid=,ppid=,args="], capture_output=True, text=True, errors="replace", timeout=30)
+            for line in (r.stdout or "").splitlines():
+                parts = line.split(None, 2)
+                if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+                    rows.append((int(parts[0]), int(parts[1]), parts[2]))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return []
+    return rows
+
+
+def venv_holders(venv: str, table: list[tuple[int, int, str]] | None = None) -> list[tuple[int, str]]:
+    """Tiến trình có exe/dòng lệnh nằm trong `venv` (trừ chính helper và cha của nó)."""
+    if not venv:
+        return []
+    needle = os.path.normcase(os.path.normpath(venv)).rstrip("\\/") + os.sep
+    me = {os.getpid(), os.getppid()}
+    out = []
+    for pid, _ppid, cmd in table if table is not None else _process_table():
+        if pid > 0 and pid not in me and needle in os.path.normcase(cmd.replace("/", os.sep)):
+            out.append((pid, cmd))
+    return out
+
+
+def web_restart_argv(cmd: str) -> list[str] | None:
+    """Dòng lệnh `…python[.exe] <launcher cfharness> web [args]` → argv chạy lại web (bỏ `--open`: không bật tab trình duyệt mới)."""
+    try:
+        parts = [x.strip('"') for x in shlex.split(cmd, posix=False)] if os.name == "nt" else shlex.split(cmd)
+    except ValueError:
+        return None
+    for i, tok in enumerate(parts):
+        if tok == "web" and i >= 1 and "cfharness" in os.path.basename(parts[i - 1]).lower():
+            return [parts[i - 1], "web", *[x for x in parts[i + 1:] if x != "--open"]]
+    return None
+
+
+def _kill(pid: int) -> None:
+    if os.name == "nt":  # pragma: no cover
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, **no_window_kwargs())
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    if not _wait_exit(pid, 10.0):
+        try:
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+        except OSError:
+            pass
+
+
+def stop_venv_holders(venv: str | None, log, restarts: list[list[str]]) -> None:
+    """Dừng tiến trình giữ file trong venv của tool; argv `cfharness web` cần chạy lại sau cập nhật được thêm vào `restarts`.
+    CHỈ Windows: macOS/Linux xoá được file đang mở nên uv thay venv khi tiến trình vẫn chạy — không dừng gì (tránh làm chết
+    daemon của hub khác dùng chung bản cài)."""
+    if not venv or not _windows():
+        return
+    holders = venv_holders(venv)
+    for pid, cmd in holders:
+        log.write(f"dừng tiến trình đang chạy từ venv của tool (pid {pid}): {cmd.strip()[:200]}\n")
+        w = web_restart_argv(cmd)
+        if w and w not in restarts:
+            restarts.append(w)
+        _kill(pid)
+    for pid, _ in holders:
+        _wait_exit(pid, 10.0)
+    log.flush()
+
+
+def start_detached(argv: list[str], env: dict[str, str], log) -> None:
+    """Chạy lại `cfharness web` tách khỏi helper (helper sắp thoát)."""
+    log.write(f"chạy lại: {' '.join(argv)}\n")
+    kw: dict[str, Any] = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "env": env}
+    if os.name == "nt":  # pragma: no cover
+        kw["creationflags"] = (getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+                               | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    else:
+        kw["start_new_session"] = True
+    try:
+        subprocess.Popen(argv, **kw)
+    except OSError as e:
+        log.write(f"[không chạy lại được: {e}]\n")
+
+
+def install_with_retry(a: argparse.Namespace, install: list[str], log, env: dict[str, str], restarts: list[list[str]]) -> tuple[int, str]:
+    """Cài; lỗi vì file trong venv bị khoá (tiến trình mở lại sau bước dừng) → dừng lần nữa rồi cài lại MỘT lần."""
+    rc, out = _run(install, log, INSTALL_TIMEOUT_S, env)
+    if rc != 0 and getattr(a, "venv", None) and any(m in out.lower() for m in LOCKED_MARKERS):
+        log.write("cài lỗi vì file trong venv đang bị giữ — dừng tiến trình giữ venv rồi thử lại\n")
+        stop_venv_holders(a.venv, log, restarts)
+        rc, out = _run(install, log, INSTALL_TIMEOUT_S, env)
+    return rc, out
 
 
 def stop_daemon(home: Path, log) -> None:
@@ -274,8 +393,11 @@ def apply(a: argparse.Namespace) -> int:
             except OSError:
                 pass
             _wait_exit(int(a.wait_pid), 15.0)
+        phase("stopping_holders")
+        restarts: list[list[str]] = []
+        stop_venv_holders(a.venv, log, restarts)
         phase("installing")
-        rc, out = _run(json.loads(a.install), log, INSTALL_TIMEOUT_S, env)
+        rc, out = install_with_retry(a, json.loads(a.install), log, env, restarts)
         error = None if rc == 0 else f"cài đặt lỗi (mã {rc}): {out.strip().splitlines()[-1] if out.strip() else 'không có output'}"
         phase("restarting", **({"error": error} if error else {}))
         rrc, rout = _run(json.loads(a.restart), log, RESTART_TIMEOUT_S, env)
@@ -286,7 +408,7 @@ def apply(a: argparse.Namespace) -> int:
             error = f"{error}; {msg}" if error else msg
         if not healthy and a.rollback_install:
             phase("rolling_back", error=error)
-            rb = rollback_steps(a, log, env, json.loads(a.rollback_install), phase)
+            rb = rollback_steps(a, log, env, json.loads(a.rollback_install), phase, restarts)
             st["rollback"] = rb
             back = f"đã quay về {st.get('version_before') or 'bản trước'}" + (" + hub.db trước cập nhật" if rb.get("db_restored") else "")
             error = f"{error} → {back if rb['ok'] else 'quay về LỖI: ' + str(rb.get('error'))}"
@@ -295,6 +417,9 @@ def apply(a: argparse.Namespace) -> int:
         phase("verifying")
         vrc, vout = _run(json.loads(a.verify), log, 30.0, env) if a.verify else (1, "")
         version_after = (vout.strip().split() or [""])[-1] if vrc == 0 else None
+        if vrc == 0:  # cfharness chạy được (bản mới hoặc bản cũ đã quay về) → bật lại web UI đã dừng
+            for w in restarts:
+                start_detached(w, env, log)
         st.update({"state": "failed" if error else "done", "phase": "finished", "finished_at": _now(), "version_after": version_after,
                    "error": error, "updated_at": _now(), "rolled_back": bool((st.get("rollback") or {}).get("ok"))})
         write_state(state_path, st)
@@ -302,13 +427,16 @@ def apply(a: argparse.Namespace) -> int:
     return 0 if not error else 1
 
 
-def rollback_steps(a: argparse.Namespace, log, env: dict[str, str], install: list[str], phase) -> dict[str, Any]:
-    """Quay về: dừng daemon còn sót → khôi phục hub.db nếu migration đã tăng → cài tag cũ → khởi động lại → kiểm."""
+def rollback_steps(a: argparse.Namespace, log, env: dict[str, str], install: list[str], phase,
+                   restarts: list[list[str]] | None = None) -> dict[str, Any]:
+    """Quay về: dừng daemon còn sót + tiến trình giữ venv → khôi phục hub.db nếu migration đã tăng → cài tag cũ → khởi động lại → kiểm."""
+    restarts = restarts if restarts is not None else []
     if a.home:
         stop_daemon(Path(a.home), log)
+    stop_venv_holders(getattr(a, "venv", None), log, restarts)
     rb: dict[str, Any] = restore_db_if_migrated(a, log)
     phase("rolling_back")
-    irc, iout = _run(install, log, INSTALL_TIMEOUT_S, env)
+    irc, iout = install_with_retry(a, install, log, env, restarts)
     phase("rollback_restarting")
     rrc, _ = _run(json.loads(a.restart), log, RESTART_TIMEOUT_S, env)
     healthy = wait_healthy(a.socket, a.health_timeout, rrc, log)
@@ -347,10 +475,14 @@ def rollback(a: argparse.Namespace) -> int:
                 pass
             _wait_exit(int(a.wait_pid), 15.0)
         phase("rolling_back")
-        rb = rollback_steps(a, log, env, json.loads(a.install), phase)
+        restarts: list[list[str]] = []
+        rb = rollback_steps(a, log, env, json.loads(a.install), phase, restarts)
         phase("verifying")
         vrc, vout = _run(json.loads(a.verify), log, 30.0, env) if a.verify else (1, "")
         version_after = (vout.strip().split() or [""])[-1] if vrc == 0 else None
+        if vrc == 0:
+            for w in restarts:
+                start_detached(w, env, log)
         st.update({"state": "done" if rb["ok"] else "failed", "phase": "finished", "finished_at": _now(), "version_after": version_after,
                    "error": rb.get("error"), "rollback": rb, "rolled_back": rb["ok"], "updated_at": _now()})
         write_state(state_path, st)
@@ -370,6 +502,7 @@ def _common(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--health-timeout", type=float, default=HEALTH_TIMEOUT_S)
     ap.add_argument("--db-backup", default=None, help="archive bản sao lưu pre-update (backup.py)")
     ap.add_argument("--db-version", type=int, default=None, help="user_version của hub.db lúc chụp")
+    ap.add_argument("--venv", default=None, help="venv của tool: tiến trình khác chạy từ đây bị dừng trước khi cài (Windows khoá file)")
 
 
 def main(argv: list[str] | None = None) -> int:

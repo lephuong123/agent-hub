@@ -26,31 +26,48 @@ def _commands() -> list[str]:
     return [ln for ln in body.splitlines() if ln.strip()]
 
 
+def _expand() -> list[list[str]]:
+    """Dòng gộp `cfharness g: a <x> | b {c|d}` → các đường lệnh ['g','a'], ['g','b','c'], ['g','b','d']; dòng lệnh đơn → ['cmd']."""
+    out: list[list[str]] = []
+    for ln in _commands():
+        head, sep, rest = ln.partition(": ")
+        words = shlex.split(head)[1:]
+        group: list[str] = []
+        for w in words:
+            if w.startswith(("-", "<", "[", "…")):
+                break
+            group.append(w)
+        if not sep:
+            out.append(group)
+            continue
+        for item in rest.split(" | "):
+            name, *tail = item.split()
+            nested = tail[0][1:-1].split("|") if tail and tail[0].startswith("{") else None
+            out.extend([group + [name, n] for n in nested] if nested else [group + [name]])
+    return out
+
+
 def test_reference_lists_real_commands_and_rules():
     ref = cli_reference()
     lines = _commands()
-    assert "cfharness runs list --agent X --status X --limit X" in lines  # lệnh đúng (trước đây điều phối viên bịa `run list`)
-    assert not any(ln.startswith("cfharness run list") for ln in lines)
-    assert "cfharness account use <id>" in lines and "cfharness schedule pause <id> --reason X" in lines
-    assert not any(ln.startswith("cfharness hook") for ln in lines)  # lệnh nội bộ
+    paths = [" ".join(p) for p in _expand()]
+    assert "cfharness runs: list | show <id> | stop <id> | logs <id> | follow <id>" in lines  # trước đây điều phối viên bịa `run list`
+    assert "runs list" in paths and "run list" not in paths
+    assert "account use" in paths and "schedule pause" in paths and "admin users list" in paths
+    assert not any(p.split()[0] == "hook" for p in paths if p)  # lệnh nội bộ
     for must in ("You cannot run them yourself", "fetch it with", "never guess a command or flag", "--help"):
         assert must in ref, must
-    assert len(ref) < 16000  # giữ khối gọn (prompt mỗi lượt)
+    assert len(ref) < 9000  # giữ khối gọn: prompt mỗi lượt + giới hạn dòng lệnh Windows (bản cũ ~14–18k → WinError 206)
 
 
 def test_every_listed_command_path_parses():
-    """Mọi đường lệnh trong khối (bỏ cờ/tham số) phải là lệnh con có thật của parser — khối không bao giờ lệch CLI."""
+    """Mọi đường lệnh trong khối phải là lệnh con có thật của parser — khối không bao giờ lệch CLI."""
     p = build_parser()
-    for ln in _commands():
-        words = []
-        for w in shlex.split(ln)[1:]:
-            if w.startswith(("-", "<", "[", "…")):
-                break
-            words.append(w)
+    for words in _expand():
         sub = p
         for w in words:
             sp = next(a for a in sub._actions if a.__class__.__name__ == "_SubParsersAction")
-            assert w in sp.choices, ln
+            assert w in sp.choices, words
             sub = sp.choices[w]
 
 

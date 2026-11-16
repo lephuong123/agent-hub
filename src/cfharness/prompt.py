@@ -11,6 +11,7 @@ Persona/prompt viết bằng tiếng Anh (Q-14).
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any
 
 HUB_CONVENTIONS = """# cfharness conventions
@@ -105,3 +106,59 @@ def build_system_prompt(agent_id: str, soul: str, knowledge_blocks: list[str] | 
 
 def prompt_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+# Ngưỡng cảnh báo cỡ system prompt (ký tự) — `runtime.claude.system_prompt_warn_chars`. Prompt dài tốn token mọi lượt và, khi còn
+# đi qua argv, chạm giới hạn dòng lệnh Windows 32767 (WinError 206: prompt điều phối viên 21,9k → 36,6k chỉ sau một commit).
+# Vượt ngưỡng → daemon ghi log cảnh báo khi dựng prompt, `cfharness doctor` báo vàng.
+SYSTEM_PROMPT_WARN_CHARS = 30000
+
+_SECTION_RE = re.compile(r"(?m)^(?:# (.+)|═+\n(.+?)\n═+)$")
+
+
+def prompt_sections(text: str) -> list[tuple[str, int]]:
+    """Cỡ từng khối của system prompt: tiêu đề `# …` (quy ước, SOUL, CLI…) và banner `════` (USER PROFILE, MEMORY)."""
+    marks = [(m.start(), (m.group(1) or m.group(2) or "").strip()) for m in _SECTION_RE.finditer(text)]
+    if not marks or marks[0][0] > 0:
+        marks.insert(0, (0, "(đầu)"))
+    out = []
+    for i, (pos, name) in enumerate(marks):
+        end = marks[i + 1][0] if i + 1 < len(marks) else len(text)
+        if end > pos:
+            out.append((name.split(" [", 1)[0][:48], end - pos))
+    return out
+
+
+def size_summary(text: str, top: int = 3) -> str:
+    """'36622 ký tự; lớn nhất: cfharness CLI reference 14707, Điều phối viên 12282, …' — cho log/doctor."""
+    big = sorted(prompt_sections(text), key=lambda s: -s[1])[:top]
+    return f"{len(text)} ký tự; lớn nhất: " + ", ".join(f"{n} {c}" for n, c in big)
+
+
+def latest_prompts(home: "Path") -> list[tuple[str, str]]:
+    """(agent_id, nội dung) của system prompt GẦN NHẤT của mỗi agent còn hoạt động — đọc thẳng hub.db (chỉ đọc) và
+    HUB_HOME/prompts/<hash>.md, không cần daemon (`cfharness doctor`). Lỗi đọc → danh sách rỗng."""
+    import sqlite3
+    from pathlib import Path
+
+    db = Path(home) / "hub.db"
+    if not db.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT r.agent_id, r.system_prompt_hash FROM runs r JOIN agents a ON a.id = r.agent_id "
+                "WHERE r.system_prompt_hash IS NOT NULL AND a.deleted_at IS NULL AND a.archived_at IS NULL "
+                "AND r.queued_at = (SELECT MAX(queued_at) FROM runs WHERE agent_id = r.agent_id AND system_prompt_hash IS NOT NULL)"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+    out = []
+    for agent_id, h in sorted(set(rows)):
+        p = Path(home) / "prompts" / f"{h}.md"
+        if p.exists():
+            out.append((agent_id, p.read_text(encoding="utf-8")))
+    return out

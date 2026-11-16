@@ -35,6 +35,9 @@ class RunSpec:
     effort: str | None = None
     fallback_model: str | None = None
     system_prompt: str | None = None
+    # file chứa đúng `system_prompt` (RunManager ghi vào thư mục runtime của run). Prompt dài → `--append-system-prompt-file`
+    # thay vì đưa nguyên văn vào argv (Windows: dòng lệnh tối đa 32767 ký tự → WinError 206)
+    system_prompt_path: Path | None = None
     tool_policy: dict[str, Any] = field(default_factory=dict)
     mcp_config_path: Path | None = None
     settings_path: Path | None = None

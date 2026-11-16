@@ -44,6 +44,16 @@ DEFAULT_PORT = 8765
 PORT_BASE, PORT_SPAN = 8770, 1000
 RESERVED_PORTS = frozenset({8766})
 NAME_MAX = 60
+# Link tải app desktop (thẻ ở Cài đặt + link ở chân thanh bên). HẰNG SỐ: repo app cố định, tên tệp cố định mà mỗi release
+# của app đăng kèm → `releases/latest/download/<tên>` luôn trỏ bản ổn định mới nhất. Không lấy từ cấu hình (không mở đường
+# cho ai đổi link tải thành tệp khác).
+DESKTOP_REPO = "lephuong123/cfharness-desktop"
+DOWNLOADS = {
+    "mac": f"https://github.com/{DESKTOP_REPO}/releases/latest/download/Cfharness-Desktop-macOS.dmg",
+    "windows": f"https://github.com/{DESKTOP_REPO}/releases/latest/download/Cfharness-Desktop-Windows-setup.exe",
+    "page": "https://lephuong123.github.io/cfharness-desktop/",
+}
+
 APP_UA_RE = re.compile(r"CfharnessDesktop/([0-9A-Za-z.+\-]{1,32})")
 
 
@@ -368,5 +378,5 @@ def local_web_cfg(paths: HubPaths) -> dict[str, Any]:
     return v if isinstance(v, dict) else {}
 
 
-__all__ = ["WELL_KNOWN", "WELL_KNOWN_PATH", "BADGE_PATH", "badge_from", "routes", "note_app_ua", "display_name", "preferred_port", "pick_port",
+__all__ = ["DOWNLOADS", "WELL_KNOWN", "WELL_KNOWN_PATH", "BADGE_PATH", "badge_from", "routes", "note_app_ua", "display_name", "preferred_port", "pick_port",
            "spawn_web", "wait_ready", "info", "local_web_cfg", "probe", "acquire_ensure_lock", "release_ensure_lock", "take_nonce_env", "NONCE_ENV"]

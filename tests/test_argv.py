@@ -168,3 +168,40 @@ def test_child_env_strips_parent_claude_session():
 
 def test_default_settings_disable_auto_memory():
     assert DEFAULTS["runtime"]["claude"]["settings"]["autoMemoryEnabled"] is False
+
+
+# ---------------------------------------------------------------- prompt hệ thống dài → file (Windows WinError 206)
+def test_long_system_prompt_goes_through_file():
+    from cfharness.runtime.claude_cli import SYSTEM_PROMPT_FILE_MIN_CHARS, check_cmdline_length
+
+    long_sp = "x" * 40000  # như prompt điều phối viên (~37k): nguyên văn trong argv vượt giới hạn dòng lệnh Windows
+    p = Path("/h/runtime/r_1/system_prompt.md")
+    argv, _ = build_argv(spec(system_prompt=long_sp, system_prompt_path=p), cfg())
+    assert flag_value(argv, "--append-system-prompt-file") == str(p)
+    assert "--append-system-prompt" not in argv and long_sp not in argv
+    check_cmdline_length(argv)  # không ném
+    # ngắn → vẫn argv (không đổi hành vi agent thường); không có file → argv
+    argv, _ = build_argv(spec(system_prompt="SOUL", system_prompt_path=p), cfg())
+    assert flag_value(argv, "--append-system-prompt") == "SOUL"
+    argv, _ = build_argv(spec(system_prompt=long_sp), cfg())
+    assert flag_value(argv, "--append-system-prompt") == long_sp
+    with pytest.raises(ArgvError, match="--append-system-prompt"):
+        check_cmdline_length(argv)
+    # replace mode → --system-prompt-file; ngưỡng cấu hình được
+    c = cfg()
+    c["system_prompt_mode"] = "replace"
+    c["system_prompt_file_min_chars"] = 3
+    argv, _ = build_argv(spec(system_prompt="SOUL", system_prompt_path=p), c)
+    assert flag_value(argv, "--system-prompt-file") == str(p)
+    assert SYSTEM_PROMPT_FILE_MIN_CHARS < 32767
+
+
+def test_long_system_prompt_file_flag_respects_flag_matrix():
+    p = Path("/h/runtime/r_1/system_prompt.md")
+    c = cfg()
+    # phiên bản có trong flag_matrix mà thiếu cờ -file → giữ argv (không truyền cờ chưa kiểm)
+    argv, _ = build_argv(spec(system_prompt="y" * 9000, system_prompt_path=p), c, "2.1.312")
+    assert "--append-system-prompt-file" not in argv and "--append-system-prompt" in argv
+    c["flag_matrix"] = {**c["flag_matrix"], "9.9.9": list(c["flag_matrix"]["2.1.312"]) + ["--append-system-prompt-file"]}
+    argv, _ = build_argv(spec(system_prompt="y" * 9000, system_prompt_path=p), c, "9.9.9")
+    assert flag_value(argv, "--append-system-prompt-file") == str(p)
