@@ -41,11 +41,15 @@ TOOLS: dict[str, dict[str, Any]] = {
         "inputSchema": {"type": "object", "properties": {"text": _S}, "required": ["text"]},
     },
     "task_complete": {
-        "description": "Mark your current task as complete. Call once at the end, then finish your turn with a short summary.",
+        "description": ("Mark your current task as complete. Call once at the end. `summary` is the task report the owner reads: the "
+                        "outcome in one sentence, then the headings Đã làm / Còn mở / Cần bạn (Done / Still open / Needs you) with "
+                        "short bullets — what changed, what is not finished or verified, and what only the human must do. Then end "
+                        "your turn with that same report as your final message."),
         "inputSchema": {"type": "object", "properties": {"summary": _S, "result": {"type": "object"}}, "required": ["summary"]},
     },
     "task_request_review": {
-        "description": "Finish your task and ask for a review by a team reviewer.",
+        "description": ("Finish your task and ask for a review by a team reviewer. `summary` is the task report (outcome, then "
+                        "Đã làm / Còn mở / Cần bạn)."),
         "inputSchema": {"type": "object", "properties": {"summary": _S}, "required": ["summary"]},
     },
     "task_block": {
