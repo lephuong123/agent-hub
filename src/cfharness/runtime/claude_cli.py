@@ -38,8 +38,25 @@ _FLAGS_WITH_VALUE = frozenset({
     "--input-format", "--output-format", "--resume", "--session-id", "--name", "--append-system-prompt", "--system-prompt",
     "--system-prompt-snapshot", "--model", "--effort", "--fallback-model", "--max-budget-usd", "--mcp-config", "--settings",
     "--setting-sources", "--permission-mode", "--permission-prompts", "--permission-prompt-tool", "--add-dir", "--json-schema",
-    "--agents", "--worktree", "--plugin-dir",
+    "--agents", "--worktree", "--plugin-dir", "--append-system-prompt-file", "--system-prompt-file",
 })
+
+# Prompt hệ thống dài hơn ngưỡng này (ký tự) đi qua file thay vì argv (runtime.claude.system_prompt_file_min_chars).
+# Windows giới hạn cả dòng lệnh ở 32767 ký tự UTF-16 → prompt điều phối viên (~37k) làm spawn lỗi WinError 206.
+SYSTEM_PROMPT_FILE_MIN_CHARS = 8000
+WINDOWS_CMDLINE_MAX = 32767
+
+
+def _system_prompt_args(spec: RunSpec, claude_cfg: dict[str, Any], cli_version: str | None, mode: str) -> list[str]:
+    inline = "--append-system-prompt" if mode == "append" else "--system-prompt"
+    min_chars = int(claude_cfg.get("system_prompt_file_min_chars", SYSTEM_PROMPT_FILE_MIN_CHARS))
+    text = spec.system_prompt or ""
+    if spec.system_prompt_path is not None and len(text) > min_chars:
+        flag = inline + "-file"
+        # phiên bản có trong flag_matrix mà thiếu cờ -file → giữ argv (spawn có thể lỗi trên Windows; start() báo rõ)
+        if _matrix_has(claude_cfg, cli_version, flag) is not False:
+            return [flag, str(spec.system_prompt_path)]
+    return [inline, text]
 
 
 def argv_flags(argv: list[str]) -> list[str]:
@@ -151,7 +168,7 @@ def build_argv(spec: RunSpec,claude_cfg: dict[str, Any], cli_version: str | None
         mode = claude_cfg.get("system_prompt_mode", "append")
         if mode not in ("append", "replace"):
             raise ArgvError(f"runtime.claude.system_prompt_mode không hợp lệ: {mode}")
-        argv += ["--append-system-prompt" if mode == "append" else "--system-prompt", spec.system_prompt]
+        argv += _system_prompt_args(spec, claude_cfg, cli_version, mode)
     snap = claude_cfg.get("system_prompt_snapshot")
     if snap is not None:
         if snap not in ("on", "off"):
@@ -256,6 +273,16 @@ def oneshot_argv(req: "OneShotRequest", claude_cfg: dict[str, Any], *, mcp_path:
     argv += ["--tools", ""]
     check_flag_matrix(argv, claude_cfg, cli_version)
     return argv
+
+
+def check_cmdline_length(argv: list[str], limit: int = WINDOWS_CMDLINE_MAX) -> None:
+    """Windows: dòng lệnh > 32767 ký tự UTF-16 → CreateProcess lỗi WinError 206 không nói gì. Báo trước, chỉ ra đối số dài nhất."""
+    n = len(subprocess.list2cmdline(argv).encode("utf-16-le")) // 2
+    if n <= limit:
+        return
+    i = max(range(1, len(argv)), key=lambda k: len(argv[k]))
+    owner = argv[i - 1] if argv[i - 1].startswith("-") else "(đối số)"
+    raise ArgvError(f"dòng lệnh `claude` dài {n} ký tự, vượt giới hạn Windows {limit}; đối số dài nhất: {owner} ({len(argv[i])} ký tự)")
 
 
 def parse_oneshot_output(stdout: bytes) -> dict[str, Any]:
@@ -444,6 +471,8 @@ class ClaudeCliRuntime(AgentRuntime):
         cli_version = self.version()
         argv, stdin_bytes = build_argv(spec, self.cfg, cli_version)  # H-10: kiểm ma trận cờ theo phiên bản
         argv = exec_argv(argv)
+        if IS_WINDOWS:
+            check_cmdline_length(argv)
         spec.cwd.mkdir(parents=True, exist_ok=True)
         spec.stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
         stderr_f = open(spec.stderr_log_path, "ab")
@@ -683,7 +712,7 @@ def _redact_for_storage(argv: list[str], spec: RunSpec) -> list[str]:
     out = redact_argv(argv)
     # không lưu nguyên prompt/system prompt dài trong argv (đã có ở bảng runs / hash)
     for i, a in enumerate(out):
-        if i > 0 and out[i - 1] in ("--append-system-prompt", "--system-prompt"):
+        if i > 0 and out[i - 1] in ("--append-system-prompt", "--system-prompt"):  # (-file: chỉ là đường dẫn, giữ nguyên)
             out[i] = f"<system-prompt {len(a)} chars>"
         elif a == spec.prompt and len(a) > 200:
             out[i] = a[:200] + "…"
