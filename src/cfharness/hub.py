@@ -200,6 +200,14 @@ class Hub:
             self._bg.append(asyncio.get_running_loop().create_task(self.approvals.loop()))
         except RuntimeError:
             pass
+        try:  # web còn chạy code cũ sau cập nhật (macOS/Linux) → dừng để launchd/daemon chạy lại bằng code mới — web/reload.py
+            import asyncio
+
+            from .web.reload import stale_web_loop
+
+            self._bg.append(asyncio.get_running_loop().create_task(stale_web_loop(self)))
+        except RuntimeError:
+            pass
         from .session_search import start_backfill  # v17: chỉ mục hội thoại cũ theo lô nền (session_search.py)
 
         start_backfill(self)
