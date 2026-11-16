@@ -19,15 +19,12 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - Tệp đặt thẳng ở gốc workspace không lên Không gian số (Không gian số không có tệp ở gốc) — thẻ Cài đặt liệt kê để bạn chuyển vào một thư
   mục cấp 1; agent được dặn tạo tệp trong thư mục cấp 1.
 - Tài khoản bị gỡ quyền admin của workspace → thẻ Cài đặt báo đỏ kèm tên tài khoản, nút "Đăng nhập lại".
-- **Tự thiết lập Không gian số ngay trên trang Cài đặt web**, dùng được cả qua link public — không còn phải nhờ admin chạy lệnh ở máy chủ
-  (#121): nhập địa chỉ Không gian số, chọn chế độ (toàn bộ workspace hoặc một thư mục), bấm **Đăng nhập & nối thư mục**, rồi đồng ý trên
-  trang Không gian số (nút "Mở trang đồng ý" ngay trên thẻ; thẻ tự cập nhật và tự nối thư mục khi xong). Trên web cũng đăng nhập lại khi hết
-  phiên, thêm thư mục khác đã cấp, chuyển sang toàn bộ workspace, gỡ thư mục, tạm dừng/chạy lại đồng bộ. Thiết lập, đăng nhập, chuyển chế độ
-  và gỡ có xác nhận 2 bước.
+- Luồng tự thiết lập trên trang Cài đặt web (có từ v0.2.13, #121) thêm **chọn chế độ** (toàn bộ workspace — mặc định — hoặc một thư mục),
+  nút **Chuyển sang toàn bộ workspace**; nút "Đăng nhập lại" gộp với "Thêm thư mục khác…" (chế độ một thư mục). Thiết lập, đăng nhập lại,
+  chuyển chế độ và gỡ thư mục giờ có xác nhận 2 bước; nút Gỡ ẩn khi có run đang ghi vào thư mục đó.
 - Qua link public, đăng nhập theo kiểu chuyển tiếp: Không gian số đưa trình duyệt về `https://<hub>/filehub/oauth/cb` (cần
-  `web.public_origin`); qua link public không đổi được máy chủ/binary đã đặt. Web trên chính máy chạy hub đăng nhập trực tiếp như terminal.
-- Binary sync chỉ do admin cài: web không nhận đường dẫn binary; hub dùng cấu hình hoặc tự tìm ở `/usr/local/bin`, `/opt/homebrew/bin`,
-  `~/.local/bin` (không dò PATH). Chỗ đặt bản sao trên máy chỉ đổi được khi dùng web trên chính máy chạy hub.
+  `web.public_origin`) — trước đây link đồng ý mở qua link public không đăng nhập xong được. Qua link public không đổi được máy chủ/binary đã
+  đặt; binary tự tìm lần đầu phải là bản quản trị cài (người dùng hub không ghi được). Web trên chính máy chạy hub đăng nhập trực tiếp như terminal.
 - Lệnh mới `cfharness filehub switch-to-workspace`: chuyển thư mục chung đang dùng sang toàn bộ workspace (giữ nguyên tệp cũ).
 
 ### Lưu ý khi cập nhật
@@ -37,6 +34,20 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - Chế độ workspace và đăng nhập qua link public cần `tang-thu-sync-headless` bản mới (có `--root-mode`/`--redirect-uri`) và Không gian số
   bản có gốc workspace. Binary cũ: thiết lập chế độ workspace báo "binary sync chưa hỗ trợ…" — dùng `--scope folder` hoặc cập nhật binary.
   `filehub.sync_min_version` sẽ được nâng khi bản sync mới phát hành (TODO: số phiên bản chưa chốt).
+- Đăng nhập Không gian số qua link public cần đặt `web.public_origin` (https) ở terminal.
+
+---
+
+## v0.2.13 — 2026-11-16
+
+Tự thiết lập thư mục chung Không gian số ngay trên web, và sửa lỗi trang Cài đặt báo lỗi sau khi cập nhật lên v0.2.12: giao diện web giờ tự chạy lại sang bản mới sau mỗi lần cập nhật.
+
+### Tính năng mới — thư mục chung Không gian số
+- Trang **Cài đặt** web có luồng tự thiết lập Không gian số, dùng được cả qua link public: nhập địa chỉ Không gian số và tên thư mục, bấm
+  **Đăng nhập & nối thư mục**, rồi đồng ý thiết bị trên trang Không gian số (link mở ngay trên thẻ, thẻ tự cập nhật khi xong). Trên web cũng
+  đăng nhập lại khi hết phiên, thêm thư mục khác, gỡ thư mục, tạm dừng/chạy lại đồng bộ. Không còn phải nhờ admin chạy lệnh ở máy chủ (#121).
+- Binary sync chỉ do admin cài: web không nhận đường dẫn binary; hub dùng cấu hình hoặc tự tìm ở `/usr/local/bin`, `/opt/homebrew/bin`,
+  `~/.local/bin`. Chỗ đặt bản sao trên máy chỉ đổi được khi dùng web trên chính máy chạy hub.
 
 ### Sửa lỗi
 - **Trang Cài đặt lỗi 500 sau khi cập nhật lên v0.2.12 (macOS/Linux)**: bước cập nhật chỉ khởi động lại daemon, còn tiến trình web
