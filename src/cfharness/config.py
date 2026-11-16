@@ -666,7 +666,11 @@ DEFAULTS: dict[str, Any] = {
         "sync_min_version": "0.1.0",  # `--version` thấp hơn → không chạy, báo ở thẻ Cài đặt
         "device_name": None,  # null = "cfharness · <tên máy>"
         "local_parent": "~/KhongGianSo",  # thư mục cha của bản sao cục bộ (phải trong workspace.confine nếu bật giam; không trong HUB_HOME)
-        "folders": [],  # [{name, root_id, ws_id, local_path}] — do `filehub setup|add|remove` ghi
+        "folders": [],  # [{name, root_id, ws_id, local_path, kind folder|workspace, account?}] — do `filehub setup|add|remove|switch-to-workspace` ghi
+        # chế độ khi `filehub setup` (plan-filehub-workspace-root W4): workspace = TOÀN BỘ một workspace Không gian số (gốc ảo = wsId, chỉ
+        # Workspace Admin); folder = MỘT thư mục (cây con, như trước). Đăng nhập lại giữ chế độ của thư mục chung đang có.
+        "scope": "workspace",
+        "relay_timeout_s": 600,  # đăng nhập từ xa qua web public (relay OAuth): state chờ ≤ 10 phút, dùng một lần
         "poll_s": None,  # --poll của binary (null = mặc định của binary)
         "max_delete_batch": 0,  # --max-delete-batch: 0 = tắt; > 0 → xoá quá ngưỡng thì dừng chiều đẩy lên chờ `filehub resume --root`
         "extra_ignore": [],  # mẫu bỏ qua thêm (kiểu .gitignore) cho chiều đẩy lên — cộng vào ignore.txt sinh từ files.secret_patterns

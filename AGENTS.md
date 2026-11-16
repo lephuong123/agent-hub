@@ -752,9 +752,15 @@ Không migration (cấu hình `filehub.*` ∈ `integrity.SECURITY_KEYS`, trạng
 |---|---|
 | `filehub/supervisor.py` | `tang-thu-sync-headless` là tiến trình con của daemon: `--version` ≥ `filehub.sync_min_version`, env danh sách trắng (`ENV_KEEP`), backoff, SIGTERM dừng êm, đối soát `(pid, start_time)` (`HUB_HOME/filehub/supervisor.json`) |
 | `filehub/service.py` | `hub.filehub`: status.json → `filehub.state|conflict|blocked`; index/<root>.json → link; control.json → presence + `resume_push`; steer `by="hub"` khi `recent` chiều `down` lúc run giữ khoá gốc; sau run `filehub.changed|deleted|secret_warning`; `resolve_ref("filehub:<tên>[/<con>]")` |
-| `filehub/rpc.py`, `filehub/cli.py` | RPC `filehub.status|list|link` (đọc) + `setup|login|add|remove|pause|resume` (HUMAN_ONLY, `MUTATING_FILEHUB` tự audit); CLI `cfharness filehub …` (∈ `HUB_HUMAN_ONLY_CLI` trừ `status`) |
-| `web/filehub_pages.py` | Thẻ "Không gian số" ở Cài đặt: tự thiết lập/đăng nhập (link đồng ý + poll)/thêm/gỡ/tạm dừng, cả qua link public (chỉ đường dẫn bản sao trên máy cần `is_local_request`; binary không bao giờ từ web — `filehub.detect_binary`), `/filehub/open` → `<server>/files/<folder_id>?file=<file_id>`; chip tệp `fh` |
+| `filehub/rpc.py`, `filehub/cli.py` | RPC `filehub.status|list|link` (đọc) + `setup|login|login_callback|switch_to_workspace|add|remove|pause|resume` (HUMAN_ONLY, `MUTATING_FILEHUB` tự audit); CLI `cfharness filehub …` (∈ `HUB_HUMAN_ONLY_CLI` trừ `status`) |
+| `web/filehub_pages.py` | Thẻ "Không gian số" ở Cài đặt — tự thiết lập (form địa chỉ + chế độ workspace|folder, mặc định workspace) / đăng nhập (link đồng ý + thẻ poll 3 s + `/filehub/login`, tự nối thư mục) / thêm thư mục đã cấp / gỡ / tạm dừng, mọi thao tác qua `ACTIONS` → RPC `filehub.*`, cả qua link public (thiết lập/đăng nhập/chuyển/gỡ = `Action.step2`); binary KHÔNG BAO GIỜ từ web (`filehub.detect_binary`: cấu hình → chỗ cài cố định, không dò PATH), `local_parent`/`local_path` chỉ khi `is_local_request`; qua public: relay OAuth, route CÔNG KHAI `/filehub/oauth/cb` (`fh_limiter`), không đổi server/binary đã đặt; `/filehub/open` → `<server>/files/<folder_id>?file=<file_id>`; chip tệp `fh` |
 
+Gốc workspace (H7, `docs/dev-notes/plan-filehub-workspace-root.md`): `folders[].kind` folder|workspace (`root_id = ws_id` = gốc ảo), `filehub.scope`
+mặc định workspace; `--root-mode workspace` (login) và `--root-kind workspace` (chạy đồng bộ) chỉ truyền khi chế độ workspace; dòng `ROOT` 3/4 cột cũ
+vẫn đọc. Hợp đồng headless: `tang-thu-sync/docs/headless-cfharness.md` — đổi hợp đồng → sửa cả `tests/fake_tangthu_sync.py`. Tên sống trên web (`status.roots[].server_name`)
+là BÍ DANH trong `resolve_ref` — `local_path`/tên cfharness không bao giờ tự đổi. Relay OAuth: `state` của LOGIN_URL do daemon giữ (≤ `relay_timeout_s`,
+một lần, `compare_digest`), sai → lỗi chung và lượt chờ giữ nguyên; code/state chỉ ký tự URL-safe trước khi ghi `CODE` vào stdin binary, không vào audit.
+Qua link public không đổi server/binary đã đặt (`setup{remote}`). Thao tác web mới cho filehub → RPC `filehub.*` (app desktop gọi lại), không logic trong template.
 Bất biến: workspace `filehub:` khoá theo GỐC thư mục chung (`WorkspaceLocks(store, hub)`), checkpoint luôn `_walk`, `run revert` từ chối
 (`FILEHUB_NO_REVERT`); bản sao cục bộ phải trong `workspace.confine` W và không trong/chứa HUB_HOME. Xoá/di chuyển/ghi đè TRONG thư mục chung mà
 run được ghi = `write` (không hỏi, chỉ báo sau run — §7.3); `.tangthu*` + `HUB_HOME/filehub` = cấm (`filehub_metadata`, sandbox deny, `sensitive_read`).

@@ -222,3 +222,89 @@ def test_device_name_keeps_ip_hostname(monkeypatch, env):
     d, *_ = env
     assert d.hub.filehub.device_name() == "cfharness · 192.168.2.51"
     monkeypatch.setattr(S, "_MACHINE", None)
+
+
+# ------------------------------------------------------------------ gốc workspace (plan-filehub-workspace-root.md, PR H7)
+async def test_workspace_root_top_level_folders_inside_confine(env):
+    """Chế độ workspace: `filehub:<ws>/<thư mục cấp 1>/…` = đúng đường dẫn người thấy trên web; bản sao trong W (giam) → task/run chạy,
+    khoá = gốc workspace; tên sống trên web (đổi tên) là bí danh; prompt nói rõ gốc = workspace + tệp mới phải trong thư mục cấp 1."""
+    d, s, _old, tmp = env
+    w = tmp / "W"
+    ws_local = (w / "KhongGianSo" / "admin harness")
+    (ws_local / "v1_2026-11-15" / "00_Tong_quan").mkdir(parents=True)
+    (ws_local / "v1_2026-11-15" / "00_Tong_quan" / "README.md").write_text("đọc tôi\n")
+    d.hub.config.set("filehub.folders", [{"name": "admin harness", "root_id": "ws_9", "ws_id": "ws_9", "local_path": str(ws_local.resolve()),
+                                          "kind": "workspace", "account": "chu.domain"}])
+    d.hub.config.set("workspace.confine", {"root": str(w)})
+    ws_local = ws_local.resolve()
+    fh = d.hub.filehub
+    fh.prepare_files()
+    fh.status_path.write_text(json.dumps({"state": "idle", "roots": [{"id": "ws_9", "kind": "workspace", "server_name": "Admin Harness (mới)"}]}))
+    sub = "filehub:admin harness/v1_2026-11-15/00_Tong_quan"
+    assert fh.resolve_ref(sub)[0] == str(ws_local / "v1_2026-11-15" / "00_Tong_quan")
+    assert fh.resolve_ref("filehub:Admin Harness (mới)/v1_2026-11-15")[0] == str(ws_local / "v1_2026-11-15")  # bí danh tên mới
+    with pytest.raises(HubError, match="không có thư mục chung"):
+        fh.resolve_ref("filehub:Admin Harness/v1_2026-11-15")
+    # server_name null (chưa đồng bộ lần nào) / chậm cập nhật (đổi tên ws không có sự kiện feed — S5 làm mới theo token ~15 phút):
+    # tên cfharness luôn khớp, không lỗi
+    fh.status_path.write_text(json.dumps({"state": "idle", "roots": [{"id": "ws_9", "kind": "workspace", "server_name": None}]}))
+    assert fh.resolve_ref(sub)[0] == str(ws_local / "v1_2026-11-15" / "00_Tong_quan") and fh.status()["folders"][0]["server_name"] == ""
+    fh.status_path.write_text(json.dumps({"state": "idle", "roots": [{"id": "ws_9", "kind": "workspace", "server_name": "Admin Harness (mới)"}]}))
+    s.by_prompt["DOC-TONG-QUAN"] = {"text": "xong", "files": {"tom-tat.md": "# tóm tắt\n"}}
+    t = await rpc(d, "task.create", {"assignee": "w1", "title": "DOC-TONG-QUAN", "body": "DOC-TONG-QUAN", "workspace": sub})
+    assert t["workspace"]["kind"] == "filehub" and t["workspace"]["folder"] == "admin harness"
+    run = await until(lambda: next((r for r in d.hub.store.list_runs(agent_id="w1") if r.get("diff")), None))
+    assert run["cwd"] == str(ws_local / "v1_2026-11-15" / "00_Tong_quan") and run["workspace_key"] == str(ws_local)
+    spec = next(x for x in s.specs if "DOC-TONG-QUAN" in x.prompt)
+    assert "the WHOLE Không gian số workspace" in spec.system_prompt and "INSIDE a top-level folder" in spec.system_prompt
+    assert '"Admin Harness (mới)"' in spec.system_prompt
+    rows = await rpc(d, "filehub.list")
+    assert rows[0]["kind"] == "workspace" and rows[0]["server_name"] == "Admin Harness (mới)"
+    st = await rpc(d, "filehub.status")
+    assert st["folders"][0]["display"] == "Toàn bộ workspace «Admin Harness (mới)»" and st["folders"][0]["account"] == "chu.domain"
+
+
+def test_revoked_state_names_account(env):
+    d, *_ = env
+    fh = d.hub.filehub
+    fh.prepare_files()
+    d.hub.config.set("filehub.folders", [{**fh.folders()[0], "account": "chu.domain"}])
+    fh.status_path.write_text(json.dumps({"state": "idle", "roots": [{"id": "r_chung", "state": "disconnected", "last_error": "root_revoked",
+                                                                      "server_name": None}]}))
+    st = fh.status()
+    assert st["state"] == "revoked" and st["folders"][0]["revoked"] and st["folders"][0]["account"] == "chu.domain"
+    fh.tick()
+    assert events(d.hub, "filehub.state")[-1].payload["state"] == "revoked"
+    assert not st["folders"][0]["revoked_temporary"]  # root đã ngắt (binary cũ) → phải đăng nhập lại
+
+
+def test_revoked_temporary_workspace_root(env):
+    """Binary S5 thật khi tài khoản bị gỡ admin: root KHÔNG ngắt — `state=error`, `last_error=root_revoked` (e2e 2026-11-16). Cấp lại quyền
+    là tự chạy tiếp (T6 xét quyền sống) → thẻ/CLI không bảo đăng nhập lại."""
+    d, *_ = env
+    fh = d.hub.filehub
+    fh.prepare_files()
+    d.hub.config.set("filehub.folders", [{**fh.folders()[0], "account": "chu.domain"}])
+    fh.status_path.write_text(json.dumps({"state": "idle", "roots": [{"id": "r_chung", "state": "error", "last_error": "root_revoked"}]}))
+    st = fh.status()
+    f = st["folders"][0]
+    assert st["state"] == "revoked" and f["revoked"] and f["revoked_temporary"] and f["account"] == "chu.domain"
+    fh.status_path.write_text(json.dumps({"state": "idle", "roots": [{"id": "r_chung", "state": "idle", "last_error": None}]}))
+    st = fh.status()
+    assert st["state"] == "idle" and not st["folders"][0]["revoked"] and not st["folders"][0]["revoked_temporary"]
+
+
+def test_workspace_deleted_disconnects_with_reason(env):
+    """Binary S5 khi workspace bị xoá trên server (WebSocket `root_revoked workspace_deleted`): root NGẮT, `last_error=workspace_deleted`,
+    bản trên máy đổi tên `<tên> (đã ngắt đồng bộ)` → status nêu rõ (không phải "mất quyền tạm thời") + chỗ tệp nằm bây giờ (e2e 2026-11-16)."""
+    d, *_ = env
+    fh = d.hub.filehub
+    fh.prepare_files()
+    f0 = fh.folders()[0]
+    moved = f0["local_path"] + " (đã ngắt đồng bộ)"
+    fh.status_path.write_text(json.dumps({"state": "idle", "roots": [{"id": f0["root_id"], "state": "disconnected", "last_error": "workspace_deleted",
+                                                                      "local_path": moved}]}))
+    st = fh.status()
+    f = st["folders"][0]
+    assert st["state"] == "revoked" and f["revoked"] and f["workspace_deleted"] and not f["revoked_temporary"]
+    assert f["disconnected_path"] == moved

@@ -1,7 +1,12 @@
 """`hub.filehub` — thư mục dùng chung người ↔ agent trên "Không gian số" (docs/dev-notes/filehub.md, plan-cloud-files.md §3, §8.4).
 
 - Cấu hình ở `config.yaml` nhánh `filehub.*` (∈ `integrity.SECURITY_KEYS`; chỉ daemon ghi theo lệnh người). Danh sách thư mục chung
-  `filehub.folders = [{name, root_id, ws_id, local_path}]` (v1 dùng 1, code sẵn cho N).
+  `filehub.folders = [{name, root_id, ws_id, local_path, kind, account?}]` (v1 dùng 1, code sẵn cho N). `kind` = `folder` (MỘT thư mục,
+  cây con) | `workspace` (TOÀN BỘ một workspace — gốc ảo `root_id = ws_id`, docs/dev-notes/plan-filehub-workspace-root.md); thiếu = folder.
+- Đổi tên trên web không đổi id: `local_path` + tên cfharness GIỮ; tên sống (`status.roots[].server_name`) là BÍ DANH trong `resolve_ref`.
+- Đăng nhập: listener loopback của binary (CLI / web mở trên máy hub) hoặc RELAY OAuth (web mở qua `web.public_origin`): binary chạy với
+  `--redirect-uri <public_origin>/filehub/oauth/cb`, hub giữ `state` của LOGIN_URL (≤ `relay_timeout_s`, MỘT lần) → route công khai của web
+  gọi `filehub.login_callback{code, state}` → so `compare_digest` → ghi `CODE <code>\t<state>` vào stdin của binary (PKCE verifier không rời binary).
 - Trạng thái đồng bộ đọc từ `HUB_HOME/filehub/status.json` (binary sync ghi nguyên tử) → `idle|syncing|conflict|offline|auth_expired|error`
   (+ `paused`, `not_configured`, `version_mismatch` do hub đặt). Đổi trạng thái / bản xung đột mới / chiều đẩy bị chặn → event.
 - Link "Mở trên Không gian số": ánh xạ đường dẫn → id từ `<profile>/index/<rootId>.json` (chỉ đọc) → `<server>/files/<folder_id>?file=<file_id>`.
@@ -38,13 +43,54 @@ log = logging.getLogger("cfharness.filehub")
 
 REF_PREFIX = "filehub:"
 STATUS_MAX_BYTES = 4_000_000
-STATES = ("idle", "syncing", "conflict", "offline", "auth_expired", "error", "paused", "not_configured", "version_mismatch", "starting")
+STATES = ("idle", "syncing", "conflict", "offline", "auth_expired", "error", "paused", "not_configured", "version_mismatch", "starting", "revoked")
 STEER_TEXT = "[cfharness] The human changed {rel} on Không gian số while you were working. Re-Read it before editing."
 IGNORE_BASE = (".git/", "node_modules/", ".DS_Store", "Thumbs.db", "*.tmp", "*.swp", "~$*", ".~lock.*", ".tangthu*",
                # tệp nội bộ của claude CLI trong cwd của run (vd `.claude/.cc-writes`, settings.local.json) — không bao giờ lên cloud
                ".claude/", ".claude.json", ".cc-writes")
 DEVICE_NAME_MAX = 40
 META_PREFIX = ".tangthu"
+KINDS = ("folder", "workspace")
+RELAY_PATH = "/filehub/oauth/cb"
+# code/state của callback OAuth đi vào MỘT dòng stdin của binary (`CODE <code>\t<state>`) — chỉ ký tự an toàn cho URL, không tab/xuống dòng
+_TOKEN_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~+/=")
+TOKEN_MAX = 2048
+# lỗi trang đồng ý trả về redirect_uri (openapi.yaml authorize 302) — ngoài danh sách → "other" (không phản chiếu chữ của bên ngoài)
+CALLBACK_ERRORS = ("access_denied", "device_limit", "super_not_member", "not_ws_admin")
+_ERR_CODE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+# `ERROR <mã>` của `login` (headless S5) → chữ cho thẻ Cài đặt / CLI / app desktop (dựng ở daemon, không trong template)
+LOGIN_ERROR_TEXT = {
+    "access_denied": "Bạn đã từ chối cấp quyền ở trang đồng ý.",
+    # Trang đồng ý không cho biết tài khoản nào vừa đồng ý (lỗi chỉ có mã) → không gán lỗi cho tài khoản hub đang dùng: đúng lúc người
+    # đăng nhập NHẦM tài khoản thì gán sẽ đổ lỗi cho tài khoản đúng. Tài khoản đang dùng chỉ nêu làm ngữ cảnh ({acc}).
+    "device_limit": "Tài khoản bạn vừa dùng ở trang đồng ý đã đủ số thiết bị — thu hồi thiết bị cũ ở Không gian số › Hồ sơ › Thiết bị rồi "
+                    "thử lại.{acc}",
+    "super_not_member": "Tài khoản bạn vừa dùng ở trang đồng ý là Super Admin, không phải thành viên của workspace — chế độ workspace cần đăng "
+                        "nhập bằng tài khoản Workspace Admin là thành viên của workspace đó.{acc}",
+    "not_ws_admin": "Tài khoản bạn vừa dùng ở trang đồng ý không phải Workspace Admin của workspace đã chọn — đăng nhập lại bằng tài khoản "
+                    "admin của workspace (hoặc dùng chế độ một thư mục).{acc}",
+    "timeout": "Hết thời gian chờ đồng ý — bắt đầu lại.", "state_mismatch": "Liên kết đăng nhập không khớp — bắt đầu lại.",
+    "stdin_closed": "Lượt đăng nhập bị huỷ trước khi hoàn tất — bắt đầu lại.", "network": "Không kết nối được Không gian số — kiểm mạng rồi thử lại.",
+    "invalid_grant": "Mã đăng nhập không còn hiệu lực — bắt đầu lại.", "store": "Không ghi được tệp token của tiến trình đồng bộ.",
+    "usage": "Binary đồng bộ không nhận tham số (bản cũ?) — cập nhật tang-thu-sync-headless.",
+}
+
+
+def login_error_text(code: Any, account: str = "") -> str | None:
+    if not code:
+        return None
+    c = str(code)
+    t = LOGIN_ERROR_TEXT.get(c)
+    if t is None:
+        return f"Đăng nhập Không gian số lỗi: {c}"
+    return t.format(acc=f" Hub hiện đăng nhập bằng «{account}»." if account else "")
+
+
+def error_code(v: Any) -> str:
+    """Mã lỗi từ query `?error=` của trang đồng ý → chuyển cho binary (`ERROR <mã>\t<state>`): chỉ [a-z0-9_], ≤ 64, khác → other."""
+    s = str(v or "")
+    return s if 0 < len(s) <= 64 and all(c in _ERR_CODE_CHARS for c in s) else "other"
+REVOKED_ERRORS = ("root_revoked", "disconnected", "workspace_deleted")
 BINARY_NAME = "tang-thu-sync-headless"
 # Chỗ admin cài binary sync (scripts/setup-hub-user.sh cài /usr/local/bin) — web KHÔNG BAO GIỜ nhận đường dẫn binary từ client (chạy được tệp
 # tuỳ ý); thiếu cấu hình thì daemon tự dò ở các chỗ cố định này.
@@ -150,6 +196,66 @@ def valid_name(name: str) -> bool:
             and name not in (".", "..") and not name.startswith("."))
 
 
+def safe_name(name: str, fallback: str = "workspace") -> str:
+    """Tên thư mục chung từ tên trên Không gian số (vd tên workspace có `/`, `:`) → ký tự hợp lệ của `valid_name`."""
+    out = "".join(c if (c.isalnum() or c in " -_.") else "-" for c in str(name or ""))[:80]
+    out = " ".join(out.split()).lstrip(".").strip()
+    return out if valid_name(out) else fallback
+
+
+def kind_of(f: dict[str, Any] | None) -> str:
+    k = str((f or {}).get("kind") or "folder")
+    return k if k in KINDS else "folder"
+
+
+def valid_token(v: Any) -> bool:
+    return isinstance(v, str) and 0 < len(v) <= TOKEN_MAX and all(c in _TOKEN_CHARS for c in v)
+
+
+def read_status_file(hub: Any) -> dict[str, Any] | None:
+    """status.json của binary sync (đọc thẳng — dùng cả khi `hub.filehub` chưa gắn, vd dựng system prompt)."""
+    p = Path(hub.paths.home) / "filehub" / "status.json"
+    try:
+        if p.stat().st_size > STATUS_MAX_BYTES:
+            return None
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def live_names(hub: Any) -> dict[str, str]:
+    """root_id → tên SỐNG trên Không gian số (`roots[].server_name`, đã làm sạch một dòng). Đổi tên trên web → tên mới ở đây."""
+    from ..termsafe import one_line
+
+    out: dict[str, str] = {}
+    for r in (read_status_file(hub) or {}).get("roots") or []:
+        if isinstance(r, dict) and r.get("id") and r.get("server_name"):
+            n = one_line(str(r["server_name"]), 120)
+            if n:
+                out[str(r["id"])] = n
+    return out
+
+
+def shared_folders(hub: Any) -> list[dict[str, str]]:
+    """Thư mục chung cho khối prompt "Shared folder": tên cfharness, đường dẫn, kind, tên sống (nếu khác)."""
+    try:
+        if not hub.config.get("filehub.enabled"):
+            return []
+    except (KeyError, AttributeError):
+        return []
+    names = live_names(hub)
+    out = []
+    for f in config_folders(hub.config):
+        live = names.get(str(f.get("root_id") or ""), "")
+        out.append({"name": str(f["name"]), "path": str(f["local_path"]), "kind": kind_of(f), "server_name": live if live and live != f["name"] else ""})
+    return out
+
+
+def root_revoked(r: dict[str, Any]) -> bool:
+    return str(r.get("last_error") or "") in REVOKED_ERRORS or str(r.get("state") or "") == "disconnected"
+
+
 class FilehubService:
     def __init__(self, hub: "Hub") -> None:
         self.hub = hub
@@ -166,6 +272,7 @@ class FilehubService:
         self._resume_push: list[str] = []
         self.login_state: dict[str, Any] = {"state": "none"}
         self._login_proc: asyncio.subprocess.Process | None = None
+        self._relay: dict[str, Any] | None = None  # {state, expires} — state của LOGIN_URL relay đang chờ callback (một lần)
         self._bg: set[asyncio.Task[Any]] = set()
         hub.bus.add_listener(self._on_event)
 
@@ -221,6 +328,35 @@ class FilehubService:
                 return f
         raise NotFound(f"không có thư mục chung '{name}' (cfharness filehub status)")
 
+    def _known_account(self) -> str:
+        acc = self.login_state.get("account") or next((f.get("account") for f in self.folders() if f.get("account")), "")
+        return str(acc or "")
+
+    def scope(self) -> str:
+        v = str(self.cfg("scope") or "workspace")
+        return v if v in KINDS else "workspace"
+
+    def match_ref(self, body: str) -> tuple[dict[str, Any], str]:
+        """`<tên>[/<con>]` → (thư mục, phần con). Tên cfharness khớp trước; không có → tên SỐNG trên web (bí danh sau khi đổi tên,
+        chỉ khi khớp đúng một thư mục). Tên dài nhất thắng (tên workspace có thể chứa `/`)."""
+        folders = self.folders()
+        for f in sorted(folders, key=lambda x: -len(x["name"])):
+            n = f["name"]
+            if body == n or body.startswith(n + "/"):
+                return f, body[len(n):].lstrip("/")
+        names = live_names(self.hub)
+        hits = []
+        for f in folders:
+            live = names.get(str(f.get("root_id") or ""))
+            if live and (body == live or body.startswith(live + "/")):
+                hits.append((len(live), f, body[len(live):].lstrip("/")))
+        if hits:
+            hits.sort(key=lambda x: -x[0])
+            if len(hits) == 1 or hits[0][0] != hits[1][0]:
+                return hits[0][1], hits[0][2]
+        name = body.partition("/")[0]
+        raise NotFound(f"không có thư mục chung '{name}' (cfharness filehub status)")
+
     def folder_by_root(self, root_id: str | None) -> dict[str, Any] | None:
         return next((f for f in self.folders() if f.get("root_id") == root_id), None)
 
@@ -235,6 +371,19 @@ class FilehubService:
         st = self.read_status() or {}
         have = {r.get("id") for r in st.get("roots") or [] if isinstance(r, dict)}
         return next((f for f in self.folders() if f.get("root_id") and f["root_id"] not in have), None)
+
+    def stale_roots(self) -> list[str]:
+        """Root binary còn đồng bộ (status.json) mà KHÔNG còn trong `filehub.folders` — `filehub remove` / chuyển sang workspace chỉ sửa cấu
+        hình; hồ sơ của binary vẫn giữ root nên nó tiếp tục đồng bộ bản sao cũ (chuyển sang workspace: thư mục cũ nằm TRONG workspace mới →
+        hai bản trên máy của cùng một thư mục server, người xoá bản cũ như được dặn là xoá trên server). Truyền `--remove-root` (e2e 2026-11-16)."""
+        st = self.read_status() or {}
+        mine = {str(f.get("root_id")) for f in self.folders() if f.get("root_id")}
+        out = []
+        for r in st.get("roots") or []:
+            rid = str((r or {}).get("id") or "") if isinstance(r, dict) else ""
+            if rid and rid not in mine and all(c.isalnum() or c in "-_" for c in rid):
+                out.append(rid)
+        return list(dict.fromkeys(out))
 
     # ------------------------------------------------------------------ tệp phụ
     def prepare_files(self) -> None:
@@ -321,6 +470,9 @@ class FilehubService:
         s = str(st.get("state") or "idle")
         if s not in STATES:
             s = "error"
+        mine = {f.get("root_id") for f in self.folders()}
+        if s != "auth_expired" and any(root_revoked(r) for r in st.get("roots") or [] if isinstance(r, dict) and r.get("id") in mine):
+            return "revoked"  # tài khoản không còn quyền với gốc (vd bị gỡ Workspace Admin) — đăng nhập lại bằng tài khoản có quyền
         if s in ("idle", "syncing") and any((r or {}).get("conflicts") for r in st.get("roots") or [] if isinstance(r, dict)):
             return "conflict"
         return s
@@ -341,12 +493,17 @@ class FilehubService:
         root_folder = idx.get("root_folder_id")
         srv = self.server()
         if rel in (".", ""):
+            if kind_of(f) == "workspace":  # gốc ảo (wsId) không phải thư mục trên web — trang Tệp của workspace hiện tại
+                return {"folder": f["name"], "rel": "", "url": f"{srv}/files" if srv else None}
             return {"folder": f["name"], "rel": "", "url": f"{srv}/files/{root_folder}" if root_folder else None}
         it = items.get(rel) if isinstance(items, dict) else None
         if not isinstance(it, dict):
             return {"folder": f["name"], "rel": rel, "url": None}
         if it.get("file_id"):
-            url = f"{srv}/files/{it.get('parent_folder_id') or root_folder}?file={it['file_id']}"
+            parent = it.get("parent_folder_id") or root_folder
+            if kind_of(f) == "workspace" and parent == f.get("root_id"):  # tệp ở gốc workspace: không đồng bộ (W3) → không có trang
+                return {"folder": f["name"], "rel": rel, "url": None}
+            url = f"{srv}/files/{parent}?file={it['file_id']}"
         else:
             url = f"{srv}/files/{it.get('folder_id')}"
         return {"folder": f["name"], "rel": rel, "url": url if srv else None}
@@ -379,10 +536,9 @@ class FilehubService:
         if not isinstance(ref, str) or not ref.startswith(REF_PREFIX):
             raise HubError(f"workspace phải dạng filehub:<tên>[/<thư mục con>]: {ref!r}")
         body = ref[len(REF_PREFIX):].strip().strip("/")
-        name, _, sub = body.partition("/")
         if not self.enabled():
             raise HubError("thư mục chung (filehub) chưa bật — `cfharness filehub setup`")
-        f = self.folder(name)
+        f, sub = self.match_ref(body)
         parts = [x for x in sub.split("/") if x not in ("", ".")]
         if any(x == ".." for x in parts) or any(x.startswith(META_PREFIX) for x in parts):
             raise HubError(f"đường dẫn con không hợp lệ: {sub!r}")
@@ -397,18 +553,43 @@ class FilehubService:
 
     # ------------------------------------------------------------------ trạng thái
     def status(self) -> dict[str, Any]:
+        from ..termsafe import one_line
+
         st = self.read_status()
         roots = {r.get("id"): r for r in (st or {}).get("roots") or [] if isinstance(r, dict)}
+        names = live_names(self.hub)
         out_f = []
         for f in self.folders():
             r = roots.get(f.get("root_id")) or {}
             idx = self.read_index(f.get("root_id") or "") if f.get("root_id") else {}
+            kind = kind_of(f)
+            live = names.get(str(f.get("root_id") or "")) or ""
+            account = one_line(str(f.get("account") or ""), 80)  # từ cột 5 của dòng ROOT lúc đăng nhập (status S5 không có account)
+            # S5: `roots[].unpushable[{path, kind}]` — kind root_files = tệp nằm thẳng ở gốc workspace (server 422 root_files_not_allowed)
+            unp = [x for x in (r.get("unpushable") or [])[:200] if isinstance(x, dict) and x.get("path")]
+            root_files = [one_line(str(x["path"]), 300) for x in unp if x.get("kind") == "root_files"][:50]
+            other_unpushable = [{"path": one_line(str(x["path"]), 300), "kind": one_line(str(x.get("kind") or ""), 30)}
+                                for x in unp if x.get("kind") != "root_files"][:50]
+            if kind == "workspace":
+                url = f"{self.server()}/files" if self.server() else None
+            else:
+                url = f"{self.server()}/files/{idx['root_folder_id']}" if idx.get("root_folder_id") and self.server() else None
             out_f.append({
                 "name": f["name"], "root_id": f.get("root_id"), "local_path": f["local_path"], "state": r.get("state") or ("pending" if f.get("root_id") else "no_root"),
+                "kind": kind, "server_name": live, "renamed": bool(live and live != f["name"]), "account": account or None,
+                "display": (f"Toàn bộ workspace «{live or f['name']}»" if kind == "workspace" else f"Thư mục «{live or f['name']}»"),
+                "root_files": root_files, "unpushable": other_unpushable, "revoked": root_revoked(r),
+                # gốc workspace mất admin (binary S5 `last_error=root_revoked`, không ngắt): cấp lại quyền → tự chạy tiếp, không đăng nhập lại
+                "revoked_temporary": root_revoked(r) and str(r.get("last_error") or "") == "root_revoked" and str(r.get("state") or "") != "disconnected",
+                # workspace bị xoá trên server (binary S5 `last_error=workspace_deleted`): ngắt hẳn, binary đổi tên bản trên máy
+                # `<tên> (đã ngắt đồng bộ)` — đăng nhập lại không giúp gì; `disconnected_path` = chỗ tệp nằm bây giờ
+                "workspace_deleted": str(r.get("last_error") or "") == "workspace_deleted",
+                "disconnected_path": (str(r["local_path"]) if root_revoked(r) and r.get("local_path")
+                                      and _real(str(r["local_path"])) != _real(f["local_path"]) else None),
                 "pending_up": r.get("pending_up"), "pending_down": r.get("pending_down"), "blocked": r.get("blocked"),
                 "conflicts": [{"path": str(c.get("path"))[:300], "created_at": c.get("created_at")} for c in (r.get("conflicts") or [])[:50] if isinstance(c, dict)],
                 "last_error": r.get("last_error"),
-                "url": f"{self.server()}/files/{idx['root_folder_id']}" if idx.get("root_folder_id") and self.server() else None,
+                "url": url,
                 "lock": self.hub.runs.locks.holder(_real(f["local_path"])),
             })
         recent = [{k: e.get(k) for k in ("ts", "root_id", "dir", "op", "path")} for e in ((st or {}).get("recent") or [])[-20:] if isinstance(e, dict)]
@@ -416,15 +597,31 @@ class FilehubService:
             "enabled": self.enabled(), "server": self.server() or None, "device": self.device_name(), "state": self.overall_state(st),
             "paused": self.paused(), "supervisor": self.supervisor.info(), "sync_version": (st or {}).get("version") or self.supervisor.version,
             "updated_at": (st or {}).get("updated_at"), "folders": out_f, "recent": recent,
-            "login": {k: v for k, v in self.login_state.items() if k in ("state", "url", "roots", "error", "started_at", "finished_at")},
+            "login": {**{k: v for k, v in self.login_state.items()
+                         if k in ("state", "url", "roots", "error", "started_at", "finished_at", "mode", "relay", "account", "switch", "switched_from")},
+                      "message": login_error_text(self.login_state.get("error"), self._known_account())
+                      if self.login_state.get("state") == "error" else None},
             "tokens": self.tokens_path.exists(), "local_parent": str(self.cfg("local_parent") or ""),
-            "binary": detect_binary(self.cfg("sync_binary")),
+            "scope": self.scope(), "binary": detect_binary(self.cfg("sync_binary")),
+            "relay_available": self.public_origin() is not None,
+            "can_switch": any(kind_of(f) != "workspace" for f in self.folders()),
             "relogin_after_import": bool(self.hub.store.state_get("import_filehub")),
         }
 
     def list(self) -> list[dict[str, Any]]:
         """RPC `filehub.list` (đọc — điều phối viên dùng để giao việc): tên thư mục chung + workspace + đường dẫn cục bộ."""
-        return [{"name": f["name"], "workspace": f"{REF_PREFIX}{f['name']}", "local_path": f["local_path"], "root_id": f.get("root_id")} for f in self.folders()]
+        names = live_names(self.hub)
+        out = []
+        for f in self.folders():
+            live = names.get(str(f.get("root_id") or "")) or ""
+            row = {"name": f["name"], "workspace": f"{REF_PREFIX}{f['name']}", "local_path": f["local_path"], "root_id": f.get("root_id"),
+                   "kind": kind_of(f), "server_name": live or f["name"]}
+            if live and live != f["name"]:  # đổi tên trên web: tên cfharness giữ, tên mới là bí danh (`filehub:<tên mới>` cũng khớp)
+                row["note"] = f"{f['name']} — trên web hiện là «{live}»"
+            if kind_of(f) == "workspace":
+                row["layout"] = "root = whole workspace; new files must be inside a top-level folder"
+            out.append(row)
+        return out
 
     # ------------------------------------------------------------------ vòng nền
     def start(self) -> None:
@@ -645,7 +842,7 @@ class FilehubService:
         return {"changed": changed, "deleted": deleted, "secret": secret}
 
     # ------------------------------------------------------------------ thao tác của người (RPC ghi, HUMAN_ONLY)
-    def _validate_local(self, local: str, *, exclude: str | None = None) -> str:
+    def _validate_local(self, local: str, *, exclude: str | None = None, forbid: tuple[str, ...] | list[str] = ()) -> str:
         p = Path(os.path.expanduser(local))
         if not p.is_absolute():
             raise HubError(f"đường dẫn bản sao cục bộ phải tuyệt đối: {local!r}")
@@ -662,6 +859,10 @@ class FilehubService:
             o = _real(f["local_path"])
             if _under(rp, o) or _under(o, rp):
                 raise HubError(f"bản sao cục bộ '{rp}' trùng/chứa thư mục chung '{f['name']}' ({o})")
+        for old in forbid:  # chuyển chế độ: bản sao mới không được trùng/chứa bản sao cũ (người tự xoá bản cũ sau khi kiểm)
+            o = _real(old)
+            if _under(rp, o) or _under(o, rp):
+                raise HubError(f"bản sao cục bộ '{rp}' trùng/chứa bản sao cũ ({o}) — chọn đường dẫn khác (--local-path)")
         from .. import confine as _confine
 
         conf = _confine.of_hub(self.hub)
@@ -679,26 +880,35 @@ class FilehubService:
                 raise HubError(f"bản sao cục bộ '{rp}' trùng/chứa vùng bảo vệ ({region})", code=-32003)
         return rp
 
-    def add(self, root_id: str, name: str | None = None, *, ws_id: str | None = None, local_path: str | None = None) -> dict[str, Any]:
+    def add(self, root_id: str, name: str | None = None, *, ws_id: str | None = None, local_path: str | None = None, kind: str | None = None,
+            account: str | None = None, forbid: tuple[str, ...] | list[str] = ()) -> dict[str, Any]:
         root_id = str(root_id or "").strip()
         if not root_id or not all(c.isalnum() or c in "-_" for c in root_id):
             raise HubError(f"root_id không hợp lệ: {root_id!r}")
-        name = str(name or "").strip() or next((r["name"] for r in self.login_state.get("roots") or [] if r.get("id") == root_id), "") or root_id
+        granted = next((r for r in self.login_state.get("roots") or [] if r.get("id") == root_id), {})
+        name = str(name or "").strip() or safe_name(str(granted.get("name") or ""), root_id) or root_id
         if not valid_name(name):
             raise HubError(f"tên thư mục chung không hợp lệ: {name!r} (chữ, số, khoảng trắng, - _ ., ≤ 80 ký tự)")
         if any(f["name"] == name or f.get("root_id") == root_id for f in self.folders()):
             raise Conflict(f"thư mục chung '{name}' (root {root_id}) đã có")
-        ws_id = ws_id or next((r.get("ws_id") for r in self.login_state.get("roots") or [] if r.get("id") == root_id), None)
+        ws_id = ws_id or granted.get("ws_id") or None
+        kind = str(kind or granted.get("kind") or "folder")
+        if kind not in KINDS:
+            raise HubError(f"kind không hợp lệ: {kind!r} (folder|workspace)")
+        account = account if account is not None else granted.get("account")
         parent = os.path.expanduser(str(self.cfg("local_parent") or "~/KhongGianSo"))
-        local = self._validate_local(local_path or os.path.join(parent, name))
+        local = self._validate_local(local_path or os.path.join(parent, name), forbid=forbid)
         if not os.path.isdir(local):
             os.makedirs(local, exist_ok=True)
-        folders = self.folders() + [{"name": name, "root_id": root_id, "ws_id": ws_id, "local_path": local}]
+        row: dict[str, Any] = {"name": name, "root_id": root_id, "ws_id": ws_id, "local_path": local, "kind": kind}
+        if account:
+            row["account"] = str(account)[:80]
+        folders = self.folders() + [row]
         self.hub.config.set("filehub.folders", folders)
         if not self.enabled():
             self.hub.config.set("filehub.enabled", True)
         self._apply_change()
-        return {"name": name, "root_id": root_id, "local_path": local, "workspace": f"{REF_PREFIX}{name}"}
+        return {"name": name, "root_id": root_id, "local_path": local, "workspace": f"{REF_PREFIX}{name}", "kind": kind}
 
     def remove(self, name: str) -> dict[str, Any]:
         f = self.folder(name)
@@ -741,47 +951,117 @@ class FilehubService:
         if self._task is None or self._task.done():
             self.start()
 
+    # ------------------------------------------------------------------ thiết lập / đăng nhập
+    def public_origin(self) -> str | None:
+        """`web.public_origin` (https, đã kiểm) — đích relay OAuth khi đăng nhập từ web mở qua link public. None = không relay được."""
+        from ..web.public import parse_public_origin
+
+        try:
+            return parse_public_origin(self.hub.config.get("web.public_origin"))
+        except (KeyError, ValueError):
+            return None
+
+    @staticmethod
+    def _remote_binary_ok(binary: str) -> bool:
+        """Thiết lập qua web PUBLIC (phiên có thể bị lấy cắp): chỉ nhận binary đúng tên và người dùng của hub KHÔNG ghi được (tệp lẫn
+        thư mục chứa) — vd /usr/local/bin do quản trị cài. Không thì phải đặt ở terminal / web trên chính máy hub."""
+        base = os.path.basename(binary)
+        if base not in ("tang-thu-sync-headless", "tang-thu-sync-headless.exe"):
+            return False
+        real = _real(binary)
+        return not os.access(real, os.W_OK) and not os.access(os.path.dirname(real), os.W_OK)
+
     def setup(self, p: dict[str, Any]) -> dict[str, Any]:
-        """Cấu hình + đăng nhập (đồng ý thiết bị, thư mục rỗng tạo ở trang đồng ý) — xong thì tự thêm thư mục chung đầu tiên."""
-        server = str(p.get("server") or self.cfg("server") or "").strip().rstrip("/")
+        """Cấu hình + đăng nhập (đồng ý thiết bị) — xong thì tự thêm thư mục chung đầu tiên. `scope` workspace (mặc định) | folder.
+        Binary: `binary` (chỉ CLI — web không bao giờ gửi) → cấu hình → chỗ cài cố định (`detect_binary`, không dò PATH).
+        `remote` = gọi từ web qua link public: không được ĐỔI server/binary đã đặt; binary lần đầu phải qua `_remote_binary_ok`."""
+        remote = bool(p.get("remote"))
+        cur_server, cur_binary = self.server(), str(self.cfg("sync_binary") or "")
+        server = str(p.get("server") or cur_server or "").strip().rstrip("/")
         if not (server.startswith("https://") or server.startswith("http://127.0.0.1") or server.startswith("http://localhost")):
             raise HubError("server phải là URL https:// của Không gian số (vd https://thumucai.trungtamdhs.com)")
         given = os.path.expanduser(str(p.get("binary") or "").strip())
-        binary = given if given else detect_binary(self.cfg("sync_binary"))
+        binary = given if given else detect_binary(cur_binary or None)
         if not binary or not _runnable(binary):
             if given:
                 raise HubError(f"không tìm thấy binary sync chạy được: {given!r} (--binary /đường/dẫn/{BINARY_NAME})")
             raise HubError(f"máy chạy hub chưa có binary sync {BINARY_NAME} (admin cài vào /usr/local/bin, hoặc "
                            f"`cfharness filehub setup --binary /đường/dẫn/{BINARY_NAME}` trong terminal)")
+        if remote:
+            if cur_server and server != cur_server:
+                raise HubError("qua link public không đổi được máy chủ Không gian số đã đặt — đổi ở terminal (`cfharness filehub setup`) "
+                               "hoặc web trên chính máy chạy hub", code=-32003)
+            cur = os.path.expanduser(cur_binary) if cur_binary else ""
+            if cur and binary != cur:
+                raise HubError("qua link public không đổi được binary sync đã đặt — đổi ở terminal (`cfharness filehub setup --binary …`) "
+                               "hoặc web trên chính máy chạy hub", code=-32003)
+            if not cur and not self._remote_binary_ok(binary):
+                raise HubError("qua link public chỉ dùng được binary `tang-thu-sync-headless` do quản trị cài (vd /usr/local/bin, bạn không ghi "
+                               "được) — đường dẫn khác: đặt ở terminal hoặc web trên chính máy chạy hub", code=-32003)
+        scope = str(p.get("scope") or self.scope())
+        if scope not in KINDS:
+            raise HubError(f"scope không hợp lệ: {scope!r} (workspace|folder)")
+        name = str(p.get("name") or "").strip()
+        if name and not valid_name(name):
+            raise HubError(f"tên thư mục không hợp lệ: {name!r}")
         self.hub.config.set("filehub.server", server)
         self.hub.config.set("filehub.sync_binary", binary)
         if p.get("local_parent"):
             self.hub.config.set("filehub.local_parent", str(p["local_parent"]))
+        if scope != self.scope():
+            self.hub.config.set("filehub.scope", scope)
         self.hub.config.set("filehub.enabled", True)
-        name = str(p.get("name") or "cfharness").strip()
-        if not valid_name(name):
-            raise HubError(f"tên thư mục không hợp lệ: {name!r}")
-        return {"server": server, "binary": binary, "name": name}
+        return {"server": server, "binary": binary, "name": name or ("cfharness" if scope == "folder" else ""), "scope": scope}
 
-    async def login(self, *, root_hint: str | None = None, no_browser: bool = False, auto_add: bool = False,
-                    local_path: str | None = None) -> dict[str, Any]:
-        """Chạy `<binary> login …`, chờ dòng `LOGIN_URL` rồi trả ngay; tiến trình chạy tiếp tới khi người đồng ý (ROOT …) hoặc lỗi."""
-        if self._login_proc is not None and self._login_proc.returncode is None:
-            if self.login_state.get("url"):
-                return {"login_url": self.login_state["url"], "state": "waiting"}
-            raise Conflict("đang có một lượt đăng nhập")
+    def relogin_mode(self) -> str:
+        """Đăng nhập lại giữ chế độ của thư mục chung đang có; chưa có → `filehub.scope`."""
+        fs = self.folders()
+        return kind_of(fs[0]) if fs else self.scope()
+
+    async def login(self, *, root_hint: str | None = None, no_browser: bool = False, auto_add: bool = False, local_path: str | None = None,
+                    mode: str | None = None, relay: bool = False, switch: bool = False) -> dict[str, Any]:
+        """Chạy `<binary> login …`, chờ dòng `LOGIN_URL` rồi trả ngay; tiến trình chạy tiếp tới khi người đồng ý (ROOT …) hoặc lỗi.
+        `mode` folder|workspace (`--root-mode single|workspace`; single = mặc định của binary nên không truyền cờ — chạy được với binary cũ).
+        `relay` = web mở qua link public: `--redirect-uri <web.public_origin>/filehub/oauth/cb`, stdin PIPE, giữ `state` chờ callback."""
+        mode = mode or self.relogin_mode()
+        if mode not in KINDS:
+            raise HubError(f"chế độ không hợp lệ: {mode!r} (workspace|folder)")
+        old_proc = self._login_proc
+        if old_proc is not None and old_proc.returncode is None:
+            same = (self.login_state.get("mode"), bool(self.login_state.get("relay")), bool(self.login_state.get("switch"))) == (mode, relay, switch)
+            if (same and self.login_state.get("state") == "waiting" and self.login_state.get("url")
+                    and (not relay or self._relay is not None)):
+                return {"login_url": self.login_state["url"], "state": "waiting", "mode": mode, "relay": relay}
+            self._kill_login()  # lượt cũ khác kiểu (vd loopback → relay) hoặc đã huỷ: bỏ, bắt đầu lại
+            try:
+                await asyncio.wait_for(old_proc.wait(), timeout=5)
+            except asyncio.TimeoutError:  # pragma: no cover
+                pass
         binary = self.supervisor.binary()
         if not binary or not self.server():
             raise HubError("chưa cấu hình server/binary — chạy `cfharness filehub setup` trước")
+        origin = None
+        if relay:
+            origin = self.public_origin()
+            if origin is None:
+                raise HubError("đăng nhập từ xa cần `web.public_origin` (https://…, qua tunnel TLS) — đặt ở terminal "
+                               "(`cfharness config set web.public_origin https://…`) hoặc đăng nhập trên chính máy chạy hub")
         self.prepare_files()
         argv = [binary, "login", "--server", self.server(), "--tokens", str(self.tokens_path), "--device", self.device_name()]
+        if mode == "workspace":
+            argv += ["--root-mode", "workspace"]
         if root_hint:
             argv += ["--root-hint", root_hint]
-        if no_browser:
+        relay_timeout = int(self.cfg("relay_timeout_s") or 600)
+        if relay:
+            argv += ["--redirect-uri", f"{origin}{RELAY_PATH}", "--no-browser", "--timeout", str(relay_timeout)]
+        elif no_browser:
             argv.append("--no-browser")
-        self.login_state = {"state": "starting", "started_at": time.time(), "roots": []}
-        proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-                                                    stderr=asyncio.subprocess.DEVNULL, env=child_env(), cwd=str(self.dir), **no_window_kwargs())
+        self._relay = None
+        self.login_state = {"state": "starting", "started_at": time.time(), "roots": [], "mode": mode, "relay": relay, "switch": switch}
+        proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.PIPE if relay else asyncio.subprocess.DEVNULL,
+                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=child_env(),
+                                                    cwd=str(self.dir), **no_window_kwargs())
         self._login_proc = proc
         timeout = float(self.cfg("login_url_timeout_s") or 30)
         url = None
@@ -795,8 +1075,12 @@ class FilehubService:
                 if s.startswith("LOGIN_URL "):
                     url = s[len("LOGIN_URL "):].strip()
                 elif s.startswith("ERROR"):
-                    self.login_state.update(state="error", error=s[5:].strip()[:120] or "unknown", finished_at=time.time())
-                    raise HubError(f"đăng nhập Không gian số lỗi: {self.login_state['error']}")
+                    code = s[5:].strip()[:120] or "unknown"
+                    self.login_state.update(state="error", error=code, finished_at=time.time())
+                    if code == "usage" and (mode == "workspace" or relay):
+                        raise HubError("binary sync chưa hỗ trợ " + ("đăng nhập từ xa (relay)" if relay else "chế độ workspace")
+                                       + " — cập nhật tang-thu-sync-headless" + ("" if relay else ", hoặc thiết lập với --scope folder"))
+                    raise HubError(login_error_text(code, self._known_account()) or f"đăng nhập Không gian số lỗi: {code}")
         except asyncio.TimeoutError:
             proc.kill()
             self.login_state.update(state="error", error="timeout", finished_at=time.time())
@@ -808,11 +1092,93 @@ class FilehubService:
         if not (url.startswith("http://") or url.startswith("https://")):
             proc.kill()
             raise HubError("LOGIN_URL không hợp lệ")
-        self.login_state.update(state="waiting", url=url)
-        self._spawn(self._finish_login(proc, auto_add=auto_add, local_path=local_path))
-        return {"login_url": url, "state": "waiting"}
+        if relay:
+            from urllib.parse import parse_qs, urlsplit
 
-    async def _finish_login(self, proc: asyncio.subprocess.Process, *, auto_add: bool, local_path: str | None) -> None:
+            st = (parse_qs(urlsplit(url).query).get("state") or [""])[0]
+            if not valid_token(st) or len(st) < 16:
+                proc.kill()
+                self.login_state.update(state="error", error="no_state", finished_at=time.time())
+                raise HubError("LOGIN_URL của binary sync không có state hợp lệ — không đăng nhập từ xa được")
+            self._relay = {"state": st, "expires": time.time() + relay_timeout}
+        self.login_state.update(state="waiting", url=url)
+        self._spawn(self._finish_login(proc, auto_add=auto_add, local_path=local_path, switch=switch))
+        return {"login_url": url, "state": "waiting", "mode": mode, "relay": relay}
+
+    def _kill_login(self) -> None:
+        p = self._login_proc
+        self._relay = None
+        if p is not None and p.returncode is None:
+            try:
+                p.kill()
+            except ProcessLookupError:  # pragma: no cover
+                pass
+
+    async def login_callback(self, p: dict[str, Any]) -> dict[str, Any]:
+        """RPC `filehub.login_callback {code, state, error?}` — web nhận ở route công khai `/filehub/oauth/cb` (relay OAuth).
+        `state` so `compare_digest` với state đang chờ (≤ relay_timeout_s, MỘT lần). Sai/hết hạn/không có lượt chờ → lỗi CHUNG, lượt chờ
+        giữ nguyên (kẻ dò không làm hỏng lượt đăng nhập thật). Khớp → ghi `CODE <code>\t<state>` vào stdin binary, chờ kết quả ≤ 30 s.
+        code/state bị gỡ khỏi `p` trước khi audit (thông tin đăng nhập một lần)."""
+        import hmac
+
+        code, state, error = p.pop("code", None), p.pop("state", None), p.pop("error", None)
+        generic = HubError("liên kết đăng nhập không hợp lệ hoặc đã hết hạn — bắt đầu lại ở Cài đặt › Không gian số", code=-32602)
+        rel, proc = self._relay, self._login_proc
+        if rel is None or proc is None or proc.returncode is not None or proc.stdin is None:
+            raise generic
+        if time.time() > float(rel["expires"]):
+            self._kill_login()
+            self.login_state.update(state="error", error="timeout", finished_at=time.time())
+            raise generic
+        if not valid_token(state) or not hmac.compare_digest(str(state).encode(), str(rel["state"]).encode()):
+            raise generic
+        self._relay = None  # dùng một lần
+        if error is not None:  # trang đồng ý trả `?error=` → chuyển cho binary (`ERROR <mã>\t<state>`), binary in `ERROR <mã>` rồi thoát
+            line = f"ERROR {error_code(error)}\t{state}\n"
+        elif valid_token(code):
+            line = f"CODE {code}\t{state}\n"
+        else:
+            self.login_state.update(state="error", error="invalid_code", finished_at=time.time())
+            self._kill_login()
+            return {"ok": False, "state": "error", "error": "invalid_code", "message": "Mã đăng nhập không hợp lệ — bắt đầu lại."}
+        try:
+            proc.stdin.write(line.encode())
+            await proc.stdin.drain()
+            proc.stdin.close()
+        except (BrokenPipeError, ConnectionResetError, RuntimeError):
+            self.login_state.update(state="error", error="sync_exited", finished_at=time.time())
+            return {"ok": False, "state": "error", "error": "sync_exited"}
+        t0 = time.monotonic()
+        while self.login_state.get("state") not in ("done", "error") and time.monotonic() - t0 < 30:
+            await asyncio.sleep(0.05)
+        st = str(self.login_state.get("state"))
+        err = self.login_state.get("error") if st == "error" else None
+        return {"ok": st == "done", "state": st, "error": err, "message": login_error_text(err, self._known_account()) if err else None}
+
+    async def switch_to_workspace(self, p: dict[str, Any]) -> dict[str, Any]:
+        """RPC `filehub.switch_to_workspace {local_path?, relay?, no_browser?, root_hint?}` (chỉ người): đăng nhập `--root-mode workspace`;
+        xong → gỡ thư mục chung chế độ một thư mục khỏi cấu hình (GIỮ tệp trên máy và trên Không gian số) → thêm gốc workspace (bản sao
+        mới không trùng/chứa bản cũ). Đăng nhập lỗi → cấu hình cũ giữ nguyên. Người tự xoá bản cũ + thu hồi thiết bị cũ ở Hồ sơ › Thiết bị."""
+        folders = self.folders()
+        if not self.server() or not self.supervisor.binary():
+            raise HubError("chưa thiết lập Không gian số — `cfharness filehub setup` (mặc định đã là chế độ workspace)")
+        if folders and all(kind_of(f) == "workspace" for f in folders):
+            raise Conflict("thư mục chung đã ở chế độ toàn bộ workspace")
+        for f in folders:
+            holder = self.hub.runs.locks.holder(_real(f["local_path"]))
+            if holder:
+                raise Conflict(f"thư mục chung '{f['name']}' đang có run {holder.get('run_id')} ghi — dừng run trước khi chuyển chế độ")
+        old = [f["local_path"] for f in folders if kind_of(f) != "workspace"]
+        res = await self.login(mode="workspace", relay=bool(p.get("relay")), no_browser=bool(p.get("no_browser")), auto_add=True,
+                               local_path=p.get("local_path"), switch=True, root_hint=p.get("root_hint"))
+        self.login_state["switched_from"] = old
+        return {**res, "switch_from": old,
+                "note": "sau khi đồng ý: thư mục cũ được gỡ khỏi hub (tệp giữ nguyên) — kiểm bản mới rồi tự xoá bản cũ; thu hồi thiết bị cũ ở "
+                        "Không gian số › Hồ sơ › Thiết bị (tối đa 5 thiết bị mỗi tài khoản)"}
+
+    async def _finish_login(self, proc: asyncio.subprocess.Process, *, auto_add: bool, local_path: str | None, switch: bool = False) -> None:
+        from ..termsafe import one_line
+
         roots: list[dict[str, str]] = []
         err = None
         assert proc.stdout is not None
@@ -822,38 +1188,92 @@ class FilehubService:
                 break
             s = line.decode("utf-8", "replace").rstrip("\n")
             if s.startswith("ROOT "):
+                # `ROOT <id>\t<wsId>\t<name>[\t<kind>\t<account>]` — cột 4–5 mới (S5); thiếu = folder / không rõ tài khoản
                 parts = s[5:].split("\t")
                 if len(parts) >= 3:
-                    roots.append({"id": parts[0].strip(), "ws_id": parts[1].strip(), "name": parts[2].strip()[:80]})
+                    kind = parts[3].strip() if len(parts) >= 4 else "folder"
+                    roots.append({"id": parts[0].strip(), "ws_id": parts[1].strip(), "name": one_line(parts[2], 80),
+                                  "kind": kind if kind in KINDS else "folder", "account": one_line(parts[4], 80) if len(parts) >= 5 else ""})
             elif s.startswith("ERROR"):
                 err = s[5:].strip()[:120] or "unknown"
         rc = await proc.wait()
+        if self._login_proc is not proc:  # lượt cũ đã bị thay bằng lượt mới — không đụng trạng thái của lượt mới
+            return
+        self._relay = None
         if rc != 0 or err:
-            self.login_state.update(state="error", error=err or f"exit {rc}", finished_at=time.time())
-            self.hub.publish(make_event("filehub.state", None, {"state": "auth_error", "prev": self._last_state, "error": self.login_state["error"]}, source="hub"))
+            if self.login_state.get("state") != "error":  # lỗi đã đặt (callback từ chối / huỷ) thì giữ
+                self.login_state.update(state="error", error=err or f"exit {rc}", finished_at=time.time())
+            self.hub.publish(make_event("filehub.state", None, {"state": "auth_error", "prev": self._last_state, "error": self.login_state.get("error")}, source="hub"))
             return
         try:
             os.chmod(self.tokens_path, 0o600)
         except OSError:
             pass
-        self.login_state.update(state="done", roots=roots, finished_at=time.time())
+        account = next((r["account"] for r in roots if r.get("account")), "")
+        self.login_state.update(roots=roots, account=account or None)
         if self.hub.store.state_get("import_filehub"):  # hub nhập từ máy khác (hub_transfer): thiết bị máy này đã đăng nhập → hết nhắc
             self.hub.store.state_set("import_filehub", None)
         added = None
-        if auto_add and roots and not self.folders():
-            r = roots[0]
+        mode = self.login_state.get("mode") or "folder"
+        if switch:
+            added = self._switch_apply(roots, local_path)
+        elif auto_add and roots and not self.folders():
+            r = next((x for x in roots if x["kind"] == mode), roots[0])
             try:
-                added = self.add(r["id"], r["name"], ws_id=r.get("ws_id"), local_path=local_path)
+                added = self.add(r["id"], safe_name(r["name"]), ws_id=r.get("ws_id"), local_path=local_path, kind=r["kind"], account=r.get("account") or None)
             except HubError as ex:
                 self.login_state.update(error=f"không thêm được thư mục: {ex}"[:200])
         elif self.folders():
-            self._apply_change()  # đăng nhập lại (auth_expired) → chạy lại tiến trình sync với token mới
+            self._update_accounts(roots)
+            self._apply_change()  # đăng nhập lại (auth_expired / mất quyền) → chạy lại tiến trình sync với token mới
+        if self.login_state.get("state") != "error":
+            self.login_state.update(state="done", finished_at=time.time())
         try:
             from ..approvals import audit_record
 
-            audit_record("filehub.login_done", agent_id=None, run_id=None, data={"roots": [r["id"] for r in roots], "added": (added or {}).get("name")})
+            audit_record("filehub.login_done", agent_id=None, run_id=None,
+                         data={"roots": [r["id"] for r in roots], "kinds": [r["kind"] for r in roots], "added": (added or {}).get("name"), "switch": switch})
         except Exception:  # pragma: no cover
             pass
 
+    def _update_accounts(self, roots: list[dict[str, str]]) -> None:
+        """Đăng nhập lại: cập nhật tài khoản hiển thị của thư mục đang có (có thể đăng nhập bằng tài khoản admin khác)."""
+        by_id = {r["id"]: r for r in roots}
+        fs, changed = self.folders(), False
+        for f in fs:
+            acc = (by_id.get(str(f.get("root_id"))) or {}).get("account")
+            if acc and f.get("account") != acc:
+                f["account"], changed = acc, True
+        if changed:
+            self.hub.config.set("filehub.folders", fs)
 
-__all__ = ["FilehubService", "REF_PREFIX", "STEER_TEXT", "BINARY_NAME", "detect_binary", "local_roots", "root_of", "config_folders", "valid_name"]
+    def _switch_apply(self, roots: list[dict[str, str]], local_path: str | None) -> dict[str, Any] | None:
+        r = next((x for x in roots if x["kind"] == "workspace"), None)
+        if r is None:  # server cũ bỏ qua root_mode → không đổi gì
+            self.login_state.update(state="error", error="server chưa cấp gốc workspace (Không gian số chưa hỗ trợ, hoặc tài khoản không phải "
+                                                          "Workspace Admin) — thư mục cũ giữ nguyên; đăng nhập lại bằng `cfharness filehub login`",
+                                    finished_at=time.time())
+            return None
+        before = self.folders()
+        old = [f for f in before if kind_of(f) != "workspace"]
+        old_paths = [f["local_path"] for f in old]
+        self.hub.config.set("filehub.folders", [f for f in before if kind_of(f) == "workspace"])
+        name = safe_name(r["name"])
+        if not local_path:
+            parent = os.path.expanduser(str(self.cfg("local_parent") or "~/KhongGianSo"))
+            if any(_under(_real(os.path.join(parent, name)), _real(o)) or _under(_real(o), _real(os.path.join(parent, name))) for o in old_paths):
+                name = safe_name(f"{name} workspace")
+        try:
+            added = self.add(r["id"], name, ws_id=r.get("ws_id"), local_path=local_path, kind="workspace", account=r.get("account") or None,
+                             forbid=old_paths)
+        except HubError as ex:
+            self.hub.config.set("filehub.folders", before)
+            self._apply_change()
+            self.login_state.update(state="error", error=f"không thêm được gốc workspace: {ex}"[:200], finished_at=time.time())
+            return None
+        self.login_state["switched_from"] = old_paths
+        return added
+
+
+__all__ = ["FilehubService", "REF_PREFIX", "RELAY_PATH", "STEER_TEXT", "local_roots", "root_of", "config_folders", "valid_name", "safe_name", "kind_of",
+           "live_names", "shared_folders", "read_status_file", "login_error_text", "BINARY_NAME", "detect_binary"]

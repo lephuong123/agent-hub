@@ -136,7 +136,9 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # Xem/mở file trong workspace của run/agent (fileview.py): đọc ngoài sandbox của agent gọi (workspace agent KHÁC) + mở app trên máy
         "file.read", "file.open",
         # Thư mục chung Không gian số (filehub/): đăng nhập thiết bị, thêm/gỡ thư mục, tạm dừng đồng bộ — chỉ người (không MANAGER_ALLOWED)
-        "filehub.setup", "filehub.login", "filehub.add", "filehub.remove", "filehub.pause", "filehub.resume",
+        # login_callback: relay OAuth từ web public (code một lần); switch_to_workspace: đổi gốc đồng bộ sang toàn bộ workspace
+        "filehub.setup", "filehub.login", "filehub.login_callback", "filehub.switch_to_workspace", "filehub.add", "filehub.remove",
+        "filehub.pause", "filehub.resume",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})

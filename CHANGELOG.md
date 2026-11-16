@@ -12,6 +12,42 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ---
 
+## v0.2.14 — 2026-11-16
+
+Thư mục dùng chung với Không gian số giờ là **cả workspace** của domain, và đăng nhập được ngay trên web hub kể cả qua link public (#122).
+
+### Thư mục dùng chung với "Không gian số": cả workspace + cài đặt trên web
+- Thư mục chung giờ có thể là **toàn bộ một workspace** Không gian số (mặc định khi `cfharness filehub setup`; tài khoản đăng nhập phải là
+  Workspace Admin): đường dẫn trên máy = đường dẫn bạn thấy trên web tính từ workspace, thư mục cấp 1 tạo sau tự về máy. Chế độ một thư mục cũ
+  vẫn dùng được (`--scope folder`).
+- Đổi tên workspace/thư mục trên web: đồng bộ chạy tiếp, trên máy giữ tên và đường dẫn cũ; giao việc bằng tên mới (`filehub:<tên mới>/…`)
+  vẫn trúng đúng thư mục. Thẻ Cài đặt hiện "Toàn bộ workspace «tên mới»" và tài khoản đã đăng nhập.
+- Tệp đặt thẳng ở gốc workspace không lên Không gian số (Không gian số không có tệp ở gốc) — thẻ Cài đặt liệt kê để bạn chuyển vào một thư
+  mục cấp 1; agent được dặn tạo tệp trong thư mục cấp 1.
+- Tài khoản bị gỡ quyền admin của workspace → thẻ Cài đặt báo đỏ kèm tên tài khoản, nút "Đăng nhập lại".
+- Luồng tự thiết lập trên trang Cài đặt web (có từ v0.2.13, #121) thêm **chọn chế độ** (toàn bộ workspace — mặc định — hoặc một thư mục),
+  nút **Chuyển sang toàn bộ workspace**; nút "Đăng nhập lại" gộp với "Thêm thư mục khác…" (chế độ một thư mục). Thiết lập, đăng nhập lại,
+  chuyển chế độ và gỡ thư mục giờ có xác nhận 2 bước; nút Gỡ ẩn khi có run đang ghi vào thư mục đó.
+- Qua link public, đăng nhập theo kiểu chuyển tiếp: Không gian số đưa trình duyệt về `https://<hub>/filehub/oauth/cb` (cần
+  `web.public_origin`) — trước đây link đồng ý mở qua link public không đăng nhập xong được. Qua link public không đổi được máy chủ/binary đã
+  đặt; binary tự tìm lần đầu phải là bản quản trị cài (người dùng hub không ghi được). Web trên chính máy chạy hub đăng nhập trực tiếp như terminal.
+- Lệnh mới `cfharness filehub switch-to-workspace`: chuyển thư mục chung đang dùng sang toàn bộ workspace (giữ nguyên tệp cũ).
+- Bị gỡ quyền admin rồi được cấp lại → đồng bộ tự chạy tiếp, không phải đăng nhập lại; workspace bị xoá trên web → báo "workspace đã bị xoá".
+- Thư mục đã gỡ khỏi hub (hoặc bản cũ sau khi chuyển chế độ) không còn âm thầm đồng bộ tiếp.
+- `scripts/setup-hub-user.sh` bước Không gian số mặc định đồng bộ toàn bộ workspace (`KGS_WS=` chọn sẵn tên; một thư mục: `KGS_SCOPE=folder`).
+
+### Lưu ý khi cập nhật
+- Hub đang đồng bộ MỘT thư mục vẫn chạy như cũ. Muốn chuyển sang cả workspace: `cfharness filehub switch-to-workspace` (hoặc nút "Chuyển sang
+  toàn bộ workspace" ở Cài đặt web) — đăng nhập bằng tài khoản admin của workspace; xong thì kiểm bản sao mới, tự xoá bản sao cũ và thu hồi
+  thiết bị cũ ở Không gian số › Hồ sơ › Thiết bị.
+- Chế độ workspace và đăng nhập qua link public cần `tang-thu-sync-headless` bản mới (có `--root-mode`/`--redirect-uri`) và Không gian số
+  bản có gốc workspace. Binary cũ: thiết lập chế độ workspace báo "binary sync chưa hỗ trợ…" — dùng `--scope folder` hoặc cập nhật binary.
+  Bản sync mới vẫn báo `--version` 0.1.1 (chưa phát hành app desktop mới) nên `filehub.sync_min_version` giữ nguyên — hub nhận diện bản mới
+  theo tính năng. Máy chủ Không gian số (thumucai.trungtamdhs.com, trungtamai.cchchn.com) đã chạy bản có gốc workspace từ 2026-11-16.
+- Đăng nhập Không gian số qua link public cần đặt `web.public_origin` (https) ở terminal.
+
+---
+
 ## v0.2.13 — 2026-11-16
 
 Tự thiết lập thư mục chung Không gian số ngay trên web, và sửa lỗi trang Cài đặt báo lỗi sau khi cập nhật lên v0.2.12: giao diện web giờ tự chạy lại sang bản mới sau mỗi lần cập nhật.

@@ -376,12 +376,14 @@ async def test_manager_filehub_read_and_assign_but_no_writes(env, tmp_path):
     (local / "Báo cáo").mkdir()
     rows = await tool(d, rid, "filehub_list")
     assert rows[0]["workspace"] == "filehub:chung" and rows[0]["local_path"] == str(local)
-    for op in ("filehub_setup", "filehub_add", "filehub_pause"):
+    for op in ("filehub_setup", "filehub_add", "filehub_pause", "filehub_switch_to_workspace", "filehub_login_callback"):
         await _deny_tool(d, rid, op, {}, match="không có trong bộ tool")
     for m in MUTATING_FILEHUB:
         assert m in auth.HUMAN_ONLY and m not in auth.MANAGER_ALLOWED
         await _deny_rpc(d, rid, m, {"root_id": "r_x", "name": "chung", "server": "https://x", "binary": "/bin/sh"})
+    assert {"filehub.switch_to_workspace", "filehub.login_callback"} <= set(MUTATING_FILEHUB)  # H7: đổi gốc / relay OAuth — chỉ người
     assert d.hub.filehub.folders()[0]["name"] == "chung" and not d.hub.filehub.paused()
+    assert rows[0]["kind"] == "folder"  # filehub_list có kind (workspace = toàn bộ workspace)
     t = await tool(d, rid, "task_create", {"title": "báo cáo", "body": "viết", "assignee": "w1", "workspace": "filehub:chung/Báo cáo"})
     tk = d.hub.store.conn.execute("SELECT workspace FROM tasks WHERE id=?", (t.get("id") or t.get("task_id"),)).fetchone()
     assert json.loads(tk[0])["path"] == str(local / "Báo cáo")
