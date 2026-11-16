@@ -621,6 +621,10 @@ class RunManager:
                                              perm_tool=perm_tool, guard_cfg=guard_cfg, info=k_info)
         mcp_path = rt_dir / "mcp.json"
         _write_json_0600(mcp_path, {"mcpServers": servers})
+        sp_path = None
+        if system_prompt:  # prompt dài → build_argv dùng --append-system-prompt-file (giới hạn dòng lệnh Windows)
+            sp_path = rt_dir / "system_prompt.md"
+            sp_path.write_text(system_prompt, encoding="utf-8", newline="")
         ar = self.active.get(run_id)
         if ar is not None:
             ar.static_deny = static
@@ -643,6 +647,7 @@ class RunManager:
             effort=agent.get("effort"),
             fallback_model=agent.get("fallback_model"),
             system_prompt=system_prompt,
+            system_prompt_path=sp_path,
             tool_policy=tp,
             mcp_config_path=mcp_path,
             settings_path=settings_path,
@@ -823,6 +828,9 @@ class RunManager:
             raise
         except (RuntimeError_, HubError, OSError) as e:
             rlog.warning("run %s lỗi khởi chạy: %s", run_id, e)
+            if spec is not None and spec.system_prompt and ar.handle is None:
+                # spawn hỏng (vd WinError 206 vì prompt quá dài) → vẫn ghi hash để `doctor`/điều tra thấy đúng prompt đã dùng
+                hub.store.update_run(run_id, {"system_prompt_hash": prompt_hash(spec.system_prompt)})
             self._finalize_error(ar, "failed", str(e))
         except Exception as e:  # pragma: no cover - lỗi không lường trước
             rlog.exception("run %s lỗi", run_id)

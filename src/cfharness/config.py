@@ -733,6 +733,11 @@ DEFAULTS: dict[str, Any] = {
             "default_permission_mode": None,
             # cache `claude --version` (giây)
             "version_cache_s": 600,
+            # prompt hệ thống dài hơn ngưỡng (ký tự) → `--append-system-prompt-file <runtime/run/system_prompt.md>` thay vì argv.
+            # Windows giới hạn dòng lệnh 32767 ký tự: prompt điều phối viên ~37k đưa thẳng vào argv → WinError 206 (kiểm CLI 2.1.325).
+            "system_prompt_file_min_chars": 8000,
+            # cỡ system prompt (ký tự) mà vượt → log cảnh báo khi dựng prompt + `cfharness doctor` báo vàng (prompt.py)
+            "system_prompt_warn_chars": 30000,
             # trần (giây) chờ quyết định cho một `control_request can_use_tool` của CLI (vd SandboxNetworkAccess) — quá → deny.
             # Guard tự giữ ≤ approval.timeout_s; đây chỉ là chốt an toàn để CLI không bao giờ treo vô hạn.
             "control_request_timeout_s": 1800,
