@@ -10,6 +10,12 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+---
+
+## v0.2.13 — 2026-11-16
+
+Sửa lỗi trang Cài đặt báo lỗi sau khi cập nhật lên v0.2.12: giao diện web giờ tự chạy lại sang bản mới sau mỗi lần cập nhật.
+
 ### Sửa lỗi
 - **Trang Cài đặt lỗi 500 sau khi cập nhật lên v0.2.12 (macOS/Linux)**: bước cập nhật chỉ khởi động lại daemon, còn tiến trình web
   (`cfharness web`, gồm cả web chạy bằng LaunchDaemon) vẫn chạy code cũ nhưng đọc giao diện mới → trang nào dùng thông tin mới (thẻ
