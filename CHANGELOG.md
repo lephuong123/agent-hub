@@ -14,6 +14,27 @@ _(chưa có thay đổi)_
 
 ---
 
+## v0.2.11 — 2026-11-16
+
+### Sửa lỗi
+- **Điều phối viên không trả lời được trên Windows** (`không spawn được claude.EXE: [WinError 206] The filename or extension is too long`):
+  system prompt của điều phối viên lên ~36.600 ký tự sau khi thêm danh sách lệnh CLI (v0.2.10), vượt giới hạn dòng lệnh Windows 32.767.
+  Prompt dài hơn 8.000 ký tự giờ truyền qua file (`--append-system-prompt-file`) thay vì dòng lệnh (#114).
+- Danh sách lệnh CLI trong prompt điều phối viên gọn lại (mỗi nhóm lệnh một dòng, cờ của lệnh con xem `--help`): ~14.700 → ~6.800 ký tự,
+  bớt token mỗi lượt (#114).
+- Run không khởi chạy được vẫn ghi lại system prompt đã dùng, để điều tra (#114).
+
+### Giám sát cỡ system prompt (#114)
+- Daemon ghi log cảnh báo khi system prompt của một agent vượt `runtime.claude.system_prompt_warn_chars` (mặc định 30.000 ký tự),
+  kèm các khối lớn nhất.
+- `cfharness doctor` báo vàng agent có prompt vượt ngưỡng; bình thường in agent có prompt lớn nhất.
+
+### Lưu ý khi cập nhật
+- Không có migration. Cấu hình mới có giá trị mặc định: `runtime.claude.system_prompt_file_min_chars` (8000),
+  `runtime.claude.system_prompt_warn_chars` (30000).
+
+---
+
 ## v0.2.10 — 2026-11-15
 
 ### Cài đặt hub cho user
