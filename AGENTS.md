@@ -753,7 +753,7 @@ Không migration (cấu hình `filehub.*` ∈ `integrity.SECURITY_KEYS`, trạng
 | `filehub/supervisor.py` | `tang-thu-sync-headless` là tiến trình con của daemon: `--version` ≥ `filehub.sync_min_version`, env danh sách trắng (`ENV_KEEP`), backoff, SIGTERM dừng êm, đối soát `(pid, start_time)` (`HUB_HOME/filehub/supervisor.json`) |
 | `filehub/service.py` | `hub.filehub`: status.json → `filehub.state|conflict|blocked`; index/<root>.json → link; control.json → presence + `resume_push`; steer `by="hub"` khi `recent` chiều `down` lúc run giữ khoá gốc; sau run `filehub.changed|deleted|secret_warning`; `resolve_ref("filehub:<tên>[/<con>]")` |
 | `filehub/rpc.py`, `filehub/cli.py` | RPC `filehub.status|list|link` (đọc) + `setup|login|add|remove|pause|resume` (HUMAN_ONLY, `MUTATING_FILEHUB` tự audit); CLI `cfharness filehub …` (∈ `HUB_HUMAN_ONLY_CLI` trừ `status`) |
-| `web/filehub_pages.py` | Thẻ "Không gian số" ở Cài đặt (thao tác chỉ khi `is_local_request`), `/filehub/open` → `<server>/files/<folder_id>?file=<file_id>`; chip tệp `fh` |
+| `web/filehub_pages.py` | Thẻ "Không gian số" ở Cài đặt: tự thiết lập/đăng nhập (link đồng ý + poll)/thêm/gỡ/tạm dừng, cả qua link public (chỉ đường dẫn bản sao trên máy cần `is_local_request`; binary không bao giờ từ web — `filehub.detect_binary`), `/filehub/open` → `<server>/files/<folder_id>?file=<file_id>`; chip tệp `fh` |
 
 Bất biến: workspace `filehub:` khoá theo GỐC thư mục chung (`WorkspaceLocks(store, hub)`), checkpoint luôn `_walk`, `run revert` từ chối
 (`FILEHUB_NO_REVERT`); bản sao cục bộ phải trong `workspace.confine` W và không trong/chứa HUB_HOME. Xoá/di chuyển/ghi đè TRONG thư mục chung mà

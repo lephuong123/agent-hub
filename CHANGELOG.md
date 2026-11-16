@@ -14,7 +14,14 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## v0.2.13 — 2026-11-16
 
-Sửa lỗi trang Cài đặt báo lỗi sau khi cập nhật lên v0.2.12: giao diện web giờ tự chạy lại sang bản mới sau mỗi lần cập nhật.
+Tự thiết lập thư mục chung Không gian số ngay trên web, và sửa lỗi trang Cài đặt báo lỗi sau khi cập nhật lên v0.2.12: giao diện web giờ tự chạy lại sang bản mới sau mỗi lần cập nhật.
+
+### Tính năng mới — thư mục chung Không gian số
+- Trang **Cài đặt** web có luồng tự thiết lập Không gian số, dùng được cả qua link public: nhập địa chỉ Không gian số và tên thư mục, bấm
+  **Đăng nhập & nối thư mục**, rồi đồng ý thiết bị trên trang Không gian số (link mở ngay trên thẻ, thẻ tự cập nhật khi xong). Trên web cũng
+  đăng nhập lại khi hết phiên, thêm thư mục khác, gỡ thư mục, tạm dừng/chạy lại đồng bộ. Không còn phải nhờ admin chạy lệnh ở máy chủ (#121).
+- Binary sync chỉ do admin cài: web không nhận đường dẫn binary; hub dùng cấu hình hoặc tự tìm ở `/usr/local/bin`, `/opt/homebrew/bin`,
+  `~/.local/bin`. Chỗ đặt bản sao trên máy chỉ đổi được khi dùng web trên chính máy chạy hub.
 
 ### Sửa lỗi
 - **Trang Cài đặt lỗi 500 sau khi cập nhật lên v0.2.12 (macOS/Linux)**: bước cập nhật chỉ khởi động lại daemon, còn tiến trình web

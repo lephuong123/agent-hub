@@ -45,6 +45,10 @@ IGNORE_BASE = (".git/", "node_modules/", ".DS_Store", "Thumbs.db", "*.tmp", "*.s
                ".claude/", ".claude.json", ".cc-writes")
 DEVICE_NAME_MAX = 40
 META_PREFIX = ".tangthu"
+BINARY_NAME = "tang-thu-sync-headless"
+# Chỗ admin cài binary sync (scripts/setup-hub-user.sh cài /usr/local/bin) — web KHÔNG BAO GIỜ nhận đường dẫn binary từ client (chạy được tệp
+# tuỳ ý); thiếu cấu hình thì daemon tự dò ở các chỗ cố định này.
+BINARY_CANDIDATES = ("/usr/local/bin/" + BINARY_NAME, "/opt/homebrew/bin/" + BINARY_NAME, "~/.local/bin/" + BINARY_NAME)
 
 
 def _real(p: str | Path) -> str:
@@ -121,6 +125,24 @@ def machine_name() -> str:
             name = ""
     _MACHINE = name or friendly_host(socket.gethostname())
     return _MACHINE
+
+
+def _runnable(p: str) -> bool:
+    return bool(p) and os.path.isabs(p) and os.path.isfile(p) and os.access(p, os.X_OK)
+
+
+def detect_binary(configured: str | None = None) -> str | None:
+    """Binary sync dùng được: cấu hình (người đặt) → các chỗ cài cố định (`BINARY_CANDIDATES`). Không dò PATH (PATH của daemon do người
+    dùng/agent ảnh hưởng được)."""
+    if configured:
+        p = os.path.expanduser(str(configured))
+        if _runnable(p):
+            return p
+    for c in BINARY_CANDIDATES:
+        p = os.path.expanduser(c)
+        if _runnable(p):
+            return p
+    return None
 
 
 def valid_name(name: str) -> bool:
@@ -396,6 +418,7 @@ class FilehubService:
             "updated_at": (st or {}).get("updated_at"), "folders": out_f, "recent": recent,
             "login": {k: v for k, v in self.login_state.items() if k in ("state", "url", "roots", "error", "started_at", "finished_at")},
             "tokens": self.tokens_path.exists(), "local_parent": str(self.cfg("local_parent") or ""),
+            "binary": detect_binary(self.cfg("sync_binary")),
             "relogin_after_import": bool(self.hub.store.state_get("import_filehub")),
         }
 
@@ -723,9 +746,13 @@ class FilehubService:
         server = str(p.get("server") or self.cfg("server") or "").strip().rstrip("/")
         if not (server.startswith("https://") or server.startswith("http://127.0.0.1") or server.startswith("http://localhost")):
             raise HubError("server phải là URL https:// của Không gian số (vd https://thumucai.trungtamdhs.com)")
-        binary = os.path.expanduser(str(p.get("binary") or self.cfg("sync_binary") or "").strip())
-        if not binary or not os.path.isabs(binary) or not os.path.isfile(binary) or not os.access(binary, os.X_OK):
-            raise HubError(f"không tìm thấy binary sync chạy được: {binary!r} (--binary /đường/dẫn/tang-thu-sync-headless)")
+        given = os.path.expanduser(str(p.get("binary") or "").strip())
+        binary = given if given else detect_binary(self.cfg("sync_binary"))
+        if not binary or not _runnable(binary):
+            if given:
+                raise HubError(f"không tìm thấy binary sync chạy được: {given!r} (--binary /đường/dẫn/{BINARY_NAME})")
+            raise HubError(f"máy chạy hub chưa có binary sync {BINARY_NAME} (admin cài vào /usr/local/bin, hoặc "
+                           f"`cfharness filehub setup --binary /đường/dẫn/{BINARY_NAME}` trong terminal)")
         self.hub.config.set("filehub.server", server)
         self.hub.config.set("filehub.sync_binary", binary)
         if p.get("local_parent"):
@@ -829,4 +856,4 @@ class FilehubService:
             pass
 
 
-__all__ = ["FilehubService", "REF_PREFIX", "STEER_TEXT", "local_roots", "root_of", "config_folders", "valid_name"]
+__all__ = ["FilehubService", "REF_PREFIX", "STEER_TEXT", "BINARY_NAME", "detect_binary", "local_roots", "root_of", "config_folders", "valid_name"]
