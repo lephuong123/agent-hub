@@ -10,6 +10,17 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Thay đổi
+- **Task xong luôn có báo cáo gửi về người giao việc**: trước đây chỉ điều phối viên báo (khi nó chạy nền và tự quyết gọi
+  `notify_owner`), và nó hay kết thúc bằng `NO_ACTION` nên người không nghe gì. Giờ khi một task người giao xong, hub tự gửi báo cáo về
+  đúng hội thoại/thread đã giao việc, theo khung cố định **Đã làm / Còn mở / Cần bạn** (tắt bằng `manager.auto_report_tasks: false`).
+  Task không gắn hội thoại nào (tạo từ CLI/web) thì điều phối viên bắt buộc phải báo, không được bỏ qua.
+- Agent làm task kết thúc bằng báo cáo theo khung trên. Kết quả lưu vào task là bản **đầy đủ hơn** giữa tin nhắn cuối và `summary` của
+  `task_complete`; trước đây `summary` ngắn luôn thắng nên báo cáo bị mất chi tiết.
+- Task gốc tách thành task con: kết quả được gộp lại theo cùng khung (mỗi task con một dòng, gom "Còn mở"/"Cần bạn" của các task con),
+  không còn hiện id nội bộ.
+- Sự kiện "task xong" gửi điều phối viên mang câu kết quả + "Còn mở" + "Cần bạn" (trước đây 200 ký tự đầu).
+
 ### Sửa lỗi
 - **Cập nhật trên Windows làm hub chết hẳn khi web UI đang mở**: `cfharness web` (và tiến trình khác chạy từ bản cài) giữ file trong venv
   → `uv tool install` lỗi "Access is denied" giữa chừng, venv bị xoá dở, bước quay về bản cũ cũng lỗi theo. Tiến trình cập nhật giờ dừng

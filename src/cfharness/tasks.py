@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from .errors import Conflict, HubError, NotFound
 from .events import make_event
 from .store import now_iso
+from .task_report import REPORT_FORMAT
 
 if TYPE_CHECKING:
     from .hub import Hub
@@ -560,12 +561,11 @@ class TaskService:
                     "the answer will appear in the task comments." if hub_self else " Do not ask questions.")]
         if hub_self:
             proto += [
-                "- When done, call the tool `mcp__hub-self__task_complete` with a concise summary (and `result` if useful).",
+                ("- When done, call the tool `mcp__hub-self__task_complete` with `summary` = the same task report as below (and "
+                 "`result` if useful)."),
                 "- If you cannot proceed without a human decision, call `mcp__hub-self__task_block` with the reason.",
             ]
-        proto.append("- End your final message with the task result as Markdown (it is shown to people): first line = the outcome in "
-                     "one sentence; then only what the reader needs (changes with file paths, findings, assumptions, open issues) as "
-                     "short bullets; code or commands in fenced blocks with a language tag. No narration of your process, no tool names.")
+        proto.append("- " + REPORT_FORMAT)
         lines += proto
         return "\n".join(lines)
 
