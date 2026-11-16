@@ -230,10 +230,23 @@ def cmd_web(ctx: Any) -> int:
         print(f"Link đăng nhập một lần (hết hạn sau 5 phút; lấy link mới: cfharness web --open):\n  {url}", flush=True)
         if a.open:
             _open(url)
+    from .reload import InstallWatcher, exec_self
+
+    server = uvicorn.Server(uvicorn.Config(app, host=host.strip("[]"), port=a.port, log_level="warning", access_log=False, server_header=False,
+                                           proxy_headers=False, timeout_graceful_shutdown=5))
+
+    def _on_new_install(version: str) -> None:
+        print(f"cfharness đã được cập nhật lên {version} — chạy lại giao diện web…", flush=True)
+        server.should_exit = True
+
+    watcher = InstallWatcher(_on_new_install).start()  # web chạy code cũ + template mới = lỗi 500 (web/reload.py)
     try:
-        uvicorn.run(app, host=host.strip("[]"), port=a.port, log_level="warning", access_log=False, server_header=False, proxy_headers=False)
+        server.run()
     finally:
+        watcher.stop()
         clear_state(ctx.paths, os.getpid())
+    if watcher.changed_to:
+        exec_self()
     return 0
 
 

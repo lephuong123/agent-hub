@@ -46,3 +46,19 @@ Cách sửa (v0.2.7):
   qua pha `installing`, rồi thoát 75 để launchd chạy lại bằng mã mới (tối đa 20 phút; state cũ hơn 20 phút = helper treo → bỏ qua).
 - Test: `tests/test_update.py::test_supervisor_*`, `test_plan_supervised_*`, `test_rpc_update_under_launchd_*`, `test_daemon_holds_*`,
   `test_wait_supervised_*`.
+
+## Web tự chạy lại sau cập nhật (`web/reload.py`)
+Sự cố 2026-11-16 (hub lamlinh lên v0.2.12 bằng nút web): trên macOS/Linux helper chỉ khởi động lại DAEMON (`stop_venv_holders` chỉ
+dừng tiến trình trên Windows), tiến trình `cfharness web` cũ chạy tiếp code cũ nhưng Jinja đọc template MỚI → `settings.html` dùng
+`desktop_dl` mà code cũ không truyền → `UndefinedError`, trang Cài đặt 500.
+- `InstallWatcher` (luồng nền trong `cmd_web`, 15 s/lần): so phiên bản metadata gói ĐÃ CÀI (`importlib.metadata`, đọc lại từ đĩa)
+  với bản đã cài lúc web khởi động — không so với `__version__` (bản editable chưa cài lại sẽ lệch mãi → vòng lặp). Thấy bản mới ở
+  2 lần dò liên tiếp + python của venv còn đó → `server.should_exit` (dừng êm, `timeout_graceful_shutdown=5` để SSE không giữ mãi)
+  → `clear_state` → `os.execv` cùng argv (bỏ `--open`). Giữ pid → launchd `KeepAlive` không thấy tiến trình chết, không tranh cổng.
+- Không đọc được metadata lúc khởi động → tắt tính năng (log info). Phiên web trong RAM → người dùng đăng nhập lại.
+- Windows vẫn theo đường cũ (helper dừng web rồi `start_detached`).
+- Test: `tests/test_web_reload.py`; kiểm thật: tiến trình `cfharness web` với probe giả đổi 1.0 → 2.0 → cùng pid exec lại, 200, `auth/web.json` ghi lại.
+- Phía DAEMON (`stale_web_loop`, `Hub.start`, POSIX): web khởi động trước bản sửa không có `InstallWatcher`. 45 s sau khi daemon lên,
+  đọc `auth/web.json` (nay có `version`): pid sống + `version` khác daemon (thiếu = web cũ) + dòng lệnh của pid đúng là `cfharness … web`
+  (không bao giờ đụng pid lạ/chính mình) → SIGTERM (15 s rồi SIGKILL) → chờ 35 s xem launchd có bật lại không → không thì daemon tự
+  chạy lại đúng dòng lệnh (bỏ `--open`, tách session, log `logs/web.log`). Hub đang lỗi trang Cài đặt: cập nhật từ trang `/update`.
