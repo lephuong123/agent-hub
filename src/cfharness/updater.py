@@ -230,6 +230,9 @@ class Updater:
                 "--verify", json.dumps(plan["verify"])]
         if os.name != "nt":
             argv += ["--socket", str(self.paths.socket)]
+        # venv của tool (…/Scripts/python.exe hoặc …/bin/python → thư mục cha của cha): helper dừng tiến trình khác chạy từ đây
+        # (web UI, mcp serve, TUI) trước khi cài — Windows khoá file đang mở, uv xoá venv dở dang (update_helper.py bước 1b)
+        argv += ["--venv", str(Path(self.python).parent.parent)]
         if cmd == "apply" and plan.get("rollback_install"):
             argv += ["--rollback-install", json.dumps(plan["rollback_install"])]
         if backup and backup.get("path") and isinstance(backup.get("user_version"), int):

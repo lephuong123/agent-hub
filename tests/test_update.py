@@ -5,7 +5,10 @@ Không gọi mạng/GitHub, không chạy `uv` thật: `Updater.fetch/info/spawn
 
 from __future__ import annotations
 
+import argparse
+import io
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -96,7 +99,7 @@ def test_start_validates_then_spawns_helper_outside_venv(hub_home):
     r = up.start(busy=2, force=True, wait_pid=999)
     assert r["tag"] == NEWER and r["helper_pid"] == 4242
     argv, opts = spawned[0]
-    assert argv[:3] == ["/base/python3", "-I", str(up.dir / "helper.py")] and (up.dir / "helper.py").read_text() == Path(helper.__file__).read_text()
+    assert argv[:3] == ["/base/python3", "-I", str(up.dir / "helper.py")] and (up.dir / "helper.py").read_text(encoding="utf-8") == Path(helper.__file__).read_text(encoding="utf-8")
     install = json.loads(argv[argv.index("--install") + 1])
     assert install[:4] == ["/usr/bin/uv", "tool", "install", "--force"] and install[-1] == f"git+https://github.com/lephuong123/agent-hub@{NEWER}"
     assert json.loads(argv[argv.index("--restart") + 1]) == ["/venv/bin/python", "-m", "cfharness", "daemon", "start"]
@@ -300,3 +303,72 @@ def test_wait_supervised_returns_pid_or_none(hub_home):
         from cfharness.rpc import RpcClient
 
         RpcClient(hub_home.socket, timeout=5).call("hub.shutdown")
+
+
+# Sự cố thật (Windows, lên v0.2.11): `cfharness web --open` chạy từ venv của tool → uv không xoá được Scripts\ ("Access is denied"),
+# venv bị xoá dở, quay về cũng lỗi → hub chết hẳn. Helper giờ dừng tiến trình giữ venv trước khi cài và bật lại web sau đó.
+VENV = str(Path("/u/tools/cfharness"))
+
+
+def _table():
+    sep = os.sep
+    return [
+        (10, 1, f"{VENV}{sep}Scripts{sep}python.exe {VENV}{sep}Scripts{sep}python.exe /home/me/.local/bin/cfharness web --open --port 8765"),
+        (11, 10, f"{VENV.upper()}{sep}Scripts{sep}python.exe -m cfharness mcp serve"),  # khác hoa/thường (Windows) vẫn khớp
+        (12, 1, f"{VENV}-other{sep}python cfharness web"),  # venv khác cùng tiền tố → không khớp
+        (os.getpid(), 1, f"{VENV}{sep}python helper"),  # chính helper → bỏ
+    ]
+
+
+def test_venv_holders_match_only_tool_venv():
+    pids = [p for p, _ in helper.venv_holders(VENV, _table())]
+    assert 10 in pids and os.getpid() not in pids and 12 not in pids
+    assert (11 in pids) == (os.path.normcase("A") == os.path.normcase("a"))
+    assert helper.venv_holders("", _table()) == []
+
+
+def test_web_restart_argv_drops_open():
+    w = helper.web_restart_argv("/venv/bin/python /home/me/.local/bin/cfharness web --open --port 8765")
+    assert w == ["/home/me/.local/bin/cfharness", "web", "--port", "8765"]
+    assert helper.web_restart_argv("/venv/bin/python -m cfharness daemon run") is None
+
+
+def test_stop_venv_holders_windows_only(monkeypatch):
+    killed: list[int] = []
+    monkeypatch.setattr(helper, "_process_table", _table)
+    monkeypatch.setattr(helper, "_kill", killed.append)
+    monkeypatch.setattr(helper, "_wait_exit", lambda pid, t: True)
+    log = io.StringIO()
+    restarts: list = []
+    monkeypatch.setattr(helper, "_windows", lambda: False)
+    helper.stop_venv_holders(VENV, log, restarts)
+    assert killed == [] and restarts == []  # macOS/Linux: uv thay venv được khi đang chạy → không dừng gì
+    monkeypatch.setattr(helper, "_windows", lambda: True)
+    helper.stop_venv_holders(VENV, log, restarts)
+    helper.stop_venv_holders(VENV, log, restarts)  # gọi lại (bước thử lại) → không thêm web trùng
+    assert 10 in killed and os.getpid() not in killed
+    assert restarts == [["/home/me/.local/bin/cfharness", "web", "--port", "8765"]]
+
+
+def test_install_retries_once_when_venv_locked(monkeypatch, tmp_path):
+    calls: list = []
+    stops: list = []
+    outs = iter([(2, "error: failed to remove directory `C:/x/Scripts`: Access is denied. (os error 5)"), (0, "ok")])
+    monkeypatch.setattr(helper, "_run", lambda argv, log, t, env: (calls.append(argv), next(outs))[1])
+    monkeypatch.setattr(helper, "stop_venv_holders", lambda venv, log, restarts: stops.append(venv))
+    a = argparse.Namespace(venv=VENV)
+    assert helper.install_with_retry(a, ["uv", "tool", "install"], io.StringIO(), {}, [])[0] == 0
+    assert len(calls) == 2 and stops == [VENV]
+    # lỗi khác (không phải khoá file) → không thử lại
+    calls.clear()
+    stops.clear()
+    monkeypatch.setattr(helper, "_run", lambda argv, log, t, env: (calls.append(argv), (2, "error: no tag"))[1])
+    assert helper.install_with_retry(a, ["uv"], io.StringIO(), {}, [])[0] == 2
+    assert len(calls) == 1 and stops == []
+
+
+def test_updater_passes_tool_venv_to_helper(hub_home):
+    up, _ = make_updater(hub_home)
+    up.dir.mkdir(parents=True, exist_ok=True)
+    argv = up._helper_argv("apply", up.plan(NEWER), install=["uv"], wait_pid=None, backup=None)
+    assert argv[argv.index("--venv") + 1] == str(Path("/venv/bin/python").parent.parent)
