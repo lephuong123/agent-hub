@@ -96,6 +96,12 @@ async def test_card_workspace_account_root_files_revoked_rename(env):
     assert "to.iso" in card and "too_large" in card
     assert "filehub:Admin &lt;b&gt;Harness&lt;/b&gt; 2" in card and "<b>Harness</b>" not in card
     assert "/do/filehub_switch" not in card  # đã là workspace
+    # binary S5 thật: gỡ admin = tạm thời (root không ngắt) → cấp lại quyền là tự chạy tiếp, không bảo đăng nhập lại
+    e.hub.filehub.status_path.write_text(json.dumps({
+        "version": "0.4.0", "state": "idle",
+        "roots": [{"id": "ws_9", "name": "admin harness", "kind": "workspace", "state": "error", "last_error": "root_revoked", "conflicts": []}]}))
+    card = (await e.client.get("/partials/filehub")).text
+    assert "mất quyền" in card and "không cần" in card and "Cấp lại quyền admin" in card
 
 
 def _fh_bin(e, tmp, **env):

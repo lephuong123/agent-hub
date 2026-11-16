@@ -61,11 +61,14 @@ _ERR_CODE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
 # `ERROR <mã>` của `login` (headless S5) → chữ cho thẻ Cài đặt / CLI / app desktop (dựng ở daemon, không trong template)
 LOGIN_ERROR_TEXT = {
     "access_denied": "Bạn đã từ chối cấp quyền ở trang đồng ý.",
-    "device_limit": "Tài khoản {acc} đã đủ số thiết bị — thu hồi thiết bị cũ ở Không gian số › Hồ sơ › Thiết bị rồi thử lại.",
-    "super_not_member": "Tài khoản {acc} là Super Admin, không phải thành viên của workspace — chế độ workspace cần đăng nhập bằng tài khoản "
-                        "Workspace Admin là thành viên của workspace đó.",
-    "not_ws_admin": "Tài khoản {acc} không phải Workspace Admin của workspace này — đăng nhập lại bằng tài khoản admin của workspace "
-                    "(hoặc dùng chế độ một thư mục).",
+    # Trang đồng ý không cho biết tài khoản nào vừa đồng ý (lỗi chỉ có mã) → không gán lỗi cho tài khoản hub đang dùng: đúng lúc người
+    # đăng nhập NHẦM tài khoản thì gán sẽ đổ lỗi cho tài khoản đúng. Tài khoản đang dùng chỉ nêu làm ngữ cảnh ({acc}).
+    "device_limit": "Tài khoản bạn vừa dùng ở trang đồng ý đã đủ số thiết bị — thu hồi thiết bị cũ ở Không gian số › Hồ sơ › Thiết bị rồi "
+                    "thử lại.{acc}",
+    "super_not_member": "Tài khoản bạn vừa dùng ở trang đồng ý là Super Admin, không phải thành viên của workspace — chế độ workspace cần đăng "
+                        "nhập bằng tài khoản Workspace Admin là thành viên của workspace đó.{acc}",
+    "not_ws_admin": "Tài khoản bạn vừa dùng ở trang đồng ý không phải Workspace Admin của workspace đã chọn — đăng nhập lại bằng tài khoản "
+                    "admin của workspace (hoặc dùng chế độ một thư mục).{acc}",
     "timeout": "Hết thời gian chờ đồng ý — bắt đầu lại.", "state_mismatch": "Liên kết đăng nhập không khớp — bắt đầu lại.",
     "stdin_closed": "Lượt đăng nhập bị huỷ trước khi hoàn tất — bắt đầu lại.", "network": "Không kết nối được Không gian số — kiểm mạng rồi thử lại.",
     "invalid_grant": "Mã đăng nhập không còn hiệu lực — bắt đầu lại.", "store": "Không ghi được tệp token của tiến trình đồng bộ.",
@@ -80,7 +83,7 @@ def login_error_text(code: Any, account: str = "") -> str | None:
     t = LOGIN_ERROR_TEXT.get(c)
     if t is None:
         return f"Đăng nhập Không gian số lỗi: {c}"
-    return t.format(acc=f"«{account}»" if account else "bạn dùng")
+    return t.format(acc=f" Hub hiện đăng nhập bằng «{account}»." if account else "")
 
 
 def error_code(v: Any) -> str:
@@ -541,6 +544,8 @@ class FilehubService:
                 "kind": kind, "server_name": live, "renamed": bool(live and live != f["name"]), "account": account or None,
                 "display": (f"Toàn bộ workspace «{live or f['name']}»" if kind == "workspace" else f"Thư mục «{live or f['name']}»"),
                 "root_files": root_files, "unpushable": other_unpushable, "revoked": root_revoked(r),
+                # gốc workspace mất admin (binary S5 `last_error=root_revoked`, không ngắt): cấp lại quyền → tự chạy tiếp, không đăng nhập lại
+                "revoked_temporary": root_revoked(r) and str(r.get("last_error") or "") == "root_revoked" and str(r.get("state") or "") != "disconnected",
                 "pending_up": r.get("pending_up"), "pending_down": r.get("pending_down"), "blocked": r.get("blocked"),
                 "conflicts": [{"path": str(c.get("path"))[:300], "created_at": c.get("created_at")} for c in (r.get("conflicts") or [])[:50] if isinstance(c, dict)],
                 "last_error": r.get("last_error"),

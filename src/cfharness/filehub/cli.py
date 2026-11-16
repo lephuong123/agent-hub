@@ -61,7 +61,11 @@ def _print_status(r: dict[str, Any]) -> None:
     for f in r.get("folders") or []:
         lock = f.get("lock")
         print(f"  • {f.get('display') or f['name']}" + (f" · đăng nhập bằng {f['account']}" if f.get("account") else ""))
-        if f.get("revoked"):
+        if f.get("revoked") and f.get("revoked_temporary"):
+            print(f"    ⛔ tài khoản {f.get('account') or '(không rõ)'} không còn quyền với {f.get('display') or f['name']} (vd không còn là admin) — "
+                  "đồng bộ tạm dừng, tệp trên máy giữ nguyên; cấp lại quyền admin cho tài khoản này là tự chạy tiếp (không cần đăng nhập lại), "
+                  "hoặc đăng nhập bằng tài khoản admin khác: `cfharness filehub login`")
+        elif f.get("revoked"):
             print(f"    ⛔ tài khoản {f.get('account') or '(không rõ)'} không còn quyền với {f.get('display') or f['name']} — đăng nhập lại bằng "
                   "tài khoản admin: `cfharness filehub login`")
         if f.get("renamed"):

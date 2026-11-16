@@ -157,3 +157,18 @@ Test: `test_filehub_supervisor.py` (workspace 5 cột + `--root-kind`, 4 cột /
 `test_filehub_workspace.py` (`filehub:<ws>/<cấp 1>/…` trong W, bí danh tên mới, prompt, revoked), `test_web_filehub.py` (thao tác qua link public,
 bước 2, relay end-to-end với binary giả, callback sai/dùng lại/XSS/giới hạn tốc độ, loopback trên máy hub), `test_sec_auth.py`,
 `test_manager_security.py`, `test_guard_classifier.py::test_filehub_cli_human_only`.
+
+## Nghiệm thu thật gốc workspace (e2e 3 repo, 2026-11-16)
+
+Server T6 (worktree `feat/sync-ws-root`, Postgres/MinIO/clamd dev, DB riêng) + binary S5 thật + cfharness H7 (HUB_HOME tạm, `workspace.confine`
+bật). Đạt: đăng nhập workspace qua loopback (CLI) và relay (`filehub.login{relay}` → `/filehub/oauth/cb` của web, state sai/lặp → 400), thư mục
+cấp 1 hai chiều < 1 s, đổi tên workspace (đường dẫn giữ, `server_name` + bí danh `filehub:<tên mới>`; không có dòng feed → tên mới tới khi
+làm mới token, ≤ 15 phút), tệp ở gốc → `root_files`, `not_ws_admin`/`super_not_member`, token sang ws khác → 403 `root_not_granted`, admin 2 ws
+chọn một, chế độ một thư mục cũ. Hai lỗi đã sửa:
+1. **Gỡ admin rồi cấp lại không chạy tiếp** (S5): engine ngắt gốc workspace như root thư mục (đổi tên `<tên> (đã ngắt đồng bộ)`) → `local_path`
+   biến mất, cấp lại admin không có tác dụng. Đã chốt (T6): cấp lại admin → chạy tiếp KHÔNG cần đăng nhập lại. Sửa ở tang-thu-sync: gốc workspace
+   mất admin = tạm thời (`last_error=root_revoked`, `roots[].state=error`, không đổi gì trên máy, hỏi lại mỗi 30 s). Hub: `folders[].revoked_temporary`
+   → thẻ/CLI nói "cấp lại quyền admin là tự chạy tiếp, không cần đăng nhập lại" (root đã ngắt — rời/xoá workspace, binary cũ — vẫn "đăng nhập lại").
+2. **Lỗi trang đồng ý đổ cho tài khoản hub đang dùng**: `not_ws_admin`/`super_not_member`/`device_limit` chỉ có mã, không biết tài khoản nào vừa
+   đồng ý — chữ cũ "Tài khoản «<tài khoản hub>» không phải Workspace Admin" sai đúng lúc người đăng nhập nhầm tài khoản. Nay: "Tài khoản bạn vừa
+   dùng ở trang đồng ý …" + "Hub hiện đăng nhập bằng «x»" làm ngữ cảnh.

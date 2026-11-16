@@ -62,7 +62,9 @@
         </tr>
         {% if f.revoked %}
         <tr><td colspan="4" class="small"><span class="pill danger">{{ m.icon('alert') }}mất quyền</span> Tài khoản <b>{{ f.account or '(không rõ)' }}</b>
-          không còn quyền với {{ f.display or f.name }} (vd không còn là admin của workspace) — đăng nhập lại bằng tài khoản admin.</td></tr>
+          không còn quyền với {{ f.display or f.name }} (vd không còn là admin của workspace) —
+          {% if f.revoked_temporary %}đồng bộ tạm dừng, tệp trên máy giữ nguyên. Cấp lại quyền admin cho tài khoản này là tự chạy tiếp (không cần
+          đăng nhập lại), hoặc đăng nhập lại bằng tài khoản admin khác.{% else %}đăng nhập lại bằng tài khoản admin.{% endif %}</td></tr>
         {% endif %}
         {% if f.blocked %}
         <tr><td colspan="4"><span class="pill danger">{{ m.icon('alert') }}đã dừng đẩy lên ({{ f.blocked }})</span>

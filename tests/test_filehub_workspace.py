@@ -275,3 +275,20 @@ def test_revoked_state_names_account(env):
     assert st["state"] == "revoked" and st["folders"][0]["revoked"] and st["folders"][0]["account"] == "chu.domain"
     fh.tick()
     assert events(d.hub, "filehub.state")[-1].payload["state"] == "revoked"
+    assert not st["folders"][0]["revoked_temporary"]  # root đã ngắt (binary cũ) → phải đăng nhập lại
+
+
+def test_revoked_temporary_workspace_root(env):
+    """Binary S5 thật khi tài khoản bị gỡ admin: root KHÔNG ngắt — `state=error`, `last_error=root_revoked` (e2e 2026-11-16). Cấp lại quyền
+    là tự chạy tiếp (T6 xét quyền sống) → thẻ/CLI không bảo đăng nhập lại."""
+    d, *_ = env
+    fh = d.hub.filehub
+    fh.prepare_files()
+    d.hub.config.set("filehub.folders", [{**fh.folders()[0], "account": "chu.domain"}])
+    fh.status_path.write_text(json.dumps({"state": "idle", "roots": [{"id": "r_chung", "state": "error", "last_error": "root_revoked"}]}))
+    st = fh.status()
+    f = st["folders"][0]
+    assert st["state"] == "revoked" and f["revoked"] and f["revoked_temporary"] and f["account"] == "chu.domain"
+    fh.status_path.write_text(json.dumps({"state": "idle", "roots": [{"id": "r_chung", "state": "idle", "last_error": None}]}))
+    st = fh.status()
+    assert st["state"] == "idle" and not st["folders"][0]["revoked"] and not st["folders"][0]["revoked_temporary"]

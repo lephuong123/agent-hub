@@ -383,11 +383,13 @@ async def test_relay_expired_and_error_and_bad_code(env):
     d.hub.config.set("filehub.folders", [{**fh.folders()[0], "account": "chu.domain"}])
     await rpc(d, "filehub.login", {"relay": True})
     r = await rpc(d, "filehub.login_callback", {"error": "not_ws_admin", "state": fh._relay["state"]})
-    assert r["error"] == "not_ws_admin" and "«chu.domain»" in r["message"] and "Workspace Admin" in r["message"]
+    # tài khoản vừa đồng ý không biết được → không đổ lỗi cho tài khoản hub đang dùng, chỉ nêu làm ngữ cảnh
+    assert r["error"] == "not_ws_admin" and "vừa dùng" in r["message"] and "Workspace Admin" in r["message"]
+    assert "Tài khoản «chu.domain»" not in r["message"] and "Hub hiện đăng nhập bằng «chu.domain»" in r["message"]
     assert "«chu.domain»" in fh.status()["login"]["message"]
     await rpc(d, "filehub.login", {"relay": True})
     r = await rpc(d, "filehub.login_callback", {"error": "super_not_member", "state": fh._relay["state"]})
-    assert "Super Admin" in r["message"] and "«chu.domain»" in r["message"]
+    assert "Super Admin" in r["message"] and "Hub hiện đăng nhập bằng «chu.domain»" in r["message"]
     # code có ký tự xuống dòng/tab (chèn thêm dòng vào stdin của binary) → từ chối, không ghi gì vào stdin
     await rpc(d, "filehub.login", {"relay": True})
     r = await rpc(d, "filehub.login_callback", {"code": "a\nCODE b", "state": fh._relay["state"]})
