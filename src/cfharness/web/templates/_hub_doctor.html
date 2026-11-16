@@ -1,0 +1,15 @@
+{#- Kết quả `hub.doctor` (hub_doctor.py, chỉ đọc) — trang Chuyển hub (web/transfer_pages.py). -#}
+{% import "_macros.html" as m with context %}
+<section class="card" id="hub-doctor-result">
+  <div class="card-head"><h2>{{ m.icon('shield') }} Kiểm tra hub (doctor)</h2>
+    {% if doc %}<span class="pill {{ 'ok' if doc.ok else 'danger' }}">{{ doc.summary.errors }} lỗi · {{ doc.summary.warnings }} cảnh báo</span>{% endif %}
+    <button class="btn sm ghost" type="button" hx-get="/partials/hub-transfer/doctor" hx-target="#hub-doctor-result" hx-swap="outerHTML">{{ m.icon('refresh') }}<span>Kiểm tra lại</span></button></div>
+  {% if down %}<p class="muted">Daemon không chạy.</p>
+  {% elif error %}<p class="muted">Không chạy được doctor: {{ error }}</p>
+  {% else %}
+  <ul class="plain">
+    {% for c in doc.checks %}<li>{% if c.level == 'error' %}<span class="pill danger">{{ m.icon('x') }}lỗi</span>{% elif c.level == 'warning' %}<span class="pill warn">{{ m.icon('alert') }}cần làm</span>{% elif c.level == 'info' %}<span class="pill muted">{{ m.icon('info') }}</span>{% else %}<span class="pill ok">{{ m.icon('check') }}</span>{% endif %}
+      <b>{{ c.check }}</b>{% if c.detail %} — {{ c.detail }}{% endif %}{% if c.fix %}<br><code class="small">{{ c.fix }}</code>{% endif %}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</section>

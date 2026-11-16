@@ -14,6 +14,7 @@
 - `manager.conversations` nhận thêm `workstream?` (id/mã luồng), `lobby?` (chỉ hội thoại sảnh), `archived?`; Conv thêm `workstream_id, unread, archived_at`.
 - `manager.conversation_update {conversation_id, title?, workstream? ("" = về sảnh), archived?, read?}` (HUMAN_ONLY) → Conv.
 - `manager.conversation_read {conversation_id}` (HUMAN_ONLY, không audit) — đánh dấu đã xem tới tin cuối (`unread` = 0).
+- `manager.chat` nhận thêm `voice?` = `dictation|conversation` (tin nói bằng giọng — web; không phím tắt duyệt, thêm ghi chú cho điều phối viên).
 - `manager.chat` nhận thêm `workstream?` (hội thoại MỚI tạo trong luồng đó; với `reuse_latest` = hội thoại gần nhất của luồng trên kênh).
 - Luồng việc (manager/workstreams.py): `workstream.list {status?: active|closed|all}` → `[WS]`, `workstream.get {id}` → WS đầy đủ (state,
   open_tasks, recent_done, conversations), `workstream.create {title, key?, sprint?, state?}` (HUMAN_ONLY), `workstream.update {id, title?, key?,
@@ -69,7 +70,7 @@ def register_rpc(daemon: "Daemon") -> None:
     async def _chat(p: dict[str, Any]) -> dict[str, Any]:
         return await m.chat(str(_req(p, "channel")), str(p.get("text") or ""), conversation_id=p.get("conversation_id"),
                             reuse_latest=bool(p.get("reuse_latest")), images=p.get("images"), files=p.get("files"),
-                            workstream=p.get("workstream") or None)
+                            workstream=p.get("workstream") or None, voice=p.get("voice") or None)
 
     def _conv_update(p: dict[str, Any]) -> dict[str, Any]:
         arch = p.get("archived")

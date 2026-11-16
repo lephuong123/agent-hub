@@ -75,6 +75,9 @@ EVENT_LEVELS: dict[str, str] = {
     "hub.started": "summary",
     "hub.stopping": "summary",
     "hub.config_changed": "summary",
+    # chuyển nhà (hub_freeze.py, `hub export --for move`): hub nguồn đóng băng {at, export_id, profile} / người gỡ {export_id, frozen_at}
+    "hub.frozen": "summary",
+    "hub.unfrozen": "summary",
     "cli.version_warning": "summary",
     "auth.blocked": "summary",
     "auth.cleared": "summary",  # cờ chặn đăng nhập được gỡ (người: doctor/auth.reset; tự động: kiểm lại thấy đã đăng nhập)
@@ -165,6 +168,7 @@ EVENT_LEVELS: dict[str, str] = {
     "learning.deferred": "summary",  # hoãn: rate_limited | no_eval
     "learning.eval_failed": "summary",  # L3 tụt eval → không áp dụng
     "learning.rolled_back": "summary",  # rollback entry: actor user/eval_gate/regression_monitor/canary
+    "learning.ledger_recovery": "summary",  # S8-B: Hub.start đối chiếu ledger_pending sót do crash — outcome completed|discarded|flagged (flagged: warning=true, hint)
     "learning.canary": "summary",  # (M5)
     "learning.promoted": "summary",  # (M5)
     "cache.warning": "summary",  # FR-OB-04: hash system prompt đổi > N lần/ngày
@@ -200,6 +204,13 @@ EVENT_LEVELS: dict[str, str] = {
     "question.cancelled": "summary",  # question_id, reason
     "question.action": "summary",  # xin phép: người cho phép → hub thực hiện (question_id, kind, target, ok, error?)
     "question.reminder": "summary",  # nhắc người: question_id, reminder_count, wait_s
+    # Thư mục chung Không gian số (filehub/, docs/dev-notes/filehub.md) — payload chỉ tên thư mục/đường dẫn tương đối/id, không nội dung tệp
+    "filehub.state": "summary",  # state idle|syncing|conflict|offline|auth_expired|error|paused|…, prev, error
+    "filehub.conflict": "summary",  # folder, root_id, path — bản xung đột do sync-core tạo (không mất dữ liệu)
+    "filehub.blocked": "summary",  # folder, root_id, reason (mass_delete) — chiều đẩy lên dừng chờ `filehub resume --root`
+    "filehub.changed": "summary",  # run_id, folder, count, paths≤20, url — run đổi tệp trong thư mục chung
+    "filehub.deleted": "summary",  # run_id, folder, count, paths≤20, url — run xoá tệp (không hỏi duyệt; khôi phục ở thùng rác Không gian số)
+    "filehub.secret_warning": "summary",  # run_id, folder, count, paths≤20 — tệp mới/sửa chứa giá trị secret hub biết (đã lên cloud)
     # Hệ thống ngoài hub (systems/): thao tác job launchd/Task Scheduler (system, label, action pause|resume|restart, ok, by, reason, detail)
     "system.job": "summary",
     # Lịch chạy tự động (schedules/): schedule_id, name, kind, expr, status, next_run_at, created_by, by (+ action/reason/fire…)

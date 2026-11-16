@@ -195,6 +195,10 @@ def cmd_daemon(ctx: Ctx) -> int:
             f"chi phí hôm nay: {_fmt_usd(st['cost_today_usd'])}\n"
             f"ESTOP: {'BẬT — ' + str(es.get('reason') or '') if es.get('on') else 'tắt'}"
         )
+        if st.get("migrated_to"):  # chuyển nhà (hub_freeze.py)
+            from .hub_freeze import banner
+
+            text += "\nĐÓNG BĂNG: " + banner(st["migrated_to"])
         if st.get("auth_block"):
             text += "\nCẢNH BÁO: claude chưa đăng nhập — spawn bị chặn (chạy `claude auth login` rồi `cfharness doctor`)"
         try:  # H-10: kiểm phiên bản lúc daemon khởi động + cảnh báo raw.unknown
@@ -663,7 +667,7 @@ def cmd_run(ctx: Ctx) -> int:
         run = None
     params: dict[str, Any] = {"agent": a.agent, "prompt": a.prompt}
     if a.cwd:
-        params["cwd"] = str(Path(a.cwd).expanduser().resolve())
+        params["cwd"] = a.cwd if a.cwd.startswith("filehub:") else str(Path(a.cwd).expanduser().resolve())  # filehub:<tên>[/<con>] — daemon giải
     if a.budget is not None:
         params["budget_usd"] = a.budget
     if a.model:
@@ -946,6 +950,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_question_parsers(sub, common)
 
+    # Thư mục chung Không gian số: cfharness filehub setup|login|status|add|remove|pause|resume (filehub/cli.py)
+    from .filehub.cli import add_parsers as _add_filehub_parsers
+
+    _add_filehub_parsers(sub, common)
+
     # Hệ thống ngoài hub: cfharness system scan|list|show|add|rm|lock|unlock|pause|resume|restart (systems/cli.py)
     from .systems.cli import add_parsers as _add_system_parsers
 
@@ -980,6 +989,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .backup_cli import add_parsers as _add_backup_parsers
 
     _add_backup_parsers(sub, common)
+
+    # xuất / nhập toàn bộ hub sang máy khác: cfharness hub export|import (hub_transfer_cli.py, hub_transfer.py)
+    from .hub_transfer_cli import add_parsers as _add_hub_transfer_parsers
+
+    _add_hub_transfer_parsers(sub, common)
 
     # tổng quan máy nhiều người dùng: cfharness admin overview (admin_cli.py, admin_overview.py)
     from .admin_cli import add_parsers as _add_admin_parsers

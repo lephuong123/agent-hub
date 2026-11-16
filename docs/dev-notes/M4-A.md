@@ -75,6 +75,23 @@ Lần 1 phát hiện: skill seed qua `learn propose` (ledger actor=user) bị **
 correction (0% → 100%) — review sau đó không còn skill để vá (đã lưu memory USER.md thay thế). Đề nghị B loại entry `actor=user`
 (hoặc thay đổi không do vòng học tạo) khỏi tự rollback; lần 2 seed skill bằng file viết tay để tránh.
 
+## Ledger an toàn khi crash (S8-B, write-ahead)
+`Ledger.apply` (`learning/ledger.py`) là write-ahead, áp cho mọi kind (file memory, cây skill, config, graph):
+1. Ghi ý định trong MỘT transaction: hàng `snapshots` + hàng `ledger_pending` (migration v27) chứa blob before đã lưu, sha256 trạng thái
+   SAU dự kiến (`_expected_after`: file = nội dung mới; cây = tar tất định dựng từ before + `files`; config = before + khoá đổi + SOUL;
+   graph = không đoán) và hàng entry soạn sẵn.
+2. Ghi đích (`_write_target`; file: tmp + rename). Graph không ghi ở bước này.
+3. MỘT transaction (`_commit`): graph `write_rows` + đăng ký/archive skill + INSERT `ledger_entries` + `rolled_back_by` + xoá pending.
+   Hàng graph và entry cùng commit hoặc cùng huỷ. Bên gọi đã mở transaction → dùng SAVEPOINT.
+
+`Hub.start` gọi `Ledger.recover_pending()`: với mỗi pending, trạng thái đích hiện tại == after dự kiến → hoàn tất entry (cờ `recovered`,
+rollback được như thường); == before → bỏ pending; khác (người sửa giữa chừng, config dở trong `agents.update`, dự đoán after lệch) →
+`state='flagged'` + event `learning.ledger_recovery{outcome:flagged, warning, snapshot_id, before_blob, hint}`, KHÔNG ghi đè đích; snapshot +
+blob before được giữ để người khôi phục tay. Hàng flagged không bị xử lý/cảnh báo lại. Lỗi thường (`Exception`) ở bước 2/3 mà đích chưa
+đổi → bỏ pending ngay. Bảo đảm: mọi thay đổi trên đĩa/DB do ledger tạo đều có entry, hoặc đã về trạng thái trước, hoặc bị gắn cờ.
+Giới hạn: hàng pending commit với `synchronous=NORMAL` (bền khi tiến trình chết, không bảo đảm khi mất điện); việc sau `apply`
+của bên gọi (đổi trạng thái proposal, event `learning.applied`) không nằm trong bảo đảm này. Test: `tests/test_ledger_crash_recovery.py`.
+
 ## Việc dở / gợi ý
 - Canary/shadow, ghi tầng team/global thật (M5). Tab Learnings thuộc B.
 - `doctor` chưa hiển thị cảnh báo cache (có `learn cache` + event `cache.warning`).

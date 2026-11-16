@@ -63,6 +63,10 @@ class QueuedNotifier:
 
     # ------------------------------------------------------------------ bus
     def __call__(self, ev: HubEvent) -> None:
+        from ..hub_freeze import frozen
+
+        if frozen(self.hub):  # hub đã chuyển nhà sang máy khác (hub_freeze): máy này không gửi gì ra kênh ngoài
+            return
         events = self.cfg().get("events") or []
         # approval.escalated = "người được hỏi lần đầu" → nhận ở mọi cấu hình đã nhận approval.open (danh sách cũ người tự đặt)
         # đề xuất golden có nút = bản một chạm của `golden.suggested` → nhận ở mọi cấu hình đã nhận golden.suggested
@@ -136,9 +140,11 @@ class QueuedNotifier:
         attempts = int(c.get("max_attempts") or 5)
         base = float(c.get("backoff_base_s") or 2)
         ids = {"request_id": ev.payload.get("request_id"), "digest_id": ev.payload.get("digest_id")}
+        from ..hub_freeze import frozen
+
         for i in range(attempts):
             t = self.target()
-            if t is None:
+            if t is None or frozen(self.hub):  # đóng băng giữa lúc tin còn trong hàng đợi → bỏ (máy mới gửi)
                 return
             t0 = time.monotonic()
             try:

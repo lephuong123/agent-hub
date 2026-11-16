@@ -349,7 +349,9 @@ def test_human_only_covers_sensitive_surface():
               "learn.retry", "learn.refine", "agent.update", "golden.add", "golden.rm", "learn.policy_set", "secret.set", "mcp.add", "estop.set",
               # web "Quyền đã cấp" / lịch / hội thoại điều phối viên (#3 #5 #7)
               "guard.grant.rm", "guard.trust.set", "guard.sandbox.allow_domain", "guard.sandbox.dev_host", "schedule.update",
-              "manager.archive", "manager.unarchive", "manager.tick"):
+              "manager.archive", "manager.unarchive", "manager.tick",
+              "hub.export",  # xuất toàn bộ hub (hub_transfer.py)
+              "hub.freeze", "hub.unfreeze", "hub.doctor"):  # chuyển nhà: đóng băng/gỡ (hub_freeze.py), doctor lộ đường dẫn/tên secret
         assert m in auth.HUMAN_ONLY, m
     assert "guard.check" not in auth.HUMAN_ONLY and "taskself.call" not in auth.HUMAN_ONLY  # hook/hub-self không bị chặn
 
@@ -400,6 +402,29 @@ async def test_backup_restore_and_update_rollback_human_only(home, monkeypatch):
         B.restore(home, r["id"])
 
 
+async def test_hub_transfer_web_rpcs_human_only(home):
+    """Xuất/nhập hub từ web (hub_transfer_web.py, PR6): agent trong run — kể cả đọc trộm token người — không gọi được RPC mới
+    (xuất gói chứa mọi thứ / nhập đè hub.db / đọc kế hoạch lộ đường dẫn); không có trong MANAGER_ALLOWED; method ghi được bọc audit."""
+    from cfharness import hub_transfer_web as W
+
+    for m in W.HUMAN_ONLY_TRANSFER_WEB:
+        assert m in auth.HUMAN_ONLY and m not in auth.MANAGER_ALLOWED, m
+    assert set(W.MUTATING_TRANSFER_WEB) <= auth.all_mutating()
+    d, srv = await _start(home)
+    try:
+        for m, prm in (("hub.export_start", {"profile": "core", "secrets": False}), ("hub.import_start", {"upload": "up-0000000000000000"}),
+                       ("hub.import_plan", {"upload": "up-0000000000000000"}), ("hub.transfer_status", {})):
+            run_n, proc_n, go_n = await _start_run(d)
+            rr = await _in_run(go_n, _client_py(home, m, prm, steal_token=True))
+            resp = json.loads(rr["out"].strip().splitlines()[-1])
+            assert resp.get("error", {}).get("code") == -32003, (m, resp)
+            proc_n.wait(5)
+        assert d.hub.transfer_web.job is None
+        assert not list((home.home / "exports").glob("*.cfhx")) if (home.home / "exports").exists() else True
+    finally:
+        await _stop(d, srv)
+
+
 def test_admin_methods_human_only_not_manager():
     """plan-admin-users: mọi RPC admin.* ∈ HUMAN_ONLY, KHÔNG ∈ MANAGER_ALLOWED; method ghi admin.estop_set đã phân loại + bọc audit."""
     from cfharness.admin_rpc import MUTATING_ADMIN, READ_ADMIN
@@ -427,3 +452,78 @@ def test_admin_shared_permission_deny_every_hub(tmp_path):
         deny = s["permissions"]["deny"]
         for t in ("Read", "Grep", "Glob", "Edit", "Write"):
             assert f"{t}(/{SHARED_ROOT}/**)" in deny, (trust, t)  # "//abs" = đường dẫn tuyệt đối trong luật Claude Code
+
+
+def test_desktop_app_data_denied_every_hub(tmp_path):
+    """C6 (app desktop): Read/Grep/Glob/Edit/Write không vào thư mục dữ liệu app — kể cả agent trust_full; sandbox chặn đọc/ghi."""
+    from cfharness.desktop_app import app_data_dirs
+    from cfharness.guard.runtime import build_settings, rule_path
+
+    home = tmp_path / "hub"
+    (home / "policy").mkdir(parents=True)
+    for trust in (False, True):
+        s = build_settings({}, run_id="r1", socket=tmp_path / "hub.sock", policy_dir=home / "policy", guard_cfg={"enabled": True},
+                           approval_timeout_s=60, cwd=tmp_path, trust_full=trust)
+        deny = s["permissions"]["deny"]
+        for d in app_data_dirs():
+            for t in ("Read", "Grep", "Glob", "Edit", "Write"):
+                assert f"{t}(/{rule_path(d)}/**)" in deny, (trust, t, d)
+        if not trust and s.get("sandbox", {}).get("enabled"):
+            fs = s["sandbox"]["filesystem"]
+            for d in app_data_dirs():
+                assert any(x.rstrip("/") == d.replace("\\", "/") for x in fs["denyRead"]), d
+                assert any(x.rstrip("/") == d.replace("\\", "/") for x in fs["denyWrite"]), d
+
+
+async def test_agent_cannot_forge_audit_record(home):
+    """B4: RPC `audit.record` nhận actor/channel/summary do người gọi tự khai → chỉ người (web/CLI). Agent trong run gọi
+    (kể cả đã đọc trộm token) bị từ chối, không ghi được dòng audit giả "user duyệt"; người vẫn ghi được."""
+    assert "audit.record" in auth.HUMAN_ONLY and "audit.record" not in auth.MANAGER_ALLOWED
+    d, srv = await _start(home)
+    try:
+        forged = {"kind": "approval.approve", "actor": "user", "channel": "web", "summary": "người duyệt rm -rf", "data": {"approval_id": "ap_1"}}
+        agent = auth.Caller(via="socket", pid=1, token_ok=False, run_id="r_x", agent_id="a1", evidence=["env:CFHARNESS_RUN_ID"])
+        r = await d.call_as(agent, "audit.record", dict(forged))
+        assert r.get("error", {}).get("code") == -32003, r
+        run, proc, go = await _start_run(d)
+        rr = await _in_run(go, _client_py(home, "audit.record", dict(forged), steal_token=True))
+        resp = json.loads(rr["out"].strip().splitlines()[-1])
+        assert resp.get("error", {}).get("code") == -32003, resp
+        proc.wait(5)
+        n = d.hub.store.conn.execute("SELECT COUNT(*) FROM audit_log WHERE kind='approval.approve' AND actor='user'").fetchone()[0]
+        assert n == 0
+        r = await asyncio.to_thread(RpcClient(home.socket).call, "audit.record", {"kind": "web.login", "actor": "user", "channel": "web"})
+        assert r["id"]
+    finally:
+        await _stop(d, srv)
+
+
+async def test_filehub_writes_human_only(home):
+    """Thư mục chung Không gian số (filehub/): agent trong run — kể cả đọc trộm token người — không setup/thêm/gỡ/tạm dừng được;
+    method ghi đã phân loại + bọc audit; CLI ghi bị classifier chặn; đọc trạng thái thì được."""
+    from cfharness.filehub.rpc import MUTATING_FILEHUB
+    from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI
+
+    for m in MUTATING_FILEHUB:
+        assert m in auth.HUMAN_ONLY and m not in auth.MANAGER_ALLOWED, m
+    assert set(MUTATING_FILEHUB) <= auth.all_mutating()
+    assert {"setup", "login", "add", "remove", "pause", "resume"} <= HUB_HUMAN_ONLY_CLI["filehub"]
+    for m in ("filehub.status", "filehub.list", "filehub.link"):
+        assert m not in auth.HUMAN_ONLY
+    d, srv = await _start(home)
+    try:
+        for m, prm in (("filehub.setup", {"server": "https://x.example", "binary": "/bin/sh"}), ("filehub.add", {"root_id": "r1", "local_path": "/tmp/x"}),
+                       ("filehub.pause", {})):
+            run_n, proc_n, go_n = await _start_run(d)
+            rr = await _in_run(go_n, _client_py(home, m, prm, steal_token=True))
+            resp = json.loads(rr["out"].strip().splitlines()[-1])
+            assert resp.get("error", {}).get("code") == -32003, (m, resp)
+            proc_n.wait(5)
+        run_n, proc_n, go_n = await _start_run(d)
+        rr = await _in_run(go_n, _client_py(home, "filehub.status", {}, steal_token=False))
+        assert "result" in json.loads(rr["out"].strip().splitlines()[-1])
+        proc_n.wait(5)
+        assert not d.hub.filehub.folders() and not d.hub.store.state_get("filehub.paused")
+        assert d.hub.config.get("filehub.server") is None
+    finally:
+        await _stop(d, srv)

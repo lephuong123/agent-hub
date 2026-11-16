@@ -38,6 +38,7 @@ import secrets as _secrets
 import time
 from typing import TYPE_CHECKING, Any
 
+from ...hub_freeze import frozen
 from ... import auth as _auth
 from ...events import HubEvent
 from ...notify.base import QueuedNotifier, clip
@@ -237,6 +238,8 @@ class SlackBot(ChatBot):
         c = self.cfg()
         if not ignore_enabled and not (c.get("enabled", True) and c.get("interactive")):
             return None
+        if not ignore_enabled and frozen(self.hub):  # hub đã chuyển nhà (hub_freeze): máy mới giữ Socket Mode — tránh chia sự kiện
+            return None
         return self._secret(c.get("bot_token_secret") or "SLACK_BOT_TOKEN")
 
     def app_token(self) -> str | None:
@@ -339,8 +342,10 @@ class SlackBot(ChatBot):
         return "Trả lời trong thread của tin vừa gửi."
 
     def team_ok(self, team: Any) -> bool:
-        pinned = self.cfg().get("team_id")
-        return not pinned or str(team or "") == str(pinned)
+        # chưa ghim (token đặt tay, không qua `slack setup`) → workspace của token theo `auth.test`; chưa biết workspace → từ chối
+        # (fail-closed: trước đây nhận envelope của MỌI workspace)
+        pinned = self.cfg().get("team_id") or self.info.get("team_id")
+        return bool(pinned) and str(team or "") == str(pinned)
 
     # ------------------------------------------------------------------ Socket Mode
     async def _loop(self) -> None:

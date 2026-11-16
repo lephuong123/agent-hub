@@ -25,7 +25,7 @@ from starlette.applications import Starlette
 from starlette.datastructures import FormData
 from starlette.exceptions import HTTPException
 from starlette.requests import Request, cookie_parser
-from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
@@ -37,6 +37,7 @@ from ..paths import HubPaths
 from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
 from ..tui.client import AsyncHubClient, subscribe
 from ..tui.model import STATUS_ORDER
+from . import desktop as _desktop
 from . import present as P
 from . import settings_schema as _settings
 from .public import LoginLimiter, client_ip, public_hosts
@@ -114,7 +115,7 @@ SECURITY_HEADERS = [
     (b"referrer-policy", b"same-origin"),  # no-referrer làm Chrome gửi `Origin: null` cho form POST
     (b"cross-origin-opener-policy", b"same-origin"),
     (b"cross-origin-resource-policy", b"same-origin"),
-    (b"permissions-policy", b"camera=(), microphone=(), geolocation=()"),
+    (b"permissions-policy", b"camera=(), microphone=(self), geolocation=()"),  # micro: chỉ cùng origin — nhập bằng giọng nói (static/voice.js)
 ]
 
 
@@ -135,6 +136,9 @@ class WebState:
     totp: TotpStore | None = None
     devices: DeviceStore | None = None  # "Tin cậy thiết bị này" (web/devices.py) — chỉ dùng trên host public https
     _dev_rejects: dict[str, float] = field(default_factory=dict)  # giới hạn ghi audit `web.device_rejected` theo IP
+    # directory hub (C5, web/desktop.py): giới hạn lần sai token + trần lần trả danh mục — chỉ RAM
+    dir_limiter: Any = field(default_factory=lambda: _desktop.directory_limiter())
+    dir_window: Any = field(default_factory=lambda: _desktop.SuccessWindow())
 
     @property
     def public_hosts(self) -> set[str]:
@@ -181,9 +185,12 @@ class WebState:
 class GuardMiddleware:
     """ASGI thuần (không đệm response → SSE chạy được): kiểm Host, gắn phiên, chặn khi chưa đăng nhập, thêm header bảo mật."""
 
-    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/mcp/oauth/callback")  # callback OAuth: state là lớp bảo vệ (web/mcp_oauth.py)
+    # callback OAuth: state là lớp bảo vệ (web/mcp_oauth.py); well-known: app desktop nhận diện hub (chỉ {kind, schema, app_api})
+    # directory: công khai nhưng có token (C5, hub admin — web/desktop.directory: sai → 404, giới hạn tốc độ)
+    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/mcp/oauth/callback", "/.well-known/cfharness.json", "/.well-known/cfharness-directory")
     # JSON do trang gọi bằng fetch (polling): chưa đăng nhập → 401 (không chuyển hướng), không gia hạn phiên — như /sse/, /partials/
-    API = ("/office/state", "/office/approval/", "/office/question/", "/office/chat", "/office/do/")  # tiền tố
+    # `/app/` = API cho app desktop (web/desktop.py: /app/badge) — 401 dạng JSON
+    API = ("/office/state", "/office/approval/", "/office/question/", "/office/chat", "/office/do/", "/app/")  # tiền tố
 
     def __init__(self, app: Any, state: WebState) -> None:
         self.app = app
@@ -222,6 +229,8 @@ class GuardMiddleware:
             # chống DNS rebinding: chỉ phục vụ đúng Host đã định
             await PlainTextResponse(f"Host không hợp lệ — mở {self.state.base_url}/", status_code=421)(scope, receive, send_headers)
             return
+        if "cfharnessdesktop/" in headers.get("user-agent", "").lower():
+            _desktop.note_app_ua(headers.get("user-agent", ""))  # C7: chỉ ghi log, không đổi giao diện
         sid = cookie_parser(headers.get("cookie", "")).get(self.state.cookie)
         # polling/SSE không gia hạn phiên — chỉ thao tác của người (trang, POST) mới gia hạn
         poll = path.startswith(("/sse/", "/partials/")) or path.startswith(self.API)
@@ -232,6 +241,8 @@ class GuardMiddleware:
         if sess is None and not public:
             if scope.get("method") == "GET" and not poll and "hx-request" not in headers:
                 resp: Response = RedirectResponse("/login", status_code=303)
+            elif path.startswith("/app/"):
+                resp = JSONResponse({"error": "unauthenticated"}, status_code=401)
             else:
                 resp = PlainTextResponse("Chưa đăng nhập — mở /login (mã TOTP) hoặc chạy `cfharness web --open` trên máy chạy hub.", status_code=401)
             await resp(scope, receive, send_headers)
@@ -277,10 +288,22 @@ async def post_guard(request: Request, *, need_key: bool = True) -> tuple[Sessio
     `k` (form) / `X-Ahub-Key` (header) = `Session.key`: chỉ trao cho trình duyệt MỘT lần qua fragment `#k=` lúc đăng nhập, JS giữ trong
     localStorage của origin web và gắn vào mọi form POST. HTML không bao giờ chứa nó → kẻ có cookie (vd dev server ở cổng khác cùng
     host nhận cookie) đọc HTML lấy CSRF vẫn không POST được."""
-    st = ws(request)
     sess = session_of(request)
     if sess is None:
         raise HTTPException(401, "Chưa đăng nhập")
+    origin_guard(request)
+    form = await request.form()
+    if not WebAuth.csrf_ok(sess, form.get("csrf") or request.headers.get("x-csrf-token")):
+        raise HTTPException(403, "Token CSRF sai hoặc thiếu — tải lại trang rồi thử lại")
+    if need_key and not WebAuth.key_ok(sess, form.get(KEY_FIELD) or request.headers.get(KEY_HEADER)):
+        raise HTTPException(403, "Trình duyệt này thiếu khoá phiên (cần JavaScript; hoặc phiên mở ở tab/trình duyệt khác) — "
+                                 "chạy `cfharness web --open` để đăng nhập lại")
+    return sess, form
+
+
+def origin_guard(request: Request) -> None:
+    """Cùng nguồn (Origin / Referer / Sec-Fetch-Site) — phần không đọc thân của `post_guard`; dùng riêng cho POST thân thô (tải gói lên)."""
+    st = ws(request)
     origin = request.headers.get("origin")
     if origin and origin not in st.origins:
         raise HTTPException(403, "Origin không hợp lệ")
@@ -291,13 +314,6 @@ async def post_guard(request: Request, *, need_key: bool = True) -> tuple[Sessio
     sfs = request.headers.get("sec-fetch-site")
     if sfs and sfs not in ("same-origin", "none"):
         raise HTTPException(403, "Yêu cầu khác nguồn bị từ chối")
-    form = await request.form()
-    if not WebAuth.csrf_ok(sess, form.get("csrf") or request.headers.get("x-csrf-token")):
-        raise HTTPException(403, "Token CSRF sai hoặc thiếu — tải lại trang rồi thử lại")
-    if need_key and not WebAuth.key_ok(sess, form.get(KEY_FIELD) or request.headers.get(KEY_HEADER)):
-        raise HTTPException(403, "Trình duyệt này thiếu khoá phiên (cần JavaScript; hoặc phiên mở ở tab/trình duyệt khác) — "
-                                 "chạy `cfharness web --open` để đăng nhập lại")
-    return sess, form
 
 
 # ============================================================================ RPC
@@ -352,6 +368,10 @@ async def render(request: Request, name: str, ctx: dict[str, Any] | None = None,
             badge = {"approvals": len(pend or []), "waiting_human": sum(1 for a in pend or [] if a.get("status") == "waiting_human"),
                      "estop": bool((es or {}).get("on")), "admin_estop": bool((es or {}).get("admin")),
                      "questions": len(await questions(request, "open"))}
+            try:  # chuyển nhà (hub_freeze.py): banner "đã chuyển sang máy khác" — daemon cũ chưa có method thì bỏ qua
+                badge["migrated_to"] = ((await rpc(request, "hub.frozen")) or {}).get("migrated_to")
+            except RpcError:
+                badge["migrated_to"] = None
         except (RpcError, DaemonUnavailable, OSError):
             badge = {"down": True}
         if not badge.get("down"):
@@ -677,7 +697,11 @@ async def overview(request: Request) -> Response:
             mgr["web_conv"] = next((c["id"] for c in await _web_convs(request)), None)
     except RpcError:
         mgr = {"available": False, "agent_id": None}
-    return await render(request, "overview.html", {**data, "nav": "overview", "agents": agents, "mgr": mgr})
+    try:  # hub vừa cài, chưa có gì → thẻ nổi bật "Nhập hub từ máy khác" (web/transfer_pages.py)
+        fresh = bool(((await rpc(request, "hub.transfer_status")) or {}).get("fresh"))
+    except RpcError:
+        fresh = False
+    return await render(request, "overview.html", {**data, "nav": "overview", "agents": agents, "mgr": mgr, "fresh": fresh})
 
 
 async def partial_overview(request: Request) -> Response:
@@ -1223,6 +1247,9 @@ class Action:
     secret_fields: tuple[str, ...] = ()  # trường mang giá trị bí mật — KHÔNG đưa sang trang xác nhận
     call: Callable[[Request, dict[str, Any]], Awaitable[Any]] | None = None  # thao tác nhiều RPC (mặc định: một RPC `method`)
     step2: Callable[[FormData], str] | str | None = None  # bước 2 BẮT BUỘC (thao tác NỚI quyền) — trang xác nhận lần 2 nêu rõ hệ quả
+    # ô người phải gõ (lại) Ở BƯỚC 2 — (tên, nhãn, kiểu input): passphrase không bao giờ đi qua trang xác nhận (`secret_fields`) nên được
+    # nhập đúng ở POST cuối cùng; id gói gõ lại (web/transfer_pages.py)
+    reenter: Callable[[FormData], list[tuple[str, str, str]]] | None = None
 
 
 async def _config_set(request: Request, p: dict[str, Any]) -> Any:
@@ -1555,7 +1582,8 @@ async def plan_action(request: Request, name: str, form: FormData, act: Action) 
                     fields=fields)
     if act.step2 and form.get("confirm2") != "yes":
         # thao tác nới quyền (vd gỡ tài nguyên bảo vệ — web/perm_pages.py): bước 2 nêu rõ hệ quả, như "luôn cho phép"
-        return Plan("step2", act, params, kind="generic", message=act.step2(form) if callable(act.step2) else act.step2, fields=carry(form))
+        return Plan("step2", act, params, kind="generic", message=act.step2(form) if callable(act.step2) else act.step2,
+                    fields=[(k, v) for k, v in carry(form) if k not in act.secret_fields])  # giá trị secret không vào HTML (cả bước 2)
     if name == "approve_always" and form.get("confirm2") != "yes":
         # bước 2 BẮT BUỘC: trang nói rõ luật sẽ tạo (agent + tool + dấu vân tay / agent + host) — `always_offer` do daemon tính
         try:
@@ -1600,7 +1628,8 @@ async def do_action(request: Request) -> Response:
                                                       "back": back, "note": act.note})
     if plan.step == "step2" and plan.kind == "generic":
         return await render(request, "confirm.html", {"message": plan.message, "fields": [*(plan.fields or []), ("confirm2", "yes")], "action": f"/do/{name}",
-                                                      "danger": True, "back": back, "note": None, "heading": "Xác nhận lần 2"})
+                                                      "danger": True, "back": back, "note": None, "heading": "Xác nhận lần 2",
+                                                      "reenter": act.reenter(form) if act.reenter else []})
     if plan.step == "step2":
         ap = plan.ap or {}
         ctx = {"a": ap, "view": P.action_view(ap), "fields": plan.fields, "action": f"/do/{name}", "back": back}
@@ -1981,8 +2010,11 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_memory_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
+        *_filehub_pages.routes(),  # /partials/filehub + /filehub/open — thẻ "Không gian số" ở Cài đặt (filehub/)
         *_backup_pages.routes(),  # /partials/backup — thẻ "Sao lưu" ở Cài đặt (backup.py)
+        *_transfer_pages.routes(),  # /hub-transfer — xuất/nhập toàn bộ hub (hub_transfer_web.py, web/transfer_pages.py)
         *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
+        *_desktop.routes(),  # /.well-known/cfharness.json + /app/badge — app desktop (web/desktop.py, docs/dev-notes/desktop-app.md)
         *_file_pages.routes(),  # /files/view|raw|open — xem/mở file agent đã thao tác (web/file_pages.py, docs/dev-notes/file-open.md)
         Mount("/static", app=StaticFiles(directory=str(HERE / "static")), name="static"),
     ]
@@ -2024,6 +2056,16 @@ _update_pages.register_actions(ACTIONS, Action, _req)
 from . import backup_pages as _backup_pages  # noqa: E402
 
 _backup_pages.register_actions(ACTIONS, Action, _req)
+
+# "Chuyển hub sang máy khác" (hub_transfer_web.py): hub_export / hub_import (bước 2 bắt buộc, passphrase chỉ ở bước 2) / hub_unfreeze
+from . import transfer_pages as _transfer_pages  # noqa: E402
+
+_transfer_pages.register_actions(ACTIONS, Action, _req)
+
+# Thẻ "Không gian số" (filehub/): filehub_pause|resume|resume_push (chỉ web cục bộ) + link "Mở trên Không gian số"
+from . import filehub_pages as _filehub_pages  # noqa: E402
+
+_filehub_pages.register_actions(ACTIONS, Action, _req)
 
 # Quản trị máy (admin_overview.py, admin_rpc.py): /admin/overview|users|alerts|audit (nhóm cfharness-admin) + /machine (phía user);
 # ghi DUY NHẤT = ESTOP admin (admin_estop_on|off, có xác nhận); chính sách chỉ hiện lệnh sudo

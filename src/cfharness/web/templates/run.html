@@ -39,7 +39,7 @@
   <section id="steer-card" class="run-composer" data-result="/partials/run/{{ run.id }}/result">
     <form method="post" action="/do/steer" class="composer" id="steer-form">
       <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ run.id }}"><input type="hidden" name="next" value="/runs/{{ run.id }}">
-      <textarea name="text" rows="1" required placeholder="Chỉ đạo agent — vd: Chỉ xem thư mục src/, bỏ qua tests/" aria-label="Chỉ đạo agent (steer)"></textarea>
+      <textarea data-voice name="text" rows="1" required placeholder="Chỉ đạo agent — vd: Chỉ xem thư mục src/, bỏ qua tests/" aria-label="Chỉ đạo agent (steer)"></textarea>
       <button class="btn primary" type="submit">{{ m.icon('send') }}<span class="btn-t">Gửi chỉ đạo</span></button>
     </form>
     <p class="run-dock-hint">Chỉ đạo agent (steer): đưa vào ngữ cảnh agent ở lượt kế tiếp.</p>

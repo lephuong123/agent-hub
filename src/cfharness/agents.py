@@ -487,10 +487,20 @@ class AgentService:
             status = "paused"
         else:
             status = "working" if self.active_runs(agent_id) else "idle"
+            self._clear_import_pause(agent_id)
             if row["status"] != "paused":
                 return self.show(agent_id)
         self.set_status(agent_id, status, current_run_id=row.get("current_run_id"), force=True)
         return self.show(agent_id)
+
+    def _clear_import_pause(self, agent_id: str) -> None:
+        """Người `agent resume` → bỏ lý do "[hub] workspace chưa có trên máy này" do `hub import` đặt (transfer_repos.PAUSED_KEY)."""
+        from .transfer_repos import PAUSED_KEY
+
+        cur = self.store.state_get(PAUSED_KEY)
+        if isinstance(cur, dict) and agent_id in cur:
+            cur.pop(agent_id)
+            self.store.state_set(PAUSED_KEY, cur)
 
     def set_status(
         self, agent_id: str, status: str, *, current_run_id: str | None = None, reason: str | None = None, force: bool = False
@@ -518,14 +528,82 @@ def _copy_tree(src: Path, dst: Path) -> None:
         shutil.copytree(src, dst, dirs_exist_ok=True, symlinks=False, ignore=shutil.ignore_patterns("__pycache__"))
 
 
+def _knowledge_files(root: Path, *, with_memory: bool) -> list[tuple[str, str]]:
+    """(tên tương đối, nội dung) của mọi file tri thức sẽ được chép: SOUL.md, MEMORY.md/USER.md (khi `with_memory`), mọi file
+    trong skills/ (SKILL.md và file hỗ trợ). File nhị phân đọc với `errors="replace"` để vẫn quét được phần text."""
+    out: list[tuple[str, str]] = []
+    for n in ["SOUL.md"] + (["MEMORY.md", "USER.md"] if with_memory else []):
+        if (root / n).is_file():
+            out.append((n, (root / n).read_text(encoding="utf-8", errors="replace")))
+    skills = root / "skills"
+    if skills.is_dir():
+        for p in sorted(skills.rglob("*")):
+            if p.is_file() and "__pycache__" not in p.parts:
+                out.append(((Path("skills") / p.relative_to(skills)).as_posix(), p.read_text(encoding="utf-8", errors="replace")))
+    return out
+
+
+def _graph_texts(data: dict[str, Any]) -> list[str]:
+    """Mọi chuỗi trong hàng graph (fact/text/name/summary/aliases…) để quét threat."""
+    out: list[str] = []
+
+    def walk(v: Any) -> None:
+        if isinstance(v, str):
+            out.append(v)
+        elif isinstance(v, dict):
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, (list, tuple)):
+            for x in v:
+                walk(x)
+
+    walk(data)
+    return out
+
+
+def _threat_scan_or_raise(svc: AgentService, items: list[tuple[str, str]], *, source: str, target_id: str,
+                          origin: str, agent_id: str | None) -> None:
+    """Quét TOÀN BỘ nội dung sắp đưa vào agent bằng đúng scanner của vòng học (`learning.threats.scan`: cửa sổ trượt,
+    `_has_raw_secret`, Unicode ẩn, mẫu chạm chính sách). Trúng → phát `guard.blocked` và raise `HubError` nêu tên file + loại
+    threat (KHÔNG kèm giá trị khớp — tránh lộ secret). Gọi TRƯỚC mọi thao tác ghi: không agent dở, không file, không row."""
+    from .learning.threats import scan
+
+    hits: list[tuple[str, list[str]]] = []
+    for label, text in items:
+        found = scan(text)
+        if found:
+            hits.append((label, found))
+    if not hits:
+        return
+    detail = "; ".join(f"{label}: {', '.join(found[:5])}" for label, found in hits[:10])
+    verb = "import" if source == "agent_import" else "clone"
+    msg = f"từ chối {verb} agent '{target_id}' từ {origin}: nội dung chứa mẫu nguy hiểm — {detail}"
+    svc.publish(make_event("guard.blocked", agent_id, {
+        "source": source, "reason": "threat_scan", "rule": "threat_scan", "detail": msg[:500], "target_id": target_id,
+        "origin": origin, "file": hits[0][0], "files": [h[0] for h in hits][:20], "flags": sorted({f for h in hits for f in h[1]})[:20]}))
+    raise HubError(msg)
+
+
 def clone_agent(svc: AgentService, src: str, dst: str, *, with_memory: bool = False, name: str | None = None) -> dict[str, Any]:
     """Sao chép cấu hình + SOUL + skill (giữ nguyên nội dung/`created_by` trong SKILL.md); memory chỉ khi `with_memory` — gồm cả graph
-    memory tầng agent (hàng chép sang agent mới với id mới, không qua ledger như MEMORY.md)."""
+    memory tầng agent (hàng chép sang agent mới với id mới, không qua ledger như MEMORY.md).
+
+    Threat scan (S8-A): clone từ agent LOCAL cũng quét toàn bộ nội dung sẽ chép (SOUL, skills/*, + MEMORY/USER/graph khi
+    `with_memory`) bằng cùng scanner với import/vòng học, TRƯỚC khi tạo agent đích. Lý do: chi phí nhỏ, và file trong home agent
+    có thể bị sửa ngoài ledger (tay người/tiến trình khác) — clone không được thành đường rửa nội dung độc sang agent mới."""
     row = svc.get_row(src)
     cfg = svc.config_of(row).model_dump()
     cfg["id"] = dst
     cfg["name"] = name or dst
     src_home = Path(row["home_path"])
+    items = _knowledge_files(src_home, with_memory=with_memory)
+    graph: dict[str, Any] | None = None
+    if with_memory:
+        from .knowledge.graph import GraphStore
+
+        graph = GraphStore(svc.store.conn).export_owner("agent", src)
+        items += [("graph (memory tầng agent)", t) for t in _graph_texts(graph)]
+    _threat_scan_or_raise(svc, items, source="agent_clone", target_id=dst, origin=f"agent '{src}'", agent_id=src)
     soul = (src_home / "SOUL.md").read_text(encoding="utf-8") if (src_home / "SOUL.md").exists() else None
     svc.create(cfg, soul)
     home = svc.paths.agent_home(dst)
@@ -536,8 +614,7 @@ def clone_agent(svc: AgentService, src: str, dst: str, *, with_memory: bool = Fa
                 shutil.copy2(src_home / f, home / f)
         from .knowledge.graph import GraphStore
 
-        gs = GraphStore(svc.store.conn)
-        gs.import_rows(gs.export_owner("agent", src), "agent", dst, agent_id=dst)
+        GraphStore(svc.store.conn).import_rows(graph or {}, "agent", dst, agent_id=dst)
     svc.store.update_agent(dst, {"cloned_from": src})
     svc.publish(make_event("agent.cloned", dst, {"agent_id": dst, "cloned_from": src, "with_memory": with_memory}))
     return svc.show(dst)
@@ -598,6 +675,8 @@ def export_agent(svc: AgentService, agent_id: str, dest: str | Path, *, with_mem
 
 
 def import_agent(svc: AgentService, path: str | Path, *, new_id: str | None = None, name: str | None = None) -> dict[str, Any]:
+    """Nhập agent từ file export. Mọi nội dung (SOUL, MEMORY/USER, skills/* gồm file hỗ trợ, graph.json) được quét threat
+    bằng `learning.threats.scan` TRƯỚC khi ghi: trúng → `HubError` (nêu file + loại threat, không lộ giá trị), không để lại dấu vết."""
     import json
     import tarfile
     import tempfile
@@ -620,6 +699,18 @@ def import_agent(svc: AgentService, path: str | Path, *, new_id: str | None = No
         cfg["id"] = new_id or manifest["agent_id"]
         if name:
             cfg["name"] = name
+        # S8-A: đọc + quét TOÀN BỘ nội dung (SOUL, MEMORY/USER, skills/*, graph.json) TRƯỚC mọi thao tác ghi
+        graph: dict[str, Any] | None = None
+        if (root / GRAPH_EXPORT).exists():
+            try:
+                graph = json.loads((root / GRAPH_EXPORT).read_text(encoding="utf-8"))
+            except ValueError:
+                graph = None
+            if not isinstance(graph, dict):
+                raise HubError(f"{GRAPH_EXPORT} không hợp lệ")
+        items = _knowledge_files(root, with_memory=True)
+        items += [(GRAPH_EXPORT, t) for t in _graph_texts(graph or {})]
+        _threat_scan_or_raise(svc, items, source="agent_import", target_id=str(cfg["id"]), origin=f"file {path.name}", agent_id=None)
         soul = (root / "SOUL.md").read_text(encoding="utf-8") if (root / "SOUL.md").exists() else None
         svc.create(cfg, soul)
         home = svc.paths.agent_home(cfg["id"])
@@ -627,13 +718,10 @@ def import_agent(svc: AgentService, path: str | Path, *, new_id: str | None = No
         for f in ("MEMORY.md", "USER.md"):
             if (root / f).exists():
                 shutil.copy2(root / f, home / f)
-        if (root / GRAPH_EXPORT).exists():
+        if graph is not None:
             from .knowledge.graph import GraphStore
 
-            data = json.loads((root / GRAPH_EXPORT).read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                raise HubError(f"{GRAPH_EXPORT} không hợp lệ")
-            GraphStore(svc.store.conn).import_rows(data, "agent", cfg["id"], agent_id=cfg["id"])
+            GraphStore(svc.store.conn).import_rows(graph, "agent", cfg["id"], agent_id=cfg["id"])
     svc.store.update_agent(cfg["id"], {"cloned_from": f"import:{manifest['agent_id']}"})
     svc.publish(make_event("agent.imported", cfg["id"], {"agent_id": cfg["id"], "from": manifest["agent_id"], "path": str(path)}))
     return svc.show(cfg["id"])

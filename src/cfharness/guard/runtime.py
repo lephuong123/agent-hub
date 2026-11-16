@@ -180,18 +180,35 @@ def admin_shared_deny_rules() -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def app_data_deny_rules() -> list[str]:
+    """App desktop (C6, desktop_app.py): Read/Grep/Glob/Edit/Write… KHÔNG vào thư mục dữ liệu của app (cookie phiên WebView + token directory
+    của mọi hub). Áp cho mọi hub, kể cả agent trust_full — dữ liệu đăng nhập của app không phải quyền của hub để trao."""
+    from ..desktop_app import app_data_dirs
+
+    out: list[str] = []
+    roots: list[str] = []
+    for d in app_data_dirs():
+        roots += [d, os.path.realpath(d)]
+    for r in dict.fromkeys(roots):
+        for t in ("Read", "Grep", "Glob", *FILE_TOOLS):
+            out += [f"{t}(/{rule_path(r)}/**)", f"{t}(/{rule_path(r)})"]
+    return list(dict.fromkeys(out))
+
+
 def secret_read_deny_rules(hub_home: Path, socket: Path) -> list[str]:
     """`permissions.deny` cho tool Read/Grep/Glob: token người, secret, mcp.json đã resolve, token MCP HTTP."""
     from ..auth import token_path
 
     out: list[str] = []
     # WEB: `auth/` giữ khoá ký link đăng nhập web (auth/web.json) — sandbox đã denyRead cả thư mục, đây là lớp Read/Grep/Glob
-    # backups/: bản sao lưu chứa toàn bộ hub.db + tri thức mọi agent (backup.py)
+    # backups/: bản sao lưu chứa toàn bộ hub.db + tri thức mọi agent (backup.py); exports/ + imports/: gói xuất/nhập hub (hub_transfer.py)
+    # filehub/: profile + base của binary sync (Không gian số), control.json — như secrets/ (docs/dev-notes/filehub.md)
     targets = [str(token_path(socket)), f"{hub_home}/secrets/**", f"{hub_home}/agents/*/runtime/**", f"{hub_home}/mcp_server/tokens.json", f"{hub_home}/auth/**",
-               f"{hub_home}/backups/**"]
+               f"{hub_home}/backups/**", f"{hub_home}/filehub/**", f"{hub_home}/exports/**", f"{hub_home}/imports/**"]
     real = os.path.realpath(hub_home)
     if real != str(hub_home):
-        targets += [f"{real}/secrets/**", f"{real}/agents/*/runtime/**", f"{real}/mcp_server/tokens.json", f"{real}/auth/**", f"{real}/backups/**"]
+        targets += [f"{real}/secrets/**", f"{real}/agents/*/runtime/**", f"{real}/mcp_server/tokens.json", f"{real}/auth/**", f"{real}/backups/**",
+                    f"{real}/filehub/**", f"{real}/exports/**", f"{real}/imports/**"]
     toks = [str(token_path(socket))]
     if IS_WINDOWS:  # CLI báo file_path dạng tên dài — thêm biến thể realpath (vd `LEQUYP~1` → tên thật)
         toks.append(os.path.realpath(toks[0]))
@@ -210,6 +227,8 @@ HUB_WRITE_DENY_NAMES = (
     "policy", "hub.db", "hub.db-wal", "hub.db-shm", "hub.db-journal", "config.yaml", "secrets", "mcp", "mcp_server", "ledger",
     "snapshots", "audit", "trash", "runs", "logs", "prompts", "checkpoints", "global", "teams", "hub.pid", "hub.sock", "auth",
     "backups", "update",  # bản sao lưu HUB_HOME (backup.py) + trạng thái/helper cập nhật (updater.py)
+    "exports", "imports",  # gói xuất/nhập toàn bộ hub (hub_transfer.py)
+    "filehub",  # profile/base/status/control của binary sync Không gian số (filehub/)
 )
 AGENT_WRITE_DENY_NAMES = ("config.yaml", "SOUL.md", "MEMORY.md", "USER.md", "skills", ".archive", "runtime", "home", ".tier_overlay")
 
@@ -341,6 +360,9 @@ def fixed_protected_dirs(hub_home: Path, socket: Path, sb_cfg: dict[str, Any] | 
     if sb_cfg.get("protect_hub_code", True):
         out.append(os.path.realpath(package_dir()))
     out += home_persistence_dirs() + path_bin_dirs() + executable_zones()
+    from ..desktop_app import app_data_dirs
+
+    out += app_data_dirs()  # C6: thư mục dữ liệu app desktop — workspace không được nằm trong
     out += [str(x) for x in sb_cfg.get("extra_deny_write") or []]
     return list(dict.fromkeys(out))
 
@@ -407,7 +429,8 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
     deny_w += [str(x) for x in sb_cfg.get("extra_deny_write") or []]
     deny_r: list[str] = [str(tok)]
     for h in homes:
-        deny_r += [f"{h}/secrets", f"{h}/agents/*/runtime", f"{h}/mcp_server/tokens.json", f"{h}/auth", f"{h}/backups"]
+        deny_r += [f"{h}/secrets", f"{h}/agents/*/runtime", f"{h}/mcp_server/tokens.json", f"{h}/auth", f"{h}/backups", f"{h}/filehub",
+                   f"{h}/exports", f"{h}/imports"]
         try:
             for a in (Path(h) / "agents").iterdir():
                 deny_r.append(str(a / "runtime"))
@@ -426,6 +449,10 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
 
         deny_w.append(SHARED_ROOT)
         deny_r.append(SHARED_ROOT)
+    from ..desktop_app import app_data_dirs  # C6: thư mục dữ liệu app desktop (cookie phiên WebView, token directory) — không đọc/ghi
+
+    deny_w += app_data_dirs()
+    deny_r += app_data_dirs()
     deny_r += [str(x) for x in sb_cfg.get("extra_deny_read") or []]
     socks = [str(x) for x in sb_cfg.get("allow_unix_sockets") or []]
     if sb_cfg.get("allow_ssh_agent", False) and os.environ.get("SSH_AUTH_SOCK"):
@@ -489,7 +516,8 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
         conf_deny = permission_deny_rules(confine, read_roots(confine, hub_home, cwd=cwd))
     if trust_full:
         perms = dict(s.get("permissions") or {})
-        perms["deny"] = list(perms.get("deny") or []) + admin_shared_deny_rules()  # dữ liệu của user KHÁC: không phải quyền của người này để trao
+        # dữ liệu của user KHÁC / phiên đăng nhập của app desktop: không phải quyền của người này để trao
+        perms["deny"] = list(perms.get("deny") or []) + admin_shared_deny_rules() + app_data_deny_rules()
         s["permissions"] = perms
         if confine is None:
             s["sandbox"] = {"enabled": False}
@@ -505,7 +533,7 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
     user_prot = protected_write_paths(hub_home)  # R2-2: tài nguyên NGƯỜI khai báo (vd `.next` prod) → chặn tĩnh tool ghi + sandbox
     perms["deny"] = (list(perms.get("deny") or []) + policy_deny_rules(policy_dir) + secret_read_deny_rules(hub_home, Path(socket))
                      + exec_zone_deny_rules() + [f"{t}(/{rule_path(p)}{suf})" for p in user_prot for t in FILE_TOOLS for suf in ("/**", "")]
-                     + credential_deny_rules() + admin_shared_deny_rules() + (conf_deny if confine is not None else []))
+                     + credential_deny_rules() + admin_shared_deny_rules() + app_data_deny_rules() + (conf_deny if confine is not None else []))
     s["permissions"] = perms
     sb_cfg = sb_cfg0
     if not sb_cfg.get("enabled", True) and confine is not None:

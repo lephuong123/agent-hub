@@ -6,6 +6,13 @@
   <div class="ph-title"><h1>Tổng quan</h1><span class="sub">Agent nào đang làm gì, việc gì đang chờ bạn.</span></div>
   <div class="btn-row"><a class="btn" href="#quick">{{ mc.icon('send') }}Giao việc nhanh</a></div>
 </div>
+{% if fresh %}
+<section class="card attention" id="fresh-import">
+  <div class="card-head"><h2>{{ mc.icon('arrow-left') }} Nhập hub từ máy khác</h2><a class="btn primary" href="/hub-transfer#import">Nhập gói .cfhx{{ mc.icon('chev-right') }}</a></div>
+  <p>Hub này đang trống. Đã có hub cfharness ở máy khác? Xuất ở máy đó (Cài đặt → Chuyển hub, hoặc <code>cfharness hub export</code>) rồi tải file lên đây —
+    agent, team, task, tri thức, lịch, lịch sử và session Claude đi theo. Hoặc bắt đầu mới: tạo agent ở trang <a href="/agents">Agent</a>.</p>
+</section>
+{% endif %}
 <div id="overview" hx-get="/partials/overview" hx-trigger="every 3s" hx-swap="innerHTML">
 {% include "_overview.html" %}
 </div>
@@ -23,7 +30,7 @@
         <input type="hidden" name="csrf" value="{{ csrf }}">
         {% if mgr.web_conv %}<input type="hidden" name="c" value="{{ mgr.web_conv }}">{% endif %}
         <label class="sr-only" for="mgr-quick">Gửi nhanh cho điều phối viên</label>
-        <textarea id="mgr-quick" name="text" rows="2" required maxlength="8000" placeholder="Vd: “Có việc gì đang kẹt không?”"></textarea>
+        <textarea data-voice id="mgr-quick" name="text" rows="2" required maxlength="8000" placeholder="Vd: “Có việc gì đang kẹt không?”"></textarea>
         <button class="btn primary icon send" type="submit" title="Gửi" aria-label="Gửi">{{ mc.icon('arrow-up') }}</button>
       </form>
       {% elif mgr and mgr.available %}
@@ -38,7 +45,7 @@
       <form method="post" action="/do/run_start" class="form">
         <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/">
         <label>Agent<select name="agent" required>{% for a in agents %}<option value="{{ a }}">{{ a }}</option>{% endfor %}</select></label>
-        <label>Việc cần làm<textarea name="prompt" rows="3" required placeholder="Ví dụ: Tóm tắt README.md thành 5 gạch đầu dòng"></textarea></label>
+        <label>Việc cần làm<textarea data-voice name="prompt" rows="3" required placeholder="Ví dụ: Tóm tắt README.md thành 5 gạch đầu dòng"></textarea></label>
         <div class="form-actions"><button class="btn primary" type="submit">{{ mc.icon('play') }}Giao việc</button></div>
       </form>
       {% else %}<p class="muted">Tạo agent trước, rồi giao việc ở đây.</p>{% endif %}

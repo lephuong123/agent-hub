@@ -202,7 +202,8 @@ DEFAULTS: dict[str, Any] = {
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
                        "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
-                       "budget.warning", "budget.exceeded"],  # M4-B: digest + nhắc chọn golden task (Q-23)
+                       "budget.warning", "budget.exceeded",
+                       "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,
             "backoff_base_s": 2,
             "timeout_s": 10,
@@ -222,6 +223,8 @@ DEFAULTS: dict[str, Any] = {
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
                        "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
                        "budget.warning", "budget.exceeded",
+                       # thư mục chung Không gian số (filehub/): run đổi/xoá tệp, bản xung đột, tệp có thể chứa bí mật, chiều đẩy lên bị chặn
+                       "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked",
                        # vào/ra web + thiết bị tin cậy (web_events.py) — chỉ metadata, gửi vào nhóm chat riêng của hub nếu có
                        "web.login", "web.logout", "web.login_locked", "web.device_trusted", "web.device_reuse_detected", "web.device_revoked",
                        "web.devices_revoked_all"],
@@ -287,6 +290,10 @@ DEFAULTS: dict[str, Any] = {
     # KHÔNG có trong danh mục Cài đặt của web (settings_schema). Bind vẫn loopback — tunnel (cloudflared/tailscale) proxy về 127.0.0.1.
     "web": {
         "public_origin": None,  # vd "https://an.example.com" — chỉ https, không path; null = chỉ dùng trên máy này
+        # cổng cố định của web hub này (`cfharness web --json --ensure`, app desktop); null = 8765 cho home mặc định, hub khác
+        # cổng riêng tất định theo hub (web/desktop.py — tránh hai hub cùng cổng)
+        "port": None,
+        "display_name": None,  # tên hiển thị của hub (app desktop, ≤ 60 ký tự một dòng); null = tên thư mục HUB_HOME
         "session_max_age_s": 12 * 3600,  # tuổi tối đa của phiên web (giây)
         "session_idle_s": 3600,  # phiên không thao tác quá N giây → đăng nhập lại (polling/SSE không gia hạn)
         # header IP thật của client — CHỈ đọc khi có public_origin VÀ request tới từ loopback (tunnel chạy trên máy này)
@@ -585,6 +592,10 @@ DEFAULTS: dict[str, Any] = {
         "compresslevel": 5,
         "tick_s": 60,
     },
+    # Xuất/nhập hub (hub_transfer_web.py, web /hub-transfer): trần cỡ gói tải lên qua web (MB) — kiểm Content-Length trước khi nhận
+    "transfer": {
+        "max_upload_mb": 4096,
+    },
     # Tổng quan máy (admin_overview.py, docs/dev-notes/admin-overview.md): mỗi hub xuất bản tóm tắt CHỈ SỐ LIỆU ra thư mục chung để
     # người quản trị xem mọi hub trên máy. Chỉ người đặt (`config.set` ∈ HUMAN_ONLY; nhánh ∈ integrity.SECURITY_KEYS).
     "admin_export": {
@@ -592,6 +603,11 @@ DEFAULTS: dict[str, Any] = {
         "interval_s": 60,  # 10..3600
         "dir": "/Users/Shared/cfharness/status",  # admin tạo sẵn (nhóm cfharness-admin); hub admin cũng ĐỌC thư mục này
         "group": "cfharness-admin",  # nhóm của file 0640; không có → giữ nhóm hiện có + cảnh báo
+    },
+    # Directory hub cho app desktop (admin_directory.py, C5 — docs/dev-notes/desktop-app.md): hub của ADMIN phát danh mục hub có origin công
+    # khai ở `/.well-known/cfharness-directory?t=<token>`. Chỉ người đặt; nhánh ∈ integrity.SECURITY_KEYS.
+    "admin_directory": {
+        "name": None,  # tên danh mục (một dòng ≤ 60); null = "cfharness"
     },
     # Quản trị máy — cảnh báo + lịch sử ở hub của ADMIN (admin_watch.py, docs/dev-notes/admin-users.md). Chỉ có tác dụng khi daemon thuộc
     # nhóm cfharness-admin. Chỉ người đặt; nhánh ∈ integrity.SECURITY_KEYS.
@@ -637,6 +653,27 @@ DEFAULTS: dict[str, Any] = {
         "secret_allow": [".env.example", ".env.sample", ".env.template", ".env.dist", ".env.default", ".env.defaults", "*.pub"],
         "cloud_download": True,  # cho tải file về khi dùng web qua link public (xem trong trình duyệt luôn được)
         "max_download_mb": 10,  # trần tải về / ảnh / PDF (1–50 MB)
+    },
+    # Thư mục dùng chung với "Không gian số" (docs/dev-notes/filehub.md): binary `tang-thu-sync-headless` chạy dưới daemon, đồng bộ 2 chiều
+    # ~/KhongGianSo/<tên> ↔ thư mục người là Owner. Nhánh `filehub` ∈ integrity.SECURITY_KEYS — chỉ người đổi (CLI `cfharness filehub …`).
+    "filehub": {
+        "enabled": False,  # `cfharness filehub setup` bật
+        "server": None,  # vd https://thumucai.trungtamdhs.com
+        "sync_binary": None,  # đường dẫn tuyệt đối tang-thu-sync-headless
+        "sync_min_version": "0.1.0",  # `--version` thấp hơn → không chạy, báo ở thẻ Cài đặt
+        "device_name": None,  # null = "cfharness · <tên máy>"
+        "local_parent": "~/KhongGianSo",  # thư mục cha của bản sao cục bộ (phải trong workspace.confine nếu bật giam; không trong HUB_HOME)
+        "folders": [],  # [{name, root_id, ws_id, local_path}] — do `filehub setup|add|remove` ghi
+        "poll_s": None,  # --poll của binary (null = mặc định của binary)
+        "max_delete_batch": 0,  # --max-delete-batch: 0 = tắt; > 0 → xoá quá ngưỡng thì dừng chiều đẩy lên chờ `filehub resume --root`
+        "extra_ignore": [],  # mẫu bỏ qua thêm (kiểu .gitignore) cho chiều đẩy lên — cộng vào ignore.txt sinh từ files.secret_patterns
+        "restart_backoff_s": [1, 300],  # restart tiến trình sync: min..max giây (luỹ thừa 2)
+        "stop_grace_s": 15,  # SIGTERM → chờ → SIGKILL
+        "tick_s": 1.0,  # nhịp đọc status.json
+        "presence_ttl_s": 600,  # dải "cfharness đang làm việc" trên Không gian số — hub làm mới trước khi hết hạn
+        "steer_on_cloud_change": True,  # người sửa tệp trên Không gian số trong lúc run giữ khoá → steer câu cố định
+        "secret_scan_max_bytes": 5000000,  # quét GIÁ TRỊ secret trên tệp mới/sửa sau run (tệp lớn hơn bỏ qua)
+        "login_url_timeout_s": 30,
     },
     "workspace": {
         # MGR-1: gốc người cho phép đặt workspace `dir`. Ngoài ra luôn cho vùng scratch/worktree/eval của hub. Người thêm gốc tại đây (chỉ người).
@@ -919,6 +956,10 @@ def validate_setting(key: str, value: Any) -> None:
         from .backup import validate_setting as _validate_backup
 
         _validate_backup(key, value)
+    if key == "admin_directory" or key.startswith("admin_directory."):
+        from .admin_directory import validate_setting as _validate_directory
+
+        _validate_directory(key, value)
     if key == "admin_watch" or key.startswith("admin_watch."):
         _validate_admin_watch(key, value)
     if key == "files" or key.startswith("files."):

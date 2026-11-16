@@ -14,9 +14,13 @@ import unicodedata
 from typing import List, Optional, Tuple
 
 from .. import names as _names
+from .. import redact as _redact
 
-# Hard cap on scanned text: scanners are advisory, so bound worst-case runtime.
+# Cửa sổ quét: mỗi lần regex chạy trên tối đa MAX_SCAN_CHARS ký tự (chặn thời gian xấu nhất của một lần search), nhưng
+# `scan` trượt cửa sổ trên TOÀN BỘ nội dung (chồng lấn `_SCAN_OVERLAP` để mẫu nằm vắt qua ranh giới vẫn khớp) — trước đây
+# nội dung bị cắt ở 64K trong khi SKILL.md được tới `skill_chars` (100K): injection đặt sau mốc 64K lọt qua.
 MAX_SCAN_CHARS = 65_536
+_SCAN_OVERLAP = 8_192  # > độ dài khớp dài nhất của các mẫu (~2×2048 ký tự)
 # Bounded filler between key attack words (unbounded ``(?:\w+\s+)*`` backtracks badly).
 _FILLER = r"(?:\w+\s+){0,8}"
 # Env var reference ending in a secret-ish suffix (see exfil comment below).
@@ -127,6 +131,16 @@ def _compile() -> dict[str, list[tuple[re.Pattern, str]]]:
 
 _COMPILED = _compile()
 
+# Token bí mật dạng THÔ (khoá Anthropic/OpenAI, GitHub, Slack, AWS, Google, JWT…) không bao giờ được vào memory/skill:
+# dùng lại mẫu che secret của `redact.py`, thêm ranh giới trái để chuỗi như "risk-assessment-…" không khớp nhầm `sk-…`.
+_RAW_SECRET = re.compile(r"(?<![A-Za-z0-9_\-])(?:" + _redact._SECRET_VALUE.pattern + ")")
+# Giá trị mẫu trong tài liệu (`Bearer YOUR_ACCESS_TOKEN`, `AKIA…EXAMPLE`, `sk-xxxx…`) không phải secret — không chặn mục chứa nó.
+_PLACEHOLDER = re.compile(r"EXAMPLE|YOUR_|PLACEHOLDER|REDACTED|XXXXXX|<[^>]*>", re.IGNORECASE)
+
+
+def _has_raw_secret(content: str) -> bool:
+    return any(not _PLACEHOLDER.search(m.group(0)) for m in _RAW_SECRET.finditer(content))
+
 # Nội dung tri thức dặn agent sửa chính sách an toàn của hub (FR-SG-05, FR-LN-07 mục 8).
 _CLI_NAMES = _names.alt(_names.HUB_CLI_NAMES)  # tên mới + tên cũ (đổi tên cfharness)
 _HUB = rf"(?:{_names.alt(_names.HUB_HOME_DIRNAMES)}|{_CLI_NAMES}|hub_home|HUB_HOME)"
@@ -143,17 +157,30 @@ POLICY_TOUCH_PATTERNS: list[tuple[re.Pattern, str]] = [
 def scan_load(content: str) -> list[str]:
     """Quét lúc NẠP tri thức vào prompt (như Hermes quét memory lúc load): injection/Unicode ẩn — KHÔNG gồm mẫu chạm chính
     sách (đó là luật cho thay đổi do học, mục người viết tay nói về policy/ không phải mối đe doạ lúc nạp)."""
-    return [x for x in scan(content) if x not in ("policy_touch", "self_escalation")]
+    return [x for x in scan(content) if x not in ("policy_touch", "self_escalation", "raw_secret")]
 
 
 def scan(content: str, scope: str = "strict") -> list[str]:
-    """Id các mẫu nguy hiểm khớp trong `content` (rỗng = sạch)."""
+    """Id các mẫu nguy hiểm khớp trong `content` (rỗng = sạch). Quét TOÀN BỘ nội dung theo cửa sổ chồng lấn."""
     if not content:
         return []
-    content = content[:MAX_SCAN_CHARS]
+    if len(content) <= MAX_SCAN_CHARS:
+        return _scan_window(content, scope)
+    found: list[str] = []
+    step = MAX_SCAN_CHARS - _SCAN_OVERLAP
+    for start in range(0, len(content), step):
+        found += _scan_window(content[start:start + MAX_SCAN_CHARS], scope)
+        if start + MAX_SCAN_CHARS >= len(content):
+            break
+    return list(dict.fromkeys(found))
+
+
+def _scan_window(content: str, scope: str) -> list[str]:
     found = [f"invisible_unicode_U+{ord(ch):04X}" for ch in sorted(set(content) & INVISIBLE_CHARS)]
     found += [f"tag_unicode_U+{ord(ch):05X}" for ch in sorted({c for c in content if ord(c) in _TAG_RANGE})][:3]
     norm = unicodedata.normalize("NFKC", content)
     found += [pid for rx, pid in _COMPILED[scope] if rx.search(norm)]
     found += [pid for rx, pid in POLICY_TOUCH_PATTERNS if rx.search(norm)]
+    if _has_raw_secret(content):
+        found.append("raw_secret")
     return list(dict.fromkeys(found))

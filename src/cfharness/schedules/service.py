@@ -130,7 +130,7 @@ class ScheduleService:
 
     # ------------------------------------------------------------------ biểu thức
     def _spec(self, r: dict[str, Any]) -> cron.Spec:
-        return cron.parse(r["expr"], tz=cron.get_tz(r.get("tz")))
+        return cron.parse(r["expr"], tz=cron.get_tz(r.get("tz")), strict=False)  # bản ghi cũ: không làm hỏng list/tick
 
     def _next(self, r: dict[str, Any], after: datetime) -> datetime | None:
         spec = self._spec(r)
@@ -431,9 +431,13 @@ class ScheduleService:
             self._task = None
 
     async def _loop(self) -> None:
+        from ..runs import export_quiesced
+
         while True:
             try:
                 await asyncio.sleep(max(1.0, float(self.cfg("tick_s"))))
+                if export_quiesced(self.hub):  # đang xuất gói hub → bỏ lượt (hub_transfer)
+                    continue
                 self.tick()
             except asyncio.CancelledError:
                 raise

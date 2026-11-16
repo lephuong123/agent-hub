@@ -109,6 +109,10 @@ class Hub:
         from .backup import attach as _attach_backup
 
         _attach_backup(self)
+        # Thư mục dùng chung với "Không gian số" (`hub.filehub`: giám sát binary sync, trạng thái, presence, steer, báo sau run) — filehub/
+        from .filehub import attach as _attach_filehub
+
+        _attach_filehub(self)
         # Quản trị máy (plan-admin-users): ESTOP admin bằng file cờ (`hub.admin_control`), chính sách root (`hub.admin_policy`), audit metadata
         # (`hub.admin_audit`), cảnh báo + lịch sử cho hub của admin (`hub.admin_watch`) — admin_control.py, admin_policy.py, admin_audit.py, admin_watch.py
         from .admin_audit import attach as _attach_admin_audit
@@ -150,6 +154,10 @@ class Hub:
     # -- lifecycle
     def start(self) -> None:
         n = self.runs.reconcile_on_start()
+        try:  # S8-B: ledger write-ahead — hoàn tất / bỏ / gắn cờ thay đổi học dở dang khi daemon chết giữa Ledger.apply
+            self.learning.ledger.recover_pending()
+        except Exception:  # pragma: no cover
+            log.exception("không khôi phục được ledger_pending")
         try:  # H-12: mcp.json (secret đã resolve) của run cũ còn sót khi daemon chết → xoá
             from .guard.integrity import cleanup_runtime_dirs
 
@@ -159,6 +167,12 @@ class Hub:
         except Exception:  # pragma: no cover
             log.exception("không dọn được runtime/")
         self.integrity.start()  # SEC: so policy/ với bản chuẩn + vòng kiểm nền
+        try:  # hub clone PR5: lần đầu lên sau `hub import` → viết lại đường dẫn máy cũ trong tri thức qua Ledger (actor import)
+            from .import_followups import process as _import_followups
+
+            _import_followups(self)
+        except Exception:  # pragma: no cover — không chặn daemon khởi động; còn `status != done` → thử lại lần sau
+            log.exception("không xử lý được import_followups")
         try:  # P2.4: đăng ký HUB_HOME vào registry hub của user OS → hub khác chặn đọc/ghi home này
             from .confine import register_home
 
@@ -202,6 +216,7 @@ class Hub:
         self.auto_resume.stop()  # lịch hẹn vẫn ở hub_state, lần khởi động sau chạy tiếp
         await self.manager.stop()  # M7
         await self.questions.stop()
+        await self.filehub.stop()  # type: ignore[attr-defined]  # SIGTERM tiến trình sync (dừng êm, không bỏ dở commit)
         await self.accounts.close_all_logins()  # type: ignore[attr-defined]  # kill tiến trình `claude setup-token` đang chờ code
         await self.runs.shutdown()
         self.integrity.stop()
@@ -259,4 +274,5 @@ class Hub:
             "epoch_usage": self.aggregator.snapshot(),
             "subscribers": self.bus.subscriber_count,
             "sandbox_enabled": bool((self.config.get("guard.sandbox") or {}).get("enabled", True)),
+            "migrated_to": self.runs.frozen,  # chuyển nhà (hub_freeze.py): hub đóng băng — banner ở CLI/TUI/web
         }

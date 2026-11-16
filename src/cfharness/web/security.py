@@ -219,7 +219,8 @@ def state_path(paths: HubPaths) -> Path:
     return paths.home / "auth" / "web.json"
 
 
-def write_state(paths: HubPaths, *, host: str, port: int, key: bytes, name: str = WEB_HOST, public_origin: str | None = None) -> Path:
+def write_state(paths: HubPaths, *, host: str, port: int, key: bytes, name: str = WEB_HOST, public_origin: str | None = None,
+                nonce: str | None = None) -> Path:
     d = paths.home / "auth"
     d.mkdir(parents=True, exist_ok=True)
     os.chmod(d, 0o700)
@@ -229,7 +230,7 @@ def write_state(paths: HubPaths, *, host: str, port: int, key: bytes, name: str 
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump({"v": 1, "pid": os.getpid(), "host": host, "name": name, "port": port, "key": key.hex(), "public_origin": public_origin,
-                   "started_at": time.time()}, f)
+                   "started_at": time.time(), **({"nonce": nonce} if nonce else {})}, f)
     os.replace(tmp, p)
     return p
 

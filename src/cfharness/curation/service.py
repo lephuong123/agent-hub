@@ -627,9 +627,13 @@ class CurationService:
             self._task = None
 
     async def loop(self) -> None:
+        from ..runs import export_quiesced
+
         while True:
             try:
                 await asyncio.sleep(float(self.cfg("tick_s") or 300))
+                if export_quiesced(self.hub):  # đang xuất gói hub → bỏ lượt (hub_transfer)
+                    continue
                 await self.tick()
             except asyncio.CancelledError:
                 raise

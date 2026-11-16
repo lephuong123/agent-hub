@@ -104,14 +104,16 @@
     <div class="composer-wrap">
       <button type="button" class="mgr-jump" id="mgr-jump" hidden title="Về tin mới nhất" aria-label="Về tin mới nhất">{{ mc.icon('chev-down', 'sm') }}<span>Tin mới nhất</span></button>
       <form method="post" action="/manager/send" class="mgr-form" id="mgr-form" enctype="multipart/form-data">
-        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="c" value="{{ conv or '' }}"><input type="hidden" name="w" value="{{ wsx.id if wsx and not conv else '' }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="c" value="{{ conv or '' }}"><input type="hidden" name="w" value="{{ wsx.id if wsx and not conv else '' }}"><input type="hidden" name="voice" value="">
         <label class="sr-only" for="mgr-text">Tin nhắn cho điều phối viên</label>
         <ul class="mgr-files" id="mgr-files" hidden aria-label="Tệp đính kèm"></ul>
         <textarea id="mgr-text" name="text" rows="1" maxlength="8000" placeholder="{{ ('Nhắn trong ' ~ (wsx.key or wsx.title) ~ '…') if wsx else 'Nhắn điều phối viên…' }}"></textarea>
         <div class="composer-bar">
           <input type="file" id="mgr-file" name="attach" multiple class="sr-only" tabindex="-1">
           <label for="mgr-file" class="btn ghost sm icon attach" id="mgr-attach" title="Đính kèm ảnh, tệp văn bản, PDF/Excel/Word/PowerPoint (hoặc kéo–thả, dán ảnh)" tabindex="0" role="button">{{ mc.icon('clip') }}<span class="sr-only">Đính kèm tệp</span></label>
-          <span class="composer-hint">Enter để gửi · Shift+Enter xuống dòng · Esc dừng · kéo–thả hoặc dán ảnh để đính kèm</span>
+          <button type="button" class="btn ghost sm icon voice-mic" id="mgr-mic" data-voice-for="mgr-text" hidden aria-pressed="false" aria-label="Nhập bằng giọng nói" title="Nói để nhập (tiếng Việt) — bấm để bật/tắt, giữ để nói-thả; hoặc giữ Space khi ô trống">{{ mc.icon('mic') }}</button>
+          <span class="composer-hint">Enter để gửi · Shift+Enter xuống dòng · Esc dừng · giữ Space (ô trống) để nói · kéo–thả hoặc dán ảnh để đính kèm</span>
+          <button type="button" class="btn ghost sm icon voice-wave" id="mgr-voice" hidden aria-pressed="false" aria-label="Trò chuyện bằng giọng nói" title="Trò chuyện bằng giọng nói — nói, điều phối viên trả lời và đọc to">{{ mc.icon('wave') }}</button>
           <button class="btn primary send" type="submit" id="mgr-send" title="Gửi" aria-label="Gửi">{{ mc.icon('arrow-up', 'i-send') }}{{ mc.icon('stop', 'i-stop') }}</button>
         </div>
       </form>

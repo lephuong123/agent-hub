@@ -82,6 +82,8 @@ def format_message(ev: HubEvent) -> str | None:
         if p.get("on"):
             return f"🛑 Người quản trị máy đã BẬT ESTOP cho hub của bạn (mã: {rc}) — run mới bị chặn, run đang chạy đã dừng."
         return "▶️ Người quản trị máy đã gỡ ESTOP — hub chạy lại bình thường."
+    if ev.type.startswith("filehub."):  # thư mục chung Không gian số — dòng chữ CỐ ĐỊNH, link là chữ (không nút)
+        return _filehub_text(ev.type, p, agent)
     if ev.type == "auth.denied":
         return f"⛔ Đã chặn *{agent}* dùng `{p.get('method')}` — thao tác này chỉ người được làm."
     if ev.type == "run.repeated_failure":
@@ -121,6 +123,30 @@ def format_message(ev: HubEvent) -> str | None:
         if not p.get("candidates"):
             lines.append(f"• viết tay: `cfharness golden add {agent} --prompt \"…\" --regex \"…\"`")
         return "\n".join(lines)
+    return None
+
+
+def _filehub_text(etype: str, p: dict[str, Any], agent: str) -> str | None:
+    from ..termsafe import one_line
+
+    folder = one_line(p.get("folder") or "thư mục chung", 80)
+    url = p.get("url") if isinstance(p.get("url"), str) and p["url"].startswith(("https://", "http://")) else None
+    link = f"\nMở: {one_line(url, 300)}" if url else ""
+    paths = [one_line(x, 120) for x in (p.get("paths") or [])[:5] if isinstance(x, str)]
+    more = f" (+{int(p.get('count') or 0) - len(paths)})" if int(p.get("count") or 0) > len(paths) else ""
+    lst = f"\n`{_clip(', '.join(paths), 400)}`{more}" if paths else ""
+    if etype == "filehub.changed":
+        return f"📁 {int(p.get('count') or 0)} tệp trong «{folder}» đã đổi (do *{agent}*){link}"
+    if etype == "filehub.deleted":
+        return (f"🗑 *{agent}* đã xoá {int(p.get('count') or 0)} tệp trong «{folder}»{lst}\n"
+                f"Khôi phục được ở thùng rác Không gian số.{link}")
+    if etype == "filehub.secret_warning":
+        return f"🔐 Tệp trong «{folder}» có thể chứa bí mật — đã lên Không gian số, hãy kiểm tra:{lst}{link}"
+    if etype == "filehub.conflict":
+        return f"⚠️ Bản xung đột trong «{folder}»: `{_clip(one_line(p.get('path'), 200), 200)}` — người và agent cùng sửa một tệp, không mất bản nào."
+    if etype == "filehub.blocked":
+        return (f"⛔ Đã dừng đẩy lên Không gian số cho «{folder}» (xoá hàng loạt). Kiểm tra rồi chạy: "
+                f"`cfharness filehub resume --root {one_line(p.get('root_id'), 64)}`")
     return None
 
 

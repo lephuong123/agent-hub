@@ -37,6 +37,15 @@ phát trong `RunManager._finalize` sau khi ghi DB (event `run.completed` của a
 - Hook lỗi/timeout là fail-OPEN — hook guard của M1 phải tự fail-closed.
 - Biến môi trường phiên Claude Code bao ngoài (`CLAUDECODE`, `CLAUDE_CODE_*`…) bị loại khỏi tiến trình con (`runtime.claude.env_strip`).
 
+## Phát hành — viết release note TRƯỚC
+Release note theo từng phiên bản ở `CHANGELOG.md` (gốc repo, tiếng Việt, mục mới nhất trên cùng). Quy trình bắt buộc khi phát hành `vX.Y.Z`:
+1. **Trước tiên** viết release note: đổi mục "Chưa phát hành" thành `## vX.Y.Z — <YYYY-MM-DD>`, bổ sung đủ mọi PR/thay đổi kể từ tag trước
+   (`git log --first-parent <tag trước>..HEAD`), nhóm theo chức năng, viết theo góc nhìn người dùng, ghi số PR, có mục "Lưu ý khi cập nhật"
+   nếu có migration / cấu hình phải sửa tay. Chưa có release note thì KHÔNG nâng phiên bản, KHÔNG tạo tag/GitHub Release.
+2. Sau đó mới nâng `version` (`pyproject.toml`, `src/cfharness/__init__.py`, `uv.lock`), tag ở README và `scripts/setup-hub-user.sh`.
+3. Thân GitHub Release = chép nguyên mục của phiên bản đó trong `CHANGELOG.md` (không dùng "Generate release notes" thay thế).
+Trong lúc làm việc: PR có thay đổi người dùng thấy được thì thêm một dòng vào mục "Chưa phát hành".
+
 ## Lệnh
 ```bash
 uv sync
@@ -591,6 +600,85 @@ Chi tiết, danh sách gồm/bỏ, giới hạn: `docs/dev-notes/backup.md`. Kh�
 - Cập nhật: `update.start` tạo bản `pre-update` trước khi chạy helper; helper (chỉ stdlib) dò `hub.ping`, không lên → cài lại bản cũ + khôi phục hub.db
   khi `user_version` đã tăng; `cfharness update --rollback` (RPC `update.rollback`). Pha mới của helper mà daemon phải chờ → `daemon._UPDATE_BUSY_PHASES`.
 
+## Xuất / nhập toàn bộ hub sang máy khác — `hub_transfer.py` (PR1–PR6 của `docs/dev-notes/plan-hub-clone.md`)
+Tài liệu tổng hợp (người dùng + kỹ thuật + giới hạn): `docs/dev-notes/hub-clone.md`. Không migration. Test: `tests/test_hub_transfer.py`,
+`tests/test_hub_transfer_secrets.py`, `tests/test_hub_transfer_sessions.py`, `tests/test_hub_transfer_cross_os.py`, `tests/test_hub_transfer_move.py`,
+`tests/test_web_hub_transfer.py`, `tests/test_sec_auth.py::test_hub_transfer_web_rpcs_human_only`.
+- `hub_transfer.py`: gói `.cfhx` (tar không nén ngoài, từng phần tử gzip riêng, `MANIFEST.json` cuối, sha256 nội dung gốc, `sections` có `prefix`
+  — phần mới thêm sau là mục `sections` mới, bản cũ bỏ qua phần `optional`). Xuất = RPC `hub.export` (HUMAN_ONLY, tự audit; làm lặng bằng
+  `RunManager.quiesced` rồi thả trong `finally`) hoặc ngoại tuyến (giữ `daemon.lock`); chỉ ghi vào `HUB_HOME/exports/`. Nhập CHỈ ngoại tuyến từ CLI
+  (`hub import`, không RPC): kiểm gói → stage `HUB_HOME/.import-*` → `pathmap` trên stage → dọn `MACHINE_STATE` → áp chế độ (`clone` mặc định)
+  → chuyển vào chỗ (`backup._apply_stage`) → `rebaseline_offline`. `hub_transfer_cli.py`: `cfharness hub export|import` (∈ `HUB_HUMAN_ONLY_CLI`).
+- `pathmap.py`: viết lại đường dẫn nhiều cặp trong MỘT lượt (dùng chung với `home_migrate`). Bảng append-only/`HISTORY_COLS` giữ nguyên; tri thức
+  thuộc ledger (file MEMORY/SKILL/config agent, bảng `mem_*`) KHÔNG viết lại tay — chỉ ghi `hub_state.import_followups`.
+- PR2 `transfer_secrets.py`: phần `secrets.enc` = scrypt(n=2^17,r=8,p=1) → AES-256-GCM, AAD = id gói + sha256 manifest (bỏ đúng mục của chính
+  `secrets.enc`) → tráo bất kỳ phần nào khác = giải mã thất bại. Bản rõ chỉ theo danh sách trắng `allowed_payload_path` (`secrets/<NAME>`,
+  `.meta.json`, `auth/totp.json`, `mcp_server/tokens.json`) — KHÔNG BAO GIỜ `auth/web.json`, thiết bị tin cậy, `<socket>.auth`. Passphrase CHỈ
+  trong tiến trình CLI của người (getpass / `--passphrase-file` 0600; parser `allow_abbrev=False`): daemon đóng gói phần không mật, CLI gắn
+  `secrets.enc` (`seal_package`) — passphrase không qua RPC/audit/log/DB (`wrap_with_audit` vẫn gỡ khoá `passphrase` phòng hờ). Nhập: giải mã
+  ngay sau kiểm gói (sai → từ chối, chưa ghi gì), ghi secret SAU CÙNG qua `SecretStore.set_bytes` (0600, đăng ký bộ che) có hoàn tác. `clone`
+  bỏ `TELEGRAM_*`/`SLACK_*`/`MCP_OAUTH_*` (`transfer_secrets.CLONE_SKIP_PREFIXES`), giữ token MCP tĩnh + `CLAUDE_ACCT_*`/`CLAUDE_CODE_OAUTH_TOKEN`;
+  thêm loại secret mới của hub → phân loại ở đó + ca trong test. `clone` còn huỷ approval/câu hỏi đang chờ (`cancelled`, KHÔNG `expired`) +
+  run `waiting_human` → `interrupted`. Nhập lỗi sau khi đã ghi → `_rollback_import` (bản `pre-restore` / home trống). Vòng nền ghi tri thức/DB
+  kiểm `runs.export_quiesced(hub)` đầu mỗi lượt — thêm vòng nền ghi mới → thêm dòng kiểm + vào danh sách trong test.
+- PR3 `transfer_sessions.py`: phần `claude/` (optional) = session Claude Code của hub (`core`: hội thoại điều phối viên chưa lưu trữ + task chưa
+  xong + run dở/`pending_resume`; `full`: mọi session_id trong `sessions`/`runs`/`manager_conversations`) — chỉ tìm đúng `<sid>.jsonl` hub biết
+  dưới `<claude home>/projects/*/` (+ cây `<sid>/`), không theo symlink, trần cỡ, che secret THEO GIÁ TRỊ lúc xuất. Claude home =
+  `CLAUDE_CONFIG_DIR` hoặc `~/.claude` (chỉ đọc/ghi file — không bao giờ đặt biến này cho tiến trình `claude`); test dùng
+  `CFHARNESS_TEST_CLAUDE_HOME` (conftest trỏ thư mục tạm — test KHÔNG đụng `~/.claude` thật). Nhập: `encode_cwd(pathmap(cwd))` (quy tắc
+  Claude Code: đơn vị UTF-16 ngoài `[A-Za-z0-9]` → `-`, > 200 → cắt + `-`base36(hash Java); đổi quy tắc → sửa `encode_cwd` + fixture tên
+  thật trong test), viết lại từng dòng JSON, `O_EXCL` 0600 / thư mục mới 0700, sid trùng → bỏ; ghi SAU hub.db, TRƯỚC secret, có hoàn tác.
+- PR4 khác OS (§5b): `pathmap.PathMap` biết CẢ HAI kiểu bất kể OS đang chạy (kiểu suy từ chuỗi: `path_style`; KHÔNG dùng `IS_WINDOWS`);
+  cặp Windows khớp dạng thô/JSON-escape/`C:/…`, ổ đĩa không phân biệt hoa/thường; khác kiểu → sau tiền tố đổi dấu phân cách CHỈ ở phần đuôi
+  của token đường dẫn (`_tail_end`: dừng ở khoảng trắng — trừ đoạn tương đối kiểu `Application Support/x` —, nháy, `<>|,;:&`, `\` lạ,
+  ngoặc đóng lẻ); POSIX → Windows trong JSON (giá trị DB là JSON hợp lệ, file `.json`) / nháy kép YAML → dạng `\\`. POSIX → POSIX giữ
+  đúng hành vi cũ (`home migrate`). Kiểm tuyệt đối đa kiểu: `pathmap.is_abs` (không `os.path.isabs`). `transfer_os.py`: mọi hàm nhận
+  `target_os` làm THAM SỐ (test mô phỏng Windows trên macOS); `plan_names` kiểm tên phần tử TRƯỚC khi giải nén (Windows: `<>:"|?*`, điều
+  khiển, CON/NUL/COM1…, đuôi `.`/khoảng trắng; ổ không phân biệt hoa/thường — `fs_case_insensitive` dò không ghi): tri thức (bên trong
+  `skills/`, `.archive/`, mục `trash/`) → đổi tên tất định trong STAGE (thư mục skill giữ `NAME_RE`: `con` → `con-skill`; `skills.name|path`,
+  frontmatter; KHÔNG qua ledger) + `import_followups.renamed`; `claude/` → bỏ file; còn lại → từ chối cả gói trước khi ghi. MCP stdio thiếu
+  lệnh (mọi lần nhập) → `probe_error` "[hub] …" (không có cột bật/tắt). Thêm vùng tri thức đổi tên được → `transfer_os._kind` + ca test.
+- PR5 chuyển nhà `hub_freeze.py`: `hub export --for move` → sau khi gói qua kiểm tra, `hub_state.migrated_to {at, export_id, sha256, sealed…}`
+  (trong daemon: NGAY trong cửa sổ làm lặng; ngoại tuyến: trước khi nhả `daemon.lock`; CLI gắn `secrets.enc` xong → `hub.freeze` cập nhật sha256
+  cùng export_id, gắn hỏng → tự gỡ). Đóng băng = `RunManager.frozen`: `submit` từ chối MỌI kind (`Blocked` + `data.migrated_to`), `tick` không khởi
+  chạy hàng đợi, `recovery.resume_interrupted` không resume, `runs.export_quiesced` = đang xuất HOẶC đóng băng (mọi vòng nền ghi bỏ lượt) — RIÊNG
+  sao lưu dùng `runs.exporting` (vẫn chạy khi đóng băng). Telegram/Slack: `token()` trả None khi đóng băng (trừ `ignore_enabled` của người),
+  `QueuedNotifier` bỏ mọi tin; freeze/unfreeze `kick()` vòng nhận. Banner: `hub.status.migrated_to`, `tui.snapshot.hub.migrated_to`, web
+  `base.html` (RPC đọc `hub.frozen`). Gỡ CHỈ người: `hub.unfreeze` (HUMAN_ONLY, tự audit) ← `cfharness hub unfreeze` (y/N). Event `hub.frozen|unfrozen`.
+  Thêm đường tạo run/kênh gửi ra ngoài mới → phải đi qua `RunManager.submit` / `token()` / `QueuedNotifier` (hoặc tự kiểm `hub_freeze.frozen`).
+- PR5 `transfer_repos.py`: phần `repos.json` (optional) — repo workspace NGOÀI HUB_HOME (agent `workspace_default`, team `policies.workspace`, task
+  mở, `cwd` run chưa xong): gốc git, remote ĐÃ CHE (`mask_remote`: bỏ userinfo URL, token query, che theo giá trị secret), nhánh, HEAD, dirty;
+  git qua `GIT_SAFE_ARGS`/`GIT_ENV`. KHÔNG BAO GIỜ đóng gói repo. Nhập: `plan` (thiếu → lệnh `git clone`, dirty → cảnh báo), `pause_missing` trên
+  stage DB (agent thiếu workspace → `paused` + `hub_state.import_paused`; `agents.set_paused(False)` gỡ lý do), `--clone-repos` SAU khi hub.db vào
+  chỗ (không bao giờ vào thư mục đã có, lỗi không hoàn tác lần nhập) → `unpause_present`. `hub_state.import_repos` cho doctor.
+- PR5 `import_followups.py` (gọi ở `Hub.start`): `hub_state.import_followups` → viết lại đường dẫn bằng `map` của lần nhập qua `Ledger.apply` actor
+  `ledger.IMPORT_ACTOR="import"` — memory (file, rollback theo mục), skill (tree), SOUL (config), graph fact/thực thể SỐNG (graph, sửa hàng tại
+  chỗ, rollback theo hàng); config.yaml agent dựng lại từ DB; episode/fact đã đóng/`.archive/` = lịch sử, giữ nguyên. `import` KHÔNG thuộc
+  `AUTO_CHANGE_ACTORS` (do người khởi xướng → không bao giờ bị tự rollback). Idempotent, lỗi từng mục → `status=partial` + `retry` (thử lại lần
+  daemon lên sau), audit `hub.import_followups`.
+- PR5 `hub_doctor.py`: `cfharness hub doctor [--probe] [--json]` + RPC `hub.doctor` (HUMAN_ONLY, chỉ đọc, không probe mạng) — đọc DB chỉ đọc,
+  config, TÊN secret (không bao giờ giá trị); không gọi `claude` ngoài `--version` (và `auth status` khi `--probe`). Tự chạy sau `hub import`.
+  `HUB_HUMAN_ONLY_CLI["hub"] = None` (mọi lệnh con `hub …` chặn với agent).
+- PR6 web — `hub_transfer_web.py` (daemon) + `web/transfer_pages.py` (`/hub-transfer`, thẻ ở Cài đặt, thẻ "Nhập hub từ máy khác" ở trang chủ khi
+  `hub_fresh`) + `static/transfer.js`. RPC `hub.transfer_status|export_start|export_status|import_plan|import_start|import_status` (∈ HUMAN_ONLY,
+  `HUMAN_ONLY_TRANSFER_WEB`; ghi = `MUTATING_TRANSFER_WEB`, tự audit, `passphrase` bị pop trước khi chạy). Xuất NỀN trong daemon (`ExportJobs`:
+  `export_in_daemon` → `seal_package` TRONG daemon → freeze/unfreeze như CLI). Passphrase web CHỈ ở bước 2 (`Action.reenter` — ô password trống;
+  `Action.secret_fields` lọc cả trang bước 1 và bước 2 khỏi `carry()`). Tải lên = XHR thân thô (`origin_guard` + CSRF/khoá qua header, Content-Length
+  ≤ `transfer.max_upload_mb` trước khi đọc, `.part` 0600 → rename, lỗi → xoá); tải về = token một lần trong RAM web (gắn `Session.sid`, 10 phút)
+  → stream `exports/<id>.cfhx` (`ID_RE`, `O_NOFOLLOW`) — hai chỗ DUY NHẤT web đụng file của hub (gói, không bao giờ hub.db). Nhập: `hub.import_start`
+  kiểm nhanh (id gõ lại, passphrase, hub trống|replace, run|stop) → `imports/<id>/job.json` (không passphrase) + `pass` 0600 → spawn
+  `python -m cfharness hub import-job <id>` → daemon tự dừng; job xoá `pass` ngay khi đọc, chờ `daemon.lock`, gọi `import_package`, LUÔN khởi
+  động lại daemon, ghi `state.json` (danh sách trắng `STATE_KEYS`/`REPORT_KEYS`). `daemon.run_foreground` → `hold_while_importing` (job sống →
+  daemon mới chờ); `register_rpc` → `cleanup` (`pass` sót, job chết → failed, gói tải lên > 24 h). Web không đọc `state.json` trực tiếp (như
+  `update_pages`: daemon dừng → "đang dừng", poll). Thêm RPC web → `HUMAN_ONLY_TRANSFER_WEB` (+ `MUTATING_…`) + ca trong 2 file test trên; khoá
+  mới của state/kết quả → danh sách trắng; pha job mà daemon phải chờ → `IMPORT_BUSY_PHASES`.
+- filehub (Không gian số): token thiết bị `secrets/filehub/` + `filehub/` KHÔNG BAO GIỜ vào gói (cả move); nhập (`_adjust_filehub`) → `filehub.enabled=false`,
+  `device_name=null`, clone gỡ `folders` (move giữ, đã pathmap), `hub_state.import_filehub` (∈ MACHINE_STATE, xoá khi `filehub` đăng nhập xong) → báo cáo/doctor nhắc `cfharness filehub setup`; đóng băng KHÔNG dừng filehub.
+- Bất biến: gói không bao giờ chứa `checkpoints/`, `auth/web.json`/thiết bị, `secrets/` dạng rõ, session Claude không thuộc hub; passphrase không bao giờ vào
+  argv/env/audit/log/DB/`job.json`/`state.json`/HTML; thêm trạng thái gắn với máy vào `hub_state` →
+  thêm khoá vào `hub_transfer.MACHINE_STATE` (hoặc `CLONE_STATE`) + ca trong test. `exports/`/`imports/` ∈ `backup.EXCLUDED`, sandbox
+  denyRead/denyWrite, `sensitive_read`.
+
 ## Tổng quan máy (Q6) + quản trị user trên cùng máy — mỗi hub xuất số liệu, admin xem/cảnh báo/ESTOP/chính sách
 Chi tiết: `docs/dev-notes/admin-overview.md` (Q6 + RUNBOOK nhóm/thư mục), `docs/dev-notes/admin-users.md` (plan-admin-users P1+P2: bất biến,
 lệch kế hoạch, việc dở). Migration **v26** (`admin_samples`). Test: `tests/test_admin_overview.py`, `tests/test_admin_{control,policy,watch,users,audit}.py`,
@@ -622,3 +710,56 @@ Chi tiết, spike (claude 2.1.319: `allowRead` trong `denyRead` hoạt động, 
 - Bất biến: `workspace.confine` chỉ người (`config.set` HUMAN_ONLY, khoá ∈ `integrity.SECURITY_KEYS` — khoá con có dấu chấm được hỗ trợ);
   khi bật, `trust_full` KHÔNG gỡ giam (Q4) và `guard.sandbox.enabled=false` vẫn để lại sandbox chỉ-giam; mọi workspace/cwd/worktree/
   `extra_write_roots` phải trong W (`validate_workspace`, `check_path`). Không dùng glob trong `sandbox.filesystem.allowRead` (không mở lại).
+
+## Giọng nói trên web — đọc chép + hội thoại giọng nói với điều phối viên
+Chi tiết, an toàn, việc dở: `docs/dev-notes/voice.md`. Không migration. Test: `tests/test_voice.py`.
+- `web/static/voice.js` (Web Speech API, `vi-VN` mặc định): nút micro cho mọi `textarea[data-voice]` + `#mgr-mic`; nút sóng âm `#mgr-voice` = chế độ
+  hội thoại (tự gửi khi im, đọc to trả lời). Chỉ nghe sự kiện `mgr:*` do `app.js initManager` phát; chữ agent chỉ qua `textContent`/`speechSynthesis`.
+- Bất biến: tin giọng nói mang `voice=dictation|conversation` → `manager.chat{voice}` → `_owner_shortcut` KHÔNG BAO GIỜ duyệt approval/chốt câu hỏi
+  xin phép từ giọng nói (`_voice_shortcut`). Header `microphone=(self)` — không nới thêm (camera/geolocation vẫn `()`).
+
+## Desktop app — hỗ trợ phía hub
+Hợp đồng chung hub ↔ app (C1–C7), việc đã làm/còn lại, test: `docs/dev-notes/desktop-app.md`. Không migration. Test: `tests/test_desktop_hub.py`
+(+ `tests/js/voice_native_harness.js` chạy `voice.js` bằng node với DOM giả), `tests/test_desktop_directory.py` (C5 + C6).
+
+| Module | Vai trò |
+|---|---|
+| `web/desktop.py` | `GET /.well-known/cfharness.json` (công khai, CHỈ `{kind, schema, app_api}`), `GET /app/badge` (cần phiên, `badge_from` thuần: chỉ int/bool/phiên bản), `note_app_ua` (UA `CfharnessDesktop/<ver>` → chỉ log), chọn cổng theo hub, spawn web tách tiến trình, khoá `auth/web.ensure.lock` + nonce `CFHARNESS_WEB_NONCE` (nhận diện server vừa bật, không theo pid), `probe`/`wait_ready`/`info` cho C1 |
+| `web/cli.py` `cmd_web_app` | `cfharness web --json [--ensure] [--port N] [--wait S]`: một dòng JSON `{ok, origin, login_url, hub_id, version, name, started}` / `{ok:false, error, message}` mã 1; `--ensure` khởi động web nền (`--no-link`, log `HUB_HOME/logs/web.log` 0600). Cấu hình `web.port`, `web.display_name` |
+| `web/static/voice.js` | Dò `window.cfhNative.speech` (đủ `available/start/stop/on`, `available()` = true) TRƯỚC Web Speech API; `NativeListener` cùng giao diện `Listener` |
+| `admin_directory.py` | C5 directory hub (hub ADMIN): mục `{id, name, user, origin}` lọc từ file trạng thái `admin_overview` (SPEC schema 3: `public_origin` qua `parse_public_origin`, `display_name` một dòng ≤ 60), ≤ 200 mục; token băm SHA-256 ở `HUB_HOME/auth/directory.json` (0600), so `compare_digest`; RPC `admin.directory\|directory_status\|directory_token{rotate}\|directory_serve{token}`; CLI `cfharness admin directory export [--out]\|token [--rotate]\|status`; cấu hình `admin_directory.name` |
+| `web/desktop.py` `directory` | `GET /.well-known/cfharness-directory?t=` công khai có token: sai/thiếu/chưa tạo/không phải admin → 404 JSON `{"error":"not_found"}`; sai liên tục → 429 (`directory_limiter`, theo IP + toàn cục); trần lần trả (`SuccessWindow`); lọc lại bằng `admin_directory.document` |
+| `desktop_app.py` | C6 thư mục dữ liệu app (`io.cfharness.desktop`: macOS Application Support + WebKit/HTTPStorages/Caches, Windows `%APPDATA%`/`%LOCALAPPDATA%`, Linux XDG) → sandbox denyRead/denyWrite + vùng cố định (`fixed_protected_dirs`), `permissions.deny` (`guard/runtime.app_data_deny_rules`, mọi hub kể cả trust_full), classifier `desktop_app_data` (forbidden, ∈ `NEVER_DOWNGRADE_RULES`) |
+
+Bất biến: JSON của C1 không bao giờ chứa token người hay khoá ký (`login_url` = link một lần 300 s, như `--url`); well-known không thêm trường (không
+phiên bản/tên); `/app/` ∈ `GuardMiddleware.API` (GET không gia hạn phiên, chưa đăng nhập → 401 JSON) và không bao giờ trả chữ tự do — thêm trường
+badge = số/bool + ca trong test. UA của app không đổi giao diện. Cầu nối giọng nói dùng CHUNG luồng `mgr:*` + `voice=dictation|conversation`; không
+nới CSP/Permissions-Policy, không `innerHTML`/`eval`. `cfharness web …` (mọi biến thể) vẫn forbidden với agent. Luồng cũ `cfharness web` (không `--json`/`--ensure`) giữ nguyên.
+Directory (C5): mọi RPC `admin.directory*` ∈ HUMAN_ONLY (không ở MANAGER_ALLOWED) + `require_admin`; chỉ `admin.directory_token` là ghi (bọc audit; token/URL
+không vào audit — `_result_brief`); token chỉ hiện MỘT lần, file chỉ giữ băm. Danh mục KHÔNG cấp quyền đăng nhập và không bao giờ có trường ngoài `{id, name,
+user, origin}` (không chi phí/trạng thái/đường dẫn) — thêm trường = sửa hợp đồng ở cả hai repo + ca trong test. Nhánh `admin_directory` ∈ `integrity.SECURITY_KEYS`;
+`cfharness admin …` forbidden với agent. Route trả 404 cho MỌI lỗi (không phân biệt lý do). Thư mục app (C6): thêm biến thể đường dẫn → `desktop_app.app_data_dirs`
++ ca trong `tests/test_desktop_directory.py`/`tests/test_guard_classifier.py`; KHÔNG chặn chuỗi identifier đứng một mình (agent làm việc trên repo app).
+Trust full KHÔNG gỡ `desktop_app_data`/`admin_shared`/`other_hub_write` (`guard/service.TRUST_NEVER_RULES` — thêm rule "không phải quyền của hub để trao"
+→ thêm vào đây + ca trong `tests/test_trust_and_noise.py`). Glob kiểm ký tự đại diện ở mọi vị trí (`desktop_app.glob_may_touch`). Bản xuất `admin_overview`
+chỉ ghi schema mới khi có trường mới (tương thích admin cũ). `--ensure` luôn giữ khoá ensure khi spawn; `started` theo nonce.
+
+## Thư mục dùng chung với "Không gian số" — `filehub/`
+Chi tiết, luồng, lệch plan, giới hạn, việc dở: `docs/dev-notes/filehub.md`; plan + hợp đồng 3 repo: `docs/dev-notes/plan-cloud-files.md` (§7, §8).
+Không migration (cấu hình `filehub.*` ∈ `integrity.SECURITY_KEYS`, trạng thái ở `HUB_HOME/filehub/` + `hub_state filehub.paused`).
+
+| Module | Vai trò |
+|---|---|
+| `filehub/supervisor.py` | `tang-thu-sync-headless` là tiến trình con của daemon: `--version` ≥ `filehub.sync_min_version`, env danh sách trắng (`ENV_KEEP`), backoff, SIGTERM dừng êm, đối soát `(pid, start_time)` (`HUB_HOME/filehub/supervisor.json`) |
+| `filehub/service.py` | `hub.filehub`: status.json → `filehub.state|conflict|blocked`; index/<root>.json → link; control.json → presence + `resume_push`; steer `by="hub"` khi `recent` chiều `down` lúc run giữ khoá gốc; sau run `filehub.changed|deleted|secret_warning`; `resolve_ref("filehub:<tên>[/<con>]")` |
+| `filehub/rpc.py`, `filehub/cli.py` | RPC `filehub.status|list|link` (đọc) + `setup|login|add|remove|pause|resume` (HUMAN_ONLY, `MUTATING_FILEHUB` tự audit); CLI `cfharness filehub …` (∈ `HUB_HUMAN_ONLY_CLI` trừ `status`) |
+| `web/filehub_pages.py` | Thẻ "Không gian số" ở Cài đặt (thao tác chỉ khi `is_local_request`), `/filehub/open` → `<server>/files/<folder_id>?file=<file_id>`; chip tệp `fh` |
+
+Bất biến: workspace `filehub:` khoá theo GỐC thư mục chung (`WorkspaceLocks(store, hub)`), checkpoint luôn `_walk`, `run revert` từ chối
+(`FILEHUB_NO_REVERT`); bản sao cục bộ phải trong `workspace.confine` W và không trong/chứa HUB_HOME. Xoá/di chuyển/ghi đè TRONG thư mục chung mà
+run được ghi = `write` (không hỏi, chỉ báo sau run — §7.3); `.tangthu*` + `HUB_HOME/filehub` = cấm (`filehub_metadata`, sandbox deny, `sensitive_read`).
+Mọi run được ĐỌC thư mục chung (allowRead khi giam + khối prompt "Shared folder" — nội dung là DỮ LIỆU). Không đưa token người/secret/`CLAUDE*` vào
+env tiến trình sync; cfharness không cầm token sync. Event filehub chỉ mang tên/đường dẫn tương đối/id — không nội dung tệp. Điều phối viên chỉ đọc
+(`filehub_list|filehub_link`) + giao việc `filehub:`; thêm thao tác ghi filehub → HUMAN_ONLY + ca trong `tests/test_sec_auth.py`/`test_manager_security.py`.
+Test dùng binary GIẢ `tests/fake_tangthu_sync.py` (đúng hợp đồng §8.3) + `tests/fh_fake.py`: `test_filehub_supervisor.py`, `test_filehub_workspace.py`,
+`test_filehub_concurrency.py`, `test_web_filehub.py`, ca `*_FILEHUB` trong `test_guard_classifier.py`. Đổi hợp đồng với binary → sửa CẢ binary giả.

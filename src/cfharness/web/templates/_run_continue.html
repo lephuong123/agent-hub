@@ -7,7 +7,7 @@
   <section class="run-composer" id="continue-card">
     <form method="post" action="/do/run_continue" class="composer">
       <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="id" value="{{ run.id }}"><input type="hidden" name="next" value="/runs/{{ run.id }}">
-      <textarea name="prompt" rows="1" required placeholder="Nói tiếp — agent nhớ toàn bộ hội thoại này. Ví dụ: Giờ viết lại ngắn hơn" aria-label="Nói tiếp với agent"></textarea>
+      <textarea data-voice name="prompt" rows="1" required placeholder="Nói tiếp — agent nhớ toàn bộ hội thoại này. Ví dụ: Giờ viết lại ngắn hơn" aria-label="Nói tiếp với agent"></textarea>
       <button class="btn primary" type="submit">{{ m.icon('send') }}<span class="btn-t">Gửi tiếp</span></button>
     </form>
     <p class="run-dock-hint">Nói tiếp với agent: mở một run mới tiếp nối hội thoại này.</p>

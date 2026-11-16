@@ -35,6 +35,9 @@ GIT_SAFE_ARGS = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
                  "-c", "diff.external=", "-c", "core.untrackedCache=false")
 
 
+FILEHUB_NO_REVERT = ("run trên thư mục chung (filehub) không hoàn tác ở hub — khôi phục bằng phiên bản/thùng rác trên Không gian số "
+                     "(người thấy được mọi thay đổi ở đó)")
+
 _EXTRA_ALLOWED_ROOTS: list[str] = []  # CHỈ test (conftest) đặt; sản phẩm luôn rỗng
 
 
@@ -58,6 +61,11 @@ def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
         path = path.get("path")
     if not path:
         return
+    if str(path).startswith("filehub:"):  # thư mục chung Không gian số → kiểm đường dẫn cục bộ đã giải
+        fh = getattr(hub, "filehub", None)
+        if fh is None:
+            raise HubError(f"{what}: thư mục chung (filehub) chưa bật")
+        path = fh.resolve_ref(str(path))[0]
     from .guard.runtime import fixed_protected_dirs
 
     try:
@@ -85,6 +93,12 @@ def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
     if conf is not None:
         roots.append(Path(conf.root))
     roots += [hh / "agents", hh / "worktrees", hh / "evals", hh / "checkpoints"]
+    try:  # thư mục chung Không gian số (filehub): bản sao cục bộ là workspace hợp lệ (đã kiểm không trong HUB_HOME/vùng bảo vệ lúc thêm)
+        from .filehub.service import local_roots as _fh_roots
+
+        roots += [Path(r) for r in _fh_roots(hub)]
+    except Exception:  # pragma: no cover
+        pass
     roots += [Path(r) for r in _EXTRA_ALLOWED_ROOTS]  # test-only (conftest, cùng tiến trình); rỗng trong sản phẩm
     roots += [Path(r).expanduser().resolve() for r in env_extra_roots()]  # test-only (CFHARNESS_TESTING=1)
     if not any(p == r or p.is_relative_to(r) for r in roots):
@@ -270,16 +284,39 @@ class BlobStore:
 class WorkspaceLocks(RepoLocks):
     """Khoá ghi theo repo (FR-RT-12). Giao diện của `RepoLocks` (M1-B) giữ nguyên; chỉ đổi cách tính khoá."""
 
+    def __init__(self, store: Any, hub: Any = None) -> None:
+        super().__init__(store)
+        self.hub = hub
+        if hub is not None:  # thư mục chung (filehub): khoá = GỐC thư mục chung, kể cả khi cwd là thư mục con `filehub:<tên>/<con>`
+            self.key_for = self._key_for_hub  # type: ignore[method-assign]
+
     @staticmethod
     def key_for(cwd: str | None, workspace_kind: str) -> str | None:
         if not cwd or workspace_kind != "dir":
             return None
         return git_root(cwd) or os.path.realpath(os.path.expanduser(cwd))
 
+    def _key_for_hub(self, cwd: str | None, workspace_kind: str) -> str | None:
+        if cwd and str(cwd).startswith("filehub:"):  # workspace_default của agent dạng filehub:<tên>[/<con>]
+            try:
+                cwd = self.hub.filehub.resolve_ref(str(cwd), must_exist=False)[0]
+            except HubError:
+                return None
+        if cwd and workspace_kind == "dir":
+            from .filehub.service import root_of
+
+            r = root_of(self.hub, cwd)
+            if r is not None:
+                return r
+        return WorkspaceLocks.key_for(cwd, workspace_kind)
+
 
 # ============================================================================ checkpoint / diff
-def take_checkpoint(cwd: str | Path, store_dir: Path, *, max_file_bytes: int = 5_000_000, max_files: int = 20_000) -> dict[str, Any]:
-    root = git_root(cwd)
+def take_checkpoint(cwd: str | Path, store_dir: Path, *, max_file_bytes: int = 5_000_000, max_files: int = 20_000,
+                    force_walk: bool = False) -> dict[str, Any]:
+    """`force_walk` (thư mục chung filehub): luôn chỉ danh sách file (size, mtime) — không revert ở hub, hoàn tác là việc của phiên bản/
+    thùng rác trên Không gian số."""
+    root = None if force_walk else git_root(cwd)
     t = time.time()
     if root is None:
         files, truncated = _walk(Path(cwd).resolve(), max_files)
@@ -326,8 +363,11 @@ def compute_diff(cp: dict[str, Any], store_dir: Path, *, max_file_bytes: int = 5
                 continue
             st = "added" if b is None else ("deleted" if a is None else "modified")
             files.append({"path": rel, "status": st, "revertible": False})
-        return {"kind": "dir", "root": str(root), "files": files, "revertible": False, "truncated": truncated or cp.get("truncated", False),
-                "stat": {"files": len(files)}}
+        out = {"kind": "dir", "root": str(root), "files": files, "revertible": False, "truncated": truncated or cp.get("truncated", False),
+               "stat": {"files": len(files)}}
+        if cp.get("filehub"):
+            out["filehub"] = cp["filehub"]
+        return out
     root = cp["root"]
     head_before = cp.get("head")
     head_after, branch_after = _head(root)
@@ -418,6 +458,8 @@ def resume_conflicts(run: dict[str, Any]) -> list[str]:
 
 
 def revert(diff: dict[str, Any], store_dir: Path, *, dry_run: bool = False) -> dict[str, Any]:
+    if diff.get("filehub"):
+        raise HubError(FILEHUB_NO_REVERT)
     if diff.get("kind") != "git":
         raise HubError("workspace không phải repo git — chỉ có danh sách file bị sửa, không hoàn tác được (FR-RT-12)")
     files = diff.get("files") or []

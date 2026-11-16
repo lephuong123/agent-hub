@@ -51,6 +51,7 @@ NET_CONTINUE_MSG = (
     "[cfharness] Nobody approved this network connection (request {aid}) within {timeout}s, so it is DENIED for now and your run continues. "
     "Do not retry the same host now; work without it, or clearly report in your final summary what could not be fetched and why."
 )
+TRUST_NEVER_RULES = frozenset({"other_hub_write", "admin_shared", "desktop_app_data"})  # forbidden mà trust full KHÔNG gỡ
 FORBIDDEN_MSG = "[cfharness] Blocked by hub safety policy: {reason}. Agents may not approve their own requests or change safety policy."
 RESTART_MSG = (
     "[cfharness] A human APPROVED this action (request {aid}), but a static safety rule blocks it in this process. "
@@ -255,9 +256,18 @@ class GuardService:
             chrome_allowed=self.chrome_allowed(run),
             trusted_repo_scripts=bool(self.knob("guard.trusted_repo_scripts")),
             task_created_deletes=bool(self.knob("guard.task_created_deletes")),
+            filehub_roots=self._filehub_roots(),
             **self._confine_ctx(c, run, roots),
             **self._connector_ctx(run),
         )
+
+    def _filehub_roots(self) -> tuple[str, ...]:
+        try:
+            from ..filehub.service import local_roots
+
+            return tuple(local_roots(self.hub))
+        except Exception:  # pragma: no cover
+            return ()
 
     def _confine_ctx(self, cwd: str, run: dict[str, Any] | None, roots: tuple[str, ...]) -> dict[str, Any]:
         """P2 (workspace.confine): gốc giam + gốc đọc/chặn cho classifier; hub home khác đã đăng ký (P2.4)."""
@@ -272,6 +282,7 @@ class GuardService:
         if conf is None:
             return out
         extra = list(self.run_extra_write_roots(run, roots)) if run else []
+        extra += list(self._filehub_roots())  # mọi run được ĐỌC thư mục chung (plan-cloud-files §7.4)
         out.update(confine_root=conf.root, confine_read=tuple(_c.read_roots(conf, self.hub.paths.home, cwd=cwd, extra=extra)),
                    confine_deny=tuple(_c.deny_read_roots(conf)))
         return out
@@ -1224,7 +1235,7 @@ class GuardService:
             self._record(run, channel, tool_name, tool_input, v, "allow", classifier=auto["by"], extra={"auto_reason": auto["reason"]})
             return {"decision": "allow", "reason": f"[cfharness] allowed automatically ({auto['by']}): {auto['reason']}", "verdict": v.verdict,
                     "decided_by": auto["by"]}
-        fp = action_fingerprint(tool_name, tool_input)
+        fp = action_fingerprint(tool_name, tool_input, ctx.cwd)
         ap = self.hub.approvals
         # LLM thứ hai (tắt mặc định): CHỈ hạ uncertain đủ điều kiện → safe/write; mọi kết quả khác → giữ chờ người như cũ
         if always_eligible(v) and self.second.enabled() and ap.find_pending(run_id, fp) is None:
@@ -1296,7 +1307,9 @@ class GuardService:
             v = Verdict("uncertain", "classifier_error", None, f"phân loại lỗi: {type(e).__name__}")
         from ..confine import CONFINE_RULES
 
-        if v.forbidden and (v.rule in CONFINE_RULES or v.rule == "other_hub_write" or (v.rule == "hub_secret_read" and ctx.confine_root)):
+        # dữ liệu của user KHÁC (`admin_shared`) và phiên đăng nhập của app desktop (`desktop_app_data`, cùng user OS — không có quyền file nào
+        # chặn hộ) không phải quyền của hub để trao: trust full vẫn cấm, kể cả qua Bash (sandbox OS tắt khi trust)
+        if v.forbidden and (v.rule in CONFINE_RULES or v.rule in TRUST_NEVER_RULES or (v.rule == "hub_secret_read" and ctx.confine_root)):
             self._record(run, channel, tool_name, tool_input, v, "deny", classifier="trust")
             self.hub.publish(make_event("guard.blocked", run["agent_id"], {"source": "runtime", "reason": "guard_rule", "rule": v.rule, "detail": v.reason,
                                                                          "tool": tool_name, "preview": action_preview(tool_name, tool_input)}, run_id=run["id"]))
@@ -1361,7 +1374,7 @@ class GuardService:
 
         hold = self.needs_human(v)
         auto = self.auto_allow(run, tool, ti, v, ctx) if (run and hold) else None
-        return {**v.to_dict(), "hold": hold and auto is None, "fingerprint": action_fingerprint(tool, ti), "cwd": str(ctx.cwd),
+        return {**v.to_dict(), "hold": hold and auto is None, "fingerprint": action_fingerprint(tool, ti, ctx.cwd), "cwd": str(ctx.cwd),
                 "profile": profile(self.hub.config), "auto_allow": auto,
                 "never_automatic": never_automatic(v, tool_name=tool, tool_input=ti, roots=list(ctx.allowed_roots), cwd=str(ctx.cwd)) if hold else None}
 

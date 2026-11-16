@@ -106,6 +106,15 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # Sao lưu (backup.py): tạo = ghi file lớn vào HUB_HOME; kiểm/kế hoạch khôi phục = đọc bản sao chứa toàn bộ dữ liệu hub — chỉ người.
         # Khôi phục không có RPC (daemon phải dừng; CLI `backup restore` ∈ HUB_HUMAN_ONLY_CLI)
         "backup.create", "backup.verify", "backup.restore_plan",
+        # Xuất toàn bộ hub (hub_transfer.py): gói chứa hub.db + tri thức + transcript MỌI agent, dừng run đang chạy — chỉ người.
+        # Nhập không có RPC (daemon đích phải dừng; CLI `hub import` ∈ HUB_HUMAN_ONLY_CLI)
+        "hub.export",
+        # Chuyển nhà (hub_freeze.py): gỡ đóng băng = cho máy cũ chạy lại run/lịch/bot song song máy mới (409 Telegram, chia sự kiện Slack,
+        # OAuth xoay vòng) — chỉ người. hub.doctor (hub_doctor.py) chỉ đọc nhưng lộ đường dẫn/tên secret/repo của người — chỉ người.
+        "hub.freeze", "hub.unfreeze", "hub.doctor",
+        # Xuất/nhập hub từ web (hub_transfer_web.py, PR6): nhận passphrase, đọc gói tải lên, dừng daemon để nhập đè hub.db, lộ đường
+        # dẫn/tên secret — chỉ người (kể cả các method chỉ đọc)
+        "hub.transfer_status", "hub.export_start", "hub.export_status", "hub.import_plan", "hub.import_start", "hub.import_status",
         # Tài khoản Claude (accounts/): token = quyền dùng tài khoản Claude của người; đổi tài khoản CHỈ do người (không tự đổi, không
         # MANAGER_ALLOWED) — agent không được tự thêm/đổi/xoá/kiểm tài khoản hay mở phiên `claude setup-token`
         "account.login_start", "account.login_finish", "account.login_cancel", "account.add_token", "account.use", "account.rename",
@@ -114,12 +123,20 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "admin.overview",
         # Vào/ra web + thiết bị tin cậy (web_events.py): ghi audit + phát event → Telegram — agent không được giả "đăng nhập"/"thu hồi"
         "web.notify",
+        # Ghi audit tuỳ ý (mcp_server/rpc.py audit.record): actor/channel/summary do người gọi tự khai — chỉ web/CLI của người dùng;
+        # agent/hook/hub-self không cần (audit của agent do daemon tự ghi khi bọc MUTATING, actor=agent) → agent không giả "user duyệt"
+        "audit.record",
         # Quản trị máy (admin_rpc.py, docs/dev-notes/admin-users.md): đọc trạng thái/audit/chính sách user khác (admin), bật/gỡ ESTOP admin,
         # trang minh bạch phía user — mọi method admin.* chỉ người; phía admin còn kiểm nhóm cfharness-admin (admin_control.require_admin)
         "admin.users", "admin.user", "admin.estop_list", "admin.estop_set", "admin.alerts", "admin.audit", "admin.policy",
         "admin.nav", "admin.self", "admin.setup_check",
+        # Directory hub cho app desktop (admin_directory.py, C5 — docs/dev-notes/desktop-app.md): danh mục hub của MỌI user trên máy, token
+        # directory (xoay = ghi), `admin.directory_serve` do web gọi sau khi nhận token từ route công khai — chỉ người + nhóm cfharness-admin
+        "admin.directory", "admin.directory_status", "admin.directory_token", "admin.directory_serve",
         # Xem/mở file trong workspace của run/agent (fileview.py): đọc ngoài sandbox của agent gọi (workspace agent KHÁC) + mở app trên máy
         "file.read", "file.open",
+        # Thư mục chung Không gian số (filehub/): đăng nhập thiết bị, thêm/gỡ thư mục, tạm dừng đồng bộ — chỉ người (không MANAGER_ALLOWED)
+        "filehub.setup", "filehub.login", "filehub.add", "filehub.remove", "filehub.pause", "filehub.resume",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})
@@ -214,9 +231,10 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS"),
                       ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE"),
                       ("cfharness.web_events", "MUTATING_WEB"),
-                      ("cfharness.backup", "MUTATING_BACKUP"),
-                      ("cfharness.admin_rpc", "MUTATING_ADMIN"),
-                      ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):
+                      ("cfharness.backup", "MUTATING_BACKUP"), ("cfharness.hub_transfer", "MUTATING_TRANSFER"),
+                      ("cfharness.hub_freeze", "MUTATING_FREEZE"), ("cfharness.hub_transfer_web", "MUTATING_TRANSFER_WEB"),
+                      ("cfharness.admin_rpc", "MUTATING_ADMIN"), ("cfharness.admin_directory", "MUTATING_DIRECTORY"),
+                      ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.filehub.rpc", "MUTATING_FILEHUB"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):
         try:
             import importlib
 

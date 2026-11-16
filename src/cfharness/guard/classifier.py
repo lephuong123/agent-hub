@@ -120,10 +120,15 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "update": None,
     # Sao lưu (backup.py): khôi phục ghi đè hub.db/policy/tri thức; tạo/kiểm đọc + ghi toàn bộ dữ liệu hub — agent gõ, kể cả list, đều chặn
     "backup": None,  # cập nhật cfharness = cài đè phần mềm hub + khởi động lại daemon (update.start ∈ HUMAN_ONLY) — agent gõ, kể cả --check, đều chặn
+    # Xuất/nhập toàn bộ hub (hub_transfer.py): gói chứa toàn bộ dữ liệu hub; nhập ghi đè hub.db/tri thức; `hub unfreeze` gỡ đóng băng
+    # chuyển nhà (hub_freeze.py); `hub doctor` lộ đường dẫn/tên secret — agent gõ, MỌI lệnh con, đều chặn
+    "hub": None,
     # Lịch chạy tự động (schedules/): schedule.* ghi ∈ HUMAN_ONLY — agent không tự đặt việc chạy lặp
     "schedule": {"add", "create", "edit", "update", "pause", "resume", "rm", "remove", "delete", "run-now", "run_now"},
     # Tài khoản Claude (accounts/, luồng core): account.* ghi ∈ HUMAN_ONLY — agent không tự thêm/đổi/xoá tài khoản Claude
     "account": {"add", "login", "use", "rename", "rm", "remove", "delete", "check"},
+    # Thư mục chung Không gian số (filehub/): filehub.* ghi ∈ HUMAN_ONLY — đăng nhập thiết bị, thêm/gỡ thư mục, tạm dừng đồng bộ
+    "filehub": {"setup", "login", "add", "remove", "rm", "pause", "resume"},
 }
 
 # H-03: API dạng phương thức (`Path(..).unlink()`) đứng sau `)`/`]` nên KHÔNG dùng `\b` trước dấu chấm
@@ -254,6 +259,9 @@ class GuardContext:
     confine_read: tuple[str, ...] = ()
     confine_deny: tuple[str, ...] = ()
     other_hub_homes: tuple[str, ...] = ()  # P2.4: hub home KHÁC đã đăng ký (cùng user OS) — cấm đọc + ghi
+    # thư mục chung Không gian số (filehub/): gốc bản sao cục bộ (realpath). Xoá/di chuyển/ghi đè TRONG gốc mà run được ghi = `write`
+    # (không hỏi — plan-cloud-files §7.3: hub báo người sau run, khôi phục ở thùng rác/phiên bản Không gian số); metadata sync = cấm
+    filehub_roots: tuple[str, ...] = ()
 
     @property
     def home(self) -> str:
@@ -399,7 +407,7 @@ NET_BLOCK_RULES = frozenset({"webfetch_local", "ssrf_metadata", "ssrf_private_ip
 # đánh dấu cần duyệt, lỗi bộ phân loại/không phân tích được đích, run không hoạt động/ESTOP
 NEVER_DOWNGRADE_RULES = NET_BLOCK_RULES | frozenset({
     "url_dns_failed", "web_domain_denied", "web_domain_not_allowed", "sandbox_network_not_allowed", "sandbox_network_bad_host", "mcp_require_approval", "classifier_error", "unknown_run", "estop",
-    "nesting_too_deep", "hub_secret_read", "self_approval", "admin_shared",
+    "nesting_too_deep", "hub_secret_read", "self_approval", "admin_shared", "desktop_app_data",
 })
 NEVER_DOWNGRADE_KLASS = frozenset({"hub", "policy", "guard"})
 
@@ -430,16 +438,17 @@ def match_always_mcp_tool(tool_name: str, ctx: GuardContext) -> dict[str, Any] |
 
 
 def match_always(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardContext) -> dict[str, Any] | None:
-    """Luật `exact`: cùng agent + cùng tool + cùng `action_fingerprint` (lệnh đã chuẩn hoá). Không có wildcard."""
+    """Luật `exact`: cùng agent (bắt buộc có agent_id) + cùng tool + cùng `action_fingerprint` (lệnh đã chuẩn hoá, kèm cwd với Bash).
+    Không có wildcard."""
     fp = None
     for r in ctx.always_allow:
         if not isinstance(r, dict) or r.get("kind") != "exact" or r.get("disabled"):
             continue
-        if r.get("agent_id") and r.get("agent_id") != ctx.agent_id:
-            continue
+        if not r.get("agent_id") or r.get("agent_id") != ctx.agent_id:
+            continue  # A3: luật thiếu agent_id (dữ liệu cũ/sửa tay) KHÔNG khớp agent nào
         if r.get("tool") != tool_name:
             continue
-        fp = fp or action_fingerprint(tool_name, tool_input)
+        fp = fp or action_fingerprint(tool_name, tool_input, ctx.cwd)
         if r.get("fingerprint") == fp:
             return r
     return None
@@ -558,11 +567,19 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
                 v = ti.get(k)
                 if isinstance(v, str) and v and admin_shared(_abs(v, ctx.cwd)):
                     return Verdict("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [v], forbidden=True)
+                if isinstance(v, str) and v and desktop_app_data(_abs(v, ctx.cwd)):
+                    return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [v], forbidden=True)
                 if isinstance(v, str) and v and sensitive_read(_abs(v, ctx.cwd), ctx):
                     return Verdict("destructive", "hub_secret_read", "hub", "agent không được đọc token người/secret/mcp.json của hub", [v], forbidden=True)
+            pat = ti.get("pattern") if tool_name == "Glob" else None  # Glob có thể chỉ mang đường dẫn tuyệt đối trong pattern
+            gm = glob_app_data(pat, ti.get("path"), ctx) if isinstance(pat, str) and pat else None
+            if gm == "literal":
+                return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [pat], forbidden=True)
             cv = confine_read_verdict(tool_name, ti, ctx)
             if cv is not None:
                 return cv
+            if gm == "wildcard":  # khớp nhờ ký tự đại diện (vd `~/**`): sau luật giam (cụ thể hơn), vẫn forbidden
+                return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [pat], forbidden=True)
             return Verdict("safe", "read_only_tool")
         if tool_name in SUBAGENT_TOOLS:
             return Verdict("write", "subagent_tool", reason="subagent/điều khiển task — tool con của nó đi qua hook riêng")
@@ -753,6 +770,30 @@ def confine_read_verdict(tool_name: str, ti: dict[str, Any], ctx: GuardContext) 
 
 READ_PATH_KEYS = ("file_path", "path", "notebook_path")
 
+FILEHUB_META_PREFIX = ".tangthu"
+FILEHUB_META_REASON = "agent không được ghi metadata/profile của tiến trình đồng bộ Không gian số (.tangthu*, HUB_HOME/filehub)"
+
+
+def filehub_root(p: str, ctx: GuardContext) -> str | None:
+    """Gốc thư mục chung (filehub) chứa `p` (literal hoặc realpath), None nếu không thuộc thư mục chung nào."""
+    for c in {canon_path(p), _real(p)}:
+        for r in ctx.filehub_roots:
+            if _under(c, canon_path(r)):
+                return canon_path(r)
+    return None
+
+
+def filehub_meta(p: str, ctx: GuardContext) -> bool:
+    """Metadata/base của sync: `.tangthu*` trong thư mục chung, hoặc profile/status/control ở HUB_HOME/filehub."""
+    hh = _hub_home(ctx)
+    for c in {canon_path(p), _real(p)}:
+        if any(_under(c, h + "/filehub") for h in {hh, _real(hh)}):
+            return True
+        root = filehub_root(c, ctx)
+        if root is not None and any(part.lower().startswith(FILEHUB_META_PREFIX) for part in _rel_parts(c, root)):
+            return True
+    return False
+
 
 def admin_shared(p: str) -> bool:
     """Thư mục chung của quản trị máy (trạng thái/audit/chính sách/cờ ESTOP/admin-log của MỌI user) — agent không đọc/ghi (plan-admin-users §4)."""
@@ -765,6 +806,33 @@ def admin_shared(p: str) -> bool:
 
 
 ADMIN_SHARED_REASON = "agent không được đọc/ghi thư mục chung của quản trị máy (dữ liệu của mọi user trên máy)"
+
+
+def glob_app_data(pattern: str, path: Any, ctx: GuardContext) -> str | None:
+    """"literal"/"wildcard"/None — Glob có thể liệt kê tên tệp trong thư mục dữ liệu app desktop: mẫu (nối vào `path`/cwd nếu tương đối) — ký tự đại diện ở BẤT KỲ đâu
+    (`* ? [ {`), không chỉ phần trước `*` đầu tiên (`desktop_app.glob_may_touch`)."""
+    from ..desktop_app import glob_may_touch
+
+    base = path if isinstance(path, str) and path else str(ctx.cwd)
+    full = os.path.expanduser(pattern)
+    if not _isabs(full):
+        full = os.path.join(os.path.expanduser(base), full)
+    full = canon_path(full) if IS_WINDOWS else full
+    cut = re.split(r"[*?\[{]", full, maxsplit=1)[0]
+    lit = cut if cut == full else (cut.rsplit("/", 1)[0] or "/")
+    if desktop_app_data(lit):
+        return "literal"
+    return "wildcard" if glob_may_touch(full) else None
+
+
+def desktop_app_data(p: str) -> bool:
+    """Thư mục dữ liệu app desktop cfharness (C6 — desktop_app.py): cookie phiên WebView + token directory của mọi hub."""
+    from ..desktop_app import is_app_data
+
+    return is_app_data(canon_path(p)) or is_app_data(p)
+
+
+DESKTOP_APP_REASON = "agent không được đọc/ghi thư mục dữ liệu của app desktop cfharness (cookie phiên, token directory của mọi hub)"
 
 
 def sensitive_read(p: str, ctx: GuardContext) -> bool:
@@ -786,7 +854,8 @@ def sensitive_read(p: str, ctx: GuardContext) -> bool:
         if ctx.hub_socket and _same(c, ctx.hub_socket + ".auth"):
             return True
         for h in homes:
-            if _under(c, h + "/secrets") or _under(c, h + "/auth") or _under(c, h + "/backups") or _same(c, h + "/mcp_server/tokens.json"):
+            if (_under(c, h + "/secrets") or _under(c, h + "/auth") or _under(c, h + "/backups") or _under(c, h + "/filehub")
+                    or _under(c, h + "/exports") or _under(c, h + "/imports") or _same(c, h + "/mcp_server/tokens.json")):
                 return True
             parts = [x.lower() for x in _rel_parts(c, h)] if IS_WINDOWS else _rel_parts(c, h)
             if len(parts) >= 3 and parts[0] == "agents" and parts[2] == "runtime":
@@ -904,6 +973,10 @@ def classify_file_write(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -
     op = "overwrite" if tool_name == "Write" and os.path.exists(ap) else "write"
     if admin_shared(ap):
         return Verdict("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [ap], forbidden=True)
+    if desktop_app_data(ap):
+        return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [ap], forbidden=True)
+    if filehub_meta(ap, ctx):
+        return Verdict("destructive", "filehub_metadata", "hub", FILEHUB_META_REASON, [ap], forbidden=True)
     for cand in {ap, rp}:
         if _under(cand, canon_path(str(ctx.policy.policy_dir))):
             return Verdict("destructive", "policy_write", "policy", "agent không được ghi chính sách an toàn (FR-SG-05)", [ap], "hub-policy")
@@ -1196,6 +1269,8 @@ class BashAnalyzer:
         return protected_path(self.ctx, p, op)
 
     def check_delete_target(self, p: str, what: str, recursive: bool = True) -> None:
+        if self.filehub_meta_hit(p, what):
+            return
         if _critical(p, self.ctx.home) or _same(p, os.path.dirname(self.ctx.home)):
             self.hit("destructive", "delete_critical", "system", f"{what} thư mục hệ thống/home {p}", [p])
             return
@@ -1204,6 +1279,8 @@ class BashAnalyzer:
             r = self.ctx.policy.protected_under(p)
         if r is not None:
             self.hit("destructive", "protected_delete", "file", f"{what} chạm tài nguyên được bảo vệ {r.selector}", [p], r)
+            return
+        if self.filehub_write(p, what):
             return
         if not created_by_run(p, self.ctx):
             if self.checkpointed(p):
@@ -1219,6 +1296,8 @@ class BashAnalyzer:
         if DISK_DEV.match(p):
             self.hit("destructive", "write_block_device", "system", f"{what} ghi thẳng thiết bị đĩa {p}", [p])
             return
+        if self.filehub_meta_hit(p, what):
+            return
         exists = os.path.lexists(p)
         r = self.protected(p, "overwrite" if exists else "write")
         if r is not None:
@@ -1227,6 +1306,8 @@ class BashAnalyzer:
         if _tmp_scratch(p, self.ctx) or not exists or os.path.isdir(p):
             self.hit("write", "write_file", "file", what, [p])
             return
+        if self.filehub_write(p, what):
+            return
         if not created_by_run(p, self.ctx):
             if self.checkpointed(p):
                 self.hit("write", "overwrite_checkpointed", "file", f"{what} {p} — có checkpoint của run (revert được)", [p])
@@ -1234,6 +1315,30 @@ class BashAnalyzer:
             self.hit("destructive", "overwrite_existing", "file", f"{what} ghi đè file có sẵn {p} (không phải file run tự tạo)", [p])
         else:
             self.hit("write", "overwrite_run_created", "file", what, [p])
+
+    def filehub_meta_hit(self, p: str, what: str) -> bool:
+        if self.ctx.filehub_roots and filehub_meta(p, self.ctx) or _under(canon_path(p), _hub_home(self.ctx) + "/filehub"):
+            self.hit("destructive", "filehub_metadata", "hub", f"{what}: {FILEHUB_META_REASON}", [p], forbidden=True)
+            return True
+        return False
+
+    def filehub_write(self, p: str, what: str) -> bool:
+        """Xoá/ghi đè/di chuyển TRONG thư mục chung mà run được ghi (cwd/extra_write_roots) → `write`, không hỏi duyệt (§7.3);
+        gốc thư mục chung chính nó → phá huỷ (mất cả sync root); metadata sync → cấm. Trả True nếu đã quyết."""
+        root = filehub_root(p, self.ctx)
+        if root is None:
+            return False
+        if self.filehub_meta_hit(p, what):
+            return True
+        if any(_same(c, root) for c in {canon_path(p), _real(p)}):
+            self.hit("destructive", "filehub_root_delete", "file", f"{what} chính gốc thư mục chung {root} (mất cả thư mục đồng bộ)", [p])
+            return True
+        roots = write_roots(self.ctx)
+        if not any(_under(c, r) for c in {canon_path(p), _real(p)} for r in roots):
+            return False
+        self.hit("write", "filehub_delete" if what.startswith(tuple(DELETE_CMDS) + ("rmdir", "mv", "gmv", "find")) else "filehub_overwrite", "file",
+                 f"{what} trong thư mục chung {root} — hub báo người sau run; khôi phục ở thùng rác/phiên bản Không gian số", [p])
+        return True
 
     def checkpointed(self, p: str) -> bool:
         """File THƯỜNG đã được git track trong repo có checkpoint của run → `cfharness run revert` khôi phục được."""
@@ -1244,6 +1349,8 @@ class BashAnalyzer:
         return r is not None and r.returncode == 0
 
     def check_write_target(self, p: str, what: str, op: str = "write") -> None:
+        if self.filehub_meta_hit(p, what):
+            return
         r = self.protected(p, op)
         if r is not None:
             self.hit("destructive", "protected_write", "file", f"{what} vào tài nguyên được bảo vệ {r.selector}", [p], r)
@@ -1263,11 +1370,17 @@ class BashAnalyzer:
         hh = _hub_home(self.ctx)
         if _contains(norm, hh + "/auth") or _contains(norm, hh + "/secrets"):
             self.hit("destructive", "hub_secret_read", "hub", "agent đụng token người/secret store của hub", forbidden=True)
+        if _contains(norm, hh + "/filehub"):
+            self.hit("destructive", "filehub_metadata", "hub", FILEHUB_META_REASON, forbidden=True)
         if not IS_WINDOWS:
             from ..admin_overview import SHARED_ROOT
 
             if re.search(re.escape(SHARED_ROOT) + r"(?![A-Za-z0-9_.\-])", norm):
                 self.hit("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [SHARED_ROOT], forbidden=True)
+        from ..desktop_app import APP_ID, shell_mentions
+
+        if shell_mentions(norm) or shell_mentions(script):
+            self.hit("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [APP_ID], forbidden=True)
         for pat in self.ctx.policy.bash_patterns:
             try:
                 if re.search(pat["pattern"], norm):
@@ -1476,6 +1589,13 @@ class BashAnalyzer:
                     i += 2
                 elif t in ("-S", "--split-string") and i + 1 < len(args):
                     self.merge(self.sub(args[i + 1].literal + " " + " ".join(_q(w.literal) for w in args[i + 2 :])))
+                    return None
+                elif t.startswith("--split-string=") or (t.startswith("-S") and len(t) > 2):
+                    lit = args[i].literal
+                    self.merge(self.sub((lit.split("=", 1)[1] if lit.startswith("--") else lit[2:]) + " " + " ".join(_q(w.literal) for w in args[i + 1 :])))
+                    return None
+                elif t.startswith("-") and not t.startswith("--") and "S" in t[1:]:
+                    self.hit("uncertain", "env_split_string", None, "env -S (cụm cờ) chạy chuỗi lệnh")
                     return None
                 elif t.startswith("-") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t):
                     i += 1
@@ -1840,12 +1960,115 @@ class BashAnalyzer:
             else:
                 self.hit("write", "network_cmd", None, "")
             return
-        if base in READ_ONLY_CMDS:
-            if base == "echo" or base == "printf":
-                return
+        if base in READ_ONLY_CMDS or base in ("gawk", "nawk", "mawk"):
+            self.readonly_flags(base, args)
             return
         # lệnh chung: kiểm đối số đường dẫn chạm tài nguyên được bảo vệ
         self.generic(base, args, unknown_targets)
+
+    def _opt_values(self, args: list[shell.Word], short: str | None, long: str) -> list[shell.Word | str]:
+        """Giá trị của tuỳ chọn `-X v`, `-Xv`, cụm `-abX v`, `--long v`, `--long=v` (giá trị là Word hoặc chuỗi đã tách)."""
+        out: list[shell.Word | str] = []
+        for i, a in enumerate(args):
+            t = a.text
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if t == long:
+                out.append(nxt if nxt is not None else "")
+            elif t.startswith(long + "="):
+                out.append(t[len(long) + 1 :])
+            elif short and t.startswith("-") and not t.startswith("--") and short in t[1:]:
+                tail = t[t.index(short, 1) + 1 :]
+                out.append(tail if tail else (nxt if nxt is not None else ""))
+        return out
+
+    def _out_file(self, v: shell.Word | str, what: str) -> None:
+        p = self.path(v) if (v.text if isinstance(v, shell.Word) else v) else None
+        if p is None:
+            self.hit("uncertain", "readonly_output_dynamic", "file", f"{what}: đích ghi động")
+        else:
+            self.check_overwrite_target(p, what)
+
+    _AWK_EXEC = re.compile(r"\bsystem\s*\(|\|&?\s*getline\b|\bprintf?\b[^;{}]*\|")  # không bắt `FS="|"` (chỉ là ký tự)
+    _AWK_REDIR = re.compile(r"\bprintf?\b[^;{}]*?>>?\s*(\"([^\"]*)\"|[^\s;}]+)")
+
+    def readonly_flags(self, base: str, args: list[shell.Word]) -> None:
+        """A1: lệnh "chỉ đọc" nhưng có cờ ghi file / chạy lệnh tuỳ ý (sort -o, awk system()/>, git --output/-c core.pager,
+        diff --output, rg --pre, man -P, env -S, yq -i) — không được rơi vào `safe`; ghi file vẫn qua kiểm protected path."""
+        texts = [a.text for a in args]
+        if base == "sort":
+            for v in self._opt_values(args, "o", "--output"):
+                self._out_file(v, "sort -o")
+        elif base == "diff":
+            for v in self._opt_values(args, None, "--output"):
+                self._out_file(v, "diff --output")
+        elif base == "rg":
+            if self._opt_values(args, None, "--pre"):
+                self.hit("uncertain", "readonly_exec_flag", None, "rg --pre chạy lệnh tuỳ ý trên từng file")
+        elif base == "man":
+            if self._opt_values(args, "P", "--pager") or self._opt_values(args, "H", "--html"):
+                self.hit("uncertain", "readonly_exec_flag", None, "man -P/--pager/-H chạy chương trình tuỳ ý")
+        elif base == "yq":
+            if any(t in ("-i", "--inplace") or t.startswith("--inplace=") or (t.startswith("-") and not t.startswith("--") and "i" in t[1:]) for t in texts):
+                for a in args:
+                    if a.text.startswith("-") or not a.text or a.dynamic:
+                        continue
+                    p = self.path(a)
+                    if p and os.path.exists(p):
+                        self.check_write_target(p, "yq -i", "overwrite")
+                self.hit("write", "inplace_edit", "file", "yq -i")
+        elif base in ("awk", "gawk", "nawk", "mawk"):
+            self.awk(args)
+
+    def awk(self, args: list[shell.Word]) -> None:
+        """awk: chương trình có system()/pipe tới lệnh → uncertain; `print > "file"` → ghi file; `-i inplace` → sửa tại chỗ."""
+        i, prog, inplace = 0, None, False
+        while i < len(args):
+            t = args[i].text
+            if t in ("-f", "--file", "-E", "--exec"):
+                self.hit("uncertain", "awk_program_file", None, "awk -f: chương trình từ file, không kiểm được")
+                return
+            if t in ("-i", "--include", "-l", "--load") or t.startswith(("--include=", "--load=")) or (t.startswith(("-i", "-l")) and len(t) > 2):
+                val = t.split("=", 1)[1] if "=" in t and t.startswith("--") else (t[2:] if not t.startswith("--") and len(t) > 2 else (args[i + 1].text if i + 1 < len(args) else ""))
+                if val in ("inplace", "inplace.awk"):
+                    inplace = True
+                else:
+                    self.hit("uncertain", "awk_load", None, f"awk nạp thư viện/extension {val!r}")
+                i += 1 if (len(t) > 2 and not t.startswith("--")) or "=" in t else 2
+                continue
+            if t in ("-v", "-F", "--assign", "--field-separator"):
+                i += 2
+                continue
+            if t == "--":
+                i += 1
+                break
+            if t.startswith("-") and t != "-":
+                i += 1
+                continue
+            break
+        if i < len(args):
+            prog = args[i]
+            files = args[i + 1 :]
+        else:
+            files = []
+        if prog is not None:
+            code = prog.literal
+            if prog.dynamic:
+                self.hit("uncertain", "awk_dynamic", None, "chương trình awk động")
+            if self._AWK_EXEC.search(code):
+                self.hit("uncertain", "awk_exec", None, "awk chạy lệnh (system()/pipe)")
+            for m in self._AWK_REDIR.finditer(code):
+                if m.group(2) is not None:
+                    self._out_file(m.group(2), "awk print >")
+                else:
+                    self.hit("uncertain", "readonly_output_dynamic", "file", "awk print > đích động")
+        if inplace:
+            for a in files:
+                if a.text.startswith("-") or "=" in a.text or a.dynamic:
+                    continue
+                p = self.path(a)
+                if p:
+                    self.check_write_target(p, "awk -i inplace", "overwrite")
+            self.hit("write", "inplace_edit", "file", "awk -i inplace")
 
     def windows_cmd(self, base: str, args: list[shell.Word], sc: shell.SimpleCommand) -> bool:
         """Lệnh Windows (agent gọi từ Git Bash của Claude Code trên Windows): Task Scheduler / dịch vụ / registry / WMI = lịch chạy
@@ -2159,7 +2382,9 @@ class BashAnalyzer:
                 else:
                     dp0 = self.path(dst)
                     root = canon_path(str(self.ctx.cwd)).rstrip("/")
-                    if os.path.lexists(sp) and _under(sp, root) and dp0 is not None and not _under(dp0, root) and not created_by_run(sp, self.ctx):
+                    if filehub_root(sp, self.ctx) is not None and self.filehub_write(sp, "mv"):
+                        pass  # di chuyển trong/ra khỏi thư mục chung = xoá ở đó → `write` (§7.3); đích vẫn kiểm bên dưới
+                    elif os.path.lexists(sp) and _under(sp, root) and dp0 is not None and not _under(dp0, root) and not created_by_run(sp, self.ctx):
                         # H-03: chuyển file/thư mục CÓ SẴN ra khỏi workspace = xoá khỏi repo của người
                         self.hit("destructive", "move_out_existing", "file", f"mv {sp} ra ngoài workspace (file có sẵn)", [sp])
         dp = self.path(dst)
@@ -2802,6 +3027,15 @@ class BashAnalyzer:
             return
         self.hit("write", "hub_cli", "hub", "cfharness")
 
+    _GIT_EXEC_CFG = re.compile(r"^(core\.(pager|editor|sshcommand|fsmonitor|hookspath|askpass|gitproxy)|pager\.|alias\.|diff\.|merge\.|filter\.|"
+                               r"sequence\.editor|gpg\.|credential\.|uploadpack\.|receivepack\.|protocol\.|url\.|include|interactive\.difffilter|"
+                               r"remote\..*\.(uploadpack|receivepack|proxy)|http\.|ssh\.)", re.I)
+
+    def _git_config_flag(self, kv: str) -> None:
+        """A1: `git -c core.pager=…`/`alias.x=!cmd`/… cho phép chạy chương trình tuỳ ý → không còn là lệnh chỉ đọc."""
+        if shell.DYN in kv or self._GIT_EXEC_CFG.match(kv.split("=", 1)[0].strip()):
+            self.hit("uncertain", "git_config_exec", "git", f"git -c {kv.split('=', 1)[0]}: cấu hình có thể chạy lệnh tuỳ ý")
+
     def git(self, args: list[shell.Word]) -> None:
         cwd = self.cwd
         i = 0
@@ -2810,13 +3044,26 @@ class BashAnalyzer:
             if texts[i] == "-C" and i + 1 < len(texts):
                 cwd = self.path(args[i + 1])
                 i += 2
-            elif texts[i] in ("-c", "--git-dir", "--work-tree", "--namespace", "--exec-path") and i + 1 < len(texts):
+            elif texts[i] in ("-c", "--config-env") and i + 1 < len(texts):
+                self._git_config_flag(texts[i + 1])
+                i += 2
+            elif texts[i].startswith("--config-env="):
+                self._git_config_flag(texts[i].split("=", 1)[1])
+                i += 1
+            elif texts[i] in ("--git-dir", "--work-tree", "--namespace", "--exec-path") and i + 1 < len(texts):
                 i += 2
             else:
+                if texts[i] in ("-p", "--paginate"):
+                    self.hit("uncertain", "git_pager", "git", "git --paginate chạy pager theo cấu hình (core.pager) — có thể là lệnh tuỳ ý")
                 i += 1
         if i >= len(texts):
             return
         sub, rest = texts[i], texts[i + 1 :]
+        # A1: cờ ghi file / chạy chương trình ngoài ở mọi lệnh con "chỉ đọc" (diff/log/show…)
+        for v in self._opt_values(args[i + 1 :], None, "--output"):
+            self._out_file(v, f"git {sub} --output")
+        if "--ext-diff" in rest:
+            self.hit("uncertain", "git_ext_diff", "git", "git --ext-diff chạy diff.external (lệnh tuỳ ý theo cấu hình)")
         flags = [t for t in rest if t.startswith("-")]
         pos = [t for t in rest if not t.startswith("-")]
         # R2-2: chuẩn hoá (bỏ -C/-c/--no-pager/--git-dir, đường dẫn tuyệt đối tới git) rồi khớp mẫu chặn của REPO ĐÍCH
@@ -3077,14 +3324,55 @@ def _q(s: str) -> str:
     return shlex.quote(s)
 
 
-def action_fingerprint(tool_name: str, tool_input: dict[str, Any] | None) -> str:
-    """Dấu vân tay thao tác cho vé cho phép một lần (FR-SG-04): tool + input chuẩn hoá (bỏ mô tả/timeout)."""
+def _collapse_ws_outside_quotes(cmd: str) -> str:
+    """Gộp khoảng trắng liên tiếp thành một dấu cách, NHƯNG giữ nguyên trong '…' / "…" (`touch 'a b'` ≠ `touch 'a  b'`)."""
+    out: list[str] = []
+    q: str | None = None
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if q is None:
+            if c.isspace():
+                j = i
+                while j < n and cmd[j].isspace():
+                    j += 1
+                out.append(" ")
+                i = j
+                continue
+            if c == "\\" and i + 1 < n:
+                out.append(cmd[i : i + 2])
+                i += 2
+                continue
+            if c in ("'", '"'):
+                q = c
+        elif c == q:
+            q = None
+        elif q == '"' and c == "\\" and i + 1 < n:
+            out.append(cmd[i : i + 2])
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out).strip()
+
+
+def action_fingerprint(tool_name: str, tool_input: dict[str, Any] | None, cwd: str | os.PathLike[str] | None = None) -> str:
+    """Dấu vân tay thao tác cho vé cho phép một lần / luật `exact` (FR-SG-04): tool + input chuẩn hoá (bỏ mô tả/timeout).
+    A2: `dangerouslyDisableSandbox` (chạy NGOÀI sandbox) là thao tác khác; khoảng trắng chỉ gộp ngoài dấu nháy; với Bash, `cwd`
+    (đã chuẩn hoá) thuộc fingerprint vì cùng lệnh tương đối ở thư mục khác là thao tác khác."""
     import hashlib
 
     ti = dict(tool_input or {})
-    for k in ("description", "timeout", "run_in_background", "dangerouslyDisableSandbox"):
+    for k in ("description", "timeout", "run_in_background"):
         ti.pop(k, None)
+    if not ti.get("dangerouslyDisableSandbox"):
+        ti.pop("dangerouslyDisableSandbox", None)  # false/thiếu = trong sandbox: giữ fingerprint cũ
+    else:
+        ti["dangerouslyDisableSandbox"] = True
     if tool_name == "Bash" and isinstance(ti.get("command"), str):
-        ti["command"] = re.sub(r"\s+", " ", shell.normalize(ti["command"])).strip()
-    blob = json.dumps({"tool": tool_name, "input": ti}, sort_keys=True, ensure_ascii=False)
+        ti["command"] = _collapse_ws_outside_quotes(shell.normalize(ti["command"]))
+    doc: dict[str, Any] = {"tool": tool_name, "input": ti}
+    if tool_name == "Bash" and cwd:
+        doc["cwd"] = os.path.normpath(os.path.abspath(os.path.expanduser(str(cwd))))
+    blob = json.dumps(doc, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:32]

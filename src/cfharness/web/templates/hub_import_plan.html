@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Kế hoạch nhập hub{% endblock %}
+{% block content %}
+{% set src = p.source or {} %}{% set sec = p.secrets or {} %}{% set cs = p.claude_sessions or {} %}
+<div class="page-head"><div class="ph-title"><h1>Kế hoạch nhập gói {{ p.id or '?' }}</h1>
+  <span class="sub">Chưa ghi gì. Đọc toàn bộ kế hoạch (giống <code>cfharness hub import --dry-run</code>) rồi xác nhận ở cuối trang.</span></div></div>
+
+{% if p.blockers %}
+<section class="card attention"><h2>{{ m.icon('x') }} Không nhập được</h2>
+  <ul class="plain">{% for b in p.blockers %}<li>{{ b }}</li>{% endfor %}</ul></section>
+{% endif %}
+
+<section class="card">
+  <dl class="kv cols">
+    <div><dt>Gói</dt><dd>{{ p.id }} · {{ p.profile }} · {{ size(p.size) }}</dd></div>
+    <div><dt>Xuất lúc</dt><dd>{{ p.created_at }}</dd></div>
+    <div><dt>Máy nguồn</dt><dd>{{ src.host }} ({{ src.os }}/{{ src.arch }}) · cfharness {{ src.cfharness_version }} · schema v{{ src.user_version }}</dd></div>
+    <div><dt>Nhập vào</dt><dd><code>{{ p.target_home }}</code> — {% if p.fresh %}<span class="pill ok">hub trống</span>{% else %}<span class="pill warn">ĐÃ CÓ HUB — sẽ bị thay thế</span>{% endif %}</dd></div>
+    <div><dt>Chế độ</dt><dd>{{ mode_label.get(p.mode, p.mode) }}</dd></div>
+    <div><dt>Kiểm gói</dt><dd>{{ 'OK' if p.verify and p.verify.ok else 'LỖI' }} — {{ p.verify.files if p.verify }} phần tử, hub.db {{ p.verify.integrity if p.verify }}</dd></div>
+    {% if p.target_os %}<div><dt>Máy đích</dt><dd>{{ p.target_os }}{% if p.case_insensitive %} · ổ không phân biệt hoa/thường{% endif %}</dd></div>{% endif %}
+    <div><dt>Dung lượng cần</dt><dd>~{{ size(p.space_needed) }}</dd></div>
+  </dl>
+</section>
+
+{% if p.warnings %}
+<section class="card"><h2>{{ m.icon('alert') }} Lưu ý</h2><ul class="plain">{% for w in p.warnings %}<li>{{ w }}</li>{% endfor %}</ul></section>
+{% endif %}
+
+<section class="card"><h2>{{ m.icon('branch') }} Bản đồ đường dẫn</h2>
+  {% if p.path_map %}<table class="tbl"><thead><tr><th>Máy nguồn</th><th>Máy này</th></tr></thead><tbody>
+    {% for x in p.path_map %}<tr><td><code>{{ x['from'] }}</code></td><td><code>{{ x['to'] }}</code></td></tr>{% endfor %}</tbody></table>
+  {% else %}<p class="muted small">Không đổi — cùng đường dẫn.</p>{% endif %}
+  {% if p.db_rewrite %}<p class="small">DB: {{ p.db_rewrite.values()|sum }} giá trị sẽ viết lại{% if p.files_rewrite %}; file cấu hình: {{ p.files_rewrite|join(', ') }}{% endif %}.</p>{% endif %}
+  {% if p.review or p.knowledge_rows_with_old_paths %}<p class="small muted">Tri thức thuộc ledger ({{ (p.review or [])|length }} file, {{ p.knowledge_rows_with_old_paths or 0 }} hàng graph) — daemon tự viết lại qua ledger (rollback được) khi chạy lần đầu.</p>{% endif %}
+</section>
+
+<section class="card"><h2>{{ m.icon('run') }} Việc / lịch / run</h2>
+  <ul class="plain small">
+    <li>Run đang dở → interrupted: {{ p.runs_interrupted or 0 }}{% if p.runs_pending_resume %} (tự chạy tiếp ở máy này: {{ p.runs_pending_resume }}){% endif %}</li>
+    {% if p.mode == 'clone' %}<li>Task bị chặn: {{ p.tasks_blocked or 0 }} · lịch tạm dừng: {{ p.schedules_paused or 0 }} · tắt: {{ (p.config_changed or [])|join(', ') or 'kênh đã tắt sẵn' }}</li>{% endif %}
+    {% if p.approvals_cancelled or p.questions_cancelled %}<li>Huỷ (nhân bản): {{ p.approvals_cancelled or 0 }} yêu cầu duyệt, {{ p.questions_cancelled or 0 }} câu hỏi đang chờ</li>{% endif %}
+    {% if p.state_cleared %}<li>Dọn trạng thái máy cũ: {{ p.state_cleared|join(', ') }}</li>{% endif %}
+    {% if p.agents_paused %}<li>Agent nhập ở trạng thái tạm dừng (workspace chưa có): {{ p.agents_paused|list|sort|join(', ') }}</li>{% endif %}
+    {% for mm in p.mcp_missing or [] %}<li>{{ m.icon('alert') }} MCP <b>{{ mm.server }}</b>: lệnh <code>{{ mm.command }}</code> {{ mm.reason or 'không thấy ở máy này' }} — sửa sau bằng <code>cfharness mcp edit {{ mm.server }}</code></li>{% endfor %}
+    {% for r in (p.renamed or [])[:20] %}<li>Đổi tên (tên không hợp lệ ở máy này): <code>{{ r['from'] }}</code> → <code>{{ r['to'] }}</code></li>{% endfor %}
+    {% for r in (p.names_refused or [])[:20] %}<li>{{ m.icon('x') }} {{ r.reason }}</li>{% endfor %}
+  </ul>
+</section>
+
+{% if p.repos %}
+<section class="card"><h2>{{ m.icon('branch') }} Repo workspace</h2>
+  <ul class="plain small">{% for r in p.repos %}<li>{{ m.icon('check' if r.exists else 'x') }} <code>{{ r.to }}</code>{% if r.remote %} ← {{ r.remote }}{% endif %}{% if r.branch %} [{{ r.branch }}]{% endif %}{% if r.dirty %} <span class="pill warn">nguồn có {{ r.uncommitted }} file chưa commit</span>{% endif %}
+    {% if not r.exists and r.hint %}<br><code class="small">{{ r.hint }}</code>{% endif %}</li>{% endfor %}</ul>
+  <p class="small muted">Repo không nằm trong gói. Thiếu → tick "tự git clone" ở dưới, hoặc clone tay rồi <code>cfharness agent resume &lt;id&gt;</code>. Đổi chỗ đặt repo: thêm dòng <code>CŨ=MỚI</code> ở "Đổi thêm đường dẫn".</p>
+</section>
+{% endif %}
+
+<section class="card"><h2>{{ m.icon('shield') }} Secret</h2>
+  {% if not sec.present %}<p class="small muted">Gói không mang secret mã hoá.</p>
+  {% elif opts.skip_secrets %}<p class="small">Gói có {{ (sec.names or [])|length }} secret mã hoá — <b>BỎ QUA</b> (đặt lại sau khi nhập).</p>
+  {% else %}<p class="small">{{ (sec.names or [])|length }} secret mã hoá —
+    {% if sec.unlocked %}<span class="pill ok">{{ m.icon('check') }}passphrase đúng</span>{% elif sec.unlocked == False %}<span class="pill danger">passphrase SAI</span>{% else %}<span class="pill muted">cần passphrase</span>{% endif %}
+    · sẽ nhập {{ (sec['import'] or [])|length }}{% if sec.totp %} + TOTP web{% endif %}{% if sec.mcp_tokens %} + token MCP HTTP{% endif %}</p>
+    {% if sec.skip_mode %}<p class="small">Bỏ theo chế độ {{ p.mode }} (bot/OAuth của máy nguồn): {{ sec.skip_mode|join(', ') }}</p>{% endif %}{% endif %}
+  {% if p.missing_secrets %}<p class="small">{{ m.icon('alert') }} Phải đặt lại sau khi nhập: {{ p.missing_secrets[:12]|join(', ') }}{% if p.missing_secrets|length > 12 %}…{% endif %}</p>{% endif %}
+  {% if cs.present %}<p class="small">Session Claude Code: {{ cs.sessions or 0 }} session ({{ size(cs.bytes) }}) → <code>{{ cs.target }}/projects</code>{% if cs.redacted %} — transcript đã che secret{% endif %}{% if cs.conflicts %}; {{ cs.conflicts|length }} trùng id (giữ của máy này){% endif %}</p>{% endif %}
+</section>
+
+<section class="card"><h2>{{ m.icon('edit') }} Tuỳ chọn — tính lại kế hoạch</h2>
+  <form method="post" action="/hub-transfer/import/{{ uid }}" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Chế độ<select name="mode">{% for k, v in mode_label.items() %}<option value="{{ k }}"{% if k == p.mode %} selected{% endif %}>{{ v }}</option>{% endfor %}</select></label>
+    <label>Đổi thêm đường dẫn (mỗi dòng <code>CŨ=MỚI</code>, như <code>--map-path</code>)<textarea name="maps" rows="3" spellcheck="false">{{ maps_text }}</textarea></label>
+    {% if sec.present %}
+    <label>Thử passphrase (chỉ để kiểm — bạn sẽ nhập lại ở bước xác nhận cuối)<input type="password" name="passphrase" autocomplete="off"></label>
+    <label class="check"><input type="checkbox" name="skip_secrets" value="1"{% if opts.skip_secrets %} checked{% endif %}> <span>Bỏ qua secret (quên passphrase) — nhập phần còn lại</span></label>
+    {% endif %}
+    <label class="check"><input type="checkbox" name="clone_repos" value="1"{% if opts.clone_repos %} checked{% endif %}> <span>Tự <code>git clone</code> repo workspace chưa có (không bao giờ vào thư mục đã có)</span></label>
+    <div class="form-actions"><button class="btn" type="submit">{{ m.icon('refresh') }}<span>Tính lại kế hoạch</span></button></div>
+  </form>
+</section>
+
+{% if not p.blockers %}
+<section class="card attention" id="go">
+  <h2>{{ m.icon('arrow-left') }} Nhập gói này</h2>
+  <form method="post" action="/do/hub_import" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/hub-transfer/import/{{ uid }}">
+    <input type="hidden" name="upload" value="{{ uid }}"><input type="hidden" name="pkg_id" value="{{ p.id }}"><input type="hidden" name="mode" value="{{ p.mode }}">
+    {% for x in opts.maps %}<input type="hidden" name="map" value="{{ x }}">{% endfor %}
+    <input type="hidden" name="has_secrets" value="{{ '1' if sec.present else '0' }}">
+    {% if opts.skip_secrets %}<input type="hidden" name="skip_secrets" value="1">{% endif %}
+    {% if opts.clone_repos %}<input type="hidden" name="clone_repos" value="1">{% endif %}
+    {% if not p.fresh %}<label class="check"><input type="checkbox" name="replace" value="1" required> <span><b>Thay thế hub hiện có</b> — hiện trạng được chụp thành bản sao lưu <code>pre-restore</code> trước khi ghi đè</span></label>{% endif %}
+    {% if p.running %}<label class="check"><input type="checkbox" name="stop" value="1" required> <span>Dừng {{ p.running }} run đang chạy/chờ</span></label>{% endif %}
+    <p class="small muted">Bước kế tiếp: gõ lại id gói{% if sec.present and not opts.skip_secrets %} + passphrase{% endif %}. Daemon dừng trong lúc nhập rồi tự chạy lại.</p>
+    <div class="form-actions"><button class="btn danger" type="submit">{{ m.icon('arrow-left') }}<span>Nhập…</span></button></div>
+  </form>
+</section>
+{% endif %}
+<form method="post" action="/hub-transfer/import/{{ uid }}/discard" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}">
+  <button class="btn ghost sm" type="submit">{{ m.icon('trash') }}<span>Huỷ — xoá gói tải lên</span></button></form>
+<p class="small"><a href="/hub-transfer">← Chuyển hub</a></p>
+{% endblock %}

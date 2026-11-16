@@ -138,11 +138,15 @@ def reconcile(hub: "Hub") -> dict[str, Any]:
         interrupted += 1
         rlog.info("khôi phục: run %s → interrupted (daemon khởi động lại)", run["id"])
         to_resume.append(store.get_run(run["id"]))  # type: ignore[arg-type]
+    seen = {r["id"] for r in to_resume}
     for rid in store.state_get("pending_resume", []) or []:
         r = store.get_run(rid)
-        if r and r["status"] == "interrupted" and not r.get("continued_in_run_id"):
+        # run vừa chuyển running → interrupted ở trên cũng có thể nằm trong pending_resume: chỉ resume MỘT lần
+        if r and rid not in seen and r["status"] == "interrupted" and not r.get("continued_in_run_id"):
             to_resume.append(r)
-    store.state_set("pending_resume", [])
+            seen.add(rid)
+    # không có event loop (khởi động đồng bộ) thì chưa resume được: GIỮ danh sách cho lần khởi động có loop, không xoá mất
+    store.state_set("pending_resume", [] if _loop_running() else sorted(seen))
     evals_closed = _close_stale_evals(hub)
     # agent 'working' cũ không còn đúng
     for a in store.list_agents(include_archived=True):
@@ -199,12 +203,15 @@ def _close_stale_evals(hub: "Hub") -> list[str]:
 def resume_interrupted(hub: "Hub", run: dict[str, Any]) -> dict[str, Any] | None:
     from .runs import RESUME_INTERRUPTED_PROMPT
 
-    if hub.runs.estop.get("on"):
+    if hub.runs.estop.get("on") or hub.runs.frozen:  # đóng băng (chuyển nhà, hub_freeze): run dở chạy tiếp ở MÁY MỚI, không ở đây
         return None
     if run.get("kind") == "eval":  # M4-B: run eval --no-session-persistence, home tạm đã mất → không resume
         return None
     ag = hub.store.get_agent(run["agent_id"])
     if ag is None or ag.get("archived_at") or ag["status"] == "paused":
+        return None
+    cur = hub.store.get_run(run["id"])
+    if cur is None or cur.get("continued_in_run_id"):  # đã được tiếp tục (gọi lặp / bản dict cũ) → không tạo run con trùng
         return None
     if hub.auto_resume.exhausted(run, "daemon_restart"):  # trần chung với auto_resume.py: daemon chết lặp lại không resume mãi
         return None

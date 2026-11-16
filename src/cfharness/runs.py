@@ -102,9 +102,12 @@ class RunManager:
         self._warned_versions: set[str] = set()
         self._auth_watch: asyncio.Task | None = None
         self.shutting_down = False
+        # Làm lặng hub khi xuất gói (hub_transfer.py): khác None → không khởi chạy run trong hàng đợi (run mới vẫn xếp hàng,
+        # chạy khi xuất xong). Chỉ trong RAM — không bao giờ vào hub.db (gói xuất không mang trạng thái này)
+        self.quiesced: str | None = None
         from .workspace import WorkspaceLocks
 
-        self.locks = WorkspaceLocks(hub.store)  # M3: khoá theo gốc repo (FR-RT-12), thay bản tối thiểu M1-B
+        self.locks = WorkspaceLocks(hub.store, hub)  # M3: khoá theo gốc repo (FR-RT-12), thay bản tối thiểu M1-B
 
     # ------------------------------------------------------------------ state
     @property
@@ -116,6 +119,13 @@ class RunManager:
         from .admin_control import merge_estop  # ESTOP quản trị máy (cờ file của admin) gộp vào — user `estop off` không gỡ được
 
         return merge_estop(self.store.state_get("estop", {"on": False}), self.store.state_get("admin_estop"))
+
+    @property
+    def frozen(self) -> dict[str, Any] | None:
+        """`hub_state.migrated_to` khi hub đã `hub export --for move` (hub_freeze.py) — bền qua restart, chỉ người gỡ."""
+        from .hub_freeze import frozen
+
+        return frozen(self.hub)
 
     @property
     def auth_block(self) -> dict[str, Any] | None:
@@ -220,10 +230,22 @@ class RunManager:
         run_opts: dict[str, Any] | None = None,
         max_runtime_s: float | None = None,
         manager_issue: bool = False,
+        budget_exempt: bool = False,
     ) -> dict[str, Any]:
         if not prompt or not prompt.strip():
             raise HubError("prompt rỗng")
+        mig = self.frozen
+        if mig:  # hub đã chuyển nhà sang máy khác (hub_freeze.py): MỌI kind run đều bị từ chối tới khi người `hub unfreeze`
+            from .hub_freeze import blocked_error
+
+            raise blocked_error(mig)
         agent = self.hub.agents.get_row(agent_id)
+        if not cwd and str(agent.get("workspace_default") or "").startswith("filehub:"):
+            cwd = agent["workspace_default"]  # workspace mặc định của agent là thư mục chung → như run --cwd filehub:…
+        if cwd and str(cwd).startswith("filehub:"):  # thư mục chung Không gian số: `filehub:<tên>[/<con>]` → bản sao cục bộ
+            fh_path, fh_folder, _sub = self.hub.filehub.resolve_ref(str(cwd))  # type: ignore[attr-defined]
+            cwd = fh_path
+            run_opts = {**(run_opts or {}), "workspace_kind": "filehub", "filehub": fh_folder["name"]}
         if cwd:  # MGR-1: workspace ad-hoc phải trong gốc cho phép, không trong vùng bảo vệ
             from .workspace import validate_workspace
             validate_workspace(self.hub, cwd, "cwd của run")
@@ -267,7 +289,9 @@ class RunManager:
                 data={"auth_block": ab},
             )
         if agent["status"] == "paused" and check_paused:
-            raise Blocked(f"agent '{agent_id}' đang paused — `cfharness agent resume {agent_id}` trước")
+            why = (self.store.state_get("import_paused") or {}).get(agent_id) or {}  # hub import: workspace chưa có ở máy này (transfer_repos)
+            extra = f" ({why.get('reason')}: {why.get('workspace')} — tạo/clone repo trước)" if isinstance(why, dict) and why.get("reason") else ""
+            raise Blocked(f"agent '{agent_id}' đang paused{extra} — `cfharness agent resume {agent_id}` trước")
         if cwd is not None and not Path(cwd).expanduser().is_dir():
             raise HubError(f"cwd không tồn tại: {cwd}")
         if agent.get("plugins"):  # báo sớm plugin chưa cài thay vì để run hỏng lúc spawn
@@ -277,7 +301,7 @@ class RunManager:
                 _resolve_plugins(list(agent["plugins"]))
             except PluginError as e:
                 raise HubError(str(e), data={"field": "plugins"}) from e
-        max_budget = self._budget_for(agent, budget_usd, team_id)
+        max_budget = self._budget_for(agent, budget_usd, team_id, exempt_day=budget_exempt)
         run_id = "r_" + uuid.uuid4().hex[:12]
         session_id = resume_session_id or str(uuid.uuid4())
         if resume_session_id and (run_opts or {}).get("fork"):  # M4-A: fork → session MỚI, session gốc không đổi
@@ -305,20 +329,25 @@ class RunManager:
             "max_runtime_s": max_runtime_s,
         }
         self.store.insert_run(row)
-        if mgr_keep:
-            self.hub.manager.mark_issued(run_id, (run_opts or {}).get("manager_conversation"))
-        if task_id:
-            self.hub.dispatcher.on_run_submitted(task_id, run_id, parent_run_id)
-        seq_before = self.hub.bus.last_seq
-        self.hub.publish(
-            make_event(
-                "run.queued",
-                agent_id,
-                {"kind": kind, "session_id": session_id, "max_budget_usd": max_budget, "prompt_preview": prompt[:200], "resume": bool(resume_session_id), "parent_run_id": parent_run_id, "resume_reason": resume_reason},
-                run_id=run_id,
-                session_id=session_id,
+        try:
+            if mgr_keep:
+                self.hub.manager.mark_issued(run_id, (run_opts or {}).get("manager_conversation"))
+            if task_id:
+                self.hub.dispatcher.on_run_submitted(task_id, run_id, parent_run_id)
+            seq_before = self.hub.bus.last_seq
+            self.hub.publish(
+                make_event(
+                    "run.queued",
+                    agent_id,
+                    {"kind": kind, "session_id": session_id, "max_budget_usd": max_budget, "prompt_preview": prompt[:200], "resume": bool(resume_session_id), "parent_run_id": parent_run_id, "resume_reason": resume_reason},
+                    run_id=run_id,
+                    session_id=session_id,
+                )
             )
-        )
+        except Exception as e:
+            # run đã ghi DB nhưng chưa vào hàng đợi: đóng nó lại, không để run 'queued' ma giữ chỗ ngân sách (reserved_budget) mãi
+            self.store.update_run(run_id, {"status": "failed", "outcome": "failed", "ended_at": now_iso(), "error": f"lỗi khi xếp hàng run: {e}"[:500]})
+            raise
         self.queue.append(run_id)
         self.waiters[run_id] = asyncio.Event()
         self.tick()
@@ -341,14 +370,17 @@ class RunManager:
         r = self.store.conn.execute(f"SELECT COALESCE(SUM(MAX(max_budget_usd - COALESCE(cost_usd, 0), 0)), 0) FROM runs WHERE {where}", args).fetchone()
         return float(r[0] or 0)
 
-    def _budget_for(self, agent: dict[str, Any], budget_usd: float | None, team_id: str | None = None) -> float | None:
+    def _budget_for(self, agent: dict[str, Any], budget_usd: float | None, team_id: str | None = None, *,
+                    exempt_day: bool = False) -> float | None:
         """Trần `--max-budget-usd` của run = min(ngân sách run, phần còn lại của ngày ở hub/team/agent) (FR-OB-03).
-        Phần còn lại TRỪ phần đang giữ chỗ của run chưa kết thúc (H-19) → tổng trần các run song song ≤ hạn mức ngày."""
+        Phần còn lại TRỪ phần đang giữ chỗ của run chưa kết thúc (H-19) → tổng trần các run song song ≤ hạn mức ngày.
+        `exempt_day` (lượt chạy tiếp sau khi NGƯỜI quyết approval — chủ repo quyết 2026-11-14): bỏ qua trần ngày của
+        hub/team/agent/điều phối viên; trần mỗi run (kế thừa từ run gốc) và scope `admin` (chính sách root) vẫn áp."""
         limits = agent.get("limits") or {}
         per_run = budget_usd or limits.get("max_budget_usd_per_run") or self.hub.config.get("runs.default_max_budget_usd")
         per_run = self._admin_policy().cap_per_run(self.hub, per_run)  # trần mỗi run của chính sách quản trị máy
         for scope, owner, used, day in self.budget_scopes(agent["id"], team_id):
-            if not day:
+            if not day or (exempt_day and scope != "admin"):
                 continue
             reserved = self.reserved_budget(scope, owner)
             if used < float(day) and round(float(day) - used - reserved, 6) <= 0:
@@ -370,7 +402,7 @@ class RunManager:
     def tick(self) -> list[str]:
         """Khởi chạy các run trong hàng đợi khi đủ điều kiện. Trả danh sách run vừa khởi chạy."""
         started: list[str] = []
-        if self.shutting_down or self.estop.get("on"):
+        if self.shutting_down or self.quiesced or self.estop.get("on") or self.frozen:
             return started
         limit = self.effective_limit()  # M3: điều tiết theo rate limit (FR-RT-16)
         skipped: list[str] = []
@@ -435,7 +467,9 @@ class RunManager:
             if _in_agent_workspaces(cwd, home):  # M7: thư mục cố định trong workspaces/ của agent (hội thoại manager) = scratch
                 wkind = "scratch"
         elif agent.get("workspace_default"):
-            cwd, wkind = Path(agent["workspace_default"]).expanduser(), "dir"
+            wd = str(agent["workspace_default"])
+            cwd = Path(hub.filehub.resolve_ref(wd)[0] if wd.startswith("filehub:") else wd).expanduser()  # type: ignore[attr-defined]
+            wkind = "dir"
         else:
             cwd, wkind = home / "workspaces" / run_id, "scratch"
         if wkind in ("dir", "worktree") and cwd.exists():  # R2-5 (SEC): kiểm lại lúc spawn — chống TOCTOU (đổi thành symlink sau khi đặt)
@@ -889,7 +923,11 @@ class RunManager:
 
         wc = self.hub.config.get("workspace")
         try:
-            cp = await asyncio.to_thread(take_checkpoint, spec.cwd, self.checkpoint_dir(ar.run_id), max_file_bytes=int(wc["max_file_bytes"]), max_files=int(wc["max_files"]))
+            fh = (run.get("run_opts") or {}).get("filehub")
+            cp = await asyncio.to_thread(take_checkpoint, spec.cwd, self.checkpoint_dir(ar.run_id), max_file_bytes=int(wc["max_file_bytes"]), max_files=int(wc["max_files"]),
+                                         force_walk=bool(fh))
+            if fh:
+                cp["filehub"] = str(fh)
         except Exception as e:  # checkpoint lỗi không chặn run, nhưng ghi lại (không revert được)
             run_logger(log, ar.run_id, ar.agent_id).warning("checkpoint run %s lỗi: %r", ar.run_id, e)
             self.store.update_run(ar.run_id, {"checkpoint": {"kind": "error", "error": repr(e)[:300]}, "workspace_key": ar.lock_key})
@@ -1051,10 +1089,17 @@ class RunManager:
             self._check_repeated_failure(ar.agent_id, ar.run_id, error)
 
     def _record_cost(self, h: RunHandle, res: dict[str, Any]) -> dict[str, Any]:
-        total = float(res.get("cost_usd") or 0.0)
+        """Chi phí run = luỹ kế session mới − luỹ kế đã ghi. Luỹ kế session KHÔNG BAO GIỜ đi lùi: `total_cost_usd` thiếu (lượt
+        lỗi sớm) hoặc nhỏ hơn luỹ kế đã ghi → run tính 0 và giữ nguyên luỹ kế (trước đây ghi đè bằng số nhỏ hơn làm lượt sau
+        bị cộng lại phần đã tính)."""
+        raw = res.get("cost_usd")
         sess = self.store.get_session(h.spec.resume_session_id if h.spec.fork else h.spec.session_id)  # M4-A: fork luỹ kế từ session gốc
-        prev = float(sess["cumulative_cost_usd"]) if sess and h.spec.resume_session_id else 0.0
-        run_cost = round(max(0.0, total - prev), 8) if total >= prev else total
+        prev = float(sess["cumulative_cost_usd"] or 0.0) if sess and h.spec.resume_session_id else 0.0
+        total = float(raw) if raw is not None else prev
+        if total < prev:
+            log.warning("run %s: total_cost_usd %.6f nhỏ hơn luỹ kế session %.6f — giữ luỹ kế, run tính 0", getattr(h, "run_id", "?"), total, prev)
+            total = prev
+        run_cost = round(total - prev, 8)
         self.store.set_session_cost(h.spec.session_id, total)
         return {"cost_usd": run_cost, "session_cost_total_usd": total}
 
@@ -1332,20 +1377,43 @@ class RunManager:
             + "\nThen continue the original task from where you stopped and finish with a short summary."
         )
         ticket = next((a["id"] for a in decided if a["status"] == "allowed"), None)
+        # Người vừa quyết → lượt chạy tiếp không bị trần NGÀY chặn (không thì quyết định của người thành vô ích). Chỉ khi
+        # MỌI quyết định là của người: điều phối viên (`manager:*`) / hub tự quyết không được miễn.
+        exempt = all(human_decided(a) for a in decided)
         try:
             new = self.submit(
                 run["agent_id"], prompt, cwd=run.get("cwd"), budget_usd=run.get("max_budget_usd"), model=run.get("model"),
                 kind=run.get("kind") or "adhoc", resume_session_id=run["session_id"], parent_run_id=run_id,
-                resume_reason="approval", resume_ticket_id=ticket, check_paused=False,
+                resume_reason="approval", resume_ticket_id=ticket, check_paused=False, budget_exempt=exempt,
             )
-        except HubError as e:
+        except HubError as e:  # gồm Blocked (ESTOP, ngân sách…)
+            # approval đã quyết hết mà không resume được → kết thúc run (failed), không để kẹt waiting_human mãi;
+            # người chạy tiếp bằng `cfharness run continue` khi hết lý do chặn.
+            err = f"không resume được sau khi duyệt: {e.message}"
+            self.store.update_run(run_id, {"status": "failed", "outcome": "failed", "error": err, "ended_at": run.get("ended_at") or now_iso()})
+            self.locks.release_session(run.get("session_id"))
             self.hub.publish(make_event("error", run["agent_id"], {"code": "resume_failed", "message": e.message}, run_id=run_id))
+            self.hub.publish(make_event("run.failed", run["agent_id"], {"outcome": "failed", "error": err}, run_id=run_id, session_id=run.get("session_id")))
+            self._set_agent_after(run["agent_id"], run_id, "failed")
             return None
         self.store.update_run(run_id, {"status": "resumed", "outcome": "resumed", "continued_in_run_id": new["id"]})
+        if exempt and self._day_exhausted(run["agent_id"], new.get("team_id")):
+            from . import audit as _audit
+
+            _audit.record("budget.exempt_approved", run["agent_id"], new["id"],
+                         {"from_run_id": run_id, "approvals": [a["id"] for a in decided], "by": [a.get("resolved_by") for a in decided],
+                          "max_budget_usd": new.get("max_budget_usd"), "actor": "hub"})
         for a in decided:
             self.hub.approvals._update(a["id"], {"resume_run_id": new["id"]})
         self.hub.publish(make_event("run.resumed", run["agent_id"], {"from_run_id": run_id, "run_id": new["id"], "reason": "approval", "ticket": ticket}, run_id=run_id, session_id=run["session_id"]))
         return new
+
+    def _day_exhausted(self, agent_id: str, team_id: str | None) -> bool:
+        """Có scope ngày (ngoài `admin`) đã hết hoặc đang bị giữ chỗ hết → lượt vừa tạo thực sự dùng miễn trừ (để ghi audit)."""
+        for scope, owner, used, day in self.budget_scopes(agent_id, team_id):
+            if day and scope != "admin" and round(float(day) - used - self.reserved_budget(scope, owner), 6) <= 0:
+                return True
+        return False
 
     def continue_run(self, ref: str, prompt: str, *, reason: str = "continue", budget_usd: float | None = None) -> dict[str, Any]:
         """FR-TK-14: run mới cùng agent, `--resume <session>` (không fork), cùng cwd. `ref` = id run (tiền tố) hoặc session."""
@@ -1366,6 +1434,28 @@ class RunManager:
             run["agent_id"], prompt, cwd=run.get("cwd"), budget_usd=budget_usd, model=run.get("model"), kind=run.get("kind") or "adhoc",
             resume_session_id=run["session_id"], parent_run_id=run["id"], resume_reason=reason,
         )
+
+
+def export_quiesced(hub: Any) -> bool:
+    """Hub đang xuất gói (`hub_transfer.export_in_daemon` đặt `RunManager.quiesced`) HOẶC đã đóng băng vì chuyển nhà (`hub_freeze`,
+    `hub_state.migrated_to`): các vòng nền GHI tri thức/DB bỏ lượt (kiểm ở đầu mỗi tick). Lượt ĐANG chạy dở (đang `await`) không bị cắt —
+    xem giới hạn ở docstring hub_transfer. Sao lưu KHÔNG dùng hàm này khi đóng băng (vẫn chạy — `exporting`)."""
+    if exporting(hub):
+        return True
+    from .hub_freeze import frozen
+
+    return frozen(hub) is not None
+
+
+def exporting(hub: Any) -> bool:
+    """CHỈ đang xuất gói (làm lặng trong RAM) — không tính đóng băng."""
+    return bool(getattr(getattr(hub, "runs", None), "quiesced", None))
+
+
+def human_decided(a: dict[str, Any]) -> bool:
+    """Approval do NGƯỜI quyết (cùng cách phân loại `approval_stats.decider`): có `resolved_by`, không phải hub/điều phối viên."""
+    by = str(a.get("resolved_by") or "")
+    return a.get("status") in ("allowed", "denied") and bool(by) and by != "hub" and not by.startswith("manager:")
 
 
 # M7 MGR-3: khoá run_opts của vai trò manager + lý do tiếp nối NỘI BỘ của hub được giữ vai trò
