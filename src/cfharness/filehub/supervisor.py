@@ -101,6 +101,8 @@ class SyncSupervisor:
         if pend is not None:  # hợp đồng: một --add-root mỗi lần chạy; root đã có trong status thì bỏ cờ pending
             args += ["--add-root", str(pend["root_id"]), "--root-name", str(pend["name"]), "--ws", str(pend.get("ws_id") or ""),
                      "--local-parent", str(Path(pend["local_path"]).parent)]
+            if pend.get("kind") == "workspace":  # S5: thiếu = folder; gốc workspace BẮT BUỘC --root-kind workspace
+                args += ["--root-kind", "workspace"]
         return args
 
     def check_version(self) -> str | None:

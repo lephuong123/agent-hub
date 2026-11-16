@@ -48,6 +48,11 @@ def inject(hub: Any, **entry: Any) -> None:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def login_argv(hub: Any) -> list[list[str]]:
+    p = hub.filehub.tokens_path.parent / "login_argv.jsonl"
+    return [json.loads(x)["argv"] for x in p.read_text().splitlines()] if p.exists() else []
+
+
 def argv_log(hub: Any) -> list[dict[str, Any]]:
     p = hub.filehub.profile_dir / "argv.jsonl"
     return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []

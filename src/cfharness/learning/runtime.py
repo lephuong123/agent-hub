@@ -78,14 +78,12 @@ def system_prompt_for(hub: "Hub", run: dict[str, Any], agent: dict[str, Any]) ->
     return text, info
 
 
-def _shared_folders(hub: "Hub") -> list[tuple[str, str]]:
-    """Thư mục chung Không gian số đã bật (filehub/) — mọi run được đọc (plan-cloud-files §7.4)."""
+def _shared_folders(hub: "Hub") -> list[dict[str, str]]:
+    """Thư mục chung Không gian số đã bật (filehub/) — mọi run được đọc (plan-cloud-files §7.4); kind + tên sống trên web."""
     try:
-        from ..filehub.service import config_folders
+        from ..filehub.service import shared_folders
 
-        if not hub.config.get("filehub.enabled"):
-            return []
-        return [(str(f["name"]), str(f["local_path"])) for f in config_folders(hub.config)]
+        return shared_folders(hub)
     except Exception:  # pragma: no cover - khối phụ hỏng không chặn run
         return []
 

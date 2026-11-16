@@ -10,7 +10,27 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
-_(chưa có thay đổi)_
+### Thư mục dùng chung với "Không gian số": cả workspace + cài đặt trên web
+- Thư mục chung giờ có thể là **toàn bộ một workspace** Không gian số (mặc định khi `cfharness filehub setup`; tài khoản đăng nhập phải là
+  Workspace Admin): đường dẫn trên máy = đường dẫn bạn thấy trên web tính từ workspace, thư mục cấp 1 tạo sau tự về máy. Chế độ một thư mục cũ
+  vẫn dùng được (`--scope folder`).
+- Đổi tên workspace/thư mục trên web: đồng bộ chạy tiếp, trên máy giữ tên và đường dẫn cũ; giao việc bằng tên mới (`filehub:<tên mới>/…`)
+  vẫn trúng đúng thư mục. Thẻ Cài đặt hiện "Toàn bộ workspace «tên mới»" và tài khoản đã đăng nhập.
+- Tệp đặt thẳng ở gốc workspace không lên Không gian số (Không gian số không có tệp ở gốc) — thẻ Cài đặt liệt kê để bạn chuyển vào một thư
+  mục cấp 1; agent được dặn tạo tệp trong thư mục cấp 1.
+- Tài khoản bị gỡ quyền admin của workspace → thẻ Cài đặt báo đỏ kèm tên tài khoản, nút "Đăng nhập lại".
+- **Cài đặt Không gian số trên web**, kể cả khi mở qua link public: thiết lập, đăng nhập lại, chuyển sang toàn bộ workspace, tạm dừng/chạy lại,
+  gỡ thư mục (các thao tác lớn có xác nhận 2 bước). Qua link public, đăng nhập theo kiểu chuyển tiếp: Không gian số đưa trình duyệt về
+  `https://<hub>/filehub/oauth/cb` (cần `web.public_origin`); qua link public không đổi được máy chủ/binary đã đặt.
+- Lệnh mới `cfharness filehub switch-to-workspace`: chuyển thư mục chung đang dùng sang toàn bộ workspace (giữ nguyên tệp cũ).
+
+### Lưu ý khi cập nhật
+- Hub đang đồng bộ MỘT thư mục vẫn chạy như cũ. Muốn chuyển sang cả workspace: `cfharness filehub switch-to-workspace` (hoặc nút "Chuyển sang
+  toàn bộ workspace" ở Cài đặt web) — đăng nhập bằng tài khoản admin của workspace; xong thì kiểm bản sao mới, tự xoá bản sao cũ và thu hồi
+  thiết bị cũ ở Không gian số › Hồ sơ › Thiết bị.
+- Chế độ workspace và đăng nhập qua link public cần `tang-thu-sync-headless` bản mới (có `--root-mode`/`--redirect-uri`) và Không gian số
+  bản có gốc workspace. Binary cũ: thiết lập chế độ workspace báo "binary sync chưa hỗ trợ…" — dùng `--scope folder` hoặc cập nhật binary.
+  `filehub.sync_min_version` sẽ được nâng khi bản sync mới phát hành (TODO: số phiên bản chưa chốt).
 
 ---
 

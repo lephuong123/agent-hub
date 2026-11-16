@@ -1,6 +1,7 @@
 # Thư mục dùng chung với "Không gian số" (`filehub/`)
 
-Ngày: 2026-11-15. Plan + quyết định + hợp đồng 3 repo: `plan-cloud-files.md` (§3, §7, §8). Không có migration.
+Ngày: 2026-11-15 (gốc workspace + cài đặt trên web: 2026-11-16, PR H7 — `plan-filehub-workspace-root.md`). Plan + quyết định + hợp đồng 3 repo:
+`plan-cloud-files.md` (§3, §7, §8). Không có migration.
 
 ## Tóm tắt
 
@@ -67,7 +68,9 @@ Tệp: `HUB_HOME/filehub/{profile/, status.json, control.json, ignore.txt, super
 
 - RPC ghi `filehub.*` ∈ `auth.HUMAN_ONLY`, `MUTATING_FILEHUB` ∈ `auth.all_mutating()` (bọc audit), KHÔNG ∈ `MANAGER_ALLOWED`. Điều phối viên có tool
   chỉ đọc `filehub_list|filehub_link` và giao việc workspace `filehub:` (`manager/permissions.check_path` giải ref rồi kiểm như đường dẫn thường).
-- Web: tạm dừng/chạy lại/cho đẩy tiếp chỉ khi `is_local_request` (qua link public chỉ xem); thiết lập/đăng nhập/thêm/gỡ chỉ ở terminal.
+- Web (W7, H7): MỌI thao tác (thiết lập, đăng nhập lại, chuyển sang workspace, tạm dừng/chạy lại/cho đẩy tiếp, gỡ) làm được cả qua link public
+  — vẫn đăng nhập web + TOTP + CSRF + khoá phiên; thiết lập/đăng nhập/chuyển/gỡ = `Action.step2`. Qua link public (`remote`): không ĐỔI được
+  server/binary đã đặt; binary mới phải tên `tang-thu-sync-headless` và người dùng của hub không ghi được (tệp + thư mục chứa).
 
 ## Lệch plan / hợp đồng
 
@@ -110,3 +113,47 @@ thùng rác cloud, presence, steer by=hub). Bốn lỗi đã sửa:
 2. `ignore.txt` mặc định thêm `.claude/`, `.claude.json`, `.cc-writes` (Claude Code ghi `.claude/.cc-writes` trong cwd của run).
 3. `filehub.state` không phát/ghi mỗi vòng syncing↔idle (syncing gộp vào idle cho event); trạng thái thật vẫn ở `filehub.status`.
 4. Tên thiết bị: macOS `scutil --get ComputerName`, không có → hostname (IP giữ nguyên, không cắt ở dấu chấm), ≤ 40 ký tự.
+
+## Gốc workspace + cài đặt trên web (PR H7, 2026-11-16)
+
+Plan + quyết định W1–W7: `plan-filehub-workspace-root.md`. Hợp đồng chung: `tang-thu-sync/protocol/openapi.yaml` (6a9eaf9).
+
+- Cấu hình: `filehub.folders[].kind` = `folder` | `workspace` (thiếu = folder) + `account` (username, chỉ hiển thị); `filehub.scope` (mặc định
+  `workspace`) cho `setup`; `filehub.relay_timeout_s` (600). Chế độ workspace: `root_id = ws_id` (gốc ảo), bản sao `<local_parent>/<tên ws>`.
+- Đăng nhập: `login --root-mode workspace` CHỈ khi chế độ workspace (single là mặc định của binary → không truyền cờ, binary cũ vẫn chạy chế độ
+  folder; binary cũ + workspace → `ERROR usage` → báo "chưa hỗ trợ chế độ workspace"). Đăng nhập lại giữ chế độ của thư mục đang có.
+  Dòng `ROOT <id>\t<wsId>\t<name>[\t<kind>\t<account>]` — 3 cột cũ vẫn đọc (kind=folder, account rỗng).
+- Relay OAuth (web public): `filehub.login{relay:true}` → binary `--redirect-uri <web.public_origin>/filehub/oauth/cb --no-browser --timeout
+  <relay_timeout_s>`, stdin PIPE; daemon lấy `state` từ query của LOGIN_URL (thiếu/ngắn → từ chối). Route web CÔNG KHAI `GET /filehub/oauth/cb`
+  (`GuardMiddleware.PUBLIC`; `WebState.fh_limiter` khoá theo IP + toàn cục sau 10 lần sai) → RPC `filehub.login_callback{code,state,error?}`
+  (HUMAN_ONLY, MUTATING, code/state bị `pop` trước audit): `compare_digest`; sai/hết hạn/không có lượt chờ → lỗi CHUNG và lượt chờ GIỮ
+  NGUYÊN; khớp → xoá state (một lần) → `CODE <code>\t<state>\n` vào stdin (code/state chỉ ký tự URL-safe, ≤ 2048 — không chèn được dòng
+  thứ hai). `?error=` của trang đồng ý: sau khi state khớp → `ERROR <mã>\t<state>` vào stdin (mã chỉ `[a-z0-9_]` ≤ 64, khác → `other`), binary
+  in `ERROR <mã>` và thoát. Trang kết quả chỉ chữ cố định hoặc chữ daemon dựng (`message`), không phản chiếu query.
+  Web trên chính máy hub (`is_local_request`) dùng listener loopback như CLI (`no_browser`, trang `/filehub/login` đưa link tab mới).
+- Hợp đồng headless: `tang-thu-sync/docs/headless-cfharness.md` (S5, commit 9869ede). Chạy đồng bộ với `--add-root <id> … --root-kind workspace`
+  cho gốc workspace (thiếu = folder; hub chỉ truyền khi workspace). Lỗi `login`: `ERROR <mã>` exit 1 (`usage` exit 2); chữ tiếng Việt dựng ở
+  daemon (`service.login_error_text` → `status.login.message`, nêu tên tài khoản cho `super_not_member`/`not_ws_admin`/`device_limit`).
+- Trạng thái (status.json của binary): `roots[].kind`, `roots[].server_name` (tên SỐNG, `null` tới lần đồng bộ đầu; đổi tên workspace không có
+  sự kiện feed → cập nhật theo lần làm mới token ~15 phút — bí danh chịu được tên cũ/null, tên cfharness luôn khớp), `roots[].unpushable[{path,
+  kind}]` (kind `root_files` → `folders[].root_files` "tệp ở gốc workspace không đồng bộ"; kind khác → `folders[].unpushable`). Tài khoản: cột 5
+  của dòng `ROOT` (rỗng khi server cũ) → `folders[].account` (status không có account). `last_error ∈ {root_revoked, disconnected}`
+  hoặc `roots[].state == disconnected` → `folders[].revoked` + trạng thái tổng `revoked` (event `filehub.state`).
+- Đổi tên: tên cfharness + `local_path` giữ; `resolve_ref` (`match_ref`) nhận tên sống làm bí danh (tên cfharness khớp trước, tên dài nhất
+  thắng, bí danh trùng nhiều thư mục → không khớp). `filehub.list` thêm `kind`, `server_name`, `note`, `layout`. Khối prompt "Shared folder"
+  ghi gốc = cả workspace, tên mới, "tạo tệp trong thư mục cấp 1" (tên sống đọc từ status.json — chỉ đổi khi người đổi tên → prompt cache ổn định).
+- `filehub.switch_to_workspace` / `cfharness filehub switch-to-workspace` (HUMAN_ONLY, MUTATING, ∈ `HUB_HUMAN_ONLY_CLI`): có run giữ khoá →
+  từ chối; đăng nhập chế độ workspace TRƯỚC, chỉ khi thành công mới gỡ thư mục chế độ folder khỏi cấu hình (tệp giữ) và thêm gốc workspace ở
+  bản sao mới (không trùng/chứa bản cũ — trùng tên thì thêm hậu tố ` workspace`); server không cấp gốc workspace → cấu hình cũ giữ nguyên.
+  `login.switched_from` (RAM) → thẻ/CLI nhắc xoá bản cũ + thu hồi thiết bị cũ.
+- Link gốc workspace: `<server>/files` (trang Tệp của workspace hiện tại — route riêng theo ws chưa có ở T6); tệp ở gốc workspace: không có link.
+
+Lệch plan/hợp đồng (H7):
+- Plan §4 "Chuyển chế độ" gỡ root cũ TRƯỚC khi đăng nhập; làm SAU khi đăng nhập thành công (lỗi đăng nhập không làm mất thư mục chung đang chạy).
+- `cfharness filehub rename` (đổi tên cục bộ) chưa làm (plan để sau).
+- `filehub.sync_min_version` chưa nâng — TODO khi S5 phát hành.
+
+Test: `test_filehub_supervisor.py` (workspace 5 cột + `--root-kind`, 4 cột / account rỗng, binary cũ 3 cột, relay state một lần/hết hạn/lỗi/code chèn dòng, switch, remote setup),
+`test_filehub_workspace.py` (`filehub:<ws>/<cấp 1>/…` trong W, bí danh tên mới, prompt, revoked), `test_web_filehub.py` (thao tác qua link public,
+bước 2, relay end-to-end với binary giả, callback sai/dùng lại/XSS/giới hạn tốc độ, loopback trên máy hub), `test_sec_auth.py`,
+`test_manager_security.py`, `test_guard_classifier.py::test_filehub_cli_human_only`.
