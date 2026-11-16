@@ -351,6 +351,16 @@ def cmd_doctor(ctx: Ctx) -> int:
     note = doctor_note(cfg)
     if note:
         add("khung điều phối viên (hermes) không sandbox", note[0], note[1], "warning")
+    from .prompt import SYSTEM_PROMPT_WARN_CHARS, latest_prompts, size_summary
+
+    sp_limit = int(ccfg.get("system_prompt_warn_chars") or SYSTEM_PROMPT_WARN_CHARS)
+    sp_all = latest_prompts(ctx.paths.home)
+    sp_big = [(aid, t) for aid, t in sp_all if len(t) > sp_limit]
+    for aid, t in sp_big:
+        add(f"system prompt {aid}", False, f"{size_summary(t)} (ngưỡng {sp_limit}: runtime.claude.system_prompt_warn_chars)", "warning")
+    if sp_all and not sp_big:
+        aid, t = max(sp_all, key=lambda x: len(x[1]))
+        add("cỡ system prompt", True, f"lớn nhất {aid}: {len(t)}/{sp_limit} ký tự")
     add("HUB_HOME ghi được", os.access(ctx.paths.home, os.W_OK) if ctx.paths.home.exists() else os.access(ctx.paths.home.parent, os.W_OK), str(ctx.paths.home))
     client = RpcClient(ctx.paths.socket, timeout=10)
     daemon_up = True

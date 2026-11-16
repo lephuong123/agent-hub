@@ -74,8 +74,23 @@ def system_prompt_for(hub: "Hub", run: dict[str, Any], agent: dict[str, Any]) ->
 
     text = build_system_prompt(agent["id"], soul, blocks, charter=team_charter(hub, run.get("team_id")), browser=effective_mode(agent, hub.config),
                                cli_ref=_manager_cli_ref(hub, agent["id"]), shared_folders=_shared_folders(hub))
+    _warn_if_large(hub, agent["id"], text)
     save_prompt(hub, text)
     return text, info
+
+
+def _warn_if_large(hub: "Hub", agent_id: str, text: str) -> None:
+    """Prompt vượt `runtime.claude.system_prompt_warn_chars` → log cảnh báo kèm các khối lớn nhất (không chặn run)."""
+    from ..prompt import SYSTEM_PROMPT_WARN_CHARS, size_summary
+
+    try:
+        limit = int(hub.config.get("runtime.claude.system_prompt_warn_chars") or SYSTEM_PROMPT_WARN_CHARS)
+    except Exception:  # pragma: no cover
+        limit = SYSTEM_PROMPT_WARN_CHARS
+    if len(text) > limit:
+        import logging
+
+        logging.getLogger("cfharness.learning").warning("system prompt của %s vượt ngưỡng %d: %s", agent_id, limit, size_summary(text))
 
 
 def _shared_folders(hub: "Hub") -> list[tuple[str, str]]:

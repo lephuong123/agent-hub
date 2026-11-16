@@ -215,3 +215,9 @@ Bash không sandbox OS, và thư mục app cùng chủ OS với agent nên khôn
 - Directory chỉ liệt kê hub có `web.public_origin`; hub chỉ chạy cục bộ không có trong danh mục (đúng hợp đồng: origin phải https).
 - Giới hạn tốc độ directory chỉ ở RAM tiến trình web (khởi động lại web = xoá khoá), như giới hạn đăng nhập.
 - Nhánh Windows của `--ensure` chưa chạy thật trên máy Windows (chỉ có code + cờ `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`).
+
+## Link tải app trên web của hub (2026-11-16)
+Thẻ `#desktop-app` ở Cài đặt (`templates/_desktop_app.html`) + link `Tải app máy tính` ở chân thanh bên (`base.html`). Link là HẰNG SỐ
+`web/desktop.DOWNLOADS` → `releases/latest/download/Cfharness-Desktop-{macOS.dmg,Windows-setup.exe}` của repo app (release của app
+đăng kèm hai tệp tên cố định) + trang hướng dẫn GitHub Pages. Không lấy từ cấu hình. Hiện cả khi mở trong app (C7: UA không đổi giao diện).
+Test: `tests/test_desktop_hub.py::test_settings_has_desktop_download_links`.

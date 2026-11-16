@@ -35,6 +35,7 @@ from .. import auth as _auth
 from ..errors import Blocked, Conflict, HubError, NotFound
 from ..events import TERMINAL_RUN_EVENTS, HubEvent, iso, make_event
 from ..store import now_iso
+from .. import task_report
 from . import prompts
 from .permissions import ManagerPermissions, task_spec
 
@@ -870,7 +871,35 @@ class ManagerService:
             self.hub.store.state_set("manager_tick", tk)
 
     # ------------------------------------------------------------------ nhịp: gom sự kiện
-    def _push(self, kind: str, key: str, summary: str, **data: Any) -> None:
+    def _report_task_done(self, t: dict[str, Any]) -> bool:
+        """Task người giao xong → hub TỰ gửi báo cáo (Đã làm / Còn mở / Cần bạn) về hội thoại đã giao việc — không phụ thuộc điều
+        phối viên có gọi notify_owner trong tick hay không (trước đây tick hay kết thúc NO_ACTION → người không nghe gì). Không biết
+        hội thoại gốc (task tạo từ CLI/web không qua hội thoại) → False: điều phối viên lo như cũ."""
+        if not self.cfg("auto_report_tasks", True):
+            return False
+        try:
+            cid = self.origin_conversation(task_id=t["id"])
+            conv = self._conv_row(cid) if cid else None
+        except Exception:  # hội thoại đã xoá / lỗi tra — không chặn luồng sự kiện
+            conv = None
+        if not conv or conv.get("channel") == HEARTBEAT_CHANNEL or conv.get("archived_at"):
+            return False
+        text = task_report.owner_report(t)
+        try:
+            self._add_msg(conv["id"], "notify", text, None)
+            self.hub.audit.record("manager.notify", self.agent_id(), None, {"text": text[:1000], "kind": "task_report", "task_id": t["id"],
+                                                                             "conversation_id": conv["id"]},
+                                  actor="hub", channel="manager", target=conv["id"], summary="hub.task_report")
+            self.hub.publish(make_event("manager.reply", self.agent_id(), {
+                "conversation_id": conv["id"], "run_id": None, "text": text[:TEXT_MAX], **({"truncated": True} if len(text) > TEXT_MAX else {}),
+                "channel": conv["channel"], "kind": "notify", "notify_kind": "need_human" if task_report.needs_owner(t) else "done",
+                "ok": True, "conversation_guessed": False, "task_id": t["id"], "auto_report": True}))
+        except Exception:  # pragma: no cover — gửi lỗi → để điều phối viên báo như cũ
+            log.exception("không gửi được báo cáo task %s", t.get("id"))
+            return False
+        return True
+
+    def _push(self, kind: str, key: str, summary: str, *, cap: int = 300, **data: Any) -> None:
         if key in self._pending_keys:
             return
         self._pending_keys.add(key)
@@ -888,7 +917,7 @@ class ManagerService:
             data["workstream_id"] = wid
         if self._first_pending is None:
             self._first_pending = time.monotonic()
-        self.pending.append({"kind": kind, "summary": summary[:300], "ts": now_iso(), "_key": key, **data})
+        self.pending.append({"kind": kind, "summary": summary[:cap], "ts": now_iso(), "_key": key, **data})
 
     def wake_soon(self) -> None:
         """Sự kiện cần điều phối viên xử lý sớm (approval giao cho nó): bỏ thời gian gom `event_debounce_s` — vòng nền (`check_s`)
@@ -919,8 +948,11 @@ class ManagerService:
             elif to == "done" and str(t.get("created_by") or "").startswith("schedule:"):
                 return  # task do lịch tạo: kết quả đã gửi về kênh của lịch (schedules/) — không tốn một nhịp chỉ để báo xong
             elif to == "done" and (not t.get("origin_task_id") or str(t.get("created_by") or "").startswith("manager:")):
-                self._push("task_done", f"td:{t['id']}", f"task {t['id']} '{t['title'][:80]}' DONE: {str(t.get('result_summary') or '')[:200]}",
-                           task_id=t["id"], team_id=t.get("team_id"))
+                posted = self._report_task_done(t)
+                self._push("task_done", f"td:{t['id']}", f"task {t['id']} '{t['title'][:80]}' DONE"
+                           + (" (cfharness ALREADY POSTED this report to the owner's conversation — do not repeat it)" if posted else "")
+                           + f": {task_report.digest(t.get('result_summary'), 700)}",
+                           cap=1000, task_id=t["id"], team_id=t.get("team_id"), reported=posted)
         elif ev.type == "task.circuit_open":
             self._push("task_circuit_open", f"tc:{ev.task_id}:{ev.seq}", f"task {ev.task_id}: circuit breaker opened (repeated failures)", task_id=ev.task_id)
         elif ev.type in ("run.failed",) and ev.source == "hub":

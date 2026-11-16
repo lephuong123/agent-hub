@@ -36,7 +36,8 @@ fork = "--fork-session" in args
 sid = opt("--session-id") if (not resume or fork) else resume
 first = json.loads(sys.stdin.readline())
 prompt = first["message"]["content"]
-system = opt("--append-system-prompt") or opt("--system-prompt") or ""
+_sp_file = opt("--append-system-prompt-file") or opt("--system-prompt-file")
+system = Path(_sp_file).read_text(encoding="utf-8") if _sp_file else (opt("--append-system-prompt") or opt("--system-prompt") or "")
 mcp_cfg = json.loads(Path(opt("--mcp-config")).read_text(encoding="utf-8")) if opt("--mcp-config") else {"mcpServers": {}}
 tools = (opt("--tools") or "Bash,Read,Write,Edit").split(",") if "--tools" in args else ["Bash", "Read", "Write", "Edit", "Glob", "Grep"]
 mcp_names = list(mcp_cfg.get("mcpServers", {}))

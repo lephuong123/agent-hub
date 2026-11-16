@@ -131,6 +131,9 @@ ul, ol { margin: 0 0 var(--s3); padding-left: 1.3rem; }
 .daemon-st .ic { width: 9px; height: 9px; color: var(--ok); }
 .daemon-st.down .ic { color: var(--danger); } .daemon-st.down { color: var(--danger); }
 .side-btn { justify-content: flex-start !important; }
+.side-dl { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 8px 0 10px; border-radius: 8px; color: var(--text-2); font-size: var(--fs-sm); white-space: nowrap; }
+.side-dl .ic { color: var(--muted); width: 17px; height: 17px; }
+.side-dl:hover { background: var(--surface-3); color: var(--text); text-decoration: none; }
 .side-foot > .side-btn { width: 100%; }
 
 .shell.noside { display: block; background: var(--bg); }
@@ -154,6 +157,7 @@ ul, ol { margin: 0 0 var(--s3); padding-left: 1.3rem; }
   html.side-min .side-foot { align-items: center; width: 100%; }
   html.side-min .side-user { flex-direction: column; padding: 0; gap: 6px; }
   html.side-min .side-btn { justify-content: center !important; width: 36px; padding: 0; }
+  html.side-min .side-dl { justify-content: center; width: 36px; padding: 0; }
 }
 
 /* ============================================================ đầu trang */
@@ -842,6 +846,7 @@ html.mgr-info-closed .mgr-side { display: none; }
   .side-foot { align-items: center; width: 100%; }
   .side-user { flex-direction: column; padding: 0; gap: 6px; }
   .side-btn { justify-content: center !important; width: 36px; padding: 0; }
+  .side-dl { justify-content: center; width: 36px; padding: 0; }
   .grid-main { grid-template-columns: minmax(0, 1fr); }
 }
 @media (min-width: 1101px) { .nav-sep { display: none; } html.side-min .nav-sep { display: block; } }

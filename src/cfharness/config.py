@@ -318,6 +318,9 @@ DEFAULTS: dict[str, Any] = {
         "tick_interval_s": 1800,  # tick định kỳ dự phòng (chỉ chạy khi có việc đáng xử lý)
         "check_s": 10,  # chu kỳ vòng nền kiểm sự kiện gom được
         "event_debounce_s": 45,  # gom sự kiện trong cửa sổ này rồi mới tick (một tick cho nhiều sự kiện)
+        # task người giao xong → hub TỰ gửi báo cáo (Đã làm / Còn mở / Cần bạn) về hội thoại đã giao việc, không chờ điều phối viên
+        # quyết có notify_owner hay không (task_report.py). Tắt = như cũ: chỉ điều phối viên báo.
+        "auto_report_tasks": True,
         "approval_wait_min": 2,  # approval chờ người lâu hơn N phút → sự kiện cho tick (điều phối viên xin phép người bằng nút)
         "crash_repeat": 2,  # run crashed/failed lặp ≥ N lần/giờ cùng agent → sự kiện
         "max_pending_events": 40,  # trần sự kiện đưa vào một prompt tick (cũ hơn bị gộp đếm)
@@ -770,6 +773,11 @@ DEFAULTS: dict[str, Any] = {
             "default_permission_mode": None,
             # cache `claude --version` (giây)
             "version_cache_s": 600,
+            # prompt hệ thống dài hơn ngưỡng (ký tự) → `--append-system-prompt-file <runtime/run/system_prompt.md>` thay vì argv.
+            # Windows giới hạn dòng lệnh 32767 ký tự: prompt điều phối viên ~37k đưa thẳng vào argv → WinError 206 (kiểm CLI 2.1.325).
+            "system_prompt_file_min_chars": 8000,
+            # cỡ system prompt (ký tự) mà vượt → log cảnh báo khi dựng prompt + `cfharness doctor` báo vàng (prompt.py)
+            "system_prompt_warn_chars": 30000,
             # trần (giây) chờ quyết định cho một `control_request can_use_tool` của CLI (vd SandboxNetworkAccess) — quá → deny.
             # Guard tự giữ ≤ approval.timeout_s; đây chỉ là chốt an toàn để CLI không bao giờ treo vô hạn.
             "control_request_timeout_s": 1800,
