@@ -1,16 +1,24 @@
 """Thẻ "Không gian số" ở Cài đặt (filehub/) — `/partials/filehub` (htmx `load`), trang đăng nhập `/filehub/login`, callback relay OAuth
 `/filehub/oauth/cb` và `/filehub/open` (link "Mở trên Không gian số"). docs/dev-notes/filehub.md, plan-filehub-workspace-root.md (W7).
 
-- Đọc: RPC `filehub.status`. Daemon không trả lời → thẻ báo, không lỗi trang.
-- Ghi (W7 — làm được cả khi mở qua link public; vẫn cần đăng nhập web + TOTP + CSRF + khoá phiên WT-1, audit `web`): mọi thao tác là
-  `ACTIONS` gọi RPC `filehub.*` (không logic trong template → app desktop gọi lại cùng RPC). Thiết lập / đăng nhập / chuyển chế độ / gỡ
-  = `Action.step2` (bước 2 bắt buộc). Qua link public: thiết lập không đổi được server/binary đã đặt (`remote` — service kiểm).
-- Đăng nhập: web trên chính máy hub (`is_local_request`) → listener loopback của binary như CLI; qua link public → RELAY OAuth: daemon chạy
-  binary với `--redirect-uri <web.public_origin>/filehub/oauth/cb` → trang `/filehub/login` đưa link trang đồng ý (tab mới) → Không gian số
-  chuyển trình duyệt về `GET /filehub/oauth/cb?code&state` — route CÔNG KHAI với GuardMiddleware (cookie phiên SameSite=Strict không đi
-  theo điều hướng chéo site). An toàn vì `state` (do binary sinh, daemon giữ ≤ 10 phút, MỘT lần, so `compare_digest`) + PKCE verifier không
+- Đọc: RPC `filehub.status` (trạng thái đồng bộ, thư mục chung, bản xung đột, khoá run, lượt đăng nhập). Daemon không trả lời → thẻ báo,
+  không lỗi trang. Thẻ tự làm mới mỗi 3 s khi có lượt đăng nhập đang chờ đồng ý; thư mục đã cấp lúc đăng nhập mà chưa nối → form "Thêm".
+- Ghi (W7 + #121 — làm được cả khi mở qua link public; vẫn cần đăng nhập web + TOTP + CSRF + Origin + khoá phiên WT-1, audit `web`, RPC
+  `filehub.*` ∈ HUMAN_ONLY): mọi thao tác là `ACTIONS` gọi RPC `filehub.*` (không logic trong template → app desktop gọi lại cùng RPC):
+  `filehub_setup` (máy chủ + chế độ workspace|folder + tên → đăng nhập, xong tự nối thư mục đầu), `filehub_login` (đăng nhập lại / cấp thêm
+  thư mục), `filehub_switch`, `filehub_add` (thư mục đã cấp), `filehub_remove`, `filehub_pause|filehub_resume|filehub_resume_push`.
+  Thiết lập / đăng nhập / chuyển chế độ / gỡ = `Action.step2` (bước 2 bắt buộc).
+- Ranh giới: web KHÔNG BAO GIỜ nhận đường dẫn binary sync (daemon dùng cấu hình hoặc tự dò ở chỗ cài cố định — `filehub.detect_binary`,
+  không dò PATH); đường dẫn bản sao cục bộ (`local_parent`/`local_path`) chỉ đặt được khi dùng web trên chính máy chạy hub
+  (`is_local_request`), qua link public dùng `<local_parent>/<tên>`; qua link public thiết lập không đổi được server/binary đã đặt (`remote`
+  — service kiểm). Link đồng ý luôn `no_browser` (không mở trình duyệt trên máy hub).
+- Đăng nhập: web trên chính máy hub → listener loopback của binary như CLI; qua link public → RELAY OAuth: daemon chạy
+  binary với `--redirect-uri <web.public_origin>/filehub/oauth/cb` → trang `/filehub/login` (và thẻ) đưa link trang đồng ý (tab mới) → Không
+  gian số chuyển trình duyệt về `GET /filehub/oauth/cb?code&state` — route CÔNG KHAI với GuardMiddleware (cookie phiên SameSite=Strict không
+  đi theo điều hướng chéo site). An toàn vì `state` (do binary sinh, daemon giữ ≤ 10 phút, MỘT lần, so `compare_digest`) + PKCE verifier không
   rời binary; route giới hạn tốc độ theo IP, KHÔNG phản chiếu tham số (trang kết quả chỉ chữ cố định).
-- `/filehub/open?run=…&path=…` → RPC `filehub.link` → chuyển hướng tới `<server>/files/<folder_id>?file=<file_id>`; URL dựng ở daemon.
+- `/filehub/open?run=…&path=…` → RPC `filehub.link` → chuyển hướng tới `<server>/files/<folder_id>?file=<file_id>`; URL dựng ở daemon từ
+  cấu hình `filehub.server` (người đặt) + id trong index của binary sync — không lấy từ client.
 """
 
 from __future__ import annotations
@@ -47,6 +55,14 @@ async def partial_filehub(request: Request) -> Response:
         ctx = {"down": True}
     except RpcError as e:
         ctx = {"error": e.message}
+    data = ctx.get("data")
+    if isinstance(data, dict):
+        have = {f.get("root_id") for f in data.get("folders") or []}
+        lg = data.get("login") or {}
+        ctx["available"] = [r for r in lg.get("roots") or [] if isinstance(r, dict) and r.get("id") and r.get("id") not in have]
+        url = str(lg.get("url") or "")
+        ctx["login_url"] = url if lg.get("state") in ("starting", "waiting") and url.startswith(("https://", "http://")) else ""
+        ctx["polling"] = lg.get("state") in ("starting", "waiting")
     sess = session_of(request)
     return ws(request).templates.TemplateResponse(request, "_filehub.html", {**ctx, "csrf": sess.csrf if sess else "", "states": STATE_VIEW,
                                                                              "local": _local(request)})
@@ -132,64 +148,99 @@ async def filehub_open(request: Request) -> Response:
     return RedirectResponse(url, status_code=303)
 
 
+NEXT = "/settings#filehub"
+LOCAL_ONLY_MSG = ("Đường dẫn bản sao trên máy chỉ đặt được khi dùng web trên chính máy chạy hub (hoặc `cfharness filehub …` trong terminal). "
+                  "Qua link public, thư mục được đặt ở <thư mục cha mặc định>/<tên>.")
+
+
+def _server(f: Any) -> str:
+    v = str(f.get("server") or "").strip().rstrip("/")
+    if not v.startswith("https://") or len(v) > 300 or any(c.isspace() for c in v):
+        raise ValueError("địa chỉ Không gian số phải là URL https://… (vd https://trungtamai.cchchn.com)")
+    return v
+
+
+def _name(f: Any, key: str = "name", default: str | None = None) -> str:
+    from ..filehub.service import valid_name
+
+    v = str(f.get(key) or "").strip() or (default or "")
+    if not valid_name(v):
+        raise ValueError("tên thư mục: chữ, số, khoảng trắng, - _ . (≤ 80 ký tự)")
+    return v
+
+
+def _local_path(f: Any, key: str) -> dict[str, Any]:
+    v = str(f.get(key) or "").strip()
+    return {key: v} if v else {}
+
+
+def _guard_local(request: Request, p: dict[str, Any], *keys: str) -> None:
+    if any(p.get(k) for k in keys) and not _local(request):
+        raise RpcError(-32003, LOCAL_ONLY_MSG)
+
+
 def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
     def _login_params(request: Request, p: dict[str, Any]) -> dict[str, Any]:
         # web luôn tự đưa link (không để binary mở trình duyệt trên máy hub); qua link public → relay OAuth
-        local = _local(request)
-        return {**p, "no_browser": True, "relay": not local}
+        return {**p, "no_browser": True, "relay": not _local(request)}
 
-    async def _pause(request: Request, p: dict[str, Any]) -> Any:
-        return await rpc(request, "filehub.pause", {}, audit=True)
+    def simple(method: str) -> Any:
+        async def call(request: Request, p: dict[str, Any]) -> Any:
+            return await rpc(request, method, p, audit=True)
 
-    async def _resume(request: Request, p: dict[str, Any]) -> Any:
-        return await rpc(request, "filehub.resume", {}, audit=True)
-
-    async def _push(request: Request, p: dict[str, Any]) -> Any:
-        return await rpc(request, "filehub.resume", {"root_id": p.get("root_id")}, audit=True)
+        return call
 
     async def _setup(request: Request, p: dict[str, Any]) -> Any:
+        _guard_local(request, p, "local_parent", "local_path")
         return await rpc(request, "filehub.setup", {**_login_params(request, p), "remote": not _local(request)}, audit=True)
 
     async def _login(request: Request, p: dict[str, Any]) -> Any:
-        return await rpc(request, "filehub.login", _login_params(request, p), audit=True)
+        return await rpc(request, "filehub.login", _login_params(request, {}), audit=True)
 
     async def _switch(request: Request, p: dict[str, Any]) -> Any:
-        return await rpc(request, "filehub.switch_to_workspace", _login_params(request, p), audit=True)
+        return await rpc(request, "filehub.switch_to_workspace", _login_params(request, {}), audit=True)
+
+    async def _add(request: Request, p: dict[str, Any]) -> Any:
+        _guard_local(request, p, "local_path")
+        return await rpc(request, "filehub.add", p, audit=True)
 
     def _setup_build(f: Any) -> dict[str, Any]:
+        # KHÔNG có `binary`: web không bao giờ nhận đường dẫn binary sync (daemon tự dò — filehub.detect_binary)
         scope = str(f.get("scope") or "workspace")
         if scope not in ("workspace", "folder"):
             raise ValueError("scope phải là workspace|folder")
-        out = {"server": _req(f, "server"), "binary": _req(f, "binary"), "scope": scope}
-        for k in ("name", "local_parent"):
-            v = str(f.get(k) or "").strip()
-            if v:
-                out[k] = v
+        out: dict[str, Any] = {"server": _server(f), "scope": scope, **_local_path(f, "local_parent")}
+        if str(f.get("name") or "").strip() or scope == "folder":
+            out["name"] = _name(f, default="cfharness")
         return out
 
     def _scope_text(f: Any) -> str:
         return ("TOÀN BỘ workspace (chọn workspace ở trang đồng ý; tài khoản phải là Workspace Admin)" if str(f.get("scope") or "workspace") == "workspace"
-                else "MỘT thư mục (chọn/tạo ở trang đồng ý)")
+                else f"MỘT thư mục «{str(f.get('name') or 'cfharness').strip()}» (chọn/tạo ở trang đồng ý, nơi bạn là Chủ sở hữu)")
 
     goto_login = lambda r, f: "/filehub/login"  # noqa: E731
-    actions["filehub_pause"] = Action("filehub.pause", lambda f: {}, "Đã tạm dừng đồng bộ Không gian số", call=_pause,
+    actions["filehub_pause"] = Action("filehub.pause", lambda f: {}, "Đã tạm dừng đồng bộ Không gian số", call=simple("filehub.pause"),
                                       confirm="Tạm dừng đồng bộ với Không gian số?\nTệp người sửa trên web sẽ không về máy (và ngược lại) tới khi chạy lại.",
-                                      goto=lambda r, f: "/settings#filehub")
-    actions["filehub_resume"] = Action("filehub.resume", lambda f: {}, "Đã chạy lại đồng bộ", call=_resume, goto=lambda r, f: "/settings#filehub")
-    actions["filehub_resume_push"] = Action("filehub.resume", lambda f: {"root_id": _req(f, "root_id")}, "Đã cho đẩy lên tiếp", call=_push,
+                                      goto=lambda r, f: NEXT)
+    actions["filehub_resume"] = Action("filehub.resume", lambda f: {}, "Đã chạy lại đồng bộ", call=simple("filehub.resume"), goto=lambda r, f: NEXT)
+    actions["filehub_resume_push"] = Action("filehub.resume", lambda f: {"root_id": _req(f, "root_id")}, "Đã cho đẩy lên tiếp",
+                                            call=simple("filehub.resume"),
                                             confirm="Cho tiến trình đồng bộ đẩy tiếp các thay đổi (gồm các tệp đã xoá) lên Không gian số?",
-                                            goto=lambda r, f: "/settings#filehub")
+                                            goto=lambda r, f: NEXT)
     actions["filehub_setup"] = Action(
-        "filehub.setup", _setup_build, "Đã bắt đầu đăng nhập Không gian số", call=_setup, goto=goto_login,
-        confirm=lambda f: f"Thiết lập đồng bộ với Không gian số {f.get('server')}?\nChế độ: {_scope_text(f)}.",
+        "filehub.setup", _setup_build,
+        "Đã tạo link đồng ý — mở trang đồng ý, đăng nhập rồi bấm Cho phép; thư mục chung được nối tự động khi xong.", call=_setup, goto=goto_login,
+        confirm=lambda f: (f"Nối hub với Không gian số {str(f.get('server') or '').strip()}?\nChế độ: {_scope_text(f)}.\nBước tiếp theo: mở link "
+                           "đồng ý, đăng nhập tài khoản Không gian số rồi bấm Cho phép."),
         step2=lambda f: ("Hub sẽ chạy tiến trình đồng bộ 2 chiều dưới tài khoản Không gian số bạn đồng ý (tệp agent ghi mang tên tài khoản đó). "
                          + ("Chế độ workspace: agent được giao việc ghi được MỌI thư mục của workspace, kể cả thư mục người khác tạo sau — "
                             "lưới an toàn là phiên bản + thùng rác Không gian số và báo sau mỗi run." if str(f.get("scope") or "workspace") == "workspace"
-                            else "Chỉ thư mục được chọn ở trang đồng ý được đồng bộ.")),
+                            else "Chỉ thư mục được chọn ở trang đồng ý được đồng bộ.")
+                         + " Xoá của agent không cần duyệt (khôi phục ở thùng rác Không gian số)."),
         danger=True)
     actions["filehub_login"] = Action(
-        "filehub.login", lambda f: {}, "Đã bắt đầu đăng nhập lại", call=_login, goto=goto_login,
-        confirm="Đăng nhập lại Không gian số (thiết bị cfharness)?",
+        "filehub.login", lambda f: {}, "Đã tạo link đồng ý thiết bị mới — mở trang đồng ý để đăng nhập lại", call=_login, goto=goto_login,
+        confirm="Đăng nhập lại Không gian số cho máy chạy hub? (tạo link đồng ý thiết bị mới — chế độ một thư mục: cấp thêm thư mục được)",
         step2="Đăng nhập cấp token MỚI cho tiến trình đồng bộ của hub. Đăng nhập bằng tài khoản có quyền với thư mục chung "
               "(chế độ workspace: tài khoản admin của workspace).", danger=True)
     actions["filehub_switch"] = Action(
@@ -198,11 +249,16 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
         step2="Sau khi bạn đồng ý ở Không gian số: thư mục chung cũ được gỡ khỏi hub (tệp trên máy và trên web GIỮ NGUYÊN), hub đồng bộ cả "
               "workspace về một bản sao MỚI. Agent được giao việc ghi được mọi thư mục của workspace. Kiểm bản mới rồi tự xoá bản cũ; thu hồi "
               "thiết bị cũ ở Không gian số › Hồ sơ › Thiết bị.", danger=True)
+    actions["filehub_add"] = Action(
+        "filehub.add", lambda f: {"root_id": _req(f, "root_id"), "name": _name(f), **_local_path(f, "local_path")},
+        lambda r, f: f"Đã thêm thư mục chung «{(r or {}).get('name')}» → {(r or {}).get('local_path')} (giao việc: workspace {(r or {}).get('workspace')})",
+        call=_add, goto=lambda r, f: NEXT,
+        confirm=lambda f: f"Thêm thư mục «{str(f.get('name') or '').strip()}» làm thư mục chung (đồng bộ 2 chiều về máy chạy hub)?")
     actions["filehub_remove"] = Action(
         "filehub.remove", lambda f: {"name": _req(f, "name")}, lambda r, f: f"Đã gỡ «{f.get('name')}» khỏi hub (tệp giữ nguyên)",
-        confirm=lambda f: f"Gỡ thư mục chung «{f.get('name')}» khỏi hub?",
-        step2=lambda f: (f"Hub dừng đồng bộ «{f.get('name')}», agent không còn giao việc vào đó được. Tệp trên máy và trên Không gian số GIỮ "
-                         "NGUYÊN (không xoá gì)."), danger=True, goto=lambda r, f: "/settings#filehub")
+        call=simple("filehub.remove"), confirm=lambda f: f"Gỡ thư mục chung «{f.get('name')}» khỏi hub?",
+        step2=lambda f: (f"Hub dừng đồng bộ «{f.get('name')}», agent không còn giao việc vào workspace filehub:{f.get('name')} được. Tệp trên máy "
+                         "và trên Không gian số GIỮ NGUYÊN (không xoá gì)."), danger=True, goto=lambda r, f: NEXT)
 
 
 def routes() -> list[Any]:

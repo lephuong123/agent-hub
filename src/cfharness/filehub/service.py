@@ -91,6 +91,10 @@ def error_code(v: Any) -> str:
     s = str(v or "")
     return s if 0 < len(s) <= 64 and all(c in _ERR_CODE_CHARS for c in s) else "other"
 REVOKED_ERRORS = ("root_revoked", "disconnected", "workspace_deleted")
+BINARY_NAME = "tang-thu-sync-headless"
+# Chỗ admin cài binary sync (scripts/setup-hub-user.sh cài /usr/local/bin) — web KHÔNG BAO GIỜ nhận đường dẫn binary từ client (chạy được tệp
+# tuỳ ý); thiếu cấu hình thì daemon tự dò ở các chỗ cố định này.
+BINARY_CANDIDATES = ("/usr/local/bin/" + BINARY_NAME, "/opt/homebrew/bin/" + BINARY_NAME, "~/.local/bin/" + BINARY_NAME)
 
 
 def _real(p: str | Path) -> str:
@@ -167,6 +171,24 @@ def machine_name() -> str:
             name = ""
     _MACHINE = name or friendly_host(socket.gethostname())
     return _MACHINE
+
+
+def _runnable(p: str) -> bool:
+    return bool(p) and os.path.isabs(p) and os.path.isfile(p) and os.access(p, os.X_OK)
+
+
+def detect_binary(configured: str | None = None) -> str | None:
+    """Binary sync dùng được: cấu hình (người đặt) → các chỗ cài cố định (`BINARY_CANDIDATES`). Không dò PATH (PATH của daemon do người
+    dùng/agent ảnh hưởng được)."""
+    if configured:
+        p = os.path.expanduser(str(configured))
+        if _runnable(p):
+            return p
+    for c in BINARY_CANDIDATES:
+        p = os.path.expanduser(c)
+        if _runnable(p):
+            return p
+    return None
 
 
 def valid_name(name: str) -> bool:
@@ -580,7 +602,7 @@ class FilehubService:
                       "message": login_error_text(self.login_state.get("error"), self._known_account())
                       if self.login_state.get("state") == "error" else None},
             "tokens": self.tokens_path.exists(), "local_parent": str(self.cfg("local_parent") or ""),
-            "scope": self.scope(), "binary": self.supervisor.binary(), "binary_hint": self.binary_hint(),
+            "scope": self.scope(), "binary": detect_binary(self.cfg("sync_binary")),
             "relay_available": self.public_origin() is not None,
             "can_switch": any(kind_of(f) != "workspace" for f in self.folders()),
             "relogin_after_import": bool(self.hub.store.state_get("import_filehub")),
@@ -940,16 +962,6 @@ class FilehubService:
             return None
 
     @staticmethod
-    def binary_hint() -> str | None:
-        """Đường dẫn binary sync cài sẵn trên máy (gợi ý cho form thiết lập trên web) — None nếu không thấy."""
-        import shutil
-
-        for c in (shutil.which("tang-thu-sync-headless"), "/usr/local/bin/tang-thu-sync-headless", "/opt/homebrew/bin/tang-thu-sync-headless"):
-            if c and os.path.isfile(c) and os.access(c, os.X_OK):
-                return c
-        return None
-
-    @staticmethod
     def _remote_binary_ok(binary: str) -> bool:
         """Thiết lập qua web PUBLIC (phiên có thể bị lấy cắp): chỉ nhận binary đúng tên và người dùng của hub KHÔNG ghi được (tệp lẫn
         thư mục chứa) — vd /usr/local/bin do quản trị cài. Không thì phải đặt ở terminal / web trên chính máy hub."""
@@ -961,21 +973,30 @@ class FilehubService:
 
     def setup(self, p: dict[str, Any]) -> dict[str, Any]:
         """Cấu hình + đăng nhập (đồng ý thiết bị) — xong thì tự thêm thư mục chung đầu tiên. `scope` workspace (mặc định) | folder.
-        `remote` = gọi từ web qua link public: không được ĐỔI server/binary đã đặt; binary mới phải qua `_remote_binary_ok`."""
+        Binary: `binary` (chỉ CLI — web không bao giờ gửi) → cấu hình → chỗ cài cố định (`detect_binary`, không dò PATH).
+        `remote` = gọi từ web qua link public: không được ĐỔI server/binary đã đặt; binary lần đầu phải qua `_remote_binary_ok`."""
         remote = bool(p.get("remote"))
         cur_server, cur_binary = self.server(), str(self.cfg("sync_binary") or "")
         server = str(p.get("server") or cur_server or "").strip().rstrip("/")
         if not (server.startswith("https://") or server.startswith("http://127.0.0.1") or server.startswith("http://localhost")):
             raise HubError("server phải là URL https:// của Không gian số (vd https://thumucai.trungtamdhs.com)")
-        binary = os.path.expanduser(str(p.get("binary") or cur_binary or "").strip())
-        if not binary or not os.path.isabs(binary) or not os.path.isfile(binary) or not os.access(binary, os.X_OK):
-            raise HubError(f"không tìm thấy binary sync chạy được: {binary!r} (--binary /đường/dẫn/tang-thu-sync-headless)")
+        given = os.path.expanduser(str(p.get("binary") or "").strip())
+        binary = given if given else detect_binary(cur_binary or None)
+        if not binary or not _runnable(binary):
+            if given:
+                raise HubError(f"không tìm thấy binary sync chạy được: {given!r} (--binary /đường/dẫn/{BINARY_NAME})")
+            raise HubError(f"máy chạy hub chưa có binary sync {BINARY_NAME} (admin cài vào /usr/local/bin, hoặc "
+                           f"`cfharness filehub setup --binary /đường/dẫn/{BINARY_NAME}` trong terminal)")
         if remote:
             if cur_server and server != cur_server:
                 raise HubError("qua link public không đổi được máy chủ Không gian số đã đặt — đổi ở terminal (`cfharness filehub setup`) "
                                "hoặc web trên chính máy chạy hub", code=-32003)
-            if binary != (os.path.expanduser(cur_binary) if cur_binary else "") and not self._remote_binary_ok(binary):
-                raise HubError("qua link public chỉ chọn được binary `tang-thu-sync-headless` do quản trị cài (vd /usr/local/bin, bạn không ghi "
+            cur = os.path.expanduser(cur_binary) if cur_binary else ""
+            if cur and binary != cur:
+                raise HubError("qua link public không đổi được binary sync đã đặt — đổi ở terminal (`cfharness filehub setup --binary …`) "
+                               "hoặc web trên chính máy chạy hub", code=-32003)
+            if not cur and not self._remote_binary_ok(binary):
+                raise HubError("qua link public chỉ dùng được binary `tang-thu-sync-headless` do quản trị cài (vd /usr/local/bin, bạn không ghi "
                                "được) — đường dẫn khác: đặt ở terminal hoặc web trên chính máy chạy hub", code=-32003)
         scope = str(p.get("scope") or self.scope())
         if scope not in KINDS:
@@ -1255,4 +1276,4 @@ class FilehubService:
 
 
 __all__ = ["FilehubService", "REF_PREFIX", "RELAY_PATH", "STEER_TEXT", "local_roots", "root_of", "config_folders", "valid_name", "safe_name", "kind_of",
-           "live_names", "shared_folders", "read_status_file", "login_error_text"]
+           "live_names", "shared_folders", "read_status_file", "login_error_text", "BINARY_NAME", "detect_binary"]

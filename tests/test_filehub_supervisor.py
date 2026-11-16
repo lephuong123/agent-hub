@@ -450,6 +450,33 @@ async def test_remote_setup_cannot_change_server_or_pick_writable_binary(env):
     assert d.hub.config.get("filehub.server") == "https://kgs.example.test" and d.hub.config.get("filehub.sync_binary") is None
 
 
+async def test_remote_setup_detected_binary_rules(env, monkeypatch):
+    """Gộp #121 + H7: binary tự dò (`detect_binary`, không PATH) qua link public vẫn chịu luật chặt — chưa đặt: phải là binary người dùng hub
+    không ghi được; đã đặt: không đổi sang chỗ khác. Ở terminal (không `remote`) binary tự dò được nhận."""
+    import cfharness.filehub.service as fhs
+
+    make, tmp = env
+    d = await make()
+    configure(d.hub, tmp)
+    b = fake_bin(tmp / "bin3")  # người dùng của hub ghi được
+    monkeypatch.setattr(fhs, "BINARY_CANDIDATES", (str(b),))
+    d.hub.config.set("filehub.sync_binary", None)
+    assert fhs.detect_binary(None) == str(b)
+    with pytest.raises(HubError, match="do quản trị cài"):
+        d.hub.filehub.setup({"server": "https://kgs.example.test", "remote": True})
+    assert d.hub.config.get("filehub.sync_binary") is None
+    d.hub.config.set("filehub.sync_binary", str(tmp / "khong-co" / "tang-thu-sync-headless"))  # đã đặt nhưng hỏng → tự dò ra chỗ khác
+    with pytest.raises(HubError, match="không đổi được binary"):
+        d.hub.filehub.setup({"server": "https://kgs.example.test", "remote": True})
+    d.hub.config.set("filehub.sync_binary", None)
+    assert d.hub.filehub.setup({"server": "https://kgs.example.test", "scope": "folder"})["binary"] == str(b)  # terminal: nhận
+    monkeypatch.setattr(fhs, "BINARY_CANDIDATES", ())
+    monkeypatch.setenv("PATH", f"{b.parent}:{os.environ.get('PATH', '')}")  # binary có trong PATH của daemon vẫn KHÔNG được dùng
+    d.hub.config.set("filehub.sync_binary", None)
+    with pytest.raises(HubError, match="chưa có binary sync"):  # không dò PATH
+        d.hub.filehub.setup({"server": "https://kgs.example.test"})
+
+
 def test_cli_parser_switch_and_scope():
     from cfharness.cli import build_parser
 

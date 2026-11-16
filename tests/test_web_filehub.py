@@ -1,7 +1,8 @@
 """Web — thẻ "Không gian số" ở Cài đặt + link "Mở trên Không gian số" trên chip tệp (filehub/, plan-cloud-files §3.6) + cài đặt trên web
-cả qua link public (plan-filehub-workspace-root W7): thiết lập/đăng nhập/chuyển chế độ/gỡ có bước 2, đăng nhập từ xa = relay OAuth qua route
-công khai `/filehub/oauth/cb` (state một lần, giới hạn tốc độ, không phản chiếu tham số). Chữ từ binary sync là dữ liệu → autoescape.
-Thẻ: status/index ghi tay; đăng nhập: binary GIẢ `fake_tangthu_sync.py` (không mạng, không claude).
+cả qua link public (plan-filehub-workspace-root W7 + #121): người dùng hub tự thiết lập/đăng nhập/nối/gỡ thư mục/tạm dừng; thiết lập/đăng
+nhập/chuyển chế độ/gỡ có bước 2, đăng nhập từ xa = relay OAuth qua route công khai `/filehub/oauth/cb` (state một lần, giới hạn tốc độ, không
+phản chiếu tham số). Web không bao giờ nhận đường dẫn binary sync; đường dẫn bản sao trên máy chỉ đặt được khi web dùng trên chính máy chạy
+hub. Chữ từ binary sync là dữ liệu → autoescape. Thẻ: status/index ghi tay; đăng nhập: binary GIẢ `fake_tangthu_sync.py` (không mạng, không claude).
 """
 
 from __future__ import annotations
@@ -14,8 +15,14 @@ import pytest
 from test_web import BASE, ISOLATED, _start, _stop, audit_rows, until  # noqa: F401 — khung test web
 
 
+PROXY = {"x-forwarded-for": "203.0.113.9"}  # như qua tunnel public → không phải web cục bộ
+
+
 @pytest.fixture
-async def env(hub_home, tmp_path):
+async def env(hub_home, tmp_path, monkeypatch):
+    import cfharness.filehub.service as fhs
+
+    monkeypatch.setattr(fhs, "BINARY_CANDIDATES", ())  # không dò binary thật cài trên máy chạy test
     from cfharness.runtime import FakeRuntime
 
     e = await _start(hub_home, FakeRuntime(ISOLATED))
@@ -49,7 +56,7 @@ async def test_card_not_configured_then_status(env):
     await e.login()
     assert 'hx-get="/partials/filehub"' in (await e.client.get("/settings")).text
     card = (await e.client.get("/partials/filehub")).text
-    assert "Không gian số" in card and "Chưa thiết lập" in card and "cfharness filehub setup" in card
+    assert "Không gian số" in card and "thiếu binary sync" in card and "/do/filehub_setup" not in card
     local = _setup(e.hub, tmp)
     card = (await e.client.get("/partials/filehub")).text
     assert "có bản xung đột" in card and "filehub:chung" in card and str(local) in card and "⬆2" in card
@@ -58,24 +65,86 @@ async def test_card_not_configured_then_status(env):
     assert 'action="/do/filehub_pause"' in card  # web cục bộ: có nút
 
 
-async def test_pause_also_via_public_link(env):
-    """W7: qua link public (proxy) vẫn tạm dừng/chạy lại được — vẫn đăng nhập web + CSRF + khoá phiên + xác nhận, audit kênh web."""
+async def test_pause_remove_over_public_link(env):
+    """W7/#121: qua link public (proxy) vẫn tạm dừng/chạy lại/gỡ được — vẫn đăng nhập web + CSRF + khoá phiên + xác nhận (gỡ: bước 2), audit web."""
     e, tmp = env
     await e.login()
-    _setup(e.hub, tmp)
-    proxy = {"x-forwarded-for": "203.0.113.9"}
-    card = (await e.client.get("/partials/filehub", headers=proxy)).text
+    local = _setup(e.hub, tmp)
+    card = (await e.client.get("/partials/filehub", headers=PROXY)).text
     assert 'action="/do/filehub_pause"' in card and 'action="/do/filehub_login"' in card and 'action="/do/filehub_remove"' in card
-    r = await e.post("/do/filehub_pause", {"next": "/settings#filehub"}, headers=proxy)
+    r = await e.post("/do/filehub_pause", {"next": "/settings#filehub"}, headers=PROXY)
     assert r.status_code == 200 and "Tạm dừng đồng bộ với Không gian số?" in r.text and not e.hub.filehub.paused()
-    r = await e.client.post("/do/filehub_pause", data={"confirm": "yes", "csrf": e.csrf}, headers=proxy)  # thiếu khoá phiên → 403
+    r = await e.client.post("/do/filehub_pause", data={"confirm": "yes", "csrf": e.csrf}, headers=PROXY)  # thiếu khoá phiên → 403
     assert r.status_code == 403 and not e.hub.filehub.paused()
-    r = await e.post("/do/filehub_pause", {"confirm": "yes", "next": "/settings#filehub"}, headers=proxy)
+    r = await e.post("/do/filehub_pause", {"confirm": "yes", "next": "/settings#filehub"}, headers=PROXY)
     assert r.status_code == 303 and e.hub.filehub.paused()
     assert audit_rows(e, "filehub.pause")[-1]["channel"] == "web"
     assert "tạm dừng" in (await e.client.get("/partials/filehub")).text
-    r = await e.post("/do/filehub_resume", {"confirm": "yes", "next": "/settings#filehub"}, headers=proxy)
+    r = await e.post("/do/filehub_resume", {"confirm": "yes", "next": "/settings#filehub"}, headers=PROXY)
     assert r.status_code == 303 and not e.hub.filehub.paused()
+    r = await e.post("/do/filehub_remove", {"name": "chung", "next": "/settings#filehub"}, headers=PROXY)
+    assert r.status_code == 200 and "Gỡ thư mục chung «chung»" in r.text and e.hub.filehub.folders()
+    r = await e.post("/do/filehub_remove", {"name": "chung", "confirm": "yes", "next": "/settings#filehub"}, headers=PROXY)
+    assert r.status_code == 200 and "Xác nhận lần 2" in r.text and e.hub.filehub.folders()  # gỡ = bước 2 bắt buộc
+    r = await e.post("/do/filehub_remove", {"name": "chung", "confirm": "yes", "confirm2": "yes", "next": "/settings#filehub"}, headers=PROXY)
+    assert r.status_code == 303 and not e.hub.filehub.folders() and local.is_dir()  # tệp trên máy giữ nguyên
+    assert audit_rows(e, "filehub.remove")[-1]["channel"] == "web"
+
+
+async def test_setup_login_and_add_folder_over_public_link(env):
+    """#121 qua link public (đã gộp với W7): form thiết lập không có ô binary/đường dẫn máy; đường dẫn máy từ cloud bị từ chối; binary gửi từ
+    client bị bỏ qua; đăng nhập = relay (bước 2) → thẻ tự poll 3 s + nút "Mở trang đồng ý" → đồng ý xong tự nối thư mục; thư mục khác đã cấp →
+    thêm từ web (local_path từ cloud bị từ chối)."""
+    import httpx2 as httpx
+
+    from fh_fake import fake_bin
+
+    e, tmp = env
+    await e.login()
+    b = fake_bin(tmp / "bin", {"FAKE_TT_LOGIN_HOLD_S": "0.3"})
+    e.hub.config.set("filehub.sync_binary", str(b))  # admin đã cài binary (web không bao giờ đặt được)
+    e.hub.config.set("web.public_origin", "https://an.example.com")
+    parent = (tmp / "KGS").resolve()
+    e.hub.config.set("filehub.local_parent", str(parent))
+    e.hub.config.set("filehub.tick_s", 0.05)
+    card = (await e.client.get("/partials/filehub", headers=PROXY)).text
+    assert 'action="/do/filehub_setup"' in card and 'name="server"' in card and 'name="local_parent"' not in card  # qua cloud: không sửa chỗ đặt
+    assert 'name="binary"' not in card and 'name="scope"' in card
+    yes = {"confirm": "yes", "confirm2": "yes", "next": "/settings#filehub"}
+    # đường dẫn trên máy từ cloud → từ chối, không đổi cấu hình
+    await e.post("/do/filehub_setup", {"server": "https://kgs.example.test", "scope": "folder", "name": "Báo cáo", "local_parent": str(tmp / "evil"),
+                                       **yes}, headers=PROXY)
+    assert not e.hub.config.get("filehub.server") and e.hub.filehub.login_state.get("state") == "none"
+    # URL không phải https → lỗi kiểm ở web
+    await e.post("/do/filehub_setup", {"server": "http://kgs.example.test", "scope": "folder", "name": "x", **yes}, headers=PROXY)
+    assert not e.hub.config.get("filehub.server")
+    # binary gửi từ client bị bỏ qua
+    r = await _step2(e, "filehub_setup", {"server": "https://kgs.example.test", "scope": "folder", "name": "Báo cáo", "binary": "/bin/sh"}, PROXY)
+    assert r.status_code == 303 and r.headers["location"] == "/filehub/login" and e.hub.config.get("filehub.sync_binary") == str(b)
+    assert e.hub.config.get("filehub.server") == "https://kgs.example.test"
+    card = (await e.client.get("/partials/filehub", headers=PROXY)).text
+    assert "Mở trang đồng ý" in card and 'href="https://kgs.example.test/api/oauth/authorize?' in card
+    assert 'hx-trigger="every 3s"' in card
+    state = e.hub.filehub._relay["state"]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=e.app), base_url=BASE) as anon:
+        r = await anon.get("/filehub/oauth/cb", params={"code": "good_code", "state": state})
+        assert r.status_code == 200
+    assert await until(lambda: e.hub.filehub.folders(), timeout=15)
+    f = e.hub.filehub.folders()[0]
+    assert f["name"] == "Báo cáo" and f["local_path"] == str(parent / "Báo cáo") and (parent / "Báo cáo").is_dir()
+    card = (await e.client.get("/partials/filehub", headers=PROXY)).text
+    assert "filehub:Báo cáo" in card and 'hx-trigger="every 3s"' not in card
+    assert "thêm thư mục khác" in card  # chế độ một thư mục: cùng một nút đăng nhập lại để cấp thêm thư mục
+    assert audit_rows(e, "filehub.setup")[-1]["channel"] == "web"
+    # root khác được cấp lúc đăng nhập (vd thêm thư mục) → thêm từ web; local_path từ cloud bị từ chối
+    e.hub.filehub.login_state["roots"].append({"id": "r_hop", "ws_id": "ws_1", "name": "Họp"})
+    card = (await e.client.get("/partials/filehub", headers=PROXY)).text
+    assert 'action="/do/filehub_add"' in card and 'value="r_hop"' in card and 'name="local_path"' not in card
+    await e.post("/do/filehub_add", {"root_id": "r_hop", "name": "Họp", "local_path": str(tmp / "evil"), "confirm": "yes"}, headers=PROXY)
+    assert len(e.hub.filehub.folders()) == 1
+    r = await e.post("/do/filehub_add", {"root_id": "r_hop", "name": "Họp", "confirm": "yes", "next": "/settings#filehub"}, headers=PROXY)
+    assert r.status_code == 303 and [x["name"] for x in e.hub.filehub.folders()] == ["Báo cáo", "Họp"]
+    await e.hub.filehub.stop()
 
 
 async def test_card_workspace_account_root_files_revoked_rename(env):
@@ -145,11 +214,14 @@ async def test_setup_via_public_link_relay_oauth_callback(env):
     e.hub.config.set("filehub.server", None)
     proxy = {"x-forwarded-for": "203.0.113.9"}
     card = (await e.client.get("/partials/filehub", headers=proxy)).text
-    assert 'action="/do/filehub_setup"' in card and "web.public_origin" in card
-    # qua link public: binary người dùng ghi được → từ chối (phiên bị lấy cắp không chạy được binary tuỳ ý)
-    r = await _step2(e, "filehub_setup", {"server": "https://kgs.example.test", "binary": str(b), "scope": "workspace"}, proxy)
-    assert r.status_code == 303 and e.hub.config.get("filehub.sync_binary") is None
+    assert "thiếu binary sync" in card and 'action="/do/filehub_setup"' not in card
+    # qua link public: binary gửi từ web bị BỎ (web không bao giờ nhận đường dẫn binary) → chưa có binary cài sẵn → từ chối
+    r = await e.post("/do/filehub_setup", {"server": "https://kgs.example.test", "binary": str(b), "scope": "workspace", "confirm": "yes",
+                                           "confirm2": "yes", "next": "/settings#filehub"}, headers=proxy)
+    assert r.status_code == 303 and e.hub.config.get("filehub.sync_binary") is None and not e.hub.filehub.login_state.get("url")
     e.hub.config.set("filehub.sync_binary", str(b))  # quản trị đặt sẵn ở terminal
+    card = (await e.client.get("/partials/filehub", headers=proxy)).text
+    assert 'action="/do/filehub_setup"' in card and "web.public_origin" in card and 'name="binary"' not in card
     e.hub.config.set("filehub.server", "https://kgs.example.test")
     r = await _step2(e, "filehub_setup", {"server": "https://kgs.example.test", "binary": str(b), "scope": "workspace"}, proxy)
     assert r.status_code == 303 and not e.hub.filehub.login_state.get("url")  # thiếu web.public_origin → lỗi, không chạy binary

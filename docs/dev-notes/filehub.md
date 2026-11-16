@@ -68,9 +68,10 @@ Tệp: `HUB_HOME/filehub/{profile/, status.json, control.json, ignore.txt, super
 
 - RPC ghi `filehub.*` ∈ `auth.HUMAN_ONLY`, `MUTATING_FILEHUB` ∈ `auth.all_mutating()` (bọc audit), KHÔNG ∈ `MANAGER_ALLOWED`. Điều phối viên có tool
   chỉ đọc `filehub_list|filehub_link` và giao việc workspace `filehub:` (`manager/permissions.check_path` giải ref rồi kiểm như đường dẫn thường).
-- Web (W7, H7): MỌI thao tác (thiết lập, đăng nhập lại, chuyển sang workspace, tạm dừng/chạy lại/cho đẩy tiếp, gỡ) làm được cả qua link public
-  — vẫn đăng nhập web + TOTP + CSRF + khoá phiên; thiết lập/đăng nhập/chuyển/gỡ = `Action.step2`. Qua link public (`remote`): không ĐỔI được
-  server/binary đã đặt; binary mới phải tên `tang-thu-sync-headless` và người dùng của hub không ghi được (tệp + thư mục chứa).
+- Web (#121 + W7/H7, xem § Web): mọi thao tác (thiết lập, đăng nhập lại, chuyển sang workspace, thêm/gỡ thư mục, tạm dừng/chạy lại/cho đẩy
+  tiếp) làm được cả qua link public — vẫn đăng nhập web + TOTP + CSRF + khoá phiên; thiết lập/đăng nhập/chuyển/gỡ = `Action.step2`. Đường dẫn
+  binary không bao giờ từ web; đường dẫn bản sao trên máy (`local_parent`, `local_path`) chỉ khi `is_local_request`; qua link public
+  (`remote`) không ĐỔI được server/binary đã đặt.
 
 ## Lệch plan / hợp đồng
 
@@ -82,6 +83,41 @@ Tệp: `HUB_HOME/filehub/{profile/, status.json, control.json, ignore.txt, super
 - Steer chỉ cho run GIỮ KHOÁ gốc (workspace `filehub:`), không cho run chỉ đọc hay run dùng `extra_write_roots`.
 - Kiểm sha256 binary (S3) chưa làm: `filehub.sync_binary` là đường dẫn người đặt; hub chỉ kiểm `--version`.
 
+## Web — tự thiết lập + quản lý trên web, cả qua link public (#121 + H7/W7, 2026-11-16)
+
+Trước đây thẻ Cài đặt qua link public chỉ xem, và `setup-hub-user.sh` bắt admin mở link đồng ý TRÊN máy chủ. Nay người dùng hub tự làm trên
+web (gộp #121 "tự thiết lập" với W7 "cài đặt qua link public + relay OAuth" — một thẻ, một luồng đăng nhập, một bộ `ACTIONS`):
+
+1. Thẻ "Không gian số" (chưa có thư mục) hiện form: địa chỉ Không gian số (`https://`, kiểm ở web), **chế độ** (mặc định toàn bộ workspace —
+   tài khoản Workspace Admin; hoặc một thư mục), tên thư mục (chế độ một thư mục, mặc định `cfharness`); web cục bộ thêm ô thư mục cha.
+   KHÔNG có ô binary. Thiếu binary (`detect_binary` không thấy) → thẻ báo nhờ admin cài, không hiện form.
+2. `filehub_setup` (xác nhận + bước 2 nêu hệ quả của chế độ) → RPC `filehub.setup{server, scope, name?, no_browser: true, relay, remote}` →
+   chuyển tới `/filehub/login` (từng bước theo chế độ). Thẻ ở Cài đặt cũng hiện nút "Mở trang đồng ý" (URL `LOGIN_URL` của binary, chỉ
+   `http(s)://`, `rel=noopener noreferrer`) và tự poll `/partials/filehub` 3 s/lần khi `login.state ∈ starting|waiting` — cùng MỘT lượt
+   đăng nhập (`login_state` của daemon), hai chỗ xem.
+3. Kiểu đăng nhập: web trên chính máy hub (`is_local_request`) → listener loopback của binary như CLI; qua link public → relay OAuth (cần
+   `web.public_origin`; § "Gốc workspace + cài đặt trên web"). Luôn `no_browser`.
+4. Người đồng ý → `_finish_login` tự thêm root đầu tiên (như CLI). Root khác cấp lúc đăng nhập → form "Thêm" (`filehub_add`, xác nhận).
+   Một nút `filehub_login` (bước 2): "Đăng nhập lại" (chế độ workspace) / "Đăng nhập lại / thêm thư mục khác…" (chế độ một thư mục — trang
+   đồng ý cho chọn/tạo thêm thư mục), nổi bật khi hết phiên / mất quyền / vừa chuyển máy. "Chuyển sang toàn bộ workspace" (`filehub_switch`,
+   bước 2) khi còn thư mục chế độ folder. "Gỡ khỏi hub" (`filehub_remove`, bước 2, giữ tệp) — ẩn khi run đang giữ khoá thư mục.
+
+Ranh giới (giữ luật CHẶT hơn của cả hai bên):
+- `filehub.detect_binary`: `binary` (chỉ CLI) → cấu hình `filehub.sync_binary` → `BINARY_CANDIDATES` (chỗ cài cố định), KHÔNG dò PATH (bỏ
+  `binary_hint` dò PATH của H7). Web không bao giờ gửi `binary` (bộ dựng tham số bỏ trường này) → web không chạy được tệp tuỳ ý.
+- Qua link public (`remote`): không đổi server đã đặt; không đổi binary đã đặt (kể cả khi `detect_binary` tìm ra chỗ khác); chưa đặt binary
+  thì binary tự dò phải tên `tang-thu-sync-headless` và người dùng của hub không ghi được (tệp + thư mục chứa — `_remote_binary_ok`).
+- Đường dẫn trên máy (`local_parent`, `local_path`) từ phiên public → từ chối trước khi gọi RPC (`_guard_local`). Qua cloud, bản sao đặt ở
+  `<local_parent>/<tên>`, vẫn qua `_validate_local` (không trong/chứa HUB_HOME, trong W khi giam…).
+- Mọi thao tác qua `ACTIONS` (CSRF + Origin + khoá phiên, có bước xác nhận; thiết lập/đăng nhập/chuyển/gỡ có bước 2) → RPC HUMAN_ONLY, audit
+  kênh `web`.
+- Lệch plan-cloud-files §3.6 "qua cloud chỉ xem": chủ repo quyết 2026-11-16 cho người dùng hub tự nối Không gian số từ cloud. Quyết định 1
+  (web cfharness không ghi TỆP qua cloud) giữ nguyên.
+
+Test: `tests/test_web_filehub.py::test_setup_login_and_add_folder_over_public_link`, `::test_pause_remove_over_public_link`,
+`::test_setup_via_public_link_relay_oauth_callback`, `::test_login_on_hub_machine_uses_loopback_listener_and_switch_remove_step2`;
+`tests/test_filehub_supervisor.py::test_remote_setup_cannot_change_server_or_pick_writable_binary`.
+
 ## Test (không mạng, không claude)
 
 `tests/fake_tangthu_sync.py` (binary giả đúng §8.3: `--version`, `login`, vòng chính ghi status/index, đọc control, `inject.jsonl` mô phỏng cloud,
@@ -92,7 +128,7 @@ Tệp: `HUB_HOME/filehub/{profile/, status.json, control.json, ignore.txt, super
 ## Chạy thử với binary thật
 
 ```bash
-cfharness filehub setup --server https://thumucai.trungtamdhs.com --binary /đường/dẫn/tang-thu-sync-headless --name cfharness
+cfharness filehub setup --server https://thumucai.trungtamdhs.com --binary /đường/dẫn/tang-thu-sync-headless   # --scope folder --name cfharness: một thư mục
 # (tuỳ chọn) cfharness config set filehub.sync_min_version 0.1.0 ; filehub.max_delete_batch 50 ; filehub.local_parent ~/KhongGianSo
 cfharness filehub status
 cfharness task create --assignee <agent> --workspace "filehub:cfharness/Báo cáo" "đọc yêu cầu, viết báo cáo .docx"
@@ -130,7 +166,7 @@ Plan + quyết định W1–W7: `plan-filehub-workspace-root.md`. Hợp đồng 
   NGUYÊN; khớp → xoá state (một lần) → `CODE <code>\t<state>\n` vào stdin (code/state chỉ ký tự URL-safe, ≤ 2048 — không chèn được dòng
   thứ hai). `?error=` của trang đồng ý: sau khi state khớp → `ERROR <mã>\t<state>` vào stdin (mã chỉ `[a-z0-9_]` ≤ 64, khác → `other`), binary
   in `ERROR <mã>` và thoát. Trang kết quả chỉ chữ cố định hoặc chữ daemon dựng (`message`), không phản chiếu query.
-  Web trên chính máy hub (`is_local_request`) dùng listener loopback như CLI (`no_browser`, trang `/filehub/login` đưa link tab mới).
+  Web trên chính máy hub (`is_local_request`) dùng listener loopback như CLI (`no_browser`). Thẻ + trang `/filehub/login`: § Web.
 - Hợp đồng headless: `tang-thu-sync/docs/headless-cfharness.md` (S5, commit 9869ede). Chạy đồng bộ với `--add-root <id> … --root-kind workspace`
   cho gốc workspace (thiếu = folder; hub chỉ truyền khi workspace). Lỗi `login`: `ERROR <mã>` exit 1 (`usage` exit 2); chữ tiếng Việt dựng ở
   daemon (`service.login_error_text` → `status.login.message`, nêu tên tài khoản cho `super_not_member`/`not_ws_admin`/`device_limit`).
