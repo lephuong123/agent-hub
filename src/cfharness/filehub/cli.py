@@ -1,4 +1,4 @@
-"""CLI `cfharness filehub setup|login|switch-to-workspace|status|add|remove|pause|resume` — client thuần của daemon (RPC `filehub.*`).
+"""CLI `cfharness filehub setup|login|switch-to-workspace|status|add|remove|rename|pause|resume` — client thuần của daemon (RPC `filehub.*`).
 
 `setup`/`login`/`switch-to-workspace` in link đồng ý thiết bị (dòng `LOGIN_URL` của binary sync) rồi chờ người bấm đồng ý trên Không gian số.
 Cùng thao tác làm được ở thẻ "Không gian số" của Cài đặt web (kể cả qua link public — đăng nhập relay OAuth).
@@ -44,6 +44,10 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     ad.add_argument("--local-path")
     rm = ss.add_parser("remove", help="gỡ thư mục chung khỏi hub (không xoá tệp trên máy lẫn trên Không gian số; chỉ người)", parents=[common])
     rm.add_argument("name")
+    rn = ss.add_parser("rename", help="đổi tên thư mục chung trong cfharness (filehub:<tên>) — không đổi đường dẫn trên máy, không đổi tên trên "
+                                      "Không gian số; tên cũ vẫn khớp làm bí danh (chỉ người)", parents=[common])
+    rn.add_argument("name")
+    rn.add_argument("new_name")
     ss.add_parser("pause", help="tạm dừng đồng bộ (dừng tiến trình sync)", parents=[common])
     rs = ss.add_parser("resume", help="chạy lại đồng bộ; --root <id>: cho chiều đẩy lên đang bị chặn (xoá hàng loạt) đi tiếp", parents=[common])
     rs.add_argument("--root")
@@ -74,6 +78,8 @@ def _print_status(r: dict[str, Any]) -> None:
                   "tài khoản admin: `cfharness filehub login`")
             if f.get("disconnected_path"):
                 print(f"    (đã ngắt đồng bộ — bản trên máy nay ở {f['disconnected_path']}, tệp giữ nguyên)")
+        if f.get("aliases"):
+            print("    tên cũ (vẫn khớp): " + ", ".join(f"filehub:{x}" for x in f["aliases"]))
         if f.get("renamed"):
             print(f"    (trên web đã đổi tên thành «{f['server_name']}» — trên máy giữ tên/đường dẫn cũ; filehub:{f['server_name']} cũng khớp)")
         print(f"    {f['name']}  →  {f['local_path']}  (workspace filehub:{f['name']})"
@@ -150,6 +156,10 @@ def cmd_filehub(ctx: Any) -> int:
     if act == "remove":
         r = ctx.call("filehub.remove", {"name": a.name})
         ctx.out(r, f"Đã gỡ «{r['removed']}» khỏi hub — {r['note']}")
+        return 0
+    if act == "rename":
+        r = ctx.call("filehub.rename", {"name": a.name, "new_name": a.new_name})
+        ctx.out(r, f"Đã đổi tên «{r['previous']}» → «{r['name']}» (giao việc: workspace {r['workspace']}; filehub:{r['previous']} vẫn khớp) — {r['note']}")
         return 0
     if act == "pause":
         ctx.out(ctx.call("filehub.pause", {}), "Đã tạm dừng đồng bộ.")

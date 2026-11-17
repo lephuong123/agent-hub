@@ -138,7 +138,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # Thư mục chung Không gian số (filehub/): đăng nhập thiết bị, thêm/gỡ thư mục, tạm dừng đồng bộ — chỉ người (không MANAGER_ALLOWED)
         # login_callback: relay OAuth từ web public (code một lần); switch_to_workspace: đổi gốc đồng bộ sang toàn bộ workspace
         "filehub.setup", "filehub.login", "filehub.login_callback", "filehub.switch_to_workspace", "filehub.add", "filehub.remove",
-        "filehub.pause", "filehub.resume",
+        "filehub.rename", "filehub.pause", "filehub.resume",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})
