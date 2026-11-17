@@ -125,6 +125,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "hub": None,
     # Lịch chạy tự động (schedules/): schedule.* ghi ∈ HUMAN_ONLY — agent không tự đặt việc chạy lặp
     "schedule": {"add", "create", "edit", "update", "pause", "resume", "rm", "remove", "delete", "run-now", "run_now"},
+    "session": {"reindex"},  # dựng lại chỉ mục tìm kiếm hội thoại (session.reindex ∈ HUMAN_ONLY) — `session status` chỉ đọc
     # Tài khoản Claude (accounts/, luồng core): account.* ghi ∈ HUMAN_ONLY — agent không tự thêm/đổi/xoá tài khoản Claude
     "account": {"add", "login", "use", "rename", "rm", "remove", "delete", "check"},
     # Thư mục chung Không gian số (filehub/): filehub.* ghi ∈ HUMAN_ONLY — đăng nhập thiết bị, thêm/gỡ thư mục, tạm dừng đồng bộ

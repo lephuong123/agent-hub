@@ -57,6 +57,8 @@ MUTATING = frozenset(
         "knowledge.skill_save", "knowledge.skill_archive", "knowledge.skill_restore", "knowledge.skill_import", "knowledge.skill_promote",
         # hardening CLI (mcp_server/surface_rpc.py)
         "agent.archive", "agent.revert", "trash.restore", "trash.purge", "mcp.cancel_task",
+        # dựng lại chỉ mục tìm kiếm hội thoại (session_search.schedule_reindex)
+        "session.reindex",
         # hồ sơ phê duyệt (guard/rpc.py) — audit trong ApprovalService (tiền tố approval. không bọc lần hai)
         "approval.manager_decide",
     }

@@ -371,6 +371,25 @@ class SurfaceRpc:
         args.setdefault("group", True)
         return self._session(args, vis)
 
+    def session_index_status(self, p: dict[str, Any]) -> dict[str, Any]:
+        """`session.index_status {}` — chỉ số đếm/tiến độ chỉ mục (không có nội dung hội thoại)."""
+        from .. import session_search as ss
+
+        return ss.index_status(self.hub.store.conn)
+
+    def session_reindex(self, p: dict[str, Any]) -> dict[str, Any]:
+        """`session.reindex {fts_only?}` (HUMAN_ONLY, audit): lên lịch dựng lại chỉ mục hội thoại; việc nặng chạy nền theo lô
+        (`session_search.run_backfill`) để daemon không bị chặn. Không xoá `session_messages`."""
+        from .. import session_search as ss
+        from ..runs import export_quiesced
+
+        if export_quiesced(self.hub):
+            raise Blocked("hub đang xuất gói / đã đóng băng chuyển nhà — không dựng lại chỉ mục lúc này")
+        with self.hub.store.tx():
+            res = ss.schedule_reindex(self.hub.store.conn, fts_only=bool(p.get("fts_only")))
+        ss.start_backfill(self.hub)
+        return res
+
     def _run_for_hook(self, run_id: str | None) -> dict[str, Any] | None:
         return self.hub.store.get_run(run_id) if run_id else None
 
@@ -472,6 +491,8 @@ class SurfaceRpc:
             "memory.recall_self": self.memory_recall_self,
             "session.search": self.session_search,
             "session.search_self": self.session_search_self,
+            "session.index_status": self.session_index_status,
+            "session.reindex": self.session_reindex,
             "hook.observe": self.hook_observe,
             "hook.timeout": self.hook_timeout,
             "mcp.agent_run": self.agent_run,

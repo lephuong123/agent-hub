@@ -124,7 +124,8 @@ CREATE INDEX IF NOT EXISTS session_messages_ts ON session_messages(ts);
 
 
 BACKFILL_KEY = "session_index_backfill"
-PHASES = ("runs", "events", "manager", "done")
+# "fts" chỉ có khi người chạy `session reindex` (nạp lại FTS từ session_messages); backfill v17 bắt đầu từ "runs"
+PHASES = ("fts", "runs", "events", "manager", "done")
 
 
 def migrate_v17(conn: sqlite3.Connection) -> None:
@@ -137,18 +138,30 @@ def migrate_v17(conn: sqlite3.Connection) -> None:
 
     for stmt in _split_sql(SCHEMA):
         conn.execute(stmt)
+    _create_fts(conn)
+    # mốc trên: hàng ghi SAU migration đã được chỉ mục lúc ghi → backfill chỉ cần tới đây
+    _set_state(conn, {"phase": "runs", "cursor": 0, "hi": _source_hi(conn), "done": 0})
+
+
+def _create_fts(conn: sqlite3.Connection) -> str | None:
+    """Tạo bảng FTS5 + trigger nếu bản SQLite hỗ trợ (idempotent). Trả tokenizer đã chọn hoặc None."""
     tok = pick_tokenizer(conn)
     if tok is not None:
         conn.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS session_fts USING fts5(folded, content='session_messages', content_rowid='id', tokenize='{tok}')")
         conn.execute("CREATE TRIGGER IF NOT EXISTS session_messages_ai AFTER INSERT ON session_messages BEGIN "
                      "INSERT INTO session_fts(rowid, folded) VALUES (new.id, new.folded); END")
-        conn.execute("CREATE TRIGGER IF NOT EXISTS session_messages_ad AFTER DELETE ON session_messages BEGIN "
-                     "INSERT INTO session_fts(session_fts, rowid, folded) VALUES ('delete', old.id, old.folded); END")
-    # mốc trên: hàng ghi SAU migration đã được chỉ mục lúc ghi → backfill chỉ cần tới đây
-    hi = {"runs": conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM runs").fetchone()[0],
-          "events": conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM events").fetchone()[0],
-          "manager": conn.execute("SELECT COALESCE(MAX(id), 0) FROM manager_messages").fetchone()[0]}
-    _set_state(conn, {"phase": "runs", "cursor": 0, "hi": hi, "done": 0})
+        conn.execute(DELETE_TRIGGER)
+    return tok
+
+
+DELETE_TRIGGER = ("CREATE TRIGGER IF NOT EXISTS session_messages_ad AFTER DELETE ON session_messages BEGIN "
+                  "INSERT INTO session_fts(session_fts, rowid, folded) VALUES ('delete', old.id, old.folded); END")
+
+
+def _source_hi(conn: sqlite3.Connection) -> dict[str, int]:
+    return {"runs": conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM runs").fetchone()[0],
+            "events": conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM events").fetchone()[0],
+            "manager": conn.execute("SELECT COALESCE(MAX(id), 0) FROM manager_messages").fetchone()[0]}
 
 
 def _get_state(conn: sqlite3.Connection) -> dict[str, Any] | None:
@@ -186,13 +199,24 @@ def backfill_step(conn: sqlite3.Connection, batch: int = 400, idx: "Indexer | No
     idx = idx or Indexer(conn)
     phase, cur, hi = st["phase"], int(st.get("cursor") or 0), st.get("hi") or {}
     n = 0
-    if phase == "runs":
+    if phase == "fts":
+        # `session reindex`: nạp lại FTS từ session_messages (FTS đã `delete-all` lúc lên lịch). Hàng id > mốc đã vào FTS qua trigger.
+        rows = conn.execute("SELECT id, folded FROM session_messages WHERE id > ? AND id <= ? ORDER BY id LIMIT ?",
+                            (cur, int(hi.get("fts") or 0), batch)).fetchall()
+        if rows and _has_table(conn, "session_fts"):
+            conn.executemany("INSERT INTO session_fts(rowid, folded) VALUES (?,?)", [(r[0], r[1]) for r in rows])
+        if rows:
+            cur = rows[-1][0]
+        n = len(rows)
+    elif phase == "runs":
         rows = conn.execute("SELECT rowid AS _rid, * FROM runs WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?",
                             (cur, int(hi.get("runs") or 0), batch)).fetchall()
         for r in rows:
             d = dict(r)
             idx.index_run_prompt(d)
-            if d.get("summary") and conn.execute("SELECT 1 FROM events WHERE run_id=? AND +type='message.complete' LIMIT 1", (d["id"],)).fetchone() is None:
+            if (d.get("summary") and conn.execute("SELECT 1 FROM events WHERE run_id=? AND +type='message.complete' LIMIT 1", (d["id"],)).fetchone() is None
+                    # reindex: event đã bị retention xoá nhưng tin assistant đã chỉ mục từ trước → không thêm bản tóm tắt trùng
+                    and conn.execute("SELECT 1 FROM session_messages WHERE run_id=? AND role='assistant' LIMIT 1", (d["id"],)).fetchone() is None):
                 idx.add(f"run:{d['id']}:summary", "run", idx.run_meta(d["id"]), role="assistant", text=d["summary"], ts=d.get("ended_at") or d["queued_at"])
             cur = d["_rid"]
         n = len(rows)
@@ -216,9 +240,17 @@ def backfill_step(conn: sqlite3.Connection, batch: int = 400, idx: "Indexer | No
             idx.index_manager_message(dict(m))
             cur = m["id"]
         n = len(rows)
-    st["done"] = int(st.get("done") or 0) + n
+    if phase == "fts":
+        st["fts_done"] = int(st.get("fts_done") or 0) + n
+    else:
+        st["done"] = int(st.get("done") or 0) + n
     if n < batch:  # hết pha này
-        st["phase"], st["cursor"] = PHASES[PHASES.index(phase) + 1], 0
+        nxt = "done" if phase == "fts" and st.get("fts_only") else PHASES[PHASES.index(phase) + 1]
+        st["phase"], st["cursor"] = nxt, 0
+        if nxt == "done" and st.get("reindex"):
+            from .events import iso
+
+            st["finished_at"] = iso()
     else:
         st["cursor"] = cur
     _set_state(conn, st)
@@ -239,13 +271,18 @@ async def run_backfill(hub: Any, *, batch: int = 150, pause_s: float = 0.02) -> 
     import asyncio
     import logging
 
+    from .runs import export_quiesced
+
     log = logging.getLogger("cfharness.session_search")
     try:
         if not backfill_pending(hub.store.conn):
             return
-        log.info("bắt đầu backfill chỉ mục hội thoại (v17)")
+        log.info("bắt đầu backfill chỉ mục hội thoại")
         idx = indexer_for(hub.store)
         while True:
+            if export_quiesced(hub):  # đang xuất gói / đóng băng chuyển nhà → không ghi DB, chờ
+                await asyncio.sleep(1.0)
+                continue
             with hub.store.tx():
                 more = backfill_step(hub.store.conn, batch=batch, idx=idx)
             if not more:
@@ -259,14 +296,62 @@ async def run_backfill(hub: Any, *, batch: int = 150, pause_s: float = 0.02) -> 
 
 
 def start_backfill(hub: Any) -> None:
+    """Khởi chạy vòng nền nếu còn việc và chưa có vòng nào đang chạy (gọi ở `Hub.start` và sau `session.reindex`)."""
     try:
         import asyncio
 
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
+    cur = getattr(hub, "_session_backfill_task", None)
+    if cur is not None and not cur.done():
+        return
     if backfill_pending(hub.store.conn):
-        hub._bg.append(loop.create_task(run_backfill(hub)))
+        t = loop.create_task(run_backfill(hub))
+        hub._session_backfill_task = t
+        hub._bg.append(t)
+
+
+# ============================================================================ dựng lại chỉ mục (`cfharness session reindex`)
+def index_status(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Tình trạng chỉ mục: số tin, engine, tiến độ backfill/reindex (chỉ số đếm — không có nội dung hội thoại)."""
+    if not _has_table(conn, "session_messages"):
+        return {"ready": False, "engine": None, "messages": 0, "pending": False}
+    st = _get_state(conn) or {}
+    out: dict[str, Any] = {"ready": True, "engine": _tokenizer(conn) or "like",
+                           "messages": conn.execute("SELECT COUNT(*) FROM session_messages").fetchone()[0],
+                           "pending": bool(st) and st.get("phase") != "done", "phase": st.get("phase")}
+    for k in ("done", "fts_done", "reindex", "fts_only", "started_at", "finished_at"):
+        if st.get(k) is not None:
+            out[k] = st[k]
+    if st.get("phase") == "fts":
+        out["fts_total"] = int((st.get("hi") or {}).get("fts") or 0)
+    return out
+
+
+def schedule_reindex(conn: sqlite3.Connection, *, fts_only: bool = False) -> dict[str, Any]:
+    """Lên lịch dựng lại chỉ mục (gọi trong giao dịch của daemon; việc nặng chạy NỀN theo lô qua `run_backfill`).
+
+    1. FTS: tạo lại nếu thiếu (vd SQLite nay đã có FTS5), rồi `delete-all` + nạp lại từ `session_messages` theo lô (pha `fts`) —
+       sửa FTS lệch/hỏng. Trong lúc nạp, tìm kiếm có thể thiếu kết quả (`backfill_pending: true`).
+    2. Trừ khi `fts_only`: quét lại TOÀN BỘ runs/events/manager_messages (idempotent nhờ `ref` UNIQUE) để bù tin bị thiếu (lỗi chỉ mục
+       lúc ghi, backfill dở). KHÔNG xoá `session_messages`: event cũ đã bị retention xoá thì bản chỉ mục là nơi duy nhất còn văn bản."""
+    from .events import iso
+
+    if not _has_table(conn, "session_messages"):
+        raise HubError("CSDL chưa có chỉ mục hội thoại (cần migration v17) — khởi động lại daemon")
+    created = _tokenizer(conn) is None and _create_fts(conn) is not None
+    has_fts = _has_table(conn, "session_fts")
+    if fts_only and not has_fts:
+        raise HubError("bản SQLite này không có FTS5 — tìm kiếm dùng LIKE, không có chỉ mục FTS để dựng lại")
+    hi: dict[str, int] = _source_hi(conn)
+    if has_fts:
+        hi["fts"] = conn.execute("SELECT COALESCE(MAX(id), 0) FROM session_messages").fetchone()[0]
+        conn.execute("INSERT INTO session_fts(session_fts) VALUES('delete-all')")
+    _set_state(conn, {"phase": "fts" if has_fts else "runs", "cursor": 0, "hi": hi, "done": 0, "fts_done": 0, "reindex": True,
+                      "fts_only": bool(fts_only), "started_at": iso()})
+    return {"scheduled": True, "fts_created": created, "engine": _tokenizer(conn) or "like", "fts_only": bool(fts_only),
+            "messages": conn.execute("SELECT COUNT(*) FROM session_messages").fetchone()[0], "fts_total": hi.get("fts", 0)}
 
 
 # ============================================================================ chỉ mục lúc ghi
@@ -381,7 +466,26 @@ class Indexer:
     def purge_agent(self, agent_id: str) -> int:
         if not self.ready:
             return 0
-        return self.conn.execute("DELETE FROM session_messages WHERE agent_id=?", (agent_id,)).rowcount
+        st = _get_state(self.conn)
+        if not (st and st.get("phase") == "fts" and _has_table(self.conn, "session_fts")):
+            return self.conn.execute("DELETE FROM session_messages WHERE agent_id=?", (agent_id,)).rowcount
+        # đang nạp lại FTS (`session reindex`): trigger 'delete' trên hàng CHƯA nạp lại làm hỏng FTS ("malformed") → tạm gỡ trigger,
+        # xoá sạch FTS, xoá hàng, gắn lại trigger, làm lại pha fts từ đầu. SAVEPOINT: nguyên tử kể cả khi ngoài giao dịch.
+        c = self.conn
+        c.execute("SAVEPOINT purge_session_index")
+        try:
+            c.execute("DROP TRIGGER IF EXISTS session_messages_ad")
+            c.execute("INSERT INTO session_fts(session_fts) VALUES('delete-all')")
+            n = c.execute("DELETE FROM session_messages WHERE agent_id=?", (agent_id,)).rowcount
+            c.execute(DELETE_TRIGGER)
+            st["cursor"], st["fts_done"] = 0, 0
+            _set_state(c, st)
+        except BaseException:
+            c.execute("ROLLBACK TO purge_session_index")
+            c.execute("RELEASE purge_session_index")
+            raise
+        c.execute("RELEASE purge_session_index")
+        return n
 
 
 def indexer_for(store: Any) -> Indexer:
@@ -825,7 +929,59 @@ def cmd_search(ctx: Any) -> int:
     return 0
 
 
+def render_status(res: dict[str, Any]) -> str:
+    if not res.get("ready"):
+        return "chưa có chỉ mục hội thoại (cần migration v17 — khởi động lại daemon)"
+    lines = [f"chỉ mục hội thoại: {res.get('messages', 0)} tin · engine {res.get('engine')}"]
+    if res.get("pending"):
+        if res.get("phase") == "fts":
+            lines.append(f"đang nạp lại FTS: {res.get('fts_done', 0)}/{res.get('fts_total', 0)} tin (tìm kiếm có thể thiếu kết quả)")
+        else:
+            what = "dựng lại" if res.get("reindex") else "backfill"
+            lines.append(f"đang {what} (pha {res.get('phase')}): {res.get('done', 0)} hàng nguồn đã quét")
+    elif res.get("reindex") and res.get("finished_at"):
+        lines.append(f"lần dựng lại gần nhất: {str(res.get('started_at') or '')[:19]} → {str(res['finished_at'])[:19]}")
+    return "\n".join(lines)
+
+
+def cmd_session(ctx: Any) -> int:
+    """`cfharness session status|reindex` — reindex là thao tác của NGƯỜI (RPC `session.reindex` ∈ HUMAN_ONLY, audit)."""
+    import time
+
+    a = ctx.args
+    if a.action == "status":
+        res = ctx.call("session.index_status", {})
+        ctx.out(res, render_status(res))
+        return 0
+    res = ctx.call("session.reindex", {"fts_only": bool(a.fts_only)})
+    msg = (f"đã lên lịch dựng lại chỉ mục hội thoại ({res.get('messages', 0)} tin, engine {res.get('engine')}"
+           + (", vừa tạo FTS5" if res.get("fts_created") else "") + (", chỉ FTS" if res.get("fts_only") else ", quét lại toàn bộ nguồn")
+           + ") — chạy nền trong daemon; xem tiến độ: cfharness session status")
+    if not a.wait:
+        ctx.out(res, msg)
+        return 0
+    if not getattr(ctx, "json", False):
+        print(msg)
+    deadline = time.monotonic() + max(1.0, float(a.timeout))
+    st = ctx.call("session.index_status", {})
+    while st.get("pending") and time.monotonic() < deadline:
+        time.sleep(0.5)
+        st = ctx.call("session.index_status", {})
+    ctx.out(st, render_status(st))
+    return 0 if not st.get("pending") else 1
+
+
 def add_parsers(sub: Any, common: Any) -> None:
+    se = sub.add_parser("session", help="chỉ mục tìm kiếm hội thoại: status | reindex (dựng lại — chỉ người)", parents=[common])
+    ssub = se.add_subparsers(dest="action", required=True)
+    ssub.add_parser("status", help="số tin đã chỉ mục, engine, tiến độ backfill/dựng lại", parents=[common])
+    ri = ssub.add_parser("reindex", help="dựng lại chỉ mục: nạp lại FTS5 + quét lại runs/events/hội thoại (chạy nền trong daemon)",
+                         parents=[common])
+    ri.add_argument("--fts-only", action="store_true", help="chỉ nạp lại FTS5 từ các tin đã chỉ mục, không quét lại nguồn")
+    ri.add_argument("--wait", action="store_true", help="chờ tới khi xong (in tiến độ cuối)")
+    ri.add_argument("--timeout", type=float, default=600.0, help="giây tối đa khi --wait (mặc định 600)")
+    se.set_defaults(fn=cmd_session)
+
     s = sub.add_parser("search", help='tìm kiếm hội thoại (FTS5, không gọi LLM): cfharness search "từ khoá" | --around ID | --read RUN | --browse',
                        parents=[common])
     s.add_argument("query", nargs="*", help='từ khoá (có dấu/không dấu đều khớp; "cụm từ" trong ngoặc kép)')

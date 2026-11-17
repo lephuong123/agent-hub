@@ -667,3 +667,11 @@ def test_filehub_cli_human_only(env):
         v = bash(env, cmd)
         assert v.forbidden, (cmd, v.rule)
     assert not bash(env, "cfharness filehub status").forbidden
+
+
+def test_session_reindex_cli_human_only(env):
+    """`cfharness session reindex` = dựng lại chỉ mục tìm kiếm hội thoại (session.reindex ∈ HUMAN_ONLY); `session status` chỉ đọc."""
+    for cmd in ("cfharness session reindex", "uv run cfharness session reindex --fts-only --wait"):
+        v = bash(env, cmd)
+        assert v.forbidden and v.rule == "hub_human_only", (cmd, v.rule)
+    assert not bash(env, "cfharness session status").forbidden
