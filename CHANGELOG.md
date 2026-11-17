@@ -10,6 +10,14 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+---
+
+## v0.2.17 — 2026-11-17
+
+Trang "Hệ thống ngoài" trên web + chat, `hub doctor` báo dung lượng và dọn thư mục mồ côi, tìm hội thoại cũ trong `cfharness chat`,
+đổi tên thư mục chung Không gian số, bộ tự kiểm bảo mật `cfharness selftest --live`, và proxy loopback cho MCP OAuth (bật mặc định —
+run dài không còn 401, token không còn nằm trong file của run) (#129–#137).
+
 ### Hệ thống ngoài + Sức khoẻ hub
 - **Trang "Hệ thống ngoài" trên web** (`/systems`, nhóm "Hệ thống" ở thanh bên): xem các app trong thư mục làm việc và job launchd của chúng
   (trạng thái, pid, ai tạm dừng, lịch), quét tìm + đăng ký hệ thống mới, thêm theo đường dẫn, gỡ, khoá/mở khoá job, tạm dừng / bật lại /
@@ -48,14 +56,30 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   không tốn tiền. Lệnh chỉ người (agent gõ bị chặn). Hướng dẫn: `docs/dev-notes/selftest.md`.
 
 ### Tích hợp MCP
-- **Proxy loopback cho MCP đăng nhập OAuth (tuỳ chọn, mặc định tắt)**: bật `cfharness config set mcp.oauth_proxy.enabled true` thì run
-  không còn nhận token OAuth trong file mcp.json — `claude` nói chuyện với một proxy của daemon trên `127.0.0.1` (URL + khoá riêng
-  từng run, hết hiệu lực khi run kết thúc), proxy chèn token mới nhất và tự làm mới khi sắp hết hạn hoặc khi server trả 401. Run
+- **Proxy loopback cho MCP đăng nhập OAuth (bật mặc định)**: run không còn nhận token OAuth trong file mcp.json — `claude` nói
+  chuyện với một proxy của daemon trên `127.0.0.1` (URL + khoá riêng từng run, hết hiệu lực khi run kết thúc), proxy chèn token mới nhất và tự làm mới khi sắp hết hạn hoặc khi server trả 401. Run
   dài hơn hạn access token (thường 1 giờ) không còn bị 401 giữa chừng. Hỗ trợ Streamable HTTP và SSE. Proxy không khởi động được →
-  tự dùng lại cách cũ (Bearer trong mcp.json). Đã nghiệm thu với Claude Code 2.1.326 thật (guard + sandbox bật).
+  tự dùng lại cách cũ (Bearer trong mcp.json). Đã nghiệm thu với Claude Code 2.1.326 thật (guard + sandbox bật). Tắt nếu cần:
+  `cfharness config set mcp.oauth_proxy.enabled false`.
 - **Máy có `HTTP_PROXY`/`HTTPS_PROXY`**: tiến trình `claude` của run luôn có `127.0.0.1,localhost,::1` trong `NO_PROXY`, và daemon gọi
   máy chủ OAuth/MCP chạy trên máy này đi thẳng — trước đây request tới địa chỉ cục bộ bị đẩy qua proxy công ty và hỏng.
 - **`cfharness mcp edit --url` giữ nguyên transport `sse`** (trước đây tự đổi sang `http`, làm hỏng server SSE cũ).
+
+### Sửa lỗi
+- **Web không lên lại sau khi khởi động lại máy (lỗi 502 qua tunnel)**: số tiến trình ghi trong `auth/web.json` bị tiến trình khác của
+  hệ thống dùng lại sau khi máy khởi động → `cfharness web` tưởng đã có server đang chạy, in link đăng nhập rồi thoát, launchd bật lại
+  mãi mà không ai nghe cổng. Giờ web so thời điểm tiến trình bắt đầu với lúc ghi trạng thái, nhận ra file cũ và tự chạy bình thường.
+  Hub đang bị kẹt: xoá `~/.cfharness/auth/web.json` của user đó (launchd bật lại web trong khoảng 30 giây) (#136).
+- **Kết nối MCP OAuth qua link public lỗi sau khi bấm Chấp nhận**: web luôn bảo nhà cung cấp quay về `http://127.0.0.1:<cổng>/…`,
+  địa chỉ chỉ đúng khi trình duyệt chạy trên chính máy hub — người vào qua `https://<tên>.…` (tunnel) bị lỗi không kết nối được. Giờ vào
+  qua link public thì quay về `https://<link public>/mcp/oauth/callback`; vào từ chính máy vẫn như cũ. MCP server đăng ký client tự động
+  (DCR) tự nhận địa chỉ mới; server dùng `client_id` nhập tay cần khai thêm địa chỉ này ở phía nhà cung cấp (#137).
+
+### Lưu ý khi cập nhật
+- Không có migration.
+- Proxy MCP OAuth bật sẵn: MCP server đăng nhập OAuth sẽ đi qua proxy của daemon trên `127.0.0.1`. Nếu gặp lỗi kết nối MCP, tắt bằng
+  `cfharness config set mcp.oauth_proxy.enabled false` (quay về cách cũ) và báo lại. Máy có `HTTP_PROXY`/`HTTPS_PROXY` không cần làm gì.
+- Sau khi cập nhật có thể chạy `cfharness selftest --live` (vài cent với haiku) để kiểm lớp bảo vệ trên máy mình.
 
 ---
 
@@ -80,10 +104,6 @@ Thêm lệnh nhận bản chuẩn toàn vẹn sau khi cài lại cfharness (#127
 Bản sửa lỗi: daemon trên Windows không còn bị "điếc" sau khi một client ngắt kết nối giữa chừng (#124).
 
 ### Sửa lỗi
-- **Kết nối MCP OAuth qua link public lỗi sau khi bấm Chấp nhận**: web luôn bảo nhà cung cấp quay về `http://127.0.0.1:<cổng>/…`,
-  địa chỉ chỉ đúng khi trình duyệt chạy trên chính máy hub — người vào qua `https://<tên>.…` (tunnel) bị lỗi không kết nối được. Giờ vào
-  qua link public thì quay về `https://<link public>/mcp/oauth/callback`; vào từ chính máy vẫn như cũ. MCP server đăng ký client tự động
-  (DCR) tự nhận địa chỉ mới; server dùng `client_id` nhập tay cần khai thêm địa chỉ này ở phía nhà cung cấp (#137).
 - **Daemon sống mà "điếc" trên Windows — `cfharness chat`/web/CLI không gửi được gì, báo "daemon không chạy"**: khi một client đóng kết
   nối giữa chừng, `accept` lỗi (WinError 64) và asyncio đóng hẳn socket nghe của daemon; tiến trình vẫn chạy nhưng không nhận kết nối
   mới cho tới khi bị giết. Daemon giờ kiểm socket nghe mỗi 2 giây và tự mở lại (ghi cổng mới vào `hub.sock`), client nối lại bình thường (#124).
@@ -147,10 +167,6 @@ Tự thiết lập thư mục chung Không gian số ngay trên web, và sửa l
   "Ứng dụng máy tính" ở Cài đặt) báo lỗi. Giờ web tự chạy lại sang bản mới khi bản cài đổi (khoảng 30 giây), và daemon bản mới khi lên
   sẽ dừng web còn chạy code cũ để launchd bật lại (không có launchd thì daemon tự chạy lại đúng lệnh cũ). Sau khi web chạy lại cần đăng
   nhập lại (#120).
-- **Web không lên lại sau khi khởi động lại máy (lỗi 502 qua tunnel)**: số tiến trình ghi trong `auth/web.json` bị tiến trình khác của
-  hệ thống dùng lại sau khi máy khởi động → `cfharness web` tưởng đã có server đang chạy, in link đăng nhập rồi thoát, launchd bật lại
-  mãi mà không ai nghe cổng. Giờ web so thời điểm tiến trình bắt đầu với lúc ghi trạng thái, nhận ra file cũ và tự chạy bình thường.
-  Hub đang bị kẹt: xoá `~/.cfharness/auth/web.json` của user đó (launchd bật lại web trong khoảng 30 giây) (#136).
 
 ### Lưu ý khi cập nhật
 - Không có migration, không có cấu hình phải sửa.

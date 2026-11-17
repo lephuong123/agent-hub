@@ -111,10 +111,10 @@ chờ qua web callback: không phụ thuộc `cfharness web` đang chạy, `127.
 
 ## 8. Giới hạn đã biết + đề xuất
 - **Token hết hạn giữa run rất dài** (đường cũ): token được chèn tĩnh vào mcp.json lúc spawn; `claude` không biết refresh. Run dài hơn
-  thời hạn access token (thường 1 h) → MCP trả 401 giữa chừng. Đã có lời giải: proxy loopback §8.1 (bật bằng cấu hình).
+  thời hạn access token (thường 1 h) → MCP trả 401 giữa chừng. Đã có lời giải: proxy loopback §8.1 (bật mặc định từ v0.2.17).
 
 ### 8.1 Proxy loopback chèn token (`mcp_client/oauth_proxy.py`, nhánh `feat/mcp-oauth-proxy`)
-Bật: `cfharness config set mcp.oauth_proxy.enabled true` (mặc định TẮT — xem "Chưa nghiệm thu với claude thật" bên dưới). Cấu hình
+BẬT mặc định từ v0.2.17 (2026-11-17, sau nghiệm thu với claude thật — kết quả bên dưới); tắt: `cfharness config set mcp.oauth_proxy.enabled false`. Cấu hình
 `mcp.oauth_proxy.{enabled, port (0 = OS chọn), max_body_mb}`; nhánh ∈ `integrity.SECURITY_KEYS` (sửa tay config.yaml bị khôi phục).
 
 **Luồng.**
