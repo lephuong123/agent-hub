@@ -41,6 +41,16 @@ def redirect_uri(port: int) -> str:
     return f"http://127.0.0.1:{port}{CALLBACK_PATH}"
 
 
+def redirect_uri_for(request: Request, st: Any) -> str:
+    """Người vào qua host public (tunnel TLS, `web.public_origin`) → trình duyệt của họ KHÔNG ở máy chạy hub, `127.0.0.1` trỏ về máy
+    của họ → bấm Chấp nhận xong là lỗi không kết nối được. Khi đó quay về `https://<public_origin>/mcp/oauth/callback` (route công khai,
+    `state` là lớp bảo vệ). Vào từ chính máy → giữ loopback như cũ."""
+    host = request.headers.get("host") or ""  # nguyên Host header như mọi chỗ gọi is_public (public_hosts có cả dạng host:cổng)
+    if getattr(st, "public_origin", None) and st.is_public(host):
+        return f"{str(st.public_origin).rstrip('/')}{CALLBACK_PATH}"
+    return redirect_uri(st.port)
+
+
 def _external_ok(url: str) -> bool:
     s = urlsplit(url or "")
     return bool(s.netloc) and (s.scheme == "https" or (s.scheme == "http" and is_loopback_host(s.hostname)))
@@ -55,7 +65,7 @@ async def connect(request: Request) -> Response:
     back = f"/mcp/{name}"
     st = A.ws(request)
     try:
-        res = await A.rpc(request, "mcp.oauth_start", {"name": name, "redirect_uri": redirect_uri(st.port)}, audit=True)
+        res = await A.rpc(request, "mcp.oauth_start", {"name": name, "redirect_uri": redirect_uri_for(request, st)}, audit=True)
     except (RpcError, DaemonUnavailable) as e:
         return A.flash_redirect(request, back, "error", f"Không bắt đầu được đăng nhập: {A.err_text(e)}")
     url = str((res or {}).get("authorize_url") or "")
