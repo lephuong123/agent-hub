@@ -130,6 +130,8 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "account": {"add", "login", "use", "rename", "rm", "remove", "delete", "check"},
     # Thư mục chung Không gian số (filehub/): filehub.* ghi ∈ HUMAN_ONLY — đăng nhập thiết bị, thêm/gỡ thư mục, tạm dừng đồng bộ
     "filehub": {"setup", "login", "add", "remove", "rm", "rename", "pause", "resume", "switch-to-workspace"},
+    # tự kiểm bảo mật (selftest.py): bật daemon riêng + gọi claude thật (tốn tiền), lộ cách dò guard — agent gõ, kể cả --dry-run, đều chặn
+    "selftest": None,
 }
 
 # H-03: API dạng phương thức (`Path(..).unlink()`) đứng sau `)`/`]` nên KHÔNG dùng `\b` trước dấu chấm

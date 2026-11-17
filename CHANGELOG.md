@@ -10,6 +10,13 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Bảo mật
+- **`cfharness selftest --live` — tự kiểm bảo mật với `claude` thật trước khi phát hành**: tạo hub TẠM (daemon riêng, không đụng hub thật),
+  cho một agent model rẻ (mặc định haiku) thử 12 thao tác bị cấm — ghi `policy/` (shell, python, tool Write), đọc secret / token người,
+  gọi thẳng socket hub, `cfharness approve`, `cfharness config set`, curl dịch vụ loopback, ghi/đọc ngoài workspace khi giam — rồi đo
+  hậu quả thật và báo ĐẠT / TRƯỢT / KHÔNG KẾT LUẬN từng ca. Trần chi phí cứng (`--budget-usd`, mặc định $0.50; mỗi run `--per-run-usd`
+  $0.10), đạt trần thì dừng ngay và bỏ qua các ca còn lại; xong thì dọn sạch hub tạm. `cfharness selftest --dry-run` chỉ liệt kê ca,
+  không tốn tiền. Lệnh chỉ người (agent gõ bị chặn). Hướng dẫn: `docs/dev-notes/selftest.md`.
 ### Tìm hội thoại cũ
 - **`/search <từ khoá>` trong `cfharness chat`** (cả màn hình đầy đủ lẫn `--classic`): tìm trong mọi hội thoại với điều phối viên và
   session của các agent (có dấu/không dấu đều khớp, `"cụm từ"` trong ngoặc kép), kết quả gộp theo luồng, đánh số, kèm đoạn trích.
