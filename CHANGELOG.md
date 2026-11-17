@@ -16,6 +16,18 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - **Đổi tên thư mục chung trong cfharness**: `cfharness filehub rename <tên cũ> <tên mới>` hoặc "Đổi tên trong cfharness" ở thẻ Không gian số
   (Cài đặt). Chỉ đổi tên dùng để giao việc (`filehub:<tên>`); đường dẫn trên máy và tên trên Không gian số giữ nguyên, tên cũ vẫn khớp
   (task/agent đã ghi `filehub:<tên cũ>` chạy tiếp). Từ chối khi có run đang ghi vào thư mục hoặc thư mục chưa đồng bộ lần đầu.
+### Tính năng mới
+- **Trang "Hệ thống ngoài" trên web** (`/systems`, nhóm "Hệ thống" ở thanh bên): xem các app trong thư mục làm việc và job launchd của chúng
+  (trạng thái, pid, ai tạm dừng, lịch), quét tìm + đăng ký hệ thống mới, thêm theo đường dẫn, gỡ, khoá/mở khoá job, tạm dừng / bật lại /
+  khởi động lại job; trang chi tiết có đuôi log (đã che secret). Mọi thao tác có hộp xác nhận và ghi nhật ký kênh `web`.
+- **Lệnh chat `/hethong`** (Telegram; Slack: `/cfh hethong`): xem hệ thống ngoài + job, nút Dừng / Bật lại / Khởi động lại từng job —
+  luôn 2 bước. Đăng ký, gỡ, khoá chỉ làm ở web/CLI.
+- **Sức khoẻ: dung lượng HUB_HOME + dọn thư mục làm việc mồ côi**: `cfharness hub doctor` và thẻ Sức khoẻ (Cài đặt web) báo dung lượng
+  theo thư mục (logs, checkpoints, backups, exports, workspaces của agent…), chỗ trống ổ đĩa, và các thư mục làm việc không còn dùng —
+  thư mục của hội thoại điều phối viên đã lưu trữ/không còn, workspace/worktree không run/task nào tham chiếu, workspace của run đã xong
+  quá 30 ngày, git worktree của task đã xong. Mặc định CHỈ BÁO; dọn bằng `cfharness hub doctor --cleanup [--older-than NGÀY]` (liệt kê
+  rồi hỏi y/N, ghi nhật ký kiểm toán). Không bao giờ xoá run/ledger/audit hay thư mục đang có run chạy; git worktree ngoài HUB_HOME chỉ
+  được gợi ý lệnh `git worktree remove`.
 
 ---
 

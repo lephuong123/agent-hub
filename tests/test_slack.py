@@ -322,6 +322,27 @@ async def test_schedules_pause_resume_buttons(make, sk):
     assert d.hub.schedules.get(s["id"])["status"] == "active"
 
 
+async def test_systems_job_buttons_two_steps(make, sk, tmp_path):
+    """/cfh hethong: nút ở tin riêng (nhãn chỉ label job); thao tác job 2 bước — audit kênh slack."""
+    from test_systems import attach_world, make_world
+
+    d = await make()
+    w = make_world(tmp_path)
+    attach_world(d.hub, w)
+    d.hub.systems.scan(apply=True)
+    await deliver(sk, sk.slash(BOSS, "hethong"))
+    m = sk.sent(DM_BOSS)[-1]
+    btn = next(b for b in sk.buttons(m) if b["text"]["text"] == "🔄 Khởi động lại com.vn2.web")
+    assert "Việc nhóm 2" not in sk.text_of(m)
+    await deliver(sk, sk.press(DM_BOSS, BOSS, btn["value"], m["_ts"]))
+    assert w["fake"].loaded["com.vn2.web"] == 811  # bước 1 chỉ hỏi
+    upd = sk.calls_of("chat.update")[-1]
+    ok = next(b for b in sk.buttons(upd) if b["text"]["text"] == "Xác nhận KHỞI ĐỘNG LẠI")
+    await deliver(sk, sk.press(DM_BOSS, BOSS, ok["value"], m["_ts"]))
+    assert w["fake"].loaded["com.vn2.web"] == 5151
+    assert d.hub.audit.query(kind="system.job")[0]["channel"] == f"slack:{DM_BOSS}"
+
+
 # ============================================================================ duyệt bằng nút
 async def test_approval_buttons_two_step(make, sk):
     d = await make(runtime=FakeRuntime(hold=True))

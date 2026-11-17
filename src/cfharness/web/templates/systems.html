@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% from "_systems.html" import job_row with context %}
+{% block title %}Hệ thống ngoài{% endblock %}
+{% block content %}
+<div class="page-head"><div class="ph-title"><h1>Hệ thống ngoài</h1><span class="sub">App trong thư mục làm việc và job launchd của chúng (không phải agent của hub). Bạn và điều phối viên tạm dừng / bật lại / khởi động lại job đã đăng ký; chỉ bạn đăng ký, gỡ, khoá.</span></div></div>
+{% if unavailable %}<div class="banner warn">{{ m.icon('alert') }}<span>{{ unavailable }}</span></div>{% endif %}
+{% if error %}<div class="banner danger" role="alert">{{ m.icon('alert') }}<span>{{ error }}</span></div>{% endif %}
+<div class="row between wrap-row filters">
+  <span class="muted">{{ sum.systems }} hệ thống · {{ sum.jobs }} job · {{ sum.running }} đang chạy{% if sum.paused %} · <b>{{ sum.paused }} tạm dừng</b>{% endif %}{% if sum.error %} · <span class="danger-t">{{ sum.error }} lỗi</span>{% endif %}{% if sum.locked %} · {{ sum.locked }} khoá{% endif %}</span>
+  <span class="row gap"><a class="btn sm" href="/systems?scan=1#sys-scan">{{ m.icon('search') }}<span>Quét tìm hệ thống</span></a><a class="btn sm ghost" href="#sys-add">{{ m.icon('plus') }}<span>Thêm theo đường dẫn</span></a></span>
+</div>
+
+{% if scan %}
+<section class="card" id="sys-scan">
+  <h2>{{ m.icon('search') }} Kết quả quét</h2>
+  <p class="muted small">Gốc quét: {% for r in scan.roots %}<code>{{ r }}</code>{{ ', ' if not loop.last }}{% else %}chưa cấu hình (<code>systems.roots</code> / <code>workspace.allowed_roots</code>){% endfor %}. Quét thử không đăng ký gì.</p>
+  {% if scan.new_rows %}
+  <table class="tbl stack">
+    <thead><tr><th>Hệ thống mới</th><th>Thư mục</th><th>Job</th></tr></thead>
+    <tbody>{% for s in scan.new_rows %}<tr><td data-label="Hệ thống"><b>{{ s.title }}</b> <span class="id">{{ s.id }}</span></td><td data-label="Thư mục"><code>{{ s.path }}</code></td>
+      <td data-label="Job">{% for lb in s.jobs %}<code>{{ lb }}</code>{{ ', ' if not loop.last }}{% else %}<span class="muted">không có</span>{% endfor %}</td></tr>{% endfor %}</tbody>
+  </table>
+  <div class="row end">{{ m.act("system_scan_apply", "Đăng ký " ~ scan.new_rows|length ~ " hệ thống mới", {}, "btn primary", confirm="Đăng ký mọi hệ thống mới vừa quét thấy?", next="/systems", ic="check") }}</div>
+  {% else %}<p>Không có hệ thống mới.</p>{% endif %}
+  {% if scan.gone %}<p class="small">Đã đăng ký nhưng không còn thấy: {% for g in scan.gone %}<a href="/systems/{{ g }}">{{ g }}</a>{{ ', ' if not loop.last }}{% endfor %} — gỡ ở trang chi tiết nếu không dùng nữa.</p>{% endif %}
+</section>
+{% endif %}
+
+{% if not rows and not unavailable %}
+<section class="card">{{ m.empty("Bấm «Quét tìm hệ thống» để tìm app trong thư mục làm việc, hoặc thêm theo đường dẫn ở dưới.", "power", title="Chưa đăng ký hệ thống nào") }}</section>
+{% endif %}
+{% for s in rows %}
+<section class="card flush" id="sys-{{ s.id }}">
+  <h2 class="pad"><a href="/systems/{{ s.id }}">{{ s.title or s.id }}</a> <span class="id">{{ s.id }}</span></h2>
+  <p class="muted small pad"><code>{{ s.path }}</code>{% if s.added_at %} · đăng ký {{ m.rel(s.added_at) }}{% endif %}</p>
+  {% if not s.jobs %}<p class="muted pad">Không có job nào trỏ vào thư mục này.</p>{% else %}
+  <table class="tbl stack">
+    <thead><tr><th>Job</th><th>Trạng thái</th><th class="actions"><span class="sr-only">Thao tác</span></th></tr></thead>
+    <tbody>{% for j in s.jobs %}{{ job_row(j, s.id, "/systems") }}{% endfor %}</tbody>
+  </table>{% endif %}
+</section>
+{% endfor %}
+
+<section class="card" id="sys-add">
+  <h2>{{ m.icon('plus') }} Thêm hệ thống theo đường dẫn</h2>
+  <form method="post" action="/do/system_add" class="form">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/systems">
+    <div class="fgrid">
+      <label class="span2">Thư mục của app <input name="path" required placeholder="vd ~/Workspace/viec-nhom-2" autocomplete="off" spellcheck="false"></label>
+      <label>Mã (tuỳ chọn) <input name="id" maxlength="80" placeholder="mặc định: tên thư mục" autocomplete="off" spellcheck="false"></label>
+    </div>
+    <div class="row end"><button class="btn primary" type="submit">{{ m.icon('plus') }}<span>Xem lại &amp; đăng ký</span></button></div>
+  </form>
+</section>
+{% endblock %}

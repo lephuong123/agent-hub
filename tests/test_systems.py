@@ -67,8 +67,8 @@ def _plist(d: Path, label: str, **kw) -> None:
     (d / f"{label}.plist").write_bytes(plistlib.dumps({"Label": label, **kw}))
 
 
-@pytest.fixture
-def world(tmp_path):
+def make_world(tmp_path: Path) -> dict:
+    """Thư mục làm việc + LaunchAgents giả + `FakeLaunchd` (dùng chung với test web/Telegram/Slack của trang Hệ thống ngoài)."""
     ws, la = tmp_path / "ws", tmp_path / "LaunchAgents"
     ws.mkdir()
     la.mkdir()
@@ -95,12 +95,22 @@ def world(tmp_path):
     return {"ws": ws, "la": la, "fake": fake, "a": a}
 
 
+def attach_world(hub, world: dict) -> None:
+    """Trỏ `hub.systems` vào thế giới giả (không bao giờ đụng launchctl / ~/Library thật)."""
+    hub.config.set("systems.roots", [str(world["ws"])])
+    hub.config.set("systems.launch_agents_dir", str(world["la"]))
+    hub.systems._lc = Launchctl(runner=world["fake"], uid=501)
+
+
+@pytest.fixture
+def world(tmp_path):
+    return make_world(tmp_path)
+
+
 @pytest.fixture
 async def env(hub_home, world):
     d = await make_daemon(hub_home)
-    d.hub.config.set("systems.roots", [str(world["ws"])])
-    d.hub.config.set("systems.launch_agents_dir", str(world["la"]))
-    d.hub.systems._lc = Launchctl(runner=world["fake"], uid=501)
+    attach_world(d.hub, world)
     res = await manager_run(d)
     yield d, res["run_id"], world
     await close(d)

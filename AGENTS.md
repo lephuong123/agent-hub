@@ -425,13 +425,14 @@ Bất biến: guard nhận diện tên cũ VĨNH VIỄN (binary/module cũ có t
 `tests/test_rename_cfharness.py`. Literal tên cũ chỉ được nằm trên dòng có `rename:keep`. `home migrate` là lệnh chỉ người (`HUB_HUMAN_ONLY_CLI`).
 
 ## Hệ thống ngoài hub — app trong ~/Workspace + job launchd (`systems/`)
-Chi tiết, quyền, nghiệm thu thật, việc dở: `docs/dev-notes/systems.md`. Không migration (`hub_state systems.registry|systems.paused`). Test: `tests/test_systems.py`.
+Chi tiết, quyền, nghiệm thu thật, việc dở: `docs/dev-notes/systems.md`. Không migration (`hub_state systems.registry|systems.paused`). Test: `tests/test_systems.py`, `tests/test_web_systems.py`, ca `systems` trong `test_telegram.py`/`test_slack.py`.
 
 | Module | Vai trò |
 |---|---|
 | `systems/launchd.py` | Đọc plist (thuần, `plutil` dự phòng) + `Launchctl` (runner thay được — test KHÔNG gọi launchctl thật): state/disabled/pause/resume/restart miền `gui/<uid>` |
 | `systems/service.py` | `hub.systems`: nhận diện (gốc `systems.roots` → thư mục con + job theo cwd/đường dẫn), registry, `job(label, action)` + `job_check` dùng chung với quyền manager |
 | `systems/rpc.py`, `cli.py` | RPC `system.list|get|scan|add|rm|lock|job` (ghi = HUMAN_ONLY, tự audit); CLI `cfharness system scan|list|show|add|rm|lock|unlock|pause|resume|restart` |
+| `web/systems_pages.py` (+ `systems.html`, `system.html`, `_systems.html`) | Trang `/systems` "Hệ thống ngoài": danh sách + quét thử/đăng ký + thêm + gỡ + khoá + pause/resume/restart job qua `ACTIONS` (xác nhận, audit `web`); `/systems/{id}` đuôi log. Chat: `ChatBot._c_systems` (`/hethong`, nút job 2 bước `yp|yr|yk`) |
 
 Bất biến: đăng ký/khoá = CHỈ người. Điều phối viên chỉ `system.job` (MANAGER_ALLOWED + `check_rpc` → `job_check`) trên job thuộc hệ thống đã đăng ký,
 không khoá, trong trần `manager.max_system_ops_per_hour`. Không bao giờ nhận diện thư mục/job của chính hub. `launchctl` chỉ chạy trong daemon.

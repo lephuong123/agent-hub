@@ -1,4 +1,4 @@
-{#- Thẻ "Sức khoẻ" ở Cài đặt (partial /partials/health) — chỉ RPC đọc: hub.status, hub.compat, guard.integrity.status, report.hangs. -#}
+{#- Thẻ "Sức khoẻ" ở Cài đặt (partial /partials/health) — chỉ RPC đọc: hub.status, hub.compat, guard.integrity.status, report.hangs, hub.housekeeping. -#}
 {% import "_macros.html" as m with context %}
 <section class="card" id="health">
   <div class="card-head"><h2>{{ m.icon('shield') }} Sức khoẻ</h2>{% if bad %}<span class="pill danger">{{ bad }} vấn đề</span>{% else %}<span class="pill ok">{{ m.icon('check') }}ổn</span>{% endif %}</div>

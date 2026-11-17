@@ -36,6 +36,10 @@ log = logging.getLogger("cfharness.chat")
 PENDING = ("open", "waiting_human")
 SCHED_ID_RE = re.compile(r"sc_[A-Za-z0-9]{4,32}")  # id lịch do hub sinh — chỉ id dạng này mới lên nhãn nút
 SCHED_BUTTONS_MAX = 10
+SYS_BUTTONS_MAX = 10  # job hệ thống ngoài có nút (/hethong) — mỗi job một hàng
+SYS_ACTIONS = {"yp": "pause", "yr": "resume", "yk": "restart"}  # nút /hethong bước 1 → `system.job{action}`; bước 2 = "<mã>c"
+SYS_VERB = {"pause": "tạm dừng", "resume": "bật lại", "restart": "khởi động lại"}
+SYS_ICON = {"running": "●", "idle": "○", "paused": "⏸", "not_loaded": "·", "error": "⚠"}
 AGENT_FRAME = "▼ Agent viết:"  # tiền tố cố định (chữ hub) ngay trước `<pre>` nội dung agent — WT-8, rút gọn theo ux-plan §3.1
 _UID: contextvars.ContextVar[str | None] = contextvars.ContextVar("chat_from_id", default=None)
 # Thread của việc đang xử lý: (chat, tin để trả lời vào thread của nó). Slack (chat/slack/bot.py `_send`) dùng khi tin gửi vào kênh
@@ -421,6 +425,7 @@ class ChatBot:
             "estop": self._c_estop, "digest": self._c_digest, "moi": self._c_new, "new": self._c_new,
             "hoi": self._c_questions, "questions": self._c_questions, "canban": self._c_inbox,
             "lich": self._c_schedules, "schedules": self._c_schedules,
+            "hethong": self._c_systems, "systems": self._c_systems,
             "taikhoan": self._c_accounts, "account": self._c_accounts, "accounts": self._c_accounts,
         }
 
@@ -481,6 +486,63 @@ class ChatBot:
             nxt = str((r or {}).get("next_run_local") or "—")
             return f"Đã bật lại {sid}.", f"▶️ <b>Đã bật lại lịch</b> <code>{esc(sid)}</code> — lượt tới {esc(nxt)}.", None
         return "Đã huỷ — lịch vẫn tạm dừng.", f"⏸ <b>Đã huỷ</b> — lịch <code>{esc(sid)}</code> vẫn tạm dừng.", None
+
+    async def _c_systems(self, cid: str, rest: str, api: Any) -> str | None:
+        """Hệ thống ngoài hub (app + job launchd, systems/) — đọc qua `self.call` (cổng người + allowlist). Tin danh sách là văn bản thuần
+        (tên app lấy từ README, label/lịch từ plist → bỏ ký tự điều khiển/vô hình). Nút ở tin RIÊNG, nhãn chỉ mang label job. Mọi thao tác
+        job = 2 bước (đụng app đang chạy thật). Đăng ký / gỡ / khoá: chỉ CLI + web (không có nút ở chat)."""
+        from ..notify.telegram import visible
+
+        rows = await self.call(cid, "system.list")
+        if not rows:
+            return ("🖥 Chưa đăng ký hệ thống ngoài nào. Quét và đăng ký ở trang web Hệ thống ngoài hoặc `cfharness system scan --apply`.")
+        lines = [f"🖥 Hệ thống ngoài hub ({len(rows)}):"]
+        jobs: list[dict[str, Any]] = []
+        for s in rows:
+            lines.append(f"• {visible(str(s.get('id') or ''))[:60]} · {visible(str(s.get('title') or ''))[:60]}")
+            for j in s.get("jobs") or []:
+                jobs.append(j)
+                extra = f" · pid {j['pid']}" if j.get("pid") else (f" · mã thoát {j['last_exit']}" if j.get("last_exit") not in (None, 0) else "")
+                lines.append(f"   {SYS_ICON.get(j.get('status'), '?')} {visible(str(j.get('label') or ''))[:80]} — {j.get('status_vi') or j.get('status')}"
+                             f"{extra}" + (f" · {visible(str(j['schedule']))[:40]}" if j.get("schedule") else "") + (" · 🔒 khoá" if j.get("locked") else ""))
+            if not s.get("jobs"):
+                lines.append("   (không có job)")
+        lines.append("Tạm dừng / bật lại / khởi động lại: nút bên dưới (2 bước), trang web Hệ thống ngoài, hoặc `cfharness system pause|resume|restart <label>`.")
+        await self._send(api, cid, fit("\n".join(lines)))
+        btns: list[list[tuple[str, str, str]]] = []
+        for j in jobs:
+            label = str(j.get("label") or "")
+            if not label or len(label) > 200 or visible(label) != label:
+                continue
+            short = label if len(label) <= 40 else label[:39] + "…"
+            if j.get("status") == "paused":
+                btns.append([("yr", label, f"▶️ Bật lại {short}")])
+            else:
+                btns.append([("yp", label, f"⏸ Dừng {short}"), ("yk", label, f"🔄 Khởi động lại {short}")])
+        if btns:
+            markup, _ = self.callbacks.issue_rows(btns[:SYS_BUTTONS_MAX], cid, ttl=min(self._ttl(), 86400))
+            await self._send(api, cid, "🖥 Thao tác job hệ thống ngoài:", markup)
+        return None
+
+    async def _system_action(self, cid: str, a: str, label: str) -> tuple[str, str | None, dict[str, Any] | None]:
+        """Nút /hethong → bước 2 (sửa tại chỗ) → `system.job` qua `call` (cổng người + allowlist from.id + audit `<kênh>:<chat>`)."""
+        lb = f"<code>{esc(label)}</code>"
+        if a in SYS_ACTIONS:
+            act = SYS_ACTIONS[a]
+            markup, _ = self.callbacks.issue([(a + "c", label, f"Xác nhận {SYS_VERB[act].upper()}"), ("ycx", label, "Huỷ")], cid,
+                                             ttl=min(self._ttl(), 3600))
+            why = {"pause": "Job bị gỡ khỏi launchd và tắt tự nạp — không chạy theo lịch, không tự bật lại khi khởi động máy, tới khi bật lại.",
+                   "resume": "Job được nạp lại và chạy theo cấu hình của nó (lịch / luôn chạy).",
+                   "restart": "Tiến trình đang chạy (nếu có) bị dừng và chạy lại ngay."}[act]
+            return "Cần xác nhận bước 2 — xem tin này.", f"⚠️ <b>{esc(SYS_VERB[act].capitalize())} job</b> {lb}?\n{esc(why)}", markup
+        if a in ("ypc", "yrc", "ykc"):
+            act = SYS_ACTIONS[a[:2]]
+            r = await self.call(cid, "system.job", {"label": label, "action": act, "reason": f"người {SYS_VERB[act]} qua {self.LABEL}"}) or {}
+            icon = {"pause": "⏸", "resume": "▶️", "restart": "🔄"}[act]
+            return (f"Đã {SYS_VERB[act]} {label}.",
+                    f"{icon} <b>Đã {esc(SYS_VERB[act])} job</b> {lb} — bởi {esc(who_label(_UID.get()))} qua {esc(self.LABEL)}. "
+                    f"Trạng thái: {esc(r.get('status_vi') or r.get('status') or '?')}. Xem lại: {esc(self.cmd('hethong'))}.", None)
+        return "Đã huỷ — job giữ nguyên.", f"<b>Đã huỷ</b> — job {lb} giữ nguyên.", None
 
     async def _c_help(self, cid: str, rest: str, api: Any) -> str | None:
         return self.help_text()
@@ -840,6 +902,8 @@ class ChatBot:
                 text, edit = await self._golden_decide(cid, a, ref)
             elif a in ("sp", "sr", "src", "scx"):  # lịch chạy (/lich): tạm dừng một chạm, bật lại 2 bước
                 text, edit, markup = await self._schedule_action(cid, a, ref)
+            elif a in ("yp", "yr", "yk", "ypc", "yrc", "ykc", "ycx"):  # hệ thống ngoài (/hethong): mọi thao tác job 2 bước
+                text, edit, markup = await self._system_action(cid, a, ref)
             elif a == "eo":
                 await self.call(cid, "estop.set", {"on": False, "reason": f"{self.LABEL} {cid}"})
                 text = "Đã TẮT ESTOP — hub chạy run trở lại."
