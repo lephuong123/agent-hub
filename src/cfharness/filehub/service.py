@@ -101,6 +101,10 @@ BINARY_NAME = "tang-thu-sync-headless"
 BINARY_CANDIDATES = ("/usr/local/bin/" + BINARY_NAME, "/opt/homebrew/bin/" + BINARY_NAME, "~/.local/bin/" + BINARY_NAME)
 
 
+DEFAULT_PARENT = "~/KhongGianSo"  # = DEFAULTS filehub.local_parent
+PARENT_DIRNAME = "KhongGianSo"  # tên thư mục cha trong vùng giam khi local_parent nằm ngoài W
+
+
 def _real(p: str | Path) -> str:
     return os.path.realpath(os.path.expanduser(str(p)))
 
@@ -318,6 +322,18 @@ class FilehubService:
             return self.hub.config.get(f"filehub.{key}")
         except KeyError:
             return None
+
+    def local_parent(self) -> str:
+        """Thư mục cha THỰC DÙNG của bản sao cục bộ (đường dẫn tuyệt đối).
+        Đang giam (`workspace.confine`) mà `filehub.local_parent` (kể cả mặc định `~/KhongGianSo`) nằm ngoài vùng giam W → bản sao ở đó
+        không bao giờ hợp lệ (`_validate_local`) → dùng `<W>/KhongGianSo` thay vì báo lỗi bắt người tự sửa cấu hình."""
+        parent = os.path.expanduser(str(self.cfg("local_parent") or DEFAULT_PARENT))
+        from .. import confine as _confine
+
+        conf = _confine.of_hub(self.hub)
+        if conf is not None and not _under(_real(parent), conf.root):
+            return os.path.join(conf.root, PARENT_DIRNAME)
+        return parent
 
     @property
     def dir(self) -> Path:
@@ -668,7 +684,7 @@ class FilehubService:
                          if k in ("state", "url", "roots", "error", "started_at", "finished_at", "mode", "relay", "account", "switch", "switched_from")},
                       "message": login_error_text(self.login_state.get("error"), self._known_account())
                       if self.login_state.get("state") == "error" else None},
-            "tokens": self.tokens_path.exists(), "local_parent": str(self.cfg("local_parent") or ""),
+            "tokens": self.tokens_path.exists(), "local_parent": self.local_parent(),
             "scope": self.scope(), "binary": detect_binary(self.cfg("sync_binary")),
             "relay_available": self.public_origin() is not None,
             "can_switch": any(kind_of(f) != "workspace" for f in self.folders()),
@@ -990,7 +1006,7 @@ class FilehubService:
         if kind not in KINDS:
             raise HubError(f"kind không hợp lệ: {kind!r} (folder|workspace)")
         account = account if account is not None else granted.get("account")
-        parent = os.path.expanduser(str(self.cfg("local_parent") or "~/KhongGianSo"))
+        parent = self.local_parent()
         local = self._validate_local(local_path or os.path.join(parent, name), forbid=forbid)
         if not os.path.isdir(local):
             os.makedirs(local, exist_ok=True)
@@ -1133,6 +1149,16 @@ class FilehubService:
         name = str(p.get("name") or "").strip()
         if name and not valid_name(name):
             raise HubError(f"tên thư mục không hợp lệ: {name!r}")
+        if p.get("local_parent"):  # kiểm TRƯỚC khi ghi cấu hình nào
+            lp = os.path.expanduser(str(p["local_parent"]).strip())
+            if not os.path.isabs(lp):
+                raise HubError(f"thư mục cha của bản sao cục bộ phải là đường dẫn tuyệt đối: {p['local_parent']!r}")
+            from .. import confine as _confine
+
+            conf = _confine.of_hub(self.hub)
+            if conf is not None and not _under(_real(lp), conf.root):
+                raise HubError(f"thư mục cha '{_real(lp)}' nằm ngoài workspace được giam ({conf.root}) — chọn một thư mục trong đó "
+                               f"(vd {os.path.join(conf.root, PARENT_DIRNAME)}) hoặc bỏ trống để hub tự chọn", code=-32003)
         self.hub.config.set("filehub.server", server)
         self.hub.config.set("filehub.sync_binary", binary)
         if p.get("local_parent"):
@@ -1389,7 +1415,7 @@ class FilehubService:
         self._set_folders([f for f in before if kind_of(f) == "workspace"])
         name = safe_name(r["name"])
         if not local_path:
-            parent = os.path.expanduser(str(self.cfg("local_parent") or "~/KhongGianSo"))
+            parent = self.local_parent()
             if any(_under(_real(os.path.join(parent, name)), _real(o)) or _under(_real(o), _real(os.path.join(parent, name))) for o in old_paths):
                 name = safe_name(f"{name} workspace")
         try:

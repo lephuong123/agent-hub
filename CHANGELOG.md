@@ -10,6 +10,12 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Cài đặt
+- `scripts/setup-hub-user.sh` thêm `RESET=1`: làm lại hub của một user từ đầu — dừng dịch vụ, CẤT (không xoá) dữ liệu hub, Workspace, session Claude cũ sang `~/.reset-<giờ>`, hỏi gõ "reset" để xác nhận (#146).
+
+### Không gian số (thư mục chung)
+- Hub đang giam agent trong một workspace (`workspace.confine`) mà thư mục cha của bản sao (`filehub.local_parent`, mặc định `~/KhongGianSo`) nằm ngoài vùng giam → bản sao tự đặt ở `<vùng giam>/KhongGianSo/<tên>` thay vì báo "nằm ngoài workspace được giam" (nối thư mục qua web public không sửa được đường dẫn nên bị kẹt). `filehub setup --local-parent` ngoài vùng giam bị từ chối ngay, không ghi cấu hình (#141).
+
 ### Không gian số — cổng cfharness (chế độ `lane`, chưa bật mặc định)
 - `cfharness filehub lane setup --url http://127.0.0.1:8223` (khoá hỏi bằng getpass, chỉ lưu trong secret store), `lane status|test|disable`:
   nối hub với cổng cfharness của Không gian số trên cùng máy — chỉ nhận URL loopback, khoá không bao giờ vào cấu hình/nhật ký/gói nhân bản.
@@ -36,6 +42,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   gửi lại an toàn (cùng Idempotency-Key). `cfharness filehub status` liệt kê cả thư mục chế độ lane. Run chỉ đọc không bao giờ đẩy (kể cả
   sau khi daemon khởi động lại); người di chuyển tệp lên đúng tên agent vừa tạo → bản của agent thành tệp riêng; người sửa tệp lớn chưa tải
   → không tải cả tệp mỗi lần.
+
 
 ### Cập nhật
 - `cfharness update` không còn bảo "tắt và mở lại giao diện web" — người dùng hub chạy trên máy chủ (web qua LaunchDaemon, vào bằng link

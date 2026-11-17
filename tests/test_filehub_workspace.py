@@ -396,3 +396,37 @@ async def test_rename_rejected_while_run_holds_lock(env):
     assert d.hub.filehub.folders()[0]["name"] == "chung"
     d.hub.runs.runtime().release(r1["id"])  # type: ignore[attr-defined]
     await wait_status(d, r1["id"], ("completed",))
+
+
+async def test_local_parent_outside_confine_falls_back_inside_w(env):
+    """Hub giam trong W mà `filehub.local_parent` (mặc định `~/KhongGianSo`) ở ngoài W → bản sao mới đặt ở `<W>/KhongGianSo/<tên>`
+    thay vì báo "nằm ngoài workspace được giam" (lỗi thật trên hub user: nối thư mục qua web không sửa được đường dẫn)."""
+    d, _, _local, tmp = env
+    fh = d.hub.filehub
+    out = tmp / "Ngoai"
+    d.hub.config.set("filehub.local_parent", str(out))
+    assert fh.local_parent() == str(out)  # chưa giam → giữ cấu hình
+    w = tmp / "W"
+    w.mkdir()
+    d.hub.config.set("workspace.confine", {"root": str(w)})
+    assert fh.local_parent() == str(w.resolve() / "KhongGianSo")
+    assert fh.status()["local_parent"] == str(w.resolve() / "KhongGianSo")
+    res = fh.add("r_moi", "LLinh - CFharness")
+    assert res["local_path"] == str(w.resolve() / "KhongGianSo" / "LLinh - CFharness")
+    assert (w / "KhongGianSo" / "LLinh - CFharness").is_dir() and not out.exists()
+    # đã đặt trong W → giữ đúng chỗ người chọn
+    inside = w / "Chung"
+    d.hub.config.set("filehub.local_parent", str(inside))
+    assert fh.local_parent() == str(inside)
+
+
+async def test_setup_rejects_explicit_local_parent_outside_confine(env):
+    d, _, _local, tmp = env
+    w = tmp / "W"
+    w.mkdir()
+    d.hub.config.set("workspace.confine", {"root": str(w)})
+    before = d.hub.config.get("filehub.server")
+    with pytest.raises(HubError, match="ngoài workspace được giam"):
+        await rpc(d, "filehub.setup", {"server": "https://kgs2.example.test", "binary": str(tmp / "bin" / "tang-thu-sync-headless"),
+                                       "local_parent": str(tmp / "Ngoai"), "no_browser": True})
+    assert d.hub.config.get("filehub.server") == before  # không ghi gì khi bị từ chối

@@ -4,6 +4,7 @@
 #   sudo bash scripts/setup-hub-user.sh [user] ["Họ tên"] [cổng web] [cổng mcp]
 #   Tên miền con khác tên user: sudo SUB=admin bash scripts/setup-hub-user.sh hubadmin "Hub Admin" 8723 8724
 #   Miền khác trungtamdhs.com:  sudo SUB=admin DOMAIN=cchchn.com bash scripts/setup-hub-user.sh cchcadmin "Admin CCHC" 8725 8726
+#   Làm lại hub đã có từ đầu (cất dữ liệu cũ, không xoá): thêm RESET=1
 #   Kèm thư mục chung Không gian số: thêm KGS=https://trungtamai.cchchn.com — mặc định đồng bộ TOÀN BỘ workspace của domain
 #   (KGS_WS=tên workspace để chọn sẵn; tài khoản chủ domain phải là Workspace Admin). Một thư mục: KGS_SCOPE=folder KGS_FOLDER=tên.
 #   Không gian số chạy CÙNG máy → cổng cfharness thay đồng bộ: thêm KGS_MODE=lane (KGS_LANE_URL mặc định http://127.0.0.1:8223).
@@ -48,6 +49,24 @@ cfh()  { as_u "$H/.local/bin/cfharness" "$@"; }
 [ "$(id -u)" = 0 ] || { echo "Chạy bằng sudo: sudo bash $0"; exit 1; }
 [ -n "$ADMIN" ] && [ "$ADMIN" != root ] || { echo "Chạy bằng 'sudo' từ user admin (không chạy trực tiếp bằng root)"; exit 1; }
 cd /
+
+if [ "${RESET:-}" = 1 ] && id "$U" >/dev/null 2>&1; then
+  step "0/11 RESET hub của $U (dừng dịch vụ, cất dữ liệu cũ sang $H/.reset-…)"
+  printf 'Làm lại hub của %s từ đầu? Dữ liệu hub, Workspace, session Claude cũ sẽ được CẤT sang %s/.reset-<giờ> (không xoá). Gõ "reset" để tiếp tục: ' "$U" "$H"
+  read -r ans; [ "$ans" = reset ] || { echo "Huỷ"; exit 1; }
+  for k in web daemon; do
+    launchctl bootout "system/com.cfharness.$k.$U" 2>/dev/null || true
+    rm -f "/Library/LaunchDaemons/com.cfharness.$k.$U.plist"
+  done
+  pkill -u "$U" 2>/dev/null || true; sleep 2; pkill -9 -u "$U" 2>/dev/null || true
+  BK="$H/.reset-$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$BK"; chown "$U" "$BK"; chmod 700 "$BK"
+  for p in .cfharness .claude .claude.json .config/cfharness Workspace; do
+    if [ -e "$H/$p" ]; then mkdir -p "$BK/$(dirname "$p")"; mv "$H/$p" "$BK/$p"; fi
+  done
+  rm -rf "/Users/Shared/cfharness/status/$U" "/Users/Shared/cfharness/status/$U.json"
+  ok "đã dừng hub cũ, cất dữ liệu ở $BK (xoá hẳn khi chắc chắn: sudo rm -rf $BK)"
+fi
 
 step "1/11 User macOS $U"
 if id "$U" >/dev/null 2>&1; then ok "đã có user $U"; else
