@@ -380,6 +380,7 @@ async def test_task_done_report_posted_to_assigning_conversation_by_hub(d):
     (trước đây tick hay NO_ACTION → người không nghe gì). Sự kiện cho tick ghi rõ đã báo để điều phối viên không lặp lại."""
     res = await manager_run(d, text="sửa login")
     d.hub.agents.create({"id": "w1", "name": "w1"})
+    d.hub.agents.set_paused("w1", True)  # dispatcher không tự chạy task (runtime giả xong ngay → "done" không có "Cần bạn" — test chập chờn)
     ta = await tool(d, res["run_id"], "task_create", {"title": "Sửa login", "body": "làm", "assignee": "w1"})
     d.hub.runs.runtime().release()
     await wait_status(d, res["run_id"], ("completed",))
