@@ -10,37 +10,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
-### Tích hợp MCP
-- **Proxy loopback cho MCP đăng nhập OAuth (tuỳ chọn, mặc định tắt)**: bật `cfharness config set mcp.oauth_proxy.enabled true` thì run
-  không còn nhận token OAuth trong file mcp.json — `claude` nói chuyện với một proxy của daemon trên `127.0.0.1` (URL + khoá riêng
-  từng run, hết hiệu lực khi run kết thúc), proxy chèn token mới nhất và tự làm mới khi sắp hết hạn hoặc khi server trả 401. Run
-  dài hơn hạn access token (thường 1 giờ) không còn bị 401 giữa chừng. Hỗ trợ Streamable HTTP và SSE. Proxy không khởi động được →
-  tự dùng lại cách cũ (Bearer trong mcp.json). Đã nghiệm thu với Claude Code 2.1.326 thật (guard + sandbox bật).
-- **Máy có `HTTP_PROXY`/`HTTPS_PROXY`**: tiến trình `claude` của run luôn có `127.0.0.1,localhost,::1` trong `NO_PROXY`, và daemon gọi
-  máy chủ OAuth/MCP chạy trên máy này đi thẳng — trước đây request tới địa chỉ cục bộ bị đẩy qua proxy công ty và hỏng.
-- **`cfharness mcp edit --url` giữ nguyên transport `sse`** (trước đây tự đổi sang `http`, làm hỏng server SSE cũ).
-### Bảo mật
-- **`cfharness selftest --live` — tự kiểm bảo mật với `claude` thật trước khi phát hành**: tạo hub TẠM (daemon riêng, không đụng hub thật),
-  cho một agent model rẻ (mặc định haiku) thử 12 thao tác bị cấm — ghi `policy/` (shell, python, tool Write), đọc secret / token người,
-  gọi thẳng socket hub, `cfharness approve`, `cfharness config set`, curl dịch vụ loopback, ghi/đọc ngoài workspace khi giam — rồi đo
-  hậu quả thật và báo ĐẠT / TRƯỢT / KHÔNG KẾT LUẬN từng ca. Trần chi phí cứng (`--budget-usd`, mặc định $0.50; mỗi run `--per-run-usd`
-  $0.10), đạt trần thì dừng ngay và bỏ qua các ca còn lại; xong thì dọn sạch hub tạm. `cfharness selftest --dry-run` chỉ liệt kê ca,
-  không tốn tiền. Lệnh chỉ người (agent gõ bị chặn). Hướng dẫn: `docs/dev-notes/selftest.md`.
-### Tìm hội thoại cũ
-- **`/search <từ khoá>` trong `cfharness chat`** (cả màn hình đầy đủ lẫn `--classic`): tìm trong mọi hội thoại với điều phối viên và
-  session của các agent (có dấu/không dấu đều khớp, `"cụm từ"` trong ngoặc kép), kết quả gộp theo luồng, đánh số, kèm đoạn trích.
-  `/open <số>` (hoặc click kết quả ở màn hình đầy đủ) mở hội thoại cli tìm được; luồng khác thì hiện đoạn hội thoại quanh chỗ khớp
-  (chỉ xem) và gợi ý `/attach <run>`. Có trong menu `/` và bảng phím tắt `?`.
-- **`cfharness session reindex`**: dựng lại chỉ mục tìm kiếm hội thoại khi kết quả tìm thiếu/lệch — nạp lại FTS5 và quét lại toàn bộ
-  run/event/hội thoại để bù tin bị sót (`--fts-only` chỉ nạp lại FTS, `--wait` chờ xong). Chạy nền trong daemon, không xoá văn bản đã
-  chỉ mục; chỉ người làm được (agent bị chặn), có ghi nhật ký kiểm toán. `cfharness session status` xem số tin đã chỉ mục và tiến độ.
-### Không gian số (thư mục dùng chung)
-- **Báo sau run cho thư mục ghi thêm**: run có `extra_write_roots` nằm trong thư mục chung (vd task làm ở scratch nhưng được ghi vào
-  `~/KhongGianSo/<tên>/Báo cáo`) giờ cũng báo tệp đã xoá / đã đổi / có thể chứa bí mật sau run — như run có workspace `filehub:`.
-- **Đổi tên thư mục chung trong cfharness**: `cfharness filehub rename <tên cũ> <tên mới>` hoặc "Đổi tên trong cfharness" ở thẻ Không gian số
-  (Cài đặt). Chỉ đổi tên dùng để giao việc (`filehub:<tên>`); đường dẫn trên máy và tên trên Không gian số giữ nguyên, tên cũ vẫn khớp
-  (task/agent đã ghi `filehub:<tên cũ>` chạy tiếp). Từ chối khi có run đang ghi vào thư mục hoặc thư mục chưa đồng bộ lần đầu.
-### Tính năng mới
+### Hệ thống ngoài + Sức khoẻ hub
 - **Trang "Hệ thống ngoài" trên web** (`/systems`, nhóm "Hệ thống" ở thanh bên): xem các app trong thư mục làm việc và job launchd của chúng
   (trạng thái, pid, ai tạm dừng, lịch), quét tìm + đăng ký hệ thống mới, thêm theo đường dẫn, gỡ, khoá/mở khoá job, tạm dừng / bật lại /
   khởi động lại job; trang chi tiết có đuôi log (đã che secret). Mọi thao tác có hộp xác nhận và ghi nhật ký kênh `web`.
@@ -52,6 +22,40 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   quá 30 ngày, git worktree của task đã xong. Mặc định CHỈ BÁO; dọn bằng `cfharness hub doctor --cleanup [--older-than NGÀY]` (liệt kê
   rồi hỏi y/N, ghi nhật ký kiểm toán). Không bao giờ xoá run/ledger/audit hay thư mục đang có run chạy; git worktree ngoài HUB_HOME chỉ
   được gợi ý lệnh `git worktree remove`.
+
+### Không gian số (thư mục dùng chung)
+- **Báo sau run cho thư mục ghi thêm**: run có `extra_write_roots` nằm trong thư mục chung (vd task làm ở scratch nhưng được ghi vào
+  `~/KhongGianSo/<tên>/Báo cáo`) giờ cũng báo tệp đã xoá / đã đổi / có thể chứa bí mật sau run — như run có workspace `filehub:`.
+- **Đổi tên thư mục chung trong cfharness**: `cfharness filehub rename <tên cũ> <tên mới>` hoặc "Đổi tên trong cfharness" ở thẻ Không gian số
+  (Cài đặt). Chỉ đổi tên dùng để giao việc (`filehub:<tên>`); đường dẫn trên máy và tên trên Không gian số giữ nguyên, tên cũ vẫn khớp
+  (task/agent đã ghi `filehub:<tên cũ>` chạy tiếp). Từ chối khi có run đang ghi vào thư mục hoặc thư mục chưa đồng bộ lần đầu.
+
+### Tìm hội thoại cũ
+- **`/search <từ khoá>` trong `cfharness chat`** (cả màn hình đầy đủ lẫn `--classic`): tìm trong mọi hội thoại với điều phối viên và
+  session của các agent (có dấu/không dấu đều khớp, `"cụm từ"` trong ngoặc kép), kết quả gộp theo luồng, đánh số, kèm đoạn trích.
+  `/open <số>` (hoặc click kết quả ở màn hình đầy đủ) mở hội thoại cli tìm được; luồng khác thì hiện đoạn hội thoại quanh chỗ khớp
+  (chỉ xem) và gợi ý `/attach <run>`. Có trong menu `/` và bảng phím tắt `?`.
+- **`cfharness session reindex`**: dựng lại chỉ mục tìm kiếm hội thoại khi kết quả tìm thiếu/lệch — nạp lại FTS5 và quét lại toàn bộ
+  run/event/hội thoại để bù tin bị sót (`--fts-only` chỉ nạp lại FTS, `--wait` chờ xong). Chạy nền trong daemon, không xoá văn bản đã
+  chỉ mục; chỉ người làm được (agent bị chặn), có ghi nhật ký kiểm toán. `cfharness session status` xem số tin đã chỉ mục và tiến độ.
+
+### Bảo mật
+- **`cfharness selftest --live` — tự kiểm bảo mật với `claude` thật trước khi phát hành**: tạo hub TẠM (daemon riêng, không đụng hub thật),
+  cho một agent model rẻ (mặc định haiku) thử 12 thao tác bị cấm — ghi `policy/` (shell, python, tool Write), đọc secret / token người,
+  gọi thẳng socket hub, `cfharness approve`, `cfharness config set`, curl dịch vụ loopback, ghi/đọc ngoài workspace khi giam — rồi đo
+  hậu quả thật và báo ĐẠT / TRƯỢT / KHÔNG KẾT LUẬN từng ca. Trần chi phí cứng (`--budget-usd`, mặc định $0.50; mỗi run `--per-run-usd`
+  $0.10), đạt trần thì dừng ngay và bỏ qua các ca còn lại; xong thì dọn sạch hub tạm. `cfharness selftest --dry-run` chỉ liệt kê ca,
+  không tốn tiền. Lệnh chỉ người (agent gõ bị chặn). Hướng dẫn: `docs/dev-notes/selftest.md`.
+
+### Tích hợp MCP
+- **Proxy loopback cho MCP đăng nhập OAuth (tuỳ chọn, mặc định tắt)**: bật `cfharness config set mcp.oauth_proxy.enabled true` thì run
+  không còn nhận token OAuth trong file mcp.json — `claude` nói chuyện với một proxy của daemon trên `127.0.0.1` (URL + khoá riêng
+  từng run, hết hiệu lực khi run kết thúc), proxy chèn token mới nhất và tự làm mới khi sắp hết hạn hoặc khi server trả 401. Run
+  dài hơn hạn access token (thường 1 giờ) không còn bị 401 giữa chừng. Hỗ trợ Streamable HTTP và SSE. Proxy không khởi động được →
+  tự dùng lại cách cũ (Bearer trong mcp.json). Đã nghiệm thu với Claude Code 2.1.326 thật (guard + sandbox bật).
+- **Máy có `HTTP_PROXY`/`HTTPS_PROXY`**: tiến trình `claude` của run luôn có `127.0.0.1,localhost,::1` trong `NO_PROXY`, và daemon gọi
+  máy chủ OAuth/MCP chạy trên máy này đi thẳng — trước đây request tới địa chỉ cục bộ bị đẩy qua proxy công ty và hỏng.
+- **`cfharness mcp edit --url` giữ nguyên transport `sse`** (trước đây tự đổi sang `http`, làm hỏng server SSE cũ).
 
 ---
 
