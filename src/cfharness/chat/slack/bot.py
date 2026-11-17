@@ -126,6 +126,7 @@ def help_text(slash: str) -> str:
 {c} digest — tóm tắt học 24 giờ qua
 {c} taikhoan — tài khoản Claude: xem trạng thái, bấm Dùng để đổi khi hết hạn mức
 {c} lich — lịch chạy tự động (xem)
+{c} hethong — hệ thống ngoài hub (app + job launchd): xem, tạm dừng / bật lại / khởi động lại job
 {c} moi — mở cuộc trò chuyện mới với điều phối viên
 {c} help — trợ giúp
 Tin nhắn chữ thường trong DM với bot → gửi cho ĐIỀU PHỐI VIÊN; trả lời trong thread của tin điều phối viên để tiếp tục đúng

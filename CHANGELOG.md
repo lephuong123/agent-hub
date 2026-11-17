@@ -10,6 +10,13 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Tính năng mới
+- **Trang "Hệ thống ngoài" trên web** (`/systems`, nhóm "Hệ thống" ở thanh bên): xem các app trong thư mục làm việc và job launchd của chúng
+  (trạng thái, pid, ai tạm dừng, lịch), quét tìm + đăng ký hệ thống mới, thêm theo đường dẫn, gỡ, khoá/mở khoá job, tạm dừng / bật lại /
+  khởi động lại job; trang chi tiết có đuôi log (đã che secret). Mọi thao tác có hộp xác nhận và ghi nhật ký kênh `web`.
+- **Lệnh chat `/hethong`** (Telegram; Slack: `/cfh hethong`): xem hệ thống ngoài + job, nút Dừng / Bật lại / Khởi động lại từng job —
+  luôn 2 bước. Đăng ký, gỡ, khoá chỉ làm ở web/CLI.
+
 ---
 
 ## v0.2.15 — 2026-11-17

@@ -35,7 +35,20 @@ tạm tắt…"` → điều phối viên gọi `system_get` rồi `system_job p
 `tests/test_systems.py` (launchctl GIẢ — không bao giờ gọi launchctl thật): nhận diện/đăng ký, pause/resume/restart, đuôi log, manager trong quyền,
 ngoài phạm vi (lớp 1 + lớp 2), job khoá, không đăng ký/khoá được, trần tần suất, agent trong run bị chặn, classifier.
 
+## Web + chat (2026-11-17)
+- Web `/systems` (`web/systems_pages.py`, `systems.html`, `system.html`, macro hàng job `_systems.html`; menu "Hệ thống ngoài" nhóm "Hệ thống"):
+  danh sách `system.list` + tóm tắt; `?scan=1` = `system.scan {}` (quét thử, KHÔNG đăng ký) → nút "Đăng ký N hệ thống mới" (`system.scan{apply}`);
+  form thêm theo đường dẫn (`system.add`); `/systems/{id}` = `system.get{log_bytes: 4000}` (đuôi log đã che, autoescape) + "Gỡ khỏi danh sách".
+  Thao tác qua `ACTIONS`: `system_job{label, action}` (pause|resume|restart), `system_lock{label, on}`, `system_rm`, `system_scan_apply`,
+  `system_add` — mọi cái có `confirm` (gỡ = danger), `audit=True` → `wrap_with_audit` ghi kênh `web`. Web là người (HUMAN_ONLY qua token người).
+- Chat `/hethong` (alias `/systems`; Slack `/cfh hethong`) ở `ChatBot._c_systems`: tin danh sách văn bản thuần (tên app từ README, label/lịch
+  từ plist → `visible()`), nút ở tin RIÊNG, nhãn chỉ mang label job (bỏ label có ký tự vô hình/quá 200). Mã nút `yp|yr|yk` (bước 1) →
+  sửa tại chỗ thành "Xác nhận …"/"Huỷ" (`ypc|yrc|ykc`/`ycx`) → `self.call("system.job", {reason: "người … qua <kênh>"})` (cổng người +
+  allowlist from.id + audit `<kênh>:<chat>`). Mọi thao tác job 2 bước (đụng app đang chạy thật). Chat KHÔNG có nút đăng ký/gỡ/khoá.
+- Test: `tests/test_web_systems.py`, `tests/test_telegram.py::test_systems_command_job_buttons_two_steps`,
+  `tests/test_slack.py::test_systems_job_buttons_two_steps`; thế giới giả dùng chung `test_systems.make_world` + `attach_world`.
+
 ## Việc dở
-- Web/Telegram chưa có màn/nút cho hệ thống (chỉ CLI + điều phối viên). Telegram: lệnh chat ghi trạng thái phải qua `bot.call`.
+- Trang web chưa tự làm mới trạng thái job (tải lại trang); chưa có nút trong cảnh 3D `/office`.
 - Chỉ launchd (macOS) miền `gui/<uid>`; chưa có systemd/cron/docker.
 - `job_paths` tách đối số theo khoảng trắng — đường dẫn có dấu cách trong `ProgramArguments` có thể không gán được (WorkingDirectory vẫn đúng).
