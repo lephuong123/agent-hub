@@ -129,7 +129,8 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     # Tài khoản Claude (accounts/, luồng core): account.* ghi ∈ HUMAN_ONLY — agent không tự thêm/đổi/xoá tài khoản Claude
     "account": {"add", "login", "use", "rename", "rm", "remove", "delete", "check"},
     # Thư mục chung Không gian số (filehub/): filehub.* ghi ∈ HUMAN_ONLY — đăng nhập thiết bị, thêm/gỡ thư mục, tạm dừng đồng bộ
-    "filehub": {"setup", "login", "add", "remove", "rm", "rename", "pause", "resume", "switch-to-workspace"},
+    # `lane` (cổng cfharness: setup/test/disable/add/orphans… — khoá hub của người) + `switch` (đổi chế độ sync|lane) — chỉ người
+    "filehub": {"setup", "login", "add", "remove", "rm", "rename", "pause", "resume", "switch-to-workspace", "lane", "switch"},
     # tự kiểm bảo mật (selftest.py): bật daemon riêng + gọi claude thật (tốn tiền), lộ cách dò guard — agent gõ, kể cả --dry-run, đều chặn
     "selftest": None,
 }
@@ -265,6 +266,8 @@ class GuardContext:
     # thư mục chung Không gian số (filehub/): gốc bản sao cục bộ (realpath). Xoá/di chuyển/ghi đè TRONG gốc mà run được ghi = `write`
     # (không hỏi — plan-cloud-files §7.3: hub báo người sau run, khôi phục ở thùng rác/phiên bản Không gian số); metadata sync = cấm
     filehub_roots: tuple[str, ...] = ()
+    # cổng cfharness (filehub/lane/): cổng loopback của Không gian số — agent nhắm tới = cấm (`filehub_lane`); chỉ daemon nói chuyện với cổng
+    lane_ports: tuple[int, ...] = ()
 
     @property
     def home(self) -> str:
@@ -410,7 +413,7 @@ NET_BLOCK_RULES = frozenset({"webfetch_local", "ssrf_metadata", "ssrf_private_ip
 # đánh dấu cần duyệt, lỗi bộ phân loại/không phân tích được đích, run không hoạt động/ESTOP
 NEVER_DOWNGRADE_RULES = NET_BLOCK_RULES | frozenset({
     "url_dns_failed", "web_domain_denied", "web_domain_not_allowed", "sandbox_network_not_allowed", "sandbox_network_bad_host", "mcp_require_approval", "classifier_error", "unknown_run", "estop",
-    "nesting_too_deep", "hub_secret_read", "self_approval", "admin_shared", "desktop_app_data",
+    "nesting_too_deep", "hub_secret_read", "self_approval", "admin_shared", "desktop_app_data", "filehub_lane",
 })
 NEVER_DOWNGRADE_KLASS = frozenset({"hub", "policy", "guard"})
 
@@ -562,6 +565,8 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
         if tool_name in FILE_WRITE_TOOLS:
             return classify_file_write(tool_name, ti, ctx)
         if tool_name == "WebFetch":
+            if lane_port_hit(str(ti.get("url") or ""), ctx.lane_ports):
+                return Verdict("destructive", "filehub_lane", "hub", FILEHUB_LANE_REASON, [str(ti.get("url"))[:200]], forbidden=True)
             uv = url_verdict(str(ti.get("url") or ""), "WebFetch")
             if uv is not None:
                 return uv
@@ -775,6 +780,16 @@ READ_PATH_KEYS = ("file_path", "path", "notebook_path")
 
 FILEHUB_META_PREFIX = ".tangthu"
 FILEHUB_META_REASON = "agent không được ghi metadata/profile của tiến trình đồng bộ Không gian số (.tangthu*, HUB_HOME/filehub)"
+FILEHUB_LANE_REASON = "agent không được gọi cổng cfharness của Không gian số (chỉ daemon cầm khoá hub; dùng tool hub-self fs_* hoặc cây làm việc)"
+_LOOPBACK_RE = re.compile(r"(?<![\w.])(?:127(?:\.\d{1,3}){3}|localhost|0\.0\.0\.0|\[?::1\]?|::ffff:127\.0\.0\.1|2130706433|0x7f000001)(?![\w.])", re.I)
+
+
+def lane_port_hit(text: str, ports: tuple[int, ...]) -> bool:
+    """Chuỗi (lệnh shell/mã/URL) nhắm tới loopback VÀ nhắc một cổng lane (`127.0.0.1:8223`, `('127.0.0.1', 8223)`, `localhost 8223`…)."""
+    if not ports or not text or not _LOOPBACK_RE.search(text):
+        return False
+    return any(re.search(rf"(?<!\d){p}(?!\d)", text) for p in ports)
+
 
 
 def filehub_root(p: str, ctx: GuardContext) -> str | None:
@@ -1375,6 +1390,8 @@ class BashAnalyzer:
             self.hit("destructive", "hub_secret_read", "hub", "agent đụng token người/secret store của hub", forbidden=True)
         if _contains(norm, hh + "/filehub"):
             self.hit("destructive", "filehub_metadata", "hub", FILEHUB_META_REASON, forbidden=True)
+        if lane_port_hit(norm, self.ctx.lane_ports):
+            self.hit("destructive", "filehub_lane", "hub", FILEHUB_LANE_REASON, forbidden=True)
         if not IS_WINDOWS:
             from ..admin_overview import SHARED_ROOT
 

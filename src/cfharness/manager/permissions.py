@@ -223,6 +223,8 @@ class ManagerPermissions:
             if fh is None:
                 return f"{what}: thư mục chung chưa bật"
             try:
+                if fh.lane_target(path) is not None:
+                    return None  # chế độ lane: không đường dẫn cục bộ — cây dựng trong vùng làm việc của agent lúc run chạy
                 path = fh.resolve_ref(path, must_exist=False)[0]
             except HubError as e:
                 return f"{what}: {e.message}"

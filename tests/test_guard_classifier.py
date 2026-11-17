@@ -669,6 +669,40 @@ def test_filehub_cli_human_only(env):
     assert not bash(env, "cfharness filehub status").forbidden
 
 
+# ------------------------------------------------------------------ cổng cfharness (filehub/lane/): agent không bao giờ nói chuyện với cổng
+DESTRUCTIVE_LANE = [  # mọi biến thể nhắm cổng lane 8223 trên loopback → CẤM (`filehub_lane`), kể cả khi trust full
+    ("Bash", {"command": "curl http://127.0.0.1:8223/lane/v1/hello"}),
+    ("Bash", {"command": "curl -s 'http://localhost:8223/lane/v1/events'"}),
+    ("Bash", {"command": "nc 127.0.0.1 8223"}),
+    ("Bash", {"command": "python3 -c \"import socket; socket.create_connection(('127.0.0.1', 8223))\""}),
+    ("Bash", {"command": "wget -qO- http://[::1]:8223/lane/v1/cursor"}),
+    ("Bash", {"command": "node -e \"fetch('http://0.0.0.0:8223/lane/v1/hello')\""}),
+    ("WebFetch", {"url": "http://127.0.0.1:8223/lane/v1/hello", "prompt": "x"}),
+]
+SAFE_LANE = [  # cổng khác / không nhắm loopback → không dính luật lane
+    ("Bash", {"command": "echo 8223 > ghi-chu.txt"}),
+    ("Bash", {"command": "ls -la"}),
+]
+
+
+def test_lane_port_forbidden(env):
+    from dataclasses import replace
+
+    from cfharness.guard.service import TRUST_NEVER_RULES
+
+    ctx = replace(env["ctx"], lane_ports=(8223, 8233))
+    missed = [(t, ti, v.rule) for t, ti in DESTRUCTIVE_LANE if not ((v := classify(t, ti, ctx)).forbidden and v.rule == "filehub_lane")]
+    assert not missed, missed
+    for t, ti in SAFE_LANE:
+        assert classify(t, ti, ctx).rule != "filehub_lane", ti
+    assert classify("Bash", {"command": "curl http://127.0.0.1:8223/x"}, env["ctx"]).rule != "filehub_lane"  # chưa cấu hình cổng nào
+    assert "filehub_lane" in TRUST_NEVER_RULES  # trust full không gỡ
+    for cmd in ("cfharness filehub lane setup --url http://127.0.0.1:8223", "cfharness filehub lane disable --server qltm",
+                "cfharness filehub switch chung --to lane", "cfharness filehub lane orphan push r_1"):
+        v = bash(env, cmd)
+        assert v.forbidden and v.rule == "hub_human_only", (cmd, v.rule)
+
+
 def test_session_reindex_cli_human_only(env):
     """`cfharness session reindex` = dựng lại chỉ mục tìm kiếm hội thoại (session.reindex ∈ HUMAN_ONLY); `session status` chỉ đọc."""
     for cmd in ("cfharness session reindex", "uv run cfharness session reindex --fts-only --wait"):

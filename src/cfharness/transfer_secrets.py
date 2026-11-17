@@ -75,6 +75,7 @@ CLONE_SKIP_PREFIXES: tuple[tuple[str, str], ...] = (
     ("TELEGRAM_", "channel"),   # TELEGRAM_BOT_TOKEN, TELEGRAM_CALLBACK_KEY
     ("SLACK_", "channel"),      # SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_CALLBACK_KEY, SLACK_WEBHOOK_URL
     ("MCP_OAUTH_", "oauth"),    # mcp_client/oauth.secret_name: MCP_OAUTH_<TÊN>_<băm> — access/refresh token xoay vòng + client DCR
+    ("FILEHUB_LANE_", "filehub_lane"),  # khoá cổng cfharness (filehub/lane/): gắn MỘT hub — bản nhân bản tạo khoá riêng; `move` giữ
 )
 KEEP_KINDS: tuple[tuple[str, str], ...] = (
     ("CLAUDE_ACCT_", "claude_account"),

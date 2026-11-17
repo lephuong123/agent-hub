@@ -68,6 +68,21 @@ async def partial_filehub(request: Request) -> Response:
                                                                              "local": _local(request)})
 
 
+async def partial_lane(request: Request) -> Response:
+    """Thẻ "Cổng cfharness" (chế độ lane): RPC `filehub.lane_status` (không bao giờ có khoá) + tên thư mục đang ở chế độ sync (để chuyển)."""
+    ctx: dict[str, Any]
+    try:
+        ctx = {"data": await rpc(request, "filehub.lane_status")}
+        st = await rpc(request, "filehub.status")
+        ctx["sync_folders"] = [str(f.get("name")) for f in (st or {}).get("folders") or [] if f.get("name")]
+    except (DaemonUnavailable, OSError):
+        ctx = {"down": True}
+    except RpcError as e:
+        ctx = {"error": e.message}
+    sess = session_of(request)
+    return ws(request).templates.TemplateResponse(request, "_filehub_lane.html", {**ctx, "csrf": sess.csrf if sess else ""})
+
+
 async def _login_ctx(request: Request) -> dict[str, Any]:
     try:
         st = await rpc(request, "filehub.status")
@@ -259,6 +274,61 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
         call=simple("filehub.remove"), confirm=lambda f: f"Gỡ thư mục chung «{f.get('name')}» khỏi hub?",
         step2=lambda f: (f"Hub dừng đồng bộ «{f.get('name')}», agent không còn giao việc vào workspace filehub:{f.get('name')} được. Tệp trên máy "
                          "và trên Không gian số GIỮ NGUYÊN (không xoá gì)."), danger=True, goto=lambda r, f: NEXT)
+    # ---- cổng cfharness (chế độ lane): khoá CHỈ nhập ở bước 2 (ô password trống, không qua trang xác nhận/carry, không vào HTML/log/audit)
+    def _lane_setup_build(f: Any) -> dict[str, Any]:
+        server = str(f.get("server") or "").strip().lower()
+        url = str(f.get("url") or "").strip()
+        from ..filehub.lane.client import SERVER_RE, LaneError, check_url
+
+        if not SERVER_RE.match(server):
+            raise ValueError("tên cổng: chữ thường/số/_ (vd qltm)")
+        try:
+            url = check_url(url)
+        except LaneError as e:
+            raise ValueError(e.message) from None
+        p: dict[str, Any] = {"server": server, "url": url}
+        if f.get("confirm2") == "yes":
+            key = str(f.get("key") or "").strip()
+            if not key:
+                raise ValueError("nhập khoá cổng cfharness (tt_lane_…)")
+            p["key"] = key
+        return p
+
+    actions["filehub_lane_setup"] = Action(
+        "filehub.lane_setup", _lane_setup_build, lambda r, f: f"Đã lưu khoá cổng «{(r or {}).get('server')}» ({(r or {}).get('key_prefix')}…) — tài khoản {(r or {}).get('user')}",
+        confirm=lambda f: f"Nối hub với cổng cfharness {str(f.get('url') or '').strip()} (tên «{str(f.get('server') or '').strip()}»)?",
+        step2=("Dán khoá cổng tạo ở Không gian số › Hồ sơ › Cổng cfharness. Khoá cho hub làm việc với thư mục được cấp DƯỚI TÊN TÀI KHOẢN CỦA BẠN "
+               "(agent không bao giờ thấy khoá; chỉ daemon dùng, chỉ gửi tới 127.0.0.1). Hub lưu khoá trong kho secret (0600)."),
+        reenter=lambda f: [("key", "Khoá cổng cfharness (tt_lane_…)", "password")], secret_fields=("key",), danger=True,
+        goto=lambda r, f: NEXT)
+    actions["filehub_lane_disable"] = Action(
+        "filehub.lane_disable", lambda f: {"server": _req(f, "server")}, lambda r, f: f"Đã xoá khoá cổng «{f.get('server')}»",
+        confirm=lambda f: f"Xoá khoá + cấu hình cổng «{f.get('server')}»? Run trên thư mục chế độ lane sẽ không chạy được tới khi nhập khoá mới.",
+        danger=True, goto=lambda r, f: NEXT)
+    actions["filehub_switch_mode"] = Action(
+        "filehub.switch", lambda f: {"name": _req(f, "name"), "to": "lane" if f.get("to") == "lane" else "sync"},
+        lambda r, f: f"Đã chuyển «{(r or {}).get('name')}» sang chế độ {(r or {}).get('mode')}" + (f" — {(r or {}).get('note')}" if (r or {}).get("note") else ""),
+        confirm=lambda f: (f"Chuyển thư mục «{f.get('name')}» sang CỔNG CFHARNESS (không đồng bộ về máy nữa)?" if f.get("to") == "lane"
+                           else f"Đưa thư mục «{f.get('name')}» về ĐỒNG BỘ 2 CHIỀU cũ?"),
+        step2=lambda f: ("Đồng bộ 2 chiều của thư mục này dừng; agent làm việc qua cây dựng cho từng run (mỗi lần lưu lên Không gian số ngay). "
+                         "Bản sao cũ trên máy GIỮ NGUYÊN — hub không xoá; kiểm rồi tự xoá. Từ chối nếu đồng bộ còn chưa yên."
+                         if f.get("to") == "lane" else "Hub đồng bộ lại thư mục về bản sao cũ trên máy (có thể cũ hơn Không gian số — đồng bộ đối chiếu lại)."),
+        danger=True, goto=lambda r, f: NEXT)
+    actions["filehub_lane_orphan"] = Action(
+        "filehub.lane_orphan", lambda f: {"tree": _req(f, "tree"), "action": "drop" if f.get("action") == "drop" else "push"},
+        lambda r, f: ("Đã bỏ thay đổi chưa đẩy" if (r or {}).get("dropped") else ("Đã đẩy hết lên Không gian số" if (r or {}).get("pushed")
+                      else f"Còn {len((r or {}).get('left') or [])} thay đổi chưa đẩy được ({(r or {}).get('code')})")),
+        confirm=lambda f: ("BỎ hẳn các thay đổi chưa đẩy lên của run này (xoá bản trên máy)?" if f.get("action") == "drop"
+                           else "Đẩy lại các thay đổi còn kẹt lên Không gian số? (tệp chứa secret vẫn bị chặn)"),
+        danger=True, goto=lambda r, f: NEXT)
+    actions["filehub_lane_deletes"] = Action(
+        "filehub.resume", lambda f: {"root_id": _req(f, "root_id"), **({"discard": True} if f.get("discard") else {})},
+        lambda r, f: (f"Đã KHÔNG xoá {(r or {}).get('discarded', 0)} mục — tệp được trả lại cây làm việc của agent" if f.get("discard")
+                      else f"Đã cho xoá {(r or {}).get('released', 0)} mục (vào thùng rác Không gian số)"),
+        call=simple("filehub.resume"),
+        confirm=lambda f: ("KHÔNG cho agent xoá các mục đang giữ? Tệp ở lại Không gian số và được trả lại cây làm việc của agent." if f.get("discard")
+                           else "Cho agent xoá các mục đang giữ trên Không gian số? (vào thùng rác, khôi phục được)"),
+        goto=lambda r, f: NEXT)
     actions["filehub_rename"] = Action(
         "filehub.rename", lambda f: {"name": _req(f, "name"), "new_name": _name(f, "new_name")},
         lambda r, f: f"Đã đổi tên «{(r or {}).get('previous')}» → «{(r or {}).get('name')}» (giao việc: workspace {(r or {}).get('workspace')})",
@@ -268,7 +338,7 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
 
 
 def routes() -> list[Any]:
-    return [Route("/partials/filehub", partial_filehub), Route("/partials/filehub/login", partial_login), Route("/filehub/login", login_page),
+    return [Route("/partials/filehub", partial_filehub), Route("/partials/filehub/lane", partial_lane), Route("/partials/filehub/login", partial_login), Route("/filehub/login", login_page),
             Route(CALLBACK_PATH, oauth_callback), Route("/filehub/open", filehub_open)]
 
 

@@ -285,11 +285,15 @@ class TaskService:
                 ref = str(ws.get("ref") or ws.get("path") or "")
                 if not ref.startswith("filehub:"):
                     ref = "filehub:" + ref
-                fpath, folder, _sub = self.hub.filehub.resolve_ref(ref)  # type: ignore[attr-defined]
-                from .workspace import validate_workspace
+                lane_t = self.hub.filehub.lane_target(ref)  # type: ignore[attr-defined]
+                if lane_t is not None:  # cổng cfharness (chế độ lane): không bản sao — cây dựng lúc run chạy; khoá theo gốc trên server
+                    ws = {**ws, "ref": ref, "path": None, "folder": lane_t["folder"], "lane": True}
+                else:
+                    fpath, folder, _sub = self.hub.filehub.resolve_ref(ref)  # type: ignore[attr-defined]
+                    from .workspace import validate_workspace
 
-                validate_workspace(self.hub, {"kind": "dir", "path": fpath}, "workspace thư mục chung")
-                ws = {**ws, "ref": ref, "path": fpath, "folder": folder["name"]}
+                    validate_workspace(self.hub, {"kind": "dir", "path": fpath}, "workspace thư mục chung")
+                    ws = {**ws, "ref": ref, "path": fpath, "folder": folder["name"]}
             if ws.get("extra_write_roots") is not None:
                 ws = {**ws, "extra_write_roots": self._extra_write_roots(ws)}
             if ws.get("kind") == "dir":

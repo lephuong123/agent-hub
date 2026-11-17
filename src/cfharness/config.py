@@ -689,6 +689,37 @@ DEFAULTS: dict[str, Any] = {
         "steer_on_cloud_change": True,  # người sửa tệp trên Không gian số trong lúc run giữ khoá → steer câu cố định
         "secret_scan_max_bytes": 5000000,  # quét GIÁ TRỊ secret trên tệp mới/sửa sau run (tệp lớn hơn bỏ qua)
         "login_url_timeout_s": 30,
+        # Cổng cfharness (docs/dev-notes/plan-filehub-lane.md): `sync` = đồng bộ 2 chiều cũ (binary) · `lane` = không bản sao lâu dài, cây làm
+        # việc theo run qua cổng loopback của Không gian số. Mặc định giữ `sync` tới khi NGƯỜI chuyển (`cfharness filehub switch`); thư mục có
+        # `folders[].mode` thì theo thư mục.
+        "mode": "sync",
+        "lane": {
+            # {<tên>: {url, hub_label, user, key_prefix, scope, expires_at, set_at}} — do `filehub lane setup` ghi; KHOÁ ở secret store
+            # (`FILEHUB_LANE_<TÊN>`), không bao giờ ở đây
+            "servers": {},
+            "tree_max_bytes": 2147483648,  # phạm vi lớn hơn → chế độ tools (không dựng cây, agent dùng fs_* + fs_pull)
+            "tree_max_files": 20000,
+            "fetch_lazy_bytes": 52428800,  # tệp > 50 MB: tệp trống + ghi chú, agent gọi fs_pull khi cần
+            "fetch_parallel": 8,
+            "push_quiet_s": 2.0,  # gộp: đẩy khi tệp yên ≥ 2 s
+            "push_min_interval_s": 30,  # ≤ 1 phiên bản / 30 s / tệp (flush cuối run bỏ qua trần này)
+            "final_flush_s": 60,
+            "scan_interval_s": 0.5,  # nhịp quét mtime của cây (Bash/script); tool Write/Edit kích quét ngay
+            "presence_ttl_s": 300,
+            "orphan_keep_days": 7,
+            "read_max_bytes": 262144,  # fs_read trả văn bản ≤ 256 KB; lớn hơn → fs_pull
+            "request_timeout_s": 60,
+            # PUT nội dung: server quét virus ĐỒNG BỘ (chờ máy quét tới 300 s) → timeout ghi phải dài hơn, không thì hub bỏ cuộc rồi gửi lại
+            # (cùng Idempotency-Key nên vẫn an toàn, nhưng chậm). Lệnh ghi khác dùng request_timeout_s.
+            "write_timeout_s": 360,  # §C.6: client ≥ 360 s
+            # chặn xoá hàng loạt: một run xoá nhiều hơn số tệp này (cộng dồn từ lần duyệt gần nhất) → GIỮ mọi lệnh xoá, event filehub.blocked
+            # {reason: mass_delete}, chờ NGƯỜI `cfharness filehub resume --root <id>` (đẩy tiếp) hoặc `--discard` (không xoá, kéo tệp về lại)
+            "max_delete_batch": 20,
+            "reconnect_s": [0.5, 10],  # nối lại luồng sự kiện: lùi 0,5 → 10 s
+            "key_max_days": 180,  # khoá không có expires_at từ server → coi như hết hạn sau 180 ngày kể từ lúc đặt
+            "key_warn_days": 14,  # cảnh báo trước khi khoá hết hạn
+            "maintenance_s": 60,
+        },
     },
     "workspace": {
         # MGR-1: gốc người cho phép đặt workspace `dir`. Ngoài ra luôn cho vùng scratch/worktree/eval của hub. Người thêm gốc tại đây (chỉ người).
@@ -957,6 +988,10 @@ def validate_setting(key: str, value: Any) -> None:
         from .guard.profiles import validate_setting as _validate_profile
 
         _validate_profile(key, value)
+    if key == "filehub" or key.startswith("filehub.mode") or key.startswith("filehub.lane") or key.startswith("filehub.folders"):
+        from .filehub.lane.service import validate_setting as _validate_lane  # cổng cfharness: mode sync|lane, URL chỉ loopback
+
+        _validate_lane(key, value)
     if key == "web" or key.startswith("web."):
         from .web.public import validate_setting as _validate_web_public
 

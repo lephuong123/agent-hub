@@ -65,6 +65,8 @@ def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
         fh = getattr(hub, "filehub", None)
         if fh is None:
             raise HubError(f"{what}: thư mục chung (filehub) chưa bật")
+        if fh.lane_target(str(path)) is not None:
+            return  # chế độ lane: không bản sao — cây dựng trong vùng làm việc của agent lúc run chạy (filehub/lane/)
         path = fh.resolve_ref(str(path))[0]
     from .guard.runtime import fixed_protected_dirs
 
@@ -299,6 +301,9 @@ class WorkspaceLocks(RepoLocks):
     def _key_for_hub(self, cwd: str | None, workspace_kind: str) -> str | None:
         if cwd and str(cwd).startswith("filehub:"):  # workspace_default của agent dạng filehub:<tên>[/<con>]
             try:
+                lt = self.hub.filehub.lane_target(str(cwd))
+                if lt is not None:
+                    return str(lt["key"]) if workspace_kind == "dir" else None  # chế độ lane: khoá = gốc thư mục chung trên server
                 cwd = self.hub.filehub.resolve_ref(str(cwd), must_exist=False)[0]
             except HubError:
                 return None

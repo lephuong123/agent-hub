@@ -715,6 +715,24 @@ Chi tiết, spike (claude 2.1.319: `allowRead` trong `denyRead` hoạt động, 
   khi bật, `trust_full` KHÔNG gỡ giam (Q4) và `guard.sandbox.enabled=false` vẫn để lại sandbox chỉ-giam; mọi workspace/cwd/worktree/
   `extra_write_roots` phải trong W (`validate_workspace`, `check_path`). Không dùng glob trong `sandbox.filesystem.allowRead` (không mở lại).
 
+## Cổng cfharness — thư mục chung Không gian số không qua đồng bộ (`filehub.mode` sync|lane, `filehub/lane/`)
+Plan + hợp đồng §C (chép NGUYÊN VĂN ở `quan-ly-thu-muc-ai/docs/PLAN-cong-cfharness.md`), đã làm, lệch, việc dở: `docs/dev-notes/plan-filehub-lane.md`.
+Không migration (trạng thái ở `hub_state filehub.lane` ∈ `hub_transfer.MACHINE_STATE`, cây/trạng thái ở `HUB_HOME/filehub/lane*`). Mặc định `sync`.
+
+| Module | Vai trò |
+|---|---|
+| `filehub/lane/client.py` | `LaneClient` §C (HTTP+SSE, `LaneError` theo C.7, `norm_rel` C.4 phía hub, `check_url` chỉ loopback) |
+| `filehub/lane/service.py` | `hub.filehub.lane`: khoá (secret `FILEHUB_LANE_<TÊN>`), trạng thái, luồng SSE + cursor, `prepare_run`/`flush_run`/`end_run`, presence, `switch`, mồ côi, bảo trì |
+| `filehub/lane/workdir.py` | Cây theo run `<agent home>/workspaces/lane-<tree>`: dựng, kéo + steer, quét/đẩy, xung đột, chặn secret, flush |
+| `filehub/lane/tools.py` | `fsself.call` (hub-self `fs_*`, cờ `--fs ro|rw`) — ràng run + phạm vi + chỉ đọc |
+
+Bất biến: khoá cổng KHÔNG BAO GIỜ trong env/argv/mcp.json của run, DB, config.yaml, audit (`wrap_with_audit` bỏ `key`), log, event, gói
+`clone` (`transfer_secrets.CLONE_SKIP_PREFIXES`). Agent không bao giờ nói chuyện với cổng (sandbox chặn TCP localhost + classifier `filehub_lane`
+∈ `TRUST_NEVER_RULES`); mọi truy cập qua daemon. Quét giá trị secret TRƯỚC khi đẩy (không một byte nào rời máy). Không bao giờ ghi đè bản của
+người (`If-Match`; 409 → bản xung đột riêng). Hub không xoá bản sao `sync` cũ khi chuyển. Ghi chế độ/khoá/mồ côi = HUMAN_ONLY (`HUMAN_ONLY_LANE`),
+không ∈ MANAGER_ALLOWED; CLI `filehub lane|switch` ∈ `HUB_HUMAN_ONLY_CLI`. Đổi hợp đồng → sửa §C ở CẢ HAI repo + `tests/fake_kgs_lane.py`.
+Steer/nhắn agent = câu cố định tiếng Anh, đường dẫn đã `one_line`. Test: `tests/test_lane_{client,service,workdir,switch}.py` (server giả, ScriptedRuntime).
+
 ## Giọng nói trên web — đọc chép + hội thoại giọng nói với điều phối viên
 Chi tiết, an toàn, việc dở: `docs/dev-notes/voice.md`. Không migration. Test: `tests/test_voice.py`.
 - `web/static/voice.js` (Web Speech API, `vi-VN` mặc định): nút micro cho mọi `textarea[data-voice]` + `#mgr-mic`; nút sóng âm `#mgr-voice` = chế độ

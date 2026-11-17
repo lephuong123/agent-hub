@@ -113,7 +113,9 @@ MACHINE_STATE = ("repo_locks", "browser_locks", "rate_limit", "rate_limit_gate",
                  # PR5: đóng băng chuyển nhà của máy NGUỒN (gói xuất lại từ hub đã đóng băng) + kết quả lần nhập trước của chính nguồn
                  "migrated_to", "import_paused", "import_repos",
                  # filehub (Không gian số): tạm dừng đồng bộ là của MÁY cũ; lần nhập trước của chính nguồn (cần đăng nhập lại)
-                 "filehub.paused", "import_filehub")
+                 "filehub.paused", "import_filehub",
+                 # cổng cfharness (filehub/lane/): cursor luồng sự kiện + cây mồ côi của MÁY cũ
+                 "filehub.lane")
 # filehub: thư mục chung Không gian số — token THIẾT BỊ (`secrets/filehub/tokens.json`, `--device "cfharness · <máy>"`) KHÔNG BAO GIỜ đi theo
 # gói (cả clone lẫn move: `transfer_secrets.collect` chỉ lấy `secrets/<NAME>` dạng `NAME_RE`, thư mục con bị bỏ qua sạch). Khi nhập (mọi chế độ):
 # `filehub.enabled=false` + `device_name=null` (tên thiết bị là của máy) → daemon đích không spawn binary sync tới khi người

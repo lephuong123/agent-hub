@@ -244,7 +244,15 @@ class RunManager:
         agent = self.hub.agents.get_row(agent_id)
         if not cwd and str(agent.get("workspace_default") or "").startswith("filehub:"):
             cwd = agent["workspace_default"]  # workspace mặc định của agent là thư mục chung → như run --cwd filehub:…
-        if cwd and str(cwd).startswith("filehub:"):  # thư mục chung Không gian số: `filehub:<tên>[/<con>]` → bản sao cục bộ
+        lane_t = self.hub.filehub.lane_target(str(cwd)) if cwd and str(cwd).startswith("filehub:") else None  # type: ignore[attr-defined]
+        if lane_t is not None:  # cổng cfharness (chế độ lane): không bản sao — cây làm việc dựng lúc run bắt đầu (filehub/lane/)
+            cwd = None
+            lane_opts = {k: lane_t[k] for k in ("server", "root", "sub", "folder", "kind")}
+            prev = ((self.store.get_run(parent_run_id) or {}).get("run_opts") or {}).get("filehub_lane") if parent_run_id else None
+            if isinstance(prev, dict) and prev.get("tree") and prev.get("root") == lane_t["root"] and prev.get("sub") == lane_t["sub"]:
+                lane_opts["tree"] = prev["tree"]  # retry/resume của task: CÙNG cây → `claude --resume` tìm thấy session theo cwd
+            run_opts = {**(run_opts or {}), "workspace_kind": "filehub_lane", "filehub": lane_t["folder"], "filehub_lane": lane_opts}
+        elif cwd and str(cwd).startswith("filehub:"):  # thư mục chung Không gian số: `filehub:<tên>[/<con>]` → bản sao cục bộ
             fh_path, fh_folder, _sub = self.hub.filehub.resolve_ref(str(cwd))  # type: ignore[attr-defined]
             cwd = fh_path
             run_opts = {**(run_opts or {}), "workspace_kind": "filehub", "filehub": fh_folder["name"]}
@@ -266,6 +274,13 @@ class RunManager:
             mgr_keep = manager_issue or bool(parent_run_id and resume_reason in MANAGER_INTERNAL_RESUME and mgr is not None and mgr.is_issued(parent_run_id))
             if not mgr_keep:
                 run_opts = {k: v for k, v in run_opts.items() if k not in MANAGER_OPT_KEYS and not (k == "hub_self" and v == "manager")} or None
+        if cwd and self.hub.filehub.lane.is_tree_path(cwd):  # type: ignore[attr-defined]
+            # cwd = cây lane của run trước (continue/resume/auto-resume/review fork): run_opts lane kế thừa → dựng lại ĐÚNG cây lúc chạy;
+            # không có (vd review fork chỉ đọc) → chỉ cần thư mục tồn tại để `claude --resume` tìm session theo cwd
+            if (run_opts or {}).get("filehub_lane"):
+                cwd = None
+            else:
+                Path(str(cwd)).mkdir(parents=True, exist_ok=True)
         if team_id:
             team = self.hub.teams.find(team_id)
             if team is not None and team.get("estop"):
@@ -466,15 +481,15 @@ class RunManager:
         opts = dict(run.get("run_opts") or {})
         if run.get("cwd"):
             cwd, wkind = Path(run["cwd"]), ("worktree" if opts.get("workspace_kind") == "worktree" else "dir")
-            if _in_agent_workspaces(cwd, home):  # M7: thư mục cố định trong workspaces/ của agent (hội thoại manager) = scratch
-                wkind = "scratch"
+            if _in_agent_workspaces(cwd, home) and not opts.get("filehub_lane"):  # M7: thư mục cố định trong workspaces/ của agent = scratch
+                wkind = "scratch"  # (cây lane nằm ở đó nhưng là THƯ MỤC CỦA NGƯỜI trên Không gian số → `dir`, không bao giờ scratch/bypass)
         elif agent.get("workspace_default"):
             wd = str(agent["workspace_default"])
             cwd = Path(hub.filehub.resolve_ref(wd)[0] if wd.startswith("filehub:") else wd).expanduser()  # type: ignore[attr-defined]
             wkind = "dir"
         else:
             cwd, wkind = home / "workspaces" / run_id, "scratch"
-        if wkind in ("dir", "worktree") and cwd.exists():  # R2-5 (SEC): kiểm lại lúc spawn — chống TOCTOU (đổi thành symlink sau khi đặt)
+        if wkind in ("dir", "worktree") and cwd.exists() and not opts.get("filehub_lane"):  # R2-5 (SEC): kiểm lại lúc spawn — chống TOCTOU
             from .workspace import validate_workspace
 
             validate_workspace(hub, str(cwd.resolve()), "cwd của run (kiểm lại lúc spawn)")
@@ -655,6 +670,18 @@ class RunManager:
         system_prompt, k_info = _learning_prompt(hub, run, agent)
         perm_tool, env_extra = _learning_mcp(hub, run, agent, servers=servers, tp=tp, allowed_mcp=allowed_mcp, env_extra=env_extra,
                                              perm_tool=perm_tool, guard_cfg=guard_cfg, info=k_info)
+        if opts.get("filehub_lane") and not opts.get("learning_review"):  # cổng cfharness: nhóm tool `fs_*` (daemon ràng run/phạm vi/chỉ đọc)
+            from .mcp_server.hub_self import SERVER_NAME as _HS, add_fs_flag, server_entry as _hs_entry
+
+            if _HS not in servers:
+                from .learning.runtime import memory_scopes as _ms
+
+                servers[_HS] = _hs_entry(run_id, hub.paths.socket, hub.paths.home, "knowledge", guard_cfg, memory_scopes=_ms(hub, agent))
+                allowed_mcp.append(_HS)
+                tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + [f"mcp__{_HS}"]))
+                env_extra = {**env_extra, "CFHARNESS_RUN_ID": run_id}
+            ro = bool(opts.get("read_only")) or _agent_read_only(agent)
+            servers[_HS] = add_fs_flag(servers[_HS], "ro" if ro else "rw")
         mcp_path = rt_dir / "mcp.json"
         _write_json_0600(mcp_path, {"mcpServers": servers})
         sp_path = None
@@ -669,6 +696,14 @@ class RunManager:
             prompt = hub.manager.render_prompt(run_id, prompt)
         if recall:  # graph memory: khối DỮ LIỆU trước tin user đầu — chỉ vào stdin, KHÔNG vào DB (runs.prompt giữ nguyên lời người)
             prompt = f"{recall}\n\n{prompt}"
+        if opts.get("filehub_lane"):  # cổng cfharness: ghi chú cây làm việc (tin user đầu, không system prompt) + thay đổi của người lúc chờ
+            wd = hub.filehub.lane.workdir_of(run_id)  # type: ignore[attr-defined]
+            if wd is not None:
+                notes = wd.take_deferred()
+                if notes:
+                    prompt = "\n".join(notes) + f"\n\n{prompt}"
+                if not run.get("resumed_from_session"):
+                    prompt = f"{wd.prompt_note()}\n\n{prompt}"
         return RunSpec(
             run_id=run_id,
             agent_id=agent["id"],
@@ -765,6 +800,11 @@ class RunManager:
             return None
         if (run.get("run_opts") or {}).get("read_only") or _agent_read_only(agent):
             return None  # FR-RT-12: run chỉ đọc không bị khoá
+        lane = (run.get("run_opts") or {}).get("filehub_lane")
+        if isinstance(lane, dict) and lane.get("server") and lane.get("root"):  # cổng cfharness: khoá = GỐC thư mục chung trên server
+            from .filehub.lane.service import lock_key
+
+            return lock_key(str(lane["server"]), str(lane["root"]))
         if run.get("cwd"):
             if _in_agent_workspaces(Path(run["cwd"]), Path(agent["home_path"])):
                 return None  # M7: scratch cố định của agent (hội thoại manager) — không phải repo người
@@ -815,6 +855,7 @@ class RunManager:
         set_run_context(run_id, agent_id)  # H-20: mọi log trong task này có run_id/agent_id
         rlog = run_logger(log, run_id, agent_id, task_id=ar.task_id)
         spec: RunSpec | None = None
+        lane_run = False
         ar.entered = True
         try:
             ar.lock_key = ar.lock_key or self._lock_key(run, agent)  # đã đặt chỗ trong tick (H-21); cùng session → kế thừa
@@ -830,6 +871,10 @@ class RunManager:
                         await proxy.ensure_started()
                     except (HubError, OSError) as e:
                         rlog.warning("proxy OAuth MCP không khởi động được (%s) — dùng Bearer tĩnh trong mcp.json", e)
+            if (run.get("run_opts") or {}).get("filehub_lane"):  # cổng cfharness: dựng cây làm việc TRƯỚC spawn (lỗi → failed filehub_unavailable)
+                lane_cwd, lane_opts = await hub.filehub.lane.prepare_run(run, agent)  # type: ignore[attr-defined]
+                run = {**run, "cwd": str(lane_cwd), "run_opts": lane_opts}
+                lane_run = True
             recall = await self._memory_prefetch(run, agent)  # graph memory: top-k fact vào TIN USER ĐẦU (không vào system prompt)
             spec = self._prepare_spec(run, agent, recall=recall)
             spec.control_handler = functools.partial(self._control_request, ar)  # CLI 2.1.303+: control_request can_use_tool → guard
@@ -875,6 +920,8 @@ class RunManager:
                 await self._diff(ar)  # M3: diff có trước event kết thúc run
             if ar.extra_checkpoints:
                 await self._extra_diff(ar)
+            if lane_run:  # cổng cfharness: quét lần cuối + đẩy hết (≤ final_flush_s) + diff từ nhật ký thao tác — TRƯỚC event kết thúc run
+                await hub.filehub.lane.flush_run(run_id)  # type: ignore[attr-defined]
             await self._finalize(ar)
         except asyncio.CancelledError:
             if ar.handle is not None and ar.runtime is not None:
@@ -902,6 +949,11 @@ class RunManager:
                 await self._diff(ar)
             if ar.extra_checkpoints:
                 await self._extra_diff(ar)
+            if lane_run:  # đỗ cây (waiting_human) hoặc báo + xoá/mồ côi cây
+                try:
+                    await hub.filehub.lane.end_run(run_id)  # type: ignore[attr-defined]
+                except Exception:  # pragma: no cover — dọn cây lỗi không làm hỏng kết thúc run
+                    rlog.exception("đóng cây làm việc lane của run %s lỗi", run_id)
             self.active.pop(run_id, None)
             br = getattr(getattr(hub, "guard", None), "browser", None)
             if br is not None:  # Claude in Chrome: nhả khoá trình duyệt khi run kết thúc (kể cả waiting_human — tiến trình đã dừng)
@@ -945,6 +997,8 @@ class RunManager:
         """FR-RT-12: checkpoint trước run ghi vào repo thật (workspace dir, không chỉ đọc). Không commit/stash."""
         if spec.workspace_kind != "dir" or not self.hub.config.get("workspace.checkpoint") or ar.lock_key is None:
             return
+        if (run.get("run_opts") or {}).get("filehub_lane"):
+            return  # cổng cfharness: diff dựng từ nhật ký thao tác đã đẩy (filehub/lane/workdir.ops), không chụp/walk cây
         from .workspace import take_checkpoint
 
         wc = self.hub.config.get("workspace")

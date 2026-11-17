@@ -51,6 +51,35 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     ss.add_parser("pause", help="tạm dừng đồng bộ (dừng tiến trình sync)", parents=[common])
     rs = ss.add_parser("resume", help="chạy lại đồng bộ; --root <id>: cho chiều đẩy lên đang bị chặn (xoá hàng loạt) đi tiếp", parents=[common])
     rs.add_argument("--root")
+    rs.add_argument("--discard", action="store_true",
+                    help="thư mục chế độ lane: KHÔNG xoá lô đang giữ (xoá hàng loạt) — kéo tệp về lại cây run, báo agent")
+    # cổng cfharness (chế độ lane — docs/dev-notes/plan-filehub-lane.md): khoá hub do NGƯỜI tạo ở Không gian số › Hồ sơ › Cổng cfharness
+    ln = ss.add_parser("lane", help="cổng cfharness: thư mục chung KHÔNG qua đồng bộ (cây làm việc theo run) — thiết lập khoá, trạng thái (chỉ người)",
+                       parents=[common])
+    ls = ln.add_subparsers(dest="lane_action")
+    lst = ls.add_parser("setup", help="nhập khoá cổng (hỏi bằng getpass, không qua tham số) + kiểm `hello`", parents=[common])
+    lst.add_argument("--server", default="qltm", help="tên cổng (qltm, cchc…) — mặc định qltm")
+    lst.add_argument("--url", required=True, help="http://127.0.0.1:<cổng> (qltm 8223, cchc 8233) — chỉ loopback")
+    lst.add_argument("--key-file", help="đọc khoá từ tệp 0600 (thay cho gõ tay); tệp người khác đọc được → từ chối")
+    ls.add_parser("status", help="trạng thái cổng, thư mục chế độ lane, cây làm việc đang chạy, cây mồ côi", parents=[common])
+    lt = ls.add_parser("test", help="thử khoá đã lưu (hello + cursor)", parents=[common])
+    lt.add_argument("--server")
+    ld = ls.add_parser("disable", help="xoá khoá + cấu hình cổng", parents=[common])
+    ld.add_argument("--server", required=True)
+    ld.add_argument("--force", action="store_true", help="kể cả khi còn thư mục chế độ lane dùng cổng này")
+    la = ls.add_parser("add", help="thêm thư mục chung chế độ lane từ một gốc khoá được cấp (không bản sao trên máy)", parents=[common])
+    la.add_argument("root_id")
+    la.add_argument("--name")
+    la.add_argument("--server")
+    lo = ls.add_parser("orphan", help="cây mồ côi (thay đổi chưa đẩy lên được khi run kết thúc): push = đẩy lại, drop = bỏ", parents=[common])
+    lo.add_argument("orphan_action", choices=("push", "drop"))
+    lo.add_argument("tree")
+    sw2 = ss.add_parser("switch", help="đổi chế độ một thư mục chung: sync (đồng bộ 2 chiều cũ) ↔ lane (cổng cfharness) — bản sao cũ để nguyên",
+                        parents=[common])
+    sw2.add_argument("name")
+    sw2.add_argument("--to", required=True, choices=("lane", "sync"))
+    sw2.add_argument("--server", help="cổng (mặc định: cổng duy nhất đã thiết lập)")
+    sw2.add_argument("--force", action="store_true", help="chuyển dù không đọc được trạng thái đồng bộ")
     s.set_defaults(fn=cmd_filehub)
 
 
@@ -60,8 +89,12 @@ def _print_status(r: dict[str, Any]) -> None:
           + (f" · sync {r['sync_version']}" if r.get("sync_version") else ""))
     if sv.get("last_error") and r["state"] in ("error", "version_mismatch"):
         print(f"  lỗi: {sv['last_error']}")
-    if not r.get("folders"):
+    if not r.get("folders") and not r.get("lane_folders"):
         print("  (chưa có thư mục chung — `cfharness filehub setup --server URL --binary /đường/dẫn/tang-thu-sync-headless`)")
+    for f in r.get("lane_folders") or []:  # chế độ lane: không bản sao trên máy — cây làm việc theo run qua cổng cfharness
+        print(f"  • {f['name']}  (chế độ lane, cổng {f.get('server') or '?'}, gốc {f.get('root_id')})  →  workspace {f.get('workspace') or 'filehub:' + f['name']}")
+        if f.get("old_copy"):
+            print(f"    bản sao cũ của chế độ sync còn ở {f['old_copy']} (hub không xoá — kiểm rồi tự xoá)")
     for f in r.get("folders") or []:
         lock = f.get("lock")
         print(f"  • {f.get('display') or f['name']}" + (f" · đăng nhập bằng {f['account']}" if f.get("account") else ""))
@@ -120,9 +153,104 @@ def _wait_login(ctx: Any, timeout_s: float = 900) -> int:
     return 1
 
 
+def _read_key(a: Any) -> str:
+    import getpass
+    import os
+    import stat
+
+    if a.key_file:
+        p = os.path.expanduser(a.key_file)
+        st = os.stat(p)
+        if st.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+            raise SystemExit(f"{p}: tệp khoá phải chỉ chủ đọc được (chmod 600)")
+        with open(p, encoding="utf-8") as f:
+            return f.read().strip()
+    return getpass.getpass("Khoá cổng cfharness (tt_lane_…, không hiện khi gõ): ").strip()
+
+
+def _print_lane(r: dict[str, Any]) -> None:
+    print(f"Cổng cfharness — chế độ mặc định: {r.get('mode')}")
+    if not r.get("servers"):
+        print("  (chưa thiết lập — `cfharness filehub lane setup --url http://127.0.0.1:8223`)")
+    for s in r.get("servers") or []:
+        exp = s.get("expiry") or {}
+        print(f"  • {s['name']}: {s.get('url')} · tài khoản {s.get('user') or '?'} · khoá {s.get('key_prefix') or '?'}… ({s.get('scope') or '?'})"
+              f" · {s.get('state')}" + (f" ({s['error']})" if s.get("error") else ""))
+        if exp.get("expires_at"):
+            print(f"    hết hạn: {exp['expires_at']} (còn {exp.get('days_left')} ngày)" + ("  ⚠ sắp hết hạn — tạo khoá mới rồi `filehub lane setup`" if exp.get("warn") else ""))
+    for f in r.get("folders") or []:
+        print(f"  thư mục {f['name']} (root {f.get('root_id')}, cổng {f.get('server') or '?'}) → workspace {f['workspace']}"
+              + (f"\n    bản sao cũ của chế độ sync giữ nguyên ở {f['old_copy']} (hub không xoá — kiểm rồi tự xoá)" if f.get("old_copy") else ""))
+    for w in r.get("runs") or []:
+        print(f"  run {w.get('run_id')} ({w.get('agent_id')}) · {w.get('folder')}/{w.get('sub') or ''} · {w.get('mode')} · chờ đẩy {w.get('pending')}"
+              + (f" · chặn (secret) {w.get('blocked')}" if w.get("blocked") else ""))
+    for o in r.get("orphans") or []:
+        print(f"  ⚠ cây mồ côi {o.get('tree')} ({o.get('folder')}): {o.get('count')} thay đổi chưa đẩy — "
+              f"`cfharness filehub lane orphan push {o.get('tree')}` / `… orphan drop {o.get('tree')}`")
+
+
+def _cmd_lane(ctx: Any) -> int:
+    a = ctx.args
+    act = getattr(a, "lane_action", None) or "status"
+    if act == "status":
+        r = ctx.call("filehub.lane_status", {})
+        if ctx.json:
+            ctx.out(r)
+        else:
+            _print_lane(r)
+        return 0
+    if act == "setup":
+        key = _read_key(a)
+        r = ctx.call("filehub.lane_setup", {"server": a.server, "url": a.url, "key": key})
+        del key
+        if ctx.json:
+            ctx.out(r)
+            return 0
+        print(f"Đã lưu khoá cổng «{r['server']}» ({r.get('key_prefix')}…, {r.get('scope')}) — tài khoản {r.get('user') or '?'}, hub «{r.get('hub_label')}».")
+        for x in r.get("roots") or []:
+            print(f"  gốc {x['id']} · {'workspace' if x['kind'] == 'workspace' else 'thư mục'} «{x['name']}»"
+                  + (f" ↔ thư mục chung {x['folder']} (chế độ {x['mode']})" if x.get("folder") else ""))
+        return 0
+    if act == "test":
+        r = ctx.call("filehub.lane_test", {"server": a.server})
+        ctx.out(r, f"Cổng «{r['server']}» trả lời (giao thức {r.get('protocol')}, tài khoản {r.get('user')}, {len(r.get('roots') or [])} gốc).")
+        return 0
+    if act == "disable":
+        r = ctx.call("filehub.lane_disable", {"server": a.server, "force": a.force})
+        ctx.out(r, f"Đã xoá khoá + cấu hình cổng «{r['server']}».")
+        return 0
+    return _cmd_lane_more(ctx, act)
+
+
+def _cmd_lane_more(ctx: Any, act: str) -> int:
+    a = ctx.args
+    if act == "add":
+        r = ctx.call("filehub.lane_add", {"root_id": a.root_id, "name": a.name, "server": a.server})
+        ctx.out(r, f"Đã thêm thư mục chung «{r['name']}» (chế độ lane, cổng {r['server']}) — giao việc: workspace {r['workspace']}")
+        return 0
+    if act == "orphan":
+        r = ctx.call("filehub.lane_orphan", {"tree": a.tree, "action": a.orphan_action})
+        if r.get("dropped"):
+            ctx.out(r, f"Đã bỏ cây mồ côi {r['tree']}.")
+        elif r.get("pushed"):
+            ctx.out(r, f"Đã đẩy hết thay đổi của cây {r['tree']} lên Không gian số.")
+        else:
+            ctx.out(r, f"Còn {len(r.get('left') or [])} thay đổi chưa đẩy được ({r.get('code')}): " + ", ".join(r.get("left") or [])[:500])
+            return 1
+        return 0
+    return 1
+
+
 def cmd_filehub(ctx: Any) -> int:
     a = ctx.args
     act = a.fh_action or "status"
+    if act == "lane":
+        return _cmd_lane(ctx)
+    if act == "switch":
+        r = ctx.call("filehub.switch", {"name": a.name, "to": a.to, "server": a.server, "force": a.force})
+        ctx.out(r, f"Đã chuyển «{r['name']}» sang chế độ {r['mode']}." + (f"\n{r['note']}" if r.get("note") else "")
+                + "".join(f"\n⚠ {w}" for w in r.get("warnings") or []))
+        return 0
     if act == "status":
         r = ctx.call("filehub.status", {})
         if ctx.json:
@@ -165,8 +293,13 @@ def cmd_filehub(ctx: Any) -> int:
         ctx.out(ctx.call("filehub.pause", {}), "Đã tạm dừng đồng bộ.")
         return 0
     if act == "resume":
-        r = ctx.call("filehub.resume", {"root_id": a.root})
-        ctx.out(r, "Đã cho chiều đẩy lên đi tiếp." if a.root else "Đã chạy lại đồng bộ.")
+        r = ctx.call("filehub.resume", {"root_id": a.root, **({"discard": True} if a.discard else {})})
+        if isinstance(r, dict) and r.get("lane"):
+            msg = (f"Đã bỏ lô xoá ({r.get('discarded', 0)} mục) — tệp được kéo về lại, agent đã được báo." if a.discard
+                   else f"Đã duyệt lô xoá ({r.get('released', 0)} mục) — đẩy tiếp lên Không gian số.")
+        else:
+            msg = "Đã cho chiều đẩy lên đi tiếp." if a.root else "Đã chạy lại đồng bộ."
+        ctx.out(r, msg)
         return 0
     return 1
 

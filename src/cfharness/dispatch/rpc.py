@@ -208,12 +208,12 @@ class OrchestrationRpc:
 
         run = self._run(_req(p, "id"))
         diff = run.get("diff")
-        if not diff or diff.get("kind") not in ("git", "dir"):
-            raise HubError(f"run {run['id']} không có diff (không ghi vào workspace dir, hoặc checkpoint lỗi)")
-        if (run.get("run_opts") or {}).get("filehub") or diff.get("filehub"):
+        if (run.get("run_opts") or {}).get("filehub") or (diff or {}).get("filehub"):  # cả chế độ lane (diff kind=lane)
             from ..workspace import FILEHUB_NO_REVERT
 
             raise HubError(FILEHUB_NO_REVERT)
+        if not diff or diff.get("kind") not in ("git", "dir"):
+            raise HubError(f"run {run['id']} không có diff (không ghi vào workspace dir, hoặc checkpoint lỗi)")
         if run.get("reverted_at"):
             raise Conflict(f"run {run['id']} đã được revert lúc {run['reverted_at']}")
         if diff.get("checkpoint_purged_at"):

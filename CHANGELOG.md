@@ -16,6 +16,34 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 ### Không gian số (thư mục chung)
 - Hub đang giam agent trong một workspace (`workspace.confine`) mà thư mục cha của bản sao (`filehub.local_parent`, mặc định `~/KhongGianSo`) nằm ngoài vùng giam → bản sao tự đặt ở `<vùng giam>/KhongGianSo/<tên>` thay vì báo "nằm ngoài workspace được giam" (nối thư mục qua web public không sửa được đường dẫn nên bị kẹt). `filehub setup --local-parent` ngoài vùng giam bị từ chối ngay, không ghi cấu hình (#141).
 
+### Không gian số — cổng cfharness (chế độ `lane`, chưa bật mặc định) (#147)
+- `cfharness filehub lane setup --url http://127.0.0.1:8223` (khoá hỏi bằng getpass, chỉ lưu trong secret store), `lane status|test|disable`:
+  nối hub với cổng cfharness của Không gian số trên cùng máy — chỉ nhận URL loopback, khoá không bao giờ vào cấu hình/nhật ký/gói nhân bản.
+  Hub đang dùng đồng bộ cũ không đổi gì cho tới khi người chuyển thư mục sang `lane`.
+- Run trên thư mục chế độ `lane` (`filehub:<tên>[/<con>]`) có cây làm việc riêng dựng từ Không gian số lúc bắt đầu (đúng phạm vi ref) và
+  xoá khi run xong; người sửa/xoá/di chuyển tệp trong phạm vi → hub kéo về và nhắn agent ngay (thường < 1 s). Run chỉ đọc hoặc phạm vi quá
+  lớn: cây rỗng + tool `fs_list|fs_read|fs_stat|fs_versions|fs_link|fs_pull`. Agent không bao giờ gọi được cổng trực tiếp (bị chặn).
+- Agent lưu tệp trong cây → lên Không gian số trong vài giây thành phiên bản mới (không bao giờ ghi đè bản người vừa lưu: giữ bản của agent
+  thành tệp `<tên> (cfharness <agent> <giờ>)`); tệp đang bị người khoá → xếp hàng, mở khoá là lưu. **Tệp chứa giá trị secret của hub bị
+  chặn TRƯỚC khi đẩy** (không một byte nào rời máy, agent được báo). Hết run còn thay đổi chưa đẩy được → giữ ở cây mồ côi
+  (`cfharness filehub lane orphan push|drop <run>`, tự dọn sau 7 ngày). Diff của run lấy từ nhật ký thao tác; hoàn tác ở phiên bản/thùng rác
+  Không gian số.
+- Chuyển từng thư mục: `cfharness filehub switch <tên> --to lane|sync` (từ chối khi đồng bộ còn dở / gốc chưa được cấp cho khoá / có run
+  đang ghi) — bản sao `~/KhongGianSo/<tên>` cũ **để nguyên** (hub không xoá), được báo ở `filehub lane status` và thẻ web. Thư mục mới:
+  `cfharness filehub lane add <id gốc>`. Thẻ "Cổng cfharness" ở Cài đặt web (khoá chỉ nhập ở bước 2). Trên Không gian số thấy dải
+  "cfharness · <agent> · đang sửa <tệp>" trong lúc run ghi. `setup-hub-user.sh`: `KGS_MODE=lane`.
+- An toàn hơn khi agent làm việc trên thư mục chế độ `lane`: hub không bao giờ đi xuyên symlink agent đặt trong cây (xoá/di chuyển/đọc để
+  đẩy đều từ chối); tệp tạm/khoá Office/`.git` của người trên Không gian số không bao giờ bị xoá; agent xoá tệp mà người vừa lưu bản mới →
+  không xoá, kéo bản của người về; tệp lớn chưa tải không bị ghi đè bằng nội dung cụt (bản của agent thành tệp riêng, nhắc `fs_pull`); hai
+  bản xung đột cùng phút không đè nhau; người xoá thư mục thì tệp agent chưa lưu bên trong được giữ thành bản riêng. **Xoá hàng loạt**
+  (> `filehub.lane.max_delete_batch`, mặc định 20, mỗi run) bị GIỮ, báo người — `cfharness filehub resume --root <id>` để xoá tiếp, thêm
+  `--discard` để không xoá và kéo tệp về lại — hoặc nút "Cho xoá"/"Không xoá" ở thẻ "Cổng cfharness" (Cài đặt web). Tool `fs_delete` của
+  agent đi cùng đường xoá đó (cùng trần, không xoá tệp tạm/khoá/`.git` của người và giữ thư mục còn chứa chúng). Xoá thư mục: tệp trước, thư mục sau (Không gian số chỉ xoá thư mục rỗng). Ghi lên Không gian số chờ quét virus tới `filehub.lane.write_timeout_s` (mặc định 360 s) và
+  gửi lại an toàn (cùng Idempotency-Key). `cfharness filehub status` liệt kê cả thư mục chế độ lane. Run chỉ đọc không bao giờ đẩy (kể cả
+  sau khi daemon khởi động lại); người di chuyển tệp lên đúng tên agent vừa tạo → bản của agent thành tệp riêng; người sửa tệp lớn chưa tải
+  → không tải cả tệp mỗi lần.
+
+
 ### Cập nhật
 - `cfharness update` không còn bảo "tắt và mở lại giao diện web" — người dùng hub chạy trên máy chủ (web qua LaunchDaemon, vào bằng link
   public) không làm được việc đó. Giờ lệnh chờ giao diện web tự chạy lại bằng bản mới (tối đa 2 phút), quá giờ thì tự chạy lại web, rồi báo
