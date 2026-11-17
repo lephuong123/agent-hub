@@ -143,6 +143,10 @@ Tự thiết lập thư mục chung Không gian số ngay trên web, và sửa l
   "Ứng dụng máy tính" ở Cài đặt) báo lỗi. Giờ web tự chạy lại sang bản mới khi bản cài đổi (khoảng 30 giây), và daemon bản mới khi lên
   sẽ dừng web còn chạy code cũ để launchd bật lại (không có launchd thì daemon tự chạy lại đúng lệnh cũ). Sau khi web chạy lại cần đăng
   nhập lại (#120).
+- **Web không lên lại sau khi khởi động lại máy (lỗi 502 qua tunnel)**: số tiến trình ghi trong `auth/web.json` bị tiến trình khác của
+  hệ thống dùng lại sau khi máy khởi động → `cfharness web` tưởng đã có server đang chạy, in link đăng nhập rồi thoát, launchd bật lại
+  mãi mà không ai nghe cổng. Giờ web so thời điểm tiến trình bắt đầu với lúc ghi trạng thái, nhận ra file cũ và tự chạy bình thường.
+  Hub đang bị kẹt: xoá `~/.cfharness/auth/web.json` của user đó (launchd bật lại web trong khoảng 30 giây) (#136).
 
 ### Lưu ý khi cập nhật
 - Không có migration, không có cấu hình phải sửa.
