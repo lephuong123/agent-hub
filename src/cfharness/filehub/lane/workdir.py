@@ -105,6 +105,7 @@ class Workdir:
         self._task: asyncio.Task[Any] | None = None
         self.last_pushed: str | None = None
         self._presence_at = 0.0
+        self._presence_path: str | None = None
         self.parked = False
         self.latencies: list[float] = []
         self.ops_mark = 0

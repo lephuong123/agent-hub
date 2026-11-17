@@ -144,7 +144,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "filehub.setup", "filehub.login", "filehub.login_callback", "filehub.switch_to_workspace", "filehub.add", "filehub.remove",
         "filehub.rename", "filehub.pause", "filehub.resume",
         # Cổng cfharness (filehub/lane/, plan-filehub-lane.md): khoá hub của người (secret store) — nhập/thử/xoá/chuyển chế độ/cây mồ côi
-        "filehub.lane_setup", "filehub.lane_disable", "filehub.lane_test", "filehub.lane_orphan",
+        "filehub.lane_setup", "filehub.lane_disable", "filehub.lane_test", "filehub.lane_orphan", "filehub.lane_add", "filehub.switch",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})

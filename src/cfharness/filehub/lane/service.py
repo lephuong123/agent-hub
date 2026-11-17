@@ -255,7 +255,9 @@ class LaneService:
                         "key_prefix": s.get("key_prefix"), "key": self.hub.secrets.exists(secret_name(name)), "state": st.get("state") or "unknown",
                         "error": st.get("code"), "expiry": self.key_expiry(name)})
         folders = [{"name": f["name"], "root_id": f.get("root_id"), "server": self.folder_server(f), "kind": f.get("kind") or "folder",
-                    "old_copy": f.get("local_path") or None, "workspace": f"filehub:{f['name']}"} for f in self.fh.lane_folders()]
+                    # bản sao của chế độ sync cũ: hub KHÔNG xoá (chủ repo chốt) — chỉ báo còn đó
+                    "old_copy": f.get("local_path") if f.get("local_path") and os.path.isdir(os.path.expanduser(str(f["local_path"]))) else None,
+                    "workspace": f"filehub:{f['name']}"} for f in self.fh.lane_folders()]
         return {"mode": str(self.fh.cfg("mode") or "sync"), "servers": out, "folders": folders, **self._run_status()}
 
     def _run_status(self) -> dict[str, Any]:
@@ -732,12 +734,116 @@ class LaneService:
         shutil.rmtree(d, ignore_errors=True)
         return {"tree": tree, "pushed": True}
 
-    # ------------------------------------------------------------------ presence (H4)
+    # ------------------------------------------------------------------ presence (C.6 `PUT /presence`): "cfharness · <agent> · đang sửa <tệp>"
     async def presence_tick(self, wd: Any) -> None:
-        return None
+        """Làm mới presence của run GHI ở nửa ttl, hoặc ngay khi tệp đẩy gần nhất đổi (nhãn do server dựng — hub chỉ gửi đường dẫn)."""
+        if wd.read_only or wd.parked or wd.revoked or wd.stopped_push:
+            return
+        ttl = int(self.cfg("presence_ttl_s") or 300)
+        path = wd.remote(wd.last_pushed) if wd.last_pushed else None
+        if time.time() - wd._presence_at < ttl / 2 and path == getattr(wd, "_presence_path", None):
+            return
+        wd._presence_at, wd._presence_path = time.time(), path
+        try:
+            await self.client(wd.server).presence_put(wd.root, path, ttl, agent=wd.agent_id, run=wd.run_id)
+        except LaneError as e:
+            log.info("lane: presence lỗi (%s): %s", wd.run_id, e.lane_code)
 
     async def presence_clear(self, wd: Any) -> None:
-        return None
+        if wd.read_only or not wd._presence_at:
+            return
+        wd._presence_at = 0.0
+        try:
+            await self.client(wd.server).presence_delete(wd.root, agent=wd.agent_id, run=wd.run_id)
+        except LaneError as e:
+            log.info("lane: xoá presence lỗi (%s): %s", wd.run_id, e.lane_code)
+
+    # ------------------------------------------------------------------ chuyển chế độ (CHỈ người) + thêm thư mục lane
+    async def add_folder(self, p: dict[str, Any]) -> dict[str, Any]:
+        """RPC `filehub.lane_add {root_id, name?, server?}`: thêm thư mục chung chế độ lane từ một gốc khoá được cấp (không bản sao trên máy)."""
+        from ..service import REF_PREFIX, aliases_of, safe_name, valid_name
+
+        server = str(p.get("server") or self.default_server() or "")
+        self.server_cfg(server)
+        rid = str(p.get("root_id") or "")
+        h = await self.hello(server, force=True)
+        r = next((x for x in h.get("roots") or [] if isinstance(x, dict) and str(x.get("id")) == rid), None)
+        if r is None:
+            raise NotFound(f"gốc {rid!r} không được cấp cho khoá cổng '{server}' (xem `cfharness filehub lane test`)")
+        name = str(p.get("name") or "").strip() or safe_name(str(r.get("name") or ""), "chung")
+        if not valid_name(name):
+            raise HubError(f"tên thư mục chung không hợp lệ: {name!r}")
+        rows = self.fh.all_folders()
+        if any(f["name"] == name or name in aliases_of(f) or str(f.get("root_id")) == rid for f in rows):
+            raise Conflict(f"thư mục chung '{name}' (hoặc gốc {rid}) đã có — đổi chế độ bằng `cfharness filehub switch`")
+        row = {"name": name, "root_id": rid, "ws_id": str(r.get("ws_id") or "") or None, "kind": "workspace" if r.get("kind") == "workspace" else "folder",
+               "mode": "lane", "server": server}
+        self.hub.config.set("filehub.folders", rows + [row])
+        if not self.fh.enabled():
+            self.hub.config.set("filehub.enabled", True)
+        return {**row, "workspace": f"{REF_PREFIX}{name}"}
+
+    async def switch(self, p: dict[str, Any]) -> dict[str, Any]:
+        """RPC `filehub.switch {name, to: lane|sync, server?, force?}` (CHỈ người).
+
+        → lane: gốc phải được cấp cho khoá; đồng bộ cũ của gốc đó phải yên (status.json: không chờ đẩy/kéo, không bản xung đột, không
+        bị chặn) và không có run giữ khoá → `folders[].mode = lane` → binary sync bỏ gốc (`--remove-root`). Bản sao `~/KhongGianSo/<tên>`
+        để NGUYÊN (chủ repo chốt: hub không bao giờ xoá/di chuyển) và được báo ở trạng thái.
+        → sync: chỉ khi thư mục còn bản sao cục bộ (`local_path`) và không có run lane đang làm việc trên gốc."""
+        from ..service import _real
+
+        name, to = str(p.get("name") or ""), str(p.get("to") or "")
+        if to not in ("lane", "sync"):
+            raise HubError("to phải là lane|sync", code=-32602)
+        rows = self.fh.all_folders()
+        f = next((x for x in rows if x["name"] == name), None)
+        if f is None:
+            raise NotFound(f"không có thư mục chung '{name}'")
+        from ..service import folder_mode
+
+        cur = folder_mode(f, self.hub.config)
+        if cur == to:
+            raise HubError(f"thư mục '{name}' đã ở chế độ {to}")
+        warn: list[str] = []
+        if to == "lane":
+            server = str(p.get("server") or f.get("server") or self.default_server() or "")
+            self.server_cfg(server)
+            h = await self.hello(server, force=True)
+            if str(f.get("root_id")) not in {str(r.get("id")) for r in h.get("roots") or [] if isinstance(r, dict)}:
+                raise HubError(f"gốc {f.get('root_id')} của '{name}' chưa được cấp cho khoá cổng '{server}' — cấp ở Không gian số › Hồ sơ › Cổng cfharness")
+            if f.get("local_path") and self.hub.runs.locks.holder(_real(f["local_path"])):
+                raise Conflict(f"thư mục '{name}' đang có run ghi — chờ xong rồi chuyển")
+            st = self.fh.read_status() or {}
+            r = next((x for x in st.get("roots") or [] if isinstance(x, dict) and x.get("id") == f.get("root_id")), None)
+            if r is None:
+                if not p.get("force"):
+                    raise Conflict(f"không đọc được trạng thái đồng bộ của '{name}' — không biết còn thay đổi chưa đồng bộ không. Chạy đồng bộ tới khi "
+                                   "yên rồi chuyển, hoặc --force nếu chắc chắn")
+                warn.append("không kiểm được trạng thái đồng bộ (--force)")
+            else:
+                busy = [k for k in ("pending_up", "pending_down") if r.get(k)] + (["conflicts"] if r.get("conflicts") else []) + (["blocked"] if r.get("blocked") else [])
+                if busy or str(r.get("state") or "idle") not in ("idle", "ok", "synced"):
+                    raise Conflict(f"đồng bộ của '{name}' chưa yên ({', '.join(busy) or r.get('state')}) — chờ đồng bộ xong / xử lý bản xung đột rồi chuyển")
+            nf = {**f, "mode": "lane", "server": server}
+        else:
+            if not f.get("local_path") or not os.path.isdir(os.path.expanduser(str(f["local_path"]))):
+                raise HubError(f"thư mục '{name}' không có bản sao trên máy — thêm lại bằng `cfharness filehub add` (chế độ sync)")
+            srv = self.folder_server(f)
+            if srv and self.hub.runs.locks.holder(lock_key(srv, str(f.get("root_id")))):
+                raise Conflict(f"thư mục '{name}' đang có run làm việc qua cổng — chờ xong rồi chuyển")
+            nf = {**f, "mode": "sync"}
+            warn.append("bản sao trên máy có thể cũ hơn Không gian số — đồng bộ sẽ đối chiếu lại")
+        self.hub.config.set("filehub.folders", [nf if x["name"] == name else x for x in rows])
+        try:
+            self.fh._apply_change()  # binary sync: thêm lại / bỏ gốc (`--remove-root` cho gốc không còn ở chế độ sync)
+        except Exception:  # pragma: no cover
+            log.exception("lane: áp đổi chế độ cho binary sync lỗi")
+        out = {"name": name, "mode": to, "server": nf.get("server"), "workspace": f"filehub:{name}", "warnings": warn}
+        if to == "lane" and f.get("local_path"):
+            out["old_copy"] = f["local_path"]
+            out["note"] = (f"bản sao cũ {f['local_path']} GIỮ NGUYÊN (hub không xoá) — kiểm rồi tự xoá; agent làm việc qua cây theo run từ nay. "
+                           "Khi mọi thư mục đã ở chế độ lane: thu hồi thiết bị đồng bộ ở Không gian số › Hồ sơ › Thiết bị.")
+        return out
 
     # ------------------------------------------------------------------ vòng nền: hạn khoá, mồ côi quá hạn, cây của run đã xong (daemon khởi động lại)
     def start(self) -> None:

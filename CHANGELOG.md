@@ -22,6 +22,10 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   chặn TRƯỚC khi đẩy** (không một byte nào rời máy, agent được báo). Hết run còn thay đổi chưa đẩy được → giữ ở cây mồ côi
   (`cfharness filehub lane orphan push|drop <run>`, tự dọn sau 7 ngày). Diff của run lấy từ nhật ký thao tác; hoàn tác ở phiên bản/thùng rác
   Không gian số.
+- Chuyển từng thư mục: `cfharness filehub switch <tên> --to lane|sync` (từ chối khi đồng bộ còn dở / gốc chưa được cấp cho khoá / có run
+  đang ghi) — bản sao `~/KhongGianSo/<tên>` cũ **để nguyên** (hub không xoá), được báo ở `filehub lane status` và thẻ web. Thư mục mới:
+  `cfharness filehub lane add <id gốc>`. Thẻ "Cổng cfharness" ở Cài đặt web (khoá chỉ nhập ở bước 2). Trên Không gian số thấy dải
+  "cfharness · <agent> · đang sửa <tệp>" trong lúc run ghi. `setup-hub-user.sh`: `KGS_MODE=lane`.
 
 ### MCP server
 - `cfharness mcp add|edit <tên> --url … --oauth …`: cờ đặt SAU tên được đọc đúng — trước đây bị lưu lặng lẽ thành lệnh stdio

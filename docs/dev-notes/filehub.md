@@ -3,6 +3,9 @@
 Ngày: 2026-11-15 (gốc workspace + cài đặt trên web: 2026-11-16, PR H7 — `plan-filehub-workspace-root.md`). Plan + quyết định + hợp đồng 3 repo:
 `plan-cloud-files.md` (§3, §7, §8). Không có migration.
 
+> **Chế độ `lane` (cổng cfharness, 2026-11-17):** thư mục có `folders[].mode = lane` (hoặc `filehub.mode = lane`) KHÔNG đồng bộ về máy —
+> cây làm việc theo run qua cổng loopback của Không gian số. Xem `plan-filehub-lane.md` (§C hợp đồng, §10 đã làm). Mọi mục dưới đây là chế độ `sync`.
+
 ## Tóm tắt
 
 Một thư mục đồng bộ 2 chiều giữa máy chạy hub (`~/KhongGianSo/<tên>/`) và một thư mục người là Owner trên Không gian số. Đồng bộ do

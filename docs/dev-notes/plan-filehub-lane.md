@@ -1,6 +1,6 @@
 # Plan: cổng cfharness — thư mục chung Không gian số không qua đồng bộ (`filehub` chế độ `lane`)
 
-Ngày: 2026-11-17. Trạng thái: PLAN + HỢP ĐỒNG (chưa code). Nhánh `feat/filehub-lane`. Thay thế dần `plan-cloud-files.md` §3–§5 + §8.3
+Ngày: 2026-11-17. Trạng thái: H1–H4 ĐÃ LÀM trên fake (§10); nghiệm thu thật chờ K1–K4. Nhánh `feat/filehub-lane`. Thay thế dần `plan-cloud-files.md` §3–§5 + §8.3
 (đồng bộ 2 chiều qua `tang-thu-sync-headless`); quyết định §7 của plan đó (xoá = `write`, mọi run được đọc, nội dung là DỮ LIỆU) GIỮ NGUYÊN.
 Plan phía Không gian số: `quan-ly-thu-muc-ai` `docs/PLAN-cong-cfharness.md` (cùng §C).
 
@@ -115,7 +115,8 @@ xoá, nâng nhãn Tối mật) không còn trong `roots`.
  "mtime": "2026-11-17T08:00:00Z", "locked": false, "label": null}
 ```
   Thư mục: `type: "folder"`, không `version_id|size|sha256|mime`. `label`: `null|"mat"` (Tối mật không bao giờ xuất hiện). Mục mà
-  người dùng không thấy, thuộc thư mục `claude_allowed = false`, hoặc Tối mật → coi như không tồn tại (`404 not_found`).
+  người dùng không thấy, thuộc thư mục `claude_allowed = false`, hoặc Tối mật → coi như không tồn tại (`404 not_found`). Tệp khớp mẫu
+  loại trừ ACL-04 (`.env`, `*.pem`, khoá riêng… – như phiên Claude) cũng vô hình; ghi vào đúng tên đó → `403 forbidden`.
 
 ### C.5 Đọc
 | Lệnh | Trả |
@@ -163,6 +164,8 @@ xoá, nâng nhãn Tối mật) không còn trong `roots`.
 | 503 | `scan_unavailable` | `retry_after` | lùi + thử lại (fail-closed: không bao giờ ghi khi chưa quét) |
 | 507 | `storage_full` | `scope`, `used_bytes`, `quota_bytes` | dừng đẩy gốc đó, báo người |
 
+`current` bị bỏ khi mục đang chiếm tên vô hình với agent (thư mục Claude tắt, Tối mật, mẫu loại trừ) – không lộ gì thêm.
+
 ### C.8 Luồng sự kiện
 `GET /lane/v1/events?cursor=<cursor>` (hoặc header `Last-Event-ID`), `Accept: text/event-stream`. Không có cursor → từ đầu luồng hiện
 tại. Mỗi khung:
@@ -173,11 +176,12 @@ data: {"root":"6f1c…","op":"update","type":"file","id":"0b7e…","path":"Báo 
        "version_id":"77aa…","size":48900,"sha256":"1b4e…","by_kind":"human","self":false,"agent":null,"request_id":null,
        "at":"2026-11-17T08:01:02Z"}
 ```
-- `op` ∈ `create|update|move|rename|delete|restore|acl`. `path` = đường dẫn SAU thay đổi (xoá: đường dẫn cuối cùng); `from_path` khi
-  `move|rename`. Một mục thuộc nhiều gốc được cấp → một khung cho mỗi gốc.
+- `op` ∈ `create|update|move|rename|delete|restore|acl`. `path` = đường dẫn SAU thay đổi (xoá: đường dẫn cuối cùng; mục đã bị dọn hẳn
+  khỏi DB: `path: null`, `gone: true`); `from_path` khi `move|rename` (null khi chỗ cũ ngoài gốc). Một mục thuộc nhiều gốc được cấp → một khung cho mỗi gốc.
 - `by_kind` ∈ `human|cfharness|claude|device|source|system` — KHÔNG có tên người. `self: true` khi chính khoá này ghi (kèm `agent`,
   `request_id` = `Idempotency-Key`) → hub bỏ qua tiếng vọng.
-- `op: acl` hoặc mục rời khỏi phạm vi nhìn thấy → `{"op":"acl","gone":true,…}`: hub `stat`/`list` lại `path`.
+- `op: acl` hoặc mục rời khỏi phạm vi nhìn thấy → `{"op":"acl","gone":true,…}`: hub `stat`/`list` lại `path` (= thư mục gần nhất
+  CÒN thấy được – không lộ tên mới của mục vô hình; `""` = gốc).
 - `event: reset` `{"root": "…", "reason": "compacted|acl|restored"}` — cursor quá cũ (journal đã nén, > 30 ngày) hoặc thay đổi hàng loạt:
   hub `list?recursive=1` lại gốc đó rồi nối luồng bằng `cursor` của lượt list.
 - `event: root_revoked` `{"root": "…"}` · `event: key_revoked` (rồi đóng) · `event: replaced` (luồng thứ 3 mở → luồng cũ nhất bị đóng)
@@ -286,3 +290,32 @@ H1 song song với K1; H2/H3 viết trên fake, nghiệm thu thật chỉ sau kh
 8. **Bản sao `~/KhongGianSo/*` cũ để nguyên** và báo (status/thẻ web) — hub KHÔNG BAO GIỜ xoá/di chuyển (thay §5 bước 3 "chuyển vào trash").
 9. (thêm) **Khoá hết hạn sau 180 ngày**, cảnh báo trước khi hết hạn (`filehub.lane.key_warn_days`, mặc định 14): `expires_at` của server
    nếu có, không thì `set_at + filehub.lane.key_max_days`.
+
+## 10. Đã làm phía cfharness (H1–H4, nhánh `feat/filehub-lane`) — chạy trên server giả, chưa nghiệm thu thật
+
+| PR | Nội dung | Test |
+|---|---|---|
+| H1 | `filehub/lane/client.py` (§C đầy đủ: C.3 hello, C.5 đọc, C.6 ghi + Idempotency-Key, C.7 → `LaneError`, C.8 SSE một kết nối), `check_url` chỉ loopback, `norm_rel` (C.4 phía hub); `LaneService.setup|test|disable|status` — khoá `FILEHUB_LANE_<TÊN>` chỉ secret store, gỡ khỏi params trước audit; hạn khoá 180 ngày + cảnh báo; `filehub.mode` + `folders[].mode` (mặc định `sync`); RPC/CLI `filehub lane …` (HUMAN_ONLY); gói `clone` bỏ khoá | `test_lane_client.py` |
+| H2 | Luồng SSE/server khi có cây (cursor bền `hub_state filehub.lane`, nối lại 0,5→10 s + `Last-Event-ID`, `reset`/`root_revoked`/`key_revoked`); `Workdir.materialize` (đúng phạm vi, lười > 50 MB, chế độ `tools` khi quá ngưỡng/chỉ đọc); kéo thay đổi của người + steer một lần/(run, tệp) + `filehub.human_changed{latency_ms}`; hub-self `fs_*` (`--fs ro|rw`) → `fsself.call` (ràng run như `taskself.call`, ∈ `auth.SCOPED_READ`); RunManager: ref lane → `run_opts.filehub_lane`, khoá `filehub-lane:<server>:<root>`, dựng cây trước spawn (lỗi → `failed` `filehub_unavailable`); task/dispatcher/locks/manager hiểu ref lane; classifier `filehub_lane` (cấm, ∈ `TRUST_NEVER_RULES`) | `test_lane_service.py`, `test_guard_classifier.py::test_lane_port_forbidden` |
+| H3 | Đẩy: quét mtime + kích theo `tool.complete`, gộp `push_quiet_s` + trần `push_min_interval_s`, `If-Match`/`If-None-Match: *`, xoá → thùng rác, đổi tên → `move` (theo sha256), thư mục; bỏ symlink/liên kết cứng/tệp rác; **quét secret trước khi đẩy**; 409 → bản xung đột; 423 → hàng đợi + steer một lần; 429/503 lùi; 422 infected; 401/507 dừng; flush cuối run → `runs.diff{kind: lane}` + `workspace.diff` + `filehub.changed|deleted`; mồ côi `filehub/lane-orphans/<tree>` + `filehub.push_failed` + `filehub.lane_orphan push|drop`; `waiting_human` → đỗ cây, chạy tiếp đối soát (thay đổi của người lúc chờ vào tin đầu); vòng bảo trì (`export_quiesced`) đẩy nốt cây của run đã chết, dọn mồ côi > 7 ngày | `test_lane_workdir.py` |
+| H4 | Presence (`PUT` ở nửa ttl / khi tệp đẩy gần nhất đổi, `DELETE` cuối run, run chỉ đọc không có); `filehub switch <tên> --to lane|sync` (từ chối khi đồng bộ chưa yên / gốc chưa cấp / có run; bản sao cũ để nguyên + báo); `filehub lane add`; thẻ web "Cổng cfharness" (khoá chỉ ở bước 2 — `Action.reenter` + `secret_fields`); `setup-hub-user.sh` `KGS_MODE=lane` | `test_lane_switch.py` |
+
+Lệch plan (không đổi §C ngoài tên tệp fake):
+- **Cây ở `<HUB_HOME>/agents/<agent>/workspaces/lane-<tree>`** thay cho `HUB_HOME/workspaces/lane/<run>`: classifier/sandbox coi mọi đường dẫn
+  HUB_HOME ngoài vùng làm việc của agent là vùng hub (ghi/xoá bị giữ chờ người). `tree` = run ĐẦU của chuỗi (continue/resume/retry/auto-resume
+  dùng lại CÙNG cây → `claude --resume` tìm session theo cwd). `workspace_kind` của spec vẫn `dir` (không bao giờ scratch/bypass).
+- Fake server: `tests/fake_kgs_lane.py` (ThreadingHTTPServer stdlib, TCP loopback thật — SSE đứt/nối lại thật) — §C ghi tên này ở cả hai repo.
+- Kích quét bằng event `tool.complete` của run (thay cho hook PostToolUse riêng) + quét mtime `scan_interval_s`.
+- Đẩy từ bộ nhớ, trần 256 MB/tệp (`client.UPLOAD_MAX_BYTES`, httpx async không gửi tệp đồng bộ có Content-Length) — lớn hơn: báo agent `too_large`.
+- Chuyển chế độ KHÔNG chuyển bản sao cũ vào trash (quyết định 8): để nguyên, báo ở `lane status`/thẻ web.
+- Xung đột dùng lại event `filehub.conflict` (thêm `run_id`, `copy`). `filehub.lane_test` là HUMAN_ONLY (dùng khoá dù chỉ đọc).
+- Thay đổi của người khi run chưa chạy (đối soát lúc chạy tiếp) không steer được → vào TIN ĐẦU của lượt sau.
+
+Việc còn lại:
+- Nghiệm thu thật trên qltm sau khi K1–K4 lên (plan §7 H4); `tested` với claude thật (steer + Write/Edit trong cây).
+- `run.revert` cho run lane = khôi phục phiên bản trước run qua `restore` (HUMAN_ONLY) — chưa làm (`run revert` từ chối như sync).
+- Run KHÔNG có workspace `filehub:` không đọc được thư mục lane (không có bản sao) — §7.4 "mọi run được đọc" chỉ còn với `sync`; cần
+  quyết: cho mọi run `fs_*` chỉ đọc theo gốc, hay giữ như vậy.
+- Presence không làm mới trong lúc cây đỗ (`waiting_human`) — hết hạn theo ttl.
+- Chặn đọc cây lane của agent KHÁC bằng sandbox (hiện như scratch của agent).
+- H5 (gỡ đồng bộ cũ) — ngoài phạm vi.

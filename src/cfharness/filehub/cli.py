@@ -65,9 +65,19 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     ld = ls.add_parser("disable", help="xoá khoá + cấu hình cổng", parents=[common])
     ld.add_argument("--server", required=True)
     ld.add_argument("--force", action="store_true", help="kể cả khi còn thư mục chế độ lane dùng cổng này")
+    la = ls.add_parser("add", help="thêm thư mục chung chế độ lane từ một gốc khoá được cấp (không bản sao trên máy)", parents=[common])
+    la.add_argument("root_id")
+    la.add_argument("--name")
+    la.add_argument("--server")
     lo = ls.add_parser("orphan", help="cây mồ côi (thay đổi chưa đẩy lên được khi run kết thúc): push = đẩy lại, drop = bỏ", parents=[common])
     lo.add_argument("orphan_action", choices=("push", "drop"))
     lo.add_argument("tree")
+    sw2 = ss.add_parser("switch", help="đổi chế độ một thư mục chung: sync (đồng bộ 2 chiều cũ) ↔ lane (cổng cfharness) — bản sao cũ để nguyên",
+                        parents=[common])
+    sw2.add_argument("name")
+    sw2.add_argument("--to", required=True, choices=("lane", "sync"))
+    sw2.add_argument("--server", help="cổng (mặc định: cổng duy nhất đã thiết lập)")
+    sw2.add_argument("--force", action="store_true", help="chuyển dù không đọc được trạng thái đồng bộ")
     s.set_defaults(fn=cmd_filehub)
 
 
@@ -208,6 +218,10 @@ def _cmd_lane(ctx: Any) -> int:
 
 def _cmd_lane_more(ctx: Any, act: str) -> int:
     a = ctx.args
+    if act == "add":
+        r = ctx.call("filehub.lane_add", {"root_id": a.root_id, "name": a.name, "server": a.server})
+        ctx.out(r, f"Đã thêm thư mục chung «{r['name']}» (chế độ lane, cổng {r['server']}) — giao việc: workspace {r['workspace']}")
+        return 0
     if act == "orphan":
         r = ctx.call("filehub.lane_orphan", {"tree": a.tree, "action": a.orphan_action})
         if r.get("dropped"):
@@ -226,6 +240,11 @@ def cmd_filehub(ctx: Any) -> int:
     act = a.fh_action or "status"
     if act == "lane":
         return _cmd_lane(ctx)
+    if act == "switch":
+        r = ctx.call("filehub.switch", {"name": a.name, "to": a.to, "server": a.server, "force": a.force})
+        ctx.out(r, f"Đã chuyển «{r['name']}» sang chế độ {r['mode']}." + (f"\n{r['note']}" if r.get("note") else "")
+                + "".join(f"\n⚠ {w}" for w in r.get("warnings") or []))
+        return 0
     if act == "status":
         r = ctx.call("filehub.status", {})
         if ctx.json:

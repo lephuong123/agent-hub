@@ -8,7 +8,8 @@
   `filehub.switch_to_workspace {local_path?, relay?, no_browser?}`; `filehub.add {root_id, name?, ws_id?, local_path?, kind?}`;
   `filehub.remove {name}`; `filehub.rename {name, new_name}` (đổi tên cfharness — tên cũ thành bí danh); `filehub.pause {}`; `filehub.resume {root_id?}` (root_id = cho chiều đẩy lên đang bị chặn đi tiếp).
 - cổng cfharness (chế độ lane, filehub/lane/): `filehub.lane_status {}` (đọc, không khoá) · `filehub.lane_setup {server, url, key}` (khoá
-  chỉ người nhập — CLI getpass / web bước 2; gỡ khỏi params trước audit) · `filehub.lane_test {server}` · `filehub.lane_disable {server, force?}`.
+  chỉ người nhập — CLI getpass / web bước 2; gỡ khỏi params trước audit) · `filehub.lane_test {server}` · `filehub.lane_disable {server, force?}` · `filehub.lane_add {root_id, name?, server?}` ·
+  `filehub.switch {name, to: lane|sync, server?, force?}` · `filehub.lane_orphan {tree, action: push|drop}` — mọi ghi là HUMAN_ONLY.
 - `relay: true` (web mở qua `web.public_origin`): binary đăng nhập với redirect về `<public_origin>/filehub/oauth/cb` thay cho listener loopback.
 Điều phối viên KHÔNG có method ghi nào ở đây (không thuộc MANAGER_ALLOWED); đọc qua tool hub-self `filehub_list|filehub_link`.
 """
@@ -25,9 +26,9 @@ if TYPE_CHECKING:
 MUTATING_FILEHUB = ("filehub.setup", "filehub.login", "filehub.login_callback", "filehub.switch_to_workspace", "filehub.add", "filehub.remove",
                     "filehub.rename", "filehub.pause", "filehub.resume",
                     # cổng cfharness (filehub/lane/): khoá hub chỉ người nhập (CLI getpass / web bước 2), gỡ khỏi params trước audit
-                    "filehub.lane_setup", "filehub.lane_disable", "filehub.lane_orphan")
+                    "filehub.lane_setup", "filehub.lane_disable", "filehub.lane_orphan", "filehub.lane_add", "filehub.switch")
 # Cổng cfharness — chỉ người (HUMAN_ONLY), KHÔNG ∈ MANAGER_ALLOWED. `lane_test` không ghi nhưng dùng khoá → chỉ người.
-HUMAN_ONLY_LANE = ("filehub.lane_setup", "filehub.lane_disable", "filehub.lane_test", "filehub.lane_orphan")
+HUMAN_ONLY_LANE = ("filehub.lane_setup", "filehub.lane_disable", "filehub.lane_test", "filehub.lane_orphan", "filehub.lane_add", "filehub.switch")
 
 
 def _req(p: dict[str, Any], key: str) -> Any:
@@ -72,7 +73,9 @@ def register_rpc(daemon: "Daemon") -> None:
         "filehub.lane_setup": s.lane.setup,  # khoá bị pop khỏi p NGAY đầu hàm (audit không thấy)
         "filehub.lane_test": s.lane.test,
         "filehub.lane_disable": s.lane.disable,
-        "filehub.lane_orphan": s.lane.orphan,  # {tree, action: push|drop} — cây mồ côi (thay đổi chưa đẩy được khi run kết thúc)
+        "filehub.lane_orphan": s.lane.orphan,
+        "filehub.lane_add": s.lane.add_folder,  # {root_id, name?, server?} — thư mục chế độ lane mới (không bản sao)
+        "filehub.switch": s.lane.switch,  # {name, to: lane|sync, server?, force?} — bản sao cũ để nguyên  # {tree, action: push|drop} — cây mồ côi (thay đổi chưa đẩy được khi run kết thúc)
         # tool hub-self `fs_*` của run có workspace thư mục chung chế độ lane — daemon ràng run_id với tiến trình gọi (như taskself.call)
         "fsself.call": s.lane.fsself_call,
     }
