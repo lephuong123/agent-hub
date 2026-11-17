@@ -509,6 +509,45 @@ def test_cli_web_url_mints_link_from_running_server_state(hub_home, capsys):
     state_path(hub_home).unlink()
 
 
+def test_pid_reused_compares_process_start_with_state_time():
+    from cfharness.web.security import pid_reused
+
+    assert pid_reused(42, 1000.0, start_time=lambda pid: 1500.0)  # tiến trình mang pid sinh SAU lúc ghi state → tái dùng
+    assert not pid_reused(42, 1000.0, start_time=lambda pid: 990.0)  # web thật: bắt đầu trước khi ghi state
+    assert not pid_reused(42, 1000.0, start_time=lambda pid: 1001.0)  # ps chỉ chính xác tới giây → có khoảng dung sai
+    assert not pid_reused(42, 1000.0, start_time=lambda pid: None)  # không đọc được → giữ hành vi cũ
+    assert not pid_reused(42, None, start_time=lambda pid: 1500.0)  # state cũ thiếu started_at
+    assert not pid_reused(42, True, start_time=lambda pid: 1500.0)
+
+    def boom(pid):
+        raise OSError("ps lỗi")
+
+    assert not pid_reused(42, 1000.0, start_time=boom)
+
+
+def test_read_state_ignores_pid_reused_after_reboot(hub_home, tmp_path):
+    """Sự cố 2026-11-17: sau khởi động lại máy pid trong web.json thuộc tiến trình khác → web tưởng đã chạy, thoát 0 mãi (502)."""
+    import subprocess
+    import sys
+
+    write_state(hub_home, host="127.0.0.1", port=8790, key=os.urandom(32))
+    assert read_state(hub_home)["pid"] == os.getpid()  # web thật (chính tiến trình này) vẫn được nhận
+    p = state_path(hub_home)
+    data = json.loads(p.read_text(encoding="utf-8"))
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        data.update(pid=child.pid, started_at=time.time() - 3600)  # state ghi từ 1 giờ trước, pid nay là tiến trình vừa sinh
+        p.write_text(json.dumps(data), encoding="utf-8")
+        assert read_state(hub_home) is None
+        data["started_at"] = time.time() + 60  # cùng pid nhưng tiến trình có trước lúc ghi state → đúng server
+        p.write_text(json.dumps(data), encoding="utf-8")
+        assert read_state(hub_home)["pid"] == child.pid
+    finally:
+        child.kill()
+        child.wait()
+        p.unlink()
+
+
 def test_agent_in_run_cannot_reach_web_secrets(hub_home):
     """Agent trong run: sandbox chặn đọc HUB_HOME/auth (khoá ký link web), tool Read bị deny, lệnh `cfharness web` bị cấm."""
     from cfharness.guard.classifier import GuardContext, classify

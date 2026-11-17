@@ -248,10 +248,30 @@ def read_state(paths: HubPaths) -> dict[str, Any] | None:
         pid = int(data["pid"])
         if not pid_alive(pid):  # KHÔNG os.kill(pid, 0) — trên Windows đó là TerminateProcess
             return None
+        if pid_reused(pid, data.get("started_at")):
+            return None
         bytes.fromhex(data["key"])
         return data
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
         return None
+
+
+PID_REUSE_SLACK_S = 2.0
+
+
+def pid_reused(pid: int, started_at: Any, *, start_time: Callable[[int], float | None] | None = None) -> bool:
+    """pid trong `web.json` đã bị tiến trình KHÁC tái dùng? = tiến trình đang mang pid bắt đầu SAU lúc web ghi state.
+    Sự cố 2026-11-17: khởi động lại máy → pid cũ (316/319/320) thuộc tiến trình hệ thống → web tưởng đã có server, in link rồi
+    thoát 0 → launchd bật lại mãi, không ai nghe cổng (502). Không đọc được thời điểm / state cũ thiếu `started_at` → giữ hành vi cũ."""
+    if not isinstance(started_at, (int, float)) or isinstance(started_at, bool):
+        return False
+    if start_time is None:
+        from ..recovery import pid_start_time as start_time
+    try:
+        st = start_time(int(pid))
+    except Exception:  # noqa: BLE001
+        return False
+    return st is not None and st > float(started_at) + PID_REUSE_SLACK_S
 
 
 def clear_state(paths: HubPaths, pid: int | None = None) -> None:
