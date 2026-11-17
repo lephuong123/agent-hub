@@ -10,6 +10,12 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Không gian số (thư mục dùng chung)
+- **Báo sau run cho thư mục ghi thêm**: run có `extra_write_roots` nằm trong thư mục chung (vd task làm ở scratch nhưng được ghi vào
+  `~/KhongGianSo/<tên>/Báo cáo`) giờ cũng báo tệp đã xoá / đã đổi / có thể chứa bí mật sau run — như run có workspace `filehub:`.
+- **Đổi tên thư mục chung trong cfharness**: `cfharness filehub rename <tên cũ> <tên mới>` hoặc "Đổi tên trong cfharness" ở thẻ Không gian số
+  (Cài đặt). Chỉ đổi tên dùng để giao việc (`filehub:<tên>`); đường dẫn trên máy và tên trên Không gian số giữ nguyên, tên cũ vẫn khớp
+  (task/agent đã ghi `filehub:<tên cũ>` chạy tiếp). Từ chối khi có run đang ghi vào thư mục hoặc thư mục chưa đồng bộ lần đầu.
 ### Tính năng mới
 - **Trang "Hệ thống ngoài" trên web** (`/systems`, nhóm "Hệ thống" ở thanh bên): xem các app trong thư mục làm việc và job launchd của chúng
   (trạng thái, pid, ai tạm dừng, lịch), quét tìm + đăng ký hệ thống mới, thêm theo đường dẫn, gỡ, khoá/mở khoá job, tạm dừng / bật lại /

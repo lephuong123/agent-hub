@@ -4,6 +4,8 @@
   `filehub.folders = [{name, root_id, ws_id, local_path, kind, account?}]` (v1 dùng 1, code sẵn cho N). `kind` = `folder` (MỘT thư mục,
   cây con) | `workspace` (TOÀN BỘ một workspace — gốc ảo `root_id = ws_id`, docs/dev-notes/plan-filehub-workspace-root.md); thiếu = folder.
 - Đổi tên trên web không đổi id: `local_path` + tên cfharness GIỮ; tên sống (`status.roots[].server_name`) là BÍ DANH trong `resolve_ref`.
+- Đổi tên cfharness (`filehub.rename`, chỉ người): `name` mới, `local_path` GIỮ; tên cũ vào `aliases` (≤ `ALIASES_MAX`) để task/agent/run đã
+  ghi `filehub:<tên cũ>` vẫn khớp. Thứ tự khớp: tên cfharness → bí danh cũ → tên sống trên web.
 - Đăng nhập: listener loopback của binary (CLI / web mở trên máy hub) hoặc RELAY OAuth (web mở qua `web.public_origin`): binary chạy với
   `--redirect-uri <public_origin>/filehub/oauth/cb`, hub giữ `state` của LOGIN_URL (≤ `relay_timeout_s`, MỘT lần) → route công khai của web
   gọi `filehub.login_callback{code, state}` → so `compare_digest` → ghi `CODE <code>\t<state>` vào stdin của binary (PKCE verifier không rời binary).
@@ -15,7 +17,8 @@
 - Steer: `recent` có thay đổi chiều `down` trong khi một run đang giữ khoá gốc thư mục → `steer(by="hub")` câu cố định (tiếng Anh).
   `signals` bỏ qua steer `by=="hub"` (không phải correction của người).
 - Sau run trên workspace `filehub:`: xoá → `filehub.deleted` (không hỏi duyệt — §7.3), đổi → `filehub.changed`, tệp mới/sửa chứa GIÁ TRỊ
-  secret hub biết (`redact`) → `filehub.secret_warning` (chỉ cảnh báo, tệp đã lên cloud).
+  secret hub biết (`redact`) → `filehub.secret_warning` (chỉ cảnh báo, tệp đã lên cloud). Cũng cho mỗi `extra_write_roots` của run nằm
+  trong thư mục chung (`RunManager` chụp danh sách tệp riêng — `extra_checkpoints` — rồi gọi `report_extra`; payload có `extra_root`).
 """
 
 from __future__ import annotations
@@ -51,6 +54,7 @@ IGNORE_BASE = (".git/", "node_modules/", ".DS_Store", "Thumbs.db", "*.tmp", "*.s
 DEVICE_NAME_MAX = 40
 META_PREFIX = ".tangthu"
 KINDS = ("folder", "workspace")
+ALIASES_MAX = 5  # tên cfharness cũ giữ làm bí danh sau `filehub.rename`
 RELAY_PATH = "/filehub/oauth/cb"
 # code/state của callback OAuth đi vào MỘT dòng stdin của binary (`CODE <code>\t<state>`) — chỉ ký tự an toàn cho URL, không tab/xuống dòng
 _TOKEN_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~+/=")
@@ -208,6 +212,11 @@ def kind_of(f: dict[str, Any] | None) -> str:
     return k if k in KINDS else "folder"
 
 
+def aliases_of(f: dict[str, Any] | None) -> list[str]:
+    v = (f or {}).get("aliases") or []
+    return [str(x) for x in v if isinstance(x, str) and valid_name(x)][:ALIASES_MAX] if isinstance(v, list) else []
+
+
 def valid_token(v: Any) -> bool:
     return isinstance(v, str) and 0 < len(v) <= TOKEN_MAX and all(c in _TOKEN_CHARS for c in v)
 
@@ -322,10 +331,15 @@ class FilehubService:
     def paused(self) -> bool:
         return bool(self.hub.store.state_get("filehub.paused"))
 
-    def folder(self, name: str) -> dict[str, Any]:
+    def folder(self, name: str, *, aliases: bool = False) -> dict[str, Any]:
+        """Thư mục theo tên cfharness; `aliases=True` → cả tên cũ sau `filehub.rename` (run/task đã ghi tên cũ)."""
         for f in self.folders():
             if f["name"] == name:
                 return f
+        if aliases:
+            for f in self.folders():
+                if name in aliases_of(f):
+                    return f
         raise NotFound(f"không có thư mục chung '{name}' (cfharness filehub status)")
 
     def _known_account(self) -> str:
@@ -344,6 +358,10 @@ class FilehubService:
             n = f["name"]
             if body == n or body.startswith(n + "/"):
                 return f, body[len(n):].lstrip("/")
+        old = sorted(((a, f) for f in folders for a in aliases_of(f)), key=lambda x: -len(x[0]))  # tên cũ sau `filehub.rename`
+        for a, f in old:
+            if body == a or body.startswith(a + "/"):
+                return f, body[len(a):].lstrip("/")
         names = live_names(self.hub)
         hits = []
         for f in folders:
@@ -577,6 +595,7 @@ class FilehubService:
             out_f.append({
                 "name": f["name"], "root_id": f.get("root_id"), "local_path": f["local_path"], "state": r.get("state") or ("pending" if f.get("root_id") else "no_root"),
                 "kind": kind, "server_name": live, "renamed": bool(live and live != f["name"]), "account": account or None,
+                "aliases": aliases_of(f),
                 "display": (f"Toàn bộ workspace «{live or f['name']}»" if kind == "workspace" else f"Thư mục «{live or f['name']}»"),
                 "root_files": root_files, "unpushable": other_unpushable, "revoked": root_revoked(r),
                 # gốc workspace mất admin (binary S5 `last_error=root_revoked`, không ngắt): cấp lại quyền → tự chạy tiếp, không đăng nhập lại
@@ -618,6 +637,8 @@ class FilehubService:
                    "kind": kind_of(f), "server_name": live or f["name"]}
             if live and live != f["name"]:  # đổi tên trên web: tên cfharness giữ, tên mới là bí danh (`filehub:<tên mới>` cũng khớp)
                 row["note"] = f"{f['name']} — trên web hiện là «{live}»"
+            if aliases_of(f):
+                row["aliases"] = aliases_of(f)
             if kind_of(f) == "workspace":
                 row["layout"] = "root = whole workspace; new files must be inside a top-level folder"
             out.append(row)
@@ -773,7 +794,7 @@ class FilehubService:
         if not name:
             return None
         try:
-            return self.folder(str(name))
+            return self.folder(str(name), aliases=True)
         except NotFound:
             return None
 
@@ -807,6 +828,25 @@ class FilehubService:
         diff = run.get("diff")
         if f is None or not isinstance(diff, dict) or not diff.get("root"):
             return None
+        return self._report(run_id, run, f, diff)
+
+    def report_extra(self, run_id: str, diffs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Báo sau run cho `extra_write_roots` nằm trong thư mục chung (RunManager chụp danh sách tệp trước run, diff sau run — không có
+        revert). Mỗi gốc thêm một bộ event, payload có `extra_root` (đường dẫn tương đối trong thư mục chung)."""
+        run = self.hub.store.get_run(run_id) or {}
+        out = []
+        for d in diffs:
+            if not isinstance(d, dict) or not d.get("root"):
+                continue
+            f = self.folder_of_path(str(d["root"]))
+            if f is None:
+                continue
+            r = self._report(run_id, run, f, d, extra=True)
+            if r is not None:
+                out.append(r)
+        return out
+
+    def _report(self, run_id: str, run: dict[str, Any], f: dict[str, Any], diff: dict[str, Any], *, extra: bool = False) -> dict[str, Any] | None:
         base = _real(f["local_path"])
         droot = str(diff["root"])
         deleted, changed, secret = [], [], []
@@ -831,7 +871,9 @@ class FilehubService:
                 continue
         link = self.link_for(droot) or {}
         url = link.get("url")
-        common = {"folder": f["name"], "run_id": run_id, "url": url}
+        common: dict[str, Any] = {"folder": f["name"], "run_id": run_id, "url": url}
+        if extra:
+            common["extra_root"] = os.path.relpath(_real(droot), base).replace(os.sep, "/")
         if changed:
             ev = make_event("filehub.changed", run.get("agent_id"), {**common, "count": len(changed), "paths": changed[:20]}, run_id=run_id, source="hub")
             self.hub.publish(ev)
@@ -889,8 +931,8 @@ class FilehubService:
         name = str(name or "").strip() or safe_name(str(granted.get("name") or ""), root_id) or root_id
         if not valid_name(name):
             raise HubError(f"tên thư mục chung không hợp lệ: {name!r} (chữ, số, khoảng trắng, - _ ., ≤ 80 ký tự)")
-        if any(f["name"] == name or f.get("root_id") == root_id for f in self.folders()):
-            raise Conflict(f"thư mục chung '{name}' (root {root_id}) đã có")
+        if any(f["name"] == name or f.get("root_id") == root_id or name in aliases_of(f) for f in self.folders()):
+            raise Conflict(f"thư mục chung '{name}' (root {root_id}) đã có (hoặc là tên cũ của một thư mục chung)")
         ws_id = ws_id or granted.get("ws_id") or None
         kind = str(kind or granted.get("kind") or "folder")
         if kind not in KINDS:
@@ -918,6 +960,36 @@ class FilehubService:
         self.hub.config.set("filehub.folders", [x for x in self.folders() if x["name"] != name])
         self._apply_change()
         return {"removed": name, "local_path": f["local_path"], "note": "tệp trên máy và trên Không gian số được giữ nguyên"}
+
+    def rename(self, name: str, new_name: str) -> dict[str, Any]:
+        """Đổi tên cfharness (`filehub:<tên>`) — chỉ cục bộ: không đổi `local_path`, không đổi tên trên Không gian số. Tên cũ giữ làm bí
+        danh (task/agent/run đã ghi `filehub:<tên cũ>` vẫn chạy). Có run giữ khoá → từ chối; root chưa đồng bộ lần đầu → từ chối (binary
+        còn nhận `--root-name` của lần thêm)."""
+        f = self.folder(str(name or ""))
+        old = f["name"]
+        new_name = str(new_name or "").strip()
+        if not valid_name(new_name):
+            raise HubError(f"tên thư mục chung không hợp lệ: {new_name!r} (chữ, số, khoảng trắng, - _ ., ≤ 80 ký tự)")
+        if new_name == old:
+            raise HubError(f"tên mới trùng tên hiện tại «{old}»")
+        for x in self.folders():
+            if x["name"] != old and (x["name"] == new_name or new_name in aliases_of(x)):
+                raise Conflict(f"tên «{new_name}» đã dùng cho thư mục chung «{x['name']}»")
+        holder = self.hub.runs.locks.holder(_real(f["local_path"]))
+        if holder:
+            raise Conflict(f"thư mục chung '{old}' đang có run {holder.get('run_id')} ghi — dừng run trước khi đổi tên")
+        pend = self.pending_add()
+        if pend is not None and pend.get("root_id") == f.get("root_id"):
+            raise Conflict(f"thư mục chung '{old}' chưa đồng bộ lần đầu — chờ đồng bộ xong rồi đổi tên")
+        aliases = [a for a in aliases_of(f) if a != new_name] + [old]
+        rows = []
+        for x in self.folders():
+            if x["name"] == old:
+                x = {**x, "name": new_name, "aliases": aliases[-ALIASES_MAX:]}
+            rows.append(x)
+        self.hub.config.set("filehub.folders", rows)
+        return {"name": new_name, "previous": old, "aliases": aliases[-ALIASES_MAX:], "local_path": f["local_path"],
+                "workspace": f"{REF_PREFIX}{new_name}", "note": "chỉ đổi tên trong cfharness — đường dẫn trên máy và tên trên Không gian số giữ nguyên"}
 
     def pause(self) -> dict[str, Any]:
         self.hub.store.state_set("filehub.paused", True)

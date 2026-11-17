@@ -308,3 +308,91 @@ def test_workspace_deleted_disconnects_with_reason(env):
     f = st["folders"][0]
     assert st["state"] == "revoked" and f["revoked"] and f["workspace_deleted"] and not f["revoked_temporary"]
     assert f["disconnected_path"] == moved
+
+
+# ------------------------------------------------------------------ báo sau run cho extra_write_roots (việc dở filehub.md)
+async def test_extra_write_roots_in_shared_folder_reported_after_run(env):
+    """Run workspace scratch + `extra_write_roots` trong thư mục chung → cũng có filehub.changed|deleted|secret_warning (payload
+    `extra_root`); gốc ngoài thư mục chung → không báo."""
+    d, s, local, tmp = env
+    register_secret_values("SECRETVALUE-extra-98765432")
+    other = tmp / "ngoai"
+    other.mkdir()
+    (other / "a.txt").write_text("1")
+    bc = local / "Báo cáo"
+    s.by_prompt["EXTRA-GHI"] = {"text": "xong", "files": {str(bc / "moi.md"): "# mới\n", str(bc / "yeu-cau.md"): None,
+                                                         str(bc / "bi-mat.txt"): "k=SECRETVALUE-extra-98765432\n", str(other / "a.txt"): None}}
+    await rpc(d, "task.create", {"assignee": "w1", "title": "EXTRA-GHI", "body": "EXTRA-GHI", "workspace": "scratch",
+                                 "extra_write_roots": [str(bc), str(other)]})
+    await until(lambda: events(d.hub, "filehub.deleted") and events(d.hub, "filehub.changed") and events(d.hub, "filehub.secret_warning"))
+    de = events(d.hub, "filehub.deleted")[0].payload
+    assert de["paths"] == ["Báo cáo/yeu-cau.md"] and de["extra_root"] == "Báo cáo" and de["folder"] == "chung"
+    assert sorted(events(d.hub, "filehub.changed")[0].payload["paths"]) == ["Báo cáo/bi-mat.txt", "Báo cáo/moi.md"]
+    sw = events(d.hub, "filehub.secret_warning")[0].payload
+    assert sw["paths"] == ["Báo cáo/bi-mat.txt"] and "SECRETVALUE" not in json.dumps(sw)
+    await asyncio.sleep(0.2)
+    assert len(events(d.hub, "filehub.deleted")) == 1  # a.txt ngoài thư mục chung: không báo
+
+
+async def test_extra_write_root_covered_by_main_workspace_not_duplicated(env):
+    d, s, local, _ = env
+    s.by_prompt["CHINH-GHI"] = {"text": "x", "files": {"Báo cáo/z.md": "z"}}
+    run = d.hub.runs.submit("w1", "CHINH-GHI", cwd="filehub:chung", run_opts={"extra_write_roots": [str(local / "Báo cáo")]})
+    await until(lambda: events(d.hub, "filehub.changed"))
+    await asyncio.sleep(0.2)
+    ch = events(d.hub, "filehub.changed")
+    assert len(ch) == 1 and ch[0].payload["paths"] == ["Báo cáo/z.md"] and "extra_root" not in ch[0].payload
+    assert ch[0].payload["run_id"] == run["id"]
+
+
+# ------------------------------------------------------------------ đổi tên cfharness (filehub.rename)
+def _synced(d, local):
+    fh = d.hub.filehub
+    fh.prepare_files()
+    fh.status_path.write_text(json.dumps({"state": "idle", "roots": [{"id": "r_chung", "local_path": str(local), "state": "idle"}]}))
+
+
+async def test_rename_keeps_local_path_and_old_name_as_alias(env):
+    from cfharness.errors import Conflict
+
+    d, s, local, _ = env
+    fh = d.hub.filehub
+    with pytest.raises(HubError, match="chưa đồng bộ lần đầu"):  # binary còn nhận --root-name của lần thêm
+        await rpc(d, "filehub.rename", {"name": "chung", "new_name": "Dự án"})
+    _synced(d, local)
+    for bad, msg in (("", "thiếu"), ("../x", "không hợp lệ"), ("chung", "trùng tên hiện tại")):
+        with pytest.raises(HubError, match=msg):
+            await rpc(d, "filehub.rename", {"name": "chung", "new_name": bad})
+    r = await rpc(d, "filehub.rename", {"name": "chung", "new_name": "Dự án"})
+    assert r["name"] == "Dự án" and r["previous"] == "chung" and r["local_path"] == str(local) and r["workspace"] == "filehub:Dự án"
+    f = fh.folders()[0]
+    assert f["name"] == "Dự án" and f["aliases"] == ["chung"] and f["local_path"] == str(local) and f["root_id"] == "r_chung"
+    assert fh.resolve_ref("filehub:Dự án/Báo cáo")[0] == str(local / "Báo cáo")
+    assert fh.resolve_ref("filehub:chung/Báo cáo")[0] == str(local / "Báo cáo")  # tên cũ vẫn khớp (task/agent đã ghi)
+    assert fh.list()[0]["aliases"] == ["chung"] and fh.status()["folders"][0]["aliases"] == ["chung"]
+    assert fh._run_folder({"run_opts": {"filehub": "chung"}})["name"] == "Dự án"  # run/task đã ghi tên cũ vẫn có báo sau run
+    s.by_prompt["SAU-DOI-TEN"] = {"text": "x", "files": {"sau.md": "1"}}
+    run = d.hub.runs.submit("w1", "SAU-DOI-TEN", cwd="filehub:chung", run_opts={})
+    assert d.hub.store.get_run(run["id"])["run_opts"]["filehub"] == "Dự án"
+    await until(lambda: events(d.hub, "filehub.changed"))
+    # đổi lại tên cũ: bỏ khỏi bí danh; add trùng bí danh → Conflict; tên không có → NotFound
+    await rpc(d, "filehub.rename", {"name": "Dự án", "new_name": "chung"})
+    assert fh.folders()[0]["aliases"] == ["Dự án"]
+    fh.login_state = {"roots": [{"id": "r_2", "name": "x"}]}
+    with pytest.raises(Conflict, match="tên cũ"):
+        fh.add("r_2", "Dự án", local_path=str(local.parent / "hai"))
+    with pytest.raises(HubError, match="không có thư mục chung"):
+        await rpc(d, "filehub.rename", {"name": "khong-co", "new_name": "y"})
+
+
+async def test_rename_rejected_while_run_holds_lock(env):
+    d, s, local, _ = env
+    _synced(d, local)
+    s.by_prompt["GIU-DOI-TEN"] = {"text": "x", "hold": True}
+    r1 = await rpc(d, "run.start", {"agent": "w1", "prompt": "GIU-DOI-TEN", "cwd": "filehub:chung"})
+    await wait_status(d, r1["id"])
+    with pytest.raises(HubError, match="đang có run"):
+        await rpc(d, "filehub.rename", {"name": "chung", "new_name": "moi"})
+    assert d.hub.filehub.folders()[0]["name"] == "chung"
+    d.hub.runs.runtime().release(r1["id"])  # type: ignore[attr-defined]
+    await wait_status(d, r1["id"], ("completed",))
