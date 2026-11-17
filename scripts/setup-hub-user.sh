@@ -18,7 +18,7 @@ MCP="${4:-8722}"
 DOMAIN="${DOMAIN:-trungtamdhs.com}"   # miền gốc (zone Cloudflare): https://$SUB.$DOMAIN
 SUB="${SUB:-$U}"        # tên miền con: https://$SUB.$DOMAIN
 HOST="$SUB.$DOMAIN"
-VER="${VER:-v0.2.14}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
+VER="${VER:-v0.2.15}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
 KGS="${KGS:-}"          # URL Không gian số để nối thư mục chung (trống = bỏ qua bước 10)
 KGS_SCOPE="${KGS_SCOPE:-workspace}"   # workspace | folder
 KGS_FOLDER="${KGS_FOLDER:-cfharness}"   # chỉ dùng khi KGS_SCOPE=folder
