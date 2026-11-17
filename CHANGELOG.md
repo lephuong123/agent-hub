@@ -16,7 +16,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 ### Không gian số (thư mục chung)
 - Hub đang giam agent trong một workspace (`workspace.confine`) mà thư mục cha của bản sao (`filehub.local_parent`, mặc định `~/KhongGianSo`) nằm ngoài vùng giam → bản sao tự đặt ở `<vùng giam>/KhongGianSo/<tên>` thay vì báo "nằm ngoài workspace được giam" (nối thư mục qua web public không sửa được đường dẫn nên bị kẹt). `filehub setup --local-parent` ngoài vùng giam bị từ chối ngay, không ghi cấu hình (#141).
 
-### Không gian số — cổng cfharness (chế độ `lane`, chưa bật mặc định)
+### Không gian số — cổng cfharness (chế độ `lane`, chưa bật mặc định) (#147)
 - `cfharness filehub lane setup --url http://127.0.0.1:8223` (khoá hỏi bằng getpass, chỉ lưu trong secret store), `lane status|test|disable`:
   nối hub với cổng cfharness của Không gian số trên cùng máy — chỉ nhận URL loopback, khoá không bao giờ vào cấu hình/nhật ký/gói nhân bản.
   Hub đang dùng đồng bộ cũ không đổi gì cho tới khi người chuyển thư mục sang `lane`.
