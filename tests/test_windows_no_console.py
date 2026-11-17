@@ -36,6 +36,7 @@ ALLOWLIST = {
     ("systems/launchd.py", "default_runner"): "launchctl/systemctl — chỉ macOS/Linux (Windows dùng taskscheduler.default_runner)",
     ("systems/launchd.py", "parse_plist"): "/usr/bin/plutil — chỉ macOS",
     ("update_helper.py", "_process_table"): "`ps` — chỉ nhánh POSIX (nhánh Windows đã dùng no_window_kwargs)",
+    ("update_cli.py", "open_terminals"): "`ps` đếm cửa sổ chat/top còn mở sau cập nhật — chỉ POSIX (Windows trả 0 trước khi spawn)",
     ("web/reload.py", "process_cmdline"): "`ps` — chỉ POSIX (`stale_web_loop` bỏ qua Windows: helper cập nhật tự dừng/chạy lại web)",
     ("web/reload.py", "spawn_detached"): "chạy lại web cũ sau cập nhật — chỉ POSIX (`stale_web_loop` bỏ qua Windows)",
     ("update_helper.py", "start_detached"): "helper CHỈ stdlib, không import được oscompat — tự đặt CREATE_NO_WINDOW|DETACHED_PROCESS",

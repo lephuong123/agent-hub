@@ -372,3 +372,64 @@ def test_updater_passes_tool_venv_to_helper(hub_home):
     up.dir.mkdir(parents=True, exist_ok=True)
     argv = up._helper_argv("apply", up.plan(NEWER), install=["uv"], wait_pid=None, backup=None)
     assert argv[argv.index("--venv") + 1] == str(Path("/venv/bin/python").parent.parent)
+
+
+# ---- sau cập nhật: web tự chạy lại bản mới, CLI không bảo người "tắt và mở lại" (người dùng host không làm được) ----
+
+class _Clock:
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+    def sleep(self, s: float) -> None:
+        self.t += s
+
+
+def test_web_after_update_no_web_running():
+    from cfharness.update_cli import web_after_update
+
+    c = _Clock()
+    assert web_after_update("p", "0.2.17", read_state=lambda p: None, restart=lambda *a: pytest.fail("không được gọi"),
+                            sleep=c.sleep, clock=c) == "none"
+
+
+def test_web_after_update_waits_for_launchd_respawn():
+    from cfharness.update_cli import web_after_update
+
+    c, seen = _Clock(), []
+    states = iter([{"version": "0.2.12"}, {"version": "0.2.12"}, {"version": "0.2.17"}])
+    res = web_after_update("p", "v0.2.17", read_state=lambda p: next(states), restart=lambda *a: pytest.fail("không được gọi"),
+                           sleep=c.sleep, clock=c, progress=seen.append)
+    assert res == "ok" and len(seen) == 1  # báo chờ đúng một lần
+
+
+def test_web_after_update_restarts_web_itself_when_still_old():
+    from cfharness.update_cli import web_after_update
+
+    c, calls = _Clock(), []
+    res = web_after_update("p", "0.2.17", wait_s=10, read_state=lambda p: {"version": "0.2.10"},
+                           restart=lambda p, v: calls.append(v) or "killed", sleep=c.sleep, clock=c)
+    assert res == "restarted" and calls == ["0.2.17"]
+    res = web_after_update("p", "0.2.17", wait_s=10, read_state=lambda p: {"version": "0.2.10"},
+                           restart=lambda p, v: "failed", sleep=c.sleep, clock=c)
+    assert res == "failed"
+
+    def boom(p, v):
+        raise OSError("x")
+
+    assert web_after_update("p", "0.2.17", wait_s=0, read_state=lambda p: {}, restart=boom, sleep=c.sleep, clock=c) == "none"
+    assert web_after_update("p", "0.2.17", wait_s=0, read_state=lambda p: {"pid": 1}, restart=boom, sleep=c.sleep, clock=c) == "failed"
+
+
+def test_open_terminals_counts_only_interactive_cfharness():
+    from cfharness.update_cli import open_terminals
+
+    rows = ["  101 /Users/u/.local/share/uv/tools/cfharness/bin/python /Users/u/.local/bin/cfharness chat",
+            "  102 /Users/u/.local/share/uv/tools/cfharness/bin/python -m cfharness top --home /x",
+            "  103 /Users/u/.local/share/uv/tools/cfharness/bin/python /Users/u/.local/bin/cfharness web --port 8765",
+            "  104 /Users/u/.local/share/uv/tools/cfharness/bin/python -m cfharness daemon run",
+            "  105 vim chat.txt",
+            f"  {os.getpid()} /x/python /x/cfharness chat"]
+    assert open_terminals(rows) == 2

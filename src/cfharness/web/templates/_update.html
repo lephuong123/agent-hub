@@ -27,7 +27,7 @@
       {% else %}<p class="small"><span class="pill danger">{{ m.icon('alert') }}{{ 'đã tự quay về' if st.rolled_back else 'cập nhật lỗi' }}</span> {{ m.rel(st.finished_at) }} — {{ st.error }}</p>{% endif %}
     {% endif %}
     {% if web_stale %}
-      <p class="small"><span class="pill warn">{{ m.icon('alert') }}giao diện web đang chạy bản cũ {{ web_version }}</span> Tắt <code>cfharness web</code> (Ctrl+C) rồi chạy lại <code>cfharness web --open</code> để dùng giao diện mới.</p>
+      <p class="small"><span class="pill warn">{{ m.icon('alert') }}giao diện web đang chạy bản cũ {{ web_version }}</span> Giao diện web tự chạy lại bằng bản mới trong khoảng 1–2 phút sau khi cập nhật — tải lại trang sau đó (có thể phải đăng nhập lại).</p>
     {% endif %}
     {% if not busy %}
       {% if not chk.can_update %}
