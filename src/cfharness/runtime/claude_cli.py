@@ -339,6 +339,24 @@ def oauth_token(secrets: Any) -> str | None:
     return v or None
 
 
+PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+LOOPBACK_NO_PROXY = ("127.0.0.1", "localhost", "::1")
+
+
+def with_loopback_no_proxy(env: dict[str, str]) -> dict[str, str]:
+    """Có HTTP(S)_PROXY/ALL_PROXY trong env → thêm 127.0.0.1/localhost/::1 vào NO_PROXY + no_proxy (giữ giá trị sẵn có).
+    Đã kiểm thật (claude 2.1.326, docs/dev-notes/mcp-oauth.md §8.1): không có NO_PROXY, client MCP của claude gửi request tới
+    proxy OAuth loopback của hub QUA proxy ngoài (http thường → lộ route id + khoá trong rõ cho proxy, và MCP hỏng 502)."""
+    if not any(env.get(k) for k in PROXY_VARS):
+        return env
+    for var in ("NO_PROXY", "no_proxy"):
+        cur = [x.strip() for x in (env.get(var) or env.get(var.swapcase()) or "").split(",") if x.strip()]
+        if "*" in cur:
+            continue
+        env[var] = ",".join(cur + [h for h in LOOPBACK_NO_PROXY if h not in cur])
+    return env
+
+
 def child_env(claude_cfg: dict[str, Any], base: dict[str, str] | None = None, *, oauth_token: str | None = None) -> dict[str, str]:
     """Env của tiến trình `claude`: bỏ `env_strip` (biến phiên Claude Code bao ngoài), thêm `env_extra`; có `oauth_token` (secret
     store) → đặt `CLAUDE_CODE_OAUTH_TOKEN` — ngoại lệ DUY NHẤT với env_strip, và ghi đè giá trị cùng tên trong env daemon/env_extra.
@@ -350,7 +368,7 @@ def child_env(claude_cfg: dict[str, Any], base: dict[str, str] | None = None, *,
         env[str(k)] = str(v)
     if oauth_token:
         env[OAUTH_TOKEN_SECRET] = oauth_token
-    return env
+    return with_loopback_no_proxy(env)
 
 
 _version_cache: dict[str, tuple[float, str | None]] = {}
@@ -386,7 +404,7 @@ class ClaudeCliRuntime(AgentRuntime):
         tok = oauth_token(self.secrets)
         if tok:  # token của hub thắng mọi giá trị cùng tên (env_extra của run không ghi đè được)
             env[OAUTH_TOKEN_SECRET] = tok
-        return env
+        return with_loopback_no_proxy(env)  # env_extra của run có thể đặt proxy → vẫn giữ loopback đi thẳng
 
     def capabilities(self) -> dict[str, bool]:
         return {

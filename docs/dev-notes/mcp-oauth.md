@@ -66,6 +66,7 @@ Web: form thêm server có ô "Đăng nhập OAuth" (chỉ http/sse; không prob
 - `registry.runtime_entry(cfg)` (dùng bởi `build_for_agent_servers`, `resolved_entry`, `probe`) = resolve `${…}` + chèn
   `headers.Authorization: Bearer <token>`. mcp.json runtime: `_write_json_0600`, `rmtree(runtime/<run>)` trong `finally` của
   `_run` (đã kiểm bằng test: mode 0600 trên POSIX, file biến mất sau run); sandbox chặn agent đọc mcp.json.
+- `mcp.oauth_proxy.enabled=true` → mcp.json của run trỏ tới proxy loopback thay vì chèn Bearer (§8.1); token làm mới khi chuyển tiếp.
 - **Chưa kết nối / hết hạn / URL đổi → run FAILED với thông báo rõ** ("cần đăng nhập OAuth — `cfharness mcp login <tên>` hoặc
   nút Kết nối"). Chọn fail-closed thay vì bỏ server + event: cùng hành vi với secret thiếu, agent không chạy âm thầm thiếu tool
   rồi tự xoay xở (có thể bằng cách kém an toàn hơn); người thấy ngay lỗi ở trang run.
@@ -109,11 +110,83 @@ chờ qua web callback: không phụ thuộc `cfharness web` đang chạy, `127.
 - Còn mở: tiến trình cùng user ngoài sandbox đọc được secret store (ngang mức đã chấp nhận ở hardening-SEC §3).
 
 ## 8. Giới hạn đã biết + đề xuất
-- **Token hết hạn giữa run rất dài**: token được chèn tĩnh vào mcp.json lúc spawn; `claude` không biết refresh. Run dài hơn thời
-  hạn access token (thường 1 h) → MCP trả 401 giữa chừng. Đề xuất follow-up: **proxy loopback chèn token** — daemon mở
-  `http://127.0.0.1:<cổng>/mcp/<server>/<nonce theo run>` (nonce ngẫu nhiên, chỉ hợp lệ khi run chạy), mcp.json trỏ tới proxy
-  thay vì server thật; proxy thêm `Authorization` mới nhất (refresh khi cần) và stream SSE. Lợi thêm: token không bao giờ nằm
-  trong file runtime. Cần mở ngoại lệ sandbox cho đúng cổng proxy (hiện sandbox chặn TCP localhost).
+- **Token hết hạn giữa run rất dài** (đường cũ): token được chèn tĩnh vào mcp.json lúc spawn; `claude` không biết refresh. Run dài hơn
+  thời hạn access token (thường 1 h) → MCP trả 401 giữa chừng. Đã có lời giải: proxy loopback §8.1 (bật bằng cấu hình).
+
+### 8.1 Proxy loopback chèn token (`mcp_client/oauth_proxy.py`, nhánh `feat/mcp-oauth-proxy`)
+Bật: `cfharness config set mcp.oauth_proxy.enabled true` (mặc định TẮT — xem "Chưa nghiệm thu với claude thật" bên dưới). Cấu hình
+`mcp.oauth_proxy.{enabled, port (0 = OS chọn), max_body_mb}`; nhánh ∈ `integrity.SECURITY_KEYS` (sửa tay config.yaml bị khôi phục).
+
+**Luồng.**
+1. `RunManager._run`: agent có server OAuth + proxy bật → `hub.mcp_proxy.ensure_started()` (khởi động lười, một lần mỗi daemon) sau
+   `ensure_fresh_for`. Lỗi bind (cổng bận…) → log cảnh báo, **dự phòng đường cũ** (Bearer tĩnh trong mcp.json) — run không hỏng.
+2. `_prepare_spec` → `_agent_mcp_servers(agent, run_id)`: vẫn dựng entry đầy đủ trước (kiểm token: chưa kết nối/hết hạn/URL đổi →
+   run `failed` rõ như cũ), rồi THAY entry của mỗi server OAuth bằng `proxy.register(run_id, cfg)` =
+   `{"type": http|sse, "url": "http://127.0.0.1:<cổng>/r/<id 192 bit><path của server>", "headers": {"X-Cfharness-Proxy-Key": <256 bit>}}`.
+   mcp.json KHÔNG còn token, refresh token hay header tĩnh nào của server (proxy tự thêm khi chuyển tiếp).
+3. Mỗi request tới proxy, theo thứ tự (mọi từ chối cùng `403 forbidden`, không phân biệt lý do): peer phải loopback; `Host` =
+   `127.0.0.1:<cổng>`/`localhost:<cổng>` (chống DNS rebinding); KHÔNG có `Origin` (client MCP của claude không gửi — trình duyệt luôn
+   gửi với POST khác nguồn → chặn CSRF từ trang web); route còn sống; khoá đúng (`hmac.compare_digest`); path ∈ danh sách cho phép
+   của route (ban đầu chỉ path của URL server — token không đi tới path khác cùng origin, vd token endpoint); server vẫn là OAuth và
+   URL cấu hình == URL lúc đăng ký route (URL đổi giữa run → từ chối).
+4. Thân request đệm (≤ `max_body_mb`, quá → 413) → `oauth.ensure_fresh(server)` (làm mới nếu còn < 5 phút) → header mới nhất từ
+   `registry.runtime_entry` (Bearer + header tĩnh đã thay secret) → gửi tới `origin server + path` (httpx2, không theo redirect,
+   `accept-encoding: identity`, bỏ hop-by-hop/`authorization`/khoá proxy/`origin`/`cookie`). Upstream 401 → nếu token chưa bị request
+   khác làm mới thì `oauth.refresh` bắt buộc, gửi lại ĐÚNG MỘT lần; vẫn 401/làm mới lỗi → trả 401 **không** kèm `WWW-Authenticate`
+   (không để `claude` tự mở luồng OAuth của nó với proxy).
+5. Response chuyển tiếp từng khối (`aiter_raw`, không đệm — Streamable HTTP trả `text/event-stream`, GET SSE dài), bỏ hop-by-hop,
+   `content-encoding`, `www-authenticate`, `set-cookie`. Transport `sse` cũ: event `endpoint` được viết lại thành
+   `/r/<id>/<path>?<query>` (chỉ khi cùng origin với server; path đó vào danh sách cho phép) → POST message cũng đi qua proxy + khoá.
+   Client ngắt kết nối → đóng stream upstream.
+6. `finally` của `_run` → `proxy.revoke_run(run_id)`: route bị xoá (request sau → 403), stream đang mở bị đóng. Run `waiting_human`
+   cũng vậy (tiến trình đã dừng); resume = run mới = route mới. Daemon dừng (`Hub.stop`) → proxy dừng; khởi động lại → route mất
+   (RAM), cổng mới (nếu `port: 0`).
+
+**Vì sao KHÔNG mở ngoại lệ sandbox.** Sandbox OS của Claude Code chỉ bọc Bash (hardening-SEC §1: "Hook và server MCP do claude chạy NGOÀI
+sandbox"); client MCP HTTP/SSE nằm trong chính tiến trình `claude` → nối được proxy mà KHÔNG cần `allowLocalBinding`. Giữ nguyên chặn
+loopback cho Bash là tốt hơn yêu cầu ban đầu: Bash của agent thường không chạm được proxy chút nào. Test khẳng định settings.json của
+run không có `allowLocalBinding`.
+
+**Mô hình đe doạ.**
+- Agent (Bash/Read) không đọc được khoá: mcp.json ở `agents/*/runtime` (denyRead sandbox + `permissions.deny` Read/Grep/Glob).
+- Agent được người mở `allow_localhost` (hoặc trust full / sandbox tắt) chạm được cổng nhưng vẫn cần route id + khoá của đúng run;
+  agent khác / tiến trình khác không có. Nếu agent trust full đọc được mcp.json của CHÍNH run mình thì có thể gọi tool MCP qua proxy
+  mà không qua hook guard — nhưng đường cũ còn tệ hơn (đọc được token thật, dùng được từ bất kỳ đâu, tới khi hết hạn). Với proxy, thứ
+  lộ ra chỉ dùng được trên loopback, cho đúng một server, tới khi run kết thúc.
+- Tiến trình cùng user ngoài sandbox: vẫn đọc được secret store (ngang mức §7); với proxy không thêm gì đáng kể.
+- Log: proxy không log URL (có route id), header hay body; lỗi đi qua `redact_str`.
+
+**Nghiệm thu với `claude` thật — 2026-11-17, Claude Code 2.1.326, haiku, tổng $0.021 (6 run).** Hub TẠM (`CFHARNESS_HOME` trong
+thư mục tạm, daemon từ mã nhánh, `budget.hub_usd_per_day=0.30`), guard bật + sandbox OS bật (settings.json của run: `sandbox.enabled=true`,
+`failIfUnavailable=true`, KHÔNG `allowLocalBinding`, hook PreToolUse có mặt). Server = `tests/oauth_fake.py` chạy thành tiến trình riêng trên
+127.0.0.1, ghi log từng request (method, path, status, 13 ký tự đầu `Authorization`, tên header, UA). Hai server OAuth gán cho agent:
+`fnotes` (Streamable HTTP, đăng nhập qua luồng thật `mcp.oauth_start/callback` với AS giả) và `flegacy` (transport SSE cũ, token gieo sẵn).
+Agent gọi `doc_ghi_chu` vài lần.
+- **(a) Kết nối 127.0.0.1 khi guard + sandbox bật: ĐẠT.** Tool trả "ghi chu so N: hop OK"; log server thấy request UA `claude-code/2.1.326
+  (sdk-cli)` qua proxy. Không cần ngoại lệ sandbox (khẳng định: client MCP chạy ngoài sandbox Bash).
+- **(b) Khoá trên mọi loại request: ĐẠT.** Server nhận từ claude (qua proxy): Streamable HTTP `POST /mcp` (initialize, notification 202,
+  tools/list, tools/call) + `GET /mcp` (stream server→client, 405 của server giả); SSE cũ `GET /sse` (200, stream) + `POST /messages?session_id=…`
+  (202, endpoint đã viết lại qua proxy). Proxy chỉ chuyển tiếp khi khoá đúng (mọi nhánh khác từ chối trước khi chạm upstream) → mọi request
+  trên đều mang `X-Cfharness-Proxy-Key`; upstream không bao giờ thấy header khoá (`has_proxy_key_header=false`) và mọi `Bearer` upstream do
+  proxy chèn. mcp.json chụp lúc run chạy: chỉ URL `/r/<id>/…` + khoá, không `Authorization`/`Bearer`/access token/seed.
+- **Làm mới giữa run: ĐẠT.** Server giả vô hiệu access token ngay sau tools/call đầu → tools/call kế tiếp: upstream 401 → proxy gọi
+  `/as/token` (refresh) → gửi lại với token mới → 200; agent không thấy lỗi.
+- **(c) HTTP(S)_PROXY trong env daemon: TRƯỚC SỬA — HỎNG.** Daemon chạy với `HTTP_PROXY/HTTPS_PROXY` (+ chữ thường) trỏ proxy chuyển tiếp ghi
+  log: claude đẩy `POST/GET http://127.0.0.1:<cổng>/r/<id>/…` QUA proxy ngoài (route id + khoá đi dạng rõ tới proxy; MCP 502
+  `CLIENT_HTTP_NOT_IMPLEMENTED`). API Anthropic đi `CONNECT api.anthropic.com:443` (đúng). **Sửa:** `runtime/claude_cli.with_loopback_no_proxy`
+  — có biến proxy trong env tiến trình `claude` (cả từ `env_extra` của run) → thêm `127.0.0.1,localhost,::1` vào `NO_PROXY` + `no_proxy`
+  (giữ giá trị cũ, `*` giữ nguyên). Phía daemon, httpx cũng không tự bỏ qua loopback: client của proxy + `OAuthManager` gắn
+  `LOOPBACK_DIRECT_MOUNTS` (đích 127.0.0.1/localhost/::1 đi thẳng; đích từ xa vẫn theo proxy của môi trường). **SAU SỬA — ĐẠT:** log proxy
+  ngoài chỉ còn `CONNECT api.anthropic.com:443` (+ telemetry của CLI), không request loopback nào; cả `fnotes` lẫn `flegacy` trả kết quả.
+- Phát hiện thêm khi nghiệm thu (đã sửa): `cfharness mcp edit --url` không kèm `--transport` ép server về `http` → server SSE cũ hỏng
+  (claude thử POST lên URL SSE). Giờ giữ transport http/sse hiện có. Log của proxy mang `run_id` của run khởi động nó (contextvar kế thừa)
+  → task server chạy trong Context rỗng. Từ chối giờ ghi log INFO kèm mã lý do (`missing_key|bad_key|unknown_route|path|origin|host|…`,
+  path chỉ khi ngoài `/r/`) + `proxy.status()["stats"]`.
+- Chưa thử với nhà cung cấp OAuth thật (Linear/Notion…) — phần OAuth đã có ở luồng cũ; proxy chỉ đổi chặng claude → server.
+- Dọn: daemon tạm dừng, `~/.claude/projects/<cwd tạm>` đã xoá, không đụng hub thật / `~/.claude.json`.
+
+**Giới hạn.** Body request đệm toàn bộ (MCP là JSON-RPC nhỏ; upload lớn qua MCP hiếm). Không hỗ trợ WebSocket. `cfharness takeover`
+(phiên tương tác của người, không có vòng đời run) vẫn dùng đường cũ. Probe (`mcp.probe`) gọi thẳng server (trong daemon, không qua file).
 - Không có vòng nền refresh — chỉ làm mới khi run/probe/start cần (đủ cho mô hình hiện tại; token "connected" hiển thị có thể
   "expired" tới lần dùng kế tiếp, khi đó tự refresh).
 - Không hỗ trợ: Client ID Metadata Document (CIMD), `private_key_jwt`, DPoP, step-up scope (403 `insufficient_scope`).
@@ -131,6 +204,13 @@ doanh nghiệp tự host (Okta/Auth0 khi tắt DCR). Với các provider này: �
 --oauth-client-secret '${SECRET}'`.
 
 ## 10. Test
+Proxy (§8.1): `tests/test_mcp_oauth_proxy.py` (10 test, MCP/AS giả `tests/oauth_fake.py` thêm `/mcp` dạng event-stream có khối chờ
+`release`, `/sse` + `/messages`): chuyển tiếp với token hiện tại + làm mới khi sắp hết hạn, 401 upstream → làm mới + gửi lại một lần
+(lỗi → 401 không `WWW-Authenticate`), stream không đệm, SSE cũ viết lại `endpoint`, từ chối (thiếu/sai khoá, route lạ, path ngoài danh
+sách, không qua route, `Origin`, `Host` lạ, khoá run khác, sau thu hồi, URL đổi) mà server thật không nhận request nào, chỉ bind
+127.0.0.1, mcp.json của run không chứa token/`Authorization` + settings không `allowLocalBinding` + route thu hồi sau run, chưa kết
+nối → run fail rõ, tắt → đường cũ, cổng bận → dự phòng đường cũ.
+
 `tests/test_mcp_oauth.py` (15 test) + AS/MCP giả `tests/oauth_fake.py` (uvicorn 127.0.0.1; kiểm PKCE S256, redirect_uri,
 client_id, `resource` thật): discovery 401→PRM→AS, DCR + dùng lại bản đăng ký, state sai/đã dùng/hết hạn, lỗi nhà cung cấp, code
 giả, verifier sai, iss (sai/thiếu khi đã khai), client tay (client_secret_basic), không DCR → lỗi rõ, dự phòng không PRM,

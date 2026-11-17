@@ -165,6 +165,9 @@ def attach(hub: "Hub") -> None:
 
     hub.mcp_oauth = OAuthManager(hub.mcp, secrets, publish=hub.publish)  # type: ignore[attr-defined]  # docs/dev-notes/mcp-oauth.md
     hub.mcp.oauth = hub.mcp_oauth  # type: ignore[attr-defined]
+    from .oauth_proxy import OAuthProxy
+
+    hub.mcp_proxy = OAuthProxy(hub)  # type: ignore[attr-defined]  # proxy loopback chèn token (mcp-oauth.md §8.1), khởi động lười
     hub.bus.add_listener(ToolWriteWatcher(hub))
     # H-12: bộ che theo GIÁ TRỊ — nạp mọi secret đã lưu + giá trị env-fallback mà registry đang tham chiếu
     try:

@@ -355,6 +355,10 @@ def cmd_mcp(ctx: Any) -> int:
         return EXIT_OK if not res.get("probe") or res["probe"].get("ok") else EXIT_SYS
     if act == "edit":
         patch = _server_payload(a, creating=False)
+        if a.url and not a.transport:  # chỉ đổi URL: giữ transport http/sse hiện có (trước đây ép về http → server SSE hỏng)
+            cur_t = (ctx.call("mcp.show", {"name": a.name}).get("config") or {}).get("transport")
+            if cur_t in ("http", "sse"):
+                patch["transport"] = cur_t
         if patch.get("auth"):  # gộp với auth hiện có (sửa riêng client_id/scope không làm mất phần còn lại)
             cur = (ctx.call("mcp.show", {"name": a.name}).get("config") or {}).get("auth") or {}
             patch["auth"] = {**cur, **patch["auth"]}
