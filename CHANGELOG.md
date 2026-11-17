@@ -15,7 +15,10 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   không còn nhận token OAuth trong file mcp.json — `claude` nói chuyện với một proxy của daemon trên `127.0.0.1` (URL + khoá riêng
   từng run, hết hiệu lực khi run kết thúc), proxy chèn token mới nhất và tự làm mới khi sắp hết hạn hoặc khi server trả 401. Run
   dài hơn hạn access token (thường 1 giờ) không còn bị 401 giữa chừng. Hỗ trợ Streamable HTTP và SSE. Proxy không khởi động được →
-  tự dùng lại cách cũ (Bearer trong mcp.json).
+  tự dùng lại cách cũ (Bearer trong mcp.json). Đã nghiệm thu với Claude Code 2.1.326 thật (guard + sandbox bật).
+- **Máy có `HTTP_PROXY`/`HTTPS_PROXY`**: tiến trình `claude` của run luôn có `127.0.0.1,localhost,::1` trong `NO_PROXY`, và daemon gọi
+  máy chủ OAuth/MCP chạy trên máy này đi thẳng — trước đây request tới địa chỉ cục bộ bị đẩy qua proxy công ty và hỏng.
+- **`cfharness mcp edit --url` giữ nguyên transport `sse`** (trước đây tự đổi sang `http`, làm hỏng server SSE cũ).
 
 ---
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import hmac
 import logging
 import secrets as _secrets
@@ -37,7 +38,7 @@ from urllib.parse import urljoin, urlsplit
 
 from ..errors import HubError
 from ..redact import redact_str
-from .oauth import is_oauth
+from .oauth import LOOPBACK_DIRECT_MOUNTS, is_oauth
 
 if TYPE_CHECKING:
     from .config import McpServerConfig
@@ -102,6 +103,8 @@ class OAuthProxy:
         self._sock: socket.socket | None = None
         self._start_lock: asyncio.Lock | None = None
         self._http: Any = None
+        # đếm theo lý do (không URL/khoá/token) — nghiệm thu + `status()`; từ chối còn ghi log INFO kèm mã lý do
+        self.stats: dict[str, int] = {}
 
     # ------------------------------------------------------------------ cấu hình / vòng đời
     def _cfg(self, key: str, default: Any) -> Any:
@@ -152,7 +155,8 @@ class OAuthProxy:
             server = _server_cls()(config)
             self._sock, self._server = sock, server
             self.port = sock.getsockname()[1]
-            self._task = asyncio.create_task(server.serve(sockets=[sock]), name="mcp-oauth-proxy")
+            # Context RỖNG: khởi động lười trong task của một run → không để mọi log của proxy mang run_id của run đầu tiên
+            self._task = asyncio.create_task(server.serve(sockets=[sock]), name="mcp-oauth-proxy", context=contextvars.Context())
             for _ in range(500):
                 if server.started:
                     break
@@ -223,7 +227,17 @@ class OAuthProxy:
         return len(ids)
 
     def status(self) -> dict[str, Any]:
-        return {"enabled": self.enabled(), "running": self.running, "port": self.port, "routes": len(self.routes)}
+        return {"enabled": self.enabled(), "running": self.running, "port": self.port, "routes": len(self.routes), "stats": dict(self.stats)}
+
+    def _count(self, key: str) -> None:
+        self.stats[key] = self.stats.get(key, 0) + 1
+
+    async def _reject(self, send: Any, reason: str, status: int = 403, detail: str = "") -> None:
+        """Mọi từ chối: cùng thân trả lời (không lộ lý do cho bên gọi); lý do chỉ vào log/stats của daemon. `detail` chỉ cho
+        thứ KHÔNG chứa route id/khoá (vd path ngoài `/r/`)."""
+        self._count(f"rejected.{reason}")
+        log.info("proxy OAuth MCP từ chối request (%s%s)", reason, f": {detail}" if detail else "")
+        await _plain(send, status, "forbidden" if status == 403 else "not found")
 
     # ------------------------------------------------------------------ http
     def _client(self) -> Any:
@@ -231,7 +245,7 @@ class OAuthProxy:
             import httpx2
 
             kw: dict[str, Any] = {"timeout": httpx2.Timeout(connect=15.0, read=None, write=60.0, pool=None),
-                                  "follow_redirects": False}
+                                  "follow_redirects": False, "mounts": dict(LOOPBACK_DIRECT_MOUNTS)}
             if self.transport is not None:
                 kw["transport"] = self.transport
             self._http = httpx2.AsyncClient(**kw)
@@ -258,29 +272,33 @@ class OAuthProxy:
         headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers") or []}
         client = scope.get("client") or ("", 0)
         if client[0] not in ("127.0.0.1", "::1"):
-            return await _plain(send, 403, "forbidden")
+            return await self._reject(send, "peer")
         if headers.get("host") not in (f"{HOST}:{self.port}", f"localhost:{self.port}"):
-            return await _plain(send, 403, "forbidden")  # DNS rebinding: Host lạ
+            return await self._reject(send, "host")  # DNS rebinding: Host lạ
         if "origin" in headers:
-            return await _plain(send, 403, "forbidden")  # trình duyệt (CSRF) — client MCP của claude không gửi Origin
+            return await self._reject(send, "origin")  # trình duyệt (CSRF) — client MCP của claude không gửi Origin
         path: str = scope.get("path") or ""
         if not path.startswith(ROUTE_PREFIX):
-            return await _plain(send, 404, "not found")
+            return await self._reject(send, "no_route", 404, f"{scope.get('method')} {redact_str(path)[:80]}")
         rid, _, rest = path[len(ROUTE_PREFIX):].partition("/")
         route = self.routes.get(rid)
         key = headers.get(KEY_HEADER.lower(), "")
-        if route is None or not key or not hmac.compare_digest(key.encode(), route.key.encode()):
-            return await _plain(send, 403, "forbidden")  # route lạ / đã thu hồi / thiếu hoặc sai khoá — cùng một trả lời
+        if route is None:
+            return await self._reject(send, "unknown_route")  # route lạ / đã thu hồi
+        if not key:
+            return await self._reject(send, "missing_key")
+        if not hmac.compare_digest(key.encode(), route.key.encode()):
+            return await self._reject(send, "bad_key")
         upath = "/" + rest
         if upath not in route.allowed_paths:
-            return await _plain(send, 403, "forbidden")
+            return await self._reject(send, "path")
         reg = self.hub.mcp
         try:
             cfg = reg.config_of(reg.require(route.server))
         except Exception:  # noqa: BLE001 — server bị xoá giữa run
-            return await _plain(send, 403, "forbidden")
+            return await self._reject(send, "server_gone")
         if not is_oauth(cfg) or str(cfg.url or "") != route.upstream:
-            return await _plain(send, 403, "forbidden")  # URL đổi giữa run → không gửi token sang chỗ mới
+            return await self._reject(send, "url_changed")  # URL đổi giữa run → không gửi token sang chỗ mới
         # thân request (MCP: JSON-RPC nhỏ) — đệm có trần để gửi lại được sau khi làm mới token
         cap = int(float(self._cfg("max_body_mb", DEFAULT_MAX_BODY_MB)) * 1024 * 1024)
         body = bytearray()
@@ -294,6 +312,7 @@ class OAuthProxy:
             if not msg.get("more_body"):
                 break
         route.requests += 1
+        self._count(f"accepted.{scope.get('method') or 'GET'}")
         method = scope.get("method") or "GET"
         qs = (scope.get("query_string") or b"").decode("latin-1")
         url = route.origin + upath + (f"?{qs}" if qs else "")
@@ -319,9 +338,11 @@ class OAuthProxy:
                 _, cur = self._upstream_headers(cfg)
             except HubError:
                 cur = ""
+            self._count("upstream_401")
             if cur == used:  # chưa ai làm mới → làm mới bắt buộc (request khác có thể vừa làm)
                 try:
                     await oauth.refresh(route.server)
+                    self._count("refreshed_after_401")
                 except HubError as e:
                     log.warning("proxy OAuth MCP %s: làm mới sau 401 lỗi: %s", route.server, e.message)
                     return await _plain(send, 401, "oauth refresh failed")

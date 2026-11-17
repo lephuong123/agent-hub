@@ -150,7 +150,9 @@ class FakeOAuth:
         q = self.sse_queues.get(request.query_params.get("session_id") or "")
         if q is None:
             return Response(status_code=404)
-        await q.put(await request.json())
+        msg = await request.json()
+        if "id" in msg:  # notification (không id) → không có trả lời trên stream
+            await q.put(msg)
         return Response(status_code=202)
 
     async def prm_doc(self, request: Request) -> Response:

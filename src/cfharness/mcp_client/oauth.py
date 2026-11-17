@@ -54,6 +54,8 @@ MAX_CLIENTS = 6  # số bản đăng ký DCR giữ lại (mỗi redirect_uri m�
 CLIENT_NAME = "cfharness"
 STATUSES = ("not_connected", "connected", "expired", "error")
 SENSITIVE_KEYS = ("access_token", "refresh_token", "client_secret", "id_token")
+# HTTP(S)_PROXY của môi trường daemon KHÔNG áp cho đích loopback (httpx không tự bỏ qua localhost): AS/MCP chạy trên máy này đi thẳng
+LOOPBACK_DIRECT_MOUNTS: dict[str, Any] = {"all://127.0.0.1": None, "all://localhost": None, "all://[::1]": None}
 
 
 # ============================================================================ tiện ích thuần
@@ -272,7 +274,8 @@ class OAuthManager:
     def _client(self) -> Any:
         import httpx2
 
-        kw: dict[str, Any] = {"timeout": HTTP_TIMEOUT_S, "follow_redirects": False, "headers": {"User-Agent": "cfharness-mcp-oauth"}}
+        kw: dict[str, Any] = {"timeout": HTTP_TIMEOUT_S, "follow_redirects": False, "headers": {"User-Agent": "cfharness-mcp-oauth"},
+                              "mounts": dict(LOOPBACK_DIRECT_MOUNTS)}
         if self.transport is not None:
             kw["transport"] = self.transport
         return httpx2.AsyncClient(**kw)

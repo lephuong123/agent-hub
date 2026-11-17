@@ -58,7 +58,7 @@ async def _route(hub, name="notes", run_id="r_test"):
 async def _post(entry, *, headers=None, url=None, body=INIT):
     h = dict(ACCEPT)
     h.update(entry["headers"] if headers is None else headers)
-    async with httpx.AsyncClient(timeout=10) as c:
+    async with httpx.AsyncClient(timeout=10, trust_env=False) as c:  # client test = "claude" đã có NO_PROXY loopback
         return await c.post(url or entry["url"], headers=h, content=json.dumps(body))
 
 
@@ -290,3 +290,68 @@ def test_config_branch_is_security_key():
     from cfharness.guard.integrity import SECURITY_KEYS
 
     assert "mcp.oauth_proxy" in SECURITY_KEYS
+
+
+# =========================================================================== proxy HTTP của môi trường (nghiệm thu thật 2026-11-17)
+def test_child_env_keeps_loopback_off_env_proxy():
+    """claude 2.1.326 thật: có HTTP_PROXY mà không NO_PROXY → request tới proxy OAuth 127.0.0.1 đi QUA proxy ngoài (lộ route+khoá,
+    MCP 502). child_env thêm loopback vào NO_PROXY/no_proxy, giữ giá trị sẵn có; không đụng gì khi không có proxy."""
+    from types import SimpleNamespace
+
+    from cfharness.runtime.claude_cli import ClaudeCliRuntime, child_env
+
+    base = {"PATH": "/bin", "HTTPS_PROXY": "http://corp:3128", "NO_PROXY": "intra.example"}
+    env = child_env({}, base)
+    for var in ("NO_PROXY", "no_proxy"):
+        parts = env[var].split(",")
+        assert parts[0] == "intra.example" and {"127.0.0.1", "localhost", "::1"} <= set(parts)
+    assert "NO_PROXY" not in child_env({}, {"PATH": "/bin"})
+    assert child_env({}, {"http_proxy": "http://p:1", "no_proxy": "*"})["no_proxy"] == "*"
+    # env_extra của run đặt proxy → _run_env vẫn giữ loopback đi thẳng
+    rt = ClaudeCliRuntime({})
+    assert "127.0.0.1" in rt._run_env(SimpleNamespace(env_extra={"HTTP_PROXY": "http://corp:3128"}))["NO_PROXY"].split(",")
+
+
+async def test_upstream_on_loopback_bypasses_env_proxy(hub, fake, monkeypatch):
+    """HTTP_PROXY của daemon không áp cho đích loopback (httpx không tự bỏ qua localhost) — proxy + refresh vẫn tới server cục bộ."""
+    add_server(hub, fake)
+    await connect(hub, fake)
+    entry = await _route(hub)
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")  # cổng discard: client daemon đi qua đây là hỏng
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+    fake.access[fake.issued_access[-1]] = 0  # ép 401 → refresh (OAuthManager) → gửi lại
+    r = await _post(entry)
+    assert r.status_code == 200 and hub.mcp_proxy.stats.get("refreshed_after_401") == 1
+
+
+async def test_rejections_are_counted_by_reason(hub, fake):
+    add_server(hub, fake)
+    await connect(hub, fake)
+    entry = await _route(hub)
+    await _post(entry, headers={})
+    await _post(entry, headers={KEY_HEADER: "x"})
+    await _post(entry)
+    st = hub.mcp_proxy.status()["stats"]
+    assert st["rejected.missing_key"] == 1 and st["rejected.bad_key"] == 1 and st["accepted.POST"] == 1
+
+
+def test_cli_edit_url_keeps_sse_transport(hub_home):
+    """`mcp edit --url` không có --transport: giữ sse (trước đây ép về http — server SSE cũ hỏng; phát hiện khi nghiệm thu thật)."""
+    import yaml
+
+    from cfharness.cli import main
+    from cfharness.daemon import spawn_background
+
+    hub_home.config.write_text(yaml.safe_dump({"runtime": {"kind": "fake"}}))
+    spawn_background(hub_home)
+    try:
+        assert main(["mcp", "add", "--transport", "sse", "--url", "http://127.0.0.1:1/sse", "--no-probe", "old"]) == 0
+        assert main(["mcp", "edit", "--url", "http://127.0.0.1:2/sse", "old"]) == 0
+        assert main(["--json", "mcp", "show", "old"]) == 0
+    finally:
+        main(["daemon", "stop"])
+    import sqlite3
+
+    row = sqlite3.connect(hub_home.db).execute("SELECT config FROM mcp_servers WHERE name='old'").fetchone()
+    cfg = json.loads(row[0])
+    assert cfg["transport"] == "sse" and cfg["url"] == "http://127.0.0.1:2/sse"

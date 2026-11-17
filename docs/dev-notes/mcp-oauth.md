@@ -156,10 +156,34 @@ run không có `allowLocalBinding`.
 - Tiến trình cùng user ngoài sandbox: vẫn đọc được secret store (ngang mức §7); với proxy không thêm gì đáng kể.
 - Log: proxy không log URL (có route id), header hay body; lỗi đi qua `redact_str`.
 
-**Chưa nghiệm thu với `claude` thật** (nhánh này chỉ test với client httpx + MCP/AS giả): cần một lần chạy thật `claude -p` có sandbox
-bật, mcp.json trỏ proxy, server OAuth thật (vd Linear/Notion) để xác nhận (a) client MCP của claude nối được 127.0.0.1 khi sandbox bật,
-(b) claude gửi header `X-Cfharness-Proxy-Key` trên cả GET SSE lẫn POST message, (c) không bị `HTTP(S)_PROXY` của môi trường daemon
-kéo request loopback đi vòng (nếu có, cần `NO_PROXY=127.0.0.1`). Xong thì có thể cân nhắc bật mặc định.
+**Nghiệm thu với `claude` thật — 2026-11-17, Claude Code 2.1.326, haiku, tổng $0.021 (6 run).** Hub TẠM (`CFHARNESS_HOME` trong
+thư mục tạm, daemon từ mã nhánh, `budget.hub_usd_per_day=0.30`), guard bật + sandbox OS bật (settings.json của run: `sandbox.enabled=true`,
+`failIfUnavailable=true`, KHÔNG `allowLocalBinding`, hook PreToolUse có mặt). Server = `tests/oauth_fake.py` chạy thành tiến trình riêng trên
+127.0.0.1, ghi log từng request (method, path, status, 13 ký tự đầu `Authorization`, tên header, UA). Hai server OAuth gán cho agent:
+`fnotes` (Streamable HTTP, đăng nhập qua luồng thật `mcp.oauth_start/callback` với AS giả) và `flegacy` (transport SSE cũ, token gieo sẵn).
+Agent gọi `doc_ghi_chu` vài lần.
+- **(a) Kết nối 127.0.0.1 khi guard + sandbox bật: ĐẠT.** Tool trả "ghi chu so N: hop OK"; log server thấy request UA `claude-code/2.1.326
+  (sdk-cli)` qua proxy. Không cần ngoại lệ sandbox (khẳng định: client MCP chạy ngoài sandbox Bash).
+- **(b) Khoá trên mọi loại request: ĐẠT.** Server nhận từ claude (qua proxy): Streamable HTTP `POST /mcp` (initialize, notification 202,
+  tools/list, tools/call) + `GET /mcp` (stream server→client, 405 của server giả); SSE cũ `GET /sse` (200, stream) + `POST /messages?session_id=…`
+  (202, endpoint đã viết lại qua proxy). Proxy chỉ chuyển tiếp khi khoá đúng (mọi nhánh khác từ chối trước khi chạm upstream) → mọi request
+  trên đều mang `X-Cfharness-Proxy-Key`; upstream không bao giờ thấy header khoá (`has_proxy_key_header=false`) và mọi `Bearer` upstream do
+  proxy chèn. mcp.json chụp lúc run chạy: chỉ URL `/r/<id>/…` + khoá, không `Authorization`/`Bearer`/access token/seed.
+- **Làm mới giữa run: ĐẠT.** Server giả vô hiệu access token ngay sau tools/call đầu → tools/call kế tiếp: upstream 401 → proxy gọi
+  `/as/token` (refresh) → gửi lại với token mới → 200; agent không thấy lỗi.
+- **(c) HTTP(S)_PROXY trong env daemon: TRƯỚC SỬA — HỎNG.** Daemon chạy với `HTTP_PROXY/HTTPS_PROXY` (+ chữ thường) trỏ proxy chuyển tiếp ghi
+  log: claude đẩy `POST/GET http://127.0.0.1:<cổng>/r/<id>/…` QUA proxy ngoài (route id + khoá đi dạng rõ tới proxy; MCP 502
+  `CLIENT_HTTP_NOT_IMPLEMENTED`). API Anthropic đi `CONNECT api.anthropic.com:443` (đúng). **Sửa:** `runtime/claude_cli.with_loopback_no_proxy`
+  — có biến proxy trong env tiến trình `claude` (cả từ `env_extra` của run) → thêm `127.0.0.1,localhost,::1` vào `NO_PROXY` + `no_proxy`
+  (giữ giá trị cũ, `*` giữ nguyên). Phía daemon, httpx cũng không tự bỏ qua loopback: client của proxy + `OAuthManager` gắn
+  `LOOPBACK_DIRECT_MOUNTS` (đích 127.0.0.1/localhost/::1 đi thẳng; đích từ xa vẫn theo proxy của môi trường). **SAU SỬA — ĐẠT:** log proxy
+  ngoài chỉ còn `CONNECT api.anthropic.com:443` (+ telemetry của CLI), không request loopback nào; cả `fnotes` lẫn `flegacy` trả kết quả.
+- Phát hiện thêm khi nghiệm thu (đã sửa): `cfharness mcp edit --url` không kèm `--transport` ép server về `http` → server SSE cũ hỏng
+  (claude thử POST lên URL SSE). Giờ giữ transport http/sse hiện có. Log của proxy mang `run_id` của run khởi động nó (contextvar kế thừa)
+  → task server chạy trong Context rỗng. Từ chối giờ ghi log INFO kèm mã lý do (`missing_key|bad_key|unknown_route|path|origin|host|…`,
+  path chỉ khi ngoài `/r/`) + `proxy.status()["stats"]`.
+- Chưa thử với nhà cung cấp OAuth thật (Linear/Notion…) — phần OAuth đã có ở luồng cũ; proxy chỉ đổi chặng claude → server.
+- Dọn: daemon tạm dừng, `~/.claude/projects/<cwd tạm>` đã xoá, không đụng hub thật / `~/.claude.json`.
 
 **Giới hạn.** Body request đệm toàn bộ (MCP là JSON-RPC nhỏ; upload lớn qua MCP hiếm). Không hỗ trợ WebSocket. `cfharness takeover`
 (phiên tương tác của người, không có vòng đời run) vẫn dùng đường cũ. Probe (`mcp.probe`) gọi thẳng server (trong daemon, không qua file).
