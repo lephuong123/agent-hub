@@ -81,6 +81,16 @@ async def start_server(cb: Callable[[asyncio.StreamReader, asyncio.StreamWriter]
     return server
 
 
+def server_listening(server: Any) -> bool:
+    """Socket nghe của server còn mở không.
+
+    Windows (ProactorEventLoop): một lỗi `accept` (vd WinError 64 khi client đóng kết nối giữa chừng) làm asyncio log
+    "Accept failed on a socket" rồi ĐÓNG HẲN socket nghe — tiến trình daemon vẫn sống nhưng không nhận kết nối nào nữa,
+    mọi client thấy "daemon không chạy". Daemon dùng hàm này để phát hiện và mở lại server."""
+    socks = getattr(server, "sockets", None) or ()
+    return bool(socks) and all(s.fileno() != -1 for s in socks)
+
+
 def peer_pid(sock: Any) -> int | None:
     """pid đầu kia kết nối, do kernel báo (macOS LOCAL_PEERPID, Linux SO_PEERCRED, Windows bảng TCP)."""
     if IS_WINDOWS:

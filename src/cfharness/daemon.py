@@ -30,6 +30,8 @@ from .runtime import AgentRuntime
 
 log = logging.getLogger("cfharness.daemon")
 Handler = Callable[[dict[str, Any]], Awaitable[Any] | Any]
+RPC_LIMIT = 16 * 1024 * 1024
+LISTENER_CHECK_S = 2.0  # chu kỳ kiểm socket nghe còn mở (`Daemon._watch_listener`)
 
 
 class Daemon:
@@ -481,7 +483,7 @@ class Daemon:
                 raise SystemExit(f"daemon đã chạy (socket {sock})")
             sock.unlink(missing_ok=True)
         self.hub.start()
-        self.server = await transport.start_server(self._handle_conn, sock, limit=16 * 1024 * 1024)
+        self.server = await transport.start_server(self._handle_conn, sock, limit=RPC_LIMIT)
         self.paths.pidfile.write_text(str(os.getpid()), encoding="utf-8")
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
@@ -490,15 +492,37 @@ class Daemon:
             except (NotImplementedError, RuntimeError):  # pragma: no cover
                 pass
         log.info("daemon sẵn sàng tại %s (epoch %s)", sock, self.hub.bus.epoch)
+        watch = asyncio.create_task(self._watch_listener())
         try:
             await self.stopping.wait()
         finally:
             log.info("daemon đang dừng")
+            watch.cancel()
             self.server.close()
             await self.hub.stop()
             JOBS.close_all()
             sock.unlink(missing_ok=True)
             self.paths.pidfile.unlink(missing_ok=True)
+
+
+    async def _watch_listener(self, interval: float = LISTENER_CHECK_S) -> None:
+        """Mở lại server khi socket nghe bị asyncio đóng sau lỗi accept (`transport.server_listening`).
+        Không có cái này, daemon sống mà điếc: CLI/web/chat đều báo "daemon không chạy" cho tới khi giết tiến trình."""
+        while not self.stopping.is_set():
+            try:
+                await asyncio.wait_for(self.stopping.wait(), interval)
+                return
+            except asyncio.TimeoutError:
+                pass
+            if self.server is None or transport.server_listening(self.server):
+                continue
+            log.error("socket nghe của daemon đã bị đóng (accept lỗi) — mở lại server")
+            try:
+                self.server.close()
+                self.server = await transport.start_server(self._handle_conn, self.paths.socket, limit=RPC_LIMIT)
+                log.info("daemon nghe lại tại %s", self.paths.socket)
+            except Exception:
+                log.exception("mở lại server của daemon lỗi — thử lại sau %.0f s", interval)
 
 
 def _live_daemon(sock: Path) -> bool:
