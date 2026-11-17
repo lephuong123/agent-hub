@@ -51,7 +51,7 @@ NET_CONTINUE_MSG = (
     "[cfharness] Nobody approved this network connection (request {aid}) within {timeout}s, so it is DENIED for now and your run continues. "
     "Do not retry the same host now; work without it, or clearly report in your final summary what could not be fetched and why."
 )
-TRUST_NEVER_RULES = frozenset({"other_hub_write", "admin_shared", "desktop_app_data"})  # forbidden mà trust full KHÔNG gỡ
+TRUST_NEVER_RULES = frozenset({"other_hub_write", "admin_shared", "desktop_app_data", "filehub_lane"})  # forbidden mà trust full KHÔNG gỡ
 FORBIDDEN_MSG = "[cfharness] Blocked by hub safety policy: {reason}. Agents may not approve their own requests or change safety policy."
 RESTART_MSG = (
     "[cfharness] A human APPROVED this action (request {aid}), but a static safety rule blocks it in this process. "
@@ -257,9 +257,16 @@ class GuardService:
             trusted_repo_scripts=bool(self.knob("guard.trusted_repo_scripts")),
             task_created_deletes=bool(self.knob("guard.task_created_deletes")),
             filehub_roots=self._filehub_roots(),
+            lane_ports=self._lane_ports(),
             **self._confine_ctx(c, run, roots),
             **self._connector_ctx(run),
         )
+
+    def _lane_ports(self) -> tuple[int, ...]:
+        try:
+            return tuple(self.hub.filehub.lane.ports())  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover
+            return ()
 
     def _filehub_roots(self) -> tuple[str, ...]:
         try:

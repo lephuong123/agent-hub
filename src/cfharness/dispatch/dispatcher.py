@@ -548,7 +548,8 @@ class TaskDispatcher:
         ws = t.get("workspace") or {}
         kind = ws.get("kind") or "scratch"
         if kind == "filehub":  # thư mục chung: khoá/checkpoint như `dir` (gốc khoá = gốc thư mục chung — WorkspaceLocks)
-            return ws.get("path"), "dir"
+            # chế độ có thể đổi sau khi tạo task (sync ↔ lane): giải lại từ ref lúc chạy (RunManager.submit + WorkspaceLocks hiểu `filehub:`)
+            return (ws.get("ref") or ws.get("path")), "dir"
         return (ws.get("path") if kind in ("dir", "worktree") else None), kind
 
     def _lock_block(self, t: dict[str, Any], agent_id: str, session_id: str | None, read_only: bool) -> str | None:

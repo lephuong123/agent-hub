@@ -72,6 +72,8 @@ def register_rpc(daemon: "Daemon") -> None:
         "filehub.lane_setup": s.lane.setup,  # khoá bị pop khỏi p NGAY đầu hàm (audit không thấy)
         "filehub.lane_test": s.lane.test,
         "filehub.lane_disable": s.lane.disable,
+        # tool hub-self `fs_*` của run có workspace thư mục chung chế độ lane — daemon ràng run_id với tiến trình gọi (như taskself.call)
+        "fsself.call": s.lane.fsself_call,
     }
     for name in MUTATING_FILEHUB:
         methods[name] = wrap_with_audit(daemon.hub, name, methods[name])

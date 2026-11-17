@@ -14,11 +14,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
+import shutil
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ...errors import Conflict, HubError, NotFound
+from ...errors import Blocked, Conflict, HubError, NotFound
 from ...events import make_event
 from .client import PROTOCOL, SERVER_RE, LaneClient, LaneError, check_url, key_prefix, port_of, valid_key
 
@@ -106,6 +109,12 @@ class LaneService:
         self._hello: dict[str, tuple[float, dict[str, Any]]] = {}
         self.states: dict[str, dict[str, Any]] = {}
         self.transport: Any = None  # test: transport httpx thay thế (mặc định TCP thật tới 127.0.0.1)
+        self.workdirs: dict[str, Any] = {}  # tree → Workdir (đang chạy hoặc đỗ khi waiting_human)
+        self.by_run: dict[str, str] = {}  # run_id → tree
+        self._streams: dict[str, asyncio.Task[Any]] = {}  # server → vòng đọc SSE
+        self._maint: asyncio.Task[Any] | None = None
+        self.stream_reconnects: dict[str, int] = {}
+        self.hub.bus.add_listener(self._on_bus)
 
     # ------------------------------------------------------------------ cấu hình
     def cfg(self, key: str) -> Any:
@@ -250,7 +259,10 @@ class LaneService:
         return {"mode": str(self.fh.cfg("mode") or "sync"), "servers": out, "folders": folders, **self._run_status()}
 
     def _run_status(self) -> dict[str, Any]:
-        return {}
+        lat = sorted(x for wd in self.workdirs.values() for x in wd.latencies)
+        p95 = round(lat[min(len(lat) - 1, int(len(lat) * 0.95))] * 1000) if lat else None
+        return {"runs": [wd.info() for wd in self.workdirs.values()], "orphans": self.orphans(), "steer_latency_p95_ms": p95,
+                "streams": {k: (not t.done()) for k, t in self._streams.items()}}
 
     # ------------------------------------------------------------------ thiết lập (CHỈ người — RPC HUMAN_ONLY)
     async def setup(self, p: dict[str, Any]) -> dict[str, Any]:
@@ -334,7 +346,302 @@ class LaneService:
         return {"server": server, "removed": True, "folders": using}
 
     def _busy(self, server: str) -> bool:
+        return any(wd.server == server and not wd.parked for wd in self.workdirs.values())
+
+    # ------------------------------------------------------------------ cây làm việc theo run
+    @property
+    def state_dir(self) -> Path:
+        return Path(self.hub.paths.home) / "filehub" / "lane"
+
+    @property
+    def orphan_dir(self) -> Path:
+        return Path(self.hub.paths.home) / "filehub" / "lane-orphans"
+
+    def ignore_patterns(self) -> list[str]:
+        try:
+            return list(self.fh.ignore_lines())
+        except Exception:  # pragma: no cover
+            from ..service import IGNORE_BASE
+
+            return list(IGNORE_BASE)
+
+    def tree_path(self, agent: dict[str, Any], tree: str) -> Path:
+        return Path(agent["home_path"]) / "workspaces" / f"lane-{tree}"
+
+    def is_tree_path(self, path: Any) -> bool:
+        """`cwd` là cây lane (chuỗi resume/continue/review của run lane): `<HUB_HOME>/agents/<id>/workspaces/lane-<tree>`."""
+        try:
+            p = Path(str(path)).expanduser().resolve()
+            rel = p.relative_to(Path(self.hub.paths.home).resolve() / "agents")
+        except (ValueError, OSError, RuntimeError):
+            return False
+        parts = rel.parts
+        return len(parts) == 3 and parts[1] == "workspaces" and parts[2].startswith("lane-")
+
+    def workdir_of(self, run_id: str) -> Any:
+        tree = self.by_run.get(run_id)
+        return self.workdirs.get(tree) if tree else None
+
+    def publish(self, etype: str, wd: Any, payload: dict[str, Any]) -> None:
+        ev = make_event(etype, wd.agent_id if wd is not None else None,
+                        {**({"run_id": wd.run_id, "folder": wd.folder} if wd is not None else {}), **payload}, run_id=wd.run_id if wd is not None else None,
+                        source="hub")
+        self.hub.publish(ev)
+
+    async def steer(self, run_id: str, text: str) -> None:
+        from ...steer import steer
+
+        run = self.hub.store.get_run(run_id) or {}
+        if run.get("status") != "running":
+            return
+        try:
+            await steer(self.hub, run_id, text, by="hub", channel="hub")
+        except HubError as e:
+            log.info("lane: không steer được run %s: %s", run_id, e.message)
+
+    async def prepare_run(self, run: dict[str, Any], agent: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
+        """Trước spawn: dựng/đỗ lại cây của run. Trả (cwd, run_opts đã ghi `tree`). Lỗi → HubError `filehub_unavailable: …` (run failed)."""
+        from .workdir import Workdir
+
+        opts = dict(run.get("run_opts") or {})
+        lane = dict(opts.get("filehub_lane") or {})
+        server, root = str(lane.get("server") or ""), str(lane.get("root") or "")
+        tree = str(lane.get("tree") or run["id"])
+        try:
+            h = await self.hello(server)
+            if root not in {str(r.get("id")) for r in h.get("roots") or [] if isinstance(r, dict)}:
+                raise LaneError("root_not_granted", 403)
+            ro = bool(opts.get("read_only"))
+            wd = self.workdirs.get(tree)
+            path = self.tree_path(agent, tree)
+            if wd is None and (self.state_dir / f"{tree}.json").exists() and path.is_dir():
+                wd = Workdir.load(self, self.state_dir / f"{tree}.json", path=path)  # daemon khởi động lại / resume sau waiting_human
+            if wd is not None:
+                wd.run_id, wd.parked, wd.read_only = run["id"], False, ro
+                wd.steered = set()
+                await wd.reconcile()
+            else:
+                if path.exists():
+                    shutil.rmtree(path, ignore_errors=True)
+                wd = Workdir(self, tree=tree, run_id=run["id"], agent_id=agent["id"], folder=str(lane.get("folder") or ""), server=server,
+                             root=root, sub=str(lane.get("sub") or ""), path=path, read_only=ro, kind=str(lane.get("kind") or "folder"))
+                await wd.materialize()
+        except LaneError as e:
+            raise HubError(f"filehub_unavailable: {e.message}", data={"lane_code": e.lane_code}) from None
+        except OSError as e:
+            raise HubError(f"filehub_unavailable: không dựng được cây làm việc ({type(e).__name__})") from None
+        self.workdirs[tree] = wd
+        self.by_run[run["id"]] = tree
+        lane["tree"] = tree
+        opts["filehub_lane"] = lane
+        if run.get("run_opts") != opts:
+            self.hub.store.update_run(run["id"], {"run_opts": opts})
+        wd.persist()
+        self.ensure_stream(server, wd.cursor)
+        wd.start()
+        return wd.path, opts
+
+    async def flush_run(self, run_id: str) -> dict[str, Any] | None:
+        return None
+
+    async def end_run(self, run_id: str) -> None:
+        """Sau run: `waiting_human` → ĐỖ cây (giữ base + presence, resume dùng lại); còn lại → bỏ cây khỏi bộ nhớ, xoá cây."""
+        tree = self.by_run.pop(run_id, None)
+        wd = self.workdirs.get(tree) if tree else None
+        if wd is None:
+            return
+        await wd.stop()
+        status = (self.hub.store.get_run(run_id) or {}).get("status")
+        if status in ("waiting_human", "interrupted"):
+            wd.parked = True
+            wd.persist()
+            self._maybe_stop_stream(wd.server)
+            return
+        await self._close_tree(wd)
+
+    async def _close_tree(self, wd: Any) -> None:
+        self.workdirs.pop(wd.tree, None)
+        shutil.rmtree(wd.path, ignore_errors=True)
+        try:
+            wd.state_path.unlink()
+        except OSError:
+            pass
+        self._maybe_stop_stream(wd.server)
+
+    # ------------------------------------------------------------------ luồng sự kiện (một kết nối / server, chỉ khi có cây)
+    def ensure_stream(self, server: str, cursor: str) -> None:
+        t = self._streams.get(server)
+        if t is not None and not t.done():
+            return
+        if cursor and not self._cursor(server):
+            self._save_cursor(server, cursor)
+        elif cursor:
+            self._save_cursor(server, cursor)  # cây mới: nghe từ ảnh chụp của lượt list (không bỏ sót khung giữa list và nối luồng)
+        try:
+            self._streams[server] = asyncio.get_running_loop().create_task(self._stream_loop(server))
+        except RuntimeError:  # pragma: no cover
+            pass
+
+    def _maybe_stop_stream(self, server: str) -> None:
+        if any(wd.server == server and not wd.parked for wd in self.workdirs.values()):
+            return
+        t = self._streams.pop(server, None)
+        if t is not None:
+            t.cancel()
+
+    def _cursor(self, server: str) -> str:
+        st = self.hub.store.state_get("filehub.lane") or {}
+        return str(((st.get("cursors") or {}).get(server)) or "")
+
+    def _save_cursor(self, server: str, cursor: str) -> None:
+        st = dict(self.hub.store.state_get("filehub.lane") or {})
+        cur = dict(st.get("cursors") or {})
+        if cur.get(server) == cursor:
+            return
+        cur[server] = cursor
+        st["cursors"] = cur
+        self.hub.store.state_set("filehub.lane", st)
+
+    async def _stream_loop(self, server: str) -> None:
+        lo, hi = (list(self.cfg("reconnect_s") or [0.5, 10]) + [0.5, 10])[:2]
+        delay = float(lo)
+        while True:
+            try:
+                c = self.client(server)
+                async for ev in c.events(self._cursor(server) or None):
+                    delay = float(lo)
+                    if self.states.get(server, {}).get("state") in ("offline", None):
+                        self._set_state(server, "ok")
+                    stop = await self._on_frame(server, ev)
+                    if ev.id and ev.type not in ("ping",):
+                        self._save_cursor(server, ev.id)
+                    if stop:
+                        return
+            except asyncio.CancelledError:
+                raise
+            except LaneError as e:
+                self._on_error(server, e)
+                if e.lane_code in ("unauthorized", "lane_disabled", "version_mismatch"):
+                    await self._stop_pushes(server, e.lane_code)
+                    return
+            except Exception:  # pragma: no cover — vòng nền không được chết vì một khung hỏng
+                log.exception("lane: luồng sự kiện %s lỗi", server)
+            self.stream_reconnects[server] = self.stream_reconnects.get(server, 0) + 1
+            await asyncio.sleep(delay)
+            delay = min(float(hi), delay * 2)
+
+    async def _on_frame(self, server: str, ev: Any) -> bool:
+        recv = time.time()
+        wds = [wd for wd in self.workdirs.values() if wd.server == server and not wd.parked]
+        if ev.type == "change":
+            root = str(ev.data.get("root") or "")
+            for wd in wds:
+                if wd.root == root:
+                    await wd.on_change(ev.data, at_recv=recv)
+        elif ev.type == "reset":
+            root = str(ev.data.get("root") or "")
+            for wd in wds:
+                if wd.root == root:
+                    try:
+                        await wd.reconcile()
+                    except (LaneError, HubError, OSError) as e:
+                        log.warning("lane: đối soát lại sau reset lỗi: %s", e)
+            cur = await self.client(server).cursor()
+            self._save_cursor(server, cur)
+        elif ev.type == "root_revoked":
+            root = str(ev.data.get("root") or "")
+            self._hello.pop(server, None)
+            for wd in wds:
+                if wd.root == root:
+                    wd.revoked = True
+                    from .workdir import STEER_REVOKED
+
+                    await wd.steer("revoked", STEER_REVOKED)
+        elif ev.type == "key_revoked":
+            self._set_state(server, "auth_failed", code="key_revoked")
+            await self._stop_pushes(server, "unauthorized")
+            return True
         return False
+
+    async def _stop_pushes(self, server: str, code: str) -> None:
+        for wd in self.workdirs.values():
+            if wd.server == server:
+                wd.stopped_push = code
+
+    # ------------------------------------------------------------------ fsself.call (tool hub-self `fs_*`)
+    async def fsself_call(self, p: dict[str, Any]) -> Any:
+        from ... import auth as _auth
+        from .tools import call
+
+        run_id, op = str(p.get("run_id") or ""), str(p.get("op") or "")
+        run = self.hub.store.get_run(run_id)
+        if run is None or run["status"] not in ("queued", "running"):
+            raise HubError("run không còn chạy — fs_* chỉ dùng được trong run đang chạy")
+        c = _auth.current_caller()
+        if c is not None and c.via == "socket" and not c.human and c.run_id != run["id"]:
+            raise Blocked("fs_*: run_id không khớp tiến trình gọi (chỉ hub-self của chính run đó)", data={"caller": c.to_dict()})
+        wd = self.workdir_of(run_id)
+        if wd is None:
+            raise Blocked("run này không có workspace thư mục chung chế độ lane (cổng cfharness)")
+        from ...runs import _agent_read_only
+
+        agent = self.hub.store.get_agent(run["agent_id"]) or {}
+        ro = bool((run.get("run_opts") or {}).get("read_only")) or _agent_read_only(agent)
+        try:
+            return await call(self, wd, op, dict(p.get("args") or {}), read_only=ro)
+        except LaneError as e:
+            if e.lane_code in ("unauthorized", "lane_disabled"):
+                self._on_error(wd.server, e)
+            raise HubError(e.message, data={"lane_code": e.lane_code}) from None
+
+    async def pull(self, wd: Any, rel: str) -> dict[str, Any]:
+        """fs_pull: tải tệp (hoặc thư mục, trong ngưỡng cây) vào cây run; tệp đã sửa cục bộ → giữ bản của agent thành bản xung đột."""
+        c = self.client(wd.server)
+        it = await c.stat(wd.root, wd.remote(rel))
+        async with wd.lock:
+            if it.get("type") == "folder":
+                items, _cur, cut = await c.list_all(wd.root, wd.remote(rel), recursive=True, max_items=int(self.cfg("tree_max_files") or 20000))
+                if cut:
+                    raise HubError("thư mục quá nhiều tệp — fs_pull từng thư mục con")
+                n = 0
+                for x in items:
+                    r = wd.rel_of(str(x.get("path") or ""))
+                    if not r:
+                        continue
+                    if x.get("type") == "folder":
+                        wd.local(r).mkdir(parents=True, exist_ok=True)
+                        wd.base[r] = wd._base_of(x)
+                    else:
+                        if (wd.path / r).exists() and wd.modified_locally(r):
+                            await wd._conflict_local(r)
+                        await wd._download(r, x)
+                        n += 1
+                wd.local(rel).mkdir(parents=True, exist_ok=True)
+                wd.base[rel] = wd._base_of(it)
+                wd.persist()
+                return {"path": rel, "type": "folder", "files": n, "local": str(wd.path / rel)}
+            if (wd.path / rel).exists() and wd.modified_locally(rel):
+                await wd._conflict_local(rel)
+            b = await wd._download(rel, it)
+            wd.read_paths.add(rel)
+            wd.persist()
+        return {"path": rel, "type": "file", "size": b.get("size"), "version_id": b.get("version_id"), "local": str(wd.path / rel)}
+
+    async def write_op(self, wd: Any, op: str, args: dict[str, Any]) -> Any:
+        raise HubError(f"{op}: chưa hỗ trợ")
+
+    def orphans(self) -> list[dict[str, Any]]:
+        return []
+
+    def _on_bus(self, ev: Any) -> None:
+        """Tool của run vừa xong (Write/Edit/Bash…) → kích quét cây ngay (không chờ nhịp `scan_interval_s`)."""
+        try:
+            if ev.run_id and ev.type in ("tool.complete",) and ev.run_id in self.by_run:
+                wd = self.workdir_of(ev.run_id)
+                if wd is not None:
+                    wd.kick()
+        except Exception:  # pragma: no cover — listener không được làm hỏng bus
+            pass
 
     # ------------------------------------------------------------------ tiện ích
     def _spawn(self, coro: Any) -> None:
@@ -347,6 +654,11 @@ class LaneService:
         t.add_done_callback(self.fh._bg.discard)
 
     async def stop(self) -> None:
+        for t in list(self._streams.values()) + ([self._maint] if self._maint else []):
+            t.cancel()
+        self._streams.clear()
+        for wd in list(self.workdirs.values()):
+            await wd.stop()
         for _fp, c in list(self._clients.values()):
             await c.aclose()
         self._clients.clear()

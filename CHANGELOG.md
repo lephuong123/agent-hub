@@ -14,6 +14,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - `cfharness filehub lane setup --url http://127.0.0.1:8223` (khoá hỏi bằng getpass, chỉ lưu trong secret store), `lane status|test|disable`:
   nối hub với cổng cfharness của Không gian số trên cùng máy — chỉ nhận URL loopback, khoá không bao giờ vào cấu hình/nhật ký/gói nhân bản.
   Hub đang dùng đồng bộ cũ không đổi gì cho tới khi người chuyển thư mục sang `lane`.
+- Run trên thư mục chế độ `lane` (`filehub:<tên>[/<con>]`) có cây làm việc riêng dựng từ Không gian số lúc bắt đầu (đúng phạm vi ref) và
+  xoá khi run xong; người sửa/xoá/di chuyển tệp trong phạm vi → hub kéo về và nhắn agent ngay (thường < 1 s). Run chỉ đọc hoặc phạm vi quá
+  lớn: cây rỗng + tool `fs_list|fs_read|fs_stat|fs_versions|fs_link|fs_pull`. Agent không bao giờ gọi được cổng trực tiếp (bị chặn).
 
 ### MCP server
 - `cfharness mcp add|edit <tên> --url … --oauth …`: cờ đặt SAU tên được đọc đúng — trước đây bị lưu lặng lẽ thành lệnh stdio
