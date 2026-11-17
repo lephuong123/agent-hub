@@ -343,10 +343,11 @@ async def _install_ctx(request: Request, reg_name: str, opt_id: str | None) -> d
     opt = next((o for o in opts if o.get("id") == opt_id), opts[0] if opts else None)
     from ..mcp_client.oauth_cli import DEFAULT_PORT
     from .app import ws
-    from .mcp_oauth import redirect_uri
+    from .mcp_oauth import redirect_uri, redirect_uri_for
 
-    # app OAuth tạo tay ở nhà cung cấp phải khai đúng redirect URI: web (nút Kết nối) và `cfharness mcp login` (loopback)
-    redirect_uris = [redirect_uri(ws(request).port), f"http://127.0.0.1:{DEFAULT_PORT}/callback"]
+    # app OAuth tạo tay ở nhà cung cấp phải khai đúng redirect URI: web (nút Kết nối — tên miền public nếu đang vào qua đó) và
+    # `cfharness mcp login` (loopback)
+    redirect_uris = list(dict.fromkeys([redirect_uri_for(request, ws(request)), redirect_uri(ws(request).port), f"http://127.0.0.1:{DEFAULT_PORT}/callback"]))
     return {"entry": res.get("server") or {}, "options": opts, "opt": opt, "suggested": res.get("suggested_name") or "mcp",
             "redirect_uris": redirect_uris}
 

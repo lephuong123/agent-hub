@@ -452,3 +452,46 @@ def test_cli_login_via_loopback_listener(hub_home, fake, capsys, monkeypatch):
         assert "đã ngắt kết nối" in capsys.readouterr().out
     finally:
         main(["daemon", "stop"])
+
+
+async def test_web_connect_via_public_origin_redirects_back_to_public_domain(hub_home, fake):
+    """Vào web qua `web.public_origin` (tunnel) → redirect_uri = tên miền public, không phải 127.0.0.1 của máy người bấm."""
+    from cfharness.web.app import create_app
+    from cfharness.web.security import WebAuth, cookie_name
+
+    PUB = "https://hub.example.com"
+    d, task = await _daemon(hub_home)
+    auth = WebAuth()
+    app = create_app(hub_home, auth=auth, port=WEB_PORT, public_origin=PUB)
+    c = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=WEB_BASE)
+    try:
+        r = await c.get("/login?t=" + auth.mint())
+        sid = r.cookies.get(cookie_name(hub_home.home)) or c.cookies.get(cookie_name(hub_home.home))
+        csrf, key = auth.sessions[sid].csrf, r.headers["location"].split("#k=", 1)[1]
+        r = await c.post("/do/mcp_add", data={"csrf": csrf, "k": key, "confirm": "yes", "name": "notes", "transport": "http",
+                                              "url": fake.mcp_url, "oauth": "1", "next": "/mcp"})
+        assert r.status_code == 303
+
+        async def connect_url(host: str, origin: str) -> str:
+            r = await c.post("/do/mcp_connect", data={"csrf": csrf, "k": key, "name": "notes"}, headers={"host": host, "origin": origin})
+            assert r.status_code == 200, r.text[:300]
+            return re.search(r'content="0;url=([^"]+)"', r.text).group(1).replace("&amp;", "&")
+
+        url = await connect_url("hub.example.com", PUB)
+        assert parse_qs(urlsplit(url).query)["redirect_uri"] == [PUB + "/mcp/oauth/callback"]
+        cb = await asyncio.to_thread(authorize, url)
+        assert cb["_redirect"] == PUB + "/mcp/oauth/callback"
+        # callback trên host public (route công khai, Host hợp lệ) → hoàn tất
+        anon = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=PUB)
+        try:
+            ok = await anon.get("/mcp/oauth/callback", params={"state": cb["state"], "code": cb["code"]})
+            assert ok.status_code == 200 and "Đã kết nối" in ok.text
+        finally:
+            await anon.aclose()
+        assert d.hub.mcp.show("notes")["oauth_status"] == "connected"
+        # vào cục bộ vẫn dùng loopback
+        url = await connect_url(f"cfharness.localhost:{WEB_PORT}", WEB_BASE)
+        assert parse_qs(urlsplit(url).query)["redirect_uri"] == [f"http://127.0.0.1:{WEB_PORT}/mcp/oauth/callback"]
+    finally:
+        await c.aclose()
+        await _stop(d, task)
