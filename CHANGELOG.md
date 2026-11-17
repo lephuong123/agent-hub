@@ -17,6 +17,32 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   hậu quả thật và báo ĐẠT / TRƯỢT / KHÔNG KẾT LUẬN từng ca. Trần chi phí cứng (`--budget-usd`, mặc định $0.50; mỗi run `--per-run-usd`
   $0.10), đạt trần thì dừng ngay và bỏ qua các ca còn lại; xong thì dọn sạch hub tạm. `cfharness selftest --dry-run` chỉ liệt kê ca,
   không tốn tiền. Lệnh chỉ người (agent gõ bị chặn). Hướng dẫn: `docs/dev-notes/selftest.md`.
+### Tìm hội thoại cũ
+- **`/search <từ khoá>` trong `cfharness chat`** (cả màn hình đầy đủ lẫn `--classic`): tìm trong mọi hội thoại với điều phối viên và
+  session của các agent (có dấu/không dấu đều khớp, `"cụm từ"` trong ngoặc kép), kết quả gộp theo luồng, đánh số, kèm đoạn trích.
+  `/open <số>` (hoặc click kết quả ở màn hình đầy đủ) mở hội thoại cli tìm được; luồng khác thì hiện đoạn hội thoại quanh chỗ khớp
+  (chỉ xem) và gợi ý `/attach <run>`. Có trong menu `/` và bảng phím tắt `?`.
+- **`cfharness session reindex`**: dựng lại chỉ mục tìm kiếm hội thoại khi kết quả tìm thiếu/lệch — nạp lại FTS5 và quét lại toàn bộ
+  run/event/hội thoại để bù tin bị sót (`--fts-only` chỉ nạp lại FTS, `--wait` chờ xong). Chạy nền trong daemon, không xoá văn bản đã
+  chỉ mục; chỉ người làm được (agent bị chặn), có ghi nhật ký kiểm toán. `cfharness session status` xem số tin đã chỉ mục và tiến độ.
+### Không gian số (thư mục dùng chung)
+- **Báo sau run cho thư mục ghi thêm**: run có `extra_write_roots` nằm trong thư mục chung (vd task làm ở scratch nhưng được ghi vào
+  `~/KhongGianSo/<tên>/Báo cáo`) giờ cũng báo tệp đã xoá / đã đổi / có thể chứa bí mật sau run — như run có workspace `filehub:`.
+- **Đổi tên thư mục chung trong cfharness**: `cfharness filehub rename <tên cũ> <tên mới>` hoặc "Đổi tên trong cfharness" ở thẻ Không gian số
+  (Cài đặt). Chỉ đổi tên dùng để giao việc (`filehub:<tên>`); đường dẫn trên máy và tên trên Không gian số giữ nguyên, tên cũ vẫn khớp
+  (task/agent đã ghi `filehub:<tên cũ>` chạy tiếp). Từ chối khi có run đang ghi vào thư mục hoặc thư mục chưa đồng bộ lần đầu.
+### Tính năng mới
+- **Trang "Hệ thống ngoài" trên web** (`/systems`, nhóm "Hệ thống" ở thanh bên): xem các app trong thư mục làm việc và job launchd của chúng
+  (trạng thái, pid, ai tạm dừng, lịch), quét tìm + đăng ký hệ thống mới, thêm theo đường dẫn, gỡ, khoá/mở khoá job, tạm dừng / bật lại /
+  khởi động lại job; trang chi tiết có đuôi log (đã che secret). Mọi thao tác có hộp xác nhận và ghi nhật ký kênh `web`.
+- **Lệnh chat `/hethong`** (Telegram; Slack: `/cfh hethong`): xem hệ thống ngoài + job, nút Dừng / Bật lại / Khởi động lại từng job —
+  luôn 2 bước. Đăng ký, gỡ, khoá chỉ làm ở web/CLI.
+- **Sức khoẻ: dung lượng HUB_HOME + dọn thư mục làm việc mồ côi**: `cfharness hub doctor` và thẻ Sức khoẻ (Cài đặt web) báo dung lượng
+  theo thư mục (logs, checkpoints, backups, exports, workspaces của agent…), chỗ trống ổ đĩa, và các thư mục làm việc không còn dùng —
+  thư mục của hội thoại điều phối viên đã lưu trữ/không còn, workspace/worktree không run/task nào tham chiếu, workspace của run đã xong
+  quá 30 ngày, git worktree của task đã xong. Mặc định CHỈ BÁO; dọn bằng `cfharness hub doctor --cleanup [--older-than NGÀY]` (liệt kê
+  rồi hỏi y/N, ghi nhật ký kiểm toán). Không bao giờ xoá run/ledger/audit hay thư mục đang có run chạy; git worktree ngoài HUB_HOME chỉ
+  được gợi ý lệnh `git worktree remove`.
 
 ---
 

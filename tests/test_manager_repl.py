@@ -398,3 +398,53 @@ async def test_daemon_rejects_non_image_payload(env, hub_home):
         with pytest.raises(Exception):
             await c.call("manager.chat", {"channel": "cli", "text": "x", "images": bad}, audit=True)
     assert d.hub.store.conn.execute("SELECT COUNT(*) FROM manager_messages").fetchone()[0] == 0
+
+
+# =========================================================================== /search + /open <số>
+async def test_search_and_open_result(env, hub_home):
+    d = env
+    await designate(d)
+    d.script.hold_manager = False
+    d.hub.agents.create({"id": "w", "name": "Worker"})
+    d.hub.store.insert_run({"id": "r_w1", "agent_id": "w", "kind": "adhoc", "prompt": "kiểm tra kangaroo trên máy chủ " + EVIL,
+                            "status": "completed", "queued_at": "2026-10-01T00:00:00Z", "session_id": "s_w1"})
+    s, buf = session(hub_home, color=True, new=True)
+    assert await s.open()
+    try:
+        await s.send("nhắc tôi về con kangaroo")
+        assert await s.wait_idle(10)
+        c1 = s.state.conversation_id
+        assert await s.handle("/new")
+        await s.send("chuyện khác hẳn")
+        assert await s.wait_idle(10)
+        c2 = s.state.conversation_id
+        assert await s.handle("/search")
+        assert "cần từ khoá" in buf.getvalue()
+        buf.truncate(0)
+        buf.seek(0)
+        assert await s.handle("/search kangaroo")  # người thấy mọi luồng (hội thoại điều phối viên + run của agent khác)
+        out = buf.getvalue()
+        assert "Tìm" in out and "kangaroo" in out and c1 in out and "s_w1" in out
+        for bad in ("\x1b]", "http://evil", "pwned", "‮", "​", "\x9b", "\x07"):
+            assert bad not in out, bad
+        kinds = {(t["thread"]["type"], t["thread"]["id"]): i for i, t in enumerate(s.search_results, 1)}
+        n_conv, n_run = kinds[("conversation", c1)], kinds[("session", "s_w1")]
+        assert s.search_results[n_conv - 1]["cli"] and not s.search_results[n_run - 1]["cli"]
+        assert [c for c, _ in repl._arg_choices(s, "/open")] == [str(i) for i in range(1, len(s.search_results) + 1)]
+        # /open <số> hội thoại cli → chuyển sang
+        assert s.state.conversation_id == c2
+        assert await s.handle(f"/open {n_conv}")
+        assert s.state.conversation_id == c1
+        # /open <số> luồng của agent khác → đoạn transcript quanh tin khớp, chỉ xem (không đổi hội thoại)
+        buf.truncate(0)
+        buf.seek(0)
+        assert await s.handle(f"/open {n_run}")
+        out = buf.getvalue()
+        assert s.state.conversation_id == c1
+        assert "chỉ xem" in out and "kiểm tra kangaroo" in out and "/attach r_w1" in out
+        for bad in ("\x1b]", "http://evil", "pwned", "‮", "\x9b", "\x07"):
+            assert bad not in out, bad
+        assert await s.handle("/open 99") and "không có kết quả số 99" in buf.getvalue()
+        assert await s.handle("/help") and "/search" in buf.getvalue()
+    finally:
+        await s.close()

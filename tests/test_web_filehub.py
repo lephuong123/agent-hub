@@ -91,6 +91,26 @@ async def test_pause_remove_over_public_link(env):
     assert audit_rows(e, "filehub.remove")[-1]["channel"] == "web"
 
 
+async def test_rename_from_web(env):
+    """Đổi tên cfharness từ thẻ Cài đặt: xác nhận → `filehub.rename` (audit web); tên mới sai → lỗi ở web; tên cũ thành bí danh."""
+    e, tmp = env
+    await e.login()
+    local = _setup(e.hub, tmp)
+    card = (await e.client.get("/partials/filehub", headers=PROXY)).text
+    assert 'action="/do/filehub_rename"' in card
+    r = await e.post("/do/filehub_rename", {"name": "chung", "new_name": "Dự án", "next": "/settings#filehub"}, headers=PROXY)
+    assert r.status_code == 200 and "Đổi tên thư mục chung «chung» thành «Dự án»" in r.text and e.hub.filehub.folders()[0]["name"] == "chung"
+    r = await e.post("/do/filehub_rename", {"name": "chung", "new_name": "../x", "confirm": "yes", "next": "/settings#filehub"}, headers=PROXY)
+    assert e.hub.filehub.folders()[0]["name"] == "chung"
+    r = await e.post("/do/filehub_rename", {"name": "chung", "new_name": "Dự án", "confirm": "yes", "next": "/settings#filehub"}, headers=PROXY)
+    assert r.status_code == 303
+    f = e.hub.filehub.folders()[0]
+    assert f["name"] == "Dự án" and f["aliases"] == ["chung"] and f["local_path"] == str(local)
+    assert audit_rows(e, "filehub.rename")[-1]["channel"] == "web"
+    card = (await e.client.get("/partials/filehub")).text
+    assert "filehub:Dự án" in card and "tên cũ vẫn khớp" in card
+
+
 async def test_setup_login_and_add_folder_over_public_link(env):
     """#121 qua link public (đã gộp với W7): form thiết lập không có ô binary/đường dẫn máy; đường dẫn máy từ cloud bị từ chối; binary gửi từ
     client bị bỏ qua; đăng nhập = relay (bước 2) → thẻ tự poll 3 s + nút "Mở trang đồng ý" → đồng ý xong tự nối thư mục; thư mục khác đã cấp →
