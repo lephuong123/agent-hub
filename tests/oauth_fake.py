@@ -6,8 +6,10 @@ Chạy bằng uvicorn trên 127.0.0.1 (loopback → http được phép). Kiểm
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
+import json
 import secrets
 import socket
 import threading
@@ -18,7 +20,7 @@ from urllib.parse import urlencode
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, RedirectResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 
@@ -45,8 +47,15 @@ class FakeOAuth:
         self.mcp_auth_seen: list[str | None] = []
         self.issued_access: list[str] = []
         self.issued_refresh: list[str] = []
+        # proxy OAuth (test_mcp_oauth_proxy.py): /mcp trả text/event-stream nhiều khối, khối 2 chờ `release` (chứng minh stream
+        # không bị đệm); transport SSE cũ ở /sse + /messages (event `endpoint` tương đối)
+        self.sse_mode = False
+        self.release = threading.Event()
+        self.sse_queues: dict[str, Any] = {}
         self.app = Starlette(routes=[
             Route("/mcp", self.mcp, methods=["POST", "GET", "DELETE"]),
+            Route("/sse", self.sse, methods=["GET"]),
+            Route("/messages", self.messages, methods=["POST"]),
             Route("/.well-known/oauth-protected-resource/mcp", self.prm_doc),
             Route("/.well-known/oauth-authorization-server/as", self.as_doc),
             Route("/as/register", self.register, methods=["POST"]),
@@ -93,13 +102,56 @@ class FakeOAuth:
         msg = await request.json()
         if "id" not in msg:
             return Response(status_code=202)
+        if self.sse_mode:
+            return StreamingResponse(self._sse_reply(msg), media_type="text/event-stream")
+        return JSONResponse(self._reply(msg))
+
+    def _reply(self, msg: dict[str, Any]) -> dict[str, Any]:
         if msg["method"] == "initialize":
             res = {"protocolVersion": msg["params"]["protocolVersion"], "capabilities": {"tools": {}}, "serverInfo": {"name": "fake-oauth-mcp", "version": "1"}}
         elif msg["method"] == "tools/list":
             res = {"tools": [{"name": "doc_ghi_chu", "description": "đọc ghi chú", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": True}}]}
         else:
-            return JSONResponse({"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": "no"}})
-        return JSONResponse({"jsonrpc": "2.0", "id": msg["id"], "result": res})
+            return {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32601, "message": "no"}}
+        return {"jsonrpc": "2.0", "id": msg["id"], "result": res}
+
+    def _authed(self, request: Request) -> bool:
+        auth = request.headers.get("authorization")
+        self.mcp_auth_seen.append(auth)
+        tok = auth[7:] if auth and auth.startswith("Bearer ") else None
+        return bool(tok) and self.access.get(tok or "", 0) >= time.time() and tok not in self.revoked
+
+    async def _sse_reply(self, msg: dict[str, Any]):
+        yield b'event: message\ndata: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}\n\n'
+        while not self.release.is_set():
+            await asyncio.sleep(0.02)
+        yield ("event: message\ndata: " + json.dumps(self._reply(msg)) + "\n\n").encode()
+
+    async def sse(self, request: Request) -> Response:
+        if not self._authed(request):
+            return Response(status_code=401, headers={"WWW-Authenticate": 'Bearer scope="mcp.read"'})
+        sid = secrets.token_hex(4)
+        q: asyncio.Queue = asyncio.Queue()
+        self.sse_queues[sid] = q
+
+        async def gen():
+            yield f"event: endpoint\ndata: /messages?session_id={sid}\n\n".encode()
+            while True:
+                msg = await q.get()
+                if msg is None:
+                    return
+                yield ("event: message\ndata: " + json.dumps(self._reply(msg)) + "\n\n").encode()
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    async def messages(self, request: Request) -> Response:
+        if not self._authed(request):
+            return Response(status_code=401)
+        q = self.sse_queues.get(request.query_params.get("session_id") or "")
+        if q is None:
+            return Response(status_code=404)
+        await q.put(await request.json())
+        return Response(status_code=202)
 
     async def prm_doc(self, request: Request) -> Response:
         if not self.prm:

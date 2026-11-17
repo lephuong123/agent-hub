@@ -275,6 +275,14 @@ DEFAULTS: dict[str, Any] = {
         # server MCP nội bộ của hub không ghi audit tool.write (tool điều khiển của guard)
         "audit_ignore_servers": ["hub-guard"],
         "probe_timeout_s": 30,
+        # Proxy loopback chèn token MCP OAuth (mcp_client/oauth_proxy.py, docs/dev-notes/mcp-oauth.md §8.1): mcp.json của run trỏ tới
+        # http://127.0.0.1:<cổng>/r/<id>… + khoá theo run, token làm mới khi chuyển tiếp, không bao giờ vào file runtime. Tắt = đường cũ
+        # (Bearer tĩnh trong mcp.json 0600). Nhánh này ∈ integrity.SECURITY_KEYS.
+        "oauth_proxy": {
+            "enabled": False,
+            "port": 0,  # 0 = OS chọn cổng ngẫu nhiên mỗi lần daemon khởi động (chỉ bind 127.0.0.1)
+            "max_body_mb": 16,  # trần thân request (đệm để gửi lại sau khi làm mới token)
+        },
     },
     # Client OAuth của `cfharness mcp login` (mcp_client/oauth_cli.py)
     "mcp_client": {

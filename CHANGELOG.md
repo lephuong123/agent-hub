@@ -10,6 +10,13 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Tích hợp MCP
+- **Proxy loopback cho MCP đăng nhập OAuth (tuỳ chọn, mặc định tắt)**: bật `cfharness config set mcp.oauth_proxy.enabled true` thì run
+  không còn nhận token OAuth trong file mcp.json — `claude` nói chuyện với một proxy của daemon trên `127.0.0.1` (URL + khoá riêng
+  từng run, hết hiệu lực khi run kết thúc), proxy chèn token mới nhất và tự làm mới khi sắp hết hạn hoặc khi server trả 401. Run
+  dài hơn hạn access token (thường 1 giờ) không còn bị 401 giữa chừng. Hỗ trợ Streamable HTTP và SSE. Proxy không khởi động được →
+  tự dùng lại cách cũ (Bearer trong mcp.json).
+
 ---
 
 ## v0.2.15 — 2026-11-17

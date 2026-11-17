@@ -80,6 +80,7 @@ Chi tiết, lệch BRD, việc dở: `docs/dev-notes/M1-A.md`.
 | `mcp_client/wiring.py` | `attach(hub)` (gọi trong `Hub.__init__`): `hub.secrets`, `hub.audit`, `hub.mcp`, listener `ToolWriteWatcher` → audit + event `tool.write` |
 | `secrets.py` | Secret store file 0600 `HUB_HOME/secrets/<NAME>`; `${NAME}` trong cấu hình, `resolve()` fail-closed |
 | `mcp_client/oauth.py` | OAuth 2.1 cho MCP http/sse (`auth: {type: oauth}`): discovery PRM/AS, DCR, PKCE, state RAM ≤10 phút, token ở secret store; RPC `mcp.oauth_start|callback|status|disconnect|refresh`; chèn Bearer vào mcp.json runtime. Chi tiết: `docs/dev-notes/mcp-oauth.md` |
+| `mcp_client/oauth_proxy.py` | `hub.mcp_proxy`: proxy loopback (CHỈ 127.0.0.1, lười, `mcp.oauth_proxy.enabled`, mặc định tắt) — mcp.json của run trỏ `/r/<id>…` + header `X-Cfharness-Proxy-Key` theo run, KHÔNG token; proxy làm mới + chèn Bearer, stream SSE, thu hồi trong `finally` của `_run`. Không mở ngoại lệ sandbox (client MCP chạy trong tiến trình claude). Test `tests/test_mcp_oauth_proxy.py`; `docs/dev-notes/mcp-oauth.md` §8.1 |
 | `audit.py` | `audit_log` append-only (trigger). `audit.record(kind, agent_id, run_id, data)` cho luồng B; tiến trình ngoài daemon dùng RPC `audit.record` |
 
 Quy tắc thêm: method RPC mới thay đổi trạng thái → thêm tên vào `MUTATING` (rpc.py) và khai báo TRƯỚC dòng `register_rpc(self)`.

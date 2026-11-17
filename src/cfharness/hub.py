@@ -227,6 +227,8 @@ class Hub:
         await self.filehub.stop()  # type: ignore[attr-defined]  # SIGTERM tiến trình sync (dừng êm, không bỏ dở commit)
         await self.accounts.close_all_logins()  # type: ignore[attr-defined]  # kill tiến trình `claude setup-token` đang chờ code
         await self.runs.shutdown()
+        if getattr(self, "mcp_proxy", None) is not None:
+            await self.mcp_proxy.stop()  # type: ignore[attr-defined]
         self.integrity.stop()
         for t in self._bg:
             t.cancel()

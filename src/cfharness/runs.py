@@ -549,7 +549,7 @@ class RunManager:
         _write_json_0600(settings_path, settings)
         json.loads(settings_path.read_text(encoding="utf-8"))
         # mcp.json: server của agent (luồng A — đã thay secret) + hub-guard (luồng B)
-        servers = self._agent_mcp_servers(agent)
+        servers = self._agent_mcp_servers(agent, run_id=run_id)
         tp = dict(agent.get("tool_policy") or {})
         if conn and tp.get("tools") is not None and "ToolSearch" not in tp["tools"]:
             # `--tools` thiếu ToolSearch → CLI nhét schema MỌI tool connector vào ngữ cảnh (đo 2.1.310: 161k vs 15k token/lượt)
@@ -706,14 +706,24 @@ class RunManager:
             thinking_max_chars=int(claude_cfg.get("thinking_max_chars") or 8000),
         )
 
-    def _agent_mcp_servers(self, agent: dict[str, Any]) -> dict[str, Any]:
-        """Hợp đồng A: `mcp_client.build_agent_mcp_servers(agent)` (đã thay secret). Chưa có → registry.yaml của M0."""
+    def _agent_mcp_servers(self, agent: dict[str, Any], run_id: str | None = None) -> dict[str, Any]:
+        """Hợp đồng A: `mcp_client.build_agent_mcp_servers(agent)` (đã thay secret). Chưa có → registry.yaml của M0.
+        `run_id` + proxy OAuth đang chạy → entry server OAuth trỏ tới proxy loopback (khoá theo run, KHÔNG token)."""
         try:
             from .mcp_client import build_agent_mcp_servers
         except ImportError:  # pragma: no cover
             reg = load_mcp_registry(self.hub.paths)
             return {name: reg[name] for name in agent.get("mcp_servers") or [] if name in reg}
-        return dict(build_agent_mcp_servers(agent, home=self.hub.paths.home) or {})
+        servers = dict(build_agent_mcp_servers(agent, home=self.hub.paths.home) or {})  # kiểm token (chưa kết nối → lỗi rõ)
+        proxy = getattr(self.hub, "mcp_proxy", None)
+        if run_id and proxy is not None and proxy.enabled() and proxy.running:
+            from .mcp_client.oauth import is_oauth
+
+            for name in list(servers):
+                row = self.hub.mcp.get_row(name)
+                if row is not None and is_oauth(row.get("config")):
+                    servers[name] = proxy.register(run_id, self.hub.mcp.config_of(row))
+        return servers
 
     def _agent_mcp_tool_rules(self, agent: dict[str, Any]) -> dict[str, list[str]]:
         if not agent.get("mcp_servers"):
@@ -812,6 +822,12 @@ class RunManager:
             ar.runtime = runtime
             if agent.get("mcp_servers") and getattr(hub, "mcp_oauth", None) is not None:
                 await hub.mcp_oauth.ensure_fresh_for(list(agent["mcp_servers"]))  # OAuth MCP: làm mới token sắp hết hạn trước khi ghi mcp.json
+                proxy = getattr(hub, "mcp_proxy", None)
+                if proxy is not None and proxy.needed_for(list(agent["mcp_servers"])):
+                    try:  # proxy loopback chèn token (mcp-oauth.md §8.1) — lỗi khởi động → dự phòng Bearer tĩnh trong mcp.json
+                        await proxy.ensure_started()
+                    except (HubError, OSError) as e:
+                        rlog.warning("proxy OAuth MCP không khởi động được (%s) — dùng Bearer tĩnh trong mcp.json", e)
             recall = await self._memory_prefetch(run, agent)  # graph memory: top-k fact vào TIN USER ĐẦU (không vào system prompt)
             spec = self._prepare_spec(run, agent, recall=recall)
             spec.control_handler = functools.partial(self._control_request, ar)  # CLI 2.1.303+: control_request can_use_tool → guard
@@ -872,6 +888,9 @@ class RunManager:
         finally:
             if ar.timer:
                 ar.timer.cancel()
+            proxy = getattr(hub, "mcp_proxy", None)
+            if proxy is not None:
+                proxy.revoke_run(run_id)  # route proxy OAuth của run hết hiệu lực ngay
             if spec is not None:
                 shutil.rmtree(Path(agent["home_path"]) / "runtime" / run_id, ignore_errors=True)
             if ar.checkpoint is not None and not ar.diff_done:
