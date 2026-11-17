@@ -181,9 +181,11 @@ class IntegrationRpc:
 
     def mcp_assign(self, p: dict[str, Any]) -> dict[str, Any]:
         server, agent_id = _req(p, "server"), _req(p, "agent")
-        self.hub.mcp.require(server)
         row = self.hub.agents.get_row(agent_id)
         cur = list(row.get("mcp_servers") or [])
+        # gỡ được cả server đã xoá mềm / không còn trong registry (nếu không, agent mắc kẹt với tên mồ côi — thu hẹp, không cần server tồn tại)
+        if not (p.get("unassign") and server in cur):
+            self.hub.mcp.require(server)
         if p.get("unassign"):
             new = [s for s in cur if s != server]
         else:

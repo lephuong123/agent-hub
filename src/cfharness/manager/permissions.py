@@ -347,7 +347,8 @@ class ManagerPermissions:
                 if s in own:
                     return f"MCP '{s}' là MCP của chính hub — điều phối viên điều khiển hub qua hub-self, không qua MCP này"
                 if s not in names:
-                    return f"MCP '{s}' không có trong registry"
+                    return (f"MCP '{s}' không có trong registry (đã xoá hoặc chưa thêm) — gỡ khỏi điều phối viên: "
+                            f"`cfharness mcp unassign {s} {aid}`, hoặc thêm/khôi phục server (`cfharness mcp add|restore {s}`)")
                 if trust.get(s, "untrusted") != "trusted":
                     return f"MCP '{s}' có trust=untrusted — điều phối viên chỉ dùng MCP người đã đánh dấu trusted (`cfharness mcp edit {s} --trust trusted`)"
         if row.get("subagents"):
