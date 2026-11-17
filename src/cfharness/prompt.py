@@ -60,6 +60,10 @@ def shared_folder_block(folders: list[Any]) -> str:
     for f in folders:
         d = f if isinstance(f, dict) else {"name": f[0], "path": f[1]}
         name, path = d["name"], d["path"]
+        if d.get("lane"):  # cổng cfharness: không bản sao trên máy (filehub/lane/)
+            rows.append(f"- {name}: no local copy — a run whose workspace is `filehub:{name}` or `filehub:{name}/<subfolder>` gets a work "
+                        "tree in its cwd; every save there goes to Không gian số within seconds, and the human's edits arrive the same way")
+            continue
         line = f"- {name}: {path} (workspace `filehub:{name}`)"
         if d.get("kind") == "workspace":
             any_ws = True

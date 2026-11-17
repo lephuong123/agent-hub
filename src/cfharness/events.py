@@ -211,6 +211,12 @@ EVENT_LEVELS: dict[str, str] = {
     "filehub.changed": "summary",  # run_id, folder, count, paths≤20, url — run đổi tệp trong thư mục chung
     "filehub.deleted": "summary",  # run_id, folder, count, paths≤20, url — run xoá tệp (không hỏi duyệt; khôi phục ở thùng rác Không gian số)
     "filehub.secret_warning": "summary",  # run_id, folder, count, paths≤20 — tệp mới/sửa chứa giá trị secret hub biết (đã lên cloud)
+    # Cổng cfharness (filehub/lane/, plan-filehub-lane.md) — chỉ tên/đường dẫn tương đối đã làm sạch/id, không nội dung tệp, không tên người
+    "filehub.lane.state": "summary",  # server, state ok|offline|auth_failed|version_mismatch|disabled|not_configured|key_expiring, prev, code?, days_left?
+    "filehub.human_changed": "summary",  # run_id, folder, path, op, latency_ms — người sửa/xoá/di chuyển tệp trong phạm vi run → đã kéo về + steer
+    "filehub.push_failed": "summary",  # run_id, folder, count, paths≤20, code, tree — còn thay đổi chưa đẩy được (cây mồ côi)
+    "filehub.secret_blocked": "summary",  # run_id, folder, path — tệp chứa giá trị secret hub biết: KHÔNG đẩy lên (giữ trong cây run)
+    "filehub.infected": "summary",  # run_id, folder, path — Không gian số phát hiện mã độc (đã cách ly, không tạo phiên bản)
     # Hệ thống ngoài hub (systems/): thao tác job launchd/Task Scheduler (system, label, action pause|resume|restart, ok, by, reason, detail)
     "system.job": "summary",
     # Lịch chạy tự động (schedules/): schedule_id, name, kind, expr, status, next_run_at, created_by, by (+ action/reason/fire…)

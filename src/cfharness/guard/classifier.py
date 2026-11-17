@@ -129,7 +129,8 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     # Tài khoản Claude (accounts/, luồng core): account.* ghi ∈ HUMAN_ONLY — agent không tự thêm/đổi/xoá tài khoản Claude
     "account": {"add", "login", "use", "rename", "rm", "remove", "delete", "check"},
     # Thư mục chung Không gian số (filehub/): filehub.* ghi ∈ HUMAN_ONLY — đăng nhập thiết bị, thêm/gỡ thư mục, tạm dừng đồng bộ
-    "filehub": {"setup", "login", "add", "remove", "rm", "rename", "pause", "resume", "switch-to-workspace"},
+    # `lane` (cổng cfharness: setup/test/disable/add/orphans… — khoá hub của người) + `switch` (đổi chế độ sync|lane) — chỉ người
+    "filehub": {"setup", "login", "add", "remove", "rm", "rename", "pause", "resume", "switch-to-workspace", "lane", "switch"},
     # tự kiểm bảo mật (selftest.py): bật daemon riêng + gọi claude thật (tốn tiền), lộ cách dò guard — agent gõ, kể cả --dry-run, đều chặn
     "selftest": None,
 }

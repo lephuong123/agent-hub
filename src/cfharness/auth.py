@@ -143,6 +143,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # login_callback: relay OAuth từ web public (code một lần); switch_to_workspace: đổi gốc đồng bộ sang toàn bộ workspace
         "filehub.setup", "filehub.login", "filehub.login_callback", "filehub.switch_to_workspace", "filehub.add", "filehub.remove",
         "filehub.rename", "filehub.pause", "filehub.resume",
+        # Cổng cfharness (filehub/lane/, plan-filehub-lane.md): khoá hub của người (secret store) — nhập/thử/xoá/chuyển chế độ/cây mồ côi
+        "filehub.lane_setup", "filehub.lane_disable", "filehub.lane_test",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})

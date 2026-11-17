@@ -68,7 +68,7 @@ Quyết định:
 ## §C. Hợp đồng cổng cfharness — giao thức `lane/v1` (chép NGUYÊN VĂN ở cả hai repo)
 
 > Bản gốc: `agent-hub` `docs/dev-notes/plan-filehub-lane.md` §C = `quan-ly-thu-muc-ai` `docs/PLAN-cong-cfharness.md` §C. Sửa một bên
-> thì sửa cả hai trong cùng đợt PR; fake server của hub (`tests/fake_lane.py`) phải theo đúng mục này.
+> thì sửa cả hai trong cùng đợt PR; fake server của hub (`tests/fake_kgs_lane.py`) phải theo đúng mục này.
 
 ### C.1 Vận chuyển
 - HTTP/1.1 thuần, JSON UTF-8 (trừ thân tệp = byte thô). Luồng sự kiện = **SSE** (`text/event-stream`) — không WebSocket (không cần
@@ -245,7 +245,7 @@ nút "Đẩy lại"/"Bỏ" trên web; dọn sau `orphan_keep_days` 7. `waiting_h
    lane (theo quy ước "một script mỗi user"). Hub ở máy khác (không cùng máy Không gian số) → giữ `sync` (câu hỏi Q6).
 
 ## 6. Test (không gọi Không gian số thật, không mạng ngoài)
-- `tests/fake_lane.py`: Starlette + uvicorn trên `127.0.0.1:0`, cây trong RAM theo C.4–C.9 (phiên bản, `If-Match`, khoá, hạn mức,
+- `tests/fake_kgs_lane.py`: ThreadingHTTPServer (stdlib, TCP loopback thật) trên `127.0.0.1:0`, cây trong RAM theo C.4–C.9 (phiên bản, `If-Match`, khoá, hạn mức,
   `infected` theo tên tệp chứa `EICAR`, idempotency, SSE có cursor/`reset`/`root_revoked`), API phụ cho test: `human_write(path, bytes)`,
   `lock(path)`, `revoke()`, `drop_stream()`. Hợp đồng đổi → sửa fake trong CÙNG PR.
 - `test_lane_client.py`: ánh xạ mọi mã C.7, SSE nối lại + `Last-Event-ID`, khoá không lộ trong lỗi/log/repr.
@@ -262,7 +262,7 @@ nút "Đẩy lại"/"Bỏ" trên web; dọn sau `orphan_keep_days` 7. `waiting_h
 | # | Repo | Nội dung | Phụ thuộc |
 |---|---|---|---|
 | K1 | Không gian số | migration 048 + khoá hub (tạo/thu hồi ở Hồ sơ, danh sách ở Quản trị) + listener lane + `hello` | — |
-| H1 | cfharness | `LaneClient` + `fake_lane.py` + `filehub lane setup|status|test` (secret, kiểm loopback) | §C (không cần K1) |
+| H1 | cfharness | `LaneClient` + `fake_kgs_lane.py` + `filehub lane setup|status|test` (secret, kiểm loopback) | §C (không cần K1) |
 | K2 | Không gian số | đọc (`stat/list/content/versions/cursor`) + SSE `events` | K1 |
 | H2 | cfharness | `LaneService` (luồng sự kiện, cursor, state) + tool `fs_*` chỉ đọc + chế độ `tools` cho run chỉ đọc | H1 |
 | K3 | Không gian số | ghi (`content PUT` qua quét, `mkdir/move/item DELETE/restore`) + ghi nhận cfharness + luật khoá/`claude_allowed` | K2 |
@@ -274,15 +274,15 @@ nút "Đẩy lại"/"Bỏ" trên web; dọn sau `orphan_keep_days` 7. `waiting_h
 
 H1 song song với K1; H2/H3 viết trên fake, nghiệm thu thật chỉ sau khi K tương ứng lên prod. Mỗi PR có dòng "Chưa phát hành" ở CHANGELOG.
 
-## 8. Câu hỏi mở cho chủ repo
-1. **TCP loopback hay Unix socket?** Plan chọn TCP `127.0.0.1:8223` + khoá (Node không đọc được uid ngang hàng nếu không có addon).
-   Unix socket `/Users/Shared/cfharness/lane.sock` nhóm `cfharness-users` 0660 chặn thêm được user macOS ngoài nhóm — có cần không?
-2. **Ai cấp khoá?** Plan: chính người dùng (Owner thư mục / Admin ws) tự cấp ở Hồ sơ, Super Admin bật chính sách + thu hồi mọi khoá.
-   Hay chỉ Super Admin cấp?
-3. **`claude_allowed=false` = vô hình với cfharness** (plan chọn vậy) — đồng ý?
-4. **Phiên bản dồn dập:** hub gộp (≤ 1 phiên bản/30 s/tệp + flush cuối). Có cần Không gian số gộp phía server (thay blob của phiên bản
-   cuối nếu cùng khoá + run trong 10 phút) để không đẩy bản người ra khỏi 50 bản giữ lại?
-5. **Ngưỡng cây theo run** (2 GB / 20 000 tệp, tệp > 50 MB tải lười) có hợp với thư mục thật hiện nay?
-6. **Hub ở máy khác** (không cùng Mac mini) dùng gì: giữ `sync`, hay sau này mở lane qua tunnel có mTLS?
-7. **Agent có nên tự khoá tệp (FLD-10) khi sửa** để người thấy khoá thay vì chỉ presence?
-8. **Bản sao `~/KhongGianSo/*` cũ:** chuyển vào `HUB_HOME/trash` (plan) hay xoá hẳn sau khi đối soát sha256 với server?
+## 8. Đã chốt (chủ repo, 2026-11-17)
+1. **TCP loopback** `127.0.0.1:8223` (qltm) / `8233` (cchc) + khoá — không Unix socket.
+2. **Khoá do chính người dùng cấp** cho tài khoản Không gian số của mình; hub lưu trong secret store qua lệnh/thẻ web CHỈ NGƯỜI
+   (`cfharness filehub lane setup` getpass / thẻ Cài đặt bước 2).
+3. **`claude_allowed=false` = vô hình** với cfharness.
+4. **Không gian số gộp phiên bản dồn dập** phía server (hub vẫn ≤ 1 phiên bản/30 s/tệp + flush cuối).
+5. **Ngưỡng cây theo run** như plan: 2 GB / 20 000 tệp, tệp > 50 MB tải lười.
+6. **Hub ở máy khác: ngoài phạm vi** — giữ `sync`.
+7. **Agent KHÔNG khoá tệp** (FLD-10): chỉ `If-Match`/409 + presence.
+8. **Bản sao `~/KhongGianSo/*` cũ để nguyên** và báo (status/thẻ web) — hub KHÔNG BAO GIỜ xoá/di chuyển (thay §5 bước 3 "chuyển vào trash").
+9. (thêm) **Khoá hết hạn sau 180 ngày**, cảnh báo trước khi hết hạn (`filehub.lane.key_warn_days`, mặc định 14): `expires_at` của server
+   nếu có, không thì `set_at + filehub.lane.key_max_days`.

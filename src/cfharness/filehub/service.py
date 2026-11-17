@@ -110,12 +110,34 @@ def _under(p: str, base: str) -> bool:
     return p == base or p.startswith(base + "/")
 
 
-def config_folders(config: Any) -> list[dict[str, Any]]:
+def all_folders(config: Any) -> list[dict[str, Any]]:
+    """Mọi thư mục chung đã cấu hình (cả chế độ `sync` lẫn `lane`)."""
     try:
         v = config.get("filehub.folders") or []
     except KeyError:
         return []
-    return [dict(f) for f in v if isinstance(f, dict) and f.get("name") and f.get("local_path")]
+    return [dict(f) for f in v if isinstance(f, dict) and f.get("name")]
+
+
+def folder_mode(f: dict[str, Any] | None, config: Any) -> str:
+    """`sync` (đồng bộ 2 chiều cũ) | `lane` (cổng cfharness). `folders[].mode` thắng `filehub.mode` (mặc định `sync`)."""
+    m = (f or {}).get("mode")
+    if m not in ("sync", "lane"):
+        try:
+            m = config.get("filehub.mode")
+        except (KeyError, AttributeError):
+            m = None
+    return "lane" if m == "lane" else "sync"
+
+
+def config_folders(config: Any) -> list[dict[str, Any]]:
+    """Thư mục chung chế độ `sync` (có bản sao cục bộ) — mọi chỗ dùng `local_path` (guard, sandbox, khoá, binary sync)."""
+    return [f for f in all_folders(config) if f.get("local_path") and folder_mode(f, config) == "sync"]
+
+
+def lane_folders(config: Any) -> list[dict[str, Any]]:
+    """Thư mục chung chế độ `lane` (không bản sao lâu dài — cây làm việc theo run, filehub/lane/)."""
+    return [f for f in all_folders(config) if f.get("root_id") and folder_mode(f, config) == "lane"]
 
 
 def local_roots(hub: Any) -> list[str]:
@@ -258,6 +280,8 @@ def shared_folders(hub: Any) -> list[dict[str, str]]:
     for f in config_folders(hub.config):
         live = names.get(str(f.get("root_id") or ""), "")
         out.append({"name": str(f["name"]), "path": str(f["local_path"]), "kind": kind_of(f), "server_name": live if live and live != f["name"] else ""})
+    for f in lane_folders(hub.config):  # cổng cfharness: không bản sao — cây làm việc dựng cho run có workspace `filehub:<tên>`
+        out.append({"name": str(f["name"]), "path": "", "kind": kind_of(f), "server_name": "", "lane": True})
     return out
 
 
@@ -284,6 +308,9 @@ class FilehubService:
         self._relay: dict[str, Any] | None = None  # {state, expires} — state của LOGIN_URL relay đang chờ callback (một lần)
         self._bg: set[asyncio.Task[Any]] = set()
         hub.bus.add_listener(self._on_event)
+        from .lane.service import LaneService  # cổng cfharness (chế độ lane) — filehub/lane/
+
+        self.lane = LaneService(self)
 
     # ------------------------------------------------------------------ cấu hình / đường dẫn
     def cfg(self, key: str) -> Any:
@@ -320,7 +347,25 @@ class FilehubService:
         return str(self.cfg("device_name") or f"cfharness · {machine_name()}")[:64]
 
     def folders(self) -> list[dict[str, Any]]:
+        """Thư mục chế độ `sync` (có bản sao cục bộ). Thư mục `lane`: `lane_folders()`."""
         return config_folders(self.hub.config)
+
+    def all_folders(self) -> list[dict[str, Any]]:
+        return all_folders(self.hub.config)
+
+    def lane_folders(self) -> list[dict[str, Any]]:
+        return lane_folders(self.hub.config)
+
+    def _set_folders(self, rows: list[dict[str, Any]]) -> None:
+        """Ghi `filehub.folders` từ danh sách thư mục `sync` — GIỮ thư mục `lane` (code đồng bộ cũ chỉ thấy thư mục sync)."""
+        keep = [f for f in self.lane_folders() if not any(r.get("name") == f["name"] or (f.get("root_id") and r.get("root_id") == f["root_id"]) for r in rows)]
+        self.hub.config.set("filehub.folders", list(rows) + keep)
+
+    def lane_target(self, ref: Any) -> dict[str, Any] | None:
+        """`filehub:<tên>[/<con>]` trỏ thư mục chế độ `lane` → `{folder, server, root, sub, key}`; thư mục `sync`/không khớp → None."""
+        if not isinstance(ref, str) or not ref.startswith(REF_PREFIX) or not self.enabled():
+            return None
+        return self.lane.target(ref[len(REF_PREFIX):].strip().strip("/"))
 
     def enabled(self) -> bool:
         return bool(self.cfg("enabled"))
@@ -556,6 +601,9 @@ class FilehubService:
         body = ref[len(REF_PREFIX):].strip().strip("/")
         if not self.enabled():
             raise HubError("thư mục chung (filehub) chưa bật — `cfharness filehub setup`")
+        if self.lane.target(body) is not None:  # chế độ lane: không có bản sao trên máy — bên gọi phải xử lý `lane_target` trước
+            raise HubError(f"'{ref}' là thư mục chung chế độ lane (cổng cfharness) — không có bản sao trên máy; cây làm việc dựng khi run chạy",
+                           data={"lane": True})
         f, sub = self.match_ref(body)
         parts = [x for x in sub.split("/") if x not in ("", ".")]
         if any(x == ".." for x in parts) or any(x.startswith(META_PREFIX) for x in parts):
@@ -671,6 +719,7 @@ class FilehubService:
             except ProcessLookupError:  # pragma: no cover
                 pass
         await self.supervisor.stop()
+        await self.lane.stop()
 
     async def _loop(self) -> None:
         while True:
@@ -931,7 +980,7 @@ class FilehubService:
         name = str(name or "").strip() or safe_name(str(granted.get("name") or ""), root_id) or root_id
         if not valid_name(name):
             raise HubError(f"tên thư mục chung không hợp lệ: {name!r} (chữ, số, khoảng trắng, - _ ., ≤ 80 ký tự)")
-        if any(f["name"] == name or f.get("root_id") == root_id or name in aliases_of(f) for f in self.folders()):
+        if any(f["name"] == name or f.get("root_id") == root_id or name in aliases_of(f) for f in self.all_folders()):
             raise Conflict(f"thư mục chung '{name}' (root {root_id}) đã có (hoặc là tên cũ của một thư mục chung)")
         ws_id = ws_id or granted.get("ws_id") or None
         kind = str(kind or granted.get("kind") or "folder")
@@ -946,7 +995,7 @@ class FilehubService:
         if account:
             row["account"] = str(account)[:80]
         folders = self.folders() + [row]
-        self.hub.config.set("filehub.folders", folders)
+        self._set_folders(folders)
         if not self.enabled():
             self.hub.config.set("filehub.enabled", True)
         self._apply_change()
@@ -957,7 +1006,7 @@ class FilehubService:
         holder = self.hub.runs.locks.holder(_real(f["local_path"]))
         if holder:
             raise Conflict(f"thư mục chung '{name}' đang có run {holder.get('run_id')} ghi — dừng run trước")
-        self.hub.config.set("filehub.folders", [x for x in self.folders() if x["name"] != name])
+        self._set_folders([x for x in self.folders() if x["name"] != name])
         self._apply_change()
         return {"removed": name, "local_path": f["local_path"], "note": "tệp trên máy và trên Không gian số được giữ nguyên"}
 
@@ -972,7 +1021,7 @@ class FilehubService:
             raise HubError(f"tên thư mục chung không hợp lệ: {new_name!r} (chữ, số, khoảng trắng, - _ ., ≤ 80 ký tự)")
         if new_name == old:
             raise HubError(f"tên mới trùng tên hiện tại «{old}»")
-        for x in self.folders():
+        for x in self.all_folders():
             if x["name"] != old and (x["name"] == new_name or new_name in aliases_of(x)):
                 raise Conflict(f"tên «{new_name}» đã dùng cho thư mục chung «{x['name']}»")
         holder = self.hub.runs.locks.holder(_real(f["local_path"]))
@@ -987,7 +1036,7 @@ class FilehubService:
             if x["name"] == old:
                 x = {**x, "name": new_name, "aliases": aliases[-ALIASES_MAX:]}
             rows.append(x)
-        self.hub.config.set("filehub.folders", rows)
+        self._set_folders(rows)
         return {"name": new_name, "previous": old, "aliases": aliases[-ALIASES_MAX:], "local_path": f["local_path"],
                 "workspace": f"{REF_PREFIX}{new_name}", "note": "chỉ đổi tên trong cfharness — đường dẫn trên máy và tên trên Không gian số giữ nguyên"}
 
@@ -1317,7 +1366,7 @@ class FilehubService:
             if acc and f.get("account") != acc:
                 f["account"], changed = acc, True
         if changed:
-            self.hub.config.set("filehub.folders", fs)
+            self._set_folders(fs)
 
     def _switch_apply(self, roots: list[dict[str, str]], local_path: str | None) -> dict[str, Any] | None:
         r = next((x for x in roots if x["kind"] == "workspace"), None)
@@ -1329,7 +1378,7 @@ class FilehubService:
         before = self.folders()
         old = [f for f in before if kind_of(f) != "workspace"]
         old_paths = [f["local_path"] for f in old]
-        self.hub.config.set("filehub.folders", [f for f in before if kind_of(f) == "workspace"])
+        self._set_folders([f for f in before if kind_of(f) == "workspace"])
         name = safe_name(r["name"])
         if not local_path:
             parent = os.path.expanduser(str(self.cfg("local_parent") or "~/KhongGianSo"))
@@ -1339,7 +1388,7 @@ class FilehubService:
             added = self.add(r["id"], name, ws_id=r.get("ws_id"), local_path=local_path, kind="workspace", account=r.get("account") or None,
                              forbid=old_paths)
         except HubError as ex:
-            self.hub.config.set("filehub.folders", before)
+            self._set_folders(before)
             self._apply_change()
             self.login_state.update(state="error", error=f"không thêm được gốc workspace: {ex}"[:200], finished_at=time.time())
             return None
@@ -1348,4 +1397,4 @@ class FilehubService:
 
 
 __all__ = ["FilehubService", "REF_PREFIX", "RELAY_PATH", "STEER_TEXT", "local_roots", "root_of", "config_folders", "valid_name", "safe_name", "kind_of",
-           "live_names", "shared_folders", "read_status_file", "login_error_text", "BINARY_NAME", "detect_binary"]
+           "live_names", "shared_folders", "all_folders", "lane_folders", "folder_mode", "read_status_file", "login_error_text", "BINARY_NAME", "detect_binary"]
