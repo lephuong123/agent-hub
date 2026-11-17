@@ -17,6 +17,8 @@ Agent khác + phê duyệt (`agentsview.py`, vẫn KHÔNG RPC mới — cùng ng
 Lệnh `/agents` (`/ps`), `/stop <agent|run>`, `/attach <agent|run>` (chạy `cfharness attach` rồi quay lại), `/approvals`, `/approve`,
 `/deny`, `/always` (2 bước, gửi `always_confirm`), `/answer` — gọi đúng RPC `approval.*`/`question.*`/`run.stop` như TUI/web/Telegram
 (daemon kiểm HUMAN_ONLY bằng token người; audit kênh `cli`). Cho phép LUÔN hỏi y/N sau khi in lại lệnh đầy đủ.
+`/search <từ khoá>` = RPC đọc `session.search {group}` (tìm mọi hội thoại/session, đánh số) → `/open <số>`: hội thoại kênh cli thì chuyển
+sang, luồng khác thì in đoạn transcript quanh tin khớp (`mode=around`, chỉ xem, mỗi tin một dòng qua `one_line`).
 """
 
 from __future__ import annotations
@@ -55,6 +57,8 @@ SNAPSHOT_S = 1.0  # chu kỳ `tui.snapshot` (như `top`)
 QUESTIONS_S = 5.0  # chu kỳ `question.list` phòng lỡ event
 STARTUP_CARDS = 3  # số thẻ in khi mở phiên mà đã có yêu cầu chờ
 BELL_GAP_S = 1.0
+SEARCH_LIMIT = 8  # số luồng mỗi lần /search
+SEARCH_WINDOW = 4  # /open <số> luồng không phải hội thoại cli: số tin trước/sau tin khớp
 
 
 def _err(e: Exception) -> str:
@@ -138,6 +142,7 @@ class ChatSession:
         self._fire_sub: Any = None
         self._snap_task: asyncio.Task | None = None
         self._q_task: asyncio.Task | None = None
+        self.search_results: list[dict[str, Any]] = []  # luồng của lần /search gần nhất (`/open <số>`)
 
     # ------------------------------------------------------------------ mở / đóng
     async def open(self) -> bool:
@@ -554,6 +559,67 @@ class ChatSession:
         convs = await self.client.call("manager.conversations", {"channel": V.CHANNEL, "limit": 500}) or []
         return next((c for c in convs if c.get("id") == cid), None)
 
+    async def _open_conv(self, conv: dict[str, Any]) -> None:
+        st = self.state
+        assert st is not None
+        st.switch(conv["id"])
+        rows = await self.client.call("manager.history", {"conversation_id": conv["id"], "limit": max(self.replay, 10)}) or []
+        items = V.history_items(rows)
+        self.banner(st.manager_id, conv["id"], title=conv.get("title"), resumed=len(items))
+        for it in items:
+            self._emit(it)
+        await self._resume(rows)
+
+    # ------------------------------------------------------------------ tìm hội thoại (/search)
+    async def cmd_search(self, arg: str) -> None:
+        """`/search <từ khoá>` → RPC `session.search` (group theo luồng; người thấy mọi hội thoại — daemon tính phạm vi)."""
+        q = arg.strip()
+        if not q:
+            self._note("cần từ khoá: /search <từ khoá> (có dấu/không dấu đều khớp; \"cụm từ\" trong ngoặc kép)", "warn")
+            return
+        res = await self.client.call("session.search", {"mode": "search", "query": q, "group": True, "limit": SEARCH_LIMIT}) or {}
+        threads = res.get("threads") or []
+        cli_ids: set[str] = set()
+        if any((t.get("thread") or {}).get("type") == "conversation" for t in threads):
+            convs = await self.client.call("manager.conversations", {"channel": V.CHANNEL, "limit": 500}) or []
+            cli_ids = {str(c.get("id")) for c in convs}
+        self.search_results = [{**t, "cli": (t.get("thread") or {}).get("type") == "conversation" and str(t["thread"].get("id")) in cli_ids}
+                               for t in threads]
+        self.out.write(V.search_head_text(q, res), meta={"kind": "search_head"})
+        for i, t in enumerate(self.search_results, 1):
+            self.out.write(V.search_hit_text(i, t), meta={"kind": "search_hit", "n": i})
+        if self.search_results:
+            self.out.write(V.search_foot_text(self.search_results), meta={"kind": "search_foot"})
+
+    async def open_search_result(self, n: int) -> None:
+        if not 1 <= n <= len(self.search_results):
+            self._note(f"không có kết quả số {n} (lần /search gần nhất có {len(self.search_results)})", "warn")
+            return
+        t = self.search_results[n - 1]
+        th_ = t.get("thread") or {}
+        if t.get("cli"):
+            conv = await self._find_conv(str(th_.get("id")))
+            if conv is not None:
+                await self._open_conv(conv)
+                return
+        hits = t.get("hits") or []
+        if hits:
+            res = await self.client.call("session.search", {"mode": "around", "message_id": hits[0]["id"], "window": SEARCH_WINDOW}) or {}
+        else:
+            key = {"conversation": "conversation_id", "session": "session_id"}.get(str(th_.get("type")), "run_id")
+            res = await self.client.call("session.search", {"mode": "read", key: th_.get("id"), "limit": 2 * SEARCH_WINDOW + 1}) or {}
+        label = V.THREAD_LABEL.get(str(th_.get("type")), "luồng")
+        header = f"{label} {one_line(th_.get('id'), 40)}" + (f" · {one_line(t['agent_id'], 24)}" if t.get("agent_id") else "") + " — chỉ xem"
+        self.out.write(V.transcript_text(res, header=header), meta={"kind": "search_read", "n": n})
+        if th_.get("type") == "conversation":
+            hint = "hội thoại này không thuộc kênh cli (web/Telegram/Slack) — mở ở kênh đó để chat tiếp"
+        else:
+            rid = next((h.get("run_id") for h in hits if h.get("run_id")), None)
+            hint = f"xem trực tiếp/chi tiết: /attach {rid}" if rid else "đọc hết: cfharness search --read <run|session>"
+            if rid:
+                hint += f" · đọc hết: cfharness search --read {rid}"
+        self._note(hint)
+
     # ------------------------------------------------------------------ luồng việc (/ws)
     async def _current_ws(self) -> str | None:
         st = self.state
@@ -798,19 +864,18 @@ class ChatSession:
                 self.out.write(V.conv_list_text(rows[:20], st.conversation_id))
             elif cmd == "/open":
                 if not arg:
-                    self._emit({"kind": "note", "text": "cần id hội thoại: /open <id> (xem /list)", "tone": "warn"})
+                    self._emit({"kind": "note", "text": "cần id hội thoại: /open <id> (xem /list) hoặc /open <số> (kết quả /search)", "tone": "warn"})
+                    return True
+                if arg.isdigit() and len(arg) <= 3:
+                    await self.open_search_result(int(arg))
                     return True
                 conv = await self._find_conv(arg)
                 if conv is None:
                     self._emit({"kind": "note", "text": f"không có hội thoại '{one_line(arg, 40)}' (xem /list)", "tone": "err"})
                     return True
-                st.switch(conv["id"])
-                rows = await self.client.call("manager.history", {"conversation_id": conv["id"], "limit": max(self.replay, 10)}) or []
-                items = V.history_items(rows)
-                self.banner(st.manager_id, conv["id"], title=conv.get("title"), resumed=len(items))
-                for it in items:
-                    self._emit(it)
-                await self._resume(rows)
+                await self._open_conv(conv)
+            elif cmd == "/search":
+                await self.cmd_search(arg)
             elif cmd == "/ws":
                 await self.cmd_ws(arg)
             elif cmd == "/history":
@@ -849,7 +914,10 @@ class ChatSession:
 
 # ---------------------------------------------------------------------- giao diện nhập
 def _arg_choices(session: ChatSession, cmd: str) -> list[tuple[str, str]]:
-    """Gợi ý tham số đầu: id approval (/approve /deny /always), câu hỏi (/answer), agent đang chạy (/stop /attach)."""
+    """Gợi ý tham số đầu: id approval (/approve /deny /always), câu hỏi (/answer), agent đang chạy (/stop /attach), số kết quả /search (/open)."""
+    if cmd == "/open" and session.search_results:
+        return [(str(i), one_line(f"{(t.get('thread') or {}).get('type')}: {t.get('title') or ''}", 50))
+                for i, t in enumerate(session.search_results, 1)]
     mon = session.mon
     if mon is None:
         return []

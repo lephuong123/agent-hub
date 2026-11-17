@@ -88,6 +88,8 @@ class ActiveRun:
     last_hb: float = 0.0
     checkpoint: dict[str, Any] | None = None
     diff_done: bool = False
+    # filehub: `extra_write_roots` nằm trong thư mục chung → danh sách tệp trước run (báo sau run; không revert)
+    extra_checkpoints: list[dict[str, Any]] = field(default_factory=list)
     kind: str = "adhoc"  # M4-A: run review không tính vào max_concurrent_runs của agent
     entered: bool = False  # hardening H-21: coroutine `_run` đã bắt đầu (khoá đặt chỗ trong tick được `_run` nhả)
 
@@ -832,6 +834,7 @@ class RunManager:
             spec = self._prepare_spec(run, agent, recall=recall)
             spec.control_handler = functools.partial(self._control_request, ar)  # CLI 2.1.303+: control_request can_use_tool → guard
             await self._checkpoint(ar, run, spec)
+            await self._extra_checkpoints(ar, run)
             cli_version = await self._check_cli_version(runtime, agent_id, run_id)
             if self._ended_before_start(run_id):
                 return
@@ -870,6 +873,8 @@ class RunManager:
                 self._on_event(ar, ev)
             if ar.checkpoint is not None:
                 await self._diff(ar)  # M3: diff có trước event kết thúc run
+            if ar.extra_checkpoints:
+                await self._extra_diff(ar)
             await self._finalize(ar)
         except asyncio.CancelledError:
             if ar.handle is not None and ar.runtime is not None:
@@ -895,6 +900,8 @@ class RunManager:
                 shutil.rmtree(Path(agent["home_path"]) / "runtime" / run_id, ignore_errors=True)
             if ar.checkpoint is not None and not ar.diff_done:
                 await self._diff(ar)
+            if ar.extra_checkpoints:
+                await self._extra_diff(ar)
             self.active.pop(run_id, None)
             br = getattr(getattr(hub, "guard", None), "browser", None)
             if br is not None:  # Claude in Chrome: nhả khoá trình duyệt khi run kết thúc (kể cả waiting_human — tiến trình đã dừng)
@@ -961,6 +968,51 @@ class RunManager:
         ev = make_event("workspace.checkpoint", ar.agent_id, {"kind": cp["kind"], "root": cp["root"], "head": cp.get("head"), "branch": cp.get("branch"), "dirty": len(cp.get("dirty") or {})}, run_id=ar.run_id)
         ev.task_id, ev.team_id = ar.task_id, ar.team_id
         self.hub.publish(ev)
+
+    async def _extra_checkpoints(self, ar: ActiveRun, run: dict[str, Any]) -> None:
+        """filehub: mỗi `extra_write_roots` nằm trong thư mục chung (mà workspace chính không phủ) → chụp danh sách tệp (size, mtime) để
+        sau run báo `filehub.changed|deleted|secret_warning` như workspace `filehub:`. Không revert (hoàn tác ở Không gian số)."""
+        opts = run.get("run_opts") or {}
+        extra = opts.get("extra_write_roots") or []
+        fh = getattr(self.hub, "filehub", None)
+        if not extra or fh is None or opts.get("read_only") or not self.hub.config.get("workspace.checkpoint"):
+            return
+        from .filehub.service import _real, _under, root_of
+        from .workspace import take_checkpoint
+
+        covered: list[str] = []
+        if ar.checkpoint and ar.checkpoint.get("filehub") and ar.checkpoint.get("root"):
+            covered.append(_real(str(ar.checkpoint["root"])))  # workspace chính đã là thư mục chung → đã có báo
+        roots: list[str] = []
+        for x in sorted({_real(str(x)) for x in extra if isinstance(x, str)}, key=len):
+            if root_of(self.hub, x) is None or not os.path.isdir(x) or any(_under(x, c) for c in covered + roots):
+                continue
+            roots.append(x)
+        max_files = int((self.hub.config.get("workspace") or {}).get("max_files") or 20_000)
+        for r in roots[:5]:
+            try:
+                cp = await asyncio.to_thread(take_checkpoint, r, self.checkpoint_dir(ar.run_id), max_files=max_files, force_walk=True)
+            except Exception as e:  # không chặn run
+                run_logger(log, ar.run_id, ar.agent_id).warning("checkpoint extra_write_root %s lỗi: %r", r, e)
+                continue
+            ar.extra_checkpoints.append(cp)
+
+    async def _extra_diff(self, ar: ActiveRun) -> None:
+        from .workspace import compute_diff
+
+        cps, ar.extra_checkpoints = ar.extra_checkpoints, []
+        diffs = []
+        for cp in cps:
+            try:
+                diffs.append(await asyncio.to_thread(compute_diff, cp, self.checkpoint_dir(ar.run_id)))
+            except Exception as e:
+                run_logger(log, ar.run_id, ar.agent_id).warning("diff extra_write_root %s lỗi: %r", cp.get("root"), e)
+        fh = getattr(self.hub, "filehub", None)
+        if diffs and fh is not None:
+            try:
+                fh.report_extra(ar.run_id, diffs)
+            except Exception:  # pragma: no cover — báo lỗi không làm hỏng kết thúc run
+                run_logger(log, ar.run_id, ar.agent_id).exception("báo filehub cho extra_write_roots lỗi")
 
     async def _diff(self, ar: ActiveRun) -> None:
         from .workspace import compute_diff

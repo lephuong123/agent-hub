@@ -483,3 +483,122 @@ def test_group_respects_visibility(hub):
     _run(hub, "r2", "b", prompt="b cũng nói quokka", session="sB")
     g = _search(hub, ss.agent_visibility(hub.store.conn, "b"), query="quokka", group=True)
     assert [t["thread"]["id"] for t in g["threads"]] == ["sB"]
+
+
+# ============================================================================ dựng lại chỉ mục (`cfharness session reindex`)
+def _fts_count(hub) -> int:
+    return hub.store.conn.execute("SELECT COUNT(*) FROM session_fts").fetchone()[0]
+
+
+def test_reindex_rebuilds_fts_and_fills_gaps(hub):
+    c = hub.store.conn
+    hub.agents.create({"id": "a", "name": "A"})
+    _run(hub, "r1", "a", prompt="cấu hình máy chủ echidna", session="sA")
+    _ev(hub, "message.complete", "a", "r1", {"text": "đã xong echidna"}, session="sA")
+    # FTS hỏng/lệch + một run ghi ngoài bộ chỉ mục (lỗ hổng)
+    c.execute("INSERT INTO session_fts(session_fts) VALUES('delete-all')")
+    c.execute("INSERT INTO runs (id, agent_id, kind, prompt, status, queued_at, session_id) VALUES "
+              "('r_gap','a','adhoc','việc bị sót echidna','completed','2026-10-02T00:00:00Z','sG')")
+    assert _search(hub, query="echidna")["hits"] == []
+    before = c.execute("SELECT COUNT(*) FROM session_messages").fetchone()[0]
+    res = ss.schedule_reindex(c)
+    assert res["scheduled"] and res["fts_total"] == before and not res["fts_only"]
+    st = ss.index_status(c)
+    assert st["pending"] and st["phase"] == "fts" and st["reindex"]
+    assert _search(hub, query="echidna")["backfill_pending"] is True
+    ss.backfill(c)
+    hits = _search(hub, query="echidna")["hits"]
+    assert {h["run_id"] for h in hits} == {"r1", "r_gap"}
+    assert c.execute("SELECT COUNT(*) FROM session_messages").fetchone()[0] == before + 1  # không nhân đôi (ref UNIQUE)
+    assert _fts_count(hub) == before + 1
+    st = ss.index_status(c)
+    assert not st["pending"] and st["finished_at"] and st["fts_done"] == before
+    assert "lần dựng lại gần nhất" in ss.render_status(st)
+    # chạy lại lần nữa: idempotent
+    ss.schedule_reindex(c)
+    ss.backfill(c)
+    assert c.execute("SELECT COUNT(*) FROM session_messages").fetchone()[0] == before + 1 and _fts_count(hub) == before + 1
+
+
+def test_reindex_fts_only_skips_source_rescan(hub):
+    c = hub.store.conn
+    hub.agents.create({"id": "a", "name": "A"})
+    _run(hub, "r1", "a", prompt="numbat ở đây")
+    c.execute("INSERT INTO runs (id, agent_id, kind, prompt, status, queued_at) VALUES ('r_gap','a','adhoc','numbat bị sót','completed','t')")
+    ss.schedule_reindex(c, fts_only=True)
+    ss.backfill(c)
+    assert {h["run_id"] for h in _search(hub, query="numbat")["hits"]} == {"r1"}
+    assert ss.index_status(c)["phase"] == "done"
+
+
+def test_reindex_does_not_duplicate_summary_after_retention(hub):
+    """Event `message.complete` đã bị retention xoá nhưng tin assistant còn trong chỉ mục → quét lại runs KHÔNG thêm bản tóm tắt."""
+    c = hub.store.conn
+    hub.agents.create({"id": "a", "name": "A"})
+    _run(hub, "r_old", "a", prompt="p", summary="tóm tắt bilby")
+    ss.indexer_for(hub.store).index_event_row({"type": "message.complete", "ts": "2020-01-01T00:00:00Z", "epoch": "old", "seq": 1,
+                                               "run_id": "r_old", "payload": {"text": "trả lời đầy đủ bilby"}})
+    ss.schedule_reindex(c)
+    ss.backfill(c)
+    assert [h["role"] for h in _search(hub, query="bilby")["hits"]] == ["assistant"]
+
+
+def test_purge_agent_during_fts_rebuild_restarts_phase(hub):
+    c = hub.store.conn
+    for a in ("a", "gone"):
+        hub.agents.create({"id": a, "name": a})
+    for i in range(6):
+        _run(hub, f"r{i}", "a" if i % 2 else "gone", prompt=f"wallaby số {i}")
+    ss.schedule_reindex(c, fts_only=True)
+    ss.backfill_step(c, batch=2)  # nạp lại được một phần
+    hub.agents.remove("gone")
+    from cfharness.recovery import purge_agent
+
+    purge_agent(hub, "gone", by="user", channel="cli")
+    st = ss._get_state(c)
+    assert st["phase"] == "fts" and st["cursor"] == 0
+    ss.backfill(c)
+    assert {h["run_id"] for h in _search(hub, query="wallaby")["hits"]} == {"r1", "r3", "r5"}
+    assert _fts_count(hub) == c.execute("SELECT COUNT(*) FROM session_messages").fetchone()[0]
+    c.execute("INSERT INTO session_fts(session_fts) VALUES('integrity-check')")
+
+
+async def test_reindex_rpc_runs_in_background(hub_home):
+    import asyncio
+
+    from cfharness.daemon import Daemon
+
+    d = Daemon(hub_home, runtime=FakeRuntime())
+    h = d.hub
+    try:
+        h.agents.create({"id": "a", "name": "A"})
+        _run(h, "r1", "a", prompt="quoll trong rừng")
+        h.store.conn.execute("INSERT INTO session_fts(session_fts) VALUES('delete-all')")
+        res = await d.methods["session.reindex"]({})
+        assert res["scheduled"]
+        t = h._session_backfill_task
+        assert t is not None and not t.done()
+        await d.methods["session.reindex"]({})  # lần 2 khi vòng nền còn chạy → không sinh vòng thứ hai
+        assert h._session_backfill_task is t
+        await asyncio.wait_for(t, 10)
+        st = d.methods["session.index_status"]({})
+        st = (await st) if asyncio.iscoroutine(st) else st
+        assert not st["pending"]
+        assert _search(h, query="quoll")["hits"]
+    finally:
+        await h.stop()
+        h.store.close()
+
+
+def test_reindex_cli_human(daemon, capsys):
+    from cfharness.rpc import RpcClient
+
+    rpc = RpcClient(daemon.socket, timeout=30)
+    rpc.call("agent.create", {"config": {"id": "ev", "name": "EV"}})
+    code, out, _ = _cli(capsys, "session", "reindex", "--wait", "--timeout", "30")
+    assert code == 0 and "đã lên lịch dựng lại" in out and "chỉ mục hội thoại:" in out
+    code, out, _ = _cli(capsys, "--json", "session", "status")
+    st = json.loads(out)
+    assert code == 0 and st["ready"] and not st["pending"] and st["reindex"]
+    audit = rpc.call("audit.list", {"limit": 50})
+    assert "session.reindex" in json.dumps(audit, ensure_ascii=False)

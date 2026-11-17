@@ -6,7 +6,7 @@
   relay?, remote?}` → cấu hình + chạy `<binary> login` → `{login_url}`; `filehub.login {root_hint?, no_browser?, relay?, mode?}` (đăng nhập
   lại — giữ chế độ đang có); `filehub.login_callback {code, state, error?}` (relay OAuth — web gọi từ route công khai `/filehub/oauth/cb`);
   `filehub.switch_to_workspace {local_path?, relay?, no_browser?}`; `filehub.add {root_id, name?, ws_id?, local_path?, kind?}`;
-  `filehub.remove {name}`; `filehub.pause {}`; `filehub.resume {root_id?}` (root_id = cho chiều đẩy lên đang bị chặn đi tiếp).
+  `filehub.remove {name}`; `filehub.rename {name, new_name}` (đổi tên cfharness — tên cũ thành bí danh); `filehub.pause {}`; `filehub.resume {root_id?}` (root_id = cho chiều đẩy lên đang bị chặn đi tiếp).
 - `relay: true` (web mở qua `web.public_origin`): binary đăng nhập với redirect về `<public_origin>/filehub/oauth/cb` thay cho listener loopback.
 Điều phối viên KHÔNG có method ghi nào ở đây (không thuộc MANAGER_ALLOWED); đọc qua tool hub-self `filehub_list|filehub_link`.
 """
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from ..daemon import Daemon
 
 MUTATING_FILEHUB = ("filehub.setup", "filehub.login", "filehub.login_callback", "filehub.switch_to_workspace", "filehub.add", "filehub.remove",
-                    "filehub.pause", "filehub.resume")
+                    "filehub.rename", "filehub.pause", "filehub.resume")
 
 
 def _req(p: dict[str, Any], key: str) -> Any:
@@ -58,6 +58,7 @@ def register_rpc(daemon: "Daemon") -> None:
         "filehub.switch_to_workspace": s.switch_to_workspace,
         "filehub.add": lambda p: s.add(str(_req(p, "root_id")), p.get("name"), ws_id=p.get("ws_id"), local_path=p.get("local_path"), kind=p.get("kind")),
         "filehub.remove": lambda p: s.remove(str(_req(p, "name"))),
+        "filehub.rename": lambda p: s.rename(str(_req(p, "name")), str(_req(p, "new_name"))),
         "filehub.pause": lambda p: s.pause(),
         "filehub.resume": lambda p: s.resume(p.get("root_id")),
     }

@@ -357,7 +357,8 @@ from .settings_cmds import HELP as _SETTINGS_HELP  # noqa: E402 — lệnh cài 
 HELP = [
     ("/new", "mở hội thoại mới"),
     ("/list", "các hội thoại (kênh cli — dùng chung với TUI)"),
-    ("/open <id>", "chuyển sang hội thoại"),
+    ("/open <id|số>", "chuyển sang hội thoại; số = mở kết quả của /search"),
+    ("/search <từ khoá>", "tìm trong mọi hội thoại/session cũ (không dấu cũng khớp, \"cụm từ\"); /open <số> để mở"),
     ("/ws [mã]", "luồng việc (mỗi epic một luồng): không mã = danh sách; có mã = sang hội thoại của luồng"),
     ("/ws new <mã> <tên>", "mở luồng mới (vd /ws new LH-55166 Monitor) và chuyển sang"),
     ("/ws state | attach <mã> | close", "STATE.md của luồng hiện tại · gắn hội thoại này vào luồng · đóng luồng"),
@@ -408,4 +409,68 @@ def conv_list_text(rows: list[dict[str, Any]], current: str | None) -> Text:
     return t
 
 
-__all__ = ["REPL_KEYS", "TUI_KEYS", "FULL_KEYS", "ChatState", "timeline", "pending_run", "render", "banner", "help_text", "conv_list_text", "history_items", "CHANNEL", "COMMANDS", "HELP", "hhmm"]
+# ---------------------------------------------------------------------- /search
+THREAD_LABEL = {"conversation": "hội thoại", "session": "session", "run": "run"}
+ROLE_LABEL = {"user": "người", "steer": "người (chèn)", "assistant": "agent", "manager": "điều phối viên", "tool_call": "tool",
+              "tool_result": "kết quả tool", "notify": "báo", "tick": "nhịp", "schedule": "lịch"}
+
+
+def search_head_text(query: str, res: dict[str, Any]) -> Text:
+    """Dòng đầu kết quả `/search` (chữ người gõ + số luồng)."""
+    t = Text()
+    n = len(res.get("threads") or [])
+    t.append("  Tìm ", style=th.MUTED)
+    t.append(f"“{one_line(query, 60)}”", style=th.HEAD)
+    t.append(f" — {n} luồng" if n else " — không có kết quả", style=th.MUTED)
+    if res.get("next_offset") is not None:
+        t.append(" (còn nữa — thu hẹp từ khoá)", style=th.MUTED)
+    if res.get("backfill_pending"):
+        t.append(" · chỉ mục đang dựng, kết quả có thể thiếu", style=C_WARN)
+    return t
+
+
+def search_hit_text(n: int, t: dict[str, Any], *, snippets: int = 2) -> Text:
+    """Một luồng tìm được. Tiêu đề/đoạn trích là DỮ LIỆU agent/người → `one_line` (termsafe) + Text không markup."""
+    th_ = t.get("thread") or {}
+    out = Text()
+    out.append(f"  {n:>2}. ", style=th.HEAD)
+    out.append(THREAD_LABEL.get(str(th_.get("type")), str(th_.get("type"))), style=C_MGR)
+    out.append(f" {one_line(th_.get('id'), 16)}", style=th.HEAD)
+    if t.get("agent_id"):
+        out.append(f" · {one_line(t['agent_id'], 24)}", style=th.MUTED)
+    when = str(t.get("last_ts") or "")[:10]
+    out.append(f" · {t.get('matches', 0)} khớp" + (f" · {when}" if when else ""), style=th.MUTED)
+    if t.get("cli"):
+        out.append(" · cli", style=C_OK)
+    if t.get("title"):
+        out.append(f"\n      {one_line(t['title'], 90)}")
+    for h in (t.get("hits") or [])[:snippets]:
+        out.append(f"\n      {ROLE_LABEL.get(str(h.get('role')), one_line(h.get('role'), 16))}: ", style=th.MUTED)
+        out.append(one_line(h.get("snippet"), 110), style=C_DIM)
+    return out
+
+
+def search_foot_text(results: list[dict[str, Any]]) -> Text:
+    t = Text()
+    if results:
+        t.append("  /open <số> — hội thoại cli: chuyển sang; luồng khác: xem đoạn quanh chỗ khớp (chỉ đọc)", style=th.MUTED)
+    return t
+
+
+def transcript_text(res: dict[str, Any], *, header: str) -> Text:
+    """Đoạn transcript (`session.search` around/read) — chỉ xem. Mỗi tin MỘT dòng đã làm sạch, ▶ = tin khớp."""
+    t = Text()
+    t.append(f"  {header}", style=th.HEAD)
+    for m in res.get("messages") or []:
+        t.append("\n")
+        t.append("  ▶ " if m.get("anchor") else "    ", style=C_MGR)
+        who = ROLE_LABEL.get(str(m.get("role")), one_line(m.get("role"), 16))
+        if m.get("tool") and m.get("role") in ("tool_call", "tool_result"):
+            who += f"[{one_line(m['tool'], 30)}]"
+        t.append(f"{hhmm(m.get('ts'))} {who}: ", style=th.MUTED)
+        t.append(one_line(m.get("text"), 300), style="" if m.get("anchor") else C_DIM)
+    return t
+
+
+__all__ = ["REPL_KEYS", "TUI_KEYS", "FULL_KEYS", "ChatState", "timeline", "pending_run", "render", "banner", "help_text", "conv_list_text", "history_items", "CHANNEL", "COMMANDS", "HELP", "hhmm",
+           "search_head_text", "search_hit_text", "search_foot_text", "transcript_text"]

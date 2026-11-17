@@ -14,6 +14,8 @@ Hình (kiểu vẽ chung ở `tui/cc_render.py`):
 - Spinner `✻ Đang nghĩ… (12s · esc để dừng)` ngay TRÊN ô nhập khi bận (ẩn khi rảnh). Ô nhập viền tròn xám có `> `; dưới là MỘT dòng
   mờ `? phím tắt` … `<điều phối viên> · hội thoại <id>`, hoặc menu lệnh khi gõ `/`; `?` ở ô nhập trống = bảng phím tắt.
 - Bảng agent đang chạy dưới cùng (như cây tác vụ nền của Claude Code): click hoặc ↓ (ô nhập trống) + Enter → `AttachScreen`.
+- `/search <từ khoá>` (RPC `session.search`, gộp theo luồng): mỗi luồng một mục click được → như gõ `/open <số>` (hội thoại cli → chuyển
+  sang; luồng khác → đoạn transcript quanh chỗ khớp, chỉ xem).
 - Kéo chuột chọn chữ → tự copy (OSC 52 + `attachments.clipboard_set` dự phòng). Ctrl-C: có vùng chọn → copy; đang làm → dừng lượt;
   rảnh → bấm lần nữa để thoát.
 Chữ của agent là DỮ LIỆU: `termsafe.clean/one_line` + `rich.text.Text` (không markup, không link). Mục phải là MỘT `Text` (`flatten`)
@@ -271,6 +273,7 @@ SHORTCUTS = (
     (("click", "mở tool / thẻ / agent"), ("ctrl + n", "hội thoại mới")),
     (("kéo chuột", "chọn chữ = copy"), ("ctrl + v", "dán ảnh")),
     (("pgup / pgdn", "cuộn"), ("ctrl + c ×2 / ctrl + d", "thoát")),
+    (("/search <từ>", "tìm hội thoại cũ"), ("click kết quả", "mở (= /open <số>)")),
 )
 
 
@@ -723,7 +726,7 @@ class ChatScreen(Screen):
         if kind in ("approval_card", "question_card"):
             cls = "item clickable" if (meta or {}).get("routed") == "manager" else "item clickable card"
             r = _strip_blank_head(r)
-        elif kind == "action":
+        elif kind in ("action", "search_hit"):
             cls = "item clickable"
         self._mount(Item(r, meta, classes=cls))
 
@@ -907,6 +910,8 @@ class ChatScreen(Screen):
             self.prefill(f"/approve {m.get('id')} ")
         elif k == "question_card":
             self.prefill(f"/answer {m.get('id')} ")
+        elif k == "search_hit" and self.session is not None:  # kết quả /search → mở luôn (như gõ /open <số>)
+            self.run_worker(self._handle(f"/open {int(m.get('n') or 0)}"), group="chat-send", exit_on_error=False)
 
     def prefill(self, text: str) -> None:
         inp = self.query_one("#chat-input", Input)

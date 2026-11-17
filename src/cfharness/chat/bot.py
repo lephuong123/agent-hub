@@ -60,6 +60,7 @@ HELP = """cfharness qua Telegram — lệnh (bấm / để xem menu):
 /digest — tóm tắt học 24 giờ qua
 /taikhoan (/account) — tài khoản Claude: xem trạng thái, bấm Dùng để đổi khi hết hạn mức
 /lich — lịch chạy tự động (xem; tạo/tắt: nhắn điều phối viên)
+/hethong — hệ thống ngoài hub (app + job launchd): xem, tạm dừng / bật lại / khởi động lại job
 /moi — mở cuộc trò chuyện mới với điều phối viên
 /help — trợ giúp
 Tin nhắn thường (không bắt đầu bằng /) → gửi cho ĐIỀU PHỐI VIÊN (agent quản lý cả đội); reply vào tin của
@@ -75,6 +76,7 @@ BOT_COMMANDS = [
     ("moi", "Cuộc trò chuyện mới với điều phối viên"), ("digest", "Tóm tắt học 24 giờ qua"), ("estop", "Dừng khẩn cấp: /estop on|off"),
     ("help", "Trợ giúp"),
     ("lich", "Lịch chạy tự động (xem)"),
+    ("hethong", "Hệ thống ngoài hub: job launchd"),
     ("taikhoan", "Tài khoản Claude: xem / đổi"),
 ]
 # T-A: bàn phím nhanh (chat riêng) — bấm = gửi đúng chữ này → lệnh tương ứng

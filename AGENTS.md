@@ -281,6 +281,8 @@ Chi tiết, spike sandbox thật, giới hạn: `docs/dev-notes/hardening-SEC.md
 Quy tắc: method RPC nhạy cảm mới → thêm vào `auth.HUMAN_ONLY` + lệnh CLI tương ứng vào `HUB_HUMAN_ONLY_CLI` (classifier) + test trong
 `tests/test_sec_auth.py`. Writer hợp lệ mới ghi vào `policy/` → bọc trong `guard/integrity.attach` (không thì bị khôi phục). Không đưa token
 người vào env của run. Test: `tests/test_sec_*.py`.
+Trước phát hành: `cfharness selftest --live` (`selftest.py`, `docs/dev-notes/selftest.md`) — hub tạm + `claude` thật chạy ca đỏ, trần chi phí cứng.
+Thêm lớp chặn mới → thêm `Case` (hậu quả đo ở phía người) + cập nhật `tests/test_selftest.py` (claude giả, không tốn tiền).
 
 ## Telegram — bot thông báo, duyệt bằng nút, lệnh chat (luồng TG)
 Chi tiết, lý do chọn `httpx2`, test chứng minh, việc dở: `docs/dev-notes/telegram.md`. Không có migration (trạng thái ở `hub_state`).
@@ -426,13 +428,14 @@ Bất biến: guard nhận diện tên cũ VĨNH VIỄN (binary/module cũ có t
 `tests/test_rename_cfharness.py`. Literal tên cũ chỉ được nằm trên dòng có `rename:keep`. `home migrate` là lệnh chỉ người (`HUB_HUMAN_ONLY_CLI`).
 
 ## Hệ thống ngoài hub — app trong ~/Workspace + job launchd (`systems/`)
-Chi tiết, quyền, nghiệm thu thật, việc dở: `docs/dev-notes/systems.md`. Không migration (`hub_state systems.registry|systems.paused`). Test: `tests/test_systems.py`.
+Chi tiết, quyền, nghiệm thu thật, việc dở: `docs/dev-notes/systems.md`. Không migration (`hub_state systems.registry|systems.paused`). Test: `tests/test_systems.py`, `tests/test_web_systems.py`, ca `systems` trong `test_telegram.py`/`test_slack.py`.
 
 | Module | Vai trò |
 |---|---|
 | `systems/launchd.py` | Đọc plist (thuần, `plutil` dự phòng) + `Launchctl` (runner thay được — test KHÔNG gọi launchctl thật): state/disabled/pause/resume/restart miền `gui/<uid>` |
 | `systems/service.py` | `hub.systems`: nhận diện (gốc `systems.roots` → thư mục con + job theo cwd/đường dẫn), registry, `job(label, action)` + `job_check` dùng chung với quyền manager |
 | `systems/rpc.py`, `cli.py` | RPC `system.list|get|scan|add|rm|lock|job` (ghi = HUMAN_ONLY, tự audit); CLI `cfharness system scan|list|show|add|rm|lock|unlock|pause|resume|restart` |
+| `web/systems_pages.py` (+ `systems.html`, `system.html`, `_systems.html`) | Trang `/systems` "Hệ thống ngoài": danh sách + quét thử/đăng ký + thêm + gỡ + khoá + pause/resume/restart job qua `ACTIONS` (xác nhận, audit `web`); `/systems/{id}` đuôi log. Chat: `ChatBot._c_systems` (`/hethong`, nút job 2 bước `yp|yr|yk`) |
 
 Bất biến: đăng ký/khoá = CHỈ người. Điều phối viên chỉ `system.job` (MANAGER_ALLOWED + `check_rpc` → `job_check`) trên job thuộc hệ thống đã đăng ký,
 không khoá, trong trần `manager.max_system_ops_per_hour`. Không bao giờ nhận diện thư mục/job của chính hub. `launchctl` chỉ chạy trong daemon.
@@ -752,8 +755,8 @@ Không migration (cấu hình `filehub.*` ∈ `integrity.SECURITY_KEYS`, trạng
 | Module | Vai trò |
 |---|---|
 | `filehub/supervisor.py` | `tang-thu-sync-headless` là tiến trình con của daemon: `--version` ≥ `filehub.sync_min_version`, env danh sách trắng (`ENV_KEEP`), backoff, SIGTERM dừng êm, đối soát `(pid, start_time)` (`HUB_HOME/filehub/supervisor.json`) |
-| `filehub/service.py` | `hub.filehub`: status.json → `filehub.state|conflict|blocked`; index/<root>.json → link; control.json → presence + `resume_push`; steer `by="hub"` khi `recent` chiều `down` lúc run giữ khoá gốc; sau run `filehub.changed|deleted|secret_warning`; `resolve_ref("filehub:<tên>[/<con>]")` |
-| `filehub/rpc.py`, `filehub/cli.py` | RPC `filehub.status|list|link` (đọc) + `setup|login|login_callback|switch_to_workspace|add|remove|pause|resume` (HUMAN_ONLY, `MUTATING_FILEHUB` tự audit); CLI `cfharness filehub …` (∈ `HUB_HUMAN_ONLY_CLI` trừ `status`) |
+| `filehub/service.py` | `hub.filehub`: status.json → `filehub.state|conflict|blocked`; index/<root>.json → link; control.json → presence + `resume_push`; steer `by="hub"` khi `recent` chiều `down` lúc run giữ khoá gốc; sau run `filehub.changed|deleted|secret_warning` (cả `extra_write_roots` trong thư mục chung — `report_extra`); `rename` = đổi tên cfharness, tên cũ thành `aliases`; `resolve_ref("filehub:<tên>[/<con>]")` |
+| `filehub/rpc.py`, `filehub/cli.py` | RPC `filehub.status|list|link` (đọc) + `setup|login|login_callback|switch_to_workspace|add|remove|rename|pause|resume` (HUMAN_ONLY, `MUTATING_FILEHUB` tự audit); CLI `cfharness filehub …` (∈ `HUB_HUMAN_ONLY_CLI` trừ `status`) |
 | `web/filehub_pages.py` | Thẻ "Không gian số" ở Cài đặt — tự thiết lập (form địa chỉ + chế độ workspace|folder, mặc định workspace) / đăng nhập (link đồng ý + thẻ poll 3 s + `/filehub/login`, tự nối thư mục) / thêm thư mục đã cấp / gỡ / tạm dừng, mọi thao tác qua `ACTIONS` → RPC `filehub.*`, cả qua link public (thiết lập/đăng nhập/chuyển/gỡ = `Action.step2`); binary KHÔNG BAO GIỜ từ web (`filehub.detect_binary`: cấu hình → chỗ cài cố định, không dò PATH), `local_parent`/`local_path` chỉ khi `is_local_request`; qua public: relay OAuth, route CÔNG KHAI `/filehub/oauth/cb` (`fh_limiter`), không đổi server/binary đã đặt; `/filehub/open` → `<server>/files/<folder_id>?file=<file_id>`; chip tệp `fh` |
 
 Gốc workspace (H7, `docs/dev-notes/plan-filehub-workspace-root.md`): `folders[].kind` folder|workspace (`root_id = ws_id` = gốc ảo), `filehub.scope`

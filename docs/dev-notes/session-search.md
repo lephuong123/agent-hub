@@ -85,12 +85,40 @@ run_id của agent khác để mở rộng phạm vi. `run_socket_block` của �
 - MCP ngoài: `hub_memory_search` (như cũ) + `hub_session_search` (readOnly, 4 chế độ).
 - CLI: `cfharness search "từ khoá" [--agent --team --kind --role --since --until --technical --limit --offset]`,
   `--around ID [--window N]`, `--read <run|tiền tố run|session|mc_…>`, `--browse`; `--json` cho kết quả thô.
+- `cfharness chat` (2026-11-17, `manager/repl.py` — dùng chung cho REPL `--classic` và fullscreen `tui/chat.py`): `/search <từ khoá>` gọi
+  `session.search {group: true, limit: 8}` (người → thấy mọi luồng), in mỗi luồng một mục đánh số (`chatview.search_hit_text`: loại luồng, id,
+  agent, số khớp, ngày, tiêu đề + ≤ 2 đoạn trích — mọi chữ qua `termsafe.one_line`), đánh dấu `cli` nếu là hội thoại điều phối viên kênh
+  cli (đối chiếu `manager.conversations{channel: cli}`). `/open <số>` (≤ 3 chữ số; id hội thoại `mc_…` vẫn như cũ): hội thoại cli → chuyển
+  sang như `/open <id>`; luồng khác (session/run của agent, hội thoại kênh web/Telegram/Slack) → `mode=around` quanh hit tốt nhất (±4 tin),
+  CHỈ XEM, mỗi tin một dòng ≤ 300 ký tự, kèm gợi ý `/attach <run>` / `cfharness search --read`. Fullscreen: mục kết quả `clickable`, click =
+  `/open <số>`. Gợi ý tham số `/open` (REPL) = số kết quả. Không RPC mới.
+
+## Dựng lại chỉ mục — `cfharness session reindex` (2026-11-17)
+
+- RPC `session.reindex {fts_only?}` (∈ `auth.HUMAN_ONLY` + `MUTATING` → audit; CLI `session reindex` ∈ `HUB_HUMAN_ONLY_CLI`) và
+  `session.index_status` (chỉ số đếm/tiến độ, không nội dung — không HUMAN_ONLY). CLI `cfharness session reindex [--fts-only] [--wait
+  [--timeout S]]`, `cfharness session status`.
+- `schedule_reindex` (trong giao dịch, nhanh): tạo FTS nếu còn thiếu (vd bản SQLite cũ không có FTS5, nay đã có), `delete-all` FTS, đặt
+  con trỏ backfill pha MỚI `fts` (mốc = `MAX(session_messages.id)`) rồi — trừ `fts_only` — các pha `runs → events → manager` với mốc = MAX
+  hiện tại, quét lại TOÀN BỘ nguồn (idempotent nhờ `ref` UNIQUE) để bù tin sót. Việc nặng chạy NỀN qua `run_backfill` (cùng vòng backfill
+  v17, lô 150 hàng/giao dịch); `start_backfill` không sinh vòng thứ hai khi vòng cũ còn chạy (`hub._session_backfill_task`). Trong lúc nạp lại,
+  tìm kiếm có `backfill_pending: true` và có thể thiếu kết quả. Hàng mới (id > mốc) vào FTS qua trigger như thường.
+- KHÔNG xoá `session_messages`: event cũ đã bị retention xoá thì bản chỉ mục là nơi DUY NHẤT còn văn bản. Quét lại runs không thêm bản
+  `runs.summary` cho run đã có tin assistant trong chỉ mục (tránh trùng sau retention).
+- `purge_agent` trong pha `fts`: trigger `'delete'` trên hàng CHƯA nạp lại làm FTS5 báo "database disk image is malformed" → trong
+  SAVEPOINT tạm gỡ trigger, `delete-all`, xoá hàng, gắn lại trigger, làm lại pha `fts` từ đầu.
+- `run_backfill` nay kiểm `runs.export_quiesced` mỗi lô (đang xuất gói/đóng băng → chờ, không ghi DB).
+- Test: `tests/test_session_search.py::test_reindex_*`, `test_purge_agent_during_fts_rebuild_restarts_phase`, `tests/test_sec_auth.py::test_session_reindex_human_only`,
+  `tests/test_guard_classifier.py::test_session_reindex_cli_human_only`, `tests/test_manager_repl.py::test_search_and_open_result`,
+  `tests/test_chat_app.py::test_search_results_clickable_open`.
 
 ## Việc dở / giới hạn
 
 - Tin `tool_result` giữ 2.000 ký tự đầu (như Hermes; adapter `RESULT_PREVIEW_MAX` = 2.000) — output tool dài hơn vẫn không tìm được phần đuôi.
   Hàng chỉ mục trước 2026-10-30 chỉ có 300 ký tự và không khôi phục được (event gốc cũng chỉ giữ 500).
 - Chưa tóm tắt luồng bằng LLM (nếu Hermes có — đối chiếu trước khi làm; xem `plan-memory-hermes-parity.md`).
-- Chưa có lệnh `reindex`/xây lại FTS thủ công (`INSERT INTO session_fts(session_fts) VALUES('rebuild')` dùng được nếu cần).
-- Web/TUI chưa có ô tìm kiếm hội thoại (chỉ RPC/MCP/CLI/hub-self).
+- ~~Chưa có lệnh `reindex`~~ — đã có `cfharness session reindex` (2026-11-17, mục trên). Chưa có: đổi tokenizer của FTS đã tồn tại (cần
+  DROP + tạo lại bảng ảo — reindex chỉ tạo khi THIẾU), chưa có nút trên web.
+- ~~TUI chưa có ô tìm kiếm~~ — `cfharness chat` có `/search` (2026-11-17). Web (`/manager`) và `cfharness top` vẫn chưa có ô tìm kiếm hội thoại.
+- `/search` trong chat chưa có bộ lọc (agent/thời gian/kind) và chưa phân trang (8 luồng đầu; "còn nữa — thu hẹp từ khoá").
 - `web/demo.py` sửa `manager_messages.text/ts` trực tiếp (chỉ demo) → bản chỉ mục giữ nội dung cũ.

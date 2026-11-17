@@ -663,7 +663,15 @@ def test_filehub_outside_write_roots_unchanged(fhenv, env, monkeypatch):
 def test_filehub_cli_human_only(env):
     for cmd in ("cfharness filehub setup --server https://x --binary /b", "cfharness filehub login", "cfharness filehub add r1",
                 "cfharness filehub remove chung", "cfharness filehub pause", "cfharness filehub resume --root r1",
-                "cfharness filehub switch-to-workspace --no-wait"):
+                "cfharness filehub switch-to-workspace --no-wait", "cfharness filehub rename chung moi"):
         v = bash(env, cmd)
         assert v.forbidden, (cmd, v.rule)
     assert not bash(env, "cfharness filehub status").forbidden
+
+
+def test_session_reindex_cli_human_only(env):
+    """`cfharness session reindex` = dựng lại chỉ mục tìm kiếm hội thoại (session.reindex ∈ HUMAN_ONLY); `session status` chỉ đọc."""
+    for cmd in ("cfharness session reindex", "uv run cfharness session reindex --fts-only --wait"):
+        v = bash(env, cmd)
+        assert v.forbidden and v.rule == "hub_human_only", (cmd, v.rule)
+    assert not bash(env, "cfharness session status").forbidden

@@ -507,14 +507,15 @@ async def test_filehub_writes_human_only(home):
     for m in MUTATING_FILEHUB:
         assert m in auth.HUMAN_ONLY and m not in auth.MANAGER_ALLOWED, m
     assert set(MUTATING_FILEHUB) <= auth.all_mutating()
-    assert {"setup", "login", "add", "remove", "pause", "resume", "switch-to-workspace"} <= HUB_HUMAN_ONLY_CLI["filehub"]
-    assert {"filehub.login_callback", "filehub.switch_to_workspace"} <= set(MUTATING_FILEHUB)  # gốc workspace + relay OAuth (H7)
+    assert {"setup", "login", "add", "remove", "rename", "pause", "resume", "switch-to-workspace"} <= HUB_HUMAN_ONLY_CLI["filehub"]
+    assert {"filehub.login_callback", "filehub.switch_to_workspace", "filehub.rename"} <= set(MUTATING_FILEHUB)  # H7 + đổi tên cục bộ
     for m in ("filehub.status", "filehub.list", "filehub.link"):
         assert m not in auth.HUMAN_ONLY
     d, srv = await _start(home)
     try:
         for m, prm in (("filehub.setup", {"server": "https://x.example", "binary": "/bin/sh"}), ("filehub.add", {"root_id": "r1", "local_path": "/tmp/x"}),
-                       ("filehub.pause", {}), ("filehub.switch_to_workspace", {}), ("filehub.login_callback", {"code": "c", "state": "s" * 32})):
+                       ("filehub.pause", {}), ("filehub.switch_to_workspace", {}), ("filehub.login_callback", {"code": "c", "state": "s" * 32}),
+                       ("filehub.rename", {"name": "chung", "new_name": "x"})):
             run_n, proc_n, go_n = await _start_run(d)
             rr = await _in_run(go_n, _client_py(home, m, prm, steal_token=True))
             resp = json.loads(rr["out"].strip().splitlines()[-1])
@@ -526,5 +527,32 @@ async def test_filehub_writes_human_only(home):
         proc_n.wait(5)
         assert not d.hub.filehub.folders() and not d.hub.store.state_get("filehub.paused")
         assert d.hub.config.get("filehub.server") is None
+    finally:
+        await _stop(d, srv)
+
+
+async def test_session_reindex_human_only(home):
+    """Dựng lại chỉ mục tìm kiếm hội thoại (session_search.schedule_reindex): agent trong run — kể cả đọc trộm token người — bị từ chối;
+    method ghi được bọc audit; CLI `session reindex` bị classifier chặn, `session status` (chỉ số đếm) thì không."""
+    from cfharness import session_search as ss
+    from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI
+
+    assert "session.reindex" in auth.HUMAN_ONLY and "session.reindex" not in auth.MANAGER_ALLOWED
+    assert "session.reindex" in auth.all_mutating() and "session.index_status" not in auth.HUMAN_ONLY
+    assert HUB_HUMAN_ONLY_CLI["session"] == {"reindex"}
+    d, srv = await _start(home)
+    try:
+        run_n, proc_n, go_n = await _start_run(d)
+        rr = await _in_run(go_n, _client_py(home, "session.reindex", {}, steal_token=True))
+        resp = json.loads(rr["out"].strip().splitlines()[-1])
+        assert resp.get("error", {}).get("code") == -32003, resp
+        proc_n.wait(5)
+        assert not (ss.index_status(d.hub.store.conn).get("reindex"))
+        run_n, proc_n, go_n = await _start_run(d)
+        rr = await _in_run(go_n, _client_py(home, "session.index_status", {}, steal_token=False))
+        assert "result" in json.loads(rr["out"].strip().splitlines()[-1])
+        proc_n.wait(5)
+        r = await asyncio.to_thread(RpcClient(home.socket).call, "session.reindex", {"fts_only": True})  # người: được
+        assert r["scheduled"]
     finally:
         await _stop(d, srv)
