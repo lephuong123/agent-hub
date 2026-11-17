@@ -10,6 +10,15 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Tìm hội thoại cũ
+- **`/search <từ khoá>` trong `cfharness chat`** (cả màn hình đầy đủ lẫn `--classic`): tìm trong mọi hội thoại với điều phối viên và
+  session của các agent (có dấu/không dấu đều khớp, `"cụm từ"` trong ngoặc kép), kết quả gộp theo luồng, đánh số, kèm đoạn trích.
+  `/open <số>` (hoặc click kết quả ở màn hình đầy đủ) mở hội thoại cli tìm được; luồng khác thì hiện đoạn hội thoại quanh chỗ khớp
+  (chỉ xem) và gợi ý `/attach <run>`. Có trong menu `/` và bảng phím tắt `?`.
+- **`cfharness session reindex`**: dựng lại chỉ mục tìm kiếm hội thoại khi kết quả tìm thiếu/lệch — nạp lại FTS5 và quét lại toàn bộ
+  run/event/hội thoại để bù tin bị sót (`--fts-only` chỉ nạp lại FTS, `--wait` chờ xong). Chạy nền trong daemon, không xoá văn bản đã
+  chỉ mục; chỉ người làm được (agent bị chặn), có ghi nhật ký kiểm toán. `cfharness session status` xem số tin đã chỉ mục và tiến độ.
+
 ---
 
 ## v0.2.15 — 2026-11-17

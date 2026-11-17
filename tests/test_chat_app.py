@@ -330,6 +330,32 @@ async def test_history_up_down_and_slash_hint(env, hub_home, monkeypatch):
         assert inp.value == "sao?" and not keys.display
 
 
+async def test_search_results_clickable_open(env, hub_home, monkeypatch):
+    """`/search` trong chat fullscreen: mỗi luồng một mục click được (= `/open <số>`); có trong menu `/` và bảng phím tắt."""
+    d = env
+    no_native_clipboard(monkeypatch)
+    await designate(d)
+    d.hub.agents.create({"id": "w", "name": "Worker"})
+    d.hub.store.insert_run({"id": "r_w1", "agent_id": "w", "kind": "adhoc", "prompt": "dọn log wombat " + EVIL, "status": "completed",
+                            "queued_at": "2026-10-01T00:00:00Z", "session_id": "s_w1"})
+    menu = C.slash_menu("/se")
+    assert menu is not None and menu.plain.startswith("/search")
+    assert "/search" in C.shortcuts_text().plain
+    app = C.ChatApp(hub_home.socket, home=hub_home.home)
+    async with app.run_test(size=SIZE) as pilot:
+        scr = await open_chat(app, pilot)
+        await send(pilot, scr, "/search wombat")
+        assert await until(lambda: item_with(scr, "s_w1") is not None, pilot=pilot)
+        hit = item_with(scr, "s_w1")
+        assert hit.has_class("clickable") and hit.meta == {"kind": "search_hit", "n": 1}
+        assert "\x1b" not in hit.render().plain and "http://evil" not in hit.render().plain
+        shot(app, "25-chat-tim-kiem.svg")
+        await click_item(app, pilot, hit)
+        assert await until(lambda: item_with(scr, "chỉ xem") is not None, pilot=pilot)
+        assert "dọn log wombat" in item_with(scr, "chỉ xem").render().plain
+        assert item_with(scr, "/attach r_w1") is not None
+
+
 async def test_multiline_paste_shows_marker_and_sends_full_text(env, hub_home, monkeypatch):
     from textual import events
 
