@@ -11,13 +11,38 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 ## Chưa phát hành
 
 ### Không gian số (thư mục chung)
-- Hub đang giam agent trong một workspace (`workspace.confine`) mà thư mục cha của bản sao (`filehub.local_parent`, mặc định `~/KhongGianSo`) nằm ngoài vùng giam → bản sao tự đặt ở `<vùng giam>/KhongGianSo/<tên>` thay vì báo "nằm ngoài workspace được giam" (nối thư mục qua web public không sửa được đường dẫn nên bị kẹt). `filehub setup --local-parent` ngoài vùng giam bị từ chối ngay, không ghi cấu hình.
+- Hub đang giam agent trong một workspace (`workspace.confine`) mà thư mục cha của bản sao (`filehub.local_parent`, mặc định `~/KhongGianSo`) nằm ngoài vùng giam → bản sao tự đặt ở `<vùng giam>/KhongGianSo/<tên>` thay vì báo "nằm ngoài workspace được giam" (nối thư mục qua web public không sửa được đường dẫn nên bị kẹt). `filehub setup --local-parent` ngoài vùng giam bị từ chối ngay, không ghi cấu hình (#141).
+
+### Cập nhật
+- `cfharness update` không còn bảo "tắt và mở lại giao diện web" — người dùng hub chạy trên máy chủ (web qua LaunchDaemon, vào bằng link
+  public) không làm được việc đó. Giờ lệnh chờ giao diện web tự chạy lại bằng bản mới (tối đa 2 phút), quá giờ thì tự chạy lại web, rồi báo
+  kết quả; chỉ nhắc mở lại `cfharness chat`/`top` khi thật sự đang có cửa sổ như vậy. Trang Cài đặt web cũng thôi bảo bấm Ctrl+C (#144).
+
+### MCP
+- **Gỡ được MCP đã xoá khỏi agent/điều phối viên**: `cfharness mcp unassign <server> <agent>` không còn đòi server phải còn trong registry,
+  và sửa agent không còn bị chặn vì một MCP đã gán từ trước nay không còn. Lỗi "điều phối viên … MCP 'x' không có trong registry" giờ
+  chỉ thẳng lệnh sửa (#145).
+
+---
+
+## v0.2.18 — 2026-11-17
+
+Điều phối viên dùng được MCP trusted (chỉ đọc) ngay với khung mặc định, và sửa cờ dòng lệnh `cfharness mcp add|edit` (#140, #142).
+
+### Điều phối viên
+- Khung quyền mặc định `strict` nay cho dùng MCP **trusted ở chế độ chỉ đọc** (`mcp: read_only_trusted`): điều phối viên gắn MCP
+  đã đánh dấu trusted không còn bị chặn "vượt khung" mà không phải chạy `cfharness manager capabilities set --mcp read_only_trusted`.
+  Tool MCP ghi vẫn bị chặn tĩnh, MCP untrusted vẫn bị từ chối; muốn tắt hẳn: `cfharness manager capabilities set --mcp none` (#142).
 
 ### MCP server
 - `cfharness mcp add|edit <tên> --url … --oauth …`: cờ đặt SAU tên được đọc đúng — trước đây bị lưu lặng lẽ thành lệnh stdio
   (`--transport …`). Lệnh stdio vẫn viết sau `--` (#140).
 - `mcp edit --transport http` (và sửa trên web) từ server stdio tự bỏ `command`/`args`/`env` cũ — không còn lỗi "transport http không dùng 'command'" (#140).
 - Trang MCP server liệt kê cả redirect URI qua tên miền public (khi đang vào web qua đó) để khai cho app OAuth tạo tay ở nhà cung cấp (#140).
+
+### Lưu ý khi cập nhật
+- Không có migration. Hub đã đặt `manager.capabilities.mcp: none` rõ ràng thì giữ nguyên (không tự mở MCP). Điều phối viên chỉ dùng
+  được MCP đã đánh dấu trusted — MCP untrusted vẫn báo lỗi kèm lệnh `cfharness mcp edit <tên> --trust trusted`.
 
 ---
 

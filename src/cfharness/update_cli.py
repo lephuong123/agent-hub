@@ -63,16 +63,101 @@ def _follow(ctx: Any, timeout: float = 1200.0) -> int:
                 rb = st.get("rollback") or {}
                 print(f"đã quay về {st.get('version_after') or st.get('tag')}" + (" + hub.db trước cập nhật" if rb.get("db_restored") else "")
                       + " · daemon đã chạy lại")
+                _after_update(ctx, st.get("version_after") or st.get("tag"))
                 return 0
             if st["state"] == "done":
                 print(f"đã cập nhật {st.get('version_before')} → {st.get('version_after') or st.get('tag')} · daemon đã chạy lại")
-                print("Giao diện web / `cfharness chat` đang mở vẫn là bản cũ — tắt và mở lại.")
+                _after_update(ctx, st.get("version_after") or st.get("tag"))
                 return 0
             print(f"lỗi: {st.get('error')}\nlog: {ctx.paths.logs_dir / 'update.log'}", file=sys.stderr)
             return 1
         time.sleep(1.0)
     print(f"chưa xong sau {int(timeout)} s — xem log {ctx.paths.logs_dir / 'update.log'}", file=sys.stderr)
     return 1
+
+
+WEB_WAIT_S = 120.0  # > reload.GRACE_S (45) + RESPAWN_WAIT_S (35): daemon bản mới tự dừng web cũ để launchd bật lại trước khi CLI ra tay
+TERMINAL_CMDS = ("chat", "top", "attach", "manager")
+
+
+def _norm_version(v: Any) -> str:
+    return str(v or "").strip().lstrip("vV")
+
+
+def web_after_update(paths: Any, version: Any, *, wait_s: float = WEB_WAIT_S, read_state: Any = None, restart: Any = None,
+                     sleep: Any = time.sleep, clock: Any = time.monotonic, progress: Any = None) -> str:
+    """Sau cập nhật: chờ giao diện web chạy lại bằng bản mới (daemon bản mới dừng web cũ → launchd/daemon bật lại — web/reload.py).
+    Hết `wait_s` mà web vẫn chạy bản cũ → tự chạy lại (`restart_stale_web`, cùng hàm daemon dùng). Người dùng trên host (web qua
+    LaunchDaemon) không có cách nào tự "tắt và mở lại" web — nên CLI không được đẩy việc đó cho họ.
+    Trả: none (không có web) | ok | restarted | failed."""
+    import os
+
+    if os.name == "nt":  # Windows: helper đã dừng + chạy lại web (update_helper.stop_venv_holders)
+        return "none"
+    if read_state is None:
+        from .web.security import read_state
+    want = _norm_version(version)
+    end, told = clock() + wait_s, False
+    while True:
+        st = read_state(paths)
+        if not st:
+            return "none"
+        if _norm_version(st.get("version")) == want:
+            return "ok"
+        if clock() >= end:
+            break
+        if not told and progress:
+            progress("  … chờ giao diện web chạy lại bằng bản mới")
+            told = True
+        sleep(2.0)
+    if restart is None:
+        from .web.reload import restart_stale_web as restart
+    try:
+        res = restart(paths, want)
+    except Exception:  # noqa: BLE001
+        return "failed"
+    if res in ("killed", "respawned"):
+        return "restarted"
+    st = read_state(paths)
+    return "ok" if st and _norm_version(st.get("version")) == want else "failed"
+
+
+def open_terminals(cmdline_rows: Any = None) -> int:
+    """Số cửa sổ `cfharness chat|top|attach|manager` đang mở của user này (chạy code cũ tới khi thoát)."""
+    import os
+    import subprocess
+
+    if cmdline_rows is None:
+        if os.name == "nt":
+            return 0
+        try:
+            r = subprocess.run(["ps", "-U", str(os.getuid()), "-o", "pid=,command="], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return 0
+        cmdline_rows = r.stdout.splitlines()
+    me, n = os.getpid(), 0
+    for row in cmdline_rows:
+        parts = row.split()
+        if len(parts) < 3 or not parts[0].isdigit() or int(parts[0]) == me:
+            continue
+        for i, tok in enumerate(parts[1:-1], start=1):
+            if (os.path.basename(tok).startswith("cfharness") or (tok == "cfharness" and parts[i - 1] == "-m")) and parts[i + 1] in TERMINAL_CMDS:
+                n += 1
+                break
+    return n
+
+
+def _after_update(ctx: Any, version: Any) -> None:
+    res = web_after_update(ctx.paths, version, progress=lambda m: print(m, flush=True))
+    if res == "ok":
+        print("giao diện web đã tự chạy lại bằng bản mới — tải lại trang (có thể phải đăng nhập lại)")
+    elif res == "restarted":
+        print("đã chạy lại giao diện web bằng bản mới — tải lại trang (có thể phải đăng nhập lại)")
+    elif res == "failed":
+        print(f"! giao diện web chưa chạy lại được bằng bản mới — xem {ctx.paths.logs_dir / 'web.log'}", file=sys.stderr)
+    n = open_terminals()
+    if n:
+        print(f"đang mở {n} cửa sổ `cfharness chat`/`top` chạy bản cũ — thoát (Ctrl-C hoặc q) rồi mở lại")
 
 
 def cmd_rollback(ctx: Any) -> int:

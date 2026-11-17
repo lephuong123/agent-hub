@@ -218,11 +218,12 @@ class AgentService:
         self.hub: Any = None  # gắn sau trong Hub.__init__ (validate_workspace cần config/guard)
 
     # ------------------------------------------------------------------ helpers
-    def _check_mcp(self, cfg: AgentConfig) -> None:
+    def _check_mcp(self, cfg: AgentConfig, *, keep: list[str] | None = None) -> None:
+        """`keep` = server agent ĐÃ có: không kiểm lại (server bị xoá sau khi gán vẫn để agent sửa được / gỡ dần từng cái)."""
         if not cfg.mcp_servers:
             return
         reg = load_mcp_registry(self.paths)
-        missing = [s for s in cfg.mcp_servers if s not in reg]
+        missing = [s for s in cfg.mcp_servers if s not in reg and s not in (keep or [])]
         if missing:
             raise HubError(
                 f"MCP server không có trong registry ({self.paths.mcp_registry}): {', '.join(missing)}",
@@ -340,7 +341,7 @@ class AgentService:
         except ValidationError as e:
             msg, fields = _validation_message(e)
             raise HubError(msg, data={"fields": fields}) from None
-        self._check_mcp(cfg)
+        self._check_mcp(cfg, keep=list(current.get("mcp_servers") or []))
         if cfg.workspace_default and cfg.workspace_default != current.get("workspace_default"):
             from .workspace import validate_workspace
             validate_workspace(self.hub, cfg.workspace_default, "workspace_default")
