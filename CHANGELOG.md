@@ -83,7 +83,7 @@ Bản sửa lỗi: daemon trên Windows không còn bị "điếc" sau khi một
 - **Kết nối MCP OAuth qua link public lỗi sau khi bấm Chấp nhận**: web luôn bảo nhà cung cấp quay về `http://127.0.0.1:<cổng>/…`,
   địa chỉ chỉ đúng khi trình duyệt chạy trên chính máy hub — người vào qua `https://<tên>.…` (tunnel) bị lỗi không kết nối được. Giờ vào
   qua link public thì quay về `https://<link public>/mcp/oauth/callback`; vào từ chính máy vẫn như cũ. MCP server đăng ký client tự động
-  (DCR) tự nhận địa chỉ mới; server dùng `client_id` nhập tay cần khai thêm địa chỉ này ở phía nhà cung cấp.
+  (DCR) tự nhận địa chỉ mới; server dùng `client_id` nhập tay cần khai thêm địa chỉ này ở phía nhà cung cấp (#137).
 - **Daemon sống mà "điếc" trên Windows — `cfharness chat`/web/CLI không gửi được gì, báo "daemon không chạy"**: khi một client đóng kết
   nối giữa chừng, `accept` lỗi (WinError 64) và asyncio đóng hẳn socket nghe của daemon; tiến trình vẫn chạy nhưng không nhận kết nối
   mới cho tới khi bị giết. Daemon giờ kiểm socket nghe mỗi 2 giây và tự mở lại (ghi cổng mới vào `hub.sock`), client nối lại bình thường (#124).
