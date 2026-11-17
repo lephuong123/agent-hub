@@ -369,6 +369,29 @@ trước khi sửa; KHÔNG đổi §C):
 - Web: thẻ "Cổng cfharness" liệt kê lô xoá đang giữ theo run (`info().held`) + nút "Cho xoá"/"Không xoá" (ACTIONS `filehub_lane_deletes` →
   `filehub.resume {root_id, discard?}`, xác nhận, audit web). Chat (Telegram/Slack) chưa có nút — vẫn qua web/CLI.
 
+Sửa theo nghiệm thu UI + e2e (2026-11-17, nhánh `fix/lane-onboarding`, `tests/test_lane_onboarding.py` — mỗi ca đỏ trước khi sửa; KHÔNG đổi §C):
+- **B0 dán khoá là xong**: `LaneService.setup` → `reconcile(server, hello)`: mọi `hello.roots` chưa có thư mục → thêm `folders[]` `{mode: lane,
+  server, kind: workspace|folder}` (tên `safe_name` + ` 2`, ` 3`… nếu trùng tên/bí danh); gốc đang `sync` → giữ, báo (`sync` + nút chuyển). Mỗi
+  `hello` MỚI (setup, test, `prepare_run`, kiểm tra sức khoẻ, sau khung `root_revoked`) đối soát lại: gốc mới → thêm; thư mục lane của cổng mà
+  gốc không còn trong `roots` → `hub_state filehub.lane.revoked` (KHÔNG xoá gì; `status.folders[].revoked`, `filehub.list status=revoked`); cấp
+  lại → gỡ. Có thay đổi → event `filehub.lane.roots{server, added, revoked, regranted, sync}` (Telegram/Slack). `lane add` không đối soát trước
+  (người chọn tên). `lane_disable` gỡ thư mục lane KHÔNG có `local_path` của cổng đó (chỉ cấu hình), thư mục từng sync vẫn cần `switch` trước.
+  `filehub.lane_test` ∈ `MUTATING_FILEHUB` (đối soát có thể thêm thư mục → audit).
+- **B0b**: `url` bỏ trống → `filehub.lane.default_urls` (8223, 8233; chỉ nhận cổng trả `hello` hợp lệ với khoá vừa dán, ưu tiên báo lỗi khác
+  `offline`); `server` bỏ trống → `hello.server.instance` (khớp `SERVER_RE`, không thì `qltm`). CLI `--url/--server` tuỳ chọn; thẻ web chỉ còn
+  nút + ô địa chỉ trong "Nâng cao".
+- **B1**: `FilehubService.list()` thêm thư mục lane `{mode: lane, kind, server, status, local_path: null}` (tool `filehub_list` của điều phối
+  viên), sync có `mode: sync`; `filehub.status.lane_configured`; `not_found` liệt kê tên có thật; thẻ "Không gian số" + `filehub status` CLI
+  nói "qua cổng cfharness" khi chỉ có cổng.
+- **B5**: `Workdir.held_view()` (≤ `HELD_SHOW` = 50) → `info().held_paths`, `filehub.blocked.paths` ≤ 50; thẻ web liệt kê + "và N mục nữa";
+  `Action.preview` (web/app.py — chữ đọc từ daemon lúc xác nhận, áp cho cả 2D/3D) cho trang xác nhận "Cho xoá/Không xoá"; tin Telegram/Slack
+  liệt kê 10 mục đầu.
+- **B9/B10/B12**: `lane.STATE_TEXT` (nhãn + việc cần làm) trong `lane_status.servers[].label|hint`, `expiry.date` (giờ máy, dd/mm/yyyy) +
+  `expiry.days` (nguyên); thẻ không hiện hạn khi `auth_failed`. `LaneService.health_check` (vòng nền `_health_loop`, `lane.start()`):
+  `hello` mỗi `health_ok_s` (300) khi ổn, lùi `health_retry_s` [5, 300] khi lỗi — `offline` tự về `ok` không cần run. Nút "Thử kết nối"
+  (ACTIONS `filehub_lane_test`), thao tác lane quay về `#filehub-lane`, bỏ câu "Nhập lại giá trị ở trang Cài đặt" ở bước 1 khi thao tác có
+  `reenter` (khoá hỏi ở bước 2).
+
 Việc còn lại:
 - Nghiệm thu thật trên qltm sau khi K1–K4 lên (plan §7 H4); `tested` với claude thật (steer + Write/Edit trong cây).
 - `run.revert` cho run lane = khôi phục phiên bản trước run qua `restore` (HUMAN_ONLY) — chưa làm (`run revert` từ chối như sync).

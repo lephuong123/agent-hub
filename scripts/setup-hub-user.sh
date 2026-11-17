@@ -7,7 +7,7 @@
 #   Làm lại hub đã có từ đầu (cất dữ liệu cũ, không xoá): thêm RESET=1
 #   Kèm thư mục chung Không gian số: thêm KGS=https://trungtamai.cchchn.com — mặc định đồng bộ TOÀN BỘ workspace của domain
 #   (KGS_WS=tên workspace để chọn sẵn; tài khoản chủ domain phải là Workspace Admin). Một thư mục: KGS_SCOPE=folder KGS_FOLDER=tên.
-#   Không gian số chạy CÙNG máy → cổng cfharness thay đồng bộ: thêm KGS_MODE=lane (KGS_LANE_URL mặc định http://127.0.0.1:8223).
+#   Không gian số chạy CÙNG máy → cổng cfharness thay đồng bộ: thêm KGS_MODE=lane (dán khoá cổng là xong — thư mục được cấp dùng được ngay).
 # MỘT lệnh làm hết: user, cài đặt, token, cấu hình, LaunchDaemon, tunnel + DNS, thư mục chung (nếu có KGS), TOTP.
 # Đừng `| tee` ra file: màn hình có token Claude (bước 3) và link đăng ký TOTP (bước 8).
 # Chạy lại được (bỏ qua bước đã xong).
@@ -29,8 +29,8 @@ KGS_WS="${KGS_WS:-}"                  # gợi ý tên workspace (KGS_SCOPE=works
 # Không gian số › Hồ sơ › Cổng cfharness cho tài khoản của mình — script hỏi bằng getpass, không in) rồi chọn gốc. Chỉ khi Không gian số
 # chạy CÙNG máy (cổng loopback). Mặc định vẫn sync.
 KGS_MODE="${KGS_MODE:-sync}"          # sync | lane
-KGS_LANE_URL="${KGS_LANE_URL:-http://127.0.0.1:8223}"   # qltm 8223, cchc 8233
-KGS_LANE_NAME="${KGS_LANE_NAME:-qltm}"
+KGS_LANE_URL="${KGS_LANE_URL:-}"     # trống = thử http://127.0.0.1:8223 (qltm) rồi 8233 (cchc)
+KGS_LANE_NAME="${KGS_LANE_NAME:-}"   # trống = theo Không gian số trả lời (qltm/cchc)
 # filehub có từ v0.2.10 nên tag mặc định đã đủ cho bước 10 (KGS)
 TUNNEL_CFG="${TUNNEL_CFG:-}"   # mặc định /Users/<admin>/.cloudflared/cfharness-config.yml
 CERT_ZONE="${CERT_ZONE:-cchchn.com}"   # zone của ~/.cloudflared/cert.pem: chỉ miền này tạo DNS tự động được
@@ -195,13 +195,16 @@ fi
 step "10/11 Thư mục chung Không gian số"
 if [ -n "$KGS" ] && [ "$KGS_MODE" = lane ]; then
   for _ in $(seq 1 30); do cfh filehub status >/dev/null 2>&1 && break; sleep 1; done
-  if cfh filehub lane test --server "$KGS_LANE_NAME" >/dev/null 2>&1; then ok "cổng cfharness «$KGS_LANE_NAME» đã nối"; else
+  if cfh filehub lane test ${KGS_LANE_NAME:+--server "$KGS_LANE_NAME"} >/dev/null 2>&1; then ok "cổng cfharness đã nối"; else
     echo "Dán khoá cổng cfharness của tài khoản $U (Không gian số › Hồ sơ › Cổng cfharness — chọn đúng thư mục/workspace cấp cho hub):"
     cfh config set filehub.server "$KGS" >/dev/null
-    cfh filehub lane setup --server "$KGS_LANE_NAME" --url "$KGS_LANE_URL" || warn "chưa nối được cổng — chạy lại script hoặc dùng web › Cài đặt › Cổng cfharness"
+    # bỏ trống KGS_LANE_URL / KGS_LANE_NAME → hub thử 8223 rồi 8233 và lấy tên cổng theo Không gian số trả lời
+    cfh filehub lane setup ${KGS_LANE_NAME:+--server "$KGS_LANE_NAME"} ${KGS_LANE_URL:+--url "$KGS_LANE_URL"} \
+      || warn "chưa nối được cổng — chạy lại script hoặc dùng web › Cài đặt › Cổng cfharness (chỉ cần dán khoá)"
   fi
+  # hub TỰ thêm mọi thư mục/workspace khoá được cấp (setup + mỗi lần kiểm tra) — không còn bước `lane add`
+  cfh filehub lane test ${KGS_LANE_NAME:+--server "$KGS_LANE_NAME"} || true
   cfh filehub lane status || true
-  echo "Thêm thư mục chung từ gốc được cấp: sudo -u $U -i cfharness filehub lane add <id gốc> --name <tên> (hoặc web › Cài đặt › Cổng cfharness)"
 elif [ -z "$KGS" ]; then ok "bỏ qua (không đặt KGS=<URL Không gian số>)"; else
   if [ -x "/Users/$ADMIN/.local/bin/tang-thu-sync-headless" ]; then install -m 0755 "/Users/$ADMIN/.local/bin/tang-thu-sync-headless" "$SYNC_BIN"; fi
   [ -x "$SYNC_BIN" ] || { warn "chưa có $SYNC_BIN (build tang-thu-sync: cargo build -p sync-core --release --bin tang-thu-sync-headless) — bỏ qua"; SKIP_KGS=1; }

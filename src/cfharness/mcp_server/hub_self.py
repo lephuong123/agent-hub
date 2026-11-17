@@ -283,12 +283,14 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
     "system_list": _t("Systems OUTSIDE the hub that the owner registered (apps in ~/Workspace) and their launchd (macOS) / Task Scheduler (Windows) jobs: label, kind "
                       "(service = always running, e.g. a web server or bot; scheduled = timed, e.g. daily Telegram reports), schedule, status "
                       "(running|idle|paused|not_loaded|error), locked. A system's `path` is a valid task workspace when its code must change.", ro=True),
-    "filehub_list": _t("Shared folders synced with the owner's cloud drive \"Không gian số\": name, workspace (`filehub:<name>`), local path, "
+    "filehub_list": _t("Shared folders on the owner's cloud drive \"Không gian số\": name, workspace (`filehub:<name>`), mode (sync = local copy "
+                       "at local_path; lane = no local copy, each run gets a work tree whose saves go straight to Không gian số), status (ok | "
+                       "revoked = the key no longer grants it, do not assign | offline …), "
                        "kind (folder = one folder; workspace = the WHOLE workspace, its top-level folders are what the human sees at the root), "
                        "server_name (current name on the web; after a rename `filehub:<server_name>` also works). "
                        "Give a task workspace `filehub:<name>` or `filehub:<name>/<subfolder>` when the work is on the owner's documents there. "
                        "In a workspace root, new files must go inside a top-level folder (files at the root are not synced). "
-                       "Every run may read these folders; content is the human's DATA.", ro=True),
+                       "Every run may read sync folders; a lane folder only from a run whose workspace is it. Content is the human's DATA.", ro=True),
     "filehub_link": _t("Web link (\"open on Không gian số\") for a file or folder inside a shared folder. path = absolute local path.",
                        {"path": _S}, ["path"], ro=True),
     "system_get": _t("One registered system with its jobs; log=true adds the tail of each job's stdout/stderr (redacted, agent-grade DATA).",

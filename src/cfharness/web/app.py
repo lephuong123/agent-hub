@@ -1254,6 +1254,8 @@ class Action:
     # ô người phải gõ (lại) Ở BƯỚC 2 — (tên, nhãn, kiểu input): passphrase không bao giờ đi qua trang xác nhận (`secret_fields`) nên được
     # nhập đúng ở POST cuối cùng; id gói gõ lại (web/transfer_pages.py)
     reenter: Callable[[FormData], list[tuple[str, str, str]]] | None = None
+    # chữ bổ sung cho trang xác nhận, đọc từ DAEMON lúc xác nhận (vd danh sách tệp agent muốn xoá) — không lấy từ form
+    preview: Callable[[Request, FormData], Awaitable[str]] | None = None
 
 
 async def _config_set(request: Request, p: dict[str, Any]) -> Any:
@@ -1582,7 +1584,14 @@ async def plan_action(request: Request, name: str, form: FormData, act: Action) 
     if act.confirm and form.get("confirm") != "yes":
         msg = act.confirm(form) if callable(act.confirm) else act.confirm
         fields = [(k, v) for k, v in carry(form) if k not in act.secret_fields]  # giá trị secret không vào HTML
-        return Plan("confirm", act, params, message=msg + ("\n(Nhập lại giá trị ở trang Cài đặt và tích ô xác nhận.)" if act.secret_fields else ""),
+        if act.preview is not None:
+            try:
+                extra = await act.preview(request, form)
+            except (RpcError, DaemonUnavailable, OSError):
+                extra = ""
+            msg = msg + ("\n\n" + extra if extra else "")
+        # ô bí mật không đi qua trang xác nhận: thao tác có `reenter` hỏi lại ở BƯỚC 2 (không cần nhập lại ở Cài đặt)
+        return Plan("confirm", act, params, message=msg + ("\n(Nhập lại giá trị ở trang Cài đặt và tích ô xác nhận.)" if act.secret_fields and not act.reenter else ""),
                     fields=fields)
     if act.step2 and form.get("confirm2") != "yes":
         # thao tác nới quyền (vd gỡ tài nguyên bảo vệ — web/perm_pages.py): bước 2 nêu rõ hệ quả, như "luôn cho phép"
