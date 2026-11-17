@@ -7,7 +7,8 @@ MCP (đánh dấu thiếu lệnh của lần nhập, OAuth chưa kết nối; `-
 thư mục chung Không gian số (filehub: cần đăng nhập lại sau nhập, chưa đăng nhập, binary sync thiếu), repo workspace (có chưa, HEAD khớp
 `repos.json` của gói), agent bị tạm dừng vì thiếu workspace, lịch đang tạm dừng (clone), việc viết lại
 tri thức còn dở (`import_followups`), `imported_from`/`cloned_from`/`migrated_to`, tự khởi động (gợi ý đúng OS), `cfharness[vector]`,
-quyền file (POSIX). Kết quả `{ok, home, checks[{id, check, ok, level ok|info|warning|error, detail, fix?}], summary}`.
+quyền file (POSIX), dung lượng HUB_HOME theo mục cấp 1 + thư mục làm việc dọn được (`housekeeping.py` — chỉ báo; dọn = `--cleanup`,
+cần daemon, RPC `hub.cleanup`). Kết quả `{ok, home, checks[{id, check, ok, level ok|info|warning|error, detail, fix?}], summary}`.
 
 RPC `hub.doctor {}` (HUMAN_ONLY: lộ đường dẫn/tên secret/repo của người; chỉ đọc, không audit) — cho web PR6; không probe mạng trong RPC
 (web gọi `mcp.probe` riêng nếu cần).
@@ -110,12 +111,14 @@ def run(paths: "HubPaths", *, probe: bool = False, claude_binary: str | None = N
         _autostart(ck, paths)
         _vector(ck, cfg)
         _perms(ck, paths)
+        hk = _housekeeping(ck, paths, c)
     finally:
         if c is not None:
             c.close()
     errs = sum(1 for x in ck.items if x["level"] == "error")
     warns = sum(1 for x in ck.items if x["level"] == "warning")
-    return {"ok": errs == 0, "home": str(home), "checks": ck.items, "summary": {"errors": errs, "warnings": warns, "total": len(ck.items)}}
+    return {"ok": errs == 0, "home": str(home), "checks": ck.items, "summary": {"errors": errs, "warnings": warns, "total": len(ck.items)},
+            "housekeeping": hk}
 
 
 # ============================================================================ từng nhóm
@@ -427,6 +430,62 @@ def _perms(ck: _Checks, paths: "HubPaths") -> None:
            "warning", fix=f"chmod 700 {home} {home / 'secrets'} {home / 'auth'}; chmod 600 {paths.db} {home / 'secrets'}/*")
 
 
+DISK_FREE_WARN = 2 * 1024 ** 3  # chỗ trống ổ chứa HUB_HOME dưới 2 GB → cảnh báo
+
+
+def _housekeeping(ck: _Checks, paths: "HubPaths", c: sqlite3.Connection | None) -> dict[str, Any] | None:
+    """Dung lượng HUB_HOME theo mục cấp 1 + thư mục làm việc dọn được (housekeeping.py). CHỈ BÁO — dọn = `hub doctor --cleanup`."""
+    from .housekeeping import LABELS, human, report
+
+    try:
+        hk = report(paths.home, c)
+    except Exception as e:  # noqa: BLE001 — quét đĩa lỗi không làm hỏng doctor
+        ck.add("disk", "dung lượng HUB_HOME", False, f"không quét được: {e}"[:200], "info")
+        return None
+    du = hk["disk"]
+    top = ", ".join(f"{x['name']} {human(x['bytes'])}" for x in du["entries"][:6] if x["bytes"])
+    ws = du.get("agent_workspaces") or {}
+    disk = du.get("disk") or {}
+    low = bool(disk) and disk.get("free", 0) < DISK_FREE_WARN
+    ck.add("disk", "dung lượng HUB_HOME", True, f"{human(du['total'])} — {top or 'trống'}"
+           + (f" · workspaces của agent {human(ws.get('bytes'))}" if ws.get("bytes") else "")
+           + (f" · ổ đĩa còn trống {human(disk.get('free'))}" if disk else ""), "info")
+    if low:
+        ck.add("disk_free", "chỗ trống ổ đĩa", False, f"chỉ còn {human(disk.get('free'))} trên ổ chứa HUB_HOME", "warning",
+               fix="cfharness hub doctor --cleanup; giảm retention.checkpoints_days / backup.keep; xoá gói cũ trong exports/")
+    cl = hk["cleanup"]
+    kinds = "; ".join(f"{v['count']} {LABELS.get(k, k)} ({human(v['bytes'])})" for k, v in sorted(cl["by_kind"].items())
+                      if k != "scratch_stale")
+    n = cl["cleanable"]["count"]
+    ck.add("cleanup", "thư mục làm việc dọn được", n == 0,
+           (f"{n} thư mục, {human(cl['cleanable']['bytes'])}: {kinds}" if n else "không có")
+           + (f" · {cl['busy']} thư mục đang có run/task dùng (giữ)" if cl["busy"] else ""),
+           "warning", fix="cfharness hub doctor --cleanup (liệt kê rồi hỏi y/N; không xoá run/ledger/audit)")
+    st = cl["stale"]
+    if st["count"]:
+        ck.add("cleanup_stale", f"workspace scratch của run đã xong > {st['days']:.0f} ngày", True,
+               f"{st['count']} thư mục, {human(st['bytes'])} — giữ để `run continue` còn thấy file", "info")
+        ck.items[-1]["fix"] = f"cfharness hub doctor --cleanup --older-than {st['days']:.0f}"
+    for t in cl.get("task_worktrees") or []:
+        ck.add(f"task_worktree:{t['path']}", "git worktree của task đã xong", True, f"{t['path']} (task {t['task']}) — hub không tự xoá", "info")
+        ck.items[-1]["fix"] = t["fix"]
+    return hk
+
+
+def cleanup_text(plan: dict[str, Any]) -> str:
+    """Danh sách thư mục sẽ dọn (cho bước xác nhận y/N của `hub doctor --cleanup`)."""
+    from .housekeeping import LABELS, human
+
+    items = [x for x in plan.get("items") or [] if x.get("cleanable")]
+    out = [f"{len(items)} thư mục dọn được ({human(sum(x['bytes'] for x in items))}):"]
+    for x in items:
+        out.append(f"  - {x['rel']}  {human(x['bytes'])}  [{LABELS.get(x['kind'], x['kind'])}]")
+    busy = [x for x in plan.get("items") or [] if x.get("busy")]
+    if busy:
+        out.append(f"giữ {len(busy)} thư mục đang có run/task dùng: " + ", ".join(x["rel"] for x in busy[:8]))
+    return "\n".join(out)
+
+
 def text(rep: dict[str, Any]) -> str:
     mark = {"ok": "✓", "info": "·", "warning": "!", "error": "✗"}
     out = [f"hub doctor — {rep.get('home')}"]
@@ -449,6 +508,10 @@ def register_rpc(daemon: "Daemon") -> None:
         return await asyncio.to_thread(run, hub.paths)
 
     daemon.methods["hub.doctor"] = _doctor
+    # dung lượng + dọn thư mục làm việc: hub.housekeeping (đọc) + hub.cleanup (tự audit) — housekeeping.py
+    from .housekeeping import register_rpc as _register_housekeeping
+
+    _register_housekeeping(daemon)
 
 
 __all__ = ["run", "text", "register_rpc"]

@@ -1,0 +1,19 @@
+{# Hàng job của trang Hệ thống ngoài (web/systems_pages.py) — dùng chung cho /systems và /systems/{id}. #}
+{% import "_macros.html" as m with context %}
+{% macro job_row(j, sid, next) -%}
+{% set st = job_status.get(j.status, (j.status_vi or j.status, 'muted', 'circle')) %}
+<tr id="job-{{ j.label }}">
+  <td data-label="Job" class="title-cell"><code class="t">{{ j.label }}</code>{% if j.locked %} <span class="pill info" title="Điều phối viên không thao tác được job này">khoá</span>{% endif %}
+    <span class="s">{{ job_kind.get(j.kind, j.kind) }}{% if j.schedule %} · {{ j.schedule }}{% endif %}</span></td>
+  <td data-label="Trạng thái"><span class="pill {{ st[1] }}">{{ m.icon(st[2]) }}{{ st[0] }}</span>
+    {% if j.pid %}<div class="muted small">pid {{ j.pid }}</div>{% elif j.last_exit not in (none, 0) %}<div class="muted small">mã thoát {{ j.last_exit }}</div>{% endif %}
+    {% if j.paused_by %}<div class="muted small">dừng bởi {{ j.paused_by.by }}{% if j.paused_by.at %} · {{ m.rel(j.paused_by.at) }}{% endif %}{% if j.paused_by.reason %} — {{ j.paused_by.reason }}{% endif %}</div>{% endif %}</td>
+  <td class="actions">
+    {% if j.status == 'paused' %}{{ m.act("system_job", "Bật lại", {"label": j.label, "action": "resume"}, "btn sm", confirm=job_confirm('resume', j.label), next=next, ic="play") }}
+    {% else %}{{ m.act("system_job", "Tạm dừng", {"label": j.label, "action": "pause"}, "btn sm", confirm=job_confirm('pause', j.label), next=next, ic="pause") }}
+    {{ m.act("system_job", "Khởi động lại", {"label": j.label, "action": "restart"}, "btn sm ghost", confirm=job_confirm('restart', j.label), next=next, ic="refresh") }}{% endif %}
+    {% if j.locked %}{{ m.act("system_lock", "Mở khoá", {"label": j.label, "on": "0"}, "btn sm ghost", confirm="Mở khoá job " ~ j.label ~ "? Điều phối viên lại được thao tác job này.", next=next, ic="x", title="Cho điều phối viên thao tác lại job này") }}
+    {% else %}{{ m.act("system_lock", "Khoá", {"label": j.label, "on": "1"}, "btn sm ghost", confirm="Khoá job " ~ j.label ~ "? Điều phối viên không thao tác được job này nữa.", next=next, ic="shield", title="Chỉ bạn thao tác được job này") }}{% endif %}
+  </td>
+</tr>
+{%- endmacro %}

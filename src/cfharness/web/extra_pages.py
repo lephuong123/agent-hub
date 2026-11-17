@@ -8,7 +8,8 @@
 - **Thay đổi file của run**: `/partials/run/{id}/diff` (trang run tải lười bằng htmx) + `/runs/{id}/diff` (không cần JS) — `run.diff{patch}`,
   diff unified tách theo file, gập/mở, có trần kích thước; "Hoàn tác" = `run.revert` (hộp xác nhận nguy hiểm), "Kiểm tra" = `dry_run`.
 - **Sức khoẻ** `/partials/health` (thẻ ở Cài đặt): chỉ RPC đọc `hub.status` + `hub.compat` + `guard.integrity.status` + `report.hangs`
-  (run timed_out/interrupted/crashed 14 ngày theo agent/loại/tool dở/thời lượng — auto_resume.py)
+  (run timed_out/interrupted/crashed 14 ngày theo agent/loại/tool dở/thời lượng — auto_resume.py) + `hub.housekeeping` (dung lượng HUB_HOME,
+  thư mục làm việc dọn được — housekeeping.py; dọn chỉ từ terminal `cfharness hub doctor --cleanup`)
   (không có RPC `doctor` — `cfharness doctor` chạy `claude` cục bộ, không thêm RPC nặng).
 
 Module này không đọc/ghi `hub.db`; chỉ gọi RPC như phần còn lại của web. `app.py` chỉ thêm route + `register_actions`.
@@ -437,6 +438,7 @@ def revert_confirm(f: Any) -> str:
 
 
 # ============================================================================ sức khoẻ (thẻ ở Cài đặt)
+DISK_FREE_WARN = 2 * 1024 ** 3  # như hub_doctor.DISK_FREE_WARN
 HANG_GROUPS = (("by_agent", "Theo agent"), ("by_kind", "Theo loại run"), ("by_tool", "Tool đang chạy dở"), ("by_duration", "Theo thời lượng"))
 
 
@@ -483,6 +485,23 @@ async def partial_health(request: Request) -> Response:
             hung, total = int(hangs.get("hung") or 0), int(hangs.get("runs_total") or 0)
             add("Run treo / quá giờ (14 ngày)", hung < HANG_WARN_MIN or hung < HANG_WARN_RATIO * total, f"{hangs.get('hung', 0)}/{hangs.get('runs_total', 0)} run" + (f" ({oc})" if oc else "")
                 + (f" · {auto} lần tự resume" if auto else ""), "warning")
+        hk = await _opt(request, "hub.housekeeping", {}, {}) or {}
+        if hk:
+            from ..housekeeping import human
+
+            du = hk.get("disk") or {}
+            top = ", ".join(f"{x.get('name')} {human(x.get('bytes'))}" for x in (du.get("entries") or [])[:4] if x.get("bytes"))
+            free = (du.get("disk") or {}).get("free")
+            low = free is not None and free < DISK_FREE_WARN
+            add("Dung lượng HUB_HOME", not low, f"{human(du.get('total'))}" + (f" — {top}" if top else "")
+                + (f" · ổ đĩa còn trống {human(free)}" if free is not None else ""), "warning")
+            cl = hk.get("cleanup") or {}
+            n = int((cl.get("cleanable") or {}).get("count") or 0)
+            st = cl.get("stale") or {}
+            add("Thư mục làm việc dọn được", n == 0, (f"{n} thư mục, {human((cl.get('cleanable') or {}).get('bytes'))} — chạy "
+                                                     "`cfharness hub doctor --cleanup` trong terminal" if n else "không có")
+                + (f" · {st.get('count')} workspace run đã xong > {float(st.get('days') or 30):.0f} ngày ({human(st.get('bytes'))})"
+                   if st.get("count") else ""), "warning")
     except (RpcError, DaemonUnavailable, OSError) as e:
         add("Daemon", False, err_text(e))
     sess = session_of(request)

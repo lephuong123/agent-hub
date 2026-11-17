@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% from "_systems.html" import job_row with context %}
+{% block title %}{{ s.title or s.id }} · Hệ thống ngoài{% endblock %}
+{% block content %}
+<div class="page-head"><div class="ph-title"><h1>{{ s.title or s.id }}</h1><span class="sub"><span class="id">{{ s.id }}</span> · <code>{{ s.path }}</code>{% if s.added_at %} · đăng ký {{ m.rel(s.added_at) }}{% endif %}</span></div>
+  <div class="row gap"><a class="btn sm ghost" href="/systems">{{ m.icon('arrow-left') }}<span>Mọi hệ thống</span></a>
+    {{ m.act("system_rm", "Gỡ khỏi danh sách", {"id": s.id}, "btn sm ghost danger-t", confirm="Gỡ hệ thống " ~ s.id ~ " khỏi danh sách quản lý?", next="/systems/" ~ s.id, ic="trash") }}</div></div>
+<section class="card flush" id="sys-jobs">
+  <h2 class="pad">{{ m.icon('power') }} Job</h2>
+  {% if not s.jobs %}<p class="muted pad">Không có job nào trỏ vào thư mục này.</p>{% else %}
+  <table class="tbl stack">
+    <thead><tr><th>Job</th><th>Trạng thái</th><th class="actions"><span class="sr-only">Thao tác</span></th></tr></thead>
+    <tbody>{% for j in s.jobs %}{{ job_row(j, s.id, "/systems/" ~ s.id) }}{% endfor %}</tbody>
+  </table>{% endif %}
+</section>
+{% for j in s.jobs %}
+<section class="card" id="log-{{ j.label }}">
+  <h2>{{ m.icon('log') }} Log <code>{{ j.label }}</code></h2>
+  <p class="muted small">Lệnh: <code>{{ j.program }}</code></p>
+  {% if j.log_note %}<p class="muted">{{ j.log_note }}</p>{% endif %}
+  {% for k, label in [("stdout", "Đầu ra"), ("stderr", "Lỗi")] %}{% if j.log and j.log[k] %}
+  <details {{ 'open' if loop.first }}><summary>{{ label }} (đuôi, đã che secret)</summary><pre class="pre">{{ j.log[k] }}</pre></details>
+  {% endif %}{% endfor %}
+</section>
+{% endfor %}
+{% endblock %}

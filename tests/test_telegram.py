@@ -256,6 +256,54 @@ async def test_schedules_command_pause_one_tap_resume_two_steps(make, tg):
     await stop(d)
 
 
+async def test_systems_command_job_buttons_two_steps(make, tg, tmp_path):
+    """/hethong: danh sách hệ thống + job (văn bản thuần) + tin RIÊNG có nút (nhãn chỉ label job). Mọi thao tác job 2 bước; ghi qua
+    `bot.call` → `system.job` audit kênh telegram; người ngoài allowlist không tiêu nút; không có nút đăng ký/khoá."""
+    from test_systems import attach_world, make_world
+
+    d = await make()
+    w = make_world(tmp_path)
+    attach_world(d.hub, w)
+    (w["a"] / "README.md").write_text("# Bấm <b>vào</b> đây\n", encoding="utf-8")
+    await until(lambda: tg.calls_of("getUpdates"))
+    await say(tg, BOSS, "/hethong")
+    assert "Chưa đăng ký hệ thống" in texts(tg, BOSS)[-1]
+    d.hub.systems.scan(apply=True)
+    await say(tg, BOSS, "/hethong")
+    listing, panel = tg.sent(BOSS)[-2], tg.sent(BOSS)[-1]
+    assert "Bấm <b>vào</b> đây" in listing["text"] and "com.vn2.bantin" in listing["text"] and not FakeTelegram.buttons(listing)
+    assert "com.hub.self" not in listing["text"]
+    btns = FakeTelegram.buttons(panel)
+    labels = [b["text"] for b in btns]
+    assert "⏸ Dừng com.vn2.bantin" in labels and "🔄 Khởi động lại com.vn2.web" in labels and "vào" not in panel["text"]
+    assert not any("khoá" in x.lower() or "gỡ" in x.lower() for x in labels)
+    pause = next(b for b in btns if b["text"] == "⏸ Dừng com.vn2.bantin")
+    await press(tg, STRANGER, pause["callback_data"])  # ngoài allowlist → bỏ qua
+    await press(tg, BOSS, pause["callback_data"])
+    assert not any(c[0] == "bootout" for c in w["fake"].calls)  # bước 1 chỉ hỏi
+    step2 = tg.edits(BOSS)[-1]
+    b2 = [b for row in step2["reply_markup"]["inline_keyboard"] for b in row]
+    assert [b["text"] for b in b2] == ["Xác nhận TẠM DỪNG", "Huỷ"] and "com.vn2.bantin" in step2["text"]
+    await press(tg, BOSS, b2[0]["callback_data"])
+    job = next(j for s in d.hub.systems.list() for j in s["jobs"] if j["label"] == "com.vn2.bantin")
+    assert job["status"] == "paused" and job["paused_by"]["reason"] == "người tạm dừng qua Telegram"
+    au = d.hub.audit.query(kind="system.job")
+    assert au and au[0]["channel"] == f"telegram:{BOSS}" and au[0]["actor"] == "user"
+    assert "Đã tạm dừng job" in tg.edits(BOSS)[-1]["text"]
+    await press(tg, BOSS, b2[0]["callback_data"])  # nonce đã tiêu
+    assert len(d.hub.audit.query(kind="system.job")) == 1
+    # bật lại: nút đổi thành Bật lại; Huỷ ở bước 2 không làm gì
+    await say(tg, BOSS, "/hethong")
+    resume = next(b for b in FakeTelegram.buttons(tg.sent(BOSS)[-1]) if b["text"] == "▶️ Bật lại com.vn2.bantin")
+    await press(tg, BOSS, resume["callback_data"])
+    b2 = [b for row in tg.edits(BOSS)[-1]["reply_markup"]["inline_keyboard"] for b in row]
+    await press(tg, BOSS, b2[1]["callback_data"])
+    assert "giữ nguyên" in tg.edits(BOSS)[-1]["text"]
+    job = next(j for s in d.hub.systems.list() for j in s["jobs"] if j["label"] == "com.vn2.bantin")
+    assert job["status"] == "paused"
+    await stop(d)
+
+
 async def test_run_command_returns_result_with_cost_then_reply_continues(make, tg):
     d = await make()
     d.hub.agents.create({"id": "coder", "name": "Coder"})

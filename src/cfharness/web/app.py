@@ -1929,6 +1929,13 @@ def _perm_routes() -> list[Any]:
     return _pp.routes()
 
 
+def _systems_routes() -> list[Any]:
+    from . import systems_pages as _sp  # /systems — "Hệ thống ngoài" (app + job launchd, systems/; docs/dev-notes/systems.md)
+
+    _sp.register_actions(ACTIONS, Action, _req)
+    return _sp.routes()
+
+
 def _mcp_routes() -> list[Any]:
     from .mcp_pages import routes as _r
 
@@ -2009,6 +2016,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_manager_routes(),
         *_extra_routes(),
         *_perm_routes(),
+        *_systems_routes(),
         *_office_routes(),
         *_skill_routes(),
         *_memory_routes(),
