@@ -10,6 +10,12 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### MCP server
+- `cfharness mcp add|edit <tên> --url … --oauth …`: cờ đặt SAU tên được đọc đúng — trước đây bị lưu lặng lẽ thành lệnh stdio
+  (`--transport …`). Lệnh stdio vẫn viết sau `--`.
+- `mcp edit --transport http` (và sửa trên web) từ server stdio tự bỏ `command`/`args`/`env` cũ — không còn lỗi "transport http không dùng 'command'".
+- Trang MCP server liệt kê cả redirect URI qua tên miền public (khi đang vào web qua đó) để khai cho app OAuth tạo tay ở nhà cung cấp.
+
 ---
 
 ## v0.2.17 — 2026-11-17

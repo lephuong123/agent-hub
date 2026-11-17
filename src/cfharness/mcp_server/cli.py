@@ -164,6 +164,45 @@ def cmd_mcp_token(ctx: Any) -> int:
 
 
 # ============================================================================ registry
+def _server_fields(sp: argparse.ArgumentParser) -> None:
+    sp.add_argument("--transport", choices=["stdio", "http", "sse"])
+    sp.add_argument("--url")
+    sp.add_argument("--env", action="append", metavar="KEY=VALUE", help="giá trị secret dạng rõ tự chuyển vào secret store")
+    sp.add_argument("--header", action="append", metavar="KEY=VALUE")
+    sp.add_argument("--include", action="append", help="glob tool được dùng")
+    sp.add_argument("--exclude", action="append", help="glob tool bị chặn")
+    sp.add_argument("--require-approval", action="append", help="glob tool luôn qua phê duyệt")
+    sp.add_argument("--trust", help="trusted | untrusted (giá trị lạ = untrusted)")
+    sp.add_argument("--timeout", type=float, help="giây")
+    sp.add_argument("--description")
+    sp.add_argument("--oauth", action="store_true", help="server cần đăng nhập OAuth 2.1 (http/sse) — rồi `cfharness mcp login <tên>`")
+    sp.add_argument("--oauth-scope", action="append", help="scope OAuth xin (phân tách dấu phẩy)")
+    sp.add_argument("--oauth-client-id", help="client_id đăng ký tay (provider không hỗ trợ đăng ký động)")
+    sp.add_argument("--oauth-client-secret", help="client_secret hoặc ${SECRET} (giá trị rõ tự chuyển vào secret store)")
+    sp.add_argument("--no-oauth", action="store_true", help="(edit) bỏ OAuth")
+    sp.add_argument("command", nargs=argparse.REMAINDER, help="(stdio) -- lệnh và tham số")
+
+
+def _hoist_trailing_flags(a: argparse.Namespace, act: str) -> None:
+    """`mcp add|edit <tên> --url … --oauth`: tham số `command` (REMAINDER) nuốt MỌI thứ sau tên, kể cả cờ — trước đây các cờ bị
+    lưu lặng lẽ thành lệnh stdio (`--transport http …`). Nếu phần đuôi bắt đầu bằng cờ (không có `--` ngăn cách) thì đọc lại
+    nó như cờ; lệnh stdio vẫn viết sau `--` (`mcp add x --trust trusted -- npx -y pkg`)."""
+    rest = list(a.command or [])
+    if not rest or rest[0] == "--" or not rest[0].startswith("-"):
+        return
+    p = argparse.ArgumentParser(prog=f"cfharness mcp {act} <tên>", add_help=False)
+    _server_fields(p)
+    p.add_argument("--no-probe" if act == "add" else "--probe", action="store_true")
+    ns = p.parse_args(rest)
+    for k, v in vars(ns).items():
+        if k == "command":
+            a.command = v
+        elif isinstance(v, list):
+            setattr(a, k, (getattr(a, k, None) or []) + v)
+        elif v is not None and v is not False:
+            setattr(a, k, v)
+
+
 def _server_payload(a: argparse.Namespace, *, creating: bool) -> dict[str, Any]:
     d: dict[str, Any] = {}
     command = list(a.command or [])
@@ -345,6 +384,8 @@ def cmd_mcp(ctx: Any) -> int:
         return cmd_mcp_snippet(ctx)
     if act == "token":
         return cmd_mcp_token(ctx)
+    if act in ("add", "edit"):
+        _hoist_trailing_flags(a, act)
     if act == "add":
         payload = {"name": a.name, **_server_payload(a, creating=True)}
         res = ctx.call("mcp.add", {"config": payload, "probe": not a.no_probe, "timeout_s": a.timeout})
@@ -519,32 +560,14 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     tk = ms.add_parser("token", help="xem/đổi token cục bộ cho MCP HTTP", parents=[common])
     tk.add_argument("--rotate", action="store_true")
 
-    def server_fields(sp: argparse.ArgumentParser) -> None:
-        sp.add_argument("--transport", choices=["stdio", "http", "sse"])
-        sp.add_argument("--url")
-        sp.add_argument("--env", action="append", metavar="KEY=VALUE", help="giá trị secret dạng rõ tự chuyển vào secret store")
-        sp.add_argument("--header", action="append", metavar="KEY=VALUE")
-        sp.add_argument("--include", action="append", help="glob tool được dùng")
-        sp.add_argument("--exclude", action="append", help="glob tool bị chặn")
-        sp.add_argument("--require-approval", action="append", help="glob tool luôn qua phê duyệt")
-        sp.add_argument("--trust", help="trusted | untrusted (giá trị lạ = untrusted)")
-        sp.add_argument("--timeout", type=float, help="giây")
-        sp.add_argument("--description")
-        sp.add_argument("--oauth", action="store_true", help="server cần đăng nhập OAuth 2.1 (http/sse) — rồi `cfharness mcp login <tên>`")
-        sp.add_argument("--oauth-scope", action="append", help="scope OAuth xin (phân tách dấu phẩy)")
-        sp.add_argument("--oauth-client-id", help="client_id đăng ký tay (provider không hỗ trợ đăng ký động)")
-        sp.add_argument("--oauth-client-secret", help="client_secret hoặc ${SECRET} (giá trị rõ tự chuyển vào secret store)")
-        sp.add_argument("--no-oauth", action="store_true", help="(edit) bỏ OAuth")
-        sp.add_argument("command", nargs=argparse.REMAINDER, help="(stdio) -- lệnh và tham số")
-
     ad = ms.add_parser("add", help="thêm MCP server: cfharness mcp add <tên> [--trust …] -- <lệnh> <args…> | --url URL", parents=[common])
     ad.add_argument("name")
     ad.add_argument("--no-probe", action="store_true")
-    server_fields(ad)
+    _server_fields(ad)
     ed = ms.add_parser("edit", help="sửa MCP server (--env KEY= để xoá khoá)", parents=[common])
     ed.add_argument("name")
     ed.add_argument("--probe", action="store_true")
-    server_fields(ed)
+    _server_fields(ed)
     an = ms.add_parser("annotate", help="ghi đè annotations tool (người đặt), vd: mcp annotate playwright 'browser_navigate' --not-destructive",
                        parents=[common])
     an.add_argument("name", help="tên MCP server")

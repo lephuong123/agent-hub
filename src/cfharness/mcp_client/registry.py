@@ -212,6 +212,13 @@ class McpRegistry:
         if "name" in patch and patch["name"] != name:
             raise HubError("không đổi được tên server (xoá rồi thêm lại)")
         cur = dict(row["config"])
+        new_t = patch.get("transport")
+        if new_t and new_t != cur.get("transport", "stdio"):
+            # Đổi loại transport: bỏ trường riêng của loại cũ (patch là phép gộp — không bỏ thì stdio→http vướng 'command' cũ).
+            drop = ("command", "args", "env") if new_t in ("http", "sse") else (("url", "headers", "auth") if new_t == "stdio" else ())
+            for k in drop:
+                if k not in patch:
+                    cur.pop(k, None)
         for k, v in patch.items():
             if k == "name":
                 continue
