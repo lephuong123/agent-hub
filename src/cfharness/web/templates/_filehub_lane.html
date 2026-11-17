@@ -45,6 +45,12 @@
         {{ m.act("filehub_lane_orphan", "Đẩy lại", {"tree": o.tree, "action": "push"}, "btn sm", next="/settings#filehub-lane") }}
         {{ m.act("filehub_lane_orphan", "Bỏ", {"tree": o.tree, "action": "drop"}, "btn ghost sm", next="/settings#filehub-lane") }}</p>
     {% endfor %}
+    {% for w in data.runs if w.held %}
+      <p class="small"><span class="pill warn">{{ m.icon('alert') }}{{ w.held }} mục xoá đang chờ duyệt</span> agent {{ w.agent_id }}
+        ({{ w.folder }}{{ '/' ~ w.sub if w.sub }}) xoá nhiều mục cùng lúc — tệp vẫn còn trên Không gian số tới khi bạn quyết.
+        {{ m.act("filehub_lane_deletes", "Cho xoá", {"root_id": w.root_id}, "btn sm", next="/settings#filehub-lane") }}
+        {{ m.act("filehub_lane_deletes", "Không xoá", {"root_id": w.root_id, "discard": "1"}, "btn ghost sm", next="/settings#filehub-lane") }}</p>
+    {% endfor %}
     {% if data.runs %}<p class="small muted">Đang làm việc: {% for w in data.runs %}{{ w.agent_id }} ({{ w.folder }}{{ '/' ~ w.sub if w.sub }}, {{ w.mode }}){{ ", " if not loop.last }}{% endfor %}</p>{% endif %}
   {% endif %}
 </section>

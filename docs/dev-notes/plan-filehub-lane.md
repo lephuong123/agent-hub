@@ -352,6 +352,23 @@ Sửa theo review (2026-11-17, `tests/test_lane_review_fixes.py` — mỗi ca đ
   (`STEER_RMDIR_NOT_EMPTY`). Di chuyển thư mục `403 hidden_content` / `423` → lỗi trả agent (cây cục bộ không đổi). `409 in_progress
   {retry_after}` → chờ rồi gửi lại CÙNG Idempotency-Key (không bản xung đột). Fake: `hidden`, `inflight`, `put_delay` = quét TRƯỚC khi chốt.
 
+Sửa theo vòng kiểm chứng (2026-11-17, `tests/test_lane_verify_fixes.py` + `test_web_filehub.py::test_lane_held_mass_delete_buttons` — mỗi ca đỏ
+trước khi sửa; KHÔNG đổi §C):
+- **`fs_delete` = cùng đường xoá với quét** (`Workdir.tool_delete`): liệt kê cây con → mục bị bỏ qua (tệp tạm/khoá Office/`.git`) vào `hidden`,
+  thư mục tổ tiên của chúng (kể cả chính thư mục được xoá) GIỮ — kết quả `kept_parent` + `note` cho agent; phần còn lại thành lệnh
+  `delete`/`rmdir` trong hàng đợi (`if_rev` theo lượt liệt kê) → `_mass_delete_gate` + `del_count` chung (quá trần → `held`, kết quả
+  `held: true`, `filehub.blocked{mass_delete}`) → `push_pending(final, only=…)` ghi trạng thái SAU MỖI mục. Lỗi tạm (423/429/mạng) → mục ở lại
+  hàng đợi (`queued`), lỗi hẳn → mục về lại cây + `errors`. Chế độ tools: mục chưa từng kéo về (`unpulled`) chỉ được quên khi người bỏ lô.
+- `recover()` giữ cờ `read_only` bền: cây của run chỉ đọc chỉ được dọn, không bao giờ đẩy.
+- Người di chuyển tệp lên tên agent vừa tạo (chưa đẩy, nội dung khác) → bản của agent thành bản `(cfharness …)` TRƯỚC, tệp người về đúng tên,
+  chỗ cũ không bị đẩy lại thành tệp mới.
+- 409 mà `current.sha256` = nội dung một lần gửi TRƯỚC của chính agent (`prev_shas` — đã chốt sau timeout) → lấy bản đó làm base, đẩy lại MỘT
+  lần với Idempotency-Key MỚI (If-Match đã đổi), không bản xung đột giả.
+- Người sửa tệp lười (chưa tải) → chỉ cập nhật metadata base (vẫn `lazy`), không tải.
+- Xung đột giữ bản người (`_conflict_local(keep_remote)`) CHÉP bản agent sang tên mới rồi tải đè nguyên tử — tệp gốc không lúc nào biến mất.
+- Web: thẻ "Cổng cfharness" liệt kê lô xoá đang giữ theo run (`info().held`) + nút "Cho xoá"/"Không xoá" (ACTIONS `filehub_lane_deletes` →
+  `filehub.resume {root_id, discard?}`, xác nhận, audit web). Chat (Telegram/Slack) chưa có nút — vẫn qua web/CLI.
+
 Việc còn lại:
 - Nghiệm thu thật trên qltm sau khi K1–K4 lên (plan §7 H4); `tested` với claude thật (steer + Write/Edit trong cây).
 - `run.revert` cho run lane = khôi phục phiên bản trước run qua `restore` (HUMAN_ONLY) — chưa làm (`run revert` từ chối như sync).

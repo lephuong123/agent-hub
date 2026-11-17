@@ -337,3 +337,45 @@ async def test_requires_login(env):
     assert r.status_code in (303, 401, 403)
     r = await e.client.get("/partials/filehub")
     assert r.status_code in (303, 401, 403)
+
+
+async def test_lane_held_mass_delete_buttons(env, monkeypatch):
+    """Cổng cfharness: lô xoá hàng loạt đang GIỮ của run lane → thẻ "Cổng cfharness" có nút "Cho xoá"/"Không xoá" (xác nhận, RPC
+    `filehub.resume {root_id, discard}` HUMAN_ONLY sẵn có, audit web) — trước đây chỉ CLI `filehub resume --root … [--discard]`."""
+    e, _tmp = env
+    await e.login()
+    e.hub.config.set("filehub.folders", [{"name": "chung", "root_id": "r_chung", "ws_id": "w", "kind": "folder", "mode": "lane", "server": "qltm"}])
+    lane = e.hub.filehub.lane
+
+    class W:
+        root, tree, latencies, server = "r_chung", "t1", [], "qltm"
+
+        def info(self):
+            return {"tree": "t1", "run_id": "run_x", "agent_id": "w1", "folder": "chung", "sub": "<b>Báo cáo</b>", "mode": "tree", "pending": 30,
+                    "blocked": 0, "failed": 0, "lazy": 0, "parked": False, "revoked": False, "held": 30, "root_id": "r_chung"}
+
+        async def stop(self):
+            pass
+
+    calls = []
+
+    async def release(root_id, *, discard=False):
+        calls.append((root_id, discard))
+        return {"root_id": root_id, "lane": True, "discarded" if discard else "released": 30, "trees": 1}
+
+    monkeypatch.setattr(lane, "release_deletes", release)
+    lane.workdirs["t1"] = W()
+    try:
+        card = (await e.client.get("/partials/filehub/lane")).text
+        assert "30 mục xoá đang chờ duyệt" in card and "<b>Báo cáo</b>" not in card
+        assert card.count('action="/do/filehub_lane_deletes"') == 2
+        r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "next": "/settings#filehub-lane"})
+        assert r.status_code == 200 and "Cho agent xoá" in r.text and not calls  # xác nhận trước
+        r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "confirm": "yes", "next": "/settings#filehub-lane"})
+        assert r.status_code == 303 and calls == [("r_chung", False)]
+        r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "discard": "1", "confirm": "yes", "next": "/settings#filehub-lane"})
+        assert r.status_code == 303 and calls[-1] == ("r_chung", True)
+        rows = audit_rows(e, "filehub.resume")
+        assert rows[-1]["channel"] == "web"
+    finally:
+        lane.workdirs.pop("t1", None)

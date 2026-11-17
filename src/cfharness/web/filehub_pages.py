@@ -321,6 +321,14 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
         confirm=lambda f: ("BỎ hẳn các thay đổi chưa đẩy lên của run này (xoá bản trên máy)?" if f.get("action") == "drop"
                            else "Đẩy lại các thay đổi còn kẹt lên Không gian số? (tệp chứa secret vẫn bị chặn)"),
         danger=True, goto=lambda r, f: NEXT)
+    actions["filehub_lane_deletes"] = Action(
+        "filehub.resume", lambda f: {"root_id": _req(f, "root_id"), **({"discard": True} if f.get("discard") else {})},
+        lambda r, f: (f"Đã KHÔNG xoá {(r or {}).get('discarded', 0)} mục — tệp được trả lại cây làm việc của agent" if f.get("discard")
+                      else f"Đã cho xoá {(r or {}).get('released', 0)} mục (vào thùng rác Không gian số)"),
+        call=simple("filehub.resume"),
+        confirm=lambda f: ("KHÔNG cho agent xoá các mục đang giữ? Tệp ở lại Không gian số và được trả lại cây làm việc của agent." if f.get("discard")
+                           else "Cho agent xoá các mục đang giữ trên Không gian số? (vào thùng rác, khôi phục được)"),
+        goto=lambda r, f: NEXT)
     actions["filehub_rename"] = Action(
         "filehub.rename", lambda f: {"name": _req(f, "name"), "new_name": _name(f, "new_name")},
         lambda r, f: f"Đã đổi tên «{(r or {}).get('previous')}» → «{(r or {}).get('name')}» (giao việc: workspace {(r or {}).get('workspace')})",

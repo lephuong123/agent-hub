@@ -425,6 +425,15 @@ class Workdir:
             await self._download(rel)
             await self.steer(f"undel:{rel}", STEER_UNDELETED.format(rel=one_line(rel, 300)))
             return
+        b = self.base.get(rel) or {}
+        if b.get("lazy") and not self.modified_locally(rel):
+            # tệp lớn CHƯA tải (chỗ giữ trống): người sửa → chỉ cập nhật metadata, KHÔNG tải cả tệp mỗi lần người lưu (agent fs_pull khi cần)
+            meta = d if d.get("version_id") else await self.svc.client(self.server).stat(self.root, self.remote(rel))
+            self.base[rel] = {**self._base_of(meta), "lazy": True}
+            if rel not in self.lazy:
+                self.lazy.append(rel)
+            await self.steer(f"chg:{rel}", STEER_CHANGED.format(rel=one_line(rel, 300)))
+            return
         new = await self._conflict_local(rel, steer=False) if self.fs.is_file(rel) and self.modified_locally(rel) else None
         await self._download(rel)
         if new:
@@ -568,6 +577,23 @@ class Workdir:
                 except (LaneError, HubError, OSError) as e:
                     log.warning("lane: không kéo được %s: %s", one_line(dst, 200), e)
         else:
+            kept_dst = None
+            if d.get("type") != "folder" and self.fs.is_file(dst) and dst not in self.base:
+                # agent vừa tạo `dst` (chưa đẩy) mà người di chuyển tệp của mình lên đúng tên đó → bản của agent thành bản riêng TRƯỚC, rồi
+                # tệp của người về đúng tên (không bao giờ để base[dst] = bản người trên nội dung agent → lần đẩy sau ghi đè bản người)
+                want = str((self.base.get(src) or {}).get("sha256") or d.get("sha256") or "")
+                if self.local_sha(dst) != want:
+                    kept_dst = self._conflict_name(dst)
+                    if self.fs.rename(dst, kept_dst, overwrite=False):
+                        self._snap(kept_dst)
+                        self.snapshot.pop(dst, None)
+                        self.pending[kept_dst] = {"since": 0.0, "op": "write", "conflict_of": dst}
+                        self.svc.publish("filehub.conflict", self, {"path": one_line(dst, 300), "copy": one_line(kept_dst, 300), "root_id": self.root})
+                    else:
+                        kept_dst = None
+                else:
+                    self.fs.remove(dst)  # cùng nội dung: tệp của người thay chỗ, không gì mất
+                self.pending.pop(dst, None)
             if self.fs.exists(src) and not self.fs.exists(dst):
                 if self.fs.is_file(src) and self.modified_locally(src):
                     await self._conflict_local(src, keep_remote=False)
@@ -580,6 +606,13 @@ class Workdir:
                 self._snap(nk)
             if dst in self.base:
                 self.base[dst]["rev"] = int(d.get("rev") or self.base[dst].get("rev") or 0)
+            elif d.get("type") == "file" and self.mode == "tree" and not self.fs.exists(dst):
+                try:
+                    await self._download(dst)  # chỗ cũ chưa từng có trong cây (vd ngoài phạm vi) → kéo đúng tệp ở chỗ mới
+                except (LaneError, HubError, OSError) as e:
+                    log.warning("lane: không kéo được %s: %s", one_line(dst, 200), e)
+            if kept_dst:
+                await self.steer(f"cf:{dst}", STEER_CONFLICT.format(rel=one_line(dst, 300), rel2=one_line(kept_dst, 300)))
         if tracked:
             await self.steer(f"mv:{src}", STEER_MOVED.format(rel=one_line(src, 300), rel2=one_line(dst, 300)))
 
@@ -601,12 +634,16 @@ class Workdir:
         """Giữ bản của agent: đổi tên cục bộ thành bản xung đột (tên DUY NHẤT — không đè bản xung đột trước), đẩy như tệp mới. Trả rel mới."""
         new = self._conflict_name(rel)
         try:
-            if not self.fs.rename(rel, new, overwrite=False):
+            if keep_remote:
+                # CHÉP bản của agent sang tên mới; bản của người được tải đè NGUYÊN TỬ lên `rel` sau đó → tệp gốc không lúc nào biến mất
+                self.fs.write_atomic(new, self.fs.read_bytes(rel), tmp_prefix=TMP_PREFIX)
+            elif not self.fs.rename(rel, new, overwrite=False):
                 return None
         except (OSError, HubError):
             return None
         self._snap(new)
-        self.snapshot.pop(rel, None)
+        if not keep_remote:
+            self.snapshot.pop(rel, None)
         self.pending[new] = {"since": 0.0, "op": "write", "conflict_of": rel}  # bản của agent lên Không gian số thành tệp riêng
         self.svc.publish("filehub.conflict", self, {"path": one_line(rel, 300), "copy": one_line(new, 300), "root_id": self.root})
         if steer:
@@ -792,13 +829,14 @@ class Workdir:
         last = self.last_push.get(rel, 0.0)
         return now - last >= float(self.svc.cfg("push_min_interval_s") or 0)
 
-    async def push_pending(self, *, final: bool = False) -> None:
+    async def push_pending(self, *, final: bool = False, only: set[str] | None = None) -> None:
+        """Đẩy mục đến hạn. `only` (tool fs_delete): chỉ các mục này, ghi trạng thái SAU MỖI mục (dừng giữa chừng không để base cũ)."""
         if self.stopped_push or self.revoked or self.read_only:
             return
         now = time.time()
         await self._mass_delete_gate()
         order = {"delete": 0, "move": 1, "write": 2, "mkdir": 3, "rmdir": 4}
-        due = sorted(((r, e) for r, e in self.pending.items() if self._due(r, e, now, final)),
+        due = sorted(((r, e) for r, e in self.pending.items() if (only is None or r in only) and self._due(r, e, now, final)),
                      key=lambda x: (order.get(str(x[1].get("op")), 9), -x[0].count("/") if x[1].get("op") == "rmdir" else x[0].count("/"), x[0]))
         changed = False
         for rel, e in due:
@@ -830,8 +868,111 @@ class Workdir:
                 self.failed[rel] = f"local:{type(ex).__name__}"
                 self.pending.pop(rel, None)
                 changed = True
+            if only is not None:
+                self.persist()
         if changed:
             self.persist()
+
+    async def tool_delete(self, rel: str, st: dict[str, Any]) -> dict[str, Any]:
+        """Tool `fs_delete` — CÙNG đường xoá với quét (không có đường xoá song song): xếp lệnh xoá vào hàng đợi (`delete` tệp / `rmdir` thư mục,
+        `if_rev` ghim theo bản server vừa liệt kê) → chặn xoá hàng loạt + đếm `del_count` chung → đẩy (tệp trước, thư mục từ dưới lên; base +
+        trạng thái cập nhật SAU MỖI mục). Mục bị bỏ qua (tệp tạm/khoá Office/.git của người) hoặc vô hình không bao giờ bị xoá; thư mục còn
+        chứa chúng được GIỮ (agent được báo lý do). Gọi khi đã giữ `self.lock`."""
+        c = self.svc.client(self.server)
+        if self.ignored_item(rel, st.get("type")):
+            raise HubError(f"'{rel}' là tệp tạm/khoá/thư mục bị bỏ qua của người — hub không xoá")
+        items: list[tuple[str, dict[str, Any]]] = [(rel, st)]
+        if st.get("type") == "folder":
+            sub, _cur, cut = await c.list_all(self.root, self.remote(rel), recursive=True, max_items=int(self.svc.cfg("tree_max_files") or 20000))
+            if cut:
+                raise HubError("thư mục quá nhiều mục — xoá từng thư mục con")
+            for x in sub:
+                r = self.rel_of(str(x.get("path") or ""))
+                if r and r.startswith(rel + "/"):
+                    items.append((r, x))
+        skipped: list[str] = []
+        keep_dirs: set[str] = set()
+        for r, x in items:
+            if self.ignored_item(r, x.get("type")):
+                self.hidden.add(r)
+                skipped.append(r)
+                p = r
+                while "/" in p and p != rel:
+                    p = p.rsplit("/", 1)[0]
+                    keep_dirs.add(p)
+        queued: list[str] = []
+        for r, x in items:
+            if r in keep_dirs or any(r == k or r.startswith(k + "/") for k in skipped):
+                continue
+            folder = x.get("type") == "folder"
+            unpulled = r not in self.base
+            if unpulled:
+                self.base[r] = self._base_of(x)
+            self.pending[r] = {"since": 0.0, "op": "rmdir" if folder else "delete", "if_rev": int(x.get("rev") or 0) or None, "tool": True,
+                               **({"unpulled": True} if unpulled and self.mode != "tree" else {})}
+            queued.append(r)
+        for k in [k for k in self.pending if (k == rel or k.startswith(rel + "/")) and k not in queued]:
+            if self.pending[k].get("op") not in ("delete", "rmdir"):
+                self.pending.pop(k, None)  # ghi/tạo chưa đẩy bên trong: agent đã xoá — bỏ
+        # đĩa: xoá NGAY (base vẫn giữ tới khi server xác nhận; quét thấy mục đang chờ xoá → không đánh dấu lại)
+        if rel not in keep_dirs:
+            self.fs.remove(rel)
+        else:
+            for r in sorted(queued, key=lambda x: -x.count("/")):
+                self.fs.remove(r)
+        for k in [k for k in list(self.snapshot) if k == rel or k.startswith(rel + "/")]:
+            self.snapshot.pop(k, None)
+        await self._mass_delete_gate()
+        note = ""
+        if rel in keep_dirs:
+            note = (f"'{rel}' was kept: it contains items a person uses that you must not delete (temporary/lock/.git files): "
+                    + ", ".join(one_line(x, 120) for x in sorted(skipped)[:5]))
+        if any((self.pending.get(r) or {}).get("held") for r in queued):
+            self.persist()
+            return {"path": rel, "trashed": False, "held": True, "count": len(queued),
+                    "note": "Too many deletions at once: they are ON HOLD until a person approves; the files are still on Không gian số. "
+                            "Do not recreate them." + (" " + note if note else "")}
+        only = set(queued)
+        for _ in range(rel.count("/") + 70):
+            before = {r for r in queued if r in self.pending}
+            if not before or self.stopped_push or self.revoked:
+                break
+            await self.push_pending(final=True, only=only)
+            if {r for r in queued if r in self.pending} == before:
+                break
+        errors: dict[str, str] = {}
+        for r in queued:
+            code = self.failed.pop(r, None)
+            if code is None:
+                continue
+            errors[r] = code  # server từ chối: đưa mục về lại cây (base còn nguyên), báo agent
+            try:
+                if (self.base.get(r) or {}).get("type") == "folder":
+                    self.fs.mkdirs(r)
+                elif (self.pending.get(r) or {}).get("unpulled") or self.mode != "tree":
+                    self.base.pop(r, None)
+                else:
+                    await self._download(r)
+            except (LaneError, HubError, OSError) as ex:
+                log.warning("lane: không kéo lại được %s: %s", one_line(r, 200), ex)
+        done = [r for r in queued if r not in self.base and r not in self.pending and r not in errors]
+        left = sorted(r for r in queued if r in self.pending)
+        self.persist()
+        if errors and not done and not left:
+            r0, c0 = next(iter(errors.items()))
+            raise HubError(f"không xoá được '{r0}' trên Không gian số ({c0})", data={"lane_code": c0})
+        res: dict[str, Any] = {"path": rel, "trashed": rel in done, "deleted": len(done)}
+        if rel in keep_dirs:
+            res["kept_parent"] = True
+        if left:
+            res["queued"] = left
+            note = (note + " " if note else "") + ("Some deletions are queued (file locked / server busy) and will be retried: "
+                                                   + ", ".join(one_line(x, 120) for x in left[:5]))
+        if errors:
+            res["errors"] = {one_line(k, 200): v for k, v in list(errors.items())[:20]}
+        if note:
+            res["note"] = note
+        return res
 
     def held_deletes(self) -> list[str]:
         return sorted(r for r, e in self.pending.items() if e.get("held"))
@@ -869,6 +1010,9 @@ class Workdir:
                 for r in sorted(held, key=lambda x: x.count("/")):
                     e = self.pending.pop(r, None) or {}
                     b = self.base.get(r) or {}
+                    if e.get("unpulled"):  # chế độ tools: tool fs_delete trên tệp chưa từng kéo về → chỉ quên
+                        self.base.pop(r, None)
+                        continue
                     try:
                         if e.get("op") == "rmdir" or b.get("type") == "folder":
                             self.fs.mkdirs(r)
@@ -976,7 +1120,11 @@ class Workdir:
         # Idempotency-Key GIỮ qua mọi lần thử lại của CÙNG nội dung (C.6): timeout rồi gửi lại → server trả đúng phản hồi lần đầu
         idem = e.get("idem") if e.get("idem_sha") == sha and e.get("idem") else str(uuid.uuid4())
         if rel in self.pending:
-            self.pending[rel] = {**self.pending[rel], "idem": idem, "idem_sha": sha}
+            # nội dung của lần gửi TRƯỚC (có thể server đã chốt mà hub không nhận được phản hồi) — 409 về sau so cả với chúng (_push_error)
+            prev = list(e.get("prev_shas") or [])
+            if e.get("idem_sha") and e.get("idem_sha") != sha and e["idem_sha"] not in prev:
+                prev = (prev + [e["idem_sha"]])[-5:]
+            self.pending[rel] = {**self.pending[rel], "idem": idem, "idem_sha": sha, **({"prev_shas": prev} if prev else {})}
         item = await c.write(self.root, self.remote(rel), data, agent=self.agent_id, run=self.run_id,
                              if_match=str(b["version_id"]) if is_file else None, create=not is_file, parents=True, idem=idem,
                              timeout=float(self.svc.cfg("write_timeout_s") or 360))
@@ -1111,6 +1259,18 @@ class Workdir:
                 # bản trên server ĐÃ là đúng nội dung của agent (vd lần gửi trước đã chốt mà hub không nhận được phản hồi) → thành công
                 self._pushed(rel, cur, sha, is_file=bool((self.base.get(rel) or {}).get("version_id")), e=e)
                 return
+            if (cur.get("sha256") and cur.get("version_id") and cur.get("type", "file") == "file" and cur["sha256"] in (e.get("prev_shas") or [])
+                    and not e.get("rebased")):
+                # bản trên server = nội dung lần gửi TRƯỚC của chính agent (đã chốt sau timeout) → không phải người sửa: lấy bản đó làm base
+                # rồi đẩy lại bản hiện tại (một lần), không tạo bản xung đột giả
+                self.base[rel] = self._base_of(cur, str(cur["sha256"]))
+                # khoá MỚI: If-Match đã đổi → là lệnh khác (cùng khoá thì server trả lại đúng 409 đã lưu)
+                self.pending[rel] = {**{k: v for k, v in e.items() if k not in ("prev_shas", "retry_at", "idem", "idem_sha")}, "rebased": True}
+                try:
+                    await self._push_write(rel)
+                except LaneError as ex2:
+                    await self._push_error(rel, ex2)
+                return
             await self._conflict_push(rel, cur)
             return
         if code == "file_locked":
@@ -1213,7 +1373,7 @@ class Workdir:
     def info(self) -> dict[str, Any]:
         return {"tree": self.tree, "run_id": self.run_id, "agent_id": self.agent_id, "folder": self.folder, "sub": self.sub, "mode": self.mode,
                 "pending": len(self.pending), "blocked": len(self.blocked), "failed": len(self.failed), "lazy": len(self.lazy),
-                "parked": self.parked, "revoked": self.revoked}
+                "parked": self.parked, "revoked": self.revoked, "held": len(self.held_deletes()), "root_id": self.root}
 
 
 __all__ = ["Workdir", "conflict_name", "STEER_CHANGED", "STEER_CONFLICT", "STEER_SECRET", "STEER_LOCKED", "TMP_PREFIX"]

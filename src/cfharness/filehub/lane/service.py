@@ -944,11 +944,15 @@ class LaneService:
                 continue
             if wd.server not in self.servers():
                 continue
-            wd.parked, wd.read_only = False, False
-            try:
-                await wd.flush(timeout_s=float(self.cfg("final_flush_s") or 60))
-            except Exception as e:  # pragma: no cover
-                log.warning("lane: đẩy nốt cây %s lỗi: %s", tree, e)
+            wd.parked = False
+            if wd.read_only:
+                # run CHỈ ĐỌC (trạng thái bền giữ cờ): không bao giờ đẩy — chỉ dọn cây (mọi thứ trong cây là bản đọc)
+                wd.pending, wd.blocked, wd.failed = {}, {}, {}
+            else:
+                try:
+                    await wd.flush(timeout_s=float(self.cfg("final_flush_s") or 60))
+                except Exception as e:  # pragma: no cover
+                    log.warning("lane: đẩy nốt cây %s lỗi: %s", tree, e)
             wd.ops_mark = 0
             self._report(wd)
             await self._close_tree(wd)
@@ -1003,25 +1007,8 @@ class LaneService:
                 rel = rel_arg(wd, args.get("path"), allow_root=False)
                 wd.fs.check(rel, final_link_ok=True)  # TRƯỚC lệnh trên server (như fs_move); chính mục là symlink → chỉ gỡ symlink
                 st = await c.stat(wd.root, wd.remote(rel))
-                if st.get("type") == "folder":
-                    # §C.6: server chỉ xoá thư mục RỖNG → tệp trước, thư mục con từ dưới lên, cuối cùng chính nó. Còn mục agent không thấy
-                    # → `not_empty`: dừng, báo agent (đã xoá phần thấy được — vào thùng rác, khôi phục được)
-                    items, _cur, cut = await c.list_all(wd.root, wd.remote(rel), recursive=True, max_items=int(self.cfg("tree_max_files") or 20000))
-                    if cut:
-                        raise HubError("thư mục quá nhiều mục — xoá từng thư mục con")
-                    kids = sorted((x for x in items if x.get("path")), key=lambda x: (x.get("type") == "folder", -str(x["path"]).count("/")))
-                    for x in kids:
-                        await c.delete(wd.root, str(x["path"]), if_rev=int(x.get("rev") or 0) or None, agent=wd.agent_id, run=wd.run_id)
-                    st = await c.stat(wd.root, wd.remote(rel))
-                res = await c.delete(wd.root, wd.remote(rel), if_rev=int(st.get("rev") or 0) or None, agent=wd.agent_id, run=wd.run_id)
-                wd.fs.remove(rel)
-                for k in [k for k in list(wd.base) if k == rel or k.startswith(rel + "/")]:
-                    wd.base.pop(k, None)
-                    wd.snapshot.pop(k, None)
-                    wd.pending.pop(k, None)
-                wd._op("deleted", rel)
-                wd.persist()
-                return {"path": rel, "trashed": True, "trash_batch": res.get("trash_batch")}
+                # CÙNG đường xoá với quét: chặn xoá hàng loạt + đếm chung, bỏ qua mục bị bỏ qua/vô hình, base cập nhật theo từng mục
+                return await wd.tool_delete(rel, st)
             if op == "fs_restore":
                 rel = rel_arg(wd, args.get("path"), allow_root=False)
                 st = await c.stat(wd.root, wd.remote(rel))
