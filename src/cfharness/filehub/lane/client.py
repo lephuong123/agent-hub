@@ -223,11 +223,13 @@ class LaneClient:
         return LaneError(code, resp.status_code, extra)
 
     async def _req(self, method: str, path: str, *, params: dict[str, Any] | None = None, json_body: Any = None, content: bytes | None = None,
-                   agent: str | None = None, run: str | None = None, headers: dict[str, str] | None = None, raw: bool = False) -> Any:
+                   agent: str | None = None, run: str | None = None, headers: dict[str, str] | None = None, raw: bool = False,
+                   timeout: float | None = None) -> Any:
         url = f"{self.url}/lane/v1{path}"
         hdr = self._headers(agent, run, headers)
+        kw: dict[str, Any] = {"timeout": float(timeout)} if timeout else {}
         try:
-            resp = await self._http().request(method, url, params=params, json=json_body, content=content, headers=hdr)
+            resp = await self._http().request(method, url, params=params, json=json_body, content=content, headers=hdr, **kw)
         except (_httpx.TimeoutException, _httpx.TransportError, OSError) as e:
             raise LaneError("offline", 0, message=f"cổng cfharness: không kết nối được {self.url} ({type(e).__name__})") from None
         if resp.status_code >= 400:
@@ -309,31 +311,11 @@ class LaneClient:
         return b"".join(chunks), hdr
 
     async def read_to_file(self, root: str, path: str, dest: str, *, version: str | None = None) -> dict[str, str]:
-        """Tải tệp vào `dest` (tạo mới O_EXCL, 0600 rồi chmod 0644 bởi bên gọi nếu cần) — luồng, kiểm sha256. Lỗi → xoá `dest`."""
-        params: dict[str, Any] = {"path": norm_rel(path, allow_root=False)}
-        if version:
-            params["version"] = version
-        url = f"{self.url}/lane/v1/roots/{self._root(root)}/content"
-        h = hashlib.sha256()
+        """Tải tệp vào `dest` (tạo mới O_EXCL, 0644) — luồng, kiểm sha256. Lỗi → xoá `dest`."""
         fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
         ok = False
         try:
-            with os.fdopen(fd, "wb") as f:
-                try:
-                    async with self._http().stream("GET", url, params=params, headers=self._headers()) as resp:
-                        if resp.status_code >= 400:
-                            await resp.aread()
-                            raise self._error(resp)
-                        async for c in resp.aiter_bytes():
-                            h.update(c)
-                            f.write(c)
-                        hdr = {k.lower(): v for k, v in resp.headers.items()}
-                except (_httpx.TimeoutException, _httpx.TransportError) as e:
-                    raise LaneError("offline", 0, message=f"cổng cfharness: không kết nối được {self.url} ({type(e).__name__})") from None
-            want = hdr.get("x-lane-sha256")
-            if want and want.lower() != h.hexdigest():
-                raise LaneError("hash_mismatch", 0, message="cổng cfharness: nội dung tải về sai sha256")
-            hdr["sha256"] = h.hexdigest()
+            hdr = await self.read_to_fd(root, path, fd, version=version)
             ok = True
             return hdr
         finally:
@@ -343,12 +325,45 @@ class LaneClient:
                 except OSError:
                     pass
 
+    async def read_to_fd(self, root: str, path: str, fd: int, *, version: str | None = None) -> dict[str, str]:
+        """Tải tệp vào `fd` đã mở để ghi (hàm ĐÓNG fd) — luồng, kiểm sha256. Trả header (chữ thường) + `sha256` đã tính + `version_id` lấy
+        từ `ETag` CỦA CHÍNH lượt tải này (bên gọi dựng base từ đây, không `stat` sau — tránh lệch nội dung ↔ phiên bản khi người vừa lưu tiếp).
+        Lỗi → ném; bên gọi tự xoá tệp tạm."""
+        params: dict[str, Any] = {"path": norm_rel(path, allow_root=False)}
+        if version:
+            params["version"] = version
+        url = f"{self.url}/lane/v1/roots/{self._root(root)}/content"
+        h = hashlib.sha256()
+        with os.fdopen(fd, "wb") as f:
+            try:
+                async with self._http().stream("GET", url, params=params, headers=self._headers()) as resp:
+                    if resp.status_code >= 400:
+                        await resp.aread()
+                        raise self._error(resp)
+                    async for c in resp.aiter_bytes():
+                        h.update(c)
+                        f.write(c)
+                    hdr = {k.lower(): v for k, v in resp.headers.items()}
+            except (_httpx.TimeoutException, _httpx.TransportError) as e:
+                raise LaneError("offline", 0, message=f"cổng cfharness: không kết nối được {self.url} ({type(e).__name__})") from None
+        want = hdr.get("x-lane-sha256")
+        if want and want.lower() != h.hexdigest():
+            raise LaneError("hash_mismatch", 0, message="cổng cfharness: nội dung tải về sai sha256")
+        hdr["sha256"] = h.hexdigest()
+        et = (hdr.get("etag") or "").strip()
+        if et.startswith("W/"):
+            et = et[2:]
+        hdr["version_id"] = et.strip('"')
+        return hdr
+
     async def versions(self, root: str, path: str) -> list[dict[str, Any]]:
         return list((await self._req("GET", f"/roots/{self._root(root)}/versions", params={"path": norm_rel(path, allow_root=False)})).get("versions") or [])
 
     # ------------------------------------------------------------------ C.6 ghi (mọi lệnh: X-Lane-Agent + X-Lane-Run + Idempotency-Key)
     async def write(self, root: str, path: str, data: bytes, *, agent: str, run: str, if_match: str | None = None, create: bool = False,
-                    parents: bool = True, idem: str | None = None) -> dict[str, Any]:
+                    parents: bool = True, idem: str | None = None, timeout: float | None = None) -> dict[str, Any]:
+        """PUT nội dung. Server quét virus ĐỒNG BỘ (chờ tới ~300 s) → bên gọi truyền `timeout` dài hơn (`filehub.lane.write_timeout_s`) và
+        GIỮ `idem` qua mọi lần thử lại (C.6: cùng khoá → đúng phản hồi lần đầu, không 409 với chính bản mình vừa chốt)."""
         if not isinstance(data, (bytes, bytearray)):
             raise LaneError("invalid_input", message="nội dung phải là bytes")
         if len(data) > UPLOAD_MAX_BYTES:
@@ -362,7 +377,7 @@ class LaneClient:
         else:
             hdr["If-Match"] = f'"{if_match}"'
         d = await self._req("PUT", f"/roots/{self._root(root)}/content", params={"path": norm_rel(path, allow_root=False), "parents": 1 if parents else 0},
-                            content=bytes(data), agent=agent, run=run, headers=hdr)
+                            content=bytes(data), agent=agent, run=run, headers=hdr, timeout=timeout)
         return d.get("item") or {}
 
     async def mkdir(self, root: str, path: str, *, agent: str, run: str, parents: bool = True, idem: str | None = None) -> dict[str, Any]:

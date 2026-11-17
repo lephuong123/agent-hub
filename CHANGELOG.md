@@ -26,6 +26,13 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   đang ghi) — bản sao `~/KhongGianSo/<tên>` cũ **để nguyên** (hub không xoá), được báo ở `filehub lane status` và thẻ web. Thư mục mới:
   `cfharness filehub lane add <id gốc>`. Thẻ "Cổng cfharness" ở Cài đặt web (khoá chỉ nhập ở bước 2). Trên Không gian số thấy dải
   "cfharness · <agent> · đang sửa <tệp>" trong lúc run ghi. `setup-hub-user.sh`: `KGS_MODE=lane`.
+- An toàn hơn khi agent làm việc trên thư mục chế độ `lane`: hub không bao giờ đi xuyên symlink agent đặt trong cây (xoá/di chuyển/đọc để
+  đẩy đều từ chối); tệp tạm/khoá Office/`.git` của người trên Không gian số không bao giờ bị xoá; agent xoá tệp mà người vừa lưu bản mới →
+  không xoá, kéo bản của người về; tệp lớn chưa tải không bị ghi đè bằng nội dung cụt (bản của agent thành tệp riêng, nhắc `fs_pull`); hai
+  bản xung đột cùng phút không đè nhau; người xoá thư mục thì tệp agent chưa lưu bên trong được giữ thành bản riêng. **Xoá hàng loạt**
+  (> `filehub.lane.max_delete_batch`, mặc định 20, mỗi run) bị GIỮ, báo người — `cfharness filehub resume --root <id>` để xoá tiếp, thêm
+  `--discard` để không xoá và kéo tệp về lại. Ghi lên Không gian số chờ quét virus tới `filehub.lane.write_timeout_s` (mặc định 330 s) và
+  gửi lại an toàn (cùng Idempotency-Key). `cfharness filehub status` liệt kê cả thư mục chế độ lane.
 
 ### MCP server
 - `cfharness mcp add|edit <tên> --url … --oauth …`: cờ đặt SAU tên được đọc đúng — trước đây bị lưu lặng lẽ thành lệnh stdio

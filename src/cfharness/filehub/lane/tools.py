@@ -79,7 +79,7 @@ async def call(svc: "LaneService", wd: "Workdir", op: str, args: dict[str, Any],
         rel = rel_arg(wd, args.get("path"))
         it = await c.stat(wd.root, wd.remote(rel))
         wd.read_paths.add(rel)
-        return {**_item(wd, it), "local": str(wd.path / rel) if (wd.path / rel).exists() and rel else None}
+        return {**_item(wd, it), "local": str(wd.path / rel) if rel and wd.fs.exists(rel) else None}
     if op == "fs_read":
         rel = rel_arg(wd, args.get("path"), allow_root=False)
         lim = int(svc.cfg("read_max_bytes") or 262144)

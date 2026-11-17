@@ -127,21 +127,28 @@ xoá, nâng nhãn Tối mật) không còn trong `roots`.
 | `GET …/versions?path=` | `{versions: [{version_id, no, size, sha256, at, by_kind}]}` (≤ 50, mới trước) |
 | `GET /lane/v1/cursor` | `{cursor}` = đầu luồng hiện tại (bắt đầu nghe "từ bây giờ") |
 
-### C.6 Ghi (mọi lệnh ghi: `X-Lane-Agent` + `X-Lane-Run` + `Idempotency-Key: <uuid>`; gửi lại cùng khoá trong 24 h → đúng phản hồi lần đầu)
+### C.6 Ghi (mọi lệnh ghi: `X-Lane-Agent` + `X-Lane-Run` + `Idempotency-Key: <uuid>`; gửi lại cùng khoá trong 24 h → đúng phản hồi lần đầu — xem "Idempotency-Key" dưới bảng)
 | Lệnh | Thân | Trả |
 |---|---|---|
 | `PUT …/content?path=&parents=0\|1` | byte thô; `Content-Length` BẮT BUỘC (chunked → `411`); `X-Lane-Sha256: <hex>` BẮT BUỘC; `If-Match: "<version_id>"` (sửa) HOẶC `If-None-Match: *` (tạo mới) — thiếu cả hai → `428 precondition_required` | `201 {item}` tạo / `200 {item}` phiên bản mới |
 | `POST …/mkdir` | `{"path": "A/B", "parents": true}` | `201 {item}`; đã có thư mục → `200 {item}` |
-| `POST …/move` | `{"from": "A/x.md", "to": "B/y.md", "if_rev": 7}` | `200 {item}`; đích đã có → `409 name_conflict {current}` (không ghi đè) |
-| `DELETE …/item?path=&if_rev=` | — | `200 {trash_batch: "<id>", item}` (vào Thùng rác; không xoá hẳn) |
+| `POST …/move` | `{"from": "A/x.md", "to": "B/y.md", "if_rev": 7}` | `200 {item}`; đích đã có → `409 name_conflict {current}` (không ghi đè). Thư mục: cây con có mục agent không thấy → `403 hidden_content`; có tệp đang khoá → `423 file_locked` |
+| `DELETE …/item?path=&if_rev=` | — | `200 {trash_batch: "<id>", item}` (vào Thùng rác; không xoá hẳn). Thư mục: CHỈ khi rỗng (kể cả mục vô hình với agent) — còn mục → `409 not_empty`; hub xoá tệp trước rồi rmdir từ dưới lên |
 | `POST …/restore` | `{"trash_batch": "<id>"}` HOẶC `{"path": "x.md", "version_id": "…", "if_match": "<version_id hiện tại>"}` | `200 {item}` (khôi phục phiên bản = tạo phiên bản mới) |
 | `PUT /lane/v1/presence` | `{"root": "…", "path": "Báo cáo/Q3.docx"\|null, "ttl_s": 300}` | `200 {since, until}`; nhãn do server dựng: `cfharness · <agent>` (+ ` · đang sửa <tên tệp>`) |
 | `DELETE /lane/v1/presence?root=` | — | `204` (xoá presence của `X-Lane-Run`) |
 
 - Ghi nội dung là ĐỒNG BỘ: server nhận hết thân → kiểm sha256 → quét ClamAV → chốt phiên bản trong giao dịch (kiểm lại base, quyền,
-  khoá, hạn mức) → journal + sự kiện `fs` cho web → trả. Không có trạng thái "đang quét" phía client.
+  khoá, hạn mức) → journal + sự kiện `fs` cho web → trả. Không có trạng thái "đang quét" phía client. Server chờ quét tối đa
+  `LANE_SCAN_WAIT_S` (mặc định **300 s**; quá → `503 scan_unavailable`) → timeout đọc phản hồi của client cho `PUT …/content` phải
+  > 300 s + thời gian gửi thân (hub: ≥ 360 s).
 - Khoá tệp (FLD-10): BẤT KỲ khoá đang hiệu lực nào trên tệp — kể cả khoá của CHÍNH người dùng gắn với khoá hub — chặn lane (`423`).
   Người khoá tệp = agent không ghi được.
+- Cây chỉ xuống (D7: thư mục hệ thống / tự quản / gắn Nguồn) kiểm ở CẢ nguồn lẫn đích: di chuyển / đổi tên / xoá mục trong cây đó →
+  `403 forbidden`.
+- Idempotency-Key: server giữ dấu "đang chạy" trước khi thực thi — request trùng khoá tới khi lần đầu chưa xong → `409 in_progress
+  {retry_after}` (không chạy lần hai; hub thử lại CÙNG khoá sau `retry_after`). Chỉ lưu kết quả cuối (2xx / 4xx); lỗi tạm `423`, `429`,
+  `5xx` và lỗi đọc thân (thân bị cắt / sai băm khi truyền) KHÔNG lưu → gửi lại cùng khoá chạy thật.
 - `scope: ro` → mọi lệnh ghi `403 read_only_key`. Gốc workspace: tệp ở ngay gốc → `422 root_files_not_allowed`; xoá/di chuyển chính gốc
   → `403 root_not_granted`.
 
@@ -151,10 +158,13 @@ xoá, nâng nhãn Tối mật) không còn trong `roots`.
 | 400 | `invalid_input`, `hash_mismatch` | — | lỗi lập trình → log, không thử lại |
 | 401 | `unauthorized` | — | dừng lane, `filehub.lane.state=auth_failed`, báo người |
 | 403 | `lane_disabled`, `lane_not_local`, `root_not_granted`, `forbidden`, `read_only_key` | — | trả lỗi cho agent; `root_not_granted` → nạp lại `hello` |
+| 403 | `hidden_content` | — | di chuyển / đổi tên thư mục có mục agent không thấy: trả lỗi cho agent (không thử lại) |
 | 404 | `not_found` | — | như tệp không có |
 | 409 | `conflict` | `current: Item` | KHÔNG ghi đè: lưu bản của agent thành bản xung đột (§4.4), steer agent |
 | 409 | `exists`, `name_conflict` | `current: Item` | như trên |
 | 409 | `parent_missing` | — | thử lại với `parents=1` nếu ý định rõ |
+| 409 | `not_empty` | — | xoá thư mục còn mục: xoá các mục con trước rồi thử lại; vẫn còn (mục vô hình với agent) → trả lỗi cho agent, giữ thư mục |
+| 409 | `in_progress` | `retry_after` | lệnh cùng `Idempotency-Key` đang chạy: chờ `retry_after` rồi gửi lại CÙNG khoá |
 | 411 / 428 | `length_required` / `precondition_required` | — | lỗi lập trình |
 | 413 | `too_large` | `max_bytes` | trả lỗi cho agent |
 | 422 | `invalid_name`, `root_files_not_allowed` | — | trả lỗi cho agent |
@@ -182,6 +192,9 @@ data: {"root":"6f1c…","op":"update","type":"file","id":"0b7e…","path":"Báo 
   `request_id` = `Idempotency-Key`) → hub bỏ qua tiếng vọng.
 - `op: acl` hoặc mục rời khỏi phạm vi nhìn thấy → `{"op":"acl","gone":true,…}`: hub `stat`/`list` lại `path` (= thư mục gần nhất
   CÒN thấy được – không lộ tên mới của mục vô hình; `""` = gốc).
+- Mục agent CHƯA TỪNG thấy (trong thư mục vô hình, khớp mẫu loại trừ, Claude tắt…) → KHÔNG có khung nào (không id / rev / thời điểm).
+  `gone` chỉ phát khi mục thấy được TRƯỚC thay đổi (chỗ cũ của move / tên cũ của rename thấy được; dòng `acl` của thư mục có cha còn
+  thấy được). `from_path` = `null` khi tên / chỗ cũ không thấy được với agent (vd. đổi tên từ `.env`).
 - `event: reset` `{"root": "…", "reason": "compacted|acl|restored"}` — cursor quá cũ (journal đã nén, > 30 ngày) hoặc thay đổi hàng loạt:
   hub `list?recursive=1` lại gốc đó rồi nối luồng bằng `cursor` của lượt list.
 - `event: root_revoked` `{"root": "…"}` · `event: key_revoked` (rồi đóng) · `event: replaced` (luồng thứ 3 mở → luồng cũ nhất bị đóng)
@@ -310,6 +323,30 @@ Lệch plan (không đổi §C ngoài tên tệp fake):
 - Chuyển chế độ KHÔNG chuyển bản sao cũ vào trash (quyết định 8): để nguyên, báo ở `lane status`/thẻ web.
 - Xung đột dùng lại event `filehub.conflict` (thêm `run_id`, `copy`). `filehub.lane_test` là HUMAN_ONLY (dùng khoá dù chỉ đọc).
 - Thay đổi của người khi run chưa chạy (đối soát lúc chạy tiếp) không steer được → vào TIN ĐẦU của lượt sau.
+
+Sửa theo review (2026-11-17, `tests/test_lane_review_fixes.py` — mỗi ca đỏ trước khi sửa; KHÔNG đổi §C):
+- **Symlink**: mọi thao tác tệp của daemon trong cây đi qua `lane/safefs.SafeTree` (mở gốc + từng thành phần bằng `dir_fd` + `O_NOFOLLOW`,
+  thao tác cuối theo fd: đọc để đẩy, tải về, ghi, xoá — `rmtree(dir_fd=)` —, đổi tên). Thành phần symlink → `UnsafePath`: `fs_delete`/`fs_move`
+  từ chối TRƯỚC lệnh trên server; khung xoá/di chuyển của người không đụng đĩa (di chuyển: kéo tệp ở chỗ mới); đẩy → `failed=symlink`
+  (cây mồ côi). Gốc cây không còn là thư mục thật → quét dừng (không suy ra "agent xoá hết").
+- **Mẫu bỏ qua**: mục khớp `ignored()` trên server không vào base (materialize/reconcile/fs_pull/khung change), ghi vào `hidden`; xoá thư mục
+  còn chứa mục `hidden` → chỉ quên thư mục, không xoá.
+- **Xoá đang chờ vs bản người mới hơn**: khung change của tệp agent vừa xoá/di chuyển (chưa đẩy) → huỷ lệnh xoá, kéo bản người về, steer
+  (`STEER_UNDELETED`); di chuyển → bản ở chỗ mới thành tệp mới. `if_rev` GHIM lúc phát hiện xoá/di chuyển (scan), không lấy base lúc đẩy.
+- **Base nhất quán**: `_download` lấy `version_id` từ `ETag` + sha256 của CHÍNH lượt tải (`LaneClient.read_to_fd`); `stat` chỉ để lấy rev khi
+  metadata không khớp ETag — server đã đi tiếp thì ghi rev thấp hơn (khung mới hơn kéo lại; xoá/di chuyển với rev đó → 409).
+- **Tệp lười**: đẩy tệp có base `lazy` (chưa `fs_pull`) → bản của agent thành tệp riêng, trả lại tệp trống, steer `fs_pull` (`STEER_LAZY`).
+- **Thử lại**: `Idempotency-Key` lưu trong mục hàng đợi (`idem`, theo sha256 nội dung — đổi nội dung = khoá mới) và dùng lại qua mọi lần thử;
+  PUT nội dung dùng `filehub.lane.write_timeout_s` (mặc định 330 s > chờ quét 300 s); 409 mà `current.sha256` = bản cục bộ → coi là đã lưu.
+- **Xoá hàng loạt**: `filehub.lane.max_delete_batch` (mặc định 20, 0 = tắt) — lệnh xoá chưa duyệt + đã đẩy từ lần duyệt gần nhất vượt trần
+  → GIỮ mọi lệnh xoá (`held`), `filehub.blocked{reason: mass_delete, lane: true, count, paths}` (đã có trong danh sách thông báo Telegram/Slack)
+  + steer agent. Người: `cfharness filehub resume --root <id>` (RPC `filehub.resume`, HUMAN_ONLY sẵn) đẩy tiếp, `--discard` kéo tệp về lại
+  + steer. Không ai quyết → cây mồ côi `code=mass_delete`; `lane orphan push` (người) = duyệt.
+- **Người xoá thư mục**: tệp agent tạo/sửa chưa đẩy bên trong → đổi tên thành bản `(cfharness …)` (đẩy như bản xung đột, tạo lại thư mục
+  chỉ chứa chúng), phần còn lại xoá; steer `STEER_DELETED_KEPT`.
+- **Khử trùng khung**: `(id, rev)` chỉ khi khung có `rev` (khung thư mục/acl thiếu rev không bao giờ bị nuốt).
+- **Tên bản xung đột** duy nhất (`conflict_name(taken=…)`: trong cây / base / hàng đợi → ` 2`, ` 3`…).
+- `filehub status` (`status.lane_folders`) liệt kê thư mục chế độ lane. Test helper `finish()` chờ `end_run` xong (hết race event sau trạng thái).
 
 Việc còn lại:
 - Nghiệm thu thật trên qltm sau khi K1–K4 lên (plan §7 H4); `tested` với claude thật (steer + Write/Edit trong cây).

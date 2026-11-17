@@ -673,6 +673,8 @@ class FilehubService:
             "relay_available": self.public_origin() is not None,
             "can_switch": any(kind_of(f) != "workspace" for f in self.folders()),
             "relogin_after_import": bool(self.hub.store.state_get("import_filehub")),
+            # thư mục chế độ lane (cổng cfharness — không bản sao trên máy): `filehub status` liệt kê cùng thư mục sync
+            "lane_folders": [{**f, "mode": "lane"} for f in self.lane.status().get("folders") or []],
         }
 
     def list(self) -> list[dict[str, Any]]:
@@ -1047,7 +1049,12 @@ class FilehubService:
         self.tick()
         return {"paused": True}
 
-    def resume(self, root_id: str | None = None) -> dict[str, Any]:
+    def resume(self, root_id: str | None = None, *, discard: bool = False) -> Any:
+        if root_id and any(str(f.get("root_id")) == str(root_id) for f in self.lane_folders()):
+            # thư mục chế độ lane: lô xoá hàng loạt đang giữ của các run trên gốc này → NGƯỜI quyết đẩy tiếp / bỏ (discard)
+            return self.lane.release_deletes(str(root_id), discard=discard)
+        if discard:
+            raise HubError("--discard chỉ dùng cho thư mục chế độ lane (cổng cfharness)")
         if root_id:  # chiều đẩy lên bị chặn (xoá hàng loạt) → báo binary đẩy tiếp
             if self.folder_by_root(root_id) is None:
                 raise NotFound(f"không có thư mục chung với root {root_id}")

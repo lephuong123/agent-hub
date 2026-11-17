@@ -587,19 +587,24 @@ class LaneService:
                     r = wd.rel_of(str(x.get("path") or ""))
                     if not r:
                         continue
+                    if wd.ignored_item(r, x.get("type")):
+                        wd.hidden.add(r)
+                        continue
                     if x.get("type") == "folder":
-                        wd.local(r).mkdir(parents=True, exist_ok=True)
+                        wd.fs.mkdirs(r)
                         wd.base[r] = wd._base_of(x)
                     else:
-                        if (wd.path / r).exists() and wd.modified_locally(r):
+                        if wd.fs.is_file(r) and wd.modified_locally(r):
                             await wd._conflict_local(r)
                         await wd._download(r, x)
                         n += 1
-                wd.local(rel).mkdir(parents=True, exist_ok=True)
+                wd.fs.mkdirs(rel)
                 wd.base[rel] = wd._base_of(it)
                 wd.persist()
                 return {"path": rel, "type": "folder", "files": n, "local": str(wd.path / rel)}
-            if (wd.path / rel).exists() and wd.modified_locally(rel):
+            if wd.ignored(rel):
+                raise HubError(f"'{rel}' khớp mẫu bỏ qua (tệp tạm/khoá/.git) — không kéo vào cây")
+            if wd.fs.is_file(rel) and wd.modified_locally(rel):
                 await wd._conflict_local(rel)
             b = await wd._download(rel, it)
             wd.read_paths.add(rel)
@@ -687,7 +692,8 @@ class LaneService:
         except OSError:
             pass
         wd.persist_to(dst / "state.json")
-        code = wd.stopped_push or next(iter(set(wd.failed.values()) - {"hardlink"}), None) or ("secret_blocked" if wd.blocked else "pending")
+        code = (wd.stopped_push or ("mass_delete" if wd.held_deletes() else None) or next(iter(set(wd.failed.values()) - {"hardlink"}), None)
+                or ("secret_blocked" if wd.blocked else "pending"))
         self.publish("filehub.push_failed", wd, {"count": len(left), "paths": [one_line(x, 300) for x in left[:20]], "code": code, "tree": wd.tree})
 
     def orphans(self) -> list[dict[str, Any]]:
@@ -723,8 +729,9 @@ class LaneService:
         wd.parked, wd.stopped_push, wd.read_only = False, None, False
         wd.failed = {k: v for k, v in wd.failed.items() if v == "hardlink"}
         wd.blocked = {}
-        for r in list(wd.pending):
-            wd.pending[r] = {**wd.pending[r], "retry_at": 0}
+        for r in list(wd.pending):  # người bấm đẩy lại cây mồ côi = duyệt cả lô xoá đang giữ (nếu có)
+            wd.pending[r] = {**{k: v for k, v in wd.pending[r].items() if k != "held"}, "retry_at": 0,
+                             **({"approved": True} if wd.pending[r].get("held") else {})}
         await wd.flush(timeout_s=float(self.cfg("final_flush_s") or 60))
         left = wd.unpushed()
         if left:
@@ -733,6 +740,15 @@ class LaneService:
         self._report(wd)
         shutil.rmtree(d, ignore_errors=True)
         return {"tree": tree, "pushed": True}
+
+    async def release_deletes(self, root_id: str, *, discard: bool = False) -> dict[str, Any]:
+        """CHỈ người (RPC `filehub.resume {root_id, discard?}`): lô xoá hàng loạt đang giữ của mọi cây trên gốc này → đẩy tiếp, hoặc bỏ
+        (`discard`: không xoá trên Không gian số, kéo tệp về lại cây run, agent được báo)."""
+        n = 0
+        trees = [wd for wd in self.workdirs.values() if wd.root == str(root_id)]
+        for wd in trees:
+            n += await wd.release_deletes(discard=discard)
+        return {"root_id": root_id, "lane": True, "released" if not discard else "discarded": n, "trees": len(trees)}
 
     # ------------------------------------------------------------------ presence (C.6 `PUT /presence`): "cfharness · <agent> · đang sửa <tệp>"
     async def presence_tick(self, wd: Any) -> None:
@@ -955,15 +971,13 @@ class LaneService:
                     except LaneError as e:
                         if e.lane_code != "not_found":
                             raise
-                p = wd.local(rel)
-                p.parent.mkdir(parents=True, exist_ok=True)
-                tmp = p.parent / f".lane-tmp-{os.getpid()}-{time.time_ns()}"
-                tmp.write_text(content, encoding="utf-8")
-                os.replace(tmp, p)
+                from .workdir import TMP_PREFIX
+
+                wd.fs.write_atomic(rel, content.encode("utf-8"), tmp_prefix=TMP_PREFIX)  # không theo symlink ở bất kỳ cấp nào
                 return await wd.push_now(rel)
             if op == "fs_mkdir":
                 rel = rel_arg(wd, args.get("path"), allow_root=False)
-                wd.local(rel).mkdir(parents=True, exist_ok=True)
+                wd.fs.mkdirs(rel)
                 item = await c.mkdir(wd.root, wd.remote(rel), agent=wd.agent_id, run=wd.run_id)
                 wd.base[rel] = wd._base_of(item)
                 wd._op("added", rel, folder=True)
@@ -971,12 +985,11 @@ class LaneService:
                 return {"path": rel, "created": True}
             if op == "fs_move":
                 src, dst = rel_arg(wd, args.get("from"), allow_root=False), rel_arg(wd, args.get("to"), allow_root=False)
+                wd.fs.check(src)  # TRƯỚC lệnh trên server: cây có symlink ở đường dẫn → từ chối, không đi xuyên (daemon không sandbox)
+                wd.fs.check(dst)
                 st = await c.stat(wd.root, wd.remote(src))
                 item = await c.move(wd.root, wd.remote(src), wd.remote(dst), if_rev=int(st.get("rev") or 0) or None, agent=wd.agent_id, run=wd.run_id)
-                ps, pd = wd.path / src, wd.local(dst)
-                if ps.exists() and not os.path.islink(ps) and not pd.exists():
-                    pd.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(ps, pd)
+                wd.fs.rename(src, dst, overwrite=False)
                 for k in [k for k in list(wd.base) if k == src or k.startswith(src + "/")]:
                     wd.base[dst + k[len(src):]] = wd.base.pop(k)
                     wd.snapshot.pop(k, None)
@@ -988,13 +1001,10 @@ class LaneService:
                 return {"from": src, "to": dst, "moved": True}
             if op == "fs_delete":
                 rel = rel_arg(wd, args.get("path"), allow_root=False)
+                wd.fs.check(rel, final_link_ok=True)  # TRƯỚC lệnh trên server (như fs_move); chính mục là symlink → chỉ gỡ symlink
                 st = await c.stat(wd.root, wd.remote(rel))
                 res = await c.delete(wd.root, wd.remote(rel), if_rev=int(st.get("rev") or 0) or None, agent=wd.agent_id, run=wd.run_id)
-                p = wd.path / rel
-                if p.is_dir() and not os.path.islink(p):
-                    shutil.rmtree(p, ignore_errors=True)
-                elif p.exists() or os.path.islink(p):
-                    p.unlink(missing_ok=True)
+                wd.fs.remove(rel)
                 for k in [k for k in list(wd.base) if k == rel or k.startswith(rel + "/")]:
                     wd.base.pop(k, None)
                     wd.snapshot.pop(k, None)

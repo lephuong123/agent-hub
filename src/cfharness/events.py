@@ -207,7 +207,7 @@ EVENT_LEVELS: dict[str, str] = {
     # Thư mục chung Không gian số (filehub/, docs/dev-notes/filehub.md) — payload chỉ tên thư mục/đường dẫn tương đối/id, không nội dung tệp
     "filehub.state": "summary",  # state idle|syncing|conflict|offline|auth_expired|error|paused|…, prev, error
     "filehub.conflict": "summary",  # folder, root_id, path — bản xung đột do sync-core tạo (không mất dữ liệu)
-    "filehub.blocked": "summary",  # folder, root_id, reason (mass_delete) — chiều đẩy lên dừng chờ `filehub resume --root`
+    "filehub.blocked": "summary",  # folder, root_id, reason (mass_delete) — chiều đẩy lên dừng chờ `filehub resume --root`; lane: + run_id, count, limit, paths≤20, lane
     "filehub.changed": "summary",  # run_id, folder, count, paths≤20, url — run đổi tệp trong thư mục chung
     "filehub.deleted": "summary",  # run_id, folder, count, paths≤20, url — run xoá tệp (không hỏi duyệt; khôi phục ở thùng rác Không gian số)
     "filehub.secret_warning": "summary",  # run_id, folder, count, paths≤20 — tệp mới/sửa chứa giá trị secret hub biết (đã lên cloud)

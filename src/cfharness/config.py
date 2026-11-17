@@ -709,6 +709,12 @@ DEFAULTS: dict[str, Any] = {
             "orphan_keep_days": 7,
             "read_max_bytes": 262144,  # fs_read trả văn bản ≤ 256 KB; lớn hơn → fs_pull
             "request_timeout_s": 60,
+            # PUT nội dung: server quét virus ĐỒNG BỘ (chờ máy quét tới 300 s) → timeout ghi phải dài hơn, không thì hub bỏ cuộc rồi gửi lại
+            # (cùng Idempotency-Key nên vẫn an toàn, nhưng chậm). Lệnh ghi khác dùng request_timeout_s.
+            "write_timeout_s": 330,
+            # chặn xoá hàng loạt: một run xoá nhiều hơn số tệp này (cộng dồn từ lần duyệt gần nhất) → GIỮ mọi lệnh xoá, event filehub.blocked
+            # {reason: mass_delete}, chờ NGƯỜI `cfharness filehub resume --root <id>` (đẩy tiếp) hoặc `--discard` (không xoá, kéo tệp về lại)
+            "max_delete_batch": 20,
             "reconnect_s": [0.5, 10],  # nối lại luồng sự kiện: lùi 0,5 → 10 s
             "key_max_days": 180,  # khoá không có expires_at từ server → coi như hết hạn sau 180 ngày kể từ lúc đặt
             "key_warn_days": 14,  # cảnh báo trước khi khoá hết hạn

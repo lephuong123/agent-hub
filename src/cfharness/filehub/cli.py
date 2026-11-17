@@ -51,6 +51,8 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     ss.add_parser("pause", help="tạm dừng đồng bộ (dừng tiến trình sync)", parents=[common])
     rs = ss.add_parser("resume", help="chạy lại đồng bộ; --root <id>: cho chiều đẩy lên đang bị chặn (xoá hàng loạt) đi tiếp", parents=[common])
     rs.add_argument("--root")
+    rs.add_argument("--discard", action="store_true",
+                    help="thư mục chế độ lane: KHÔNG xoá lô đang giữ (xoá hàng loạt) — kéo tệp về lại cây run, báo agent")
     # cổng cfharness (chế độ lane — docs/dev-notes/plan-filehub-lane.md): khoá hub do NGƯỜI tạo ở Không gian số › Hồ sơ › Cổng cfharness
     ln = ss.add_parser("lane", help="cổng cfharness: thư mục chung KHÔNG qua đồng bộ (cây làm việc theo run) — thiết lập khoá, trạng thái (chỉ người)",
                        parents=[common])
@@ -87,8 +89,12 @@ def _print_status(r: dict[str, Any]) -> None:
           + (f" · sync {r['sync_version']}" if r.get("sync_version") else ""))
     if sv.get("last_error") and r["state"] in ("error", "version_mismatch"):
         print(f"  lỗi: {sv['last_error']}")
-    if not r.get("folders"):
+    if not r.get("folders") and not r.get("lane_folders"):
         print("  (chưa có thư mục chung — `cfharness filehub setup --server URL --binary /đường/dẫn/tang-thu-sync-headless`)")
+    for f in r.get("lane_folders") or []:  # chế độ lane: không bản sao trên máy — cây làm việc theo run qua cổng cfharness
+        print(f"  • {f['name']}  (chế độ lane, cổng {f.get('server') or '?'}, gốc {f.get('root_id')})  →  workspace {f.get('workspace') or 'filehub:' + f['name']}")
+        if f.get("old_copy"):
+            print(f"    bản sao cũ của chế độ sync còn ở {f['old_copy']} (hub không xoá — kiểm rồi tự xoá)")
     for f in r.get("folders") or []:
         lock = f.get("lock")
         print(f"  • {f.get('display') or f['name']}" + (f" · đăng nhập bằng {f['account']}" if f.get("account") else ""))
@@ -287,8 +293,13 @@ def cmd_filehub(ctx: Any) -> int:
         ctx.out(ctx.call("filehub.pause", {}), "Đã tạm dừng đồng bộ.")
         return 0
     if act == "resume":
-        r = ctx.call("filehub.resume", {"root_id": a.root})
-        ctx.out(r, "Đã cho chiều đẩy lên đi tiếp." if a.root else "Đã chạy lại đồng bộ.")
+        r = ctx.call("filehub.resume", {"root_id": a.root, **({"discard": True} if a.discard else {})})
+        if isinstance(r, dict) and r.get("lane"):
+            msg = (f"Đã bỏ lô xoá ({r.get('discarded', 0)} mục) — tệp được kéo về lại, agent đã được báo." if a.discard
+                   else f"Đã duyệt lô xoá ({r.get('released', 0)} mục) — đẩy tiếp lên Không gian số.")
+        else:
+            msg = "Đã cho chiều đẩy lên đi tiếp." if a.root else "Đã chạy lại đồng bộ."
+        ctx.out(r, msg)
         return 0
     return 1
 

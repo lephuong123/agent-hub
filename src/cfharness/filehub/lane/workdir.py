@@ -12,7 +12,11 @@ Bố cục: cây ở `<home agent>/workspaces/lane-<tree>` (vùng scratch của 
   steer MỘT lần/(run, tệp). Tệp cục bộ đã sửa → xung đột (§4.4): bản của agent thành `<tên> (cfharness <agent> <HHMM>).<đuôi>`.
 - Đẩy (quét mtime + kích theo tool): quét GIÁ TRỊ secret TRƯỚC khi đẩy (`redact.contains_secret_value`) → chặn; `If-Match` = base,
   `If-None-Match: *` cho tệp mới; 409 → bản xung đột; 423 → hàng đợi, thử lại; 422 infected → event; 401/507 → dừng.
-- Không bao giờ theo symlink (lstat, `O_NOFOLLOW`, cha phải nằm trong cây); bỏ tệp nhiều liên kết cứng.
+- Không bao giờ theo symlink ở BẤT KỲ cấp nào (`safefs.SafeTree`: mở từng thành phần bằng `dir_fd` + `O_NOFOLLOW` — đọc để đẩy, ghi, xoá,
+  đổi tên đều vậy); bỏ tệp nhiều liên kết cứng.
+- Tệp khớp mẫu bỏ qua (`ignored`) không bao giờ vào base, không tải, không đẩy, không xoá (kể cả thư mục trên server còn chứa tệp bị bỏ qua).
+- Xoá hàng loạt (> `max_delete_batch` / run kể từ lần duyệt gần nhất) → GIỮ, `filehub.blocked{reason: mass_delete}`, chờ người
+  (`filehub resume --root <id>` / `--discard`). Không bao giờ tự quyết.
 """
 
 from __future__ import annotations
@@ -23,16 +27,15 @@ import hashlib
 import json
 import logging
 import os
-import shutil
 import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...errors import HubError
-from ...events import make_event
 from ...termsafe import one_line
 from .client import LaneError, join_rel, norm_rel
+from .safefs import SafeTree, UnsafePath
 
 if TYPE_CHECKING:
     from .service import LaneService
@@ -51,29 +54,38 @@ STEER_SECRET = ("[cfharness] {rel} was NOT saved to Không gian số: it contain
 STEER_LOCKED = "[cfharness] {rel} is locked on Không gian số by a person. Your change is queued and will be saved when the lock is released."
 STEER_FAILED = "[cfharness] Could not save {rel} to Không gian số ({code}). The change stays only in your work tree."
 STEER_REVOKED = "[cfharness] Access to this shared folder was revoked on Không gian số. Your changes are no longer saved there."
+STEER_DELETED_KEPT = ("[cfharness] The human deleted {rel} on Không gian số just now. Your unsaved files inside it were kept as: {rel2}. "
+                      "Do not recreate the rest unless the task requires it.")
+STEER_UNDELETED = ("[cfharness] The human saved a newer version of {rel} after you deleted it, so your delete was NOT applied and the file is "
+                   "back in your work tree. Re-Read it; delete again only if the task still requires it.")
+STEER_LAZY = ("[cfharness] {rel} is a large file that was not downloaded (empty placeholder), so your edit was NOT saved over it. Your version "
+              "was kept as {rel2}. Call fs_pull on {rel} first, then edit it.")
+STEER_MASS_DELETE = ("[cfharness] You deleted {n} items in the shared folder at once. Deletions are ON HOLD until a person approves them; the "
+                     "files are still on Không gian số. Do not recreate them.")
+STEER_DELETE_REFUSED = ("[cfharness] A person did NOT approve deleting {n} items in the shared folder; they were restored in your work tree. "
+                        "Do not delete them again unless asked.")
 LAZY_NOTE = "large files listed but not downloaded (empty placeholders); call fs_pull before using them"
 
 
-def _sha_file(p: Path) -> str | None:
-    try:
-        fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError:
-        return None
-    h = hashlib.sha256()
-    with os.fdopen(fd, "rb") as f:
-        for c in iter(lambda: f.read(1 << 20), b""):
-            h.update(c)
-    return h.hexdigest()
+def _hhmm(now: float | None = None) -> str:
+    return time.strftime("%H%M", time.localtime(now or time.time()))
 
 
-def conflict_name(rel: str, agent: str, now: float | None = None) -> str:
+def conflict_name(rel: str, agent: str, now: float | None = None, *, taken: Any = None, hhmm: str | None = None) -> str:
+    """`<tên> (cfharness <agent> <HHMM>).<đuôi>`; tên đó đã có (`taken(rel) → True`: trong cây / base / hàng đợi) → thêm ` 2`, ` 3`, …
+    (hai xung đột cùng phút không bao giờ đè nhau)."""
     d, _, name = rel.rpartition("/")
     stem, dot, ext = name.rpartition(".")
     if not dot or not stem:
         stem, ext = name, ""
-    hhmm = time.strftime("%H%M", time.localtime(now or time.time()))
-    new = f"{stem} (cfharness {agent} {hhmm})" + (f".{ext}" if ext else "")
-    return f"{d}/{new}" if d else new
+    hm = hhmm or _hhmm(now)
+    new = ""
+    for i in range(1, 10000):
+        new = f"{stem} (cfharness {agent} {hm}{f' {i}' if i > 1 else ''})" + (f".{ext}" if ext else "")
+        new = f"{d}/{new}" if d else new
+        if taken is None or not taken(new):
+            break
+    return new
 
 
 class Workdir:
@@ -111,6 +123,9 @@ class Workdir:
         self.ops_mark = 0
         self.deferred: list[str] = []
         self.last_push: dict[str, float] = {}  # rel → lúc đẩy gần nhất (≤ 1 phiên bản / push_min_interval_s / tệp)
+        self.hidden: set[str] = set()  # mục trên server khớp mẫu bỏ qua (không tải) — thư mục chứa chúng không bao giờ bị xoá cả cây
+        self.del_count = 0  # lệnh xoá đã đẩy trong run kể từ lần người duyệt gần nhất (chặn xoá hàng loạt)
+        self.last_copy: dict[str, str] = {}  # rel (tệp lười) → bản riêng của agent vừa tạo (trả cho fs_write)
 
     # ------------------------------------------------------------------ đường dẫn
     def remote(self, rel: str) -> str:
@@ -126,18 +141,25 @@ class Workdir:
             return path[len(self.sub) + 1:]
         return None
 
+    @property
+    def fs(self) -> SafeTree:
+        """Mọi thao tác tệp của daemon trong cây đi qua đây (không theo symlink ở bất kỳ cấp nào)."""
+        return SafeTree(self.path)
+
     def local(self, rel: str) -> Path:
-        """Đường dẫn cục bộ an toàn của `rel` (đã chuẩn hoá C.4) — cha (đã có) phải nằm trong cây, không qua symlink."""
-        rel = norm_rel(rel, allow_root=False)
-        p = self.path / rel
-        root = os.path.realpath(self.path)
-        par = p.parent
-        while not par.exists() and par != self.path:
-            par = par.parent
-        rp = os.path.realpath(par)
-        if not (rp == root or rp.startswith(root + os.sep)):
-            raise HubError(f"đường dẫn '{rel}' thoát ra ngoài cây làm việc (symlink?)")
-        return p
+        """Đường dẫn cục bộ của `rel` (đã chuẩn hoá C.4) để HIỂN THỊ — kiểm không có thành phần symlink. Thao tác tệp: dùng `self.fs`."""
+        try:
+            rel = norm_rel(rel, allow_root=False)
+        except LaneError as e:
+            raise HubError(e.message) from None
+        self.fs.check(rel)
+        return self.path / rel
+
+    def ignored_item(self, rel: str, type_: Any) -> bool:
+        return self.ignored(rel + "/x") if type_ == "folder" else self.ignored(rel)
+
+    def _conflict_name(self, rel: str) -> str:
+        return conflict_name(rel, self.agent_id, taken=lambda x: x in self.base or x in self.pending or self.fs.lstat(x) is not None)
 
     def ignored(self, rel: str) -> bool:
         if rel.startswith(TMP_PREFIX) or f"/{TMP_PREFIX}" in rel:
@@ -162,7 +184,8 @@ class Workdir:
         d = {"v": STATE_VERSION, "tree": self.tree, "run_id": self.run_id, "agent_id": self.agent_id, "folder": self.folder, "server": self.server,
              "root": self.root, "sub": self.sub, "path": str(self.path), "read_only": self.read_only, "kind": self.kind, "mode": self.mode,
              "base": self.base, "pending": self.pending, "blocked": self.blocked, "failed": self.failed, "ops": self.ops[-2000:],
-             "lazy": self.lazy, "cursor": self.cursor, "parked": self.parked}
+             "lazy": self.lazy, "cursor": self.cursor, "parked": self.parked, "hidden": sorted(self.hidden)[:5000],
+             "del_count": self.del_count}
         self.svc.state_dir.mkdir(parents=True, exist_ok=True)
         tmp = self.state_path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -194,6 +217,8 @@ class Workdir:
         wd.lazy = list(d.get("lazy") or [])
         wd.cursor = str(d.get("cursor") or "")
         wd.parked = bool(d.get("parked"))
+        wd.hidden = set(d.get("hidden") or [])
+        wd.del_count = int(d.get("del_count") or 0)
         return wd
 
     # ------------------------------------------------------------------ dựng cây
@@ -202,6 +227,8 @@ class Workdir:
         c = self.svc.client(self.server)
         max_files = int(self.svc.cfg("tree_max_files") or 20000)
         self.path.mkdir(parents=True, exist_ok=True)
+        if os.path.islink(self.path):  # pragma: no cover — vừa xoá/tạo bởi daemon
+            raise UnsafePath("gốc cây làm việc là symlink")
         os.chmod(self.path, 0o700)
         if self.read_only:
             self.mode = "tools"
@@ -226,18 +253,19 @@ class Workdir:
                 rel = norm_rel(rel, allow_root=False)
             except LaneError:
                 continue
+            if self.ignored_item(rel, it.get("type")):
+                self.hidden.add(rel)  # tệp tạm/khoá Office/.git của người: không tải, không bao giờ coi là "agent đã xoá"
+                continue
             if it.get("type") == "folder":
-                self.local(rel).mkdir(parents=True, exist_ok=True)
+                self.fs.mkdirs(rel)
                 self.base[rel] = self._base_of(it)
             elif it.get("type") == "file":
                 files.append((rel, it))
 
         async def one(rel: str, it: dict[str, Any]) -> None:
             async with sem:
-                p = self.local(rel)
-                p.parent.mkdir(parents=True, exist_ok=True)
                 if int(it.get("size") or 0) > lazy_at:
-                    p.write_bytes(b"")
+                    self.fs.write_atomic(rel, b"", tmp_prefix=TMP_PREFIX)
                     self.lazy.append(rel)
                     self.base[rel] = {**self._base_of(it), "lazy": True}
                 else:
@@ -252,39 +280,52 @@ class Workdir:
                 "sha256": sha or it.get("sha256"), "size": it.get("size")}
 
     def _snap(self, rel: str) -> None:
-        try:
-            st = os.lstat(self.path / rel)
+        st = self.fs.lstat(rel)
+        if st is not None:
             self.snapshot[rel] = (st.st_size, st.st_mtime_ns)
-        except OSError:
+        else:
             self.snapshot.pop(rel, None)
 
     async def _download(self, rel: str, it: dict[str, Any] | None = None, *, version: str | None = None) -> dict[str, Any]:
-        """Tải `rel` từ server vào cây (tệp tạm cùng thư mục → `os.replace`, không theo symlink ở đích). Cập nhật base."""
-        p = self.local(rel)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.parent / f"{TMP_PREFIX}{uuid.uuid4().hex}"
+        """Tải `rel` từ server vào cây (tệp tạm cùng thư mục, mở qua `dir_fd` — không theo symlink ở bất kỳ cấp nào → `rename`). Base dựng
+        từ CHÍNH lượt tải (ETag = version_id, sha256 tính khi tải), KHÔNG `stat` sau rồi ghép: người lưu tiếp giữa hai lệnh thì base sẽ mang
+        phiên bản mới với nội dung cũ → lần đẩy sau ghi đè bản của người. `stat` chỉ để lấy `rev`/kích thước khi metadata trong tay không khớp
+        ETag; server đã đi tiếp → rev ghi thấp hơn hiện tại (khung `change` mới hơn sẽ kéo lại; xoá/di chuyển với rev đó bị 409 — an toàn)."""
         c = self.svc.client(self.server)
-        hdr = await c.read_to_file(self.root, self.remote(rel), str(tmp), version=version)
-        os.replace(tmp, p)
-        if it is None or it.get("sha256") != hdr.get("sha256"):
-            it = await c.stat(self.root, self.remote(rel))
-        self.base[rel] = self._base_of(it, hdr.get("sha256"))
+        with self.fs.parent(rel, create=True) as (pfd, name):
+            tmp = f"{TMP_PREFIX}{uuid.uuid4().hex}"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644, dir_fd=pfd)
+            try:
+                hdr = await c.read_to_fd(self.root, self.remote(rel), fd, version=version)
+                os.rename(tmp, name, src_dir_fd=pfd, dst_dir_fd=pfd)
+            except BaseException:
+                try:
+                    os.unlink(tmp, dir_fd=pfd)
+                except OSError:
+                    pass
+                raise
+        ver, sha = hdr.get("version_id") or None, hdr.get("sha256")
+        meta = it
+        if meta is None or (ver and meta.get("version_id") != ver) or (not ver and meta.get("sha256") != sha):
+            meta = await c.stat(self.root, self.remote(rel))
+        if ver and meta.get("version_id") != ver:
+            meta = {**meta, "version_id": ver, "rev": max(0, int(meta.get("rev") or 0) - 1), "size": None}
+        self.base[rel] = self._base_of(meta, sha)
         if rel in self.lazy:
             self.lazy.remove(rel)
         self._snap(rel)
         return self.base[rel]
 
     def local_sha(self, rel: str) -> str | None:
-        p = self.path / rel
         try:
-            st = os.lstat(p)
-        except OSError:
+            fd, _st2 = self.fs.open_read(rel)
+        except (OSError, HubError):
             return None
-        import stat as _st
-
-        if not _st.S_ISREG(st.st_mode):
-            return None
-        return _sha_file(p)
+        h = hashlib.sha256()
+        with os.fdopen(fd, "rb") as f:
+            for c in iter(lambda: f.read(1 << 20), b""):
+                h.update(c)
+        return h.hexdigest()
 
     def modified_locally(self, rel: str) -> bool:
         b = self.base.get(rel)
@@ -318,16 +359,23 @@ class Workdir:
         path, op = str(d.get("path") or ""), str(d.get("op") or "")
         rel = self.rel_of(path)
         from_rel = self.rel_of(d.get("from_path")) if d.get("from_path") else None
+        if rel is not None and self.ignored_item(rel, d.get("type")):
+            rel = None  # tệp tạm/khoá của người: không kéo (đổi tên thành tên bị bỏ qua = rời cây)
+        if from_rel is not None and self.ignored_item(from_rel, d.get("type")):
+            from_rel = None
         if rel is None and from_rel is None:
             return
-        key = (str(d.get("id") or ""), int(d.get("rev") or 0))
-        if key in self.seen:
-            return
-        self.seen.add(key)
+        # khử trùng theo (id, rev) CHỈ khi khung có rev (C.8): khung thư mục/acl thiếu rev (null) không bao giờ bị coi là trùng
+        rev = d.get("rev")
+        if rev is not None and d.get("id"):
+            key = (str(d.get("id")), int(rev))
+            if key in self.seen:
+                return
+            self.seen.add(key)
         async with self.lock:
-            if rel is not None:
+            if rel is not None and rev is not None:
                 b = self.base.get(rel)
-                if b is not None and int(b.get("rev") or 0) >= key[1] and op not in ("delete", "move", "rename"):
+                if b is not None and int(b.get("rev") or 0) >= int(rev) and op not in ("delete", "move", "rename"):
                     return
             try:
                 if op in ("move", "rename") and from_rel is not None and rel is not None:
@@ -340,7 +388,7 @@ class Workdir:
                     await self._recheck(rel or "")
                 elif rel is not None and d.get("type") == "folder":
                     if self.mode == "tree" and op in ("create", "move", "rename", "restore"):
-                        self.local(rel).mkdir(parents=True, exist_ok=True)
+                        self.fs.mkdirs(rel)
                         self.base[rel] = self._base_of(d)
                 elif rel is not None:
                     await self._human_write(rel, d)
@@ -364,46 +412,172 @@ class Workdir:
             if rel in self.read_paths:
                 await self.steer(f"chg:{rel}", STEER_CHANGED.format(rel=one_line(rel, 300)))
             return
-        new = await self._conflict_local(rel, steer=False) if self.modified_locally(rel) else None
+        pe = self.pending.get(rel) or {}
+        if pe.get("op") in ("delete", "move_src"):
+            # agent đã xoá/di chuyển tệp nhưng chưa đẩy, người vừa lưu bản MỚI hơn → KHÔNG xoá bản của người: huỷ lệnh xoá, kéo bản người về,
+            # agent quyết lại. Di chuyển: bản agent ở chỗ mới thành tệp mới (không mất).
+            self.pending.pop(rel, None)
+            for k, e in list(self.pending.items()):
+                if e.get("op") == "move" and e.get("from") == rel:
+                    self.pending[k] = {kk: vv for kk, vv in e.items() if kk not in ("from", "if_rev", "idem")} | {"op": "write"}
+            await self._download(rel)
+            await self.steer(f"undel:{rel}", STEER_UNDELETED.format(rel=one_line(rel, 300)))
+            return
+        new = await self._conflict_local(rel, steer=False) if self.fs.is_file(rel) and self.modified_locally(rel) else None
         await self._download(rel)
         if new:
             await self.steer(f"cf:{rel}", STEER_CONFLICT.format(rel=one_line(rel, 300), rel2=one_line(new, 300)))
         else:
             await self.steer(f"chg:{rel}", STEER_CHANGED.format(rel=one_line(rel, 300)))
 
+    def _local_files_under(self, rel: str) -> list[str]:
+        """Tệp thường trong cây con `rel` (đi theo fd, không theo symlink)."""
+        import stat as _st
+
+        out: list[str] = []
+
+        def rec(dfd: int, prefix: str) -> None:
+            for name in os.listdir(dfd):
+                r = f"{prefix}/{name}"
+                try:
+                    st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                except OSError:
+                    continue
+                if _st.S_ISDIR(st.st_mode):
+                    try:
+                        sub = os.open(name, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=dfd)
+                    except OSError:
+                        continue
+                    try:
+                        rec(sub, r)
+                    finally:
+                        os.close(sub)
+                elif _st.S_ISREG(st.st_mode):
+                    out.append(r)
+
+        try:
+            fd = self.fs.open_dir(rel.split("/"))
+        except (OSError, HubError):
+            return out
+        try:
+            rec(fd, rel)
+        finally:
+            os.close(fd)
+        return out
+
     async def _human_delete(self, rel: str, d: dict[str, Any]) -> None:
         tracked = self._tracked(rel)
-        p = self.path / rel
-        if rel in self.base or p.exists() or os.path.islink(p):
-            if p.is_file() and not os.path.islink(p) and self.modified_locally(rel):
-                await self._conflict_local(rel, keep_remote=False)
-            elif p.is_dir() and not os.path.islink(p):
-                shutil.rmtree(p, ignore_errors=True)
-            elif p.exists() or os.path.islink(p):
-                p.unlink(missing_ok=True)
-        for k in [k for k in self.base if k == rel or k.startswith(rel + "/")]:
+        kept: list[str] = []
+        try:
+            self.fs.check(rel)
+            st = self.fs.lstat(rel)
+        except UnsafePath as e:  # agent thay một cấp bằng symlink → KHÔNG đụng gì trên đĩa (daemon không bao giờ đi xuyên symlink)
+            log.warning("lane: bỏ xoá cục bộ %s: %s", one_line(rel, 200), e.message)
+            st = None
+        import stat as _st
+
+        if st is not None and _st.S_ISDIR(st.st_mode):
+            # tệp agent tạo/sửa mà CHƯA đẩy trong thư mục người vừa xoá → giữ thành bản riêng (đẩy lên như bản xung đột), phần còn lại xoá
+            files = self._local_files_under(rel)
+            for f in files:
+                if self.ignored(f):
+                    continue
+                if f not in self.base or self.modified_locally(f):
+                    new = self._conflict_name(f)
+                    if self.fs.rename(f, new, overwrite=False):
+                        kept.append(new)
+                        self.pending[new] = {"since": 0.0, "op": "write", "conflict_of": f}
+                        self.svc.publish("filehub.conflict", self, {"path": one_line(f, 300), "copy": one_line(new, 300), "root_id": self.root})
+            if not kept:
+                self.fs.remove(rel)
+            else:
+                keep = set(kept)
+                for f in self._local_files_under(rel):
+                    if f not in keep:
+                        self.fs.remove(f)
+                self._prune_empty(rel)
+                for k in kept:
+                    self._snap(k)
+        elif st is not None and _st.S_ISREG(st.st_mode) and self.modified_locally(rel):
+            new = await self._conflict_local(rel, keep_remote=False, steer=False)
+            if new:
+                kept.append(new)
+        elif st is not None:
+            self.fs.remove(rel)
+        for k in [k for k in list(self.base) if k == rel or k.startswith(rel + "/")]:
             self.base.pop(k, None)
             self.snapshot.pop(k, None)
+        for k in [k for k in list(self.pending) if (k == rel or k.startswith(rel + "/")) and k not in kept]:
             self.pending.pop(k, None)
-        if tracked:
+        if kept:
+            await self.steer(f"del:{rel}", STEER_DELETED_KEPT.format(rel=one_line(rel, 300), rel2=", ".join(one_line(k, 200) for k in kept[:20])))
+        elif tracked:
             await self.steer(f"del:{rel}", STEER_DELETED.format(rel=one_line(rel, 300)))
+
+    def _prune_empty(self, rel: str) -> None:
+        """Xoá thư mục rỗng trong cây con `rel` (từ dưới lên), theo fd."""
+        def rec(dfd: int) -> bool:
+            empty = True
+            for name in os.listdir(dfd):
+                try:
+                    sub = os.open(name, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=dfd)
+                except OSError:
+                    empty = False
+                    continue
+                try:
+                    sub_empty = rec(sub)
+                finally:
+                    os.close(sub)
+                if sub_empty:
+                    try:
+                        os.rmdir(name, dir_fd=dfd)
+                    except OSError:
+                        empty = False
+                else:
+                    empty = False
+            return empty
+
+        try:
+            fd = self.fs.open_dir(rel.split("/"))
+        except (OSError, HubError):
+            return
+        try:
+            rec(fd)
+        finally:
+            os.close(fd)
 
     async def _human_move(self, src: str, dst: str, d: dict[str, Any]) -> None:
         tracked = self._tracked(src)
-        ps, pd = self.path / src, self.path / dst
-        if ps.exists() and not os.path.islink(ps) and not pd.exists():
-            if ps.is_file() and self.modified_locally(src):
-                await self._conflict_local(src, keep_remote=False)
-            else:
-                self.local(dst).parent.mkdir(parents=True, exist_ok=True)
-                os.replace(ps, pd)
-        for k in [k for k in list(self.base) if k == src or k.startswith(src + "/")]:
-            nk = dst + k[len(src):]
-            self.base[nk] = self.base.pop(k)
-            self.snapshot.pop(k, None)
-            self._snap(nk)
-        if dst in self.base:
-            self.base[dst]["rev"] = int(d.get("rev") or self.base[dst].get("rev") or 0)
+        try:
+            self.fs.check(src)
+            self.fs.check(dst)
+            safe = True
+        except UnsafePath as e:
+            log.warning("lane: bỏ di chuyển cục bộ %s → %s: %s", one_line(src, 200), one_line(dst, 200), e.message)
+            safe = False
+        if not safe:
+            # không đi xuyên symlink: quên chỗ cũ, kéo đúng tệp ở chỗ mới (thư mục: chỉ ghi base, tệp con tới bằng khung/đối soát sau)
+            for k in [k for k in list(self.base) if k == src or k.startswith(src + "/")]:
+                self.base.pop(k, None)
+                self.snapshot.pop(k, None)
+            if d.get("type") == "file" and self.mode == "tree":
+                try:
+                    await self._download(dst)
+                except (LaneError, HubError, OSError) as e:
+                    log.warning("lane: không kéo được %s: %s", one_line(dst, 200), e)
+        else:
+            if self.fs.exists(src) and not self.fs.exists(dst):
+                if self.fs.is_file(src) and self.modified_locally(src):
+                    await self._conflict_local(src, keep_remote=False)
+                else:
+                    self.fs.rename(src, dst, overwrite=False)
+            for k in [k for k in list(self.base) if k == src or k.startswith(src + "/")]:
+                nk = dst + k[len(src):]
+                self.base[nk] = self.base.pop(k)
+                self.snapshot.pop(k, None)
+                self._snap(nk)
+            if dst in self.base:
+                self.base[dst]["rev"] = int(d.get("rev") or self.base[dst].get("rev") or 0)
         if tracked:
             await self.steer(f"mv:{src}", STEER_MOVED.format(rel=one_line(src, 300), rel2=one_line(dst, 300)))
 
@@ -416,17 +590,18 @@ class Workdir:
                     await self._human_delete(rel, {})
                 return
             raise
-        if it and it.get("type") == "file" and self._tracked(rel):
+        if it and it.get("type") == "file" and self._tracked(rel) and not self.ignored(rel):
             b = self.base.get(rel)
             if b is None or int(b.get("rev") or 0) < int(it.get("rev") or 0):
                 await self._human_write(rel, it)
 
     async def _conflict_local(self, rel: str, *, keep_remote: bool = True, steer: bool = True) -> str | None:
-        """Giữ bản của agent: đổi tên cục bộ thành bản xung đột (đẩy lên ở H3). Trả rel mới."""
-        new = conflict_name(rel, self.agent_id)
+        """Giữ bản của agent: đổi tên cục bộ thành bản xung đột (tên DUY NHẤT — không đè bản xung đột trước), đẩy như tệp mới. Trả rel mới."""
+        new = self._conflict_name(rel)
         try:
-            os.replace(self.path / rel, self.local(new))
-        except OSError:
+            if not self.fs.rename(rel, new, overwrite=False):
+                return None
+        except (OSError, HubError):
             return None
         self._snap(new)
         self.snapshot.pop(rel, None)
@@ -455,8 +630,13 @@ class Workdir:
             for it in items:
                 rel = self.rel_of(str(it.get("path") or ""))
                 if rel:
+                    if self.ignored_item(rel, it.get("type")):
+                        self.hidden.add(rel)
+                        continue
                     remote[rel] = it
         async with self.lock:
+            for rel in [r for r in self.base if self.ignored_item(r, self.base[r].get("type"))]:
+                self.base.pop(rel, None)  # trạng thái cũ (trước khi lọc mẫu bỏ qua): quên, không bao giờ xoá
             for rel in sorted(set(self.base) - set(remote), key=len, reverse=True):
                 if self.base.get(rel, {}).get("type") == "file":
                     await self._human_delete(rel, {})
@@ -466,11 +646,11 @@ class Workdir:
                 b = self.base.get(rel)
                 if it.get("type") == "folder":
                     if self.mode == "tree":
-                        self.local(rel).mkdir(parents=True, exist_ok=True)
+                        self.fs.mkdirs(rel)
                     self.base[rel] = self._base_of(it)
                 elif b is None:
                     if self.mode == "tree":
-                        if (self.path / rel).exists():
+                        if self.fs.exists(rel):
                             if self.local_sha(rel) == it.get("sha256"):
                                 self.base[rel] = self._base_of(it)
                                 self._snap(rel)
@@ -528,6 +708,11 @@ class Workdir:
         files: dict[str, tuple[int, int]] = {}
         dirs: set[str] = set()
         root = str(self.path)
+        try:
+            if not _st.S_ISDIR(os.lstat(root).st_mode):
+                raise UnsafePath("gốc cây làm việc không còn là thư mục thật (symlink?) — dừng quét")
+        except FileNotFoundError:
+            raise UnsafePath("gốc cây làm việc đã mất — dừng quét") from None
         for dp, dns, fns in os.walk(root, followlinks=False):
             rd = os.path.relpath(dp, root).replace(os.sep, "/")
             rd = "" if rd == "." else rd
@@ -556,10 +741,14 @@ class Workdir:
 
     def scan(self) -> None:
         """So ảnh chụp (size, mtime) với lần trước + base → đánh dấu `pending` (ghi/xoá/di chuyển/tạo thư mục)."""
-        files, dirs = self.walk()
+        try:
+            files, dirs = self.walk()
+        except UnsafePath as e:  # gốc cây bị thay bằng symlink/xoá: KHÔNG suy ra "agent xoá hết" — không đánh dấu gì
+            log.warning("lane: cây %s: %s", self.tree, e.message)
+            return
         now = time.time()
         changed = [r for r, sig in files.items() if self.snapshot.get(r) != sig and r not in self.failed]
-        removed = [r for r, b in self.base.items() if b.get("type") == "file" and r not in files]
+        removed = [r for r, b in self.base.items() if b.get("type") == "file" and r not in files and not self.ignored(r)]
         self.snapshot = dict(files)
         for r in changed:
             self.pending[r] = {**self.pending.get(r, {}), "since": now, "op": "write"}
@@ -572,21 +761,23 @@ class Workdir:
         for r in removed:
             if r in self.pending and self.pending[r].get("op") in ("delete", "move_src"):
                 continue
+            # rev GHIM lúc agent xoá/di chuyển: người lưu bản mới sau đó → server 409, không bao giờ xoá bản của người
+            pin = int(self.base[r].get("rev") or 0) or None
             dst = new_by_sha.pop(str(self.base[r].get("sha256") or ""), None)
             if dst and self.base[r].get("sha256"):
-                self.pending[dst] = {"since": now, "op": "move", "from": r}
+                self.pending[dst] = {"since": now, "op": "move", "from": r, "if_rev": pin}
                 self.pending[r] = {"since": now, "op": "move_src"}
             else:
-                self.pending[r] = {"since": now, "op": "delete"}
+                self.pending[r] = {"since": now, "op": "delete", "if_rev": pin}
         for d in dirs:
             if d not in self.base and not any(f.startswith(d + "/") for f in files) and d not in self.pending:
                 self.pending[d] = {"since": now, "op": "mkdir"}
         for r, b in list(self.base.items()):
-            if b.get("type") == "folder" and r not in dirs and r not in self.pending and not (self.path / r).exists():
-                self.pending[r] = {"since": now, "op": "rmdir"}
+            if b.get("type") == "folder" and r not in dirs and r not in self.pending and not self.fs.exists(r):
+                self.pending[r] = {"since": now, "op": "rmdir", "if_rev": int(b.get("rev") or 0) or None}
 
     def _due(self, rel: str, e: dict[str, Any], now: float, final: bool) -> bool:
-        if e.get("op") == "move_src":
+        if e.get("op") == "move_src" or e.get("held"):
             return False
         if float(e.get("retry_at") or 0) > now:
             return False
@@ -601,6 +792,7 @@ class Workdir:
         if self.stopped_push or self.revoked or self.read_only:
             return
         now = time.time()
+        await self._mass_delete_gate()
         order = {"delete": 0, "move": 1, "write": 2, "mkdir": 3, "rmdir": 4}
         due = sorted(((r, e) for r, e in self.pending.items() if self._due(r, e, now, final)),
                      key=lambda x: (order.get(str(x[1].get("op")), 9), -x[0].count("/") if x[1].get("op") == "rmdir" else x[0].count("/"), x[0]))
@@ -626,6 +818,10 @@ class Workdir:
             except LaneError as ex:
                 await self._push_error(rel, ex)
                 changed = True
+            except UnsafePath:
+                self.failed[rel] = "symlink"  # agent thay một cấp bằng symlink → không đọc/đẩy gì xuyên qua đó
+                self.pending.pop(rel, None)
+                changed = True
             except OSError as ex:
                 self.failed[rel] = f"local:{type(ex).__name__}"
                 self.pending.pop(rel, None)
@@ -633,18 +829,73 @@ class Workdir:
         if changed:
             self.persist()
 
+    def held_deletes(self) -> list[str]:
+        return sorted(r for r, e in self.pending.items() if e.get("held"))
+
+    async def _mass_delete_gate(self) -> None:
+        """Chặn xoá hàng loạt: số lệnh xoá chưa được duyệt + số đã đẩy từ lần duyệt gần nhất > `max_delete_batch` → GIỮ mọi lệnh xoá chưa
+        duyệt (`held`), báo người MỘT lần (`filehub.blocked{reason: mass_delete}`) + steer agent. Không bao giờ tự quyết: người
+        `filehub resume --root <id>` (đẩy tiếp) / `--discard` (không xoá, kéo về lại); run kết thúc khi còn giữ → cây mồ côi."""
+        limit = int(self.svc.cfg("max_delete_batch") or 0)
+        if limit <= 0:
+            return
+        dels = [r for r, e in self.pending.items() if e.get("op") in ("delete", "rmdir") and not e.get("approved")]
+        if not dels:
+            return
+        already = any(e.get("held") for e in self.pending.values())
+        if not already and self.del_count + len(dels) <= limit:
+            return
+        for r in dels:
+            self.pending[r]["held"] = True
+        if not already:
+            self.svc.publish("filehub.blocked", self, {"root_id": self.root, "reason": "mass_delete", "count": len(dels), "limit": limit,
+                                                       "paths": [one_line(x, 300) for x in sorted(dels)[:20]], "lane": True})
+            self.steered.discard("massdel")
+            await self.steer("massdel", STEER_MASS_DELETE.format(n=len(dels)))
+
+    async def release_deletes(self, *, discard: bool) -> int:
+        """Người quyết lô xoá đang giữ: đẩy tiếp (`approved`) hoặc bỏ (kéo tệp về lại cây, agent được báo). Trả số mục."""
+        async with self.lock:
+            held = self.held_deletes()
+            if not discard:
+                for r in held:
+                    self.pending[r] = {**{k: v for k, v in self.pending[r].items() if k != "held"}, "approved": True}
+                self.del_count = 0
+            else:
+                for r in sorted(held, key=lambda x: x.count("/")):
+                    e = self.pending.pop(r, None) or {}
+                    b = self.base.get(r) or {}
+                    try:
+                        if e.get("op") == "rmdir" or b.get("type") == "folder":
+                            self.fs.mkdirs(r)
+                        elif not b.get("lazy"):
+                            await self._download(r)
+                        else:
+                            self.fs.write_atomic(r, b"", tmp_prefix=TMP_PREFIX)
+                            self._snap(r)
+                    except (LaneError, HubError, OSError) as ex:
+                        log.warning("lane: không kéo lại được %s: %s", one_line(r, 200), ex)
+                if held:
+                    await self.steer(f"undelbatch:{time.time()}", STEER_DELETE_REFUSED.format(n=len(held)))
+            self.persist()
+        self.kick()
+        return len(held)
+
     def _op(self, op: str, rel: str, **extra: Any) -> None:
         self.ops.append({"op": op, "path": rel, "at": time.time(), **extra})
 
     async def push_now(self, rel: str) -> dict[str, Any]:
         """fs_write: đẩy ngay một tệp (bỏ qua gộp/trần tần suất). Trả kết quả cho agent."""
         self._snap(rel)
-        self.pending[rel] = {"since": 0.0, "op": "write"}
+        self.pending[rel] = {**self.pending.get(rel, {}), "since": 0.0, "op": "write"}
+        self.last_copy.pop(rel, None)
         try:
             await self._push_write(rel)
         except LaneError as ex:
             await self._push_error(rel, ex)
         self.persist()
+        if rel in self.last_copy:
+            return {"path": rel, "saved": False, "reason": "not_pulled", "your_copy": self.last_copy[rel]}
         if rel in self.blocked:
             return {"path": rel, "saved": False, "reason": "secret_blocked"}
         if rel in self.failed:
@@ -658,25 +909,26 @@ class Workdir:
         return {"path": rel, "saved": True, "version_id": b.get("version_id"), "rev": b.get("rev")}
 
     async def _push_write(self, rel: str) -> None:
-        import stat as _st
-
         from ...redact import contains_secret_value
         from .client import UPLOAD_MAX_BYTES
 
         e = self.pending.get(rel) or {}
-        p = self.path / rel
-        st = os.lstat(p)
-        if not _st.S_ISREG(st.st_mode):
-            self.pending.pop(rel, None)
-            return
-        if st.st_nlink > 1:
-            self.failed[rel] = "hardlink"
-            self.pending.pop(rel, None)
-            return
-        if st.st_size > UPLOAD_MAX_BYTES:
-            raise LaneError("too_large", 413, {"max_bytes": UPLOAD_MAX_BYTES})
-        fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            fd, st = self.fs.open_read(rel)  # không theo symlink ở BẤT KỲ cấp nào (agent thay thư mục cha bằng symlink → UnsafePath)
+        except UnsafePath:
+            raise
+        except OSError as ex:
+            if isinstance(ex, (FileNotFoundError, NotADirectoryError)):
+                self.pending.pop(rel, None)
+                return
+            raise
         with os.fdopen(fd, "rb") as f:
+            if st.st_nlink > 1:
+                self.failed[rel] = "hardlink"
+                self.pending.pop(rel, None)
+                return
+            if st.st_size > UPLOAD_MAX_BYTES:
+                raise LaneError("too_large", 413, {"max_bytes": UPLOAD_MAX_BYTES})
             data = f.read()
         sha = hashlib.sha256(data).hexdigest()
         b = self.base.get(rel)
@@ -685,11 +937,25 @@ class Workdir:
             self.failed.pop(rel, None)
             self.blocked.pop(rel, None)
             return
-        if b is not None and b.get("lazy") and not data:
-            self.pending.pop(rel, None)
-            return
         if self.ignored(rel):
             self.pending.pop(rel, None)
+            return
+        if b is not None and b.get("lazy"):
+            # tệp lớn CHƯA tải (tệp trống giữ chỗ): không bao giờ ghi đè bản thật bằng nội dung agent viết lên chỗ giữ — giữ bản của agent
+            # thành tệp riêng, trả lại tệp trống, bảo agent fs_pull trước
+            self.pending.pop(rel, None)
+            if not data:
+                return
+            new = self._conflict_name(rel)
+            if not self.fs.rename(rel, new, overwrite=False):
+                return
+            self.fs.write_atomic(rel, b"", tmp_prefix=TMP_PREFIX)
+            self._snap(rel)
+            self._snap(new)
+            self.pending[new] = {"since": 0.0, "op": "write", "conflict_of": rel}
+            self.last_copy[rel] = new
+            self.svc.publish("filehub.conflict", self, {"path": one_line(rel, 300), "copy": one_line(new, 300), "root_id": self.root, "reason": "not_pulled"})
+            await self.steer(f"lazy:{rel}", STEER_LAZY.format(rel=one_line(rel, 300), rel2=one_line(new, 300)))
             return
         # QUÉT SECRET TRƯỚC KHI ĐẨY: không một byte nào rời máy nếu tệp chứa giá trị secret hub biết
         if contains_secret_value(data):
@@ -703,8 +969,16 @@ class Workdir:
         self.blocked.pop(rel, None)
         c = self.svc.client(self.server)
         is_file = b is not None and b.get("type") == "file" and b.get("version_id")
+        # Idempotency-Key GIỮ qua mọi lần thử lại của CÙNG nội dung (C.6): timeout rồi gửi lại → server trả đúng phản hồi lần đầu
+        idem = e.get("idem") if e.get("idem_sha") == sha and e.get("idem") else str(uuid.uuid4())
+        if rel in self.pending:
+            self.pending[rel] = {**self.pending[rel], "idem": idem, "idem_sha": sha}
         item = await c.write(self.root, self.remote(rel), data, agent=self.agent_id, run=self.run_id,
-                             if_match=str(b["version_id"]) if is_file else None, create=not is_file, parents=True)
+                             if_match=str(b["version_id"]) if is_file else None, create=not is_file, parents=True, idem=idem,
+                             timeout=float(self.svc.cfg("write_timeout_s") or 330))
+        self._pushed(rel, item, sha, is_file=bool(is_file), e=e)
+
+    def _pushed(self, rel: str, item: dict[str, Any], sha: str, *, is_file: bool, e: dict[str, Any]) -> None:
         self.base[rel] = self._base_of(item, sha)
         self._op("modified" if is_file else "added", rel, **({"conflict_of": e["conflict_of"]} if e.get("conflict_of") else {}))
         self.pending.pop(rel, None)
@@ -712,14 +986,29 @@ class Workdir:
         self.last_pushed = rel
         self.last_push[rel] = time.time()
 
+    def _idem(self, rel: str) -> str:
+        e = self.pending.get(rel)
+        if e is None:
+            return str(uuid.uuid4())
+        if not e.get("idem"):
+            e["idem"] = str(uuid.uuid4())
+        return str(e["idem"])
+
     async def _push_delete(self, rel: str, *, folder: bool = False) -> None:
         b = self.base.get(rel)
-        if b is None:
+        e = self.pending.get(rel) or {}
+        if b is None or self.ignored_item(rel, b.get("type")):
+            self.pending.pop(rel, None)
+            return
+        if folder and any(h.startswith(rel + "/") for h in self.hidden):
+            # thư mục trên server còn tệp bị bỏ qua của người (.git, ~$…, *.tmp): xoá thư mục = xoá cả chúng → chỉ quên thư mục, không xoá
+            self.base.pop(rel, None)
             self.pending.pop(rel, None)
             return
         c = self.svc.client(self.server)
+        if_rev = e.get("if_rev") if e.get("if_rev") is not None else (int(b.get("rev") or 0) or None)
         try:
-            await c.delete(self.root, self.remote(rel), if_rev=int(b.get("rev") or 0) or None, agent=self.agent_id, run=self.run_id)
+            await c.delete(self.root, self.remote(rel), if_rev=if_rev, agent=self.agent_id, run=self.run_id, idem=self._idem(rel))
         except LaneError as ex:
             if ex.lane_code == "not_found":
                 pass
@@ -727,7 +1016,7 @@ class Workdir:
                 # người đã sửa tệp sau base → KHÔNG xoá bản của người: kéo bản đó về lại cây + báo agent
                 self.pending.pop(rel, None)
                 await self._download(rel)
-                await self.steer(f"chg:{rel}", STEER_CHANGED.format(rel=one_line(rel, 300)))
+                await self.steer(f"undel:{rel}", STEER_UNDELETED.format(rel=one_line(rel, 300)))
                 return
             else:
                 raise
@@ -735,24 +1024,28 @@ class Workdir:
             self.base.pop(k, None)
         self._op("deleted", rel)
         self.pending.pop(rel, None)
+        self.del_count += 1
 
     async def _push_move(self, src: str, dst: str) -> None:
         b = self.base.get(src)
+        e = self.pending.get(dst) or {}
         c = self.svc.client(self.server)
         if b is None:
             self.pending.pop(src, None)
             self.pending[dst] = {"since": 0.0, "op": "write"}
             await self._push_write(dst)
             return
+        if_rev = e.get("if_rev") if e.get("if_rev") is not None else (int(b.get("rev") or 0) or None)
         try:
-            item = await c.move(self.root, self.remote(src), self.remote(dst), if_rev=int(b.get("rev") or 0) or None, agent=self.agent_id, run=self.run_id)
+            item = await c.move(self.root, self.remote(src), self.remote(dst), if_rev=if_rev, agent=self.agent_id, run=self.run_id,
+                                idem=self._idem(dst))
         except LaneError as ex:
             if ex.lane_code in ("name_conflict", "conflict", "not_found", "exists"):  # đích đã có / nguồn đổi → tạo mới + xoá nguồn
                 self.pending.pop(src, None)
                 self.pending[dst] = {"since": 0.0, "op": "write"}
                 await self._push_write(dst)
                 if ex.lane_code != "not_found":
-                    self.pending[src] = {"since": 0.0, "op": "delete"}
+                    self.pending[src] = {"since": 0.0, "op": "delete", "if_rev": if_rev}
                     await self._push_delete(src)
                 else:
                     self.base.pop(src, None)
@@ -764,7 +1057,7 @@ class Workdir:
         self.pending.pop(dst, None)
 
     async def _push_mkdir(self, rel: str) -> None:
-        item = await self.svc.client(self.server).mkdir(self.root, self.remote(rel), agent=self.agent_id, run=self.run_id)
+        item = await self.svc.client(self.server).mkdir(self.root, self.remote(rel), agent=self.agent_id, run=self.run_id, idem=self._idem(rel))
         self.base[rel] = self._base_of(item)
         self._op("added", rel, folder=True)
         self.pending.pop(rel, None)
@@ -774,7 +1067,13 @@ class Workdir:
         e = self.pending.get(rel) or {}
         now = time.time()
         if code in ("conflict", "exists") and e.get("op", "write") == "write":
-            await self._conflict_push(rel, ex.extra.get("current") or {})
+            cur = ex.extra.get("current") or {}
+            sha = self.local_sha(rel)
+            if cur.get("sha256") and sha and cur.get("sha256") == sha and cur.get("type", "file") == "file":
+                # bản trên server ĐÃ là đúng nội dung của agent (vd lần gửi trước đã chốt mà hub không nhận được phản hồi) → thành công
+                self._pushed(rel, cur, sha, is_file=bool((self.base.get(rel) or {}).get("version_id")), e=e)
+                return
+            await self._conflict_push(rel, cur)
             return
         if code == "file_locked":
             until = ex.extra.get("until")
@@ -818,16 +1117,18 @@ class Workdir:
             return
         self.pending.pop(rel, None)
         self.pending[new] = {"since": 0.0, "op": "write", "conflict_of": rel}
-        for i in range(2, 6):  # trùng tên bản xung đột (cùng phút) → thêm hậu tố
+        taken: set[str] = set()
+        for _i in range(2, 6):  # tên bản xung đột đã có trên server (cùng phút, chưa thấy trong cây) → tên khác
             try:
                 await self._push_write(new)
                 break
             except LaneError as ex:
                 if ex.lane_code != "exists":
                     raise
-                stem, dot, ext = new.rpartition(".")
-                alt = f"{stem} {i}.{ext}" if dot else f"{new} {i}"
-                os.replace(self.path / new, self.local(alt))
+                taken.add(new)
+                alt = conflict_name(rel, self.agent_id, taken=lambda x: x in taken or x in self.base or x in self.pending or self.fs.lstat(x) is not None)
+                if not self.fs.rename(new, alt, overwrite=False):
+                    break
                 self.pending.pop(new, None)
                 new = alt
                 self.pending[new] = {"since": 0.0, "op": "write", "conflict_of": rel}
@@ -845,7 +1146,7 @@ class Workdir:
             self.scan()
             while self.pending and not self.stopped_push and not self.revoked and not self.read_only:
                 await self.push_pending(final=True)
-                left = [e for e in self.pending.values() if e.get("op") != "move_src"]
+                left = [e for e in self.pending.values() if e.get("op") != "move_src" and not e.get("held")]
                 if not left or loop.time() >= deadline:
                     break
                 nxt = min(float(e.get("retry_at") or 0) for e in left) - time.time()

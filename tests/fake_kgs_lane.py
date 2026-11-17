@@ -4,7 +4,9 @@ ngẫu nhiên>. ThreadingHTTPServer (stdlib) — TCP thật nên test được S
 Cây trong RAM theo gốc: phiên bản, `If-Match`/`If-None-Match`, khoá tệp (423), hạn mức (507), `infected` khi nội dung chứa `EICAR`,
 idempotency 24 h, presence, luồng SSE có cursor (`c1.` + base64url {ws: seq}), `reset`, `root_revoked`, `key_revoked`, `replaced`, ping.
 API cho test: `human_write`, `human_delete`, `human_move`, `lock`, `unlock`, `revoke`, `drop_streams`, `reset_root`, `revoke_root`,
-`fail_next(op, status, code, **extra)`, `requests` (nhật ký, header Authorization đã che), `presence`.
+`fail_next(op, status, code, **extra)`, `requests` (nhật ký, header Authorization đã che), `presence`, `on_content` (hook gọi trong lúc
+phục vụ `GET content` — mô phỏng người lưu bản mới giữa tải nội dung và `stat`), `put_delay[path] = giây` (MỘT lần: PUT content chốt
+phiên bản + lưu Idempotency-Key rồi mới trả sau `giây` — mô phỏng quét virus lâu hơn timeout của client).
 """
 
 from __future__ import annotations
@@ -112,6 +114,8 @@ class FakeLane:
         self.stream_opens = 0
         self.list_pages: dict[str, tuple[list[dict[str, Any]], str]] = {}
         self.page_limit = 2000
+        self.on_content: Any = None  # callable(path) — chạy trong lúc phục vụ GET content (sau khi đã chọn phiên bản trả về)
+        self.put_delay: dict[str, float] = {}
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -225,6 +229,8 @@ class FakeLane:
     def human_delete(self, path: str, root: str = "r_chung") -> None:
         r = self.roots[root]
         it = r.items.pop(path)
+        for k in [k for k in r.items if k.startswith(path + "/")]:  # xoá thư mục = cả cây con (vào thùng rác cùng lô)
+            r.items.pop(k)
         it.rev += 1
         self._change(r, "delete", it, by="human")
 
@@ -341,6 +347,8 @@ class FakeLane:
             st, res, h, raw = self._root_cmd(method, cmd, root, q, hdr, body)
         if write and idem and st < 500 and st not in (423, 429):
             self.idem[idem] = (st, res)
+        if method == "PUT" and cmd == "content" and q.get("path") in self.put_delay:
+            time.sleep(self.put_delay.pop(q["path"]))  # đã chốt + lưu khoá idempotency → client hết giờ chờ, lần gửi lại nhận đúng phản hồi này
         return st, res, h, raw
 
     def _root_cmd(self, method: str, cmd: str, root: Root, q: dict[str, str], hdr: dict[str, str], body: bytes) -> tuple[int, Any, dict[str, str] | None, bytes | None]:
@@ -382,6 +390,8 @@ class FakeLane:
                 v = next((x for x in it.versions if x["version_id"] == q["version"]), None)
                 if v is None:
                     return 404, {"code": "not_found"}, None, None
+            if self.on_content is not None:
+                self.on_content(p)
             if hdr.get("If-None-Match") == f'"{v["version_id"]}"':
                 return 304, None, {"ETag": f'"{v["version_id"]}"'}, b""
             return 200, None, {"ETag": f'"{v["version_id"]}"', "X-Lane-Sha256": v["sha256"], "Content-Type": "application/octet-stream"}, v["data"]

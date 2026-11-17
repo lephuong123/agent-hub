@@ -49,7 +49,9 @@ def puts(lane, path):
 
 async def finish(d, rid, status=("completed",)):
     d.hub.runs.runtime().release(rid)
-    return await wait_status(d, rid, status)
+    await wait_status(d, rid, status)
+    await until(lambda: rid not in d.hub.runs.active)  # end_run (báo thay đổi, mồ côi/xoá cây) chạy SAU khi trạng thái đã ghi
+    return d.hub.store.get_run(rid)
 
 
 async def test_push_on_save_create_delete_move_mkdir_and_echo(env):

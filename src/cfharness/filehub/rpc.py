@@ -6,7 +6,7 @@
   relay?, remote?}` → cấu hình + chạy `<binary> login` → `{login_url}`; `filehub.login {root_hint?, no_browser?, relay?, mode?}` (đăng nhập
   lại — giữ chế độ đang có); `filehub.login_callback {code, state, error?}` (relay OAuth — web gọi từ route công khai `/filehub/oauth/cb`);
   `filehub.switch_to_workspace {local_path?, relay?, no_browser?}`; `filehub.add {root_id, name?, ws_id?, local_path?, kind?}`;
-  `filehub.remove {name}`; `filehub.rename {name, new_name}` (đổi tên cfharness — tên cũ thành bí danh); `filehub.pause {}`; `filehub.resume {root_id?}` (root_id = cho chiều đẩy lên đang bị chặn đi tiếp).
+  `filehub.remove {name}`; `filehub.rename {name, new_name}` (đổi tên cfharness — tên cũ thành bí danh); `filehub.pause {}`; `filehub.resume {root_id?, discard?}` (root_id = cho chiều đẩy lên đang bị chặn đi tiếp; thư mục lane: discard = không xoá, kéo tệp về lại).
 - cổng cfharness (chế độ lane, filehub/lane/): `filehub.lane_status {}` (đọc, không khoá) · `filehub.lane_setup {server, url, key}` (khoá
   chỉ người nhập — CLI getpass / web bước 2; gỡ khỏi params trước audit) · `filehub.lane_test {server}` · `filehub.lane_disable {server, force?}` · `filehub.lane_add {root_id, name?, server?}` ·
   `filehub.switch {name, to: lane|sync, server?, force?}` · `filehub.lane_orphan {tree, action: push|drop}` — mọi ghi là HUMAN_ONLY.
@@ -67,7 +67,7 @@ def register_rpc(daemon: "Daemon") -> None:
         "filehub.remove": lambda p: s.remove(str(_req(p, "name"))),
         "filehub.rename": lambda p: s.rename(str(_req(p, "name")), str(_req(p, "new_name"))),
         "filehub.pause": lambda p: s.pause(),
-        "filehub.resume": lambda p: s.resume(p.get("root_id")),
+        "filehub.resume": lambda p: s.resume(p.get("root_id"), discard=bool(p.get("discard"))),  # lane: {root_id, discard?} = người quyết lô xoá hàng loạt
         # cổng cfharness (chế độ lane)
         "filehub.lane_status": lambda p: s.lane.status(),
         "filehub.lane_setup": s.lane.setup,  # khoá bị pop khỏi p NGAY đầu hàm (audit không thấy)
