@@ -75,7 +75,7 @@ async def partial_lane(request: Request) -> Response:
         ctx = {"data": await rpc(request, "filehub.lane_status")}
         st = await rpc(request, "filehub.status")
         ctx["sync_folders"] = [str(f.get("name")) for f in (st or {}).get("folders") or [] if f.get("name")]
-        ctx["held"] = {str(w.get("tree")): held_list([w]) for w in ctx["data"].get("runs") or [] if isinstance(w, dict) and w.get("held")}
+        ctx["batches"] = held_batches(ctx["data"])
     except (DaemonUnavailable, OSError):
         ctx = {"down": True}
     except RpcError as e:
@@ -197,7 +197,7 @@ def _guard_local(request: Request, p: dict[str, Any], *keys: str) -> None:
 
 
 def held_list(runs: Any, root_id: str | None = None) -> tuple[list[str], int]:
-    """Lô xoá đang giữ (từ `filehub.lane_status.runs[].held_paths` do daemon cắt ≤ 50) → (đường dẫn, số mục không hiện)."""
+    """Lô xoá đang giữ (từ `filehub.lane_status.runs[]` / `orphans[]` `.held_paths` do daemon cắt ≤ 50) → (đường dẫn, số mục không hiện)."""
     paths: list[str] = []
     total = 0
     for w in runs or []:
@@ -208,12 +208,72 @@ def held_list(runs: Any, root_id: str | None = None) -> tuple[list[str], int]:
     return paths, max(0, total - len(paths))
 
 
+def held_batches(st: Any) -> list[dict[str, Any]]:
+    """Lô xoá hàng loạt đang chờ người — gộp theo GỐC (Cho xoá / Không xoá áp cho cả gốc), từ run đang chạy lẫn run đã kết thúc (cây mồ côi)."""
+    out: dict[str, dict[str, Any]] = {}
+    st = st if isinstance(st, dict) else {}
+    for ended, w in [*((False, x) for x in st.get("runs") or []), *((True, x) for x in st.get("orphans") or [])]:
+        if not isinstance(w, dict) or not w.get("held") or not w.get("root_id"):
+            continue
+        b = out.setdefault(str(w["root_id"]), {"root_id": str(w["root_id"]), "folder": w.get("folder"), "agents": [], "tasks": [], "count": 0,
+                                               "paths": [], "ended": False})
+        b["count"] += int(w.get("held") or 0)
+        b["paths"] += [str(x) for x in (w.get("held_paths") or [])[:50]]
+        b["ended"] = b["ended"] or ended
+        if w.get("agent_id") and w["agent_id"] not in b["agents"]:
+            b["agents"].append(w["agent_id"])
+        if w.get("task_id") and w["task_id"] not in b["tasks"]:
+            b["tasks"].append(w["task_id"])
+    for b in out.values():
+        b["more"] = max(0, b["count"] - len(b["paths"]))
+    return list(out.values())
+
+
+def _bullets(lines: list[str], more: int) -> str:
+    return "\n".join(f"• {x}" for x in lines) + (f"\n… và {more} mục nữa" if more else "")
+
+
 async def _held_preview(request: Request, f: Any) -> str:
     st = await rpc(request, "filehub.lane_status")
-    paths, more = held_list((st or {}).get("runs"), str(f.get("root_id") or ""))
+    paths, more = held_list([*((st or {}).get("runs") or []), *((st or {}).get("orphans") or [])], str(f.get("root_id") or ""))
     if not paths:
         return ""
-    return "Các mục agent muốn xoá:\n" + "\n".join(f"• {p}" for p in paths) + (f"\n… và {more} mục nữa" if more else "")
+    head = ("Các tệp sẽ Ở LẠI Không gian số (lệnh xoá của agent bị bỏ):" if f.get("discard")
+            else "Các mục sẽ bị XOÁ trên Không gian số (vào thùng rác):")
+    return head + "\n" + _bullets(paths, more)
+
+
+def _item_line(x: dict[str, Any]) -> str:
+    op, path = str(x.get("op") or ""), str(x.get("path") or "")
+    if op == "move" and x.get("from"):
+        return f"Di chuyển {x['from']} → {path}"
+    label = str(x.get("label") or op)
+    return f"{label[:1].upper()}{label[1:]} {path}"
+
+
+async def _orphan_preview(request: Request, f: Any) -> str:
+    st = await rpc(request, "filehub.lane_status")
+    o = next((x for x in (st or {}).get("orphans") or [] if isinstance(x, dict) and str(x.get("tree")) == str(f.get("tree"))), None)
+    if o is None:
+        return ""
+    items = [x for x in o.get("items") or [] if isinstance(x, dict) and not x.get("held")]
+    more = max(0, int(o.get("count") or 0) - int(o.get("held") or 0) - len(items))
+    if f.get("action") == "drop":
+        txt = "Sẽ KHÔNG làm các thay đổi này trên Không gian số:\n" + _bullets([_item_line(x) for x in items], more)
+        if o.get("held"):
+            txt += f"\n(và bỏ {o['held']} mục xoá đang chờ duyệt — các tệp đó ở lại Không gian số)"
+        return txt
+    txt = "Sẽ làm trên Không gian số:\n" + _bullets([_item_line(x) for x in items], more)
+    if o.get("held"):
+        txt += (f"\n{o['held']} mục xoá đang chờ duyệt KHÔNG đi kèm — quyết riêng bằng Cho xoá / Không xoá.")
+    return txt
+
+
+def _n(f: Any) -> str:
+    try:
+        return str(max(0, int(str(f.get("n") or "0"))))
+    except ValueError:
+        return "các"
 
 
 def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
@@ -352,21 +412,30 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
                          "Bản sao cũ trên máy GIỮ NGUYÊN — hub không xoá; kiểm rồi tự xoá. Từ chối nếu đồng bộ còn chưa yên."
                          if f.get("to") == "lane" else "Hub đồng bộ lại thư mục về bản sao cũ trên máy (có thể cũ hơn Không gian số — đồng bộ đối chiếu lại)."),
         danger=True, goto=lambda r, f: NEXT_LANE)
+    def _orphan_ok(r: Any, f: Any) -> str:
+        r = r or {}
+        if r.get("dropped"):
+            return "Đã bỏ thay đổi của agent — tệp trên Không gian số giữ nguyên"
+        held = f" Còn {r['held']} mục xoá chờ bạn quyết (Cho xoá / Không xoá)." if r.get("held") else ""
+        if r.get("pushed"):
+            return "Đã làm xong các thay đổi trên Không gian số"
+        n = len(r.get("left") or []) - int(r.get("held") or 0)
+        return (f"Còn {n} thay đổi chưa làm được ({r.get('code')})." if n > 0 else "Đã làm các thay đổi khác.") + held
+
     actions["filehub_lane_orphan"] = Action(
-        "filehub.lane_orphan", lambda f: {"tree": _req(f, "tree"), "action": "drop" if f.get("action") == "drop" else "push"},
-        lambda r, f: ("Đã bỏ thay đổi chưa đẩy" if (r or {}).get("dropped") else ("Đã đẩy hết lên Không gian số" if (r or {}).get("pushed")
-                      else f"Còn {len((r or {}).get('left') or [])} thay đổi chưa đẩy được ({(r or {}).get('code')})")),
-        confirm=lambda f: ("BỎ hẳn các thay đổi chưa đẩy lên của run này (xoá bản trên máy)?" if f.get("action") == "drop"
-                           else "Đẩy lại các thay đổi còn kẹt lên Không gian số? (tệp chứa secret vẫn bị chặn)"),
-        danger=True, goto=lambda r, f: NEXT_LANE)
+        "filehub.lane_orphan", lambda f: {"tree": _req(f, "tree"), "action": "drop" if f.get("action") == "drop" else "push"}, _orphan_ok,
+        confirm=lambda f: ("Bỏ thay đổi của agent? Các thay đổi dưới đây KHÔNG được làm trên Không gian số (tệp trên Không gian số giữ nguyên); "
+                           "bản làm việc trên máy bị xoá." if f.get("action") == "drop"
+                           else "Làm lại trên Không gian số các thay đổi còn kẹt của run này (từng mục dưới đây)? Tệp chứa secret vẫn bị chặn."),
+        preview=_orphan_preview, danger=True, goto=lambda r, f: NEXT_LANE)
     actions["filehub_lane_deletes"] = Action(
         "filehub.resume", lambda f: {"root_id": _req(f, "root_id"), **({"discard": True} if f.get("discard") else {})},
-        lambda r, f: (f"Đã KHÔNG xoá {(r or {}).get('discarded', 0)} mục — tệp được trả lại cây làm việc của agent" if f.get("discard")
-                      else f"Đã cho xoá {(r or {}).get('released', 0)} mục (vào thùng rác Không gian số)"),
+        lambda r, f: (f"Không xoá — giữ {(r or {}).get('discarded', 0)} tệp trên Không gian số, đã bỏ lệnh xoá của agent" if f.get("discard")
+                      else f"Đã xoá {(r or {}).get('released', 0)} mục trên Không gian số (vào thùng rác, khôi phục được)"),
         call=simple("filehub.resume"),
-        confirm=lambda f: ("KHÔNG cho agent xoá các mục đang giữ? Tệp ở lại Không gian số và được trả lại cây làm việc của agent." if f.get("discard")
-                           else "Cho agent xoá các mục đang giữ trên Không gian số? (vào thùng rác, khôi phục được)"),
-        preview=_held_preview, goto=lambda r, f: NEXT_LANE)
+        confirm=lambda f: (f"Không xoá — giữ {_n(f)} tệp trên Không gian số, bỏ thay đổi của agent (lệnh xoá hàng loạt)?" if f.get("discard")
+                           else f"Xoá {_n(f)} tệp trên Không gian số (vào thùng rác, khôi phục được)?"),
+        preview=_held_preview, danger=True, goto=lambda r, f: str(f.get("next") or "") if str(f.get("next") or "") == "/inbox" else NEXT_LANE)
     actions["filehub_lane_test"] = Action(
         "filehub.lane_test", lambda f: {"server": _req(f, "server")},
         lambda r, f: (f"Cổng «{(r or {}).get('server')}» trả lời — {len((r or {}).get('roots') or [])} thư mục/workspace được cấp"

@@ -219,7 +219,7 @@ async def test_web_lane_card_texts_test_button_and_redirect(web, lane):
     e = web
     await e.login()
     card = (await e.client.get("/partials/filehub/lane")).text
-    assert 'value="http://127.0.0.1:8223"' in card  # chỉ cần dán khoá
+    assert 'placeholder="http://127.0.0.1:8223"' in card and 'value="http://127.0.0.1:8223"' not in card  # chỉ cần dán khoá; trống = tự thử 8223 rồi 8233
     r = await e.post("/do/filehub_lane_setup", {"url": lane.url, "next": "/settings#filehub-lane"})
     assert r.status_code == 200 and "Nhập lại giá trị ở trang Cài đặt" not in r.text
     r = await e.post("/do/filehub_lane_setup", {"url": lane.url, "confirm": "yes", "confirm2": "yes", "key": KEY, "next": "/settings#filehub-lane"})

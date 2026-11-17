@@ -34,6 +34,8 @@ SECRET_PREFIX = "FILEHUB_LANE_"
 STATES = ("ok", "offline", "auth_failed", "version_mismatch", "disabled", "not_configured", "key_expiring")
 LOCK_PREFIX = "filehub-lane:"
 # trạng thái cổng → (nhãn ngắn, việc người cần làm) — dùng chung cho thẻ web, CLI (không bao giờ in mã thô cho người)
+OP_TEXT = {"delete": "xoá", "rmdir": "xoá thư mục", "write": "ghi", "move": "di chuyển", "mkdir": "tạo thư mục"}
+ORPHAN_SHOW = 50
 STATE_TEXT = {
     "ok": ("đang hoạt động", ""),
     "key_expiring": ("khoá sắp hết hạn", "Tạo khoá mới ở Không gian số › Hồ sơ › Cổng cfharness rồi dán lại (Thay khoá) trước ngày hết hạn."),
@@ -284,6 +286,8 @@ class LaneService:
             out.append({"name": name, "url": s.get("url"), "user": s.get("user"), "hub_label": s.get("hub_label"), "scope": s.get("scope"),
                         "key_prefix": s.get("key_prefix"), "key": self.hub.secrets.exists(secret_name(name)), "state": state,
                         "label": label, "hint": hint, "error": st.get("code"), "expiry": self.key_expiry(name),
+                        # lần kiểm tra (hello) gần nhất theo giờ máy — thẻ web ghi "kiểm tra lúc …" cạnh trạng thái
+                        "checked": datetime.fromtimestamp(float(st["at"])).strftime("%H:%M:%S") if st.get("at") else None,
                         "roots": self._roots_view(self._hello[name][1]) if name in self._hello else None})
         revoked = self._revoked()
         sstate = {x["name"]: x["state"] for x in out}
@@ -302,7 +306,9 @@ class LaneService:
     def _run_status(self) -> dict[str, Any]:
         lat = sorted(x for wd in self.workdirs.values() for x in wd.latencies)
         p95 = round(lat[min(len(lat) - 1, int(len(lat) * 0.95))] * 1000) if lat else None
-        return {"runs": [wd.info() for wd in self.workdirs.values()], "orphans": self.orphans(), "steer_latency_p95_ms": p95,
+        runs = [wd.info() for wd in self.workdirs.values()]
+        return {"runs": [{**i, "task_id": self._task_of(i.get("run_id"))} for i in runs], "orphans": self.orphans(),
+                "steer_latency_p95_ms": p95,
                 "streams": {k: (not t.done()) for k, t in self._streams.items()}}
 
     # ------------------------------------------------------------------ thiết lập (CHỈ người — RPC HUMAN_ONLY)
@@ -851,8 +857,40 @@ class LaneService:
                 or ("secret_blocked" if wd.blocked else "pending"))
         self.publish("filehub.push_failed", wd, {"count": len(left), "paths": [one_line(x, 300) for x in left[:20]], "code": code, "tree": wd.tree})
 
+    def _task_of(self, run_id: Any) -> str | None:
+        try:
+            return (self.hub.store.get_run(str(run_id)) or {}).get("task_id") if run_id else None
+        except Exception:  # pragma: no cover
+            return None
+
+    @staticmethod
+    def change_items(st: dict[str, Any]) -> list[dict[str, Any]]:
+        """Thay đổi còn kẹt của một cây (trạng thái đã lưu) → từng mục kèm THAO TÁC sẽ làm trên Không gian số (cho người quyết): xoá / xoá thư
+        mục / ghi / di chuyển / tạo thư mục; tệp bị chặn (secret) / lỗi đẩy = ghi kèm lý do. Lô xoá đang giữ đánh dấu `held`."""
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for r, e in sorted((st.get("pending") or {}).items()):
+            op = str(e.get("op") or "write")
+            if op == "move_src":
+                continue
+            it = {"path": r, "op": op, "label": OP_TEXT.get(op, op), "held": bool(e.get("held"))}
+            if op == "move" and e.get("from"):
+                it["from"] = str(e["from"])
+            out.append(it)
+            seen.add(r)
+        for r in sorted(st.get("blocked") or {}):
+            if r not in seen:
+                out.append({"path": r, "op": "write", "label": "ghi (bị chặn: chứa secret)", "held": False})
+                seen.add(r)
+        for r, c in sorted((st.get("failed") or {}).items()):
+            if r not in seen and c != "hardlink":
+                out.append({"path": r, "op": "write", "label": f"ghi (lỗi: {c})", "held": False})
+        return out
+
     def orphans(self) -> list[dict[str, Any]]:
         import json as _json
+
+        from ...termsafe import one_line
 
         out = []
         if not self.orphan_dir.is_dir():
@@ -862,9 +900,12 @@ class LaneService:
                 st = _json.loads((d / "state.json").read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
-            left = sorted(set((st.get("pending") or {})) | set(st.get("blocked") or {}) | set(st.get("failed") or {}))
-            out.append({"tree": d.name, "folder": st.get("folder"), "run_id": st.get("run_id"), "agent_id": st.get("agent_id"), "count": len(left),
-                        "paths": left[:20], "since": d.stat().st_mtime})
+            items = self.change_items(st)
+            held = [x["path"] for x in items if x["held"]]
+            cut = [{**x, "path": one_line(x["path"], 300), **({"from": one_line(x["from"], 300)} if x.get("from") else {})} for x in items[:ORPHAN_SHOW]]
+            out.append({"tree": d.name, "folder": st.get("folder"), "root_id": st.get("root"), "run_id": st.get("run_id"), "agent_id": st.get("agent_id"),
+                        "task_id": self._task_of(st.get("run_id")), "count": len(items), "paths": [x["path"] for x in cut][:20], "items": cut,
+                        "held": len(held), "held_paths": [one_line(x, 300) for x in held[:ORPHAN_SHOW]], "since": d.stat().st_mtime})
         return out
 
     async def orphan(self, p: dict[str, Any]) -> dict[str, Any]:
@@ -884,17 +925,51 @@ class LaneService:
         wd.parked, wd.stopped_push, wd.read_only = False, None, False
         wd.failed = {k: v for k, v in wd.failed.items() if v == "hardlink"}
         wd.blocked = {}
-        for r in list(wd.pending):  # người bấm đẩy lại cây mồ côi = duyệt cả lô xoá đang giữ (nếu có)
-            wd.pending[r] = {**{k: v for k, v in wd.pending[r].items() if k != "held"}, "retry_at": 0,
-                             **({"approved": True} if wd.pending[r].get("held") else {})}
+        # "Đẩy lại" KHÔNG BAO GIỜ ngầm duyệt lô xoá đang giữ: lô đó chỉ đi qua Cho xoá / Không xoá (`filehub.resume`, nêu từng tệp)
+        for r in list(wd.pending):
+            wd.pending[r] = {**wd.pending[r], "retry_at": 0}
         await wd.flush(timeout_s=float(self.cfg("final_flush_s") or 60))
         left = wd.unpushed()
+        held = len(wd.held_deletes())
         if left:
             wd.persist_to(d / "state.json")
-            return {"tree": tree, "pushed": False, "left": left[:50], "code": wd.stopped_push or "pending"}
+            return {"tree": tree, "pushed": False, "left": left[:50], "held": held, "code": wd.stopped_push or ("mass_delete" if held else "pending")}
         self._report(wd)
         shutil.rmtree(d, ignore_errors=True)
-        return {"tree": tree, "pushed": True}
+        return {"tree": tree, "pushed": True, "held": 0}
+
+    async def _release_orphan(self, d: Path, *, discard: bool) -> int:
+        """Lô xoá đang giữ của một cây MỒ CÔI (run đã kết thúc) — cùng nghĩa như khi run còn chạy: Cho xoá = đẩy đúng các lệnh xoá đó;
+        Không xoá = bỏ các lệnh xoá (tệp ở lại Không gian số; cây mồ côi không còn agent nên không kéo về). Thay đổi khác giữ nguyên."""
+        from .workdir import Workdir
+
+        wd = Workdir.load(self, d / "state.json", path=d / "tree")
+        held = wd.held_deletes()
+        if not held:
+            return 0
+        if discard:
+            for r in held:
+                wd.pending.pop(r, None)
+        else:
+            wd.parked, wd.stopped_push, wd.read_only = False, None, False
+            for r in held:
+                wd.pending[r] = {**{k: v for k, v in wd.pending[r].items() if k != "held"}, "approved": True, "retry_at": 0}
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + float(self.cfg("final_flush_s") or 60)
+            todo = set(held)
+            while todo & set(wd.pending) and not wd.stopped_push and loop.time() < deadline:
+                await wd.push_pending(final=True, only=todo)
+                due = [wd.pending[r] for r in todo & set(wd.pending)]
+                if due:
+                    nxt = min(float(e.get("retry_at") or 0) for e in due) - time.time()
+                    await asyncio.sleep(min(max(0.05, nxt), 1.0))
+        if not wd.unpushed():
+            if not discard:
+                self._report(wd)
+            shutil.rmtree(d, ignore_errors=True)
+        else:
+            wd.persist_to(d / "state.json")
+        return len(held)
 
     async def release_deletes(self, root_id: str, *, discard: bool = False) -> dict[str, Any]:
         """CHỈ người (RPC `filehub.resume {root_id, discard?}`): lô xoá hàng loạt đang giữ của mọi cây trên gốc này → đẩy tiếp, hoặc bỏ
@@ -903,7 +978,11 @@ class LaneService:
         trees = [wd for wd in self.workdirs.values() if wd.root == str(root_id)]
         for wd in trees:
             n += await wd.release_deletes(discard=discard)
-        return {"root_id": root_id, "lane": True, "released" if not discard else "discarded": n, "trees": len(trees)}
+        # run đã kết thúc khi lô còn giữ → cây mồ côi: lô xoá vẫn chờ CÙNG quyết định (không đổi nghĩa thành "đẩy lại")
+        orphans = [o for o in self.orphans() if o.get("held") and str(o.get("root_id")) == str(root_id)]
+        for o in orphans:
+            n += await self._release_orphan(self.orphan_dir / str(o["tree"]), discard=discard)
+        return {"root_id": root_id, "lane": True, "released" if not discard else "discarded": n, "trees": len(trees) + len(orphans)}
 
     # ------------------------------------------------------------------ presence (C.6 `PUT /presence`): "cfharness · <agent> · đang sửa <tệp>"
     async def presence_tick(self, wd: Any) -> None:
@@ -1053,7 +1132,7 @@ class LaneService:
         if export_quiesced(self.hub):
             return
         now = time.time() if now is None else float(now)
-        ok_s = float(self.cfg("health_ok_s") or 300)
+        ok_s = float(self.cfg("health_ok_s") or 60)
         lo, hi = [float(x) for x in (list(self.cfg("health_retry_s") or [5, 300]) + [5, 300])[:2]]
         for name in list(self.servers()):
             if not self._key(name):

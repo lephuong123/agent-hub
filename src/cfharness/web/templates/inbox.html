@@ -7,7 +7,7 @@
   <a class="btn" href="/approvals">{{ m.icon('shield') }}Lịch sử duyệt</a>
 </div>
 {% set total = pend|length + q_open|length %}
-{% if not total and not blocked and not q_mgr %}
+{% if not total and not blocked and not q_mgr and not batches %}
 <section class="card">{{ m.empty("Agent đang tự làm — khi cần bạn duyệt hay trả lời, việc sẽ hiện ở đây (và qua Telegram nếu đã bật).", "check", "ok", "Không có gì cần bạn lúc này") }}</section>
 {% endif %}
 
@@ -20,6 +20,13 @@
 <div class="section-title"><h2>{{ m.icon('shield') }} Thao tác phá huỷ chờ duyệt <span class="pill danger">{{ pend|length }}</span></h2></div>
 <p class="muted small">Agent chỉ hỏi khi định làm thao tác có thể mất dữ liệu. Bạn vắng thì agent <b>chờ</b> — không bao giờ tự quyết. Cho phép = <b>một lần</b>, đúng thao tác đó.</p>
 <div class="need">{% for a in pend %}{{ m.approval_card(a, "/inbox") }}{% endfor %}</div>
+{% endif %}
+
+{% if batches %}
+<div class="section-title"><h2>{{ m.icon('alert') }} Xoá hàng loạt chờ bạn duyệt <span class="pill danger">{{ batches|length }}</span></h2></div>
+<p class="muted small">Agent xoá nhiều mục trên Không gian số cùng lúc — hub giữ lại, tệp còn nguyên tới khi bạn quyết. Cho xoá = vào thùng rác
+  (khôi phục được); Không xoá = giữ tệp, bỏ lệnh xoá của agent.</p>
+<section class="card">{% set hnext = "/inbox" %}{% for b in batches %}{% include "_held_batch.html" %}{% endfor %}</section>
 {% endif %}
 
 {% if q_mgr %}
@@ -36,7 +43,8 @@
     <td data-label="Task" class="title-cell"><a class="t" href="/tasks/{{ t.id }}">{{ t.title }}</a><span class="s id">{{ t.id }}</span></td>
     <td data-label="Lý do" class="small">{{ (t.block_reason or '—')|first(120) }}</td>
     <td data-label="Giao cho">{{ t.assignee_agent_id or t.team_id or '—' }}</td>
-    <td class="actions">{{ m.act("task_unblock", "Gỡ chặn", {"id": t.id}, "btn sm", next="/inbox", ic="refresh") }}</td>
+    <td class="actions">{% if held_task and held_task.get(t.id) %}<a class="btn sm" href="#held-{{ held_task[t.id] }}">{{ m.icon('alert') }}Xem lô xoá chờ duyệt</a>{% endif %}
+      {{ m.act("task_unblock", "Gỡ chặn", {"id": t.id}, "btn sm", next="/inbox", ic="refresh") }}</td>
   </tr>{% endfor %}
   </tbody></table>
 </section>

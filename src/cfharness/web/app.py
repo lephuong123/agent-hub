@@ -1027,8 +1027,16 @@ async def inbox_page(request: Request) -> Response:
     asked = {q.get("task_id") for q in qs}
     blocked = [t for t in blocked if t.get("status") == "blocked" and t["id"] not in asked]
     recent = [q for q in await questions(request, "answered") if q.get("answered_at")][:8]
+    from .filehub_pages import held_batches
+
+    try:  # lô xoá hàng loạt trên Không gian số đang chờ người (run đang chạy hoặc đã kết thúc) — Cho xoá / Không xoá ngay tại đây
+        batches = held_batches(await rpc(request, "filehub.lane_status"))
+    except RpcError:
+        batches = []
+    held_task = {t: b["root_id"] for b in batches for t in b["tasks"]}
     return await render(request, "inbox.html", {"nav": "inbox", "pend": pend, "q_open": [q for q in qs if q["status"] == "open"],
-                                                 "q_mgr": [q for q in qs if q["status"] == "with_manager"], "blocked": blocked, "recent": recent})
+                                                 "q_mgr": [q for q in qs if q["status"] == "with_manager"], "blocked": blocked, "recent": recent,
+                                                 "batches": batches, "held_task": held_task})
 
 
 async def approvals_page(request: Request) -> Response:

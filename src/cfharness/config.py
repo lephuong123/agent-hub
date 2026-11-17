@@ -722,7 +722,7 @@ DEFAULTS: dict[str, Any] = {
             # bỏ trống địa chỉ khi thiết lập → thử lần lượt (qltm 8223, cchc 8233); chỉ nhận cổng trả `hello` hợp lệ với khoá vừa dán
             "default_urls": ["http://127.0.0.1:8223", "http://127.0.0.1:8233"],
             # kiểm tra sức khoẻ nền (`hello`): đang ok → mỗi health_ok_s (đối soát gốc mới cấp / mất quyền); không ok → thử lại lùi dần
-            "health_ok_s": 300,
+            "health_ok_s": 60,  # một GET /hello mỗi phút: khoá bị thu hồi / Không gian số tắt thấy trong ≤ 1 phút
             "health_retry_s": [5, 300],
         },
     },

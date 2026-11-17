@@ -55,6 +55,12 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   hạn khoá theo ngày giờ máy + số ngày nguyên, nút "Thử kết nối", mọi thao tác quay về đúng thẻ. Hub tự kiểm tra cổng định kỳ (cả lúc không
   có run): "không kết nối được" tự về "đang hoạt động" khi Không gian số chạy lại. Lô xoá hàng loạt đang giữ liệt kê đường dẫn (50 mục đầu
   + "và N mục nữa") trên thẻ, trang xác nhận và tin Telegram/Slack.
+- Lô xoá hàng loạt đang giữ vẫn hiện "N mục xoá đang chờ duyệt" + "Cho xoá"/"Không xoá" (cùng nghĩa) sau khi run đã kết thúc, và có ở
+  trang "Cần bạn" (task bị chặn vì lô xoá có nút tới lô đó). Thay đổi còn kẹt sau run ghi rõ thao tác từng mục (xoá / ghi / di chuyển) + đường
+  dẫn; trang xác nhận nói thẳng "Xoá N tệp trên Không gian số …" / "Không xoá — giữ N tệp, bỏ thay đổi của agent"; "Làm lại trên Không gian
+  số" không bao giờ ngầm xoá lô đang giữ. Ô địa chỉ "Nâng cao" để trống (tự thử 8223 rồi 8233). Cổng được kiểm lại mỗi phút (khoá bị thu hồi
+  / Không gian số tắt thấy trong ≤ 1 phút), thẻ ghi "kiểm tra lúc …". Tool đọc của điều phối viên (`filehub_list`…) không còn ghi nhật ký như
+  thao tác ghi; điều phối viên thấy lý do task đang chờ bằng chữ rõ (vd chờ slot chạy) thay vì mã thô.
 
 
 ### Cập nhật

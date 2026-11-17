@@ -482,6 +482,8 @@ FS_WRITE_TOOLS: dict[str, dict[str, Any]] = {
 FS_TOOLS = {**FS_READ_TOOLS, **FS_WRITE_TOOLS}
 TOOLS.update(FS_TOOLS)
 MANAGER_READ_TOOLS = frozenset(n for n, t in MANAGER_TOOLS.items() if (t.get("annotations") or {}).get("readOnlyHint"))
+# Mọi tool đọc của hub-self (mọi vai trò) — ToolWriteWatcher không audit chúng là `tool.write` (hub-self không nằm trong registry MCP)
+READ_ONLY_TOOLS = frozenset(n for n, t in {**TOOLS, **MANAGER_TOOLS}.items() if (t.get("annotations") or {}).get("readOnlyHint"))
 _KNOW = ("skills_list", "skill_view")
 ROLE_TOOLS = {
     # hardening H-14 (FR-MS-08): memory_search cho mọi vai trò trong task; graph memory: memory_recall (đọc) mọi vai trò trừ learning

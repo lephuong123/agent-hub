@@ -388,9 +388,20 @@ Sửa theo nghiệm thu UI + e2e (2026-11-17, nhánh `fix/lane-onboarding`, `tes
   liệt kê 10 mục đầu.
 - **B9/B10/B12**: `lane.STATE_TEXT` (nhãn + việc cần làm) trong `lane_status.servers[].label|hint`, `expiry.date` (giờ máy, dd/mm/yyyy) +
   `expiry.days` (nguyên); thẻ không hiện hạn khi `auth_failed`. `LaneService.health_check` (vòng nền `_health_loop`, `lane.start()`):
-  `hello` mỗi `health_ok_s` (300) khi ổn, lùi `health_retry_s` [5, 300] khi lỗi — `offline` tự về `ok` không cần run. Nút "Thử kết nối"
+  `hello` mỗi `health_ok_s` (60; trước là 300) khi ổn, lùi `health_retry_s` [5, 300] khi lỗi — `offline` tự về `ok` không cần run. Nút "Thử kết nối"
   (ACTIONS `filehub_lane_test`), thao tác lane quay về `#filehub-lane`, bỏ câu "Nhập lại giá trị ở trang Cài đặt" ở bước 1 khi thao tác có
   `reenter` (khoá hỏi ở bước 2).
+
+Sửa theo nghiệm thu lần 2 (2026-11-17, `tests/test_lane_accept_fixes.py`, mỗi ca đỏ trước khi sửa):
+- Lô xoá đang giữ KHÔNG đổi nghĩa khi run kết thúc: `orphans()[]` có `root_id`, `task_id`, `held`, `held_paths`, `items[] {path, op, label, from?,
+  held}` (`LaneService.change_items`, `OP_TEXT` xoá/ghi/di chuyển…); `filehub.resume {root_id, discard?}` áp cả cây mồ côi (`_release_orphan`:
+  Cho xoá = đẩy ĐÚNG các lệnh xoá; Không xoá = bỏ lệnh xoá, tệp ở lại). `lane_orphan push` KHÔNG còn ngầm duyệt lô xoá (trả `held`).
+  Web: lô xoá gộp theo gốc (`filehub_pages.held_batches`, `_held_batch.html`) ở thẻ + "Cần bạn" (task bị chặn → link `#held-<gốc>`); trang xác
+  nhận nêu thao tác từng mục (`_orphan_preview`) và số tệp ("Xoá N tệp trên Không gian số" / "Không xoá — giữ N tệp, bỏ thay đổi của agent").
+- Ô địa chỉ "Nâng cao" để trống (placeholder) → tự thử `default_urls`. Thẻ ghi "kiểm tra lúc HH:MM:SS" (`servers[].checked`).
+- `ToolWriteWatcher` bỏ qua tool đọc của hub-self (`hub_self.READ_ONLY_TOOLS`) — trước đây mọi tool hub-self (cả `filehub_list`) bị audit `tool.write`.
+- Điều phối viên: `open_tasks[]/task_list[]/task_get` có `wait` (câu tiếng Anh từ `wait_reason`, `manager/ops.wait_text`) — `rate_limit` nghĩa là
+  "giảm số run song song vì gần hạn mức", không phải lỗi rate limit.
 
 Việc còn lại:
 - Nghiệm thu thật trên qltm sau khi K1–K4 lên (plan §7 H4); `tested` với claude thật (steer + Write/Edit trong cây).

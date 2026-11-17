@@ -1,0 +1,10 @@
+{#- Một lô xoá hàng loạt đang chờ người (theo gốc) — dùng ở thẻ "Cổng cfharness" và trang "Cần bạn". Biến: `b` (web/filehub_pages.held_batches),
+    `hnext` (trang quay về). Đường dẫn là dữ liệu từ Không gian số/agent → autoescape. Cho xoá / Không xoá = RPC `filehub.resume` (CHỈ người). -#}
+{% import "_macros.html" as m with context %}
+<div class="small" id="held-{{ b.root_id }}"><p><span class="pill warn">{{ m.icon('alert') }}{{ b.count }} mục xoá đang chờ duyệt</span>
+  agent {{ b.agents|join(', ') or '?' }} ({{ b.folder }}) xoá nhiều mục cùng lúc{% if b.ended %} — run đã kết thúc, lô xoá vẫn chờ bạn quyết{% endif %}.
+  Tệp vẫn còn trên Không gian số tới khi bạn quyết.
+  {{ m.act("filehub_lane_deletes", "Cho xoá", {"root_id": b.root_id, "n": b.count}, "btn sm", next=hnext) }}
+  {{ m.act("filehub_lane_deletes", "Không xoá", {"root_id": b.root_id, "n": b.count, "discard": "1"}, "btn ghost sm", next=hnext) }}</p>
+  {% if b.paths %}<ul class="small">{% for p in b.paths %}<li>xoá <code>{{ p }}</code></li>{% endfor %}</ul>
+    {% if b.more %}<p class="small muted">… và {{ b.more }} mục nữa</p>{% endif %}{% endif %}</div>
