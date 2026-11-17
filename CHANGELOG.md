@@ -10,6 +10,11 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Lệnh mới
+- **`cfharness guard integrity status|accept`**: cảnh báo "môi trường Python của hub bị thay đổi" (vd sau khi cài lại cfharness) bảo chạy
+  `cfharness guard integrity accept` nhưng CLI chưa có lệnh này. Giờ `status` xem lần kiểm gần nhất và các lệch gần đây, `accept` (chỉ
+  người) nhận trạng thái hiện tại làm bản chuẩn, gồm cả `.pth`/`sitecustomize`.
+
 ---
 
 ## v0.2.15 — 2026-11-17

@@ -76,3 +76,17 @@ def test_cli_guard_and_approvals(daemon, capsys):
     assert code == 1 and "gõ lại id" in err
     code, out, _ = cli(capsys, "agent", "purge", "x", "--confirm", "x")
     assert code == 0 and "đã purge" in out
+
+
+def test_cli_guard_integrity_status_and_accept(daemon, capsys):
+    """`cfharness guard integrity accept` — lệnh mà cảnh báo integrity gợi ý phải tồn tại trong CLI."""
+    code, out, _ = cli(capsys, "guard", "integrity", "status", "--json")
+    st = json.loads(out)
+    assert code == 0 and "baseline" in st and "last_check" in st
+    code, out, _ = cli(capsys, "guard", "integrity", "status")
+    assert code == 0 and "bản chuẩn:" in out
+    code, out, _ = cli(capsys, "guard", "integrity", "accept", "--json")
+    r = json.loads(out)
+    assert code == 0 and r["ok"] and r["entries"] >= 1
+    code, out, _ = cli(capsys, "guard", "integrity", "accept")
+    assert code == 0 and "đã nhận trạng thái hiện tại" in out
