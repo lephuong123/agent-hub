@@ -10,10 +10,20 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+---
+
+## v0.2.15 — 2026-11-17
+
+Bản sửa lỗi: daemon trên Windows không còn bị "điếc" sau khi một client ngắt kết nối giữa chừng (#124).
+
 ### Sửa lỗi
 - **Daemon sống mà "điếc" trên Windows — `cfharness chat`/web/CLI không gửi được gì, báo "daemon không chạy"**: khi một client đóng kết
   nối giữa chừng, `accept` lỗi (WinError 64) và asyncio đóng hẳn socket nghe của daemon; tiến trình vẫn chạy nhưng không nhận kết nối
   mới cho tới khi bị giết. Daemon giờ kiểm socket nghe mỗi 2 giây và tự mở lại (ghi cổng mới vào `hub.sock`), client nối lại bình thường (#124).
+
+### Lưu ý khi cập nhật
+- Trên Windows, dừng daemon và đóng mọi cửa sổ `cfharness` (TUI, `chat`, `web`) trước khi `uv tool install --force`; nếu còn
+  `cfharness.exe` đang chạy, uv báo `Access is denied` khi xoá thư mục `Scripts` và cập nhật thất bại.
 
 ---
 
