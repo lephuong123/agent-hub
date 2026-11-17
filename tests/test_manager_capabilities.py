@@ -66,7 +66,7 @@ def _agent(d, aid: str, **tp) -> None:
 # ------------------------------------------------------------------ strict mặc định = hành vi cũ
 def test_resolve_defaults_and_fail_closed():
     s = resolve_capabilities(None)
-    assert s["profile"] == "strict" and s["tools"] == {"Read", "Grep", "Glob"} and s["mcp"] == "none" and s["web"] is False
+    assert s["profile"] == "strict" and s["tools"] == {"Read", "Grep", "Glob"} and s["mcp"] == "read_only_trusted" and s["web"] is False
     h = resolve_capabilities({"profile": "hermes"})
     assert {"Bash", "Write", "Edit", "WebFetch", "WebSearch"} <= h["tools"] and h["mcp"] == "read_only_trusted"
     assert "Task" not in h["tools"] and "Agent" not in h["tools"]
@@ -95,10 +95,18 @@ async def test_strict_default_keeps_mgr8(d):
     _agent(d, "webby", tools=["Read", "WebFetch"])
     with pytest.raises(HubError, match="vượt|chỉ cho"):
         await rpc(d, "manager.set", {"agent_id": "webby"})
+    # strict mặc định = MCP trusted CHỈ ĐỌC: MCP untrusted vẫn chặn, trusted được; `--mcp none` tắt hẳn
+    _mcp(d, "shady", "untrusted")
+    _agent(d, "mcpu", tools=["Read"], mcp_servers=["shady"])
+    with pytest.raises(HubError, match="untrusted"):
+        await rpc(d, "manager.set", {"agent_id": "mcpu"})
     _mcp(d, "docs", "trusted")
     _agent(d, "mcpy", tools=["Read"], mcp_servers=["docs"])
-    with pytest.raises(HubError, match="MCP"):
+    assert d.hub.manager.perms.manager_config_problem(d.hub.store.get_agent("mcpy")) is None
+    d.hub.config.set("manager.capabilities.mcp", "none")
+    with pytest.raises(HubError, match="không cho MCP"):
         await rpc(d, "manager.set", {"agent_id": "mcpy"})
+    d.hub.config.set("manager.capabilities.mcp", None)
     _agent(d, "ro", tools=["Read", "Grep", "Glob"])
     await rpc(d, "manager.set", {"agent_id": "ro"})
     info = await rpc(d, "manager.capabilities")

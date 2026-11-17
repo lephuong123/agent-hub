@@ -10,6 +10,11 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Điều phối viên
+- Khung quyền mặc định `strict` nay cho dùng MCP **trusted ở chế độ chỉ đọc** (`mcp: read_only_trusted`): điều phối viên gắn MCP
+  đã đánh dấu trusted không còn bị chặn "vượt khung" mà không phải chạy `cfharness manager capabilities set --mcp read_only_trusted`.
+  Tool MCP ghi vẫn bị chặn tĩnh, MCP untrusted vẫn bị từ chối; muốn tắt hẳn: `cfharness manager capabilities set --mcp none`.
+
 ### MCP server
 - `cfharness mcp add|edit <tên> --url … --oauth …`: cờ đặt SAU tên được đọc đúng — trước đây bị lưu lặng lẽ thành lệnh stdio
   (`--transport …`). Lệnh stdio vẫn viết sau `--` (#140).

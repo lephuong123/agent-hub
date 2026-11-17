@@ -56,7 +56,9 @@ RATE_LIMITS = {
 # §9 (M7-core.md): khung quyền của điều phối viên — NGƯỜI đặt ở `manager.capabilities` (nhánh `manager` ∈ integrity.SECURITY_KEYS,
 # `config.set` ∈ HUMAN_ONLY). Tool ngoài CAP_TOOLS_MAX không bao giờ được (Task/Agent = subagent, có thể mang permissionMode riêng).
 CAP_PROFILES: dict[str, dict[str, Any]] = {
-    "strict": {"tools": ["Read", "Grep", "Glob"], "mcp": "none", "web": False},
+    # strict mặc định cho MCP trusted CHỈ ĐỌC (tool đã probe không readOnlyHint → --disallowedTools; chưa probe → hook guard giữ chờ người):
+    # agent điều phối viên gắn MCP trusted chạy được ngay, không phải `capabilities set --mcp`. `--mcp none` = tắt hẳn.
+    "strict": {"tools": ["Read", "Grep", "Glob"], "mcp": "read_only_trusted", "web": False},
     "hermes": {"tools": ["Bash", "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Grep", "Glob", "TodoWrite"],
                "mcp": "read_only_trusted", "web": True},
 }
