@@ -711,7 +711,7 @@ DEFAULTS: dict[str, Any] = {
             "request_timeout_s": 60,
             # PUT nội dung: server quét virus ĐỒNG BỘ (chờ máy quét tới 300 s) → timeout ghi phải dài hơn, không thì hub bỏ cuộc rồi gửi lại
             # (cùng Idempotency-Key nên vẫn an toàn, nhưng chậm). Lệnh ghi khác dùng request_timeout_s.
-            "write_timeout_s": 330,
+            "write_timeout_s": 360,  # §C.6: client ≥ 360 s
             # chặn xoá hàng loạt: một run xoá nhiều hơn số tệp này (cộng dồn từ lần duyệt gần nhất) → GIỮ mọi lệnh xoá, event filehub.blocked
             # {reason: mass_delete}, chờ NGƯỜI `cfharness filehub resume --root <id>` (đẩy tiếp) hoặc `--discard` (không xoá, kéo tệp về lại)
             "max_delete_batch": 20,

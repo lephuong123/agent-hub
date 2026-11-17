@@ -51,9 +51,11 @@ ERROR_TEXT = {
     "root_files_not_allowed": "không được đặt tệp ngay ở gốc workspace", "infected": "tệp bị phát hiện mã độc (đã cách ly)",
     "file_locked": "tệp đang bị khoá trên Không gian số", "rate_limited": "quá nhiều yêu cầu", "too_many_writes": "quá nhiều lệnh ghi đồng thời",
     "scan_unavailable": "máy quét virus tạm thời không chạy", "storage_full": "hết dung lượng", "offline": "không kết nối được cổng",
+    "not_empty": "thư mục còn mục (kể cả mục agent không thấy) — chỉ xoá được thư mục rỗng",
+    "hidden_content": "thư mục có mục agent không thấy — không di chuyển/đổi tên được", "in_progress": "lệnh cùng khoá đang chạy",
     "bad_response": "phản hồi không hợp lệ", "version_mismatch": "phiên bản giao thức khác", "not_local_url": "URL cổng phải là loopback",
 }
-RETRYABLE = frozenset({"file_locked", "rate_limited", "too_many_writes", "scan_unavailable", "offline"})
+RETRYABLE = frozenset({"file_locked", "rate_limited", "too_many_writes", "scan_unavailable", "offline", "in_progress"})
 
 
 class LaneError(HubError):

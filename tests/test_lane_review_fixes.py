@@ -230,7 +230,7 @@ async def test_retry_after_timeout_reuses_idempotency_key(env):
 async def test_write_timeout_longer_than_server_scan(env):
     d, s, lane = env
     d.hub.config.set("filehub.lane.request_timeout_s", 0.4)  # đọc/stat ngắn — ghi dùng write_timeout_s (mặc định > chờ quét 300 s)
-    assert float(d.hub.config.get("filehub.lane.write_timeout_s")) > 300
+    assert float(d.hub.config.get("filehub.lane.write_timeout_s")) >= 360  # §C.6: server chờ quét ≤ 300 s → client ≥ 360 s
     rid, cwd = await held(d, s)
     lane.put_delay["Báo cáo/yeu-cau.md"] = 0.9
     (cwd / "yeu-cau.md").write_text("agent sửa\n")
@@ -366,3 +366,78 @@ def test_conflict_name_unique(tmp_path):
     taken = {"a (cfharness w1 1200).md"}
     n = wdmod.conflict_name("a.md", "w1", taken=lambda x: x in taken, hhmm="1200")
     assert n == "a (cfharness w1 1200 2).md"
+
+
+# ---------------------------------------------------------------- §C cập nhật (phía KGS 2026-11-17)
+async def test_folder_delete_pushes_children_first(env):
+    """Server chỉ xoá thư mục RỖNG (`409 not_empty`) → hub xoá tệp trước, thư mục sau (cả quét lẫn tool fs_delete)."""
+    d, s, lane = env
+    for p in ("Báo cáo/td/a.md", "Báo cáo/td/con/b.md", "Báo cáo/tool/x.md", "Báo cáo/tool/sub/y.md"):
+        lane.human_write(p, "x\n")
+    rid, cwd = await held(d, s)
+    shutil.rmtree(cwd / "td")
+    await until(lambda: "Báo cáo/td" not in lane.root().items)
+    assert not [k for k in lane.root().items if k.startswith("Báo cáo/td")]
+    dels = [r["query"]["path"] for r in lane.requests if r["method"] == "DELETE" and "/item" in r["path"]]
+    assert dels.index("Báo cáo/td/a.md") < dels.index("Báo cáo/td") and dels.index("Báo cáo/td/con") < dels.index("Báo cáo/td")
+    assert not [r for r in lane.requests if r.get("code") == "not_empty"]
+    r = await fsop(d, rid)("fs_delete", path="tool")
+    assert r["trashed"] and not [k for k in lane.root().items if k.startswith("Báo cáo/tool")] and not (cwd / "tool").exists()
+    await finish(d, rid)
+
+
+async def test_rmdir_not_empty_relists_restores_and_steers(env):
+    """Thư mục còn mục hub chưa thấy (vd người vừa thêm, khung chưa tới) → `409 not_empty`: không ép, liệt kê lại, kéo về, báo agent."""
+    from fake_kgs_lane import Item
+
+    d, s, lane = env
+    lane.human_write("Báo cáo/td/a.md", "a\n")
+    rid, cwd = await held(d, s)
+    lane.root().items["Báo cáo/td/moi.md"] = Item("Báo cáo/td/moi.md", "file", "người vừa thêm\n".encode())  # không phát khung
+    shutil.rmtree(cwd / "td")
+    await until(lambda: any("td" in x and "still contains" in x for x in steers(d, rid)))
+    await until(lambda: (cwd / "td" / "moi.md").exists())
+    assert (cwd / "td" / "moi.md").read_text() == "người vừa thêm\n"
+    assert lane.file("Báo cáo/td/moi.md") == "người vừa thêm\n".encode() and lane.file("Báo cáo/td/a.md") is None
+    await asyncio.sleep(0.4)
+    assert len([r for r in lane.requests if r.get("code") == "not_empty"]) == 1  # không thử lại dồn dập
+    await finish(d, rid)
+    assert "Báo cáo/td" in lane.root().items
+
+
+async def test_folder_move_hidden_content_or_locked_errors_to_agent(env):
+    d, s, lane = env
+    lane.human_write("Báo cáo/td/a.md", "a\n")
+    lane.human_write("Báo cáo/td/.env", "BÍ\n")
+    lane.hidden.add("Báo cáo/td/.env")
+    lane.human_write("Báo cáo/tk/b.md", "b\n")
+    lane.lock("Báo cáo/tk/b.md")
+    rid, cwd = await held(d, s)
+    fs = fsop(d, rid)
+    with pytest.raises(HubError, match="hidden_content"):
+        await fs("fs_move", **{"from": "td", "to": "td2"})
+    with pytest.raises(HubError, match="file_locked"):
+        await fs("fs_move", **{"from": "tk", "to": "tk2"})
+    assert (cwd / "td" / "a.md").exists() and not (cwd / "td2").exists() and (cwd / "tk" / "b.md").exists()
+    assert "Báo cáo/td/a.md" in lane.root().items and "Báo cáo/tk/b.md" in lane.root().items
+    await finish(d, rid)
+
+
+async def test_in_progress_retries_with_same_key(env):
+    d, s, lane = env
+    d.hub.config.set("filehub.lane.request_timeout_s", 0.4)
+    d.hub.config.set("filehub.lane.write_timeout_s", 0.4)
+    rid, cwd = await held(d, s)
+    lane.put_delay["Báo cáo/yeu-cau.md"] = 2.0  # quét lâu: lần gửi lại khi lần đầu chưa xong → 409 in_progress
+    (cwd / "yeu-cau.md").write_text("agent sửa\n")
+    await until(lambda: lane.file("Báo cáo/yeu-cau.md") == "agent sửa\n".encode(), timeout=10)
+    await until(lambda: any(r.get("code") is None and r.get("status") == 200 for r in lane.requests
+                            if r["method"] == "PUT" and r["query"].get("path") == "Báo cáo/yeu-cau.md"), timeout=10)
+    ps = [r for r in lane.requests if r["method"] == "PUT" and r["query"].get("path") == "Báo cáo/yeu-cau.md"]
+    assert any(p.get("code") == "in_progress" for p in ps) and len({p["headers"]["Idempotency-Key"] for p in ps}) == 1
+    assert not copies(lane, "yeu-cau") and not any("Conflict" in x for x in steers(d, rid))
+    wd = d.hub.filehub.lane.workdir_of(rid)
+    await until(lambda: "yeu-cau.md" not in wd.pending)
+    assert "yeu-cau.md" not in wd.failed
+    assert wd.base["yeu-cau.md"]["version_id"] == lane.root().items["Báo cáo/yeu-cau.md"].versions[0]["version_id"]
+    await finish(d, rid)

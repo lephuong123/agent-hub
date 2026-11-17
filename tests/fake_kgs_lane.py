@@ -7,6 +7,9 @@ API cho test: `human_write`, `human_delete`, `human_move`, `lock`, `unlock`, `re
 `fail_next(op, status, code, **extra)`, `requests` (nhật ký, header Authorization đã che), `presence`, `on_content` (hook gọi trong lúc
 phục vụ `GET content` — mô phỏng người lưu bản mới giữa tải nội dung và `stat`), `put_delay[path] = giây` (MỘT lần: PUT content chốt
 phiên bản + lưu Idempotency-Key rồi mới trả sau `giây` — mô phỏng quét virus lâu hơn timeout của client).
+§C (bản cập nhật 2026-11-17): xoá thư mục CHỈ khi rỗng (`409 not_empty`, kể cả mục vô hình); di chuyển thư mục có mục vô hình với agent
+(`hidden`) → `403 hidden_content`, có tệp đang khoá → `423`; cùng Idempotency-Key khi lần đầu CHƯA xong → `409 in_progress {retry_after}`
+(`put_delay` = thời gian quét TRƯỚC khi chốt). `hidden` = tập đường dẫn agent không thấy (list/stat bỏ qua, không phát khung).
 """
 
 from __future__ import annotations
@@ -116,6 +119,8 @@ class FakeLane:
         self.page_limit = 2000
         self.on_content: Any = None  # callable(path) — chạy trong lúc phục vụ GET content (sau khi đã chọn phiên bản trả về)
         self.put_delay: dict[str, float] = {}
+        self.hidden: set[str] = set()
+        self.inflight: set[str] = set()
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -153,6 +158,7 @@ class FakeLane:
                 if u.path == "/lane/v1/events" and method == "GET":
                     return outer._events(self, q, hdr)
                 code, res, extra_h, raw = outer.dispatch(method, u.path, q, hdr, body)
+                rec["status"], rec["code"] = code, (res or {}).get("code") if isinstance(res, dict) else None
                 self._send(code, res, extra_h, raw)
 
             def do_GET(self) -> None:  # noqa: N802
@@ -335,6 +341,8 @@ class FakeLane:
         if write and idem and idem in self.idem:
             st, res = self.idem[idem]
             return st, res, None, None
+        if write and idem and idem in self.inflight:
+            return 409, {"code": "in_progress", "retry_after": 0.3}, None, None
         if tail == "presence":
             return self._presence(method, q, hdr, body)
         if not tail.startswith("roots/"):
@@ -343,12 +351,17 @@ class FakeLane:
         root = self.roots.get(rid)
         if root is None:
             return 403, {"code": "root_not_granted"}, None, None
-        with self.cond:
-            st, res, h, raw = self._root_cmd(method, cmd, root, q, hdr, body)
-        if write and idem and st < 500 and st not in (423, 429):
-            self.idem[idem] = (st, res)
-        if method == "PUT" and cmd == "content" and q.get("path") in self.put_delay:
-            time.sleep(self.put_delay.pop(q["path"]))  # đã chốt + lưu khoá idempotency → client hết giờ chờ, lần gửi lại nhận đúng phản hồi này
+        if write and idem:
+            self.inflight.add(idem)
+        try:
+            if method == "PUT" and cmd == "content" and q.get("path") in self.put_delay:
+                time.sleep(self.put_delay.pop(q["path"]))  # "quét virus" TRƯỚC khi chốt — lần gửi lại cùng khoá lúc này → in_progress
+            with self.cond:
+                st, res, h, raw = self._root_cmd(method, cmd, root, q, hdr, body)
+            if write and idem and st < 500 and st not in (423, 429):
+                self.idem[idem] = (st, res)
+        finally:
+            self.inflight.discard(idem or "")
         return st, res, h, raw
 
     def _root_cmd(self, method: str, cmd: str, root: Root, q: dict[str, str], hdr: dict[str, str], body: bytes) -> tuple[int, Any, dict[str, str] | None, bytes | None]:
@@ -359,7 +372,7 @@ class FakeLane:
             return 422, {"code": "invalid_name"}, None, None
         if method == "GET" and cmd == "stat":
             it = root.items.get(p)
-            if it is None:
+            if it is None or p in self.hidden:
                 return 404, {"code": "not_found"}, None, None
             return 200, {"item": it.to_dict(self._parent_id(root, p))}, None, None
         if method == "GET" and cmd == "list":
@@ -372,7 +385,7 @@ class FakeLane:
                 pre = p + "/" if p else ""
                 rec = q.get("recursive") == "1"
                 rest = [it.to_dict(self._parent_id(root, k)) for k, it in sorted(root.items.items())
-                        if k.startswith(pre) and k != p and (rec or "/" not in k[len(pre):])]
+                        if k.startswith(pre) and k != p and (rec or "/" not in k[len(pre):]) and k not in self.hidden]
                 cur = enc_cursor(self.seq)
             lim = min(int(q.get("limit") or 2000), self.page_limit)
             items, rest = rest[:lim], rest[lim:]
@@ -469,6 +482,13 @@ class FakeLane:
                     return 409, {"code": "conflict", "current": it.to_dict(self._parent_id(root, src))}, None, None
                 if dst in root.items:
                     return 409, {"code": "name_conflict", "current": root.items[dst].to_dict(self._parent_id(root, dst))}, None, None
+                if it.type == "folder":
+                    sub = [k for k in root.items if k.startswith(src + "/")]
+                    if any(k in self.hidden for k in sub):
+                        return 403, {"code": "hidden_content"}, None, None
+                    lk = [root.items[k] for k in sub if root.items[k].locked_until and root.items[k].locked_until > time.time()]
+                    if lk:
+                        return 423, {"code": "file_locked", "until": datetime.fromtimestamp(lk[0].locked_until, timezone.utc).isoformat()}, None, None
                 self._ensure_parents(root, dst, "cfharness")
                 for k in [k for k in list(root.items) if k == src or k.startswith(src + "/")]:
                     x = root.items.pop(k)
@@ -501,6 +521,8 @@ class FakeLane:
                 return 409, {"code": "conflict", "current": it.to_dict(self._parent_id(root, p))}, None, None
             if it.locked_until and it.locked_until > time.time():
                 return 423, {"code": "file_locked", "until": datetime.fromtimestamp(it.locked_until, timezone.utc).isoformat()}, None, None
+            if it.type == "folder" and any(k.startswith(p + "/") for k in root.items):
+                return 409, {"code": "not_empty"}, None, None  # thư mục chỉ xoá khi rỗng (kể cả mục vô hình với agent)
             d = it.to_dict(self._parent_id(root, p))
             for k in [k for k in list(root.items) if k == p or k.startswith(p + "/")]:
                 root.items.pop(k)

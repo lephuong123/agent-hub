@@ -1003,6 +1003,16 @@ class LaneService:
                 rel = rel_arg(wd, args.get("path"), allow_root=False)
                 wd.fs.check(rel, final_link_ok=True)  # TRƯỚC lệnh trên server (như fs_move); chính mục là symlink → chỉ gỡ symlink
                 st = await c.stat(wd.root, wd.remote(rel))
+                if st.get("type") == "folder":
+                    # §C.6: server chỉ xoá thư mục RỖNG → tệp trước, thư mục con từ dưới lên, cuối cùng chính nó. Còn mục agent không thấy
+                    # → `not_empty`: dừng, báo agent (đã xoá phần thấy được — vào thùng rác, khôi phục được)
+                    items, _cur, cut = await c.list_all(wd.root, wd.remote(rel), recursive=True, max_items=int(self.cfg("tree_max_files") or 20000))
+                    if cut:
+                        raise HubError("thư mục quá nhiều mục — xoá từng thư mục con")
+                    kids = sorted((x for x in items if x.get("path")), key=lambda x: (x.get("type") == "folder", -str(x["path"]).count("/")))
+                    for x in kids:
+                        await c.delete(wd.root, str(x["path"]), if_rev=int(x.get("rev") or 0) or None, agent=wd.agent_id, run=wd.run_id)
+                    st = await c.stat(wd.root, wd.remote(rel))
                 res = await c.delete(wd.root, wd.remote(rel), if_rev=int(st.get("rev") or 0) or None, agent=wd.agent_id, run=wd.run_id)
                 wd.fs.remove(rel)
                 for k in [k for k in list(wd.base) if k == rel or k.startswith(rel + "/")]:

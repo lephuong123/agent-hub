@@ -62,6 +62,8 @@ STEER_LAZY = ("[cfharness] {rel} is a large file that was not downloaded (empty 
               "was kept as {rel2}. Call fs_pull on {rel} first, then edit it.")
 STEER_MASS_DELETE = ("[cfharness] You deleted {n} items in the shared folder at once. Deletions are ON HOLD until a person approves them; the "
                      "files are still on Không gian số. Do not recreate them.")
+STEER_RMDIR_NOT_EMPTY = ("[cfharness] Could not delete folder {rel} on Không gian số: it still contains items (new, or not visible to you). "
+                         "It was kept and its visible content is back in your work tree. Do not force it.")
 STEER_DELETE_REFUSED = ("[cfharness] A person did NOT approve deleting {n} items in the shared folder; they were restored in your work tree. "
                         "Do not delete them again unless asked.")
 LAZY_NOTE = "large files listed but not downloaded (empty placeholders); call fs_pull before using them"
@@ -779,6 +781,8 @@ class Workdir:
     def _due(self, rel: str, e: dict[str, Any], now: float, final: bool) -> bool:
         if e.get("op") == "move_src" or e.get("held"):
             return False
+        if e.get("op") == "rmdir" and any(k.startswith(rel + "/") for k in self.pending):
+            return False  # §C.6: server chỉ xoá thư mục RỖNG → mục con (xoá/di chuyển đi/đang giữ) phải xong trước
         if float(e.get("retry_at") or 0) > now:
             return False
         if final:
@@ -975,7 +979,7 @@ class Workdir:
             self.pending[rel] = {**self.pending[rel], "idem": idem, "idem_sha": sha}
         item = await c.write(self.root, self.remote(rel), data, agent=self.agent_id, run=self.run_id,
                              if_match=str(b["version_id"]) if is_file else None, create=not is_file, parents=True, idem=idem,
-                             timeout=float(self.svc.cfg("write_timeout_s") or 330))
+                             timeout=float(self.svc.cfg("write_timeout_s") or 360))
         self._pushed(rel, item, sha, is_file=bool(is_file), e=e)
 
     def _pushed(self, rel: str, item: dict[str, Any], sha: str, *, is_file: bool, e: dict[str, Any]) -> None:
@@ -1012,6 +1016,9 @@ class Workdir:
         except LaneError as ex:
             if ex.lane_code == "not_found":
                 pass
+            elif ex.lane_code == "not_empty" and folder:
+                await self._rmdir_not_empty(rel)
+                return
             elif ex.lane_code == "conflict" and not folder:
                 # người đã sửa tệp sau base → KHÔNG xoá bản của người: kéo bản đó về lại cây + báo agent
                 self.pending.pop(rel, None)
@@ -1025,6 +1032,37 @@ class Workdir:
         self._op("deleted", rel)
         self.pending.pop(rel, None)
         self.del_count += 1
+
+    async def _rmdir_not_empty(self, rel: str) -> None:
+        """`409 not_empty` khi xoá thư mục: có mục hub chưa thấy (người vừa thêm, khung chưa tới) hoặc mục vô hình với agent → KHÔNG ép:
+        giữ thư mục, liệt kê lại cây con, kéo mục mới về, báo agent."""
+        self.pending.pop(rel, None)
+        self.fs.mkdirs(rel)
+        try:
+            items, _cur, _cut = await self.svc.client(self.server).list_all(self.root, self.remote(rel), recursive=True,
+                                                                           max_items=int(self.svc.cfg("tree_max_files") or 20000))
+        except LaneError as e:
+            log.warning("lane: liệt kê lại %s lỗi: %s", one_line(rel, 200), e)
+            items = []
+        for it in sorted(items, key=lambda x: str(x.get("path") or "")):
+            r = self.rel_of(str(it.get("path") or ""))
+            if not r:
+                continue
+            if self.ignored_item(r, it.get("type")):
+                self.hidden.add(r)
+                continue
+            if r in self.base or r in self.pending:
+                continue
+            try:
+                if it.get("type") == "folder":
+                    self.fs.mkdirs(r)
+                    self.base[r] = self._base_of(it)
+                elif it.get("type") == "file":
+                    await self._download(r, it)
+            except (LaneError, HubError, OSError) as e:
+                log.warning("lane: kéo lại %s lỗi: %s", one_line(r, 200), e)
+        self.steered.discard(f"rmdir:{rel}")
+        await self.steer(f"rmdir:{rel}", STEER_RMDIR_NOT_EMPTY.format(rel=one_line(rel, 300)))
 
     async def _push_move(self, src: str, dst: str) -> None:
         b = self.base.get(src)
@@ -1083,7 +1121,8 @@ class Workdir:
             self.pending[rel] = {**e, "retry_at": min(t, now + 60) if t else now + 60, "why": "file_locked"}
             await self.steer(f"lock:{rel}", STEER_LOCKED.format(rel=one_line(rel, 300)))
             return
-        if code in ("rate_limited", "too_many_writes", "scan_unavailable", "offline"):
+        if code in ("rate_limited", "too_many_writes", "scan_unavailable", "offline", "in_progress"):
+            # in_progress (§C.6): lần gửi trước CÙNG khoá chưa xong → chờ retry_after rồi gửi lại CÙNG khoá (idem giữ trong mục hàng đợi)
             n = int(e.get("tries") or 0) + 1
             wait = ex.retry_after if ex.retry_after is not None else min(30.0, 0.5 * (2 ** n))
             self.pending[rel] = {**e, "retry_at": now + wait, "tries": n, "why": code}

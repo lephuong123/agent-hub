@@ -337,7 +337,7 @@ Sửa theo review (2026-11-17, `tests/test_lane_review_fixes.py` — mỗi ca đ
   metadata không khớp ETag — server đã đi tiếp thì ghi rev thấp hơn (khung mới hơn kéo lại; xoá/di chuyển với rev đó → 409).
 - **Tệp lười**: đẩy tệp có base `lazy` (chưa `fs_pull`) → bản của agent thành tệp riêng, trả lại tệp trống, steer `fs_pull` (`STEER_LAZY`).
 - **Thử lại**: `Idempotency-Key` lưu trong mục hàng đợi (`idem`, theo sha256 nội dung — đổi nội dung = khoá mới) và dùng lại qua mọi lần thử;
-  PUT nội dung dùng `filehub.lane.write_timeout_s` (mặc định 330 s > chờ quét 300 s); 409 mà `current.sha256` = bản cục bộ → coi là đã lưu.
+  PUT nội dung dùng `filehub.lane.write_timeout_s` (mặc định 360 s ≥ §C.6; chờ quét 300 s); 409 mà `current.sha256` = bản cục bộ → coi là đã lưu.
 - **Xoá hàng loạt**: `filehub.lane.max_delete_batch` (mặc định 20, 0 = tắt) — lệnh xoá chưa duyệt + đã đẩy từ lần duyệt gần nhất vượt trần
   → GIỮ mọi lệnh xoá (`held`), `filehub.blocked{reason: mass_delete, lane: true, count, paths}` (đã có trong danh sách thông báo Telegram/Slack)
   + steer agent. Người: `cfharness filehub resume --root <id>` (RPC `filehub.resume`, HUMAN_ONLY sẵn) đẩy tiếp, `--discard` kéo tệp về lại
@@ -347,6 +347,10 @@ Sửa theo review (2026-11-17, `tests/test_lane_review_fixes.py` — mỗi ca đ
 - **Khử trùng khung**: `(id, rev)` chỉ khi khung có `rev` (khung thư mục/acl thiếu rev không bao giờ bị nuốt).
 - **Tên bản xung đột** duy nhất (`conflict_name(taken=…)`: trong cây / base / hàng đợi → ` 2`, ` 3`…).
 - `filehub status` (`status.lane_folders`) liệt kê thư mục chế độ lane. Test helper `finish()` chờ `end_run` xong (hết race event sau trạng thái).
+- Theo §C cập nhật (phía KGS): xoá thư mục CHỈ khi rỗng → quét: `rmdir` chờ mọi mục con trong hàng đợi xong (`_due`), `fs_delete` thư mục
+  xoá tệp → thư mục con (dưới lên) → chính nó; `409 not_empty` khi quét → không ép: giữ thư mục, liệt kê lại cây con, kéo mục mới về, steer
+  (`STEER_RMDIR_NOT_EMPTY`). Di chuyển thư mục `403 hidden_content` / `423` → lỗi trả agent (cây cục bộ không đổi). `409 in_progress
+  {retry_after}` → chờ rồi gửi lại CÙNG Idempotency-Key (không bản xung đột). Fake: `hidden`, `inflight`, `put_delay` = quét TRƯỚC khi chốt.
 
 Việc còn lại:
 - Nghiệm thu thật trên qltm sau khi K1–K4 lên (plan §7 H4); `tested` với claude thật (steer + Write/Edit trong cây).
