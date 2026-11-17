@@ -13,7 +13,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 ### Cập nhật
 - `cfharness update` không còn bảo "tắt và mở lại giao diện web" — người dùng hub chạy trên máy chủ (web qua LaunchDaemon, vào bằng link
   public) không làm được việc đó. Giờ lệnh chờ giao diện web tự chạy lại bằng bản mới (tối đa 2 phút), quá giờ thì tự chạy lại web, rồi báo
-  kết quả; chỉ nhắc mở lại `cfharness chat`/`top` khi thật sự đang có cửa sổ như vậy. Trang Cài đặt web cũng thôi bảo bấm Ctrl+C.
+  kết quả; chỉ nhắc mở lại `cfharness chat`/`top` khi thật sự đang có cửa sổ như vậy. Trang Cài đặt web cũng thôi bảo bấm Ctrl+C (#144).
 
 ---
 
