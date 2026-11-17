@@ -94,11 +94,19 @@
         <tr>
           <td><strong>{{ f.display or f.name }}</strong>{% if f.account %}<br><span class="small muted">đăng nhập bằng {{ f.account }}</span>{% endif %}
             <br><code class="small">filehub:{{ f.name }}</code>{% if f.renamed %} <span class="small muted">(trên web đã đổi tên — <code>filehub:{{ f.server_name }}</code> cũng khớp)</span>{% endif %}
+            {% if f.aliases %}<br><span class="small muted">tên cũ vẫn khớp: {% for x in f.aliases %}<code>filehub:{{ x }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
             {% if f.lock %}<br><span class="pill info">run {{ f.lock.run_id }} đang ghi</span>{% endif %}</td>
           <td><code class="small">{{ f.local_path }}</code></td>
           <td class="num">{% if f.pending_up or f.pending_down %}⬆{{ f.pending_up or 0 }} ⬇{{ f.pending_down or 0 }}{% else %}—{% endif %}</td>
           <td>{% if f.url %}<a href="{{ f.url }}" target="_blank" rel="noopener noreferrer">Mở trên Không gian số</a><br>{% endif %}
-            {% if not f.lock %}{{ m.act("filehub_remove", "Gỡ khỏi hub", {"name": f.name}, "btn ghost sm", next="/settings#filehub") }}{% endif %}</td>
+            {% if not f.lock %}{{ m.act("filehub_remove", "Gỡ khỏi hub", {"name": f.name}, "btn ghost sm", next="/settings#filehub") }}
+            <details class="small"><summary>Đổi tên trong cfharness</summary>
+              <form method="post" action="/do/filehub_rename" class="row gap wrap-row" autocomplete="off">
+                <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#filehub">
+                <input type="hidden" name="name" value="{{ f.name }}">
+                <label class="small">Tên mới <input name="new_name" required maxlength="80" value="{{ f.name }}" spellcheck="false"></label>
+                <button type="submit" class="btn ghost sm">Đổi tên</button>
+              </form></details>{% endif %}</td>
         </tr>
         {% if f.workspace_deleted %}
         <tr><td colspan="4" class="small"><span class="pill danger">{{ m.icon('alert') }}workspace đã bị xoá</span> Workspace

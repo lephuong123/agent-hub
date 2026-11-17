@@ -6,7 +6,7 @@
 - Ghi (W7 + #121 — làm được cả khi mở qua link public; vẫn cần đăng nhập web + TOTP + CSRF + Origin + khoá phiên WT-1, audit `web`, RPC
   `filehub.*` ∈ HUMAN_ONLY): mọi thao tác là `ACTIONS` gọi RPC `filehub.*` (không logic trong template → app desktop gọi lại cùng RPC):
   `filehub_setup` (máy chủ + chế độ workspace|folder + tên → đăng nhập, xong tự nối thư mục đầu), `filehub_login` (đăng nhập lại / cấp thêm
-  thư mục), `filehub_switch`, `filehub_add` (thư mục đã cấp), `filehub_remove`, `filehub_pause|filehub_resume|filehub_resume_push`.
+  thư mục), `filehub_switch`, `filehub_add` (thư mục đã cấp), `filehub_remove`, `filehub_rename`, `filehub_pause|filehub_resume|filehub_resume_push`.
   Thiết lập / đăng nhập / chuyển chế độ / gỡ = `Action.step2` (bước 2 bắt buộc).
 - Ranh giới: web KHÔNG BAO GIỜ nhận đường dẫn binary sync (daemon dùng cấu hình hoặc tự dò ở chỗ cài cố định — `filehub.detect_binary`,
   không dò PATH); đường dẫn bản sao cục bộ (`local_parent`/`local_path`) chỉ đặt được khi dùng web trên chính máy chạy hub
@@ -259,6 +259,12 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
         call=simple("filehub.remove"), confirm=lambda f: f"Gỡ thư mục chung «{f.get('name')}» khỏi hub?",
         step2=lambda f: (f"Hub dừng đồng bộ «{f.get('name')}», agent không còn giao việc vào workspace filehub:{f.get('name')} được. Tệp trên máy "
                          "và trên Không gian số GIỮ NGUYÊN (không xoá gì)."), danger=True, goto=lambda r, f: NEXT)
+    actions["filehub_rename"] = Action(
+        "filehub.rename", lambda f: {"name": _req(f, "name"), "new_name": _name(f, "new_name")},
+        lambda r, f: f"Đã đổi tên «{(r or {}).get('previous')}» → «{(r or {}).get('name')}» (giao việc: workspace {(r or {}).get('workspace')})",
+        call=simple("filehub.rename"), goto=lambda r, f: NEXT,
+        confirm=lambda f: (f"Đổi tên thư mục chung «{f.get('name')}» thành «{str(f.get('new_name') or '').strip()}» trong cfharness?\n"
+                           "Chỉ đổi tên dùng để giao việc (filehub:<tên>) — đường dẫn trên máy và tên trên Không gian số giữ nguyên; tên cũ vẫn khớp."))
 
 
 def routes() -> list[Any]:

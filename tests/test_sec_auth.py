@@ -507,14 +507,15 @@ async def test_filehub_writes_human_only(home):
     for m in MUTATING_FILEHUB:
         assert m in auth.HUMAN_ONLY and m not in auth.MANAGER_ALLOWED, m
     assert set(MUTATING_FILEHUB) <= auth.all_mutating()
-    assert {"setup", "login", "add", "remove", "pause", "resume", "switch-to-workspace"} <= HUB_HUMAN_ONLY_CLI["filehub"]
-    assert {"filehub.login_callback", "filehub.switch_to_workspace"} <= set(MUTATING_FILEHUB)  # gốc workspace + relay OAuth (H7)
+    assert {"setup", "login", "add", "remove", "rename", "pause", "resume", "switch-to-workspace"} <= HUB_HUMAN_ONLY_CLI["filehub"]
+    assert {"filehub.login_callback", "filehub.switch_to_workspace", "filehub.rename"} <= set(MUTATING_FILEHUB)  # H7 + đổi tên cục bộ
     for m in ("filehub.status", "filehub.list", "filehub.link"):
         assert m not in auth.HUMAN_ONLY
     d, srv = await _start(home)
     try:
         for m, prm in (("filehub.setup", {"server": "https://x.example", "binary": "/bin/sh"}), ("filehub.add", {"root_id": "r1", "local_path": "/tmp/x"}),
-                       ("filehub.pause", {}), ("filehub.switch_to_workspace", {}), ("filehub.login_callback", {"code": "c", "state": "s" * 32})):
+                       ("filehub.pause", {}), ("filehub.switch_to_workspace", {}), ("filehub.login_callback", {"code": "c", "state": "s" * 32}),
+                       ("filehub.rename", {"name": "chung", "new_name": "x"})):
             run_n, proc_n, go_n = await _start_run(d)
             rr = await _in_run(go_n, _client_py(home, m, prm, steal_token=True))
             resp = json.loads(rr["out"].strip().splitlines()[-1])

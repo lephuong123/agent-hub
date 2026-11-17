@@ -77,9 +77,12 @@ Tệp: `HUB_HOME/filehub/{profile/, status.json, control.json, ignore.txt, super
 
 - Plan §3.3 cũ "xoá = destructive" thay bằng §7.3 (xoá = `write`, chỉ báo). `filehub.max_delete_batch` mặc định 0 (tắt), là công tắc tuỳ chọn.
 - Plan §3.1 "đọc base SQLite của sync-core" → dùng `index/<rootId>.json` theo hợp đồng §8.3.
-- `filehub.resync` (plan §3.1) chưa làm. `filehub.resume {root_id}` = gửi `resume_push` qua control.json (không có cờ `--resume-push` riêng — theo §8.3).
-- Báo sau run (deleted/changed/secret) chỉ cho run có WORKSPACE `filehub:` (có checkpoint/diff). Run ghi vào thư mục chung qua `extra_write_roots`
-  không có diff ở thư mục đó → không có báo (thay đổi vẫn hiện ở `recent`/Không gian số).
+- `filehub.resync` (plan §3.1) chưa làm — hợp đồng headless (§8.3 + `tang-thu-sync/docs/headless-cfharness.md`) không có cơ chế (control.json
+  chỉ `presence` + `resume_push`), hub không bịa giao thức. `filehub.resume {root_id}` = gửi `resume_push` qua control.json (không có cờ `--resume-push` riêng — theo §8.3).
+- Báo sau run (deleted/changed/secret) cho run có WORKSPACE `filehub:` VÀ (2026-11-17) cho mỗi `extra_write_roots` nằm trong thư mục chung:
+  `RunManager._extra_checkpoints` chụp danh sách tệp (`take_checkpoint(force_walk=True)`, ≤ 5 gốc, bỏ gốc đã nằm trong workspace `filehub:` chính
+  và gốc lồng nhau, bỏ run chỉ đọc / `workspace.checkpoint` tắt) → `_extra_diff` → `FilehubService.report_extra` → cùng event, payload thêm
+  `extra_root` (đường dẫn tương đối trong thư mục chung). Diff này không lưu vào `runs.diff` (không revert, chỉ để báo).
 - Steer chỉ cho run GIỮ KHOÁ gốc (workspace `filehub:`), không cho run chỉ đọc hay run dùng `extra_write_roots`.
 - Kiểm sha256 binary (S3) chưa làm: `filehub.sync_binary` là đường dẫn người đặt; hub chỉ kiểm `--version`.
 
@@ -135,10 +138,31 @@ cfharness task create --assignee <agent> --workspace "filehub:cfharness/Báo cá
 ```
 Nếu bật `workspace.confine`, `filehub.local_parent` phải nằm trong W trước khi `setup`.
 
+## Đổi tên cfharness (`filehub.rename`, 2026-11-17)
+
+`cfharness filehub rename <tên cũ> <tên mới>` / RPC `filehub.rename {name, new_name}` (HUMAN_ONLY, `MUTATING_FILEHUB`, `HUB_HUMAN_ONLY_CLI`) / thẻ
+Cài đặt "Đổi tên trong cfharness" (`ACTIONS.filehub_rename`, có xác nhận, một bước — không nới quyền):
+- Chỉ đổi `folders[].name`; `local_path`, `root_id`, tên trên Không gian số giữ nguyên; không khởi động lại binary (tên chỉ vào argv qua
+  `--root-name` của lần thêm root).
+- Tên cũ vào `folders[].aliases` (≤ `ALIASES_MAX`=5, đổi lại tên cũ thì bỏ khỏi bí danh): task (`workspace.folder`), `run_opts.filehub`,
+  `workspace_default` của agent đã ghi tên cũ vẫn khớp. Thứ tự khớp `match_ref`: tên cfharness → bí danh cũ → tên sống trên web. `add`/`rename`
+  từ chối tên trùng tên hoặc bí danh của thư mục khác.
+- Từ chối khi có run giữ khoá gốc thư mục, hoặc root chưa đồng bộ lần đầu (`pending_add` — binary còn nhận `--root-name`, đổi tên lúc đó sẽ lệch
+  `local_path`).
+Test: `test_filehub_workspace.py::test_rename_*`, `test_web_filehub.py::test_rename_from_web`, `test_sec_auth.py::test_filehub_writes_human_only`,
+`test_manager_security.py::test_manager_filehub_read_and_assign_but_no_writes`, `test_guard_classifier.py::test_filehub_cli_human_only`.
+
 ## Việc dở
 
 - Nghiệm thu thật (§5 plan) khi có binary S1–S3 + T1/T3 phía Không gian số.
-- Kiểm sha256/tải binary theo tag; `filehub.resync`; báo sau run cho `extra_write_roots`; chặn đẩy tệp có secret TRƯỚC khi lên cloud (cần hook sync-core).
+- **Kiểm sha256/tải binary theo tag** — cần phía tang-thu-sync: CI (`.github/workflows/ci.yml`) và `docs/PHAT-HANH.md` chỉ phát bản app desktop
+  (`install.json` có `sha256` cho `.dmg`/`-setup.exe`), CHƯA phát `tang-thu-sync-headless` kèm checksum. Khi có (vd `headless.json`
+  `{version, files[{platform, arch, url, sha256}]}` hoặc `SHA256SUMS` theo tag), hub thêm `filehub.sync_sha256` (người đặt, ∈ SECURITY_KEYS) +
+  kiểm trước mỗi lần spawn trong `SyncSupervisor` (+ `cfharness filehub install --tag`). Không tự bịa nguồn checksum.
+- **`filehub.resync`** (yêu cầu đồng bộ đầy đủ lại) — cần phía tang-thu-sync: hợp đồng headless chưa có cơ chế (control.json chỉ `presence`,
+  `resume_push`; không có cờ). Đề xuất cho S-tiếp: khoá control `"resync": ["<rootId>"]` áp khi mtime đổi (như `resume_push`), binary quét lại toàn
+  bộ root + đối chiếu base. Khi có: hub thêm RPC `filehub.resync {root_id}` (HUMAN_ONLY, MUTATING) ghi khoá đó + sửa CẢ `tests/fake_tangthu_sync.py`.
+- Chặn đẩy tệp có secret TRƯỚC khi lên cloud — cần hook trong sync-core (repo tang-thu-sync); hub hiện chỉ cảnh báo SAU run (`filehub.secret_warning`).
 
 ## Sửa sau nghiệm thu thật (2026-11-15)
 
@@ -186,7 +210,7 @@ Plan + quyết định W1–W7: `plan-filehub-workspace-root.md`. Hợp đồng 
 
 Lệch plan/hợp đồng (H7):
 - Plan §4 "Chuyển chế độ" gỡ root cũ TRƯỚC khi đăng nhập; làm SAU khi đăng nhập thành công (lỗi đăng nhập không làm mất thư mục chung đang chạy).
-- `cfharness filehub rename` (đổi tên cục bộ) chưa làm (plan để sau).
+- `cfharness filehub rename` (đổi tên cục bộ) đã làm 2026-11-17 — § "Đổi tên cfharness".
 - `filehub.sync_min_version` giữ nguyên: headless S5 vẫn báo `--version` 0.1.1 (phiên bản workspace = phiên bản app desktop, chưa phát hành) — hub nhận diện bản mới theo tính năng (binary cũ + chế độ workspace → "chưa hỗ trợ").
 
 Test: `test_filehub_supervisor.py` (workspace 5 cột + `--root-kind`, 4 cột / account rỗng, binary cũ 3 cột, relay state một lần/hết hạn/lỗi/code chèn dòng, switch, remote setup),
