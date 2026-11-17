@@ -999,6 +999,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .admin_cli import add_parsers as _add_admin_parsers
 
     _add_admin_parsers(sub, common)
+
+    # tự kiểm bảo mật với claude thật trên hub tạm: cfharness selftest [--live|--dry-run] (selftest.py)
+    from .selftest import add_parsers as _add_selftest_parsers
+
+    _add_selftest_parsers(sub, common)
     return p
 
 

@@ -280,6 +280,8 @@ Chi tiết, spike sandbox thật, giới hạn: `docs/dev-notes/hardening-SEC.md
 Quy tắc: method RPC nhạy cảm mới → thêm vào `auth.HUMAN_ONLY` + lệnh CLI tương ứng vào `HUB_HUMAN_ONLY_CLI` (classifier) + test trong
 `tests/test_sec_auth.py`. Writer hợp lệ mới ghi vào `policy/` → bọc trong `guard/integrity.attach` (không thì bị khôi phục). Không đưa token
 người vào env của run. Test: `tests/test_sec_*.py`.
+Trước phát hành: `cfharness selftest --live` (`selftest.py`, `docs/dev-notes/selftest.md`) — hub tạm + `claude` thật chạy ca đỏ, trần chi phí cứng.
+Thêm lớp chặn mới → thêm `Case` (hậu quả đo ở phía người) + cập nhật `tests/test_selftest.py` (claude giả, không tốn tiền).
 
 ## Telegram — bot thông báo, duyệt bằng nút, lệnh chat (luồng TG)
 Chi tiết, lý do chọn `httpx2`, test chứng minh, việc dở: `docs/dev-notes/telegram.md`. Không có migration (trạng thái ở `hub_state`).

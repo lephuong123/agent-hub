@@ -73,6 +73,7 @@ Kết luận → **phương án A**: `denyRead: [$HOME]` + `allowRead: [W, read_
 - Classifier vẫn là phỏng đoán: `vim -c`, `git apply`, `patch`, `make` tuỳ ý, `sed -i` file có sẵn = ghi thường (giữ báo nhầm thấp).
 - Chưa làm kiểm chứng thật cuối bằng agent haiku được yêu cầu tự duyệt (3 cách) + ghi policy bằng python. Đã có: spike sandbox thật (§1) và
   test với daemon/socket/tiến trình thật (`test_sec_auth.py`). Nên chạy lần kiểm chứng này trước khi phát hành.
+  → Đã có công cụ: `cfharness selftest --live` (hub tạm + agent haiku + 12 ca đỏ, trần chi phí cứng) — `docs/dev-notes/selftest.md`.
 
 ## 4. File của luồng khác đã chạm (ghi chú cho coordinator)
 - `runtime/claude_cli.py` (CLI): `build_argv` gọi `guard.runtime.check_extra_args` (thay 2 dòng kiểm cũ).
