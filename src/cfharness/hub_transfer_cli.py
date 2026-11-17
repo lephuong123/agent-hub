@@ -13,6 +13,7 @@ Lệnh chỉ người: `hub export|import` ∈ HUB_HUMAN_ONLY_CLI (agent gõ b�
   PR5: `--clone-repos` (git clone repo workspace thiếu, sau khi nhập); in `hub doctor` sau khi nhập.
 - PR5 `export --for move [--yes]`: chuyển nhà — gói qua kiểm tra → hub này ĐÓNG BĂNG (`hub_freeze.py`); `unfreeze [--yes]`: gỡ (y/N);
   `doctor [--probe] [--json]`: kiểm hub sau khi nhập (`hub_doctor.py`, chỉ đọc, chạy được khi daemon dừng).
+  `doctor --cleanup [--older-than NGÀY] [--yes]`: dọn thư mục làm việc mồ côi qua daemon (`housekeeping.py`, RPC `hub.cleanup`, y/N, audit).
 """
 
 from __future__ import annotations
@@ -61,6 +62,12 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     u.set_defaults(fn=cmd_unfreeze)
     dr = hs.add_parser("doctor", allow_abbrev=False, help="kiểm hub sau khi nhập (chỉ đọc, gợi ý lệnh; chạy được khi daemon dừng)", parents=[common])
     dr.add_argument("--probe", action="store_true", help="thử thật: `claude auth status`, kết nối MCP (cần daemon chạy) — không gọi model")
+    dr.add_argument("--cleanup", action="store_true",
+                    help="dọn thư mục làm việc mồ côi (hội thoại điều phối viên đã lưu trữ/không còn, workspace/worktree không ai tham chiếu): "
+                         "liệt kê rồi hỏi y/N; không bao giờ xoá run/ledger/audit hay thư mục có run đang chạy")
+    dr.add_argument("--older-than", type=float, default=None, metavar="NGÀY",
+                    help="cùng --cleanup: dọn cả workspace scratch của run đã xong cũ hơn số ngày này")
+    dr.add_argument("--yes", "-y", action="store_true", help="cùng --cleanup: bỏ qua xác nhận")
     dr.set_defaults(fn=cmd_doctor)
     ij = hs.add_parser("import-job", allow_abbrev=False, help="(nội bộ) tiến trình nhập do trang web /hub-transfer chạy — đừng gọi tay", parents=[common])
     ij.add_argument("upload", help="mã gói tải lên (up-…)")
@@ -486,6 +493,11 @@ def _doctor(ctx: Any) -> int:
     from .home_migrate import daemon_running
 
     a = ctx.args
+    if getattr(a, "cleanup", False):
+        return _doctor_cleanup(ctx)
+    if getattr(a, "older_than", None) is not None:
+        print("lỗi: --older-than chỉ dùng cùng --cleanup", file=sys.stderr)
+        return 1
     probe = None
     if a.probe and daemon_running(ctx.paths.home) is not None:
         def probe(name: str) -> dict:
@@ -493,6 +505,41 @@ def _doctor(ctx: Any) -> int:
     rep = D.run(ctx.paths, probe=bool(a.probe), mcp_probe=probe)
     ctx.out(rep, D.text(rep))
     return 0 if rep["ok"] else 1
+
+
+def _doctor_cleanup(ctx: Any) -> int:
+    """`hub doctor --cleanup`: daemon tính danh sách (`hub.housekeeping`) → in → y/N → `hub.cleanup` với ĐÚNG danh sách đã in (daemon tính
+    lại và chỉ xoá phần vẫn còn dọn được — có run mới dùng thì giữ). Cần daemon (người duy nhất ghi; biết run nào đang sống)."""
+    from . import hub_doctor as D
+    from .housekeeping import human
+
+    a = ctx.args
+    days = a.older_than
+    if days is not None and days < 1:
+        print("lỗi: --older-than phải ≥ 1 ngày", file=sys.stderr)
+        return 1
+    plan = (ctx.call("hub.housekeeping", {"older_than_days": days, "refresh": True}) or {}).get("cleanup") or {}
+    rels = [x["rel"] for x in plan.get("items") or [] if x.get("cleanable")]
+    if not rels:
+        ctx.out({"removed": [], "skipped": [], "freed_bytes": 0, "plan": plan}, "không có thư mục nào để dọn"
+                + (f" (giữ {plan.get('busy')} thư mục đang có run/task dùng)" if plan.get("busy") else ""))
+        return 0
+    if not ctx.json:
+        print(D.cleanup_text(plan))
+    if not a.yes:
+        if not sys.stdin.isatty():
+            print("lỗi: không chạy trong terminal — cần --yes", file=sys.stderr)
+            return 1
+        ans = input(f"Xoá {len(rels)} thư mục trên? Chỉ xoá file trên đĩa (run/ledger/audit giữ nguyên); không hoàn tác được. [y/N] ").strip().lower()
+        if ans not in ("y", "yes", "c", "co", "có"):
+            print("đã huỷ")
+            return 0
+    r = ctx.call("hub.cleanup", {"paths": rels, "older_than_days": days}) or {}
+    lines = [f"đã xoá {len(r.get('removed') or [])} thư mục, giải phóng {human(r.get('freed_bytes'))}"]
+    for s in r.get("skipped") or []:
+        lines.append(f"  giữ {s.get('rel')}: {s.get('reason')}")
+    ctx.out(r, "\n".join(lines))
+    return 0
 
 
 def cmd_import_job(ctx: Any) -> int:
