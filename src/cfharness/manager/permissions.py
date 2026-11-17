@@ -56,7 +56,9 @@ RATE_LIMITS = {
 # §9 (M7-core.md): khung quyền của điều phối viên — NGƯỜI đặt ở `manager.capabilities` (nhánh `manager` ∈ integrity.SECURITY_KEYS,
 # `config.set` ∈ HUMAN_ONLY). Tool ngoài CAP_TOOLS_MAX không bao giờ được (Task/Agent = subagent, có thể mang permissionMode riêng).
 CAP_PROFILES: dict[str, dict[str, Any]] = {
-    "strict": {"tools": ["Read", "Grep", "Glob"], "mcp": "none", "web": False},
+    # strict mặc định cho MCP trusted CHỈ ĐỌC (tool đã probe không readOnlyHint → --disallowedTools; chưa probe → hook guard giữ chờ người):
+    # agent điều phối viên gắn MCP trusted chạy được ngay, không phải `capabilities set --mcp`. `--mcp none` = tắt hẳn.
+    "strict": {"tools": ["Read", "Grep", "Glob"], "mcp": "read_only_trusted", "web": False},
     "hermes": {"tools": ["Bash", "Read", "Write", "Edit", "MultiEdit", "NotebookEdit", "Grep", "Glob", "TodoWrite"],
                "mcp": "read_only_trusted", "web": True},
 }
@@ -347,7 +349,8 @@ class ManagerPermissions:
                 if s in own:
                     return f"MCP '{s}' là MCP của chính hub — điều phối viên điều khiển hub qua hub-self, không qua MCP này"
                 if s not in names:
-                    return f"MCP '{s}' không có trong registry"
+                    return (f"MCP '{s}' không có trong registry (đã xoá hoặc chưa thêm) — gỡ khỏi điều phối viên: "
+                            f"`cfharness mcp unassign {s} {aid}`, hoặc thêm/khôi phục server (`cfharness mcp add|restore {s}`)")
                 if trust.get(s, "untrusted") != "trusted":
                     return f"MCP '{s}' có trust=untrusted — điều phối viên chỉ dùng MCP người đã đánh dấu trusted (`cfharness mcp edit {s} --trust trusted`)"
         if row.get("subagents"):

@@ -5,7 +5,7 @@
 - `/update`: trang chỉ có thẻ trên — đích sau khi bấm nút, vì trang Cài đặt cần daemon mà daemon sắp dừng.
 - Thao tác `update_start` / `update_start_force` qua `ACTIONS` (CSRF + khoá phiên WT-1, `_audit.channel=web`, luôn có hộp xác nhận);
   `update.start` ∈ HUMAN_ONLY và tự ghi audit.
-Web chỉ là client RPC — không đọc file trạng thái trực tiếp. Bản web đang chạy khác bản daemon → nhắc mở lại `cfharness web`.
+Web chỉ là client RPC — không đọc file trạng thái trực tiếp. Bản web đang chạy khác bản daemon → báo web sẽ tự chạy lại (web/reload.py), tải lại trang.
 """
 
 from __future__ import annotations

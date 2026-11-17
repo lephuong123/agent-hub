@@ -27,8 +27,9 @@ def os_sandbox_available() -> bool:
 
 
 def is_wide(caps: dict[str, Any]) -> bool:
-    """Khung (đã resolve) rộng hơn strict: tool ngoài Read/Grep/Glob hoặc MCP ngoài hub-self."""
-    return bool(set(caps.get("tools") or ()) - STRICT_TOOLS) or (caps.get("mcp") or "none") != "none"
+    """Khung (đã resolve) rộng hơn strict: tool ngoài Read/Grep/Glob hoặc MCP `trusted` (cả tool ghi). MCP `read_only_trusted`
+    (mặc định của strict) không phụ thuộc sandbox OS — server MCP không chạy trong sandbox Bash — nên không tính là rộng."""
+    return bool(set(caps.get("tools") or ()) - STRICT_TOOLS) or caps.get("mcp") == "trusted"
 
 
 def opted_in(manager_cfg: Any) -> bool:

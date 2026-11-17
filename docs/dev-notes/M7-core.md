@@ -171,7 +171,7 @@ Test: `tests/test_manager_capabilities.py` (16 ca). Không migration, không RPC
 ### Thiết kế
 - **Khung do NGƯỜI đặt** — config `manager.capabilities = {profile, tools, mcp, web}` (nhánh `manager` ∈ `guard/integrity.SECURITY_KEYS`:
   ghi thẳng `config.yaml` bị khôi phục; `config.set` ∈ HUMAN_ONLY + audit; không có trong `web.SAFE_CONFIG`). `null` = theo profile.
-  - `strict` (mặc định, = MGR-8 cũ): Read/Grep/Glob, `mcp: none`, `web: false`.
+  - `strict` (mặc định): Read/Grep/Glob, `mcp: read_only_trusted` (từ 2026-11-17; trước đó `none`), `web: false`.
   - `hermes`: Bash, Read, Write, Edit, MultiEdit, NotebookEdit, Grep, Glob, TodoWrite + (`web: true`) WebFetch, WebSearch; `mcp: read_only_trusted`.
   - `tools` ghi đè danh sách, nhưng luôn ⊆ `CAP_TOOLS_MAX` (không bao giờ Task/Agent = subagent mang permissionMode riêng). `mcp`:
     `none | read_only_trusted | trusted`. Giá trị lạ khi sửa tay → fail-closed (strict / none) + cảnh báo trong `capabilities show`.
