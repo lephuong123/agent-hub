@@ -320,6 +320,21 @@ async def test_health_card_shows_hang_stats(env):
     assert re.search(r'<li class="hc warn">(?:(?!</li>).)*?Run treo / quá giờ', r.text)  # 3/3 run treo → vàng
 
 
+async def test_health_card_shows_disk_and_cleanup(env):
+    """hub.housekeeping: dung lượng HUB_HOME + thư mục làm việc dọn được (chỉ báo, dọn từ terminal)."""
+    import re
+
+    env.hub.agents.create({"id": "hk1", "name": "hk1", "model": "haiku"})
+    orphan = env.hub.paths.home / "agents" / "hk1" / "workspaces" / "r_ghost"
+    orphan.mkdir(parents=True)
+    (orphan / "f").write_bytes(b"z" * 4096)
+    await env.login()
+    r = await env.client.get("/partials/health")
+    assert r.status_code == 200 and "Dung lượng HUB_HOME" in r.text
+    assert re.search(r'<li class="hc warn">(?:(?!</li>).)*?Thư mục làm việc dọn được(?:(?!</li>).)*?1 thư mục', r.text)
+    assert "cfharness hub doctor --cleanup" in r.text and orphan.is_dir()  # web không xoá gì
+
+
 async def test_health_hang_row_not_warning_for_low_ratio(env):
     """Vài run treo lẻ / tổng nhiều run → dòng 'Run treo' xanh (không phải vấn đề); tỉ lệ cao → vàng."""
     import re

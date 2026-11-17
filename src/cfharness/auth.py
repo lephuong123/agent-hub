@@ -112,6 +112,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # Chuyển nhà (hub_freeze.py): gỡ đóng băng = cho máy cũ chạy lại run/lịch/bot song song máy mới (409 Telegram, chia sự kiện Slack,
         # OAuth xoay vòng) — chỉ người. hub.doctor (hub_doctor.py) chỉ đọc nhưng lộ đường dẫn/tên secret/repo của người — chỉ người.
         "hub.freeze", "hub.unfreeze", "hub.doctor",
+        # Dung lượng + dọn thư mục làm việc (housekeeping.py): đọc lộ đường dẫn workspace của mọi agent; dọn = xoá thư mục trên đĩa — chỉ người
+        "hub.housekeeping", "hub.cleanup",
         # Xuất/nhập hub từ web (hub_transfer_web.py, PR6): nhận passphrase, đọc gói tải lên, dừng daemon để nhập đè hub.db, lộ đường
         # dẫn/tên secret — chỉ người (kể cả các method chỉ đọc)
         "hub.transfer_status", "hub.export_start", "hub.export_status", "hub.import_plan", "hub.import_start", "hub.import_status",

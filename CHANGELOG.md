@@ -10,6 +10,13 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+- **Sức khoẻ: dung lượng HUB_HOME + dọn thư mục làm việc mồ côi**: `cfharness hub doctor` và thẻ Sức khoẻ (Cài đặt web) báo dung lượng
+  theo thư mục (logs, checkpoints, backups, exports, workspaces của agent…), chỗ trống ổ đĩa, và các thư mục làm việc không còn dùng —
+  thư mục của hội thoại điều phối viên đã lưu trữ/không còn, workspace/worktree không run/task nào tham chiếu, workspace của run đã xong
+  quá 30 ngày, git worktree của task đã xong. Mặc định CHỈ BÁO; dọn bằng `cfharness hub doctor --cleanup [--older-than NGÀY]` (liệt kê
+  rồi hỏi y/N, ghi nhật ký kiểm toán). Không bao giờ xoá run/ledger/audit hay thư mục đang có run chạy; git worktree ngoài HUB_HOME chỉ
+  được gợi ý lệnh `git worktree remove`.
+
 ---
 
 ## v0.2.16 — 2026-11-17
