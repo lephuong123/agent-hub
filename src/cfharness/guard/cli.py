@@ -1,4 +1,4 @@
-"""Lệnh CLI của luồng B: `approvals`, `approve <id>`, `deny <id>`, `guard test|policy|protect|decisions`,
+"""Lệnh CLI của luồng B: `approvals`, `approve <id>`, `deny <id>`, `guard test|policy|protect|integrity|decisions`,
 `notify test`, `run continue <run|session> "<tin>"`, `run resume <run>`, `agent purge <id> --confirm <id>`.
 
 `run continue` / `agent purge` đụng parser cũ (`run <agent> <prompt>`, nhóm `agent`) nên được viết lại thành
@@ -273,6 +273,21 @@ def cmd_guard(ctx: Any) -> int:
             r = ctx.call("guard.protect.rm", {"id": a.id})
             ctx.out(r, f"đã gỡ luật luôn cho phép {r['id']} (lịch sử giữ trong policy/history/)")
         return 0
+    if a.action == "integrity":
+        if a.op == "status":
+            r = ctx.call("guard.integrity.status")
+            lc = r.get("last_check") or {}
+            ev = r.get("recent_events") or []
+            lines = [f"kiểm gần nhất: {lc.get('ts') or '-'}  ·  chu kỳ {r.get('tick_s')} s  ·  tự khôi phục: {'bật' if r.get('restore') else 'tắt'}",
+                     f"bản chuẩn: {len(r.get('baseline') or [])} mục"]
+            if ev:
+                lines.append(f"lệch gần đây ({len(ev)}):")
+                lines += [f"  {e.get('target') or '?'}: " + ", ".join(k for k in e if k != "target") for e in ev[-10:]]
+            ctx.out(r, "\n".join(lines))
+        else:
+            r = ctx.call("guard.integrity.accept")
+            ctx.out(r, f"đã nhận trạng thái hiện tại làm bản chuẩn ({r.get('entries')} mục) và môi trường Python của hub (.pth/sitecustomize)")
+        return 0
     if a.action == "protect":
         if a.op == "list":
             rows = ctx.call("guard.protect.list")
@@ -416,6 +431,11 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     als.add_parser("list", parents=[common])
     alr = als.add_parser("rm", parents=[common])
     alr.add_argument("id")
+    ig = gs.add_parser("integrity", help="giám sát toàn vẹn policy/config/môi trường Python của hub", parents=[common])
+    igs = ig.add_subparsers(dest="op", required=True)
+    igs.add_parser("status", help="lần kiểm gần nhất, bản chuẩn, sự kiện lệch gần đây", parents=[common])
+    igs.add_parser("accept", help="(chỉ người) nhận trạng thái đĩa hiện tại làm bản chuẩn, gồm .pth/sitecustomize — vd sau khi cài lại cfharness",
+                   parents=[common])
     pr = gs.add_parser("protect", help="tài nguyên được bảo vệ (chỉ người sửa)", parents=[common])
     ps = pr.add_subparsers(dest="op", required=True)
     ps.add_parser("list", parents=[common])
