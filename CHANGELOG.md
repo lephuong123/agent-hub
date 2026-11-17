@@ -21,6 +21,22 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ---
 
+## v0.2.16 — 2026-11-17
+
+Thêm lệnh nhận bản chuẩn toàn vẹn sau khi cài lại cfharness (#127); test listener của daemon chạy được trên Linux/macOS (#126).
+
+### Lệnh mới
+- **`cfharness guard integrity status|accept`**: cảnh báo "môi trường Python của hub bị thay đổi" (vd sau khi cài lại cfharness) bảo chạy
+  `cfharness guard integrity accept` nhưng CLI chưa có lệnh này. Giờ `status` xem lần kiểm gần nhất và các lệch gần đây, `accept` (chỉ
+  người) nhận trạng thái hiện tại làm bản chuẩn, gồm cả `.pth`/`sitecustomize`.
+
+### Lưu ý khi cập nhật
+- Trên Windows vẫn phải dừng daemon và đóng mọi cửa sổ `cfharness` trước khi `uv tool install --force` (xem v0.2.15).
+- Nếu sau khi cài lại có cảnh báo "môi trường Python của hub bị thay đổi", xem `cfharness guard integrity status` rồi chạy
+  `cfharness guard integrity accept`.
+
+---
+
 ## v0.2.15 — 2026-11-17
 
 Bản sửa lỗi: daemon trên Windows không còn bị "điếc" sau khi một client ngắt kết nối giữa chừng (#124).
