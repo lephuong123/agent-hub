@@ -410,3 +410,24 @@ async def test_cli_capabilities_set_and_sync(d):
         assert json.loads(cp.stdout)["problem"]  # agent giờ vượt khung strict → báo
     finally:
         srv.close()
+
+
+# ------------------------------------------------------------------ MCP mồ côi (xoá mềm / không còn trong registry) gỡ được
+async def test_unassign_orphan_mcp_unblocks_manager(d):
+    """Hub thật (lamlinh): điều phối viên mang MCP 'toa-soan' không còn trong registry → mọi lượt chat bị chặn, và
+    `mcp unassign` trước đây cũng đòi server tồn tại → kẹt. Gỡ phải được; lỗi phải chỉ đúng lệnh sửa."""
+    _mcp(d, "toa-soan", "trusted")
+    _agent(d, "boss2", tools=["Read", "Grep", "Glob"], mcp_servers=["toa-soan"])
+    await rpc(d, "mcp.remove", {"name": "toa-soan", "force": True})  # xoá mềm khi agent còn dùng
+    why = d.hub.manager.perms.manager_config_problem(d.hub.store.get_agent("boss2")) or ""
+    assert "cfharness mcp unassign toa-soan boss2" in why, why
+    d.hub.store.conn.execute("UPDATE agents SET mcp_servers=? WHERE id='boss2'", (json.dumps(["toa-soan", "ghost"]),))
+    await rpc(d, "mcp.assign", {"server": "toa-soan", "agent": "boss2", "unassign": True})  # đã xoá mềm
+    await rpc(d, "mcp.assign", {"server": "ghost", "agent": "boss2", "unassign": True})  # chưa từng có
+    assert d.hub.store.get_agent("boss2")["mcp_servers"] == []
+    assert d.hub.manager.perms.manager_config_problem(d.hub.store.get_agent("boss2")) is None
+    # gán vẫn đòi server có trong registry; gỡ tên agent không có + không có trong registry → lỗi rõ
+    with pytest.raises(HubError):
+        await rpc(d, "mcp.assign", {"server": "ghost", "agent": "boss2"})
+    with pytest.raises(HubError):
+        await rpc(d, "mcp.assign", {"server": "ghost", "agent": "boss2", "unassign": True})

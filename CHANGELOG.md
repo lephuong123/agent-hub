@@ -10,6 +10,10 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+- **Gỡ được MCP đã xoá khỏi agent/điều phối viên**: `cfharness mcp unassign <server> <agent>` không còn đòi server phải còn trong registry,
+  và sửa agent không còn bị chặn vì một MCP đã gán từ trước nay không còn. Lỗi "điều phối viên … MCP 'x' không có trong registry" giờ
+  chỉ thẳng lệnh sửa.
+
 ---
 
 ## v0.2.18 — 2026-11-17
