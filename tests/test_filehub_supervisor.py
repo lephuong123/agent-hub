@@ -15,7 +15,7 @@ import pytest
 from cfharness.errors import HubError
 from cfharness.filehub.supervisor import ENV_KEEP, child_env, parse_version, version_ok
 from cfharness.recovery import pid_alive, pid_start_time
-from fh_fake import FAKE, argv_log, configure, events, fake_bin, inject, until
+from fh_fake import FAKE, argv_log, configure, events, fake_bin, inject, login_argv, until
 from m7_fake import close, make_daemon, rpc
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="binary sync chỉ macOS/Linux (shim #!/bin/sh)")
@@ -67,7 +67,7 @@ async def test_supervisor_starts_with_contract_args_and_minimal_env(env):
                       ("--tokens", str(fh.tokens_path)), ("--extra-ignore", str(fh.ignore_path)), ("--max-delete-batch", "0"),
                       ("--server", "https://kgs.example.test"), ("--add-root", "r_chung"), ("--root-name", "chung"), ("--local-parent", str(local.parent))):
         assert a[a.index(flag) + 1] == val, flag
-    assert str(fh.tokens_path).startswith(str(d.hub.paths.home / "secrets"))
+    assert str(fh.tokens_path).startswith(str(d.hub.paths.home / "secrets")) and "--root-kind" not in a  # folder = mặc định
     # env tối thiểu: không CLAUDE*/ANTHROPIC*/CFHARNESS*, không token người
     keys = set(runs[0]["env"])
     assert not {k for k in keys if k.startswith(("CLAUDE", "ANTHROPIC", "CFHARNESS"))}, keys
@@ -142,13 +142,16 @@ async def test_setup_login_creates_folder_and_audits(env, monkeypatch):
     b = fake_bin(tmp / "bin")
     d.hub.config.set("filehub.tick_s", 0.05)
     d.hub.config.set("filehub.poll_s", 0.1)
-    res = await rpc(d, "filehub.setup", {"server": "https://kgs.example.test", "binary": str(b), "name": "Tài liệu",
+    res = await rpc(d, "filehub.setup", {"server": "https://kgs.example.test", "binary": str(b), "name": "Tài liệu", "scope": "folder",
                                          "local_parent": str(tmp / "KGS"), "no_browser": True})
-    assert res["login_url"].startswith("https://kgs.example.test/api/sync/oauth/authorize?root_mode=single")
+    assert res["login_url"].startswith("https://kgs.example.test/api/oauth/authorize?root_mode=single") and res["mode"] == "folder"
     await until(lambda: d.hub.filehub.login_state.get("state") == "done")
     f = d.hub.filehub.folders()
     rid = d.hub.filehub.login_state["roots"][0]["id"]
-    assert f == [{"name": "Tài liệu", "root_id": rid, "ws_id": "ws_1", "local_path": str((tmp / "KGS" / "Tài liệu").resolve())}]
+    assert f == [{"name": "Tài liệu", "root_id": rid, "ws_id": "ws_1", "local_path": str((tmp / "KGS" / "Tài liệu").resolve()), "kind": "folder",
+                  "account": "admin.cchc"}]
+    # chế độ một thư mục: KHÔNG truyền --root-mode (mặc định single của binary — chạy được với binary cũ)
+    assert "--root-mode" not in login_argv(d.hub)[0]
     assert oct(os.stat(d.hub.filehub.tokens_path).st_mode & 0o777) == "0o600"
     await until(lambda: (d.hub.filehub.read_status() or {}).get("roots"))
     assert [r["kind"] for r in d.hub.audit.query(kind="filehub.setup")]
@@ -246,3 +249,238 @@ async def test_hub_stop_terminates_sync(env):
     assert proc is not None and proc.returncode is None
     await asyncio.wait_for(d.hub.filehub.stop(), 10)
     assert proc.returncode == 0
+
+
+# ------------------------------------------------------------------ gốc workspace (plan-filehub-workspace-root.md, PR H7)
+async def test_setup_workspace_mode_root_5_cols_status_rename_alias(env):
+    """Mặc định chế độ workspace: `--root-mode workspace`, ROOT 5 cột (kind + tài khoản) → thư mục chung kind=workspace (root_id = wsId);
+    status: "Toàn bộ workspace «tên sống»", tài khoản, tệp ở gốc không đẩy được; đổi tên trên web → tên cũ giữ, tên mới là bí danh."""
+    make, tmp = env
+    d = await make()
+    b = fake_bin(tmp / "bin", {"FAKE_TT_WS_NAME": "admin harness", "FAKE_TT_ACCOUNT": "chu.domain"})
+    d.hub.config.set("filehub.tick_s", 0.05)
+    d.hub.config.set("filehub.poll_s", 0.1)
+    res = await rpc(d, "filehub.setup", {"server": "https://kgs.example.test", "binary": str(b), "local_parent": str(tmp / "KGS"), "no_browser": True})
+    assert res["scope"] == "workspace" and res["mode"] == "workspace" and "root_mode=workspace" in res["login_url"]
+    assert login_argv(d.hub)[0][login_argv(d.hub)[0].index("--root-mode") + 1] == "workspace"
+    await until(lambda: d.hub.filehub.login_state.get("state") == "done")
+    fh = d.hub.filehub
+    [f] = fh.folders()
+    local = (tmp / "KGS" / "admin harness").resolve()
+    assert f["kind"] == "workspace" and f["name"] == "admin harness" and f["root_id"] == f["ws_id"] and f["account"] == "chu.domain"
+    assert f["local_path"] == str(local) and fh.login_state["account"] == "chu.domain"
+    await until(lambda: (fh.read_status() or {}).get("roots"))
+    a = [x for x in argv_log(d.hub) if "--profile" in x["argv"]][0]["argv"]
+    assert a[a.index("--add-root") + 1] == f["root_id"] and a[a.index("--root-name") + 1] == "admin harness"
+    assert a[a.index("--root-kind") + 1] == "workspace"  # S5: gốc workspace BẮT BUỘC --root-kind workspace
+    (local / "v1_2026-11-15").mkdir()
+    (local / "v1_2026-11-15" / "a.md").write_text("x")
+    (local / "o-goc.md").write_text("tệp ở gốc")
+    st = await until(lambda: (lambda s: s if s["folders"][0]["root_files"] else None)(fh.status()))
+    row = st["folders"][0]
+    assert row["display"] == "Toàn bộ workspace «admin harness»" and row["account"] == "chu.domain" and row["root_files"] == ["o-goc.md"]
+    assert row["url"] == "https://kgs.example.test/files" and not row["renamed"]
+    await until(lambda: "v1_2026-11-15/a.md" in (fh.read_index(f["root_id"]).get("items") or {}))
+    assert "o-goc.md" not in fh.read_index(f["root_id"])["items"]
+    assert fh.link_for(str(local / "o-goc.md"))["url"] is None  # tệp ở gốc: không có trang trên web
+    # đổi tên workspace trên web → status.server_name mới; tên cfharness + local_path giữ; tên mới khớp như bí danh
+    (fh.profile_dir / "server_names.json").write_text(json.dumps({f["root_id"]: "Admin Harness 2026"}))
+    await until(lambda: fh.status()["folders"][0]["renamed"])
+    assert fh.folders()[0]["local_path"] == str(local)
+    assert fh.resolve_ref("filehub:Admin Harness 2026/v1_2026-11-15")[0] == str(local / "v1_2026-11-15")
+    assert fh.resolve_ref("filehub:admin harness/v1_2026-11-15")[0] == str(local / "v1_2026-11-15")
+    lst = await rpc(d, "filehub.list")
+    assert lst[0]["kind"] == "workspace" and lst[0]["server_name"] == "Admin Harness 2026" and "Admin Harness 2026" in lst[0]["note"]
+
+
+async def test_old_binary_three_column_root_still_works(env):
+    """Binary CŨ (trước S5): dòng ROOT 3 cột vẫn đọc được (kind=folder); chế độ workspace → báo cập nhật binary, không đổi cấu hình."""
+    make, tmp = env
+    d = await make()
+    b = fake_bin(tmp / "bin", {"FAKE_TT_OLD": "1"})
+    with pytest.raises(HubError, match="chưa hỗ trợ chế độ workspace"):
+        await rpc(d, "filehub.setup", {"server": "https://kgs.example.test", "binary": str(b), "local_parent": str(tmp / "KGS"), "no_browser": True})
+    assert not d.hub.filehub.folders()
+    await rpc(d, "filehub.setup", {"server": "https://kgs.example.test", "binary": str(b), "scope": "folder", "local_parent": str(tmp / "KGS"),
+                                   "no_browser": True})
+    await until(lambda: d.hub.filehub.login_state.get("state") == "done")
+    [f] = d.hub.filehub.folders()
+    assert f["kind"] == "folder" and f["name"] == "cfharness" and "account" not in f
+    assert d.hub.filehub.login_state["roots"][0] == {"id": f["root_id"], "ws_id": "ws_1", "name": "cfharness", "kind": "folder", "account": ""}
+
+
+async def test_root_line_4_cols_and_empty_account(env):
+    """S5 luôn in đủ 4 tab; server cũ → account rỗng (`ROOT r1\tw9\tcfharness\tfolder\t`). Dòng 4 cột cũng nhận."""
+    make, tmp = env
+    for cols, acc in (("5", ""), ("4", "x")):
+        d = await make()
+        b = fake_bin(tmp / f"bin{cols}", {"FAKE_TT_ACCOUNT": acc, "FAKE_TT_ROOT_COLS": cols})
+        await rpc(d, "filehub.setup", {"server": "https://kgs.example.test", "binary": str(b), "scope": "folder", "local_parent": str(tmp / f"K{cols}"),
+                                       "no_browser": True})
+        await until(lambda: d.hub.filehub.login_state.get("state") == "done")
+        [f] = d.hub.filehub.folders()
+        assert f["kind"] == "folder" and "account" not in f, f
+        await d.hub.filehub.stop()
+
+
+def test_parse_root_lines_4_and_5_columns():
+    from cfharness.filehub.service import kind_of, safe_name
+
+    assert safe_name("admin/harness: 2026") == "admin-harness- 2026" and safe_name("...") == "workspace"
+    assert kind_of({"kind": "workspace"}) == "workspace" and kind_of({}) == "folder" and kind_of({"kind": "lạ"}) == "folder"
+
+
+async def test_relay_login_state_checked_single_use(env):
+    """Relay OAuth (web public): binary chạy với --redirect-uri <public_origin>/filehub/oauth/cb, stdin PIPE; callback sai state → lỗi
+    CHUNG, lượt chờ giữ nguyên; đúng → ghi `CODE <code>\\t<state>` vào stdin → đăng nhập xong; state dùng lại → lỗi. code không vào audit."""
+    from cfharness.filehub.service import RELAY_PATH
+
+    make, tmp = env
+    d = await make()
+    b = fake_bin(tmp / "bin", {"FAKE_TT_WS_NAME": "admin harness"})
+    with pytest.raises(HubError, match="web.public_origin"):
+        await rpc(d, "filehub.setup", {"server": "https://kgs.example.test", "binary": str(b), "local_parent": str(tmp / "KGS"), "relay": True})
+    d.hub.config.set("web.public_origin", "https://an.example.com")
+    res = await rpc(d, "filehub.login", {"relay": True, "mode": "workspace"})
+    argv = login_argv(d.hub)[-1]
+    assert argv[argv.index("--redirect-uri") + 1] == "https://an.example.com" + RELAY_PATH and "--no-browser" in argv
+    fh = d.hub.filehub
+    state = fh._relay["state"]
+    assert f"state={state}" in res["login_url"] and fh.status()["login"]["relay"] is True
+    for bad in ({"code": "c1", "state": "x" * 32}, {"code": "c1", "state": state + "\nCODE"}, {"code": "c1"}):
+        with pytest.raises(HubError, match="không hợp lệ hoặc đã hết hạn"):
+            await rpc(d, "filehub.login_callback", dict(bad))
+    assert fh._relay is not None and fh._login_proc.returncode is None  # kẻ dò không làm hỏng lượt chờ thật
+    r = await rpc(d, "filehub.login_callback", {"code": "the-code_123", "state": state})
+    assert r == {"ok": True, "state": "done", "error": None, "message": None}
+    assert (fh.tokens_path.parent / "relay_code.txt").read_text() == "the-code_123"
+    assert fh.folders()[0]["kind"] == "workspace"
+    with pytest.raises(HubError, match="không hợp lệ hoặc đã hết hạn"):  # một lần
+        await rpc(d, "filehub.login_callback", {"code": "the-code_123", "state": state})
+    rows = d.hub.audit.query(kind="filehub.login_callback")
+    assert rows and "the-code_123" not in json.dumps(rows) and state not in json.dumps(rows)
+
+
+async def test_relay_expired_and_error_and_bad_code(env):
+    make, tmp = env
+    d = await make()
+    configure(d.hub, tmp)
+    d.hub.config.set("web.public_origin", "https://an.example.com")
+    fh = d.hub.filehub
+    # hết hạn → lỗi chung, lượt bị huỷ
+    await rpc(d, "filehub.login", {"relay": True})
+    st = fh._relay["state"]
+    fh._relay["expires"] = 0
+    with pytest.raises(HubError, match="hết hạn"):
+        await rpc(d, "filehub.login_callback", {"code": "c", "state": st})
+    await until(lambda: fh.login_state.get("state") == "error")
+    assert fh.login_state["error"] == "timeout"
+    # trang đồng ý trả lỗi (danh sách trắng; chữ lạ → other)
+    await rpc(d, "filehub.login", {"relay": True})
+    st = fh._relay["state"]
+    r = await rpc(d, "filehub.login_callback", {"error": "<script>", "state": st})
+    assert r["ok"] is False and r["error"] == "other"  # chữ lạ → `ERROR other\t<state>` cho binary
+    d.hub.config.set("filehub.folders", [{**fh.folders()[0], "account": "chu.domain"}])
+    await rpc(d, "filehub.login", {"relay": True})
+    r = await rpc(d, "filehub.login_callback", {"error": "not_ws_admin", "state": fh._relay["state"]})
+    # tài khoản vừa đồng ý không biết được → không đổ lỗi cho tài khoản hub đang dùng, chỉ nêu làm ngữ cảnh
+    assert r["error"] == "not_ws_admin" and "vừa dùng" in r["message"] and "Workspace Admin" in r["message"]
+    assert "Tài khoản «chu.domain»" not in r["message"] and "Hub hiện đăng nhập bằng «chu.domain»" in r["message"]
+    assert "«chu.domain»" in fh.status()["login"]["message"]
+    await rpc(d, "filehub.login", {"relay": True})
+    r = await rpc(d, "filehub.login_callback", {"error": "super_not_member", "state": fh._relay["state"]})
+    assert "Super Admin" in r["message"] and "Hub hiện đăng nhập bằng «chu.domain»" in r["message"]
+    # code có ký tự xuống dòng/tab (chèn thêm dòng vào stdin của binary) → từ chối, không ghi gì vào stdin
+    await rpc(d, "filehub.login", {"relay": True})
+    r = await rpc(d, "filehub.login_callback", {"code": "a\nCODE b", "state": fh._relay["state"]})
+    assert r["error"] == "invalid_code" and not (fh.tokens_path.parent / "relay_code.txt").exists()
+
+
+async def test_switch_to_workspace_keeps_old_files(env, monkeypatch):
+    """`switch-to-workspace`: đăng nhập chế độ workspace → gỡ thư mục cũ khỏi cấu hình (tệp giữ) → thêm gốc workspace ở bản sao MỚI;
+    có run giữ khoá → từ chối; đã là workspace → từ chối; audit."""
+    make, tmp = env
+    d, old = await _started(make, tmp, env={"FAKE_TT_WS_NAME": "chung"})  # cố ý trùng tên với thư mục cũ → bản sao mới phải khác
+    (old / "giu-lai.txt").write_text("x")
+    fh = d.hub.filehub
+    old_root = fh.folders()[0]["root_id"]
+    await until(lambda: any(r.get("id") == old_root for r in (fh.read_status() or {}).get("roots") or []))
+    monkeypatch.setattr(d.hub.runs.locks, "holder", lambda p: {"run_id": "run_x"})
+    with pytest.raises(HubError, match="đang có run"):
+        await rpc(d, "filehub.switch_to_workspace", {"no_browser": True})
+    monkeypatch.undo()
+    res = await rpc(d, "filehub.switch_to_workspace", {"no_browser": True})
+    assert res["mode"] == "workspace" and res["switch_from"] == [str(old)]
+    await until(lambda: fh.login_state.get("state") in ("done", "error"))
+    assert fh.login_state["state"] == "done", fh.login_state
+    [f] = fh.folders()
+    assert f["kind"] == "workspace" and f["local_path"] != str(old) and not f["local_path"].startswith(str(old) + "/")
+    assert (old / "giu-lai.txt").exists() and fh.status()["login"]["switched_from"] == [str(old)]
+    assert fh.status()["can_switch"] is False
+    with pytest.raises(HubError, match="đã ở chế độ"):
+        await rpc(d, "filehub.switch_to_workspace", {})
+    assert [r["kind"] for r in d.hub.audit.query(kind="filehub.switch_to_workspace")]
+    await until(lambda: any(r.get("id") == f["root_id"] for r in (fh.read_status() or {}).get("roots") or []))
+    # e2e 2026-11-16: root cũ phải RỜI hồ sơ của binary (không đồng bộ song song bản sao cũ — nó nằm trong workspace mới)
+    await until(lambda: not any(r.get("id") == old_root for r in (fh.read_status() or {}).get("roots") or []))
+    argvs = [json.loads(x)["argv"] for x in (fh.profile_dir / "argv.jsonl").read_text().splitlines()]
+    assert any("--remove-root" in a and a[a.index("--remove-root") + 1] == old_root for a in argvs)
+    assert fh.stale_roots() == [] and (old / "giu-lai.txt").exists()
+
+
+async def test_switch_server_without_workspace_keeps_old_config(env):
+    make, tmp = env
+    d, old = await _started(make, tmp, env={"FAKE_TT_DENY_WORKSPACE": "1"})
+    before = d.hub.filehub.folders()
+    await rpc(d, "filehub.switch_to_workspace", {"no_browser": True})
+    await until(lambda: d.hub.filehub.login_state.get("state") == "error")
+    assert "chưa cấp gốc workspace" in d.hub.filehub.login_state["error"] and d.hub.filehub.folders() == before
+
+
+async def test_remote_setup_cannot_change_server_or_pick_writable_binary(env):
+    make, tmp = env
+    d = await make()
+    configure(d.hub, tmp)
+    d.hub.config.set("filehub.sync_binary", None)
+    b = fake_bin(tmp / "bin2")  # người dùng của hub ghi được → không nhận qua link public
+    with pytest.raises(HubError, match="link public"):
+        await rpc(d, "filehub.setup", {"server": "https://khac.example.test", "binary": str(b), "remote": True})
+    with pytest.raises(HubError, match="do quản trị cài"):
+        await rpc(d, "filehub.setup", {"server": "https://kgs.example.test", "binary": str(b), "remote": True})
+    assert d.hub.config.get("filehub.server") == "https://kgs.example.test" and d.hub.config.get("filehub.sync_binary") is None
+
+
+async def test_remote_setup_detected_binary_rules(env, monkeypatch):
+    """Gộp #121 + H7: binary tự dò (`detect_binary`, không PATH) qua link public vẫn chịu luật chặt — chưa đặt: phải là binary người dùng hub
+    không ghi được; đã đặt: không đổi sang chỗ khác. Ở terminal (không `remote`) binary tự dò được nhận."""
+    import cfharness.filehub.service as fhs
+
+    make, tmp = env
+    d = await make()
+    configure(d.hub, tmp)
+    b = fake_bin(tmp / "bin3")  # người dùng của hub ghi được
+    monkeypatch.setattr(fhs, "BINARY_CANDIDATES", (str(b),))
+    d.hub.config.set("filehub.sync_binary", None)
+    assert fhs.detect_binary(None) == str(b)
+    with pytest.raises(HubError, match="do quản trị cài"):
+        d.hub.filehub.setup({"server": "https://kgs.example.test", "remote": True})
+    assert d.hub.config.get("filehub.sync_binary") is None
+    d.hub.config.set("filehub.sync_binary", str(tmp / "khong-co" / "tang-thu-sync-headless"))  # đã đặt nhưng hỏng → tự dò ra chỗ khác
+    with pytest.raises(HubError, match="không đổi được binary"):
+        d.hub.filehub.setup({"server": "https://kgs.example.test", "remote": True})
+    d.hub.config.set("filehub.sync_binary", None)
+    assert d.hub.filehub.setup({"server": "https://kgs.example.test", "scope": "folder"})["binary"] == str(b)  # terminal: nhận
+    monkeypatch.setattr(fhs, "BINARY_CANDIDATES", ())
+    monkeypatch.setenv("PATH", f"{b.parent}:{os.environ.get('PATH', '')}")  # binary có trong PATH của daemon vẫn KHÔNG được dùng
+    d.hub.config.set("filehub.sync_binary", None)
+    with pytest.raises(HubError, match="chưa có binary sync"):  # không dò PATH
+        d.hub.filehub.setup({"server": "https://kgs.example.test"})
+
+
+def test_cli_parser_switch_and_scope():
+    from cfharness.cli import build_parser
+
+    p = build_parser()
+    a = p.parse_args(["filehub", "switch-to-workspace", "--local-path", "/x", "--no-wait"])
+    assert a.fh_action == "switch-to-workspace" and a.local_path == "/x"
+    assert p.parse_args(["filehub", "setup", "--scope", "folder"]).scope == "folder"

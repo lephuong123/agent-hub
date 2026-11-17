@@ -1,0 +1,25 @@
+{#- Trạng thái lượt đăng nhập Không gian số (web/filehub_pages.py) — tự làm mới khi đang chờ. URL trang đồng ý do daemon kiểm (http/https). -#}
+{% import "_macros.html" as m with context %}
+<div id="fh-login"{% if lg and lg.state in ('starting', 'waiting') %} hx-get="/partials/filehub/login" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+  {% if down %}
+    <p class="muted">Daemon không trả lời — thử lại sau.</p>
+  {% elif not lg or lg.state in (none, 'none') %}
+    <p class="muted">Không có lượt đăng nhập nào đang chờ. Bắt đầu ở <a href="/settings#filehub">Cài đặt › Không gian số</a>.</p>
+  {% elif lg.state in ('starting', 'waiting') %}
+    <p><b>Bước 2:</b> mở trang đồng ý của Không gian số, đăng nhập {% if lg.mode == 'workspace' %}bằng <b>tài khoản admin của workspace</b> (không dùng
+      Super Admin), chọn <b>«Toàn bộ workspace»</b>{% else %}rồi chọn/tạo thư mục{% endif %} và bấm Đồng ý.</p>
+    {% if url %}<p><a class="btn primary" href="{{ url }}" target="_blank" rel="noopener noreferrer">{{ m.icon('external') }}<span>Mở trang đồng ý (tab mới)</span></a></p>{% endif %}
+    <p class="small muted">{% if lg.relay %}Đồng ý xong, Không gian số đưa trình duyệt về hub này và trang này tự cập nhật. Liên kết dùng một lần, hết hạn sau 10 phút.
+      {% else %}Trình duyệt trên máy chạy hub nhận kết quả trực tiếp; trang này tự cập nhật.{% endif %}</p>
+  {% elif lg.state == 'done' %}
+    <p><span class="pill ok">{{ m.icon('check') }}đã đăng nhập</span>{% if lg.account %} bằng <b>{{ lg.account }}</b>{% endif %}.
+      {% for r in lg.roots or [] %}{{ 'Toàn bộ workspace' if r.kind == 'workspace' else 'Thư mục' }} «{{ r.name }}»{{ ", " if not loop.last }}{% endfor %}</p>
+    {% if lg.error %}<p class="small"><span class="pill warn">lưu ý</span> {{ lg.error }}</p>{% endif %}
+    {% if lg.switched_from %}<p class="small">Bản sao cũ (đã gỡ khỏi hub, tệp giữ nguyên — kiểm bản mới rồi tự xoá):
+      {% for p in lg.switched_from %}<code>{{ p }}</code>{{ ", " if not loop.last }}{% endfor %}. Thu hồi thiết bị cũ ở Không gian số › Hồ sơ › Thiết bị.</p>{% endif %}
+    <p><a class="btn" href="/settings#filehub">Quay lại Cài đặt</a></p>
+  {% else %}
+    <p><span class="pill danger">{{ m.icon('alert') }}đăng nhập lỗi</span> {{ lg.message or lg.error }}</p>
+    <p><a class="btn" href="/settings#filehub">Quay lại Cài đặt</a></p>
+  {% endif %}
+</div>

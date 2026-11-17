@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="refresh" content="2;url={{ next }}">
+<title>Không gian số · cfharness</title>
+<link rel="icon" href="{{ static("favicon.svg") }}" type="image/svg+xml">
+<link rel="stylesheet" href="{{ static("app.css") }}">
+</head>
+<body>
+{#- Kết quả callback relay OAuth (web/filehub_pages.py): CHỈ chữ cố định — không bao giờ in code/state/error lấy từ query. -#}
+<main class="main"><section class="card narrow">
+  <h1>{{ 'Đã đăng nhập' if ok else 'Chưa đăng nhập được' }}</h1>
+  <p class="{{ '' if ok else 'danger-t' }}">{{ message }}</p>
+  <div class="row end"><a class="btn primary" href="{{ next }}">Quay lại Cài đặt</a></div>
+</section></main>
+</body>
+</html>
