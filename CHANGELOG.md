@@ -10,6 +10,12 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Cập nhật
+- `cfharness update` không còn bảo "tắt và mở lại giao diện web" — người dùng hub chạy trên máy chủ (web qua LaunchDaemon, vào bằng link
+  public) không làm được việc đó. Giờ lệnh chờ giao diện web tự chạy lại bằng bản mới (tối đa 2 phút), quá giờ thì tự chạy lại web, rồi báo
+  kết quả; chỉ nhắc mở lại `cfharness chat`/`top` khi thật sự đang có cửa sổ như vậy. Trang Cài đặt web cũng thôi bảo bấm Ctrl+C (#144).
+
+### MCP
 - **Gỡ được MCP đã xoá khỏi agent/điều phối viên**: `cfharness mcp unassign <server> <agent>` không còn đòi server phải còn trong registry,
   và sửa agent không còn bị chặn vì một MCP đã gán từ trước nay không còn. Lỗi "điều phối viên … MCP 'x' không có trong registry" giờ
   chỉ thẳng lệnh sửa (#145).
