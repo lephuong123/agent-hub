@@ -40,18 +40,24 @@ def _ping(p: HubPaths) -> dict:
 
 
 def test_server_listening_detects_closed_socket():
-    async def go():
-        srv = await asyncio.start_server(lambda r, w: None, host="127.0.0.1", port=0)
-        try:
-            assert transport.server_listening(srv)
-            srv.sockets[0]._sock.close()  # như asyncio làm trong `_start_serving` khi accept lỗi
-            assert not transport.server_listening(srv)
-        finally:
-            srv.close()
+    # socket giả: đóng socket thô dưới selector loop (Unix) làm `srv.close()` lỗi fd -1 — chỉ cần kiểm logic của hàm
+    class Sock:
+        def __init__(self, fd: int):
+            self.fd = fd
 
-    asyncio.run(go())
+        def fileno(self) -> int:
+            return self.fd
+
+    class Srv:
+        def __init__(self, *fds: int):
+            self.sockets = [Sock(fd) for fd in fds]
+
+    assert transport.server_listening(Srv(5))
+    assert not transport.server_listening(Srv(5, -1))
+    assert not transport.server_listening(Srv())
 
 
+@pytest.mark.skipif(not IS_WINDOWS, reason="chỉ ProactorEventLoop (Windows) đóng socket nghe khi accept lỗi; đóng fd dưới selector loop làm hỏng loop")
 async def test_daemon_reopens_listener_after_accept_failure(home):
     d = Daemon(home, runtime=FakeRuntime(hold=True))
     d.hub.start()
