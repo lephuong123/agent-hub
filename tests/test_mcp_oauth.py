@@ -213,6 +213,8 @@ async def test_legacy_without_prm_uses_server_origin(hub_home):
 
 # =========================================================================== refresh / run / probe
 async def test_refresh_before_run_and_injection_into_runtime_mcp_json(hub, fake, hub_home):
+    # kiểm ĐƯỜNG CŨ (Bearer chèn vào mcp.json) — proxy bật mặc định từ v0.2.17; đường proxy: tests/test_mcp_oauth_proxy.py
+    hub.config.set("mcp.oauth_proxy.enabled", False)
     add_server(hub, fake)
     hub.agents.create({"id": "a", "name": "A", "model": "haiku", "mcp_servers": ["notes"]})
     # chưa kết nối → run FAIL rõ ràng (fail-closed), không chạy thiếu tool lặng lẽ
