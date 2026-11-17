@@ -107,6 +107,9 @@ class Workdir:
         self._presence_at = 0.0
         self.parked = False
         self.latencies: list[float] = []
+        self.ops_mark = 0
+        self.deferred: list[str] = []
+        self.last_push: dict[str, float] = {}  # rel → lúc đẩy gần nhất (≤ 1 phiên bản / push_min_interval_s / tệp)
 
     # ------------------------------------------------------------------ đường dẫn
     def remote(self, rel: str) -> str:
@@ -165,6 +168,15 @@ class Workdir:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=False)
         tmp.replace(self.state_path)
+
+    def persist_to(self, path: Path) -> None:
+        old = self.svc.state_dir
+        try:
+            self.persist()
+            self.state_path.replace(path)
+        except OSError:  # pragma: no cover
+            pass
+        _ = old
 
     @classmethod
     def load(cls, svc: "LaneService", state: Path, *, path: Path | None = None) -> "Workdir":
@@ -351,10 +363,12 @@ class Workdir:
             if rel in self.read_paths:
                 await self.steer(f"chg:{rel}", STEER_CHANGED.format(rel=one_line(rel, 300)))
             return
-        if self.modified_locally(rel):
-            await self._conflict_local(rel)
+        new = await self._conflict_local(rel, steer=False) if self.modified_locally(rel) else None
         await self._download(rel)
-        await self.steer(f"chg:{rel}", STEER_CHANGED.format(rel=one_line(rel, 300)))
+        if new:
+            await self.steer(f"cf:{rel}", STEER_CONFLICT.format(rel=one_line(rel, 300), rel2=one_line(new, 300)))
+        else:
+            await self.steer(f"chg:{rel}", STEER_CHANGED.format(rel=one_line(rel, 300)))
 
     async def _human_delete(self, rel: str, d: dict[str, Any]) -> None:
         tracked = self._tracked(rel)
@@ -406,7 +420,7 @@ class Workdir:
             if b is None or int(b.get("rev") or 0) < int(it.get("rev") or 0):
                 await self._human_write(rel, it)
 
-    async def _conflict_local(self, rel: str, *, keep_remote: bool = True) -> str | None:
+    async def _conflict_local(self, rel: str, *, keep_remote: bool = True, steer: bool = True) -> str | None:
         """Giữ bản của agent: đổi tên cục bộ thành bản xung đột (đẩy lên ở H3). Trả rel mới."""
         new = conflict_name(rel, self.agent_id)
         try:
@@ -415,8 +429,10 @@ class Workdir:
             return None
         self._snap(new)
         self.snapshot.pop(rel, None)
+        self.pending[new] = {"since": 0.0, "op": "write", "conflict_of": rel}  # bản của agent lên Không gian số thành tệp riêng
         self.svc.publish("filehub.conflict", self, {"path": one_line(rel, 300), "copy": one_line(new, 300), "root_id": self.root})
-        await self.steer(f"cf:{rel}", STEER_CONFLICT.format(rel=one_line(rel, 300), rel2=one_line(new, 300)))
+        if steer:
+            await self.steer(f"cf:{rel}", STEER_CONFLICT.format(rel=one_line(rel, 300), rel2=one_line(new, 300)))
         return new
 
     async def reconcile(self) -> None:
@@ -471,20 +487,384 @@ class Workdir:
         if key in self.steered:
             return
         self.steered.add(key)
-        await self.svc.steer(self.run_id, text)
+        if not await self.svc.steer(self.run_id, text):
+            self.deferred.append(text)  # run chưa chạy (đối soát trước khi chạy tiếp) → vào tin đầu của lượt sau
 
-    # ------------------------------------------------------------------ vòng đời (H3 thêm đẩy)
+    def take_deferred(self) -> list[str]:
+        out, self.deferred = self.deferred[:20], []
+        return out
+
+    # ------------------------------------------------------------------ đẩy (quét mtime + kích theo tool)
     def start(self) -> None:
-        pass
+        if self._task is None or self._task.done():
+            self.ops_mark = len(self.ops)
+            try:
+                self._task = asyncio.get_running_loop().create_task(self._loop())
+            except RuntimeError:  # pragma: no cover
+                self._task = None
+
+    async def _loop(self) -> None:
+        while True:
+            try:
+                await asyncio.wait_for(self._kick.wait(), timeout=max(0.05, float(self.svc.cfg("scan_interval_s") or 0.5)))
+            except asyncio.TimeoutError:
+                pass
+            self._kick.clear()
+            try:
+                if not self.read_only:
+                    async with self.lock:
+                        self.scan()
+                        await self.push_pending()
+                await self.svc.presence_tick(self)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # pragma: no cover — vòng quét không được chết vì một tệp hỏng
+                log.exception("lane: vòng quét cây %s lỗi", self.tree)
+
+    def walk(self) -> tuple[dict[str, tuple[int, int]], set[str]]:
+        import stat as _st
+
+        files: dict[str, tuple[int, int]] = {}
+        dirs: set[str] = set()
+        root = str(self.path)
+        for dp, dns, fns in os.walk(root, followlinks=False):
+            rd = os.path.relpath(dp, root).replace(os.sep, "/")
+            rd = "" if rd == "." else rd
+            keep = []
+            for dn in dns:
+                rel = f"{rd}/{dn}" if rd else dn
+                if os.path.islink(os.path.join(dp, dn)) or self.ignored(rel + "/x") or dn.startswith(TMP_PREFIX):
+                    continue
+                keep.append(dn)
+                dirs.add(rel)
+            dns[:] = keep
+            for fn in fns:
+                rel = f"{rd}/{fn}" if rd else fn
+                if self.ignored(rel):
+                    continue
+                try:
+                    st = os.lstat(os.path.join(dp, fn))
+                except OSError:
+                    continue
+                if not _st.S_ISREG(st.st_mode):
+                    continue  # symlink/FIFO/thiết bị: không bao giờ đẩy (symlink trỏ ra ngoài = rò rỉ dữ liệu)
+                files[rel] = (st.st_size, st.st_mtime_ns)
+                if st.st_nlink > 1:
+                    self.failed[rel] = "hardlink"
+        return files, dirs
+
+    def scan(self) -> None:
+        """So ảnh chụp (size, mtime) với lần trước + base → đánh dấu `pending` (ghi/xoá/di chuyển/tạo thư mục)."""
+        files, dirs = self.walk()
+        now = time.time()
+        changed = [r for r, sig in files.items() if self.snapshot.get(r) != sig and r not in self.failed]
+        removed = [r for r, b in self.base.items() if b.get("type") == "file" and r not in files]
+        self.snapshot = dict(files)
+        for r in changed:
+            self.pending[r] = {**self.pending.get(r, {}), "since": now, "op": "write"}
+        new_by_sha: dict[str, str] = {}
+        for r in changed:
+            if r not in self.base:
+                sha = self.local_sha(r)
+                if sha:
+                    new_by_sha.setdefault(sha, r)
+        for r in removed:
+            if r in self.pending and self.pending[r].get("op") in ("delete", "move_src"):
+                continue
+            dst = new_by_sha.pop(str(self.base[r].get("sha256") or ""), None)
+            if dst and self.base[r].get("sha256"):
+                self.pending[dst] = {"since": now, "op": "move", "from": r}
+                self.pending[r] = {"since": now, "op": "move_src"}
+            else:
+                self.pending[r] = {"since": now, "op": "delete"}
+        for d in dirs:
+            if d not in self.base and not any(f.startswith(d + "/") for f in files) and d not in self.pending:
+                self.pending[d] = {"since": now, "op": "mkdir"}
+        for r, b in list(self.base.items()):
+            if b.get("type") == "folder" and r not in dirs and r not in self.pending and not (self.path / r).exists():
+                self.pending[r] = {"since": now, "op": "rmdir"}
+
+    def _due(self, rel: str, e: dict[str, Any], now: float, final: bool) -> bool:
+        if e.get("op") == "move_src":
+            return False
+        if float(e.get("retry_at") or 0) > now:
+            return False
+        if final:
+            return True
+        if now - float(e.get("since") or 0) < float(self.svc.cfg("push_quiet_s") or 2.0):
+            return False
+        last = self.last_push.get(rel, 0.0)
+        return now - last >= float(self.svc.cfg("push_min_interval_s") or 0)
+
+    async def push_pending(self, *, final: bool = False) -> None:
+        if self.stopped_push or self.revoked or self.read_only:
+            return
+        now = time.time()
+        order = {"delete": 0, "move": 1, "write": 2, "mkdir": 3, "rmdir": 4}
+        due = sorted(((r, e) for r, e in self.pending.items() if self._due(r, e, now, final)),
+                     key=lambda x: (order.get(str(x[1].get("op")), 9), -x[0].count("/") if x[1].get("op") == "rmdir" else x[0].count("/"), x[0]))
+        changed = False
+        for rel, e in due:
+            if self.stopped_push or self.revoked:
+                break
+            if rel not in self.pending:
+                continue
+            try:
+                op = e.get("op")
+                if op == "delete":
+                    await self._push_delete(rel)
+                elif op == "move":
+                    await self._push_move(str(e.get("from")), rel)
+                elif op == "mkdir":
+                    await self._push_mkdir(rel)
+                elif op == "rmdir":
+                    await self._push_delete(rel, folder=True)
+                else:
+                    await self._push_write(rel)
+                changed = True
+            except LaneError as ex:
+                await self._push_error(rel, ex)
+                changed = True
+            except OSError as ex:
+                self.failed[rel] = f"local:{type(ex).__name__}"
+                self.pending.pop(rel, None)
+                changed = True
+        if changed:
+            self.persist()
+
+    def _op(self, op: str, rel: str, **extra: Any) -> None:
+        self.ops.append({"op": op, "path": rel, "at": time.time(), **extra})
+
+    async def push_now(self, rel: str) -> dict[str, Any]:
+        """fs_write: đẩy ngay một tệp (bỏ qua gộp/trần tần suất). Trả kết quả cho agent."""
+        self._snap(rel)
+        self.pending[rel] = {"since": 0.0, "op": "write"}
+        try:
+            await self._push_write(rel)
+        except LaneError as ex:
+            await self._push_error(rel, ex)
+        self.persist()
+        if rel in self.blocked:
+            return {"path": rel, "saved": False, "reason": "secret_blocked"}
+        if rel in self.failed:
+            return {"path": rel, "saved": False, "reason": self.failed[rel]}
+        if rel in self.pending:
+            return {"path": rel, "saved": False, "reason": str(self.pending[rel].get("why") or "queued")}
+        b = self.base.get(rel) or {}
+        if b.get("sha256") != self.local_sha(rel):  # bản xung đột: bản agent đã thành tệp khác
+            last = next((o for o in reversed(self.ops) if o.get("conflict_of") == rel), None)
+            return {"path": rel, "saved": False, "reason": "conflict", "your_copy": last.get("path") if last else None}
+        return {"path": rel, "saved": True, "version_id": b.get("version_id"), "rev": b.get("rev")}
+
+    async def _push_write(self, rel: str) -> None:
+        import stat as _st
+
+        from ...redact import contains_secret_value
+        from .client import UPLOAD_MAX_BYTES
+
+        e = self.pending.get(rel) or {}
+        p = self.path / rel
+        st = os.lstat(p)
+        if not _st.S_ISREG(st.st_mode):
+            self.pending.pop(rel, None)
+            return
+        if st.st_nlink > 1:
+            self.failed[rel] = "hardlink"
+            self.pending.pop(rel, None)
+            return
+        if st.st_size > UPLOAD_MAX_BYTES:
+            raise LaneError("too_large", 413, {"max_bytes": UPLOAD_MAX_BYTES})
+        fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "rb") as f:
+            data = f.read()
+        sha = hashlib.sha256(data).hexdigest()
+        b = self.base.get(rel)
+        if b is not None and b.get("type") == "file" and b.get("sha256") == sha:
+            self.pending.pop(rel, None)
+            self.failed.pop(rel, None)
+            self.blocked.pop(rel, None)
+            return
+        if b is not None and b.get("lazy") and not data:
+            self.pending.pop(rel, None)
+            return
+        if self.ignored(rel):
+            self.pending.pop(rel, None)
+            return
+        # QUÉT SECRET TRƯỚC KHI ĐẨY: không một byte nào rời máy nếu tệp chứa giá trị secret hub biết
+        if contains_secret_value(data):
+            first = self.blocked.get(rel) is None
+            self.blocked[rel] = sha
+            self.pending.pop(rel, None)
+            if first or self.blocked.get(rel) != sha:
+                self.svc.publish("filehub.secret_blocked", self, {"path": one_line(rel, 300)})
+            await self.steer(f"sec:{rel}:{sha[:12]}", STEER_SECRET.format(rel=one_line(rel, 300)))
+            return
+        self.blocked.pop(rel, None)
+        c = self.svc.client(self.server)
+        is_file = b is not None and b.get("type") == "file" and b.get("version_id")
+        item = await c.write(self.root, self.remote(rel), data, agent=self.agent_id, run=self.run_id,
+                             if_match=str(b["version_id"]) if is_file else None, create=not is_file, parents=True)
+        self.base[rel] = self._base_of(item, sha)
+        self._op("modified" if is_file else "added", rel, **({"conflict_of": e["conflict_of"]} if e.get("conflict_of") else {}))
+        self.pending.pop(rel, None)
+        self.failed.pop(rel, None)
+        self.last_pushed = rel
+        self.last_push[rel] = time.time()
+
+    async def _push_delete(self, rel: str, *, folder: bool = False) -> None:
+        b = self.base.get(rel)
+        if b is None:
+            self.pending.pop(rel, None)
+            return
+        c = self.svc.client(self.server)
+        try:
+            await c.delete(self.root, self.remote(rel), if_rev=int(b.get("rev") or 0) or None, agent=self.agent_id, run=self.run_id)
+        except LaneError as ex:
+            if ex.lane_code == "not_found":
+                pass
+            elif ex.lane_code == "conflict" and not folder:
+                # người đã sửa tệp sau base → KHÔNG xoá bản của người: kéo bản đó về lại cây + báo agent
+                self.pending.pop(rel, None)
+                await self._download(rel)
+                await self.steer(f"chg:{rel}", STEER_CHANGED.format(rel=one_line(rel, 300)))
+                return
+            else:
+                raise
+        for k in [k for k in self.base if k == rel or k.startswith(rel + "/")]:
+            self.base.pop(k, None)
+        self._op("deleted", rel)
+        self.pending.pop(rel, None)
+
+    async def _push_move(self, src: str, dst: str) -> None:
+        b = self.base.get(src)
+        c = self.svc.client(self.server)
+        if b is None:
+            self.pending.pop(src, None)
+            self.pending[dst] = {"since": 0.0, "op": "write"}
+            await self._push_write(dst)
+            return
+        try:
+            item = await c.move(self.root, self.remote(src), self.remote(dst), if_rev=int(b.get("rev") or 0) or None, agent=self.agent_id, run=self.run_id)
+        except LaneError as ex:
+            if ex.lane_code in ("name_conflict", "conflict", "not_found", "exists"):  # đích đã có / nguồn đổi → tạo mới + xoá nguồn
+                self.pending.pop(src, None)
+                self.pending[dst] = {"since": 0.0, "op": "write"}
+                await self._push_write(dst)
+                if ex.lane_code != "not_found":
+                    self.pending[src] = {"since": 0.0, "op": "delete"}
+                    await self._push_delete(src)
+                else:
+                    self.base.pop(src, None)
+                return
+            raise
+        self.base[dst] = {**self.base.pop(src), **{k: v for k, v in self._base_of(item).items() if v is not None and k != "sha256"}}
+        self._op("renamed", dst, **{"from": src})
+        self.pending.pop(src, None)
+        self.pending.pop(dst, None)
+
+    async def _push_mkdir(self, rel: str) -> None:
+        item = await self.svc.client(self.server).mkdir(self.root, self.remote(rel), agent=self.agent_id, run=self.run_id)
+        self.base[rel] = self._base_of(item)
+        self._op("added", rel, folder=True)
+        self.pending.pop(rel, None)
+
+    async def _push_error(self, rel: str, ex: LaneError) -> None:
+        code = ex.lane_code
+        e = self.pending.get(rel) or {}
+        now = time.time()
+        if code in ("conflict", "exists") and e.get("op", "write") == "write":
+            await self._conflict_push(rel, ex.extra.get("current") or {})
+            return
+        if code == "file_locked":
+            until = ex.extra.get("until")
+            from .service import _parse_ts
+
+            t = _parse_ts(until) if until else None
+            self.pending[rel] = {**e, "retry_at": min(t, now + 60) if t else now + 60, "why": "file_locked"}
+            await self.steer(f"lock:{rel}", STEER_LOCKED.format(rel=one_line(rel, 300)))
+            return
+        if code in ("rate_limited", "too_many_writes", "scan_unavailable", "offline"):
+            n = int(e.get("tries") or 0) + 1
+            wait = ex.retry_after if ex.retry_after is not None else min(30.0, 0.5 * (2 ** n))
+            self.pending[rel] = {**e, "retry_at": now + wait, "tries": n, "why": code}
+            return
+        if code in ("unauthorized", "lane_disabled"):
+            self.stopped_push = code
+            self.svc._on_error(self.server, ex)
+            return
+        if code == "storage_full":
+            self.stopped_push = code
+            self.failed[rel] = code
+            self.pending.pop(rel, None)
+            await self.steer(f"fail:{code}", STEER_FAILED.format(rel=one_line(rel, 300), code=code))
+            return
+        if code == "root_not_granted":
+            self.revoked = True
+            await self.steer("revoked", STEER_REVOKED)
+            return
+        if code == "infected":
+            self.svc.publish("filehub.infected", self, {"path": one_line(rel, 300)})
+        self.failed[rel] = code
+        self.pending.pop(rel, None)
+        await self.steer(f"fail:{rel}", STEER_FAILED.format(rel=one_line(rel, 300), code=code))
+
+    async def _conflict_push(self, rel: str, current: dict[str, Any]) -> None:
+        """409 khi đẩy: người đã lưu bản mới hơn → bản của agent thành tệp riêng (`If-None-Match: *`), bản của người về đúng tên."""
+        first = await self._conflict_local(rel, steer=False)
+        new = first
+        if new is None:
+            self.pending.pop(rel, None)
+            return
+        self.pending.pop(rel, None)
+        self.pending[new] = {"since": 0.0, "op": "write", "conflict_of": rel}
+        for i in range(2, 6):  # trùng tên bản xung đột (cùng phút) → thêm hậu tố
+            try:
+                await self._push_write(new)
+                break
+            except LaneError as ex:
+                if ex.lane_code != "exists":
+                    raise
+                stem, dot, ext = new.rpartition(".")
+                alt = f"{stem} {i}.{ext}" if dot else f"{new} {i}"
+                os.replace(self.path / new, self.local(alt))
+                self.pending.pop(new, None)
+                new = alt
+                self.pending[new] = {"since": 0.0, "op": "write", "conflict_of": rel}
+        await self._download(rel)
+        await self.steer(f"cf:{rel}", STEER_CONFLICT.format(rel=one_line(rel, 300), rel2=one_line(new, 300)))
+
+    async def flush(self, *, timeout_s: float) -> None:
+        """Cuối run: dừng vòng quét → quét lần cuối → đẩy hết (bỏ qua gộp/trần tần suất) tới khi hết hàng đợi / hết `timeout_s` / 401/507."""
+        await self.stop()
+        if self.read_only and not self.pending:
+            return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(0.0, timeout_s)
+        async with self.lock:
+            self.scan()
+            while self.pending and not self.stopped_push and not self.revoked and not self.read_only:
+                await self.push_pending(final=True)
+                left = [e for e in self.pending.values() if e.get("op") != "move_src"]
+                if not left or loop.time() >= deadline:
+                    break
+                nxt = min(float(e.get("retry_at") or 0) for e in left) - time.time()
+                await asyncio.sleep(min(max(0.05, nxt), max(0.0, deadline - loop.time()), 1.0))
+            self.persist()
+
+    def unpushed(self) -> list[str]:
+        return sorted(set(r for r, e in self.pending.items() if e.get("op") != "move_src") | set(self.blocked) | {r for r, c in self.failed.items() if c != "hardlink"})
+
+    def run_ops(self) -> list[dict[str, Any]]:
+        return self.ops[getattr(self, "ops_mark", 0):]
 
     async def stop(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
+        t, self._task = self._task, None
+        if t is not None and t is not asyncio.current_task():
+            t.cancel()
             try:
-                await self._task
+                await t
             except (asyncio.CancelledError, Exception):
                 pass
-            self._task = None
 
     def kick(self) -> None:
         self._kick.set()

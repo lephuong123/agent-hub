@@ -65,6 +65,9 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     ld = ls.add_parser("disable", help="xoá khoá + cấu hình cổng", parents=[common])
     ld.add_argument("--server", required=True)
     ld.add_argument("--force", action="store_true", help="kể cả khi còn thư mục chế độ lane dùng cổng này")
+    lo = ls.add_parser("orphan", help="cây mồ côi (thay đổi chưa đẩy lên được khi run kết thúc): push = đẩy lại, drop = bỏ", parents=[common])
+    lo.add_argument("orphan_action", choices=("push", "drop"))
+    lo.add_argument("tree")
     s.set_defaults(fn=cmd_filehub)
 
 
@@ -204,6 +207,17 @@ def _cmd_lane(ctx: Any) -> int:
 
 
 def _cmd_lane_more(ctx: Any, act: str) -> int:
+    a = ctx.args
+    if act == "orphan":
+        r = ctx.call("filehub.lane_orphan", {"tree": a.tree, "action": a.orphan_action})
+        if r.get("dropped"):
+            ctx.out(r, f"Đã bỏ cây mồ côi {r['tree']}.")
+        elif r.get("pushed"):
+            ctx.out(r, f"Đã đẩy hết thay đổi của cây {r['tree']} lên Không gian số.")
+        else:
+            ctx.out(r, f"Còn {len(r.get('left') or [])} thay đổi chưa đẩy được ({r.get('code')}): " + ", ".join(r.get("left") or [])[:500])
+            return 1
+        return 0
     return 1
 
 

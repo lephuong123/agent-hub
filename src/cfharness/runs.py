@@ -696,10 +696,14 @@ class RunManager:
             prompt = hub.manager.render_prompt(run_id, prompt)
         if recall:  # graph memory: khối DỮ LIỆU trước tin user đầu — chỉ vào stdin, KHÔNG vào DB (runs.prompt giữ nguyên lời người)
             prompt = f"{recall}\n\n{prompt}"
-        if opts.get("filehub_lane") and not run.get("resumed_from_session"):  # cổng cfharness: ghi chú cây làm việc (tin user đầu, không system prompt)
+        if opts.get("filehub_lane"):  # cổng cfharness: ghi chú cây làm việc (tin user đầu, không system prompt) + thay đổi của người lúc chờ
             wd = hub.filehub.lane.workdir_of(run_id)  # type: ignore[attr-defined]
             if wd is not None:
-                prompt = f"{wd.prompt_note()}\n\n{prompt}"
+                notes = wd.take_deferred()
+                if notes:
+                    prompt = "\n".join(notes) + f"\n\n{prompt}"
+                if not run.get("resumed_from_session"):
+                    prompt = f"{wd.prompt_note()}\n\n{prompt}"
         return RunSpec(
             run_id=run_id,
             agent_id=agent["id"],

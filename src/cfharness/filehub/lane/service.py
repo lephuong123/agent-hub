@@ -388,16 +388,19 @@ class LaneService:
                         source="hub")
         self.hub.publish(ev)
 
-    async def steer(self, run_id: str, text: str) -> None:
+    async def steer(self, run_id: str, text: str) -> bool:
+        """Steer câu cố định vào run đang chạy. Run chưa/không chạy (đang dựng cây, đang chờ người) → False (bên gọi giữ lại câu)."""
         from ...steer import steer
 
         run = self.hub.store.get_run(run_id) or {}
         if run.get("status") != "running":
-            return
+            return False
         try:
             await steer(self.hub, run_id, text, by="hub", channel="hub")
+            return True
         except HubError as e:
             log.info("lane: không steer được run %s: %s", run_id, e.message)
+            return False
 
     async def prepare_run(self, run: dict[str, Any], agent: dict[str, Any]) -> tuple[Path, dict[str, Any]]:
         """Trước spawn: dựng/đỗ lại cây của run. Trả (cwd, run_opts đã ghi `tree`). Lỗi → HubError `filehub_unavailable: …` (run failed)."""
@@ -441,32 +444,6 @@ class LaneService:
         wd.start()
         return wd.path, opts
 
-    async def flush_run(self, run_id: str) -> dict[str, Any] | None:
-        return None
-
-    async def end_run(self, run_id: str) -> None:
-        """Sau run: `waiting_human` → ĐỖ cây (giữ base + presence, resume dùng lại); còn lại → bỏ cây khỏi bộ nhớ, xoá cây."""
-        tree = self.by_run.pop(run_id, None)
-        wd = self.workdirs.get(tree) if tree else None
-        if wd is None:
-            return
-        await wd.stop()
-        status = (self.hub.store.get_run(run_id) or {}).get("status")
-        if status in ("waiting_human", "interrupted"):
-            wd.parked = True
-            wd.persist()
-            self._maybe_stop_stream(wd.server)
-            return
-        await self._close_tree(wd)
-
-    async def _close_tree(self, wd: Any) -> None:
-        self.workdirs.pop(wd.tree, None)
-        shutil.rmtree(wd.path, ignore_errors=True)
-        try:
-            wd.state_path.unlink()
-        except OSError:
-            pass
-        self._maybe_stop_stream(wd.server)
 
     # ------------------------------------------------------------------ luồng sự kiện (một kết nối / server, chỉ khi có cây)
     def ensure_stream(self, server: str, cursor: str) -> None:
@@ -627,11 +604,309 @@ class LaneService:
             wd.persist()
         return {"path": rel, "type": "file", "size": b.get("size"), "version_id": b.get("version_id"), "local": str(wd.path / rel)}
 
-    async def write_op(self, wd: Any, op: str, args: dict[str, Any]) -> Any:
-        raise HubError(f"{op}: chưa hỗ trợ")
+    async def flush_run(self, run_id: str) -> dict[str, Any] | None:
+        """Cuối run (TRƯỚC event kết thúc): quét lần cuối + đẩy hết (≤ `final_flush_s`) → `runs.diff` từ nhật ký thao tác + `workspace.diff`."""
+        wd = self.workdir_of(run_id)
+        if wd is None:
+            return None
+        await wd.flush(timeout_s=float(self.cfg("final_flush_s") or 60))
+        wd.flushed = True
+        st = {"added": "added", "modified": "modified", "deleted": "deleted", "renamed": "renamed"}
+        files = [{"status": st.get(o.get("op"), "modified"), "path": o.get("path"), **({"from": o["from"]} if o.get("from") else {})}
+                 for o in wd.run_ops() if o.get("op") in st]
+        diff = {"kind": "lane", "root": str(wd.path), "filehub": wd.folder, "lane": {"server": wd.server, "root": wd.root, "sub": wd.sub},
+                "files": files[:500], "stat": {"files": len(files), "unpushed": len(wd.unpushed())}, "revertible": False}
+        self.hub.store.update_run(run_id, {"diff": diff})
+        ev = make_event("workspace.diff", wd.agent_id, {"kind": "lane", "stat": diff["stat"], "files": [f"{f['status']}:{f['path']}" for f in files[:50]],
+                                                        "revertible": False}, run_id=run_id)
+        self.hub.publish(ev)
+        return diff
+
+    async def end_run(self, run_id: str) -> None:
+        """Sau run: `waiting_human`/`interrupted` → ĐỖ cây (giữ base + presence, resume dùng lại); còn lại → báo thay đổi, xoá presence,
+        còn thay đổi chưa đẩy → chuyển cây sang `filehub/lane-orphans/<tree>` (event `filehub.push_failed`), không thì xoá cây."""
+        tree = self.by_run.pop(run_id, None)
+        wd = self.workdirs.get(tree) if tree else None
+        if wd is None:
+            return
+        status = (self.hub.store.get_run(run_id) or {}).get("status")
+        if status in ("waiting_human", "interrupted"):
+            await wd.stop()
+            wd.parked = True
+            wd.persist()
+            self._maybe_stop_stream(wd.server)
+            return
+        if not getattr(wd, "flushed", False):
+            try:
+                await wd.flush(timeout_s=float(self.cfg("final_flush_s") or 60))
+            except Exception:  # pragma: no cover
+                log.exception("lane: flush cuối run %s lỗi", run_id)
+        await self.presence_clear(wd)
+        self._report(wd)
+        await self._close_tree(wd)
+
+    def _report(self, wd: Any) -> None:
+        from ...termsafe import one_line
+
+        ops = wd.run_ops()
+        changed = [o["path"] for o in ops if o.get("op") in ("added", "modified", "renamed")]
+        deleted = [o["path"] for o in ops if o.get("op") == "deleted"]
+        for etype, paths in (("filehub.changed", changed), ("filehub.deleted", deleted)):
+            if paths:
+                uniq = list(dict.fromkeys(paths))
+                self.publish(etype, wd, {"count": len(uniq), "paths": [one_line(x, 300) for x in uniq[:20]], "url": None, "lane": True})
+
+    async def _close_tree(self, wd: Any) -> None:
+        self.workdirs.pop(wd.tree, None)
+        left = wd.unpushed()
+        if left and wd.path.is_dir():
+            self._orphan(wd, left)
+        else:
+            shutil.rmtree(wd.path, ignore_errors=True)
+            try:
+                wd.state_path.unlink()
+            except OSError:
+                pass
+        self._maybe_stop_stream(wd.server)
+
+    def _orphan(self, wd: Any, left: list[str]) -> None:
+        from ...termsafe import one_line
+
+        dst = self.orphan_dir / wd.tree
+        self.orphan_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.orphan_dir, 0o700)
+        if dst.exists():
+            shutil.rmtree(dst, ignore_errors=True)
+        dst.mkdir(mode=0o700)
+        shutil.move(str(wd.path), str(dst / "tree"))
+        wd.path = dst / "tree"
+        try:
+            wd.state_path.replace(dst / "state.json")
+        except OSError:
+            pass
+        wd.persist_to(dst / "state.json")
+        code = wd.stopped_push or next(iter(set(wd.failed.values()) - {"hardlink"}), None) or ("secret_blocked" if wd.blocked else "pending")
+        self.publish("filehub.push_failed", wd, {"count": len(left), "paths": [one_line(x, 300) for x in left[:20]], "code": code, "tree": wd.tree})
 
     def orphans(self) -> list[dict[str, Any]]:
-        return []
+        import json as _json
+
+        out = []
+        if not self.orphan_dir.is_dir():
+            return out
+        for d in sorted(self.orphan_dir.iterdir()):
+            try:
+                st = _json.loads((d / "state.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            left = sorted(set((st.get("pending") or {})) | set(st.get("blocked") or {}) | set(st.get("failed") or {}))
+            out.append({"tree": d.name, "folder": st.get("folder"), "run_id": st.get("run_id"), "agent_id": st.get("agent_id"), "count": len(left),
+                        "paths": left[:20], "since": d.stat().st_mtime})
+        return out
+
+    async def orphan(self, p: dict[str, Any]) -> dict[str, Any]:
+        """RPC `filehub.lane_orphan {tree, action: push|drop}` (CHỈ người): đẩy lại thay đổi còn kẹt của cây mồ côi, hoặc bỏ hẳn (xoá cây)."""
+        from .workdir import Workdir
+
+        tree, action = str(p.get("tree") or ""), str(p.get("action") or "")
+        d = self.orphan_dir / tree
+        if not tree or "/" in tree or tree.startswith(".") or not (d / "state.json").is_file():
+            raise NotFound(f"không có cây mồ côi '{tree}'")
+        if action == "drop":
+            shutil.rmtree(d, ignore_errors=True)
+            return {"tree": tree, "dropped": True}
+        if action != "push":
+            raise HubError("action phải là push|drop", code=-32602)
+        wd = Workdir.load(self, d / "state.json", path=d / "tree")
+        wd.parked, wd.stopped_push, wd.read_only = False, None, False
+        wd.failed = {k: v for k, v in wd.failed.items() if v == "hardlink"}
+        wd.blocked = {}
+        for r in list(wd.pending):
+            wd.pending[r] = {**wd.pending[r], "retry_at": 0}
+        await wd.flush(timeout_s=float(self.cfg("final_flush_s") or 60))
+        left = wd.unpushed()
+        if left:
+            wd.persist_to(d / "state.json")
+            return {"tree": tree, "pushed": False, "left": left[:50], "code": wd.stopped_push or "pending"}
+        self._report(wd)
+        shutil.rmtree(d, ignore_errors=True)
+        return {"tree": tree, "pushed": True}
+
+    # ------------------------------------------------------------------ presence (H4)
+    async def presence_tick(self, wd: Any) -> None:
+        return None
+
+    async def presence_clear(self, wd: Any) -> None:
+        return None
+
+    # ------------------------------------------------------------------ vòng nền: hạn khoá, mồ côi quá hạn, cây của run đã xong (daemon khởi động lại)
+    def start(self) -> None:
+        if self._maint is None or self._maint.done():
+            try:
+                self._maint = asyncio.get_running_loop().create_task(self._maintenance_loop())
+            except RuntimeError:  # pragma: no cover
+                self._maint = None
+
+    async def _maintenance_loop(self) -> None:
+        await asyncio.sleep(1.0)
+        from ...runs import export_quiesced
+
+        while True:
+            try:
+                if not export_quiesced(self.hub):  # đang xuất gói / đóng băng chuyển nhà → bỏ lượt (không đẩy, không ghi trạng thái)
+                    await self.maintenance()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # pragma: no cover
+                log.exception("lane: vòng bảo trì lỗi")
+            await asyncio.sleep(max(1.0, float(self.cfg("maintenance_s") or 60)))
+
+    async def maintenance(self) -> None:
+        from ...runs import export_quiesced
+
+        if export_quiesced(self.hub):  # đang xuất gói / đã đóng băng chuyển nhà: không đẩy, không ghi trạng thái
+            return
+        day = time.strftime("%Y-%m-%d")
+        st = dict(self.hub.store.state_get("filehub.lane") or {})
+        warned = dict(st.get("key_warned") or {})
+        for name in self.servers():
+            exp = self.key_expiry(name)
+            if exp.get("warn") and warned.get(name) != day:
+                warned[name] = day
+                self._set_state(name, "key_expiring", days_left=exp.get("days_left"))
+        if warned != (st.get("key_warned") or {}):
+            st["key_warned"] = warned
+            self.hub.store.state_set("filehub.lane", st)
+        keep = float(self.cfg("orphan_keep_days") or 7) * 86400
+        if self.orphan_dir.is_dir():
+            for d in self.orphan_dir.iterdir():
+                try:
+                    if time.time() - d.stat().st_mtime > keep:
+                        shutil.rmtree(d, ignore_errors=True)
+                except OSError:
+                    pass
+        await self.recover()
+
+    def _tree_busy(self, tree: str) -> bool:
+        import json as _json
+
+        rows = self.hub.store.conn.execute(
+            "SELECT run_opts, status FROM runs WHERE run_opts LIKE ? AND status IN ('queued','running','waiting_human','interrupted')", (f"%{tree}%",)
+        ).fetchall()
+        for r in rows:
+            try:
+                o = _json.loads(r[0]) if isinstance(r[0], str) else (r[0] or {})
+            except ValueError:
+                continue
+            if ((o or {}).get("filehub_lane") or {}).get("tree") == tree:
+                return True
+        return False
+
+    async def recover(self) -> None:
+        """Cây có trạng thái trên đĩa mà không thuộc run nào đang chạy/chờ/đỗ (daemon chết giữa run, run đã kết thúc) → đẩy nốt hoặc mồ côi."""
+        from .workdir import Workdir
+
+        if not self.state_dir.is_dir():
+            return
+        for f in sorted(self.state_dir.glob("*.json")):
+            tree = f.stem
+            if tree in self.workdirs or self._tree_busy(tree):
+                continue
+            try:
+                wd = Workdir.load(self, f)
+            except (OSError, ValueError, KeyError):
+                f.unlink(missing_ok=True)
+                continue
+            if not wd.path.is_dir():
+                f.unlink(missing_ok=True)
+                continue
+            if wd.server not in self.servers():
+                continue
+            wd.parked, wd.read_only = False, False
+            try:
+                await wd.flush(timeout_s=float(self.cfg("final_flush_s") or 60))
+            except Exception as e:  # pragma: no cover
+                log.warning("lane: đẩy nốt cây %s lỗi: %s", tree, e)
+            wd.ops_mark = 0
+            self._report(wd)
+            await self._close_tree(wd)
+
+    # ------------------------------------------------------------------ fs_* ghi (H3)
+    async def write_op(self, wd: Any, op: str, args: dict[str, Any]) -> Any:
+        from .tools import rel_arg
+
+        c = self.client(wd.server)
+        async with wd.lock:
+            if op == "fs_write":
+                rel = rel_arg(wd, args.get("path"), allow_root=False)
+                content = args.get("content")
+                if not isinstance(content, str):
+                    raise HubError("content phải là chuỗi", code=-32602)
+                if args.get("create_only"):
+                    try:
+                        await c.stat(wd.root, wd.remote(rel))
+                        raise HubError(f"'{rel}' đã có trên Không gian số (create_only)")
+                    except LaneError as e:
+                        if e.lane_code != "not_found":
+                            raise
+                p = wd.local(rel)
+                p.parent.mkdir(parents=True, exist_ok=True)
+                tmp = p.parent / f".lane-tmp-{os.getpid()}-{time.time_ns()}"
+                tmp.write_text(content, encoding="utf-8")
+                os.replace(tmp, p)
+                return await wd.push_now(rel)
+            if op == "fs_mkdir":
+                rel = rel_arg(wd, args.get("path"), allow_root=False)
+                wd.local(rel).mkdir(parents=True, exist_ok=True)
+                item = await c.mkdir(wd.root, wd.remote(rel), agent=wd.agent_id, run=wd.run_id)
+                wd.base[rel] = wd._base_of(item)
+                wd._op("added", rel, folder=True)
+                wd.persist()
+                return {"path": rel, "created": True}
+            if op == "fs_move":
+                src, dst = rel_arg(wd, args.get("from"), allow_root=False), rel_arg(wd, args.get("to"), allow_root=False)
+                st = await c.stat(wd.root, wd.remote(src))
+                item = await c.move(wd.root, wd.remote(src), wd.remote(dst), if_rev=int(st.get("rev") or 0) or None, agent=wd.agent_id, run=wd.run_id)
+                ps, pd = wd.path / src, wd.local(dst)
+                if ps.exists() and not os.path.islink(ps) and not pd.exists():
+                    pd.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(ps, pd)
+                for k in [k for k in list(wd.base) if k == src or k.startswith(src + "/")]:
+                    wd.base[dst + k[len(src):]] = wd.base.pop(k)
+                    wd.snapshot.pop(k, None)
+                    wd._snap(dst + k[len(src):])
+                if dst in wd.base:
+                    wd.base[dst]["rev"] = int(item.get("rev") or 0)
+                wd._op("renamed", dst, **{"from": src})
+                wd.persist()
+                return {"from": src, "to": dst, "moved": True}
+            if op == "fs_delete":
+                rel = rel_arg(wd, args.get("path"), allow_root=False)
+                st = await c.stat(wd.root, wd.remote(rel))
+                res = await c.delete(wd.root, wd.remote(rel), if_rev=int(st.get("rev") or 0) or None, agent=wd.agent_id, run=wd.run_id)
+                p = wd.path / rel
+                if p.is_dir() and not os.path.islink(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                elif p.exists() or os.path.islink(p):
+                    p.unlink(missing_ok=True)
+                for k in [k for k in list(wd.base) if k == rel or k.startswith(rel + "/")]:
+                    wd.base.pop(k, None)
+                    wd.snapshot.pop(k, None)
+                    wd.pending.pop(k, None)
+                wd._op("deleted", rel)
+                wd.persist()
+                return {"path": rel, "trashed": True, "trash_batch": res.get("trash_batch")}
+            if op == "fs_restore":
+                rel = rel_arg(wd, args.get("path"), allow_root=False)
+                st = await c.stat(wd.root, wd.remote(rel))
+                item = await c.restore(wd.root, agent=wd.agent_id, run=wd.run_id, path=wd.remote(rel), version_id=str(args.get("version_id") or ""),
+                                       if_match=str(st.get("version_id") or ""))
+                if wd.mode == "tree" or rel in wd.base:
+                    await wd._download(rel, item)
+                wd._op("modified", rel, restored=True)
+                wd.persist()
+                return {"path": rel, "restored": True, "version_id": item.get("version_id")}
+        raise HubError(f"không có tool '{op}'")
 
     def _on_bus(self, ev: Any) -> None:
         """Tool của run vừa xong (Write/Edit/Bash…) → kích quét cây ngay (không chờ nhịp `scan_interval_s`)."""

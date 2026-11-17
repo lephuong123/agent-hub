@@ -851,6 +851,7 @@ class FilehubService:
         try:
             if ev.type == "hub.started":
                 self.start()
+                self.lane.start()  # cổng cfharness: hạn khoá, cây mồ côi, cây của run đã xong (daemon khởi động lại)
             elif ev.type == "run.started" and ev.run_id:
                 run = self.hub.store.get_run(ev.run_id) or {}
                 f = self._run_folder(run)

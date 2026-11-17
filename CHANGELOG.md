@@ -17,6 +17,11 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - Run trên thư mục chế độ `lane` (`filehub:<tên>[/<con>]`) có cây làm việc riêng dựng từ Không gian số lúc bắt đầu (đúng phạm vi ref) và
   xoá khi run xong; người sửa/xoá/di chuyển tệp trong phạm vi → hub kéo về và nhắn agent ngay (thường < 1 s). Run chỉ đọc hoặc phạm vi quá
   lớn: cây rỗng + tool `fs_list|fs_read|fs_stat|fs_versions|fs_link|fs_pull`. Agent không bao giờ gọi được cổng trực tiếp (bị chặn).
+- Agent lưu tệp trong cây → lên Không gian số trong vài giây thành phiên bản mới (không bao giờ ghi đè bản người vừa lưu: giữ bản của agent
+  thành tệp `<tên> (cfharness <agent> <giờ>)`); tệp đang bị người khoá → xếp hàng, mở khoá là lưu. **Tệp chứa giá trị secret của hub bị
+  chặn TRƯỚC khi đẩy** (không một byte nào rời máy, agent được báo). Hết run còn thay đổi chưa đẩy được → giữ ở cây mồ côi
+  (`cfharness filehub lane orphan push|drop <run>`, tự dọn sau 7 ngày). Diff của run lấy từ nhật ký thao tác; hoàn tác ở phiên bản/thùng rác
+  Không gian số.
 
 ### MCP server
 - `cfharness mcp add|edit <tên> --url … --oauth …`: cờ đặt SAU tên được đọc đúng — trước đây bị lưu lặng lẽ thành lệnh stdio

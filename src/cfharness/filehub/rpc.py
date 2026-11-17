@@ -25,9 +25,9 @@ if TYPE_CHECKING:
 MUTATING_FILEHUB = ("filehub.setup", "filehub.login", "filehub.login_callback", "filehub.switch_to_workspace", "filehub.add", "filehub.remove",
                     "filehub.rename", "filehub.pause", "filehub.resume",
                     # cổng cfharness (filehub/lane/): khoá hub chỉ người nhập (CLI getpass / web bước 2), gỡ khỏi params trước audit
-                    "filehub.lane_setup", "filehub.lane_disable")
+                    "filehub.lane_setup", "filehub.lane_disable", "filehub.lane_orphan")
 # Cổng cfharness — chỉ người (HUMAN_ONLY), KHÔNG ∈ MANAGER_ALLOWED. `lane_test` không ghi nhưng dùng khoá → chỉ người.
-HUMAN_ONLY_LANE = ("filehub.lane_setup", "filehub.lane_disable", "filehub.lane_test")
+HUMAN_ONLY_LANE = ("filehub.lane_setup", "filehub.lane_disable", "filehub.lane_test", "filehub.lane_orphan")
 
 
 def _req(p: dict[str, Any], key: str) -> Any:
@@ -72,6 +72,7 @@ def register_rpc(daemon: "Daemon") -> None:
         "filehub.lane_setup": s.lane.setup,  # khoá bị pop khỏi p NGAY đầu hàm (audit không thấy)
         "filehub.lane_test": s.lane.test,
         "filehub.lane_disable": s.lane.disable,
+        "filehub.lane_orphan": s.lane.orphan,  # {tree, action: push|drop} — cây mồ côi (thay đổi chưa đẩy được khi run kết thúc)
         # tool hub-self `fs_*` của run có workspace thư mục chung chế độ lane — daemon ràng run_id với tiến trình gọi (như taskself.call)
         "fsself.call": s.lane.fsself_call,
     }

@@ -502,11 +502,12 @@ def test_background_loops_skip_while_export_quiesced():
     from cfharness.manager.service import ManagerService
     from cfharness.runs import export_quiesced
     from cfharness.schedules.service import ScheduleService
+    from cfharness.filehub.lane.service import LaneService
 
     assert export_quiesced(SimpleNamespace(runs=SimpleNamespace(quiesced="export")))
     assert not export_quiesced(SimpleNamespace(runs=SimpleNamespace(quiesced=None))) and not export_quiesced(SimpleNamespace())
     for fn in (LearningService.loop, LearningOps.loop, CurationService.loop, ScheduleService._loop, ManagerService._loop,
-               TaskDispatcher._loop, embed.run_vector_loop, session_search.run_backfill):
+               TaskDispatcher._loop, embed.run_vector_loop, session_search.run_backfill, LaneService._maintenance_loop):
         assert "export_quiesced(" in inspect.getsource(fn), fn.__qualname__
     # PR5: sao lưu chỉ bỏ lượt khi ĐANG XUẤT (`exporting`), vẫn chạy khi hub đóng băng vì chuyển nhà (hub_freeze)
     assert "exporting(" in inspect.getsource(backup.BackupService._loop)
