@@ -86,7 +86,7 @@ async def main_async(a: argparse.Namespace) -> dict:
         ids.append(aid)
         try:
             await c.call("agent.create", {"config": {"id": aid, "name": f"bench {i}", "model": "haiku", "limits": {"max_concurrent_runs": 1}}})
-        except Exception:
+        except Exception:  # best-effort: bench: agent có thể đã có từ lần trước
             pass
     workers = ids[: a.concurrent]
     res: dict = {"agents": a.agents, "concurrent_target": a.concurrent, "duration_s": a.duration, "line_delay_s": a.line_delay, "subscriber_queue": a.sub_queue}
@@ -117,7 +117,7 @@ async def main_async(a: argparse.Namespace) -> dict:
                         r = await c.call("run.start", {"agent": w, "prompt": f"bench run {len(submitted)}"})
                         submitted.append(r["id"])
                         busy.add(w)
-                    except Exception:
+                    except Exception:  # best-effort: bench: run bị từ chối (giới hạn đồng thời) — thử lại vòng sau
                         pass
             st = await c.call("hub.status")
             max_running = max(max_running, st["running"])

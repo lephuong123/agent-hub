@@ -299,6 +299,7 @@ def _filehub_roots(paths: HubPaths) -> list[str]:
             out += [lp, os.path.realpath(lp)]
         return list(dict.fromkeys(out))
     except Exception:  # cấu hình hỏng không được chặn xuất
+        log.debug("hub_transfer: cấu hình filehub hỏng — bỏ gốc filehub", exc_info=True)
         return []
 
 
@@ -371,7 +372,7 @@ def _export(paths: HubPaths, profile: str, by: str, level: int, chome: Path | No
                 try:
                     repos = TR.collect(db_copy, [str(paths.home), os.path.realpath(paths.home), *_filehub_roots(paths)])
                 except Exception as e:  # git hỏng/thiếu không được chặn xuất — phần optional
-                    log.warning("không thu được repos.json: %s", e)
+                    log.warning("không thu được repos.json: %s", e, exc_info=True)
                     repos = []
                 if repos:
                     meta = _add_member(tf, TR.MEMBER, io.BytesIO(TR.payload(repos)), tmpdir, level=level)
@@ -1139,6 +1140,7 @@ def _stage_config(stage: Path) -> Any:
 
         return HubConfig(stage / "config.yaml")
     except Exception:  # config.yaml hỏng không được chặn kế hoạch
+        log.debug("hub_transfer: config.yaml của gói hỏng — kế hoạch không dùng config", exc_info=True)
         return None
 
 

@@ -58,13 +58,13 @@ def parse_plist(path: Path) -> dict[str, Any] | None:
     try:
         with path.open("rb") as f:
             d = plistlib.load(f)
-    except Exception:
+    except Exception:  # best-effort: plistlib khắt khe — thử plutil bên dưới
         # plistlib khắt khe hơn launchd (vd `--` trong chú thích XML) — chuẩn hoá bằng plutil của macOS rồi đọc lại
         try:
             cp = subprocess.run(["/usr/bin/plutil", "-convert", "xml1", "-o", "-", str(path)], capture_output=True, timeout=5,
                                 stdin=subprocess.DEVNULL)
             d = plistlib.loads(cp.stdout) if cp.returncode == 0 else None
-        except Exception:
+        except Exception:  # best-effort: plist không đọc được → bỏ job
             d = None
     if not isinstance(d, dict):
         return None

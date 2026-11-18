@@ -235,5 +235,5 @@ class SlackNotifier(QueuedNotifier):
         try:
             await asyncio.to_thread(self._post, t, text)
             return {"sent": True, "kind": t["kind"]}
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi trả về trong reason; không exc_info vì traceback có thể mang URL webhook
             return {"sent": False, "reason": _clip(e, 300)}

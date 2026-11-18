@@ -155,7 +155,7 @@ class SyncSupervisor:
             return
         self._stopping = False
         try:
-            self._task = asyncio.get_running_loop().create_task(self._loop())
+            self._task = asyncio.get_running_loop().create_task(self._loop(), name="filehub-supervisor")
         except RuntimeError:
             self._task = None
 
@@ -195,7 +195,7 @@ class SyncSupervisor:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            except (asyncio.CancelledError, Exception):  # best-effort: chờ task giám sát đã huỷ kết thúc  # noqa: BLE001
                 pass
             self._task = None
         self.proc = None

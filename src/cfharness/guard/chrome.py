@@ -116,7 +116,7 @@ def _override(tool: str, ctx: "GuardContext") -> dict[str, Any]:
         return {}
     try:
         ann = ctx.mcp_annotations(CHROME_SERVER, tool) or {}
-    except Exception:
+    except Exception:  # fail-closed: không đọc được annotations → không có ghi đè của người
         return {}
     ov = ann.get("human_override")
     return ov if isinstance(ov, dict) else {}

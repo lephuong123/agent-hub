@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .aiotasks import spawn
 from .agents import load_mcp_registry
 from .cost_guard import COST_BASIS_ESTIMATED, estimated_run_cost, flag_once, manager_budget_scope
 from .errors import Blocked, HubError, NotFound
@@ -453,7 +454,7 @@ class RunManager:
             ar = ActiveRun(rid, agent["id"], task_id=run.get("task_id"), team_id=run.get("team_id"), kind=run.get("kind") or "adhoc")
             ar.lock_key = lock_key
             self.active[rid] = ar
-            ar.task = asyncio.get_event_loop().create_task(self._run(ar, run, agent))
+            ar.task = asyncio.get_event_loop().create_task(self._run(ar, run, agent), name=f"run:{ar.run_id}")
             ar.task.add_done_callback(lambda _t, ar=ar, sid=run["session_id"]: self._release_unstarted(ar, sid))
             started.append(rid)
         # giữ thứ tự FIFO cho run bị bỏ qua
@@ -1019,7 +1020,7 @@ class RunManager:
             if fh:
                 cp["filehub"] = str(fh)
         except Exception as e:  # checkpoint lỗi không chặn run, nhưng ghi lại (không revert được)
-            run_logger(log, ar.run_id, ar.agent_id).warning("checkpoint run %s lỗi: %r", ar.run_id, e)
+            run_logger(log, ar.run_id, ar.agent_id).warning("checkpoint run %s lỗi: %r", ar.run_id, e, exc_info=True)
             self.store.update_run(ar.run_id, {"checkpoint": {"kind": "error", "error": repr(e)[:300]}, "workspace_key": ar.lock_key})
             return
         ar.checkpoint = cp
@@ -1057,7 +1058,7 @@ class RunManager:
             try:
                 cp = await asyncio.to_thread(take_checkpoint, r, self.checkpoint_dir(ar.run_id), max_files=max_files, force_walk=True)
             except Exception as e:  # không chặn run
-                run_logger(log, ar.run_id, ar.agent_id).warning("checkpoint extra_write_root %s lỗi: %r", r, e)
+                run_logger(log, ar.run_id, ar.agent_id).warning("checkpoint extra_write_root %s lỗi: %r", r, e, exc_info=True)
                 continue
             ar.extra_checkpoints.append(cp)
 
@@ -1070,7 +1071,7 @@ class RunManager:
             try:
                 diffs.append(await asyncio.to_thread(compute_diff, cp, self.checkpoint_dir(ar.run_id)))
             except Exception as e:
-                run_logger(log, ar.run_id, ar.agent_id).warning("diff extra_write_root %s lỗi: %r", cp.get("root"), e)
+                run_logger(log, ar.run_id, ar.agent_id).warning("diff extra_write_root %s lỗi: %r", cp.get("root"), e, exc_info=True)
         fh = getattr(self.hub, "filehub", None)
         if diffs and fh is not None:
             try:
@@ -1085,7 +1086,7 @@ class RunManager:
         try:
             diff = await asyncio.to_thread(compute_diff, ar.checkpoint, self.checkpoint_dir(ar.run_id), max_file_bytes=int(self.hub.config.get("workspace.max_file_bytes")))
         except Exception as e:
-            run_logger(log, ar.run_id, ar.agent_id).warning("diff run %s lỗi: %r", ar.run_id, e)
+            run_logger(log, ar.run_id, ar.agent_id).warning("diff run %s lỗi: %r", ar.run_id, e, exc_info=True)
             self.store.update_run(ar.run_id, {"diff": {"kind": "error", "error": repr(e)[:300]}})
             return
         self.store.update_run(ar.run_id, {"diff": diff})
@@ -1096,7 +1097,7 @@ class RunManager:
     def _on_timeout(self, ar: ActiveRun) -> None:
         ar.timed_out = True
         if ar.handle is not None and ar.runtime is not None:
-            asyncio.ensure_future(ar.runtime.stop(ar.handle, grace_s=float(self.hub.config.get("runs.stop_grace_s"))))
+            spawn(ar.runtime.stop(ar.handle, grace_s=float(self.hub.config.get("runs.stop_grace_s"))), name=f"run-stop-timeout:{ar.run_id}")
 
     def _on_event(self, ar: ActiveRun, ev: HubEvent) -> None:
         # Trạng thái agent do hub tính (nhiều run/agent), không lấy agent.status từ adapter.
@@ -1151,7 +1152,7 @@ class RunManager:
             try:
                 await ar.runtime.stop(h, grace_s=0.5)
             except Exception:  # pragma: no cover
-                pass
+                log.debug("dọn tiến trình con mồ côi của run lỗi", exc_info=True)
         sig = (self.store.get_run(ar.run_id) or {}).get("task_signal") or {}
         if outcome == "completed" and sig.get("op") == "block":
             outcome = "blocked"  # agent gọi hub-self task_block (FR-TK-03)
@@ -1347,7 +1348,7 @@ class RunManager:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._auth_watch = loop.create_task(self._auth_watch_loop())
+        self._auth_watch = loop.create_task(self._auth_watch_loop(), name="runs-auth-watch")
 
     async def _auth_watch_loop(self) -> None:
         while self.auth_block and not self.shutting_down:
@@ -1390,7 +1391,7 @@ class RunManager:
         if ar is None or ar.handle is None or ar.runtime is None:
             raise HubError(f"run '{rid}' không đang chạy (status={run['status']})")
         grace = float(self.hub.config.get("runs.stop_grace_s"))
-        asyncio.ensure_future(ar.runtime.stop(ar.handle, grace_s=grace))
+        spawn(ar.runtime.stop(ar.handle, grace_s=grace), name=f"run-stop:{rid}")
         return run
 
     async def set_estop(self, on: bool, *, reason: str | None = None, stop_running: bool = False) -> dict[str, Any]:
@@ -1401,7 +1402,7 @@ class RunManager:
             grace = float(self.hub.config.get("runs.stop_grace_s"))
             for ar in list(self.active.values()):
                 if ar.handle is not None and ar.runtime is not None:
-                    asyncio.ensure_future(ar.runtime.stop(ar.handle, grace_s=grace))
+                    spawn(ar.runtime.stop(ar.handle, grace_s=grace), name=f"run-stop-estop:{ar.run_id}")
         if not on:
             self.tick()
         return state
@@ -1427,7 +1428,7 @@ class RunManager:
                 try:
                     await asyncio.wait_for(ar.task, 15)
                 except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
-                    pass
+                    log.debug("chờ task run kết thúc khi dừng hub lỗi/hết giờ", exc_info=True)
         pending = [rid for rid in interrupted if (self.store.get_run(rid) or {}).get("status") == "interrupted"]
         self.store.state_set("pending_resume", sorted(set(list(self.store.state_get("pending_resume", []) or []) + pending)))
         self.queue.clear()
@@ -1453,7 +1454,7 @@ class RunManager:
         grace = float(self.hub.config.get("runs.stop_grace_s"))
         delay = float(self.hub.config.get("approval.pause_delay_s"))
         loop = asyncio.get_event_loop()
-        loop.call_later(delay, lambda: asyncio.ensure_future(ar.runtime.stop(ar.handle, grace_s=grace)))  # type: ignore[union-attr]
+        loop.call_later(delay, lambda: spawn(ar.runtime.stop(ar.handle, grace_s=grace), name=f"run-pause:{run_id}"))  # type: ignore[union-attr]
 
     def pause_clock(self, run_id: str) -> None:
         """Dừng đồng hồ max_runtime_s khi đang giữ chờ người (thời gian chờ người không tính, như approval_human_wait)."""

@@ -483,7 +483,7 @@ async def _web_notify(request: Request, kind: str, data: dict[str, Any]) -> None
             await _audit_login(request, kind, data)
         else:
             log.warning("không gửi được web.notify %s: %s", kind, e)
-    except Exception:  # noqa: BLE001
+    except Exception:  # best-effort: đã log warning (chỉ kind + ip); không exc_info để không lộ data  # noqa: BLE001
         log.warning("không gửi được web.notify %s (%s)", kind, data.get("ip"))
 
 
@@ -1729,7 +1729,7 @@ async def _stream(request: Request, params: dict[str, Any], convert: Callable[[d
                 await q.put(msg)
                 if "end" in msg:
                     break
-        except Exception as e:  # daemon tắt, run không tồn tại…
+        except Exception as e:  # best-effort: lỗi gửi cho trình duyệt dạng end.reason (daemon tắt, run không có…)
             await q.put({"end": {"reason": err_text(e)}})
         finally:
             await q.put(None)

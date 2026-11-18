@@ -162,7 +162,7 @@ def allowed_roots(hub: Any) -> list[str]:
         from ..filehub.service import local_roots as _fh_roots
 
         cand += _fh_roots(hub)
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: không đọc được gốc filehub → bỏ qua (chỉ thu hẹp danh sách tự cho phép)  # pragma: no cover
         pass
     for r in cand:
         try:
@@ -213,7 +213,7 @@ def gates_mode(config: Any) -> str:
     """Công tắc chung `gates.mode` (chỉ người đặt): human | manager | off. Giá trị lạ/lỗi đọc → human (bảo thủ)."""
     try:
         v = config.get("gates.mode")
-    except Exception:
+    except Exception:  # fail-closed: lỗi đọc → human (bảo thủ)
         return "human"
     return v if v in GATES_MODES else "human"
 

@@ -21,6 +21,7 @@ Luật (mỗi luật có test đỏ→xanh trong `tests/test_manager_security.py
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -28,6 +29,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..errors import HubError
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..auth import Caller
@@ -296,7 +299,7 @@ class ManagerPermissions:
             for m in self.hub.mcp.list():
                 out[str(m["name"])] = str(m.get("trust") or (m.get("config") or {}).get("trust") or "untrusted")
         except Exception:
-            pass
+            log.debug("manager: không đọc được registry MCP (trust)", exc_info=True)
         return out
 
     # ------------------------------------------------------------------ MGR-8: cấu hình tối thiểu của agent được chỉ định làm manager
@@ -376,6 +379,7 @@ class ManagerPermissions:
             try:
                 r = self.hub.mcp.get_row(s) or {}  # type: ignore[attr-defined]
             except Exception:
+                log.debug("manager: không đọc được dòng registry MCP", exc_info=True)
                 r = {}
             for tool_name, rec in sorted((r.get("annotations_cache") or {}).items()):
                 if not (rec or {}).get("readOnlyHint"):
@@ -388,10 +392,11 @@ class ManagerPermissions:
         try:
             names = {str(m["name"]) for m in self.hub.mcp.list()}
         except Exception:
-            pass
+            log.debug("manager: không đọc được danh sách MCP", exc_info=True)
         try:
             own = self.hub.guard.hub_mcp_servers()
         except Exception:
+            log.debug("manager: không đọc được MCP của hub", exc_info=True)
             own = frozenset()
         return names, own
 
@@ -540,6 +545,7 @@ class ManagerPermissions:
         try:
             return dict(self.hub.learning.policy.get("config_bounds") or {})
         except Exception:  # pragma: no cover
+            log.debug("manager: không đọc được config_bounds — dùng khung chặt", exc_info=True)
             return {"models": [], "max_budget_usd_per_run": None, "budget_usd_per_day": None, "max_concurrent_runs": None, "max_effort": "max"}
 
     def rate_block(self, method: str) -> str | None:
@@ -689,7 +695,7 @@ class ManagerPermissions:
                 return "cần lý do (reason) cho quyết định"
             try:
                 row = self.hub.approvals.get(str(p.get("id") or p.get("request_id") or ""))
-            except Exception:
+            except Exception:  # fail-closed: không đọc được approval → từ chối
                 return "không có approval này"
             why = self.hub.approvals.manager_block(row, str(caller.manager))
             if why:

@@ -54,7 +54,7 @@ class LearningOps:
         if self._task is not None and not self._task.done():
             return
         try:
-            self._task = asyncio.get_running_loop().create_task(self.loop())
+            self._task = asyncio.get_running_loop().create_task(self.loop(), name="learning-ops-loop")
         except RuntimeError:
             self._task = None
 

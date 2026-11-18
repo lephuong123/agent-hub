@@ -380,7 +380,7 @@ class CanaryManager:
 
             self.conn.execute("UPDATE ledger_entries SET flags=? WHERE id=?", (json.dumps(flags), e["id"]))
         except (NotFound, Exception):  # pragma: no cover
-            pass
+            log.debug("canary: không cập nhật được flags của ledger entry", exc_info=True)
         affected = self.affected_agents({"scope": c["scope"], "team_id": c["owner_id"] if c["scope"] == "team" else None, "target": c["target"]})
         self._emit("learning.promoted", c, {"detail": why, "agents": affected, "observed": c.get("observed"),
                                             "summary": f"{c['scope']}:{c.get('owner_id') or 'global'} {c['target']} {c.get('target_ref') or ''} → promoted cho {len(affected)} agent",

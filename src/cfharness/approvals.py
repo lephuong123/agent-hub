@@ -30,6 +30,7 @@ import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from .aiotasks import spawn
 from .errors import Conflict, HubError, NotFound
 from .events import make_event
 from .redact import redact
@@ -238,6 +239,7 @@ class ApprovalService:
             if mgr.perms is not None and asking_agent in mgr.perms.manager_ids():
                 return None  # agent từng là điều phối viên — người quyết
         except Exception:  # pragma: no cover
+            log.debug("không đọc được danh sách điều phối viên — để người quyết", exc_info=True)
             return None
         row = self.hub.store.get_agent(mid)
         if row is None or row.get("archived_at") or row.get("status") == "paused":
@@ -498,7 +500,7 @@ class ApprovalService:
                "because nobody answered in time. It is approved to run exactly ONCE: run exactly that same action now, then continue.")
         if run.get("status") in ("queued", "running"):
             try:
-                asyncio.get_running_loop().create_task(self._steer_late(run["id"], msg))
+                spawn(self._steer_late(run["id"], msg), name=f"approval-steer-late:{run['id']}")
             except RuntimeError:  # ngoài event loop (test thuần): run kết thúc → listener resume
                 pass
             return

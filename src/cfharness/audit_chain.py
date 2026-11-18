@@ -391,6 +391,7 @@ class AuditChain:
 
             return backup._LOCK.locked() or hub_transfer._LOCK.locked() or exporting(self.hub)
         except Exception:  # pragma: no cover
+            log.debug("không xác định được trạng thái sao lưu/xuất gói", exc_info=True)
             return False
 
     def tail(self) -> dict[str, Any] | None:
@@ -464,7 +465,7 @@ class AuditChain:
                 if self.hub.store.state_get(self.TAMPER_STATE) == sig:
                     return
             except Exception:  # pragma: no cover
-                pass
+                log.debug("không đọc được trạng thái tamper đã báo", exc_info=True)
         payload = tamper_payload(res)
         log.error("audit_log bị sửa/xoá ngoài hub: %s", payload)
         try:

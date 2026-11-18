@@ -471,7 +471,7 @@ class ClaudeCliRuntime(AgentRuntime):
                 if proc is not None:
                     try:
                         proc.kill()
-                    except Exception:
+                    except Exception:  # best-effort: tiến trình đã thoát — lỗi gốc được trả trong OneShotResult
                         pass
                 return OneShotResult(False, None, 0.0, int((time.monotonic() - t0) * 1000), f"lỗi gọi {binary}: {e!r}"[:300])
         data = parse_oneshot_output(out_b)

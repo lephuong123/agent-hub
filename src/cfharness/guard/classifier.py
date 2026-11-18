@@ -599,7 +599,7 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
         if toks & MCP_DELETE_TOKENS:
             return Verdict("destructive", "tool_name_delete", "file", f"tên tool '{tool_name}' mang nghĩa xoá")
         return Verdict("write", "unknown_tool", reason=f"tool '{tool_name}' chưa có trong danh mục → coi là ghi (có audit)")
-    except Exception as e:  # lỗi bộ phân loại → deny-by-default (FR-SG-03 bước 3)
+    except Exception as e:  # fail-closed: lỗi bộ phân loại → uncertain (deny-by-default, FR-SG-03 bước 3)
         return Verdict("uncertain", "classifier_error", None, f"lỗi bộ phân loại: {e!r}")
 
 
@@ -920,7 +920,7 @@ def _persistence_dirs(home: str) -> tuple[str, ...]:
         from .runtime import path_bin_dirs
 
         return base + tuple(path_bin_dirs())
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: không dò được thư mục bin của PATH → chỉ vùng cơ bản  # pragma: no cover
         return base
 
 
@@ -968,7 +968,7 @@ def exec_zone(p: str) -> str | None:
         from .runtime import executable_zones
 
         zones = executable_zones()
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: không dò được vùng thực thi → không coi là vùng thực thi (luật khác vẫn áp)  # pragma: no cover
         return None
     for c in {p, _real(p)}:
         for z in zones:
@@ -1161,7 +1161,7 @@ def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdi
     if ctx.mcp_annotations is not None:
         try:
             ann = ctx.mcp_annotations(server, tool)
-        except Exception:
+        except Exception:  # fail-closed: không đọc được annotations → coi như không có (luật mcp mặc định)
             ann = None
     ann = ann or {}
     prot = ctx.policy.match_mcp(server, tool)
@@ -1443,7 +1443,7 @@ class BashAnalyzer:
         if target_dir and self.ctx.repo_deny_lookup is not None:
             try:
                 pats = list(dict.fromkeys(pats + list(self.ctx.repo_deny_lookup(target_dir))))
-            except Exception:  # pragma: no cover
+            except Exception:  # best-effort: mẫu chặn theo repo không đọc được → giữ mẫu tĩnh  # pragma: no cover
                 pass
         if not pats:
             return False

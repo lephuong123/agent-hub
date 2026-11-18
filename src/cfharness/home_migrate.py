@@ -85,7 +85,7 @@ def daemon_running(home: Path) -> int | None:
         return int(st.get("pid") or 0) or -1
     except DaemonUnavailable:
         return None
-    except Exception:
+    except Exception:  # best-effort: không đọc được trạng thái → coi là đang chạy, không rõ pid
         return -1
 
 

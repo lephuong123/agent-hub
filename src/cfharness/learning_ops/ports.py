@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import uuid
 from typing import TYPE_CHECKING, Any
 
 from ..events import make_event
 from ..store import now_iso
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..hub import Hub
@@ -111,6 +114,7 @@ async def ledger_rollback(hub: "Hub", entry_id: str, *, actor: str, reason: str)
             return {"ok": False, "error": str(e), "human_change": True}
         return {"ok": False, "error": str(e)[:300]}
     except Exception as e:  # rollback lỗi (đích bị sửa ngoài ledger…) → báo, không làm chết vòng nền
+        log.debug("rollback tự động lỗi — trả về cho vòng nền", exc_info=True)
         return {"ok": False, "error": str(e)[:300]}
     out = dict(r) if isinstance(r, dict) else {"result": r}
     out.setdefault("ok", True)

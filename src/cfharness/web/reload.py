@@ -104,7 +104,7 @@ def exec_self() -> None:  # pragma: no cover — thay tiến trình; test kiểm
     try:
         sys.stdout.flush()
         sys.stderr.flush()
-    except Exception:  # noqa: BLE001
+    except Exception:  # best-effort: flush trước execv là phụ  # noqa: BLE001
         pass
     os.execv(argv[0], argv)
 

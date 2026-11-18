@@ -357,6 +357,7 @@ def list_backups(paths: HubPaths) -> list[dict[str, Any]]:
             try:
                 side = {"manifest": _read_manifest_from_tar(p), "archive": {"name": n, "size": p.stat().st_size, "sha256": None}}
             except Exception:  # archive hỏng / thiếu manifest → vẫn liệt kê để người thấy và xoá
+                log.debug("archive sao lưu hỏng/thiếu manifest — vẫn liệt kê", exc_info=True)
                 m = ID_RE.match(bid)
                 side = {"manifest": {"id": bid, "kind": m[2] if m else None, "created_at": None}, "archive": {"name": n, "size": p.stat().st_size},
                         "broken": True}
@@ -439,7 +440,7 @@ def verify(paths: HubPaths, bid: str, *, extract_to: Path | None = None) -> dict
     try:
         try:
             manifest = _read_manifest_from_tar(p)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi được trả về trong errors cho người
             errors.append(f"không đọc được manifest: {e}")
             return {"id": bid, "ok": False, "errors": errors, "warnings": warnings}
         if manifest.get("format") != FORMAT or manifest.get("id") != bid:
@@ -688,7 +689,7 @@ class BackupService:
     def schedule_info(self, rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         try:
             spec = self._spec()
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi trả về trong trường error
             return {"enabled": False, "expr": self.cfg().get("schedule"), "error": str(e)}
         if spec is None:
             return {"enabled": False, "expr": self.cfg().get("schedule")}
@@ -713,7 +714,7 @@ class BackupService:
     def due(self) -> bool:
         try:
             nxt = self.next_due()
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi lưu ở last_error (hiện ở thẻ Sao lưu)
             self.last_error = f"backup.schedule không hợp lệ: {e}"
             return False
         return nxt is not None and self.clock() >= nxt.timestamp()
@@ -743,7 +744,7 @@ class BackupService:
         if self._task is not None and not self._task.done():
             return
         try:
-            self._task = asyncio.get_running_loop().create_task(self._loop())
+            self._task = asyncio.get_running_loop().create_task(self._loop(), name="backup-schedule")
         except RuntimeError:
             self._task = None
 

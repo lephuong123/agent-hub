@@ -81,7 +81,7 @@ REASON_LABEL = {"totp_disabled": "tắt TOTP", "totp_reenrolled": "đăng ký l�
 def _when(ev: "HubEvent") -> str:
     try:
         return ev.ts.astimezone().strftime("%H:%M %d/%m/%Y")
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: ts lạ → chuỗi rỗng  # pragma: no cover
         return ""
 
 

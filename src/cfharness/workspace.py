@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import logging
 import os
 import subprocess
 import time
@@ -27,6 +28,8 @@ from typing import Any
 from .errors import Conflict, HubError
 from .guard.locks import RepoLocks
 from .oscompat import IS_WINDOWS, no_window_kwargs
+
+log = logging.getLogger(__name__)
 
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache", ".tox", "dist", "build"}
 GIT_ENV = {"LC_ALL": "C", "LANG": "C", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"}
@@ -100,7 +103,7 @@ def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
 
         roots += [Path(r) for r in _fh_roots(hub)]
     except Exception:  # pragma: no cover
-        pass
+        log.debug("workspace: không đọc được gốc filehub", exc_info=True)
     roots += [Path(r) for r in _EXTRA_ALLOWED_ROOTS]  # test-only (conftest, cùng tiến trình); rỗng trong sản phẩm
     roots += [Path(r).expanduser().resolve() for r in env_extra_roots()]  # test-only (CFHARNESS_TESTING=1)
     if not any(p == r or p.is_relative_to(r) for r in roots):
@@ -136,7 +139,7 @@ def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
     except HubError:
         raise
     except Exception:  # pragma: no cover
-        pass
+        log.warning("workspace: kiểm tài nguyên bảo vệ lỗi — bỏ qua kiểm này", exc_info=True)
 
 
 # ============================================================================ git helpers

@@ -205,7 +205,7 @@ def cmd_daemon(ctx: Ctx) -> int:
             text += "\nCẢNH BÁO: claude chưa đăng nhập — spawn bị chặn (chạy `claude auth login` rồi `cfharness doctor`)"
         try:  # H-10: kiểm phiên bản lúc daemon khởi động + cảnh báo raw.unknown
             compat = client.call("hub.compat")
-        except Exception:
+        except Exception:  # best-effort: daemon cũ có thể chưa có hub.compat
             compat = None
         if compat:
             st["compat"] = compat
@@ -226,7 +226,7 @@ def _autostart_status(ctx: Ctx) -> dict[str, Any] | None:
 
         st = Autostart(ctx.paths).status()
         return {**st, "text": status_text(st)}
-    except Exception:
+    except Exception:  # best-effort: trạng thái tự khởi động chỉ để hiển thị
         return None
 
 
@@ -392,7 +392,7 @@ def cmd_doctor(ctx: Ctx) -> int:
     if daemon_up and auth_ok:
         try:
             client.call("auth.reset")
-        except Exception:
+        except Exception:  # best-effort: reset token phụ trợ cho doctor
             pass
     if ctx.args.agent:
         if not daemon_up:
@@ -436,7 +436,7 @@ def cmd_doctor(ctx: Ctx) -> int:
             ur = compat.get("unknown_rate") or {}
             if ur:
                 add("tỉ lệ event lạ (raw.unknown, 1 giờ)", not ur.get("alert"), f"{ur.get('unknown', 0)}/{ur.get('total', 0)} ({(ur.get('rate') or 0) * 100:.1f}%)", "error")
-        except Exception:
+        except Exception:  # best-effort: kiểm compat trong doctor là phụ
             pass
     bad = [c for c in checks if c["level"] == "error"]
     text = "\n".join(f"{'✓' if c['ok'] else ('!' if c['level'] == 'warning' else '✗')} {c['check']}: {c['detail']}" for c in checks)

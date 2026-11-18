@@ -201,7 +201,7 @@ class ChatSession:
         for t in tasks:
             try:
                 await t
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # best-effort: chờ task đã huỷ kết thúc (thoát REPL)
                 pass
 
     def _spawn(self, coro: Any) -> asyncio.Task:
@@ -1019,7 +1019,7 @@ async def run_tty(session: ChatSession, home: Path) -> int:
         try:
             size = get_app().output.get_size()
             width, height = size.columns, size.rows
-        except Exception:
+        except Exception:  # best-effort: không có app prompt_toolkit → kích thước terminal
             try:
                 width, height = os.get_terminal_size()
             except OSError:
@@ -1132,7 +1132,7 @@ async def oneshot(sock: Path, params: dict[str, Any], *, wait: bool, timeout: fl
         try:
             async for msg in sub:
                 await q.put(msg)
-        except Exception as e:  # pragma: no cover
+        except Exception as e:  # best-effort: luồng event đứt → báo end cho vòng chờ  # pragma: no cover
             await q.put({"end": {"reason": str(e)}})
 
     task = asyncio.ensure_future(pump())
@@ -1169,7 +1169,7 @@ async def oneshot(sock: Path, params: dict[str, Any], *, wait: bool, timeout: fl
         task.cancel()
         try:
             await task
-        except (asyncio.CancelledError, Exception):
+        except (asyncio.CancelledError, Exception):  # best-effort: chờ task đã huỷ kết thúc
             pass
 
 

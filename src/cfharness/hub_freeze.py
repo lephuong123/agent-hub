@@ -121,7 +121,7 @@ def unfreeze(hub: "Hub", *, export_id: str | None = None) -> dict[str, Any]:
     try:
         hub.dispatcher.kick()
     except Exception:  # pragma: no cover
-        pass
+        log.debug("không kick được dispatcher sau khi gỡ đóng băng", exc_info=True)
     log.warning("đã gỡ đóng băng hub (gói %s)", cur.get("export_id"))
     return {"unfrozen": True, "migrated_to": cur}
 

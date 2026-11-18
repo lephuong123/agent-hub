@@ -370,7 +370,7 @@ class AgentService:
                 "WHERE m.agent_id=? AND t.archived_at IS NULL ORDER BY m.team_id",
                 (agent_id,),
             ).fetchall()
-        except Exception:  # bảng team chưa có (DB rất cũ) → không có thành viên
+        except Exception:  # best-effort: bảng team chưa có (DB rất cũ) → không có thành viên
             return []
         return [{"team_id": r[0], "role": r[1]} for r in rows]
 

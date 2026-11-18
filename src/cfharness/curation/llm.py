@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import tempfile
 import time
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..store import now_iso
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..hub import Hub
@@ -71,4 +74,4 @@ def _record(hub: "Hub", run_id: str, agent_id: str, model: str, started: str, co
             "summary": summary, "duration_ms": duration_ms, "run_opts": {"curation_id": curation_id, "curation_llm": label},
         })
     except Exception:  # pragma: no cover
-        pass
+        log.debug("không ghi được dòng run curator", exc_info=True)

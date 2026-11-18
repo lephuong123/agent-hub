@@ -513,3 +513,32 @@ Lệch / để sau:
 - Che theo giá trị trong `filehub-sync.log` làm theo từng khúc 4 KB — secret vắt qua ranh giới khúc có thể lọt vào file (gói chẩn đoán quét lại cả file).
 - Không phát event `support.created` (dòng audit `support.create` là đủ; tránh sinh lại schema event). Không tự dọn gói cũ trong `exports/`.
 - `hub doctor` trong gói vẫn gọi `claude --version` như lệnh doctor (chỉ `versions.json` dùng trạng thái compat).
+
+### L8 — Dọn nuốt lỗi (nhánh `feat/logging-l8`)
+Đã làm:
+- `scripts/check_broad_except.py` (chỉ stdlib, AST): mọi handler `except Exception`/`except BaseException`/`except:` trần (kể cả tuple có chứa) trong
+  `src/cfharness/**.py`. ĐẠT khi (a) thân có `<x>.exception(...)` hoặc `<x>.debug|info|warning|warn|error|critical|log(..., exc_info=<khác False/None>)`,
+  (b) thân có `raise` (không tính hàm/lambda/lớp lồng), hoặc (c) dòng `except` → hết dòng mở của lệnh đầu thân có `# fail-closed: <lý do>`,
+  `# best-effort: <lý do>`, `# pragma: no cover — <lý do>` hoặc `# noqa: BLE001 — <lý do>` (gạch `—`/`–`/`-`, phải có chữ sau). Pragma/noqa trần và chú
+  thích tự do (vd `# config hỏng không được chặn`) KHÔNG đạt. `--check` (file nào tăng / file mới có vi phạm → mã 1), `--update` ghi
+  `scripts/broad_except_baseline.txt` (`path:count`, theo file vì số dòng xê dịch). `tests/test_broad_except.py`: không hồi quy + ca đúng/sai của bộ phân loại.
+- Số handler chưa đạt: **302 → 0** (trên 565 handler rộng; 116 file). Phân loại: 202 chỉ chú thích (`best-effort` 181, `fail-closed` 21),
+  8 `fail-closed` + `log.debug`, 75 `log.debug(..., exc_info=True)`, 4 `log.warning(..., exc_info=True)` (eval gate/eval sau áp dụng lỗi hạ tầng, review
+  graph_extract lỗi, kiểm tài nguyên bảo vệ của `validate_workspace` lỗi), 13 log có sẵn được thêm `exc_info=True` (checkpoint/diff run, import_followups,
+  pipeline eval gate, lane flush, compat). Baseline = rỗng → mọi handler mới phải đạt ngay.
+- Guard/hook/integrity: không đổi giá trị trả về hay nhánh nào; `hook.py`, `mcp_guard.py`, `observe_hook.py`, `hub_self.py`, `update_helper.py`, `cron.py`
+  chỉ thêm chú thích (không import). TUI: chú thích (lỗi đã hiện cho người qua notify/khung).
+- Không `exc_info` cho lỗi client Telegram/Slack/webhook (traceback có thể mang URL chứa token dù thông điệp đã gỡ) và `web.notify` — các chỗ đó đã
+  log thông điệp đã gỡ token → chú thích `best-effort`. Mọi log mới chỉ chuỗi cố định + traceback (không payload/nội dung).
+- `create_task`/`ensure_future` "bắn rồi quên" → `aiotasks.spawn(..., name=…)`: 11 chỗ (dừng run khi timeout/dừng tay/ESTOP/chờ người ×4, ESTOP quản trị,
+  dispatcher dừng run chết, steer phê duyệt muộn, `questions._spawn`, hết hạn đăng nhập tài khoản, đóng response proxy OAuth, huỷ review). 25 task
+  giữ handle (vòng nền, run, `_bg`) được đặt `name=`; vòng đời (huỷ/await) giữ nguyên.
+- `print(` trong module không phải CLI: **0 chỗ đổi**. Phần còn lại đều là đầu ra cho người hoặc giao thức: `home_migrate` (lệnh `home migrate`),
+  `session_search`/`logs_rpc` (phần CLI), `event_schema`/`curation/overhead` (`__main__`), `web/demo` (dòng `SEED`/`LOGIN` script đọc), `daemon`/
+  `hub_transfer_web` (stderr TRƯỚC khi `setup_logging` — đổi sang log sẽ mất), hook/MCP stdio (stdout là giao thức). Số "43" ở §5 B1 phần lớn đã nằm
+  trong module `*cli*.py`/`tui/`.
+
+Lệch / để sau:
+- Rule (c) nhận cả `# noqa: BLE001 — <lý do>` (codebase dùng nhiều, cùng nghĩa với pragma có lý do).
+- Handler có `raise` ở một nhánh vẫn ĐẠT (theo kế hoạch: "raise ở bất kỳ đâu trong handler").
+- Không thêm kiểm `print(` vào test (danh sách còn lại đều hợp lệ; thêm sau nếu tái phát).

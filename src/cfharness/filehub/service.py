@@ -484,6 +484,7 @@ class FilehubService:
         try:
             st = _file_settings(self.hub.config.get("files"))
         except Exception:  # noqa: BLE001
+            log.debug("filehub: cấu hình files hỏng — dùng mặc định", exc_info=True)
             st = _file_settings(None)
         out = list(IGNORE_BASE) + [str(p) for p in st["secret_patterns"]] + [f"!{p}" for p in st["secret_allow"]]
         return list(dict.fromkeys(out + [str(x) for x in self.cfg("extra_ignore") or []]))
@@ -724,7 +725,7 @@ class FilehubService:
             self.supervisor.start()
         if self._task is None or self._task.done():
             try:
-                self._task = asyncio.get_running_loop().create_task(self._loop())
+                self._task = asyncio.get_running_loop().create_task(self._loop(), name="filehub-service")
             except RuntimeError:
                 self._task = None
 
@@ -1389,7 +1390,7 @@ class FilehubService:
             audit_record("filehub.login_done", agent_id=None, run_id=None,
                          data={"roots": [r["id"] for r in roots], "kinds": [r["kind"] for r in roots], "added": (added or {}).get("name"), "switch": switch})
         except Exception:  # pragma: no cover
-            pass
+            log.debug("filehub: không ghi được audit login_done", exc_info=True)
 
     def _update_accounts(self, roots: list[dict[str, str]]) -> None:
         """Đăng nhập lại: cập nhật tài khoản hiển thị của thư mục đang có (có thể đăng nhập bằng tài khoản admin khác)."""

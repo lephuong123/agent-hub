@@ -317,7 +317,7 @@ class _WinPty(_Pty):  # pragma: no cover — Windows
             return False
         try:
             return bool(self.proc.isalive())
-        except Exception:  # noqa: BLE001
+        except Exception:  # best-effort: PTY đã đóng = tiến trình không còn sống  # noqa: BLE001
             return False
 
     async def kill(self) -> None:

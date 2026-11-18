@@ -163,7 +163,7 @@ class SlackChatNotifier(QueuedNotifier):
                 if row.get("status") not in ("open", "waiting_human"):
                     return None  # đã quyết trước khi kịp gửi
             except Exception:
-                pass
+                log.debug("không đọc được approval trước khi gửi Slack", exc_info=True)
             return {"approval_id": aid, "kind": ev.type, "payload": dict(p), "done": set()}
         text = _slack_format(ev)
         if not text:
@@ -233,7 +233,7 @@ class SlackBot(ChatBot):
         sec = getattr(self.hub, "secrets", None)
         try:
             return sec.get(name) if (sec is not None and name) else None
-        except Exception:
+        except Exception:  # fail-closed: không đọc được secret → không có token (bot tắt)
             return None
 
     def token(self, *, ignore_enabled: bool = False) -> str | None:
@@ -302,7 +302,7 @@ class SlackBot(ChatBot):
             try:
                 await self.modals.open(api, trig, cid, _UID.get(), kind, ref)
                 return {"message_id": None, "modal": True}
-            except Exception as e:
+            except Exception as e:  # best-effort: đã log; rơi về trả lời trong thread
                 log.info("Slack: không mở được modal (%s) — dùng trả lời trong thread", clip(e, 200))
         return await super().ask_input(api, cid, kind, ref, text, placeholder, reply_to=reply_to)  # chữ đã theo Slack (reply_here)
 
@@ -375,7 +375,7 @@ class SlackBot(ChatBot):
                 netlog.ok()
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except Exception as e:  # best-effort: lỗi kết nối lưu ở info.last_error (đã gỡ token), backoff rồi nối lại
                 self.info["polling"] = False
                 self.info["last_error"] = clip(e, 300)
                 if time.monotonic() - attempt > 60:  # kết nối đã sống một lúc rồi mới rớt → chuỗi lỗi mới
@@ -510,6 +510,7 @@ class SlackBot(ChatBot):
         try:
             r = svc.maybe(str(sid))
         except Exception:  # pragma: no cover
+            log.debug("không đọc được lịch của thread Slack", exc_info=True)
             return False
         return r is not None and str((r.get("deliver_to") or {}).get("channel") or "") == f"{self.NAME}:{cid}"
 
@@ -628,7 +629,7 @@ class SlackBot(ChatBot):
     async def manager_run_started(self, api: SlackApi, chat: Any, run_id: str, *, reply_to: Any = None) -> None:
         try:
             await self.progress.start(api, str(chat), run_id, reply_to)
-        except Exception as e:  # tiến độ là phụ — không bao giờ chặn luồng điều phối viên
+        except Exception as e:  # best-effort: tiến độ là phụ — đã log debug
             log.debug("tin tiến độ điều phối viên lỗi: %s", clip(e, 200))
 
     async def manager_run_finished(self, run_id: str, *, chat: Any = None, reply_to: Any = None, outcome: str = "completed") -> None:
@@ -645,7 +646,7 @@ class SlackBot(ChatBot):
             return
         try:
             await api.call("chat.postEphemeral", {"channel": chat, "user": user, "text": render.escape(text[:300])})
-        except Exception as e:
+        except Exception as e:  # best-effort: đã log debug (lỗi đã gỡ token)
             log.debug("chat.postEphemeral lỗi: %s", clip(e))
 
     async def dm_of(self, api: SlackApi, user: str) -> str | None:
@@ -811,7 +812,7 @@ class SlackBot(ChatBot):
             u = (await api.call("users.info", {"user": uid})).get("user") or {}
             p = u.get("profile") or {}
             name = str(p.get("display_name") or p.get("real_name") or u.get("real_name") or u.get("name") or uid)
-        except Exception as e:
+        except Exception as e:  # best-effort: đã log debug; dùng uid làm tên
             log.debug("users.info lỗi: %s", clip(e))
         if len(self._names) > 500:
             self._names.clear()
@@ -873,7 +874,7 @@ class SlackBot(ChatBot):
                 if not res.get("has_more") or not cursor:
                     break
                 params = dict(params, cursor=cursor)
-        except Exception as e:
+        except Exception as e:  # best-effort: đã log; dùng phần thread đã đọc
             if not got:
                 log.info("Slack: không đọc được thread %s (%s) — bỏ ngữ cảnh", cid, clip(e, 200))
                 return ""
@@ -1051,7 +1052,7 @@ class SlackBot(ChatBot):
     async def _fill_name(self, api: SlackApi, cid: str, uid: str) -> None:
         try:
             u = (await api.call("users.info", {"user": uid})).get("user") or {}
-        except Exception:
+        except Exception:  # best-effort: tên người chỉ để hiển thị khi ghép nối
             return
         rec = (self.pairing or {}).get("pending", {}).get(cid)
         if rec is not None:

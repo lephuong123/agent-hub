@@ -164,7 +164,7 @@ class ManagerChat:
         while run_id in self._st(self.RUNS) and asyncio.get_running_loop().time() - t0 < limit:
             try:  # không bắt buộc (không phải mọi Bot API giả/thật đều có)
                 await self.bot.typing(api, chat_id, reply_to=reply_to)
-            except Exception:
+            except Exception:  # best-effort: typing không bắt buộc (Bot API giả/thật có thể không có)
                 return
             await asyncio.sleep(every)
 
@@ -290,7 +290,7 @@ class ManagerChat:
         for msg in msgs:
             try:
                 res = await self.bot._send(api, chat, msg, html=True, reply_to=reply_to)
-            except Exception as e:
+            except Exception as e:  # best-effort: đã log (lỗi đã gỡ token); không exc_info vì traceback có thể mang URL chứa token
                 log.warning("không gửi được trả lời của điều phối viên: %s", clip(e))
                 await finish(sent)
                 return
@@ -310,12 +310,12 @@ class ManagerChat:
                 await self.bot.send_document(api, chat, f"dieu-phoi-{run_id or conv or 'tra-loi'}.md",
                                              visible(redact_str(text)).encode("utf-8"),
                                              "Trả lời đầy đủ của điều phối viên (do agent viết)", mime="text/markdown")
-            except Exception as e:
+            except Exception as e:  # best-effort: đã log (lỗi đã gỡ token); không exc_info vì traceback có thể mang URL chứa token
                 log.warning("không gửi được tệp trả lời đầy đủ: %s", clip(e))
         if wanted:
             try:
                 await self.bot.media.deliver_files(api, chat, conv, wanted)
-            except Exception as e:
+            except Exception as e:  # best-effort: đã log (lỗi đã gỡ token); không exc_info vì traceback có thể mang URL chứa token
                 log.warning("không gửi được tệp của điều phối viên: %s", clip(e))
         self.sent_replies += 1
 
@@ -345,5 +345,5 @@ class ManagerChat:
             thread_scope(meta.get("chat"), meta.get("reply_to"))
             try:
                 await self.bot._send(api, meta["chat"], text, reply_to=meta.get("reply_to"))
-            except Exception as e:
+            except Exception as e:  # best-effort: đã log (lỗi đã gỡ token); không exc_info vì traceback có thể mang URL chứa token
                 log.warning("không gửi được báo lỗi điều phối viên: %s", clip(e))

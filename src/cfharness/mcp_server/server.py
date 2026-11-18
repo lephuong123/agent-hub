@@ -211,7 +211,7 @@ class HubMcp:
         headers = None
         try:
             headers = ctx.headers if ctx is not None else None
-        except Exception:
+        except Exception:  # best-effort: ctx không có headers (stdio) → mức mặc định
             headers = None
         if headers is None:
             return self.default_level
@@ -224,7 +224,7 @@ class HubMcp:
         try:
             cp = ctx.session.client_params
             name = cp.client_info.name if cp and cp.client_info else None
-        except Exception:
+        except Exception:  # best-effort: không có client_info → "unknown"
             name = None
         return f"mcp:{name or 'unknown'}" + (":http" if self.transport == "http" else "")
 
@@ -579,7 +579,7 @@ class HubMcp:
             guard = await hub.call("guard.policy", ctx=ctx)
             try:
                 learning = await hub.call("learn.policy_get", {}, ctx=ctx)
-            except Exception:  # luồng học chưa cài
+            except Exception:  # best-effort: luồng học chưa cài
                 learning = None
             return PolicyOut(guard=guard if isinstance(guard, dict) else {"policy": guard}, learning=learning if isinstance(learning, dict) else None)
 

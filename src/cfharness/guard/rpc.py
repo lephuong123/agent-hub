@@ -67,7 +67,7 @@ def _repo_deny_add(hub, p: dict[str, Any]) -> dict[str, Any]:
 
         by, channel = _who(p)
         audit_record("guard.repo_deny_add", agent_id=None, run_id=None, data={"repo": repo, "pattern": pattern, "actor": by, "channel": channel})
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: audit lỗi không được làm hỏng thao tác đã xong  # pragma: no cover
         pass
     return res
 

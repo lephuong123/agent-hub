@@ -155,7 +155,7 @@ class MemoryMirror:
                 "AND target_ref=? AND agent_id IS NOT NULL AND op!='rollback' ORDER BY applied_at DESC LIMIT 5",
                 (scope, owner or "", target_ref))]
         except Exception:  # pragma: no cover
-            pass
+            log.debug("graph_mirror: không đọc được agent ứng viên từ ledger", exc_info=True)
         for a in dict.fromkeys(c for c in cands if c):
             if self.hub.store.get_agent(a) is None or scope not in self.svc.memory_scopes(a):
                 continue

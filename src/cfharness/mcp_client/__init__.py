@@ -61,7 +61,7 @@ def _readonly_registry(home: Path) -> "McpRegistry":
         conn.row_factory = sqlite3.Row
     try:
         env_fallback = bool(HubConfig(paths.config).get("secrets.env_fallback"))
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: config hỏng → giữ env_fallback mặc định  # pragma: no cover
         env_fallback = True
     return McpRegistry(lambda: conn, paths, SecretStore(paths.home / "secrets", env_fallback=env_fallback), writable=False)
 

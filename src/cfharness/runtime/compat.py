@@ -107,13 +107,13 @@ class CliCompat:
         except RuntimeError:
             loop = None
         if loop is not None:
-            self.task = loop.create_task(self._check())
+            self.task = loop.create_task(self._check(), name="cli-compat-check")
         else:
             try:
                 rt = self.hub.runs.runtime()
                 self.record_version(rt.version(), getattr(rt, "name", "?"))
             except Exception as e:  # pragma: no cover
-                log.warning("kiểm phiên bản CLI lỗi: %r", e)
+                log.warning("kiểm phiên bản CLI lỗi: %r", e, exc_info=True)
 
     # ------------------------------------------------------------------ hook quan sát (spool)
     def ingest_hook_spool(self) -> int:

@@ -76,7 +76,7 @@ def git_info(path: str | Path) -> dict[str, Any]:
         return out
     try:
         root = git_root(p)
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: git hỏng/thiếu → không coi là repo  # pragma: no cover
         root = None
     if root is None:
         return out

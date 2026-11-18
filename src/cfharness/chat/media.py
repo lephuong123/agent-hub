@@ -262,7 +262,7 @@ class MediaBase:
         try:
             await self.bot._send(api, cid, f"<b>Một số tệp/ảnh không gửi được cho điều phối viên:</b>\n<pre>{esc(body)}</pre>",
                                  html=True, reply_to=reply_to)
-        except Exception as e:
+        except Exception as e:  # best-effort: đã log (lỗi đã gỡ token); không exc_info vì traceback có thể mang URL chứa token
             log.warning("không gửi được báo lỗi tệp: %s", clip(e))
 
     # ------------------------------------------------------------------ ra
@@ -274,6 +274,7 @@ class MediaBase:
             row = mgr._conv_row(conv)  # type: ignore[union-attr]
             home = Path(self.hub.agents.get_row(row["agent_id"])["home_path"])
         except Exception:
+            log.debug("không tìm được thư mục hội thoại điều phối viên", exc_info=True)
             return None
         return home / "workspaces" / f"conv-{conv}"
 
@@ -302,7 +303,7 @@ class MediaBase:
             try:
                 res = await self.bot.send_document(api, chat, name, data, f"📎 Tệp từ điều phối viên: {visible(name)[:200]}",
                                                    timeout=max(60.0, float(self.bot.cfg().get("timeout_s") or 15)))
-            except Exception as e:
+            except Exception as e:  # best-effort: lỗi gom vào errors và báo người; không exc_info (URL có thể chứa token)
                 errors.append(f"{rel}: gửi lỗi ({clip(e, 120)})")
                 continue
             sent += 1
@@ -321,7 +322,7 @@ class MediaBase:
         body = "\n".join(f"• {visible(e)}" for e in errors[:10])
         try:
             await self.bot._send(api, chat, f"<b>Không gửi được một số tệp điều phối viên đánh dấu:</b>\n<pre>{esc(body)}</pre>", html=True)
-        except Exception as e:
+        except Exception as e:  # best-effort: đã log (lỗi đã gỡ token); không exc_info vì traceback có thể mang URL chứa token
             log.warning("không gửi được báo lỗi tệp: %s", clip(e))
 
 

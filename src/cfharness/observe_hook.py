@@ -71,7 +71,7 @@ def _spool(home: str | None, rec: dict) -> None:
         fd = os.open(os.path.join(d, "hook-timeouts.jsonl"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    except Exception:
+    except Exception:  # best-effort: hook quan sát fail-open — spool lỗi thì thôi
         pass
 
 
@@ -91,7 +91,7 @@ def observe(argv: list[str], stdin_text: str | None = None) -> dict:
         data = json.loads(raw) if raw and raw.strip() else {}
         if not isinstance(data, dict):
             data = {}
-    except Exception:
+    except Exception:  # best-effort: stdin không phải JSON → không metadata
         data = {}
     meta = {k: data.get(k) for k in ("session_id", "tool_name", "stop_hook_active") if data.get(k) is not None}
     if event == "PreCompact" and data.get("trigger") in ("manual", "auto"):
@@ -106,14 +106,14 @@ def observe(argv: list[str], stdin_text: str | None = None) -> dict:
         return {"ok": True, "reply": msg}
     except TimeoutError:
         reason = "timeout"
-    except Exception:
+    except Exception:  # best-effort: daemon không với tới → ghi lý do unreachable
         reason = "unreachable"
     elapsed_ms = int((time.monotonic() - t0) * 1000)
     rec = {"run_id": run_id, "event": event, "timeout_s": timeout, "elapsed_ms": elapsed_ms, "reason": reason, "ts": time.time()}
     try:  # notification (không id) — daemon ghi event khi rảnh, hook không chờ
         _send(sock, {"jsonrpc": "2.0", "method": "hook.timeout", "params": rec}, 0.3, wait_reply=False)
         delivered = True
-    except Exception:
+    except Exception:  # best-effort: không báo được daemon → ghi spool
         delivered = False
     if not delivered:
         _spool(home, rec)

@@ -221,7 +221,7 @@ class ChatFlows:
             else:
                 await self.bot._edit(api, pg["chat"], pg["mid"], self._progress_text(rid, agent, pg), None)
             pg["last"] = time.monotonic()
-        except Exception as e:
+        except Exception as e:  # best-effort: đã log debug (lỗi đã gỡ token)
             log.debug("không cập nhật được tiến độ run %s: %s", rid, clip(e))
         finally:
             if pg is not None:

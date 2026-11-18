@@ -185,7 +185,7 @@ class Updater:
             return self._cache[1]
         try:
             res = {"ok": True, **self.fetch(8.0)}
-        except Exception as e:  # mạng/GitHub lỗi → báo, không ném (trang Cài đặt vẫn hiện)
+        except Exception as e:  # best-effort: mạng/GitHub lỗi → báo trong kết quả, trang Cài đặt vẫn hiện
             res = {"ok": False, "error": f"không kiểm tra được bản mới: {e}"}
         res["checked_at"] = time.time()
         self._cache = (now, res)

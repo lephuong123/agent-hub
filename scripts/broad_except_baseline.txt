@@ -1,0 +1,2 @@
+# Số handler `except Exception` chưa đạt quy tắc nuốt lỗi, theo file (scripts/check_broad_except.py --update).
+# Chỉ được GIẢM: thêm handler mới phải log kèm exc_info hoặc có `# fail-closed: …` / `# best-effort: …`.

@@ -102,7 +102,7 @@ class Subscription:
         if self._writer is not None:
             try:
                 self._writer.close()
-            except Exception:  # pragma: no cover
+            except Exception:  # best-effort: đóng kết nối đã hỏng  # pragma: no cover
                 pass
             self._writer = None
 

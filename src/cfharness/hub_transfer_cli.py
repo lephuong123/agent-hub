@@ -227,7 +227,7 @@ def _unfreeze_after_failure(ctx: Any, export_id: str, online: bool) -> None:
             finally:
                 c.close()
         print("gắn secret lỗi — gói đã bị xoá, đã gỡ đóng băng (hub này chạy bình thường)", file=sys.stderr)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # best-effort: lỗi đã in cho người kèm cách gỡ  # noqa: BLE001
         print(f"gắn secret lỗi VÀ không gỡ được đóng băng ({e}) — chạy `cfharness hub unfreeze`", file=sys.stderr)
 
 
@@ -388,7 +388,7 @@ def _import(ctx: Any) -> int:
         from .config import HubConfig
 
         cfg = HubConfig(ctx.paths.config).get("backup") if ctx.paths.config.exists() else None
-    except Exception:  # config.yaml hỏng không được chặn nhập
+    except Exception:  # best-effort: config.yaml hỏng không được chặn nhập (dùng mặc định)
         pass
     r = T.import_package(ctx.paths, pkg, maps=maps, mode=a.mode, replace=a.replace, cfg=cfg, passphrase=pw, skip_secrets=a.skip_secrets,
                          clone_repos=a.clone_repos)

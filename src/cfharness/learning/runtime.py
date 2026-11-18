@@ -85,7 +85,7 @@ def _warn_if_large(hub: "Hub", agent_id: str, text: str) -> None:
 
     try:
         limit = int(hub.config.get("runtime.claude.system_prompt_warn_chars") or SYSTEM_PROMPT_WARN_CHARS)
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: cấu hình lạ → ngưỡng mặc định  # pragma: no cover
         limit = SYSTEM_PROMPT_WARN_CHARS
     if len(text) > limit:
         import logging
