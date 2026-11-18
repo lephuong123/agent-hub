@@ -218,16 +218,17 @@ class ManagerPermissions:
             if path.get("kind") in ("scratch", "worktree") and not path.get("path"):
                 return None
             path = path.get("ref") if path.get("kind") == "filehub" and path.get("ref") else path.get("path")
-        if isinstance(path, str) and path.startswith("filehub:"):  # thư mục chung Không gian số → kiểm đường dẫn cục bộ đã giải
+        if isinstance(path, str) and path.startswith("filehub:"):  # thư mục chung Không gian số (chỉ qua cổng)
             fh = getattr(self.hub, "filehub", None)
             if fh is None:
                 return f"{what}: thư mục chung chưa bật"
             try:
                 if fh.lane_target(path) is not None:
-                    return None  # chế độ lane: không đường dẫn cục bộ — cây dựng trong vùng làm việc của agent lúc run chạy
-                path = fh.resolve_ref(path, must_exist=False)[0]
+                    return None  # cổng cfharness: không đường dẫn cục bộ — cây dựng trong vùng làm việc của agent lúc run chạy
+                fh.resolve_ref(path)  # luôn ném: thư mục đồng bộ cũ cần chuyển / tên sai
             except HubError as e:
                 return f"{what}: {e.message}"
+            return f"{what}: thư mục chung không dùng được"
         try:
             p = Path(str(path)).expanduser().resolve()
         except (OSError, RuntimeError):

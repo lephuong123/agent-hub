@@ -96,8 +96,9 @@ class Root:
 
 class FakeLane:
     def __init__(self, *, key: str = KEY, roots: tuple[str, ...] = ("r_chung",), kind: str = "folder", scope: str = "rw",
-                 expires_at: str | None = None, protocol: int = 1, ping_s: float = 15.0) -> None:
+                 expires_at: str | None = None, protocol: int = 1, ping_s: float = 15.0, public_url: str | None = None) -> None:
         self.key = key
+        self.public_url = public_url  # hello.server.public_url (§C.3, tuỳ chọn) — None = không gửi trường
         self.scope = scope
         self.expires_at = expires_at
         self.protocol = protocol
@@ -324,7 +325,8 @@ class FakeLane:
         if bad:
             return bad[0], bad[1], None, None
         if tail == "hello" and method == "GET":
-            return 200, {"protocol": self.protocol, "server": {"name": "Không gian số", "instance": "qltm", "version": "2026.11.20"},
+            srv = {"name": "Không gian số", "instance": "qltm", "version": "2026.11.20", **({"public_url": self.public_url} if self.public_url is not None else {})}
+            return 200, {"protocol": self.protocol, "server": srv,
                          "user": {"username": "lamlinh"},
                          "key": {"prefix": self.key[:12], "hub_label": "lamlinh", "scope": self.scope, "expires_at": self.expires_at},
                          "roots": [{"id": r.id, "kind": r.kind, "ws_id": r.ws, "name": r.name, "role": "owner"} for r in self.roots.values()],
