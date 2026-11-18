@@ -452,7 +452,8 @@ MANAGER_TOOLS.update({
 })
 # Cổng cfharness (filehub/lane/): run có workspace thư mục chung chế độ lane → nhóm `fs_*` (cờ `--fs ro|rw`). Mọi lời gọi → RPC `fsself.call`;
 # DAEMON ràng run_id + phạm vi workspace + chỉ đọc (filehub/lane/tools.py) — danh sách tool ở đây chỉ để hiện/ẩn.
-_P = {"type": "string", "description": "path relative to the shared-folder scope of this run (= your cwd); '' = the scope root"}
+_P = {"type": "string", "description": "path relative to the shared-folder scope of this run (= your cwd); '' = the scope root. "
+                                       "Run WITHOUT a shared-folder workspace (read-only): '<folder name>/<path>'; '' lists the folders"}
 FS_READ_TOOLS: dict[str, dict[str, Any]] = {
     "fs_status": _t("Status of your shared-folder work tree on Không gian số: mode (tree = files are in your cwd; tools = cwd starts empty, use "
                     "fs_pull), pending uploads, files blocked because they contain a secret, failed uploads, large files not downloaded yet.", ro=True),
@@ -480,6 +481,8 @@ FS_WRITE_TOOLS: dict[str, dict[str, Any]] = {
                      {"path": _P, "version_id": _S}, ["path", "version_id"]),
 }
 FS_TOOLS = {**FS_READ_TOOLS, **FS_WRITE_TOOLS}
+# run KHÔNG có workspace lane (`--fs browse`): chỉ đọc server, không cây làm việc (không fs_pull/fs_status)
+FS_BROWSE_TOOLS = ("fs_list", "fs_stat", "fs_read", "fs_versions", "fs_link")
 TOOLS.update(FS_TOOLS)
 MANAGER_READ_TOOLS = frozenset(n for n, t in MANAGER_TOOLS.items() if (t.get("annotations") or {}).get("readOnlyHint"))
 # Mọi tool đọc của hub-self (mọi vai trò) — ToolWriteWatcher không audit chúng là `tool.write` (hub-self không nằm trong registry MCP)
@@ -507,7 +510,9 @@ _out_lock = threading.Lock()
 
 
 def fs_tools(mode: str | None) -> tuple[str, ...]:
-    """Nhóm `fs_*` theo cờ `--fs`: `ro` = chỉ đọc (+ fs_pull), `rw` = cả ghi; khác → không có."""
+    """Nhóm `fs_*` theo cờ `--fs`: `ro` = chỉ đọc (+ fs_pull), `rw` = cả ghi, `browse` = chỉ đọc server (run không có workspace lane)."""
+    if mode == "browse":
+        return FS_BROWSE_TOOLS
     if mode == "rw":
         return tuple(FS_TOOLS)
     if mode == "ro":
@@ -516,12 +521,12 @@ def fs_tools(mode: str | None) -> tuple[str, ...]:
 
 
 def add_fs_flag(entry: dict[str, Any], mode: str) -> dict[str, Any]:
-    """Thêm `--fs ro|rw` vào entry hub-self có sẵn (run thư mục chung chế độ lane)."""
+    """Thêm `--fs ro|rw|browse` vào entry hub-self có sẵn (run thư mục chung chế độ lane / run khác chỉ đọc)."""
     args = [a for a in entry.get("args") or []]
     if "--fs" in args:
         i = args.index("--fs")
         del args[i:i + 2]
-    return {**entry, "args": args + ["--fs", "rw" if mode == "rw" else "ro"]}
+    return {**entry, "args": args + ["--fs", mode if mode in ("rw", "browse") else "ro"]}
 
 
 def server_entry(run_id: str, socket: Path, hub_home: Path, role: str, guard_cfg: dict[str, Any] | None = None,
@@ -606,7 +611,7 @@ def main() -> int:
     a = _args(sys.argv[1:])
     run_id, sock, role = a.get("run", ""), a.get("socket", ""), a.get("role", "worker")
     scopes = tuple(s for s in (a.get("memory-scopes") or "agent").split(",") if s)
-    fs = a.get("fs") if a.get("fs") in ("ro", "rw") else None
+    fs = a.get("fs") if a.get("fs") in ("ro", "rw", "browse") else None
     threads: list[threading.Thread] = []
     for line in sys.stdin:
         line = line.strip()

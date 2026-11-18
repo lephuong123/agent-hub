@@ -724,6 +724,9 @@ DEFAULTS: dict[str, Any] = {
             # kiểm tra sức khoẻ nền (`hello`): đang ok → mỗi health_ok_s (đối soát gốc mới cấp / mất quyền); không ok → thử lại lùi dần
             "health_ok_s": 60,  # một GET /hello mỗi phút: khoá bị thu hồi / Không gian số tắt thấy trong ≤ 1 phút
             "health_retry_s": [5, 300],
+            # plan-cloud-files §7.4 "mọi run được đọc": run KHÔNG có workspace lane vẫn ĐỌC được thư mục chung chế độ lane qua tool fs_*
+            # chỉ đọc (`--fs browse`: fs_list/fs_stat/fs_read/fs_versions/fs_link, đường dẫn "<tên thư mục>/<…>"); false = chỉ run có workspace lane
+            "read_all_runs": True,
         },
     },
     "workspace": {

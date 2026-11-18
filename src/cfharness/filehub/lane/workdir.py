@@ -70,6 +70,12 @@ STEER_DELETE_REFUSED = ("[cfharness] A person did NOT approve deleting {n} items
 LAZY_NOTE = "large files listed but not downloaded (empty placeholders); call fs_pull before using them"
 
 
+def _ancestors(rel: str) -> list[str]:
+    """`a/b/c.md` → [`a`, `a/b`] (gần gốc trước)."""
+    parts = rel.split("/")[:-1]
+    return ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+
+
 def _hhmm(now: float | None = None) -> str:
     return time.strftime("%H%M", time.localtime(now or time.time()))
 
@@ -1137,8 +1143,14 @@ class Workdir:
         self._pushed(rel, item, sha, is_file=bool(is_file), e=e)
 
     def _pushed(self, rel: str, item: dict[str, Any], sha: str, *, is_file: bool, e: dict[str, Any]) -> None:
+        before = (self.base.get(rel) or {}).get("version_id") if is_file else None
+        # thư mục cha server tạo kèm (`parents=1`) mà trước đó chưa có → hoàn tác xoá luôn (nếu còn rỗng)
+        parents = [] if is_file else [a for a in _ancestors(rel) if a not in self.base]
         self.base[rel] = self._base_of(item, sha)
-        self._op("modified" if is_file else "added", rel, **({"conflict_of": e["conflict_of"]} if e.get("conflict_of") else {}))
+        # `before`/`after` (version_id) = dữ liệu hoàn tác (`run revert`: restore phiên bản trước / xoá tệp run tạo)
+        self._op("modified" if is_file else "added", rel, after=item.get("version_id"), **({"before": before} if before else {}),
+                 **({"parents": parents} if parents else {}),
+                 **({"conflict_of": e["conflict_of"]} if e.get("conflict_of") else {}))
         self.pending.pop(rel, None)
         self.failed.pop(rel, None)
         self.last_pushed = rel
@@ -1165,11 +1177,12 @@ class Workdir:
             return
         c = self.svc.client(self.server)
         if_rev = e.get("if_rev") if e.get("if_rev") is not None else (int(b.get("rev") or 0) or None)
+        res: dict[str, Any] = {}
         try:
-            await c.delete(self.root, self.remote(rel), if_rev=if_rev, agent=self.agent_id, run=self.run_id, idem=self._idem(rel))
+            res = await c.delete(self.root, self.remote(rel), if_rev=if_rev, agent=self.agent_id, run=self.run_id, idem=self._idem(rel)) or {}
         except LaneError as ex:
             if ex.lane_code == "not_found":
-                pass
+                res = {"gone": True}  # đã bị người/bên khác xoá trước — không phải thay đổi của run (hoàn tác không khôi phục)
             elif ex.lane_code == "not_empty" and folder:
                 await self._rmdir_not_empty(rel)
                 return
@@ -1183,7 +1196,9 @@ class Workdir:
                 raise
         for k in [k for k in self.base if k == rel or k.startswith(rel + "/")]:
             self.base.pop(k, None)
-        self._op("deleted", rel)
+        self._op("deleted", rel, **({"trash": str(res["trash_batch"])} if res.get("trash_batch") else {}),
+                 **({"gone": True} if res.get("gone") else {}), **({"folder": True} if b.get("type") == "folder" else {}),
+                 **({"before": b["version_id"]} if b.get("version_id") else {}))
         self.pending.pop(rel, None)
         self.del_count += 1
 
@@ -1244,7 +1259,8 @@ class Workdir:
                 return
             raise
         self.base[dst] = {**self.base.pop(src), **{k: v for k, v in self._base_of(item).items() if v is not None and k != "sha256"}}
-        self._op("renamed", dst, **{"from": src})
+        self._op("renamed", dst, **{"from": src}, after=self.base[dst].get("version_id"), rev=int(item.get("rev") or 0) or None,
+                 **({"folder": True} if self.base[dst].get("type") == "folder" else {}))
         self.pending.pop(src, None)
         self.pending.pop(dst, None)
 
