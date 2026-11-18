@@ -338,11 +338,8 @@ class FileAccess:
                 raise NotFound(f"không tìm thấy agent '{aid}'")
             if ag.get("workspace_default"):
                 wd = str(ag["workspace_default"])
-                if wd.startswith("filehub:") and getattr(self.hub, "filehub", None) is not None:
-                    try:
-                        wd = self.hub.filehub.resolve_ref(wd, must_exist=False)[0]
-                    except HubError:
-                        wd = ""
+                if wd.startswith("filehub:"):  # thư mục chung qua cổng: không đường dẫn cố định trên máy (cây theo run)
+                    wd = ""
                 if wd:
                     out.append(wd)
             if ag.get("home_path"):

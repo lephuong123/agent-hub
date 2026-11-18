@@ -66,8 +66,9 @@ def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
         if fh is None:
             raise HubError(f"{what}: thư mục chung (filehub) chưa bật")
         if fh.lane_target(str(path)) is not None:
-            return  # chế độ lane: không bản sao — cây dựng trong vùng làm việc của agent lúc run chạy (filehub/lane/)
-        path = fh.resolve_ref(str(path))[0]
+            return  # cổng cfharness: không bản sao — cây dựng trong vùng làm việc của agent lúc run chạy (filehub/lane/)
+        fh.resolve_ref(str(path))  # luôn ném lỗi có giải thích (thư mục đồng bộ cũ cần chuyển / tên sai)
+        return
     from .guard.runtime import fixed_protected_dirs
 
     try:
@@ -95,12 +96,6 @@ def validate_workspace(hub: Any, path: Any, what: str = "workspace") -> None:
     if conf is not None:
         roots.append(Path(conf.root))
     roots += [hh / "agents", hh / "worktrees", hh / "evals", hh / "checkpoints"]
-    try:  # thư mục chung Không gian số (filehub): bản sao cục bộ là workspace hợp lệ (đã kiểm không trong HUB_HOME/vùng bảo vệ lúc thêm)
-        from .filehub.service import local_roots as _fh_roots
-
-        roots += [Path(r) for r in _fh_roots(hub)]
-    except Exception:  # pragma: no cover
-        pass
     roots += [Path(r) for r in _EXTRA_ALLOWED_ROOTS]  # test-only (conftest, cùng tiến trình); rỗng trong sản phẩm
     roots += [Path(r).expanduser().resolve() for r in env_extra_roots()]  # test-only (CFHARNESS_TESTING=1)
     if not any(p == r or p.is_relative_to(r) for r in roots):
@@ -289,7 +284,7 @@ class WorkspaceLocks(RepoLocks):
     def __init__(self, store: Any, hub: Any = None) -> None:
         super().__init__(store)
         self.hub = hub
-        if hub is not None:  # thư mục chung (filehub): khoá = GỐC thư mục chung, kể cả khi cwd là thư mục con `filehub:<tên>/<con>`
+        if hub is not None:  # thư mục chung (filehub, cổng): khoá = GỐC thư mục chung trên server, kể cả `filehub:<tên>/<con>`
             self.key_for = self._key_for_hub  # type: ignore[method-assign]
 
     @staticmethod
@@ -302,17 +297,9 @@ class WorkspaceLocks(RepoLocks):
         if cwd and str(cwd).startswith("filehub:"):  # workspace_default của agent dạng filehub:<tên>[/<con>]
             try:
                 lt = self.hub.filehub.lane_target(str(cwd))
-                if lt is not None:
-                    return str(lt["key"]) if workspace_kind == "dir" else None  # chế độ lane: khoá = gốc thư mục chung trên server
-                cwd = self.hub.filehub.resolve_ref(str(cwd), must_exist=False)[0]
             except HubError:
                 return None
-        if cwd and workspace_kind == "dir":
-            from .filehub.service import root_of
-
-            r = root_of(self.hub, cwd)
-            if r is not None:
-                return r
+            return str(lt["key"]) if lt is not None and workspace_kind == "dir" else None  # khoá = gốc thư mục chung trên server
         return WorkspaceLocks.key_for(cwd, workspace_kind)
 
 
