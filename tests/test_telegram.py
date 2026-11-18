@@ -790,3 +790,113 @@ async def test_accounts_command_lists_and_switches_by_button(make, tg):
     resp = await d.call_as(auth.telegram_caller(d.hub, STRANGER, STRANGER), "account.use", {"id": a})
     assert resp["error"]["code"] == BLOCKED and d.hub.accounts.active_id() == b
     await stop(d)
+
+
+# ============================================================================ lô xoá hàng loạt đang giữ (filehub lane) — Cho xoá / Không xoá
+LANE_ROOT = "r0abc123def"
+
+
+def lane_stub(d: Daemon, n: int = 12):
+    """Giả `filehub.lane_status` (lô đang giữ của LANE_ROOT) + `filehub.resume` (ghi lại tham số, rồi lô hết giữ) — RPC thật vẫn
+    đi qua cổng người + bọc audit của daemon."""
+    state = {"runs": [{"run_id": "r_lane", "agent_id": "coder", "folder": "Hồ sơ", "root_id": LANE_ROOT, "held": n,
+                       "held_paths": [f"docs/<b>tep{i}</b>.txt" for i in range(min(n, 50))]}], "orphans": []}
+    calls: list[dict] = []
+
+    def resume(root_id=None, *, discard=False):
+        calls.append({"root_id": root_id, "discard": discard})
+        k = state["runs"][0]["held"]
+        state["runs"][0]["held"], state["runs"][0]["held_paths"] = 0, []
+        return {"discarded": k} if discard else {"released": k}
+
+    d.hub.filehub.lane.status = lambda: state  # type: ignore[method-assign]
+    d.hub.filehub.resume = resume  # type: ignore[method-assign]
+    return state, calls
+
+
+def lane_event(n: int = 12):
+    return make_event("filehub.blocked", "coder", {"run_id": "r_lane", "folder": "Hồ sơ", "root_id": LANE_ROOT, "reason": "mass_delete",
+                                                   "count": n, "limit": 5, "lane": True,
+                                                   "paths": [f"docs/<b>tep{i}</b>.txt" for i in range(min(n, 50))]}, source="hub")
+
+
+async def test_lane_mass_delete_buttons_two_steps_allow(make, tg):
+    """Tin báo (đường dẫn sau tiền tố cố định, không nút) + tin hệ thống RIÊNG có Cho xoá / Không xoá. Bước 1 đọc lại danh sách hiện
+    tại, KHÔNG gọi filehub.resume; bước 2 → `filehub.resume{root_id}` audit kênh telegram; người ngoài allowlist bị bỏ qua; nonce dùng một lần."""
+    d = await make(allowed=(BOSS,))
+    _, calls = lane_stub(d)
+    await until(lambda: tg.calls_of("getUpdates"))
+    d.hub.publish(lane_event())
+    sysmsg = await until(lambda: tg.with_buttons(BOSS, ["Cho xoá", "Không xoá"]))
+    note = next(m for m in tg.sent(BOSS) if "muốn xoá 12 mục" in m["text"])
+    assert not FakeTelegram.buttons(note) and "tep0" in note["text"]
+    assert "tep" not in sysmsg["text"] and sysmsg.get("reply_to_message_id") is not None
+    cho = next(b for b in FakeTelegram.buttons(sysmsg) if b["text"] == "Cho xoá")
+    assert tg.ref_of(cho) == LANE_ROOT and LANE_ROOT not in cho["callback_data"]
+    await press(tg, STRANGER, cho["callback_data"])  # ngoài allowlist → bỏ qua, không tiêu nút
+    assert not tg.edits(BOSS)
+    await press(tg, BOSS, cho["callback_data"])
+    assert calls == []  # bước 1 chỉ hỏi
+    assert "Chờ xác nhận" in tg.edits(BOSS)[-1]["text"] and not FakeTelegram.buttons(tg.edits(BOSS)[-1])
+    confirm_msg = tg.with_buttons(BOSS, ["Xác nhận XOÁ", "Huỷ"])
+    assert "Xoá 12 tệp trên Không gian số (vào thùng rác, khôi phục được)?" in confirm_msg["text"] and "tep" not in confirm_msg["text"]
+    listing = next(m for m in tg.sent(BOSS) if tg.message_id_of(m) == confirm_msg["reply_to_message_id"])
+    assert not FakeTelegram.buttons(listing) and "và 2 mục nữa" in listing["text"] and "tep9" in listing["text"]
+    assert "&lt;b&gt;tep0&lt;/b&gt;" in listing["text"]  # đường dẫn là dữ liệu: escape trong <pre>
+    await press(tg, BOSS, cho["callback_data"])  # nonce bước 1 đã tiêu (cả nhóm)
+    assert len([m for m in tg.sent(BOSS) if [b["text"] for b in FakeTelegram.buttons(m)] == ["Xác nhận XOÁ", "Huỷ"]]) == 1
+    ok = FakeTelegram.buttons(confirm_msg)[0]
+    await press(tg, BOSS, ok["callback_data"])
+    assert calls == [{"root_id": LANE_ROOT, "discard": False}]
+    assert "Đã xoá 12 mục trên Không gian số" in tg.edits(BOSS)[-1]["text"]
+    au = d.hub.audit.query(kind="filehub.resume")
+    assert au and au[0]["channel"] == f"telegram:{BOSS}" and au[0]["actor"] == "user"
+    await press(tg, BOSS, ok["callback_data"])  # dùng lại nonce → từ chối
+    assert len(calls) == 1
+    await stop(d)
+
+
+async def test_lane_mass_delete_discard_and_nothing_held(make, tg):
+    """Không xoá → `filehub.resume{root_id, discard}`; lô đã được quyết nơi khác → báo, không ghi."""
+    d = await make()
+    state, calls = lane_stub(d, n=3)
+    await until(lambda: tg.calls_of("getUpdates"))
+    d.hub.publish(lane_event(3))
+    sysmsg = await until(lambda: tg.with_buttons(BOSS, ["Cho xoá", "Không xoá"]))
+    khong = next(b for b in FakeTelegram.buttons(sysmsg) if b["text"] == "Không xoá")
+    await press(tg, BOSS, khong["callback_data"])
+    confirm_msg = tg.with_buttons(BOSS, ["Xác nhận KHÔNG XOÁ", "Huỷ"])
+    assert "Không xoá — giữ 3 tệp trên Không gian số, bỏ thay đổi của agent" in confirm_msg["text"] and calls == []
+    # Huỷ → nút bước 1 trở lại, không ghi
+    await press(tg, BOSS, FakeTelegram.buttons(confirm_msg)[1]["callback_data"])
+    assert "Đã huỷ" in tg.edits(BOSS)[-1]["text"] and calls == []
+    again = [b for b in FakeTelegram.buttons(tg.edits(BOSS)[-1]) if b["text"] == "Không xoá"][0]
+    await press(tg, BOSS, again["callback_data"])
+    confirm_msg = tg.with_buttons(BOSS, ["Xác nhận KHÔNG XOÁ", "Huỷ"])
+    await press(tg, BOSS, FakeTelegram.buttons(confirm_msg)[0]["callback_data"])
+    assert calls == [{"root_id": LANE_ROOT, "discard": True}]
+    assert "giữ 3 tệp" in tg.edits(BOSS)[-1]["text"]
+    assert d.hub.audit.query(kind="filehub.resume")[0]["channel"] == f"telegram:{BOSS}"
+    # lô mới rồi được quyết ở web trước khi bấm → bước 1 báo "không còn", không có nút xác nhận, không ghi
+    state["runs"][0].update(held=4, held_paths=["a.txt", "b.txt", "c.txt", "d.txt"])
+    d.hub.publish(lane_event(4))
+    await until(lambda: len([m for m in tg.sent(BOSS) if [b["text"] for b in FakeTelegram.buttons(m)] == ["Cho xoá", "Không xoá"]]) == 2)
+    sysmsg = tg.with_buttons(BOSS, ["Cho xoá", "Không xoá"])
+    state["runs"][0].update(held=0, held_paths=[])
+    await press(tg, BOSS, FakeTelegram.buttons(sysmsg)[0]["callback_data"])
+    assert "Không còn lô xoá nào đang giữ" in tg.edits(BOSS)[-1]["text"] and len(calls) == 1
+    await stop(d)
+
+
+async def test_lane_blocked_without_lane_flag_has_no_buttons(make, tg):
+    """`filehub.blocked` của chế độ sync cũ (không `lane`) / root lạ → chỉ tin chữ, không nút."""
+    d = await make()
+    await until(lambda: tg.calls_of("getUpdates"))
+    d.hub.publish(make_event("filehub.blocked", None, {"folder": "X", "root_id": LANE_ROOT, "reason": "mass_delete"}, source="hub"))
+    ev = lane_event(2)
+    ev.payload["root_id"] = "bad root/<x>"
+    d.hub.publish(ev)
+    await until(lambda: len([m for m in tg.sent(BOSS) if "Không gian số" in m["text"] or "muốn xoá" in m["text"]]) >= 2)
+    await asyncio.sleep(0.2)
+    assert not any(FakeTelegram.buttons(m) for m in tg.sent(BOSS))
+    await stop(d)

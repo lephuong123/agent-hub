@@ -1027,8 +1027,16 @@ async def inbox_page(request: Request) -> Response:
     asked = {q.get("task_id") for q in qs}
     blocked = [t for t in blocked if t.get("status") == "blocked" and t["id"] not in asked]
     recent = [q for q in await questions(request, "answered") if q.get("answered_at")][:8]
+    from .filehub_pages import held_batches
+
+    try:  # lô xoá hàng loạt trên Không gian số đang chờ người (run đang chạy hoặc đã kết thúc) — Cho xoá / Không xoá ngay tại đây
+        batches = held_batches(await rpc(request, "filehub.lane_status"))
+    except RpcError:
+        batches = []
+    held_task = {t: b["root_id"] for b in batches for t in b["tasks"]}
     return await render(request, "inbox.html", {"nav": "inbox", "pend": pend, "q_open": [q for q in qs if q["status"] == "open"],
-                                                 "q_mgr": [q for q in qs if q["status"] == "with_manager"], "blocked": blocked, "recent": recent})
+                                                 "q_mgr": [q for q in qs if q["status"] == "with_manager"], "blocked": blocked, "recent": recent,
+                                                 "batches": batches, "held_task": held_task})
 
 
 async def approvals_page(request: Request) -> Response:
@@ -1254,6 +1262,8 @@ class Action:
     # ô người phải gõ (lại) Ở BƯỚC 2 — (tên, nhãn, kiểu input): passphrase không bao giờ đi qua trang xác nhận (`secret_fields`) nên được
     # nhập đúng ở POST cuối cùng; id gói gõ lại (web/transfer_pages.py)
     reenter: Callable[[FormData], list[tuple[str, str, str]]] | None = None
+    # chữ bổ sung cho trang xác nhận, đọc từ DAEMON lúc xác nhận (vd danh sách tệp agent muốn xoá) — không lấy từ form
+    preview: Callable[[Request, FormData], Awaitable[str]] | None = None
 
 
 async def _config_set(request: Request, p: dict[str, Any]) -> Any:
@@ -1582,7 +1592,14 @@ async def plan_action(request: Request, name: str, form: FormData, act: Action) 
     if act.confirm and form.get("confirm") != "yes":
         msg = act.confirm(form) if callable(act.confirm) else act.confirm
         fields = [(k, v) for k, v in carry(form) if k not in act.secret_fields]  # giá trị secret không vào HTML
-        return Plan("confirm", act, params, message=msg + ("\n(Nhập lại giá trị ở trang Cài đặt và tích ô xác nhận.)" if act.secret_fields else ""),
+        if act.preview is not None:
+            try:
+                extra = await act.preview(request, form)
+            except (RpcError, DaemonUnavailable, OSError):
+                extra = ""
+            msg = msg + ("\n\n" + extra if extra else "")
+        # ô bí mật không đi qua trang xác nhận: thao tác có `reenter` hỏi lại ở BƯỚC 2 (không cần nhập lại ở Cài đặt)
+        return Plan("confirm", act, params, message=msg + ("\n(Nhập lại giá trị ở trang Cài đặt và tích ô xác nhận.)" if act.secret_fields and not act.reenter else ""),
                     fields=fields)
     if act.step2 and form.get("confirm2") != "yes":
         # thao tác nới quyền (vd gỡ tài nguyên bảo vệ — web/perm_pages.py): bước 2 nêu rõ hệ quả, như "luôn cho phép"
