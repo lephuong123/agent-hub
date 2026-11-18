@@ -929,6 +929,15 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS ledger_pending_state ON ledger_pending(state, created_at);
     """,
+    # v28 — mã yêu cầu `req_id` (L2, docs/dev-notes/plan-logging.md §3): nối lệnh của người/kênh → run → event → audit. Chỉ THÊM cột
+    # nullable (dòng cũ = NULL). `events.req_id` không index (bảng lớn, ghi nóng — tra theo run_id); L3 thêm cột audit khác ở v29.
+    """
+    ALTER TABLE runs ADD COLUMN req_id TEXT;
+    CREATE INDEX IF NOT EXISTS runs_req_id ON runs(req_id);
+    ALTER TABLE audit_log ADD COLUMN req_id TEXT;
+    CREATE INDEX IF NOT EXISTS audit_log_req_id ON audit_log(req_id);
+    ALTER TABLE events ADD COLUMN req_id TEXT;
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
@@ -1067,7 +1076,7 @@ class Store:
     def insert_event(self, ev: HubEvent) -> None:
         self.conn.execute(
             "INSERT INTO events (epoch, seq, ts, type, level, source, agent_id, team_id, task_id, run_id, "
-            "session_id, subagent_id, payload) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "session_id, subagent_id, payload, req_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 ev.epoch,
                 ev.seq,
@@ -1082,6 +1091,7 @@ class Store:
                 ev.session_id,
                 ev.subagent_id,
                 _dumps(_mask_secrets(ev.payload)),
+                ev.req_id,
             ),
         )
         try:  # v17: chỉ mục hội thoại (prompt/steer/assistant/tool) — lỗi chỉ mục không được làm mất event

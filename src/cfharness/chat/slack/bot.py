@@ -38,6 +38,7 @@ import secrets as _secrets
 import time
 from typing import TYPE_CHECKING, Any
 
+from ...trace import traced
 from ...hub_freeze import frozen
 from ... import auth as _auth
 from ...events import HubEvent
@@ -663,6 +664,7 @@ class SlackBot(ChatBot):
         return cid
 
     # ------------------------------------------------------------------ nhận
+    @traced("slack")  # L2: điểm vào nội bộ → req_id mới (cha = mã đang bind)
     async def handle_envelope(self, typ: str, p: dict[str, Any], api: SlackApi) -> None:
         _TRIGGER.set(None)  # worker dùng chung một context — không để trigger / thread của envelope trước lọt sang
         _THREAD.set(None)

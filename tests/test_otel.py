@@ -127,3 +127,27 @@ def test_export_failure_does_not_break_hub(hub_home):
     assert h.telemetry.stats["errors"] >= 1 and h.telemetry.stats["dropped"] >= 1
     assert h.store.get_run("r_1")["status"] == "completed"
     h.store.close()
+
+
+def test_req_id_trace_and_allowlist(hub_home):
+    """L2: run có req_id → trace_id suy từ req_id (span tool cùng trace), thuộc tính `cfharness.req_id` nằm trong allowlist."""
+    from cfharness.telemetry.otel import RUN_SPAN_KEYS, _hex_id
+    from cfharness.trace import new_req_id
+
+    h = _hub(hub_home, {"enabled": True, "exporter": "memory", "flush_s": 0.05})
+    rq = new_req_id()
+    h.store.insert_run({"id": "r_2", "agent_id": "a", "kind": "adhoc", "prompt": "x", "status": "completed", "outcome": "completed",
+                        "queued_at": "2026-10-18T00:00:00.000Z", "req_id": rq})
+    for e in (make_event("run.started", "a", {}, run_id="r_2"),
+              make_event("tool.start", "a", {"tool_id": "t1", "name": "Bash"}, run_id="r_2"),
+              make_event("tool.complete", "a", {"tool_id": "t1", "name": "Bash", "duration_s": 0.1}, run_id="r_2"),
+              make_event("run.completed", "a", {"outcome": "completed"}, run_id="r_2")):
+        h.publish(e)
+    spans = _spans(h)
+    run = next(s for s in spans if s["name"] == "run adhoc")
+    tool = next(s for s in spans if s["name"] == "tool Bash")
+    assert run["traceId"] == tool["traceId"] == _hex_id("req:" + rq, 16)
+    keys = {a["key"] for a in run["attributes"]}
+    assert "cfharness.req_id" in RUN_SPAN_KEYS and keys <= RUN_SPAN_KEYS
+    assert {a["key"]: a["value"] for a in run["attributes"]}["cfharness.req_id"]["stringValue"] == rq
+    h.store.close()

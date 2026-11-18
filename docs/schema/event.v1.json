@@ -36,6 +36,18 @@
       "title": "Payload",
       "type": "object"
     },
+    "req_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Req Id"
+    },
     "run_id": {
       "anyOf": [
         {

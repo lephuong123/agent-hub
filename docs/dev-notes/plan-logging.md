@@ -303,3 +303,40 @@ Lệch / để sau:
 - `update_helper` / import-job vẫn ghi text (chỉ stdlib, không import cfharness): đã xoay vòng; formatter JSON mini để L7.
 - 38 chỗ `create_task` còn lại (giữ tham chiếu riêng, có await/huỷ theo vòng đời) đã được `loop.set_exception_handler` bắt khi lỗi
   không ai lấy; đổi sang `aiotasks.spawn` dần trong L8.
+
+### L2 — `req_id` + access log RPC (nhánh `feat/logging-l2`)
+Đã làm:
+- `trace.py`: `new_req_id()` = `r_` + ULID Crockford 26 ký tự (stdlib, sắp theo thời gian), `valid_req_id` (dài đúng 28, chữ HOA, ký tự đầu ≤ 7),
+  contextvar `REQ_CTX` {req_id, parent_req_id, channel, principal}, `bind`/`set_ctx`/`reset`, `child(channel)` + decorator `traced(channel)`,
+  `outgoing` (client), `accept` (daemon), `TraceFilter` (cài trong `setup_logging` cạnh `RunContextFilter`).
+- Client: `rpc.with_auth` gắn `params._trace` → `RpcClient`, `AsyncHubClient` (web/TUI) và `DaemonCaller` của MCP (một req_id cho cả lần thử lại sau
+  khi tự khởi động daemon). `RpcError.req_id` (từ `_meta.req_id`, không có thì mã đã gửi); `client.last_req_id`. CLI in `(mã yêu cầu r_…)`, `--json` thêm `error.req_id`.
+- Daemon `_dispatch`: pop `_trace` (handler không bao giờ thấy), nhận nếu đúng định dạng, không thì sinh mới; `call_as` trong một lượt đang bind
+  dùng lại mã đó; bind cho cả lượt; mọi phản hồi có thêm thành viên cấp cao `"_meta": {"req_id": …}` (client cũ bỏ qua). Thân cũ tách thành
+  `_dispatch_inner` (không đổi logic quyền).
+- B3: logger `cfharness.rpc`, một bản ghi mỗi lượt `{event, method, req_id, via, channel, duration_ms, outcome ok|error|denied, code}` (`logs.EXTRA_FIELDS`
+  vào JSON). Đọc thành công = DEBUG, method ∈ `all_mutating()` = INFO, lỗi nghiệp vụ/tham số = INFO, `BLOCKED` = WARNING `denied`, lỗi bất ngờ giữ
+  `log.exception` ERROR (+ bản ghi access INFO). `logs.slow_rpc_ms` (mặc định 2000, đọc lại ≤ 5 s một lần) → WARNING `rpc.slow`, trừ `daemon.SLOW_EXEMPT`
+  (`run.wait`, `mcp.events`, `mcp.task_events`, `guard.check` — chờ lâu theo thiết kế). `events.subscribe`: chỉ `rpc.stream_open`/`rpc.stream_close`
+  (thời lượng, lý do; `slow_consumer` = WARNING). Kiểm `isEnabledFor` trước khi dựng bản ghi.
+- Lan truyền: migration **v28** = `runs.req_id` (+ index), `audit_log.req_id` (+ index), `events.req_id` (không index). `RunManager.submit` lưu req_id
+  đang bind (không có → mã riêng, để MỌI run từ v28 có req_id); `_run` bind req_id của run → event adapter/finalize/log/audit trong task của run cùng mã;
+  env `CFHARNESS_REQ_ID` cho tiến trình `claude` (env_extra của run, không đụng `env_strip`); hook guard + `hub-guard` (`guard/hook.with_trace`, chỉ
+  chuỗi ngắn ký tự an toàn, vẫn fail-closed) gửi kèm `guard.check` → event `guard.decision` + audit `guard.*` cùng mã. `HubEvent.req_id` tuỳ chọn
+  (`Hub.publish` điền), schema `docs/schema/event.v1.json` sinh lại. `AuditLog.record` ghi req_id từ contextvar.
+- Điểm vào nội bộ (`@traced`): Telegram `handle_update`, Slack `handle_envelope`, `ManagerService._tick`, `ScheduleService._fire`,
+  `TaskDispatcher._submit_claimed`, `AutoResumer.fire` — mã mới, cha = mã đang bind.
+- OTel: trace_id của span run/tool = băm `req:<req_id>` của run (không có → `run:<run_id>` như cũ); thuộc tính `cfharness.req_id`; allowlist
+  `otel.RUN_SPAN_KEYS` lọc thuộc tính span run.
+- Test: `tests/test_trace_id.py` (daemon thật + socket thật + hook guard là tiến trình con thật: một lệnh web → cùng req_id ở `_meta`, audit, run, mọi
+  event của run, `guard.decision`, dòng `hub.log`; `_trace` sai bị thay; lỗi mang req_id; CLI in mã; level access log; `rpc.slow`; điểm vào nội bộ),
+  `tests/test_otel.py::test_req_id_trace_and_allowlist`.
+
+Lệch / để sau:
+- v28 chỉ có các cột req_id (theo chốt khi giao L2); cột audit A1 (`outcome`, `principal`, `duration_ms`…) → L3 ở **v29**. Thêm `events.req_id` (không có
+  trong §3 ban đầu) vì event lưu theo cột — thiếu thì mất req_id khi đọc lại từ DB; không index (bảng ghi nóng, tra qua `run_id`), L6 thêm nếu cần.
+- `guard_decisions` chưa có cột req_id: đối chiếu qua event `guard.decision` (+ dòng audit khi không `safe`). L3/L6 quyết.
+- `principal` trong contextvar để trống (L3 — danh tính do daemon chứng thực). `channel` = `_audit.channel` (người tự khai cho cli/tui/web; daemon ép
+  cho agent/manager/chat) hoặc loại người gọi.
+- req_id do client gửi được nhận kể cả từ agent (chỉ là mã đối chiếu, không có quyền gì) — agent có thể "mượn" mã của lệnh khác để làm rối trace,
+  không làm được gì hơn. Không có span OTel cho RPC. Hook quan sát (`observe_hook`) chưa gửi req_id (spool riêng, L6).

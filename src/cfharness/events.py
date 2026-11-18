@@ -265,6 +265,7 @@ class HubEvent(BaseModel):
     session_id: str | None = None
     subagent_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    req_id: str | None = None  # L2 (tuỳ chọn, v vẫn = 1): mã yêu cầu gây ra event — `Hub.publish` điền từ trace.REQ_CTX
 
     @property
     def persisted(self) -> bool:

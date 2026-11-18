@@ -15,7 +15,7 @@ from typing import Any, AsyncIterator
 
 from .. import transport
 from ..errors import SYSTEM_ERROR
-from ..rpc import DaemonUnavailable, RpcError, encode, with_auth
+from ..rpc import DaemonUnavailable, RpcError, encode, raise_for, response_req_id, with_auth
 
 LIMIT = 64 * 1024 * 1024
 
@@ -26,6 +26,7 @@ class AsyncHubClient:
         self.channel = channel
         self.timeout = timeout
         self._id = 0
+        self.last_req_id: str | None = None
 
     async def _open(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         try:
@@ -37,20 +38,22 @@ class AsyncHubClient:
         params = dict(params or {})
         if audit:
             params["_audit"] = {"channel": self.channel, "actor": "user"}
-        reader, writer = await self._open()
+        reader, writer = await self._open()  # mở socket TRƯỚC: daemon dừng → DaemonUnavailable (không phải lỗi kiểm chủ socket)
+        sent: str | None = None
         try:
+            p = with_auth(self.sock_path, params)  # + `_trace.req_id` (L2): bind trong task hiện tại hoặc sinh mới
+            sent = p["_trace"]["req_id"]
             self._id += 1
-            writer.write(encode({"jsonrpc": "2.0", "id": self._id, "method": method, "params": with_auth(self.sock_path, params)}))
+            writer.write(encode({"jsonrpc": "2.0", "id": self._id, "method": method, "params": p}))
             await writer.drain()
             line = await asyncio.wait_for(reader.readline(), timeout or self.timeout)
         finally:
             writer.close()
         if not line:
-            raise RpcError(SYSTEM_ERROR, "daemon đóng kết nối không trả lời")
+            raise RpcError(SYSTEM_ERROR, "daemon đóng kết nối không trả lời", req_id=sent)
         msg = json.loads(line)
-        if "error" in msg:
-            e = msg["error"]
-            raise RpcError(e.get("code", SYSTEM_ERROR), e.get("message", "lỗi"), e.get("data"))
+        self.last_req_id = response_req_id(msg, sent)
+        raise_for(msg, sent)
         return msg.get("result")
 
 
@@ -71,9 +74,7 @@ class Subscription:
             writer.write(encode({"jsonrpc": "2.0", "id": self.client._id, "method": "events.subscribe", "params": self.params}))
             await writer.drain()
             first = json.loads(await reader.readline() or b"{}")
-            if "error" in first:
-                e = first["error"]
-                raise RpcError(e.get("code", SYSTEM_ERROR), e.get("message", "lỗi"), e.get("data"))
+            raise_for(first)
             yield {"subscribed": first.get("result") or {}}
             while not self.closed:
                 line = await reader.readline()

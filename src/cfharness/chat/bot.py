@@ -31,6 +31,7 @@ import secrets as _secrets
 import time
 from typing import TYPE_CHECKING, Any
 
+from ..trace import traced
 from .. import auth as _auth
 from ..hub_freeze import frozen
 from ..notify.base import clip
@@ -246,6 +247,7 @@ class TelegramBot(ChatBot):
         await api.call("sendChatAction", {"chat_id": chat, "action": "typing"})
 
     # ------------------------------------------------------------------ update
+    @traced("telegram")  # L2: điểm vào nội bộ → req_id mới (cha = mã đang bind)
     async def handle_update(self, u: dict[str, Any], api: TelegramApi) -> None:
         if "callback_query" in u:
             await self._on_callback(u["callback_query"], api)

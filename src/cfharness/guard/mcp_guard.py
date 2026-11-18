@@ -16,7 +16,7 @@ import threading
 import time
 
 from ..oscompat import utf8_stdio
-from .hook import _args, rpc_call
+from .hook import _args, rpc_call, with_trace
 
 PROTOCOL_DEFAULT = "2025-06-18"
 TOOL = {
@@ -48,14 +48,14 @@ def decide(args: dict, run_id: str, sock: str, timeout: float) -> dict:
         res = rpc_call(
             sock,
             "guard.check",
-            {
+            with_trace({
                 "run_id": run_id,
                 "channel": "permtool",
                 "tool_name": tool_name,
                 "tool_input": tool_input,
                 "tool_use_id": args.get("tool_use_id"),
                 "max_wait_s": max(1.0, timeout - 10 - (time.monotonic() - t0)),
-            },
+            }),
             timeout,
         )
         if res.get("decision") == "allow":

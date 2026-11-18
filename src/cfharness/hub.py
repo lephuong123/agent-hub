@@ -17,6 +17,7 @@ from .paths import HubPaths
 from .runs import RunManager
 from .runtime import AgentRuntime
 from .store import Store
+from .trace import current_req_id as _current_req_id
 
 log = logging.getLogger("cfharness.hub")
 
@@ -142,6 +143,8 @@ class Hub:
                 log.exception("không ghi được event %s", ev.type)
 
     def publish(self, ev: HubEvent) -> HubEvent:
+        if ev.req_id is None:  # L2: event của run lấy req_id của run (RunManager._run bind nó), còn lại = lượt xử lý đang bind
+            ev.req_id = _current_req_id()
         if ev.payload:  # H-12: che theo GIÁ TRỊ secret trước khi tới bus/DB/TUI/Slack/OTel
             from .redact import mask_obj
 

@@ -25,6 +25,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable
 
+from ..trace import traced
 from ..errors import Blocked, Conflict, HubError, NotFound
 from ..events import TERMINAL_RUN_EVENTS, HubEvent, iso, make_event
 from . import cron
@@ -585,6 +586,7 @@ class ScheduleService:
             return mgr._new_conv("cli", aid, f"Lịch: {r['name']}")
         return home
 
+    @traced("schedule")  # L2: điểm vào nội bộ → req_id mới (cha = mã đang bind)
     def _fire(self, r: dict[str, Any], due: datetime, *, manual: bool, catchup: bool = False, by: str = "hub") -> dict[str, Any]:
         h = self.hub
         now = self.now()

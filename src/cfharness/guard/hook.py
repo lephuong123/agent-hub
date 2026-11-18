@@ -71,6 +71,15 @@ def rpc_call(sock_path: str, method: str, params: dict, timeout: float) -> dict:
     return msg["result"]
 
 
+def with_trace(params: dict) -> dict:
+    """L2: gắn `_trace.req_id` từ env `CFHARNESS_REQ_ID` (do hub đặt cho tiến trình claude) — chỉ để đối chiếu log/audit.
+    Chỉ chuỗi ngắn ký tự an toàn; daemon kiểm lại định dạng (sai → mã mới). Không bao giờ làm hỏng lời gọi."""
+    v = os.environ.get("CFHARNESS_REQ_ID") or ""
+    if 0 < len(v) <= 64 and v.isascii() and v.replace("_", "").isalnum():
+        params["_trace"] = {"req_id": v}
+    return params
+
+
 def _args(argv: list[str]) -> dict[str, str]:
     out: dict[str, str] = {}
     i = 0
@@ -102,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         res = rpc_call(
             sock,
             "guard.check",
-            {
+            with_trace({
                 "run_id": run_id,
                 "channel": "hook",
                 "tool_name": data.get("tool_name"),
@@ -111,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
                 "session_id": data.get("session_id"),
                 "cwd": data.get("cwd"),
                 "max_wait_s": max(1.0, timeout - (time.monotonic() - t0) - 10),
-            },
+            }),
             timeout,
         )
         decision = res.get("decision")
