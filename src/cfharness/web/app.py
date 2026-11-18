@@ -139,8 +139,6 @@ class WebState:
     # directory hub (C5, web/desktop.py): giới hạn lần sai token + trần lần trả danh mục — chỉ RAM
     dir_limiter: Any = field(default_factory=lambda: _desktop.directory_limiter())
     dir_window: Any = field(default_factory=lambda: _desktop.SuccessWindow())
-    # callback relay OAuth Không gian số (web/filehub_pages.py): giới hạn lần SAI state theo IP + toàn cục — chỉ RAM
-    fh_limiter: Any = field(default_factory=lambda: _desktop.directory_limiter())
 
     @property
     def public_hosts(self) -> set[str]:
@@ -189,8 +187,7 @@ class GuardMiddleware:
 
     # callback OAuth: state là lớp bảo vệ (web/mcp_oauth.py); well-known: app desktop nhận diện hub (chỉ {kind, schema, app_api})
     # directory: công khai nhưng có token (C5, hub admin — web/desktop.directory: sai → 404, giới hạn tốc độ)
-    # /filehub/oauth/cb: relay OAuth Không gian số — state (binary sinh, daemon giữ, một lần) là lớp bảo vệ (web/filehub_pages.py)
-    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/mcp/oauth/callback", "/filehub/oauth/cb", "/.well-known/cfharness.json",
+    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/mcp/oauth/callback", "/.well-known/cfharness.json",
               "/.well-known/cfharness-directory")
     # JSON do trang gọi bằng fetch (polling): chưa đăng nhập → 401 (không chuyển hướng), không gia hạn phiên — như /sse/, /partials/
     # `/app/` = API cho app desktop (web/desktop.py: /app/badge) — 401 dạng JSON
@@ -2039,7 +2036,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_memory_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
-        *_filehub_pages.routes(),  # /partials/filehub + /filehub/open — thẻ "Không gian số" ở Cài đặt (filehub/)
+        *_filehub_pages.routes(),  # /partials/filehub[/lane] + /filehub/open — thẻ "Không gian số" ở Cài đặt (filehub/)
         *_backup_pages.routes(),  # /partials/backup — thẻ "Sao lưu" ở Cài đặt (backup.py)
         *_transfer_pages.routes(),  # /hub-transfer — xuất/nhập toàn bộ hub (hub_transfer_web.py, web/transfer_pages.py)
         *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
@@ -2091,7 +2088,7 @@ from . import transfer_pages as _transfer_pages  # noqa: E402
 
 _transfer_pages.register_actions(ACTIONS, Action, _req)
 
-# Thẻ "Không gian số" (filehub/): thiết lập/đăng nhập (relay OAuth qua link public)/chuyển chế độ/gỡ/tạm dừng + link "Mở trên Không gian số"
+# Thẻ "Không gian số — cổng cfharness" (filehub/): khoá cổng, thư mục chung, lô xoá đang giữ, cây mồ côi + link "Mở trên Không gian số"
 from . import filehub_pages as _filehub_pages  # noqa: E402
 
 _filehub_pages.register_actions(ACTIONS, Action, _req)
