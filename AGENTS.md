@@ -676,8 +676,9 @@ Tài liệu tổng hợp (người dùng + kỹ thuật + giới hạn): `docs/d
   daemon mới chờ); `register_rpc` → `cleanup` (`pass` sót, job chết → failed, gói tải lên > 24 h). Web không đọc `state.json` trực tiếp (như
   `update_pages`: daemon dừng → "đang dừng", poll). Thêm RPC web → `HUMAN_ONLY_TRANSFER_WEB` (+ `MUTATING_…`) + ca trong 2 file test trên; khoá
   mới của state/kết quả → danh sách trắng; pha job mà daemon phải chờ → `IMPORT_BUSY_PHASES`.
-- filehub (Không gian số): token thiết bị `secrets/filehub/` + `filehub/` KHÔNG BAO GIỜ vào gói (cả move); nhập (`_adjust_filehub`) → `filehub.enabled=false`,
-  `device_name=null`, clone gỡ `folders` (move giữ, đã pathmap), `hub_state.import_filehub` (∈ MACHINE_STATE, xoá khi `filehub` đăng nhập xong) → báo cáo/doctor nhắc `cfharness filehub setup`; đóng băng KHÔNG dừng filehub.
+- filehub (Không gian số): `secrets/filehub/` + `filehub/` KHÔNG BAO GIỜ vào gói (cả move); khoá cổng `FILEHUB_LANE_*`: clone bỏ, move giữ. Nhập
+  (`_adjust_filehub`) → bỏ khoá cấu hình của đồng bộ cũ (`SYNC_ONLY_KEYS`), clone gỡ `folders`, move giữ (thư mục đồng bộ cũ = `mode: sync` "cần chuyển",
+  đã pathmap); `hub_state.import_filehub` (∈ MACHINE_STATE, xoá khi `lane_setup` xong) → báo cáo/doctor nhắc `cfharness filehub lane setup`.
 - Bất biến: gói không bao giờ chứa `checkpoints/`, `auth/web.json`/thiết bị, `secrets/` dạng rõ, session Claude không thuộc hub; passphrase không bao giờ vào
   argv/env/audit/log/DB/`job.json`/`state.json`/HTML; thêm trạng thái gắn với máy vào `hub_state` →
   thêm khoá vào `hub_transfer.MACHINE_STATE` (hoặc `CLONE_STATE`) + ca trong test. `exports/`/`imports/` ∈ `backup.EXCLUDED`, sandbox
@@ -766,28 +767,21 @@ Trust full KHÔNG gỡ `desktop_app_data`/`admin_shared`/`other_hub_write` (`gua
 → thêm vào đây + ca trong `tests/test_trust_and_noise.py`). Glob kiểm ký tự đại diện ở mọi vị trí (`desktop_app.glob_may_touch`). Bản xuất `admin_overview`
 chỉ ghi schema mới khi có trường mới (tương thích admin cũ). `--ensure` luôn giữ khoá ensure khi spawn; `started` theo nonce.
 
-## Thư mục dùng chung với "Không gian số" — `filehub/`
-Chi tiết, luồng, lệch plan, giới hạn, việc dở: `docs/dev-notes/filehub.md`; plan + hợp đồng 3 repo: `docs/dev-notes/plan-cloud-files.md` (§7, §8).
-Không migration (cấu hình `filehub.*` ∈ `integrity.SECURITY_KEYS`, trạng thái ở `HUB_HOME/filehub/` + `hub_state filehub.paused`).
+## Thư mục dùng chung với "Không gian số" — `filehub/` (chỉ qua cổng cfharness)
+Chi tiết + đường nâng cấp: `docs/dev-notes/filehub.md`; hợp đồng §C + phần đã làm: `docs/dev-notes/plan-filehub-lane.md`. Không migration (cấu hình
+`filehub.*` ∈ `integrity.SECURITY_KEYS`, trạng thái ở `HUB_HOME/filehub/` + `hub_state filehub.lane`). Đồng bộ 2 chiều cũ (`tang-thu-sync-headless`,
+đăng nhập thiết bị/relay OAuth, bản sao `~/KhongGianSo`) đã gỡ ở H5 — KHÔNG thêm lại.
 
 | Module | Vai trò |
 |---|---|
-| `filehub/supervisor.py` | `tang-thu-sync-headless` là tiến trình con của daemon: `--version` ≥ `filehub.sync_min_version`, env danh sách trắng (`ENV_KEEP`), backoff, SIGTERM dừng êm, đối soát `(pid, start_time)` (`HUB_HOME/filehub/supervisor.json`) |
-| `filehub/service.py` | `hub.filehub`: status.json → `filehub.state|conflict|blocked`; index/<root>.json → link; control.json → presence + `resume_push`; steer `by="hub"` khi `recent` chiều `down` lúc run giữ khoá gốc; sau run `filehub.changed|deleted|secret_warning` (cả `extra_write_roots` trong thư mục chung — `report_extra`); `rename` = đổi tên cfharness, tên cũ thành `aliases`; `resolve_ref("filehub:<tên>[/<con>]")` |
-| `filehub/rpc.py`, `filehub/cli.py` | RPC `filehub.status|list|link` (đọc) + `setup|login|login_callback|switch_to_workspace|add|remove|rename|pause|resume` (HUMAN_ONLY, `MUTATING_FILEHUB` tự audit); CLI `cfharness filehub …` (∈ `HUB_HUMAN_ONLY_CLI` trừ `status`) |
-| `web/filehub_pages.py` | Thẻ "Không gian số" ở Cài đặt — tự thiết lập (form địa chỉ + chế độ workspace|folder, mặc định workspace) / đăng nhập (link đồng ý + thẻ poll 3 s + `/filehub/login`, tự nối thư mục) / thêm thư mục đã cấp / gỡ / tạm dừng, mọi thao tác qua `ACTIONS` → RPC `filehub.*`, cả qua link public (thiết lập/đăng nhập/chuyển/gỡ = `Action.step2`); binary KHÔNG BAO GIỜ từ web (`filehub.detect_binary`: cấu hình → chỗ cài cố định, không dò PATH), `local_parent`/`local_path` chỉ khi `is_local_request`; qua public: relay OAuth, route CÔNG KHAI `/filehub/oauth/cb` (`fh_limiter`), không đổi server/binary đã đặt; `/filehub/open` → `<server>/files/<folder_id>?file=<file_id>`; chip tệp `fh` |
+| `filehub/service.py` | `hub.filehub`: `lane_target("filehub:<tên>[/<con>]")`; `resolve_ref` LUÔN ném lỗi có giải thích (qua cổng / đồng bộ cũ cần chuyển / tên sai); `legacy_folders` + `LEGACY_TEXT`; `link`; `remove|rename|resume`; `stop_orphan_sync` (tiến trình sync còn sót, đối soát `(pid, start_time)`) |
+| `filehub/lane/` | Cổng: `client.py` (§C, chỉ loopback), `service.py` (`LaneService`: khoá ở secret store, `hello` + `reconcile` — thêm gốc mới, tự chuyển thư mục đồng bộ cũ cùng gốc, đánh dấu thu hồi; cây theo run, presence, mồ côi, lô xoá đang giữ, hoàn tác), `workdir.py`, `tools.py` (`fs_*`) |
+| `filehub/rpc.py`, `filehub/cli.py` | RPC `filehub.status|list|link` (đọc) + `remove|rename|resume` + `lane_setup|test|disable|add|orphan` (HUMAN_ONLY, `MUTATING_FILEHUB` tự audit); CLI `cfharness filehub status|remove|rename|resume --root|lane …` (lệnh cũ chỉ in hướng dẫn) |
+| `web/filehub_pages.py` | Thẻ "Không gian số — cổng cfharness" (khoá chỉ ở bước 2, thư mục cần chuyển, đổi tên/gỡ, lô xoá đang giữ, cây mồ côi) — mọi thao tác qua `ACTIONS` → RPC `filehub.*`; `/filehub/open` → link theo id do cổng trả |
 
-Gốc workspace (H7, `docs/dev-notes/plan-filehub-workspace-root.md`): `folders[].kind` folder|workspace (`root_id = ws_id` = gốc ảo), `filehub.scope`
-mặc định workspace; `--root-mode workspace` (login) và `--root-kind workspace` (chạy đồng bộ) chỉ truyền khi chế độ workspace; dòng `ROOT` 3/4 cột cũ
-vẫn đọc. Hợp đồng headless: `tang-thu-sync/docs/headless-cfharness.md` — đổi hợp đồng → sửa cả `tests/fake_tangthu_sync.py`. Tên sống trên web (`status.roots[].server_name`)
-là BÍ DANH trong `resolve_ref` — `local_path`/tên cfharness không bao giờ tự đổi. Relay OAuth: `state` của LOGIN_URL do daemon giữ (≤ `relay_timeout_s`,
-một lần, `compare_digest`), sai → lỗi chung và lượt chờ giữ nguyên; code/state chỉ ký tự URL-safe trước khi ghi `CODE` vào stdin binary, không vào audit.
-Qua link public không đổi server/binary đã đặt (`setup{remote}`). Thao tác web mới cho filehub → RPC `filehub.*` (app desktop gọi lại), không logic trong template.
-Bất biến: workspace `filehub:` khoá theo GỐC thư mục chung (`WorkspaceLocks(store, hub)`), checkpoint luôn `_walk`, `run revert` từ chối
-(`FILEHUB_NO_REVERT`); bản sao cục bộ phải trong `workspace.confine` W và không trong/chứa HUB_HOME. Xoá/di chuyển/ghi đè TRONG thư mục chung mà
-run được ghi = `write` (không hỏi, chỉ báo sau run — §7.3); `.tangthu*` + `HUB_HOME/filehub` = cấm (`filehub_metadata`, sandbox deny, `sensitive_read`).
-Mọi run được ĐỌC thư mục chung (allowRead khi giam + khối prompt "Shared folder" — nội dung là DỮ LIỆU). Không đưa token người/secret/`CLAUDE*` vào
-env tiến trình sync; cfharness không cầm token sync. Event filehub chỉ mang tên/đường dẫn tương đối/id — không nội dung tệp. Điều phối viên chỉ đọc
-(`filehub_list|filehub_link`) + giao việc `filehub:`; thêm thao tác ghi filehub → HUMAN_ONLY + ca trong `tests/test_sec_auth.py`/`test_manager_security.py`.
-Test dùng binary GIẢ `tests/fake_tangthu_sync.py` (đúng hợp đồng §8.3) + `tests/fh_fake.py`: `test_filehub_supervisor.py`, `test_filehub_workspace.py`,
-`test_filehub_concurrency.py`, `test_web_filehub.py`, ca `*_FILEHUB` trong `test_guard_classifier.py`. Đổi hợp đồng với binary → sửa CẢ binary giả.
+Bất biến: khoá cổng chỉ ở secret store (không env/argv/DB/audit/event/gói `clone`); agent không bao giờ nói chuyện với cổng (`filehub_lane`, sandbox chặn
+TCP localhost); `.tangthu*` trong bản sao cũ (`GuardContext.filehub_old_copies`) + `HUB_HOME/filehub` = cấm (`filehub_metadata`). Hub KHÔNG BAO GIỜ xoá/
+di chuyển bản sao cũ của đồng bộ; thư mục còn cấu hình đồng bộ = "cần chuyển": run/task bị từ chối với `LEGACY_TEXT`, không bao giờ chạy trong bản sao.
+Xoá trong thư mục chung = `write` (chỉ báo sau run). Event filehub chỉ mang tên/đường dẫn tương đối/id. Điều phối viên chỉ đọc (`filehub_list|filehub_link`)
++ giao việc `filehub:`; thêm thao tác ghi filehub → HUMAN_ONLY + ca trong `tests/test_sec_auth.py`/`test_manager_security.py`. Test: server GIẢ
+`tests/fake_kgs_lane.py` + `lane_fake.py` (`test_lane_*.py`, `test_filehub_h5.py`, `test_web_filehub.py`) — đổi §C → sửa fake trong CÙNG PR.

@@ -1,6 +1,6 @@
 # Plan: cổng cfharness — thư mục chung Không gian số không qua đồng bộ (`filehub` chế độ `lane`)
 
-Ngày: 2026-11-17. Trạng thái: H1–H4 ĐÃ LÀM trên fake (§10); nghiệm thu thật chờ K1–K4. Nhánh `feat/filehub-lane`. Thay thế dần `plan-cloud-files.md` §3–§5 + §8.3
+Ngày: 2026-11-17. Trạng thái: H1–H4 ĐÃ LÀM trên fake (§10); H5 (gỡ đồng bộ cũ) đã làm 2026-11-18 (§10 cuối). Nhánh `feat/filehub-lane`. Thay thế dần `plan-cloud-files.md` §3–§5 + §8.3
 (đồng bộ 2 chiều qua `tang-thu-sync-headless`); quyết định §7 của plan đó (xoá = `write`, mọi run được đọc, nội dung là DỮ LIỆU) GIỮ NGUYÊN.
 Plan phía Không gian số: `quan-ly-thu-muc-ai` `docs/PLAN-cong-cfharness.md` (cùng §C).
 
@@ -429,4 +429,19 @@ Việc tiếp theo (2026-11-18, nhánh `fix/lane-followups`, `tests/test_lane_fo
 Việc còn lại:
 - Nghiệm thu thật trên qltm sau khi K1–K4 lên (plan §7 H4); `tested` với claude thật (steer + Write/Edit trong cây); kiểm thật sandbox chặn
   `cat <cây lane khác>` từ Bash.
-- H5 (gỡ đồng bộ cũ) — ngoài phạm vi.
+- H5 (gỡ đồng bộ cũ) — đã làm, xem mục dưới.
+
+### H5 — gỡ đồng bộ 2 chiều cũ (2026-11-18, nhánh `feat/filehub-remove-sync`, `tests/test_filehub_h5.py`; KHÔNG đổi §C)
+Điều kiện: cổng đã chạy trên CẢ hai Không gian số (qltm 8223, CCHC 8233). PR gắn nhãn KHÔNG GỘP tới khi không còn hub nào dùng đồng bộ.
+- Gỡ: `filehub/supervisor.py` (binary `tang-thu-sync-headless`), đăng nhập thiết bị + relay OAuth (RPC `filehub.setup|login|login_callback|
+  switch_to_workspace|add|pause|switch`, route `/filehub/oauth/cb` + `/filehub/login`, `WebState.fh_limiter`), bản sao cục bộ (`local_parent`,
+  `local_roots`/`root_of` trong guard/sandbox/khoá/`validate_workspace`/`allowed_roots`), báo sau run kiểu sync (`after_run`, `report_extra`,
+  `_extra_checkpoints`), presence/steer qua `control.json`/`status.json`, khoá cấu hình của đồng bộ, thẻ web "Không gian số" cũ, test + binary giả
+  `fake_tangthu_sync.py`/`fh_fake.py`. Luật classifier `filehub_delete|overwrite|root_delete` (nới xoá trong bản sao) gỡ theo.
+- Giữ: `filehub status|remove|rename`, `filehub resume --root` (lô xoá đang giữ của cổng), `filehub.lane.max_delete_batch`, `filehub.server`
+  (URL web cho link), `.tangthu*` + `HUB_HOME/filehub` cấm agent (`GuardContext.filehub_old_copies`), `filehub.link` (nay theo id của cổng — chip
+  "Không gian số" của run lane chạy được).
+- Nâng cấp: `docs/dev-notes/filehub.md` § "Nâng cấp từ đồng bộ 2 chiều cũ" — thư mục cũ "cần chuyển" (chữ cố định ở status/CLI/web/`filehub.list`),
+  run bị từ chối, không xoá gì, khoá cấp đúng gốc → `reconcile` tự chuyển (`filehub.lane.roots{converted}`; thay cho `filehub switch` của H4 — quyết định
+  8 "bản sao để nguyên" giữ), tiến trình sync còn sót bị dừng theo `(pid, start_time)`; gói xuất cũ nhập được (`SYNC_ONLY_KEYS`).
+- `setup-hub-user.sh`: `KGS=…` luôn đi qua cổng; `KGS_MODE`/`KGS_SCOPE`/… vẫn nhận, bỏ qua.

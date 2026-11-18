@@ -3,7 +3,7 @@
     Chữ từ Không gian số (tên gốc, tên tài khoản, đường dẫn) là dữ liệu → autoescape. -#}
 {% import "_macros.html" as m with context %}
 <section class="card" id="filehub-lane">
-  <div class="card-head"><h2>{{ m.icon('inbox') }} Cổng cfharness — Không gian số không qua đồng bộ</h2>
+  <div class="card-head"><h2>{{ m.icon('inbox') }} Không gian số — cổng cfharness</h2>
     {% if data and not data.servers %}<span class="pill">chưa thiết lập</span>{% endif %}</div>
   {% if down %}
     <p class="muted">Daemon không trả lời.</p>
@@ -37,17 +37,22 @@
     {% for f in data.folders %}
       <tr><td><b>{{ f.name }}</b>{% if f.kind == 'workspace' %} <span class="muted">(toàn bộ workspace)</span>{% endif %}</td><td><code>{{ f.workspace }}</code></td>
         <td>{% if f.revoked %}<span class="pill danger">mất quyền</span> khoá không còn được cấp gốc này (tệp không bị xoá) — cấp lại ở Không gian số › Hồ sơ › Cổng cfharness{% endif %}
-          {% if f.old_copy %}bản sao cũ <code>{{ f.old_copy }}</code> — hub không xoá; kiểm rồi tự xoá
-          {{ m.act("filehub_switch_mode", "Về đồng bộ cũ", {"name": f.name, "to": "sync"}, "btn ghost sm", next="/settings#filehub-lane") }}{% endif %}
-          {% if not f.revoked and not f.old_copy %}—{% endif %}</td></tr>
+          {% if f.old_copy %}bản sao cũ của đồng bộ 2 chiều <code>{{ f.old_copy }}</code> — hub không xoá; kiểm rồi tự xoá{% endif %}
+          {% if not f.revoked and not f.old_copy %}—{% endif %}
+          <details class="small"><summary>Đổi tên / gỡ</summary>
+            <form method="post" action="/do/filehub_rename" class="row gap wrap-row" autocomplete="off">
+              <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#filehub-lane">
+              <input type="hidden" name="name" value="{{ f.name }}">
+              <label class="small">Tên mới <input name="new_name" maxlength="80" required spellcheck="false"></label>
+              <button type="submit" class="btn ghost sm">Đổi tên</button></form>
+            {{ m.act("filehub_remove", "Gỡ khỏi hub", {"name": f.name}, "btn ghost sm", next="/settings#filehub-lane") }}</details></td></tr>
     {% endfor %}
     </tbody></table>
     {% endif %}
-    {% if sync_folders and data.servers %}
-      <p class="small"><span class="pill warn">đồng bộ kiểu cũ</span> Thư mục còn đồng bộ về máy (bản sao trên máy) — hub giữ nguyên tới khi bạn
-      chuyển sang cổng:
-      {% for n in sync_folders %}{{ m.act("filehub_switch_mode", "Chuyển «" ~ n ~ "» sang cổng", {"name": n, "to": "lane"}, "btn ghost sm", next="/settings#filehub-lane") }}{% endfor %}</p>
-    {% endif %}
+    {% for f in legacy or [] %}
+      <p class="small"><span class="pill warn">{{ m.icon('alert') }}cần chuyển</span> {{ f.message }}{% if f.old_copy %} (bản sao: <code>{{ f.old_copy }}</code>){% endif %}.
+        Khoá cấp đúng thư mục/workspace này thì hub tự chuyển. {{ m.act("filehub_remove", "Gỡ khỏi hub", {"name": f.name}, "btn ghost sm", next="/settings#filehub-lane") }}</p>
+    {% endfor %}
     {% set hnext = "/settings#filehub-lane" %}
     {% for b in batches or [] %}{% include "_held_batch.html" %}{% endfor %}
     {% for o in data.orphans %}

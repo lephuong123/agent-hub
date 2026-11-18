@@ -13,7 +13,7 @@ KHÔNG BAO GIỜ: `auth/web.json` (khoá ký phiên web), `auth/trusted_devices.
 chúng: bộ đọc từ chối mọi đường dẫn ngoài danh sách trắng. Cũng KHÔNG BAO GIỜ (cả clone lẫn move): thư mục con của `secrets/`, cụ thể
 `secrets/filehub/tokens.json` — token THIẾT BỊ Không gian số (`--device "cfharness · <máy>"`, binary sync tự ghi): mang sang máy khác = hai
 máy đồng bộ dưới CÙNG một thiết bị. `collect` chỉ lấy file thường tên `NAME_RE` ngay trong `secrets/` → thư mục con bị bỏ qua sạch (không
-lỗi, không tính là secret thiếu — `missing_secrets` cũng chỉ đếm tên `NAME_RE`); máy mới đăng nhập lại (`cfharness filehub setup`).
+lỗi, không tính là secret thiếu — `missing_secrets` cũng chỉ đếm tên `NAME_RE`); (đồng bộ 2 chiều cũ đã bỏ — máy mới dùng cổng cfharness: `cfharness filehub lane setup`).
 
 Passphrase CHỈ sống trong tiến trình CLI của người: CLI hỏi (getpass, TTY) hoặc đọc `--passphrase-file` (phải 0600, của chính user) → daemon
 đóng gói phần không mật như PR1 (RPC `hub.export` không nhận passphrase) → CLI tự đọc `HUB_HOME/secrets/` (cùng user OS) và `seal_package`

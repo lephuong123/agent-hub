@@ -58,7 +58,8 @@ async def test_setup_auto_adds_every_granted_root_and_run_works(env, tmp_path):
     lane.roots["r_ws"] = Root("r_ws", kind="workspace", ws="r_ws", name="Phòng CCHC/2026")
     lane.roots["r_cu"] = Root("r_cu", name="cu")
     _sync(d, tmp_path, "chung", "r_khac")  # trùng TÊN với gốc r_chung (gốc khác) → tên mới duy nhất
-    old = _sync(d, tmp_path, "cu", "r_cu")  # gốc r_cu đang đồng bộ kiểu cũ → giữ nguyên, chỉ báo
+    old = _sync(d, tmp_path, "cu", "r_cu")  # gốc r_cu còn cấu hình đồng bộ cũ (đã bỏ — H5) → TỰ chuyển sang cổng, bản sao để nguyên
+    (old / "giu.txt").write_text("bản sao cũ\n")
     r = await rpc(d, "filehub.lane_setup", {"server": "qltm", "url": lane.url, "key": KEY})
     added = {x["name"]: x for x in r["added"]}
     assert set(added) == {"chung 2", "Phòng CCHC-2026"}
@@ -66,10 +67,12 @@ async def test_setup_auto_adds_every_granted_root_and_run_works(env, tmp_path):
     assert _folder(d, "chung 2")["mode"] == "lane" and _folder(d, "chung 2")["root_id"] == "r_chung"
     ws = _folder(d, "Phòng CCHC-2026")
     assert ws["kind"] == "workspace" and ws["mode"] == "lane" and ws["server"] == "qltm"
-    assert _folder(d, "cu")["local_path"] == str(old) and _folder(d, "cu").get("mode") in (None, "sync")  # không tự chuyển
-    assert [x["name"] for x in r["sync"]] == ["cu"] and "đồng bộ kiểu cũ" in r["sync"][0]["hint"]
+    assert _folder(d, "cu")["local_path"] == str(old) and _folder(d, "cu")["mode"] == "lane" and _folder(d, "cu")["server"] == "qltm"
+    assert (old / "giu.txt").read_text() == "bản sao cũ\n"  # hub không đụng bản sao cũ
+    assert [x["name"] for x in r["converted"]] == ["cu"] and r["converted"][0]["old_copy"] == str(old)
+    assert _folder(d, "chung")["root_id"] == "r_khac" and d.hub.filehub.lane_target("filehub:chung") is None  # gốc không được cấp: vẫn cần chuyển
     ev = events(d, "filehub.lane.roots")[-1].payload
-    assert ev["server"] == "qltm" and sorted(ev["added"]) == ["Phòng CCHC-2026", "chung 2"] and ev["sync"] == ["cu"]
+    assert ev["server"] == "qltm" and sorted(ev["added"]) == ["Phòng CCHC-2026", "chung 2"] and ev["converted"] == ["cu"]
     # dùng được NGAY: run với workspace filehub:<tên> dựng cây đúng gốc
     s.by_prompt["LÀM"] = {"text": "xong", "hold": True}
     rid = d.hub.runs.submit("w1", "LÀM", cwd="filehub:chung 2/Báo cáo")["id"]
@@ -79,7 +82,7 @@ async def test_setup_auto_adds_every_granted_root_and_run_works(env, tmp_path):
     await wait_status(d, rid, ("completed",))
     # thiết lập lại (thay khoá) không thêm trùng
     r2 = await rpc(d, "filehub.lane_setup", {"server": "qltm", "url": lane.url, "key": KEY})
-    assert r2["added"] == [] and len(d.hub.filehub.lane_folders()) == 2
+    assert r2["added"] == [] and r2["converted"] == [] and len(d.hub.filehub.lane_folders()) == 3
 
 
 async def test_later_hello_reconciles_new_and_revoked_roots(env):
