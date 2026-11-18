@@ -86,7 +86,9 @@ async def test_default_stays_sync_and_switch_keeps_old_copy(env, tmp_path):
 
 async def test_lane_add_and_global_mode(env):
     d, s, lane = env
+    # thiết lập đã TỰ thêm gốc được cấp (test_lane_onboarding.py); `lane add` vẫn dùng được cho gốc chưa có (ca tay)
     await rpc(d, "filehub.lane_setup", {"server": "qltm", "url": lane.url, "key": KEY})
+    d.hub.config.set("filehub.folders", [])
     r = await rpc(d, "filehub.lane_add", {"root_id": "r_chung", "name": "chung"})
     assert r["mode"] == "lane" and r["workspace"] == "filehub:chung" and d.hub.filehub.lane_target("filehub:chung")
     with pytest.raises(HubError, match="đã có"):

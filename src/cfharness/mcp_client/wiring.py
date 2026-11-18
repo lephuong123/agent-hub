@@ -74,6 +74,11 @@ class ToolWriteWatcher:
         server, tool = parsed
         if server in self._ignored():
             return
+        if server == "hub-self":
+            from ..mcp_server.hub_self import READ_ONLY_TOOLS
+
+            if tool in READ_ONLY_TOOLS:  # tool đọc của chính hub (filehub_list, task_show…) — không phải thao tác ghi
+                return
         ann = reg.tool_annotations(server, tool)
         if ann is not None and ann.get("readOnlyHint") is True:
             return

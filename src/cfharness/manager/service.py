@@ -1015,11 +1015,16 @@ class ManagerService:
             except Exception:  # pragma: no cover
                 log.exception("manager tick lỗi")
 
-    def _next_tick(self, tk: dict[str, Any]) -> str | None:
+    def _next_tick_at(self, tk: dict[str, Any], now: datetime) -> datetime:
+        """Mốc nhịp định kỳ kế tiếp. Chưa từng kiểm → tới hạn NGAY = `now` của người gọi (không đọc đồng hồ lần nữa:
+        trước đây `iso()` lấy giờ SAU `now` → lệch qua ranh giới mili-giây thì `now < nxt` → `not_due` ngẫu nhiên)."""
         last = _parse(tk.get("last_check") or tk.get("last_tick"))
         if last is None:
-            return iso()
-        return iso(last + timedelta(seconds=float(self.cfg("tick_interval_s", 1800))))
+            return now
+        return last + timedelta(seconds=float(self.cfg("tick_interval_s", 1800)))
+
+    def _next_tick(self, tk: dict[str, Any]) -> str | None:
+        return iso(self._next_tick_at(tk, datetime.now(timezone.utc)))
 
     def _open_work(self) -> int:
         """Việc manager đang theo dõi: task do manager giao chưa xong (không tính blocked — đã báo bằng sự kiện)."""
@@ -1053,8 +1058,7 @@ class ManagerService:
             tk = dict(self.hub.store.state_get("manager_tick") or {})
             now = datetime.now(timezone.utc)
             due_events = bool(self.pending) and (force or (time.monotonic() - (self._first_pending or 0)) >= float(self.cfg("event_debounce_s", 45)))
-            nxt = _parse(self._next_tick(tk))
-            periodic = nxt is not None and now >= nxt
+            periodic = now >= self._next_tick_at(tk, now)
             if not (due_events or periodic or force):
                 return {"run_id": None, "skipped": "not_due", "pending_events": len(self.pending)}
             work = self._open_work()
