@@ -670,6 +670,13 @@ def test_session_reindex_cli_human_only(env):
     assert not bash(env, "cfharness session status").forbidden
 
 
+def test_logs_cli_human_only(env):
+    """L1 (docs/dev-notes/plan-logging.md): đổi/xem level log + dump stack daemon = lệnh của người."""
+    for cmd in ("cfharness logs level", "cfharness logs level cfharness debug --for 2h", "cfharness daemon dump-stacks"):
+        v = bash(env, cmd)
+        assert v.forbidden, (cmd, v.rule)
+
+
 # --------------------------------------------------------------------------- cây lane của run KHÁC (plan-filehub-lane §10)
 def _lane_ctx(env):
     from dataclasses import replace

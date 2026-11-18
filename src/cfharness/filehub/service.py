@@ -23,6 +23,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import track
 from ..errors import Conflict, HubError, NotFound
 from ..events import HubEvent, make_event
 
@@ -408,8 +409,7 @@ class FilehubService:
         except RuntimeError:
             coro.close()
             return
-        self._bg.add(t)
-        t.add_done_callback(self._bg.discard)
+        track(t, self._bg)  # L1: lỗi task → log
 
     def _on_event(self, ev: HubEvent) -> None:
         try:

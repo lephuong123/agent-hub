@@ -106,6 +106,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # Sao lưu (backup.py): tạo = ghi file lớn vào HUB_HOME; kiểm/kế hoạch khôi phục = đọc bản sao chứa toàn bộ dữ liệu hub — chỉ người.
         # Khôi phục không có RPC (daemon phải dừng; CLI `backup restore` ∈ HUB_HUMAN_ONLY_CLI)
         "backup.create", "backup.verify", "backup.restore_plan",
+        # Log hệ thống (logs_rpc.py, L1): xem/đổi level log của daemon — level DEBUG lộ thêm chi tiết vận hành, chỉ người
+        "logs.levels", "logs.level",
         # Xuất toàn bộ hub (hub_transfer.py): gói chứa hub.db + tri thức + transcript MỌI agent, dừng run đang chạy — chỉ người.
         # Nhập không có RPC (daemon đích phải dừng; CLI `hub import` ∈ HUB_HUMAN_ONLY_CLI)
         "hub.export",
@@ -239,7 +241,7 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS"),
                       ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE"),
                       ("cfharness.web_events", "MUTATING_WEB"),
-                      ("cfharness.backup", "MUTATING_BACKUP"), ("cfharness.hub_transfer", "MUTATING_TRANSFER"),
+                      ("cfharness.backup", "MUTATING_BACKUP"), ("cfharness.logs_rpc", "MUTATING_LOGS"), ("cfharness.hub_transfer", "MUTATING_TRANSFER"),
                       ("cfharness.hub_freeze", "MUTATING_FREEZE"), ("cfharness.hub_transfer_web", "MUTATING_TRANSFER_WEB"),
                       ("cfharness.admin_rpc", "MUTATING_ADMIN"), ("cfharness.admin_directory", "MUTATING_DIRECTORY"),
                       ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.filehub.rpc", "MUTATING_FILEHUB"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):

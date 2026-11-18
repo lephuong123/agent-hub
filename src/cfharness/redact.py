@@ -179,6 +179,16 @@ def install_log_filter(logger: Any = None) -> None:
             h.addFilter(SecretLogFilter())
 
 
+class _UnlessFileLogging:
+    def filter(self, record: Any) -> bool:
+        try:
+            from .logs import file_logging_active
+
+            return not file_logging_active()
+        except Exception:  # pragma: no cover — lỗi import: vẫn ghi stderr (an toàn hơn mất log)
+            return True
+
+
 def install_stderr_masking() -> None:
     """Thư viện bên thứ ba (vd SDK `mcp`) log ra stderr qua `logging.lastResort` → `logs/daemon.out` KHÔNG che.
     Gắn handler stderr có `SecretLogFilter` cho root logger (daemon gọi lúc khởi động)."""
@@ -189,6 +199,7 @@ def install_stderr_masking() -> None:
     if not any(getattr(h, "_cfharness_masked", False) for h in root.handlers):
         h = _logging.StreamHandler(_sys.stderr)
         h.setLevel(_logging.WARNING)
+        h.addFilter(_UnlessFileLogging())  # L1: tiến trình đã có log JSONL (hub.log) → stderr (daemon.out) không ghi lặp
         h.setFormatter(_logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
         h._cfharness_masked = True  # type: ignore[attr-defined]
         root.addHandler(h)

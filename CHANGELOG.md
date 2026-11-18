@@ -10,6 +10,12 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Log hệ thống (nền tảng — L1 của `docs/dev-notes/plan-logging.md`) (#150)
+- Web và `cfharness mcp serve` giờ ghi log JSON có che secret như daemon (`logs/web.jsonl`, `logs/mcp.jsonl`); mỗi dòng log có thêm tiến trình, pid và vị trí mã. Log của thư viện (asyncio, mcp, uvicorn…) vào cùng file thay vì chỉ ra stderr; cảnh báo không còn bị ghi hai lần (`hub.log` + `daemon.out`).
+- `cfharness logs level` xem level log đang áp dụng; `cfharness logs level cfharness.guard debug --for 30m` bật DEBUG tạm cho một phần hub, tự về mức cũ khi hết giờ — không cần khởi động lại daemon. Đổi lâu dài: `cfharness config set logs.level …` (có hiệu lực ngay).
+- Lỗi trước đây chết im lặng giờ được ghi lại: tác vụ nền lỗi, lỗi trong thread, lỗi không ai bắt, listener event lỗi (không còn làm hỏng việc phát event). Daemon treo: `cfharness daemon dump-stacks` ghi stack mọi thread vào `logs/faults.log`.
+- `web.log`, `update.out`, `update.log`, `import-job.out` được xoay vòng khi quá `logs.max_bytes`.
+
 ---
 
 ## v0.2.21 — 2026-11-18

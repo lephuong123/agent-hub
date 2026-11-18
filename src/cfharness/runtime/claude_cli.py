@@ -16,6 +16,7 @@ import subprocess
 import time
 from typing import Any, AsyncIterator
 
+from ..aiotasks import track
 from ..events import HubEvent, make_event
 from ..oscompat import IS_WINDOWS, JOBS, exec_argv, interrupt_group, kill_tree, new_group_kwargs, no_window_kwargs
 from ..redact import redact_argv
@@ -618,8 +619,7 @@ class ClaudeCliRuntime(AgentRuntime):
             return
         task = asyncio.get_running_loop().create_task(self._answer_control(handle, obj))
         tasks: set[asyncio.Task] = handle.internal.setdefault("control_tasks", set())
-        tasks.add(task)
-        task.add_done_callback(tasks.discard)
+        track(task, tasks)  # L1: lỗi task → log
 
     async def _answer_control(self, handle: RunHandle, obj: dict[str, Any]) -> None:
         rid = obj["request_id"]

@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ...aiotasks import track
 from ...errors import Blocked, Conflict, HubError, NotFound
 from ...events import make_event
 from .client import PROTOCOL, SERVER_RE, LaneClient, LaneError, check_url, join_rel, key_prefix, port_of, valid_key
@@ -1522,8 +1523,7 @@ class LaneService:
         except RuntimeError:
             coro.close()
             return
-        self.fh._bg.add(t)
-        t.add_done_callback(self.fh._bg.discard)
+        track(t, self.fh._bg)  # L1: lỗi task → log
 
     async def stop(self) -> None:
         for t in list(self._streams.values()) + ([self._maint] if self._maint else []) + ([self._health] if self._health else []):

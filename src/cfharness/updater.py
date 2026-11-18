@@ -119,6 +119,13 @@ def find_uv(env_path: str | None = None) -> str | None:
 
 
 def _default_spawn(argv: list[str], opts: dict[str, Any]) -> int:
+    from pathlib import Path
+
+    from .logs import rotate_if_large
+
+    log = Path(opts["log"])
+    rotate_if_large(log)  # L1: update.out + update.log (helper chỉ stdlib, ghi thẳng) xoay lúc bật helper
+    rotate_if_large(log.with_name("update.log"))
     out = open(opts["log"], "ab")  # noqa: SIM115 — giữ mở cho tiến trình con
     try:
         p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, cwd=opts.get("cwd"), env=opts.get("env"), close_fds=True,

@@ -33,6 +33,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import track
 from ..errors import Blocked, HubError
 from ..store import now_iso
 
@@ -183,8 +184,7 @@ class GraphExtractor:
         def fire() -> None:
             self._pending.pop(key, None)
             t = loop.create_task(self._safe_extract(run, trigger))
-            self.tasks.add(t)
-            t.add_done_callback(self.tasks.discard)
+            track(t, self.tasks)  # L1: lỗi task → log
 
         if delay > 0:
             self._pending[key] = loop.call_later(delay, fire)
