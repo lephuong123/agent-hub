@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+from .aiotasks import spawn
 from .errors import Blocked, HubError
 
 if TYPE_CHECKING:
@@ -371,7 +372,7 @@ class AdminControl:
                 grace = float(self.hub.config.get("runs.stop_grace_s"))
                 for ar in list(runs.active.values()):
                     if ar.handle is not None and ar.runtime is not None:
-                        asyncio.ensure_future(ar.runtime.stop(ar.handle, grace_s=grace))
+                        spawn(ar.runtime.stop(ar.handle, grace_s=grace), name=f"run-stop-admin-estop:{ar.run_id}")
             except RuntimeError:  # không có event loop (Hub dùng đồng bộ trong test/CLI) — run sẽ bị chặn ở submit/tick
                 pass
         elif not st["on"]:
@@ -396,7 +397,7 @@ class AdminControl:
         if self._task is not None and not self._task.done():
             return
         try:
-            self._task = asyncio.get_running_loop().create_task(self._loop())
+            self._task = asyncio.get_running_loop().create_task(self._loop(), name="admin-control")
         except RuntimeError:
             self._task = None
 

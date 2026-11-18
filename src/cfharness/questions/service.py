@@ -22,6 +22,7 @@ import unicodedata
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import spawn
 from ..errors import Conflict, HubError, NotFound
 from ..events import TERMINAL_RUN_EVENTS, HubEvent, make_event
 from ..store import now_iso
@@ -301,6 +302,7 @@ class QuestionService:
             try:
                 res = await execute(self.hub, q["action"], by="user", channel=channel)
             except Exception as e:
+                log.debug("questions: thực hiện thao tác xin phép lỗi", exc_info=True)
                 res = {"ok": False, "error": str(getattr(e, "message", None) or e)[:300]}
             self._update(q["id"], {"answer": {**(q.get("answer") or {}), "action_result": res}})
             q = self.get(q["id"])
@@ -426,7 +428,7 @@ class QuestionService:
 
     def _spawn(self, coro: Any) -> None:
         try:
-            asyncio.get_running_loop().create_task(coro)
+            spawn(coro, name="questions-continue")
         except RuntimeError:  # ngoài event loop (test thuần) — chạy đồng bộ
             asyncio.run(coro)
 
@@ -506,14 +508,14 @@ class QuestionService:
         except RuntimeError:
             return
         if self._task is None or self._task.done():
-            self._task = loop.create_task(self._loop())
+            self._task = loop.create_task(self._loop(), name="questions-loop")
 
     async def stop(self) -> None:
         if self._task is not None:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # best-effort: chờ vòng nền đã huỷ kết thúc
                 pass
 
     async def _loop(self) -> None:

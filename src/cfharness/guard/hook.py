@@ -34,7 +34,7 @@ def _emit(decision: str, reason: str) -> None:
 def _deny_and_exit(reason: str) -> None:
     try:
         _emit("deny", reason)
-    except BaseException:
+    except BaseException:  # fail-closed: in JSON deny lỗi → thoát mã 2 (Claude Code coi là chặn)
         os._exit(2)
     os._exit(0)
 
@@ -130,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except SystemExit:
         raise
-    except BaseException as e:  # fail-closed
+    except BaseException as e:  # fail-closed: mọi lỗi của hook = deny (hook fail-open phía Claude Code)
         _deny_and_exit(f"hub guard unavailable — blocked (fail-closed): {type(e).__name__}: {str(e)[:200]}")
         return 0
 
@@ -140,7 +140,7 @@ if __name__ == "__main__":
         rc = main()
     except SystemExit as e:
         rc = int(e.code or 0)
-    except BaseException:
+    except BaseException:  # fail-closed: hook sập = deny
         _deny_and_exit("hub guard crashed — blocked (fail-closed)")
         rc = 0
     sys.exit(rc)

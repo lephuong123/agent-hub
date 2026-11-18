@@ -107,7 +107,7 @@ def injection_hint(tool_name: str, tool_input: dict[str, Any]) -> str | None:
         import unicodedata
 
         blob = unicodedata.normalize("NFKC", blob)
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: NFKC lỗi → dò trên chuỗi gốc  # pragma: no cover
         pass
     m = INJECTION_RE.search(blob)
     return m.group(0)[:80] if m else None
@@ -215,7 +215,7 @@ class SecondOpinion:
                                  timeout_s=timeout, label="guard_second_opinion")
             try:
                 r = await asyncio.wait_for(self._runtime(c.get("binary")).oneshot(req), timeout + 5)
-            except Exception as e:  # hết giờ / lỗi runtime → giữ chờ người
+            except Exception as e:  # fail-closed: hết giờ / lỗi runtime → giữ chờ người
                 self._charge(0.0)
                 return Opinion("needs_human", f"second opinion lỗi: {type(e).__name__}", "error", model=model, cache_key=key)
             cost = float(getattr(r, "cost_usd", 0.0) or 0.0)

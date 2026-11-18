@@ -658,7 +658,7 @@ class ChatScreen(Screen):
         self.session = s
         try:
             ok = await s.open()
-        except Exception as e:  # daemon lỗi / hội thoại không có
+        except Exception as e:  # best-effort: lỗi hiện cho người trong khung chat
             self.add_item({"kind": "note", "text": R._err(e), "tone": "err"})
             ok = False
         if not ok:

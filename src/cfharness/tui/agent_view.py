@@ -205,7 +205,7 @@ class AgentViewScreen(Screen):
         client: AsyncHubClient = self.app.client  # type: ignore[attr-defined]
         try:
             run = await client.call("run.get", {"id": self.run_id, "events": True})
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người trong transcript (TUI không ghi log file)
             self._add({"kind": "note", "text": f"không nạp được run {self.run_id}: {_err(e)}", "tone": "err"})
             return
         events_ = run.pop("events", []) or []
@@ -258,7 +258,7 @@ class AgentViewScreen(Screen):
                 st = await client.call("hub.status")
                 if st["epoch"] != epoch:
                     epoch, since = st["epoch"], 0
-            except Exception:
+            except Exception:  # best-effort: daemon mất kết nối → thử lại sau 2 s
                 await asyncio.sleep(2)
 
     def _show(self, ev: dict[str, Any]) -> None:

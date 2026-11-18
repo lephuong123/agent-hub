@@ -246,6 +246,7 @@ class FilehubService:
         try:
             st = _file_settings(self.hub.config.get("files"))
         except Exception:  # noqa: BLE001
+            log.debug("filehub: cấu hình files hỏng — dùng mặc định", exc_info=True)
             st = _file_settings(None)
         out = list(IGNORE_BASE) + [str(p) for p in st["secret_patterns"]] + [f"!{p}" for p in st["secret_allow"]]
         return list(dict.fromkeys(out + [str(x) for x in self.cfg("extra_ignore") or []]))

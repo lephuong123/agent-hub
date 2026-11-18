@@ -63,7 +63,7 @@ def _teams_by_agent(hub: "Hub") -> dict[str, str]:
             "SELECT m.agent_id, COALESCE(t.name, m.team_id) AS team FROM team_members m LEFT JOIN teams t ON t.id = m.team_id "
             "WHERE t.archived_at IS NULL ORDER BY m.created_at"
         ).fetchall()
-    except Exception:
+    except Exception:  # best-effort: bảng team chưa có (DB cũ) → không nhãn team
         return {}
     out: dict[str, str] = {}
     for r in rows:
@@ -76,7 +76,7 @@ def _task_title(hub: "Hub", task_id: str | None) -> str | None:
         return None
     try:
         r = hub.store.conn.execute("SELECT title FROM tasks WHERE id=?", (task_id,)).fetchone()
-    except Exception:
+    except Exception:  # best-effort: bảng tasks chưa có (DB cũ) → không tiêu đề
         return None
     return r["title"] if r else None
 

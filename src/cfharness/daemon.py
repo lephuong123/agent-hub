@@ -597,7 +597,7 @@ class Daemon:
         finally:
             try:
                 writer.close()
-            except Exception:  # pragma: no cover
+            except Exception:  # best-effort: đóng kết nối đã hỏng  # pragma: no cover
                 pass
 
     async def _subscribe(self, req: dict[str, Any], reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -798,7 +798,7 @@ def _live_daemon(sock: Path) -> bool:
     try:
         RpcClient(sock, timeout=2).call("hub.ping")
         return True
-    except Exception:
+    except Exception:  # best-effort: không ping được = daemon không chạy
         return False
 
 
@@ -816,7 +816,7 @@ def _log_settings(paths: HubPaths) -> dict[str, Any]:
     """`logs.*` (NFR-21); config hỏng → mặc định (log không được làm daemon không khởi động)."""
     try:
         c = HubConfig(paths.config).get("logs") or {}
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: config hỏng → mặc định (log không được làm daemon không khởi động)  # pragma: no cover
         c = {}
     return {"max_bytes": c.get("max_bytes", DEFAULT_MAX_BYTES), "backup_count": c.get("backup_count", DEFAULT_BACKUP_COUNT),
             "max_age_days": c.get("max_age_days", DEFAULT_MAX_AGE_DAYS), "level": LEVELS.get(str(c.get("level") or "info").lower(), logging.INFO)}

@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlsplit
 
+from ..aiotasks import spawn
 from ..errors import HubError
 from ..redact import redact_str
 from .oauth import LOOPBACK_DIRECT_MOUNTS, is_oauth
@@ -179,7 +180,7 @@ class OAuthProxy:
         if task is not None:
             try:
                 await asyncio.wait_for(task, 5)
-            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):  # noqa: BLE001
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):  # best-effort: chờ vòng proxy dừng; hết giờ/lỗi → huỷ  # noqa: BLE001
                 task.cancel()
         if self._sock is not None:
             with contextlib.suppress(OSError):
@@ -216,7 +217,7 @@ class OAuthProxy:
             return
         for resp in list(r.responses):
             with contextlib.suppress(RuntimeError):
-                asyncio.get_running_loop().create_task(_aclose(resp))
+                spawn(_aclose(resp), name="mcp-proxy-aclose")
         r.responses.clear()
 
     def revoke_run(self, run_id: str) -> int:

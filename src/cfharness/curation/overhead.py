@@ -40,7 +40,7 @@ async def _wait_idle(hub: Any, timeout: float = 30.0) -> None:
             return
         try:
             hub.learning.reviews.tick()
-        except Exception:
+        except Exception:  # best-effort: bench overhead — review tick lỗi không ảnh hưởng số đo
             pass
         await asyncio.sleep(0.02)
 
@@ -108,7 +108,7 @@ async def _one(home: Path, mode: str, n: int, line_delay_s: float) -> dict[str, 
         hub.learning.stop()
         hub.learning_ops.stop()
         hub.curation.stop()
-    except Exception:
+    except Exception:  # best-effort: bench overhead — dọn dịch vụ khi kết thúc
         pass
     await asyncio.sleep(0.05)
     hub.store.close()

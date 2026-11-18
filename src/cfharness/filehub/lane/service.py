@@ -621,6 +621,7 @@ class LaneService:
         try:
             return list(self.fh.ignore_lines())
         except Exception:  # pragma: no cover
+            log.debug("lane: không đọc được mẫu bỏ qua — dùng IGNORE_BASE", exc_info=True)
             from ..service import IGNORE_BASE
 
             return list(IGNORE_BASE)
@@ -1002,7 +1003,7 @@ class LaneService:
     def _task_of(self, run_id: Any) -> str | None:
         try:
             return (self.hub.store.get_run(str(run_id)) or {}).get("task_id") if run_id else None
-        except Exception:  # pragma: no cover
+        except Exception:  # best-effort: chỉ để gắn task vào báo cáo — không đọc được run thì bỏ  # pragma: no cover
             return None
 
     @staticmethod
@@ -1297,7 +1298,7 @@ class LaneService:
     def start(self) -> None:
         if self._maint is None or self._maint.done():
             try:
-                self._maint = asyncio.get_running_loop().create_task(self._maintenance_loop())
+                self._maint = asyncio.get_running_loop().create_task(self._maintenance_loop(), name="filehub-lane-maint")
             except RuntimeError:  # pragma: no cover
                 self._maint = None
         if self._health is None or self._health.done():
@@ -1435,7 +1436,7 @@ class LaneService:
                 try:
                     await wd.flush(timeout_s=float(self.cfg("final_flush_s") or 60))
                 except Exception as e:  # pragma: no cover
-                    log.warning("lane: đẩy nốt cây %s lỗi: %s", tree, e)
+                    log.warning("lane: đẩy nốt cây %s lỗi: %s", tree, e, exc_info=True)
             wd.ops_mark = 0
             self._report(wd)
             await self._close_tree(wd)

@@ -589,7 +589,7 @@ def handle(msg: dict, run_id: str, sock: str, role: str, scopes: tuple[str, ...]
                 else:
                     method = "learnself.call" if name in LEARN_TOOLS or name in MEMORY_TOOL else "taskself.call"
                 res = rpc_call(sock, method, {"run_id": run_id, "op": name, "args": p.get("arguments") or {}}, 60)
-            except Exception as e:  # daemon trả lỗi nghiệp vụ hoặc không với tới
+            except Exception as e:  # best-effort: lỗi daemon trả về cho agent dạng kết quả tool lỗi
                 _text(mid, f"cfharness error: {e}", True)
                 return
             _text(mid, res)
@@ -597,7 +597,7 @@ def handle(msg: dict, run_id: str, sock: str, role: str, scopes: tuple[str, ...]
             _send({"jsonrpc": "2.0", "id": mid, "result": {method.split("/")[0]: []}})
         else:
             _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"method not found: {method}"}})
-    except BaseException as e:  # pragma: no cover
+    except BaseException as e:  # best-effort: lỗi xử lý tin → trả lỗi JSON-RPC (stdout là giao thức, không in log)  # pragma: no cover
         _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32000, "message": str(e)[:200]}})
 
 

@@ -370,7 +370,7 @@ def _live_cwds(hub: "Hub") -> list[str]:
             if ag.get("home_path"):
                 out.append(os.path.normpath(str(Path(ag["home_path"]) / "workspaces" / r[0])))
         except Exception:  # noqa: BLE001
-            pass
+            log.debug("housekeeping: không đọc được agent của workspace", exc_info=True)
     return out
 
 

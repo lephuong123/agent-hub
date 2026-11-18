@@ -48,7 +48,7 @@ class QueuedNotifier:
         if sec is not None and hasattr(sec, "lookup"):
             try:
                 return sec.lookup(name)
-            except Exception:
+            except Exception:  # fail-closed: không đọc được secret → không có (kênh tắt)
                 return None
         return None
 
@@ -102,13 +102,14 @@ class QueuedNotifier:
         try:
             row = ap.get(str(rid))
         except Exception:
+            log.debug("notify: không đọc được approval — dùng routed_to của event", exc_info=True)
             return (ev.payload or {}).get("routed_to") == "manager"
         return row.get("routed_to") == "manager" and row.get("status") in ("open", "waiting_human")
 
     def ensure_worker(self) -> None:
         if self._task is None or self._task.done():
             try:
-                self._task = asyncio.get_running_loop().create_task(self._worker())
+                self._task = asyncio.get_running_loop().create_task(self._worker(), name="notify-worker")
             except RuntimeError:
                 pass
 
@@ -117,7 +118,7 @@ class QueuedNotifier:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # best-effort: chờ worker đã huỷ kết thúc
                 pass
 
     async def drain(self, timeout: float = 10) -> None:
@@ -152,7 +153,7 @@ class QueuedNotifier:
                 self.sent += 1
                 self.hub.publish(make_event("notify.sent", ev.agent_id, {"channel": self.channel, **extra, "for": ev.type, **ids}, run_id=ev.run_id))
                 return
-            except Exception as e:
+            except Exception as e:  # best-effort: đã log (lỗi đã gỡ token) + event notify.failed; không exc_info vì traceback có thể mang URL webhook
                 self.failed += 1
                 err = clip(e, 300)
                 log.warning("gửi %s lỗi (lần %d/%d, %s): %s", self.channel, i + 1, attempts, ev.type, err)

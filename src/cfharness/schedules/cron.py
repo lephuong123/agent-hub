@@ -74,7 +74,7 @@ def get_tz(name: str | None) -> tzinfo:
             from zoneinfo import ZoneInfo
 
             return ZoneInfo(name)
-        except Exception:  # tên lạ / không có tzdata → giờ máy
+        except Exception:  # best-effort: tên lạ / không có tzdata → giờ máy
             pass
     n = local_tz_name()
     if n and n != name:

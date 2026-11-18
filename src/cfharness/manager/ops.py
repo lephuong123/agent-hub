@@ -52,7 +52,7 @@ def wait_text(hub: Any, t: dict[str, Any]) -> str | None:
         return code
     try:
         limit = hub.runs.effective_limit()
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: chỉ để hiện giới hạn trong câu chờ — lỗi thì in "?"  # pragma: no cover
         limit = None
     return tpl.format(limit=limit if limit is not None else "?", not_before=t.get("not_before") or "?")
 

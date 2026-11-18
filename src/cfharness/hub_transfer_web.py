@@ -216,7 +216,7 @@ def hub_fresh(hub: "Hub") -> bool:
         try:
             if conn.execute(f"SELECT 1 FROM {t} LIMIT 1").fetchone():  # noqa: S608 — tên bảng cố định
                 return False
-        except Exception:  # bảng chưa có (schema cũ) → bỏ qua
+        except Exception:  # best-effort: bảng chưa có (schema cũ) → bỏ qua
             continue
     return not T._secret_names(hub.paths.home)
 
@@ -425,7 +425,7 @@ def run_import_job(paths: HubPaths, uid: str, *, supervised: bool = False, wait_
 
             cfg = HubConfig(paths.config).get("backup") if paths.config.exists() else None
         except Exception:  # config.yaml hỏng không được chặn nhập
-            pass
+            log.debug("hub_transfer: config.yaml hỏng — nhập không dùng cấu hình backup", exc_info=True)
         replace = not T.home_blank(paths)
         rep = T.import_package(paths, upload_path(paths, uid), maps=_maps(job.get("maps")), mode=_mode(job.get("mode")), replace=replace,
                                cfg=cfg, passphrase=None if job.get("skip_secrets") else pw, skip_secrets=bool(job.get("skip_secrets")),

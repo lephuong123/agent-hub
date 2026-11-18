@@ -450,7 +450,7 @@ def restore_db_if_migrated(a: argparse.Namespace, log) -> dict[str, Any]:
     try:
         out["db_replaced_kept_at"] = restore_db(home, Path(a.db_backup), log)
         out["db_restored"] = True
-    except Exception as e:
+    except Exception as e:  # best-effort: lỗi ghi vào out.db_error + update.log
         out["db_error"] = f"không khôi phục được hub.db: {e}"
         log.write(out["db_error"] + "\n")
     finally:
@@ -608,7 +608,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as e:  # pragma: no cover — mọi lỗi phải về trạng thái failed, không để web chờ mãi
         try:
             st = json.loads(Path(a.state).read_text(encoding="utf-8"))
-        except Exception:
+        except Exception:  # best-effort: state.json hỏng → ghi state mới
             st = {}
         st.update({"state": "failed", "phase": "finished", "error": f"lỗi tiến trình cập nhật: {e}", "finished_at": _now(), "updated_at": _now()})
         write_state(Path(a.state), st)

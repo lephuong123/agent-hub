@@ -529,7 +529,7 @@ def telegram_caller(hub: "Hub", chat_id: Any, user_id: Any = None) -> Caller:
     """
     try:
         cfg = hub.config.get("notify.telegram") or {}
-    except Exception:  # pragma: no cover
+    except Exception:  # fail-closed: config hỏng → allowlist rỗng (không ai là người)  # pragma: no cover
         cfg = {}
     cid = str(chat_id)
     uid = str(user_id) if user_id is not None else None
@@ -555,7 +555,7 @@ def slack_caller(hub: "Hub", chat_id: Any, user_id: Any = None) -> Caller:
     """
     try:
         cfg = hub.config.get("notify.slack") or {}
-    except Exception:  # pragma: no cover
+    except Exception:  # fail-closed: config hỏng → allowlist rỗng (không ai là người)  # pragma: no cover
         cfg = {}
     cid = str(chat_id)
     uid = str(user_id) if user_id is not None else None
@@ -694,7 +694,7 @@ class CallerResolver:
             rows = self.hub.store.conn.execute(
                 "SELECT id, agent_id, pid, pid_start_time FROM runs WHERE pid IS NOT NULL AND started_at >= ?", (since,)
             ).fetchall()
-        except Exception:  # pragma: no cover
+        except Exception:  # best-effort: không đọc được run → không nhận diện pid là run; lớp chặn chính là token người (agent không đọc được file token)  # pragma: no cover
             return out
         for r in rows:
             try:
@@ -751,6 +751,6 @@ class CallerResolver:
             try:
                 row = self.hub.store.get_run(c.run_id)
                 c.agent_id = row["agent_id"] if row else None
-            except Exception:  # pragma: no cover
+            except Exception:  # best-effort: không đọc được run → agent_id để trống  # pragma: no cover
                 pass
         return c

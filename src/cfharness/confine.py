@@ -18,11 +18,14 @@ Registry hub (`~/.config/cfharness/hubs.json`, env `CFHARNESS_HUBS_REGISTRY` cho
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 # toolchain thường cần ĐỌC ngoài W (cache gói, trình quản lý phiên bản, cấu hình git — KHÔNG gồm credential: vẫn denyRead riêng)
 DEFAULT_READ_ALLOW = ["~/.npm", "~/.cache", "~/.local/share/uv", "~/.cargo", "~/.rustup", "~/.nvm", "~/Library/Caches",
@@ -69,6 +72,7 @@ def of_hub(hub: Any) -> Confine | None:
     try:
         return from_config(hub.config)
     except Exception:  # pragma: no cover
+        log.debug("không đọc được cấu hình workspace.confine", exc_info=True)
         return None
 
 

@@ -349,7 +349,7 @@ class PolicyStore:
         Đọc lỗi/không phải dict → [] (không luật nào = giữ chờ người, fail-closed)."""
         try:
             rules = self._read(self.always_file).get("rules") or []
-        except Exception:
+        except Exception:  # fail-closed: đọc lỗi → không luật luôn-cho-phép nào (giữ chờ người)
             return []
         out = [dict(r) for r in rules if isinstance(r, dict) and r.get("id") and r.get("kind") in ALWAYS_KINDS]
         return out if include_disabled else [r for r in out if not r.get("disabled")]
@@ -526,7 +526,7 @@ def repo_deny_for(store: "PolicyStore", cwd: str) -> list[str]:
     """Mẫu chặn (disallowedTools kiểu Claude) áp cho run có `cwd` nằm TRONG repo người đã đặt (MGR-2)."""
     try:
         from ..workspace import git_root
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: import lỗi → không xác định gốc repo (không mẫu theo repo)  # pragma: no cover
         git_root = lambda _p: None  # type: ignore
     repos = store.repo_deny_list()
     if not repos:
@@ -565,7 +565,7 @@ def _remote_urls(repo: str) -> set[str]:
         from ..workspace import _git
 
         r = _git(repo, "remote", "-v")
-    except Exception:
+    except Exception:  # best-effort: git lỗi → không có remote
         return set()
     if r.returncode != 0:
         return set()

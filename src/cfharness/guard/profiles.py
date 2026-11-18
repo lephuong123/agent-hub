@@ -207,7 +207,7 @@ def gates_mode(config: Any) -> str:
     """Công tắc chung `gates.mode` (chỉ người đặt): human | manager | off. Giá trị lạ/lỗi đọc → human (bảo thủ)."""
     try:
         v = config.get("gates.mode")
-    except Exception:
+    except Exception:  # fail-closed: lỗi đọc → human (bảo thủ)
         return "human"
     return v if v in GATES_MODES else "human"
 

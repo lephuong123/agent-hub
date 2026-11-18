@@ -656,7 +656,7 @@ def wrap_with_audit(hub: "Hub", method: str, fn: Callable[[dict[str, Any]], Any]
             res = fn(p)
             if asyncio.iscoroutine(res):
                 res = await res
-        except BaseException as e:  # ghi rồi ném lại nguyên trạng
+        except BaseException as e:  # best-effort: ghi audit rồi ném lại nguyên trạng ở dưới
             exc = e
         dur = (_time.perf_counter() - t0) * 1000.0
         if exc is not None and not isinstance(exc, Exception):  # huỷ task / thoát: không phải kết quả thao tác

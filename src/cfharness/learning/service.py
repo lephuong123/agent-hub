@@ -69,7 +69,7 @@ class LearningService:
 
                     tps.append(json.loads(r[0] or "{}"))
             except Exception:  # pragma: no cover
-                pass
+                log.debug("learning: không đọc được run_opts của agent", exc_info=True)
         return self.policy.switches(agent_id, tps)
 
     # ------------------------------------------------------------------ bus
@@ -122,7 +122,7 @@ class LearningService:
         if self._task is not None and not self._task.done():
             return
         try:
-            self._task = asyncio.get_running_loop().create_task(self.loop())
+            self._task = asyncio.get_running_loop().create_task(self.loop(), name="learning-loop")
         except RuntimeError:
             self._task = None
 

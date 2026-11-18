@@ -23,6 +23,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import spawn
 from ..errors import Conflict, HubError, NotFound
 from ..events import iso, make_event
 from ..redact import register_secret_values
@@ -428,7 +429,7 @@ class AccountService:
 
     def _expire_soon(self, login_id: str) -> None:
         try:
-            asyncio.get_running_loop().create_task(self._close_login(login_id))
+            spawn(self._close_login(login_id), name=f"account-login-expire:{login_id}")
         except RuntimeError:  # pragma: no cover
             self._logins.pop(login_id, None)
 

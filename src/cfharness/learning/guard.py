@@ -13,6 +13,7 @@ Mỗi chặn có `category` theo BRD §9.2 (`policy_touch` | `self_escalation` |
 
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -20,6 +21,8 @@ from typing import TYPE_CHECKING, Any
 
 from .policy import EFFORT_ORDER
 from .threats import scan
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..hub import Hub
@@ -80,6 +83,7 @@ def _destructive_tool_pattern(hub: "Hub", pattern: str) -> str | None:
         try:
             ann = hub.mcp.tool_annotations(server, tool) if hasattr(hub, "mcp") else None
         except Exception:
+            log.debug("guard học: không đọc được annotations MCP", exc_info=True)
             ann = None
         if ann and ann.get("destructiveHint"):
             return f"tool MCP '{p}' có destructiveHint"
@@ -284,6 +288,7 @@ class LearningGuard:
             try:
                 names = {m["name"] for m in self.hub.mcp.list()} if hasattr(self.hub, "mcp") else set()
             except Exception:
+                log.debug("guard học: không đọc được registry MCP", exc_info=True)
                 names = set()
             new = [s for s in ch["mcp_servers"] or [] if s not in (cur.get("mcp_servers") or [])]
             missing = [s for s in new if s not in names]

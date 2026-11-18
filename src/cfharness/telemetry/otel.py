@@ -262,7 +262,7 @@ class OtelExporter:
                 with urllib.request.urlopen(req, timeout=float(c.get("timeout_s") or 5)) as r:
                     r.read()
             self.stats["exported"] += len(spans)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi xuất OTel đếm trong stats (last_error); không log từng lần để tránh ồn
             self.stats["errors"] += 1
             self.stats["dropped"] += len(spans)
             self.stats["last_error"] = repr(e)[:200]
@@ -273,7 +273,7 @@ class OtelExporter:
         sec = getattr(self.hub, "secrets", None)
         try:
             return sec.resolve(v) if sec is not None else v
-        except Exception:
+        except Exception:  # fail-closed: không resolve được secret → header rỗng
             return ""
 
     def close(self) -> None:

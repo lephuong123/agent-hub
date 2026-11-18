@@ -244,7 +244,7 @@ def resolve_check(host: str, *, resolver: Resolver | None = None, timeout_s: flo
         ips = list(_POOL.submit(lambda: list(fn(h))).result(timeout=timeout_s))
     except _FutTimeout:
         return UrlCheck(False, "url_dns_failed", f"phân giải DNS {h} quá {timeout_s}s — không xác minh được đích", h)
-    except Exception as e:  # gaierror, lỗi resolver giả trong test…
+    except Exception as e:  # fail-closed: không phân giải được → không xác minh được đích (không tự cho phép)
         return UrlCheck(False, "url_dns_failed", f"không phân giải được {h} ({type(e).__name__}) — không xác minh được đích", h)
     if not ips:
         return UrlCheck(False, "url_dns_failed", f"{h} không có địa chỉ IP", h)

@@ -8,10 +8,13 @@ và lệnh CLI tương ứng bị bộ phân loại coi là `policy_change` (for
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from ..errors import HubError
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..daemon import Daemon
@@ -237,7 +240,7 @@ def register_rpc(daemon: "Daemon") -> None:
             try:  # Signal `cancel` (FR-LN-01): người dừng run — ghi TRƯỚC khi dừng để còn biết tool đang chạy
                 daemon.hub.learning.signals.human_stop(str(p.get("id") or ""), str(((p.get("_audit") or {}).get("channel")) or "cli"))
             except Exception:  # pragma: no cover
-                pass
+                log.debug("không ghi được Signal human_stop", exc_info=True)
             return orig_stop(p)
 
         daemon.methods["run.stop"] = run_stop

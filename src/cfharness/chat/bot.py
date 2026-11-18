@@ -111,7 +111,7 @@ class TelegramBot(ChatBot):
         sec = getattr(self.hub, "secrets", None)
         try:
             return sec.get(c.get("bot_token_secret") or "TELEGRAM_BOT_TOKEN") if sec is not None else None
-        except Exception:
+        except Exception:  # fail-closed: không đọc được secret → không có token (bot tắt)
             return None
 
     def api(self, *, ignore_enabled: bool = False) -> TelegramApi | None:
@@ -195,7 +195,7 @@ class TelegramBot(ChatBot):
                         log.exception("lỗi xử lý update Telegram")
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except Exception as e:  # best-effort: lỗi mạng đã ghi qua netlog (đã gỡ token), backoff rồi thử lại
                 self.info["last_error"] = clip(e, 300)
                 netlog.error(e, self.info["last_error"])
                 ra = getattr(e, "retry_after", None)
@@ -233,7 +233,7 @@ class TelegramBot(ChatBot):
             log.debug("không sửa được tin: %s", clip(e))
             try:
                 await api.call("editMessageReplyMarkup", {"chat_id": chat, "message_id": mid, "reply_markup": markup or {"inline_keyboard": []}})
-            except Exception:
+            except Exception:  # best-effort: gỡ nút trên tin cũ là phụ — lỗi trước đã log debug
                 pass
             return False
 
@@ -362,7 +362,7 @@ class TelegramBot(ChatBot):
             return
         try:
             await api.call("answerCallbackQuery", {"callback_query_id": qid, "text": text[:190]})
-        except Exception as e:
+        except Exception as e:  # best-effort: đã log debug (lỗi đã gỡ token)
             log.debug("answerCallbackQuery lỗi: %s", clip(e))
 
     # ------------------------------------------------------------------ trạng thái

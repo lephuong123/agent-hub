@@ -204,7 +204,7 @@ class ManagerService:
         """`notify.slack.mention_reply`: "full" (mặc định) | "result" (tag trong kênh → chỉ kết quả, ngắn). Lỗi đọc → "full"."""
         try:
             return str(self.hub.config.get("notify.slack.mention_reply") or "full")
-        except Exception:
+        except Exception:  # best-effort: lỗi đọc → "full"
             return "full"
 
     def cfg(self, key: str, default: Any = None) -> Any:
@@ -882,6 +882,7 @@ class ManagerService:
             cid = self.origin_conversation(task_id=t["id"])
             conv = self._conv_row(cid) if cid else None
         except Exception:  # hội thoại đã xoá / lỗi tra — không chặn luồng sự kiện
+            log.debug("manager: không tra được hội thoại gốc của task", exc_info=True)
             conv = None
         if not conv or conv.get("channel") == HEARTBEAT_CHANNEL or conv.get("archived_at"):
             return False
@@ -913,6 +914,7 @@ class ManagerService:
         try:  # luồng của sự kiện: luồng của task, không thì luồng của hội thoại gốc → tick riêng theo luồng
             wid = self.ws.of_task(data.get("task_id")) or self.ws.of_conversation(conv)
         except Exception:  # pragma: no cover
+            log.debug("manager: không tra được luồng việc của sự kiện", exc_info=True)
             wid = None
         if wid:
             data["workstream_id"] = wid
@@ -991,14 +993,14 @@ class ManagerService:
         except RuntimeError:
             return
         if self._task is None or self._task.done():
-            self._task = loop.create_task(self._loop())
+            self._task = loop.create_task(self._loop(), name="manager-heartbeat")
 
     async def stop(self) -> None:
         if self._task is not None:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # best-effort: chờ vòng nhịp đã huỷ kết thúc
                 pass
 
     async def _loop(self) -> None:

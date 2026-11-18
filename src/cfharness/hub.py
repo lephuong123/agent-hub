@@ -223,7 +223,7 @@ class Hub:
         try:  # vòng nhắc approval + purge retention (cần event loop đang chạy)
             import asyncio
 
-            self._bg.append(asyncio.get_running_loop().create_task(self.approvals.loop()))
+            self._bg.append(asyncio.get_running_loop().create_task(self.approvals.loop(), name="approvals-loop"))
         except RuntimeError:
             pass
         try:  # L1: level log đổi lúc chạy (config logs.level/levels + `cfharness logs level … --for`)
@@ -239,7 +239,7 @@ class Hub:
 
             from .web.reload import stale_web_loop
 
-            self._bg.append(asyncio.get_running_loop().create_task(stale_web_loop(self)))
+            self._bg.append(asyncio.get_running_loop().create_task(stale_web_loop(self), name="stale-web-loop"))
         except RuntimeError:
             pass
         from .session_search import start_backfill  # v17: chỉ mục hội thoại cũ theo lô nền (session_search.py)
@@ -290,7 +290,7 @@ class Hub:
 
             audit_record("guard.sandbox_disabled", agent_id=None, run_id=None, data={"enabled": False})
         except Exception:  # pragma: no cover
-            pass
+            log.debug("không ghi được audit guard.sandbox_disabled", exc_info=True)
 
     def _account_brief(self) -> dict[str, Any] | None:
         try:

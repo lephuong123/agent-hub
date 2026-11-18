@@ -41,6 +41,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import spawn
 from ..trace import traced
 from ..errors import Blocked, HubError
 from ..events import HubEvent, make_event
@@ -120,7 +121,7 @@ def reset_from_text(text: str | None, now: datetime | None = None) -> datetime |
             from zoneinfo import ZoneInfo
 
             tz = ZoneInfo(zone.strip())
-        except Exception:
+        except Exception:  # best-effort: tên múi giờ lạ → giờ máy
             tz = None
     local_now = now.astimezone(tz) if tz else now.astimezone()
     cand = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -188,7 +189,7 @@ class TaskDispatcher:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._loop_task = loop.create_task(self._loop())
+        self._loop_task = loop.create_task(self._loop(), name="task-dispatcher")
         self.kick()
 
     async def stop(self) -> None:
@@ -637,7 +638,7 @@ class TaskDispatcher:
                     "run %s: tiến trình chết, không heartbeat > %ss → dừng (crashed)", run["id"], ttl)
                 ar.crashed = True  # type: ignore[attr-defined]
                 if ar.runtime is not None:
-                    asyncio.ensure_future(ar.runtime.stop(ar.handle, grace_s=1))
+                    spawn(ar.runtime.stop(ar.handle, grace_s=1), name=f"run-stop-crashed:{run['id']}")
 
     @staticmethod
     def _alive(ar: Any) -> bool:

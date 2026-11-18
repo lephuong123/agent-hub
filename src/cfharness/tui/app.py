@@ -194,7 +194,7 @@ class HtopScreen(Screen):
             return None
         try:
             key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
-        except Exception:
+        except Exception:  # best-effort: bảng rỗng/con trỏ ngoài bảng
             return None
         return key.value
 
@@ -358,13 +358,13 @@ class HtopScreen(Screen):
         try:
             templates = await app.client.call("template.list")  # type: ignore[attr-defined]
             mcp = [m["name"] for m in await app.client.call("mcp.list") or []]  # type: ignore[attr-defined]
-        except Exception:
+        except Exception:  # best-effort: daemon cũ/lỗi → form không có gợi ý template/MCP
             templates, mcp = [], []
         agent = None
         if agent_id:
             try:
                 agent = await app.client.call("agent.get", {"id": agent_id})  # type: ignore[attr-defined]
-            except Exception as e:
+            except Exception as e:  # best-effort: lỗi hiện cho người qua notify
                 self.notify(_err(e), severity="error")
                 return
 
@@ -381,7 +381,7 @@ class HtopScreen(Screen):
                 else:
                     await app.client.call("agent.create", {"config": {"id": data["id"], **data["changes"]}}, audit=True)  # type: ignore[attr-defined]
                     self.notify(f"Đã tạo agent {data['id']}")
-            except Exception as e:
+            except Exception as e:  # best-effort: lỗi trả về form để hiện cho người
                 return _err(e)
             await app.refresh_snapshot()  # type: ignore[attr-defined]
             return None
@@ -702,7 +702,7 @@ class AttachScreen(Screen):
         client: AsyncHubClient = app.client  # type: ignore[attr-defined]
         try:
             run = await client.call("run.get", {"id": self.run_id, "events": True})
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người trong transcript
             tr.note(f"✖ không nạp được run {self.run_id}: {_err(e)}", th.ERR_STRONG)
             return
         self.run = run
@@ -756,7 +756,7 @@ class AttachScreen(Screen):
                 st = await client.call("hub.status")
                 if st["epoch"] != epoch:
                     epoch, since = st["epoch"], 0
-            except Exception:
+            except Exception:  # best-effort: daemon mất kết nối → thử lại sau 2 s
                 await asyncio.sleep(2)
 
     def _show(self, ev: dict[str, Any], tr: Transcript) -> None:
@@ -942,7 +942,7 @@ class TasksScreen(Screen):
                 return
             head.update(Text(f" Tasks — lỗi: {e.message}", style=th.ERR_STRONG))
             return
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện ở tiêu đề tab Tasks
             head.update(Text(f" Tasks — lỗi: {e}", style=th.ERR_STRONG))
             return
         counts: dict[str, int] = {}
@@ -990,7 +990,7 @@ class TasksScreen(Screen):
             return None
         try:
             return table.coordinate_to_cell_key(table.cursor_coordinate)[0].value
-        except Exception:
+        except Exception:  # best-effort: bảng rỗng/con trỏ ngoài bảng
             return None
 
     @on(DataTable.RowHighlighted)
@@ -1008,7 +1008,7 @@ class TasksScreen(Screen):
             return
         try:
             t = await self.app.client.call("task.get", {"id": tid})  # type: ignore[attr-defined]
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người trong khung chi tiết
             w.update(Text(f" {_err(e)}", style=th.ERR))
             return
         x = Text()
@@ -1047,7 +1047,7 @@ class TasksScreen(Screen):
     async def _create(self, params: dict[str, Any]) -> None:
         try:
             t = await self.app.client.call("task.create", params, audit=True)  # type: ignore[attr-defined]
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify
             self.notify(_err(e), severity="error")
             return
         self.notify(f"Đã tạo task {t['id']}")
@@ -1385,7 +1385,7 @@ class TopApp(App):
         t0 = time.perf_counter()
         try:
             snap = await self.client.call("tui.snapshot")
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện ở dòng tóm tắt (mất kết nối daemon)
             self.connected = False
             self.last_error = _err(e)
             try:
@@ -1460,7 +1460,7 @@ class TopApp(App):
     async def call_and_refresh(self, method: str, params: dict[str, Any], ok: str) -> bool:
         try:
             await self.client.call(method, params, audit=True)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify
             self.notify(_err(e), severity="error")
             return False
         self.notify(ok)
@@ -1474,7 +1474,7 @@ class TopApp(App):
             params["always"] = True  # daemon kiểm lại điều kiện (`always_prepare`) — không đủ → lỗi, approval giữ nguyên
         try:
             res = await self.client.call(method, params)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify (viewer khác đã quyết trước…)
             self.notify(_err(e), severity="error")  # vd viewer khác đã quyết trước (FR-UI-04)
             await self.refresh_snapshot()
             return
@@ -1503,7 +1503,7 @@ class TopApp(App):
     async def steer(self, run_id: str, text: str) -> bool:
         try:
             r = await self.client.call("run.steer", {"id": run_id, "text": text, "channel": self.CHANNEL, "by": "user"}, audit=True)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify
             self.notify(_err(e), severity="error", timeout=8)
             return False
         self.notify(f"Đã gửi steer vào {r['run_id']} (lần {r['steer_count']}) — chờ steer.ack")
@@ -1516,7 +1516,7 @@ class TopApp(App):
             kind, note = "wrong", text.strip()  # chỉ ghi chú → coi là sửa sai (correction)
         try:
             await self.client.call("feedback.record", {"run_id": run_id, "kind": kind, "note": note or None, "source": self.CHANNEL}, audit=True)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify
             self.notify(_err(e), severity="error")
             return False
         self.notify(f"Đã ghi feedback '{kind}' cho run {run_id} — vòng học sẽ xem xét")
@@ -1528,7 +1528,7 @@ class TopApp(App):
     async def takeover(self, ref: str) -> None:
         try:
             info = await self.client.call("run.takeover", {"id": ref})
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify
             self.notify(_err(e), severity="error", timeout=8)
             return
         if not self.takeover_exec:
@@ -1552,7 +1552,7 @@ class TopApp(App):
                 rc = 127
         try:
             await self.client.call("run.takeover_record", {"id": info["run_id"], "exit_code": rc, "started_at": started}, audit=True)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify
             self.notify(_err(e), severity="error")
         await self.refresh_snapshot()
 

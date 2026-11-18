@@ -149,7 +149,7 @@ def _restore(ctx: Any) -> int:
         from .config import HubConfig
 
         cfg = HubConfig(ctx.paths.config).get("backup")
-    except Exception:  # config.yaml hỏng không được chặn khôi phục
+    except Exception:  # best-effort: config.yaml hỏng không được chặn khôi phục (dùng mặc định)
         pass
     r = B.restore(ctx.paths, a.id, cfg=cfg)
     msg = (f"đã khôi phục {r['restored']}: {r['files_written']} file ghi, {r['files_removed']} file gỡ, "

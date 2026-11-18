@@ -287,7 +287,7 @@ def _meta_items(paths: "HubPaths", conn: sqlite3.Connection | None, status: dict
         raw = yaml.safe_load(paths.config.read_text(encoding="utf-8")) if paths.config.is_file() else {}
         cfg, masked = filter_config(raw or {})
         yield _Item("meta/config.json", _json_bytes(cfg), "config", {"masked_keys": masked})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # best-effort: lỗi ghi vào meta/config.json (chỉ tên lớp lỗi, không nội dung config)  # noqa: BLE001
         yield _Item("meta/config.json", _json_bytes({"error": f"không đọc được config.yaml: {type(e).__name__}"}), "config")
 
 

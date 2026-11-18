@@ -61,7 +61,7 @@ def decide(args: dict, run_id: str, sock: str, timeout: float) -> dict:
         if res.get("decision") == "allow":
             return {"behavior": "allow", "updatedInput": tool_input}
         return {"behavior": "deny", "message": str(res.get("reason") or "denied by hub guard")}
-    except BaseException as e:
+    except BaseException as e:  # fail-closed: mọi lỗi = deny (hub-guard không bao giờ cho phép khi không hỏi được daemon)
         return {"behavior": "deny", "message": f"hub guard unavailable — blocked (fail-closed): {type(e).__name__}: {str(e)[:200]}"}
 
 
@@ -89,7 +89,7 @@ def handle(msg: dict, run_id: str, sock: str, timeout: float) -> None:
             _send({"jsonrpc": "2.0", "id": mid, "result": {method.split("/")[0]: []}})
         else:
             _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"method not found: {method}"}})
-    except BaseException as e:  # pragma: no cover
+    except BaseException as e:  # fail-closed: lỗi xử lý tin MCP → trả lỗi JSON-RPC (không cho phép gì)  # pragma: no cover
         _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32000, "message": str(e)[:200]}})
 
 

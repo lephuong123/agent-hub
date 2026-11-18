@@ -129,7 +129,7 @@ def protected_write_paths(hub_home: Path) -> list[str]:
         from .policy import PolicyStore
 
         pol = PolicyStore(hub_home).load()
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: policy hỏng → không thêm luật deny theo đường dẫn người đặt (guard vẫn kiểm qua classifier)  # pragma: no cover
         return []
     out = []
     for r in pol.resources:
@@ -367,7 +367,7 @@ def other_default_homes(hub_home: Path) -> list[str]:
         from ..confine import other_hub_homes
 
         out += [h for h in other_hub_homes(hub_home) if h not in out]
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: registry hub khác hỏng → không thêm (sandbox vẫn chặn HUB_HOME)  # pragma: no cover
         pass
     return out
 

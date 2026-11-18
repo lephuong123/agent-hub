@@ -90,7 +90,7 @@ def run(paths: "HubPaths", *, probe: bool = False, claude_binary: str | None = N
     home = paths.home
     try:
         cfg = HubConfig(paths.config).data
-    except Exception as e:
+    except Exception as e:  # best-effort: lỗi được báo trong kết quả doctor
         cfg = {}
         ck.add("config", "config.yaml", False, f"không đọc được: {e}", fix=f"sửa {paths.config}")
     c = _ro(paths.db)
@@ -211,7 +211,7 @@ def _mcp(ck: _Checks, c: sqlite3.Connection | None, secrets: set[str], probe: Ca
                 pr = probe(name) or {}
                 ck.add(f"mcp:{name}", f"MCP {name}", bool(pr.get("ok")), f"kết nối được, {len(pr.get('tools') or {})} tool" if pr.get("ok")
                        else f"không kết nối được: {pr.get('error')}", fix=f"cfharness mcp edit {name}")
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # best-effort: lỗi được báo trong kết quả doctor  # noqa: BLE001
                 ck.add(f"mcp:{name}", f"MCP {name}", False, f"không thử được: {e}", "warning", fix=f"cfharness mcp probe {name}")
             continue
         if perr.startswith("[hub]"):
@@ -377,7 +377,7 @@ def _autostart(ck: _Checks, paths: "HubPaths") -> None:
         from .systems.autostart import Autostart, status_text
 
         st = Autostart(paths).status()
-    except Exception as e:  # pragma: no cover
+    except Exception as e:  # best-effort: lỗi được báo trong kết quả doctor  # pragma: no cover
         ck.add("autostart", "tự khởi động", False, str(e)[:200], "info")
         return
     if st.get("method") == "unsupported":

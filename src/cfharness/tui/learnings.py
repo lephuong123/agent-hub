@@ -147,7 +147,7 @@ async def maybe_show_digest(app: Any) -> None:
     """FR-LN-13: lần đầu mở TUI trong ngày → hiện digest chưa xem (gộp nếu nhiều ngày không mở)."""
     try:
         r = await app.client.call("digest.tui_open", {})
-    except Exception:
+    except Exception:  # best-effort: daemon cũ/lỗi → không hiện digest
         return
     if r and r.get("show") and r.get("text"):
         from .app import InfoScreen
@@ -285,7 +285,7 @@ class LearningsScreen(Screen):
             return None
         try:
             return table.coordinate_to_cell_key(table.cursor_coordinate)[0].value
-        except Exception:
+        except Exception:  # best-effort: bảng rỗng/con trỏ ngoài bảng
             return None
 
     def selected(self) -> dict[str, Any] | None:
@@ -323,7 +323,7 @@ class LearningsScreen(Screen):
         if not diff and entry and x["type"] == "learning.applied":
             try:
                 diff = (await self.client.call("learn.show", {"id": entry})).get("diff")
-            except Exception:
+            except Exception:  # best-effort: không lấy được diff → hiện không có diff
                 diff = None
         if diff:
             for ln in str(diff).splitlines()[:8]:
@@ -385,7 +385,7 @@ class LearningsScreen(Screen):
             pins = await self.client.call("knowledge.pins", {"agent": agent}) or []
             on = not any(pp.get("target") == target and pp.get("ref") == ref for pp in pins)
             await self.client.call("knowledge.pin", {"agent": agent, "target": target, "ref": ref, "on": on}, audit=True)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify
             self.notify(_err(e), severity="error")
             return False
         self.notify(("Đã pin " if on else "Đã bỏ pin ") + f"{target} {ref} của {agent} — vòng học {'không' if on else 'lại được'} đụng vào")
@@ -401,7 +401,7 @@ class LearningsScreen(Screen):
         if not d or not d.get("text"):
             try:
                 d = await self.client.call("digest.run", {"no_send": True}, audit=True)
-            except Exception as e:
+            except Exception as e:  # best-effort: lỗi hiện cho người qua notify
                 self.notify(_err(e), severity="error")
                 return
         self.app.push_screen(InfoScreen(Text(str(d.get("text"))[:6000])))
@@ -418,7 +418,7 @@ class LearningsScreen(Screen):
 
         try:
             j = await self.client.call("learn.journey", {"agent": agent, "limit": 30})
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify
             self.notify(_err(e), severity="error")
             return
         t = Text()
@@ -466,7 +466,7 @@ class LearningsScreen(Screen):
     async def set_learning(self, agent: str, enabled: bool) -> bool:
         try:
             await self.client.call("learn.policy_set", {"key": f"agents.{agent}.enabled", "value": enabled, "parse": False}, audit=True)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify
             self.notify(_err(e), severity="error")
             return False
         self.notify(f"Đã {'bật' if enabled else 'tắt'} học cho {agent}")
@@ -540,7 +540,7 @@ class LedgerScreen(Screen):
             return None
         try:
             k = table.coordinate_to_cell_key(table.cursor_coordinate)[0].value
-        except Exception:
+        except Exception:  # best-effort: bảng rỗng/con trỏ ngoài bảng
             return None
         return next((e for e in self.entries if e["id"] == k), None)
 
@@ -563,7 +563,7 @@ class LedgerScreen(Screen):
             t.append(f" {e['summary']}\n", style=th.MUTED)
         try:
             diff = (await self.client.call("learn.show", {"id": e["id"]})).get("diff")
-        except Exception:
+        except Exception:  # best-effort: không lấy được diff → hiện không có diff
             diff = None
         for ln in str(diff or "").splitlines()[:8]:
             st = th.OK if ln.startswith("+") and not ln.startswith("+++") else th.ERR if ln.startswith("-") and not ln.startswith("---") else th.MUTED
@@ -646,14 +646,14 @@ class GoldenScreen(Screen):
         agents = []
         try:
             agents = [a["id"] for a in await self.client.call("agent.list", {})]
-        except Exception:
+        except Exception:  # best-effort: không đọc được danh sách agent → không gợi ý golden
             pass
         missing = [a for a in agents if not counts.get(a)]
         self.candidates = []
         for a in missing[:3]:
             try:
                 self.candidates += [{**c, "agent_id": a} for c in await self.client.call("golden.candidates", {"agent_id": a, "limit": 3})]
-            except Exception:
+            except Exception:  # best-effort: gợi ý golden là phụ
                 pass
         h = Text()
         h.append(" Golden task ", style="bold reverse yellow")
@@ -679,7 +679,7 @@ class GoldenScreen(Screen):
             return None
         try:
             return table.coordinate_to_cell_key(table.cursor_coordinate)[0].value
-        except Exception:
+        except Exception:  # best-effort: bảng rỗng/con trỏ ngoài bảng
             return None
 
     @on(DataTable.RowHighlighted)
@@ -727,7 +727,7 @@ class GoldenScreen(Screen):
         try:
             ck = parse_checker_spec(spec)
             g = await self.client.call("golden.from_run", {"run_id": run_id, "checker": ck}, audit=True)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify
             self.notify(_err(e), severity="error", timeout=8)
             return None
         self.notify(f"Đã tạo golden task {g['id']} cho {g['agent_id']}")
@@ -748,7 +748,7 @@ class GoldenScreen(Screen):
 
         try:
             g = await self.client.call("golden.show", {"id": gid})
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify
             self.notify(_err(e), severity="error")
             return
         t = Text()
@@ -778,7 +778,7 @@ class GoldenScreen(Screen):
     async def update_checker(self, gid: str, spec: str) -> bool:
         try:
             g = await self.client.call("golden.update", {"id": gid, "changes": {"checker": parse_checker_spec(spec)}}, audit=True)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify
             self.notify(_err(e), severity="error", timeout=8)
             return False
         self.notify(f"Đã sửa {gid} → v{g['version']}")
@@ -806,7 +806,7 @@ class GoldenScreen(Screen):
     async def _call(self, method: str, gid: str, ok: str) -> bool:
         try:
             await self.client.call(method, {"id": gid}, audit=True)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi hiện cho người qua notify
             self.notify(_err(e), severity="error")
             return False
         self.notify(ok)

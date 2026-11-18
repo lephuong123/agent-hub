@@ -113,7 +113,7 @@ class QuestionChat:
             try:
                 await self.send(api, chat, q, kind=kind, payload=payload)
                 n += 1
-            except Exception as e:
+            except Exception as e:  # best-effort: đã log (lỗi đã gỡ token); không exc_info vì traceback có thể mang URL chứa token
                 log.warning("không gửi được câu hỏi %s tới %s: %s", qid, chat, clip(e))
         return n
 
@@ -205,7 +205,7 @@ class QuestionChat:
             return
         try:
             await self.bot._edit(api, chat, mid, text, markup, fallback=False)
-        except Exception as e:  # tin đã xoá/không đổi — không quan trọng
+        except Exception as e:  # best-effort: tin đã xoá/không đổi — đã log debug
             log.debug("không sửa được tin câu hỏi: %s", clip(e))
 
     def result_text(self, q: dict[str, Any]) -> str:

@@ -636,7 +636,7 @@ class Pipeline:
         try:
             v = gate_mod.normalize(await aw)
         except Exception as e:
-            log.warning("eval gate tầng team/global lỗi cho %s: %r", prop["id"], e)
+            log.warning("eval gate tầng team/global lỗi cho %s: %r", prop["id"], e, exc_info=True)
             v = {"status": "deferred_no_eval", "reason": f"eval_error: {e!r}"[:300]}
         plan = self._replan_checked(prop)
         if plan is None:
@@ -672,7 +672,7 @@ class Pipeline:
         try:
             v = gate_mod.normalize(await aw)
         except Exception as e:  # lỗi hạ tầng eval → hoãn, không áp dụng
-            log.warning("eval gate lỗi cho %s: %r", prop["id"], e)
+            log.warning("eval gate lỗi cho %s: %r", prop["id"], e, exc_info=True)
             v = {"status": "deferred_no_eval", "reason": f"eval_error: {e!r}"[:300]}
         plan = self._replan_checked(prop)  # dựng lại + guard lại: đích/pin có thể đã đổi trong lúc chấm
         if plan is None:
@@ -717,7 +717,7 @@ class Pipeline:
             try:
                 self.conn.execute("UPDATE ledger_entries SET eval_before=?, eval_after=? WHERE id=?", (eval_scores.get("before"), eval_scores.get("after"), entry["id"]))
             except Exception:  # pragma: no cover
-                pass
+                log.debug("pipeline: không ghi được điểm eval vào ledger", exc_info=True)
         self._update(prop["id"], status="applied", ledger_entry_id=entry["id"])
         canary = self.svc.canary.attach_entry(cid, prop, entry) if cid else None
         if canary is not None:
@@ -743,7 +743,7 @@ class Pipeline:
                 try:
                     self._mark_eval(entry, gate_mod.normalize(await v))
                 except Exception as e:  # pragma: no cover
-                    log.warning("post_apply lỗi %s: %r", entry["id"], e)
+                    log.warning("post_apply lỗi %s: %r", entry["id"], e, exc_info=True)
 
             self._spawn(_w())
         else:

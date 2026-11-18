@@ -157,7 +157,7 @@ class IntegrityMonitor:
             return {}
         try:
             d = yaml.safe_load(raw.decode("utf-8")) or {}
-        except Exception:
+        except Exception:  # fail-closed: YAML hỏng → đánh dấu __unparseable__ (bị coi là thay đổi)
             return {"__unparseable__": True}
         if not isinstance(d, dict):
             return {"__unparseable__": True}
@@ -296,7 +296,7 @@ class IntegrityMonitor:
                         if raw != b"__symlink__":
                             try:
                                 merged = yaml.safe_load(raw.decode("utf-8")) or {}
-                            except Exception:
+                            except Exception:  # best-effort: bản chuẩn YAML hỏng → coi như rỗng (so khớp phát hiện khác biệt)
                                 merged = {}
                             if not isinstance(merged, dict):
                                 merged = {}
@@ -352,7 +352,7 @@ class IntegrityMonitor:
             self._db_version = int(self.conn.execute("PRAGMA data_version").fetchone()[0])
             self._db_ino = os.stat(self.hub.paths.db).st_ino
         except Exception:  # pragma: no cover
-            pass
+            log.debug("integrity: không đọc được data_version/inode của hub.db", exc_info=True)
 
     def _db_check(self) -> dict[str, Any] | None:
         out: dict[str, Any] = {}
@@ -368,6 +368,7 @@ class IntegrityMonitor:
         except FileNotFoundError:
             out["file_missing"] = True
         except Exception:  # pragma: no cover
+            log.debug("integrity: không kiểm được hub.db lượt này", exc_info=True)
             return None
         return out or None
 
@@ -384,7 +385,7 @@ class IntegrityMonitor:
 
             audit_record("guard.tamper_detected", agent_id=None, run_id=None, data=payload)
         except Exception:  # pragma: no cover
-            pass
+            log.debug("integrity: không ghi được audit guard.tamper_detected", exc_info=True)
         log.warning("phát hiện thay đổi ngoài RPC ở %s: %s", target, payload)
 
     # ------------------------------------------------------------------ vòng nền
@@ -400,7 +401,7 @@ class IntegrityMonitor:
         except RuntimeError:
             return
         if self.task is None or self.task.done():
-            self.task = loop.create_task(self._loop())
+            self.task = loop.create_task(self._loop(), name="integrity-loop")
 
     async def _loop(self) -> None:
         while True:
@@ -541,11 +542,11 @@ def python_env_files() -> dict[str, str]:
             pass
     try:
         dirs |= {os.path.realpath(d) for d in site.getsitepackages()}
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: site-packages có thể không có (venv lạ)  # pragma: no cover
         pass
     try:
         dirs.add(os.path.realpath(site.getusersitepackages()))
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: user site-packages có thể không có (venv lạ)  # pragma: no cover
         pass
     out: dict[str, str] = {}
     for d in dirs:

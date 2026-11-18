@@ -92,7 +92,7 @@ def collect(paths: HubPaths) -> list[dict[str, Any]]:
     # 3. cổng web / MCP
     try:
         cfg = HubConfig(paths.config)
-    except Exception as e:  # config hỏng: vẫn báo phần còn lại
+    except Exception as e:  # best-effort: lỗi được báo trong kết quả doctor
         add("config.yaml", False, f"không đọc được: {e}")
         cfg = None
 

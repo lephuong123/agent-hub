@@ -786,7 +786,7 @@ Xoá trong thư mục chung = `write` (chỉ báo sau run). Event filehub chỉ 
 + giao việc `filehub:`; thêm thao tác ghi filehub → HUMAN_ONLY + ca trong `tests/test_sec_auth.py`/`test_manager_security.py`. Test: server GIẢ
 `tests/fake_kgs_lane.py` + `lane_fake.py` (`test_lane_*.py`, `test_filehub_h5.py`, `test_web_filehub.py`) — đổi §C → sửa fake trong CÙNG PR.
 
-## Log hệ thống — `docs/dev-notes/plan-logging.md` (L1 nền tảng, L2 req_id, L3 audit đầy đủ, L4 chuỗi băm audit, L5 truy vấn + cảnh báo + lưu trữ audit, L6 công cụ debug, L7 gói chẩn đoán; còn L8 dọn nuốt lỗi)
+## Log hệ thống — `docs/dev-notes/plan-logging.md` (L1 nền tảng, L2 req_id, L3 audit đầy đủ, L4 chuỗi băm audit, L5 truy vấn + cảnh báo + lưu trữ audit, L6 công cụ debug, L7 gói chẩn đoán, L8 dọn nuốt lỗi)
 | Module | Vai trò |
 |---|---|
 | `logs.py` | `setup_logging(proc, filename, shared)` JSONL mọi tiến trình (daemon `hub.log`, web `web.jsonl`, MCP `mcp.jsonl`), handler root cho thư viện (không lặp), che secret; `LevelController`/`level_loop` (config `logs.level|levels` + level tạm `hub_state logs.temp_levels`); `install_crash_handlers` (excepthook, faulthandler `logs/faults.log`, SIGUSR1), `asyncio_exception_handler`, `ERROR_COUNTS` |
@@ -850,3 +850,10 @@ agent. Mọi byte vào gói qua `support_bundle.scrub` NGAY trước khi ghi (sh
 `RUN_COLUMNS` (metadata, không chữ tự do). Raw transcript luôn cần xác nhận bước 2 ở MỌI bề mặt (`confirm_raw` RPC, `--confirm-raw`/gõ `raw` CLI,
 `Action.step2` web). `exports/`, `imports/`, `backups/` ∈ classifier `sensitive_regions` (Bash) ngoài sandbox + `sensitive_read`. `update_helper.JsonLog` (chỉ stdlib) và `logs.setup_stream_json` (import-job) ghi dòng JSON
 cùng trường lõi `hub.log`. Test: `tests/test_support_bundle.py`.
+Nuốt lỗi (L8): handler `except Exception`/`except BaseException`/`except:` MỚI phải (a) log kèm `exc_info` (`log.debug(..., exc_info=True)` trở lên,
+hoặc `log.exception`), (b) ném lại, hoặc (c) có chú thích `# fail-closed: <lý do>` / `# best-effort: <lý do>` (`# pragma: no cover — <lý do>` cũng
+được; pragma trần thì không) trên dòng `except` hoặc dòng lệnh đầu của thân — kiểm bằng `scripts/check_broad_except.py` (AST) trong
+`tests/test_broad_except.py`; baseline theo file `scripts/broad_except_baseline.txt` chỉ được GIẢM (`--update` sau khi dọn). Log trong handler chỉ
+metadata (id, tên lớp lỗi) — không payload; lỗi của client Telegram/Slack/webhook/HTTP không `exc_info` (traceback có thể mang URL chứa token) → dùng
+chú thích. Module chỉ stdlib (hook, `mcp_guard`, `observe_hook`, `hub_self`, `update_helper`, `transport`, `oscompat`, `cron`) chỉ thêm chú thích.
+Tác vụ "bắn rồi quên" dùng `aiotasks.spawn(coro, name=…)`; task giữ handle (huỷ/await theo vòng đời) đặt `name=`.

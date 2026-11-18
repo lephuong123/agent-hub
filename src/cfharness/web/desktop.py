@@ -376,7 +376,7 @@ def local_web_cfg(paths: HubPaths) -> dict[str, Any]:
         from ..config import HubConfig
 
         v = HubConfig(paths.config).get("web")
-    except Exception:  # noqa: BLE001
+    except Exception:  # best-effort: config hỏng → {} (dùng mặc định)  # noqa: BLE001
         return {}
     return v if isinstance(v, dict) else {}
 

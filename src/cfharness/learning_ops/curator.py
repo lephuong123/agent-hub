@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -30,6 +31,8 @@ from typing import TYPE_CHECKING, Any
 from ..events import make_event
 from ..store import now_iso
 from .ports import knowledge
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..hub import Hub
@@ -138,6 +141,7 @@ class Curator:
                 await _call(fn, "agent", owner, name, "stale" if act["action"] == "stale" else "active")
             return True, None
         except Exception as e:  # một skill lỗi không chặn cả lượt
+            log.debug("curator: một skill lỗi (bỏ qua, lượt vẫn chạy)", exc_info=True)
             return False, repr(e)[:300]
 
     # ------------------------------------------------------------------ chạy
