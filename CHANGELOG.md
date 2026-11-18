@@ -10,6 +10,19 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+---
+
+## v0.2.20 — 2026-11-18
+
+Hoàn thiện cổng cfharness: hoàn tác run trên Không gian số, nút duyệt lô xoá trên Telegram/Slack, mọi run đọc được thư mục chung qua cổng,
+chặn run đọc/ghi cây làm việc của run khác; sửa test chập chờn của nhịp điều phối viên (#151).
+
+### Lưu ý khi cập nhật
+- Không có migration DB của hub. Cổng cfharness giờ có trên cả hai hệ Không gian số (bản chính cổng 8223, bản CCHC cổng 8233) — hub nối
+  CCHC dán khoá cổng là chuyển được (hub tự thử 8223 rồi 8233).
+- Mặc định mọi run đọc được thư mục chung chế độ cổng; muốn tắt: `cfharness config set filehub.lane.read_all_runs false`.
+
+### Không gian số — cổng cfharness (#151)
 - Cổng cfharness: hoàn tác run làm việc trên thư mục chung (`cfharness run revert <run>`, nút "Hoàn tác trên Không gian số" ở trang run) —
   khôi phục phiên bản trước run, lấy lại tệp run xoá từ thùng rác, chuyển tệp run tạo vào thùng rác, đổi tên lại; từ chối khi tệp đã bị
   sửa tiếp sau run. Run cũ (trước bản này) vẫn chỉ khôi phục được trên Không gian số.
@@ -17,7 +30,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - Cổng cfharness: mọi run (kể cả run không làm trong thư mục chung) đọc được thư mục chung chế độ cổng qua tool đọc `fs_list`/`fs_read`…
   (tắt: `filehub.lane.read_all_runs: false`); run không đọc/ghi được cây làm việc của run khác; dải "cfharness đang làm việc" trên Không gian
   số vẫn giữ khi run chờ bạn duyệt.
-- Sửa test chập chờn của nhịp điều phối viên (mốc nhịp đầu tiên lệch mili-giây → bỏ lượt kiểm việc).
+
+### Điều phối viên
+- Sửa lỗi nhịp đầu tiên của điều phối viên đôi khi bị bỏ lượt (mốc thời gian lệch mili-giây) (#151).
 
 ---
 
