@@ -146,12 +146,10 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "file.read", "file.open",
         # Dựng lại chỉ mục tìm kiếm hội thoại (session_search.py): ghi lại FTS + quét lại MỌI transcript, tốn CPU/IO — bảo trì của người
         "session.reindex",
-        # Thư mục chung Không gian số (filehub/): đăng nhập thiết bị, thêm/gỡ thư mục, tạm dừng đồng bộ — chỉ người (không MANAGER_ALLOWED)
-        # login_callback: relay OAuth từ web public (code một lần); switch_to_workspace: đổi gốc đồng bộ sang toàn bộ workspace
-        "filehub.setup", "filehub.login", "filehub.login_callback", "filehub.switch_to_workspace", "filehub.add", "filehub.remove",
-        "filehub.rename", "filehub.pause", "filehub.resume",
-        # Cổng cfharness (filehub/lane/, plan-filehub-lane.md): khoá hub của người (secret store) — nhập/thử/xoá/chuyển chế độ/cây mồ côi
-        "filehub.lane_setup", "filehub.lane_disable", "filehub.lane_test", "filehub.lane_orphan", "filehub.lane_add", "filehub.switch",
+        # Thư mục chung Không gian số (filehub/): gỡ/đổi tên thư mục, duyệt lô xoá đang giữ — chỉ người (không MANAGER_ALLOWED)
+        "filehub.remove", "filehub.rename", "filehub.resume",
+        # Cổng cfharness (filehub/lane/, plan-filehub-lane.md): khoá hub của người (secret store) — nhập/thử/xoá/thêm thư mục/cây mồ côi
+        "filehub.lane_setup", "filehub.lane_disable", "filehub.lane_test", "filehub.lane_orphan", "filehub.lane_add",
     }
 )
 DOWNGRADE = frozenset({"learn.propose"})

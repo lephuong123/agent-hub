@@ -202,7 +202,7 @@ def secret_read_deny_rules(hub_home: Path, socket: Path) -> list[str]:
     out: list[str] = []
     # WEB: `auth/` giữ khoá ký link đăng nhập web (auth/web.json) — sandbox đã denyRead cả thư mục, đây là lớp Read/Grep/Glob
     # backups/: bản sao lưu chứa toàn bộ hub.db + tri thức mọi agent (backup.py); exports/ + imports/: gói xuất/nhập hub (hub_transfer.py)
-    # filehub/: profile + base của binary sync (Không gian số), control.json — như secrets/ (docs/dev-notes/filehub.md)
+    # filehub/: trạng thái cổng cfharness (cursor, cây mồ côi) + tàn dư đồng bộ cũ — như secrets/ (docs/dev-notes/filehub.md)
     targets = [*(str(t) for t in all_token_paths(socket)), f"{hub_home}/secrets/**", f"{hub_home}/agents/*/runtime/**", f"{hub_home}/mcp_server/tokens.json", f"{hub_home}/auth/**",
                f"{hub_home}/backups/**", f"{hub_home}/filehub/**", f"{hub_home}/exports/**", f"{hub_home}/imports/**", f"{hub_home}/logs/**"]
     real = os.path.realpath(hub_home)
@@ -228,7 +228,7 @@ HUB_WRITE_DENY_NAMES = (
     "snapshots", "audit", "trash", "runs", "logs", "prompts", "checkpoints", "global", "teams", "hub.pid", "hub.sock", "auth",
     "backups", "update",  # bản sao lưu HUB_HOME (backup.py) + trạng thái/helper cập nhật (updater.py)
     "exports", "imports",  # gói xuất/nhập toàn bộ hub (hub_transfer.py)
-    "filehub",  # profile/base/status/control của binary sync Không gian số (filehub/)
+    "filehub",  # trạng thái cổng cfharness + cây mồ côi + tàn dư đồng bộ cũ (filehub/)
 )
 AGENT_WRITE_DENY_NAMES = ("config.yaml", "SOUL.md", "MEMORY.md", "USER.md", "skills", ".archive", "runtime", "home", ".tier_overlay")
 

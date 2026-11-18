@@ -1,160 +1,84 @@
-"""CLI `cfharness filehub setup|login|switch-to-workspace|status|add|remove|rename|pause|resume` — client thuần của daemon (RPC `filehub.*`).
+"""CLI `cfharness filehub status|remove|rename|resume|lane …` — client thuần của daemon (RPC `filehub.*`).
 
-`setup`/`login`/`switch-to-workspace` in link đồng ý thiết bị (dòng `LOGIN_URL` của binary sync) rồi chờ người bấm đồng ý trên Không gian số.
-Cùng thao tác làm được ở thẻ "Không gian số" của Cài đặt web (kể cả qua link public — đăng nhập relay OAuth).
+Thư mục chung Không gian số đi qua CỔNG CFHARNESS (`filehub lane setup`: dán khoá tạo ở Không gian số › Hồ sơ › Cổng cfharness). Đồng bộ
+2 chiều cũ (`filehub setup|login|add|pause|switch…`) đã bỏ — thư mục còn cấu hình cũ được báo "cần chuyển" và tự chuyển khi khoá cấp đúng gốc.
 """
 
 from __future__ import annotations
 
 import argparse
-import time
 from typing import Any
 
-STATE_VI = {"idle": "đã đồng bộ", "syncing": "đang đồng bộ", "conflict": "có bản xung đột", "offline": "mất kết nối", "auth_expired": "hết phiên đăng nhập",
-            "error": "lỗi", "paused": "tạm dừng", "not_configured": "chưa thiết lập", "version_mismatch": "binary sync sai phiên bản", "starting": "đang khởi động",
-            "revoked": "mất quyền truy cập"}
+REMOVED = ("setup", "login", "switch-to-workspace", "add", "pause", "switch")
+REMOVED_TEXT = ("Đồng bộ 2 chiều cũ đã bỏ — thư mục chung Không gian số giờ đi qua cổng cfharness: `cfharness filehub lane setup` (dán khoá "
+                "tạo ở Không gian số › Hồ sơ › Cổng cfharness). Thư mục đồng bộ cũ cùng gốc được tự chuyển; bản sao trên máy để nguyên.")
 
 
 def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
-    s = sub.add_parser("filehub", help="thư mục dùng chung với \"Không gian số\" (đồng bộ 2 chiều; agent làm việc trong workspace filehub:<tên>)",
+    s = sub.add_parser("filehub", help="thư mục dùng chung với \"Không gian số\" qua cổng cfharness (agent làm việc trong workspace filehub:<tên>)",
                        parents=[common])
     ss = s.add_subparsers(dest="fh_action")
-    st = ss.add_parser("setup", help="thiết lập: server + binary sync, đăng nhập (đồng ý thiết bị), tạo thư mục rỗng (chỉ người)", parents=[common])
-    st.add_argument("--server", help="URL Không gian số, vd https://thumucai.trungtamdhs.com")
-    st.add_argument("--binary", help="đường dẫn tang-thu-sync-headless")
-    st.add_argument("--scope", choices=("workspace", "folder"),
-                    help="workspace (mặc định) = TOÀN BỘ một workspace (tài khoản phải là Workspace Admin); folder = MỘT thư mục")
-    st.add_argument("--name", help="gợi ý tên (chế độ folder: tên thư mục rỗng tạo ở trang đồng ý, mặc định cfharness; workspace: tên workspace)")
-    st.add_argument("--local-parent", help="thư mục cha của bản sao cục bộ (mặc định ~/KhongGianSo)")
-    st.add_argument("--local-path", help="đường dẫn bản sao cục bộ (mặc định <local-parent>/<tên>)")
-    st.add_argument("--no-browser", action="store_true", help="không tự mở trình duyệt — chỉ in link")
-    st.add_argument("--no-wait", action="store_true", help="in link rồi thoát, không chờ đồng ý")
-    lg = ss.add_parser("login", help="đăng nhập lại (khi hết phiên / mất quyền) — giữ chế độ đang có; chỉ người", parents=[common])
-    lg.add_argument("--no-browser", action="store_true")
-    lg.add_argument("--no-wait", action="store_true")
-    sw = ss.add_parser("switch-to-workspace", help="chuyển thư mục chung từ MỘT thư mục sang TOÀN BỘ workspace (giữ tệp cũ; chỉ người)",
-                       parents=[common])
-    sw.add_argument("--local-path", help="bản sao cục bộ mới (mặc định <local-parent>/<tên workspace>; không trùng/chứa bản cũ)")
-    sw.add_argument("--no-browser", action="store_true")
-    sw.add_argument("--no-wait", action="store_true")
-    ss.add_parser("status", help="trạng thái đồng bộ, thư mục chung, bản xung đột", parents=[common])
-    ad = ss.add_parser("add", help="thêm một thư mục chung từ root đã cấp lúc đăng nhập (chỉ người)", parents=[common])
-    ad.add_argument("root_id")
-    ad.add_argument("--name")
-    ad.add_argument("--local-path")
+    ss.add_parser("status", help="thư mục chung, cổng, thư mục đồng bộ cũ cần chuyển", parents=[common])
     rm = ss.add_parser("remove", help="gỡ thư mục chung khỏi hub (không xoá tệp trên máy lẫn trên Không gian số; chỉ người)", parents=[common])
     rm.add_argument("name")
-    rn = ss.add_parser("rename", help="đổi tên thư mục chung trong cfharness (filehub:<tên>) — không đổi đường dẫn trên máy, không đổi tên trên "
-                                      "Không gian số; tên cũ vẫn khớp làm bí danh (chỉ người)", parents=[common])
+    rn = ss.add_parser("rename", help="đổi tên thư mục chung trong cfharness (filehub:<tên>) — không đổi tên trên Không gian số; tên cũ vẫn khớp "
+                                      "làm bí danh (chỉ người)", parents=[common])
     rn.add_argument("name")
     rn.add_argument("new_name")
-    ss.add_parser("pause", help="tạm dừng đồng bộ (dừng tiến trình sync)", parents=[common])
-    rs = ss.add_parser("resume", help="chạy lại đồng bộ; --root <id>: cho chiều đẩy lên đang bị chặn (xoá hàng loạt) đi tiếp", parents=[common])
-    rs.add_argument("--root")
-    rs.add_argument("--discard", action="store_true",
-                    help="thư mục chế độ lane: KHÔNG xoá lô đang giữ (xoá hàng loạt) — kéo tệp về lại cây run, báo agent")
-    # cổng cfharness (chế độ lane — docs/dev-notes/plan-filehub-lane.md): khoá hub do NGƯỜI tạo ở Không gian số › Hồ sơ › Cổng cfharness
-    ln = ss.add_parser("lane", help="cổng cfharness: thư mục chung KHÔNG qua đồng bộ (cây làm việc theo run) — thiết lập khoá, trạng thái (chỉ người)",
+    rs = ss.add_parser("resume", help="lô xoá hàng loạt đang giữ của một gốc: đẩy tiếp (mặc định) hoặc --discard (không xoá) — chỉ người",
                        parents=[common])
+    rs.add_argument("--root", required=True, help="id gốc (xem `filehub lane status`)")
+    rs.add_argument("--discard", action="store_true", help="KHÔNG xoá lô đang giữ — kéo tệp về lại cây run, báo agent")
+    for old in REMOVED:  # lệnh của đồng bộ cũ: nhận để in hướng dẫn (không làm gì)
+        o = ss.add_parser(old, help=argparse.SUPPRESS, parents=[common])
+        o.add_argument("rest", nargs="*")
+        for opt in ("--server", "--binary", "--scope", "--name", "--local-parent", "--local-path", "--to"):
+            o.add_argument(opt, help=argparse.SUPPRESS)
+        for flag in ("--no-browser", "--no-wait", "--force"):
+            o.add_argument(flag, action="store_true", help=argparse.SUPPRESS)
+    # cổng cfharness (docs/dev-notes/plan-filehub-lane.md): khoá hub do NGƯỜI tạo ở Không gian số › Hồ sơ › Cổng cfharness
+    ln = ss.add_parser("lane", help="cổng cfharness: thiết lập khoá, trạng thái, thêm thư mục, cây mồ côi (chỉ người)", parents=[common])
     ls = ln.add_subparsers(dest="lane_action")
     lst = ls.add_parser("setup", help="nhập khoá cổng (hỏi bằng getpass, không qua tham số) + kiểm `hello`", parents=[common])
     lst.add_argument("--server", help="tên cổng (qltm, cchc…) — mặc định theo Không gian số trả lời (qltm/cchc)")
     lst.add_argument("--url", help="http://127.0.0.1:<cổng> — bỏ trống: thử 8223 (qltm) rồi 8233 (cchc); chỉ loopback")
     lst.add_argument("--key-file", help="đọc khoá từ tệp 0600 (thay cho gõ tay); tệp người khác đọc được → từ chối")
-    ls.add_parser("status", help="trạng thái cổng, thư mục chế độ lane, cây làm việc đang chạy, cây mồ côi", parents=[common])
+    ls.add_parser("status", help="trạng thái cổng, thư mục qua cổng, cây làm việc đang chạy, cây mồ côi", parents=[common])
     lt = ls.add_parser("test", help="thử khoá đã lưu (hello + cursor)", parents=[common])
     lt.add_argument("--server")
     ld = ls.add_parser("disable", help="xoá khoá + cấu hình cổng", parents=[common])
     ld.add_argument("--server", required=True)
-    ld.add_argument("--force", action="store_true", help="kể cả khi còn thư mục chế độ lane dùng cổng này")
-    la = ls.add_parser("add", help="thêm thư mục chung chế độ lane từ một gốc khoá được cấp (không bản sao trên máy)", parents=[common])
+    ld.add_argument("--force", action="store_true", help=argparse.SUPPRESS)  # giữ cho script cũ — không còn cần
+    la = ls.add_parser("add", help="thêm thư mục chung từ một gốc khoá được cấp (không bản sao trên máy)", parents=[common])
     la.add_argument("root_id")
     la.add_argument("--name")
     la.add_argument("--server")
     lo = ls.add_parser("orphan", help="cây mồ côi (thay đổi chưa đẩy lên được khi run kết thúc): push = đẩy lại, drop = bỏ", parents=[common])
     lo.add_argument("orphan_action", choices=("push", "drop"))
     lo.add_argument("tree")
-    sw2 = ss.add_parser("switch", help="đổi chế độ một thư mục chung: sync (đồng bộ 2 chiều cũ) ↔ lane (cổng cfharness) — bản sao cũ để nguyên",
-                        parents=[common])
-    sw2.add_argument("name")
-    sw2.add_argument("--to", required=True, choices=("lane", "sync"))
-    sw2.add_argument("--server", help="cổng (mặc định: cổng duy nhất đã thiết lập)")
-    sw2.add_argument("--force", action="store_true", help="chuyển dù không đọc được trạng thái đồng bộ")
     s.set_defaults(fn=cmd_filehub)
 
 
+def _print_legacy(rows: list[dict[str, Any]]) -> None:
+    for f in rows or []:
+        print(f"  ⚠ {f.get('message')}" + (f" (bản sao: {f['old_copy']})" if f.get("old_copy") else ""))
+
+
 def _print_status(r: dict[str, Any]) -> None:
-    sv = r.get("supervisor") or {}
-    if r.get("lane_configured") and not r.get("folders"):  # chỉ dùng cổng cfharness: không có đồng bộ 2 chiều để báo
-        print("Không gian số: qua cổng cfharness (không đồng bộ về máy) — chi tiết: `cfharness filehub lane status`")
-    else:
-        print(f"Không gian số: {r.get('server') or '(chưa đặt)'} · thiết bị «{r.get('device')}» · {STATE_VI.get(r['state'], r['state'])}"
-              + (f" · sync {r['sync_version']}" if r.get("sync_version") else ""))
-    if sv.get("last_error") and r["state"] in ("error", "version_mismatch"):
-        print(f"  lỗi: {sv['last_error']}")
-    if not r.get("folders") and not r.get("lane_folders"):
-        print("  (chưa có thư mục chung — `cfharness filehub setup --server URL --binary /đường/dẫn/tang-thu-sync-headless`)")
-    for f in r.get("lane_folders") or []:  # chế độ lane: không bản sao trên máy — cây làm việc theo run qua cổng cfharness
-        print(f"  • {f['name']}  (chế độ lane, cổng {f.get('server') or '?'})  →  workspace {f.get('workspace') or 'filehub:' + f['name']}"
+    if r.get("state") == "not_configured" and not r.get("legacy"):
+        print("Không gian số: chưa thiết lập — `cfharness filehub lane setup` rồi dán khoá cổng (Không gian số › Hồ sơ › Cổng cfharness)")
+        return
+    print("Không gian số: qua cổng cfharness (không đồng bộ về máy) — chi tiết cổng: `cfharness filehub lane status`")
+    for f in r.get("folders") or []:
+        print(f"  • {f['name']}{' (toàn bộ workspace)' if f.get('kind') == 'workspace' else ''} (cổng {f.get('server') or '?'})  →  "
+              f"workspace {f.get('workspace') or 'filehub:' + f['name']}"
               + ("  ⛔ khoá không còn được cấp gốc này" if f.get("revoked") else ""))
         if f.get("old_copy"):
-            print(f"    bản sao cũ của chế độ sync còn ở {f['old_copy']} (hub không xoá — kiểm rồi tự xoá)")
-    for f in r.get("folders") or []:
-        lock = f.get("lock")
-        print(f"  • {f.get('display') or f['name']}" + (f" · đăng nhập bằng {f['account']}" if f.get("account") else ""))
-        if f.get("workspace_deleted"):
-            print(f"    ⛔ workspace «{f.get('server_name') or f['name']}» đã bị xoá trên Không gian số — đồng bộ đã ngắt, tệp trên máy giữ nguyên"
-                  + (f" (bản trên máy nay ở {f['disconnected_path']})" if f.get("disconnected_path") else "")
-                  + f"; gỡ khỏi hub: `cfharness filehub remove {f['name']}`")
-        elif f.get("revoked") and f.get("revoked_temporary"):
-            print(f"    ⛔ tài khoản {f.get('account') or '(không rõ)'} không còn quyền với {f.get('display') or f['name']} (vd không còn là admin) — "
-                  "đồng bộ tạm dừng, tệp trên máy giữ nguyên; cấp lại quyền admin cho tài khoản này là tự chạy tiếp (không cần đăng nhập lại), "
-                  "hoặc đăng nhập bằng tài khoản admin khác: `cfharness filehub login`")
-        elif f.get("revoked"):
-            print(f"    ⛔ tài khoản {f.get('account') or '(không rõ)'} không còn quyền với {f.get('display') or f['name']} — đăng nhập lại bằng "
-                  "tài khoản admin: `cfharness filehub login`")
-            if f.get("disconnected_path"):
-                print(f"    (đã ngắt đồng bộ — bản trên máy nay ở {f['disconnected_path']}, tệp giữ nguyên)")
-        if f.get("aliases"):
-            print("    tên cũ (vẫn khớp): " + ", ".join(f"filehub:{x}" for x in f["aliases"]))
-        if f.get("renamed"):
-            print(f"    (trên web đã đổi tên thành «{f['server_name']}» — trên máy giữ tên/đường dẫn cũ; filehub:{f['server_name']} cũng khớp)")
-        print(f"    {f['name']}  →  {f['local_path']}  (workspace filehub:{f['name']})"
-              + (f"  ⬆{f['pending_up']} ⬇{f['pending_down']}" if f.get("pending_up") or f.get("pending_down") else "")
-              + (f"  · đang có run {lock.get('run_id')} ghi" if lock else ""))
-        if f.get("blocked"):
-            print(f"    ⛔ chiều đẩy lên đang dừng ({f['blocked']}) — `cfharness filehub resume --root {f['root_id']}` để đẩy tiếp")
-        for c in f.get("conflicts") or []:
-            print(f"    ⚠ bản xung đột: {c['path']}")
-        for p in f.get("root_files") or []:
-            print(f"    ⚠ tệp ở gốc workspace không đồng bộ (đưa vào một thư mục cấp 1): {p}")
-        for x in f.get("unpushable") or []:
-            print(f"    ⚠ không đẩy lên được ({x.get('kind')}): {x.get('path')}")
-        if f.get("url"):
-            print(f"    mở: {f['url']}")
-    lg = r.get("login") or {}
-    if lg.get("switched_from"):
-        print("  Bản sao cũ (đã gỡ khỏi hub, tệp giữ nguyên — kiểm bản mới rồi tự xoá): " + ", ".join(lg["switched_from"]))
-    if lg.get("state") in ("waiting", "error"):
-        print(f"  đăng nhập: {lg['state']}" + (f" — {lg.get('message') or lg.get('error')}" if lg.get("error") else f" — {lg.get('url')}"))
-
-
-def _wait_login(ctx: Any, timeout_s: float = 900) -> int:
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < timeout_s:
-        st = ctx.call("filehub.status", {})
-        lg = st.get("login") or {}
-        if lg.get("state") == "done":
-            names = ", ".join(("workspace " if r.get("kind") == "workspace" else "") + r.get("name", "?") for r in lg.get("roots") or [])
-            print(f"Đã đăng nhập{' bằng ' + lg['account'] if lg.get('account') else ''}. Được cấp: {names or '(không có)'}")
-            _print_status(st)
-            return 0
-        if lg.get("state") == "error":
-            print(f"lỗi đăng nhập: {lg.get('message') or lg.get('error')}")
-            return 1
-        time.sleep(1.5)
-    print("hết thời gian chờ đồng ý — chạy lại `cfharness filehub login`")
-    return 1
+            print(f"    bản sao cũ của đồng bộ 2 chiều còn ở {f['old_copy']} (hub không xoá — kiểm rồi tự xoá)")
+    _print_legacy(r.get("legacy") or [])
+    o = r.get("orphan_sync") or {}
+    if o.get("found"):
+        print(f"  (đã dừng tiến trình đồng bộ cũ còn sót, pid {o.get('pid')})")
 
 
 def _read_key(a: Any) -> str:
@@ -180,16 +104,18 @@ def _print_roots(r: dict[str, Any]) -> None:
         if x.get("folder") and x.get("mode") == "lane":
             print(f"  ✓ {kind} «{x['name']}» → giao việc: workspace filehub:{x['folder']}" + ("  (mới thêm)" if x["folder"] in added else ""))
         elif x.get("folder"):
-            print(f"  • {kind} «{x['name']}» đang đồng bộ kiểu cũ (thư mục chung {x['folder']}) — giữ nguyên; chuyển sang cổng: "
-                  f"`cfharness filehub switch \"{x['folder']}\" --to lane`")
+            print(f"  ⚠ {kind} «{x['name']}»: thư mục chung {x['folder']} còn cấu hình đồng bộ cũ")
         else:
             print(f"  • {kind} «{x['name']}» (gốc {x['id']})")
+    for x in r.get("converted") or []:
+        print(f"  ✓ thư mục đồng bộ cũ «{x.get('name')}» đã chuyển sang cổng — giao việc: workspace {x.get('workspace')}"
+              + (f" (bản sao cũ {x['old_copy']} để nguyên — kiểm rồi tự xoá)" if x.get("old_copy") else ""))
     for n in r.get("revoked") or []:
         print(f"  ⛔ thư mục chung «{n}»: khoá không còn được cấp gốc này (tệp không bị xoá) — cấp lại ở Không gian số › Hồ sơ › Cổng cfharness")
 
 
 def _print_lane(r: dict[str, Any]) -> None:
-    print(f"Cổng cfharness — chế độ mặc định: {r.get('mode')}")
+    print("Cổng cfharness")
     if not r.get("servers"):
         print("  (chưa thiết lập — `cfharness filehub lane setup` rồi dán khoá)")
     for s in r.get("servers") or []:
@@ -203,7 +129,7 @@ def _print_lane(r: dict[str, Any]) -> None:
     for f in r.get("folders") or []:
         print(f"  thư mục {f['name']} (cổng {f.get('server') or '?'}) → workspace {f['workspace']}"
               + ("  ⛔ khoá không còn được cấp gốc này (tệp không bị xoá) — cấp lại ở Không gian số › Hồ sơ › Cổng cfharness" if f.get("revoked") else "")
-              + (f"\n    bản sao cũ của chế độ sync giữ nguyên ở {f['old_copy']} (hub không xoá — kiểm rồi tự xoá)" if f.get("old_copy") else ""))
+              + (f"\n    bản sao cũ của đồng bộ 2 chiều giữ nguyên ở {f['old_copy']} (hub không xoá — kiểm rồi tự xoá)" if f.get("old_copy") else ""))
     for w in r.get("runs") or []:
         print(f"  run {w.get('run_id')} ({w.get('agent_id')}) · {w.get('folder')}/{w.get('sub') or ''} · {w.get('mode')} · chờ đẩy {w.get('pending')}"
               + (f" · chặn (secret) {w.get('blocked')}" if w.get("blocked") else ""))
@@ -242,7 +168,7 @@ def _cmd_lane(ctx: Any) -> int:
         _print_roots(r)
         return 0
     if act == "disable":
-        r = ctx.call("filehub.lane_disable", {"server": a.server, "force": a.force})
+        r = ctx.call("filehub.lane_disable", {"server": a.server})
         ctx.out(r, f"Đã xoá khoá + cấu hình cổng «{r['server']}».")
         return 0
     return _cmd_lane_more(ctx, act)
@@ -272,40 +198,15 @@ def cmd_filehub(ctx: Any) -> int:
     act = a.fh_action or "status"
     if act == "lane":
         return _cmd_lane(ctx)
-    if act == "switch":
-        r = ctx.call("filehub.switch", {"name": a.name, "to": a.to, "server": a.server, "force": a.force})
-        ctx.out(r, f"Đã chuyển «{r['name']}» sang chế độ {r['mode']}." + (f"\n{r['note']}" if r.get("note") else "")
-                + "".join(f"\n⚠ {w}" for w in r.get("warnings") or []))
-        return 0
+    if act in REMOVED:
+        print(REMOVED_TEXT)
+        return 2
     if act == "status":
         r = ctx.call("filehub.status", {})
         if ctx.json:
             ctx.out(r)
         else:
             _print_status(r)
-        return 0
-    if act in ("setup", "login", "switch-to-workspace"):
-        if act == "setup":
-            r = ctx.call("filehub.setup", {"server": a.server, "binary": a.binary, "name": a.name, "scope": a.scope, "local_parent": a.local_parent,
-                                           "local_path": a.local_path, "no_browser": a.no_browser})
-        elif act == "login":
-            r = ctx.call("filehub.login", {"no_browser": a.no_browser})
-        else:
-            r = ctx.call("filehub.switch_to_workspace", {"no_browser": a.no_browser, "local_path": a.local_path})
-        if ctx.json:
-            ctx.out(r)
-            return 0
-        if r.get("mode") == "workspace":
-            print("Mở link sau để đồng ý thiết bị «cfharness» — chọn «Toàn bộ workspace» (chỉ hiện với Workspace Admin; đăng nhập bằng tài khoản\n"
-                  f"admin của workspace, không dùng tài khoản Super Admin):\n  {r['login_url']}")
-        else:
-            print(f"Mở link sau để đồng ý thiết bị «cfharness» (chọn/tạo thư mục rỗng ngay ở trang đồng ý):\n  {r['login_url']}")
-        if act == "switch-to-workspace":
-            print(f"Sau khi đồng ý: {r.get('note')}")
-        return 0 if a.no_wait else _wait_login(ctx)
-    if act == "add":
-        r = ctx.call("filehub.add", {"root_id": a.root_id, "name": a.name, "local_path": a.local_path})
-        ctx.out(r, f"Đã thêm thư mục chung «{r['name']}» → {r['local_path']} (giao việc: workspace {r['workspace']})")
         return 0
     if act == "remove":
         r = ctx.call("filehub.remove", {"name": a.name})
@@ -315,19 +216,13 @@ def cmd_filehub(ctx: Any) -> int:
         r = ctx.call("filehub.rename", {"name": a.name, "new_name": a.new_name})
         ctx.out(r, f"Đã đổi tên «{r['previous']}» → «{r['name']}» (giao việc: workspace {r['workspace']}; filehub:{r['previous']} vẫn khớp) — {r['note']}")
         return 0
-    if act == "pause":
-        ctx.out(ctx.call("filehub.pause", {}), "Đã tạm dừng đồng bộ.")
-        return 0
     if act == "resume":
         r = ctx.call("filehub.resume", {"root_id": a.root, **({"discard": True} if a.discard else {})})
-        if isinstance(r, dict) and r.get("lane"):
-            msg = (f"Đã bỏ lô xoá ({r.get('discarded', 0)} mục) — tệp được kéo về lại, agent đã được báo." if a.discard
-                   else f"Đã duyệt lô xoá ({r.get('released', 0)} mục) — đẩy tiếp lên Không gian số.")
-        else:
-            msg = "Đã cho chiều đẩy lên đi tiếp." if a.root else "Đã chạy lại đồng bộ."
+        msg = (f"Đã bỏ lô xoá ({(r or {}).get('discarded', 0)} mục) — tệp được kéo về lại, agent đã được báo." if a.discard
+               else f"Đã duyệt lô xoá ({(r or {}).get('released', 0)} mục) — đẩy tiếp lên Không gian số.")
         ctx.out(r, msg)
         return 0
     return 1
 
 
-__all__ = ["add_parsers", "cmd_filehub", "STATE_VI"]
+__all__ = ["add_parsers", "cmd_filehub", "REMOVED_TEXT"]
