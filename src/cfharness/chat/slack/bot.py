@@ -168,7 +168,9 @@ class SlackChatNotifier(QueuedNotifier):
         text = _slack_format(ev)
         if not text:
             return None
-        return {"text": text, "approval_id": None, "done": set()}
+        # lô xoá hàng loạt đang GIỮ (cổng lane) → tin chữ như cũ + tin hệ thống RIÊNG có nút Cho xoá / Không xoá (chat/base.py)
+        lane = self.bot.lane_root(p) if ev.type == "filehub.blocked" else None
+        return {"text": text, "approval_id": None, "lane_root": lane, "done": set()}
 
     async def _send(self, target: dict[str, Any], ev: HubEvent, msg: Any) -> dict[str, Any]:
         api: SlackApi = target["api"]
@@ -189,7 +191,10 @@ class SlackChatNotifier(QueuedNotifier):
                     return {"chats": n, "skipped": "resolved"}
                 await self.bot.send_approval(api, chat, row, kind=msg["kind"], payload=msg.get("payload"))
             else:
-                await self.bot._send(api, chat, msg["text"])  # chữ thuần → escape (giữ *đậm*/`mã` của định dạng cũ)
+                res = await self.bot._send(api, chat, msg["text"])  # chữ thuần → escape (giữ *đậm*/`mã` của định dạng cũ)
+                if msg.get("lane_root"):
+                    mid = res.get("message_id") if isinstance(res, dict) else None
+                    await self.bot.send_lane_delete_buttons(api, chat, msg["lane_root"], reply_to=mid)
             msg["done"].add(chat)
             n += 1
         return {"chats": n}

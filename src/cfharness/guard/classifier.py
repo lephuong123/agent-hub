@@ -417,7 +417,7 @@ NET_BLOCK_RULES = frozenset({"webfetch_local", "ssrf_metadata", "ssrf_private_ip
 # đánh dấu cần duyệt, lỗi bộ phân loại/không phân tích được đích, run không hoạt động/ESTOP
 NEVER_DOWNGRADE_RULES = NET_BLOCK_RULES | frozenset({
     "url_dns_failed", "web_domain_denied", "web_domain_not_allowed", "sandbox_network_not_allowed", "sandbox_network_bad_host", "mcp_require_approval", "classifier_error", "unknown_run", "estop",
-    "nesting_too_deep", "hub_secret_read", "self_approval", "admin_shared", "desktop_app_data", "filehub_lane",
+    "nesting_too_deep", "hub_secret_read", "self_approval", "admin_shared", "desktop_app_data", "filehub_lane", "lane_other_tree",
 })
 NEVER_DOWNGRADE_KLASS = frozenset({"hub", "policy", "guard"})
 
@@ -579,11 +579,15 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
                 v = ti.get(k)
                 if isinstance(v, str) and v and admin_shared(_abs(v, ctx.cwd)):
                     return Verdict("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [v], forbidden=True)
+                if isinstance(v, str) and v and lane_other_tree(_abs(v, ctx.cwd), ctx):
+                    return Verdict("destructive", "lane_other_tree", "hub", LANE_OTHER_REASON, [v], forbidden=True)
                 if isinstance(v, str) and v and desktop_app_data(_abs(v, ctx.cwd)):
                     return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [v], forbidden=True)
                 if isinstance(v, str) and v and sensitive_read(_abs(v, ctx.cwd), ctx):
                     return Verdict("destructive", "hub_secret_read", "hub", "agent không được đọc token người/secret/mcp.json của hub", [v], forbidden=True)
             pat = ti.get("pattern") if tool_name == "Glob" else None  # Glob có thể chỉ mang đường dẫn tuyệt đối trong pattern
+            if isinstance(pat, str) and pat and lane_other_in_script(pat, ctx):
+                return Verdict("destructive", "lane_other_tree", "hub", LANE_OTHER_REASON, [pat], forbidden=True)
             gm = glob_app_data(pat, ti.get("path"), ctx) if isinstance(pat, str) and pat else None
             if gm == "literal":
                 return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [pat], forbidden=True)
@@ -817,6 +821,33 @@ def filehub_meta(p: str, ctx: GuardContext) -> bool:
     return False
 
 
+LANE_OTHER_REASON = "agent không được đọc/ghi cây làm việc lane của run khác (thư mục chung theo phạm vi/quyền của run đó)"
+# token có `lane-<tree>` (tuyệt đối, `~`, `..`/tương đối) trong lệnh Bash — kiểm lại bằng `lane_other_tree` sau khi giải theo cwd
+LANE_TREE_TOKEN = re.compile(r"(?:^|(?<=[\s'\"=:;(|&<>`]))((?:[^\s'\"=:;(|&<>`]*/)?lane-[A-Za-z0-9_\-]+)")
+
+
+def lane_other_tree(p: str, ctx: GuardContext) -> bool:
+    """`p` (tuyệt đối) nằm trong cây làm việc lane `<HUB_HOME>/agents/<agent>/workspaces/lane-<tree>` KHÔNG phải cây của chính run (cwd)."""
+    hh = _hub_home(ctx)
+    own = {canon_path(str(ctx.cwd)), _real(str(ctx.cwd))}
+    for c in {canon_path(p), _real(p)}:
+        for h in {hh, _real(hh)}:
+            parts = _rel_parts(c, h + "/agents")
+            if len(parts) >= 3 and parts[1] == "workspaces" and parts[2].startswith("lane-"):
+                tree = h + "/agents/" + "/".join(parts[:3])
+                if not any(_under(o, tree) for o in own):
+                    return True
+    return False
+
+
+def lane_other_in_script(script: str, ctx: GuardContext) -> str | None:
+    for m in LANE_TREE_TOKEN.finditer(script):
+        ap = _abs(m.group(1), ctx.cwd)
+        if lane_other_tree(ap, ctx):
+            return ap
+    return None
+
+
 def admin_shared(p: str) -> bool:
     """Thư mục chung của quản trị máy (trạng thái/audit/chính sách/cờ ESTOP/admin-log của MỌI user) — agent không đọc/ghi (plan-admin-users §4)."""
     if IS_WINDOWS:
@@ -996,6 +1027,8 @@ def classify_file_write(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -
     op = "overwrite" if tool_name == "Write" and os.path.exists(ap) else "write"
     if admin_shared(ap):
         return Verdict("destructive", "admin_shared", "hub", ADMIN_SHARED_REASON, [ap], forbidden=True)
+    if lane_other_tree(ap, ctx):
+        return Verdict("destructive", "lane_other_tree", "hub", LANE_OTHER_REASON, [ap], forbidden=True)
     if desktop_app_data(ap):
         return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [ap], forbidden=True)
     if filehub_meta(ap, ctx):
@@ -1397,6 +1430,9 @@ class BashAnalyzer:
             self.hit("destructive", "filehub_metadata", "hub", FILEHUB_META_REASON, forbidden=True)
         if lane_port_hit(norm, self.ctx.lane_ports):
             self.hit("destructive", "filehub_lane", "hub", FILEHUB_LANE_REASON, forbidden=True)
+        lo = lane_other_in_script(norm, self.ctx) or lane_other_in_script(_win_slashes(script), self.ctx)
+        if lo:
+            self.hit("destructive", "lane_other_tree", "hub", LANE_OTHER_REASON, [lo], forbidden=True)
         if not IS_WINDOWS:
             from ..admin_overview import SHARED_ROOT
 

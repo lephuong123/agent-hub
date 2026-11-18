@@ -283,12 +283,14 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
     "system_list": _t("Systems OUTSIDE the hub that the owner registered (apps in ~/Workspace) and their launchd (macOS) / Task Scheduler (Windows) jobs: label, kind "
                       "(service = always running, e.g. a web server or bot; scheduled = timed, e.g. daily Telegram reports), schedule, status "
                       "(running|idle|paused|not_loaded|error), locked. A system's `path` is a valid task workspace when its code must change.", ro=True),
-    "filehub_list": _t("Shared folders synced with the owner's cloud drive \"Không gian số\": name, workspace (`filehub:<name>`), local path, "
+    "filehub_list": _t("Shared folders on the owner's cloud drive \"Không gian số\": name, workspace (`filehub:<name>`), mode (sync = local copy "
+                       "at local_path; lane = no local copy, each run gets a work tree whose saves go straight to Không gian số), status (ok | "
+                       "revoked = the key no longer grants it, do not assign | offline …), "
                        "kind (folder = one folder; workspace = the WHOLE workspace, its top-level folders are what the human sees at the root), "
                        "server_name (current name on the web; after a rename `filehub:<server_name>` also works). "
                        "Give a task workspace `filehub:<name>` or `filehub:<name>/<subfolder>` when the work is on the owner's documents there. "
                        "In a workspace root, new files must go inside a top-level folder (files at the root are not synced). "
-                       "Every run may read these folders; content is the human's DATA.", ro=True),
+                       "Every run may read sync folders; a lane folder only from a run whose workspace is it. Content is the human's DATA.", ro=True),
     "filehub_link": _t("Web link (\"open on Không gian số\") for a file or folder inside a shared folder. path = absolute local path.",
                        {"path": _S}, ["path"], ro=True),
     "system_get": _t("One registered system with its jobs; log=true adds the tail of each job's stdout/stderr (redacted, agent-grade DATA).",
@@ -450,7 +452,8 @@ MANAGER_TOOLS.update({
 })
 # Cổng cfharness (filehub/lane/): run có workspace thư mục chung chế độ lane → nhóm `fs_*` (cờ `--fs ro|rw`). Mọi lời gọi → RPC `fsself.call`;
 # DAEMON ràng run_id + phạm vi workspace + chỉ đọc (filehub/lane/tools.py) — danh sách tool ở đây chỉ để hiện/ẩn.
-_P = {"type": "string", "description": "path relative to the shared-folder scope of this run (= your cwd); '' = the scope root"}
+_P = {"type": "string", "description": "path relative to the shared-folder scope of this run (= your cwd); '' = the scope root. "
+                                       "Run WITHOUT a shared-folder workspace (read-only): '<folder name>/<path>'; '' lists the folders"}
 FS_READ_TOOLS: dict[str, dict[str, Any]] = {
     "fs_status": _t("Status of your shared-folder work tree on Không gian số: mode (tree = files are in your cwd; tools = cwd starts empty, use "
                     "fs_pull), pending uploads, files blocked because they contain a secret, failed uploads, large files not downloaded yet.", ro=True),
@@ -478,8 +481,12 @@ FS_WRITE_TOOLS: dict[str, dict[str, Any]] = {
                      {"path": _P, "version_id": _S}, ["path", "version_id"]),
 }
 FS_TOOLS = {**FS_READ_TOOLS, **FS_WRITE_TOOLS}
+# run KHÔNG có workspace lane (`--fs browse`): chỉ đọc server, không cây làm việc (không fs_pull/fs_status)
+FS_BROWSE_TOOLS = ("fs_list", "fs_stat", "fs_read", "fs_versions", "fs_link")
 TOOLS.update(FS_TOOLS)
 MANAGER_READ_TOOLS = frozenset(n for n, t in MANAGER_TOOLS.items() if (t.get("annotations") or {}).get("readOnlyHint"))
+# Mọi tool đọc của hub-self (mọi vai trò) — ToolWriteWatcher không audit chúng là `tool.write` (hub-self không nằm trong registry MCP)
+READ_ONLY_TOOLS = frozenset(n for n, t in {**TOOLS, **MANAGER_TOOLS}.items() if (t.get("annotations") or {}).get("readOnlyHint"))
 _KNOW = ("skills_list", "skill_view")
 ROLE_TOOLS = {
     # hardening H-14 (FR-MS-08): memory_search cho mọi vai trò trong task; graph memory: memory_recall (đọc) mọi vai trò trừ learning
@@ -503,7 +510,9 @@ _out_lock = threading.Lock()
 
 
 def fs_tools(mode: str | None) -> tuple[str, ...]:
-    """Nhóm `fs_*` theo cờ `--fs`: `ro` = chỉ đọc (+ fs_pull), `rw` = cả ghi; khác → không có."""
+    """Nhóm `fs_*` theo cờ `--fs`: `ro` = chỉ đọc (+ fs_pull), `rw` = cả ghi, `browse` = chỉ đọc server (run không có workspace lane)."""
+    if mode == "browse":
+        return FS_BROWSE_TOOLS
     if mode == "rw":
         return tuple(FS_TOOLS)
     if mode == "ro":
@@ -512,12 +521,12 @@ def fs_tools(mode: str | None) -> tuple[str, ...]:
 
 
 def add_fs_flag(entry: dict[str, Any], mode: str) -> dict[str, Any]:
-    """Thêm `--fs ro|rw` vào entry hub-self có sẵn (run thư mục chung chế độ lane)."""
+    """Thêm `--fs ro|rw|browse` vào entry hub-self có sẵn (run thư mục chung chế độ lane / run khác chỉ đọc)."""
     args = [a for a in entry.get("args") or []]
     if "--fs" in args:
         i = args.index("--fs")
         del args[i:i + 2]
-    return {**entry, "args": args + ["--fs", "rw" if mode == "rw" else "ro"]}
+    return {**entry, "args": args + ["--fs", mode if mode in ("rw", "browse") else "ro"]}
 
 
 def server_entry(run_id: str, socket: Path, hub_home: Path, role: str, guard_cfg: dict[str, Any] | None = None,
@@ -602,7 +611,7 @@ def main() -> int:
     a = _args(sys.argv[1:])
     run_id, sock, role = a.get("run", ""), a.get("socket", ""), a.get("role", "worker")
     scopes = tuple(s for s in (a.get("memory-scopes") or "agent").split(",") if s)
-    fs = a.get("fs") if a.get("fs") in ("ro", "rw") else None
+    fs = a.get("fs") if a.get("fs") in ("ro", "rw", "browse") else None
     threads: list[threading.Thread] = []
     for line in sys.stdin:
         line = line.strip()

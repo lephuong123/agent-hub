@@ -22,6 +22,41 @@ if TYPE_CHECKING:
 READ_RUN_FIELDS = ("id", "agent_id", "kind", "status", "outcome", "task_id", "team_id", "cost_usd", "queued_at", "started_at", "ended_at", "session_id", "parent_run_id")
 
 
+WAIT_TEXT = {
+    "concurrency": "queued: waiting for a free run slot (all {limit} hub run slots are busy) — normal, it starts automatically; not an error",
+    "rate_limit": "queued: waiting for a free run slot — the hub lowered parallel runs to {limit} because Claude usage is near its limit "
+                  "(no rate-limit error happened); it starts automatically",
+    "rate_limit_reset": "waiting for the Claude usage limit to reset (a run hit the limit); retries at {not_before}",
+    "backoff": "waiting to retry at {not_before} after an unsuccessful attempt",
+    "workspace_locked": "queued: its workspace (folder/repo) is held by another run — starts when that run ends",
+    "agent_busy": "queued: the assigned agent is at its concurrent-run limit — starts when it frees up",
+    "agent_paused": "the assigned agent is paused by the owner",
+    "member_limit": "queued: the assignee already has its maximum tasks in progress in this team",
+    "no_assignee": "no agent could be chosen to take it",
+    "no_lead": "the team has no lead to split it",
+    "estop": "emergency stop (ESTOP) is on — nothing starts", "team_estop": "the team's emergency stop is on — nothing starts",
+}
+
+
+def wait_text(hub: Any, t: dict[str, Any]) -> str | None:
+    """Mã `wait_reason` của task → câu tiếng Anh nói rõ task ĐANG CHỜ GÌ (điều phối viên không đoán "rate limit" từ mã thô)."""
+    code = str(t.get("wait_reason") or "")
+    if not code:
+        return None
+    if code.startswith("budget"):
+        return f"daily budget reached ({code.partition(':')[2] or 'hub'}) — starts tomorrow or when the owner raises it"
+    if code.startswith("blocked:"):
+        return f"could not start: {code[8:]}"
+    tpl = WAIT_TEXT.get(code)
+    if tpl is None:
+        return code
+    try:
+        limit = hub.runs.effective_limit()
+    except Exception:  # pragma: no cover
+        limit = None
+    return tpl.format(limit=limit if limit is not None else "?", not_before=t.get("not_before") or "?")
+
+
 def _trunc(v: Any, n: int = 600) -> Any:
     from .service import _trunc as t
 
@@ -153,8 +188,8 @@ class ManagerOps:
         teams = [{"id": t["id"], "name": t.get("name"), "estop": bool(t.get("estop")), "counts": t.get("counts"),
                   "members": [{"agent_id": m.get("agent_id"), "role": m.get("role")} for m in t.get("members") or []]} for t in h.teams.list()]
         wsf = self.svc.ws.row(a["workstream"])["id"] if a.get("workstream") else None
-        open_tasks = [{k: t.get(k) for k in ("id", "title", "team_id", "assignee_agent_id", "status", "wait_reason", "block_reason", "created_by", "updated_at",
-                                             "workstream_id")}
+        open_tasks = [{**{k: t.get(k) for k in ("id", "title", "team_id", "assignee_agent_id", "status", "wait_reason", "block_reason", "created_by",
+                                                "updated_at", "workstream_id")}, "wait": wait_text(h, t)}
                       for t in h.tasks.list(status=["triage", "todo", "ready", "running", "review", "blocked"], limit=40, workstream=wsf)]
         workstreams = [{"id": w["id"], "key": w.get("key"), "title": w["title"], "sprint": w.get("sprint"), "tasks": w["tasks"],
                         "needs_human": w["needs_human"]} for w in self.svc.ws.list("active", limit=30)]
@@ -168,6 +203,7 @@ class ManagerOps:
                 "gates_mode": gates_mode(h.config),
                 "note": "Approvals with routed_to='manager' were delegated to YOU: decide them with approval_decide (or approval_escalate). "
                         "All other approvals are decided ONLY by the human: use ask_owner_permission (approve_action) if one blocks progress. "
+                        "open_tasks[].wait says in words why a task has not started yet — report that, never guess a cause from wait_reason. "
                         "An agent with free_slots=0 is busy: work sent to it waits. Send it to an idle agent of the same kind, or agent_clone one. "
                         "free_slots=null / max_concurrent_runs=null means no limit."}
 
@@ -186,11 +222,12 @@ class ManagerOps:
     def op_task_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
         wsf = self.svc.ws.row(a["workstream"])["id"] if a.get("workstream") else None
         rows = self.hub.tasks.list(team=a.get("team"), status=a.get("status"), assignee=a.get("assignee"), limit=int(a.get("limit") or 30), workstream=wsf)
-        return [{k: t.get(k) for k in ("id", "title", "team_id", "assignee_agent_id", "status", "wait_reason", "block_reason", "result_summary", "created_by",
-                                         "updated_at", "parents", "children", "workstream_id")} for t in rows]
+        return [{**{k: t.get(k) for k in ("id", "title", "team_id", "assignee_agent_id", "status", "wait_reason", "block_reason", "result_summary", "created_by",
+                                            "updated_at", "parents", "children", "workstream_id")}, "wait": wait_text(self.hub, t)} for t in rows]
 
     def op_task_get(self, a: dict[str, Any]) -> dict[str, Any]:
         t = self.hub.tasks.get(str(a.get("id") or ""))
+        t["wait"] = wait_text(self.hub, t)
         t["comments"] = (t.get("comments") or [])[-15:]
         t["runs"] = (t.get("runs") or [])[-10:]
         return t

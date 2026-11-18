@@ -285,8 +285,12 @@ def shared_folders(hub: Any) -> list[dict[str, str]]:
     for f in config_folders(hub.config):
         live = names.get(str(f.get("root_id") or ""), "")
         out.append({"name": str(f["name"]), "path": str(f["local_path"]), "kind": kind_of(f), "server_name": live if live and live != f["name"] else ""})
+    try:
+        browse = bool(hub.config.get("filehub.lane.read_all_runs"))
+    except (KeyError, AttributeError):
+        browse = False
     for f in lane_folders(hub.config):  # cổng cfharness: không bản sao — cây làm việc dựng cho run có workspace `filehub:<tên>`
-        out.append({"name": str(f["name"]), "path": "", "kind": kind_of(f), "server_name": "", "lane": True})
+        out.append({"name": str(f["name"]), "path": "", "kind": kind_of(f), "server_name": "", "lane": True, "browse": browse})
     return out
 
 
@@ -402,7 +406,15 @@ class FilehubService:
             for f in self.folders():
                 if name in aliases_of(f):
                     return f
-        raise NotFound(f"không có thư mục chung '{name}' (cfharness filehub status)")
+        raise self.not_found(name)
+
+    def not_found(self, name: str) -> NotFound:
+        """Lỗi tên thư mục chung sai: liệt kê tên CÓ THẬT (cả chế độ sync lẫn lane) — không chỉ người dùng sang thiết lập đồng bộ cũ."""
+        names = [str(f["name"]) for f in self.all_folders()]
+        if names:
+            return NotFound(f"không có thư mục chung '{name}' — có: " + ", ".join(f"filehub:{n}" for n in names[:20]))
+        return NotFound(f"không có thư mục chung '{name}' — chưa có thư mục chung nào: dán khoá cổng ở Cài đặt › Cổng cfharness "
+                        "(hoặc `cfharness filehub lane setup`)")
 
     def _known_account(self) -> str:
         acc = self.login_state.get("account") or next((f.get("account") for f in self.folders() if f.get("account")), "")
@@ -434,8 +446,7 @@ class FilehubService:
             hits.sort(key=lambda x: -x[0])
             if len(hits) == 1 or hits[0][0] != hits[1][0]:
                 return hits[0][1], hits[0][2]
-        name = body.partition("/")[0]
-        raise NotFound(f"không có thư mục chung '{name}' (cfharness filehub status)")
+        raise self.not_found(body.partition("/")[0])
 
     def folder_by_root(self, root_id: str | None) -> dict[str, Any] | None:
         return next((f for f in self.folders() if f.get("root_id") == root_id), None)
@@ -693,6 +704,7 @@ class FilehubService:
             "relogin_after_import": bool(self.hub.store.state_get("import_filehub")),
             # thư mục chế độ lane (cổng cfharness — không bản sao trên máy): `filehub status` liệt kê cùng thư mục sync
             "lane_folders": [{**f, "mode": "lane"} for f in self.lane.status().get("folders") or []],
+            "lane_configured": bool(self.lane.servers()),
         }
 
     def list(self) -> list[dict[str, Any]]:
@@ -708,6 +720,12 @@ class FilehubService:
             if aliases_of(f):
                 row["aliases"] = aliases_of(f)
             if kind_of(f) == "workspace":
+                row["layout"] = "root = whole workspace; new files must be inside a top-level folder"
+            out.append({**row, "mode": "sync"})
+        for f in self.lane.status().get("folders") or []:  # cổng cfharness: không bản sao trên máy — cây làm việc dựng cho từng run
+            row = {"name": f["name"], "workspace": f["workspace"], "mode": "lane", "kind": f["kind"], "root_id": f.get("root_id"),
+                   "server": f.get("server"), "status": f.get("status"), "server_name": f["name"], "local_path": None}
+            if f["kind"] == "workspace":
                 row["layout"] = "root = whole workspace; new files must be inside a top-level folder"
             out.append(row)
         return out

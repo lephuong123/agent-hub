@@ -12,18 +12,50 @@ Kết quả là DỮ LIỆU từ Không gian số (tên/đường dẫn/nội du
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...errors import Blocked, HubError, NotFound
 from ...redact import redact_str
 from ...termsafe import one_line
-from .client import LaneError, norm_rel
+from .client import LaneError, join_rel, norm_rel
 
 if TYPE_CHECKING:
     from .service import LaneService
     from .workdir import Workdir
 
 READ_OPS = ("fs_status", "fs_list", "fs_stat", "fs_read", "fs_versions", "fs_link", "fs_pull")
+BROWSE_OPS = ("fs_list", "fs_stat", "fs_read", "fs_versions", "fs_link")
+
+
+class _NoTree:
+    def exists(self, rel: str) -> bool:
+        return False
+
+
+class Browse:
+    """Đọc thư mục chung chế độ lane từ run KHÔNG có workspace lane (plan-cloud-files §7.4 "mọi run được đọc"): không cây làm việc, chỉ đọc
+    server, phạm vi = cả thư mục chung (gốc đã cấp); đường dẫn agent gửi/nhận có tiền tố `<tên thư mục>/`."""
+
+    browse = True
+    read_only = True
+    revoked = False
+    sub = ""
+    mode = "browse"
+
+    def __init__(self, t: dict[str, Any]) -> None:
+        self.folder, self.server, self.root = str(t["folder"]), str(t["server"]), str(t["root"])
+        self.kind = str(t.get("kind") or "folder")
+        self.path = Path("/nonexistent/cfharness-lane-browse")  # không có cây: đường dẫn tuyệt đối luôn bị từ chối (rel_arg)
+        self.read_paths: set[str] = set()
+        self.fs = _NoTree()
+
+    def remote(self, rel: str) -> str:
+        return join_rel(self.sub, rel)
+
+    def rel_of(self, path: str | None) -> str | None:
+        return path or None
+
 WRITE_OPS = ("fs_write", "fs_mkdir", "fs_move", "fs_delete", "fs_restore")
 ITEM_KEYS = ("path", "type", "size", "mtime", "version_no", "version_id", "rev", "locked")
 
@@ -31,6 +63,8 @@ ITEM_KEYS = ("path", "type", "size", "mtime", "version_no", "version_id", "rev",
 def _item(wd: "Workdir", it: dict[str, Any]) -> dict[str, Any]:
     out = {k: it.get(k) for k in ITEM_KEYS if it.get(k) is not None}
     rel = wd.rel_of(str(it.get("path") or "")) if wd.sub else str(it.get("path") or "")
+    if getattr(wd, "browse", False):  # run không có workspace lane: đường dẫn kèm tên thư mục chung để gọi lại được
+        rel = f"{wd.folder}/{rel}" if rel else wd.folder
     out["path"] = one_line(rel or "", 1024)
     return out
 
@@ -60,6 +94,8 @@ def rel_arg(wd: "Workdir", v: Any, *, allow_root: bool = True) -> str:
 async def call(svc: "LaneService", wd: "Workdir", op: str, args: dict[str, Any], *, read_only: bool) -> Any:
     if op not in READ_OPS + WRITE_OPS:
         raise NotFound(f"không có tool '{op}'")
+    if getattr(wd, "browse", False) and op not in BROWSE_OPS:
+        raise Blocked(f"{op}: run này không có workspace thư mục chung — chỉ đọc được (fs_list/fs_stat/fs_read/fs_versions/fs_link)")
     if op in WRITE_OPS and (read_only or wd.read_only):
         raise Blocked(f"{op}: run chỉ đọc — không ghi được vào thư mục chung")
     if wd.revoked:
@@ -116,4 +152,4 @@ async def call(svc: "LaneService", wd: "Workdir", op: str, args: dict[str, Any],
     return await svc.write_op(wd, op, args)
 
 
-__all__ = ["call", "READ_OPS", "WRITE_OPS", "rel_arg"]
+__all__ = ["call", "READ_OPS", "WRITE_OPS", "BROWSE_OPS", "Browse", "rel_arg"]

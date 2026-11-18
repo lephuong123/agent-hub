@@ -686,6 +686,17 @@ class RunManager:
                 env_extra = {**env_extra, "CFHARNESS_RUN_ID": run_id}
             ro = bool(opts.get("read_only")) or _agent_read_only(agent)
             servers[_HS] = add_fs_flag(servers[_HS], "ro" if ro else "rw")
+        elif _lane_browse(hub, run, opts):  # plan-cloud-files §7.4: run khác vẫn ĐỌC được thư mục chung chế độ lane (`fs_*` chỉ đọc server)
+            from .mcp_server.hub_self import SERVER_NAME as _HS, add_fs_flag, server_entry as _hs_entry
+
+            if _HS not in servers:
+                from .learning.runtime import memory_scopes as _ms
+
+                servers[_HS] = _hs_entry(run_id, hub.paths.socket, hub.paths.home, "knowledge", guard_cfg, memory_scopes=_ms(hub, agent))
+                allowed_mcp.append(_HS)
+                tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + [f"mcp__{_HS}"]))
+                env_extra = {**env_extra, "CFHARNESS_RUN_ID": run_id}
+            servers[_HS] = add_fs_flag(servers[_HS], "browse")
         if valid_req_id(run.get("req_id")):  # L2: hook guard/observe gửi kèm req_id → guard.check cùng mã với lệnh tạo run
             env_extra = {**env_extra, ENV_REQ_ID: str(run["req_id"])}
         mcp_path = rt_dir / "mcp.json"
@@ -1603,6 +1614,19 @@ def _in_agent_workspaces(cwd: Path, home: Path) -> bool:
     try:
         return Path(cwd).resolve().is_relative_to((Path(home) / "workspaces").resolve())
     except OSError:  # pragma: no cover
+        return False
+
+
+def _lane_browse(hub: Any, run: dict[str, Any], opts: dict[str, Any]) -> bool:
+    """Run làm việc (không review/eval/curator/trích xuất…) không có workspace lane, khi có thư mục chung chế độ lane → `fs_*` chỉ đọc."""
+    from .learning.review import NON_WORK_KINDS
+
+    if opts.get("learning_review") or opts.get("eval_overlay") or run.get("kind") in NON_WORK_KINDS:
+        return False
+    lane = getattr(getattr(hub, "filehub", None), "lane", None)
+    try:
+        return bool(lane is not None and lane.browse_enabled())
+    except Exception:  # pragma: no cover — không bao giờ làm hỏng spawn vì phần đọc thêm này
         return False
 
 

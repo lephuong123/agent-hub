@@ -44,6 +44,7 @@ log = logging.getLogger("cfharness.filehub.lane")
 
 TMP_PREFIX = ".lane-tmp-"
 STATE_VERSION = 1
+HELD_SHOW = 50  # lô xoá đang giữ: số đường dẫn hiện cho người (phần còn lại "và N mục nữa")
 # steer: câu CỐ ĐỊNH tiếng Anh; <rel> đã làm sạch một dòng (nội dung từ Không gian số là DỮ LIỆU)
 STEER_CHANGED = "[cfharness] The human changed {rel} on Không gian số just now. Re-Read it before editing."
 STEER_DELETED = "[cfharness] The human deleted {rel} on Không gian số just now. Do not recreate it unless the task requires it."
@@ -67,6 +68,12 @@ STEER_RMDIR_NOT_EMPTY = ("[cfharness] Could not delete folder {rel} on Không gi
 STEER_DELETE_REFUSED = ("[cfharness] A person did NOT approve deleting {n} items in the shared folder; they were restored in your work tree. "
                         "Do not delete them again unless asked.")
 LAZY_NOTE = "large files listed but not downloaded (empty placeholders); call fs_pull before using them"
+
+
+def _ancestors(rel: str) -> list[str]:
+    """`a/b/c.md` → [`a`, `a/b`] (gần gốc trước)."""
+    parts = rel.split("/")[:-1]
+    return ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
 
 
 def _hhmm(now: float | None = None) -> str:
@@ -977,6 +984,11 @@ class Workdir:
     def held_deletes(self) -> list[str]:
         return sorted(r for r, e in self.pending.items() if e.get("held"))
 
+    def held_view(self, limit: int = HELD_SHOW) -> dict[str, Any]:
+        """Lô xoá đang giữ cho NGƯỜI quyết: tổng + ≤ `limit` đường dẫn đầu (thẻ web, trang xác nhận, event)."""
+        held = self.held_deletes()
+        return {"count": len(held), "paths": [one_line(x, 300) for x in held[:limit]]}
+
     async def _mass_delete_gate(self) -> None:
         """Chặn xoá hàng loạt: số lệnh xoá chưa được duyệt + số đã đẩy từ lần duyệt gần nhất > `max_delete_batch` → GIỮ mọi lệnh xoá chưa
         duyệt (`held`), báo người MỘT lần (`filehub.blocked{reason: mass_delete}`) + steer agent. Không bao giờ tự quyết: người
@@ -994,7 +1006,7 @@ class Workdir:
             self.pending[r]["held"] = True
         if not already:
             self.svc.publish("filehub.blocked", self, {"root_id": self.root, "reason": "mass_delete", "count": len(dels), "limit": limit,
-                                                       "paths": [one_line(x, 300) for x in sorted(dels)[:20]], "lane": True})
+                                                       "paths": [one_line(x, 300) for x in sorted(dels)[:HELD_SHOW]], "lane": True})
             self.steered.discard("massdel")
             await self.steer("massdel", STEER_MASS_DELETE.format(n=len(dels)))
 
@@ -1131,8 +1143,14 @@ class Workdir:
         self._pushed(rel, item, sha, is_file=bool(is_file), e=e)
 
     def _pushed(self, rel: str, item: dict[str, Any], sha: str, *, is_file: bool, e: dict[str, Any]) -> None:
+        before = (self.base.get(rel) or {}).get("version_id") if is_file else None
+        # thư mục cha server tạo kèm (`parents=1`) mà trước đó chưa có → hoàn tác xoá luôn (nếu còn rỗng)
+        parents = [] if is_file else [a for a in _ancestors(rel) if a not in self.base]
         self.base[rel] = self._base_of(item, sha)
-        self._op("modified" if is_file else "added", rel, **({"conflict_of": e["conflict_of"]} if e.get("conflict_of") else {}))
+        # `before`/`after` (version_id) = dữ liệu hoàn tác (`run revert`: restore phiên bản trước / xoá tệp run tạo)
+        self._op("modified" if is_file else "added", rel, after=item.get("version_id"), **({"before": before} if before else {}),
+                 **({"parents": parents} if parents else {}),
+                 **({"conflict_of": e["conflict_of"]} if e.get("conflict_of") else {}))
         self.pending.pop(rel, None)
         self.failed.pop(rel, None)
         self.last_pushed = rel
@@ -1159,11 +1177,12 @@ class Workdir:
             return
         c = self.svc.client(self.server)
         if_rev = e.get("if_rev") if e.get("if_rev") is not None else (int(b.get("rev") or 0) or None)
+        res: dict[str, Any] = {}
         try:
-            await c.delete(self.root, self.remote(rel), if_rev=if_rev, agent=self.agent_id, run=self.run_id, idem=self._idem(rel))
+            res = await c.delete(self.root, self.remote(rel), if_rev=if_rev, agent=self.agent_id, run=self.run_id, idem=self._idem(rel)) or {}
         except LaneError as ex:
             if ex.lane_code == "not_found":
-                pass
+                res = {"gone": True}  # đã bị người/bên khác xoá trước — không phải thay đổi của run (hoàn tác không khôi phục)
             elif ex.lane_code == "not_empty" and folder:
                 await self._rmdir_not_empty(rel)
                 return
@@ -1177,7 +1196,9 @@ class Workdir:
                 raise
         for k in [k for k in self.base if k == rel or k.startswith(rel + "/")]:
             self.base.pop(k, None)
-        self._op("deleted", rel)
+        self._op("deleted", rel, **({"trash": str(res["trash_batch"])} if res.get("trash_batch") else {}),
+                 **({"gone": True} if res.get("gone") else {}), **({"folder": True} if b.get("type") == "folder" else {}),
+                 **({"before": b["version_id"]} if b.get("version_id") else {}))
         self.pending.pop(rel, None)
         self.del_count += 1
 
@@ -1238,7 +1259,8 @@ class Workdir:
                 return
             raise
         self.base[dst] = {**self.base.pop(src), **{k: v for k, v in self._base_of(item).items() if v is not None and k != "sha256"}}
-        self._op("renamed", dst, **{"from": src})
+        self._op("renamed", dst, **{"from": src}, after=self.base[dst].get("version_id"), rev=int(item.get("rev") or 0) or None,
+                 **({"folder": True} if self.base[dst].get("type") == "folder" else {}))
         self.pending.pop(src, None)
         self.pending.pop(dst, None)
 
@@ -1373,7 +1395,8 @@ class Workdir:
     def info(self) -> dict[str, Any]:
         return {"tree": self.tree, "run_id": self.run_id, "agent_id": self.agent_id, "folder": self.folder, "sub": self.sub, "mode": self.mode,
                 "pending": len(self.pending), "blocked": len(self.blocked), "failed": len(self.failed), "lazy": len(self.lazy),
-                "parked": self.parked, "revoked": self.revoked, "held": len(self.held_deletes()), "root_id": self.root}
+                "parked": self.parked, "revoked": self.revoked, "held": len(self.held_deletes()), "held_paths": self.held_view()["paths"],
+                "root_id": self.root}
 
 
 __all__ = ["Workdir", "conflict_name", "STEER_CHANGED", "STEER_CONFLICT", "STEER_SECRET", "STEER_LOCKED", "TMP_PREFIX"]
