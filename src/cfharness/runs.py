@@ -36,6 +36,7 @@ from .cost_guard import COST_BASIS_ESTIMATED, estimated_run_cost, flag_once, man
 from .errors import Blocked, HubError, NotFound
 from .events import TERMINAL_RUN_EVENTS, HubEvent, make_event
 from .logs import run_logger, set_run_context
+from .trace import ENV_REQ_ID, REQ_CTX, current_req_id, new_req_id, set_ctx as set_trace_ctx, valid_req_id
 from .prompt import build_system_prompt, prompt_hash
 from .runtime import AgentRuntime, RunHandle, RunSpec, RuntimeError_, make_runtime
 from .store import now_iso
@@ -340,6 +341,8 @@ class RunManager:
             "team_id": team_id,
             "run_opts": run_opts or None,
             "max_runtime_s": max_runtime_s,
+            # L2: mã yêu cầu của lệnh tạo run (resume/continue = lệnh mới → mã mới); tạo ngoài mọi lượt (khôi phục…) → mã riêng
+            "req_id": current_req_id() or new_req_id(),
         }
         self.store.insert_run(row)
         try:
@@ -691,6 +694,8 @@ class RunManager:
                 tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + [f"mcp__{_HS}"]))
                 env_extra = {**env_extra, "CFHARNESS_RUN_ID": run_id}
             servers[_HS] = add_fs_flag(servers[_HS], "browse")
+        if valid_req_id(run.get("req_id")):  # L2: hook guard/observe gửi kèm req_id → guard.check cùng mã với lệnh tạo run
+            env_extra = {**env_extra, ENV_REQ_ID: str(run["req_id"])}
         mcp_path = rt_dir / "mcp.json"
         _write_json_0600(mcp_path, {"mcpServers": servers})
         sp_path = None
@@ -862,6 +867,11 @@ class RunManager:
         hub = self.hub
         run_id, agent_id = ar.run_id, ar.agent_id
         set_run_context(run_id, agent_id)  # H-20: mọi log trong task này có run_id/agent_id
+        # L2: event/log/audit trong task của run mang req_id của run (task riêng → không cần reset); run trước v28 → không có mã
+        if valid_req_id(run.get("req_id")):
+            set_trace_ctx(run["req_id"], channel="run")
+        else:
+            REQ_CTX.set(None)
         rlog = run_logger(log, run_id, agent_id, task_id=ar.task_id)
         spec: RunSpec | None = None
         lane_run = False

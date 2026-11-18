@@ -30,11 +30,27 @@ INVALID_PARAMS = -32602
 
 
 class RpcError(Exception):
-    def __init__(self, code: int, message: str, data: Any = None) -> None:
+    def __init__(self, code: int, message: str, data: Any = None, req_id: str | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.data = data
+        self.req_id = req_id  # L2: mã yêu cầu daemon trả trong `_meta.req_id` — CLI in "(mã yêu cầu r_…)" khi lỗi
+
+
+def response_req_id(msg: Any, sent: str | None = None) -> str | None:
+    """req_id của phản hồi: `_meta.req_id` (daemon trả, đã kiểm định dạng) → không có thì req_id đã gửi."""
+    from .trace import valid_req_id
+
+    meta = msg.get("_meta") if isinstance(msg, dict) else None
+    rid = meta.get("req_id") if isinstance(meta, dict) else None
+    return rid if valid_req_id(rid) else sent
+
+
+def raise_for(msg: dict[str, Any], sent: str | None = None) -> None:
+    if "error" in msg:
+        e = msg["error"] if isinstance(msg["error"], dict) else {}
+        raise RpcError(e.get("code", SYSTEM_ERROR), e.get("message", "lỗi"), e.get("data"), req_id=response_req_id(msg, sent))
 
 
 class DaemonUnavailable(Exception):
@@ -77,10 +93,12 @@ def check_socket_owner(sock_path: Path | str) -> None:
 
 def with_auth(sock_path: Path | str, params: dict[str, Any] | None) -> dict[str, Any]:
     """Gắn token người (nếu đọc được) vào params — dùng chung cho mọi client của người.
-    Có token thì kiểm chủ socket trước (`check_socket_owner`) — không bao giờ gửi token tới socket của user khác."""
+    Có token thì kiểm chủ socket trước (`check_socket_owner`) — không bao giờ gửi token tới socket của user khác.
+    L2: gắn cả `_trace.req_id` (đang bind trong contextvar, hoặc sinh mới) — `trace.outgoing`."""
     from .auth import AUTH_PARAM, load_token
+    from .trace import outgoing
 
-    p = dict(params or {})
+    p = outgoing(params)
     tok = load_token(sock_path)
     if tok and AUTH_PARAM not in p:
         check_socket_owner(sock_path)
@@ -93,6 +111,7 @@ class RpcClient:
         self.sock_path = sock_path
         self.timeout = timeout
         self._id = 0
+        self.last_req_id: str | None = None
 
     def _connect(self) -> socket.socket:
         try:
@@ -107,17 +126,19 @@ class RpcClient:
             s.settimeout(timeout)
         try:
             self._id += 1
-            s.sendall(encode({"jsonrpc": "2.0", "id": self._id, "method": method, "params": with_auth(self.sock_path, params)}))
+            p = with_auth(self.sock_path, params)
+            sent = p["_trace"]["req_id"]
+            self.last_req_id = sent
+            s.sendall(encode({"jsonrpc": "2.0", "id": self._id, "method": method, "params": p}))
             f = s.makefile("rb")
             line = f.readline()
             if not line:
-                raise RpcError(SYSTEM_ERROR, "daemon đóng kết nối không trả lời")
+                raise RpcError(SYSTEM_ERROR, "daemon đóng kết nối không trả lời", req_id=sent)
             msg = json.loads(line)
         finally:
             s.close()
-        if "error" in msg:
-            e = msg["error"]
-            raise RpcError(e.get("code", SYSTEM_ERROR), e.get("message", "lỗi"), e.get("data"))
+        self.last_req_id = response_req_id(msg, sent)
+        raise_for(msg, sent)
         return msg.get("result")
 
     def subscribe(self, params: dict[str, Any]) -> Iterator[dict[str, Any]]:
@@ -129,9 +150,7 @@ class RpcClient:
             s.sendall(encode({"jsonrpc": "2.0", "id": self._id, "method": "events.subscribe", "params": params}))
             f = s.makefile("rb")
             first = json.loads(f.readline() or b"{}")
-            if "error" in first:
-                e = first["error"]
-                raise RpcError(e.get("code", SYSTEM_ERROR), e.get("message", "lỗi"), e.get("data"))
+            raise_for(first)
             yield {"subscribed": first.get("result")}
             for line in f:
                 msg = json.loads(line)

@@ -64,6 +64,8 @@ class RunContextFilter(logging.Filter):
 
 _PROC = "daemon"  # tên tiến trình ghi log (daemon|web|mcp|cli|helper) — đặt trong setup_logging
 CONTEXT_FIELDS = ("run_id", "agent_id", "task_id", "team_id", "req_id", "channel")
+# L2: trường METADATA của access log RPC (`cfharness.rpc`, daemon._access_log) — chỉ id/tên/số, không bao giờ params/kết quả
+EXTRA_FIELDS = ("event", "method", "via", "duration_ms", "outcome", "code", "reason")
 
 
 class JsonFormatter(logging.Formatter):
@@ -80,6 +82,10 @@ class JsonFormatter(logging.Formatter):
         for k in CONTEXT_FIELDS:
             v = getattr(record, k, None)
             if v:
+                d[k] = v
+        for k in EXTRA_FIELDS:
+            v = getattr(record, k, None)
+            if v is not None and isinstance(v, (str, int, float)):
                 d[k] = v
         if record.exc_info:
             d["exc"] = self.formatException(record.exc_info)
@@ -220,6 +226,7 @@ def setup_logging(logs_dir: Path, level: int = logging.INFO, *, max_bytes: int =
     _PROC = proc
     logs_dir.mkdir(parents=True, exist_ok=True)
     from .redact import SecretLogFilter
+    from .trace import TraceFilter
 
     path = logs_dir / filename
     lg = logging.getLogger("cfharness")
@@ -230,6 +237,7 @@ def setup_logging(logs_dir: Path, level: int = logging.INFO, *, max_bytes: int =
     h = _file_handler(path, proc, max_bytes=max_bytes, backup_count=backup_count, max_age_days=max_age_days, shared=shared)
     h.setFormatter(JsonFormatter())
     h.addFilter(RunContextFilter())
+    h.addFilter(TraceFilter())  # L2: req_id/channel của lượt xử lý hiện tại (trace.py)
     h.addFilter(SecretLogFilter())
     lg.addHandler(h)
     root = logging.getLogger()

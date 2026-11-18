@@ -41,6 +41,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from ..trace import traced
 from ..errors import Blocked, HubError
 from ..events import HubEvent, make_event
 from ..logs import RunLogger, run_logger
@@ -787,6 +788,7 @@ class TaskDispatcher:
                     log.exception("không trả được claim của task %s", t["id"])
             raise
 
+    @traced("dispatcher")  # L2: điểm vào nội bộ → req_id mới (cha = mã đang bind)
     def _submit_claimed(
         self, t: dict[str, Any], agent_id: str, *, kind: str, from_status: str, to_status: str, prompt: str, json_schema: dict | None,
         read_only: bool, retry: dict[str, Any] | None, parent_run: dict[str, Any] | None, hub_self: str, now: str,

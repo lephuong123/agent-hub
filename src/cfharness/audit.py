@@ -52,10 +52,11 @@ class AuditLog:
         if len(payload) > MAX_DATA_CHARS:
             payload = json.dumps({"truncated": True, "head": payload[:MAX_DATA_CHARS]}, ensure_ascii=False)
         from .store import now_iso
+        from .trace import current_req_id
 
         cur = self.store.conn.execute(
-            "INSERT INTO audit_log (ts, kind, actor, channel, agent_id, run_id, target, summary, data) VALUES (?,?,?,?,?,?,?,?,?)",
-            (now_iso(), kind, actor, channel, agent_id, run_id, target, self.mask(summary or "")[:500] or None, payload),
+            "INSERT INTO audit_log (ts, kind, actor, channel, agent_id, run_id, target, summary, data, req_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (now_iso(), kind, actor, channel, agent_id, run_id, target, self.mask(summary or "")[:500] or None, payload, current_req_id()),
         )
         for tap in self.taps:
             try:

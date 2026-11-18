@@ -31,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..trace import traced
 from .. import auth as _auth
 from ..errors import Blocked, Conflict, HubError, NotFound
 from ..events import TERMINAL_RUN_EVENTS, HubEvent, iso, make_event
@@ -1081,6 +1082,7 @@ class ManagerService:
         w = self.ws.maybe(wid) if wid else None
         return self._new_conv(HEARTBEAT_CHANNEL, aid, f"heartbeat · {self.ws.label(w)}" if w else "heartbeat", workstream_id=wid if w else None)
 
+    @traced("manager.tick")  # L2: điểm vào nội bộ → req_id mới (cha = mã đang bind)
     def _tick(self, aid: str, tk: dict[str, Any], *, reason: str, open_work: int) -> dict[str, Any]:
         cap = int(self.cfg("max_pending_events", 40))
         # MỘT luồng mỗi lượt (luồng của sự kiện cũ nhất): sự kiện luồng khác chờ lượt sau (khoá chống chồng giữ một run nhịp mỗi lúc)

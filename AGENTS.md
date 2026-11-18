@@ -792,7 +792,14 @@ Xoá trong thư mục chung = `write` (chỉ báo sau run). Event filehub chỉ 
 | `logs.py` | `setup_logging(proc, filename, shared)` JSONL mọi tiến trình (daemon `hub.log`, web `web.jsonl`, MCP `mcp.jsonl`), handler root cho thư viện (không lặp), che secret; `LevelController`/`level_loop` (config `logs.level|levels` + level tạm `hub_state logs.temp_levels`); `install_crash_handlers` (excepthook, faulthandler `logs/faults.log`, SIGUSR1), `asyncio_exception_handler`, `ERROR_COUNTS` |
 | `logs_rpc.py` | RPC `logs.levels|level` (HUMAN_ONLY, `logs.level` tự audit), CLI `cfharness logs level` (∈ HUB_HUMAN_ONLY_CLI) |
 | `aiotasks.py` | `track(task, keep)` / `spawn(coro)`: tác vụ nền "bắn rồi quên" có log lỗi — dùng thay cho `keep.add(t); t.add_done_callback(keep.discard)` |
+| `trace.py` | L2: mã yêu cầu `req_id` (`r_<ULID>`), contextvar `REQ_CTX` {req_id, parent_req_id, channel, principal}, `bind`/`child`/`traced` (điểm vào nội bộ: chat, nhịp điều phối viên, lịch, dispatcher, auto-resume), `outgoing` (client gắn `params._trace`), `accept` (daemon: chỉ nhận đúng định dạng), `TraceFilter` (log). Daemon trả `_meta.req_id` trong MỌI phản hồi (`RpcError.req_id`, CLI in "mã yêu cầu"); access log `cfharness.rpc` (đọc = DEBUG, ghi/lỗi = INFO, denied/`rpc.slow` = WARNING; `logs.slow_rpc_ms`) |
 
 Bất biến: log là METADATA — không bao giờ ghi prompt, trả lời, input/output tool, diff, giá trị secret (kể cả DEBUG). Chỉ đổi level được cho
 `cfharness[.x]` + `logs.LIB_LOGGERS` (không httpx/urllib3). Listener bus lỗi không được làm hỏng `publish`. Tiến trình mới chạy lâu → `setup_process_logging`
 (lỗi IO bỏ qua). Test: `tests/test_logging_l1.py` (fixture trả lại trạng thái logging toàn cục — test gọi `setup_logging` phải dùng nó).
+req_id (L2): CHỈ là mã đối chiếu — client/agent tự khai được, nên không bao giờ dùng để quyết định quyền/danh tính/chống trùng; daemon kiểm định dạng
+chặt (dài đúng 28, Crockford HOA) và pop `_trace` trước handler. Migration v28: `runs.req_id`, `audit_log.req_id`, `events.req_id`. Run luôn có req_id
+(lệnh tạo, hoặc mã riêng khi tạo ngoài mọi lượt); task `_run` bind req_id của run → event/log/audit của run cùng mã; env `CFHARNESS_REQ_ID` cho `claude`
+→ hook guard gửi kèm `guard.check`. `HubEvent.req_id` tuỳ chọn (`Hub.publish` điền). Access log chỉ metadata (`logs.EXTRA_FIELDS`) — không params/kết quả;
+method chờ lâu theo thiết kế → `daemon.SLOW_EXEMPT`. Điểm vào nội bộ mới tạo run → `@trace.traced("<kênh>")`. OTel: trace_id = băm req_id của run,
+thuộc tính span run theo `otel.RUN_SPAN_KEYS`. Test: `tests/test_trace_id.py`.

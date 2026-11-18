@@ -62,7 +62,9 @@ class DaemonCaller:
 
     def __call__(self, method: str, params: dict[str, Any]) -> Any:
         from ..rpc import DaemonUnavailable, RpcClient
+        from ..trace import outgoing
 
+        params = outgoing(params)  # L2: một req_id cho lời gọi tool — lần thử lại sau khi tự khởi động daemon dùng CÙNG mã
         try:
             return RpcClient(self.paths.socket, timeout=120).call(method, params)
         except DaemonUnavailable:

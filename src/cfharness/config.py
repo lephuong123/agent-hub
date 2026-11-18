@@ -263,6 +263,7 @@ DEFAULTS: dict[str, Any] = {
         "max_age_days": 30,
         "level": "info",
         "levels": {},
+        "slow_rpc_ms": 2000,  # L2: lời gọi RPC chậm hơn → WARNING `rpc.slow` trong hub.log (0 = tắt)
     },
     "recovery": {
         "auto_resume": True,  # Q-09: daemon restart → dừng-và-resume tự động (trừ waiting_human)

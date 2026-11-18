@@ -15,6 +15,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - `cfharness logs level` xem level log đang áp dụng; `cfharness logs level cfharness.guard debug --for 30m` bật DEBUG tạm cho một phần hub, tự về mức cũ khi hết giờ — không cần khởi động lại daemon. Đổi lâu dài: `cfharness config set logs.level …` (có hiệu lực ngay).
 - Lỗi trước đây chết im lặng giờ được ghi lại: tác vụ nền lỗi, lỗi trong thread, lỗi không ai bắt, listener event lỗi (không còn làm hỏng việc phát event). Daemon treo: `cfharness daemon dump-stacks` ghi stack mọi thread vào `logs/faults.log`.
 - `web.log`, `update.out`, `update.log`, `import-job.out` được xoay vòng khi quá `logs.max_bytes`.
+- Mỗi lệnh (CLI, web, TUI, MCP, Telegram/Slack, lịch, điều phối viên) có một mã yêu cầu `r_…` đi theo suốt: dòng audit, run, event, quyết định guard và log đều mang cùng mã. Lỗi từ CLI in kèm `(mã yêu cầu r_…)` để tra trong `logs/hub.log`. `hub.log` có thêm một dòng cho mỗi lời gọi RPC (method, thời lượng, kết quả — không có nội dung); lời gọi chậm hơn `logs.slow_rpc_ms` (mặc định 2000 ms) được cảnh báo `rpc.slow`. Daemon cập nhật lên DB phiên bản 28 (chỉ thêm cột) (L2).
 
 ---
 

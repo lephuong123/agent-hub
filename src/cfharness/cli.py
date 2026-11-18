@@ -1094,10 +1094,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return int(args.fn(ctx) or 0)
     except RpcError as e:
+        rid = getattr(e, "req_id", None)
         if ctx.json:
-            print(json.dumps({"error": {"code": e.code, "message": e.message, "data": e.data}}, ensure_ascii=False, default=str))
+            err = {"code": e.code, "message": e.message, "data": e.data, **({"req_id": rid} if rid else {})}
+            print(json.dumps({"error": err}, ensure_ascii=False, default=str))
         else:
-            report_error(e.message, code=e.code, data=e.data)
+            # L2: mã yêu cầu để tra log/audit (`hub.log` trường req_id) — chỉ là mã đối chiếu
+            report_error(e.message + (f" (mã yêu cầu {rid})" if rid else ""), code=e.code, data=e.data)
         return exit_code_for(e.code)
     except DaemonUnavailable as e:
         report_error(str(e), fix=th.DAEMON_FIX)

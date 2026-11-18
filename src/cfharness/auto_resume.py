@@ -34,6 +34,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from .trace import traced
 from .errors import HubError
 from .events import HubEvent, make_event
 
@@ -245,6 +246,7 @@ class AutoResumer:
             h.cancel()
         self._handles.clear()
 
+    @traced("auto_resume")  # L2: điểm vào nội bộ → req_id mới (cha = mã đang bind)
     def fire(self, run_id: str) -> dict[str, Any] | None:
         self._handles.pop(run_id, None)
         self._persist(run_id, None)
