@@ -10,6 +10,15 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+- Cổng cfharness: hoàn tác run làm việc trên thư mục chung (`cfharness run revert <run>`, nút "Hoàn tác trên Không gian số" ở trang run) —
+  khôi phục phiên bản trước run, lấy lại tệp run xoá từ thùng rác, chuyển tệp run tạo vào thùng rác, đổi tên lại; từ chối khi tệp đã bị
+  sửa tiếp sau run. Run cũ (trước bản này) vẫn chỉ khôi phục được trên Không gian số.
+- Telegram/Slack: nút "Cho xoá"/"Không xoá" cho lô xoá hàng loạt đang giữ của cổng cfharness (2 bước, bước 2 liệt kê danh sách hiện tại).
+- Cổng cfharness: mọi run (kể cả run không làm trong thư mục chung) đọc được thư mục chung chế độ cổng qua tool đọc `fs_list`/`fs_read`…
+  (tắt: `filehub.lane.read_all_runs: false`); run không đọc/ghi được cây làm việc của run khác; dải "cfharness đang làm việc" trên Không gian
+  số vẫn giữ khi run chờ bạn duyệt.
+- Sửa test chập chờn của nhịp điều phối viên (mốc nhịp đầu tiên lệch mili-giây → bỏ lượt kiểm việc).
+
 ---
 
 ## v0.2.19 — 2026-11-18
