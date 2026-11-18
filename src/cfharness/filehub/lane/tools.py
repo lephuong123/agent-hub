@@ -138,7 +138,7 @@ async def call(svc: "LaneService", wd: "Workdir", op: str, args: dict[str, Any],
     if op == "fs_link":
         rel = rel_arg(wd, args.get("path"))
         it = await c.stat(wd.root, wd.remote(rel)) if rel else {}
-        srv = svc.fh.server()
+        srv = svc.fh.server(wd.server)
         if not srv:
             return {"path": rel, "url": None}
         if not rel:
