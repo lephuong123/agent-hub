@@ -193,8 +193,9 @@ data: {"root":"6f1c…","op":"update","type":"file","id":"0b7e…","path":"Báo 
 - `op: acl` hoặc mục rời khỏi phạm vi nhìn thấy → `{"op":"acl","gone":true,…}`: hub `stat`/`list` lại `path` (= thư mục gần nhất
   CÒN thấy được – không lộ tên mới của mục vô hình; `""` = gốc).
 - Mục agent CHƯA TỪNG thấy (trong thư mục vô hình, khớp mẫu loại trừ, Claude tắt…) → KHÔNG có khung nào (không id / rev / thời điểm).
-  `gone` chỉ phát khi mục thấy được TRƯỚC thay đổi (chỗ cũ của move / tên cũ của rename thấy được; dòng `acl` của thư mục có cha còn
-  thấy được). `from_path` = `null` khi tên / chỗ cũ không thấy được với agent (vd. đổi tên từ `.env`).
+  `gone` chỉ phát khi mục thấy được TRƯỚC thay đổi (chỗ cũ của move / tên cũ của rename thấy được; dòng `acl`: thư mục thấy được ngay
+  trước giao dịch đổi quyền; mục đã bị dọn hẳn: thấy được lúc còn trong Thùng rác). `from_path` = `null` khi tên / chỗ cũ không thấy
+  được với agent (vd. đổi tên từ `.env`).
 - `event: reset` `{"root": "…", "reason": "compacted|acl|restored"}` — cursor quá cũ (journal đã nén, > 30 ngày) hoặc thay đổi hàng loạt:
   hub `list?recursive=1` lại gốc đó rồi nối luồng bằng `cursor` của lượt list.
 - `event: root_revoked` `{"root": "…"}` · `event: key_revoked` (rồi đóng) · `event: replaced` (luồng thứ 3 mở → luồng cũ nhất bị đóng)
