@@ -192,9 +192,15 @@ class FilehubService:
     def enabled(self) -> bool:
         return bool(self.cfg("enabled"))
 
-    def server(self) -> str:
-        """URL web của Không gian số (link "Mở trên Không gian số" — `fs_link`, `filehub.link`); không phải địa chỉ cổng."""
-        return str(self.cfg("server") or "").rstrip("/")
+    def server(self, lane_server: str | None = None) -> str:
+        """URL web của Không gian số (link "Mở trên Không gian số" — `fs_link`, `filehub.link`); không phải địa chỉ cổng. `filehub.server`
+        người đặt thắng; khi trống hoặc do hub tự đặt từ `hello.server.public_url` (§C.3) → public_url của chính cổng `lane_server` (nhiều
+        cổng: mỗi cổng link về web của nó)."""
+        cur = str(self.cfg("server") or "").rstrip("/")
+        lane = getattr(self, "lane", None)
+        if lane is None or (cur and cur != lane.server_auto()):
+            return cur
+        return lane.public_url(lane_server) or cur
 
     def all_folders(self) -> list[dict[str, Any]]:
         return all_folders(self.hub.config)
@@ -302,7 +308,7 @@ class FilehubService:
             rel = norm_rel(path)
         except LaneError as e:
             raise HubError(f"đường dẫn không hợp lệ: {e.message}") from None
-        srv = self.server()
+        srv = self.server(server)
         if not rel:
             return {"folder": folder, "rel": "", "url": f"{srv}/files" if srv and kind == "workspace" and not sub else None}
         try:

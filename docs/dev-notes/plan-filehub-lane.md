@@ -94,13 +94,16 @@ Quyết định:
 ### C.3 Bắt tay
 `GET /lane/v1/hello` →
 ```json
-{"protocol": 1, "server": {"name": "Không gian số", "instance": "qltm", "version": "2026.11.20"},
+{"protocol": 1, "server": {"name": "Không gian số", "instance": "qltm", "version": "2026.11.20", "public_url": "https://tangthu.congty.vn"},
  "user": {"username": "lamlinh"}, "key": {"prefix": "tt_lane_Ab3d", "hub_label": "lamlinh", "scope": "rw", "expires_at": null},
  "roots": [{"id": "6f1c…", "kind": "folder", "ws_id": "a2e0…", "name": "cfharness", "role": "owner"},
            {"id": "a2e0…", "kind": "workspace", "ws_id": "a2e0…", "name": "Phòng CCHC", "role": "admin"}],
  "limits": {"max_file_bytes": 2147483648, "list_page_max": 2000, "presence_ttl_s": [30, 3600],
             "writes_in_flight_per_key": 8, "event_streams_per_key": 2, "path_max_bytes": 1024}}
 ```
+`server.public_url` (tuỳ chọn, thêm sau – tương thích ngược) = origin web công khai của hệ (`PUBLIC_URL` của API, cùng nguồn link
+Slack / Teams / MCP OAuth): chỉ `https://host[:port]`, không đường dẫn / userinfo; chưa đặt hoặc không phải https → không có trường. Hub dùng
+nó dựng link "Mở trên Không gian số" khi `filehub.server` chưa do người đặt (không bao giờ ghi đè giá trị người đặt).
 `protocol` khác 1 → hub dừng lane đó (`filehub.lane.state = version_mismatch`). Gốc mất quyền (rời ws, mất Owner/Admin, thư mục bị
 xoá, nâng nhãn Tối mật) không còn trong `roots`.
 

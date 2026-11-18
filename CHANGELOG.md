@@ -30,6 +30,10 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - Link "Mở trên Không gian số" (chip tệp ở diff của run, tool `filehub_link` của điều phối viên) dùng id do cổng trả.
 - Nhập gói hub cũ (`hub import`) còn cấu hình đồng bộ: bỏ khoá của đồng bộ, thư mục thành "cần chuyển" (`move`) / gỡ (`clone`);
   `hub doctor` báo thư mục cần chuyển và cổng chưa có khoá.
+- Hub chỉ dán khoá cổng (chưa đặt `filehub.server`) giờ có link "Mở trên Không gian số": cổng báo địa chỉ web công khai trong `hello`
+  (`server.public_url`, cần Không gian số bản mới — bản cũ không gửi thì như trước). Hub kiểm chặt (chỉ https, không đường dẫn/userinfo), tự
+  đặt `filehub.server` khi còn trống và cập nhật nếu cổng đổi địa chỉ; giá trị người đặt không bao giờ bị ghi đè; nhiều cổng → link mỗi cổng
+  về web của chính nó.
 
 ---
 

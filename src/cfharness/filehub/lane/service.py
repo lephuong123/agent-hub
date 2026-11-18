@@ -59,6 +59,30 @@ def lock_key(server: str, root: str) -> str:
     return f"{LOCK_PREFIX}{server}:{root}"
 
 
+PUBLIC_URL_MAX = 255
+
+
+def clean_public_url(v: Any) -> str | None:
+    """`hello.server.public_url` (§C.3, tuỳ chọn) → `https://host[:port]` hoặc None. Nghiêm: chỉ https, có host, không userinfo, không
+    đường dẫn ngoài `/`, không truy vấn/fragment, không khoảng trắng/ký tự điều khiển, ≤ PUBLIC_URL_MAX ký tự."""
+    from urllib.parse import urlsplit
+
+    if not isinstance(v, str) or not v or len(v) > PUBLIC_URL_MAX or any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7F for c in v):
+        return None
+    try:
+        u = urlsplit(v)
+        port = u.port
+        host = u.hostname
+    except ValueError:
+        return None
+    if (u.scheme.lower() != "https" or not host or "@" in u.netloc or u.path not in ("", "/") or u.query or u.fragment
+            or "\\" in v or not all((c.isascii() and c.isalnum()) or c in ".-:" for c in host)):
+        return None
+    if ":" in host:  # IPv6
+        host = f"[{host}]"
+    return f"https://{host.lower()}{f':{port}' if port and port != 443 else ''}"
+
+
 def validate_setting(key: str, value: Any) -> None:
     """`config.set` nhánh filehub: `mode` ∈ sync|lane; URL server lane chỉ loopback; không ai cất khoá vào config."""
     def _mode(v: Any) -> None:
@@ -417,6 +441,10 @@ class LaneService:
         from ...termsafe import one_line
         from ..service import REF_PREFIX, aliases_of, folder_mode, safe_name
 
+        try:
+            self._apply_public_url(server, h)
+        except Exception:  # pragma: no cover — link là phụ, không làm hỏng đối soát
+            log.exception("lane: ghi public_url của %s lỗi", server)
         granted = [r for r in (h.get("roots") or [])[:200] if isinstance(r, dict) and r.get("id")]
         gids = {str(r["id"])[:128] for r in granted}
         rows = self.fh.all_folders()
@@ -476,6 +504,48 @@ class LaneService:
             self.hub.publish(make_event("filehub.lane.roots", None, {"server": server, "added": [x["name"] for x in added], "revoked": newly,
                                                                      "regranted": back, "converted": conv_names}, source="hub"))
         return {"added": added, "converted": converted, "revoked": sorted(names[x] for x in now_rev)}
+
+    def _apply_public_url(self, server: str, h: dict[str, Any]) -> None:
+        """`hello.server.public_url` → nhớ theo cổng (hub_state `filehub.lane.public_urls`) + đặt `filehub.server` khi nó TRỐNG hoặc do
+        chính cổng này tự đặt lần trước (`server_auto {url, from}`). Giá trị người đặt (khác bản tự đặt) không bao giờ bị ghi đè."""
+        pu = clean_public_url((h.get("server") or {}).get("public_url") if isinstance(h.get("server"), dict) else None)
+        st = dict(self.hub.store.state_get("filehub.lane") or {})
+        urls = {str(k): str(v) for k, v in (st.get("public_urls") or {}).items()} if isinstance(st.get("public_urls"), dict) else {}
+        changed = False
+        if pu and urls.get(server) != pu:
+            urls[server] = pu
+            changed = True
+        elif not pu and server in urls:
+            urls.pop(server)
+            changed = True
+        if changed:
+            st["public_urls"] = urls
+        cur = str(self.fh.cfg("server") or "").rstrip("/")
+        auto = st.get("server_auto") if isinstance(st.get("server_auto"), dict) else None
+        mine = bool(auto and auto.get("from") == server and cur == auto.get("url"))
+        if pu and (not cur or mine):
+            if cur != pu:
+                self.hub.config.set("filehub.server", pu)
+                log.info("lane: filehub.server = %s (theo hello của cổng %s)", pu, server)
+            if not mine or auto.get("url") != pu:
+                st["server_auto"] = {"url": pu, "from": server}
+                changed = True
+        elif auto and not mine and cur != auto.get("url"):  # người đã đặt giá trị khác → bỏ dấu tự đặt
+            st.pop("server_auto", None)
+            changed = True
+        if changed:
+            self.hub.store.state_set("filehub.lane", st)
+
+    def public_url(self, server: str | None) -> str | None:
+        """public_url cổng `server` báo trong hello gần nhất (đã kiểm) — None nếu chưa có."""
+        st = self.hub.store.state_get("filehub.lane") or {}
+        urls = st.get("public_urls") if isinstance(st.get("public_urls"), dict) else {}
+        return clean_public_url(urls.get(str(server or ""))) if server else None
+
+    def server_auto(self) -> str | None:
+        st = self.hub.store.state_get("filehub.lane") or {}
+        a = st.get("server_auto")
+        return str(a.get("url")) if isinstance(a, dict) and a.get("url") else None
 
     def _roots_view(self, h: dict[str, Any]) -> list[dict[str, Any]]:
         from ...termsafe import one_line
