@@ -698,34 +698,16 @@ DEFAULTS: dict[str, Any] = {
         "cloud_download": True,  # cho tải file về khi dùng web qua link public (xem trong trình duyệt luôn được)
         "max_download_mb": 10,  # trần tải về / ảnh / PDF (1–50 MB)
     },
-    # Thư mục dùng chung với "Không gian số" (docs/dev-notes/filehub.md): binary `tang-thu-sync-headless` chạy dưới daemon, đồng bộ 2 chiều
-    # ~/KhongGianSo/<tên> ↔ thư mục người là Owner. Nhánh `filehub` ∈ integrity.SECURITY_KEYS — chỉ người đổi (CLI `cfharness filehub …`).
+    # Thư mục dùng chung với "Không gian số" (docs/dev-notes/filehub.md) qua CỔNG CFHARNESS (filehub/lane/) — chế độ duy nhất từ H5 (đồng bộ
+    # 2 chiều `tang-thu-sync-headless` đã bỏ; khoá cũ của nó trong config.yaml — sync_binary, local_parent, device_name, mode… — được bỏ qua).
+    # Nhánh `filehub` ∈ integrity.SECURITY_KEYS — chỉ người đổi (CLI `cfharness filehub …`, thẻ Cài đặt).
     "filehub": {
-        "enabled": False,  # `cfharness filehub setup` bật
-        "server": None,  # vd https://thumucai.trungtamdhs.com
-        "sync_binary": None,  # đường dẫn tuyệt đối tang-thu-sync-headless
-        "sync_min_version": "0.1.0",  # `--version` thấp hơn → không chạy, báo ở thẻ Cài đặt
-        "device_name": None,  # null = "cfharness · <tên máy>"
-        "local_parent": "~/KhongGianSo",  # thư mục cha của bản sao cục bộ (phải trong workspace.confine nếu bật giam; không trong HUB_HOME)
-        "folders": [],  # [{name, root_id, ws_id, local_path, kind folder|workspace, account?}] — do `filehub setup|add|remove|switch-to-workspace` ghi
-        # chế độ khi `filehub setup` (plan-filehub-workspace-root W4): workspace = TOÀN BỘ một workspace Không gian số (gốc ảo = wsId, chỉ
-        # Workspace Admin); folder = MỘT thư mục (cây con, như trước). Đăng nhập lại giữ chế độ của thư mục chung đang có.
-        "scope": "workspace",
-        "relay_timeout_s": 600,  # đăng nhập từ xa qua web public (relay OAuth): state chờ ≤ 10 phút, dùng một lần
-        "poll_s": None,  # --poll của binary (null = mặc định của binary)
-        "max_delete_batch": 0,  # --max-delete-batch: 0 = tắt; > 0 → xoá quá ngưỡng thì dừng chiều đẩy lên chờ `filehub resume --root`
-        "extra_ignore": [],  # mẫu bỏ qua thêm (kiểu .gitignore) cho chiều đẩy lên — cộng vào ignore.txt sinh từ files.secret_patterns
-        "restart_backoff_s": [1, 300],  # restart tiến trình sync: min..max giây (luỹ thừa 2)
-        "stop_grace_s": 15,  # SIGTERM → chờ → SIGKILL
-        "tick_s": 1.0,  # nhịp đọc status.json
-        "presence_ttl_s": 600,  # dải "cfharness đang làm việc" trên Không gian số — hub làm mới trước khi hết hạn
-        "steer_on_cloud_change": True,  # người sửa tệp trên Không gian số trong lúc run giữ khoá → steer câu cố định
-        "secret_scan_max_bytes": 5000000,  # quét GIÁ TRỊ secret trên tệp mới/sửa sau run (tệp lớn hơn bỏ qua)
-        "login_url_timeout_s": 30,
-        # Cổng cfharness (docs/dev-notes/plan-filehub-lane.md): `sync` = đồng bộ 2 chiều cũ (binary) · `lane` = không bản sao lâu dài, cây làm
-        # việc theo run qua cổng loopback của Không gian số. Mặc định giữ `sync` tới khi NGƯỜI chuyển (`cfharness filehub switch`); thư mục có
-        # `folders[].mode` thì theo thư mục.
-        "mode": "sync",
+        "enabled": False,  # `filehub lane setup` bật
+        "server": None,  # URL web của Không gian số (vd https://thumucai.trungtamdhs.com) — chỉ để dựng link "Mở trên Không gian số"
+        # [{name, root_id, ws_id, kind folder|workspace, mode: lane, server, aliases?}] — do `filehub lane setup|add` (đối soát) ghi.
+        # Thư mục còn `mode: sync` / `local_path` (đồng bộ cũ) = CẦN CHUYỂN: khoá cổng cấp đúng gốc → tự chuyển; bản sao trên máy để nguyên.
+        "folders": [],
+        "extra_ignore": [],  # mẫu bỏ qua thêm (kiểu .gitignore) cho chiều đẩy lên — cộng vào mẫu sinh từ files.secret_patterns
         "lane": {
             # {<tên>: {url, hub_label, user, key_prefix, scope, expires_at, set_at}} — do `filehub lane setup` ghi; KHOÁ ở secret store
             # (`FILEHUB_LANE_<TÊN>`), không bao giờ ở đây
@@ -1030,7 +1012,7 @@ def validate_setting(key: str, value: Any) -> None:
 
         _validate_profile(key, value)
     if key == "filehub" or key.startswith("filehub.mode") or key.startswith("filehub.lane") or key.startswith("filehub.folders"):
-        from .filehub.lane.service import validate_setting as _validate_lane  # cổng cfharness: mode sync|lane, URL chỉ loopback
+        from .filehub.lane.service import validate_setting as _validate_lane  # cổng cfharness: folders[].mode, URL chỉ loopback
 
         _validate_lane(key, value)
     if key == "web" or key.startswith("web."):

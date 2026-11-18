@@ -250,9 +250,10 @@ def _brief_report(rep: dict[str, Any]) -> dict[str, Any]:
     if isinstance(cs, dict):
         out["claude_sessions"] = {"written": len(cs.get("written") or []), "conflicts": len(cs.get("conflicts") or []), "target": cs.get("target")}
     fh = out.get("filehub")
-    if isinstance(fh, dict):  # danh sách trắng: chế độ, tên thư mục chung, lệnh đăng nhập lại, agent dùng workspace filehub:
+    if isinstance(fh, dict):  # danh sách trắng: chế độ, tên thư mục chung, lệnh nối lại, agent dùng workspace filehub:
         out["filehub"] = {"mode": fh.get("mode"), "command": fh.get("command"), "agents": list(fh.get("agents") or [])[:20],
-                          "folders": [{"name": f.get("name")} for f in fh.get("folders") or [] if isinstance(f, dict)][:20]}
+                          "folders": [{"name": f.get("name")} for f in fh.get("folders") or [] if isinstance(f, dict)][:20],
+                          "lane_folders": [str(x) for x in fh.get("lane_folders") or []][:20]}
     if isinstance(out.get("agents_paused"), dict):
         out["agents_paused"] = sorted(out["agents_paused"])
     return out

@@ -21,7 +21,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - Nhật ký kiểm toán chống sửa (L4): mỗi dòng audit mới được nối vào một chuỗi băm (sha256); hub định kỳ (mỗi giờ, `audit.anchor_interval_s`) và khi daemon dừng ghi "bản neo" của dòng cuối vào `audit-anchors.jsonl` (và vào file metadata của quản trị máy khi bật xuất trạng thái admin). `cfharness audit verify [--since-id N] [--json]` kiểm toàn bộ chuỗi + bản neo, báo đúng dòng bị sửa/xoá; ai sửa DB rồi tính lại cả chuỗi vẫn bị bản neo bắt. Phát hiện sửa/xoá (kể cả trong lúc daemon dừng — daemon kiểm phần đuôi khi khởi động) → cảnh báo `audit.tamper_detected` qua Telegram/Slack. Gửi bản neo ra Telegram/Slack để giữ bằng chứng ngoài máy: `cfharness config set audit.anchor_notify true` (tắt mặc định). Bản neo đi cùng bản sao lưu và gói xuất hub nên khôi phục/nhập không báo nhầm.
 
 - Truy vấn audit + cảnh báo (L5): `cfharness audit list` lọc thêm `--principal --actor --outcome denied --req r_… --since 24h --until … --q <chữ>` (`--q` chỉ tìm trong tóm tắt/đích, không bao giờ trong dữ liệu) và phân trang `--before-id N`; `cfharness audit export --since 7d [--format jsonl|csv]` ghi `HUB_HOME/exports/audit-<giờ>.<đuôi>` (0600, kèm cột băm để kiểm lại). Trang web "Nhật ký kiểm toán" có các bộ lọc này, cột kết quả có màu, nút "Cũ hơn" và thẻ "Hoạt động theo người" (số dòng theo danh tính × ngày, 7 ngày, kèm số lần bị từ chối). Hub tự cảnh báo `audit.alert` qua Telegram (nhóm bảo mật) / Slack khi thấy mẫu đáng ngờ: ≥ 5 thao tác bị từ chối / 10 phút cùng một danh tính, ≥ 5 lần đăng nhập web sai / 15 phút (theo IP; toàn cục khi từ nhiều IP), đổi cấu hình an toàn (`gates.mode`, `approval.profile`, `guard.enabled`, `guard.sandbox.*`, `workspace.confine`, `audit.*`, `audit_watch.*`, bật trust full, cấp quyền theo luật, ngoại lệ sandbox), danh tính mới lần đầu xuất hiện (thiết bị web tin cậy, user Telegram/Slack, token MCP…), ≥ 30 lượt đọc dữ liệu nhạy cảm / 10 phút, nhật ký/chính sách bị sửa ngoài hub; truy cập secret ngoài giờ khi đặt `audit_watch.secret_access.hours` (vd `"08:00-19:00"`). Mỗi cảnh báo chỉ báo một lần cho tới khi hết, và có tin "Hết cảnh báo" khi qua trọn cửa sổ không còn lặp lại. Ngưỡng ở `audit_watch.*` (chỉ người đổi, được kiểm toàn vẹn). Tuỳ chọn lưu trữ audit cũ (tắt mặc định — audit vẫn giữ vĩnh viễn trong DB): `cfharness config set audit.archive_after_days 365` dồn các tháng đã trọn ra `HUB_HOME/audit-archive/<yyyy-mm>.jsonl.gz` (giữ chuỗi băm, có `MANIFEST.json`) rồi mới xoá khỏi DB; `audit verify` vẫn kiểm được chuỗi, `audit verify --archive` còn kiểm từng file lưu trữ. Agent không đọc/ghi được `audit-archive/`.
-- Gói chẩn đoán (L7): `cfharness support bundle [--since 24h] [--run <id> …]` in danh sách file + cỡ, hỏi xác nhận rồi ghi `HUB_HOME/exports/support-<giờ>.tar.gz` (0600) để gửi người hỗ trợ khi gỡ lỗi: log hệ thống trong khoảng thời gian chọn (cả file đã xoay vòng), `hub doctor`, trạng thái hub, phiên bản (cfharness, claude, python, OS), cấu hình đã lọc (khoá nhạy cảm bị che, nhánh `web` chỉ giữ bật/tắt), dòng thời gian (chỉ metadata) của các run chọn, và `MANIFEST.json` (sha256 từng file + số chỗ đã che theo file). Mọi byte được quét che secret (theo giá trị + mẫu token) ngay trước khi ghi; không bao giờ có hub.db, secret, đăng nhập web, token, session Claude, checkpoint, bản sao lưu, memory/skill. Raw transcript chỉ khi thêm `--include-raw` và xác nhận bước 2 (gõ `raw`; `--yes` không bỏ qua bước này). Trần `support.max_mb` (mặc định 200) và `support.max_file_mb` (50). Daemon dừng vẫn tạo được. Web: thẻ "Gói chẩn đoán" ở Cài đặt — xem trước, tạo (raw cần bước 2), tải về bằng link dùng một lần. stderr của tiến trình đồng bộ Không gian số giờ ghi vào `logs/filehub-sync.log` (xoay vòng, đã che secret) thay vì chỉ giữ 300 ký tự cuối; `update.log` và `import-job.out` ghi dòng JSON cùng dạng `hub.log` (trang cập nhật vẫn hiện chữ như cũ). Agent không đọc được `exports/`, `imports/`, `backups/` kể cả qua lệnh shell.
+- Gói chẩn đoán (L7): `cfharness support bundle [--since 24h] [--run <id> …]` in danh sách file + cỡ, hỏi xác nhận rồi ghi `HUB_HOME/exports/support-<giờ>.tar.gz` (0600) để gửi người hỗ trợ khi gỡ lỗi: log hệ thống trong khoảng thời gian chọn (cả file đã xoay vòng), `hub doctor`, trạng thái hub, phiên bản (cfharness, claude, python, OS), cấu hình đã lọc (khoá nhạy cảm bị che, nhánh `web` chỉ giữ bật/tắt), dòng thời gian (chỉ metadata) của các run chọn, và `MANIFEST.json` (sha256 từng file + số chỗ đã che theo file). Mọi byte được quét che secret (theo giá trị + mẫu token) ngay trước khi ghi; không bao giờ có hub.db, secret, đăng nhập web, token, session Claude, checkpoint, bản sao lưu, memory/skill. Raw transcript chỉ khi thêm `--include-raw` và xác nhận bước 2 (gõ `raw`; `--yes` không bỏ qua bước này). Trần `support.max_mb` (mặc định 200) và `support.max_file_mb` (50). Daemon dừng vẫn tạo được. Web: thẻ "Gói chẩn đoán" ở Cài đặt — xem trước, tạo (raw cần bước 2), tải về bằng link dùng một lần. `update.log` và `import-job.out` ghi dòng JSON cùng dạng `hub.log` (trang cập nhật vẫn hiện chữ như cũ). Agent không đọc được `exports/`, `imports/`, `backups/` kể cả qua lệnh shell.
 
 #### Lưu ý khi cập nhật (L5)
 - Daemon nâng DB lên phiên bản 31 (chỉ thay trigger `audit_no_delete`: vẫn chặn xoá mọi dòng audit, trừ dòng đã chuyển ra `audit-archive/` khi bạn bật `audit.archive_after_days`). Lần đầu chạy sau cập nhật, hub nạp danh sách danh tính đã thấy từ audit sẵn có nên không cảnh báo "danh tính mới" cho những danh tính cũ. Danh sách `notify.<kênh>.events` đã sửa tay sẽ không tự có `audit.alert` — thêm vào nếu muốn nhận cảnh báo.
@@ -32,6 +32,35 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 #### Lưu ý khi cập nhật (L3)
 - Daemon nâng DB lên phiên bản 29 (chỉ thêm cột vào `audit_log`, dòng cũ để trống).
 - **Khởi động lại web (`cfharness web`) và `cfharness mcp serve` sau khi cập nhật daemon** để dùng token riêng mới (`<socket>.web.auth`, `<socket>.mcp.auth`). Web/MCP chạy từ trước vẫn hoạt động nhưng được ghi là `os:<user>` với kênh `cli` (kênh tự khai nằm ở `declared_channel`).
+
+---
+
+## v0.2.21 — 2026-11-18
+
+### Lưu ý khi cập nhật
+- **Đồng bộ 2 chiều cũ với Không gian số đã bỏ** (tiến trình `tang-thu-sync-headless`, đăng nhập thiết bị, bản sao `~/KhongGianSo/…`):
+  thư mục chung giờ CHỈ đi qua cổng cfharness. Hub còn thư mục đồng bộ cũ thì sau khi cập nhật thấy "Thư mục X đang dùng đồng bộ cũ
+  (đã bỏ) — dán khoá cổng cfharness ở Cài đặt để dùng tiếp; bản sao trên máy để nguyên" (Cài đặt › Không gian số, `cfharness filehub
+  status`); run/task giao vào thư mục đó bị từ chối với cùng câu. Dán khoá cổng (tạo ở Không gian số › Hồ sơ › Cổng cfharness, cấp đúng
+  thư mục/workspace đó) là hub tự chuyển thư mục sang cổng — giữ tên `filehub:<tên>`. Hub KHÔNG xoá gì: bản sao trên máy, `HUB_HOME/filehub/`
+  để nguyên (kiểm rồi tự xoá); thu hồi thiết bị đồng bộ cũ ở Không gian số › Hồ sơ › Thiết bị. Tiến trình đồng bộ còn chạy từ bản cũ được
+  hub dừng khi khởi động. Khoá cấu hình cũ (`filehub.sync_binary`, `local_parent`, `device_name`, `mode`…) không gây lỗi, được bỏ qua.
+- Lệnh `cfharness filehub setup|login|add|pause|switch|switch-to-workspace` không còn (chỉ in hướng dẫn); `filehub resume` cần `--root`
+  (lô xoá đang giữ của cổng). `scripts/setup-hub-user.sh`: `KGS=…` luôn đi qua cổng (biến `KGS_MODE`, `KGS_SCOPE`… vẫn nhận, bỏ qua).
+- Không có migration DB.
+
+### Không gian số — chỉ còn cổng cfharness (H5, #154)
+- Gỡ đồng bộ 2 chiều cũ: tiến trình giám sát binary sync, đăng nhập thiết bị + relay OAuth qua web public (`/filehub/oauth/cb`, trang
+  `/filehub/login`), bản sao cục bộ, chặn xoá hàng loạt của binary, chuyển chế độ sync ↔ cổng. Thẻ Cài đặt gộp thành một thẻ "Không gian số —
+  cổng cfharness" (thêm đổi tên / gỡ thư mục, báo thư mục cần chuyển).
+- Thư mục đồng bộ cũ tự chuyển sang cổng khi khoá được cấp đúng gốc (khi dán khoá, "Thử kết nối" hoặc kiểm tra nền mỗi phút).
+- Link "Mở trên Không gian số" (chip tệp ở diff của run, tool `filehub_link` của điều phối viên) dùng id do cổng trả.
+- Nhập gói hub cũ (`hub import`) còn cấu hình đồng bộ: bỏ khoá của đồng bộ, thư mục thành "cần chuyển" (`move`) / gỡ (`clone`);
+  `hub doctor` báo thư mục cần chuyển và cổng chưa có khoá.
+- Hub chỉ dán khoá cổng (chưa đặt `filehub.server`) giờ có link "Mở trên Không gian số": cổng báo địa chỉ web công khai trong `hello`
+  (`server.public_url`, cần Không gian số bản mới — bản cũ không gửi thì như trước). Hub kiểm chặt (chỉ https, không đường dẫn/userinfo), tự
+  đặt `filehub.server` khi còn trống và cập nhật nếu cổng đổi địa chỉ; giá trị người đặt không bao giờ bị ghi đè; nhiều cổng → link mỗi cổng
+  về web của chính nó.
 
 ---
 

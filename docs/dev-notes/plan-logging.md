@@ -513,3 +513,6 @@ Lệch / để sau:
 - Che theo giá trị trong `filehub-sync.log` làm theo từng khúc 4 KB — secret vắt qua ranh giới khúc có thể lọt vào file (gói chẩn đoán quét lại cả file).
 - Không phát event `support.created` (dòng audit `support.create` là đủ; tránh sinh lại schema event). Không tự dọn gói cũ trong `exports/`.
 - `hub doctor` trong gói vẫn gọi `claude --version` như lệnh doctor (chỉ `versions.json` dùng trạng thái compat).
+
+> Ghi chú sau khi merge main v0.2.21 (gỡ đồng bộ 2 chiều cũ của Không gian số): `filehub/supervisor.py` không còn → phần "stderr sync filehub ra
+> `logs/filehub-sync.log`" của L7 bị bỏ cùng test của nó; gói chẩn đoán vẫn nhận file này nếu còn sót từ bản cũ.

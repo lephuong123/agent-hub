@@ -181,8 +181,7 @@ def _filehub_text(etype: str, p: dict[str, Any], agent: str) -> str | None:
             return (f"⛔ *{agent}* muốn xoá {n} mục trong «{folder}» cùng lúc — hub đang GIỮ, chưa xoá gì:\n{body}{rest}\n"
                     f"Quyết ở web › Cài đặt › Cổng cfharness («Cho xoá» / «Không xoá») hoặc `cfharness filehub resume --root {root}` "
                     "(thêm `--discard` để không xoá).")
-        return (f"⛔ Đã dừng đẩy lên Không gian số cho «{folder}» (xoá hàng loạt). Kiểm tra rồi chạy: "
-                f"`cfharness filehub resume --root {root}`")
+        return f"⛔ «{folder}»: thay đổi lên Không gian số đang bị giữ (xoá hàng loạt) — xem web › Cài đặt › Không gian số."
     if etype == "filehub.lane.roots":
         parts = []
         if p.get("added"):
@@ -191,9 +190,9 @@ def _filehub_text(etype: str, p: dict[str, Any], agent: str) -> str | None:
             parts.append("mất quyền (khoá không còn được cấp — tệp không bị xoá): " + ", ".join(f"«{one_line(x, 80)}»" for x in p["revoked"][:20]))
         if p.get("regranted"):
             parts.append("được cấp lại: " + ", ".join(f"«{one_line(x, 80)}»" for x in p["regranted"][:20]))
-        if p.get("sync"):
-            parts.append("đang đồng bộ kiểu cũ (giữ nguyên — chuyển ở web › Cài đặt › Cổng cfharness): "
-                         + ", ".join(f"«{one_line(x, 80)}»" for x in p["sync"][:20]))
+        if p.get("converted"):
+            parts.append("đã chuyển từ đồng bộ cũ sang cổng (bản sao trên máy để nguyên): "
+                         + ", ".join(f"`filehub:{one_line(x, 80)}`" for x in p["converted"][:20]))
         return ("📂 Cổng cfharness: " + "; ".join(parts)) if parts else None
     return None
 

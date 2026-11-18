@@ -174,25 +174,29 @@ async def test_root_not_granted_fails_run_with_filehub_unavailable(env):
     assert "filehub_unavailable" in (run.get("error") or "")
 
 
-async def test_filehub_refs_work_in_both_modes(env, tmp_path):
-    """`filehub:<tên>` giữ nguyên ở cả hai chế độ: thư mục sync → bản sao cục bộ; thư mục lane → cây theo run; task giải lại lúc chạy."""
+async def test_filehub_refs_lane_only_legacy_needs_migration(env, tmp_path):
+    """`filehub:<tên>` của thư mục qua cổng → cây theo run; thư mục còn cấu hình đồng bộ cũ (đã bỏ — H5) → mọi đường (run, task, ref) từ
+    chối với lời giải thích, không bao giờ chạy trong bản sao cũ; task giải lại lúc chạy."""
     d, s, lane = env
     local = tmp_path / "KhongGianSo" / "cu"
     (local / "A").mkdir(parents=True)
     d.hub.config.set("filehub.folders", [*d.hub.config.get("filehub.folders"),
                                          {"name": "cu", "root_id": "r_cu", "ws_id": "w", "local_path": str(local.resolve())}])
-    assert d.hub.filehub.lane_target("filehub:cu/A") is None and d.hub.filehub.resolve_ref("filehub:cu/A")[0] == str((local / "A").resolve())
+    assert d.hub.filehub.lane_target("filehub:cu/A") is None
+    with pytest.raises(HubError, match="đồng bộ cũ") as ei:
+        d.hub.filehub.resolve_ref("filehub:cu/A")
+    assert ei.value.data["needs_migration"] is True
+    with pytest.raises(HubError, match="đồng bộ cũ"):
+        d.hub.runs.submit("w1", "X", cwd="filehub:cu")
+    with pytest.raises(HubError, match="đồng bộ cũ"):
+        await rpc(d, "task.create", {"assignee": "w1", "title": "T", "body": "T", "workspace": "filehub:cu/A"})
     assert d.hub.filehub.lane_target("filehub:chung/Báo cáo")["sub"] == "Báo cáo"
-    with pytest.raises(HubError, match="chế độ lane"):
+    with pytest.raises(HubError, match="qua cổng"):
         d.hub.filehub.resolve_ref("filehub:chung")
     s.by_prompt["TASK-LANE"] = {"text": "xong"}
     t = await rpc(d, "task.create", {"assignee": "w1", "title": "TASK-LANE", "body": "TASK-LANE", "workspace": "filehub:chung/Báo cáo"})
     assert t["workspace"]["lane"] is True and t["workspace"]["path"] is None
     run = await until(lambda: next((r for r in d.hub.store.list_runs(agent_id="w1") if r.get("status") == "completed"), None))
     assert run["run_opts"]["filehub_lane"]["sub"] == "Báo cáo"
-    # chuyển thư mục về sync mà không có bản sao → ref vẫn giải (thư mục sync cần local_path)
     assert {f["name"] for f in d.hub.filehub.lane_folders()} == {"chung"}
-    assert {f["name"] for f in d.hub.filehub.folders()} == {"cu"}
-    # code đồng bộ cũ ghi folders → giữ thư mục lane
-    d.hub.filehub._set_folders([f for f in d.hub.filehub.folders()])
-    assert {f["name"] for f in d.hub.filehub.lane_folders()} == {"chung"}
+    assert {f["name"] for f in d.hub.filehub.legacy_folders()} == {"cu"}
