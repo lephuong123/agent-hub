@@ -36,6 +36,7 @@ ENV_KEEP = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TM
 ENV_DROP_PREFIXES = ("CLAUDE", "CFHARNESS", "AGENTHUB", "AGENT_HUB", "ANTHROPIC")
 _SEMVER = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 STABLE_S = 60.0
+SYNC_LOG = "filehub-sync.log"  # stderr của tiến trình sync (L7), trong HUB_HOME/logs/
 
 
 def child_env(base: dict[str, str] | None = None) -> dict[str, str]:
@@ -264,18 +265,56 @@ class SyncSupervisor:
                 pass
         self.state = "stopped"
 
+    @property
+    def log_path(self) -> Path:
+        return self.hub.paths.logs_dir / SYNC_LOG
+
+    def _open_log(self) -> int | None:
+        """`HUB_HOME/logs/filehub-sync.log` (0600, O_APPEND, không theo symlink), xoay lúc spawn theo `logs.max_bytes`. Lỗi IO → None
+        (vẫn giữ đuôi stderr trong RAM để báo lỗi)."""
+        from ..logs import DEFAULT_BACKUP_COUNT, DEFAULT_MAX_BYTES, rotate_if_large
+
+        p = self.log_path
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            ls = self.hub.config.get("logs") or {}
+            rotate_if_large(p, int(ls.get("max_bytes", DEFAULT_MAX_BYTES) or 0), int(ls.get("backup_count", DEFAULT_BACKUP_COUNT) or 0))
+            fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            try:
+                os.chmod(p, 0o600)
+            except OSError:  # pragma: no cover — Windows
+                pass
+            return fd
+        except OSError as e:
+            log.warning("không mở được %s: %s", p.name, type(e).__name__)
+            return None
+
     async def _drain_stderr(self, p: asyncio.subprocess.Process) -> str:
-        """Đọc stderr tới khi tiến trình đóng (tránh đầy pipe); giữ 300 ký tự cuối (đã che secret) để báo lỗi."""
-        from ..redact import redact_str
+        """Đọc stderr tới khi tiến trình đóng (tránh đầy pipe). Ghi từng khúc (đã che theo GIÁ TRỊ secret) vào `logs/filehub-sync.log`
+        (L7 — gói chẩn đoán lấy file này); vẫn giữ 300 ký tự cuối (đã che) để báo lỗi trong `last_error`."""
+        from ..redact import mask_bytes, redact_str
 
         tail = b""
         if p.stderr is None:
             return ""
-        while True:
-            chunk = await p.stderr.read(4096)
-            if not chunk:
-                break
-            tail = (tail + chunk)[-2000:]
+        fd = self._open_log()
+        try:
+            if fd is not None:
+                os.write(fd, f"--- {time.strftime('%Y-%m-%dT%H:%M:%S%z')} sync pid {p.pid} bắt đầu ---\n".encode())
+            while True:
+                chunk = await p.stderr.read(4096)
+                if not chunk:
+                    break
+                tail = (tail + chunk)[-2000:]
+                if fd is not None:
+                    try:
+                        os.write(fd, mask_bytes(chunk))
+                    except OSError:  # đĩa đầy… → thôi ghi file, vẫn đọc pipe
+                        os.close(fd)
+                        fd = None
+        finally:
+            if fd is not None:
+                os.close(fd)
         return redact_str(tail.decode("utf-8", "replace").strip()[-300:])
 
     def info(self) -> dict[str, Any]:

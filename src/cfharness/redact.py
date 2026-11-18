@@ -122,6 +122,19 @@ def redact_str(s: str) -> str:
     return _SECRET_VALUE.sub(MASK, mask_values(s))
 
 
+def redact_count(s: str) -> tuple[str, int]:
+    """Như `redact_str` nhưng trả thêm SỐ chỗ đã che (theo giá trị + theo mẫu) — gói chẩn đoán ghi số này vào `redaction_report`
+    (chỉ con số, không bao giờ giá trị). Chuỗi có thể chứa surrogate (`errors="surrogateescape"`) — regex vẫn chạy được."""
+    if not s:
+        return s, 0
+    n = 0
+    rx = _rx
+    if rx is not None:
+        s, n = rx.subn(MASK, s)
+    s, m = _SECRET_VALUE.subn(MASK, s)
+    return s, n + m
+
+
 def redact(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: (MASK if isinstance(k, str) and _SECRET_KEY.search(k) and v else redact(v)) for k, v in obj.items()}

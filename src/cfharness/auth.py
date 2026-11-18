@@ -111,6 +111,9 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "logs.levels", "logs.level",
         # L6 (công cụ debug): đọc log hệ thống + dòng thời gian của yêu cầu/run — lộ chi tiết vận hành, đường dẫn, id của mọi agent; chỉ người
         "logs.query", "trace.get",
+        # L7 (gói chẩn đoán, support_bundle.py): gói gom log + doctor + trạng thái + dòng thời gian run (+ raw transcript khi người chọn) —
+        # đọc lộ chi tiết vận hành của mọi agent, ghi file vào exports/; chỉ người (kể cả kế hoạch/danh sách)
+        "support.plan", "support.create", "support.list",
         # Xuất toàn bộ hub (hub_transfer.py): gói chứa hub.db + tri thức + transcript MỌI agent, dừng run đang chạy — chỉ người.
         # Nhập không có RPC (daemon đích phải dừng; CLI `hub import` ∈ HUB_HUMAN_ONLY_CLI)
         "hub.export",
@@ -252,7 +255,7 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.questions.rpc", "MUTATING_QUESTIONS"), ("cfharness.systems.rpc", "MUTATING_SYSTEMS"),
                       ("cfharness.schedules.rpc", "MUTATING_SCHEDULES"), ("cfharness.updater", "MUTATING_UPDATE"),
                       ("cfharness.web_events", "MUTATING_WEB"),
-                      ("cfharness.backup", "MUTATING_BACKUP"), ("cfharness.logs_rpc", "MUTATING_LOGS"), ("cfharness.hub_transfer", "MUTATING_TRANSFER"),
+                      ("cfharness.backup", "MUTATING_BACKUP"), ("cfharness.logs_rpc", "MUTATING_LOGS"), ("cfharness.support_bundle", "MUTATING_SUPPORT"), ("cfharness.hub_transfer", "MUTATING_TRANSFER"),
                       ("cfharness.hub_freeze", "MUTATING_FREEZE"), ("cfharness.hub_transfer_web", "MUTATING_TRANSFER_WEB"),
                       ("cfharness.admin_rpc", "MUTATING_ADMIN"), ("cfharness.admin_directory", "MUTATING_DIRECTORY"),
                       ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.filehub.rpc", "MUTATING_FILEHUB"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):

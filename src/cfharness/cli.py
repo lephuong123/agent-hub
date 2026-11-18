@@ -1015,6 +1015,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_logs_parsers(sub, common)
 
+    # gói chẩn đoán đã che secret: cfharness support bundle|list (support_cli.py, support_bundle.py, L7) — chỉ người
+    from .support_cli import add_parsers as _add_support_parsers
+
+    _add_support_parsers(sub, common)
+
     # xuất / nhập toàn bộ hub sang máy khác: cfharness hub export|import (hub_transfer_cli.py, hub_transfer.py)
     from .hub_transfer_cli import add_parsers as _add_hub_transfer_parsers
 

@@ -220,11 +220,62 @@ async def import_plan(request: Request) -> Response:
 
 
 # ============================================================================ tải về (link một lần)
-def _tokens(request: Request) -> dict[str, tuple[str, str, float]]:
+# Dùng chung với gói chẩn đoán (web/support_pages.py): token ngẫu nhiên MỘT lần trong RAM của tiến trình web, gắn phiên, hết hạn 10 phút;
+# mỗi loại một kho riêng (`app.state.<ns>_tokens`) để token của loại này không mở được file loại kia.
+def _tokens(request: Request, ns: str = "transfer") -> dict[str, tuple[str, str, float]]:
     st = request.app.state
-    if not hasattr(st, "transfer_tokens"):
-        st.transfer_tokens = {}
-    return st.transfer_tokens
+    attr = f"{ns}_tokens"
+    if not hasattr(st, attr):
+        setattr(st, attr, {})
+    return getattr(st, attr)
+
+
+def mint_download(request: Request, sess: Any, name: str, ns: str = "transfer") -> str:
+    """Token một lần cho `name` (đã kiểm định dạng ở bên gọi), gắn phiên `sess`. Dọn token hết hạn."""
+    now = time.time()
+    toks = _tokens(request, ns)
+    for k in [k for k, v in toks.items() if v[2] < now]:
+        toks.pop(k, None)
+    tok = secrets.token_urlsafe(24)
+    toks[tok] = (sess.sid, name, now + TOKEN_TTL_S)
+    return tok
+
+
+def take_download(request: Request, ns: str = "transfer") -> str:
+    """Tiêu token trong đường dẫn (MỘT lần — kể cả khi hết hạn) → tên đã gắn. Sai phiên / dùng lại / hết hạn → 404."""
+    sess = session_of(request)
+    tok = request.path_params["token"]
+    toks = _tokens(request, ns)
+    ent = toks.get(tok)
+    if sess is None or ent is None or ent[0] != sess.sid:
+        raise HTTPException(404, "Link tải không hợp lệ hoặc đã dùng")
+    toks.pop(tok, None)
+    if ent[2] < time.time():
+        raise HTTPException(404, "Link tải đã hết hạn — bấm \"Tải về\" lại")
+    return ent[1]
+
+
+def stream_file(path: Any, filename: str) -> Response:
+    """Stream file THƯỜNG (`O_NOFOLLOW`) dạng tải về, không cache. Không có / không phải file thường → 404."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        raise HTTPException(404, "File không còn trên máy") from None
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode):
+        os.close(fd)
+        raise HTTPException(404, "File không hợp lệ")
+
+    def gen() -> Any:
+        with os.fdopen(fd, "rb") as f:
+            while True:
+                b = f.read(CHUNK)
+                if not b:
+                    break
+                yield b
+
+    return StreamingResponse(gen(), media_type="application/octet-stream", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store", "Content-Length": str(st.st_size)})
 
 
 async def download_link(request: Request) -> Response:
@@ -236,45 +287,14 @@ async def download_link(request: Request) -> Response:
     eid = str((st.get("result") or {}).get("id") or "")
     if st.get("state") != "done" or not T.ID_RE.match(eid):
         return flash_redirect(request, "/hub-transfer", "error", "Chưa có gói xuất xong để tải về")
-    now = time.time()
-    toks = _tokens(request)
-    for k in [k for k, v in toks.items() if v[2] < now]:
-        toks.pop(k, None)
-    tok = secrets.token_urlsafe(24)
-    toks[tok] = (sess.sid, eid, now + TOKEN_TTL_S)
-    return RedirectResponse(f"/hub-transfer/download/{tok}", status_code=303)
+    return RedirectResponse(f"/hub-transfer/download/{mint_download(request, sess, eid)}", status_code=303)
 
 
 async def download(request: Request) -> Response:
-    sess = session_of(request)
-    tok = request.path_params["token"]
-    toks = _tokens(request)
-    ent = toks.get(tok)
-    if sess is None or ent is None or ent[0] != sess.sid:
-        raise HTTPException(404, "Link tải không hợp lệ hoặc đã dùng")
-    toks.pop(tok, None)  # MỘT lần — kể cả khi hết hạn
-    if ent[2] < time.time() or not T.ID_RE.match(ent[1]):
-        raise HTTPException(404, "Link tải đã hết hạn — bấm \"Tải về\" lại")
-    path = T.exports_dir(ws(request).paths) / f"{ent[1]}{T.EXT}"
-    try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError:
-        raise HTTPException(404, "Gói không còn trên máy") from None
-    st = os.fstat(fd)
-    if not stat.S_ISREG(st.st_mode):
-        os.close(fd)
+    eid = take_download(request)
+    if not T.ID_RE.match(eid):
         raise HTTPException(404, "Gói không hợp lệ")
-
-    def gen() -> Any:
-        with os.fdopen(fd, "rb") as f:
-            while True:
-                b = f.read(CHUNK)
-                if not b:
-                    break
-                yield b
-
-    return StreamingResponse(gen(), media_type="application/octet-stream", headers={
-        "Content-Disposition": f'attachment; filename="{ent[1]}{T.EXT}"', "Cache-Control": "no-store", "Content-Length": str(st.st_size)})
+    return stream_file(T.exports_dir(ws(request).paths) / f"{eid}{T.EXT}", f"{eid}{T.EXT}")
 
 
 # ============================================================================ thao tác (ACTIONS)
@@ -386,4 +406,4 @@ def routes() -> list[Any]:
             Route("/hub-transfer/download/{token}", download)]
 
 
-__all__ = ["register_actions", "routes"]
+__all__ = ["register_actions", "routes", "mint_download", "take_download", "stream_file"]

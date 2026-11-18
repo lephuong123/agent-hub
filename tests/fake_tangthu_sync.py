@@ -21,6 +21,7 @@ Biến môi trường điều khiển (chỉ test):
 - `FAKE_TT_WS_NAME`        tên workspace cấp ở chế độ workspace (mặc định root-hint hoặc "admin harness")
 - `FAKE_TT_ACCOUNT`        username tài khoản đã đồng ý (mặc định "admin.cchc"; rỗng = server cũ không trả account)
 - `FAKE_TT_DENY_WORKSPACE` server cũ/không phải admin: chế độ workspace vẫn cấp root kind folder
+- `FAKE_TT_STDERR`         tiến trình chính ghi dòng này ra stderr lúc bắt đầu (kiểm `logs/filehub-sync.log`, L7)
 Tên sống (đổi tên trên web) bơm qua `<profile>/server_names.json` ({rootId: tên}).
 Mọi lần chạy ghi `<profile>/argv.jsonl` (argv + tên biến môi trường) để test kiểm cờ và env tối thiểu; `login` ghi `<thư mục tokens>/login_argv.jsonl`.
 """
@@ -317,6 +318,8 @@ class Main:
     def run(self) -> int:
         signal.signal(signal.SIGTERM, lambda *_: setattr(self, "stop", True))
         exit_after = float(os.environ.get("FAKE_TT_EXIT_AFTER_S") or 0)
+        if os.environ.get("FAKE_TT_STDERR"):
+            print(os.environ["FAKE_TT_STDERR"], file=sys.stderr, flush=True)
         t0 = time.monotonic()
         poll = float(str(self.a.get("poll") or 0.2))
         for r in self.roots:

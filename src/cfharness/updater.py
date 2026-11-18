@@ -206,10 +206,22 @@ class Updater:
                 "releases_url": RELEASES_URL, "log": str(self.log_path)}
 
     def log_tail(self, lines: int = 40) -> str:
+        """Đuôi `update.log` cho người đọc: dòng JSON (helper từ L7) → `msg`; dòng chữ cũ giữ nguyên."""
         try:
-            return "\n".join(self.log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-max(1, min(lines, 400)):])
+            raw = self.log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-max(1, min(lines, 400)):]
         except OSError:
             return ""
+        out = []
+        for ln in raw:
+            if ln.startswith("{"):
+                try:
+                    d = json.loads(ln)
+                    if isinstance(d, dict) and isinstance(d.get("msg"), str):
+                        ln = d["msg"]
+                except ValueError:
+                    pass
+            out.append(ln)
+        return "\n".join(out)
 
     # ------------------------------------------------------------------ cập nhật
     def install_argv(self, tag: str) -> list[str]:
