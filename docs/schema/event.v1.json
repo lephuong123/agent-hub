@@ -192,6 +192,7 @@
     "filehub.deleted": "summary",
     "filehub.human_changed": "summary",
     "filehub.infected": "summary",
+    "filehub.lane.roots": "summary",
     "filehub.lane.state": "summary",
     "filehub.push_failed": "summary",
     "filehub.secret_blocked": "summary",
