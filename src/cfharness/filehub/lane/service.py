@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...errors import Blocked, Conflict, HubError, NotFound
 from ...events import make_event
-from .client import PROTOCOL, SERVER_RE, LaneClient, LaneError, check_url, key_prefix, port_of, valid_key
+from .client import PROTOCOL, SERVER_RE, LaneClient, LaneError, check_url, join_rel, key_prefix, port_of, valid_key
 
 if TYPE_CHECKING:
     from ..service import FilehubService
@@ -107,6 +107,28 @@ def validate_setting(key: str, value: Any) -> None:
         _servers({name: value} if "." not in key[len("filehub.lane.servers."):] else None)
     elif key == "filehub.folders":
         _folders(value)
+
+
+REVERT_MAX_OPS = 2000  # run lane nhiều thao tác hơn → không hoàn tác ở hub (khôi phục trên Không gian số)
+REVERT_KEYS = ("op", "path", "from", "before", "after", "trash", "gone", "folder", "rev", "parents")
+
+
+def revert_ops(ops: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Thao tác ĐÃ ĐẨY của run (theo thứ tự) → bản ghi hoàn tác gọn lưu trong `runs.diff.revert_ops` (không nội dung tệp)."""
+    return [{k: o[k] for k in REVERT_KEYS if o.get(k) is not None} for o in ops if o.get("op") in ("added", "modified", "deleted", "renamed")]
+
+
+def op_revertible(o: dict[str, Any]) -> bool:
+    op = o.get("op")
+    if op == "added":
+        return bool(o.get("folder") or o.get("after"))
+    if op == "modified":
+        return bool(o.get("before") and o.get("after"))
+    if op == "deleted":
+        return bool(o.get("trash") or o.get("gone"))
+    if op == "renamed":
+        return bool(o.get("from") and (o.get("folder") or o.get("after")))
+    return False
 
 
 def _parse_ts(v: Any) -> float | None:
@@ -782,11 +804,14 @@ class LaneService:
         st = {"added": "added", "modified": "modified", "deleted": "deleted", "renamed": "renamed"}
         files = [{"status": st.get(o.get("op"), "modified"), "path": o.get("path"), **({"from": o["from"]} if o.get("from") else {})}
                  for o in wd.run_ops() if o.get("op") in st]
+        rops = revert_ops(wd.run_ops())
+        revertible = bool(rops) and len(rops) <= REVERT_MAX_OPS and all(op_revertible(o) for o in rops)
         diff = {"kind": "lane", "root": str(wd.path), "filehub": wd.folder, "lane": {"server": wd.server, "root": wd.root, "sub": wd.sub},
-                "files": files[:500], "stat": {"files": len(files), "unpushed": len(wd.unpushed())}, "revertible": False}
+                "files": files[:500], "stat": {"files": len(files), "unpushed": len(wd.unpushed())}, "revertible": revertible,
+                **({"revert_ops": rops} if revertible else {})}
         self.hub.store.update_run(run_id, {"diff": diff})
         ev = make_event("workspace.diff", wd.agent_id, {"kind": "lane", "stat": diff["stat"], "files": [f"{f['status']}:{f['path']}" for f in files[:50]],
-                                                        "revertible": False}, run_id=run_id)
+                                                        "revertible": revertible}, run_id=run_id)
         self.hub.publish(ev)
         return diff
 
@@ -984,20 +1009,138 @@ class LaneService:
             n += await self._release_orphan(self.orphan_dir / str(o["tree"]), discard=discard)
         return {"root_id": root_id, "lane": True, "released" if not discard else "discarded": n, "trees": len(trees) + len(orphans)}
 
+    # ------------------------------------------------------------------ hoàn tác run (CHỈ người: RPC `run.revert`, HUMAN_ONLY)
+    async def revert_run(self, run: dict[str, Any], *, dry_run: bool = False) -> dict[str, Any]:
+        """Hoàn tác thay đổi của một run lane TRÊN Không gian số bằng phiên bản/thùng rác (C.6 `restore`, `move`, `DELETE` → thùng rác):
+        sửa → khôi phục phiên bản trước run; tạo → xoá (vào thùng rác); xoá → khôi phục từ thùng rác; đổi tên → đổi lại.
+        Như workspace `dir:`: KIỂM TRƯỚC toàn bộ — mục nào đã bị sửa tiếp sau run (phiên bản khác bản run để lại, chỗ trống đã có mục mới)
+        → `Conflict`, không ghi gì. Không bao giờ xoá hẳn: mọi bước đều khôi phục lại được trên Không gian số."""
+        from ...termsafe import one_line
+
+        diff = dict(run.get("diff") or {})
+        lane = dict(diff.get("lane") or {})
+        server, root, sub = str(lane.get("server") or ""), str(lane.get("root") or ""), str(lane.get("sub") or "")
+        ops = [o for o in (diff.get("revert_ops") or []) if isinstance(o, dict)]
+        if not diff.get("revertible") or not ops:
+            raise HubError("run lane này không có dữ liệu hoàn tác (run cũ trước khi hub ghi phiên bản, quá nhiều thao tác, hoặc không đẩy gì) — "
+                           "khôi phục bằng phiên bản/thùng rác trên Không gian số")
+        if server not in self.servers():
+            raise HubError(f"cổng cfharness «{server}» không còn được cấu hình — không hoàn tác được")
+        tree = str(((run.get("run_opts") or {}).get("filehub_lane") or {}).get("tree") or run["id"])
+        if tree in self.workdirs or self._tree_busy(tree) or (self.state_dir / f"{tree}.json").exists():
+            raise Conflict("cây làm việc của run còn đang dùng (run đang chạy/chờ/đỗ) — xử lý xong trước khi hoàn tác")
+        if (self.orphan_dir / tree).exists():
+            raise Conflict("run còn thay đổi chưa đẩy lên Không gian số (cây mồ côi) — Đẩy lại hoặc Bỏ trước khi hoàn tác")
+        c = self.client(server)
+
+        def remote(rel: str) -> str:
+            return join_rel(sub, rel)
+
+        # trạng thái cuối run theo từng đường dẫn (đổi tên thư mục kéo theo con)
+        final: dict[str, dict[str, Any]] = {}
+        for o in ops:
+            rel, op = str(o.get("path") or ""), o.get("op")
+            if op == "renamed":
+                src = str(o.get("from") or "")
+                for k in [k for k in list(final) if k == src or k.startswith(src + "/")]:
+                    final[rel + k[len(src):]] = final.pop(k)
+                final[src] = {"absent": True}
+                final[rel] = {"folder": bool(o.get("folder")), "after": o.get("after")}
+            elif op == "deleted":
+                for k in [k for k in list(final) if k.startswith(rel + "/")]:
+                    final.pop(k)
+                final[rel] = {"absent": True}
+            else:
+                final[rel] = {"folder": bool(o.get("folder")), "after": o.get("after")}
+        conflicts: list[str] = []
+        for rel, want in final.items():
+            try:
+                cur: dict[str, Any] | None = await c.stat(root, remote(rel))
+            except LaneError as e:
+                if e.lane_code != "not_found":
+                    raise HubError(f"không kiểm được '{one_line(rel, 200)}' trên Không gian số: {e.message}") from None
+                cur = None
+            if want.get("absent"):
+                if cur is not None:
+                    conflicts.append(rel)  # chỗ run để trống đã có mục mới
+            elif cur is None or (want.get("folder") and cur.get("type") != "folder"):
+                conflicts.append(rel)
+            elif not want.get("folder") and str(cur.get("version_id") or "") != str(want.get("after") or ""):
+                conflicts.append(rel)  # đã có phiên bản mới hơn bản run để lại (người hoặc run khác sửa tiếp)
+        if conflicts:
+            shown = [one_line(x, 200) for x in sorted(conflicts)[:20]]
+            raise Conflict(f"xung đột: {len(conflicts)} mục trên Không gian số đã bị sửa tiếp sau run — không ghi đè: {', '.join(shown)}",
+                           data={"conflicts": shown})
+        paths = sorted({str(o.get("path")) for o in ops} | {str(o["from"]) for o in ops if o.get("from")})
+        if dry_run:
+            return {"reverted": paths, "warnings": [], "dry_run": True, "lane": True}
+        agent, rid = str(run.get("agent_id") or "hub"), f"revert-{run['id']}"
+        done: list[str] = []
+        warnings: list[str] = []
+        try:
+            for o in reversed(ops):
+                rel, op = str(o.get("path") or ""), o.get("op")
+                if op == "modified":
+                    cur = await c.stat(root, remote(rel))
+                    await c.restore(root, agent=agent, run=rid, path=remote(rel), version_id=str(o["before"]), if_match=str(cur.get("version_id") or ""))
+                elif op == "added":
+                    cur = await c.stat(root, remote(rel))
+                    try:
+                        await c.delete(root, remote(rel), if_rev=int(cur.get("rev") or 0) or None, agent=agent, run=rid)
+                    except LaneError as e:
+                        if not (o.get("folder") and e.lane_code == "not_empty"):
+                            raise
+                        warnings.append(f"giữ thư mục '{one_line(rel, 200)}': trong đó có mục không do run tạo")
+                        continue
+                    for par in reversed([str(x) for x in o.get("parents") or []]):  # thư mục cha server tạo kèm: chỉ xoá khi đã rỗng
+                        try:
+                            await c.delete(root, remote(par), if_rev=None, agent=agent, run=rid)
+                        except LaneError as e:
+                            if e.lane_code not in ("not_empty", "not_found"):
+                                raise
+                            break
+                elif op == "deleted":
+                    if o.get("gone"):
+                        continue  # đã bị bên khác xoá trước run kịp xoá — không phải thay đổi của run
+                    await c.restore(root, agent=agent, run=rid, trash_batch=str(o["trash"]))
+                elif op == "renamed":
+                    cur = await c.stat(root, remote(rel))
+                    await c.move(root, remote(rel), remote(str(o["from"])), if_rev=int(cur.get("rev") or 0) or None, agent=agent, run=rid)
+                done.append(rel)
+        except LaneError as e:
+            # dừng ở bước lỗi: các bước đã làm vẫn khôi phục được (phiên bản/thùng rác) — báo rõ để người xử lý nốt trên Không gian số
+            raise HubError(f"hoàn tác dừng giữa chừng ở '{one_line(rel, 200)}': {e.message} — đã hoàn tác {len(done)} thao tác",
+                           data={"partial": [one_line(x, 200) for x in done[:50]], "lane_code": e.lane_code}) from None
+        return {"reverted": paths, "warnings": warnings, "dry_run": False, "lane": True}
+
     # ------------------------------------------------------------------ presence (C.6 `PUT /presence`): "cfharness · <agent> · đang sửa <tệp>"
-    async def presence_tick(self, wd: Any) -> None:
+    async def presence_tick(self, wd: Any, *, now: float | None = None, parked_ok: bool = False) -> None:
         """Làm mới presence của run GHI ở nửa ttl, hoặc ngay khi tệp đẩy gần nhất đổi (nhãn do server dựng — hub chỉ gửi đường dẫn)."""
-        if wd.read_only or wd.parked or wd.revoked or wd.stopped_push:
+        if wd.read_only or (wd.parked and not parked_ok) or wd.revoked or wd.stopped_push:
             return
+        now = time.time() if now is None else float(now)
         ttl = int(self.cfg("presence_ttl_s") or 300)
         path = wd.remote(wd.last_pushed) if wd.last_pushed else None
-        if time.time() - wd._presence_at < ttl / 2 and path == getattr(wd, "_presence_path", None):
+        if now - wd._presence_at < ttl / 2 and path == getattr(wd, "_presence_path", None):
             return
-        wd._presence_at, wd._presence_path = time.time(), path
+        wd._presence_at, wd._presence_path = now, path
         try:
             await self.client(wd.server).presence_put(wd.root, path, ttl, agent=wd.agent_id, run=wd.run_id)
         except LaneError as e:
             log.info("lane: presence lỗi (%s): %s", wd.run_id, e.lane_code)
+
+    async def parked_presence(self, now: float | None = None) -> None:
+        """Cây ĐỖ vì run chờ người (`waiting_human`): GIỮ presence (plan §4.5) — người trên web vẫn thấy "cfharness · <agent>" đang làm dở
+        thư mục này; làm mới ở nửa ttl như khi chạy. Cây đỗ vì `interrupted` (daemon/tiến trình dừng) → không làm mới (hết hạn theo ttl);
+        run đã kết thúc hẳn → xoá presence ngay."""
+        for wd in list(self.workdirs.values()):
+            if not wd.parked or wd.read_only or not wd._presence_at:
+                continue
+            status = (self.hub.store.get_run(wd.run_id) or {}).get("status")
+            if status == "waiting_human":
+                await self.presence_tick(wd, now=now, parked_ok=True)
+            elif status not in ("queued", "running", "interrupted"):
+                await self.presence_clear(wd)
 
     async def presence_clear(self, wd: Any) -> None:
         if wd.read_only or not wd._presence_at:
@@ -1115,9 +1258,13 @@ class LaneService:
             log.info("lane: hello lại %s lỗi: %s", server, e.message)
 
     async def _health_loop(self) -> None:
+        from ...runs import export_quiesced
+
         while True:
             try:
                 await self.health_check()
+                if not export_quiesced(self.hub):
+                    await self.parked_presence()
             except asyncio.CancelledError:
                 raise
             except Exception:  # pragma: no cover
@@ -1281,7 +1428,8 @@ class LaneService:
                     wd._snap(dst + k[len(src):])
                 if dst in wd.base:
                     wd.base[dst]["rev"] = int(item.get("rev") or 0)
-                wd._op("renamed", dst, **{"from": src})
+                wd._op("renamed", dst, **{"from": src}, after=item.get("version_id") or (wd.base.get(dst) or {}).get("version_id"),
+                        rev=int(item.get("rev") or 0) or None, **({"folder": True} if item.get("type") == "folder" else {}))
                 wd.persist()
                 return {"from": src, "to": dst, "moved": True}
             if op == "fs_delete":
@@ -1297,7 +1445,8 @@ class LaneService:
                                        if_match=str(st.get("version_id") or ""))
                 if wd.mode == "tree" or rel in wd.base:
                     await wd._download(rel, item)
-                wd._op("modified", rel, restored=True)
+                wd._op("modified", rel, restored=True, after=item.get("version_id"),
+                        **({"before": st.get("version_id")} if st.get("version_id") else {}))
                 wd.persist()
                 return {"path": rel, "restored": True, "version_id": item.get("version_id")}
         raise HubError(f"không có tool '{op}'")
