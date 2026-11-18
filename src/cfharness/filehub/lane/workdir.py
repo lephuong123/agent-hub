@@ -44,6 +44,7 @@ log = logging.getLogger("cfharness.filehub.lane")
 
 TMP_PREFIX = ".lane-tmp-"
 STATE_VERSION = 1
+HELD_SHOW = 50  # lô xoá đang giữ: số đường dẫn hiện cho người (phần còn lại "và N mục nữa")
 # steer: câu CỐ ĐỊNH tiếng Anh; <rel> đã làm sạch một dòng (nội dung từ Không gian số là DỮ LIỆU)
 STEER_CHANGED = "[cfharness] The human changed {rel} on Không gian số just now. Re-Read it before editing."
 STEER_DELETED = "[cfharness] The human deleted {rel} on Không gian số just now. Do not recreate it unless the task requires it."
@@ -977,6 +978,11 @@ class Workdir:
     def held_deletes(self) -> list[str]:
         return sorted(r for r, e in self.pending.items() if e.get("held"))
 
+    def held_view(self, limit: int = HELD_SHOW) -> dict[str, Any]:
+        """Lô xoá đang giữ cho NGƯỜI quyết: tổng + ≤ `limit` đường dẫn đầu (thẻ web, trang xác nhận, event)."""
+        held = self.held_deletes()
+        return {"count": len(held), "paths": [one_line(x, 300) for x in held[:limit]]}
+
     async def _mass_delete_gate(self) -> None:
         """Chặn xoá hàng loạt: số lệnh xoá chưa được duyệt + số đã đẩy từ lần duyệt gần nhất > `max_delete_batch` → GIỮ mọi lệnh xoá chưa
         duyệt (`held`), báo người MỘT lần (`filehub.blocked{reason: mass_delete}`) + steer agent. Không bao giờ tự quyết: người
@@ -994,7 +1000,7 @@ class Workdir:
             self.pending[r]["held"] = True
         if not already:
             self.svc.publish("filehub.blocked", self, {"root_id": self.root, "reason": "mass_delete", "count": len(dels), "limit": limit,
-                                                       "paths": [one_line(x, 300) for x in sorted(dels)[:20]], "lane": True})
+                                                       "paths": [one_line(x, 300) for x in sorted(dels)[:HELD_SHOW]], "lane": True})
             self.steered.discard("massdel")
             await self.steer("massdel", STEER_MASS_DELETE.format(n=len(dels)))
 
@@ -1373,7 +1379,8 @@ class Workdir:
     def info(self) -> dict[str, Any]:
         return {"tree": self.tree, "run_id": self.run_id, "agent_id": self.agent_id, "folder": self.folder, "sub": self.sub, "mode": self.mode,
                 "pending": len(self.pending), "blocked": len(self.blocked), "failed": len(self.failed), "lazy": len(self.lazy),
-                "parked": self.parked, "revoked": self.revoked, "held": len(self.held_deletes()), "root_id": self.root}
+                "parked": self.parked, "revoked": self.revoked, "held": len(self.held_deletes()), "held_paths": self.held_view()["paths"],
+                "root_id": self.root}
 
 
 __all__ = ["Workdir", "conflict_name", "STEER_CHANGED", "STEER_CONFLICT", "STEER_SECRET", "STEER_LOCKED", "TMP_PREFIX"]
