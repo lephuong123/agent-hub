@@ -13,7 +13,8 @@
 {%- endmacro %}
 <section class="card" id="filehub"{% if polling %} hx-get="/partials/filehub" hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
   <div class="card-head"><h2>{{ m.icon('inbox') }} Không gian số — thư mục dùng chung</h2>
-    {% if data %}{% set sv = states.get(data.state, (data.state, '')) %}<span class="pill {{ sv[1] }}">{{ sv[0] }}</span>{% endif %}
+    {% if data and data.lane_configured and not data.folders %}<span class="pill ok">qua cổng cfharness</span>
+    {% elif data %}{% set sv = states.get(data.state, (data.state, '')) %}<span class="pill {{ sv[1] }}">{{ sv[0] }}</span>{% endif %}
   </div>
   {% if down %}
     <p class="muted">Daemon không trả lời — không đọc được trạng thái đồng bộ.</p>
@@ -47,6 +48,11 @@
   {% if not data.enabled or not data.folders %}
     {#- ---- chưa có thư mục: thư mục đã cấp → nối; chưa có binary → nhờ admin; còn lại → form thiết lập ---- -#}
     {% if not polling %}
+    {% if data.lane_configured %}
+    <p class="small">Hub đang dùng <b>cổng cfharness</b> (thẻ «Cổng cfharness» bên dưới) — thư mục chung dùng được ngay, không cần đồng bộ về máy
+      {% if data.lane_folders %}({% for f in data.lane_folders %}<code>{{ f.workspace }}</code>{{ ", " if not loop.last }}{% endfor %}){% endif %}.</p>
+    <details class="small"><summary>Đồng bộ 2 chiều kiểu cũ (chỉ khi Không gian số chạy ở máy khác)</summary>
+    {% endif %}
     <p class="small muted">Thư mục dùng chung đồng bộ 2 chiều giữa máy chạy hub và Không gian số: bạn sửa tệp trên web/điện thoại, agent làm việc
       trên bản sao ở máy (workspace <code>filehub:&lt;tên&gt;</code>). Mặc định đồng bộ <b>toàn bộ một workspace</b> (đăng nhập bằng tài khoản admin
       của workspace); hoặc chỉ một thư mục.</p>
@@ -78,6 +84,7 @@
     </form>
     <p class="small muted">Hoặc ở terminal: <code>cfharness filehub setup --server https://…</code></p>
     {% endif %}
+    {% if data.lane_configured %}</details>{% endif %}
     {% endif %}
   {% else %}
     {#- ---- đã có thư mục ---- -#}

@@ -22,6 +22,8 @@ def _restore_logging(monkeypatch):
     """setup_logging đổi trạng thái logging toàn cục → trả lại nguyên trạng sau mỗi test."""
     root, lg = logging.getLogger(), logging.getLogger("cfharness")
     saved = (list(root.handlers), root.level, list(lg.handlers), lg.level, getattr(lg, logs._FILE_MARK, None), logs._PROC)
+    if hasattr(lg, logs._FILE_MARK):  # test khác (vd test_sec_secrets) đã setup_logging mà không trả lại → bắt đầu sạch
+        delattr(lg, logs._FILE_MARK)
     yield
     for h in list(root.handlers):
         if h not in saved[0]:
@@ -38,6 +40,8 @@ def _restore_logging(monkeypatch):
     lg.setLevel(saved[3])
     if saved[4] is None and hasattr(lg, logs._FILE_MARK):
         delattr(lg, logs._FILE_MARK)
+    elif saved[4] is not None:
+        setattr(lg, logs._FILE_MARK, saved[4])
     logs._PROC = saved[5]
     for name in ("cfharness.guard", "asyncio", "cfharness.l1"):
         logging.getLogger(name).setLevel(logging.NOTSET)

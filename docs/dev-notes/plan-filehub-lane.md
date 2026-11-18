@@ -193,8 +193,9 @@ data: {"root":"6f1c…","op":"update","type":"file","id":"0b7e…","path":"Báo 
 - `op: acl` hoặc mục rời khỏi phạm vi nhìn thấy → `{"op":"acl","gone":true,…}`: hub `stat`/`list` lại `path` (= thư mục gần nhất
   CÒN thấy được – không lộ tên mới của mục vô hình; `""` = gốc).
 - Mục agent CHƯA TỪNG thấy (trong thư mục vô hình, khớp mẫu loại trừ, Claude tắt…) → KHÔNG có khung nào (không id / rev / thời điểm).
-  `gone` chỉ phát khi mục thấy được TRƯỚC thay đổi (chỗ cũ của move / tên cũ của rename thấy được; dòng `acl` của thư mục có cha còn
-  thấy được). `from_path` = `null` khi tên / chỗ cũ không thấy được với agent (vd. đổi tên từ `.env`).
+  `gone` chỉ phát khi mục thấy được TRƯỚC thay đổi (chỗ cũ của move / tên cũ của rename thấy được; dòng `acl`: thư mục thấy được ngay
+  trước giao dịch đổi quyền; mục đã bị dọn hẳn: thấy được lúc còn trong Thùng rác). `from_path` = `null` khi tên / chỗ cũ không thấy
+  được với agent (vd. đổi tên từ `.env`).
 - `event: reset` `{"root": "…", "reason": "compacted|acl|restored"}` — cursor quá cũ (journal đã nén, > 30 ngày) hoặc thay đổi hàng loạt:
   hub `list?recursive=1` lại gốc đó rồi nối luồng bằng `cursor` của lượt list.
 - `event: root_revoked` `{"root": "…"}` · `event: key_revoked` (rồi đóng) · `event: replaced` (luồng thứ 3 mở → luồng cũ nhất bị đóng)
@@ -367,13 +368,65 @@ trước khi sửa; KHÔNG đổi §C):
 - Người sửa tệp lười (chưa tải) → chỉ cập nhật metadata base (vẫn `lazy`), không tải.
 - Xung đột giữ bản người (`_conflict_local(keep_remote)`) CHÉP bản agent sang tên mới rồi tải đè nguyên tử — tệp gốc không lúc nào biến mất.
 - Web: thẻ "Cổng cfharness" liệt kê lô xoá đang giữ theo run (`info().held`) + nút "Cho xoá"/"Không xoá" (ACTIONS `filehub_lane_deletes` →
-  `filehub.resume {root_id, discard?}`, xác nhận, audit web). Chat (Telegram/Slack) chưa có nút — vẫn qua web/CLI.
+  `filehub.resume {root_id, discard?}`, xác nhận, audit web). Chat (Telegram/Slack): có nút từ 2026-11-18 (mục "Việc tiếp theo").
+
+Sửa theo nghiệm thu UI + e2e (2026-11-17, nhánh `fix/lane-onboarding`, `tests/test_lane_onboarding.py` — mỗi ca đỏ trước khi sửa; KHÔNG đổi §C):
+- **B0 dán khoá là xong**: `LaneService.setup` → `reconcile(server, hello)`: mọi `hello.roots` chưa có thư mục → thêm `folders[]` `{mode: lane,
+  server, kind: workspace|folder}` (tên `safe_name` + ` 2`, ` 3`… nếu trùng tên/bí danh); gốc đang `sync` → giữ, báo (`sync` + nút chuyển). Mỗi
+  `hello` MỚI (setup, test, `prepare_run`, kiểm tra sức khoẻ, sau khung `root_revoked`) đối soát lại: gốc mới → thêm; thư mục lane của cổng mà
+  gốc không còn trong `roots` → `hub_state filehub.lane.revoked` (KHÔNG xoá gì; `status.folders[].revoked`, `filehub.list status=revoked`); cấp
+  lại → gỡ. Có thay đổi → event `filehub.lane.roots{server, added, revoked, regranted, sync}` (Telegram/Slack). `lane add` không đối soát trước
+  (người chọn tên). `lane_disable` gỡ thư mục lane KHÔNG có `local_path` của cổng đó (chỉ cấu hình), thư mục từng sync vẫn cần `switch` trước.
+  `filehub.lane_test` ∈ `MUTATING_FILEHUB` (đối soát có thể thêm thư mục → audit).
+- **B0b**: `url` bỏ trống → `filehub.lane.default_urls` (8223, 8233; chỉ nhận cổng trả `hello` hợp lệ với khoá vừa dán, ưu tiên báo lỗi khác
+  `offline`); `server` bỏ trống → `hello.server.instance` (khớp `SERVER_RE`, không thì `qltm`). CLI `--url/--server` tuỳ chọn; thẻ web chỉ còn
+  nút + ô địa chỉ trong "Nâng cao".
+- **B1**: `FilehubService.list()` thêm thư mục lane `{mode: lane, kind, server, status, local_path: null}` (tool `filehub_list` của điều phối
+  viên), sync có `mode: sync`; `filehub.status.lane_configured`; `not_found` liệt kê tên có thật; thẻ "Không gian số" + `filehub status` CLI
+  nói "qua cổng cfharness" khi chỉ có cổng.
+- **B5**: `Workdir.held_view()` (≤ `HELD_SHOW` = 50) → `info().held_paths`, `filehub.blocked.paths` ≤ 50; thẻ web liệt kê + "và N mục nữa";
+  `Action.preview` (web/app.py — chữ đọc từ daemon lúc xác nhận, áp cho cả 2D/3D) cho trang xác nhận "Cho xoá/Không xoá"; tin Telegram/Slack
+  liệt kê 10 mục đầu.
+- **B9/B10/B12**: `lane.STATE_TEXT` (nhãn + việc cần làm) trong `lane_status.servers[].label|hint`, `expiry.date` (giờ máy, dd/mm/yyyy) +
+  `expiry.days` (nguyên); thẻ không hiện hạn khi `auth_failed`. `LaneService.health_check` (vòng nền `_health_loop`, `lane.start()`):
+  `hello` mỗi `health_ok_s` (60; trước là 300) khi ổn, lùi `health_retry_s` [5, 300] khi lỗi — `offline` tự về `ok` không cần run. Nút "Thử kết nối"
+  (ACTIONS `filehub_lane_test`), thao tác lane quay về `#filehub-lane`, bỏ câu "Nhập lại giá trị ở trang Cài đặt" ở bước 1 khi thao tác có
+  `reenter` (khoá hỏi ở bước 2).
+
+Sửa theo nghiệm thu lần 2 (2026-11-17, `tests/test_lane_accept_fixes.py`, mỗi ca đỏ trước khi sửa):
+- Lô xoá đang giữ KHÔNG đổi nghĩa khi run kết thúc: `orphans()[]` có `root_id`, `task_id`, `held`, `held_paths`, `items[] {path, op, label, from?,
+  held}` (`LaneService.change_items`, `OP_TEXT` xoá/ghi/di chuyển…); `filehub.resume {root_id, discard?}` áp cả cây mồ côi (`_release_orphan`:
+  Cho xoá = đẩy ĐÚNG các lệnh xoá; Không xoá = bỏ lệnh xoá, tệp ở lại). `lane_orphan push` KHÔNG còn ngầm duyệt lô xoá (trả `held`).
+  Web: lô xoá gộp theo gốc (`filehub_pages.held_batches`, `_held_batch.html`) ở thẻ + "Cần bạn" (task bị chặn → link `#held-<gốc>`); trang xác
+  nhận nêu thao tác từng mục (`_orphan_preview`) và số tệp ("Xoá N tệp trên Không gian số" / "Không xoá — giữ N tệp, bỏ thay đổi của agent").
+- Ô địa chỉ "Nâng cao" để trống (placeholder) → tự thử `default_urls`. Thẻ ghi "kiểm tra lúc HH:MM:SS" (`servers[].checked`).
+- `ToolWriteWatcher` bỏ qua tool đọc của hub-self (`hub_self.READ_ONLY_TOOLS`) — trước đây mọi tool hub-self (cả `filehub_list`) bị audit `tool.write`.
+- Điều phối viên: `open_tasks[]/task_list[]/task_get` có `wait` (câu tiếng Anh từ `wait_reason`, `manager/ops.wait_text`) — `rate_limit` nghĩa là
+  "giảm số run song song vì gần hạn mức", không phải lỗi rate limit.
+
+Việc tiếp theo (2026-11-18, nhánh `fix/lane-followups`, `tests/test_lane_followups.py` + ca trong `test_guard_classifier.py`, `test_telegram.py`,
+`test_slack.py`; KHÔNG đổi §C — fake chỉ làm đủ `restore {trash_batch}` đã có trong §C.6):
+- **`run revert` cho run lane** (RPC `run.revert`, HUMAN_ONLY sẵn): nhật ký thao tác ghi `before`/`after` (version_id), `trash` (lô thùng rác
+  của lệnh xoá), `parents` (thư mục cha server tạo kèm `parents=1`) → `runs.diff.revert_ops` (≤ 2000, không nội dung) + `revertible: true`.
+  `LaneService.revert_run`: KIỂM TRƯỚC trạng thái cuối run của từng đường dẫn (phiên bản = `after`, chỗ run để trống vẫn trống; đổi tên thư
+  mục kéo theo con) — khác → `Conflict{conflicts}`, không ghi gì; rồi đi NGƯỢC: sửa → `restore {path, version_id: before}`, tạo → `DELETE`
+  (thùng rác, + thư mục cha tạo kèm nếu rỗng), xoá → `restore {trash_batch}`, đổi tên → `move` lại. Lỗi giữa chừng → `HubError{partial}`
+  (mọi bước đã làm vẫn khôi phục được). Từ chối khi cây còn dùng/đỗ/mồ côi (thay đổi chưa đẩy). Run cũ (không có `revert_ops`) → từ chối
+  như trước. Web: nút "Hoàn tác trên Không gian số" + "Kiểm tra trước" (`dry_run`).
+- **Presence khi chờ người** (theo §4.5 "waiting_human giữ cây + presence"): `LaneService.parked_presence` (vòng sức khoẻ 1 s) làm mới
+  presence của cây đỗ ở nửa ttl CHỈ khi run `waiting_human`; `interrupted` → để hết hạn; run đã kết thúc → xoá presence.
+- **Cây lane của run khác**: sandbox denyRead + denyWrite ĐƯỜNG DẪN CỤ THỂ mọi `agents/*/workspaces/lane-*` có lúc spawn trừ cây của chính run
+  (`guard/runtime.lane_tree_dirs`, cả `confine_only_sandbox` của trust full); classifier `lane_other_tree` (cấm, ∈ `TRUST_NEVER_RULES` +
+  `NEVER_DOWNGRADE_RULES`) cho Read/Grep/Glob/Edit/Write + Bash (tuyệt đối, `~`, `../lane-…`) — kiểm mỗi lần gọi tool nên phủ cả cây tạo
+  sau lúc spawn (sandbox thì không).
+- **Mọi run được đọc** (quyết theo plan-cloud-files §7.4 — header plan này "GIỮ NGUYÊN"): run làm việc KHÔNG có workspace lane (trừ
+  review/eval/curator/graph_extract) được hub-self `--fs browse` = `fs_list|fs_stat|fs_read|fs_versions|fs_link` chỉ đọc server, đường dẫn
+  `<tên thư mục>/<…>` (`fs_list ""` = danh sách thư mục; gốc bị thu hồi không hiện/không đọc). Không cây, không `fs_pull`. Khối prompt
+  "Shared folder" nói điều này. Tắt: `filehub.lane.read_all_runs: false`.
+- **Telegram/Slack**: nút "Cho xoá"/"Không xoá" cho `filehub.blocked{mass_delete, lane}` (ChatBot core, `lx|lk` → bước 2 đọc lại
+  `filehub.lane_status` theo `root_id`, tin danh sách riêng sau tiền tố cố định, tin nút riêng → `lxc|lkc` → `filehub.resume` qua `self.call`).
 
 Việc còn lại:
-- Nghiệm thu thật trên qltm sau khi K1–K4 lên (plan §7 H4); `tested` với claude thật (steer + Write/Edit trong cây).
-- `run.revert` cho run lane = khôi phục phiên bản trước run qua `restore` (HUMAN_ONLY) — chưa làm (`run revert` từ chối như sync).
-- Run KHÔNG có workspace `filehub:` không đọc được thư mục lane (không có bản sao) — §7.4 "mọi run được đọc" chỉ còn với `sync`; cần
-  quyết: cho mọi run `fs_*` chỉ đọc theo gốc, hay giữ như vậy.
-- Presence không làm mới trong lúc cây đỗ (`waiting_human`) — hết hạn theo ttl.
-- Chặn đọc cây lane của agent KHÁC bằng sandbox (hiện như scratch của agent).
+- Nghiệm thu thật trên qltm sau khi K1–K4 lên (plan §7 H4); `tested` với claude thật (steer + Write/Edit trong cây); kiểm thật sandbox chặn
+  `cat <cây lane khác>` từ Bash.
 - H5 (gỡ đồng bộ cũ) — ngoài phạm vi.
