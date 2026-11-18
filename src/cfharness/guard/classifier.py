@@ -106,9 +106,10 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "run": {"revert", "takeover"},
     "runs": {"revert"},
     "curation": {"rollback"},
-    "daemon": {"stop", "restart", "dump-stacks"},
+    "daemon": {"stop", "restart", "dump-stacks", "logs"},  # L6: `daemon logs` = đọc log hệ thống (alias cũ của `logs`)
     "audit": None,  # nhật ký kiểm toán (audit.list ∈ HUMAN_ONLY, L3) — agent gõ, kể cả chỉ xem, đều chặn
     "logs": None,  # log hệ thống (logs_rpc.py, L1): đổi level / xem log của hub — agent gõ, kể cả chỉ xem, đều chặn
+    "trace": None,  # L6: dòng thời gian yêu cầu/run (audit + log + event) — chỉ người
     "auth": None,
     "notify": {"telegram", "slack"},  # token bot / allowlist chat / gửi tin thay người (chat/rpc.py, chat/slack/rpc.py)
     "answer": None,  # UX: trả lời câu hỏi = quyết định của người (agent không tự trả lời câu hỏi của mình/agent khác)
@@ -906,7 +907,8 @@ def sensitive_read(p: str, ctx: GuardContext) -> bool:
             return True
         for h in homes:
             if (_under(c, h + "/secrets") or _under(c, h + "/auth") or _under(c, h + "/backups") or _under(c, h + "/filehub")
-                    or _under(c, h + "/exports") or _under(c, h + "/imports") or _same(c, h + "/mcp_server/tokens.json")):
+                    or _under(c, h + "/exports") or _under(c, h + "/imports") or _under(c, h + "/logs")
+                    or _same(c, h + "/mcp_server/tokens.json")):  # L6: logs/ = log hệ thống (id, đường dẫn, lỗi của mọi agent)
                 return True
             parts = [x.lower() for x in _rel_parts(c, h)] if IS_WINDOWS else _rel_parts(c, h)
             if len(parts) >= 3 and parts[0] == "agents" and parts[2] == "runtime":
@@ -1507,7 +1509,7 @@ class BashAnalyzer:
         # chỉ vùng mà ĐỌC ĐƯỢC = lộ secret/token/tự duyệt (policy đã do protected_write bắt — không đưa vào đây để không che protected_id)
         out: list[str] = []
         for h in {_hub_home(self.ctx), _real(_hub_home(self.ctx))}:
-            out += [f"{h}/auth", f"{h}/secrets", f"{h}/mcp_server/tokens.json", f"{h}/hub.db"]
+            out += [f"{h}/auth", f"{h}/secrets", f"{h}/mcp_server/tokens.json", f"{h}/hub.db", f"{h}/logs"]  # L6: log hệ thống
         if self.ctx.hub_socket:
             sock = canon_path(self.ctx.hub_socket)
             out += [sock, sock + ".auth", sock + ".web.auth", sock + ".mcp.auth"]

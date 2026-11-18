@@ -1,4 +1,4 @@
-{#- Thẻ "Sức khoẻ" ở Cài đặt (partial /partials/health) — chỉ RPC đọc: hub.status, hub.compat, guard.integrity.status, report.hangs, hub.housekeeping. -#}
+{#- Thẻ "Sức khoẻ" ở Cài đặt (partial /partials/health) — chỉ RPC đọc: hub.status (+ log_errors, L6), hub.compat, guard.integrity.status, report.hangs, hub.housekeeping. -#}
 {% import "_macros.html" as m with context %}
 <section class="card" id="health">
   <div class="card-head"><h2>{{ m.icon('shield') }} Sức khoẻ</h2>{% if bad %}<span class="pill danger">{{ bad }} vấn đề</span>{% else %}<span class="pill ok">{{ m.icon('check') }}ổn</span>{% endif %}</div>
@@ -16,5 +16,13 @@
     </div>
   </details>
   {% endif %}
-  <p class="muted small">Kiểm đầy đủ (gồm đăng nhập claude, PATH, MCP của agent): chạy <code>cfharness doctor</code> trong terminal.</p>
+  {% set le24 = (log_errors or {}).get('24h') or {} %}
+  {% if le24.by_logger %}
+  <details class="hangs"><summary>Lỗi / cảnh báo theo logger — 24 giờ (từ khi daemon chạy)</summary>
+    <table class="tbl small"><thead><tr><th>Logger</th><th>Lỗi</th><th>Cảnh báo</th></tr></thead><tbody>
+    {% for x in le24.by_logger %}<tr><td><a href="/logs?logger={{ x.logger|urlencode }}&amp;level=warning&amp;since=24h"><code>{{ x.logger }}</code></a></td><td>{{ x.error }}</td><td>{{ x.warning }}</td></tr>{% endfor %}
+    </tbody></table>
+  </details>
+  {% endif %}
+  <p class="muted small"><a href="/logs?level=error&amp;since=24h">Xem lỗi trong nhật ký hệ thống</a> · Kiểm đầy đủ (gồm đăng nhập claude, PATH, MCP của agent): chạy <code>cfharness doctor</code> trong terminal.</p>
 </section>

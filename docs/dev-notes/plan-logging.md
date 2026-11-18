@@ -380,3 +380,31 @@ Lệch / để sau:
 - Bỏ req_id client chỉ áp cho người gọi đã xác định ĐẦY ĐỦ là agent (method HUMAN_ONLY/ghi/`SCOPED_READ`/`SENSITIVE_READS`). Đường nóng (đọc thường,
   `guard.check` của hook — không token, không dò cây tiến trình) vẫn nhận req_id gửi kèm: hook guard cần nó để nối `guard.decision` với lệnh tạo run (L2); req_id
   không mang quyền gì.
+
+### L6 — Công cụ debug (nhánh `feat/logging-l6`)
+Đã làm:
+- `log_query.py`: đọc mọi `*.jsonl` + `hub.log` của `HUB_HOME/logs/` (cả `.N` và `.gz`), lọc THEO TRƯỜNG (`req_id`, `run_id`, `agent_id`, `task_id`, `proc`,
+  `logger` khớp tiền tố theo dấu chấm, `level` tối thiểu, `since`/`until` dạng `2h` hoặc ISO); chuỗi con chỉ là lọc thô trước khi parse. Dòng không phải
+  JSON object bị bỏ. Trần: `limit` ≤ 2000 dòng mới nhất, byte quét ≤ 64 MB mặc định (file mới nhất trước; file lớn đọc phần đuôi; `.gz` đọc từ đầu tới
+  trần); file có mtime trước `since` bị bỏ qua. `follow` cho `-f` (file đang ghi, xoay vòng → mở lại).
+- RPC `logs.query` + `trace.get` (logs_rpc.py; HUMAN_ONLY, ∈ `SENSITIVE_READS` → `read:<method>` gộp 10 phút; chạy trong thread, trace mở SQLite chỉ đọc
+  riêng). CLI `cfharness logs [...]` (không lệnh con = truy vấn; `logs level` giữ nguyên; `daemon logs` giữ nguyên như cũ), gọi RPC không tự khởi động
+  daemon, daemon dừng/daemon cũ thiếu method → đọc file trực tiếp (`--local` ép). `cfharness trace <id>` (`--json`, `--no-logs`, `--limit`).
+- `trace_view.py`: audit theo `req_id`/`run_id` (index), event theo `run_id` (index) chỉ dạng tóm tắt (`EVENT_KEYS`, giá trị từ khoá/id ngắn; bỏ level
+  `detail`/`debug`), event mang req_id mà không gắn run → cửa sổ rowid tìm nhị phân theo ts (không cần index `events.req_id`), guard decision (không input,
+  không lý do), approval (không input/lý do/ghi chú), run con qua `parent_run_id`/`continued_in_run_id` (3 tầng) và lệnh con qua `parent_req_id` trong log
+  (một tầng). Trần: 50 run, 300 event/run, 200k dòng event trong cửa sổ, 32 MB log, `limit` mục.
+- Web `/logs` "Nhật ký hệ thống" (menu cạnh "Nhật ký"), `/trace/{id}`; `/audit` thêm cột mã yêu cầu → `/trace/<req_id>`; trang run có link "Dòng thời gian".
+  Autoescape, không `|safe`, không JS mới.
+- B5: `log_query.ErrorCounter` (handler WARNING gắn trong `setup_logging`, thùng 1 phút giữ 24 h, đếm theo logger + `rpc.slow`) → `hub.status.log_errors`
+  (+ `ERROR_COUNTS`, `bus.listener_errors`); thẻ Sức khoẻ thêm 3 dòng + bảng theo logger (link `/logs`). `hub doctor` thêm kiểm `recent_errors` + mục
+  "Lỗi gần đây" (top 5 ERROR 24 h gom theo logger + mẫu thông điệp, req_id mẫu).
+- An toàn: `HUB_HOME/logs` vào sandbox denyRead, `permissions.deny` Read/Grep/Glob, classifier `sensitive_read` + `sensitive_regions` (Bash `cat/tail/grep`
+  → `hub_secret_read` forbidden). Classifier: `cfharness trace` và `cfharness daemon logs` forbidden (`logs` đã có). Log trả qua RPC che lại theo giá trị secret.
+- Test: `tests/test_debug_tools.py`.
+
+Lệch / để sau:
+- `parent_req_id` thêm vào trường log (`logs.CONTEXT_FIELDS` + `TraceFilter`) — DB không lưu nó, nên lệnh con chỉ tìm được khi log còn (retention log).
+- Không thêm index/migration: `events.req_id` vẫn không index (dùng cửa sổ rowid); `runs.parent_run_id` không index (quét bảng runs, đủ nhanh ở cỡ một tháng).
+- "Task chết" của B5 chưa có bộ đếm riêng (lỗi task asyncio đã vào `ERROR_COUNTS.asyncio`/`task`).
+- `observe_hook` vẫn chưa gửi req_id (L2 để lại).

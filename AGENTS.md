@@ -786,11 +786,14 @@ Xoá trong thư mục chung = `write` (chỉ báo sau run). Event filehub chỉ 
 + giao việc `filehub:`; thêm thao tác ghi filehub → HUMAN_ONLY + ca trong `tests/test_sec_auth.py`/`test_manager_security.py`. Test: server GIẢ
 `tests/fake_kgs_lane.py` + `lane_fake.py` (`test_lane_*.py`, `test_filehub_h5.py`, `test_web_filehub.py`) — đổi §C → sửa fake trong CÙNG PR.
 
-## Log hệ thống — `docs/dev-notes/plan-logging.md` (L1 nền tảng; L2–L8: req_id, audit đầy đủ, chuỗi băm, cảnh báo, trace, gói chẩn đoán)
+## Log hệ thống — `docs/dev-notes/plan-logging.md` (L1 nền tảng, L2 req_id, L3 audit đầy đủ, L6 công cụ debug; L4/L5/L7/L8: req_id, audit đầy đủ, chuỗi băm, cảnh báo, trace, gói chẩn đoán)
 | Module | Vai trò |
 |---|---|
 | `logs.py` | `setup_logging(proc, filename, shared)` JSONL mọi tiến trình (daemon `hub.log`, web `web.jsonl`, MCP `mcp.jsonl`), handler root cho thư viện (không lặp), che secret; `LevelController`/`level_loop` (config `logs.level|levels` + level tạm `hub_state logs.temp_levels`); `install_crash_handlers` (excepthook, faulthandler `logs/faults.log`, SIGUSR1), `asyncio_exception_handler`, `ERROR_COUNTS` |
-| `logs_rpc.py` | RPC `logs.levels|level` (HUMAN_ONLY, `logs.level` tự audit), CLI `cfharness logs level` (∈ HUB_HUMAN_ONLY_CLI) |
+| `logs_rpc.py` | RPC `logs.levels|level` (HUMAN_ONLY, `logs.level` tự audit), CLI `cfharness logs level` (∈ HUB_HUMAN_ONLY_CLI); L6: RPC `logs.query` + `trace.get` (HUMAN_ONLY, ∈ `SENSITIVE_READS`, chạy trong thread — trace mở SQLite CHỈ ĐỌC riêng), CLI `cfharness logs [--since --level --logger --req --run --agent --proc -n -f --local]` (daemon dừng → đọc file trực tiếp) + `cfharness trace <req_id|run_id|task_id>` (∈ HUB_HUMAN_ONLY_CLI) |
+| `log_query.py` | L6: đọc `*.jsonl` + `hub.log` (cả `.N`, `.gz`) lọc THEO TRƯỜNG (chuỗi con chỉ là lọc thô trước parse), gộp theo ts, trần dòng/byte (file mới trước, file lớn đọc đuôi, bỏ file có mtime trước `since`); `follow` (`-f`); `ErrorCounter` (handler WARNING, thùng 1 phút/24 h, gắn trong `setup_logging` → `hub.status.log_errors`); `recent_errors` (doctor "Lỗi gần đây": gom logger + `msg_template`) |
+| `trace_view.py` | L6: dòng thời gian audit (req_id/run_id) + log + event TÓM TẮT (`EVENT_KEYS`, giá trị chỉ từ khoá/id ngắn; bỏ level detail/debug) + guard (không input) + approval (không input/lý do) + run con (`parent_run_id`, `continued_in_run_id`, lệnh con qua `parent_req_id` trong log); event theo req không gắn run = cửa sổ rowid tìm nhị phân theo ts (không index `events.req_id`) |
+| `web/debug_pages.py` | L6: `/logs` "Nhật ký hệ thống" + `/trace/{id}` (chỉ đọc, autoescape; `/audit` link req_id, trang run link "Dòng thời gian") |
 | `aiotasks.py` | `track(task, keep)` / `spawn(coro)`: tác vụ nền "bắn rồi quên" có log lỗi — dùng thay cho `keep.add(t); t.add_done_callback(keep.discard)` |
 | `trace.py` | L2: mã yêu cầu `req_id` (`r_<ULID>`), contextvar `REQ_CTX` {req_id, parent_req_id, channel, principal}, `bind`/`child`/`traced` (điểm vào nội bộ: chat, nhịp điều phối viên, lịch, dispatcher, auto-resume), `outgoing` (client gắn `params._trace`), `accept` (daemon: chỉ nhận đúng định dạng), `TraceFilter` (log). Daemon trả `_meta.req_id` trong MỌI phản hồi (`RpcError.req_id`, CLI in "mã yêu cầu"); access log `cfharness.rpc` (đọc = DEBUG, ghi/lỗi = INFO, denied/`rpc.slow` = WARNING; `logs.slow_rpc_ms`) |
 
@@ -814,3 +817,8 @@ traceback, ném lại lỗi gốc; dòng lỗi bỏ khoá kiểu thông tin đă
 (principal, method, target) / 10 phút trong RAM (dòng đầu ngay, dòng `coalesced` khi cửa sổ đóng — audit append-only). Agent/điều phối viên trong run: req_id
 client gửi bị bỏ, mã mới với cha = req_id của run. Token web/mcp cùng lớp bảo vệ với token người (sandbox, `permissions.deny`, classifier, fileview, backup).
 `audit.list` ∈ HUMAN_ONLY, `cfharness audit` ∈ HUB_HUMAN_ONLY_CLI. Không bao giờ đưa sid/khoá phiên/token vào audit. Test: `tests/test_audit_full.py`.
+Công cụ debug (L6): agent KHÔNG đọc được `HUB_HOME/logs/` — sandbox denyRead + `permissions.deny` Read/Grep/Glob (`secret_read_deny_rules`) + classifier
+(`sensitive_read`, `sensitive_regions` → `hub_secret_read` forbidden); `cfharness logs|trace|daemon logs` forbidden. `trace.get`/`/trace` không bao giờ trả payload
+event, input tool/guard/approval, `data` của audit — thêm trường event vào tóm tắt = thêm vào `trace_view.EVENT_KEYS` (giá trị vẫn qua `_SAFE`). Log trả về
+qua RPC che lại theo giá trị secret (`mask_values`); terminal qua `termsafe.one_line`, web autoescape (không `|safe`). Log có thêm trường `parent_req_id`.
+Test: `tests/test_debug_tools.py`.

@@ -151,7 +151,7 @@ def from_env() -> str | None:
 
 
 class TraceFilter(logging.Filter):
-    """Chép `req_id`/`channel` của contextvar vào bản ghi (không ghi đè giá trị bản ghi đã có)."""
+    """Chép `req_id`/`channel`/`parent_req_id` của contextvar vào bản ghi (không ghi đè giá trị bản ghi đã có)."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         c = REQ_CTX.get()
@@ -160,6 +160,8 @@ class TraceFilter(logging.Filter):
                 record.req_id = c["req_id"]
             if c.get("channel") and not getattr(record, "channel", None):
                 record.channel = c["channel"]
+            if c.get("parent_req_id") and not getattr(record, "parent_req_id", None):
+                record.parent_req_id = c["parent_req_id"]  # L6: `trace` tìm lệnh con (điểm vào nội bộ, agent gọi trong run)
         return True
 
 
