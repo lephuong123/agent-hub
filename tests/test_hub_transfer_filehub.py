@@ -1,6 +1,6 @@
-"""Hub clone × filehub (thư mục chung "Không gian số"): token THIẾT BỊ không bao giờ vào gói (cả clone lẫn move), nhập không bật đồng bộ
-(TẮT, chưa đăng nhập, không tên thiết bị cũ), `local_path` đi qua pathmap (move), `filehub/` + `secrets/filehub/` của máy đích giữ nguyên,
-doctor báo filehub, đăng nhập lại xoá nhắc. Không gọi claude, không mạng (binary sync giả `fake_tangthu_sync.py`).
+"""Hub clone × filehub (thư mục chung "Không gian số"). Gói CŨ (hub còn đồng bộ 2 chiều — đã bỏ ở H5): token THIẾT BỊ không bao giờ vào gói
+(cả clone lẫn move); nhập bỏ khoá cấu hình của đồng bộ, thư mục đồng bộ thành "cần chuyển" (move: `mode: sync`, `local_path` qua pathmap;
+clone: gỡ), `filehub/` + `secrets/filehub/` của máy đích giữ nguyên, doctor báo, dán khoá cổng xoá nhắc. Không gọi claude, không mạng.
 """
 
 from __future__ import annotations
@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import sys
 import tarfile
 from pathlib import Path
 
@@ -115,47 +114,47 @@ def test_device_token_never_in_package_clone_or_move(tmp_path, monkeypatch, for_
         S.encrypt(m, [("secrets/filehub/tokens.json", TOKEN.encode())], PW)
 
 
-# ============================================================================ nhập: TẮT, chưa đăng nhập, không tự đồng bộ
-def test_import_clone_filehub_off_folders_removed_and_report(tmp_path, monkeypatch):
+# ============================================================================ nhập gói cũ: thư mục đồng bộ → cần chuyển
+def test_import_clone_old_package_drops_sync_and_report(tmp_path, monkeypatch):
     src, _, _ = fh_source(tmp_path, monkeypatch)
     pkg = Path(T.export_offline(src, profile="core")["path"])
     T.seal_package(pkg, src.home, PW)
     dst = dest(tmp_path, monkeypatch)
     plan = T.import_plan(dst, pkg, passphrase=PW)
     assert plan["filehub"]["folders"][0]["name"] == "chung" and plan["filehub"]["mode"] == "clone"
-    assert any(w.startswith("Thư mục Không gian số cần đăng nhập lại: `cfharness filehub setup --name chung --binary ") for w in plan["warnings"]), plan["warnings"]
+    assert any(w.startswith("Thư mục Không gian số: dán khoá cổng cfharness") for w in plan["warnings"]), plan["warnings"]
     assert not dst.config.exists()  # dry-run không ghi gì
     r = T.import_package(dst, pkg, passphrase=PW)
     fh = _cfg(dst)
-    assert fh["enabled"] is False and fh["folders"] == [] and fh["device_name"] is None
-    assert fh["server"] == "https://kgs.example.test"  # cấu hình không phải thiết bị giữ lại → setup không cần gõ lại server
+    assert fh["folders"] == [] and fh["enabled"] is True and fh["server"] == "https://kgs.example.test"
+    raw = HubConfig(dst.config)._overrides["filehub"]
+    assert not {"sync_binary", "device_name", "local_parent"} & set(raw), raw  # khoá cấu hình của đồng bộ cũ bị bỏ
     assert not (dst.home / "secrets" / "filehub").exists() and not (dst.home / "filehub").exists()
     st = _state(dst, "import_filehub")
-    assert st["mode"] == "clone" and st["needs_login"] and st["agents"] == ["w1"] and st["command"].startswith("cfharness filehub setup --name chung")
+    assert st["mode"] == "clone" and st["needs_login"] and st["agents"] == ["w1"] and st["command"] == "cfharness filehub lane setup"
     assert _state(dst, "filehub.paused") is None  # tạm dừng là của máy cũ
-    assert r["filehub"]["config_changed"] == ["filehub.enabled", "filehub.device_name", "filehub.folders"]
-    assert "Thư mục Không gian số cần đăng nhập lại" in T.filehub_note(r["filehub"])
+    assert set(r["filehub"]["config_changed"]) == {"filehub.sync_binary", "filehub.device_name", "filehub.local_parent", "filehub.folders"}
     from cfharness.hub_transfer_web import _brief_report
 
     br = _brief_report(r)["filehub"]
-    assert set(br) == {"mode", "command", "agents", "folders"} and br["folders"] == [{"name": "chung"}]
-    # daemon đích: service không coi là bật → không spawn binary sync; workspace filehub: từ chối rõ ràng
+    assert set(br) == {"mode", "command", "agents", "folders", "lane_folders"} and br["folders"] == [{"name": "chung"}]
+    # daemon đích: workspace filehub: từ chối rõ ràng, không có gì chạy
     from cfharness.hub import Hub
     from cfharness.runtime.fake import FakeRuntime
 
     h = Hub(dst, runtime=FakeRuntime())
     try:
-        assert not h.filehub.enabled() and not h.filehub.configured() and h.filehub.status()["relogin_after_import"]
+        assert h.filehub.status()["relogin_after_import"]
         h.filehub.start()
-        assert h.filehub.supervisor._task is None and not (dst.home / "filehub").exists()
-        with pytest.raises(HubError, match="chưa bật"):
+        assert not (dst.home / "filehub").exists()
+        with pytest.raises(HubError, match="không có thư mục chung"):
             h.filehub.resolve_ref("filehub:chung")
     finally:
         h.store.close()
 
 
-def test_import_move_keeps_folders_with_mapped_local_path(tmp_path, monkeypatch):
-    src, _, _ = fh_source(tmp_path, monkeypatch)
+def test_import_move_old_package_marks_needs_migration(tmp_path, monkeypatch):
+    src, _, local = fh_source(tmp_path, monkeypatch)
     pkg = Path(T.export_offline(src, profile="core", for_move=True)["path"])
     T.seal_package(pkg, src.home, PW)
     dst = dest(tmp_path, monkeypatch)
@@ -164,19 +163,29 @@ def test_import_move_keeps_folders_with_mapped_local_path(tmp_path, monkeypatch)
     assert plan["filehub"]["folders"] == [{"name": "chung", "local_path": want}]  # dry-run hiện đường dẫn ĐÃ map
     T.import_package(dst, pkg, mode="move", passphrase=PW)
     fh = _cfg(dst)
-    assert fh["enabled"] is False and fh["device_name"] is None
-    assert fh["folders"] == [{"name": "chung", "root_id": "r_chung", "ws_id": "ws_1", "local_path": want}]
-    assert fh["local_parent"] == str(tmp_path / "userB" / "KhongGianSo")
+    assert fh["folders"] == [{"name": "chung", "root_id": "r_chung", "ws_id": "ws_1", "local_path": want, "mode": "sync"}]
+    assert "local_parent" not in HubConfig(dst.config)._overrides["filehub"]
     assert not (dst.home / "secrets" / "filehub").exists()  # move cũng không mang token thiết bị
-    assert _state(dst, "import_filehub")["folders_kept"] is True
-    assert "đóng băng không dừng filehub" in T.filehub_note(_state(dst, "import_filehub"))
+    st = _state(dst, "import_filehub")
+    assert st["folders_kept"] is True and st["needs_migration"] == ["chung"]
+    assert "dùng đồng bộ cũ (đã bỏ)" in T.filehub_note(st)
+    from cfharness.hub import Hub
+    from cfharness.runtime.fake import FakeRuntime
+
+    h = Hub(dst, runtime=FakeRuntime())
+    try:
+        assert h.filehub.status()["state"] == "needs_migration"
+        with pytest.raises(HubError, match="đồng bộ cũ"):
+            h.filehub.resolve_ref("filehub:chung")
+    finally:
+        h.store.close()
 
 
 def test_import_replace_keeps_target_filehub_files(tmp_path, monkeypatch):
     src, _, _ = fh_source(tmp_path, monkeypatch)
     pkg = Path(T.export_offline(src, profile="core")["path"])
     dst = dest(tmp_path, monkeypatch)
-    # máy đích đã có hub + filehub riêng (thiết bị của chính nó)
+    # máy đích đã có hub + tàn dư đồng bộ cũ của chính nó
     dst.home.mkdir(parents=True, exist_ok=True)
     dst.config.write_text("guard:\n  git_probe: false\n")
     (dst.home / "secrets" / "filehub").mkdir(parents=True, mode=0o700)
@@ -186,7 +195,6 @@ def test_import_replace_keeps_target_filehub_files(tmp_path, monkeypatch):
     T.import_package(dst, pkg, replace=True, skip_secrets=True)
     assert (dst.home / "secrets" / "filehub" / "tokens.json").read_text() == TARGET_TOKEN
     assert (dst.home / "filehub" / "status.json").read_text() == '{"state": "idle"}'
-    assert _cfg(dst)["enabled"] is False  # cấu hình đến từ gói: vẫn TẮT tới khi người setup
 
 
 # ============================================================================ doctor
@@ -199,51 +207,47 @@ def test_doctor_filehub_checks(tmp_path, monkeypatch):
     os.chmod(dst.home / "secrets", 0o700)
     by = {c["id"]: c for c in D.run(dst)["checks"]}
     fh = by["filehub"]
-    assert fh["level"] == "warning" and fh["fix"].startswith("cfharness filehub setup --name chung"), fh
-    # binary sync đường dẫn máy cũ (map sang userB) không có ở máy này
-    assert by["filehub_binary"]["level"] == "warning" and "--binary" in by["filehub_binary"]["fix"] and "--binary" in fh["fix"]
-    assert by["perms"]["ok"], by["perms"]
-    # đăng nhập lại xong (nhắc đã xoá) nhưng token chưa có + đang bật → "chưa đăng nhập"
+    assert fh["level"] == "warning" and fh["fix"] == "cfharness filehub lane setup", fh
+    assert "filehub_binary" not in by and by["perms"]["ok"], by["perms"]
+    # nhắc sau nhập đã xoá → còn thư mục đồng bộ cũ → báo cần chuyển
     c = sqlite3.connect(str(dst.db))
     c.execute("UPDATE hub_state SET value='null' WHERE key='import_filehub'")
     c.commit()
     c.close()
-    b = tmp_path / "userB" / "bin" / "tang-thu-sync-headless"
-    b.parent.mkdir(parents=True)
-    b.write_text("#!/bin/sh\n")
-    b.chmod(0o755)
+    by = {c["id"]: c for c in D.run(dst)["checks"]}
+    assert by["filehub"]["level"] == "warning" and "đồng bộ cũ (đã bỏ)" in by["filehub"]["detail"]
+    # đã chuyển sang cổng nhưng máy này chưa có khoá
     cfg = HubConfig(dst.config)
-    cfg.set("filehub.enabled", True)
+    cfg.set("filehub.folders", [{"name": "chung", "root_id": "r_chung", "mode": "lane", "server": "qltm"}])
+    cfg.set("filehub.lane.servers", {"qltm": {"url": "http://127.0.0.1:8223"}})
     by = {c["id"]: c for c in D.run(dst)["checks"]}
-    assert by["filehub"]["level"] == "warning" and by["filehub"]["fix"] == "cfharness filehub login" and "filehub_binary" not in by
-    (dst.home / "secrets" / "filehub" / "tokens.json").write_text("{}")
+    assert by["filehub"]["level"] == "warning" and "qltm" in by["filehub"]["detail"] and "chưa có khoá" in by["filehub"]["detail"]
+    (dst.home / "secrets" / "FILEHUB_LANE_QLTM").write_text("x")
     by = {c["id"]: c for c in D.run(dst)["checks"]}
-    assert by["filehub"]["ok"] and "đã đăng nhập" in by["filehub"]["detail"]
+    assert by["filehub"]["ok"] and "qua cổng" in by["filehub"]["detail"]
     # hub chưa từng thiết lập filehub
     cfg.set("filehub.enabled", False)
     cfg.set("filehub.folders", [])
+    cfg.set("filehub.lane.servers", {})
     assert {c["id"]: c for c in D.run(dst)["checks"]}["filehub"]["level"] == "info"
 
 
-# ============================================================================ đăng nhập lại ở máy đích → hết nhắc
-@pytest.mark.skipif(sys.platform == "win32", reason="binary sync giả là shim #!/bin/sh")
-async def test_relogin_clears_import_flag(hub_home, tmp_path):
-    from fh_fake import fake_bin, until
+# ============================================================================ dán khoá cổng ở máy đích → hết nhắc
+async def test_lane_setup_clears_import_flag(hub_home):
+    from fake_kgs_lane import KEY, FakeLane
     from m7_fake import close, make_daemon, rpc
 
+    lane = FakeLane()
     d = await make_daemon(hub_home)
     try:
         d.hub.store.state_set(T.FILEHUB_STATE, {"mode": "clone", "needs_login": True})
         assert d.hub.filehub.status()["relogin_after_import"]
-        d.hub.config.set("filehub.tick_s", 0.05)
-        d.hub.config.set("filehub.poll_s", 0.1)
-        await rpc(d, "filehub.setup", {"server": "https://kgs.example.test", "binary": str(fake_bin(tmp_path / "bin")), "name": "chung",
-                                       "local_parent": str(tmp_path / "KGS"), "no_browser": True})
-        await until(lambda: d.hub.filehub.login_state.get("state") == "done")
+        await rpc(d, "filehub.lane_setup", {"server": "qltm", "url": lane.url, "key": KEY})
         assert not d.hub.store.state_get(T.FILEHUB_STATE) and not d.hub.filehub.status()["relogin_after_import"]
     finally:
         await d.hub.filehub.stop()
         await close(d)
+        lane.close()
 
 
 def test_import_filehub_state_is_machine_state():

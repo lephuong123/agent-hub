@@ -12,10 +12,9 @@ Khi có mặt (`frozen(hub)` khác None):
   lại), bản sao lưu không tạo run, không chạm kênh ngoài, không đổi dữ liệu — tắt nó chỉ làm mất lưới an toàn.
 - Telegram/Slack: `token()` của bot trả None (không long poll / không Socket Mode / không gửi) và `QueuedNotifier` bỏ mọi thông báo
   (kể cả webhook Slack một chiều) — tránh 409 và chia sự kiện với máy mới. Lệnh `notify … test|setup` của người (ignore_enabled) vẫn chạy.
-- Thư mục chung Không gian số (`hub.filehub`, binary sync) VẪN chạy (quyết định 2026-11-15, như sao lưu): đó là đồng bộ tệp của NGƯỜI
-  (không tạo run, không tốn tiền, không dùng bot/OAuth chung với máy mới — máy mới đăng nhập bằng thiết bị RIÊNG vì token thiết bị không đi
-  theo gói); dừng nó chỉ làm tệp người sửa ở máy cũ không lên cloud. Event `filehub.*` vẫn ghi DB nhưng không gửi ra kênh (QueuedNotifier bỏ),
-  steer/presence không xảy ra vì không có run. Người tự `cfharness filehub pause` ở máy cũ nếu không dùng nữa.
+- Thư mục chung Không gian số (`hub.filehub`, cổng cfharness): không có run thì không có cây làm việc nào; vòng sức khoẻ/bảo trì của cổng
+  vẫn chạy (chỉ `hello`, đẩy nốt cây mồ côi đã có trước khi đóng băng bỏ lượt vì `export_quiesced`). Event `filehub.*` vẫn ghi DB nhưng không
+  gửi ra kênh (QueuedNotifier bỏ).
 - `hub.status`, `tui.snapshot`, web (mọi trang) hiện banner "đã chuyển sang máy khác lúc …".
 Gỡ: CHỈ người — `cfharness hub unfreeze` (xác nhận y/N) → RPC `hub.unfreeze` (HUMAN_ONLY, tự audit; agent gõ lệnh `cfharness hub …` bị
 classifier chặn thẳng — `HUB_HUMAN_ONLY_CLI["hub"] = None`). Event `hub.frozen` / `hub.unfrozen`.

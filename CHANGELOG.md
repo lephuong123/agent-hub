@@ -18,6 +18,35 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ---
 
+## v0.2.21 — 2026-11-18
+
+### Lưu ý khi cập nhật
+- **Đồng bộ 2 chiều cũ với Không gian số đã bỏ** (tiến trình `tang-thu-sync-headless`, đăng nhập thiết bị, bản sao `~/KhongGianSo/…`):
+  thư mục chung giờ CHỈ đi qua cổng cfharness. Hub còn thư mục đồng bộ cũ thì sau khi cập nhật thấy "Thư mục X đang dùng đồng bộ cũ
+  (đã bỏ) — dán khoá cổng cfharness ở Cài đặt để dùng tiếp; bản sao trên máy để nguyên" (Cài đặt › Không gian số, `cfharness filehub
+  status`); run/task giao vào thư mục đó bị từ chối với cùng câu. Dán khoá cổng (tạo ở Không gian số › Hồ sơ › Cổng cfharness, cấp đúng
+  thư mục/workspace đó) là hub tự chuyển thư mục sang cổng — giữ tên `filehub:<tên>`. Hub KHÔNG xoá gì: bản sao trên máy, `HUB_HOME/filehub/`
+  để nguyên (kiểm rồi tự xoá); thu hồi thiết bị đồng bộ cũ ở Không gian số › Hồ sơ › Thiết bị. Tiến trình đồng bộ còn chạy từ bản cũ được
+  hub dừng khi khởi động. Khoá cấu hình cũ (`filehub.sync_binary`, `local_parent`, `device_name`, `mode`…) không gây lỗi, được bỏ qua.
+- Lệnh `cfharness filehub setup|login|add|pause|switch|switch-to-workspace` không còn (chỉ in hướng dẫn); `filehub resume` cần `--root`
+  (lô xoá đang giữ của cổng). `scripts/setup-hub-user.sh`: `KGS=…` luôn đi qua cổng (biến `KGS_MODE`, `KGS_SCOPE`… vẫn nhận, bỏ qua).
+- Không có migration DB.
+
+### Không gian số — chỉ còn cổng cfharness (H5, #154)
+- Gỡ đồng bộ 2 chiều cũ: tiến trình giám sát binary sync, đăng nhập thiết bị + relay OAuth qua web public (`/filehub/oauth/cb`, trang
+  `/filehub/login`), bản sao cục bộ, chặn xoá hàng loạt của binary, chuyển chế độ sync ↔ cổng. Thẻ Cài đặt gộp thành một thẻ "Không gian số —
+  cổng cfharness" (thêm đổi tên / gỡ thư mục, báo thư mục cần chuyển).
+- Thư mục đồng bộ cũ tự chuyển sang cổng khi khoá được cấp đúng gốc (khi dán khoá, "Thử kết nối" hoặc kiểm tra nền mỗi phút).
+- Link "Mở trên Không gian số" (chip tệp ở diff của run, tool `filehub_link` của điều phối viên) dùng id do cổng trả.
+- Nhập gói hub cũ (`hub import`) còn cấu hình đồng bộ: bỏ khoá của đồng bộ, thư mục thành "cần chuyển" (`move`) / gỡ (`clone`);
+  `hub doctor` báo thư mục cần chuyển và cổng chưa có khoá.
+- Hub chỉ dán khoá cổng (chưa đặt `filehub.server`) giờ có link "Mở trên Không gian số": cổng báo địa chỉ web công khai trong `hello`
+  (`server.public_url`, cần Không gian số bản mới — bản cũ không gửi thì như trước). Hub kiểm chặt (chỉ https, không đường dẫn/userinfo), tự
+  đặt `filehub.server` khi còn trống và cập nhật nếu cổng đổi địa chỉ; giá trị người đặt không bao giờ bị ghi đè; nhiều cổng → link mỗi cổng
+  về web của chính nó.
+
+---
+
 ## v0.2.20 — 2026-11-18
 
 Hoàn thiện cổng cfharness: hoàn tác run trên Không gian số, nút duyệt lô xoá trên Telegram/Slack, mọi run đọc được thư mục chung qua cổng,
