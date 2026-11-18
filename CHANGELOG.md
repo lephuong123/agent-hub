@@ -10,13 +10,28 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+---
+
+## v0.2.19 — 2026-11-18
+
+Cổng cfharness: agent làm việc thẳng trên Không gian số cùng máy, realtime hai chiều, thay đồng bộ 2 chiều thường trực — dán khoá là dùng được
+ngay (#147, #148). Kèm sửa bản sao ngoài vùng giam (#141), `cfharness update` tự chạy lại web (#144), gỡ MCP đã xoá (#145), `RESET=1` (#146).
+
+### Lưu ý khi cập nhật
+- Không có migration DB của hub. Cấu hình mới đều có mặc định; hub đang dùng đồng bộ cũ (`filehub.mode: sync`) **không đổi gì** cho tới khi
+  người dán khoá cổng.
+- Muốn dùng cổng: Không gian số phải là bản có cổng cfharness (đã deploy 2026-11-18, cổng `127.0.0.1:8223`) và Super Admin bật "Cho phép
+  cổng cfharness" ở Hệ thống › Chính sách. Sau đó Workspace Admin tạo khoá ở Hồ sơ › Cổng cfharness → dán vào cfharness › Cài đặt › Cổng
+  cfharness. Bản sao `~/KhongGianSo/<tên>` của đồng bộ cũ được để nguyên — kiểm rồi tự xoá khi đã chuyển.
+- Hệ Không gian số CCHC (cổng 8233) chưa có cổng cfharness — hub nối CCHC tiếp tục dùng đồng bộ cũ.
+
 ### Cài đặt
 - `scripts/setup-hub-user.sh` thêm `RESET=1`: làm lại hub của một user từ đầu — dừng dịch vụ, CẤT (không xoá) dữ liệu hub, Workspace, session Claude cũ sang `~/.reset-<giờ>`, hỏi gõ "reset" để xác nhận (#146).
 
 ### Không gian số (thư mục chung)
 - Hub đang giam agent trong một workspace (`workspace.confine`) mà thư mục cha của bản sao (`filehub.local_parent`, mặc định `~/KhongGianSo`) nằm ngoài vùng giam → bản sao tự đặt ở `<vùng giam>/KhongGianSo/<tên>` thay vì báo "nằm ngoài workspace được giam" (nối thư mục qua web public không sửa được đường dẫn nên bị kẹt). `filehub setup --local-parent` ngoài vùng giam bị từ chối ngay, không ghi cấu hình (#141).
 
-### Không gian số — cổng cfharness (chế độ `lane`, chưa bật mặc định) (#147)
+### Không gian số — cổng cfharness (chế độ `lane`, chưa bật mặc định) (#147, #148)
 - `cfharness filehub lane setup --url http://127.0.0.1:8223` (khoá hỏi bằng getpass, chỉ lưu trong secret store), `lane status|test|disable`:
   nối hub với cổng cfharness của Không gian số trên cùng máy — chỉ nhận URL loopback, khoá không bao giờ vào cấu hình/nhật ký/gói nhân bản.
   Hub đang dùng đồng bộ cũ không đổi gì cho tới khi người chuyển thư mục sang `lane`.
