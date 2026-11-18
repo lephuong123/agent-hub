@@ -696,7 +696,7 @@ class CallerResolver:
             rows = self.hub.store.conn.execute(
                 "SELECT id, agent_id, pid, pid_start_time FROM runs WHERE pid IS NOT NULL AND started_at >= ?", (since,)
             ).fetchall()
-        except Exception:  # fail-closed: không đọc được run → không nhận diện pid là run (không cấp gì thêm)  # pragma: no cover
+        except Exception:  # best-effort: không đọc được run → không nhận diện pid là run; lớp chặn chính là token người (agent không đọc được file token)  # pragma: no cover
             return out
         for r in rows:
             try:
