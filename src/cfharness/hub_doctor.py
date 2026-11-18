@@ -4,7 +4,7 @@
 Kiểm: `claude` trên PATH + phiên bản so `runtime.claude.tested_versions` + đăng nhập (secret `CLAUDE_CODE_OAUTH_TOKEN`/`CLAUDE_ACCT_*`, cờ
 `auth_block`; `--probe` mới chạy `claude auth status` — không bao giờ gọi model), `${NAME}` trong config.yaml + cấu hình MCP có secret/env,
 MCP (đánh dấu thiếu lệnh của lần nhập, OAuth chưa kết nối; `--probe` + daemon chạy → `mcp.probe` từng server), Telegram/Slack bật + có token,
-thư mục chung Không gian số (filehub: cần đăng nhập lại sau nhập, chưa đăng nhập, binary sync thiếu), repo workspace (có chưa, HEAD khớp
+thư mục chung Không gian số (filehub: cần dán khoá cổng sau nhập, thư mục đồng bộ cũ cần chuyển, cổng thiếu khoá), repo workspace (có chưa, HEAD khớp
 `repos.json` của gói), agent bị tạm dừng vì thiếu workspace, lịch đang tạm dừng (clone), việc viết lại
 tri thức còn dở (`import_followups`), `imported_from`/`cloned_from`/`migrated_to`, tự khởi động (gợi ý đúng OS), `cfharness[vector]`,
 quyền file (POSIX), dung lượng HUB_HOME theo mục cấp 1 + thư mục làm việc dọn được (`housekeeping.py` — chỉ báo; dọn = `--cleanup`,
@@ -244,35 +244,36 @@ def _channels(ck: _Checks, cfg: dict[str, Any], secrets: set[str]) -> None:
 
 
 def _filehub(ck: _Checks, cfg: dict[str, Any], c: sqlite3.Connection | None, home: Path) -> None:
-    """Thư mục chung Không gian số: cấu hình có nhưng thiết bị máy này chưa đăng nhập (token `secrets/filehub/tokens.json` không đi theo
-    gói xuất), lần nhập còn chờ đăng nhập lại (`hub_state.import_filehub`), binary sync không có ở máy này. Chỉ đọc — không chạy binary."""
+    """Thư mục chung Không gian số (qua cổng cfharness): lần nhập còn chờ khoá (`hub_state.import_filehub`), thư mục còn cấu hình đồng bộ
+    2 chiều cũ (đã bỏ — cần chuyển), cổng đã cấu hình mà máy này chưa có khoá (`secrets/FILEHUB_LANE_*` — chỉ xét TÊN tệp, không đọc)."""
+    from .filehub.service import legacy_text
+    from .hub_transfer import FILEHUB_COMMAND
+
     fh = (cfg.get("filehub") or {}) if cfg else {}
     imp = _state(c, "import_filehub")
     folders = [f for f in fh.get("folders") or [] if isinstance(f, dict) and f.get("name")]
-    if not fh.get("enabled") and not folders and not imp:
+    servers = ((fh.get("lane") or {}).get("servers") or {}) if isinstance(fh.get("lane"), dict) else {}
+    if not fh.get("enabled") and not folders and not imp and not servers:
         ck.add("filehub", "Không gian số", True, "chưa thiết lập", "info")
         return
-    from .hub_transfer import filehub_command
 
-    binary = str(fh.get("sync_binary") or "")
-    bpath = os.path.expanduser(binary) if binary else ""
-    binary_ok = bool(bpath) and os.path.isfile(bpath) and os.access(bpath, os.X_OK)
-    info = {"folders": folders or ((imp or {}).get("folders") if isinstance(imp, dict) else None) or [], "binary": binary,
-            "server": fh.get("server")}
-    cmd = filehub_command(info, binary_ok=binary_ok)
-    tokens = (home / "secrets" / "filehub" / "tokens.json").is_file()
+    def _legacy(f: dict[str, Any]) -> bool:
+        m = f.get("mode")
+        return m == "sync" or (m not in ("sync", "lane") and fh.get("mode") != "lane" and bool(f.get("local_path")))
+
+    legacy = [str(f["name"]) for f in folders if _legacy(f)]
+    no_key = sorted(str(n) for n in servers if not (home / "secrets" / f"FILEHUB_LANE_{str(n).upper()}").is_file())
     if imp:
-        ck.add("filehub", "Không gian số", False, "hub nhập từ máy khác — đồng bộ TẮT, thiết bị máy này chưa đăng nhập (token thiết bị không đi "
-               "theo gói)", "warning", fix=cmd)
-    elif fh.get("enabled") and not tokens:
-        ck.add("filehub", "Không gian số", False, "có cấu hình nhưng máy này chưa đăng nhập", "warning",
-               fix="cfharness filehub login" if folders and binary_ok else cmd)
+        ck.add("filehub", "Không gian số", False, "hub nhập từ máy khác — dán khoá cổng cfharness ở máy này", "warning", fix=FILEHUB_COMMAND)
+    elif legacy:
+        ck.add("filehub", "Không gian số", False, "; ".join(legacy_text(n) for n in legacy[:5]), "warning", fix=FILEHUB_COMMAND)
+    elif no_key:
+        ck.add("filehub", "Không gian số", False, f"cổng {', '.join(no_key)} chưa có khoá ở máy này", "warning", fix=FILEHUB_COMMAND)
+    elif not servers:
+        ck.add("filehub", "Không gian số", False, "có cấu hình nhưng chưa dán khoá cổng cfharness", "warning", fix=FILEHUB_COMMAND)
     else:
-        ck.add("filehub", "Không gian số", True, ("bật" if fh.get("enabled") else "TẮT") + f", {len(folders)} thư mục chung"
-               + (", đã đăng nhập" if tokens else ""), "ok" if fh.get("enabled") else "info")
-    if binary and not binary_ok:
-        ck.add("filehub_binary", "binary sync Không gian số", False, f"không có/không chạy được ở máy này: {binary}", "warning",
-               fix="cfharness filehub setup --binary /đường/dẫn/tang-thu-sync-headless")
+        ck.add("filehub", "Không gian số", True, ("bật" if fh.get("enabled") else "TẮT") + f", {len(folders)} thư mục chung qua cổng",
+               "ok" if fh.get("enabled") else "info")
 
 
 def _repos(ck: _Checks, c: sqlite3.Connection | None) -> None:

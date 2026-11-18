@@ -117,11 +117,13 @@ MACHINE_STATE = ("repo_locks", "browser_locks", "rate_limit", "rate_limit_gate",
                  "filehub.paused", "import_filehub",
                  # cổng cfharness (filehub/lane/): cursor luồng sự kiện + cây mồ côi của MÁY cũ
                  "filehub.lane")
-# filehub: thư mục chung Không gian số — token THIẾT BỊ (`secrets/filehub/tokens.json`, `--device "cfharness · <máy>"`) KHÔNG BAO GIỜ đi theo
-# gói (cả clone lẫn move: `transfer_secrets.collect` chỉ lấy `secrets/<NAME>` dạng `NAME_RE`, thư mục con bị bỏ qua sạch). Khi nhập (mọi chế độ):
-# `filehub.enabled=false` + `device_name=null` (tên thiết bị là của máy) → daemon đích không spawn binary sync tới khi người
-# `cfharness filehub setup` (đăng nhập thiết bị MỚI). `clone`: gỡ `filehub.folders` (2 hub độc lập — không tự đồng bộ chung một root);
-# `move`: giữ folders (local_path đã qua pathmap) để đăng nhập lại là đồng bộ tiếp đúng root. `hub_state.import_filehub` → doctor/báo cáo.
+# filehub: thư mục chung Không gian số đi qua CỔNG CFHARNESS (khoá `FILEHUB_LANE_*` ở secret store: `clone` bỏ, `move` giữ —
+# transfer_secrets). Đồng bộ 2 chiều cũ (H5 gỡ): token thiết bị `secrets/filehub/` + `filehub/` KHÔNG BAO GIỜ vào gói; gói CŨ còn cấu hình
+# đồng bộ → khi nhập: bỏ khoá cấu hình của đồng bộ (`SYNC_ONLY_KEYS`), thư mục đồng bộ thành "cần chuyển" (`mode: sync`, bản sao không đụng),
+# `clone` gỡ `filehub.folders` (2 hub độc lập), `move` giữ (local_path đã qua pathmap). `hub_state.import_filehub` → doctor/báo cáo.
+SYNC_ONLY_KEYS = ("sync_binary", "sync_min_version", "device_name", "local_parent", "scope", "relay_timeout_s", "poll_s", "max_delete_batch",
+                  "restart_backoff_s", "stop_grace_s", "tick_s", "presence_ttl_s", "steer_on_cloud_change", "login_url_timeout_s",
+                  "secret_scan_max_bytes", "mode")
 FILEHUB_STATE = "import_filehub"
 # Thêm cho `clone` (2 hub cùng chạy): trạng thái kênh chat của bot máy nguồn (nút/tin/map hội thoại) + run hẹn tự resume
 CLONE_STATE = ("pending_resume", "auto_resume_pending")
@@ -287,15 +289,13 @@ def _workspace_roots(db: Path) -> list[str]:
 
 
 def _filehub_roots(paths: HubPaths) -> list[str]:
-    """Bản sao cục bộ của thư mục chung Không gian số — KHÔNG phải repo workspace (binary sync tải lại ở máy mới sau khi đăng nhập):
-    loại khỏi `repos.json` để kế hoạch nhập không gợi ý clone/không báo thiếu."""
+    """Bản sao cũ của đồng bộ Không gian số (đã bỏ) — KHÔNG phải repo workspace: loại khỏi `repos.json` (không gợi ý clone/báo thiếu)."""
     try:
         from .config import HubConfig
-        from .filehub.service import config_folders
+        from .filehub.service import old_copies
 
         out = []
-        for f in config_folders(HubConfig(paths.config)):
-            lp = os.path.expanduser(str(f["local_path"]))
+        for lp in old_copies(HubConfig(paths.config)):
             out += [lp, os.path.realpath(lp)]
         return list(dict.fromkeys(out))
     except Exception:  # cấu hình hỏng không được chặn xuất
@@ -821,8 +821,8 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
             if out["agents_paused"]:
                 rows_state.append((TR.PAUSED_KEY, out["agents_paused"]))
             if filehub:
-                rows_state.append((FILEHUB_STATE, {k: filehub.get(k) for k in ("mode", "server", "binary", "folders", "folders_kept", "agents",
-                                                                                 "command", "needs_login")} | {"at": now}))
+                rows_state.append((FILEHUB_STATE, {k: filehub.get(k) for k in ("mode", "server", "folders", "lane_folders", "folders_kept", "agents",
+                                                                                 "command", "needs_login", "needs_migration")} | {"at": now}))
             if repos:
                 rows_state.append((TR.REPOS_KEY, [{k: r.get(k) for k in ("from", "to", "git", "remote", "branch", "head", "dirty", "uncommitted")}
                                                   for r in repos]))
@@ -872,79 +872,75 @@ def _adjust_config(stage: Path, mode: str, *, apply: bool) -> list[str]:
     return changed
 
 
-def filehub_command(info: dict[str, Any], *, binary_ok: bool | None = None) -> str:
-    """Lệnh đăng nhập lại thư mục Không gian số ở máy này (gợi ý cho báo cáo nhập/dry-run/doctor)."""
-    names = [f.get("name") for f in info.get("folders") or [] if f.get("name")]
-    cmd = "cfharness filehub setup" + (f" --name {_shq(str(names[0]))}" if names else "")
-    b = info.get("binary")
-    if binary_ok is None:
-        binary_ok = bool(b) and os.path.isfile(os.path.expanduser(str(b))) and os.access(os.path.expanduser(str(b)), os.X_OK)
-    if not binary_ok:
-        cmd += " --binary /đường/dẫn/tang-thu-sync-headless"
-    if not info.get("server"):
-        cmd += " --server https://<Không gian số>"
-    return cmd
+FILEHUB_COMMAND = "cfharness filehub lane setup"
 
 
-def _shq(s: str) -> str:
-    import shlex
-
-    return shlex.quote(s)
+def filehub_command(info: dict[str, Any] | None = None) -> str:
+    """Lệnh nối lại thư mục Không gian số ở máy này (gợi ý cho báo cáo nhập/dry-run/doctor): dán khoá cổng cfharness."""
+    return FILEHUB_COMMAND
 
 
 def filehub_note(info: dict[str, Any]) -> str:
-    """Một dòng cho báo cáo nhập + dry-run (không chứa token — chỉ tên thư mục/lệnh)."""
-    names = [str(f.get("name")) for f in info.get("folders") or [] if f.get("name")]
-    head = f"Thư mục Không gian số cần đăng nhập lại: `{info.get('command') or filehub_command(info)}`"
+    """Một dòng cho báo cáo nhập + dry-run (không chứa khoá — chỉ tên thư mục/lệnh)."""
+    legacy = [str(f.get("name")) for f in info.get("folders") or [] if f.get("name")]
+    lane = [str(x) for x in info.get("lane_folders") or []]
+    head = f"Thư mục Không gian số: dán khoá cổng cfharness ở máy này (Cài đặt › Không gian số hoặc `{FILEHUB_COMMAND}`)"
     if info.get("mode") == "move":
-        tail = (f" — giữ thư mục chung {', '.join(names)} (đường dẫn đã đổi theo máy này); đồng bộ TẮT tới khi đăng nhập thiết bị mới. "
-                "Máy cũ vẫn đồng bộ (đóng băng không dừng filehub) — `cfharness filehub pause` ở máy cũ nếu không dùng nữa") if names else                " — đồng bộ TẮT tới khi đăng nhập thiết bị mới"
+        tail = ""
+        if lane:
+            tail += f" — giữ thư mục qua cổng {', '.join(lane)} (khoá đi theo gói; cổng phải chạy trên máy này)"
+        if legacy:
+            tail += (f" — thư mục {', '.join(legacy)} dùng đồng bộ cũ (đã bỏ): cần chuyển — khoá cấp đúng gốc là tự chuyển; bản sao trên máy "
+                     "để nguyên")
     else:
-        tail = (f" — nhân bản: đã gỡ thư mục chung {', '.join(names)} khỏi hub này (máy nguồn vẫn đồng bộ); setup cùng tên để workspace "
-                f"`filehub:{names[0]}` của agent/task chạy lại") if names else " — nhân bản: đồng bộ TẮT"
+        names = legacy + lane
+        tail = (f" — nhân bản: đã gỡ thư mục chung {', '.join(names)} khỏi hub này (khoá cổng không đi theo bản nhân bản); dán khoá riêng "
+                f"cấp cùng thư mục để workspace `filehub:{names[0]}` của agent/task chạy lại") if names else " — nhân bản"
     if info.get("agents"):
         tail += f"; agent dùng workspace filehub: {', '.join(info['agents'][:5])}"
     return head + tail
 
 
 def _adjust_filehub(stage: Path, mode: str, pm: PathMap, *, apply: bool) -> dict[str, Any] | None:
-    """filehub (Không gian số) ở máy đích sau khi nhập: TẮT, chưa đăng nhập (token thiết bị không đi theo gói), không tên thiết bị cũ.
-    `clone` gỡ `folders`; `move` giữ (local_path đã viết lại bởi pathmap). None = nguồn chưa từng thiết lập filehub."""
+    """filehub (Không gian số) ở máy đích sau khi nhập. Bỏ khoá cấu hình của đồng bộ 2 chiều cũ (gói cũ), thư mục đồng bộ cũ thành "cần
+    chuyển" (`mode: sync` rõ ràng; bản sao `local_path` không đụng). `clone` gỡ `folders`; `move` giữ (local_path đã viết lại bởi pathmap).
+    None = nguồn chưa từng thiết lập filehub."""
     from .config import HubConfig
-    from .filehub.service import config_folders
+    from .filehub.service import folder_mode
 
     p = stage / "config.yaml"
     if not p.is_file():
         return None
     cfg = HubConfig(p)
-
-    def g(k: str) -> Any:
-        try:
-            return cfg.get(f"filehub.{k}")
-        except KeyError:
-            return None
-
-    folders = config_folders(cfg)
-    enabled = bool(g("enabled"))
-    if not enabled and not folders and not g("server"):
+    try:
+        sub = cfg.get("filehub")
+    except KeyError:
+        sub = {}
+    sub = dict(sub) if isinstance(sub, dict) else {}
+    try:
+        over = dict((cfg._overrides or {}).get("filehub") or {})  # chỉ khoá người đặt (không DEFAULTS)
+    except AttributeError:  # pragma: no cover
+        over = {}
+    rows = [dict(f) for f in sub.get("folders") or [] if isinstance(f, dict) and f.get("name")]
+    servers = ((sub.get("lane") or {}).get("servers") or {}) if isinstance(sub.get("lane"), dict) else {}
+    enabled = bool(sub.get("enabled"))
+    if not enabled and not rows and not sub.get("server") and not servers:
         return None
     keep = mode == "move"
+    legacy = [f for f in rows if folder_mode(f, cfg) == "sync"]
+    lane = [f for f in rows if folder_mode(f, cfg) == "lane"]
     out_f = []
-    for f in folders:
+    for f in legacy:
         lp = str(f.get("local_path") or "")
         out_f.append({"name": f.get("name"), "local_path": lp if apply else pm.rewrite(lp, syntax="text")})
-    binary = g("sync_binary")
-    if binary and not apply:
-        binary = pm.rewrite(str(binary), syntax="text")
-    changed = [k for k, cond in (("filehub.enabled", enabled), ("filehub.device_name", bool(g("device_name"))),
-                                 ("filehub.folders", bool(folders) and not keep)) if cond]
-    if apply:
-        if enabled:
-            cfg.set("filehub.enabled", False)
-        if g("device_name"):
-            cfg.set("filehub.device_name", None)
-        if folders and not keep:
-            cfg.set("filehub.folders", [])
+    dropped = [k for k in SYNC_ONLY_KEYS if k in over]
+    changed = [f"filehub.{k}" for k in dropped] + (["filehub.folders"] if rows and (not keep or legacy) else [])
+    if apply and (dropped or (rows and (not keep or legacy))):
+        new_rows = [{**f, "mode": folder_mode(f, cfg)} for f in rows] if keep else []
+        new = {k: v for k, v in over.items() if k not in SYNC_ONLY_KEYS}
+        if rows or "folders" in over:
+            new["folders"] = new_rows
+        cfg.set("filehub", new)
         os.chmod(p, 0o600)
     agents: list[str] = []
     db = stage / DB_MEMBER
@@ -957,8 +953,9 @@ def _adjust_filehub(stage: Path, mode: str, pm: PathMap, *, apply: bool) -> dict
             agents = []
         finally:
             c.close()
-    info = {"mode": mode, "was_enabled": enabled, "server": g("server"), "binary": binary, "folders": out_f, "folders_kept": keep and bool(folders),
-            "config_changed": changed, "agents": agents, "needs_login": True}
+    info = {"mode": mode, "was_enabled": enabled, "server": sub.get("server"), "folders": out_f,
+            "lane_folders": [str(f["name"]) for f in lane], "folders_kept": keep and bool(rows), "config_changed": changed, "agents": agents,
+            "needs_login": not keep or bool(legacy) or not servers, "needs_migration": [str(f["name"]) for f in legacy] if keep else []}
     info["command"] = filehub_command(info)
     return info
 

@@ -258,7 +258,7 @@ class GuardService:
             chrome_allowed=self.chrome_allowed(run),
             trusted_repo_scripts=bool(self.knob("guard.trusted_repo_scripts")),
             task_created_deletes=bool(self.knob("guard.task_created_deletes")),
-            filehub_roots=self._filehub_roots(),
+            filehub_old_copies=self._filehub_old_copies(),
             lane_ports=self._lane_ports(),
             **self._confine_ctx(c, run, roots),
             **self._connector_ctx(run),
@@ -271,11 +271,12 @@ class GuardService:
             log.debug("guard: không đọc được cổng lane", exc_info=True)
             return ()
 
-    def _filehub_roots(self) -> tuple[str, ...]:
+    def _filehub_old_copies(self) -> tuple[str, ...]:
+        """Bản sao trên máy của đồng bộ 2 chiều cũ (đã bỏ): `.tangthu*` bên trong vẫn cấm agent ghi (classifier `filehub_metadata`)."""
         try:
-            from ..filehub.service import local_roots
+            from ..filehub.service import old_copies
 
-            return tuple(local_roots(self.hub))
+            return tuple(old_copies(self.hub.config))
         except Exception:  # pragma: no cover
             log.debug("guard: không đọc được gốc filehub", exc_info=True)
             return ()
@@ -293,7 +294,6 @@ class GuardService:
         if conf is None:
             return out
         extra = list(self.run_extra_write_roots(run, roots)) if run else []
-        extra += list(self._filehub_roots())  # mọi run được ĐỌC thư mục chung (plan-cloud-files §7.4)
         out.update(confine_root=conf.root, confine_read=tuple(_c.read_roots(conf, self.hub.paths.home, cwd=cwd, extra=extra)),
                    confine_deny=tuple(_c.deny_read_roots(conf)))
         return out

@@ -353,33 +353,7 @@ async def test_web_card_plan_create_and_single_use_download(hub_home):
 
 
 # ============================================================================ phần L1 để lại
-@pytest.mark.skipif(sys.platform == "win32", reason="binary sync giả chỉ macOS/Linux")
-async def test_filehub_sync_stderr_to_rotating_log(hub_home, tmp_path):
-    from fh_fake import configure, until
-    from m7_fake import close, make_daemon
-
-    register_secret_values("FhSyncSecretValue-778899")
-    d = await make_daemon(hub_home)
-    try:
-        d.hub.config.set("logs.max_bytes", 1000)
-        logp = hub_home.logs_dir / "filehub-sync.log"
-        logp.write_text("x" * 2000)  # quá trần → xoay lúc spawn
-        configure(d.hub, tmp_path, env={"FAKE_TT_STDERR": "sync boom FhSyncSecretValue-778899", "FAKE_TT_EXIT_AFTER_S": "0.3"})
-        d.hub.filehub.start()
-        sv = d.hub.filehub.supervisor
-        await until(lambda: logp.exists() and b"sync boom" in logp.read_bytes(), timeout=15)
-        await until(lambda: sv.last_error and "sync boom" in sv.last_error, timeout=15)
-        data = logp.read_bytes()
-        assert b"FhSyncSecretValue-778899" not in data and b"sync boom ***" in data
-        assert "FhSyncSecretValue" not in sv.last_error and "mã 3" in sv.last_error  # đuôi stderr vẫn vào last_error
-        assert (hub_home.logs_dir / "filehub-sync.log.1").read_text() == "x" * 2000
-        assert stat.S_IMODE(logp.stat().st_mode) == 0o600
-        await d.hub.filehub.stop()
-        mem = _members(Path(SB.create(hub_home, since="1h")["path"]))
-        assert b"sync boom ***" in mem["logs/filehub-sync.log"]
-    finally:
-        await d.hub.filehub.stop()
-        await close(d)
+# (stderr của binary sync filehub ra file — bỏ: main v0.2.21 đã gỡ đồng bộ 2 chiều cũ, không còn tiến trình sync)
 
 
 def test_update_helper_writes_json_lines(tmp_path):
