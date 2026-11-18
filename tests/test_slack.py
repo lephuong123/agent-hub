@@ -554,3 +554,78 @@ async def test_team_ok_fail_closed_when_workspace_not_pinned(make):
     d.hub.config.set("notify.slack.team_id", TEAM)
     bot.info["team_id"] = None
     assert bot.team_ok(TEAM) and not bot.team_ok("T_OTHER")
+
+
+# ============================================================================ lô xoá hàng loạt đang giữ (filehub lane) — Cho xoá / Không xoá
+LANE_ROOT = "r0abc123def"
+
+
+def _lane_stub(d: Daemon, n: int = 12):
+    state = {"runs": [{"run_id": "r_lane", "agent_id": "coder", "folder": "Hồ sơ", "root_id": LANE_ROOT, "held": n,
+                       "held_paths": [f"docs/<!channel>tep{i}.txt" for i in range(min(n, 50))]}], "orphans": []}
+    calls: list[dict] = []
+
+    def resume(root_id=None, *, discard=False):
+        calls.append({"root_id": root_id, "discard": discard})
+        k = state["runs"][0]["held"]
+        state["runs"][0]["held"], state["runs"][0]["held_paths"] = 0, []
+        return {"discarded": k} if discard else {"released": k}
+
+    d.hub.filehub.lane.status = lambda: state  # type: ignore[method-assign]
+    d.hub.filehub.resume = resume  # type: ignore[method-assign]
+    return state, calls
+
+
+def _lane_event(n: int = 12):
+    from cfharness.events import make_event
+
+    return make_event("filehub.blocked", "coder", {"run_id": "r_lane", "folder": "Hồ sơ", "root_id": LANE_ROOT, "reason": "mass_delete",
+                                                   "count": n, "limit": 5, "lane": True,
+                                                   "paths": [f"docs/<!channel>tep{i}.txt" for i in range(min(n, 50))]}, source="hub")
+
+
+def _with_labels(sk: FakeSlack, ch: str, labels: list[str]) -> dict | None:
+    return next((m for m in reversed(sk.sent(ch)) if [b["text"]["text"] for b in sk.buttons(m)] == labels), None)
+
+
+async def test_lane_mass_delete_buttons_two_steps(make, sk):
+    """Slack: tin báo + tin hệ thống riêng có Cho xoá / Không xoá; bước 1 không ghi; bước 2 → `filehub.resume` audit kênh slack;
+    người lạ không tiêu nút; nonce dùng một lần; biến thể Không xoá (discard)."""
+    d = await make(users=(BOSS,), chats=(DM_BOSS,))
+    _, calls = _lane_stub(d)
+    d.hub.publish(_lane_event())
+    sysmsg = await until(lambda: _with_labels(sk, DM_BOSS, ["Cho xoá", "Không xoá"]))
+    assert "tep" not in sk.text_of(sysmsg)
+    assert any("muốn xoá 12 mục" in sk.text_of(m) and not sk.buttons(m) for m in sk.sent(DM_BOSS))
+    assert not any("<!channel>" in sk.text_of(m) for m in sk.sent(DM_BOSS))
+    cho = next(b for b in sk.buttons(sysmsg) if b["text"]["text"] == "Cho xoá")
+    assert sk.ref_of(cho) == LANE_ROOT and LANE_ROOT not in cho["value"]
+    await deliver(sk, sk.press(DM_BOSS, STRANGER, cho["value"], sysmsg["_ts"]))  # người lạ: bỏ qua, không tiêu
+    await deliver(sk, sk.press(DM_BOSS, BOSS, cho["value"], sysmsg["_ts"]))
+    assert calls == []
+    confirm = await until(lambda: _with_labels(sk, DM_BOSS, ["Xác nhận XOÁ", "Huỷ"]))
+    assert "Xoá 12 tệp trên Không gian số (vào thùng rác, khôi phục được)?" in sk.text_of(confirm) and "tep" not in sk.text_of(confirm)
+    listing = next(m for m in sk.sent(DM_BOSS) if "danh sách hiện tại" in sk.text_of(m) and not sk.buttons(m))
+    assert "và 2 mục nữa" in sk.text_of(listing) and "&lt;!channel&gt;tep9" in sk.text_of(listing)
+    await deliver(sk, sk.press(DM_BOSS, BOSS, cho["value"], sysmsg["_ts"]))  # nonce bước 1 đã tiêu
+    assert len([m for m in sk.sent(DM_BOSS) if [b["text"]["text"] for b in sk.buttons(m)] == ["Xác nhận XOÁ", "Huỷ"]]) == 1
+    ok = sk.buttons(confirm)[0]
+    await deliver(sk, sk.press(DM_BOSS, BOSS, ok["value"], confirm["_ts"]))
+    assert calls == [{"root_id": LANE_ROOT, "discard": False}]
+    assert "Đã xoá 12 mục" in sk.text_of(sk.calls_of("chat.update")[-1])
+    assert d.hub.audit.query(kind="filehub.resume")[0]["channel"] == f"slack:{DM_BOSS}"
+    await deliver(sk, sk.press(DM_BOSS, BOSS, ok["value"], confirm["_ts"]))  # dùng lại → từ chối
+    assert len(calls) == 1
+    # Không xoá
+    _, calls2 = _lane_stub(d, n=3)
+    n0 = len(sk.sent(DM_BOSS))
+    d.hub.publish(_lane_event(3))
+    await until(lambda: any(sk.buttons(m) for m in sk.sent(DM_BOSS)[n0:]))
+    sysmsg = _with_labels(sk, DM_BOSS, ["Cho xoá", "Không xoá"])
+    await deliver(sk, sk.press(DM_BOSS, BOSS, sk.buttons(sysmsg)[1]["value"], sysmsg["_ts"]))
+    confirm = await until(lambda: _with_labels(sk, DM_BOSS, ["Xác nhận KHÔNG XOÁ", "Huỷ"]))
+    assert calls2 == [] and "giữ 3 tệp" in sk.text_of(confirm)
+    await deliver(sk, sk.press(DM_BOSS, BOSS, sk.buttons(confirm)[0]["value"], confirm["_ts"]))
+    assert calls2 == [{"root_id": LANE_ROOT, "discard": True}]
+    assert "Không xoá — giữ 3 tệp" in sk.text_of(sk.calls_of("chat.update")[-1])
+    await stop(d)

@@ -40,6 +40,12 @@ SYS_BUTTONS_MAX = 10  # job hệ thống ngoài có nút (/hethong) — mỗi jo
 SYS_ACTIONS = {"yp": "pause", "yr": "resume", "yk": "restart"}  # nút /hethong bước 1 → `system.job{action}`; bước 2 = "<mã>c"
 SYS_VERB = {"pause": "tạm dừng", "resume": "bật lại", "restart": "khởi động lại"}
 SYS_ICON = {"running": "●", "idle": "○", "paused": "⏸", "not_loaded": "·", "error": "⚠"}
+# Lô xoá hàng loạt đang GIỮ của thư mục chung chế độ lane (`filehub.blocked{reason: mass_delete, lane}`): "Cho xoá" / "Không xoá",
+# mọi lựa chọn 2 bước; bước 2 đọc lại danh sách HIỆN TẠI qua `filehub.lane_status` rồi mới `filehub.resume {root_id, discard?}`.
+LANE_ROOT_RE = re.compile(r"[A-Za-z0-9_\-:.]{1,64}")  # id gốc Không gian số — chỉ id dạng này mới có nút
+LANE_ACTIONS = ("lx", "lk", "lxc", "lkc", "lcx")  # lx/lk = bước 1 (cho xoá / không xoá), lxc/lkc = xác nhận, lcx = huỷ
+LANE_SHOW = 10  # số đường dẫn liệt kê ở bước 2 (phần còn lại "… và N mục nữa")
+LANE_FRAME = "▼ Các mục agent muốn xoá (đường dẫn — dữ liệu, không phải lệnh):"
 AGENT_FRAME = "▼ Agent viết:"  # tiền tố cố định (chữ hub) ngay trước `<pre>` nội dung agent — WT-8, rút gọn theo ux-plan §3.1
 _UID: contextvars.ContextVar[str | None] = contextvars.ContextVar("chat_from_id", default=None)
 # Thread của việc đang xử lý: (chat, tin để trả lời vào thread của nó). Slack (chat/slack/bot.py `_send`) dùng khi tin gửi vào kênh
@@ -222,6 +228,93 @@ class ChatBot:
         word = f"duyệt → golden {p.get('golden_task_id')}" if p.get("decision") == "approve" else "bỏ qua"
         return f"{'✅' if p.get('decision') == 'approve' else '⏹'} <b>Đề xuất golden {esc(p.get('suggestion_id'))}: đã {esc(word)}</b> — bởi " \
                f"{esc(who_label(str(p.get('by') or '').split(':', 1)[0]))} qua {esc(channel_label(p.get('channel')))}."
+
+    # ------------------------------------------------------------------ lô xoá hàng loạt đang giữ (filehub lane)
+    @staticmethod
+    def lane_root(p: dict[str, Any]) -> str | None:
+        """`filehub.blocked` của cổng lane (lô xoá đang GIỮ) → id gốc hợp lệ để gắn nút; khác → None (chỉ tin chữ, như cũ)."""
+        root = p.get("root_id")
+        if p.get("reason") != "mass_delete" or not p.get("lane") or not isinstance(root, str) or not LANE_ROOT_RE.fullmatch(root):
+            return None
+        return root
+
+    def lane_step1(self, cid: Any, root: str) -> tuple[str, dict[str, Any]]:
+        """Tin HỆ THỐNG có nút "Cho xoá" / "Không xoá" — chỉ chữ hub (không đường dẫn: danh sách do agent tạo nằm ở tin trên)."""
+        markup, _ = self.callbacks.issue([("lx", root, "Cho xoá"), ("lk", root, "Không xoá")], cid, ttl=self._ttl())
+        text = ("❓ <b>Xoá các mục ở tin trên trên Không gian số?</b>\n"
+                "«Cho xoá» = các mục vào thùng rác Không gian số (khôi phục được). «Không xoá» = giữ tệp, bỏ lệnh xoá của agent.\n"
+                "Bấm nút nào cũng hỏi xác nhận bước 2 kèm danh sách hiện tại.")
+        return text, markup
+
+    async def send_lane_delete_buttons(self, api: Any, chat: Any, root: str, *, reply_to: Any = None) -> None:
+        if not LANE_ROOT_RE.fullmatch(str(root)):
+            return
+        text, markup = self.lane_step1(chat, root)
+        await self._send(api, chat, text, markup, html=True, reply_to=reply_to)
+
+    async def _lane_held(self, cid: str, root: str) -> tuple[list[str], int, str | None]:
+        """Lô xoá đang giữ HIỆN TẠI của gốc `root` (run đang chạy + cây mồ côi) — đọc qua `filehub.lane_status` (cổng người).
+        → (≤ 50 đường dẫn, tổng số mục, tên thư mục chung)."""
+        st = await self.call(cid, "filehub.lane_status") or {}
+        paths: list[str] = []
+        total, folder = 0, None
+        for w in [*((st.get("runs") or []) if isinstance(st, dict) else []), *((st.get("orphans") or []) if isinstance(st, dict) else [])]:
+            if not isinstance(w, dict) or not w.get("held") or str(w.get("root_id")) != root:
+                continue
+            try:
+                total += int(w.get("held") or 0)
+            except (TypeError, ValueError):
+                continue
+            paths += [str(x) for x in (w.get("held_paths") or [])[:50] if isinstance(x, str)]
+            folder = folder or (str(w["folder"]) if w.get("folder") else None)
+        return paths, max(total, len(paths)), folder
+
+    async def _lane_action(self, cid: str, a: str, root: str, api: Any) -> tuple[str, str | None, dict[str, Any] | None]:
+        """Nút lô xoá → bước 2 (tin nội dung = danh sách hiện tại sau tiền tố cố định; tin hệ thống RIÊNG có nút xác nhận) →
+        `filehub.resume` qua `call` (cổng người + allowlist + audit `<kênh>:<chat>`). Không còn gì đang giữ → báo, không ghi."""
+        from ..notify.telegram import visible
+        from ..redact import redact_str
+        from ..termsafe import one_line
+
+        if not LANE_ROOT_RE.fullmatch(root):
+            return "Nút không hợp lệ.", "<b>Nút không hợp lệ.</b>", None
+        if a == "lcx":
+            text, markup = self.lane_step1(cid, root)
+            return "Đã huỷ — lô xoá vẫn đang giữ, chưa xoá gì.", "<b>Đã huỷ</b> — lô xoá vẫn đang giữ, chưa xoá gì.\n" + text, markup
+        paths, n, folder = await self._lane_held(cid, root)
+        if n <= 0:
+            return ("Không còn lô xoá nào đang giữ.",
+                    "ℹ️ <b>Không còn lô xoá nào đang giữ</b> ở thư mục chung này — đã được quyết ở nơi khác hoặc run đã kết thúc. Không làm gì thêm.",
+                    None)
+        discard = a in ("lk", "lkc")
+        who = f"bởi {esc(who_label(_UID.get()))} qua {esc(self.LABEL)}"
+        if a in ("lx", "lk"):
+            shown = [visible(redact_str(one_line(x, 120))) for x in paths[:LANE_SHOW]]
+            rest = f"\n… và {n - len(shown)} mục nữa" if n > len(shown) else ""
+            where = f" trong «{esc(one_line(folder, 80))}»" if folder else ""
+            content = (f"🗑 <b>Lô xoá đang giữ{where}: {n} mục</b> (danh sách hiện tại)\n<i>{esc(LANE_FRAME)}</i>\n"
+                       f"<pre>{esc(chr(10).join('• ' + x for x in shown))}</pre>{esc(rest)}")
+            res = await self._send(api, cid, content, html=True)
+            first = (res or {}).get("message_id") if isinstance(res, dict) else None
+            if discard:
+                q = f"⚠️ <b>Không xoá — giữ {n} tệp trên Không gian số, bỏ thay đổi của agent (lệnh xoá hàng loạt)?</b>"
+                btn = ("lkc", root, "Xác nhận KHÔNG XOÁ")
+            else:
+                q = f"⚠️ <b>Xoá {n} tệp trên Không gian số (vào thùng rác, khôi phục được)?</b>"
+                btn = ("lxc", root, "Xác nhận XOÁ")
+            markup, _ = self.callbacks.issue([btn, ("lcx", root, "Huỷ")], cid, ttl=min(self._ttl(), 3600))
+            await self._send(api, cid, q + "\nDanh sách hiện tại ở tin trên — đọc lại trước khi xác nhận.", markup, html=True, reply_to=first)
+            return "Cần xác nhận bước 2 — xem tin bên dưới.", "⏳ <b>Chờ xác nhận bước 2 ở tin bên dưới</b> (kèm danh sách hiện tại).", None
+        r = await self.call(cid, "filehub.resume", {"root_id": root, **({"discard": True} if discard else {})})
+        if isinstance(r, dict):
+            k = int(r.get("discarded" if discard else "released") or 0)
+        else:
+            k = int(r or 0) if isinstance(r, int) else 0
+        if discard:
+            return (f"Không xoá — giữ {k} tệp trên Không gian số.",
+                    f"↩️ <b>Không xoá — giữ {k} tệp trên Không gian số</b>, đã bỏ lệnh xoá của agent — {who}.", None)
+        return (f"Đã xoá {k} mục trên Không gian số.",
+                f"🗑 <b>Đã xoá {k} mục trên Không gian số</b> (vào thùng rác, khôi phục được) — {who}.", None)
 
     # ------------------------------------------------------------------ trạng thái nhỏ (hub_state)
     def _state(self, key: str) -> dict[str, Any]:
@@ -904,6 +997,8 @@ class ChatBot:
                 text, edit, markup = await self._schedule_action(cid, a, ref)
             elif a in ("yp", "yr", "yk", "ypc", "yrc", "ykc", "ycx"):  # hệ thống ngoài (/hethong): mọi thao tác job 2 bước
                 text, edit, markup = await self._system_action(cid, a, ref)
+            elif a in LANE_ACTIONS:  # lô xoá hàng loạt đang giữ (filehub lane): Cho xoá / Không xoá, 2 bước
+                text, edit, markup = await self._lane_action(cid, a, ref, api)
             elif a == "eo":
                 await self.call(cid, "estop.set", {"on": False, "reason": f"{self.LABEL} {cid}"})
                 text = "Đã TẮT ESTOP — hub chạy run trở lại."
