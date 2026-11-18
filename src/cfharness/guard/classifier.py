@@ -109,6 +109,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "daemon": {"stop", "restart", "dump-stacks", "logs"},  # L6: `daemon logs` = đọc log hệ thống (alias cũ của `logs`)
     "audit": None,  # nhật ký kiểm toán (audit.list ∈ HUMAN_ONLY, L3) — agent gõ, kể cả chỉ xem, đều chặn
     "logs": None,  # log hệ thống (logs_rpc.py, L1): đổi level / xem log của hub — agent gõ, kể cả chỉ xem, đều chặn
+    "support": None,  # L7: gói chẩn đoán (log + doctor + dòng thời gian run, raw khi chọn) — agent gõ, kể cả chỉ xem kế hoạch, đều chặn
     "trace": None,  # L6: dòng thời gian yêu cầu/run (audit + log + event) — chỉ người
     "auth": None,
     "notify": {"telegram", "slack"},  # token bot / allowlist chat / gửi tin thay người (chat/rpc.py, chat/slack/rpc.py)
@@ -1510,7 +1511,10 @@ class BashAnalyzer:
         out: list[str] = []
         for h in {_hub_home(self.ctx), _real(_hub_home(self.ctx))}:
             out += [f"{h}/auth", f"{h}/secrets", f"{h}/mcp_server/tokens.json", f"{h}/hub.db", f"{h}/logs",  # L6: log hệ thống
-                    f"{h}/audit-archive"]  # L5: audit đã lưu trữ
+                    f"{h}/audit-archive",  # L5: audit đã lưu trữ
+                    # L7: gói chẩn đoán (exports/support-*.tar.gz) + gói xuất/nhập hub + bản sao lưu — vốn đã ∈ sandbox deny + sensitive_read
+                    # (tool Read), giờ Bash `cat/tar/cp` cũng forbidden ở lớp classifier
+                    f"{h}/exports", f"{h}/imports", f"{h}/backups"]
         if self.ctx.hub_socket:
             sock = canon_path(self.ctx.hub_socket)
             out += [sock, sock + ".auth", sock + ".web.auth", sock + ".mcp.auth"]

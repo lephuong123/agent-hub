@@ -69,13 +69,17 @@ EXTRA_FIELDS = ("event", "method", "via", "duration_ms", "outcome", "code", "rea
 
 
 class JsonFormatter(logging.Formatter):
+    def __init__(self, *args: Any, proc: str | None = None, **kw: Any) -> None:
+        super().__init__(*args, **kw)
+        self.proc = proc  # None = tiến trình đã `setup_logging` (`_PROC`); đặt riêng cho handler phụ (vd import-job ghi stderr — L7)
+
     def format(self, record: logging.LogRecord) -> str:
         d = {
             "ts": iso(datetime.fromtimestamp(record.created, timezone.utc)),
             "level": record.levelname.lower(),
             "logger": record.name,
             "msg": record.getMessage(),
-            "proc": _PROC,
+            "proc": self.proc or _PROC,
             "pid": record.process,
             "src": f"{record.module}:{record.lineno}",
         }
@@ -263,6 +267,25 @@ class _SharedStream(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         self.target.handle(record)  # filter (ngữ cảnh run, che secret) + formatter + xoay vòng của handler đích
+
+
+def setup_stream_json(proc: str, stream: Any = None, level: int = logging.INFO) -> logging.Handler:
+    """Tiến trình phụ ghi ra stderr đã được chuyển vào file (vd `hub import-job` → `logs/import-job.out`, L7): bản ghi `cfharness` thành
+    dòng JSON cùng schema `hub.log` (`ts`, `level`, `logger`, `msg`, `proc`, `pid`, …), đã che secret. Gọi lại được (thay handler cũ)."""
+    from .redact import SecretLogFilter
+
+    lg = logging.getLogger("cfharness")
+    for h in [x for x in lg.handlers if getattr(x, "_cfharness_stream_json", False)]:
+        lg.removeHandler(h)
+    h = logging.StreamHandler(stream if stream is not None else sys.stderr)
+    h.setFormatter(JsonFormatter(proc=proc))
+    h.addFilter(RunContextFilter())
+    h.addFilter(SecretLogFilter())
+    setattr(h, "_cfharness_stream_json", True)
+    lg.addHandler(h)
+    if lg.level == logging.NOTSET or lg.level > level:
+        lg.setLevel(level)
+    return h
 
 
 def file_logging_active() -> bool:

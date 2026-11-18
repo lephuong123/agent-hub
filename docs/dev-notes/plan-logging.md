@@ -477,3 +477,42 @@ Lệch / để sau:
 - `mass_read` cộng `data.count` của dòng `read:*` (dòng `coalesced` của L3 đến khi cửa sổ gộp 10 phút đóng → có thể trễ tới 10 phút).
 - `secret_access` tính cả `secret.rm`. `audit.alert` cũng được ghi thành dòng audit (lịch sử cảnh báo tra được bằng `audit list --kind audit.alert`).
 - Bộ test chung tắt `audit_watch` qua env `CFHARNESS_AUDIT_WATCH=off` (conftest) để không chen event/tin Telegram vào test đếm tin; test riêng bật lại.
+
+### L7 — Gói chẩn đoán (nhánh `feat/logging-l7`)
+Đã làm:
+- `support_bundle.py`: `create(paths, since, run_ids, include_raw, dry_run, status, cfg)` → kế hoạch (`dry_run`: file + cỡ SAU lọc/che + số chỗ che + file
+  bị bỏ vì trần) hoặc `HUB_HOME/exports/support-<YYYYmmddTHHMMSS>.tar.gz` (0600, thư mục 0700, `.part` O_EXCL → rename; khoá chống chạy chồng). Nguồn theo
+  danh sách trắng: `meta/versions.json` (claude lấy từ `hub_state.cli_compat`, không spawn), `meta/doctor.json` (`hub_doctor.run`), `meta/status.json`
+  (`hub.status`; ngoại tuyến = `daemon: not_running`), `meta/config.json` (`filter_config`: khoá nhạy cảm → `***`, số chỉ che khi là id chat/user, nhánh
+  `web` chỉ giữ bool, chuỗi che theo giá trị/mẫu); `logs/` (tên khớp `LOG_JSONL_RE` — lọc dòng theo `ts` ≥ since, `.gz` giải nén, dòng không JSON bỏ và
+  đếm — hoặc `LOG_TEXT_RE` — phần đuôi trong trần; file có mtime trước since bỏ cả file; không thư mục con, không symlink); `runs/<id>/run.json`
+  (`RUN_COLUMNS`, không prompt/summary/error/kết quả/diff/argv) + `runs/<id>/trace.json` (`trace_view.build(include_logs=False)`: audit metadata, event
+  tóm tắt, guard verdict, approval); raw `runs/<id>/raw.jsonl` + `stderr.log` chỉ khi `include_raw`. `MANIFEST.json` cuối: file + sha256 + cỡ (của nội
+  dung ĐÃ che), `redaction_report {total, files}` (chỉ số đếm; gồm khoá config đã che), `skipped`, `never_included`, phiên bản. Trần `support.max_mb`
+  (200, tổng chưa nén) + `support.max_file_mb` (50/file; JSONL giữ dòng mới nhất); thứ tự ưu tiên meta → run → log mới nhất → (bỏ file vượt trần tổng).
+- `redact.redact_count` (che theo giá trị + mẫu, trả số chỗ); `scrub` dùng `surrogateescape` để không mất byte nào ngoài chỗ che.
+- RPC `support.plan|list` (đọc) + `support.create` (`MUTATING_SUPPORT`, `wrap_with_audit`; `include_raw` thiếu `confirm_raw: true` → -32602) — đều
+  HUMAN_ONLY, không MANAGER_ALLOWED, chạy trong thread. CLI `cfharness support bundle [--since] [--run …] [--include-raw] [--yes] [--confirm-raw] [--local]`
+  + `support list`: in kế hoạch → y/N (`--yes`) → raw cần bước 2 riêng (gõ `raw` hoặc `--confirm-raw`; `--yes` không bỏ qua) → tạo; daemon dừng → tại chỗ
+  giữ `daemon.lock`, từ chối trong run của agent. `support` ∈ HUB_HUMAN_ONLY_CLI.
+- Web: thẻ "Gói chẩn đoán" ở Cài đặt (`/partials/support`, danh sách + nút tải), `/support` xem trước (`support.plan`), ACTIONS `support_create` (xác nhận) /
+  `support_create_raw` (xác nhận + `step2`, gửi `confirm_raw`); tải về: tách `transfer_pages.mint_download/take_download/stream_file` (đường cũ của gói chuyển
+  hub dùng lại y nguyên), kho token riêng `support_tokens`.
+- An toàn: `exports/`, `imports/`, `backups/` thêm vào classifier `sensitive_regions` — trước đó Bash `cat|cp|tar` gói trong `exports/` ra `safe` ở lớp
+  classifier (sandbox denyRead + `sensitive_read` của tool Read vẫn chặn).
+- Phần L1 để lại: stderr của sync filehub tee vào `logs/filehub-sync.log` (0600, O_APPEND|O_NOFOLLOW, xoay lúc spawn theo `logs.max_bytes`, che theo giá
+  trị từng khúc), vẫn giữ 300 ký tự cuối cho `last_error`. `update_helper.JsonLog`/`open_log` (chỉ stdlib) ghi `update.log` thành dòng JSON
+  `{ts, level, logger, msg, proc: helper, pid}`; `Updater.log_tail` hiện lại `msg`. Import-job: `logs.setup_stream_json("import-job")` (stderr = `import-job.out`).
+- Test: `tests/test_support_bundle.py`.
+
+Lệch / để sau:
+- Import-job là tiến trình `python -m cfharness` (không bị cài đè như helper cập nhật) → dùng `logs.JsonFormatter` (thêm tham số `proc`) qua
+  `setup_stream_json` thay vì formatter mini; chỉ `update_helper` có formatter riêng chỉ stdlib. Dòng `print` của thư viện/`hub_transfer` trong job vẫn là chữ.
+- Ngoại tuyến (CLI, daemon dừng) nạp secret store vào bộ che của chính tiến trình CLI (`SecretStore.preload`, chỉ RAM) để quét lại theo giá trị như
+  trong daemon; giá trị env-fallback (`${VAR}` lấy từ env của daemon) chỉ daemon biết.
+- Che theo giá trị trong `filehub-sync.log` làm theo từng khúc 4 KB — secret vắt qua ranh giới khúc có thể lọt vào file (gói chẩn đoán quét lại cả file).
+- Không phát event `support.created` (dòng audit `support.create` là đủ; tránh sinh lại schema event). Không tự dọn gói cũ trong `exports/`.
+- `hub doctor` trong gói vẫn gọi `claude --version` như lệnh doctor (chỉ `versions.json` dùng trạng thái compat).
+
+> Ghi chú sau khi merge main v0.2.21 (gỡ đồng bộ 2 chiều cũ của Không gian số): `filehub/supervisor.py` không còn → phần "stderr sync filehub ra
+> `logs/filehub-sync.log`" của L7 bị bỏ cùng test của nó; gói chẩn đoán vẫn nhận file này nếu còn sót từ bản cũ.

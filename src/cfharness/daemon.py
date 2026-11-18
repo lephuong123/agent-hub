@@ -163,6 +163,10 @@ class Daemon:
         from .logs_rpc import register_rpc as _register_logs
 
         _register_logs(self)
+        # Gói chẩn đoán: support.plan|create|list (support_bundle.py, L7 — HUMAN_ONLY, tự bọc audit support.create)
+        from .support_bundle import register_rpc as _register_support
+
+        _register_support(self)
         # Xuất toàn bộ hub sang máy khác: hub.export (hub_transfer.py — làm lặng hub, ghi gói .cfhx, tự bọc audit; nhập chỉ ngoại tuyến từ CLI)
         from .hub_transfer import register_rpc as _register_hub_transfer
 

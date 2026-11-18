@@ -549,8 +549,15 @@ def cmd_import_job(ctx: Any) -> int:
 def _import_job(ctx: Any) -> int:
     """PR6 (web): chạy lần nhập mà daemon đã chuẩn bị (`hub.import_start` → `imports/<upload>/job.json` + `pass`). Không hỏi gì — người đã
     xác nhận 2 bước trên web. Ghi `imports/<upload>/state.json`, khởi động lại daemon ở cuối (kể cả lỗi)."""
-    from .hub_transfer_web import run_import_job
+    import logging
 
+    from .hub_transfer_web import run_import_job
+    from .logs import setup_stream_json
+
+    setup_stream_json("import-job")  # L7: stderr của job (= logs/import-job.out) là dòng JSON cùng schema hub.log
+    jlog = logging.getLogger("cfharness.hub_transfer_web")
+    jlog.info("nhập hub (web) bắt đầu: gói %s", ctx.args.upload)
     st = run_import_job(ctx.paths, ctx.args.upload, supervised=bool(ctx.args.supervised))
-    print(f"nhập hub (web): {st.get('state')}" + (f" — {st['error']}" if st.get("error") else ""))
+    (jlog.info if st.get("state") == "done" else jlog.error)("nhập hub (web): %s%s", st.get("state"),
+                                                             f" — {st['error']}" if st.get("error") else "")
     return 0 if st.get("state") == "done" else 1

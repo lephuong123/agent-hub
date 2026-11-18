@@ -2101,6 +2101,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
         *_filehub_pages.routes(),  # /partials/filehub[/lane] + /filehub/open — thẻ "Không gian số" ở Cài đặt (filehub/)
         *_backup_pages.routes(),  # /partials/backup — thẻ "Sao lưu" ở Cài đặt (backup.py)
+        *_support_pages.routes(),  # /partials/support + /support + tải gói một lần — "Gói chẩn đoán" (support_bundle.py, L7)
         *_transfer_pages.routes(),  # /hub-transfer — xuất/nhập toàn bộ hub (hub_transfer_web.py, web/transfer_pages.py)
         *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
         *_desktop.routes(),  # /.well-known/cfharness.json + /app/badge — app desktop (web/desktop.py, docs/dev-notes/desktop-app.md)
@@ -2145,6 +2146,11 @@ _update_pages.register_actions(ACTIONS, Action, _req)
 from . import backup_pages as _backup_pages  # noqa: E402
 
 _backup_pages.register_actions(ACTIONS, Action, _req)
+
+# Thẻ "Gói chẩn đoán" (support_bundle.py, L7): support_create / support_create_raw (bước 2) + tải về bằng link một lần
+from . import support_pages as _support_pages  # noqa: E402
+
+_support_pages.register_actions(ACTIONS, Action, _req)
 
 # "Chuyển hub sang máy khác" (hub_transfer_web.py): hub_export / hub_import (bước 2 bắt buộc, passphrase chỉ ở bước 2) / hub_unfreeze
 from . import transfer_pages as _transfer_pages  # noqa: E402
