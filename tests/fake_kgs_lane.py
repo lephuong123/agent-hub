@@ -121,6 +121,7 @@ class FakeLane:
         self.put_delay: dict[str, float] = {}
         self.hidden: set[str] = set()
         self.inflight: set[str] = set()
+        self.trash: dict[str, tuple[str, list[Item]]] = {}  # trash_batch → (root, mục đã xoá) — C.6 `restore {trash_batch}`
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -497,6 +498,21 @@ class FakeLane:
                 it.rev += 1
                 self._change(root, "move", it, by="cfharness", from_path=src, agent=agent, request_id=rid)
                 return 200, {"item": it.to_dict(self._parent_id(root, dst))}, None, None
+            if b.get("trash_batch"):  # khôi phục từ thùng rác: chỗ cũ đã có mục → name_conflict (không ghi đè)
+                tb = self.trash.get(str(b["trash_batch"]))
+                if tb is None or tb[0] != root.id:
+                    return 404, {"code": "not_found"}, None, None
+                items = tb[1]
+                clash = next((x for x in items if x.path in root.items), None)
+                if clash is not None:
+                    return 409, {"code": "name_conflict", "current": root.items[clash.path].to_dict(self._parent_id(root, clash.path))}, None, None
+                self.trash.pop(str(b["trash_batch"]))
+                self._ensure_parents(root, items[0].path, "cfharness")
+                for x in items:
+                    x.rev += 1
+                    root.items[x.path] = x
+                self._change(root, "restore", items[0], by="cfharness", agent=agent, request_id=rid)
+                return 200, {"item": items[0].to_dict(self._parent_id(root, items[0].path))}, None, None
             # restore phiên bản
             path = str(b.get("path") or "")
             it = root.items.get(path)
@@ -524,11 +540,12 @@ class FakeLane:
             if it.type == "folder" and any(k.startswith(p + "/") for k in root.items):
                 return 409, {"code": "not_empty"}, None, None  # thư mục chỉ xoá khi rỗng (kể cả mục vô hình với agent)
             d = it.to_dict(self._parent_id(root, p))
-            for k in [k for k in list(root.items) if k == p or k.startswith(p + "/")]:
-                root.items.pop(k)
+            gone = [root.items.pop(k) for k in sorted(k for k in list(root.items) if k == p or k.startswith(p + "/"))]
             it.rev += 1
             self._change(root, "delete", it, by="cfharness", agent=agent, request_id=rid)
-            return 200, {"trash_batch": uuid.uuid4().hex, "item": d}, None, None
+            batch = uuid.uuid4().hex
+            self.trash[batch] = (root.id, gone)
+            return 200, {"trash_batch": batch, "item": d}, None, None
         return 404, {"code": "not_found"}, None, None
 
     def _presence(self, method: str, q: dict[str, str], hdr: dict[str, str], body: bytes) -> tuple[int, Any, dict[str, str] | None, bytes | None]:

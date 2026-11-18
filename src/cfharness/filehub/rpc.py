@@ -26,7 +26,8 @@ if TYPE_CHECKING:
 MUTATING_FILEHUB = ("filehub.setup", "filehub.login", "filehub.login_callback", "filehub.switch_to_workspace", "filehub.add", "filehub.remove",
                     "filehub.rename", "filehub.pause", "filehub.resume",
                     # cổng cfharness (filehub/lane/): khoá hub chỉ người nhập (CLI getpass / web bước 2), gỡ khỏi params trước audit
-                    "filehub.lane_setup", "filehub.lane_disable", "filehub.lane_orphan", "filehub.lane_add", "filehub.switch")
+                    "filehub.lane_setup", "filehub.lane_disable", "filehub.lane_orphan", "filehub.lane_add", "filehub.switch",
+                    "filehub.lane_test")  # lane_test: hello + đối soát → có thể THÊM thư mục chung (gốc mới được cấp)
 # Cổng cfharness — chỉ người (HUMAN_ONLY), KHÔNG ∈ MANAGER_ALLOWED. `lane_test` không ghi nhưng dùng khoá → chỉ người.
 HUMAN_ONLY_LANE = ("filehub.lane_setup", "filehub.lane_disable", "filehub.lane_test", "filehub.lane_orphan", "filehub.lane_add", "filehub.switch")
 

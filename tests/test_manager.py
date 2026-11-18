@@ -303,6 +303,23 @@ async def test_heartbeat_approval_waiting_and_periodic_open_work(d):
     assert "not finished yet: 1" in d.hub.store.get_run(tk["run_id"])["prompt"]
 
 
+async def test_first_periodic_check_is_due_even_when_clock_ticks(d, monkeypatch):
+    """Flake CI macOS: chưa từng kiểm → mốc kế tiếp từng là `iso()` đọc đồng hồ SAU `now` → qua ranh giới mili-giây thì
+    `now < nxt` → `not_due`. Mô phỏng đồng hồ chạy giữa hai lần đọc: mốc phải là chính `now`."""
+    from datetime import timedelta
+
+    from cfharness.events import iso as real_iso
+    from cfharness.events import utcnow
+    from cfharness.manager import service as msvc
+
+    monkeypatch.setattr(msvc, "iso", lambda dt=None: real_iso(dt if dt is not None else utcnow() + timedelta(milliseconds=5)))
+    d.hub.config.set("manager.tick_interval_s", 0)
+    d.hub.agents.create({"id": "boss", "name": "boss", "tool_policy": {"tools": ["Read", "Grep", "Glob"]}})
+    await rpc(d, "manager.set", {"agent_id": "boss"})
+    assert not (d.hub.store.state_get("manager_tick") or {}).get("last_check")
+    assert (await d.hub.manager.maybe_tick())["skipped"] == "nothing_to_do"
+
+
 async def test_worker_run_cannot_use_manager_tools(d):
     d.hub.agents.create({"id": "w1", "name": "w1"})
     d.hub.config.set("learning.agent_memory_tool", False)  # tool memory gắn hub-self vai trò knowledge cho mọi run — ở đây kiểm vai trò manager

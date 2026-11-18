@@ -22,13 +22,52 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - Daemon nâng DB lên phiên bản 29 (chỉ thêm cột vào `audit_log`, dòng cũ để trống).
 - **Khởi động lại web (`cfharness web`) và `cfharness mcp serve` sau khi cập nhật daemon** để dùng token riêng mới (`<socket>.web.auth`, `<socket>.mcp.auth`). Web/MCP chạy từ trước vẫn hoạt động nhưng được ghi là `os:<user>` với kênh `cli` (kênh tự khai nằm ở `declared_channel`).
 
+---
+
+## v0.2.20 — 2026-11-18
+
+Hoàn thiện cổng cfharness: hoàn tác run trên Không gian số, nút duyệt lô xoá trên Telegram/Slack, mọi run đọc được thư mục chung qua cổng,
+chặn run đọc/ghi cây làm việc của run khác; sửa test chập chờn của nhịp điều phối viên (#151).
+
+### Lưu ý khi cập nhật
+- Không có migration DB của hub. Cổng cfharness giờ có trên cả hai hệ Không gian số (bản chính cổng 8223, bản CCHC cổng 8233) — hub nối
+  CCHC dán khoá cổng là chuyển được (hub tự thử 8223 rồi 8233).
+- Mặc định mọi run đọc được thư mục chung chế độ cổng; muốn tắt: `cfharness config set filehub.lane.read_all_runs false`.
+
+### Không gian số — cổng cfharness (#151)
+- Cổng cfharness: hoàn tác run làm việc trên thư mục chung (`cfharness run revert <run>`, nút "Hoàn tác trên Không gian số" ở trang run) —
+  khôi phục phiên bản trước run, lấy lại tệp run xoá từ thùng rác, chuyển tệp run tạo vào thùng rác, đổi tên lại; từ chối khi tệp đã bị
+  sửa tiếp sau run. Run cũ (trước bản này) vẫn chỉ khôi phục được trên Không gian số.
+- Telegram/Slack: nút "Cho xoá"/"Không xoá" cho lô xoá hàng loạt đang giữ của cổng cfharness (2 bước, bước 2 liệt kê danh sách hiện tại).
+- Cổng cfharness: mọi run (kể cả run không làm trong thư mục chung) đọc được thư mục chung chế độ cổng qua tool đọc `fs_list`/`fs_read`…
+  (tắt: `filehub.lane.read_all_runs: false`); run không đọc/ghi được cây làm việc của run khác; dải "cfharness đang làm việc" trên Không gian
+  số vẫn giữ khi run chờ bạn duyệt.
+
+### Điều phối viên
+- Sửa lỗi nhịp đầu tiên của điều phối viên đôi khi bị bỏ lượt (mốc thời gian lệch mili-giây) (#151).
+
+---
+
+## v0.2.19 — 2026-11-18
+
+Cổng cfharness: agent làm việc thẳng trên Không gian số cùng máy, realtime hai chiều, thay đồng bộ 2 chiều thường trực — dán khoá là dùng được
+ngay (#147, #148). Kèm sửa bản sao ngoài vùng giam (#141), `cfharness update` tự chạy lại web (#144), gỡ MCP đã xoá (#145), `RESET=1` (#146).
+
+### Lưu ý khi cập nhật
+- Không có migration DB của hub. Cấu hình mới đều có mặc định; hub đang dùng đồng bộ cũ (`filehub.mode: sync`) **không đổi gì** cho tới khi
+  người dán khoá cổng.
+- Muốn dùng cổng: Không gian số phải là bản có cổng cfharness (đã deploy 2026-11-18, cổng `127.0.0.1:8223`) và Super Admin bật "Cho phép
+  cổng cfharness" ở Hệ thống › Chính sách. Sau đó Workspace Admin tạo khoá ở Hồ sơ › Cổng cfharness → dán vào cfharness › Cài đặt › Cổng
+  cfharness. Bản sao `~/KhongGianSo/<tên>` của đồng bộ cũ được để nguyên — kiểm rồi tự xoá khi đã chuyển.
+- Hệ Không gian số CCHC (cổng 8233) chưa có cổng cfharness — hub nối CCHC tiếp tục dùng đồng bộ cũ.
+
 ### Cài đặt
 - `scripts/setup-hub-user.sh` thêm `RESET=1`: làm lại hub của một user từ đầu — dừng dịch vụ, CẤT (không xoá) dữ liệu hub, Workspace, session Claude cũ sang `~/.reset-<giờ>`, hỏi gõ "reset" để xác nhận (#146).
 
 ### Không gian số (thư mục chung)
 - Hub đang giam agent trong một workspace (`workspace.confine`) mà thư mục cha của bản sao (`filehub.local_parent`, mặc định `~/KhongGianSo`) nằm ngoài vùng giam → bản sao tự đặt ở `<vùng giam>/KhongGianSo/<tên>` thay vì báo "nằm ngoài workspace được giam" (nối thư mục qua web public không sửa được đường dẫn nên bị kẹt). `filehub setup --local-parent` ngoài vùng giam bị từ chối ngay, không ghi cấu hình (#141).
 
-### Không gian số — cổng cfharness (chế độ `lane`, chưa bật mặc định) (#147)
+### Không gian số — cổng cfharness (chế độ `lane`, chưa bật mặc định) (#147, #148)
 - `cfharness filehub lane setup --url http://127.0.0.1:8223` (khoá hỏi bằng getpass, chỉ lưu trong secret store), `lane status|test|disable`:
   nối hub với cổng cfharness của Không gian số trên cùng máy — chỉ nhận URL loopback, khoá không bao giờ vào cấu hình/nhật ký/gói nhân bản.
   Hub đang dùng đồng bộ cũ không đổi gì cho tới khi người chuyển thư mục sang `lane`.
@@ -42,7 +81,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   Không gian số.
 - Chuyển từng thư mục: `cfharness filehub switch <tên> --to lane|sync` (từ chối khi đồng bộ còn dở / gốc chưa được cấp cho khoá / có run
   đang ghi) — bản sao `~/KhongGianSo/<tên>` cũ **để nguyên** (hub không xoá), được báo ở `filehub lane status` và thẻ web. Thư mục mới:
-  `cfharness filehub lane add <id gốc>`. Thẻ "Cổng cfharness" ở Cài đặt web (khoá chỉ nhập ở bước 2). Trên Không gian số thấy dải
+  tự thêm khi dán khoá (xem dưới); ca tay `cfharness filehub lane add <id gốc>`. Thẻ "Cổng cfharness" ở Cài đặt web (khoá chỉ nhập ở bước 2). Trên Không gian số thấy dải
   "cfharness · <agent> · đang sửa <tệp>" trong lúc run ghi. `setup-hub-user.sh`: `KGS_MODE=lane`.
 - An toàn hơn khi agent làm việc trên thư mục chế độ `lane`: hub không bao giờ đi xuyên symlink agent đặt trong cây (xoá/di chuyển/đọc để
   đẩy đều từ chối); tệp tạm/khoá Office/`.git` của người trên Không gian số không bao giờ bị xoá; agent xoá tệp mà người vừa lưu bản mới →
@@ -54,6 +93,25 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   gửi lại an toàn (cùng Idempotency-Key). `cfharness filehub status` liệt kê cả thư mục chế độ lane. Run chỉ đọc không bao giờ đẩy (kể cả
   sau khi daemon khởi động lại); người di chuyển tệp lên đúng tên agent vừa tạo → bản của agent thành tệp riêng; người sửa tệp lớn chưa tải
   → không tải cả tệp mỗi lần.
+- **Dán khoá là chạy được luôn**: `filehub lane setup` / thẻ "Cổng cfharness" tự thêm MỌI thư mục/workspace khoá được cấp thành thư mục
+  chung chế độ lane (tên theo Không gian số, tự thêm số nếu trùng; workspace → cả workspace) — giao việc `filehub:<tên>` được ngay, không
+  cần `lane test`/`lane add` hay id gốc. Hub tự đối soát mỗi lần nói chuyện với cổng: cấp thêm thư mục → tự thêm; thư mục bị thu hồi →
+  báo "mất quyền" (không xoá gì); thư mục đang đồng bộ kiểu cũ cùng gốc → giữ nguyên, có nút "Chuyển sang cổng". Báo qua Telegram/Slack
+  (event `filehub.lane.roots`). Bỏ trống địa chỉ → hub thử 8223 rồi 8233, tên cổng theo Không gian số; trên web chỉ cần dán khoá.
+  `setup-hub-user.sh KGS_MODE=lane` kết thúc với thư mục dùng được ngay. `lane add` vẫn còn cho ca tay; "Xoá khoá" gỡ luôn các thư mục chỉ
+  có qua cổng đó (tệp trên Không gian số giữ nguyên, dán lại khoá là về).
+- Điều phối viên và `filehub.list`/`filehub status` thấy thư mục chế độ lane (chế độ, loại, trạng thái `ok|revoked|offline…`); thẻ
+  "Không gian số" không còn báo "chưa thiết lập" khi hub dùng cổng; tên thư mục gõ sai → lỗi liệt kê các tên có thật.
+- Thẻ "Cổng cfharness": trạng thái bằng chữ + việc cần làm (vd khoá bị thu hồi → "tạo khoá mới … rồi dán lại", không hiện "còn N ngày"),
+  hạn khoá theo ngày giờ máy + số ngày nguyên, nút "Thử kết nối", mọi thao tác quay về đúng thẻ. Hub tự kiểm tra cổng định kỳ (cả lúc không
+  có run): "không kết nối được" tự về "đang hoạt động" khi Không gian số chạy lại. Lô xoá hàng loạt đang giữ liệt kê đường dẫn (50 mục đầu
+  + "và N mục nữa") trên thẻ, trang xác nhận và tin Telegram/Slack.
+- Lô xoá hàng loạt đang giữ vẫn hiện "N mục xoá đang chờ duyệt" + "Cho xoá"/"Không xoá" (cùng nghĩa) sau khi run đã kết thúc, và có ở
+  trang "Cần bạn" (task bị chặn vì lô xoá có nút tới lô đó). Thay đổi còn kẹt sau run ghi rõ thao tác từng mục (xoá / ghi / di chuyển) + đường
+  dẫn; trang xác nhận nói thẳng "Xoá N tệp trên Không gian số …" / "Không xoá — giữ N tệp, bỏ thay đổi của agent"; "Làm lại trên Không gian
+  số" không bao giờ ngầm xoá lô đang giữ. Ô địa chỉ "Nâng cao" để trống (tự thử 8223 rồi 8233). Cổng được kiểm lại mỗi phút (khoá bị thu hồi
+  / Không gian số tắt thấy trong ≤ 1 phút), thẻ ghi "kiểm tra lúc …". Tool đọc của điều phối viên (`filehub_list`…) không còn ghi nhật ký như
+  thao tác ghi; điều phối viên thấy lý do task đang chờ bằng chữ rõ (vd chờ slot chạy) thay vì mã thô.
 
 
 ### Cập nhật
