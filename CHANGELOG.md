@@ -10,6 +10,10 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+---
+
+## v0.2.21 — 2026-11-18
+
 ### Lưu ý khi cập nhật
 - **Đồng bộ 2 chiều cũ với Không gian số đã bỏ** (tiến trình `tang-thu-sync-headless`, đăng nhập thiết bị, bản sao `~/KhongGianSo/…`):
   thư mục chung giờ CHỈ đi qua cổng cfharness. Hub còn thư mục đồng bộ cũ thì sau khi cập nhật thấy "Thư mục X đang dùng đồng bộ cũ
@@ -22,7 +26,7 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   (lô xoá đang giữ của cổng). `scripts/setup-hub-user.sh`: `KGS=…` luôn đi qua cổng (biến `KGS_MODE`, `KGS_SCOPE`… vẫn nhận, bỏ qua).
 - Không có migration DB.
 
-### Không gian số — chỉ còn cổng cfharness (H5)
+### Không gian số — chỉ còn cổng cfharness (H5, #154)
 - Gỡ đồng bộ 2 chiều cũ: tiến trình giám sát binary sync, đăng nhập thiết bị + relay OAuth qua web public (`/filehub/oauth/cb`, trang
   `/filehub/login`), bản sao cục bộ, chặn xoá hàng loạt của binary, chuyển chế độ sync ↔ cổng. Thẻ Cài đặt gộp thành một thẻ "Không gian số —
   cổng cfharness" (thêm đổi tên / gỡ thư mục, báo thư mục cần chuyển).

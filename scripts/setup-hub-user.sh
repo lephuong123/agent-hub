@@ -20,7 +20,7 @@ MCP="${4:-8722}"
 DOMAIN="${DOMAIN:-trungtamdhs.com}"   # miền gốc (zone Cloudflare): https://$SUB.$DOMAIN
 SUB="${SUB:-$U}"        # tên miền con: https://$SUB.$DOMAIN
 HOST="$SUB.$DOMAIN"
-VER="${VER:-v0.2.20}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
+VER="${VER:-v0.2.21}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
 KGS="${KGS:-}"          # URL Không gian số để nối thư mục chung (trống = bỏ qua bước 10)
 # Cổng cfharness (docs/dev-notes/plan-filehub-lane.md): nhập khoá cổng (người dùng tạo ở Không gian số › Hồ sơ › Cổng cfharness cho tài
 # khoản của mình — script hỏi bằng getpass, không in); hub tự thêm mọi gốc khoá được cấp. Chỉ khi Không gian số chạy CÙNG máy (loopback).
