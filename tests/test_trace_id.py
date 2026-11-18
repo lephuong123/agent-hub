@@ -161,7 +161,7 @@ def test_one_web_request_same_req_id_everywhere(home, restore_logging):
         d, srv = await _start(home)
         try:
             d.hub.agents.create({"id": "a1", "name": "A1", "limits": {"max_concurrent_runs": 20}})
-            cli = AsyncHubClient(home.socket, channel="web")
+            cli = AsyncHubClient(home.socket, channel="web", cred="web")  # L3: token web riêng → kênh web do daemon chứng thực
             run = await cli.call("run.start", {"agent": "a1", "prompt": "hello"}, audit=True)
             rid = cli.last_req_id
             assert trace.valid_req_id(rid)

@@ -91,15 +91,16 @@ def check_socket_owner(sock_path: Path | str) -> None:
                               "Có thể ai đó chiếm trước đường dẫn socket; đặt CFHARNESS_SOCKET=<đường dẫn riêng> hoặc kiểm tra máy.")
 
 
-def with_auth(sock_path: Path | str, params: dict[str, Any] | None) -> dict[str, Any]:
+def with_auth(sock_path: Path | str, params: dict[str, Any] | None, *, kind: str = "human") -> dict[str, Any]:
     """Gắn token người (nếu đọc được) vào params — dùng chung cho mọi client của người.
     Có token thì kiểm chủ socket trước (`check_socket_owner`) — không bao giờ gửi token tới socket của user khác.
-    L2: gắn cả `_trace.req_id` (đang bind trong contextvar, hoặc sinh mới) — `trace.outgoing`."""
+    L2: gắn cả `_trace.req_id` (đang bind trong contextvar, hoặc sinh mới) — `trace.outgoing`.
+    L3: `kind` = loại client (`web`/`mcp` có token riêng `<socket>.<kind>.auth`); daemon cũ chưa sinh → dùng token người."""
     from .auth import AUTH_PARAM, load_token
     from .trace import outgoing
 
     p = outgoing(params)
-    tok = load_token(sock_path)
+    tok = (load_token(sock_path, kind) if kind != "human" else None) or load_token(sock_path)
     if tok and AUTH_PARAM not in p:
         check_socket_owner(sock_path)
         p[AUTH_PARAM] = tok
@@ -107,9 +108,10 @@ def with_auth(sock_path: Path | str, params: dict[str, Any] | None) -> dict[str,
 
 
 class RpcClient:
-    def __init__(self, sock_path: Path, timeout: float | None = 60.0) -> None:
+    def __init__(self, sock_path: Path, timeout: float | None = 60.0, *, kind: str = "human") -> None:
         self.sock_path = sock_path
         self.timeout = timeout
+        self.kind = kind  # L3: loại token (human | web | mcp) — `with_auth(kind=)`
         self._id = 0
         self.last_req_id: str | None = None
 
@@ -126,7 +128,7 @@ class RpcClient:
             s.settimeout(timeout)
         try:
             self._id += 1
-            p = with_auth(self.sock_path, params)
+            p = with_auth(self.sock_path, params, kind=self.kind)
             sent = p["_trace"]["req_id"]
             self.last_req_id = sent
             s.sendall(encode({"jsonrpc": "2.0", "id": self._id, "method": method, "params": p}))

@@ -28,7 +28,7 @@ from .pathmap import rewrite_files as _pm_rewrite_files
 from .pathmap import scan_files as _pm_scan_files
 from .paths import HubPaths, legacy_default_home, legacy_home_in_use, resolve_home
 
-STALE = ("hub.sock", "hub.sock.auth", "hub.pid")
+STALE = ("hub.sock", "hub.sock.auth", "hub.sock.web.auth", "hub.sock.mcp.auth", "hub.pid")
 
 
 @dataclass

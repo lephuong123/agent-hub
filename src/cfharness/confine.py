@@ -233,10 +233,10 @@ def apply_sandbox(sb: dict[str, Any], conf: Confine, hub_home: Path, *, cwd: Pat
 def confine_only_sandbox(conf: Confine, hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cwd: Path | None) -> dict[str, Any]:
     """Sandbox CHỈ để giam filesystem (trust_full hoặc guard.sandbox.enabled=false): ghi được root + cwd + toolchain, mạng mở
     (`*` + loopback), Unix socket chỉ theo cấu hình (hub.sock luôn bị chặn). Vẫn chặn đọc secret/token của hub."""
-    from .auth import token_path
+    from .auth import all_token_paths
 
-    tok = str(token_path(socket))
-    deny_r = [tok]
+    toks = [str(t) for t in all_token_paths(socket)]  # L3: token người + web + mcp
+    deny_r = list(toks)
     for h in dict.fromkeys([str(hub_home), _real(str(hub_home))]):
         deny_r += [f"{h}/secrets", f"{h}/mcp_server/tokens.json", f"{h}/auth"]
         try:
@@ -248,7 +248,7 @@ def confine_only_sandbox(conf: Confine, hub_home: Path, socket: Path, sb_cfg: di
 
     lanes = lane_tree_dirs(hub_home, cwd=cwd)  # cây lane của run khác: trust full cũng không gỡ (classifier `lane_other_tree` ∈ TRUST_NEVER_RULES)
     deny_r += other_hub_homes(hub_home) + lanes
-    deny_w = [str(socket), tok, *other_hub_homes(hub_home), *lanes]
+    deny_w = [str(socket), *toks, *other_hub_homes(hub_home), *lanes]
     aw = [conf.root, *conf.read_allow] + [str(x) for x in sb_cfg.get("extra_allow_write") or []]
     socks = [str(x) for x in sb_cfg.get("allow_unix_sockets") or [] if _real(str(x)) != _real(str(socket))]
     sb: dict[str, Any] = {

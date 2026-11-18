@@ -241,6 +241,8 @@ class HubMcp:
         params = dict(params or {})
         if audit:
             params["_audit"] = {"channel": self.channel(ctx), "actor": "user"}
+        # L3: transport + mức token HTTP → principal `mcp:stdio` / `mcp:http:<level>` (daemon chỉ nhận khi đi kèm token MCP)
+        params["_client"] = {"transport": self.transport, **({"level": self.level(ctx)} if self.transport == "http" else {})}
         try:
             return await anyio.to_thread.run_sync(lambda: self.caller(method, params))
         except RpcError as e:

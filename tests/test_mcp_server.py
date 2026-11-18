@@ -31,7 +31,7 @@ def daemon(hub_home):
 
 
 def caller_for(paths):
-    return lambda method, params: RpcClient(paths.socket, timeout=60).call(method, params)
+    return lambda method, params: RpcClient(paths.socket, timeout=60, kind="mcp").call(method, params)  # như DaemonCaller (L3: token MCP riêng)
 
 
 def sc(result):

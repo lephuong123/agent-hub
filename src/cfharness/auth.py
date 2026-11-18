@@ -34,6 +34,7 @@ import ctypes
 import ctypes.util
 import hmac
 import os
+import re
 import secrets
 import socket
 import struct
@@ -130,6 +131,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # Ghi audit tuỳ ý (mcp_server/rpc.py audit.record): actor/channel/summary do người gọi tự khai — chỉ web/CLI của người dùng;
         # agent/hook/hub-self không cần (audit của agent do daemon tự ghi khi bọc MUTATING, actor=agent) → agent không giả "user duyệt"
         "audit.record",
+        # Đọc nhật ký kiểm toán (L3, plan-logging.md A5): lộ mọi thao tác, kênh, principal, ip của người — agent không đọc audit
+        "audit.list",
         # Quản trị máy (admin_rpc.py, docs/dev-notes/admin-users.md): đọc trạng thái/audit/chính sách user khác (admin), bật/gỡ ESTOP admin,
         # trang minh bạch phía user — mọi method admin.* chỉ người; phía admin còn kiểm nhóm cfharness-admin (admin_control.require_admin)
         "admin.users", "admin.user", "admin.estop_list", "admin.estop_set", "admin.alerts", "admin.audit", "admin.policy",
@@ -274,16 +277,37 @@ def require_human(what: str, *, allow_manager: bool = False) -> None:
 
 
 # ============================================================================ token
-def token_path(sock_path: str | os.PathLike[str]) -> Path:
+# L3 (plan-logging.md A2): mỗi LOẠI client người có token riêng để daemon CHỨNG THỰC kênh thay vì tin `_audit.channel`:
+# `human` = CLI/TUI (`<socket>.auth`), `web` = tiến trình `cfharness web` (`<socket>.web.auth`), `mcp` = `cfharness mcp serve`
+# (`<socket>.mcp.auth`). Cả ba sinh lại cùng lúc khi daemon khởi tạo, 0600, cùng lớp bảo vệ (sandbox denyRead/denyWrite, classifier,
+# fileview). Client web/mcp không đọc được token riêng (daemon cũ) → dùng token người (tương thích: ghi `os:<user>` + kênh khai).
+TOKEN_KINDS = ("human", "web", "mcp")
+
+
+def token_path(sock_path: str | os.PathLike[str], kind: str = "human") -> Path:
     p = Path(sock_path)
-    return p.with_name(p.name + ".auth")
+    if kind == "human":
+        return p.with_name(p.name + ".auth")
+    if kind not in TOKEN_KINDS:
+        raise ValueError(f"loại token lạ: {kind!r}")
+    return p.with_name(f"{p.name}.{kind}.auth")
 
 
-def issue_token(sock_path: str | os.PathLike[str]) -> str:
+def all_token_paths(sock_path: str | os.PathLike[str]) -> list[Path]:
+    """Mọi file token của socket (người + web + mcp) — sandbox/classifier/fileview chặn đọc/ghi như nhau."""
+    return [token_path(sock_path, k) for k in TOKEN_KINDS]
+
+
+def issue_tokens(sock_path: str | os.PathLike[str]) -> dict[str, str]:
+    """Sinh token mới cho mọi loại client (`TOKEN_KINDS`). Trả {loại: token}."""
+    return {k: issue_token(sock_path, k) for k in TOKEN_KINDS}
+
+
+def issue_token(sock_path: str | os.PathLike[str], kind: str = "human") -> str:
     """Sinh token mới (mỗi lần daemon khởi tạo), ghi 0600 không theo symlink. Trả token.
 
     Daemon KHÔNG gọi khi socket đang có daemon sống (`daemon._live_daemon`) — ghi đè sẽ làm token trong file lệch daemon đang chạy."""
-    path = token_path(sock_path)
+    path = token_path(sock_path, kind)
     path.parent.mkdir(parents=True, exist_ok=True)
     tok = secrets.token_urlsafe(32)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -298,11 +322,11 @@ def issue_token(sock_path: str | os.PathLike[str]) -> str:
     return tok
 
 
-def load_token(sock_path: str | os.PathLike[str] | None) -> str | None:
+def load_token(sock_path: str | os.PathLike[str] | None, kind: str = "human") -> str | None:
     if not sock_path:
         return None
     try:
-        p = token_path(sock_path)
+        p = token_path(sock_path, kind)
         st = os.lstat(p)
         if not os.path.isfile(p) or os.path.islink(p) or not owned_by_me(st):
             return None
@@ -452,6 +476,10 @@ class Caller:
     evidence: list[str] = field(default_factory=list)
     # M7: id agent manager khi lời gọi do ManagerService thực hiện THAY run manager (chỉ dựng trong daemon, `manager_caller`)
     manager: str | None = None
+    # L3: loại token đã khớp (human | web | mcp — `TOKEN_KINDS`) — daemon chứng thực kênh theo đây, không theo `_audit.channel`
+    cred: str | None = None
+    # L3: id người gửi/bấm của kênh chat (Telegram from.id, Slack user id) — `principal` = telegram:<user> / slack:<user>
+    user: str | None = None
 
     @property
     def internal(self) -> bool:
@@ -470,6 +498,8 @@ class Caller:
                "evidence": self.evidence[:5], "human": self.human}
         if self.manager:
             out["manager"] = self.manager
+        if self.cred and self.cred != "human":
+            out["cred"] = self.cred
         return out
 
 
@@ -502,7 +532,7 @@ def telegram_caller(hub: "Hub", chat_id: Any, user_id: Any = None) -> Caller:
             ok = bool(cfg.get("allow_groups")) and uid in users
         else:
             ok = uid == cid or uid in users
-    return Caller(via=f"telegram:{chat_id}", token_ok=ok)
+    return Caller(via=f"telegram:{chat_id}", token_ok=ok, user=uid)
 
 
 def slack_caller(hub: "Hub", chat_id: Any, user_id: Any = None) -> Caller:
@@ -527,7 +557,101 @@ def slack_caller(hub: "Hub", chat_id: Any, user_id: Any = None) -> Caller:
         ok = cid in allowed
     elif ok:  # kênh chung: mọi kênh có bot khi `allow_channels` — cổng là NGƯỜI (allowed_user_ids) + workspace ghim, không cần ghép nối kênh
         ok = bool(cfg.get("allow_channels"))
-    return Caller(via=f"slack:{chat_id}", token_ok=ok)
+    return Caller(via=f"slack:{chat_id}", token_ok=ok, user=uid)
+
+
+# ============================================================================ danh tính do daemon chứng thực (L3, plan-logging.md A2)
+_REF_RE = re.compile(r"(dev|sess)_[0-9a-f]{8}")
+_SAFE_RE = re.compile(r"[A-Za-z0-9_.@\-]{1,48}")
+HUMAN_DECLARED = ("cli", "tui")  # kênh client token người (CLI/TUI) được tự khai — token không phân biệt được, cả hai đều là chủ máy
+_OS_USER: str | None = None
+
+
+def os_user() -> str:
+    """Tên user OS của daemon. Socket 0600 (POSIX) / kiểm cùng user (Windows, `transport`) bảo đảm peer cùng uid với daemon."""
+    global _OS_USER
+    if _OS_USER is None:
+        name = ""
+        try:
+            import pwd
+
+            name = pwd.getpwuid(os.getuid()).pw_name
+        except Exception:  # best-effort: Windows / uid không có trong passwd → getpass
+            try:
+                import getpass
+
+                name = getpass.getuser()
+            except Exception:  # best-effort: không xác định được tên → uid
+                name = ""
+        _OS_USER = name if _SAFE_RE.fullmatch(name or "") else (f"uid{os.getuid()}" if hasattr(os, "getuid") else "unknown")
+    return _OS_USER
+
+
+def clean_client_meta(caller: "Caller", raw: Any) -> dict[str, str]:
+    """`params._client` (daemon pop trước handler) → chỉ trường hợp lệ VỚI loại token đã khớp:
+    web → `session_ref` (`dev_|sess_` + 8 hex — băm, không bao giờ sid/khoá) + `ip` (web chỉ gửi khi qua public_origin);
+    mcp → `transport` (stdio|http) + `level` (read|control|none). Token khác / sai định dạng → bỏ (không bao giờ ném lỗi)."""
+    out: dict[str, str] = {}
+    if not isinstance(raw, dict) or caller.via != "socket" or not caller.token_ok or caller.is_agent:
+        return out
+    if caller.cred == "web":
+        ref = raw.get("session_ref")
+        if isinstance(ref, str) and _REF_RE.fullmatch(ref):
+            out["session_ref"] = ref
+        ip = raw.get("ip")
+        if isinstance(ip, str) and 0 < len(ip) <= 64:
+            try:
+                import ipaddress
+
+                out["ip"] = str(ipaddress.ip_address(ip.strip().strip("[]")))
+            except ValueError:
+                pass
+    elif caller.cred == "mcp":
+        if raw.get("transport") in ("stdio", "http"):
+            out["transport"] = str(raw["transport"])
+        if raw.get("level") in ("read", "control", "none"):
+            out["level"] = str(raw["level"])
+    return out
+
+
+def principal_of(caller: "Caller", client: dict[str, str] | None = None, *, internal_channel: str | None = None) -> str:
+    """Nhãn danh tính ổn định do daemon xác định (không tin client tự khai):
+    `os:<user>` (token người CLI/TUI), `web:dev_<8>`/`web:sess_<8>` (token web), `mcp:stdio`/`mcp:http:<level>` (token MCP),
+    `telegram:<from_id>`, `slack:<user_id>`, `manager:<agent>`, `agent:<id>`, `hub:<service>` (nội bộ), `anon:socket` (thiếu token)."""
+    client = client or {}
+    if caller.manager:
+        return f"manager:{caller.manager}"
+    if caller.is_agent:
+        return f"agent:{caller.agent_id or 'unknown'}"
+    for pre in ("telegram:", "slack:"):
+        if caller.via.startswith(pre):
+            u = caller.user if caller.user and _SAFE_RE.fullmatch(caller.user) else None
+            return f"{pre}{u}" if u else f"{pre}chat_{caller.via[len(pre):][:32]}"
+    if caller.internal:
+        ch = internal_channel if internal_channel and _SAFE_RE.fullmatch(internal_channel) else "internal"
+        return f"hub:{ch}"
+    if not caller.token_ok:
+        return "anon:socket"
+    if caller.cred == "web":
+        return f"web:{client['session_ref']}" if client.get("session_ref") else "web:anon"
+    if caller.cred == "mcp":
+        if client.get("transport") == "http":
+            return f"mcp:http:{client.get('level') or 'unknown'}"
+        return "mcp:stdio" if client.get("transport") == "stdio" else "mcp:unknown"
+    return f"os:{os_user()}"
+
+
+def attested_channel(caller: "Caller", declared: Any) -> str | None:
+    """Kênh daemon ghi cho lời gọi của NGƯỜI qua socket theo loại token (None = giữ nguyên — nội bộ/call_as/agent đã ép).
+    web → `web`; mcp → kênh khai nếu là `mcp:<tên client>`, không thì `mcp`; token người → `cli`/`tui` như khai, kênh khác (vd
+    client cũ khai `web`) → `cli` (kênh khai vẫn lưu ở `declared_channel`)."""
+    if caller.via != "socket" or not caller.human:
+        return None
+    if caller.cred == "web":
+        return "web"
+    if caller.cred == "mcp":
+        return declared if isinstance(declared, str) and declared.startswith("mcp:") and len(declared) <= 64 else "mcp"
+    return declared if declared in HUMAN_DECLARED else "cli"
 
 
 CURRENT_CALLER: contextvars.ContextVar[Caller | None] = contextvars.ContextVar("cfharness_caller", default=None)
@@ -570,8 +694,9 @@ class CallerResolver:
                 continue
         return out
 
-    def resolve(self, pid: int | None, token: Any, expected_token: str | None) -> Caller:
-        c = Caller(via="socket", pid=pid, token_ok=token_ok(token, expected_token))
+    def resolve(self, pid: int | None, token: Any, expected_token: str | None, *, cred: str | None = None) -> Caller:
+        """`cred` (L3): loại token daemon đã khớp trước (human|web|mcp) — có thì token đã đúng."""
+        c = Caller(via="socket", pid=pid, token_ok=cred is not None or token_ok(token, expected_token), cred=cred)
         if pid is None:
             if sys.platform in ("darwin", "linux", "win32"):  # nền tảng hỗ trợ mà không lấy được pid → không tin là người
                 c.evidence.append("peer_pid_unknown")

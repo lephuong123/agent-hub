@@ -556,3 +556,46 @@ async def test_session_reindex_human_only(home):
         assert r["scheduled"]
     finally:
         await _stop(d, srv)
+
+
+# =============================================================================== L3 (plan-logging.md A2/A5): audit.list + token web/MCP riêng
+def test_audit_list_human_only_and_cli_blocked(home):
+    from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI, GuardContext, classify
+    from cfharness.guard.policy import PolicyStore
+
+    assert "audit.list" in auth.HUMAN_ONLY and "audit.list" not in auth.MANAGER_ALLOWED
+    assert HUB_HUMAN_ONLY_CLI.get("audit", "missing") is None
+    ps = PolicyStore(home.home)
+    ps.ensure()
+    ctx = GuardContext(home.home / "agents", ps.load(), run_since=time.time(), hub_socket=str(home.socket), git_probe=False)
+    for cmd in ("cfharness audit list", "cfharness audit list --limit 5"):
+        assert classify("Bash", {"command": cmd}, ctx).forbidden, cmd
+    # token web/MCP riêng: cùng lớp bảo vệ với token người (classifier + permissions.deny)
+    from cfharness.guard.runtime import secret_read_deny_rules
+
+    rules = secret_read_deny_rules(home.home, home.socket)
+    for kind in auth.TOKEN_KINDS:
+        tp = auth.token_path(home.socket, kind)
+        assert classify("Bash", {"command": f"cat {tp}"}, ctx).forbidden, kind
+        assert classify("Read", {"file_path": str(tp)}, ctx).forbidden, kind
+        assert any(str(tp) in r and r.startswith("Read(") for r in rules), kind
+
+
+async def test_agent_with_stolen_web_or_mcp_token_still_denied(home):
+    """Token web/MCP là token NGƯỜI (kênh khác): agent trong run đọc trộm được (giả định sandbox tắt) vẫn bị bằng chứng tiến trình chặn
+    ở method HUMAN_ONLY (audit.list) và dòng audit mang principal agent:<id> — không mạo danh web."""
+    d, srv = await _start(home)
+    try:
+        for kind in ("web", "mcp"):
+            tok = auth.token_path(home.socket, kind).read_text().strip()
+            run, proc, go = await _start_run(d)
+            rr = await _in_run(go, _client_py(home, "audit.list", {"_auth": tok, "limit": 1,
+                                                                  "_client": {"session_ref": "sess_00000000", "transport": "http", "level": "control"}},
+                                              steal_token=False))
+            resp = json.loads(rr["out"].strip().splitlines()[-1])
+            assert resp.get("error", {}).get("code") == -32003, (kind, resp)
+            row = d.hub.audit.query(kind="auth.denied", limit=1)[0]
+            assert row["principal"].startswith("agent:") and row["outcome"] == "denied" and row["session_ref"] is None, row
+            proc.kill()
+    finally:
+        await _stop(d, srv)

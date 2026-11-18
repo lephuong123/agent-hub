@@ -56,7 +56,7 @@ class DaemonCaller:
         from ..rpc import RpcClient
 
         self.paths = paths
-        self.client = RpcClient(paths.socket, timeout=120)
+        self.client = RpcClient(paths.socket, timeout=120, kind="mcp")
         self._lock = threading.Lock()
         self._started = False
 
@@ -66,7 +66,7 @@ class DaemonCaller:
 
         params = outgoing(params)  # L2: một req_id cho lời gọi tool — lần thử lại sau khi tự khởi động daemon dùng CÙNG mã
         try:
-            return RpcClient(self.paths.socket, timeout=120).call(method, params)
+            return RpcClient(self.paths.socket, timeout=120, kind="mcp").call(method, params)  # L3: token riêng của MCP server
         except DaemonUnavailable:
             with self._lock:
                 if not self._started:
@@ -74,7 +74,7 @@ class DaemonCaller:
 
                     spawn_background(self.paths)
                     self._started = True
-            return RpcClient(self.paths.socket, timeout=120).call(method, params)
+            return RpcClient(self.paths.socket, timeout=120, kind="mcp").call(method, params)
 
 
 # ============================================================================ mcp serve / snippet / token
@@ -543,7 +543,7 @@ def cmd_secret(ctx: Any) -> int:
 def cmd_audit(ctx: Any) -> int:
     a = ctx.args
     rows = ctx.call("audit.list", {"kind": a.kind, "run_id": a.run, "agent_id": a.agent, "channel": a.channel, "limit": a.limit})
-    ctx.out(rows, "\n".join(f"#{r['id']:<5} {r['ts']}  {r['kind']:<18} {r['channel']:<20} {r['actor']:<16} {r.get('target') or '-'}  {r.get('run_id') or ''}" for r in rows) or "(audit trống)")
+    ctx.out(rows, "\n".join(f"#{r['id']:<5} {r['ts']}  {r['kind']:<18} {r['channel']:<20} {r['actor']:<16} {r.get('outcome') or '-':<6} {r.get('principal') or '-':<20} {r.get('target') or '-'}  {r.get('run_id') or ''}" for r in rows) or "(audit trống)")
     return EXIT_OK
 
 

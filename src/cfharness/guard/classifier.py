@@ -107,6 +107,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "runs": {"revert"},
     "curation": {"rollback"},
     "daemon": {"stop", "restart", "dump-stacks"},
+    "audit": None,  # nhật ký kiểm toán (audit.list ∈ HUMAN_ONLY, L3) — agent gõ, kể cả chỉ xem, đều chặn
     "logs": None,  # log hệ thống (logs_rpc.py, L1): đổi level / xem log của hub — agent gõ, kể cả chỉ xem, đều chặn
     "auth": None,
     "notify": {"telegram", "slack"},  # token bot / allowlist chat / gửi tin thay người (chat/rpc.py, chat/slack/rpc.py)
@@ -899,9 +900,9 @@ def sensitive_read(p: str, ctx: GuardContext) -> bool:
             if _under(c, f"{uh}/{x}"):
                 return True
     for c in cands:
-        if fold_path(c).endswith(".sock.auth") or (os.path.basename(c).lower() if IS_WINDOWS else os.path.basename(c)) == "human.token":
+        if fold_path(c).endswith((".sock.auth", ".sock.web.auth", ".sock.mcp.auth")) or (os.path.basename(c).lower() if IS_WINDOWS else os.path.basename(c)) == "human.token":
             return True
-        if ctx.hub_socket and _same(c, ctx.hub_socket + ".auth"):
+        if ctx.hub_socket and any(_same(c, ctx.hub_socket + sfx) for sfx in (".auth", ".web.auth", ".mcp.auth")):  # L3: token web/mcp
             return True
         for h in homes:
             if (_under(c, h + "/secrets") or _under(c, h + "/auth") or _under(c, h + "/backups") or _under(c, h + "/filehub")
@@ -1509,7 +1510,7 @@ class BashAnalyzer:
             out += [f"{h}/auth", f"{h}/secrets", f"{h}/mcp_server/tokens.json", f"{h}/hub.db"]
         if self.ctx.hub_socket:
             sock = canon_path(self.ctx.hub_socket)
-            out += [sock, sock + ".auth"]
+            out += [sock, sock + ".auth", sock + ".web.auth", sock + ".mcp.auth"]
         uh = canon_path(str(self.ctx.policy.user_home)).rstrip("/")  # R3-1: thông tin xác thực của người
         out += [f"{uh}/{x}" for x in (".config/gh", ".git-credentials", ".config/git/credentials", "Library/Keychains", ".netrc", ".ssh") + _win_cred_dirs()]
         return list(dict.fromkeys(out))
@@ -1559,7 +1560,7 @@ class BashAnalyzer:
                 for r in {cand, _real(cand)}:
                     for region in regions:
                         if self._in_region(r, region):
-                            if sensitive_read(r, self.ctx) or region.rstrip("/").endswith(("/auth", "/secrets", "/.config/gh", "/Keychains", "/.ssh")) or region.endswith((".sock", ".sock.auth", "hub.db", ".git-credentials", ".netrc")):
+                            if sensitive_read(r, self.ctx) or region.rstrip("/").endswith(("/auth", "/secrets", "/.config/gh", "/Keychains", "/.ssh")) or region.endswith((".sock", ".sock.auth", ".sock.web.auth", ".sock.mcp.auth", "hub.db", ".git-credentials", ".netrc")):
                                 self.hit("destructive", "hub_secret_read", "hub", f"lệnh chạm vùng nhạy cảm hub ({region})", [cand], forbidden=True)
                             else:
                                 self.hit("destructive", "hub_sensitive", "hub", f"lệnh chạm vùng nhạy cảm hub ({region})", [cand])

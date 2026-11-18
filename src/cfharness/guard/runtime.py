@@ -197,22 +197,22 @@ def app_data_deny_rules() -> list[str]:
 
 def secret_read_deny_rules(hub_home: Path, socket: Path) -> list[str]:
     """`permissions.deny` cho tool Read/Grep/Glob: token người, secret, mcp.json đã resolve, token MCP HTTP."""
-    from ..auth import token_path
+    from ..auth import all_token_paths
 
     out: list[str] = []
     # WEB: `auth/` giữ khoá ký link đăng nhập web (auth/web.json) — sandbox đã denyRead cả thư mục, đây là lớp Read/Grep/Glob
     # backups/: bản sao lưu chứa toàn bộ hub.db + tri thức mọi agent (backup.py); exports/ + imports/: gói xuất/nhập hub (hub_transfer.py)
     # filehub/: trạng thái cổng cfharness (cursor, cây mồ côi) + tàn dư đồng bộ cũ — như secrets/ (docs/dev-notes/filehub.md)
-    targets = [str(token_path(socket)), f"{hub_home}/secrets/**", f"{hub_home}/agents/*/runtime/**", f"{hub_home}/mcp_server/tokens.json", f"{hub_home}/auth/**",
+    targets = [*(str(t) for t in all_token_paths(socket)), f"{hub_home}/secrets/**", f"{hub_home}/agents/*/runtime/**", f"{hub_home}/mcp_server/tokens.json", f"{hub_home}/auth/**",
                f"{hub_home}/backups/**", f"{hub_home}/filehub/**", f"{hub_home}/exports/**", f"{hub_home}/imports/**"]
     real = os.path.realpath(hub_home)
     if real != str(hub_home):
         targets += [f"{real}/secrets/**", f"{real}/agents/*/runtime/**", f"{real}/mcp_server/tokens.json", f"{real}/auth/**", f"{real}/backups/**",
                     f"{real}/filehub/**", f"{real}/exports/**", f"{real}/imports/**"]
-    toks = [str(token_path(socket))]
+    toks = [str(t) for t in all_token_paths(socket)]  # L3: token người + web + mcp
     if IS_WINDOWS:  # CLI báo file_path dạng tên dài — thêm biến thể realpath (vd `LEQUYP~1` → tên thật)
-        toks.append(os.path.realpath(toks[0]))
-        targets += toks[1:]
+        toks += [os.path.realpath(t) for t in toks]
+        targets += toks
     for t in dict.fromkeys(targets):
         for tool in ("Read", "Grep", "Glob"):
             out.append(f"{tool}({_abs_rule(t)})")
@@ -372,7 +372,7 @@ def other_default_homes(hub_home: Path) -> list[str]:
 def fixed_protected_dirs(hub_home: Path, socket: Path, sb_cfg: dict[str, Any] | None = None) -> list[str]:
     """Vùng LUÔN cấm ghi (không bao giờ gỡ theo cwd; workspace không được trùng/chứa/nằm trong — MGR-1).
     Tách riêng với tên phát hiện động trong HUB_HOME (vd `evals/` bản sao eval vẫn ghi được)."""
-    from ..auth import token_path
+    from ..auth import all_token_paths
     from .policy import package_dir
 
     sb_cfg = sb_cfg or {}
@@ -381,7 +381,7 @@ def fixed_protected_dirs(hub_home: Path, socket: Path, sb_cfg: dict[str, Any] | 
         hp = Path(h)
         out += [str(hp / n) for n in HUB_WRITE_DENY_NAMES]
         out += [f"{hp}/agents/*/{n}" for n in AGENT_WRITE_DENY_NAMES]
-    out += [str(socket), str(token_path(socket))]
+    out += [str(socket), *(str(t) for t in all_token_paths(socket))]
     from ..paths import socket_private_dirs
 
     out += socket_private_dirs(socket)  # đa instance P1: thư mục socket dự phòng /tmp/cfharness-<uid>/
@@ -416,7 +416,7 @@ def network_domains(sb_cfg: dict[str, Any], overrides: dict[str, Any] | None) ->
 def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cwd: Path | None = None,
                      overrides: dict[str, Any] | None = None, confine: Any = None) -> dict[str, Any]:
     """Khoá `sandbox` cho settings.json của run (Claude Code ≥ 2.1.302). Thuần ngoài việc liệt kê thư mục HUB_HOME."""
-    from ..auth import token_path
+    from ..auth import all_token_paths
     from .policy import package_dir
 
     home = Path(hub_home)
@@ -441,8 +441,8 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
                 deny_w += [str(a / n) for n in AGENT_WRITE_DENY_NAMES]
         except OSError:
             pass
-    tok = token_path(socket)
-    deny_w += [str(socket), str(tok)]
+    toks = [str(t) for t in all_token_paths(socket)]  # L3: token người + web + mcp
+    deny_w += [str(socket), *toks]
     from ..paths import socket_private_dirs
 
     deny_w += socket_private_dirs(socket)  # đa instance P1
@@ -456,7 +456,7 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
     deny_w += path_bin_dirs()  # MGR-1: mọi thư mục bin trên PATH thuộc $HOME (người/daemon thực thi ngoài sandbox)
     deny_w += executable_zones()  # R2-1: venv/site-packages của hub, mọi PATH, /opt/homebrew, repo hub, dotfile công cụ
     deny_w += [str(x) for x in sb_cfg.get("extra_deny_write") or []]
-    deny_r: list[str] = [str(tok)]
+    deny_r: list[str] = list(toks)
     for h in homes:
         deny_r += [f"{h}/secrets", f"{h}/agents/*/runtime", f"{h}/mcp_server/tokens.json", f"{h}/auth", f"{h}/backups", f"{h}/filehub",
                    f"{h}/exports", f"{h}/imports"]

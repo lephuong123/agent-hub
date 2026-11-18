@@ -24,6 +24,21 @@ if TYPE_CHECKING:
 log = logging.getLogger("cfharness.audit")
 
 MAX_DATA_CHARS = 8000
+OUTCOMES = ("ok", "error", "denied")
+# L3 (A1/A3): dòng do service tự ghi — kết quả hiển nhiên theo loại. Từ chối quyền / đăng nhập hỏng = denied; thao tác của người đã
+# thực hiện xong (quyết approval, trust/grant/sandbox/bảo vệ, purge, đổi policy, ghép nối chat) = ok. Loại khác (phát hiện, thông
+# báo…) để NULL — không đoán.
+DENIED_KINDS = frozenset({"auth.denied", "manager.denied", "web.login_failed", "web.login_locked"})
+OK_PREFIXES = ("approval.", "guard.trust", "guard.rule_grant", "guard.sandbox", "guard.repo_deny", "guard.protect", "guard.integrity_accept",
+               "agent.purged", "policy.changed", "telegram.", "slack.", "question.", "web.login", "web.logout", "web.totp_", "read:")
+# trường ngữ cảnh do daemon đặt cho lượt RPC (`trace.REQ_CTX`) → cột audit cùng tên
+CTX_FIELDS = ("principal", "declared_channel", "session_ref", "ip", "caller_run_id")
+
+
+def default_outcome(kind: str) -> str | None:
+    if kind in DENIED_KINDS:
+        return "denied"
+    return "ok" if kind.startswith(OK_PREFIXES) else None
 
 
 class AuditLog:
@@ -44,10 +59,23 @@ class AuditLog:
         channel: str | None = None,
         target: str | None = None,
         summary: str | None = None,
+        outcome: str | None = None,
+        error_code: str | None = None,
+        duration_ms: float | None = None,
+        **ctx_over: Any,
     ) -> int:
+        """`principal`/`declared_channel`/`session_ref`/`ip`/`caller_run_id` (L3) mặc định lấy từ ngữ cảnh lượt RPC (`trace.current()`,
+        do daemon chứng thực) — truyền tường minh để ghi đè. `actor` thiếu → `data.actor` → `data.by` (A5: service ghi `by`) → `hub`."""
         data = dict(data or {})
-        actor = actor or data.pop("actor", None) or "hub"
+        actor = actor or data.pop("actor", None) or (str(data["by"]) if data.get("by") else None) or "hub"
         channel = channel or data.pop("channel", None) or "runtime"
+        if outcome not in OUTCOMES:
+            outcome = default_outcome(kind)
+        from .trace import current as _cur
+
+        ctx = _cur() or {}
+        extra = {k: (ctx_over[k] if k in ctx_over else ctx.get(k)) for k in CTX_FIELDS}
+        extra = {k: (str(v)[:120] if v is not None else None) for k, v in extra.items()}
         payload = self.mask(json.dumps(redact(data), ensure_ascii=False, default=str))
         if len(payload) > MAX_DATA_CHARS:
             payload = json.dumps({"truncated": True, "head": payload[:MAX_DATA_CHARS]}, ensure_ascii=False)
@@ -55,8 +83,11 @@ class AuditLog:
         from .trace import current_req_id
 
         cur = self.store.conn.execute(
-            "INSERT INTO audit_log (ts, kind, actor, channel, agent_id, run_id, target, summary, data, req_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (now_iso(), kind, actor, channel, agent_id, run_id, target, self.mask(summary or "")[:500] or None, payload, current_req_id()),
+            "INSERT INTO audit_log (ts, kind, actor, channel, agent_id, run_id, target, summary, data, req_id, outcome, error_code, duration_ms,"
+            " principal, declared_channel, session_ref, ip, caller_run_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (now_iso(), kind, actor, channel, agent_id, run_id, target, self.mask(summary or "")[:500] or None, payload, current_req_id(),
+             outcome, (str(error_code)[:40] if error_code else None), (round(float(duration_ms), 1) if duration_ms is not None else None),
+             extra["principal"], extra["declared_channel"], extra["session_ref"], extra["ip"], extra["caller_run_id"]),
         )
         for tap in self.taps:
             try:
@@ -73,9 +104,11 @@ class AuditLog:
         run_id: str | None = None,
         channel: str | None = None,
         limit: int = 100,
+        principal: str | None = None,
+        outcome: str | None = None,
     ) -> list[dict[str, Any]]:
         where, args = [], []
-        for col, val in (("agent_id", agent_id), ("run_id", run_id), ("channel", channel)):
+        for col, val in (("agent_id", agent_id), ("run_id", run_id), ("channel", channel), ("principal", principal), ("outcome", outcome)):
             if val is not None:
                 where.append(f"{col}=?")
                 args.append(val)

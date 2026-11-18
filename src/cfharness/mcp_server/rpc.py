@@ -64,6 +64,20 @@ MUTATING = frozenset(
     }
 )
 NOT_AUDITED_PREFIXES = ("approval.",)
+# L3 (plan-logging.md A4): method ĐỌC dữ liệu nhạy cảm — daemon tự ghi `read:<method>` (target + số bản ghi, KHÔNG nội dung), gộp một
+# dòng mỗi (principal, method, target) trong `READ_COALESCE_S` (`Daemon._record_read`). `run.get` chỉ khi có `events` (transcript).
+SENSITIVE_READS = frozenset(
+    {
+        "secret.list", "run.get", "mcp.events", "session.search", "memory.search", "memory.search_self", "learn.graph_view",
+        "guard.decisions", "audit.list", "hub.doctor", "logs.levels",
+    }
+)
+READ_COALESCE_S = 600.0
+# mã lỗi audit (cột `error_code`) theo mã JSON-RPC — không bao giờ thông điệp/traceback
+ERROR_CODES = {-32001: "user_error", -32004: "not_found", -32009: "conflict", -32003: "blocked", -32000: "system", -32602: "invalid_params"}
+# dòng audit THẤT BẠI không bao giờ mang các khoá này (handler lỗi trước khi kịp gỡ thông tin đăng nhập khỏi params)
+FAILURE_DROP_KEYS = frozenset({"token", "code", "state", "iss", "password", "secret", "passphrase", "key", "value", "api_key", "bot_token", "app_token"})
+AUDITED_ATTR = "_cfharness_audited"  # dấu của wrap_with_audit (test "mọi method ghi đều có audit" dò qua chuỗi __wrapped__)
 FEEDBACK_KINDS = {"good": "good", "wrong": "correction", "partial": "correction"}
 TEXT_MAX = 2000
 
@@ -411,7 +425,8 @@ class IntegrationRpc:
 
     def audit_list(self, p: dict[str, Any]) -> list[dict[str, Any]]:
         return self.hub.audit.query(
-            kind=p.get("kind"), agent_id=p.get("agent_id"), run_id=p.get("run_id"), channel=p.get("channel"), limit=int(p.get("limit") or 100)
+            kind=p.get("kind"), agent_id=p.get("agent_id"), run_id=p.get("run_id"), channel=p.get("channel"), limit=int(p.get("limit") or 100),
+            principal=p.get("principal"), outcome=p.get("outcome"),
         )
 
     def feedback_record(self, p: dict[str, Any]) -> dict[str, Any]:
@@ -501,39 +516,101 @@ def _result_brief(res: Any) -> dict[str, Any]:
     return {k: res[k] for k in keys if k in res}
 
 
+def _audit_params(method: str, p: dict[str, Any]) -> dict[str, Any]:
+    """Params đã gỡ giá trị bí mật/nặng (như trước L3) — dùng cho cả dòng thành công lẫn thất bại."""
+    params = {k: v for k, v in p.items() if k not in ("value", "soul", "passphrase", "key")}  # passphrase: gói hub (hub_transfer); key: khoá cổng cfharness (filehub lane) — phòng hờ
+    if method.startswith("mcp.oauth_"):  # code/state/iss của callback OAuth là thông tin đăng nhập một lần — không vào audit
+        params = {k: v for k, v in params.items() if k in ("name", "redirect_uri", "error")}
+    if "soul" in p:
+        params["soul"] = "(updated)" if p.get("soul") else None
+    if "prompt" in params:
+        params["prompt"] = _trunc(params["prompt"], 500)
+    if isinstance(params.get("images"), list):  # manager.chat: không ghi dữ liệu ảnh (base64) vào audit append-only
+        params["images"] = [{"name": str((i or {}).get("name") or "")[:80], "b64_chars": len(str((i or {}).get("data_b64") or ""))}
+                            for i in params["images"][:10] if isinstance(i, dict)]
+    return params
+
+
+def error_outcome(exc: BaseException) -> tuple[str, str]:
+    """(outcome, error_code) của một lỗi: `Blocked` (quyền/ESTOP/ngân sách) → denied; `HubError` khác → error + mã; tham số sai →
+    invalid_params; lỗi bất ngờ → error/system. Không bao giờ thông điệp hay traceback."""
+    code = getattr(exc, "code", None) if isinstance(exc, HubError) else None
+    if code == -32003:
+        return "denied", "blocked"
+    if isinstance(exc, HubError):
+        return "error", ERROR_CODES.get(int(code or -32001), str(code))
+    if type(exc).__name__ == "_ParamError":
+        return "error", "invalid_params"
+    return "error", "system"
+
+
 def wrap_with_audit(hub: "Hub", method: str, fn: Callable[[dict[str, Any]], Any]) -> Callable[[dict[str, Any]], Any]:
+    """Bọc method GHI: một dòng audit cho MỖI lời gọi tới handler — thành công (`outcome=ok`) lẫn thất bại (`denied`/`error` + `error_code`,
+    L3 A3), kèm `duration_ms`. Lỗi gốc luôn được ném lại. `channel`/`actor` từ `_audit` (daemon đã chứng thực/ép kênh), thiếu thì kênh
+    daemon xác định cho lượt (`trace.current()['audit_channel']`)."""
+    import time as _time
+
     async def wrapped(p: dict[str, Any]) -> Any:
         meta = p.pop("_audit", None) if isinstance(p, dict) else None
         meta = meta if isinstance(meta, dict) else {}
-        res = fn(p)
-        if asyncio.iscoroutine(res):
-            res = await res
+        t0 = _time.perf_counter()
+        res: Any = None
+        exc: BaseException | None = None
         try:
-            params = {k: v for k, v in p.items() if k not in ("value", "soul", "passphrase", "key")}  # passphrase: gói hub (hub_transfer); key: khoá cổng cfharness (filehub lane) — phòng hờ
-            if method.startswith("mcp.oauth_"):  # code/state/iss của callback OAuth là thông tin đăng nhập một lần — không vào audit
-                params = {k: v for k, v in params.items() if k in ("name", "redirect_uri", "error")}
-            if "soul" in p:
-                params["soul"] = "(updated)" if p.get("soul") else None
-            if "prompt" in params:
-                params["prompt"] = _trunc(params["prompt"], 500)
-            if isinstance(params.get("images"), list):  # manager.chat: không ghi dữ liệu ảnh (base64) vào audit append-only
-                params["images"] = [{"name": str((i or {}).get("name") or "")[:80], "b64_chars": len(str((i or {}).get("data_b64") or ""))}
-                                    for i in params["images"][:10] if isinstance(i, dict)]
+            res = fn(p)
+            if asyncio.iscoroutine(res):
+                res = await res
+        except BaseException as e:  # ghi rồi ném lại nguyên trạng
+            exc = e
+        dur = (_time.perf_counter() - t0) * 1000.0
+        if exc is not None and not isinstance(exc, Exception):  # huỷ task / thoát: không phải kết quả thao tác
+            raise exc
+        try:
+            # params SAU handler (handler gỡ thông tin đăng nhập trước khi audit — vd filehub code/state, accounts token); dòng lỗi còn bỏ
+            # thêm mọi khoá kiểu thông tin đăng nhập (handler có thể lỗi TRƯỚC khi kịp gỡ)
+            src = dict(p) if isinstance(p, dict) else {}
+            if exc is not None:
+                src = {k: v for k, v in src.items() if k not in FAILURE_DROP_KEYS}
+            from ..trace import current as _cur
+
+            ch = meta.get("channel") or (_cur() or {}).get("audit_channel") or "cli"
+            outcome, code = ("ok", None) if exc is None else error_outcome(exc)
+            data: dict[str, Any] = {"params": _audit_params(method, src)}
+            if exc is None:
+                data["result"] = _result_brief(res)
             hub.audit.record(
                 method,
-                p.get("agent") or p.get("agent_id") or (_target_of(p) if method.startswith("agent.") or method == "mcp.agent_create" else None),
-                p.get("run_id") or (p.get("id") if method.startswith("run.") else None) or (res.get("run_id") if isinstance(res, dict) else None),
-                {"params": params, "result": _result_brief(res)},
+                src.get("agent") or src.get("agent_id") or (_target_of(src) if method.startswith("agent.") or method == "mcp.agent_create" else None),
+                src.get("run_id") or (src.get("id") if method.startswith("run.") else None) or (res.get("run_id") if isinstance(res, dict) else None),
+                data,
                 actor=str(meta.get("actor") or "user"),
-                channel=str(meta.get("channel") or "cli"),
-                target=_target_of(p),
+                channel=str(ch),
+                target=_target_of(src),
                 summary=method,
+                outcome=outcome,
+                error_code=code,
+                duration_ms=dur,
             )
         except Exception:  # pragma: no cover — audit lỗi không được che kết quả thao tác đã xong
             log.exception("không ghi được audit cho %s", method)
+        if exc is not None:
+            raise exc
         return res
 
+    setattr(wrapped, AUDITED_ATTR, method)
+    wrapped.__wrapped__ = fn  # type: ignore[attr-defined]
     return wrapped
+
+
+def is_audited(fn: Any) -> bool:
+    """Handler (hoặc lớp bọc ngoài giữ `__wrapped__`) đã qua `wrap_with_audit`."""
+    seen = 0
+    while fn is not None and seen < 20:
+        if getattr(fn, AUDITED_ATTR, None):
+            return True
+        fn = getattr(fn, "__wrapped__", None)
+        seen += 1
+    return False
 
 
 def register_rpc(daemon: "Daemon") -> IntegrationRpc:

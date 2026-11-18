@@ -21,9 +21,13 @@ LIMIT = 64 * 1024 * 1024
 
 
 class AsyncHubClient:
-    def __init__(self, sock_path: Path | str, *, channel: str = "tui", timeout: float = 30.0) -> None:
+    def __init__(self, sock_path: Path | str, *, channel: str = "tui", timeout: float = 30.0, cred: str = "human",
+                 client_meta: Any = None) -> None:
         self.sock_path = str(sock_path)
         self.channel = channel
+        # L3: loại token (`web` → `<socket>.web.auth`) + hàm trả metadata client theo yêu cầu đang xử lý (web: session_ref/ip) → `params._client`
+        self.cred = cred
+        self.client_meta = client_meta
         self.timeout = timeout
         self._id = 0
         self.last_req_id: str | None = None
@@ -41,7 +45,10 @@ class AsyncHubClient:
         reader, writer = await self._open()  # mở socket TRƯỚC: daemon dừng → DaemonUnavailable (không phải lỗi kiểm chủ socket)
         sent: str | None = None
         try:
-            p = with_auth(self.sock_path, params)  # + `_trace.req_id` (L2): bind trong task hiện tại hoặc sinh mới
+            meta = self.client_meta() if self.client_meta is not None else None
+            if meta:
+                params["_client"] = dict(meta)
+            p = with_auth(self.sock_path, params, kind=self.cred)  # + `_trace.req_id` (L2): bind trong task hiện tại hoặc sinh mới
             sent = p["_trace"]["req_id"]
             self._id += 1
             writer.write(encode({"jsonrpc": "2.0", "id": self._id, "method": method, "params": p}))

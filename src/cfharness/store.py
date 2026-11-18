@@ -938,6 +938,21 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS audit_log_req_id ON audit_log(req_id);
     ALTER TABLE events ADD COLUMN req_id TEXT;
     """,
+    # v29 — audit đầy đủ (L3, docs/dev-notes/plan-logging.md §4 A1–A5): kết quả (ok|error|denied) + mã lỗi + thời lượng, danh tính do
+    # daemon chứng thực (`principal`) tách khỏi kênh client tự khai (`declared_channel`), phiên web đã băm (`session_ref`), ip (chỉ khi
+    # qua public_origin), run của người gọi (agent/điều phối viên). Chỉ THÊM cột nullable; trigger append-only giữ nguyên. Chuỗi băm = L4.
+    """
+    ALTER TABLE audit_log ADD COLUMN outcome TEXT;
+    ALTER TABLE audit_log ADD COLUMN error_code TEXT;
+    ALTER TABLE audit_log ADD COLUMN duration_ms REAL;
+    ALTER TABLE audit_log ADD COLUMN principal TEXT;
+    ALTER TABLE audit_log ADD COLUMN declared_channel TEXT;
+    ALTER TABLE audit_log ADD COLUMN session_ref TEXT;
+    ALTER TABLE audit_log ADD COLUMN ip TEXT;
+    ALTER TABLE audit_log ADD COLUMN caller_run_id TEXT;
+    CREATE INDEX IF NOT EXISTS audit_log_principal_ts ON audit_log(principal, ts);
+    CREATE INDEX IF NOT EXISTS audit_log_outcome_ts ON audit_log(outcome, ts);
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
