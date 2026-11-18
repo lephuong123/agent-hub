@@ -42,6 +42,17 @@ def _id(p: dict[str, Any]) -> str:
     return str(v)
 
 
+def _who(p: dict[str, Any]) -> tuple[str, str]:
+    """(by, channel) cho dòng audit do service ghi (A5, L3): ưu tiên `_audit` (daemon đã chứng thực kênh người / ép kênh agent), giữ
+    tương thích tham số cũ `by`/`channel` khi không có `_audit`. Kênh khai trong params vẫn lưu ở `declared_channel` qua ngữ cảnh lượt."""
+    from ..trace import current
+
+    meta = p.get("_audit") if isinstance(p.get("_audit"), dict) else {}
+    by = str(meta.get("actor") or p.get("by") or p.get("actor") or "user")
+    channel = str(meta.get("channel") or (current() or {}).get("audit_channel") or p.get("channel") or "cli")
+    return by, channel
+
+
 def _repo_deny_add(hub, p: dict[str, Any]) -> dict[str, Any]:
     repo = p.get("repo")
     pattern = p.get("pattern")
@@ -54,7 +65,8 @@ def _repo_deny_add(hub, p: dict[str, Any]) -> dict[str, Any]:
     try:
         from ..approvals import audit_record
 
-        audit_record("guard.repo_deny_add", agent_id=None, run_id=None, data={"repo": repo, "pattern": pattern})
+        by, channel = _who(p)
+        audit_record("guard.repo_deny_add", agent_id=None, run_id=None, data={"repo": repo, "pattern": pattern, "actor": by, "channel": channel})
     except Exception:  # pragma: no cover
         pass
     return res
@@ -65,9 +77,17 @@ def _repo_deny_rm(hub, p: dict[str, Any]) -> dict[str, Any]:
     if not repo:
         raise HubError("cần 'repo'")
     try:
-        return hub.guard.policy_store.repo_deny_rm(str(repo), p.get("pattern"))
+        res = hub.guard.policy_store.repo_deny_rm(str(repo), p.get("pattern"))
     except KeyError:
         raise HubError(f"không có mẫu chặn cho repo '{repo}'", code=-32004) from None
+    try:  # A5 (L3): gỡ mẫu chặn = nới chính sách an toàn → luôn có dòng audit
+        from ..approvals import audit_record
+
+        by, channel = _who(p)
+        audit_record("guard.repo_deny_rm", agent_id=None, run_id=None, data={"repo": repo, "pattern": p.get("pattern"), "actor": by, "channel": channel})
+    except Exception:  # best-effort: audit lỗi không che kết quả thao tác đã xong (như repo_deny_add)
+        pass
+    return res
 
 
 def register_rpc(d: "Daemon") -> None:
@@ -172,7 +192,7 @@ def register_rpc(d: "Daemon") -> None:
         aid = _id(p)
         if p.get("confirm") != aid:
             raise HubError(f"purge là thao tác phá huỷ — xác nhận bằng cách gõ lại id: --confirm {aid}")
-        return purge_agent(hub, aid, by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli"))
+        return purge_agent(hub, aid, by=_who(p)[0], channel=_who(p)[1])
 
     d.methods.update(
         {
@@ -203,23 +223,23 @@ def register_rpc(d: "Daemon") -> None:
             "guard.sandbox.list": lambda p: hub.guard.sandbox_overrides(),
             "guard.sandbox.get": lambda p: hub.guard.sandbox_overrides(_id(p)),
             "guard.sandbox.set": lambda p: hub.guard.sandbox_set(
-                _id(p), allow_localhost=bool(p.get("allow_localhost")), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+                _id(p), allow_localhost=bool(p.get("allow_localhost")), by=_who(p)[0], channel=_who(p)[1]),
             "guard.sandbox.allow_domain": lambda p: hub.guard.sandbox_allow_domain(
-                _id(p), str(p.get("domain") or ""), remove=bool(p.get("remove")), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+                _id(p), str(p.get("domain") or ""), remove=bool(p.get("remove")), by=_who(p)[0], channel=_who(p)[1]),
             "guard.sandbox.dev_host": lambda p: hub.guard.sandbox_dev_host(
-                _id(p), str(p.get("host") or ""), remove=bool(p.get("remove")), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+                _id(p), str(p.get("host") or ""), remove=bool(p.get("remove")), by=_who(p)[0], channel=_who(p)[1]),
             # trust hoàn toàn theo agent — set chỉ người (auth.HUMAN_ONLY + cổng service), đọc tự do
             "guard.trust.list": lambda p: hub.guard.trust_all(),
             "guard.trust.set": lambda p: hub.guard.trust_set(
-                _id(p), str(p.get("mode") or ""), for_s=p.get("for_s"), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+                _id(p), str(p.get("mode") or ""), for_s=p.get("for_s"), by=_who(p)[0], channel=_who(p)[1]),
             "guard.trust.set_all": lambda p: hub.guard.trust_set_all(
-                str(p.get("mode") or ""), for_s=p.get("for_s"), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+                str(p.get("mode") or ""), for_s=p.get("for_s"), by=_who(p)[0], channel=_who(p)[1]),
             # luôn cho phép theo agent + luật (xin một lần) — set/rm chỉ người (auth.HUMAN_ONLY + cổng service), đọc tự do
             "guard.grant.list": lambda p: hub.guard.rule_grants(),
             "guard.grant.set": lambda p: hub.guard.rule_grant_set(
-                _id(p), str(p.get("rule") or ""), for_s=p.get("for_s"), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+                _id(p), str(p.get("rule") or ""), for_s=p.get("for_s"), by=_who(p)[0], channel=_who(p)[1]),
             "guard.grant.rm": lambda p: hub.guard.rule_grant_rm(
-                _id(p), (str(p["rule"]) if p.get("rule") else None), by=str(p.get("by") or "user"), channel=str(p.get("channel") or "cli")),
+                _id(p), (str(p["rule"]) if p.get("rule") else None), by=_who(p)[0], channel=_who(p)[1]),
             # MGR-2: mẫu chặn theo repo (người đặt, áp cho mọi agent) — set chỉ người, đọc tự do
             "guard.repo_deny.list": lambda p: hub.guard.policy_store.repo_deny_list(),
             "guard.repo_deny.add": lambda p: _repo_deny_add(hub, p),

@@ -340,3 +340,43 @@ Lệch / để sau:
   cho agent/manager/chat) hoặc loại người gọi.
 - req_id do client gửi được nhận kể cả từ agent (chỉ là mã đối chiếu, không có quyền gì) — agent có thể "mượn" mã của lệnh khác để làm rối trace,
   không làm được gì hơn. Không có span OTel cho RPC. Hook quan sát (`observe_hook`) chưa gửi req_id (spool riêng, L6).
+
+### L3 — Audit đầy đủ (nhánh `feat/logging-l3`)
+Đã làm:
+- Migration **v29**: `audit_log.outcome|error_code|duration_ms|principal|declared_channel|session_ref|ip|caller_run_id` + index `(principal, ts)`,
+  `(outcome, ts)`. Trigger append-only giữ nguyên; `prev_hash`/`row_hash` để L4. `AuditLog.record` nhận các trường mới (mặc định lấy từ `trace.current()`),
+  `outcome` mặc định theo loại cho dòng service (`audit.DENIED_KINDS` → denied, `OK_PREFIXES` → ok, còn lại NULL); `actor` thiếu → `data.by` (A5).
+  `AuditLog.query` lọc thêm `principal`, `outcome`.
+- A2: `auth.TOKEN_KINDS` — token riêng `<socket>.web.auth` (web) và `<socket>.mcp.auth` (`mcp serve`) sinh lại cùng token người; `Caller.cred` = loại token
+  khớp (so hằng thời gian). `auth.principal_of` → `os:<user>`, `web:dev_<8>`/`web:sess_<8>`/`web:anon`, `mcp:stdio`/`mcp:http:<level>`, `telegram:<from_id>`,
+  `slack:<user_id>` (`Caller.user`), `manager:<agent>`, `agent:<id>`, `hub:<kênh điểm vào>` (nội bộ), `anon:socket`. Kênh của người qua socket do daemon đặt
+  (`attested_channel`: web → `web`; mcp → `mcp:<client>`/`mcp`; token người → `cli`/`tui` như khai, khác → `cli`); kênh khai → `declared_channel`.
+  `params._client` (web: `session_ref` băm 8 hex của device_id/sid + `ip` CHỈ khi yêu cầu qua public_origin — `web.app.web_client_meta` qua contextvar
+  `WEB_CLIENT` đặt trong `GuardMiddleware`; MCP: `transport`, `level`) chỉ nhận theo loại token. Token web/mcp có cùng lớp bảo vệ token người (sandbox
+  denyRead/denyWrite, `permissions.deny`, classifier `sensitive_read`/`hub_secret_read`, fileview, backup/home_migrate).
+- A3: `wrap_with_audit` bọc try/except — Blocked → `denied/blocked`, HubError → `error/<mã>`, tham số → `error/invalid_params`, bất ngờ → `error/system`;
+  luôn ném lại; `duration_ms`; params che như cũ, lấy SAU handler (handler gỡ code/state/token trước audit); dòng lỗi bỏ thêm mọi khoá kiểu thông
+  tin đăng nhập (`FAILURE_DROP_KEYS` — handler có thể lỗi trước khi kịp gỡ); không traceback/thông điệp lỗi. Test cũ đếm dòng audit (filehub callback,
+  directory token, hub.export) sửa để tính dòng `outcome=error` mới.
+- A4: `mcp_server.rpc.SENSITIVE_READS` (cả 11 tên đều tồn tại); daemon ghi `read:<method>` sau lượt thành công (`Daemon._record_read`), `target` = id/tên
+  (chuỗi tìm kiếm chỉ `q:<n>ch`), `result_count`. Web bỏ ghi thêm cho các method này.
+- A5: `guard.trust|grant|sandbox|repo_deny` + `agent.purge` lấy actor/kênh từ `_audit` (đã chứng thực), không có thì kênh của lượt, giữ `by`/`channel` cũ;
+  `guard.repo_deny_rm` có dòng audit; `caller_run_id` cho agent/điều phối viên. `eval.*`/`digest.run`/`curator.run`/`regression.check` vốn đã bọc nhưng
+  `_with_by` làm mất dấu → giữ `__wrapped__`. `audit.list` ∈ HUMAN_ONLY, `cfharness audit` ∈ HUB_HUMAN_ONLY_CLI. `cfharness audit list` thêm cột outcome/principal.
+- Agent/điều phối viên trong run: req_id client gửi bị bỏ, mã mới, cha = `runs.req_id` của run người gọi.
+- Test: `tests/test_audit_full.py` (14 ca), `tests/test_sec_auth.py::test_audit_list_human_only_and_cli_blocked`, `::test_agent_with_stolen_web_or_mcp_token_still_denied`.
+
+Lệch / để sau:
+- `session_ref`/`ip` đi trong `params._client` (mọi lời gọi, kể cả đọc) thay vì `_audit` — lượt đọc nhạy cảm không có `_audit` nhưng cần principal web.
+- MCP cũng có token riêng (kế hoạch chỉ nêu web) để `mcp:stdio|http:<level>` là danh tính chứng thực; `level` do MCP server báo (nó giữ token HTTP) — chỉ
+  nhận khi đi kèm token MCP. Token người CLI/TUI không phân biệt được với nhau → `tui` vẫn là kênh khai được (cùng một chủ máy).
+- `os:<user>` = user của daemon (socket 0600 / Windows kiểm cùng user ⇒ peer cùng uid), không đọc uid peer riêng.
+- Gộp lượt đọc: audit append-only nên KHÔNG cập nhật được `count` của dòng đầu → tối đa 2 dòng/cửa sổ (dòng đầu `count=1` ngay; dòng `coalesced` với số lượt
+  còn lại khi cửa sổ đóng — kiểm trong `_watch_listener` mỗi 2 s và khi dừng daemon). Khởi động lại mất phần gộp dở.
+- Method ghi do service tự audit (không qua `wrap_with_audit`, nên chưa có dòng `error`/`denied` khi lỗi trong handler): `telegram.*`, `slack.*`, `file.open`,
+  `web.notify`, `approval.manager_decide`; `managerself.call` (thao tác ghi bên trong đã bọc), `manager.conversation_read` (chỉ đánh dấu đã xem) — danh sách +
+  lý do ở `SERVICE_AUDITED`. `guard.trust|grant|sandbox|protect` không thuộc `all_mutating()` (HUMAN_ONLY, service tự ghi) — giữ nguyên.
+- Test "mọi method ghi đều có audit" kiểm dấu `AUDITED_ATTR` qua chuỗi `__wrapped__` thay vì gọi thử từng method (gọi thật cần dựng tham số cho >150 method).
+- Bỏ req_id client chỉ áp cho người gọi đã xác định ĐẦY ĐỦ là agent (method HUMAN_ONLY/ghi/`SCOPED_READ`/`SENSITIVE_READS`). Đường nóng (đọc thường,
+  `guard.check` của hook — không token, không dò cây tiến trình) vẫn nhận req_id gửi kèm: hook guard cần nó để nối `guard.decision` với lệnh tạo run (L2); req_id
+  không mang quyền gì.

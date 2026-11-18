@@ -391,8 +391,8 @@ async def test_rpc_export_human_only_quiesce_and_stop(hub_home):
         r = await rpc(d, "hub.export", {"profile": "core", "stop": True, "_audit": {"channel": "cli"}})
         assert r["stopped_runs"] == [run["id"]] and Path(r["path"]).is_file() and r["verify"]["ok"]
         assert d.hub.runs.quiesced is None
-        rows = d.hub.store.conn.execute("SELECT channel FROM audit_log WHERE kind='hub.export'").fetchall()
-        assert [x["channel"] for x in rows] == ["cli"]
+        rows = d.hub.store.conn.execute("SELECT channel FROM audit_log WHERE kind='hub.export' AND outcome='ok'").fetchall()
+        assert [x["channel"] for x in rows] == ["cli"]  # L3: lần từ chối trước (thiếu --stop) là dòng outcome=error riêng
         # đang lặng: run mới xếp hàng, không khởi chạy; thả → chạy
         d.hub.runs.quiesced = "export"
         r2 = d.hub.runs.submit("w1", "sau khi xuất")

@@ -809,3 +809,14 @@ chặt (dài đúng 28, Crockford HOA) và pop `_trace` trước handler. Migrat
 → hook guard gửi kèm `guard.check`. `HubEvent.req_id` tuỳ chọn (`Hub.publish` điền). Access log chỉ metadata (`logs.EXTRA_FIELDS`) — không params/kết quả;
 method chờ lâu theo thiết kế → `daemon.SLOW_EXEMPT`. Điểm vào nội bộ mới tạo run → `@trace.traced("<kênh>")`. OTel: trace_id = băm req_id của run,
 thuộc tính span run theo `otel.RUN_SPAN_KEYS`. Test: `tests/test_trace_id.py`.
+Audit đầy đủ (L3, migration **v29**: `audit_log.outcome|error_code|duration_ms|principal|declared_channel|session_ref|ip|caller_run_id`):
+`principal` do DAEMON chứng thực (`auth.principal_of`) — token theo loại client `auth.TOKEN_KINDS` (`<socket>.auth` CLI/TUI, `<socket>.web.auth` web,
+`<socket>.mcp.auth` MCP server; sinh lại cùng nhau; client web/mcp thiếu token riêng → token người). Kênh của người qua socket = `auth.attested_channel`
+(token, không phải `_audit.channel`; kênh khai → `declared_channel`). `params._client` (web: `session_ref` băm + `ip` chỉ khi qua public_origin — `web_client_meta`;
+MCP: `transport`/`level`) chỉ nhận theo loại token (`clean_client_meta`), daemon pop trước handler. Ngữ cảnh lượt (`trace.REQ_CTX`: principal, audit_channel,
+declared_channel, session_ref, ip, caller_run_id) là mặc định của `AuditLog.record`. `wrap_with_audit` ghi MỌI lời gọi (ok/denied/error + `duration_ms`, không
+traceback, ném lại lỗi gốc; dòng lỗi bỏ khoá kiểu thông tin đăng nhập `FAILURE_DROP_KEYS` — thêm tham số bí mật mới → thêm vào đó) và đặt dấu `AUDITED_ATTR` — lớp bọc ngoài phải giữ `__wrapped__`; method ghi mới không bọc → thêm lý do vào `SERVICE_AUDITED` của
+`tests/test_audit_full.py`. Đọc nhạy cảm `mcp_server.rpc.SENSITIVE_READS` → daemon ghi `read:<method>` (đích + số bản ghi, chuỗi tìm kiếm chỉ độ dài), gộp
+(principal, method, target) / 10 phút trong RAM (dòng đầu ngay, dòng `coalesced` khi cửa sổ đóng — audit append-only). Agent/điều phối viên trong run: req_id
+client gửi bị bỏ, mã mới với cha = req_id của run. Token web/mcp cùng lớp bảo vệ với token người (sandbox, `permissions.deny`, classifier, fileview, backup).
+`audit.list` ∈ HUMAN_ONLY, `cfharness audit` ∈ HUB_HUMAN_ONLY_CLI. Không bao giờ đưa sid/khoá phiên/token vào audit. Test: `tests/test_audit_full.py`.

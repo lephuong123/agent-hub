@@ -11,6 +11,7 @@ nhạy cảm cần `confirm=yes` (JS hiện hộp xác nhận; không có JS →
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import re
@@ -251,7 +252,32 @@ class GuardMiddleware:
                 resp = PlainTextResponse("Chưa đăng nhập — mở /login (mã TOTP) hoặc chạy `cfharness web --open` trên máy chạy hub.", status_code=401)
             await resp(scope, receive, send_headers)
             return
-        await self.app(scope, receive, send_headers)
+        tok = WEB_CLIENT.set(web_client_meta(self.state, scope, headers, host, sid if sess is not None else None, sess))
+        try:
+            await self.app(scope, receive, send_headers)
+        finally:
+            WEB_CLIENT.reset(tok)
+
+
+# L3 (plan-logging.md A2): metadata client của yêu cầu đang xử lý → `params._client` của mọi RPC (AsyncHubClient cred="web"). CHỈ băm
+# (8 hex sha256 của device_id / sid — không bao giờ sid, khoá phiên, token thô) + ip CHỈ khi yêu cầu đến qua public_origin.
+WEB_CLIENT: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar("cfharness_web_client", default=None)
+
+
+def web_client_meta(state: "WebState", scope: dict, headers: dict[str, str], host: str, sid: str | None, sess: Any) -> dict[str, str] | None:
+    import hashlib
+
+    out: dict[str, str] = {}
+    dev = getattr(sess, "device_id", "") if sess is not None else ""
+    if dev:
+        out["session_ref"] = "dev_" + hashlib.sha256(str(dev).encode()).hexdigest()[:8]
+    elif sid:
+        out["session_ref"] = "sess_" + hashlib.sha256(str(sid).encode()).hexdigest()[:8]
+    if state.is_public(host):
+        ip = client_ip(scope, headers, public=True, header=state.ip_header)
+        if ip and ip != "?":
+            out["ip"] = ip
+    return out or None
 
 
 def with_wait(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -325,10 +351,14 @@ _UNAUDITED_HUMAN = None
 
 
 def _needs_extra_audit(method: str) -> bool:
-    """Method chỉ-người mà daemon KHÔNG tự ghi audit theo `_audit` (approval.* tự ghi theo `channel`)."""
+    """Method chỉ-người mà daemon KHÔNG tự ghi audit theo `_audit` (approval.* tự ghi theo `channel`). Lượt đọc nhạy cảm
+    (`SENSITIVE_READS`, L3) daemon tự ghi `read:<method>` → không ghi thêm ở đây (tránh dòng đôi)."""
     global _UNAUDITED_HUMAN
     if _UNAUDITED_HUMAN is None:
-        _UNAUDITED_HUMAN = frozenset(m for m in _auth.HUMAN_ONLY - _auth.all_mutating() if not m.startswith("approval.") and m != "agent.purge")
+        from ..mcp_server.rpc import SENSITIVE_READS
+
+        _UNAUDITED_HUMAN = frozenset(m for m in _auth.HUMAN_ONLY - _auth.all_mutating() - SENSITIVE_READS
+                                     if not m.startswith("approval.") and m != "agent.purge")
     return method in _UNAUDITED_HUMAN
 
 
@@ -1972,7 +2002,8 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
     `trusted_devices` = nhánh `web.trusted_devices` (web/devices.py)."""
     from .public import parse_public_origin
 
-    state = WebState(paths=paths, auth=auth or WebAuth(), host=host, port=port, client=AsyncHubClient(paths.socket, channel=CHANNEL, timeout=60.0),
+    state = WebState(paths=paths, auth=auth or WebAuth(), host=host, port=port,
+                     client=AsyncHubClient(paths.socket, channel=CHANNEL, timeout=60.0, cred="web", client_meta=WEB_CLIENT.get),
                      templates=make_templates(), name=name, public_origin=parse_public_origin(public_origin), ip_header=ip_header,
                      limiter=limiter or LoginLimiter(), totp=TotpStore(paths), devices=DeviceStore(paths, trusted_devices))
     state.auth.device_ok = state.devices.valid if state.devices is not None else None

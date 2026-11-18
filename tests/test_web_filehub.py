@@ -281,7 +281,10 @@ async def test_callback_no_pending_xss_and_rate_limit(env):
         assert r.status_code == 400
         codes = [(await anon.get("/filehub/oauth/cb", params={"code": "x", "state": f"s{i:031d}"})).status_code for i in range(15)]
         assert codes[-1] == 429 and "Thử sai quá nhiều" in (await anon.get("/filehub/oauth/cb", params={"state": "y" * 32})).text
-    assert not audit_rows(e, "filehub.login_callback")
+    # L3: lần gọi lỗi CÓ dòng audit (outcome=error) nhưng không bao giờ mang code/state/chuỗi tấn công
+    rows = [dict(r) for r in e.hub.store.conn.execute("SELECT outcome, data FROM audit_log WHERE kind='filehub.login_callback'")]
+    assert rows and all(r["outcome"] == "error" for r in rows)
+    assert "<svg" not in json.dumps(rows) and '"state"' not in json.dumps(rows) and '"code"' not in json.dumps(rows)
 
 
 async def test_login_on_hub_machine_uses_loopback_listener_and_switch_remove_step2(env):

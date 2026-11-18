@@ -62,7 +62,7 @@ INCLUDE_DIRS = ("policy", "agents", "global", "teams", "ledger", "snapshots", "m
 AGENT_SKIP = ("runtime", "workspaces", ".tier_overlay")
 EXCLUDED = ("secrets", "auth", "mcp_server", "runs", "checkpoints", "logs", "workspaces", "worktrees", "evals", "models", "update",
             BACKUP_DIRNAME, "exports", "imports",  # gói xuất/nhập toàn bộ hub (hub_transfer.py) — lớn, đã là bản sao
-            "hub.sock", "hub.sock.auth", "hub.pid", "daemon.lock", "cli_history",
+            "hub.sock", "hub.sock.auth", "hub.sock.web.auth", "hub.sock.mcp.auth", "hub.pid", "daemon.lock", "cli_history",
             "filehub")  # profile/base/status của binary sync Không gian số — tái tạo được (cấu hình filehub.* nằm trong config.yaml, được sao lưu)
 ID_RE = re.compile(r"^(\d{8}T\d{6})-(manual|auto|pre-update|pre-restore)(?:-([a-z0-9][a-z0-9-]{0,30}))?$")
 LABEL_RE = re.compile(r"[^a-z0-9-]+")
