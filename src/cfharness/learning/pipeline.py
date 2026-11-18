@@ -27,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import track
 from ..errors import HubError, NotFound
 from ..events import make_event
 from ..knowledge.store import (
@@ -877,8 +878,7 @@ class Pipeline:
             asyncio.run(coro)
             return
         t = loop.create_task(coro)
-        self._tasks.add(t)
-        t.add_done_callback(self._tasks.discard)
+        track(t, self._tasks)  # L1: lỗi task → log
 
     def get(self, proposal_id: str) -> dict[str, Any]:
         r = self.conn.execute("SELECT * FROM proposals WHERE id=?", (proposal_id,)).fetchone()

@@ -252,12 +252,17 @@ DEFAULTS: dict[str, Any] = {
             "timeout_s": 15,
         },
     },
-    # Log daemon `logs/` (NFR-21): hub.log xoay vòng theo dung lượng (an toàn trên Windows), daemon.out xoay lúc khởi động;
-    # bản cũ (`*.log.N`, `*.out.N`) quá max_age_days bị xoá (0/null = chỉ giới hạn theo số bản). Đổi có hiệu lực khi daemon khởi động lại.
+    # Log `logs/` (NFR-21): hub.log (daemon) / web.jsonl / mcp.jsonl xoay vòng theo dung lượng (an toàn trên Windows), daemon.out,
+    # web.log, update.out, import-job.out xoay lúc tiến trình được bật; bản cũ (`*.log.N`, `*.out.N`, `*.jsonl.N`) quá max_age_days bị
+    # xoá (0/null = chỉ giới hạn theo số bản). Kích thước/số bản có hiệu lực khi tiến trình khởi động lại; `level` + `levels`
+    # ({logger: level}, chỉ `cfharness.*` + logs.LIB_LOGGERS) áp NGAY lúc chạy (L1, docs/dev-notes/plan-logging.md). Level tạm:
+    # `cfharness logs level <logger> debug --for 30m`.
     "logs": {
         "max_bytes": 10 * 1024 * 1024,
         "backup_count": 5,
         "max_age_days": 30,
+        "level": "info",
+        "levels": {},
     },
     "recovery": {
         "auto_resume": True,  # Q-09: daemon restart → dừng-và-resume tự động (trừ waiting_human)

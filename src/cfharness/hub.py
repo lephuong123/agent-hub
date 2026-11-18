@@ -26,6 +26,9 @@ class Hub:
         self.paths = paths
         paths.ensure()
         self.config = HubConfig(paths.config)
+        from .logs import LevelController
+
+        self.log_levels = LevelController()  # L1: logs.level/levels + level tạm, áp lúc chạy (logs.level_loop)
         self.store = Store(paths.db)
         bc = self.config.get("bus")
         self.bus = EventBus(ring_events=int(bc["ring_events"]), ring_bytes=int(bc["ring_bytes"]), subscriber_queue=int(bc["subscriber_queue"]))
@@ -198,6 +201,14 @@ class Hub:
             import asyncio
 
             self._bg.append(asyncio.get_running_loop().create_task(self.approvals.loop()))
+        except RuntimeError:
+            pass
+        try:  # L1: level log đổi lúc chạy (config logs.level/levels + `cfharness logs level … --for`)
+            import asyncio
+
+            from .logs import level_loop
+
+            self._bg.append(asyncio.get_running_loop().create_task(level_loop(self), name="log-levels"))
         except RuntimeError:
             pass
         try:  # web còn chạy code cũ sau cập nhật (macOS/Linux) → dừng để launchd/daemon chạy lại bằng code mới — web/reload.py

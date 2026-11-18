@@ -25,6 +25,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any
 
+from ...aiotasks import track
 from ...events import HubEvent
 from ...notify.base import clip
 from ...notify.telegram import esc
@@ -183,8 +184,7 @@ class SlackProgress:
             return
         task = asyncio.get_running_loop().create_task(self._pump(rec))
         rec["task"] = task
-        self.bot._bg.add(task)  # bot.stop() huỷ cùng tác vụ nền khác
-        task.add_done_callback(self.bot._bg.discard)
+        track(task, self.bot._bg)  # bot.stop() huỷ cùng tác vụ nền khác
 
     async def finish(self, run_id: str, *, chat: Any = None, reply_to: Any = None, outcome: str = "completed") -> None:
         """Có trả lời / run kết thúc không trả lời → tin tiến độ thu về một dòng, gỡ nút, xoá trạng thái/reaction (`silent` → xoá tin)."""

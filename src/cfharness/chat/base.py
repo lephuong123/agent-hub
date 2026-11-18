@@ -22,6 +22,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import track
 from .. import auth as _auth
 from ..events import TERMINAL_RUN_EVENTS, HubEvent, iso
 from ..notify.base import clip
@@ -297,8 +298,7 @@ class ChatBot:
         except RuntimeError:
             coro.close()
             return
-        self._bg.add(task)
-        task.add_done_callback(self._bg.discard)
+        track(task, self._bg)  # L1: lỗi task → log
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():

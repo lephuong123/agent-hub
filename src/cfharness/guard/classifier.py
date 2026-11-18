@@ -106,7 +106,8 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "run": {"revert", "takeover"},
     "runs": {"revert"},
     "curation": {"rollback"},
-    "daemon": {"stop", "restart"},
+    "daemon": {"stop", "restart", "dump-stacks"},
+    "logs": None,  # log hệ thống (logs_rpc.py, L1): đổi level / xem log của hub — agent gõ, kể cả chỉ xem, đều chặn
     "auth": None,
     "notify": {"telegram", "slack"},  # token bot / allowlist chat / gửi tin thay người (chat/rpc.py, chat/slack/rpc.py)
     "answer": None,  # UX: trả lời câu hỏi = quyết định của người (agent không tự trả lời câu hỏi của mình/agent khác)

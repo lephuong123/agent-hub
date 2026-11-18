@@ -359,6 +359,9 @@ def _spawn_job(argv: list[str], env: dict[str, str], log_path: Path) -> int:
     from .oscompat import detached_kwargs
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    from .logs import rotate_if_large
+
+    rotate_if_large(log_path)  # L1: file đầu ra thô của job không tự xoay → xoay lúc bật
     out = open(log_path, "ab")  # noqa: SIM115 — giữ mở cho tiến trình con
     try:
         p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, env=env, close_fds=True, **detached_kwargs())

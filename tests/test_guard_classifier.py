@@ -709,3 +709,10 @@ def test_session_reindex_cli_human_only(env):
         v = bash(env, cmd)
         assert v.forbidden and v.rule == "hub_human_only", (cmd, v.rule)
     assert not bash(env, "cfharness session status").forbidden
+
+
+def test_logs_cli_human_only(env):
+    """L1 (docs/dev-notes/plan-logging.md): đổi/xem level log + dump stack daemon = lệnh của người."""
+    for cmd in ("cfharness logs level", "cfharness logs level cfharness debug --for 2h", "cfharness daemon dump-stacks"):
+        v = bash(env, cmd)
+        assert v.forbidden, (cmd, v.rule)

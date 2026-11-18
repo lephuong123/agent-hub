@@ -22,7 +22,8 @@ from .config import HubConfig
 from .errors import BLOCKED, HubError, SYSTEM_ERROR
 from .events import TERMINAL_RUN_EVENTS
 from .hub import Hub
-from .logs import DEFAULT_BACKUP_COUNT, DEFAULT_MAX_AGE_DAYS, DEFAULT_MAX_BYTES, rotate_if_large, setup_logging
+from .logs import (DEFAULT_BACKUP_COUNT, DEFAULT_MAX_AGE_DAYS, DEFAULT_MAX_BYTES, LEVELS, asyncio_exception_handler,
+                   install_crash_handlers, rotate_if_large, setup_logging)
 from .paths import HubPaths
 from .oscompat import IS_WINDOWS, JOBS, detached_kwargs, ensure_hidden_console, same_user
 from .rpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, DaemonUnavailable, RpcClient, encode
@@ -141,6 +142,10 @@ class Daemon:
         from .backup import register_rpc as _register_backup
 
         _register_backup(self)
+        # Log hệ thống: logs.levels|level (logs_rpc.py, L1 — HUMAN_ONLY, tự bọc audit logs.level)
+        from .logs_rpc import register_rpc as _register_logs
+
+        _register_logs(self)
         # Xuất toàn bộ hub sang máy khác: hub.export (hub_transfer.py — làm lặng hub, ghi gói .cfhx, tự bọc audit; nhập chỉ ngoại tuyến từ CLI)
         from .hub_transfer import register_rpc as _register_hub_transfer
 
@@ -486,6 +491,7 @@ class Daemon:
         self.server = await transport.start_server(self._handle_conn, sock, limit=RPC_LIMIT)
         self.paths.pidfile.write_text(str(os.getpid()), encoding="utf-8")
         loop = asyncio.get_running_loop()
+        loop.set_exception_handler(asyncio_exception_handler)  # L1: task chết không ai đợi → log ERROR thay vì chỉ in stderr
         for sig in (signal.SIGTERM, signal.SIGINT):
             try:
                 loop.add_signal_handler(sig, self.stopping.set)
@@ -553,7 +559,7 @@ def _log_settings(paths: HubPaths) -> dict[str, Any]:
     except Exception:  # pragma: no cover
         c = {}
     return {"max_bytes": c.get("max_bytes", DEFAULT_MAX_BYTES), "backup_count": c.get("backup_count", DEFAULT_BACKUP_COUNT),
-            "max_age_days": c.get("max_age_days", DEFAULT_MAX_AGE_DAYS)}
+            "max_age_days": c.get("max_age_days", DEFAULT_MAX_AGE_DAYS), "level": LEVELS.get(str(c.get("level") or "info").lower(), logging.INFO)}
 
 
 def _rotate_daemon_out(paths: HubPaths, ls: dict[str, Any]) -> None:
@@ -585,7 +591,8 @@ def run_foreground(paths: HubPaths) -> None:
         sys.stdout = sys.stdout or out
         sys.stderr = sys.stderr or out
     console = ensure_hidden_console()  # Windows/pythonw: console ẩn cho claude + hậu duệ (không bật cửa sổ, CTRL_BREAK chạy được)
-    setup_logging(paths.logs_dir, max_bytes=ls["max_bytes"], backup_count=ls["backup_count"], max_age_days=ls["max_age_days"])
+    setup_logging(paths.logs_dir, ls["level"], max_bytes=ls["max_bytes"], backup_count=ls["backup_count"], max_age_days=ls["max_age_days"])
+    install_crash_handlers(paths.logs_dir)  # L1: excepthook + faulthandler (logs/faults.log, SIGUSR1 = dump stack)
     if console not in ("posix", "existing"):
         logging.getLogger("cfharness.daemon").info("không có console → đã lấy console ẩn (%s)", console)
     if tightened:

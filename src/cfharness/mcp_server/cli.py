@@ -83,11 +83,23 @@ def _cfharness_command() -> list[str]:
     return [sys.executable, "-m", "cfharness"]
 
 
+def _logs_settings(ctx: Any) -> dict[str, Any]:
+    from ..logs import logs_settings
+
+    return logs_settings(_config_get(ctx, "logs", {}))
+
+
 def cmd_mcp_serve(ctx: Any) -> int:
     import logging
 
     a = ctx.args
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
+    for h in logging.getLogger().handlers:
+        h.setLevel(logging.WARNING)  # stderr (claude hiển thị) giữ như cũ: chỉ WARNING trở lên
+    from ..logs import setup_process_logging
+
+    # L1: nhiều `mcp serve` chạy cùng lúc → một file chung `mcp.jsonl` (append, xoay lúc mở); không ghi được (sandbox…) → bỏ qua
+    setup_process_logging(ctx.paths.logs_dir, "mcp", "mcp.jsonl", _logs_settings(ctx), shared=True)
     caller = DaemonCaller(ctx.paths)
     if a.http:
         from .http import serve_http

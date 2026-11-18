@@ -37,6 +37,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import track
 from ..errors import HubError
 from ..events import make_event
 from ..store import now_iso
@@ -290,8 +291,7 @@ class ReviewScheduler:
                                                                               "cost_usd": res.get("cost_usd")}))
 
         t = loop.create_task(go())
-        self.svc.graph_extract.tasks.add(t)
-        t.add_done_callback(self.svc.graph_extract.tasks.discard)
+        track(t, self.svc.graph_extract.tasks)  # L1: lỗi task → log
         return None
 
     # ------------------------------------------------------------------ ngân sách

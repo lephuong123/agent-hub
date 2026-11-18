@@ -6,12 +6,14 @@ Cải tiến so với demo:
   để biết replay có bị `truncated` không (khi đó client nạp lại từ DB).
 - Subscriber lọc theo agent / run / level; hàng đợi CÓ GIỚI HẠN — subscriber chậm bị ngắt
   với lý do `slow_consumer`, agent không bao giờ chờ UI.
-- Listener đồng bộ (ghi DB, aggregator) chạy trước fanout, theo thứ tự đăng ký.
+- Listener đồng bộ (ghi DB, aggregator) chạy trước fanout, theo thứ tự đăng ký; listener lỗi bị log + đếm (`listener_errors`),
+  không làm hỏng publish.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
@@ -20,6 +22,7 @@ from typing import Any, Callable, Iterable
 
 from .events import HubEvent, new_epoch
 
+_log = logging.getLogger("cfharness.bus")
 LEVEL_RANK = {"summary": 0, "detail": 1, "debug": 2}
 HUB_KEY = "_hub"  # ring cho event không gắn agent
 
@@ -130,6 +133,7 @@ class EventBus:
         self.ring_events = ring_events
         self.ring_bytes = ring_bytes
         self.subscriber_queue = subscriber_queue
+        self.listener_errors = 0
 
     @property
     def last_seq(self) -> int:
@@ -145,7 +149,11 @@ class EventBus:
             ring = self._rings[key] = _Ring(self.ring_events, self.ring_bytes)
         ring.append(ev)
         for listener in list(self._listeners):
-            listener(ev)
+            try:
+                listener(ev)
+            except Exception:  # L1: một listener lỗi không được làm hỏng publish (persist/notifier/listener khác vẫn chạy)
+                self.listener_errors += 1
+                _log.exception("listener %s lỗi khi xử lý event %s", getattr(listener, "__qualname__", repr(listener)), ev.type)
         for sub in list(self._subs.values()):
             if sub.wants(ev):
                 sub.offer(ev)

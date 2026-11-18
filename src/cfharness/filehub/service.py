@@ -34,6 +34,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import track
 from ..errors import Conflict, HubError, NotFound
 from ..events import TERMINAL_RUN_EVENTS, HubEvent, make_event
 from ..oscompat import no_window_kwargs
@@ -852,8 +853,7 @@ class FilehubService:
         except RuntimeError:
             coro.close()
             return
-        self._bg.add(t)
-        t.add_done_callback(self._bg.discard)
+        track(t, self._bg)  # L1: lỗi task → log
 
     # ------------------------------------------------------------------ listener bus: presence + báo sau run
     def _run_folder(self, run: dict[str, Any]) -> dict[str, Any] | None:

@@ -178,6 +178,8 @@ def cmd_daemon(ctx: Ctx) -> int:
         return EXIT_OK
     if a.action == "logs":
         return _daemon_logs(ctx)
+    if a.action == "dump-stacks":
+        return _daemon_dump_stacks(ctx)
     if a.action == "status":
         try:
             st = client.call("hub.status")
@@ -261,6 +263,23 @@ def _compat_text(compat: dict[str, Any]) -> str:
     if ur.get("alert"):
         out += f"\nCẢNH BÁO (ĐỎ): {ur.get('unknown')}/{ur.get('total')} event không nhận dạng được trong 1 giờ ({ur.get('rate', 0) * 100:.1f}%) — cân nhắc `cfharness estop on`"
     return out
+
+
+def _daemon_dump_stacks(ctx: Ctx) -> int:
+    """L1: SIGUSR1 → faulthandler của daemon ghi stack mọi thread vào `logs/faults.log` (bắt daemon treo, không dừng daemon)."""
+    sig = getattr(signal, "SIGUSR1", None)
+    if sig is None:
+        print("lỗi: dump-stacks chỉ có trên macOS/Linux", file=sys.stderr)
+        return EXIT_USER
+    try:
+        pid = int(ctx.paths.pidfile.read_text().strip())
+        os.kill(pid, sig)
+    except (OSError, ValueError):
+        print("lỗi: daemon không chạy", file=sys.stderr)
+        return EXIT_USER
+    f = ctx.paths.logs_dir / "faults.log"
+    ctx.out({"pid": pid, "file": str(f)}, f"đã yêu cầu daemon (pid {pid}) ghi stack vào {f}")
+    return EXIT_OK
 
 
 def _daemon_logs(ctx: Ctx) -> int:
@@ -772,8 +791,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     d = sub.add_parser("daemon", help="quản lý daemon", parents=[common])
-    d.add_argument("action", choices=["start", "stop", "status", "run", "logs", "install-service", "uninstall-service"],
-                   help="install-service/uninstall-service: tự khởi động daemon khi đăng nhập (Windows Task Scheduler, macOS LaunchAgent, Linux systemd --user)")
+    d.add_argument("action", choices=["start", "stop", "status", "run", "logs", "dump-stacks", "install-service", "uninstall-service"],
+                   help="install-service/uninstall-service: tự khởi động daemon khi đăng nhập (Windows Task Scheduler, macOS LaunchAgent, Linux systemd --user); "
+                        "dump-stacks: ghi stack mọi thread của daemon vào logs/faults.log (macOS/Linux)")
     d.add_argument("--foreground", action="store_true", help="chạy daemon ở tiền cảnh")
     d.add_argument("--wait-supervisor", type=float, default=None, help=argparse.SUPPRESS)  # bộ cập nhật: chờ launchd chạy lại daemon
     d.add_argument("--dry-run", action="store_true", help="install-service/uninstall-service: chỉ in kế hoạch, không thay đổi gì")
@@ -989,6 +1009,11 @@ def build_parser() -> argparse.ArgumentParser:
     from .backup_cli import add_parsers as _add_backup_parsers
 
     _add_backup_parsers(sub, common)
+
+    # log hệ thống: cfharness logs level … (logs_rpc.py) — chỉ người
+    from .logs_rpc import add_parsers as _add_logs_parsers
+
+    _add_logs_parsers(sub, common)
 
     # xuất / nhập toàn bộ hub sang máy khác: cfharness hub export|import (hub_transfer_cli.py, hub_transfer.py)
     from .hub_transfer_cli import add_parsers as _add_hub_transfer_parsers

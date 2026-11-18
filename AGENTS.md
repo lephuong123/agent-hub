@@ -791,3 +791,14 @@ env tiến trình sync; cfharness không cầm token sync. Event filehub chỉ m
 (`filehub_list|filehub_link`) + giao việc `filehub:`; thêm thao tác ghi filehub → HUMAN_ONLY + ca trong `tests/test_sec_auth.py`/`test_manager_security.py`.
 Test dùng binary GIẢ `tests/fake_tangthu_sync.py` (đúng hợp đồng §8.3) + `tests/fh_fake.py`: `test_filehub_supervisor.py`, `test_filehub_workspace.py`,
 `test_filehub_concurrency.py`, `test_web_filehub.py`, ca `*_FILEHUB` trong `test_guard_classifier.py`. Đổi hợp đồng với binary → sửa CẢ binary giả.
+
+## Log hệ thống — `docs/dev-notes/plan-logging.md` (L1 nền tảng; L2–L8: req_id, audit đầy đủ, chuỗi băm, cảnh báo, trace, gói chẩn đoán)
+| Module | Vai trò |
+|---|---|
+| `logs.py` | `setup_logging(proc, filename, shared)` JSONL mọi tiến trình (daemon `hub.log`, web `web.jsonl`, MCP `mcp.jsonl`), handler root cho thư viện (không lặp), che secret; `LevelController`/`level_loop` (config `logs.level|levels` + level tạm `hub_state logs.temp_levels`); `install_crash_handlers` (excepthook, faulthandler `logs/faults.log`, SIGUSR1), `asyncio_exception_handler`, `ERROR_COUNTS` |
+| `logs_rpc.py` | RPC `logs.levels|level` (HUMAN_ONLY, `logs.level` tự audit), CLI `cfharness logs level` (∈ HUB_HUMAN_ONLY_CLI) |
+| `aiotasks.py` | `track(task, keep)` / `spawn(coro)`: tác vụ nền "bắn rồi quên" có log lỗi — dùng thay cho `keep.add(t); t.add_done_callback(keep.discard)` |
+
+Bất biến: log là METADATA — không bao giờ ghi prompt, trả lời, input/output tool, diff, giá trị secret (kể cả DEBUG). Chỉ đổi level được cho
+`cfharness[.x]` + `logs.LIB_LOGGERS` (không httpx/urllib3). Listener bus lỗi không được làm hỏng `publish`. Tiến trình mới chạy lâu → `setup_process_logging`
+(lỗi IO bỏ qua). Test: `tests/test_logging_l1.py` (fixture trả lại trạng thái logging toàn cục — test gọi `setup_logging` phải dùng nó).
