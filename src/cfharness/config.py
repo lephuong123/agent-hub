@@ -201,7 +201,7 @@ DEFAULTS: dict[str, Any] = {
             "manager_progress": True,  # P7: tin tiến độ + nút Dừng khi điều phối viên làm việc cho tin Slack (chat/slack/progress.py)
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
-                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper", "audit.tamper_detected", "audit.anchored",
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper", "audit.tamper_detected", "audit.anchored", "audit.alert",
                        "budget.warning", "budget.exceeded",
                        "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked", "filehub.lane.roots"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,
@@ -221,7 +221,7 @@ DEFAULTS: dict[str, Any] = {
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
-                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper", "audit.tamper_detected", "audit.anchored",
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper", "audit.tamper_detected", "audit.anchored", "audit.alert",
                        "budget.warning", "budget.exceeded",
                        # thư mục chung Không gian số (filehub/): run đổi/xoá tệp, bản xung đột, tệp có thể chứa bí mật, chiều đẩy lên bị chặn
                        "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked", "filehub.lane.roots",
@@ -606,6 +606,22 @@ DEFAULTS: dict[str, Any] = {
         "anchor_interval_s": 3600,  # neo (last_id, row_hash) vào HUB_HOME/audit-anchors.jsonl (+ metadata admin) mỗi chừng này giây + khi dừng
         "anchor_notify": False,  # Q4: gửi bản neo vào Telegram/Slack (event audit.anchored) — tắt mặc định
         "verify_on_start_rows": 1000,  # daemon khởi động kiểm chừng này dòng audit cuối + bản neo (0 = không kiểm)
+        # L5 (A9, Q3): 0 = giữ audit vĩnh viễn trong DB (mặc định). N > 0 = dồn dòng của các THÁNG đã trọn trước (bây giờ − N ngày) ra
+        # HUB_HOME/audit-archive/<yyyy-mm>.jsonl.gz (0600, giữ chuỗi băm, có MANIFEST.json) rồi mới xoá khỏi DB (audit_archive.py)
+        "archive_after_days": 0,
+        "archive_tick_s": 3600,
+    },
+    # L5 (A8, audit_watch.py): cảnh báo theo mẫu audit → event audit.alert (Telegram nhóm bảo mật / Slack). Nhánh ∈ integrity.SECURITY_KEYS.
+    "audit_watch": {
+        "enabled": True,
+        "denied_burst": {"enabled": True, "threshold": 5, "window_s": 600},
+        "login_fail_burst": {"enabled": True, "threshold": 5, "window_s": 900},
+        "security_change": {"enabled": True, "window_s": 600},
+        "secret_access": {"enabled": True, "hours": None, "window_s": 600},  # vd "08:00-19:00" (giờ máy); null = tắt luật này
+        "new_principal": {"enabled": True, "window_s": 600, "max_seen": 1000,
+                          "ignore_prefixes": ["hub:", "agent:", "manager:", "anon:", "web:sess_", "web:anon"]},
+        "mass_read": {"enabled": True, "threshold": 30, "window_s": 600},
+        "tamper": {"enabled": True, "window_s": 3600},
     },
     "backup": {
         "schedule": "daily 03:30",  # cú pháp schedules/cron.py; máy ngủ lúc đó → chạy bù một lần ở nhịp kế tiếp
@@ -1014,6 +1030,13 @@ def validate_setting(key: str, value: Any) -> None:
         _validate_directory(key, value)
     if key == "admin_watch" or key.startswith("admin_watch."):
         _validate_admin_watch(key, value)
+    if key == "audit_watch" or key.startswith("audit_watch."):  # L5
+        from .audit_watch import validate_setting as _validate_audit_watch
+
+        _validate_audit_watch(key, value)
+    if key in ("audit.archive_after_days", "audit.archive_tick_s"):  # L5
+        if isinstance(value, bool) or not isinstance(value, int) or value < (0 if key.endswith("days") else 60):
+            raise ValueError(f"{key} phải là số nguyên ≥ {0 if key.endswith('days') else 60}")
     if key == "files" or key.startswith("files."):
         from .fileview import validate_setting as _validate_files
 

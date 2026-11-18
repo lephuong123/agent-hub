@@ -38,7 +38,8 @@ APPEND_ONLY = frozenset({"events", "audit_log", "guard_decisions", "snapshots", 
                          "session_messages"})  # v17: văn bản hội thoại là lịch sử; FTS chỉ đồng bộ theo INSERT/DELETE
 HISTORY_COLS = frozenset({("runs", "argv_redacted"), ("runs", "diff")})
 REWRITE_FILES = ("config.yaml", "policy/*.yaml", "policy/golden/*", "mcp/registry.yaml", "checkpoints/*/checkpoint.json")
-SCAN_SKIP_DIRS = ("checkpoints", "runs", "logs", "snapshots", "ledger", "prompts", "policy/history", "trash/tamper", "worktrees", "evals", ".git")
+SCAN_SKIP_DIRS = ("checkpoints", "runs", "logs", "snapshots", "ledger", "prompts", "policy/history", "trash/tamper", "worktrees", "evals", ".git",
+                  "audit-archive")  # L5: lịch sử audit có băm — không bao giờ viết lại
 TEXT_SUFFIX = (".yaml", ".yml", ".json", ".md", ".txt", ".toml")
 MAX_SCAN = 2 * 1024 * 1024
 

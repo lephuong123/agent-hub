@@ -109,6 +109,7 @@ KNOWLEDGE_TABLES = ("mem_*",)
 # Trạng thái gắn với MÁY cũ trong hub_state — luôn xoá khi nhập (khoá, rate limit, phiên bản CLI, đăng nhập claude, job launchd, offset bot…)
 MACHINE_STATE = ("repo_locks", "browser_locks", "rate_limit", "rate_limit_gate", "rate_limit_gates", "rate_limit_by_account",
                  "pyenv_baseline", "cli_compat", "cli_unknown_rate", "auth_block", "claude_account_checks", "admin_watch.active",
+                 "audit_watch.active",  # L5: cảnh báo audit đang bật của máy nguồn (máy đích tự học lại); `audit.archive_cutoff` ĐI CÙNG DB (khớp audit-archive/)
                  "systems.registry", "systems.paused", "telegram.offset", "slack.seen",
                  # PR5: đóng băng chuyển nhà của máy NGUỒN (gói xuất lại từ hub đã đóng băng) + kết quả lần nhập trước của chính nguồn
                  "migrated_to", "import_paused", "import_repos",

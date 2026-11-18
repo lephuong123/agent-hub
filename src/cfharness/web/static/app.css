@@ -1354,3 +1354,13 @@ html.kb-open .tabbar { display: none; }
   .voice-mic.on, .voice-ring, .voice-core { animation: none !important; }
 }
 .voice-open .mgr-log { padding-bottom: 140px; }
+
+/* L5 — nhật ký kiểm toán: cột kết quả có màu + thẻ "Hoạt động theo người" */
+.pill.outcome-ok { background: var(--ok-soft); color: var(--ok); }
+.pill.outcome-error { background: var(--warn-soft); color: var(--warn); }
+.pill.outcome-denied { background: var(--danger-soft); color: var(--danger); }
+.pill.outcome-other { background: var(--surface-3); color: var(--muted); }
+a.outcome-denied { color: var(--danger); font-weight: 600; }
+.audit-activity { overflow-x: auto; }
+.audit-activity table { min-width: 520px; }
+.audit-activity td.muted { color: var(--muted); }

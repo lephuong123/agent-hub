@@ -53,7 +53,7 @@ ANCHORS_FILE = "audit-anchors.jsonl"
 ANCHOR_VERSION = 1
 ANCHORS_CHECKED = 50  # số bản neo gần nhất đem đối chiếu
 ANCHORS_MAX_READ = 8 * 1024 * 1024  # file lớn hơn → chỉ đọc phần đuôi
-BREAK_REASONS = ("unhashed_row", "id_gap", "prev_mismatch", "hash_mismatch")
+BREAK_REASONS = ("unhashed_row", "id_gap", "prev_mismatch", "hash_mismatch", "archive_missing")  # L5: archive_missing = dòng đầu DB sau mốc lưu trữ không nối được manifest
 ANCHOR_REASONS = ("anchor_missing", "anchor_mismatch")
 _HEX64 = frozenset("0123456789abcdef")
 _SELECT_COLS = ", ".join(CHAIN_COLUMNS) + ", prev_hash, row_hash"
@@ -166,8 +166,21 @@ def _iter_rows(conn: sqlite3.Connection, start_id: int) -> Iterable[dict[str, An
             yield dict(zip(names, r))
 
 
-def verify_chain(conn: sqlite3.Connection, *, since_id: int | None = None, tail: int | None = None) -> dict[str, Any]:
-    """Kiểm chuỗi từ `since_id` (hoặc `tail` dòng cuối; mặc định toàn bảng). Dòng trước điểm bắt đầu được TIN (không kiểm lại)."""
+def archive_cutoff(conn: sqlite3.Connection) -> int:
+    """L5 (A9): id lớn nhất đã chuyển ra `audit-archive/` (`hub_state['audit.archive_cutoff']`, 0 = chưa lưu trữ)."""
+    try:
+        r = conn.execute("SELECT value FROM hub_state WHERE key='audit.archive_cutoff'").fetchone()
+        return int(json.loads(r[0])) if r else 0
+    except (sqlite3.Error, ValueError, TypeError):
+        return 0
+
+
+def verify_chain(conn: sqlite3.Connection, *, since_id: int | None = None, tail: int | None = None,
+                 archive: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Kiểm chuỗi từ `since_id` (hoặc `tail` dòng cuối; mặc định toàn bảng). Dòng trước điểm bắt đầu được TIN (không kiểm lại).
+
+    L5 (A9): dòng đã lưu trữ không còn trong DB → dòng đầu tiên còn lại nối với mục manifest có `last_id = id - 1` (`archive` =
+    MANIFEST.json đã đọc): `prev_hash` phải bằng `next_prev` của mục đó. Có mốc lưu trữ mà không có mục nối được → `archive_missing`."""
     out: dict[str, Any] = {"ok": True, "checked": 0, "unchained": 0, "first_id": None, "last_id": None, "chain_start_id": None, "break": None}
     if not has_chain(conn):
         out["no_chain"] = True
@@ -181,39 +194,59 @@ def verify_chain(conn: sqlite3.Connection, *, since_id: int | None = None, tail:
     cur = conn.execute(f"SELECT {_SELECT_COLS} FROM audit_log WHERE id < ? ORDER BY id DESC LIMIT 1", (start,))
     prev = _as_dict(cur, cur.fetchone())
     started = bool(prev and prev.get("row_hash"))
-    if started:
-        first = conn.execute("SELECT MIN(id) FROM audit_log WHERE row_hash IS NOT NULL").fetchone()[0]
-        out["chain_start_id"] = first
+    prev_id: int | None = int(prev["id"]) if prev else None
+    exp_prev = prev_for(prev)
+    cutoff = archive_cutoff(conn)
+    if cutoff:
+        out["archive_cutoff"] = cutoff
 
     def brk(rid: int, reason: str, expected: Any, actual: Any) -> dict[str, Any]:
         out["ok"] = False
         out["break"] = {"id": rid, "reason": reason, "expected": expected, "actual": actual}
         return out
 
+    if prev is None:
+        first = conn.execute("SELECT MIN(id) FROM audit_log WHERE id >= ?", (start,)).fetchone()[0]
+        entries = list((archive or {}).get("archives") or [])
+        link = next((e for e in entries if isinstance(e, dict) and first is not None and e.get("last_id") == int(first) - 1), None)
+        if link is not None:
+            prev_id, exp_prev, started = int(link["last_id"]), str(link.get("next_prev") or ""), bool(link.get("chained"))
+            out["archive_link_id"] = prev_id
+        elif cutoff and first is not None and int(first) > 1:
+            return brk(int(first), "archive_missing", f"manifest last_id={int(first) - 1}", None)
+    if started:
+        cs = conn.execute("SELECT MIN(id) FROM audit_log WHERE row_hash IS NOT NULL").fetchone()[0]
+        out["chain_start_id"] = cs
     for r in _iter_rows(conn, start):
-        rid = int(r["id"])
-        out["checked"] += 1
-        out["first_id"] = out["first_id"] or rid
-        out["last_id"] = rid
-        if not r.get("row_hash"):
-            if started:
-                return brk(rid, "unhashed_row", "row_hash", None)
-            out["unchained"] += 1
-            prev = r
-            continue
-        if started and prev is not None and rid != int(prev["id"]) + 1:
-            return brk(rid, "id_gap", int(prev["id"]) + 1, rid)
-        exp_prev = prev_for(prev)
-        if r.get("prev_hash") != exp_prev:
-            return brk(rid, "prev_mismatch", exp_prev, r.get("prev_hash"))
-        h = compute_hash(str(r["prev_hash"]), r)
-        if h != r["row_hash"]:
-            return brk(rid, "hash_mismatch", h, r["row_hash"])
-        if not started:
-            started = True
-            out["chain_start_id"] = out["chain_start_id"] or rid
-        prev = r
+        res = _walk_row(r, out, prev_id, exp_prev, started)
+        if res is not None:
+            return brk(*res)
+        prev_id, started = int(r["id"]), started or bool(r.get("row_hash"))
+        exp_prev = prev_for(r)
     return out
+
+
+def _walk_row(r: Mapping[str, Any], out: dict[str, Any], prev_id: int | None, exp_prev: str, started: bool) -> tuple[int, str, Any, Any] | None:
+    """Một bước kiểm chuỗi (dùng chung cho DB và file lưu trữ). Trả (id, lý do, mong đợi, thực tế) khi gãy."""
+    rid = int(r["id"])
+    out["checked"] += 1
+    out["first_id"] = out["first_id"] or rid
+    out["last_id"] = rid
+    if not r.get("row_hash"):
+        if started:
+            return rid, "unhashed_row", "row_hash", None
+        out["unchained"] += 1
+        return None
+    if started and prev_id is not None and rid != prev_id + 1:
+        return rid, "id_gap", prev_id + 1, rid
+    if r.get("prev_hash") != exp_prev:
+        return rid, "prev_mismatch", exp_prev, r.get("prev_hash")
+    h = compute_hash(str(r["prev_hash"]), r)
+    if h != r["row_hash"]:
+        return rid, "hash_mismatch", h, r["row_hash"]
+    if not started:
+        out["chain_start_id"] = out["chain_start_id"] or rid
+    return None
 
 
 # ============================================================================ bản neo
@@ -258,11 +291,16 @@ def read_anchors(path: Path) -> dict[str, Any]:
     return out
 
 
-def check_anchors(conn: sqlite3.Connection, anchors: list[dict[str, Any]], *, limit: int = ANCHORS_CHECKED) -> dict[str, Any]:
+def check_anchors(conn: sqlite3.Connection, anchors: list[dict[str, Any]], *, limit: int = ANCHORS_CHECKED,
+                  archived: Mapping[int, str] | None = None) -> dict[str, Any]:
+    """`archived` (L5) = {id: row_hash} các bản neo trỏ vào dòng đã lưu trữ (manifest ghi lại lúc lưu trữ, sau khi đã đối chiếu)."""
     recent = anchors[-limit:] if limit else anchors
     out: dict[str, Any] = {"ok": True, "checked": len(recent), "latest": (recent[-1] if recent else None), "problems": []}
     for a in recent:
         r = conn.execute("SELECT row_hash FROM audit_log WHERE id=?", (a["last_id"],)).fetchone()
+        if r is None and archived and a["last_id"] in archived:
+            r = (archived[a["last_id"]],)
+            out["archived"] = int(out.get("archived") or 0) + 1
         if r is None:
             out["problems"].append({"id": a["last_id"], "reason": "anchor_missing", "expected": a["row_hash"], "actual": None})
         elif r[0] != a["row_hash"]:
@@ -271,17 +309,28 @@ def check_anchors(conn: sqlite3.Connection, anchors: list[dict[str, Any]], *, li
     return out
 
 
-def verify_db(db: Path | str, home: Path | str, *, since_id: int | None = None, tail: int | None = None) -> dict[str, Any]:
-    """Kiểm chuỗi + bản neo bằng kết nối CHỈ ĐỌC riêng (chạy được trong luồng phụ hoặc khi daemon dừng)."""
+def verify_db(db: Path | str, home: Path | str, *, since_id: int | None = None, tail: int | None = None,
+              archive: bool = False) -> dict[str, Any]:
+    """Kiểm chuỗi + bản neo bằng kết nối CHỈ ĐỌC riêng (chạy được trong luồng phụ hoặc khi daemon dừng). `archive=True` (L5) còn kiểm
+    từng file trong `audit-archive/` (sha256 + chuỗi + nối liền nhau và nối với DB)."""
+    from . import audit_archive as AA
+
     t0 = time.monotonic()
     conn = sqlite3.connect(f"file:{Path(db)}?mode=ro", uri=True, timeout=10)
     try:
-        out = verify_chain(conn, since_id=since_id, tail=tail)
+        man = AA.read_manifest(home)
+        out = verify_chain(conn, since_id=since_id, tail=tail, archive=man)
         af = read_anchors(anchors_path(home))
-        anc = check_anchors(conn, af["anchors"])
+        anc = check_anchors(conn, af["anchors"], archived=AA.archived_anchors(man))
         anc.update({"file": af["exists"], "bad_lines": af["bad_lines"], "total": len(af["anchors"])})
         out["anchors"] = anc
         out["ok"] = bool(out["ok"] and anc["ok"])
+        if man.get("archives"):
+            out["archive_files"] = len(man["archives"])
+        if archive:
+            arc = AA.verify_archives(home, man, conn=conn)
+            out["archive"] = arc
+            out["ok"] = bool(out["ok"] and arc["ok"])
     finally:
         conn.close()
     out["duration_ms"] = round((time.monotonic() - t0) * 1000, 1)
@@ -298,6 +347,12 @@ def tamper_payload(res: dict[str, Any]) -> dict[str, Any]:
     probs = ((res.get("anchors") or {}).get("problems") or [])[:5]
     if probs:
         p["anchors"] = [{"id": int(x["id"]), "reason": x["reason"] if x.get("reason") in ANCHOR_REASONS else "other"} for x in probs]
+    from .audit_archive import ARCHIVE_REASONS, FILE_RE
+
+    aprobs = ((res.get("archive") or {}).get("problems") or [])[:5]
+    if aprobs:  # L5: chỉ tên file đúng mẫu `<yyyy-mm>[-<id>].jsonl.gz` + mã lý do
+        p["archive"] = [{"file": str(x.get("file")) if FILE_RE.match(str(x.get("file") or "")) else "?",
+                         "reason": x["reason"] if x.get("reason") in ARCHIVE_REASONS else "other"} for x in aprobs]
     return p
 
 
@@ -394,8 +449,9 @@ class AuditChain:
         return rec
 
     # ------------------------------------------------------------------ kiểm
-    def verify(self, *, since_id: int | None = None, tail: int | None = None, report: bool = True, dedupe: bool = False) -> dict[str, Any]:
-        res = verify_db(self.hub.paths.db, self.hub.paths.home, since_id=since_id, tail=tail)
+    def verify(self, *, since_id: int | None = None, tail: int | None = None, report: bool = True, dedupe: bool = False,
+               archive: bool = False) -> dict[str, Any]:
+        res = verify_db(self.hub.paths.db, self.hub.paths.home, since_id=since_id, tail=tail, archive=archive)
         self.last_verify = {k: res.get(k) for k in ("ok", "checked", "last_id")}
         if not res["ok"] and report:
             self.report(res, dedupe=dedupe)

@@ -132,6 +132,13 @@ class Hub:
         from .audit_chain import attach as _attach_audit_chain
 
         _attach_audit_chain(self)
+        # L5: cảnh báo theo mẫu audit (`hub.audit_watch`, row_tap của hub.audit) + lưu trữ audit cũ ra file (`hub.audit_archive`, tắt mặc
+        # định — audit.archive_after_days) — audit_watch.py, audit_archive.py
+        from .audit_archive import attach as _attach_audit_archive
+        from .audit_watch import attach as _attach_audit_watch
+
+        _attach_audit_watch(self)
+        _attach_audit_archive(self)
         self._bg: list[Any] = []
         # hardening SEC (H-02 lớp 3): toàn vẹn policy/ + config.yaml + hub.db (`hub.integrity`) — guard/integrity.py. GIỮ CUỐI __init__
         from .guard.integrity import attach as _attach_integrity
@@ -181,6 +188,11 @@ class Hub:
             self.audit_chain.start()  # type: ignore[attr-defined]
         except Exception:  # pragma: no cover
             log.exception("không khởi động được chuỗi băm audit")
+        try:  # L5: nạp tập principal đã thấy + vòng báo "hết cảnh báo"; vòng lưu trữ audit (chỉ chạy khi audit.archive_after_days > 0)
+            self.audit_watch.start()  # type: ignore[attr-defined]
+            self.audit_archive.start()  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover
+            log.exception("không khởi động được audit_watch/audit_archive")
         try:  # hub clone PR5: lần đầu lên sau `hub import` → viết lại đường dẫn máy cũ trong tri thức qua Ledger (actor import)
             from .import_followups import process as _import_followups
 
@@ -252,6 +264,8 @@ class Hub:
         if getattr(self, "mcp_proxy", None) is not None:
             await self.mcp_proxy.stop()  # type: ignore[attr-defined]
         self.integrity.stop()
+        self.audit_watch.stop()  # type: ignore[attr-defined]
+        self.audit_archive.stop()  # type: ignore[attr-defined]
         self.audit_chain.stop()  # type: ignore[attr-defined]  # L4: neo dòng audit cuối trước khi đóng DB
         for t in self._bg:
             t.cancel()

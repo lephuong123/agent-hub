@@ -175,6 +175,7 @@
     "approval.reminder": "summary",
     "approval.resolved": "summary",
     "approval.waiting_human": "summary",
+    "audit.alert": "summary",
     "audit.anchored": "detail",
     "audit.tamper_detected": "summary",
     "auth.blocked": "summary",
