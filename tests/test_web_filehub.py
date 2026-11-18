@@ -373,7 +373,7 @@ async def test_lane_held_mass_delete_buttons(env, monkeypatch):
         assert "30 mục xoá đang chờ duyệt" in card and "<b>Báo cáo</b>" not in card
         assert card.count('action="/do/filehub_lane_deletes"') == 2
         r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "next": "/settings#filehub-lane"})
-        assert r.status_code == 200 and "Cho agent xoá" in r.text and not calls  # xác nhận trước
+        assert r.status_code == 200 and "tệp trên Không gian số (vào thùng rác" in r.text and not calls  # xác nhận trước
         r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "confirm": "yes", "next": "/settings#filehub-lane"})
         assert r.status_code == 303 and calls == [("r_chung", False)]
         r = await e.post("/do/filehub_lane_deletes", {"root_id": "r_chung", "discard": "1", "confirm": "yes", "next": "/settings#filehub-lane"})

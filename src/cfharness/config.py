@@ -203,7 +203,7 @@ DEFAULTS: dict[str, Any] = {
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
                        "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
                        "budget.warning", "budget.exceeded",
-                       "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked"],  # M4-B: digest + nhắc chọn golden task (Q-23)
+                       "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked", "filehub.lane.roots"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,
             "backoff_base_s": 2,
             "timeout_s": 10,
@@ -224,7 +224,7 @@ DEFAULTS: dict[str, Any] = {
                        "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
                        "budget.warning", "budget.exceeded",
                        # thư mục chung Không gian số (filehub/): run đổi/xoá tệp, bản xung đột, tệp có thể chứa bí mật, chiều đẩy lên bị chặn
-                       "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked",
+                       "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked", "filehub.lane.roots",
                        # vào/ra web + thiết bị tin cậy (web_events.py) — chỉ metadata, gửi vào nhóm chat riêng của hub nếu có
                        "web.login", "web.logout", "web.login_locked", "web.device_trusted", "web.device_reuse_detected", "web.device_revoked",
                        "web.devices_revoked_all"],
@@ -725,6 +725,14 @@ DEFAULTS: dict[str, Any] = {
             "key_max_days": 180,  # khoá không có expires_at từ server → coi như hết hạn sau 180 ngày kể từ lúc đặt
             "key_warn_days": 14,  # cảnh báo trước khi khoá hết hạn
             "maintenance_s": 60,
+            # bỏ trống địa chỉ khi thiết lập → thử lần lượt (qltm 8223, cchc 8233); chỉ nhận cổng trả `hello` hợp lệ với khoá vừa dán
+            "default_urls": ["http://127.0.0.1:8223", "http://127.0.0.1:8233"],
+            # kiểm tra sức khoẻ nền (`hello`): đang ok → mỗi health_ok_s (đối soát gốc mới cấp / mất quyền); không ok → thử lại lùi dần
+            "health_ok_s": 60,  # một GET /hello mỗi phút: khoá bị thu hồi / Không gian số tắt thấy trong ≤ 1 phút
+            "health_retry_s": [5, 300],
+            # plan-cloud-files §7.4 "mọi run được đọc": run KHÔNG có workspace lane vẫn ĐỌC được thư mục chung chế độ lane qua tool fs_*
+            # chỉ đọc (`--fs browse`: fs_list/fs_stat/fs_read/fs_versions/fs_link, đường dẫn "<tên thư mục>/<…>"); false = chỉ run có workspace lane
+            "read_all_runs": True,
         },
     },
     "workspace": {

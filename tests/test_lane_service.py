@@ -154,12 +154,13 @@ async def test_read_only_run_uses_tools_mode_and_fs_tools_bound_to_run(env):
     other = auth.Caller(via="socket", pid=12345, token_ok=False, run_id="r_khac", agent_id="w2", evidence=["env_run_id"])
     with pytest.raises(HubError, match="không khớp"):
         await fs("fs_list", caller=other)
-    # run không có workspace lane → không có fs_*
+    # run không có workspace lane → chỉ đọc server (`--fs browse`, test_lane_followups); tắt read_all_runs → không có fs_*
+    d.hub.config.set("filehub.lane.read_all_runs", False)
     s.by_prompt["THƯỜNG"] = {"text": "x", "hold": True}
     r2 = {"run_id": d.hub.runs.submit("w2", "THƯỜNG")["id"]}
     await wait_status(d, r2["run_id"])
     with pytest.raises(HubError, match="lane"):
-        await fs("fs_list", run_id=r2["run_id"])
+        await fs("fs_list", {"path": "chung"}, run_id=r2["run_id"])
     d.hub.runs.runtime().release()
     await wait_status(d, rid, ("completed",))
 

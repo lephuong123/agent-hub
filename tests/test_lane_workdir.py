@@ -86,14 +86,17 @@ async def test_push_on_save_create_delete_move_mkdir_and_echo(env):
     assert steers(d, rid) == []
     run = await finish(d, rid)
     diff = run["diff"]
-    assert diff["kind"] == "lane" and diff["revertible"] is False and diff["filehub"] == "chung"
+    assert diff["kind"] == "lane" and diff["revertible"] is True and diff["filehub"] == "chung"  # hoàn tác qua phiên bản/thùng rác (test_lane_followups)
     st = {(f["status"], f["path"]) for f in diff["files"]}
     assert {("modified", "yeu-cau.md"), ("added", "moi/bao-cao.md"), ("renamed", "luu-tru.md"), ("deleted", "luu-tru.md")} <= st
     ch = events(d, "filehub.changed")[-1].payload
     assert ch["run_id"] == rid and "yeu-cau.md" in ch["paths"] and ch["lane"] is True
     assert events(d, "filehub.deleted")[-1].payload["paths"] == ["luu-tru.md"]
-    with pytest.raises(Exception, match="Không gian số|filehub"):
-        await rpc(d, "run.revert", {"id": rid})  # hoàn tác ở phiên bản/thùng rác Không gian số
+    if d.hub.filehub.lane.orphans():  # còn thay đổi chưa đẩy (cây mồ côi) → không hoàn tác tới khi người xử lý cây
+        with pytest.raises(Exception, match="chưa đẩy"):
+            await rpc(d, "run.revert", {"id": rid, "dry_run": True})
+    else:  # hoàn tác qua phiên bản/thùng rác Không gian số (test_lane_followups) — kiểm thử, không ghi
+        assert (await rpc(d, "run.revert", {"id": rid, "dry_run": True}))["dry_run"] is True
     # cây có hardlink/symlink không đẩy → mồ côi (giữ lại cho người xem), không mất
     orph = d.hub.filehub.lane.orphans()
     assert not orph or all(o["tree"] == rid for o in orph)
