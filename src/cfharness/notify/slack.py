@@ -72,6 +72,20 @@ def format_message(ev: HubEvent) -> str | None:
                 parts.append(f"bản neo dòng #{a['id']} {'không còn' if a.get('reason') == 'anchor_missing' else 'không khớp'}")
         return ("🚨 Nhật ký kiểm toán bị sửa/xoá ngoài hub: " + ("; ".join(parts) or "chuỗi băm không hợp lệ")
                 + "\nKiểm lại: `cfharness audit verify`")
+    if ev.type == "audit.alert":  # L5 (audit_watch.py): payload chỉ id/enum — lọc lại kiểu trước khi in
+        from ..audit_watch import RULE_VI, SUBJECTS, clean_principal
+
+        rule = p.get("rule") if p.get("rule") in RULE_VI else None
+        if rule is None or p.get("state") not in ("on", "resolved"):
+            return None
+        who = clean_principal(p.get("principal") or "?")
+        n = p.get("count") if isinstance(p.get("count"), int) else 0
+        win = p.get("window_s") if isinstance(p.get("window_s"), int) else 0
+        subj = f" · `{p['subject']}`" if p.get("subject") in SUBJECTS else ""
+        if p["state"] == "resolved":
+            return f"✅ Hết cảnh báo kiểm toán «{RULE_VI[rule]}» — `{who}` (tổng {n} lượt){subj}"
+        return (f"🛎 Cảnh báo kiểm toán: {RULE_VI[rule]} — `{who}` ({n} lượt / {max(1, win // 60)} phút){subj}\n"
+                f"Xem: `cfharness audit list --principal {who} --since 1h`")
     if ev.type == "audit.anchored":  # L4: bản neo định kỳ (chỉ khi audit.anchor_notify bật) — giữ tin này làm bằng chứng ngoài máy
         if not isinstance(p.get("last_id"), int) or not isinstance(p.get("row_hash"), str):
             return None

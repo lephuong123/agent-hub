@@ -960,6 +960,15 @@ MIGRATIONS: list[str] = [
     ALTER TABLE audit_log ADD COLUMN prev_hash TEXT;
     ALTER TABLE audit_log ADD COLUMN row_hash TEXT;
     """,
+    # v31 — lưu trữ audit (L5, docs/dev-notes/plan-logging.md §4 A9; audit_archive.py): `audit_log` vẫn append-only, TRỪ dòng có
+    # id ≤ `hub_state['audit.archive_cutoff']` do job lưu trữ đặt NGAY TRƯỚC khi xoá (sau khi đã ghi file .jsonl.gz + manifest). Không có
+    # mốc (mặc định — `audit.archive_after_days: 0`) → không xoá được dòng nào (giống v12 `retention_cutoff` của events).
+    """
+    DROP TRIGGER IF EXISTS audit_no_delete;
+    CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit_log
+        WHEN OLD.id > COALESCE((SELECT CAST(value AS INTEGER) FROM hub_state WHERE key='audit.archive_cutoff'), 0)
+        BEGIN SELECT RAISE(ABORT, 'audit_log là append-only (chỉ job lưu trữ xoá được dòng id ≤ audit.archive_cutoff)'); END;
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.

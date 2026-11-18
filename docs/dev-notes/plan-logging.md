@@ -444,3 +444,36 @@ Lệch / để sau:
 - Level `alert` không có trong bảng (`summary|detail|debug`): `audit.tamper_detected` = `summary` (cao nhất, như `guard.tamper_detected`); `audit.anchored` = `detail`.
 - Hạ phiên bản rồi ghi audit bằng bản cũ → dòng NULL giữa chuỗi bị báo `unhashed_row` (đúng ý: không phân biệt được với chèn dòng giả).
 - Xoá phần đuôi + sửa `sqlite_sequence` chỉ bị phát hiện nếu đã có bản neo trỏ tới các dòng đó (giới hạn vốn có của chuỗi băm).
+
+### L5 — Truy vấn audit + cảnh báo theo mẫu + lưu trữ (nhánh `feat/logging-l5`)
+Đã làm:
+- A7: `AuditLog.query` lọc `principal`, `actor`, `outcome`, `req_id`, `kind` (`*` cuối) / `kind_prefix`, `since`/`until`, `q` (LIKE đã escape, CHỈ `summary`/`target`,
+  không bao giờ `data`), phân trang `before_id`, `limit` ≤ 1000. `since`/`until` đổi thành khoảng id bằng tìm nhị phân trên khoá chính (nới 1000 id, vẫn lọc
+  đúng theo `ts`) — không quét cả bảng. RPC `audit.list` nhận các tham số mới (`since` nhận cả `24h`/`7d`, sai → `invalid_params`). `audit.export` (HUMAN_ONLY,
+  ∈ MUTATING nên được bọc audit): `HUB_HOME/exports/audit-<ts>.<jsonl|csv>` (file O_EXCL 0600, thư mục 0700), mọi cột kể cả `prev_hash`/`row_hash`, `data` giữ
+  nguyên chuỗi đã che lúc ghi → băm lại được từ file; kết nối SQLite chỉ đọc trong luồng phụ. `audit.activity` (HUMAN_ONLY, ∈ SENSITIVE_READS): principal ×
+  ngày (giờ máy) 7 ngày + số `denied`. CLI `audit list --principal --actor --outcome --req --q --since --until --before-id`, `audit export`, `audit verify --archive`.
+  Web `/audit`: bộ lọc mới, cột kết quả (`.pill.outcome-ok|error|denied` trong `static/app.css`), link principal, "Cũ hơn", thẻ "Hoạt động theo người"; link
+  `/trace/<req_id>` của L6 giữ nguyên.
+- A8 `audit_watch.py`: `row_taps` mới của `AuditLog` (dòng đầy đủ sau khi ghi; tap cũ 4 tham số không có principal/outcome/target). 7 luật như bảng §4 A8,
+  cửa sổ trượt trong RAM, event `audit.alert{rule, principal, count, window_s, state, subject?}` (level `summary`, schema sinh lại) + dòng audit cùng tên
+  (principal `hub:audit_watch`, bị chính luồng cảnh báo bỏ qua). Có trong `notify.telegram|slack.events` mặc định; Telegram gửi vào `security_chats` (tiền tố
+  `audit.` vốn đã định tuyến). Cấu hình `audit_watch.*` ∈ `integrity.SECURITY_KEYS`, có `validate_setting`.
+- A9 `audit_archive.py` (tắt mặc định, `audit.archive_after_days`), migration **v31** (thay `audit_no_delete`: chỉ xoá được `id <= hub_state['audit.archive_cutoff']`).
+  `verify_chain` nối dòng đầu còn lại với `next_prev` của mục manifest; `check_anchors` đối chiếu neo trỏ vào dòng đã lưu trữ với `anchors` của manifest;
+  `verify_db(archive=True)` băm lại file. `audit-archive/` vào `backup.INCLUDE_DIRS` (nên vào cả gói `.cfhx` — hub_transfer dùng chung tập sao lưu),
+  `pathmap.SCAN_SKIP_DIRS`, sandbox denyRead/denyWrite, `permissions.deny`, `HUB_WRITE_DENY_NAMES`, classifier `sensitive_read` + `sensitive_regions`.
+- Test: `tests/test_audit_watch.py`, `tests/test_audit_query.py`.
+
+Lệch / để sau:
+- Lưu trữ theo THÁNG trọn vẹn (UTC theo `ts`): dòng cũ hơn N ngày nhưng thuộc tháng chưa trọn chờ sang tháng sau — để mỗi tháng đúng một file
+  `<yyyy-mm>.jsonl.gz` như kế hoạch (chạy hằng giờ theo ngày sẽ ra hàng trăm file nhỏ). Trùng tên (vd đồng hồ chỉnh lùi) → `<yyyy-mm>-<first_id>.jsonl.gz`.
+  Không bao giờ lưu trữ dòng cuối của bảng (`insert_chained` cần nó để nối). Chuỗi gãy / neo lệch trong khoảng sắp lưu trữ → bỏ lượt (không "rửa" dấu vết).
+- `login_fail_burst` toàn cục (`*`) chỉ bật khi ≥ ngưỡng lượt đến từ ≥ 2 IP — một IP đã có cảnh báo `ip:<ip>` riêng (tránh hai tin cho một nguồn).
+- `new_principal` không báo thêm `anon:` (người gọi socket không token, vd hook) và `web:sess_*`/`web:anon` (đổi mỗi lần đăng nhập không thiết bị tin cậy); hub
+  cài mới (chưa có principal nào) học im lặng principal `os:` đầu tiên. Tập đã thấy có trần (`max_seen`, bỏ mục cũ nhất).
+- Luật "ngay lập tức" (`security_change`, `secret_access`, `new_principal`, `tamper`) cũng chống trùng theo (luật, principal) trong `window_s`: nhiều thay
+  đổi liền nhau của cùng một người = một tin `on`, tin `resolved` mang tổng số lượt. Payload thêm `subject` (từ vựng cố định) cho `security_change`/`tamper`.
+- `mass_read` cộng `data.count` của dòng `read:*` (dòng `coalesced` của L3 đến khi cửa sổ gộp 10 phút đóng → có thể trễ tới 10 phút).
+- `secret_access` tính cả `secret.rm`. `audit.alert` cũng được ghi thành dòng audit (lịch sử cảnh báo tra được bằng `audit list --kind audit.alert`).
+- Bộ test chung tắt `audit_watch` qua env `CFHARNESS_AUDIT_WATCH=off` (conftest) để không chen event/tin Telegram vào test đếm tin; test riêng bật lại.

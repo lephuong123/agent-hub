@@ -876,7 +876,7 @@ def sensitive_read(p: str, ctx: GuardContext) -> bool:
             return True
         for h in homes:
             if (_under(c, h + "/secrets") or _under(c, h + "/auth") or _under(c, h + "/backups") or _under(c, h + "/filehub")
-                    or _under(c, h + "/exports") or _under(c, h + "/imports") or _under(c, h + "/logs")
+                    or _under(c, h + "/exports") or _under(c, h + "/imports") or _under(c, h + "/logs") or _under(c, h + "/audit-archive")
                     or _same(c, h + "/mcp_server/tokens.json")):  # L6: logs/ = log hệ thống (id, đường dẫn, lỗi của mọi agent)
                 return True
             parts = [x.lower() for x in _rel_parts(c, h)] if IS_WINDOWS else _rel_parts(c, h)
@@ -1495,7 +1495,8 @@ class BashAnalyzer:
         # chỉ vùng mà ĐỌC ĐƯỢC = lộ secret/token/tự duyệt (policy đã do protected_write bắt — không đưa vào đây để không che protected_id)
         out: list[str] = []
         for h in {_hub_home(self.ctx), _real(_hub_home(self.ctx))}:
-            out += [f"{h}/auth", f"{h}/secrets", f"{h}/mcp_server/tokens.json", f"{h}/hub.db", f"{h}/logs"]  # L6: log hệ thống
+            out += [f"{h}/auth", f"{h}/secrets", f"{h}/mcp_server/tokens.json", f"{h}/hub.db", f"{h}/logs",  # L6: log hệ thống
+                    f"{h}/audit-archive"]  # L5: audit đã lưu trữ
         if self.ctx.hub_socket:
             sock = canon_path(self.ctx.hub_socket)
             out += [sock, sock + ".auth", sock + ".web.auth", sock + ".mcp.auth"]

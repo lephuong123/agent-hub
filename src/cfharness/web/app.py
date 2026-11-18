@@ -1167,14 +1167,39 @@ async def costs_page(request: Request) -> Response:
                                                 "hub": snap.get("hub") or {}})
 
 
+AUDIT_WEB_FILTERS = ("channel", "agent_id", "kind", "principal", "actor", "outcome", "req_id", "since", "until", "q", "before_id")
+
+
 async def audit_page(request: Request) -> Response:
+    """L5 (A7): lọc theo principal/actor/kết quả/mã yêu cầu/khoảng thời gian (`24h` hoặc ISO)/chuỗi con trong tóm tắt-đích, phân trang `before_id`,
+    thẻ "Hoạt động theo người" (`audit.activity`). Chữ là dữ liệu: autoescape (không `|safe`)."""
     q = request.query_params
-    params: dict[str, Any] = {"limit": int(q.get("limit") or 200)}
-    for k in ("channel", "agent_id", "kind"):
-        if q.get(k):
-            params[k] = q[k]
-    rows = await rpc(request, "audit.list", params)
-    return await render(request, "audit.html", {"nav": "audit", "rows": rows, "q": dict(q)})
+    try:
+        limit = max(1, min(int(q.get("limit") or 200), 1000))
+    except ValueError:
+        limit = 200
+    params: dict[str, Any] = {"limit": limit}
+    for k in AUDIT_WEB_FILTERS:
+        v = (q.get(k) or "").strip()
+        if v:
+            params[k] = v[:200]
+    error = None
+    try:
+        rows = await rpc(request, "audit.list", params)
+    except RpcError as e:
+        rows, error = [], err_text(e)
+    try:
+        activity = await rpc(request, "audit.activity", {"days": 7})
+    except RpcError:
+        activity = None
+    older = None
+    if rows and len(rows) >= limit:
+        nq = {k: v for k, v in params.items() if k not in ("before_id", "limit")}
+        nq["before_id"] = min(int(r["id"]) for r in rows)
+        from urllib.parse import urlencode
+
+        older = "/audit?" + urlencode(nq)
+    return await render(request, "audit.html", {"nav": "audit", "rows": rows, "q": dict(q), "activity": activity, "older": older, "error": error})
 
 
 async def settings_page(request: Request) -> Response:

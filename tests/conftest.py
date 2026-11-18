@@ -209,6 +209,13 @@ def _no_embedding_model(monkeypatch):
     monkeypatch.setenv("CFHARNESS_GRAPH_VECTOR", "off")
 
 
+@pytest.fixture(autouse=True)
+def _no_audit_watch(monkeypatch):
+    """L5: cảnh báo theo mẫu audit (audit_watch.py) TẮT cho bộ test chung — không chen event/tin Telegram/dòng audit `audit.alert` vào
+    test đếm tin/dòng. `tests/test_audit_watch.py` bật lại (`monkeypatch.delenv`)."""
+    monkeypatch.setenv("CFHARNESS_AUDIT_WATCH", "off")
+
+
 @pytest.fixture
 def hub_home(tmp_path, monkeypatch) -> HubPaths:
     home = tmp_path / "hub"

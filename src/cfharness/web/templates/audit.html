@@ -5,20 +5,46 @@
 <div class="page-head"><h1>Nhật ký kiểm toán</h1><span class="muted"><a href="/logs">Nhật ký hệ thống</a> · bấm mã yêu cầu để xem dòng thời gian</span></div>
 <form method="get" action="/audit" class="filters">
   <label>Kênh <select name="channel"><option value="">tất cả</option>{% for c in ('web', 'cli', 'tui', 'telegram', 'agent', 'hook', 'mcp') %}<option value="{{ c }}" {{ 'selected' if q.channel == c }}>{{ c }}</option>{% endfor %}</select></label>
+  <label>Ai (principal) <input name="principal" value="{{ q.principal or '' }}" size="16" placeholder="vd os:ten, web:dev_…"></label>
+  <label>Actor <input name="actor" value="{{ q.actor or '' }}" size="10" placeholder="user, hub…"></label>
+  <label>Kết quả <select name="outcome"><option value="">tất cả</option>{% for o, t in (('ok', 'thành công'), ('error', 'lỗi'), ('denied', 'bị từ chối')) %}<option value="{{ o }}" {{ 'selected' if q.outcome == o }}>{{ t }}</option>{% endfor %}</select></label>
   <label>Agent <input name="agent_id" value="{{ q.agent_id or '' }}" size="10"></label>
-  <label>Loại <input name="kind" value="{{ q.kind or '' }}" size="14" placeholder="vd approval.resolved"></label>
+  <label>Loại <input name="kind" value="{{ q.kind or '' }}" size="14" placeholder="vd approval.* "></label>
+  <label>Mã yêu cầu <input name="req_id" value="{{ q.req_id or '' }}" size="14" placeholder="r_…"></label>
+  <label>Từ <input name="since" value="{{ q.since or '' }}" size="10" placeholder="24h, 7d, ISO"></label>
+  <label>Đến <input name="until" value="{{ q.until or '' }}" size="10" placeholder="ISO"></label>
+  <label>Tìm <input name="q" value="{{ q.q or '' }}" size="14" placeholder="trong tóm tắt/đích"></label>
   <button class="btn sm" type="submit">Lọc</button>
+  <a class="btn sm ghost" href="/audit">Bỏ lọc</a>
 </form>
+{% if error %}<div class="flash error" role="alert">{{ error }}</div>{% endif %}
+{% if activity and activity.rows %}
+<section class="card audit-activity">
+  <h2>Hoạt động theo người <span class="muted small">(số dòng nhật ký / ngày, 7 ngày)</span></h2>
+  <table class="tbl"><thead><tr><th>Ai</th>{% for d in activity.days %}<th class="num">{{ d[5:] }}</th>{% endfor %}<th class="num">Tổng</th><th class="num">Bị từ chối</th></tr></thead><tbody>
+  {% for r in activity.rows %}<tr>
+    <td><a href="/audit?principal={{ r.principal|urlencode }}&amp;since=7d"><code>{{ r.principal }}</code></a></td>
+    {% for c in r.counts %}<td class="num {{ 'muted' if not c }}">{{ c }}</td>{% endfor %}
+    <td class="num"><strong>{{ r.total }}</strong></td>
+    <td class="num">{% if r.denied %}<a class="outcome-denied" href="/audit?principal={{ r.principal|urlencode }}&amp;outcome=denied&amp;since=7d">{{ r.denied }}</a>{% else %}0{% endif %}</td>
+  </tr>{% endfor %}
+  </tbody></table>
+  {% if activity.principals > activity.rows|length %}<p class="muted small">Hiện {{ activity.rows|length }}/{{ activity.principals }} danh tính nhiều hoạt động nhất.</p>{% endif %}
+</section>
+{% endif %}
 <section class="card">
   {% if not rows %}{{ m.empty("Không có bản ghi.") }}{% else %}
-  <table class="tbl stack"><thead><tr><th>Lúc</th><th>Thao tác</th><th>Ai</th><th>Kênh</th><th>Agent / run</th><th>Chi tiết</th><th>Mã yêu cầu</th></tr></thead><tbody>
+  <table class="tbl stack"><thead><tr><th>Lúc</th><th>Thao tác</th><th>Kết quả</th><th>Ai</th><th>Kênh</th><th>Agent / run</th><th>Chi tiết</th><th>Mã yêu cầu</th></tr></thead><tbody>
   {% for r in rows %}<tr>
     <td data-label="Lúc">{{ r.ts|ts }}</td><td data-label="Thao tác"><code>{{ r.kind }}</code></td>
-    <td data-label="Ai"><span class="pill {{ 'warn' if r.actor == 'agent' else 'muted' }}">{{ r.actor }}</span></td><td data-label="Kênh">{{ r.channel }}</td>
+    <td data-label="Kết quả">{% if r.outcome %}<span class="pill outcome-{{ r.outcome if r.outcome in ('ok', 'error', 'denied') else 'other' }}">{{ {'ok': 'thành công', 'error': 'lỗi', 'denied': 'bị từ chối'}.get(r.outcome, r.outcome) }}</span>{% if r.error_code %} <small class="muted">{{ r.error_code }}</small>{% endif %}{% endif %}</td>
+    <td data-label="Ai"><span class="pill {{ 'warn' if r.actor == 'agent' else 'muted' }}">{{ r.actor }}</span>{% if r.principal %} <a class="small" href="/audit?principal={{ r.principal|urlencode }}"><code>{{ r.principal }}</code></a>{% endif %}</td><td data-label="Kênh">{{ r.channel }}</td>
     <td data-label="Agent / run">{{ r.agent_id or '' }}{% if r.run_id %} <a href="/runs/{{ r.run_id }}"><code>{{ r.run_id }}</code></a>{% endif %}</td>
     <td data-label="Chi tiết" class="small"><details><summary>{{ r.target or r.summary or '' }}</summary><pre>{{ r.data|j }}</pre></details></td>
     <td data-label="Mã yêu cầu" class="small">{% if r.req_id %}<a href="/trace/{{ r.req_id|urlencode }}" title="Dòng thời gian của yêu cầu"><code>{{ r.req_id }}</code></a>{% endif %}</td>
   </tr>{% endfor %}
-  </tbody></table>{% endif %}
+  </tbody></table>
+  {% if older %}<p><a class="btn sm" href="{{ older }}">Cũ hơn →</a></p>{% endif %}
+  {% endif %}
 </section>
 {% endblock %}

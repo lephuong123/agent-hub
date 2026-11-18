@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -61,6 +62,8 @@ MUTATING = frozenset(
         "session.reindex",
         # hồ sơ phê duyệt (guard/rpc.py) — audit trong ApprovalService (tiền tố approval. không bọc lần hai)
         "approval.manager_decide",
+        # L5 (A7): xuất audit ra HUB_HOME/exports/ — ghi file nên audit như thao tác ghi
+        "audit.export",
     }
 )
 NOT_AUDITED_PREFIXES = ("approval.",)
@@ -71,6 +74,7 @@ SENSITIVE_READS = frozenset(
         "secret.list", "run.get", "mcp.events", "session.search", "memory.search", "memory.search_self", "learn.graph_view",
         "guard.decisions", "audit.list", "hub.doctor", "logs.levels",
         "logs.query", "trace.get",  # L6: đọc log hệ thống / dòng thời gian (logs_rpc.py)
+        "audit.activity",  # L5: thẻ "Hoạt động theo người" (principal × ngày)
     }
 )
 READ_COALESCE_S = 600.0
@@ -425,13 +429,54 @@ class IntegrationRpc:
         return {"id": aid}
 
     def audit_list(self, p: dict[str, Any]) -> list[dict[str, Any]]:
-        return self.hub.audit.query(
-            kind=p.get("kind"), agent_id=p.get("agent_id"), run_id=p.get("run_id"), channel=p.get("channel"), limit=int(p.get("limit") or 100),
-            principal=p.get("principal"), outcome=p.get("outcome"),
-        )
+        """L5 (A7): lọc `kind` (có `*` cuối = tiền tố) / `kind_prefix`, `agent_id`, `run_id`, `channel`, `principal`, `actor`, `outcome`,
+        `req_id`, `since`/`until` (ISO hoặc tương đối `24h`), `q` (chuỗi con trong summary/target — không bao giờ trong data), phân trang
+        `before_id`; `limit` ≤ 1000."""
+        f = _audit_filters(p)
+        return self.hub.audit.query(**f, limit=int(p.get("limit") or 100))
+
+    def audit_activity(self, p: dict[str, Any]) -> dict[str, Any]:
+        """L5: số dòng audit theo principal × ngày (giờ máy) trong `days` ngày gần nhất (mặc định 7, ≤ 31) — chỉ đọc, HUMAN_ONLY."""
+        return self.hub.audit.activity(days=int(p.get("days") or 7))
+
+    async def audit_export(self, p: dict[str, Any]) -> dict[str, Any]:
+        """L5 (A7): ghi `HUB_HOME/exports/audit-<ts>.<jsonl|csv>` (0600, thư mục 0700) — mọi cột kể cả `prev_hash`/`row_hash`, `data` giữ nguyên
+        chuỗi đã che lúc ghi. Bộ lọc như `audit.list` (trừ `limit`/`before_id`). HUMAN_ONLY, bọc audit như thao tác ghi."""
+        fmt = str(p.get("format") or "jsonl").lower()
+        if fmt not in ("jsonl", "csv"):
+            raise HubError("format phải là jsonl hoặc csv", code=-32602)
+        f = _audit_filters(p)
+        f.pop("before_id", None)
+        d = self.hub.paths.home / "exports"
+        d.mkdir(parents=True, exist_ok=True)
+        if os.name == "posix":
+            os.chmod(d, 0o700)
+        from datetime import datetime as _dt
+
+        stamp = _dt.now().strftime("%Y%m%dT%H%M%S")
+        path = d / f"audit-{stamp}.{fmt}"
+        i = 1
+        while path.exists():
+            i += 1
+            path = d / f"audit-{stamp}-{i}.{fmt}"
+        res = await asyncio.to_thread(self._export_sync, path, fmt, f)
+        return {"path": str(path), "name": path.name, **res, "filters": {k: v for k, v in f.items() if v not in (None, "")}}
+
+    def _export_sync(self, path: Any, fmt: str, f: dict[str, Any]) -> dict[str, Any]:
+        """Kết nối SQLite CHỈ ĐỌC riêng (chạy trong luồng phụ, không chặn vòng sự kiện của daemon)."""
+        import sqlite3
+
+        from ..audit import export_conn
+
+        conn = sqlite3.connect(f"file:{self.hub.paths.db}?mode=ro", uri=True, timeout=10)
+        try:
+            return export_conn(conn, path, fmt=fmt, **f)
+        finally:
+            conn.close()
 
     async def audit_verify(self, p: dict[str, Any]) -> dict[str, Any]:
-        """L4: kiểm chuỗi băm + bản neo (HUMAN_ONLY, chỉ đọc) — luồng phụ, kết nối SQLite chỉ đọc riêng. Gãy → `audit.tamper_detected`."""
+        """L4: kiểm chuỗi băm + bản neo (HUMAN_ONLY, chỉ đọc) — luồng phụ, kết nối SQLite chỉ đọc riêng. Gãy → `audit.tamper_detected`.
+        L5: `archive=true` còn kiểm các file trong `audit-archive/` (sha256 + chuỗi + nối liền)."""
         since = p.get("since_id")
         if since is not None:
             try:
@@ -439,7 +484,7 @@ class IntegrationRpc:
             except (TypeError, ValueError):
                 raise HubError("since_id phải là số nguyên", code=-32602) from None
         chain = self.hub.audit_chain  # type: ignore[attr-defined]
-        res = await asyncio.to_thread(chain.verify, since_id=since, report=False)
+        res = await asyncio.to_thread(chain.verify, since_id=since, report=False, archive=bool(p.get("archive")))
         if not res["ok"]:
             chain.report(res)
         return res
@@ -509,10 +554,45 @@ class IntegrationRpc:
             "audit.record": self.audit_record,
             "audit.list": self.audit_list,
             "audit.verify": self.audit_verify,
+            "audit.export": self.audit_export,
+            "audit.activity": self.audit_activity,
             "feedback.record": self.feedback_record,
             "feedback.list": self.feedback_list,
             **_oauth_methods(h),
         }
+
+
+AUDIT_FILTERS = ("kind", "kind_prefix", "agent_id", "run_id", "channel", "principal", "actor", "outcome", "req_id", "since", "until", "q", "before_id")
+
+
+def _audit_filters(p: dict[str, Any]) -> dict[str, Any]:
+    """Tham số lọc audit đã kiểm: `since`/`until` nhận ISO hoặc tương đối (`24h`, `30m`, `7d`) → ISO UTC; `outcome` ∈ ok|error|denied;
+    `before_id` số nguyên. Chuỗi khác cắt 200 ký tự."""
+    from ..audit import OUTCOMES
+    from ..log_query import parse_time
+
+    out: dict[str, Any] = {}
+    for k in AUDIT_FILTERS:
+        v = p.get(k)
+        if v in (None, ""):
+            continue
+        if k in ("since", "until"):
+            try:
+                out[k] = parse_time(v)
+            except ValueError as e:
+                raise HubError(str(e), code=-32602) from None
+        elif k == "before_id":
+            try:
+                out[k] = int(v)
+            except (TypeError, ValueError):
+                raise HubError("before_id phải là số nguyên", code=-32602) from None
+        elif k == "outcome":
+            if v not in OUTCOMES:
+                raise HubError(f"outcome phải là {'|'.join(OUTCOMES)}", code=-32602)
+            out[k] = v
+        else:
+            out[k] = str(v)[:200]
+    return out
 
 
 def _target_of(p: dict[str, Any]) -> str | None:

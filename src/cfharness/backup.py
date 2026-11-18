@@ -57,7 +57,8 @@ KINDS = ("manual", "auto", "pre-update", "pre-restore")
 SAFETY_KINDS = ("pre-update", "pre-restore")
 # Mục cấp 1 được sao lưu (ngoài hub.db). Mục khác của HUB_HOME KHÔNG vào bản sao.
 INCLUDE_FILES = ("config.yaml", "audit-anchors.jsonl")  # L4: bản neo chuỗi băm audit đi cùng hub.db (khôi phục → neo khớp DB khôi phục)
-INCLUDE_DIRS = ("policy", "agents", "global", "teams", "ledger", "snapshots", "mcp", "trash", "prompts")
+INCLUDE_DIRS = ("policy", "agents", "global", "teams", "ledger", "snapshots", "mcp", "trash", "prompts",
+                "audit-archive")  # L5: audit đã lưu trữ (audit_archive.py) — đi cùng hub.db, không thì `audit verify` báo archive_missing
 # Trong agents/<id>/: thư mục chạy/tạm — không sao lưu, và khôi phục không đụng tới
 AGENT_SKIP = ("runtime", "workspaces", ".tier_overlay")
 EXCLUDED = ("secrets", "auth", "mcp_server", "runs", "checkpoints", "logs", "workspaces", "worktrees", "evals", "models", "update",
