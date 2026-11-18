@@ -189,7 +189,9 @@ async def test_download_base_matches_downloaded_content(env):
     lane.human_write("Báo cáo/yeu-cau.md", "v2 của người\n")
     await until(lambda: (cwd / "yeu-cau.md").read_text() == "v3 của người\n", timeout=4)
     wd = d.hub.filehub.lane.workdir_of(rid)
-    assert wd.base["yeu-cau.md"]["version_id"] == lane.root().items["Báo cáo/yeu-cau.md"].versions[0]["version_id"]
+    # tệp được ghi xuống đĩa trước, base cập nhật ngay sau đó (cùng lượt kéo) → chờ base, không kiểm tức thì (chập chờn trên CI)
+    want = lane.root().items["Báo cáo/yeu-cau.md"].versions[0]["version_id"]
+    await until(lambda: (wd.base.get("yeu-cau.md") or {}).get("version_id") == want, timeout=4)
     await finish(d, rid)
 
 
