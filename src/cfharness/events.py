@@ -107,6 +107,8 @@ EVENT_LEVELS: dict[str, str] = {
     "guard.decision": "debug",
     "guard.blocked": "summary",
     "guard.tamper_detected": "summary",
+    "audit.tamper_detected": "summary",  # L4: chuỗi băm audit_log gãy / bản neo không khớp (payload chỉ id + mã lý do) — mức cao nhất của bảng
+    "audit.anchored": "detail",  # L4: bản neo (last_id, row_hash) — CHỈ phát khi audit.anchor_notify bật
     "backup.created": "summary",  # bản sao lưu HUB_HOME mới (backup.py): {id, kind, size, pruned}
     "backup.failed": "summary",  # sao lưu tự động lỗi: {kind, error}  # hardening SEC: policy/config/hub.db bị ghi NGOÀI RPC (guard/integrity.py) → khôi phục + Slack
     "auth.denied": "summary",  # hardening SEC: method chỉ-người bị gọi từ tiến trình run/thiếu token (auth.py)

@@ -430,6 +430,20 @@ class IntegrationRpc:
             principal=p.get("principal"), outcome=p.get("outcome"),
         )
 
+    async def audit_verify(self, p: dict[str, Any]) -> dict[str, Any]:
+        """L4: kiểm chuỗi băm + bản neo (HUMAN_ONLY, chỉ đọc) — luồng phụ, kết nối SQLite chỉ đọc riêng. Gãy → `audit.tamper_detected`."""
+        since = p.get("since_id")
+        if since is not None:
+            try:
+                since = int(since)
+            except (TypeError, ValueError):
+                raise HubError("since_id phải là số nguyên", code=-32602) from None
+        chain = self.hub.audit_chain  # type: ignore[attr-defined]
+        res = await asyncio.to_thread(chain.verify, since_id=since, report=False)
+        if not res["ok"]:
+            chain.report(res)
+        return res
+
     def feedback_record(self, p: dict[str, Any]) -> dict[str, Any]:
         run = self._find_run(_req(p, "run_id"))
         verdict = str(_req(p, "kind")).lower()
@@ -494,6 +508,7 @@ class IntegrationRpc:
             "secret.rm": self.secret_rm,
             "audit.record": self.audit_record,
             "audit.list": self.audit_list,
+            "audit.verify": self.audit_verify,
             "feedback.record": self.feedback_record,
             "feedback.list": self.feedback_list,
             **_oauth_methods(h),

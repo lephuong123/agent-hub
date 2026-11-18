@@ -833,8 +833,9 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
                         "approvals_cancelled": out["approvals_cancelled"], "questions_cancelled": out["questions_cancelled"],
                         "agents_paused": len(out["agents_paused"]), "repos": len(repos or []),
                         **{k: (len(v) if isinstance(v, list) else v) for k, v in (extra or {}).items()}}
-                conn.execute("INSERT INTO audit_log (ts, kind, actor, channel, data) VALUES (?,?,?,?,?)",
-                             (now, "hub.imported", "user", "cli", json.dumps(data, ensure_ascii=False)))
+                from .audit_chain import insert_chained  # L4: nối chuỗi băm của gói (DB gói cũ chưa v30 → dòng thường)
+
+                insert_chained(conn, {"ts": now, "kind": "hub.imported", "actor": "user", "channel": "cli", "data": json.dumps(data, ensure_ascii=False)})
         if apply:
             conn.execute("COMMIT")
     except Exception:

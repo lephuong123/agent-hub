@@ -229,6 +229,7 @@ HUB_WRITE_DENY_NAMES = (
     "backups", "update",  # bản sao lưu HUB_HOME (backup.py) + trạng thái/helper cập nhật (updater.py)
     "exports", "imports",  # gói xuất/nhập toàn bộ hub (hub_transfer.py)
     "filehub",  # profile/base/status/control của binary sync Không gian số (filehub/)
+    "audit-anchors.jsonl",  # L4: bản neo chuỗi băm audit (audit_chain.py) — agent không được sửa/xoá
 )
 AGENT_WRITE_DENY_NAMES = ("config.yaml", "SOUL.md", "MEMORY.md", "USER.md", "skills", ".archive", "runtime", "home", ".tier_overlay")
 

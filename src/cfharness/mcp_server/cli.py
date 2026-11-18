@@ -542,9 +542,38 @@ def cmd_secret(ctx: Any) -> int:
 
 def cmd_audit(ctx: Any) -> int:
     a = ctx.args
+    if a.audit_action == "verify":
+        return cmd_audit_verify(ctx)
     rows = ctx.call("audit.list", {"kind": a.kind, "run_id": a.run, "agent_id": a.agent, "channel": a.channel, "limit": a.limit})
     ctx.out(rows, "\n".join(f"#{r['id']:<5} {r['ts']}  {r['kind']:<18} {r['channel']:<20} {r['actor']:<16} {r.get('outcome') or '-':<6} {r.get('principal') or '-':<20} {r.get('target') or '-'}  {r.get('run_id') or ''}" for r in rows) or "(audit trống)")
     return EXIT_OK
+
+
+def cmd_audit_verify(ctx: Any) -> int:
+    """L4: `cfharness audit verify [--since-id N] [--json]` — mã thoát 1 khi chuỗi gãy / bản neo lệch."""
+    a = ctx.args
+    r = ctx.call("audit.verify", {"since_id": a.since_id} if a.since_id is not None else {})
+    lines = []
+    if r.get("no_chain"):
+        lines.append("DB chưa có chuỗi băm audit (schema < v30)")
+    b = r.get("break")
+    lines.append(f"đã kiểm {r.get('checked', 0)} dòng (#{r.get('first_id') or '-'}…#{r.get('last_id') or '-'}; chuỗi bắt đầu từ #{r.get('chain_start_id') or '-'}"
+                 f"{'; ' + str(r['unchained']) + ' dòng trước v30 không kiểm' if r.get('unchained') else ''}) trong {r.get('duration_ms', 0)} ms")
+    if b:
+        lines.append(f"GÃY ở dòng #{b['id']}: {b['reason']}\n  mong đợi: {b.get('expected')}\n  thực tế:  {b.get('actual')}")
+    anc = r.get("anchors") or {}
+    if not anc.get("file"):
+        lines.append("bản neo: chưa có file audit-anchors.jsonl")
+    else:
+        lt = anc.get("latest") or {}
+        lines.append(f"bản neo: kiểm {anc.get('checked', 0)}/{anc.get('total', 0)}" + (f", mới nhất #{lt.get('last_id')} lúc {lt.get('ts')}" if lt else "")
+                     + (f", {anc['bad_lines']} dòng hỏng" if anc.get("bad_lines") else ""))
+        for x in anc.get("problems") or []:
+            what = "không còn trong DB (bị xoá)" if x["reason"] == "anchor_missing" else "băm khác (bị sửa rồi tính lại chuỗi)"
+            lines.append(f"  BẢN NEO #{x['id']}: {what}")
+    lines.append("KẾT QUẢ: " + ("toàn vẹn" if r.get("ok") else "PHÁT HIỆN SỬA/XOÁ — đã phát cảnh báo audit.tamper_detected"))
+    ctx.out(r, "\n".join(lines))
+    return EXIT_OK if r.get("ok") else 1
 
 
 def cmd_feedback(ctx: Any) -> int:
@@ -642,6 +671,8 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     al.add_argument("--agent")
     al.add_argument("--channel")
     al.add_argument("--limit", type=int, default=50)
+    av = aus.add_parser("verify", help="kiểm chuỗi băm nhật ký kiểm toán + bản neo (L4)", parents=[common])
+    av.add_argument("--since-id", type=int, default=None, help="chỉ kiểm từ dòng id này (dòng trước được tin)")
     au.set_defaults(fn=cmd_audit)
 
     fb = sub.add_parser("feedback", help="ghi phản hồi về một run (Signal)", parents=[common])

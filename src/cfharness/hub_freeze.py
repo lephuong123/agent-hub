@@ -144,8 +144,10 @@ def freeze_offline(paths: "HubPaths", info: dict[str, Any]) -> dict[str, Any]:
             rec = {**old, **{k: v for k, v in rec.items() if k != "at"}}
         c.execute("INSERT INTO hub_state(key, value, updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
                   "updated_at=excluded.updated_at", (KEY, json.dumps(rec, ensure_ascii=False), now_iso()))
-        c.execute("INSERT INTO audit_log (ts, kind, actor, channel, data) VALUES (?,?,?,?,?)",
-                  (now_iso(), "hub.freeze", "user", "cli", json.dumps({"export_id": rec.get("export_id"), "offline": True}, ensure_ascii=False)))
+        from .audit_chain import insert_chained  # L4: dòng ghi ngoại tuyến cũng nối chuỗi băm
+
+        insert_chained(c, {"ts": now_iso(), "kind": "hub.freeze", "actor": "user", "channel": "cli",
+                           "data": json.dumps({"export_id": rec.get("export_id"), "offline": True}, ensure_ascii=False)})
     finally:
         c.close()
     return rec

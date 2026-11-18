@@ -408,3 +408,39 @@ Lệch / để sau:
 - Không thêm index/migration: `events.req_id` vẫn không index (dùng cửa sổ rowid); `runs.parent_run_id` không index (quét bảng runs, đủ nhanh ở cỡ một tháng).
 - "Task chết" của B5 chưa có bộ đếm riêng (lỗi task asyncio đã vào `ERROR_COUNTS.asyncio`/`task`).
 - `observe_hook` vẫn chưa gửi req_id (L2 để lại).
+
+### L4 — Chuỗi băm audit (nhánh `feat/logging-l4`)
+Đã làm:
+- Migration **v30**: `audit_log.prev_hash|row_hash` (dòng cũ NULL). Trigger `audit_no_update` (BEFORE UPDATE, mọi cột) đã chặn sửa hai cột mới — không cần trigger riêng (có test).
+- `audit_chain.py`: `row_hash = sha256(prev_hash ‖ canonical_json(CHAIN_COLUMNS))` — JSON khoá sắp xếp, không khoảng trắng, UTF-8; `CHAIN_COLUMNS` = id, ts, kind, actor,
+  channel, agent_id, run_id, target, summary, data + cột L2/L3 (req_id, outcome, error_code, duration_ms, principal, declared_channel, session_ref, ip, caller_run_id) —
+  đổi danh sách là thay đổi phá vỡ. Giá trị chuẩn hoá theo kiểu SQLite trả lại (TEXT → str, duration_ms → float) để băm lúc ghi = lúc đọc. Dòng chuỗi đầu tiên:
+  `genesis:<sha256 canonical_json(dòng cuối trước v30)>`, bảng trống → `genesis`.
+- `insert_chained` là writer DUY NHẤT: `AuditLog.record` (RLock + `BEGIN IMMEDIATE` khi chưa trong transaction, trong transaction của người gọi thì ghi trong đó),
+  `hub_freeze.freeze_offline`, `hub_transfer` (dòng `hub.imported` trên stage; DB gói cũ chưa v30 → dòng thường, migration nối genesis sau). id cấp tường minh =
+  max(sqlite_sequence, MAX(id)) + 1 → trong vùng chuỗi id liên tiếp, khoảng hở = bị xoá. Test quét mã nguồn: `INSERT INTO audit_log` chỉ còn ở `audit_chain.py`.
+- Kiểm `verify_chain`/`verify_db` (kết nối chỉ đọc riêng): chỗ gãy đầu tiên `unhashed_row` (dòng không băm chen vào chuỗi) / `id_gap` (xoá giữa, báo id mất) /
+  `prev_mismatch` / `hash_mismatch` (sửa, báo đúng id) + đối chiếu 50 bản neo cuối (`anchor_missing` = xoá, `anchor_mismatch` = sửa rồi tính lại chuỗi).
+  RPC `audit.verify {since_id?}` (HUMAN_ONLY, `asyncio.to_thread`), CLI `cfharness audit verify [--since-id N] [--json]` (mã thoát 1 khi gãy; `audit` vốn ∈
+  HUB_HUMAN_ONLY_CLI từ L3). Gãy → event `audit.tamper_detected` (payload chỉ `checked`, `break_id`, `reason`, `anchors[{id, reason}]`) + dòng audit cùng tên;
+  có trong `notify.telegram|slack.events` mặc định, Telegram gửi vào `security_chats` (cùng nhóm với `web.*`). Daemon khởi động kiểm `audit.verify_on_start_rows`
+  (mặc định 1000) dòng cuối + bản neo; chỗ gãy đã báo không báo lại mỗi lần khởi động (`hub_state audit.tamper_reported`), `audit verify` thủ công luôn báo.
+- Neo: lúc khởi động, mỗi `audit.anchor_interval_s` (3600) và khi dừng (chỉ khi có dòng mới) → (a) `HUB_HOME/audit-anchors.jsonl` (0600, O_APPEND|O_NOFOLLOW,
+  `{v, last_id, row_hash, ts, reason}`); (c) `admin_audit` kind `audit.anchor` với `anchor_id` (int) + `anchor_hash` (sha256 hex) trong `AUDIT_SPEC` — chỉ khi
+  bộ xuất admin bật và thư mục `audit/<user>/` đã được cấp; (d) event `audit.anchored` CHỈ khi `audit.anchor_notify: true` (Q4, mặc định tắt). Nhánh `audit` ∈
+  `integrity.SECURITY_KEYS`.
+- Sao lưu/chuyển hub: `audit-anchors.jsonl` ∈ `backup.INCLUDE_FILES` → vào bản sao lưu và gói `.cfhx` (cả clone lẫn move — bản neo chỉ có id/băm, khớp DB đi
+  cùng); khôi phục/nhập đặt lại đúng file của bản đó (bản sao lưu trước L4 không có → file bị gỡ, không báo nhầm). Không neo trong lúc sao lưu/xuất gói
+  (`backup._LOCK`, `hub_transfer._LOCK`, `runs.exporting`; đọc đuôi chuỗi TRƯỚC khi kiểm khoá → bản neo không bao giờ trỏ tới dòng mà DB đã chụp không có).
+  `update_helper.restore_db` (quay về DB trước cập nhật) khôi phục cả `audit-anchors.jsonl` từ cùng bản pre-update. Sandbox: tên file ∈ `HUB_WRITE_DENY_NAMES`.
+- Test: `tests/test_audit_chain.py` (22 ca).
+
+Lệch / để sau:
+- (b) KHÔNG neo vào `integrity_baseline`: bảng nằm trong chính hub.db — ai sửa được `audit_log` thì sửa luôn bản neo. Bằng chứng ngoài DB là file neo (cùng user OS,
+  sandbox chặn agent ghi), bản admin (thư mục root cấp) và tin Telegram/Slack khi bật `anchor_notify`. Lớp `integrity` sẵn có (`PRAGMA data_version`) vẫn báo
+  khi hub.db bị kết nối khác ghi lúc daemon chạy.
+- Không cache băm dòng cuối trong RAM: đọc `ORDER BY id DESC LIMIT 1` (tra khoá chính) mỗi lần ghi — rẻ như kiểm cache, và cache sẽ sai khi transaction ngoài
+  chứa dòng audit bị ROLLBACK. 1000 dòng ghi + kiểm trong < 1 s ở máy dev.
+- Level `alert` không có trong bảng (`summary|detail|debug`): `audit.tamper_detected` = `summary` (cao nhất, như `guard.tamper_detected`); `audit.anchored` = `detail`.
+- Hạ phiên bản rồi ghi audit bằng bản cũ → dòng NULL giữa chuỗi bị báo `unhashed_row` (đúng ý: không phân biệt được với chèn dòng giả).
+- Xoá phần đuôi + sửa `sqlite_sequence` chỉ bị phát hiện nếu đã có bản neo trỏ tới các dòng đó (giới hạn vốn có của chuỗi băm).

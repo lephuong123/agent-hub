@@ -3,7 +3,8 @@
 Hub user (khi đang xuất trạng thái — `AdminExporter.enabled`) chép MỖI dòng audit thành một dòng JSONL tối giản vào
 `<thư mục cha của admin_export.dir>/audit/<user>/<YYYY-MM-DD>.jsonl` (thư mục `<user>/` do root tạo khi cấp quyền; thiếu → bỏ qua).
 Mỗi dòng CHỈ: `ts`, `kind` (danh sách trắng: method RPC đã phân loại + một số loại audit hệ thống), `actor` (enum, KHÔNG id agent),
-`channel` (enum, bỏ `:<chat_id>`), `outcome` (enum), và với `config.set` thêm `key` (tên khoá thuộc DEFAULTS, KHÔNG giá trị).
+`channel` (enum, bỏ `:<chat_id>`), `outcome` (enum), và với `config.set` thêm `key` (tên khoá thuộc DEFAULTS, KHÔNG giá trị); với `audit.anchor`
+(L4, bản neo chuỗi băm — không phải dòng audit, `AuditChain.anchor` gọi `tap` trực tiếp) thêm `anchor_id` (int) + `anchor_hash` (sha256 hex).
 Không summary/data/target/prompt. Trần dòng/byte mỗi ngày; file cũ hơn `KEEP_DAYS` ngày bị xoá (bởi chính hub user).
 Bộ đọc (hub admin, RPC `admin.audit`) coi file là DỮ LIỆU KHÔNG TIN CẬY: không theo symlink, chủ file = user, lọc lại `AUDIT_SPEC`.
 """
@@ -33,11 +34,14 @@ KIND_RE = r"^[a-z][a-z0-9_]{0,40}(\.[a-z0-9_]{1,40}){0,3}$"
 KEY_RE = r"^[a-z][a-z0-9_]{0,40}(\.[A-Za-z0-9_]{1,40}){0,5}$"
 DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.jsonl$")
 AUDIT_SPEC: dict[str, str] = {"ts": "iso", "kind": "re:" + KIND_RE, "actor": "enum:" + ",".join(ACTORS),
-                              "channel": "enum:" + ",".join(CHANNELS), "outcome": "enum:" + ",".join(OUTCOMES), "key": "re:" + KEY_RE}
+                              "channel": "enum:" + ",".join(CHANNELS), "outcome": "enum:" + ",".join(OUTCOMES), "key": "re:" + KEY_RE,
+                              # L4: kind `audit.anchor` — bản neo chuỗi băm audit (id dòng cuối + sha256 hex), không gì khác
+                              "anchor_id": "int", "anchor_hash": "re:^[0-9a-f]{64}$"}
 # loại audit KHÔNG phải method RPC nhưng có ý nghĩa với admin (đăng nhập web, chặn agent, toàn vẹn…)
 EXTRA_KINDS = frozenset({"web.login", "web.login_failed", "web.login_locked", "web.totp_confirmed", "web.totp_enroll", "auth.denied",
                          "telegram.ignored", "slack.ignored", "guard.integrity_accept", "guard.tamper_detected", "approval.open",
-                         "approval.resolved", "approval.manager_decided", "manager.action", "run.auto_resume", "hub.admin_estop"})
+                         "approval.resolved", "approval.manager_decided", "manager.action", "run.auto_resume", "hub.admin_estop",
+                         "audit.anchor", "audit.tamper_detected"})  # L4: neo chuỗi băm (audit_chain.AuditChain.anchor) + phát hiện sửa
 FAIL_KINDS = {"auth.denied": "denied", "web.login_failed": "failed", "web.login_locked": "denied", "telegram.ignored": "denied",
               "slack.ignored": "denied"}
 
@@ -84,6 +88,10 @@ def line_for(kind: str, actor: str, channel: str, data: dict[str, Any], *, kinds
         k = _config_key(data)
         if k:
             rec["key"] = k
+    if kind == "audit.anchor":  # chỉ hai trường id/băm — filter_flat bỏ giá trị sai kiểu; thiếu một trong hai → không ghi
+        rec["anchor_id"], rec["anchor_hash"] = data.get("anchor_id"), data.get("anchor_hash")
+        out = filter_flat(rec, AUDIT_SPEC)
+        return out if "anchor_id" in out and "anchor_hash" in out else None
     return filter_flat(rec, AUDIT_SPEC)
 
 

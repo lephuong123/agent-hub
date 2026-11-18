@@ -201,7 +201,7 @@ DEFAULTS: dict[str, Any] = {
             "manager_progress": True,  # P7: tin tiến độ + nút Dừng khi điều phối viên làm việc cho tin Slack (chat/slack/progress.py)
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
-                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper", "audit.tamper_detected", "audit.anchored",
                        "budget.warning", "budget.exceeded",
                        "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,
@@ -221,7 +221,7 @@ DEFAULTS: dict[str, Any] = {
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
-                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper", "audit.tamper_detected", "audit.anchored",
                        "budget.warning", "budget.exceeded",
                        # thư mục chung Không gian số (filehub/): run đổi/xoá tệp, bản xung đột, tệp có thể chứa bí mật, chiều đẩy lên bị chặn
                        "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked",
@@ -601,6 +601,12 @@ DEFAULTS: dict[str, Any] = {
     },
     # Sao lưu HUB_HOME (backup.py, docs/dev-notes/backup.md). Bật mặc định hằng ngày: ledger/audit/tri thức nằm trên MỘT file SQLite
     # giữ vĩnh viễn — một bản/ngày (nén, bỏ runs/checkpoints/logs/secrets) rẻ hơn nhiều so với mất dữ liệu. "off" = tắt lịch.
+    # L4 (docs/dev-notes/plan-logging.md §4 A6, audit_chain.py): chuỗi băm audit_log. Nhánh ∈ integrity.SECURITY_KEYS.
+    "audit": {
+        "anchor_interval_s": 3600,  # neo (last_id, row_hash) vào HUB_HOME/audit-anchors.jsonl (+ metadata admin) mỗi chừng này giây + khi dừng
+        "anchor_notify": False,  # Q4: gửi bản neo vào Telegram/Slack (event audit.anchored) — tắt mặc định
+        "verify_on_start_rows": 1000,  # daemon khởi động kiểm chừng này dòng audit cuối + bản neo (0 = không kiểm)
+    },
     "backup": {
         "schedule": "daily 03:30",  # cú pháp schedules/cron.py; máy ngủ lúc đó → chạy bù một lần ở nhịp kế tiếp
         "keep": 7,  # số bản manual+auto giữ lại
