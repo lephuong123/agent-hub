@@ -1927,6 +1927,12 @@ def _manager_routes() -> list[Any]:
     return _r()
 
 
+def _debug_routes() -> list[Any]:
+    from .debug_pages import routes as _r  # /logs, /trace/{id} — công cụ debug (L6, docs/dev-notes/plan-logging.md B6)
+
+    return _r()
+
+
 def _extra_routes() -> list[Any]:
     from . import extra_pages as _x  # lịch chạy, tìm kiếm hội thoại, diff/revert run, sức khoẻ (+ thao tác vào ACTIONS)
 
@@ -2038,6 +2044,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_mcp_routes(),  # /mcp/browse, /mcp/agent/{id}, /mcp/{name} (+ /tool) — web/mcp_pages.py
         Route("/costs", costs_page),
         Route("/audit", audit_page),
+        *_debug_routes(),  # /logs "Nhật ký hệ thống" + /trace/{id} — chỉ đọc (web/debug_pages.py, L6)
         Route("/settings", settings_page),
         *_mcp_oauth.routes(),  # /do/mcp_connect + /mcp/oauth/callback — TRƯỚC /do/{name}
         Route("/do/{name}", do_action, methods=["POST"]),

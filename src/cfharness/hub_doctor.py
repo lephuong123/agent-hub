@@ -112,13 +112,14 @@ def run(paths: "HubPaths", *, probe: bool = False, claude_binary: str | None = N
         _vector(ck, cfg)
         _perms(ck, paths)
         hk = _housekeeping(ck, paths, c)
+        recent = _recent_errors(ck, paths)
     finally:
         if c is not None:
             c.close()
     errs = sum(1 for x in ck.items if x["level"] == "error")
     warns = sum(1 for x in ck.items if x["level"] == "warning")
     return {"ok": errs == 0, "home": str(home), "checks": ck.items, "summary": {"errors": errs, "warnings": warns, "total": len(ck.items)},
-            "housekeeping": hk}
+            "housekeeping": hk, "recent_errors": recent}
 
 
 # ============================================================================ từng nhóm
@@ -472,6 +473,22 @@ def _housekeeping(ck: _Checks, paths: "HubPaths", c: sqlite3.Connection | None) 
     return hk
 
 
+def _recent_errors(ck: _Checks, paths: "HubPaths") -> dict[str, Any] | None:
+    """L6 (B5): top 5 thông điệp ERROR 24 h trong log (mọi tiến trình, gom theo logger + mẫu thông điệp, có req_id mẫu). Trần byte quét."""
+    from .log_query import recent_errors
+
+    try:
+        rep = recent_errors(paths.logs_dir)
+    except Exception as e:  # best-effort: doctor không được hỏng vì log hỏng
+        ck.add("recent_errors", "Lỗi gần đây (24 giờ)", False, f"không đọc được log: {type(e).__name__}", "info")
+        return None
+    n = int(rep.get("total") or 0)
+    ck.add("recent_errors", "Lỗi gần đây (24 giờ)", n == 0, "không có" if n == 0 else
+           f"{n} dòng ERROR, {rep.get('distinct', 0)} loại" + (" (chạm trần quét)" if rep.get("truncated") else ""), "warning",
+           fix="cfharness logs --level error --since 24h  ·  cfharness trace <req_id>")
+    return rep
+
+
 def cleanup_text(plan: dict[str, Any]) -> str:
     """Danh sách thư mục sẽ dọn (cho bước xác nhận y/N của `hub doctor --cleanup`)."""
     from .housekeeping import LABELS, human
@@ -493,6 +510,14 @@ def text(rep: dict[str, Any]) -> str:
         out.append(f"{mark.get(x['level'], '?')} {x['check']}: {x['detail']}")
         if x.get("fix") and x["level"] != "ok":
             out.append(f"    → {x['fix']}")
+    groups = (rep.get("recent_errors") or {}).get("groups") or []
+    if groups:
+        from .termsafe import one_line
+
+        out.append("Lỗi gần đây (24 giờ, gom theo logger + mẫu thông điệp):")
+        for g in groups:
+            rid = f"  · mẫu {g['req_id']}" if g.get("req_id") else ""
+            out.append(f"  {g.get('count', 0):>4}× {one_line(str(g.get('logger') or ''), 80)}: {one_line(str(g.get('template') or ''), 160)}{rid}")
     s = rep.get("summary") or {}
     out.append(f"{s.get('errors', 0)} lỗi, {s.get('warnings', 0)} cảnh báo" + (" — hub sẵn sàng" if rep.get("ok") else ""))
     return "\n".join(out)

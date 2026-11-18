@@ -1,0 +1,40 @@
+{#- Nhật ký hệ thống (/logs, L6) — RPC logs.query. Chữ log là DỮ LIỆU: autoescape, không |safe. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Nhật ký hệ thống{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Nhật ký hệ thống</h1><span class="muted">log JSON của daemon, web, MCP — kể cả file đã xoay vòng · <a href="/audit">Nhật ký kiểm toán</a></span></div>
+<form method="get" action="/logs" class="filters">
+  <label>Từ <input name="since" value="{{ q.since or '' }}" size="8" placeholder="2h, 1d, ISO"></label>
+  <label>Tới <input name="until" value="{{ q.until or '' }}" size="8"></label>
+  <label>Mức ≥ <select name="level">{% for l in levels %}<option value="{{ l }}" {{ 'selected' if (q.level or '') == l }}>{{ l or 'tất cả' }}</option>{% endfor %}</select></label>
+  <label>Logger <input name="logger" value="{{ q.logger or '' }}" size="14" placeholder="cfharness.guard"></label>
+  <label>Mã yêu cầu <input name="req" value="{{ q.req or '' }}" size="16" placeholder="r_…"></label>
+  <label>Run <input name="run" value="{{ q.run or '' }}" size="12"></label>
+  <label>Agent <input name="agent" value="{{ q.agent or '' }}" size="10"></label>
+  <label>Tiến trình <select name="proc">{% for p in procs %}<option value="{{ p }}" {{ 'selected' if (q.proc or '') == p }}>{{ p or 'tất cả' }}</option>{% endfor %}</select></label>
+  <label>Số dòng <input name="limit" value="{{ q.limit }}" size="5" inputmode="numeric"></label>
+  <button class="btn sm" type="submit">Lọc</button>
+</form>
+{% if error %}{{ m.empty(error, "alert", "danger", title="Bộ lọc không hợp lệ") }}{% endif %}
+<section class="card">
+  <p class="muted small">{{ rows|length }} dòng · quét {{ res.files|length if res.files else 0 }} file, {{ ((res.scanned_bytes or 0) / 1048576)|round(1) }} MB{% if res.more %} · còn dòng cũ hơn (tăng số dòng){% endif %}{% if res.truncated %} · <b>chạm trần byte quét</b> — thu hẹp khoảng thời gian{% endif %}</p>
+  {% if not rows %}{{ m.empty("Không có dòng log khớp bộ lọc.") }}{% else %}
+  <table class="tbl stack"><thead><tr><th>Lúc</th><th>Mức</th><th>Tiến trình</th><th>Logger</th><th>Thông điệp</th><th>Mã</th></tr></thead><tbody>
+  {% for r in rows %}<tr>
+    <td data-label="Lúc" class="small">{{ r.ts|ts }}</td>
+    <td data-label="Mức"><span class="pill {{ level_tone.get(r.level, 'muted') }}">{{ r.level }}</span></td>
+    <td data-label="Tiến trình">{{ r.proc or '' }}</td>
+    <td data-label="Logger"><code>{{ r.logger }}</code></td>
+    <td data-label="Thông điệp" class="small pre">{{ r.msg }}{% if r.exc %}<details><summary>traceback</summary><pre>{{ r.exc }}</pre></details>{% endif %}</td>
+    <td data-label="Mã" class="small">
+      {% if r.req_id and id_kind(r.req_id) == 'req' %}<a href="/trace/{{ r.req_id }}"><code>{{ r.req_id }}</code></a><br>{% elif r.req_id %}<code>{{ r.req_id }}</code><br>{% endif %}
+      {% if r.run_id and id_kind(r.run_id) == 'run' %}<a href="/trace/{{ r.run_id }}"><code>{{ r.run_id }}</code></a>{% elif r.run_id %}<code>{{ r.run_id }}</code>{% endif %}
+      {% if r.agent_id %} <span class="muted">{{ r.agent_id }}</span>{% endif %}
+      {% if r.method %} <span class="muted">{{ r.method }}{% if r.duration_ms is not none %} · {{ r.duration_ms }} ms{% endif %}</span>{% endif %}
+    </td>
+  </tr>{% endfor %}
+  </tbody></table>{% endif %}
+</section>
+<p class="muted small">Terminal: <code>cfharness logs --since 2h --level warning</code> · theo dõi: <code>cfharness logs -f</code> · dòng thời gian: <code>cfharness trace &lt;mã&gt;</code></p>
+{% endblock %}

@@ -1,0 +1,37 @@
+{#- Dòng thời gian (/trace/<id>, L6) — RPC trace.get: audit + log + event (tóm tắt) + guard + approval + run con. Chữ là DỮ LIỆU: autoescape. -#}
+{% extends "base.html" %}
+{% import "_macros.html" as m with context %}
+{% block title %}Dòng thời gian {{ ident }}{% endblock %}
+{% block content %}
+<nav class="crumbs"><a href="/logs">Nhật ký hệ thống</a>{{ m.icon('chev-right') }}<span>Dòng thời gian</span></nav>
+<div class="page-head"><h1>Dòng thời gian <code>{{ ident }}</code></h1><span class="muted">{{ {'req': 'mã yêu cầu', 'run': 'run', 'task': 'task'}.get(res.kind, '') }} · {{ (res['items'] or [])|length }} mục · {{ (res.runs or [])|length }} run</span></div>
+{% if res.runs %}
+<section class="card"><h2>Run liên quan</h2>
+  <table class="tbl small"><thead><tr><th>Run</th><th>Agent</th><th>Loại</th><th>Trạng thái</th><th>Quan hệ</th><th>Mã yêu cầu</th></tr></thead><tbody>
+  {% for r in res.runs %}<tr>
+    <td>{% if id_kind(r.id) == 'run' %}<a href="/runs/{{ r.id }}"><code>{{ r.id }}</code></a>{% else %}<code>{{ r.id }}</code>{% endif %}</td>
+    <td>{{ r.agent_id or '' }}</td><td>{{ r.kind or '' }}</td><td>{{ r.status or '' }}{% if r.outcome %} · {{ r.outcome }}{% endif %}</td><td>{{ r.relation or '' }}</td>
+    <td>{% if r.req_id and id_kind(r.req_id) == 'req' %}<a href="/trace/{{ r.req_id }}"><code>{{ r.req_id }}</code></a>{% endif %}</td>
+  </tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endif %}
+<section class="card">
+  {% if not res.found %}{{ m.empty("Không tìm thấy gì cho mã này — kiểm lại id; log/event cũ có thể đã bị dọn theo retention.", "search") }}{% else %}
+  <table class="tbl stack"><thead><tr><th>Lúc</th><th>Nguồn</th><th>Mục</th><th>Chi tiết</th><th>Mã</th></tr></thead><tbody>
+  {% for it in res['items'] %}<tr>
+    <td data-label="Lúc" class="small">{{ it.ts|ts }}</td>
+    <td data-label="Nguồn"><span class="pill {{ source_tone.get(it.source, 'muted') }}">{{ source_label.get(it.source, it.source) }}</span>{% if it.level and it.source == 'log' %} <span class="pill {{ level_tone.get(it.level, 'muted') }}">{{ it.level }}</span>{% endif %}</td>
+    <td data-label="Mục"><code>{{ it.label }}</code>{% if it.outcome %} <span class="pill {{ 'ok' if it.outcome in ('ok', 'success', 'completed') else 'warn' }}">{{ it.outcome }}</span>{% endif %}</td>
+    <td data-label="Chi tiết" class="small pre">{% for k, v in (it.detail or {}).items() %}{% if k != 'exc' %}<span class="muted">{{ k }}</span>={{ v }} {% endif %}{% endfor %}{% if it.detail and it.detail.exc %}<details><summary>traceback</summary><pre>{{ it.detail.exc }}</pre></details>{% endif %}</td>
+    <td data-label="Mã" class="small">
+      {% if it.req_id and it.req_id != ident and id_kind(it.req_id) == 'req' %}<a href="/trace/{{ it.req_id }}"><code>{{ it.req_id }}</code></a> {% endif %}
+      {% if it.run_id and id_kind(it.run_id) == 'run' %}<a href="/runs/{{ it.run_id }}"><code>{{ it.run_id }}</code></a>{% endif %}
+      {% if it.agent_id %} <span class="muted">{{ it.agent_id }}</span>{% endif %}
+    </td>
+  </tr>{% endfor %}
+  </tbody></table>{% endif %}
+  {% for n in res.notes or [] %}<p class="muted small">! {{ n }}</p>{% endfor %}
+  {% if res.truncated %}<p class="muted small">Nhiều mục hơn giới hạn — thêm <code>?limit=5000</code> hoặc dùng <code>cfharness trace {{ ident }} --json</code>.</p>{% endif %}
+</section>
+{% endblock %}

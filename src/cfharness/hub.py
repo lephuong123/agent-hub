@@ -299,4 +299,14 @@ class Hub:
             "subscribers": self.bus.subscriber_count,
             "sandbox_enabled": bool((self.config.get("guard.sandbox") or {}).get("enabled", True)),
             "migrated_to": self.runs.frozen,  # chuyển nhà (hub_freeze.py): hub đóng băng — banner ở CLI/TUI/web
+            "log_errors": self._log_errors(),  # L6 (B5): WARNING/ERROR 1 h/24 h theo logger, rpc.slow, lỗi không ai bắt — chỉ con số
         }
+
+    def _log_errors(self) -> dict[str, Any]:
+        try:
+            from .log_query import error_stats
+
+            return error_stats(self)
+        except Exception:  # best-effort: hub.status không được hỏng vì bộ đếm
+            log.exception("không đọc được bộ đếm lỗi log")
+            return {}

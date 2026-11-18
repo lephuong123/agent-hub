@@ -204,11 +204,11 @@ def secret_read_deny_rules(hub_home: Path, socket: Path) -> list[str]:
     # backups/: bản sao lưu chứa toàn bộ hub.db + tri thức mọi agent (backup.py); exports/ + imports/: gói xuất/nhập hub (hub_transfer.py)
     # filehub/: profile + base của binary sync (Không gian số), control.json — như secrets/ (docs/dev-notes/filehub.md)
     targets = [*(str(t) for t in all_token_paths(socket)), f"{hub_home}/secrets/**", f"{hub_home}/agents/*/runtime/**", f"{hub_home}/mcp_server/tokens.json", f"{hub_home}/auth/**",
-               f"{hub_home}/backups/**", f"{hub_home}/filehub/**", f"{hub_home}/exports/**", f"{hub_home}/imports/**"]
+               f"{hub_home}/backups/**", f"{hub_home}/filehub/**", f"{hub_home}/exports/**", f"{hub_home}/imports/**", f"{hub_home}/logs/**"]
     real = os.path.realpath(hub_home)
     if real != str(hub_home):
         targets += [f"{real}/secrets/**", f"{real}/agents/*/runtime/**", f"{real}/mcp_server/tokens.json", f"{real}/auth/**", f"{real}/backups/**",
-                    f"{real}/filehub/**", f"{real}/exports/**", f"{real}/imports/**"]
+                    f"{real}/filehub/**", f"{real}/exports/**", f"{real}/imports/**", f"{real}/logs/**"]
     toks = [str(t) for t in all_token_paths(socket)]  # L3: token người + web + mcp
     if IS_WINDOWS:  # CLI báo file_path dạng tên dài — thêm biến thể realpath (vd `LEQUYP~1` → tên thật)
         toks += [os.path.realpath(t) for t in toks]
@@ -430,7 +430,7 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
     deny_r: list[str] = list(toks)
     for h in homes:
         deny_r += [f"{h}/secrets", f"{h}/agents/*/runtime", f"{h}/mcp_server/tokens.json", f"{h}/auth", f"{h}/backups", f"{h}/filehub",
-                   f"{h}/exports", f"{h}/imports"]
+                   f"{h}/exports", f"{h}/imports", f"{h}/logs"]  # L6: log hệ thống — agent không đọc log của hub
         try:
             for a in (Path(h) / "agents").iterdir():
                 deny_r.append(str(a / "runtime"))

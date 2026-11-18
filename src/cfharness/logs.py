@@ -63,7 +63,7 @@ class RunContextFilter(logging.Filter):
 
 
 _PROC = "daemon"  # tên tiến trình ghi log (daemon|web|mcp|cli|helper) — đặt trong setup_logging
-CONTEXT_FIELDS = ("run_id", "agent_id", "task_id", "team_id", "req_id", "channel")
+CONTEXT_FIELDS = ("run_id", "agent_id", "task_id", "team_id", "req_id", "parent_req_id", "channel")
 # L2: trường METADATA của access log RPC (`cfharness.rpc`, daemon._access_log) — chỉ id/tên/số, không bao giờ params/kết quả
 EXTRA_FIELDS = ("event", "method", "via", "duration_ms", "outcome", "code", "reason")
 
@@ -249,6 +249,9 @@ def setup_logging(logs_dir: Path, level: int = logging.INFO, *, max_bytes: int =
     setattr(rh, _FILE_MARK, True)
     root.addHandler(rh)
     setattr(lg, _FILE_MARK, True)
+    from .log_query import ensure_error_counter
+
+    ensure_error_counter()  # L6 (B5): đếm WARNING/ERROR theo logger trong RAM cho hub.status / thẻ Sức khoẻ
 
 
 class _SharedStream(logging.Handler):

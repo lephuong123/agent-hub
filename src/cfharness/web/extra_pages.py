@@ -7,7 +7,7 @@
   (không dùng `|safe`: tách đoạn ở server, template autoescape từng đoạn).
 - **Thay đổi file của run**: `/partials/run/{id}/diff` (trang run tải lười bằng htmx) + `/runs/{id}/diff` (không cần JS) — `run.diff{patch}`,
   diff unified tách theo file, gập/mở, có trần kích thước; "Hoàn tác" = `run.revert` (hộp xác nhận nguy hiểm), "Kiểm tra" = `dry_run`.
-- **Sức khoẻ** `/partials/health` (thẻ ở Cài đặt): chỉ RPC đọc `hub.status` + `hub.compat` + `guard.integrity.status` + `report.hangs`
+- **Sức khoẻ** `/partials/health` (thẻ ở Cài đặt): chỉ RPC đọc `hub.status` (+ bộ đếm lỗi log `log_errors`, L6) + `hub.compat` + `guard.integrity.status` + `report.hangs`
   (run timed_out/interrupted/crashed 14 ngày theo agent/loại/tool dở/thời lượng — auto_resume.py) + `hub.housekeeping` (dung lượng HUB_HOME,
   thư mục làm việc dọn được — housekeeping.py; dọn chỉ từ terminal `cfharness hub doctor --cleanup`)
   (không có RPC `doctor` — `cfharness doctor` chạy `claude` cục bộ, không thêm RPC nặng).
@@ -445,6 +445,7 @@ HANG_GROUPS = (("by_agent", "Theo agent"), ("by_kind", "Theo loại run"), ("by_
 async def partial_health(request: Request) -> Response:
     checks: list[dict[str, Any]] = []
     hangs: dict[str, Any] = {}
+    log_errors: dict[str, Any] = {}
 
     def add(name: str, ok: bool, detail: str, level: str = "error") -> None:
         checks.append({"check": name, "ok": ok, "detail": detail, "tone": "ok" if ok else ("warn" if level == "warning" else "danger")})
@@ -464,6 +465,17 @@ async def partial_health(request: Request) -> Response:
         if rl:
             add("Giới hạn tốc độ", False, "đang bị giới hạn" + (f" tới {rl.get('until')}" if isinstance(rl, dict) and rl.get("until") else "")
                 + " — muốn chạy tiếp ngay: đổi sang tài khoản khác ở mục Tài khoản Claude (nút Dùng)", "warning")
+        log_errors = st.get("log_errors") if isinstance(st.get("log_errors"), dict) else {}
+        if log_errors:  # L6 (B5): bộ đếm lỗi trong RAM của daemon (từ khi daemon chạy)
+            d24, d1 = log_errors.get("24h") or {}, log_errors.get("1h") or {}
+            top = ", ".join(f"{x.get('logger')} ({x.get('error', 0)} lỗi)" for x in (d24.get("by_logger") or [])[:3] if x.get("error"))
+            add("Lỗi trong log (24 giờ)", not d24.get("error"), f"{d24.get('error', 0)} lỗi, {d24.get('warning', 0)} cảnh báo · 1 giờ qua: "
+                f"{d1.get('error', 0)} lỗi, {d1.get('warning', 0)} cảnh báo" + (f" — {top}" if top else ""), "warning")
+            add("Gọi RPC chậm (24 giờ)", not d24.get("rpc_slow"), f"{d24.get('rpc_slow', 0)} lần chậm hơn ngưỡng logs.slow_rpc_ms", "warning")
+            unc = {k: v for k, v in (log_errors.get("uncaught") or {}).items() if v}
+            if log_errors.get("bus_listener_errors"):
+                unc["listener event"] = log_errors["bus_listener_errors"]
+            add("Lỗi không ai bắt", not unc, "không có" if not unc else ", ".join(f"{k}: {v}" for k, v in unc.items()), "warning")
         compat = await _opt(request, "hub.compat", {}, {}) or {}
         cli = compat.get("cli") or {}
         if cli:
@@ -506,7 +518,7 @@ async def partial_health(request: Request) -> Response:
         add("Daemon", False, err_text(e))
     sess = session_of(request)
     return ws(request).templates.TemplateResponse(request, "_health.html", {"checks": checks, "bad": sum(1 for c in checks if c["tone"] == "danger"),
-                                                                           "hangs": hangs, "hang_groups": HANG_GROUPS,
+                                                                           "hangs": hangs, "hang_groups": HANG_GROUPS, "log_errors": log_errors,
                                                                            "csrf": sess.csrf if sess else ""})
 
 

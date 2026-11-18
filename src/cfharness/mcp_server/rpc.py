@@ -70,6 +70,7 @@ SENSITIVE_READS = frozenset(
     {
         "secret.list", "run.get", "mcp.events", "session.search", "memory.search", "memory.search_self", "learn.graph_view",
         "guard.decisions", "audit.list", "hub.doctor", "logs.levels",
+        "logs.query", "trace.get",  # L6: đọc log hệ thống / dòng thời gian (logs_rpc.py)
     }
 )
 READ_COALESCE_S = 600.0

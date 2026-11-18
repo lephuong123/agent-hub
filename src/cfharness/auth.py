@@ -109,6 +109,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "backup.create", "backup.verify", "backup.restore_plan",
         # Log hệ thống (logs_rpc.py, L1): xem/đổi level log của daemon — level DEBUG lộ thêm chi tiết vận hành, chỉ người
         "logs.levels", "logs.level",
+        # L6 (công cụ debug): đọc log hệ thống + dòng thời gian của yêu cầu/run — lộ chi tiết vận hành, đường dẫn, id của mọi agent; chỉ người
+        "logs.query", "trace.get",
         # Xuất toàn bộ hub (hub_transfer.py): gói chứa hub.db + tri thức + transcript MỌI agent, dừng run đang chạy — chỉ người.
         # Nhập không có RPC (daemon đích phải dừng; CLI `hub import` ∈ HUB_HUMAN_ONLY_CLI)
         "hub.export",
