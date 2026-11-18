@@ -2,10 +2,12 @@
 
 1. `run revert` cho run lane = khôi phục TRÊN Không gian số bằng phiên bản/thùng rác (CHỈ người), chỉ khi mục chưa bị sửa tiếp sau run.
 2. Presence vẫn được làm mới khi cây đỗ vì run chờ người (`waiting_human`) — plan §4.5 "waiting_human giữ cây + presence".
+3. Run KHÔNG có workspace lane vẫn ĐỌC được thư mục chung chế độ lane (plan-cloud-files §7.4) qua `fs_*` chỉ đọc (`--fs browse`).
 """
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -184,3 +186,56 @@ async def test_presence_not_refreshed_for_interrupted_park(env):
     n = sum(1 for r in lane.requests if r["path"].endswith("/presence") and r["method"] == "PUT")
     await d.hub.filehub.lane.parked_presence(now=time.time() + 20)
     assert sum(1 for r in lane.requests if r["path"].endswith("/presence") and r["method"] == "PUT") == n
+
+
+# ============================================================================ 3. run khác đọc thư mục lane (`--fs browse`)
+async def test_non_lane_run_reads_lane_folders_read_only(env):
+    d, s, lane = env
+    s.by_prompt["THƯỜNG"] = {"text": "x", "hold": True}
+    rid = d.hub.runs.submit("w2", "THƯỜNG")["id"]  # scratch, không có workspace thư mục chung
+    await wait_status(d, rid)
+    spec = d.hub.runs.runtime().specs[rid]
+    hs = json.loads(Path(spec.mcp_config_path).read_text())["mcpServers"]["hub-self"]
+    assert hs["args"][-2:] == ["--fs", "browse"]
+    assert "Any other run can READ it" in (spec.system_prompt or "")
+
+    async def fs(op, args=None):
+        return await rpc(d, "fsself.call", {"run_id": rid, "op": op, "args": args or {}})
+
+    top = await fs("fs_list")
+    assert [i["path"] for i in top["items"]] == ["chung"]
+    ls = await fs("fs_list", {"path": "chung/Báo cáo"})
+    assert {"chung/Báo cáo/yeu-cau.md", "chung/Báo cáo/cu.md"} <= {i["path"] for i in ls["items"]}
+    assert (await fs("fs_read", {"path": "chung/Báo cáo/yeu-cau.md"}))["text"] == "bản gốc\n"
+    assert (await fs("fs_read", {"path": "filehub:chung/Báo cáo/cu.md"}))["text"] == "tệp cũ\n"
+    assert (await fs("fs_stat", {"path": "chung/Báo cáo/a.md"}))["path"] == "chung/Báo cáo/a.md"
+    assert len((await fs("fs_versions", {"path": "chung/Báo cáo/a.md"}))["versions"]) == 1
+    n_writes = len(lane.writes())
+    for op in ("fs_write", "fs_mkdir", "fs_delete", "fs_move", "fs_restore", "fs_pull", "fs_status"):
+        with pytest.raises(HubError, match="chỉ đọc"):
+            await fs(op, {"path": "chung/Báo cáo/x.md", "content": "x", "from": "chung/a", "to": "chung/b", "version_id": "v"})
+    assert len(lane.writes()) == n_writes
+    with pytest.raises(HubError, match="không có thư mục chung 'khac'"):
+        await fs("fs_read", {"path": "khac/x.md"})
+    for bad in ("chung/../x", "chung/.tangthu/db", "/etc/passwd"):
+        with pytest.raises(HubError):
+            await fs("fs_read", {"path": bad})
+    # gốc bị thu hồi → không đọc được, không còn trong danh sách
+    st = dict(d.hub.store.state_get("filehub.lane") or {})
+    st["revoked"] = {"qltm": ["r_chung"]}
+    d.hub.store.state_set("filehub.lane", st)
+    assert (await fs("fs_list"))["items"] == []
+    with pytest.raises(HubError):
+        await fs("fs_read", {"path": "chung/Báo cáo/yeu-cau.md"})
+
+
+async def test_browse_not_for_technical_runs_or_when_disabled(env):
+    d, s, lane = env
+    from cfharness.runs import _lane_browse
+
+    assert _lane_browse(d.hub, {"kind": "agent"}, {})
+    for kind in ("review", "eval", "curator", "graph_extract"):
+        assert not _lane_browse(d.hub, {"kind": kind}, {})
+    assert not _lane_browse(d.hub, {"kind": "agent"}, {"learning_review": True})
+    d.hub.config.set("filehub.lane.read_all_runs", False)
+    assert not _lane_browse(d.hub, {"kind": "agent"}, {})

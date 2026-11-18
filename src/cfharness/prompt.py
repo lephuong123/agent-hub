@@ -62,7 +62,8 @@ def shared_folder_block(folders: list[Any]) -> str:
         name, path = d["name"], d["path"]
         if d.get("lane"):  # cổng cfharness: không bản sao trên máy (filehub/lane/)
             rows.append(f"- {name}: no local copy — a run whose workspace is `filehub:{name}` or `filehub:{name}/<subfolder>` gets a work "
-                        "tree in its cwd; every save there goes to Không gian số within seconds, and the human's edits arrive the same way")
+                        "tree in its cwd; every save there goes to Không gian số within seconds, and the human's edits arrive the same way"
+                        + (f". Any other run can READ it with the fs_list / fs_read tools, paths `{name}/<path>`" if d.get("browse") else ""))
             continue
         line = f"- {name}: {path} (workspace `filehub:{name}`)"
         if d.get("kind") == "workspace":

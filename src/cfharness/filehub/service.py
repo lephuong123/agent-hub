@@ -284,8 +284,12 @@ def shared_folders(hub: Any) -> list[dict[str, str]]:
     for f in config_folders(hub.config):
         live = names.get(str(f.get("root_id") or ""), "")
         out.append({"name": str(f["name"]), "path": str(f["local_path"]), "kind": kind_of(f), "server_name": live if live and live != f["name"] else ""})
+    try:
+        browse = bool(hub.config.get("filehub.lane.read_all_runs"))
+    except (KeyError, AttributeError):
+        browse = False
     for f in lane_folders(hub.config):  # cổng cfharness: không bản sao — cây làm việc dựng cho run có workspace `filehub:<tên>`
-        out.append({"name": str(f["name"]), "path": "", "kind": kind_of(f), "server_name": "", "lane": True})
+        out.append({"name": str(f["name"]), "path": "", "kind": kind_of(f), "server_name": "", "lane": True, "browse": browse})
     return out
 
 
