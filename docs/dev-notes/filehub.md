@@ -5,6 +5,10 @@ Ngày: 2026-11-15 (gốc workspace + cài đặt trên web: 2026-11-16, PR H7 �
 
 > **Chế độ `lane` (cổng cfharness, 2026-11-17):** thư mục có `folders[].mode = lane` (hoặc `filehub.mode = lane`) KHÔNG đồng bộ về máy —
 > cây làm việc theo run qua cổng loopback của Không gian số. Xem `plan-filehub-lane.md` (§C hợp đồng, §10 đã làm). Mọi mục dưới đây là chế độ `sync`.
+> Người dùng: tạo khoá ở Không gian số › Hồ sơ › Cổng cfharness (chọn thư mục/workspace cấp cho hub) → dán ở Cài đặt › Cổng cfharness (hoặc
+> `cfharness filehub lane setup`, bỏ trống địa chỉ) → mọi thư mục được cấp thành `filehub:<tên>` dùng được ngay; cấp thêm/thu hồi trên Không
+> gian số → hub tự cập nhật trong ≤ 5 phút (bấm "Thử kết nối" để ngay). Thư mục đang đồng bộ kiểu cũ cùng gốc giữ nguyên tới khi bấm
+> "Chuyển sang cổng".
 
 ## Tóm tắt
 

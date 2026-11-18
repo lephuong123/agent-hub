@@ -158,8 +158,29 @@ def _filehub_text(etype: str, p: dict[str, Any], agent: str) -> str | None:
     if etype == "filehub.conflict":
         return f"⚠️ Bản xung đột trong «{folder}»: `{_clip(one_line(p.get('path'), 200), 200)}` — người và agent cùng sửa một tệp, không mất bản nào."
     if etype == "filehub.blocked":
+        root = one_line(p.get("root_id"), 64)
+        if p.get("lane"):  # cổng cfharness: lô xoá đang GIỮ (chưa xoá gì) — liệt kê để người quyết
+            shown = [one_line(x, 120) for x in (p.get("paths") or [])[:10] if isinstance(x, str)]
+            n = int(p.get("count") or 0)
+            rest = f"\n… và {n - len(shown)} mục nữa" if n > len(shown) else ""
+            body = "\n".join(f"• `{_clip(x, 120)}`" for x in shown)
+            return (f"⛔ *{agent}* muốn xoá {n} mục trong «{folder}» cùng lúc — hub đang GIỮ, chưa xoá gì:\n{body}{rest}\n"
+                    f"Quyết ở web › Cài đặt › Cổng cfharness («Cho xoá» / «Không xoá») hoặc `cfharness filehub resume --root {root}` "
+                    "(thêm `--discard` để không xoá).")
         return (f"⛔ Đã dừng đẩy lên Không gian số cho «{folder}» (xoá hàng loạt). Kiểm tra rồi chạy: "
-                f"`cfharness filehub resume --root {one_line(p.get('root_id'), 64)}`")
+                f"`cfharness filehub resume --root {root}`")
+    if etype == "filehub.lane.roots":
+        parts = []
+        if p.get("added"):
+            parts.append("đã thêm thư mục chung: " + ", ".join(f"`filehub:{one_line(x, 80)}`" for x in p["added"][:20]))
+        if p.get("revoked"):
+            parts.append("mất quyền (khoá không còn được cấp — tệp không bị xoá): " + ", ".join(f"«{one_line(x, 80)}»" for x in p["revoked"][:20]))
+        if p.get("regranted"):
+            parts.append("được cấp lại: " + ", ".join(f"«{one_line(x, 80)}»" for x in p["regranted"][:20]))
+        if p.get("sync"):
+            parts.append("đang đồng bộ kiểu cũ (giữ nguyên — chuyển ở web › Cài đặt › Cổng cfharness): "
+                         + ", ".join(f"«{one_line(x, 80)}»" for x in p["sync"][:20]))
+        return ("📂 Cổng cfharness: " + "; ".join(parts)) if parts else None
     return None
 
 

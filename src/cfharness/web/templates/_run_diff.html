@@ -23,7 +23,11 @@
   {% if dv.hidden_files %}<p class="muted small">… còn {{ dv.hidden_files }} file không hiển thị — <code>cfharness run diff {{ run.id }}</code>.</p>{% endif %}
   {% if dv.cut_patch %}<p class="muted small">Diff quá lớn — chỉ hiển thị phần đầu. Xem đủ: <code>cfharness run diff {{ run.id }} --patch</code>.</p>{% endif %}
   <div class="btn-row diff-actions">
-    {% if dv.can_revert %}
+    {% if dv.can_revert and dv.lane %}
+      {{ m.act("run_revert", "Hoàn tác trên Không gian số", {"id": run.id, "files": dv.total_files, "lane": 1}, "btn danger sm", confirm="Hoàn tác thay đổi của run " ~ run.id ~ " trên Không gian số?\nKhôi phục " ~ dv.total_files ~ " tệp về phiên bản TRƯỚC run, tệp run xoá lấy lại từ thùng rác, tệp run tạo mới chuyển vào thùng rác.\nChỉ làm được khi các tệp này CHƯA bị sửa tiếp sau run: nếu bạn hoặc run khác đã sửa, hub từ chối và không ghi gì.\nMọi bước đều khôi phục lại được trên Không gian số (phiên bản/thùng rác).", next="/runs/" ~ run.id ~ "#diff", ic="undo") }}
+      {{ m.act("run_revert_check", "Kiểm tra trước", {"id": run.id}, "btn ghost sm", next="/runs/" ~ run.id ~ "#diff", title="Thử hoàn tác (không ghi gì) — báo xung đột nếu có") }}
+      <span class="muted small">Chỉ hoàn tác được khi các tệp chưa bị sửa tiếp sau run.</span>
+    {% elif dv.can_revert %}
       {{ m.act("run_revert", "Hoàn tác thay đổi", {"id": run.id, "files": dv.total_files}, "btn danger sm", confirm="Hoàn tác thay đổi file của run " ~ run.id ~ "?\nGhi lại nội dung " ~ dv.total_files ~ " file như TRƯỚC khi run bắt đầu (file run tạo mới sẽ bị xoá).\nChỉ làm được khi các file này CHƯA bị sửa tiếp sau run: nếu bạn hoặc run khác đã sửa, hub từ chối và không ghi gì.\nKhông đổi HEAD/nhánh git — commit của run (nếu có) vẫn còn.", next="/runs/" ~ run.id ~ "#diff", ic="undo") }}
       {{ m.act("run_revert_check", "Kiểm tra trước", {"id": run.id}, "btn ghost sm", next="/runs/" ~ run.id ~ "#diff", title="Thử hoàn tác (không ghi gì) — báo xung đột nếu có") }}
       <span class="muted small">Chỉ hoàn tác được khi các file chưa bị sửa tiếp sau run.</span>

@@ -4,52 +4,63 @@
 {% import "_macros.html" as m with context %}
 <section class="card" id="filehub-lane">
   <div class="card-head"><h2>{{ m.icon('inbox') }} Cổng cfharness — Không gian số không qua đồng bộ</h2>
-    {% if data %}<span class="pill">chế độ mặc định: {{ data.mode }}</span>{% endif %}</div>
+    {% if data and not data.servers %}<span class="pill">chưa thiết lập</span>{% endif %}</div>
   {% if down %}
     <p class="muted">Daemon không trả lời.</p>
   {% elif error %}
     <p class="muted">Không đọc được trạng thái cổng: {{ error }}</p>
   {% else %}
     <p class="small muted">Agent làm việc trên thư mục chung qua một cây làm việc dựng cho từng run (không có bản sao lâu dài trên máy); mỗi lần lưu
-      lên Không gian số trong vài giây, người sửa thì agent được báo ngay. Khoá cổng tạo ở Không gian số › Hồ sơ › Cổng cfharness (cho chính
-      tài khoản của bạn), hết hạn sau 180 ngày.</p>
+      lên Không gian số trong vài giây, người sửa thì agent được báo ngay. Tạo khoá ở Không gian số › Hồ sơ › Cổng cfharness (cho chính tài
+      khoản của bạn, chọn thư mục/workspace cấp cho hub) rồi dán vào đây — mọi thư mục được cấp dùng được ngay, không cần lệnh nào.</p>
     {% for s in data.servers %}
-      <p><b>{{ s.name }}</b> · <code>{{ s.url }}</code> · tài khoản {{ s.user or '?' }} · khoá <code>{{ s.key_prefix or '?' }}…</code> ({{ s.scope }})
-        <span class="pill {{ 'ok' if s.state == 'ok' else ('warn' if s.state in ('offline', 'key_expiring', 'unknown') else 'danger') }}">{{ s.state }}</span>
-        {% if s.expiry and s.expiry.expires_at %}<span class="small {{ 'pill warn' if s.expiry.warn else 'muted' }}">hết hạn {{ s.expiry.expires_at }} (còn {{ s.expiry.days_left }} ngày)</span>{% endif %}
+      {% set tone = 'ok' if s.state == 'ok' else ('warn' if s.state in ('offline', 'key_expiring', 'unknown') else 'danger') %}
+      <p><b>{{ s.name }}</b> · <code>{{ s.url }}</code> · tài khoản {{ s.user or '?' }} · khoá <code>{{ s.key_prefix or '?' }}…</code>{% if s.scope == 'ro' %} (chỉ đọc){% endif %}
+        <span class="pill {{ tone }}">{{ s.label or s.state }}</span>{% if s.checked %} <span class="small muted">kiểm tra lúc {{ s.checked }}</span>{% endif %}
+        {% if s.expiry and s.expiry.date and s.state not in ('auth_failed',) %}<span class="small {{ 'pill warn' if s.expiry.warn else 'muted' }}">hết hạn {{ s.expiry.date }} (còn {{ s.expiry.days }} ngày)</span>{% endif %}
+        {{ m.act("filehub_lane_test", "Thử kết nối", {"server": s.name}, "btn sm", next="/settings#filehub-lane") }}
         {{ m.act("filehub_lane_disable", "Xoá khoá", {"server": s.name}, "btn ghost sm", next="/settings#filehub-lane") }}</p>
+      {% if s.hint %}<p class="small"><span class="pill {{ tone }}">{{ m.icon('alert') }}cần làm</span> {{ s.hint }}</p>{% endif %}
     {% endfor %}
-    <details class="small" {% if not data.servers %}open{% endif %}><summary>{{ 'Thiết lập cổng' if not data.servers else 'Thay khoá / thêm cổng' }}</summary>
+    <details class="small" {% if not data.servers %}open{% endif %}><summary>{{ 'Dán khoá cổng' if not data.servers else 'Thay khoá / thêm cổng' }}</summary>
       <form method="post" action="/do/filehub_lane_setup" class="row gap wrap-row" autocomplete="off">
         <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#filehub-lane">
-        <label class="small">Tên <input name="server" required maxlength="32" value="qltm" pattern="[a-z0-9_]{1,32}" spellcheck="false"></label>
-        <label class="small">Địa chỉ cổng <input name="url" required maxlength="40" value="http://127.0.0.1:8223" spellcheck="false"></label>
-        <button type="submit" class="btn sm">Tiếp — nhập khoá ở bước sau</button>
+        <details class="small"><summary>Nâng cao (Không gian số chạy ở cổng khác)</summary>
+          <label class="small">Địa chỉ cổng <input name="url" maxlength="40" placeholder="http://127.0.0.1:8223" spellcheck="false"></label>
+          <label class="small">Tên cổng (tuỳ chọn) <input name="server" maxlength="32" pattern="[a-z0-9_]{1,32}" placeholder="theo Không gian số" spellcheck="false"></label>
+          <span class="muted">Để trống địa chỉ: hub thử 8223 rồi 8233.</span>
+        </details>
+        <button type="submit" class="btn sm">Tiếp — dán khoá ở bước sau</button>
       </form></details>
     {% if data.folders %}
-    <table class="tbl small"><thead><tr><th>Thư mục (chế độ lane)</th><th>Cổng</th><th>Bản sao cũ</th></tr></thead><tbody>
+    <table class="tbl small"><thead><tr><th>Thư mục chung (qua cổng)</th><th>Giao việc</th><th>Ghi chú</th></tr></thead><tbody>
     {% for f in data.folders %}
-      <tr><td><b>{{ f.name }}</b> <code>{{ f.workspace }}</code></td><td>{{ f.server or '?' }}</td>
-        <td>{% if f.old_copy %}<code>{{ f.old_copy }}</code> — hub không xoá; kiểm rồi tự xoá{% else %}—{% endif %}
-          {{ m.act("filehub_switch_mode", "Về đồng bộ cũ", {"name": f.name, "to": "sync"}, "btn ghost sm", next="/settings#filehub-lane") if f.old_copy }}</td></tr>
+      <tr><td><b>{{ f.name }}</b>{% if f.kind == 'workspace' %} <span class="muted">(toàn bộ workspace)</span>{% endif %}</td><td><code>{{ f.workspace }}</code></td>
+        <td>{% if f.revoked %}<span class="pill danger">mất quyền</span> khoá không còn được cấp gốc này (tệp không bị xoá) — cấp lại ở Không gian số › Hồ sơ › Cổng cfharness{% endif %}
+          {% if f.old_copy %}bản sao cũ <code>{{ f.old_copy }}</code> — hub không xoá; kiểm rồi tự xoá
+          {{ m.act("filehub_switch_mode", "Về đồng bộ cũ", {"name": f.name, "to": "sync"}, "btn ghost sm", next="/settings#filehub-lane") }}{% endif %}
+          {% if not f.revoked and not f.old_copy %}—{% endif %}</td></tr>
     {% endfor %}
     </tbody></table>
     {% endif %}
     {% if sync_folders and data.servers %}
-      <p class="small">Thư mục đang đồng bộ 2 chiều — chuyển sang cổng:
-      {% for n in sync_folders %}{{ m.act("filehub_switch_mode", n, {"name": n, "to": "lane"}, "btn ghost sm", next="/settings#filehub-lane") }}{% endfor %}</p>
+      <p class="small"><span class="pill warn">đồng bộ kiểu cũ</span> Thư mục còn đồng bộ về máy (bản sao trên máy) — hub giữ nguyên tới khi bạn
+      chuyển sang cổng:
+      {% for n in sync_folders %}{{ m.act("filehub_switch_mode", "Chuyển «" ~ n ~ "» sang cổng", {"name": n, "to": "lane"}, "btn ghost sm", next="/settings#filehub-lane") }}{% endfor %}</p>
     {% endif %}
+    {% set hnext = "/settings#filehub-lane" %}
+    {% for b in batches or [] %}{% include "_held_batch.html" %}{% endfor %}
     {% for o in data.orphans %}
-      <p class="small"><span class="pill warn">{{ m.icon('alert') }}chưa đẩy được</span> run {{ o.run_id }} ({{ o.folder }}): {{ o.count }} thay đổi
-        {% for p in o.paths[:5] %}<code>{{ p }}</code>{{ ", " if not loop.last }}{% endfor %}
-        {{ m.act("filehub_lane_orphan", "Đẩy lại", {"tree": o.tree, "action": "push"}, "btn sm", next="/settings#filehub-lane") }}
-        {{ m.act("filehub_lane_orphan", "Bỏ", {"tree": o.tree, "action": "drop"}, "btn ghost sm", next="/settings#filehub-lane") }}</p>
-    {% endfor %}
-    {% for w in data.runs if w.held %}
-      <p class="small"><span class="pill warn">{{ m.icon('alert') }}{{ w.held }} mục xoá đang chờ duyệt</span> agent {{ w.agent_id }}
-        ({{ w.folder }}{{ '/' ~ w.sub if w.sub }}) xoá nhiều mục cùng lúc — tệp vẫn còn trên Không gian số tới khi bạn quyết.
-        {{ m.act("filehub_lane_deletes", "Cho xoá", {"root_id": w.root_id}, "btn sm", next="/settings#filehub-lane") }}
-        {{ m.act("filehub_lane_deletes", "Không xoá", {"root_id": w.root_id, "discard": "1"}, "btn ghost sm", next="/settings#filehub-lane") }}</p>
+      {% set other = (o['items'] or [])|rejectattr('held')|list %}
+      {% set n_other = (o.count or 0) - (o.held or 0) %}
+      {% if n_other > 0 %}
+      <div class="small"><p><span class="pill warn">{{ m.icon('alert') }}chưa làm được trên Không gian số</span> run {{ o.run_id }}{% if o.agent_id %} của agent
+        {{ o.agent_id }}{% endif %} ({{ o.folder }}) đã kết thúc, còn {{ n_other }} thay đổi chưa lên Không gian số:</p>
+        <ul class="small">{% for x in other[:10] %}<li>{{ x.label }} {% if x.from %}<code>{{ x.from }}</code> → {% endif %}<code>{{ x.path }}</code></li>{% endfor %}</ul>
+        {% if n_other > 10 %}<p class="small muted">… và {{ n_other - 10 }} thay đổi nữa (trang xác nhận liệt kê đủ)</p>{% endif %}
+        <p>{{ m.act("filehub_lane_orphan", "Làm lại trên Không gian số", {"tree": o.tree, "action": "push"}, "btn sm", next=hnext) }}
+        {{ m.act("filehub_lane_orphan", "Bỏ thay đổi của agent", {"tree": o.tree, "action": "drop"}, "btn ghost sm", next=hnext) }}</p></div>
+      {% endif %}
     {% endfor %}
     {% if data.runs %}<p class="small muted">Đang làm việc: {% for w in data.runs %}{{ w.agent_id }} ({{ w.folder }}{{ '/' ~ w.sub if w.sub }}, {{ w.mode }}){{ ", " if not loop.last }}{% endfor %}</p>{% endif %}
   {% endif %}

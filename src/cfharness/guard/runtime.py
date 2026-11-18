@@ -320,6 +320,35 @@ def home_persistence_dirs() -> list[str]:
                                   ".zprofile", ".zshenv", ".zlogin", ".claude", ".claude.json", ".local/bin")] + windows_autorun_dirs()
 
 
+LANE_TREE_PREFIX = "lane-"  # cây làm việc lane: `<HUB_HOME>/agents/<agent>/workspaces/lane-<tree>` (filehub/lane/service.tree_path)
+
+
+def lane_tree_dirs(hub_home: Path, *, cwd: Path | str | None = None) -> list[str]:
+    """Cây làm việc lane của run KHÁC (mọi agent) đang có trên đĩa lúc dựng settings — run không đọc/ghi được cây của run khác
+    (dữ liệu thư mục chung theo phạm vi/quyền của run kia). Bỏ cây của chính run (cwd). Cây tạo SAU lúc spawn: classifier
+    `lane_other_tree` chặn (kiểm mỗi lần gọi tool). Đường dẫn cụ thể (không glob): denyRead cụ thể thắng allowRead rộng hơn (spike)."""
+    own: set[str] = set()
+    if cwd is not None:
+        own = {str(cwd).rstrip("/"), os.path.realpath(str(cwd)).rstrip("/")}
+    out: list[str] = []
+    for h in dict.fromkeys([str(hub_home), os.path.realpath(hub_home)]):
+        try:
+            agents = [a for a in (Path(h) / "agents").iterdir() if a.is_dir()]
+        except OSError:
+            continue
+        for a in agents:
+            try:
+                trees = [t for t in (a / "workspaces").iterdir() if t.name.startswith(LANE_TREE_PREFIX)]
+            except OSError:
+                continue
+            for t in trees:
+                p = str(t).rstrip("/")
+                if p in own or os.path.realpath(p).rstrip("/") in own:
+                    continue
+                out.append(p)
+    return list(dict.fromkeys(out))
+
+
 def other_default_homes(hub_home: Path) -> list[str]:
     """Home mặc định dưới ~ (tên mới `.cfharness` + tên cũ `.cfharness`) + hub home đã đăng ký (registry) KHÔNG phải/không chứa/
     không nằm trong home đang dùng."""
@@ -454,6 +483,9 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
 
     deny_w += app_data_dirs()
     deny_r += app_data_dirs()
+    lanes = lane_tree_dirs(home, cwd=cwd)  # cây lane của run khác — không đọc/ghi
+    deny_w += lanes
+    deny_r += lanes
     deny_r += [str(x) for x in sb_cfg.get("extra_deny_read") or []]
     socks = [str(x) for x in sb_cfg.get("allow_unix_sockets") or []]
     if sb_cfg.get("allow_ssh_agent", False) and os.environ.get("SSH_AUTH_SOCK"):

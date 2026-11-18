@@ -716,3 +716,79 @@ def test_logs_cli_human_only(env):
     for cmd in ("cfharness logs level", "cfharness logs level cfharness debug --for 2h", "cfharness daemon dump-stacks"):
         v = bash(env, cmd)
         assert v.forbidden, (cmd, v.rule)
+
+
+# --------------------------------------------------------------------------- cây lane của run KHÁC (plan-filehub-lane §10)
+def _lane_ctx(env):
+    from dataclasses import replace
+
+    hub = env["hub"]
+    own = hub / "agents" / "w1" / "workspaces" / "lane-r_own"
+    other = hub / "agents" / "w2" / "workspaces" / "lane-r_other"
+    same_agent = hub / "agents" / "w1" / "workspaces" / "lane-r_sibling"
+    for p in (own, other, same_agent):
+        (p / "Báo cáo").mkdir(parents=True, exist_ok=True)
+        (p / "Báo cáo" / "q3.md").write_text("x")
+    return replace(env["ctx"], cwd=own), own, other, same_agent
+
+
+def test_lane_other_tree_forbidden(env):
+    from cfharness.guard.classifier import NEVER_DOWNGRADE_RULES
+    from cfharness.guard.service import TRUST_NEVER_RULES
+
+    ctx, own, other, sib = _lane_ctx(env)
+    bad = [
+        ("Read", {"file_path": str(other / "Báo cáo" / "q3.md")}),
+        ("Read", {"file_path": str(sib / "Báo cáo" / "q3.md")}),
+        ("Read", {"file_path": "../lane-r_sibling/Báo cáo/q3.md"}),
+        ("Grep", {"pattern": "x", "path": str(other)}),
+        ("Glob", {"pattern": str(other) + "/**/*.md"}),
+        ("Glob", {"pattern": "*.md", "path": str(other)}),
+        ("Write", {"file_path": str(other / "moi.md"), "content": "x"}),
+        ("Edit", {"file_path": str(sib / "Báo cáo" / "q3.md"), "old_string": "x", "new_string": "y"}),
+        ("Bash", {"command": f"cat '{other}/Báo cáo/q3.md'"}),
+        ("Bash", {"command": "cat ../lane-r_sibling/Báo\\ cáo/q3.md"}),
+        ("Bash", {"command": f"cp -r {other} /tmp/x"}),
+        ("Bash", {"command": f"ls {env['hub']}/agents/w2/workspaces/lane-r_other"}),
+        ("Bash", {"command": f"rm -rf {sib}"}),
+    ]
+    missed = [(t, ti, v.rule) for t, ti in bad if not ((v := classify(t, ti, ctx)).forbidden and v.rule == "lane_other_tree")]
+    assert not missed, missed
+    ok = [
+        ("Read", {"file_path": str(own / "Báo cáo" / "q3.md")}),
+        ("Read", {"file_path": "Báo cáo/q3.md"}),
+        ("Write", {"file_path": str(own / "moi.md"), "content": "x"}),
+        ("Bash", {"command": "cat 'Báo cáo/q3.md'"}),
+        ("Bash", {"command": f"ls {own}"}),
+        ("Bash", {"command": "echo plane-x airplane-lane-y"}),
+    ]
+    for t, ti in ok:
+        assert classify(t, ti, ctx).rule != "lane_other_tree", ti
+    # run KHÔNG phải lane (scratch) cũng không đọc được cây lane nào
+    from dataclasses import replace
+
+    scratch = env["hub"] / "agents" / "w1" / "workspaces" / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    v = classify("Read", {"file_path": str(own / "Báo cáo" / "q3.md")}, replace(ctx, cwd=scratch))
+    assert v.forbidden and v.rule == "lane_other_tree"
+    assert "lane_other_tree" in TRUST_NEVER_RULES and "lane_other_tree" in NEVER_DOWNGRADE_RULES
+
+
+def test_lane_other_tree_sandbox_deny(env):
+    from cfharness.confine import Confine, confine_only_sandbox
+    from cfharness.guard.runtime import lane_tree_dirs, sandbox_settings
+
+    ctx, own, other, sib = _lane_ctx(env)
+    hub = env["hub"]
+    sock = hub / "hub.sock"
+    sb = sandbox_settings(hub, sock, {}, cwd=own)
+    fs = sb["filesystem"]
+    for p in (str(other), str(sib)):
+        assert p in fs["denyRead"] and p in fs["denyWrite"], p
+    assert str(own) not in fs["denyRead"] and str(own) not in fs["denyWrite"]
+    assert not any("*" in p and "lane-" in p for p in fs["denyRead"])  # đường dẫn cụ thể (glob không mở lại được allowRead)
+    assert set(lane_tree_dirs(hub)) >= {str(own), str(other), str(sib)}  # không có cwd → chặn mọi cây
+    conf = Confine(root=str(env["ws"]), read_allow=())
+    sb2 = confine_only_sandbox(conf, hub, sock, {}, cwd=own)
+    assert str(other) in sb2["filesystem"]["denyRead"] and str(other) in sb2["filesystem"]["denyWrite"]
+    assert str(own) not in sb2["filesystem"]["denyRead"]

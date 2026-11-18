@@ -202,13 +202,17 @@ class OrchestrationRpc:
                 out["patch"] = Path(diff["patch_path"]).read_text(encoding="utf-8")
         return out
 
-    def run_revert(self, p: dict[str, Any]) -> dict[str, Any]:
-        """`cfharness run revert <run>` (FR-RT-12): áp ngược diff của run, chỉ khi file không bị sửa tiếp."""
+    def run_revert(self, p: dict[str, Any]) -> Any:
+        """`cfharness run revert <run>` (FR-RT-12): áp ngược diff của run, chỉ khi file không bị sửa tiếp.
+        Run lane (diff kind=lane): hoàn tác TRÊN Không gian số bằng phiên bản/thùng rác (`LaneService.revert_run`) — trả coroutine
+        (daemon chờ); nhánh git/dir giữ đồng bộ."""
         from ..workspace import revert
 
         run = self._run(_req(p, "id"))
         diff = run.get("diff")
-        if (run.get("run_opts") or {}).get("filehub") or (diff or {}).get("filehub"):  # cả chế độ lane (diff kind=lane)
+        if (diff or {}).get("kind") == "lane":
+            return self._lane_revert(run, p)
+        if (run.get("run_opts") or {}).get("filehub") or (diff or {}).get("filehub"):  # đồng bộ cũ (sync): không có phiên bản ở hub
             from ..workspace import FILEHUB_NO_REVERT
 
             raise HubError(FILEHUB_NO_REVERT)
@@ -233,6 +237,27 @@ class OrchestrationRpc:
         if not p.get("dry_run"):
             self.hub.store.update_run(run["id"], {"reverted_at": now_iso()})
             ev = make_event("run.reverted", run["agent_id"], {"files": res["reverted"], "warnings": res["warnings"]}, run_id=run["id"])
+            ev.task_id, ev.team_id = run.get("task_id"), run.get("team_id")
+            self.hub.publish(ev)
+        return {"run_id": run["id"], **res}
+
+    async def _lane_revert(self, run: dict[str, Any], p: dict[str, Any]) -> dict[str, Any]:
+        if run.get("reverted_at"):
+            raise Conflict(f"run {run['id']} đã được revert lúc {run['reverted_at']}")
+        busy = self.hub.store.conn.execute(
+            "SELECT id, status FROM runs WHERE session_id=? AND status IN ('queued','running','waiting_human') LIMIT 1", (run.get("session_id"),)
+        ).fetchone()
+        if busy:
+            raise Conflict(f"session của run còn đang chạy (run {busy[0]}, {busy[1]}) — dừng trước khi revert")
+        fh = getattr(self.hub, "filehub", None)
+        lane = getattr(fh, "lane", None) if fh is not None else None
+        if lane is None:
+            raise HubError("cổng cfharness chưa được cấu hình — không hoàn tác được run lane")
+        res = await lane.revert_run(run, dry_run=bool(p.get("dry_run")))
+        if not p.get("dry_run"):
+            self.hub.store.update_run(run["id"], {"reverted_at": now_iso()})
+            ev = make_event("run.reverted", run["agent_id"], {"files": res["reverted"][:200], "warnings": res["warnings"], "lane": True},
+                            run_id=run["id"])
             ev.task_id, ev.team_id = run.get("task_id"), run.get("team_id")
             self.hub.publish(ev)
         return {"run_id": run["id"], **res}
