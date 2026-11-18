@@ -337,8 +337,33 @@ def restore_db(home: Path, archive: Path, log) -> str:
             shutil.move(str(side), f"{aside}{suffix}")
     os.replace(tmp, db)
     os.chmod(db, 0o600)
+    restore_anchors(home, archive, aside, log)
     log.write(f"đã khôi phục hub.db từ {archive.name} (DB trước đó giữ ở {aside.name})\n")
     return str(aside)
+
+
+ANCHORS = "audit-anchors.jsonl"  # = audit_chain.ANCHORS_FILE (helper không import cfharness)
+
+
+def restore_anchors(home: Path, archive: Path, aside: Path, log) -> None:
+    """L4: bản neo chuỗi băm audit phải khớp hub.db vừa khôi phục — lấy bản trong cùng bản sao lưu; bản sao lưu không có (trước L4) →
+    chuyển file hiện có sang `<aside>.audit-anchors.jsonl` (neo trỏ tới dòng DB khôi phục không có → kiểm sẽ báo nhầm là bị xoá)."""
+    cur = home / ANCHORS
+    try:
+        if cur.exists() or cur.is_symlink():
+            shutil.move(str(cur), f"{aside}.{ANCHORS}")
+        with tarfile.open(archive, "r:gz") as tf:
+            try:
+                m = tf.getmember(f"home/{ANCHORS}")
+            except KeyError:
+                return
+            src = tf.extractfile(m)
+            if not m.isreg() or src is None:
+                return
+            with os.fdopen(os.open(cur, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+                shutil.copyfileobj(src, f)
+    except (OSError, tarfile.TarError) as e:  # không chặn quay về; tệ nhất là audit verify báo bản neo lệch
+        log.write(f"không khôi phục được {ANCHORS}: {e}\n")
 
 
 def restore_db_if_migrated(a: argparse.Namespace, log) -> dict[str, Any]:

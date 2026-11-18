@@ -786,7 +786,7 @@ Xoá trong thư mục chung = `write` (chỉ báo sau run). Event filehub chỉ 
 + giao việc `filehub:`; thêm thao tác ghi filehub → HUMAN_ONLY + ca trong `tests/test_sec_auth.py`/`test_manager_security.py`. Test: server GIẢ
 `tests/fake_kgs_lane.py` + `lane_fake.py` (`test_lane_*.py`, `test_filehub_h5.py`, `test_web_filehub.py`) — đổi §C → sửa fake trong CÙNG PR.
 
-## Log hệ thống — `docs/dev-notes/plan-logging.md` (L1 nền tảng, L2 req_id, L3 audit đầy đủ, L6 công cụ debug; L4/L5/L7/L8: req_id, audit đầy đủ, chuỗi băm, cảnh báo, trace, gói chẩn đoán)
+## Log hệ thống — `docs/dev-notes/plan-logging.md` (L1 nền tảng, L2 req_id, L3 audit đầy đủ, L4 chuỗi băm audit, L6 công cụ debug; L4/L5/L7/L8: req_id, audit đầy đủ, chuỗi băm, cảnh báo, trace, gói chẩn đoán)
 | Module | Vai trò |
 |---|---|
 | `logs.py` | `setup_logging(proc, filename, shared)` JSONL mọi tiến trình (daemon `hub.log`, web `web.jsonl`, MCP `mcp.jsonl`), handler root cho thư viện (không lặp), che secret; `LevelController`/`level_loop` (config `logs.level|levels` + level tạm `hub_state logs.temp_levels`); `install_crash_handlers` (excepthook, faulthandler `logs/faults.log`, SIGUSR1), `asyncio_exception_handler`, `ERROR_COUNTS` |
@@ -794,6 +794,7 @@ Xoá trong thư mục chung = `write` (chỉ báo sau run). Event filehub chỉ 
 | `log_query.py` | L6: đọc `*.jsonl` + `hub.log` (cả `.N`, `.gz`) lọc THEO TRƯỜNG (chuỗi con chỉ là lọc thô trước parse), gộp theo ts, trần dòng/byte (file mới trước, file lớn đọc đuôi, bỏ file có mtime trước `since`); `follow` (`-f`); `ErrorCounter` (handler WARNING, thùng 1 phút/24 h, gắn trong `setup_logging` → `hub.status.log_errors`); `recent_errors` (doctor "Lỗi gần đây": gom logger + `msg_template`) |
 | `trace_view.py` | L6: dòng thời gian audit (req_id/run_id) + log + event TÓM TẮT (`EVENT_KEYS`, giá trị chỉ từ khoá/id ngắn; bỏ level detail/debug) + guard (không input) + approval (không input/lý do) + run con (`parent_run_id`, `continued_in_run_id`, lệnh con qua `parent_req_id` trong log); event theo req không gắn run = cửa sổ rowid tìm nhị phân theo ts (không index `events.req_id`) |
 | `web/debug_pages.py` | L6: `/logs` "Nhật ký hệ thống" + `/trace/{id}` (chỉ đọc, autoescape; `/audit` link req_id, trang run link "Dòng thời gian") |
+| `audit_chain.py` | L4: chuỗi băm `audit_log` (v30 `prev_hash`/`row_hash`, `CHAIN_COLUMNS` = HỢP ĐỒNG), `insert_chained` (writer DUY NHẤT của `audit_log`: `AuditLog.record`, `hub_freeze` ngoại tuyến, `hub_transfer` trên stage), `verify_chain`/`verify_db` (kết nối chỉ đọc), `AuditChain` (`hub.audit_chain`: neo `HUB_HOME/audit-anchors.jsonl` + metadata admin `audit.anchor` + event `audit.anchored` khi `audit.anchor_notify`; kiểm đuôi lúc khởi động; event `audit.tamper_detected`). RPC `audit.verify` (HUMAN_ONLY, luồng phụ), CLI `cfharness audit verify [--since-id N] [--json]` (mã thoát 1 khi gãy) |
 | `aiotasks.py` | `track(task, keep)` / `spawn(coro)`: tác vụ nền "bắn rồi quên" có log lỗi — dùng thay cho `keep.add(t); t.add_done_callback(keep.discard)` |
 | `trace.py` | L2: mã yêu cầu `req_id` (`r_<ULID>`), contextvar `REQ_CTX` {req_id, parent_req_id, channel, principal}, `bind`/`child`/`traced` (điểm vào nội bộ: chat, nhịp điều phối viên, lịch, dispatcher, auto-resume), `outgoing` (client gắn `params._trace`), `accept` (daemon: chỉ nhận đúng định dạng), `TraceFilter` (log). Daemon trả `_meta.req_id` trong MỌI phản hồi (`RpcError.req_id`, CLI in "mã yêu cầu"); access log `cfharness.rpc` (đọc = DEBUG, ghi/lỗi = INFO, denied/`rpc.slow` = WARNING; `logs.slow_rpc_ms`) |
 
@@ -822,3 +823,10 @@ Công cụ debug (L6): agent KHÔNG đọc được `HUB_HOME/logs/` — sandbox
 event, input tool/guard/approval, `data` của audit — thêm trường event vào tóm tắt = thêm vào `trace_view.EVENT_KEYS` (giá trị vẫn qua `_SAFE`). Log trả về
 qua RPC che lại theo giá trị secret (`mask_values`); terminal qua `termsafe.one_line`, web autoescape (không `|safe`). Log có thêm trường `parent_req_id`.
 Test: `tests/test_debug_tools.py`.
+Chuỗi băm (L4, migration **v30**): MỌI INSERT vào `audit_log` qua `audit_chain.insert_chained` (đọc dòng cuối + ghi trong CÙNG transaction, id cấp tường minh
+→ id liên tiếp trong vùng chuỗi; test quét mã nguồn đòi `INSERT INTO audit_log` chỉ có ở `audit_chain.py`). Đổi `CHAIN_COLUMNS` = thay đổi phá vỡ; cột audit
+mới KHÔNG tự vào chuỗi. Dòng trước v30 = NULL (không kiểm), dòng chuỗi đầu = `genesis:<sha256 dòng cuối trước v30>`. Bản neo: `audit-anchors.jsonl` ∈
+`backup.INCLUDE_FILES` (đi cùng bản sao lưu + gói xuất clone/move → khôi phục/nhập ra neo khớp DB; `update_helper.restore_anchors` khi quay về DB trước cập
+nhật), ∈ `HUB_WRITE_DENY_NAMES` (sandbox); không neo khi đang sao lưu/xuất gói (`AuditChain._busy` — đọc đuôi TRƯỚC khi kiểm). Không neo vào
+`integrity_baseline` (cùng hub.db — không thêm bảo vệ). Payload `audit.tamper_detected` CHỈ id + mã lý do; báo lúc khởi động chống lặp theo chữ ký
+(`hub_state audit.tamper_reported`). Nhánh `audit` ∈ `integrity.SECURITY_KEYS`. Test: `tests/test_audit_chain.py`.

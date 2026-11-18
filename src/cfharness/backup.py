@@ -56,7 +56,7 @@ BACKUP_DIRNAME = "backups"
 KINDS = ("manual", "auto", "pre-update", "pre-restore")
 SAFETY_KINDS = ("pre-update", "pre-restore")
 # Mục cấp 1 được sao lưu (ngoài hub.db). Mục khác của HUB_HOME KHÔNG vào bản sao.
-INCLUDE_FILES = ("config.yaml",)
+INCLUDE_FILES = ("config.yaml", "audit-anchors.jsonl")  # L4: bản neo chuỗi băm audit đi cùng hub.db (khôi phục → neo khớp DB khôi phục)
 INCLUDE_DIRS = ("policy", "agents", "global", "teams", "ledger", "snapshots", "mcp", "trash", "prompts")
 # Trong agents/<id>/: thư mục chạy/tạm — không sao lưu, và khôi phục không đụng tới
 AGENT_SKIP = ("runtime", "workspaces", ".tier_overlay")

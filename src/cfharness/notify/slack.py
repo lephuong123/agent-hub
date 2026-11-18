@@ -63,6 +63,19 @@ def format_message(ev: HubEvent) -> str | None:
         done = "đã khôi phục bản chuẩn" if (p.get("restored") or p.get("moved")) else "cần bạn kiểm tra"
         return (f"🚨 `{what}` bị sửa ngoài hub — {done}: `{_clip(', '.join(str(f) for f in files if f) or str(p), 300)}`\n"
                 "Nếu chính bạn sửa: `cfharness guard integrity accept`")
+    if ev.type == "audit.tamper_detected":  # L4 (audit_chain.py): payload chỉ id + mã lý do — lọc lại kiểu trước khi in
+        parts = []
+        if isinstance(p.get("break_id"), int):
+            parts.append(f"chuỗi băm gãy ở dòng #{p['break_id']} ({_clip(p.get('reason'), 20)})")
+        for a in (p.get("anchors") or [])[:3]:
+            if isinstance(a, dict) and isinstance(a.get("id"), int):
+                parts.append(f"bản neo dòng #{a['id']} {'không còn' if a.get('reason') == 'anchor_missing' else 'không khớp'}")
+        return ("🚨 Nhật ký kiểm toán bị sửa/xoá ngoài hub: " + ("; ".join(parts) or "chuỗi băm không hợp lệ")
+                + "\nKiểm lại: `cfharness audit verify`")
+    if ev.type == "audit.anchored":  # L4: bản neo định kỳ (chỉ khi audit.anchor_notify bật) — giữ tin này làm bằng chứng ngoài máy
+        if not isinstance(p.get("last_id"), int) or not isinstance(p.get("row_hash"), str):
+            return None
+        return f"🔗 Neo nhật ký kiểm toán: dòng #{p['last_id']} · băm `{_clip(p['row_hash'], 64)}`"
     if ev.type == "admin.alert":  # quản trị máy (admin_watch.py): payload chỉ id/enum — lọc lại trước khi in
         from ..admin_overview import USER_RE
         from ..admin_watch import ALERT_VI

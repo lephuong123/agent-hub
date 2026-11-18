@@ -953,6 +953,13 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS audit_log_principal_ts ON audit_log(principal, ts);
     CREATE INDEX IF NOT EXISTS audit_log_outcome_ts ON audit_log(outcome, ts);
     """,
+    # v30 — chuỗi băm audit (L4, docs/dev-notes/plan-logging.md §4 A6; audit_chain.py): `row_hash = sha256(prev_hash ‖ canonical_json(các
+    # cột cố định))`. Dòng trước v30 giữ NULL (không kiểm); dòng chuỗi đầu tiên nối `genesis:<sha256 dòng cuối trước v30>`. Trigger
+    # `audit_no_update` (BEFORE UPDATE, mọi cột) đã chặn sửa cả hai cột mới — không cần trigger riêng.
+    """
+    ALTER TABLE audit_log ADD COLUMN prev_hash TEXT;
+    ALTER TABLE audit_log ADD COLUMN row_hash TEXT;
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.

@@ -128,6 +128,10 @@ class Hub:
         _attach_admin_policy(self)
         _attach_admin_audit(self)
         _attach_admin_watch(self)
+        # L4: chuỗi băm audit — neo định kỳ/khi dừng vào HUB_HOME/audit-anchors.jsonl (+ metadata admin), kiểm đuôi lúc khởi động — audit_chain.py
+        from .audit_chain import attach as _attach_audit_chain
+
+        _attach_audit_chain(self)
         self._bg: list[Any] = []
         # hardening SEC (H-02 lớp 3): toàn vẹn policy/ + config.yaml + hub.db (`hub.integrity`) — guard/integrity.py. GIỮ CUỐI __init__
         from .guard.integrity import attach as _attach_integrity
@@ -173,6 +177,10 @@ class Hub:
         except Exception:  # pragma: no cover
             log.exception("không dọn được runtime/")
         self.integrity.start()  # SEC: so policy/ với bản chuẩn + vòng kiểm nền
+        try:  # L4: kiểm đuôi chuỗi băm audit (sửa/xoá khi daemon dừng) + neo + vòng neo định kỳ
+            self.audit_chain.start()  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover
+            log.exception("không khởi động được chuỗi băm audit")
         try:  # hub clone PR5: lần đầu lên sau `hub import` → viết lại đường dẫn máy cũ trong tri thức qua Ledger (actor import)
             from .import_followups import process as _import_followups
 
@@ -244,6 +252,7 @@ class Hub:
         if getattr(self, "mcp_proxy", None) is not None:
             await self.mcp_proxy.stop()  # type: ignore[attr-defined]
         self.integrity.stop()
+        self.audit_chain.stop()  # type: ignore[attr-defined]  # L4: neo dòng audit cuối trước khi đóng DB
         for t in self._bg:
             t.cancel()
         await self.notifier.stop()

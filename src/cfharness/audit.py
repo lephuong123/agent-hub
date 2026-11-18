@@ -6,6 +6,8 @@
 - `channel`: `cli` | `tui` | `mcp:<tên client>` | `runtime` | `hook`; `actor`: `user` (Q-11 một người dùng)
   | `agent:<id>` | `hub`.
 
+L4: mỗi dòng nối vào chuỗi băm (`audit_chain.insert_chained` — writer DUY NHẤT của `audit_log`; neo + kiểm ở `audit_chain.AuditChain`).
+
 Không phát event cho mỗi dòng audit (tránh nhân đôi luồng); riêng tool ghi có event `tool.write`
 (phát trong `mcp_client.wiring`).
 """
@@ -14,8 +16,10 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from typing import TYPE_CHECKING, Any, Callable
 
+from .audit_chain import has_chain, insert_chained
 from .redact import redact
 
 if TYPE_CHECKING:
@@ -47,6 +51,8 @@ class AuditLog:
         self.mask = mask or (lambda s: s)
         # người nghe sau mỗi dòng (vd admin_audit: bản METADATA cho người quản trị máy) — lỗi của tap không ảnh hưởng ghi audit
         self.taps: list[Callable[[str, str, str, dict[str, Any]], None]] = []
+        self._lock = threading.RLock()
+        self._chained: bool | None = None  # L4: bảng đã có cột chuỗi băm (v30) — hỏi PRAGMA một lần
 
     def record(
         self,
@@ -82,19 +88,20 @@ class AuditLog:
         from .store import now_iso
         from .trace import current_req_id
 
-        cur = self.store.conn.execute(
-            "INSERT INTO audit_log (ts, kind, actor, channel, agent_id, run_id, target, summary, data, req_id, outcome, error_code, duration_ms,"
-            " principal, declared_channel, session_ref, ip, caller_run_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (now_iso(), kind, actor, channel, agent_id, run_id, target, self.mask(summary or "")[:500] or None, payload, current_req_id(),
-             outcome, (str(error_code)[:40] if error_code else None), (round(float(duration_ms), 1) if duration_ms is not None else None),
-             extra["principal"], extra["declared_channel"], extra["session_ref"], extra["ip"], extra["caller_run_id"]),
-        )
+        values = {"ts": now_iso(), "kind": kind, "actor": actor, "channel": channel, "agent_id": agent_id, "run_id": run_id,
+                  "target": (str(target) if target is not None else None), "summary": self.mask(summary or "")[:500] or None, "data": payload,
+                  "req_id": current_req_id(), "outcome": outcome, "error_code": (str(error_code)[:40] if error_code else None),
+                  "duration_ms": (round(float(duration_ms), 1) if duration_ms is not None else None), **extra}
+        with self._lock:  # L4: đọc dòng cuối + ghi trong cùng transaction (audit_chain.insert_chained); khoá chặn hai luồng của daemon chen nhau
+            if self._chained is None:
+                self._chained = has_chain(self.store.conn)
+            rid = insert_chained(self.store.conn, values, chained=self._chained)
         for tap in self.taps:
             try:
                 tap(kind, actor, channel, data)
             except Exception:  # pragma: no cover
                 log.exception("audit tap lỗi")
-        return int(cur.lastrowid or 0)
+        return rid
 
     def query(
         self,

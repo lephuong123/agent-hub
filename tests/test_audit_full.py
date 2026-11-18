@@ -80,7 +80,7 @@ def test_v29_columns_and_indexes(home):
     cols = {r[1] for r in d.hub.store.conn.execute("PRAGMA table_info(audit_log)")}
     for c in ("outcome", "error_code", "duration_ms", "principal", "declared_channel", "session_ref", "ip", "caller_run_id", "req_id"):
         assert c in cols, c
-    assert "row_hash" not in cols and "prev_hash" not in cols  # L4
+    assert "row_hash" in cols and "prev_hash" in cols  # L4 (v30)
     idx = {r[1] for r in d.hub.store.conn.execute("PRAGMA index_list(audit_log)")}
     assert {"audit_log_principal_ts", "audit_log_outcome_ts"} <= idx
     rid = d.hub.audit.record("x.test", None, None, {}, principal="os:me", outcome="ok")

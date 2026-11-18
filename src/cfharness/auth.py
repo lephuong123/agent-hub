@@ -135,6 +135,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "audit.record",
         # Đọc nhật ký kiểm toán (L3, plan-logging.md A5): lộ mọi thao tác, kênh, principal, ip của người — agent không đọc audit
         "audit.list",
+        # Kiểm chuỗi băm audit (L4, audit_chain.py): chỉ đọc nhưng lộ id/băm + có thể phát cảnh báo tamper — chỉ người
+        "audit.verify",
         # Quản trị máy (admin_rpc.py, docs/dev-notes/admin-users.md): đọc trạng thái/audit/chính sách user khác (admin), bật/gỡ ESTOP admin,
         # trang minh bạch phía user — mọi method admin.* chỉ người; phía admin còn kiểm nhóm cfharness-admin (admin_control.require_admin)
         "admin.users", "admin.user", "admin.estop_list", "admin.estop_set", "admin.alerts", "admin.audit", "admin.policy",
