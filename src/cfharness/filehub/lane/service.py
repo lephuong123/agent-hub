@@ -934,7 +934,7 @@ class LaneService:
     def _task_of(self, run_id: Any) -> str | None:
         try:
             return (self.hub.store.get_run(str(run_id)) or {}).get("task_id") if run_id else None
-        except Exception:  # pragma: no cover
+        except Exception:  # best-effort: chỉ để gắn task vào báo cáo — không đọc được run thì bỏ  # pragma: no cover
             return None
 
     @staticmethod
