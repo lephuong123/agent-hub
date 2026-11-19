@@ -41,7 +41,23 @@
     {% else %}<p class="muted small">Chưa có MCP server nào trong registry — <a href="/mcp">thêm ở trang MCP</a>.</p>{% endif %}
   </fieldset>
   <fieldset>
-    <legend>{{ '' if agent else '4. ' }}Giới hạn & ngân sách</legend>
+    <legend>{{ '' if agent else '4. ' }}Connector claude.ai</legend>
+    {% if connector_gaps %}<div class="flash error" role="alert">Agent được phép gọi tool của <b>{{ connector_gaps|join(', ') }}</b> nhưng connector đó chưa bật, nên run không nạp được các tool này. Tick connector đó ở bên dưới.</div>{% endif %}
+    {% if not guard_enabled %}<div class="flash error" role="alert">Guard đang tắt: run chạy như không có connector. Bật <code>guard.enabled</code> trong Cài đặt.</div>{% endif %}
+    <input type="hidden" name="connectors_form" value="1">
+    {% if connector_options %}
+    <div class="checks compact">
+      {% for o in connector_options %}
+      <label class="check"><input type="checkbox" name="connector" value="{{ o.name }}" {{ 'checked' if o.slug in v.connector_slugs }}><span><b>{{ o.name }}</b></span></label>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <label class="span2">Connector khác <input name="connectors_extra" value="{{ v.connectors_extra or '' }}" placeholder="vd: Notion, Slack (phân cách dấu phẩy)" autocomplete="off"></label>
+    <p class="hint">Tên giống trong Claude Code (<code>claude.ai Atlassian</code> → <code>Atlassian</code>). Không chọn gì = tắt. Khi bật, run nạp cấu hình user
+      <code>~/.claude</code>. Agent ghi bằng tài khoản thật của bạn (Jira, Slack…), chỉ thao tác xoá phải duyệt. MCP ngoài agent và ngoài danh sách này bị guard chặn.</p>
+  </fieldset>
+  <fieldset>
+    <legend>{{ '' if agent else '5. ' }}Giới hạn & ngân sách</legend>
     <div class="fgrid">
       <label>Ngân sách mỗi run ($) <input name="max_budget_usd_per_run" inputmode="decimal" value="{{ v.max_budget_usd_per_run or '' }}" placeholder="vd 0.5"></label>
       <label>Ngân sách mỗi ngày ($) <input name="budget_usd_per_day" inputmode="decimal" value="{{ v.budget_usd_per_day or '' }}" placeholder="không giới hạn"></label>
