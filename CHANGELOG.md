@@ -10,6 +10,13 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Web — bật connector claude.ai cho từng agent
+- Form sửa/tạo agent có phần **Connector claude.ai**: tick connector (gợi ý từ danh sách của điều phối viên, connector đang bật và connector
+  mà `allowed_tools` cần) hoặc gõ tên khác. Đổi connector phải xác nhận (agent ghi bằng tài khoản thật). Trước đây chỉ đặt được bằng
+  `cfharness agent edit <id> --connectors`.
+- Trang agent và form báo đỏ khi `allowed_tools` cho gọi `mcp__claude_ai_X__*` mà connector X chưa bật. Đây là nguyên nhân jira-ops và
+  jira-analyst không thấy Atlassian MCP (run khởi động với `--setting-sources ""` + `--strict-mcp-config` nên không nạp connector).
+
 ---
 
 ## v0.2.20 — 2026-11-18

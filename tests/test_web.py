@@ -911,3 +911,48 @@ async def test_rule_grant_button_two_steps_and_duration(held):
     g = env.hub.guard.rule_grants()[run["agent_id"]][rule]
     assert g["until"] and g["channel"] == "web" and g["approval_id"] == ap["id"]
     assert env.hub.approvals.get(other["id"])["status"] == "allowed"
+
+
+# =========================================================================== connector claude.ai cho agent thường (web)
+def test_agent_form_connectors_parsing():
+    from starlette.datastructures import FormData
+
+    from cfharness.web.app import connector_gaps
+
+    # client cũ (không có phần connector) → không đụng tới connectors
+    assert "connectors" not in (agent_changes(FormData([("name", "A")]), creating=False, from_template=False).get("tool_policy") or {})
+    f = FormData([("connectors_form", "1"), ("connector", "Atlassian"), ("connector", "Atlassian MCP"), ("connectors_extra", "Slack, Atlassian")])
+    assert agent_changes(f, creating=False, from_template=False)["tool_policy"]["connectors"] == ["Atlassian", "Atlassian MCP", "Slack"]
+    # không chọn gì = tắt (edit); tạo từ mẫu thì ô trống = theo mẫu
+    assert agent_changes(FormData([("connectors_form", "1")]), creating=False, from_template=False)["tool_policy"]["connectors"] is None
+    assert "connectors" not in (agent_changes(FormData([("connectors_form", "1")]), creating=True, from_template=True).get("tool_policy") or {})
+    tp = {"allowed_tools": ["mcp__claude_ai_Atlassian__*", "mcp__claude_ai_Atlassian_MCP__*", "ToolSearch", "mcp__hub-self__x"], "connectors": ["Atlassian"]}
+    assert connector_gaps(tp) == ["Atlassian_MCP"]
+    assert connector_gaps({"allowed_tools": ["mcp__claude_ai_Claude_Docs__read"]}) == ["Claude_Docs"]
+    assert connector_gaps(None) == []
+
+
+async def test_agent_connectors_set_from_web_with_confirmation(env):
+    await env.login()
+    env.hub.config.set("manager.capabilities.connectors", ["Claude Docs", "Atlassian MCP"])
+    env.hub.agents.create({"id": "jo", "name": "jo", "tool_policy": {"allowed_tools": ["mcp__claude_ai_Atlassian__*"]}})
+    # trang agent + form báo connector thiếu (lỗi khiến jira-ops không thấy Atlassian MCP)
+    r = await env.client.get("/agents/jo")
+    assert "thiếu: Atlassian" in r.text
+    r = await env.client.get("/agents/jo/edit")
+    assert 'name="connector" value="Atlassian"' in r.text and 'value="Atlassian MCP"' in r.text and "chưa bật" in r.text
+    a = env.hub.agents.show("jo")
+    base = {"name": "jo", "role": a.get("role") or "", "description": "", "model": a["model"], "soul": a.get("soul") or "", "connectors_form": "1"}
+    r = await env.post("/agents/jo/save", {**base, "connector": ["Atlassian", "Atlassian MCP"]})
+    assert r.status_code == 200 and "connector claude.ai" in r.text and "Atlassian_MCP" in r.text  # trang xác nhận
+    assert not env.hub.agents.show("jo")["tool_policy"].get("connectors")
+    r = await env.post("/agents/jo/save", {**base, "connector": ["Atlassian", "Atlassian MCP"], "confirm": "yes"})
+    assert r.status_code == 303 and env.hub.agents.show("jo")["tool_policy"]["connectors"] == ["Atlassian", "Atlassian_MCP"]
+    r = await env.client.get("/agents/jo/edit")
+    assert r.text.count("checked") >= 2 and "chưa bật" not in r.text
+    # lưu lại không đổi connector → không hỏi lại vì connector
+    r = await env.post("/agents/jo/save", {**base, "connector": ["Atlassian", "Atlassian MCP"]})
+    assert "connector claude.ai:" not in r.text
+    # bỏ tick hết → tắt (có xác nhận)
+    r = await env.post("/agents/jo/save", {**base, "confirm": "yes"})
+    assert r.status_code == 303 and not env.hub.agents.show("jo")["tool_policy"].get("connectors")
