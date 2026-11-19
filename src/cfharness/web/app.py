@@ -11,6 +11,7 @@ nhạy cảm cần `confirm=yes` (JS hiện hộp xác nhận; không có JS →
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import re
@@ -139,8 +140,6 @@ class WebState:
     # directory hub (C5, web/desktop.py): giới hạn lần sai token + trần lần trả danh mục — chỉ RAM
     dir_limiter: Any = field(default_factory=lambda: _desktop.directory_limiter())
     dir_window: Any = field(default_factory=lambda: _desktop.SuccessWindow())
-    # callback relay OAuth Không gian số (web/filehub_pages.py): giới hạn lần SAI state theo IP + toàn cục — chỉ RAM
-    fh_limiter: Any = field(default_factory=lambda: _desktop.directory_limiter())
 
     @property
     def public_hosts(self) -> set[str]:
@@ -189,8 +188,7 @@ class GuardMiddleware:
 
     # callback OAuth: state là lớp bảo vệ (web/mcp_oauth.py); well-known: app desktop nhận diện hub (chỉ {kind, schema, app_api})
     # directory: công khai nhưng có token (C5, hub admin — web/desktop.directory: sai → 404, giới hạn tốc độ)
-    # /filehub/oauth/cb: relay OAuth Không gian số — state (binary sinh, daemon giữ, một lần) là lớp bảo vệ (web/filehub_pages.py)
-    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/mcp/oauth/callback", "/filehub/oauth/cb", "/.well-known/cfharness.json",
+    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/mcp/oauth/callback", "/.well-known/cfharness.json",
               "/.well-known/cfharness-directory")
     # JSON do trang gọi bằng fetch (polling): chưa đăng nhập → 401 (không chuyển hướng), không gia hạn phiên — như /sse/, /partials/
     # `/app/` = API cho app desktop (web/desktop.py: /app/badge) — 401 dạng JSON
@@ -251,7 +249,32 @@ class GuardMiddleware:
                 resp = PlainTextResponse("Chưa đăng nhập — mở /login (mã TOTP) hoặc chạy `cfharness web --open` trên máy chạy hub.", status_code=401)
             await resp(scope, receive, send_headers)
             return
-        await self.app(scope, receive, send_headers)
+        tok = WEB_CLIENT.set(web_client_meta(self.state, scope, headers, host, sid if sess is not None else None, sess))
+        try:
+            await self.app(scope, receive, send_headers)
+        finally:
+            WEB_CLIENT.reset(tok)
+
+
+# L3 (plan-logging.md A2): metadata client của yêu cầu đang xử lý → `params._client` của mọi RPC (AsyncHubClient cred="web"). CHỈ băm
+# (8 hex sha256 của device_id / sid — không bao giờ sid, khoá phiên, token thô) + ip CHỈ khi yêu cầu đến qua public_origin.
+WEB_CLIENT: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar("cfharness_web_client", default=None)
+
+
+def web_client_meta(state: "WebState", scope: dict, headers: dict[str, str], host: str, sid: str | None, sess: Any) -> dict[str, str] | None:
+    import hashlib
+
+    out: dict[str, str] = {}
+    dev = getattr(sess, "device_id", "") if sess is not None else ""
+    if dev:
+        out["session_ref"] = "dev_" + hashlib.sha256(str(dev).encode()).hexdigest()[:8]
+    elif sid:
+        out["session_ref"] = "sess_" + hashlib.sha256(str(sid).encode()).hexdigest()[:8]
+    if state.is_public(host):
+        ip = client_ip(scope, headers, public=True, header=state.ip_header)
+        if ip and ip != "?":
+            out["ip"] = ip
+    return out or None
 
 
 def with_wait(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -325,10 +348,14 @@ _UNAUDITED_HUMAN = None
 
 
 def _needs_extra_audit(method: str) -> bool:
-    """Method chỉ-người mà daemon KHÔNG tự ghi audit theo `_audit` (approval.* tự ghi theo `channel`)."""
+    """Method chỉ-người mà daemon KHÔNG tự ghi audit theo `_audit` (approval.* tự ghi theo `channel`). Lượt đọc nhạy cảm
+    (`SENSITIVE_READS`, L3) daemon tự ghi `read:<method>` → không ghi thêm ở đây (tránh dòng đôi)."""
     global _UNAUDITED_HUMAN
     if _UNAUDITED_HUMAN is None:
-        _UNAUDITED_HUMAN = frozenset(m for m in _auth.HUMAN_ONLY - _auth.all_mutating() if not m.startswith("approval.") and m != "agent.purge")
+        from ..mcp_server.rpc import SENSITIVE_READS
+
+        _UNAUDITED_HUMAN = frozenset(m for m in _auth.HUMAN_ONLY - _auth.all_mutating() - SENSITIVE_READS
+                                     if not m.startswith("approval.") and m != "agent.purge")
     return method in _UNAUDITED_HUMAN
 
 
@@ -453,7 +480,7 @@ async def _web_notify(request: Request, kind: str, data: dict[str, Any]) -> None
             await _audit_login(request, kind, data)
         else:
             log.warning("không gửi được web.notify %s: %s", kind, e)
-    except Exception:  # noqa: BLE001
+    except Exception:  # best-effort: đã log warning (chỉ kind + ip); không exc_info để không lộ data  # noqa: BLE001
         log.warning("không gửi được web.notify %s (%s)", kind, data.get("ip"))
 
 
@@ -1220,14 +1247,39 @@ async def costs_page(request: Request) -> Response:
                                                 "hub": snap.get("hub") or {}})
 
 
+AUDIT_WEB_FILTERS = ("channel", "agent_id", "kind", "principal", "actor", "outcome", "req_id", "since", "until", "q", "before_id")
+
+
 async def audit_page(request: Request) -> Response:
+    """L5 (A7): lọc theo principal/actor/kết quả/mã yêu cầu/khoảng thời gian (`24h` hoặc ISO)/chuỗi con trong tóm tắt-đích, phân trang `before_id`,
+    thẻ "Hoạt động theo người" (`audit.activity`). Chữ là dữ liệu: autoescape (không `|safe`)."""
     q = request.query_params
-    params: dict[str, Any] = {"limit": int(q.get("limit") or 200)}
-    for k in ("channel", "agent_id", "kind"):
-        if q.get(k):
-            params[k] = q[k]
-    rows = await rpc(request, "audit.list", params)
-    return await render(request, "audit.html", {"nav": "audit", "rows": rows, "q": dict(q)})
+    try:
+        limit = max(1, min(int(q.get("limit") or 200), 1000))
+    except ValueError:
+        limit = 200
+    params: dict[str, Any] = {"limit": limit}
+    for k in AUDIT_WEB_FILTERS:
+        v = (q.get(k) or "").strip()
+        if v:
+            params[k] = v[:200]
+    error = None
+    try:
+        rows = await rpc(request, "audit.list", params)
+    except RpcError as e:
+        rows, error = [], err_text(e)
+    try:
+        activity = await rpc(request, "audit.activity", {"days": 7})
+    except RpcError:
+        activity = None
+    older = None
+    if rows and len(rows) >= limit:
+        nq = {k: v for k, v in params.items() if k not in ("before_id", "limit")}
+        nq["before_id"] = min(int(r["id"]) for r in rows)
+        from urllib.parse import urlencode
+
+        older = "/audit?" + urlencode(nq)
+    return await render(request, "audit.html", {"nav": "audit", "rows": rows, "q": dict(q), "activity": activity, "older": older, "error": error})
 
 
 async def settings_page(request: Request) -> Response:
@@ -1766,7 +1818,7 @@ async def _stream(request: Request, params: dict[str, Any], convert: Callable[[d
                 await q.put(msg)
                 if "end" in msg:
                     break
-        except Exception as e:  # daemon tắt, run không tồn tại…
+        except Exception as e:  # best-effort: lỗi gửi cho trình duyệt dạng end.reason (daemon tắt, run không có…)
             await q.put({"end": {"reason": err_text(e)}})
         finally:
             await q.put(None)
@@ -1989,6 +2041,12 @@ def _manager_routes() -> list[Any]:
     return _r()
 
 
+def _debug_routes() -> list[Any]:
+    from .debug_pages import routes as _r  # /logs, /trace/{id} — công cụ debug (L6, docs/dev-notes/plan-logging.md B6)
+
+    return _r()
+
+
 def _extra_routes() -> list[Any]:
     from . import extra_pages as _x  # lịch chạy, tìm kiếm hội thoại, diff/revert run, sức khoẻ (+ thao tác vào ACTIONS)
 
@@ -2064,7 +2122,8 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
     `trusted_devices` = nhánh `web.trusted_devices` (web/devices.py)."""
     from .public import parse_public_origin
 
-    state = WebState(paths=paths, auth=auth or WebAuth(), host=host, port=port, client=AsyncHubClient(paths.socket, channel=CHANNEL, timeout=60.0),
+    state = WebState(paths=paths, auth=auth or WebAuth(), host=host, port=port,
+                     client=AsyncHubClient(paths.socket, channel=CHANNEL, timeout=60.0, cred="web", client_meta=WEB_CLIENT.get),
                      templates=make_templates(), name=name, public_origin=parse_public_origin(public_origin), ip_header=ip_header,
                      limiter=limiter or LoginLimiter(), totp=TotpStore(paths), devices=DeviceStore(paths, trusted_devices))
     state.auth.device_ok = state.devices.valid if state.devices is not None else None
@@ -2099,6 +2158,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_mcp_routes(),  # /mcp/browse, /mcp/agent/{id}, /mcp/{name} (+ /tool) — web/mcp_pages.py
         Route("/costs", costs_page),
         Route("/audit", audit_page),
+        *_debug_routes(),  # /logs "Nhật ký hệ thống" + /trace/{id} — chỉ đọc (web/debug_pages.py, L6)
         Route("/settings", settings_page),
         *_mcp_oauth.routes(),  # /do/mcp_connect + /mcp/oauth/callback — TRƯỚC /do/{name}
         Route("/do/{name}", do_action, methods=["POST"]),
@@ -2114,8 +2174,9 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_memory_routes(),
         *_slack_pages.routes(),  # /partials/slack/pending — wizard Slack 2 chiều
         *_update_pages.routes(),  # /update, /partials/update — nút "Cập nhật hệ thống"
-        *_filehub_pages.routes(),  # /partials/filehub + /filehub/open — thẻ "Không gian số" ở Cài đặt (filehub/)
+        *_filehub_pages.routes(),  # /partials/filehub[/lane] + /filehub/open — thẻ "Không gian số" ở Cài đặt (filehub/)
         *_backup_pages.routes(),  # /partials/backup — thẻ "Sao lưu" ở Cài đặt (backup.py)
+        *_support_pages.routes(),  # /partials/support + /support + tải gói một lần — "Gói chẩn đoán" (support_bundle.py, L7)
         *_transfer_pages.routes(),  # /hub-transfer — xuất/nhập toàn bộ hub (hub_transfer_web.py, web/transfer_pages.py)
         *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
         *_desktop.routes(),  # /.well-known/cfharness.json + /app/badge — app desktop (web/desktop.py, docs/dev-notes/desktop-app.md)
@@ -2161,12 +2222,17 @@ from . import backup_pages as _backup_pages  # noqa: E402
 
 _backup_pages.register_actions(ACTIONS, Action, _req)
 
+# Thẻ "Gói chẩn đoán" (support_bundle.py, L7): support_create / support_create_raw (bước 2) + tải về bằng link một lần
+from . import support_pages as _support_pages  # noqa: E402
+
+_support_pages.register_actions(ACTIONS, Action, _req)
+
 # "Chuyển hub sang máy khác" (hub_transfer_web.py): hub_export / hub_import (bước 2 bắt buộc, passphrase chỉ ở bước 2) / hub_unfreeze
 from . import transfer_pages as _transfer_pages  # noqa: E402
 
 _transfer_pages.register_actions(ACTIONS, Action, _req)
 
-# Thẻ "Không gian số" (filehub/): thiết lập/đăng nhập (relay OAuth qua link public)/chuyển chế độ/gỡ/tạm dừng + link "Mở trên Không gian số"
+# Thẻ "Không gian số — cổng cfharness" (filehub/): khoá cổng, thư mục chung, lô xoá đang giữ, cây mồ côi + link "Mở trên Không gian số"
 from . import filehub_pages as _filehub_pages  # noqa: E402
 
 _filehub_pages.register_actions(ACTIONS, Action, _req)

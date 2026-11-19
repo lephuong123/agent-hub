@@ -17,19 +17,27 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from . import auth as _auth
+from . import trace as _trace
 from . import transport
 from .config import HubConfig
 from .errors import BLOCKED, HubError, SYSTEM_ERROR
 from .events import TERMINAL_RUN_EVENTS
 from .hub import Hub
-from .logs import DEFAULT_BACKUP_COUNT, DEFAULT_MAX_AGE_DAYS, DEFAULT_MAX_BYTES, rotate_if_large, setup_logging
+from .logs import (DEFAULT_BACKUP_COUNT, DEFAULT_MAX_AGE_DAYS, DEFAULT_MAX_BYTES, LEVELS, asyncio_exception_handler,
+                   install_crash_handlers, rotate_if_large, setup_logging)
 from .paths import HubPaths
 from .oscompat import IS_WINDOWS, JOBS, detached_kwargs, ensure_hidden_console, same_user
 from .rpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, DaemonUnavailable, RpcClient, encode
 from .runtime import AgentRuntime
 
 log = logging.getLogger("cfharness.daemon")
+rpc_log = logging.getLogger("cfharness.rpc")  # B3 access log (plan-logging.md): một bản ghi metadata mỗi lượt RPC
+DEFAULT_SLOW_RPC_MS = 2000
+# method CHỜ LÂU theo thiết kế (long-poll / giữ chờ người duyệt) — không cảnh báo `rpc.slow`
+SLOW_EXEMPT = frozenset({"run.wait", "mcp.events", "mcp.task_events", "guard.check"})
 Handler = Callable[[dict[str, Any]], Awaitable[Any] | Any]
+CLIENT_PARAM = "_client"  # L3: metadata client (web: session_ref/ip; MCP: transport/level) — daemon pop, chỉ nhận theo loại token
+from .mcp_server.rpc import READ_COALESCE_S as _READ_COALESCE_S, SENSITIVE_READS as _SENSITIVE_READS  # noqa: E402
 RPC_LIMIT = 16 * 1024 * 1024
 LISTENER_CHECK_S = 2.0  # chu kỳ kiểm socket nghe còn mở (`Daemon._watch_listener`)
 
@@ -42,6 +50,9 @@ class Daemon:
         # KHÔNG ghi đè file khi socket đang có daemon sống: bản thứ hai (vd launchd thử tiếp quản trong lúc daemon chạy tay) sẽ
         # thoát ở `serve()`, nhưng nếu đã ghi file thì token trong file lệch với daemon đang chạy → mọi lệnh của người bị từ chối.
         self.auth_token: str | None = None
+        # L3 (plan-logging.md A2): token RIÊNG cho tiến trình web / MCP server (`<socket>.web.auth`, `<socket>.mcp.auth`) — daemon biết lời
+        # gọi đến từ web/MCP theo token khớp, không tin `_audit.channel`. Sinh lại cùng token người.
+        self.client_tokens: dict[str, str] = {}
         from .paths import ensure_socket_dir
 
         ensure_socket_dir(paths.socket)  # đa instance P1: socket dự phòng trong thư mục riêng 0700 của user (UnsafeSocketDir → không khởi động)
@@ -50,8 +61,15 @@ class Daemon:
                 self.auth_token = _auth.issue_token(paths.socket)
             except OSError:  # pragma: no cover — không có token → mọi method nhạy cảm qua socket bị từ chối (fail-closed)
                 log.exception("không tạo được token người cạnh socket %s", paths.socket)
+            for kind in _auth.TOKEN_KINDS[1:]:
+                try:
+                    self.client_tokens[kind] = _auth.issue_token(paths.socket, kind)
+                except OSError:  # pragma: no cover — thiếu token web/mcp → client đó dùng token người (ghi os:<user>)
+                    log.exception("không tạo được token %s cạnh socket %s", kind, paths.socket)
+        self._reads: dict[tuple[str, str, str], list[Any]] = {}  # A4: cửa sổ gộp lượt đọc nhạy cảm (RAM; khởi động lại = dòng mới)
         self.callers = _auth.CallerResolver(self.hub)
         self._mutating: frozenset[str] = frozenset()
+        self._slow_cache: tuple[float, float] = (float(DEFAULT_SLOW_RPC_MS), 0.0)
         self.server: asyncio.base_events.Server | None = None
         self.stopping = asyncio.Event()
         self.exit_code = 0  # ≠ 0 khi dừng để launchd chạy lại (cập nhật dưới LaunchAgent/LaunchDaemon — `SUPERVISED_RESTART_CODE`)
@@ -141,6 +159,14 @@ class Daemon:
         from .backup import register_rpc as _register_backup
 
         _register_backup(self)
+        # Log hệ thống: logs.levels|level (logs_rpc.py, L1 — HUMAN_ONLY, tự bọc audit logs.level)
+        from .logs_rpc import register_rpc as _register_logs
+
+        _register_logs(self)
+        # Gói chẩn đoán: support.plan|create|list (support_bundle.py, L7 — HUMAN_ONLY, tự bọc audit support.create)
+        from .support_bundle import register_rpc as _register_support
+
+        _register_support(self)
         # Xuất toàn bộ hub sang máy khác: hub.export (hub_transfer.py — làm lặng hub, ghi gói .cfhx, tự bọc audit; nhập chỉ ngoại tuyến từ CLI)
         from .hub_transfer import register_rpc as _register_hub_transfer
 
@@ -257,13 +283,24 @@ class Daemon:
 
     # ------------------------------------------------------------------ server
     # ------------------------------------------------------------------ xác thực người gọi (H-01, H-05)
+    def _cred_of(self, token: Any) -> str | None:
+        """Loại token khớp (human | web | mcp) — so hằng thời gian với từng token; không khớp → None."""
+        if _auth.token_ok(token, self.auth_token):
+            return "human"
+        for kind, tok in self.client_tokens.items():
+            if _auth.token_ok(token, tok):
+                return kind
+        return None
+
     def _caller_for(self, method: str, params: dict[str, Any], peer: int | None, via_socket: bool) -> _auth.Caller:
         token = params.pop(_auth.AUTH_PARAM, None) if isinstance(params, dict) else None
         if not via_socket:
             return _auth.Caller(via="internal")
-        if method not in _auth.HUMAN_ONLY and method not in self._mutating and method not in _auth.SCOPED_READ:
-            return _auth.Caller(via="socket", pid=peer, token_ok=_auth.token_ok(token, self.auth_token))  # đường nóng: guard.check, đọc
-        return self.callers.resolve(peer, token, self.auth_token)
+        cred = self._cred_of(token)
+        if (method not in _auth.HUMAN_ONLY and method not in self._mutating and method not in _auth.SCOPED_READ
+                and method not in _SENSITIVE_READS):
+            return _auth.Caller(via="socket", pid=peer, token_ok=cred is not None, cred=cred)  # đường nóng: guard.check, đọc
+        return self.callers.resolve(peer, token, self.auth_token, cred=cred)
 
     def _deny_caller(self, method: str, caller: _auth.Caller, why: str | None = None) -> HubError:
         from .approvals import audit_record
@@ -316,11 +353,152 @@ class Daemon:
         return await self._dispatch(req, as_caller=caller)  # type: ignore[return-value]
 
     async def _dispatch(self, req: Any, *, peer: int | None = None, via_socket: bool = False, as_caller: _auth.Caller | None = None) -> dict[str, Any] | None:
+        """Một lượt JSON-RPC. L2: bind `req_id` (trace.py) cho cả lượt, trả `_meta.req_id` trong phản hồi, ghi access log `cfharness.rpc`."""
         if not isinstance(req, dict) or req.get("jsonrpc") != "2.0" or not isinstance(req.get("method"), str):
             return {"jsonrpc": "2.0", "id": None, "error": {"code": INVALID_REQUEST, "message": "Invalid Request"}}
+        params = req.get("params") or {}
+        raw_trace = params.pop(_trace.TRACE_PARAM, None) if isinstance(params, dict) else None
+        raw_client = params.pop(CLIENT_PARAM, None) if isinstance(params, dict) else None  # L3: chỉ nhận theo loại token (`clean_client_meta`)
+        if raw_trace is None and as_caller is not None and _trace.current_req_id():
+            req_id = _trace.current_req_id()  # call_as trong daemon (chat, điều phối viên…): cùng lượt với điểm vào đang bind
+        else:
+            req_id = _trace.accept(raw_trace)  # chỉ nhận đúng định dạng `r_<ULID>`; sai/thiếu → mã mới (không bao giờ là quyền)
+        outer = _trace.current() or {}
+        parent = outer.get("req_id")
+        tok = _trace.set_ctx(req_id, parent_req_id=parent if parent != req_id else None)
+        t0 = time.perf_counter()
+        info: dict[str, Any] = {"caller": as_caller, "client": raw_client, "trace_given": raw_trace is not None,
+                                "outer_channel": outer.get("channel"), "req_id": req_id}
+        try:
+            resp = await self._dispatch_inner(req, params, info, peer=peer, via_socket=via_socket, as_caller=as_caller)
+            req_id = info["req_id"]  # có thể đã thay (agent/điều phối viên không được tự chọn req_id — `_bind_identity`)
+            if resp is not None and req["method"] in _SENSITIVE_READS and "result" in resp:
+                self._record_read(req["method"], info, resp["result"])
+        finally:
+            _trace.reset(tok)
+        if resp is not None:
+            resp["_meta"] = {"req_id": req_id}
+            self._access_log(req["method"], req_id, info, resp, (time.perf_counter() - t0) * 1000.0)
+        return resp
+
+    def _bind_identity(self, method: str, caller: _auth.Caller, params: Any, info: dict[str, Any], *, call_as: bool) -> None:
+        """L3 (A2): danh tính do daemon chứng thực → ngữ cảnh lượt (`trace.REQ_CTX`): `principal`, kênh đã chứng thực (`audit_channel`;
+        ghi đè `_audit.channel` của NGƯỜI qua socket theo loại token), kênh client khai (`declared_channel`), `session_ref`/`ip` (chỉ từ token
+        web), `caller_run_id`. Agent/điều phối viên trong run: req_id client gửi bị BỎ — mã mới, cha = req_id của run (không chen được vào
+        trace của lệnh người)."""
+        ctx = _trace.current()
+        if ctx is None:  # pragma: no cover — _dispatch luôn đặt
+            return
+        meta = params.get("_audit") if isinstance(params, dict) and isinstance(params.get("_audit"), dict) else None
+        declared = meta.get("channel") if meta else None
+        client = _auth.clean_client_meta(caller, info.get("client"))
+        attested = None if call_as else _auth.attested_channel(caller, declared)
+        if attested is not None and meta is not None:
+            meta["channel"] = attested
+        if caller.is_agent and (caller.via == "socket" or (call_as and info.get("trace_given"))):
+            run_req = None
+            if caller.via == "socket" and caller.run_id:
+                try:
+                    run = self.hub.store.get_run(caller.run_id)
+                    run_req = run.get("req_id") if run else None
+                except Exception:  # best-effort: không đọc được run → chỉ cha là mã đang có
+                    log.debug("không đọc được req_id của run %s", caller.run_id, exc_info=True)
+            new = _trace.new_req_id()
+            ctx["parent_req_id"] = run_req if _trace.valid_req_id(run_req) else ctx.get("parent_req_id")
+            ctx["req_id"] = info["req_id"] = new
+        ctx["principal"] = info["principal"] = _trace._clean_channel(_auth.principal_of(caller, client, internal_channel=info.get("outer_channel")))
+        ctx["declared_channel"] = _trace._clean_channel(declared) if declared is not None else None
+        ctx["session_ref"] = client.get("session_ref")
+        ctx["ip"] = client.get("ip")
+        ctx["caller_run_id"] = caller.run_id if caller.is_agent else None
+        ctx["audit_channel"] = _trace._clean_channel((meta or {}).get("channel") if meta else attested) or None
+        info["attested"] = attested
+
+    def _record_read(self, method: str, info: dict[str, Any], result: Any) -> None:
+        """A4: một dòng `read:<method>` (target + số bản ghi, KHÔNG nội dung) cho mỗi (principal, method, target) trong `READ_COALESCE_S`.
+        Lượt đầu ghi ngay (count=1); các lượt sau trong cửa sổ gộp trong RAM rồi ghi MỘT dòng `coalesced` khi cửa sổ đóng (audit là
+        append-only — không sửa được dòng đầu). Khởi động lại mất phần gộp dở → lượt sau ghi dòng mới."""
+        params = info.get("params_snapshot") or {}
+        if method == "run.get" and not params.get("events"):
+            return
+        caller = info.get("caller")
+        principal = str(info.get("principal") or "unknown")
+        target = _read_target(params)
+        n = _result_count(result)
+        now = time.monotonic()
+        self._flush_reads(now)
+        key = (principal, method, target or "")
+        slot = self._reads.get(key)
+        if slot is not None:
+            slot[1] += 1
+            slot[2] = n if n is not None else slot[2]
+            return
+        if len(self._reads) >= 2000:  # trần RAM: ghi sớm cửa sổ cũ nhất
+            self._flush_reads(now, force_oldest=True)
+        self._reads[key] = [now, 0, n, _actor_of(caller), info.get("channel")]
+        self._write_read(method, target, principal, count=1, result_count=n, actor=_actor_of(caller), channel=info.get("channel"))
+
+    def _write_read(self, method: str, target: str | None, principal: str, *, count: int, result_count: int | None, actor: str,
+                    channel: Any, coalesced: bool = False) -> None:
+        data: dict[str, Any] = {"count": count, "window_s": int(_READ_COALESCE_S)}
+        if result_count is not None:
+            data["result_count"] = result_count
+        if coalesced:
+            data["coalesced"] = True
+        try:
+            self.hub.audit.record(f"read:{method}", None, None, data, actor=actor, channel=str(channel or "cli"), target=target,
+                                  summary=f"read:{method}", outcome="ok", principal=principal)
+        except Exception:  # best-effort: audit đọc lỗi không được làm hỏng lượt đọc
+            log.exception("không ghi được audit read:%s", method)
+
+    def _flush_reads(self, now: float | None = None, *, force_oldest: bool = False, all_: bool = False) -> None:
+        now = time.monotonic() if now is None else now
+        oldest = min(self._reads, key=lambda k: self._reads[k][0]) if force_oldest and self._reads else None
+        for key in list(self._reads):
+            start, extra, n, actor, channel = self._reads[key]
+            if all_ or key == oldest or now - start >= _READ_COALESCE_S:
+                del self._reads[key]
+                if extra:
+                    self._write_read(key[1], key[2] or None, key[0], count=extra, result_count=n, actor=actor, channel=channel, coalesced=True)
+
+    def _slow_rpc_ms(self) -> float:
+        """`logs.slow_rpc_ms` (mặc định 2000; 0 = tắt) — đọc lại tối đa mỗi 5 s (không đọc config ở mỗi lời gọi)."""
+        now = time.monotonic()
+        if now >= self._slow_cache[1]:
+            try:
+                v = float(self.hub.config.get("logs.slow_rpc_ms") or 0)
+            except (KeyError, TypeError, ValueError):
+                v = float(DEFAULT_SLOW_RPC_MS)
+            self._slow_cache = (v, now + 5.0)
+        return self._slow_cache[0]
+
+    def _access_log(self, method: str, req_id: str, info: dict[str, Any], resp: dict[str, Any], dur_ms: float) -> None:
+        """B3: một bản ghi METADATA mỗi lượt (không params/kết quả). Đọc thành công = DEBUG; ghi / lỗi nghiệp vụ = INFO; bị từ chối
+        (BLOCKED) = WARNING; chậm hơn `logs.slow_rpc_ms` = WARNING `rpc.slow` (trừ method chờ lâu theo thiết kế)."""
+        err = resp.get("error")
+        code = err.get("code") if isinstance(err, dict) else None
+        outcome = "ok" if err is None else ("denied" if code == BLOCKED else "error")
+        if outcome == "ok":
+            level = logging.INFO if method in self._mutating else logging.DEBUG
+        elif outcome == "denied":
+            level = logging.WARNING
+        else:
+            level = logging.INFO
+        slow_ms = self._slow_rpc_ms()
+        slow = bool(slow_ms) and dur_ms >= slow_ms and method not in SLOW_EXEMPT
+        if slow:
+            level = max(level, logging.WARNING)
+        if not rpc_log.isEnabledFor(level):
+            return
+        caller = info.get("caller")
+        rpc_log.log(level, "%s %s %s %.1fms", "rpc.slow" if slow else "rpc", method, outcome, dur_ms,
+                    extra={"event": "rpc.slow" if slow else "rpc", "method": method[:80], "req_id": req_id, "via": _via(caller),
+                           "channel": info.get("channel"), "duration_ms": round(dur_ms, 1), "outcome": outcome, "code": code})
+
+    async def _dispatch_inner(self, req: dict[str, Any], params: Any, info: dict[str, Any], *, peer: int | None, via_socket: bool,
+                              as_caller: _auth.Caller | None) -> dict[str, Any] | None:
         rid = req.get("id")
         method = req["method"]
-        params = req.get("params") or {}
         fn = self.methods.get(method)
         if fn is None:
             if isinstance(params, dict):
@@ -339,9 +517,19 @@ class Daemon:
                     params["_audit"] = {"channel": caller.via, "actor": "unknown"}
             else:
                 caller = self._caller_for(method, params, peer, via_socket)
+            info["caller"] = caller
+            if method in _SENSITIVE_READS and isinstance(params, dict):
+                info["params_snapshot"] = {k: v for k, v in params.items() if not k.startswith("_")}
+            declared = None
+            if isinstance(params, dict) and isinstance(params.get("_audit"), dict):
+                declared = params["_audit"].get("channel")
             if not caller.human and caller.via == "socket" and isinstance(params, dict) and (method in _auth.HUMAN_ONLY or "_audit" in params or caller.is_agent):
                 # mọi lời gọi không phải người: audit ghi đúng là agent (không tin `_audit.actor` do client tự khai)
                 params["_audit"] = {"channel": "agent" if caller.is_agent else "socket", "actor": "agent", "run_id": caller.run_id}
+            self._bind_identity(method, caller, params, info, call_as=as_caller is not None)
+            if declared is not None and _trace.current() is not None:
+                _trace.current()["declared_channel"] = _trace._clean_channel(declared)  # type: ignore[index]
+            _set_channel(info, caller, params)
             if caller.manager:
                 # M7: người gọi = điều phối viên (chỉ dựng trong daemon). Chỉ MANAGER_ALLOWED + kiểm trường cấm theo method.
                 if method not in _auth.MANAGER_ALLOWED:
@@ -393,9 +581,12 @@ class Daemon:
                     await writer.drain()
                     continue
                 if isinstance(req, dict) and req.get("method") == "events.subscribe":
+                    raw_trace = None
                     if isinstance(req.get("params"), dict):
                         req["params"].pop(_auth.AUTH_PARAM, None)
-                    await self._subscribe(req, reader, writer)
+                        raw_trace = req["params"].pop(_trace.TRACE_PARAM, None)
+                    with _trace.bind(_trace.accept(raw_trace), channel="subscribe"):
+                        await self._subscribe(req, reader, writer)
                     break
                 resp = await self._dispatch(req, peer=peer, via_socket=True)
                 if resp is not None and "id" in req:
@@ -406,7 +597,7 @@ class Daemon:
         finally:
             try:
                 writer.close()
-            except Exception:  # pragma: no cover
+            except Exception:  # best-effort: đóng kết nối đã hỏng  # pragma: no cover
                 pass
 
     async def _subscribe(self, req: dict[str, Any], reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -430,6 +621,10 @@ class Daemon:
             backfill=self.hub.backfill(run_id=run_id, agent_id=agent_id),
         )
         until_end = bool(p.get("until_run_end")) and run_id is not None
+        t0 = time.perf_counter()
+        if rpc_log.isEnabledFor(logging.DEBUG):  # B3: luồng dài — chỉ ghi lúc mở + lúc đóng
+            rpc_log.debug("rpc events.subscribe open", extra={"event": "rpc.stream_open", "method": "events.subscribe", "via": "socket",
+                                                            "outcome": "open"})
         writer.write(
             encode(
                 {
@@ -447,6 +642,7 @@ class Daemon:
                 writer.write(encode({"jsonrpc": "2.0", "method": "events.end", "params": {"reason": "run_finished", "status": run["status"]}}))
                 await writer.drain()
                 sub.close()
+                _stream_closed(t0, "run_finished")
                 return
         eof_task = asyncio.ensure_future(reader.read())  # client đóng kết nối
         reason = "closed"
@@ -471,10 +667,11 @@ class Daemon:
                 writer.write(encode({"jsonrpc": "2.0", "method": "events.end", "params": {"reason": reason}}))
                 await writer.drain()
         except (ConnectionResetError, BrokenPipeError):
-            pass
+            reason = "connection_lost"
         finally:
             eof_task.cancel()
             sub.close()
+            _stream_closed(t0, reason)
 
     async def serve(self) -> None:
         sock = self.paths.socket
@@ -486,6 +683,7 @@ class Daemon:
         self.server = await transport.start_server(self._handle_conn, sock, limit=RPC_LIMIT)
         self.paths.pidfile.write_text(str(os.getpid()), encoding="utf-8")
         loop = asyncio.get_running_loop()
+        loop.set_exception_handler(asyncio_exception_handler)  # L1: task chết không ai đợi → log ERROR thay vì chỉ in stderr
         for sig in (signal.SIGTERM, signal.SIGINT):
             try:
                 loop.add_signal_handler(sig, self.stopping.set)
@@ -499,6 +697,7 @@ class Daemon:
             log.info("daemon đang dừng")
             watch.cancel()
             self.server.close()
+            self._flush_reads(all_=True)  # A4: ghi nốt phần gộp lượt đọc nhạy cảm
             await self.hub.stop()
             JOBS.close_all()
             sock.unlink(missing_ok=True)
@@ -514,6 +713,8 @@ class Daemon:
                 return
             except asyncio.TimeoutError:
                 pass
+            if self._reads:
+                self._flush_reads()  # A4: cửa sổ gộp lượt đọc đã đóng → ghi dòng gộp
             if self.server is None or transport.server_listening(self.server):
                 continue
             log.error("socket nghe của daemon đã bị đóng (accept lỗi) — mở lại server")
@@ -525,6 +726,71 @@ class Daemon:
                 log.exception("mở lại server của daemon lỗi — thử lại sau %.0f s", interval)
 
 
+def _stream_closed(t0: float, reason: str) -> None:
+    dur_ms = (time.perf_counter() - t0) * 1000.0
+    level = logging.WARNING if reason == "slow_consumer" else logging.DEBUG
+    if rpc_log.isEnabledFor(level):
+        rpc_log.log(level, "rpc events.subscribe close %s %.0fms", reason, dur_ms,
+                    extra={"event": "rpc.stream_close", "method": "events.subscribe", "via": "socket", "duration_ms": round(dur_ms, 1),
+                           "outcome": "closed", "reason": str(reason)[:40]})
+
+
+def _read_target(p: dict[str, Any]) -> str | None:
+    """Đích của lượt đọc: id/run/agent/tên (≤ 80 ký tự). Chuỗi tìm kiếm có thể là nội dung → chỉ ghi độ dài (`q:<n>ch`)."""
+    for k in ("id", "run_id", "agent_id", "agent", "name", "kind"):
+        v = p.get(k)
+        if v is not None and not isinstance(v, (dict, list)):
+            return str(v)[:80]
+    for k in ("query", "q", "text"):
+        v = p.get(k)
+        if isinstance(v, str) and v:
+            return f"q:{len(v)}ch"
+    return None
+
+
+def _result_count(res: Any) -> int | None:
+    """Số bản ghi trả về khi hiển nhiên (độ dài list, hoặc list trong khoá quen thuộc) — không bao giờ nội dung."""
+    if isinstance(res, list):
+        return len(res)
+    if isinstance(res, dict):
+        for k in ("events", "results", "hits", "items", "rows", "facts", "entities", "secrets", "names"):
+            if isinstance(res.get(k), list):
+                return len(res[k])
+    return None
+
+
+def _actor_of(caller: "_auth.Caller | None") -> str:
+    if caller is None:
+        return "unknown"
+    if caller.manager:
+        return f"manager:{caller.manager}"
+    if caller.is_agent:
+        return "agent"
+    return "user" if caller.human else "unknown"
+
+
+def _via(caller: "_auth.Caller | None") -> str:
+    """Loại người gọi cho access log: manager / agent / internal / socket / telegram:<chat> / slack:<chat> (+ ":human" khi là người)."""
+    if caller is None:
+        return "unknown"
+    if caller.manager:
+        return "manager"
+    if caller.is_agent:
+        return "agent"
+    return f"{caller.via}:human" if caller.via == "socket" and caller.human else caller.via
+
+
+def _set_channel(info: dict[str, Any], caller: "_auth.Caller", params: Any) -> None:
+    """Kênh của lượt (log/event): `_audit.channel` (daemon đã ép cho agent/manager, chứng thực cho người — L3) → kênh chứng thực theo
+    token → không có thì loại người gọi."""
+    ch = (params.get("_audit") or {}).get("channel") if isinstance(params, dict) and isinstance(params.get("_audit"), dict) else None
+    ch = ch if isinstance(ch, str) else (info.get("attested") or _via(caller))
+    ctx = _trace.current()
+    if ctx is not None:
+        ctx["channel"] = _trace._clean_channel(ch)
+        info["channel"] = ctx["channel"]
+
+
 def _live_daemon(sock: Path) -> bool:
     """Socket có daemon đang trả lời không (`hub.ping`)."""
     if not sock.exists():
@@ -532,7 +798,7 @@ def _live_daemon(sock: Path) -> bool:
     try:
         RpcClient(sock, timeout=2).call("hub.ping")
         return True
-    except Exception:
+    except Exception:  # best-effort: không ping được = daemon không chạy
         return False
 
 
@@ -550,10 +816,10 @@ def _log_settings(paths: HubPaths) -> dict[str, Any]:
     """`logs.*` (NFR-21); config hỏng → mặc định (log không được làm daemon không khởi động)."""
     try:
         c = HubConfig(paths.config).get("logs") or {}
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: config hỏng → mặc định (log không được làm daemon không khởi động)  # pragma: no cover
         c = {}
     return {"max_bytes": c.get("max_bytes", DEFAULT_MAX_BYTES), "backup_count": c.get("backup_count", DEFAULT_BACKUP_COUNT),
-            "max_age_days": c.get("max_age_days", DEFAULT_MAX_AGE_DAYS)}
+            "max_age_days": c.get("max_age_days", DEFAULT_MAX_AGE_DAYS), "level": LEVELS.get(str(c.get("level") or "info").lower(), logging.INFO)}
 
 
 def _rotate_daemon_out(paths: HubPaths, ls: dict[str, Any]) -> None:
@@ -585,7 +851,8 @@ def run_foreground(paths: HubPaths) -> None:
         sys.stdout = sys.stdout or out
         sys.stderr = sys.stderr or out
     console = ensure_hidden_console()  # Windows/pythonw: console ẩn cho claude + hậu duệ (không bật cửa sổ, CTRL_BREAK chạy được)
-    setup_logging(paths.logs_dir, max_bytes=ls["max_bytes"], backup_count=ls["backup_count"], max_age_days=ls["max_age_days"])
+    setup_logging(paths.logs_dir, ls["level"], max_bytes=ls["max_bytes"], backup_count=ls["backup_count"], max_age_days=ls["max_age_days"])
+    install_crash_handlers(paths.logs_dir)  # L1: excepthook + faulthandler (logs/faults.log, SIGUSR1 = dump stack)
     if console not in ("posix", "existing"):
         logging.getLogger("cfharness.daemon").info("không có console → đã lấy console ẩn (%s)", console)
     if tightened:

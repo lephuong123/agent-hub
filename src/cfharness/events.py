@@ -107,6 +107,9 @@ EVENT_LEVELS: dict[str, str] = {
     "guard.decision": "debug",
     "guard.blocked": "summary",
     "guard.tamper_detected": "summary",
+    "audit.alert": "summary",  # L5 (audit_watch.py): cảnh báo theo mẫu audit {rule, principal, count, window_s, state on|resolved, subject?} — chỉ metadata
+    "audit.tamper_detected": "summary",  # L4: chuỗi băm audit_log gãy / bản neo không khớp (payload chỉ id + mã lý do) — mức cao nhất của bảng
+    "audit.anchored": "detail",  # L4: bản neo (last_id, row_hash) — CHỈ phát khi audit.anchor_notify bật
     "backup.created": "summary",  # bản sao lưu HUB_HOME mới (backup.py): {id, kind, size, pruned}
     "backup.failed": "summary",  # sao lưu tự động lỗi: {kind, error}  # hardening SEC: policy/config/hub.db bị ghi NGOÀI RPC (guard/integrity.py) → khôi phục + Slack
     "auth.denied": "summary",  # hardening SEC: method chỉ-người bị gọi từ tiến trình run/thiếu token (auth.py)
@@ -205,14 +208,14 @@ EVENT_LEVELS: dict[str, str] = {
     "question.action": "summary",  # xin phép: người cho phép → hub thực hiện (question_id, kind, target, ok, error?)
     "question.reminder": "summary",  # nhắc người: question_id, reminder_count, wait_s
     # Thư mục chung Không gian số (filehub/, docs/dev-notes/filehub.md) — payload chỉ tên thư mục/đường dẫn tương đối/id, không nội dung tệp
-    "filehub.state": "summary",  # state idle|syncing|conflict|offline|auth_expired|error|paused|…, prev, error
+    "filehub.state": "summary",  # state needs_migration + folders[] (thư mục còn cấu hình đồng bộ cũ — đã bỏ); trước H5: trạng thái đồng bộ
     "filehub.conflict": "summary",  # folder, root_id, path — bản xung đột do sync-core tạo (không mất dữ liệu)
     "filehub.blocked": "summary",  # folder, root_id, reason (mass_delete) — chiều đẩy lên dừng chờ `filehub resume --root`; lane: + run_id, count, limit, paths≤50, lane
     "filehub.changed": "summary",  # run_id, folder, count, paths≤20, url — run đổi tệp trong thư mục chung
     "filehub.deleted": "summary",  # run_id, folder, count, paths≤20, url — run xoá tệp (không hỏi duyệt; khôi phục ở thùng rác Không gian số)
     "filehub.secret_warning": "summary",  # run_id, folder, count, paths≤20 — tệp mới/sửa chứa giá trị secret hub biết (đã lên cloud)
     # Cổng cfharness (filehub/lane/, plan-filehub-lane.md) — chỉ tên/đường dẫn tương đối đã làm sạch/id, không nội dung tệp, không tên người
-    # server, added[tên thư mục vừa thêm], revoked[tên thư mục mất quyền], regranted[tên được cấp lại], sync[tên còn đồng bộ kiểu cũ] —
+    # server, added[tên thư mục vừa thêm], revoked[tên thư mục mất quyền], regranted[tên được cấp lại], converted[tên đồng bộ cũ tự chuyển sang cổng] —
     # đối soát gốc khoá được cấp mỗi `hello` mới (LaneService.reconcile); không xoá gì
     "filehub.lane.roots": "summary",
     "filehub.lane.state": "summary",  # server, state ok|offline|auth_failed|version_mismatch|disabled|not_configured|key_expiring, prev, code?, days_left?
@@ -268,6 +271,7 @@ class HubEvent(BaseModel):
     session_id: str | None = None
     subagent_id: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+    req_id: str | None = None  # L2 (tuỳ chọn, v vẫn = 1): mã yêu cầu gây ra event — `Hub.publish` điền từ trace.REQ_CTX
 
     @property
     def persisted(self) -> bool:

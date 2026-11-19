@@ -56,15 +56,17 @@ class DaemonCaller:
         from ..rpc import RpcClient
 
         self.paths = paths
-        self.client = RpcClient(paths.socket, timeout=120)
+        self.client = RpcClient(paths.socket, timeout=120, kind="mcp")
         self._lock = threading.Lock()
         self._started = False
 
     def __call__(self, method: str, params: dict[str, Any]) -> Any:
         from ..rpc import DaemonUnavailable, RpcClient
+        from ..trace import outgoing
 
+        params = outgoing(params)  # L2: một req_id cho lời gọi tool — lần thử lại sau khi tự khởi động daemon dùng CÙNG mã
         try:
-            return RpcClient(self.paths.socket, timeout=120).call(method, params)
+            return RpcClient(self.paths.socket, timeout=120, kind="mcp").call(method, params)  # L3: token riêng của MCP server
         except DaemonUnavailable:
             with self._lock:
                 if not self._started:
@@ -72,7 +74,7 @@ class DaemonCaller:
 
                     spawn_background(self.paths)
                     self._started = True
-            return RpcClient(self.paths.socket, timeout=120).call(method, params)
+            return RpcClient(self.paths.socket, timeout=120, kind="mcp").call(method, params)
 
 
 # ============================================================================ mcp serve / snippet / token
@@ -83,11 +85,23 @@ def _cfharness_command() -> list[str]:
     return [sys.executable, "-m", "cfharness"]
 
 
+def _logs_settings(ctx: Any) -> dict[str, Any]:
+    from ..logs import logs_settings
+
+    return logs_settings(_config_get(ctx, "logs", {}))
+
+
 def cmd_mcp_serve(ctx: Any) -> int:
     import logging
 
     a = ctx.args
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
+    for h in logging.getLogger().handlers:
+        h.setLevel(logging.WARNING)  # stderr (claude hiển thị) giữ như cũ: chỉ WARNING trở lên
+    from ..logs import setup_process_logging
+
+    # L1: nhiều `mcp serve` chạy cùng lúc → một file chung `mcp.jsonl` (append, xoay lúc mở); không ghi được (sandbox…) → bỏ qua
+    setup_process_logging(ctx.paths.logs_dir, "mcp", "mcp.jsonl", _logs_settings(ctx), shared=True)
     caller = DaemonCaller(ctx.paths)
     if a.http:
         from .http import serve_http
@@ -526,11 +540,97 @@ def cmd_secret(ctx: Any) -> int:
     return EXIT_OK
 
 
+def _audit_time(v: str | None, flag: str) -> str | None:
+    """`24h`/`30m`/`7d`/ISO → ISO UTC (đổi ở CLI để thông báo lỗi rõ trước khi gọi daemon)."""
+    if not v:
+        return None
+    from ..log_query import parse_time
+
+    try:
+        return parse_time(v)
+    except ValueError as e:
+        raise SystemExit(f"{flag}: {e}") from None
+
+
+def _audit_filter_params(a: Any) -> dict[str, Any]:
+    p = {"kind": a.kind, "run_id": a.run, "agent_id": a.agent, "channel": a.channel, "principal": a.principal, "actor": a.actor,
+         "outcome": a.outcome, "req_id": a.req, "q": a.q, "since": _audit_time(a.since, "--since"), "until": _audit_time(a.until, "--until")}
+    return {k: v for k, v in p.items() if v not in (None, "")}
+
+
+def _one_line(v: Any, n: int) -> str:
+    from ..termsafe import one_line
+
+    return one_line(str(v if v is not None else "-"))[:n]
+
+
 def cmd_audit(ctx: Any) -> int:
     a = ctx.args
-    rows = ctx.call("audit.list", {"kind": a.kind, "run_id": a.run, "agent_id": a.agent, "channel": a.channel, "limit": a.limit})
-    ctx.out(rows, "\n".join(f"#{r['id']:<5} {r['ts']}  {r['kind']:<18} {r['channel']:<20} {r['actor']:<16} {r.get('target') or '-'}  {r.get('run_id') or ''}" for r in rows) or "(audit trống)")
+    if a.audit_action == "verify":
+        return cmd_audit_verify(ctx)
+    if a.audit_action == "export":
+        return cmd_audit_export(ctx)
+    params = _audit_filter_params(a)
+    params["limit"] = a.limit
+    if a.before_id is not None:
+        params["before_id"] = a.before_id
+    rows = ctx.call("audit.list", params)
+    text = "\n".join(f"#{r['id']:<5} {r['ts']}  {_one_line(r['kind'], 30):<18} {_one_line(r['channel'], 20):<20} {_one_line(r['actor'], 16):<16} "
+                     f"{r.get('outcome') or '-':<6} {_one_line(r.get('principal'), 24):<20} {_one_line(r.get('target'), 60)}  {r.get('run_id') or ''}"
+                     f"{'  ' + r['req_id'] if r.get('req_id') else ''}" for r in rows) or "(audit trống)"
+    if rows and len(rows) >= a.limit:
+        text += f"\n… còn nữa: thêm --before-id {min(r['id'] for r in rows)}"
+    ctx.out(rows, text)
     return EXIT_OK
+
+
+def cmd_audit_export(ctx: Any) -> int:
+    """L5: `cfharness audit export [--since 7d] [--until …] [--format jsonl|csv] [lọc như list]` → HUB_HOME/exports/audit-<ts>.<ext> (0600)."""
+    a = ctx.args
+    params = _audit_filter_params(a)
+    params["format"] = a.format
+    r = ctx.call("audit.export", params)
+    ctx.out(r, f"đã xuất {r.get('rows', 0)} dòng audit (#{r.get('first_id') or '-'}…#{r.get('last_id') or '-'}, kèm cột băm) → {r.get('path')}\n"
+               f"  {r.get('bytes', 0)} byte · sha256 {r.get('sha256')} · file 0600")
+    return EXIT_OK
+
+
+def cmd_audit_verify(ctx: Any) -> int:
+    """L4: `cfharness audit verify [--since-id N] [--json]` — mã thoát 1 khi chuỗi gãy / bản neo lệch."""
+    a = ctx.args
+    params: dict[str, Any] = {"since_id": a.since_id} if a.since_id is not None else {}
+    if getattr(a, "archive", False):
+        params["archive"] = True
+    r = ctx.call("audit.verify", params)
+    lines = []
+    if r.get("no_chain"):
+        lines.append("DB chưa có chuỗi băm audit (schema < v30)")
+    b = r.get("break")
+    lines.append(f"đã kiểm {r.get('checked', 0)} dòng (#{r.get('first_id') or '-'}…#{r.get('last_id') or '-'}; chuỗi bắt đầu từ #{r.get('chain_start_id') or '-'}"
+                 f"{'; ' + str(r['unchained']) + ' dòng trước v30 không kiểm' if r.get('unchained') else ''}) trong {r.get('duration_ms', 0)} ms")
+    if b:
+        lines.append(f"GÃY ở dòng #{b['id']}: {b['reason']}\n  mong đợi: {b.get('expected')}\n  thực tế:  {b.get('actual')}")
+    anc = r.get("anchors") or {}
+    if not anc.get("file"):
+        lines.append("bản neo: chưa có file audit-anchors.jsonl")
+    if r.get("archive_cutoff"):
+        lines.append(f"lưu trữ: dòng ≤ #{r['archive_cutoff']} đã chuyển ra audit-archive/ ({r.get('archive_files', 0)} file)"
+                     + (f"; dòng đầu DB nối với file lưu trữ #{r['archive_link_id']}" if r.get("archive_link_id") else ""))
+    else:
+        lt = anc.get("latest") or {}
+        lines.append(f"bản neo: kiểm {anc.get('checked', 0)}/{anc.get('total', 0)}" + (f", mới nhất #{lt.get('last_id')} lúc {lt.get('ts')}" if lt else "")
+                     + (f", {anc['bad_lines']} dòng hỏng" if anc.get("bad_lines") else ""))
+        for x in anc.get("problems") or []:
+            what = "không còn trong DB (bị xoá)" if x["reason"] == "anchor_missing" else "băm khác (bị sửa rồi tính lại chuỗi)"
+            lines.append(f"  BẢN NEO #{x['id']}: {what}")
+    arc = r.get("archive")
+    if arc is not None:
+        lines.append(f"file lưu trữ: kiểm {arc.get('files', 0)} file, {arc.get('rows', 0)} dòng" + ("" if arc.get("ok") else " — CÓ LỖI"))
+        for x in arc.get("problems") or []:
+            lines.append(f"  {x.get('file')}: {x.get('reason')}" + (f" (dòng #{x['id']})" if x.get("id") else ""))
+    lines.append("KẾT QUẢ: " + ("toàn vẹn" if r.get("ok") else "PHÁT HIỆN SỬA/XOÁ — đã phát cảnh báo audit.tamper_detected"))
+    ctx.out(r, "\n".join(lines))
+    return EXIT_OK if r.get("ok") else 1
 
 
 def cmd_feedback(ctx: Any) -> int:
@@ -622,12 +722,30 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
 
     au = sub.add_parser("audit", help="xem nhật ký kiểm toán", parents=[common])
     aus = au.add_subparsers(dest="audit_action", required=True)
+
+    def _filters(sp: Any) -> None:
+        sp.add_argument("--kind", help="vd tool.write, agent.* (dấu * cuối = tiền tố)")
+        sp.add_argument("--run")
+        sp.add_argument("--agent")
+        sp.add_argument("--channel")
+        sp.add_argument("--principal", help="vd os:phuong, web:dev_ab12cd34, telegram:123, agent:coder")
+        sp.add_argument("--actor", help="vd user, hub, agent:coder")
+        sp.add_argument("--outcome", choices=["ok", "error", "denied"])
+        sp.add_argument("--req", help="mã yêu cầu r_…")
+        sp.add_argument("--q", help="tìm chuỗi con trong tóm tắt/đích (không tìm trong data)")
+        sp.add_argument("--since", help="vd 24h, 30m, 7d hoặc 2026-11-18T10:00")
+        sp.add_argument("--until", help="như --since")
+
     al = aus.add_parser("list", parents=[common])
-    al.add_argument("--kind", help="vd tool.write, agent.* ")
-    al.add_argument("--run")
-    al.add_argument("--agent")
-    al.add_argument("--channel")
+    _filters(al)
+    al.add_argument("--before-id", type=int, default=None, help="phân trang: chỉ dòng có id nhỏ hơn số này")
     al.add_argument("--limit", type=int, default=50)
+    ae = aus.add_parser("export", help="xuất audit ra HUB_HOME/exports/ (0600, kèm cột băm)", parents=[common])
+    _filters(ae)
+    ae.add_argument("--format", choices=["jsonl", "csv"], default="jsonl")
+    av = aus.add_parser("verify", help="kiểm chuỗi băm nhật ký kiểm toán + bản neo (L4)", parents=[common])
+    av.add_argument("--since-id", type=int, default=None, help="chỉ kiểm từ dòng id này (dòng trước được tin)")
+    av.add_argument("--archive", action="store_true", help="kiểm cả các file trong audit-archive/ (sha256 + chuỗi băm)")
     au.set_defaults(fn=cmd_audit)
 
     fb = sub.add_parser("feedback", help="ghi phản hồi về một run (Signal)", parents=[common])

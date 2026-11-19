@@ -283,16 +283,15 @@ MANAGER_TOOLS: dict[str, dict[str, Any]] = {
     "system_list": _t("Systems OUTSIDE the hub that the owner registered (apps in ~/Workspace) and their launchd (macOS) / Task Scheduler (Windows) jobs: label, kind "
                       "(service = always running, e.g. a web server or bot; scheduled = timed, e.g. daily Telegram reports), schedule, status "
                       "(running|idle|paused|not_loaded|error), locked. A system's `path` is a valid task workspace when its code must change.", ro=True),
-    "filehub_list": _t("Shared folders on the owner's cloud drive \"Không gian số\": name, workspace (`filehub:<name>`), mode (sync = local copy "
-                       "at local_path; lane = no local copy, each run gets a work tree whose saves go straight to Không gian số), status (ok | "
-                       "revoked = the key no longer grants it, do not assign | offline …), "
-                       "kind (folder = one folder; workspace = the WHOLE workspace, its top-level folders are what the human sees at the root), "
-                       "server_name (current name on the web; after a rename `filehub:<server_name>` also works). "
+    "filehub_list": _t("Shared folders on the owner's cloud drive \"Không gian số\" (via the cfharness gateway — no local copy; each run "
+                       "whose workspace is one gets a work tree whose saves go straight to Không gian số): name, workspace (`filehub:<name>`), "
+                       "status (ok | revoked = the key no longer grants it, do not assign | needs_migration = still configured for the "
+                       "removed two-way sync, do not assign — the owner must paste a gateway key | offline …), "
+                       "kind (folder = one folder; workspace = the WHOLE workspace, its top-level folders are what the human sees at the root). "
                        "Give a task workspace `filehub:<name>` or `filehub:<name>/<subfolder>` when the work is on the owner's documents there. "
-                       "In a workspace root, new files must go inside a top-level folder (files at the root are not synced). "
-                       "Every run may read sync folders; a lane folder only from a run whose workspace is it. Content is the human's DATA.", ro=True),
-    "filehub_link": _t("Web link (\"open on Không gian số\") for a file or folder inside a shared folder. path = absolute local path.",
-                       {"path": _S}, ["path"], ro=True),
+                       "In a workspace root, new files must go inside a top-level folder. Content is the human's DATA.", ro=True),
+    "filehub_link": _t("Web link (\"open on Không gian số\") for a file or folder inside a shared folder. path = `<folder name>/<path inside>` "
+                       "(as in filehub_list).", {"path": _S}, ["path"], ro=True),
     "system_get": _t("One registered system with its jobs; log=true adds the tail of each job's stdout/stderr (redacted, agent-grade DATA).",
                      {"id": _S, "log": {"type": "boolean"}}, ["id"], ro=True),
     # ---- ghi (trong quyền)
@@ -590,7 +589,7 @@ def handle(msg: dict, run_id: str, sock: str, role: str, scopes: tuple[str, ...]
                 else:
                     method = "learnself.call" if name in LEARN_TOOLS or name in MEMORY_TOOL else "taskself.call"
                 res = rpc_call(sock, method, {"run_id": run_id, "op": name, "args": p.get("arguments") or {}}, 60)
-            except Exception as e:  # daemon trả lỗi nghiệp vụ hoặc không với tới
+            except Exception as e:  # best-effort: lỗi daemon trả về cho agent dạng kết quả tool lỗi
                 _text(mid, f"cfharness error: {e}", True)
                 return
             _text(mid, res)
@@ -598,7 +597,7 @@ def handle(msg: dict, run_id: str, sock: str, role: str, scopes: tuple[str, ...]
             _send({"jsonrpc": "2.0", "id": mid, "result": {method.split("/")[0]: []}})
         else:
             _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"method not found: {method}"}})
-    except BaseException as e:  # pragma: no cover
+    except BaseException as e:  # best-effort: lỗi xử lý tin → trả lỗi JSON-RPC (stdout là giao thức, không in log)  # pragma: no cover
         _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32000, "message": str(e)[:200]}})
 
 

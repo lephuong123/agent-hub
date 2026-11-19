@@ -31,11 +31,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .aiotasks import spawn
 from .agents import load_mcp_registry
 from .cost_guard import COST_BASIS_ESTIMATED, estimated_run_cost, flag_once, manager_budget_scope
 from .errors import Blocked, HubError, NotFound
 from .events import TERMINAL_RUN_EVENTS, HubEvent, make_event
 from .logs import run_logger, set_run_context
+from .trace import ENV_REQ_ID, REQ_CTX, current_req_id, new_req_id, set_ctx as set_trace_ctx, valid_req_id
 from .prompt import build_system_prompt, prompt_hash
 from .runtime import AgentRuntime, RunHandle, RunSpec, RuntimeError_, make_runtime
 from .store import now_iso
@@ -88,8 +90,6 @@ class ActiveRun:
     last_hb: float = 0.0
     checkpoint: dict[str, Any] | None = None
     diff_done: bool = False
-    # filehub: `extra_write_roots` nằm trong thư mục chung → danh sách tệp trước run (báo sau run; không revert)
-    extra_checkpoints: list[dict[str, Any]] = field(default_factory=list)
     kind: str = "adhoc"  # M4-A: run review không tính vào max_concurrent_runs của agent
     entered: bool = False  # hardening H-21: coroutine `_run` đã bắt đầu (khoá đặt chỗ trong tick được `_run` nhả)
 
@@ -252,10 +252,8 @@ class RunManager:
             if isinstance(prev, dict) and prev.get("tree") and prev.get("root") == lane_t["root"] and prev.get("sub") == lane_t["sub"]:
                 lane_opts["tree"] = prev["tree"]  # retry/resume của task: CÙNG cây → `claude --resume` tìm thấy session theo cwd
             run_opts = {**(run_opts or {}), "workspace_kind": "filehub_lane", "filehub": lane_t["folder"], "filehub_lane": lane_opts}
-        elif cwd and str(cwd).startswith("filehub:"):  # thư mục chung Không gian số: `filehub:<tên>[/<con>]` → bản sao cục bộ
-            fh_path, fh_folder, _sub = self.hub.filehub.resolve_ref(str(cwd))  # type: ignore[attr-defined]
-            cwd = fh_path
-            run_opts = {**(run_opts or {}), "workspace_kind": "filehub", "filehub": fh_folder["name"]}
+        elif cwd and str(cwd).startswith("filehub:"):  # thư mục đồng bộ cũ cần chuyển / tên sai → lỗi có giải thích (không bản sao nào được dùng)
+            self.hub.filehub.resolve_ref(str(cwd))  # type: ignore[attr-defined]
         if cwd:  # MGR-1: workspace ad-hoc phải trong gốc cho phép, không trong vùng bảo vệ
             from .workspace import validate_workspace
             validate_workspace(self.hub, cwd, "cwd của run")
@@ -344,6 +342,8 @@ class RunManager:
             "team_id": team_id,
             "run_opts": run_opts or None,
             "max_runtime_s": max_runtime_s,
+            # L2: mã yêu cầu của lệnh tạo run (resume/continue = lệnh mới → mã mới); tạo ngoài mọi lượt (khôi phục…) → mã riêng
+            "req_id": current_req_id() or new_req_id(),
         }
         self.store.insert_run(row)
         try:
@@ -450,7 +450,7 @@ class RunManager:
             ar = ActiveRun(rid, agent["id"], task_id=run.get("task_id"), team_id=run.get("team_id"), kind=run.get("kind") or "adhoc")
             ar.lock_key = lock_key
             self.active[rid] = ar
-            ar.task = asyncio.get_event_loop().create_task(self._run(ar, run, agent))
+            ar.task = asyncio.get_event_loop().create_task(self._run(ar, run, agent), name=f"run:{ar.run_id}")
             ar.task.add_done_callback(lambda _t, ar=ar, sid=run["session_id"]: self._release_unstarted(ar, sid))
             started.append(rid)
         # giữ thứ tự FIFO cho run bị bỏ qua
@@ -485,7 +485,9 @@ class RunManager:
                 wkind = "scratch"  # (cây lane nằm ở đó nhưng là THƯ MỤC CỦA NGƯỜI trên Không gian số → `dir`, không bao giờ scratch/bypass)
         elif agent.get("workspace_default"):
             wd = str(agent["workspace_default"])
-            cwd = Path(hub.filehub.resolve_ref(wd)[0] if wd.startswith("filehub:") else wd).expanduser()  # type: ignore[attr-defined]
+            if wd.startswith("filehub:"):  # thư mục chung: chỉ qua cổng (ref lane đã thành cây ở trên) — còn lại là lỗi có giải thích
+                hub.filehub.resolve_ref(wd)  # type: ignore[attr-defined]
+            cwd = Path(wd).expanduser()
             wkind = "dir"
         else:
             cwd, wkind = home / "workspaces" / run_id, "scratch"
@@ -693,6 +695,8 @@ class RunManager:
                 tp["allowed_tools"] = list(dict.fromkeys(list(tp.get("allowed_tools") or []) + [f"mcp__{_HS}"]))
                 env_extra = {**env_extra, "CFHARNESS_RUN_ID": run_id}
             servers[_HS] = add_fs_flag(servers[_HS], "browse")
+        if valid_req_id(run.get("req_id")):  # L2: hook guard/observe gửi kèm req_id → guard.check cùng mã với lệnh tạo run
+            env_extra = {**env_extra, ENV_REQ_ID: str(run["req_id"])}
         mcp_path = rt_dir / "mcp.json"
         _write_json_0600(mcp_path, {"mcpServers": servers})
         sp_path = None
@@ -864,6 +868,11 @@ class RunManager:
         hub = self.hub
         run_id, agent_id = ar.run_id, ar.agent_id
         set_run_context(run_id, agent_id)  # H-20: mọi log trong task này có run_id/agent_id
+        # L2: event/log/audit trong task của run mang req_id của run (task riêng → không cần reset); run trước v28 → không có mã
+        if valid_req_id(run.get("req_id")):
+            set_trace_ctx(run["req_id"], channel="run")
+        else:
+            REQ_CTX.set(None)
         rlog = run_logger(log, run_id, agent_id, task_id=ar.task_id)
         spec: RunSpec | None = None
         lane_run = False
@@ -882,7 +891,13 @@ class RunManager:
                         await proxy.ensure_started()
                     except (HubError, OSError) as e:
                         rlog.warning("proxy OAuth MCP không khởi động được (%s) — dùng Bearer tĩnh trong mcp.json", e)
-            if (run.get("run_opts") or {}).get("filehub_lane"):  # cổng cfharness: dựng cây làm việc TRƯỚC spawn (lỗi → failed filehub_unavailable)
+            ropts = run.get("run_opts") or {}
+            if ropts.get("workspace_kind") == "filehub" and not ropts.get("filehub_lane"):
+                # run tạo trước H5 trên bản sao của đồng bộ 2 chiều cũ (đã bỏ): không chạy trong bản sao cũ nữa
+                from .filehub.service import legacy_text
+
+                raise HubError(legacy_text(ropts.get("filehub") or "?"))
+            if ropts.get("filehub_lane"):  # cổng cfharness: dựng cây làm việc TRƯỚC spawn (lỗi → failed filehub_unavailable)
                 lane_cwd, lane_opts = await hub.filehub.lane.prepare_run(run, agent)  # type: ignore[attr-defined]
                 run = {**run, "cwd": str(lane_cwd), "run_opts": lane_opts}
                 lane_run = True
@@ -890,7 +905,6 @@ class RunManager:
             spec = self._prepare_spec(run, agent, recall=recall)
             spec.control_handler = functools.partial(self._control_request, ar)  # CLI 2.1.303+: control_request can_use_tool → guard
             await self._checkpoint(ar, run, spec)
-            await self._extra_checkpoints(ar, run)
             cli_version = await self._check_cli_version(runtime, agent_id, run_id)
             if self._ended_before_start(run_id):
                 return
@@ -929,8 +943,6 @@ class RunManager:
                 self._on_event(ar, ev)
             if ar.checkpoint is not None:
                 await self._diff(ar)  # M3: diff có trước event kết thúc run
-            if ar.extra_checkpoints:
-                await self._extra_diff(ar)
             if lane_run:  # cổng cfharness: quét lần cuối + đẩy hết (≤ final_flush_s) + diff từ nhật ký thao tác — TRƯỚC event kết thúc run
                 await hub.filehub.lane.flush_run(run_id)  # type: ignore[attr-defined]
             await self._finalize(ar)
@@ -958,8 +970,6 @@ class RunManager:
                 shutil.rmtree(Path(agent["home_path"]) / "runtime" / run_id, ignore_errors=True)
             if ar.checkpoint is not None and not ar.diff_done:
                 await self._diff(ar)
-            if ar.extra_checkpoints:
-                await self._extra_diff(ar)
             if lane_run:  # đỗ cây (waiting_human) hoặc báo + xoá/mồ côi cây
                 try:
                     await hub.filehub.lane.end_run(run_id)  # type: ignore[attr-defined]
@@ -1014,13 +1024,9 @@ class RunManager:
 
         wc = self.hub.config.get("workspace")
         try:
-            fh = (run.get("run_opts") or {}).get("filehub")
-            cp = await asyncio.to_thread(take_checkpoint, spec.cwd, self.checkpoint_dir(ar.run_id), max_file_bytes=int(wc["max_file_bytes"]), max_files=int(wc["max_files"]),
-                                         force_walk=bool(fh))
-            if fh:
-                cp["filehub"] = str(fh)
+            cp = await asyncio.to_thread(take_checkpoint, spec.cwd, self.checkpoint_dir(ar.run_id), max_file_bytes=int(wc["max_file_bytes"]), max_files=int(wc["max_files"]))
         except Exception as e:  # checkpoint lỗi không chặn run, nhưng ghi lại (không revert được)
-            run_logger(log, ar.run_id, ar.agent_id).warning("checkpoint run %s lỗi: %r", ar.run_id, e)
+            run_logger(log, ar.run_id, ar.agent_id).warning("checkpoint run %s lỗi: %r", ar.run_id, e, exc_info=True)
             self.store.update_run(ar.run_id, {"checkpoint": {"kind": "error", "error": repr(e)[:300]}, "workspace_key": ar.lock_key})
             return
         ar.checkpoint = cp
@@ -1034,51 +1040,6 @@ class RunManager:
         ev.task_id, ev.team_id = ar.task_id, ar.team_id
         self.hub.publish(ev)
 
-    async def _extra_checkpoints(self, ar: ActiveRun, run: dict[str, Any]) -> None:
-        """filehub: mỗi `extra_write_roots` nằm trong thư mục chung (mà workspace chính không phủ) → chụp danh sách tệp (size, mtime) để
-        sau run báo `filehub.changed|deleted|secret_warning` như workspace `filehub:`. Không revert (hoàn tác ở Không gian số)."""
-        opts = run.get("run_opts") or {}
-        extra = opts.get("extra_write_roots") or []
-        fh = getattr(self.hub, "filehub", None)
-        if not extra or fh is None or opts.get("read_only") or not self.hub.config.get("workspace.checkpoint"):
-            return
-        from .filehub.service import _real, _under, root_of
-        from .workspace import take_checkpoint
-
-        covered: list[str] = []
-        if ar.checkpoint and ar.checkpoint.get("filehub") and ar.checkpoint.get("root"):
-            covered.append(_real(str(ar.checkpoint["root"])))  # workspace chính đã là thư mục chung → đã có báo
-        roots: list[str] = []
-        for x in sorted({_real(str(x)) for x in extra if isinstance(x, str)}, key=len):
-            if root_of(self.hub, x) is None or not os.path.isdir(x) or any(_under(x, c) for c in covered + roots):
-                continue
-            roots.append(x)
-        max_files = int((self.hub.config.get("workspace") or {}).get("max_files") or 20_000)
-        for r in roots[:5]:
-            try:
-                cp = await asyncio.to_thread(take_checkpoint, r, self.checkpoint_dir(ar.run_id), max_files=max_files, force_walk=True)
-            except Exception as e:  # không chặn run
-                run_logger(log, ar.run_id, ar.agent_id).warning("checkpoint extra_write_root %s lỗi: %r", r, e)
-                continue
-            ar.extra_checkpoints.append(cp)
-
-    async def _extra_diff(self, ar: ActiveRun) -> None:
-        from .workspace import compute_diff
-
-        cps, ar.extra_checkpoints = ar.extra_checkpoints, []
-        diffs = []
-        for cp in cps:
-            try:
-                diffs.append(await asyncio.to_thread(compute_diff, cp, self.checkpoint_dir(ar.run_id)))
-            except Exception as e:
-                run_logger(log, ar.run_id, ar.agent_id).warning("diff extra_write_root %s lỗi: %r", cp.get("root"), e)
-        fh = getattr(self.hub, "filehub", None)
-        if diffs and fh is not None:
-            try:
-                fh.report_extra(ar.run_id, diffs)
-            except Exception:  # pragma: no cover — báo lỗi không làm hỏng kết thúc run
-                run_logger(log, ar.run_id, ar.agent_id).exception("báo filehub cho extra_write_roots lỗi")
-
     async def _diff(self, ar: ActiveRun) -> None:
         from .workspace import compute_diff
 
@@ -1086,7 +1047,7 @@ class RunManager:
         try:
             diff = await asyncio.to_thread(compute_diff, ar.checkpoint, self.checkpoint_dir(ar.run_id), max_file_bytes=int(self.hub.config.get("workspace.max_file_bytes")))
         except Exception as e:
-            run_logger(log, ar.run_id, ar.agent_id).warning("diff run %s lỗi: %r", ar.run_id, e)
+            run_logger(log, ar.run_id, ar.agent_id).warning("diff run %s lỗi: %r", ar.run_id, e, exc_info=True)
             self.store.update_run(ar.run_id, {"diff": {"kind": "error", "error": repr(e)[:300]}})
             return
         self.store.update_run(ar.run_id, {"diff": diff})
@@ -1097,7 +1058,7 @@ class RunManager:
     def _on_timeout(self, ar: ActiveRun) -> None:
         ar.timed_out = True
         if ar.handle is not None and ar.runtime is not None:
-            asyncio.ensure_future(ar.runtime.stop(ar.handle, grace_s=float(self.hub.config.get("runs.stop_grace_s"))))
+            spawn(ar.runtime.stop(ar.handle, grace_s=float(self.hub.config.get("runs.stop_grace_s"))), name=f"run-stop-timeout:{ar.run_id}")
 
     def _on_event(self, ar: ActiveRun, ev: HubEvent) -> None:
         # Trạng thái agent do hub tính (nhiều run/agent), không lấy agent.status từ adapter.
@@ -1152,7 +1113,7 @@ class RunManager:
             try:
                 await ar.runtime.stop(h, grace_s=0.5)
             except Exception:  # pragma: no cover
-                pass
+                log.debug("dọn tiến trình con mồ côi của run lỗi", exc_info=True)
         sig = (self.store.get_run(ar.run_id) or {}).get("task_signal") or {}
         if outcome == "completed" and sig.get("op") == "block":
             outcome = "blocked"  # agent gọi hub-self task_block (FR-TK-03)
@@ -1348,7 +1309,7 @@ class RunManager:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._auth_watch = loop.create_task(self._auth_watch_loop())
+        self._auth_watch = loop.create_task(self._auth_watch_loop(), name="runs-auth-watch")
 
     async def _auth_watch_loop(self) -> None:
         while self.auth_block and not self.shutting_down:
@@ -1391,7 +1352,7 @@ class RunManager:
         if ar is None or ar.handle is None or ar.runtime is None:
             raise HubError(f"run '{rid}' không đang chạy (status={run['status']})")
         grace = float(self.hub.config.get("runs.stop_grace_s"))
-        asyncio.ensure_future(ar.runtime.stop(ar.handle, grace_s=grace))
+        spawn(ar.runtime.stop(ar.handle, grace_s=grace), name=f"run-stop:{rid}")
         return run
 
     async def set_estop(self, on: bool, *, reason: str | None = None, stop_running: bool = False) -> dict[str, Any]:
@@ -1402,7 +1363,7 @@ class RunManager:
             grace = float(self.hub.config.get("runs.stop_grace_s"))
             for ar in list(self.active.values()):
                 if ar.handle is not None and ar.runtime is not None:
-                    asyncio.ensure_future(ar.runtime.stop(ar.handle, grace_s=grace))
+                    spawn(ar.runtime.stop(ar.handle, grace_s=grace), name=f"run-stop-estop:{ar.run_id}")
         if not on:
             self.tick()
         return state
@@ -1428,7 +1389,7 @@ class RunManager:
                 try:
                     await asyncio.wait_for(ar.task, 15)
                 except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
-                    pass
+                    log.debug("chờ task run kết thúc khi dừng hub lỗi/hết giờ", exc_info=True)
         pending = [rid for rid in interrupted if (self.store.get_run(rid) or {}).get("status") == "interrupted"]
         self.store.state_set("pending_resume", sorted(set(list(self.store.state_get("pending_resume", []) or []) + pending)))
         self.queue.clear()
@@ -1454,7 +1415,7 @@ class RunManager:
         grace = float(self.hub.config.get("runs.stop_grace_s"))
         delay = float(self.hub.config.get("approval.pause_delay_s"))
         loop = asyncio.get_event_loop()
-        loop.call_later(delay, lambda: asyncio.ensure_future(ar.runtime.stop(ar.handle, grace_s=grace)))  # type: ignore[union-attr]
+        loop.call_later(delay, lambda: spawn(ar.runtime.stop(ar.handle, grace_s=grace), name=f"run-pause:{run_id}"))  # type: ignore[union-attr]
 
     def pause_clock(self, run_id: str) -> None:
         """Dừng đồng hồ max_runtime_s khi đang giữ chờ người (thời gian chờ người không tính, như approval_human_wait)."""

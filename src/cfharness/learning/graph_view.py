@@ -15,9 +15,12 @@ Văn bản episode KHÔNG BAO GIỜ được trả (chỉ id). Method HUMAN_ONLY
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from ..errors import HubError, NotFound
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..hub import Hub
@@ -170,6 +173,7 @@ def graph_view(hub: "Hub", p: dict[str, Any]) -> dict[str, Any]:
             try:
                 qvec = emb.embed([query])[0]
             except Exception:
+                log.debug("graph_view: embed câu truy vấn lỗi — chỉ FTS", exc_info=True)
                 qvec = None
         ranked = r.search(tiers, query, hidden=hidden, limit=50, hops=hops, include_history=history, query_vec=qvec,
                           half_life_days=float(_cfg(hub, "recall.half_life_days", 90)))

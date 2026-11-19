@@ -39,7 +39,7 @@ def _port_busy(host: str, port: int) -> bool:
 def _open(url: str) -> None:
     try:
         webbrowser.open(url, new=2)
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: không mở được trình duyệt — URL vẫn được in  # pragma: no cover
         pass
 
 
@@ -47,7 +47,7 @@ def _web_cfg(ctx: Any) -> dict[str, Any]:
     """Nhánh `web` của config qua daemon (tự khởi động). Lỗi → {} (chỉ dùng cục bộ)."""
     try:
         v = ctx.call("config.get", {"key": "web"})
-    except Exception:  # noqa: BLE001
+    except Exception:  # best-effort: daemon lỗi → {} (chỉ dùng cục bộ)  # noqa: BLE001
         return {}
     return v if isinstance(v, dict) else {}
 
@@ -114,7 +114,7 @@ def _notify(ctx: Any, kind: str, data: dict[str, Any]) -> None:
     """`web.notify` (HUMAN_ONLY: audit + event → Telegram). Daemon cũ (chưa có method) → audit thường."""
     try:
         ctx.call("web.notify", {"kind": kind, "data": data, "channel": "cli"})
-    except Exception:  # noqa: BLE001
+    except Exception:  # best-effort: daemon cũ chưa có web.notify → audit thường  # noqa: BLE001
         _audit(ctx, kind, data)
 
 
@@ -160,8 +160,17 @@ def cmd_devices(ctx: Any, words: list[str]) -> int:
 def _audit(ctx: Any, kind: str, data: dict[str, Any] | None = None) -> None:
     try:
         ctx.call("audit.record", {"kind": kind, "actor": "user", "channel": "cli", "summary": kind, "data": data or {}})
-    except Exception:  # noqa: BLE001
+    except Exception:  # best-effort: audit từ CLI là phụ  # noqa: BLE001
         pass
+
+
+def _logs_cfg(ctx: Any) -> dict[str, Any]:
+    try:
+        from ..config import HubConfig
+
+        return HubConfig(ctx.paths.config).get("logs") or {}
+    except Exception:  # best-effort: config hỏng → mặc định
+        return {}
 
 
 def cmd_web(ctx: Any) -> int:
@@ -208,6 +217,10 @@ def cmd_web(ctx: Any) -> int:
         print(f"lỗi: cổng {a.port} đang bận — chọn cổng khác: cfharness web --port {a.port + 1}", file=sys.stderr)
         return 1
     ctx.client()  # tự khởi động daemon nếu chưa chạy
+    from ..logs import install_crash_handlers, logs_settings, setup_process_logging
+
+    if setup_process_logging(ctx.paths.logs_dir, "web", "web.jsonl", logs_settings(_logs_cfg(ctx))):  # L1: log JSONL + che secret
+        install_crash_handlers()
     import uvicorn
 
     from .app import create_app

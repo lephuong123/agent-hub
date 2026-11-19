@@ -63,6 +63,33 @@ def format_message(ev: HubEvent) -> str | None:
         done = "đã khôi phục bản chuẩn" if (p.get("restored") or p.get("moved")) else "cần bạn kiểm tra"
         return (f"🚨 `{what}` bị sửa ngoài hub — {done}: `{_clip(', '.join(str(f) for f in files if f) or str(p), 300)}`\n"
                 "Nếu chính bạn sửa: `cfharness guard integrity accept`")
+    if ev.type == "audit.tamper_detected":  # L4 (audit_chain.py): payload chỉ id + mã lý do — lọc lại kiểu trước khi in
+        parts = []
+        if isinstance(p.get("break_id"), int):
+            parts.append(f"chuỗi băm gãy ở dòng #{p['break_id']} ({_clip(p.get('reason'), 20)})")
+        for a in (p.get("anchors") or [])[:3]:
+            if isinstance(a, dict) and isinstance(a.get("id"), int):
+                parts.append(f"bản neo dòng #{a['id']} {'không còn' if a.get('reason') == 'anchor_missing' else 'không khớp'}")
+        return ("🚨 Nhật ký kiểm toán bị sửa/xoá ngoài hub: " + ("; ".join(parts) or "chuỗi băm không hợp lệ")
+                + "\nKiểm lại: `cfharness audit verify`")
+    if ev.type == "audit.alert":  # L5 (audit_watch.py): payload chỉ id/enum — lọc lại kiểu trước khi in
+        from ..audit_watch import RULE_VI, SUBJECTS, clean_principal
+
+        rule = p.get("rule") if p.get("rule") in RULE_VI else None
+        if rule is None or p.get("state") not in ("on", "resolved"):
+            return None
+        who = clean_principal(p.get("principal") or "?")
+        n = p.get("count") if isinstance(p.get("count"), int) else 0
+        win = p.get("window_s") if isinstance(p.get("window_s"), int) else 0
+        subj = f" · `{p['subject']}`" if p.get("subject") in SUBJECTS else ""
+        if p["state"] == "resolved":
+            return f"✅ Hết cảnh báo kiểm toán «{RULE_VI[rule]}» — `{who}` (tổng {n} lượt){subj}"
+        return (f"🛎 Cảnh báo kiểm toán: {RULE_VI[rule]} — `{who}` ({n} lượt / {max(1, win // 60)} phút){subj}\n"
+                f"Xem: `cfharness audit list --principal {who} --since 1h`")
+    if ev.type == "audit.anchored":  # L4: bản neo định kỳ (chỉ khi audit.anchor_notify bật) — giữ tin này làm bằng chứng ngoài máy
+        if not isinstance(p.get("last_id"), int) or not isinstance(p.get("row_hash"), str):
+            return None
+        return f"🔗 Neo nhật ký kiểm toán: dòng #{p['last_id']} · băm `{_clip(p['row_hash'], 64)}`"
     if ev.type == "admin.alert":  # quản trị máy (admin_watch.py): payload chỉ id/enum — lọc lại trước khi in
         from ..admin_overview import USER_RE
         from ..admin_watch import ALERT_VI
@@ -154,8 +181,7 @@ def _filehub_text(etype: str, p: dict[str, Any], agent: str) -> str | None:
             return (f"⛔ *{agent}* muốn xoá {n} mục trong «{folder}» cùng lúc — hub đang GIỮ, chưa xoá gì:\n{body}{rest}\n"
                     f"Quyết ở web › Cài đặt › Cổng cfharness («Cho xoá» / «Không xoá») hoặc `cfharness filehub resume --root {root}` "
                     "(thêm `--discard` để không xoá).")
-        return (f"⛔ Đã dừng đẩy lên Không gian số cho «{folder}» (xoá hàng loạt). Kiểm tra rồi chạy: "
-                f"`cfharness filehub resume --root {root}`")
+        return f"⛔ «{folder}»: thay đổi lên Không gian số đang bị giữ (xoá hàng loạt) — xem web › Cài đặt › Không gian số."
     if etype == "filehub.lane.roots":
         parts = []
         if p.get("added"):
@@ -164,9 +190,9 @@ def _filehub_text(etype: str, p: dict[str, Any], agent: str) -> str | None:
             parts.append("mất quyền (khoá không còn được cấp — tệp không bị xoá): " + ", ".join(f"«{one_line(x, 80)}»" for x in p["revoked"][:20]))
         if p.get("regranted"):
             parts.append("được cấp lại: " + ", ".join(f"«{one_line(x, 80)}»" for x in p["regranted"][:20]))
-        if p.get("sync"):
-            parts.append("đang đồng bộ kiểu cũ (giữ nguyên — chuyển ở web › Cài đặt › Cổng cfharness): "
-                         + ", ".join(f"«{one_line(x, 80)}»" for x in p["sync"][:20]))
+        if p.get("converted"):
+            parts.append("đã chuyển từ đồng bộ cũ sang cổng (bản sao trên máy để nguyên): "
+                         + ", ".join(f"`filehub:{one_line(x, 80)}`" for x in p["converted"][:20]))
         return ("📂 Cổng cfharness: " + "; ".join(parts)) if parts else None
     return None
 
@@ -229,5 +255,5 @@ class SlackNotifier(QueuedNotifier):
         try:
             await asyncio.to_thread(self._post, t, text)
             return {"sent": True, "kind": t["kind"]}
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi trả về trong reason; không exc_info vì traceback có thể mang URL webhook
             return {"sent": False, "reason": _clip(e, 300)}

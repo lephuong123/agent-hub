@@ -28,7 +28,7 @@ from .pathmap import rewrite_files as _pm_rewrite_files
 from .pathmap import scan_files as _pm_scan_files
 from .paths import HubPaths, legacy_default_home, legacy_home_in_use, resolve_home
 
-STALE = ("hub.sock", "hub.sock.auth", "hub.pid")
+STALE = ("hub.sock", "hub.sock.auth", "hub.sock.web.auth", "hub.sock.mcp.auth", "hub.pid")
 
 
 @dataclass
@@ -85,7 +85,7 @@ def daemon_running(home: Path) -> int | None:
         return int(st.get("pid") or 0) or -1
     except DaemonUnavailable:
         return None
-    except Exception:
+    except Exception:  # best-effort: không đọc được trạng thái → coi là đang chạy, không rõ pid
         return -1
 
 

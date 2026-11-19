@@ -570,26 +570,14 @@ def test_desktop_app_data_forbidden(env):
     assert classify("Bash", {"command": "cat ~/Workspace/cfharness-desktop/src/x.rs"}, env["ctx"]).rule != "desktop_app_data"
 
 
-# ------------------------------------------------------------------ thư mục chung Không gian số (filehub/, plan-cloud-files §7.3)
-# FH = gốc bản sao cục bộ = cwd của run. Xoá/di chuyển/ghi đè TRONG thư mục chung = `write` (không hỏi — hub báo người sau run, khôi phục ở
-# thùng rác Không gian số); metadata sync (.tangthu*, HUB_HOME/filehub) = CẤM; xoá chính gốc = phá huỷ (mất cả thư mục đồng bộ).
-SAFE_FILEHUB = [
-    ("Bash", {"command": "rm FH/Báo cáo/cu.docx"}),
-    ("Bash", {"command": "rm -rf FH/Báo cáo/nhap"}),
-    ("Bash", {"command": "rm -r 'Báo cáo/nhap'"}),
-    ("Bash", {"command": "mv FH/Báo cáo/cu.docx FH/Lưu trữ/cu.docx"}),
-    ("Bash", {"command": "mv FH/Báo cáo/cu.docx /tmp/cu.docx"}),
-    ("Bash", {"command": "echo x > FH/Báo cáo/cu.docx"}),
-    ("Bash", {"command": "cp /tmp/moi.docx FH/Báo cáo/cu.docx"}),
-    ("Bash", {"command": "rmdir FH/Lưu trữ"}),
-    ("Write", {"file_path": "FH/Báo cáo/cu.docx", "content": "x"}),
-    ("Edit", {"file_path": "FH/Báo cáo/cu.docx", "old_string": "a", "new_string": "b"}),
-    ("Read", {"file_path": "FH/Báo cáo/cu.docx"}),
-]
-DESTRUCTIVE_FILEHUB = [  # (tool, input, cấm?)
+# ------------------------------------------------------------------ bản sao cũ của đồng bộ Không gian số (đã bỏ ở H5)
+# FH = bản sao cũ trên máy (= cwd của run cho dễ kiểm). Không còn là thư mục chung: xoá/ghi đè tệp có sẵn = luật thường (KHÔNG nới thành
+# `write`); metadata cũ `.tangthu*` + vùng HUB_HOME/filehub vẫn CẤM (đề phòng bản sao còn trên máy).
+DESTRUCTIVE_OLD_COPY = [  # (tool, input, cấm?)
     ("Bash", {"command": "rm -rf FH"}, False),
     ("Bash", {"command": "rm FH/.tangthu.db"}, True),
     ("Bash", {"command": "echo x > FH/.tangthu-base/state"}, True),
+    ("Bash", {"command": "mv FH/.tangthu.db /tmp/x"}, True),
     ("Write", {"file_path": "FH/.tangthu.db", "content": "x"}, True),
     ("Edit", {"file_path": "FH/Báo cáo/.tangthu-tmp", "old_string": "a", "new_string": "b"}, True),
     ("Write", {"file_path": "HUB/filehub/control.json", "content": "{}"}, True),
@@ -608,7 +596,7 @@ def fhenv(env, tmp_path_factory):
     (fh / ".tangthu.db").write_text("")
     old = env["ctx"]
     real = os.path.realpath(fh)
-    ctx = GuardContext(Path(real), old.policy, run_since=old.run_since + 10_000, hub_socket=old.hub_socket, git_probe=False, filehub_roots=(real,))
+    ctx = GuardContext(Path(real), old.policy, run_since=old.run_since + 10_000, hub_socket=old.hub_socket, git_probe=False, filehub_old_copies=(real,))
     return {**env, "ctx": ctx, "fh": real}
 
 
@@ -617,53 +605,24 @@ def _fh(fhenv, ti):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="macOS/Linux")
-def test_filehub_delete_move_overwrite_is_write(fhenv):
-    bad = []
-    for tool, ti in SAFE_FILEHUB:
-        v = classify(tool, _fh(fhenv, ti), fhenv["ctx"])
-        if held(v):
-            bad.append((tool, ti, v.verdict, v.rule))
-    assert not bad, bad
-    v = classify("Bash", _fh(fhenv, {"command": "rm -rf FH/Báo cáo/nhap"}), fhenv["ctx"])
-    assert v.verdict == "write" and v.rule == "filehub_delete"
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="macOS/Linux")
-def test_filehub_metadata_forbidden_root_delete_destructive(fhenv):
+def test_old_sync_copy_not_relaxed_metadata_still_forbidden(fhenv):
     missed = []
-    for tool, ti, forbid in DESTRUCTIVE_FILEHUB:
+    for tool, ti, forbid in DESTRUCTIVE_OLD_COPY:
         v = classify(tool, _fh(fhenv, ti), fhenv["ctx"])
         if not held(v) or bool(v.forbidden) != forbid:
             missed.append((tool, ti, v.verdict, v.rule, v.forbidden))
     assert not missed, missed
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="macOS/Linux")
-def test_filehub_outside_write_roots_unchanged(fhenv, env, monkeypatch):
-    """Run KHÔNG được giao thư mục chung (cwd ở repo khác): xoá tệp có sẵn trong thư mục chung vẫn hỏi người như cũ; ghi vẫn ngoài workspace."""
-    import tempfile
-
-    from cfharness.guard.classifier import TMP_PREFIXES
-
-    if fhenv["fh"].startswith(TMP_PREFIXES):  # Linux: thư mục tạm của pytest nằm dưới /tmp — vốn là vùng ghi tự do, ca này chỉ có nghĩa trên macOS
-        pytest.skip("thư mục chung giả nằm dưới /tmp")
-    monkeypatch.setattr(tempfile, "tempdir", "/nonexistent-cfh-tmp")  # thư mục tạm của pytest chứa cả thư mục chung giả — không coi là vùng tạm
-    old = fhenv["ctx"]
-    ctx = GuardContext(env["ws"], old.policy, run_since=old.run_since, hub_socket=old.hub_socket, git_probe=False, filehub_roots=old.filehub_roots)
-    v = classify("Bash", {"command": f"rm '{fhenv['fh']}/Báo cáo/cu.docx'"}, ctx)
-    assert v.verdict == "destructive" and v.rule == "delete_not_run_created"
-    v = classify("Write", {"file_path": f"{fhenv['fh']}/Báo cáo/cu.docx", "content": "x"}, ctx)
-    assert v.verdict == "destructive" and v.rule == "write_outside_workspace"
-    # được cấp qua extra_write_roots → như workspace
-    ctx2 = GuardContext(env["ws"], old.policy, run_since=old.run_since, hub_socket=old.hub_socket, git_probe=False, filehub_roots=old.filehub_roots,
-                        extra_write_roots=(fhenv["fh"],))
-    assert classify("Bash", {"command": f"rm '{fhenv['fh']}/Báo cáo/cu.docx'"}, ctx2).rule == "filehub_delete"
+    for cmd in ("rm -rf FH/Báo cáo/nhap", "rm FH/Báo cáo/cu.docx", "echo x > FH/Báo cáo/cu.docx", "mv FH/Báo cáo/cu.docx /tmp/x"):
+        v = classify("Bash", _fh(fhenv, {"command": cmd}), fhenv["ctx"])  # luật thường (thư mục tạm của pytest có thể là vùng ghi tự do)
+        assert v.rule not in ("filehub_delete", "filehub_overwrite", "filehub_root_delete") and not v.forbidden, (cmd, v.rule)
+    assert classify("Read", _fh(fhenv, {"file_path": "FH/Báo cáo/cu.docx"}), fhenv["ctx"]).verdict == "safe"
 
 
 def test_filehub_cli_human_only(env):
     for cmd in ("cfharness filehub setup --server https://x --binary /b", "cfharness filehub login", "cfharness filehub add r1",
                 "cfharness filehub remove chung", "cfharness filehub pause", "cfharness filehub resume --root r1",
-                "cfharness filehub switch-to-workspace --no-wait", "cfharness filehub rename chung moi"):
+                "cfharness filehub switch-to-workspace --no-wait", "cfharness filehub rename chung moi",
+                "cfharness filehub lane setup", "cfharness filehub lane orphan push t1"):
         v = bash(env, cmd)
         assert v.forbidden, (cmd, v.rule)
     assert not bash(env, "cfharness filehub status").forbidden
@@ -709,6 +668,13 @@ def test_session_reindex_cli_human_only(env):
         v = bash(env, cmd)
         assert v.forbidden and v.rule == "hub_human_only", (cmd, v.rule)
     assert not bash(env, "cfharness session status").forbidden
+
+
+def test_logs_cli_human_only(env):
+    """L1 (docs/dev-notes/plan-logging.md): đổi/xem level log + dump stack daemon = lệnh của người."""
+    for cmd in ("cfharness logs level", "cfharness logs level cfharness debug --for 2h", "cfharness daemon dump-stacks"):
+        v = bash(env, cmd)
+        assert v.forbidden, (cmd, v.rule)
 
 
 # --------------------------------------------------------------------------- cây lane của run KHÁC (plan-filehub-lane §10)

@@ -12,12 +12,15 @@ Mọi method trừ `status` ∈ `auth.HUMAN_ONLY` (agent không tự ghép chat 
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, Any
 
 from ..errors import HubError
 from ..notify.base import clip
 from ..notify.telegram import TelegramApi, TelegramError
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..daemon import Daemon
@@ -38,7 +41,7 @@ def register_rpc(d: "Daemon") -> None:
         try:
             hub.audit.record(kind, None, None, data, actor=str(meta.get("actor") or "user"), channel=str(meta.get("channel") or "cli"), summary=kind)  # type: ignore[attr-defined]
         except Exception:  # pragma: no cover
-            pass
+            log.debug("không ghi được audit kênh chat", exc_info=True)
 
     def _name() -> str:
         return str(bot.cfg().get("bot_token_secret") or "TELEGRAM_BOT_TOKEN")
@@ -109,7 +112,7 @@ def register_rpc(d: "Daemon") -> None:
             try:
                 await bot._send(api, cid, "Đã kết nối cfharness. Bạn sẽ nhận thông báo duyệt, lỗi lặp, digest… tại đây.\n\n" + _help())
                 welcome = True
-            except Exception as e:
+            except Exception as e:  # best-effort: lỗi trả về trong welcome_sent
                 welcome = clip(e, 200)
         return {"allowed_chat_ids": cur, "allowed_user_ids": users, "welcome_sent": welcome}
 

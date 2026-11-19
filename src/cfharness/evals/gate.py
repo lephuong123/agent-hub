@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -40,6 +41,8 @@ from . import overlay as ov
 from .checkers import EvalOutput, Grade, grade_deterministic
 from .judge import judge
 from .memory_golden import grade_memory, is_memory_task, summarize
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..hub import Hub
@@ -170,6 +173,7 @@ class EvalGate:
                 self._close(eval_id, GateVerdict("deferred_no_eval", reason="cancelled"), agent_id)
                 raise
             except Exception as e:  # lỗi hạ tầng: không chặn vĩnh viễn, hoãn
+                log.warning("eval gate lỗi hạ tầng — hoãn (deferred_no_eval)", exc_info=True)
                 return self._close(eval_id, GateVerdict("deferred_no_eval", reason=f"eval_error: {e!r}"[:300]), agent_id)
             finally:
                 self._cleanup(tmp)
@@ -253,6 +257,7 @@ class EvalGate:
                 self._close(eval_id, GateVerdict("deferred_no_eval", reason="cancelled"), agent_id)
                 raise
             except Exception as e:
+                log.warning("eval sau áp dụng lỗi hạ tầng — hoãn (deferred_no_eval)", exc_info=True)
                 return self._close(eval_id, GateVerdict("deferred_no_eval", reason=f"eval_error: {e!r}"[:300], flags=["unevaluated"]), agent_id)
             finally:
                 self._cleanup(tmp)

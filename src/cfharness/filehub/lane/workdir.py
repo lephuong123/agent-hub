@@ -726,7 +726,7 @@ class Workdir:
         if self._task is None or self._task.done():
             self.ops_mark = len(self.ops)
             try:
-                self._task = asyncio.get_running_loop().create_task(self._loop())
+                self._task = asyncio.get_running_loop().create_task(self._loop(), name="filehub-lane-tree")
             except RuntimeError:  # pragma: no cover
                 self._task = None
 
@@ -1386,7 +1386,7 @@ class Workdir:
             t.cancel()
             try:
                 await t
-            except (asyncio.CancelledError, Exception):
+            except (asyncio.CancelledError, Exception):  # best-effort: chờ task đã huỷ kết thúc; lỗi của nó đã log trong vòng lặp
                 pass
 
     def kick(self) -> None:

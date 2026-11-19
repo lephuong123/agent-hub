@@ -31,7 +31,7 @@ def callback_port(ctx: Any) -> int:
         from ..config import HubConfig
 
         v = HubConfig(ctx.paths.config).get("mcp_client.oauth_callback_port")
-    except Exception:
+    except Exception:  # best-effort: config hỏng → cổng mặc định
         v = None
     try:
         return DEFAULT_PORT if v is None or isinstance(v, bool) else max(0, min(65535, int(v)))
@@ -65,7 +65,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             res = srv.call("mcp.oauth_callback", {k: q.get(k) for k in ("state", "code", "error", "error_description", "iss")})
-        except Exception as e:  # RpcError: state lạ/đã dùng → tiếp tục chờ callback thật
+        except Exception as e:  # best-effort: state lạ/đã dùng → báo 400, tiếp tục chờ callback thật
             self._send(400, f"Không hợp lệ: {getattr(e, 'message', e)}")
             return
         srv.result = res
@@ -105,7 +105,7 @@ def cmd_login(ctx: Any) -> int:
         if not a.no_browser:
             try:
                 webbrowser.open(url, new=2)
-            except Exception:  # pragma: no cover
+            except Exception:  # best-effort: không mở được trình duyệt — URL vẫn được in  # pragma: no cover
                 pass
         print(f"Đang chờ trình duyệt quay về {redirect} (tối đa {WAIT_S // 60} phút, Ctrl+C để huỷ)…", flush=True)
         deadline = time.monotonic() + float(a.timeout or WAIT_S)

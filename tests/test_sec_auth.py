@@ -499,7 +499,7 @@ async def test_agent_cannot_forge_audit_record(home):
 
 
 async def test_filehub_writes_human_only(home):
-    """Thư mục chung Không gian số (filehub/): agent trong run — kể cả đọc trộm token người — không setup/thêm/gỡ/tạm dừng được;
+    """Thư mục chung Không gian số (filehub/): agent trong run — kể cả đọc trộm token người — không gỡ/đổi tên/duyệt lô xoá/khoá cổng được;
     method ghi đã phân loại + bọc audit; CLI ghi bị classifier chặn; đọc trạng thái thì được."""
     from cfharness.filehub.rpc import MUTATING_FILEHUB
     from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI
@@ -507,14 +507,14 @@ async def test_filehub_writes_human_only(home):
     for m in MUTATING_FILEHUB:
         assert m in auth.HUMAN_ONLY and m not in auth.MANAGER_ALLOWED, m
     assert set(MUTATING_FILEHUB) <= auth.all_mutating()
-    assert {"setup", "login", "add", "remove", "rename", "pause", "resume", "switch-to-workspace"} <= HUB_HUMAN_ONLY_CLI["filehub"]
-    assert {"filehub.login_callback", "filehub.switch_to_workspace", "filehub.rename"} <= set(MUTATING_FILEHUB)  # H7 + đổi tên cục bộ
+    assert {"setup", "login", "add", "remove", "rename", "pause", "resume", "switch-to-workspace", "lane"} <= HUB_HUMAN_ONLY_CLI["filehub"]
+    assert {"filehub.remove", "filehub.rename", "filehub.resume", "filehub.lane_setup"} <= set(MUTATING_FILEHUB)
     for m in ("filehub.status", "filehub.list", "filehub.link"):
         assert m not in auth.HUMAN_ONLY
     d, srv = await _start(home)
     try:
-        for m, prm in (("filehub.setup", {"server": "https://x.example", "binary": "/bin/sh"}), ("filehub.add", {"root_id": "r1", "local_path": "/tmp/x"}),
-                       ("filehub.pause", {}), ("filehub.switch_to_workspace", {}), ("filehub.login_callback", {"code": "c", "state": "s" * 32}),
+        for m, prm in (("filehub.lane_setup", {"url": "http://127.0.0.1:8223", "key": "tt_lane_" + "a" * 43}),
+                       ("filehub.lane_add", {"root_id": "r1"}), ("filehub.remove", {"name": "chung"}), ("filehub.resume", {"root_id": "r1"}),
                        ("filehub.rename", {"name": "chung", "new_name": "x"})):
             run_n, proc_n, go_n = await _start_run(d)
             rr = await _in_run(go_n, _client_py(home, m, prm, steal_token=True))
@@ -525,7 +525,7 @@ async def test_filehub_writes_human_only(home):
         rr = await _in_run(go_n, _client_py(home, "filehub.status", {}, steal_token=False))
         assert "result" in json.loads(rr["out"].strip().splitlines()[-1])
         proc_n.wait(5)
-        assert not d.hub.filehub.folders() and not d.hub.store.state_get("filehub.paused")
+        assert not d.hub.filehub.folders() and not d.hub.secrets.exists("FILEHUB_LANE_QLTM")
         assert d.hub.config.get("filehub.server") is None
     finally:
         await _stop(d, srv)
@@ -554,5 +554,48 @@ async def test_session_reindex_human_only(home):
         proc_n.wait(5)
         r = await asyncio.to_thread(RpcClient(home.socket).call, "session.reindex", {"fts_only": True})  # người: được
         assert r["scheduled"]
+    finally:
+        await _stop(d, srv)
+
+
+# =============================================================================== L3 (plan-logging.md A2/A5): audit.list + token web/MCP riêng
+def test_audit_list_human_only_and_cli_blocked(home):
+    from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI, GuardContext, classify
+    from cfharness.guard.policy import PolicyStore
+
+    assert "audit.list" in auth.HUMAN_ONLY and "audit.list" not in auth.MANAGER_ALLOWED
+    assert HUB_HUMAN_ONLY_CLI.get("audit", "missing") is None
+    ps = PolicyStore(home.home)
+    ps.ensure()
+    ctx = GuardContext(home.home / "agents", ps.load(), run_since=time.time(), hub_socket=str(home.socket), git_probe=False)
+    for cmd in ("cfharness audit list", "cfharness audit list --limit 5"):
+        assert classify("Bash", {"command": cmd}, ctx).forbidden, cmd
+    # token web/MCP riêng: cùng lớp bảo vệ với token người (classifier + permissions.deny)
+    from cfharness.guard.runtime import secret_read_deny_rules
+
+    rules = secret_read_deny_rules(home.home, home.socket)
+    for kind in auth.TOKEN_KINDS:
+        tp = auth.token_path(home.socket, kind)
+        assert classify("Bash", {"command": f"cat {tp}"}, ctx).forbidden, kind
+        assert classify("Read", {"file_path": str(tp)}, ctx).forbidden, kind
+        assert any(str(tp) in r and r.startswith("Read(") for r in rules), kind
+
+
+async def test_agent_with_stolen_web_or_mcp_token_still_denied(home):
+    """Token web/MCP là token NGƯỜI (kênh khác): agent trong run đọc trộm được (giả định sandbox tắt) vẫn bị bằng chứng tiến trình chặn
+    ở method HUMAN_ONLY (audit.list) và dòng audit mang principal agent:<id> — không mạo danh web."""
+    d, srv = await _start(home)
+    try:
+        for kind in ("web", "mcp"):
+            tok = auth.token_path(home.socket, kind).read_text().strip()
+            run, proc, go = await _start_run(d)
+            rr = await _in_run(go, _client_py(home, "audit.list", {"_auth": tok, "limit": 1,
+                                                                  "_client": {"session_ref": "sess_00000000", "transport": "http", "level": "control"}},
+                                              steal_token=False))
+            resp = json.loads(rr["out"].strip().splitlines()[-1])
+            assert resp.get("error", {}).get("code") == -32003, (kind, resp)
+            row = d.hub.audit.query(kind="auth.denied", limit=1)[0]
+            assert row["principal"].startswith("agent:") and row["outcome"] == "denied" and row["session_ref"] is None, row
+            proc.kill()
     finally:
         await _stop(d, srv)

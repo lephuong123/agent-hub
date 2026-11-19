@@ -189,7 +189,7 @@ class LaneClient:
         if self._client is not None:
             try:
                 await self._client.aclose()
-            except Exception:  # pragma: no cover
+            except Exception:  # best-effort: đóng client HTTP đã hỏng  # pragma: no cover
                 pass
             self._client = None
 
@@ -211,7 +211,7 @@ class LaneClient:
         try:
             d = resp.json()
             body = d if isinstance(d, dict) else {}
-        except Exception:
+        except Exception:  # best-effort: thân lỗi không phải JSON → mã theo status HTTP
             pass
         code = str(body.get("code") or "") or {401: "unauthorized", 404: "not_found", 411: "length_required", 413: "too_large",
                                                  423: "file_locked", 428: "precondition_required", 429: "rate_limited",

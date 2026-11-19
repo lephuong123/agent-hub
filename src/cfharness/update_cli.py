@@ -114,7 +114,7 @@ def web_after_update(paths: Any, version: Any, *, wait_s: float = WEB_WAIT_S, re
         from .web.reload import restart_stale_web as restart
     try:
         res = restart(paths, want)
-    except Exception:  # noqa: BLE001
+    except Exception:  # best-effort: khởi động lại web là phụ — trả "failed" cho người  # noqa: BLE001
         return "failed"
     if res in ("killed", "respawned"):
         return "restarted"

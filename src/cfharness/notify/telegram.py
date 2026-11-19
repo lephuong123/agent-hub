@@ -360,6 +360,7 @@ class TelegramNotifier(QueuedNotifier):
                     return None  # đã quyết trước khi kịp gửi
                 heavy = is_heavy(row, self.cfg().get("confirm_classes") or [])
             except Exception:
+                log.debug("telegram: không đọc được approval — xét lớp nặng theo payload", exc_info=True)
                 heavy = bool(p.get("protected_resource_id")) or p.get("destructive_class") in set(self.cfg().get("confirm_classes") or [])
         if aid:
             return {"approval_id": aid, "kind": ev.type, "payload": dict(p), "done": set()}
@@ -374,7 +375,7 @@ class TelegramNotifier(QueuedNotifier):
         api: TelegramApi = target["api"]
         n = 0
         p = ev.payload or {}
-        chats = self.bot.security_chats() if ev.type.startswith("web.") else self.bot.route_chats(ev.run_id or p.get("run_id"), p.get("conversation_id"))
+        chats = self.bot.security_chats() if ev.type.startswith(("web.", "audit.")) else self.bot.route_chats(ev.run_id or p.get("run_id"), p.get("conversation_id"))
         for chat in chats:
             if chat in msg["done"]:
                 continue

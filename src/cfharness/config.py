@@ -201,7 +201,7 @@ DEFAULTS: dict[str, Any] = {
             "manager_progress": True,  # P7: tin tiến độ + nút Dừng khi điều phối viên làm việc cho tin Slack (chat/slack/progress.py)
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
-                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper", "audit.tamper_detected", "audit.anchored", "audit.alert",
                        "budget.warning", "budget.exceeded",
                        "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked", "filehub.lane.roots"],  # M4-B: digest + nhắc chọn golden task (Q-23)
             "max_attempts": 5,
@@ -221,7 +221,7 @@ DEFAULTS: dict[str, Any] = {
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
             "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
-                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper",
+                       "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper", "audit.tamper_detected", "audit.anchored", "audit.alert",
                        "budget.warning", "budget.exceeded",
                        # thư mục chung Không gian số (filehub/): run đổi/xoá tệp, bản xung đột, tệp có thể chứa bí mật, chiều đẩy lên bị chặn
                        "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked", "filehub.lane.roots",
@@ -252,12 +252,18 @@ DEFAULTS: dict[str, Any] = {
             "timeout_s": 15,
         },
     },
-    # Log daemon `logs/` (NFR-21): hub.log xoay vòng theo dung lượng (an toàn trên Windows), daemon.out xoay lúc khởi động;
-    # bản cũ (`*.log.N`, `*.out.N`) quá max_age_days bị xoá (0/null = chỉ giới hạn theo số bản). Đổi có hiệu lực khi daemon khởi động lại.
+    # Log `logs/` (NFR-21): hub.log (daemon) / web.jsonl / mcp.jsonl xoay vòng theo dung lượng (an toàn trên Windows), daemon.out,
+    # web.log, update.out, import-job.out xoay lúc tiến trình được bật; bản cũ (`*.log.N`, `*.out.N`, `*.jsonl.N`) quá max_age_days bị
+    # xoá (0/null = chỉ giới hạn theo số bản). Kích thước/số bản có hiệu lực khi tiến trình khởi động lại; `level` + `levels`
+    # ({logger: level}, chỉ `cfharness.*` + logs.LIB_LOGGERS) áp NGAY lúc chạy (L1, docs/dev-notes/plan-logging.md). Level tạm:
+    # `cfharness logs level <logger> debug --for 30m`.
     "logs": {
         "max_bytes": 10 * 1024 * 1024,
         "backup_count": 5,
         "max_age_days": 30,
+        "level": "info",
+        "levels": {},
+        "slow_rpc_ms": 2000,  # L2: lời gọi RPC chậm hơn → WARNING `rpc.slow` trong hub.log (0 = tắt)
     },
     "recovery": {
         "auto_resume": True,  # Q-09: daemon restart → dừng-và-resume tự động (trừ waiting_human)
@@ -595,6 +601,28 @@ DEFAULTS: dict[str, Any] = {
     },
     # Sao lưu HUB_HOME (backup.py, docs/dev-notes/backup.md). Bật mặc định hằng ngày: ledger/audit/tri thức nằm trên MỘT file SQLite
     # giữ vĩnh viễn — một bản/ngày (nén, bỏ runs/checkpoints/logs/secrets) rẻ hơn nhiều so với mất dữ liệu. "off" = tắt lịch.
+    # L4 (docs/dev-notes/plan-logging.md §4 A6, audit_chain.py): chuỗi băm audit_log. Nhánh ∈ integrity.SECURITY_KEYS.
+    "audit": {
+        "anchor_interval_s": 3600,  # neo (last_id, row_hash) vào HUB_HOME/audit-anchors.jsonl (+ metadata admin) mỗi chừng này giây + khi dừng
+        "anchor_notify": False,  # Q4: gửi bản neo vào Telegram/Slack (event audit.anchored) — tắt mặc định
+        "verify_on_start_rows": 1000,  # daemon khởi động kiểm chừng này dòng audit cuối + bản neo (0 = không kiểm)
+        # L5 (A9, Q3): 0 = giữ audit vĩnh viễn trong DB (mặc định). N > 0 = dồn dòng của các THÁNG đã trọn trước (bây giờ − N ngày) ra
+        # HUB_HOME/audit-archive/<yyyy-mm>.jsonl.gz (0600, giữ chuỗi băm, có MANIFEST.json) rồi mới xoá khỏi DB (audit_archive.py)
+        "archive_after_days": 0,
+        "archive_tick_s": 3600,
+    },
+    # L5 (A8, audit_watch.py): cảnh báo theo mẫu audit → event audit.alert (Telegram nhóm bảo mật / Slack). Nhánh ∈ integrity.SECURITY_KEYS.
+    "audit_watch": {
+        "enabled": True,
+        "denied_burst": {"enabled": True, "threshold": 5, "window_s": 600},
+        "login_fail_burst": {"enabled": True, "threshold": 5, "window_s": 900},
+        "security_change": {"enabled": True, "window_s": 600},
+        "secret_access": {"enabled": True, "hours": None, "window_s": 600},  # vd "08:00-19:00" (giờ máy); null = tắt luật này
+        "new_principal": {"enabled": True, "window_s": 600, "max_seen": 1000,
+                          "ignore_prefixes": ["hub:", "agent:", "manager:", "anon:", "web:sess_", "web:anon"]},
+        "mass_read": {"enabled": True, "threshold": 30, "window_s": 600},
+        "tamper": {"enabled": True, "window_s": 3600},
+    },
     "backup": {
         "schedule": "daily 03:30",  # cú pháp schedules/cron.py; máy ngủ lúc đó → chạy bù một lần ở nhịp kế tiếp
         "keep": 7,  # số bản manual+auto giữ lại
@@ -606,6 +634,11 @@ DEFAULTS: dict[str, Any] = {
     # Xuất/nhập hub (hub_transfer_web.py, web /hub-transfer): trần cỡ gói tải lên qua web (MB) — kiểm Content-Length trước khi nhận
     "transfer": {
         "max_upload_mb": 4096,
+    },
+    # Gói chẩn đoán (support_bundle.py, L7): trần tổng (MB, nội dung chưa nén) + trần mỗi file trong gói
+    "support": {
+        "max_mb": 200,
+        "max_file_mb": 50,
     },
     # Tổng quan máy (admin_overview.py, docs/dev-notes/admin-overview.md): mỗi hub xuất bản tóm tắt CHỈ SỐ LIỆU ra thư mục chung để
     # người quản trị xem mọi hub trên máy. Chỉ người đặt (`config.set` ∈ HUMAN_ONLY; nhánh ∈ integrity.SECURITY_KEYS).
@@ -665,34 +698,16 @@ DEFAULTS: dict[str, Any] = {
         "cloud_download": True,  # cho tải file về khi dùng web qua link public (xem trong trình duyệt luôn được)
         "max_download_mb": 10,  # trần tải về / ảnh / PDF (1–50 MB)
     },
-    # Thư mục dùng chung với "Không gian số" (docs/dev-notes/filehub.md): binary `tang-thu-sync-headless` chạy dưới daemon, đồng bộ 2 chiều
-    # ~/KhongGianSo/<tên> ↔ thư mục người là Owner. Nhánh `filehub` ∈ integrity.SECURITY_KEYS — chỉ người đổi (CLI `cfharness filehub …`).
+    # Thư mục dùng chung với "Không gian số" (docs/dev-notes/filehub.md) qua CỔNG CFHARNESS (filehub/lane/) — chế độ duy nhất từ H5 (đồng bộ
+    # 2 chiều `tang-thu-sync-headless` đã bỏ; khoá cũ của nó trong config.yaml — sync_binary, local_parent, device_name, mode… — được bỏ qua).
+    # Nhánh `filehub` ∈ integrity.SECURITY_KEYS — chỉ người đổi (CLI `cfharness filehub …`, thẻ Cài đặt).
     "filehub": {
-        "enabled": False,  # `cfharness filehub setup` bật
-        "server": None,  # vd https://thumucai.trungtamdhs.com
-        "sync_binary": None,  # đường dẫn tuyệt đối tang-thu-sync-headless
-        "sync_min_version": "0.1.0",  # `--version` thấp hơn → không chạy, báo ở thẻ Cài đặt
-        "device_name": None,  # null = "cfharness · <tên máy>"
-        "local_parent": "~/KhongGianSo",  # thư mục cha của bản sao cục bộ (phải trong workspace.confine nếu bật giam; không trong HUB_HOME)
-        "folders": [],  # [{name, root_id, ws_id, local_path, kind folder|workspace, account?}] — do `filehub setup|add|remove|switch-to-workspace` ghi
-        # chế độ khi `filehub setup` (plan-filehub-workspace-root W4): workspace = TOÀN BỘ một workspace Không gian số (gốc ảo = wsId, chỉ
-        # Workspace Admin); folder = MỘT thư mục (cây con, như trước). Đăng nhập lại giữ chế độ của thư mục chung đang có.
-        "scope": "workspace",
-        "relay_timeout_s": 600,  # đăng nhập từ xa qua web public (relay OAuth): state chờ ≤ 10 phút, dùng một lần
-        "poll_s": None,  # --poll của binary (null = mặc định của binary)
-        "max_delete_batch": 0,  # --max-delete-batch: 0 = tắt; > 0 → xoá quá ngưỡng thì dừng chiều đẩy lên chờ `filehub resume --root`
-        "extra_ignore": [],  # mẫu bỏ qua thêm (kiểu .gitignore) cho chiều đẩy lên — cộng vào ignore.txt sinh từ files.secret_patterns
-        "restart_backoff_s": [1, 300],  # restart tiến trình sync: min..max giây (luỹ thừa 2)
-        "stop_grace_s": 15,  # SIGTERM → chờ → SIGKILL
-        "tick_s": 1.0,  # nhịp đọc status.json
-        "presence_ttl_s": 600,  # dải "cfharness đang làm việc" trên Không gian số — hub làm mới trước khi hết hạn
-        "steer_on_cloud_change": True,  # người sửa tệp trên Không gian số trong lúc run giữ khoá → steer câu cố định
-        "secret_scan_max_bytes": 5000000,  # quét GIÁ TRỊ secret trên tệp mới/sửa sau run (tệp lớn hơn bỏ qua)
-        "login_url_timeout_s": 30,
-        # Cổng cfharness (docs/dev-notes/plan-filehub-lane.md): `sync` = đồng bộ 2 chiều cũ (binary) · `lane` = không bản sao lâu dài, cây làm
-        # việc theo run qua cổng loopback của Không gian số. Mặc định giữ `sync` tới khi NGƯỜI chuyển (`cfharness filehub switch`); thư mục có
-        # `folders[].mode` thì theo thư mục.
-        "mode": "sync",
+        "enabled": False,  # `filehub lane setup` bật
+        "server": None,  # URL web của Không gian số (vd https://thumucai.trungtamdhs.com) — chỉ để dựng link "Mở trên Không gian số"
+        # [{name, root_id, ws_id, kind folder|workspace, mode: lane, server, aliases?}] — do `filehub lane setup|add` (đối soát) ghi.
+        # Thư mục còn `mode: sync` / `local_path` (đồng bộ cũ) = CẦN CHUYỂN: khoá cổng cấp đúng gốc → tự chuyển; bản sao trên máy để nguyên.
+        "folders": [],
+        "extra_ignore": [],  # mẫu bỏ qua thêm (kiểu .gitignore) cho chiều đẩy lên — cộng vào mẫu sinh từ files.secret_patterns
         "lane": {
             # {<tên>: {url, hub_label, user, key_prefix, scope, expires_at, set_at}} — do `filehub lane setup` ghi; KHOÁ ở secret store
             # (`FILEHUB_LANE_<TÊN>`), không bao giờ ở đây
@@ -997,7 +1012,7 @@ def validate_setting(key: str, value: Any) -> None:
 
         _validate_profile(key, value)
     if key == "filehub" or key.startswith("filehub.mode") or key.startswith("filehub.lane") or key.startswith("filehub.folders"):
-        from .filehub.lane.service import validate_setting as _validate_lane  # cổng cfharness: mode sync|lane, URL chỉ loopback
+        from .filehub.lane.service import validate_setting as _validate_lane  # cổng cfharness: folders[].mode, URL chỉ loopback
 
         _validate_lane(key, value)
     if key == "web" or key.startswith("web."):
@@ -1020,6 +1035,13 @@ def validate_setting(key: str, value: Any) -> None:
         _validate_directory(key, value)
     if key == "admin_watch" or key.startswith("admin_watch."):
         _validate_admin_watch(key, value)
+    if key == "audit_watch" or key.startswith("audit_watch."):  # L5
+        from .audit_watch import validate_setting as _validate_audit_watch
+
+        _validate_audit_watch(key, value)
+    if key in ("audit.archive_after_days", "audit.archive_tick_s"):  # L5
+        if isinstance(value, bool) or not isinstance(value, int) or value < (0 if key.endswith("days") else 60):
+            raise ValueError(f"{key} phải là số nguyên ≥ {0 if key.endswith('days') else 60}")
     if key == "files" or key.startswith("files."):
         from .fileview import validate_setting as _validate_files
 

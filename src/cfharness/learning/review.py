@@ -37,6 +37,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import spawn, track
 from ..errors import HubError
 from ..events import make_event
 from ..store import now_iso
@@ -281,6 +282,7 @@ class ReviewScheduler:
             try:
                 res = await self.svc.graph_extract.extract(src, "review")
             except Exception as e:  # pragma: no cover
+                log.warning("review: graph_extract lỗi", exc_info=True)
                 res = {"status": "failed", "reason": repr(e)[:300]}
             st = "done" if res.get("status") in ("done", "skipped") else "failed"
             self.svc.signals.mark_processed(list(job.get("signal_ids") or []), job["id"])
@@ -290,8 +292,7 @@ class ReviewScheduler:
                                                                               "cost_usd": res.get("cost_usd")}))
 
         t = loop.create_task(go())
-        self.svc.graph_extract.tasks.add(t)
-        t.add_done_callback(self.svc.graph_extract.tasks.discard)
+        track(t, self.svc.graph_extract.tasks)  # L1: lỗi task → log
         return None
 
     # ------------------------------------------------------------------ ngân sách
@@ -341,7 +342,7 @@ class ReviewScheduler:
         try:
             rows = self.conn.execute("SELECT role, tool, text FROM session_messages WHERE session_id=? ORDER BY ts DESC, id DESC LIMIT 2000",
                                      (src["session_id"],)).fetchall()
-        except Exception:  # bảng chưa có (chỉ mục chưa dựng)
+        except Exception:  # best-effort: bảng chỉ mục session chưa có
             return None
         lines: list[str] = []
         used = 0
@@ -448,7 +449,11 @@ class ReviewScheduler:
         if job["status"] == "queued":
             self._end(job, "cancelled", reason="người huỷ")
         elif job["status"] == "running" and job.get("run_id"):
-            asyncio.ensure_future(self.hub.runs.stop(job["run_id"]))
+            coro = self.hub.runs.stop(job["run_id"])
+            try:
+                spawn(coro, name=f"review-cancel:{job['id']}")
+            except RuntimeError:  # best-effort: ngoài event loop (test thuần) — không dừng được run
+                coro.close()
         return self.get(job["id"])
 
 

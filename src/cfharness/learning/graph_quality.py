@@ -112,6 +112,7 @@ class GraphQuality:
         try:
             v = self.hub.config.get(f"graph_memory.quality.{key}")
         except Exception:
+            log.debug("graph_quality: không đọc được cấu hình", exc_info=True)
             v = None
         return DEFAULTS[key] if v is None else v
 
@@ -119,6 +120,7 @@ class GraphQuality:
         try:
             v = self.hub.config.get(f"graph_memory.consolidate.{key}")
         except Exception:
+            log.debug("graph_quality: không đọc được cấu hình consolidate", exc_info=True)
             v = None
         return CONSOLIDATE_DEFAULTS[key] if v is None else v
 

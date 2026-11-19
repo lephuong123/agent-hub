@@ -25,6 +25,7 @@ import re
 import time
 from typing import TYPE_CHECKING, Any
 
+from ...aiotasks import track
 from ...events import HubEvent
 from ...notify.base import clip
 from ...notify.telegram import esc
@@ -143,7 +144,7 @@ class SlackProgress:
                 await api.call("assistant.threads.setStatus", {"channel_id": k[0], "thread_ts": self.bot._root_of(k[1]) or k[1], "status": ""})
             elif mode == "reaction":
                 await api.call("reactions.remove", {"channel": k[0], "timestamp": k[1], "name": REACTION})
-        except Exception as e:
+        except Exception as e:  # best-effort: đã log debug (lỗi đã gỡ token)
             log.debug("không xoá được trạng thái 'đang xử lý': %s", clip(e, 200))
         if mode == "reaction" and outcome and outcome != "silent":  # chế độ icon: thay ⏳ bằng kết quả trên tin của người
             try:
@@ -172,7 +173,7 @@ class SlackProgress:
         rec["markup"] = self._issue(rec)
         try:
             res = await self.bot._send(api, rec["chat"], self.text(rec), rec["markup"], html=True, reply_to=reply_to)
-        except Exception as e:
+        except Exception as e:  # best-effort: đã log debug (lỗi đã gỡ token)
             log.debug("không gửi được tin tiến độ: %s", clip(e, 200))
             self._drop(run_id)
             return
@@ -183,8 +184,7 @@ class SlackProgress:
             return
         task = asyncio.get_running_loop().create_task(self._pump(rec))
         rec["task"] = task
-        self.bot._bg.add(task)  # bot.stop() huỷ cùng tác vụ nền khác
-        task.add_done_callback(self.bot._bg.discard)
+        track(task, self.bot._bg)  # bot.stop() huỷ cùng tác vụ nền khác
 
     async def finish(self, run_id: str, *, chat: Any = None, reply_to: Any = None, outcome: str = "completed") -> None:
         """Có trả lời / run kết thúc không trả lời → tin tiến độ thu về một dòng, gỡ nút, xoá trạng thái/reaction (`silent` → xoá tin)."""
@@ -201,7 +201,7 @@ class SlackProgress:
                 if outcome == "silent":  # điều phối viên chọn im lặng → gỡ hẳn tin tiến độ (thread không bị rác)
                     try:
                         await api.call("chat.delete", {"channel": rec["chat"], "ts": rec["mid"]})
-                    except Exception as e:
+                    except Exception as e:  # best-effort: đã log debug (lỗi đã gỡ token)
                         log.debug("không xoá được tin tiến độ: %s", clip(e, 200))
                 else:
                     await self._push(rec, final=True)
@@ -253,6 +253,7 @@ class SlackProgress:
         try:
             return list(self.bot.hub.store.query_events(run_id=run_id, types=["tool.start", "tool.complete"], limit=STEPS_KEPT * 4))
         except Exception:
+            log.debug("không đọc được event backlog của run cho tin tiến độ", exc_info=True)
             return []
 
     @staticmethod
@@ -338,7 +339,7 @@ class SlackProgress:
                 if not final:
                     rec["dirty"].set()  # lần sửa sau mang trạng thái mới nhất
                     return
-            except Exception as e:
+            except Exception as e:  # best-effort: đã log debug (lỗi đã gỡ token)
                 log.debug("không sửa được tin tiến độ: %s", clip(e, 200))
                 return
 

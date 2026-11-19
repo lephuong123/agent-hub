@@ -676,8 +676,9 @@ Tài liệu tổng hợp (người dùng + kỹ thuật + giới hạn): `docs/d
   daemon mới chờ); `register_rpc` → `cleanup` (`pass` sót, job chết → failed, gói tải lên > 24 h). Web không đọc `state.json` trực tiếp (như
   `update_pages`: daemon dừng → "đang dừng", poll). Thêm RPC web → `HUMAN_ONLY_TRANSFER_WEB` (+ `MUTATING_…`) + ca trong 2 file test trên; khoá
   mới của state/kết quả → danh sách trắng; pha job mà daemon phải chờ → `IMPORT_BUSY_PHASES`.
-- filehub (Không gian số): token thiết bị `secrets/filehub/` + `filehub/` KHÔNG BAO GIỜ vào gói (cả move); nhập (`_adjust_filehub`) → `filehub.enabled=false`,
-  `device_name=null`, clone gỡ `folders` (move giữ, đã pathmap), `hub_state.import_filehub` (∈ MACHINE_STATE, xoá khi `filehub` đăng nhập xong) → báo cáo/doctor nhắc `cfharness filehub setup`; đóng băng KHÔNG dừng filehub.
+- filehub (Không gian số): `secrets/filehub/` + `filehub/` KHÔNG BAO GIỜ vào gói (cả move); khoá cổng `FILEHUB_LANE_*`: clone bỏ, move giữ. Nhập
+  (`_adjust_filehub`) → bỏ khoá cấu hình của đồng bộ cũ (`SYNC_ONLY_KEYS`), clone gỡ `folders`, move giữ (thư mục đồng bộ cũ = `mode: sync` "cần chuyển",
+  đã pathmap); `hub_state.import_filehub` (∈ MACHINE_STATE, xoá khi `lane_setup` xong) → báo cáo/doctor nhắc `cfharness filehub lane setup`.
 - Bất biến: gói không bao giờ chứa `checkpoints/`, `auth/web.json`/thiết bị, `secrets/` dạng rõ, session Claude không thuộc hub; passphrase không bao giờ vào
   argv/env/audit/log/DB/`job.json`/`state.json`/HTML; thêm trạng thái gắn với máy vào `hub_state` →
   thêm khoá vào `hub_transfer.MACHINE_STATE` (hoặc `CLONE_STATE`) + ca trong test. `exports/`/`imports/` ∈ `backup.EXCLUDED`, sandbox
@@ -766,28 +767,93 @@ Trust full KHÔNG gỡ `desktop_app_data`/`admin_shared`/`other_hub_write` (`gua
 → thêm vào đây + ca trong `tests/test_trust_and_noise.py`). Glob kiểm ký tự đại diện ở mọi vị trí (`desktop_app.glob_may_touch`). Bản xuất `admin_overview`
 chỉ ghi schema mới khi có trường mới (tương thích admin cũ). `--ensure` luôn giữ khoá ensure khi spawn; `started` theo nonce.
 
-## Thư mục dùng chung với "Không gian số" — `filehub/`
-Chi tiết, luồng, lệch plan, giới hạn, việc dở: `docs/dev-notes/filehub.md`; plan + hợp đồng 3 repo: `docs/dev-notes/plan-cloud-files.md` (§7, §8).
-Không migration (cấu hình `filehub.*` ∈ `integrity.SECURITY_KEYS`, trạng thái ở `HUB_HOME/filehub/` + `hub_state filehub.paused`).
+## Thư mục dùng chung với "Không gian số" — `filehub/` (chỉ qua cổng cfharness)
+Chi tiết + đường nâng cấp: `docs/dev-notes/filehub.md`; hợp đồng §C + phần đã làm: `docs/dev-notes/plan-filehub-lane.md`. Không migration (cấu hình
+`filehub.*` ∈ `integrity.SECURITY_KEYS`, trạng thái ở `HUB_HOME/filehub/` + `hub_state filehub.lane`). Đồng bộ 2 chiều cũ (`tang-thu-sync-headless`,
+đăng nhập thiết bị/relay OAuth, bản sao `~/KhongGianSo`) đã gỡ ở H5 — KHÔNG thêm lại.
 
 | Module | Vai trò |
 |---|---|
-| `filehub/supervisor.py` | `tang-thu-sync-headless` là tiến trình con của daemon: `--version` ≥ `filehub.sync_min_version`, env danh sách trắng (`ENV_KEEP`), backoff, SIGTERM dừng êm, đối soát `(pid, start_time)` (`HUB_HOME/filehub/supervisor.json`) |
-| `filehub/service.py` | `hub.filehub`: status.json → `filehub.state|conflict|blocked`; index/<root>.json → link; control.json → presence + `resume_push`; steer `by="hub"` khi `recent` chiều `down` lúc run giữ khoá gốc; sau run `filehub.changed|deleted|secret_warning` (cả `extra_write_roots` trong thư mục chung — `report_extra`); `rename` = đổi tên cfharness, tên cũ thành `aliases`; `resolve_ref("filehub:<tên>[/<con>]")` |
-| `filehub/rpc.py`, `filehub/cli.py` | RPC `filehub.status|list|link` (đọc) + `setup|login|login_callback|switch_to_workspace|add|remove|rename|pause|resume` (HUMAN_ONLY, `MUTATING_FILEHUB` tự audit); CLI `cfharness filehub …` (∈ `HUB_HUMAN_ONLY_CLI` trừ `status`) |
-| `web/filehub_pages.py` | Thẻ "Không gian số" ở Cài đặt — tự thiết lập (form địa chỉ + chế độ workspace|folder, mặc định workspace) / đăng nhập (link đồng ý + thẻ poll 3 s + `/filehub/login`, tự nối thư mục) / thêm thư mục đã cấp / gỡ / tạm dừng, mọi thao tác qua `ACTIONS` → RPC `filehub.*`, cả qua link public (thiết lập/đăng nhập/chuyển/gỡ = `Action.step2`); binary KHÔNG BAO GIỜ từ web (`filehub.detect_binary`: cấu hình → chỗ cài cố định, không dò PATH), `local_parent`/`local_path` chỉ khi `is_local_request`; qua public: relay OAuth, route CÔNG KHAI `/filehub/oauth/cb` (`fh_limiter`), không đổi server/binary đã đặt; `/filehub/open` → `<server>/files/<folder_id>?file=<file_id>`; chip tệp `fh` |
+| `filehub/service.py` | `hub.filehub`: `lane_target("filehub:<tên>[/<con>]")`; `resolve_ref` LUÔN ném lỗi có giải thích (qua cổng / đồng bộ cũ cần chuyển / tên sai); `legacy_folders` + `LEGACY_TEXT`; `link`; `remove|rename|resume`; `stop_orphan_sync` (tiến trình sync còn sót, đối soát `(pid, start_time)`) |
+| `filehub/lane/` | Cổng: `client.py` (§C, chỉ loopback), `service.py` (`LaneService`: khoá ở secret store, `hello` + `reconcile` — thêm gốc mới, tự chuyển thư mục đồng bộ cũ cùng gốc, đánh dấu thu hồi; cây theo run, presence, mồ côi, lô xoá đang giữ, hoàn tác), `workdir.py`, `tools.py` (`fs_*`) |
+| `filehub/rpc.py`, `filehub/cli.py` | RPC `filehub.status|list|link` (đọc) + `remove|rename|resume` + `lane_setup|test|disable|add|orphan` (HUMAN_ONLY, `MUTATING_FILEHUB` tự audit); CLI `cfharness filehub status|remove|rename|resume --root|lane …` (lệnh cũ chỉ in hướng dẫn) |
+| `web/filehub_pages.py` | Thẻ "Không gian số — cổng cfharness" (khoá chỉ ở bước 2, thư mục cần chuyển, đổi tên/gỡ, lô xoá đang giữ, cây mồ côi) — mọi thao tác qua `ACTIONS` → RPC `filehub.*`; `/filehub/open` → link theo id do cổng trả |
 
-Gốc workspace (H7, `docs/dev-notes/plan-filehub-workspace-root.md`): `folders[].kind` folder|workspace (`root_id = ws_id` = gốc ảo), `filehub.scope`
-mặc định workspace; `--root-mode workspace` (login) và `--root-kind workspace` (chạy đồng bộ) chỉ truyền khi chế độ workspace; dòng `ROOT` 3/4 cột cũ
-vẫn đọc. Hợp đồng headless: `tang-thu-sync/docs/headless-cfharness.md` — đổi hợp đồng → sửa cả `tests/fake_tangthu_sync.py`. Tên sống trên web (`status.roots[].server_name`)
-là BÍ DANH trong `resolve_ref` — `local_path`/tên cfharness không bao giờ tự đổi. Relay OAuth: `state` của LOGIN_URL do daemon giữ (≤ `relay_timeout_s`,
-một lần, `compare_digest`), sai → lỗi chung và lượt chờ giữ nguyên; code/state chỉ ký tự URL-safe trước khi ghi `CODE` vào stdin binary, không vào audit.
-Qua link public không đổi server/binary đã đặt (`setup{remote}`). Thao tác web mới cho filehub → RPC `filehub.*` (app desktop gọi lại), không logic trong template.
-Bất biến: workspace `filehub:` khoá theo GỐC thư mục chung (`WorkspaceLocks(store, hub)`), checkpoint luôn `_walk`, `run revert` từ chối
-(`FILEHUB_NO_REVERT`); bản sao cục bộ phải trong `workspace.confine` W và không trong/chứa HUB_HOME. Xoá/di chuyển/ghi đè TRONG thư mục chung mà
-run được ghi = `write` (không hỏi, chỉ báo sau run — §7.3); `.tangthu*` + `HUB_HOME/filehub` = cấm (`filehub_metadata`, sandbox deny, `sensitive_read`).
-Mọi run được ĐỌC thư mục chung (allowRead khi giam + khối prompt "Shared folder" — nội dung là DỮ LIỆU). Không đưa token người/secret/`CLAUDE*` vào
-env tiến trình sync; cfharness không cầm token sync. Event filehub chỉ mang tên/đường dẫn tương đối/id — không nội dung tệp. Điều phối viên chỉ đọc
-(`filehub_list|filehub_link`) + giao việc `filehub:`; thêm thao tác ghi filehub → HUMAN_ONLY + ca trong `tests/test_sec_auth.py`/`test_manager_security.py`.
-Test dùng binary GIẢ `tests/fake_tangthu_sync.py` (đúng hợp đồng §8.3) + `tests/fh_fake.py`: `test_filehub_supervisor.py`, `test_filehub_workspace.py`,
-`test_filehub_concurrency.py`, `test_web_filehub.py`, ca `*_FILEHUB` trong `test_guard_classifier.py`. Đổi hợp đồng với binary → sửa CẢ binary giả.
+Bất biến: khoá cổng chỉ ở secret store (không env/argv/DB/audit/event/gói `clone`); agent không bao giờ nói chuyện với cổng (`filehub_lane`, sandbox chặn
+TCP localhost); `.tangthu*` trong bản sao cũ (`GuardContext.filehub_old_copies`) + `HUB_HOME/filehub` = cấm (`filehub_metadata`). Hub KHÔNG BAO GIỜ xoá/
+di chuyển bản sao cũ của đồng bộ; thư mục còn cấu hình đồng bộ = "cần chuyển": run/task bị từ chối với `LEGACY_TEXT`, không bao giờ chạy trong bản sao.
+Xoá trong thư mục chung = `write` (chỉ báo sau run). Event filehub chỉ mang tên/đường dẫn tương đối/id. Điều phối viên chỉ đọc (`filehub_list|filehub_link`)
++ giao việc `filehub:`; thêm thao tác ghi filehub → HUMAN_ONLY + ca trong `tests/test_sec_auth.py`/`test_manager_security.py`. Test: server GIẢ
+`tests/fake_kgs_lane.py` + `lane_fake.py` (`test_lane_*.py`, `test_filehub_h5.py`, `test_web_filehub.py`) — đổi §C → sửa fake trong CÙNG PR.
+
+## Log hệ thống — `docs/dev-notes/plan-logging.md` (L1 nền tảng, L2 req_id, L3 audit đầy đủ, L4 chuỗi băm audit, L5 truy vấn + cảnh báo + lưu trữ audit, L6 công cụ debug, L7 gói chẩn đoán, L8 dọn nuốt lỗi)
+| Module | Vai trò |
+|---|---|
+| `logs.py` | `setup_logging(proc, filename, shared)` JSONL mọi tiến trình (daemon `hub.log`, web `web.jsonl`, MCP `mcp.jsonl`), handler root cho thư viện (không lặp), che secret; `LevelController`/`level_loop` (config `logs.level|levels` + level tạm `hub_state logs.temp_levels`); `install_crash_handlers` (excepthook, faulthandler `logs/faults.log`, SIGUSR1), `asyncio_exception_handler`, `ERROR_COUNTS` |
+| `logs_rpc.py` | RPC `logs.levels|level` (HUMAN_ONLY, `logs.level` tự audit), CLI `cfharness logs level` (∈ HUB_HUMAN_ONLY_CLI); L6: RPC `logs.query` + `trace.get` (HUMAN_ONLY, ∈ `SENSITIVE_READS`, chạy trong thread — trace mở SQLite CHỈ ĐỌC riêng), CLI `cfharness logs [--since --level --logger --req --run --agent --proc -n -f --local]` (daemon dừng → đọc file trực tiếp) + `cfharness trace <req_id|run_id|task_id>` (∈ HUB_HUMAN_ONLY_CLI) |
+| `log_query.py` | L6: đọc `*.jsonl` + `hub.log` (cả `.N`, `.gz`) lọc THEO TRƯỜNG (chuỗi con chỉ là lọc thô trước parse), gộp theo ts, trần dòng/byte (file mới trước, file lớn đọc đuôi, bỏ file có mtime trước `since`); `follow` (`-f`); `ErrorCounter` (handler WARNING, thùng 1 phút/24 h, gắn trong `setup_logging` → `hub.status.log_errors`); `recent_errors` (doctor "Lỗi gần đây": gom logger + `msg_template`) |
+| `trace_view.py` | L6: dòng thời gian audit (req_id/run_id) + log + event TÓM TẮT (`EVENT_KEYS`, giá trị chỉ từ khoá/id ngắn; bỏ level detail/debug) + guard (không input) + approval (không input/lý do) + run con (`parent_run_id`, `continued_in_run_id`, lệnh con qua `parent_req_id` trong log); event theo req không gắn run = cửa sổ rowid tìm nhị phân theo ts (không index `events.req_id`) |
+| `web/debug_pages.py` | L6: `/logs` "Nhật ký hệ thống" + `/trace/{id}` (chỉ đọc, autoescape; `/audit` link req_id, trang run link "Dòng thời gian") |
+| `audit_chain.py` | L4: chuỗi băm `audit_log` (v30 `prev_hash`/`row_hash`, `CHAIN_COLUMNS` = HỢP ĐỒNG), `insert_chained` (writer DUY NHẤT của `audit_log`: `AuditLog.record`, `hub_freeze` ngoại tuyến, `hub_transfer` trên stage), `verify_chain`/`verify_db` (kết nối chỉ đọc), `AuditChain` (`hub.audit_chain`: neo `HUB_HOME/audit-anchors.jsonl` + metadata admin `audit.anchor` + event `audit.anchored` khi `audit.anchor_notify`; kiểm đuôi lúc khởi động; event `audit.tamper_detected`). RPC `audit.verify` (HUMAN_ONLY, luồng phụ), CLI `cfharness audit verify [--since-id N] [--json]` (mã thoát 1 khi gãy) |
+| `audit.py` (L5) | `AuditLog.query` lọc principal/actor/outcome/req_id/kind tiền tố/since-until (id tìm nhị phân theo ts — `first_id_at`/`last_id_at`)/`q` (CHỈ summary+target)/`before_id`; `activity(days)`; `export_conn` (jsonl/csv, 0600 O_EXCL, mọi cột kể cả băm, `data` nguyên chuỗi đã che); `row_taps` (dòng đầy đủ + `data_obj` sau mỗi lần ghi, lỗi chỉ log). RPC `audit.list` (tham số mới, `since` nhận `24h`), `audit.export` (∈ MUTATING, ghi `exports/audit-<ts>.<ext>`, kết nối chỉ đọc trong thread), `audit.activity` (∈ SENSITIVE_READS) — đều HUMAN_ONLY; CLI `audit list --principal --actor --outcome --req --q --since --until --before-id`, `audit export`, `audit verify --archive`; web `/audit` (bộ lọc, cột kết quả `.pill.outcome-*`, "Cũ hơn", thẻ "Hoạt động theo người") |
+| `audit_watch.py` (L5) | `hub.audit_watch` (row_tap): luật `denied_burst`/`login_fail_burst`/`security_change`/`secret_access`/`new_principal`/`mass_read`/`tamper` — cửa sổ trượt trong RAM, event `audit.alert{rule, principal, count, window_s, state on|resolved, subject?}` + dòng audit cùng tên; chống trùng theo (luật, principal), `resolved` sau trọn cửa sổ (vòng 30 s + mỗi lần ghi), trạng thái `hub_state audit_watch.active`, tập principal `audit_watch.seen` (nạp từ audit sẵn có lần đầu). Cấu hình `audit_watch.*` (∈ SECURITY_KEYS, `validate_setting`) |
+| `audit_archive.py` (L5) | `hub.audit_archive` (tắt mặc định, `audit.archive_after_days`): tháng UTC đã trọn trước mốc → kiểm chuỗi + neo → `audit-archive/<yyyy-mm>.jsonl.gz` (0600/0700) → `MANIFEST.json` → transaction đặt `hub_state audit.archive_cutoff` + DELETE (trigger v31). Không lưu trữ dòng cuối; tiếp tục được sau khi chết giữa chừng; `verify_archives` (sha256 + chuỗi + nối liền); bỏ lượt khi `export_quiesced`/sao lưu |
+| `support_bundle.py`, `support_cli.py`, `web/support_pages.py` (L7) | Gói chẩn đoán: `create(paths, since, run_ids, include_raw, dry_run)` → kế hoạch hoặc `exports/support-<ts>.tar.gz` (0600, `.part` O_EXCL → rename). Nguồn theo DANH SÁCH TRẮNG: `meta/` (versions từ `hub_state.cli_compat` — không spawn claude, `hub_doctor.run`, `hub.status`, config đã lọc `filter_config`), `logs/` (chỉ tên khớp `LOG_JSONL_RE`/`LOG_TEXT_RE`, không thư mục con/symlink; JSONL lọc theo `ts`), `runs/<id>/run.json` (`RUN_COLUMNS`) + `trace.json` (`trace_view.build`), raw chỉ khi `include_raw`. Mọi byte qua `redact.redact_count` → `redaction_report` (chỉ số đếm). RPC `support.plan|list` + `support.create` (∈ MUTATING_SUPPORT, tự audit; `include_raw` cần `confirm_raw`) — HUMAN_ONLY; CLI `cfharness support bundle|list` (daemon dừng → tại chỗ giữ `daemon.lock`); web thẻ Cài đặt + `/support` (xem trước) + ACTIONS `support_create`/`support_create_raw` (bước 2) + tải về một lần (`transfer_pages.mint_download/take_download/stream_file`, kho token riêng) |
+| `aiotasks.py` | `track(task, keep)` / `spawn(coro)`: tác vụ nền "bắn rồi quên" có log lỗi — dùng thay cho `keep.add(t); t.add_done_callback(keep.discard)` |
+| `trace.py` | L2: mã yêu cầu `req_id` (`r_<ULID>`), contextvar `REQ_CTX` {req_id, parent_req_id, channel, principal}, `bind`/`child`/`traced` (điểm vào nội bộ: chat, nhịp điều phối viên, lịch, dispatcher, auto-resume), `outgoing` (client gắn `params._trace`), `accept` (daemon: chỉ nhận đúng định dạng), `TraceFilter` (log). Daemon trả `_meta.req_id` trong MỌI phản hồi (`RpcError.req_id`, CLI in "mã yêu cầu"); access log `cfharness.rpc` (đọc = DEBUG, ghi/lỗi = INFO, denied/`rpc.slow` = WARNING; `logs.slow_rpc_ms`) |
+
+Bất biến: log là METADATA — không bao giờ ghi prompt, trả lời, input/output tool, diff, giá trị secret (kể cả DEBUG). Chỉ đổi level được cho
+`cfharness[.x]` + `logs.LIB_LOGGERS` (không httpx/urllib3). Listener bus lỗi không được làm hỏng `publish`. Tiến trình mới chạy lâu → `setup_process_logging`
+(lỗi IO bỏ qua). Test: `tests/test_logging_l1.py` (fixture trả lại trạng thái logging toàn cục — test gọi `setup_logging` phải dùng nó).
+req_id (L2): CHỈ là mã đối chiếu — client/agent tự khai được, nên không bao giờ dùng để quyết định quyền/danh tính/chống trùng; daemon kiểm định dạng
+chặt (dài đúng 28, Crockford HOA) và pop `_trace` trước handler. Migration v28: `runs.req_id`, `audit_log.req_id`, `events.req_id`. Run luôn có req_id
+(lệnh tạo, hoặc mã riêng khi tạo ngoài mọi lượt); task `_run` bind req_id của run → event/log/audit của run cùng mã; env `CFHARNESS_REQ_ID` cho `claude`
+→ hook guard gửi kèm `guard.check`. `HubEvent.req_id` tuỳ chọn (`Hub.publish` điền). Access log chỉ metadata (`logs.EXTRA_FIELDS`) — không params/kết quả;
+method chờ lâu theo thiết kế → `daemon.SLOW_EXEMPT`. Điểm vào nội bộ mới tạo run → `@trace.traced("<kênh>")`. OTel: trace_id = băm req_id của run,
+thuộc tính span run theo `otel.RUN_SPAN_KEYS`. Test: `tests/test_trace_id.py`.
+Audit đầy đủ (L3, migration **v29**: `audit_log.outcome|error_code|duration_ms|principal|declared_channel|session_ref|ip|caller_run_id`):
+`principal` do DAEMON chứng thực (`auth.principal_of`) — token theo loại client `auth.TOKEN_KINDS` (`<socket>.auth` CLI/TUI, `<socket>.web.auth` web,
+`<socket>.mcp.auth` MCP server; sinh lại cùng nhau; client web/mcp thiếu token riêng → token người). Kênh của người qua socket = `auth.attested_channel`
+(token, không phải `_audit.channel`; kênh khai → `declared_channel`). `params._client` (web: `session_ref` băm + `ip` chỉ khi qua public_origin — `web_client_meta`;
+MCP: `transport`/`level`) chỉ nhận theo loại token (`clean_client_meta`), daemon pop trước handler. Ngữ cảnh lượt (`trace.REQ_CTX`: principal, audit_channel,
+declared_channel, session_ref, ip, caller_run_id) là mặc định của `AuditLog.record`. `wrap_with_audit` ghi MỌI lời gọi (ok/denied/error + `duration_ms`, không
+traceback, ném lại lỗi gốc; dòng lỗi bỏ khoá kiểu thông tin đăng nhập `FAILURE_DROP_KEYS` — thêm tham số bí mật mới → thêm vào đó) và đặt dấu `AUDITED_ATTR` — lớp bọc ngoài phải giữ `__wrapped__`; method ghi mới không bọc → thêm lý do vào `SERVICE_AUDITED` của
+`tests/test_audit_full.py`. Đọc nhạy cảm `mcp_server.rpc.SENSITIVE_READS` → daemon ghi `read:<method>` (đích + số bản ghi, chuỗi tìm kiếm chỉ độ dài), gộp
+(principal, method, target) / 10 phút trong RAM (dòng đầu ngay, dòng `coalesced` khi cửa sổ đóng — audit append-only). Agent/điều phối viên trong run: req_id
+client gửi bị bỏ, mã mới với cha = req_id của run. Token web/mcp cùng lớp bảo vệ với token người (sandbox, `permissions.deny`, classifier, fileview, backup).
+`audit.list` ∈ HUMAN_ONLY, `cfharness audit` ∈ HUB_HUMAN_ONLY_CLI. Không bao giờ đưa sid/khoá phiên/token vào audit. Test: `tests/test_audit_full.py`.
+Công cụ debug (L6): agent KHÔNG đọc được `HUB_HOME/logs/` — sandbox denyRead + `permissions.deny` Read/Grep/Glob (`secret_read_deny_rules`) + classifier
+(`sensitive_read`, `sensitive_regions` → `hub_secret_read` forbidden); `cfharness logs|trace|daemon logs` forbidden. `trace.get`/`/trace` không bao giờ trả payload
+event, input tool/guard/approval, `data` của audit — thêm trường event vào tóm tắt = thêm vào `trace_view.EVENT_KEYS` (giá trị vẫn qua `_SAFE`). Log trả về
+qua RPC che lại theo giá trị secret (`mask_values`); terminal qua `termsafe.one_line`, web autoescape (không `|safe`). Log có thêm trường `parent_req_id`.
+Test: `tests/test_debug_tools.py`.
+Chuỗi băm (L4, migration **v30**): MỌI INSERT vào `audit_log` qua `audit_chain.insert_chained` (đọc dòng cuối + ghi trong CÙNG transaction, id cấp tường minh
+→ id liên tiếp trong vùng chuỗi; test quét mã nguồn đòi `INSERT INTO audit_log` chỉ có ở `audit_chain.py`). Đổi `CHAIN_COLUMNS` = thay đổi phá vỡ; cột audit
+mới KHÔNG tự vào chuỗi. Dòng trước v30 = NULL (không kiểm), dòng chuỗi đầu = `genesis:<sha256 dòng cuối trước v30>`. Bản neo: `audit-anchors.jsonl` ∈
+`backup.INCLUDE_FILES` (đi cùng bản sao lưu + gói xuất clone/move → khôi phục/nhập ra neo khớp DB; `update_helper.restore_anchors` khi quay về DB trước cập
+nhật), ∈ `HUB_WRITE_DENY_NAMES` (sandbox); không neo khi đang sao lưu/xuất gói (`AuditChain._busy` — đọc đuôi TRƯỚC khi kiểm). Không neo vào
+`integrity_baseline` (cùng hub.db — không thêm bảo vệ). Payload `audit.tamper_detected` CHỈ id + mã lý do; báo lúc khởi động chống lặp theo chữ ký
+(`hub_state audit.tamper_reported`). Nhánh `audit` ∈ `integrity.SECURITY_KEYS`. Test: `tests/test_audit_chain.py`.
+Truy vấn + cảnh báo + lưu trữ (L5, migration **v31**: `audit_no_delete` chỉ cho xoá `id <= hub_state['audit.archive_cutoff']`): `q` không bao giờ tìm
+trong `data`; tap audit (`taps`/`row_taps`) không bao giờ làm hỏng lượt ghi; payload `audit.alert` CHỈ metadata (`subject` thuộc từ vựng cố định
+`audit_watch.SUBJECTS`, principal qua `clean_principal`) — thêm luật = thêm vào `RULES`/`RULE_VI`/`DEFAULTS` (+ config) + ca đỏ→xanh trong
+`tests/test_audit_watch.py`; luật phải rẻ (RAM, không quét DB mỗi lần ghi). Dòng `audit.alert` bị bỏ qua (không vòng lặp). `new_principal` không báo
+`hub:`/`agent:`/`manager:`/`anon:`/`web:sess_`/`web:anon`; cài mới học im lặng principal `os:` đầu tiên. Env `CFHARNESS_AUDIT_WATCH=off` (conftest đặt cho
+bộ test chung). Telegram gửi `audit.*` vào `security_chats`. Lưu trữ: không bao giờ xoá trước khi file + manifest đã ghi xong; chuỗi gãy/neo lệch → không
+lưu trữ; `verify_chain` nối dòng đầu DB với `next_prev` của mục manifest (`archive_missing` nếu có mốc mà không nối được), bản neo trỏ vào dòng đã lưu
+trữ đối chiếu với `anchors` trong manifest. `audit-archive/` ∈ `backup.INCLUDE_DIRS` (bản sao lưu + gói `.cfhx`), `pathmap.SCAN_SKIP_DIRS`, sandbox
+denyRead/denyWrite + `permissions.deny` + `HUB_WRITE_DENY_NAMES`, classifier `sensitive_read`/`sensitive_regions`. Test: `tests/test_audit_query.py`,
+`tests/test_audit_watch.py`.
+Gói chẩn đoán (L7): KHÔNG BAO GIỜ thêm nguồn bằng cách quét thư mục rộng — nguồn mới = hàm `_*_items` riêng + ca "file cấm vắng mặt" trong
+`tests/test_support_bundle.py`; không bao giờ hub.db/secrets/auth/token socket/session Claude/checkpoints/backups/exports/imports/audit-archive/tri thức
+agent. Mọi byte vào gói qua `support_bundle.scrub` NGAY trước khi ghi (sha256 manifest = nội dung đã che). Cột `runs` mới chỉ vào gói khi thêm vào
+`RUN_COLUMNS` (metadata, không chữ tự do). Raw transcript luôn cần xác nhận bước 2 ở MỌI bề mặt (`confirm_raw` RPC, `--confirm-raw`/gõ `raw` CLI,
+`Action.step2` web). `exports/`, `imports/`, `backups/` ∈ classifier `sensitive_regions` (Bash) ngoài sandbox + `sensitive_read`. `update_helper.JsonLog` (chỉ stdlib) và `logs.setup_stream_json` (import-job) ghi dòng JSON
+cùng trường lõi `hub.log`. Test: `tests/test_support_bundle.py`.
+Nuốt lỗi (L8): handler `except Exception`/`except BaseException`/`except:` MỚI phải (a) log kèm `exc_info` (`log.debug(..., exc_info=True)` trở lên,
+hoặc `log.exception`), (b) ném lại, hoặc (c) có chú thích `# fail-closed: <lý do>` / `# best-effort: <lý do>` (`# pragma: no cover — <lý do>` cũng
+được; pragma trần thì không) trên dòng `except` hoặc dòng lệnh đầu của thân — kiểm bằng `scripts/check_broad_except.py` (AST) trong
+`tests/test_broad_except.py`; baseline theo file `scripts/broad_except_baseline.txt` chỉ được GIẢM (`--update` sau khi dọn). Log trong handler chỉ
+metadata (id, tên lớp lỗi) — không payload; lỗi của client Telegram/Slack/webhook/HTTP không `exc_info` (traceback có thể mang URL chứa token) → dùng
+chú thích. Module chỉ stdlib (hook, `mcp_guard`, `observe_hook`, `hub_self`, `update_helper`, `transport`, `oscompat`, `cron`) chỉ thêm chú thích.
+Tác vụ "bắn rồi quên" dùng `aiotasks.spawn(coro, name=…)`; task giữ handle (huỷ/await theo vòng đời) đặt `name=`.

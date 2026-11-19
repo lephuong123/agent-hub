@@ -2,7 +2,12 @@
 
 Xoay vòng an toàn trên Windows (`SafeRotatingFileHandler`): file đang mở ở tiến trình khác (`daemon logs`, trình xem log,
 antivirus) KHÔNG đổi tên được → chép sang `.1` rồi cắt file gốc (copytruncate) thay vì `handleError` và để file lớn mãi.
-`logs.*` trong config: `max_bytes`, `backup_count`, `max_age_days` (0/null = không dọn theo tuổi).
+`logs.*` trong config: `max_bytes`, `backup_count`, `max_age_days` (0/null = không dọn theo tuổi), `level` + `levels`
+(đổi lúc chạy — `LevelController`, docs/dev-notes/plan-logging.md L1).
+
+Mỗi tiến trình một file JSONL: daemon `hub.log`, web `web.jsonl`, MCP stdio `mcp.jsonl` (`setup_logging(proc=…)`). Bản ghi thư
+viện ngoài (asyncio, mcp, uvicorn…) cũng vào cùng file (handler ở root, chỉ khi logger đó phát tới mức của handler). Log là
+METADATA: không bao giờ ghi prompt, nội dung trả lời, input/output tool hay giá trị secret — kể cả ở DEBUG.
 """
 
 from __future__ import annotations
@@ -11,8 +16,12 @@ import contextvars
 import json
 import logging
 import os
+import re
 import shutil
+import sys
+import threading
 import time
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -53,17 +62,34 @@ class RunContextFilter(logging.Filter):
         return True
 
 
+_PROC = "daemon"  # tên tiến trình ghi log (daemon|web|mcp|cli|helper) — đặt trong setup_logging
+CONTEXT_FIELDS = ("run_id", "agent_id", "task_id", "team_id", "req_id", "parent_req_id", "channel")
+# L2: trường METADATA của access log RPC (`cfharness.rpc`, daemon._access_log) — chỉ id/tên/số, không bao giờ params/kết quả
+EXTRA_FIELDS = ("event", "method", "via", "duration_ms", "outcome", "code", "reason")
+
+
 class JsonFormatter(logging.Formatter):
+    def __init__(self, *args: Any, proc: str | None = None, **kw: Any) -> None:
+        super().__init__(*args, **kw)
+        self.proc = proc  # None = tiến trình đã `setup_logging` (`_PROC`); đặt riêng cho handler phụ (vd import-job ghi stderr — L7)
+
     def format(self, record: logging.LogRecord) -> str:
         d = {
-            "ts": iso(),
+            "ts": iso(datetime.fromtimestamp(record.created, timezone.utc)),
             "level": record.levelname.lower(),
             "logger": record.name,
             "msg": record.getMessage(),
+            "proc": self.proc or _PROC,
+            "pid": record.process,
+            "src": f"{record.module}:{record.lineno}",
         }
-        for k in ("run_id", "agent_id", "task_id", "team_id"):
+        for k in CONTEXT_FIELDS:
             v = getattr(record, k, None)
             if v:
+                d[k] = v
+        for k in EXTRA_FIELDS:
+            v = getattr(record, k, None)
+            if v is not None and isinstance(v, (str, int, float)):
                 d[k] = v
         if record.exc_info:
             d["exc"] = self.formatException(record.exc_info)
@@ -121,13 +147,13 @@ def rotate_if_large(path: Path, max_bytes: int = DEFAULT_MAX_BYTES, backup_count
 
 
 def purge_old_logs(logs_dir: Path, max_age_days: float | None, now: float | None = None) -> list[str]:
-    """Xoá bản xoay vòng (`*.log.N`, `*.out.N`) cũ hơn `max_age_days` theo mtime. File đang ghi không bao giờ bị xoá."""
+    """Xoá bản xoay vòng (`*.log.N`, `*.out.N`, `*.jsonl.N`) cũ hơn `max_age_days` theo mtime. File đang ghi không bao giờ bị xoá."""
     if not max_age_days:
         return []
     cutoff = (now if now is not None else time.time()) - float(max_age_days) * 86400
     out: list[str] = []
     for f in logs_dir.glob("*.*"):
-        if not f.suffix[1:].isdigit() or not f.stem.endswith((".log", ".out")):
+        if not f.suffix[1:].isdigit() or not f.stem.endswith((".log", ".out", ".jsonl")):
             continue
         try:
             if f.stat().st_mtime < cutoff:
@@ -165,16 +191,269 @@ class SafeRotatingFileHandler(RotatingFileHandler):
         purge_old_logs(Path(self.baseFilename).parent, self.max_age_days)
 
 
+LIB_LOGGERS = ("asyncio", "mcp", "uvicorn", "starlette", "websockets")  # thư viện được phép đổi level (không httpx/urllib3: URL có token)
+LEVELS = {"debug": logging.DEBUG, "info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR, "critical": logging.CRITICAL}
+_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_]+){0,8}$")
+_FILE_MARK = "_cfharness_jsonl"
+
+
+class _NotCfharness(logging.Filter):
+    """Handler ở root: bản ghi `cfharness.*` đã có handler riêng (propagate lên root) → không ghi lần hai."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (record.name == "cfharness" or record.name.startswith("cfharness."))
+
+
+def _file_handler(path: Path, proc: str, *, max_bytes: int, backup_count: int, max_age_days: float | None,
+                  shared: bool) -> logging.Handler:
+    """`shared=True` (nhiều tiến trình cùng ghi, vd MCP stdio): FileHandler append + xoay lúc mở — không xoay giữa chừng (đua nhau
+    đổi tên). Ngược lại `SafeRotatingFileHandler`."""
+    if shared:
+        rotate_if_large(path, max_bytes, backup_count)
+        purge_old_logs(path.parent, max_age_days)
+        h: logging.Handler = logging.FileHandler(path, encoding="utf-8")
+    else:
+        h = SafeRotatingFileHandler(path, maxBytes=int(max_bytes or 0), backupCount=int(backup_count or 0), max_age_days=max_age_days)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:  # best-effort: Windows / file của người khác
+        pass
+    return h
+
+
 def setup_logging(logs_dir: Path, level: int = logging.INFO, *, max_bytes: int = DEFAULT_MAX_BYTES,
-                  backup_count: int = DEFAULT_BACKUP_COUNT, max_age_days: float | None = DEFAULT_MAX_AGE_DAYS) -> None:
+                  backup_count: int = DEFAULT_BACKUP_COUNT, max_age_days: float | None = DEFAULT_MAX_AGE_DAYS,
+                  proc: str = "daemon", filename: str = "hub.log", shared: bool = False) -> None:
+    """Cấu hình log JSONL cho tiến trình `proc`: handler cho `cfharness` (mọi level ≥ level của logger) + handler ở root cho thư
+    viện ngoài (không lặp bản ghi `cfharness`). Cả hai che secret (`SecretLogFilter`). Gọi lại được (thay handler cũ)."""
+    global _PROC
+    _PROC = proc
     logs_dir.mkdir(parents=True, exist_ok=True)
-    root = logging.getLogger("cfharness")
-    root.setLevel(level)
-    for h in list(root.handlers):
-        root.removeHandler(h)
+    from .redact import SecretLogFilter
+    from .trace import TraceFilter
+
+    path = logs_dir / filename
+    lg = logging.getLogger("cfharness")
+    lg.setLevel(level)
+    for h in list(lg.handlers):
+        lg.removeHandler(h)
         h.close()
-    h = SafeRotatingFileHandler(logs_dir / "hub.log", maxBytes=int(max_bytes or 0), backupCount=int(backup_count or 0),
-                                max_age_days=max_age_days)
+    h = _file_handler(path, proc, max_bytes=max_bytes, backup_count=backup_count, max_age_days=max_age_days, shared=shared)
     h.setFormatter(JsonFormatter())
     h.addFilter(RunContextFilter())
-    root.addHandler(h)
+    h.addFilter(TraceFilter())  # L2: req_id/channel của lượt xử lý hiện tại (trace.py)
+    h.addFilter(SecretLogFilter())
+    lg.addHandler(h)
+    root = logging.getLogger()
+    for old in [x for x in root.handlers if getattr(x, _FILE_MARK, False)]:
+        root.removeHandler(old)
+        old.close()
+    rh: logging.Handler = _SharedStream(h)
+    rh.addFilter(_NotCfharness())
+    setattr(rh, _FILE_MARK, True)
+    root.addHandler(rh)
+    setattr(lg, _FILE_MARK, True)
+    from .log_query import ensure_error_counter
+
+    ensure_error_counter()  # L6 (B5): đếm WARNING/ERROR theo logger trong RAM cho hub.status / thẻ Sức khoẻ
+
+
+class _SharedStream(logging.Handler):
+    """Handler ở root ghi QUA handler file của `cfharness` (một file, một luồng xoay vòng) — tránh hai handler xoay cùng file."""
+
+    def __init__(self, target: logging.Handler) -> None:
+        super().__init__()
+        self.target = target
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.target.handle(record)  # filter (ngữ cảnh run, che secret) + formatter + xoay vòng của handler đích
+
+
+def setup_stream_json(proc: str, stream: Any = None, level: int = logging.INFO) -> logging.Handler:
+    """Tiến trình phụ ghi ra stderr đã được chuyển vào file (vd `hub import-job` → `logs/import-job.out`, L7): bản ghi `cfharness` thành
+    dòng JSON cùng schema `hub.log` (`ts`, `level`, `logger`, `msg`, `proc`, `pid`, …), đã che secret. Gọi lại được (thay handler cũ)."""
+    from .redact import SecretLogFilter
+
+    lg = logging.getLogger("cfharness")
+    for h in [x for x in lg.handlers if getattr(x, "_cfharness_stream_json", False)]:
+        lg.removeHandler(h)
+    h = logging.StreamHandler(stream if stream is not None else sys.stderr)
+    h.setFormatter(JsonFormatter(proc=proc))
+    h.addFilter(RunContextFilter())
+    h.addFilter(SecretLogFilter())
+    setattr(h, "_cfharness_stream_json", True)
+    lg.addHandler(h)
+    if lg.level == logging.NOTSET or lg.level > level:
+        lg.setLevel(level)
+    return h
+
+
+def file_logging_active() -> bool:
+    """True khi tiến trình đã `setup_logging` (log thư viện vào file JSONL) — stderr khỏi ghi lặp."""
+    return bool(getattr(logging.getLogger("cfharness"), _FILE_MARK, False))
+
+
+def setup_process_logging(logs_dir: Path, proc: str, filename: str, settings: dict[str, Any] | None = None, *,
+                          shared: bool = False) -> bool:
+    """Tiến trình phụ (web, MCP stdio): như daemon nhưng lỗi IO (sandbox chặn ghi, đĩa đầy…) chỉ bỏ qua — trả False."""
+    s = settings or {}
+    try:
+        setup_logging(logs_dir, LEVELS.get(str(s.get("level") or "info").lower(), logging.INFO),
+                      max_bytes=int(s.get("max_bytes", DEFAULT_MAX_BYTES) or 0), backup_count=int(s.get("backup_count", DEFAULT_BACKUP_COUNT) or 0),
+                      max_age_days=s.get("max_age_days", DEFAULT_MAX_AGE_DAYS), proc=proc, filename=filename, shared=shared)
+        return True
+    except OSError:
+        return False
+
+
+# ---------------------------------------------------------------------------- level đổi lúc chạy (L1)
+def valid_logger_name(name: str) -> bool:
+    """Chỉ `cfharness[.x]` và thư viện trong `LIB_LOGGERS[.x]` — không root, không httpx/urllib3 (DEBUG của chúng in URL có token)."""
+    if not isinstance(name, str) or not _NAME_RE.match(name):
+        return False
+    head = name.split(".", 1)[0]
+    return head == "cfharness" or head in LIB_LOGGERS
+
+
+def parse_level(v: Any) -> int | None:
+    return LEVELS.get(str(v or "").strip().lower())
+
+
+class LevelController:
+    """Áp `logs.level` (logger `cfharness`) + `logs.levels` {logger: level} + level tạm (hub_state `logs.temp_levels`
+    {logger: {level, until}}, ưu tiên cao nhất). Logger thôi được cấu hình → về NOTSET (thừa kế). Thuần với `now`."""
+
+    def __init__(self) -> None:
+        self.managed: set[str] = set()
+
+    @staticmethod
+    def effective(cfg: dict[str, Any] | None, temp: dict[str, Any] | None, now: float) -> tuple[dict[str, int], list[str]]:
+        cfg = cfg if isinstance(cfg, dict) else {}
+        out: dict[str, int] = {"cfharness": parse_level(cfg.get("level")) or logging.INFO}
+        per = cfg.get("levels")
+        for name, lv in (per.items() if isinstance(per, dict) else []):
+            n = parse_level(lv)
+            if n is not None and valid_logger_name(str(name)):
+                out[str(name)] = n
+        expired: list[str] = []
+        for name, t in ((temp or {}).items() if isinstance(temp, dict) else []):
+            n = parse_level((t or {}).get("level")) if isinstance(t, dict) else None
+            try:
+                until = float((t or {}).get("until") or 0)
+            except (TypeError, ValueError):
+                until = 0.0
+            if n is None or not valid_logger_name(str(name)) or until <= now:
+                expired.append(str(name))
+                continue
+            out[str(name)] = n
+        return out, expired
+
+    def apply(self, levels: dict[str, int]) -> None:
+        for name in self.managed - set(levels):
+            logging.getLogger(name).setLevel(logging.NOTSET if name != "cfharness" else logging.INFO)
+        for name, n in levels.items():
+            lg = logging.getLogger(name)
+            if lg.level != n:
+                lg.setLevel(n)
+        self.managed = set(levels)
+
+
+TEMP_KEY = "logs.temp_levels"
+MAX_TEMP_S = 24 * 3600
+
+
+def refresh_levels(hub: Any, ctl: LevelController, now: float | None = None) -> dict[str, int]:
+    """Đọc config + hub_state, dọn level tạm hết hạn, áp. Chỉ khi tiến trình đã `setup_logging` (test in-process không đổi
+    level toàn cục của pytest)."""
+    now = time.time() if now is None else now
+    temp = hub.store.state_get(TEMP_KEY, {}) or {}
+    levels, expired = ctl.effective(hub.config.get("logs") or {}, temp, now)
+    if expired and isinstance(temp, dict):
+        for name in expired:
+            temp.pop(name, None)
+        hub.store.state_set(TEMP_KEY, temp)
+        logging.getLogger("cfharness.logs").info("level log tạm đã hết hạn: %s", ", ".join(sorted(expired)))
+    if file_logging_active():
+        ctl.apply(levels)
+    return levels
+
+
+async def level_loop(hub: Any, interval_s: float = 5.0) -> None:
+    import asyncio
+
+    ctl = hub.log_levels
+    while True:
+        try:
+            refresh_levels(hub, ctl)
+        except Exception:  # best-effort: cấu hình hỏng không được giết vòng
+            logging.getLogger("cfharness.logs").exception("không áp được level log")
+        await asyncio.sleep(interval_s)
+
+
+# ---------------------------------------------------------------------------- lỗi không ai bắt (L1)
+_FAULT_FILE: Any = None
+_crash_log = logging.getLogger("cfharness.crash")
+ERROR_COUNTS: dict[str, int] = {"asyncio": 0, "thread": 0, "uncaught": 0, "task": 0}
+
+
+def install_crash_handlers(logs_dir: Path | None = None) -> None:
+    """`sys.excepthook` + `threading.excepthook` → log CRITICAL/ERROR (rồi gọi hook cũ); `faulthandler` → `logs/faults.log`
+    (segfault/treo); POSIX: `SIGUSR1` dump stack mọi thread vào faults.log (`cfharness daemon dump-stacks`). Idempotent."""
+    global _FAULT_FILE
+    prev_sys = sys.excepthook
+    if not getattr(prev_sys, "_cfharness", False):
+        def _sys_hook(tp: Any, val: Any, tb: Any) -> None:
+            if not issubclass(tp, KeyboardInterrupt):
+                ERROR_COUNTS["uncaught"] += 1
+                _crash_log.critical("lỗi không bắt được: %s", tp.__name__, exc_info=(tp, val, tb))
+            prev_sys(tp, val, tb)
+
+        _sys_hook._cfharness = True  # type: ignore[attr-defined]
+        sys.excepthook = _sys_hook
+    prev_th = threading.excepthook
+    if not getattr(prev_th, "_cfharness", False):
+        def _th_hook(args: Any) -> None:
+            if args.exc_type is not SystemExit:
+                ERROR_COUNTS["thread"] += 1
+                _crash_log.error("thread %s lỗi: %s", getattr(args.thread, "name", "?"), args.exc_type.__name__,
+                                 exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+            prev_th(args)
+
+        _th_hook._cfharness = True  # type: ignore[attr-defined]
+        threading.excepthook = _th_hook
+    if logs_dir is not None and _FAULT_FILE is None:
+        import faulthandler
+
+        try:
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            fd = os.open(logs_dir / "faults.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            _FAULT_FILE = os.fdopen(fd, "a", encoding="utf-8")
+            faulthandler.enable(file=_FAULT_FILE, all_threads=True)
+            if hasattr(faulthandler, "register") and hasattr(__import__("signal"), "SIGUSR1"):
+                import signal
+
+                faulthandler.register(signal.SIGUSR1, file=_FAULT_FILE, all_threads=True, chain=False)
+        except (OSError, ValueError, RuntimeError):  # best-effort: không có faults.log vẫn chạy
+            _FAULT_FILE = None
+
+
+def asyncio_exception_handler(loop: Any, context: dict[str, Any]) -> None:
+    """`loop.set_exception_handler`: task chết không ai đợi, callback lỗi… → log ERROR (thay vì chỉ in stderr)."""
+    ERROR_COUNTS["asyncio"] += 1
+    exc = context.get("exception")
+    where = context.get("task") or context.get("future") or context.get("handle")
+    name = where.get_name() if hasattr(where, "get_name") else type(where).__name__ if where is not None else "-"
+    _crash_log.error("asyncio: %s (%s)", context.get("message") or "lỗi", name,
+                     exc_info=(type(exc), exc, exc.__traceback__) if isinstance(exc, BaseException) else None)
+
+
+def logs_settings(cfg: Any) -> dict[str, Any]:
+    c = cfg if isinstance(cfg, dict) else {}
+    return {"max_bytes": c.get("max_bytes", DEFAULT_MAX_BYTES), "backup_count": c.get("backup_count", DEFAULT_BACKUP_COUNT),
+            "max_age_days": c.get("max_age_days", DEFAULT_MAX_AGE_DAYS), "level": c.get("level") or "info"}
+
+
+__all__ = ["setup_logging", "setup_process_logging", "file_logging_active", "LevelController", "refresh_levels", "level_loop",
+           "install_crash_handlers", "asyncio_exception_handler", "valid_logger_name", "parse_level", "logs_settings",
+           "JsonFormatter", "RunContextFilter", "SafeRotatingFileHandler", "run_logger", "set_run_context", "rotate_file",
+           "rotate_if_large", "purge_old_logs", "ERROR_COUNTS", "LEVELS", "LIB_LOGGERS", "TEMP_KEY", "MAX_TEMP_S"]

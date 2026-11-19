@@ -34,7 +34,7 @@ def _emit(decision: str, reason: str) -> None:
 def _deny_and_exit(reason: str) -> None:
     try:
         _emit("deny", reason)
-    except BaseException:
+    except BaseException:  # fail-closed: in JSON deny lỗi → thoát mã 2 (Claude Code coi là chặn)
         os._exit(2)
     os._exit(0)
 
@@ -71,6 +71,15 @@ def rpc_call(sock_path: str, method: str, params: dict, timeout: float) -> dict:
     return msg["result"]
 
 
+def with_trace(params: dict) -> dict:
+    """L2: gắn `_trace.req_id` từ env `CFHARNESS_REQ_ID` (do hub đặt cho tiến trình claude) — chỉ để đối chiếu log/audit.
+    Chỉ chuỗi ngắn ký tự an toàn; daemon kiểm lại định dạng (sai → mã mới). Không bao giờ làm hỏng lời gọi."""
+    v = os.environ.get("CFHARNESS_REQ_ID") or ""
+    if 0 < len(v) <= 64 and v.isascii() and v.replace("_", "").isalnum():
+        params["_trace"] = {"req_id": v}
+    return params
+
+
 def _args(argv: list[str]) -> dict[str, str]:
     out: dict[str, str] = {}
     i = 0
@@ -102,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
         res = rpc_call(
             sock,
             "guard.check",
-            {
+            with_trace({
                 "run_id": run_id,
                 "channel": "hook",
                 "tool_name": data.get("tool_name"),
@@ -111,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
                 "session_id": data.get("session_id"),
                 "cwd": data.get("cwd"),
                 "max_wait_s": max(1.0, timeout - (time.monotonic() - t0) - 10),
-            },
+            }),
             timeout,
         )
         decision = res.get("decision")
@@ -121,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except SystemExit:
         raise
-    except BaseException as e:  # fail-closed
+    except BaseException as e:  # fail-closed: mọi lỗi của hook = deny (hook fail-open phía Claude Code)
         _deny_and_exit(f"hub guard unavailable — blocked (fail-closed): {type(e).__name__}: {str(e)[:200]}")
         return 0
 
@@ -131,7 +140,7 @@ if __name__ == "__main__":
         rc = main()
     except SystemExit as e:
         rc = int(e.code or 0)
-    except BaseException:
+    except BaseException:  # fail-closed: hook sập = deny
         _deny_and_exit("hub guard crashed — blocked (fail-closed)")
         rc = 0
     sys.exit(rc)

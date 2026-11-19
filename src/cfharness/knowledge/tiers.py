@@ -47,7 +47,7 @@ class TierVersions:
             rows = self.hub.store.conn.execute(
                 "SELECT id, scope, owner_id, target, target_ref, blob_kind, path, before_blob, after_blob, canary_agent_id "
                 "FROM tier_canaries WHERE status='canary' AND mode='canary'").fetchall()
-        except Exception:  # bảng chưa có (DB cũ trong test thuần)
+        except Exception:  # best-effort: bảng tier_canaries chưa có (DB cũ trong test thuần)
             return []
         return [dict(r) for r in rows]
 
@@ -62,7 +62,7 @@ class TierVersions:
             rows = self.hub.store.conn.execute(
                 "SELECT ledger_entry_id, canary_agent_id FROM tier_canaries WHERE status='canary' AND mode='canary' AND path LIKE 'graph://%' "
                 "AND ledger_entry_id IS NOT NULL").fetchall()
-        except Exception:
+        except Exception:  # best-effort: bảng tier_canaries chưa có (DB cũ trong test thuần)
             return set()
         return {r[0] for r in rows if r[1] != agent_id}
 

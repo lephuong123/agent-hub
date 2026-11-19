@@ -217,7 +217,7 @@ async def test_rpc_directory_admin_only_and_token_once(env, tmp_path, as_admin):
     assert not ad.verify_token(env.paths, tok) and ad.verify_token(env.paths, tok2)
     # token không vào audit (append-only)
     rows = env.hub.store.conn.execute("SELECT * FROM audit_log WHERE kind='admin.directory_token'").fetchall()
-    assert len(rows) == 2 and tok not in json.dumps([list(map(str, x)) for x in rows]) and tok2 not in json.dumps([list(map(str, x)) for x in rows])
+    assert len([x for x in rows if x["outcome"] == "ok"]) == 2 and len(rows) == 3 and tok not in json.dumps([list(map(str, x)) for x in rows]) and tok2 not in json.dumps([list(map(str, x)) for x in rows])
     with pytest.raises(RpcError):
         await cli.call("admin.directory_serve", {"token": tok})
     assert (await cli.call("admin.directory_serve", {"token": tok2}))["hubs"]

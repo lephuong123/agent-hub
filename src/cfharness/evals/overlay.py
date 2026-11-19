@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..errors import HubError
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..hub import Hub
@@ -210,6 +213,7 @@ def materialize_before(hub: "Hub", home: Path, cfg: dict[str, Any], entry: dict[
             r = fn(entry, home, cfg)
             return r is not False
         except Exception:
+            log.debug("eval overlay: áp entry lên bản sao lỗi", exc_info=True)
             return False
     target = str(entry.get("target") or "")
     if target == "config":
@@ -285,13 +289,13 @@ def prompt_fingerprint(hub: Any, agent_id: str, home: Path) -> str:
             from ..knowledge.prompt_blocks import build_knowledge_blocks
 
             blocks, _ = build_knowledge_blocks(ks, agent_id, home=home)
-        except Exception as e:  # tri thức hỏng → khác mọi lần khác, không dùng cache cũ
+        except Exception as e:  # best-effort: lỗi nằm trong dấu vân tay (khác mọi lần, không dùng cache cũ)
             parts.append(f"blocks_error:{e!r}")
         vers = getattr(ks, "versions", None)
         if vers is not None and hasattr(vers, "version_map"):
             try:
                 parts.append(json.dumps(vers.version_map(agent_id), sort_keys=True, default=str, ensure_ascii=False))
-            except Exception as e:
+            except Exception as e:  # best-effort: lỗi nằm trong dấu vân tay (khác mọi lần, không dùng cache cũ)
                 parts.append(f"versions_error:{e!r}")
     soul_p = home / "SOUL.md"
     text = build_system_prompt(agent_id, soul_p.read_text(encoding="utf-8") if soul_p.exists() else "", blocks)

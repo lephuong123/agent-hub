@@ -17,6 +17,7 @@ from .paths import HubPaths
 from .runs import RunManager
 from .runtime import AgentRuntime
 from .store import Store
+from .trace import current_req_id as _current_req_id
 
 log = logging.getLogger("cfharness.hub")
 
@@ -26,6 +27,9 @@ class Hub:
         self.paths = paths
         paths.ensure()
         self.config = HubConfig(paths.config)
+        from .logs import LevelController
+
+        self.log_levels = LevelController()  # L1: logs.level/levels + level tạm, áp lúc chạy (logs.level_loop)
         self.store = Store(paths.db)
         bc = self.config.get("bus")
         self.bus = EventBus(ring_events=int(bc["ring_events"]), ring_bytes=int(bc["ring_bytes"]), subscriber_queue=int(bc["subscriber_queue"]))
@@ -124,6 +128,17 @@ class Hub:
         _attach_admin_policy(self)
         _attach_admin_audit(self)
         _attach_admin_watch(self)
+        # L4: chuỗi băm audit — neo định kỳ/khi dừng vào HUB_HOME/audit-anchors.jsonl (+ metadata admin), kiểm đuôi lúc khởi động — audit_chain.py
+        from .audit_chain import attach as _attach_audit_chain
+
+        _attach_audit_chain(self)
+        # L5: cảnh báo theo mẫu audit (`hub.audit_watch`, row_tap của hub.audit) + lưu trữ audit cũ ra file (`hub.audit_archive`, tắt mặc
+        # định — audit.archive_after_days) — audit_watch.py, audit_archive.py
+        from .audit_archive import attach as _attach_audit_archive
+        from .audit_watch import attach as _attach_audit_watch
+
+        _attach_audit_watch(self)
+        _attach_audit_archive(self)
         self._bg: list[Any] = []
         # hardening SEC (H-02 lớp 3): toàn vẹn policy/ + config.yaml + hub.db (`hub.integrity`) — guard/integrity.py. GIỮ CUỐI __init__
         from .guard.integrity import attach as _attach_integrity
@@ -139,6 +154,8 @@ class Hub:
                 log.exception("không ghi được event %s", ev.type)
 
     def publish(self, ev: HubEvent) -> HubEvent:
+        if ev.req_id is None:  # L2: event của run lấy req_id của run (RunManager._run bind nó), còn lại = lượt xử lý đang bind
+            ev.req_id = _current_req_id()
         if ev.payload:  # H-12: che theo GIÁ TRỊ secret trước khi tới bus/DB/TUI/Slack/OTel
             from .redact import mask_obj
 
@@ -167,6 +184,15 @@ class Hub:
         except Exception:  # pragma: no cover
             log.exception("không dọn được runtime/")
         self.integrity.start()  # SEC: so policy/ với bản chuẩn + vòng kiểm nền
+        try:  # L4: kiểm đuôi chuỗi băm audit (sửa/xoá khi daemon dừng) + neo + vòng neo định kỳ
+            self.audit_chain.start()  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover
+            log.exception("không khởi động được chuỗi băm audit")
+        try:  # L5: nạp tập principal đã thấy + vòng báo "hết cảnh báo"; vòng lưu trữ audit (chỉ chạy khi audit.archive_after_days > 0)
+            self.audit_watch.start()  # type: ignore[attr-defined]
+            self.audit_archive.start()  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover
+            log.exception("không khởi động được audit_watch/audit_archive")
         try:  # hub clone PR5: lần đầu lên sau `hub import` → viết lại đường dẫn máy cũ trong tri thức qua Ledger (actor import)
             from .import_followups import process as _import_followups
 
@@ -197,7 +223,15 @@ class Hub:
         try:  # vòng nhắc approval + purge retention (cần event loop đang chạy)
             import asyncio
 
-            self._bg.append(asyncio.get_running_loop().create_task(self.approvals.loop()))
+            self._bg.append(asyncio.get_running_loop().create_task(self.approvals.loop(), name="approvals-loop"))
+        except RuntimeError:
+            pass
+        try:  # L1: level log đổi lúc chạy (config logs.level/levels + `cfharness logs level … --for`)
+            import asyncio
+
+            from .logs import level_loop
+
+            self._bg.append(asyncio.get_running_loop().create_task(level_loop(self), name="log-levels"))
         except RuntimeError:
             pass
         try:  # web còn chạy code cũ sau cập nhật (macOS/Linux) → dừng để launchd/daemon chạy lại bằng code mới — web/reload.py
@@ -205,7 +239,7 @@ class Hub:
 
             from .web.reload import stale_web_loop
 
-            self._bg.append(asyncio.get_running_loop().create_task(stale_web_loop(self)))
+            self._bg.append(asyncio.get_running_loop().create_task(stale_web_loop(self), name="stale-web-loop"))
         except RuntimeError:
             pass
         from .session_search import start_backfill  # v17: chỉ mục hội thoại cũ theo lô nền (session_search.py)
@@ -230,6 +264,9 @@ class Hub:
         if getattr(self, "mcp_proxy", None) is not None:
             await self.mcp_proxy.stop()  # type: ignore[attr-defined]
         self.integrity.stop()
+        self.audit_watch.stop()  # type: ignore[attr-defined]
+        self.audit_archive.stop()  # type: ignore[attr-defined]
+        self.audit_chain.stop()  # type: ignore[attr-defined]  # L4: neo dòng audit cuối trước khi đóng DB
         for t in self._bg:
             t.cancel()
         await self.notifier.stop()
@@ -253,7 +290,7 @@ class Hub:
 
             audit_record("guard.sandbox_disabled", agent_id=None, run_id=None, data={"enabled": False})
         except Exception:  # pragma: no cover
-            pass
+            log.debug("không ghi được audit guard.sandbox_disabled", exc_info=True)
 
     def _account_brief(self) -> dict[str, Any] | None:
         try:
@@ -285,4 +322,14 @@ class Hub:
             "subscribers": self.bus.subscriber_count,
             "sandbox_enabled": bool((self.config.get("guard.sandbox") or {}).get("enabled", True)),
             "migrated_to": self.runs.frozen,  # chuyển nhà (hub_freeze.py): hub đóng băng — banner ở CLI/TUI/web
+            "log_errors": self._log_errors(),  # L6 (B5): WARNING/ERROR 1 h/24 h theo logger, rpc.slow, lỗi không ai bắt — chỉ con số
         }
+
+    def _log_errors(self) -> dict[str, Any]:
+        try:
+            from .log_query import error_stats
+
+            return error_stats(self)
+        except Exception:  # best-effort: hub.status không được hỏng vì bộ đếm
+            log.exception("không đọc được bộ đếm lỗi log")
+            return {}

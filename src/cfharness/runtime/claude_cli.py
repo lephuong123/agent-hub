@@ -16,6 +16,7 @@ import subprocess
 import time
 from typing import Any, AsyncIterator
 
+from ..aiotasks import track
 from ..events import HubEvent, make_event
 from ..oscompat import IS_WINDOWS, JOBS, exec_argv, interrupt_group, kill_tree, new_group_kwargs, no_window_kwargs
 from ..redact import redact_argv
@@ -470,7 +471,7 @@ class ClaudeCliRuntime(AgentRuntime):
                 if proc is not None:
                     try:
                         proc.kill()
-                    except Exception:
+                    except Exception:  # best-effort: tiến trình đã thoát — lỗi gốc được trả trong OneShotResult
                         pass
                 return OneShotResult(False, None, 0.0, int((time.monotonic() - t0) * 1000), f"lỗi gọi {binary}: {e!r}"[:300])
         data = parse_oneshot_output(out_b)
@@ -618,8 +619,7 @@ class ClaudeCliRuntime(AgentRuntime):
             return
         task = asyncio.get_running_loop().create_task(self._answer_control(handle, obj))
         tasks: set[asyncio.Task] = handle.internal.setdefault("control_tasks", set())
-        tasks.add(task)
-        task.add_done_callback(tasks.discard)
+        track(task, tasks)  # L1: lỗi task → log
 
     async def _answer_control(self, handle: RunHandle, obj: dict[str, Any]) -> None:
         rid = obj["request_id"]

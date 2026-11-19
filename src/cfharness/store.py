@@ -929,6 +929,46 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS ledger_pending_state ON ledger_pending(state, created_at);
     """,
+    # v28 — mã yêu cầu `req_id` (L2, docs/dev-notes/plan-logging.md §3): nối lệnh của người/kênh → run → event → audit. Chỉ THÊM cột
+    # nullable (dòng cũ = NULL). `events.req_id` không index (bảng lớn, ghi nóng — tra theo run_id); L3 thêm cột audit khác ở v29.
+    """
+    ALTER TABLE runs ADD COLUMN req_id TEXT;
+    CREATE INDEX IF NOT EXISTS runs_req_id ON runs(req_id);
+    ALTER TABLE audit_log ADD COLUMN req_id TEXT;
+    CREATE INDEX IF NOT EXISTS audit_log_req_id ON audit_log(req_id);
+    ALTER TABLE events ADD COLUMN req_id TEXT;
+    """,
+    # v29 — audit đầy đủ (L3, docs/dev-notes/plan-logging.md §4 A1–A5): kết quả (ok|error|denied) + mã lỗi + thời lượng, danh tính do
+    # daemon chứng thực (`principal`) tách khỏi kênh client tự khai (`declared_channel`), phiên web đã băm (`session_ref`), ip (chỉ khi
+    # qua public_origin), run của người gọi (agent/điều phối viên). Chỉ THÊM cột nullable; trigger append-only giữ nguyên. Chuỗi băm = L4.
+    """
+    ALTER TABLE audit_log ADD COLUMN outcome TEXT;
+    ALTER TABLE audit_log ADD COLUMN error_code TEXT;
+    ALTER TABLE audit_log ADD COLUMN duration_ms REAL;
+    ALTER TABLE audit_log ADD COLUMN principal TEXT;
+    ALTER TABLE audit_log ADD COLUMN declared_channel TEXT;
+    ALTER TABLE audit_log ADD COLUMN session_ref TEXT;
+    ALTER TABLE audit_log ADD COLUMN ip TEXT;
+    ALTER TABLE audit_log ADD COLUMN caller_run_id TEXT;
+    CREATE INDEX IF NOT EXISTS audit_log_principal_ts ON audit_log(principal, ts);
+    CREATE INDEX IF NOT EXISTS audit_log_outcome_ts ON audit_log(outcome, ts);
+    """,
+    # v30 — chuỗi băm audit (L4, docs/dev-notes/plan-logging.md §4 A6; audit_chain.py): `row_hash = sha256(prev_hash ‖ canonical_json(các
+    # cột cố định))`. Dòng trước v30 giữ NULL (không kiểm); dòng chuỗi đầu tiên nối `genesis:<sha256 dòng cuối trước v30>`. Trigger
+    # `audit_no_update` (BEFORE UPDATE, mọi cột) đã chặn sửa cả hai cột mới — không cần trigger riêng.
+    """
+    ALTER TABLE audit_log ADD COLUMN prev_hash TEXT;
+    ALTER TABLE audit_log ADD COLUMN row_hash TEXT;
+    """,
+    # v31 — lưu trữ audit (L5, docs/dev-notes/plan-logging.md §4 A9; audit_archive.py): `audit_log` vẫn append-only, TRỪ dòng có
+    # id ≤ `hub_state['audit.archive_cutoff']` do job lưu trữ đặt NGAY TRƯỚC khi xoá (sau khi đã ghi file .jsonl.gz + manifest). Không có
+    # mốc (mặc định — `audit.archive_after_days: 0`) → không xoá được dòng nào (giống v12 `retention_cutoff` của events).
+    """
+    DROP TRIGGER IF EXISTS audit_no_delete;
+    CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit_log
+        WHEN OLD.id > COALESCE((SELECT CAST(value AS INTEGER) FROM hub_state WHERE key='audit.archive_cutoff'), 0)
+        BEGIN SELECT RAISE(ABORT, 'audit_log là append-only (chỉ job lưu trữ xoá được dòng id ≤ audit.archive_cutoff)'); END;
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
@@ -1067,7 +1107,7 @@ class Store:
     def insert_event(self, ev: HubEvent) -> None:
         self.conn.execute(
             "INSERT INTO events (epoch, seq, ts, type, level, source, agent_id, team_id, task_id, run_id, "
-            "session_id, subagent_id, payload) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "session_id, subagent_id, payload, req_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 ev.epoch,
                 ev.seq,
@@ -1082,6 +1122,7 @@ class Store:
                 ev.session_id,
                 ev.subagent_id,
                 _dumps(_mask_secrets(ev.payload)),
+                ev.req_id,
             ),
         )
         try:  # v17: chỉ mục hội thoại (prompt/steer/assistant/tool) — lỗi chỉ mục không được làm mất event

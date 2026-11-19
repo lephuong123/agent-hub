@@ -22,6 +22,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import track
 from .. import auth as _auth
 from ..events import TERMINAL_RUN_EVENTS, HubEvent, iso
 from ..notify.base import clip
@@ -390,8 +391,7 @@ class ChatBot:
         except RuntimeError:
             coro.close()
             return
-        self._bg.add(task)
-        task.add_done_callback(self._bg.discard)
+        track(task, self._bg)  # L1: lỗi task → log
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -401,7 +401,7 @@ class ChatBot:
         except RuntimeError:
             return
         self._wake = asyncio.Event()
-        self._task = loop.create_task(self._loop())
+        self._task = loop.create_task(self._loop(), name="chat-loop")
 
     def stop(self) -> None:
         for t in [self._task, self.notifier._task, *self._bg]:
@@ -452,7 +452,7 @@ class ChatBot:
                 try:
                     await self._send(api, c, text)
                     n += 1
-                except Exception as e:
+                except Exception as e:  # best-effort: lỗi trả về trong reason; không exc_info vì traceback có thể mang URL chứa token
                     errs.append(f"{c}: {clip(e, 200)}")
         finally:
             _ROOT_POST.reset(tok)
@@ -878,7 +878,7 @@ class ChatBot:
             res = await self._send(api, chat, self.format_result(run), html=True)
             if res.get("message_id") is not None:
                 self._map_message(chat, res["message_id"], run_id)
-        except Exception as e:
+        except Exception as e:  # best-effort: đã log (lỗi đã gỡ token); không exc_info vì traceback có thể mang URL chứa token
             log.warning("không gửi được kết quả run %s: %s", run_id, clip(e))
 
     # ------------------------------------------------------------------ tin duyệt (WT-2, WT-8)
@@ -1173,6 +1173,7 @@ class ChatBot:
             try:
                 ch = str((mgr._conv_row(conversation_id) if mgr is not None else {}).get("channel") or "")
             except Exception:
+                log.debug("không đọc được kênh của hội thoại điều phối viên", exc_info=True)
                 ch = ""
             if ch.startswith(f"{self.NAME}:"):
                 return ch.split(":", 1)[1] or None

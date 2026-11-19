@@ -192,6 +192,7 @@ def _with_by(fn: Callable[[dict[str, Any]], Any]) -> Callable[[dict[str, Any]], 
         p["_by"] = str(meta.get("channel") or "cli")
         return fn(p)
 
+    g.__wrapped__ = fn  # type: ignore[attr-defined]  # giữ dấu wrap_with_audit (test mọi method ghi đều có audit — L3)
     return g
 
 

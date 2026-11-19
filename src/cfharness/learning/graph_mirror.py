@@ -27,6 +27,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import track
 from ..errors import Blocked, HubError
 from ..store import now_iso
 from .graph_extract import EXTRACT_SCHEMA, EXTRACT_SYSTEM
@@ -154,7 +155,7 @@ class MemoryMirror:
                 "AND target_ref=? AND agent_id IS NOT NULL AND op!='rollback' ORDER BY applied_at DESC LIMIT 5",
                 (scope, owner or "", target_ref))]
         except Exception:  # pragma: no cover
-            pass
+            log.debug("graph_mirror: không đọc được agent ứng viên từ ledger", exc_info=True)
         for a in dict.fromkeys(c for c in cands if c):
             if self.hub.store.get_agent(a) is None or scope not in self.svc.memory_scopes(a):
                 continue
@@ -197,8 +198,7 @@ class MemoryMirror:
         def fire() -> None:
             self._pending.pop(key, None)
             t = loop.create_task(self._safe_sync(scope, owner, store, hint))
-            self.tasks.add(t)
-            t.add_done_callback(self.tasks.discard)
+            track(t, self.tasks)  # L1: lỗi task → log
 
         if delay > 0:
             self._pending[key] = loop.call_later(delay, fire)

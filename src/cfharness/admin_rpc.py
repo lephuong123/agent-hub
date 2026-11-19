@@ -9,10 +9,13 @@ Ghi duy nhất: `admin.estop_set` (bật/gỡ cờ ESTOP admin — tự audit, g
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from .errors import HubError
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .daemon import Daemon
@@ -109,7 +112,7 @@ def register_rpc(daemon: "Daemon") -> None:
             try:
                 w.evaluate()  # cảnh báo admin_estop_on bật / báo hồi phục (gỡ) ngay, không chờ nhịp
             except Exception:  # pragma: no cover
-                pass
+                log.debug("admin_watch.evaluate lỗi sau ESTOP admin", exc_info=True)
         ctl = getattr(hub, "admin_control", None)
         if ctl is not None:  # hub admin cũng là một hub user (cờ `estop` mọi user / cờ riêng của chính admin)
             ctl.check()

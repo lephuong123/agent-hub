@@ -242,6 +242,7 @@ def process(hub: "Hub") -> dict[str, Any] | None:
             try:
                 u = _unit(hub, str(rel))
             except Exception as e:  # pragma: no cover
+                log.debug("import_followups: không phân loại được đường dẫn", exc_info=True)
                 res["errors"].append({"path": rel, "error": str(e)[:300]})
                 continue
             kind, key = u if u else ("skip", "?")
@@ -260,7 +261,7 @@ def process(hub: "Hub") -> dict[str, Any] | None:
                 elif kind == "agent_config":
                     (res["rewritten"] if _agent_config(hub, pm, key) == "rewritten" else res["unchanged"]).append(rel)
             except Exception as e:
-                log.warning("viết lại đường dẫn %s lỗi: %s", rel, e)
+                log.warning("viết lại đường dẫn %s lỗi: %s", rel, e, exc_info=True)
                 res["errors"].append({"path": rel, "error": str(e)[:300]})
         for k, rels in skills.items():
             try:
@@ -270,13 +271,13 @@ def process(hub: "Hub") -> dict[str, Any] | None:
                 if e is not None:
                     res["entries"].append(e["id"])
             except Exception as ex:
-                log.warning("viết lại đường dẫn skill %s lỗi: %s", k[2], ex)
+                log.warning("viết lại đường dẫn skill %s lỗi: %s", k[2], ex, exc_info=True)
                 res["errors"] += [{"path": rel, "error": str(ex)[:300]} for rel in skill_rels[k]]
         try:
             res["graph"] = _graph(hub, pm)
             res["entries"] += [g["entry"] for g in res["graph"]]
         except Exception as e:
-            log.warning("viết lại đường dẫn graph memory lỗi: %s", e)
+            log.warning("viết lại đường dẫn graph memory lỗi: %s", e, exc_info=True)
             res["errors"].append({"path": "graph", "error": str(e)[:300]})
     remaining_graph = len(graph_rows(hub.store.conn, pm)) if pm else 0
     status = "partial" if res["errors"] else "done"

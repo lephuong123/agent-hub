@@ -158,7 +158,8 @@ class GuardService:
             from ..mcp_client import tool_annotations
 
             return tool_annotations(server, tool, home=self.hub.paths.home)
-        except Exception:
+        except Exception:  # fail-closed: không đọc được annotations MCP → coi như không có
+            log.debug("guard: không đọc được annotations MCP", exc_info=True)
             return None
 
     def _chrome_annotations(self, tool: str) -> dict[str, Any] | None:
@@ -180,7 +181,8 @@ class GuardService:
 
         try:
             agent = self.hub.store.get_agent(run.get("agent_id")) if run.get("agent_id") else None
-        except Exception:  # lỗi đọc = không cho (fail-closed)
+        except Exception:  # fail-closed: lỗi đọc agent = không cho chrome
+            log.debug("guard: không đọc được agent cho chế độ chrome", exc_info=True)
             return False
         return effective_mode(agent, self.hub.config) in CHROME_MODES
 
@@ -256,7 +258,7 @@ class GuardService:
             chrome_allowed=self.chrome_allowed(run),
             trusted_repo_scripts=bool(self.knob("guard.trusted_repo_scripts")),
             task_created_deletes=bool(self.knob("guard.task_created_deletes")),
-            filehub_roots=self._filehub_roots(),
+            filehub_old_copies=self._filehub_old_copies(),
             lane_ports=self._lane_ports(),
             **self._confine_ctx(c, run, roots),
             **self._connector_ctx(run),
@@ -266,14 +268,17 @@ class GuardService:
         try:
             return tuple(self.hub.filehub.lane.ports())  # type: ignore[attr-defined]
         except Exception:  # pragma: no cover
+            log.debug("guard: không đọc được cổng lane", exc_info=True)
             return ()
 
-    def _filehub_roots(self) -> tuple[str, ...]:
+    def _filehub_old_copies(self) -> tuple[str, ...]:
+        """Bản sao trên máy của đồng bộ 2 chiều cũ (đã bỏ): `.tangthu*` bên trong vẫn cấm agent ghi (classifier `filehub_metadata`)."""
         try:
-            from ..filehub.service import local_roots
+            from ..filehub.service import old_copies
 
-            return tuple(local_roots(self.hub))
+            return tuple(old_copies(self.hub.config))
         except Exception:  # pragma: no cover
+            log.debug("guard: không đọc được gốc filehub", exc_info=True)
             return ()
 
     def _confine_ctx(self, cwd: str, run: dict[str, Any] | None, roots: tuple[str, ...]) -> dict[str, Any]:
@@ -284,12 +289,11 @@ class GuardService:
         try:
             out["other_hub_homes"] = tuple(_c.other_hub_homes(self.hub.paths.home))
         except Exception:  # pragma: no cover
-            pass
+            log.debug("guard: không đọc được registry hub khác", exc_info=True)
         conf = _c.of_hub(self.hub)
         if conf is None:
             return out
         extra = list(self.run_extra_write_roots(run, roots)) if run else []
-        extra += list(self._filehub_roots())  # mọi run được ĐỌC thư mục chung (plan-cloud-files §7.4)
         out.update(confine_root=conf.root, confine_read=tuple(_c.read_roots(conf, self.hub.paths.home, cwd=cwd, extra=extra)),
                    confine_deny=tuple(_c.deny_read_roots(conf)))
         return out
@@ -307,7 +311,8 @@ class GuardService:
         try:
             agent = self.hub.store.get_agent(run.get("agent_id")) or {} if run.get("agent_id") else {}
             conns = run_connectors(self.hub, agent, is_mgr)
-        except Exception:  # lỗi đọc cấu hình = coi như run connector KHÔNG cho connector nào (fail-closed)
+        except Exception:  # fail-closed: lỗi đọc cấu hình = run connector không cho connector nào
+            log.debug("guard: không đọc được connector của run", exc_info=True)
             return {"connectors": (), "run_mcp_servers": frozenset()}
         if not conns:
             return {}
@@ -561,6 +566,7 @@ class GuardService:
 
             return repo_deny_for(self.policy_store, cwd)
         except Exception:  # pragma: no cover
+            log.debug("guard: không đọc được mẫu chặn theo repo", exc_info=True)
             return []
 
     # ------------------------------------------------------------------ ngoại lệ sandbox THEO AGENT (chỉ người đặt)
@@ -587,6 +593,7 @@ class GuardService:
             agent = self.hub.store.get_agent(agent_id) or {}
             names = list(agent.get("mcp_servers") or [])
         except Exception:  # pragma: no cover
+            log.debug("guard: không đọc được MCP của agent", exc_info=True)
             return []
         out: list[str] = []
         reg = getattr(self.hub, "mcp", None)
@@ -594,6 +601,7 @@ class GuardService:
             try:
                 row = reg.get_row(n) if reg is not None else None
             except Exception:
+                log.debug("guard: không đọc được dòng registry MCP", exc_info=True)
                 row = None
             url = str(((row or {}).get("config") or {}).get("url") or "")
             if url:
@@ -705,7 +713,8 @@ class GuardService:
             return None
         try:
             return self.trust_all().get(agent_id)
-        except Exception:  # lỗi đọc = không trust (giữ guard như thường)
+        except Exception:  # fail-closed: lỗi đọc = không trust (giữ guard như thường)
+            log.debug("guard: không đọc được trust", exc_info=True)
             return None
 
     def run_trusted(self, run: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -776,7 +785,8 @@ class GuardService:
             return None
         try:
             return (self.rule_grants().get(str(run.get("agent_id") or "")) or {}).get(v.rule)
-        except Exception:
+        except Exception:  # fail-closed: lỗi đọc = không có grant theo luật
+            log.debug("guard: không đọc được grant theo luật", exc_info=True)
             return None
 
     @staticmethod
@@ -891,7 +901,8 @@ class GuardService:
         out: set[str] = set()
         try:
             rows = reg.list(include_deleted=False)
-        except Exception:
+        except Exception:  # best-effort: registry lỗi → không nhận diện MCP hub nào
+            log.debug("guard: không đọc được registry MCP", exc_info=True)
             return frozenset()
         for r in rows:
             if is_hub_mcp_config(r.get("config") or {}, port):
@@ -1058,7 +1069,8 @@ class GuardService:
                 if h.returncode != 0 or h.stdout.strip() != head:
                     return None  # run đã commit/đổi nhánh → reset có thể mất commit; để người quyết
                 st = _git(root, "status", "--porcelain=v1", "-z", "--untracked-files=no", "--no-renames")
-            except Exception:  # noqa: BLE001
+            except Exception:  # fail-closed: git lỗi → không tự cho phép reset (để người quyết)  # noqa: BLE001
+                log.debug("guard: git lỗi khi kiểm reset --hard an toàn", exc_info=True)
                 return None
             if st.returncode != 0:
                 return None
@@ -1342,7 +1354,7 @@ class GuardService:
         try:
             role = str((self.hub.store.get_agent(run["agent_id"]) or {}).get("role") or "")
         except Exception:  # pragma: no cover
-            pass
+            log.debug("guard: không đọc được role của agent cho second opinion", exc_info=True)
         if ctx.manager_run:
             role = (role + " (hub coordinator/manager)").strip()
         mw = float(max_wait) - 5 if isinstance(max_wait, (int, float)) and max_wait > 0 else None
@@ -1375,7 +1387,8 @@ class GuardService:
         v = classify(tool, ti, ctx)
         try:
             v = await self.net_check(run, tool, ti, v, ctx)
-        except Exception as e:  # pragma: no cover
+        except Exception as e:  # fail-closed: kiểm mạng lỗi → uncertain (hỏi người)  # pragma: no cover
+            log.debug("guard: net_check lỗi", exc_info=True)
             v = Verdict("uncertain", "url_dns_failed", "network", f"kiểm mạng lỗi: {type(e).__name__}")
         from .profiles import never_automatic, profile
 

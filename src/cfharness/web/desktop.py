@@ -302,6 +302,9 @@ def spawn_web(paths: HubPaths, *, port: int, host: str, name: str, nonce: str | 
     logs = paths.home / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     logf = logs / "web.log"
+    from ..logs import rotate_if_large
+
+    rotate_if_large(logf)  # L1: stdout/stderr thô của web không xoay được khi đang chạy → xoay lúc bật (log JSONL ở web.jsonl)
     fd = os.open(logf, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
     out = os.fdopen(fd, "ab")
     env = dict(os.environ)
@@ -373,7 +376,7 @@ def local_web_cfg(paths: HubPaths) -> dict[str, Any]:
         from ..config import HubConfig
 
         v = HubConfig(paths.config).get("web")
-    except Exception:  # noqa: BLE001
+    except Exception:  # best-effort: config hỏng → {} (dùng mặc định)  # noqa: BLE001
         return {}
     return v if isinstance(v, dict) else {}
 

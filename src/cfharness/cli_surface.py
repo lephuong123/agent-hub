@@ -165,7 +165,7 @@ def cmd_hook(ctx: Any) -> int:
     argv += ["--socket", a.socket or str(ctx.paths.socket), "--home", str(ctx.paths.home)]
     try:
         res = observe(argv)
-    except BaseException:  # pragma: no cover
+    except BaseException:  # best-effort: hook quan sát fail-open — lỗi = ok:false  # pragma: no cover
         res = {"ok": False}
     if ctx.json:
         print(json.dumps(res, ensure_ascii=False, default=str))

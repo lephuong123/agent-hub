@@ -30,7 +30,7 @@ def _ago(row: dict[str, Any]) -> str:
     try:
         t = datetime.fromisoformat(row["opened_at"].replace("Z", "+00:00"))
         s = int((datetime.now(timezone.utc) - t).total_seconds())
-    except Exception:
+    except Exception:  # best-effort: thời điểm hỏng → hiện "-"
         return "-"
     return f"{s // 3600}h{(s % 3600) // 60:02d}m" if s >= 3600 else f"{s // 60}m{s % 60:02d}s"
 

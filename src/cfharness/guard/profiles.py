@@ -158,12 +158,6 @@ def allowed_roots(hub: Any) -> list[str]:
     hh = Path(hub.paths.home)
     cand = [str(r) for r in roots] + [str(hh / "agents"), str(hh / "worktrees")] + list(_ws._EXTRA_ALLOWED_ROOTS)
     cand += _ws.env_extra_roots()  # test-only (CFHARNESS_TESTING=1, như validate_workspace)
-    try:  # thư mục chung Không gian số (filehub): bản sao cục bộ — ghi được khi run được GIAO (workspace filehub: hoặc extra_write_roots)
-        from ..filehub.service import local_roots as _fh_roots
-
-        cand += _fh_roots(hub)
-    except Exception:  # pragma: no cover
-        pass
     for r in cand:
         try:
             out.append(_canon(os.path.realpath(os.path.expanduser(r))))
@@ -213,7 +207,7 @@ def gates_mode(config: Any) -> str:
     """Công tắc chung `gates.mode` (chỉ người đặt): human | manager | off. Giá trị lạ/lỗi đọc → human (bảo thủ)."""
     try:
         v = config.get("gates.mode")
-    except Exception:
+    except Exception:  # fail-closed: lỗi đọc → human (bảo thủ)
         return "human"
     return v if v in GATES_MODES else "human"
 

@@ -5,7 +5,8 @@ Không phụ thuộc SDK `opentelemetry`: dựng span theo mô hình dữ liệu
 đợi giới hạn; luồng nền gom lô + gửi (lỗi mạng không ảnh hưởng hub, span bị bỏ khi đầy — đếm `dropped`).
 
 Span (chỉ METADATA — allowlist thuộc tính, không bao giờ prompt/output/kết quả tool/nội dung MCP/secret):
-- `run <kind>`: một span mỗi run (trace_id suy từ run_id) — agent, kind, model, outcome, cost, token, số turn, thời lượng.
+- `run <kind>`: một span mỗi run — agent, kind, model, outcome, cost, token, số turn, thời lượng, `cfharness.req_id`. trace_id suy từ
+  `req_id` của run (L2: mọi run cùng một lệnh của người chung một trace), run trước v28 (không có req_id) → suy từ run_id.
 - `tool <name>`: con của span run — tên tool, thời lượng, is_error, `tool.mcp_server` nếu là `mcp__<server>__…`.
   `include_payloads=true` chỉ thêm input ĐÃ CHE (redact) + cắt 512 ký tự của tool BUILT-IN; tool `mcp__*` không bao giờ.
 - `learning <event>`: span tức thời cho `learning.*`, `review.*`, `curation.*`, `guard.blocked`, `eval.completed` — chỉ id,
@@ -35,6 +36,10 @@ LEARNING_PREFIXES = ("learning.", "review.", "curation.", "curator.", "eval.comp
 LEARNING_KEYS = ("proposal_id", "ledger_entry_id", "review_id", "curation_id", "eval_id", "status", "outcome", "target", "op", "risk_class", "scope",
                  "actor", "created_by", "reason", "rule", "kind", "cost_usd", "trigger", "team_id")
 MAX_OPEN_TOOLS = 10_000
+# allowlist thuộc tính span run (chỉ id/tên/số) — thêm khoá = thêm vào đây + ca trong tests/test_otel.py
+RUN_SPAN_KEYS = frozenset({"cfharness.agent_id", "cfharness.run_id", "cfharness.req_id", "cfharness.run.kind", "cfharness.team_id", "cfharness.task_id",
+                           "gen_ai.system", "gen_ai.request.model", "cfharness.run.outcome", "cfharness.cost_usd", "gen_ai.usage.input_tokens",
+                           "gen_ai.usage.output_tokens", "cfharness.usage.cache_read_tokens", "cfharness.num_turns", "cfharness.resumed"})
 
 
 def _hex_id(seed: str, n: int) -> str:
@@ -70,6 +75,7 @@ class OtelExporter:
         self.open_runs: dict[str, int] = {}
         self.open_tools: dict[tuple[str, str], tuple[int, str]] = {}
         self._payloads: dict[tuple[str, str], Any] = {}
+        self._run_trace: dict[str, str] = {}  # run_id → trace_id (từ req_id của run) cho span tool
         self.stats = {"spans": 0, "exported": 0, "dropped": 0, "errors": 0, "last_error": None}
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -92,6 +98,7 @@ class OtelExporter:
             t = ev.type
             if t == "run.started" and ev.run_id:
                 self.open_runs[ev.run_id] = _ns(ev)
+                self._trace_for(ev.run_id)
             elif t == "tool.start" and ev.run_id:
                 if len(self.open_tools) < MAX_OPEN_TOOLS:
                     self.open_tools[(ev.run_id, str(ev.payload.get("tool_id")))] = (_ns(ev), str(ev.payload.get("name") or "?"))
@@ -113,6 +120,22 @@ class OtelExporter:
         except queue.Full:
             self.stats["dropped"] += 1
 
+    def _trace_for(self, run_id: str, run: dict[str, Any] | None = None) -> str:
+        """trace_id của run: băm `req_id` của run (L2) — không có → băm run_id (như trước). Cache theo run cho span tool."""
+        tr = self._run_trace.get(run_id)
+        if tr is None:
+            from ..trace import valid_req_id
+
+            if run is None:
+                row = self.hub.store.conn.execute("SELECT req_id FROM runs WHERE id=?", (run_id,)).fetchone()
+                rq = row[0] if row is not None else None
+            else:
+                rq = run.get("req_id")
+            tr = _hex_id("req:" + rq, 16) if valid_req_id(rq) else _hex_id("run:" + run_id, 16)
+            if len(self._run_trace) < MAX_OPEN_TOOLS:
+                self._run_trace[run_id] = tr
+        return tr
+
     def _run_span(self, ev: HubEvent) -> None:
         run = self.hub.store.get_run(ev.run_id or "") or {}
         start = self.open_runs.pop(ev.run_id or "", None)
@@ -126,9 +149,12 @@ class OtelExporter:
              "cfharness.cost_usd": float(run["cost_usd"]) if run.get("cost_usd") is not None else None,
              "gen_ai.usage.input_tokens": _int(usage.get("input_tokens")), "gen_ai.usage.output_tokens": _int(usage.get("output_tokens")),
              "cfharness.usage.cache_read_tokens": _int(usage.get("cache_read_input_tokens")), "cfharness.num_turns": _int(run.get("num_turns")),
-             "cfharness.resumed": bool(run.get("resumed_from_session")) if run else None}
+             "cfharness.resumed": bool(run.get("resumed_from_session")) if run else None, "cfharness.req_id": run.get("req_id")}
+        a = {k: v for k, v in a.items() if k in RUN_SPAN_KEYS}
         ok = outcome in ("completed",)
-        self._put(self._span(_hex_id("run:" + str(ev.run_id), 16), _hex_id("span:run:" + str(ev.run_id), 8), None, f"run {run.get('kind') or 'adhoc'}",
+        trace = self._trace_for(str(ev.run_id), run)
+        self._run_trace.pop(str(ev.run_id), None)
+        self._put(self._span(trace, _hex_id("span:run:" + str(ev.run_id), 8), None, f"run {run.get('kind') or 'adhoc'}",
                              start, _ns(ev), a, ok, None if ok else str(outcome)))
 
     def _tool_span(self, ev: HubEvent) -> None:
@@ -148,7 +174,7 @@ class OtelExporter:
 
             a["tool.input"] = json.dumps(redact(pl), ensure_ascii=False, default=str)[:512]
         err = bool(ev.payload.get("is_error"))
-        self._put(self._span(_hex_id("run:" + str(ev.run_id), 16), _hex_id(f"tool:{ev.run_id}:{tid}", 8), _hex_id("span:run:" + str(ev.run_id), 8),
+        self._put(self._span(self._trace_for(str(ev.run_id)), _hex_id(f"tool:{ev.run_id}:{tid}", 8), _hex_id("span:run:" + str(ev.run_id), 8),
                              f"tool {name}", start, end, a, not err, "tool error" if err else None))
 
     def _learning_span(self, ev: HubEvent) -> None:
@@ -236,7 +262,7 @@ class OtelExporter:
                 with urllib.request.urlopen(req, timeout=float(c.get("timeout_s") or 5)) as r:
                     r.read()
             self.stats["exported"] += len(spans)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi xuất OTel đếm trong stats (last_error); không log từng lần để tránh ồn
             self.stats["errors"] += 1
             self.stats["dropped"] += len(spans)
             self.stats["last_error"] = repr(e)[:200]
@@ -247,7 +273,7 @@ class OtelExporter:
         sec = getattr(self.hub, "secrets", None)
         try:
             return sec.resolve(v) if sec is not None else v
-        except Exception:
+        except Exception:  # fail-closed: không resolve được secret → header rỗng
             return ""
 
     def close(self) -> None:

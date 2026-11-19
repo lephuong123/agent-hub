@@ -41,6 +41,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import spawn
+from ..trace import traced
 from ..errors import Blocked, HubError
 from ..events import HubEvent, make_event
 from ..logs import RunLogger, run_logger
@@ -119,7 +121,7 @@ def reset_from_text(text: str | None, now: datetime | None = None) -> datetime |
             from zoneinfo import ZoneInfo
 
             tz = ZoneInfo(zone.strip())
-        except Exception:
+        except Exception:  # best-effort: tên múi giờ lạ → giờ máy
             tz = None
     local_now = now.astimezone(tz) if tz else now.astimezone()
     cand = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -187,7 +189,7 @@ class TaskDispatcher:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._loop_task = loop.create_task(self._loop())
+        self._loop_task = loop.create_task(self._loop(), name="task-dispatcher")
         self.kick()
 
     async def stop(self) -> None:
@@ -548,7 +550,7 @@ class TaskDispatcher:
         ws = t.get("workspace") or {}
         kind = ws.get("kind") or "scratch"
         if kind == "filehub":  # thư mục chung: khoá/checkpoint như `dir` (gốc khoá = gốc thư mục chung — WorkspaceLocks)
-            # chế độ có thể đổi sau khi tạo task (sync ↔ lane): giải lại từ ref lúc chạy (RunManager.submit + WorkspaceLocks hiểu `filehub:`)
+            # giải lại từ ref lúc chạy (RunManager.submit + WorkspaceLocks hiểu `filehub:`; thư mục đồng bộ cũ chưa chuyển → lỗi có giải thích)
             return (ws.get("ref") or ws.get("path")), "dir"
         return (ws.get("path") if kind in ("dir", "worktree") else None), kind
 
@@ -636,7 +638,7 @@ class TaskDispatcher:
                     "run %s: tiến trình chết, không heartbeat > %ss → dừng (crashed)", run["id"], ttl)
                 ar.crashed = True  # type: ignore[attr-defined]
                 if ar.runtime is not None:
-                    asyncio.ensure_future(ar.runtime.stop(ar.handle, grace_s=1))
+                    spawn(ar.runtime.stop(ar.handle, grace_s=1), name=f"run-stop-crashed:{run['id']}")
 
     @staticmethod
     def _alive(ar: Any) -> bool:
@@ -787,6 +789,7 @@ class TaskDispatcher:
                     log.exception("không trả được claim của task %s", t["id"])
             raise
 
+    @traced("dispatcher")  # L2: điểm vào nội bộ → req_id mới (cha = mã đang bind)
     def _submit_claimed(
         self, t: dict[str, Any], agent_id: str, *, kind: str, from_status: str, to_status: str, prompt: str, json_schema: dict | None,
         read_only: bool, retry: dict[str, Any] | None, parent_run: dict[str, Any] | None, hub_self: str, now: str,

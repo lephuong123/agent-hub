@@ -178,6 +178,8 @@ def cmd_daemon(ctx: Ctx) -> int:
         return EXIT_OK
     if a.action == "logs":
         return _daemon_logs(ctx)
+    if a.action == "dump-stacks":
+        return _daemon_dump_stacks(ctx)
     if a.action == "status":
         try:
             st = client.call("hub.status")
@@ -203,7 +205,7 @@ def cmd_daemon(ctx: Ctx) -> int:
             text += "\nCẢNH BÁO: claude chưa đăng nhập — spawn bị chặn (chạy `claude auth login` rồi `cfharness doctor`)"
         try:  # H-10: kiểm phiên bản lúc daemon khởi động + cảnh báo raw.unknown
             compat = client.call("hub.compat")
-        except Exception:
+        except Exception:  # best-effort: daemon cũ có thể chưa có hub.compat
             compat = None
         if compat:
             st["compat"] = compat
@@ -224,7 +226,7 @@ def _autostart_status(ctx: Ctx) -> dict[str, Any] | None:
 
         st = Autostart(ctx.paths).status()
         return {**st, "text": status_text(st)}
-    except Exception:
+    except Exception:  # best-effort: trạng thái tự khởi động chỉ để hiển thị
         return None
 
 
@@ -261,6 +263,23 @@ def _compat_text(compat: dict[str, Any]) -> str:
     if ur.get("alert"):
         out += f"\nCẢNH BÁO (ĐỎ): {ur.get('unknown')}/{ur.get('total')} event không nhận dạng được trong 1 giờ ({ur.get('rate', 0) * 100:.1f}%) — cân nhắc `cfharness estop on`"
     return out
+
+
+def _daemon_dump_stacks(ctx: Ctx) -> int:
+    """L1: SIGUSR1 → faulthandler của daemon ghi stack mọi thread vào `logs/faults.log` (bắt daemon treo, không dừng daemon)."""
+    sig = getattr(signal, "SIGUSR1", None)
+    if sig is None:
+        print("lỗi: dump-stacks chỉ có trên macOS/Linux", file=sys.stderr)
+        return EXIT_USER
+    try:
+        pid = int(ctx.paths.pidfile.read_text().strip())
+        os.kill(pid, sig)
+    except (OSError, ValueError):
+        print("lỗi: daemon không chạy", file=sys.stderr)
+        return EXIT_USER
+    f = ctx.paths.logs_dir / "faults.log"
+    ctx.out({"pid": pid, "file": str(f)}, f"đã yêu cầu daemon (pid {pid}) ghi stack vào {f}")
+    return EXIT_OK
 
 
 def _daemon_logs(ctx: Ctx) -> int:
@@ -373,7 +392,7 @@ def cmd_doctor(ctx: Ctx) -> int:
     if daemon_up and auth_ok:
         try:
             client.call("auth.reset")
-        except Exception:
+        except Exception:  # best-effort: reset token phụ trợ cho doctor
             pass
     if ctx.args.agent:
         if not daemon_up:
@@ -417,7 +436,7 @@ def cmd_doctor(ctx: Ctx) -> int:
             ur = compat.get("unknown_rate") or {}
             if ur:
                 add("tỉ lệ event lạ (raw.unknown, 1 giờ)", not ur.get("alert"), f"{ur.get('unknown', 0)}/{ur.get('total', 0)} ({(ur.get('rate') or 0) * 100:.1f}%)", "error")
-        except Exception:
+        except Exception:  # best-effort: kiểm compat trong doctor là phụ
             pass
     bad = [c for c in checks if c["level"] == "error"]
     text = "\n".join(f"{'✓' if c['ok'] else ('!' if c['level'] == 'warning' else '✗')} {c['check']}: {c['detail']}" for c in checks)
@@ -772,8 +791,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     d = sub.add_parser("daemon", help="quản lý daemon", parents=[common])
-    d.add_argument("action", choices=["start", "stop", "status", "run", "logs", "install-service", "uninstall-service"],
-                   help="install-service/uninstall-service: tự khởi động daemon khi đăng nhập (Windows Task Scheduler, macOS LaunchAgent, Linux systemd --user)")
+    d.add_argument("action", choices=["start", "stop", "status", "run", "logs", "dump-stacks", "install-service", "uninstall-service"],
+                   help="install-service/uninstall-service: tự khởi động daemon khi đăng nhập (Windows Task Scheduler, macOS LaunchAgent, Linux systemd --user); "
+                        "dump-stacks: ghi stack mọi thread của daemon vào logs/faults.log (macOS/Linux)")
     d.add_argument("--foreground", action="store_true", help="chạy daemon ở tiền cảnh")
     d.add_argument("--wait-supervisor", type=float, default=None, help=argparse.SUPPRESS)  # bộ cập nhật: chờ launchd chạy lại daemon
     d.add_argument("--dry-run", action="store_true", help="install-service/uninstall-service: chỉ in kế hoạch, không thay đổi gì")
@@ -990,6 +1010,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_backup_parsers(sub, common)
 
+    # log hệ thống: cfharness logs level … (logs_rpc.py) — chỉ người
+    from .logs_rpc import add_parsers as _add_logs_parsers
+
+    _add_logs_parsers(sub, common)
+
+    # gói chẩn đoán đã che secret: cfharness support bundle|list (support_cli.py, support_bundle.py, L7) — chỉ người
+    from .support_cli import add_parsers as _add_support_parsers
+
+    _add_support_parsers(sub, common)
+
     # xuất / nhập toàn bộ hub sang máy khác: cfharness hub export|import (hub_transfer_cli.py, hub_transfer.py)
     from .hub_transfer_cli import add_parsers as _add_hub_transfer_parsers
 
@@ -1069,10 +1099,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return int(args.fn(ctx) or 0)
     except RpcError as e:
+        rid = getattr(e, "req_id", None)
         if ctx.json:
-            print(json.dumps({"error": {"code": e.code, "message": e.message, "data": e.data}}, ensure_ascii=False, default=str))
+            err = {"code": e.code, "message": e.message, "data": e.data, **({"req_id": rid} if rid else {})}
+            print(json.dumps({"error": err}, ensure_ascii=False, default=str))
         else:
-            report_error(e.message, code=e.code, data=e.data)
+            # L2: mã yêu cầu để tra log/audit (`hub.log` trường req_id) — chỉ là mã đối chiếu
+            report_error(e.message + (f" (mã yêu cầu {rid})" if rid else ""), code=e.code, data=e.data)
         return exit_code_for(e.code)
     except DaemonUnavailable as e:
         report_error(str(e), fix=th.DAEMON_FIX)

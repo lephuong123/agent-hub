@@ -36,6 +36,18 @@
       "title": "Payload",
       "type": "object"
     },
+    "req_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Req Id"
+    },
     "run_id": {
       "anyOf": [
         {
@@ -163,6 +175,9 @@
     "approval.reminder": "summary",
     "approval.resolved": "summary",
     "approval.waiting_human": "summary",
+    "audit.alert": "summary",
+    "audit.anchored": "detail",
+    "audit.tamper_detected": "summary",
     "auth.blocked": "summary",
     "auth.cleared": "summary",
     "auth.denied": "summary",

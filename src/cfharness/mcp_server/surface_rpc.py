@@ -118,6 +118,7 @@ def memory_search(hub: Any, query: str, *, agent_id: str | None = None, scope: s
                         else:
                             entries = ks.versions.read_memory(aid, tscope, owner, store_name, home=home)
                     except Exception:
+                        log.debug("memory.search: không đọc được memory một tầng", exc_info=True)
                         entries = []
                     if ks is None and tscope == "agent":
                         row = hub.store.get_agent(aid)
@@ -132,6 +133,7 @@ def memory_search(hub: Any, query: str, *, agent_id: str | None = None, scope: s
             try:
                 skills = ks.effective_skills(aid, home=home) if home is not None else ks.effective_skills(aid)
             except Exception:
+                log.debug("memory.search: không đọc được skill hiệu lực", exc_info=True)
                 skills = []
             for s in skills:
                 skey = ("skill", s.get("owner"), s["name"], s.get("path"))

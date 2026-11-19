@@ -49,6 +49,70 @@ def _now() -> float:
     return time.time()
 
 
+# ---------------------------------------------------------------------------- log JSON lines (L7, plan-logging.md B1 — chỉ stdlib)
+class JsonLog:
+    """Bọc file log: mỗi DÒNG chữ ghi qua `write()` thành một dòng JSON cùng trường lõi với `logs.JsonFormatter` của hub
+    (`ts`, `level`, `logger`, `msg`, `proc`, `pid`) — `cfharness logs` / gói chẩn đoán đọc được. Chữ người đọc giữ nguyên trong `msg`.
+    Không import cfharness (helper chạy ngoài venv bị cài đè)."""
+
+    def __init__(self, f: Any, *, logger: str = "cfharness.update_helper", proc: str = "helper") -> None:
+        self.f, self.logger, self.proc = f, logger, proc
+        self.pid = os.getpid()
+        self._buf = ""
+
+    @staticmethod
+    def _level(line: str) -> str:
+        low = line.lower()
+        if "lỗi" in low or "không chạy" in low or "không trả lời" in low or "không khôi phục" in low:
+            return "error"
+        if "quá " in low or "sigterm" in low or "dừng" in low:
+            return "warning"
+        return "info"
+
+    def _emit(self, line: str) -> None:
+        line = line.rstrip("\r")
+        if not line.strip():
+            return
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + f".{int(time.time() * 1000) % 1000:03d}Z"
+        rec = {"ts": ts, "level": self._level(line), "logger": self.logger, "msg": line, "proc": self.proc, "pid": self.pid}
+        self.f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+    def write(self, s: str) -> int:
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            self._emit(line)
+        return len(s)
+
+    def flush(self) -> None:
+        self.f.flush()
+
+    def close(self) -> None:
+        if self._buf:
+            self._emit(self._buf)
+            self._buf = ""
+        self.f.flush()
+
+
+class open_log:  # noqa: N801 — dùng như `open()`
+    """`with open_log(path) as log:` — file append (0600 khi tạo mới) + `JsonLog`."""
+
+    def __init__(self, path: Any) -> None:
+        self.path = path
+
+    def __enter__(self) -> JsonLog:
+        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        self._f = os.fdopen(fd, "a", encoding="utf-8")
+        self._log = JsonLog(self._f)
+        return self._log
+
+    def __exit__(self, *exc: Any) -> None:
+        try:
+            self._log.close()
+        finally:
+            self._f.close()
+
+
 def write_state(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
@@ -337,8 +401,33 @@ def restore_db(home: Path, archive: Path, log) -> str:
             shutil.move(str(side), f"{aside}{suffix}")
     os.replace(tmp, db)
     os.chmod(db, 0o600)
+    restore_anchors(home, archive, aside, log)
     log.write(f"đã khôi phục hub.db từ {archive.name} (DB trước đó giữ ở {aside.name})\n")
     return str(aside)
+
+
+ANCHORS = "audit-anchors.jsonl"  # = audit_chain.ANCHORS_FILE (helper không import cfharness)
+
+
+def restore_anchors(home: Path, archive: Path, aside: Path, log) -> None:
+    """L4: bản neo chuỗi băm audit phải khớp hub.db vừa khôi phục — lấy bản trong cùng bản sao lưu; bản sao lưu không có (trước L4) →
+    chuyển file hiện có sang `<aside>.audit-anchors.jsonl` (neo trỏ tới dòng DB khôi phục không có → kiểm sẽ báo nhầm là bị xoá)."""
+    cur = home / ANCHORS
+    try:
+        if cur.exists() or cur.is_symlink():
+            shutil.move(str(cur), f"{aside}.{ANCHORS}")
+        with tarfile.open(archive, "r:gz") as tf:
+            try:
+                m = tf.getmember(f"home/{ANCHORS}")
+            except KeyError:
+                return
+            src = tf.extractfile(m)
+            if not m.isreg() or src is None:
+                return
+            with os.fdopen(os.open(cur, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+                shutil.copyfileobj(src, f)
+    except (OSError, tarfile.TarError) as e:  # không chặn quay về; tệ nhất là audit verify báo bản neo lệch
+        log.write(f"không khôi phục được {ANCHORS}: {e}\n")
 
 
 def restore_db_if_migrated(a: argparse.Namespace, log) -> dict[str, Any]:
@@ -361,7 +450,7 @@ def restore_db_if_migrated(a: argparse.Namespace, log) -> dict[str, Any]:
     try:
         out["db_replaced_kept_at"] = restore_db(home, Path(a.db_backup), log)
         out["db_restored"] = True
-    except Exception as e:
+    except Exception as e:  # best-effort: lỗi ghi vào out.db_error + update.log
         out["db_error"] = f"không khôi phục được hub.db: {e}"
         log.write(out["db_error"] + "\n")
     finally:
@@ -383,7 +472,7 @@ def apply(a: argparse.Namespace) -> int:
     if a.home:
         env["CFHARNESS_HOME"] = a.home
     Path(a.log).parent.mkdir(parents=True, exist_ok=True)
-    with open(a.log, "a", encoding="utf-8") as log:
+    with open_log(a.log) as log:
         log.write(f"\n=== cập nhật cfharness {st.get('version_before') or '?'} → {st.get('tag') or '?'} · {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
         phase("waiting_daemon")
         if a.wait_pid and not _wait_exit(int(a.wait_pid), WAIT_DAEMON_S):
@@ -465,7 +554,7 @@ def rollback(a: argparse.Namespace) -> int:
     if a.home:
         env["CFHARNESS_HOME"] = a.home
     Path(a.log).parent.mkdir(parents=True, exist_ok=True)
-    with open(a.log, "a", encoding="utf-8") as log:
+    with open_log(a.log) as log:
         log.write(f"\n=== quay về cfharness {st.get('version_before') or '?'} → {st.get('tag') or '?'} · {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
         phase("waiting_daemon")
         if a.wait_pid and not _wait_exit(int(a.wait_pid), WAIT_DAEMON_S):
@@ -519,7 +608,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as e:  # pragma: no cover — mọi lỗi phải về trạng thái failed, không để web chờ mãi
         try:
             st = json.loads(Path(a.state).read_text(encoding="utf-8"))
-        except Exception:
+        except Exception:  # best-effort: state.json hỏng → ghi state mới
             st = {}
         st.update({"state": "failed", "phase": "finished", "error": f"lỗi tiến trình cập nhật: {e}", "finished_at": _now(), "updated_at": _now()})
         write_state(Path(a.state), st)

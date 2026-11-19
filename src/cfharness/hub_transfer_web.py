@@ -216,7 +216,7 @@ def hub_fresh(hub: "Hub") -> bool:
         try:
             if conn.execute(f"SELECT 1 FROM {t} LIMIT 1").fetchone():  # noqa: S608 — tên bảng cố định
                 return False
-        except Exception:  # bảng chưa có (schema cũ) → bỏ qua
+        except Exception:  # best-effort: bảng chưa có (schema cũ) → bỏ qua
             continue
     return not T._secret_names(hub.paths.home)
 
@@ -250,9 +250,10 @@ def _brief_report(rep: dict[str, Any]) -> dict[str, Any]:
     if isinstance(cs, dict):
         out["claude_sessions"] = {"written": len(cs.get("written") or []), "conflicts": len(cs.get("conflicts") or []), "target": cs.get("target")}
     fh = out.get("filehub")
-    if isinstance(fh, dict):  # danh sách trắng: chế độ, tên thư mục chung, lệnh đăng nhập lại, agent dùng workspace filehub:
+    if isinstance(fh, dict):  # danh sách trắng: chế độ, tên thư mục chung, lệnh nối lại, agent dùng workspace filehub:
         out["filehub"] = {"mode": fh.get("mode"), "command": fh.get("command"), "agents": list(fh.get("agents") or [])[:20],
-                          "folders": [{"name": f.get("name")} for f in fh.get("folders") or [] if isinstance(f, dict)][:20]}
+                          "folders": [{"name": f.get("name")} for f in fh.get("folders") or [] if isinstance(f, dict)][:20],
+                          "lane_folders": [str(x) for x in fh.get("lane_folders") or []][:20]}
     if isinstance(out.get("agents_paused"), dict):
         out["agents_paused"] = sorted(out["agents_paused"])
     return out
@@ -359,6 +360,9 @@ def _spawn_job(argv: list[str], env: dict[str, str], log_path: Path) -> int:
     from .oscompat import detached_kwargs
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    from .logs import rotate_if_large
+
+    rotate_if_large(log_path)  # L1: file đầu ra thô của job không tự xoay → xoay lúc bật
     out = open(log_path, "ab")  # noqa: SIM115 — giữ mở cho tiến trình con
     try:
         p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, env=env, close_fds=True, **detached_kwargs())
@@ -421,7 +425,7 @@ def run_import_job(paths: HubPaths, uid: str, *, supervised: bool = False, wait_
 
             cfg = HubConfig(paths.config).get("backup") if paths.config.exists() else None
         except Exception:  # config.yaml hỏng không được chặn nhập
-            pass
+            log.debug("hub_transfer: config.yaml hỏng — nhập không dùng cấu hình backup", exc_info=True)
         replace = not T.home_blank(paths)
         rep = T.import_package(paths, upload_path(paths, uid), maps=_maps(job.get("maps")), mode=_mode(job.get("mode")), replace=replace,
                                cfg=cfg, passphrase=None if job.get("skip_secrets") else pw, skip_secrets=bool(job.get("skip_secrets")),

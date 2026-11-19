@@ -223,6 +223,7 @@ def _safe(fn: Callable[[], Any]) -> Any:
     try:
         return fn()
     except Exception:
+        log.debug("admin_overview: một mục thu thập lỗi (bỏ mục)", exc_info=True)
         return None
 
 
@@ -254,7 +255,7 @@ def _collect_v2(hub: "Hub", st: dict[str, Any], now: datetime, midnight: datetim
         g = getattr(hub, "guard", None)
         out["agents"] = {"trust_full": sum(1 for a in store.list_agents() if (g.trust_of(a["id"]) if g else None))}
     except Exception:
-        pass
+        log.debug("admin_overview: không đếm được agent trust_full", exc_info=True)
     # ngân sách ngày: hạn mức chặt nhất (cấu hình hub ∧ chính sách quản trị máy) + phần trăm đã dùng
     from .admin_policy import current as _pol
 
@@ -338,7 +339,7 @@ def collect(hub: "Hub", *, up: bool = True, interval_s: float = 60, now: datetim
         raw["public_origin"] = _canon_origin(wcfg.get("public_origin"))  # config lưu chuỗi người gõ (vd `https://An.Example.com/`) → dạng chuẩn
         raw["display_name"] = wcfg.get("display_name")
     except Exception:  # pragma: no cover
-        pass
+        log.debug("admin_overview: không đọc được nhánh config web", exc_info=True)
     raw["estop"]["on"] = bool((store.state_get("estop") or {}).get("on"))  # ESTOP của chính user (ESTOP admin ở admin_estop)
     raw["runs"].update({k: int(oc.get(k[6:], 0)) for k in ("today_crashed", "today_timed_out", "today_budget_exceeded", "today_rate_limited")})
     for sec, fn in (("v2", _collect_v2),):
@@ -430,6 +431,7 @@ class AdminExporter:
 
             return require_export(self.hub)
         except Exception:  # pragma: no cover
+            log.debug("admin_overview: không đọc được chính sách require.export", exc_info=True)
             return False
 
     @property
@@ -510,7 +512,7 @@ class AdminExporter:
         if self._task is not None and not self._task.done():
             return
         try:
-            self._task = asyncio.get_running_loop().create_task(self._loop())
+            self._task = asyncio.get_running_loop().create_task(self._loop(), name="admin-export")
         except RuntimeError:
             self._task = None
 

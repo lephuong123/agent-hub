@@ -269,7 +269,7 @@ def pid_reused(pid: int, started_at: Any, *, start_time: Callable[[int], float |
         from ..recovery import pid_start_time as start_time
     try:
         st = start_time(int(pid))
-    except Exception:  # noqa: BLE001
+    except Exception:  # best-effort: không đọc được giờ khởi động pid → giữ hành vi cũ (coi là không bị dùng lại)  # noqa: BLE001
         return False
     return st is not None and st > float(started_at) + PID_REUSE_SLACK_S
 

@@ -33,6 +33,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from ..aiotasks import track
 from ..errors import Blocked, HubError
 from ..store import now_iso
 
@@ -183,8 +184,7 @@ class GraphExtractor:
         def fire() -> None:
             self._pending.pop(key, None)
             t = loop.create_task(self._safe_extract(run, trigger))
-            self.tasks.add(t)
-            t.add_done_callback(self.tasks.discard)
+            track(t, self.tasks)  # L1: lỗi task → log
 
         if delay > 0:
             self._pending[key] = loop.call_later(delay, fire)
@@ -232,7 +232,7 @@ class GraphExtractor:
                 "SELECT id, role, text FROM session_messages WHERE source='run' AND session_id=? AND id>? AND subagent_id IS NULL "
                 f"AND role IN ({','.join('?' * len(RUN_ROLES))}) AND (kind IS NULL OR kind NOT IN ({','.join('?' * len(TECHNICAL_KINDS))})) "
                 "ORDER BY id", (ref, after, *RUN_ROLES, *TECHNICAL_KINDS)).fetchall()
-        except Exception:  # bảng chỉ mục chưa có
+        except Exception:  # best-effort: bảng chỉ mục session chưa có
             return []
         return [{"id": int(r[0]), "role": "user" if r[1] == "steer" else r[1], "text": str(r[2] or "")} for r in rows]
 
@@ -267,6 +267,7 @@ class GraphExtractor:
             rows = self.conn.execute(f"SELECT name, type FROM mem_entities WHERE ({where}) AND retracted_by IS NULL AND invalidated_at IS NULL "
                                      "ORDER BY updated_at DESC LIMIT ?", (*args, int(limit))).fetchall()
         except Exception:
+            log.debug("graph_extract: không đọc được thực thể gần đây", exc_info=True)
             return []
         from ..redact import redact_str
         from .threats import scan_load

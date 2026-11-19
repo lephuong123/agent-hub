@@ -122,6 +122,19 @@ def redact_str(s: str) -> str:
     return _SECRET_VALUE.sub(MASK, mask_values(s))
 
 
+def redact_count(s: str) -> tuple[str, int]:
+    """Như `redact_str` nhưng trả thêm SỐ chỗ đã che (theo giá trị + theo mẫu) — gói chẩn đoán ghi số này vào `redaction_report`
+    (chỉ con số, không bao giờ giá trị). Chuỗi có thể chứa surrogate (`errors="surrogateescape"`) — regex vẫn chạy được."""
+    if not s:
+        return s, 0
+    n = 0
+    rx = _rx
+    if rx is not None:
+        s, n = rx.subn(MASK, s)
+    s, m = _SECRET_VALUE.subn(MASK, s)
+    return s, n + m
+
+
 def redact(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: (MASK if isinstance(k, str) and _SECRET_KEY.search(k) and v else redact(v)) for k, v in obj.items()}
@@ -179,6 +192,16 @@ def install_log_filter(logger: Any = None) -> None:
             h.addFilter(SecretLogFilter())
 
 
+class _UnlessFileLogging:
+    def filter(self, record: Any) -> bool:
+        try:
+            from .logs import file_logging_active
+
+            return not file_logging_active()
+        except Exception:  # pragma: no cover — lỗi import: vẫn ghi stderr (an toàn hơn mất log)
+            return True
+
+
 def install_stderr_masking() -> None:
     """Thư viện bên thứ ba (vd SDK `mcp`) log ra stderr qua `logging.lastResort` → `logs/daemon.out` KHÔNG che.
     Gắn handler stderr có `SecretLogFilter` cho root logger (daemon gọi lúc khởi động)."""
@@ -189,6 +212,7 @@ def install_stderr_masking() -> None:
     if not any(getattr(h, "_cfharness_masked", False) for h in root.handlers):
         h = _logging.StreamHandler(_sys.stderr)
         h.setLevel(_logging.WARNING)
+        h.addFilter(_UnlessFileLogging())  # L1: tiến trình đã có log JSONL (hub.log) → stderr (daemon.out) không ghi lặp
         h.setFormatter(_logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
         h._cfharness_masked = True  # type: ignore[attr-defined]
         root.addHandler(h)

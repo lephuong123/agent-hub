@@ -175,7 +175,7 @@ def code_lang(info: str | None) -> tuple[str, Any]:
         return "text", None
     try:
         lx = get_lexer_by_name(name.lower())
-    except (ClassNotFound, Exception):
+    except (ClassNotFound, Exception):  # best-effort: ngôn ngữ lạ → text thường
         return "text", None
     label = (lx.aliases[0] if lx.aliases else lx.name) or "text"
     return (label if _LANG_OK.fullmatch(label) else "text"), lx
@@ -193,7 +193,7 @@ def code_html(code: str, info: str | None) -> str:
             from pygments.formatters import HtmlFormatter
 
             body = _hl(code, lx, HtmlFormatter(nowrap=True, classprefix="tk-"))
-        except Exception:  # pragma: no cover
+        except Exception:  # best-effort: tô màu lỗi → mã thô đã escape  # pragma: no cover
             body = ""
     if not body:
         body = str(escape(code))

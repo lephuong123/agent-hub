@@ -8,10 +8,13 @@ Viết tiếng Anh (Q-14).
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .store import ENTRY_DELIMITER, memory_chars, parse_memory
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .store import KnowledgeStore
@@ -71,6 +74,7 @@ def build_knowledge_blocks(ks: "KnowledgeStore", agent_id: str, home: Path | Non
                 else:  # M5-A: tầng team/global theo phiên bản gán cho agent (canary) / ứng viên eval
                     entries = ks.versions.read_memory(agent_id, scope, owner, store, home=home)
             except Exception:
+                log.debug("prompt_blocks: không đọc được memory một tầng", exc_info=True)
                 entries = []
             if not entries:
                 continue
@@ -80,6 +84,7 @@ def build_knowledge_blocks(ks: "KnowledgeStore", agent_id: str, home: Path | Non
     try:
         mem_tool = bool(ks.hub.config.get("learning.agent_memory_tool")) and bool(ks.hub.config.get("learning.knowledge_tools"))
     except Exception:  # pragma: no cover
+        log.debug("prompt_blocks: không đọc được cấu hình tool memory", exc_info=True)
         mem_tool = False
     if mem_tool:
         blocks.append(MEMORY_GUIDANCE)

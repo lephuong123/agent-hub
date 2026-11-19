@@ -232,7 +232,7 @@ def base_origin(hub: "Hub") -> tuple[str, bool]:
             from .web.desktop import preferred_port
 
             port = preferred_port(hub.paths)
-        except Exception:  # pragma: no cover
+        except Exception:  # best-effort: không đọc được cổng ưu tiên → cổng mặc định  # pragma: no cover
             port = 8765
     from .web.security import WEB_HOST
 

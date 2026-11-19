@@ -56,14 +56,15 @@ BACKUP_DIRNAME = "backups"
 KINDS = ("manual", "auto", "pre-update", "pre-restore")
 SAFETY_KINDS = ("pre-update", "pre-restore")
 # Mục cấp 1 được sao lưu (ngoài hub.db). Mục khác của HUB_HOME KHÔNG vào bản sao.
-INCLUDE_FILES = ("config.yaml",)
-INCLUDE_DIRS = ("policy", "agents", "global", "teams", "ledger", "snapshots", "mcp", "trash", "prompts")
+INCLUDE_FILES = ("config.yaml", "audit-anchors.jsonl")  # L4: bản neo chuỗi băm audit đi cùng hub.db (khôi phục → neo khớp DB khôi phục)
+INCLUDE_DIRS = ("policy", "agents", "global", "teams", "ledger", "snapshots", "mcp", "trash", "prompts",
+                "audit-archive")  # L5: audit đã lưu trữ (audit_archive.py) — đi cùng hub.db, không thì `audit verify` báo archive_missing
 # Trong agents/<id>/: thư mục chạy/tạm — không sao lưu, và khôi phục không đụng tới
 AGENT_SKIP = ("runtime", "workspaces", ".tier_overlay")
 EXCLUDED = ("secrets", "auth", "mcp_server", "runs", "checkpoints", "logs", "workspaces", "worktrees", "evals", "models", "update",
             BACKUP_DIRNAME, "exports", "imports",  # gói xuất/nhập toàn bộ hub (hub_transfer.py) — lớn, đã là bản sao
-            "hub.sock", "hub.sock.auth", "hub.pid", "daemon.lock", "cli_history",
-            "filehub")  # profile/base/status của binary sync Không gian số — tái tạo được (cấu hình filehub.* nằm trong config.yaml, được sao lưu)
+            "hub.sock", "hub.sock.auth", "hub.sock.web.auth", "hub.sock.mcp.auth", "hub.pid", "daemon.lock", "cli_history",
+            "filehub")  # trạng thái cổng cfharness (cursor, cây mồ côi) + tàn dư đồng bộ cũ — gắn với máy (cấu hình filehub.* nằm trong config.yaml, được sao lưu)
 ID_RE = re.compile(r"^(\d{8}T\d{6})-(manual|auto|pre-update|pre-restore)(?:-([a-z0-9][a-z0-9-]{0,30}))?$")
 LABEL_RE = re.compile(r"[^a-z0-9-]+")
 MUTATING_BACKUP = ("backup.create",)
@@ -356,6 +357,7 @@ def list_backups(paths: HubPaths) -> list[dict[str, Any]]:
             try:
                 side = {"manifest": _read_manifest_from_tar(p), "archive": {"name": n, "size": p.stat().st_size, "sha256": None}}
             except Exception:  # archive hỏng / thiếu manifest → vẫn liệt kê để người thấy và xoá
+                log.debug("archive sao lưu hỏng/thiếu manifest — vẫn liệt kê", exc_info=True)
                 m = ID_RE.match(bid)
                 side = {"manifest": {"id": bid, "kind": m[2] if m else None, "created_at": None}, "archive": {"name": n, "size": p.stat().st_size},
                         "broken": True}
@@ -438,7 +440,7 @@ def verify(paths: HubPaths, bid: str, *, extract_to: Path | None = None) -> dict
     try:
         try:
             manifest = _read_manifest_from_tar(p)
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi được trả về trong errors cho người
             errors.append(f"không đọc được manifest: {e}")
             return {"id": bid, "ok": False, "errors": errors, "warnings": warnings}
         if manifest.get("format") != FORMAT or manifest.get("id") != bid:
@@ -687,7 +689,7 @@ class BackupService:
     def schedule_info(self, rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         try:
             spec = self._spec()
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi trả về trong trường error
             return {"enabled": False, "expr": self.cfg().get("schedule"), "error": str(e)}
         if spec is None:
             return {"enabled": False, "expr": self.cfg().get("schedule")}
@@ -712,7 +714,7 @@ class BackupService:
     def due(self) -> bool:
         try:
             nxt = self.next_due()
-        except Exception as e:
+        except Exception as e:  # best-effort: lỗi lưu ở last_error (hiện ở thẻ Sao lưu)
             self.last_error = f"backup.schedule không hợp lệ: {e}"
             return False
         return nxt is not None and self.clock() >= nxt.timestamp()
@@ -742,7 +744,7 @@ class BackupService:
         if self._task is not None and not self._task.done():
             return
         try:
-            self._task = asyncio.get_running_loop().create_task(self._loop())
+            self._task = asyncio.get_running_loop().create_task(self._loop(), name="backup-schedule")
         except RuntimeError:
             self._task = None
 

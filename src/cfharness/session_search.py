@@ -307,7 +307,7 @@ def start_backfill(hub: Any) -> None:
     if cur is not None and not cur.done():
         return
     if backfill_pending(hub.store.conn):
-        t = loop.create_task(run_backfill(hub))
+        t = loop.create_task(run_backfill(hub), name="session-backfill")
         hub._session_backfill_task = t
         hub._bg.append(t)
 

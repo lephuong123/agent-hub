@@ -37,8 +37,13 @@ def _block_rename(monkeypatch):
 def test_setup_logging_rotates_when_rename_blocked(tmp_path, monkeypatch, capsys):
     from cfharness.logs import setup_logging
 
+    from cfharness import logs as _logs
+
     root = logging.getLogger("cfharness")
     old = list(root.handlers)
+    top = logging.getLogger()
+    old_top = list(top.handlers)
+    had_mark = hasattr(root, _logs._FILE_MARK)
     try:
         setup_logging(tmp_path, max_bytes=2000, backup_count=2, max_age_days=30)
         h = root.handlers[0]
@@ -60,6 +65,12 @@ def test_setup_logging_rotates_when_rename_blocked(tmp_path, monkeypatch, capsys
             h.close()
         for h in old:
             root.addHandler(h)
+        for h in list(top.handlers):  # handler root của setup_logging + dấu "đã có log file" — không để rò sang test khác
+            if h not in old_top:
+                top.removeHandler(h)
+                h.close()
+        if not had_mark and hasattr(root, _logs._FILE_MARK):
+            delattr(root, _logs._FILE_MARK)
 
 
 def test_rotation_with_reader_holding_file_open(tmp_path):

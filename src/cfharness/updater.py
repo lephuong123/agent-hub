@@ -119,6 +119,13 @@ def find_uv(env_path: str | None = None) -> str | None:
 
 
 def _default_spawn(argv: list[str], opts: dict[str, Any]) -> int:
+    from pathlib import Path
+
+    from .logs import rotate_if_large
+
+    log = Path(opts["log"])
+    rotate_if_large(log)  # L1: update.out + update.log (helper chỉ stdlib, ghi thẳng) xoay lúc bật helper
+    rotate_if_large(log.with_name("update.log"))
     out = open(opts["log"], "ab")  # noqa: SIM115 — giữ mở cho tiến trình con
     try:
         p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=out, cwd=opts.get("cwd"), env=opts.get("env"), close_fds=True,
@@ -178,7 +185,7 @@ class Updater:
             return self._cache[1]
         try:
             res = {"ok": True, **self.fetch(8.0)}
-        except Exception as e:  # mạng/GitHub lỗi → báo, không ném (trang Cài đặt vẫn hiện)
+        except Exception as e:  # best-effort: mạng/GitHub lỗi → báo trong kết quả, trang Cài đặt vẫn hiện
             res = {"ok": False, "error": f"không kiểm tra được bản mới: {e}"}
         res["checked_at"] = time.time()
         self._cache = (now, res)
@@ -199,10 +206,22 @@ class Updater:
                 "releases_url": RELEASES_URL, "log": str(self.log_path)}
 
     def log_tail(self, lines: int = 40) -> str:
+        """Đuôi `update.log` cho người đọc: dòng JSON (helper từ L7) → `msg`; dòng chữ cũ giữ nguyên."""
         try:
-            return "\n".join(self.log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-max(1, min(lines, 400)):])
+            raw = self.log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-max(1, min(lines, 400)):]
         except OSError:
             return ""
+        out = []
+        for ln in raw:
+            if ln.startswith("{"):
+                try:
+                    d = json.loads(ln)
+                    if isinstance(d, dict) and isinstance(d.get("msg"), str):
+                        ln = d["msg"]
+                except ValueError:
+                    pass
+            out.append(ln)
+        return "\n".join(out)
 
     # ------------------------------------------------------------------ cập nhật
     def install_argv(self, tag: str) -> list[str]:

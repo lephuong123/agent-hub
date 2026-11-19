@@ -52,7 +52,7 @@ def wait_text(hub: Any, t: dict[str, Any]) -> str | None:
         return code
     try:
         limit = hub.runs.effective_limit()
-    except Exception:  # pragma: no cover
+    except Exception:  # best-effort: chỉ để hiện giới hạn trong câu chờ — lỗi thì in "?"  # pragma: no cover
         limit = None
     return tpl.format(limit=limit if limit is not None else "?", not_before=t.get("not_before") or "?")
 
@@ -290,14 +290,14 @@ class ManagerOps:
         fh = getattr(self.hub, "filehub", None)
         return fh.list() if fh is not None else []
 
-    def op_filehub_link(self, a: dict[str, Any]) -> dict[str, Any]:
+    def op_filehub_link(self, a: dict[str, Any]) -> Any:
         fh = getattr(self.hub, "filehub", None)
         if fh is None:
             raise HubError("thư mục chung chưa bật")
-        p = str(a.get("path") or "")
-        if not os.path.isabs(p):
-            raise HubError("path phải là đường dẫn tuyệt đối trong thư mục chung")
-        return fh.link({"path": p})
+        p = str(a.get("path") or "").strip()
+        if not p or os.path.isabs(p):
+            raise HubError("path = <tên thư mục chung>/<đường dẫn trong thư mục> (như filehub_list)")
+        return fh.link({"path": p})  # coroutine — call() chờ
 
     def op_system_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
         return self.hub.systems.list()  # type: ignore[attr-defined]

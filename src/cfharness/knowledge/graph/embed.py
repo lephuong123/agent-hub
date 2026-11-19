@@ -116,6 +116,7 @@ def _cfg(hub: Any, key: str, default: Any) -> Any:
     try:
         v = hub.config.get(f"graph_memory.{key}")
     except Exception:
+        log.debug("graph: không đọc được cấu hình graph_memory", exc_info=True)
         return default
     return default if v is None else v
 
@@ -136,7 +137,7 @@ def get_embedder(hub: Any) -> Embedder | None:
         return None
     try:
         cache = str(hub.paths.home / "models")
-    except Exception:
+    except Exception:  # best-effort: không có thư mục home → fastembed dùng cache mặc định
         cache = None
     try:
         emb = BgeM3Embedder(cache_dir=cache, threads=_cfg(hub, "vector.threads", None))
@@ -309,8 +310,8 @@ def start_vector_loop(hub: Any) -> None:
     try:
         load_vec(hub.store.conn)
     except Exception:  # pragma: no cover
-        pass
+        log.debug("graph: không nạp được sqlite-vec", exc_info=True)
     from .resolve import set_embed_matcher  # bộ khớp thực thể khi GHI (PR write) — dùng vector tên do vòng nền này chỉ mục
 
     set_embed_matcher(entity_matcher(hub, float(_cfg(hub, "vector.entity_match", 0.92))))
-    hub._bg.append(loop.create_task(run_vector_loop(hub)))
+    hub._bg.append(loop.create_task(run_vector_loop(hub)), name="graph-vector-loop")

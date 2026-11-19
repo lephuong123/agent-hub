@@ -21,6 +21,7 @@ Luật (mỗi luật có test đỏ→xanh trong `tests/test_manager_security.py
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -28,6 +29,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..errors import HubError
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..auth import Caller
@@ -218,16 +221,17 @@ class ManagerPermissions:
             if path.get("kind") in ("scratch", "worktree") and not path.get("path"):
                 return None
             path = path.get("ref") if path.get("kind") == "filehub" and path.get("ref") else path.get("path")
-        if isinstance(path, str) and path.startswith("filehub:"):  # thư mục chung Không gian số → kiểm đường dẫn cục bộ đã giải
+        if isinstance(path, str) and path.startswith("filehub:"):  # thư mục chung Không gian số (chỉ qua cổng)
             fh = getattr(self.hub, "filehub", None)
             if fh is None:
                 return f"{what}: thư mục chung chưa bật"
             try:
                 if fh.lane_target(path) is not None:
-                    return None  # chế độ lane: không đường dẫn cục bộ — cây dựng trong vùng làm việc của agent lúc run chạy
-                path = fh.resolve_ref(path, must_exist=False)[0]
+                    return None  # cổng cfharness: không đường dẫn cục bộ — cây dựng trong vùng làm việc của agent lúc run chạy
+                fh.resolve_ref(path)  # luôn ném: thư mục đồng bộ cũ cần chuyển / tên sai
             except HubError as e:
                 return f"{what}: {e.message}"
+            return f"{what}: thư mục chung không dùng được"
         try:
             p = Path(str(path)).expanduser().resolve()
         except (OSError, RuntimeError):
@@ -296,7 +300,7 @@ class ManagerPermissions:
             for m in self.hub.mcp.list():
                 out[str(m["name"])] = str(m.get("trust") or (m.get("config") or {}).get("trust") or "untrusted")
         except Exception:
-            pass
+            log.debug("manager: không đọc được registry MCP (trust)", exc_info=True)
         return out
 
     # ------------------------------------------------------------------ MGR-8: cấu hình tối thiểu của agent được chỉ định làm manager
@@ -376,6 +380,7 @@ class ManagerPermissions:
             try:
                 r = self.hub.mcp.get_row(s) or {}  # type: ignore[attr-defined]
             except Exception:
+                log.debug("manager: không đọc được dòng registry MCP", exc_info=True)
                 r = {}
             for tool_name, rec in sorted((r.get("annotations_cache") or {}).items()):
                 if not (rec or {}).get("readOnlyHint"):
@@ -388,10 +393,11 @@ class ManagerPermissions:
         try:
             names = {str(m["name"]) for m in self.hub.mcp.list()}
         except Exception:
-            pass
+            log.debug("manager: không đọc được danh sách MCP", exc_info=True)
         try:
             own = self.hub.guard.hub_mcp_servers()
         except Exception:
+            log.debug("manager: không đọc được MCP của hub", exc_info=True)
             own = frozenset()
         return names, own
 
@@ -540,6 +546,7 @@ class ManagerPermissions:
         try:
             return dict(self.hub.learning.policy.get("config_bounds") or {})
         except Exception:  # pragma: no cover
+            log.debug("manager: không đọc được config_bounds — dùng khung chặt", exc_info=True)
             return {"models": [], "max_budget_usd_per_run": None, "budget_usd_per_day": None, "max_concurrent_runs": None, "max_effort": "max"}
 
     def rate_block(self, method: str) -> str | None:
@@ -689,7 +696,7 @@ class ManagerPermissions:
                 return "cần lý do (reason) cho quyết định"
             try:
                 row = self.hub.approvals.get(str(p.get("id") or p.get("request_id") or ""))
-            except Exception:
+            except Exception:  # fail-closed: không đọc được approval → từ chối
                 return "không có approval này"
             why = self.hub.approvals.manager_block(row, str(caller.manager))
             if why:
