@@ -50,7 +50,7 @@ def test_claudeai_methods_human_only():
 @needs_pty
 async def test_login_flow_status_and_logout(d, tmp_path):
     st = await rpc(d, "account.claudeai_status", {})
-    assert st["logged_in"] is False and st["login"] is None and st["connectors_auto"] is False
+    assert st["logged_in"] is False and st["login"] is None and st["connectors_auto"] is True
     claude_cli._login_cache["claude"] = (0.0, False)
 
     lg = await rpc(d, "account.claudeai_login_start", {})

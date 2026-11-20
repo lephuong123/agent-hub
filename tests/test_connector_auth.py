@@ -203,7 +203,7 @@ def test_adapter_wildcard_none_connected():
 
 
 async def test_connectors_auto_on_with_login(d, user_home, monkeypatch):
-    d.hub.config.set("connectors.auto", True)
+    monkeypatch.delenv("CFHARNESS_CONNECTORS_AUTO")
     spec, fb = await _run(d, None, monkeypatch, True)
     assert spec.connectors == ["*"] and spec.auth_mode == "login" and not fb
     assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False}
@@ -212,18 +212,21 @@ async def test_connectors_auto_on_with_login(d, user_home, monkeypatch):
 
 
 async def test_connectors_auto_needs_login(d, user_home, monkeypatch):
-    d.hub.config.set("connectors.auto", True)
+    monkeypatch.delenv("CFHARNESS_CONNECTORS_AUTO")
     spec, fb = await _run(d, None, monkeypatch, False)
     assert spec.connectors is None and spec.isolation_overrides is None and not fb  # không /login → không nạp ~/.claude
     assert d.hub.guard.context_for(d.hub.store.get_run(spec.run_id)).connectors is None
 
 
-async def test_connectors_auto_off_by_default(d, user_home, monkeypatch):
+async def test_connectors_auto_on_by_default_can_turn_off(d, user_home, monkeypatch):
+    monkeypatch.delenv("CFHARNESS_CONNECTORS_AUTO")
+    assert d.hub.config.get("connectors.auto") is True  # mặc định bật (v0.2.26)
+    d.hub.config.set("connectors.auto", False)
     spec, _ = await _run(d, None, monkeypatch, True)
     assert spec.connectors is None and spec.auth_mode == "token"
 
 
 async def test_connectors_auto_explicit_list_wins(d, user_home, monkeypatch):
-    d.hub.config.set("connectors.auto", True)
+    monkeypatch.delenv("CFHARNESS_CONNECTORS_AUTO")
     spec, _ = await _run(d, ["Atlassian"], monkeypatch, True)
     assert spec.connectors == ["Atlassian"]
