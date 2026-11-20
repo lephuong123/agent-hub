@@ -61,6 +61,11 @@ class RunSpec:
     # run điều phối viên có connector claude.ai: ghi đè `runtime.claude.isolation` (setting_sources/strict_mcp_config) cho riêng run
     isolation_overrides: dict[str, Any] | None = None
     allowed_mcp_prefixes: list[str] | None = None
+    # connector claude.ai người cho phép (slug, vd "Google_Drive") — adapter báo `connector.unavailable` khi CLI không nạp/chưa kết nối
+    connectors: list[str] | None = None
+    # "token" = CLAUDE_CODE_OAUTH_TOKEN của hub (mặc định); "login" = phiên `claude /login` của user OS (KHÔNG đặt token) — token
+    # `setup-token` không nạp connector claude.ai nào (đã kiểm 2.1.325), nên run có connector chọn theo `runtime.claude.connectors_auth`
+    auth_mode: Literal["token", "login"] = "token"
     # agent được người đặt trust full (guard/service.trust_set): cho phép `bypassPermissions` trên mọi workspace (ngoại lệ NFR-15 do người chọn)
     trust_full: bool = False
     # plugin Claude Code của agent (plugins.py) → `--plugin-dir <thư mục>` mỗi plugin
@@ -127,6 +132,11 @@ class AgentRuntime(abc.ABC):
     async def auth_status(self) -> bool | None:
         """Kiểm lại trạng thái đăng nhập của runtime: True = đã đăng nhập, False = chưa, None = không xác định được.
         Dùng trước khi chặn mọi run vì một lỗi "Not logged in" (có thể chỉ thoáng qua lúc làm mới OAuth)."""
+        return None
+
+    async def login_available(self) -> bool | None:
+        """Có phiên đăng nhập claude.ai đầy đủ (`claude /login`, không tính token env) để nạp connector claude.ai?
+        True/False; None = không xác định (runtime không hỗ trợ)."""
         return None
 
     async def oneshot(self, req: "OneShotRequest") -> "OneShotResult":
@@ -196,6 +206,7 @@ def make_adapter(spec: RunSpec) -> ClaudeStreamAdapter:
         allowed_plugin_prefixes=spec.allowed_plugin_prefixes,
         require_no_auto_memory=spec.require_no_auto_memory,
         allowed_mcp_prefixes=spec.allowed_mcp_prefixes,
+        expected_connectors=spec.connectors,
         persist_thinking=spec.persist_thinking,
         thinking_max=spec.thinking_max_chars,
     )

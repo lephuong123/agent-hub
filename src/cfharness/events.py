@@ -81,6 +81,8 @@ EVENT_LEVELS: dict[str, str] = {
     "cli.version_warning": "summary",
     "auth.blocked": "summary",
     "auth.cleared": "summary",  # cờ chặn đăng nhập được gỡ (người: doctor/auth.reset; tự động: kiểm lại thấy đã đăng nhập)
+    "connector.unavailable": "summary",  # connector claude.ai người cho phép mà run không nạp / chưa kết nối (claude_adapter)
+    "connector.auth_fallback": "summary",  # run có connector nhưng user OS chưa `claude /login` → vẫn dùng token setup-token (runs)
     "auth.transient": "summary",  # run báo "Not logged in" nhưng kiểm lại `claude auth status` vẫn đăng nhập → KHÔNG chặn
     "hook.event": "debug",
     "hook.timeout": "summary",  # hardening H-11: hook quan sát quá 2 s → fail-OPEN, ghi lại (FR-RT-17)

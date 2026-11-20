@@ -10,6 +10,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Connector claude.ai trên hub dùng token chung
+- Agent/điều phối viên bật connector claude.ai (`--connectors "Google Drive"`…) giờ dùng được connector trên hub đăng nhập bằng token `claude setup-token`: token này không nạp connector nào, nên run có connector tự chạy bằng phiên `claude /login` của user OS khi có (`runtime.claude.connectors_auth`: `auto` mặc định, `login`, `token`). Chưa đăng nhập `/login` → run vẫn chạy bằng token như cũ và có event `connector.auth_fallback`; connector chưa nối trên claude.ai (vd Google Drive `needs-auth`) → event `connector.unavailable` thay vì im lặng. `cfharness hub doctor --probe` có thêm mục "connector claude.ai". Hướng dẫn: `docs/dev-notes/manager-connectors.md`.
+
 ### Log hệ thống (nền tảng — L1 của `docs/dev-notes/plan-logging.md`) (#150)
 - Web và `cfharness mcp serve` giờ ghi log JSON có che secret như daemon (`logs/web.jsonl`, `logs/mcp.jsonl`); mỗi dòng log có thêm tiến trình, pid và vị trí mã. Log của thư viện (asyncio, mcp, uvicorn…) vào cùng file thay vì chỉ ra stderr; cảnh báo không còn bị ghi hai lần (`hub.log` + `daemon.out`).
 - `cfharness logs level` xem level log đang áp dụng; `cfharness logs level cfharness.guard debug --for 30m` bật DEBUG tạm cho một phần hub, tự về mức cũ khi hết giờ — không cần khởi động lại daemon. Đổi lâu dài: `cfharness config set logs.level …` (có hiệu lực ngay).

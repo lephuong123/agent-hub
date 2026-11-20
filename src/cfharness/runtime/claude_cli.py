@@ -373,6 +373,7 @@ def child_env(claude_cfg: dict[str, Any], base: dict[str, str] | None = None, *,
 
 
 _version_cache: dict[str, tuple[float, str | None]] = {}
+_login_cache: dict[str, tuple[float, bool]] = {}  # ClaudeCliRuntime.login_available (runtime tạo mới mỗi run → cache theo binary)
 
 
 def claude_version(binary: str = "claude", cache_s: float = 600) -> str | None:
@@ -402,6 +403,11 @@ class ClaudeCliRuntime(AgentRuntime):
 
     def _run_env(self, spec: RunSpec) -> dict[str, str]:
         env = {**child_env(self.cfg), **(spec.env_extra or {})}
+        if spec.auth_mode == "login":
+            # run có connector claude.ai: token `setup-token` không nạp connector → dùng phiên `claude /login` của user OS;
+            # gỡ MỌI nguồn token (env daemon, env_extra) để CLI không ưu tiên token
+            env.pop(OAUTH_TOKEN_SECRET, None)
+            return with_loopback_no_proxy(env)
         tok = oauth_token(self.secrets)
         if tok:  # token của hub thắng mọi giá trị cùng tên (env_extra của run không ghi đè được)
             env[OAUTH_TOKEN_SECRET] = tok
@@ -443,6 +449,40 @@ class ClaudeCliRuntime(AgentRuntime):
         if not isinstance(info, dict) or "loggedIn" not in info:
             return None
         return bool(info["loggedIn"])
+
+    async def login_available(self) -> bool | None:
+        """`claude auth status` KHÔNG có CLAUDE_CODE_OAUTH_TOKEN → True khi đã `/login` claude.ai (authMethod=claude.ai).
+        Cache `version_cache_s` (mặc định 600 s); không chạy được/không đọc được → None (không cache)."""
+        now = time.monotonic()
+        binary = self.cfg.get("binary") or "claude"
+        hit = _login_cache.get(binary)
+        if hit is not None and now - hit[0] < float(self.cfg.get("version_cache_s", 600)):
+            return hit[1]
+        env = child_env(self.cfg)
+        env.pop(OAUTH_TOKEN_SECRET, None)
+        argv = exec_argv([self.cfg.get("binary") or "claude", "auth", "status"])
+        try:
+            proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                                                        stderr=asyncio.subprocess.PIPE, env=env, **no_window_kwargs())
+        except OSError:
+            return None
+        try:
+            out_b, _ = await asyncio.wait_for(proc.communicate(), float(self.cfg.get("auth_check_timeout_s", 30)))
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:  # pragma: no cover
+                pass
+            return None
+        try:
+            info = json.loads(out_b.decode("utf-8", "replace"))
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(info, dict) or "loggedIn" not in info:
+            return None
+        ok = bool(info.get("loggedIn")) and info.get("authMethod") == "claude.ai"
+        _login_cache[binary] = (now, ok)
+        return ok
 
     async def oneshot(self, req: "OneShotRequest") -> "OneShotResult":
         import tempfile
