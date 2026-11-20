@@ -121,7 +121,10 @@ def prepare(hub: "Hub", ref: str) -> dict[str, Any]:
     _write_0600(settings_path, settings)
     _write_0600(mcp_path, {"mcpServers": hub.runs._agent_mcp_servers(agent)})
     soul_p = Path(agent["home_path"]) / "SOUL.md"
-    system_prompt = build_system_prompt(agent["id"], soul_p.read_text(encoding="utf-8") if soul_p.exists() else "")
+    from ..pdf_support import system_note
+
+    system_prompt = build_system_prompt(agent["id"], soul_p.read_text(encoding="utf-8") if soul_p.exists() else "",
+                                        pdf_note=system_note(hub.config))  # máy không có pdftoppm → nhắc đọc PDF chỉ với file_path
     tp = dict(agent.get("tool_policy") or {})
     argv = build_takeover_argv(
         binary=str(claude_cfg.get("binary") or "claude"),

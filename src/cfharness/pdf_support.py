@@ -3,10 +3,12 @@
 Sự thật đã kiểm (claude 2.1.329, `docs/dev-notes/pdf-attachments.md`): Read đọc PDF chỉ với `file_path` → khối document gốc, KHÔNG cần
 poppler. Model truyền `pages` (Haiku tự làm kể cả với PDF 2 trang) → Read gọi `pdftoppm` để vẽ trang; máy không có poppler → lỗi
 "pdftoppm is not installed". Khung quyền strict chỉ có Read nên agent không tự xoay được → hub:
-- `pdftoppm_status(cfg)`: dò `pdftoppm` (PATH của daemon + `tools.poppler_path`), CACHE theo (giá trị cấu hình, PATH) + TTL — không
-  gọi tiến trình con mỗi tin; đổi `tools.poppler_path` → khoá cache khác → dò lại ngay.
+- `pdftoppm_status(cfg)`: dò `pdftoppm` (PATH của daemon + `tools.poppler_path`) và CHẠY thử `pdftoppm -v` (`probe`, cùng quy tắc với
+  Claude Code), CACHE theo (giá trị cấu hình, PATH) + TTL — không gọi tiến trình con mỗi tin; đổi `tools.poppler_path` → dò lại ngay.
+  PATH là của daemon lúc khởi động: cài poppler khi daemon đang chạy → cần khởi động lại daemon (hoặc đặt `tools.poppler_path`).
 - Không dùng được → `PDF_SYSTEM_NOTE` vào system prompt mọi run (`prompt.build_system_prompt(pdf_note=…)`) + ghi chú trong `files_note`.
-- `tools.poppler_path` hợp lệ → `run_path_extra(cfg)` trả thư mục đó; `ClaudeCliRuntime._run_env` thêm vào CUỐI PATH của tiến trình
+- `tools.poppler_path` hợp lệ → `run_path_extra(cfg)` trả thư mục đó (+ thư mục pdftoppm tìm thấy trên PATH daemon, phòng env_extra của
+  run thay PATH); `ClaudeCliRuntime._run_env` thêm vào CUỐI PATH của tiến trình
   `claude` (thêm cuối, không chèn đầu: thư mục poppler không che được `git`/`python`… sẵn có trên PATH — chỉ thêm lệnh còn thiếu).
 - Kiểm giá trị (`validate_poppler_path`): đường dẫn TUYỆT ĐỐI tới thư mục có sẵn, chứa `pdftoppm`/`pdftoppm.exe` là file thường; không
   NUL, không ký tự ngăn cách PATH (`;`/`:`) — một giá trị không thể chèn nhiều mục PATH. Kiểm lại lúc dùng (thư mục bị xoá → bỏ qua).
@@ -18,6 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -30,7 +33,10 @@ CONFIG_KEY = "tools.poppler_path"
 PDFTOPPM = "pdftoppm"
 CACHE_TTL_S = 300.0
 FIX_HINT = ("cài poppler: `scoop install poppler` hoặc `winget install oschwartz10612.Poppler` (Windows), `brew install poppler` (macOS), "
-            "`apt install poppler-utils` (Linux); hoặc `cfharness config set tools.poppler_path <thư mục chứa pdftoppm>`")
+            "`apt install poppler-utils` (Linux) rồi khởi động lại daemon (daemon giữ PATH lúc khởi động); hoặc "
+            "`cfharness config set tools.poppler_path <thư mục chứa pdftoppm>` (có hiệu lực ngay)")
+RESTART_NOTE = (" — daemon đang chạy từ trước khi cài poppler chỉ thấy sau khi khởi động lại (`cfharness daemon stop` rồi `start`), "
+                "trừ khi đặt tools.poppler_path")
 
 # Tiếng Anh (prompt gửi agent). Chỉ thêm khi pdftoppm KHÔNG dùng được trên máy hub.
 PDF_SYSTEM_NOTE = """# Reading PDF files
@@ -124,8 +130,26 @@ def reset_cache() -> None:
         _cache.clear()
 
 
+PROBE_TIMEOUT_S = 5.0
+
+
+def probe(exe: str) -> bool:
+    """`pdftoppm -v` chạy được? Cùng quy tắc với Claude Code (claude 2.1.329): mã 0, hoặc mã khác 127 VÀ có in ra stderr. File tồn tại
+    mà hỏng/sai kiến trúc/không phải pdftoppm → False (không thì hub bỏ lời nhắc "không truyền pages" trong khi Read vẫn lỗi)."""
+    from .oscompat import no_window_kwargs
+
+    try:
+        r = subprocess.run([exe, "-v"], capture_output=True, timeout=PROBE_TIMEOUT_S, stdin=subprocess.DEVNULL, **no_window_kwargs())
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    return r.returncode == 0 or (r.returncode != 127 and bool((r.stderr or b"").strip()))
+
+
 def pdftoppm_status(cfg: Any = None, *, ttl_s: float = CACHE_TTL_S) -> dict[str, Any]:
-    """`{usable, path, source: "path"|"config"|None, configured}` — có cache theo (giá trị cấu hình, PATH daemon), sống `ttl_s` giây."""
+    """`{usable, path, source: "path"|"config"|None, configured, broken}` — có cache theo (giá trị cấu hình, PATH daemon), sống `ttl_s`
+    giây (cache = không chạy `pdftoppm -v` mỗi tin/mỗi run). `broken` = đường dẫn pdftoppm tìm thấy nhưng `probe` hỏng.
+    PATH là PATH của DAEMON lúc khởi động: cài poppler khi daemon đang chạy → daemon chỉ thấy sau khi khởi động lại (hoặc đặt
+    `tools.poppler_path`, có hiệu lực ngay)."""
     configured = _configured(cfg)
     env_path = os.environ.get("PATH", "")
     key = (configured if isinstance(configured, (str, type(None))) else repr(configured), env_path)
@@ -134,13 +158,21 @@ def pdftoppm_status(cfg: Any = None, *, ttl_s: float = CACHE_TTL_S) -> dict[str,
         hit = _cache.get(key)
         if hit and now - hit[0] < ttl_s:
             return dict(hit[1])
+    out: dict[str, Any] = {"usable": False, "path": None, "source": None, "configured": configured, "broken": None}
     found = shutil.which(PDFTOPPM)
-    out: dict[str, Any] = {"usable": bool(found), "path": found, "source": "path" if found else None, "configured": configured}
-    if not found:
+    if found:
+        if probe(found):
+            out.update(usable=True, path=found, source="path")
+        else:
+            out["broken"] = found
+    if not out["usable"]:
         d = poppler_dir(cfg)
         exe = _find_in_dir(Path(d)) if d else None
         if exe is not None:
-            out.update(usable=True, path=str(exe), source="config")
+            if probe(str(exe)):
+                out.update(usable=True, path=str(exe), source="config")
+            else:
+                out["broken"] = str(exe)
     with _lock:
         _cache[key] = (now, out)
     return dict(out)
@@ -160,9 +192,21 @@ def system_note(cfg: Any = None) -> str | None:
 
 
 def run_path_extra(cfg: Any = None) -> list[str]:
-    """Thư mục thêm vào CUỐI PATH của run `claude`: `[tools.poppler_path]` khi hợp lệ, không thì []."""
+    """Thư mục thêm vào CUỐI PATH của run `claude`: `tools.poppler_path` khi hợp lệ; pdftoppm dùng được thấy trên PATH của daemon →
+    thêm cả thư mục đó (env_extra của run có thể thay PATH và làm mất nó trong khi hub đã bỏ lời nhắc "không truyền pages")."""
+    out: list[str] = []
     d = poppler_dir(cfg)
-    return [d] if d else []
+    if d:
+        out.append(d)
+    try:
+        st = pdftoppm_status(cfg)
+    except Exception:  # pragma: no cover - best-effort
+        st = {}
+    if st.get("usable") and st.get("source") == "path" and st.get("path"):
+        p = str(Path(st["path"]).parent)
+        if p not in out:
+            out.append(p)
+    return out
 
 
 def append_path(env: dict[str, str], dirs: list[str]) -> dict[str, str]:

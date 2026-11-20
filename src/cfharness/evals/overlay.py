@@ -298,7 +298,11 @@ def prompt_fingerprint(hub: Any, agent_id: str, home: Path) -> str:
             except Exception as e:  # best-effort: lỗi nằm trong dấu vân tay (khác mọi lần, không dùng cache cũ)
                 parts.append(f"versions_error:{e!r}")
     soul_p = home / "SOUL.md"
-    text = build_system_prompt(agent_id, soul_p.read_text(encoding="utf-8") if soul_p.exists() else "", blocks)
+    from ..pdf_support import system_note
+
+    # cùng khối "đọc PDF" như run thật (learning/runtime._pdf_note) — máy không có pdftoppm thì prompt eval khác prompt thật nếu thiếu
+    text = build_system_prompt(agent_id, soul_p.read_text(encoding="utf-8") if soul_p.exists() else "", blocks,
+                               pdf_note=system_note(getattr(hub, "config", None)))
     parts.insert(0, prompt_hash(text))
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:20]
 

@@ -19,8 +19,10 @@ EXE = "pdftoppm.exe" if sys.platform == "win32" else "pdftoppm"
 
 
 @pytest.fixture(autouse=True)
-def _fresh_cache():
+def _fresh_cache(request, monkeypatch):
     ps.reset_cache()
+    if request.node.name != "test_probe_runs_binary_like_claude_code":  # pdftoppm giả trong test là file rác: coi `pdftoppm -v` chạy được nếu file còn
+        monkeypatch.setattr(ps, "probe", lambda exe: Path(exe).is_file() or exe.startswith("/usr/"))
     yield
     ps.reset_cache()
 
@@ -62,10 +64,14 @@ def test_config_validation_tools_and_attachments(poppler: Path, tmp_path: Path):
         with pytest.raises(ValueError):
             validate_setting(key, value)
     validate_setting("attachments.pdf.split_pages", 30)
+    validate_setting("attachments.pdf.split_pages", 100)
+    validate_setting("attachments.pdf.timeout_s", 50)
     validate_setting("attachments.pdf", {"split": False, "max_parts": 5, "timeout_s": 12.5})
     validate_setting("attachments", {"pdf": {"split_pages": 1}})
     for key, value in [("attachments.pdf.split_pages", 0), ("attachments.pdf.split_pages", 2.5), ("attachments.pdf.split_pages", True),
-                       ("attachments.pdf.max_parts", 201), ("attachments.pdf.timeout_s", 1), ("attachments.pdf.split", "yes"),
+                       ("attachments.pdf.max_parts", 201), ("attachments.pdf.timeout_s", 1),
+                       ("attachments.pdf.split_pages", 101),  # phần > 100 trang: Read đọc cả phần một lần — quá nặng / quá 600 trang
+                       ("attachments.pdf.timeout_s", 51),  # quá hạn RPC web 60 s → người thấy lỗi gửi mà hub vẫn nhận tin ("attachments.pdf.split", "yes"),
                        ("attachments.pdf.nope", 1), ("attachments.other", {}), ("attachments", []), ("attachments.pdf", 3)]:
         with pytest.raises(ValueError):
             validate_setting(key, value)
@@ -91,7 +97,7 @@ def test_status_uses_config_and_cache_refreshes_on_change(poppler: Path, no_syst
     real_find = ps._find_in_dir
     monkeypatch.setattr(ps, "_find_in_dir", lambda d: calls.append(d) or real_find(d))
     off = ps.pdftoppm_status({})
-    assert off == {"usable": False, "path": None, "source": None, "configured": None}
+    assert off == {"usable": False, "path": None, "source": None, "configured": None, "broken": None}
     assert ps.system_note({}) == ps.PDF_SYSTEM_NOTE
     cfg = {"tools": {"poppler_path": str(poppler)}}
     on = ps.pdftoppm_status(cfg)
@@ -109,6 +115,37 @@ def test_status_prefers_path(monkeypatch):
     monkeypatch.setattr(ps.shutil, "which", lambda name, *a, **k: "/usr/bin/pdftoppm" if name == ps.PDFTOPPM else None)
     st = ps.pdftoppm_status({"tools": {"poppler_path": None}})
     assert st["usable"] and st["source"] == "path" and ps.system_note({}) is None
+    # pdftoppm thấy trên PATH daemon → thư mục đó cũng vào path_extra của run (env_extra của run có thể thay PATH)
+    assert ps.run_path_extra({}) == [str(Path("/usr/bin/pdftoppm").parent)]
+
+
+def test_probe_runs_binary_like_claude_code(tmp_path: Path, monkeypatch):
+    # thật: không có file / file rác (không chạy được) → False
+    assert not ps.probe(str(tmp_path / "missing" / EXE))
+    junk = tmp_path / EXE
+    junk.write_bytes(b"not a program")
+    assert not ps.probe(str(junk))
+    # quy tắc của Claude Code: mã 0, hoặc mã ≠ 127 VÀ có stderr
+    import subprocess as sp
+
+    seen = []
+    for rc, err, ok in ((0, b"", True), (99, b"pdftoppm version 24.02.0", True), (1, b"", False), (127, b"not found", False)):
+        monkeypatch.setattr(ps.subprocess, "run", lambda argv, **k: seen.append(argv) or sp.CompletedProcess(argv, rc, b"", err))
+        assert ps.probe("/x/pdftoppm") is ok
+    assert seen[0] == ["/x/pdftoppm", "-v"]
+
+
+def test_broken_binary_is_not_usable(poppler: Path, no_system_pdftoppm, monkeypatch, hub_home, tmp_path: Path):
+    # pdftoppm có file nhưng `-v` hỏng → KHÔNG coi là dùng được (giữ lời nhắc "never pass pages"), doctor cảnh báo
+    monkeypatch.setattr(ps, "probe", lambda exe: False)
+    cfg = {"tools": {"poppler_path": str(poppler)}}
+    st = ps.pdftoppm_status(cfg)
+    assert not st["usable"] and st["broken"] == str(poppler / EXE) and ps.system_note(cfg) == ps.PDF_SYSTEM_NOTE
+    from cfharness import hub_doctor as D
+
+    HubConfig(hub_home.config).set("tools.poppler_path", str(poppler))
+    c = {x["id"]: x for x in D.run(hub_home, claude_binary=str(tmp_path / "no-claude"))["checks"]}["pdftoppm"]
+    assert not c["ok"] and c["level"] == "warning" and "-v" in c["detail"] and "scoop install poppler" in c["fix"]
 
 
 def test_system_prompt_block_only_when_missing():
@@ -192,3 +229,20 @@ def test_doctor_pdftoppm_check(hub_home, poppler: Path, no_system_pdftoppm, tmp_
     (poppler / EXE).unlink()  # cấu hình trỏ thư mục không còn pdftoppm → cảnh báo + cách sửa
     c = check(D.run(hub_home, claude_binary=str(tmp_path / "no-claude")))
     assert not c["ok"] and c["level"] == "warning" and "tools.poppler_path" in c["fix"]
+
+
+def test_eval_overlay_prompt_matches_production_pdf_note(tmp_path: Path, monkeypatch):
+    # prompt eval phải giống prompt run thật: máy không có pdftoppm → cùng khối "# Reading PDF files"
+    from cfharness.evals import overlay
+
+    seen: list = []
+    import cfharness.prompt as P
+
+    real = P.build_system_prompt
+    monkeypatch.setattr(P, "build_system_prompt", lambda *a, **k: seen.append(k.get("pdf_note")) or real(*a, **k))
+    hub = SimpleNamespace(config={}, knowledge=None)
+    monkeypatch.setattr(ps, "pdf_render_available", lambda cfg=None: False)
+    a = overlay.prompt_fingerprint(hub, "a1", tmp_path)
+    monkeypatch.setattr(ps, "pdf_render_available", lambda cfg=None: True)
+    b = overlay.prompt_fingerprint(hub, "a1", tmp_path)
+    assert seen == [ps.PDF_SYSTEM_NOTE, None] and a != b
