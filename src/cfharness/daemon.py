@@ -838,9 +838,15 @@ def run_foreground(paths: HubPaths) -> None:
     hold_while_importing(paths)  # nhập hub từ web: job `hub import-job` đang ghi đè hub.db → chờ nó xong (nó tự khởi động lại daemon)
     global _INSTANCE_LOCK
     _INSTANCE_LOCK = acquire_instance_lock(paths, wait_s=3.0)
+    if _INSTANCE_LOCK is None and supervisor() == "launchd":
+        # Job launchd thua khoá (bản ngoài launchd đang giữ): CHỜ khoá thay vì thoát 1 — thoát 1 làm launchd chạy lại mỗi
+        # ThrottleInterval vô hạn (sự cố runs=6511). Bản ngoài chết → job này tiếp quản ngay, hub không mất giám sát.
+        print(f"daemon (launchd) chờ khoá {instance_lock_path(paths)} — bản khác đang chạy cho {paths.home}", file=sys.stderr)
+        while _INSTANCE_LOCK is None:
+            _INSTANCE_LOCK = acquire_instance_lock(paths, wait_s=LOCK_RETRY_S)
     if _INSTANCE_LOCK is None:
-        # Bản khác đang chạy/đang khởi động trên CÙNG HUB_HOME (vd LaunchDaemon vừa bật + lệnh CLI tự khởi động cùng lúc):
-        # thoát mã ≠ 0 để launchd (KeepAlive SuccessfulExit=false) thử lại sau, không bao giờ chạy 2 daemon ghi một hub.db.
+        # Bản khác đang chạy/đang khởi động trên CÙNG HUB_HOME (vd lệnh CLI tự khởi động hai lần cùng lúc):
+        # thoát mã ≠ 0, không bao giờ chạy 2 daemon ghi một hub.db.
         print(f"daemon đã chạy cho {paths.home} (khoá {instance_lock_path(paths)}) — thoát", file=sys.stderr)
         raise SystemExit(1)
     tightened = paths.tighten_permissions()  # cài đặt cũ: siết HUB_HOME + mục cấp 1 (lỗi chỉ cảnh báo)
@@ -873,6 +879,7 @@ SUPERVISED_RESTART_CODE = 75  # EX_TEMPFAIL: thoát ≠ 0 → launchd chạy l�
 SUPERVISOR_LABEL_PREFIX = "com.cfharness.daemon."
 _UPDATE_BUSY_PHASES = ("starting", "waiting_daemon", "installing", "rolling_back")  # rolling_back: helper thay hub.db + cài lại bản cũ
 _IS_MACOS = sys.platform == "darwin"
+LOCK_RETRY_S = 30.0  # job launchd thua khoá: thử lấy lại mỗi chừng này giây (bằng ThrottleInterval của plist)
 
 
 def supervisor() -> str | None:
@@ -917,6 +924,24 @@ def wait_supervised(paths: HubPaths, wait_s: float) -> int | None:
     return None
 
 
+def _kickstart_autostart(paths: HubPaths) -> bool:
+    """macOS + LaunchAgent tự khởi động của HUB_HOME này đã cài: `launchctl kickstart -k gui/<uid>/<label>` để launchd chạy
+    daemon. True khi launchd nhận lệnh; False (chưa cài / job chưa nạp / lỗi) → bên gọi tự bật như cũ.
+    Bản tự bật ngoài launchd giữ `daemon.lock` → job launchd thua khoá (sự cố sau `cfharness update`)."""
+    if not _IS_MACOS:
+        return False
+    from .systems.autostart import Autostart
+
+    au = Autostart(paths)
+    if not au.definition_path().exists():  # rẻ: không gọi launchctl khi chưa cài (HUB_HOME tạm của test)
+        return False
+    rc, _, err = au._run(["/bin/launchctl", "kickstart", "-k", f"{au._gui()}/{au.name}"])
+    if rc != 0:
+        print(f"launchctl kickstart {au.name} lỗi ({rc}): {err.strip()[:200]} — tự khởi động daemon", file=sys.stderr)
+        return False
+    return True
+
+
 def spawn_background(paths: HubPaths, wait_s: float = 15.0) -> int:
     """Khởi chạy daemon nền (tách session), chờ socket sẵn sàng. Trả pid."""
     paths.ensure()
@@ -925,6 +950,8 @@ def spawn_background(paths: HubPaths, wait_s: float = 15.0) -> int:
     env = dict(os.environ)
     env["CFHARNESS_HOME"] = str(paths.home)
     if instance_lock_held(paths):  # bản khác đang khởi động (chưa mở socket) → chờ nó, không bật thêm bản thứ hai
+        return _wait_ready(paths, wait_s, None)
+    if _kickstart_autostart(paths):  # đã cài LaunchAgent: để launchd chạy daemon (đúng --home), không bật bản ngoài launchd
         return _wait_ready(paths, wait_s, None)
     proc = subprocess.Popen(
         [sys.executable, "-m", "cfharness", "daemon", "run"],
