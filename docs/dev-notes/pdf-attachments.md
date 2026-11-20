@@ -3,6 +3,10 @@
 Người gửi PDF cho điều phối viên qua web, Telegram hoặc Slack. Cả ba kênh đi qua `manager.chat` → `ManagerService._save_files_async`
 → `write_attachment_files` (`manager/service.py`), nên mọi kênh có cùng hành vi.
 
+TUI và REPL (`cfharness chat`, `top` → `m`) KHÔNG nằm trong luồng này: kéo–thả PDF chỉ để lại đường dẫn trong chữ của tin
+(`manager/attachments.py` chỉ tách ảnh), nên không có bản chữ, không tách phần, không có ghi chú trong `files_note`. Agent chỉ có khối
+system prompt "đọc PDF chỉ với `file_path`" (mục 4).
+
 ## 1. Vì sao cần
 
 Kết quả kiểm với claude 2.1.329 (tool Read, khung quyền strict chỉ có Read):
@@ -21,47 +25,82 @@ Lệnh tái hiện (trong thư mục có PDF):
 ## 2. Luồng
 
 1. `decode_files` nhận PDF theo nội dung (`%PDF-`), trần cứng 10 MB (`FILE_MAX_BYTES`).
-2. `_save_files_async` lấy thư mục hội thoại và cấu hình trên event loop, rồi chạy `write_attachment_files` trong thread
-   (`asyncio.to_thread`). Trích PDF có thể mất vài giây và không được chặn loop của daemon.
-3. Bản gốc ghi vào `attachments/doc-<thời điểm>-<ngẫu nhiên>-<tên>.pdf` (0600, `O_EXCL`).
-4. `doc_extract.extract_isolated` chạy `python -I -m cfharness.manager.pdf_worker` (tiến trình con, cửa sổ ẩn trên Windows):
-   - stdin: một dòng JSON tuỳ chọn, sau đó là byte PDF. stdout: `[[hậu tố, base64], …]`.
-   - Hạn giờ cứng `attachments.pdf.timeout_s` (mặc định 90 s). Quá hạn thì tiến trình bị giết và hub chỉ lưu bản gốc.
-   - Hậu tố trả về phải khớp `PDF_COPY_SUFFIX` (`.txt` hoặc `.pNNN-MMM.pdf`). Hậu tố lạ thì bỏ toàn bộ kết quả.
-5. Bản trích ghi cạnh bản gốc:
-   - `<tên>.pdf.txt`: chữ theo trang, mỗi trang có tiêu đề `--- page N ---`.
+2. `ManagerService.chat` khoá theo hội thoại (`_conv_lock`) từ lúc lưu tệp tới lúc ghi tin + submit/steer. Tin thứ hai của cùng hội
+   thoại gửi trong lúc tin có PDF đang trích sẽ chờ, rồi steer vào run của tin PDF (chờ run đó rời `queued` tối đa `QUEUED_WAIT_S`
+   = 5 s). Không có khoá thì tin sau chạy trước và tin PDF bị steer vào run của nó, thứ tự tin của người bị đảo.
+3. `_save_files_async` lấy thư mục hội thoại và cấu hình trên event loop, rồi chạy `write_attachment_files` trong thread
+   (`asyncio.to_thread`). Trích PDF có thể mất nhiều giây và không được chặn loop của daemon.
+4. Bản gốc ghi vào `attachments/doc-<thời điểm>-<ngẫu nhiên>-<tên>.pdf` (0600, `O_EXCL`).
+5. Các PDF của một tin được trích SONG SONG (`ThreadPoolExecutor`, mỗi PDF một tiến trình con), mỗi cái cùng hạn giờ cứng
+   `attachments.pdf.timeout_s` (mặc định 40 s, tối đa 50 s). Cả tin vì thế tốn tối đa khoảng một hạn giờ, dưới hạn 60 s mà web chờ
+   `manager.chat`. Trước đây trích lần lượt: 4 PDF chậm vượt 60 s, web báo lỗi trong khi daemon vẫn nhận tin, người gửi lại thành
+   lượt trùng.
+6. `doc_extract.extract_isolated` chạy `python -I -m cfharness.manager.pdf_worker` (tiến trình con, cửa sổ ẩn trên Windows):
+   - stdin: một dòng JSON tuỳ chọn, sau đó là byte PDF.
+   - stdout: mỗi sự kiện của `pdf_events` một dòng JSON, ghi và flush ngay: `{"pages"}` → các `{"part", "first", "last", "b64"}` →
+     `{"parts_end"}` → các `{"page", "text"}` → `{"text_end"}` → `{"done"}`. Tách phần chạy TRƯỚC vì chỉ chép đối tượng trang
+     (nhanh), dùng tối đa 40% ngân sách mềm; chữ dùng phần còn lại.
+   - Ngân sách mềm `time_budget_s` ≈ 80% hạn giờ cứng, chỉ kiểm giữa các trang. Một trang bệnh hoạn treo `extract_text` thì hạn giờ
+     cứng giết tiến trình; `subprocess.run` vẫn trả phần stdout đã ghi (`TimeoutExpired.stdout`), nên các phần và trang đã xong được
+     giữ, bản chữ ghi rõ dừng vì hết giờ.
+   - `pdf_assemble` (phía daemon) dựng kết quả từ các dòng và kiểm TỪNG mục: phần phải khớp `.pNNN-MMM.pdf` (3–8 chữ số, đúng
+     `first`/`last`, nối tiếp phần trước), trang phải đúng thứ tự, base64 hợp lệ. Mục sai bị bỏ riêng, không bỏ cả kết quả. (Trước
+     đây regex chỉ nhận 3–5 chữ số nên PDF ≥ 100 000 trang mất cả bản chữ lẫn mọi phần.)
+7. Bản trích ghi cạnh bản gốc:
+   - `<tên>.pdf.txt`: dòng đầu nêu phạm vi trang, vd `[PDF text copy made by cfharness: ONLY pages 1-13 of 400 (stopped: extraction
+     time limit) …]`; sau đó chữ theo trang, mỗi trang có tiêu đề `--- page N ---`; bị cắt thì cuối tệp nhắc lại phạm vi. Trước đây
+     chỉ có một dòng tiếng Việt ở CUỐI tệp; tệp vài MB thì Read (trần 25k token) không tới được cuối, và điều phối viên trả lời "13
+     trang" cho PDF 400 trang.
    - `<tên>.pdf.p001-050.pdf`, …: chỉ có khi PDF dài hơn `split_pages` trang. Read đọc từng phần chỉ với `file_path` và vẫn thấy
      bảng, hình.
-6. `prompts.files_note` báo cho điều phối viên từng trường hợp:
-   - Có bản chữ: liệt kê bản chữ và các phần.
-   - Không có bản chữ (scan, mã hoá, hỏng): nói rõ, bảo Read bản gốc chỉ với `file_path`.
+8. `write_attachment_files` trả thêm `pdf_info` = {bản gốc: info} (`status`, `pages`, `text_pages`, `text_reason`, `parts_last`,
+   `parts_reason`, `no_text`). `prompts.files_note` dùng nó để nói với điều phối viên:
+   - Tổng số trang; bản chữ phủ trang nào (`text copy of pages 1-500 of 2000 ONLY (stopped: page limit)`); các phần phủ trang nào.
+   - Trang còn lại: có `pdftoppm` → Read bản gốc với `pages`; không có và bản gốc ≤ 600 trang → Read bản gốc chỉ với `file_path`
+     (đắt, chỉ khi cần); không có và > 600 trang → nói rõ không đọc được (API từ chối PDF > 600 trang), báo người, không đoán.
+   - Không có bản chữ: lý do cụ thể (scan, có mật khẩu, không phân tích được, hết giờ).
    - Máy không có `pdftoppm`: thêm câu "never pass `pages`".
 
 ## 3. Trích (`manager/doc_extract.py`, thư viện `pypdf`)
 
 | Trường hợp | Kết quả |
 |---|---|
-| PDF có chữ | `.txt`, tối đa `PDF_TEXT_MAX_PAGES` = 500 trang và `OUT_MAX_BYTES` = 8 MB; bị cắt thì cuối chữ có dòng `--- (cắt bớt: …) ---` |
-| PDF scan (không trang nào có chữ) | Không có `.txt`; vẫn tách phần nếu dài |
-| Mã hoá | Thử mật khẩu rỗng. Mở được thì xử lý bình thường; không mở được thì không có bản trích |
-| Hỏng, cụt, rác | Không ném lỗi; trả `[]` (chỉ lưu bản gốc) |
-| Một trang lỗi | Trang đó ghi `(không đọc được chữ của trang này)`, các trang khác vẫn trích |
+| PDF có chữ | `.txt`, tối đa `PDF_TEXT_MAX_PAGES` = 500 trang và `OUT_MAX_BYTES` = 8 MB; dòng đầu nêu phạm vi trang và lý do cắt |
+| PDF scan (không trang nào có chữ) | Không có `.txt` (`no_text: scanned`); vẫn tách phần nếu dài |
+| Mã hoá | Thử mật khẩu rỗng. Mở được thì xử lý bình thường; không mở được thì không có bản trích (`status: encrypted`) |
+| Hỏng, cụt, rác | Không ném lỗi; không có bản trích (`status: unreadable`), chỉ lưu bản gốc |
+| Một trang lỗi | Trang đó ghi `(the text of this page could not be extracted)`, các trang khác vẫn trích |
 
 Giới hạn công việc:
-- pypdf có sẵn trần giải nén (`ZLIB_MAX_OUTPUT_LENGTH`, `MAX_DECLARED_STREAM_LENGTH`…).
-- Ngân sách thời gian `PDF_TIME_BUDGET_S` được kiểm giữa các trang, một lần cho phần chữ và một lần cho phần tách.
-- Tách phần: tối đa `attachments.pdf.max_parts` phần, tổng tối đa `PDF_PARTS_MAX_BYTES` (48 MB).
+- pypdf có sẵn trần giải nén (`ZLIB_MAX_OUTPUT_LENGTH`, `MAX_DECLARED_STREAM_LENGTH`…). pypdf khoá ở 6.21.4 (`>=6.0,<7`): bản đã ra
+  hơn 2 tuần; lên major mới phải xem lại vì thư viện này đọc tệp không tin cậy.
+- Ngân sách thời gian mềm được kiểm giữa các trang (tách phần ≤ 40%, chữ phần còn lại); hạn giờ cứng của tiến trình con lo trang treo.
+- Tách phần (`pdf_part_pages`): tối đa `attachments.pdf.max_parts` phần; số trang mỗi phần = `split_pages`, nới lên tới
+  `PDF_PART_MAX_PAGES` = 100 để các phần phủ hết tài liệu (2000 trang, 20 phần → 100 trang/phần). PDF 3000 trang thì các phần phủ
+  trang 1–2000 và `files_note` nói rõ. Tổng tối đa `PDF_PARTS_MAX_BYTES` (48 MB). `split_pages` tối đa 100 vì Read đọc cả phần một
+  lần (API từ chối PDF > 600 trang).
 - Tiến trình con trên POSIX tự đặt `RLIMIT_AS` 2 GB. Windows chỉ có hạn giờ.
 
 Logger `pypdf` bị hạ xuống ERROR để PDF lỗi nhẹ không làm ồn `hub.log`.
 
+Đã đo trên máy dev (Windows 11): 4 PDF chậm 8 trang (200k toán tử `Tj`/trang) trong một tin: 38,5 s (trước: 131 s, lần lượt). PDF 400
+trang chữ dày: bản chữ trang 1–16 + 8 phần phủ 1–400. PDF 3000 trang: bản chữ 1–500 + 20 phần × 100 trang phủ 1–2000. PDF 100 000
+trang: 20 phần tên 6 chữ số được giữ. PDF có một trang treo, hạn giờ 5 s: giữ trang 1–3 và mọi phần.
+
 ## 4. Poppler (`pdf_support.py`)
 
-- `pdftoppm_status(cfg)` dò `pdftoppm` trên PATH của daemon, sau đó trong `tools.poppler_path`. Kết quả cache theo
-  (giá trị cấu hình, PATH) trong `CACHE_TTL_S` = 300 s, nên không gọi tiến trình con cho mỗi tin. Đổi `tools.poppler_path` thì dò lại ngay.
+- `pdftoppm_status(cfg)` dò `pdftoppm` trên PATH của daemon, sau đó trong `tools.poppler_path`, rồi CHẠY thử `pdftoppm -v`
+  (`probe`) theo quy tắc của Claude Code 2.1.329: dùng được khi mã thoát 0, hoặc mã khác 127 và có in ra stderr. File có mà chạy
+  không được (hỏng, sai kiến trúc) → không dùng được (`broken`): hub vẫn nhắc "never pass `pages`", doctor cảnh báo.
+  Kết quả cache theo (giá trị cấu hình, PATH) trong `CACHE_TTL_S` = 300 s, nên không gọi tiến trình con cho mỗi tin. Đổi
+  `tools.poppler_path` thì dò lại ngay.
+- PATH là PATH của daemon lúc khởi động. Cài poppler bằng scoop/winget khi daemon đang chạy: `hub doctor` (tiến trình mới, PATH mới)
+  báo có, nhưng daemon vẫn nhắc "không có pdftoppm" tới khi khởi động lại. Đặt `tools.poppler_path` thì có hiệu lực ngay. Doctor ghi
+  điều này trong mục `pdftoppm`.
 - Không có `pdftoppm`:
   - Mọi run có khối `# Reading PDF files` ngay sau quy ước hub (`prompt.build_system_prompt(pdf_note=…)`). Khối này ổn định theo máy
-    nên không phá prompt cache. Run resume dùng lại prompt cũ của session.
+    nên không phá prompt cache. Run resume dùng lại prompt cũ của session. Takeover (`tui/takeover.py`) và dấu vân tay prompt của
+    eval (`evals/overlay.py`) cũng truyền `pdf_note`, nên prompt eval giống prompt run thật.
   - `files_note` có thêm câu nhắc khi tin có PDF.
 - `tools.poppler_path` = thư mục chứa `pdftoppm(.exe)`:
   - Khi đặt, giá trị phải là đường dẫn tuyệt đối tới thư mục có sẵn, chứa `pdftoppm`; không chứa NUL, xuống dòng hay ký tự ngăn cách
@@ -71,9 +110,12 @@ Logger `pypdf` bị hạ xuống ERROR để PDF lỗi nhẹ không làm ồn `h
     chèn đầu PATH; thêm cuối an toàn hơn vì thư mục poppler không che được `git`, `python`… sẵn có, chỉ bổ sung lệnh còn thiếu.
   - Nhánh `tools` ∈ `integrity.SECURITY_KEYS` (đổi PATH của mọi run). Web chỉ hiển thị khoá này; đổi bằng
     `cfharness config set tools.poppler_path <thư mục>`.
+- `pdftoppm` tìm thấy trên PATH của daemon: thư mục của nó cũng vào `path_extra`. `env_extra` của runtime có thể thay hẳn PATH của
+  run; khi đó hub đã bỏ lời nhắc "never pass `pages`" mà run lại không thấy `pdftoppm`.
 - `hub doctor` có mục `pdftoppm` (mức cảnh báo):
-  - Thiếu: gợi ý `scoop install poppler`, `winget install oschwartz10612.Poppler`, `brew install poppler`, `apt install poppler-utils`,
-    hoặc đặt `tools.poppler_path`.
+  - Thiếu: gợi ý `scoop install poppler`, `winget install oschwartz10612.Poppler`, `brew install poppler`, `apt install poppler-utils`
+    (rồi khởi động lại daemon), hoặc đặt `tools.poppler_path`.
+  - Có file mà `pdftoppm -v` không chạy được: cảnh báo, gợi ý cài lại.
   - `tools.poppler_path` hỏng (thư mục mất, không còn `pdftoppm`): cảnh báo kèm cách sửa.
 
 ## 5. Cấu hình
@@ -81,12 +123,16 @@ Logger `pypdf` bị hạ xuống ERROR để PDF lỗi nhẹ không làm ồn `h
 | Khoá | Mặc định | Ý nghĩa |
 |---|---|---|
 | `attachments.pdf.split` | `true` | Tách PDF dài thành các phần (bản chữ vẫn luôn có) |
-| `attachments.pdf.split_pages` | `50` | Số trang mỗi phần; PDF nhiều hơn N trang mới tách (1–10000) |
-| `attachments.pdf.max_parts` | `20` | Số phần tối đa mỗi PDF (1–200) |
-| `attachments.pdf.timeout_s` | `90` | Hạn giờ tiến trình trích một PDF (5–600 s) |
+| `attachments.pdf.split_pages` | `50` | Số trang mỗi phần; PDF nhiều hơn N trang mới tách (1–100) |
+| `attachments.pdf.max_parts` | `20` | Số phần tối đa mỗi PDF (1–200); số trang mỗi phần tự nới (≤ 100) để phủ hết PDF |
+| `attachments.pdf.timeout_s` | `40` | Hạn giờ cứng trích PDF của một tin, các PDF chạy song song (5–50 s, dưới hạn 60 s của web) |
 | `tools.poppler_path` | `null` | Thư mục chứa `pdftoppm`; chỉ người đặt qua CLI |
 
-Ba khoá `split*`/`max_parts` sửa được trên web (Cài đặt → Điều phối viên). `config.validate_setting` kiểm kiểu và khoảng của mọi khoá.
+Ba khoá `split*`/`max_parts` sửa được trên web (Cài đặt → Điều phối viên). `config.validate_setting` kiểm kiểu và khoảng của mọi khoá
+(khoảng số lấy từ `doc_extract.PDF_LIMITS`, cùng chỗ với `pdf_options`).
+
+Web (`web/manager.py`): tin có tệp gọi `manager.chat` với hạn chờ `CHAT_FILES_TIMEOUT_S` = 120 s thay vì 60 s mặc định. Vẫn quá hạn
+thì trả 504 với lời báo "tin có thể vẫn đã được nhận — tải lại hội thoại và kiểm tra trước khi gửi lại", không để lỗi 500.
 
 ## 6. Việc chưa làm
 
@@ -94,12 +140,17 @@ Ba khoá `split*`/`max_parts` sửa được trên web (Cài đặt → Điều 
   và takeover tương tác. Các lời gọi này không đọc PDF đính kèm.
 - PDF trong workspace của agent (không phải tệp người gửi cho điều phối viên) không được trích. Agent dùng khối system prompt (chỉ
   `file_path`) hoặc cài poppler.
+- Trích PDF vẫn chạy trước khi `manager.chat` trả (tối đa một hạn giờ, ≤ 50 s). Cách triệt để hơn (trả ngay, gắn bản trích khi xong)
+  chưa làm.
 
 ## 7. Test
 
 - `tests/test_doc_extract.py`: PDF sinh trong test bằng pypdf (`make_pdf`, có font Identity-H cho tiếng Việt, mã hoá AES).
-  Phủ các ca: chữ, tiếng Việt, hỏng/cụt, mã hoá, scan, trần trang/dung lượng/thời gian, tách phần, tiến trình con (thật + hết giờ +
-  kết quả lạ), `write_attachment_files`, `files_note`.
-- `tests/test_pdf_support.py`: kiểm `tools.poppler_path` + `attachments.pdf.*`, cache dò, khối system prompt, PATH của run (`_run_env`
-  và `RunSpec` qua `Hub` + `FakeRuntime`), mục doctor.
+  Phủ các ca: chữ, tiếng Việt, hỏng/cụt, mã hoá, scan, trần trang/dung lượng/thời gian (dòng đầu nêu phạm vi), tách phần + nới
+  trang/phần, tiến trình con (thật; bị giết giữa chừng vẫn giữ dòng đã ghi; mục lạ bị bỏ từng cái; tên phần 6 chữ số),
+  `write_attachment_files` (song song), `files_note` (phạm vi phủ, > 600 trang, có/không pdftoppm).
+- `tests/test_pdf_support.py`: kiểm `tools.poppler_path` + `attachments.pdf.*`, cache dò, `probe` (`pdftoppm -v`), binary hỏng, khối
+  system prompt (cả prompt eval), PATH của run (`_run_env` và `RunSpec` qua `Hub` + `FakeRuntime`), mục doctor.
+- `tests/test_manager.py::test_pdf_message_keeps_order_with_message_sent_during_extraction`: thứ tự tin khi trích PDF lâu.
+- `tests/test_web_manager.py::test_send_with_files_waits_longer_and_timeout_is_clear`: hạn chờ web + 504 rõ ràng.
 - Kênh: `tests/test_telegram_media.py::test_pdf_document_gets_text_copy_and_parts`, `tests/test_slack_media.py::test_pdf_file_accepted_with_text_copy`.
