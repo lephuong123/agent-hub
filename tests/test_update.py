@@ -433,3 +433,87 @@ def test_open_terminals_counts_only_interactive_cfharness():
             "  105 vim chat.txt",
             f"  {os.getpid()} /x/python /x/cfharness chat"]
     assert open_terminals(rows) == 2
+
+
+# Sự cố thật (macOS, sau `cfharness update`): daemon được bật lại NGOÀI launchd (không --home) → job LaunchAgent thua
+# `daemon.lock`, thoát 1 và bị launchd chạy lại vô hạn (runs=6511). Sửa: đã cài LaunchAgent thì `kickstart -k` thay vì Popen;
+# job launchd thua khoá thì chờ khoá, không thoát 1. Mọi lệnh launchctl/Popen đều giả.
+def _fake_autostart(monkeypatch, tmp_path, *, installed: bool, rc: int = 0) -> list[list[str]]:
+    from cfharness import daemon as D
+    from cfharness.systems.autostart import Autostart
+
+    plist = tmp_path / "agent.plist"
+    if installed:
+        plist.write_text("x", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def run(self, argv):
+        calls.append(list(argv))
+        return rc, "", "Could not find service" if rc else ""
+
+    monkeypatch.setattr(D, "_IS_MACOS", True)
+    monkeypatch.setattr(Autostart, "definition_path", lambda self: plist)
+    monkeypatch.setattr(Autostart, "_run", run)
+    monkeypatch.setattr(D, "_wait_ready", lambda paths, wait_s, proc: 4242 if proc is None else 777)
+    return calls
+
+
+def test_spawn_background_kickstarts_launchd_when_autostart_installed(hub_home, monkeypatch, tmp_path):
+    from cfharness import daemon as D
+    from cfharness.systems.autostart import Autostart
+
+    calls = _fake_autostart(monkeypatch, tmp_path, installed=True)
+    monkeypatch.setattr(D.subprocess, "Popen", lambda *a, **k: pytest.fail("không được tự bật daemon ngoài launchd"))
+    assert D.spawn_background(hub_home) == 4242
+    label = Autostart(hub_home).name
+    assert calls == [["/bin/launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"]]
+
+
+@pytest.mark.parametrize("installed,rc", [(False, 0), (True, 113)])  # chưa cài / job chưa nạp → vẫn tự bật như cũ
+def test_spawn_background_falls_back_to_popen(hub_home, monkeypatch, tmp_path, installed, rc):
+    from cfharness import daemon as D
+
+    calls = _fake_autostart(monkeypatch, tmp_path, installed=installed, rc=rc)
+    popened: list[list[str]] = []
+    monkeypatch.setattr(D.subprocess, "Popen", lambda argv, **k: popened.append(argv) or object())
+    assert D.spawn_background(hub_home) == 777
+    assert len(popened) == 1 and popened[0][-2:] == ["daemon", "run"]
+    assert len(calls) == (1 if installed else 0)
+
+
+class _StopAfterLock(Exception):
+    pass
+
+
+@pytest.mark.parametrize("label", ["com.cfharness.daemon.x", None])
+def test_run_foreground_lock_lost_under_launchd_waits(hub_home, monkeypatch, label):
+    from cfharness import daemon as D
+    from cfharness import oscompat
+
+    monkeypatch.setattr(oscompat, "set_private_umask", lambda: None)
+    monkeypatch.setattr(D, "_IS_MACOS", True)
+    monkeypatch.setattr(D, "_INSTANCE_LOCK", None)
+    if label:
+        monkeypatch.setenv("XPC_SERVICE_NAME", label)
+    else:
+        monkeypatch.delenv("XPC_SERVICE_NAME", raising=False)
+    results = [None, None, "handle"]  # thua khoá 2 lần rồi bản ngoài chết → lấy được
+    waits: list[float] = []
+
+    def acquire(paths, wait_s=0.0):
+        waits.append(wait_s)
+        return results.pop(0)
+
+    def stop(paths):
+        raise _StopAfterLock
+
+    monkeypatch.setattr(D, "acquire_instance_lock", acquire)
+    monkeypatch.setattr(D, "_log_settings", stop)  # bước ngay sau khi giữ khoá: dừng test ở đây
+    if label:
+        with pytest.raises(_StopAfterLock):
+            D.run_foreground(hub_home)
+        assert waits == [3.0, D.LOCK_RETRY_S, D.LOCK_RETRY_S] and D._INSTANCE_LOCK == "handle"
+    else:
+        with pytest.raises(SystemExit) as ei:
+            D.run_foreground(hub_home)
+        assert ei.value.code == 1 and waits == [3.0]
