@@ -80,6 +80,23 @@ Chữ ký ở docstring `schedules/rpc.py`. CLI ở `schedules/cli.py`. Telegram
 (cổng người + allowlist), văn bản thuần không nút, tên lịch qua `visible()`. Tạo/tắt lịch từ Telegram = nhắn điều phối viên. Không sửa `web/`.
 Event mới (EVENT_LEVELS + `docs/schema/event.v1.json` đã sinh lại): `schedule.created|updated{action: edit|resume|rm}|paused|fired|skipped|failed`.
 
+## Gửi thêm kết quả sang chat riêng (`deliver_to.also`, 2026-11-20)
+Một lịch có thể gửi kết quả tới tối đa 4 chat riêng ngoài nơi nhận chính, vd báo cáo 07:00 về cả Telegram và Slack DM:
+`cfharness schedule edit <id> --also telegram:<chat_id> --also slack:D…` (`--no-also` bỏ hết; `schedule show` in `… + <kênh>`).
+- Lưu trong `deliver_to.also` (không migration). RPC nhận tham số `also` (có mặt = thay toàn bộ, `[]` = bỏ) hoặc `deliver_to.also`; vắng
+  cả hai → GIỮ danh sách cũ (sửa nơi nhận chính bằng chuỗi từ web/CLI `--to`/`--clear-to` không làm mất).
+- Chỉ chat riêng: `telegram:<id dương>` / `slack:D…` (`ALSO_RE`) — không web/cli/tui, nhóm Telegram, kênh chung Slack. Bỏ trùng, bỏ kênh
+  trùng nơi nhận chính (cả lúc lưu lẫn lúc gửi so với kênh thực nhận bản chính).
+- CHỈ NGƯỜI đặt: điều phối viên tạo lịch có `also` → từ chối ở `manager_check` (lớp 1 + 2 + lần 3) — không cho điều phối viên đẩy nội
+  dung sang chat tuỳ ý. (`schedule.update` vốn đã chỉ người.)
+- Gửi (`_deliver_also`): sau bản chính, mỗi kênh một `manager.reply{conversation_id: None, kind: notify, notify_kind: schedule, also: true}`.
+  kind agent/task: cùng chữ với bản chính (cả tin tự tạm dừng); kind manager: bản chính đi đường `_finish_run` của hội thoại, bản sao phát
+  ở `_finish_fire` với tiêu đề "⏰ Kết quả lịch '…'". Bot nhận ở `ManagerChat.on_event` → tin mới (không thread; Slack DM `root_post_ok`);
+  chat KHÔNG còn trong allowlist của bot lúc gửi → `_deliver` bỏ (`notify_chats`).
+- Web: chỉ hiển thị (`sched_dest`: "… + gửi thêm: …"); form sửa không đặt/bỏ `also` (dùng CLI).
+Test: `tests/test_schedules.py` (`test_also_*`, `test_manager_cannot_set_also`, `test_cli_also_flags`), `tests/test_telegram_manager.py`
+và `tests/test_slack_mentions.py` (`test_schedule_also_copy_*`: gửi tới chat trong allowlist, bỏ chat ngoài).
+
 ## Test (`tests/test_schedules.py`, 69 ca, không gọi claude)
 Parser (17 dạng đúng, 17 dạng sai), ngữ nghĩa trường cron, mốc kế (ngày/ngày thường/OR ngày-thứ/29-2/không bao giờ), every/once, DST
 New York (không crash, tăng dần), ước tính khoảng/lượt-ngày; đồng hồ giả (`hub.schedules.clock`): bắn đúng giờ + giao kết quả về

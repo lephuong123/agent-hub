@@ -1,7 +1,8 @@
 """`hub.schedules` — lịch chạy tự động (kiểu `cronjob_manage` của Hermes) cho điều phối viên, agent và task.
 
 - **Lịch** (`schedules`, migration v16): `kind` manager | agent | task, biểu thức (`cron.py`: cron 5 trường, `every 30m`, `daily 08:00`,
-  `weekdays 08:30`, `at …` một lần), múi giờ = giờ máy, `deliver_to` {conversation_id?, channel?} (rỗng = hội thoại gần nhất của người),
+  `weekdays 08:30`, `at …` một lần), múi giờ = giờ máy, `deliver_to` {conversation_id?, channel?, also?} (rỗng = hội thoại gần nhất của người;
+  `also` = chat riêng nhận THÊM kết quả, chỉ người đặt),
   `budget_usd` mỗi lượt, `created_by` = `user` | `manager:<agent>` (lấy từ NGƯỜI GỌI, không tin tham số). Trạng thái active | paused | done
   (lịch một lần đã chạy). Xoá = xoá mềm (`deleted_at`) — lịch sử lượt (`schedule_fires`) giữ nguyên.
 - **Vòng nền** (`schedules.tick_s`, khởi động ở `hub.started`): lịch đến hạn → kiểm ESTOP (hub/team), agent pause/archive, chưa có điều phối
@@ -40,6 +41,9 @@ KINDS = ("manager", "agent", "task")
 STATUSES = ("active", "paused", "done")
 LIVE = ("queued", "running", "waiting_human")
 CHANNEL_RE = re.compile(r"^(web|cli|tui|telegram:-?\d{1,20}|slack:[CDG][A-Z0-9]{2,20})$")  # slack: DM (D…) / kênh (C…, G…)
+# `deliver_to.also`: kênh nhận THÊM kết quả — chỉ chat riêng (Telegram chat riêng = id dương, Slack DM = D…); không web/cli/tui/nhóm/kênh chung
+ALSO_RE = re.compile(r"^(telegram:\d{1,20}|slack:D[A-Z0-9]{2,20})$")
+ALSO_MAX = 4
 DEFAULTS: dict[str, Any] = {
     # hạn mức (ngân sách, độ dài prompt, trần của điều phối viên): null = không giới hạn — người đặt trong Cài đặt nếu muốn
     "enabled": True, "tick_s": 15, "catchup_grace_s": 3600, "max_failures": 3, "default_budget_usd": None, "prompt_max_chars": None,
@@ -200,9 +204,20 @@ class ScheduleService:
         dt = p.get("deliver_to", cur.get("deliver_to"))
         if isinstance(dt, str):
             dt = {"conversation_id": dt} if dt.startswith("mc_") else {"channel": dt}
-        dt = {k: v for k, v in dict(dt or {}).items() if k in ("conversation_id", "channel") and v}
+        raw_dt = dict(dt or {})
+        dt = {k: v for k, v in raw_dt.items() if k in ("conversation_id", "channel") and v}
         if dt.get("channel") and not CHANNEL_RE.match(str(dt["channel"])):
             raise HubError("deliver_to.channel phải là web|cli|tui|telegram:<chat_id>|slack:<chat_id>")
+        # kênh nhận thêm: tham số `also` (thay toàn bộ) > `deliver_to.also` > giữ của lịch hiện tại (sửa nơi nhận chính không làm mất)
+        if "also" in p:
+            also_in = p.get("also")
+        elif "also" in raw_dt:
+            also_in = raw_dt.get("also")
+        else:
+            also_in = (cur.get("deliver_to") or {}).get("also")
+        also = self._clean_also(also_in, main=dt.get("channel"))
+        if also:
+            dt["also"] = also
         if dt.get("conversation_id"):
             c = self.conn.execute("SELECT channel FROM manager_conversations WHERE id=?", (str(dt["conversation_id"]),)).fetchone()
             if c is None:
@@ -219,6 +234,26 @@ class ScheduleService:
         return {"name": name, "kind": kind, "target": target, "prompt": prompt, "expr": spec.expr, "tz": tzname, "deliver_to": dt,
                 "budget_usd": budget, "options": opts, "_spec": spec}
 
+    @staticmethod
+    def _clean_also(v: Any, *, main: Any) -> list[str]:
+        """`also` → danh sách kênh chat riêng hợp lệ, bỏ trùng + bỏ kênh trùng nơi nhận chính; sai → HubError."""
+        if v in (None, "", []):
+            return []
+        if isinstance(v, str):
+            v = [x for x in re.split(r"[\s,]+", v) if x]
+        if not isinstance(v, (list, tuple)):
+            raise HubError("deliver_to.also phải là danh sách kênh")
+        out: list[str] = []
+        for x in v:
+            ch = str(x or "").strip()
+            if not ALSO_RE.match(ch):
+                raise HubError(f"deliver_to.also: '{ch[:60]}' không hợp lệ — chỉ chat riêng telegram:<chat_id> hoặc Slack DM slack:D…")
+            if ch != main and ch not in out:
+                out.append(ch)
+        if len(out) > ALSO_MAX:
+            raise HubError(f"deliver_to.also: tối đa {ALSO_MAX} kênh")
+        return out
+
     # ------------------------------------------------------------------ quyền điều phối viên (lớp 1 + 2 + lần 3 ở service)
     def manager_check(self, caller: "Caller", method: str, p: dict[str, Any]) -> str | None:
         """Lý do từ chối (chuỗi) hoặc None. Gọi từ `manager/permissions.check_rpc` (cả tool hub-self lẫn daemon) và từ service."""
@@ -226,6 +261,10 @@ class ScheduleService:
             run = self.hub.store.get_run(str(caller.run_id or "")) or {}
             if (run.get("run_opts") or {}).get("manager_kind") == "schedule":
                 return "đang trong một lượt chạy của lịch — không tạo lịch từ lịch (chống lịch đẻ lịch, như Hermes)"
+            dt = p.get("deliver_to")
+            if p.get("also") or (isinstance(dt, dict) and dt.get("also")):
+                return ("deliver_to.also (gửi thêm kết quả sang chat khác) chỉ NGƯỜI đặt — điều phối viên không được đẩy nội dung "
+                        "sang chat tuỳ ý; nếu cần, báo người")
             return self._manager_spec_problem(caller, p, existing=None)
         if method in ("schedule.pause", "schedule.resume", "schedule.rm", "schedule.run_now"):
             r = self.maybe(str(p.get("id") or ""))
@@ -697,6 +736,11 @@ class ScheduleService:
             label = f"run {f.get('run_id')}" if f.get("run_id") else f"task {f.get('task_id')}"
             head = f"⏰ Kết quả lịch '{r['name']}' ({label})" if ok else f"⏰ Lịch '{r['name']}' LỖI ({label}, {outcome})"
             self._deliver(r, f"{head}:\n{text or '(không có nội dung)'}", ok=ok, run_id=f.get("run_id"))
+        else:  # kết quả chính đã đi đường manager.reply của hội thoại — chỉ gửi bản sao sang kênh nhận thêm
+            head = f"⏰ Kết quả lịch '{r['name']}'" if ok else f"⏰ Lịch '{r['name']}' LỖI (run {f.get('run_id')}, {outcome})"
+            cid = ((self.hub.store.get_run(f["run_id"]) or {}).get("run_opts") or {}).get("manager_conversation") if f.get("run_id") else None
+            row = self.conn.execute("SELECT channel FROM manager_conversations WHERE id=?", (cid,)).fetchone() if cid else None
+            self._deliver_also(r, f"{head}:\n{text or '(không có nội dung)'}", ok=ok, run_id=f.get("run_id"), main=row[0] if row else None)
         if ok:
             self.conn.execute("UPDATE schedules SET fail_count=0, last_status='ok', updated_at=? WHERE id=?", (iso(self.now()), r["id"]))
         elif outcome == "rate_limited":
@@ -726,11 +770,25 @@ class ScheduleService:
         if conv is not None:
             mgr._add_msg(conv["id"], "notify", text, run_id)
             ch = conv["channel"]
-        elif not ch:
+        if ch:
+            self.hub.publish(make_event("manager.reply", mgr.agent_id(), {"conversation_id": conv["id"] if conv else None, "run_id": run_id,
+                                                                        "text": text[:4000], "channel": ch, "kind": "notify",
+                                                                        "notify_kind": "schedule", "ok": ok, "schedule_id": r["id"]}, run_id=run_id))
+        self._deliver_also(r, text, ok=ok, run_id=run_id, main=ch)
+
+    def _deliver_also(self, r: dict[str, Any], text: str, *, ok: bool, run_id: str | None, main: str | None = None) -> None:
+        """Bản sao kết quả sang `deliver_to.also` (chat riêng do NGƯỜI đặt): `manager.reply{kind:notify}` không hội thoại → bot của kênh
+        gửi thành tin mới. Chat không còn trong allowlist của bot lúc gửi → bot bỏ (`ManagerChat._deliver` kiểm `notify_chats`)."""
+        also = (r.get("deliver_to") or {}).get("also") or []
+        if not also:
             return
-        self.hub.publish(make_event("manager.reply", mgr.agent_id(), {"conversation_id": conv["id"] if conv else None, "run_id": run_id, "text": text[:4000],
-                                                                    "channel": ch, "kind": "notify", "notify_kind": "schedule", "ok": ok,
-                                                                    "schedule_id": r["id"]}, run_id=run_id))
+        mgr = self.hub.manager  # type: ignore[attr-defined]
+        for ch in also:
+            if ch == main or not ALSO_RE.match(str(ch)):  # trùng kênh vừa nhận bản chính / phòng hờ dữ liệu cũ, sửa tay
+                continue
+            self.hub.publish(make_event("manager.reply", mgr.agent_id(), {"conversation_id": None, "run_id": run_id, "text": text[:4000],
+                                                                        "channel": ch, "kind": "notify", "notify_kind": "schedule", "ok": ok,
+                                                                        "schedule_id": r["id"], "also": True}, run_id=run_id))
 
     def _event(self, etype: str, r: dict[str, Any], *, by: str, **extra: Any) -> None:
         payload = {"schedule_id": r["id"], "name": r["name"], "kind": r["kind"], "expr": r["expr"], "status": r["status"],

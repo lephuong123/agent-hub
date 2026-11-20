@@ -663,3 +663,107 @@ async def test_cli_edit_clear_to_removes_deliver_to(env):
     await rpc(d, "schedule.update", calls[-1][1])
     assert (await rpc(d, "schedule.get", {"id": s["id"]}))["deliver_to"] == {}
     assert cmd_schedule(Ctx(["schedule", "edit", s["id"], "--clear-to", "--to", "web"])) == 1  # mâu thuẫn → lỗi, không gọi
+
+
+# ============================================================================ deliver_to.also — gửi THÊM sang chat riêng
+TG, SL = "telegram:6385255222", "slack:D0CGKLE5WQY"
+
+
+async def test_also_validation_dedupe_and_update_semantics(env):
+    d = env
+    base = {"kind": "agent", "target": "w1", "expr": "daily 07:00", "prompt": "báo cáo sáng"}
+    s = await rpc(d, "schedule.create", {**base, "deliver_to": {"channel": TG, "also": [SL, TG, SL]}})
+    assert s["deliver_to"] == {"channel": TG, "also": [SL]}  # bỏ trùng + bỏ kênh trùng nơi nhận chính
+    for bad in ("web", "cli", "tui", "telegram:-1001234", "slack:C0TEAM001", "slack:G0PRIV001", "slack:U0BOSS001", "mc_abc", "telegram:"):
+        with pytest.raises(HubError, match="deliver_to.also"):
+            await rpc(d, "schedule.create", {**base, "also": [bad]})
+    with pytest.raises(HubError, match="tối đa 4"):
+        await rpc(d, "schedule.create", {**base, "also": [f"telegram:{i}" for i in range(1, 6)]})
+    # sửa nơi nhận chính (chuỗi, như web/CLI --to) → giữ `also`; `also` có mặt → thay; `[]` → bỏ
+    s = await rpc(d, "schedule.update", {"id": s["id"], "deliver_to": "web"})
+    assert s["deliver_to"] == {"channel": "web", "also": [SL]}
+    s = await rpc(d, "schedule.update", {"id": s["id"], "deliver_to": None})
+    assert s["deliver_to"] == {"also": [SL]}
+    s = await rpc(d, "schedule.update", {"id": s["id"], "also": [TG, SL]})
+    assert s["deliver_to"] == {"also": [TG, SL]}
+    s = await rpc(d, "schedule.update", {"id": s["id"], "also": []})
+    assert s["deliver_to"] == {}
+
+
+async def test_manager_cannot_set_also(mgr):
+    d, rid, cid = mgr
+    with pytest.raises(HubError) as ei:  # lớp 1 (tool hub-self)
+        await tool(d, rid, "schedule_create", {"expr": "daily 07:00", "prompt": "x", "budget_usd": 0.1,
+                                               "deliver_to": {"conversation_id": cid, "also": [TG]}})
+    assert ei.value.code == BLOCKED and "chỉ NGƯỜI" in ei.value.message, ei.value.message
+    for p in ({"also": [TG]}, {"deliver_to": {"conversation_id": cid, "also": [SL]}}):  # lớp 2: gọi thẳng daemon
+        with pytest.raises(HubError) as ei:
+            await rpc(d, "schedule.create", {"expr": "daily 07:00", "prompt": "x", "budget_usd": 0.1, "deliver_to": {"conversation_id": cid}, **p},
+                      as_caller=auth.manager_caller("boss", rid))
+        assert ei.value.code == BLOCKED and (ei.value.data or {}).get("reason") == "manager_forbidden"
+    assert await rpc(d, "schedule.list") == []
+
+
+async def test_also_delivery_agent_kind_one_extra_event_per_channel(env):
+    d = env
+    await designate(d)
+    s = await rpc(d, "schedule.create", {"kind": "agent", "target": "w1", "expr": "daily 07:00", "prompt": "báo cáo sáng",
+                                         "deliver_to": {"channel": "telegram:42", "also": [TG, SL]}})
+    at(d, 2026, 10, 20, 7, 0)
+    out = d.hub.schedules.tick()
+    await ended(d, out[0]["run_id"])
+    reps = await until(lambda: (lambda r: r if len(r) >= 3 else None)([p for p in evs(d, "manager.reply") if p.get("schedule_id") == s["id"]]))
+    main = [p for p in reps if not p.get("also")]
+    extra = [p for p in reps if p.get("also")]
+    assert [p["channel"] for p in main] == ["telegram:42"] and main[0]["conversation_id"]
+    assert sorted(p["channel"] for p in extra) == sorted([TG, SL])
+    for p in extra:
+        assert p["conversation_id"] is None and p["kind"] == "notify" and p["notify_kind"] == "schedule" and p["ok"] is True
+        assert p["run_id"] == out[0]["run_id"] and p["text"] == main[0]["text"] and "worker done" in p["text"]
+
+
+async def test_also_delivery_manager_kind(env):
+    d = env
+    await designate(d)
+    s = await rpc(d, "schedule.create", {"kind": "manager", "expr": "daily 07:00", "prompt": "báo cáo sáng",
+                                         "deliver_to": {"channel": TG, "also": [SL]}})
+    at(d, 2026, 10, 20, 7, 0)
+    out = d.hub.schedules.tick()
+    await ended(d, out[0]["run_id"])
+    await until(lambda: fires(d, s["id"])[-1]["status"] == "completed")
+    reps = [p for p in evs(d, "manager.reply") if p.get("schedule_id") == s["id"]]
+    main = [p for p in reps if not p.get("also")]
+    extra = [p for p in reps if p.get("also")]
+    assert [p["channel"] for p in main] == [TG] and main[0]["kind"] == "reply"
+    assert [p["channel"] for p in extra] == [SL] and extra[0]["conversation_id"] is None and extra[0]["kind"] == "notify"
+    assert "báo cáo" in extra[0]["text"] or "Kết quả lịch" in extra[0]["text"]
+
+
+async def test_cli_also_flags():
+    from cfharness.cli import build_parser
+    from cfharness.schedules.cli import _dest, cmd_schedule
+
+    calls: list[tuple[str, dict]] = []
+
+    class Ctx:
+        json = True
+
+        def __init__(self, argv: list[str]) -> None:
+            self.args = build_parser().parse_args(argv)
+
+        def call(self, method: str, params: dict | None = None):
+            calls.append((method, dict(params or {})))
+            return {}
+
+        def out(self, v) -> None:
+            pass
+
+    assert cmd_schedule(Ctx(["schedule", "add", "daily 07:00", "báo cáo", "--to", TG, "--also", SL, "--also", "telegram:1"])) == 0
+    assert calls[-1][1]["also"] == [SL, "telegram:1"] and calls[-1][1]["deliver_to"] == TG
+    assert cmd_schedule(Ctx(["schedule", "edit", "sc_x", "--no-also"])) == 0
+    assert calls[-1] == ("schedule.update", {"id": "sc_x", "also": []})
+    assert cmd_schedule(Ctx(["schedule", "edit", "sc_x", "--prompt", "y"])) == 0
+    assert "also" not in calls[-1][1]  # không đụng → service giữ danh sách cũ
+    n = len(calls)
+    assert cmd_schedule(Ctx(["schedule", "edit", "sc_x", "--no-also", "--also", SL])) == 1 and len(calls) == n
+    assert _dest({"deliver_to": {"channel": TG, "also": [SL]}}) == f"{TG} + {SL}"

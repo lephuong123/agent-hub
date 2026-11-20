@@ -10,6 +10,13 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Lịch — gửi thêm kết quả sang chat riêng khác
+- Một lịch gửi được kết quả tới tối đa 4 chat riêng (Telegram chat riêng, Slack DM) ngoài nơi nhận chính, vd báo cáo 07:00 về cả Telegram
+  lẫn Slack: `cfharness schedule edit <id> --also telegram:<chat_id> --also slack:D…` (`--no-also` để bỏ). Chỉ người đặt được (điều phối
+  viên không); chat không còn trong allowlist của bot thì không nhận. Trang lịch trên web hiện các kênh gửi thêm (chỉ xem).
+
+- `scripts/setup-hub-user.sh`: `CONNECTOR_AGENTS=all` bật connector cho mọi agent; connector được GỘP với connector agent đang có thay vì ghi đè.
+
 ---
 
 ## v0.2.23 — 2026-11-20
