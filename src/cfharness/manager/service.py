@@ -502,12 +502,6 @@ class ManagerService:
             out.append(f"attachments/{name}")
         return out
 
-    def _save_files(self, agent_id: str, cid: str, docs: list[tuple[str, bytes]]) -> tuple[list[str], dict[str, list[str]]]:
-        """Bản ĐỒNG BỘ của `_save_files_async` (chặn luồng gọi tới khi trích xong) — chỉ dùng ngoài event loop."""
-        from .doc_extract import pdf_options
-
-        return write_attachment_files(Path(self._conv_cwd(agent_id, cid)) / "attachments", docs, pdf_opts=pdf_options(self.hub.config))
-
     async def _save_files_async(self, agent_id: str, cid: str, docs: list[tuple[str, bytes]]) -> tuple[list[str], dict[str, list[str]]]:
         """Ghi tệp + trích bản đọc được trong THREAD: trích PDF (tiến trình con, tới `attachments.pdf.timeout_s`) có thể mất vài giây —
         không được chặn event loop của daemon. Thư mục + cấu hình lấy trên loop (DB chỉ dùng ở loop)."""

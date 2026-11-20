@@ -323,3 +323,31 @@ def test_files_note_pdf_variants():
     assert "never pass `pages`" in prompts.files_note(files, ex, pdf_render=False)
     assert "never pass `pages`" not in prompts.files_note(["attachments/b.docx"], {"attachments/b.docx": []}, pdf_render=False)
     assert "PDFs too" not in note
+
+
+async def test_save_files_async_does_not_block_event_loop(tmp_path, monkeypatch):
+    import asyncio
+    import time as _time
+    from types import SimpleNamespace
+
+    from cfharness.manager.service import ManagerService
+
+    def slow_extract(data, opts=None):
+        _time.sleep(0.5)  # PDF lâu: phải chạy trong thread, loop vẫn chạy
+        return [(".txt", b"--- page 1 ---\nOK")]
+
+    monkeypatch.setattr(dx, "extract_isolated", slow_extract)
+    fake = SimpleNamespace(_conv_cwd=lambda aid, cid: str(tmp_path), hub=SimpleNamespace(config={}))
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    t = asyncio.create_task(ticker())
+    saved, extracted = await ManagerService._save_files_async(fake, "boss", "mc_1", [("a.pdf", make_pdf(["x"]))])
+    t.cancel()
+    assert ticks >= 10
+    assert extracted[saved[0]] == [saved[0] + ".txt"] and (tmp_path / saved[0]).is_file()
