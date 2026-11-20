@@ -246,3 +246,47 @@ def test_eval_overlay_prompt_matches_production_pdf_note(tmp_path: Path, monkeyp
     monkeypatch.setattr(ps, "pdf_render_available", lambda cfg=None: True)
     b = overlay.prompt_fingerprint(hub, "a1", tmp_path)
     assert seen == [ps.PDF_SYSTEM_NOTE, None] and a != b
+
+
+async def test_status_never_probes_on_event_loop(monkeypatch, no_system_pdftoppm, poppler: Path):
+    # trong event loop: không chạy `pdftoppm -v` tại chỗ — chưa có cache → `pending` (an toàn: còn lời nhắc), dò trong thread nền;
+    # cache hết hạn → trả giá trị cũ ngay, dò lại nền
+    import threading
+    import time as _t
+
+    gate = threading.Event()
+    loop_thread = threading.get_ident()
+    probes: list[int] = []
+
+    def slow_probe(exe):
+        probes.append(threading.get_ident())
+        gate.wait(5)
+        return True
+
+    monkeypatch.setattr(ps, "probe", slow_probe)
+    cfg = {"tools": {"poppler_path": str(poppler)}}
+    t0 = _t.monotonic()
+    st = ps.pdftoppm_status(cfg)
+    assert _t.monotonic() - t0 < 0.5 and st["pending"] and not st["usable"]
+    assert ps.system_note(cfg) == ps.PDF_SYSTEM_NOTE and ps.run_path_extra(cfg) == [str(poppler)]
+    gate.set()
+    for _ in range(200):
+        if ps.pdftoppm_status(cfg).get("usable"):
+            break
+        await asyncio.sleep(0.01)
+    assert ps.pdftoppm_status(cfg)["usable"] and probes and loop_thread not in probes
+    gate.clear()
+    t0 = _t.monotonic()
+    st = ps.pdftoppm_status(cfg, ttl_s=0)  # hết hạn: giá trị cũ, không chờ
+    assert _t.monotonic() - t0 < 0.5 and st["usable"] and "pending" not in st
+    gate.set()
+    # code async muốn kết quả chắc chắn: to_thread (block mặc định True ngoài event loop)
+    assert (await asyncio.to_thread(ps.pdftoppm_status, cfg, ttl_s=0))["usable"]
+
+
+def test_doctor_no_restart_note_when_pdftoppm_works_from_path(hub_home, monkeypatch, tmp_path: Path):
+    from cfharness import hub_doctor as D
+
+    monkeypatch.setattr(ps.shutil, "which", lambda name, *a, **k: "/usr/bin/pdftoppm" if name == ps.PDFTOPPM else None)
+    c = {x["id"]: x for x in D.run(hub_home, claude_binary=str(tmp_path / "no-claude"))["checks"]}["pdftoppm"]
+    assert c["ok"] and c["detail"] == "/usr/bin/pdftoppm" and "khởi động lại" not in c["detail"]

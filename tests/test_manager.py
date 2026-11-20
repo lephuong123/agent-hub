@@ -448,7 +448,7 @@ async def test_pdf_message_keeps_order_with_message_sent_during_extraction(d, mo
     from cfharness.manager import doc_extract as dx
     from test_doc_extract import make_pdf
 
-    def slow(data, opts=None):
+    def slow(data, opts=None, **kw):
         _t.sleep(0.6)
         return [], {"status": "ok", "pages": 1, "text_pages": 0, "text_reason": None, "parts_last": 0, "parts_reason": None,
                     "no_text": "scanned"}
@@ -469,5 +469,6 @@ async def test_pdf_message_keeps_order_with_message_sent_during_extraction(d, mo
     assert not ra.get("steered") and rb.get("steered") and rb["run_id"] == ra["run_id"]
     users = [m["text"].splitlines()[0] for m in await rpc(d, "manager.history", {"conversation_id": cid}) if m["role"] == "user"]
     assert users == ["tin 0", "A có PDF", "B gửi sau"]
+    assert d.hub.manager._conv_locks == {}  # khoá hội thoại hết lượt giữ/chờ → bỏ khỏi dict (không phình suốt đời daemon)
     run = d.hub.store.get_run(ra["run_id"])
     assert run["resumed_from_session"] == d.hub.store.get_run(r0["run_id"])["session_id"]  # đọc lại hội thoại trong khoá: vẫn resume

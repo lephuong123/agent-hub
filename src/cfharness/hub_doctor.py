@@ -399,7 +399,7 @@ def _vector(ck: _Checks, cfg: dict[str, Any]) -> None:
 def _poppler(ck: _Checks, cfg: dict[str, Any]) -> None:
     """`pdftoppm` (poppler) cho tool Read đọc PDF có `pages` — thiếu chỉ là cảnh báo: hub vẫn trích chữ + tách phần PDF và nhắc agent
     đọc PDF chỉ với `file_path` (docs/dev-notes/pdf-attachments.md)."""
-    from .pdf_support import CONFIG_KEY, FIX_HINT, RESTART_NOTE, pdftoppm_status, validate_poppler_path
+    from .pdf_support import CONFIG_KEY, FIX_HINT, pdftoppm_status, validate_poppler_path
 
     configured = ((cfg.get("tools") or {}).get("poppler_path")) if cfg else None
     bad = ""
@@ -408,12 +408,12 @@ def _poppler(ck: _Checks, cfg: dict[str, Any]) -> None:
             validate_poppler_path(configured)
         except ValueError as e:
             bad = str(e)
-    st = pdftoppm_status(cfg, ttl_s=0)
+    st = pdftoppm_status(cfg, ttl_s=0, block=True)  # doctor cần kết quả thật (không lấy `pending`)
     if bad:
         ck.add("pdftoppm", "pdftoppm (poppler) cho đọc PDF", False, f"{bad}" + (f" — đang dùng {st['path']} trên PATH" if st["usable"] else ""),
                "warning", fix=f"sửa {CONFIG_KEY} (thư mục chứa pdftoppm) hoặc `cfharness config set {CONFIG_KEY} null`")
     elif st["usable"]:
-        ck.add("pdftoppm", "pdftoppm (poppler) cho đọc PDF", True, f"{st['path']}" + (f" ({CONFIG_KEY})" if st["source"] == "config" else RESTART_NOTE))
+        ck.add("pdftoppm", "pdftoppm (poppler) cho đọc PDF", True, f"{st['path']}" + (f" ({CONFIG_KEY})" if st["source"] == "config" else ""))
     elif st.get("broken"):
         ck.add("pdftoppm", "pdftoppm (poppler) cho đọc PDF", False,
                f"{st['broken']} có nhưng `pdftoppm -v` không chạy được — Read của agent vẫn lỗi khi đọc PDF theo trang", "warning",

@@ -222,3 +222,26 @@ async def test_pdf_file_accepted_with_text_copy(make, sk):
     assert "Điều 1 ETA-9" in (orig.parent / (orig.name + ".txt")).read_text(encoding="utf-8")
     assert f"attachments/{orig.name}.txt" in run["prompt"] and "text copy made by the hub" in run["prompt"]
     assert not errors_text(sk)
+
+
+async def test_pdf_extraction_does_not_stall_slack_worker(make, sk, monkeypatch):
+    # trích PDF chạy trong task riêng của kênh: worker Slack vẫn xử lý slash command / nút duyệt ngay, hàng đợi không dồn
+    import time as _t
+
+    from cfharness.manager import doc_extract as dx
+    from test_doc_extract import make_pdf
+
+    def slow(data, opts=None, **kw):
+        _t.sleep(2.5)
+        return [], {"status": "ok", "pages": 1, "text_pages": 0, "text_reason": None, "parts_last": 0, "parts_reason": None,
+                    "no_text": "scanned"}
+
+    monkeypatch.setattr(dx, "extract_isolated", slow)
+    d = await mk(make, sk)
+    t0 = _t.monotonic()
+    await deliver(sk, sk.user_files(DM_BOSS, BOSS, [("a.pdf", make_pdf([None]), "application/pdf")], text="PDF trước"))
+    await deliver(sk, sk.slash(BOSS, "trangthai"))
+    assert any("ESTOP" in t for t in texts(sk, DM_BOSS)) and _t.monotonic() - t0 < 2.3 and not boss_runs(d)
+    sk.user_message(DM_BOSS, BOSS, "tin chữ sau")
+    runs = await until(lambda: boss_runs(d), timeout=15)
+    assert "PDF trước" in runs[0]["prompt"]  # thứ tự tin của kênh giữ nguyên

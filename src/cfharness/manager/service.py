@@ -158,9 +158,11 @@ def write_attachment_files(d: Path, docs: list[tuple[str, bytes]], *, pdf_opts: 
     dưới hạn 60 s của RPC web), không phải 4 × hạn giờ như khi trích lần lượt.
     Trả (đường dẫn bản gốc tương đối theo cwd, {bản gốc tài liệu: [bản trích]} — PDF/Office luôn có khoá, danh sách rỗng = không trích
     được, {bản gốc PDF: info} — tổng trang + phạm vi bản chữ/phần đã phủ, `doc_extract.pdf_assemble`)."""
+    import shutil
+    import tempfile
     from concurrent.futures import ThreadPoolExecutor
 
-    from .doc_extract import doc_ext, extract, extract_isolated
+    from .doc_extract import PDF_PARTS_MAX_BYTES, doc_ext, extract, extract_isolated
 
     d.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -169,8 +171,13 @@ def write_attachment_files(d: Path, docs: list[tuple[str, bytes]], *, pdf_opts: 
     pdf_info: dict[str, dict[str, Any]] = {}
     pdfs: list[tuple[str, str, bytes]] = []
 
-    def write(name: str, data: bytes) -> str:
+    def write(name: str, data: bytes | Path) -> str:
         fd = os.open(d / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        if isinstance(data, Path):  # phần PDF tiến trình con đã ghi vào thư mục tạm (cùng ổ đĩa) → chuyển chỗ, không nạp vào bộ nhớ
+            os.close(fd)
+            os.replace(data, d / name)
+            os.chmod(d / name, 0o600)
+            return f"attachments/{name}"
         with os.fdopen(fd, "wb") as f:
             f.write(data)
         return f"attachments/{name}"
@@ -185,11 +192,26 @@ def write_attachment_files(d: Path, docs: list[tuple[str, bytes]], *, pdf_opts: 
         elif ext:
             extracted[rel] = [write(name + suffix, body) for suffix, body in extract(ext, data)]
     if pdfs:
-        with ThreadPoolExecutor(max_workers=len(pdfs), thread_name_prefix="pdf-extract") as pool:
-            results = list(pool.map(lambda job: extract_isolated(job[2], pdf_opts), pdfs))
-        for (rel, name, _), (copies, info) in zip(pdfs, results):
-            extracted[rel] = [write(name + suffix, body) for suffix, body in copies]
-            pdf_info[rel] = info
+        # trần dung lượng các phần tách là của CẢ TIN, chia đều cho các PDF (4 PDF → mỗi cái ≤ 12 MB phần)
+        opts = dict(pdf_opts or {}, parts_max_bytes=PDF_PARTS_MAX_BYTES // len(pdfs))
+        works: list[Path] = []
+        try:
+            for _ in pdfs:  # mỗi PDF một thư mục tạm riêng cạnh bản gốc (cùng ổ đĩa → chuyển phần bằng os.replace)
+                works.append(Path(tempfile.mkdtemp(prefix=".pdf-work-", dir=d)))
+            with ThreadPoolExecutor(max_workers=len(pdfs), thread_name_prefix="pdf-extract") as pool:
+                results = list(pool.map(lambda job: extract_isolated(job[0][2], opts, work_dir=job[1]), zip(pdfs, works)))
+            for (rel, name, _), (copies, info) in zip(pdfs, results):
+                saved: list[str] = []
+                for suffix, body in copies:
+                    try:
+                        saved.append(write(name + suffix, body))
+                    except OSError:
+                        log.warning("không lưu được bản trích PDF %s", suffix, exc_info=True)
+                extracted[rel] = saved
+                pdf_info[rel] = info
+        finally:
+            for w in works:
+                shutil.rmtree(w, ignore_errors=True)
     return out, extracted, pdf_info
 
 
@@ -239,7 +261,8 @@ class ManagerService:
         self._reported_approvals: set[str] = set()
         self._fail_times: dict[str, list[float]] = {}
         self._tick_lock = asyncio.Lock()
-        self._conv_locks: dict[str, asyncio.Lock] = {}  # khoá mỗi hội thoại cho `chat` (giữ thứ tự tin khi trích PDF lâu)
+        # khoá mỗi hội thoại cho `chat` (giữ thứ tự tin khi trích PDF lâu): [khoá, số lượt đang giữ/chờ] — hết lượt thì xoá
+        self._conv_locks: dict[str, list[Any]] = {}
         self._task: asyncio.Task | None = None
         self._run_keys: dict[str, str] = {}
         from .workstreams import Workstreams
@@ -679,16 +702,20 @@ class ManagerService:
         self.ws.touch(conv.get("workstream_id"))
         # Khoá theo hội thoại từ lúc lưu tệp tới lúc ghi tin + submit/steer: tin có PDF chờ trích (tới `attachments.pdf.timeout_s`) mà
         # tin sau của CÙNG hội thoại chạy trước thì tin PDF bị steer vào run của tin sau → thứ tự tin của người bị đảo.
-        lock = self._conv_lock(conv["id"])
+        cid = conv["id"]
+        ent = self._conv_locks.get(cid)
+        if ent is None:
+            ent = self._conv_locks[cid] = [asyncio.Lock(), 0]
+        ent[1] += 1  # số lượt đang giữ/chờ khoá: về 0 → bỏ khoá khỏi dict (không phình theo số hội thoại suốt đời daemon)
+        lock: asyncio.Lock = ent[0]
         waited = lock.locked()
-        async with lock:
-            return await self._chat_turn(channel, text, aid, conv, imgs, docs, voice=voice, switched_from=switched_from, waited=waited)
-
-    def _conv_lock(self, cid: str) -> asyncio.Lock:
-        lk = self._conv_locks.get(cid)
-        if lk is None:
-            lk = self._conv_locks[cid] = asyncio.Lock()
-        return lk
+        try:
+            async with lock:
+                return await self._chat_turn(channel, text, aid, conv, imgs, docs, voice=voice, switched_from=switched_from, waited=waited)
+        finally:
+            ent[1] -= 1
+            if ent[1] <= 0 and self._conv_locks.get(cid) is ent:
+                del self._conv_locks[cid]
 
     async def _chat_turn(self, channel: str, text: str, aid: str, conv: dict[str, Any], imgs: list[tuple[str, bytes]],
                          docs: list[tuple[str, bytes]], *, voice: str | None, switched_from: str | None,
@@ -703,7 +730,7 @@ class ManagerService:
         if any(f.lower().endswith(".pdf") for f in saved_docs):
             from ..pdf_support import pdf_render_available
 
-            pdf_render = pdf_render_available(self.hub.config)
+            pdf_render = await asyncio.to_thread(pdf_render_available, self.hub.config)  # dò pdftoppm (cache; hết hạn → chạy `-v`) ngoài event loop
         prompt_text = (text + (prompts.images_note(saved_imgs) if saved_imgs else "")
                        + (prompts.files_note(saved_docs, extracted, pdf_render=pdf_render, pdf_info=pdf_info) if saved_docs else ""))
         if saved_imgs:

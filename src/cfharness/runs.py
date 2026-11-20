@@ -903,6 +903,7 @@ class RunManager:
                 run = {**run, "cwd": str(lane_cwd), "run_opts": lane_opts}
                 lane_run = True
             recall = await self._memory_prefetch(run, agent)  # graph memory: top-k fact vào TIN USER ĐẦU (không vào system prompt)
+            await _refresh_pdftoppm(hub)  # dò pdftoppm (cache hết hạn → chạy `-v`) trong THREAD: `_prepare_spec` chỉ đọc cache
             spec = self._prepare_spec(run, agent, recall=recall)
             spec.control_handler = functools.partial(self._control_request, ar)  # CLI 2.1.303+: control_request can_use_tool → guard
             await self._checkpoint(ar, run, spec)
@@ -1579,6 +1580,17 @@ def _lane_browse(hub: Any, run: dict[str, Any], opts: dict[str, Any]) -> bool:
         return bool(lane is not None and lane.browse_enabled())
     except Exception:  # pragma: no cover — không bao giờ làm hỏng spawn vì phần đọc thêm này
         return False
+
+
+async def _refresh_pdftoppm(hub: Any) -> None:
+    """Làm tươi cache `pdf_support.pdftoppm_status` ngoài event loop trước `_prepare_spec` (system prompt + path_extra đọc cache;
+    gọi trong event loop không bao giờ chạy tiến trình con tại chỗ)."""
+    try:
+        from .pdf_support import pdftoppm_status
+
+        await asyncio.to_thread(pdftoppm_status, hub.config)
+    except Exception:  # best-effort: không bao giờ làm hỏng spawn vì phần phụ này
+        log.debug("dò pdftoppm lỗi", exc_info=True)
 
 
 def _poppler_path_extra(hub: Any) -> list[str]:

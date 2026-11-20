@@ -179,7 +179,10 @@ PDF_READ_MAX_PAGES = 600  # = doc_extract.PDF_READ_MAX_PAGES: API từ chối PD
 _STOP_EN = {"pages": "page limit", "bytes": "size limit", "time": "time limit", "error": "extraction error", "parts": "part limit"}
 _NO_TEXT_EN = {"encrypted": "the PDF is password-protected", "unreadable": "the hub could not parse the PDF",
                "error": "the hub could not parse the PDF", "timeout": "text extraction ran out of time",
-               "scanned": "the PDF is scanned (images only)", "time": "text extraction ran out of time"}
+               "scanned": "the PDF is scanned (images only)", "time": "text extraction ran out of time",
+               "page_errors": "the hub could not extract the text of any page (damaged or unusual content, not necessarily a scan)"}
+PDF_ENCRYPTED_NOTE = ("it cannot be opened without its password (neither the hub nor the Read tool can decrypt it), so do not try to "
+                      "Read it: tell the owner and ask for an unprotected copy")
 
 
 def _part_last(parts: list[str]) -> int:
@@ -215,7 +218,9 @@ def _pdf_item(f: str, ex: list[str] | None, info: dict[str, Any] | None, pdf_ren
         bits.append(f"page-range parts covering pages 1-{last}{of} for tables and figures, Read each with only `file_path`: "
                     + ", ".join(parts))
         covered = max(covered, last)
-    if total is None:
+    if info.get("status") == "encrypted" and not text and not parts:
+        bits.append(PDF_ENCRYPTED_NOTE)
+    elif total is None:
         if not text and not parts:
             bits.append("Read the original" + ("" if pdf_render else " with only `file_path`"))
     elif covered < total:

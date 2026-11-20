@@ -35,9 +35,6 @@ CACHE_TTL_S = 300.0
 FIX_HINT = ("cài poppler: `scoop install poppler` hoặc `winget install oschwartz10612.Poppler` (Windows), `brew install poppler` (macOS), "
             "`apt install poppler-utils` (Linux) rồi khởi động lại daemon (daemon giữ PATH lúc khởi động); hoặc "
             "`cfharness config set tools.poppler_path <thư mục chứa pdftoppm>` (có hiệu lực ngay)")
-RESTART_NOTE = (" — daemon đang chạy từ trước khi cài poppler chỉ thấy sau khi khởi động lại (`cfharness daemon stop` rồi `start`), "
-                "trừ khi đặt tools.poppler_path")
-
 # Tiếng Anh (prompt gửi agent). Chỉ thêm khi pdftoppm KHÔNG dùng được trên máy hub.
 PDF_SYSTEM_NOTE = """# Reading PDF files
 PDF page rendering (pdftoppm) is not installed on this machine. To read a PDF, call Read with ONLY `file_path` and never pass `pages`:
@@ -145,19 +142,18 @@ def probe(exe: str) -> bool:
     return r.returncode == 0 or (r.returncode != 127 and bool((r.stderr or b"").strip()))
 
 
-def pdftoppm_status(cfg: Any = None, *, ttl_s: float = CACHE_TTL_S) -> dict[str, Any]:
-    """`{usable, path, source: "path"|"config"|None, configured, broken}` — có cache theo (giá trị cấu hình, PATH daemon), sống `ttl_s`
-    giây (cache = không chạy `pdftoppm -v` mỗi tin/mỗi run). `broken` = đường dẫn pdftoppm tìm thấy nhưng `probe` hỏng.
-    PATH là PATH của DAEMON lúc khởi động: cài poppler khi daemon đang chạy → daemon chỉ thấy sau khi khởi động lại (hoặc đặt
-    `tools.poppler_path`, có hiệu lực ngay)."""
-    configured = _configured(cfg)
-    env_path = os.environ.get("PATH", "")
-    key = (configured if isinstance(configured, (str, type(None))) else repr(configured), env_path)
-    now = time.monotonic()
-    with _lock:
-        hit = _cache.get(key)
-        if hit and now - hit[0] < ttl_s:
-            return dict(hit[1])
+def _in_event_loop() -> bool:
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def _compute(configured: Any) -> dict[str, Any]:
+    """Phần CHẬM của `pdftoppm_status` (which + chạy `pdftoppm -v`, tới `PROBE_TIMEOUT_S`); chỉ nhận giá trị cấu hình (an toàn trong thread)."""
     out: dict[str, Any] = {"usable": False, "path": None, "source": None, "configured": configured, "broken": None}
     found = shutil.which(PDFTOPPM)
     if found:
@@ -166,16 +162,73 @@ def pdftoppm_status(cfg: Any = None, *, ttl_s: float = CACHE_TTL_S) -> dict[str,
         else:
             out["broken"] = found
     if not out["usable"]:
-        d = poppler_dir(cfg)
+        d = poppler_dir({"tools": {"poppler_path": configured}})
         exe = _find_in_dir(Path(d)) if d else None
         if exe is not None:
             if probe(str(exe)):
                 out.update(usable=True, path=str(exe), source="config")
             else:
                 out["broken"] = str(exe)
+    return out
+
+
+_refreshing: set[tuple[Any, str]] = set()
+
+
+def _refresh_bg(key: tuple[Any, str], configured: Any) -> None:
+    """Dò lại trong thread nền (một lần mỗi khoá cùng lúc) — gọi từ event loop không bao giờ chờ `pdftoppm -v`."""
     with _lock:
-        _cache[key] = (now, out)
+        if key in _refreshing:
+            return
+        _refreshing.add(key)
+
+    def run() -> None:
+        try:
+            st = _compute(configured)
+            with _lock:
+                _cache[key] = (time.monotonic(), st)
+        except Exception:  # pragma: no cover - best-effort
+            log.debug("dò pdftoppm (nền) lỗi", exc_info=True)
+        finally:
+            with _lock:
+                _refreshing.discard(key)
+
+    threading.Thread(target=run, name="pdftoppm-probe", daemon=True).start()
+
+
+def pdftoppm_status(cfg: Any = None, *, ttl_s: float = CACHE_TTL_S, block: bool | None = None) -> dict[str, Any]:
+    """`{usable, path, source: "path"|"config"|None, configured, broken}` — có cache theo (giá trị cấu hình, PATH daemon), sống `ttl_s`
+    giây (cache = không chạy `pdftoppm -v` mỗi tin/mỗi run). `broken` = đường dẫn pdftoppm tìm thấy nhưng `probe` hỏng.
+    `block` (mặc định: True khi KHÔNG ở trong event loop): False → không bao giờ chạy tiến trình con tại chỗ — cache hết hạn trả giá trị
+    cũ và dò lại trong thread nền; chưa có cache trả `usable=False, pending=True` (an toàn: chỉ thêm lời nhắc "không truyền pages")
+    rồi dò nền. Gọi từ code async muốn kết quả chắc chắn → `await asyncio.to_thread(pdftoppm_status, cfg)`.
+    PATH là PATH của DAEMON lúc khởi động: cài poppler khi daemon đang chạy → daemon chỉ thấy sau khi khởi động lại (hoặc đặt
+    `tools.poppler_path`, có hiệu lực ngay)."""
+    configured = _configured(cfg)
+    env_path = os.environ.get("PATH", "")
+    key = (configured if isinstance(configured, (str, type(None))) else repr(configured), env_path)
+    now = time.monotonic()
+    with _lock:
+        hit = _cache.get(key)
+    if hit and now - hit[0] < ttl_s:
+        return dict(hit[1])
+    if block is None:
+        block = not _in_event_loop()
+    if not block:
+        _refresh_bg(key, configured)
+        if hit:
+            return dict(hit[1])
+        return {"usable": False, "path": None, "source": None, "configured": configured, "broken": None, "pending": True}
+    out = _compute(configured)
+    with _lock:
+        _cache[key] = (time.monotonic(), out)
     return dict(out)
+
+
+def warm(cfg: Any = None) -> None:
+    """Dò sẵn trong thread nền lúc daemon khởi động (lượt chat/run đầu tiên đã có kết quả thật, không phải `pending`)."""
+    configured = _configured(cfg)
+    _refresh_bg((configured if isinstance(configured, (str, type(None))) else repr(configured), os.environ.get("PATH", "")), configured)
 
 
 def pdf_render_available(cfg: Any = None) -> bool:

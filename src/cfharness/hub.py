@@ -218,6 +218,12 @@ class Hub:
             self.runs.start_auth_watch()  # cờ chặn đăng nhập còn từ lần chạy trước → kiểm lại định kỳ, tự gỡ khi đã đăng nhập
         self.auto_resume.start()  # hẹn lại lượt tự resume đã lên lịch trước khi daemon dừng
         self.manager.start()  # M7: vòng nhịp điều phối viên (chỉ tick khi có việc)
+        try:  # dò pdftoppm trong thread nền (system prompt của run đầu tiên đã có kết quả thật; không chạy tiến trình con trên event loop)
+            from .pdf_support import warm as _warm_pdf
+
+            _warm_pdf(self.config)
+        except Exception:  # pragma: no cover - best-effort
+            log.debug("dò pdftoppm lỗi", exc_info=True)
         self.questions.start()  # UX: chuyển câu hỏi quá hạn của điều phối viên lên người + nhắc lại
         self.compat.check_on_start()  # hardening H-10: phiên bản CLI → hub_state.cli_compat (header TUI)
         try:  # vòng nhắc approval + purge retention (cần event loop đang chạy)

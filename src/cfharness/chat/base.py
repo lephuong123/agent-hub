@@ -138,6 +138,7 @@ class ChatBot:
         self._task: asyncio.Task | None = None
         self._wake: asyncio.Event | None = None
         self._bg: set[asyncio.Task] = set()
+        self._chat_tails: dict[str, asyncio.Task] = {}  # tin của một chat đang xử lý NGOÀI vòng nhận (`_chain_chat`)
         self._ready_for: str | None = None
         self._ignored_at: dict[str, float] = {}
         self.pairing: dict[str, Any] | None = None
@@ -392,6 +393,46 @@ class ChatBot:
             coro.close()
             return
         track(task, self._bg)  # L1: lỗi task → log
+
+    def _chat_busy(self, cid: str) -> bool:
+        """Chat còn tin đang xử lý ngoài vòng nhận (`_chain_chat`) → tin sau của chat đó (gửi điều phối viên) phải xếp hàng sau nó."""
+        t = self._chat_tails.get(str(cid))
+        return t is not None and not t.done()
+
+    def _chain_chat(self, cid: str, coro: Any) -> None:
+        """Xử lý một tin của chat `cid` trong task riêng, SAU tin trước của cùng chat (giữ thứ tự tin của người), để vòng nhận
+        (Telegram getUpdates / worker Slack) không chờ: tin có tệp chờ tải + trích PDF tới `attachments.pdf.timeout_s` — trong lúc đó
+        chat khác, nút duyệt/E-stop, lệnh `/` vẫn được xử lý ngay. Task chép contextvars lúc tạo (uid, thread Slack…)."""
+        key = str(cid)
+        prev = self._chat_tails.get(key)
+
+        async def run() -> None:
+            try:
+                if prev is not None and not prev.done():
+                    await asyncio.wait({prev})  # chờ tin trước xong (lỗi/huỷ của nó không lan sang tin này)
+            except asyncio.CancelledError:
+                coro.close()
+                raise
+            try:
+                await coro
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("lỗi xử lý tin chat %s", self.NAME)
+
+        try:
+            task = asyncio.get_running_loop().create_task(run())
+        except RuntimeError:
+            coro.close()
+            return
+        track(task, self._bg)
+        self._chat_tails[key] = task
+
+        def _done(t: asyncio.Task, key: str = key) -> None:
+            if self._chat_tails.get(key) is t:
+                del self._chat_tails[key]
+
+        task.add_done_callback(_done)
 
     def start(self) -> None:
         if self._task is not None and not self._task.done():
