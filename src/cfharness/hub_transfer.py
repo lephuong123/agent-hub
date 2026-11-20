@@ -110,6 +110,7 @@ KNOWLEDGE_TABLES = ("mem_*",)
 MACHINE_STATE = ("repo_locks", "browser_locks", "rate_limit", "rate_limit_gate", "rate_limit_gates", "rate_limit_by_account",
                  "pyenv_baseline", "cli_compat", "cli_unknown_rate", "auth_block", "claude_account_checks", "admin_watch.active",
                  "accounts.claudeai",  # phiên claude.ai theo tài khoản — thư mục claude-config/ không bao giờ đi theo gói (gắn với máy)
+                 "mcp.claude_seen",  # server MCP lạ đã gặp ở run bỏ strict, theo thư mục cấu hình claude của MÁY này (runs._remember_claude_seen)
                  "mcp.claude_status",  # trạng thái MCP do claude quản lý theo tài khoản (mcp_client/claude_admin.py) — token ở Keychain máy cũ
                  "audit_watch.active",  # L5: cảnh báo audit đang bật của máy nguồn (máy đích tự học lại); `audit.archive_cutoff` ĐI CÙNG DB (khớp audit-archive/)
                  "systems.registry", "systems.paused", "telegram.offset", "slack.seen",

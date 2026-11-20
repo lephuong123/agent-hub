@@ -54,6 +54,11 @@ def user_claude_extras(home: Path | None = None, config_dir: Path | None = None)
         hooks |= {str(k) for k in hk}
         plugins |= {str(k) for k, v in pl.items() if v}
         servers |= {str(k) for k in sv}
+    # server do tổ chức cấp (remote-settings.json managedMcpServers / managed-mcp.json) — claude nạp dưới nguồn `user`
+    from ..mcp_client.claude_source import managed_servers
+
+    for cd in ([None] if config_dir is None else [None, Path(config_dir)]):
+        servers |= set(managed_servers(cd))
     return {"hooks": sorted(hooks), "plugins": sorted(plugins), "mcp_servers": sorted(servers)}
 
 

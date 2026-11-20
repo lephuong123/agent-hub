@@ -224,7 +224,7 @@ class IntegrationRpc:
         from ..mcp_client import claude_source as cs
 
         aid, cdir = cs.account_config_dir(self.hub, str(p["account_id"]) if p.get("account_id") else None)
-        have = cs.read_servers(cdir)
+        have = cs.all_servers(cdir)
         rows = {r["name"]: r for r in self.hub.mcp.list()}
         out = []
         for name in sorted(have):

@@ -98,6 +98,8 @@ class ActiveRun:
     claude_session: str | None = None
     # MCP nguồn claude gán cho agent mà run này nạp (plan-mcp-claude-native PR2) — guard coi run là "run connector" (chặn MCP lạ)
     claude_mcp: tuple[str, ...] = ()
+    # run đã bỏ --strict-mcp-config: khoá (tài khoản/thư mục cấu hình) để ghi server MCP lạ thấy ở system/init → run sau gỡ luôn
+    seen_key: str | None = None
 
 
 class RunManager:
@@ -551,7 +553,7 @@ class RunManager:
                                     "(run phải bỏ --strict-mcp-config, chỉ hook guard chặn được MCP lạ của cấu hình claude)")
             from .mcp_client import claude_source as _cs
 
-            have = _cs.read_servers(connector_dir)
+            have = _cs.all_servers(connector_dir)
             missing = [n for n in claude_mcp if n not in have]
             if missing:
                 raise HubError(f"MCP nguồn claude {', '.join(missing)} không có trong cấu hình claude của tài khoản "
@@ -564,6 +566,16 @@ class RunManager:
                 conn = run_setup((), config_dir=connector_dir)
                 settings = {**settings, **conn["settings_patch"]}
             claude_deny = [n for n in have if n not in claude_mcp]  # lọc server hub cùng tên sau khi dựng mcp.json (dưới)
+        if conn is not None:
+            # MỌI run đã bỏ --strict-mcp-config (connector / MCP nguồn claude): gỡ khỏi ngữ cảnh mọi server claude tự nạp mà agent
+            # không được gán — `.claude.json` user-scope, server tổ chức cấp (remote-settings/managed-mcp) và server lạ đã gặp ở
+            # `system/init` của run trước cùng tài khoản (hub_state `mcp.claude_seen`). Guard vẫn chặn gọi (mcp_not_in_run).
+            from .mcp_client import claude_source as _cs
+
+            known = list(_cs.all_servers(connector_dir)) + list((self.hub.store.state_get("mcp.claude_seen", {}) or {}).get(
+                _seen_key(account, connector_dir), []))
+            claude_deny = list(dict.fromkeys(claude_deny + [n for n in known if n not in claude_mcp]))
+            conn = {**conn, "allowed_mcp": list(dict.fromkeys(list(conn.get("allowed_mcp") or []) + known))}  # đã gỡ → không báo vi phạm lặp lại
         # trust full (người đặt theo agent — guard/service.trust_set): bypassPermissions, không sandbox OS, không mẫu chặn tĩnh của hub
         # — TRỪ phần giam trong W khi workspace.confine bật (P2, Q4: docs/dev-notes/confine.md)
         trust = hub.guard.run_trusted({**run, "run_opts": opts})
@@ -835,6 +847,24 @@ class RunManager:
             return []
         return list(agent_claude_mcp_servers(agent, home=self.hub.paths.home) or [])
 
+    def _remember_claude_seen(self, ar: ActiveRun) -> None:
+        """Server MCP lạ (isolation.violation kind mcp_server) ở run đã bỏ strict → `hub_state mcp.claude_seen[<khoá>]` để run sau cùng
+        tài khoản thêm `--disallowedTools mcp__<x>__*` (server claude nạp từ nguồn hub không đọc được). Chỉ TÊN, trần 200/khoá."""
+        if not ar.seen_key:
+            return
+        names = [str(v.get("name")) for v in (ar.violations or []) if isinstance(v, dict) and v.get("kind") == "mcp_server" and v.get("name")]
+        if not names:
+            return
+        try:
+            seen = dict(self.hub.store.state_get("mcp.claude_seen", {}) or {})
+            cur = list(seen.get(ar.seen_key) or [])
+            new = [n for n in names if n not in cur and len(n) <= 128]
+            if new:
+                seen[ar.seen_key] = (cur + new)[-200:]
+                self.hub.store.state_set("mcp.claude_seen", seen)
+        except Exception:  # best-effort: chỉ là gợi ý gỡ khỏi ngữ cảnh, guard vẫn chặn gọi
+            log.debug("không ghi được mcp.claude_seen", exc_info=True)
+
     async def _claude_mcp_dir(self, spec: RunSpec, ar: ActiveRun, acct: tuple[str | None, Path | None]) -> None:
         """Run có MCP nguồn claude: CLAUDE_CONFIG_DIR = thư mục cấu hình của tài khoản token đang dùng (token MCP của claude nằm theo
         thư mục đó) dù auth_mode là token hay login; machine/custom → cấu hình mặc định. Không dựng được → run hỏng (fail-closed)."""
@@ -987,6 +1017,8 @@ class RunManager:
                     ar.claude_session = acct[0] if spec.claude_config_dir is not None else MACHINE
             if ar.claude_mcp:
                 await self._claude_mcp_dir(spec, ar, acct)
+            if spec.connectors or ar.claude_mcp:
+                ar.seen_key = _seen_key(acct[0], acct[1])
             await self._checkpoint(ar, run, spec)
             cli_version = await self._check_cli_version(runtime, agent_id, run_id)
             if self._ended_before_start(run_id):
@@ -1207,6 +1239,7 @@ class RunManager:
         elif res is not None and outcome != "completed":
             error = res.get("summary") or "; ".join(str(x) for x in res.get("errors") or []) or res.get("subtype")
         await self._detect_auth(ar, (res or {}).get("summary") or "", h.stderr_tail, outcome)
+        self._remember_claude_seen(ar)
         data: dict[str, Any] = {
             "status": outcome,
             "outcome": outcome,
@@ -1721,6 +1754,11 @@ class RunManager:
             run["agent_id"], prompt, cwd=run.get("cwd"), budget_usd=budget_usd, model=run.get("model"), kind=run.get("kind") or "adhoc",
             resume_session_id=run["session_id"], parent_run_id=run["id"], resume_reason=reason,
         )
+
+
+def _seen_key(account: str | None, config_dir: Path | None) -> str:
+    """Khoá `mcp.claude_seen`: thư mục cấu hình claude thật của run (tài khoản token) hoặc `default` (cấu hình mặc định)."""
+    return str(config_dir) if config_dir is not None else "default"
 
 
 def export_quiesced(hub: Any) -> bool:

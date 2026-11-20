@@ -326,7 +326,7 @@ def _claude_mcp(ck: _Checks, c: sqlite3.Connection | None, home: Path) -> None:
     key = DEFAULT_KEY if cdir is None else cdir.name
     acct = "" if cdir is None else f" --account {cdir.name}"
     try:
-        have = cs.read_servers(cdir)
+        have = cs.all_servers(cdir)
     except Exception as e:  # best-effort: doctor báo, không dừng  # noqa: BLE001
         ck.add("mcp_claude", "MCP nguồn claude", False, f"không đọc được cấu hình claude ({type(e).__name__})", "warning")
         return

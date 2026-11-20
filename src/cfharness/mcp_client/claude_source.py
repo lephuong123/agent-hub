@@ -89,7 +89,13 @@ def read_servers(config_dir: Path | None) -> dict[str, dict[str, Any]]:
         return {}
     servers = data.get("mcpServers") if isinstance(data, dict) else None
     if not isinstance(servers, dict):
-        return {}
+        servers = {}
+    return _entries(servers)
+
+
+def _entries(servers: dict[str, Any], **extra: Any) -> dict[str, dict[str, Any]]:
+    from ..guard.service import is_hub_mcp_config
+
     out: dict[str, dict[str, Any]] = {}
     for name, entry in servers.items():
         if not isinstance(name, str) or not name or not isinstance(entry, dict):
@@ -99,8 +105,57 @@ def read_servers(config_dir: Path | None) -> dict[str, dict[str, Any]]:
             hub = bool(is_hub_mcp_config(entry))
         except Exception:  # fail-closed: không xác định được → coi như server của hub (không cho đăng ký)
             hub = True
-        out[name] = {"transport": tr, "host": _host(entry.get("url")) if tr != "stdio" else None, "hub": hub}
+        out[name] = {"transport": tr, "host": _host(entry.get("url")) if tr != "stdio" else None, "hub": hub, **extra}
     return out
+
+
+def _json_obj(p: Path) -> dict[str, Any]:
+    try:
+        if p.stat().st_size > MAX_BYTES:
+            return {}
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:  # best-effort: file hỏng = không có server (không log nội dung)
+        log.warning("không đọc được cấu hình MCP quản lý của claude: %s", type(e).__name__)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def remote_settings_path(config_dir: Path | None) -> Path:
+    """`remote-settings.json` (cài đặt tổ chức claude.ai tải về, có `managedMcpServers`) nằm TRONG thư mục cấu hình claude
+    (`~/.claude` hoặc CLAUDE_CONFIG_DIR) — khác `.claude.json` (cạnh thư mục ở cấu hình mặc định)."""
+    if config_dir is not None:
+        return Path(config_dir) / "remote-settings.json"
+    from ..transfer_sessions import TEST_ENV
+
+    if os.environ.get("CFHARNESS_TESTING") == "1" and os.environ.get(TEST_ENV):
+        return Path(os.environ[TEST_ENV]) / ".claude" / "remote-settings.json"
+    env = os.environ.get("CLAUDE_CONFIG_DIR")
+    return (Path(env).expanduser() if env else Path.home() / ".claude") / "remote-settings.json"
+
+
+MANAGED_MCP_FILES = (Path("/Library/Application Support/ClaudeCode/managed-mcp.json"), Path("/etc/claude-code/managed-mcp.json"))
+
+
+def managed_servers(config_dir: Path | None) -> dict[str, dict[str, Any]]:
+    """Server MCP do TỔ CHỨC cấp, claude nạp ngoài `.claude.json` (đã thấy thật: `remote-settings.json.managedMcpServers` trên
+    2.1.329; `managed-mcp.json` hệ thống). Chỉ tên/transport/host (`managed=True`) — để gỡ khỏi run không gán và đăng ký được."""
+    out: dict[str, dict[str, Any]] = {}
+    ms = _json_obj(remote_settings_path(config_dir)).get("managedMcpServers")
+    if isinstance(ms, dict):
+        out.update(_entries(ms, managed=True))
+    if not (os.environ.get("CFHARNESS_TESTING") == "1"):
+        for f in MANAGED_MCP_FILES:
+            srv = _json_obj(f).get("mcpServers")
+            if isinstance(srv, dict):
+                out.update(_entries(srv, managed=True))
+    return out
+
+
+def all_servers(config_dir: Path | None) -> dict[str, dict[str, Any]]:
+    """Mọi server MCP claude sẽ nạp từ cấu hình (user-scope `.claude.json` + do tổ chức cấp); `.claude.json` thắng khi trùng tên."""
+    return {**managed_servers(config_dir), **read_servers(config_dir)}
 
 
 def account_config_dir(hub: Any, account_id: str | None = None) -> tuple[str | None, Path | None]:
@@ -133,7 +188,7 @@ def register(hub: Any, cfg: dict[str, Any], account_id: Any = None, *, info: dic
     name = str(cfg.get("name") or "")
     aid, cdir = account_config_dir(hub, str(account_id) if account_id else None)
     if info is None:
-        have = read_servers(cdir)
+        have = all_servers(cdir)
         if name not in have:
             raise HubError(f"không có MCP '{name}' trong cấu hình claude của tài khoản {account_label(aid)} "
                            f"({claude_json_path(cdir)}) — thêm bằng `cfharness mcp claude add` / `claude mcp add -s user …` dưới tài khoản đó trước",
@@ -158,4 +213,4 @@ def register(hub: Any, cfg: dict[str, Any], account_id: Any = None, *, info: dic
     return out
 
 
-__all__ = ["account_config_dir", "account_label", "claude_json_path", "default_claude_json", "read_servers", "register", "tool_server_name"]
+__all__ = ["all_servers", "managed_servers", "remote_settings_path", "account_config_dir", "account_label", "claude_json_path", "default_claude_json", "read_servers", "register", "tool_server_name"]

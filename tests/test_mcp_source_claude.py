@@ -397,3 +397,31 @@ async def test_fake_claude_e2e_init_status(hub_home, tmp_path, monkeypatch):
     finally:
         await hub.dispatcher.stop()
         hub.store.close()
+
+
+async def test_org_managed_and_seen_servers_are_removed_from_context(d):
+    """Server tổ chức cấp (`remote-settings.json.managedMcpServers`, thấy thật trên 2.1.329) + server lạ đã gặp ở system/init của run
+    trước (`mcp.claude_seen`) bị `--disallowedTools` ở run sau; liệt kê được (chỉ tên/host), đăng ký được làm nguồn claude."""
+    a, _, cdir = _acct(d)
+    (cdir / "remote-settings.json").write_text(json.dumps({"managedMcpServers": {
+        "orgdb": {"type": "http", "url": "https://mcp-db.org.example/mcp", "oauth": {"clientId": "cid-SECRET", "callbackPort": 9009}}},
+        "permissions": {}}), encoding="utf-8")
+    res = await rpc(d, "mcp.claude_servers", {})
+    assert "orgdb" in [s["name"] for s in res["servers"]] and "cid-SECRET" not in json.dumps(res)
+    await _setup_agent(d)
+    run_id, spec, _ = await _run(d)
+    argv, _ = build_argv(spec, dict(DEFAULTS["runtime"]["claude"]))
+    dis = argv[argv.index("--disallowedTools") + 1:]
+    assert "mcp__orgdb__*" in dis and "mcp__ghost__*" not in dis
+    ar = d.hub.runs.active[run_id]
+    assert ar.seen_key == str(cdir)
+    ar.violations.append({"kind": "mcp_server", "name": "ghost"})  # server claude nạp từ nguồn hub không đọc được
+    ar.violations.append({"kind": "hook", "name": "SessionStart:startup"})
+    d.hub.runs._remember_claude_seen(ar)
+    assert d.hub.store.state_get("mcp.claude_seen") == {str(cdir): ["ghost"]}
+    await rpc(d, "run.stop", {"id": run_id})
+    _, spec2, _ = await _run(d)
+    dis2 = build_argv(spec2, dict(DEFAULTS["runtime"]["claude"]))[0]
+    assert "mcp__ghost__*" in dis2 and "mcp__orgdb__*" in dis2
+    out = await rpc(d, "mcp.add", {"config": {"name": "orgdb", "source": "claude", "trust": "trusted"}})
+    assert out["config"]["url"] == "https://mcp-db.org.example" and "cid-SECRET" not in json.dumps(out)
