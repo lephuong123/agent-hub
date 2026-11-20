@@ -10,8 +10,15 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
-### Người dùng tự đăng nhập claude.ai cho connector ngay trên web hub
+---
+
+## v0.2.25 — 2026-11-20
+
+### Người dùng tự đăng nhập claude.ai cho connector ngay trên web hub (#168)
 - Cài đặt › Tài khoản Claude có khối **Connector claude.ai**: bấm "Đăng nhập claude.ai", mở link, đăng nhập tài khoản đã Connect Google Drive/Gmail… trên claude.ai, dán code — xong là agent dùng được connector, không cần admin vào máy chạy lệnh. Khối hiện tài khoản đang đăng nhập, nút đăng xuất và công tắc "Tự dùng connector cho mọi agent" (`connectors.auto`, bật cần xác nhận 2 bước).
+
+#### Lưu ý khi cập nhật
+- Đăng nhập chạy `claude auth login` dưới user OS của hub. Hub chạy nền (LaunchDaemon, user không đăng nhập màn hình) có thể không lưu được phiên vào Keychain — web sẽ báo "chưa thấy phiên claude.ai" thay vì báo thành công; khi đó đăng nhập bằng terminal của user hub (`sudo -u <user> -H claude` → `/login`).
 
 ---
 
