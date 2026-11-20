@@ -112,6 +112,9 @@ MACHINE_STATE = ("repo_locks", "browser_locks", "rate_limit", "rate_limit_gate",
                  "accounts.claudeai",  # phiên claude.ai theo tài khoản — thư mục claude-config/ không bao giờ đi theo gói (gắn với máy)
                  "mcp.claude_seen",  # server MCP lạ đã gặp ở run bỏ strict, theo thư mục cấu hình claude của MÁY này (runs._remember_claude_seen)
                  "mcp.claude_status",  # trạng thái MCP do claude quản lý theo tài khoản (mcp_client/claude_admin.py) — token ở Keychain máy cũ
+                 # PR4: server đang chờ đăng nhập claude để xoá token OAuth hub (mcp_client/migrate.py) — lượt đăng nhập là của máy cũ;
+                 # danh sách MCP nguồn claude cần thêm/đăng nhập lại của lần nhập trước (MCP_CLAUDE_STATE)
+                 "mcp.migrations", "import_mcp_claude",
                  "audit_watch.active",  # L5: cảnh báo audit đang bật của máy nguồn (máy đích tự học lại); `audit.archive_cutoff` ĐI CÙNG DB (khớp audit-archive/)
                  "systems.registry", "systems.paused", "telegram.offset", "slack.seen",
                  # PR5: đóng băng chuyển nhà của máy NGUỒN (gói xuất lại từ hub đã đóng băng) + kết quả lần nhập trước của chính nguồn
@@ -741,6 +744,48 @@ def _state_keys(conn: sqlite3.Connection, mode: str) -> list[str]:
     return sorted(k for k in keys if k in drop or (mode == "clone" and k.startswith(CLONE_STATE_PREFIXES)))
 
 
+MCP_CLAUDE_STATE = "import_mcp_claude"  # [{server, transport, host, accounts}] — doctor: thêm + đăng nhập lại trên tài khoản
+
+
+def mcp_claude_relogin(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """MCP nguồn claude (plan-mcp-claude-native PR2–PR4) trong DB của gói: cấu hình + token nằm trong `claude-config/<id>/` + Keychain của
+    MÁY CŨ (không bao giờ đi theo gói) → ở máy này phải thêm lại + đăng nhập lại trên tài khoản. Tài khoản lấy từ cache trạng thái
+    `mcp.claude_status` của máy cũ (đọc TRƯỚC khi dọn MACHINE_STATE), không có thì tài khoản đang dùng. CHỈ tên/host/id tài khoản."""
+    from urllib.parse import urlsplit
+
+    tabs = _tables(conn)
+    if "mcp_servers" not in tabs or "hub_state" not in tabs:
+        return []
+
+    def st(key: str) -> Any:
+        r = conn.execute("SELECT value FROM hub_state WHERE key=?", (key,)).fetchone()
+        try:
+            return json.loads(r[0]) if r and r[0] else None
+        except ValueError:
+            return None
+
+    cache = st("mcp.claude_status")
+    cache = cache if isinstance(cache, dict) else {}
+    active = st("claude_account_active")
+    fallback = str(active) if isinstance(active, str) and active.startswith("a_") else "machine"
+    out = []
+    for r in conn.execute("SELECT name, config FROM mcp_servers WHERE deleted_at IS NULL ORDER BY name").fetchall():
+        try:
+            conf = json.loads(r[1] or "{}") or {}
+        except ValueError:
+            continue
+        if conf.get("source") != "claude":
+            continue
+        accts = sorted(("machine" if k == "default" else str(k)) for k, e in cache.items()
+                       if isinstance(e, dict) and isinstance(e.get("servers"), dict) and r[0] in e["servers"])
+        try:
+            host = urlsplit(str(conf.get("url") or "")).hostname
+        except ValueError:
+            host = None
+        out.append({"server": str(r[0]), "transport": conf.get("transport"), "host": host, "accounts": accts or [fallback]})
+    return out
+
+
 def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], followups: dict[str, Any] | None = None,
                extra: dict[str, Any] | None = None, repos: list[dict[str, Any]] | None = None, pm: PathMap | None = None,
                filehub: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -759,6 +804,7 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
         if apply:
             conn.execute("BEGIN IMMEDIATE")
         if "hub_state" in tabs:
+            out["mcp_claude_relogin"] = mcp_claude_relogin(conn)  # TRƯỚC khi dọn mcp.claude_status (∈ MACHINE_STATE)
             keys = _state_keys(conn, mode)
             out["state_cleared"] = keys
             if apply and keys:
@@ -821,6 +867,8 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
                 rows_state.append(("cloned_from", {"hub_id": src.get("hub_id"), "export_id": manifest.get("id"), "at": now}))
             if followups:
                 rows_state.append(("import_followups", followups))
+            if out.get("mcp_claude_relogin"):
+                rows_state.append((MCP_CLAUDE_STATE, out["mcp_claude_relogin"]))
             if out["agents_paused"]:
                 rows_state.append((TR.PAUSED_KEY, out["agents_paused"]))
             if filehub:
@@ -881,6 +929,27 @@ FILEHUB_COMMAND = "cfharness filehub lane setup"
 def filehub_command(info: dict[str, Any] | None = None) -> str:
     """Lệnh nối lại thư mục Không gian số ở máy này (gợi ý cho báo cáo nhập/dry-run/doctor): dán khoá cổng cfharness."""
     return FILEHUB_COMMAND
+
+
+def mcp_claude_steps(item: dict[str, Any]) -> list[str]:
+    """Lệnh cho một MCP nguồn claude sau khi nhập: thêm lại (url đầy đủ không đi theo gói — hub chỉ giữ host) + đăng nhập, theo tài khoản."""
+    out = []
+    n = str(item.get("server") or "")
+    url = f"https://{item['host']}/…" if item.get("host") else "<URL>"
+    for a in item.get("accounts") or ["machine"]:
+        acct = f" --account {a}"
+        if item.get("transport") == "stdio":
+            out.append(f"cfharness mcp claude add {n}{acct} -- <lệnh>")
+        else:
+            out.append(f"cfharness mcp claude add {n} --url {url}{acct}; cfharness mcp claude login {n}{acct}")
+    return out
+
+
+def mcp_claude_note(items: list[dict[str, Any]]) -> str:
+    """Một dòng cho báo cáo nhập: MCP nguồn claude phải thêm + đăng nhập lại trên tài khoản (token ở Keychain máy cũ)."""
+    parts = [f"{i.get('server')} (tài khoản {', '.join(i.get('accounts') or ['machine'])})" for i in items[:8]]
+    return ("MCP do claude quản lý: cấu hình + đăng nhập nằm ở máy cũ — thêm lại rồi đăng nhập lại trên tài khoản: " + "; ".join(parts)
+            + ("…" if len(items) > 8 else "") + " (lệnh cụ thể: `cfharness hub doctor`)")
 
 
 def filehub_note(info: dict[str, Any]) -> str:
@@ -1486,5 +1555,5 @@ def register_rpc(daemon: "Daemon") -> None:
 
 
 __all__ = ["seal_package", "check_passphrase", "has_secrets", "export_package", "export_in_daemon", "export_offline", "verify_package", "read_manifest", "check_manifest", "import_plan",
-           "import_package", "build_pathmap", "parse_map_paths", "home_blank", "register_rpc", "MACHINE_STATE", "CLONE_STATE",
+           "import_package", "mcp_claude_relogin", "mcp_claude_note", "mcp_claude_steps", "build_pathmap", "parse_map_paths", "home_blank", "register_rpc", "MACHINE_STATE", "CLONE_STATE",
            "MUTATING_TRANSFER", "PROFILES", "MODES", "EXT", "exports_dir", "imports_dir"]

@@ -286,12 +286,15 @@ def _mcp(ck: _Checks, c: sqlite3.Connection | None, secrets: set[str], probe: Ca
         return
     from .mcp_client.oauth import secret_name as oauth_secret
 
+    hub_oauth: list[str] = []
     for r in rows:
         name = r["name"]
         try:
             conf = json.loads(r["config"] or "{}") or {}
         except ValueError:
             conf = {}
+        if conf.get("source") != "claude" and isinstance(conf.get("auth"), dict) and conf["auth"].get("type") == "oauth":
+            hub_oauth.append(name)
         perr = str(r["probe_error"] or "")
         if conf.get("source") == "claude":  # cấu hình + token do claude giữ theo tài khoản — hub không probe (plan-mcp-claude-native)
             ck.add(f"mcp:{name}", f"MCP {name}", True, f"{r['transport']} · nguồn claude (cấu hình + token theo tài khoản Claude đang dùng)")
@@ -311,6 +314,10 @@ def _mcp(ck: _Checks, c: sqlite3.Connection | None, secrets: set[str], probe: Ca
         else:
             ck.add(f"mcp:{name}", f"MCP {name}", True, f"{r['transport']}" + (f" · lần thử cuối lỗi: {perr[:120]}" if perr else "")
                    + ("" if r["last_probe_at"] else " · chưa thử (--probe)"))
+    if hub_oauth:  # plan-mcp-claude-native PR4: OAuth tự viết của hub sẽ bị gỡ (giai đoạn B) — khuyên chuyển sang claude theo tài khoản
+        ck.add("mcp_hub_oauth", "MCP OAuth do hub giữ", False,
+               f"nên chuyển sang claude: {', '.join(hub_oauth[:8])} — OAuth + proxy của hub sẽ bị gỡ ở bản sau", "warning",
+               fix="; ".join(f"cfharness mcp migrate-to-claude {n} --account <id>" for n in hub_oauth[:3]))
 
 
 def _claude_mcp(ck: _Checks, c: sqlite3.Connection | None, home: Path) -> None:
@@ -322,6 +329,7 @@ def _claude_mcp(ck: _Checks, c: sqlite3.Connection | None, home: Path) -> None:
     from .mcp_client import claude_source as cs
     from .mcp_client.claude_admin import CACHE_KEY, DEFAULT_KEY
 
+    _import_mcp_claude(ck, c, home)
     label, cdir = _connector_account(c, home)
     key = DEFAULT_KEY if cdir is None else cdir.name
     acct = "" if cdir is None else f" --account {cdir.name}"
@@ -359,6 +367,46 @@ def _claude_mcp(ck: _Checks, c: sqlite3.Connection | None, home: Path) -> None:
     elif have:
         ck.add("mcp_claude_auth", "Đăng nhập MCP nguồn claude", True, f"tài khoản {label}: không server nào cần đăng nhập "
                f"(kiểm lúc {entry.get('checked_at') or '?'})")
+
+
+def _import_mcp_claude(ck: _Checks, c: sqlite3.Connection, home: Path) -> None:
+    """Sau `hub import`: MCP nguồn claude phải thêm lại + đăng nhập lại trên tài khoản (`hub_state import_mcp_claude`, hub_transfer).
+    Mục đã có trong cấu hình claude của tài khoản đó VÀ lần kiểm gần nhất `connected` thì thôi báo."""
+    from .accounts import claude_config
+    from .hub_transfer import MCP_CLAUDE_STATE, mcp_claude_steps
+    from .mcp_client import claude_source as cs
+    from .mcp_client.claude_admin import CACHE_KEY, DEFAULT_KEY
+
+    items = _state(c, MCP_CLAUDE_STATE)
+    if not isinstance(items, list) or not items:
+        return
+    cache = _state(c, CACHE_KEY)
+    cache = cache if isinstance(cache, dict) else {}
+    todo: list[dict[str, Any]] = []
+    for it in items:
+        if not isinstance(it, dict) or not it.get("server"):
+            continue
+        left = []
+        for a in it.get("accounts") or ["machine"]:
+            a = str(a)
+            cdir = claude_config.account_dir(home, a) if a.startswith("a_") else None
+            key = DEFAULT_KEY if cdir is None else a
+            try:
+                have = it["server"] in cs.read_servers(cdir)
+            except Exception:  # best-effort: không đọc được thì vẫn nhắc  # noqa: BLE001
+                have = False
+            st = ((cache.get(key) or {}).get("servers") or {}).get(it["server"]) if isinstance(cache.get(key), dict) else None
+            if not (have and st == "connected"):
+                left.append(a)
+        if left:
+            todo.append({**it, "accounts": left})
+    if not todo:
+        ck.add("mcp_claude_import", "MCP nguồn claude sau khi nhập", True, "đã thêm + đăng nhập lại đủ trên các tài khoản")
+        return
+    steps = [s for it in todo for s in mcp_claude_steps(it)]
+    ck.add("mcp_claude_import", "MCP nguồn claude sau khi nhập", False,
+           "đăng nhập lại MCP " + "; ".join(f"{it['server']} trên tài khoản {', '.join(it['accounts'])}" for it in todo[:6])
+           + " — cấu hình + token ở máy cũ (url đầy đủ không đi theo gói: dùng URL gốc của server)", "warning", fix="; ".join(steps[:4]))
 
 
 def _channels(ck: _Checks, cfg: dict[str, Any], secrets: set[str]) -> None:

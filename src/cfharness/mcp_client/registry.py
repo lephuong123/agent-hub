@@ -262,6 +262,35 @@ class McpRegistry:
         out["secrets_moved"] = moved
         return out
 
+    def convert_to_claude(self, name: str, info: dict[str, Any]) -> dict[str, Any]:
+        """Đổi một dòng nguồn hub sang nguồn claude TẠI CHỖ (`mcp.migrate_to_claude`, plan-mcp-claude-native PR4): giữ tên (nên mọi
+        agent đã gán giữ nguyên), trust, `tools` (include/exclude/require_approval/annotations ghi đè của người), mô tả, timeout và
+        `annotations_cache` (cột riêng); bỏ cách kết nối + `auth` (claude giữ). `info` = mục `claude_source.read_servers`."""
+        self._check_writable()
+        row = self.require(name)
+        cur = dict(row["config"])
+        if cur.get("source") == SOURCE_CLAUDE:
+            raise Conflict(f"MCP '{name}' đã là nguồn claude")
+        keep = {k: cur[k] for k in ("tools", "trust", "description", "timeout_s") if k in cur}
+        data: dict[str, Any] = {"name": name, **keep, "source": SOURCE_CLAUDE, "transport": info["transport"]}
+        if info.get("host"):
+            data["url"] = f"https://{info['host']}"
+            raw = str(cur.get("url") or "")
+            if "${" not in raw and raw.lower().startswith(("http://", "https://")):
+                data["url"] = raw  # validator rút về scheme://host[:port] (giữ http loopback / cổng)
+        cfg, warnings = self._validate(data)
+        with _tx(self.conn):
+            self.conn.execute(
+                "UPDATE mcp_servers SET transport=?, config=?, trust=?, tools_include=?, tools_exclude=?, source=?, updated_at=? WHERE name=?",
+                (cfg.transport, json.dumps(cfg.stored(), ensure_ascii=False), cfg.trust, json.dumps(cfg.tools.include),
+                 json.dumps(cfg.tools.exclude), cfg.source, _now(), name),
+            )
+        self._write_mirror()
+        self._emit("migrated", name, {"source": SOURCE_CLAUDE})
+        out = self.show(name)
+        out["warnings"] = warnings
+        return out
+
     def remove(self, name: str, *, force: bool = False) -> dict[str, Any]:
         """Xoá mềm. Đang được agent dùng → từ chối trừ khi `force` (run của agent đó sẽ báo lỗi rõ ràng)."""
         self._check_writable()

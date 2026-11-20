@@ -210,7 +210,7 @@ async def test_login_wrong_then_right_redirect(d, tmp_path):
         await rpc(d, "mcp.claude_login_finish", {"login_id": lg["login_id"], "redirect_url": GOOD_REDIRECT})
     lg = await rpc(d, "mcp.claude_login_start", {"account_id": a, "name": "atl"})
     res = await rpc(d, "mcp.claude_login_finish", {"login_id": lg["login_id"], "redirect_url": GOOD_REDIRECT})
-    assert res == {"account": a, "name": "atl", "status": "connected", "ok": True}
+    assert res == {"account": a, "name": "atl", "status": "connected", "ok": True, "hub_token_deleted": False}
     # cô lập: đăng nhập nằm ở thư mục của A; B vẫn cần đăng nhập
     assert (d.hub.paths.home / "claude-config" / a / ".fake_mcp_auth.json").exists()
     stb = await rpc(d, "mcp.claude_status", {"account_id": b, "refresh": True})

@@ -230,7 +230,10 @@ class ClaudeMcpAdmin:
 
     # ------------------------------------------------------------------ thêm / gỡ
     async def add(self, account_id: Any, name: Any, transport: Any, *, url: Any = None, command: Any = None, args: Any = None,
-                  headers: Any = None, env: Any = None, register: bool = True, trust: Any = None, description: Any = None) -> dict[str, Any]:
+                  headers: Any = None, env: Any = None, register: bool = True, trust: Any = None, description: Any = None,
+                  oauth: Any = None, allow_hub_row: bool = False) -> dict[str, Any]:
+        """`oauth`: {clientId?, callbackPort?} (client OAuth đăng ký tay — chỉ http/sse). `allow_hub_row`: CHỈ `mcp.migrate_to_claude`
+        (mcp_client/migrate.py) — dòng registry nguồn hub cùng tên sẽ được chuyển sang nguồn claude ngay sau đó."""
         name = validate_name(name)
         tr = str(transport or "").strip().lower() or ("stdio" if command else "http")
         if tr not in TRANSPORTS:
@@ -255,7 +258,25 @@ class ClaudeMcpAdmin:
                     hs[str(k)] = v
                     secrets.append(v)
                 entry["headers"] = hs
+            if oauth:
+                if not isinstance(oauth, dict) or set(oauth) - {"clientId", "callbackPort"}:
+                    raise HubError("oauth chỉ nhận {clientId, callbackPort}", code=-32602)
+                o: dict[str, Any] = {}
+                cid = oauth.get("clientId")
+                if cid is not None:
+                    if not isinstance(cid, str) or not cid or len(cid) > 512 or any(ord(ch) < 0x21 for ch in cid):
+                        raise HubError("oauth.clientId không hợp lệ", code=-32602)
+                    o["clientId"] = cid
+                port = oauth.get("callbackPort")
+                if port is not None:
+                    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+                        raise HubError("oauth.callbackPort phải là số cổng 1..65535", code=-32602)
+                    o["callbackPort"] = port
+                if o:
+                    entry["oauth"] = o
         else:
+            if oauth:
+                raise HubError("transport stdio không nhận oauth", code=-32602)
             c = str(command or "").strip()
             if not c or "\n" in c:
                 raise HubError("transport stdio cần command", code=-32602)
@@ -294,7 +315,7 @@ class ClaudeMcpAdmin:
                            "chặn đọc — thêm server cần secret tĩnh bằng `cfharness mcp add` (nguồn hub, secret store), hoặc chọn một tài "
                            "khoản token (thư mục cấu hình riêng, agent không đọc được)", code=-32602)
         row = self.hub.mcp.get_row(name, include_deleted=False)  # type: ignore[attr-defined]
-        if row is not None and (row.get("config") or {}).get("source") != "claude":
+        if row is not None and (row.get("config") or {}).get("source") != "claude" and not allow_hub_row:
             raise Conflict(f"đã có MCP '{name}' nguồn hub trong registry — đặt tên khác (hai server cùng tên sẽ đè nhau trong run)")
         async with self._lock(key):
             if name in self._servers(cdir):
@@ -422,7 +443,8 @@ class ClaudeMcpAdmin:
         if status == "needs_auth":
             raise HubError(f"`claude mcp login {s.name}` đã chạy nhưng server vẫn báo cần đăng nhập — máy hub có thể không lưu được token "
                            "(Keychain). Thử lại, hoặc chạy `claude mcp login` trong terminal của user hub.")
-        return {"account": s.aid, "name": s.name, "status": status, "ok": status == "connected"}
+        dropped = list(st.get("hub_token_deleted") or []) + self._after_connected(s.key, {s.name: status})
+        return {"account": s.aid, "name": s.name, "status": status, "ok": status == "connected", "hub_token_deleted": s.name in dropped}
 
     async def login_cancel(self, login_id: Any) -> dict[str, Any]:
         await self._close_login(str(login_id or ""))
@@ -464,6 +486,17 @@ class ClaudeMcpAdmin:
         for lid in list(self._logins):
             await self._close_login(lid)
 
+    def _after_connected(self, key: str, statuses: dict[str, str]) -> list[str]:
+        """Server vừa thấy `connected` dưới cấu hình `key` mà đang chờ chuyển từ OAuth của hub (mcp.migrate_to_claude) → xoá token
+        `MCP_OAUTH_*` của hub (plan-mcp-claude-native PR4). Lỗi không làm hỏng kết quả đăng nhập/trạng thái."""
+        from . import migrate
+
+        try:
+            return migrate.on_connected(self.hub, key, [n for n, st in statuses.items() if st == "connected"])
+        except Exception:  # best-effort: token hub còn lại thì `mcp migrate-to-claude --drop-hub-token` xoá tay; không che kết quả đăng nhập
+            log.exception("không dọn được token OAuth hub sau khi chuyển sang claude")
+            return []
+
     # ------------------------------------------------------------------ trạng thái
     def _save_cache(self, key: str, servers: dict[str, str]) -> None:
         try:
@@ -489,6 +522,7 @@ class ClaudeMcpAdmin:
         aid, cdir, key = self._resolve(account_id)
         have = self._servers(cdir)
         statuses: dict[str, str] = {}
+        dropped: list[str] = []  # token OAuth hub vừa xoá vì server đã chuyển sang claude + connected (mcp_client/migrate.py)
         checked_at: str | None = None
         err: str | None = None
         hit = self._cache.get(key)
@@ -510,6 +544,7 @@ class ClaudeMcpAdmin:
                     self._cache[key] = (time.monotonic(), statuses)
                     self._save_cache(key, statuses)
                     checked_at = iso()
+                    dropped = self._after_connected(key, statuses)
                 elif err is None:
                     err = f"`claude mcp list` lỗi: {_clean_cli(er or out) or f'exit {rc}'}"
         rows = {r["name"]: r for r in self.hub.mcp.list()}  # type: ignore[attr-defined]
@@ -522,7 +557,7 @@ class ClaudeMcpAdmin:
                             "registered_source": None if r is None else ("claude" if src == "claude" else "hub"),
                             "agents": self.hub.mcp.agents_using(n) if r is not None else []})  # type: ignore[attr-defined]
         return {"account": aid, "account_label": self._label(aid), "config_path": str(cs.claude_json_path(cdir)), "servers": servers,
-                "checked_at": checked_at, "error": err, "logins": self._pending(key)}
+                "checked_at": checked_at, "error": err, "logins": self._pending(key), **({"hub_token_deleted": dropped} if dropped else {})}
 
 
 __all__ = ["CACHE_KEY", "DEFAULT_KEY", "ClaudeMcpAdmin", "parse_list", "validate_name"]

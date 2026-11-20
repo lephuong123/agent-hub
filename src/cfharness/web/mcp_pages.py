@@ -272,7 +272,29 @@ async def mcp_show(request: Request) -> Response:
     rows = tool_rows(s)
     return await render(request, "mcp_show.html", {"nav": "mcp", "s": s, "f": form, "rows": rows, "annotations": tools.get("annotations") or {},
                                                    "blocked_suspicious": [r for r in rows if r["suspicious"] and r["state"] == "blocked"],
-                                                   "masked": _has_mask(cfg)})
+                                                   "masked": _has_mask(cfg), "migrate_accounts": await _migrate_accounts(request, cfg)})
+
+
+async def _migrate_accounts(request: Request, cfg: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Tài khoản Claude chọn được cho «Chuyển sang claude» (server OAuth nguồn hub, plan-mcp-claude-native PR4). Server có header →
+    chỉ tài khoản token (`machine` lưu header rõ trong ~/.claude.json). Không phải server OAuth của hub / daemon cũ → None."""
+    from ..rpc import DaemonUnavailable
+
+    if cfg.get("source") == "claude" or (cfg.get("auth") or {}).get("type") != "oauth":
+        return None
+    try:
+        res = await rpc(request, "account.list", {}) or {}
+    except (RpcError, DaemonUnavailable, OSError):
+        return None
+    out = []
+    for a in res.get("accounts") or []:
+        if not isinstance(a, dict) or a.get("kind") not in ("token", "machine"):
+            continue
+        if a.get("kind") == "machine" and cfg.get("headers"):
+            continue
+        out.append({"id": str(a.get("id")), "label": str(a.get("label") or a.get("id")), "active": bool(a.get("active"))})
+    out.sort(key=lambda x: (not x["active"], x["label"]))
+    return out
 
 
 def _masked(d: dict[str, Any] | None) -> dict[str, Any]:

@@ -1,6 +1,6 @@
 # Plan: chuyển xử lý MCP bên thứ ba sang `claude` (MCP do claude quản lý theo tài khoản)
 
-Trạng thái: PLAN (2026-11-20). PR1 (#171), PR2, PR3 đã làm; PR4–PR5 chưa làm. Phụ thuộc nhánh connector theo tài khoản (`accounts/claude_config.py`, v0.2.27).
+Trạng thái: PLAN (2026-11-20). PR1 (#171), PR2, PR3, PR4 giai đoạn A đã làm; PR4 giai đoạn B (gỡ code OAuth/proxy) + PR5 chưa làm. Phụ thuộc nhánh connector theo tài khoản (`accounts/claude_config.py`, v0.2.27).
 
 ## 1. Kết luận phân tích
 
@@ -158,6 +158,45 @@ thật để hoàn tất) — hub không dựa vào nó, luôn kiểm lại `mcp
 - Khi không còn server OAuth `source=hub`: gỡ `oauth.py`, `oauth_proxy.py`, `oauth_cli.py`, `web/mcp_oauth.py`, RPC `mcp.oauth_*` (giữ stub trả lỗi hướng dẫn 1 phiên bản), config `mcp.oauth_proxy.*`.
 - `hub_transfer`/`backup`: server `source=claude` không mang token — gói ghi `import_followups` "đăng nhập lại MCP X trên tài khoản Y"; doctor báo.
 - CHANGELOG mục "Lưu ý khi cập nhật".
+
+**Đã làm (giai đoạn A, 2026-11-20, nhánh `feat/mcp-migrate-to-claude`, trên PR3) — chuyển, CHƯA gỡ code OAuth/proxy (hub cũ vẫn dùng):**
+- `mcp_client/migrate.py` + RPC `mcp.migrate_to_claude{name, account_id, keep_hub_token?, login?, dry_run?, drop_hub_token?}` (HUMAN_ONLY, không
+  ∈ MANAGER_ALLOWED, ∈ MUTATING; audit chỉ `MIGRATE_AUDIT_KEYS`), CLI `cfharness mcp migrate-to-claude <tên> --account <id> [--yes]
+  [--keep-hub-token] [--no-login] | --drop-hub-token` (∈ `HUB_HUMAN_ONLY_CLI["mcp"]`; xem trước bằng `dry_run`, y/N, rồi hỏi URL chuyển hướng
+  bằng getpass → `mcp.claude_login_finish`).
+- Điều kiện: dòng nguồn hub, http/sse, `auth.type == oauth`. Từ chối: không OAuth (secret tĩnh giữ nguồn hub — giải thích trong lỗi), stdio,
+  client có `client_secret_ref` (claude chỉ nhận client secret qua Keychain khi thêm tay), header + tài khoản `machine` (luật PR3), run của
+  agent gán server đang chạy, đã là nguồn claude.
+- Entry claude = `secrets.resolve(claude_entry())` (url/header đã thay `${…}`, chỉ trong bộ nhớ → stdin `claude mcp add-json`) + `oauth.clientId`
+  khi hub dùng client đăng ký tay (DCR: bỏ — claude tự đăng ký). `ClaudeMcpAdmin.add` nhận thêm `oauth` + `allow_hub_row` (chỉ đường migrate).
+  Tài khoản đã có server cùng tên + cùng transport/host → dùng lại (không thêm, không gỡ khi hoàn tác); khác → Conflict.
+- `McpRegistry.convert_to_claude`: đổi tại chỗ (giữ tên → agent gán giữ nguyên; trust, `tools` include/exclude/require_approval/annotations,
+  mô tả, timeout, cột `annotations_cache`); event `mcp.changed{op: migrated}`. Lỗi ở bước này → `claude mcp remove` entry vừa thêm.
+- Token `MCP_OAUTH_*`: giữ tới khi server `connected` dưới đúng cấu hình claude của tài khoản (`migrate.on_connected`, gọi từ
+  `ClaudeMcpAdmin.login_finish` và `status` làm mới — nút «Kiểm tra MCP» cũng dọn khi người đăng nhập xong ngoài hub); trạng thái chờ ở
+  `hub_state mcp.migrations` (∈ MACHINE_STATE). `keep_hub_token` giữ; `drop_hub_token` xoá rõ (chỉ khi đã nguồn claude). Xoá → audit
+  `mcp.migrate_hub_token_deleted` (chỉ tên + lý do). `login_finish` trả thêm `hub_token_deleted`.
+- Web: thẻ OAuth ở `/mcp/{name}` có dòng khuyên chuyển + form chọn tài khoản (`account.list`; server có header → bỏ `machine`) → ACTIONS
+  `mcp_migrate_claude` (xác nhận, CSRF, audit web) → chuyển về `/settings#acct-mcp-<id>` (lượt đăng nhập hiện ở hàng tài khoản).
+- Khuyên chuyển: `cfharness mcp login|logout` in một dòng lưu ý (stderr); doctor `mcp_hub_oauth` (warning) liệt kê server OAuth nguồn hub
+  "nên chuyển sang claude" kèm lệnh.
+- hub_transfer: `mcp_claude_relogin` (đọc TRƯỚC khi dọn MACHINE_STATE) → `hub_state import_mcp_claude` [{server, transport, host, accounts}]
+  (tài khoản theo cache `mcp.claude_status` của máy cũ, không có → tài khoản đang dùng); báo cáo `hub import` có một dòng; doctor
+  `mcp_claude_import` "đăng nhập lại MCP X trên tài khoản Y" + lệnh `mcp claude add … --url https://<host>/… ; mcp claude login …`, thôi báo khi
+  tài khoản đó đã có server + `connected`. (PR2/PR3 chưa có ghi chú này — chỉ có cảnh báo "thiếu ở tài khoản đang dùng".)
+- Test: `tests/test_mcp_migrate.py` (14 ca: đường đẹp + giữ chính sách, thời điểm xoá token, keep/drop, client_id + header, từ chối, hoàn tác,
+  classifier, manager bị chặn, doctor, nhập gói thật, CLI, web), `tests/test_sec_auth.py::test_mcp_migrate_to_claude_human_only`.
+
+Lệch / ngoài phạm vi: server http có header tĩnh (không OAuth) KHÔNG chuyển — giữ nguồn hub (secret store + mcp.json 0600); scope đặt tay của
+hub không chuyển (claude tự xin, cảnh báo); client OAuth có secret chưa chuyển tự động; client_id tay cần thêm redirect
+`http://localhost:<cổng>/callback` của claude ở nhà cung cấp (cảnh báo). `move` giữ token hub còn chờ (lượt `mcp.migrations` bị dọn) → xoá
+bằng `--drop-hub-token`.
+
+**Còn lại cho giai đoạn B (bản sau, khi hub thật không còn server OAuth nguồn hub):** gỡ `oauth.py`, `oauth_proxy.py`, `oauth_cli.py`,
+`web/mcp_oauth.py` (+ template `_mcp_oauth.html`, `mcp_oauth_go/done.html`), RPC `mcp.oauth_*` (giữ stub trả lỗi hướng dẫn migrate một
+phiên bản), config `mcp.oauth_proxy.*` + `mcp_client.oauth_callback_port`, `inject_bearer`/`ensure_fresh_for` trong runs/registry, nhánh OAuth
+của doctor/catalog/`mcp add --oauth`, test OAuth/proxy (~30); chuyển tự động lúc daemon lên (hoặc chặn run) cho server còn sót; CHANGELOG
+"Lưu ý khi cập nhật".
 
 ### PR5 — Điều phối viên + doctor
 - `mcp_registry_list` hiện cả `source`; khung `read_only_trusted` áp như server hub (dựa annotation thủ công).

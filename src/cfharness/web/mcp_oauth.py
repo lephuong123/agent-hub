@@ -107,7 +107,44 @@ def routes() -> list[Route]:
     return [Route("/do/mcp_connect", connect, methods=["POST"]), Route(CALLBACK_PATH, callback)]
 
 
+_ACCT_RE = re.compile(r"^(machine|a_[0-9a-f]{8})$")
+
+
+def _migrate_params(f: Any) -> dict[str, Any]:
+    name, acct = str(f.get("name") or ""), str(f.get("account_id") or "").strip()
+    if not _NAME_RE.match(name):
+        raise ValueError("tên MCP server không hợp lệ")
+    if not _ACCT_RE.match(acct):
+        raise ValueError("chọn tài khoản Claude")
+    return {"name": name, "account_id": acct}
+
+
+def _migrate_confirm(f: Any) -> str:
+    who = str(f.get("account_label") or f.get("account_id") or "")
+    return (f"Chuyển MCP {f.get('name')} sang claude (tài khoản «{who}»)? Hub thêm server vào cấu hình claude của tài khoản này, registry "
+            "đổi sang nguồn claude (GIỮ trust, tool, luôn hỏi duyệt, agent gán), rồi mở lượt đăng nhập ở hàng tài khoản trong Cài đặt. "
+            "Token OAuth của hub bị xoá sau khi đăng nhập claude thành công. Agent gán server này chỉ dùng được nó khi tài khoản đang dùng "
+            "có server.")
+
+
+def _migrate_ok(r: Any, f: Any) -> str:
+    r = r if isinstance(r, dict) else {}
+    msg = f"Đã chuyển MCP {r.get('name') or f.get('name')} sang claude (tài khoản {r.get('account_label') or f.get('account_id')})"
+    msg += ". Đăng nhập: bấm «Mở trang đăng nhập» rồi dán URL chuyển hướng" if r.get("login") else ". Đăng nhập ở mục «MCP của tài khoản»"
+    for w in r.get("warnings") or []:
+        msg += f". {w}"
+    return msg
+
+
+def _migrate_goto(r: Any, f: Any) -> str:
+    acct = str(f.get("account_id") or "")
+    return f"/settings#acct-mcp-{acct}" if _ACCT_RE.match(acct) else "/settings#accounts"
+
+
 def register_actions(actions: dict[str, Any], Action: Any, req: Any) -> None:
+    # plan-mcp-claude-native PR4: server OAuth của hub → MCP do claude quản lý theo tài khoản (mcp.migrate_to_claude ∈ HUMAN_ONLY, audit web)
+    actions["mcp_migrate_claude"] = Action("mcp.migrate_to_claude", _migrate_params, _migrate_ok, confirm=_migrate_confirm, danger=True,
+                                           goto=_migrate_goto)
     actions["mcp_disconnect"] = Action(
         "mcp.oauth_disconnect", lambda f: {"name": req(f, "name")},
         lambda r, f: f"Đã ngắt kết nối {f.get('name')}" + (" (đã thu hồi token)" if (r or {}).get("revoked") else ""),

@@ -43,6 +43,8 @@ MUTATING = frozenset(
         # MCP do claude quản lý theo tài khoản (plan-mcp-claude-native PR3) — audit chỉ danh sách trắng (CLAUDE_AUDIT_KEYS)
         "mcp.claude_add", "mcp.claude_remove", "mcp.claude_login_start", "mcp.claude_login_finish", "mcp.claude_login_cancel",
         "mcp.claude_logout",
+        # PR4: chuyển server OAuth của hub sang claude theo tài khoản (mcp_client/migrate.py) — audit chỉ MIGRATE_AUDIT_KEYS
+        "mcp.migrate_to_claude",
         "secret.set", "secret.rm",
         "feedback.record",
         # M2
@@ -88,6 +90,7 @@ FAILURE_DROP_KEYS = frozenset({"token", "code", "state", "iss", "password", "sec
                                "redirect_url", "headers", "env"})
 # mcp.claude_*: audit CHỈ các khoá này (url có thể mang token query, header/env/args = secret, URL chuyển hướng mang code dùng một lần)
 CLAUDE_AUDIT_KEYS = ("name", "account_id", "transport", "login_id", "force", "register", "trust")
+MIGRATE_AUDIT_KEYS = ("name", "account_id", "keep_hub_token", "drop_hub_token", "dry_run", "login")
 AUDITED_ATTR = "_cfharness_audited"  # dấu của wrap_with_audit (test "mọi method ghi đều có audit" dò qua chuỗi __wrapped__)
 FEEDBACK_KINDS = {"good": "good", "wrong": "correction", "partial": "correction"}
 TEXT_MAX = 2000
@@ -218,6 +221,19 @@ class IntegrationRpc:
 
     async def mcp_claude_status(self, p: dict[str, Any]) -> dict[str, Any]:
         return await self.hub.mcp_claude.status(p.get("account_id"), refresh=bool(p.get("refresh")), cached=bool(p.get("cached")))
+
+    async def mcp_migrate_to_claude(self, p: dict[str, Any]) -> dict[str, Any]:
+        """PR4 giai đoạn A: server OAuth của hub → MCP do claude quản lý trong cấu hình của tài khoản `account_id` (mcp_client/migrate.py).
+        `dry_run` = chỉ kiểm + xem trước; `drop_hub_token` = xoá token OAuth hub của server ĐÃ chuyển; `login=false` = không mở lượt đăng nhập."""
+        from ..mcp_client import migrate
+
+        name = _req(p, "name")
+        if p.get("drop_hub_token"):
+            return migrate.drop_hub_token(self.hub, name)
+        if p.get("dry_run"):
+            return migrate.plan(self.hub, name, p.get("account_id"))
+        return await migrate.migrate(self.hub, name, p.get("account_id"), keep_hub_token=bool(p.get("keep_hub_token")),
+                                     start_login=p.get("login", True) is not False)
 
     async def mcp_claude_servers(self, p: dict[str, Any]) -> dict[str, Any]:
         """MCP do claude quản lý trong cấu hình của tài khoản (mặc định: đang dùng) — CHỈ tên/transport/host + đã đăng ký/gán chưa."""
@@ -605,6 +621,7 @@ class IntegrationRpc:
             "mcp.claude_login_cancel": self.mcp_claude_login_cancel,
             "mcp.claude_logout": self.mcp_claude_logout,
             "mcp.claude_status": self.mcp_claude_status,
+            "mcp.migrate_to_claude": self.mcp_migrate_to_claude,
             "mcp.probe": self.mcp_probe,
             "mcp.import": self.mcp_import,
             "mcp.assign": self.mcp_assign,
@@ -686,6 +703,8 @@ def _audit_params(method: str, p: dict[str, Any]) -> dict[str, Any]:
         params = {k: v for k, v in params.items() if k in ("name", "redirect_uri", "error")}
     if method.startswith("mcp.claude_"):
         params = {k: v for k, v in params.items() if k in CLAUDE_AUDIT_KEYS}
+    if method == "mcp.migrate_to_claude":
+        params = {k: v for k, v in params.items() if k in MIGRATE_AUDIT_KEYS}
     if "soul" in p:
         params["soul"] = "(updated)" if p.get("soul") else None
     if "prompt" in params:

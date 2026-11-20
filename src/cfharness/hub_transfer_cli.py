@@ -420,6 +420,8 @@ def _import(ctx: Any) -> int:
                      "(`cfharness schedule list` rồi bật lịch cần chạy), task đang dở đã bị chặn (`cfharness task unblock <id>`).")
     if r.get("filehub"):
         lines.append(T.filehub_note(r["filehub"]))
+    if r.get("mcp_claude_relogin"):
+        lines.append(T.mcp_claude_note(r["mcp_claude_relogin"]))
     if r.get("renamed"):
         lines.append(f"Đổi tên {len(r['renamed'])} file tri thức không hợp lệ ở máy này (xem hub_state.import_followups.renamed)"
                      + (": skill " + ", ".join(f"{s['old']} → {s['new']}" for s in r.get("skills_renamed") or []) if r.get("skills_renamed") else ""))

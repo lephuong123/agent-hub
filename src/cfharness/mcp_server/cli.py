@@ -502,11 +502,71 @@ def cmd_mcp_claude(ctx: Any) -> int:
     return EXIT_OK
 
 
+def cmd_mcp_migrate(ctx: Any) -> int:
+    """`cfharness mcp migrate-to-claude <tên> --account <id> [--yes] [--keep-hub-token] [--no-login] | --drop-hub-token` — server OAuth
+    của hub → MCP do claude quản lý theo tài khoản (plan-mcp-claude-native PR4 giai đoạn A)."""
+    a = ctx.args
+    if a.drop_hub_token:
+        res = ctx.call("mcp.migrate_to_claude", {"name": a.name, "drop_hub_token": True})
+        ctx.out(res, f"MCP '{res['name']}': " + ("đã xoá token OAuth của hub" if res.get("hub_token_deleted") else "hub không còn token OAuth nào"))
+        return EXIT_OK
+    if not a.account:
+        _eprint("cần --account <id> (xem `cfharness account list`; 'machine' = cấu hình claude mặc định của máy)")
+        return EXIT_USER
+    base = {"name": a.name, "account_id": a.account}
+    pl = ctx.call("mcp.migrate_to_claude", {**base, "dry_run": True})
+    lines = [f"Chuyển MCP '{pl['name']}' ({pl['transport']}{' · ' + pl['host'] if pl.get('host') else ''}) từ OAuth của hub sang claude, "
+             f"tài khoản {pl.get('account_label')}:",
+             "  - thêm server vào cấu hình claude của tài khoản (claude giữ url/header + đăng nhập OAuth)",
+             f"  - registry đổi sang nguồn claude, GIỮ trust ({pl.get('trust')}), tool include/exclude/luôn hỏi duyệt, annotations"
+             + (f", agent gán: {', '.join(pl['agents'])}" if pl.get("agents") else ""),
+             "  - token OAuth của hub bị xoá sau khi đăng nhập claude thành công" + (" (--keep-hub-token: GIỮ)" if a.keep_hub_token else "")]
+    lines += [f"  ! {w}" for w in pl.get("warnings") or []]
+    if pl.get("agents"):
+        lines.append(f"  ! agent gán server này chỉ dùng được nó khi tài khoản đang dùng là {pl.get('account_label')} (hoặc tài khoản khác cũng có server)")
+    print("\n".join(lines))
+    if not a.yes:
+        try:
+            ok = input("Tiếp tục? [y/N] ").strip().lower() in ("y", "yes", "c", "co", "có")
+        except (KeyboardInterrupt, EOFError):
+            ok = False
+        if not ok:
+            print("Đã huỷ.")
+            return EXIT_USER
+    res = ctx.call("mcp.migrate_to_claude", {**base, "keep_hub_token": bool(a.keep_hub_token), "login": not a.no_login}, timeout=240)
+    print(f"đã chuyển MCP '{res['name']}' sang nguồn claude (tài khoản {res.get('account_label')})"
+          + ("" if res.get("added") else "; dùng server sẵn có trong cấu hình claude của tài khoản"))
+    for w in res.get("warnings") or []:
+        print(f"  ! {w}")
+    lg = res.get("login")
+    acct = f" --account {res['account']}" if res.get("account") else ""
+    if not lg:
+        ctx.out(res, f"đăng nhập sau: cfharness mcp claude login {res['name']}{acct}")
+        return EXIT_OK
+    print("Đăng nhập trên claude: mở link sau, đăng nhập + đồng ý cấp quyền. Trình duyệt chuyển tới http://localhost:… (có thể báo không mở "
+          "được trang) — chép NGUYÊN địa chỉ trên thanh trình duyệt rồi dán:")
+    print(f"  {lg['url']}")
+    try:
+        url = _ask_secret("URL chuyển hướng (Enter trống = để sau): ").strip()
+    except (KeyboardInterrupt, EOFError):
+        url = ""
+    if not url:
+        ctx.call("mcp.claude_login_cancel", {"login_id": lg["login_id"]})
+        ctx.out(res, f"\nChưa đăng nhập — token OAuth của hub vẫn giữ tới khi đăng nhập xong: cfharness mcp claude login {res['name']}{acct}")
+        return EXIT_OK
+    fin = ctx.call("mcp.claude_login_finish", {"login_id": lg["login_id"], "redirect_url": url}, timeout=240)
+    ctx.out({**res, "login_result": fin}, f"MCP '{fin['name']}': {_STATUS_VI.get(fin['status'], fin['status'])}"
+            + ("; đã xoá token OAuth của hub" if fin.get("hub_token_deleted") else ""))
+    return EXIT_OK
+
+
 def cmd_mcp(ctx: Any) -> int:
     a = ctx.args
     act = a.mcp_action
     if act == "claude":
         return cmd_mcp_claude(ctx)
+    if act == "migrate-to-claude":
+        return cmd_mcp_migrate(ctx)
     if act == "serve":
         return cmd_mcp_serve(ctx)
     if act == "snippet":
@@ -828,6 +888,14 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
         c.add_argument("name")
         if op == "rm":
             c.add_argument("--force", action="store_true", help="xoá cả khi agent còn gán (bản cuối)")
+    mg = ms.add_parser("migrate-to-claude", help="chuyển server OAuth của hub sang MCP do claude quản lý theo tài khoản (rồi đăng nhập trên claude)",
+                       parents=[common])
+    mg.add_argument("name")
+    mg.add_argument("--account", help="id tài khoản Claude đích ('machine' = cấu hình claude mặc định; server có header cần tài khoản token)")
+    mg.add_argument("--yes", "-y", action="store_true", help="không hỏi xác nhận")
+    mg.add_argument("--keep-hub-token", action="store_true", help="giữ token OAuth của hub cả sau khi đăng nhập claude xong")
+    mg.add_argument("--no-login", action="store_true", help="chỉ chuyển, đăng nhập sau (cfharness mcp claude login)")
+    mg.add_argument("--drop-hub-token", action="store_true", help="xoá token OAuth của hub cho server ĐÃ chuyển (đăng nhập xong ngoài hub)")
     ed = ms.add_parser("edit", help="sửa MCP server (--env KEY= để xoá khoá)", parents=[common])
     ed.add_argument("name")
     ed.add_argument("--probe", action="store_true")
