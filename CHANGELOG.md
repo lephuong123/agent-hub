@@ -10,6 +10,13 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Daemon — không còn lặp "thoát 1" sau `cfharness update` (macOS)
+- Đã cài tự khởi động (LaunchAgent) thì `cfharness update` / tự khởi động daemon nhờ launchd chạy lại daemon
+  (`launchctl kickstart`, giữ đúng `--home`) thay vì bật một bản ngoài launchd. Trước đây bản ngoài launchd giữ `daemon.lock`, job
+  launchd thua khoá, thoát 1 và bị chạy lại vô hạn. Job launchd lỡ thua khoá giờ chờ khoá (thử lại mỗi 30 giây) thay vì thoát 1.
+
+- `scripts/setup-hub-user.sh`: `CONNECTOR_AGENTS=all` bật connector cho mọi agent; connector được GỘP với connector agent đang có thay vì ghi đè.
+
 ### Lịch — gửi thêm kết quả sang chat riêng khác
 - Một lịch gửi được kết quả tới tối đa 4 chat riêng (Telegram chat riêng, Slack DM) ngoài nơi nhận chính, vd báo cáo 07:00 về cả Telegram
   lẫn Slack: `cfharness schedule edit <id> --also telegram:<chat_id> --also slack:D…` (`--no-also` để bỏ). Chỉ người đặt được (điều phối
