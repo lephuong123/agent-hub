@@ -10,15 +10,26 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
-### Daemon — không còn lặp "thoát 1" sau `cfharness update` (macOS)
-- Đã cài tự khởi động (LaunchAgent) thì `cfharness update` / tự khởi động daemon nhờ launchd chạy lại daemon
-  (`launchctl kickstart`, giữ đúng `--home`) thay vì bật một bản ngoài launchd. Trước đây bản ngoài launchd giữ `daemon.lock`, job
-  launchd thua khoá, thoát 1 và bị chạy lại vô hạn. Job launchd lỡ thua khoá giờ chờ khoá (thử lại mỗi 30 giây) thay vì thoát 1.
+---
 
-### Lịch — gửi thêm kết quả sang chat riêng khác
-- Một lịch gửi được kết quả tới tối đa 4 chat riêng (Telegram chat riêng, Slack DM) ngoài nơi nhận chính, vd báo cáo 07:00 về cả Telegram
-  lẫn Slack: `cfharness schedule edit <id> --also telegram:<chat_id> --also slack:D…` (`--no-also` để bỏ). Chỉ người đặt được (điều phối
-  viên không); chat không còn trong allowlist của bot thì không nhận. Trang lịch trên web hiện các kênh gửi thêm (chỉ xem).
+## v0.2.24 — 2026-11-20
+
+### Lịch — gửi kết quả tới nhiều chat riêng cùng lúc (#165)
+- Một lịch gửi được kết quả tới tối đa 4 chat riêng (Telegram chat riêng, Slack DM) ngoài nơi nhận chính — vd báo cáo sáng về cả Telegram
+  lẫn Slack: `cfharness schedule edit <id> --also telegram:<chat_id> --also slack:D…` (`--no-also` để bỏ; `schedule add` cũng nhận `--also`).
+- Chỉ người đặt được (điều phối viên không thể tự thêm chat nhận); chat không còn trong allowlist của bot thì không nhận. Trang lịch trên web
+  hiện các kênh gửi thêm (chỉ xem).
+
+### Daemon — không còn lặp "thoát 1" sau `cfharness update` trên macOS (#166)
+- Đã cài tự khởi động (LaunchAgent) thì `cfharness update` và lệnh tự khởi động daemon nhờ launchd chạy daemon (`launchctl kickstart`, giữ
+  đúng `--home`) thay vì bật một bản ngoài launchd. Trước đây bản ngoài launchd giữ `daemon.lock`, job launchd thua khoá, thoát 1 và bị
+  launchd chạy lại vô hạn (hàng nghìn lần/ngày). Job launchd lỡ thua khoá giờ chờ khoá (thử lại mỗi 30 giây) và tiếp quản ngay khi bản kia dừng.
+- Phát hiện và sửa bởi team agent giám sát của hub.
+
+#### Lưu ý khi cập nhật
+- Hub đang chạy daemon NGOÀI launchd (kiểm: `launchctl print gui/$(id -u)/com.cfharness.daemon.<…>` thấy `state = spawn scheduled`, `runs`
+  rất lớn): lần cập nhật này vẫn đi qua đường cũ. Sau khi cập nhật xong, đưa daemon về launchd một lần:
+  `cfharness daemon stop && launchctl kickstart -k gui/$(id -u)/com.cfharness.daemon.<…>` (khi không có run đang chạy).
 
 ---
 
