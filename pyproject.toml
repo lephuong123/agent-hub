@@ -14,6 +14,7 @@ dependencies = [
     "prompt-toolkit>=3.0.40",
     "pydantic>=2.7",
     "pygments>=2.17",
+    "pypdf>=6.0,<7",  # đọc tệp người gửi (không tin cậy): khoá bản đã ra ≥ 2 tuần, lên major mới phải xem lại
     "pywinpty>=2.0 ; sys_platform == 'win32'",
     "pyyaml>=6.0",
     "segno>=1.6",

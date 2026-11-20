@@ -89,7 +89,8 @@ và các khoá mới), `chat/__init__.py` (`hub.slack`), `daemon.py` (đăng ký
 
 - **Vào**: `_on_message` kiểm workspace + allowlist chat/người TRƯỚC (người lạ: không trả lời, không tải — test đếm `downloads == 0` và
   Slack giả không nhận GET nào); `SlackMedia.handle` kiểm lại `is_allowed` trước khi tải. Ảnh PNG/JPEG/GIF/WebP ≤ 5 MB, ≤ 4/tin; tệp văn bản
-  ≤ `document_max_bytes`, ≤ 4/tin; PDF/Office/nhị phân, tệp đã xoá/ẩn (`mode: tombstone|hidden_by_limit`), tệp kênh ngoài
+  ≤ `document_max_bytes`, ≤ 4/tin; tài liệu PDF/Office (`classify` → "file", daemon nhận diện lại theo nội dung và trích bản đọc được
+  — `docs/dev-notes/pdf-attachments.md`) cùng trần. Nhị phân khác, tệp đã xoá/ẩn (`mode: tombstone|hidden_by_limit`), tệp kênh ngoài
   (`file_access: check_file_info`) → từ chối kèm lý do (một tin hub, tên tệp trong khối mã, escape). Chú thích = chữ của tin.
 - **Thread**: tệp gửi trong thread → dò tin của bot trong thread (`_candidates`, như `_on_thread_reply`) → đúng cuộc trò chuyện điều phối
   viên, kể cả khi đã `/cfh moi`. Ngoài thread → cuộc hiện tại.

@@ -5,7 +5,10 @@
 - `manager.set {agent_id|null}` (HUMAN_ONLY) → như `manager.get`
 - `manager.chat {channel, text, conversation_id?, reuse_latest?, images?:[{name, data_b64}]}` (HUMAN_ONLY; ảnh PNG/JPEG/GIF/WebP ≤ 5 MB, ≤ 4 → lưu
   `<cwd hội thoại>/attachments/`, prompt bảo điều phối viên xem bằng Read; `text` được rỗng khi có ảnh;
-  `files?:[{name, data_b64}]` = tệp VĂN BẢN UTF-8 ≤ 10 MB, ≤ 4, tên do hub làm sạch → cùng thư mục `attachments/`) → `{conversation_id, run_id, session_id?, resumed?, steered?}`.
+  `files?:[{name, data_b64}]` ≤ 10 MB, ≤ 4, tên do hub làm sạch → cùng thư mục `attachments/`: tệp VĂN BẢN UTF-8, PDF hoặc Office
+  (nhận theo nội dung). Office xlsx/docx/pptx → thêm bản đọc được (CSV/`.txt`); PDF → `.txt` (chữ theo trang, dòng đầu nêu phạm vi trang)
+  + phần `.pNNN-MMM.pdf` khi dài (docs/dev-notes/pdf-attachments.md) — trích PDF xong mới trả, tối đa `attachments.pdf.timeout_s` ≤ 50 s,
+  các PDF song song) → `{conversation_id, run_id, session_id?, resumed?, steered?}`.
   Không có `conversation_id` → hội thoại MỚI (trừ `reuse_latest=true`: hội thoại gần nhất của đúng kênh). Hội thoại đang có run
   chạy → tin được steer vào run đó (`steered=true`). `conversation_id` phải cùng `channel` (khác → Conflict); hội thoại của manager CŨ →
   tự chuyển sang hội thoại gần nhất/mới của manager hiện tại trên kênh đó (`switched_from`).

@@ -751,6 +751,7 @@ class RunManager:
             require_no_auto_memory=bool(iso.get("require_no_auto_memory")),
             permission_prompt_tool=perm_tool,
             env_extra=env_extra,
+            path_extra=_poppler_path_extra(hub),  # `tools.poppler_path` hợp lệ → cuối PATH (tool Read vẽ trang PDF)
             json_schema=opts.get("json_schema") or agent.get("result_schema"),  # M3 FR-RT-14
             agents_json=agent.get("subagents") or None,  # M3 FR-RT-13
             worktree=opts.get("worktree") if wkind == "worktree" else None,
@@ -907,6 +908,7 @@ class RunManager:
                 run = {**run, "cwd": str(lane_cwd), "run_opts": lane_opts}
                 lane_run = True
             recall = await self._memory_prefetch(run, agent)  # graph memory: top-k fact vào TIN USER ĐẦU (không vào system prompt)
+            await _refresh_pdftoppm(hub)  # dò pdftoppm (cache hết hạn → chạy `-v`) trong THREAD: `_prepare_spec` chỉ đọc cache
             auto_conn = await self._auto_connectors(runtime, run, agent, ar)
             spec = self._prepare_spec(run, agent, recall=recall, auto_connectors=auto_conn)
             spec.control_handler = functools.partial(self._control_request, ar)  # CLI 2.1.303+: control_request can_use_tool → guard
@@ -1626,6 +1628,28 @@ def _lane_browse(hub: Any, run: dict[str, Any], opts: dict[str, Any]) -> bool:
         return bool(lane is not None and lane.browse_enabled())
     except Exception:  # pragma: no cover — không bao giờ làm hỏng spawn vì phần đọc thêm này
         return False
+
+
+async def _refresh_pdftoppm(hub: Any) -> None:
+    """Làm tươi cache `pdf_support.pdftoppm_status` ngoài event loop trước `_prepare_spec` (system prompt + path_extra đọc cache;
+    gọi trong event loop không bao giờ chạy tiến trình con tại chỗ)."""
+    try:
+        from .pdf_support import pdftoppm_status
+
+        await asyncio.to_thread(pdftoppm_status, hub.config)
+    except Exception:  # best-effort: không bao giờ làm hỏng spawn vì phần phụ này
+        log.debug("dò pdftoppm lỗi", exc_info=True)
+
+
+def _poppler_path_extra(hub: Any) -> list[str]:
+    """`tools.poppler_path` còn hợp lệ (kiểm lại lúc spawn) → [thư mục] thêm vào cuối PATH của run; không/hỏng → []."""
+    try:
+        from .pdf_support import run_path_extra
+
+        return run_path_extra(hub.config)
+    except Exception:  # best-effort: không bao giờ làm hỏng spawn vì phần phụ này
+        log.debug("không đọc được tools.poppler_path", exc_info=True)
+        return []
 
 
 def _agent_read_only(agent: dict[str, Any]) -> bool:

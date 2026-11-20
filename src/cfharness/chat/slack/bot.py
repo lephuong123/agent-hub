@@ -677,18 +677,28 @@ class SlackBot(ChatBot):
         _UID.set(None)
         if typ == "events_api":
             ev = p.get("event") or {}
-            if ev.get("type") == "message" and not str(ev.get("channel") or "").startswith("D"):
-                await self._on_channel_message(ev, p.get("team_id"), api)  # P8: `message.channels|groups` — lọc chặt trước mọi xử lý
-            elif ev.get("type") == "message":
-                await self._on_message(ev, p.get("team_id"), api)
-            elif ev.get("type") == "app_mention":
-                await self._on_mention(ev, p.get("team_id"), api)
+            if ev.get("type") in ("message", "app_mention"):
+                cid = str(ev.get("channel") or "")
+                if ev.get("files") or ev.get("subtype") == "file_share" or self._chat_busy(cid):
+                    # tin có tệp: tải + trích PDF có thể mất tới `attachments.pdf.timeout_s` → task riêng của kênh (giữ thứ tự tin của
+                    # kênh), worker vẫn xử lý kênh khác, nút duyệt/E-stop, slash command; hàng đợi không bị dồn khi mất kết nối
+                    self._chain_chat(cid, self._on_event_message(ev, p.get("team_id"), api))
+                    return
+                await self._on_event_message(ev, p.get("team_id"), api)
         elif typ == "slash_commands":
             await self._on_slash(p, api)
         elif typ == "interactive" and p.get("type") == "block_actions":
             await self._on_actions(p, api)
         elif typ == "interactive" and p.get("type") == "view_submission":
             await self.modals.on_submission(p, api)
+
+    async def _on_event_message(self, ev: dict[str, Any], team: Any, api: SlackApi) -> None:
+        if ev.get("type") == "message" and not str(ev.get("channel") or "").startswith("D"):
+            await self._on_channel_message(ev, team, api)  # P8: `message.channels|groups` — lọc chặt trước mọi xử lý
+        elif ev.get("type") == "message":
+            await self._on_message(ev, team, api)
+        elif ev.get("type") == "app_mention":
+            await self._on_mention(ev, team, api)
 
     async def _on_message(self, ev: dict[str, Any], team: Any, api: SlackApi, *, mgr_text: str | None = None) -> None:
         """`mgr_text` (chỉ do `_on_mention` đặt, không bao giờ lấy từ payload): chữ gửi ĐIỀU PHỐI VIÊN thay `text` (kèm ngữ cảnh thread);

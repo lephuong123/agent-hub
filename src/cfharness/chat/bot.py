@@ -266,6 +266,20 @@ class TelegramBot(ChatBot):
                 return
             self._audit_ignored(cid, chat.get("type"), "message", uid)
             return  # người lạ: KHÔNG tải tệp/ảnh, không trả lời
+        from .media import has_media
+
+        cmd = QUICK_KEYS.get(text, text)
+        # lệnh `/` chạy ngay (E-stop, trạng thái…), trừ `/moi` `/new` (đổi cuộc trò chuyện — phải sau tin có tệp đang chờ của chat)
+        command = cmd.startswith("/") and cmd.split(maxsplit=1)[0].split("@", 1)[0].lower() not in ("/moi", "/new")
+        if has_media(m) or (not command and self._chat_busy(cid)):
+            # tin có tệp: tải + trích PDF có thể mất tới `attachments.pdf.timeout_s` → xử lý trong task riêng của chat (giữ thứ tự tin
+            # của chat; vòng getUpdates vẫn nhận chat khác, nút duyệt/E-stop, lệnh `/`). Tin chữ sau đó của CÙNG chat xếp hàng sau.
+            self._chain_chat(cid, self._handle_message(m, cid, uid, text, api))
+            return
+        await self._handle_message(m, cid, uid, text, api)
+
+    async def _handle_message(self, m: dict[str, Any], cid: str, uid: str | None, text: str, api: TelegramApi) -> None:
+        """Tin của chat + người ĐÃ qua allowlist (`handle_update` kiểm trước)."""
         reply = m.get("reply_to_message")
         from .media import has_media
 

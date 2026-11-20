@@ -10,6 +10,40 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Điều phối viên đọc được PDF đính kèm trên máy không có poppler
+- Trước đây PDF gửi cho điều phối viên (web, Telegram, Slack) có thể không đọc được: model hay truyền `pages` cho tool Read, mà cách đọc
+  đó cần `pdftoppm` (poppler) — máy chưa cài thì báo "pdftoppm is not installed", và khung quyền strict không có cách khác.
+- Hub giờ tự trích chữ của PDF đính kèm thành `<tên>.pdf.txt` (mỗi trang có tiêu đề `--- page N ---`, tối đa 500 trang / 8 MB). Dòng
+  đầu tệp nêu phạm vi trang (vd `pages 1-13 of 400`) để điều phối viên không coi bản bị cắt là cả tài liệu. PDF dài hơn 50 trang còn được
+  tách thành các phần `<tên>.pdf.p001-050.pdf`… để điều phối viên đọc từng phần mà vẫn thấy bảng, hình; tối đa 20 phần, hub tự nới tới
+  100 trang/phần nên các phần phủ tối đa 2000 trang đầu (PDF dài hơn: phần sau chỉ có trong bản gốc). Tổng dung lượng các phần tối đa
+  48 MB cho cả tin (chia đều cho các PDF của tin). Ghi chú gửi điều phối viên nêu tổng số trang, bản chữ và các phần phủ tới trang nào, và trang
+  còn lại đọc thế nào (PDF quá 600 trang mà máy không có poppler: nói rõ phần sau không đọc được, không đoán). PDF scan, mã hoá có mật
+  khẩu hoặc hỏng: hub nói rõ lý do không có bản chữ (PDF có mật khẩu: điều phối viên được dặn không thử Read mà xin người bản không
+  khoá; mọi trang trích lỗi thì không bị gọi nhầm là PDF scan).
+- Việc trích chạy trong tiến trình riêng có hạn giờ nên PDF lạ không làm treo hub. Các PDF của một tin được trích song song, cả tin tối
+  đa `attachments.pdf.timeout_s` (mặc định 40 giây, dưới hạn chờ 60 giây của web). Hết giờ thì hub giữ các trang và phần đã trích xong.
+  Web chờ tin có tệp tới 120 giây; nếu vẫn quá, web báo tin có thể đã được nhận thay vì lỗi 500 (gửi lại sẽ thành lượt trùng).
+- Tin gửi trong lúc tin có PDF của cùng hội thoại đang được trích sẽ chờ tin đó, nên thứ tự tin giữ đúng.
+- Telegram/Slack: tin có tệp được tải + trích trong tác vụ riêng của chat đó, nên trong lúc trích PDF bot vẫn xử lý chat khác, nút duyệt,
+  E-stop và lệnh `/` ngay; tin sau của cùng chat xếp hàng sau tin có tệp.
+- Tiến trình trích ghi chữ từng trang và các phần thẳng ra thư mục tạm cạnh tệp gốc rồi hub chuyển chỗ — daemon không giữ các phần trong bộ nhớ.
+- Máy không có `pdftoppm`: mọi agent (kể cả run eval và takeover) được nhắc đọc PDF chỉ với `file_path` (không truyền `pages`). Hub chạy
+  thử `pdftoppm -v`; bản hỏng bị coi như không có.
+- Cài poppler để Read đọc được PDF theo trang: `scoop install poppler` hoặc `winget install oschwartz10612.Poppler` (Windows),
+  `brew install poppler` (macOS), `apt install poppler-utils` (Linux). Poppler không nằm trên PATH thì đặt
+  `cfharness config set tools.poppler_path <thư mục chứa pdftoppm>` — hub thêm thư mục đó vào cuối PATH của mọi run, có hiệu lực ngay.
+  `cfharness hub doctor` có mục kiểm `pdftoppm`.
+- Cấu hình mới: `attachments.pdf.split`, `attachments.pdf.split_pages` (mặc định 50, tối đa 100), `attachments.pdf.max_parts` (20) — sửa
+  được ở Cài đặt → Điều phối viên; `attachments.pdf.timeout_s` (40 giây, 5–50); `tools.poppler_path` (chỉ qua `cfharness config set`,
+  được kiểm toàn vẹn).
+
+#### Lưu ý khi cập nhật (PDF)
+- Phụ thuộc mới: `pypdf` (thuần Python, giấy phép BSD), khoá ở 6.21.4 (`>=6.0,<7`) — `cfharness update` / `uv tool install` tự cài.
+- Cài poppler bằng scoop/winget khi daemon đang chạy: daemon chỉ thấy `pdftoppm` sau khi khởi động lại (`cfharness daemon stop` rồi
+  `cfharness daemon start`), vì daemon giữ PATH lúc khởi động. Đặt `tools.poppler_path` thì không cần khởi động lại.
+- Kéo–thả PDF trong TUI/REPL vẫn chỉ là đường dẫn trong tin (không có bản chữ, không tách phần); chỉ web, Telegram, Slack gửi tệp.
+
 ---
 
 ## v0.2.26 — 2026-11-20

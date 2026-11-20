@@ -247,3 +247,52 @@ async def test_office_and_pdf_documents_saved_with_readable_copy(make, tg):
     sheet = next(f for f in attachments_of(run) if f.name.endswith(".2-3._B1_KhoiLuong.csv"))
     assert sheet.name.startswith(orig) and "Đào móng" in sheet.read_text(encoding="utf-8")
     assert f"attachments/{orig}" in run["prompt"] and f"attachments/{sheet.name}" in run["prompt"] and "Excel row number" in run["prompt"]
+
+
+async def test_pdf_document_gets_text_copy_and_parts(make, tg, monkeypatch):
+    from test_doc_extract import make_pdf
+
+    from cfharness import pdf_support
+
+    monkeypatch.setattr(pdf_support, "pdf_render_available", lambda cfg=None: False)  # máy không có pdftoppm
+    d = await mk(make)
+    d.hub.config.set("attachments.pdf.split_pages", 2)
+    await push(tg, BOSS, document=("Báo cáo.pdf", make_pdf(["ZETA-1", "ZETA-2", "ZETA-3"]), "application/pdf"), caption="tóm tắt giúp")
+    run = (await until(lambda: boss_runs(d)))[0]
+    files = attachments_of(run)
+    orig = next(f for f in files if f.name.endswith("-Bao_cao.pdf"))
+    txt = next(f for f in files if f.name == orig.name + ".txt")
+    assert "--- page 3 ---\nZETA-3" in txt.read_text(encoding="utf-8")
+    assert {f.name for f in files} == {orig.name, txt.name, orig.name + ".p001-002.pdf", orig.name + ".p003-003.pdf"}
+    p = run["prompt"]
+    assert f"attachments/{txt.name}" in p and f"attachments/{orig.name}.p003-003.pdf" in p and "never pass `pages`" in p
+
+
+async def test_pdf_extraction_does_not_stall_update_loop(make, tg, monkeypatch):
+    # trích PDF (tới attachments.pdf.timeout_s) chạy trong task riêng của chat: vòng getUpdates vẫn nhận update khác (lệnh, nút duyệt…)
+    # ngay; tin chữ sau đó của CÙNG chat xếp hàng sau tin PDF (thứ tự giữ nguyên)
+    import time as _t
+
+    from cfharness.manager import doc_extract as dx
+    from test_doc_extract import make_pdf
+
+    def slow(data, opts=None, **kw):
+        _t.sleep(2.5)
+        return [], {"status": "ok", "pages": 1, "text_pages": 0, "text_reason": None, "parts_last": 0, "parts_reason": None,
+                    "no_text": "scanned"}
+
+    monkeypatch.setattr(dx, "extract_isolated", slow)
+    d = await mk(make)
+    t0 = _t.monotonic()
+    await push(tg, BOSS, document=("a.pdf", make_pdf([None]), "application/pdf"), caption="PDF trước")
+    tg.user_message(BOSS, "/help")
+    await until(lambda: any("/help" in t and "trợ giúp" in t for t in texts(tg, BOSS)), timeout=5)
+    assert _t.monotonic() - t0 < 2.3 and not boss_runs(d)  # lệnh đã trả lời khi PDF còn đang trích
+    n = len(texts(tg, BOSS))
+    tg.user_message(BOSS, "/moi")  # đổi cuộc trò chuyện → phải xếp hàng SAU tin có tệp (không thì tin PDF rơi vào cuộc mới)
+    await asyncio.sleep(0.3)
+    assert len(texts(tg, BOSS)) == n and not boss_runs(d)
+    tg.user_message(BOSS, "tin chữ sau")
+    runs = await until(lambda: boss_runs(d), timeout=15)
+    assert "PDF trước" in runs[0]["prompt"]  # tin PDF tới điều phối viên TRƯỚC tin chữ gửi sau nó
+    await until(lambda: len(texts(tg, BOSS)) > n)

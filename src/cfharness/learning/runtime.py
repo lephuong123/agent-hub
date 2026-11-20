@@ -73,7 +73,7 @@ def system_prompt_for(hub: "Hub", run: dict[str, Any], agent: dict[str, Any]) ->
     from ..browser import effective_mode
 
     text = build_system_prompt(agent["id"], soul, blocks, charter=team_charter(hub, run.get("team_id")), browser=effective_mode(agent, hub.config),
-                               cli_ref=_manager_cli_ref(hub, agent["id"]), shared_folders=_shared_folders(hub))
+                               cli_ref=_manager_cli_ref(hub, agent["id"]), shared_folders=_shared_folders(hub), pdf_note=_pdf_note(hub))
     _warn_if_large(hub, agent["id"], text)
     save_prompt(hub, text)
     return text, info
@@ -91,6 +91,16 @@ def _warn_if_large(hub: "Hub", agent_id: str, text: str) -> None:
         import logging
 
         logging.getLogger("cfharness.learning").warning("system prompt của %s vượt ngưỡng %d: %s", agent_id, limit, size_summary(text))
+
+
+def _pdf_note(hub: "Hub") -> str | None:
+    """Máy hub không có pdftoppm → nhắc mọi run đọc PDF chỉ với `file_path` (pdf_support.py; dò có cache)."""
+    try:
+        from ..pdf_support import system_note
+
+        return system_note(hub.config)
+    except Exception:  # pragma: no cover - khối phụ hỏng không chặn run
+        return None
 
 
 def _shared_folders(hub: "Hub") -> list[dict[str, str]]:
