@@ -119,6 +119,40 @@ dùng lại `connector.unavailable`; chặn đăng ký server trỏ về hub (H-
 - Hàng tài khoản trên web: thêm mục "MCP của tài khoản" cạnh connector.
 - `HUB_HUMAN_ONLY_CLI`, `auth.HUMAN_ONLY`, `tests/test_sec_auth.py`.
 
+**Đã làm (2026-11-20, nhánh `feat/mcp-claude-login`, trên PR2):**
+- Kiểm thật `claude` 2.1.329: `mcp add-json -s user <tên> -` đọc JSON từ stdin nhưng TỪ CHỐI khi có biến phiên Claude Code (`CLAUDECODE`…) →
+  env bỏ mọi `CLAUDE_CODE_*`/`CLAUDECODE`/`ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`; `mcp list` in `tên: <url|lệnh> (HTTP) - ✓ Connected |
+  ! Needs authentication | ✘ Failed to connect — …` (in cả url/lệnh → hub chỉ lấy trạng thái); `mcp login --no-browser` in link authorize
+  (OSC 8 + chữ, host tuỳ server) + "Or paste the redirect URL here:", URL sai → "That doesn't look like a redirect URL…" rồi hỏi lại (không
+  thoát); `mcp remove|logout` tên lạ → exit 1. `redirect_uri` của claude là `http://localhost:<cổng>/callback` (claude cũng nghe cổng đó —
+  đăng nhập trên trình duyệt của CHÍNH máy hub có thể tự xong; khi đó `finish` báo tiến trình đã thoát → bấm Kiểm tra).
+- `mcp_client/claude_admin.py` (`hub.mcp_claude`): `add|remove|login_start|login_finish|login_cancel|logout|status`. Tài khoản →
+  `claude_source.account_config_dir` (token → `claude-config/<id>/`, dựng/kiểm symlink; machine/custom → cấu hình mặc định, KHÔNG đặt
+  CLAUDE_CONFIG_DIR — trừ khi test). cwd trung lập `claude-config/.mcp-cwd`. Đăng ký registry dùng chung `claude_source.register` (PR2
+  `mcp.add{source:claude}` gọi cùng hàm, `reuse=False` giữ Conflict cũ); thêm lại tên đã xoá mềm → khôi phục dòng (giữ trust/tools).
+- Quyết định gỡ: registry (của hub, chung mọi tài khoản) chỉ xoá mềm khi KHÔNG tài khoản nào khác (gồm cấu hình mặc định) còn server
+  cùng tên; còn agent gán + đây là bản cuối → Conflict trừ `force`. Đăng xuất/gỡ khi run đang dùng server đó của tài khoản → Conflict.
+- Quyết định secret: header/env CHỈ cho tài khoản token (thư mục `claude-config/<id>/` đã bị chặn với agent); cấu hình mặc định → từ chối
+  (PR1 chưa chặn agent đọc `~/.claude.json`) — dùng nguồn hub. Giá trị header/env đăng ký che theo giá trị; url/lệnh/args không (chữ
+  chung), nhưng không bao giờ vào audit (danh sách trắng `CLAUDE_AUDIT_KEYS`), kết quả (chỉ host) hay lỗi (`_clean_cli` bỏ mọi URL + che).
+- Đăng nhập: `accounts/login.start_login(..., url_finder=find_any_url, what=, cwd=)` — link nhận diện bằng `response_type`+`client_id`
+  (không nhận nhầm URL trong dòng lỗi); `LoginHandle.submit_redirect` (một lần thử, URL sai → lỗi cố định không nhắc lại URL); kết quả
+  LUÔN kiểm lại `claude mcp list` (vẫn `needs_auth` → lỗi "Keychain"). Mỗi tài khoản một lượt (tổng ≤ 4), `close_all` ở `Hub.stop`.
+- RPC `mcp.claude_add|remove|login_start|login_finish|login_cancel|logout|status` ∈ HUMAN_ONLY, không ∈ MANAGER_ALLOWED; ghi ∈ MUTATING.
+  `FAILURE_DROP_KEYS` thêm `redirect_url`/`headers`/`env`. Classifier: `cfharness mcp claude …` = `hub_human_only`.
+- CLI `cfharness mcp claude add|rm|login|logout|status [--account]` (giá trị header/env + URL chuyển hướng hỏi bằng getpass/stdin).
+- Web: mục "MCP của tài khoản" trên hàng token/machine — đọc `mcp.claude_status{cached:true}` (KHÔNG chạy claude khi tải trang), nút
+  «Kiểm tra MCP» (`refresh`), Đăng nhập 2 bước (link https + ô password `redirect_url`), Đăng xuất/Gỡ (xác nhận), form Thêm MCP (header
+  chỉ hiện ở tài khoản token). `Action.secret_fields` cho `redirect_url`/`header_value`/`url`.
+- Doctor `_claude_mcp`: tài khoản đang dùng thiếu server đã đăng ký nguồn claude (cảnh báo) + server cần đăng nhập theo cache lần kiểm gần
+  nhất (doctor không chạy `claude mcp list`).
+- Test: `tests/test_mcp_claude_login.py` (17 ca, `tests/fake_claude_mcp.py` theo CLAUDE_CONFIG_DIR + PTY thật),
+  `tests/test_sec_auth.py::test_mcp_claude_admin_human_only`.
+
+Lệch so với plan: không có `cfharness mcp add --via claude` (dùng nhóm lệnh riêng `mcp claude add`); trạng thái chỉ từ `claude mcp list`
+(chưa gộp `mcp.unavailable` từ init của run); chữ "thành công" của `claude mcp login` thật chưa quan sát được (spike không có OAuth server
+thật để hoàn tất) — hub không dựa vào nó, luôn kiểm lại `mcp list`.
+
 ### PR4 — Chuyển dần + gỡ OAuth/proxy của hub
 - `cfharness mcp migrate-to-claude <name> --account <id>`: server OAuth của hub → `claude mcp add-json` + `claude mcp login` (người dán URL), đổi `source=claude`, xoá token `MCP_OAUTH_*`.
 - Khi không còn server OAuth `source=hub`: gỡ `oauth.py`, `oauth_proxy.py`, `oauth_cli.py`, `web/mcp_oauth.py`, RPC `mcp.oauth_*` (giữ stub trả lỗi hướng dẫn 1 phiên bản), config `mcp.oauth_proxy.*`.

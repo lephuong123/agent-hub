@@ -110,6 +110,7 @@ KNOWLEDGE_TABLES = ("mem_*",)
 MACHINE_STATE = ("repo_locks", "browser_locks", "rate_limit", "rate_limit_gate", "rate_limit_gates", "rate_limit_by_account",
                  "pyenv_baseline", "cli_compat", "cli_unknown_rate", "auth_block", "claude_account_checks", "admin_watch.active",
                  "accounts.claudeai",  # phiên claude.ai theo tài khoản — thư mục claude-config/ không bao giờ đi theo gói (gắn với máy)
+                 "mcp.claude_status",  # trạng thái MCP do claude quản lý theo tài khoản (mcp_client/claude_admin.py) — token ở Keychain máy cũ
                  "audit_watch.active",  # L5: cảnh báo audit đang bật của máy nguồn (máy đích tự học lại); `audit.archive_cutoff` ĐI CÙNG DB (khớp audit-archive/)
                  "systems.registry", "systems.paused", "telegram.offset", "slack.seen",
                  # PR5: đóng băng chuyển nhà của máy NGUỒN (gói xuất lại từ hub đã đóng băng) + kết quả lần nhập trước của chính nguồn

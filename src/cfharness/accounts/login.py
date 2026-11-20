@@ -128,6 +128,33 @@ def find_login_url(raw: str, *, final: bool = False) -> str | None:
     return url if len(url) > m2.end() - m2.start() else None
 
 
+_ANY_URL_START_RE = re.compile(r"https://[A-Za-z0-9.\-]+(?::\d+)?/")
+
+
+def _is_authorize(url: str) -> bool:
+    """Link authorize OAuth 2.x (RFC 6749 §4.1.1): query BẮT BUỘC có `response_type` + `client_id` — loại link khác trên màn hình
+    (vd URL server trong thông báo lỗi)."""
+    q = url.split("?", 1)[1] if "?" in url else ""
+    keys = {kv.split("=", 1)[0] for kv in q.split("&")}
+    return "response_type" in keys and "client_id" in keys
+
+
+def find_any_url(raw: str, *, final: bool = False) -> str | None:
+    """Link authorize https trên màn hình (`claude mcp login --no-browser`: host/đường dẫn tuỳ MCP server — nhận diện bằng
+    `response_type` + `client_id` trong query). Ưu tiên hyperlink OSC 8; text thường chịu bẻ dòng như `find_login_url`."""
+    for m in _OSC8_URL_RE.finditer(raw):
+        if _is_authorize(m.group(1)):
+            return m.group(1)
+    text = clean_screen(raw)
+    for m2 in _ANY_URL_START_RE.finditer(text):
+        url, done = _take_wrapped(text, m2.start(), _URL_CHARS)
+        if not (done or final):
+            return None
+        if len(url) > m2.end() - m2.start() and _is_authorize(url):
+            return url
+    return None
+
+
 def find_token(raw: str, *, final: bool = False) -> str | None:
     text = clean_screen(raw)
     m = _TOKEN_START_RE.search(text)
@@ -143,6 +170,13 @@ _ERROR_LINE_RE = re.compile(r"(OAuth error|Invalid code|\bError\b|\berror:|faile
 
 
 _SIGNIN_OK_RE = re.compile(r"Login successful|Logged in as|Successfully logged in", re.I)
+# `claude mcp login`: thành công (chữ chưa kiểm hết với CLI thật — bên gọi LUÔN kiểm lại `claude mcp list`) / URL dán sai (CLI hỏi lại,
+# không thoát — claude 2.1.329: "That doesn't look like a redirect URL for this sign-in")
+_MCP_OK_RE = re.compile(r"authenticat\w* (?:success|complete)|success\w* authenticat|authentication (?:successful|complete)|"
+                        r"\bsigned in\b|\blogged in\b|tokens? (?:saved|stored)", re.I)
+_MCP_BAD_REDIRECT_RE = re.compile(r"doesn.t look like a redirect|does not look like a redirect|state mismatch|invalid state|"
+                                  r"not (?:a valid|the) redirect", re.I)
+_URL_IN_TEXT_RE = re.compile(r"\w+://\S+")
 
 
 def find_error_line(raw: str) -> str | None:
@@ -203,7 +237,8 @@ class _PosixPty(_Pty):  # pragma: no cover — POSIX
         self.loop: asyncio.AbstractEventLoop | None = None
         self._closed = False
 
-    async def start(self, argv: list[str], env: dict[str, str], on_data: Callable[[str], None], on_eof: Callable[[], None]) -> None:
+    async def start(self, argv: list[str], env: dict[str, str], on_data: Callable[[str], None], on_eof: Callable[[], None],
+                    cwd: str | None = None) -> None:
         import fcntl
         import pty
         import struct
@@ -213,7 +248,7 @@ class _PosixPty(_Pty):  # pragma: no cover — POSIX
         try:
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", PTY_ROWS, PTY_COLS, 0, 0))
             self.proc = await asyncio.create_subprocess_exec(
-                *argv, stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True, close_fds=True,
+                *argv, stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True, close_fds=True, cwd=cwd,
                 **no_window_kwargs(),  # nhánh POSIX → {}; giữ để test_windows_no_console nhận ra
             )
         except BaseException:
@@ -284,13 +319,14 @@ class _WinPty(_Pty):  # pragma: no cover — Windows
         self.proc: Any = None
         self._closed = False
 
-    async def start(self, argv: list[str], env: dict[str, str], on_data: Callable[[str], None], on_eof: Callable[[], None]) -> None:
+    async def start(self, argv: list[str], env: dict[str, str], on_data: Callable[[str], None], on_eof: Callable[[], None],
+                    cwd: str | None = None) -> None:
         import threading
 
         from winpty import PtyProcess  # pywinpty (dependency chỉ win32)
 
         loop = asyncio.get_running_loop()
-        self.proc = await asyncio.to_thread(PtyProcess.spawn, argv, env=env, dimensions=(PTY_ROWS, PTY_COLS))
+        self.proc = await asyncio.to_thread(PtyProcess.spawn, argv, env=env, cwd=cwd, dimensions=(PTY_ROWS, PTY_COLS))
         self.pid = self.proc.pid
         proc = self.proc
 
@@ -349,8 +385,10 @@ class LoginHandle:
 
     url: str
 
-    def __init__(self, pty: _Pty) -> None:
+    def __init__(self, pty: _Pty, *, url_finder: Callable[..., str | None] | None = None, what: str = "claude setup-token") -> None:
         self.url = ""
+        self.what = what
+        self._url_finder = url_finder or find_login_url
         self._pty = pty
         self._raw = ""
         self._mark = 0  # vị trí trong _raw lúc submit (chỉ tìm token/lỗi sau đó)
@@ -391,17 +429,19 @@ class LoginHandle:
         deadline = time.monotonic() + timeout
         while True:
             quiet = time.monotonic() - self._last_data >= _QUIET_ACCEPT_S
-            url = find_login_url(self._raw, final=self._eof or quiet)
+            url = self._url_finder(self._raw, final=self._eof or quiet)
             if url:
                 return url
             if self._eof:
-                tail = _tail_lines(self._raw)
+                tail = _URL_IN_TEXT_RE.sub("<url>", _tail_lines(self._raw))
                 raise HubError(
-                    "`claude setup-token` đã thoát mà không đưa link đăng nhập"
+                    f"`{self.what}` đã thoát mà không đưa link đăng nhập"
                     + (f" (màn hình: {tail})" if tail else "")
                     + ". Kiểm tra `claude --version` và kết nối mạng rồi thử lại."
                 )
             if time.monotonic() >= deadline:
+                if self.what != "claude setup-token":
+                    raise SystemFailure(f"Hết {timeout:g} giây mà `{self.what}` chưa đưa link đăng nhập. Thử lại sau.")
                 raise SystemFailure(
                     f"Hết {timeout:g} giây mà `claude setup-token` chưa đưa link đăng nhập. Thử lại sau, hoặc dùng "
                     "\"Thêm bằng token\" (chạy `claude setup-token` trên máy khác rồi dán token)."
@@ -416,6 +456,75 @@ class LoginHandle:
         """`claude auth login`: gõ code, chờ CLI tự lưu phiên rồi THOÁT (không in token). Lỗi → HubError. Bên gọi tự kiểm
         `claude auth status` sau đó (thoát ≠ chắc chắn đã lưu được phiên, vd Keychain không mở được)."""
         await self._submit_locked(code, lambda: self._signin(code, timeout))
+
+    async def submit_redirect(self, redirect_url: str, timeout: float = 90) -> bool:
+        """`claude mcp login --no-browser`: dán URL chuyển hướng (trình duyệt hiện sau khi người đồng ý) + Enter, chờ CLI báo xong/thoát.
+        True = thấy chữ thành công, False = CLI thoát không rõ — bên gọi LUÔN kiểm lại `claude mcp list`. URL sai → HubError KHÔNG nhắc
+        lại URL (nó chứa code dùng một lần). Xong (thành công hay lỗi) đều đóng tiến trình."""
+        redirect_url = (redirect_url or "").strip()
+        if not redirect_url:
+            raise HubError("Chưa dán URL chuyển hướng (địa chỉ trên thanh trình duyệt sau khi bạn đồng ý cấp quyền).")
+        if any(c.isspace() for c in redirect_url) or len(redirect_url) > 8192 or "://" not in redirect_url:
+            raise HubError("URL chuyển hướng không hợp lệ — chép NGUYÊN địa chỉ trên thanh trình duyệt (bắt đầu bằng http://localhost…).")
+        async with self._lock:
+            if self._closed or self._used:
+                raise HubError("Phiên đăng nhập này đã kết thúc. Bấm đăng nhập lại để lấy link mới.")
+            if self._eof or not self._pty.alive():
+                await self.close()
+                raise HubError(f"`{self.what}` đã thoát trước khi nhận URL chuyển hướng (có thể đã tự xong qua trình duyệt trên máy hub) — "
+                               "kiểm tra trạng thái, hoặc đăng nhập lại.")
+            self._used = True
+            self._mark = len(self._raw)
+            try:
+                return await self._redirect(redirect_url, timeout)
+            finally:
+                await self.close()
+
+    def _redirect_outcome(self, redirect_url: str) -> tuple[bool | None, str | None]:
+        """(True = thành công | False = URL sai | None = chưa rõ, dòng lỗi khác | None) trên phần màn hình SAU khi dán (URL đã che)."""
+        after = clean_screen(_redact(self._raw[self._mark :], redirect_url))
+        if _MCP_BAD_REDIRECT_RE.search(after):
+            return False, None
+        if _MCP_OK_RE.search(after):
+            return True, None
+        err = find_error_line(after)
+        return None, (_URL_IN_TEXT_RE.sub("<url>", err)[:300] if err else None)
+
+    _BAD_REDIRECT_MSG = ("URL chuyển hướng không khớp lượt đăng nhập này — chép NGUYÊN địa chỉ trên thanh trình duyệt của ĐÚNG lượt vừa mở "
+                         "(link cũ mất hiệu lực khi mở lượt mới). Bấm đăng nhập lại để lấy link mới.")
+
+    async def _redirect(self, redirect_url: str, timeout: float) -> bool:
+        self._type_code(redirect_url)
+        await asyncio.sleep(0.3)
+        try:
+            self._pty.write("\r")
+        except OSError as e:
+            raise HubError(f"Không gửi được URL vào `{self.what}` (tiến trình đã đóng). Bấm đăng nhập lại.") from e
+        deadline = time.monotonic() + timeout
+        err_seen_at: float | None = None
+        while not self._eof:
+            ok, err = self._redirect_outcome(redirect_url)
+            if ok is False:
+                raise HubError(self._BAD_REDIRECT_MSG)
+            if ok:
+                return True
+            if err:
+                now = time.monotonic()
+                if err_seen_at is None:
+                    err_seen_at = now
+                elif now - err_seen_at >= 0.5:
+                    raise HubError(f"`{self.what}` báo lỗi: {err}. Bấm đăng nhập lại để lấy link mới.")
+            if time.monotonic() >= deadline:
+                raise SystemFailure(f"Hết {timeout:g} giây chờ `{self.what}` lưu đăng nhập — bấm đăng nhập lại.")
+            await self._wait_change(deadline)
+        ok, err = self._redirect_outcome(redirect_url)
+        if ok is False:
+            raise HubError(self._BAD_REDIRECT_MSG)
+        if ok:
+            return True
+        if err:
+            raise HubError(f"`{self.what}` báo lỗi: {err}. Bấm đăng nhập lại để lấy link mới.")
+        return False
 
     async def _submit_locked(self, code: str, run: Callable[[], Any]) -> Any:
         code = (code or "").strip()
@@ -526,7 +635,13 @@ SETUP_TOKEN_ARGS = ("setup-token",)
 CLAUDEAI_LOGIN_ARGS = ("auth", "login", "--claudeai")  # phiên claude.ai đầy đủ (nạp connector) — lưu vào máy, không in token
 
 
-async def start_login(binary: str, env: dict[str, str], timeout: float = 45, args: tuple[str, ...] = SETUP_TOKEN_ARGS) -> LoginHandle:
+def mcp_login_args(name: str) -> tuple[str, ...]:
+    """`claude mcp login <name> --no-browser` (đăng nhập OAuth MCP server do claude quản lý — plan-mcp-claude-native PR3)."""
+    return ("mcp", "login", name, "--no-browser")
+
+
+async def start_login(binary: str, env: dict[str, str], timeout: float = 45, args: tuple[str, ...] = SETUP_TOKEN_ARGS, *,
+                      url_finder: Callable[..., str | None] | None = None, what: str | None = None, cwd: str | None = None) -> LoginHandle:
     """Chạy `<binary> setup-token` trong PTY, chờ link đăng nhập (≤ `timeout` giây) rồi trả handle.
 
     `env` = env ĐẦY ĐỦ của tiến trình con (vd `runtime.claude_cli.child_env(...)`); rỗng → env của daemon. Luôn đặt
@@ -550,9 +665,9 @@ async def start_login(binary: str, env: dict[str, str], timeout: float = 45, arg
         pty = _WinPty()
     else:
         pty = _PosixPty()
-    handle = LoginHandle(pty)
+    handle = LoginHandle(pty, url_finder=url_finder, what=what or "claude setup-token")
     try:
-        await pty.start(argv, env, handle._on_data, handle._on_eof)  # type: ignore[attr-defined]
+        await pty.start(argv, env, handle._on_data, handle._on_eof, cwd=cwd)  # type: ignore[attr-defined]
     except (FileNotFoundError, PermissionError) as e:
         raise HubError(f"Không chạy được `{binary} setup-token`: {type(e).__name__}. Kiểm tra cài đặt Claude Code.") from e
     except OSError as e:
@@ -566,4 +681,5 @@ async def start_login(binary: str, env: dict[str, str], timeout: float = 45, arg
     return handle
 
 
-__all__ = ["CLAUDEAI_LOGIN_ARGS", "PTY_COLS", "SETUP_TOKEN_ARGS", "LoginHandle", "clean_screen", "find_login_url", "find_token", "start_login"]
+__all__ = ["CLAUDEAI_LOGIN_ARGS", "PTY_COLS", "SETUP_TOKEN_ARGS", "LoginHandle", "clean_screen", "find_any_url", "find_login_url", "find_token",
+           "mcp_login_args", "start_login"]

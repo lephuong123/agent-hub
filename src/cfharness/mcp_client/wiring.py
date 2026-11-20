@@ -182,6 +182,9 @@ def attach(hub: "Hub") -> None:
     from .oauth_proxy import OAuthProxy
 
     hub.mcp_proxy = OAuthProxy(hub)  # type: ignore[attr-defined]  # proxy loopback chèn token (mcp-oauth.md §8.1), khởi động lười
+    from .claude_admin import ClaudeMcpAdmin
+
+    hub.mcp_claude = ClaudeMcpAdmin(hub)  # type: ignore[attr-defined]  # MCP do claude quản lý theo tài khoản (plan-mcp-claude-native PR3)
     hub.bus.add_listener(ToolWriteWatcher(hub))
     # H-12: bộ che theo GIÁ TRỊ — nạp mọi secret đã lưu + giá trị env-fallback mà registry đang tham chiếu
     try:

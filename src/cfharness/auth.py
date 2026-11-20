@@ -80,6 +80,9 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "mcp.oauth_start", "mcp.oauth_callback", "mcp.oauth_disconnect", "mcp.oauth_refresh",
         # MCP do claude quản lý trong cấu hình claude của tài khoản (tên/transport/host) — cấu hình của NGƯỜI, chỉ người xem (plan-mcp-claude-native PR2)
         "mcp.claude_servers",
+        # PR3: thêm/gỡ/đăng nhập/đăng xuất MCP trong cấu hình claude của tài khoản = cấp/thu hồi quyền dịch vụ ngoài thay người (mcp_client/claude_admin.py)
+        "mcp.claude_add", "mcp.claude_remove", "mcp.claude_login_start", "mcp.claude_login_finish", "mcp.claude_login_cancel",
+        "mcp.claude_logout", "mcp.claude_status",
         # thao tác phá huỷ workspace / tiếp quản / team
         "run.revert", "run.takeover", "run.takeover_record",
         "team.create", "team.update", "team.archive", "team.restore", "team.member_set", "team.member_rm",

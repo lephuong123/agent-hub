@@ -101,7 +101,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "secret": {"set", "rm", "remove", "delete"},
     "secrets": {"set", "rm", "remove", "delete"},
     "mcp": {"add", "edit", "update", "rm", "remove", "restore", "import", "assign", "unassign", "token", "agent-config", "annotate", "login", "logout",
-            "claude-servers"},
+            "claude-servers", "claude"},
     "estop": {"on", "off", "set", "clear"},
     "team": {"create", "edit", "update", "archive", "restore", "member", "estop", "rm"},
     "run": {"revert", "takeover"},

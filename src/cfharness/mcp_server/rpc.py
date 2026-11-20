@@ -40,6 +40,9 @@ MUTATING = frozenset(
         "mcp.add", "mcp.update", "mcp.remove", "mcp.restore", "mcp.import", "mcp.assign", "mcp.run", "mcp.agent_create",
         # OAuth MCP (mcp_client/oauth.py) — audit KHÔNG mang code/state (xem wrap_with_audit)
         "mcp.oauth_start", "mcp.oauth_callback", "mcp.oauth_disconnect", "mcp.oauth_refresh",
+        # MCP do claude quản lý theo tài khoản (plan-mcp-claude-native PR3) — audit chỉ danh sách trắng (CLAUDE_AUDIT_KEYS)
+        "mcp.claude_add", "mcp.claude_remove", "mcp.claude_login_start", "mcp.claude_login_finish", "mcp.claude_login_cancel",
+        "mcp.claude_logout",
         "secret.set", "secret.rm",
         "feedback.record",
         # M2
@@ -81,7 +84,10 @@ READ_COALESCE_S = 600.0
 # mã lỗi audit (cột `error_code`) theo mã JSON-RPC — không bao giờ thông điệp/traceback
 ERROR_CODES = {-32001: "user_error", -32004: "not_found", -32009: "conflict", -32003: "blocked", -32000: "system", -32602: "invalid_params"}
 # dòng audit THẤT BẠI không bao giờ mang các khoá này (handler lỗi trước khi kịp gỡ thông tin đăng nhập khỏi params)
-FAILURE_DROP_KEYS = frozenset({"token", "code", "state", "iss", "password", "secret", "passphrase", "key", "value", "api_key", "bot_token", "app_token"})
+FAILURE_DROP_KEYS = frozenset({"token", "code", "state", "iss", "password", "secret", "passphrase", "key", "value", "api_key", "bot_token", "app_token",
+                               "redirect_url", "headers", "env"})
+# mcp.claude_*: audit CHỈ các khoá này (url có thể mang token query, header/env/args = secret, URL chuyển hướng mang code dùng một lần)
+CLAUDE_AUDIT_KEYS = ("name", "account_id", "transport", "login_id", "force", "register", "trust")
 AUDITED_ATTR = "_cfharness_audited"  # dấu của wrap_with_audit (test "mọi method ghi đều có audit" dò qua chuỗi __wrapped__)
 FEEDBACK_KINDS = {"good": "good", "wrong": "correction", "partial": "correction"}
 TEXT_MAX = 2000
@@ -185,23 +191,33 @@ class IntegrationRpc:
         khoản (mặc định: đang dùng). transport + host lấy từ đó; không bao giờ đọc/lưu header/env/args. Không probe."""
         from ..mcp_client import claude_source as cs
 
-        name = str(cfg.get("name") or "")
-        aid, cdir = cs.account_config_dir(self.hub, str(account_id) if account_id else None)
-        have = cs.read_servers(cdir)
-        if name not in have:
-            raise HubError(f"không có MCP '{name}' trong cấu hình claude của tài khoản {cs.account_label(aid)} "
-                           f"({cs.claude_json_path(cdir)}) — thêm bằng `claude mcp add -s user …` dưới tài khoản đó trước",
-                           data={"available": sorted(have), "account": aid})
-        info = have[name]
-        if info.get("hub"):
-            raise HubError(f"MCP '{name}' trong cấu hình claude trỏ về chính hub — không đăng ký làm MCP của agent (H-18)")
-        cfg = {k: v for k, v in cfg.items() if k not in ("command", "args", "env", "headers", "auth", "url", "transport")}
-        cfg["transport"] = info["transport"]
-        if info.get("host"):
-            cfg["url"] = f"https://{info['host']}"
-        out = self.hub.mcp.add(cfg)
-        out["account"] = aid
-        return out
+        return cs.register(self.hub, cfg, account_id, reuse=False)
+
+    # ---- PR3: thêm/gỡ/đăng nhập MCP do claude quản lý theo tài khoản (mcp_client/claude_admin.py). Mọi method ∈ HUMAN_ONLY; ghi ∈ MUTATING
+    # và audit CHỈ giữ name/account_id/transport/login_id/force (`_audit_params`) — url/header/env/args/URL chuyển hướng không bao giờ vào.
+    async def mcp_claude_add(self, p: dict[str, Any]) -> dict[str, Any]:
+        args = {k: p.pop(k, None) for k in ("url", "command", "args", "headers", "env")}  # gỡ khỏi params TRƯỚC (audit dòng thành công)
+        return await self.hub.mcp_claude.add(p.get("account_id"), _req(p, "name"), p.get("transport"), register=p.get("register", True) is not False,
+                                             trust=p.get("trust"), description=p.get("description"), **args)
+
+    async def mcp_claude_remove(self, p: dict[str, Any]) -> dict[str, Any]:
+        return await self.hub.mcp_claude.remove(p.get("account_id"), _req(p, "name"), force=bool(p.get("force")))
+
+    async def mcp_claude_login_start(self, p: dict[str, Any]) -> dict[str, Any]:
+        return await self.hub.mcp_claude.login_start(p.get("account_id"), _req(p, "name"))
+
+    async def mcp_claude_login_finish(self, p: dict[str, Any]) -> dict[str, Any]:
+        url = p.pop("redirect_url", None)
+        return await self.hub.mcp_claude.login_finish(_req(p, "login_id"), url)
+
+    async def mcp_claude_login_cancel(self, p: dict[str, Any]) -> dict[str, Any]:
+        return await self.hub.mcp_claude.login_cancel(_req(p, "login_id"))
+
+    async def mcp_claude_logout(self, p: dict[str, Any]) -> dict[str, Any]:
+        return await self.hub.mcp_claude.logout(p.get("account_id"), _req(p, "name"))
+
+    async def mcp_claude_status(self, p: dict[str, Any]) -> dict[str, Any]:
+        return await self.hub.mcp_claude.status(p.get("account_id"), refresh=bool(p.get("refresh")), cached=bool(p.get("cached")))
 
     async def mcp_claude_servers(self, p: dict[str, Any]) -> dict[str, Any]:
         """MCP do claude quản lý trong cấu hình của tài khoản (mặc định: đang dùng) — CHỈ tên/transport/host + đã đăng ký/gán chưa."""
@@ -582,6 +598,13 @@ class IntegrationRpc:
             "mcp.list": lambda p: h.mcp.with_oauth(h.mcp.list(include_deleted=bool(p.get("deleted")))),
             "mcp.show": lambda p: h.mcp.show(_req(p, "name")),
             "mcp.claude_servers": self.mcp_claude_servers,
+            "mcp.claude_add": self.mcp_claude_add,
+            "mcp.claude_remove": self.mcp_claude_remove,
+            "mcp.claude_login_start": self.mcp_claude_login_start,
+            "mcp.claude_login_finish": self.mcp_claude_login_finish,
+            "mcp.claude_login_cancel": self.mcp_claude_login_cancel,
+            "mcp.claude_logout": self.mcp_claude_logout,
+            "mcp.claude_status": self.mcp_claude_status,
             "mcp.probe": self.mcp_probe,
             "mcp.import": self.mcp_import,
             "mcp.assign": self.mcp_assign,
@@ -661,6 +684,8 @@ def _audit_params(method: str, p: dict[str, Any]) -> dict[str, Any]:
     params = {k: v for k, v in p.items() if k not in ("value", "soul", "passphrase", "key")}  # passphrase: gói hub (hub_transfer); key: khoá cổng cfharness (filehub lane) — phòng hờ
     if method.startswith("mcp.oauth_"):  # code/state/iss của callback OAuth là thông tin đăng nhập một lần — không vào audit
         params = {k: v for k, v in params.items() if k in ("name", "redirect_uri", "error")}
+    if method.startswith("mcp.claude_"):
+        params = {k: v for k, v in params.items() if k in CLAUDE_AUDIT_KEYS}
     if "soul" in p:
         params["soul"] = "(updated)" if p.get("soul") else None
     if "prompt" in params:

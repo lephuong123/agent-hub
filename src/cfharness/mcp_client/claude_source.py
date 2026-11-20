@@ -122,4 +122,40 @@ def account_label(aid: str | None) -> str:
     return aid or "chưa cấu hình (cấu hình claude mặc định)"
 
 
-__all__ = ["account_config_dir", "account_label", "claude_json_path", "default_claude_json", "read_servers", "tool_server_name"]
+def register(hub: Any, cfg: dict[str, Any], account_id: Any = None, *, info: dict[str, Any] | None = None,
+             reuse: bool = True) -> dict[str, Any]:
+    """Tạo dòng registry NGUỒN claude (PR2 `mcp.add{source:claude}`, PR3 `mcp.claude_add`): server phải có trong mcpServers user-scope
+    của `.claude.json` của tài khoản (mặc định: đang dùng); transport + host lấy từ đó — bỏ mọi command/url/env/header/auth người
+    truyền. Không probe. `reuse`: đã có dòng nguồn claude (kể cả đã xoá mềm → khôi phục) → trả dòng đó (một dòng dùng chung mọi tài
+    khoản); không `reuse` → trùng tên = Conflict của registry (như `mcp.add`)."""
+    from ..errors import Conflict, HubError
+
+    name = str(cfg.get("name") or "")
+    aid, cdir = account_config_dir(hub, str(account_id) if account_id else None)
+    if info is None:
+        have = read_servers(cdir)
+        if name not in have:
+            raise HubError(f"không có MCP '{name}' trong cấu hình claude của tài khoản {account_label(aid)} "
+                           f"({claude_json_path(cdir)}) — thêm bằng `cfharness mcp claude add` / `claude mcp add -s user …` dưới tài khoản đó trước",
+                           data={"available": sorted(have), "account": aid})
+        info = have[name]
+    if info.get("hub"):
+        raise HubError(f"MCP '{name}' trong cấu hình claude trỏ về chính hub — không đăng ký làm MCP của agent (H-18)")
+    row = hub.mcp.get_row(name, include_deleted=True) if reuse else None
+    if row is not None:
+        if (row.get("config") or {}).get("source") != "claude":
+            raise Conflict(f"MCP server '{name}' đã tồn tại với nguồn hub" + (" (đang xoá mềm)" if row.get("deleted_at") else ""))
+        out = hub.mcp.restore(name) if row.get("deleted_at") else hub.mcp.show(name)
+        out["account"] = aid
+        out["existing"] = True
+        return out
+    cfg = {k: v for k, v in cfg.items() if k not in ("command", "args", "env", "headers", "auth", "url", "transport")}
+    cfg["transport"] = info["transport"]
+    if info.get("host"):
+        cfg["url"] = f"https://{info['host']}"
+    out = hub.mcp.add(cfg)
+    out["account"] = aid
+    return out
+
+
+__all__ = ["account_config_dir", "account_label", "claude_json_path", "default_claude_json", "read_servers", "register", "tool_server_name"]
