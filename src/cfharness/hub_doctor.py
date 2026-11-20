@@ -292,6 +292,9 @@ def _mcp(ck: _Checks, c: sqlite3.Connection | None, secrets: set[str], probe: Ca
         except ValueError:
             conf = {}
         perr = str(r["probe_error"] or "")
+        if conf.get("source") == "claude":  # cấu hình + token do claude giữ theo tài khoản — hub không probe (plan-mcp-claude-native)
+            ck.add(f"mcp:{name}", f"MCP {name}", True, f"{r['transport']} · nguồn claude (cấu hình + token theo tài khoản Claude đang dùng)")
+            continue
         if probe is not None:
             try:
                 pr = probe(name) or {}

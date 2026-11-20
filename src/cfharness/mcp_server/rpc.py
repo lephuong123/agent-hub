@@ -166,7 +166,10 @@ class IntegrationRpc:
 
     # ------------------------------------------------------------------ mcp.*
     async def mcp_add(self, p: dict[str, Any]) -> dict[str, Any]:
-        out = self.hub.mcp.add(_req(p, "config"))
+        cfg = dict(_req(p, "config"))
+        if str(cfg.get("source") or "").lower() == "claude":
+            return self._mcp_add_claude(cfg, p.get("account_id"))
+        out = self.hub.mcp.add(cfg)
         if p.get("probe", True):
             out["probe"] = await self.hub.mcp.probe(out["name"], timeout_s=self._probe_timeout(p))
         return out
@@ -176,6 +179,46 @@ class IntegrationRpc:
         if p.get("probe"):
             out["probe"] = await self.hub.mcp.probe(out["name"], timeout_s=self._probe_timeout(p))
         return out
+
+    def _mcp_add_claude(self, cfg: dict[str, Any], account_id: Any) -> dict[str, Any]:
+        """Đăng ký server NGUỒN claude (plan-mcp-claude-native PR2): phải có trong mcpServers user-scope của `.claude.json` của tài
+        khoản (mặc định: đang dùng). transport + host lấy từ đó; không bao giờ đọc/lưu header/env/args. Không probe."""
+        from ..mcp_client import claude_source as cs
+
+        name = str(cfg.get("name") or "")
+        aid, cdir = cs.account_config_dir(self.hub, str(account_id) if account_id else None)
+        have = cs.read_servers(cdir)
+        if name not in have:
+            raise HubError(f"không có MCP '{name}' trong cấu hình claude của tài khoản {cs.account_label(aid)} "
+                           f"({cs.claude_json_path(cdir)}) — thêm bằng `claude mcp add -s user …` dưới tài khoản đó trước",
+                           data={"available": sorted(have), "account": aid})
+        info = have[name]
+        if info.get("hub"):
+            raise HubError(f"MCP '{name}' trong cấu hình claude trỏ về chính hub — không đăng ký làm MCP của agent (H-18)")
+        cfg = {k: v for k, v in cfg.items() if k not in ("command", "args", "env", "headers", "auth", "url", "transport")}
+        cfg["transport"] = info["transport"]
+        if info.get("host"):
+            cfg["url"] = f"https://{info['host']}"
+        out = self.hub.mcp.add(cfg)
+        out["account"] = aid
+        return out
+
+    async def mcp_claude_servers(self, p: dict[str, Any]) -> dict[str, Any]:
+        """MCP do claude quản lý trong cấu hình của tài khoản (mặc định: đang dùng) — CHỈ tên/transport/host + đã đăng ký/gán chưa."""
+        from ..mcp_client import claude_source as cs
+
+        aid, cdir = cs.account_config_dir(self.hub, str(p["account_id"]) if p.get("account_id") else None)
+        have = cs.read_servers(cdir)
+        rows = {r["name"]: r for r in self.hub.mcp.list()}
+        out = []
+        for name in sorted(have):
+            r = rows.get(name)
+            src = ((r or {}).get("config") or {}).get("source")
+            out.append({"name": name, "transport": have[name]["transport"], "host": have[name].get("host"), "hub": have[name]["hub"],
+                        "registered": r is not None, "registered_source": None if r is None else ("claude" if src == "claude" else "hub"),
+                        "agents": self.hub.mcp.agents_using(name) if r is not None else []})
+        path = cs.claude_json_path(cdir)
+        return {"account": aid, "config_path": str(path), "exists": path.exists(), "servers": out}
 
     def _probe_timeout(self, p: dict[str, Any]) -> float:
         return float(p.get("timeout_s") or self.hub.config.get("mcp.probe_timeout_s"))
@@ -538,6 +581,7 @@ class IntegrationRpc:
             "mcp.restore": lambda p: h.mcp.restore(_req(p, "name")),
             "mcp.list": lambda p: h.mcp.with_oauth(h.mcp.list(include_deleted=bool(p.get("deleted")))),
             "mcp.show": lambda p: h.mcp.show(_req(p, "name")),
+            "mcp.claude_servers": self.mcp_claude_servers,
             "mcp.probe": self.mcp_probe,
             "mcp.import": self.mcp_import,
             "mcp.assign": self.mcp_assign,

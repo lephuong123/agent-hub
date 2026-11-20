@@ -424,6 +424,10 @@ class ClaudeCliRuntime(AgentRuntime):
             from ..pdf_support import append_path
 
             append_path(env, list(spec.path_extra))
+
+        cdir = getattr(spec, "claude_config_dir", None)
+        if cdir:  # MCP nguồn claude dưới token: mcpServers + token MCP nằm trong thư mục cấu hình của tài khoản (thắng env_extra)
+            env["CLAUDE_CONFIG_DIR"] = str(cdir)
         return with_loopback_no_proxy(env)  # env_extra của run có thể đặt proxy → vẫn giữ loopback đi thẳng
 
     def capabilities(self) -> dict[str, bool]:

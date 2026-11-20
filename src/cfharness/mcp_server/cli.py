@@ -207,6 +207,8 @@ def _hoist_trailing_flags(a: argparse.Namespace, act: str) -> None:
     p = argparse.ArgumentParser(prog=f"cfharness mcp {act} <tên>", add_help=False)
     _server_fields(p)
     p.add_argument("--no-probe" if act == "add" else "--probe", action="store_true")
+    if act == "add":
+        _source_fields(p)
     ns = p.parse_args(rest)
     for k, v in vars(ns).items():
         if k == "command":
@@ -215,6 +217,33 @@ def _hoist_trailing_flags(a: argparse.Namespace, act: str) -> None:
             setattr(a, k, (getattr(a, k, None) or []) + v)
         elif v is not None and v is not False:
             setattr(a, k, v)
+
+
+def _source_fields(sp: argparse.ArgumentParser) -> None:
+    sp.add_argument("--source", choices=["hub", "claude"], default=None,
+                    help="hub (mặc định: hub giữ cấu hình + secret) | claude (server đã có trong cấu hình claude của tài khoản — "
+                         "claude giữ cấu hình + token; hub chỉ giữ trust/include/exclude/require_approval)")
+    sp.add_argument("--account", help="(--source claude) id tài khoản Claude để kiểm (mặc định: tài khoản đang dùng)")
+
+
+def _claude_source_payload(a: argparse.Namespace) -> dict[str, Any]:
+    """`mcp add --source claude <tên>`: chỉ metadata an toàn — lệnh/url/env/header/OAuth thuộc claude."""
+    if a.command and [x for x in a.command if x != "--"] or a.url or a.env or a.header or a.oauth or a.oauth_scope \
+            or a.oauth_client_id or a.oauth_client_secret or a.transport:
+        raise SystemExit("--source claude: không đặt lệnh/--url/--transport/--env/--header/--oauth* (claude giữ cấu hình; hub đọc "
+                         "transport + host từ cấu hình claude của tài khoản)")
+    d: dict[str, Any] = {"source": "claude"}
+    tools: dict[str, Any] = {}
+    for src in ("include", "exclude", "require_approval"):
+        v = _split(getattr(a, src))
+        if v is not None:
+            tools[src] = v
+    if tools:
+        d["tools"] = tools
+    for src in ("trust", "description"):
+        if getattr(a, src) is not None:
+            d[src] = getattr(a, src)
+    return d
 
 
 def _server_payload(a: argparse.Namespace, *, creating: bool) -> dict[str, Any]:
@@ -400,6 +429,27 @@ def cmd_mcp(ctx: Any) -> int:
         return cmd_mcp_token(ctx)
     if act in ("add", "edit"):
         _hoist_trailing_flags(a, act)
+    if act == "add" and a.source == "claude":
+        try:
+            payload = {"name": a.name, **_claude_source_payload(a)}
+        except SystemExit as e:
+            _eprint(str(e))
+            return EXIT_USER
+        res = ctx.call("mcp.add", {"config": payload, "probe": False, "account_id": a.account})
+        ctx.out(res, f"đã thêm MCP server nguồn claude (tài khoản {res.get('account') or 'cấu hình claude mặc định'})\n" + _server_text(res)
+                + "\n  (hub không probe — gắn nhãn tool: cfharness mcp annotate " + a.name + " <tool> --read-only|--destructive)")
+        return EXIT_OK
+    if act == "claude-servers":
+        res = ctx.call("mcp.claude_servers", {"account_id": a.account})
+        lines = [f"MCP do claude quản lý — tài khoản {res.get('account') or 'cấu hình claude mặc định'} ({res.get('config_path')})"]
+        if not res.get("servers"):
+            lines.append("  (không có server nào)" if res.get("exists") else "  (chưa có .claude.json)")
+        for s in res.get("servers") or []:
+            reg = ("đã đăng ký nguồn " + s["registered_source"]) if s.get("registered") else "chưa đăng ký (cfharness mcp add --source claude " + s["name"] + ")"
+            lines.append(f"  {s['name']:<28} {s['transport']:<6} {s.get('host') or '-':<30} {reg}"
+                         + (f"  agent: {', '.join(s['agents'])}" if s.get("agents") else ""))
+        ctx.out(res, "\n".join(lines))
+        return EXIT_OK
     if act == "add":
         payload = {"name": a.name, **_server_payload(a, creating=True)}
         res = ctx.call("mcp.add", {"config": payload, "probe": not a.no_probe, "timeout_s": a.timeout})
@@ -664,6 +714,10 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     ad.add_argument("name")
     ad.add_argument("--no-probe", action="store_true")
     _server_fields(ad)
+    _source_fields(ad)
+    cs = ms.add_parser("claude-servers", help="MCP do claude quản lý trong cấu hình claude của tài khoản (chỉ tên/transport/host)",
+                       parents=[common])
+    cs.add_argument("--account", help="id tài khoản Claude (mặc định: đang dùng)")
     ed = ms.add_parser("edit", help="sửa MCP server (--env KEY= để xoá khoá)", parents=[common])
     ed.add_argument("name")
     ed.add_argument("--probe", action="store_true")

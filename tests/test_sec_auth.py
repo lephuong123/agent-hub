@@ -589,6 +589,26 @@ async def test_session_reindex_human_only(home):
         await _stop(d, srv)
 
 
+async def test_mcp_claude_servers_human_only(home):
+    """plan-mcp-claude-native PR2: danh sách MCP trong cấu hình claude của tài khoản (`mcp.claude_servers`) là cấu hình của NGƯỜI —
+    agent trong run (kể cả đọc trộm token người) bị từ chối; người gọi được; CLI `mcp claude-servers` bị classifier chặn với agent."""
+    from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI
+
+    assert "mcp.claude_servers" in auth.HUMAN_ONLY and "mcp.claude_servers" not in auth.MANAGER_ALLOWED
+    assert "claude-servers" in HUB_HUMAN_ONLY_CLI["mcp"]
+    d, srv = await _start(home)
+    try:
+        run_n, proc_n, go_n = await _start_run(d)
+        rr = await _in_run(go_n, _client_py(home, "mcp.claude_servers", {}, steal_token=True))
+        resp = json.loads(rr["out"].strip().splitlines()[-1])
+        assert resp.get("error", {}).get("code") == -32003, resp
+        proc_n.wait(5)
+        r = await asyncio.to_thread(RpcClient(home.socket).call, "mcp.claude_servers", {})  # người: được
+        assert "servers" in r
+    finally:
+        await _stop(d, srv)
+
+
 # =============================================================================== L3 (plan-logging.md A2/A5): audit.list + token web/MCP riêng
 def test_audit_list_human_only_and_cli_blocked(home):
     from cfharness.guard.classifier import HUB_HUMAN_ONLY_CLI, GuardContext, classify

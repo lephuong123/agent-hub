@@ -1,6 +1,6 @@
 # Plan: chuyển xử lý MCP bên thứ ba sang `claude` (MCP do claude quản lý theo tài khoản)
 
-Trạng thái: PLAN (2026-11-20). Chưa làm. Phụ thuộc nhánh connector theo tài khoản (`accounts/claude_config.py`, v0.2.27).
+Trạng thái: PLAN (2026-11-20). PR1 (#171), PR2, PR3 đã làm; PR4–PR5 chưa làm. Phụ thuộc nhánh connector theo tài khoản (`accounts/claude_config.py`, v0.2.27).
 
 ## 1. Kết luận phân tích
 
@@ -30,7 +30,16 @@ Không làm: bỏ `--mcp-config`, bỏ strict cho run judge/eval/review/curator/
 
 ## 3. Các bước (mỗi bước một PR, đều có test không gọi `claude` thật)
 
-### PR0 — Spike còn lại (thủ công, ghi kết quả vào file này)
+### PR0 — Spike (kết quả 2026-11-20, `claude` 2.1.329)
+- Token `claude mcp login` nằm CÙNG mục Keychain với phiên claude.ai (`Claude Code-credentials[-<hash config dir>]`, khoá `mcpOAuth`
+  theo tên server) → tách theo `CLAUDE_CONFIG_DIR` như phiên đăng nhập; `-p` dùng lại token đã đăng nhập (cf-db-* connected trong run headless).
+- `--disallowedTools "mcp__<server>__*"` gỡ HẾT tool của server khỏi ngữ cảnh (0 tool) nhưng server VẪN connect (tiến trình stdio vẫn spawn) —
+  đủ cho chặn dùng; muốn không spawn thì phải không có server trong config dir đó.
+- `system/init.mcp_servers[].status` thấy: `connected`, `needs-auth`, `pending`.
+- Server local-scope (`claude mcp add -s local` trong thư mục tạm) KHÔNG xuất hiện trong run `-p` (cả `--setting-sources user` lẫn `""`) →
+  chỉ dùng scope `user` trong config dir của tài khoản.
+
+Danh sách kiểm ban đầu:
 - Token của `claude mcp login` lưu ở đâu (Keychain theo config dir?), `-p` dùng lại được không, tự làm mới khi hết hạn.
 - Server local-scope (`projects[<cwd>].mcpServers`) có nạp dưới `--setting-sources user` không.
 - `--disallowedTools "mcp__<server>__*"` có gỡ hẳn server khỏi ngữ cảnh (không connect) không.
@@ -62,6 +71,43 @@ Không làm: bỏ `--mcp-config`, bỏ strict cho run judge/eval/review/curator/
   `mcp_unknown_tool` vẫn hỏi người, "luôn cho phép" theo tool (`mcp_tool` rule) giữ nguyên.
 - `ToolWriteWatcher` audit cả server `source=claude` (dựa trên tên server trong registry).
 - Test: `tests/test_mcp_registry.py`, `tests/test_connector_auth.py` (claude giả in `system/init` có server lạ → violation; server đã gán → không).
+
+**Đã làm (2026-11-20, nhánh `feat/mcp-source-claude`, trên nhánh connector theo tài khoản):**
+- `McpServerConfig.source` (trường CÓ SẴN, trước là nguồn gốc `manual|claude-import`) nhận thêm `claude`; `hub` là bí danh của `manual`.
+  Lưu trong JSON `config` + cột `source` có sẵn → **không migration**. `source=claude`: cấm command/args/env/headers/auth, `url` bị rút
+  về `scheme://host[:port]`, `claude_entry()` ném lỗi, `probe` trả `ok=false` (không kết nối), `update` không đổi được nguồn hub↔claude.
+- `mcp_client/claude_source.py`: `read_servers(config_dir)` đọc `mcpServers` TẦNG ĐẦU của `<config_dir>/.claude.json` → CHỈ
+  `{transport, host, hub}` (`hub` = trỏ về chính hub, `is_hub_mcp_config`); cấu hình mặc định = `$CLAUDE_CONFIG_DIR/.claude.json` hoặc
+  `~/.claude.json` (test: `CFHARNESS_TEST_CLAUDE_HOME`). `account_config_dir(hub, id)`: tài khoản token → `claude-config/<id>/`;
+  machine/custom/chưa cấu hình → mặc định.
+- RPC `mcp.claude_servers{account_id?}` (HUMAN_ONLY, chỉ đọc) + CLI `cfharness mcp claude-servers [--account]`; `mcp.add{config:{source:
+  "claude"}, account_id?}` kiểm tên có trong cấu hình của tài khoản (mặc định đang dùng), lấy transport/host từ đó (bỏ mọi
+  command/url/header người truyền), từ chối server trỏ về hub; CLI `cfharness mcp add --source claude <tên> [--account]`.
+- `runs.py`: `_agent_claude_mcp` (run kỹ thuật review/eval/curator/graph_extract + bản sao eval → bỏ qua, giữ strict); server nguồn
+  claude không vào mcp.json (`build_for_agent_servers` bỏ qua); run có server loại này → đường connector (`run_setup(())` nếu chưa có
+  connector: bỏ strict, `--setting-sources user`, plugin user tắt), guard tắt → `RuntimeError_` (run failed); thiếu server trong
+  `.claude.json` của tài khoản đang dùng → `HubError` nêu tên tài khoản + đường dẫn (fail-closed, như thiếu secret);
+  `--disallowedTools mcp__<tên đã chuẩn hoá>__*` cho mọi server trong `.claude.json` không gán (và không trùng server hub);
+  `CLAUDE_CONFIG_DIR` = thư mục tài khoản token (dựng lại symlink, phải `shared`) CẢ ở auth_mode token (`claude_cli._run_env`), machine/
+  custom → mặc định; `ActiveRun.claude_session` = tài khoản (chặn đăng xuất/xoá khi run chạy), `ActiveRun.claude_mcp`.
+- Adapter: `RunSpec.claude_mcp_servers` → event MỚI `mcp.unavailable{server, status, source}` (summary) khi server đã gán `missing` hoặc
+  không `connected`/`pending` (vd `needs-auth`) — không dùng lại `connector.unavailable` (payload/nghĩa là connector claude.ai).
+  `allowed_mcp` = mcp_servers của agent (gồm server claude đã gán) + server user-scope từ `run_setup`; server ngoài đó → `isolation.violation`.
+- Guard: `_connector_ctx` coi run có server claude là run connector (`connectors=()` nếu không có connector) → MCP khác = `mcp_not_in_run`.
+  `registry.tool_annotations` trả bản ghi cho MỌI tool của server nguồn claude (`source`, `probed`, trust, require_approval, selected,
+  ghi đè người). `classify_mcp`: tool bị loại bởi include/exclude (glob) → `mcp_not_in_run` forbidden; protected / destructiveHint /
+  tên xoá / require_approval / readOnlyHint như cũ; rồi suy theo tên: tên đọc (`_CONNECTOR_READ_RE`) → `mcp_claude_read_name` (safe,
+  trừ khi người đặt readOnlyHint=false), còn lại → server `trusted`: `mcp_claude_write` (write, audit), untrusted: `mcp_untrusted_write`
+  (hỏi) — KHÔNG `mcp_unknown_tool`. Sandbox: `agent_mcp_domains` lấy host từ `url` đã lưu.
+- `ToolWriteWatcher`: audit tool ghi của server nguồn claude (tên dạng đọc bỏ qua như guard), `annotations_known=false`, `data.source`.
+- `mcp_registry_list` của điều phối viên có `source: hub|claude`. `hub doctor`: server nguồn claude không probe (báo "nguồn claude").
+- Test: `tests/test_mcp_source_claude.py` (14 ca, gồm claude giả qua `ClaudeCliRuntime` đọc `CLAUDE_CONFIG_DIR`),
+  `tests/test_sec_auth.py::test_mcp_claude_servers_human_only`.
+
+Lệch so với plan: dùng lại trường `source` có sẵn (giá trị cũ giữ nguyên, không đổi mặc định thành chữ `hub`); server untrusted không
+"suy theo tên → write" mà hỏi duyệt như mọi tool ghi của server untrusted (giữ ý nghĩa trust); thêm event `mcp.unavailable` thay vì
+dùng lại `connector.unavailable`; chặn đăng ký server trỏ về hub (H-18). Việc dở: web chưa có nút "đăng ký nguồn claude" (PR3), PR1
+(chặn agent ĐỌC `~/.claude.json` của cấu hình MẶC ĐỊNH — dùng khi tài khoản machine/custom) chưa có trên nhánh này; `claude-config/<id>/` đã bị chặn đọc/ghi bởi nhánh connector theo tài khoản.
 
 ### PR3 — Thêm server + đăng nhập qua `claude` (web + CLI)
 - `cfharness mcp add --via claude <name> <url>` / web "Thêm MCP" chọn tài khoản: daemon chạy

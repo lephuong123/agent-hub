@@ -283,7 +283,10 @@ class ManagerOps:
         for m in self.hub.mcp.list():
             if m["name"] in own:
                 continue
-            out.append({"name": m["name"], "description": (m.get("description") or "")[:200], "transport": (m.get("config") or {}).get("type") or m.get("transport")})
+            cfg = m.get("config") or {}
+            # source: hub (hub giữ cấu hình + secret) | claude (claude giữ, theo tài khoản đang dùng — plan-mcp-claude-native PR2)
+            out.append({"name": m["name"], "description": (m.get("description") or cfg.get("description") or "")[:200],
+                        "transport": cfg.get("type") or m.get("transport"), "source": "claude" if cfg.get("source") == "claude" else "hub"})
         return out
 
     def op_filehub_list(self, a: dict[str, Any]) -> list[dict[str, Any]]:
