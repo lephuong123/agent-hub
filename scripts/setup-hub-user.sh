@@ -8,6 +8,10 @@
 #   Kèm thư mục chung Không gian số: thêm KGS=https://trungtamai.cchchn.com — qua CỔNG CFHARNESS (Không gian số chạy cùng máy): dán khoá
 #   cổng của tài khoản (Không gian số › Hồ sơ › Cổng cfharness) là xong — mọi thư mục/workspace khoá được cấp dùng được ngay.
 #   (Đồng bộ 2 chiều cũ đã bỏ; KGS_MODE/KGS_SCOPE/KGS_FOLDER/KGS_WS của bản cũ vẫn nhận nhưng không còn tác dụng.)
+#   Kèm connector claude.ai (Google Drive…) cho agent: thêm CONNECTORS="Google Drive" CONNECTOR_AGENTS="dieu-phoi agent-a" — đăng nhập
+#   `claude auth login` (tài khoản claude.ai) cho user hub; token setup-token KHÔNG nạp connector (docs/dev-notes/manager-connectors.md).
+#   Hub ĐÃ có, chỉ nâng cfharness + nối connector (không đụng token/tunnel/TOTP):
+#     sudo ONLY_CONNECTORS=1 CONNECTORS="Google Drive" CONNECTOR_AGENTS="dieu-phoi" bash scripts/setup-hub-user.sh cchcadmin
 # MỘT lệnh làm hết: user, cài đặt, token, cấu hình, LaunchDaemon, tunnel + DNS, thư mục chung (nếu có KGS), TOTP.
 # Đừng `| tee` ra file: màn hình có token Claude (bước 3) và link đăng ký TOTP (bước 8).
 # Chạy lại được (bỏ qua bước đã xong).
@@ -20,7 +24,10 @@ MCP="${4:-8722}"
 DOMAIN="${DOMAIN:-trungtamdhs.com}"   # miền gốc (zone Cloudflare): https://$SUB.$DOMAIN
 SUB="${SUB:-$U}"        # tên miền con: https://$SUB.$DOMAIN
 HOST="$SUB.$DOMAIN"
-VER="${VER:-v0.2.21}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
+VER="${VER:-v0.2.22}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
+CONNECTORS="${CONNECTORS:-}"              # connector claude.ai, phân cách dấu phẩy (vd "Google Drive,Claude Docs"); trống = bỏ qua
+CONNECTOR_AGENTS="${CONNECTOR_AGENTS:-}"  # agent bật connector, cách nhau dấu cách; điều phối viên → manager capabilities (cần --mcp trusted)
+ONLY_CONNECTORS="${ONLY_CONNECTORS:-}"    # 1 = hub đã có: chỉ bước 2 (nâng cfharness) + nối connector, rồi dừng
 KGS="${KGS:-}"          # URL Không gian số để nối thư mục chung (trống = bỏ qua bước 10)
 # Cổng cfharness (docs/dev-notes/plan-filehub-lane.md): nhập khoá cổng (người dùng tạo ở Không gian số › Hồ sơ › Cổng cfharness cho tài
 # khoản của mình — script hỏi bằng getpass, không in); hub tự thêm mọi gốc khoá được cấp. Chỉ khi Không gian số chạy CÙNG máy (loopback).
@@ -42,6 +49,35 @@ ok()   { printf '\033[32m✓ %s\033[0m\n' "$*"; }
 warn() { printf '\033[33m! %s\033[0m\n' "$*"; }
 as_u() { sudo -u "$U" -H env HOME="$H" USER="$U" LOGNAME="$U" PATH="$UPATH" "$@"; }
 cfh()  { as_u "$H/.local/bin/cfharness" "$@"; }
+
+# Connector claude.ai: phiên `claude auth login` của user hub (KHÔNG kèm token chung), bật connector cho agent, kiểm bằng doctor --probe
+connectors_step() {
+  step "Connector claude.ai: $CONNECTORS"
+  if [ -z "$CONNECTORS" ]; then ok "bỏ qua (không đặt CONNECTORS=…)"; return 0; fi
+  claude_login() { as_u env -u CLAUDE_CODE_OAUTH_TOKEN "$H/.local/bin/claude" auth "$@"; }
+  if claude_login status --json 2>/dev/null | grep -q '"authMethod": *"claude.ai"'; then
+    ok "user $U đã đăng nhập claude.ai: $(claude_login status --json 2>/dev/null | sed -n 's/.*"email": *"\([^"]*\)".*/\1/p')"
+  else
+    echo "Đăng nhập tài khoản claude.ai mà agent sẽ dùng connector (mở link in ra, đăng nhập, dán mã lại đây):"
+    claude_login login || warn "claude auth login lỗi"
+    claude_login status --json 2>/dev/null | grep -q '"authMethod": *"claude.ai"' && ok "đã đăng nhập claude.ai" \
+      || { warn "CHƯA có phiên claude.ai cho $U — connector sẽ không nạp (chạy lại script)"; return 0; }
+  fi
+  echo "  → Trên claude.ai của tài khoản này: Settings › Connectors › bấm Connect cho: $CONNECTORS (chọn đúng tài khoản Google…)."
+  for _ in $(seq 1 30); do cfh daemon status >/dev/null 2>&1 && break; sleep 1; done
+  MGR_ID="$(cfh manager get --json 2>/dev/null | sed -n 's/.*"agent_id": *"\([^"]*\)".*/\1/p' | head -1)"
+  for a in $CONNECTOR_AGENTS; do
+    if [ -n "$MGR_ID" ] && [ "$a" = "$MGR_ID" ]; then
+      cfh manager capabilities set --mcp trusted --connectors "$CONNECTORS" >/dev/null && ok "điều phối viên $a: connector $CONNECTORS" \
+        || warn "không bật được connector cho điều phối viên $a (cần profile hermes + guard/sandbox bật — cfharness manager capabilities)"
+    else
+      cfh agent edit "$a" --connectors "$CONNECTORS" >/dev/null && ok "agent $a: connector $CONNECTORS" || warn "không bật được connector cho agent $a"
+    fi
+  done
+  [ -n "$CONNECTOR_AGENTS" ] || warn "chưa đặt CONNECTOR_AGENTS — bật sau: sudo -u $U -i cfharness agent edit <id> --connectors \"$CONNECTORS\""
+  cfh hub doctor --probe 2>/dev/null | grep -i "connector" || true
+  echo "  Chạy thử một run của agent: event connector.unavailable = connector chưa Connect trên claude.ai; connector.auth_fallback = chưa đăng nhập."
+}
 
 [ "$(id -u)" = 0 ] || { echo "Chạy bằng sudo: sudo bash $0"; exit 1; }
 [ -n "$ADMIN" ] && [ "$ADMIN" != root ] || { echo "Chạy bằng 'sudo' từ user admin (không chạy trực tiếp bằng root)"; exit 1; }
@@ -84,6 +120,15 @@ step "2/11 Cài uv, claude, cfharness $VER (riêng cho $U)"
 [ -x "$H/.local/bin/claude" ] || as_u bash -c 'curl -fsSL https://claude.ai/install.sh | bash' >/dev/null
 as_u "$H/.local/bin/uv" tool install --force --python 3.13 "git+https://github.com/lephuong123/agent-hub@$VER" 2>&1 | tail -1
 ok "uv $(as_u "$H/.local/bin/uv" --version | awk '{print $2}') · claude $(as_u "$H/.local/bin/claude" --version | awk '{print $1}') · $(cfh --version 2>/dev/null || echo cfharness)"
+
+if [ "$ONLY_CONNECTORS" = 1 ]; then
+  launchctl kickstart -k "system/com.cfharness.daemon.$U" 2>/dev/null || { cfh daemon stop >/dev/null 2>&1 || true; cfh daemon start >/dev/null 2>&1 || true; }
+  launchctl kickstart -k "system/com.cfharness.web.$U" 2>/dev/null || true
+  ok "đã khởi động lại daemon + web của $U (bản mới)"
+  connectors_step
+  printf '\n\033[1;32mXONG.\033[0m\n'
+  exit 0
+fi
 
 step "3/11 Token Claude dùng chung (CLAUDE_CODE_OAUTH_TOKEN)"
 # Token `claude setup-token` dài ~108 ký tự và thường bị Terminal XUỐNG DÒNG khi in → dán vào `read` một dòng sẽ CẮT CỤT
@@ -203,6 +248,8 @@ if [ -z "$KGS" ]; then ok "bỏ qua (không đặt KGS=<URL Không gian số>)";
   cfh filehub lane test ${KGS_LANE_NAME:+--server "$KGS_LANE_NAME"} || true
   cfh filehub status || true
 fi
+
+connectors_step
 
 step "11/11 Mã đăng nhập web (TOTP) cho $U"
 cfh web totp enroll

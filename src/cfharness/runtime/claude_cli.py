@@ -403,7 +403,7 @@ class ClaudeCliRuntime(AgentRuntime):
 
     def _run_env(self, spec: RunSpec) -> dict[str, str]:
         env = {**child_env(self.cfg), **(spec.env_extra or {})}
-        if spec.auth_mode == "login":
+        if getattr(spec, "auth_mode", "token") == "login":
             # run có connector claude.ai: token `setup-token` không nạp connector → dùng phiên `claude /login` của user OS;
             # gỡ MỌI nguồn token (env daemon, env_extra) để CLI không ưu tiên token
             env.pop(OAUTH_TOKEN_SECRET, None)
