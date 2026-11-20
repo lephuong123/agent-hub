@@ -10,6 +10,8 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+- `scripts/setup-hub-user.sh`: `CONNECTOR_AGENTS=all` bật connector cho mọi agent; connector được GỘP với connector agent đang có thay vì ghi đè.
+
 ---
 
 ## v0.2.22 — 2026-11-20

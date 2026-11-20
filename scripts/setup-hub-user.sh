@@ -8,7 +8,7 @@
 #   Kèm thư mục chung Không gian số: thêm KGS=https://trungtamai.cchchn.com — qua CỔNG CFHARNESS (Không gian số chạy cùng máy): dán khoá
 #   cổng của tài khoản (Không gian số › Hồ sơ › Cổng cfharness) là xong — mọi thư mục/workspace khoá được cấp dùng được ngay.
 #   (Đồng bộ 2 chiều cũ đã bỏ; KGS_MODE/KGS_SCOPE/KGS_FOLDER/KGS_WS của bản cũ vẫn nhận nhưng không còn tác dụng.)
-#   Kèm connector claude.ai (Google Drive…) cho agent: thêm CONNECTORS="Google Drive" CONNECTOR_AGENTS="dieu-phoi agent-a" — đăng nhập
+#   Kèm connector claude.ai (Google Drive…) cho agent: thêm CONNECTORS="Google Drive" CONNECTOR_AGENTS="dieu-phoi agent-a" (hoặc "all") — đăng nhập
 #   `claude auth login` (tài khoản claude.ai) cho user hub; token setup-token KHÔNG nạp connector (docs/dev-notes/manager-connectors.md).
 #   Hub ĐÃ có, chỉ nâng cfharness + nối connector (không đụng token/tunnel/TOTP):
 #     sudo ONLY_CONNECTORS=1 CONNECTORS="Google Drive" CONNECTOR_AGENTS="dieu-phoi" bash scripts/setup-hub-user.sh cchcadmin
@@ -26,7 +26,7 @@ SUB="${SUB:-$U}"        # tên miền con: https://$SUB.$DOMAIN
 HOST="$SUB.$DOMAIN"
 VER="${VER:-v0.2.22}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
 CONNECTORS="${CONNECTORS:-}"              # connector claude.ai, phân cách dấu phẩy (vd "Google Drive,Claude Docs"); trống = bỏ qua
-CONNECTOR_AGENTS="${CONNECTOR_AGENTS:-}"  # agent bật connector, cách nhau dấu cách; điều phối viên → manager capabilities (cần --mcp trusted)
+CONNECTOR_AGENTS="${CONNECTOR_AGENTS:-}"  # agent bật connector, cách nhau dấu cách, hoặc "all" = mọi agent; GỘP với connector sẵn có; điều phối viên → manager capabilities (cần --mcp trusted)
 ONLY_CONNECTORS="${ONLY_CONNECTORS:-}"    # 1 = hub đã có: chỉ bước 2 (nâng cfharness) + nối connector, rồi dừng
 KGS="${KGS:-}"          # URL Không gian số để nối thư mục chung (trống = bỏ qua bước 10)
 # Cổng cfharness (docs/dev-notes/plan-filehub-lane.md): nhập khoá cổng (người dùng tạo ở Không gian số › Hồ sơ › Cổng cfharness cho tài
@@ -66,14 +66,37 @@ connectors_step() {
   echo "  → Trên claude.ai của tài khoản này: Settings › Connectors › bấm Connect cho: $CONNECTORS (chọn đúng tài khoản Google…)."
   for _ in $(seq 1 30); do cfh daemon status >/dev/null 2>&1 && break; sleep 1; done
   MGR_ID="$(cfh manager get --json 2>/dev/null | sed -n 's/.*"agent_id": *"\([^"]*\)".*/\1/p' | head -1)"
-  for a in $CONNECTOR_AGENTS; do
+  # "all" = mọi agent (chưa lưu trữ). GỘP với connector agent đang có (agent edit --connectors GHI ĐÈ cả danh sách)
+  # → dòng "<id>\t<danh sách đã gộp>"; agent không đổi gì thì bỏ qua
+  plan="$(cfh agent list --json 2>/dev/null | CONNECTORS="$CONNECTORS" WANT="$CONNECTOR_AGENTS" python3 -c '
+import json, os, re, sys
+slug = lambda n: re.sub(r"[^A-Za-z0-9_-]", "_", n.strip().removeprefix("claude.ai ").removeprefix("claude_ai_"))
+add = [x.strip() for x in os.environ["CONNECTORS"].split(",") if x.strip()]
+want = os.environ["WANT"].split()
+agents = {a["id"]: a for a in json.load(sys.stdin)}
+ids = list(agents) if want == ["all"] else want
+for i in ids:
+    if i not in agents:
+        print(f"{i}\t!missing"); continue
+    cur = list((agents[i].get("tool_policy") or {}).get("connectors") or [])
+    have = {slug(c) for c in cur}
+    new = cur + [c for c in add if slug(c) not in have]
+    print(f"{i}\t" + (",".join(new) if len(new) > len(cur) else "!same"))
+')" || { warn "không đọc được danh sách agent"; plan=""; }
+  while IFS=$'\t' read -r a conns; do
+    [ -n "$a" ] || continue
+    case "$conns" in
+      '!missing') warn "không có agent $a"; continue ;;
+      '!same') ok "agent $a: đã có $CONNECTORS"; continue ;;
+    esac
     if [ -n "$MGR_ID" ] && [ "$a" = "$MGR_ID" ]; then
-      cfh manager capabilities set --mcp trusted --connectors "$CONNECTORS" >/dev/null && ok "điều phối viên $a: connector $CONNECTORS" \
+      cur="$(cfh config get manager.capabilities 2>/dev/null | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin).get("connectors") or []))' 2>/dev/null || true)"
+      cfh manager capabilities set --mcp trusted --connectors "${cur:+$cur,}$CONNECTORS" >/dev/null && ok "điều phối viên $a: connector ${cur:+$cur,}$CONNECTORS" \
         || warn "không bật được connector cho điều phối viên $a (cần profile hermes + guard/sandbox bật — cfharness manager capabilities)"
     else
-      cfh agent edit "$a" --connectors "$CONNECTORS" >/dev/null && ok "agent $a: connector $CONNECTORS" || warn "không bật được connector cho agent $a"
+      cfh agent edit "$a" --connectors "$conns" >/dev/null && ok "agent $a: connector $conns" || warn "không bật được connector cho agent $a"
     fi
-  done
+  done <<< "$plan"
   [ -n "$CONNECTOR_AGENTS" ] || warn "chưa đặt CONNECTOR_AGENTS — bật sau: sudo -u $U -i cfharness agent edit <id> --connectors \"$CONNECTORS\""
   cfh hub doctor --probe 2>/dev/null | grep -i "connector" || true
   echo "  Chạy thử một run của agent: event connector.unavailable = connector chưa Connect trên claude.ai; connector.auth_fallback = chưa đăng nhập."
