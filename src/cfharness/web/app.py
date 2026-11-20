@@ -762,13 +762,73 @@ async def _agent_form_ctx(request: Request, agent: dict[str, Any] | None, values
             "browser": tp.get("browser") or "",
             "tools": ", ".join(tp.get("tools") or []), "mcp": list(agent.get("mcp_servers") or []),
             "web_allow_domains": ", ".join(tp.get("web_allow_domains") or []),
+            "connector_slugs": list(tp.get("connectors") or []),
             "max_budget_usd_per_run": lim.get("max_budget_usd_per_run") or "", "budget_usd_per_day": lim.get("budget_usd_per_day") or "",
             "max_runtime_s": lim.get("max_runtime_s") or "", "max_concurrent_runs": lim.get("max_concurrent_runs") or "",
             "workspace_default": agent.get("workspace_default") or "", "soul": agent.get("soul") or "",
         }
     v.setdefault("mcp", [])
+    conn = await _connector_hints(request, agent)
+    from ..manager.permissions import connector_slug
+    if values is not None:  # form gửi lại sau lỗi → giữ đúng lựa chọn của người
+        v["connector_slugs"] = [connector_slug(x) for x in _form_connectors_raw(values)]
+    v.setdefault("connector_slugs", [])
+    opt_slugs = {o["slug"] for o in conn["connector_options"]}
+    if values is None or "connectors_extra" not in v:
+        v["connectors_extra"] = ", ".join(x for x in v["connector_slugs"] if x not in opt_slugs)
     return {"nav": "agents", "agent": agent, "templates": templates_, "mcp": mcp, "v": v, "error": error, "models": MODELS, "efforts": EFFORTS,
-            "modes": PERMISSION_MODES, "browsers": BROWSERS}
+            "modes": PERMISSION_MODES, "browsers": BROWSERS, **conn}
+
+
+_CONNECTOR_TOOL_RE = re.compile(r"^mcp__claude_ai_([A-Za-z0-9_-]+?)__")
+
+
+def connector_gaps(tool_policy: dict[str, Any] | None) -> list[str]:
+    """Slug connector mà `allowed_tools` cho gọi (`mcp__claude_ai_X__*`) nhưng `connectors` chưa bật → run không nạp được tool đó
+    (`--setting-sources ""` + `--strict-mcp-config`). Đây là lỗi khiến jira-ops 'mất' Atlassian MCP (2026-11-19)."""
+    tp = tool_policy or {}
+    on = {str(x) for x in (tp.get("connectors") or [])}
+    seen: list[str] = []
+    for t in tp.get("allowed_tools") or []:
+        m = _CONNECTOR_TOOL_RE.match(str(t))
+        if m and m.group(1) not in on and m.group(1) not in seen:
+            seen.append(m.group(1))
+    return seen
+
+
+async def _connector_hints(request: Request, agent: dict[str, Any] | None) -> dict[str, Any]:
+    """Gợi ý cho ô connector: danh sách connector của điều phối viên (tên người đã nhập) + slug suy từ allowed_tools; cờ guard."""
+    async def cfg(key: str) -> Any:
+        try:
+            return await rpc(request, "config.get", {"key": key})
+        except RpcError:
+            return None
+    from ..manager.permissions import connector_slug
+    opts: dict[str, str] = {}  # slug → tên hiển thị
+    for n in (await cfg("manager.capabilities.connectors")) or []:
+        if isinstance(n, str) and n.strip():
+            opts.setdefault(connector_slug(n), n.strip())
+    tp = (agent or {}).get("tool_policy") or {}
+    gaps = connector_gaps(tp)
+    on = [str(x) for x in tp.get("connectors") or []]
+    for g in [*on, *gaps]:  # đang bật / allowed_tools cần mà điều phối viên chưa có → vẫn hiện để tick
+        opts.setdefault(g, g)
+    ordered = [s for s in on if s in opts] + sorted((s for s in opts if s not in on), key=lambda s: opts[s].lower())
+    return {"connector_options": [{"slug": s, "name": opts[s]} for s in ordered], "connector_gaps": gaps,
+            "guard_enabled": (await cfg("guard.enabled")) is not False}
+
+
+def _form_connectors_raw(form: Any) -> list[str]:
+    """Checkbox `connector` + ô `connectors_extra` (phân cách dấu phẩy) → danh sách tên, bỏ trùng theo slug; 'none' = tắt."""
+    from ..manager.permissions import connector_slug
+    picked = form.getlist("connector") if hasattr(form, "getlist") else list(form.get("connector") or [])
+    extra = str(form.get("connectors_extra") or "").split(",")
+    out: dict[str, str] = {}
+    for x in [*picked, *extra]:
+        x = str(x).strip()
+        if x and x.lower() != "none":
+            out.setdefault(connector_slug(x), x)
+    return list(out.values())
 
 
 async def agent_new(request: Request) -> Response:
@@ -828,6 +888,10 @@ def agent_changes(form: FormData, *, creating: bool, from_template: bool) -> dic
         doms = [d.strip() for d in re.split(r"[,\s]+", str(form.get("web_allow_domains") or "")) if d.strip()]
         if doms or not sparse:
             tp["web_allow_domains"] = doms or None
+    if "connectors_form" in form:  # form không có phần connector (client cũ) → giữ nguyên; không chọn gì = tắt
+        names = _form_connectors_raw(form)
+        if names or not sparse:
+            tp["connectors"] = names or None
     if tp:
         ch["tool_policy"] = tp
     ch["mcp_servers"] = [str(x) for x in form.getlist("mcp") if str(x).strip()]
@@ -848,6 +912,7 @@ async def agent_create(request: Request) -> Response:
     tpl = str(form.get("template") or "").strip()
     values = {k: form.get(k) for k in form.keys()}
     values["mcp"] = form.getlist("mcp")
+    values["connector"] = form.getlist("connector")
     try:
         ch = agent_changes(form, creating=True, from_template=bool(tpl))
         soul = str(form.get("soul") or "").strip() or None
@@ -855,7 +920,8 @@ async def agent_create(request: Request) -> Response:
             tp = ch.get("tool_policy") or {}
             msg = (f"Tạo agent {aid or '?'}" + (f" từ mẫu {tpl}" if tpl else "") + "?"
                    + f"\nChế độ quyền: {tp.get('permission_mode') or '(theo mẫu)'} · Tool: {', '.join(tp.get('tools') or []) or '(theo mẫu)'}"
-                   + f"\nMCP: {', '.join(ch.get('mcp_servers') or []) or '(không)'}")
+                   + f"\nMCP: {', '.join(ch.get('mcp_servers') or []) or '(không)'}"
+                   + (f"\nConnector claude.ai: {', '.join(tp['connectors'])} (run nạp cấu hình user ~/.claude)" if tp.get("connectors") else ""))
             return await render(request, "confirm.html", {"message": msg, "fields": carry(form), "action": "/agents/create", "danger": False,
                                                           "back": "/agents/new", "note": None})
         if tpl:
@@ -876,6 +942,7 @@ async def agent_update(request: Request) -> Response:
     aid = request.path_params["id"]
     values = {k: form.get(k) for k in form.keys()}
     values["mcp"] = form.getlist("mcp")
+    values["connector"] = form.getlist("connector")
     try:
         cur = await rpc(request, "agent.get", {"id": aid})
         ch = agent_changes(form, creating=False, from_template=False)
@@ -891,6 +958,14 @@ async def agent_update(request: Request) -> Response:
             tp_new.pop("web_allow_domains", None)  # ô trống không phân biệt được "chặn hết" với "không giới hạn" → giữ nguyên (bỏ qua CLI --web-domains any)
         if "web_allow_domains" in tp_new and tp_new.get("web_allow_domains") != tp_old.get("web_allow_domains"):
             risky.append(f"domain WebFetch: {_web_domains_label(tp_old.get('web_allow_domains'))} → {_web_domains_label(tp_new.get('web_allow_domains'))}")
+        if "connectors" in tp_new:
+            from ..manager.permissions import connector_slug
+            new_c = list(dict.fromkeys(connector_slug(x) for x in tp_new.get("connectors") or []))
+            if new_c != list(tp_old.get("connectors") or []):
+                risky.append(f"connector claude.ai: {', '.join(tp_old.get('connectors') or []) or '(không)'} → {', '.join(new_c) or '(không)'}"
+                             + (" (run nạp cấu hình user ~/.claude; agent ghi bằng tài khoản thật của bạn, chỉ thao tác xoá phải duyệt)" if new_c else ""))
+            else:
+                tp_new.pop("connectors")  # không đổi → không ghi lại
         if (tp_new.get("tools") or None) != (tp_old.get("tools") or None):
             risky.append(f"tool: {', '.join(tp_old.get('tools') or []) or 'mặc định'} → {', '.join(tp_new.get('tools') or []) or 'mặc định'}")
         if sorted(ch.get("mcp_servers") or []) != sorted(cur.get("mcp_servers") or []):
@@ -929,7 +1004,7 @@ async def agent_page(request: Request) -> Response:
         learn_on = None
     snap = await rpc(request, "tui.snapshot")
     live = next((r for r in snap.get("agents") or [] if r["id"] == aid), None)
-    return await render(request, "agent.html", {"nav": "agents", "a": agent, "runs": runs, "revs": list(reversed(revs or []))[:15], "pend": pend,
+    return await render(request, "agent.html", {"nav": "agents", "a": agent, "connector_gaps": connector_gaps(agent.get("tool_policy")), "runs": runs, "revs": list(reversed(revs or []))[:15], "pend": pend,
                                                 "learn_on": learn_on, "live": live, "sandbox": sandbox, "titles": await task_titles(request, runs)})
 
 

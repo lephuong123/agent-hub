@@ -17,6 +17,10 @@ cfharness agent edit <id> --connectors "Atlassian,Slack"   # bật cho run của
 cfharness agent edit <id> --connectors none                 # tắt
 ```
 
+Web: form sửa agent, phần "Connector claude.ai" (checkbox + ô "Connector khác"; đổi phải xác nhận). Trang agent báo `thiếu: X` khi
+`allowed_tools` có `mcp__claude_ai_X__*` mà `connectors` chưa có X (`web/app.py::connector_gaps`): chỉ cho phép tool thì run vẫn KHÔNG
+nạp connector.
+
 Lưu trong `tool_policy.connectors` (cột JSON có sẵn, không cần migration), chuẩn hoá về slug. Chỉ người đặt được: `agent.update`
 thuộc `HUMAN_ONLY`; điều phối viên bị chặn vì `connectors` không nằm trong `TOOL_POLICY_FIELDS`. Run thường dùng chung đường đi
 với run điều phối viên (`runs.run_connectors` cho cả spec lẫn `GuardContext`), nên cờ cô lập, tắt plugin user, `ToolSearch` và luật
