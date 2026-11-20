@@ -91,6 +91,19 @@ Các bước bật Google Drive cho hub dùng token chung (vd `cchcadmin`, admin
 3. `cfharness agent edit <id> --connectors "Google Drive"` (hoặc `manager capabilities set --connectors "Google Drive"`).
 4. `cfharness hub doctor --probe` → mục "connector claude.ai" phải xanh; chạy thử một run, không có event `connector.unavailable`.
 
+## Tự động: mọi connector tài khoản đã Connect (`connectors.auto`, `--connectors all`) (2026-11-20)
+
+- `cfharness config set connectors.auto true` (chỉ người, nhánh `connectors` ∈ `integrity.SECURITY_KEYS`): run LÀM VIỆC của agent
+  CHƯA đặt `tool_policy.connectors` tự bật connector `*` = mọi server `claude.ai *` CLI nạp — tức mọi connector tài khoản `/login`
+  của user OS đã Connect. Không áp cho điều phối viên (vẫn `manager.capabilities.connectors`, nhận `all`), run kỹ thuật
+  (`review.NON_WORK_KINDS`), guard tắt, hay `runtime.claude.connectors_auth=token`.
+- Chỉ bật khi `login_available()` = True (`RunManager._auto_connectors`, TRƯỚC `_prepare_spec`); không có phiên → run như cũ
+  (không nạp `~/.claude`, không event).
+- `--connectors all` (hoặc `*`) cho một agent = như trên nhưng bật tường minh (khi không có phiên → token + `connector.auth_fallback`).
+- Guard: `"*"` cho qua mọi `mcp__claude_ai_<x>__<tool>` theo luật connector (đọc safe / ghi write / xoá destructive); MCP khác của
+  `~/.claude` vẫn `mcp_not_in_run` (forbidden). Guard đọc connector từ `ActiveRun.connectors` (đúng cái spec đã bật), không tự tính lại.
+- Adapter: `"*"` mà không có connector nào `connected` → `connector.unavailable{connector:"*", status:"none_connected"}`.
+
 ## Rủi ro chấp nhận
 
 - **Cấu hình user lọt vào run:** hook user (vd `SessionStart`) chạy trong run, CLAUDE.md của user được nạp, plugin synced nạp.

@@ -165,3 +165,65 @@ def test_doctor_connector_users():
     c.execute("INSERT INTO agents VALUES ('old', ?, '2026-01-01')", (json.dumps({"connectors": ["Slack"]}),))
     assert hub_doctor._connector_users({}, c) == ["w1"]
     assert hub_doctor._connector_users({"manager": {"capabilities": {"connectors": ["Claude_Docs"]}}}, c) == ["(điều phối viên)", "w1"]
+
+
+# ---------------------------------------------------------------- connectors.auto / "all" (mọi connector tài khoản đã Connect)
+def test_all_wildcard_normalized():
+    from cfharness.agents import ToolPolicy
+    from cfharness.manager.permissions import connector_slug, valid_connector
+
+    assert connector_slug("all") == connector_slug("*") == "*" and valid_connector("ALL")
+    assert ToolPolicy(connectors="all").connectors == ["*"]
+    validate_setting("connectors.auto", True)
+    with pytest.raises(ValueError):
+        validate_setting("connectors.auto", "yes")
+
+
+def test_guard_wildcard_allows_only_claude_ai(tmp_path):
+    from cfharness.guard.classifier import GuardContext, classify
+    from cfharness.guard.policy import PolicyStore
+
+    ctx = GuardContext(cwd=tmp_path, policy=PolicyStore(tmp_path / "h", user_home=tmp_path).load(), git_probe=False,
+                       connectors=("*",), run_mcp_servers=frozenset())
+    assert classify("mcp__claude_ai_Google_Drive__search_files", {}, ctx).verdict == "safe"
+    assert classify("mcp__claude_ai_Gmail__send_message", {}, ctx).verdict == "write"
+    assert classify("mcp__claude_ai_Google_Drive__delete_file", {}, ctx).verdict == "destructive"
+    v = classify("mcp__playwright__browser_click", {}, ctx)  # MCP của ~/.claude.json vẫn bị chặn cứng
+    assert v.forbidden and v.rule == "mcp_not_in_run"
+
+
+def test_adapter_wildcard_none_connected():
+    init = {"type": "system", "subtype": "init", "session_id": "s", "tools": [], "plugins": [],
+            "mcp_servers": [{"name": "claude.ai Google Drive", "status": "needs-auth"}]}
+    a = ClaudeStreamAdapter("w1", "r_1", allowed_mcp_prefixes=["claude.ai "], expected_connectors=["*"])
+    assert [(e.payload["connector"], e.payload["status"]) for e in a.feed(init) if e.type == "connector.unavailable"] == [("*", "none_connected")]
+    init["mcp_servers"][0]["status"] = "connected"
+    b = ClaudeStreamAdapter("w1", "r_1", allowed_mcp_prefixes=["claude.ai "], expected_connectors=["*"])
+    assert not [e for e in b.feed(init) if e.type == "connector.unavailable"]
+
+
+async def test_connectors_auto_on_with_login(d, user_home, monkeypatch):
+    d.hub.config.set("connectors.auto", True)
+    spec, fb = await _run(d, None, monkeypatch, True)
+    assert spec.connectors == ["*"] and spec.auth_mode == "login" and not fb
+    assert spec.isolation_overrides == {"setting_sources": "user", "strict_mcp_config": False}
+    ctx = d.hub.guard.context_for(d.hub.store.get_run(spec.run_id))
+    assert ctx.connectors == ("*",)
+
+
+async def test_connectors_auto_needs_login(d, user_home, monkeypatch):
+    d.hub.config.set("connectors.auto", True)
+    spec, fb = await _run(d, None, monkeypatch, False)
+    assert spec.connectors is None and spec.isolation_overrides is None and not fb  # không /login → không nạp ~/.claude
+    assert d.hub.guard.context_for(d.hub.store.get_run(spec.run_id)).connectors is None
+
+
+async def test_connectors_auto_off_by_default(d, user_home, monkeypatch):
+    spec, _ = await _run(d, None, monkeypatch, True)
+    assert spec.connectors is None and spec.auth_mode == "token"
+
+
+async def test_connectors_auto_explicit_list_wins(d, user_home, monkeypatch):
+    d.hub.config.set("connectors.auto", True)
+    spec, _ = await _run(d, ["Atlassian"], monkeypatch, True)
+    assert spec.connectors == ["Atlassian"]

@@ -11,6 +11,7 @@
 #   Kèm connector claude.ai (Google Drive…) cho agent: thêm CONNECTORS="Google Drive" CONNECTOR_AGENTS="dieu-phoi agent-a" (hoặc "all") — đăng nhập
 #   `claude auth login` (tài khoản claude.ai) cho user hub; token setup-token KHÔNG nạp connector (docs/dev-notes/manager-connectors.md).
 #   Hub ĐÃ có, chỉ nâng cfharness + nối connector (không đụng token/tunnel/TOTP):
+#     sudo ONLY_CONNECTORS=1 CONNECTORS=auto bash scripts/setup-hub-user.sh cchcadmin      # mọi agent tự dùng connector tài khoản đã Connect
 #     sudo ONLY_CONNECTORS=1 CONNECTORS="Google Drive" CONNECTOR_AGENTS="dieu-phoi" bash scripts/setup-hub-user.sh cchcadmin
 # MỘT lệnh làm hết: user, cài đặt, token, cấu hình, LaunchDaemon, tunnel + DNS, thư mục chung (nếu có KGS), TOTP.
 # Đừng `| tee` ra file: màn hình có token Claude (bước 3) và link đăng ký TOTP (bước 8).
@@ -24,8 +25,9 @@ MCP="${4:-8722}"
 DOMAIN="${DOMAIN:-trungtamdhs.com}"   # miền gốc (zone Cloudflare): https://$SUB.$DOMAIN
 SUB="${SUB:-$U}"        # tên miền con: https://$SUB.$DOMAIN
 HOST="$SUB.$DOMAIN"
-VER="${VER:-v0.2.22}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
-CONNECTORS="${CONNECTORS:-}"              # connector claude.ai, phân cách dấu phẩy (vd "Google Drive,Claude Docs"); trống = bỏ qua
+VER="${VER:-v0.2.23}"   # cần ≥ v0.2.5 (khoá một daemon/HUB_HOME, enroll không in bí mật TOTP)
+CONNECTORS="${CONNECTORS:-}"              # connector claude.ai, phân cách dấu phẩy (vd "Google Drive,Claude Docs"); "auto" = config
+                                          # connectors.auto: mọi agent tự nạp mọi connector tài khoản đã Connect; trống = bỏ qua
 CONNECTOR_AGENTS="${CONNECTOR_AGENTS:-}"  # agent bật connector, cách nhau dấu cách, hoặc "all" = mọi agent; GỘP với connector sẵn có; điều phối viên → manager capabilities (cần --mcp trusted)
 ONLY_CONNECTORS="${ONLY_CONNECTORS:-}"    # 1 = hub đã có: chỉ bước 2 (nâng cfharness) + nối connector, rồi dừng
 KGS="${KGS:-}"          # URL Không gian số để nối thư mục chung (trống = bỏ qua bước 10)
@@ -65,6 +67,13 @@ connectors_step() {
   fi
   echo "  → Trên claude.ai của tài khoản này: Settings › Connectors › bấm Connect cho: $CONNECTORS (chọn đúng tài khoản Google…)."
   for _ in $(seq 1 30); do cfh daemon status >/dev/null 2>&1 && break; sleep 1; done
+  if [ "$CONNECTORS" = auto ]; then
+    cfh config set connectors.auto true >/dev/null && ok "connectors.auto = true: mọi agent (chưa đặt connector riêng) tự dùng connector tài khoản đã Connect" \
+      || warn "không đặt được connectors.auto (cần cfharness ≥ v0.2.23)"
+    cfh hub doctor --probe 2>/dev/null | grep -i "connector" || true
+    echo "  Chạy thử một run: event connector.unavailable{*, none_connected} = tài khoản chưa Connect connector nào trên claude.ai."
+    return 0
+  fi
   MGR_ID="$(cfh manager get --json 2>/dev/null | sed -n 's/.*"agent_id": *"\([^"]*\)".*/\1/p' | head -1)"
   # "all" = mọi agent (chưa lưu trữ). GỘP với connector agent đang có (agent edit --connectors GHI ĐÈ cả danh sách)
   # → dòng "<id>\t<danh sách đã gộp>"; agent không đổi gì thì bỏ qua

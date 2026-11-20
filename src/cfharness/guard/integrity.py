@@ -43,7 +43,7 @@ POLICY = "policy"
 CONFIG = "config.yaml"
 SECURITY_KEYS = ("guard", "approval", "runtime", "secrets", "telemetry", "notify", "learning_guard", "manager", "schedules",
                  "admin_export", "admin_watch", "admin_directory", "web", "workspace.confine", "files", "filehub",
-                 "mcp.oauth_proxy", "audit", "audit_watch")  # P2: khoá con có dấu chấm = chỉ nhánh con đó (giam agent trong W)
+                 "mcp.oauth_proxy", "audit", "audit_watch", "connectors")  # P2: khoá con có dấu chấm = chỉ nhánh con đó (giam agent trong W)
 
 
 _MISSING = object()
