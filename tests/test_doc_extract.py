@@ -179,15 +179,21 @@ def _pdf_pages(data: bytes) -> list[str]:
     return [(p.extract_text() or "").strip() for p in PdfReader(io.BytesIO(data)).pages]
 
 
+def _body(text: str) -> str:
+    """Bỏ dòng đầu (phạm vi trang) của bản chữ PDF."""
+    return text.split("\n\n", 1)[1]
+
+
 def test_pdf_text_copy_has_page_headers():
     data = make_pdf(["Hello ALPHA-1", "Second (ALPHA-2)", None])
     assert dx.doc_ext("bao-cao.pdf", data) == ".pdf"
     out = dx.extract(".pdf", data)
     assert [s for s, _ in out] == [".txt"]  # 3 trang ≤ split_pages → chỉ bản chữ
     text = out[0][1].decode("utf-8")
-    assert text.startswith("--- page 1 ---\nHello ALPHA-1")
+    assert text.startswith("[PDF text copy made by cfharness: all 3 page(s).")  # dòng đầu = phạm vi trang
+    assert _body(text).startswith("--- page 1 ---\nHello ALPHA-1")
     assert "--- page 2 ---\nSecond (ALPHA-2)" in text and "--- page 3 ---" in text  # trang trống vẫn có tiêu đề
-    assert "cắt bớt" not in text
+    assert "ONLY" not in text and "end of text copy" not in text
 
 
 def test_pdf_vietnamese_text_round_trips():
@@ -203,44 +209,52 @@ def test_pdf_corrupt_truncated_and_garbage_never_raise():
     assert dx.extract(".pdf", b"%PDF-1.7\n" + b"\x00\xff" * 500) == []
     assert dx.extract(".pdf", b"") == []
     assert dx.pdf_extract(b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF") == []
+    assert dx.pdf_extract_info(b"%PDF-1.7 junk")[1]["status"] == "unreadable"
 
 
 def test_pdf_encrypted_with_password_skipped_but_empty_password_opened():
-    assert dx.extract(".pdf", make_pdf(["secret page"], password="pw-123")) == []
+    out, info = dx.pdf_extract_info(make_pdf(["secret page"], password="pw-123"))
+    assert out == [] and info["status"] == "encrypted"
     out = dict(dx.extract(".pdf", make_pdf(["open page BETA-7"], password="")))
     assert "open page BETA-7" in out[".txt"].decode("utf-8")
 
 
 def test_pdf_scanned_has_no_text_copy_but_still_split():
-    assert dx.extract(".pdf", make_pdf([None, None])) == []
+    out, info = dx.pdf_extract_info(make_pdf([None, None]))
+    assert out == [] and info["pages"] == 2 and info["no_text"] == "scanned"
     out = dx.extract(".pdf", make_pdf([None] * 5), pdf={"split_pages": 2})
     assert [s for s, _ in out] == [".p001-002.pdf", ".p003-004.pdf", ".p005-005.pdf"]
 
 
-def test_pdf_page_cap_adds_truncation_note():
-    out = dict(dx.extract(".pdf", make_pdf([f"P{i}" for i in range(1, 6)]), pdf={"text_max_pages": 2}))
-    text = out[".txt"].decode("utf-8")
+def test_pdf_page_cap_header_states_range():
+    out, info = dx.pdf_extract_info(make_pdf([f"P{i}" for i in range(1, 6)]), text_max_pages=2)
+    text = dict(out)[".txt"].decode("utf-8")
     assert "--- page 2 ---" in text and "--- page 3 ---" not in text
-    assert "chỉ trích 2/5 trang" in text
+    # phạm vi nêu ở DÒNG ĐẦU (agent không phải đọc tới cuối tệp mới biết bị cắt) + nhắc lại ở cuối
+    assert text.splitlines()[0].startswith("[PDF text copy made by cfharness: ONLY pages 1-2 of 5 (stopped: page limit")
+    assert text.rstrip().endswith("--- (end of text copy: pages 1-2 of 5) ---")
+    assert info["text_pages"] == 2 and info["text_reason"] == "pages" and info["pages"] == 5
 
 
-def test_pdf_output_cap_adds_truncation_note(monkeypatch):
-    monkeypatch.setattr(dx, "OUT_MAX_BYTES", 60)
-    text = dict(dx.extract(".pdf", make_pdf(["x" * 30, "y" * 30, "z" * 30])))[".txt"].decode("utf-8")
-    assert "--- page 1 ---" in text and "--- page 3 ---" not in text and "cắt bớt: quá" in text
+def test_pdf_output_cap_header_states_range(monkeypatch):
+    monkeypatch.setattr(dx, "OUT_MAX_BYTES", 80)
+    out, info = dx.pdf_extract_info(make_pdf(["x" * 30, "y" * 30, "z" * 30]))
+    text = dict(out)[".txt"].decode("utf-8")
+    assert "--- page 1 ---" in text and "--- page 3 ---" not in text
+    assert "ONLY pages 1-1 of 3 (stopped: size limit" in text.splitlines()[0] and info["text_reason"] == "bytes"
 
 
 def test_pdf_time_budget_stops_between_pages(monkeypatch):
     data = make_pdf([f"T{i}" for i in range(10)])
     clock = iter(range(0, 100_000, 7))
     monkeypatch.setattr(dx.time, "monotonic", lambda: float(next(clock)))
-    text = dict(dx.extract(".pdf", data, pdf={"time_budget_s": 10}))[".txt"].decode("utf-8")
-    assert "hết thời gian trích" in text and "--- page 10 ---" not in text
+    out, info = dx.pdf_extract_info(data, time_budget_s=10)
+    text = dict(out)[".txt"].decode("utf-8")
+    assert "extraction time limit" in text.splitlines()[0] and "--- page 10 ---" not in text
+    assert info["text_reason"] == "time" and info["text_pages"] < 10
 
 
-def test_pdf_split_parts_keep_pages_and_respect_caps():
-    from pypdf import PdfReader
-
+def test_pdf_split_parts_keep_pages_and_respect_caps(monkeypatch):
     data = make_pdf([f"GAMMA-{i}" for i in range(1, 8)])
     out = dx.extract(".pdf", data, pdf={"split_pages": 3})
     assert [s for s, _ in out] == [".txt", ".p001-003.pdf", ".p004-006.pdf", ".p007-007.pdf"]
@@ -248,11 +262,26 @@ def test_pdf_split_parts_keep_pages_and_respect_caps():
     assert _pdf_pages(parts[".p001-003.pdf"]) == ["GAMMA-1", "GAMMA-2", "GAMMA-3"]
     assert _pdf_pages(parts[".p007-007.pdf"]) == ["GAMMA-7"]
     assert all(dx.PDF_COPY_SUFFIX.match(s) for s, _ in out)
-    # trần số phần / tổng dung lượng / tắt tách / đúng N trang
-    assert [s for s, _ in dx.extract(".pdf", data, pdf={"split_pages": 2, "max_parts": 2})] == [".txt", ".p001-002.pdf", ".p003-004.pdf"]
-    assert dx.pdf_split(PdfReader(io.BytesIO(data)), split_pages=3, max_bytes=10) == []
+    # max_parts nhỏ → nới trang/phần để vẫn phủ hết (7 trang, 2 phần → 4 trang/phần)
+    assert [s for s, _ in dx.extract(".pdf", data, pdf={"split_pages": 2, "max_parts": 2})] == [".txt", ".p001-004.pdf", ".p005-007.pdf"]
     assert [s for s, _ in dx.extract(".pdf", data, pdf={"split_pages": 0})] == [".txt"]
     assert [s for s, _ in dx.extract(".pdf", data, pdf={"split_pages": 7})] == [".txt"]
+    monkeypatch.setattr(dx, "PDF_PARTS_MAX_BYTES", 10)  # trần tổng dung lượng → không phần nào
+    out, info = dx.pdf_extract_info(data, split_pages=3)
+    assert [s for s, _ in out] == [".txt"] and info["parts_reason"] == "bytes" and info["parts_last"] == 0
+
+
+def test_pdf_part_pages_widen_to_cover_document_up_to_cap():
+    assert dx.pdf_part_pages(40, 50, 20) == 0  # ≤ split_pages: không tách
+    assert dx.pdf_part_pages(120, 50, 20) == 50
+    assert dx.pdf_part_pages(2000, 50, 20) == 100  # 20 phần × 100 = phủ hết 2000 trang
+    assert dx.pdf_part_pages(3000, 50, 20) == dx.PDF_PART_MAX_PAGES  # trần 100 trang/phần: phủ 2000/3000
+    assert dx.pdf_part_pages(3000, 50, 200) == 50
+    out, info = dx.pdf_extract_info(make_pdf([None] * 250), split_pages=10, max_parts=5)
+    assert [s for s, _ in out] == [".p001-050.pdf", ".p051-100.pdf", ".p101-150.pdf", ".p151-200.pdf", ".p201-250.pdf"]
+    assert info["parts_last"] == 250 and info["parts_reason"] is None
+    out, info = dx.pdf_extract_info(make_pdf([None] * 450), split_pages=10, max_parts=4)
+    assert [s for s, _ in out][-1] == ".p301-400.pdf" and info["parts_last"] == 400 and info["parts_reason"] == "parts"
 
 
 def test_pdf_part_names_widen_for_long_documents():
@@ -261,53 +290,125 @@ def test_pdf_part_names_widen_for_long_documents():
 
 
 def test_pdf_options_defaults_and_bad_values():
-    assert dx.pdf_options({}) == {"split_pages": 50, "max_parts": 20, "timeout_s": 90.0}
+    assert dx.pdf_options({}) == {"split_pages": 50, "max_parts": 20, "timeout_s": 40.0}
     o = dx.pdf_options({"attachments": {"pdf": {"split": False, "split_pages": 10, "max_parts": 3, "timeout_s": 30}}})
     assert o == {"split_pages": 0, "max_parts": 3, "timeout_s": 30.0}
-    assert dx.pdf_options({"attachments": {"pdf": {"split_pages": "x", "max_parts": True, "timeout_s": 10_000}}}) == dx.pdf_options({})
+    bad = {"split_pages": 500, "max_parts": True, "timeout_s": 90}  # > 100 trang/phần, > 50 s (vượt hạn RPC web) → mặc định
+    assert dx.pdf_options({"attachments": {"pdf": bad}}) == dx.pdf_options({})
+    assert dx.pdf_options({"attachments": {"pdf": {"split_pages": "x"}}}) == dx.pdf_options({})
 
 
 def test_extract_isolated_runs_in_subprocess_and_matches_inline():
     data = make_pdf([f"DELTA-{i}" for i in range(1, 6)])
-    out = dx.extract_isolated(data, {"split_pages": 2, "max_parts": 20, "timeout_s": 60})
+    out, info = dx.extract_isolated(data, {"split_pages": 2, "max_parts": 20, "timeout_s": 40})
     assert [s for s, _ in out] == [".txt", ".p001-002.pdf", ".p003-004.pdf", ".p005-005.pdf"]
-    assert out == dx.extract(".pdf", data, pdf={"split_pages": 2})
-    assert dx.extract_isolated(b"%PDF-1.7 garbage", {"timeout_s": 60}) == []
+    assert (out, info) == dx.pdf_extract_info(data, split_pages=2)
+    assert info == {"status": "ok", "pages": 5, "text_pages": 5, "text_reason": None, "parts_last": 5, "parts_reason": None}
+    out, info = dx.extract_isolated(b"%PDF-1.7 garbage", {"timeout_s": 40})
+    assert out == [] and info["status"] == "unreadable"
 
 
-def test_extract_isolated_timeout_and_bad_output_return_empty(monkeypatch):
+def _ev(**kw) -> bytes:
+    import json
+
+    return json.dumps(kw).encode() + b"\n"
+
+
+def test_extract_isolated_bad_items_dropped_one_by_one(monkeypatch):
     import subprocess as sp
 
-    def slow(*a, **k):
-        raise sp.TimeoutExpired(cmd="x", timeout=k.get("timeout"))
+    b64 = base64.b64encode(b"%PDF-part").decode()
+    stdout = (_ev(pages=100_000) + _ev(part="/../../evil.pdf", first=1, last=50, b64=b64)  # hậu tố lạ → bỏ RIÊNG mục này
+              + _ev(part=".p000001-000050.pdf", first=1, last=50, b64=b64)  # 6 chữ số (PDF ≥ 100 000 trang) hợp lệ
+              + _ev(part=".p000051-000100.pdf", first=51, last=100, b64="!!notb64") + _ev(parts_end="parts")
+              + _ev(page=1, text="KAPPA-1") + _ev(page=3, text="lệch thứ tự") + _ev(text_end="pages") + _ev(done=True))
+    monkeypatch.setattr(dx.subprocess, "run", lambda *a, **k: sp.CompletedProcess(a, 0, stdout, b""))
+    out, info = dx.extract_isolated(make_pdf(["x"]), {"timeout_s": 5})
+    assert [s for s, _ in out] == [".txt", ".p000001-000050.pdf"]
+    assert "KAPPA-1" in dict(out)[".txt"].decode() and "lệch" not in dict(out)[".txt"].decode()
+    assert info["pages"] == 100_000 and info["parts_last"] == 50 and info["text_pages"] == 1
+    assert dx.PDF_COPY_SUFFIX.match(".p000001-000050.pdf")
 
-    monkeypatch.setattr(dx.subprocess, "run", slow)
-    assert dx.extract_isolated(make_pdf(["x"]), {"timeout_s": 5}) == []
-    # tiến trình con trả hậu tố lạ (vd "/../x") → bỏ hết, không ghi gì
-    monkeypatch.setattr(dx.subprocess, "run", lambda *a, **k: sp.CompletedProcess(a, 0, b'[["/../../evil.txt", "eA=="]]', b""))
-    assert dx.extract_isolated(make_pdf(["x"]), {"timeout_s": 5}) == []
+
+def test_extract_isolated_timeout_keeps_partial_output(monkeypatch):
+    import subprocess as sp
+
+    b64 = base64.b64encode(b"%PDF-part").decode()
+    partial = (_ev(pages=400) + _ev(part=".p001-050.pdf", first=1, last=50, b64=b64) + _ev(page=1, text="LAMBDA-1")
+               + _ev(page=2, text="LAMBDA-2") + b'{"page": 3, "te')  # dòng cuối cụt (bị giết giữa lúc ghi)
+
+    def killed(*a, **k):
+        raise sp.TimeoutExpired(cmd="x", timeout=k.get("timeout"), output=partial)
+
+    monkeypatch.setattr(dx.subprocess, "run", killed)
+    out, info = dx.extract_isolated(make_pdf(["x"]), {"timeout_s": 5})
+    assert [s for s, _ in out] == [".txt", ".p001-050.pdf"]
+    text = dict(out)[".txt"].decode()
+    assert "ONLY pages 1-2 of 400 (stopped: extraction time limit)" in text.splitlines()[0] and "LAMBDA-2" in text
+    assert info == {"status": "ok", "pages": 400, "text_pages": 2, "text_reason": "time", "parts_last": 50, "parts_reason": "time"}
     monkeypatch.setattr(dx.subprocess, "run", lambda *a, **k: sp.CompletedProcess(a, 1, b"", b"Traceback boom"))
-    assert dx.extract_isolated(make_pdf(["x"]), {"timeout_s": 5}) == []
+    out, info = dx.extract_isolated(make_pdf(["x"]), {"timeout_s": 5})
+    assert out == [] and info["status"] == "error"
+
+
+def test_extract_isolated_real_kill_keeps_lines_already_written(monkeypatch):
+    # tiến trình con THẬT ghi vài sự kiện rồi treo (như một trang bệnh hoạn) → bị giết khi hết hạn, các dòng đã ghi vẫn được giữ
+    import sys
+
+    script = ("import sys,time,json\nsys.stdin.buffer.read()\n"
+              "for e in ({'pages': 9}, {'parts_end': None}, {'page': 1, 'text': 'MU-1'}):\n"
+              "    sys.stdout.write(json.dumps(e) + '\\n'); sys.stdout.flush()\n"
+              "time.sleep(60)\n")
+    monkeypatch.setattr(dx, "_worker_argv", lambda: [sys.executable, "-c", script])
+    import time as _t
+
+    t0 = _t.monotonic()
+    out, info = dx.extract_isolated(make_pdf(["x"]), {"timeout_s": 5})
+    assert _t.monotonic() - t0 < 20
+    assert [s for s, _ in out] == [".txt"] and "MU-1" in out[0][1].decode()
+    assert info["text_pages"] == 1 and info["text_reason"] == "time" and info["pages"] == 9
 
 
 def test_extract_isolated_real_timeout_kills_worker():
-    # hạn giờ thật (không giả lập): tiến trình con không kịp khởi động + import pypdf trong 0.01 giây → bị giết, trả []
-    assert dx.extract_isolated(make_pdf(["x"]), {"timeout_s": 0.01}) == []
+    # hạn giờ thật: tiến trình con không kịp khởi động + import pypdf trong 0.01 giây → bị giết, không có bản trích
+    out, info = dx.extract_isolated(make_pdf(["x"]), {"timeout_s": 0.01})
+    assert out == [] and info["status"] == "timeout"
 
 
 def test_write_attachment_files_pdf_copies(tmp_path):
     from cfharness.manager.service import write_attachment_files
 
     pdf = make_pdf([f"EPS-{i}" for i in range(1, 5)])
-    saved, extracted = write_attachment_files(tmp_path / "attachments", [("bao_cao.pdf", pdf), ("scan.pdf", make_pdf([None])),
-                                                                         ("ghi.md", b"# a")],
-                                              pdf_opts={"split_pages": 2, "max_parts": 20, "timeout_s": 60})
+    saved, extracted, info = write_attachment_files(tmp_path / "attachments", [("bao_cao.pdf", pdf), ("scan.pdf", make_pdf([None])),
+                                                                               ("ghi.md", b"# a")],
+                                                    pdf_opts={"split_pages": 2, "max_parts": 20, "timeout_s": 40})
     assert len(saved) == 3 and saved[0].endswith("-bao_cao.pdf") and saved[2].endswith("-ghi.md")
     assert [x[len(saved[0]):] for x in extracted[saved[0]]] == [".txt", ".p001-002.pdf", ".p003-004.pdf"]
     assert extracted[saved[1]] == []  # PDF scan 1 trang: không bản chữ, không tách — vẫn có khoá (files_note báo)
-    assert saved[2] not in extracted
+    assert info[saved[1]]["no_text"] == "scanned" and info[saved[0]]["pages"] == 4
+    assert saved[2] not in extracted and saved[2] not in info
     assert "--- page 4 ---\nEPS-4" in (tmp_path / extracted[saved[0]][0]).read_text(encoding="utf-8")
     assert _pdf_pages((tmp_path / extracted[saved[0]][2]).read_bytes()) == ["EPS-3", "EPS-4"]
+
+
+def test_write_attachment_files_extracts_pdfs_in_parallel(tmp_path, monkeypatch):
+    # 4 PDF của một tin chạy SONG SONG: cả tin ≈ một hạn giờ, không phải 4 × (web chờ `manager.chat` tối đa 60 s)
+    import threading
+    import time as _t
+
+    from cfharness.manager.service import write_attachment_files
+
+    seen: set[int] = set()
+
+    def slow(data, opts=None):
+        seen.add(threading.get_ident())
+        _t.sleep(0.6)
+        return [], {"status": "ok", "pages": 1, "text_pages": 0, "text_reason": None, "parts_last": 0, "parts_reason": None}
+
+    monkeypatch.setattr(dx, "extract_isolated", slow)
+    t0 = _t.monotonic()
+    saved, _, info = write_attachment_files(tmp_path, [(f"{i}.pdf", make_pdf(["x"])) for i in range(4)], pdf_opts={})
+    assert _t.monotonic() - t0 < 1.8 and len(seen) == 4 and len(info) == 4
 
 
 def test_files_note_pdf_variants():
@@ -316,13 +417,39 @@ def test_files_note_pdf_variants():
           "attachments/scan.pdf": [], "attachments/b.docx": ["attachments/b.docx.txt"]}
     note = prompts.files_note(files, ex)
     assert "attachments/a.pdf (text copy made by the hub" in note and "attachments/a.pdf.txt" in note
-    assert "page-range parts" in note and "attachments/a.pdf.p051-060.pdf" in note
-    assert "attachments/scan.pdf (no text copy" in note and "only `file_path`" in note
+    assert "page-range parts covering pages 1-60" in note and "attachments/a.pdf.p051-060.pdf" in note
+    assert "attachments/scan.pdf (no text copy" in note and "Read the original" in note
     assert "attachments/b.docx (readable copies made by the hub: attachments/b.docx.txt)" in note
     assert "never pass `pages`" not in note and "Excel row number" not in note  # có pdftoppm; không có sheet
     assert "never pass `pages`" in prompts.files_note(files, ex, pdf_render=False)
     assert "never pass `pages`" not in prompts.files_note(["attachments/b.docx"], {"attachments/b.docx": []}, pdf_render=False)
     assert "PDFs too" not in note
+
+
+def _info(**kw):
+    return {"status": "ok", "pages": None, "text_pages": 0, "text_reason": None, "parts_last": 0, "parts_reason": None, **kw}
+
+
+def test_files_note_states_coverage_of_truncated_copies():
+    f = "attachments/x.pdf"
+    # bản chữ bị cắt (hết giờ) — nói rõ 1-13 của 400; phần phủ hết → không bảo đọc bản gốc
+    ex = {f: [f + ".txt"] + [f + f".p{i:03d}-{i + 49:03d}.pdf" for i in range(1, 400, 50)]}
+    note = prompts.files_note([f], ex, pdf_render=False, pdf_info={f: _info(pages=400, text_pages=13, text_reason="time", parts_last=400)})
+    assert "400 page(s)" in note and "text copy of pages 1-13 of 400 ONLY (stopped: time limit)" in note
+    assert "parts covering pages 1-400 of 400" in note and "only in the original" not in note and "cannot be read" not in note
+    # 2000 trang, chỉ bản chữ 500 trang + không phần: ≤ 600? không → không đọc được, báo người
+    note = prompts.files_note([f], {f: [f + ".txt"]}, pdf_render=False, pdf_info={f: _info(pages=2000, text_pages=500, text_reason="pages")})
+    assert "pages 501-2000 cannot be read here" in note and "more than the 600 pages" in note and "Read the original" not in note
+    # 120 trang, bản chữ 13 trang, không phần → đọc bản gốc chỉ với file_path (≤ 600 trang)
+    note = prompts.files_note([f], {f: [f + ".txt"]}, pdf_render=False, pdf_info={f: _info(pages=120, text_pages=13, text_reason="time")})
+    assert "pages 14-120 are only in the original: Read it with only `file_path`" in note
+    # có pdftoppm → đọc phần còn lại bằng `pages`
+    note = prompts.files_note([f], {f: [f + ".txt"]}, pdf_render=True, pdf_info={f: _info(pages=2000, text_pages=500, text_reason="pages")})
+    assert "for pages 501-2000 Read the original with a page range in `pages`" in note
+    # không bản chữ: lý do cụ thể
+    for st, word in (("encrypted", "password-protected"), ("timeout", "ran out of time"), ("unreadable", "could not parse")):
+        assert word in prompts.files_note([f], {f: []}, pdf_info={f: _info(status=st)})
+    assert "scanned" in prompts.files_note([f], {f: []}, pdf_info={f: _info(pages=3, no_text="scanned")})
 
 
 async def test_save_files_async_does_not_block_event_loop(tmp_path, monkeypatch):
@@ -334,7 +461,7 @@ async def test_save_files_async_does_not_block_event_loop(tmp_path, monkeypatch)
 
     def slow_extract(data, opts=None):
         _time.sleep(0.5)  # PDF lâu: phải chạy trong thread, loop vẫn chạy
-        return [(".txt", b"--- page 1 ---\nOK")]
+        return [(".txt", b"--- page 1 ---\nOK")], _info(pages=1, text_pages=1)
 
     monkeypatch.setattr(dx, "extract_isolated", slow_extract)
     fake = SimpleNamespace(_conv_cwd=lambda aid, cid: str(tmp_path), hub=SimpleNamespace(config={}))
@@ -347,7 +474,7 @@ async def test_save_files_async_does_not_block_event_loop(tmp_path, monkeypatch)
             ticks += 1
 
     t = asyncio.create_task(ticker())
-    saved, extracted = await ManagerService._save_files_async(fake, "boss", "mc_1", [("a.pdf", make_pdf(["x"]))])
+    saved, extracted, info = await ManagerService._save_files_async(fake, "boss", "mc_1", [("a.pdf", make_pdf(["x"]))])
     t.cancel()
     assert ticks >= 10
-    assert extracted[saved[0]] == [saved[0] + ".txt"] and (tmp_path / saved[0]).is_file()
+    assert extracted[saved[0]] == [saved[0] + ".txt"] and (tmp_path / saved[0]).is_file() and info[saved[0]]["pages"] == 1

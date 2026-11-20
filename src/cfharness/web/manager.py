@@ -28,6 +28,7 @@ miền; link nội bộ chỉ từ `mgr_target`) — đó là đầu ra DUY NH�
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from typing import Any
@@ -48,6 +49,7 @@ ACTIONS_SCAN = 3000  # số event gần nhất của điều phối viên quét 
 PENDING_SCAN = 5000  # event tối đa của MỘT lượt đang chạy đọc lại khi tải trang (tool đang dùng + checklist)
 MAX_TEXT = 8000
 ATTACH_FIELD = "attach"
+CHAT_FILES_TIMEOUT_S = 120.0  # `manager.chat` có tệp: daemon trích PDF (hạn `attachments.pdf.timeout_s` ≤ 50 s) trước khi trả
 
 
 async def _attachments(form: Any) -> tuple[list[dict[str, str]], list[dict[str, str]], list[str], list[str]]:
@@ -410,7 +412,12 @@ async def manager_send(request: Request) -> Response:
     if files:
         params["files"] = files
     try:
-        res = await rpc(request, "manager.chat", params, audit=True) or {}
+        # tệp kèm: daemon trích PDF trước khi trả (≤ `attachments.pdf.timeout_s` ≤ 50 s, các PDF song song) → chờ lâu hơn hạn 60 s mặc định
+        res = await rpc(request, "manager.chat", params, audit=True, timeout=CHAT_FILES_TIMEOUT_S if files else None) or {}
+    except asyncio.TimeoutError:
+        # daemon có thể vẫn đang xử lý và SẼ nhận tin — không báo "gửi lỗi" kiểu bảo người gửi lại (gửi lại = lượt trùng)
+        return fail("Hub chưa trả lời kịp (đang xử lý tệp đính kèm?). Tin có thể vẫn đã được nhận — tải lại hội thoại và kiểm tra "
+                    "trước khi gửi lại.", 504)
     except RpcError as e:
         if e.code == METHOD_NOT_FOUND:
             return fail("Daemon này chưa có chức năng điều phối viên (manager.*) — cập nhật cfharness.")

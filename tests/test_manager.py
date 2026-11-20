@@ -437,3 +437,37 @@ def test_tick_prompt_requires_report_for_task_done():
 
     p = prompts.tick_prompt([{"kind": "task_done", "summary": "t done"}], dropped=0, reason="events", open_work=0)
     assert "MUST call notify_owner" in p and "ALREADY POSTED" in p
+
+
+async def test_pdf_message_keeps_order_with_message_sent_during_extraction(d, monkeypatch):
+    # tin có PDF chờ trích (thread) mà tin sau của CÙNG hội thoại chạy trước → tin PDF bị steer vào run của tin sau, thứ tự đảo.
+    # Khoá theo hội thoại trong `chat`: tin sau chờ tin PDF submit xong rồi steer vào run đó.
+    import base64
+    import time as _t
+
+    from cfharness.manager import doc_extract as dx
+    from test_doc_extract import make_pdf
+
+    def slow(data, opts=None):
+        _t.sleep(0.6)
+        return [], {"status": "ok", "pages": 1, "text_pages": 0, "text_reason": None, "parts_last": 0, "parts_reason": None,
+                    "no_text": "scanned"}
+
+    monkeypatch.setattr(dx, "extract_isolated", slow)
+    d.script.hold_manager = False
+    d.hub.agents.create({"id": "boss", "name": "boss", "tool_policy": {"tools": ["Read", "Grep", "Glob"]}})
+    await rpc(d, "manager.set", {"agent_id": "boss"})
+    r0 = await rpc(d, "manager.chat", {"channel": "web", "text": "tin 0"})
+    await wait_status(d, r0["run_id"], ("completed",))
+    d.script.hold_manager = True
+    cid = r0["conversation_id"]
+    pdf = {"name": "a.pdf", "data_b64": base64.b64encode(make_pdf([None])).decode()}
+    ta = asyncio.create_task(rpc(d, "manager.chat", {"channel": "web", "text": "A có PDF", "conversation_id": cid, "files": [pdf]}))
+    await asyncio.sleep(0.15)
+    rb = await rpc(d, "manager.chat", {"channel": "web", "text": "B gửi sau", "conversation_id": cid})
+    ra = await ta
+    assert not ra.get("steered") and rb.get("steered") and rb["run_id"] == ra["run_id"]
+    users = [m["text"].splitlines()[0] for m in await rpc(d, "manager.history", {"conversation_id": cid}) if m["role"] == "user"]
+    assert users == ["tin 0", "A có PDF", "B gửi sau"]
+    run = d.hub.store.get_run(ra["run_id"])
+    assert run["resumed_from_session"] == d.hub.store.get_run(r0["run_id"])["session_id"]  # đọc lại hội thoại trong khoá: vẫn resume

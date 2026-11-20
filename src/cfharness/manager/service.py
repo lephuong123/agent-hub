@@ -146,18 +146,28 @@ def decode_files(files: Any, max_bytes: int = FILE_MAX_BYTES) -> list[tuple[str,
     return out
 
 
+QUEUED_WAIT_S = 5.0  # `chat` vừa chờ khoá hội thoại: chờ run của tin trước rời `queued` tối đa ngần này giây rồi steer
+
+
 def write_attachment_files(d: Path, docs: list[tuple[str, bytes]], *, pdf_opts: dict[str, Any] | None = None
-                           ) -> tuple[list[str], dict[str, list[str]]]:
+                           ) -> tuple[list[str], dict[str, list[str]], dict[str, dict[str, Any]]]:
     """Tệp người gửi → `d/doc-<thời điểm>-<ngẫu nhiên>-<tên an toàn>` (0600, O_EXCL). Tài liệu trích được → thêm bản đọc được
     cạnh bản gốc: Office (xlsx/docx/pptx) `<tên>.<n>-<sheet>.csv` / `<tên>.txt`; PDF `<tên>.txt` (chữ theo trang) + phần
     `<tên>.p001-050.pdf`… khi dài (tiến trình con có hạn giờ — `doc_extract.extract_isolated`). Không đụng DB (chạy được trong thread).
-    Trả (đường dẫn bản gốc tương đối theo cwd, {bản gốc tài liệu: [bản trích]} — PDF/Office luôn có khoá, danh sách rỗng = không trích được)."""
+    Các PDF của MỘT tin trích SONG SONG, mỗi cái cùng hạn giờ cứng `pdf_opts.timeout_s` → cả tin tốn tối đa ~`timeout_s` (≤ 50 s,
+    dưới hạn 60 s của RPC web), không phải 4 × hạn giờ như khi trích lần lượt.
+    Trả (đường dẫn bản gốc tương đối theo cwd, {bản gốc tài liệu: [bản trích]} — PDF/Office luôn có khoá, danh sách rỗng = không trích
+    được, {bản gốc PDF: info} — tổng trang + phạm vi bản chữ/phần đã phủ, `doc_extract.pdf_assemble`)."""
+    from concurrent.futures import ThreadPoolExecutor
+
     from .doc_extract import doc_ext, extract, extract_isolated
 
     d.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     out: list[str] = []
     extracted: dict[str, list[str]] = {}
+    pdf_info: dict[str, dict[str, Any]] = {}
+    pdfs: list[tuple[str, str, bytes]] = []
 
     def write(name: str, data: bytes) -> str:
         fd = os.open(d / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -171,13 +181,16 @@ def write_attachment_files(d: Path, docs: list[tuple[str, bytes]], *, pdf_opts: 
         out.append(rel)
         ext = doc_ext(safe, data)
         if ext == ".pdf":
-            copies = extract_isolated(data, pdf_opts)
+            pdfs.append((rel, name, data))
         elif ext:
-            copies = extract(ext, data)
-        else:
-            continue
-        extracted[rel] = [write(name + suffix, body) for suffix, body in copies]
-    return out, extracted
+            extracted[rel] = [write(name + suffix, body) for suffix, body in extract(ext, data)]
+    if pdfs:
+        with ThreadPoolExecutor(max_workers=len(pdfs), thread_name_prefix="pdf-extract") as pool:
+            results = list(pool.map(lambda job: extract_isolated(job[2], pdf_opts), pdfs))
+        for (rel, name, _), (copies, info) in zip(pdfs, results):
+            extracted[rel] = [write(name + suffix, body) for suffix, body in copies]
+            pdf_info[rel] = info
+    return out, extracted, pdf_info
 
 
 def is_text_bytes(data: bytes) -> bool:
@@ -226,6 +239,7 @@ class ManagerService:
         self._reported_approvals: set[str] = set()
         self._fail_times: dict[str, list[float]] = {}
         self._tick_lock = asyncio.Lock()
+        self._conv_locks: dict[str, asyncio.Lock] = {}  # khoá mỗi hội thoại cho `chat` (giữ thứ tự tin khi trích PDF lâu)
         self._task: asyncio.Task | None = None
         self._run_keys: dict[str, str] = {}
         from .workstreams import Workstreams
@@ -502,8 +516,9 @@ class ManagerService:
             out.append(f"attachments/{name}")
         return out
 
-    async def _save_files_async(self, agent_id: str, cid: str, docs: list[tuple[str, bytes]]) -> tuple[list[str], dict[str, list[str]]]:
-        """Ghi tệp + trích bản đọc được trong THREAD: trích PDF (tiến trình con, tới `attachments.pdf.timeout_s`) có thể mất vài giây —
+    async def _save_files_async(self, agent_id: str, cid: str, docs: list[tuple[str, bytes]]
+                                ) -> tuple[list[str], dict[str, list[str]], dict[str, dict[str, Any]]]:
+        """Ghi tệp + trích bản đọc được trong THREAD: trích PDF (tiến trình con song song, tới `attachments.pdf.timeout_s`) có thể mất vài giây —
         không được chặn event loop của daemon. Thư mục + cấu hình lấy trên loop (DB chỉ dùng ở loop)."""
         from .doc_extract import pdf_options
 
@@ -662,8 +677,27 @@ class ManagerService:
         if conv is None:
             conv = self._new_conv(channel, aid, text.splitlines()[0], workstream_id=ws_id)
         self.ws.touch(conv.get("workstream_id"))
+        # Khoá theo hội thoại từ lúc lưu tệp tới lúc ghi tin + submit/steer: tin có PDF chờ trích (tới `attachments.pdf.timeout_s`) mà
+        # tin sau của CÙNG hội thoại chạy trước thì tin PDF bị steer vào run của tin sau → thứ tự tin của người bị đảo.
+        lock = self._conv_lock(conv["id"])
+        waited = lock.locked()
+        async with lock:
+            return await self._chat_turn(channel, text, aid, conv, imgs, docs, voice=voice, switched_from=switched_from, waited=waited)
+
+    def _conv_lock(self, cid: str) -> asyncio.Lock:
+        lk = self._conv_locks.get(cid)
+        if lk is None:
+            lk = self._conv_locks[cid] = asyncio.Lock()
+        return lk
+
+    async def _chat_turn(self, channel: str, text: str, aid: str, conv: dict[str, Any], imgs: list[tuple[str, bytes]],
+                         docs: list[tuple[str, bytes]], *, voice: str | None, switched_from: str | None,
+                         waited: bool = False) -> dict[str, Any]:
+        """Phần sau khi đã chọn hội thoại của `chat` (chạy dưới khoá hội thoại). Đọc lại hàng hội thoại: chờ khoá thì tin trước có thể
+        đã đổi session_id/turns."""
+        conv = self._conv_row(conv["id"])
         saved_imgs = self._save_images(aid, conv["id"], imgs) if imgs else []
-        saved_docs, extracted = await self._save_files_async(aid, conv["id"], docs) if docs else ([], {})
+        saved_docs, extracted, pdf_info = await self._save_files_async(aid, conv["id"], docs) if docs else ([], {}, {})
         files = saved_imgs + saved_docs
         pdf_render = True
         if any(f.lower().endswith(".pdf") for f in saved_docs):
@@ -671,7 +705,7 @@ class ManagerService:
 
             pdf_render = pdf_render_available(self.hub.config)
         prompt_text = (text + (prompts.images_note(saved_imgs) if saved_imgs else "")
-                       + (prompts.files_note(saved_docs, extracted, pdf_render=pdf_render) if saved_docs else ""))
+                       + (prompts.files_note(saved_docs, extracted, pdf_render=pdf_render, pdf_info=pdf_info) if saved_docs else ""))
         if saved_imgs:
             text = f"{text}\n📎 {len(saved_imgs)} ảnh: " + ", ".join(f.rsplit("/", 1)[-1] for f in saved_imgs)
         if saved_docs:
@@ -680,6 +714,12 @@ class ManagerService:
         _w = self.ws.maybe(conv.get("workstream_id")) if conv.get("workstream_id") else None
         wsl = self.ws.label(_w) if _w else None
         busy = self._active_runs(aid, conv["id"])
+        if waited:  # vừa chờ tin trước (vd trích PDF) submit run → run đó còn `queued` một chút: chờ nó chạy để steer, không báo bận
+            for _ in range(int(QUEUED_WAIT_S / 0.05)):
+                if not busy or busy[0]["status"] != "queued":
+                    break
+                await asyncio.sleep(0.05)
+                busy = self._active_runs(aid, conv["id"])
         if busy and busy[0]["status"] != "running":
             r = busy[0]
             raise Conflict(f"điều phối viên đang xử lý tin trước của hội thoại này (run {r['id']}, {r['status']}) — thử lại sau")

@@ -703,9 +703,11 @@ DEFAULTS: dict[str, Any] = {
     "attachments": {
         "pdf": {
             "split": True,  # tắt = không tách phần (vẫn có bản chữ)
-            "split_pages": 50,  # số trang mỗi phần; PDF nhiều hơn N trang mới tách (1..10000)
-            "max_parts": 20,  # số phần tối đa mỗi PDF (1..200); tổng dung lượng các phần ≤ 48 MB
-            "timeout_s": 90,  # hạn giờ cứng của tiến trình trích một PDF (5..600 giây); quá → chỉ lưu bản gốc
+            "split_pages": 50,  # số trang mỗi phần; PDF nhiều hơn N trang mới tách (1..100 — Read đọc cả phần một lần)
+            "max_parts": 20,  # số phần tối đa mỗi PDF (1..200); tự nới trang/phần (≤ 100) để phủ hết PDF; tổng các phần ≤ 48 MB
+            # hạn giờ cứng trích PDF của MỘT tin (5..50 giây; các PDF trích song song) — dưới hạn 60 s của RPC web. Quá → giữ các
+            # trang/phần đã trích xong, phần còn lại agent đọc từ bản gốc
+            "timeout_s": 40,
         },
     },
     # Công cụ ngoài cho run `claude`. `poppler_path` = thư mục chứa `pdftoppm(.exe)` (poppler) — tool Read cần nó khi đọc PDF có
@@ -1125,7 +1127,10 @@ def validate_setting(key: str, value: Any) -> None:
             raise ValueError(f"permission mode không hợp lệ; chọn một trong {VALID_PERMISSION_MODES}")
 
 
-_PDF_NUM = {"split_pages": (1, 10_000), "max_parts": (1, 200), "timeout_s": (5, 600)}
+def _pdf_limits() -> dict[str, tuple[int, int]]:
+    from .manager.doc_extract import PDF_LIMITS
+
+    return PDF_LIMITS
 
 
 def _validate_attachments(key: str, value: Any) -> None:
@@ -1150,8 +1155,8 @@ def _validate_attachments(key: str, value: Any) -> None:
         if k == "split":
             if not isinstance(v, bool):
                 raise ValueError("attachments.pdf.split phải là true/false")
-        elif k in _PDF_NUM:
-            lo, hi = _PDF_NUM[k]
+        elif k in _pdf_limits():
+            lo, hi = _pdf_limits()[k]
             ok_type = isinstance(v, (int, float)) if k == "timeout_s" else isinstance(v, int)
             if isinstance(v, bool) or not ok_type or not lo <= v <= hi:
                 raise ValueError(f"attachments.pdf.{k} phải là {'số' if k == 'timeout_s' else 'số nguyên'} trong {lo}..{hi}")

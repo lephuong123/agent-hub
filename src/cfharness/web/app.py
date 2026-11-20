@@ -359,9 +359,10 @@ def _needs_extra_audit(method: str) -> bool:
     return method in _UNAUDITED_HUMAN
 
 
-async def rpc(request: Request, method: str, params: dict[str, Any] | None = None, *, audit: bool = False) -> Any:
+async def rpc(request: Request, method: str, params: dict[str, Any] | None = None, *, audit: bool = False,
+              timeout: float | None = None) -> Any:
     st = ws(request)
-    res = await st.client.call(method, params or {}, audit=audit)
+    res = await st.client.call(method, params or {}, audit=audit, timeout=timeout)
     if audit and _needs_extra_audit(method):
         try:
             await st.client.call("audit.record", {"kind": method, "actor": "user", "channel": CHANNEL, "summary": method,

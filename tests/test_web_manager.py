@@ -577,3 +577,39 @@ async def test_manager_reply_mentioned_files_get_view_open_chips(stubbed):
     assert 'data-fopen="open"' in mgr and 'data-fopen="reveal"' in mgr
     assert re.search(r'<a href="https://jira\.example/browse/LH-1"[^>]*rel="nofollow noopener noreferrer"', mgr)
     assert "fchip" not in user
+
+
+async def test_send_with_files_waits_longer_and_timeout_is_clear(menv, monkeypatch):
+    # tệp kèm: daemon trích PDF trước khi trả → web chờ `CHAT_FILES_TIMEOUT_S` (không phải 60 s mặc định); hết giờ → 504 + lời báo
+    # "tin có thể vẫn đã được nhận" (không phải lỗi 500, không xui người gửi lại → lượt trùng)
+    from cfharness.web import manager as web_manager
+
+    await menv.login()
+    await designate(menv)
+    orig = menv.d.methods["manager.chat"]
+    timeouts: list = []
+
+    async def slow(p):
+        await asyncio.sleep(1.0)
+        return await orig({k: v for k, v in p.items() if k != "files"})
+
+    menv.d.methods["manager.chat"] = slow
+    from cfharness.tui.client import AsyncHubClient
+
+    real = AsyncHubClient.call
+
+    async def spy_call(self, method, params=None, *, audit=False, timeout=None):
+        if method == "manager.chat":
+            timeouts.append(timeout)
+        return await real(self, method, params, audit=audit, timeout=timeout)
+
+    monkeypatch.setattr(AsyncHubClient, "call", spy_call)
+    monkeypatch.setattr(web_manager, "CHAT_FILES_TIMEOUT_S", 0.2)
+    r = await post_files(menv, [("ghi chú.md", b"# a", "text/markdown")], text="xem")
+    assert r.status_code == 504 and "có thể vẫn đã được nhận" in r.json()["error"]
+    assert timeouts == [0.2]
+    monkeypatch.setattr(web_manager, "CHAT_FILES_TIMEOUT_S", 30.0)
+    r = await post_files(menv, [("ghi chú.md", b"# a", "text/markdown")], text="xem")
+    assert r.status_code == 200, r.text
+    await send(menv, "không tệp")
+    assert timeouts[1:] == [30.0, None]  # tin không tệp: hạn mặc định của client
