@@ -382,3 +382,112 @@ async def test_health_mentions_switch(env):
     h = (await get(env, "/partials/health")).text
     assert h.count("đổi sang tài khoản khác ở mục Tài khoản Claude") == 2
     assert "đang dùng Công ty" in h
+
+
+# =========================================================================== connector claude.ai (account.claudeai_*)
+CAI_URL = "https://claude.example/cai/oauth/authorize?code=true&state=S1"
+
+
+def _cai(env, *, logged_in=False):
+    st = {"logged_in": logged_in, "email": "u@example.com" if logged_in else None, "org": None, "plan": None, "error": None,
+          "connectors_auto": False, "connectors_auth": "auto", "login": None}
+    calls: list[tuple[str, dict]] = []
+
+    def rec(name, fn):
+        def w(p):
+            p = p or {}
+            calls.append((name, {k: v for k, v in p.items() if k != "code"} | {"has_code": bool(p.get("code"))}))
+            return fn(p)
+        env.d.methods[name] = w
+
+    def start(p):
+        st["login"] = {"login_id": "LC", "url": CAI_URL, "expires_at": "2099-01-01T00:00:00Z"}
+        return st["login"]
+
+    def finish(p):
+        if p.get("code") != CODE:
+            raise HubError("Claude không nhận code")
+        st.update(logged_in=True, email="u@example.com", login=None)
+        return dict(st)
+
+    def cancel(p):
+        st["login"] = None
+        return {"ok": True}
+
+    def logout(p):
+        st.update(logged_in=False, email=None)
+        return dict(st)
+
+    rec("account.claudeai_status", lambda p: dict(st))
+    rec("account.claudeai_login_start", start)
+    rec("account.claudeai_login_finish", finish)
+    rec("account.login_cancel", cancel)
+    rec("account.claudeai_logout", logout)
+    orig = env.d.methods["config.set"]
+
+    def cfg_set(p, _o=orig):
+        calls.append(("config.set", {k: v for k, v in p.items() if not k.startswith("_")}))
+        if p.get("key") == "connectors.auto":
+            st["connectors_auto"] = bool(p.get("value"))
+        return _o(p)
+    env.d.methods["config.set"] = cfg_set
+    return st, calls
+
+
+def cai_section(html: str) -> str:
+    m = re.search(r'<h3 class="small" id="claudeai">.*?<h3 class="small" id="acct-add">', html, re.S)
+    assert m, "thiếu khối Connector claude.ai"
+    return m.group(0)
+
+
+async def test_claudeai_login_flow(env):
+    st, calls = _cai(env)
+    s = cai_section((await get(env, "/settings")).text)
+    assert "chưa đăng nhập claude.ai" in s and "/do/claudeai_login_start" in s
+    r = await post(env, "/do/claudeai_login_start", {"next": "/settings#claudeai"})
+    assert r.status_code == 303 and calls[-1][0] == "account.claudeai_login_start" and calls[-1][1]["_audit"]["channel"] == "web"
+    s = cai_section((await get(env, "/settings")).text)
+    link = re.search(r'<a class="btn primary" href="([^"]+)" target="_blank" rel="noopener noreferrer">', s)
+    assert link and link.group(1).replace("&amp;", "&") == CAI_URL and 'name="login_id" value="LC"' in s
+    tag = re.search(r'<input name="code"[^>]*>', s).group(0)
+    assert 'type="password"' in tag and "value=" not in tag
+    await post(env, "/do/claudeai_login_finish", {"login_id": "LC", "code": "WRONG", "next": "/settings#claudeai"})
+    assert not st["logged_in"]
+    r = await post(env, "/do/claudeai_login_finish", {"login_id": "LC", "code": CODE, "next": "/settings#claudeai"})
+    assert r.status_code == 303
+    page = (await get(env, "/settings")).text
+    assert "Đã đăng nhập u@example.com" in page
+    s = cai_section(page)
+    assert "đã đăng nhập" in s and "u@example.com" in s and "Bước 2/2" not in s
+    assert [c for c in calls if c[0] == "account.claudeai_login_finish"][-1][1]["has_code"]
+    no_leak(env)
+
+
+async def test_claudeai_bad_url_never_rendered(env):
+    st, calls = _cai(env)
+    env.d.methods["account.claudeai_login_start"] = lambda p: {"login_id": "LX", "url": "javascript:alert(1)"}
+    await post(env, "/do/claudeai_login_start", {"next": "/settings#claudeai"})
+    page = (await get(env, "/settings")).text
+    assert "javascript:alert" not in page and "flash error" in page
+    assert [c[1]["login_id"] for c in calls if c[0] == "account.login_cancel"] == ["LX"]
+
+
+async def test_connectors_auto_needs_two_steps_and_logout_confirm(env):
+    st, calls = _cai(env, logged_in=True)
+    r = await post(env, "/do/connectors_auto_on", {"next": "/settings#claudeai"})
+    assert not [c for c in calls if c[0] == "config.set"]  # chưa xác nhận → chưa đổi
+    r = await post(env, "/do/connectors_auto_on", {"confirm": "yes", "next": "/settings#claudeai"})
+    assert not [c for c in calls if c[0] == "config.set"] and "KHÔNG hỏi duyệt" in r.text  # bước 2 nêu hệ quả
+    await post(env, "/do/connectors_auto_on", {"confirm": "yes", "confirm2": "yes", "next": "/settings#claudeai"})
+    assert [c[1] for c in calls if c[0] == "config.set"] == [{"key": "connectors.auto", "value": True}]
+    assert "/do/connectors_auto_off" in cai_section((await get(env, "/settings")).text)
+    await post(env, "/do/claudeai_logout", {"next": "/settings#claudeai"})
+    assert st["logged_in"]  # cần xác nhận
+    await post(env, "/do/claudeai_logout", {"confirm": "yes", "next": "/settings#claudeai"})
+    assert not st["logged_in"]
+
+
+async def test_claudeai_block_hidden_on_old_daemon(env):
+    env.d.methods.pop("account.claudeai_status", None)
+    html = (await get(env, "/settings")).text
+    assert 'id="claudeai"' not in html  # daemon chưa có account.claudeai_status → ẩn khối

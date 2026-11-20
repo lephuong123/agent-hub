@@ -85,10 +85,14 @@ Cách hub xử lý (`RunSpec.auth_mode`, `RunManager._connector_auth_mode`, `Cla
   có (`missing`) hoặc chưa `connected` (vd `needs-auth` = chưa nối connector trên claude.ai). Chỉ ở init đầu.
 - `cfharness hub doctor --probe` có mục "connector claude.ai" khi có agent/điều phối viên bật connector.
 
-Các bước bật Google Drive cho hub dùng token chung (vd `cchcadmin`, admin.cchchn.com):
-1. Đăng nhập dưới user OS của hub: `sudo -u <user> -H claude` → `/login` (tài khoản claude.ai muốn agent dùng), rồi thoát.
+Các bước bật Google Drive cho hub dùng token chung (vd `cchcadmin`, admin.cchchn.com) — NGƯỜI DÙNG TỰ làm trên web hub của họ:
+1. Web hub › Cài đặt › Tài khoản Claude › **Connector claude.ai** › "Đăng nhập claude.ai" → mở link, đăng nhập, dán code
+   (daemon chạy `claude auth login --claudeai` trong PTY như luồng thêm tài khoản — `account.claudeai_login_start|finish`, HUMAN_ONLY,
+   tự audit, code gỡ khỏi params; xong kiểm `claude auth status` không token và xoá cache `login_available`). Cách cũ (terminal của
+   admin): `sudo -u <user> -H claude` → `/login`.
 2. Trên claude.ai của tài khoản đó: Settings → Connectors → Google Drive → Connect (chọn tài khoản Google).
-3. `cfharness agent edit <id> --connectors "Google Drive"` (hoặc `manager capabilities set --connectors "Google Drive"`).
+3. Cùng khối web: "Tự dùng connector cho mọi agent" → Bật (2 bước, = `connectors.auto`), hoặc chọn connector theo agent ở form agent /
+   `cfharness agent edit <id> --connectors "Google Drive"`.
 4. `cfharness hub doctor --probe` → mục "connector claude.ai" phải xanh; chạy thử một run, không có event `connector.unavailable`.
 
 ## Tự động: mọi connector tài khoản đã Connect (`connectors.auto`, `--connectors all`) (2026-11-20)

@@ -3,6 +3,9 @@
 - `account.list {}` → `{active, accounts: [Account]}` (đọc)
 - `account.login_start {label}` → `{login_id, url, expires_at}` · `account.login_finish {login_id, code}` → `{account}` ·
   `account.login_cancel {login_id}` → `{ok}`
+- `account.claudeai_status {}` → `{logged_in, email, org, plan, connectors_auto, connectors_auth, login}` (đọc, HUMAN_ONLY) ·
+  `account.claudeai_login_start {}` → `{login_id, url, expires_at}` · `account.claudeai_login_finish {login_id, code}` → status ·
+  `account.claudeai_logout {}` → status — phiên `claude auth login` của user OS (connector claude.ai), không tạo tài khoản token
 - `account.add_token {label, token}` → `{account}` · `account.use {id}` → `{active, previous}` · `account.rename {id, label}` → `{account}` ·
   `account.rm {id}` → `{ok}` (đang dùng → Conflict; `machine` không xoá được) · `account.check {id}` → `{account}`
 Account = `{id, label, kind: token|machine|custom, active, created_at, expires_at, last_used_at, status: ok|auth_error|rate_limited|expiring|unknown,
@@ -22,7 +25,8 @@ if TYPE_CHECKING:
     from ..daemon import Daemon
 
 MUTATING_ACCOUNTS = ("account.login_start", "account.login_finish", "account.login_cancel", "account.add_token", "account.use",
-                     "account.rename", "account.rm", "account.check")
+                     "account.rename", "account.rm", "account.check", "account.claudeai_login_start", "account.claudeai_login_finish",
+                     "account.claudeai_logout")
 
 
 def _req(p: dict[str, Any], key: str) -> Any:
@@ -52,6 +56,10 @@ def register_rpc(daemon: "Daemon") -> None:
         code = _take(p, "code")
         return await s.login_finish(str(_req(p, "login_id")), code)
 
+    async def _cai_finish(p: dict[str, Any]) -> dict[str, Any]:
+        code = _take(p, "code")
+        return await s.claudeai_login_finish(str(_req(p, "login_id")), code)
+
     async def _check(p: dict[str, Any]) -> dict[str, Any]:
         return {"account": await s.check(str(_req(p, "id")))}
 
@@ -65,6 +73,11 @@ def register_rpc(daemon: "Daemon") -> None:
         "account.rename": lambda p: {"account": s.rename(str(_req(p, "id")), _req(p, "label"))},
         "account.rm": lambda p: s.remove(str(_req(p, "id"))),
         "account.check": _check,
+        # phiên claude.ai (`claude auth login`) cho connector — docs/dev-notes/manager-connectors.md
+        "account.claudeai_status": lambda p: s.claudeai_status(),
+        "account.claudeai_login_start": lambda p: s.claudeai_login_start(),
+        "account.claudeai_login_finish": _cai_finish,
+        "account.claudeai_logout": lambda p: s.claudeai_logout(),
     }
     for name in MUTATING_ACCOUNTS:
         methods[name] = wrap_with_audit(daemon.hub, name, methods[name])

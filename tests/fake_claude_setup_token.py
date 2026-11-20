@@ -10,6 +10,8 @@ link bị bẻ dòng (CRLF) và đặt sau dòng trống; nhắc "Paste code her
 - FAKE_SETUP_EXPECT: code hợp lệ (mặc định `goodcode#state123`); code khác → "OAuth error: …"
 - FAKE_SETUP_TOKEN: token in ra khi code đúng
 - FAKE_SETUP_ENV_OUT: đường dẫn file — ghi giá trị BROWSER nhận được (test kiểm không mở trình duyệt)
+- FAKE_SETUP_SIGNIN=<file>: mô phỏng `claude auth login` — code đúng → ghi file (= phiên đã lưu), in "Login successful.", thoát 0
+  (KHÔNG in token)
 """
 import os
 import sys
@@ -83,6 +85,13 @@ if code != expect:
     w(words("Press Enter to retry.") + "\r\n")
     sys.stdin.readline()
     sys.exit(1)
+signin = os.environ.get("FAKE_SETUP_SIGNIN")
+if signin:
+    with open(signin, "w", encoding="utf-8") as f:
+        f.write("claude.ai")
+    w(words("Login successful.", color=f"{ESC}[38;2;0;255;0m") + "\r\n")
+    time.sleep(0.2)
+    sys.exit(0)
 w(words("✓ Long-lived authentication token created successfully!", color=f"{ESC}[38;2;0;255;0m") + "\r\n")
 w(words("Your OAuth token (valid for 1 year):") + "\r\n")
 w(f"{ESC}[38;2;255;193;7m" + wrapped(token, 45) + f"{ESC}[39m\r\n")

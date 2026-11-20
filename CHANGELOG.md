@@ -10,6 +10,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Người dùng tự đăng nhập claude.ai cho connector ngay trên web hub
+- Cài đặt › Tài khoản Claude có khối **Connector claude.ai**: bấm "Đăng nhập claude.ai", mở link, đăng nhập tài khoản đã Connect Google Drive/Gmail… trên claude.ai, dán code — xong là agent dùng được connector, không cần admin vào máy chạy lệnh. Khối hiện tài khoản đang đăng nhập, nút đăng xuất và công tắc "Tự dùng connector cho mọi agent" (`connectors.auto`, bật cần xác nhận 2 bước).
+
 ---
 
 ## v0.2.24 — 2026-11-20

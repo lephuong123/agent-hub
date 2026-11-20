@@ -156,6 +156,7 @@
   "additionalProperties": false,
   "x-event-types": {
     "account.added": "summary",
+    "account.claudeai_login": "summary",
     "account.removed": "summary",
     "account.renamed": "summary",
     "account.switched": "summary",
