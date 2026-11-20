@@ -93,6 +93,9 @@ class ActiveRun:
     connectors: tuple[str, ...] | None = None  # connector claude.ai spec của run đã bật (guard dùng; None = chưa dựng spec)
     kind: str = "adhoc"  # M4-A: run review không tính vào max_concurrent_runs của agent
     entered: bool = False  # hardening H-21: coroutine `_run` đã bắt đầu (khoá đặt chỗ trong tick được `_run` nhả)
+    # run chạy bằng phiên claude.ai (auth_mode=login): tài khoản có phiên đang dùng (`machine` | a_xxxxxxxx) — chặn đăng xuất/xoá
+    # tài khoản đó khi run còn chạy (AccountService.require_session_idle)
+    claude_session: str | None = None
 
 
 class RunManager:
@@ -910,11 +913,16 @@ class RunManager:
                 lane_run = True
             recall = await self._memory_prefetch(run, agent)  # graph memory: top-k fact vào TIN USER ĐẦU (không vào system prompt)
             await _refresh_pdftoppm(hub)  # dò pdftoppm (cache hết hạn → chạy `-v`) trong THREAD: `_prepare_spec` chỉ đọc cache
-            auto_conn = await self._auto_connectors(runtime, run, agent, ar)
-            spec = self._prepare_spec(run, agent, recall=recall, auto_connectors=auto_conn, connector_dir=self._connector_account()[1])
+            acct = self._connector_account()  # đọc MỘT lần cho cả lượt khởi động (account.use giữa chừng không làm các bước lệch nhau)
+            auto_conn = await self._auto_connectors(runtime, run, agent, ar, acct)
+            spec = self._prepare_spec(run, agent, recall=recall, auto_connectors=auto_conn, connector_dir=acct[1])
             spec.control_handler = functools.partial(self._control_request, ar)  # CLI 2.1.303+: control_request can_use_tool → guard
             if spec.connectors:
-                spec.auth_mode, spec.claude_config_dir = await self._connector_auth(runtime, agent_id, run_id)
+                spec.auth_mode, spec.claude_config_dir = await self._connector_auth(runtime, agent_id, run_id, acct)
+                if spec.auth_mode == "login":
+                    from .accounts.service import MACHINE
+
+                    ar.claude_session = acct[0] if spec.claude_config_dir is not None else MACHINE
             await self._checkpoint(ar, run, spec)
             cli_version = await self._check_cli_version(runtime, agent_id, run_id)
             if self._ended_before_start(run_id):
@@ -1294,23 +1302,24 @@ class RunManager:
             return None, None
         return aid, (acc.config_dir(aid) if aid else None)
 
-    async def _account_login(self, runtime: AgentRuntime) -> tuple[bool | None, str | None, Path | None]:
-        """Phiên claude.ai của TÀI KHOẢN ĐANG DÙNG → (có phiên? | None, id, thư mục). Không bao giờ lấy phiên của tài khoản khác
-        (chi phí/hạn mức sẽ tính sang tài khoản đó)."""
+    async def _account_login(self, runtime: AgentRuntime, acct: tuple[str | None, Path | None]) -> bool | None:
+        """Phiên claude.ai của TÀI KHOẢN ĐANG DÙNG (`acct` = `_connector_account()`, đọc một lần mỗi lượt khởi động) có không?
+        Không bao giờ lấy phiên của tài khoản khác (chi phí/hạn mức sẽ tính sang tài khoản đó)."""
         from .accounts.service import CUSTOM
 
-        aid, cdir = self._connector_account()
+        aid, cdir = acct
         if aid == CUSTOM:
-            return False, aid, None
+            return False
         if cdir is None:  # machine / chưa cấu hình → phiên `/login` mặc định của user OS (như trước)
-            return await runtime.login_available(), aid, None
+            return await runtime.login_available()
         from .accounts import claude_config
 
         if not claude_config.exists(self.hub.paths.home, aid or ""):
-            return False, aid, cdir  # chưa từng gắn connector cho tài khoản này
-        return await runtime.login_available(config_dir=cdir), aid, cdir
+            return False  # chưa từng gắn connector cho tài khoản này
+        return await runtime.login_available(config_dir=cdir)
 
-    async def _auto_connectors(self, runtime: AgentRuntime, run: dict[str, Any], agent: dict[str, Any], ar: ActiveRun) -> bool:
+    async def _auto_connectors(self, runtime: AgentRuntime, run: dict[str, Any], agent: dict[str, Any], ar: ActiveRun,
+                               acct: tuple[str | None, Path | None] = (None, None)) -> bool:
         """`connectors.auto` (chỉ người): run LÀM VIỆC của agent chưa đặt connector riêng tự nạp mọi connector claude.ai mà phiên
         claude.ai CỦA TÀI KHOẢN ĐANG DÙNG đã Connect. Không có phiên → không bật (token setup-token không nạp connector, khỏi nạp
         cấu hình user). Không áp cho điều phối viên (manager.capabilities.connectors) và run kỹ thuật (review/eval/curator/graph_extract)."""
@@ -1327,49 +1336,64 @@ class RunManager:
         if str(self.hub.config.get("runtime.claude.connectors_auth") or "auto") == "token":
             return False
         try:
-            return bool((await self._account_login(runtime))[0])
+            return bool(await self._account_login(runtime, acct))
         except Exception:  # best-effort: không kiểm được → không bật connector tự động
             log.debug("không kiểm được phiên claude.ai cho connectors.auto", exc_info=True)
             return False
 
-    async def _connector_auth(self, runtime: AgentRuntime, agent_id: str, run_id: str) -> tuple[str, Path | None]:
+    def _fallback(self, agent_id: str, run_id: str, reason: str, account: str | None = None) -> tuple[str, None]:
+        payload: dict[str, Any] = {"reason": reason}
+        if account:
+            payload["account"] = account
+        self.hub.publish(make_event("connector.auth_fallback", agent_id, payload, run_id=run_id))
+        return "token", None
+
+    def _shared_config_dir(self, aid: str) -> tuple[Path | None, str | None]:
+        """Dựng lại thư mục cấu hình của tài khoản → (thư mục, None) hoặc (None, lý do fallback). `projects` phải là symlink sang
+        claude home mặc định — không thì session tách đôi và `--resume` chéo tài khoản hỏng (vd Windows không tạo được symlink)."""
+        from .accounts import claude_config
+
+        try:
+            d = self.hub.accounts.ensure_config_dir(aid)  # type: ignore[attr-defined]
+        except (HubError, OSError) as e:
+            log.warning("không dựng được thư mục cấu hình claude của %s: %s", aid, type(e).__name__)
+            return None, "config_dir_error"
+        if not claude_config.shared(d):
+            return None, "config_dir_unshared"
+        return d, None
+
+    async def _connector_auth(self, runtime: AgentRuntime, agent_id: str, run_id: str,
+                              acct: tuple[str | None, Path | None] = (None, None)) -> tuple[str, Path | None]:
         """Run có connector claude.ai: token `setup-token` (secret CLAUDE_CODE_OAUTH_TOKEN) KHÔNG nạp connector nào (đã kiểm 2.1.325)
-        → dùng phiên claude.ai của TÀI KHOẢN ĐANG DÙNG: tài khoản token → thư mục cấu hình riêng của nó (CLAUDE_CONFIG_DIR);
-        machine/chưa cấu hình → phiên `/login` mặc định. `runtime.claude.connectors_auth`: auto (mặc định — login khi có, không thì
-        token + event `connector.auth_fallback{reason}`), login (luôn), token (không bao giờ). Trả (auth_mode, thư mục | None).
+        → dùng phiên claude.ai của TÀI KHOẢN ĐANG DÙNG (`acct`, đọc một lần mỗi lượt khởi động): tài khoản token → thư mục cấu hình
+        riêng (CLAUDE_CONFIG_DIR); machine/chưa cấu hình → phiên `/login` mặc định; custom → không có phiên riêng.
+        `runtime.claude.connectors_auth`: auto (mặc định — login khi có, không thì token + event `connector.auth_fallback{reason}`),
+        login (luôn, trừ khi tài khoản không có/không dựng được thư mục riêng), token (không bao giờ). Trả (auth_mode, thư mục | None).
         docs/dev-notes/manager-connectors.md"""
+        from .accounts.service import CUSTOM, MACHINE
+
         mode = str(self.hub.config.get("runtime.claude.connectors_auth") or "auto")
         if mode == "token":
             return "token", None
-        if mode == "login":
-            aid, cdir = self._connector_account()
-            return "login", (self.hub.accounts.ensure_config_dir(aid) if cdir is not None and aid else None)  # type: ignore[attr-defined]
-        aid: str | None = None
-        cdir: Path | None = None
-        try:
-            ok, aid, cdir = await self._account_login(runtime)
-        except Exception:  # best-effort: không kiểm được → giữ token (hành vi cũ)
-            log.debug("không kiểm được phiên claude.ai cho connector", exc_info=True)
-            ok = None
-        if ok:
-            if cdir is not None and aid:
-                try:
-                    cdir = self.hub.accounts.ensure_config_dir(aid)  # type: ignore[attr-defined]  # dựng lại symlink dùng chung
-                except (HubError, OSError):
-                    log.warning("không dựng được thư mục cấu hình claude của %s — chạy bằng token", aid, exc_info=True)
-                    ok = None
-                    cdir = None
-            if ok:
-                return "login", cdir
-        from .accounts.service import MACHINE
-
-        own = aid not in (None, MACHINE)  # tài khoản token/custom: thiếu phiên CỦA NÓ (không mượn phiên tài khoản khác)
-        reason = "unknown" if ok is None else ("account_no_claudeai" if own else "no_claude_ai_login")
-        payload: dict[str, Any] = {"reason": reason}
-        if own:
-            payload["account"] = aid
-        self.hub.publish(make_event("connector.auth_fallback", agent_id, payload, run_id=run_id))
-        return "token", None
+        aid, cdir = acct
+        if aid == CUSTOM:  # token tự đặt: không mượn phiên của máy/tài khoản khác
+            return self._fallback(agent_id, run_id, "account_no_claudeai", aid)
+        if mode != "login":
+            try:
+                ok = await self._account_login(runtime, acct)
+            except Exception:  # best-effort: không kiểm được → giữ token (hành vi cũ)
+                log.debug("không kiểm được phiên claude.ai cho connector", exc_info=True)
+                ok = None
+            if not ok:
+                own = aid not in (None, MACHINE)  # tài khoản token: thiếu phiên CỦA NÓ (không mượn phiên tài khoản khác)
+                reason = "unknown" if ok is None else ("account_no_claudeai" if own else "no_claude_ai_login")
+                return self._fallback(agent_id, run_id, reason, aid if own else None)
+        if cdir is None or not aid:
+            return "login", None
+        d, why = self._shared_config_dir(aid)
+        if d is None:
+            return self._fallback(agent_id, run_id, why or "config_dir_error", aid)
+        return "login", d
 
     async def _auth_ok(self, runtime: AgentRuntime | None) -> bool | None:
         try:

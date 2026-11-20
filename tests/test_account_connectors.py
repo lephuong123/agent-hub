@@ -8,6 +8,7 @@ trước agent, sao lưu/gói chẩn đoán. Không gọi claude thật: `tests/
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import time
@@ -78,6 +79,7 @@ def test_config_dir_layout_and_symlinks(hub_home):
     (ch / "settings.json").write_text("{}", encoding="utf-8")
     assert claude_config.account_dir(home, "machine") is None and claude_config.account_dir(home, "../x") is None
     d = claude_config.ensure(home, "a_0123abcd")
+    assert claude_config.shared(d)
     assert d == home / "claude-config" / "a_0123abcd"
     if os.name == "posix":
         assert (d.stat().st_mode & 0o777) == 0o700 and ((home / "claude-config").stat().st_mode & 0o777) == 0o700
@@ -281,6 +283,97 @@ async def test_forced_login_uses_active_account_dir(d, monkeypatch):
     assert os.path.islink(spec.claude_config_dir / "projects")
 
 
+async def test_rm_and_logout_refused_while_run_uses_session(d, monkeypatch):
+    a, b = _two(d)
+    home = d.hub.paths.home
+    claude_config.ensure(home, a)
+    (home / "claude-config" / a / ".fake_login").write_text("1", encoding="utf-8")
+    _patch_login(d, monkeypatch, machine=True)
+    d.hub.accounts.use(a)
+    spec, _ = await _run(d, ["Google Drive"])
+    assert spec.auth_mode == "login" and d.hub.runs.active[spec.run_id].claude_session == a
+    d.hub.accounts.use(b)  # đổi tài khoản: run cũ vẫn chạy bằng thư mục của A
+    for m in ("account.rm", "account.claudeai_logout"):
+        with pytest.raises(HubError) as ei:
+            await rpc(d, m, {"id": a})
+        assert "đang chạy bằng connector" in str(ei.value) and spec.run_id in str(ei.value)
+    assert (home / "claude-config" / a / ".fake_login").exists() and d.hub.accounts._row(a) is not None
+    await rpc(d, "run.stop", {"id": spec.run_id})
+    await wait_status(d, spec.run_id, ("cancelled", "completed", "failed", "interrupted"))
+    for _ in range(100):
+        if spec.run_id not in d.hub.runs.active:
+            break
+        await asyncio.sleep(0.05)
+    await rpc(d, "account.rm", {"id": a})
+    assert not (home / "claude-config" / a).exists()
+
+
+async def test_machine_session_logout_refused_while_in_use(d, monkeypatch):
+    _patch_login(d, monkeypatch, machine=True)
+    spec, _ = await _run(d, ["Google Drive"])
+    assert d.hub.runs.active[spec.run_id].claude_session == "machine"
+    with pytest.raises(HubError, match="đang chạy bằng connector"):
+        await rpc(d, "account.claudeai_logout", {})
+
+
+async def test_unshared_config_dir_falls_back(d, monkeypatch):
+    a, _ = _two(d)
+    home = d.hub.paths.home
+    claude_config.ensure(home, a)
+    (home / "claude-config" / a / ".fake_login").write_text("1", encoding="utf-8")
+    _patch_login(d, monkeypatch, machine=True)
+    d.hub.accounts.use(a)
+    monkeypatch.setattr(claude_config, "_link", lambda link, target: None)  # như Windows không tạo được symlink
+    os.unlink(home / "claude-config" / a / "projects")
+    (home / "claude-config" / a / "projects").mkdir()
+    spec, fb = await _run(d, ["Google Drive"])
+    assert spec.auth_mode == "token" and spec.claude_config_dir is None
+    assert [(e.payload["reason"], e.payload.get("account")) for e in fb] == [("config_dir_unshared", a)]
+    assert d.hub.runs.active[spec.run_id].claude_session is None
+
+
+async def test_forced_login_custom_and_dir_error_fall_back(d, monkeypatch):
+    a, _ = _two(d)
+    _patch_login(d, monkeypatch, machine=True)
+    d.hub.config.set("runtime.claude.connectors_auth", "login")
+    # custom (token tự đặt): không mượn phiên của máy dù đang ép login
+    d.hub.secrets.set("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-" + "Cc3_" * 20)
+    assert d.hub.accounts.active_id() == "custom"
+    spec, fb = await _run(d, ["Google Drive"], "w1")
+    assert spec.auth_mode == "token" and [(e.payload["reason"], e.payload.get("account")) for e in fb] == [("account_no_claudeai", "custom")]
+    # dựng thư mục lỗi → fallback có lý do, run vẫn chạy
+    d.hub.accounts.use(a)
+
+    def boom(aid):
+        raise OSError("disk")
+    monkeypatch.setattr(d.hub.accounts, "ensure_config_dir", boom)
+    spec, fb = await _run(d, ["Google Drive"], "w2")
+    assert spec.auth_mode == "token" and [e.payload["reason"] for e in fb] == ["config_dir_error"]
+
+
+async def test_active_account_read_once_per_start(d, monkeypatch):
+    """`account.use` giữa lượt khởi động: các bước dùng chung MỘT tài khoản (đọc một lần)."""
+    a, b = _two(d)
+    home = d.hub.paths.home
+    claude_config.ensure(home, a)
+    (home / "claude-config" / a / ".fake_login").write_text("1", encoding="utf-8")
+    d.hub.accounts.use(a)
+    calls = []
+    orig = d.hub.runs._connector_account
+
+    def once():
+        calls.append(1)
+        return orig()
+    monkeypatch.setattr(d.hub.runs, "_connector_account", once)
+
+    async def login_available(self, config_dir=None):
+        d.hub.accounts.use(b)  # người đổi tài khoản đúng lúc hub đang kiểm phiên
+        return config_dir is not None and (Path(config_dir) / ".fake_login").exists()
+    monkeypatch.setattr(type(d.hub.runs.runtime()), "login_available", login_available, raising=False)
+    spec, fb = await _run(d, ["Google Drive"])
+    assert len(calls) == 1 and spec.auth_mode == "login" and spec.claude_config_dir == home / "claude-config" / a and not fb
+
+
 def test_run_setup_reads_account_dir(tmp_path):
     from cfharness.manager.connectors import run_setup
 
@@ -306,6 +399,9 @@ def test_claude_config_protected_from_agents(hub_home):
     home = hub_home.home
     assert "claude-config" in backup.EXCLUDED and not backup.included(PurePosixPath("claude-config/a_0123abcd/.claude.json"))
     assert "claude-config" in SCAN_SKIP_DIRS and "claude-config" in HUB_WRITE_DENY_NAMES and "claude-config/" in NEVER_INCLUDED
+    from cfharness.hub_transfer import MACHINE_STATE
+
+    assert "accounts.claudeai" in MACHINE_STATE  # cache phiên claude.ai theo tài khoản gắn với máy (thư mục không đi theo gói)
     rules = secret_read_deny_rules(home, hub_home.socket)
     for tool in ("Read", "Grep", "Glob"):
         assert any("claude-config" in r and r.startswith(f"{tool}(") for r in rules)
@@ -359,5 +455,9 @@ def test_doctor_counts_auto_and_probes_active_account(tmp_path, monkeypatch):
     claude_config.ensure(home, "a_0123abcd")
     (home / "claude-config" / "a_0123abcd" / ".fake_login").write_text("1", encoding="utf-8")
     assert check()["ok"] is True
+    os.unlink(home / "claude-config" / "a_0123abcd" / "projects")
+    (home / "claude-config" / "a_0123abcd" / "projects").mkdir()
+    r = check()
+    assert r["ok"] is False and "không dùng chung session" in r["detail"]
     c.execute("UPDATE hub_state SET value=? WHERE key='claude_account_active'", (json.dumps("machine"),))
     assert check()["ok"] is True  # máy: phiên mặc định

@@ -460,7 +460,7 @@ async def test_connector_on_machine_row_and_flow(env):
     assert not st["logged_in"]
     await post(env, "/do/claudeai_login_finish", {"login_id": "LC", "code": CODE, "next": "/settings#accounts"})
     page = (await get(env, "/settings")).text
-    assert "Đã gắn connector của u@example.com" in page
+    assert "Đã gắn connector: claude.ai u@example.com" in page and "hạn mức/chi phí" in page
     row = machine_row(page)
     assert "u@example.com" in row and "Đổi tài khoản connector" in row and "Gỡ connector" in row
     await post(env, "/do/claudeai_logout", {"next": "/settings#accounts"})

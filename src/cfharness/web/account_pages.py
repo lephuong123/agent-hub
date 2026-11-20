@@ -264,8 +264,9 @@ async def _cai_finish(request: Request, p: dict[str, Any]) -> dict[str, Any]:
 
 def _cai_ok(r: Any, f: FormData) -> str:
     who = (r or {}).get("email") or "tài khoản claude.ai"
-    return (f"Đã gắn connector của {who} — khi tài khoản này đang dùng, agent dùng được mọi connector đã Connect trên claude.ai "
-            "của nó")
+    org = (r or {}).get("org")
+    return (f"Đã gắn connector: claude.ai {who}" + (f" (tổ chức {org})" if org else "") + ". Khi tài khoản này đang dùng, run có "
+            "connector chạy bằng phiên claude.ai này — hạn mức/chi phí của các run đó tính vào tài khoản claude.ai vừa đăng nhập")
 
 
 def _cai_id(f: FormData) -> str:

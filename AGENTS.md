@@ -30,7 +30,7 @@ Trạng thái agent do `RunManager` tính (bỏ `agent.status` từ adapter). Ev
 phát trong `RunManager._finalize` sau khi ghi DB (event `run.completed` của adapter bị nuốt).
 
 ## Sự thật về `claude` CLI cần nhớ (spike M0)
-- Cô lập: `--setting-sources ""` + `--settings <runtime/settings.json>` (có `autoMemoryEnabled:false`) + `--strict-mcp-config --mcp-config <runtime/mcp.json>`. Không `--bare`, không đặt `CLAUDE_CONFIG_DIR` (mất OAuth).
+- Cô lập: `--setting-sources ""` + `--settings <runtime/settings.json>` (có `autoMemoryEnabled:false`) + `--strict-mcp-config --mcp-config <runtime/mcp.json>`. Không `--bare`, không đặt `CLAUDE_CONFIG_DIR` (mất OAuth) — NGOẠI LỆ DUY NHẤT: thư mục cấu hình riêng của từng tài khoản cho connector (`HUB_HOME/claude-config/<id>/`, `accounts/claude_config.py`; đã kiểm 2.1.325: phiên + mục Keychain tách riêng theo thư mục, `--resume` chéo thư mục chạy được nhờ `projects` symlink sang claude home mặc định).
 - Input `--input-format stream-json --replay-user-messages`: prompt gửi qua stdin; daemon đóng stdin sau `result` để tiến trình thoát (M0 = 1 lượt/tiến trình). Interrupt mềm = `control_request interrupt` qua stdin.
 - SIGINT → `result` `error_during_execution`/`aborted_tools`; SIGTERM → không có `result`. Run có `stop_requested` → `cancelled`.
 - `total_cost_usd` sau `--resume` là LUỸ KẾ theo session → `runs.cost_usd` = chênh lệch so với `sessions.cumulative_cost_usd`.
@@ -629,7 +629,7 @@ Tài liệu tổng hợp (người dùng + kỹ thuật + giới hạn): `docs/d
 - PR3 `transfer_sessions.py`: phần `claude/` (optional) = session Claude Code của hub (`core`: hội thoại điều phối viên chưa lưu trữ + task chưa
   xong + run dở/`pending_resume`; `full`: mọi session_id trong `sessions`/`runs`/`manager_conversations`) — chỉ tìm đúng `<sid>.jsonl` hub biết
   dưới `<claude home>/projects/*/` (+ cây `<sid>/`), không theo symlink, trần cỡ, che secret THEO GIÁ TRỊ lúc xuất. Claude home =
-  `CLAUDE_CONFIG_DIR` hoặc `~/.claude` (chỉ đọc/ghi file — không bao giờ đặt biến này cho tiến trình `claude`); test dùng
+  `CLAUDE_CONFIG_DIR` hoặc `~/.claude` (chỉ đọc/ghi file — không đặt biến này cho tiến trình `claude`, trừ thư mục connector theo tài khoản `HUB_HOME/claude-config/<id>/`); test dùng
   `CFHARNESS_TEST_CLAUDE_HOME` (conftest trỏ thư mục tạm — test KHÔNG đụng `~/.claude` thật). Nhập: `encode_cwd(pathmap(cwd))` (quy tắc
   Claude Code: đơn vị UTF-16 ngoài `[A-Za-z0-9]` → `-`, > 200 → cắt + `-`base36(hash Java); đổi quy tắc → sửa `encode_cwd` + fixture tên
   thật trong test), viết lại từng dòng JSON, `O_EXCL` 0600 / thư mục mới 0700, sid trùng → bỏ; ghi SAU hub.db, TRƯỚC secret, có hoàn tác.

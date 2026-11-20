@@ -41,7 +41,9 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
 
 def _cai_line(st: dict[str, Any]) -> str:
     if st.get("logged_in"):
-        return f"Connector: đã gắn — claude.ai {st.get('email') or ''}".rstrip()
+        org = f" (tổ chức {st['org']})" if st.get("org") else ""
+        return (f"Connector: đã gắn — claude.ai {st.get('email') or ''}{org}. Run có connector của tài khoản này tính hạn mức/chi phí "
+                "vào tài khoản claude.ai đó.")
     if st.get("logged_in") is False:
         return "Connector: chưa gắn (agent chưa dùng được Google Drive… bằng tài khoản này)"
     return f"Connector: không kiểm được{(' — ' + str(st['error'])) if st.get('error') else ''}"

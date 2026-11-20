@@ -332,6 +332,7 @@ class AccountService:
         self._require_row(account_id)
         if self.active_id() == account_id:
             raise Conflict("đang dùng tài khoản này — chọn tài khoản khác trước khi xoá", data={"id": account_id})
+        self.require_session_idle(account_id, "xoá tài khoản")
         self.secrets.delete(secret_name(account_id))
         self.store.conn.execute("DELETE FROM claude_accounts WHERE id=?", (account_id,))
         self._cai_cache_drop(account_id)
@@ -355,6 +356,7 @@ class AccountService:
         self._require_row(account_id)
         if self.active_id() == account_id:
             raise Conflict("đang dùng tài khoản này — chọn tài khoản khác trước khi xoá", data={"id": account_id})
+        self.require_session_idle(account_id, "xoá tài khoản")
         for lid, s in list(self._logins.items()):  # lượt gắn connector đang mở cho tài khoản này
             if s.account_id == account_id:
                 await self._close_login(lid)
@@ -460,6 +462,20 @@ class AccountService:
             d = self.ensure_config_dir(account_id)  # dựng lại symlink (idempotent)
         env["CLAUDE_CONFIG_DIR"] = str(d)
         return env
+
+    def session_users(self, account_id: str) -> list[str]:
+        """Run đang chạy (hoặc đang khởi động) bằng phiên claude.ai của tài khoản này (`ActiveRun.claude_session`)."""
+        runs = getattr(self.hub, "runs", None)
+        active = getattr(runs, "active", None) or {}
+        return sorted(a.run_id for a in list(active.values()) if getattr(a, "claude_session", None) == account_id)
+
+    def require_session_idle(self, account_id: str, what: str) -> None:
+        """Đăng xuất/xoá thư mục cấu hình khi run còn dùng phiên đó = run hỏng giữa chừng → từ chối (Conflict)."""
+        busy = self.session_users(account_id)
+        if busy:
+            more = f" (và {len(busy) - 3} run khác)" if len(busy) > 3 else ""
+            raise Conflict(f"không {what} được: {len(busy)} run đang chạy bằng connector của tài khoản này ({', '.join(busy[:3])}{more}) "
+                           "— chờ các run đó xong hoặc dừng chúng rồi thử lại", data={"id": account_id, "runs": busy})
 
     def _cai_cache(self) -> dict[str, Any]:
         v = self.store.state_get(CLAUDEAI_KEY)
@@ -580,6 +596,7 @@ class AccountService:
 
     async def claudeai_logout(self, account_id: Any = None) -> dict[str, Any]:
         aid = self._cai_id(account_id)
+        self.require_session_idle(aid, "gỡ connector")
         env = self._cai_env(aid)
         err = ""
         if env is not None:

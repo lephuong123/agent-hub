@@ -222,6 +222,15 @@ def _connectors(ck: _Checks, cfg: dict[str, Any], c: sqlite3.Connection | None, 
         ck.add("claude_connectors", "connector claude.ai", False, f"{who}: tài khoản {acct} CHƯA gắn connector — connector sẽ không nạp",
                "warning", fix=fix)
         return
+    if cdir is not None:
+        from .accounts import claude_config
+
+        if not claude_config.shared(cdir):  # run dựng lại symlink trước khi dùng; vẫn không phải symlink → run rơi về token
+            ck.add("claude_connectors", "connector claude.ai", False,
+                   f"{who}: thư mục cấu hình của tài khoản {acct} không dùng chung session (projects không phải symlink) — run connector "
+                   "chạy bằng token (connector.auth_fallback config_dir_unshared)", "warning",
+                   fix=f"tạo symlink {cdir}/projects → {claude_config.default_home()}/projects (Windows: bật Developer Mode / quyền tạo symlink)")
+            return
     try:
         from .oscompat import exec_argv, no_window_kwargs
         from .runtime.claude_cli import OAUTH_TOKEN_SECRET, child_env

@@ -153,7 +153,18 @@ Run (`RunManager._connector_account`, `_account_login`, `_auto_connectors`, `_co
   `RunSpec.claude_config_dir` → `_run_env` đặt `CLAUDE_CONFIG_DIR`, gỡ mọi `CLAUDE_CODE_OAUTH_TOKEN`. `machine`/chưa cấu hình → phiên
   `/login` mặc định như cũ. Còn lại → token + `connector.auth_fallback{reason: account_no_claudeai, account}` (tài khoản token/custom
   chưa gắn) hoặc `no_claude_ai_login` (máy). KHÔNG BAO GIỜ mượn phiên của tài khoản khác (chi phí sẽ tính sang tài khoản đó).
-- `connectors.auto`: chỉ bật khi tài khoản đang dùng có phiên. `connectors_auth=login` (luôn): tài khoản token → thư mục của nó.
+- `connectors.auto`: chỉ bật khi tài khoản đang dùng có phiên. `connectors_auth=login` (luôn): tài khoản token → thư mục của nó;
+  `custom` → token + `account_no_claudeai` (không mượn phiên máy, như auto); dựng thư mục lỗi → token + `config_dir_error`.
+- Tài khoản đang dùng + thư mục đọc MỘT lần mỗi lượt khởi động (`acct = _connector_account()` trong `_run`, truyền cho
+  `_auto_connectors`, `_prepare_spec(connector_dir=)`, `_connector_auth`) — `account.use` giữa chừng không làm các bước lệch nhau.
+- Sau khi dựng lại, `<dir>/projects` PHẢI là symlink sang claude home mặc định (`claude_config.shared`); không (vd Windows không tạo
+  được symlink) → token + `connector.auth_fallback{reason: config_dir_unshared}` (session sẽ tách đôi, resume chéo tài khoản hỏng);
+  doctor `--probe` báo.
+- Run chạy bằng phiên claude.ai ghi `ActiveRun.claude_session` (`machine` | id). `account.rm` / `account.claudeai_logout` của tài
+  khoản có run đang dùng phiên đó → `Conflict` ("… run đang chạy bằng connector của tài khoản này …", `data.runs`). Run đang xếp hàng
+  không chặn: chúng chọn phiên của tài khoản ĐANG DÙNG lúc khởi động, mà tài khoản đang dùng thì không xoá được.
+- Hạn mức/chi phí của run connector tính vào tài khoản claude.ai ĐÃ ĐĂNG NHẬP ở hàng đó (hub không đối chiếu được với tài khoản của
+  token setup-token — không đọc được email của token rẻ); web/CLI hiện rõ email + tổ chức claude.ai sau khi gắn.
 - `login_available(config_dir)` cache theo (binary, thư mục); thư mục chưa tồn tại → coi như chưa đăng nhập, không chạy claude, không tạo.
 - `run_setup(conns, config_dir=…)`: hook/MCP "đã biết" cho kiểm cô lập = hợp của cấu hình mặc định và thư mục tài khoản (run có thể
   rơi về token = cấu hình mặc định).

@@ -111,6 +111,16 @@ def ensure(hub_home: Path, account_id: str) -> Path:
     return d
 
 
+def shared(d: Path) -> bool:
+    """`<d>/projects` là symlink sang `projects` của claude home mặc định? Không (vd Windows không tạo được symlink) → session
+    của tài khoản tách khỏi cây chung, `--resume` chéo tài khoản hỏng → hub không chạy run bằng thư mục này."""
+    link = Path(d) / "projects"
+    try:
+        return link.is_symlink() and os.readlink(link) == str(default_home() / "projects")
+    except OSError:
+        return False
+
+
 def exists(hub_home: Path, account_id: str) -> bool:
     d = account_dir(hub_home, account_id)
     return d is not None and d.is_dir() and not d.is_symlink()
@@ -130,4 +140,4 @@ def remove(hub_home: Path, account_id: str) -> bool:
     return True
 
 
-__all__ = ["DIRNAME", "ID_RE", "account_dir", "default_home", "ensure", "exists", "remove", "root"]
+__all__ = ["DIRNAME", "ID_RE", "account_dir", "default_home", "ensure", "exists", "remove", "root", "shared"]
