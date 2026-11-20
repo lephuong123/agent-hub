@@ -142,6 +142,9 @@ def find_token(raw: str, *, final: bool = False) -> str | None:
 _ERROR_LINE_RE = re.compile(r"(OAuth error|Invalid code|\bError\b|\berror:|failed|Failed|expired|denied)")
 
 
+_SIGNIN_OK_RE = re.compile(r"Login successful|Logged in as|Successfully logged in", re.I)
+
+
 def find_error_line(raw: str) -> str | None:
     for line in clean_screen(raw).split("\n"):
         s = " ".join(line.split())
@@ -407,6 +410,14 @@ class LoginHandle:
 
     async def submit(self, code: str, timeout: float = 60) -> str:
         """Gõ code người dùng dán vào CLI, chờ token. Trả token `sk-ant-oat01-…`. Xong (thành công hay lỗi) đều đóng tiến trình."""
+        return await self._submit_locked(code, lambda: self._submit(code, timeout))
+
+    async def submit_signin(self, code: str, timeout: float = 90) -> None:
+        """`claude auth login`: gõ code, chờ CLI tự lưu phiên rồi THOÁT (không in token). Lỗi → HubError. Bên gọi tự kiểm
+        `claude auth status` sau đó (thoát ≠ chắc chắn đã lưu được phiên, vd Keychain không mở được)."""
+        await self._submit_locked(code, lambda: self._signin(code, timeout))
+
+    async def _submit_locked(self, code: str, run: Callable[[], Any]) -> Any:
         code = (code or "").strip()
         if not code:
             raise HubError("Chưa nhập code. Dán code trang đăng nhập Claude hiển thị sau khi bạn đồng ý.")
@@ -421,9 +432,44 @@ class LoginHandle:
             self._used = True
             self._mark = len(self._raw)
             try:
-                return await self._submit(code, timeout)
+                return await run()
             finally:
                 await self.close()
+
+    def _type_code(self, code: str) -> None:
+        try:
+            self._pty.write(code)
+        except OSError as e:
+            raise HubError("Không gửi được code vào `claude` (tiến trình đã đóng). Bấm đăng nhập lại.") from e
+
+    async def _signin(self, code: str, timeout: float) -> None:
+        # Gõ code thành MỘT lần ghi (như dán), rồi Enter riêng — như _submit
+        self._type_code(code)
+        await asyncio.sleep(0.3)
+        try:
+            self._pty.write("\r")
+        except OSError as e:
+            raise HubError("Không gửi được code vào `claude auth login` (tiến trình đã đóng). Bấm đăng nhập lại.") from e
+        deadline = time.monotonic() + timeout
+        err_seen_at: float | None = None
+        while not self._eof:
+            after = self._raw[self._mark :]
+            if _SIGNIN_OK_RE.search(clean_screen(after)):
+                return  # CLI báo đã lưu đăng nhập (có bản không thoát ngay) — bên gọi kiểm `claude auth status`
+            err = find_error_line(_redact(after, code))
+            if err:
+                now = time.monotonic()
+                if err_seen_at is None:
+                    err_seen_at = now
+                elif now - err_seen_at >= 0.5:
+                    raise HubError(f"Claude không nhận code: {_redact(err, code)[:300]}. Code chỉ dùng được một lần và trong vài phút — "
+                                   "bấm đăng nhập lại để lấy link mới.")
+            if time.monotonic() >= deadline:
+                raise SystemFailure(f"Hết {timeout:g} giây chờ `claude auth login` lưu đăng nhập — bấm đăng nhập lại.")
+            await self._wait_change(deadline)
+        err = find_error_line(_redact(self._raw[self._mark :], code))
+        if err:
+            raise HubError(f"`claude auth login` báo lỗi: {_redact(err, code)[:300]}. Bấm đăng nhập lại để lấy link mới.")
 
     async def _submit(self, code: str, timeout: float) -> str:
         try:
@@ -476,7 +522,11 @@ class LoginHandle:
         self._raw = ""  # có thể chứa code/token đã echo — không giữ lại
 
 
-async def start_login(binary: str, env: dict[str, str], timeout: float = 45) -> LoginHandle:
+SETUP_TOKEN_ARGS = ("setup-token",)
+CLAUDEAI_LOGIN_ARGS = ("auth", "login", "--claudeai")  # phiên claude.ai đầy đủ (nạp connector) — lưu vào máy, không in token
+
+
+async def start_login(binary: str, env: dict[str, str], timeout: float = 45, args: tuple[str, ...] = SETUP_TOKEN_ARGS) -> LoginHandle:
     """Chạy `<binary> setup-token` trong PTY, chờ link đăng nhập (≤ `timeout` giây) rồi trả handle.
 
     `env` = env ĐẦY ĐỦ của tiến trình con (vd `runtime.claude_cli.child_env(...)`); rỗng → env của daemon. Luôn đặt
@@ -490,7 +540,7 @@ async def start_login(binary: str, env: dict[str, str], timeout: float = 45) -> 
         )
     env["BROWSER"] = _noop_browser()
     env.pop("CLAUDECODE", None)
-    argv = exec_argv([resolved, "setup-token"])
+    argv = exec_argv([resolved, *args])
     pty: _Pty
     if IS_WINDOWS:  # pragma: no cover — Windows
         try:
@@ -516,4 +566,4 @@ async def start_login(binary: str, env: dict[str, str], timeout: float = 45) -> 
     return handle
 
 
-__all__ = ["PTY_COLS", "LoginHandle", "clean_screen", "find_login_url", "find_token", "start_login"]
+__all__ = ["CLAUDEAI_LOGIN_ARGS", "PTY_COLS", "SETUP_TOKEN_ARGS", "LoginHandle", "clean_screen", "find_login_url", "find_token", "start_login"]

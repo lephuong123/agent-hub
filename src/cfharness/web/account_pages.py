@@ -110,7 +110,19 @@ async def accounts_ctx(request: Request, status: dict[str, Any] | None) -> dict[
     cur = (status or {}).get("account") or next(({"id": a["id"], "label": a.get("label")} for a in rows or [] if a.get("active")), None)
     return {"accounts": rows, "acct_active": (res or {}).get("active"), "acct_current": cur, "acct_login": _login(request),
             "acct_blocked": blocked, "acct_gate_until": _hhmm(until) if until else "", "acct_auth_block": bool((status or {}).get("auth_block")),
-            "acct_switch": others}
+            "acct_switch": others, "claudeai": await claudeai_ctx(request)}
+
+
+async def claudeai_ctx(request: Request) -> dict[str, Any] | None:
+    """Khối "Connector claude.ai" (Google Drive…): phiên `claude auth login` của user OS chạy hub. Daemon cũ → None (ẩn khối)."""
+    try:
+        st = await rpc(request, "account.claudeai_status", {}) or {}
+    except (RpcError, DaemonUnavailable, OSError):
+        return None
+    lg = st.get("login") if isinstance(st.get("login"), dict) else None
+    if lg and not str(lg.get("url") or "").startswith("https://"):  # chỉ link https vào href
+        lg = None
+    return {**st, "login": lg}
 
 
 # ============================================================================ thao tác
@@ -209,6 +221,33 @@ def _use_confirm(f: FormData) -> str:
             "run đang chạy giữ tài khoản cũ tới khi xong.")
 
 
+async def _cai_start(request: Request, p: dict[str, Any]) -> dict[str, Any]:
+    r = await rpc(request, "account.claudeai_login_start", {}, audit=True) or {}
+    if not str(r.get("url") or "").startswith("https://"):
+        try:
+            await rpc(request, "account.login_cancel", {"login_id": r.get("login_id")}, audit=True)
+        except (RpcError, DaemonUnavailable, OSError):
+            pass
+        raise RpcError(-32000, "Không lấy được link đăng nhập hợp lệ từ claude — thử lại")
+    return r
+
+
+async def _cai_finish(request: Request, p: dict[str, Any]) -> dict[str, Any]:
+    r = await rpc(request, "account.claudeai_login_finish", p, audit=True)
+    p.clear()  # bỏ code khỏi bộ nhớ yêu cầu sớm nhất có thể
+    return r
+
+
+def _cai_ok(r: Any, f: FormData) -> str:
+    who = (r or {}).get("email") or "tài khoản claude.ai"
+    return f"Đã đăng nhập {who} — agent dùng được connector đã Connect trên claude.ai của tài khoản này"
+
+
+AUTO_ON_STEP2 = ("Mọi agent chưa đặt connector riêng sẽ tự dùng MỌI connector đã Connect trên tài khoản claude.ai đang đăng nhập "
+                 "(Google Drive, Gmail, Slack…) — bằng tài khoản thật, KHÔNG hỏi duyệt (trừ thao tác xoá). Chỉ Connect trên claude.ai "
+                 "những connector bạn muốn agent dùng.")
+
+
 def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
     """Thêm thao tác tài khoản Claude vào `ACTIONS` (form POST `/do/<tên>`). `account.*` ghi ∈ HUMAN_ONLY, daemon ghi audit kênh `web`."""
     actions["account_use"] = Action("account.use", lambda f: {"id": _id(f)}, _use_ok, confirm=_use_confirm)
@@ -227,6 +266,24 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
                                              call=_login_finish, secret_fields=("code",))
     actions["account_login_cancel"] = Action("account.login_cancel", lambda f: {"login_id": _req(f, "login_id", "lượt đăng nhập")},
                                              "Đã huỷ lượt đăng nhập", call=_login_cancel)
+    # phiên claude.ai cho connector (`claude auth login` của user OS chạy hub) — người dùng TỰ đăng nhập trên web hub của mình
+    actions["claudeai_login_start"] = Action("account.claudeai_login_start", lambda f: {},
+                                             "Đã mở lượt đăng nhập claude.ai — bấm «Mở trang đăng nhập», đăng nhập, rồi dán code vào ô bên dưới",
+                                             call=_cai_start)
+    actions["claudeai_login_finish"] = Action("account.claudeai_login_finish", lambda f: {"login_id": _req(f, "login_id", "lượt đăng nhập"),
+                                                                                         "code": _secret(f, "code", "code")},
+                                              _cai_ok, call=_cai_finish, secret_fields=("code",))
+    actions["claudeai_login_cancel"] = Action("account.login_cancel", lambda f: {"login_id": _req(f, "login_id", "lượt đăng nhập")},
+                                              "Đã huỷ lượt đăng nhập claude.ai", call=_login_cancel)
+    actions["claudeai_logout"] = Action("account.claudeai_logout", lambda f: {}, "Đã đăng xuất claude.ai — agent không còn dùng connector",
+                                        confirm="Đăng xuất tài khoản claude.ai khỏi máy chạy hub? Agent sẽ không dùng được connector "
+                                                "(Google Drive…) cho tới khi đăng nhập lại.", danger=True)
+    actions["connectors_auto_on"] = Action("config.set", lambda f: {"key": "connectors.auto", "value": True},
+                                           "Đã bật: agent tự dùng connector đã Connect trên claude.ai",
+                                           confirm="Bật tự dùng connector claude.ai cho mọi agent?", step2=AUTO_ON_STEP2, danger=True)
+    actions["connectors_auto_off"] = Action("config.set", lambda f: {"key": "connectors.auto", "value": False},
+                                            "Đã tắt tự dùng connector — chỉ agent đặt connector riêng mới dùng",
+                                            confirm="Tắt tự dùng connector claude.ai cho mọi agent?")
     actions["account_add_token"] = Action("account.add_token", lambda f: {"label": _label(f), "token": _secret(f, "token", "token")},
                                           lambda r, f: f"Đã thêm tài khoản {_acct_label(r, f)} — bấm «Dùng» để chuyển sang",
                                           call=_add_token, secret_fields=("token",))

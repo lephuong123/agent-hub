@@ -89,6 +89,9 @@ def _clean_token(token: Any) -> str:
     return t
 
 
+CLAUDEAI_LABEL = "\x00claudeai"  # nhãn nội bộ của lượt `claude auth login` (không bao giờ thành tên tài khoản)
+
+
 class _Login:
     def __init__(self, handle: Any, label: str, ttl_s: float) -> None:
         self.handle = handle
@@ -358,6 +361,107 @@ class AccountService:
             env.pop(OAUTH_SECRET, None)
         return env
 
+    async def _auth_info(self, env: dict[str, str], *args: str) -> tuple[dict[str, Any] | None, str]:
+        """`claude auth <args>` → (JSON đọc được | None, mô tả lỗi)."""
+        from ..oscompat import exec_argv, no_window_kwargs
+
+        cfg = self._claude_cfg()
+        argv = exec_argv([cfg.get("binary") or "claude", "auth", *args])
+        try:
+            proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+                                                        stderr=asyncio.subprocess.PIPE, env=env, **no_window_kwargs())
+        except OSError as e:
+            return None, f"không chạy được claude: {e}"
+        try:
+            out_b, err_b = await asyncio.wait_for(proc.communicate(), float(cfg.get("auth_check_timeout_s", 30)))
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:  # pragma: no cover
+                pass
+            return None, f"claude auth {' '.join(args)} quá thời gian"
+        try:
+            info = json.loads(out_b.decode("utf-8", "replace"))
+        except (json.JSONDecodeError, ValueError):
+            info = None
+        if proc.returncode not in (0, None) and not isinstance(info, dict):
+            return None, err_b.decode("utf-8", "replace").strip()[-300:] or f"exit {proc.returncode}"
+        return (info if isinstance(info, dict) else None), ""
+
+    # ------------------------------------------------------------------ phiên claude.ai cho connector (`claude auth login`)
+    async def claudeai_status(self) -> dict[str, Any]:
+        """Phiên `claude /login` (claude.ai) của user OS chạy hub — connector claude.ai (Google Drive…) chỉ nạp với phiên này,
+        không với token setup-token. Trả `{logged_in, email, org, plan, connectors_auto, login}` (KHÔNG token)."""
+        info, err = await self._auth_info(self._env(None), "status", "--json")
+        ok = bool(info and info.get("loggedIn") and info.get("authMethod") == "claude.ai")
+        cfg = self.hub.config
+        out: dict[str, Any] = {"logged_in": ok if info is not None else None, "error": None if info is not None else err[:300],
+                               "connectors_auto": bool(cfg.get("connectors.auto")),
+                               "connectors_auth": str(cfg.get("runtime.claude.connectors_auth") or "auto"),
+                               "login": next(({"login_id": lid, "url": s.handle.url, "expires_at": s.expires_at}
+                                              for lid, s in self._logins.items() if s.label == CLAUDEAI_LABEL), None)}
+        if ok and info:
+            out.update(email=str(info.get("email") or "")[:200] or None, org=str(info.get("orgName") or "")[:200] or None,
+                       plan=str(info.get("subscriptionType") or "")[:40] or None)
+        return out
+
+    async def claudeai_login_start(self) -> dict[str, Any]:
+        for lid in list(self._logins):  # tối đa 1 phiên — dùng chung chỗ với lượt thêm tài khoản
+            await self._close_login(lid)
+        from .login import CLAUDEAI_LOGIN_ARGS, start_login
+
+        cfg = self._claude_cfg()
+        handle = await start_login(str(cfg.get("binary") or "claude"), self._env(None), args=CLAUDEAI_LOGIN_ARGS)
+        login_id = "l_" + uuid.uuid4().hex[:12]
+        s = _Login(handle, CLAUDEAI_LABEL, self.login_ttl_s)
+        self._logins[login_id] = s
+        try:
+            s.timer = asyncio.get_running_loop().call_later(self.login_ttl_s, self._expire_soon, login_id)
+        except RuntimeError:  # pragma: no cover
+            pass
+        return {"login_id": login_id, "url": handle.url, "expires_at": s.expires_at}
+
+    async def claudeai_login_finish(self, login_id: str, code: Any) -> dict[str, Any]:
+        code = str(code or "").strip()
+        if not code:
+            raise HubError("thiếu code — dán code trang đăng nhập Claude hiển thị", code=-32602)
+        register_secret_values(code)
+        s = self._logins.get(login_id)
+        if s is not None and (time.monotonic() > s.deadline or s.label != CLAUDEAI_LABEL):
+            s = None if s.label != CLAUDEAI_LABEL else s
+            if s is not None:
+                await self._close_login(login_id)
+                s = None
+        if s is None:
+            raise NotFound("phiên đăng nhập không tồn tại hoặc đã hết hạn (10 phút) — bấm đăng nhập lại")
+        try:
+            await s.handle.submit_signin(code)
+        finally:
+            await self._close_login(login_id)
+        self._login_changed()
+        st = await self.claudeai_status()
+        if not st.get("logged_in"):
+            raise HubError("`claude auth login` đã chạy nhưng chưa thấy phiên claude.ai trên máy hub"
+                           + (f" ({st['error']})" if st.get("error") else "")
+                           + " — máy chạy hub có thể không lưu được đăng nhập (Keychain). Thử lại, hoặc đăng nhập bằng terminal của user hub.")
+        self.hub.publish(make_event("account.claudeai_login", None, {"logged_in": True}))
+        return st
+
+    async def claudeai_logout(self) -> dict[str, Any]:
+        _, err = await self._auth_info(self._env(None), "logout")
+        self._login_changed()
+        self.hub.publish(make_event("account.claudeai_login", None, {"logged_in": False}))
+        st = await self.claudeai_status()
+        if st.get("logged_in"):
+            raise HubError("đăng xuất chưa xong" + (f": {err}" if err else ""))
+        return st
+
+    @staticmethod
+    def _login_changed() -> None:
+        from ..runtime import claude_cli
+
+        claude_cli._login_cache.clear()  # run sau kiểm lại phiên /login ngay (connector bật/tắt theo phiên)
+
     async def _auth_status(self, env: dict[str, str]) -> tuple[bool | None, str]:
         """`claude auth status` (JSON `loggedIn`) với env cho trước → (loggedIn|None, mô tả lỗi). Cùng kiểu ClaudeCliRuntime.auth_status."""
         from ..oscompat import exec_argv, no_window_kwargs
@@ -460,6 +564,8 @@ class AccountService:
         if s is not None and time.monotonic() > s.deadline:
             await self._close_login(login_id)
             s = None
+        if s is not None and s.label == CLAUDEAI_LABEL:
+            s = None  # lượt đăng nhập claude.ai (connector) không tạo tài khoản token
         if s is None:
             raise NotFound("phiên đăng nhập không tồn tại hoặc đã hết hạn (10 phút) — bấm thêm tài khoản lại")
         try:
