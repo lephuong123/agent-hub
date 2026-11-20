@@ -195,6 +195,28 @@ def app_data_deny_rules() -> list[str]:
     return list(dict.fromkeys(out))
 
 
+def claude_files_deny_rules(hub_home: Path | None = None) -> list[str]:
+    """PR1 plan-mcp-claude-native (`claude_files.py`): Read/Grep/Glob KHÔNG vào `~/.claude.json*`, `.credentials.json`, `backups/` của
+    thư mục cấu hình Claude Code, `HUB_HOME/claude-config/` (secret MCP dạng rõ, token OAuth/đăng nhập). Áp cho mọi hub, kể cả agent
+    trust_full. Tiến trình `claude` tự đọc vẫn được (luật quyền chỉ áp tool của agent)."""
+    from ..claude_files import json_parents, secret_dirs, secret_files
+
+    out: list[str] = []
+    files = list(secret_files())
+    parents = list(json_parents())
+    dirs = list(secret_dirs(hub_home=hub_home))
+    for group in (files, parents, dirs):
+        group += [os.path.realpath(x) for x in group]
+    for f in dict.fromkeys(files):
+        out += [f"{t}(/{rule_path(f)})" for t in ("Read", "Grep", "Glob")]
+    for p in dict.fromkeys(parents):  # bản chính + bản sao lưu cạnh nó (`.claude.json.bak-…`, `.claude.json.backup…`)
+        out += [f"{t}(/{rule_path(p)}/.claude.json*)" for t in ("Read", "Grep", "Glob")]
+    for d in dict.fromkeys(dirs):
+        for t in ("Read", "Grep", "Glob"):
+            out += [f"{t}(/{rule_path(d)}/**)", f"{t}(/{rule_path(d)})"]
+    return list(dict.fromkeys(out))
+
+
 def secret_read_deny_rules(hub_home: Path, socket: Path) -> list[str]:
     """`permissions.deny` cho tool Read/Grep/Glob: token người, secret, mcp.json đã resolve, token MCP HTTP."""
     from ..auth import all_token_paths
@@ -232,6 +254,7 @@ HUB_WRITE_DENY_NAMES = (
     "filehub",  # trạng thái cổng cfharness + cây mồ côi + tàn dư đồng bộ cũ (filehub/)
     "audit-anchors.jsonl",  # L4: bản neo chuỗi băm audit (audit_chain.py) — agent không được sửa/xoá
     "audit-archive",  # L5: audit đã lưu trữ + MANIFEST (audit_archive.py)
+    "claude-config",  # thư mục cấu hình Claude Code theo tài khoản (claude_files.py) — không đọc/ghi
 )
 AGENT_WRITE_DENY_NAMES = ("config.yaml", "SOUL.md", "MEMORY.md", "USER.md", "skills", ".archive", "runtime", "home", ".tier_overlay")
 
@@ -486,6 +509,9 @@ def sandbox_settings(hub_home: Path, socket: Path, sb_cfg: dict[str, Any], *, cw
 
     deny_w += app_data_dirs()
     deny_r += app_data_dirs()
+    from ..claude_files import deny_read_paths  # PR1 plan-mcp-claude-native: ~/.claude.json*, .credentials.json, claude-config/ — không đọc
+
+    deny_r += deny_read_paths(home)
     lanes = lane_tree_dirs(home, cwd=cwd)  # cây lane của run khác — không đọc/ghi
     deny_w += lanes
     deny_r += lanes
@@ -553,7 +579,7 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
     if trust_full:
         perms = dict(s.get("permissions") or {})
         # dữ liệu của user KHÁC / phiên đăng nhập của app desktop: không phải quyền của người này để trao
-        perms["deny"] = list(perms.get("deny") or []) + admin_shared_deny_rules() + app_data_deny_rules()
+        perms["deny"] = list(perms.get("deny") or []) + admin_shared_deny_rules() + app_data_deny_rules() + claude_files_deny_rules(hub_home)
         s["permissions"] = perms
         if confine is None:
             s["sandbox"] = {"enabled": False}
@@ -569,7 +595,8 @@ def build_settings(base: dict[str, Any], *, run_id: str, socket: Path, policy_di
     user_prot = protected_write_paths(hub_home)  # R2-2: tài nguyên NGƯỜI khai báo (vd `.next` prod) → chặn tĩnh tool ghi + sandbox
     perms["deny"] = (list(perms.get("deny") or []) + policy_deny_rules(policy_dir) + secret_read_deny_rules(hub_home, Path(socket))
                      + exec_zone_deny_rules() + [f"{t}(/{rule_path(p)}{suf})" for p in user_prot for t in FILE_TOOLS for suf in ("/**", "")]
-                     + credential_deny_rules() + admin_shared_deny_rules() + app_data_deny_rules() + (conf_deny if confine is not None else []))
+                     + credential_deny_rules() + admin_shared_deny_rules() + app_data_deny_rules() + claude_files_deny_rules(hub_home)
+                     + (conf_deny if confine is not None else []))
     s["permissions"] = perms
     sb_cfg = sb_cfg0
     if not sb_cfg.get("enabled", True) and confine is not None:

@@ -765,7 +765,9 @@ user, origin}` (không chi phí/trạng thái/đường dẫn) — thêm trườ
 `cfharness admin …` forbidden với agent. Route trả 404 cho MỌI lỗi (không phân biệt lý do). Thư mục app (C6): thêm biến thể đường dẫn → `desktop_app.app_data_dirs`
 + ca trong `tests/test_desktop_directory.py`/`tests/test_guard_classifier.py`; KHÔNG chặn chuỗi identifier đứng một mình (agent làm việc trên repo app).
 Trust full KHÔNG gỡ `desktop_app_data`/`admin_shared`/`other_hub_write` (`guard/service.TRUST_NEVER_RULES` — thêm rule "không phải quyền của hub để trao"
-→ thêm vào đây + ca trong `tests/test_trust_and_noise.py`). Glob kiểm ký tự đại diện ở mọi vị trí (`desktop_app.glob_may_touch`). Bản xuất `admin_overview`
+→ thêm vào đây VÀ `classifier.STICKY_FORBIDDEN_RULES` + ca trong `tests/test_trust_and_noise.py`). Cấu hình/đăng nhập Claude Code (`claude_files.py`:
+`~/.claude.json*`, `.credentials.json`, `<config>/backups`, `$CLAUDE_CONFIG_DIR`, `HUB_HOME/claude-config/`) = rule `claude_credentials` cùng nhóm: sandbox denyRead,
+`runtime.claude_files_deny_rules` (cả trust_full), classifier forbidden; KHÔNG mở rộng sang `~/.claude/projects|settings.json`. Glob kiểm ký tự đại diện ở mọi vị trí (`desktop_app.glob_may_touch`). Bản xuất `admin_overview`
 chỉ ghi schema mới khi có trường mới (tương thích admin cũ). `--ensure` luôn giữ khoá ensure khi spawn; `started` theo nonce.
 
 ## Thư mục dùng chung với "Không gian số" — `filehub/` (chỉ qua cổng cfharness)

@@ -240,11 +240,16 @@ async def test_trust_full_never_grants_desktop_app_data_or_admin_shared(hub):
         ("Bash", {"command": "sqlite3 ~/Library/HTTPStorages/io.cfharness.desktop/httpstorages.sqlite .dump"}),
         ("Read", {"file_path": os.path.expanduser("~/Library/Application Support/io.cfharness.desktop/hubs.json")}),
         ("Bash", {"command": "cat /Users/Shared/cfharness/status/x.json"}),
+        # cấu hình/đăng nhập Claude Code (secret MCP dạng rõ, OAuth) — sandbox OS tắt khi trust nên classifier là lớp chặn Bash
+        ("Bash", {"command": "cat ~/.claude.json"}),
+        ("Bash", {"command": f"cat {hub.paths.home}/auth/x ~/.claude.json"}),  # ghép đích forbidden thường không lách được
+        ("Read", {"file_path": os.path.expanduser("~/.claude/.credentials.json")}),
+        ("Grep", {"pattern": "token", "path": os.path.expanduser("~"), "glob": ".claude.json*"}),
     ]:
         r = await check(hub, run, tool, ti)
         assert r["decision"] == "deny", (tool, ti, r)
     rules = {x[0] for x in hub.store.conn.execute("SELECT matched_rule FROM guard_decisions WHERE run_id=? AND action='deny'", (run["id"],))}
-    assert "desktop_app_data" in rules and "admin_shared" in rules
+    assert "desktop_app_data" in rules and "admin_shared" in rules and "claude_credentials" in rules
     assert (await check(hub, run, "Bash", {"command": "git push --force origin main"}))["decision"] == "allow"  # trust vẫn có hiệu lực
 
 
@@ -337,10 +342,12 @@ async def test_trusted_spec_bypass_no_sandbox_on_real_repo(hub, tmp_path):
     st = json.loads(spec.settings_path.read_text(encoding="utf-8"))
     # trust_full: bỏ permissions.deny tĩnh của hub — CHỈ giữ luật thư mục chung quản trị máy (dữ liệu của user khác, plan-admin-users)
     # + thư mục dữ liệu app desktop (C6: cookie phiên/token directory — docs/dev-notes/desktop-app.md)
-    from cfharness.guard.runtime import admin_shared_deny_rules, app_data_deny_rules
+    # + cấu hình/đăng nhập Claude Code (~/.claude.json*, .credentials.json, claude-config/ — plan-mcp-claude-native PR1)
+    from cfharness.guard.runtime import admin_shared_deny_rules, app_data_deny_rules, claude_files_deny_rules
 
     assert st["sandbox"] == {"enabled": False}
-    assert (st.get("permissions") or {}).get("deny", []) == admin_shared_deny_rules() + app_data_deny_rules()
+    assert (st.get("permissions") or {}).get("deny", []) == (admin_shared_deny_rules() + app_data_deny_rules()
+                                                             + claude_files_deny_rules(hub.paths.home))
     assert "PreToolUse" in (st.get("hooks") or {})  # hook vẫn chạy: ghi quyết định + ESTOP
     assert not any("push --force" in x for x in spec.tool_policy.get("disallowed_tools") or [])
     argv, _ = build_argv(spec, hub.config.get("runtime.claude"))

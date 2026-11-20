@@ -475,6 +475,37 @@ def test_desktop_app_data_denied_every_hub(tmp_path):
                 assert any(x.rstrip("/") == d.replace("\\", "/") for x in fs["denyWrite"]), d
 
 
+def test_claude_files_read_denied_every_hub(tmp_path, monkeypatch):
+    """PR1 plan-mcp-claude-native: Read/Grep/Glob không vào ~/.claude.json*, .credentials.json, backups/, HUB_HOME/claude-config —
+    kể cả agent trust_full và khi guard.sandbox.enabled=false; sandbox chặn đọc (Bash). ~/.claude/projects, settings.json không bị chặn."""
+    from cfharness.guard.runtime import build_settings, rule_path
+
+    ccd = tmp_path / "ccd"
+    ccd.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(ccd))
+    uh = os.path.expanduser("~")
+    home = tmp_path / "hub"
+    (home / "policy").mkdir(parents=True)
+    for trust, sb in ((False, True), (True, True), (False, False)):
+        s = build_settings({}, run_id="r1", socket=tmp_path / "hub.sock", policy_dir=home / "policy",
+                           guard_cfg={"enabled": True, "sandbox": {"enabled": sb}}, approval_timeout_s=60, cwd=tmp_path, trust_full=trust)
+        deny = s["permissions"]["deny"]
+        for t in ("Read", "Grep", "Glob"):
+            assert f"{t}(/{rule_path(uh)}/.claude.json)" in deny, (trust, sb, t)
+            assert f"{t}(/{rule_path(uh)}/.claude.json*)" in deny, (trust, sb, t)  # bản sao lưu cạnh nó
+            assert f"{t}(/{rule_path(uh)}/.claude/.credentials.json)" in deny, (trust, sb, t)
+            assert f"{t}(/{rule_path(uh)}/.claude/backups/**)" in deny, (trust, sb, t)
+            assert f"{t}(/{rule_path(ccd)}/.claude.json)" in deny and f"{t}(/{rule_path(ccd)}/.credentials.json)" in deny, (trust, sb, t)
+            assert f"{t}(/{rule_path(home)}/claude-config/**)" in deny, (trust, sb, t)
+        assert not any("/.claude/projects" in x or "/.claude/settings.json" in x for x in deny if x.startswith(("Read(", "Grep(", "Glob(")))
+        if not trust and sb and s.get("sandbox", {}).get("enabled"):
+            dr = s["sandbox"]["filesystem"]["denyRead"]
+            for p in (f"{uh}/.claude.json", f"{uh}/.claude/.credentials.json", f"{uh}/.claude/backups", f"{ccd}/.claude.json",
+                      f"{ccd}/.credentials.json", f"{home}/claude-config"):
+                assert p.replace("\\", "/") in dr, p
+            assert not any(x.rstrip("/").endswith(("/.claude", "/.claude/projects")) for x in dr)
+
+
 async def test_agent_cannot_forge_audit_record(home):
     """B4: RPC `audit.record` nhận actor/channel/summary do người gọi tự khai → chỉ người (web/CLI). Agent trong run gọi
     (kể cả đã đọc trộm token) bị từ chối, không ghi được dòng audit giả "user duyệt"; người vẫn ghi được."""
