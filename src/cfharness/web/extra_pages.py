@@ -44,8 +44,11 @@ def sched_target(r: dict[str, Any]) -> str:
 
 
 def sched_dest(r: dict[str, Any]) -> str:
+    """Nơi nhận kết quả (+ kênh nhận thêm `deliver_to.also` — chỉ hiển thị; đặt/bỏ bằng `cfharness schedule edit --also|--no-also`)."""
     dt = r.get("deliver_to") or {}
-    return str(dt.get("conversation_id") or dt.get("channel") or "hội thoại gần nhất")
+    main = str(dt.get("conversation_id") or dt.get("channel") or "hội thoại gần nhất")
+    also = [str(x) for x in dt.get("also") or []]
+    return main + (" + gửi thêm: " + ", ".join(also) if also else "")
 
 
 def schedule_params(form: Any) -> dict[str, Any]:

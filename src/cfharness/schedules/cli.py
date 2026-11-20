@@ -24,6 +24,9 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
         p.add_argument("--name")
         p.add_argument("--to", dest="deliver_to", help="nơi nhận kết quả: id hội thoại (mc_…) hoặc kênh web|cli|telegram:<chat_id>|slack:<chat_id> "
                                                        "(bỏ trống = hội thoại gần nhất của bạn)")
+        p.add_argument("--also", action="append", metavar="KÊNH",
+                       help="gửi THÊM kết quả sang chat riêng telegram:<chat_id> hoặc Slack DM slack:D… (lặp lại được, ≤ 4; "
+                            "khi sửa: thay toàn bộ danh sách cũ)")
         p.add_argument("--budget", type=float, help="trần chi phí mỗi lượt ($)")
 
     ad = ss.add_parser("add", help="tạo lịch", parents=[common], description=EXPR_HELP)
@@ -42,6 +45,7 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     _common_fields(ed, add=False)
     ed.add_argument("--clear-to", "--clear", dest="clear_to", action="store_true",
                     help="bỏ nơi nhận kết quả đã đặt (--to) → về hội thoại gần nhất của bạn")
+    ed.add_argument("--no-also", dest="no_also", action="store_true", help="bỏ mọi kênh nhận thêm (--also) đã đặt")
     pa = ss.add_parser("pause", help="tạm dừng lịch", parents=[common])
     pa.add_argument("id")
     pa.add_argument("--reason", default="")
@@ -65,7 +69,9 @@ def _local(ts: Any) -> str:
 
 def _dest(r: dict[str, Any]) -> str:
     dt = r.get("deliver_to") or {}
-    return dt.get("conversation_id") or dt.get("channel") or "hội thoại gần nhất"
+    main = dt.get("conversation_id") or dt.get("channel") or "hội thoại gần nhất"
+    also = [str(x) for x in dt.get("also") or []]
+    return main + (" + " + ", ".join(also) if also else "")
 
 
 def _target(r: dict[str, Any]) -> str:
@@ -134,6 +140,15 @@ def cmd_schedule(ctx: Any) -> int:
                 p[k] = v
         if a.budget is not None:
             p["budget_usd"] = a.budget
+        if getattr(a, "no_also", False):
+            if a.also:
+                from ..cli import eprint
+
+                eprint("lỗi: --also và --no-also không dùng cùng lúc")
+                return 1
+            p["also"] = []
+        elif a.also:
+            p["also"] = list(a.also)
         if act == "edit" and getattr(a, "clear_to", False):
             if a.deliver_to:
                 from ..cli import eprint

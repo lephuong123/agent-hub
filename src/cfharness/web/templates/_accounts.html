@@ -23,13 +23,15 @@
   <table class="tbl stack acct"><thead><tr><th>Tài khoản</th><th>Trạng thái</th><th>Dùng lần cuối</th><th>Chi phí hôm nay</th><th></th></tr></thead><tbody>
     {% for a in accounts %}<tr id="acct-{{ a.id }}">
       <td data-label="Tài khoản"><b>{{ a.label or a.id }}</b>{% if a.active %} <span class="pill ok strong">{{ m.icon('check') }}Đang dùng</span>{% endif %}
-        {% if a.kind_label %}<div class="muted small">{{ a.kind_label }}</div>{% endif %}</td>
+        {% if a.kind_label %}<div class="muted small">{{ a.kind_label }}</div>{% endif %}
+        {% if claudeai and a.kind == 'machine' %}<div class="small" id="acct-connector">{% if claudeai.logged_in %}<span class="pill ok">{{ m.icon('check') }}connector</span> claude.ai <b>{{ claudeai.email or "" }}</b>{% elif claudeai.logged_in is sameas false %}<span class="pill warn">connector chưa gắn</span> <span class="muted">— agent chưa dùng được Google Drive…</span>{% else %}<span class="pill muted">connector: chưa kiểm được</span>{% endif %}</div>{% endif %}</td>
       <td data-label="Trạng thái"><span class="pill {{ a.tone }}">{{ a.chip }}</span>{% if a.last_error and a.status != 'ok' %}<div class="small danger-t">{{ a.last_error }}</div>{% endif %}</td>
       <td data-label="Dùng lần cuối">{{ m.rel(a.last_used_at) }}</td>
       <td data-label="Chi phí hôm nay">{{ (a.cost_today_usd or 0)|cost }}</td>
       <td class="actions"><div class="row gap wrap-row">
         {% if a.can_use %}{{ m.act("account_use", "Dùng", {"id": a.id, "name": a.label or a.id}, "btn sm primary", confirm="Chuyển sang tài khoản " ~ (a.label or a.id) ~ "? Run mới dùng tài khoản này; run đang chạy giữ tài khoản cũ.", next="/settings#accounts") }}{% endif %}
         {% if a.kind != 'custom' %}{{ m.act("account_check", "Kiểm tra", {"id": a.id, "name": a.label or a.id}, "btn sm", next="/settings#accounts") }}{% endif %}
+        {% if claudeai and a.kind == 'machine' and not claudeai.login %}{{ m.act("claudeai_login_start", "Gắn connector" if not claudeai.logged_in else "Đổi tài khoản connector", {}, "btn sm" ~ (" primary" if not claudeai.logged_in else ""), next="/settings#accounts") }}{% if claudeai.logged_in %}{{ m.act("claudeai_logout", "Gỡ connector", {}, "btn sm ghost", next="/settings#accounts") }}{% endif %}{% endif %}
         {% if a.can_rm %}{{ m.act("account_rm", "Xoá", {"id": a.id, "name": a.label or a.id}, "btn sm ghost", confirm="Xoá tài khoản " ~ (a.label or a.id) ~ "? Token bị xoá khỏi secret store.", next="/settings#accounts") }}{% endif %}
         {% if a.can_rename %}<details class="acct-rename"><summary class="btn sm ghost">Đổi tên</summary>
           <form method="post" action="/do/account_rename" class="row gap" autocomplete="off">
@@ -40,6 +42,23 @@
     {% else %}<tr><td class="muted" colspan="5">Chưa có tài khoản nào — hub dùng đăng nhập sẵn có của máy. Thêm tài khoản bên dưới.</td></tr>{% endfor %}
   </tbody></table>
   {% if accounts|selectattr('kind', 'equalto', 'custom')|list %}<p class="muted small">Token đang dùng không khớp tài khoản nào trong danh sách (đặt bằng tay ở secret <code>CLAUDE_CODE_OAUTH_TOKEN</code>).</p>{% endif %}
+
+  {% if claudeai %}
+  {% if claudeai.login %}
+  <div class="acct-login" id="claudeai">
+    <p class="small"><b>Gắn connector:</b> mở trang đăng nhập (tab mới), đăng nhập tài khoản claude.ai (thường là tài khoản vừa thêm), bấm <b>Authorize</b>,
+      copy code rồi dán vào đây. Agent sẽ dùng mọi connector đã Connect trên claude.ai của tài khoản này (Google Drive, Gmail…).</p>
+    <p><a class="btn primary" href="{{ claudeai.login.url }}" target="_blank" rel="noopener noreferrer">{{ m.icon('external') }}<span>Mở trang đăng nhập</span></a></p>
+    <form method="post" action="/do/claudeai_login_finish" class="form" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="login_id" value="{{ claudeai.login.login_id }}"><input type="hidden" name="next" value="/settings#accounts">
+      <label>Code <input name="code" type="password" required autocomplete="off" spellcheck="false" placeholder="dán code sau khi đăng nhập"></label>
+      <div class="row end gap"><button class="btn" type="submit">Gắn connector</button></div>
+    </form>
+    {{ m.act("claudeai_login_cancel", "Bỏ qua", {"login_id": claudeai.login.login_id}, "btn sm ghost", next="/settings#accounts") }}
+  </div>
+  {% endif %}
+  {% if claudeai.connectors_auth == 'token' or not claudeai.connectors_auto %}<p class="banner warn small">{{ m.icon('alert') }} Agent không tự dùng connector: đã tắt bằng cấu hình (<code>connectors.auto</code> / <code>runtime.claude.connectors_auth</code>).</p>{% endif %}
+  {% endif %}
 
   <h3 class="small" id="acct-add">Thêm tài khoản</h3>
   {% if acct_login %}
@@ -62,7 +81,7 @@
     <form method="post" action="/do/account_login_start" class="form" autocomplete="off">
       <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="next" value="/settings#accounts">
       <label>Tên tài khoản <input name="label" required maxlength="60" placeholder="VD: Công ty, Cá nhân" autocomplete="off"></label>
-      <p class="muted small">Bước 1/2: hub mở lượt đăng nhập (<code>claude setup-token</code>) và đưa bạn link trang đăng nhập.</p>
+      <p class="muted small">Bước 1/2: hub mở lượt đăng nhập (<code>claude setup-token</code>) và đưa bạn link trang đăng nhập. Xong sẽ hỏi gắn connector (đăng nhập thêm một lần).</p>
       <div class="row end"><button class="btn" type="submit">Tiếp tục</button></div>
     </form>
   </details>

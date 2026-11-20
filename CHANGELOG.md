@@ -44,14 +44,80 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   `cfharness daemon start`), vì daemon giữ PATH lúc khởi động. Đặt `tools.poppler_path` thì không cần khởi động lại.
 - Kéo–thả PDF trong TUI/REPL vẫn chỉ là đường dẫn trong tin (không có bản chữ, không tách phần); chỉ web, Telegram, Slack gửi tệp.
 
-### Web — bật connector claude.ai cho từng agent
+---
+
+## v0.2.26 — 2026-11-20
+
+### Connector claude.ai: mặc định bật, gắn ngay vào tài khoản (#169)
+- Agent tự dùng mọi connector đã Connect trên claude.ai (Google Drive, Gmail…) của tài khoản đã gắn connector — **bật mặc định**, không còn công tắc trên web.
+- Bỏ khối "Connector claude.ai" riêng: trạng thái nằm ngay trên hàng **Đăng nhập của máy** trong bảng Tài khoản Claude (email đang gắn, nút **Gắn connector** / **Đổi tài khoản connector** / **Gỡ connector**).
+- Thêm tài khoản mới (đăng nhập hoặc dán token) xong thì hiện luôn bước **Gắn connector** cho tài khoản đó (đăng nhập claude.ai thêm một lần; có nút Bỏ qua).
+
+#### Lưu ý khi cập nhật
+- Máy chạy hub đã đăng nhập claude.ai (`claude /login`) cho user OS của hub: sau khi cập nhật, run của MỌI agent chưa chọn connector riêng tự nạp connector của tài khoản đó, và nạp kèm cấu hình `~/.claude` của user (hook, CLAUDE.md; MCP ngoài connector vẫn bị guard chặn, plugin user bị tắt). Agent ghi bằng tài khoản thật (gửi mail, sửa Drive…) không hỏi duyệt, trừ thao tác xoá. Không muốn: `cfharness config set connectors.auto false`, hoặc gỡ bớt connector trên claude.ai.
+
+---
+
+## v0.2.25 — 2026-11-20
+
+### Người dùng tự đăng nhập claude.ai cho connector ngay trên web hub (#168)
+- Cài đặt › Tài khoản Claude có khối **Connector claude.ai**: bấm "Đăng nhập claude.ai", mở link, đăng nhập tài khoản đã Connect Google Drive/Gmail… trên claude.ai, dán code — xong là agent dùng được connector, không cần admin vào máy chạy lệnh. Khối hiện tài khoản đang đăng nhập, nút đăng xuất và công tắc "Tự dùng connector cho mọi agent" (`connectors.auto`, bật cần xác nhận 2 bước).
+
+#### Lưu ý khi cập nhật
+- Đăng nhập chạy `claude auth login` dưới user OS của hub. Hub chạy nền (LaunchDaemon, user không đăng nhập màn hình) có thể không lưu được phiên vào Keychain — web sẽ báo "chưa thấy phiên claude.ai" thay vì báo thành công; khi đó đăng nhập bằng terminal của user hub (`sudo -u <user> -H claude` → `/login`).
+
+---
+
+## v0.2.24 — 2026-11-20
+
+### Lịch — gửi kết quả tới nhiều chat riêng cùng lúc (#165)
+- Một lịch gửi được kết quả tới tối đa 4 chat riêng (Telegram chat riêng, Slack DM) ngoài nơi nhận chính — vd báo cáo sáng về cả Telegram
+  lẫn Slack: `cfharness schedule edit <id> --also telegram:<chat_id> --also slack:D…` (`--no-also` để bỏ; `schedule add` cũng nhận `--also`).
+- Chỉ người đặt được (điều phối viên không thể tự thêm chat nhận); chat không còn trong allowlist của bot thì không nhận. Trang lịch trên web
+  hiện các kênh gửi thêm (chỉ xem).
+
+### Daemon — không còn lặp "thoát 1" sau `cfharness update` trên macOS (#166)
+- Đã cài tự khởi động (LaunchAgent) thì `cfharness update` và lệnh tự khởi động daemon nhờ launchd chạy daemon (`launchctl kickstart`, giữ
+  đúng `--home`) thay vì bật một bản ngoài launchd. Trước đây bản ngoài launchd giữ `daemon.lock`, job launchd thua khoá, thoát 1 và bị
+  launchd chạy lại vô hạn (hàng nghìn lần/ngày). Job launchd lỡ thua khoá giờ chờ khoá (thử lại mỗi 30 giây) và tiếp quản ngay khi bản kia dừng.
+- Phát hiện và sửa bởi team agent giám sát của hub.
+
+#### Lưu ý khi cập nhật
+- Hub đang chạy daemon NGOÀI launchd (kiểm: `launchctl print gui/$(id -u)/com.cfharness.daemon.<…>` thấy `state = spawn scheduled`, `runs`
+  rất lớn): lần cập nhật này vẫn đi qua đường cũ. Sau khi cập nhật xong, đưa daemon về launchd một lần:
+  `cfharness daemon stop && launchctl kickstart -k gui/$(id -u)/com.cfharness.daemon.<…>` (khi không có run đang chạy).
+
+---
+
+## v0.2.23 — 2026-11-20
+
+### Agent tự dùng connector đã Connect trên tài khoản Claude (#164)
+- `cfharness config set connectors.auto true`: mọi agent chưa đặt connector riêng tự dùng MỌI connector (Google Drive, Gmail, Docs…) mà tài khoản claude.ai đăng nhập `claude /login` của hub đã Connect — không phải khai từng agent. Chỉ bật khi hub có phiên `/login` (token setup-token không nạp connector). Không áp cho điều phối viên và run kỹ thuật (review/eval/curator). Guard vẫn áp: đọc cho qua, ghi được ghi nhật ký, xoá phải duyệt; MCP lạ của `~/.claude` vẫn bị chặn.
+- `--connectors all` cho một agent (hoặc điều phối viên: `manager capabilities set --connectors all`) = mọi connector đã Connect.
+- `scripts/setup-hub-user.sh`: `CONNECTORS=auto` (đăng nhập `/login` + bật `connectors.auto`); `CONNECTOR_AGENTS=all` bật connector cho mọi agent; connector được GỘP với connector agent đang có thay vì ghi đè. (#163)
+
+#### Lưu ý khi cập nhật
+- `connectors.auto` tắt mặc định — không đổi gì cho đến khi người bật. Khi bật, agent ghi bằng tài khoản thật (Gmail, Slack…) không hỏi duyệt trừ thao tác xoá: chỉ Connect trên claude.ai những connector muốn agent dùng.
+
+---
+
+## v0.2.22 — 2026-11-20
+
+### Connector claude.ai trên hub dùng token chung (#162)
+- Agent/điều phối viên bật connector claude.ai (`--connectors "Google Drive"`…) giờ dùng được connector trên hub đăng nhập bằng token `claude setup-token`: token này không nạp connector nào, nên run có connector tự chạy bằng phiên `claude /login` của user OS khi có (`runtime.claude.connectors_auth`: `auto` mặc định, `login`, `token`). Chưa đăng nhập `/login` → run vẫn chạy bằng token như cũ và có event `connector.auth_fallback`; connector chưa nối trên claude.ai (vd Google Drive `needs-auth`) → event `connector.unavailable` thay vì im lặng. `cfharness hub doctor --probe` có thêm mục "connector claude.ai". Hướng dẫn: `docs/dev-notes/manager-connectors.md`.
+- `scripts/setup-hub-user.sh` thêm bước nối connector: `CONNECTORS="Google Drive" CONNECTOR_AGENTS="<agent…>"`; hub đã có thì `sudo ONLY_CONNECTORS=1 CONNECTORS="Google Drive" CONNECTOR_AGENTS="<agent>" bash scripts/setup-hub-user.sh <user>` chỉ nâng cfharness, đăng nhập `claude auth login` cho user hub và bật connector (không đụng token, tunnel, TOTP).
+
+#### Lưu ý khi cập nhật (connector)
+- Hub đã bật connector và user OS của hub CÓ phiên `claude /login`: run có connector giờ chạy bằng tài khoản của phiên đó (hạn mức/chi phí tính vào tài khoản đó, không theo `cfharness account use`). Muốn giữ token chung như cũ: `cfharness config set runtime.claude.connectors_auth token`.
+
+### Web — bật connector claude.ai cho từng agent (#161)
 - Form sửa/tạo agent có phần **Connector claude.ai**: tick connector (gợi ý từ danh sách của điều phối viên, connector đang bật và connector
   mà `allowed_tools` cần) hoặc gõ tên khác. Đổi connector phải xác nhận (agent ghi bằng tài khoản thật). Trước đây chỉ đặt được bằng
   `cfharness agent edit <id> --connectors`.
 - Trang agent và form báo đỏ khi `allowed_tools` cho gọi `mcp__claude_ai_X__*` mà connector X chưa bật. Đây là nguyên nhân jira-ops và
   jira-analyst không thấy Atlassian MCP (run khởi động với `--setting-sources ""` + `--strict-mcp-config` nên không nạp connector).
 
-### Log hệ thống (nền tảng — L1 của `docs/dev-notes/plan-logging.md`) (#150)
+### Log hệ thống và nhật ký kiểm toán — `docs/dev-notes/plan-logging.md` (#150, #153, #155, #156, #157, #158, #159, #160)
 - Web và `cfharness mcp serve` giờ ghi log JSON có che secret như daemon (`logs/web.jsonl`, `logs/mcp.jsonl`); mỗi dòng log có thêm tiến trình, pid và vị trí mã. Log của thư viện (asyncio, mcp, uvicorn…) vào cùng file thay vì chỉ ra stderr; cảnh báo không còn bị ghi hai lần (`hub.log` + `daemon.out`).
 - `cfharness logs level` xem level log đang áp dụng; `cfharness logs level cfharness.guard debug --for 30m` bật DEBUG tạm cho một phần hub, tự về mức cũ khi hết giờ — không cần khởi động lại daemon. Đổi lâu dài: `cfharness config set logs.level …` (có hiệu lực ngay).
 - Lỗi trước đây chết im lặng giờ được ghi lại: tác vụ nền lỗi, lỗi trong thread, lỗi không ai bắt, listener event lỗi (không còn làm hỏng việc phát event). Daemon treo: `cfharness daemon dump-stacks` ghi stack mọi thread vào `logs/faults.log`.

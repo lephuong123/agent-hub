@@ -564,6 +564,10 @@ DEFAULTS: dict[str, Any] = {
             "max_candidates": 80,
         },
     },
+    # Connector claude.ai tự động (docs/dev-notes/manager-connectors.md): run làm việc của agent CHƯA đặt connector riêng tự nạp
+    # MỌI connector tài khoản `claude /login` của user OS đã Connect (Google Drive, Gmail…) — agent ghi bằng tài khoản thật. BẬT mặc
+    # định từ v0.2.26 (chủ repo chốt 2026-11-20); chỉ có tác dụng khi user OS có phiên /login. Tắt: `config set connectors.auto false`
+    "connectors": {"auto": True},
     # M5-B — FR-OB-07: OpenTelemetry (opt-in, tắt mặc định). Chỉ metadata; không input/output tool MCP, không secret.
     "telemetry": {
         "otel": {
@@ -857,6 +861,9 @@ DEFAULTS: dict[str, Any] = {
             "default_permission_mode": None,
             # cache `claude --version` (giây)
             "version_cache_s": 600,
+            # Run có connector claude.ai: token `setup-token` (secret CLAUDE_CODE_OAUTH_TOKEN) KHÔNG nạp connector → auto = dùng
+            # phiên `claude /login` của user OS khi có (không thì token + event connector.auth_fallback), login = luôn, token = không
+            "connectors_auth": "auto",
             # prompt hệ thống dài hơn ngưỡng (ký tự) → `--append-system-prompt-file <runtime/run/system_prompt.md>` thay vì argv.
             # Windows giới hạn dòng lệnh 32767 ký tự: prompt điều phối viên ~37k đưa thẳng vào argv → WinError 206 (kiểm CLI 2.1.325).
             "system_prompt_file_min_chars": 8000,
@@ -1125,6 +1132,12 @@ def validate_setting(key: str, value: Any) -> None:
     elif key == "runtime.claude.default_permission_mode":
         if value is not None and value not in VALID_PERMISSION_MODES:
             raise ValueError(f"permission mode không hợp lệ; chọn một trong {VALID_PERMISSION_MODES}")
+    elif key == "connectors.auto":
+        if not isinstance(value, bool):
+            raise ValueError("connectors.auto phải là true/false")
+    elif key == "runtime.claude.connectors_auth":
+        if value not in ("auto", "login", "token"):
+            raise ValueError("runtime.claude.connectors_auth phải là auto|login|token")
 
 
 def _pdf_limits() -> dict[str, tuple[int, int]]:

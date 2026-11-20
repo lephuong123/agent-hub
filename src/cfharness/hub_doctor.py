@@ -165,6 +165,58 @@ def _claude(ck: _Checks, cfg: dict[str, Any], secrets: set[str], c: sqlite3.Conn
     else:
         ck.add("claude_login", "đăng nhập claude", False, "chưa xác nhận (không có token trong secret store)", "warning",
                fix="claude auth login (hoặc cfharness hub doctor --probe để kiểm `claude auth status`)")
+    _connectors(ck, cfg, c, probe=probe, path=path, tok=bool(tok or accts))
+
+
+def _connector_users(cfg: dict[str, Any], c: sqlite3.Connection | None) -> list[str]:
+    """Agent (và điều phối viên) có connector claude.ai người cho phép."""
+    out: list[str] = []
+    if (((cfg.get("manager") or {}).get("capabilities") or {}).get("connectors")):
+        out.append("(điều phối viên)")
+    if c is not None and "agents" in _tables(c):
+        for r in c.execute("SELECT id, tool_policy FROM agents WHERE deleted_at IS NULL"):
+            try:
+                tp = json.loads(r["tool_policy"] or "{}")
+            except ValueError:
+                continue
+            if isinstance(tp, dict) and tp.get("connectors"):
+                out.append(str(r["id"]))
+    return out
+
+
+def _connectors(ck: _Checks, cfg: dict[str, Any], c: sqlite3.Connection | None, *, probe: bool, path: str | None, tok: bool) -> None:
+    """Token `setup-token` không nạp connector claude.ai → run có connector cần phiên `claude /login` của user OS
+    (docs/dev-notes/manager-connectors.md, `runtime.claude.connectors_auth`)."""
+    users = _connector_users(cfg, c)
+    if not users:
+        return
+    who = ", ".join(users[:5]) + ("…" if len(users) > 5 else "")
+    mode = str(((cfg.get("runtime") or {}).get("claude") or {}).get("connectors_auth") or "auto")
+    fix = "đăng nhập `claude` (lệnh /login, tài khoản claude.ai) dưới user OS của hub, rồi kết nối connector trên claude.ai → Settings → Connectors"
+    if mode == "token":
+        ck.add("claude_connectors", "connector claude.ai", False, f"{who}: runtime.claude.connectors_auth=token — token setup-token không nạp connector",
+               "warning", fix="cfharness config set runtime.claude.connectors_auth auto")
+        return
+    if not (probe and path):
+        if tok:
+            ck.add("claude_connectors", "connector claude.ai", True, f"{who}: cần phiên claude.ai (/login) — chạy --probe để kiểm", "warning")
+        return
+    try:
+        from .oscompat import exec_argv, no_window_kwargs
+        from .runtime.claude_cli import OAUTH_TOKEN_SECRET, child_env
+
+        env = child_env((cfg.get("runtime") or {}).get("claude") or {})
+        env.pop(OAUTH_TOKEN_SECRET, None)
+        r = subprocess.run(exec_argv([path, "auth", "status"]), capture_output=True, encoding="utf-8", errors="replace", timeout=30,
+                           env=env, **no_window_kwargs())
+        info = json.loads(r.stdout)
+        ok = bool(info.get("loggedIn")) and info.get("authMethod") == "claude.ai"
+    except (OSError, subprocess.TimeoutExpired, ValueError, AttributeError) as e:
+        ck.add("claude_connectors", "connector claude.ai", False, f"không kiểm được: {type(e).__name__}", "warning", fix=fix)
+        return
+    ck.add("claude_connectors", "connector claude.ai", ok,
+           f"{who}: " + ("có phiên claude.ai (/login) — run connector dùng phiên này" if ok else "CHƯA có phiên claude.ai — connector sẽ không nạp"),
+           "warning", fix=None if ok else fix)
 
 
 def _secret_refs(ck: _Checks, paths: "HubPaths", c: sqlite3.Connection | None, secrets: set[str]) -> None:

@@ -197,6 +197,20 @@ async def test_reply_sanitized_hub_lines_no_action_untrusted(make, tg):
     assert "Đã xong việc." in t and "[cfharness" not in t and "NO_ACTION" not in t
 
 
+async def test_schedule_also_copy_goes_to_private_chat_only_if_allowlisted(make, tg):
+    """`deliver_to.also` của lịch: `manager.reply{kind:notify}` KHÔNG hội thoại, kênh `telegram:<chat>` → tin mới ở chat đó; chat ngoài
+    allowlist của bot lúc gửi → bỏ (`ManagerChat._deliver` kiểm `notify_chats`)."""
+    d = await mk(make)
+    for chat, txt in ((BOSS, "Báo cáo 07:00 — bản gửi thêm"), (STRANGER, "lọt ra ngoài")):
+        d.hub.publish(make_event("manager.reply", "boss", {"conversation_id": None, "run_id": "r_sched01", "text": txt, "channel": f"telegram:{chat}",
+                                                           "kind": "notify", "notify_kind": "schedule", "ok": True, "schedule_id": "sc_x",
+                                                           "also": True}, run_id="r_sched01"))
+    msgs = await wait_mgr(tg, BOSS)
+    assert "Báo cáo 07:00 — bản gửi thêm" in msgs[-1]["text"] and not msgs[-1].get("reply_to_message_id")
+    await asyncio.sleep(0.4)
+    assert not texts(tg, STRANGER)
+
+
 async def test_notify_owner_goes_out_in_agent_frame(make, tg):
     d = await mk(make)
     d.hub.publish(make_event("manager.reply", "boss", {"text": "Task t_1 bị chặn 3 lần — cần anh quyết định.", "channel": f"telegram:{BOSS}",

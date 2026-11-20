@@ -128,7 +128,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         # Tài khoản Claude (accounts/): token = quyền dùng tài khoản Claude của người; đổi tài khoản CHỈ do người (không tự đổi, không
         # MANAGER_ALLOWED) — agent không được tự thêm/đổi/xoá/kiểm tài khoản hay mở phiên `claude setup-token`
         "account.login_start", "account.login_finish", "account.login_cancel", "account.add_token", "account.use", "account.rename",
-        "account.rm", "account.check",
+        "account.rm", "account.check", "account.claudeai_status", "account.claudeai_login_start", "account.claudeai_login_finish",
+        "account.claudeai_logout",
         # Tổng quan máy (admin_overview.py): CHỈ ĐỌC nhưng lộ hoạt động của user OS khác trên máy (chi phí, số run) — chỉ người
         "admin.overview",
         # Vào/ra web + thiết bị tin cậy (web_events.py): ghi audit + phát event → Telegram — agent không được giả "đăng nhập"/"thu hồi"
