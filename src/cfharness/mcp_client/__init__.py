@@ -7,6 +7,7 @@ Hàm hợp đồng cho luồng B (docs/plan/M1.md):
 - `tool_annotations(server, tool) -> dict | None`: annotations đã probe (`readOnlyHint`, `destructiveHint`,
   `title`, `description`, `suspicious`) + `trust` của server, `require_approval`, `selected`.
   `None` = server lạ hoặc tool chưa thấy khi probe (tool mới → coi như cần duyệt, FR-MC-03).
+- `agent_claude_mcp_servers(agent) -> list[str]`: server nguồn `claude` gán cho agent (không vào mcp.json; plan-mcp-claude-native PR2).
 - `agent_mcp_tool_rules(agent) -> {"allowed": [...], "disallowed": [...], "warnings": [...]}`: chuyển
   include/exclude/trust/readOnlyHint thành tên `mcp__<server>__<tool>` cho `--allowedTools/--disallowedTools`
   (FR-MC-02/03). Tool `destructiveHint`/`require_approval` KHÔNG nằm trong allowed (để guard quyết).
@@ -111,6 +112,14 @@ def build_agent_mcp_servers(agent: Any, *, home: str | Path | None = None) -> di
     return registry_for(h).build_for_agent_servers(servers)
 
 
+def agent_claude_mcp_servers(agent: Any, *, home: str | Path | None = None) -> list[str]:
+    """Server nguồn `claude` gán cho agent (KHÔNG có trong `build_agent_mcp_servers` — claude tự nạp từ cấu hình tài khoản)."""
+    servers, h = _agent_info(agent, home)
+    if not servers:
+        return []
+    return registry_for(h).claude_source_servers(servers)
+
+
 def tool_annotations(server: str, tool: str, *, home: str | Path | None = None) -> dict[str, Any] | None:
     return registry_for(home).tool_annotations(server, tool)
 
@@ -122,4 +131,4 @@ def agent_mcp_tool_rules(agent: Any, *, home: str | Path | None = None) -> dict[
     return registry_for(h).tool_rules_for_servers(servers)
 
 
-__all__ = ["build_agent_mcp_servers", "tool_annotations", "agent_mcp_tool_rules", "registry_for", "register_registry"]
+__all__ = ["agent_claude_mcp_servers", "build_agent_mcp_servers", "tool_annotations", "agent_mcp_tool_rules", "registry_for", "register_registry"]

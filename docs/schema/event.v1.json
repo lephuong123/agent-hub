@@ -256,6 +256,7 @@
     "manager.reply": "summary",
     "manager.tick": "summary",
     "mcp.changed": "summary",
+    "mcp.unavailable": "summary",
     "message.complete": "summary",
     "message.delta": "detail",
     "notify.failed": "summary",

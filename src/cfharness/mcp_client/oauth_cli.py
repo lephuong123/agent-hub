@@ -86,8 +86,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def _deprecated() -> None:
+    from .migrate import DEPRECATION_NOTE
+
+    print(f"lưu ý: {DEPRECATION_NOTE}", file=sys.stderr)
+
+
 def cmd_login(ctx: Any) -> int:
     a = ctx.args
+    _deprecated()
     s = ctx.call("mcp.show", {"name": a.name})
     if s.get("oauth_status") is None:
         print(f"lỗi: MCP server '{a.name}' chưa bật OAuth — `cfharness mcp edit {a.name} --oauth`", file=sys.stderr)
@@ -129,6 +136,7 @@ def cmd_login(ctx: Any) -> int:
 
 
 def cmd_logout(ctx: Any) -> int:
+    _deprecated()
     res = ctx.call("mcp.oauth_disconnect", {"name": ctx.args.name})
     ctx.out(res, f"đã ngắt kết nối OAuth {res['name']}" + (" (đã thu hồi token ở nhà cung cấp)" if res.get("revoked") else "")
             + ("" if res.get("disconnected") else " — vốn chưa kết nối"))

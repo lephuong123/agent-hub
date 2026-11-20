@@ -24,7 +24,7 @@ from ..errors import Conflict, HubError, NotFound
 from ..events import make_event
 from ..paths import HubPaths
 from ..secrets import SecretStore, is_ref, normalize_name
-from .config import McpServerConfig, annotation_override, match_any, normalize_trust, tool_selected
+from .config import SOURCE_CLAUDE, McpServerConfig, annotation_override, match_any, normalize_trust, tool_selected
 from .importer import _Extractor, convert_entry, read_claude_servers
 
 log = logging.getLogger("cfharness.mcp_client")
@@ -212,6 +212,8 @@ class McpRegistry:
         if "name" in patch and patch["name"] != name:
             raise HubError("không đổi được tên server (xoá rồi thêm lại)")
         cur = dict(row["config"])
+        if "source" in patch and (str(patch["source"] or "") == SOURCE_CLAUDE) != (cur.get("source") == SOURCE_CLAUDE):
+            raise HubError("không đổi được nguồn server hub ↔ claude (xoá rồi thêm lại)")
         new_t = patch.get("transport")
         if new_t and new_t != cur.get("transport", "stdio"):
             # Đổi loại transport: bỏ trường riêng của loại cũ (patch là phép gộp — không bỏ thì stdio→http vướng 'command' cũ).
@@ -258,6 +260,35 @@ class McpRegistry:
         out = self.show(name)
         out["warnings"] = warnings
         out["secrets_moved"] = moved
+        return out
+
+    def convert_to_claude(self, name: str, info: dict[str, Any]) -> dict[str, Any]:
+        """Đổi một dòng nguồn hub sang nguồn claude TẠI CHỖ (`mcp.migrate_to_claude`, plan-mcp-claude-native PR4): giữ tên (nên mọi
+        agent đã gán giữ nguyên), trust, `tools` (include/exclude/require_approval/annotations ghi đè của người), mô tả, timeout và
+        `annotations_cache` (cột riêng); bỏ cách kết nối + `auth` (claude giữ). `info` = mục `claude_source.read_servers`."""
+        self._check_writable()
+        row = self.require(name)
+        cur = dict(row["config"])
+        if cur.get("source") == SOURCE_CLAUDE:
+            raise Conflict(f"MCP '{name}' đã là nguồn claude")
+        keep = {k: cur[k] for k in ("tools", "trust", "description", "timeout_s") if k in cur}
+        data: dict[str, Any] = {"name": name, **keep, "source": SOURCE_CLAUDE, "transport": info["transport"]}
+        if info.get("host"):
+            data["url"] = f"https://{info['host']}"
+            raw = str(cur.get("url") or "")
+            if "${" not in raw and raw.lower().startswith(("http://", "https://")):
+                data["url"] = raw  # validator rút về scheme://host[:port] (giữ http loopback / cổng)
+        cfg, warnings = self._validate(data)
+        with _tx(self.conn):
+            self.conn.execute(
+                "UPDATE mcp_servers SET transport=?, config=?, trust=?, tools_include=?, tools_exclude=?, source=?, updated_at=? WHERE name=?",
+                (cfg.transport, json.dumps(cfg.stored(), ensure_ascii=False), cfg.trust, json.dumps(cfg.tools.include),
+                 json.dumps(cfg.tools.exclude), cfg.source, _now(), name),
+            )
+        self._write_mirror()
+        self._emit("migrated", name, {"source": SOURCE_CLAUDE})
+        out = self.show(name)
+        out["warnings"] = warnings
         return out
 
     def remove(self, name: str, *, force: bool = False) -> dict[str, Any]:
@@ -310,6 +341,10 @@ class McpRegistry:
 
         row = self.require(name)
         cfg = self.config_of(row)
+        if cfg.managed_by_claude:  # token do claude giữ → hub không kết nối được; gắn nhãn tay: `cfharness mcp annotate`
+            return {"ok": False, "tools": {}, "elapsed_ms": 0, "name": name, "trust": cfg.trust, "warnings": [],
+                    "error": "server nguồn claude: hub không probe (cấu hình + token do claude giữ)",
+                    "hint": f"gắn nhãn tool bằng `cfharness mcp annotate {name} <tool> --read-only|--destructive`"}
         if cfg.auth is not None and self.oauth is not None:
             await self.oauth.ensure_fresh_for([name])  # token sắp hết hạn → làm mới trước khi probe
         try:
@@ -411,13 +446,20 @@ class McpRegistry:
             return None
         cache = row.get("annotations_cache") or {}
         rec = cache.get(tool)
-        if rec is None:
-            return None
         cfg = row["config"]
+        claude_src = cfg.get("source") == SOURCE_CLAUDE
+        if rec is None and not claude_src:
+            return None
         tools = cfg.get("tools") or {}
         ov = annotation_override(tool, tools)
+        extra: dict[str, Any] = {}
+        if claude_src:
+            # nguồn claude: hub không probe được → không có annotations của server; guard dùng ghi đè của người, nếu không thì
+            # suy theo TÊN tool (guard/classifier.classify_mcp — `mcp_claude_*`). `probed` = có bản ghi annotations thật
+            extra = {"source": SOURCE_CLAUDE, "probed": rec is not None}
         return {
-            **rec,
+            **(rec or {}),
+            **extra,
             **ov,  # ghi đè của NGƯỜI (tools.annotations) thắng annotations server tự khai
             "human_override": ov or None,
             "server": server,
@@ -435,7 +477,18 @@ class McpRegistry:
                 raise HubError(f"MCP server '{name}' của agent không có trong registry", data={"server": name})
             if row.get("deleted_at"):
                 raise HubError(f"MCP server '{name}' của agent đã bị xoá mềm — `cfharness mcp restore {name}` hoặc gỡ khỏi agent", data={"server": name})
+            if (row.get("config") or {}).get("source") == SOURCE_CLAUDE:
+                continue  # claude tự nạp từ cấu hình của tài khoản (runs.py: đường connector + kiểm tồn tại)
             out[name] = self.runtime_entry(self.config_of(row))
+        return out
+
+    def claude_source_servers(self, server_names: list[str]) -> list[str]:
+        """Server nguồn claude (chưa xoá mềm) trong `server_names`, giữ thứ tự."""
+        out: list[str] = []
+        for name in server_names:
+            row = self.get_row(name)
+            if row is not None and (row.get("config") or {}).get("source") == SOURCE_CLAUDE:
+                out.append(name)
         return out
 
     def tool_rules_for_servers(self, server_names: list[str]) -> dict[str, list[str]]:
@@ -466,7 +519,8 @@ class McpRegistry:
                         globbed = True
                     elif cfg.trust == "trusted" and pat not in cfg.tools.exclude and not match_any(pat, cfg.tools.require_approval):
                         allowed.append(f"mcp__{name}__{pat}")
-                if globbed or not (cfg.tools.include or cfg.tools.exclude):
+                if (globbed or not (cfg.tools.include or cfg.tools.exclude)) and not cfg.managed_by_claude:
+                    # (nguồn claude: không probe được; mẫu glob include/exclude do hook guard áp theo `selected`)
                     warnings.append(f"server '{name}' chưa probe — mẫu glob/không có include không suy được allow/deny theo tool (`cfharness mcp probe {name}`)")
                 continue
             for tool, rec in sorted(cache.items()):

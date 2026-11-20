@@ -314,13 +314,17 @@ class GuardService:
             ar = getattr(getattr(self.hub, "runs", None), "active", {}).get(run.get("id"))
             if ar is not None and getattr(ar, "connectors", None) is not None:
                 conns = ar.connectors  # đúng connector spec của run đã bật (gồm connectors.auto)
+                claude_mcp: Any = getattr(ar, "claude_mcp", ())
             else:
                 conns = run_connectors(self.hub, agent, is_mgr)
+                claude_mcp = self.hub.runs._agent_claude_mcp(run, agent) if agent else ()  # type: ignore[attr-defined]
         except Exception:  # fail-closed: lỗi đọc cấu hình = run connector không cho connector nào
             log.debug("guard: không đọc được connector của run", exc_info=True)
             return {"connectors": (), "run_mcp_servers": frozenset()}
-        if not conns:
+        if not conns and not claude_mcp:
             return {}
+        # MCP nguồn claude (plan-mcp-claude-native PR2): run bỏ --strict-mcp-config như run connector → mọi MCP ngoài server của agent
+        # (và ngoài connector người cho phép) = `mcp_not_in_run` (forbidden); server claude đã gán nằm trong `mcp_servers` của agent
         return {"connectors": conns, "run_mcp_servers": frozenset(str(x) for x in agent.get("mcp_servers") or [])}
 
     # ------------------------------------------------------------------ luật "luôn cho phép" (người tạo khi duyệt `--always`)

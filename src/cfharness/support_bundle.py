@@ -74,7 +74,8 @@ RUN_COLUMNS = ("id", "task_id", "team_id", "agent_id", "agent_config_revision", 
                "model", "parent_run_id", "resume_reason", "continued_in_run_id", "steer_count", "human_wait_s", "req_id", "account_id")
 # để manifest nói rõ cái KHÔNG có (theo cấu tạo, không phải bộ lọc)
 NEVER_INCLUDED = ("hub.db", "secrets/", "auth/", "mcp_server/tokens.json", "<socket>.auth (token người/web/mcp)", "session Claude",
-                  "checkpoints/", "backups/", "exports/", "imports/", "audit-archive/", "tri thức agent (memory/skill)")
+                  "checkpoints/", "backups/", "exports/", "imports/", "audit-archive/", "claude-config/",
+                  "tri thức agent (memory/skill)")
 # config: khoá có giá trị nhạy cảm (ngoài mẫu chung của redact: secret/token/password/api_key/authorization/cookie/credential)
 _CFG_SENSITIVE = re.compile(r"(secret|token|passw|api[_-]?key|authorization|cookie|credential|private|webhook|chat_ids?$|user_ids?$|"
                             r"security_chats|email|phone|origin|url$|urls$|host$|headers|env$|passphrase|salt|signing|nonce)", re.I)

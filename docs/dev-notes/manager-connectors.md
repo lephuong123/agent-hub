@@ -79,8 +79,8 @@ Cách hub xử lý (`RunSpec.auth_mode`, `RunManager._connector_auth_mode`, `Cla
 - `runtime.claude.connectors_auth` = `auto` (mặc định): run có connector kiểm `claude auth status` **không kèm token** (cache 10 phút).
   Có phiên claude.ai → run chạy bằng phiên đó (gỡ `CLAUDE_CODE_OAUTH_TOKEN` khỏi env của run, cả từ env daemon lẫn `env_extra`).
   Không có → giữ token như cũ + event `connector.auth_fallback{reason}`. `login` = luôn dùng phiên; `token` = không bao giờ.
-- Run có connector dùng tài khoản của phiên `/login`, KHÔNG theo `cfharness account use` (đổi tài khoản chỉ chép token).
-  Hạn mức/chi phí tính vào tài khoản đó.
+- ~~Run có connector dùng tài khoản của phiên `/login`, KHÔNG theo `cfharness account use`.~~ Đã đổi: phiên claude.ai theo TÀI
+  KHOẢN ĐANG DÙNG — xem "Mỗi tài khoản một connector riêng (2026-11-20)" bên dưới.
 - Adapter phát `connector.unavailable{connector, status, api_key_source}` cho mỗi connector người cho phép mà system/init không
   có (`missing`) hoặc chưa `connected` (vd `needs-auth` = chưa nối connector trên claude.ai). Chỉ ở init đầu.
 - `cfharness hub doctor --probe` có mục "connector claude.ai" khi có agent/điều phối viên bật connector.
@@ -110,6 +110,79 @@ Các bước bật Google Drive cho hub dùng token chung (vd `cchcadmin`, admin
 - Guard: `"*"` cho qua mọi `mcp__claude_ai_<x>__<tool>` theo luật connector (đọc safe / ghi write / xoá destructive); MCP khác của
   `~/.claude` vẫn `mcp_not_in_run` (forbidden). Guard đọc connector từ `ActiveRun.connectors` (đúng cái spec đã bật), không tự tính lại.
 - Adapter: `"*"` mà không có connector nào `connected` → `connector.unavailable{connector:"*", status:"none_connected"}`.
+
+## Mỗi tài khoản một connector riêng (2026-11-20)
+
+Chủ repo chốt: phiên claude.ai (connector) đi theo TÀI KHOẢN Claude của hub, không còn một phiên chung cho cả user OS. Trước đó
+run có connector luôn chạy bằng phiên `/login` mặc định, bất kể `cfharness account use` — hạn mức/chi phí tính vào tài khoản khác.
+
+Sự thật đã kiểm (claude 2.1.325, macOS, spike của chủ repo):
+- `CLAUDE_CONFIG_DIR=<dir> claude auth login --claudeai` (qua PTY của `accounts/login.py`) đăng nhập thành công; `auth status --json`
+  trong `<dir>` → claude.ai, org KHÁC với thư mục mặc định, thư mục mặc định vẫn đăng nhập nguyên. Keychain có hai mục
+  `Claude Code-credentials` (mặc định) và `Claude Code-credentials-<8 hex>` (theo thư mục). Thư mục chỉ có `.claude.json` (0600) +
+  `backups/` (không `.credentials.json` với user có GUI; user LaunchDaemon không GUI có thể rơi về file — vẫn bảo vệ cả thư mục).
+- Run `CLAUDE_CONFIG_DIR=<dir> --setting-sources user` (không `--strict-mcp-config`) → system/init có connector của CHÍNH tài khoản đó.
+- `<dir>/projects` symlink sang `~/.claude/projects`: session tạo dưới `<dir>` nằm trong cây dùng chung; `claude --resume <sid>` dưới
+  cấu hình mặc định (tài khoản khác) chạy được. → resume/continue/takeover chéo tài khoản không đổi gì.
+- Hết hạn mức của một tài khoản → kết quả "You've hit your 5-hour limit · resets …" — luồng rate limit sẵn có (theo tài khoản) xử lý.
+
+Cách làm (`accounts/claude_config.py`):
+- Tài khoản token `a_xxxxxxxx` → `HUB_HOME/claude-config/<id>/` (0700, thư mục cha 0700). `machine` = cấu hình mặc định (không đặt
+  `CLAUDE_CONFIG_DIR`). `custom` (token tự đặt ngoài danh sách) không có phiên riêng.
+- Trong thư mục: symlink `projects` → `<claude home mặc định>/projects` (tạo đích nếu thiếu), `settings.json`/`CLAUDE.md` → bản mặc
+  định nếu có. KHÔNG BAO GIỜ symlink `.claude.json` hay credentials. Dựng lại idempotent trước mỗi lần dùng (symlink sai đích → thay;
+  file/thư mục thật ở đó → để nguyên). Claude home mặc định = `transfer_sessions.claude_home()` (`CLAUDE_CONFIG_DIR` của env daemon
+  hoặc `~/.claude`). Windows không tạo được symlink → log cảnh báo, session không dùng chung (resume chéo tài khoản hỏng).
+- `.claude.json` của thư mục tài khoản không có `mcpServers` của `~/.claude.json` và không có plugin (thư mục `plugins/` không symlink)
+  → run connector bằng tài khoản token nạp ÍT cấu hình user hơn run bằng `machine`.
+
+RPC (`account.claudeai_*`, HUMAN_ONLY, tự audit): `status {id?}` (không id = `machine` + `accounts: {<id>: {logged_in, email}}` từ
+cache), `login_start {id?}` (id mặc định `machine` — tương thích bản cũ; trả thêm `account_id`, `account_label`), `login_finish
+{login_id, code}` (kiểm `auth status --json` trong CÙNG thư mục), `logout {id?}`. Không bao giờ có `CLAUDE_CODE_OAUTH_TOKEN` trong env
+của các lệnh này. Lượt đăng nhập dùng chung một chỗ RAM `_logins` với lượt thêm tài khoản; `_Login.account_id` ghi tài khoản được gắn;
+`account.login_finish` (token) vẫn từ chối lượt claude.ai. Event `account.claudeai_login{id, logged_in}`.
+- Cache `hub_state["accounts.claudeai"] = {id: {logged_in, email, checked_at}}`, cập nhật khi login/logout/`account.check`/status;
+  `account.list` trả `claudeai: {logged_in, email}` mỗi tài khoản (null = chưa kiểm; custom = null) — KHÔNG chạy claude mỗi dòng.
+- `account.rm` tài khoản token: đóng lượt gắn connector đang mở → `claude auth logout` trong thư mục (best-effort, để Keychain không
+  sót mục) → xoá thư mục (chỉ thư mục đó; từ chối symlink/thoát khỏi `claude-config/`; symlink bên trong bị gỡ, không đi theo).
+- CLI: `cfharness account connector <id> [login|logout|status]` (login trong terminal như `account login`); `account list` hiện
+  "connector <email>"/"connector chưa gắn". Lệnh ∈ `HUB_HUMAN_ONLY_CLI` (classifier).
+
+Run (`RunManager._connector_account`, `_account_login`, `_auto_connectors`, `_connector_auth`):
+- Theo TÀI KHOẢN ĐANG DÙNG (`hub.accounts.active_id()`): tài khoản token có phiên trong thư mục riêng → `auth_mode="login"` +
+  `RunSpec.claude_config_dir` → `_run_env` đặt `CLAUDE_CONFIG_DIR`, gỡ mọi `CLAUDE_CODE_OAUTH_TOKEN`. `machine`/chưa cấu hình → phiên
+  `/login` mặc định như cũ. Còn lại → token + `connector.auth_fallback{reason: account_no_claudeai, account}` (tài khoản token/custom
+  chưa gắn) hoặc `no_claude_ai_login` (máy). KHÔNG BAO GIỜ mượn phiên của tài khoản khác (chi phí sẽ tính sang tài khoản đó).
+- `connectors.auto`: chỉ bật khi tài khoản đang dùng có phiên. `connectors_auth=login` (luôn): tài khoản token → thư mục của nó;
+  `custom` → token + `account_no_claudeai` (không mượn phiên máy, như auto); dựng thư mục lỗi → token + `config_dir_error`.
+- Tài khoản đang dùng + thư mục đọc MỘT lần mỗi lượt khởi động (`acct = _connector_account()` trong `_run`, truyền cho
+  `_auto_connectors`, `_prepare_spec(connector_dir=)`, `_connector_auth`) — `account.use` giữa chừng không làm các bước lệch nhau.
+- Sau khi dựng lại, `<dir>/projects` PHẢI là symlink sang claude home mặc định (`claude_config.shared`); không (vd Windows không tạo
+  được symlink) → token + `connector.auth_fallback{reason: config_dir_unshared}` (session sẽ tách đôi, resume chéo tài khoản hỏng);
+  doctor `--probe` báo.
+- Run chạy bằng phiên claude.ai ghi `ActiveRun.claude_session` (`machine` | id). `account.rm` / `account.claudeai_logout` của tài
+  khoản có run đang dùng phiên đó → `Conflict` ("… run đang chạy bằng connector của tài khoản này …", `data.runs`). Run đang xếp hàng
+  không chặn: chúng chọn phiên của tài khoản ĐANG DÙNG lúc khởi động, mà tài khoản đang dùng thì không xoá được.
+- Hạn mức/chi phí của run connector tính vào tài khoản claude.ai ĐÃ ĐĂNG NHẬP ở hàng đó (hub không đối chiếu được với tài khoản của
+  token setup-token — không đọc được email của token rẻ); web/CLI hiện rõ email + tổ chức claude.ai sau khi gắn.
+- `login_available(config_dir)` cache theo (binary, thư mục); thư mục chưa tồn tại → coi như chưa đăng nhập, không chạy claude, không tạo.
+- `run_setup(conns, config_dir=…)`: hook/MCP "đã biết" cho kiểm cô lập = hợp của cấu hình mặc định và thư mục tài khoản (run có thể
+  rơi về token = cấu hình mặc định).
+- Run KHÔNG có connector: không đổi (token của tài khoản đang dùng).
+
+Bảo vệ (thư mục giữ OAuth credentials): sandbox denyRead/denyWrite + `HUB_WRITE_DENY_NAMES`, `secret_read_deny_rules` (Read/Grep/
+Glob), classifier `sensitive_read` + `sensitive_regions` (Bash `cat/tar/rm` → forbidden; tool Write → `protected_path` như `secrets/`).
+`backup.EXCLUDED` (gắn với máy) → không vào bản sao lưu lẫn gói `.cfhx` (gói chỉ lấy `backup.included`), `pathmap.SCAN_SKIP_DIRS`
+(home migrate/nhập không đi vào symlink sang `~/.claude`), `support_bundle.NEVER_INCLUDED`. Log/event/audit chỉ có id tài khoản + email.
+
+Doctor: `connectors.auto` tính là "đang dùng connector" (trước đây bị bỏ qua — lỗi chủ repo báo); `--probe` kiểm phiên của tài khoản
+đang dùng theo con trỏ `claude_account_active` (doctor không đọc giá trị secret nên không so token).
+
+Lưu ý khi cập nhật: hub đã "Gắn connector" ở hàng "Đăng nhập của máy" (v0.2.25/26) mà đang dùng một tài khoản token (vd "Mặc định"
+tạo từ `CLAUDE_CODE_OAUTH_TOKEN`) → run thôi dùng connector (event `connector.auth_fallback{account_no_claudeai}`) cho tới khi gắn
+connector cho CHÍNH tài khoản đó (không chép được phiên: credentials ở Keychain theo thư mục).
+
+Test: `tests/test_account_connectors.py` (`tests/fake_claude_auth.py` đọc `CLAUDE_CONFIG_DIR`: `<dir>/.fake_login`), `tests/test_web_accounts.py`.
 
 ## Rủi ro chấp nhận
 

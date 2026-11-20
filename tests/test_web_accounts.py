@@ -48,6 +48,7 @@ class FakeAccounts:
             "machine": self._acct("machine", "Đăng nhập của máy", kind="machine", status="unknown"),
         }
         self.tokens: dict[str, str] = {}
+        self.cai: dict[str, dict] = {}  # phiên claude.ai (connector) theo tài khoản — `claudeai` của account.list
         self.logins: dict[str, str] = {}
         self.calls: list[tuple[str, dict]] = []
 
@@ -58,7 +59,9 @@ class FakeAccounts:
                 "last_error": last_error, "rate_limit": rate_limit, "cost_today_usd": cost}
 
     def view(self, id_: str) -> dict:
-        return {**self.rows[id_], "active": id_ == self.active}
+        c = self.cai.get(id_) or {}
+        cai = {"logged_in": c.get("logged_in", False), "email": c.get("email")} if self.rows[id_]["kind"] != "custom" else None
+        return {**self.rows[id_], "active": id_ == self.active, "claudeai": cai}
 
     def install(self, d) -> None:
         handlers = {"account.list": self.list, "account.login_start": self.login_start, "account.login_finish": self.login_finish,
@@ -391,6 +394,7 @@ CAI_URL = "https://claude.example/cai/oauth/authorize?code=true&state=S1"
 def _cai(env, *, logged_in=False):
     st = {"logged_in": logged_in, "email": "u@example.com" if logged_in else None, "org": None, "plan": None, "error": None,
           "connectors_auto": True, "connectors_auth": "auto", "login": None}
+    env.acc.cai["machine"] = st  # phiên của "Đăng nhập của máy"; tài khoản token: env.acc.cai[<id>]
     calls: list[tuple[str, dict]] = []
 
     def rec(name, fn):
@@ -401,14 +405,18 @@ def _cai(env, *, logged_in=False):
         env.d.methods[name] = w
 
     def start(p):
-        st["login"] = {"login_id": "LC", "url": CAI_URL, "expires_at": "2099-01-01T00:00:00Z"}
+        aid = p.get("id") or "machine"
+        label = env.acc.rows[aid]["label"] if aid in env.acc.rows else aid
+        st["login"] = {"login_id": "LC", "url": CAI_URL, "expires_at": "2099-01-01T00:00:00Z", "account_id": aid, "account_label": label}
         return st["login"]
 
     def finish(p):
         if p.get("code") != CODE:
             raise HubError("Claude không nhận code")
-        st.update(logged_in=True, email="u@example.com", login=None)
-        return dict(st)
+        aid = (st.get("login") or {}).get("account_id") or "machine"
+        env.acc.cai.setdefault(aid, {}).update(logged_in=True, email=f"{aid}@example.com" if aid != "machine" else "u@example.com")
+        st["login"] = None
+        return {**env.acc.cai[aid], "id": aid}
 
     def cancel(p):
         if p.get("login_id") == "LC":
@@ -417,8 +425,9 @@ def _cai(env, *, logged_in=False):
         return env.acc.login_cancel(p)
 
     def logout(p):
-        st.update(logged_in=False, email=None)
-        return dict(st)
+        aid = p.get("id") or "machine"
+        env.acc.cai.setdefault(aid, {}).update(logged_in=False, email=None)
+        return {**env.acc.cai[aid], "id": aid}
 
     rec("account.claudeai_status", lambda p: dict(st))
     rec("account.claudeai_login_start", start)
@@ -441,7 +450,7 @@ async def test_connector_on_machine_row_and_flow(env):
     assert "connector chưa gắn" in row and "/do/claudeai_login_start" in row and "Gắn connector" in row
     assert "connectors_auto_on" not in html and "connectors_auto_off" not in html  # mặc định bật, không có công tắc
     r = await post(env, "/do/claudeai_login_start", {"next": "/settings#accounts"})
-    assert r.status_code == 303 and calls[-1][1]["_audit"]["channel"] == "web"
+    assert r.status_code == 303 and calls[-1][1]["_audit"]["channel"] == "web" and calls[-1][1]["id"] == "machine"
     s = section((await get(env, "/settings")).text)
     link = re.search(r'<a class="btn primary" href="([^"]+)" target="_blank" rel="noopener noreferrer">', s)
     assert link and link.group(1).replace("&amp;", "&") == CAI_URL and 'name="login_id" value="LC"' in s
@@ -451,7 +460,7 @@ async def test_connector_on_machine_row_and_flow(env):
     assert not st["logged_in"]
     await post(env, "/do/claudeai_login_finish", {"login_id": "LC", "code": CODE, "next": "/settings#accounts"})
     page = (await get(env, "/settings")).text
-    assert "Đã gắn connector của u@example.com" in page
+    assert "Đã gắn connector: claude.ai u@example.com" in page and "hạn mức/chi phí" in page
     row = machine_row(page)
     assert "u@example.com" in row and "Đổi tài khoản connector" in row and "Gỡ connector" in row
     await post(env, "/do/claudeai_logout", {"next": "/settings#accounts"})
@@ -465,14 +474,52 @@ async def test_add_account_chains_connector_step(env):
     st, calls = _cai(env)
     await post(env, "/do/account_login_start", {"label": "Mới", "next": "/settings#accounts"})
     await post(env, "/do/account_login_finish", {"login_id": "L1", "code": CODE, "next": "/settings#accounts"})
-    assert [c[0] for c in calls].count("account.claudeai_login_start") == 1  # thêm xong → mở luôn bước gắn connector
+    starts = [c[1] for c in calls if c[0] == "account.claudeai_login_start"]
+    assert len(starts) == 1  # thêm xong → mở luôn bước gắn connector
+    new_id = next(i for i, a in env.acc.rows.items() if a["label"] == "Mới")
+    assert starts[0]["id"] == new_id  # gắn connector CHO TÀI KHOẢN VỪA THÊM (không phải đăng nhập của máy)
     page = (await get(env, "/settings")).text
     assert "Bước cuối: gắn connector" in page and 'action="/do/claudeai_login_finish"' in section(page)
+    assert "Gắn connector cho tài khoản «Mới»" in section(page)
     await post(env, "/do/claudeai_login_cancel", {"login_id": "LC", "next": "/settings#accounts"})  # Bỏ qua
     assert st["login"] is None and 'action="/do/claudeai_login_finish"' not in section((await get(env, "/settings")).text)
     # dán token cũng gắn luôn
     await post(env, "/do/account_add_token", {"label": "Token", "token": TOKEN, "next": "/settings#accounts"})
-    assert [c[0] for c in calls].count("account.claudeai_login_start") == 2
+    starts = [c[1] for c in calls if c[0] == "account.claudeai_login_start"]
+    assert len(starts) == 2 and starts[1]["id"] == next(i for i, a in env.acc.rows.items() if a["label"] == "Token")
+    no_leak(env)
+
+
+def acct_row(html: str, aid: str) -> str:
+    m = re.search(rf'<tr id="acct-{aid}">.*?</tr>', html, re.S)
+    assert m, f"thiếu hàng {aid}"
+    return m.group(0)
+
+
+async def test_connector_per_token_account_row(env):
+    """Mỗi tài khoản một connector riêng: mọi hàng (token + máy) có trạng thái + nút mang đúng id."""
+    st, calls = _cai(env)
+    env.acc.cai["a_22222222"] = {"logged_in": True, "email": "canhan@example.com"}
+    html = (await get(env, "/settings")).text
+    r1, r2 = acct_row(html, "a_11111111"), acct_row(html, "a_22222222")
+    assert "connector chưa gắn" in r1 and "Gắn connector" in r1 and 'name="id" value="a_11111111"' in r1
+    assert "canhan@example.com" in r2 and "Đổi tài khoản connector" in r2 and "Gỡ connector" in r2
+    assert "connector chưa gắn" in machine_row(html)
+    await post(env, "/do/claudeai_login_start", {"id": "a_11111111", "name": "Công ty", "next": "/settings#accounts"})
+    assert calls[-1][0] == "account.claudeai_login_start" and calls[-1][1]["id"] == "a_11111111"
+    s = section((await get(env, "/settings")).text)
+    assert "Gắn connector cho tài khoản «Công ty»" in s
+    await post(env, "/do/claudeai_login_finish", {"login_id": "LC", "code": CODE, "next": "/settings#accounts"})
+    page = (await get(env, "/settings")).text
+    assert "a_11111111@example.com" in acct_row(page, "a_11111111") and "connector chưa gắn" in machine_row(page)
+    # gỡ connector của MỘT tài khoản: cần xác nhận, tài khoản khác giữ nguyên
+    await post(env, "/do/claudeai_logout", {"id": "a_22222222", "name": "Cá nhân", "next": "/settings#accounts"})
+    assert env.acc.cai["a_22222222"]["logged_in"]
+    await post(env, "/do/claudeai_logout", {"id": "a_22222222", "name": "Cá nhân", "confirm": "yes", "next": "/settings#accounts"})
+    assert not env.acc.cai["a_22222222"]["logged_in"] and env.acc.cai["a_11111111"]["logged_in"]
+    assert [c[1]["id"] for c in calls if c[0] == "account.claudeai_logout"] == ["a_22222222"]
+    r = await post(env, "/do/claudeai_login_start", {"id": "javascript:x", "next": "/settings#accounts"})
+    assert [c[1]["id"] for c in calls if c[0] == "account.claudeai_login_start"] == ["a_11111111"]  # id lạ bị từ chối ở web
     no_leak(env)
 
 

@@ -82,16 +82,25 @@ class ToolWriteWatcher:
         ann = reg.tool_annotations(server, tool)
         if ann is not None and ann.get("readOnlyHint") is True:
             return
+        if ann is not None and ann.get("source") == "claude" and not ann.get("probed") and ann.get("readOnlyHint") is not False:
+            # MCP nguồn claude (không có annotations của server): tool tên dạng đọc = safe ở guard → không phải thao tác ghi
+            from ..guard.classifier import _CONNECTOR_READ_RE
+
+            if _CONNECTOR_READ_RE.match(tool):
+                return
         inp = ev.payload.get("input")
+        known = ann is not None and ann.get("probed") is not False  # nguồn claude chưa probe = chưa biết annotations
         data = {
             "server": server,
             "tool": tool,
             "tool_id": ev.payload.get("tool_id"),
             "input": inp,
-            "annotations_known": ann is not None,
+            "annotations_known": known,
             "trust": (ann or {}).get("trust") or (reg.get_row(server) or {}).get("trust"),
             "destructiveHint": (ann or {}).get("destructiveHint"),
         }
+        if (ann or {}).get("source") == "claude":
+            data["source"] = "claude"
         audit_id = self.hub.audit.record(
             "tool.write",
             ev.agent_id,
@@ -113,7 +122,7 @@ class ToolWriteWatcher:
                 "tool_id": ev.payload.get("tool_id"),
                 "run_id": ev.run_id,
                 "args_preview": ev.payload.get("args_preview"),
-                "annotations_known": ann is not None,
+                "annotations_known": known,
                 "trust": data["trust"],
                 "audit_id": audit_id,
             },
@@ -173,6 +182,9 @@ def attach(hub: "Hub") -> None:
     from .oauth_proxy import OAuthProxy
 
     hub.mcp_proxy = OAuthProxy(hub)  # type: ignore[attr-defined]  # proxy loopback chèn token (mcp-oauth.md §8.1), khởi động lười
+    from .claude_admin import ClaudeMcpAdmin
+
+    hub.mcp_claude = ClaudeMcpAdmin(hub)  # type: ignore[attr-defined]  # MCP do claude quản lý theo tài khoản (plan-mcp-claude-native PR3)
     hub.bus.add_listener(ToolWriteWatcher(hub))
     # H-12: bộ che theo GIÁ TRỊ — nạp mọi secret đã lưu + giá trị env-fallback mà registry đang tham chiếu
     try:

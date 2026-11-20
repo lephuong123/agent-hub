@@ -99,9 +99,10 @@ def run(paths: "HubPaths", *, probe: bool = False, claude_binary: str | None = N
         if c is None:
             ck.add("hub_db", "hub.db", False, f"không có/không mở được {paths.db}", fix="cfharness hub import <gói> hoặc cfharness daemon start")
         secrets = _secret_names(home)
-        _claude(ck, cfg, secrets, c, probe=probe, binary=claude_binary)
+        _claude(ck, cfg, secrets, c, probe=probe, binary=claude_binary, home=home)
         _secret_refs(ck, paths, c, secrets)
         _mcp(ck, c, secrets, mcp_probe if probe else None)
+        _claude_mcp(ck, c, home)
         _channels(ck, cfg, secrets)
         _filehub(ck, cfg, c, home)
         _repos(ck, c)
@@ -125,7 +126,8 @@ def run(paths: "HubPaths", *, probe: bool = False, claude_binary: str | None = N
 
 
 # ============================================================================ từng nhóm
-def _claude(ck: _Checks, cfg: dict[str, Any], secrets: set[str], c: sqlite3.Connection | None, *, probe: bool, binary: str | None) -> None:
+def _claude(ck: _Checks, cfg: dict[str, Any], secrets: set[str], c: sqlite3.Connection | None, *, probe: bool, binary: str | None,
+            home: Path | None = None) -> None:
     ccfg = ((cfg.get("runtime") or {}).get("claude") or {}) if cfg else {}
     b = binary or ccfg.get("binary") or "claude"
     path = shutil.which(b)
@@ -165,7 +167,7 @@ def _claude(ck: _Checks, cfg: dict[str, Any], secrets: set[str], c: sqlite3.Conn
     else:
         ck.add("claude_login", "đăng nhập claude", False, "chưa xác nhận (không có token trong secret store)", "warning",
                fix="claude auth login (hoặc cfharness hub doctor --probe để kiểm `claude auth status`)")
-    _connectors(ck, cfg, c, probe=probe, path=path, tok=bool(tok or accts))
+    _connectors(ck, cfg, c, probe=probe, path=path, tok=bool(tok or accts), home=home)
 
 
 def _connector_users(cfg: dict[str, Any], c: sqlite3.Connection | None) -> list[str]:
@@ -173,6 +175,8 @@ def _connector_users(cfg: dict[str, Any], c: sqlite3.Connection | None) -> list[
     out: list[str] = []
     if (((cfg.get("manager") or {}).get("capabilities") or {}).get("connectors")):
         out.append("(điều phối viên)")
+    if (cfg.get("connectors") or {}).get("auto"):  # connectors.auto (mặc định bật): mọi run làm việc của agent dùng connector
+        out.append("(connectors.auto)")
     if c is not None and "agents" in _tables(c):
         for r in c.execute("SELECT id, tool_policy FROM agents WHERE deleted_at IS NULL"):
             try:
@@ -184,29 +188,58 @@ def _connector_users(cfg: dict[str, Any], c: sqlite3.Connection | None) -> list[
     return out
 
 
-def _connectors(ck: _Checks, cfg: dict[str, Any], c: sqlite3.Connection | None, *, probe: bool, path: str | None, tok: bool) -> None:
-    """Token `setup-token` không nạp connector claude.ai → run có connector cần phiên `claude /login` của user OS
-    (docs/dev-notes/manager-connectors.md, `runtime.claude.connectors_auth`)."""
+def _connector_account(c: sqlite3.Connection | None, home: Path | None) -> tuple[str, Path | None]:
+    """(nhãn tài khoản đang dùng, thư mục cấu hình claude riêng | None) theo con trỏ `claude_account_active` (doctor không đọc giá
+    trị secret nên không so token): tài khoản token → `HUB_HOME/claude-config/<id>/`; machine/chưa cấu hình → cấu hình mặc định."""
+    from .accounts import claude_config
+
+    aid = _state(c, "claude_account_active")
+    d = claude_config.account_dir(home, str(aid)) if (home is not None and isinstance(aid, str)) else None
+    return (str(aid) if d is not None else "đăng nhập của máy"), d
+
+
+def _connectors(ck: _Checks, cfg: dict[str, Any], c: sqlite3.Connection | None, *, probe: bool, path: str | None, tok: bool,
+                home: Path | None = None) -> None:
+    """Token `setup-token` không nạp connector claude.ai → run có connector cần phiên claude.ai của TÀI KHOẢN ĐANG DÙNG (tài khoản
+    token: thư mục cấu hình riêng; machine: phiên `/login` mặc định của user OS) — docs/dev-notes/manager-connectors.md,
+    `runtime.claude.connectors_auth`. `connectors.auto` tính là "đang dùng connector"."""
     users = _connector_users(cfg, c)
     if not users:
         return
     who = ", ".join(users[:5]) + ("…" if len(users) > 5 else "")
     mode = str(((cfg.get("runtime") or {}).get("claude") or {}).get("connectors_auth") or "auto")
-    fix = "đăng nhập `claude` (lệnh /login, tài khoản claude.ai) dưới user OS của hub, rồi kết nối connector trên claude.ai → Settings → Connectors"
+    acct, cdir = _connector_account(c, home)
+    fix = ("web hub › Cài đặt › Tài khoản Claude › «Gắn connector» ở tài khoản đang dùng (hoặc `cfharness account connector "
+           f"{acct if cdir is not None else 'machine'} login`), rồi kết nối connector trên claude.ai → Settings → Connectors")
     if mode == "token":
         ck.add("claude_connectors", "connector claude.ai", False, f"{who}: runtime.claude.connectors_auth=token — token setup-token không nạp connector",
                "warning", fix="cfharness config set runtime.claude.connectors_auth auto")
         return
     if not (probe and path):
         if tok:
-            ck.add("claude_connectors", "connector claude.ai", True, f"{who}: cần phiên claude.ai (/login) — chạy --probe để kiểm", "warning")
+            ck.add("claude_connectors", "connector claude.ai", True, f"{who}: cần phiên claude.ai của tài khoản {acct} — chạy --probe để kiểm", "warning")
         return
+    if cdir is not None and not cdir.is_dir():
+        ck.add("claude_connectors", "connector claude.ai", False, f"{who}: tài khoản {acct} CHƯA gắn connector — connector sẽ không nạp",
+               "warning", fix=fix)
+        return
+    if cdir is not None:
+        from .accounts import claude_config
+
+        if not claude_config.shared(cdir):  # run dựng lại symlink trước khi dùng; vẫn không phải symlink → run rơi về token
+            ck.add("claude_connectors", "connector claude.ai", False,
+                   f"{who}: thư mục cấu hình của tài khoản {acct} không dùng chung session (projects không phải symlink) — run connector "
+                   "chạy bằng token (connector.auth_fallback config_dir_unshared)", "warning",
+                   fix=f"tạo symlink {cdir}/projects → {claude_config.default_home()}/projects (Windows: bật Developer Mode / quyền tạo symlink)")
+            return
     try:
         from .oscompat import exec_argv, no_window_kwargs
         from .runtime.claude_cli import OAUTH_TOKEN_SECRET, child_env
 
         env = child_env((cfg.get("runtime") or {}).get("claude") or {})
         env.pop(OAUTH_TOKEN_SECRET, None)
+        if cdir is not None:
+            env["CLAUDE_CONFIG_DIR"] = str(cdir)
         r = subprocess.run(exec_argv([path, "auth", "status"]), capture_output=True, encoding="utf-8", errors="replace", timeout=30,
                            env=env, **no_window_kwargs())
         info = json.loads(r.stdout)
@@ -215,7 +248,7 @@ def _connectors(ck: _Checks, cfg: dict[str, Any], c: sqlite3.Connection | None, 
         ck.add("claude_connectors", "connector claude.ai", False, f"không kiểm được: {type(e).__name__}", "warning", fix=fix)
         return
     ck.add("claude_connectors", "connector claude.ai", ok,
-           f"{who}: " + ("có phiên claude.ai (/login) — run connector dùng phiên này" if ok else "CHƯA có phiên claude.ai — connector sẽ không nạp"),
+           f"{who}: tài khoản {acct} " + ("có phiên claude.ai — run connector dùng phiên này" if ok else "CHƯA có phiên claude.ai — connector sẽ không nạp"),
            "warning", fix=None if ok else fix)
 
 
@@ -253,13 +286,19 @@ def _mcp(ck: _Checks, c: sqlite3.Connection | None, secrets: set[str], probe: Ca
         return
     from .mcp_client.oauth import secret_name as oauth_secret
 
+    hub_oauth: list[str] = []
     for r in rows:
         name = r["name"]
         try:
             conf = json.loads(r["config"] or "{}") or {}
         except ValueError:
             conf = {}
+        if conf.get("source") != "claude" and isinstance(conf.get("auth"), dict) and conf["auth"].get("type") == "oauth":
+            hub_oauth.append(name)
         perr = str(r["probe_error"] or "")
+        if conf.get("source") == "claude":  # cấu hình + token do claude giữ theo tài khoản — hub không probe (plan-mcp-claude-native)
+            ck.add(f"mcp:{name}", f"MCP {name}", True, f"{r['transport']} · nguồn claude (cấu hình + token theo tài khoản Claude đang dùng)")
+            continue
         if probe is not None:
             try:
                 pr = probe(name) or {}
@@ -275,6 +314,99 @@ def _mcp(ck: _Checks, c: sqlite3.Connection | None, secrets: set[str], probe: Ca
         else:
             ck.add(f"mcp:{name}", f"MCP {name}", True, f"{r['transport']}" + (f" · lần thử cuối lỗi: {perr[:120]}" if perr else "")
                    + ("" if r["last_probe_at"] else " · chưa thử (--probe)"))
+    if hub_oauth:  # plan-mcp-claude-native PR4: OAuth tự viết của hub sẽ bị gỡ (giai đoạn B) — khuyên chuyển sang claude theo tài khoản
+        ck.add("mcp_hub_oauth", "MCP OAuth do hub giữ", False,
+               f"nên chuyển sang claude: {', '.join(hub_oauth[:8])} — OAuth + proxy của hub sẽ bị gỡ ở bản sau", "warning",
+               fix="; ".join(f"cfharness mcp migrate-to-claude {n} --account <id>" for n in hub_oauth[:3]))
+
+
+def _claude_mcp(ck: _Checks, c: sqlite3.Connection | None, home: Path) -> None:
+    """MCP do claude quản lý (plan-mcp-claude-native PR3) của TÀI KHOẢN ĐANG DÙNG: server đã đăng ký nguồn claude mà cấu hình claude của
+    tài khoản không có (run của agent gán server đó sẽ hỏng), và server cần đăng nhập theo lần kiểm gần nhất (`hub_state mcp.claude_status`,
+    cập nhật bởi `cfharness mcp claude status` / nút «Kiểm tra MCP» — doctor KHÔNG chạy `claude mcp list`)."""
+    if c is None:
+        return
+    from .mcp_client import claude_source as cs
+    from .mcp_client.claude_admin import CACHE_KEY, DEFAULT_KEY
+
+    _import_mcp_claude(ck, c, home)
+    label, cdir = _connector_account(c, home)
+    key = DEFAULT_KEY if cdir is None else cdir.name
+    acct = "" if cdir is None else f" --account {cdir.name}"
+    try:
+        have = cs.all_servers(cdir)
+    except Exception as e:  # best-effort: doctor báo, không dừng  # noqa: BLE001
+        ck.add("mcp_claude", "MCP nguồn claude", False, f"không đọc được cấu hình claude ({type(e).__name__})", "warning")
+        return
+    reg: list[str] = []
+    if "mcp_servers" in _tables(c):
+        for r in c.execute("SELECT name, config FROM mcp_servers WHERE deleted_at IS NULL ORDER BY name").fetchall():
+            try:
+                if (json.loads(r["config"] or "{}") or {}).get("source") == "claude":
+                    reg.append(r["name"])
+            except ValueError:
+                continue
+    missing = [n for n in reg if n not in have]
+    if missing:
+        ck.add("mcp_claude_missing", "MCP nguồn claude thiếu ở tài khoản đang dùng", False,
+               f"tài khoản {label}: thiếu {', '.join(missing[:8])} — run của agent gán các server này sẽ hỏng", "warning",
+               fix="; ".join(f"cfharness mcp claude add {n} --url <URL>{acct}" for n in missing[:3]))
+    cache = _state(c, CACHE_KEY)
+    entry = cache.get(key) if isinstance(cache, dict) else None
+    servers = (entry or {}).get("servers") if isinstance(entry, dict) else None
+    if not isinstance(servers, dict):
+        if have:
+            ck.add("mcp_claude_auth", "Đăng nhập MCP nguồn claude", True,
+                   f"tài khoản {label}: {len(have)} server, chưa kiểm trạng thái (cfharness mcp claude status)", "info", fix=f"cfharness mcp claude status{acct}")
+        return
+    need = sorted(n for n, st in servers.items() if st == "needs_auth" and n in have)
+    if need:
+        ck.add("mcp_claude_auth", "Đăng nhập MCP nguồn claude", False,
+               f"tài khoản {label}: cần đăng nhập {', '.join(need[:8])} (kiểm lúc {entry.get('checked_at') or '?'})", "warning",
+               fix="; ".join(f"cfharness mcp claude login {n}{acct}" for n in need[:3]))
+    elif have:
+        ck.add("mcp_claude_auth", "Đăng nhập MCP nguồn claude", True, f"tài khoản {label}: không server nào cần đăng nhập "
+               f"(kiểm lúc {entry.get('checked_at') or '?'})")
+
+
+def _import_mcp_claude(ck: _Checks, c: sqlite3.Connection, home: Path) -> None:
+    """Sau `hub import`: MCP nguồn claude phải thêm lại + đăng nhập lại trên tài khoản (`hub_state import_mcp_claude`, hub_transfer).
+    Mục đã có trong cấu hình claude của tài khoản đó VÀ lần kiểm gần nhất `connected` thì thôi báo."""
+    from .accounts import claude_config
+    from .hub_transfer import MCP_CLAUDE_STATE, mcp_claude_steps
+    from .mcp_client import claude_source as cs
+    from .mcp_client.claude_admin import CACHE_KEY, DEFAULT_KEY
+
+    items = _state(c, MCP_CLAUDE_STATE)
+    if not isinstance(items, list) or not items:
+        return
+    cache = _state(c, CACHE_KEY)
+    cache = cache if isinstance(cache, dict) else {}
+    todo: list[dict[str, Any]] = []
+    for it in items:
+        if not isinstance(it, dict) or not it.get("server"):
+            continue
+        left = []
+        for a in it.get("accounts") or ["machine"]:
+            a = str(a)
+            cdir = claude_config.account_dir(home, a) if a.startswith("a_") else None
+            key = DEFAULT_KEY if cdir is None else a
+            try:
+                have = it["server"] in cs.read_servers(cdir)
+            except Exception:  # best-effort: không đọc được thì vẫn nhắc  # noqa: BLE001
+                have = False
+            st = ((cache.get(key) or {}).get("servers") or {}).get(it["server"]) if isinstance(cache.get(key), dict) else None
+            if not (have and st == "connected"):
+                left.append(a)
+        if left:
+            todo.append({**it, "accounts": left})
+    if not todo:
+        ck.add("mcp_claude_import", "MCP nguồn claude sau khi nhập", True, "đã thêm + đăng nhập lại đủ trên các tài khoản")
+        return
+    steps = [s for it in todo for s in mcp_claude_steps(it)]
+    ck.add("mcp_claude_import", "MCP nguồn claude sau khi nhập", False,
+           "đăng nhập lại MCP " + "; ".join(f"{it['server']} trên tài khoản {', '.join(it['accounts'])}" for it in todo[:6])
+           + " — cấu hình + token ở máy cũ (url đầy đủ không đi theo gói: dùng URL gốc của server)", "warning", fix="; ".join(steps[:4]))
 
 
 def _channels(ck: _Checks, cfg: dict[str, Any], secrets: set[str]) -> None:

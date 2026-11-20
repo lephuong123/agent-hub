@@ -120,7 +120,7 @@ async def d(hub_home):
 
 
 async def _run(d, connectors, monkeypatch, login):
-    async def login_available(self):
+    async def login_available(self, config_dir=None):
         return login
     monkeypatch.setattr(type(d.hub.runs.runtime()), "login_available", login_available, raising=False)
     d.hub.agents.create({"id": "w1", "name": "w1", "model": "haiku", "tool_policy": {"tools": TOOLS, "connectors": connectors}})

@@ -68,6 +68,12 @@ class RunSpec:
     # "token" = CLAUDE_CODE_OAUTH_TOKEN của hub (mặc định); "login" = phiên `claude /login` của user OS (KHÔNG đặt token) — token
     # `setup-token` không nạp connector claude.ai nào (đã kiểm 2.1.325), nên run có connector chọn theo `runtime.claude.connectors_auth`
     auth_mode: Literal["token", "login"] = "token"
+    # auth_mode="login" của tài khoản token đang dùng: thư mục cấu hình riêng (`HUB_HOME/claude-config/<id>/`, accounts/claude_config.py)
+    # → CLAUDE_CONFIG_DIR của run (phiên claude.ai + connector của CHÍNH tài khoản đó). None = cấu hình mặc định của user OS
+    claude_config_dir: Path | None = None
+    # MCP nguồn claude gán cho agent (plan-mcp-claude-native PR2): claude tự nạp từ `.claude.json` của tài khoản (không có trong mcp.json);
+    # adapter báo `mcp.unavailable` khi init không có server / server chưa `connected` (vd needs-auth)
+    claude_mcp_servers: list[str] | None = None
     # agent được người đặt trust full (guard/service.trust_set): cho phép `bypassPermissions` trên mọi workspace (ngoại lệ NFR-15 do người chọn)
     trust_full: bool = False
     # plugin Claude Code của agent (plugins.py) → `--plugin-dir <thư mục>` mỗi plugin
@@ -136,9 +142,9 @@ class AgentRuntime(abc.ABC):
         Dùng trước khi chặn mọi run vì một lỗi "Not logged in" (có thể chỉ thoáng qua lúc làm mới OAuth)."""
         return None
 
-    async def login_available(self) -> bool | None:
+    async def login_available(self, config_dir: Path | None = None) -> bool | None:
         """Có phiên đăng nhập claude.ai đầy đủ (`claude /login`, không tính token env) để nạp connector claude.ai?
-        True/False; None = không xác định (runtime không hỗ trợ)."""
+        `config_dir` = thư mục cấu hình riêng của tài khoản token (None = cấu hình mặc định). True/False; None = không xác định."""
         return None
 
     async def oneshot(self, req: "OneShotRequest") -> "OneShotResult":
@@ -209,6 +215,7 @@ def make_adapter(spec: RunSpec) -> ClaudeStreamAdapter:
         require_no_auto_memory=spec.require_no_auto_memory,
         allowed_mcp_prefixes=spec.allowed_mcp_prefixes,
         expected_connectors=spec.connectors,
+        expected_mcp=spec.claude_mcp_servers,
         persist_thinking=spec.persist_thinking,
         thinking_max=spec.thinking_max_chars,
     )

@@ -4,6 +4,7 @@
 - rpc.py — RPC `account.*` (ghi ∈ HUMAN_ONLY, tự bọc audit — `MUTATING_ACCOUNTS`).
 - cli.py — `cfharness account list|add|login|use|rename|rm|check`.
 - login.py — (luồng LOGIN) chạy `claude setup-token` trong PTY.
+- claude_config.py — thư mục cấu hình claude riêng của từng tài khoản token (phiên claude.ai / connector riêng).
 
 KHÔNG tự đổi tài khoản (đã chốt 2026-11-13). Hợp đồng: docs/dev-notes/plan-claude-accounts.md.
 """

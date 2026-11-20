@@ -100,7 +100,8 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "gates": None,  # công tắc chung cổng duyệt (= config.set gates.mode) — agent gõ, kể cả chỉ xem, đều chặn
     "secret": {"set", "rm", "remove", "delete"},
     "secrets": {"set", "rm", "remove", "delete"},
-    "mcp": {"add", "edit", "update", "rm", "remove", "restore", "import", "assign", "unassign", "token", "agent-config", "annotate", "login", "logout"},
+    "mcp": {"add", "edit", "update", "rm", "remove", "restore", "import", "assign", "unassign", "token", "agent-config", "annotate", "login", "logout",
+            "claude-servers", "claude", "migrate-to-claude"},
     "estop": {"on", "off", "set", "clear"},
     "team": {"create", "edit", "update", "archive", "restore", "member", "estop", "rm"},
     "run": {"revert", "takeover"},
@@ -131,7 +132,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "schedule": {"add", "create", "edit", "update", "pause", "resume", "rm", "remove", "delete", "run-now", "run_now"},
     "session": {"reindex"},  # dựng lại chỉ mục tìm kiếm hội thoại (session.reindex ∈ HUMAN_ONLY) — `session status` chỉ đọc
     # Tài khoản Claude (accounts/, luồng core): account.* ghi ∈ HUMAN_ONLY — agent không tự thêm/đổi/xoá tài khoản Claude
-    "account": {"add", "login", "use", "rename", "rm", "remove", "delete", "check"},
+    "account": {"add", "login", "use", "rename", "rm", "remove", "delete", "check", "connector"},
     # Thư mục chung Không gian số (filehub/): filehub.* ghi ∈ HUMAN_ONLY — khoá cổng, gỡ/đổi tên, lô xoá (giữ cả tên lệnh cũ của đồng bộ đã bỏ)
     # `lane` (cổng cfharness: setup/test/disable/add/orphans… — khoá hub của người) + `switch` (đổi chế độ sync|lane) — chỉ người
     "filehub": {"setup", "login", "add", "remove", "rm", "rename", "pause", "resume", "switch-to-workspace", "lane", "switch"},
@@ -956,6 +957,7 @@ def sensitive_read(p: str, ctx: GuardContext) -> bool:
         for h in homes:
             if (_under(c, h + "/secrets") or _under(c, h + "/auth") or _under(c, h + "/backups") or _under(c, h + "/filehub")
                     or _under(c, h + "/exports") or _under(c, h + "/imports") or _under(c, h + "/logs") or _under(c, h + "/audit-archive")
+                    or _under(c, h + "/claude-config")  # phiên claude.ai (OAuth) riêng của từng tài khoản
                     or _same(c, h + "/mcp_server/tokens.json")):  # L6: logs/ = log hệ thống (id, đường dẫn, lỗi của mọi agent)
                 return True
             parts = [x.lower() for x in _rel_parts(c, h)] if IS_WINDOWS else _rel_parts(c, h)
@@ -1252,6 +1254,11 @@ def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdi
     prot = ctx.policy.match_mcp(server, tool)
     if prot is not None:
         return Verdict("destructive", "protected_mcp_tool", "mcp", f"tool MCP được bảo vệ ({prot.selector})", [f"{server}/{tool}"], prot.id)
+    claude_src = ann.get("source") == "claude" and not ann.get("probed")
+    if claude_src and ann.get("selected") is False:
+        # MCP nguồn claude: hub không probe → mẫu glob include/exclude không thành --disallowedTools được; chặn ở đây
+        return Verdict("destructive", "mcp_not_in_run", "mcp", f"{tool_name}: tool bị loại bởi tools.include/exclude của server",
+                       [tool_name[:200]], forbidden=True)
     if ann.get("destructiveHint") is True:
         return Verdict("destructive", "mcp_destructive_hint", "mcp", "tool có destructiveHint", [f"{server}/{tool}"])
     toks = _name_tokens(tool)
@@ -1266,6 +1273,17 @@ def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdi
     human = ann.get("human_override") if isinstance(ann.get("human_override"), dict) else {}
     if desc and MCP_DESC_RE.search(desc) and human.get("destructiveHint") is not False:  # người đã xem tool và ghi đè → bỏ khớp mô tả
         return Verdict("destructive", "mcp_delete_description", "mcp", "mô tả tool khớp mẫu xoá", [f"{server}/{tool}"])
+    if claude_src:
+        # MCP nguồn claude (plan-mcp-claude-native PR2): không có annotations của server (token do claude giữ, hub không probe) → không
+        # dùng `mcp_unknown_tool` (luôn hỏi) mà suy theo TÊN như connector claude.ai: tên xoá → destructive (đã xét ở trên), tên đọc →
+        # safe, còn lại → ghi (server untrusted: hỏi duyệt như mọi tool ghi của server untrusted). Ghi đè của người
+        # (`cfharness mcp annotate`, readOnlyHint/destructiveHint) thắng: readOnlyHint=false bỏ suy "đọc" theo tên
+        if human.get("readOnlyHint") is not False and _CONNECTOR_READ_RE.match(tool):
+            return Verdict("safe", "mcp_claude_read_name")
+        if str(ann.get("trust") or "") != "trusted":
+            return Verdict("uncertain", "mcp_untrusted_write", "mcp", "server nguồn claude untrusted: tool không đọc theo tên/nhãn → phê duyệt động",
+                           [f"{server}/{tool}"])
+        return Verdict("write", "mcp_claude_write", "mcp", "tool MCP nguồn claude (tên không phải dạng đọc) → ghi (audit)", [f"{server}/{tool}"])
     if ctx.mcp_annotations is not None and not ann:
         return Verdict("uncertain", "mcp_unknown_tool", "mcp", "tool MCP chưa thấy khi probe → cần duyệt tới khi probe lại (FR-MC-03)", [f"{server}/{tool}"])
     if str(ann.get("trust") or "") == "untrusted":
@@ -1566,7 +1584,8 @@ class BashAnalyzer:
                     f"{h}/audit-archive",  # L5: audit đã lưu trữ
                     # L7: gói chẩn đoán (exports/support-*.tar.gz) + gói xuất/nhập hub + bản sao lưu — vốn đã ∈ sandbox deny + sensitive_read
                     # (tool Read), giờ Bash `cat/tar/cp` cũng forbidden ở lớp classifier
-                    f"{h}/exports", f"{h}/imports", f"{h}/backups"]
+                    f"{h}/exports", f"{h}/imports", f"{h}/backups",
+                    f"{h}/claude-config"]  # phiên claude.ai (OAuth) riêng của từng tài khoản (accounts/claude_config.py)
         if self.ctx.hub_socket:
             sock = canon_path(self.ctx.hub_socket)
             out += [sock, sock + ".auth", sock + ".web.auth", sock + ".mcp.auth"]

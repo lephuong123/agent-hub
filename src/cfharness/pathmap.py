@@ -39,7 +39,8 @@ APPEND_ONLY = frozenset({"events", "audit_log", "guard_decisions", "snapshots", 
 HISTORY_COLS = frozenset({("runs", "argv_redacted"), ("runs", "diff")})
 REWRITE_FILES = ("config.yaml", "policy/*.yaml", "policy/golden/*", "mcp/registry.yaml", "checkpoints/*/checkpoint.json")
 SCAN_SKIP_DIRS = ("checkpoints", "runs", "logs", "snapshots", "ledger", "prompts", "policy/history", "trash/tamper", "worktrees", "evals", ".git",
-                  "audit-archive")  # L5: lịch sử audit có băm — không bao giờ viết lại
+                  "audit-archive",  # L5: lịch sử audit có băm — không bao giờ viết lại
+                  "claude-config")  # phiên claude.ai riêng của từng tài khoản + symlink sang ~/.claude (không viết lại, không đi theo)
 TEXT_SUFFIX = (".yaml", ".yml", ".json", ".md", ".txt", ".toml")
 MAX_SCAN = 2 * 1024 * 1024
 

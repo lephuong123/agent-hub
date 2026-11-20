@@ -7,6 +7,8 @@ Adapter có trạng thái: tool đang mở (để tính `duration_s`), usage lu�
   system/init (lần đầu)          → run.started + agent.status(working)  [+ isolation.violation nếu MCP lạ]
                                    [+ connector.unavailable{connector, status, api_key_source} mỗi connector claude.ai người cho
                                     phép mà CLI không nạp ("missing") hoặc chưa `connected` (vd needs-auth) — chỉ lần init đầu]
+                                   [+ mcp.unavailable{server, status, source:"claude"} mỗi MCP nguồn claude gán cho agent mà CLI không
+                                    nạp ("missing") hoặc không `connected`/`pending` (vd needs-auth) — chỉ lần init đầu]
   system/init (lần 2+, cùng tiến trình: thông báo task nền mở lượt mới sau `result`)
                                  → status.update{status:"init", init_count}  [vẫn kiểm cô lập]
   system/status                  → status.update
@@ -121,6 +123,7 @@ class ClaudeStreamAdapter:
         require_no_auto_memory: bool = False,
         allowed_mcp_prefixes: Iterable[str] | None = None,
         expected_connectors: Iterable[str] | None = None,
+        expected_mcp: Iterable[str] | None = None,
         clock: Callable[[], float] = time.monotonic,
         now: Callable[[], datetime] | None = None,
         usage_tick_interval_s: float = 1.0,
@@ -134,6 +137,7 @@ class ClaudeStreamAdapter:
         self.allowed_plugin_prefixes = tuple(allowed_plugin_prefixes) if allowed_plugin_prefixes is not None else None
         self.allowed_mcp_prefixes = tuple(allowed_mcp_prefixes or ())  # run connector: "claude.ai " (hook guard chặn tool ở lớp dưới)
         self.expected_connectors = tuple(expected_connectors or ())  # slug connector claude.ai người cho phép
+        self.expected_mcp = tuple(expected_mcp or ())  # MCP nguồn claude gán cho agent (claude tự nạp từ cấu hình tài khoản)
         self.require_no_auto_memory = require_no_auto_memory
         self.persist_thinking = persist_thinking  # P0-9: phát reasoning.complete (ghi DB) cho khối thinking
         self.thinking_max = max(0, int(thinking_max))
@@ -356,6 +360,8 @@ class ClaudeStreamAdapter:
                     out += self._violation("mcp_server", str(s["name"]), None)
         if self.expected_connectors and self.init_count == 1:
             out += self._connector_check(mcp, obj.get("apiKeySource"))
+        if self.expected_mcp and self.init_count == 1:
+            out += self._claude_mcp_check(mcp)
         if self.allowed_plugin_prefixes is not None:
             for name in payload["plugins"]:
                 if not str(name).startswith(self.allowed_plugin_prefixes):
@@ -380,6 +386,17 @@ class ClaudeStreamAdapter:
             if st != "connected":
                 out.append(self._ev("connector.unavailable", {"connector": slug, "status": str(st or "unknown")[:32],
                                                               "api_key_source": str(api_key_source or "")[:32] or None}))
+        return out
+
+    def _claude_mcp_check(self, mcp: list[dict[str, Any]]) -> list[HubEvent]:
+        """MCP nguồn claude gán cho agent mà CLI không nạp ("missing") hoặc chưa kết nối (needs-auth, failed…). `pending` = đang
+        kết nối (chưa phải lỗi) → không báo."""
+        got = {str(s.get("name") or ""): s.get("status") for s in mcp}
+        out = []
+        for name in self.expected_mcp:
+            st = got.get(name, "missing")
+            if st not in ("connected", "pending"):
+                out.append(self._ev("mcp.unavailable", {"server": name, "status": str(st or "unknown")[:32], "source": "claude"}))
         return out
 
     # -- stream_event (partial messages)
