@@ -166,7 +166,7 @@ SECURITY_READ_SUBS = re.compile(r"^(find-(generic|internet)-password|find-certif
                                 r"export-key|unlock-keychain|set-keychain-settings|show-keychain-info|dump-trust-settings|authorizationdb|"
                                 r"set-generic-password-partition-list|set-key-partition-list|add-(generic|internet)-password)$")
 # WT-3: dấu hiệu đường dẫn trỏ vào vùng nhạy cảm của HUB_HOME (dùng cho đích động không giải được)
-SENSITIVE_HINT = re.compile(rf"(^|/)(auth|secrets)(/|$)|/(web|tokens|trusted_devices)\.json$|\.sock(\.auth)?$|/hub\.db|{_ENV_HOME}|{_HOME_DIR}")
+SENSITIVE_HINT = re.compile(rf"(^|/)(auth|secrets|claude-config)(/|$)|/(web|tokens|trusted_devices)\.json$|(^|/)\.claude\.json|(^|/)\.credentials\.json$|\.sock(\.auth)?$|/hub\.db|{_ENV_HOME}|{_HOME_DIR}")
 UNIX_SOCKET_RE = re.compile(r"\bAF_UNIX\b|UNIX-CONNECT|UNIX-CLIENT|\bcreateConnection\s*\(\s*\{?\s*path|\bnet\.connect\s*\(\s*\{?\s*path|\bnet\.connect\s*\(\s*['\"]/|UNIXSocket|socket\.AF_UNIX|IO::Socket::UNIX|\bunix:/", re.I)
 LIST_ARGV_RE = re.compile(r"""\[\s*((?:(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*,\s*)*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'))\s*,?\s*\]""")
 JS_SPAWN_RE = re.compile(r"""\b(?:spawn|spawnSync|execFile|execFileSync|Deno\.Command|Bun\.spawn)\s*\(\s*(["'])([^"']+)\1\s*,\s*\[([^\]]*)\]""")
@@ -278,10 +278,17 @@ class GuardContext:
         return canon_path(str(self.policy.user_home))
 
 
+# forbidden mà trust full KHÔNG gỡ (= guard/service.TRUST_NEVER_RULES): khi một lệnh trúng nhiều luật forbidden, giữ luật này để agent
+# trust không lách bằng cách ghép thêm một đích forbidden "thường" (vd `cat <hub>/auth/x ~/.claude.json`)
+STICKY_FORBIDDEN_RULES = frozenset({"other_hub_write", "admin_shared", "desktop_app_data", "filehub_lane", "lane_other_tree", "claude_credentials"})
+
+
 def _max(a: Verdict, b: Verdict) -> Verdict:
     if b.forbidden and not a.forbidden:
         return b
     if a.forbidden:
+        if b.forbidden and b.rule in STICKY_FORBIDDEN_RULES and a.rule not in STICKY_FORBIDDEN_RULES:
+            return b
         return a
     return b if SEVERITY[b.verdict] > SEVERITY[a.verdict] else a
 
@@ -418,6 +425,7 @@ NET_BLOCK_RULES = frozenset({"webfetch_local", "ssrf_metadata", "ssrf_private_ip
 NEVER_DOWNGRADE_RULES = NET_BLOCK_RULES | frozenset({
     "url_dns_failed", "web_domain_denied", "web_domain_not_allowed", "sandbox_network_not_allowed", "sandbox_network_bad_host", "mcp_require_approval", "classifier_error", "unknown_run", "estop",
     "nesting_too_deep", "hub_secret_read", "self_approval", "admin_shared", "desktop_app_data", "filehub_lane", "lane_other_tree",
+    "claude_credentials",
 })
 NEVER_DOWNGRADE_KLASS = frozenset({"hub", "policy", "guard"})
 
@@ -583,11 +591,16 @@ def _classify(tool_name: str, tool_input: dict[str, Any] | None, ctx: GuardConte
                     return Verdict("destructive", "lane_other_tree", "hub", LANE_OTHER_REASON, [v], forbidden=True)
                 if isinstance(v, str) and v and desktop_app_data(_abs(v, ctx.cwd)):
                     return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [v], forbidden=True)
+                if isinstance(v, str) and v and claude_secret(_abs(v, ctx.cwd), ctx):
+                    return Verdict("destructive", CLAUDE_RULE, "hub", CLAUDE_REASON, [v], forbidden=True)
                 if isinstance(v, str) and v and sensitive_read(_abs(v, ctx.cwd), ctx):
                     return Verdict("destructive", "hub_secret_read", "hub", "agent không được đọc token người/secret/mcp.json của hub", [v], forbidden=True)
             pat = ti.get("pattern") if tool_name == "Glob" else None  # Glob có thể chỉ mang đường dẫn tuyệt đối trong pattern
             if isinstance(pat, str) and pat and lane_other_in_script(pat, ctx):
                 return Verdict("destructive", "lane_other_tree", "hub", LANE_OTHER_REASON, [pat], forbidden=True)
+            gpat = pat if isinstance(pat, str) and pat else (ti.get("glob") if tool_name == "Grep" else None)
+            if isinstance(gpat, str) and gpat and glob_claude(gpat, ti.get("path"), ctx):
+                return Verdict("destructive", CLAUDE_RULE, "hub", CLAUDE_REASON, [gpat], forbidden=True)
             gm = glob_app_data(pat, ti.get("path"), ctx) if isinstance(pat, str) and pat else None
             if gm == "literal":
                 return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [pat], forbidden=True)
@@ -887,6 +900,40 @@ def desktop_app_data(p: str) -> bool:
 
 DESKTOP_APP_REASON = "agent không được đọc/ghi thư mục dữ liệu của app desktop cfharness (cookie phiên, token directory của mọi hub)"
 
+CLAUDE_RULE = "claude_credentials"
+CLAUDE_REASON = ("agent không được đọc cấu hình/đăng nhập của Claude Code (~/.claude.json, .credentials.json, claude-config/ — "
+                 "có thể chứa secret MCP, token OAuth)")
+
+
+def _claude_homes(ctx: GuardContext) -> list[str]:
+    return list(dict.fromkeys([ctx.home, canon_path(os.path.expanduser("~"))]))
+
+
+def claude_secret(p: str, ctx: GuardContext) -> bool:
+    """`claude_files.is_secret` theo home của policy VÀ home thật của daemon (+ `$CLAUDE_CONFIG_DIR`, `HUB_HOME/claude-config`)."""
+    from ..claude_files import is_secret
+
+    hh = _hub_home(ctx)
+    return any(is_secret(c, h, hub_home=hh) for c in {p, canon_path(p)} for h in _claude_homes(ctx))
+
+
+def glob_claude(pattern: str, path: Any, ctx: GuardContext) -> bool:
+    """Mẫu Glob/Grep `glob` (nối vào `path`/cwd nếu tương đối) có thể khớp tệp cấu hình/đăng nhập Claude Code."""
+    from ..claude_files import glob_may_touch
+
+    base = path if isinstance(path, str) and path else str(ctx.cwd)
+    full = os.path.expanduser(pattern)
+    if not _isabs(full):
+        full = os.path.join(_abs(base, ctx.cwd), full)
+    full = canon_path(full) if IS_WINDOWS else full
+    cut = re.split(r"[*?\[{]", full, maxsplit=1)[0]
+    if claude_secret(cut.rstrip("/") or "/", ctx):
+        return True
+    if "/" not in pattern and not os.path.expanduser(pattern).startswith("/"):  # Grep `glob` tên trần (`.claude.json*`) khớp ở MỌI tầng
+        full = os.path.join(_abs(base, ctx.cwd), "**", pattern)
+    hh = _hub_home(ctx)
+    return any(glob_may_touch(full, h, hub_home=hh) for h in _claude_homes(ctx))
+
 
 def sensitive_read(p: str, ctx: GuardContext) -> bool:
     """Đường dẫn mà agent KHÔNG được đọc: token người cạnh socket, secrets/, mcp.json đã resolve, token MCP HTTP,
@@ -1031,6 +1078,8 @@ def classify_file_write(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -
         return Verdict("destructive", "lane_other_tree", "hub", LANE_OTHER_REASON, [ap], forbidden=True)
     if desktop_app_data(ap):
         return Verdict("destructive", "desktop_app_data", "hub", DESKTOP_APP_REASON, [ap], forbidden=True)
+    if claude_secret(ap, ctx):  # Edit/Write trả lại một đoạn nội dung tệp → cũng là đọc
+        return Verdict("destructive", CLAUDE_RULE, "hub", CLAUDE_REASON, [ap], forbidden=True)
     if filehub_meta(ap, ctx):
         return Verdict("destructive", "filehub_metadata", "hub", FILEHUB_META_REASON, [ap], forbidden=True)
     for cand in {ap, rp}:
@@ -1523,6 +1572,10 @@ class BashAnalyzer:
             out += [sock, sock + ".auth", sock + ".web.auth", sock + ".mcp.auth"]
         uh = canon_path(str(self.ctx.policy.user_home)).rstrip("/")  # R3-1: thông tin xác thực của người
         out += [f"{uh}/{x}" for x in (".config/gh", ".git-credentials", ".config/git/credentials", "Library/Keychains", ".netrc", ".ssh") + _win_cred_dirs()]
+        from ..claude_files import secret_dirs, secret_files  # cấu hình/đăng nhập Claude Code (lệnh duyệt cây chạm tổ tiên → uncertain)
+
+        for h in _claude_homes(self.ctx):
+            out += [canon_path(x) for x in secret_files(h) + secret_dirs(h, hub_home=_hub_home(self.ctx))]
         return list(dict.fromkeys(out))
 
     def _in_region(self, p: str, region: str) -> bool:
@@ -1540,6 +1593,28 @@ class BashAnalyzer:
     _RECURSIVE = {"find", "grep", "egrep", "fgrep", "rg", "ag", "cp", "scp", "rsync", "tar", "gtar", "bsdtar", "zip",
                   "chmod", "chown", "chgrp", "rm", "shred", "ditto"}
 
+    def _claude_sweep(self, words: list[shell.Word]) -> bool:
+        """Đối số trỏ vào cấu hình/đăng nhập Claude Code (`claude_files`) → forbidden `claude_credentials`. Xét cả dạng gắn kèm tuỳ chọn
+        (`--data=@~/.claude.json`, `-F f=@…`, `-d@…`) vì agent trust full không có sandbox OS che hộ."""
+        for w in words:
+            t = w.text
+            if not t or w.dynamic:
+                continue
+            raws = [t] + [t.rsplit(sep, 1)[1] for sep in ("=", "@") if sep in t]
+            for raw in dict.fromkeys(raws):
+                if not raw or raw.startswith("-"):
+                    continue
+                if raw == t:
+                    exp = self.expand(w)
+                    cands = exp if exp else ([p] if (p := self.path(w)) else [])
+                else:
+                    cands = [p] if (p := self.path(raw)) else []
+                for cand in cands:
+                    if claude_secret(cand, self.ctx) or claude_secret(_real(cand), self.ctx):
+                        self.hit("destructive", CLAUDE_RULE, "hub", CLAUDE_REASON, [cand], forbidden=True)
+                        return True
+        return False
+
     def sensitive_sweep(self, sc: shell.SimpleCommand) -> None:
         """WT-3: mọi đối số/đích có thể chạm vùng nhạy cảm (sau khi giải cd/biến/glob) → đọc secret forbidden;
         không giải được chắc chắn mà có dấu hiệu trỏ vào vùng đó → uncertain (giữ chờ người)."""
@@ -1551,6 +1626,8 @@ class BashAnalyzer:
         recursive = base in self._RECURSIVE
         regions = self.sensitive_regions()
         words = list(sc.words[1:]) + [w for op, w in sc.redirects if op not in ("<&",)]
+        if self._claude_sweep(words):  # trước vùng hub: luật trust không gỡ phải thắng (vd `cat <hub>/auth/x ~/.claude.json`)
+            return
         for w in words:
             t = w.text
             if not t or (t.startswith("-") and "=" not in t):
@@ -2489,7 +2566,7 @@ class BashAnalyzer:
                 tgt = self.path(raw)
             if tgt is not None:
                 r = self.protected(tgt, "write")
-                if r is not None or _under(tgt, _hub_home(self.ctx)) and not self._hub_workspace(tgt) or sensitive_read(tgt, self.ctx):
+                if r is not None or _under(tgt, _hub_home(self.ctx)) and not self._hub_workspace(tgt) or sensitive_read(tgt, self.ctx) or claude_secret(tgt, self.ctx):
                     self.hit("destructive", "symlink_to_protected", "file", f"ln trỏ vào tài nguyên được bảo vệ / HUB_HOME ({tgt})", [tgt], r)
         if tdir is not None:
             dpath = self.path(tdir)
@@ -2813,6 +2890,9 @@ class BashAnalyzer:
                 continue
             pth = self.path(lit.replace("\\\\", "\\"))
             if pth is None:
+                continue
+            if claude_secret(pth, self.ctx):
+                self.hit("destructive", CLAUDE_RULE, "hub", f"mã {base} đọc cấu hình/đăng nhập Claude Code ({lit})", [pth], forbidden=True)
                 continue
             if sensitive_read(pth, self.ctx):
                 self.hit("destructive", "hub_secret_read", "hub", f"mã {base} đụng token/secret của hub ({lit})", [pth], forbidden=True)

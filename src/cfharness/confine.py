@@ -252,6 +252,9 @@ def confine_only_sandbox(conf: Confine, hub_home: Path, socket: Path, sb_cfg: di
 
     lanes = lane_tree_dirs(hub_home, cwd=cwd)  # cây lane của run khác: trust full cũng không gỡ (classifier `lane_other_tree` ∈ TRUST_NEVER_RULES)
     deny_r += other_hub_homes(hub_home) + lanes
+    from .claude_files import deny_read_paths  # ~/.claude.json*, .credentials.json, claude-config/: trust full cũng không gỡ
+
+    deny_r += deny_read_paths(hub_home)
     deny_w = [str(socket), *toks, *other_hub_homes(hub_home), *lanes]
     aw = [conf.root, *conf.read_allow] + [str(x) for x in sb_cfg.get("extra_allow_write") or []]
     socks = [str(x) for x in sb_cfg.get("allow_unix_sockets") or [] if _real(str(x)) != _real(str(socket))]

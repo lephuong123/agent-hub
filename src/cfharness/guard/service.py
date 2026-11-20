@@ -51,7 +51,8 @@ NET_CONTINUE_MSG = (
     "[cfharness] Nobody approved this network connection (request {aid}) within {timeout}s, so it is DENIED for now and your run continues. "
     "Do not retry the same host now; work without it, or clearly report in your final summary what could not be fetched and why."
 )
-TRUST_NEVER_RULES = frozenset({"other_hub_write", "admin_shared", "desktop_app_data", "filehub_lane", "lane_other_tree"})  # forbidden mà trust full KHÔNG gỡ
+TRUST_NEVER_RULES = frozenset({"other_hub_write", "admin_shared", "desktop_app_data", "filehub_lane", "lane_other_tree",
+                               "claude_credentials"})  # forbidden mà trust full KHÔNG gỡ
 FORBIDDEN_MSG = "[cfharness] Blocked by hub safety policy: {reason}. Agents may not approve their own requests or change safety policy."
 RESTART_MSG = (
     "[cfharness] A human APPROVED this action (request {aid}), but a static safety rule blocks it in this process. "

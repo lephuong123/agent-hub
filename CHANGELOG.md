@@ -44,6 +44,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
   `cfharness daemon start`), vì daemon giữ PATH lúc khởi động. Đặt `tools.poppler_path` thì không cần khởi động lại.
 - Kéo–thả PDF trong TUI/REPL vẫn chỉ là đường dẫn trong tin (không có bản chữ, không tách phần); chỉ web, Telegram, Slack gửi tệp.
 
+### An toàn
+- An toàn: agent không còn đọc được cấu hình/đăng nhập của Claude Code — `~/.claude.json` (và các bản sao lưu `~/.claude.json*`, `~/.claude/backups/`), `.credentials.json`, thư mục `$CLAUDE_CONFIG_DIR` và `HUB_HOME/claude-config/` — vốn có thể chứa header/env bí mật của MCP và token OAuth. Chặn ở sandbox, luật quyền tool Read/Grep/Glob và bộ phân loại (`claude_credentials`, cấm thẳng), áp cho mọi agent kể cả agent được trust full.
+
 ---
 
 ## v0.2.26 — 2026-11-20
