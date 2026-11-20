@@ -10,6 +10,24 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Điều phối viên đọc được PDF đính kèm trên máy không có poppler
+- Trước đây PDF gửi cho điều phối viên (web, Telegram, Slack) có thể không đọc được: model hay truyền `pages` cho tool Read, mà cách đọc
+  đó cần `pdftoppm` (poppler) — máy chưa cài thì báo "pdftoppm is not installed", và khung quyền strict không có cách khác.
+- Hub giờ tự trích chữ của PDF đính kèm thành `<tên>.pdf.txt` (mỗi trang có tiêu đề `--- page N ---`, tối đa 500 trang / 8 MB, có ghi
+  chú khi cắt bớt). PDF dài hơn 50 trang còn được tách thành các phần `<tên>.pdf.p001-050.pdf`… để điều phối viên đọc từng phần mà vẫn
+  thấy bảng, hình. PDF scan, mã hoá có mật khẩu hoặc hỏng: hub nói rõ không có bản chữ và bảo đọc bản gốc. Việc trích chạy trong tiến
+  trình riêng có hạn giờ nên PDF lạ không làm treo hub.
+- Máy không có `pdftoppm`: mọi agent được nhắc đọc PDF chỉ với `file_path` (không truyền `pages`).
+- Cài poppler để Read đọc được PDF theo trang: `scoop install poppler` hoặc `winget install oschwartz10612.Poppler` (Windows),
+  `brew install poppler` (macOS), `apt install poppler-utils` (Linux). Poppler không nằm trên PATH thì đặt
+  `cfharness config set tools.poppler_path <thư mục chứa pdftoppm>` — hub thêm thư mục đó vào cuối PATH của mọi run.
+  `cfharness hub doctor` có mục kiểm `pdftoppm`.
+- Cấu hình mới: `attachments.pdf.split`, `attachments.pdf.split_pages` (mặc định 50), `attachments.pdf.max_parts` (20) — sửa được ở
+  Cài đặt → Điều phối viên; `attachments.pdf.timeout_s` (90 giây); `tools.poppler_path` (chỉ qua `cfharness config set`, được kiểm toàn vẹn).
+
+#### Lưu ý khi cập nhật (PDF)
+- Phụ thuộc mới: `pypdf` (thuần Python, giấy phép BSD) — `cfharness update` / `uv tool install` tự cài.
+
 ### Web — bật connector claude.ai cho từng agent
 - Form sửa/tạo agent có phần **Connector claude.ai**: tick connector (gợi ý từ danh sách của điều phối viên, connector đang bật và connector
   mà `allowed_tools` cần) hoặc gõ tên khác. Đổi connector phải xác nhận (agent ghi bằng tài khoản thật). Trước đây chỉ đặt được bằng
