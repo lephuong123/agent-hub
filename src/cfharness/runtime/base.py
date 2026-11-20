@@ -52,6 +52,8 @@ class RunSpec:
     # M1-B: --permission-prompt-tool (kênh phê duyệt thứ hai sau hook, FR-RT-09); env bổ sung cho tiến trình
     permission_prompt_tool: str | None = None
     env_extra: dict[str, str] = field(default_factory=dict)
+    # thư mục thêm vào CUỐI PATH của tiến trình (vd `tools.poppler_path` — pdf_support.run_path_extra); không che lệnh sẵn có
+    path_extra: list[str] = field(default_factory=list)
     # M3: --json-schema (FR-RT-14), --agents (FR-RT-13), -w/--worktree (FR-RT-12 tuỳ chọn)
     json_schema: dict[str, Any] | None = None
     agents_json: dict[str, Any] | None = None

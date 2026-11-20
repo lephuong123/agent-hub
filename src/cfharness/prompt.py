@@ -1,6 +1,6 @@
 """Lắp khối system prompt của agent (FR-RT-10).
 
-Thứ tự ổn định (để giữ prompt cache): (1) quy ước hub (+ khối trình duyệt Claude in Chrome theo `tool_policy.browser`) → (2) SOUL → (3) charter team (hardening H-15: run có `team_id`;
+Thứ tự ổn định (để giữ prompt cache): (1) quy ước hub (+ khối đọc PDF khi máy không có pdftoppm — `pdf_support.py`, + khối trình duyệt Claude in Chrome theo `tool_policy.browser`) → (2) SOUL → (3) charter team (hardening H-15: run có `team_id`;
 trước đây nằm trong tin nhắn user) → (3b) `RESPONSE_STYLE` (cách trình bày câu trả lời kiểu Claude chat; đặt SAU SOUL để thắng các SOUL cũ
 còn bảo nêu task id, TRƯỚC khối tri thức để phần đầu ổn định) → (3c) danh sách lệnh CLI (CHỈ điều phối viên, `manager/cli_ref.py`) → (4) memory global/team/agent → (5) chỉ mục skill + (6) hướng dẫn đọc skill qua
 `skill_view` (M4, `knowledge/prompt_blocks.py`). Charter ổn định theo (agent, team) → hash ổn định giữa các run cùng team.
@@ -87,8 +87,11 @@ def shared_folder_block(folders: list[Any]) -> str:
 
 
 def build_system_prompt(agent_id: str, soul: str, knowledge_blocks: list[str] | None = None, charter: str | None = None,
-                        browser: str | None = None, cli_ref: str | None = None, shared_folders: list[Any] | None = None) -> str:
+                        browser: str | None = None, cli_ref: str | None = None, shared_folders: list[Any] | None = None,
+                        pdf_note: str | None = None) -> str:
     parts = [HUB_CONVENTIONS.format(agent_id=agent_id).strip()]
+    if pdf_note and pdf_note.strip():  # máy hub không có pdftoppm (pdf_support.system_note) — ổn định theo máy → không phá prompt cache
+        parts.append(pdf_note.strip())
     if browser:
         from .browser import prompt_block
 

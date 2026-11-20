@@ -671,8 +671,13 @@ class ManagerService:
         saved_imgs = self._save_images(aid, conv["id"], imgs) if imgs else []
         saved_docs, extracted = await self._save_files_async(aid, conv["id"], docs) if docs else ([], {})
         files = saved_imgs + saved_docs
+        pdf_render = True
+        if any(f.lower().endswith(".pdf") for f in saved_docs):
+            from ..pdf_support import pdf_render_available
+
+            pdf_render = pdf_render_available(self.hub.config)
         prompt_text = (text + (prompts.images_note(saved_imgs) if saved_imgs else "")
-                       + (prompts.files_note(saved_docs, extracted) if saved_docs else ""))
+                       + (prompts.files_note(saved_docs, extracted, pdf_render=pdf_render) if saved_docs else ""))
         if saved_imgs:
             text = f"{text}\n📎 {len(saved_imgs)} ảnh: " + ", ".join(f.rsplit("/", 1)[-1] for f in saved_imgs)
         if saved_docs:

@@ -202,6 +202,7 @@ READONLY: tuple[tuple[str, str], ...] = (
     ("runtime.kind", "Runtime"),
     ("runtime.claude.default_permission_mode", "Chế độ quyền mặc định"),
     ("runtime.claude.chrome.enabled", "Cho dùng Claude in Chrome"),
+    ("tools.poppler_path", "Thư mục poppler (pdftoppm) cho run"),
     ("web.public_origin", "Địa chỉ web public (tunnel TLS)"),
     ("web.session_max_age_s", "Tuổi tối đa phiên web (giây)"),
     ("web.trusted_devices.enabled", "Cho tin cậy thiết bị (web public + TOTP)"),

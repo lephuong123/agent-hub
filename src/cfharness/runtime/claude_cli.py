@@ -405,6 +405,10 @@ class ClaudeCliRuntime(AgentRuntime):
         tok = oauth_token(self.secrets)
         if tok:  # token của hub thắng mọi giá trị cùng tên (env_extra của run không ghi đè được)
             env[OAUTH_TOKEN_SECRET] = tok
+        if getattr(spec, "path_extra", None):  # vd poppler (`tools.poppler_path`): thêm CUỐI PATH — không che lệnh sẵn có
+            from ..pdf_support import append_path
+
+            append_path(env, list(spec.path_extra))
         return with_loopback_no_proxy(env)  # env_extra của run có thể đặt proxy → vẫn giữ loopback đi thẳng
 
     def capabilities(self) -> dict[str, bool]:

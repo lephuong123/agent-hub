@@ -247,3 +247,22 @@ async def test_office_and_pdf_documents_saved_with_readable_copy(make, tg):
     sheet = next(f for f in attachments_of(run) if f.name.endswith(".2-3._B1_KhoiLuong.csv"))
     assert sheet.name.startswith(orig) and "Đào móng" in sheet.read_text(encoding="utf-8")
     assert f"attachments/{orig}" in run["prompt"] and f"attachments/{sheet.name}" in run["prompt"] and "Excel row number" in run["prompt"]
+
+
+async def test_pdf_document_gets_text_copy_and_parts(make, tg, monkeypatch):
+    from test_doc_extract import make_pdf
+
+    from cfharness import pdf_support
+
+    monkeypatch.setattr(pdf_support, "pdf_render_available", lambda cfg=None: False)  # máy không có pdftoppm
+    d = await mk(make)
+    d.hub.config.set("attachments.pdf.split_pages", 2)
+    await push(tg, BOSS, document=("Báo cáo.pdf", make_pdf(["ZETA-1", "ZETA-2", "ZETA-3"]), "application/pdf"), caption="tóm tắt giúp")
+    run = (await until(lambda: boss_runs(d)))[0]
+    files = attachments_of(run)
+    orig = next(f for f in files if f.name.endswith("-Bao_cao.pdf"))
+    txt = next(f for f in files if f.name == orig.name + ".txt")
+    assert "--- page 3 ---\nZETA-3" in txt.read_text(encoding="utf-8")
+    assert {f.name for f in files} == {orig.name, txt.name, orig.name + ".p001-002.pdf", orig.name + ".p003-003.pdf"}
+    p = run["prompt"]
+    assert f"attachments/{txt.name}" in p and f"attachments/{orig.name}.p003-003.pdf" in p and "never pass `pages`" in p

@@ -7,6 +7,7 @@ MCP (đánh dấu thiếu lệnh của lần nhập, OAuth chưa kết nối; `-
 thư mục chung Không gian số (filehub: cần dán khoá cổng sau nhập, thư mục đồng bộ cũ cần chuyển, cổng thiếu khoá), repo workspace (có chưa, HEAD khớp
 `repos.json` của gói), agent bị tạm dừng vì thiếu workspace, lịch đang tạm dừng (clone), việc viết lại
 tri thức còn dở (`import_followups`), `imported_from`/`cloned_from`/`migrated_to`, tự khởi động (gợi ý đúng OS), `cfharness[vector]`,
+`pdftoppm` (poppler, cảnh báo — `tools.poppler_path`, pdf_support.py),
 quyền file (POSIX), dung lượng HUB_HOME theo mục cấp 1 + thư mục làm việc dọn được (`housekeeping.py` — chỉ báo; dọn = `--cleanup`,
 cần daemon, RPC `hub.cleanup`). Kết quả `{ok, home, checks[{id, check, ok, level ok|info|warning|error, detail, fix?}], summary}`.
 
@@ -110,6 +111,7 @@ def run(paths: "HubPaths", *, probe: bool = False, claude_binary: str | None = N
         _daemon(ck, paths)
         _autostart(ck, paths)
         _vector(ck, cfg)
+        _poppler(ck, cfg)
         _perms(ck, paths)
         hk = _housekeeping(ck, paths, c)
         recent = _recent_errors(ck, paths)
@@ -392,6 +394,30 @@ def _vector(ck: _Checks, cfg: dict[str, Any]) -> None:
     have = importlib.util.find_spec("fastembed") is not None
     ck.add("vector", "graph memory vector (cfharness[vector])", have, "đã cài" if have else "chưa cài — recall chỉ dùng FTS5", "info",
            fix="uv tool install --force 'cfharness[vector]' (cùng nguồn cài hiện tại)")
+
+
+def _poppler(ck: _Checks, cfg: dict[str, Any]) -> None:
+    """`pdftoppm` (poppler) cho tool Read đọc PDF có `pages` — thiếu chỉ là cảnh báo: hub vẫn trích chữ + tách phần PDF và nhắc agent
+    đọc PDF chỉ với `file_path` (docs/dev-notes/pdf-attachments.md)."""
+    from .pdf_support import CONFIG_KEY, FIX_HINT, pdftoppm_status, validate_poppler_path
+
+    configured = ((cfg.get("tools") or {}).get("poppler_path")) if cfg else None
+    bad = ""
+    if configured is not None:
+        try:
+            validate_poppler_path(configured)
+        except ValueError as e:
+            bad = str(e)
+    st = pdftoppm_status(cfg, ttl_s=0)
+    if bad:
+        ck.add("pdftoppm", "pdftoppm (poppler) cho đọc PDF", False, f"{bad}" + (f" — đang dùng {st['path']} trên PATH" if st["usable"] else ""),
+               "warning", fix=f"sửa {CONFIG_KEY} (thư mục chứa pdftoppm) hoặc `cfharness config set {CONFIG_KEY} null`")
+    elif st["usable"]:
+        ck.add("pdftoppm", "pdftoppm (poppler) cho đọc PDF", True, f"{st['path']}" + (f" ({CONFIG_KEY})" if st["source"] == "config" else ""))
+    else:
+        ck.add("pdftoppm", "pdftoppm (poppler) cho đọc PDF", False,
+               "không có — Read của agent không đọc PDF theo trang (`pages`); hub vẫn trích chữ + tách phần PDF đính kèm", "warning",
+               fix=FIX_HINT)
 
 
 def _perms(ck: _Checks, paths: "HubPaths") -> None:

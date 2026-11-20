@@ -708,6 +708,12 @@ DEFAULTS: dict[str, Any] = {
             "timeout_s": 90,  # hạn giờ cứng của tiến trình trích một PDF (5..600 giây); quá → chỉ lưu bản gốc
         },
     },
+    # Công cụ ngoài cho run `claude`. `poppler_path` = thư mục chứa `pdftoppm(.exe)` (poppler) — tool Read cần nó khi đọc PDF có
+    # `pages`; đặt → thêm vào CUỐI PATH của mọi run + hub thôi nhắc agent "không truyền pages" (pdf_support.py). null = chỉ dò PATH.
+    # Nhánh `tools` ∈ integrity.SECURITY_KEYS (đổi PATH của mọi run) — chỉ người đặt bằng `cfharness config set`.
+    "tools": {
+        "poppler_path": None,
+    },
     # Thư mục dùng chung với "Không gian số" (docs/dev-notes/filehub.md) qua CỔNG CFHARNESS (filehub/lane/) — chế độ duy nhất từ H5 (đồng bộ
     # 2 chiều `tang-thu-sync-headless` đã bỏ; khoá cũ của nó trong config.yaml — sync_binary, local_parent, device_name, mode… — được bỏ qua).
     # Nhánh `filehub` ∈ integrity.SECURITY_KEYS — chỉ người đổi (CLI `cfharness filehub …`, thẻ Cài đặt).
@@ -1052,6 +1058,10 @@ def validate_setting(key: str, value: Any) -> None:
     if key in ("audit.archive_after_days", "audit.archive_tick_s"):  # L5
         if isinstance(value, bool) or not isinstance(value, int) or value < (0 if key.endswith("days") else 60):
             raise ValueError(f"{key} phải là số nguyên ≥ {0 if key.endswith('days') else 60}")
+    if key == "tools" or key.startswith("tools."):
+        from .pdf_support import validate_setting as _validate_tools
+
+        _validate_tools(key, value)
     if key == "attachments" or key.startswith("attachments."):
         _validate_attachments(key, value)
     if key == "files" or key.startswith("files."):

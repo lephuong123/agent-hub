@@ -747,6 +747,7 @@ class RunManager:
             require_no_auto_memory=bool(iso.get("require_no_auto_memory")),
             permission_prompt_tool=perm_tool,
             env_extra=env_extra,
+            path_extra=_poppler_path_extra(hub),  # `tools.poppler_path` hợp lệ → cuối PATH (tool Read vẽ trang PDF)
             json_schema=opts.get("json_schema") or agent.get("result_schema"),  # M3 FR-RT-14
             agents_json=agent.get("subagents") or None,  # M3 FR-RT-13
             worktree=opts.get("worktree") if wkind == "worktree" else None,
@@ -1578,6 +1579,17 @@ def _lane_browse(hub: Any, run: dict[str, Any], opts: dict[str, Any]) -> bool:
         return bool(lane is not None and lane.browse_enabled())
     except Exception:  # pragma: no cover — không bao giờ làm hỏng spawn vì phần đọc thêm này
         return False
+
+
+def _poppler_path_extra(hub: Any) -> list[str]:
+    """`tools.poppler_path` còn hợp lệ (kiểm lại lúc spawn) → [thư mục] thêm vào cuối PATH của run; không/hỏng → []."""
+    try:
+        from .pdf_support import run_path_extra
+
+        return run_path_extra(hub.config)
+    except Exception:  # best-effort: không bao giờ làm hỏng spawn vì phần phụ này
+        log.debug("không đọc được tools.poppler_path", exc_info=True)
+        return []
 
 
 def _agent_read_only(agent: dict[str, Any]) -> bool:
