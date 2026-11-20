@@ -70,8 +70,11 @@ def _view(a: dict[str, Any]) -> dict[str, Any]:
     kl = KIND_LABEL.get(kind, "")
     if kl and kl == (a.get("label") or ""):  # tài khoản ảo có nhãn trùng loại ("Đăng nhập của máy") → không hiện hai lần
         kl = KIND_HINT.get(kind, "")
+    cai = a.get("claudeai") if isinstance(a.get("claudeai"), dict) else None
     return {**a, "chip": label, "tone": tone, "kind_label": kl, "can_use": kind in ("token", "machine") and not a.get("active"),
-            "can_rm": kind == "token" and not a.get("active"), "can_rename": kind == "token"}  # core từ chối đổi tên machine/custom
+            "can_rm": kind == "token" and not a.get("active"), "can_rename": kind == "token",  # core từ chối đổi tên machine/custom
+            # phiên claude.ai (connector) RIÊNG của tài khoản — từ cache của account.list (không chạy claude mỗi dòng); custom: không có
+            "cai": cai if kind in ("token", "machine") else None}
 
 
 def gate_closed(status: dict[str, Any] | None, now: float | None = None) -> str | None:
@@ -99,6 +102,7 @@ def _login(request: Request) -> dict[str, Any] | None:
 
 async def accounts_ctx(request: Request, status: dict[str, Any] | None) -> dict[str, Any]:
     """Ngữ cảnh khối "Tài khoản Claude" cho settings.html. Daemon chưa có `account.*` → `accounts=None` (khối hiện hướng dẫn)."""
+    cai = await claudeai_ctx(request)  # TRƯỚC account.list: kiểm phiên của `machine` → cache mới cho dòng "Đăng nhập của máy"
     try:
         res = await rpc(request, "account.list", {}) or {}
     except (RpcError, DaemonUnavailable, OSError):
@@ -110,13 +114,17 @@ async def accounts_ctx(request: Request, status: dict[str, Any] | None) -> dict[
     cur = (status or {}).get("account") or next(({"id": a["id"], "label": a.get("label")} for a in rows or [] if a.get("active")), None)
     return {"accounts": rows, "acct_active": (res or {}).get("active"), "acct_current": cur, "acct_login": _login(request),
             "acct_blocked": blocked, "acct_gate_until": _hhmm(until) if until else "", "acct_auth_block": bool((status or {}).get("auth_block")),
-            "acct_switch": others, "claudeai": await claudeai_ctx(request)}
+            "acct_switch": others, "claudeai": cai}
 
 
-async def _chain_claudeai(request: Request) -> bool:
-    """Thêm tài khoản xong → mở luôn lượt gắn connector (đăng nhập claude.ai cùng tài khoản). Lỗi = bỏ qua (người bấm tay sau)."""
+async def _chain_claudeai(request: Request, r: Any) -> bool:
+    """Thêm tài khoản xong → mở luôn lượt gắn connector CHO TÀI KHOẢN VỪA THÊM (phiên claude.ai riêng của nó). Lỗi = bỏ qua
+    (người bấm tay sau)."""
+    aid = str((((r or {}) if isinstance(r, dict) else {}).get("account") or {}).get("id") or "")
+    if not aid:
+        return False
     try:
-        await _cai_start(request, {})
+        await _cai_start(request, {"id": aid})
         return True
     except (RpcError, DaemonUnavailable, OSError):
         return False
@@ -187,7 +195,7 @@ async def _login_finish(request: Request, p: dict[str, Any]) -> dict[str, Any]:
     sess = session_of(request)
     if sess is not None:
         sess.extra.pop(LOGIN_KEY, None)
-    return {**(r or {}), "cai_started": await _chain_claudeai(request)}
+    return {**(r or {}), "cai_started": await _chain_claudeai(request, r)}
 
 
 async def _login_cancel(request: Request, p: dict[str, Any]) -> dict[str, Any]:
@@ -203,7 +211,7 @@ async def _login_cancel(request: Request, p: dict[str, Any]) -> dict[str, Any]:
 async def _add_token(request: Request, p: dict[str, Any]) -> dict[str, Any]:
     r = await rpc(request, "account.add_token", p, audit=True)
     p.clear()
-    return {**(r or {}), "cai_started": await _chain_claudeai(request)}
+    return {**(r or {}), "cai_started": await _chain_claudeai(request, r)}
 
 
 def _added_ok(r: Any, f: FormData) -> str:
@@ -238,7 +246,7 @@ def _use_confirm(f: FormData) -> str:
 
 
 async def _cai_start(request: Request, p: dict[str, Any]) -> dict[str, Any]:
-    r = await rpc(request, "account.claudeai_login_start", {}, audit=True) or {}
+    r = await rpc(request, "account.claudeai_login_start", {"id": str(p.get("id") or "machine")}, audit=True) or {}
     if not str(r.get("url") or "").startswith("https://"):
         try:
             await rpc(request, "account.login_cancel", {"login_id": r.get("login_id")}, audit=True)
@@ -256,7 +264,20 @@ async def _cai_finish(request: Request, p: dict[str, Any]) -> dict[str, Any]:
 
 def _cai_ok(r: Any, f: FormData) -> str:
     who = (r or {}).get("email") or "tài khoản claude.ai"
-    return f"Đã gắn connector của {who} — agent dùng được mọi connector đã Connect trên claude.ai của tài khoản này"
+    return (f"Đã gắn connector của {who} — khi tài khoản này đang dùng, agent dùng được mọi connector đã Connect trên claude.ai "
+            "của nó")
+
+
+def _cai_id(f: FormData) -> str:
+    v = str(f.get("id") or "").strip() or "machine"
+    if v != "machine" and not v.startswith("a_"):
+        raise ValueError("tài khoản không hợp lệ")
+    return v
+
+
+def _cai_logout_confirm(f: FormData) -> str:
+    return (f"Gỡ connector của tài khoản «{_who(f)}» (đăng xuất claude.ai của tài khoản này khỏi máy chạy hub)? Khi tài khoản này "
+            "đang dùng, agent sẽ không dùng được connector (Google Drive…) cho tới khi gắn lại.")
 
 
 def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
@@ -277,7 +298,7 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
     actions["account_login_cancel"] = Action("account.login_cancel", lambda f: {"login_id": _req(f, "login_id", "lượt đăng nhập")},
                                              "Đã huỷ lượt đăng nhập", call=_login_cancel)
     # phiên claude.ai cho connector (`claude auth login` của user OS chạy hub) — người dùng TỰ đăng nhập trên web hub của mình
-    actions["claudeai_login_start"] = Action("account.claudeai_login_start", lambda f: {},
+    actions["claudeai_login_start"] = Action("account.claudeai_login_start", lambda f: {"id": _cai_id(f)},
                                              "Gắn connector — bấm «Mở trang đăng nhập», đăng nhập tài khoản claude.ai, rồi dán code vào ô bên dưới",
                                              call=_cai_start)
     actions["claudeai_login_finish"] = Action("account.claudeai_login_finish", lambda f: {"login_id": _req(f, "login_id", "lượt đăng nhập"),
@@ -285,8 +306,8 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
                                               _cai_ok, call=_cai_finish, secret_fields=("code",))
     actions["claudeai_login_cancel"] = Action("account.login_cancel", lambda f: {"login_id": _req(f, "login_id", "lượt đăng nhập")},
                                               "Đã bỏ qua gắn connector", call=_login_cancel)
-    actions["claudeai_logout"] = Action("account.claudeai_logout", lambda f: {}, "Đã gỡ connector (đăng xuất claude.ai) — agent không còn dùng connector",
-                                        confirm="Gỡ connector (đăng xuất claude.ai khỏi máy chạy hub)? Agent sẽ không dùng được connector "
-                                                "(Google Drive…) cho tới khi gắn lại.", danger=True)
+    actions["claudeai_logout"] = Action("account.claudeai_logout", lambda f: {"id": _cai_id(f)},
+                                        lambda r, f: f"Đã gỡ connector của tài khoản {_who(f)} (đăng xuất claude.ai)",
+                                        confirm=_cai_logout_confirm, danger=True)
     actions["account_add_token"] = Action("account.add_token", lambda f: {"label": _label(f), "token": _secret(f, "token", "token")},
                                           _added_ok, call=_add_token, secret_fields=("token",))

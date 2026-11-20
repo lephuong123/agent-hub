@@ -64,7 +64,8 @@ OPEN_TASK_EXCLUDE = ("done", "archived")
 # ============================================================================ claude home + mã hoá cwd
 def claude_home() -> Path:
     """Thư mục cấu hình Claude Code của người dùng: `CLAUDE_CONFIG_DIR` (claude tự đọc biến này) hoặc `~/.claude`. Chỉ là chỗ ĐỌC/GHI
-    file session — hub không bao giờ đặt `CLAUDE_CONFIG_DIR` cho tiến trình `claude` (mất OAuth, spike M0)."""
+    file session — hub không đặt `CLAUDE_CONFIG_DIR` cho tiến trình `claude` thường (mất OAuth, spike M0); ngoại lệ: run connector của
+    tài khoản token dùng thư mục riêng `HUB_HOME/claude-config/<id>/` có `projects` symlink về đây (accounts/claude_config.py)."""
     if os.environ.get("CFHARNESS_TESTING") == "1" and os.environ.get(TEST_ENV):
         return Path(os.environ[TEST_ENV])
     env = os.environ.get("CLAUDE_CONFIG_DIR")

@@ -68,7 +68,7 @@ async def test_login_flow_status_and_logout(d, tmp_path):
     assert claude_cli._login_cache == {}  # run sau kiểm lại phiên ngay
     assert d.hub.accounts._logins == {}
     ev = d.hub.store.query_events(types=["account.claudeai_login"])
-    assert [e.payload for e in ev] == [{"logged_in": True}]
+    assert [e.payload for e in ev] == [{"id": "machine", "logged_in": True}]
     rows = [r[0] for r in d.hub.store.conn.execute("SELECT data FROM audit_log WHERE kind LIKE 'account.claudeai%'")]
     assert rows and not any(GOOD in (x or "") for x in rows)  # code không vào audit
 

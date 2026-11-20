@@ -1,4 +1,4 @@
-"""CLI `cfharness account list|add|login|use|rename|rm|check` (client thuần của daemon, RPC `account.*`).
+"""CLI `cfharness account list|add|login|use|rename|rm|check|connector` (client thuần của daemon, RPC `account.*`).
 
 Đổi tài khoản chỉ bằng lệnh của NGƯỜI (`account use`) — hub không tự đổi. Token không bao giờ in ra.
 """
@@ -32,7 +32,48 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     rm.add_argument("id")
     ck = ss.add_parser("check", help="kiểm `claude auth status` với token của tài khoản", parents=[common])
     ck.add_argument("id")
+    cn = ss.add_parser("connector", help="phiên claude.ai (connector Google Drive…) RIÊNG của tài khoản: login | logout | status",
+                       parents=[common])
+    cn.add_argument("id", help="id tài khoản (a_xxxxxxxx) hoặc `machine` (đăng nhập của máy)")
+    cn.add_argument("op", choices=("login", "logout", "status"), nargs="?", default="status")
     s.set_defaults(fn=cmd_account)
+
+
+def _cai_line(st: dict[str, Any]) -> str:
+    if st.get("logged_in"):
+        return f"Connector: đã gắn — claude.ai {st.get('email') or ''}".rstrip()
+    if st.get("logged_in") is False:
+        return "Connector: chưa gắn (agent chưa dùng được Google Drive… bằng tài khoản này)"
+    return f"Connector: không kiểm được{(' — ' + str(st['error'])) if st.get('error') else ''}"
+
+
+def _cmd_connector(ctx: Any) -> int:
+    a = ctx.args
+    if a.op == "status":
+        st = ctx.call("account.claudeai_status", {"id": a.id}, timeout=120)
+        ctx.out(st) if ctx.json else print(_cai_line(st))
+        return 0
+    if a.op == "logout":
+        st = ctx.call("account.claudeai_logout", {"id": a.id}, timeout=120)
+        ctx.out(st) if ctx.json else print("Đã gỡ connector (đăng xuất claude.ai) của tài khoản " + a.id + ".")
+        return 0
+    lg = ctx.call("account.claudeai_login_start", {"id": a.id}, timeout=120)
+    print(f"Gắn connector cho tài khoản {lg.get('account_label') or a.id}: mở link sau, đăng nhập CÙNG tài khoản claude.ai, "
+          "bấm Authorize rồi dán code:")
+    print(f"  {lg['url']}")
+    try:
+        code = input("Code: ").strip()
+    except (KeyboardInterrupt, EOFError):
+        ctx.call("account.login_cancel", {"login_id": lg["login_id"]})
+        print("\nĐã huỷ.")
+        return 1
+    if not code:
+        ctx.call("account.login_cancel", {"login_id": lg["login_id"]})
+        print("Không có code — đã huỷ.")
+        return 1
+    st = ctx.call("account.claudeai_login_finish", {"login_id": lg["login_id"], "code": code}, timeout=180)
+    ctx.out(st) if ctx.json else print(_cai_line(st))
+    return 0
 
 
 def _line(a: dict[str, Any]) -> str:
@@ -47,6 +88,11 @@ def _line(a: dict[str, Any]) -> str:
         extra.append(f"hôm nay ${a['cost_today_usd']:.2f}")
     if a.get("last_error") and a.get("status") in ("auth_error", "unknown"):
         extra.append(str(a["last_error"])[:80])
+    cai = a.get("claudeai") if isinstance(a.get("claudeai"), dict) else None
+    if cai and cai.get("logged_in"):
+        extra.append(f"connector {cai.get('email') or ''}".rstrip())
+    elif cai and cai.get("logged_in") is False:
+        extra.append("connector chưa gắn")
     return f"  {mark} {a['id']:<12} {a['label'][:32]:<32} {st:<14}" + (" · " + " · ".join(extra) if extra else "")
 
 
@@ -95,6 +141,8 @@ def cmd_account(ctx: Any) -> int:
             sc = r["saved_custom"]
             print(f"Token tự đặt trước đó đã được lưu thành tài khoản {sc['id']} ({sc['label']}).")
         return 0
+    if act == "connector":
+        return _cmd_connector(ctx)
     if act == "rename":
         r = ctx.call("account.rename", {"id": a.id, "label": a.label})
         ctx.out(r) if ctx.json else print(f"Đã đổi tên {r['account']['id']} → {r['account']['label']}.")

@@ -47,6 +47,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 ### An toàn
 - An toàn: agent không còn đọc được cấu hình/đăng nhập của Claude Code — `~/.claude.json` (và các bản sao lưu `~/.claude.json*`, `~/.claude/backups/`), `.credentials.json`, thư mục `$CLAUDE_CONFIG_DIR` và `HUB_HOME/claude-config/` — vốn có thể chứa header/env bí mật của MCP và token OAuth. Chặn ở sandbox, luật quyền tool Read/Grep/Glob và bộ phân loại (`claude_credentials`, cấm thẳng), áp cho mọi agent kể cả agent được trust full.
 
+- Connector claude.ai giờ **theo từng tài khoản Claude**: mỗi tài khoản trong Cài đặt › Tài khoản Claude có nút **Gắn connector** / **Gỡ connector** và hiện email claude.ai đã gắn; agent dùng connector (Google Drive, Gmail…) của tài khoản **đang dùng**, đổi tài khoản là đổi luôn bộ connector. Thêm tài khoản xong, bước "Gắn connector" gắn cho chính tài khoản vừa thêm. Terminal: `cfharness account connector <id> login|logout|status`. `cfharness hub doctor` tính cả `connectors.auto` và kiểm phiên của tài khoản đang dùng.
+  - Lưu ý khi cập nhật: nếu trước đây bạn đã "Gắn connector" ở hàng **Đăng nhập của máy** nhưng hub đang dùng một tài khoản khác (vd "Mặc định"), agent tạm không dùng được connector — bấm **Gắn connector** trên hàng tài khoản đang dùng (đăng nhập claude.ai lại một lần).
+
 ---
 
 ## v0.2.26 — 2026-11-20

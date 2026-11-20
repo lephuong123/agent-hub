@@ -131,7 +131,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "schedule": {"add", "create", "edit", "update", "pause", "resume", "rm", "remove", "delete", "run-now", "run_now"},
     "session": {"reindex"},  # dựng lại chỉ mục tìm kiếm hội thoại (session.reindex ∈ HUMAN_ONLY) — `session status` chỉ đọc
     # Tài khoản Claude (accounts/, luồng core): account.* ghi ∈ HUMAN_ONLY — agent không tự thêm/đổi/xoá tài khoản Claude
-    "account": {"add", "login", "use", "rename", "rm", "remove", "delete", "check"},
+    "account": {"add", "login", "use", "rename", "rm", "remove", "delete", "check", "connector"},
     # Thư mục chung Không gian số (filehub/): filehub.* ghi ∈ HUMAN_ONLY — khoá cổng, gỡ/đổi tên, lô xoá (giữ cả tên lệnh cũ của đồng bộ đã bỏ)
     # `lane` (cổng cfharness: setup/test/disable/add/orphans… — khoá hub của người) + `switch` (đổi chế độ sync|lane) — chỉ người
     "filehub": {"setup", "login", "add", "remove", "rm", "rename", "pause", "resume", "switch-to-workspace", "lane", "switch"},
@@ -956,6 +956,7 @@ def sensitive_read(p: str, ctx: GuardContext) -> bool:
         for h in homes:
             if (_under(c, h + "/secrets") or _under(c, h + "/auth") or _under(c, h + "/backups") or _under(c, h + "/filehub")
                     or _under(c, h + "/exports") or _under(c, h + "/imports") or _under(c, h + "/logs") or _under(c, h + "/audit-archive")
+                    or _under(c, h + "/claude-config")  # phiên claude.ai (OAuth) riêng của từng tài khoản
                     or _same(c, h + "/mcp_server/tokens.json")):  # L6: logs/ = log hệ thống (id, đường dẫn, lỗi của mọi agent)
                 return True
             parts = [x.lower() for x in _rel_parts(c, h)] if IS_WINDOWS else _rel_parts(c, h)
@@ -1566,7 +1567,8 @@ class BashAnalyzer:
                     f"{h}/audit-archive",  # L5: audit đã lưu trữ
                     # L7: gói chẩn đoán (exports/support-*.tar.gz) + gói xuất/nhập hub + bản sao lưu — vốn đã ∈ sandbox deny + sensitive_read
                     # (tool Read), giờ Bash `cat/tar/cp` cũng forbidden ở lớp classifier
-                    f"{h}/exports", f"{h}/imports", f"{h}/backups"]
+                    f"{h}/exports", f"{h}/imports", f"{h}/backups",
+                    f"{h}/claude-config"]  # phiên claude.ai (OAuth) riêng của từng tài khoản (accounts/claude_config.py)
         if self.ctx.hub_socket:
             sock = canon_path(self.ctx.hub_socket)
             out += [sock, sock + ".auth", sock + ".web.auth", sock + ".mcp.auth"]

@@ -3,13 +3,15 @@
 - `account.list {}` → `{active, accounts: [Account]}` (đọc)
 - `account.login_start {label}` → `{login_id, url, expires_at}` · `account.login_finish {login_id, code}` → `{account}` ·
   `account.login_cancel {login_id}` → `{ok}`
-- `account.claudeai_status {}` → `{logged_in, email, org, plan, connectors_auto, connectors_auth, login}` (đọc, HUMAN_ONLY) ·
-  `account.claudeai_login_start {}` → `{login_id, url, expires_at}` · `account.claudeai_login_finish {login_id, code}` → status ·
-  `account.claudeai_logout {}` → status — phiên `claude auth login` của user OS (connector claude.ai), không tạo tài khoản token
+- `account.claudeai_status {id?}` → `{id, logged_in, email, org, plan, connectors_auto, connectors_auth, login}` (đọc, HUMAN_ONLY;
+  không id = `machine` + `accounts: {<id>: {logged_in, email}}` từ cache) · `account.claudeai_login_start {id?}` →
+  `{login_id, url, expires_at, account_id, account_label}` · `account.claudeai_login_finish {login_id, code}` → status ·
+  `account.claudeai_logout {id?}` → status — phiên `claude auth login --claudeai` RIÊNG của từng tài khoản (connector claude.ai;
+  tài khoản token: `HUB_HOME/claude-config/<id>/`, `machine` = cấu hình mặc định — id mặc định `machine`), không tạo tài khoản token
 - `account.add_token {label, token}` → `{account}` · `account.use {id}` → `{active, previous}` · `account.rename {id, label}` → `{account}` ·
   `account.rm {id}` → `{ok}` (đang dùng → Conflict; `machine` không xoá được) · `account.check {id}` → `{account}`
 Account = `{id, label, kind: token|machine|custom, active, created_at, expires_at, last_used_at, status: ok|auth_error|rate_limited|expiring|unknown,
-last_error, rate_limit: {until, utilization}|null, cost_today_usd}` — KHÔNG BAO GIỜ có token.
+last_error, rate_limit: {until, utilization}|null, cost_today_usd, claudeai: {logged_in: bool|null, email}|null}` — KHÔNG BAO GIỜ có token.
 Ghi ∈ HUMAN_ONLY (không ở MANAGER_ALLOWED: đổi tài khoản chỉ do NGƯỜI). Tự bọc audit (`MUTATING_ACCOUNTS`); `token`/`code` bị gỡ khỏi
 params TRƯỚC khi audit đọc.
 Event: `account.added|removed|renamed|switched`.
@@ -71,13 +73,13 @@ def register_rpc(daemon: "Daemon") -> None:
         "account.add_token": _add,
         "account.use": lambda p: s.use(str(_req(p, "id"))),
         "account.rename": lambda p: {"account": s.rename(str(_req(p, "id")), _req(p, "label"))},
-        "account.rm": lambda p: s.remove(str(_req(p, "id"))),
+        "account.rm": lambda p: s.remove_account(str(_req(p, "id"))),
         "account.check": _check,
         # phiên claude.ai (`claude auth login`) cho connector — docs/dev-notes/manager-connectors.md
-        "account.claudeai_status": lambda p: s.claudeai_status(),
-        "account.claudeai_login_start": lambda p: s.claudeai_login_start(),
+        "account.claudeai_status": lambda p: s.claudeai_status(p.get("id")),
+        "account.claudeai_login_start": lambda p: s.claudeai_login_start(p.get("id")),
         "account.claudeai_login_finish": _cai_finish,
-        "account.claudeai_logout": lambda p: s.claudeai_logout(),
+        "account.claudeai_logout": lambda p: s.claudeai_logout(p.get("id")),
     }
     for name in MUTATING_ACCOUNTS:
         methods[name] = wrap_with_audit(daemon.hub, name, methods[name])

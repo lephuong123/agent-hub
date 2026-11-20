@@ -93,3 +93,9 @@ duyệt trên máy daemon, đọc URL/token bằng regex chịu mã ANSI + xuố
 - Code sai → phiên đăng nhập đóng, người phải bấm thêm tài khoản lại (không thử lại trên cùng phiên).
 - `runs.account_id` = con trỏ người chọn; ai đặt tay `CLAUDE_CODE_OAUTH_TOKEN` (hiện `custom`) thì run vẫn ghi con trỏ cũ.
 - Task `wait_reason=backoff` (rate limit không rõ giờ reset) không được đánh thức khi đổi tài khoản — chờ backoff ngắn như cũ.
+
+## Connector claude.ai theo tài khoản (2026-11-20)
+
+Mỗi tài khoản token có phiên claude.ai RIÊNG trong `HUB_HOME/claude-config/<id>/` (CLAUDE_CONFIG_DIR); run có connector dùng phiên
+của tài khoản ĐANG DÙNG, không mượn phiên tài khoản khác. `Account.claudeai = {logged_in, email}` (cache, không chạy claude khi list);
+`account.claudeai_*` nhận `id`. Chi tiết: `docs/dev-notes/manager-connectors.md` — "Mỗi tài khoản một connector riêng".

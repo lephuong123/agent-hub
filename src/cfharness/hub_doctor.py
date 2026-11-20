@@ -99,7 +99,7 @@ def run(paths: "HubPaths", *, probe: bool = False, claude_binary: str | None = N
         if c is None:
             ck.add("hub_db", "hub.db", False, f"không có/không mở được {paths.db}", fix="cfharness hub import <gói> hoặc cfharness daemon start")
         secrets = _secret_names(home)
-        _claude(ck, cfg, secrets, c, probe=probe, binary=claude_binary)
+        _claude(ck, cfg, secrets, c, probe=probe, binary=claude_binary, home=home)
         _secret_refs(ck, paths, c, secrets)
         _mcp(ck, c, secrets, mcp_probe if probe else None)
         _channels(ck, cfg, secrets)
@@ -125,7 +125,8 @@ def run(paths: "HubPaths", *, probe: bool = False, claude_binary: str | None = N
 
 
 # ============================================================================ từng nhóm
-def _claude(ck: _Checks, cfg: dict[str, Any], secrets: set[str], c: sqlite3.Connection | None, *, probe: bool, binary: str | None) -> None:
+def _claude(ck: _Checks, cfg: dict[str, Any], secrets: set[str], c: sqlite3.Connection | None, *, probe: bool, binary: str | None,
+            home: Path | None = None) -> None:
     ccfg = ((cfg.get("runtime") or {}).get("claude") or {}) if cfg else {}
     b = binary or ccfg.get("binary") or "claude"
     path = shutil.which(b)
@@ -165,7 +166,7 @@ def _claude(ck: _Checks, cfg: dict[str, Any], secrets: set[str], c: sqlite3.Conn
     else:
         ck.add("claude_login", "đăng nhập claude", False, "chưa xác nhận (không có token trong secret store)", "warning",
                fix="claude auth login (hoặc cfharness hub doctor --probe để kiểm `claude auth status`)")
-    _connectors(ck, cfg, c, probe=probe, path=path, tok=bool(tok or accts))
+    _connectors(ck, cfg, c, probe=probe, path=path, tok=bool(tok or accts), home=home)
 
 
 def _connector_users(cfg: dict[str, Any], c: sqlite3.Connection | None) -> list[str]:
@@ -173,6 +174,8 @@ def _connector_users(cfg: dict[str, Any], c: sqlite3.Connection | None) -> list[
     out: list[str] = []
     if (((cfg.get("manager") or {}).get("capabilities") or {}).get("connectors")):
         out.append("(điều phối viên)")
+    if (cfg.get("connectors") or {}).get("auto"):  # connectors.auto (mặc định bật): mọi run làm việc của agent dùng connector
+        out.append("(connectors.auto)")
     if c is not None and "agents" in _tables(c):
         for r in c.execute("SELECT id, tool_policy FROM agents WHERE deleted_at IS NULL"):
             try:
@@ -184,22 +187,40 @@ def _connector_users(cfg: dict[str, Any], c: sqlite3.Connection | None) -> list[
     return out
 
 
-def _connectors(ck: _Checks, cfg: dict[str, Any], c: sqlite3.Connection | None, *, probe: bool, path: str | None, tok: bool) -> None:
-    """Token `setup-token` không nạp connector claude.ai → run có connector cần phiên `claude /login` của user OS
-    (docs/dev-notes/manager-connectors.md, `runtime.claude.connectors_auth`)."""
+def _connector_account(c: sqlite3.Connection | None, home: Path | None) -> tuple[str, Path | None]:
+    """(nhãn tài khoản đang dùng, thư mục cấu hình claude riêng | None) theo con trỏ `claude_account_active` (doctor không đọc giá
+    trị secret nên không so token): tài khoản token → `HUB_HOME/claude-config/<id>/`; machine/chưa cấu hình → cấu hình mặc định."""
+    from .accounts import claude_config
+
+    aid = _state(c, "claude_account_active")
+    d = claude_config.account_dir(home, str(aid)) if (home is not None and isinstance(aid, str)) else None
+    return (str(aid) if d is not None else "đăng nhập của máy"), d
+
+
+def _connectors(ck: _Checks, cfg: dict[str, Any], c: sqlite3.Connection | None, *, probe: bool, path: str | None, tok: bool,
+                home: Path | None = None) -> None:
+    """Token `setup-token` không nạp connector claude.ai → run có connector cần phiên claude.ai của TÀI KHOẢN ĐANG DÙNG (tài khoản
+    token: thư mục cấu hình riêng; machine: phiên `/login` mặc định của user OS) — docs/dev-notes/manager-connectors.md,
+    `runtime.claude.connectors_auth`. `connectors.auto` tính là "đang dùng connector"."""
     users = _connector_users(cfg, c)
     if not users:
         return
     who = ", ".join(users[:5]) + ("…" if len(users) > 5 else "")
     mode = str(((cfg.get("runtime") or {}).get("claude") or {}).get("connectors_auth") or "auto")
-    fix = "đăng nhập `claude` (lệnh /login, tài khoản claude.ai) dưới user OS của hub, rồi kết nối connector trên claude.ai → Settings → Connectors"
+    acct, cdir = _connector_account(c, home)
+    fix = ("web hub › Cài đặt › Tài khoản Claude › «Gắn connector» ở tài khoản đang dùng (hoặc `cfharness account connector "
+           f"{acct if cdir is not None else 'machine'} login`), rồi kết nối connector trên claude.ai → Settings → Connectors")
     if mode == "token":
         ck.add("claude_connectors", "connector claude.ai", False, f"{who}: runtime.claude.connectors_auth=token — token setup-token không nạp connector",
                "warning", fix="cfharness config set runtime.claude.connectors_auth auto")
         return
     if not (probe and path):
         if tok:
-            ck.add("claude_connectors", "connector claude.ai", True, f"{who}: cần phiên claude.ai (/login) — chạy --probe để kiểm", "warning")
+            ck.add("claude_connectors", "connector claude.ai", True, f"{who}: cần phiên claude.ai của tài khoản {acct} — chạy --probe để kiểm", "warning")
+        return
+    if cdir is not None and not cdir.is_dir():
+        ck.add("claude_connectors", "connector claude.ai", False, f"{who}: tài khoản {acct} CHƯA gắn connector — connector sẽ không nạp",
+               "warning", fix=fix)
         return
     try:
         from .oscompat import exec_argv, no_window_kwargs
@@ -207,6 +228,8 @@ def _connectors(ck: _Checks, cfg: dict[str, Any], c: sqlite3.Connection | None, 
 
         env = child_env((cfg.get("runtime") or {}).get("claude") or {})
         env.pop(OAUTH_TOKEN_SECRET, None)
+        if cdir is not None:
+            env["CLAUDE_CONFIG_DIR"] = str(cdir)
         r = subprocess.run(exec_argv([path, "auth", "status"]), capture_output=True, encoding="utf-8", errors="replace", timeout=30,
                            env=env, **no_window_kwargs())
         info = json.loads(r.stdout)
@@ -215,7 +238,7 @@ def _connectors(ck: _Checks, cfg: dict[str, Any], c: sqlite3.Connection | None, 
         ck.add("claude_connectors", "connector claude.ai", False, f"không kiểm được: {type(e).__name__}", "warning", fix=fix)
         return
     ck.add("claude_connectors", "connector claude.ai", ok,
-           f"{who}: " + ("có phiên claude.ai (/login) — run connector dùng phiên này" if ok else "CHƯA có phiên claude.ai — connector sẽ không nạp"),
+           f"{who}: tài khoản {acct} " + ("có phiên claude.ai — run connector dùng phiên này" if ok else "CHƯA có phiên claude.ai — connector sẽ không nạp"),
            "warning", fix=None if ok else fix)
 
 

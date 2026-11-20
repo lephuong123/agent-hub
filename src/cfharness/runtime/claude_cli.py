@@ -14,6 +14,7 @@ import uuid
 import signal
 import subprocess
 import time
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 from ..aiotasks import track
@@ -373,7 +374,12 @@ def child_env(claude_cfg: dict[str, Any], base: dict[str, str] | None = None, *,
 
 
 _version_cache: dict[str, tuple[float, str | None]] = {}
-_login_cache: dict[str, tuple[float, bool]] = {}  # ClaudeCliRuntime.login_available (runtime tạo mới mỗi run → cache theo binary)
+# ClaudeCliRuntime.login_available (runtime tạo mới mỗi run → cache theo binary + thư mục cấu hình; khoá = binary khi cấu hình mặc định)
+_login_cache: dict[str, tuple[float, bool]] = {}
+
+
+def _login_key(binary: str, config_dir: Any) -> str:
+    return binary if not config_dir else f"{binary}\0{config_dir}"
 
 
 def claude_version(binary: str = "claude", cache_s: float = 600) -> str | None:
@@ -407,6 +413,9 @@ class ClaudeCliRuntime(AgentRuntime):
             # run có connector claude.ai: token `setup-token` không nạp connector → dùng phiên `claude /login` của user OS;
             # gỡ MỌI nguồn token (env daemon, env_extra) để CLI không ưu tiên token
             env.pop(OAUTH_TOKEN_SECRET, None)
+            cdir = getattr(spec, "claude_config_dir", None)
+            if cdir:  # tài khoản token đang dùng: phiên claude.ai RIÊNG của nó (accounts/claude_config.py) — thắng env_extra
+                env["CLAUDE_CONFIG_DIR"] = str(cdir)
             return with_loopback_no_proxy(env)
         tok = oauth_token(self.secrets)
         if tok:  # token của hub thắng mọi giá trị cùng tên (env_extra của run không ghi đè được)
@@ -454,16 +463,20 @@ class ClaudeCliRuntime(AgentRuntime):
             return None
         return bool(info["loggedIn"])
 
-    async def login_available(self) -> bool | None:
+    async def login_available(self, config_dir: Path | None = None) -> bool | None:
         """`claude auth status` KHÔNG có CLAUDE_CODE_OAUTH_TOKEN → True khi đã `/login` claude.ai (authMethod=claude.ai).
-        Cache `version_cache_s` (mặc định 600 s); không chạy được/không đọc được → None (không cache)."""
+        `config_dir` (thư mục cấu hình riêng của tài khoản token) → kiểm phiên trong thư mục đó (CLAUDE_CONFIG_DIR).
+        Cache `version_cache_s` (mặc định 600 s) theo (binary, thư mục); không chạy được/không đọc được → None (không cache)."""
         now = time.monotonic()
         binary = self.cfg.get("binary") or "claude"
-        hit = _login_cache.get(binary)
+        key = _login_key(binary, config_dir)
+        hit = _login_cache.get(key)
         if hit is not None and now - hit[0] < float(self.cfg.get("version_cache_s", 600)):
             return hit[1]
         env = child_env(self.cfg)
         env.pop(OAUTH_TOKEN_SECRET, None)
+        if config_dir:
+            env["CLAUDE_CONFIG_DIR"] = str(config_dir)
         argv = exec_argv([self.cfg.get("binary") or "claude", "auth", "status"])
         try:
             proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
@@ -485,7 +498,7 @@ class ClaudeCliRuntime(AgentRuntime):
         if not isinstance(info, dict) or "loggedIn" not in info:
             return None
         ok = bool(info.get("loggedIn")) and info.get("authMethod") == "claude.ai"
-        _login_cache[binary] = (now, ok)
+        _login_cache[key] = (now, ok)
         return ok
 
     async def oneshot(self, req: "OneShotRequest") -> "OneShotResult":

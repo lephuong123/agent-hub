@@ -29,6 +29,8 @@ from ..events import iso, make_event
 from ..redact import register_secret_values
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from ..hub import Hub
 
 log = logging.getLogger("cfharness.accounts")
@@ -36,6 +38,7 @@ log = logging.getLogger("cfharness.accounts")
 ACTIVE_KEY = "claude_account_active"
 CHECKS_KEY = "claude_account_checks"  # kết quả kiểm của tài khoản ảo machine/custom: {id: {status, last_error, checked_at}}
 MIGRATED_KEY = "claude_accounts_migrated"
+CLAUDEAI_KEY = "accounts.claudeai"  # cache phiên claude.ai theo tài khoản: {id: {logged_in, email, checked_at}} (không chạy claude khi list)
 GATES_KEY = "rate_limit_gates"  # luồng rate-limit ghi: {<account_key>: {until, source, run_id, set_at}}
 RL_BY_ACCOUNT_KEY = "rate_limit_by_account"  # luồng rate-limit ghi: {<account_key>: <state rate_limit>}
 DEFAULT_GATE_KEY = "_default"  # khoá cổng của dispatcher khi chưa cấu hình tài khoản
@@ -93,9 +96,10 @@ CLAUDEAI_LABEL = "\x00claudeai"  # nhãn nội bộ của lượt `claude auth l
 
 
 class _Login:
-    def __init__(self, handle: Any, label: str, ttl_s: float) -> None:
+    def __init__(self, handle: Any, label: str, ttl_s: float, *, account_id: str | None = None) -> None:
         self.handle = handle
         self.label = label
+        self.account_id = account_id  # lượt claude.ai (CLAUDEAI_LABEL): tài khoản được gắn connector (`machine` | a_xxxxxxxx)
         self.deadline = time.monotonic() + ttl_s
         self.expires_at = iso(datetime.now(timezone.utc) + timedelta(seconds=ttl_s))
         self.timer: asyncio.TimerHandle | None = None
@@ -212,7 +216,8 @@ class AccountService:
         elif st != "auth_error" and (exp := _parse_ts(expires_at)) is not None and exp - time.time() < EXPIRING_DAYS * 86400:
             st = "expiring"
         return {"id": aid, "label": label, "kind": kind, "active": is_active, "created_at": created_at, "expires_at": expires_at,
-                "last_used_at": last_used, "status": st, "last_error": last_error, "rate_limit": rate_limit, "cost_today_usd": cost}
+                "last_used_at": last_used, "status": st, "last_error": last_error, "rate_limit": rate_limit, "cost_today_usd": cost,
+                "claudeai": self.claudeai_brief(aid)}
 
     def _from_row(self, r: dict[str, Any], active: str | None) -> dict[str, Any]:
         return self._account(aid=r["id"], label=r["label"], kind="token", active=active, created_at=r["created_at"], expires_at=r["expires_at"],
@@ -329,10 +334,37 @@ class AccountService:
             raise Conflict("đang dùng tài khoản này — chọn tài khoản khác trước khi xoá", data={"id": account_id})
         self.secrets.delete(secret_name(account_id))
         self.store.conn.execute("DELETE FROM claude_accounts WHERE id=?", (account_id,))
+        self._cai_cache_drop(account_id)
+        from . import claude_config
+
+        try:
+            claude_config.remove(self.hub.paths.home, account_id)
+        except (HubError, OSError) as e:  # tài khoản đã xoá khỏi DB — thư mục sót không chặn thao tác của người
+            log.warning("không xoá được thư mục cấu hình claude của %s: %s", account_id, type(e).__name__)
         if self.store.state_get(ACTIVE_KEY) == account_id:  # con trỏ cũ (token đã bị đặt tay khác) — không trỏ vào tài khoản đã xoá
             self.store.state_set(ACTIVE_KEY, MACHINE if self._current_token() is None else None)
         self._publish("account.removed", {"id": account_id})
         return {"ok": True}
+
+    async def remove_account(self, account_id: str) -> dict[str, Any]:
+        """RPC `account.rm`: như `remove`, nhưng trước đó đăng xuất claude.ai (best-effort) trong thư mục cấu hình riêng của
+        tài khoản — không để sót phiên/Keychain của thư mục sắp xoá."""
+        account_id = str(account_id or "").strip()
+        if account_id in (MACHINE, CUSTOM):
+            raise HubError(f"không xoá được tài khoản '{account_id}'")
+        self._require_row(account_id)
+        if self.active_id() == account_id:
+            raise Conflict("đang dùng tài khoản này — chọn tài khoản khác trước khi xoá", data={"id": account_id})
+        for lid, s in list(self._logins.items()):  # lượt gắn connector đang mở cho tài khoản này
+            if s.account_id == account_id:
+                await self._close_login(lid)
+        env = self._cai_env(account_id)
+        if env is not None:
+            _, err = await self._auth_info(env, "logout")
+            if err:
+                log.warning("đăng xuất claude.ai của %s trước khi xoá chưa xong: %s", account_id, err[:200])
+            self._login_changed()
+        return self.remove(account_id)
 
     def migrate_legacy(self) -> dict[str, Any] | None:
         """Lần đầu: có `CLAUDE_CODE_OAUTH_TOKEN` mà chưa có tài khoản nào → tài khoản "Mặc định" từ nó, đặt đang dùng. Chạy một lần."""
@@ -389,37 +421,135 @@ class AccountService:
         return (info if isinstance(info, dict) else None), ""
 
     # ------------------------------------------------------------------ phiên claude.ai cho connector (`claude auth login`)
-    async def claudeai_status(self) -> dict[str, Any]:
-        """Phiên `claude /login` (claude.ai) của user OS chạy hub — connector claude.ai (Google Drive…) chỉ nạp với phiên này,
-        không với token setup-token. Trả `{logged_in, email, org, plan, connectors_auto, login}` (KHÔNG token)."""
-        info, err = await self._auth_info(self._env(None), "status", "--json")
+    # Mỗi tài khoản một phiên riêng (docs/dev-notes/manager-connectors.md — "Mỗi tài khoản một connector riêng"): tài khoản token
+    # dùng `HUB_HOME/claude-config/<id>/` (claude_config.py) làm CLAUDE_CONFIG_DIR; `machine` = cấu hình mặc định của user OS.
+    def config_dir(self, account_id: str) -> "Path | None":
+        """Thư mục cấu hình claude riêng của tài khoản token (có thể chưa tồn tại); machine/custom → None."""
+        from . import claude_config
+
+        return claude_config.account_dir(self.hub.paths.home, account_id)
+
+    def ensure_config_dir(self, account_id: str) -> "Path":
+        from . import claude_config
+
+        return claude_config.ensure(self.hub.paths.home, account_id)
+
+    def _cai_id(self, account_id: Any) -> str:
+        """id cho thao tác phiên claude.ai: trống → `machine` (tương thích bản cũ); `custom` không có phiên riêng."""
+        aid = str(account_id or "").strip() or MACHINE
+        if aid == MACHINE:
+            return aid
+        if aid == CUSTOM:
+            raise HubError("'custom' (token tự đặt) không có connector riêng — thêm token đó vào danh sách tài khoản trước")
+        self._require_row(aid)
+        return aid
+
+    def _cai_env(self, account_id: str, *, create: bool = False) -> dict[str, str] | None:
+        """Env cho `claude auth *` của phiên claude.ai: KHÔNG BAO GIỜ có CLAUDE_CODE_OAUTH_TOKEN; tài khoản token →
+        CLAUDE_CONFIG_DIR = thư mục riêng. Thư mục chưa có và `create=False` → None (chắc chắn chưa có phiên)."""
+        env = self._env(None)
+        if account_id == MACHINE:
+            return env
+        from . import claude_config
+
+        if create:
+            d = self.ensure_config_dir(account_id)
+        else:
+            if not claude_config.exists(self.hub.paths.home, account_id):
+                return None
+            d = self.ensure_config_dir(account_id)  # dựng lại symlink (idempotent)
+        env["CLAUDE_CONFIG_DIR"] = str(d)
+        return env
+
+    def _cai_cache(self) -> dict[str, Any]:
+        v = self.store.state_get(CLAUDEAI_KEY)
+        return dict(v) if isinstance(v, dict) else {}
+
+    def _cai_cache_set(self, account_id: str, logged_in: bool | None, email: str | None) -> None:
+        c = self._cai_cache()
+        c[account_id] = {"logged_in": logged_in, "email": email, "checked_at": iso()}
+        self.store.state_set(CLAUDEAI_KEY, c)
+
+    def _cai_cache_drop(self, account_id: str) -> None:
+        c = self._cai_cache()
+        if c.pop(account_id, None) is not None:
+            self.store.state_set(CLAUDEAI_KEY, c)
+
+    def claudeai_brief(self, account_id: str) -> dict[str, Any] | None:
+        """`{logged_in, email}` từ cache (KHÔNG chạy claude) — cho `account.list`. custom → None."""
+        if account_id == CUSTOM:
+            return None
+        e = self._cai_cache().get(account_id)
+        if not isinstance(e, dict):
+            return {"logged_in": None, "email": None}
+        return {"logged_in": e.get("logged_in"), "email": e.get("email")}
+
+    def _pending_cai(self, account_id: str | None = None) -> dict[str, Any] | None:
+        for lid, s in self._logins.items():
+            if s.label == CLAUDEAI_LABEL and (account_id is None or s.account_id == account_id):
+                return {"login_id": lid, "url": s.handle.url, "expires_at": s.expires_at, "account_id": s.account_id,
+                        "account_label": self._label_of(s.account_id)}
+        return None
+
+    def _label_of(self, account_id: str | None) -> str:
+        if account_id in (None, MACHINE):
+            return MACHINE_LABEL
+        r = self._row(account_id)
+        return r["label"] if r else account_id
+
+    async def _cai_probe(self, account_id: str) -> tuple[dict[str, Any] | None, str]:
+        """`claude auth status --json` trong thư mục cấu hình của tài khoản → (info|None, lỗi). Thư mục chưa có → chưa đăng nhập
+        (không chạy claude). Cập nhật cache khi đọc được."""
+        env = self._cai_env(account_id)
+        if env is None:
+            info: dict[str, Any] | None = {"loggedIn": False}
+            err = ""
+        else:
+            info, err = await self._auth_info(env, "status", "--json")
+        if info is not None:
+            ok = bool(info.get("loggedIn") and info.get("authMethod") == "claude.ai")
+            self._cai_cache_set(account_id, ok, (str(info.get("email") or "")[:200] or None) if ok else None)
+        return info, err
+
+    async def claudeai_status(self, account_id: Any = None) -> dict[str, Any]:
+        """Phiên `claude auth login --claudeai` của một tài khoản — connector claude.ai (Google Drive…) chỉ nạp với phiên này,
+        không với token setup-token. Không có id → `machine` (cấu hình mặc định của user OS) + `accounts` (cache mọi tài khoản).
+        Trả `{id, logged_in, email, org, plan, connectors_auto, connectors_auth, login}` (KHÔNG token)."""
+        aid = self._cai_id(account_id)
+        info, err = await self._cai_probe(aid)
         ok = bool(info and info.get("loggedIn") and info.get("authMethod") == "claude.ai")
         cfg = self.hub.config
-        out: dict[str, Any] = {"logged_in": ok if info is not None else None, "error": None if info is not None else err[:300],
+        out: dict[str, Any] = {"id": aid, "logged_in": ok if info is not None else None, "error": None if info is not None else err[:300],
                                "connectors_auto": bool(cfg.get("connectors.auto")),
                                "connectors_auth": str(cfg.get("runtime.claude.connectors_auth") or "auto"),
-                               "login": next(({"login_id": lid, "url": s.handle.url, "expires_at": s.expires_at}
-                                              for lid, s in self._logins.items() if s.label == CLAUDEAI_LABEL), None)}
+                               "login": self._pending_cai(None if account_id in (None, "") else aid)}
         if ok and info:
             out.update(email=str(info.get("email") or "")[:200] or None, org=str(info.get("orgName") or "")[:200] or None,
                        plan=str(info.get("subscriptionType") or "")[:40] or None)
+        if account_id in (None, ""):
+            out["accounts"] = {k: {"logged_in": v.get("logged_in"), "email": v.get("email")}
+                               for k, v in self._cai_cache().items() if isinstance(v, dict)}
         return out
 
-    async def claudeai_login_start(self) -> dict[str, Any]:
+    async def claudeai_login_start(self, account_id: Any = None) -> dict[str, Any]:
+        aid = self._cai_id(account_id)
         for lid in list(self._logins):  # tối đa 1 phiên — dùng chung chỗ với lượt thêm tài khoản
             await self._close_login(lid)
         from .login import CLAUDEAI_LOGIN_ARGS, start_login
 
         cfg = self._claude_cfg()
-        handle = await start_login(str(cfg.get("binary") or "claude"), self._env(None), args=CLAUDEAI_LOGIN_ARGS)
+        env = self._cai_env(aid, create=True)
+        assert env is not None
+        handle = await start_login(str(cfg.get("binary") or "claude"), env, args=CLAUDEAI_LOGIN_ARGS)
         login_id = "l_" + uuid.uuid4().hex[:12]
-        s = _Login(handle, CLAUDEAI_LABEL, self.login_ttl_s)
+        s = _Login(handle, CLAUDEAI_LABEL, self.login_ttl_s, account_id=aid)
         self._logins[login_id] = s
         try:
             s.timer = asyncio.get_running_loop().call_later(self.login_ttl_s, self._expire_soon, login_id)
         except RuntimeError:  # pragma: no cover
             pass
-        return {"login_id": login_id, "url": handle.url, "expires_at": s.expires_at}
+        return {"login_id": login_id, "url": handle.url, "expires_at": s.expires_at, "account_id": aid,
+                "account_label": self._label_of(aid)}
 
     async def claudeai_login_finish(self, login_id: str, code: Any) -> dict[str, Any]:
         code = str(code or "").strip()
@@ -427,31 +557,36 @@ class AccountService:
             raise HubError("thiếu code — dán code trang đăng nhập Claude hiển thị", code=-32602)
         register_secret_values(code)
         s = self._logins.get(login_id)
-        if s is not None and (time.monotonic() > s.deadline or s.label != CLAUDEAI_LABEL):
-            s = None if s.label != CLAUDEAI_LABEL else s
-            if s is not None:
-                await self._close_login(login_id)
-                s = None
+        if s is not None and s.label != CLAUDEAI_LABEL:
+            s = None  # lượt thêm tài khoản token không dùng để gắn connector
+        if s is not None and time.monotonic() > s.deadline:
+            await self._close_login(login_id)
+            s = None
         if s is None:
             raise NotFound("phiên đăng nhập không tồn tại hoặc đã hết hạn (10 phút) — bấm đăng nhập lại")
+        aid = s.account_id or MACHINE
         try:
             await s.handle.submit_signin(code)
         finally:
             await self._close_login(login_id)
         self._login_changed()
-        st = await self.claudeai_status()
+        st = await self.claudeai_status(aid)
         if not st.get("logged_in"):
             raise HubError("`claude auth login` đã chạy nhưng chưa thấy phiên claude.ai trên máy hub"
                            + (f" ({st['error']})" if st.get("error") else "")
                            + " — máy chạy hub có thể không lưu được đăng nhập (Keychain). Thử lại, hoặc đăng nhập bằng terminal của user hub.")
-        self.hub.publish(make_event("account.claudeai_login", None, {"logged_in": True}))
+        self.hub.publish(make_event("account.claudeai_login", None, {"id": aid, "logged_in": True}))
         return st
 
-    async def claudeai_logout(self) -> dict[str, Any]:
-        _, err = await self._auth_info(self._env(None), "logout")
+    async def claudeai_logout(self, account_id: Any = None) -> dict[str, Any]:
+        aid = self._cai_id(account_id)
+        env = self._cai_env(aid)
+        err = ""
+        if env is not None:
+            _, err = await self._auth_info(env, "logout")
         self._login_changed()
-        self.hub.publish(make_event("account.claudeai_login", None, {"logged_in": False}))
-        st = await self.claudeai_status()
+        self.hub.publish(make_event("account.claudeai_login", None, {"id": aid, "logged_in": False}))
+        st = await self.claudeai_status(aid)
         if st.get("logged_in"):
             raise HubError("đăng xuất chưa xong" + (f": {err}" if err else ""))
         return st
@@ -509,6 +644,8 @@ class AccountService:
             status, last_error = "auth_error", "claude auth status: chưa đăng nhập (token sai, đã thu hồi hoặc hết hạn)"
         else:
             status, last_error = "unknown", f"không kiểm được: {err}"[:500]
+        if account_id != CUSTOM:  # kiểm luôn phiên claude.ai (connector) của tài khoản → cache cho account.list
+            await self._cai_probe(account_id)
         if account_id in (MACHINE, CUSTOM):
             checks = dict(self.store.state_get(CHECKS_KEY) or {})
             checks[account_id] = {"status": status, "last_error": last_error, "checked_at": iso()}
