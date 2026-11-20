@@ -86,18 +86,21 @@ Cách hub xử lý (`RunSpec.auth_mode`, `RunManager._connector_auth_mode`, `Cla
 - `cfharness hub doctor --probe` có mục "connector claude.ai" khi có agent/điều phối viên bật connector.
 
 Các bước bật Google Drive cho hub dùng token chung (vd `cchcadmin`, admin.cchchn.com) — NGƯỜI DÙNG TỰ làm trên web hub của họ:
-1. Web hub › Cài đặt › Tài khoản Claude › **Connector claude.ai** › "Đăng nhập claude.ai" → mở link, đăng nhập, dán code
+1. Web hub › Cài đặt › Tài khoản Claude › hàng "Đăng nhập của máy" › **Gắn connector** (hoặc tự hiện ngay sau khi thêm tài khoản
+   mới — bước "Bỏ qua" được) → mở link, đăng nhập, dán code
    (daemon chạy `claude auth login --claudeai` trong PTY như luồng thêm tài khoản — `account.claudeai_login_start|finish`, HUMAN_ONLY,
    tự audit, code gỡ khỏi params; xong kiểm `claude auth status` không token và xoá cache `login_available`). Cách cũ (terminal của
    admin): `sudo -u <user> -H claude` → `/login`.
 2. Trên claude.ai của tài khoản đó: Settings → Connectors → Google Drive → Connect (chọn tài khoản Google).
-3. Cùng khối web: "Tự dùng connector cho mọi agent" → Bật (2 bước, = `connectors.auto`), hoặc chọn connector theo agent ở form agent /
-   `cfharness agent edit <id> --connectors "Google Drive"`.
+3. Không cần bật gì thêm (`connectors.auto` mặc định bật). Giới hạn theo agent: chọn connector ở form agent /
+   `cfharness agent edit <id> --connectors "Google Drive"` (danh sách riêng thắng `*`).
 4. `cfharness hub doctor --probe` → mục "connector claude.ai" phải xanh; chạy thử một run, không có event `connector.unavailable`.
 
 ## Tự động: mọi connector tài khoản đã Connect (`connectors.auto`, `--connectors all`) (2026-11-20)
 
-- `cfharness config set connectors.auto true` (chỉ người, nhánh `connectors` ∈ `integrity.SECURITY_KEYS`): run LÀM VIỆC của agent
+- `connectors.auto` — BẬT MẶC ĐỊNH từ v0.2.26 (chủ repo chốt 2026-11-20, web không có công tắc; tắt: `cfharness config set
+  connectors.auto false`, chỉ người, nhánh `connectors` ∈ `integrity.SECURITY_KEYS`). Bộ test chung tắt bằng env
+  `CFHARNESS_CONNECTORS_AUTO=off` (conftest — claude giả không hiểu `auth status`). Run LÀM VIỆC của agent
   CHƯA đặt `tool_policy.connectors` tự bật connector `*` = mọi server `claude.ai *` CLI nạp — tức mọi connector tài khoản `/login`
   của user OS đã Connect. Không áp cho điều phối viên (vẫn `manager.capabilities.connectors`, nhận `all`), run kỹ thuật
   (`review.NON_WORK_KINDS`), guard tắt, hay `runtime.claude.connectors_auth=token`.

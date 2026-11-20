@@ -12,6 +12,18 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ---
 
+## v0.2.26 — 2026-11-20
+
+### Connector claude.ai: mặc định bật, gắn ngay vào tài khoản (#169)
+- Agent tự dùng mọi connector đã Connect trên claude.ai (Google Drive, Gmail…) của tài khoản đã gắn connector — **bật mặc định**, không còn công tắc trên web.
+- Bỏ khối "Connector claude.ai" riêng: trạng thái nằm ngay trên hàng **Đăng nhập của máy** trong bảng Tài khoản Claude (email đang gắn, nút **Gắn connector** / **Đổi tài khoản connector** / **Gỡ connector**).
+- Thêm tài khoản mới (đăng nhập hoặc dán token) xong thì hiện luôn bước **Gắn connector** cho tài khoản đó (đăng nhập claude.ai thêm một lần; có nút Bỏ qua).
+
+#### Lưu ý khi cập nhật
+- Máy chạy hub đã đăng nhập claude.ai (`claude /login`) cho user OS của hub: sau khi cập nhật, run của MỌI agent chưa chọn connector riêng tự nạp connector của tài khoản đó, và nạp kèm cấu hình `~/.claude` của user (hook, CLAUDE.md; MCP ngoài connector vẫn bị guard chặn, plugin user bị tắt). Agent ghi bằng tài khoản thật (gửi mail, sửa Drive…) không hỏi duyệt, trừ thao tác xoá. Không muốn: `cfharness config set connectors.auto false`, hoặc gỡ bớt connector trên claude.ai.
+
+---
+
 ## v0.2.25 — 2026-11-20
 
 ### Người dùng tự đăng nhập claude.ai cho connector ngay trên web hub (#168)

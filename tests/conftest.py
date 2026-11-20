@@ -216,6 +216,13 @@ def _no_audit_watch(monkeypatch):
     monkeypatch.setenv("CFHARNESS_AUDIT_WATCH", "off")
 
 
+@pytest.fixture(autouse=True)
+def _no_connectors_auto(monkeypatch):
+    """`connectors.auto` bật mặc định → mỗi run kiểm `claude auth status`; claude giả của bộ test không hiểu lệnh đó.
+    TẮT cho bộ test chung; test connector bật lại (`monkeypatch.delenv("CFHARNESS_CONNECTORS_AUTO")`)."""
+    monkeypatch.setenv("CFHARNESS_CONNECTORS_AUTO", "off")
+
+
 @pytest.fixture
 def hub_home(tmp_path, monkeypatch) -> HubPaths:
     home = tmp_path / "hub"

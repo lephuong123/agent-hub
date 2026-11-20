@@ -564,9 +564,10 @@ DEFAULTS: dict[str, Any] = {
             "max_candidates": 80,
         },
     },
-    # Connector claude.ai tự động (docs/dev-notes/manager-connectors.md): bật = run làm việc của agent CHƯA đặt connector riêng tự nạp
-    # MỌI connector tài khoản `claude /login` của user OS đã Connect (Google Drive, Gmail…) — agent ghi bằng tài khoản thật. Chỉ người.
-    "connectors": {"auto": False},
+    # Connector claude.ai tự động (docs/dev-notes/manager-connectors.md): run làm việc của agent CHƯA đặt connector riêng tự nạp
+    # MỌI connector tài khoản `claude /login` của user OS đã Connect (Google Drive, Gmail…) — agent ghi bằng tài khoản thật. BẬT mặc
+    # định từ v0.2.26 (chủ repo chốt 2026-11-20); chỉ có tác dụng khi user OS có phiên /login. Tắt: `config set connectors.auto false`
+    "connectors": {"auto": True},
     # M5-B — FR-OB-07: OpenTelemetry (opt-in, tắt mặc định). Chỉ metadata; không input/output tool MCP, không secret.
     "telemetry": {
         "otel": {

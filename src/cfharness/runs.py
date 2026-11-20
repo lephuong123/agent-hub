@@ -1283,6 +1283,8 @@ class RunManager:
         Không áp cho điều phối viên (manager.capabilities.connectors) và run kỹ thuật (review/eval/curator/graph_extract)."""
         if not self.hub.config.get("connectors.auto") or not self.hub.config.get("guard.enabled"):
             return False
+        if os.environ.get("CFHARNESS_CONNECTORS_AUTO", "").lower() in ("off", "0", "false"):  # bộ test chung (tests/conftest.py)
+            return False
         from .learning.review import NON_WORK_KINDS
 
         if ar.kind in NON_WORK_KINDS or str(run.get("kind") or "") in NON_WORK_KINDS:
