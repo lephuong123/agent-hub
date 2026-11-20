@@ -208,3 +208,17 @@ def test_files_convention_in_slack_prompt():
     assert "[[file:" in prompts.chat_prompt("slack:D0BOSS001", "mc_1", "hi") and "Slack file" in prompts.chat_prompt("slack:D1", "mc_1", "hi")
     assert "Telegram document" in prompts.chat_prompt("telegram:111", "mc_1", "hi")
     assert "[[file:" not in prompts.chat_prompt("cli", "mc_1", "hi")
+
+
+async def test_pdf_file_accepted_with_text_copy(make, sk):
+    from test_doc_extract import make_pdf
+
+    d = await mk(make, sk)
+    eid = sk.user_files(DM_BOSS, BOSS, [("hop dong.pdf", make_pdf(["Điều 1 ETA-9"], unicode=True), "application/pdf")], text="đọc hợp đồng")
+    await deliver(sk, eid)
+    run = (await until(lambda: boss_runs(d)))[0]
+    files = attachments_of(run)
+    orig = next(f for f in files if f.name.endswith("-hop_dong.pdf"))
+    assert "Điều 1 ETA-9" in (orig.parent / (orig.name + ".txt")).read_text(encoding="utf-8")
+    assert f"attachments/{orig.name}.txt" in run["prompt"] and "text copy made by the hub" in run["prompt"]
+    assert not errors_text(sk)

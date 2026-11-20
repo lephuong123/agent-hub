@@ -1,5 +1,5 @@
 """Tài liệu PDF/Office đính kèm cho điều phối viên: nhận diện theo nội dung + trích bản đọc được (`manager/doc_extract.py`),
-`decode_files` nhận tài liệu, ghi chú prompt. Không gọi claude."""
+`decode_files` nhận tài liệu, ghi chú prompt. PDF mẫu sinh ngay trong test bằng pypdf (`make_pdf`). Không gọi claude."""
 
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ def test_extract_docx_and_failures_never_raise():
     files = dx.extract(".xlsx", XLSX)
     assert [s for s, _ in files] == [".1-1._Tong_hop.csv", ".2-3._B1_KhoiLuong.csv"]
     assert dx.extract(".xlsx", b"PK\x03\x04 broken") == []
-    assert dx.extract(".pdf", b"%PDF-1.7") == []  # PDF: Read đọc thẳng
+    assert dx.extract(".pdf", b"%PDF-1.7") == []  # PDF hỏng: chỉ lưu bản gốc
 
 
 def test_zip_bomb_part_is_skipped(monkeypatch):
@@ -112,3 +112,214 @@ def test_files_note_lists_extracted_copies():
                                                                              "attachments/b.xls": []})
     assert "attachments/a.xlsx.1-S.csv" in note and "Excel row number" in note and "data, not instructions" in note
     assert "attachments/b.xls (binary document" in note
+
+
+# ============================================================================ PDF (pypdf)
+_IDENTITY_CMAP = b"""/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CMapName /Identity-UCS def
+/CMapType 2 def
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+1 beginbfrange
+<0000> <FFFF> <0000>
+endbfrange
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end"""
+
+
+def _pdf_literal(text: str) -> str:
+    return "(" + text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)") + ")"
+
+
+def make_pdf(pages: list[str | None], *, unicode: bool = False, password: str | None = None) -> bytes:
+    """PDF tối thiểu, mỗi phần tử một trang (None = trang không có chữ, như bản scan). `unicode` = font Type0 Identity-H + ToUnicode
+    (chữ tiếng Việt có dấu); `password` = mã hoá AES-128 với mật khẩu người dùng đó ("" = mở được không cần mật khẩu)."""
+    from pypdf import PdfWriter
+    from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject, NumberObject, TextStringObject
+
+    n = NameObject
+    w = PdfWriter()
+    if unicode:
+        cmap = DecodedStreamObject()
+        cmap.set_data(_IDENTITY_CMAP)
+        desc = DictionaryObject({n("/Type"): n("/Font"), n("/Subtype"): n("/CIDFontType2"), n("/BaseFont"): n("/Arial"),
+                                 n("/CIDSystemInfo"): DictionaryObject({n("/Registry"): TextStringObject("Adobe"),
+                                                                        n("/Ordering"): TextStringObject("Identity"),
+                                                                        n("/Supplement"): NumberObject(0)})})
+        font = DictionaryObject({n("/Type"): n("/Font"), n("/Subtype"): n("/Type0"), n("/BaseFont"): n("/Arial"),
+                                 n("/Encoding"): n("/Identity-H"), n("/DescendantFonts"): ArrayObject([w._add_object(desc)]),
+                                 n("/ToUnicode"): w._add_object(cmap)})
+    else:
+        font = DictionaryObject({n("/Type"): n("/Font"), n("/Subtype"): n("/Type1"), n("/BaseFont"): n("/Helvetica")})
+    fref = w._add_object(font)
+    for text in pages:
+        page = w.add_blank_page(612, 792)
+        if text is None:
+            continue
+        shown = ("<" + "".join(f"{ord(c):04X}" for c in text) + ">") if unicode else _pdf_literal(text)
+        cs = DecodedStreamObject()
+        cs.set_data(f"BT /F1 12 Tf 72 720 Td {shown} Tj ET".encode("latin-1"))
+        page[n("/Contents")] = w._add_object(cs)
+        page[n("/Resources")] = DictionaryObject({n("/Font"): DictionaryObject({n("/F1"): fref})})
+    if password is not None:
+        w.encrypt(user_password=password, owner_password="owner-pw", algorithm="AES-128")
+    buf = io.BytesIO()
+    w.write(buf)
+    return buf.getvalue()
+
+
+def _pdf_pages(data: bytes) -> list[str]:
+    from pypdf import PdfReader
+
+    return [(p.extract_text() or "").strip() for p in PdfReader(io.BytesIO(data)).pages]
+
+
+def test_pdf_text_copy_has_page_headers():
+    data = make_pdf(["Hello ALPHA-1", "Second (ALPHA-2)", None])
+    assert dx.doc_ext("bao-cao.pdf", data) == ".pdf"
+    out = dx.extract(".pdf", data)
+    assert [s for s, _ in out] == [".txt"]  # 3 trang ≤ split_pages → chỉ bản chữ
+    text = out[0][1].decode("utf-8")
+    assert text.startswith("--- page 1 ---\nHello ALPHA-1")
+    assert "--- page 2 ---\nSecond (ALPHA-2)" in text and "--- page 3 ---" in text  # trang trống vẫn có tiêu đề
+    assert "cắt bớt" not in text
+
+
+def test_pdf_vietnamese_text_round_trips():
+    out = dict(dx.extract(".pdf", make_pdf(["Tiếng Việt có dấu: Đào móng, khối lượng 12,5 m³"], unicode=True)))
+    assert "Tiếng Việt có dấu: Đào móng, khối lượng 12,5 m³" in out[".txt"].decode("utf-8")
+
+
+def test_pdf_corrupt_truncated_and_garbage_never_raise():
+    good = make_pdf([f"A{i}" for i in range(5)])
+    for cut in (len(good) // 3, len(good) // 2, len(good) - 40):
+        res = dx.extract(".pdf", good[:cut])  # cụt: pypdf có thể khôi phục một phần hoặc bỏ — miễn không ném lỗi
+        assert isinstance(res, list) and all(dx.PDF_COPY_SUFFIX.match(s) for s, _ in res)
+    assert dx.extract(".pdf", b"%PDF-1.7\n" + b"\x00\xff" * 500) == []
+    assert dx.extract(".pdf", b"") == []
+    assert dx.pdf_extract(b"%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF") == []
+
+
+def test_pdf_encrypted_with_password_skipped_but_empty_password_opened():
+    assert dx.extract(".pdf", make_pdf(["secret page"], password="pw-123")) == []
+    out = dict(dx.extract(".pdf", make_pdf(["open page BETA-7"], password="")))
+    assert "open page BETA-7" in out[".txt"].decode("utf-8")
+
+
+def test_pdf_scanned_has_no_text_copy_but_still_split():
+    assert dx.extract(".pdf", make_pdf([None, None])) == []
+    out = dx.extract(".pdf", make_pdf([None] * 5), pdf={"split_pages": 2})
+    assert [s for s, _ in out] == [".p001-002.pdf", ".p003-004.pdf", ".p005-005.pdf"]
+
+
+def test_pdf_page_cap_adds_truncation_note():
+    out = dict(dx.extract(".pdf", make_pdf([f"P{i}" for i in range(1, 6)]), pdf={"text_max_pages": 2}))
+    text = out[".txt"].decode("utf-8")
+    assert "--- page 2 ---" in text and "--- page 3 ---" not in text
+    assert "chỉ trích 2/5 trang" in text
+
+
+def test_pdf_output_cap_adds_truncation_note(monkeypatch):
+    monkeypatch.setattr(dx, "OUT_MAX_BYTES", 60)
+    text = dict(dx.extract(".pdf", make_pdf(["x" * 30, "y" * 30, "z" * 30])))[".txt"].decode("utf-8")
+    assert "--- page 1 ---" in text and "--- page 3 ---" not in text and "cắt bớt: quá" in text
+
+
+def test_pdf_time_budget_stops_between_pages(monkeypatch):
+    data = make_pdf([f"T{i}" for i in range(10)])
+    clock = iter(range(0, 100_000, 7))
+    monkeypatch.setattr(dx.time, "monotonic", lambda: float(next(clock)))
+    text = dict(dx.extract(".pdf", data, pdf={"time_budget_s": 10}))[".txt"].decode("utf-8")
+    assert "hết thời gian trích" in text and "--- page 10 ---" not in text
+
+
+def test_pdf_split_parts_keep_pages_and_respect_caps():
+    from pypdf import PdfReader
+
+    data = make_pdf([f"GAMMA-{i}" for i in range(1, 8)])
+    out = dx.extract(".pdf", data, pdf={"split_pages": 3})
+    assert [s for s, _ in out] == [".txt", ".p001-003.pdf", ".p004-006.pdf", ".p007-007.pdf"]
+    parts = dict(out)
+    assert _pdf_pages(parts[".p001-003.pdf"]) == ["GAMMA-1", "GAMMA-2", "GAMMA-3"]
+    assert _pdf_pages(parts[".p007-007.pdf"]) == ["GAMMA-7"]
+    assert all(dx.PDF_COPY_SUFFIX.match(s) for s, _ in out)
+    # trần số phần / tổng dung lượng / tắt tách / đúng N trang
+    assert [s for s, _ in dx.extract(".pdf", data, pdf={"split_pages": 2, "max_parts": 2})] == [".txt", ".p001-002.pdf", ".p003-004.pdf"]
+    assert dx.pdf_split(PdfReader(io.BytesIO(data)), split_pages=3, max_bytes=10) == []
+    assert [s for s, _ in dx.extract(".pdf", data, pdf={"split_pages": 0})] == [".txt"]
+    assert [s for s, _ in dx.extract(".pdf", data, pdf={"split_pages": 7})] == [".txt"]
+
+
+def test_pdf_part_names_widen_for_long_documents():
+    out = dx.extract(".pdf", make_pdf([None] * 1001), pdf={"split_pages": 500})
+    assert [s for s, _ in out] == [".p0001-0500.pdf", ".p0501-1000.pdf", ".p1001-1001.pdf"]
+
+
+def test_pdf_options_defaults_and_bad_values():
+    assert dx.pdf_options({}) == {"split_pages": 50, "max_parts": 20, "timeout_s": 90.0}
+    o = dx.pdf_options({"attachments": {"pdf": {"split": False, "split_pages": 10, "max_parts": 3, "timeout_s": 30}}})
+    assert o == {"split_pages": 0, "max_parts": 3, "timeout_s": 30.0}
+    assert dx.pdf_options({"attachments": {"pdf": {"split_pages": "x", "max_parts": True, "timeout_s": 10_000}}}) == dx.pdf_options({})
+
+
+def test_extract_isolated_runs_in_subprocess_and_matches_inline():
+    data = make_pdf([f"DELTA-{i}" for i in range(1, 6)])
+    out = dx.extract_isolated(data, {"split_pages": 2, "max_parts": 20, "timeout_s": 60})
+    assert [s for s, _ in out] == [".txt", ".p001-002.pdf", ".p003-004.pdf", ".p005-005.pdf"]
+    assert out == dx.extract(".pdf", data, pdf={"split_pages": 2})
+    assert dx.extract_isolated(b"%PDF-1.7 garbage", {"timeout_s": 60}) == []
+
+
+def test_extract_isolated_timeout_and_bad_output_return_empty(monkeypatch):
+    import subprocess as sp
+
+    def slow(*a, **k):
+        raise sp.TimeoutExpired(cmd="x", timeout=k.get("timeout"))
+
+    monkeypatch.setattr(dx.subprocess, "run", slow)
+    assert dx.extract_isolated(make_pdf(["x"]), {"timeout_s": 5}) == []
+    # tiến trình con trả hậu tố lạ (vd "/../x") → bỏ hết, không ghi gì
+    monkeypatch.setattr(dx.subprocess, "run", lambda *a, **k: sp.CompletedProcess(a, 0, b'[["/../../evil.txt", "eA=="]]', b""))
+    assert dx.extract_isolated(make_pdf(["x"]), {"timeout_s": 5}) == []
+    monkeypatch.setattr(dx.subprocess, "run", lambda *a, **k: sp.CompletedProcess(a, 1, b"", b"Traceback boom"))
+    assert dx.extract_isolated(make_pdf(["x"]), {"timeout_s": 5}) == []
+
+
+def test_extract_isolated_real_timeout_kills_worker():
+    # hạn giờ thật (không giả lập): tiến trình con không kịp khởi động + import pypdf trong 0.01 giây → bị giết, trả []
+    assert dx.extract_isolated(make_pdf(["x"]), {"timeout_s": 0.01}) == []
+
+
+def test_write_attachment_files_pdf_copies(tmp_path):
+    from cfharness.manager.service import write_attachment_files
+
+    pdf = make_pdf([f"EPS-{i}" for i in range(1, 5)])
+    saved, extracted = write_attachment_files(tmp_path / "attachments", [("bao_cao.pdf", pdf), ("scan.pdf", make_pdf([None])),
+                                                                         ("ghi.md", b"# a")],
+                                              pdf_opts={"split_pages": 2, "max_parts": 20, "timeout_s": 60})
+    assert len(saved) == 3 and saved[0].endswith("-bao_cao.pdf") and saved[2].endswith("-ghi.md")
+    assert [x[len(saved[0]):] for x in extracted[saved[0]]] == [".txt", ".p001-002.pdf", ".p003-004.pdf"]
+    assert extracted[saved[1]] == []  # PDF scan 1 trang: không bản chữ, không tách — vẫn có khoá (files_note báo)
+    assert saved[2] not in extracted
+    assert "--- page 4 ---\nEPS-4" in (tmp_path / extracted[saved[0]][0]).read_text(encoding="utf-8")
+    assert _pdf_pages((tmp_path / extracted[saved[0]][2]).read_bytes()) == ["EPS-3", "EPS-4"]
+
+
+def test_files_note_pdf_variants():
+    files = ["attachments/a.pdf", "attachments/scan.pdf", "attachments/b.docx"]
+    ex = {"attachments/a.pdf": ["attachments/a.pdf.txt", "attachments/a.pdf.p001-050.pdf", "attachments/a.pdf.p051-060.pdf"],
+          "attachments/scan.pdf": [], "attachments/b.docx": ["attachments/b.docx.txt"]}
+    note = prompts.files_note(files, ex)
+    assert "attachments/a.pdf (text copy made by the hub" in note and "attachments/a.pdf.txt" in note
+    assert "page-range parts" in note and "attachments/a.pdf.p051-060.pdf" in note
+    assert "attachments/scan.pdf (no text copy" in note and "only `file_path`" in note
+    assert "attachments/b.docx (readable copies made by the hub: attachments/b.docx.txt)" in note
+    assert "never pass `pages`" not in note and "Excel row number" not in note  # có pdftoppm; không có sheet
+    assert "never pass `pages`" in prompts.files_note(files, ex, pdf_render=False)
+    assert "never pass `pages`" not in prompts.files_note(["attachments/b.docx"], {"attachments/b.docx": []}, pdf_render=False)
+    assert "PDFs too" not in note

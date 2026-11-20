@@ -698,6 +698,16 @@ DEFAULTS: dict[str, Any] = {
         "cloud_download": True,  # cho tải file về khi dùng web qua link public (xem trong trình duyệt luôn được)
         "max_download_mb": 10,  # trần tải về / ảnh / PDF (1–50 MB)
     },
+    # Tệp đính kèm gửi điều phối viên (web/Telegram/Slack) — docs/dev-notes/pdf-attachments.md. Hub luôn trích bản chữ `.txt` của PDF
+    # (pypdf, tiến trình con có hạn giờ); PDF dài hơn `split_pages` trang còn được tách thành các phần `<tên>.p001-050.pdf`.
+    "attachments": {
+        "pdf": {
+            "split": True,  # tắt = không tách phần (vẫn có bản chữ)
+            "split_pages": 50,  # số trang mỗi phần; PDF nhiều hơn N trang mới tách (1..10000)
+            "max_parts": 20,  # số phần tối đa mỗi PDF (1..200); tổng dung lượng các phần ≤ 48 MB
+            "timeout_s": 90,  # hạn giờ cứng của tiến trình trích một PDF (5..600 giây); quá → chỉ lưu bản gốc
+        },
+    },
     # Thư mục dùng chung với "Không gian số" (docs/dev-notes/filehub.md) qua CỔNG CFHARNESS (filehub/lane/) — chế độ duy nhất từ H5 (đồng bộ
     # 2 chiều `tang-thu-sync-headless` đã bỏ; khoá cũ của nó trong config.yaml — sync_binary, local_parent, device_name, mode… — được bỏ qua).
     # Nhánh `filehub` ∈ integrity.SECURITY_KEYS — chỉ người đổi (CLI `cfharness filehub …`, thẻ Cài đặt).
@@ -1042,6 +1052,8 @@ def validate_setting(key: str, value: Any) -> None:
     if key in ("audit.archive_after_days", "audit.archive_tick_s"):  # L5
         if isinstance(value, bool) or not isinstance(value, int) or value < (0 if key.endswith("days") else 60):
             raise ValueError(f"{key} phải là số nguyên ≥ {0 if key.endswith('days') else 60}")
+    if key == "attachments" or key.startswith("attachments."):
+        _validate_attachments(key, value)
     if key == "files" or key.startswith("files."):
         from .fileview import validate_setting as _validate_files
 
@@ -1101,6 +1113,40 @@ def validate_setting(key: str, value: Any) -> None:
     elif key == "runtime.claude.default_permission_mode":
         if value is not None and value not in VALID_PERMISSION_MODES:
             raise ValueError(f"permission mode không hợp lệ; chọn một trong {VALID_PERMISSION_MODES}")
+
+
+_PDF_NUM = {"split_pages": (1, 10_000), "max_parts": (1, 200), "timeout_s": (5, 600)}
+
+
+def _validate_attachments(key: str, value: Any) -> None:
+    """`attachments.pdf.*`: split (bool), split_pages/max_parts (số nguyên), timeout_s (số) trong khoảng `_PDF_NUM`."""
+    if key == "attachments":
+        if not isinstance(value, dict):
+            raise ValueError("attachments phải là object")
+        for k, v in value.items():
+            if k != "pdf":
+                raise ValueError(f"attachments.{k}: khoá không có")
+            _validate_attachments("attachments.pdf", v)
+        return
+    if key == "attachments.pdf":
+        if not isinstance(value, dict):
+            raise ValueError("attachments.pdf phải là object")
+        vals = dict(value)
+    elif key.startswith("attachments.pdf.") and key.count(".") == 2:
+        vals = {key.rsplit(".", 1)[1]: value}
+    else:
+        raise ValueError(f"{key}: khoá không có")
+    for k, v in vals.items():
+        if k == "split":
+            if not isinstance(v, bool):
+                raise ValueError("attachments.pdf.split phải là true/false")
+        elif k in _PDF_NUM:
+            lo, hi = _PDF_NUM[k]
+            ok_type = isinstance(v, (int, float)) if k == "timeout_s" else isinstance(v, int)
+            if isinstance(v, bool) or not ok_type or not lo <= v <= hi:
+                raise ValueError(f"attachments.pdf.{k} phải là {'số' if k == 'timeout_s' else 'số nguyên'} trong {lo}..{hi}")
+        else:
+            raise ValueError(f"attachments.pdf.{k}: khoá không có")
 
 
 _ADMIN_WATCH_NUM = {"interval_s": (15, 3600), "approval_wait_s": (0, 7 * 86400), "budget_warn_pct": (1, 100),

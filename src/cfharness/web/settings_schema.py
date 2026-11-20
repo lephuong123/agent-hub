@@ -100,6 +100,9 @@ GROUPS: tuple[tuple[str, str, tuple[Setting, ...]], ...] = (
         _s("manager.max_tasks_per_hour", "Tạo task tối đa / giờ", "int", "để trống = không giới hạn", nullable=True, min=0),
         _s("manager.max_runs_per_hour", "Chạy run tối đa / giờ", "int", "để trống = không giới hạn", nullable=True, min=0),
         _s("manager.max_system_ops_per_hour", "Thao tác hệ thống ngoài tối đa / giờ", "int", "để trống = không giới hạn", nullable=True, min=0),
+        _s("attachments.pdf.split", "PDF đính kèm dài: tách thành các phần", "bool", "điều phối viên đọc từng phần (giữ bảng/hình); luôn có bản chữ"),
+        _s("attachments.pdf.split_pages", "Số trang mỗi phần PDF", "int", "vd 50; PDF nhiều hơn N trang mới tách (1–10000)", min=1),
+        _s("attachments.pdf.max_parts", "Số phần tối đa mỗi PDF", "int", "vd 20 (1–200)", min=1),
     )),
     ("tasks", "Task & team", (
         _s("tasks.failure_limit", "Số lần lỗi tối đa mỗi task", "int", "task không thuộc team", min=1),

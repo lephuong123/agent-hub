@@ -146,6 +146,40 @@ def decode_files(files: Any, max_bytes: int = FILE_MAX_BYTES) -> list[tuple[str,
     return out
 
 
+def write_attachment_files(d: Path, docs: list[tuple[str, bytes]], *, pdf_opts: dict[str, Any] | None = None
+                           ) -> tuple[list[str], dict[str, list[str]]]:
+    """Tệp người gửi → `d/doc-<thời điểm>-<ngẫu nhiên>-<tên an toàn>` (0600, O_EXCL). Tài liệu trích được → thêm bản đọc được
+    cạnh bản gốc: Office (xlsx/docx/pptx) `<tên>.<n>-<sheet>.csv` / `<tên>.txt`; PDF `<tên>.txt` (chữ theo trang) + phần
+    `<tên>.p001-050.pdf`… khi dài (tiến trình con có hạn giờ — `doc_extract.extract_isolated`). Không đụng DB (chạy được trong thread).
+    Trả (đường dẫn bản gốc tương đối theo cwd, {bản gốc tài liệu: [bản trích]} — PDF/Office luôn có khoá, danh sách rỗng = không trích được)."""
+    from .doc_extract import doc_ext, extract, extract_isolated
+
+    d.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    out: list[str] = []
+    extracted: dict[str, list[str]] = {}
+
+    def write(name: str, data: bytes) -> str:
+        fd = os.open(d / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        return f"attachments/{name}"
+
+    for safe, data in docs:
+        name = f"doc-{stamp}-{secrets.token_hex(3)}-{safe}"
+        rel = write(name, data)
+        out.append(rel)
+        ext = doc_ext(safe, data)
+        if ext == ".pdf":
+            copies = extract_isolated(data, pdf_opts)
+        elif ext:
+            copies = extract(ext, data)
+        else:
+            continue
+        extracted[rel] = [write(name + suffix, body) for suffix, body in copies]
+    return out, extracted
+
+
 def is_text_bytes(data: bytes) -> bool:
     """Tệp văn bản = UTF-8 hợp lệ, không byte NUL."""
     if b"\x00" in data:
@@ -469,31 +503,18 @@ class ManagerService:
         return out
 
     def _save_files(self, agent_id: str, cid: str, docs: list[tuple[str, bytes]]) -> tuple[list[str], dict[str, list[str]]]:
-        """Tệp người gửi → `<cwd hội thoại>/attachments/doc-<thời điểm>-<ngẫu nhiên>-<tên an toàn>` (0600, O_EXCL).
-        Tài liệu Office trích được (xlsx/docx/pptx) → thêm bản đọc được cạnh bản gốc (`<tên>.<n>-<sheet>.csv` / `<tên>.txt`).
-        Trả (đường dẫn bản gốc tương đối theo cwd, {bản gốc: [bản trích]})."""
-        from .doc_extract import doc_ext, extract
+        """Bản ĐỒNG BỘ của `_save_files_async` (chặn luồng gọi tới khi trích xong) — chỉ dùng ngoài event loop."""
+        from .doc_extract import pdf_options
+
+        return write_attachment_files(Path(self._conv_cwd(agent_id, cid)) / "attachments", docs, pdf_opts=pdf_options(self.hub.config))
+
+    async def _save_files_async(self, agent_id: str, cid: str, docs: list[tuple[str, bytes]]) -> tuple[list[str], dict[str, list[str]]]:
+        """Ghi tệp + trích bản đọc được trong THREAD: trích PDF (tiến trình con, tới `attachments.pdf.timeout_s`) có thể mất vài giây —
+        không được chặn event loop của daemon. Thư mục + cấu hình lấy trên loop (DB chỉ dùng ở loop)."""
+        from .doc_extract import pdf_options
 
         d = Path(self._conv_cwd(agent_id, cid)) / "attachments"
-        d.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        out: list[str] = []
-        extracted: dict[str, list[str]] = {}
-
-        def write(name: str, data: bytes) -> str:
-            fd = os.open(d / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
-            return f"attachments/{name}"
-
-        for safe, data in docs:
-            name = f"doc-{stamp}-{secrets.token_hex(3)}-{safe}"
-            rel = write(name, data)
-            out.append(rel)
-            ext = doc_ext(safe, data)
-            if ext and ext != ".pdf":  # PDF: Read đọc thẳng
-                extracted[rel] = [write(name + suffix, body) for suffix, body in extract(ext, data)]
-        return out, extracted
+        return await asyncio.to_thread(write_attachment_files, d, docs, pdf_opts=pdf_options(self.hub.config))
 
     def _conv_cwd(self, agent_id: str, cid: str) -> str:
         home = Path(self.hub.agents.get_row(agent_id)["home_path"])
@@ -648,9 +669,10 @@ class ManagerService:
             conv = self._new_conv(channel, aid, text.splitlines()[0], workstream_id=ws_id)
         self.ws.touch(conv.get("workstream_id"))
         saved_imgs = self._save_images(aid, conv["id"], imgs) if imgs else []
-        saved_docs, extracted = self._save_files(aid, conv["id"], docs) if docs else ([], {})
+        saved_docs, extracted = await self._save_files_async(aid, conv["id"], docs) if docs else ([], {})
         files = saved_imgs + saved_docs
-        prompt_text = text + (prompts.images_note(saved_imgs) if saved_imgs else "") + (prompts.files_note(saved_docs, extracted) if saved_docs else "")
+        prompt_text = (text + (prompts.images_note(saved_imgs) if saved_imgs else "")
+                       + (prompts.files_note(saved_docs, extracted) if saved_docs else ""))
         if saved_imgs:
             text = f"{text}\n📎 {len(saved_imgs)} ảnh: " + ", ".join(f.rsplit("/", 1)[-1] for f in saved_imgs)
         if saved_docs:
