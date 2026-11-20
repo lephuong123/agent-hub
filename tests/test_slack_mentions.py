@@ -176,6 +176,25 @@ async def test_channel_reply_with_no_known_thread_goes_to_dm(make, sk):
     assert not sk.sent(CH)
 
 
+async def test_schedule_also_copy_to_slack_dm_only_if_allowlisted(make, sk):
+    """`deliver_to.also` = `slack:D…`: tin mới ở gốc DM (DM được đăng gốc); DM ngoài allowlist → không gửi."""
+    import asyncio
+
+    from cfharness.events import make_event
+
+    from test_slack import DM_STRANGER
+
+    d = await mk(make, sk)
+    for dm, txt in ((DM_BOSS, "Báo cáo 07:00 — bản gửi thêm"), (DM_STRANGER, "lọt ra ngoài")):
+        d.hub.publish(make_event("manager.reply", "boss", {"conversation_id": None, "run_id": "r_sched0001", "text": txt, "channel": f"slack:{dm}",
+                                                           "kind": "notify", "notify_kind": "schedule", "ok": True, "schedule_id": "sc_x",
+                                                           "also": True}, run_id="r_sched0001"))
+    got = await until(lambda: [m for m in sk.sent(DM_BOSS) if "bản gửi thêm" in sk.text_of(m)], timeout=10)
+    assert not got[-1].get("thread_ts")
+    await asyncio.sleep(0.4)
+    assert not sk.sent(DM_STRANGER)
+
+
 def test_result_only_prompt_scoped_to_slack_channels():
     from cfharness.manager import prompts
 

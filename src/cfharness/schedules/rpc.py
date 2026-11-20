@@ -2,9 +2,9 @@
 
 - `schedule.list {status?, created_by?, limit?}` → `[Schedule]`; `schedule.get {id, fires?}` → Schedule (+ `fires[]` lượt gần nhất)
   Schedule = `{id, name, kind: manager|agent|task, target, prompt, expr, describe, tz, status: active|paused|done, paused_reason, paused_by,
-  deliver_to:{conversation_id?, channel?}, budget_usd, options:{team?, assignee?, workspace?}, created_by: user|manager:<agent>, last_run_at,
+  deliver_to:{conversation_id?, channel?, also?:[telegram:<chat>|slack:D…]}, budget_usd, options:{team?, assignee?, workspace?}, created_by: user|manager:<agent>, last_run_at,
   last_run_id, last_task_id, last_status, next_run_at, fail_count, run_count, created_at, updated_at}`
-- `schedule.create {name?, kind, target?|team?|assignee?, prompt, expr, deliver_to?, budget_usd?}` → Schedule
+- `schedule.create {name?, kind, target?|team?|assignee?, prompt, expr, deliver_to?, also?, budget_usd?}` → Schedule (`also` = kênh chat riêng nhận THÊM kết quả, ≤ 4, chỉ người đặt; có mặt ở update = thay, vắng = giữ)
 - `schedule.update {id, …như create}` (chỉ người) · `schedule.pause {id, reason?}` · `schedule.resume {id}` · `schedule.rm {id}` ·
   `schedule.run_now {id}` → `{id, fired, run_id?, task_id?, conversation_id?, …}`
 - `schedule.preview {expr, count?}` (đọc) → `{expr, describe, next:[iso…], min_interval_s, runs_per_day}`
