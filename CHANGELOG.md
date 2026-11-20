@@ -10,14 +10,25 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
-### Web — bật connector claude.ai cho từng agent
+---
+
+## v0.2.22 — 2026-11-20
+
+### Connector claude.ai trên hub dùng token chung (#162)
+- Agent/điều phối viên bật connector claude.ai (`--connectors "Google Drive"`…) giờ dùng được connector trên hub đăng nhập bằng token `claude setup-token`: token này không nạp connector nào, nên run có connector tự chạy bằng phiên `claude /login` của user OS khi có (`runtime.claude.connectors_auth`: `auto` mặc định, `login`, `token`). Chưa đăng nhập `/login` → run vẫn chạy bằng token như cũ và có event `connector.auth_fallback`; connector chưa nối trên claude.ai (vd Google Drive `needs-auth`) → event `connector.unavailable` thay vì im lặng. `cfharness hub doctor --probe` có thêm mục "connector claude.ai". Hướng dẫn: `docs/dev-notes/manager-connectors.md`.
+- `scripts/setup-hub-user.sh` thêm bước nối connector: `CONNECTORS="Google Drive" CONNECTOR_AGENTS="<agent…>"`; hub đã có thì `sudo ONLY_CONNECTORS=1 CONNECTORS="Google Drive" CONNECTOR_AGENTS="<agent>" bash scripts/setup-hub-user.sh <user>` chỉ nâng cfharness, đăng nhập `claude auth login` cho user hub và bật connector (không đụng token, tunnel, TOTP).
+
+#### Lưu ý khi cập nhật (connector)
+- Hub đã bật connector và user OS của hub CÓ phiên `claude /login`: run có connector giờ chạy bằng tài khoản của phiên đó (hạn mức/chi phí tính vào tài khoản đó, không theo `cfharness account use`). Muốn giữ token chung như cũ: `cfharness config set runtime.claude.connectors_auth token`.
+
+### Web — bật connector claude.ai cho từng agent (#161)
 - Form sửa/tạo agent có phần **Connector claude.ai**: tick connector (gợi ý từ danh sách của điều phối viên, connector đang bật và connector
   mà `allowed_tools` cần) hoặc gõ tên khác. Đổi connector phải xác nhận (agent ghi bằng tài khoản thật). Trước đây chỉ đặt được bằng
   `cfharness agent edit <id> --connectors`.
 - Trang agent và form báo đỏ khi `allowed_tools` cho gọi `mcp__claude_ai_X__*` mà connector X chưa bật. Đây là nguyên nhân jira-ops và
   jira-analyst không thấy Atlassian MCP (run khởi động với `--setting-sources ""` + `--strict-mcp-config` nên không nạp connector).
 
-### Log hệ thống (nền tảng — L1 của `docs/dev-notes/plan-logging.md`) (#150)
+### Log hệ thống và nhật ký kiểm toán — `docs/dev-notes/plan-logging.md` (#150, #153, #155, #156, #157, #158, #159, #160)
 - Web và `cfharness mcp serve` giờ ghi log JSON có che secret như daemon (`logs/web.jsonl`, `logs/mcp.jsonl`); mỗi dòng log có thêm tiến trình, pid và vị trí mã. Log của thư viện (asyncio, mcp, uvicorn…) vào cùng file thay vì chỉ ra stderr; cảnh báo không còn bị ghi hai lần (`hub.log` + `daemon.out`).
 - `cfharness logs level` xem level log đang áp dụng; `cfharness logs level cfharness.guard debug --for 30m` bật DEBUG tạm cho một phần hub, tự về mức cũ khi hết giờ — không cần khởi động lại daemon. Đổi lâu dài: `cfharness config set logs.level …` (có hiệu lực ngay).
 - Lỗi trước đây chết im lặng giờ được ghi lại: tác vụ nền lỗi, lỗi trong thread, lỗi không ai bắt, listener event lỗi (không còn làm hỏng việc phát event). Daemon treo: `cfharness daemon dump-stacks` ghi stack mọi thread vào `logs/faults.log`.

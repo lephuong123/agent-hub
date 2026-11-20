@@ -189,6 +189,8 @@
     "cache.warning": "summary",
     "cli.unknown_rate_alert": "summary",
     "cli.version_warning": "summary",
+    "connector.auth_fallback": "summary",
+    "connector.unavailable": "summary",
     "control.request": "debug",
     "control.response": "debug",
     "curation.completed": "summary",

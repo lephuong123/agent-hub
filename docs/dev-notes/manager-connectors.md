@@ -63,6 +63,34 @@ lấy theo tên trong Claude Code (`claude.ai Claude Docs` → `Claude Docs`). H
   - còn lại → `write` (ghi audit, KHÔNG hỏi duyệt — theo yêu cầu người dùng);
   - tên khớp mẫu xoá (`delete|trash|remove…`) hoặc tool được bảo vệ trong policy → `destructive` (approval như luật cũ).
 
+## Kiểu đăng nhập: connector cần phiên `/login`, không dùng được token `setup-token` (2026-11-20)
+
+Đã kiểm `claude` 2.1.325 (macOS), cùng cờ `--setting-sources user`, không `--strict-mcp-config`:
+
+| Đăng nhập | Server `claude.ai *` trong system/init |
+|---|---|
+| Phiên `claude /login` (authMethod `claude.ai`) | có (29 connector của tài khoản, mỗi cái `connected`/`needs-auth`) |
+| `CLAUDE_CODE_OAUTH_TOKEN` (token `claude setup-token`) | **không có cái nào** |
+
+Hub dùng chung token setup-token (secret `CLAUDE_CODE_OAUTH_TOKEN`, `scripts/setup-hub-user.sh`) → trước bản này, bật
+`--connectors` trên hub đó không có tác dụng và không báo gì.
+
+Cách hub xử lý (`RunSpec.auth_mode`, `RunManager._connector_auth_mode`, `ClaudeCliRuntime.login_available`):
+- `runtime.claude.connectors_auth` = `auto` (mặc định): run có connector kiểm `claude auth status` **không kèm token** (cache 10 phút).
+  Có phiên claude.ai → run chạy bằng phiên đó (gỡ `CLAUDE_CODE_OAUTH_TOKEN` khỏi env của run, cả từ env daemon lẫn `env_extra`).
+  Không có → giữ token như cũ + event `connector.auth_fallback{reason}`. `login` = luôn dùng phiên; `token` = không bao giờ.
+- Run có connector dùng tài khoản của phiên `/login`, KHÔNG theo `cfharness account use` (đổi tài khoản chỉ chép token).
+  Hạn mức/chi phí tính vào tài khoản đó.
+- Adapter phát `connector.unavailable{connector, status, api_key_source}` cho mỗi connector người cho phép mà system/init không
+  có (`missing`) hoặc chưa `connected` (vd `needs-auth` = chưa nối connector trên claude.ai). Chỉ ở init đầu.
+- `cfharness hub doctor --probe` có mục "connector claude.ai" khi có agent/điều phối viên bật connector.
+
+Các bước bật Google Drive cho hub dùng token chung (vd `cchcadmin`, admin.cchchn.com):
+1. Đăng nhập dưới user OS của hub: `sudo -u <user> -H claude` → `/login` (tài khoản claude.ai muốn agent dùng), rồi thoát.
+2. Trên claude.ai của tài khoản đó: Settings → Connectors → Google Drive → Connect (chọn tài khoản Google).
+3. `cfharness agent edit <id> --connectors "Google Drive"` (hoặc `manager capabilities set --connectors "Google Drive"`).
+4. `cfharness hub doctor --probe` → mục "connector claude.ai" phải xanh; chạy thử một run, không có event `connector.unavailable`.
+
 ## Rủi ro chấp nhận
 
 - **Cấu hình user lọt vào run:** hook user (vd `SessionStart`) chạy trong run, CLAUDE.md của user được nạp, plugin synced nạp.

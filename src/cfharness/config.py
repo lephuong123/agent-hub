@@ -839,6 +839,9 @@ DEFAULTS: dict[str, Any] = {
             "default_permission_mode": None,
             # cache `claude --version` (giây)
             "version_cache_s": 600,
+            # Run có connector claude.ai: token `setup-token` (secret CLAUDE_CODE_OAUTH_TOKEN) KHÔNG nạp connector → auto = dùng
+            # phiên `claude /login` của user OS khi có (không thì token + event connector.auth_fallback), login = luôn, token = không
+            "connectors_auth": "auto",
             # prompt hệ thống dài hơn ngưỡng (ký tự) → `--append-system-prompt-file <runtime/run/system_prompt.md>` thay vì argv.
             # Windows giới hạn dòng lệnh 32767 ký tự: prompt điều phối viên ~37k đưa thẳng vào argv → WinError 206 (kiểm CLI 2.1.325).
             "system_prompt_file_min_chars": 8000,
@@ -1101,6 +1104,9 @@ def validate_setting(key: str, value: Any) -> None:
     elif key == "runtime.claude.default_permission_mode":
         if value is not None and value not in VALID_PERMISSION_MODES:
             raise ValueError(f"permission mode không hợp lệ; chọn một trong {VALID_PERMISSION_MODES}")
+    elif key == "runtime.claude.connectors_auth":
+        if value not in ("auto", "login", "token"):
+            raise ValueError("runtime.claude.connectors_auth phải là auto|login|token")
 
 
 _ADMIN_WATCH_NUM = {"interval_s": (15, 3600), "approval_wait_s": (0, 7 * 86400), "budget_warn_pct": (1, 100),

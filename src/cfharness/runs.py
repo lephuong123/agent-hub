@@ -753,6 +753,7 @@ class RunManager:
             no_session_persistence=bool(opts.get("no_session_persistence")),  # M4-B: run eval
             isolation_overrides=(conn or {}).get("isolation_overrides"),
             allowed_mcp_prefixes=(conn or {}).get("allowed_mcp_prefixes"),
+            connectors=list((conn or {}).get("connectors") or []) or None,  # slug đã chuẩn hoá (tool_policy.connectors / capabilities)
             trust_full=trusted and tp.get("permission_mode") == "bypassPermissions",
             persist_thinking=bool(claude_cfg.get("persist_thinking", True)),
             thinking_max_chars=int(claude_cfg.get("thinking_max_chars") or 8000),
@@ -904,6 +905,8 @@ class RunManager:
             recall = await self._memory_prefetch(run, agent)  # graph memory: top-k fact vào TIN USER ĐẦU (không vào system prompt)
             spec = self._prepare_spec(run, agent, recall=recall)
             spec.control_handler = functools.partial(self._control_request, ar)  # CLI 2.1.303+: control_request can_use_tool → guard
+            if spec.connectors:
+                spec.auth_mode = await self._connector_auth_mode(runtime, agent_id, run_id)
             await self._checkpoint(ar, run, spec)
             cli_version = await self._check_cli_version(runtime, agent_id, run_id)
             if self._ended_before_start(run_id):
@@ -1268,6 +1271,24 @@ class RunManager:
         others = [a.run_id for a in self.active.values() if a.agent_id == agent_id and a.run_id != run_id and a.handle is not None]
         status = "working" if others else ("error" if outcome in ("failed", "crashed") else "idle")
         self.hub.agents.set_status(agent_id, status, current_run_id=others[0] if others else None, reason=f"run {outcome}")
+
+    async def _connector_auth_mode(self, runtime: AgentRuntime, agent_id: str, run_id: str) -> str:
+        """Run có connector claude.ai: token `setup-token` (secret CLAUDE_CODE_OAUTH_TOKEN) KHÔNG nạp connector nào (đã kiểm 2.1.325)
+        → dùng phiên `claude /login` của user OS. `runtime.claude.connectors_auth`: auto (mặc định — login khi có, không thì token +
+        event `connector.auth_fallback`), login (luôn), token (không bao giờ). docs/dev-notes/manager-connectors.md"""
+        mode = str(self.hub.config.get("runtime.claude.connectors_auth") or "auto")
+        if mode in ("login", "token"):
+            return mode
+        try:
+            ok = await runtime.login_available()
+        except Exception:  # best-effort: không kiểm được → giữ token (hành vi cũ)
+            log.debug("không kiểm được phiên claude.ai cho connector", exc_info=True)
+            ok = None
+        if ok:
+            return "login"
+        self.hub.publish(make_event("connector.auth_fallback", agent_id, {"reason": "no_claude_ai_login" if ok is False else "unknown"},
+                                    run_id=run_id))
+        return "token"
 
     async def _auth_ok(self, runtime: AgentRuntime | None) -> bool | None:
         try:
