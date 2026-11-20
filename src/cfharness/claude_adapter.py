@@ -370,7 +370,12 @@ class ClaudeStreamAdapter:
 
         got = {connector_slug(str(s["name"])): s.get("status") for s in mcp if str(s.get("name") or "").startswith("claude.ai ")}
         out = []
+        if "*" in self.expected_connectors and not any(st == "connected" for st in got.values()):
+            out.append(self._ev("connector.unavailable", {"connector": "*", "status": "none_connected",
+                                                          "api_key_source": str(api_key_source or "")[:32] or None}))
         for slug in self.expected_connectors:
+            if slug == "*":
+                continue
             st = got.get(slug, "missing")
             if st != "connected":
                 out.append(self._ev("connector.unavailable", {"connector": slug, "status": str(st or "unknown")[:32],

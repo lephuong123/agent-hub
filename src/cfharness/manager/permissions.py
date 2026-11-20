@@ -80,9 +80,15 @@ CONNECTOR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()\-]{0,79}$")
 CONNECTOR_TOOL_PREFIX = "claude_ai_"
 
 
+ALL_CONNECTORS = "*"  # mọi connector claude.ai mà tài khoản đã Connect ("all" | "*"), docs/dev-notes/manager-connectors.md
+
+
 def connector_slug(name: str) -> str:
-    """"Claude Docs" | "claude.ai Claude Docs" | "claude_ai_Claude_Docs" → "Claude_Docs" (phần sau `mcp__claude_ai_`)."""
+    """"Claude Docs" | "claude.ai Claude Docs" | "claude_ai_Claude_Docs" → "Claude_Docs" (phần sau `mcp__claude_ai_`).
+    "all" / "*" → "*" (mọi connector đã kết nối của tài khoản)."""
     n = str(name).strip()
+    if n == ALL_CONNECTORS or n.lower() == "all":
+        return ALL_CONNECTORS
     for pre in ("claude.ai ", CONNECTOR_TOOL_PREFIX):
         if n.startswith(pre):
             n = n[len(pre):]
@@ -90,6 +96,8 @@ def connector_slug(name: str) -> str:
 
 
 def valid_connector(name: Any) -> bool:
+    if isinstance(name, str) and connector_slug(name) == ALL_CONNECTORS:
+        return True
     return isinstance(name, str) and bool(CONNECTOR_NAME_RE.match(name.strip())) and bool(connector_slug(name).strip("_"))
 
 

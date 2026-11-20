@@ -10,7 +10,17 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
-- `scripts/setup-hub-user.sh`: `CONNECTOR_AGENTS=all` bật connector cho mọi agent; connector được GỘP với connector agent đang có thay vì ghi đè.
+---
+
+## v0.2.23 — 2026-11-20
+
+### Agent tự dùng connector đã Connect trên tài khoản Claude
+- `cfharness config set connectors.auto true`: mọi agent chưa đặt connector riêng tự dùng MỌI connector (Google Drive, Gmail, Docs…) mà tài khoản claude.ai đăng nhập `claude /login` của hub đã Connect — không phải khai từng agent. Chỉ bật khi hub có phiên `/login` (token setup-token không nạp connector). Không áp cho điều phối viên và run kỹ thuật (review/eval/curator). Guard vẫn áp: đọc cho qua, ghi được ghi nhật ký, xoá phải duyệt; MCP lạ của `~/.claude` vẫn bị chặn.
+- `--connectors all` cho một agent (hoặc điều phối viên: `manager capabilities set --connectors all`) = mọi connector đã Connect.
+- `scripts/setup-hub-user.sh`: `CONNECTORS=auto` (đăng nhập `/login` + bật `connectors.auto`); `CONNECTOR_AGENTS=all` bật connector cho mọi agent; connector được GỘP với connector agent đang có thay vì ghi đè. (#163)
+
+#### Lưu ý khi cập nhật
+- `connectors.auto` tắt mặc định — không đổi gì cho đến khi người bật. Khi bật, agent ghi bằng tài khoản thật (Gmail, Slack…) không hỏi duyệt trừ thao tác xoá: chỉ Connect trên claude.ai những connector muốn agent dùng.
 
 ---
 

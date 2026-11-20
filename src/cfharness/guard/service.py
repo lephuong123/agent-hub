@@ -310,7 +310,11 @@ class GuardService:
             return {}
         try:
             agent = self.hub.store.get_agent(run.get("agent_id")) or {} if run.get("agent_id") else {}
-            conns = run_connectors(self.hub, agent, is_mgr)
+            ar = getattr(getattr(self.hub, "runs", None), "active", {}).get(run.get("id"))
+            if ar is not None and getattr(ar, "connectors", None) is not None:
+                conns = ar.connectors  # đúng connector spec của run đã bật (gồm connectors.auto)
+            else:
+                conns = run_connectors(self.hub, agent, is_mgr)
         except Exception:  # fail-closed: lỗi đọc cấu hình = run connector không cho connector nào
             log.debug("guard: không đọc được connector của run", exc_info=True)
             return {"connectors": (), "run_mcp_servers": frozenset()}

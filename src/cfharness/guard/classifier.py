@@ -1177,6 +1177,9 @@ def classify_mcp(tool_name: str, ti: dict[str, Any], ctx: GuardContext) -> Verdi
             pre = f"claude_ai_{slug}__"
             if rest.startswith(pre):
                 return classify_connector(f"claude_ai_{slug}", rest[len(pre):], ctx)
+        if "*" in ctx.connectors and server.startswith("claude_ai_") and tool:
+            # "all" / connectors.auto: mọi connector claude.ai tài khoản đã Connect (không gồm MCP/plugin của ~/.claude)
+            return classify_connector(server, tool, ctx)
         return Verdict("destructive", "mcp_not_in_run", "mcp", f"{tool_name}: server không thuộc agent và không nằm trong connector được phép",
                        [tool_name[:200]], forbidden=True)
     if MCP_FORBIDDEN.match(tool) or (server.startswith("hub") and tool in ("approve", "deny")):

@@ -564,6 +564,9 @@ DEFAULTS: dict[str, Any] = {
             "max_candidates": 80,
         },
     },
+    # Connector claude.ai tự động (docs/dev-notes/manager-connectors.md): bật = run làm việc của agent CHƯA đặt connector riêng tự nạp
+    # MỌI connector tài khoản `claude /login` của user OS đã Connect (Google Drive, Gmail…) — agent ghi bằng tài khoản thật. Chỉ người.
+    "connectors": {"auto": False},
     # M5-B — FR-OB-07: OpenTelemetry (opt-in, tắt mặc định). Chỉ metadata; không input/output tool MCP, không secret.
     "telemetry": {
         "otel": {
@@ -1104,6 +1107,9 @@ def validate_setting(key: str, value: Any) -> None:
     elif key == "runtime.claude.default_permission_mode":
         if value is not None and value not in VALID_PERMISSION_MODES:
             raise ValueError(f"permission mode không hợp lệ; chọn một trong {VALID_PERMISSION_MODES}")
+    elif key == "connectors.auto":
+        if not isinstance(value, bool):
+            raise ValueError("connectors.auto phải là true/false")
     elif key == "runtime.claude.connectors_auth":
         if value not in ("auto", "login", "token"):
             raise ValueError("runtime.claude.connectors_auth phải là auto|login|token")
