@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Phiên{% endblock %}
+{% block content %}
+<h1>Phiên đang hoạt động</h1>
+<table class="grid"><thead><tr><th>Tài khoản</th><th>IP</th><th>Trình duyệt</th><th>Đăng nhập</th><th>Lần cuối</th><th></th></tr></thead><tbody>
+{% for r in rows %}
+<tr><td>{{ r.email }}{% if r.current %} <span class="pill info">phiên này</span>{% endif %}</td><td>{{ r.ip }}</td><td class="small">{{ r.ua[:60] }}</td>
+<td>{{ r.created | ts }}</td><td>{{ r.last_used | ago }}</td>
+<td>{% if not r.current %}{{ op_form("auth.session_revoke", "Thu hồi", {"sid": r.sid}) }}{% endif %}</td></tr>
+{% endfor %}
+</tbody></table>
+{% endblock %}

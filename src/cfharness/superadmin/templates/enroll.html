@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Kích hoạt tài khoản{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>Kích hoạt tài khoản</h1>
+  <p>{{ info.name }} · {{ info.email }} · {{ role_vi.get(info.role, info.role) }}</p>
+  <ol>
+    <li>Quét mã QR bằng ứng dụng xác thực (Google Authenticator, 1Password…).</li>
+    <li>Đặt mật khẩu (≥ 12 ký tự) và nhập mã 6 số đang hiện trong ứng dụng.</li>
+  </ol>
+  {% if qr %}<img class="qr" src="{{ qr }}" alt="Mã QR TOTP">{% endif %}
+  <details><summary>Không quét được? Nhập khoá thủ công</summary><code class="mono">{{ info.secret }}</code></details>
+  <form method="post" action="/enroll/{{ code }}" class="stack">
+    <label>Mật khẩu <input name="password" type="password" minlength="12" autocomplete="new-password" required></label>
+    <label>Nhập lại mật khẩu <input name="password2" type="password" minlength="12" autocomplete="new-password" required></label>
+    <label>Mã TOTP <input name="totp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required></label>
+    <button class="btn primary">Kích hoạt</button>
+  </form>
+</section>
+{% endblock %}

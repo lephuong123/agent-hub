@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Nhật ký quản trị{% endblock %}
+{% block content %}
+<h1>Nhật ký quản trị</h1>
+{% if chain %}<p>{% if chain.ok %}<span class="pill ok">chuỗi băm toàn vẹn</span> {{ chain.rows }} dòng{% else %}<span class="pill bad">CHUỖI GÃY: {{ chain.reason }} tại dòng {{ chain.seq }}</span>{% endif %}</p>{% endif %}
+<form method="get" class="filters">
+  <input name="target" placeholder="đối tượng" value="{{ q.target or '' }}">
+  <input name="op_prefix" placeholder="thao tác (vd user.)" value="{{ q.op_prefix or '' }}">
+  <button class="btn">Lọc</button>
+  <a class="btn ghost" href="/audit?format=csv&target={{ q.target or '' }}&op_prefix={{ q.op_prefix or '' }}">Xuất CSV</a>
+</form>
+<table class="grid small"><thead><tr><th>#</th><th>Lúc</th><th>Người làm</th><th>IP</th><th>Thao tác</th><th>Đối tượng</th><th>Kết quả</th><th>Duyệt</th></tr></thead><tbody>
+{% for r in rows %}
+<tr><td>{{ r.seq }}</td><td>{{ r.ts | ts("%d/%m %H:%M:%S") }}</td><td>{{ r.actor_email or r.actor_id or "—" }}</td><td>{{ r.ip or "" }}</td>
+<td><code>{{ r.op }}</code></td><td>{{ r.target or "" }}</td>
+<td><span class="pill {{ 'ok' if r.outcome == 'ok' else ('warn' if r.outcome == 'pending' else 'bad') }}">{{ r.outcome }}{% if r.error_code %} · {{ r.error_code }}{% endif %}</span></td>
+<td>{{ r.approver_id or "" }}</td></tr>
+{% endfor %}
+</tbody></table>
+{% endblock %}
