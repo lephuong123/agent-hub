@@ -76,7 +76,7 @@ class AccessVerifier:
             return None
         try:
             key.verify(sig, f"{h64}.{p64}".encode("ascii"), padding.PKCS1v15(), hashes.SHA256())
-        except Exception:  # noqa: BLE001
+        except Exception:  # fail-closed: chữ ký sai → JWT không hợp lệ
             return None
         now = self.clock()
         aud = claims.get("aud")

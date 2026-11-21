@@ -82,7 +82,7 @@ class Server:
         finally:
             try:
                 writer.close()
-            except Exception:  # pragma: no cover
+            except Exception:  # best-effort: đóng kết nối đã hỏng
                 pass
 
     def every(self, seconds: float, fn: Callable[[State], Any]) -> None:

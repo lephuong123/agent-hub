@@ -53,8 +53,10 @@ class Runner:
         if env:
             e.update(env)
         try:
+            from ..oscompat import no_window_kwargs
+
             p = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout or self.timeout, env=e, cwd=cwd,
-                               check=False)
+                               check=False, **no_window_kwargs())
         except FileNotFoundError:
             return Result(127, "", f"không có chương trình {argv[0]}")
         except subprocess.TimeoutExpired:

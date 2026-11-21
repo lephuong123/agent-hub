@@ -58,7 +58,7 @@ def check_one(state: "State", d: dict[str, Any], *, ingress: Any, cf: Any, tunne
             h["dns"] = [{"type": r.get("type"), "content": r.get("content"), "proxied": r.get("proxied")} for r in recs]
             if not recs or (want and not any(r.get("type") == "CNAME" and r.get("content") == want for r in recs)):
                 codes.add("domain_dns")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # best-effort: lỗi API ghi vào health.dns_error
             h["dns_error"] = str(e)[:200]
     if ingress is not None:
         svc = ingress.hosts().get(fqdn)
@@ -89,18 +89,18 @@ def check_domains(state: "State", *, probe: Callable[[str], dict[str, Any]] | No
         return 0
     try:
         ing = machine(state).ingress()
-    except Exception:  # noqa: BLE001
+    except Exception:  # best-effort: thiếu file ingress → bỏ kiểm ingress
         ing = None
     try:
         cf = from_state(state)
-    except Exception:  # noqa: BLE001
+    except Exception:  # best-effort: chưa có token Cloudflare → bỏ kiểm DNS
         cf = None
     tunnel_id, account = setting(state.db, "cf.tunnel_id"), setting(state.db, "cf.account_id")
     tunnel_ok = None
     if cf is not None and tunnel_id and account:
         try:
             tunnel_ok = bool(cf.tunnel_connections(account, tunnel_id))
-        except Exception:  # noqa: BLE001
+        except Exception:  # best-effort: không gọi được API tunnel → không kết luận
             tunnel_ok = None
     pr = probe or state.extra.get("http_probe") or http_probe
     for d in rows:
