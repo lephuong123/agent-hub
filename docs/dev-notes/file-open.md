@@ -52,7 +52,7 @@ Daemon cũ (chưa có `file.*`) → web báo "daemon đang chạy bản cũ hơn
 ## 4. Hợp đồng HTTP (`web/file_pages.py`)
 | Route | Ghi chú |
 |---|---|
-| `GET /files/view?run=<id>\|agent=<id>&path=<p>` | Trang xem: văn bản/mã escape (autoescape, không markdown) + số dòng (CSS counter), tối đa 1 MB (`VIEW_MAX`, quá thì banner "chỉ hiển thị…"); ảnh `<img src=/files/raw…>`; PDF: link mở/tải; nhị phân: chỉ tải về. Nút "Mở bằng ứng dụng"/"Mở thư mục" chỉ khi cục bộ. Chưa đăng nhập → 303 /login. Bị chặn → 400, không có → 404 |
+| `GET /files/view?run=<id>\|agent=<id>&path=<p>[&panel=1]` | Trang xem: văn bản/mã escape (autoescape) + số dòng; file `.md/.markdown/.mdown/.mkd` thêm bản render (`present.md` — cùng bộ lọc an toàn với chat: `html=False`, link/ảnh qua `_safe_url`, không `style=`) mặc định hiện, nút "Mã nguồn" chuyển về mã thô. `panel=1` → chỉ phần thân `_file_body.html` (không khung trang, `no-store`) cho panel trượt; vẫn qua đủ `file.read` + audit (CSS counter), tối đa 1 MB (`VIEW_MAX`, quá thì banner "chỉ hiển thị…"); ảnh `<img src=/files/raw…>`; PDF: link mở/tải; nhị phân: chỉ tải về. Nút "Mở bằng ứng dụng"/"Mở thư mục" chỉ khi cục bộ. Chưa đăng nhập → 303 /login. Bị chặn → 400, không có → 404 |
 | `GET /files/raw?…[&dl=1]` | Byte gốc toàn bộ file ≤ 10 MB (`RAW_MAX`, base64 qua RPC; lớn hơn → lỗi, không trả file cắt). Inline CHỈ: ảnh raster đúng content-type, PDF, SVG (kèm CSP `sandbox` — không chạy script). Mọi loại khác: `application/octet-stream` + `Content-Disposition: attachment` + CSP sandbox. Luôn `X-Content-Type-Options: nosniff`, `no-store`. CSP chung của trang không đổi |
 | `POST /files/open` (`run|agent`, `path`, `reveal`, `csrf`, `k`) | `post_guard`: CSRF + Origin/Referer/Sec-Fetch-Site + khoá phiên WT-1. Không cục bộ → 403. `Accept: application/json` → `{ok, message}` (files.js hiện toast); không thì 303 + flash |
 
@@ -61,6 +61,17 @@ giải thích cục bộ/cloud. Có ở: dòng tool Read/Edit/Write/MultiEdit/No
 `input.file_path|notebook_path` của `tool.start`; phát lại từ DB `replay_items` và SSE `_run_converter` đều giữ chip khi `tool.complete`
 thay mục tại chỗ — `tool.complete` không mang input), và khối "Thay đổi file" (`_run_diff.html`, trừ file đã xoá). `static/files.js`
 ủy quyền sự kiện (chạy cả với mục đổ vào qua SSE), không inline script (CSP), thông báo gán bằng `textContent`. CSS riêng `static/files.css`.
+
+### Panel xem file trượt từ phải (kiểu claude.ai) — 2026-11-21
+Bấm "Xem" ở chip (click trái thường) → `files.js` nạp `/files/view?…&panel=1` vào `<aside id="fpanel">` (base.html) thay vì mở tab mới;
+giữ Ctrl/⌘/Shift/Alt hoặc chuột giữa vẫn mở tab như cũ, nút ↗ trên thanh panel mở tab mới. Bấm lại đúng chip đang mở / × / Esc → đóng.
+- HTML nhận về parse bằng `DOMParser` + `importNode` (không `innerHTML` — test khoá) → script trong đó không chạy; CSP `script-src 'self'` thêm lớp.
+- Kết quả không phải partial (hết phiên → middleware 303 `/login`, fetch đi theo) → điều hướng cả trang tới link xem, không nhét trang khác vào panel.
+- Esc: bỏ qua nếu sự kiện đã `preventDefault` hoặc đang gõ trong ô nhập NGOÀI panel (composer run: Esc = dừng lượt chạy).
+- Màn ≥ 1200 px: `#main` co lại (`width: auto` + `margin-right`) để chat/diễn biến vẫn đọc được cạnh file; chat Điều phối gập cột thông
+  tin bên phải khi panel mở. ≤ 760 px: panel phủ toàn màn. Toast nổi trên panel (z-index 70).
+- Markdown: "Xem đẹp" / "Mã nguồn" (`data-fmode` → `.fview-body[data-mode]`), nhớ lựa chọn theo người xem (`localStorage` `ahub_fmode`).
+- PDF vẫn là link mở tab mới (nhúng iframe cần nới `frame-ancestors 'none'`/`X-Frame-Options: DENY` — chưa làm, chờ quyết định).
 
 ## 5. Kiểm chứng
 - `uv run pytest -q` trên Windows 11: 2155 passed, 28 skipped; 13 failed (`test_confine.py`, `test_guard_classifier::test_confine_recall_forbidden`,
