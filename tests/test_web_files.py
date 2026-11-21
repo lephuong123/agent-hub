@@ -261,6 +261,29 @@ async def test_viewer_text_image_binary_and_raw_headers(env, ws):
     assert all("alert(1)" not in (x["data"] or "") for x in rows)  # nội dung file không bao giờ vào audit
 
 
+async def test_viewer_markdown_render_and_panel_partial(env, ws):
+    await env.login()
+    rid = await run_in(env, ws)
+    (ws / "doc.md").write_text("# Tiêu đề\n\n| a | b |\n|---|:-:|\n| 1 | 2 |\n\n<script>alert(1)</script>\n\n[x](javascript:alert(1)) [y](https://ok.example)\n",
+                               encoding="utf-8")
+    c = env.client
+    r = await c.get(f"/files/view?{q(rid, 'doc.md')}")
+    assert r.status_code == 200 and 'data-mode="md"' in r.text and 'class="md fview-md"' in r.text
+    assert "<h1>Tiêu đề</h1>" in r.text and "<table>" in r.text and 'data-fmode="src"' in r.text
+    assert 'class="fview-code"' in r.text  # mã nguồn vẫn có, chỉ ẩn bằng CSS
+    assert "<script>alert(1)" not in r.text and 'href="javascript:' not in r.text and 'href="https://ok.example"' in r.text
+    assert "<!doctype" in r.text.lower() and 'id="fpanel"' in r.text  # trang đầy đủ có khung + panel
+    # panel=1: chỉ phần thân, không khung trang / nav / panel lồng nhau
+    r = await c.get(f"/files/view?{q(rid, 'doc.md', panel='1')}")
+    assert r.status_code == 200 and "fview-md" in r.text and "<!doctype" not in r.text.lower() and 'id="fpanel"' not in r.text
+    assert "<nav" not in r.text and r.headers["cache-control"] == "no-store"
+    # file không phải markdown: không có nút chuyển chế độ
+    r = await c.get(f"/files/view?{q(rid, 'src/a.py', panel='1')}")
+    assert r.status_code == 200 and 'data-mode="src"' in r.text and "data-fmode" not in r.text and "fview-md" not in r.text
+    # panel=1 vẫn qua đủ kiểm tra phạm vi của daemon
+    assert (await c.get(f"/files/view?{q(rid, '.env', panel='1')}")).status_code == 400
+
+
 async def test_viewer_blocks_escape_secret_and_unknown_run(env, ws, tmp_path):
     await env.login()
     rid = await run_in(env, ws)
@@ -348,6 +371,7 @@ async def test_files_js_and_css_served(env):
     assert "/static/files.js" in page.text and "/static/files.css" in page.text
     js = await env.client.get("/static/files.js")
     assert js.status_code == 200 and "/files/open" in js.text and "innerHTML" not in js.text
+    assert "panel=1" in js.text and "data-fmode" in js.text and "DOMParser" in js.text
 
 
 # =========================================================================== cấu hình `files.*` (trang Cài đặt)

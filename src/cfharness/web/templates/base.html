@@ -95,6 +95,15 @@
 <div class="toasts" id="toasts" role="status" aria-live="polite">
   {% for kind, text in flashes %}<div class="flash {{ kind }}">{{ _m.icon('check' if kind == 'ok' else 'alert') }}<span class="t">{{ text }}</span><button type="button" class="toast-x" aria-label="Đóng">{{ _m.icon('x', 'sm') }}</button></div>{% endfor %}
 </div>
+{#- Panel xem file trượt từ phải (static/files.js): bấm "Xem" ở chip file → nạp /files/view?…&panel=1 vào đây, chat/lượt chạy vẫn ở bên. -#}
+<aside class="fpanel" id="fpanel" hidden aria-label="Xem file" tabindex="-1">
+  <div class="fpanel-bar">
+    <span class="fpanel-title" id="fpanel-title">Xem file</span>
+    <a class="btn icon ghost sm" id="fpanel-tab" href="#" target="_blank" rel="noopener" title="Mở trong tab mới" aria-label="Mở trong tab mới">{{ _m.icon('external') }}</a>
+    <button type="button" class="btn icon ghost sm" id="fpanel-x" title="Đóng (Esc)" aria-label="Đóng panel xem file">{{ _m.icon('x') }}</button>
+  </div>
+  <div class="fpanel-body" id="fpanel-body"></div>
+</aside>
 <dialog id="confirm-dlg" class="dlg">
   <form method="post" id="confirm-form">
     <h2>Xác nhận</h2>

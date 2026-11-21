@@ -10,6 +10,10 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Xem file ngay cạnh cuộc trò chuyện (panel trượt)
+- Bấm **Xem** ở file agent đã đọc/ghi giờ mở **panel trượt từ bên phải** (giống claude.ai) thay vì tab mới — chat / diễn biến lượt chạy vẫn ở bên trái. Đóng bằng × hoặc Esc; nút ↗ hoặc Ctrl/⌘+bấm để mở tab riêng như trước. Trên điện thoại panel phủ toàn màn.
+- File **Markdown** (`.md`) hiện bản **đã trình bày đẹp** (tiêu đề, bảng, khối mã, checklist); nút **Mã nguồn** để xem lại mã thô có số dòng. Lựa chọn được nhớ cho lần sau.
+
 ---
 
 ## v0.2.27 — 2026-11-21

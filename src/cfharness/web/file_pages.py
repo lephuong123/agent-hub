@@ -3,6 +3,8 @@
 Tiến trình web KHÔNG đọc file: mọi nội dung đi qua RPC `file.read` của daemon (HUMAN_ONLY, tự audit), mở app qua `file.open`.
 - `GET /files/view?run=<id>|agent=<id>&path=<p>` — trình xem chỉ đọc (cả máy cục bộ lẫn web public): văn bản/mã escape + số dòng
   (≤ `fileview.VIEW_MAX`, quá thì báo "đã cắt"), ảnh hiện inline, PDF mở inline/tải về, nhị phân khác chỉ có nút tải về.
+  Markdown (`.md`…) mặc định hiện bản render (`present.md`, cùng bộ lọc an toàn với chat) + nút chuyển "Mã nguồn".
+  `&panel=1` → chỉ trả phần thân (`_file_body.html`) cho panel trượt bên phải (`static/files.js`), không khung trang.
 - `GET /files/raw?…[&dl=1]` — byte gốc (≤ `fileview.RAW_MAX`). Inline CHỈ cho ảnh raster + PDF; SVG inline kèm CSP `sandbox` (không
   chạy script); mọi loại khác `Content-Disposition: attachment` + `application/octet-stream`. Luôn `X-Content-Type-Options: nosniff`.
 - `POST /files/open` (CSRF + khoá phiên WT-1 qua `post_guard`) — CHỈ khi request là CỤC BỘ (`is_local_request`): mở bằng app mặc định
@@ -33,6 +35,13 @@ INLINE_RASTER = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/bm
 RAW_CSP = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"
 LOCAL_TIP = "Mở bằng ứng dụng mặc định trên máy này (chỉ khi dùng web trên chính máy chạy hub)"
 CLOUD_TIP = "Xem trong trình duyệt (chỉ đọc)"
+
+
+MD_SUFFIXES = (".md", ".markdown", ".mdown", ".mkd")
+
+
+def is_markdown(name: str) -> bool:
+    return name.lower().endswith(MD_SUFFIXES)
 
 
 def is_local_request(request: Request) -> bool:
@@ -88,15 +97,26 @@ async def file_view(request: Request) -> Response:
     except (TypeError, ValueError, OSError):
         info["mtime_s"] = ""
     lines: list[str] = []
+    text = ""
     if info.get("kind") == "text":
         text = data.decode("utf-8", errors="replace")
         lines = text.split("\n")
         if lines and lines[-1] == "" and len(lines) > 1:
             lines.pop()
     local = is_local_request(request)
-    return await A.render(request, "file_view.html", {
-        "nav": "runs" if p.get("run_id") else "agents", "f": info, "lines": lines, "q": qs(p), "p": p, "local": local,
-        "can_download": local or info.get("cloud_download", True), "view_max": VIEW_MAX})
+    md_html = ""
+    if info.get("kind") == "text" and is_markdown(str(info.get("name") or info.get("path") or "")):
+        from markupsafe import Markup
+
+        from .present import md
+
+        md_html = Markup(md(text))  # present.md: html=False, link/ảnh qua _safe_url, không style= (CSP) — an toàn như chat
+    ctx = {"nav": "runs" if p.get("run_id") else "agents", "f": info, "lines": lines, "q": qs(p), "p": p, "local": local,
+           "can_download": local or info.get("cloud_download", True), "view_max": VIEW_MAX, "md_html": md_html}
+    if request.query_params.get("panel") == "1":  # panel trượt (static/files.js): chỉ phần thân, không khung trang
+        return A.ws(request).templates.TemplateResponse(request, "_file_body.html", {**ctx, "panel": True},
+                                                         headers={"cache-control": "no-store"})
+    return await A.render(request, "file_view.html", ctx)
 
 
 async def file_raw(request: Request) -> Response:
@@ -167,4 +187,4 @@ def routes() -> list[Any]:
     ]
 
 
-__all__ = ["routes", "is_local_request", "file_params", "PROXY_HEADERS", "LOCAL_TIP", "CLOUD_TIP"]
+__all__ = ["routes", "is_local_request", "is_markdown", "file_params", "PROXY_HEADERS", "LOCAL_TIP", "CLOUD_TIP"]
