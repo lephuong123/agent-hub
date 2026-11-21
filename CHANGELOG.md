@@ -10,19 +10,26 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
-### Sửa lỗi
+---
+
+## v0.2.28 — 2026-11-21
+
+### Sửa lỗi (#173)
 - Cập nhật trên macOS (launchd) không còn báo nhầm "khởi động lại daemon lỗi (mã 1)" khi daemon mới khởi động chậm vài giây: lệnh chờ daemon giờ thử lại khi daemon chưa kịp trả lời thay vì thoát lỗi.
 
-### Gỡ OAuth + proxy MCP do hub tự giữ — OAuth MCP từ nay do `claude` giữ theo tài khoản (`docs/dev-notes/plan-mcp-claude-native.md` PR4 giai đoạn B)
+### Gỡ OAuth + proxy MCP do hub tự giữ — OAuth MCP từ nay do `claude` giữ theo tài khoản (`docs/dev-notes/plan-mcp-claude-native.md` PR4 giai đoạn B, #174)
 - Hub không còn tự đăng nhập OAuth cho MCP server, không làm mới token, không chèn `Authorization: Bearer` vào cấu hình MCP của run và không chạy proxy loopback nữa. Server cần đăng nhập OAuth thêm vào claude theo tài khoản: Cài đặt › Tài khoản Claude › **Thêm MCP** (hoặc `cfharness mcp claude add <tên> --account <id> --url <url>` rồi `cfharness mcp claude login <tên> --account <id>`). Trang **Danh mục MCP** với server cần OAuth chỉ hướng sang đó, không cài nguồn hub nữa; `cfharness mcp add --oauth` và ô "Đăng nhập OAuth" ở trang MCP báo lỗi hướng dẫn.
 - `cfharness mcp login|logout`, nút **Kết nối / Ngắt kết nối** và RPC `mcp.oauth_*` đã gỡ — trong bản này chúng chỉ trả lỗi hướng dẫn chuyển sang claude.
 - Server OAuth kiểu cũ (nguồn hub, `auth: oauth`) còn trong registry: trang MCP hiện nhãn **cần chuyển sang claude** kèm form **Chuyển sang claude**; run của agent gán server đó bị từ chối trước khi chạy với lỗi nêu tên server và lệnh chuyển (event `mcp.unavailable{status: needs_migration}`); `cfharness hub doctor` báo lỗi; daemon ghi một dòng cảnh báo lúc khởi động. Hub không tự xoá dòng hay token nào.
 - Không đổi: MCP stdio và MCP http dùng header/secret tĩnh (nguồn hub) chạy như cũ.
-- **Lưu ý khi cập nhật**: server MCP OAuth kiểu cũ **ngừng chạy** (agent gán nó bị từ chối) tới khi chuyển sang claude. Xem server cần chuyển: `cfharness hub doctor` (mục "MCP OAuth do hub giữ") hoặc trang MCP. Chuyển từng server: `cfharness mcp migrate-to-claude <tên> --account <id>` (web: trang MCP của server → **Chuyển sang claude**), rồi đăng nhập ở hàng tài khoản trong Cài đặt — hub giữ nguyên trust, tool chặn/luôn hỏi duyệt, nhãn tool và agent đã gán; token OAuth cũ bị xoá sau khi đăng nhập claude thành công. Không dùng server nữa: `cfharness mcp rm <tên>`. Khoá cấu hình `mcp.oauth_proxy.*` và `mcp_client.oauth_callback_port` không còn tác dụng (config.yaml còn các khoá này vẫn đọc bình thường, có thể xoá).
 
-### MCP do `claude` quản lý: che secret + đăng ký trên web
+### MCP do `claude` quản lý: che secret + đăng ký trên web (#174)
 - Bảo mật: giá trị header/env/tham số/mật khẩu trong url của MCP do `claude` quản lý (`.claude.json` của cấu hình mặc định và mọi tài khoản, `remote-settings.json`) nay được che theo giá trị ở log, event, transcript run — kể cả khi server MCP in lại header trong thông báo lỗi; nạp lúc daemon khởi động và mỗi lần run bắt đầu (đọc lại khi file đổi).
 - Web: ở Cài đặt › Tài khoản Claude › MCP của tài khoản, server có trong cấu hình claude mà hub chưa đăng ký có nút **Đăng ký cho hub** (tuỳ chọn **Tin cậy**, có xác nhận); server trỏ về chính hub không đăng ký được. Form agent gắn nhãn `claude` cho MCP nguồn claude.
+
+### Lưu ý khi cập nhật
+- Server MCP OAuth kiểu cũ **ngừng chạy** (agent gán nó bị từ chối) tới khi chuyển sang claude. Xem server cần chuyển: `cfharness hub doctor` (mục "MCP OAuth do hub giữ") hoặc trang MCP. Chuyển từng server: `cfharness mcp migrate-to-claude <tên> --account <id>` (web: trang MCP của server → **Chuyển sang claude**), rồi đăng nhập ở hàng tài khoản trong Cài đặt — hub giữ nguyên trust, tool chặn/luôn hỏi duyệt, nhãn tool và agent đã gán; token OAuth cũ bị xoá sau khi đăng nhập claude thành công. Không dùng server nữa: `cfharness mcp rm <tên>`. Khoá cấu hình `mcp.oauth_proxy.*` và `mcp_client.oauth_callback_port` không còn tác dụng (config.yaml còn các khoá này vẫn đọc bình thường, có thể xoá).
+- Trên hub có server OAuth kiểu cũ: vào trang MCP của server đó, bấm **Chuyển sang claude**, chọn tài khoản, rồi đăng nhập ở Cài đặt › Tài khoản Claude › MCP của tài khoản (hoặc `cfharness mcp migrate-to-claude <tên> --account <id>`).
 
 ---
 
