@@ -199,6 +199,7 @@ async def test_users_rpc_requires_admin(hub_home, tmp_path, as_admin):
         assert (await rpc(d, "admin.nav", {}))["is_admin"] is False
         with pytest.raises(HubError):
             await rpc(d, "admin.policy", {"user": "someoneelse"})
-        assert (await rpc(d, "admin.policy", {}))["exists"] in (True, False)  # chính sách của chính mình: ai cũng xem được
+        with pytest.raises(HubError, match="không có method admin.policy"):  # VIS-07: chính sách của mình chỉ khi trang minh bạch bật
+            await rpc(d, "admin.policy", {})
     finally:
         await close(d)
