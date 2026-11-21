@@ -217,7 +217,7 @@ class JobEngine:
                 else:
                     s.apply(jc)
                     st = "done"
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # best-effort: lỗi bước được ghi vào log job + trạng thái failed (traceback vào log admind)
                 msg = str(e) if isinstance(e, StepError) else f"{type(e).__name__}: {e}"
                 jc.log("LỖI: " + msg)
                 if not isinstance(e, StepError):
@@ -279,7 +279,7 @@ class JobEngine:
                     steps[i].undo(jc)
                     undone.append(steps[i].name)
                     self.db.exec("UPDATE job_steps SET state='undone' WHERE job_id=? AND idx=?", (jid, i))
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:  # best-effort: lỗi dọn từng bước ghi vào log job, dọn tiếp bước khác
                     jc.log(f"dọn bước {steps[i].name} lỗi: {e}")
                 self._step_log(jc, i)
         self._hook(j["kind"], "on_cancel", self._ctx(j))

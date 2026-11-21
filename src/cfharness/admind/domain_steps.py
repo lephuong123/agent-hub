@@ -29,7 +29,7 @@ def tunnel_id(jc: JobCtx) -> str:
     if not tid:
         try:
             tid = _tunnel(jc).load().tunnel
-        except Exception:  # noqa: BLE001
+        except Exception:  # best-effort: chưa đọc được file tunnel → hỏi lại cf.tunnel_id
             tid = ""
     if not tid:
         raise StepError("chưa biết tunnel id (Cấu hình → cf.tunnel_id)")
@@ -121,7 +121,7 @@ class IngressAdd(Step):
         d = _domain(jc)
         try:
             return _tunnel(jc).load().hosts().get(fqdn(d)) == _service(jc, d)
-        except Exception:  # noqa: BLE001
+        except Exception:  # best-effort: không đọc được ingress = coi như chưa có, bước apply sẽ báo lỗi thật
             return False
 
     def apply(self, jc: JobCtx) -> None:
@@ -146,7 +146,7 @@ class IngressRemove(Step):
     def check(self, jc: JobCtx) -> bool:
         try:
             return fqdn(_domain(jc)) not in _tunnel(jc).load().hosts()
-        except Exception:  # noqa: BLE001
+        except Exception:  # best-effort: không đọc được ingress = chưa gỡ
             return False
 
     def apply(self, jc: JobCtx) -> None:

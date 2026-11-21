@@ -186,7 +186,7 @@ class LaunchdStep(Step):
         try:
             LaunchDaemonPlan(u, user_home=Path(home(u)), web_port=int(jc.params["web_port"]), runner=_adapter2(jc.runner),
                              directory=_launchd_dir(jc)).remove(euid=0)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # fail-closed: lỗi cài LaunchDaemon → bước lỗi (StepError)
             jc.log(f"gỡ LaunchDaemon lỗi: {e}")
 
 
@@ -250,7 +250,7 @@ class DomainStep(Step):
         for s in (IngressRemove(), DnsDelete()):
             try:
                 s.apply(jc)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # best-effort: dọn tiếp bước khác, lỗi ghi vào log job
                 jc.log(f"dọn {s.name} lỗi: {e}")
 
 
