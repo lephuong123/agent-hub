@@ -305,6 +305,24 @@ def test_wait_supervised_returns_pid_or_none(hub_home):
         RpcClient(hub_home.socket, timeout=5).call("hub.shutdown")
 
 
+def test_wait_supervised_retries_when_daemon_slow_to_answer(hub_home, monkeypatch):
+    """Sự cố v0.2.27: daemon đang khởi động nhận kết nối nhưng chưa trả lời trong 2 s → TimeoutError lọt ra, `daemon start
+    --wait-supervisor` thoát mã 1, helper ghi cập nhật "failed" dù daemon lên ngay sau đó. Giờ phải thử lại tới khi trả lời."""
+    from cfharness import daemon as D
+    from cfharness.rpc import RpcClient, RpcError
+
+    errors = [TimeoutError("timed out"), RpcError(-32000, "daemon đóng kết nối không trả lời"), ValueError("json cụt")]
+
+    def fake_call(self, method, params=None, *, timeout=None):
+        if errors:
+            raise errors.pop(0)
+        return {"pid": 4242}
+
+    monkeypatch.setattr(RpcClient, "call", fake_call)
+    monkeypatch.setattr(D.time, "sleep", lambda s: None)
+    assert D.wait_supervised(hub_home, 5) == 4242 and not errors
+
+
 # Sự cố thật (Windows, lên v0.2.11): `cfharness web --open` chạy từ venv của tool → uv không xoá được Scripts\ ("Access is denied"),
 # venv bị xoá dở, quay về cũng lỗi → hub chết hẳn. Helper giờ dừng tiến trình giữ venv trước khi cài và bật lại web sau đó.
 VENV = str(Path("/u/tools/cfharness"))

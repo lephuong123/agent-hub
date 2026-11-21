@@ -27,7 +27,7 @@ from .logs import (DEFAULT_BACKUP_COUNT, DEFAULT_MAX_AGE_DAYS, DEFAULT_MAX_BYTES
                    install_crash_handlers, rotate_if_large, setup_logging)
 from .paths import HubPaths
 from .oscompat import IS_WINDOWS, JOBS, detached_kwargs, ensure_hidden_console, same_user
-from .rpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, DaemonUnavailable, RpcClient, encode
+from .rpc import INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR, DaemonUnavailable, RpcClient, RpcError, encode
 from .runtime import AgentRuntime
 
 log = logging.getLogger("cfharness.daemon")
@@ -913,13 +913,15 @@ def _hold_while_updating(paths: HubPaths, *, poll_s: float = 1.0, max_s: float =
 
 
 def wait_supervised(paths: HubPaths, wait_s: float) -> int | None:
-    """Chờ launchd tự chạy lại daemon (không tự bật bản thứ hai). Trả pid khi daemon trả lời, None khi hết giờ."""
+    """Chờ launchd tự chạy lại daemon (không tự bật bản thứ hai). Trả pid khi daemon trả lời, None khi hết giờ.
+    Daemon đang khởi động có thể đã nhận kết nối mà chưa trả lời kịp (socket timeout) hoặc đóng kết nối giữa chừng — coi như chưa
+    lên và thử lại, không ném lỗi (sự cố v0.2.27: helper cập nhật báo "khởi động lại daemon lỗi (mã 1)" dù daemon lên ngay sau đó)."""
     client = RpcClient(paths.socket, timeout=2)
     deadline = time.monotonic() + wait_s
     while time.monotonic() < deadline:
         try:
             return int(client.call("hub.ping").get("pid") or 0)
-        except DaemonUnavailable:
+        except (DaemonUnavailable, OSError, RpcError, ValueError):  # OSError gồm TimeoutError; ValueError: dòng JSON cụt
             time.sleep(0.5)
     return None
 
