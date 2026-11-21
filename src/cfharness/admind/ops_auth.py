@@ -222,7 +222,15 @@ class SetRoleP(Params):
     reason: str = Field(default="", max_length=500)
 
 
-@op("admin.set_role", group="admin_accounts", risk="critical", params=SetRoleP, target=lambda p: p.id)
+def _set_role_pre(ctx, p: SetRoleP) -> None:
+    a = ctx.state.auth.account(p.id)
+    if not a:
+        raise OpError("not_found", "không có tài khoản")
+    if p.id == ctx.actor_id:
+        raise OpError("forbidden", "không tự đổi vai trò của mình")
+
+
+@op("admin.set_role", group="admin_accounts", risk="critical", params=SetRoleP, target=lambda p: p.id, precheck=_set_role_pre)
 def admin_set_role(ctx, p: SetRoleP) -> dict[str, Any]:
     """Đổi vai trò (thêm/hạ Super Admin — mức Tới hạn, four-eyes)."""
     a = ctx.state.auth.account(p.id)
@@ -285,7 +293,16 @@ class DeleteP(IdP):
     reason: str = Field(default="", max_length=500)
 
 
-@op("admin.delete", group="admin_accounts", risk="critical", params=DeleteP, target=lambda p: p.id)
+def _delete_pre(ctx, p: "DeleteP") -> None:
+    a = ctx.state.auth.account(p.id)
+    if not a:
+        raise OpError("not_found", "không có tài khoản")
+    if p.id == ctx.actor_id:
+        raise OpError("forbidden", "không tự xoá mình")
+    _guard_last_super(ctx, a)
+
+
+@op("admin.delete", group="admin_accounts", risk="critical", params=DeleteP, target=lambda p: p.id, precheck=_delete_pre)
 def admin_delete(ctx, p: DeleteP) -> dict[str, Any]:
     """Xoá tài khoản quản trị (four-eyes)."""
     a = ctx.state.auth.account(p.id)

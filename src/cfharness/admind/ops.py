@@ -59,7 +59,7 @@ OP_MODULES = (
     "cfharness.admind.ops_domains",
     "cfharness.admind.ops_monitor",
     "cfharness.admind.ops_jobs",
-    "cfharness.admind.ops_hub",
+    "cfharness.admind.ops_lifecycle",
     "cfharness.admind.ops_teams",
     "cfharness.admind.ops_policy",
     "cfharness.admind.ops_claude",

@@ -105,11 +105,17 @@ def zone_verify(ctx, p: ZoneIdP) -> dict[str, Any]:
     return {"ok": bool(zid)}
 
 
-@op("zone.remove", group="domain", risk="critical", params=ZoneIdP, target=lambda p: p.id)
-def zone_remove(ctx, p: ZoneIdP) -> dict[str, Any]:
-    """Bỏ zone khỏi SAC (không xoá trên Cloudflare). Zone còn tên miền → không bỏ được."""
+def _zone_remove_pre(ctx, p: ZoneIdP) -> None:
+    if not ctx.db.one("SELECT id FROM zones WHERE id=?", (p.id,)):
+        raise OpError("not_found", "không có zone")
     if ctx.db.one("SELECT id FROM domains WHERE zone_id=? AND state!='revoked'", (p.id,)):
         raise OpError("conflict", "zone còn tên miền đang dùng")
+
+
+@op("zone.remove", group="domain", risk="critical", params=ZoneIdP, target=lambda p: p.id, precheck=_zone_remove_pre)
+def zone_remove(ctx, p: ZoneIdP) -> dict[str, Any]:
+    """Bỏ zone khỏi SAC (không xoá trên Cloudflare). Zone còn tên miền → không bỏ được."""
+    _zone_remove_pre(ctx, p)
     ctx.db.exec("DELETE FROM zones WHERE id=?", (p.id,))
     return {"ok": True}
 

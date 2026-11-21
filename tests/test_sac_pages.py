@@ -40,7 +40,7 @@ def client(env):
 def test_pages_render(env, client):
     s = client.signer
     uid = env.state.db.one("SELECT id FROM hub_users WHERE os_user='lamlinh'")["id"]
-    for path in ("/", "/users", "/users/import", "/groups", f"/users/{uid}", "/domains", "/alerts", "/alerts?all=1", "/estop"):
+    for path in ("/", "/users", "/users/new", f"/users/{uid}/logs", "/users/import", "/groups", f"/users/{uid}", "/domains", "/alerts", "/alerts?all=1", "/estop"):
         r = client.get(path, headers=H(s))
         assert r.status_code == 200, (path, r.text[:300])
     for tab in ("overview", "access", "agents", "activity", "policy", "reports", "history"):
