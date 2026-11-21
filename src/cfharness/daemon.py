@@ -151,6 +151,10 @@ class Daemon:
         from .admin_overview import register_rpc as _register_admin
 
         _register_admin(self)
+        # Super Admin Console: inbox.list|accept|reject|submit (HUMAN_ONLY) — team_inbox.py
+        from .team_inbox import register_rpc as _register_inbox
+
+        _register_inbox(self)
         # Vào/ra web + thiết bị tin cậy: web.notify (HUMAN_ONLY, tự audit + phát event → Telegram/Slack) — web_events.py
         from .web_events import register_rpc as _register_web_events
 

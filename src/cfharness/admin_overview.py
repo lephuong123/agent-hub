@@ -414,6 +414,7 @@ class AdminExporter:
         self.last_warnings: list[str] = []
         self.writes = 0
         self._logged: set[str] = set()
+        self.profile: Any = None
         hub.bus.add_listener(self._on_event)
 
     def cfg(self, key: str) -> Any:
@@ -490,6 +491,14 @@ class AdminExporter:
         self.last_error = None
         self.last_ok = _iso(datetime.now())
         self.writes += 1
+        try:  # SPEC v3 hồ sơ + báo cáo ngày cho Super Admin Console (admin_profile.py) — chỉ khi đã có thư mục riêng do admin cấp
+            if self.profile is None:
+                from .admin_profile import ProfileExporter
+
+                self.profile = ProfileExporter(self.hub)
+            self.profile.tick(d, group)
+        except Exception:  # best-effort: hồ sơ/báo cáo lỗi không được làm hỏng bản xuất trạng thái chính
+            log.debug("admin_export: xuất hồ sơ/báo cáo lỗi", exc_info=True)
         return tdir / tname
 
     def status(self) -> dict[str, Any]:

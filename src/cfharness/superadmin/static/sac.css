@@ -76,3 +76,4 @@ table.grid th { font-size: .82rem; color: var(--muted); font-weight: 600; backgr
   main { padding: .8rem 1rem 3rem; }
   .who { display: none; }
 }
+.chart.bar { height: 10px; } td.wide { width: 50%; } .log.tall { max-height: 70vh; } .mt { margin-top: .8rem; }

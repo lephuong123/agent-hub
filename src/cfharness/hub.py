@@ -128,6 +128,10 @@ class Hub:
         _attach_admin_policy(self)
         _attach_admin_audit(self)
         _attach_admin_watch(self)
+        # Super Admin Console: hộp thư "Việc được giao" của Team user (`hub.team_inbox`) — team_inbox.py
+        from .team_inbox import attach as _attach_team_inbox
+
+        _attach_team_inbox(self)
         # L4: chuỗi băm audit — neo định kỳ/khi dừng vào HUB_HOME/audit-anchors.jsonl (+ metadata admin), kiểm đuôi lúc khởi động — audit_chain.py
         from .audit_chain import attach as _attach_audit_chain
 

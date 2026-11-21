@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Báo cáo ngày{% endblock %}
+{% block content %}
+<h1>Báo cáo ngày {{ r.day }}</h1>
+<form method="get" class="filters">
+  <input type="date" name="day" value="{{ r.day }}">
+  <select name="team_id"><option value="">toàn hệ</option>{% for t in teams %}<option value="{{ t.id }}" {% if q.team_id == t.id %}selected{% endif %}>{{ t.name }}</option>{% endfor %}</select>
+  <button class="btn">Xem</button>
+  <a class="btn ghost" href="/reports?day={{ r.day }}&team_id={{ q.team_id or '' }}&format=csv">Xuất CSV</a>
+  {% if can(sess, "system") %}{{ op_form("report.send_now", "Gửi lại báo cáo ngày này", {"day": r.day}) }}{% endif %}
+</form>
+<div class="tiles">
+  <div class="tile"><span>Run</span><b>{{ r.totals.runs }}</b></div>
+  <div class="tile"><span>Chi phí</span><b>{{ r.totals.cost | money }}</b></div>
+  <div class="tile {% if r.totals.missing %}bad{% endif %}"><span>Thiếu báo cáo</span><b>{{ r.totals.missing }}</b></div>
+  <div class="tile {% if r.totals.anomalies %}bad{% endif %}"><span>Có bất thường</span><b>{{ r.totals.anomalies }}</b></div>
+</div>
+<table class="grid mt"><thead><tr><th>User</th><th>Run</th><th>Xong/Lỗi</th><th>Task xong</th><th>Kẹt</th><th>Giờ hoạt động</th><th>Duyệt</th><th>Chi phí</th><th>Hôm trước</th><th>TB 7 ngày</th><th>Bất thường</th></tr></thead><tbody>
+{% for x in r.rows %}
+<tr><td>{% if x.has_report %}<a href="/reports/{{ r.day }}/{{ x.user_id }}">{{ x.os_user }}</a>{% else %}{{ x.os_user }}{% endif %}</td>
+<td>{{ x.runs if x.runs is not none else "—" }}</td><td>{{ x.completed or 0 }}/{{ x.failed or 0 }}</td><td>{{ x.tasks_done if x.tasks_done is not none else "—" }}</td>
+<td>{{ x.tasks_stuck or 0 }}</td><td>{{ x.hours }}</td><td>{{ x.approvals or 0 }}</td><td>{{ x.cost | money }}</td><td>{{ x.cost_prev | money }}</td><td>{{ x.cost_avg7 | money }}</td>
+<td>{% for a in x.anomalies %}<span class="pill {{ 'muted' if a == 'missing' else 'warn' }}">{{ {"missing": "không có báo cáo", "inactive": "không hoạt động", "cost_spike": "chi phí tăng vọt", "failure_rate": "tỉ lệ lỗi cao", "tasks_stuck": "task kẹt"}.get(a, a) }}</span> {% endfor %}</td></tr>
+{% endfor %}
+</tbody></table>
+
+{% if can(sess, "user_activity", "read") %}
+<section class="card"><h2>Tìm trong việc đã làm</h2>
+<form method="get" class="row"><input type="hidden" name="day" value="{{ r.day }}"><input name="search" value="{{ q.search or '' }}" placeholder="từ khoá tiêu đề / kết quả" minlength="2"><button class="btn">Tìm</button></form>
+{% if found is not none %}
+<table class="grid small"><thead><tr><th>Ngày</th><th>User</th><th>Việc</th><th>Agent</th><th>Trạng thái</th><th>Kết quả</th></tr></thead><tbody>
+{% for f in found %}<tr><td>{{ f.day }}</td><td>{{ f.os_user }}</td><td>{{ f.title }}</td><td>{{ f.agent }}</td><td>{{ f.status }}</td><td>{{ f.summary }}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">Không thấy (hoặc mức xem Hoạt động đang tắt).</td></tr>{% endfor %}
+</tbody></table>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

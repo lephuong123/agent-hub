@@ -319,6 +319,7 @@
     "team.archived": "summary",
     "team.created": "summary",
     "team.estop": "summary",
+    "team.inbox_new": "summary",
     "team.member": "summary",
     "team.restored": "summary",
     "team.updated": "summary",

@@ -139,6 +139,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "account.claudeai_logout",
         # Tổng quan máy (admin_overview.py): CHỈ ĐỌC nhưng lộ hoạt động của user OS khác trên máy (chi phí, số run) — chỉ người
         "admin.overview",
+        # Hộp thư "Việc được giao" từ Team user của Super Admin Console (team_inbox.py): nhận/từ chối/nộp = quyết định của NGƯỜI (BR-SA-02)
+        "inbox.list", "inbox.accept", "inbox.reject", "inbox.submit",
         # Vào/ra web + thiết bị tin cậy (web_events.py): ghi audit + phát event → Telegram — agent không được giả "đăng nhập"/"thu hồi"
         "web.notify",
         # Ghi audit tuỳ ý (mcp_server/rpc.py audit.record): actor/channel/summary do người gọi tự khai — chỉ web/CLI của người dùng;
@@ -264,7 +266,8 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.backup", "MUTATING_BACKUP"), ("cfharness.logs_rpc", "MUTATING_LOGS"), ("cfharness.support_bundle", "MUTATING_SUPPORT"), ("cfharness.hub_transfer", "MUTATING_TRANSFER"),
                       ("cfharness.hub_freeze", "MUTATING_FREEZE"), ("cfharness.hub_transfer_web", "MUTATING_TRANSFER_WEB"),
                       ("cfharness.admin_rpc", "MUTATING_ADMIN"), ("cfharness.admin_directory", "MUTATING_DIRECTORY"),
-                      ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.filehub.rpc", "MUTATING_FILEHUB"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS")):
+                      ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.filehub.rpc", "MUTATING_FILEHUB"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS"),
+                      ("cfharness.team_inbox", "MUTATING_INBOX")):
         try:
             import importlib
 

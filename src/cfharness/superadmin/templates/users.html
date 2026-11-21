@@ -41,7 +41,7 @@
 {% endfor %}
 </tbody></table>
 {% if rows and can(sess, "estop_on") %}
-<div class="row" style="margin-top:.6rem">
+<div class="row">
   <select name="p.reason_code">{% for r in ("maintenance", "security", "budget", "policy", "incident", "other") %}<option>{{ r }}</option>{% endfor %}</select>
   <button class="btn danger">Bật ESTOP cho user đã chọn</button>
 </div>

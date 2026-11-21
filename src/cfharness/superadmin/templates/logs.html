@@ -4,5 +4,5 @@
 <h1>Log hệ thống — <a href="/users/{{ p.identity.id }}">{{ p.identity.os_user }}</a></h1>
 <nav class="tabs">{% for w in ("daemon", "web", "update") %}<a href="?which={{ w }}" class="{% if which == w %}on{% endif %}">{{ w }}.out</a>{% endfor %}
 <a href="?which={{ which }}&download=1">Tải về</a></nav>
-{% if logs.missing %}<p class="muted">Không có file log.</p>{% else %}<pre class="log" style="max-height:70vh">{{ logs.lines | join("\n") }}</pre>{% endif %}
+{% if logs.missing %}<p class="muted">Không có file log.</p>{% else %}<pre class="log tall">{{ logs.lines | join("\n") }}</pre>{% endif %}
 {% endblock %}

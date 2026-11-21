@@ -199,7 +199,7 @@ DEFAULTS: dict[str, Any] = {
             "busy_indicator": "reaction",  # "status" ("đang xử lý…" trong thread, lỗi → ⏳) | "reaction" (chỉ icon ⏳ trên tin người)
             "manager_progress": True,  # P7: tin tiến độ + nút Dừng khi điều phối viên làm việc cho tin Slack (chat/slack/progress.py)
             "manager_progress_edit_s": 3,  # P7: sửa tin tiến độ tối đa 1 lần / khoảng này (gộp event)
-            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
+            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop", "team.inbox_new",
                        "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper", "audit.tamper_detected", "audit.anchored", "audit.alert",
                        "budget.warning", "budget.exceeded",
                        "filehub.changed", "filehub.deleted", "filehub.conflict", "filehub.secret_warning", "filehub.blocked", "filehub.lane.roots"],  # M4-B: digest + nhắc chọn golden task (Q-23)
@@ -219,7 +219,7 @@ DEFAULTS: dict[str, Any] = {
             "allowed_chat_ids": [],  # CHỈ các chat này được nhận thông báo + điều khiển hub
             "allowed_user_ids": [],  # WT-4: from.id được phép (ghi lúc ghép nối); nhóm CHỈ nhận người trong danh sách này
             "allow_groups": False,  # nhóm phải bật rõ ràng; mặc định chỉ chat riêng
-            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop",
+            "events": ["approval.open", "approval.waiting_human", "approval.reminder", "approval.escalated", "guard.blocked", "run.repeated_failure", "learning.rolled_back", "admin.alert", "hub.admin_estop", "team.inbox_new",
                        "learning.digest", "golden.suggested", "golden.suggestion_opened", "regression.detected", "guard.tamper_detected", "auth.denied", "guard.env_tamper", "audit.tamper_detected", "audit.anchored", "audit.alert",
                        "budget.warning", "budget.exceeded",
                        # thư mục chung Không gian số (filehub/): run đổi/xoá tệp, bản xung đột, tệp có thể chứa bí mật, chiều đẩy lên bị chặn
