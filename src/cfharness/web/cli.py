@@ -21,6 +21,7 @@ import os
 import secrets
 import socket
 import sys
+import time
 import webbrowser
 from typing import Any
 
@@ -181,6 +182,15 @@ def cmd_web(ctx: Any) -> int:
             return cmd_totp(ctx, words)
         if words[0] == "devices":
             return cmd_devices(ctx, words)
+        if words[0] == "unlock-login":  # ACC-02: gỡ khoá đăng nhập sai mà không khởi động lại web (web đọc mtime file)
+            from .app import unlock_path
+
+            p = unlock_path(ctx.paths)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(str(time.time()), encoding="utf-8")
+            _audit(ctx, "web.login_unlocked")
+            ctx.out({"ok": True}, "đã gỡ khoá đăng nhập sai (có hiệu lực ở lần đăng nhập kế tiếp)")
+            return 0
         print(f"lỗi: lệnh con lạ `{words[0]}` — dùng `cfharness web [--open]`, `cfharness web totp enroll|status|disable` hoặc "
               "`cfharness web devices list|revoke <id>|revoke-all`", file=sys.stderr)
         return 1

@@ -495,6 +495,24 @@ def _ua_label(request: Request) -> str:
     return ua_label(_ua(request))
 
 
+UNLOCK_FILE = "web-unlock"  # `cfharness web unlock-login` chạm file này (ACC-02) → web xoá khoá đăng nhập sai ở lần thử kế tiếp
+
+
+def unlock_path(paths: HubPaths) -> Path:
+    return paths.home / "auth" / UNLOCK_FILE
+
+
+def _maybe_unlock(st: Any) -> None:
+    try:
+        m = unlock_path(st.paths).stat().st_mtime
+    except (OSError, AttributeError):
+        return
+    if m > float(getattr(st, "_unlock_seen", 0.0)):
+        st._unlock_seen = m
+        st.limiter = LoginLimiter(**{k: getattr(st.limiter, k) for k in ("ip_max_failures", "global_max_failures", "window_s", "lockout_s",
+                                                                           "day_max_failures", "day_lockout_s")}, clock=st.limiter.clock)
+
+
 def _lock_text(left: float) -> str:
     return f"Đăng nhập tạm khoá do nhập sai quá nhiều lần — thử lại sau {max(1, int(left // 60) + 1)} phút."
 
@@ -503,6 +521,7 @@ async def _code_attempt(request: Request, check: Callable[[], bool], method: str
     """Một lần thử mã TOTP qua bộ giới hạn tốc độ → (đúng?, lỗi hiển thị, mã HTTP)."""
     st = ws(request)
     ip = _ip(request)
+    _maybe_unlock(st)
     lk = st.limiter.locked(ip)
     if lk is not None:
         await _audit_login(request, "web.login_failed", {"ip": ip, "method": method, "reason": f"locked_{lk[1]}"})

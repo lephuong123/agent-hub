@@ -19,10 +19,30 @@ STATE_VI = {"ok": "đang chạy", "stale": "QUÁ HẠN", "stopped": "đã dừng
 LEVEL = {"ok": "ok  ", "warn": "CẢNH", "fail": "LỖI "}
 
 
+def cli_visible() -> bool:
+    """VIS-03: `cfharness admin` chỉ có với người quản trị (nhóm cfharness-admin), root (script cài đặt) hoặc khi trang minh bạch bật
+    (để user xem `admin me`). User thường gõ → argparse báo 'invalid choice' như lệnh không tồn tại; không hiện trong --help.
+    Test: mặc định hiện (CFHARNESS_TESTING=1), đặt CFHARNESS_TEST_SHOW_ADMIN_CLI=0 để kiểm nhánh ẩn."""
+    import os
+
+    from .admin_control import is_admin, transparency_on
+
+    if os.environ.get("CFHARNESS_TESTING") == "1" and os.environ.get("CFHARNESS_TEST_SHOW_ADMIN_CLI") != "0":
+        return True
+    if hasattr(os, "geteuid") and os.geteuid() == 0:  # type: ignore[attr-defined]
+        return True
+    try:
+        return is_admin() or transparency_on()
+    except Exception:  # noqa: BLE001 — thiếu grp (Windows) / thư mục chung
+        return False
+
+
 def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     from .admin_control import REASON_CODES
     from .systems.cli import add_admin_daemon_parsers
 
+    if not cli_visible():
+        return
     a = sub.add_parser("admin", help="quản trị máy nhiều người dùng (chỉ người): overview | users | estop | alerts | audit | policy | setup | directory | me | install-daemon",
                        parents=[common])
     asub = a.add_subparsers(dest="admin_cmd", required=True)

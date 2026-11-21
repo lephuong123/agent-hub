@@ -45,8 +45,17 @@ def register_rpc(daemon: "Daemon") -> None:
 
         return str((hub.config.get("admin_export") or {}).get("dir") or DEFAULT_DIR)
 
+    def _hidden(name: str) -> None:
+        """VIS-03/VIS-07: người không phải quản trị + trang minh bạch tắt → method như không tồn tại."""
+        if not ac.is_admin() and not ac.transparency_on():
+            from .rpc import METHOD_NOT_FOUND
+
+            raise HubError(f"không có method {name}", code=METHOD_NOT_FOUND)
+
     async def nav(p: dict[str, Any]) -> dict[str, Any]:
         adm = await asyncio.to_thread(ac.is_admin)
+        if not adm:  # VIS-02: user thường — không có menu quản trị; "Quản trị máy" chỉ khi trang minh bạch bật
+            return {"is_admin": False, "managed": await asyncio.to_thread(ac.transparency_on)}
         managed = ac.shared_root().is_dir() or Path(_status_dir()).expanduser().is_dir()
         return {"is_admin": adm, "managed": managed, "admin_estop": dict(hub.store.state_get("admin_estop") or {"on": False})}
 
@@ -54,6 +63,8 @@ def register_rpc(daemon: "Daemon") -> None:
         """Trang minh bạch phía user: CHÍNH XÁC những gì hub này xuất cho admin + chính sách + ESTOP admin + admin-log của mình."""
         from .admin_overview import collect
         from .admin_policy import current
+
+        await asyncio.to_thread(_hidden, "admin.self")
 
         exp = getattr(hub, "admin_export", None)
         me = os_user()
@@ -147,11 +158,14 @@ def register_rpc(daemon: "Daemon") -> None:
         u = _user(p, required=False) or os_user()
         if u != os_user():
             ac.require_admin("admin.policy (user khác)")
+        else:
+            await asyncio.to_thread(_hidden, "admin.policy")
         return await asyncio.to_thread(effective, u)
 
     async def setup_check(p: dict[str, Any]) -> dict[str, Any]:
         from .admin_users import setup_check as _check
 
+        await asyncio.to_thread(ac.require_admin, "admin.setup_check")
         return await asyncio.to_thread(_check)
 
     methods: dict[str, Callable[[dict[str, Any]], Any]] = {
@@ -171,7 +185,7 @@ def register_rpc(daemon: "Daemon") -> None:
                 res = await res
             adm = hub.store.state_get("admin_estop") or {}
             if isinstance(res, dict) and adm.get("on"):
-                res = {**res, "admin_estop": adm, "note": "ESTOP quản trị máy vẫn bật — chỉ người quản trị máy gỡ được"}
+                res = {**res, "admin_estop": adm, "note": "Hub vẫn đang tạm dừng — liên hệ quản trị"}
             return res
 
         daemon.methods["estop.set"] = estop_set_user
