@@ -189,11 +189,12 @@ def _server_fields(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--trust", help="trusted | untrusted (giá trị lạ = untrusted)")
     sp.add_argument("--timeout", type=float, help="giây")
     sp.add_argument("--description")
-    sp.add_argument("--oauth", action="store_true", help="server cần đăng nhập OAuth 2.1 (http/sse) — rồi `cfharness mcp login <tên>`")
-    sp.add_argument("--oauth-scope", action="append", help="scope OAuth xin (phân tách dấu phẩy)")
-    sp.add_argument("--oauth-client-id", help="client_id đăng ký tay (provider không hỗ trợ đăng ký động)")
-    sp.add_argument("--oauth-client-secret", help="client_secret hoặc ${SECRET} (giá trị rõ tự chuyển vào secret store)")
-    sp.add_argument("--no-oauth", action="store_true", help="(edit) bỏ OAuth")
+    # OAuth do hub giữ đã gỡ từ v0.2.28 — cờ cũ giữ để báo lỗi hướng dẫn (`mcp claude add`); `--no-oauth` vẫn bỏ được auth của dòng cũ
+    sp.add_argument("--oauth", action="store_true", help="(đã gỡ từ v0.2.28 — server OAuth: `cfharness mcp claude add … --account <id>`)")
+    sp.add_argument("--oauth-scope", action="append", help=argparse.SUPPRESS)
+    sp.add_argument("--oauth-client-id", help=argparse.SUPPRESS)
+    sp.add_argument("--oauth-client-secret", help=argparse.SUPPRESS)
+    sp.add_argument("--no-oauth", action="store_true", help="(edit) bỏ auth OAuth kiểu cũ của dòng nguồn hub")
     sp.add_argument("command", nargs=argparse.REMAINDER, help="(stdio) -- lệnh và tham số")
 
 
@@ -280,14 +281,9 @@ def _server_payload(a: argparse.Namespace, *, creating: bool) -> dict[str, Any]:
     if getattr(a, "no_oauth", False):
         d["auth"] = None
     elif a.oauth or a.oauth_scope or a.oauth_client_id or a.oauth_client_secret:
-        auth: dict[str, Any] = {"type": "oauth"}
-        if a.oauth_scope:
-            auth["scopes"] = _split(a.oauth_scope)
-        if a.oauth_client_id:
-            auth["client_id"] = a.oauth_client_id
-        if a.oauth_client_secret:
-            auth["client_secret_ref"] = a.oauth_client_secret  # dạng rõ → registry tự chuyển vào secret store
-        d["auth"] = auth
+        from ..mcp_client.legacy_oauth import ADD_REFUSED
+
+        raise SystemExit(f"lỗi: {ADD_REFUSED}")
     return d
 
 
@@ -659,10 +655,12 @@ def cmd_mcp(ctx: Any) -> int:
         return EXIT_OK
     if act == "annotate":
         return _cmd_annotate(ctx)
-    if act in ("login", "logout"):
-        from ..mcp_client import oauth_cli
+    if act in ("login", "logout"):  # OAuth của hub đã gỡ (v0.2.28) — chỉ in hướng dẫn chuyển, không gọi daemon
+        from ..mcp_client.legacy_oauth import removed_message
 
-        return oauth_cli.cmd_login(ctx) if act == "login" else oauth_cli.cmd_logout(ctx)
+        print(f"lỗi: {removed_message(a.name)} (đăng nhập server nguồn claude: cfharness mcp claude login {a.name} --account <id>)",
+              file=sys.stderr)
+        return EXIT_USER
     if act == "agent-config":
         res = ctx.call("mcp.agent_config", {"agent": a.agent})
         ctx.out(res, json.dumps(res, ensure_ascii=False, indent=2))
@@ -934,9 +932,11 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
         x = ms.add_parser(name, help=f"{'gán' if name == 'assign' else 'gỡ'} MCP server cho agent", parents=[common])
         x.add_argument("server")
         x.add_argument("agent")
-    from ..mcp_client.oauth_cli import add_parsers as _oauth_parsers
-
-    _oauth_parsers(ms, common)
+    # `mcp login|logout` (OAuth của hub) đã gỡ từ v0.2.28 — giữ tên MỘT bản để in hướng dẫn `mcp migrate-to-claude`
+    for name in ("login", "logout"):
+        x = ms.add_parser(name, help="(đã gỡ từ v0.2.28 — dùng `mcp migrate-to-claude` / `mcp claude login`)", parents=[common])
+        x.add_argument("name")
+        x.add_argument("rest", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
     ac = ms.add_parser("agent-config", help="xem mcpServers + allow/deny sẽ dùng khi chạy agent (không lộ secret)", parents=[common])
     ac.add_argument("agent")
     m.set_defaults(fn=cmd_mcp)

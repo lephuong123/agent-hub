@@ -76,7 +76,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "golden.suggestion_approve", "golden.suggestion_reject", "golden.suggest_scan",  # đề xuất golden: hub đề xuất (vòng nền), người quyết
         # secret + registry MCP (server MCP chạy NGOÀI sandbox → thêm server = thoát sandbox)
         "secret.set", "secret.rm", "mcp.add", "mcp.update", "mcp.remove", "mcp.restore", "mcp.import", "mcp.assign",
-        # OAuth MCP: đăng nhập/làm mới/ngắt = cấp/thu hồi quyền truy cập dịch vụ ngoài thay người (docs/dev-notes/mcp-oauth.md)
+        # OAuth MCP của hub (đã gỡ từ v0.2.28 — stub trả lỗi hướng dẫn một bản; giữ trong HUMAN_ONLY tới khi gỡ hẳn tên)
         "mcp.oauth_start", "mcp.oauth_callback", "mcp.oauth_disconnect", "mcp.oauth_refresh",
         # MCP do claude quản lý trong cấu hình claude của tài khoản (tên/transport/host) — cấu hình của NGƯỜI, chỉ người xem (plan-mcp-claude-native PR2)
         "mcp.claude_servers",

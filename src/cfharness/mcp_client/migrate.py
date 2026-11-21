@@ -1,4 +1,7 @@
-"""Chuyển MCP server OAuth của HUB sang MCP do `claude` quản lý theo tài khoản (docs/dev-notes/plan-mcp-claude-native.md PR4, giai đoạn A).
+"""Chuyển MCP server OAuth của HUB sang MCP do `claude` quản lý theo tài khoản (docs/dev-notes/plan-mcp-claude-native.md PR4).
+
+Từ v0.2.28 (giai đoạn B) hub không còn OAuth/proxy riêng — dòng OAuth nguồn hub còn sót CHỈ chạy lại được sau khi chuyển; mọi thứ cần
+về cấu hình cũ (url/transport/`auth.client_id`, tên bản ghi `MCP_OAUTH_*`) nằm ở `legacy_oauth.py`.
 
 `mcp.migrate_to_claude{name, account_id, keep_hub_token?}` (HUMAN_ONLY, MUTATING, audit chỉ danh sách trắng):
 
@@ -33,8 +36,8 @@ log = logging.getLogger("cfharness.mcp_client")
 STATE_KEY = "mcp.migrations"  # {tên: {account, key, at, keep_hub_token}} — chờ đăng nhập claude rồi xoá token hub
 STATIC_NOTE = ("server dùng secret tĩnh (header/env/args) — giữ nguồn hub (secret store, mcp.json 0600 của run); chỉ server OAuth "
                "mới chuyển sang claude")
-DEPRECATION_NOTE = ("OAuth do hub tự giữ sẽ bị gỡ ở bản sau — nên chuyển sang claude: `cfharness mcp migrate-to-claude <tên> --account <id>` "
-                    "(web: trang MCP của server)")
+DEPRECATION_NOTE = ("OAuth do hub tự giữ đã gỡ từ v0.2.28 — server OAuth kiểu cũ không chạy tới khi chuyển sang claude: "
+                    "`cfharness mcp migrate-to-claude <tên> --account <id>` (web: trang MCP của server)")
 
 
 def _state(hub: "Hub") -> dict[str, Any]:
@@ -47,14 +50,14 @@ def _save(hub: "Hub", st: dict[str, Any]) -> None:
 
 
 def hub_oauth_servers(hub: "Hub") -> list[str]:
-    """Server nguồn hub dùng OAuth của hub (chưa xoá mềm) — doctor/web khuyên chuyển."""
-    from .oauth import is_oauth
+    """Server nguồn hub dùng OAuth của hub (chưa xoá mềm) — cần chuyển (doctor/web/cảnh báo lúc daemon lên)."""
+    from .legacy_oauth import legacy_rows
 
-    return [r["name"] for r in hub.mcp.list() if (r.get("config") or {}).get("source") != SOURCE_CLAUDE and is_oauth(r.get("config"))]  # type: ignore[attr-defined]
+    return legacy_rows(hub.mcp.list())  # type: ignore[attr-defined]
 
 
 def _check(hub: "Hub", name: str) -> tuple[Any, dict[str, Any]]:
-    from .oauth import is_oauth
+    from .legacy_oauth import is_oauth
 
     row = hub.mcp.require(name)  # type: ignore[attr-defined]
     conf = row.get("config") or {}
@@ -101,7 +104,7 @@ def plan(hub: "Hub", name: str, account_id: Any) -> dict[str, Any]:
 async def migrate(hub: "Hub", name: Any, account_id: Any, *, keep_hub_token: bool = False, start_login: bool = True) -> dict[str, Any]:
     from . import claude_source as cs
     from .claude_admin import DEFAULT_KEY, validate_name
-    from .oauth import load_record
+    from .legacy_oauth import load_record
 
     name = validate_name(name)
     pl = plan(hub, name, account_id)
@@ -176,9 +179,9 @@ def on_connected(hub: "Hub", key: str, names: list[str]) -> list[str]:
 
 
 def _drop(hub: "Hub", name: str, *, why: str) -> bool:
-    from .oauth import delete_record
+    from .legacy_oauth import delete_record
 
-    gone = bool(delete_record(hub.secrets, name))  # type: ignore[attr-defined]  # proxy OAuth đọc token từ secret store mỗi lượt — không có cache
+    gone = bool(delete_record(hub.secrets, name))  # type: ignore[attr-defined]
     if gone:
         try:
             hub.audit.record("mcp.migrate_hub_token_deleted", None, None, {"name": name, "reason": why})  # type: ignore[attr-defined]
@@ -194,8 +197,8 @@ def drop_hub_token(hub: "Hub", name: Any) -> dict[str, Any]:
     name = validate_name(name)
     row = hub.mcp.require(name)  # type: ignore[attr-defined]
     if (row.get("config") or {}).get("source") != SOURCE_CLAUDE:
-        raise HubError(f"MCP '{name}' vẫn là nguồn hub — chuyển trước (`cfharness mcp migrate-to-claude {name} --account <id>`); muốn "
-                       f"ngắt OAuth của hub thì dùng `cfharness mcp logout {name}`")
+        raise HubError(f"MCP '{name}' vẫn là nguồn hub — chuyển trước (`cfharness mcp migrate-to-claude {name} --account <id>`); hoặc gỡ "
+                       f"hẳn: `cfharness mcp rm {name}`")
     st = _state(hub)
     st.pop(name, None)
     _save(hub, st)

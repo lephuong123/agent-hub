@@ -34,7 +34,7 @@
     <div class="checks">
       {% for s in mcp %}{% if not s.deleted_at %}
       <label class="check"><input type="checkbox" name="mcp" value="{{ s.name }}" {{ 'checked' if s.name in v.mcp }}>
-        <span><b>{{ s.name }}</b> <span class="pill {{ 'ok' if s.trust == 'trusted' else 'muted' }}">{{ 'tin cậy' if s.trust == 'trusted' else 'cần duyệt' }}</span>
+        <span><b>{{ s.name }}</b> <span class="pill {{ 'ok' if s.trust == 'trusted' else 'muted' }}">{{ 'tin cậy' if s.trust == 'trusted' else 'cần duyệt' }}</span>{% if s.source == 'claude' or (s.config and s.config.source == 'claude') %} <span class="pill accent" title="MCP do claude quản lý theo tài khoản (cấu hình + đăng nhập ở Cài đặt → Tài khoản Claude)">claude</span>{% endif %}
         {% if s.description or (s.config and s.config.description) %}<span class="muted small">{{ s.description or s.config.description }}</span>{% endif %}</span></label>
       {% endif %}{% endfor %}
     </div>

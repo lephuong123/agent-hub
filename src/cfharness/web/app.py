@@ -186,9 +186,9 @@ class WebState:
 class GuardMiddleware:
     """ASGI thuần (không đệm response → SSE chạy được): kiểm Host, gắn phiên, chặn khi chưa đăng nhập, thêm header bảo mật."""
 
-    # callback OAuth: state là lớp bảo vệ (web/mcp_oauth.py); well-known: app desktop nhận diện hub (chỉ {kind, schema, app_api})
+    # well-known: app desktop nhận diện hub (chỉ {kind, schema, app_api}) — callback OAuth MCP của hub đã gỡ (v0.2.28)
     # directory: công khai nhưng có token (C5, hub admin — web/desktop.directory: sai → 404, giới hạn tốc độ)
-    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/mcp/oauth/callback", "/.well-known/cfharness.json",
+    PUBLIC = ("/login", "/enroll", "/favicon.ico", "/.well-known/cfharness.json",
               "/.well-known/cfharness-directory")
     # JSON do trang gọi bằng fetch (polling): chưa đăng nhập → 401 (không chuyển hướng), không gia hạn phiên — như /sse/, /partials/
     # `/app/` = API cho app desktop (web/desktop.py: /app/badge) — 401 dạng JSON
@@ -1586,8 +1586,8 @@ ACTIONS: dict[str, Action] = {
     "golden_suggestion_reject": Action("golden.suggestion_reject", lambda f: {"id": _req(f, "id")}, lambda r, f: f"Đã bỏ đề xuất {f.get('id')}"),
     "digest_run": Action("digest.run", lambda f: {"no_send": True}, "Đã tạo bản tin học"),
     # ---- MCP
-    "mcp_add": Action("mcp.add", lambda f: {"config": _mcp_config(f), "probe": not f.get("oauth")}, lambda r, f: _mcp_ok(r),
-                      goto=lambda r, f: f"/mcp/{(r or {}).get('name')}" if f.get("oauth") else "/mcp", danger=True,
+    "mcp_add": Action("mcp.add", lambda f: {"config": _mcp_config(f), "probe": True}, lambda r, f: _mcp_ok(r),
+                      goto=lambda r, f: "/mcp", danger=True,
                       confirm=lambda f: _mcp_confirm(f)),
     "mcp_probe": Action("mcp.probe", lambda f: {"name": _req(f, "name")}, lambda r, f: _probe_msg(r)),
     "mcp_remove": Action("mcp.remove", lambda f: {"name": _req(f, "name"), "force": f.get("force") == "1"}, lambda r, f: f"Đã xoá MCP {f.get('name')} (khôi phục được)",
@@ -1642,9 +1642,7 @@ def _mcp_config(f: FormData) -> dict[str, Any]:
         parts = shlex.split(_req(f, "command", "lệnh chạy"))
         cfg["command"], cfg["args"] = parts[0], parts[1:]
     else:
-        cfg["url"] = _req(f, "url", "URL")
-        if f.get("oauth"):
-            cfg["auth"] = {"type": "oauth"}  # đăng nhập bằng nút Kết nối ở trang server (web/mcp_oauth.py)
+        cfg["url"] = _req(f, "url", "URL")  # server cần OAuth: thêm vào claude theo tài khoản (Cài đặt → Tài khoản Claude), không ở đây
     env: dict[str, str] = {}
     for line in str(f.get("env") or "").splitlines():
         if "=" in line:
@@ -2161,7 +2159,6 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         Route("/audit", audit_page),
         *_debug_routes(),  # /logs "Nhật ký hệ thống" + /trace/{id} — chỉ đọc (web/debug_pages.py, L6)
         Route("/settings", settings_page),
-        *_mcp_oauth.routes(),  # /do/mcp_connect + /mcp/oauth/callback — TRƯỚC /do/{name}
         Route("/do/{name}", do_action, methods=["POST"]),
         Route("/sse/run/{id}", sse_run),
         Route("/sse/firehose", sse_firehose),
@@ -2194,11 +2191,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
 from . import manager as _mgr  # noqa: E402
 
 _mgr.register_actions(ACTIONS, Action, _req)
-from . import mcp_oauth as _mcp_oauth  # noqa: E402
-
-_mcp_oauth.register_actions(ACTIONS, Action, _req)
-
-# Trang MCP mở rộng (sửa server, tool, danh mục): thao tác `mcp_edit`
+# Trang MCP mở rộng (sửa server, tool, danh mục): thao tác `mcp_edit` + `mcp_migrate_claude` (OAuth kiểu cũ → claude)
 from . import mcp_pages as _mcpp  # noqa: E402
 
 _mcpp.register_actions(ACTIONS, Action, _req)

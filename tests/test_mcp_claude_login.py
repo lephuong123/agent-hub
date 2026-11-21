@@ -524,3 +524,48 @@ async def test_web_mcp_hidden_on_old_daemon(env):
     env.d.methods.pop("mcp.claude_status", None)
     html = (await get(env, "/settings")).text
     assert "acct-mcp-" not in html
+
+
+async def test_web_mcp_register_for_hub_button(env, tmp_path, monkeypatch):
+    """«Đăng ký cho hub» trên server có trong cấu hình claude nhưng chưa đăng ký: `mcp.add{config:{source:claude}}` THẬT (daemon kiểm
+    tên trong .claude.json), tick «Tin cậy» → trusted; server trỏ về hub không có nút; form agent gắn nhãn `claude`."""
+    state, calls = _mcp(env)
+    (tmp_path / "ch").mkdir()
+    monkeypatch.setenv("CFHARNESS_TEST_CLAUDE_HOME", str(tmp_path / "ch"))
+    (tmp_path / "ch" / ".claude.json").write_text(json.dumps({"mcpServers": {
+        "jira": {"type": "http", "url": "https://j.example/mcp", "headers": {"Authorization": "Bearer RegHdr-SECRET-000111"}},
+        "loose": {"type": "http", "url": "https://l.example/mcp"}}}), encoding="utf-8")
+    state["servers"]["machine"] += [
+        {"name": "jira", "transport": "http", "host": "j.example", "hub": False, "status": "connected", "registered": False, "agents": []},
+        {"name": "loose", "transport": "http", "host": "l.example", "hub": False, "status": "connected", "registered": False, "agents": []},
+        {"name": "selfhub", "transport": "stdio", "host": None, "hub": True, "status": "connected", "registered": False, "agents": []}]
+    row = _mrow(section((await get(env, "/settings")).text))
+    forms = re.findall(r'<form method="post" action="/do/mcp_claude_register".*?</form>', row, re.S)
+    assert len(forms) == 2 and all('name="trust"' in f and 'type="checkbox"' in f for f in forms)
+    assert 'value="selfhub"' not in "".join(forms) and "trỏ về chính hub" in row
+    assert not any('value="atl"' in f for f in forms)  # đã đăng ký → không nút
+    # chưa xác nhận → trang xác nhận, chưa đăng ký
+    r = await post(env, "/do/mcp_claude_register", {"account_id": "machine", "mcp_name": "jira", "name": "Máy", "trust": "trusted",
+                                                     "next": "/settings#acct-mcp-machine"})
+    assert r.status_code == 200 and "Đăng ký MCP «jira»" in r.text and "Tin cậy" in r.text
+    assert env.hub.mcp.get_row("jira") is None
+    r = await post(env, "/do/mcp_claude_register", {"account_id": "machine", "mcp_name": "jira", "name": "Máy", "trust": "trusted",
+                                                     "confirm": "yes", "next": "/settings#acct-mcp-machine"})
+    assert r.status_code == 303 and r.headers["location"].startswith("/settings")
+    row_db = env.hub.mcp.show("jira")
+    assert row_db["config"]["source"] == "claude" and row_db["trust"] == "trusted" and not row_db["config"].get("headers")
+    await post(env, "/do/mcp_claude_register", {"account_id": "machine", "mcp_name": "loose", "confirm": "yes", "next": "/settings"})
+    assert env.hub.mcp.show("loose")["trust"] == "untrusted"
+    # tên không có trong cấu hình claude / tên sai → không đăng ký
+    await post(env, "/do/mcp_claude_register", {"account_id": "machine", "mcp_name": "ghost", "confirm": "yes", "next": "/settings"})
+    assert env.hub.mcp.get_row("ghost") is None and "flash error" in (await get(env, "/settings")).text
+    await post(env, "/do/mcp_claude_register", {"account_id": "machine", "mcp_name": "bad name", "confirm": "yes", "next": "/settings"})
+    await post(env, "/do/mcp_claude_register", {"account_id": "../x", "mcp_name": "loose", "confirm": "yes", "next": "/settings"})
+    aud = [dict(r) for r in env.hub.store.conn.execute("SELECT * FROM audit_log WHERE kind LIKE '%mcp.add%'")]
+    assert aud and any("web" in json.dumps(a, default=str) for a in aud)
+    for b in env.bodies + [json.dumps(aud, default=str)]:
+        assert "RegHdr-SECRET" not in b
+    # form agent: server nguồn claude có nhãn `claude`
+    page = (await get(env, "/agents/new")).text
+    m = re.search(r'value="jira".*?</label>', page, re.S)
+    assert m and ">claude</span>" in m.group(0)

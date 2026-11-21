@@ -145,7 +145,7 @@ async def test_install_npm_entry_with_secret_env(env):
 async def test_install_remote_oauth_badge_and_secret_header(env):
     await env.login()
     r = await env.client.get("/mcp/browse/install?name=com.example%2Foauth")
-    assert r.status_code == 200 and "Cần đăng nhập (OAuth)" in r.text and "bấm <b>Kết nối</b>" in r.text
+    assert r.status_code == 200 and "Cần đăng nhập (OAuth)" in r.text and "Tài khoản Claude" in r.text
     r = await env.client.get("/mcp/browse/install?name=io.github.github%2Fgithub-mcp-server")
     assert 'type="password" name="h.Authorization"' in r.text and "Cần đăng nhập (OAuth)" not in r.text  # header bắt buộc → không phải OAuth
     r = await env.post("/mcp/browse/install", {"reg_name": "io.github.github/github-mcp-server", "opt": "r0", "name": "github",
@@ -154,14 +154,15 @@ async def test_install_remote_oauth_badge_and_secret_header(env):
     cfg = env.hub.mcp.get_row("github")["config"]
     assert cfg["url"] == "https://api.githubcopilot.com/mcp/" and cfg["headers"] == {"Authorization": "${MCP_GITHUB_AUTHORIZATION}"}
     assert env.hub.secrets.get("MCP_GITHUB_AUTHORIZATION") == f"Bearer {SECRET}" and env.hub.mcp.get_row("github")["transport"] == "http"
-    # server OAuth: cài với auth=oauth, KHÔNG probe (chưa có token), đưa về trang server để bấm Kết nối
+    # server OAuth: OAuth do hub giữ đã gỡ (v0.2.28) — trang cài hướng sang claude theo tài khoản, KHÔNG tạo dòng nguồn hub
     n_probes = len(env.probes)
+    r = await env.client.get("/mcp/browse/install?name=com.example%2Foauth")
+    assert r.status_code == 200 and 'id="oauth"' in r.text and "/settings#accounts" in r.text and "mcp claude add" in r.text
+    assert 'action="/mcp/browse/install"' not in r.text  # không có form cài nguồn hub
     r = await env.post("/mcp/browse/install", {"reg_name": "com.example/oauth", "opt": "r0", "name": "oauthdemo", "url": "https://mcp.example.com/mcp",
                                                "confirm": "yes"})
-    assert r.status_code == 303 and r.headers["location"] == "/mcp/oauthdemo#oauth", r.text
-    assert env.hub.mcp.get_row("oauthdemo")["config"]["auth"]["type"] == "oauth" and len(env.probes) == n_probes
-    r = await env.client.get("/mcp/oauthdemo")
-    assert r.status_code == 200 and 'id="oauth"' in r.text and "mcp_connect" in r.text and "chưa kết nối" in r.text
+    assert r.status_code == 400 and "thêm vào claude theo tài khoản" in r.text, r.text
+    assert env.hub.mcp.get_row("oauthdemo") is None and len(env.probes) == n_probes
 
 
 async def test_install_requires_session_key(env):
@@ -301,18 +302,14 @@ async def test_browse_featured_grouped_by_category(env):
     assert "Notion" in r.text and "OAuth · cần client_id" in r.text and "không cần đăng nhập" in r.text
 
 
-async def test_install_manual_oauth_client_stores_secret(env):
+async def test_install_manual_oauth_client_points_to_claude(env):
     await env.login()
     r = await env.client.get("/mcp/browse/install?name=com.slack%2Fmcp")
-    assert r.status_code == 200 and 'name="oauth_client_id"' in r.text and "/mcp/oauth/callback" in r.text and "127.0.0.1:33418/callback" in r.text
+    assert r.status_code == 200 and 'name="oauth_client_id"' not in r.text and "/mcp/oauth/callback" not in r.text
+    assert "--client-id" in r.text and "/settings#accounts" in r.text
     base = {"reg_name": "com.slack/mcp", "opt": "r0", "name": "slack", "url": "https://mcp.slack.com/mcp", "confirm": "yes"}
-    r = await env.post("/mcp/browse/install", base)
-    assert r.status_code == 400 and "client_id" in r.text and env.hub.mcp.get_row("slack") is None
-    n_probes = len(env.probes)
     r = await env.post("/mcp/browse/install", {**base, "oauth_client_id": "123.456", "oauth_client_secret": SECRET})
-    assert r.status_code == 303 and r.headers["location"] == "/mcp/slack#oauth", r.text
-    auth = env.hub.mcp.get_row("slack")["config"]["auth"]
-    assert auth["type"] == "oauth" and auth["client_id"] == "123.456" and auth["client_secret_ref"] == "${MCP_SLACK_OAUTH_CLIENT_SECRET}"
-    assert env.hub.secrets.get("MCP_SLACK_OAUTH_CLIENT_SECRET") == SECRET and len(env.probes) == n_probes
+    assert r.status_code == 400 and env.hub.mcp.get_row("slack") is None and SECRET not in r.text
+    assert env.hub.secrets.get("MCP_SLACK_OAUTH_CLIENT_SECRET") is None
     dump = json.dumps([dict(x) for x in env.hub.store.conn.execute("SELECT * FROM audit_log")], default=str)
     assert SECRET not in dump

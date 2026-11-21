@@ -407,6 +407,26 @@ def _mcp_check_ok(r: Any, f: FormData) -> str:
     return f"Kiểm tra MCP của tài khoản {_who(f)}: {len(sv)} server" + (f", cần đăng nhập: {', '.join(need)}" if need else "")
 
 
+def _mcp_register_params(f: FormData) -> dict[str, Any]:
+    """Đăng ký server có sẵn trong cấu hình claude của tài khoản cho hub (= `mcp.add{config:{source:"claude"}}` — daemon kiểm tên có
+    trong cấu hình, lấy transport/host từ đó, từ chối server trỏ về hub)."""
+    trust = "trusted" if str(f.get("trust") or "") in ("trusted", "on", "1", "yes") else "untrusted"
+    return {"config": {"name": _mcp_name(f), "source": "claude", "trust": trust}, "account_id": _mcp_acct(f)}
+
+
+def _mcp_register_confirm(f: FormData) -> str:
+    trusted = str(f.get("trust") or "") in ("trusted", "on", "1", "yes")
+    return (f"Đăng ký MCP «{_mcp_name(f)}» (cấu hình claude của tài khoản «{_who(f)}») cho hub? Sau đó gán cho agent ở trang MCP / agent. "
+            + ("Tin cậy: tool ghi của server chạy không hỏi (vẫn ghi audit)." if trusted
+               else "Không tin cậy: tool ghi của server phải chờ duyệt."))
+
+
+def _mcp_register_ok(r: Any, f: FormData) -> str:
+    r = r if isinstance(r, dict) else {}
+    tr = "tin cậy" if r.get("trust") == "trusted" else "không tin cậy"
+    return f"Đã đăng ký MCP {r.get('name') or _mcp_name(f)} cho hub (nguồn claude, {tr}) — gán cho agent ở trang MCP"
+
+
 def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
     """Thêm thao tác tài khoản Claude vào `ACTIONS` (form POST `/do/<tên>`). `account.*` ghi ∈ HUMAN_ONLY, daemon ghi audit kênh `web`."""
     actions["account_use"] = Action("account.use", lambda f: {"id": _id(f)}, _use_ok, confirm=_use_confirm)
@@ -456,6 +476,7 @@ def register_actions(actions: dict[str, Any], Action: Any, _req: Any) -> None:
                                           lambda r, f: f"Đã đăng xuất MCP {_mcp_name(f)} (tài khoản {_who(f)})", danger=True,
                                           confirm=lambda f: f"Đăng xuất MCP «{_mcp_name(f)}» của tài khoản «{_who(f)}»? Agent không dùng được "
                                           "server này (khi tài khoản đó đang dùng) tới khi đăng nhập lại.")
+    actions["mcp_claude_register"] = Action("mcp.add", _mcp_register_params, _mcp_register_ok, confirm=_mcp_register_confirm)
     actions["mcp_claude_check"] = Action("mcp.claude_status", lambda f: {"account_id": _mcp_acct(f), "refresh": True}, _mcp_check_ok, audit=False)
     actions["account_add_token"] = Action("account.add_token", lambda f: {"label": _label(f), "token": _secret(f, "token", "token")},
                                           _added_ok, call=_add_token, secret_fields=("token",))

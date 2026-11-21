@@ -31,7 +31,6 @@ _FLAGS_2_1_302: list[str] = [
 # Đa instance P1: MCP HTTP mặc định KHÁC cổng web (8765) để hai dịch vụ của cùng hub không va nhau.
 MCP_HTTP_DEFAULT_PORT = 8766
 LEGACY_MCP_HTTP_PORT = 8765  # mặc định cũ — guard vẫn coi URL loopback cổng này là MCP của hub (cài đặt cũ đã đăng ký)
-MCP_OAUTH_CALLBACK_DEFAULT_PORT = 33418  # callback OAuth của CLI (`mcp login`) — cố định để bản đăng ký DCR dùng lại được
 
 DEFAULTS: dict[str, Any] = {
     "hub": {
@@ -281,20 +280,8 @@ DEFAULTS: dict[str, Any] = {
         # server MCP nội bộ của hub không ghi audit tool.write (tool điều khiển của guard)
         "audit_ignore_servers": ["hub-guard"],
         "probe_timeout_s": 30,
-        # Proxy loopback chèn token MCP OAuth (mcp_client/oauth_proxy.py, docs/dev-notes/mcp-oauth.md §8.1): mcp.json của run trỏ tới
-        # http://127.0.0.1:<cổng>/r/<id>… + khoá theo run, token làm mới khi chuyển tiếp, không bao giờ vào file runtime. Tắt (`enabled: false`) = đường cũ
-        # (Bearer tĩnh trong mcp.json 0600). Nhánh này ∈ integrity.SECURITY_KEYS.
-        "oauth_proxy": {
-            "enabled": True,  # bật mặc định từ v0.2.17 (đã nghiệm thu với claude thật, mcp-oauth.md §8.1); proxy lỗi → tự về đường cũ
-            "port": 0,  # 0 = OS chọn cổng ngẫu nhiên mỗi lần daemon khởi động (chỉ bind 127.0.0.1)
-            "max_body_mb": 16,  # trần thân request (đệm để gửi lại sau khi làm mới token)
-        },
-    },
-    # Client OAuth của `cfharness mcp login` (mcp_client/oauth_cli.py)
-    "mcp_client": {
-        # cổng listener callback `http://127.0.0.1:<cổng>/callback`; 0 = OS chọn (mỗi lần một cổng → nhà cung cấp phải chấp nhận
-        # redirect loopback cổng bất kỳ, RFC 8252 §7.3; DCR sẽ đăng ký lại). Bận → cổng ngẫu nhiên.
-        "oauth_callback_port": MCP_OAUTH_CALLBACK_DEFAULT_PORT,
+        # `mcp.oauth_proxy.*` + `mcp_client.oauth_callback_port` (OAuth + proxy loopback của hub) đã gỡ từ v0.2.28 — OAuth MCP do claude giữ
+        # theo tài khoản. config.yaml cũ còn các khoá này vẫn đọc bình thường (khoá lạ được bỏ qua).
     },
     "secrets": {
         # `${VAR}` không có trong secret store thì lấy biến môi trường của daemon (tương thích ~/.claude.json)
@@ -1080,10 +1067,9 @@ def validate_setting(key: str, value: Any) -> None:
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")
-    if key in ("mcp_server.http_port", "mcp_client.oauth_callback_port"):
-        lo = 0 if key == "mcp_client.oauth_callback_port" else 1
-        if not isinstance(value, int) or isinstance(value, bool) or not lo <= value <= 65535:
-            raise ValueError(f"{key} phải là số nguyên {lo}–65535")
+    if key == "mcp_server.http_port":
+        if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 65535:
+            raise ValueError(f"{key} phải là số nguyên 1–65535")
     if key in ("gates", "gates.mode"):
         from .guard.profiles import GATES_MODES
 

@@ -184,6 +184,10 @@ class Hub:
         except Exception:  # pragma: no cover
             log.exception("không dọn được runtime/")
         self.integrity.start()  # SEC: so policy/ với bản chuẩn + vòng kiểm nền
+        try:  # plan-mcp-claude-native PR1: giá trị header/env/args MCP trong cấu hình claude (mặc định + mọi tài khoản) → bộ che
+            self.claude_redact.refresh()  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover
+            log.exception("không nạp được giá trị secret của cấu hình claude vào bộ che")
         try:  # L4: kiểm đuôi chuỗi băm audit (sửa/xoá khi daemon dừng) + neo + vòng neo định kỳ
             self.audit_chain.start()  # type: ignore[attr-defined]
         except Exception:  # pragma: no cover
@@ -206,6 +210,9 @@ class Hub:
         except Exception:  # pragma: no cover
             log.exception("không ghi được registry hub")
         self._warn_if_sandbox_disabled()
+        from .mcp_client.legacy_oauth import warn_on_start as _warn_legacy_oauth
+
+        _warn_legacy_oauth(self)  # MCP OAuth kiểu cũ (gỡ từ v0.2.28) còn sót → MỘT dòng cảnh báo, không xoá gì
         try:  # R2-1(c): .pth/sitecustomize lạ trong venv của hub → cảnh báo đỏ
             from .guard.integrity import check_python_env
 
@@ -269,8 +276,6 @@ class Hub:
         if getattr(self, "mcp_claude", None) is not None:
             await self.mcp_claude.close_all()  # type: ignore[attr-defined]  # kill `claude mcp login` đang chờ URL chuyển hướng
         await self.runs.shutdown()
-        if getattr(self, "mcp_proxy", None) is not None:
-            await self.mcp_proxy.stop()  # type: ignore[attr-defined]
         self.integrity.stop()
         self.audit_watch.stop()  # type: ignore[attr-defined]
         self.audit_archive.stop()  # type: ignore[attr-defined]
