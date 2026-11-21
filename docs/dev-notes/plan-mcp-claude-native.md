@@ -58,6 +58,15 @@ Danh sách kiểm ban đầu:
   tệp này cũng forbidden (Edit trả lại một đoạn nội dung); Bash xét cả dạng `--data=@…`/`-F f=@…`. `permissions.deny` qua
   `runtime.claude_files_deny_rules` (giữ cả khi trust_full); sandbox `denyRead` qua `claude_files.deny_read_paths` (cả `confine_only_sandbox`).
   **Chưa làm:** che theo giá trị header/env `mcpServers` (`redact`).
+- **Đã làm (2026-11-21, nhánh `feat/mcp-claude-redact-register`) — che theo giá trị:** `mcp_client/claude_redact.py`
+  (`hub.claude_redact`, gắn ở `mcp_client/wiring.attach`): đọc `mcpServers` (+ `projects[*].mcpServers`) của `.claude.json` và
+  `managedMcpServers` của `remote-settings.json` — cấu hình mặc định + MỌI thư mục `claude-config/a_xxxxxxxx/` (quét thư mục, không
+  cần DB) — chọn giá trị bằng CÙNG heuristic tách secret của `importer._Extractor` (khoá nhạy cảm, `Bearer …`, entropy cao; env, header,
+  args, query của url) + mật khẩu userinfo của url (cả dạng đã giải mã %), rồi `redact.register_secret_values` (≥ `MIN_VALUE_LEN`).
+  Làm mới theo `(mtime_ns, size)` — chỉ stat khi không đổi: `Hub.start` + mỗi lần run khởi động (`RunManager._refresh_claude_redact`,
+  thêm thư mục của tài khoản đang dùng). Không bao giờ log/trả giá trị (chỉ số file đọc lại). Lệch: giá trị không còn trong file vẫn
+  được che tới khi daemon khởi động lại (sổ che chỉ thêm, như SecretStore); header không nhạy cảm (vd `Content-Type`) không che.
+  Test: `tests/test_redact_claude_config.py`.
 
 ### PR2 — Registry nhận server nguồn `claude`
 - `McpServerConfig.source: hub|claude` (mặc định `hub`, không migration bảng — cột JSON sẵn có; nếu cần cột → migration mới).
@@ -226,6 +235,14 @@ của doctor/catalog/`mcp add --oauth`, test OAuth/proxy (~30); chuyển tự đ
 ### PR5 — Điều phối viên + doctor
 - `mcp_registry_list` hiện cả `source`; khung `read_only_trusted` áp như server hub (dựa annotation thủ công).
 - `hub doctor`: server claude chưa đăng nhập / tài khoản đang dùng thiếu server được gán.
+
+**Đã làm (2026-11-21, nhánh `feat/mcp-claude-redact-register`) — phần web còn thiếu:** mục "MCP của tài khoản" có nút
+«Đăng ký cho hub» cho server có trong cấu hình claude mà registry chưa có (ACTIONS `mcp_claude_register` → RPC có sẵn
+`mcp.add{config:{name, source:"claude", trust}, account_id}`, HUMAN_ONLY, xác nhận một bước nêu ý nghĩa tin cậy, CSRF/khoá phiên + audit
+`web`, quay về `/settings#acct-mcp-<id>`); ô «Tin cậy» → `trusted`, không tích → `untrusted`. Server `hub=true` (trỏ về chính hub) không
+có nút, hiện "trỏ về chính hub". Form agent: nhãn `claude` cạnh MCP nguồn claude. Tên đã xoá mềm trong registry → `mcp.add` báo trùng
+(khôi phục ở trang MCP / `cfharness mcp restore`) — giữ nguyên hợp đồng `reuse=False` của PR2. Test:
+`tests/test_mcp_claude_login.py::test_web_mcp_register_for_hub_button`.
 
 ## 4. Đánh đổi phải chấp nhận
 - Server `source=claude` gắn với **tài khoản**, không với hub: đổi tài khoản đang dùng → server đó chỉ có nếu tài khoản mới cũng có (doctor + `connector.auth_fallback`-tương tự cảnh báo).

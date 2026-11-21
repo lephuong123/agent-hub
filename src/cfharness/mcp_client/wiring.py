@@ -179,6 +179,9 @@ def attach(hub: "Hub") -> None:
     from .claude_admin import ClaudeMcpAdmin
 
     hub.mcp_claude = ClaudeMcpAdmin(hub)  # type: ignore[attr-defined]  # MCP do claude quản lý theo tài khoản (plan-mcp-claude-native PR3)
+    from .claude_redact import ClaudeConfigRedactor
+
+    hub.claude_redact = ClaudeConfigRedactor(hub.paths.home)  # type: ignore[attr-defined]  # che giá trị header/env MCP trong cấu hình claude
     hub.bus.add_listener(ToolWriteWatcher(hub))
     # H-12: bộ che theo GIÁ TRỊ — nạp mọi secret đã lưu + giá trị env-fallback mà registry đang tham chiếu
     try:

@@ -20,6 +20,10 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - Không đổi: MCP stdio và MCP http dùng header/secret tĩnh (nguồn hub) chạy như cũ.
 - **Lưu ý khi cập nhật**: server MCP OAuth kiểu cũ **ngừng chạy** (agent gán nó bị từ chối) tới khi chuyển sang claude. Xem server cần chuyển: `cfharness hub doctor` (mục "MCP OAuth do hub giữ") hoặc trang MCP. Chuyển từng server: `cfharness mcp migrate-to-claude <tên> --account <id>` (web: trang MCP của server → **Chuyển sang claude**), rồi đăng nhập ở hàng tài khoản trong Cài đặt — hub giữ nguyên trust, tool chặn/luôn hỏi duyệt, nhãn tool và agent đã gán; token OAuth cũ bị xoá sau khi đăng nhập claude thành công. Không dùng server nữa: `cfharness mcp rm <tên>`. Khoá cấu hình `mcp.oauth_proxy.*` và `mcp_client.oauth_callback_port` không còn tác dụng (config.yaml còn các khoá này vẫn đọc bình thường, có thể xoá).
 
+### MCP do `claude` quản lý: che secret + đăng ký trên web
+- Bảo mật: giá trị header/env/tham số/mật khẩu trong url của MCP do `claude` quản lý (`.claude.json` của cấu hình mặc định và mọi tài khoản, `remote-settings.json`) nay được che theo giá trị ở log, event, transcript run — kể cả khi server MCP in lại header trong thông báo lỗi; nạp lúc daemon khởi động và mỗi lần run bắt đầu (đọc lại khi file đổi).
+- Web: ở Cài đặt › Tài khoản Claude › MCP của tài khoản, server có trong cấu hình claude mà hub chưa đăng ký có nút **Đăng ký cho hub** (tuỳ chọn **Tin cậy**, có xác nhận); server trỏ về chính hub không đăng ký được. Form agent gắn nhãn `claude` cho MCP nguồn claude.
+
 ---
 
 ## v0.2.27 — 2026-11-21

@@ -844,6 +844,16 @@ class RunManager:
             f"{len(bad)} MCP dùng OAuth do hub giữ (đã gỡ từ v0.2.28): {', '.join(bad)} — run không chạy tới khi chuyển sang claude: "
             "cfharness mcp migrate-to-claude <tên> --account <id>", data={"servers": bad, "oauth": STATUS})
 
+    def _refresh_claude_redact(self, config_dir: Path | None) -> None:
+        """Run khởi động: giá trị secret trong cấu hình claude (tài khoản đang dùng + file đã đổi) → bộ che (chỉ stat khi không đổi)."""
+        cr = getattr(self.hub, "claude_redact", None)
+        if cr is None:
+            return
+        try:
+            cr.refresh([config_dir])
+        except Exception:
+            log.warning("không làm mới được bộ che theo cấu hình claude", exc_info=True)
+
     def _agent_claude_mcp(self, run: dict[str, Any], agent: dict[str, Any]) -> list[str]:
         """MCP nguồn claude gán cho agent mà run này nạp. Run kỹ thuật (review/eval/curator/graph_extract, bản sao eval) giữ
         --strict-mcp-config → không nạp (plan-mcp-claude-native §2)."""
@@ -1013,6 +1023,7 @@ class RunManager:
             recall = await self._memory_prefetch(run, agent)  # graph memory: top-k fact vào TIN USER ĐẦU (không vào system prompt)
             await _refresh_pdftoppm(hub)  # dò pdftoppm (cache hết hạn → chạy `-v`) trong THREAD: `_prepare_spec` chỉ đọc cache
             acct = self._connector_account()  # đọc MỘT lần cho cả lượt khởi động (account.use giữa chừng không làm các bước lệch nhau)
+            self._refresh_claude_redact(acct[1])
             auto_conn = await self._auto_connectors(runtime, run, agent, ar, acct)
             spec = self._prepare_spec(run, agent, recall=recall, auto_connectors=auto_conn, connector_dir=acct[1], account=acct[0])
             spec.control_handler = functools.partial(self._control_request, ar)  # CLI 2.1.303+: control_request can_use_tool → guard
