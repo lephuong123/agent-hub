@@ -24,7 +24,7 @@ ALERT_VI = {
     "domain_dns": "DNS sai", "domain_tunnel": "ingress tunnel lệch", "domain_tls": "chứng chỉ lỗi/sắp hết hạn", "domain_http": "HTTPS không ra trang đăng nhập",
     "domain_orphan": "tên miền mồ côi", "port_conflict": "trùng cổng", "job_failed": "job lỗi", "disk_low": "đĩa sắp đầy",
     "team_overdue": "việc team quá hạn", "superadmin_login_new_ip": "đăng nhập SAC từ IP mới", "approval_solo": "thao tác tới hạn chạy không người duyệt thứ hai",
-    "missing_report": "thiếu báo cáo ngày",
+    "missing_report": "thiếu báo cáo ngày", "claude_token_old": "token Claude sắp hết hạn (> 330 ngày)",
 }
 
 

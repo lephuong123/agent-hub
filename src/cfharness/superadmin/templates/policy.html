@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Chính sách{% endblock %}
+{% macro field(name, label, value, kind="text", ph="") %}<label>{{ label }} <input name="{{ name }}" value="{{ value if value is not none else '' }}" {% if kind == "num" %}inputmode="decimal"{% endif %} placeholder="{{ ph }}"></label>{% endmacro %}
+{% block content %}
+<h1>Chính sách</h1>
+<p class="muted">Hiệu lực = lấy giá trị <b>chặt hơn</b> giữa Toàn máy, Mặc định (hoặc riêng user), nhóm và các team của user. Hub đọc file do admind ghi (root, 0644).</p>
+
+<div class="cols">
+<section class="card"><h2>Phạm vi</h2>
+<ul>
+  <li><a href="?scope=machine">Toàn máy</a></li><li><a href="?scope=default">Mặc định</a></li>
+  {% for r in rows if r.scope not in ("machine", "default") %}<li><a href="?scope={{ r.scope }}">{{ r.label }}</a> <span class="muted small">rev {{ r.rev }}</span></li>{% endfor %}
+</ul>
+<form method="get" class="stack"><label>Mở phạm vi khác
+  <select name="scope">
+    {% for g in groups %}<option value="group:{{ g.id }}">Nhóm {{ g.name }}</option>{% endfor %}
+    {% for t in teams %}<option value="team:{{ t.id }}">Team {{ t.name }}</option>{% endfor %}
+    {% for u in users %}<option value="user:{{ u.id }}">User {{ u.os_user }}</option>{% endfor %}
+  </select></label><button class="btn">Mở</button></form>
+</section>
+
+<section class="card"><h2>Hiệu lực với một user</h2>
+<form method="get" class="row"><input type="hidden" name="scope" value="{{ scope }}"><select name="user">{% for u in users %}<option value="{{ u.os_user }}" {% if q.user == u.os_user %}selected{% endif %}>{{ u.os_user }}</option>{% endfor %}</select><button class="btn">Xem</button></form>
+{% if eff %}<table class="grid small mt"><thead><tr><th>Khoá</th><th>Giá trị</th><th>Nguồn</th></tr></thead><tbody>
+{% for r in eff.rows %}<tr><td><code>{{ r.key }}</code></td><td>{{ r.value }}</td><td>{{ r.source }}</td></tr>{% else %}<tr><td colspan="3" class="muted">Không có giới hạn.</td></tr>{% endfor %}
+</tbody></table><p class="muted small">rev đã ghi: {{ eff.rev_written or "—" }}</p>{% endif %}
+</section>
+</div>
+
+<section class="card"><h2>{{ cur.label if cur else scope }} <span class="muted small">rev {{ cur.rev if cur else 0 }}</span></h2>
+{% set c = content or {} %}
+<form method="get" class="grid-form">
+  <input type="hidden" name="scope" value="{{ scope }}"><input type="hidden" name="sim" value="1">
+  {{ field("c.budget.usd_per_day", "Ngân sách USD/ngày", (c.budget or {}).usd_per_day, "num") }}
+  {{ field("c.budget.usd_per_run_max", "Trần mỗi run (USD)", (c.budget or {}).usd_per_run_max, "num") }}
+  {{ field("c.runs.max_concurrent", "Số run đồng thời", (c.runs or {}).max_concurrent, "num") }}
+  {{ field("c.models.allow", "Model được dùng (phân cách dấu phẩy)", ((c.models or {}).allow or []) | join(", "), "text", "sonnet, haiku") }}
+  {{ field("c.min_version", "Phiên bản tối thiểu", c.min_version, "text", "0.2.28") }}
+  {% for k, label in (("sandbox", "Bắt buộc sandbox"), ("confine", "Bắt buộc giam workspace"), ("export", "Bắt buộc xuất trạng thái")) %}
+  <label><span><input type="checkbox" name="c.require.{{ k }}" value="true" {% if (c.require or {})[k] %}checked{% endif %}> {{ label }}</span></label>
+  {% endfor %}
+  {% if scope == "machine" %}<label><span><input type="checkbox" name="c.policy_required" value="true" {% if c.policy_required %}checked{% endif %}> Bắt buộc có chính sách (thiếu → chặn run)</span></label>{% endif %}
+  <button class="btn">Mô phỏng tác động</button>
+</form>
+
+{% if sim %}
+<div class="card"><h3>Mô phỏng: {{ sim.affected }} user bị ảnh hưởng</h3>
+{% if sim.would_block %}<p class="flash err">{{ sim.would_block | length }} hub sẽ bị chặn run:</p>
+<ul>{% for u in sim.would_block %}<li>{{ u.os_user }}: {{ u.blocked | join("; ") }}</li>{% endfor %}</ul>{% else %}<p class="flash ok">Không hub nào bị chặn.</p>{% endif %}
+{% if can(sess, "policy") %}
+{{ form_open("policy.save", "Lưu chính sách " ~ scope, confirm="Lưu chính sách cho " ~ (cur.label if cur else scope) ~ "?", next="/policy?scope=" ~ scope, cls="inline") }}
+  <input type="hidden" name="p.scope" value="{{ scope }}">
+  <input type="hidden" name="p.content:json" value="{{ content | tojson | forceescape }}">
+  <button class="btn primary">Lưu</button>
+</form>{% endif %}
+</div>
+{% endif %}
+
+{% if cur and cur.history %}
+<h3>Lịch sử</h3>
+<table class="grid small"><thead><tr><th>rev</th><th>Lúc</th><th>Người sửa</th><th>Thay đổi</th></tr></thead><tbody>
+{% for h in cur.history %}<tr><td>{{ h.rev }}</td><td>{{ h.created_at | ts }}</td><td>{{ h.author }}</td><td><pre class="log">{{ h.diff }}</pre></td></tr>{% endfor %}
+</tbody></table>
+{% if can(sess, "policy") and cur.rev > 1 %}{{ op_form("policy.rollback", "Quay về bản trước", {"scope": scope}, confirm="Quay chính sách về bản trước?", next="/policy?scope=" ~ scope) }}{% endif %}
+{% endif %}
+</section>
+{% endblock %}

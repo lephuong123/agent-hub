@@ -54,7 +54,8 @@ def collect(state: "State") -> dict[str, Any]:
                       "THEN ? ELSE last_seen END WHERE host_id=? AND user_id=?",
                       (status, (h or {}).get("hub_id"), d.get("version"), dumps(d) if d else "{}", 1 if d else 0, now, state.db.host_id, u["id"]))
         if u["state"] in ("active", "suspended"):
-            codes = AW.hub_codes(h, my_version=__version__, approval_wait_s=1800, budget_warn_pct=80) if h else {"missing"}
+            exp = state.db.get_setting(f"policy.user_rev.{u['os_user']}")
+            codes = AW.hub_codes(h, my_version=__version__, approval_wait_s=1800, budget_warn_pct=80, expected_rev=exp) if h else {"missing"}
             if u["state"] == "suspended":
                 codes -= {"stopped", "stale"}
         elif u["state"] == "revoked":
