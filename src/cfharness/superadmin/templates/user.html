@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% set i = p.identity %}{% set hub = p.hub %}
+{% block title %}{{ i.os_user }}{% endblock %}
+{% block content %}
+<div class="row">
+  <h1>{{ i.full_name or i.os_user }} <span class="muted">({{ i.os_user }})</span> {{ pill(i.state) }} {% if i.state == "active" %}{{ pill(hub.status) }}{% endif %}</h1>
+  {% if p.needs_update %}<span class="pill warn">hub cần cập nhật (số liệu cũ)</span>{% endif %}
+</div>
+
+<nav class="tabs">
+{% for t, label in (("overview", "Tổng quan"), ("access", "Truy cập"), ("agents", "Agent & cấu hình"), ("activity", "Hoạt động"), ("policy", "Chính sách"), ("reports", "Báo cáo"), ("history", "Dòng thời gian")) %}
+  <a href="?tab={{ t }}" class="{% if tab == t %}on{% endif %}">{{ label }}</a>
+{% endfor %}
+</nav>
+
+{% if tab == "overview" %}
+<div class="cols">
+<section class="card"><h2>Danh tính</h2><dl class="kv">
+  <dt>Họ tên</dt><dd>{{ i.full_name }}</dd><dt>Email</dt><dd>{{ i.email or "—" }}</dd><dt>User OS</dt><dd><code>{{ i.os_user }}</code></dd>
+  <dt>Nhóm</dt><dd>{{ i.group or "—" }}</dd>
+  <dt>Team</dt><dd>{% for t in i.teams %}<a href="/teams/{{ t.id }}">{{ t.name }}</a> ({{ t.role }}){% if not loop.last %}, {% endif %}{% else %}—{% endfor %}</dd>
+  <dt>Tạo lúc</dt><dd>{{ i.created_at | ts("%d/%m/%Y") }}{% if i.imported %} (nhập từ máy){% endif %}</dd>
+  <dt>Ghi chú quản trị</dt><dd>{{ i.note or "—" }}</dd>
+</dl>
+{% if can(sess, "user_lifecycle") %}
+<details><summary class="btn">Sửa thông tin</summary>
+{{ form_open("user.update", "Sửa thông tin", cls="stack") }}
+  <input type="hidden" name="p.id" value="{{ i.id }}">
+  <label>Họ tên <input name="p.full_name" value="{{ i.full_name }}"></label>
+  <label>Email <input name="p.email" type="email" value="{{ i.email }}"></label>
+  <label>Nhóm <select name="p.group_id:keep"><option value="">(không)</option>{% for g in groups %}<option value="{{ g.id }}" {% if g.id == i.group_id %}selected{% endif %}>{{ g.name }}</option>{% endfor %}</select></label>
+  <label>Ghi chú (chỉ SAC thấy) <textarea name="p.note:keep" rows="3">{{ i.note }}</textarea></label>
+  <button class="btn primary">Lưu</button>
+</form></details>
+{% endif %}
+</section>
+
+<section class="card"><h2>Hub</h2><dl class="kv">
+  <dt>Tên miền</dt><dd>{% for d in p.domains if d.kind == "hub" and d.state != "revoked" %}<a href="https://{{ d.sub }}.{{ d.zone }}" target="_blank" rel="noopener noreferrer">{{ d.sub }}.{{ d.zone }}</a> {{ pill(d.state) }}<br>{% else %}—{% endfor %}</dd>
+  <dt>Cổng web / MCP</dt><dd>{{ hub.web_port or "—" }} / {{ hub.mcp_port or "—" }}</dd>
+  <dt>Phiên bản</dt><dd>{{ hub.version or "—" }}{% if hub.pinned_tag %} (ghim {{ hub.pinned_tag }}){% endif %} · {{ hub.install_kind or "" }}</dd>
+  <dt>Daemon</dt><dd>{% if hub.daemon.up %}chạy từ {{ hub.daemon.started_at or "" }}{% else %}không chạy{% endif %}</dd>
+  <dt>Sandbox / giam workspace</dt><dd>{{ "bật" if hub.guard.sandbox else "tắt" }} / {{ "bật" if hub.guard.confine else "tắt" }}</dd>
+  <dt>Đĩa trống</dt><dd>{{ hub.disk.free_gb or "—" }} GB</dd>
+  <dt>Báo cáo gần nhất</dt><dd>{{ hub.last_seen | ago }}</dd>
+</dl>
+<div class="row">
+  {% if can(sess, "hub") and has_op("hub.restart") %}
+    {{ op_form("hub.restart", "Khởi động lại", {"user": i.os_user, "part": "both"}, confirm="Khởi động lại daemon + web của " ~ i.os_user ~ "?") }}
+    {{ op_form("hub.doctor", "Chẩn đoán", {"user": i.os_user}) }}
+    <a class="btn" href="/users/{{ i.id }}/logs">Log</a>
+  {% endif %}
+</div>
+</section>
+
+<section class="card"><h2>Hoạt động</h2><dl class="kv">
+  <dt>Run đang chạy / chờ</dt><dd>{{ p.metrics.runs.running or 0 }} / {{ p.metrics.runs.queued or 0 }}</dd>
+  <dt>Hôm nay</dt><dd>{{ p.metrics.runs.today_total or 0 }} run · {{ p.metrics.runs.today_completed or 0 }} xong · {{ p.metrics.runs.today_failed or 0 }} lỗi</dd>
+  <dt>Duyệt chờ</dt><dd>{{ p.metrics.approvals.open or 0 }}{% if p.metrics.approvals.oldest_wait_s %} (lâu nhất {{ (p.metrics.approvals.oldest_wait_s / 60) | int }} phút){% endif %}</dd>
+  <dt>Câu hỏi mở</dt><dd>{{ p.metrics.questions.open or 0 }}</dd>
+  <dt>Agent</dt><dd>{{ p.metrics.agents.total or 0 }} ({{ p.metrics.agents.trust_full or 0 }} tin cậy toàn phần)</dd>
+  <dt>ESTOP</dt><dd>{% if p.metrics.admin_estop.on %}<span class="pill bad">quản trị</span>{% endif %}{% if p.metrics.estop.on %}<span class="pill warn">của user</span>{% endif %}{% if not p.metrics.admin_estop.on and not p.metrics.estop.on %}tắt{% endif %}</dd>
+</dl></section>
+
+<section class="card"><h2>Chi phí</h2><dl class="kv">
+  <dt>Hôm nay</dt><dd>{{ p.cost.usd.today | money }}</dd><dt>Tháng</dt><dd>{{ p.cost.usd.month | money }}</dd>
+  <dt>% ngân sách ngày</dt><dd>{% if p.cost.budget.day_pct is not none %}{{ "%.0f" | format(p.cost.budget.day_pct) }}%{% else %}—{% endif %}</dd>
+</dl>
+{% if bars %}<svg class="chart" viewBox="0 0 600 110" role="img" aria-label="Chi phí 30 ngày">{% for b in bars %}<rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"><title>{{ b.label }}</title></rect>{% endfor %}</svg>{% endif %}
+{% if p.cost.by_agent %}<h3>Theo agent</h3><ul class="small">{% for a in p.cost.by_agent %}<li>{{ a.name }}: {{ a.usd | money }}</li>{% endfor %}</ul>{% endif %}
+{% if p.cost.by_model %}<h3>Theo model</h3><ul class="small">{% for a in p.cost.by_model %}<li>{{ a.model }}: {{ a.usd | money }}</li>{% endfor %}</ul>{% endif %}
+</section>
+</div>
+
+{% if p.alerts %}
+<section class="card"><h2>Cảnh báo</h2><ul>{% for a in p.alerts %}<li>{{ pill(a.state) }} {{ a.code }} — {{ a.opened_at | ago }}</li>{% endfor %}</ul></section>
+{% endif %}
+
+<section class="card"><h2>Vòng đời</h2>
+<div class="row">
+{% if i.state == "active" and can(sess, "user_suspend") and has_op("user.suspend") %}
+  {{ form_open("user.suspend", "Tạm khoá " ~ i.os_user, cls="inline", confirm="Tạm khoá " ~ i.os_user ~ "? Dừng run, huỷ phiên web, tắt truy cập từ ngoài.") }}
+    <input type="hidden" name="p.user" value="{{ i.os_user }}">
+    <select name="p.reason_code">{% for r in ("maintenance", "security", "budget", "policy", "incident", "other") %}<option>{{ r }}</option>{% endfor %}</select>
+    <button class="btn danger">Tạm khoá</button></form>
+{% endif %}
+{% if i.state == "suspended" and can(sess, "user_suspend") and has_op("user.resume") %}{{ op_form("user.resume", "Mở khoá", {"user": i.os_user}, confirm="Mở khoá " ~ i.os_user ~ "?", cls="primary") }}{% endif %}
+{% if i.state in ("active", "suspended") and can(sess, "user_lifecycle") and has_op("user.revoke") %}{{ op_form("user.revoke", "Thu hồi", {"user": i.os_user}, confirm="Thu hồi " ~ i.os_user ~ "? Dừng hub, gỡ nhóm, thu hồi tên miền, vô hiệu TOTP. Dữ liệu giữ nguyên.", cls="danger") }}{% endif %}
+{% if i.state == "revoked" and can(sess, "user_lifecycle") and has_op("user.restore") %}{{ op_form("user.restore", "Khôi phục", {"user": i.os_user}, confirm="Khôi phục " ~ i.os_user ~ "?", cls="primary") }}{% endif %}
+{% if i.state == "revoked" and can(sess, "user_delete") and has_op("user.delete") %}
+  {{ form_open("user.delete", "Xoá hẳn " ~ i.os_user, cls="inline", confirm="XOÁ HẲN " ~ i.os_user ~ "? Sao lưu trước, cần Super Admin khác duyệt, chờ 24 giờ.") }}
+    <input type="hidden" name="p.user" value="{{ i.os_user }}">
+    <input name="p.confirm" placeholder="gõ lại {{ i.os_user }}" required>
+    <input name="p.reason" placeholder="lý do" required>
+    <button class="btn danger">Xoá hẳn</button></form>
+{% endif %}
+{% if i.state == "create_failed" %}<span class="muted">Tạo lỗi — xem Job để thử lại hoặc huỷ và dọn.</span>{% endif %}
+</div>
+</section>
+
+{% elif tab == "access" %}
+<div class="cols">
+<section class="card"><h2>Đăng nhập web</h2><dl class="kv">
+  <dt>Web public</dt><dd>{{ "có" if p.access.web.public else "không" }}</dd><dt>TOTP</dt><dd>{{ "đã kích hoạt" if p.access.web.totp else "chưa" }}</dd>
+  <dt>Đăng nhập sai hôm nay</dt><dd>{{ p.access.web.login_failed_today or 0 }}</dd><dt>Bị khoá hôm nay</dt><dd>{{ p.access.web.locked_today or 0 }}</dd>
+  <dt>Thiết bị tin cậy</dt><dd>{{ p.access.access.trusted_devices if p.access.access.trusted_devices is defined else "—" }}</dd>
+  <dt>Phiên web đang mở</dt><dd>{{ p.access.access.web_sessions if p.access.access.web_sessions is defined else "—" }}</dd>
+</dl>
+<div class="row">{% if can(sess, "access") %}
+  {% if has_op("access.totp_reset") %}{{ op_form("access.totp_reset", "Cấp lại TOTP", {"user": i.os_user}, confirm="Cấp lại TOTP cho " ~ i.os_user ~ "? Mọi phiên + thiết bị tin cậy cũ bị huỷ.") }}{% endif %}
+  {% if has_op("access.login_unlock") %}{{ op_form("access.login_unlock", "Gỡ khoá đăng nhập sai", {"user": i.os_user}) }}{% endif %}
+  {% if has_op("access.sessions_revoke") %}{{ op_form("access.sessions_revoke", "Thu hồi mọi phiên web", {"user": i.os_user}, confirm="Đăng xuất " ~ i.os_user ~ " khỏi mọi thiết bị?") }}{% endif %}
+{% endif %}</div>
+</section>
+<section class="card"><h2>Kênh & Claude</h2><dl class="kv">
+  <dt>Telegram</dt><dd>{{ "đã ghép" if p.access.chat.telegram else "không" }}</dd><dt>Slack</dt><dd>{{ "đã ghép" if p.access.chat.slack else "không" }}</dd>
+  <dt>Claude</dt><dd>{% if p.access.claude.auth_ok %}<span class="pill ok">đăng nhập được</span>{% elif p.access.claude.auth_ok is sameas false %}<span class="pill bad">lỗi đăng nhập</span>{% else %}—{% endif %}
+    {% if p.access.claude.oauth_token_age_d is not none and p.access.claude.oauth_token_age_d is defined %} · token {{ p.access.claude.oauth_token_age_d | int }} ngày tuổi{% endif %}</dd>
+  <dt>claude CLI</dt><dd>{{ p.access.claude.cli_version or "—" }}</dd>
+</dl>
+{% if can(sess, "claude") and has_op("claude.assign") and accounts %}
+{{ form_open("claude.assign", "Đổi tài khoản Claude", cls="row") }}
+  <input type="hidden" name="p.users:multi" value="{{ i.os_user }}">
+  <select name="p.account_id">{% for a in accounts %}<option value="{{ a.id }}">{{ a.name }} ({{ a.state }})</option>{% endfor %}</select>
+  <button class="btn">Gán tài khoản</button></form>
+{% endif %}
+</section>
+<section class="card"><h2>Tên miền</h2>
+<ul>{% for d in p.domains %}<li>{{ d.sub }}.{{ d.zone }} {{ pill(d.state) }} <span class="muted">{{ d.kind }}</span></li>{% else %}<li class="muted">Chưa có tên miền.</li>{% endfor %}</ul>
+{% if can(sess, "domain") and not (p.domains | selectattr("kind", "equalto", "hub") | rejectattr("state", "equalto", "revoked") | list) %}
+{{ form_open("domain.create", "Cấp tên miền", cls="row") }}
+  <input type="hidden" name="p.user" value="{{ i.os_user }}">
+  <input name="p.sub" value="{{ i.os_user | lower }}" required>
+  <select name="p.zone_id">{% for z in zones %}<option value="{{ z.id }}">.{{ z.name }}</option>{% endfor %}</select>
+  <button class="btn primary">Cấp tên miền</button></form>
+{% endif %}
+</section>
+</div>
+
+{% elif tab == "agents" %}
+<section class="card"><h2>Agent</h2>
+{% if p.agents %}
+<table class="grid small"><thead><tr><th>Agent</th><th>Vai trò</th><th>Model</th><th>Tin cậy</th><th>Ngân sách</th><th>MCP</th><th>Trạng thái</th></tr></thead><tbody>
+{% for a in p.agents %}<tr><td>{{ a.name }}</td><td>{{ a.role }}</td><td>{{ a.model }}</td><td>{{ a.trust }}</td><td>{{ a.budget_usd | money }}</td><td>{{ a.mcp | join(", ") if a.mcp else "" }}</td><td>{{ a.status }}</td></tr>{% endfor %}
+</tbody></table>
+{% else %}<p class="muted">Hub chưa xuất hồ sơ agent (cần phiên bản có SPEC v3).</p>{% endif %}
+</section>
+
+{% elif tab == "activity" %}
+<section class="card"><h2>Việc đang làm & gần đây</h2>
+{% if not p.activity_visible %}<p class="muted">Mức xem “Hoạt động” đang tắt hoặc vai trò của bạn không được xem.</p>
+{% elif not p.activity %}<p class="muted">Hub chưa xuất dữ liệu hoạt động.</p>
+{% else %}
+<table class="grid small"><thead><tr><th>Việc</th><th>Agent</th><th>Trạng thái</th><th>Bắt đầu</th><th>Thời lượng</th><th>Kết quả</th></tr></thead><tbody>
+{% for t in p.activity.recent or [] %}<tr><td>{{ t.title }}</td><td>{{ t.agent }}</td><td>{{ t.status }}</td><td>{{ t.started_at }}</td><td>{% if t.duration_s %}{{ (t.duration_s / 60) | int }} phút{% endif %}</td><td class="small">{{ t.summary }}</td></tr>{% endfor %}
+</tbody></table>{% endif %}
+</section>
+
+{% elif tab == "policy" %}
+<section class="card"><h2>Chính sách hiệu lực</h2>
+{% if policy %}<table class="grid"><thead><tr><th>Khoá</th><th>Giá trị</th><th>Nguồn</th></tr></thead><tbody>
+{% for r in policy.rows %}<tr><td><code>{{ r.key }}</code></td><td>{{ r.value }}</td><td>{{ r.source }}</td></tr>{% endfor %}</tbody></table>
+{% else %}<p class="muted">Chưa có chính sách.</p>{% endif %}
+</section>
+
+{% elif tab == "reports" %}
+<section class="card"><h2>Báo cáo ngày</h2>
+<table class="grid small"><thead><tr><th>Ngày</th><th>Run</th><th>Xong/Lỗi</th><th>Task xong</th><th>Chi phí</th><th>Bất thường</th></tr></thead><tbody>
+{% for r in reports %}<tr><td><a href="/reports/{{ r.day }}/{{ i.id }}">{{ r.day }}</a></td><td>{{ r.data.runs.total if r.data.runs else "—" }}</td><td>{{ r.data.runs.completed if r.data.runs else "" }}/{{ r.data.runs.failed if r.data.runs else "" }}</td><td>{{ r.data.tasks.done if r.data.tasks else "—" }}</td><td>{{ r.data.cost_usd | money }}</td><td>{{ r.anomalies | join(", ") }}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">Chưa có báo cáo.</td></tr>{% endfor %}
+</tbody></table></section>
+
+{% elif tab == "history" %}
+<section class="card"><h2>Job</h2><ul>{% for j in p.jobs %}<li><a href="/jobs/{{ j.id }}">{{ j.kind }}</a> {{ pill(j.state) }} {{ j.created_at | ago }}</li>{% else %}<li class="muted">Chưa có job.</li>{% endfor %}</ul></section>
+<section class="card"><h2>Nhật ký quản trị</h2>
+<table class="grid small"><thead><tr><th>Lúc</th><th>Người làm</th><th>Thao tác</th><th>Kết quả</th></tr></thead><tbody>
+{% for r in p.audit | sort(attribute="seq", reverse=True) %}<tr><td>{{ r.ts | ts }}</td><td>{{ r.actor_email or r.actor_id }}</td><td><code>{{ r.op }}</code></td><td>{{ r.outcome }}</td></tr>{% endfor %}
+</tbody></table></section>
+{% endif %}
+{% endblock %}

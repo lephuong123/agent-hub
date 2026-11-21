@@ -85,9 +85,9 @@ class SacApp:
     # ------------------------------------------------------------------ cổng vào
     def _host_ok(self, request: Request) -> bool:
         host = (request.headers.get("host") or "").lower()
-        if host == self.cfg.hostname.lower():
-            return True
-        if self.cfg.loopback_ok:
+        if self.cfg.access is not None:
+            return host == self.cfg.hostname.lower()
+        if self.cfg.loopback_ok:  # chưa có Access: KHÔNG nhận tên miền công khai (đi qua tunnel mà không có lớp Access)
             name = host.rsplit(":", 1)[0]
             return name in ("127.0.0.1", "localhost", "[::1]")
         return False
