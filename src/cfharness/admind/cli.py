@@ -14,7 +14,25 @@ import sys
 from typing import Any
 
 
+def cli_visible() -> bool:
+    """VIS-03: chỉ root (sudo trên máy chủ) và user `_cfh_sac` mới thấy `admind`/`superadmin` — user thường không biết có SAC."""
+    if os.environ.get("CFHARNESS_TESTING") == "1" and os.environ.get("CFHARNESS_TEST_SHOW_ADMIN_CLI") != "0":
+        return True
+    if _is_root():
+        return True
+    try:
+        import pwd
+
+        from .paths import SAC_USER
+
+        return pwd.getpwuid(os.getuid()).pw_name == SAC_USER  # type: ignore[attr-defined]
+    except (ImportError, KeyError, AttributeError):
+        return False
+
+
 def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
+    if not cli_visible():
+        return
     a = sub.add_parser("admind", help="tiến trình đặc quyền của Super Admin Console (root, macOS)", parents=[common])
     asub = a.add_subparsers(dest="admind_action", required=True)
     asub.add_parser("serve", help="chạy admind (LaunchDaemon gọi; cần root)", parents=[common])

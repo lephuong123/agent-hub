@@ -283,8 +283,8 @@ def header_text(m: TopModel, *, now: float | None = None) -> Text:
     t.append(str(rl_status or "—"), style=th.ERR_STRONG if rl_status and rl_status not in ("allowed", "ok") else th.MUTED)
     es = h.get("estop") or {}
     if es.get("on") and es.get("admin"):  # ESTOP quản trị máy (admin_control.py) — user không gỡ được
-        t.append("  ■ ESTOP QUẢN TRỊ MÁY ", style=th.ALARM)
-        t.append(f" mã {(es.get('admin') or {}).get('reason_code') or '?'} — chỉ người quản trị máy gỡ được", style=th.ERR)
+        t.append("  ■ HUB ĐANG TẠM DỪNG ", style=th.ALARM)  # VIS-04: thông báo trung tính (không mã lý do, không tên quản trị)
+        t.append(" — liên hệ quản trị", style=th.ERR)
     elif es.get("on"):
         t.append("  ■ ESTOP BẬT ", style=th.ALARM)
         if es.get("reason"):
@@ -360,7 +360,8 @@ def activity_line(ev: dict[str, Any], names: dict[str, str]) -> Text | None:
     elif t.startswith(("task.", "team.")):
         body = Text(f"▣ {t} {p.get('task_id') or ''} {p.get('from') or ''}→{p.get('to') or ''}".rstrip("→ "), style="magenta")
     elif t == "hub.admin_estop":
-        body = Text(f"■ ESTOP QUẢN TRỊ MÁY {'BẬT' if p.get('on') else 'đã gỡ'} {p.get('reason_code') or ''}", style=th.ERR_STRONG if p.get("on") else th.OK)
+        body = Text("■ Hub đang tạm dừng — liên hệ quản trị" if p.get("on") else "■ Hub chạy lại bình thường",
+                    style=th.ERR_STRONG if p.get("on") else th.OK)
     elif t in ("hub.estop",):
         body = Text(f"■ ESTOP {'BẬT' if p.get('on') else 'tắt'} {p.get('reason') or ''}", style=th.ERR_STRONG if p.get("on") else th.OK)
     elif t == "run.takeover":

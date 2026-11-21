@@ -121,9 +121,33 @@ def is_admin() -> bool:
 
 
 def require_admin(what: str) -> None:
+    """FR-SA-VIS (VIS-03): với người KHÔNG thuộc nhóm quản trị, method quản trị trả CÙNG lỗi như method không tồn tại — không lộ là có."""
     if not is_admin():
-        raise Blocked(f"{what}: chỉ thành viên nhóm {ADMIN_GROUP} (người quản trị máy). Xem docs/dev-notes/admin-overview.md",
-                      data={"reason": "not_admin"})
+        from .rpc import METHOD_NOT_FOUND
+
+        raise HubError(f"không có method {what.split(' ')[0]}", code=METHOD_NOT_FOUND)
+
+
+VISIBILITY_FILE = "visibility.json"
+VISIBILITY_DEFAULT: dict[str, Any] = {"activity": False, "transparency": False}
+
+
+def visibility() -> dict[str, Any]:
+    """`control/visibility.json` (admind ghi — SYS-03, VIS-07): mức xem Hoạt động + trang minh bạch. Thiếu/hỏng → mặc định TẮT cả hai."""
+    raw, _st, err = read_small(control_dir() / VISIBILITY_FILE, FLAG_MAX)
+    if err or not raw:
+        return dict(VISIBILITY_DEFAULT)
+    try:
+        obj = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return dict(VISIBILITY_DEFAULT)
+    if not isinstance(obj, dict):
+        return dict(VISIBILITY_DEFAULT)
+    return {k: obj.get(k) is True for k in VISIBILITY_DEFAULT}
+
+
+def transparency_on() -> bool:
+    return bool(visibility().get("transparency"))
 
 
 # ============================================================================ lọc dữ liệu (dùng chung admin-log/audit)
@@ -229,7 +253,7 @@ def merge_estop(es: dict[str, Any] | None, adm: dict[str, Any] | None) -> dict[s
     if not (adm or {}).get("on"):
         return es
     return {**es, "on": True, "own_on": bool(es.get("on")), "admin": dict(adm or {}),
-            "reason": f"ESTOP quản trị máy ({(adm or {}).get('reason_code') or 'unknown'}) — chỉ người quản trị máy gỡ được"}
+            "reason": "Hub đang tạm dừng — liên hệ quản trị"}  # VIS-04: không mã lý do, không tên quản trị
 
 
 # ============================================================================ ESTOP admin — ghi (hub admin)
@@ -367,7 +391,7 @@ class AdminControl:
         self.hub.publish(make_event("hub.admin_estop", None, {k: st.get(k) for k in ("on", "scope", "reason_code", "since")}))
         runs = self.hub.runs
         if st["on"] and not prev.get("on"):
-            log.warning("ESTOP quản trị máy BẬT (%s, %s) — dừng run đang chạy", st.get("scope"), st.get("reason_code"))
+            log.warning("Hub đang tạm dừng (cờ dừng khẩn phạm vi %s) — dừng run đang chạy", st.get("scope"))  # VIS-04: không mã lý do
             try:
                 grace = float(self.hub.config.get("runs.stop_grace_s"))
                 for ar in list(runs.active.values()):
@@ -427,7 +451,7 @@ def submit_gate(hub: "Hub", agent: dict[str, Any], model: str | None) -> None:
     ctl: AdminControl | None = getattr(hub, "admin_control", None)
     st = ctl.check() if ctl is not None else read_flags()
     if st.get("on"):
-        raise Blocked(f"ESTOP quản trị máy đang bật (mã {st.get('reason_code') or 'unknown'}) — không khởi chạy run mới; chỉ người quản trị máy gỡ được",
+        raise Blocked("Hub đang tạm dừng — liên hệ quản trị. Không khởi chạy run mới.",
                       data={"admin_estop": {k: st.get(k) for k in ("on", "scope", "reason_code", "since")}})
     from .admin_policy import submit_gate as _policy_gate
 

@@ -192,10 +192,11 @@ async def test_users_rpc_requires_admin(hub_home, tmp_path, as_admin):
             with pytest.raises(HubError):
                 await rpc(d, m, {"user": ME}, as_caller=agent)
         ac._GETGROUPS = lambda: []
-        for m in ("admin.users", "admin.alerts", "admin.audit"):
-            with pytest.raises(HubError) as ei:
+        for m in ("admin.users", "admin.alerts", "admin.audit", "admin.setup_check", "admin.self", "admin.policy"):
+            with pytest.raises(HubError) as ei:  # VIS-03: như method không tồn tại
                 await rpc(d, m, {})
-            assert "cfharness-admin" in str(ei.value)
+            assert f"không có method {m}" in str(ei.value), m
+        assert (await rpc(d, "admin.nav", {}))["is_admin"] is False
         with pytest.raises(HubError):
             await rpc(d, "admin.policy", {"user": "someoneelse"})
         assert (await rpc(d, "admin.policy", {}))["exists"] in (True, False)  # chính sách của chính mình: ai cũng xem được

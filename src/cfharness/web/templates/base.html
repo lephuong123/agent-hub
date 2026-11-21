@@ -46,7 +46,7 @@
     </nav>
     {% block side_extra %}{% endblock %}
     <div class="side-foot">
-      {% if badge.admin_estop %}<a href="/machine" class="btn danger solid sm side-btn" title="Người quản trị máy đã bật ESTOP — chỉ họ gỡ được">{{ _m.icon('stop') }}<span class="lbl">ESTOP quản trị máy</span></a>
+      {% if badge.admin_estop %}<span class="btn danger solid sm side-btn" title="Hub đang tạm dừng — liên hệ quản trị">{{ _m.icon('stop') }}<span class="lbl">Hub đang tạm dừng</span></span>
       {% elif badge.estop %}<a href="/settings#estop" class="btn danger solid sm side-btn" title="Dừng khẩn cấp đang bật">{{ _m.icon('stop') }}<span class="lbl">ESTOP đang bật</span></a>{% endif %}
       <a href="/settings#desktop-app" class="side-dl" title="Tải ứng dụng máy tính Cfharness Desktop (macOS, Windows)">{{ _m.icon('download') }}<span class="lbl">Tải app máy tính</span></a>
       <div class="side-user">
@@ -64,7 +64,7 @@
       <div class="mtop-right">
         {{ view_toggle('view-toggle-m', 'view-toggle') }}
         <a class="btn ghost sm icon" href="/manager?new=1" title="Cuộc trò chuyện mới" aria-label="Cuộc trò chuyện mới">{{ _m.icon('pen-new') }}</a>
-        {% if badge.admin_estop %}<a href="/machine" class="pill danger strong">{{ _m.icon('stop') }}ESTOP quản trị</a>
+        {% if badge.admin_estop %}<span class="pill danger strong" title="Liên hệ quản trị">{{ _m.icon('stop') }}Hub đang tạm dừng</span>
         {% elif badge.estop %}<a href="/settings#estop" class="pill danger strong">{{ _m.icon('stop') }}ESTOP</a>{% endif %}
         {% if badge.down %}<span class="pill danger">daemon tắt</span>{% endif %}
       </div>
