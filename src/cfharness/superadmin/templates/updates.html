@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Cập nhật hub{% endblock %}
+{% block content %}
+<h1>Cập nhật cfharness cho hub</h1>
+<div class="cols">
+<section class="card"><h2>Theo đợt (khuyến nghị)</h2>
+<p class="muted small">1 hub thử → chẩn đoán xanh + chờ N phút không lỗi → phần còn lại theo lô. Lỗi ở đâu dừng ở đó. Hub đã ghim phiên bản khác được bỏ qua.</p>
+{{ form_open("hub.rollout", "Cập nhật theo đợt", cls="stack", confirm="Bắt đầu cập nhật theo đợt?") }}
+  <label>Tag <input name="p.tag" pattern="v\d+\.\d+\.\d+" required placeholder="v0.2.30"></label>
+  <label>Hub thử <select name="p.canary">{% for u in users %}<option value="{{ u.os_user }}">{{ u.os_user }} ({{ u.version or "?" }})</option>{% endfor %}</select></label>
+  <label>Số hub mỗi lô <input name="p.batch:int" value="3" inputmode="numeric"></label>
+  <label>Chờ sau hub thử (phút) <input name="p.soak_minutes:int" value="10" inputmode="numeric"></label>
+  <button class="btn primary">Bắt đầu</button>
+</form></section>
+<section class="card"><h2>Chọn hub cập nhật ngay</h2>
+{{ form_open("hub.update", "Cập nhật hub", cls="stack", confirm="Cập nhật các hub đã chọn?") }}
+  <label>Tag <input name="p.tag" pattern="v\d+\.\d+\.\d+" required></label>
+  <select name="p.users:multi" multiple size="8">{% for u in users %}<option value="{{ u.os_user }}">{{ u.os_user }} ({{ u.version or "?" }})</option>{% endfor %}</select>
+  <button class="btn">Cập nhật</button>
+</form></section>
+</div>
+<section class="card"><h2>Job cập nhật gần đây</h2><ul>{% for j in jobs %}<li><a href="/jobs/{{ j.id }}">{{ j.kind }} · {{ j.target }}</a> {{ pill(j.state) }} {{ j.created_at | ago }}</li>{% else %}<li class="muted">Chưa có.</li>{% endfor %}</ul></section>
+{% endblock %}

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Nhập user từ CSV{% endblock %}
+{% block content %}
+<h1>Tạo nhiều user từ CSV</h1>
+<p class="muted">Cột: <code>os_user,full_name,email,group,team,sub</code> (group = tên nhóm, team = mã team). Tối đa 100 dòng. Chạy thử trước — có dòng lỗi thì không tạo gì.</p>
+{{ form_open("user.import_csv", "Nhập CSV", cls="stack", next="/users/bulk") }}
+  <textarea name="p.csv" rows="10" required placeholder="os_user,full_name,email,group,team,sub"></textarea>
+  <div class="grid-form">
+    <label>Zone cho tên miền <select name="p.zone_id"><option value="">(không cấp tên miền)</option>{% for z in zones %}<option value="{{ z.id }}">.{{ z.name }}</option>{% endfor %}</select></label>
+    <label>Tài khoản Claude (bắt buộc) <select name="p.claude_account_id" required>{% for a in accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}</select></label>
+    <input type="hidden" name="p.dry_run:bool" value="true">
+    <label><span><input type="checkbox" name="p.dry_run:bool" value="false"> Tạo thật (bỏ chọn = chỉ chạy thử)</span></label>
+  </div>
+  <button class="btn primary">Gửi</button>
+</form>
+{% endblock %}

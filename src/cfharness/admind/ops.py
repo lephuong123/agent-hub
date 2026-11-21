@@ -64,6 +64,7 @@ OP_MODULES = (
     "cfharness.admind.ops_policy",
     "cfharness.admind.ops_claude",
     "cfharness.admind.ops_reports",
+    "cfharness.admind.ops_extra",
 )
 
 

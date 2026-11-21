@@ -40,6 +40,15 @@
   <button class="btn danger">Bật ESTOP team</button>
 </form></section>
 {% endif %}
+{% if users and has_op("estop.on_timed") %}
+<section class="card"><h2>Bảo trì có lịch (tự gỡ)</h2>
+{{ form_open("estop.on_timed", "ESTOP có hẹn gỡ", confirm="Bật ESTOP và tự gỡ sau số giờ đã chọn?") }}
+  <input type="hidden" name="p.scope" value="user">
+  <select name="p.ids:multi" multiple size="5">{% for u in users if u.state == "active" %}<option value="{{ u.os_user }}">{{ u.os_user }}</option>{% endfor %}</select>
+  <label>Tự gỡ sau (giờ) <input name="p.hours:float" value="2" inputmode="decimal"></label>
+  <button class="btn danger">Bật + hẹn gỡ</button>
+</form></section>
+{% endif %}
 {% if groups and sess.account.role != "team_lead" %}
 <section class="card"><h2>Theo nhóm</h2>
 {{ form_open("estop.on", "ESTOP nhóm", confirm="Bật ESTOP cho mọi user trong nhóm đã chọn?") }}

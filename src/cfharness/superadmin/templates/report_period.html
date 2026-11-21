@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Báo cáo {{ "tháng" if r.period == "month" else "tuần" }}{% endblock %}
+{% block content %}
+<h1>Báo cáo {{ "tháng" if r.period == "month" else "tuần" }} {{ r.start }} → {{ r.end }}</h1>
+<nav class="tabs"><a href="/reports">Ngày</a><a href="?period=week&team_id={{ q.team_id or '' }}" class="{% if r.period == 'week' %}on{% endif %}">Tuần</a><a href="?period=month&team_id={{ q.team_id or '' }}" class="{% if r.period == 'month' %}on{% endif %}">Tháng</a></nav>
+<form method="get" class="filters"><input type="hidden" name="period" value="{{ r.period }}"><select name="team_id"><option value="">toàn hệ</option>{% for t in teams %}<option value="{{ t.id }}" {% if q.team_id == t.id %}selected{% endif %}>{{ t.name }}</option>{% endfor %}</select><button class="btn">Xem</button></form>
+<div class="tiles"><div class="tile"><span>Run</span><b>{{ r.totals.runs }}</b></div><div class="tile"><span>Chi phí</span><b>{{ r.totals.cost | money }}</b></div></div>
+{% if bars %}<section class="card"><h2>Chi phí theo ngày</h2><svg class="chart" viewBox="0 0 600 100" role="img" aria-label="Xu hướng">{% for b in bars %}<rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"><title>{{ b.label }}</title></rect>{% endfor %}</svg></section>{% endif %}
+<table class="grid mt"><thead><tr><th>User</th><th>Run</th><th>Lỗi</th><th>Task xong</th><th>Ngày hoạt động</th><th>Chi phí</th></tr></thead><tbody>
+{% for x in r.rows %}<tr><td>{{ x.os_user }} <span class="muted small">{{ x.full_name }}</span></td><td>{{ x.runs | int }}</td><td>{{ x.failed | int }}</td><td>{{ x.tasks_done | int }}</td><td>{{ x.days | int }}</td><td>{{ x.cost | money }}</td></tr>
+{% else %}<tr><td colspan="6" class="muted">Chưa có báo cáo trong kỳ.</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}
