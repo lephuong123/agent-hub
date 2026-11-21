@@ -1030,6 +1030,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_admin_parsers(sub, common)
 
+    # Super Admin Console: cfharness admind serve|status|install, cfharness superadmin init|recover|call|serve (admind/cli.py)
+    from .admind.cli import add_parsers as _add_admind_parsers
+
+    _add_admind_parsers(sub, common)
+
     # tự kiểm bảo mật với claude thật trên hub tạm: cfharness selftest [--live|--dry-run] (selftest.py)
     from .selftest import add_parsers as _add_selftest_parsers
 

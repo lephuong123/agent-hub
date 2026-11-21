@@ -121,6 +121,8 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "chat": None,  # M7 terminal: `cfharness chat` = ra lệnh điều phối viên (manager.chat ∈ HUMAN_ONLY)
     "system": {"scan", "add", "rm", "lock", "unlock", "pause", "resume", "restart"},  # job launchd chạy NGOÀI sandbox (system.* ∈ HUMAN_ONLY)
     "home": {"migrate"},  # đổi tên cfharness: chuyển HUB_HOME (dừng daemon, đổi thư mục, viết lại DB) — chỉ người
+    "admind": None,  # Super Admin Console: tiến trình root + khởi tạo/khôi phục tài khoản quản trị — agent gõ đều chặn
+    "superadmin": None,
     "admin": None,  # plan-multi-instance: install-daemon (LaunchDaemon, root) + overview (admin.overview ∈ HUMAN_ONLY, lộ hoạt động user OS khác) — agent gõ đều chặn
     "update": None,
     # Sao lưu (backup.py): khôi phục ghi đè hub.db/policy/tri thức; tạo/kiểm đọc + ghi toàn bộ dữ liệu hub — agent gõ, kể cả list, đều chặn
