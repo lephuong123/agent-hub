@@ -13,7 +13,7 @@ from typing import Callable
 
 ALLOWED = {
     "sysadminctl", "dscl", "dseditgroup", "launchctl", "sudo", "cloudflared", "chown", "chmod", "mkdir", "install", "id", "createhomedir",
-    "tar", "openssl", "df", "du", "ps", "pgrep", "curl", "security", "/bin/rm",
+    "tar", "openssl", "df", "du", "ps", "pgrep", "sysctl", "curl", "security", "/bin/rm",
 }
 ALLOWED_ABS = re.compile(r"^(/opt/cfharness/bin/cfharness|/Users/[A-Za-z0-9_.-]+/\.local/bin/(cfharness|claude|uv)|/usr/bin/[a-z]+|/usr/sbin/[a-z]+|"
                          r"/bin/[a-z]+|/opt/homebrew/bin/[a-z]+|/usr/local/bin/[a-z]+)$")

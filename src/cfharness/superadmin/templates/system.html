@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Máy chủ{% endblock %}
+{% block content %}
+<h1>Tài nguyên máy</h1>
+<div class="tiles">
+  <div class="tile"><span>Tải CPU (1/5/15 phút)</span><b>{{ (res.load or ["—"]) | join(" / ") }}</b><small>{{ res.cpus or "?" }} lõi</small></div>
+  <div class="tile"><span>RAM</span><b>{{ res.ram_gb or "—" }} GB</b></div>
+  <div class="tile {% if res.disk and res.disk.free_gb is not none and res.disk.free_gb < 20 %}bad{% endif %}"><span>Đĩa trống</span><b>{{ res.disk.free_gb if res.disk else "—" }} GB</b><small>/ {{ res.disk.total_gb if res.disk else "—" }} GB</small></div>
+  <div class="tile"><span>Tiến trình claude</span><b>{{ res.claude_procs if res.claude_procs is not none else "—" }}</b></div>
+  <div class="tile {% if not res.tunnel %}bad{% endif %}"><span>Tunnel</span><b>{{ "ổn" if res.tunnel else "lỗi" }}</b></div>
+</div>
+<section class="card"><h2>Chi phí theo ngày (90 ngày)</h2>
+{% if cost_bars %}<svg class="chart" viewBox="0 0 600 100" role="img" aria-label="Chi phí">{% for b in cost_bars %}<rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"><title>{{ b.label }}</title></rect>{% endfor %}</svg>{% else %}<p class="muted">Chưa có số liệu.</p>{% endif %}
+</section>
+<section class="card"><h2>Run đồng thời lớn nhất theo ngày</h2>
+{% if run_bars %}<svg class="chart" viewBox="0 0 600 100" role="img" aria-label="Run">{% for b in run_bars %}<rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}"><title>{{ b.label }}</title></rect>{% endfor %}</svg>{% else %}<p class="muted">Chưa có số liệu.</p>{% endif %}
+</section>
+<section class="card"><h2>Đĩa trống theo hub</h2><ul>{% for u in res.users_disk or [] %}<li>{{ u.os_user }}: {{ u.free_gb if u.free_gb is not none else "—" }} GB</li>{% endfor %}</ul></section>
+{% endblock %}

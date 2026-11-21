@@ -31,6 +31,8 @@ NAV: list[tuple[str, str, str]] = [
     ("Chính sách", "/policy", "policy"),
     ("Tài khoản Claude", "/claude", "claude"),
     ("Cảnh báo", "/alerts", "monitor"),
+    ("Máy chủ", "/system", "monitor"),
+    ("Cập nhật hub", "/updates", "hub"),
     ("Job", "/jobs", "job"),
     ("Chờ duyệt", "/approvals", "approval"),
     ("Nhật ký", "/audit", "audit"),
@@ -43,7 +45,7 @@ OP_LABEL = {
     "admin.reset_totp": "Đặt lại TOTP", "admin.delete": "Xoá quản trị viên", "admin.set_role": "Đổi vai trò",
     "auth.session_revoke": "Thu hồi phiên", "approval.decide": "Duyệt", "approval.cancel": "Huỷ yêu cầu", "job.retry": "Thử lại",
     "job.cancel": "Huỷ job", "sys.config_set": "Lưu cấu hình", "sys.secret_set": "Lưu secret", "sys.cf_token_rotate": "Xoay token",
-    "estop.on": "Bật ESTOP", "estop.off": "Gỡ ESTOP", "alert.ack": "Xác nhận cảnh báo", "alert.mute": "Tắt tiếng",
+    "estop.on": "Bật ESTOP", "estop.on_timed": "Bật ESTOP có hẹn gỡ", "hub.rollout": "Cập nhật theo đợt", "user.import_csv": "Nhập CSV", "estop.off": "Gỡ ESTOP", "alert.ack": "Xác nhận cảnh báo", "alert.mute": "Tắt tiếng",
 }
 REVEAL_KEYS = {"enroll_url": "Link kích hoạt tài khoản quản trị (gửi cho người được mời — chỉ hiện MỘT lần)",
                "totp_url": "Link đăng ký TOTP của user (chỉ hiện MỘT lần, hạn 24 giờ)"}
@@ -169,4 +171,4 @@ GLOBALS["has_op"] = has_op
 
 
 # trang cụ thể nằm ở các module pages_*.py (import để đăng ký)
-from . import pages_core, pages_ops, pages_policy, pages_team  # noqa: E402,F401
+from . import pages_core, pages_extra, pages_ops, pages_policy, pages_team  # noqa: E402,F401

@@ -2,6 +2,7 @@
 {% block title %}Báo cáo ngày{% endblock %}
 {% block content %}
 <h1>Báo cáo ngày {{ r.day }}</h1>
+<nav class="tabs"><a href="/reports" class="on">Ngày</a><a href="/reports/period?period=week">Tuần</a><a href="/reports/period?period=month">Tháng</a></nav>
 <form method="get" class="filters">
   <input type="date" name="day" value="{{ r.day }}">
   <select name="team_id"><option value="">toàn hệ</option>{% for t in teams %}<option value="{{ t.id }}" {% if q.team_id == t.id %}selected{% endif %}>{{ t.name }}</option>{% endfor %}</select>
