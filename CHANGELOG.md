@@ -10,6 +10,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+### Sửa lỗi
+- Cập nhật trên macOS (launchd) không còn báo nhầm "khởi động lại daemon lỗi (mã 1)" khi daemon mới khởi động chậm vài giây: lệnh chờ daemon giờ thử lại khi daemon chưa kịp trả lời thay vì thoát lỗi.
+
 ---
 
 ## v0.2.27 — 2026-11-21
