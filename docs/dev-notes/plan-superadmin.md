@@ -1,6 +1,6 @@
 # Plan — Super Admin Console (SAC) + admind
 
-Trạng thái: ĐANG LÀM (2026-11-21). B1–B10 đã được chủ repo duyệt; BRD lên v0.2. Nguồn: `docs/BRD-Super-Admin-Console.md` v0.1 (Q1–Q3, Q5–Q10 đã chốt; Q4 còn mở).
+Trạng thái: ĐÃ LÀM M + phần lớn S (2026-11-21), chờ nghiệm thu trên máy thật (`docs/acceptance/superadmin.md`). Tài liệu vận hành: `docs/dev-notes/superadmin.md`. Nguồn: `docs/BRD-Super-Admin-Console.md` v0.1 (Q1–Q3, Q5–Q10 đã chốt; Q4 còn mở).
 Nền code: P1+P2 của `plan-admin-users.md` (`admin_*.py`, `web/admin_pages.py`, `scripts/setup-hub-user.sh`), cfharness v0.2.27.
 
 ## 0. Kết luận chính
@@ -388,6 +388,21 @@ Quay lại: admind/SAC dừng không ảnh hưởng hub (NFR-SA-07); tunnel có 
 Spike SA0-1 cần Mac mini thật (máy dev hiện tại là Windows) → làm lúc triển khai; code dựa trên giả định A1–A5 và có runner tiêm được
 để đổi lệnh theo kết quả spike mà không đổi cấu trúc.
 
-| PR | Trạng thái |
-|---|---|
-| Plan + BRD v0.2 | xong |
+| PR | Phạm vi | Trạng thái |
+|---|---|---|
+| #175 | Plan + BRD v0.2 | xong |
+| #177 | SA0-2 + SA1-1: khung admind, đăng nhập, ma trận quyền, step-up, four-eyes, audit chuỗi băm, job | xong |
+| #178 | SA1-2: web SAC (Access JWT, phiên, CSRF, menu theo vai trò) | xong |
+| #179 | SA0-3 + SA1-3..5 + DOM-03..05: tunnel/ingress, Cloudflare API, nhập user, collector, hồ sơ, tên miền, cảnh báo, ESTOP | xong |
+| #180 | SA2: vòng đời user (job tạo 11 bước…), hub, truy cập | xong |
+| #181 | SA1-6: ẩn quản trị với user thường (VIS) + test quét | xong |
+| #182 | Sửa quy ước repo (broad except, no_window) | xong |
+| #183 | SA3: hồ sơ SPEC v3 + báo cáo ngày + Team user + Team Lead + chi phí + email | xong |
+| #184 | SA4: chính sách qua admind + kho tài khoản Claude | xong |
+| #185 | SA5: ESTOP hẹn gỡ, tài nguyên/lịch sử, nhập CSV, cập nhật theo đợt, báo cáo tuần/tháng, xuất hồ sơ | xong |
+
+Chưa làm (để sau, không chặn vận hành): passkey/WebAuthn (AUTH-03 phần S — cần thư viện), Cloudflare Access cho từng hub (DOM-06, ACC-08),
+danh mục app desktop qua SAC (DOM-10), thiết bị tin cậy từng cái / ghép nối Telegram-Slack / xoay token MCP (ACC-04, 06, 07), quay về bản cũ
+có kiểm migration (HUB-05), sao lưu/khôi phục hub theo lịch (HUB-08 — đã có sao lưu home khi xoá), nhân bản hub (HUB-09), thư mục team qua
+Không gian số tự động (TEAM-04 — hiện ghi đường dẫn, cấp tay), mẫu team (TEAM-16), tóm tắt AI (RPT-11), trang minh bạch đầy đủ phía user
+(PRO-11/RPT-10 — công tắc VIS-07 đã có), xem nội dung (CNT — Q1: không làm), Windows.
