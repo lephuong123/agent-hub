@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Job{% endblock %}
+{% block content %}
+<h1>Job</h1>
+<table class="grid"><thead><tr><th>Lúc</th><th>Loại</th><th>Đối tượng</th><th>Trạng thái</th><th>Lỗi</th></tr></thead><tbody>
+{% for j in rows %}
+<tr><td><a href="/jobs/{{ j.id }}">{{ j.created_at | ts }}</a></td><td>{{ j.kind }}</td><td>{{ j.target or "" }}</td><td>{{ pill(j.state) }}</td><td class="small">{{ j.error or "" }}</td></tr>
+{% else %}<tr><td colspan="5" class="muted">Chưa có job.</td></tr>
+{% endfor %}
+</tbody></table>
+{% endblock %}

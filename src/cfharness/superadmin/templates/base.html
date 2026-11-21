@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{% block title %}Bảng điều khiển{% endblock %}</title>
+<link rel="stylesheet" href="/static/sac.css">
+<script src="/static/sac.js" defer></script>
+</head>
+<body>
+{% from "_m.html" import op_form, pill, form_open %}
+{% if sess %}
+<header class="top">
+  <button class="menu-btn" type="button" data-toggle="nav" aria-label="Menu">☰</button>
+  <a class="brand" href="/">SAC</a>
+  {% if can(sess, "estop_on") %}
+  <a class="btn danger estop" href="/estop">ESTOP</a>
+  {% endif %}
+  <span class="who">{{ sess.account.name }} · {{ role_vi.get(sess.account.role, sess.account.role) }}</span>
+  <a class="btn ghost" href="/sessions">Phiên</a>
+  <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn ghost">Đăng xuất</button></form>
+</header>
+<div class="layout">
+<nav class="side" id="nav">
+  {% for label, href in nav %}
+  <a href="{{ href }}" class="{% if (href == '/' and path == '/') or (href != '/' and path.startswith(href)) %}on{% endif %}">{{ label }}</a>
+  {% endfor %}
+</nav>
+<main>
+{% else %}
+<main class="solo">
+{% endif %}
+{% if loopback_mode and sess %}<div class="banner warn">Chưa cấu hình Cloudflare Access — SAC chỉ nhận truy cập loopback trên máy chủ.</div>{% endif %}
+{% for kind, text in flashes %}<div class="flash {{ kind }}">{{ text }}</div>{% endfor %}
+{% for r in reveal %}
+<div class="reveal"><b>{{ r.label }}</b><input readonly value="{{ r.value }}" class="copy" data-copy></div>
+{% endfor %}
+{% block content %}{% endblock %}
+</main>
+{% if sess %}</div>{% endif %}
+</body>
+</html>

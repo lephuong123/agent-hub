@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Đăng nhập{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>Đăng nhập</h1>
+  {% if info %}<div class="flash ok">{{ info }}</div>{% endif %}
+  {% if error %}<div class="flash err">{{ error }}</div>{% endif %}
+  <form method="post" action="/login" class="stack">
+    <label>Email <input name="email" type="email" autocomplete="username" required></label>
+    <label>Mật khẩu <input name="password" type="password" autocomplete="current-password" required></label>
+    <label>Mã TOTP <input name="totp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required></label>
+    <button class="btn primary">Đăng nhập</button>
+  </form>
+</section>
+{% endblock %}

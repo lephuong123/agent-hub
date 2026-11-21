@@ -1,0 +1,19 @@
+{# Macro dùng chung. op_form: form POST /op/<mã> có CSRF; confirm → JS hỏi trước khi gửi. #}
+{% macro pill(v) %}{% set p = state_pill(v) %}<span class="pill {{ p[1] }}">{{ p[0] }}</span>{% endmacro %}
+
+{% macro op_form(op, label, params={}, confirm="", cls="", next="") %}
+<form method="post" action="/op/{{ op }}" class="inline"{% if confirm %} data-confirm="{{ confirm }}"{% endif %}>
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+  <input type="hidden" name="label" value="{{ label }}">
+  {% for k, v in params.items() %}<input type="hidden" name="p.{{ k }}" value="{{ v }}">{% endfor %}
+  <button type="submit" class="btn {{ cls }}">{{ label }}</button>
+</form>
+{% endmacro %}
+
+{% macro form_open(op, label="", next="", confirm="", cls="stack") %}
+<form method="post" action="/op/{{ op }}" class="{{ cls }}"{% if confirm %} data-confirm="{{ confirm }}"{% endif %}>
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+  {% if label %}<input type="hidden" name="label" value="{{ label }}">{% endif %}
+{% endmacro %}

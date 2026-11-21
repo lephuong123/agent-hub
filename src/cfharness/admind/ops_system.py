@@ -19,6 +19,13 @@ def ping(ctx, p) -> dict[str, Any]:
     return {"pong": True, "version": __version__, "host_id": ctx.db.host_id}
 
 
+@op("sys.sac_config", group="self", risk="read", public=True)
+def sac_config(ctx, p) -> dict[str, Any]:
+    """Cấu hình công khai cho web SAC lúc khởi động (tên miền, Access AUD/team — không phải secret)."""
+    return {"hostname": setting(ctx.db, "sac.hostname"), "access_aud": setting(ctx.db, "sac.access_aud"),
+            "access_team": setting(ctx.db, "sac.access_team")}
+
+
 @op("sys.hosts", group="user_view", risk="read")
 def hosts(ctx, p) -> list[dict[str, Any]]:
     """Danh sách máy chủ (Q10 — bản này chỉ máy cục bộ điều khiển được)."""
