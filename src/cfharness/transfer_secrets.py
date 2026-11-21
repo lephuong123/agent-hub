@@ -22,8 +22,8 @@ ghi params), event, log daemon, DB hay file tạm — không phải dựa vào v
 mã hoá trong daemon: `seal_package` là hàm thuần dùng lại được; `wrap_with_audit` đã gỡ khoá `passphrase` phòng hờ.)
 
 Phân loại khi NHẬP (`classify`): chế độ `clone` (2 hub cùng chạy) KHÔNG ghi bot Telegram/Slack (`TELEGRAM_*`, `SLACK_*` — 2 máy cùng token
-→ 409/sự kiện chia đôi) và bản ghi OAuth MCP (`MCP_OAUTH_*` = `oauth.secret_name`: access + refresh token XOAY VÒNG + client DCR — máy nào
-refresh trước thì máy kia chết token; thiếu bản ghi → `mcp.oauth_status` = `not_connected` → người đăng nhập lại). Giữ: token MCP tĩnh
+→ 409/sự kiện chia đôi) và bản ghi OAuth MCP kiểu cũ (`MCP_OAUTH_*` = `legacy_oauth.secret_name` — OAuth của hub đã gỡ từ v0.2.28;
+gói cũ vẫn có thể mang bản ghi này, `clone` bỏ như trước, `move` giữ để `mcp migrate-to-claude` dọn). Giữ: token MCP tĩnh
 (`MCP_<server>_<KEY>`, vd `…_AUTHORIZATION`, `…_OAUTH_CLIENT_SECRET` do người nhập), tài khoản Claude (`CLAUDE_ACCT_*`,
 `CLAUDE_CODE_OAUTH_TOKEN`) và mọi secret khác. `move` → ghi tất cả.
 """
@@ -74,7 +74,7 @@ NEVER = ("auth/web.json", "auth/trusted_devices.json", "auth/totp_enroll.json", 
 CLONE_SKIP_PREFIXES: tuple[tuple[str, str], ...] = (
     ("TELEGRAM_", "channel"),   # TELEGRAM_BOT_TOKEN, TELEGRAM_CALLBACK_KEY
     ("SLACK_", "channel"),      # SLACK_BOT_TOKEN, SLACK_APP_TOKEN, SLACK_CALLBACK_KEY, SLACK_WEBHOOK_URL
-    ("MCP_OAUTH_", "oauth"),    # mcp_client/oauth.secret_name: MCP_OAUTH_<TÊN>_<băm> — access/refresh token xoay vòng + client DCR
+    ("MCP_OAUTH_", "oauth"),    # legacy_oauth.secret_name: MCP_OAUTH_<TÊN>_<băm> — OAuth hub kiểu cũ (gỡ từ v0.2.28); gói cũ vẫn bỏ
     ("FILEHUB_LANE_", "filehub_lane"),  # khoá cổng cfharness (filehub/lane/): gắn MỘT hub — bản nhân bản tạo khoá riêng; `move` giữ
 )
 KEEP_KINDS: tuple[tuple[str, str], ...] = (

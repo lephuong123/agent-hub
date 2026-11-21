@@ -814,22 +814,35 @@ class RunManager:
 
     def _agent_mcp_servers(self, agent: dict[str, Any], run_id: str | None = None) -> dict[str, Any]:
         """Hợp đồng A: `mcp_client.build_agent_mcp_servers(agent)` (đã thay secret). Chưa có → registry.yaml của M0.
-        `run_id` + proxy OAuth đang chạy → entry server OAuth trỏ tới proxy loopback (khoá theo run, KHÔNG token)."""
+        Server OAuth kiểu cũ (nguồn hub, gỡ từ v0.2.28) → HubError `oauth=needs_migration` (run failed trước spawn)."""
         try:
             from .mcp_client import build_agent_mcp_servers
         except ImportError:  # pragma: no cover
             reg = load_mcp_registry(self.hub.paths)
             return {name: reg[name] for name in agent.get("mcp_servers") or [] if name in reg}
-        servers = dict(build_agent_mcp_servers(agent, home=self.hub.paths.home) or {})  # kiểm token (chưa kết nối → lỗi rõ)
-        proxy = getattr(self.hub, "mcp_proxy", None)
-        if run_id and proxy is not None and proxy.enabled() and proxy.running:
-            from .mcp_client.oauth import is_oauth
+        return dict(build_agent_mcp_servers(agent, home=self.hub.paths.home) or {})
 
-            for name in list(servers):
-                row = self.hub.mcp.get_row(name)
-                if row is not None and is_oauth(row.get("config")):
-                    servers[name] = proxy.register(run_id, self.hub.mcp.config_of(row))
-        return servers
+    def _refuse_legacy_oauth_mcp(self, run: dict[str, Any], agent: dict[str, Any]) -> None:
+        """Agent gán server OAuth kiểu cũ (nguồn hub — OAuth của hub đã gỡ từ v0.2.28): phát `mcp.unavailable{server,
+        status: needs_migration, source: hub}` cho từng server rồi ném HubError nêu tên + lệnh chuyển (fail-closed, không lặng lẽ bỏ server)."""
+        from .mcp_client.legacy_oauth import STATUS, needs_migration, needs_migration_error
+
+        reg = getattr(self.hub, "mcp", None)
+        if reg is None:  # pragma: no cover — hub tối giản (test) không có registry
+            return
+        bad = []
+        for name in agent.get("mcp_servers") or []:
+            row = reg.get_row(name)
+            if row is not None and not row.get("deleted_at") and needs_migration(row.get("config") or {}):
+                bad.append(name)
+        if not bad:
+            return
+        for name in bad:
+            self.hub.publish(make_event("mcp.unavailable", agent["id"], {"server": name, "status": STATUS, "source": "hub"},
+                                        run_id=run["id"], session_id=run.get("session_id")))
+        raise needs_migration_error(bad[0]) if len(bad) == 1 else HubError(
+            f"{len(bad)} MCP dùng OAuth do hub giữ (đã gỡ từ v0.2.28): {', '.join(bad)} — run không chạy tới khi chuyển sang claude: "
+            "cfharness mcp migrate-to-claude <tên> --account <id>", data={"servers": bad, "oauth": STATUS})
 
     def _agent_claude_mcp(self, run: dict[str, Any], agent: dict[str, Any]) -> list[str]:
         """MCP nguồn claude gán cho agent mà run này nạp. Run kỹ thuật (review/eval/curator/graph_extract, bản sao eval) giữ
@@ -985,14 +998,8 @@ class RunManager:
                 raise HubError(f"thư mục {ar.lock_key} đang bị khoá bởi run khác (workspace_locked)")
             runtime = self.runtime()
             ar.runtime = runtime
-            if agent.get("mcp_servers") and getattr(hub, "mcp_oauth", None) is not None:
-                await hub.mcp_oauth.ensure_fresh_for(list(agent["mcp_servers"]))  # OAuth MCP: làm mới token sắp hết hạn trước khi ghi mcp.json
-                proxy = getattr(hub, "mcp_proxy", None)
-                if proxy is not None and proxy.needed_for(list(agent["mcp_servers"])):
-                    try:  # proxy loopback chèn token (mcp-oauth.md §8.1) — lỗi khởi động → dự phòng Bearer tĩnh trong mcp.json
-                        await proxy.ensure_started()
-                    except (HubError, OSError) as e:
-                        rlog.warning("proxy OAuth MCP không khởi động được (%s) — dùng Bearer tĩnh trong mcp.json", e)
+            if agent.get("mcp_servers"):
+                self._refuse_legacy_oauth_mcp(run, agent)  # MCP OAuth kiểu cũ (gỡ từ v0.2.28) → failed TRƯỚC khi ghi gì vào runtime/
             ropts = run.get("run_opts") or {}
             if ropts.get("workspace_kind") == "filehub" and not ropts.get("filehub_lane"):
                 # run tạo trước H5 trên bản sao của đồng bộ 2 chiều cũ (đã bỏ): không chạy trong bản sao cũ nữa
@@ -1078,9 +1085,6 @@ class RunManager:
         finally:
             if ar.timer:
                 ar.timer.cancel()
-            proxy = getattr(hub, "mcp_proxy", None)
-            if proxy is not None:
-                proxy.revoke_run(run_id)  # route proxy OAuth của run hết hiệu lực ngay
             if spec is not None:
                 shutil.rmtree(Path(agent["home_path"]) / "runtime" / run_id, ignore_errors=True)
             if ar.checkpoint is not None and not ar.diff_done:

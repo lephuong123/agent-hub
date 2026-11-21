@@ -13,6 +13,13 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 ### Sửa lỗi
 - Cập nhật trên macOS (launchd) không còn báo nhầm "khởi động lại daemon lỗi (mã 1)" khi daemon mới khởi động chậm vài giây: lệnh chờ daemon giờ thử lại khi daemon chưa kịp trả lời thay vì thoát lỗi.
 
+### Gỡ OAuth + proxy MCP do hub tự giữ — OAuth MCP từ nay do `claude` giữ theo tài khoản (`docs/dev-notes/plan-mcp-claude-native.md` PR4 giai đoạn B)
+- Hub không còn tự đăng nhập OAuth cho MCP server, không làm mới token, không chèn `Authorization: Bearer` vào cấu hình MCP của run và không chạy proxy loopback nữa. Server cần đăng nhập OAuth thêm vào claude theo tài khoản: Cài đặt › Tài khoản Claude › **Thêm MCP** (hoặc `cfharness mcp claude add <tên> --account <id> --url <url>` rồi `cfharness mcp claude login <tên> --account <id>`). Trang **Danh mục MCP** với server cần OAuth chỉ hướng sang đó, không cài nguồn hub nữa; `cfharness mcp add --oauth` và ô "Đăng nhập OAuth" ở trang MCP báo lỗi hướng dẫn.
+- `cfharness mcp login|logout`, nút **Kết nối / Ngắt kết nối** và RPC `mcp.oauth_*` đã gỡ — trong bản này chúng chỉ trả lỗi hướng dẫn chuyển sang claude.
+- Server OAuth kiểu cũ (nguồn hub, `auth: oauth`) còn trong registry: trang MCP hiện nhãn **cần chuyển sang claude** kèm form **Chuyển sang claude**; run của agent gán server đó bị từ chối trước khi chạy với lỗi nêu tên server và lệnh chuyển (event `mcp.unavailable{status: needs_migration}`); `cfharness hub doctor` báo lỗi; daemon ghi một dòng cảnh báo lúc khởi động. Hub không tự xoá dòng hay token nào.
+- Không đổi: MCP stdio và MCP http dùng header/secret tĩnh (nguồn hub) chạy như cũ.
+- **Lưu ý khi cập nhật**: server MCP OAuth kiểu cũ **ngừng chạy** (agent gán nó bị từ chối) tới khi chuyển sang claude. Xem server cần chuyển: `cfharness hub doctor` (mục "MCP OAuth do hub giữ") hoặc trang MCP. Chuyển từng server: `cfharness mcp migrate-to-claude <tên> --account <id>` (web: trang MCP của server → **Chuyển sang claude**), rồi đăng nhập ở hàng tài khoản trong Cài đặt — hub giữ nguyên trust, tool chặn/luôn hỏi duyệt, nhãn tool và agent đã gán; token OAuth cũ bị xoá sau khi đăng nhập claude thành công. Không dùng server nữa: `cfharness mcp rm <tên>`. Khoá cấu hình `mcp.oauth_proxy.*` và `mcp_client.oauth_callback_port` không còn tác dụng (config.yaml còn các khoá này vẫn đọc bình thường, có thể xoá).
+
 ---
 
 ## v0.2.27 — 2026-11-21

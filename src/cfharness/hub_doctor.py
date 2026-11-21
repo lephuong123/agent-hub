@@ -284,7 +284,7 @@ def _mcp(ck: _Checks, c: sqlite3.Connection | None, secrets: set[str], probe: Ca
     rows = c.execute("SELECT name, transport, config, probe_error, last_probe_at FROM mcp_servers WHERE deleted_at IS NULL ORDER BY name").fetchall()
     if not rows:
         return
-    from .mcp_client.oauth import secret_name as oauth_secret
+    from .mcp_client.legacy_oauth import migrate_cmd, needs_migration
 
     hub_oauth: list[str] = []
     for r in rows:
@@ -293,8 +293,11 @@ def _mcp(ck: _Checks, c: sqlite3.Connection | None, secrets: set[str], probe: Ca
             conf = json.loads(r["config"] or "{}") or {}
         except ValueError:
             conf = {}
-        if conf.get("source") != "claude" and isinstance(conf.get("auth"), dict) and conf["auth"].get("type") == "oauth":
+        if needs_migration(conf):  # OAuth do hub giữ — đã gỡ từ v0.2.28: run của agent gán server bị từ chối tới khi chuyển
             hub_oauth.append(name)
+            ck.add(f"mcp:{name}", f"MCP {name}", False, f"{r['transport']} · OAuth do hub giữ (đã gỡ) — cần chuyển sang claude",
+                   fix=migrate_cmd(name))
+            continue
         perr = str(r["probe_error"] or "")
         if conf.get("source") == "claude":  # cấu hình + token do claude giữ theo tài khoản — hub không probe (plan-mcp-claude-native)
             ck.add(f"mcp:{name}", f"MCP {name}", True, f"{r['transport']} · nguồn claude (cấu hình + token theo tài khoản Claude đang dùng)")
@@ -309,15 +312,14 @@ def _mcp(ck: _Checks, c: sqlite3.Connection | None, secrets: set[str], probe: Ca
             continue
         if perr.startswith("[hub]"):
             ck.add(f"mcp:{name}", f"MCP {name}", False, perr[:200], fix=f"cfharness mcp edit {name}")
-        elif isinstance(conf.get("auth"), dict) and conf["auth"].get("type") == "oauth" and oauth_secret(name) not in secrets:
-            ck.add(f"mcp:{name}", f"MCP {name}", False, "OAuth chưa kết nối ở máy này", "warning", fix=f"cfharness mcp login {name}")
         else:
             ck.add(f"mcp:{name}", f"MCP {name}", True, f"{r['transport']}" + (f" · lần thử cuối lỗi: {perr[:120]}" if perr else "")
                    + ("" if r["last_probe_at"] else " · chưa thử (--probe)"))
-    if hub_oauth:  # plan-mcp-claude-native PR4: OAuth tự viết của hub sẽ bị gỡ (giai đoạn B) — khuyên chuyển sang claude theo tài khoản
+    if hub_oauth:  # plan-mcp-claude-native PR4 giai đoạn B: OAuth + proxy của hub đã gỡ (v0.2.28) — server cũ không chạy tới khi chuyển
         ck.add("mcp_hub_oauth", "MCP OAuth do hub giữ", False,
-               f"nên chuyển sang claude: {', '.join(hub_oauth[:8])} — OAuth + proxy của hub sẽ bị gỡ ở bản sau", "warning",
-               fix="; ".join(f"cfharness mcp migrate-to-claude {n} --account <id>" for n in hub_oauth[:3]))
+               f"cần chuyển sang claude: {', '.join(hub_oauth[:8])} — OAuth + proxy của hub đã gỡ từ v0.2.28, run của agent gán các "
+               "server này bị từ chối", "error",
+               fix="; ".join(migrate_cmd(n) for n in hub_oauth[:3]))
 
 
 def _claude_mcp(ck: _Checks, c: sqlite3.Connection | None, home: Path) -> None:

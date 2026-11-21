@@ -247,9 +247,7 @@ def test_config_validates_ports():
     for bad in (0, 70000, "8766", True):
         with pytest.raises(ValueError):
             validate_setting("mcp_server.http_port", bad)
-    validate_setting("mcp_client.oauth_callback_port", 0)
-    with pytest.raises(ValueError):
-        validate_setting("mcp_client.oauth_callback_port", -1)
+    validate_setting("mcp_client.oauth_callback_port", -1)  # khoá đã gỡ (v0.2.28) — config.yaml cũ còn khoá này không lỗi
 
 
 def test_mcp_serve_busy_port_clear_error(tmp_path, capsys):
@@ -294,21 +292,16 @@ async def test_two_hubs_same_host_do_not_share_session_cookie(tmp_path):
     assert names[0] != names[1]
 
 
-# ============================================================================ 5. cổng callback OAuth
-def test_oauth_callback_port_configurable(tmp_path):
-    from cfharness.config import HubConfig
-    from cfharness.mcp_client.oauth_cli import DEFAULT_PORT, callback_port
+# ============================================================================ 5. khoá OAuth cũ (gỡ từ v0.2.28)
+def test_removed_oauth_keys_in_old_config_are_harmless(tmp_path):
+    from cfharness.config import DEFAULTS, HubConfig
 
     hp = P.HubPaths(tmp_path / "hub")
     hp.ensure()
-    ctx = SimpleNamespace(paths=hp, args=SimpleNamespace(port=None))
-    assert callback_port(ctx) == DEFAULT_PORT == 33418
-    HubConfig(hp.config).set("mcp_client.oauth_callback_port", 0)
-    assert callback_port(ctx) == 0
-    HubConfig(hp.config).set("mcp_client.oauth_callback_port", 34000)
-    assert callback_port(ctx) == 34000
-    ctx.args.port = 35000
-    assert callback_port(ctx) == 35000
+    hp.config.write_text("mcp:\n  oauth_proxy:\n    enabled: true\n    port: 0\nmcp_client:\n  oauth_callback_port: 33418\n", encoding="utf-8")
+    cfg = HubConfig(hp.config)
+    assert "oauth_proxy" not in DEFAULTS["mcp"] and "mcp_client" not in DEFAULTS
+    assert cfg.get("mcp.probe_timeout_s") == 30 and cfg.get("mcp.oauth_proxy.enabled") is True  # đọc được, không ai dùng
 
 
 # ============================================================================ 6. biến môi trường chỉ-cho-test

@@ -1,5 +1,9 @@
 # OAuth cho MCP server từ xa (`feat/mcp-oauth`)
 
+> **ĐÃ GỠ từ v0.2.28** (plan-mcp-claude-native PR4 giai đoạn B): `oauth.py`, `oauth_proxy.py`, `oauth_cli.py`, `web/mcp_oauth.py`, config
+> `mcp.oauth_proxy.*` / `mcp_client.oauth_callback_port`. OAuth MCP do `claude` giữ theo tài khoản (`mcp.claude_*`). Dòng kiểu cũ còn sót:
+> `mcp_client/legacy_oauth.py` + `cfharness mcp migrate-to-claude`. Tài liệu dưới đây chỉ còn giá trị lịch sử.
+
 Mục tiêu: người dùng nối một MCP server từ xa đòi OAuth bằng MỘT cú bấm "Kết nối" (như connector của Claude), thay vì phải
 tự lấy token dán vào `headers`. Trước nhánh này MCP client chỉ có header tĩnh.
 

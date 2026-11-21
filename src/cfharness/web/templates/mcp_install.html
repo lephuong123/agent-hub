@@ -23,21 +23,20 @@
 {% else %}
 {% if opt.needs_oauth %}
 <section class="card attention" id="oauth">
-  <h2>{{ m.icon('shield') }} Cần đăng nhập (OAuth)</h2>
-  <p class="small">Server này yêu cầu đăng nhập OAuth (trả 401 khi chưa có token). Hub sẽ cài server với chế độ OAuth và chưa kiểm tra kết nối;
-    sau khi cài, bấm <b>Kết nối</b> ở trang server để đăng nhập ở trang của nhà cung cấp. Token chỉ nằm trong secret store của hub.</p>
-  {% if opt.oauth_client == 'manual' %}
-  <p class="small"><b>Nhà cung cấp này không cho tự đăng ký client.</b> Tạo một app OAuth của riêng bạn{% if opt.setup_url %} tại
-    <a href="{{ opt.setup_url }}" target="_blank" rel="noopener noreferrer">{{ opt.setup_url }}</a>{% endif %}, khai các Redirect URI dưới đây,
-    rồi dán client_id (và client_secret nếu app có) vào form.</p>
-  <ul class="small">{% for u in redirect_uris %}<li><code>{{ u }}</code>{% if loop.first %} — nút Kết nối trên web{% else %} — <code>cfharness mcp login</code>{% endif %}</li>{% endfor %}</ul>
-  {% endif %}
+  <h2>{{ m.icon('shield') }} Cần đăng nhập (OAuth) — thêm vào claude</h2>
+  {% if error %}<p class="danger-t" role="alert">{{ error }}</p>{% endif %}
+  <p class="small">Server này yêu cầu đăng nhập OAuth (trả 401 khi chưa có token). Từ v0.2.28 hub không tự giữ OAuth nữa: thêm server vào
+    claude theo tài khoản ở <a href="/settings#accounts">Cài đặt → Tài khoản Claude</a> («Thêm MCP», URL bên dưới), đăng nhập ở đó, rồi gán cho agent.</p>
+  <p class="small">URL: <code>{{ opt.url }}</code>{% if opt.oauth_client == 'manual' %} — nhà cung cấp này không cho tự đăng ký client: tạo app OAuth riêng{% if opt.setup_url %} tại
+    <a href="{{ opt.setup_url }}" target="_blank" rel="noopener noreferrer">{{ opt.setup_url }}</a>{% endif %} và thêm bằng
+    <code>claude mcp add --client-id … --client-secret</code> dưới tài khoản đó.{% endif %}</p>
+  <p class="muted small">Terminal: <code>cfharness mcp claude add {{ suggested }} --account &lt;id&gt; --url {{ opt.url }}</code></p>
 </section>
-{% endif %}
+{% else %}
 <section class="card">
   <h2>Cấu hình</h2>
   {% if error %}<p class="danger-t" role="alert">{{ error }}</p>{% endif %}
-  <form method="post" action="/mcp/browse/install" class="form" data-confirm="Cài MCP server này? {{ 'Server cần đăng nhập OAuth — cài xong bấm Kết nối ở trang server:' if opt.needs_oauth else 'Hub sẽ CHẠY NGAY để kiểm tra, ngoài sandbox, dưới quyền của bạn:' }}
+  <form method="post" action="/mcp/browse/install" class="form" data-confirm="Cài MCP server này? Hub sẽ CHẠY NGAY để kiểm tra, ngoài sandbox, dưới quyền của bạn:
 {{ (opt.command ~ ' ' ~ opt.args|join(' ')) if opt.kind != 'remote' else opt.url }}">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="reg_name" value="{{ entry.name }}"><input type="hidden" name="opt" value="{{ opt.id }}">
     <label>Tên trong hub <input name="name" required maxlength="63" value="{{ v.get('name', suggested) }}" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,62}"></label>
@@ -46,11 +45,6 @@
       {% for var in opt.variables %}{{ fld(var) }}{% endfor %}
       {% for h in opt.headers %}{{ fld(h) }}{% endfor %}
       {% if opt.headers|selectattr('secret')|list %}<p class="muted xs">Header bí mật: nhập đúng giá trị header (vd <code>Bearer ghp_…</code>); hub lưu vào secret store, cấu hình chỉ giữ <code>${TÊN}</code>.</p>{% endif %}
-      {% if opt.oauth_client == 'manual' %}
-      <label>client_id của app OAuth <span class="danger-t">*</span><input name="oauth_client_id" value="{{ v.get('oauth_client_id', '') }}" required maxlength="300" autocomplete="off"></label>
-      <label>client_secret <span class="pill warn">bí mật → secret store</span><input type="password" name="oauth_client_secret" autocomplete="off" placeholder="để trống nếu app là public client (PKCE)">
-        <span class="muted xs">Có thể nhập <code>${TÊN_SECRET}</code> đã có.</span></label>
-      {% endif %}
     {% else %}
       <label>Lệnh chạy (stdio) <input name="command" value="{{ v.get('command', opt.command ~ ' ' ~ opt.args|join(' ')) }}" required></label>
       {% for a in opt.arg_fields %}{{ fld(a) }}{% endfor %}
@@ -59,8 +53,9 @@
     <label>Mô tả <input name="description" value="{{ v.get('description', (entry.description or '')[:300]) }}"></label>
     <label class="check"><input type="checkbox" name="trust" value="trusted"{{ ' checked' if v.get('trust') == 'trusted' }}> Tin cậy (tool ghi chạy không cần duyệt; tool xoá vẫn luôn cần duyệt) — mặc định: cần duyệt</label>
     <label class="check"><input type="checkbox" name="overwrite_secrets" value="1"> Ghi đè secret đã có cùng tên</label>
-    <div class="row end gap"><a class="btn ghost" href="/mcp/browse">Huỷ</a><button class="btn primary" type="submit">{{ 'Cài' if opt.needs_oauth else 'Cài &amp; kiểm tra'|safe }}</button></div>
+    <div class="row end gap"><a class="btn ghost" href="/mcp/browse">Huỷ</a><button class="btn primary" type="submit">Cài &amp; kiểm tra</button></div>
   </form>
 </section>
+{% endif %}
 {% endif %}
 {% endblock %}

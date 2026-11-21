@@ -348,7 +348,8 @@ LOOPBACK_NO_PROXY = ("127.0.0.1", "localhost", "::1")
 def with_loopback_no_proxy(env: dict[str, str]) -> dict[str, str]:
     """Có HTTP(S)_PROXY/ALL_PROXY trong env → thêm 127.0.0.1/localhost/::1 vào NO_PROXY + no_proxy (giữ giá trị sẵn có).
     Đã kiểm thật (claude 2.1.326, docs/dev-notes/mcp-oauth.md §8.1): không có NO_PROXY, client MCP của claude gửi request tới
-    proxy OAuth loopback của hub QUA proxy ngoài (http thường → lộ route id + khoá trong rõ cho proxy, và MCP hỏng 502)."""
+    proxy OAuth loopback của hub QUA proxy ngoài (http thường → lộ route id + khoá trong rõ cho proxy, và MCP hỏng 502). Proxy đó đã gỡ
+    (v0.2.28) nhưng vẫn giữ: MCP server http chạy trên máy này (127.0.0.1/localhost) cũng phải đi thẳng."""
     if not any(env.get(k) for k in PROXY_VARS):
         return env
     for var in ("NO_PROXY", "no_proxy"):
