@@ -228,18 +228,22 @@ class JobEngine:
                 self.db.exec("UPDATE jobs SET state='failed', error=?, resume_from=?, finished_at=? WHERE id=?",
                              (jc.mask(msg)[:500], s.name, now(), j["id"]))
                 self._event(jc, "job.failed", step=s.name)
+                self._hook(j["kind"], "on_failure", jc)
                 return
             self._step_log(jc, i)
             self._save_data(jc)
             self.db.exec("UPDATE job_steps SET state=?, finished_at=? WHERE job_id=? AND idx=?", (st, now(), j["id"], i))
         self.db.exec("UPDATE jobs SET state='succeeded', finished_at=? WHERE id=?", (now(), j["id"]))
         self._event(jc, "job.succeeded")
-        hook = getattr(KINDS[j["kind"]], "on_success", None)
+        self._hook(j["kind"], "on_success", jc)
+
+    def _hook(self, kind_name: str, name: str, jc: JobCtx) -> None:
+        hook = getattr(KINDS.get(kind_name), name, None)
         if hook:
             try:
                 hook(jc)
             except Exception:  # pragma: no cover
-                log.exception("on_success của job %s lỗi", j["id"])
+                log.exception("%s của job %s lỗi", name, jc.job_id)
 
     def _event(self, jc: JobCtx, name: str, **kw: Any) -> None:
         if name == "job.failed":
@@ -278,5 +282,6 @@ class JobEngine:
                 except Exception as e:  # noqa: BLE001
                     jc.log(f"dọn bước {steps[i].name} lỗi: {e}")
                 self._step_log(jc, i)
+        self._hook(j["kind"], "on_cancel", self._ctx(j))
         self._secrets.pop(jid, None)
         return {"undone": undone}

@@ -190,6 +190,9 @@ class Dispatcher:
                     if not self.state.auth.strong(ctx.ticket):
                         raise OpError("step_up_required", "cần nhập lại mã TOTP")
                 if o.risk == "critical" and approved_by is None:
+                    pre = o.meta.get("precheck")
+                    if pre is not None:  # kiểm điều kiện TRƯỚC khi tạo yêu cầu duyệt (không tạo yêu cầu vô nghĩa)
+                        pre(ctx, params)
                     ap = self.state.approvals.request(ctx, raw if isinstance(raw, dict) else {})
                     self._audit(ctx, o.name, "pending", params=raw)
                     return {"ok": False, "error": {"code": "approval_required", "message": "đã tạo yêu cầu chờ Super Admin khác duyệt",

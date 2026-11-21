@@ -109,3 +109,15 @@ async def estop(app, request, s, m):
     teams = await _try(app, request, s, "team.list", default=[])
     groups = await _try(app, request, s, "group.list", default=[])
     return app.render(request, "estop.html", s, flags=flags, users=users, teams=teams, groups=groups)
+
+
+@page(r"^/users/(?P<id>[A-Za-z0-9_.-]+)/logs$", group="hub")
+async def user_logs(app, request, s, m):
+    which = request.query_params.get("which") or "daemon"
+    prof = await app.call(request, "user.profile", {"id": m["id"]}, sess=s)
+    logs = await app.call(request, "hub.logs", {"user": prof["identity"]["os_user"], "which": which if which in ("daemon", "web", "update")
+                                                else "daemon", "lines": 1000}, sess=s)
+    if request.query_params.get("download") == "1":
+        return Response("\n".join(logs["lines"]), media_type="text/plain; charset=utf-8",
+                        headers={"Content-Disposition": f"attachment; filename={prof['identity']['os_user']}-{which}.log"})
+    return app.render(request, "logs.html", s, p=prof, logs=logs, which=which)

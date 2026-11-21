@@ -9,6 +9,10 @@
 {% endfor %}
 </ol>
 </div>
+{% if j.state == "succeeded" and j.kind in ("user.create", "user.restore") and can(sess, "user_lifecycle") %}
+<div class="card"><p>Link đăng ký TOTP cho user chỉ hiện <b>một lần</b> — bấm để xem rồi gửi cho user qua kênh riêng.</p>
+{{ op_form("user.totp_link", "Hiện link TOTP", {"job_id": j.id}, next="/jobs/" ~ j.id, cls="primary") }}</div>
+{% endif %}
 {% if j.error %}<div class="flash err">{{ j.error }}</div>{% endif %}
 {% if j.state == "failed" and can(sess, "job") %}
 <div class="row">

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Tạo user{% endblock %}
+{% block content %}
+<h1>Tạo user mới</h1>
+<p class="muted">Tạo user macOS + hub riêng + tên miền. Chạy thành job từng bước (xem tiến trình, thử lại từ bước lỗi). Token Claude chỉ gửi một lần tới admind, không lưu lại.</p>
+{{ form_open("user.create", "Tạo user", confirm="Tạo user và hub mới với thông tin đã nhập?", cls="stack") }}
+<section class="card"><h2>1. Thông tin</h2><div class="grid-form">
+  <label>Tên đăng nhập (user macOS) <input name="p.os_user" pattern="[a-z_][a-z0-9_-]{0,30}" required placeholder="vd lamlinh"></label>
+  <label>Họ tên <input name="p.full_name" required></label>
+  <label>Email <input name="p.email" type="email"></label>
+  <label>Nhóm <select name="p.group_id"><option value="">(không)</option>{% for g in groups %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}</select></label>
+</div></section>
+
+<section class="card"><h2>2. Tên miền</h2><div class="grid-form">
+  <label>Tên miền con (gợi ý = tên user) <input name="p.sub" pattern="[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?" placeholder="vd lamlinh"></label>
+  <label>Zone <select name="p.zone_id"><option value="">(chưa cấp tên miền)</option>{% for z in zones %}<option value="{{ z.id }}">.{{ z.name }}</option>{% endfor %}</select></label>
+  <label>Cổng web <input name="p.web_port:int" value="{{ ports.web or defaults.web_port or '' }}" inputmode="numeric"></label>
+  <label>Cổng MCP <input name="p.mcp_port:int" value="{{ ports.mcp or defaults.mcp_port or '' }}" inputmode="numeric"></label>
+</div></section>
+
+<section class="card"><h2>3. Tài khoản Claude</h2><div class="grid-form">
+  {% if accounts %}<label>Chọn từ kho <select name="p.claude_account_id"><option value="">(dán token bên cạnh)</option>{% for a in accounts %}<option value="{{ a.id }}">{{ a.name }} — {{ a.state }} · {{ a.users }} user</option>{% endfor %}</select></label>{% endif %}
+  <label>hoặc dán token <code>claude setup-token</code> <input name="p.claude_token" type="password" autocomplete="off" placeholder="sk-ant-oat01-…"></label>
+</div></section>
+
+<section class="card"><h2>4. Chính sách & ngân sách</h2><div class="grid-form">
+  <label>Ngân sách USD/ngày (trống = theo chính sách mặc định) <input name="p.budget_usd_per_day:float" inputmode="decimal"></label>
+  <label>Phiên bản cfharness <input name="p.version" value="{{ defaults.version or '' }}" pattern="v\d+\.\d+\.\d+"></label>
+</div></section>
+
+<section class="card"><h2>5. Tuỳ chọn</h2><div class="grid-form">
+  <input type="hidden" name="p.create_manager:bool" value="false">
+  <label><span><input type="checkbox" name="p.create_manager:bool" value="true" {% if defaults.create_manager is not sameas false %}checked{% endif %}> Tạo điều phối viên (dieu-phoi)</span></label>
+  <label>Không gian số (URL) <input name="p.kgs_url" value="{{ defaults.kgs_url or '' }}" placeholder="https://…"></label>
+  {% if teams %}<label>Thêm vào team <select name="p.teams:multi" multiple size="3">{% for t in teams %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}</select></label>{% endif %}
+</div></section>
+<button class="btn primary">Xem lại và tạo</button>
+</form>
+{% endblock %}
