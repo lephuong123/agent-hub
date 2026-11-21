@@ -169,4 +169,4 @@ GLOBALS["has_op"] = has_op
 
 
 # trang cụ thể nằm ở các module pages_*.py (import để đăng ký)
-from . import pages_core, pages_ops, pages_team  # noqa: E402,F401
+from . import pages_core, pages_ops, pages_policy, pages_team  # noqa: E402,F401

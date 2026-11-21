@@ -27,6 +27,7 @@ def verify_audit(state: "State") -> None:
 TASKS: list[tuple[float, Any]] = [
     (60.0, run_approvals),
     (86400.0, verify_audit),
+    (86400.0, lambda st: __import__("cfharness.admind.ops_claude", fromlist=["check_ages"]).check_ages(st)),
 ]
 
 

@@ -87,3 +87,16 @@ def test_team_report_cost_pages(env, client):
     html = client.get(f"/teams/{t}", headers=H(s)).text
     assert "&lt;i&gt;Việc 1&lt;/i&gt;" in html and "Chờ nhận" in html
     assert ' style="' not in html  # CSP: không style inline
+
+
+def test_policy_claude_pages(env, client):
+    s = client.signer
+    env.ok("policy.save", {"scope": "default", "content": {"budget": {"usd_per_day": 20}}}, as_="boss")
+    env.ok("claude.account_add", {"name": "Max 1", "token": "sk-ant-oat01-" + "q" * 90}, as_="boss")
+    for path in ("/policy", "/policy?scope=machine", "/policy?scope=default&sim=1&c.budget.usd_per_day=5&c.require.sandbox=true",
+                 "/policy?user=lamlinh", "/claude"):
+        r = client.get(path, headers=H(s))
+        assert r.status_code == 200, (path, r.text[:300])
+    html = client.get("/policy?scope=default&sim=1&c.budget.usd_per_day=5", headers=H(s)).text
+    assert "Mô phỏng" in html and 'name="p.content:json"' in html
+    assert "q" * 90 not in client.get("/claude", headers=H(s)).text

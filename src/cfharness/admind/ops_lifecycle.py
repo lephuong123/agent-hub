@@ -121,10 +121,10 @@ def user_create(ctx, p: CreateP) -> dict[str, Any]:
               "kgs_url": p.kgs_url, "teams": p.teams, "workspace": setting(ctx.db, "defaults.workspace_root"), "_needs_secrets": True}
     if p.budget_usd_per_day is not None:
         try:
-            from .policy import save_user_budget
+            from .ops_policy import save_user_budget
 
             save_user_budget(ctx, p.os_user, p.budget_usd_per_day)
-        except ImportError:
+        except OpError:  # best-effort: ngân sách lỗi không chặn tạo user (sửa sau ở trang Chính sách)
             pass
     jid = ctx.state.jobs.submit("user.create", target=p.os_user, params=params, created_by=ctx.actor_id, secrets={"claude_token": token})
     ctx.job_id = jid
