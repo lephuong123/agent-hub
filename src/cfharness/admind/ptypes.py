@@ -11,7 +11,7 @@ USER_PATTERN = r"^[a-z_][a-z0-9_-]{0,30}$"  # short name macOS mới tạo; user
 USER_ANY_PATTERN = r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$"
 EMAIL_PATTERN = r"^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,190}\.[A-Za-z]{2,24}$"
 LABEL_PATTERN = r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"  # một nhãn DNS
-ZONE_PATTERN = r"^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$"
+ZONE_PATTERN = r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){1,8}[a-z]{2,24}$"
 TAG_PATTERN = r"^v\d+\.\d+\.\d+$"
 ID_PATTERN = r"^[a-z]{1,4}_[0-9a-f]{8,32}$"
 TOTP_PATTERN = r"^\d{6}$"
@@ -21,7 +21,7 @@ OsUser = Annotated[str, StringConstraints(pattern=USER_PATTERN)]
 OsUserAny = Annotated[str, StringConstraints(pattern=USER_ANY_PATTERN)]
 Email = Annotated[str, StringConstraints(pattern=EMAIL_PATTERN, to_lower=True)]
 DnsLabel = Annotated[str, StringConstraints(pattern=LABEL_PATTERN, to_lower=True)]
-Zone = Annotated[str, StringConstraints(pattern=ZONE_PATTERN, to_lower=True)]
+Zone = Annotated[str, StringConstraints(pattern=ZONE_PATTERN, to_lower=True, max_length=253)]
 Tag = Annotated[str, StringConstraints(pattern=TAG_PATTERN)]
 ObjId = Annotated[str, StringConstraints(pattern=ID_PATTERN)]
 TotpCode = Annotated[str, StringConstraints(pattern=TOTP_PATTERN)]

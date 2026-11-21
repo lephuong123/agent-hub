@@ -158,5 +158,15 @@ def can(s: "Sess", group: str, need: str = "write") -> bool:
 GLOBALS["can"] = can
 
 
+def has_op(name: str) -> bool:
+    """Thao tác đã có trong bản admind này chưa (nút của tính năng chưa làm thì ẩn)."""
+    from ..admind.ops import load_all
+
+    return name in load_all()
+
+
+GLOBALS["has_op"] = has_op
+
+
 # trang cụ thể nằm ở các module pages_*.py (import để đăng ký)
-from . import pages_core  # noqa: E402,F401
+from . import pages_core, pages_ops  # noqa: E402,F401
