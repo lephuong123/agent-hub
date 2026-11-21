@@ -102,6 +102,8 @@ def format_message(ev: HubEvent) -> str | None:
         if p.get("state") == "resolved":
             return f"✅ Quản trị máy — *{user}*{hub}: đã hết cảnh báo «{ALERT_VI[code]}»"
         return f"🛎 Quản trị máy — *{user}*{hub}: {ALERT_VI[code]}\nXem: `cfharness admin users show {user}`"
+    if ev.type == "team.inbox_new":  # Team user (team_inbox.py): chỉ báo có việc — nội dung việc xem trên web của hub
+        return "📥 Có việc mới được giao từ team — mở hub → Việc được giao (/team-inbox) để Nhận hoặc Từ chối."
     if ev.type == "hub.admin_estop":  # VIS-04: thông báo trung tính — không mã lý do, không tên/đường dẫn quản trị
         if p.get("on"):
             return "🛑 Hub đang tạm dừng — liên hệ quản trị. Run mới bị chặn, run đang chạy đã dừng."

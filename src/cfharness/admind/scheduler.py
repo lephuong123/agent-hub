@@ -43,7 +43,7 @@ def register(server: "Server") -> None:
     for s, fn in TASKS:
         server.every(s, fn)
     for mod, attr, every in (("collector", "collect", 60.0), ("health", "check_domains", 600.0), ("notify", "flush", 30.0),
-                             ("reports", "tick", 60.0), ("teams_sync", "sync", 30.0)):
+                             ("reports", "tick", 60.0), ("ops_teams", "sync", 30.0)):
         fn = _optional(mod, attr)
         if fn is not None:
             server.every(every, fn)

@@ -74,3 +74,16 @@ def test_estop_from_web(env, client):
 def test_api_overview(env, client):
     r = client.get("/api/overview", headers=H(client.signer))
     assert r.status_code == 200 and r.json()["users"]["total"] == 1
+
+
+def test_team_report_cost_pages(env, client):
+    s = client.signer
+    t = env.ok("team.upsert", {"slug": "doi-a", "name": "Đội A"}, as_="boss")["id"]
+    env.ok("team.member_set", {"team_id": t, "user": "lamlinh"}, as_="boss")
+    env.ok("team.task_create", {"team_id": t, "title": "<i>Việc 1</i>", "assignee": "lamlinh"}, as_="boss")
+    for path in ("/teams", f"/teams/{t}", "/reports", "/reports?format=csv", "/costs", "/costs?by=day", "/costs?format=csv"):
+        r = client.get(path, headers=H(s))
+        assert r.status_code == 200, (path, r.text[:300])
+    html = client.get(f"/teams/{t}", headers=H(s)).text
+    assert "&lt;i&gt;Việc 1&lt;/i&gt;" in html and "Chờ nhận" in html
+    assert ' style="' not in html  # CSP: không style inline

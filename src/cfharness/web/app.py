@@ -408,6 +408,7 @@ async def render(request: Request, name: str, ctx: dict[str, Any] | None = None,
             badge = {"down": True}
         if not badge.get("down"):
             badge.update(await _admin_pages.nav_badges(request))
+            badge.update(await _inbox_pages.badge(request))
     base = {"csrf": sess.csrf if sess else "", "flashes": sess.pop_flashes() if sess else [], "badge": badge, "nav": "", "htmx": HTMX,
             "path": request.url.path}
     return st.templates.TemplateResponse(request, name, {**base, **(ctx or {})}, status_code=status)
@@ -2195,6 +2196,7 @@ def create_app(paths: HubPaths, *, auth: WebAuth | None = None, host: str = "127
         *_backup_pages.routes(),  # /partials/backup — thẻ "Sao lưu" ở Cài đặt (backup.py)
         *_support_pages.routes(),  # /partials/support + /support + tải gói một lần — "Gói chẩn đoán" (support_bundle.py, L7)
         *_transfer_pages.routes(),  # /hub-transfer — xuất/nhập toàn bộ hub (hub_transfer_web.py, web/transfer_pages.py)
+        *_inbox_pages.routes(),  # /team-inbox — "Việc được giao" từ Team user (team_inbox.py)
         *_admin_pages.routes(),  # /admin/overview — "Tổng quan máy" (chỉ đọc, admin_overview.py)
         *_desktop.routes(),  # /.well-known/cfharness.json + /app/badge — app desktop (web/desktop.py, docs/dev-notes/desktop-app.md)
         *_file_pages.routes(),  # /files/view|raw|open — xem/mở file agent đã thao tác (web/file_pages.py, docs/dev-notes/file-open.md)
@@ -2255,6 +2257,10 @@ _filehub_pages.register_actions(ACTIONS, Action, _req)
 from . import admin_pages as _admin_pages  # noqa: E402
 
 _admin_pages.register_actions(ACTIONS, Action, _req)
+# "Việc được giao" (Team user của Super Admin Console): /inbox + inbox_accept|reject|submit — team_inbox.py
+from . import inbox_pages as _inbox_pages  # noqa: E402
+
+_inbox_pages.register_actions(ACTIONS, Action, _req)
 # Xem/mở file agent đã thao tác (chip file): /files/view, /files/raw, POST /files/open — RPC file.read|file.open của daemon
 from . import file_pages as _file_pages  # noqa: E402
 

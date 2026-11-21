@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% set d = r.data %}
+{% block title %}Báo cáo {{ r.user.os_user }} {{ r.day }}{% endblock %}
+{% block content %}
+<h1>Báo cáo {{ r.day }} — <a href="/users/{{ r.user.id }}">{{ r.user.full_name or r.user.os_user }}</a></h1>
+<div class="tiles">
+  <div class="tile"><span>Run</span><b>{{ d.runs.total or 0 }}</b><small>{{ d.runs.completed or 0 }} xong · {{ d.runs.failed or 0 }} lỗi · {{ d.runs.cancelled or 0 }} dừng</small></div>
+  <div class="tile"><span>Task</span><b>{{ d.tasks.done if d.tasks.done is not none else "—" }}</b><small>{{ d.tasks.in_progress or 0 }} đang làm · {{ d.tasks.stuck or 0 }} kẹt</small></div>
+  <div class="tile"><span>Chi phí</span><b>{{ d.cost_usd | money }}</b></div>
+  <div class="tile"><span>Duyệt đã xử lý</span><b>{{ d.approvals or 0 }}</b></div>
+</div>
+<section class="card"><dl class="kv">
+  <dt>Agent đã dùng</dt><dd>{{ d.agents_used | join(", ") or "—" }}</dd>
+  <dt>Giờ hoạt động</dt><dd>{% for h in d.active_hours %}{{ h }}h {% else %}—{% endfor %}</dd>
+  <dt>Thao tác của người</dt><dd>{% for k, v in d.human_actions.items() %}<code>{{ k }}</code> × {{ v }}{% if not loop.last %}, {% endif %}{% else %}—{% endfor %}</dd>
+  <dt>Bất thường</dt><dd>{{ r.anomalies | join(", ") or "—" }}</dd>
+</dl></section>
+<section class="card"><h2>Việc đã làm</h2>
+{% if not r.activity_visible %}<p class="muted">Mức xem “Hoạt động” đang tắt hoặc vai trò của bạn không được xem chi tiết việc.</p>
+{% elif not d.items %}<p class="muted">Không có việc (hoặc hub xuất ở mức Số liệu).</p>
+{% else %}
+<table class="grid small"><thead><tr><th>Việc</th><th>Agent</th><th>Trạng thái</th><th>Bắt đầu</th><th>Kết thúc</th><th>Chi phí</th><th>Kết quả</th></tr></thead><tbody>
+{% for it in d.items %}<tr><td>{{ it.title }}</td><td>{{ it.agent }}</td><td>{{ it.status }}</td><td>{{ it.start }}</td><td>{{ it.end }}</td><td>{{ it.cost_usd | money }}</td><td>{{ it.summary }}</td></tr>{% endfor %}
+</tbody></table>{% endif %}
+</section>
+{% endblock %}
