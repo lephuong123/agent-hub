@@ -371,7 +371,12 @@ class TaskService:
                 if git_root(p) is None:
                     warnings.append("thư mục không phải repo git: hub chỉ khoá + ghi danh sách file bị sửa, KHÔNG hoàn tác được (run revert)")
                 same = self._same_lock_tasks(str(p.resolve()), set(parents) | {str(data.get("origin_task_id") or "")})
-                if same:
+                from .guard.locks import repo_lock_mode
+
+                if same and repo_lock_mode(self.hub.config) == "files":
+                    warnings.append(f"cùng repo với task đang mở {', '.join(same[:5])}: chế độ khoá theo file (guard.repo_lock=files) "
+                                    "cho chạy song song; hai task sửa CÙNG một file thì task đến sau bị từ chối ghi file đó")
+                elif same:
                     warnings.append(f"cùng thư mục (khoá repo) với task đang mở {', '.join(same[:5])}: task này CHỜ các task đó xong "
                                     "(workspace_locked), không chạy song song. Muốn song song: tạo task với `worktree` "
                                     "{repo, branch, base} để hub tạo worktree riêng làm workspace (extra_write_roots không gỡ khoá)")

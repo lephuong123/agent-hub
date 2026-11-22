@@ -124,7 +124,9 @@ Chi tiết, lệch BRD, nghiệm thu thật, việc dở: `docs/dev-notes/M3.md`
 | `dispatch/dispatcher.py` | `TaskDispatcher` (`hub.dispatcher`): tick + `kick()`; claim nguyên tử; lease/heartbeat; retry `--resume`; circuit breaker; rate limit; ngân sách ngày; lead decompose; review; tổng hợp task gốc; `self_call` cho hub-self |
 | `dispatch/routing.py`, `dispatch/plan.py` | Chọn worker theo role/description + tải; `PLAN_SCHEMA`/`REVIEW_SCHEMA` + kiểm hợp lệ |
 | `dispatch/rpc.py`, `dispatch/cli.py` | RPC `team.*`, `task.*`, `taskself.call`, `run.revert|diff`, `report.*`, `agent.clone|export|import`, `mcp.team_run|task_events`, `estop.set{team}`; CLI `team`, `task`, `run revert|diff`, `report`, `cost`, `agent clone|export|import` |
-| `workspace.py` | `WorkspaceLocks` (khoá theo gốc repo, thay `guard/locks.RepoLocks`), `take_checkpoint`/`compute_diff`/`revert`/`resume_conflicts` |
+| `workspace.py` | `WorkspaceLocks` (khoá theo gốc repo, thay `guard/locks.RepoLocks`), `take_checkpoint`/`compute_diff`/`revert`/`resume_conflicts`; `keys_for`/`task_lock_target` (hàm tính khoá DUY NHẤT), `ensure_worktree_meta`/`link_deps`/`remove_worktree` — `docs/dev-notes/workspace-parallel.md` |
+| `dispatch/integrate.py` | `Integrator`: tự cô lập subtask vào worktree (`workspace.isolate`), merge vào nhánh `cfh/<root>/integration`, task Merge khi xung đột |
+| `guard/leases.py` | Khoá theo file khi `guard.repo_lock=files` (bảng `file_leases`), luật Bash cần giữ repo độc quyền |
 | `reports.py` | `report(since)` (FR-OB-06), `cost_breakdown(by)` |
 | `mcp_server/hub_self.py` | MCP stdio `hub-self` (stdlib) cho agent trong run có task: `task_show|comment|complete|request_review|block` (+ lead `task_create|link|team_roster`) |
 
