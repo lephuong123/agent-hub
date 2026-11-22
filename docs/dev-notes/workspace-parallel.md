@@ -65,6 +65,54 @@ agent/hub tạo, lưu kind `dir`), 0 task dùng kind `worktree`.
 - Task gốc xong → để nhánh tích hợp + báo (không push/không đụng nhánh người trừ fast-forward khi checkout chính sạch và đang ở base
   và `workspace.integrate.fast_forward=true`, mặc định false) → dọn worktree con qua `remove_worktree`.
 
+#### D — đã làm (`src/cfharness/dispatch/integrate.py`, test `tests/test_workspace_parallel_integrate.py`)
+- **Quyết định lúc DISPATCH** (`TaskDispatcher._dispatch_ready` → `Integrator.maybe_isolate`), không lúc tạo task: phản ánh khoá
+  thật ngay trước khi chạy; worktree tạo đồng bộ (git) trước `runs.submit`, prompt dựng SAU khi đổi workspace nên khối "Workspace
+  rules" thấy nhánh. Chỉ task con (`origin_task_id` → task `kind=root`) — task đứng riêng không có chỗ ghép nên giữ hành vi cũ.
+- **Chế độ**: `workspace.isolate` (never|auto|always, mặc định auto) ← `TeamPolicies.isolate` ghi đè. Task: `workspace.isolate=true`
+  (kế hoạch lead / hub-self `task_create isolate`) cô lập khi chế độ ≠ never; `false` = không cô lập task đó. `never` của người/team
+  là cứng (agent không vượt được). `auto` cô lập khi: task yêu cầu; `_lock_block` = workspace_locked; `_same_lock_tasks` thấy task mở
+  KHÁC cùng khoá (trừ task gốc + hậu duệ của chính nó — chúng chạy sau); hoặc task gốc đã có nhánh tích hợp trên repo đó (giữ mọi
+  phần việc về một chỗ). Không cô lập: task đã từng chạy (resume phải cùng chỗ), agent chỉ đọc, không phải git, đã có worktree,
+  có tổ tiên đã chạy thẳng trên checkout chính của repo đó (để thấy thay đổi chưa commit của nó). Lỗi git khi tách → comment +
+  chạy như cũ. Task con có tổ tiên cô lập chưa ghép xong → `wait_reason=integration_pending`.
+- **Nhánh**: tích hợp `cfh/<root id>/integration` (worktree `_wt/<slug>`, tạo lười ở lần cô lập đầu từ nhánh hiện tại của repo = base),
+  task con `cfh/<root id>/<task id>` tách từ nhánh tích hợp (`worktree.base` = nhánh tích hợp → `remove_worktree` xoá nhánh con khi
+  đã ghép). Vướng ref: `workspace.ref_collision` kiểm tường minh (git không giữ cùng lúc `cfh/x` và `cfh/x/…`); `ensure_worktree_meta`
+  báo lỗi rõ cho mọi đường tạo (kể cả đường B cũ `cfh/<task id>`), luồng D chọn tiền tố khác: `cfh/<root>-int`, `cfharness-int/<root>`.
+- **Ghép** (`_after_done` → `Integrator.on_done`, TRƯỚC `_promote`/`_refresh_root`): giữ khoá cả worktree tích hợp lẫn worktree con
+  (session `integrate:<root>`, nhả ngay trong cùng lượt; bận → `pending`, tick thử lại). Auto-commit thay đổi chưa commit của task con
+  (`cfh: task <id> — <title>`), worktree tích hợp phải sạch, `merge --no-ff --no-verify` với `-c rerere.enabled=true -c
+  rerere.autoUpdate=true` (hook đã tắt qua `GIT_SAFE_ARGS`; thiếu user.name/email → danh tính `cfharness`). Xung đột chỉ ở lockfile
+  (`MERGE_LOCKFILES`: npm/yarn/pnpm/Cargo/poetry/uv/…) → lấy bản nhánh tích hợp + `needs_lockfile_refresh`; còn lại → abort, thử lại
+  `-Xignore-space-change` (`how=whitespace`); vẫn xung đột → abort + task `Merge: <title>` (assignee của task con, team của task gốc,
+  workspace = worktree tích hợp, body tiếng Anh liệt kê file + hai nhánh + các bước; `workspace.merge_for`). Trong lúc có task merge mở,
+  task con khác xong được xếp `pending` (không đụng worktree tích hợp). Task merge xong → hub kiểm nhánh con đã nằm trong nhánh tích hợp
+  (merge đã giải hết mà chưa commit → hub commit); không → task gốc `blocked` kèm việc người phải làm; task merge bị blocked → task gốc
+  blocked với lý do riêng. Người ghép tay + `task unblock` → tick (`Integrator.reconcile`) kiểm lại (`how=manual`).
+- **Task gốc xong** (`_refresh_root`: `Integrator.gate` — mọi task con cô lập phải đã ghép; rồi `finalize`): gỡ worktree con đã ghép qua
+  `remove_worktree(locks=…)`; nhánh tích hợp + worktree của nó để nguyên (dọn bằng `cfharness worktree clean` khi đã merge vào base —
+  `housekeeping.worktree_entries` đọc `workspace.integration.worktree`); fast-forward base ở checkout chính CHỈ khi
+  `workspace.integrate.fast_forward=true` + checkout chính sạch + đang ở base (`merge --ff-only`). Kết quả: `result_json.integration
+  {branch, path, base, merged, needs_lockfile_refresh, fast_forward, cleaned}` + dòng "Cần bạn"/"Còn mở" trong `result_summary`
+  (`task_report.compose_root(open_extra, need_extra)`).
+- **Trạng thái** ở task gốc `workspace.integration = {repo, branch, prefix, base, base_commit, path, worktree, children, merged[{task,
+  branch, commit, how, merge_task?, lockfiles?}], conflicts[{task, branch, files, merge_task, status open|failed|resolved, reason}],
+  pending, needs_lockfile_refresh, finalized, cleaned, fast_forward}`; task con `workspace.isolation = {root, reason
+  requested|conflict|integration|always, origin_path, at}`; task merge `workspace.merge_for`. Ba khoá này chỉ hub ghi: `tasks.create`
+  bỏ chúng khỏi workspace nhận từ ngoài (`integrate.strip_internal`), task con không kế thừa `integration` của task gốc.
+- **Event** (EVENT_LEVELS + `docs/schema/event.v1.json`): `task.isolated {root_id, branch, path, base, reason}`, `task.integrated
+  {root_id, branch, into, commit, how clean|lockfile|whitespace|whitespace+lockfile|merge_task|manual, needs_lockfile_refresh,
+  merge_task_id?}`, `task.integration_conflict {root_id, branch, into, files, merge_task_id}`.
+- **Sửa khi gộp A+B+C**: test A (B1/B2) dựng task kind `worktree` cũ thẳng trong DB (B đổi kind này lúc tạo); test C dùng worktree thật;
+  `remove_worktree(locks=)` + `worktree.list|clean` không gỡ worktree còn người giữ khoá SỐNG (khoá chết được sweep trước); hub-self
+  `task_create` của lead có `isolate` + `worktree {branch, base?, path?}` (chỉ repo của task gốc); khối Workspace rules nhận cwd là thư
+  mục con của worktree (task cô lập giữ thư mục con tương đối của workspace gốc).
+- **Giới hạn / chưa làm**: một repo mỗi task gốc; task con của task gốc đường B cũ (kind `worktree`, B đổi thành `cfh/<task id>` lúc tạo)
+  và `worktree` do lead/người chỉ định KHÔNG được ghép tự động; task con chạy trên checkout chính trước khi có nhánh tích hợp thì việc của nó
+  nằm ở checkout chính (không vào nhánh tích hợp); git chạy đồng bộ trong tick (như `tasks.create` của B); không sinh lại lockfile;
+  không push. Chưa có thay đổi `CHANGELOG.md` (người tích hợp ghi).
+
 ### E — Khoá theo file (`ws/leases`, sau A; tuỳ chọn bật)
 - `guard.repo_lock` ∈ `repo|files|off` (`true` = `repo`, giữ hành vi cũ). `files`: run giữ khoá repo kiểu CHIA SẺ; Edit/Write/MultiEdit/
   NotebookEdit lấy lease theo file (repo key + đường dẫn tương đối chuẩn hoá) trong `GuardService.check`, kèm sha256; khác session giữ → deny
