@@ -775,6 +775,14 @@ DEFAULTS: dict[str, Any] = {
         # Luồng B (docs/dev-notes/workspace-parallel.md): phụ thuộc node của worktree hub tạo — link (package.json + lockfile giống hệt repo
         # chính → liên kết node_modules của repo chính), install (agent tự `npm ci`), none (không làm gì)
         "deps": "link",
+        # Luồng D (docs/dev-notes/workspace-parallel.md §D): tự cô lập task con của task gốc tách việc vào worktree riêng (nhánh
+        # `cfh/<gốc>/<task>` tách từ nhánh tích hợp `cfh/<gốc>/integration`) rồi ghép lại khi xong. never = như cũ (task cùng repo
+        # chờ khoá); auto = khi lead yêu cầu (`isolate`) hoặc repo đang có task mở khác cùng khoá; always = mọi task con ghi trên repo git.
+        # Team ghi đè bằng `policies.isolate`, task bằng `workspace.isolate` (false = không cô lập task đó).
+        "isolate": "auto",
+        # fast_forward: task gốc xong → fast-forward nhánh base ở checkout chính tới nhánh tích hợp, CHỈ khi checkout chính sạch và
+        # đang ở base. Mặc định false: hub để nguyên nhánh tích hợp (không push, không đụng nhánh của người) và báo trong kết quả.
+        "integrate": {"fast_forward": False},
     },
     "bus": {
         "ring_events": 2000,  # FR-OB-01 [ĐỀ XUẤT]
@@ -1091,6 +1099,10 @@ def validate_setting(key: str, value: Any) -> None:
         _validate_confine(key, value)
     if key == "workspace.deps" and value not in ("link", "install", "none"):
         raise ValueError("workspace.deps chỉ nhận 'link', 'install' hoặc 'none'")
+    if key == "workspace.isolate" and value not in ("never", "auto", "always"):
+        raise ValueError("workspace.isolate chỉ nhận 'never', 'auto' hoặc 'always'")
+    if key == "workspace.integrate.fast_forward" and not isinstance(value, bool):
+        raise ValueError("workspace.integrate.fast_forward phải là true/false")
     if key == "guard.trust_new_agents" and value not in ("off", "full"):
         raise ValueError("guard.trust_new_agents chỉ nhận 'off' hoặc 'full'")
     if key == "notify.reminder_max_count":
