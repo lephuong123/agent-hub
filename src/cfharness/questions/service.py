@@ -403,7 +403,13 @@ class QuestionService:
             except NotFound:
                 conv = None
         if conv is None or conv["channel"] == "heartbeat" or conv["agent_id"] != mgr.agent_id():
-            conv = mgr._home_conversation()
+            # hội thoại gốc không dùng được → dự phòng KHÔNG chéo luồng: luồng của hội thoại gốc / task / run hỏi; không luồng → Sảnh
+            run = self.hub.store.get_run(q["run_id"]) if q.get("run_id") else None
+            wid = ((conv or {}).get("workstream_id") or mgr.ws.of_task(q.get("task_id"))
+                   or ((run or {}).get("run_opts") or {}).get("manager_workstream"))
+            conv = mgr.fallback_conversation(wid)
+            if conv is None and wid and mgr.ws.maybe(wid):
+                conv = mgr.ws.home_conversation(str(wid))
         try:
             res = await mgr.chat(conv["channel"] if conv else "web", self.continuation_text(q), conversation_id=conv["id"] if conv else None)
             self._mark_resumed(q, res.get("run_id"))

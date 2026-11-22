@@ -500,7 +500,7 @@ async def office_chat(request: Request) -> Response:
     msgs = [m for m in (P.mgr_message(x) for x in raw if isinstance(x, dict)) if m]
     acts = await _actions(request, aid)
     conv_qs = [q for q in await questions(request, "all", agent_id=aid) if q.get("conversation_id") == cid and q.get("status") != "cancelled"]
-    body.update({"conversation_id": cid, "messages": chat_messages(_timeline(msgs, acts, conv_qs))})
+    body.update({"conversation_id": cid, "messages": chat_messages(_timeline(msgs, acts, conv_qs, cid))})
     return JSONResponse(body, headers=NO_STORE)
 
 

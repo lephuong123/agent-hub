@@ -781,7 +781,11 @@
         if (ex) ex.replaceWith(qn); else put(qn, s);
         return;
       }
-      if (m.t === "action") {
+      // tin/thẻ gắn MỘT hội thoại khác (lượt nhịp báo nhiều cuộc, câu trả lời cuối của nhịp ở hội thoại heartbeat) → không bao giờ vào đây
+      if ((m.t === "reply" || m.t === "action") && m.conv && conv && m.conv !== conv) return;
+      var mine = (m.t === "reply" || m.t === "action") && m.conv && conv && m.conv === conv;  // của đúng cuộc này (vd notify từ lượt nhịp)
+      if (r && !runs[r] && !mine) { (early[r] = early[r] || []).push(m); if (early[r].length > 400) early[r].shift(); return; }
+      if (m.t === "action") {  // "Hành động gần đây": chỉ thẻ đã qua bộ lọc run/hội thoại ở trên (không lẫn việc của luồng khác)
         var side = document.getElementById("mgr-actions");
         if (side && m.side && !m.sideDone) {
           m.sideDone = true;
@@ -789,8 +793,6 @@
           var li = fromHTML(m.side); if (li) side.insertBefore(li, side.firstChild);
         }
       }
-      var mine = m.t === "reply" && m.conv && conv && m.conv === conv;  // tin của đúng cuộc trò chuyện này (vd notify từ lượt nhịp)
-      if (r && !runs[r] && !mine) { (early[r] = early[r] || []).push(m); if (early[r].length > 400) early[r].shift(); return; }
       var p = pend[r], q = p ? parts(p) : null;
       if (m.t === "delta" || m.t === "draft" || m.t === "seg") {
         if (!q) return;
@@ -1063,6 +1065,8 @@
         if (!b) return;
         fill(b.getAttribute("data-fill"), false);
       });
+      // đã chuyển luồng/hội thoại khác (mgrGo dựng instance mới) trong lúc chờ → instance này không được đụng URL, nháp, khung chat mới
+      var gone = function () { return dead || !ml.isConnected || !mform.isConnected; };
       mform.addEventListener("submit", function (e) {
         e.preventDefault();  // khoá phiên `k` đã được gắn ở pha capture (trên)
         if (!mtext.value.trim() && !picked.length) { if (pendingRun()) stopRun(); return; }
@@ -1074,6 +1078,7 @@
         fetch(mform.getAttribute("action"), { method: "POST", body: fd, credentials: "same-origin", headers: { "X-Ahub-Fetch": "1" } })
           .then(function (resp) { return resp.json().catch(function () { return { error: "Lỗi " + resp.status }; }); })
           .then(function (j) {
+            if (gone()) return;
             if (j.error) { if (merr) { merr.textContent = j.error; merr.hidden = false; } emit("send_error", { error: j.error }); return; }
             draftSet(draftKey(), "");
             if (j.conversation_id && j.conversation_id !== conv) {
@@ -1095,10 +1100,11 @@
             emit("sent", { run: j.run_id || "", steered: !!j.steered, conv: conv });
           })
           .catch(function () {
+            if (gone()) return;
             if (merr) { merr.textContent = "Không gửi được — kiểm tra kết nối rồi thử lại."; merr.hidden = false; }
             emit("send_error", { error: "Không gửi được — kiểm tra kết nối." });
           })
-          .then(function () { paintSend(); mtext.focus(); });
+          .then(function () { if (!gone()) { paintSend(); mtext.focus(); } });
       });
     }
     return function stop() {

@@ -10,6 +10,8 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+- **Điều phối: tin của luồng này không còn hiện ở luồng khác.** Lượt nhịp không biết hội thoại gốc giờ chỉ báo/hỏi về Sảnh (hoặc trong chính luồng của việc), không đoán "cuộc người hoạt động gần nhất" ở luồng bất kỳ; áp dụng cả khi trả lời câu hỏi và khi lịch mất hội thoại chỉ định. Trang Điều phối không kéo thẻ hành động của hội thoại khác vào hội thoại đang mở, "Hành động gần đây" chỉ thêm thẻ đã qua bộ lọc, và chuyển luồng ngay sau khi gửi không còn làm hỏng nháp/URL của luồng mới. Script chỉ đọc `scripts/list_misrouted_notices.py` liệt kê tin cũ bị đoán sai.
+
 ---
 
 ## v0.2.29 — 2026-11-22
