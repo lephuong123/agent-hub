@@ -34,6 +34,10 @@ def teams_root() -> Path:
 
 
 def _chown(p: Path, user: str, mode: int, group: str | None = None) -> None:
+    # Chỉ admind chạy root mới đặt chủ/quyền hẹp: root vẫn ghi được vào thư mục 0500. Không phải root (máy dev, CI) mà chmod 0500
+    # thì lần ghi sau vào chính thư mục đó bị PermissionError.
+    if not (hasattr(os, "geteuid") and os.geteuid() == 0):  # type: ignore[attr-defined]
+        return
     try:
         import grp
         import pwd
