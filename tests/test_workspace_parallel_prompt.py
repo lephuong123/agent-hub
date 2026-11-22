@@ -4,6 +4,7 @@ ngữ cảnh workspace của run, cờ `prompt.workspace_rules`, `isolate` trong
 from __future__ import annotations
 
 import asyncio
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from cfharness.dispatch.plan import PLAN_SCHEMA, PlanError, validate_plan
 from cfharness.hub import Hub
 from cfharness.learning.runtime import system_prompt_for, workspace_context
 from cfharness.prompt import build_system_prompt, prompt_hash, workspace_rules_block
+from cfharness.workspace import ensure_worktree_meta
 from m3_fake import ScriptedRuntime, kind_of
 
 META = {"repo": "/r/app", "branch": "cfh/root1234/sub5678", "base": "main", "path": "/r/_wt/app-x", "owned": True,
@@ -92,20 +94,34 @@ def test_context_per_run(hub, tmp_path):
     assert workspace_context(hub, {"id": "r1", "cwd": str(repo), "run_opts": {"workspace_kind": "filehub"}}, agent) is None
 
 
+def _git_repo(tmp_path: Path, name: str = "app") -> Path:
+    """Repo git THẬT (worktree do hub tạo phải qua `_check_worktree_meta` của luồng B); có package.json + lockfile nhưng repo chính
+    chưa có node_modules → worktree mới cần `npm ci`."""
+    p = tmp_path / name
+    p.mkdir()
+    for args in (("init", "-q", "-b", "main"), ("config", "user.email", "t@example.com"), ("config", "user.name", "t")):
+        subprocess.run(["git", "-C", str(p), *args], check=True, capture_output=True)
+    (p / "package.json").write_text('{"name": "app"}\n', encoding="utf-8")
+    (p / "package-lock.json").write_text("{}\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(p), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(p), "commit", "-q", "-m", "init"], check=True, capture_output=True)
+    return p
+
+
 def test_context_reads_hub_worktree_metadata_from_task(hub, tmp_path):
     agent = hub.store.get_agent("c1")
-    wt = _repo(tmp_path, "wt")
-    (wt / ".git").rmdir()
-    (wt / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")  # worktree liên kết: .git là file
-    meta = {**META, "path": str(wt)}
-    t = hub.tasks.create({"assignee": "c1", "title": "x", "body": "y", "workspace": {"kind": "dir", "path": str(wt), "worktree": meta}})
-    ctx = workspace_context(hub, {"id": "r1", "cwd": str(wt), "task_id": t["id"]}, agent)
-    assert ctx["worktree"]["branch"] == META["branch"] and "checkout" not in ctx
+    repo = _git_repo(tmp_path)
+    meta = ensure_worktree_meta(hub, str(repo), META["branch"])  # worktree liên kết thật, nhánh cfh/<root>/<task>
+    assert meta["deps"]["needs_install"] is True
+    wt = meta["path"]
+    t = hub.tasks.create({"assignee": "c1", "title": "x", "body": "y", "workspace": {"kind": "dir", "path": wt, "worktree": meta}})
+    ctx = workspace_context(hub, {"id": "r1", "cwd": wt, "task_id": t["id"]}, agent)
+    assert ctx["worktree"]["branch"] == META["branch"] and ctx["worktree"]["base"] == "main" and "checkout" not in ctx
     # metadata của worktree khác (cwd không khớp) → không nhận, coi như checkout
     other = _repo(tmp_path, "other")
     ctx2 = workspace_context(hub, {"id": "r2", "cwd": str(other), "task_id": t["id"]}, agent)
     assert "worktree" not in ctx2 and ctx2["checkout"] == "cwd"
-    text, _ = system_prompt_for(hub, {"id": "r3", "cwd": str(wt), "task_id": t["id"]}, agent)
+    text, _ = system_prompt_for(hub, {"id": "r3", "cwd": wt, "task_id": t["id"]}, agent)
     assert META["branch"] in text and "npm ci" in text
 
 

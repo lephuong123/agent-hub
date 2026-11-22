@@ -81,6 +81,14 @@ def _live_run(hub, agent, session, status="queued", **kw):
     return rid
 
 
+def _legacy_worktree_task(hub, assignee, repo, name):
+    """Task ĐÃ LƯU với kind `worktree` cũ (cwd = repo, `claude --worktree <name>`): từ luồng B `tasks.create` đổi kind này sang worktree
+    do hub tạo, nên task cũ trong DB được dựng bằng cách ghi thẳng workspace sau khi tạo (đồng bộ, trước khi dispatcher kịp tick)."""
+    t = hub.tasks.create({"assignee": assignee, "title": f"legacy {name}", "body": "x", "workspace": "scratch"})
+    hub.tasks.update(t["id"], {"workspace": {"kind": "worktree", "path": str(Path(repo).resolve()), "name": name}})
+    return hub.tasks.row(t["id"])
+
+
 class _Store:
     def __init__(self):
         self.d = {}
@@ -130,7 +138,7 @@ def test_b1_dispatcher_and_same_lock_tasks_use_same_keys(hub_home, repo):
         h.agents.set_paused("c1", True)
         h.agents.set_paused("c2", True)
         h.agents.set_paused("c3", True)
-        wt = h.tasks.create({"assignee": "c1", "title": "wt", "body": "x", "workspace": {"kind": "worktree", "path": str(repo), "name": "w1"}})
+        wt = _legacy_worktree_task(h, "c1", repo, "w1")
         # task dir mới trên repo: KHÔNG bị coi là cùng khoá với task worktree (worktree có khoá riêng)
         d = h.tasks.create({"assignee": "c2", "title": "dir", "body": "x", "workspace": str(repo)})
         assert not any(wt["id"] in w for w in d["warnings"])
@@ -156,7 +164,7 @@ async def test_b1_worktree_task_runs_in_parallel_with_repo_task(make_hub, repo):
     hub.agents.create({"id": "c1", "name": "C1"})
     hub.agents.create({"id": "c2", "name": "C2"})
     t1 = hub.tasks.create({"assignee": "c1", "title": "a", "body": "a", "workspace": str(repo)})
-    t2 = hub.tasks.create({"assignee": "c2", "title": "b", "body": "b", "workspace": {"kind": "worktree", "path": str(repo), "name": "w2"}})
+    t2 = _legacy_worktree_task(hub, "c2", repo, "w2")
     await settle(lambda: all(hub.tasks.row(t["id"])["status"] == "running" for t in (t1, t2)))
     r1, r2 = hub.tasks.row(t1["id"])["current_run_id"], hub.tasks.row(t2["id"])["current_run_id"]
     await settle(lambda: r1 in rt.gates and r2 in rt.gates)  # CẢ HAI run đã spawn (không có run kẹt hàng đợi)
@@ -207,7 +215,7 @@ async def test_b2_checkpoint_and_diff_on_existing_worktree_dir(make_hub, repo):
     rel = os.path.relpath(wt / "new.txt", repo)
     hub, rt = make_hub(lambda spec: {"files": {rel: "from agent\n"}})  # agent ghi trong worktree (cwd của tiến trình = repo)
     hub.agents.create({"id": "c1", "name": "C1"})
-    t = hub.tasks.create({"assignee": "c1", "title": "a", "body": "a", "workspace": {"kind": "worktree", "path": str(repo), "name": "w3"}})
+    t = _legacy_worktree_task(hub, "c1", repo, "w3")
     await settle(lambda: hub.tasks.row(t["id"])["status"] == "done")
     run = hub.store.list_runs()[0]
     assert run["workspace_key"] == str(wt.resolve()) == run["checkpoint"]["root"]
@@ -220,7 +228,7 @@ async def test_b2_checkpoint_and_diff_on_existing_worktree_dir(make_hub, repo):
 async def test_b2_no_checkpoint_when_worktree_not_created_yet(make_hub, repo):
     hub, rt = make_hub(lambda spec: {})
     hub.agents.create({"id": "c1", "name": "C1"})
-    t = hub.tasks.create({"assignee": "c1", "title": "a", "body": "a", "workspace": {"kind": "worktree", "path": str(repo), "name": "w4"}})
+    t = _legacy_worktree_task(hub, "c1", repo, "w4")
     await settle(lambda: hub.tasks.row(t["id"])["status"] == "done")
     run = hub.store.list_runs()[0]
     assert not run.get("checkpoint") and not run.get("diff")  # không chụp repo chính thay cho worktree
