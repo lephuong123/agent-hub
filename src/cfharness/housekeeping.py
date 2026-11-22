@@ -455,7 +455,7 @@ def worktree_status(e: dict[str, Any], live: list[str]) -> dict[str, Any]:
     """Thêm trạng thái git cho một mục của `worktree_entries`: `exists, dirty, merged (base|upstream|remote|None), busy, cleanable,
     reason`. Dọn được khi: hub tạo (`owned`), mọi task dùng nó đã xong/huỷ, không run sống nào trong đó, worktree sạch, nhánh đã merge
     vào base (hoặc có trên upstream/remote)."""
-    from .workspace import _head, _status_paths, branch_merged, find_dir_links, git_root, worktree_paths
+    from .workspace import _head, _status_paths, branch_merged, git_root, worktree_paths
 
     p = e["path"]
     it = {k: e.get(k) for k in ("path", "repo", "branch", "base", "owned", "branch_created", "legacy", "deps")}
@@ -474,7 +474,8 @@ def worktree_status(e: dict[str, Any], live: list[str]) -> dict[str, Any]:
                 it["branch"] = it["branch"] or _head(p)[1]
                 it["base"] = it["base"] or _head(root)[1]
             try:
-                links = {os.path.relpath(x, p).replace(os.sep, "/") for x in find_dir_links(p)}
+                with os.scandir(p) as it_:  # chỉ liên kết cấp 1 (node_modules) — không đi cả cây khi chỉ liệt kê
+                    links = {x.name for x in it_ if x.is_junction() or x.is_symlink()}
                 it["dirty"] = [x for x in _status_paths(p) if x.rstrip("/") not in links][:20]
             except Exception as ex:  # noqa: BLE001 — git status lỗi → coi như bẩn
                 it["dirty"] = [f"(git status lỗi: {ex})"[:200]]
