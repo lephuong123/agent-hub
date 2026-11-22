@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 from typing import TYPE_CHECKING, Any, Callable
 
 from ..errors import HubError
@@ -50,6 +51,16 @@ _DEFAULT_ID = ("-c", "user.name=cfharness", "-c", "user.email=cfharness@localhos
 
 class IntegrationError(HubError):
     """Lỗi git khi ghép (không phải xung đột nội dung) — task gốc bị chặn kèm lý do."""
+
+
+# lỗi có thể gặp khi chạy git trong bước ghép: HubError (git status lỗi…), OSError (không chạy được git), git treo quá timeout
+GIT_FAILURES = (HubError, OSError, subprocess.TimeoutExpired)
+# cô lập thất bại với các lý do này → CHẶN task (không lặng lẽ chạy trên checkout chính, nơi việc của nó không vào nhánh tích hợp)
+ISOLATE_STRICT = ("requested", "integration", "always")
+
+
+def _err_text(e: BaseException) -> str:
+    return e.message if isinstance(e, HubError) else f"{type(e).__name__}: {e}"
 
 
 def _same(a: str, b: str) -> bool:
@@ -181,15 +192,23 @@ class Integrator:
         return None
 
     def maybe_isolate(self, t: dict[str, Any], agent_id: str, *, lock_blocked: Callable[[], bool]) -> dict[str, Any] | None:
-        """Cô lập `t` nếu cần (trả task đã cập nhật) — None = chạy như cũ. Lỗi git → log + chạy như cũ (chờ khoá)."""
+        """Cô lập `t` nếu cần (trả task đã cập nhật) — None = chạy như cũ. Lỗi git: lý do `conflict` → log + chạy như cũ (chờ khoá);
+        lý do `requested|integration|always` → task bị CHẶN kèm lý do (trả task `blocked`) — chạy trên checkout chính thì việc của nó
+        không vào nhánh tích hợp."""
         reason = self.isolation_reason(t, agent_id, lock_blocked=lock_blocked)
         if reason is None:
             return None
         try:
             return self.isolate(t, reason)
-        except HubError as e:
-            log.warning("cô lập task %s thất bại (%s) — chạy như cũ", t["id"], e.message, exc_info=True)
-            self.tasks.comment(t["id"], f"hub không tạo được worktree riêng cho task này ({e.message[:300]}) — chạy trên workspace cũ",
+        except GIT_FAILURES as e:
+            msg = _err_text(e)[:300]
+            log.warning("cô lập task %s thất bại (%s, lý do cô lập %s)", t["id"], msg, reason, exc_info=True)
+            if reason in ISOLATE_STRICT:
+                return self.tasks.set_status(
+                    t["id"], "blocked",
+                    reason=f"hub không tạo được worktree riêng cho task này ({msg}) — task cần chạy cô lập (lý do: {reason}) nên KHÔNG chạy "
+                           f"trên checkout chính; sửa lỗi git (vd `git worktree prune`) rồi `cfharness task unblock {t['id']}`")
+            self.tasks.comment(t["id"], f"hub không tạo được worktree riêng cho task này ({msg}) — chạy trên workspace cũ",
                                author="hub", kind="system")
             return None
 
@@ -209,7 +228,8 @@ class Integrator:
         if integ:
             if not _same(str(integ.get("repo") or ""), repo):
                 raise HubError(f"task gốc {root['id']} đã có nhánh tích hợp trên repo khác ({integ.get('repo')}) — chỉ ghép một repo mỗi task gốc")
-            if not os.path.isdir(str(integ.get("path") or "")):  # thư mục bị xoá tay → dựng lại trên nhánh có sẵn
+            if not os.path.isdir(str(integ.get("path") or "")):  # thư mục bị xoá tay → dọn bản ghi worktree cũ của git rồi dựng lại
+                _git(repo, "worktree", "prune")
                 meta = ensure_worktree_meta(self.hub, repo, integ["branch"], integ.get("base"))
                 integ.update(path=meta["path"], worktree=meta)
                 self._save(root["id"], integ)
@@ -294,15 +314,18 @@ class Integrator:
         locks = self.hub.runs.locks
         keys = [os.path.realpath(str(integ["path"])), os.path.realpath(str(meta.get("path") or integ["path"]))]
         sess = f"integrate:{root['id']}"
-        if not locks.try_acquire_many(keys, sess, None):
+        # ĐỘC QUYỀN kể cả chế độ `files`: ghép đổi HEAD/index của worktree tích hợp — không ai khác được dùng cùng lúc
+        if not locks.try_acquire_many(keys, sess, None, mode="exclusive"):
             if t["id"] not in pending:
                 integ["pending"] = pending + [t["id"]]
                 self._save(root["id"], integ)
             return "pending"
         try:
             res = self._merge(root, integ, t)
-        except IntegrationError as e:
-            res = {"result": "error", "reason": e.message}
+        except GIT_FAILURES as e:  # git lỗi/treo giữa chừng → ghi lỗi, chặn task gốc rõ ràng (không ném lại mỗi tick)
+            log.warning("ghép task %s vào %s lỗi", t["id"], integ.get("branch"), exc_info=True)
+            res = {"result": "error", "reason": _err_text(e)[:300]}
+            self._abort_if_merging(str(integ["path"]))
         finally:
             locks.release_many(keys, sess, reason="integrated")
         integ = self.state(self.tasks.row(root["id"])) or integ
@@ -373,8 +396,6 @@ class Integrator:
         return "conflict"
 
     def _on_merge_task_done(self, mt: dict[str, Any]) -> None:
-        from ..workspace import _git
-
         root = self.tasks.maybe(mt.get("origin_task_id")) if mt.get("origin_task_id") else None
         integ = self.state(root)
         if root is None or integ is None:
@@ -383,7 +404,7 @@ class Integrator:
         entry = next((c for c in integ.get("conflicts") or [] if c.get("task") == child_id and c.get("status") in ("open", "failed")), None)
         if entry is None:
             return
-        ok, why = self._verify_merged(integ, entry["branch"])
+        ok, why = self._verify_merged(integ, entry["branch"], commit=True)
         if not ok:
             reason = (f"task merge {mt['id']} đã xong nhưng nhánh {entry['branch']} chưa được ghép vào {integ['branch']} ({why}) — "
                       f"ghép tay trong {integ['path']} rồi `cfharness task unblock {root['id']}`")
@@ -391,8 +412,7 @@ class Integrator:
             self._save(root["id"], integ)
             self._block_root(root["id"], reason)
             return
-        self._resolved(root, integ, entry, how="merge_task",
-                       commit=_git(integ["path"], "rev-parse", "HEAD").stdout.strip() or None)
+        self._resolved(root, integ, entry, how="merge_task", commit=self._head_commit(str(integ["path"])))
         self.process_pending(root["id"])
 
     def _resolved(self, root: dict[str, Any], integ: dict[str, Any], entry: dict[str, Any], *, how: str, commit: str | None) -> None:
@@ -406,23 +426,30 @@ class Integrator:
                                                           "commit": commit, "how": how, "merge_task_id": entry.get("merge_task"),
                                                           "needs_lockfile_refresh": []})
 
-    def _verify_merged(self, integ: dict[str, Any], branch: str) -> tuple[bool, str]:
-        """Nhánh `branch` đã nằm trong nhánh tích hợp? Merge đã giải hết xung đột mà chưa commit → hub commit giúp (không hook)."""
+    def _verify_merged(self, integ: dict[str, Any], branch: str, *, commit: bool = False) -> tuple[bool, str]:
+        """Nhánh `branch` đã nằm trong nhánh tích hợp (là tổ tiên của HEAD worktree tích hợp)? Merge còn dở (MERGE_HEAD): `commit=True`
+        (task merge của agent vừa xong) → đã giải hết thì hub commit giúp (không hook); `commit=False` (người ghép tay) → KHÔNG BAO GIỜ
+        commit hộ, coi như chưa ghép tới khi người tự commit. Lỗi git → (False, lý do)."""
         from ..workspace import _git
 
         ip = str(integ["path"])
         if not os.path.isdir(ip):
             return False, f"worktree tích hợp {ip} không còn"
-        if _git(ip, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode == 0:
-            if self._unmerged(ip):
-                return False, "còn file xung đột chưa giải"
-            r = self._commit(ip, "--no-edit")
-            if r.returncode != 0:
-                return False, f"không commit được merge: {(r.stderr or r.stdout).strip()[:200]}"
-        if _git(ip, "rev-parse", "-q", "--verify", f"refs/heads/{branch}").returncode != 0:
-            return False, f"nhánh {branch} không còn"
-        if _git(ip, "merge-base", "--is-ancestor", f"refs/heads/{branch}", "HEAD").returncode != 0:
-            return False, f"nhánh {branch} chưa nằm trong {integ['branch']}"
+        try:
+            if _git(ip, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode == 0:
+                if not commit:
+                    return False, f"merge trong {ip} còn dở (chưa commit) — giải xong thì `git commit` rồi mới gỡ chặn"
+                if self._unmerged(ip):
+                    return False, "còn file xung đột chưa giải"
+                r = self._commit(ip, "--no-edit")
+                if r.returncode != 0:
+                    return False, f"không commit được merge: {(r.stderr or r.stdout).strip()[:200]}"
+            if _git(ip, "rev-parse", "-q", "--verify", f"refs/heads/{branch}").returncode != 0:
+                return False, f"nhánh {branch} không còn"
+            if _git(ip, "merge-base", "--is-ancestor", f"refs/heads/{branch}", "HEAD").returncode != 0:
+                return False, f"nhánh {branch} chưa nằm trong {integ['branch']}"
+        except GIT_FAILURES as e:
+            return False, f"lỗi git khi kiểm: {_err_text(e)[:200]}"
         return True, ""
 
     def process_pending(self, root_id: str) -> None:
@@ -441,7 +468,9 @@ class Integrator:
             disp.kick()
 
     def reconcile(self) -> None:
-        """Mỗi tick: task gốc còn việc ghép dở (`pending` / xung đột `failed` người có thể đã ghép tay) → thử lại, rồi xét task gốc."""
+        """Mỗi tick: task gốc còn việc ghép dở (`pending` / xung đột `failed` người có thể đã ghép tay) → thử lại, rồi xét task gốc.
+        Xung đột `failed` (ghép tay) chỉ được kiểm khi task gốc `running` — tức người đã `task unblock` sau khi tự ghép + commit; hub
+        không commit hộ merge dở. Gỡ chặn mà nhánh chưa nằm trong nhánh tích hợp → chặn lại kèm lý do."""
         rows = self.store.conn.execute("SELECT id FROM tasks WHERE kind='root' AND status IN ('running','blocked') AND deleted_at IS NULL "
                                        "AND workspace LIKE '%\"integration\"%'").fetchall()
         disp = getattr(self.hub, "dispatcher", None)
@@ -452,14 +481,16 @@ class Integrator:
                 continue
             changed = False
             for c in list(integ.get("conflicts") or []):
-                if c.get("status") != "failed":
+                if c.get("status") != "failed" or root.get("status") != "running":
                     continue
-                ok, _why = self._verify_merged(integ, c["branch"]) if c.get("branch") else (False, "")
+                ok, why = self._verify_merged(integ, c["branch"], commit=False) if c.get("branch") else (False, "không rõ nhánh")
                 if ok:
-                    from ..workspace import _git
-
-                    self._resolved(root, integ, c, how="manual", commit=_git(integ["path"], "rev-parse", "HEAD").stdout.strip() or None)
+                    self._resolved(root, integ, c, how="manual", commit=self._head_commit(str(integ["path"])))
                     changed = True
+                else:
+                    self._block_root(rid, f"đã gỡ chặn nhưng nhánh {c.get('branch')} chưa được ghép vào {integ['branch']} ({why}) — ghép tay "
+                                          f"trong {integ['path']}, commit, rồi `cfharness task unblock {rid}`")
+                    break
             if integ.get("pending") and not self._open_conflicts(integ):
                 self.process_pending(rid)
                 changed = True
@@ -520,6 +551,25 @@ class Integrator:
         from ..workspace import _git
 
         _git(ip, "merge", "--abort")
+
+    def _abort_if_merging(self, ip: str) -> None:
+        """Sau lỗi git giữa bước ghép: còn MERGE_HEAD → `merge --abort` để worktree tích hợp sạch cho lần sau (best-effort)."""
+        from ..workspace import _git
+
+        try:
+            if os.path.isdir(ip) and _git(ip, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode == 0:
+                _git(ip, "merge", "--abort")
+        except GIT_FAILURES:
+            log.warning("merge --abort trong %s lỗi", ip, exc_info=True)
+
+    @staticmethod
+    def _head_commit(ip: str) -> str | None:
+        from ..workspace import _git
+
+        try:
+            return _git(ip, "rev-parse", "HEAD").stdout.strip() or None
+        except GIT_FAILURES:
+            return None
 
     def _merge(self, root: dict[str, Any], integ: dict[str, Any], t: dict[str, Any]) -> dict[str, Any]:
         from ..workspace import _git, _status_paths
@@ -600,9 +650,39 @@ class Integrator:
             return "wait", f"chờ ghép {', '.join(left[:5])} vào {integ['branch']}"
         return None
 
+    def _fast_forward(self, root_id: str, repo: str, ib: str, base: str | None) -> dict[str, Any]:
+        """Fast-forward `base` ở checkout chính tới nhánh tích hợp, GIỮ khoá độc quyền của checkout chính (session `integrate:<gốc>`,
+        tất cả hoặc không). Bận → bỏ qua kèm lý do; nhả trong finally."""
+        from ..workspace import _git, _head, _status_paths
+
+        locks = self.hub.runs.locks
+        key = locks.key_for(repo, "dir") or os.path.realpath(repo)
+        sess = f"integrate:{root_id}"
+        if not locks.try_acquire_many([key], sess, None, mode="exclusive"):
+            h = locks.blocked_for(key, sess, mode="exclusive") or {}
+            return {"done": False, "reason": f"checkout chính đang bị khoá bởi run {h.get('run_id') or '?'} (session {h.get('session_id') or '?'}) "
+                                             "— không fast-forward"}
+        try:
+            _h, cur = _head(repo)
+            if cur != base:
+                return {"done": False, "reason": f"checkout chính đang ở {cur or 'HEAD tách rời'}, không phải {base}"}
+            if _status_paths(repo):
+                return {"done": False, "reason": "checkout chính còn thay đổi chưa commit"}
+            r = _git(repo, "merge", "--ff-only", "--no-verify", f"refs/heads/{ib}")
+            return {"done": True} if r.returncode == 0 else {"done": False, "reason": (r.stderr or r.stdout).strip()[:300]}
+        except GIT_FAILURES as e:
+            return {"done": False, "reason": f"lỗi git: {_err_text(e)[:300]}"}
+        finally:
+            locks.release_many([key], sess, reason="integrated")
+
     def finalize(self, root: dict[str, Any]) -> dict[str, Any] | None:
         """Task gốc sắp `done`: fast-forward (nếu được phép), gỡ worktree con đã ghép, trả `{result, open_extra, need_extra}`."""
-        from ..workspace import _git, _head, _status_paths, git_root, remove_worktree
+        from ..workspace import (
+            forget_worktree,
+            git_root,
+            remove_worktree,
+            trusted_worktree_meta,
+        )
 
         root = self.tasks.row(root["id"])
         integ = self.state(root)
@@ -613,10 +693,14 @@ class Integrator:
         for m in integ.get("merged") or []:
             child = self.tasks.maybe(m.get("task"))
             meta = self._ws(child).get("worktree") if child else None
-            if not isinstance(meta, dict) or not meta.get("owned"):
+            if not isinstance(meta, dict):
+                continue
+            meta = trusted_worktree_meta(self.store, meta)  # owned/branch_created chỉ tin sổ worktree của hub
+            if not meta.get("owned"):
                 continue
             try:
                 remove_worktree(meta, locks=self.hub.runs.locks)
+                forget_worktree(self.store, meta.get("path"))
                 cleaned.append(meta.get("path"))
             except HubError as e:
                 log.warning("không gỡ được worktree %s của task %s: %s", meta.get("path"), m.get("task"), e.message)
@@ -628,14 +712,7 @@ class Integrator:
             want_ff = False
         repo = git_root(str(integ["repo"])) if integ.get("repo") else None
         if want_ff and repo:
-            _h, cur = _head(repo)
-            if cur != base:
-                ff["reason"] = f"checkout chính đang ở {cur or 'HEAD tách rời'}, không phải {base}"
-            elif _status_paths(repo):
-                ff["reason"] = "checkout chính còn thay đổi chưa commit"
-            else:
-                r = _git(repo, "merge", "--ff-only", "--no-verify", f"refs/heads/{ib}")
-                ff = {"done": r.returncode == 0} if r.returncode == 0 else {"done": False, "reason": (r.stderr or r.stdout).strip()[:300]}
+            ff = self._fast_forward(root["id"], repo, ib, base)
         integ.update(finalized=now_iso(), cleaned=cleaned, cleanup_kept=kept, fast_forward=ff)
         self._save(root["id"], integ)
         n = len(integ.get("merged") or [])

@@ -74,8 +74,8 @@ agent/hub tạo, lưu kind `dir`), 0 task dùng kind `worktree`.
   là cứng (agent không vượt được). `auto` cô lập khi: task yêu cầu; `_lock_block` = workspace_locked; `_same_lock_tasks` thấy task mở
   KHÁC cùng khoá (trừ task gốc + hậu duệ của chính nó — chúng chạy sau); hoặc task gốc đã có nhánh tích hợp trên repo đó (giữ mọi
   phần việc về một chỗ). Không cô lập: task đã từng chạy (resume phải cùng chỗ), agent chỉ đọc, không phải git, đã có worktree,
-  có tổ tiên đã chạy thẳng trên checkout chính của repo đó (để thấy thay đổi chưa commit của nó). Lỗi git khi tách → comment +
-  chạy như cũ. Task con có tổ tiên cô lập chưa ghép xong → `wait_reason=integration_pending`.
+  có tổ tiên đã chạy thẳng trên checkout chính của repo đó (để thấy thay đổi chưa commit của nó). Lỗi git khi tách → lý do `conflict`: comment +
+  chạy như cũ; `requested|integration|always`: task bị chặn (xem "Sửa sau review"). Task con có tổ tiên cô lập chưa ghép xong → `wait_reason=integration_pending`.
 - **Nhánh**: tích hợp `cfh/<root id>/integration` (worktree `_wt/<slug>`, tạo lười ở lần cô lập đầu từ nhánh hiện tại của repo = base),
   task con `cfh/<root id>/<task id>` tách từ nhánh tích hợp (`worktree.base` = nhánh tích hợp → `remove_worktree` xoá nhánh con khi
   đã ghép). Vướng ref: `workspace.ref_collision` kiểm tường minh (git không giữ cùng lúc `cfh/x` và `cfh/x/…`); `ensure_worktree_meta`
@@ -89,7 +89,7 @@ agent/hub tạo, lưu kind `dir`), 0 task dùng kind `worktree`.
   workspace = worktree tích hợp, body tiếng Anh liệt kê file + hai nhánh + các bước; `workspace.merge_for`). Trong lúc có task merge mở,
   task con khác xong được xếp `pending` (không đụng worktree tích hợp). Task merge xong → hub kiểm nhánh con đã nằm trong nhánh tích hợp
   (merge đã giải hết mà chưa commit → hub commit); không → task gốc `blocked` kèm việc người phải làm; task merge bị blocked → task gốc
-  blocked với lý do riêng. Người ghép tay + `task unblock` → tick (`Integrator.reconcile`) kiểm lại (`how=manual`).
+  blocked với lý do riêng. Người ghép tay + commit + `task unblock` → tick (`Integrator.reconcile`) kiểm lại (`how=manual`; không commit hộ merge dở).
 - **Task gốc xong** (`_refresh_root`: `Integrator.gate` — mọi task con cô lập phải đã ghép; rồi `finalize`): gỡ worktree con đã ghép qua
   `remove_worktree(locks=…)`; nhánh tích hợp + worktree của nó để nguyên (dọn bằng `cfharness worktree clean` khi đã merge vào base —
   `housekeeping.worktree_entries` đọc `workspace.integration.worktree`); fast-forward base ở checkout chính CHỈ khi
@@ -167,6 +167,38 @@ không lấy lease, không vào diff/revert của run (B7 chỉ tính file đã 
 độc quyền chạy qua script/alias không nhận ra. Dấu độc quyền giữ tới PostToolUse/TTL kể cả khi chính lệnh đó bị guard giữ chờ duyệt.
 `tasks._same_lock_tasks` (cảnh báo "task CHỜ") vẫn dùng `conflicts` thuần → ở chế độ `files` cảnh báo sai (task thực ra chạy song song) —
 thuộc vùng luồng D. `commits_made` của diff phản ánh mọi commit trên checkout (có thể của session khác).
+
+### Sửa sau review (`ws/review-fixes`)
+- **Sổ worktree do hub tạo** (`hub_state.worktrees.registry`, khoá = normcase(realpath)): CHỈ `ensure_worktree_meta` ghi khi hub vừa tạo
+  thư mục (`register_worktree`; dựng lại cùng đường dẫn + cùng nhánh giữ `branch_created` cũ). `owned`/`branch_created`/`branch`/`base`
+  dùng để dọn chỉ lấy từ sổ (`trusted_worktree_meta`), không bao giờ từ JSON của task (`task.create` cho agent gọi → metadata có thể giả):
+  `tasks._check_worktree_meta` ghi đè hai cờ theo sổ; `housekeeping.worktree_entries` đọc sổ qua kết nối chỉ đọc, không gộp OR theo task;
+  `Integrator.finalize` chỉ gỡ worktree con có trong sổ. Gỡ xong → `forget_worktree` (RPC `worktree.clean`, finalize). Sổ ∈ `MACHINE_STATE`.
+- **Xoá nhánh lúc dọn** (`remove_worktree`): chỉ khi sổ nói hub tạo nhánh + nhánh = HEAD THẬT của worktree (đọc trước khi gỡ; thư mục
+  không còn → giữ nhánh) + `base` không trỏ chính nhánh (`_base_is_branch`) + đã merge. `-d` bị từ chối (chỉ xét HEAD/upstream của checkout
+  chính) → `-D` CHỈ khi kiểm lại `merge-base --is-ancestor <nhánh> <base>` qua (`_in_base`). `branch_merged` cũng bỏ trường hợp base =
+  nhánh. Worktree đang ở nhánh khác nhánh trong sổ → không dọn. Kind `worktree` cũ: dọn được thư mục khi sạch nhưng KHÔNG BAO GIỜ xoá nhánh;
+  tên có `/`, `\`, `..` bị bỏ qua.
+- **Người giữ khoá chia sẻ chặn gỡ worktree**: `worktree_lock_holders` hỏi `blockers(mode="exclusive")`; RPC `worktree.list|clean` chụp cả
+  `list()` lẫn `list_shared()` (`held_shared`).
+- **Khoá độc quyền cho bước ghép và fast-forward**: `integrate_child` xin khoá worktree tích hợp + worktree con `mode="exclusive"` (kể cả
+  chế độ `files`). `finalize` → `_fast_forward`: xin khoá ĐỘC QUYỀN của checkout chính cho session `integrate:<gốc>` (tất cả hoặc không);
+  bận → `fast_forward = {done: false, reason: "checkout chính đang bị khoá bởi run …"}`; nhả trong `finally`.
+- **Lỗi git khi ghép**: `integrate_child` bắt `HubError|OSError|TimeoutExpired` (`GIT_FAILURES`) → `merge --abort` nếu còn MERGE_HEAD,
+  ghi xung đột `failed` kèm lý do, chặn task gốc (không ném lại mỗi tick). `_verify_merged` cũng trả (False, lý do) khi git lỗi.
+  `_refresh_root` bọc `gate`/`finalize`: lỗi bất ngờ → task gốc `blocked` kèm lý do + log.
+- **Ghép tay (quy tắc chọn)**: hub KHÔNG BAO GIỜ commit hộ merge dở của người (`_verify_merged(commit=False)`: còn MERGE_HEAD = chưa ghép).
+  Xung đột `failed` chỉ được kiểm khi task gốc `running` — tức người đã tự ghép + commit rồi `task unblock`; kiểm không qua → chặn lại kèm
+  lý do (vd "merge … còn dở"). Task merge của AGENT xong mà merge đã giải hết chưa commit → hub vẫn commit giúp (`commit=True`, như cũ).
+- **Cô lập thất bại**: lý do `requested|integration|always` → task con bị `blocked` kèm lý do (không chạy trên checkout chính, nơi việc của
+  nó không vào nhánh tích hợp); lý do `conflict` → như cũ (comment + chờ khoá). `ensure_integration` chạy `git worktree prune` trước khi
+  dựng lại worktree tích hợp bị xoá tay.
+- **Nhập hub**: `_adjust_db` xoá bảng `file_leases` (trạng thái tạm của máy cũ, như `repo_locks_shared`), báo `file_leases_cleared`.
+- **Lease trên vòng lặp sự kiện**: `leases.HASH_MAX_BYTES` hạ 20 MB → 2 MB (file lớn hơn dùng chữ ký size+mtime). TODO: `GuardService.check`
+  vẫn băm file (≤ 2 MB) và chạy `git diff --cached` (timeout 10 s, chỉ với `git commit` không đường dẫn) ĐỒNG BỘ — nên chuyển sang
+  `asyncio.to_thread` khi tách phần đọc DB khỏi phần I/O.
+- Test: `tests/test_workspace_parallel_worktree.py` (metadata giả, -D, nhánh legacy, khoá chia sẻ), `…_integrate.py` (khoá độc quyền,
+  fast-forward bị khoá, git treo, ghép tay dở, cô lập thất bại, prune), `…_leases.py` (nhập hub, ngưỡng băm).
 
 ## Kiểm thử
 `uv run pytest -q` (không gọi claude thật). Mỗi luồng thêm test riêng (`tests/test_workspace_parallel_*.py`). Thêm dòng vào

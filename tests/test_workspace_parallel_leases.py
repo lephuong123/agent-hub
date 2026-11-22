@@ -398,3 +398,41 @@ def test_observe_hook_sends_file_path_for_writes(monkeypatch):
     sent.clear()
     observe_hook.observe(["PostToolUse", "--run", "r1", "--socket", "/tmp/x.sock"], json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}}))
     assert "file_path" not in sent[0]["params"]["data"] and "command" not in json.dumps(sent[0])
+
+
+# ============================================================================ review: nhập hub xoá lease của máy cũ; ngưỡng băm
+def test_hub_import_clears_file_leases_and_worktree_registry(tmp_path):
+    import json
+    import sqlite3
+
+    from cfharness import hub_transfer as T
+
+    for mode in ("clone", "move"):
+        db = tmp_path / f"{mode}.db"
+        c = sqlite3.connect(str(db))
+        c.execute("CREATE TABLE hub_state (key TEXT PRIMARY KEY, value TEXT, updated_at TEXT)")
+        c.execute("CREATE TABLE file_leases (repo TEXT, path TEXT, rel TEXT, repo_key TEXT, session_id TEXT, run_id TEXT, agent_id TEXT, "
+                  "sha256 TEXT, pending INTEGER, acquired_at TEXT, updated_at TEXT, expires_at REAL, PRIMARY KEY (repo, path))")
+        c.execute("INSERT INTO file_leases VALUES ('/r','a.txt','a.txt','/r','s1','r1','a1',NULL,0,'t','t',NULL)")
+        for k in ("repo_locks_shared", "worktrees.registry", "keep_me"):
+            c.execute("INSERT INTO hub_state VALUES (?,?,?)", (k, json.dumps({"x": 1}), "t"))
+        c.commit()
+        c.close()
+        plan = T._adjust_db(db, mode=mode, apply=False, manifest={})
+        assert plan["file_leases_cleared"] == 1 and {"repo_locks_shared", "worktrees.registry"} <= set(plan["state_cleared"])
+        T._adjust_db(db, mode=mode, apply=True, manifest={})
+        c = sqlite3.connect(str(db))
+        assert c.execute("SELECT COUNT(*) FROM file_leases").fetchone()[0] == 0
+        assert {r[0] for r in c.execute("SELECT key FROM hub_state")} >= {"keep_me"}
+        assert not {r[0] for r in c.execute("SELECT key FROM hub_state")} & {"repo_locks_shared", "worktrees.registry"}
+        c.close()
+
+
+def test_large_file_signature_skips_hashing(tmp_path):
+    big = tmp_path / "big.bin"
+    big.write_bytes(b"x" * (L.HASH_MAX_BYTES + 1))
+    assert L.file_sig(str(big)).startswith("size:")
+    small = tmp_path / "s.txt"
+    small.write_text("a")
+    assert len(L.file_sig(str(small))) == 64
+    assert L.HASH_MAX_BYTES <= 2_000_000  # guard.check chạy trên vòng lặp sự kiện: không băm file lớn đồng bộ

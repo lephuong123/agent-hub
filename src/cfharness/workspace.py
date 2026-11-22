@@ -360,6 +360,77 @@ def ref_collision(root: str, branch: str) -> str | None:
     return None
 
 
+# Sổ worktree do HUB tạo (hub_state, chỉ `ensure_worktree_meta` ghi): {normcase(realpath): {repo, branch, base, branch_created, created_at}}.
+# `owned`/`branch_created`/`branch`/`base` dùng để DỌN chỉ tin sổ này — không bao giờ tin metadata trong JSON của task (task.create
+# nhận workspace từ agent, nên metadata có thể bị giả để `worktree clean` xoá nhánh chưa merge).
+WORKTREE_REGISTRY_KEY = "worktrees.registry"
+
+
+def _wt_key(path: str | Path) -> str:
+    return os.path.normcase(os.path.realpath(os.path.expanduser(str(path))))
+
+
+def worktree_registry(src: Any) -> dict[str, dict[str, Any]]:
+    """Đọc sổ worktree từ `Store` (state_get) hoặc kết nối sqlite (luồng phụ, chỉ đọc). Lỗi/không có → {}."""
+    import json
+    import sqlite3
+
+    if src is None:
+        return {}
+    if isinstance(src, dict):  # sổ đã đọc sẵn
+        return src
+    try:
+        if hasattr(src, "state_get"):
+            d = src.state_get(WORKTREE_REGISTRY_KEY, {})
+        else:
+            r = src.execute("SELECT value FROM hub_state WHERE key=?", (WORKTREE_REGISTRY_KEY,)).fetchone()
+            d = json.loads(r[0]) if r and r[0] else {}
+    except (sqlite3.Error, ValueError, TypeError):
+        return {}
+    return {k: v for k, v in d.items() if isinstance(v, dict)} if isinstance(d, dict) else {}
+
+
+def registered_worktree(src: Any, path: str | Path | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    return worktree_registry(src).get(_wt_key(path))
+
+
+def register_worktree(store: Any, meta: dict[str, Any]) -> None:
+    """Ghi worktree hub vừa tạo vào sổ. Dựng lại thư mục trên nhánh có sẵn (cùng đường dẫn, cùng nhánh) giữ `branch_created` cũ."""
+    if store is None or not hasattr(store, "state_set") or not meta.get("path"):
+        return
+    reg = worktree_registry(store)
+    k = _wt_key(meta["path"])
+    old = reg.get(k) or {}
+    bc = bool(meta.get("branch_created")) or bool(old.get("branch") == meta.get("branch") and old.get("branch_created"))
+    reg[k] = {"repo": meta.get("repo"), "path": meta.get("path"), "branch": meta.get("branch"), "base": meta.get("base"),
+              "branch_created": bc, "created_at": old.get("created_at") or meta.get("created_at")}
+    store.state_set(WORKTREE_REGISTRY_KEY, reg)
+
+
+def forget_worktree(store: Any, path: str | Path | None) -> None:
+    """Bỏ worktree đã gỡ khỏi sổ (đường dẫn có thể được dùng lại cho worktree khác)."""
+    if store is None or not hasattr(store, "state_set") or not path:
+        return
+    reg = worktree_registry(store)
+    if reg.pop(_wt_key(path), None) is not None:
+        store.state_set(WORKTREE_REGISTRY_KEY, reg)
+
+
+def trusted_worktree_meta(src: Any, meta: dict[str, Any] | None) -> dict[str, Any]:
+    """Metadata worktree (từ JSON task) với `owned`/`branch_created`/`branch`/`base` lấy từ SỔ của hub. Không có trong sổ →
+    `owned=False`, `branch_created=False` (không dọn, không xoá nhánh)."""
+    m = dict(meta or {})
+    ent = registered_worktree(src, m.get("path"))
+    if ent is None:
+        m.update(owned=False, branch_created=False)
+        return m
+    m.update(owned=True, branch_created=bool(ent.get("branch_created")), branch=ent.get("branch") or m.get("branch"),
+             base=ent.get("base"))
+    return m
+
+
 def ensure_worktree_meta(hub: Any, repo: str, branch: str, base: str | None = None, path: str | None = None, *,
                          deps_mode: str | None = None) -> dict[str, Any]:
     """Git worktree riêng cho một task (để nhiều task cùng repo chạy SONG SONG: khoá repo tính theo gốc của worktree, không theo
@@ -420,6 +491,7 @@ def ensure_worktree_meta(hub: Any, repo: str, branch: str, base: str | None = No
     if r.returncode != 0:
         raise HubError(f"worktree: git worktree add thất bại: {(r.stderr or r.stdout).strip()[:300]}")
     meta["owned"] = True
+    register_worktree(getattr(hub, "store", None), meta)
     try:
         meta["deps"] = link_deps(wp, root, mode)
     except OSError as e:  # không để lỗi liên kết làm hỏng việc tạo task — agent tự cài
@@ -447,8 +519,7 @@ def branch_merged(root: str, branch: str, base: str | None) -> str | None:
     None = chưa (hoặc nhánh không còn)."""
     if _git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode != 0:
         return None
-    if base and _git(root, "rev-parse", "--verify", "-q", f"{base}^{{commit}}").returncode == 0 \
-            and _git(root, "merge-base", "--is-ancestor", f"refs/heads/{branch}", base).returncode == 0:
+    if _in_base(root, branch, base):  # base = chính nhánh → không tính (luôn "đã merge")
         return "base"
     up = _git(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{branch}@{{upstream}}")
     if up.returncode == 0 and up.stdout.strip() \
@@ -458,6 +529,26 @@ def branch_merged(root: str, branch: str, base: str | None) -> str | None:
     if rem.returncode == 0 and rem.stdout.strip():
         return "remote"
     return None
+
+
+def _base_is_branch(root: str, branch: str, base: str | None) -> bool:
+    """`base` trỏ tới chính nhánh `branch` (tên trùng / ref đầy đủ trùng) → "đã merge vào base" luôn đúng, vô nghĩa."""
+    if not base:
+        return False
+    b = str(base).strip()
+    if b in (branch, f"refs/heads/{branch}", f"heads/{branch}"):
+        return True
+    r = _git(root, "rev-parse", "--symbolic-full-name", b)
+    return r.returncode == 0 and r.stdout.strip() == f"refs/heads/{branch}"
+
+
+def _in_base(root: str, branch: str, base: str | None) -> bool:
+    """Kiểm lại trước `branch -D`: base hợp lệ, không phải chính nhánh, và nhánh là tổ tiên của base."""
+    if not base or _base_is_branch(root, branch, base):
+        return False
+    if _git(root, "rev-parse", "--verify", "-q", f"{base}^{{commit}}").returncode != 0:
+        return False
+    return _git(root, "merge-base", "--is-ancestor", f"refs/heads/{branch}", f"{base}^{{commit}}").returncode == 0
 
 
 def find_dir_links(top: str | Path) -> list[str]:
@@ -493,7 +584,8 @@ def worktree_lock_holders(locks: Any, path: str | Path) -> list[dict[str, Any]]:
     if locks is None:
         return []
     key = os.path.realpath(str(path))
-    return [{**h, "key": hk} for hk, h in (locks.blockers([key], None) or {}).items()]
+    # mode="exclusive": người giữ CHIA SẺ (chế độ `files`) cũng tính — gỡ worktree cần không ai còn sống dùng nó
+    return [{**h, "key": hk} for hk, h in (locks.blockers([key], None, mode="exclusive") or {}).items()]
 
 
 def remove_worktree(meta: dict[str, Any], *, dry_run: bool = False, force: bool = False, locks: Any = None) -> dict[str, Any]:
@@ -519,6 +611,7 @@ def remove_worktree(meta: dict[str, Any], *, dry_run: bool = False, force: bool 
         raise Conflict(f"worktree {wp} đang bị khoá bởi run {h.get('run_id')} (session {h.get('session_id')}) — không gỡ khi run còn sống",
                        data={"path": wp, "holders": held[:5]})
     exists = os.path.isdir(wp)
+    cur_branch = _head(wp)[1] if exists else None  # nhánh THẬT của worktree, đọc trước khi gỡ
     if exists:
         if not any(_same(wp, x) for x in worktree_paths(root)):
             raise HubError(f"worktree: '{wp}' không phải worktree của {root} — không đụng vào")
@@ -550,19 +643,28 @@ def remove_worktree(meta: dict[str, Any], *, dry_run: bool = False, force: bool 
         if not dry_run:
             _git(root, "worktree", "prune")
     if branch and meta.get("branch_created"):
-        how = branch_merged(root, branch, meta.get("base"))
+        why_keep = None
+        if cur_branch != branch:
+            why_keep = (f"worktree đang ở nhánh {cur_branch}, không phải {branch} — giữ nhánh" if cur_branch else
+                        "không xác nhận được nhánh hiện tại của worktree — giữ nhánh")
+        elif _base_is_branch(root, branch, meta.get("base")):
+            why_keep = f"base {meta.get('base')!r} chính là nhánh {branch} — không xét được đã merge, giữ nhánh"
+        how = branch_merged(root, branch, meta.get("base")) if why_keep is None else None
         out["branch_merged"] = how
-        if how is None:
+        if why_keep is not None:
+            out["branch_kept"] = why_keep
+        elif how is None:
             out["branch_kept"] = "nhánh chưa merge vào base / chưa có trên remote — giữ"
         else:
             out["actions"].append(f"git branch -d {branch} (đã merge: {how})")
             if not dry_run:
                 r = _git(root, "branch", "-d", branch)
-                if r.returncode != 0:  # -d chỉ xét HEAD/upstream của checkout chính; ta đã kiểm merge vào base
+                # -d chỉ xét HEAD/upstream của checkout chính → -D CHỈ khi kiểm lại: nhánh nằm trong base (base ≠ nhánh)
+                if r.returncode != 0 and _in_base(root, branch, meta.get("base")):
                     r = _git(root, "branch", "-D", branch)
                 out["branch_deleted"] = r.returncode == 0
                 if r.returncode != 0:
-                    out["branch_kept"] = (r.stderr or r.stdout).strip()[:200]
+                    out["branch_kept"] = (r.stderr or r.stdout).strip()[:200] or "git branch -d từ chối — giữ nhánh"
     elif branch:
         out["branch_kept"] = "nhánh không do hub tạo — giữ"
     return out

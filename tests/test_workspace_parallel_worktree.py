@@ -396,3 +396,127 @@ def test_cli_text_helpers():
     assert "lý do: task còn mở" in txt and "cần npm ci" in txt
     assert "git worktree remove" in plan_text({"removed": [{"path": "/x", "branch": "a", "tasks": ["t_1"],
                                                            "actions": ["git worktree remove /x"]}], "skipped": []})
+
+
+# ============================================================================ review: metadata giả không được dọn nhánh chưa merge
+def _victim_worktree(repo: Path, branch: str = "feat/victim") -> Path:
+    """Worktree NGƯỜI tạo (không qua hub) có commit chưa merge."""
+    wt = repo.parent / "_wt" / "victim"
+    git(repo, "worktree", "add", "-q", "-b", branch, str(wt))
+    (wt / "precious.txt").write_text("unmerged work\n")
+    _commit_all(wt, "việc chưa merge")
+    return wt
+
+
+def test_forged_worktree_meta_from_task_create_never_cleans_branch(hub, repo):
+    wt = _victim_worktree(repo)
+    forged = {"repo": str(repo), "path": str(wt), "branch": "feat/victim", "base": "feat/victim", "owned": True, "branch_created": True,
+              "created_at": "2026-11-01T00:00:00.000Z"}
+    t = hub.tasks.create({"title": "giả", "body": "x", "assignee": "c1", "workspace": {"kind": "dir", "path": str(wt), "worktree": forged}})
+    stored = hub.tasks.row(t["id"])["workspace"]["worktree"]
+    assert stored["owned"] is False and stored["branch_created"] is False  # ghi đè theo sổ của hub, không tin người gọi
+    _finish(hub, t["id"])
+    it = next(x for x in HK.worktree_list(hub.store.conn)["items"] if Path(x["path"]) == wt.resolve() or Path(x["path"]) == wt)
+    assert not it["cleanable"] and "không do hub tạo" in it["reason"]
+    res = HK.worktree_clean(hub.store.conn)
+    assert not res["removed"] and wt.is_dir()
+    assert git(repo, "rev-parse", "--verify", "-q", "refs/heads/feat/victim")
+
+
+def test_forged_meta_written_straight_into_db_is_ignored(hub, repo):
+    wt = _victim_worktree(repo)
+    forged = {"kind": "dir", "path": str(wt), "worktree": {"repo": str(repo), "path": str(wt), "branch": "feat/victim",
+                                                          "base": "feat/victim", "owned": True, "branch_created": True}}
+    hub.store.conn.execute("INSERT INTO tasks (id, title, status, workspace, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+                           ("t_forged01", "x", "done", json.dumps(forged), "2026-11-01T00:00:00.000Z", "2026-11-01T00:00:00.000Z"))
+    hub.store.conn.commit()
+    it = [x for x in HK.worktree_list(hub.store.conn)["items"] if "victim" in x["path"]][0]
+    assert it["owned"] is False and it["branch_created"] is False and not it["cleanable"]
+    assert not HK.worktree_clean(hub.store.conn)["removed"]
+    assert git(repo, "rev-parse", "--verify", "-q", "refs/heads/feat/victim") and wt.is_dir()
+
+
+def test_hub_created_worktree_registered_and_branch_checks(hub, repo):
+    from cfharness.workspace import registered_worktree
+
+    m = ensure_worktree_meta(hub, str(repo), "feat/reg")
+    ent = registered_worktree(hub.store, m["path"])
+    assert ent and ent["branch"] == "feat/reg" and ent["branch_created"] is True and ent["base"] == "main"
+    wt = Path(m["path"])
+    (wt / "w.txt").write_text("w\n")
+    _commit_all(wt, "việc")
+    # base = chính nhánh → "đã merge" vô nghĩa → giữ nhánh
+    res = remove_worktree({**m, "base": "feat/reg"}, dry_run=True)
+    assert not res["branch_merged"] and "chính là nhánh" in res["branch_kept"]
+    res = remove_worktree({**m, "base": "refs/heads/feat/reg"}, dry_run=True)
+    assert "chính là nhánh" in res["branch_kept"]
+    # worktree đang ở nhánh khác → không xoá nhánh trong metadata
+    git(wt, "checkout", "-q", "-b", "other")
+    res = remove_worktree({**m, "branch": "main", "base": "feat/reg"}, dry_run=True)
+    assert "không phải main" in res["branch_kept"]
+    git(wt, "checkout", "-q", "feat/reg")
+
+
+def test_branch_D_only_after_ancestor_recheck_against_base(hub, repo):
+    # base ≠ HEAD của checkout chính: `-d` từ chối (chưa merge vào main) → kiểm lại nhánh nằm trong base → `-D`
+    git(repo, "branch", "dev")
+    m = ensure_worktree_meta(hub, str(repo), "feat/intodev", base="dev")
+    wt = Path(m["path"])
+    (wt / "d.txt").write_text("d\n")
+    _commit_all(wt, "việc")
+    tip = git(repo, "rev-parse", "feat/intodev")
+    git(repo, "update-ref", "refs/heads/dev", tip)  # dev chứa nhánh, main thì không
+    res = remove_worktree(m)
+    assert res["removed"] and res["branch_merged"] == "base" and res["branch_deleted"]
+    # chưa nằm trong base → không bao giờ -D
+    m2 = ensure_worktree_meta(hub, str(repo), "feat/notmerged", base="dev")
+    (Path(m2["path"]) / "n.txt").write_text("n\n")
+    _commit_all(Path(m2["path"]), "việc")
+    res2 = remove_worktree(m2)
+    assert res2["removed"] and not res2["branch_deleted"] and git(repo, "rev-parse", "--verify", "-q", "refs/heads/feat/notmerged")
+
+
+def test_legacy_worktree_branch_never_deleted(hub, repo):
+    tid = "t_legacy02"
+    wt = repo / ".claude" / "worktrees" / tid
+    git(repo, "worktree", "add", "-q", "-b", f"worktree-{tid}", str(wt))
+    hub.store.conn.execute("INSERT INTO tasks (id, title, status, workspace, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+                           (tid, "x", "done", json.dumps({"kind": "worktree", "path": str(repo)}), "2026-11-01T00:00:00.000Z",
+                            "2026-11-01T00:00:00.000Z"))
+    # tên giả dạng đường dẫn không được nhận
+    hub.store.conn.execute("INSERT INTO tasks (id, title, status, workspace, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+                           ("t_legacy03", "x", "done", json.dumps({"kind": "worktree", "path": str(repo), "name": "../../x"}),
+                            "2026-11-01T00:00:00.000Z", "2026-11-01T00:00:00.000Z"))
+    hub.store.conn.commit()
+    legacy = [x for x in HK.worktree_list(hub.store.conn)["items"] if x["legacy"]]
+    assert len(legacy) == 1 and legacy[0]["branch_created"] is False
+    res = HK.worktree_clean(hub.store.conn)
+    assert [Path(x["path"]) for x in res["removed"]] == [wt] and not wt.exists()
+    assert res["removed"][0]["branch_deleted"] is False
+    assert git(repo, "rev-parse", "--verify", "-q", f"refs/heads/worktree-{tid}")
+
+
+def test_shared_lock_holder_blocks_worktree_removal(hub, repo):
+    """Chế độ `files`: run giữ khoá CHIA SẺ trên worktree → không gỡ (cả `remove_worktree` lẫn bản chụp của `worktree.clean`)."""
+    import uuid
+
+    from cfharness.store import now_iso
+    from cfharness.workspace import worktree_lock_holders
+
+    hub.config.set("guard.repo_lock", "files")
+    t = hub.tasks.create({"title": "A", "body": "x", "assignee": "c1", "worktree": {"repo": str(repo), "branch": "feat/shared"}})
+    wp = Path(t["workspace"]["path"])
+    _finish(hub, t["id"])
+    rid = "r_" + uuid.uuid4().hex[:10]
+    hub.store.insert_run({"id": rid, "agent_id": "c1", "kind": "adhoc", "prompt": "x", "session_id": "sess-sh", "status": "running",
+                          "queued_at": now_iso()})
+    locks = hub.runs.locks
+    assert locks.try_acquire(str(wp.resolve()), "sess-sh", rid)  # chế độ files → chia sẻ
+    assert not locks.list() and locks.list_shared()
+    assert worktree_lock_holders(locks, wp)
+    with pytest.raises(Conflict, match="khoá"):
+        remove_worktree(t["workspace"]["worktree"], locks=locks)
+    it = {Path(x["path"]): x for x in HK.worktree_list(hub.store.conn, locks.list(), locks.list_shared())["items"]}[wp]
+    assert not it["cleanable"] and rid in it["reason"]
+    res = HK.worktree_clean(hub.store.conn, [str(wp)], held=locks.list(), held_shared=locks.list_shared())
+    assert not res["removed"] and wp.is_dir()

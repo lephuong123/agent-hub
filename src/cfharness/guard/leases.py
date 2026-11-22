@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 FILE_WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}
 EXCLUSIVE = ""  # `path` của hàng dấu độc quyền cả repo
 DEFAULT_EXCLUSIVE_TTL_S = 600
-HASH_MAX_BYTES = 20_000_000  # file lớn hơn → chữ ký size+mtime thay sha256
+HASH_MAX_BYTES = 2_000_000  # file lớn hơn → chữ ký size+mtime thay sha256 (check chạy ĐỒNG BỘ trên vòng lặp sự kiện của daemon)
 
 LOCKFILES = frozenset({"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", "bun.lock", "poetry.lock",
                        "uv.lock", "pipfile.lock", "cargo.lock", "gemfile.lock", "composer.lock", "go.sum"})

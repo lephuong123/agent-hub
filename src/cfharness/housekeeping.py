@@ -407,7 +407,12 @@ def _same_path(a: str, b: str) -> bool:
 def worktree_entries(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Worktree của task theo DB (không gọi git): kind `dir` có metadata `workspace.worktree` (hub tạo từ luồng B) + kind `worktree`
     đường B cũ (`claude --worktree` → `<repo>/.claude/worktrees/<name|task id>`). Gom theo đường dẫn: `{path, repo, branch, base, owned,
-    branch_created, legacy, tasks[{id, status}], open}` — `owned` = có task ghi hub đã tạo nó."""
+    branch_created, legacy, tasks[{id, status}], open}`. `owned`/`branch_created`/`branch`/`base` lấy từ SỔ worktree của hub
+    (`workspace.WORKTREE_REGISTRY_KEY`, chỉ hub ghi lúc tạo) — KHÔNG từ JSON của task (agent tạo task được → có thể giả). Kind `worktree`
+    cũ: thư mục do `claude --worktree` của run hub tạo (dọn được khi sạch), nhưng KHÔNG BAO GIỜ xoá nhánh của nó."""
+    from .workspace import trusted_worktree_meta, worktree_registry
+
+    reg = worktree_registry(conn) if "hub_state" in _tables(conn) else {}
     by: dict[str, dict[str, Any]] = {}
     for tid, status, raw in conn.execute("SELECT id, status, workspace FROM tasks WHERE workspace LIKE '%worktree%' ORDER BY created_at, id"):
         try:
@@ -419,21 +424,23 @@ def worktree_entries(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         ents: list[dict[str, Any]] = []
         meta = ws.get("worktree") if ws.get("kind") == "dir" else None
         if isinstance(meta, dict) and meta.get("path") and meta.get("repo"):
-            ents.append({"path": _norm(meta["path"]), "repo": _norm(meta["repo"]), "branch": meta.get("branch"), "base": meta.get("base"),
-                         "owned": bool(meta.get("owned")), "branch_created": bool(meta.get("branch_created")), "legacy": False,
-                         "deps": meta.get("deps")})
+            tm = trusted_worktree_meta(reg, meta)
+            ents.append({"path": _norm(meta["path"]), "repo": _norm(meta["repo"]), "branch": tm.get("branch"), "base": tm.get("base"),
+                         "owned": tm["owned"], "branch_created": tm["branch_created"], "legacy": False, "deps": meta.get("deps")})
         elif ws.get("kind") == "worktree" and ws.get("path"):
             repo = _norm(ws["path"])
-            if repo:
+            name = str(ws.get("name") or tid)
+            if repo and name not in (".", "..") and not any(c in name for c in "/\\"):  # tên thư mục, không phải đường dẫn
                 # claude --worktree <tên> tạo worktree + nhánh trong repo; hub đặt tên = workspace.name hoặc id task (dispatcher)
-                ents.append({"path": os.path.join(repo, ".claude", "worktrees", str(ws.get("name") or tid)), "repo": repo, "branch": None,
-                             "base": None, "owned": True, "branch_created": True, "legacy": True, "deps": None})
+                ents.append({"path": os.path.join(repo, ".claude", "worktrees", name), "repo": repo, "branch": None,
+                             "base": None, "owned": True, "branch_created": False, "legacy": True, "deps": None})
         integ = ws.get("integration")  # luồng D: worktree tích hợp của task gốc (dọn được khi nhánh đã merge vào base)
         imeta = integ.get("worktree") if isinstance(integ, dict) else None
         if isinstance(imeta, dict) and imeta.get("path") and imeta.get("repo"):
-            ents.append({"path": _norm(imeta["path"]), "repo": _norm(imeta["repo"]), "branch": imeta.get("branch"), "base": imeta.get("base"),
-                         "owned": bool(imeta.get("owned")), "branch_created": bool(imeta.get("branch_created")), "legacy": False,
-                         "deps": imeta.get("deps"), "integration": True})
+            tm = trusted_worktree_meta(reg, imeta)
+            ents.append({"path": _norm(imeta["path"]), "repo": _norm(imeta["repo"]), "branch": tm.get("branch"), "base": tm.get("base"),
+                         "owned": tm["owned"], "branch_created": tm["branch_created"], "legacy": False, "deps": imeta.get("deps"),
+                         "integration": True})
         for ent in ents:
             if not ent["path"]:
                 continue
@@ -441,9 +448,7 @@ def worktree_entries(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             cur = by.get(key)
             if cur is None:
                 cur = by[key] = {**ent, "tasks": []}
-            else:
-                cur["owned"] = cur["owned"] or ent["owned"]
-                cur["branch_created"] = cur["branch_created"] or ent["branch_created"]
+            # cùng đường dẫn → cùng mục sổ: owned/branch_created/branch/base như nhau, không gộp OR theo task
             cur["tasks"].append({"id": tid, "status": status})
     out = list(by.values())
     for e in out:
@@ -459,21 +464,29 @@ def _live_run_paths(conn: sqlite3.Connection) -> list[str]:
 class _HeldSnapshot:
     """Bản chụp khoá repo (`RepoLocks.list()` sau khi dọn người giữ chết, lấy ở luồng chính) cho `RepoLocks` chỉ đọc trong luồng phụ."""
 
-    def __init__(self, held: dict[str, dict[str, Any]] | None) -> None:
+    def __init__(self, held: dict[str, dict[str, Any]] | None, shared: dict[str, dict[str, Any]] | None = None) -> None:
         self.held = dict(held or {})
+        self.shared = dict(shared or {})
 
     def state_get(self, key: str, default: Any = None) -> Any:
-        return self.held
+        from .guard.locks import SHARED_STATE_KEY, STATE_KEY
+
+        if key == STATE_KEY:
+            return self.held
+        if key == SHARED_STATE_KEY:
+            return self.shared
+        return default
 
     def state_set(self, key: str, value: Any) -> None:  # pragma: no cover - bản chụp không bao giờ ghi
         raise RuntimeError("bản chụp khoá chỉ đọc")
 
 
-def held_locks(held: dict[str, dict[str, Any]] | None) -> Any:
-    """`RepoLocks` trên bản chụp khoá (không dọn, không phát event) — dùng cho `worktree_status`/`remove_worktree` ngoài luồng chính."""
+def held_locks(held: dict[str, dict[str, Any]] | None, shared: dict[str, dict[str, Any]] | None = None) -> Any:
+    """`RepoLocks` trên bản chụp khoá (không dọn, không phát event) — dùng cho `worktree_status`/`remove_worktree` ngoài luồng chính.
+    `shared` = khoá CHIA SẺ (`list_shared()`, chế độ `files`): người giữ chia sẻ còn sống cũng chặn gỡ worktree."""
     from .guard.locks import RepoLocks
 
-    return RepoLocks(_HeldSnapshot(held))
+    return RepoLocks(_HeldSnapshot(held, shared))
 
 
 def worktree_status(e: dict[str, Any], live: list[str], locks: Any = None) -> dict[str, Any]:
@@ -510,6 +523,8 @@ def worktree_status(e: dict[str, Any], live: list[str], locks: Any = None) -> di
             reason = "thư mục không còn"
         elif not it["owned"]:
             reason = "worktree không do hub tạo"
+        elif not it["legacy"] and it["branch"] and (head_branch := _head(p)[1]) != it["branch"]:
+            reason = f"worktree đang ở {head_branch or 'HEAD tách rời'}, không phải nhánh {it['branch']} hub tạo"
         elif e["open"]:
             reason = "task còn mở: " + ", ".join(t["id"] for t in e["tasks"] if t["status"] not in TASK_FINISHED)
         elif it["busy"]:
@@ -526,25 +541,27 @@ def worktree_status(e: dict[str, Any], live: list[str], locks: Any = None) -> di
     return it
 
 
-def worktree_list(conn: sqlite3.Connection, held: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
-    """`held` = bản chụp khoá repo của hub (`RepoLocks.list()` sau `sweep`): worktree còn bị run sống khoá → không dọn được."""
+def worktree_list(conn: sqlite3.Connection, held: dict[str, dict[str, Any]] | None = None,
+                  held_shared: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+    """`held`/`held_shared` = bản chụp khoá repo độc quyền/chia sẻ của hub (`RepoLocks.list()`/`list_shared()` sau `sweep`): worktree
+    còn bị run sống khoá (kiểu nào cũng vậy) → không dọn được."""
     live = _live_run_paths(conn) if "runs" in _tables(conn) else []
-    locks = held_locks(held) if held is not None else None
+    locks = held_locks(held, held_shared) if held is not None or held_shared is not None else None
     items = [worktree_status(e, live, locks) for e in worktree_entries(conn)] if "tasks" in _tables(conn) else []
     items.sort(key=lambda x: (not x["cleanable"], x["path"]))
     return {"items": items[:MAX_ITEMS], "truncated": len(items) > MAX_ITEMS, "cleanable": sum(1 for x in items if x["cleanable"])}
 
 
 def worktree_clean(conn: sqlite3.Connection, paths: list[str] | None = None, *, dry_run: bool = False,
-                   held: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+                   held: dict[str, dict[str, Any]] | None = None, held_shared: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     """Gỡ worktree dọn được (`workspace.remove_worktree`: gỡ liên kết node_modules trước, `git worktree remove` không --force, `git
     branch -d` nhánh hub tạo đã merge). Tính LẠI trạng thái ngay lúc dọn; `paths` (tuỳ chọn) giới hạn vào các worktree người đã chọn.
     `held` = bản chụp khoá repo: worktree có người giữ khoá còn sống KHÔNG bị gỡ (kể cả khi đã sạch/merge)."""
     from .errors import HubError
     from .workspace import remove_worktree
 
-    locks = held_locks(held) if held is not None else None
-    cur = worktree_list(conn, held)["items"]
+    locks = held_locks(held, held_shared) if held is not None or held_shared is not None else None
+    cur = worktree_list(conn, held, held_shared)["items"]
     want = [os.path.normpath(os.path.expanduser(str(x))) for x in paths or [] if str(x).strip()]
     removed: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -586,15 +603,16 @@ def register_worktree_rpc(daemon: "Daemon") -> None:
         finally:
             c.close()
 
-    def _held() -> dict[str, dict[str, Any]]:
-        # luồng chính: dọn khoá của session không còn run sống (B3) rồi chụp — worktree còn người giữ sống không được gỡ
+    def _held() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        # luồng chính: dọn khoá của session không còn run sống (B3) rồi chụp CẢ khoá độc quyền lẫn chia sẻ (chế độ `files`) — worktree
+        # còn người giữ sống (kiểu nào cũng vậy) không được gỡ
         locks = hub.runs.locks
         locks.sweep()
-        return locks.list()
+        return locks.list(), locks.list_shared()
 
     async def _list(p: dict[str, Any]) -> dict[str, Any]:
-        held = _held()
-        return await asyncio.to_thread(_ro, lambda c: worktree_list(c, held))
+        held, shared = _held()
+        return await asyncio.to_thread(_ro, lambda c: worktree_list(c, held, shared))
 
     async def _clean(p: dict[str, Any]) -> dict[str, Any]:
         paths = p.get("paths")
@@ -603,8 +621,14 @@ def register_worktree_rpc(daemon: "Daemon") -> None:
 
             raise HubError("paths phải là danh sách đường dẫn worktree")
         dry = bool(p.get("dry_run"))
-        held = _held()
-        return await asyncio.to_thread(_ro, lambda c: worktree_clean(c, paths, dry_run=dry, held=held))
+        held, shared = _held()
+        res = await asyncio.to_thread(_ro, lambda c: worktree_clean(c, paths, dry_run=dry, held=held, held_shared=shared))
+        if not dry:  # luồng chính (writer duy nhất): bỏ worktree đã gỡ khỏi sổ của hub
+            from .workspace import forget_worktree
+
+            for x in res.get("removed") or []:
+                forget_worktree(hub.store, x.get("path"))
+        return res
 
     daemon.methods["worktree.list"] = _list
     daemon.methods["worktree.clean"] = wrap_with_audit(hub, "worktree.clean", _clean)
