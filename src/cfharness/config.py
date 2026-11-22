@@ -555,6 +555,9 @@ DEFAULTS: dict[str, Any] = {
     # MỌI connector tài khoản `claude /login` của user OS đã Connect (Google Drive, Gmail…) — agent ghi bằng tài khoản thật. BẬT mặc
     # định từ v0.2.26 (chủ repo chốt 2026-11-20); chỉ có tác dụng khi user OS có phiên /login. Tắt: `config set connectors.auto false`
     "connectors": {"auto": True},
+    # Khối system prompt do hub chèn (prompt.py). `workspace_rules`: rule chung về workspace/git (worktree hub cấp vs checkout chính) cho
+    # MỌI run có workspace ghi — SOUL là bản sao theo máy nên rule chung phải nằm trong code (docs/dev-notes/workspace-parallel.md §C)
+    "prompt": {"workspace_rules": True},
     # M5-B — FR-OB-07: OpenTelemetry (opt-in, tắt mặc định). Chỉ metadata; không input/output tool MCP, không secret.
     "telemetry": {
         "otel": {
