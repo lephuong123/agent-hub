@@ -120,6 +120,15 @@ def _in_git(path: Path) -> bool:
     return False
 
 
+def _inside(child: str, parent: str) -> bool:
+    """`child` là thư mục con của `parent` (task cô lập của luồng D chạy ở thư mục con tương ứng trong worktree)."""
+    try:
+        c, p = os.path.normcase(os.path.realpath(child)), os.path.normcase(os.path.realpath(parent))
+    except (OSError, ValueError):  # pragma: no cover
+        return False
+    return c.startswith(p.rstrip(os.sep) + os.sep)
+
+
 def _same_path(a: str, b: str) -> bool:
     try:
         return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
@@ -161,7 +170,7 @@ def workspace_context(hub: "Hub", run: dict[str, Any], agent: dict[str, Any]) ->
             except Exception:  # pragma: no cover - task lạ/JSON hỏng → coi như không có metadata
                 ws = None
         meta = ws.get("worktree") if isinstance(ws, dict) else None
-        if isinstance(meta, dict) and (not meta.get("path") or _same_path(str(meta["path"]), str(cwd))):
+        if isinstance(meta, dict) and (not meta.get("path") or _same_path(str(meta["path"]), str(cwd)) or _inside(str(cwd), str(meta["path"]))):
             ctx["worktree"] = meta
         elif opts.get("workspace_kind") == "worktree":
             ctx["worktree"] = {}

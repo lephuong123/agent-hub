@@ -306,6 +306,37 @@ def test_housekeeping_lists_and_cleans_only_finished_clean_merged(hub, repo):
     assert {Path(x["path"]) for x in rep["task_worktrees"]} == {pb, pc}
 
 
+def test_clean_refuses_worktree_locked_by_live_run(hub, repo):
+    """Worktree đã xong/sạch/merge nhưng khoá của nó còn người giữ SỐNG (run queued/running/waiting_human) → không gỡ; người giữ chết
+    (session không còn run sống) → khoá được dọn rồi gỡ bình thường."""
+    import uuid
+
+    from cfharness.store import now_iso
+
+    t = hub.tasks.create({"title": "A", "body": "x", "assignee": "c1", "worktree": {"repo": str(repo), "branch": "feat/locked"}})
+    wp = Path(t["workspace"]["path"])
+    _finish(hub, t["id"])
+    rid = "r_" + uuid.uuid4().hex[:10]
+    hub.store.insert_run({"id": rid, "agent_id": "c1", "kind": "adhoc", "prompt": "x", "session_id": "sess-live", "status": "running",
+                          "queued_at": now_iso()})
+    locks = hub.runs.locks
+    assert locks.try_acquire(str(wp.resolve()), "sess-live", rid)
+    held = locks.list()
+    it = {Path(x["path"]): x for x in HK.worktree_list(hub.store.conn, held)["items"]}[wp]
+    assert not it["cleanable"] and rid in it["reason"] and it["locked_by"][0]["run_id"] == rid
+    res = HK.worktree_clean(hub.store.conn, [str(wp)], held=held)
+    assert not res["removed"] and rid in res["skipped"][0]["reason"] and wp.is_dir()
+    meta = hub.tasks.row(t["id"])["workspace"]["worktree"]
+    with pytest.raises(Conflict, match="khoá"):
+        remove_worktree(meta, locks=locks, force=True)  # force chỉ bỏ qua "bẩn", không bỏ qua người giữ sống
+    # run kết thúc → session không còn run sống → sweep dọn khoá → gỡ được
+    hub.store.conn.execute("UPDATE runs SET status='completed' WHERE id=?", (rid,))
+    hub.store.conn.commit()
+    locks.sweep()
+    res = HK.worktree_clean(hub.store.conn, [str(wp)], held=locks.list())
+    assert [Path(x["path"]) for x in res["removed"]] == [wp] and not wp.exists()
+
+
 def test_housekeeping_sees_legacy_path_b(hub, repo):
     # task cũ (trước luồng B) còn kind `worktree` + path=repo trong DB; claude --worktree tạo <repo>/.claude/worktrees/<id>
     tid = "t_legacy01"

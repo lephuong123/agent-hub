@@ -114,9 +114,10 @@ def render(outcome: str, done: list[str], open_: list[str], need: list[str]) -> 
     return "\n\n".join(parts)
 
 
-def compose_root(subs: list[dict[str, Any]]) -> str:
+def compose_root(subs: list[dict[str, Any]], *, open_extra: list[str] | None = None, need_extra: list[str] | None = None) -> str:
     """Kết quả task gốc đã tách thành task con: mỗi task con một dòng ở "Đã làm"; "Còn mở"/"Cần bạn" gom từ các task con (ghi
-    tên phần việc phía trước). Tất định — không gọi LLM, không id nội bộ."""
+    tên phần việc phía trước) + dòng của hub (`open_extra`/`need_extra`, vd nhánh tích hợp của luồng D). Tất định — không gọi LLM,
+    không id nội bộ."""
     done, open_, need = [], [], []
     for s in subs:
         p = parse(s.get("result_summary"))
@@ -131,7 +132,7 @@ def compose_root(subs: list[dict[str, Any]]) -> str:
         need += [f"{title}: {x}" for x in _bullets(p[NEED])]
     n = len(subs)
     outcome = f"Đã xong cả {n} phần việc." if n != 1 else "Đã xong phần việc."
-    return render(outcome, done, open_, need)
+    return render(outcome, done, open_ + list(open_extra or []), list(need_extra or []) + need)
 
 
 def owner_report(task: dict[str, Any]) -> str:

@@ -74,10 +74,16 @@ TOOLS: dict[str, dict[str, Any]] = {
         },
     },
     "task_create": {
-        "description": "(lead) Create a subtask of your task. assignee = member id (see team_roster) or omit to route by role; parents = subtask ids it depends on.",
+        "description": ("(lead) Create a subtask of your task. assignee = member id (see team_roster) or omit to route by role; parents = subtask ids it "
+                        "depends on. isolate = true asks cfharness for a separate git worktree for this subtask (same as `isolate` in a plan): set "
+                        "it when subtasks that can run at the same time write the same repo; cfharness merges it back into your task's "
+                        "integration branch when it is done. worktree = {branch, base?, path?} only when the subtask must work on a specific "
+                        "branch of your task's repo (created now, not merged back automatically). Workers never create worktrees themselves."),
         "inputSchema": {
             "type": "object",
-            "properties": {"title": _S, "body": _S, "assignee": _S, "role": _S, "parents": {"type": "array", "items": _S}},
+            "properties": {"title": _S, "body": _S, "assignee": _S, "role": _S, "parents": {"type": "array", "items": _S},
+                           "isolate": {"type": "boolean"},
+                           "worktree": {"type": "object", "properties": {"repo": _S, "branch": _S, "base": _S, "path": _S}, "required": ["branch"]}},
             "required": ["title", "body"],
         },
     },

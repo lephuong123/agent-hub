@@ -345,6 +345,21 @@ def _deps_mode(hub: Any) -> str:
     return m if m in DEPS_MODES else "link"
 
 
+def ref_collision(root: str, branch: str) -> str | None:
+    """Tên nhánh `branch` không tạo được vì vướng ref có sẵn (git lưu ref như đường dẫn: không thể có cùng lúc `cfh/x` và `cfh/x/…`).
+    Trả ref đang chắn (`refs/heads/…`) hoặc None. Đường B cũ dùng `cfh/<task id>`, luồng D dùng `cfh/<root id>/…` → kiểm tường minh
+    trước khi tạo để báo lỗi rõ ràng (và luồng D chọn tiền tố khác) thay vì lỗi `cannot lock ref` của git."""
+    parts = [x for x in str(branch).split("/") if x]
+    for i in range(1, len(parts)):
+        ref = "refs/heads/" + "/".join(parts[:i])
+        if _git(root, "rev-parse", "--verify", "-q", ref).returncode == 0:
+            return ref
+    r = _git(root, "for-each-ref", "--count=1", "--format=%(refname)", f"refs/heads/{branch}/")
+    if r.returncode == 0 and r.stdout.strip():
+        return r.stdout.strip().splitlines()[0]
+    return None
+
+
 def ensure_worktree_meta(hub: Any, repo: str, branch: str, base: str | None = None, path: str | None = None, *,
                          deps_mode: str | None = None) -> dict[str, Any]:
     """Git worktree riêng cho một task (để nhiều task cùng repo chạy SONG SONG: khoá repo tính theo gốc của worktree, không theo
@@ -395,6 +410,10 @@ def ensure_worktree_meta(hub: Any, repo: str, branch: str, base: str | None = No
         b = base_name or "HEAD"
         if _git(root, "rev-parse", "--verify", "-q", f"{b}^{{commit}}").returncode != 0:
             raise HubError(f"worktree: base không tồn tại: {b!r}")
+        clash = ref_collision(root, branch)
+        if clash is not None:
+            raise HubError(f"worktree: không tạo được nhánh {branch!r} — vướng ref có sẵn {clash} (git không giữ cùng lúc `a` và `a/…`); "
+                           "chọn tên nhánh khác")
         meta["base"] = base_name or _head_name(root)
         r = _git(root, "worktree", "add", "-b", branch, str(wp), b)
         meta["branch_created"] = r.returncode == 0
@@ -468,8 +487,18 @@ def find_dir_links(top: str | Path) -> list[str]:
     return sorted(out)
 
 
-def remove_worktree(meta: dict[str, Any], *, dry_run: bool = False, force: bool = False) -> dict[str, Any]:
-    """Gỡ worktree theo metadata, an toàn với junction: (1) worktree còn thay đổi chưa commit → `Conflict` (trừ `force`); (2) gỡ mọi
+def worktree_lock_holders(locks: Any, path: str | Path) -> list[dict[str, Any]]:
+    """Người giữ khoá (`RepoLocks`) trùng/xung đột với thư mục worktree `path` — gốc worktree là khoá ghi của run trong đó.
+    `locks.blockers` tự dọn khoá của session không còn run sống trước (B3), nên chỉ còn người giữ đang sống."""
+    if locks is None:
+        return []
+    key = os.path.realpath(str(path))
+    return [{**h, "key": hk} for hk, h in (locks.blockers([key], None) or {}).items()]
+
+
+def remove_worktree(meta: dict[str, Any], *, dry_run: bool = False, force: bool = False, locks: Any = None) -> dict[str, Any]:
+    """Gỡ worktree theo metadata, an toàn với junction: (0) `locks` (khoá repo của hub) còn người giữ SỐNG trên worktree → `Conflict`
+    kể cả `force` (khoá của session không còn run sống được dọn trước đó); (1) worktree còn thay đổi chưa commit → `Conflict` (trừ `force`); (2) gỡ mọi
     junction/symlink thư mục KHÔNG được git theo dõi (node_modules liên kết…) — gỡ chính liên kết, không đi theo; (3) `git worktree
     remove` (KHÔNG `--force` trừ khi người chọn `force` cho worktree bẩn — liên kết đã gỡ trước đó); (4) hub tạo nhánh (`branch_created`)
     và nhánh đã merge vào base / có trên upstream/remote → `git branch -d` (git từ chối vì base ≠ HEAD của checkout chính → `-D`, an toàn
@@ -484,6 +513,11 @@ def remove_worktree(meta: dict[str, Any], *, dry_run: bool = False, force: bool 
         raise HubError("worktree: không gỡ checkout chính của repo")
     out: dict[str, Any] = {"path": wp, "repo": root, "branch": branch, "dry_run": dry_run, "links": [], "removed": False,
                            "branch_deleted": False, "actions": []}
+    held = worktree_lock_holders(locks, wp)
+    if held:
+        h = held[0]
+        raise Conflict(f"worktree {wp} đang bị khoá bởi run {h.get('run_id')} (session {h.get('session_id')}) — không gỡ khi run còn sống",
+                       data={"path": wp, "holders": held[:5]})
     exists = os.path.isdir(wp)
     if exists:
         if not any(_same(wp, x) for x in worktree_paths(root)):

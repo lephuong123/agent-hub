@@ -10,7 +10,7 @@ from __future__ import annotations
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -35,6 +35,8 @@ class TeamPolicies(BaseModel):
     max_review_rounds: int = Field(default=3, ge=1)
     # workspace mặc định cho task của team: {"kind": "dir", "path": "/repo"} | {"kind": "scratch"}
     workspace: dict[str, Any] | None = None
+    # luồng D: ghi đè `workspace.isolate` cho task của team (never|auto|always); None = theo cấu hình hub
+    isolate: Literal["never", "auto", "always"] | None = None
     # FR-LN-15: công tắc học — thuộc chính sách an toàn, chỉ người đổi (M4 dùng)
     learning: dict[str, Any] = Field(default_factory=lambda: {"enabled": True, "auto_apply": True})
 

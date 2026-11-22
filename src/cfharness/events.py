@@ -160,6 +160,11 @@ EVENT_LEVELS: dict[str, str] = {
     "task.reassigned": "summary",  # đổi người làm task chưa chạy (giữ trong task gốc) — tasks.reassign
     "task.circuit_open": "summary",
     "task.requeue_exhausted": "summary",  # cost-guardrails: quá trần requeue run interrupted → task blocked
+    # workspace-parallel D: task con tách vào worktree riêng (payload {root_id, branch, path, base, reason}), ghép vào nhánh tích hợp
+    # ({root_id, branch, into, commit, how, needs_lockfile_refresh, merge_task_id?}), xung đột → task merge ({root_id, branch, into, files, merge_task_id})
+    "task.isolated": "summary",
+    "task.integrated": "summary",
+    "task.integration_conflict": "summary",
     "run.protocol_violation": "summary",
     "run.reverted": "summary",
     "workspace.checkpoint": "debug",
