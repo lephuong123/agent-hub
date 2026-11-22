@@ -226,6 +226,32 @@ def cmd_run_revert(ctx: Any) -> int:
     return 0
 
 
+def cmd_workspace(ctx: Any) -> int:
+    a = ctx.args
+    if a.action == "locks":
+        r = ctx.call("workspace.locks", {})
+        if ctx.json:
+            ctx.out(r)
+            return 0
+        if not r:
+            print("(không có khoá nào)")
+        for k, h in sorted(r.items()):
+            since = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(h.get("since") or 0)))
+            print(f"{k}  run {h.get('run_id')}  session {str(h.get('session_id') or '')[:8]}  từ {since}")
+        return 0
+    p: dict[str, Any] = {"force": bool(a.force)}
+    if Path(a.path).expanduser().exists():
+        p["path"] = str(Path(a.path).expanduser().resolve())
+    else:
+        p["key"] = a.path  # khoá không phải thư mục đang có (filehub, worktree chưa tạo) — truyền nguyên văn
+    r = ctx.call("workspace.unlock", p)
+    txt = f"đã gỡ khoá {r['key']}" + (f" (run {r['released'].get('run_id')})" if r.get("released") else "")
+    if r.get("forced"):
+        txt += f"\ncảnh báo: run {r.get('running_run_id')} vẫn đang chạy và có thể ghi tiếp"
+    ctx.out(r, txt)
+    return 0
+
+
 def cmd_run_diff(ctx: Any) -> int:
     a = ctx.args
     r = ctx.call("run.diff", {"id": a.id, "patch": a.patch})
@@ -375,6 +401,14 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     rd.add_argument("id")
     rd.add_argument("--patch", action="store_true")
     rd.set_defaults(fn=cmd_run_diff)
+
+    wsp = sub.add_parser("workspace", help="khoá ghi repo/thư mục (xem, gỡ khoá)", parents=[common])
+    wss = wsp.add_subparsers(dest="action", required=True)
+    wss.add_parser("locks", parents=[common], help="liệt kê khoá đang giữ")
+    ul = wss.add_parser("unlock", parents=[common], help="gỡ khoá của một repo/thư mục (chỉ người)")
+    ul.add_argument("path", help="thư mục/repo (hoặc đúng khoá như `workspace locks` in ra)")
+    ul.add_argument("--force", action="store_true", help="gỡ cả khi session giữ khoá còn run đang chạy (run đó vẫn ghi tiếp được)")
+    wsp.set_defaults(fn=cmd_workspace)
 
     rp = sub.add_parser("report", help="báo cáo insights (FR-OB-06)", parents=[common])
     rp.add_argument("--since", help="7d (mặc định), 24h, 2026-10-01")

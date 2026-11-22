@@ -1,4 +1,4 @@
-"""RPC của M3 trên daemon: `team.*`, `task.*`, `taskself.call` (hub-self MCP), `run.revert|diff`, `workspace.locks`,
+"""RPC của M3 trên daemon: `team.*`, `task.*`, `taskself.call` (hub-self MCP), `run.revert|diff`, `workspace.locks|unlock`,
 `report.*`, `agent.clone|export|import`, `mcp.team_run`, `mcp.task_events`; `estop.set` nhận thêm `team`.
 
 `register_rpc(daemon)` gọi TRƯỚC `mcp_server.rpc.register_rpc` (để method thay đổi trạng thái được bọc audit —
@@ -335,6 +335,7 @@ class OrchestrationRpc:
             "run.diff": self.run_diff,
             "run.revert": self.run_revert,
             "workspace.locks": lambda p: h.runs.locks.list(),
+            "workspace.unlock": lambda p: h.runs.unlock(path=p.get("path"), key=p.get("key"), force=bool(p.get("force"))),
             "report.get": self.report_get,
             "report.cost": self.report_cost,
             "report.hangs": self.report_hangs,

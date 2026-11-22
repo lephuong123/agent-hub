@@ -87,6 +87,7 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "mcp.migrate_to_claude",
         # thao tác phá huỷ workspace / tiếp quản / team
         "run.revert", "run.takeover", "run.takeover_record",
+        "workspace.unlock",  # gỡ khoá repo của run khác = cho hai run ghi chồng (workspace-parallel B3)
         "team.create", "team.update", "team.archive", "team.restore", "team.member_set", "team.member_rm",
         # V2-N1: bề mặt quản trị luồng CLI thêm sau (revert về revision cũ = nâng quyền; purge = xoá vĩnh viễn; archive/pause = DoS)
         "agent.archive", "agent.revert", "agent.pause", "agent.resume", "trash.restore", "trash.purge", "task.archive", "task.reassign",
