@@ -129,6 +129,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "hub.freeze", "hub.unfreeze", "hub.doctor",
         # Dung lượng + dọn thư mục làm việc (housekeeping.py): đọc lộ đường dẫn workspace của mọi agent; dọn = xoá thư mục trên đĩa — chỉ người
         "hub.housekeeping", "hub.cleanup",
+        # Worktree của task (housekeeping.py, luồng B): danh sách lộ repo/nhánh của mọi task; dọn = `git worktree remove` + `git branch -d` — chỉ người
+        "worktree.list", "worktree.clean",
         # Xuất/nhập hub từ web (hub_transfer_web.py, PR6): nhận passphrase, đọc gói tải lên, dừng daemon để nhập đè hub.db, lộ đường
         # dẫn/tên secret — chỉ người (kể cả các method chỉ đọc)
         "hub.transfer_status", "hub.export_start", "hub.export_status", "hub.import_plan", "hub.import_start", "hub.import_status",
@@ -267,7 +269,7 @@ def all_mutating() -> frozenset[str]:
                       ("cfharness.hub_freeze", "MUTATING_FREEZE"), ("cfharness.hub_transfer_web", "MUTATING_TRANSFER_WEB"),
                       ("cfharness.admin_rpc", "MUTATING_ADMIN"), ("cfharness.admin_directory", "MUTATING_DIRECTORY"),
                       ("cfharness.fileview", "MUTATING_FILES"), ("cfharness.filehub.rpc", "MUTATING_FILEHUB"), ("cfharness.accounts.rpc", "MUTATING_ACCOUNTS"),
-                      ("cfharness.team_inbox", "MUTATING_INBOX")):
+                      ("cfharness.team_inbox", "MUTATING_INBOX"), ("cfharness.housekeeping", "MUTATING_WORKTREE")):
         try:
             import importlib
 

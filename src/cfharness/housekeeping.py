@@ -8,8 +8,11 @@
   * `scratch_stale` — workspace scratch chỉ còn run đã KẾT THÚC tham chiếu, lần cuối cũ hơn `older_than_days` (chỉ khi người hỏi; mặc định
     doctor chỉ ĐẾM ở 30 ngày, không đưa vào danh sách dọn);
   * `worktree_orphan` — `HUB_HOME/worktrees/<tên>` không run/task nào tham chiếu;
-  * `task_worktree_done` — git worktree NGOÀI HUB_HOME của task đã xong/lưu trữ còn trên đĩa: CHỈ BÁO (repo của người — hub không xoá,
-    gợi ý `git worktree remove`).
+  * `task_worktree_done` — git worktree NGOÀI HUB_HOME của task đã xong/lưu trữ còn trên đĩa (metadata `workspace.worktree`, hoặc
+    `<repo>/.claude/worktrees/<tên>` của kind `worktree` cũ): CHỈ BÁO ở đây — dọn bằng `cfharness worktree clean`.
+- Worktree của task (`worktree_entries`/`worktree_status`/`worktree_list`/`worktree_clean`, RPC `worktree.list|clean`, CLI
+  `cfharness worktree list|clean [--dry-run]`): dọn được khi hub tạo + mọi task dùng nó đã xong/huỷ + không run sống + sạch + nhánh đã
+  merge vào base (hoặc có trên upstream/remote). Gỡ qua `workspace.remove_worktree` (gỡ liên kết node_modules trước, không --force).
   Thư mục có run CHƯA kết thúc (queued/running/waiting_human/interrupted) nằm trong → `busy`, không bao giờ dọn.
 - `cleanup(hub, paths, older_than_days)`: CHỈ trong daemon (RPC `hub.cleanup`, HUMAN_ONLY, tự audit). Tính LẠI danh sách ngay lúc dọn,
   chỉ xoá giao của danh sách người đã xác nhận với ứng viên hiện tại (chống TOCTOU), kiểm lại từng thư mục (thật, không symlink, đúng vùng
@@ -284,33 +287,16 @@ def scan(home: Path, conn: sqlite3.Connection | None, *, older_than_days: float 
         it["cleanable"] = not it["busy"] and (kind in CLEANABLE or (kind == "scratch_stale" and older_than_days is not None))
         items.append(it)
 
-    # git worktree của task đã xong, NGOÀI HUB_HOME: chỉ báo
+    # git worktree của task đã xong, NGOÀI HUB_HOME (metadata `workspace.worktree` + đường B cũ): chỉ báo — dọn = `cfharness worktree clean`
     task_wt: list[dict[str, Any]] = []
     if conn is not None and "tasks" in tables:
-        open_paths = set()
-        done: list[tuple[str, str]] = []
-        for r in conn.execute("SELECT id, status, workspace FROM tasks WHERE workspace IS NOT NULL"):
-            try:
-                ws = json.loads(r[2]) if isinstance(r[2], str) else None
-            except ValueError:
-                ws = None
-            if not isinstance(ws, dict) or ws.get("kind") != "worktree":
+        for e in worktree_entries(conn):
+            p = e["path"]
+            if e["open"] or p.startswith(str(home) + os.sep):
                 continue
-            p = _norm(ws.get("path"))
-            if not p:
-                continue
-            if r[1] in OPEN_TASK:
-                open_paths.add(p)
-            elif r[1] in ("done", "archived"):
-                done.append((r[0], p))
-        seen = set()
-        for tid, p in done:
-            if p in open_paths or p in seen or p.startswith(str(home) + os.sep):
-                continue
-            seen.add(p)
             if os.path.isdir(p) and not os.path.islink(p):
-                task_wt.append({"kind": "task_worktree_done", "task": tid, "path": p, "cleanable": False,
-                                "fix": f"git -C {p} status && git worktree remove {p}"})
+                task_wt.append({"kind": "task_worktree_done", "task": e["tasks"][-1]["id"], "path": p, "cleanable": False,
+                                "fix": "cfharness worktree list && cfharness worktree clean --dry-run"})
     items.sort(key=lambda x: (-x["bytes"], x["rel"]))
     cleanable = [x for x in items if x["cleanable"]]
     by_kind: dict[str, dict[str, int]] = {}
@@ -409,6 +395,179 @@ def cleanup(hub: "Hub", paths: list[str], *, older_than_days: float | None = Non
     return {"removed": removed, "skipped": skipped, "freed_bytes": freed, "status": "done", "count": len(removed)}
 
 
+# ============================================================================ worktree của task (luồng B — workspace-parallel.md)
+TASK_FINISHED = ("done", "archived")  # archived = đã huỷ (task.cancel/archive)
+MUTATING_WORKTREE = ("worktree.clean",)
+
+
+def _same_path(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def worktree_entries(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Worktree của task theo DB (không gọi git): kind `dir` có metadata `workspace.worktree` (hub tạo từ luồng B) + kind `worktree`
+    đường B cũ (`claude --worktree` → `<repo>/.claude/worktrees/<name|task id>`). Gom theo đường dẫn: `{path, repo, branch, base, owned,
+    branch_created, legacy, tasks[{id, status}], open}` — `owned` = có task ghi hub đã tạo nó."""
+    by: dict[str, dict[str, Any]] = {}
+    for tid, status, raw in conn.execute("SELECT id, status, workspace FROM tasks WHERE workspace LIKE '%worktree%' ORDER BY created_at, id"):
+        try:
+            ws = json.loads(raw) if isinstance(raw, str) else None
+        except ValueError:
+            continue
+        if not isinstance(ws, dict):
+            continue
+        meta = ws.get("worktree") if ws.get("kind") == "dir" else None
+        if isinstance(meta, dict) and meta.get("path") and meta.get("repo"):
+            ent = {"path": _norm(meta["path"]), "repo": _norm(meta["repo"]), "branch": meta.get("branch"), "base": meta.get("base"),
+                   "owned": bool(meta.get("owned")), "branch_created": bool(meta.get("branch_created")), "legacy": False,
+                   "deps": meta.get("deps")}
+        elif ws.get("kind") == "worktree" and ws.get("path"):
+            repo = _norm(ws["path"])
+            if not repo:
+                continue
+            # claude --worktree <tên> tạo worktree + nhánh trong repo; hub đặt tên = workspace.name hoặc id task (dispatcher)
+            ent = {"path": os.path.join(repo, ".claude", "worktrees", str(ws.get("name") or tid)), "repo": repo, "branch": None,
+                   "base": None, "owned": True, "branch_created": True, "legacy": True, "deps": None}
+        else:
+            continue
+        if not ent["path"]:
+            continue
+        key = os.path.normcase(ent["path"])
+        cur = by.get(key)
+        if cur is None:
+            cur = by[key] = {**ent, "tasks": []}
+        else:
+            cur["owned"] = cur["owned"] or ent["owned"]
+            cur["branch_created"] = cur["branch_created"] or ent["branch_created"]
+        cur["tasks"].append({"id": tid, "status": status})
+    out = list(by.values())
+    for e in out:
+        e["open"] = any(t["status"] not in TASK_FINISHED for t in e["tasks"])
+    return out
+
+
+def _live_run_paths(conn: sqlite3.Connection) -> list[str]:
+    return [os.path.normpath(str(r[0])) for r in
+            conn.execute(f"SELECT cwd FROM runs WHERE cwd IS NOT NULL AND status IN ({','.join('?' * len(LIVE_RUN))})", LIVE_RUN)]
+
+
+def worktree_status(e: dict[str, Any], live: list[str]) -> dict[str, Any]:
+    """Thêm trạng thái git cho một mục của `worktree_entries`: `exists, dirty, merged (base|upstream|remote|None), busy, cleanable,
+    reason`. Dọn được khi: hub tạo (`owned`), mọi task dùng nó đã xong/huỷ, không run sống nào trong đó, worktree sạch, nhánh đã merge
+    vào base (hoặc có trên upstream/remote)."""
+    from .workspace import _head, _status_paths, branch_merged, find_dir_links, git_root, worktree_paths
+
+    p = e["path"]
+    it = {k: e.get(k) for k in ("path", "repo", "branch", "base", "owned", "branch_created", "legacy", "deps")}
+    it["tasks"] = e["tasks"][-10:]
+    it["exists"] = os.path.isdir(p) and not os.path.islink(p)
+    it["busy"] = [x for x in live if _same_path(x, p) or os.path.normcase(x).startswith(os.path.normcase(p) + os.sep)][:5]
+    it["dirty"] = []
+    it["merged"] = None
+    reason = None
+    root = git_root(e["repo"]) if e.get("repo") and os.path.isdir(e["repo"]) else None
+    if it["exists"]:
+        if root is None or not any(_same_path(os.path.realpath(x), os.path.realpath(p)) for x in worktree_paths(root)):
+            reason = "không còn là worktree git của repo"
+        else:
+            if it["legacy"] or not it["branch"]:
+                it["branch"] = it["branch"] or _head(p)[1]
+                it["base"] = it["base"] or _head(root)[1]
+            try:
+                links = {os.path.relpath(x, p).replace(os.sep, "/") for x in find_dir_links(p)}
+                it["dirty"] = [x for x in _status_paths(p) if x.rstrip("/") not in links][:20]
+            except Exception as ex:  # noqa: BLE001 — git status lỗi → coi như bẩn
+                it["dirty"] = [f"(git status lỗi: {ex})"[:200]]
+            it["merged"] = branch_merged(root, it["branch"], it["base"]) if it["branch"] else None
+    if reason is None:
+        if not it["exists"]:
+            reason = "thư mục không còn"
+        elif not it["owned"]:
+            reason = "worktree không do hub tạo"
+        elif e["open"]:
+            reason = "task còn mở: " + ", ".join(t["id"] for t in e["tasks"] if t["status"] not in TASK_FINISHED)
+        elif it["busy"]:
+            reason = "đang có run dùng"
+        elif it["dirty"]:
+            reason = f"còn {len(it['dirty'])} thay đổi chưa commit"
+        elif it["merged"] is None:
+            reason = f"nhánh {it['branch']} chưa merge vào {it['base']} (và chưa có trên remote)"
+    it["cleanable"] = reason is None
+    it["reason"] = reason
+    return it
+
+
+def worktree_list(conn: sqlite3.Connection) -> dict[str, Any]:
+    live = _live_run_paths(conn) if "runs" in _tables(conn) else []
+    items = [worktree_status(e, live) for e in worktree_entries(conn)] if "tasks" in _tables(conn) else []
+    items.sort(key=lambda x: (not x["cleanable"], x["path"]))
+    return {"items": items[:MAX_ITEMS], "truncated": len(items) > MAX_ITEMS, "cleanable": sum(1 for x in items if x["cleanable"])}
+
+
+def worktree_clean(conn: sqlite3.Connection, paths: list[str] | None = None, *, dry_run: bool = False) -> dict[str, Any]:
+    """Gỡ worktree dọn được (`workspace.remove_worktree`: gỡ liên kết node_modules trước, `git worktree remove` không --force, `git
+    branch -d` nhánh hub tạo đã merge). Tính LẠI trạng thái ngay lúc dọn; `paths` (tuỳ chọn) giới hạn vào các worktree người đã chọn."""
+    from .errors import HubError
+    from .workspace import remove_worktree
+
+    cur = worktree_list(conn)["items"]
+    want = [os.path.normpath(os.path.expanduser(str(x))) for x in paths or [] if str(x).strip()]
+    removed: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for w in want:
+        if not any(_same_path(w, it["path"]) for it in cur):
+            skipped.append({"path": w, "reason": "không phải worktree của task nào"})
+    for it in cur:
+        if want and not any(_same_path(w, it["path"]) for w in want):
+            continue
+        if not it["cleanable"]:
+            if want:
+                skipped.append({"path": it["path"], "reason": it["reason"]})
+            continue
+        meta = {k: it.get(k) for k in ("repo", "path", "branch", "base", "branch_created")}
+        try:
+            res = remove_worktree(meta, dry_run=dry_run)
+        except HubError as e:
+            skipped.append({"path": it["path"], "reason": e.message[:300]})
+            continue
+        removed.append({"path": it["path"], "branch": it.get("branch"), "tasks": [t["id"] for t in it["tasks"]],
+                        "branch_deleted": res.get("branch_deleted"), "links": res.get("links"), "actions": res.get("actions")})
+    log.info("dọn worktree%s: %d gỡ, %d bỏ qua", " (thử)" if dry_run else "", len(removed), len(skipped))
+    return {"removed": removed, "skipped": skipped, "dry_run": dry_run, "count": len(removed)}
+
+
+def register_worktree_rpc(daemon: "Daemon") -> None:
+    """`worktree.list {}` (HUMAN_ONLY, chỉ đọc) và `worktree.clean {paths?, dry_run?}` (HUMAN_ONLY, MUTATING, tự audit)."""
+    import asyncio
+
+    from .mcp_server.rpc import wrap_with_audit
+
+    hub = daemon.hub
+
+    def _ro(fn: Any) -> Any:
+        # git chậm → luồng phụ; đọc DB qua kết nối chỉ đọc riêng (an toàn ngoài luồng chính). Dọn chỉ chạy git, không ghi DB.
+        c = sqlite3.connect(f"file:{hub.paths.db}?mode=ro", uri=True, timeout=5)
+        try:
+            return fn(c)
+        finally:
+            c.close()
+
+    async def _list(p: dict[str, Any]) -> dict[str, Any]:
+        return await asyncio.to_thread(_ro, worktree_list)
+
+    async def _clean(p: dict[str, Any]) -> dict[str, Any]:
+        paths = p.get("paths")
+        if paths is not None and (not isinstance(paths, list) or not all(isinstance(x, str) for x in paths)):
+            from .errors import HubError
+
+            raise HubError("paths phải là danh sách đường dẫn worktree")
+        dry = bool(p.get("dry_run"))
+        return await asyncio.to_thread(_ro, lambda c: worktree_clean(c, paths, dry_run=dry))
+
+    daemon.methods["worktree.list"] = _list
+    daemon.methods["worktree.clean"] = wrap_with_audit(hub, "worktree.clean", _clean)
+
+
 def register_rpc(daemon: "Daemon") -> None:
     """`hub.housekeeping {older_than_days?, refresh?}` (HUMAN_ONLY, chỉ đọc; cache 10 phút — web thẻ Sức khoẻ) và
     `hub.cleanup {paths: [rel…], older_than_days?}` (HUMAN_ONLY, tự audit; chỉ xoá thư mục còn là ứng viên lúc gọi)."""
@@ -448,6 +607,8 @@ def register_rpc(daemon: "Daemon") -> None:
 
     daemon.methods["hub.housekeeping"] = _report
     daemon.methods["hub.cleanup"] = wrap_with_audit(hub, "hub.cleanup", _cleanup)
+    register_worktree_rpc(daemon)
 
 
-__all__ = ["disk_usage", "scan", "report", "cleanup", "human", "register_rpc", "LABELS"]
+__all__ = ["disk_usage", "scan", "report", "cleanup", "human", "register_rpc", "LABELS", "worktree_entries", "worktree_status",
+           "worktree_list", "worktree_clean", "register_worktree_rpc", "MUTATING_WORKTREE"]
