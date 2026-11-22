@@ -168,6 +168,10 @@ EVENT_LEVELS: dict[str, str] = {
     "workspace.lock_acquired": "debug",
     "workspace.lock_released": "summary",
     "workspace.lock_blocked": "summary",
+    # workspace-parallel E (guard.repo_lock: files): lease theo file — payload {key (repo), path, reason, tool, session_id, holder_*}
+    "workspace.lease_denied": "summary",
+    "workspace.lease_acquired": "debug",
+    "workspace.lease_released": "debug",
     "ratelimit.throttle": "summary",
     "ratelimit.gate": "summary",  # cổng dispatcher: open=false (hạn mức rejected tới `until`) / open=true (đã reset)
     "agent.cloned": "summary",
