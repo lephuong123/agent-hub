@@ -8,6 +8,8 @@ Chữ ký:
   last_tool, last_tool_preview, last_tool_at, run_tokens, run_cost_usd, tokens_today, cost_today_usd,
   pending_approvals, waiting_human, last_run_id, last_run_status, session_id}`.
   `status` hiển thị ∈ working | waiting | waiting_human | idle | error | paused.
+- `tui.agent_state {id}` → `{agent: row|None}`: một dòng như trên, chỉ truy vấn của agent đó (trang Điều phối). Chỉ đọc, ai gọi cũng được
+  như `tui.snapshot` (không nhạy cảm, không phụ thuộc người gọi).
 - `run.steer {id (run hoặc agent), text, by?, channel?}` → `{run_id, sent, seq, steer_count}` (FR-RT-06).
 - `template.list {}` / `template.get {name}`; `agent.create_from_template {id, template, overrides?, soul?}` (FR-AG-07).
 - `run.takeover {id}` → argv/cwd để chạy `claude --resume` tương tác; `run.takeover_record {id, exit_code?, started_at?,
@@ -95,6 +97,92 @@ def _age_s(ts: str | None, now: float) -> float | None:
         return None
 
 
+LEARN_COUNT_SQL = "SELECT COUNT(*) FROM events WHERE type >= 'learning.' AND type < 'learning/' AND ts >= ?"
+"""Đếm event `learning.*` từ một mốc. Dùng KHOẢNG trên `type` ('/' là ký tự ngay sau '.') thay cho `LIKE 'learning.%'` để dùng được index
+`events_type_ts(type, ts)` — LIKE không dùng index (quét ~157 ms trên DB thật)."""
+
+
+def _agent_row(hub: "Hub", a: dict[str, Any], *, now: float, pend: list[dict[str, Any]], wh: dict[str, Any] | None, active: list[str],
+               team: str | None, tokens_today: int, cost_today: float, sbx: dict[str, Any], trust: Any) -> dict[str, Any]:
+    """Một dòng agent của `tui.snapshot` / `tui.agent_state` (cùng định dạng)."""
+    store = hub.store
+    aid = a["id"]
+    live = hub.aggregator.agents.get(aid)
+    run_id = a.get("current_run_id") or (active or [None])[0]
+    run = store.get_run(run_id) if run_id else None
+    last = run or (store.list_runs(agent_id=aid, limit=1) or [None])[0]
+    raw = a["status"]
+    if raw == "paused":
+        disp = "paused"
+    elif wh is not None or any(x["status"] == "waiting_human" for x in pend):
+        disp = "waiting_human"
+    elif pend:
+        disp = "waiting"
+    else:
+        disp = raw if raw in ("working", "idle", "error", "waiting") else ("idle" if raw != "disabled" else "paused")
+    if disp in ("idle", "error") and active:
+        disp = "working"
+    task_src = run or wh
+    task = None
+    if task_src:
+        task = _task_title(hub, task_src.get("task_id")) or _first_line(task_src.get("prompt"))
+    is_running = bool(run and run["status"] == "running")
+    run_tokens = int(live.run_tokens) if (live and is_running) else 0
+    run_cost = float(live.run_cost_est) if (live and is_running) else 0.0
+    return {
+        "id": aid,
+        "name": a.get("name") or aid,
+        "sandbox_localhost": bool(sbx.get("allow_localhost")),
+        "sandbox_domains": list(sbx.get("allow_domains") or []),
+        "trust": trust,
+        "role": a.get("role") or "",
+        "model": a.get("model"),
+        "team": team,
+        "status": disp,
+        "raw_status": raw,
+        "paused": raw == "paused",
+        "current_run_id": run["id"] if run and run["status"] in ("running", "queued") else None,
+        "run_status": run["status"] if run else None,
+        "task": task,
+        "run_started_at": run.get("started_at") if is_running else None,
+        "last_tool": live.last_tool if live else None,
+        "last_tool_preview": live.last_tool_preview if live else None,
+        "last_tool_at": iso(live.last_tool_at) if live and live.last_tool_at else None,
+        "run_tokens": run_tokens,
+        "run_cost_usd": round(run_cost, 6),
+        "tokens_today": tokens_today + run_tokens,
+        "cost_today_usd": round(cost_today, 6),
+        "pending_approvals": [x["id"] for x in pend],
+        "waiting_human": wh["id"] if wh else None,
+        "last_run_id": (last or {}).get("id") or (wh or {}).get("id"),
+        "last_run_status": (last or {}).get("status"),
+        "session_id": (live.session_id if live else None) or (last or {}).get("session_id"),
+    }
+
+
+def agent_state(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
+    """`tui.agent_state {id}` → `{agent: row|None}`: MỘT dòng agent như trong `tui.snapshot` nhưng chỉ truy vấn của agent đó (trang Điều phối
+    chỉ cần dòng của điều phối viên — không dựng cả ảnh chụp mọi agent). Agent không có/đã lưu trữ → `agent: None`."""
+    aid = str(_req(p or {}, "id"))
+    store = hub.store
+    a = store.get_agent(aid)
+    if a is None or a.get("archived_at"):
+        return {"agent": None}
+    now = time.time()
+    pend = hub.guard.annotate_always(hub.approvals.list("pending", agent_id=aid, limit=500))
+    for x in pend:
+        x["wait_s"] = round(_age_s(x.get("opened_at"), now) or 0.0, 1)
+    whs = store.list_runs(agent_id=aid, status="waiting_human", limit=1)
+    active = [ar.run_id for ar in hub.runs.active.values() if ar.agent_id == aid]
+    tok, cost = 0, 0.0
+    for r in store.conn.execute("SELECT usage, cost_usd FROM runs WHERE agent_id=? AND ended_at >= ?", (aid, _today_start_utc())):
+        tok += _tokens(r["usage"])
+        cost += float(r["cost_usd"] or 0.0)
+    row = _agent_row(hub, a, now=now, pend=pend, wh=whs[0] if whs else None, active=active, team=_teams_by_agent(hub).get(aid),
+                     tokens_today=tok, cost_today=cost, sbx=hub.guard.sandbox_overrides().get(aid) or {}, trust=hub.guard.trust_all().get(aid))
+    return {"agent": row}
+
+
 def snapshot(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
     now = time.time()
     store = hub.store
@@ -124,62 +212,11 @@ def snapshot(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
     trusts = hub.guard.trust_all()  # nhãn ⚠TRUST: agent chạy không rào chắn (guard/service.trust_set)
     for a in agents:
         aid = a["id"]
-        live = hub.aggregator.agents.get(aid)
-        run_id = a.get("current_run_id") or (active_by_agent.get(aid) or [None])[0]
-        run = store.get_run(run_id) if run_id else None
-        last = run or (store.list_runs(agent_id=aid, limit=1) or [None])[0]
-        pend = appr_by_agent.get(aid, [])
-        wh = waiting_runs.get(aid)
-        raw = a["status"]
-        if raw == "paused":
-            disp = "paused"
-        elif wh is not None or any(x["status"] == "waiting_human" for x in pend):
-            disp = "waiting_human"
-        elif pend:
-            disp = "waiting"
-        else:
-            disp = raw if raw in ("working", "idle", "error", "waiting") else ("idle" if raw != "disabled" else "paused")
-        if disp in ("idle", "error") and active_by_agent.get(aid):
-            disp = "working"
-        task_src = run or wh
-        task = None
-        if task_src:
-            task = _task_title(hub, task_src.get("task_id")) or _first_line(task_src.get("prompt"))
-        is_running = bool(run and run["status"] == "running")
-        run_tokens = int(live.run_tokens) if (live and is_running) else 0
-        run_cost = float(live.run_cost_est) if (live and is_running) else 0.0
-        running_tokens += run_tokens
-        rows.append(
-            {
-                "id": aid,
-                "name": a.get("name") or aid,
-                "sandbox_localhost": bool((sbx.get(aid) or {}).get("allow_localhost")),
-                "sandbox_domains": list((sbx.get(aid) or {}).get("allow_domains") or []),
-                "trust": trusts.get(aid),
-                "role": a.get("role") or "",
-                "model": a.get("model"),
-                "team": teams.get(aid),
-                "status": disp,
-                "raw_status": raw,
-                "paused": raw == "paused",
-                "current_run_id": run["id"] if run and run["status"] in ("running", "queued") else None,
-                "run_status": run["status"] if run else None,
-                "task": task,
-                "run_started_at": run.get("started_at") if is_running else None,
-                "last_tool": live.last_tool if live else None,
-                "last_tool_preview": live.last_tool_preview if live else None,
-                "last_tool_at": iso(live.last_tool_at) if live and live.last_tool_at else None,
-                "run_tokens": run_tokens,
-                "run_cost_usd": round(run_cost, 6),
-                "tokens_today": tok_today.get(aid, 0) + run_tokens,
-                "cost_today_usd": round(cost_today.get(aid, 0.0), 6),
-                "pending_approvals": [x["id"] for x in pend],
-                "waiting_human": wh["id"] if wh else None,
-                "last_run_id": (last or {}).get("id") or (wh or {}).get("id"),
-                "last_run_status": (last or {}).get("status"),
-                "session_id": (live.session_id if live else None) or (last or {}).get("session_id"),
-            }
-        )
+        row = _agent_row(hub, a, now=now, pend=appr_by_agent.get(aid, []), wh=waiting_runs.get(aid), active=active_by_agent.get(aid) or [],
+                         team=teams.get(aid), tokens_today=tok_today.get(aid, 0), cost_today=cost_today.get(aid, 0.0),
+                         sbx=sbx.get(aid) or {}, trust=trusts.get(aid))
+        running_tokens += row["run_tokens"]
+        rows.append(row)
 
     st = hub.status()
     cli = store.conn.execute("SELECT cli_version FROM runs WHERE cli_version IS NOT NULL ORDER BY queued_at DESC LIMIT 1").fetchone()
@@ -193,7 +230,7 @@ def snapshot(hub: "Hub", p: dict[str, Any] | None = None) -> dict[str, Any]:
     unknown = store.state_get("cli_unknown_rate") or {}
     longest = max((x["wait_s"] for x in approvals), default=0.0)
     learn_today = store.conn.execute(
-        "SELECT COUNT(*) FROM events WHERE ts >= ? AND type LIKE 'learning.%'", (since,)
+        LEARN_COUNT_SQL, (since,)
     ).fetchone()[0]
     header = {
         "agents": len(agents),
@@ -242,6 +279,7 @@ def register_rpc(d: "Daemon") -> None:
     d.methods.update(
         {
             "tui.snapshot": lambda p: snapshot(hub, p),
+            "tui.agent_state": lambda p: agent_state(hub, p),
             "run.steer": run_steer,
             "template.list": lambda p: templates.list_templates(),
             "template.get": lambda p: templates.load(str(_req(p, "name"))),

@@ -10,6 +10,9 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+- **Web/TUI bớt khựng khi hub có nhiều dữ liệu**: daemon chạy SQLite ngay trên vòng sự kiện, nên một truy vấn chậm làm đứng mọi RPC và luồng SSE (đổi tab, chữ chạy của trả lời khựng 0,2–3,7 s trên hub.db 1,5 GB). Thêm index cho bảng `runs` (migration v32), danh sách run không còn tải cột `diff` (patch chỉ đọc khi mở một run), chi phí hôm nay của `agent.list` gộp một truy vấn, đếm sự kiện học của `top` dùng index, trang Điều phối chỉ hỏi trạng thái của điều phối viên (RPC mới `tui.agent_state`). Đo trên bản sao DB thật: `run.list` 3,8 s → 5 ms, `hub.status` 55 → 3 ms.
+- **Trang Điều phối — "Hành động gần đây" đúng và theo luồng**: trước đây panel đọc 3.000 sự kiện CŨ NHẤT của điều phối viên (nên hiện việc từ cả tuần trước); nay đọc thẳng các thẻ hành động mới nhất, chỉ của luồng đang xem (Sảnh = hành động không gắn luồng). TUI `manager` cũng đọc thẻ hành động mới nhất.
+
 ---
 
 ## v0.2.29 — 2026-11-22
