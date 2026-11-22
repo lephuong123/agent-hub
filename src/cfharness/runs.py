@@ -927,8 +927,8 @@ class RunManager:
         """Có run ĐANG XẾP HÀNG (chưa khởi chạy) sẽ lấy khoá xung đột với `key` (một khoá hoặc danh sách) cho session khác không —
         dispatcher không submit thêm run ghi cùng repo (H-21: task thứ hai chờ `workspace_locked` mà không có run nào)."""
         keys = [k for k in ([key] if isinstance(key, str) or key is None else key) if k]
-        if not keys:
-            return False
+        if not keys or self.locks.default_mode() == "shared":
+            return False  # luồng E (`guard.repo_lock: files`): run giữ khoá CHIA SẺ — run xếp hàng không chặn nhau
         for rid in self.queue:
             r = self.store.get_run(rid)
             if r is None or r["status"] != "queued" or r.get("session_id") == session_id:
@@ -948,7 +948,9 @@ class RunManager:
         `TaskDispatcher._lock_block` (task → `workspace.task_lock_target`) và `TaskService._same_lock_tasks`. Khoá theo
         `WorkspaceLocks.keys_for`: cwd (kind `worktree` → thư mục worktree của `claude --worktree`, không khoá repo chính) + mỗi
         `extra_write_roots` (B4). `agent` None = không biết agent (chỉ xét workspace của run)."""
-        if not self.hub.config.get("guard.repo_lock"):
+        from .guard.locks import repo_lock_mode
+
+        if repo_lock_mode(self.hub.config) == "off":
             return None, []
         opts = run.get("run_opts") or {}
         if opts.get("read_only") or (agent is not None and _agent_read_only(agent)):
@@ -1200,7 +1202,9 @@ class RunManager:
 
         ar.diff_done = True
         try:
-            diff = await asyncio.to_thread(compute_diff, ar.checkpoint, self.checkpoint_dir(ar.run_id), max_file_bytes=int(self.hub.config.get("workspace.max_file_bytes")))
+            paths = self._lease_scope(ar)
+            diff = await asyncio.to_thread(compute_diff, ar.checkpoint, self.checkpoint_dir(ar.run_id), max_file_bytes=int(self.hub.config.get("workspace.max_file_bytes")),
+                                           paths=paths)
         except Exception as e:
             run_logger(log, ar.run_id, ar.agent_id).warning("diff run %s lỗi: %r", ar.run_id, e, exc_info=True)
             self.store.update_run(ar.run_id, {"diff": {"kind": "error", "error": repr(e)[:300]}})
@@ -1209,6 +1213,18 @@ class RunManager:
         ev = make_event("workspace.diff", ar.agent_id, {"kind": diff["kind"], "stat": diff.get("stat"), "files": [f"{f['status']}:{f['path']}" for f in diff.get("files", [])[:50]], "revertible": diff.get("revertible"), "commits_made": diff.get("commits_made")}, run_id=ar.run_id)
         ev.task_id, ev.team_id = ar.task_id, ar.team_id
         self.hub.publish(ev)
+
+    def _lease_scope(self, ar: ActiveRun) -> list[str] | None:
+        """B7 (luồng E): chế độ `guard.repo_lock: files` → diff của run chỉ gồm file session của run đã lease trong repo của checkpoint
+        (nhiều session cùng ghi checkout). None = chế độ repo (mọi thay đổi là của run)."""
+        from .guard.locks import norm_key
+
+        if self.locks.mode() != "files" or self.locks.leases is None or ar.checkpoint is None or ar.checkpoint.get("kind") != "git":
+            return None
+        run = self.store.get_run(ar.run_id) or {}
+        root = ar.checkpoint.get("root")
+        key = next((k for k in self.locks.list_shared() if root and norm_key(k) == norm_key(str(root))), None) or ar.lock_key or root
+        return self.locks.leases.paths_for(run.get("session_id"), str(key)) if key else []
 
     def _on_timeout(self, ar: ActiveRun) -> None:
         ar.timed_out = True
@@ -1795,7 +1811,11 @@ class RunManager:
         require_human("gỡ khoá workspace")
         if not key and not path:
             raise HubError("cần path hoặc key", code=-32602)
-        held = self.locks.list()
+        held = dict(self.locks.list())
+        for k, hs in self.locks.list_shared().items():  # luồng E: khoá chia sẻ — gỡ = gỡ mọi người giữ (+ lease của họ)
+            if k not in held and hs:
+                sid0, h0 = next(iter(hs.items()))
+                held[k] = {**h0, "session_id": sid0, "sessions": list(hs)}
         cand: list[str] = []
         if key:
             cand.append(str(key))
@@ -1812,10 +1832,11 @@ class RunManager:
         if hit is None:
             raise NotFound(f"không có khoá nào cho {key or path} (xem `cfharness workspace locks`)")
         h = held[hit]
-        sid = h.get("session_id")
+        sids = [x for x in (h.get("sessions") or [h.get("session_id")]) if x]
         busy = self.store.conn.execute(
-            "SELECT id, status FROM runs WHERE session_id=? AND status IN ('queued','running') ORDER BY queued_at DESC LIMIT 1", (sid,)
-        ).fetchone() if sid else None
+            f"SELECT id, status FROM runs WHERE session_id IN ({','.join('?' * len(sids))}) AND status IN ('queued','running') "
+            "ORDER BY queued_at DESC LIMIT 1", tuple(sids)
+        ).fetchone() if sids else None
         if busy is not None and not force:
             raise Conflict(f"khoá {hit} đang được run {busy[0]} ({busy[1]}) giữ — dừng run trước (`cfharness stop {busy[0]}`) "
                            "hoặc thêm --force (run vẫn chạy và có thể ghi tiếp)", data={"key": hit, "run_id": busy[0], "status": busy[1]})
@@ -1837,6 +1858,7 @@ class RunManager:
         from .guard.locks import norm_key
 
         mine = {norm_key(k) for k, h in held.items() if h.get("session_id") == sid}
+        mine |= {norm_key(k) for k, hs in self.locks.list_shared().items() if sid in hs}  # luồng E: khoá chia sẻ
         return [k for k in self.lock_keys(run, ag)[1] if norm_key(k) not in mine]
 
     def _day_exhausted(self, agent_id: str, team_id: str | None) -> bool:
