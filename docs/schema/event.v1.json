@@ -340,6 +340,9 @@
     "web.logout": "summary",
     "workspace.checkpoint": "debug",
     "workspace.diff": "summary",
+    "workspace.lock_acquired": "debug",
+    "workspace.lock_blocked": "summary",
+    "workspace.lock_released": "summary",
     "workstream.updated": "summary"
   },
   "x-not-persisted": [
