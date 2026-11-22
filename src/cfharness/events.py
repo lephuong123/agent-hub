@@ -164,6 +164,10 @@ EVENT_LEVELS: dict[str, str] = {
     "run.reverted": "summary",
     "workspace.checkpoint": "debug",
     "workspace.diff": "summary",
+    # workspace-parallel A: khoá repo — payload {key, session_id, run_id, reason}
+    "workspace.lock_acquired": "debug",
+    "workspace.lock_released": "summary",
+    "workspace.lock_blocked": "summary",
     "ratelimit.throttle": "summary",
     "ratelimit.gate": "summary",  # cổng dispatcher: open=false (hạn mức rejected tới `until`) / open=true (đã reset)
     "agent.cloned": "summary",

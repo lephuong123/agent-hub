@@ -90,6 +90,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "agent": {"create", "update", "edit", "rm", "remove", "delete", "purge", "restore", "clone", "import", "archive", "revert", "pause", "resume"},
     "trash": {"restore", "purge", "empty", "rm"},  # V2-N1
     "task": {"archive"},
+    "workspace": {"unlock"},  # RPC workspace.unlock ∈ HUMAN_ONLY (gỡ khoá repo của run khác)
     "learn": {"propose", "rollback", "retry", "refine", "policy", "pin", "unpin", "review-cancel", "review_cancel", "cancel"},
     "knowledge": {"pin", "unpin"},
     # skill manager của người (RPC knowledge.skill_* + knowledge.pin là HUMAN_ONLY) — `cfharness skill <verb>` (learning/skill_cli.py)

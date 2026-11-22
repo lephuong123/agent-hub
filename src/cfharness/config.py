@@ -95,6 +95,9 @@ DEFAULTS: dict[str, Any] = {
         "git_probe": True,
         # khoá ghi theo thư mục dir: (bản tối thiểu M1; FR-RT-12 đầy đủ ở M3)
         "repo_lock": True,
+        # run `waiting_human` giữ khoá repo tối đa ngần này giây (4 giờ) rồi nhả; resume sau đó xin lại khoá + kiểm file bị sửa
+        # (`resume_conflicts`). null = giữ tới khi có người quyết (như cũ)
+        "lock_waiting_ttl_s": 14400,
         # lớp tĩnh --disallowedTools cho mẫu luôn-phá-huỷ (CLI tự chặn nếu hook không chạy)
         "static_disallowed_tools": [
             "Bash(git push --force:*)",

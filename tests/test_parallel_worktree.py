@@ -62,6 +62,7 @@ def test_worktree_task_gets_own_lock_and_runs_in_parallel(hub, repo):
     assert not any("khoá repo" in w for w in c["warnings"]) and any("đã tạo worktree" in w for w in c["warnings"])
 
     key = hub.runs.locks.key_for(str(repo), "dir")
+    hub.runs.locks.is_active = lambda sid: True  # session giả "sess-a" không có run thật — B3 sẽ gỡ khoá của người giữ chết
     assert hub.runs.locks.try_acquire(key, "sess-a", "r_a")  # task A đang chạy, giữ khoá repo
     d = hub.dispatcher
     assert d._lock_block(hub.tasks.row(b_old["id"]), "c2", "sess-b", False) == "workspace_locked"

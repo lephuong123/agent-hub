@@ -8,7 +8,8 @@
 2. Run trong danh sách `pending_resume` (daemon dừng có kiểm soát khi run đang chạy) → như trên.
 3. Tự resume (`recovery.auto_resume`, trừ ESTOP/agent paused/agent đã xoá, chuỗi đã hết `recovery.auto_resume_max_attempts`): run mới `--resume <session>` cùng cwd với
    lời nhắc tiếp tục chuẩn; run chưa kịp có session (chưa start) → chạy lại prompt gốc.
-4. Run `queued` → xếp lại hàng đợi theo thứ tự cũ.
+4. Run `queued` → xếp lại hàng đợi theo thứ tự cũ. Sau đó gỡ khoá repo của session không còn run sống (run không được
+   resume — B3 `workspace-parallel`), event `workspace.lock_released` reason `no_live_run`.
 5. `eval_runs` còn `running` (gate chạy trong daemon, đã chết theo) → `deferred_no_eval` + event `eval.completed`.
 
 Retention (hardening H-09, NFR-28/Q-10/Q-17) — `purge_retention(hub, now)`, gọi từ `purge_expired` (vòng nền ~30 s của
@@ -169,9 +170,17 @@ def reconcile(hub: "Hub") -> dict[str, Any]:
                 nr = resume_interrupted(hub, r)
                 if nr:
                     resumed.append(nr["id"])
+        # B3: run không được resume (auto_resume tắt, hết trần, resume_conflicts, agent pause, ESTOP, freeze…) → session của nó
+        # không còn run sống nhưng khoá repo vẫn nằm trong hub_state (sống qua restart) → gỡ, không thì repo bị khoá mãi.
+        # Chỉ làm khi có loop (đã quyết resume xong); khởi động đồng bộ để lần có loop quyết.
+        released_locks = runs.locks.sweep()
         runs.tick()
+    else:
+        released_locks = []
     out = {"interrupted": interrupted, "orphans_killed": killed, "waiting_human": waiting, "resumed": resumed, "requeued": requeued, "evals_closed": evals_closed}
-    if interrupted or resumed or requeued or waiting or evals_closed:
+    if released_locks:
+        out["locks_released"] = released_locks
+    if interrupted or resumed or requeued or waiting or evals_closed or released_locks:
         hub.publish(make_event("recovery.reconciled", None, out))
         log.info("khôi phục: %s", out)
     return out

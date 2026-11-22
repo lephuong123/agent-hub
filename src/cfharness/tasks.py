@@ -193,11 +193,14 @@ class TaskService:
     def _same_lock_tasks(self, path: str, exclude: set[str]) -> list[str]:
         """Task đang mở dùng cùng khoá repo với `path` (dispatcher không cho chạy cùng lúc — `workspace_locked`). Bỏ task gốc
         (`root`, không tự chạy) và `exclude` (cha/gốc của task mới: đằng nào cũng chạy sau chúng)."""
-        locks = self.hub.runs.locks
-        key = locks.key_for(path, "dir")
-        if key is None or not self.hub.config.get("guard.repo_lock"):
+        from .workspace import task_lock_target
+
+        runs = self.hub.runs
+        locks = runs.locks
+        mine = runs.lock_keys({"cwd": path, "run_opts": {"workspace_kind": "dir"}}, None)[1]  # B1: cùng hàm tính khoá với run
+        if not mine:
             return []
-        keys: dict[str, str | None] = {}
+        cache: dict[str, list[str]] = {}
         out = []
         for r in self.conn.execute(f"SELECT id, workspace FROM tasks WHERE kind != 'root' AND status IN ({','.join('?' * len(OPEN))}) "
                                    "ORDER BY created_at DESC LIMIT 200", OPEN):
@@ -207,12 +210,12 @@ class TaskService:
                 ws = json.loads(r[1]) if isinstance(r[1], str) else (r[1] or {})
             except ValueError:
                 continue
-            wp = (ws or {}).get("path") if (ws or {}).get("kind") in ("dir", "filehub") else None
-            if not wp:
+            if not isinstance(ws, dict) or not (ws.get("path") or ws.get("ref") or ws.get("extra_write_roots")):
                 continue
-            if wp not in keys:
-                keys[wp] = locks.key_for(wp, "dir")
-            if keys[wp] == key:
+            sig = json.dumps([ws, r[0] if ws.get("kind") == "worktree" else None], sort_keys=True, default=str)
+            if sig not in cache:
+                cache[sig] = runs.lock_keys(task_lock_target({"id": r[0], "workspace": ws}), None)[1]
+            if any(locks.conflicts(a, b) for a in mine for b in cache[sig]):
                 out.append(r[0])
         return out
 

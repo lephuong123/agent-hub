@@ -211,6 +211,9 @@ def build_argv(spec: RunSpec,claude_cfg: dict[str, Any], cli_version: str | None
             raise ArgvError("bypassPermissions bị từ chối: agent phải khai báo rõ tool_policy.allow_bypass=true (NFR-15)")
         if spec.workspace_kind not in ("scratch", "worktree"):
             raise ArgvError("bypassPermissions bị từ chối: chỉ cho phép trên workspace scratch/worktree, không trên repo thật (NFR-15)")
+        if spec.workspace_kind == "worktree" and spec.cwd_main_checkout:
+            raise ArgvError("bypassPermissions bị từ chối: workspace worktree nhưng cwd là checkout chính của repo "
+                            "(claude --worktree vẫn ghi được repo chính) — dùng worktree do hub tạo (task `worktree`) (NFR-15)")
     if pm:
         argv += ["--permission-mode", pm]
     if tp.get("permission_prompts"):

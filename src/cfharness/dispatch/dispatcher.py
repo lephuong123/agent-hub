@@ -557,16 +557,12 @@ class TaskDispatcher:
     def _lock_block(self, t: dict[str, Any], agent_id: str, session_id: str | None, read_only: bool) -> str | None:
         if read_only or not self.hub.config.get("guard.repo_lock"):
             return None
-        from ..runs import _agent_read_only
+        from ..workspace import task_lock_target
 
-        ag = self.store.get_agent(agent_id) or {}
-        if ag and _agent_read_only(ag):
-            return None  # FR-RT-12: agent chỉ đọc không lấy khoá (giống RunManager._lock_key)
-        path, kind = self._workspace(t)
-        if path is None:
-            path, kind = ag.get("workspace_default"), "dir"
-        key = self.hub.runs.locks.key_for(path, kind) if path else None
-        if key and (self.hub.runs.locks.blocked_for(key, session_id) is not None or self.hub.runs.lock_pending(key, session_id)):
+        ag = self.store.get_agent(agent_id)
+        # B1: CÙNG hàm tính khoá với run (RunManager.lock_keys) — agent chỉ đọc, kind worktree, extra_write_roots, workspace_default
+        keys = self.hub.runs.lock_keys(task_lock_target(t), ag)[1]
+        if keys and (self.hub.runs.locks.blockers(keys, session_id) or self.hub.runs.lock_pending(keys, session_id)):
             return "workspace_locked"
         return None
 

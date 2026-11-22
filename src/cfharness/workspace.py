@@ -3,7 +3,9 @@
 - **Khoá** (`WorkspaceLocks`, thay bản tối thiểu `guard/locks.py` của M1-B, giữ nguyên giao diện): khoá = GỐC REPO git
   (`git rev-parse --show-toplevel`) chứa cwd; thư mục không phải git → realpath của cwd. Gắn với SESSION nên run
   `waiting_human` giữ khoá qua lần dừng tiến trình, run resume kế thừa (Q-21). Run chỉ đọc không lấy khoá
-  (`RunManager._lock_key`).
+  (`RunManager.lock_keys`). Luồng A workspace song song: một hàm tính khoá (`WorkspaceLocks.keys_for`) cho run lẫn task
+  (`task_lock_target`); kind `worktree` → thư mục worktree của `claude --worktree`; run giữ thêm khoá mỗi `extra_write_roots`;
+  khoá của session không còn run sống / `waiting_human` quá `guard.lock_waiting_ttl_s` tự gỡ; thư mục không phải git khoá cả cây con.
 - **Checkpoint** (`take_checkpoint`): repo git → `HEAD`, nhánh, danh sách file chưa commit (kể cả untracked) + bản sao
   nội dung của chúng (để phân biệt thay đổi của người với của run). KHÔNG commit, KHÔNG stash, KHÔNG đổi gì trong repo.
   Thư mục thường → danh sách file (size, mtime).
@@ -281,20 +283,120 @@ class BlobStore:
 
 
 # ============================================================================ khoá
+LIVE_RUN_STATUSES = ("queued", "running", "waiting_human")
+
+
+def claude_worktree_dir(repo: str, name: str) -> str:
+    """Thư mục mà `claude --worktree <name>` tạo cho repo (đã kiểm trong bản CLI 2.1.3xx: `<gốc repo>/.claude/worktrees/<name>`).
+    realpath — có thể chưa tồn tại (CLI tạo lúc run bắt đầu)."""
+    root = git_root(repo) or os.path.realpath(os.path.expanduser(str(repo)))
+    return os.path.realpath(os.path.join(root, ".claude", "worktrees", str(name)))
+
+
+def is_main_checkout(path: str | Path) -> bool:
+    """`path` nằm trong checkout CHÍNH của repo (`.git` ở gốc là thư mục), không phải worktree liên kết (`.git` là file)."""
+    root = git_root(path)
+    return root is not None and os.path.isdir(os.path.join(root, ".git"))
+
+
+def task_lock_target(t: dict[str, Any]) -> dict[str, Any]:
+    """Task → dạng "run" tối thiểu ({cwd, run_opts}) để tính khoá bằng CÙNG hàm với run (`RunManager.lock_keys`, B1). Ánh xạ
+    như `TaskDispatcher._workspace` + `_submit_claimed`: filehub → ref (kind dir), dir/worktree → path, worktree → tên
+    (`workspace.name` hoặc id task), `extra_write_roots` (≤ 5) cho dir/worktree/scratch."""
+    ws = t.get("workspace") or {}
+    kind = ws.get("kind") or "scratch"
+    opts: dict[str, Any] = {"workspace_kind": kind}
+    if kind == "filehub":
+        cwd, opts["workspace_kind"] = (ws.get("ref") or ws.get("path")), "dir"
+    else:
+        cwd = ws.get("path") if kind in ("dir", "worktree") else None
+    if kind == "worktree":
+        opts["worktree"] = ws.get("name") or t.get("id")
+    extra = ws.get("extra_write_roots") or []
+    if extra and kind in ("dir", "worktree", "scratch"):
+        opts["extra_write_roots"] = [str(x) for x in extra][:5]
+    return {"cwd": cwd, "run_opts": opts, "task_id": t.get("id")}
+
+
 class WorkspaceLocks(RepoLocks):
-    """Khoá ghi theo repo (FR-RT-12). Giao diện của `RepoLocks` (M1-B) giữ nguyên; chỉ đổi cách tính khoá."""
+    """Khoá ghi theo repo (FR-RT-12). Giao diện của `RepoLocks` (M1-B) giữ nguyên; đổi cách tính khoá + biết run sống (B3):
+    session không còn run `queued|running|waiting_human` → khoá bị gỡ; run `waiting_human` quá `guard.lock_waiting_ttl_s`
+    (null = tắt) cũng mất khoá (resume sau đó xin lại khoá + kiểm `resume_conflicts`)."""
 
     def __init__(self, store: Any, hub: Any = None) -> None:
         super().__init__(store)
         self.hub = hub
         if hub is not None:  # thư mục chung (filehub, cổng): khoá = GỐC thư mục chung trên server, kể cả `filehub:<tên>/<con>`
             self.key_for = self._key_for_hub  # type: ignore[method-assign]
+            self.is_active = self._session_live
+            self.on_event = self._publish
 
     @staticmethod
     def key_for(cwd: str | None, workspace_kind: str) -> str | None:
         if not cwd or workspace_kind != "dir":
             return None
         return git_root(cwd) or os.path.realpath(os.path.expanduser(cwd))
+
+    def keys_for(self, cwd: str | None, kind: str, *, worktree: str | None = None,
+                 extra_write_roots: list[str] | tuple[str, ...] | None = None) -> list[str]:
+        """HÀM DUY NHẤT tính khoá của một workspace (B1/B4): [khoá cwd, khoá mỗi extra_write_roots] (bỏ trùng, khoá cwd đứng đầu
+        nếu có). Kind `worktree` (đường cũ: cwd = repo, `claude --worktree <tên>`) → khoá = thư mục worktree của CLI, KHÔNG khoá
+        repo chính; thiếu tên (CLI tự đặt tên ngẫu nhiên) → không khoá cwd. `scratch` → chỉ khoá extra_write_roots."""
+        keys: list[str] = []
+        if cwd:
+            if kind == "worktree":
+                if worktree:
+                    keys.append(claude_worktree_dir(str(cwd), str(worktree)))
+            elif kind in ("dir", "filehub"):
+                k = self.key_for(str(cwd), "dir")
+                if k:
+                    keys.append(k)
+        for x in extra_write_roots or ():
+            k = self.key_for(str(x), "dir") if x else None
+            if k:
+                keys.append(k)
+        return list(dict.fromkeys(keys))
+
+    def _session_live(self, session_id: str) -> bool:
+        return self._session_reason(session_id) is None
+
+    def _release_reason(self, session_id: str | None, entry: dict[str, Any]) -> str | None:
+        if self.is_active != self._session_live:  # is_active được tiêm thay (test/tuỳ biến) → theo nó
+            return super()._release_reason(session_id, entry)
+        return self._session_reason(session_id)
+
+    def _session_reason(self, session_id: str | None) -> str | None:
+        if not session_id or self.hub is None:
+            return None
+        rows = self.store.conn.execute(
+            f"SELECT status, ended_at, started_at, queued_at FROM runs WHERE session_id=? AND status IN ({','.join('?' * len(LIVE_RUN_STATUSES))})",
+            (session_id, *LIVE_RUN_STATUSES)).fetchall()
+        if not rows:
+            return "no_live_run"
+        if any(r[0] != "waiting_human" for r in rows):
+            return None
+        try:
+            ttl = self.hub.config.get("guard.lock_waiting_ttl_s")
+        except KeyError:
+            ttl = None
+        if ttl in (None, "", 0, False):
+            return None
+        now = time.time()
+        for r in rows:
+            ts = r[1] or r[2] or r[3]
+            if not ts or now - _ts(ts) < float(ttl):
+                return None
+        return "waiting_ttl"
+
+    def _publish(self, etype: str, payload: dict[str, Any]) -> None:
+        from .events import make_event
+
+        rid = payload.get("run_id")
+        run = self.store.get_run(rid) if rid else None
+        ev = make_event(etype, (run or {}).get("agent_id"), payload, run_id=rid, session_id=payload.get("session_id"))
+        if run:
+            ev.task_id, ev.team_id = run.get("task_id"), run.get("team_id")
+        self.hub.publish(ev)
 
     def _key_for_hub(self, cwd: str | None, workspace_kind: str) -> str | None:
         if cwd and str(cwd).startswith("filehub:"):  # workspace_default của agent dạng filehub:<tên>[/<con>]
@@ -304,6 +406,15 @@ class WorkspaceLocks(RepoLocks):
                 return None
             return str(lt["key"]) if lt is not None and workspace_kind == "dir" else None  # khoá = gốc thư mục chung trên server
         return WorkspaceLocks.key_for(cwd, workspace_kind)
+
+
+def _ts(iso_ts: str) -> float:
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(str(iso_ts).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return time.time()
 
 
 # ============================================================================ checkpoint / diff
