@@ -769,6 +769,9 @@ DEFAULTS: dict[str, Any] = {
         "checkpoint": True,  # FR-RT-12: checkpoint + diff cho run ghi vào workspace dir
         "max_file_bytes": 5_000_000,  # file lớn hơn: chỉ lưu hash (không revert được)
         "max_files": 20_000,
+        # Luồng B (docs/dev-notes/workspace-parallel.md): phụ thuộc node của worktree hub tạo — link (package.json + lockfile giống hệt repo
+        # chính → liên kết node_modules của repo chính), install (agent tự `npm ci`), none (không làm gì)
+        "deps": "link",
     },
     "bus": {
         "ring_events": 2000,  # FR-OB-01 [ĐỀ XUẤT]
@@ -1083,6 +1086,8 @@ def validate_setting(key: str, value: Any) -> None:
         from .confine import validate_setting as _validate_confine
 
         _validate_confine(key, value)
+    if key == "workspace.deps" and value not in ("link", "install", "none"):
+        raise ValueError("workspace.deps chỉ nhận 'link', 'install' hoặc 'none'")
     if key == "guard.trust_new_agents" and value not in ("off", "full"):
         raise ValueError("guard.trust_new_agents chỉ nhận 'off' hoặc 'full'")
     if key == "notify.reminder_max_count":

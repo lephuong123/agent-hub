@@ -830,11 +830,14 @@ class ManagerPermissions:
                 if why:
                     return why
             wt = t.get("worktree") if isinstance(t.get("worktree"), dict) else {}
-            for k in ("repo", "path"):
-                if wt.get(k):
-                    why = self.check_path(wt[k], f"worktree.{k} của task", agent_id=str(t.get("assignee") or "") or None)
-                    if why:
-                        return why
+            # `workspace.worktree` = metadata worktree (task kế thừa workspace của task khác): repo/path của nó cũng phải hợp lệ
+            meta = ws.get("worktree") if isinstance(ws.get("worktree"), dict) else {}
+            for src, label in ((wt, "worktree"), (meta, "workspace.worktree")):
+                for k in ("repo", "path"):
+                    if src.get(k):
+                        why = self.check_path(src[k], f"{label}.{k} của task", agent_id=str(t.get("assignee") or "") or None)
+                        if why:
+                            return why
             return (self.check_path(t.get("workspace"), "workspace của task", agent_id=str(t.get("assignee") or "") or None)
                     or self.check_run_budget(t))
         if method == "task.reassign":

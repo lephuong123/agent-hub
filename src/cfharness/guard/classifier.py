@@ -131,6 +131,8 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     # Xuất/nhập toàn bộ hub (hub_transfer.py): gói chứa toàn bộ dữ liệu hub; nhập ghi đè hub.db/tri thức; `hub unfreeze` gỡ đóng băng
     # chuyển nhà (hub_freeze.py); `hub doctor` lộ đường dẫn/tên secret — agent gõ, MỌI lệnh con, đều chặn
     "hub": None,
+    # Worktree của task (housekeeping.py): `worktree clean` gỡ worktree + nhánh; `list` lộ repo/nhánh của mọi task — agent gõ đều chặn
+    "worktree": None,
     # Lịch chạy tự động (schedules/): schedule.* ghi ∈ HUMAN_ONLY — agent không tự đặt việc chạy lặp
     "schedule": {"add", "create", "edit", "update", "pause", "resume", "rm", "remove", "delete", "run-now", "run_now"},
     "session": {"reindex"},  # dựng lại chỉ mục tìm kiếm hội thoại (session.reindex ∈ HUMAN_ONLY) — `session status` chỉ đọc

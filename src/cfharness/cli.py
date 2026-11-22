@@ -1025,6 +1025,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_hub_transfer_parsers(sub, common)
 
+    # worktree của task do hub tạo: cfharness worktree list|clean [--dry-run] (worktree_cli.py, housekeeping.py) — chỉ người
+    from .worktree_cli import add_parsers as _add_worktree_parsers
+
+    _add_worktree_parsers(sub, common)
+
     # tổng quan máy nhiều người dùng: cfharness admin overview (admin_cli.py, admin_overview.py)
     from .admin_cli import add_parsers as _add_admin_parsers
 
