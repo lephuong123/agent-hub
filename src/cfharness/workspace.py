@@ -345,6 +345,21 @@ def _deps_mode(hub: Any) -> str:
     return m if m in DEPS_MODES else "link"
 
 
+def ref_collision(root: str, branch: str) -> str | None:
+    """Tên nhánh `branch` không tạo được vì vướng ref có sẵn (git lưu ref như đường dẫn: không thể có cùng lúc `cfh/x` và `cfh/x/…`).
+    Trả ref đang chắn (`refs/heads/…`) hoặc None. Đường B cũ dùng `cfh/<task id>`, luồng D dùng `cfh/<root id>/…` → kiểm tường minh
+    trước khi tạo để báo lỗi rõ ràng (và luồng D chọn tiền tố khác) thay vì lỗi `cannot lock ref` của git."""
+    parts = [x for x in str(branch).split("/") if x]
+    for i in range(1, len(parts)):
+        ref = "refs/heads/" + "/".join(parts[:i])
+        if _git(root, "rev-parse", "--verify", "-q", ref).returncode == 0:
+            return ref
+    r = _git(root, "for-each-ref", "--count=1", "--format=%(refname)", f"refs/heads/{branch}/")
+    if r.returncode == 0 and r.stdout.strip():
+        return r.stdout.strip().splitlines()[0]
+    return None
+
+
 def ensure_worktree_meta(hub: Any, repo: str, branch: str, base: str | None = None, path: str | None = None, *,
                          deps_mode: str | None = None) -> dict[str, Any]:
     """Git worktree riêng cho một task (để nhiều task cùng repo chạy SONG SONG: khoá repo tính theo gốc của worktree, không theo
@@ -395,6 +410,10 @@ def ensure_worktree_meta(hub: Any, repo: str, branch: str, base: str | None = No
         b = base_name or "HEAD"
         if _git(root, "rev-parse", "--verify", "-q", f"{b}^{{commit}}").returncode != 0:
             raise HubError(f"worktree: base không tồn tại: {b!r}")
+        clash = ref_collision(root, branch)
+        if clash is not None:
+            raise HubError(f"worktree: không tạo được nhánh {branch!r} — vướng ref có sẵn {clash} (git không giữ cùng lúc `a` và `a/…`); "
+                           "chọn tên nhánh khác")
         meta["base"] = base_name or _head_name(root)
         r = _git(root, "worktree", "add", "-b", branch, str(wp), b)
         meta["branch_created"] = r.returncode == 0
