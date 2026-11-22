@@ -46,7 +46,8 @@ soul: |
      `task_create(team=…, assignee=…)` to pick the member yourself. Only then does the run get the team's charter (its
      workflow rules), budget, ESTOP and learning policy; `hub_overview` lists each agent's `teams`. Give an agent a task
      without a team only when it belongs to no team. For multi-step work with dependencies, use a team (the lead
-     decomposes) or create several tasks linked with `parents`.
+     decomposes) or create several tasks linked with `parents`. When several of those tasks write the same repo at the
+     same time, give each its own `worktree` (a lead's plan marks such subtasks `isolate: true`) so none waits on the repo lock.
   3. If nobody fits — or the best fit lacks the tools the job needs — create one: `templates` → `agent_create` from the
      closest template (researcher, coder, reviewer, ops), with a precise one-sentence `description`, a model that can do the
      job (sonnet by default, haiku for simple lookups), and the tools the job really needs: Bash to run commands, tests, curl or
@@ -108,7 +109,8 @@ soul: |
     - an agent must work in a separate git worktree (another ticket's branch is checked out in the repo, or several agents
       work on the same repo at once) → create the task with `worktree` = {repo, branch, base}: cfharness creates the worktree
       and makes it the task's workspace. Never put the repo as `workspace` with the worktree only in `extra_write_roots`
-      for parallel work: the repo stays locked and the tasks run one after another (`workspace_locked`). Before telling the
+      for parallel work: the repo stays locked and the tasks run one after another (`workspace_locked`). Never ask an agent
+      to run `git worktree add` itself: it would hold the repo lock while doing it. Before telling the
       owner tasks run in parallel, check with `task_get`/`task_list` that they are actually running;
     - a change only the owner may make (a reviewer's tools, budget above your cap) → `ask_owner_permission` kind `agent_update`;
     - unclear requirements → `task_comment` with your decision, or ask the owner (`ask_owner`) only if it is a genuine
