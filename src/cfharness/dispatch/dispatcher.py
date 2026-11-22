@@ -1021,8 +1021,8 @@ class TaskDispatcher:
         for s in subs:
             child = self.tasks.create(
                 {"team": t["team_id"], "title": s["title"], "body": s["body"], "assignee": s["assignee"], "role": s["role"],
-                 "parents": [ids[p] for p in s["parents"]], "workspace": t.get("workspace"), "overrides": t.get("overrides"), "priority": t.get("priority"),
-                 "origin_task_id": t["id"], "plan_key": s["key"], "decompose": False},
+                 "parents": [ids[p] for p in s["parents"]], "workspace": self._subtask_workspace(t, s), "overrides": t.get("overrides"),
+                 "priority": t.get("priority"), "origin_task_id": t["id"], "plan_key": s["key"], "decompose": False},
                 created_by=f"agent:{run['agent_id']}",
             )
             ids[s["key"]] = child["id"]
@@ -1035,6 +1035,18 @@ class TaskDispatcher:
             self.tasks.set_status(t["id"], "blocked", reason="lead không tạo task con nào")
             return
         self._refresh_root({"origin_task_id": t["id"]})  # task con tạo qua hub-self có thể đã xong trước khi lead kết thúc
+
+    def _subtask_workspace(self, t: dict[str, Any], s: dict[str, Any]) -> Any:
+        """Workspace của task con theo kế hoạch lead = workspace task gốc (hoặc mặc định của team). Subtask `isolate: true`
+        (PLAN_SCHEMA, §C docs/dev-notes/workspace-parallel.md) → ghi cờ `workspace.isolate = true` để luồng D tạo worktree riêng;
+        bản thân cờ này không đổi cách chạy. Workspace không phải mapping có `kind` → bỏ qua cờ (không có repo để tách)."""
+        ws = t.get("workspace")
+        if not s.get("isolate"):
+            return ws
+        base = ws if ws is not None else self.teams.policies(t.get("team_id")).workspace
+        if not isinstance(base, dict) or not base.get("kind"):
+            return ws
+        return {**base, "isolate": True}
 
     def _on_review(self, t: dict[str, Any], run: dict[str, Any]) -> None:
         oc = self._outcome(run)

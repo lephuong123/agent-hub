@@ -598,6 +598,8 @@ class TaskService:
             "- Each subtask: `key` (short unique id), `title`, `body` (self-contained instructions — the worker sees only this plus the results of its parents), "
             "`assignee` (a member id from the list, matched by role/description; workers do the work, not reviewers), and `parents` (keys of subtasks whose output it needs).\n"
             "- Prefer few subtasks (2-5). Model real dependencies with `parents` (e.g. research before writing). Keep the plan acyclic.\n"
+            "- `isolate: true` asks cfharness for a separate git worktree for that subtask: set it when subtasks that can run at the same time "
+            "write the same repo; leave it out for read-only or strictly sequential subtasks. Workers never create worktrees themselves.\n"
             "- `summary`: one sentence describing the plan."
         )
         return "\n".join(lines)

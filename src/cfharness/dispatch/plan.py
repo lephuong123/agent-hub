@@ -24,6 +24,8 @@ PLAN_SCHEMA: dict[str, Any] = {
                     "assignee": {"type": "string"},
                     "role": {"type": "string"},
                     "parents": {"type": "array", "items": {"type": "string"}},
+                    # §C workspace-parallel: lead xin worktree riêng cho subtask (anh em cùng ghi một repo) — luồng D tạo worktree
+                    "isolate": {"type": "boolean"},
                 },
                 "required": ["key", "title", "body"],
             },
@@ -47,7 +49,7 @@ class PlanError(ValueError):
 
 
 def validate_plan(plan: Any, members: list[dict[str, Any]], *, lead: str | None, max_subtasks: int | None = None) -> list[dict[str, Any]]:
-    """Trả danh sách subtask đã chuẩn hoá theo thứ tự topo: {key, title, body, assignee|None, role|None, parents:[key]}."""
+    """Trả danh sách subtask đã chuẩn hoá theo thứ tự topo: {key, title, body, assignee|None, role|None, parents:[key], isolate:bool}."""
     if not isinstance(plan, dict):
         raise PlanError("output của lead không phải object JSON (thiếu structured_output)")
     subs = plan.get("subtasks")
@@ -77,7 +79,11 @@ def validate_plan(plan: Any, members: list[dict[str, Any]], *, lead: str | None,
         parents = s.get("parents") or []
         if not isinstance(parents, list) or not all(isinstance(p, str) for p in parents):
             raise PlanError(f"subtask '{key}': parents phải là danh sách key")
-        out.append({"key": key, "title": title, "body": body, "assignee": assignee, "role": role, "parents": list(dict.fromkeys(parents))})
+        isolate = s.get("isolate", False)
+        if not isinstance(isolate, bool):
+            raise PlanError(f"subtask '{key}': isolate phải là true/false")
+        out.append({"key": key, "title": title, "body": body, "assignee": assignee, "role": role, "parents": list(dict.fromkeys(parents)),
+                    "isolate": isolate})
     for s in out:
         for p in s["parents"]:
             if p not in keys:
