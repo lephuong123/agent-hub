@@ -230,14 +230,32 @@ def cmd_workspace(ctx: Any) -> int:
     a = ctx.args
     if a.action == "locks":
         r = ctx.call("workspace.locks", {})
+        try:  # luồng E: khoá chia sẻ + lease theo file (daemon cũ chưa có method → chỉ khoá độc quyền)
+            lz = ctx.call("workspace.leases", {})
+        except Exception:  # best-effort: daemon cũ không có workspace.leases — vẫn in khoá độc quyền
+            lz = None
         if ctx.json:
-            ctx.out(r)
+            ctx.out(r if lz is None else {"locks": r, **lz})
             return 0
-        if not r:
+        shared = (lz or {}).get("shared") or {}
+        leases = (lz or {}).get("leases") or []
+        if lz is not None:
+            print(f"chế độ khoá: {lz.get('mode')}")
+        if not r and not shared:
             print("(không có khoá nào)")
         for k, h in sorted(r.items()):
             since = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(h.get("since") or 0)))
             print(f"{k}  run {h.get('run_id')}  session {str(h.get('session_id') or '')[:8]}  từ {since}")
+        for k, hs in sorted(shared.items()):
+            for sid, h in sorted(hs.items()):
+                since = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(h.get("since") or 0)))
+                print(f"{k}  [chia sẻ]  run {h.get('run_id')}  session {str(sid)[:8]}  từ {since}")
+        if leases:
+            print("lease theo file:")
+            for x in leases:
+                what = f"[độc quyền: {x.get('rel')}]" if not x.get("path") else x.get("rel")
+                print(f"  {x.get('repo_key')}  {what}  agent {x.get('agent_id') or '?'}  run {x.get('run_id')}  "
+                      f"session {str(x.get('session_id') or '')[:8]}")
         return 0
     p: dict[str, Any] = {"force": bool(a.force)}
     if Path(a.path).expanduser().exists():

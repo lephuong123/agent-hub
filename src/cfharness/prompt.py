@@ -99,7 +99,7 @@ def workspace_rules_block(ctx: dict[str, Any] | None) -> str:
     - `worktree`: metadata worktree hub cấp (`workspace.worktree` của task: branch, base, repo, deps{mode, needs_install}) hoặc
       `{}` khi run dùng `claude --worktree` (kind `worktree` cũ, không có metadata) → ngữ cảnh (a) cô lập;
     - `checkout`: `"cwd"` khi cwd là checkout git dùng chung, `"extra"` khi chỉ các `extra_write_roots` là repo git → ngữ cảnh (b);
-      `locked`: hub giữ khoá repo (guard.repo_lock).
+      `locked`: hub giữ khoá repo độc quyền (`guard.repo_lock: repo`); `file_leases`: chế độ `files` (lease theo file, luồng E).
     Không chứa đường dẫn/id run → ngữ cảnh (b) ổn định giữa các run (giữ prompt cache); (a) đổi theo nhánh của task."""
     if not ctx:
         return ""
@@ -126,6 +126,12 @@ def workspace_rules_block(ctx: dict[str, Any] | None) -> str:
         lines.append("- Do not create git worktrees of that checkout yourself (`git worktree add`) unless the task explicitly tells you to. "
                      "If work needs its own branch or must run in parallel, ask the lead, or create a task with `worktree` "
                      "{repo, branch, base} and cfharness creates the worktree.")
+        if ctx.get("file_leases") and ctx["checkout"] == "cwd":
+            lines.append("- Other agents may edit other files in this checkout at the same time: cfharness gives each file to one agent "
+                         "at a time. If an edit is denied because another agent holds the file, work on another file or ask the lead to "
+                         "isolate the task in a worktree; if it says the file changed, read it again before editing. Commands that change "
+                         "the whole checkout (checkout/switch/pull/stash/reset, installs) are denied while others work in it. Commit only "
+                         "your files: `git commit -m <msg> -- <your files>`.")
         lines.append("- Stage only the files you changed, by path: never `git add -A`, `git add .` or `git commit -a`, which sweep up "
                      "other people's uncommitted changes.")
         lines.append("- Do not checkout, switch, reset, rebase or stash that checkout's branch unless the task explicitly says so.")

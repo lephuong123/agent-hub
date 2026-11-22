@@ -684,15 +684,38 @@ def task_lock_target(t: dict[str, Any]) -> dict[str, Any]:
 class WorkspaceLocks(RepoLocks):
     """Khoá ghi theo repo (FR-RT-12). Giao diện của `RepoLocks` (M1-B) giữ nguyên; đổi cách tính khoá + biết run sống (B3):
     session không còn run `queued|running|waiting_human` → khoá bị gỡ; run `waiting_human` quá `guard.lock_waiting_ttl_s`
-    (null = tắt) cũng mất khoá (resume sau đó xin lại khoá + kiểm `resume_conflicts`)."""
+    (null = tắt) cũng mất khoá (resume sau đó xin lại khoá + kiểm `resume_conflicts`).
+    Luồng E: `guard.repo_lock: files` → run xin khoá kiểu CHIA SẺ (`default_mode`), ghi từng file qua lease (`self.leases`,
+    `guard/leases.py`); lease của session nhả cùng khoá repo của nó (mọi đường nhả khoá của luồng A)."""
 
     def __init__(self, store: Any, hub: Any = None) -> None:
         super().__init__(store)
         self.hub = hub
+        self.leases: Any = None
         if hub is not None:  # thư mục chung (filehub, cổng): khoá = GỐC thư mục chung trên server, kể cả `filehub:<tên>/<con>`
+            from .guard.leases import FileLeases
+
             self.key_for = self._key_for_hub  # type: ignore[method-assign]
             self.is_active = self._session_live
             self.on_event = self._publish
+            self.leases = FileLeases(store, self)
+
+    def mode(self) -> str:
+        """`repo` | `files` | `off` theo `guard.repo_lock` (không có hub → `repo`)."""
+        from .guard.locks import repo_lock_mode
+
+        return repo_lock_mode(self.hub.config) if self.hub is not None else "repo"
+
+    def default_mode(self) -> str:
+        return "shared" if self.mode() == "files" else "exclusive"
+
+    def _on_session_released(self, session_id: str | None, keys: list[str] | None, reason: str) -> None:
+        if self.leases is None or not session_id:
+            return
+        try:
+            self.leases.release_session(session_id, keys, reason)
+        except Exception:  # best-effort: không để lỗi nhả lease làm hỏng việc nhả khoá repo (lease mồ côi bị quét theo session sống)
+            log.warning("nhả lease file của session %s lỗi", session_id, exc_info=True)
 
     @staticmethod
     def key_for(cwd: str | None, workspace_kind: str) -> str | None:
@@ -820,20 +843,36 @@ def _walk(root: Path, max_files: int) -> tuple[dict[str, list[int]], bool]:
     return out, truncated
 
 
-def compute_diff(cp: dict[str, Any], store_dir: Path, *, max_file_bytes: int = 5_000_000) -> dict[str, Any]:
+def _path_filter(paths: Any) -> Any:
+    """`paths` (đường dẫn tương đối của các file run đã lease — luồng E/B7) → hàm lọc; None = không lọc (chế độ repo)."""
+    if paths is None:
+        return None
+    from .guard.leases import norm_rel
+
+    want = {norm_rel(str(p)) for p in paths}
+    return lambda rel: norm_rel(str(rel)) in want
+
+
+def compute_diff(cp: dict[str, Any], store_dir: Path, *, max_file_bytes: int = 5_000_000, paths: Any = None) -> dict[str, Any]:
+    """`paths` (chế độ `guard.repo_lock: files`, B7): chỉ tính các file này (file run đã lease) — nhiều session cùng ghi một checkout
+    nên "mọi thay đổi trong lúc run chạy" không còn là của run. None = như cũ (mọi thay đổi)."""
+    keep = _path_filter(paths)
+    scope = {"scope": "leases", "scoped_paths": sorted(str(p) for p in paths)[:500]} if paths is not None else {}
     if cp.get("kind") == "dir":
         root = Path(cp["root"])
         now, truncated = _walk(root, 20_000)
         before = cp.get("files") or {}
         files = []
         for rel in sorted(set(before) | set(now)):
+            if keep is not None and not keep(Path(rel).as_posix()):
+                continue
             b, a = before.get(rel), now.get(rel)
             if b == a:
                 continue
             st = "added" if b is None else ("deleted" if a is None else "modified")
             files.append({"path": rel, "status": st, "revertible": False})
         out = {"kind": "dir", "root": str(root), "files": files, "revertible": False, "truncated": truncated or cp.get("truncated", False),
-               "stat": {"files": len(files)}}
+               "stat": {"files": len(files)}, **scope}
         if cp.get("filehub"):
             out["filehub"] = cp["filehub"]
         return out
@@ -847,6 +886,8 @@ def compute_diff(cp: dict[str, Any], store_dir: Path, *, max_file_bytes: int = 5
         cand |= set(_names_z(root, "diff", "--name-only", "-z", "--no-renames", head_before))
     else:
         cand |= set(_names_z(root, "ls-files", "-z"))
+    if keep is not None:
+        cand = {c for c in cand if keep(c)}
     files: list[dict[str, Any]] = []
     patch_parts: list[str] = []
     ins = dels = 0
@@ -879,7 +920,7 @@ def compute_diff(cp: dict[str, Any], store_dir: Path, *, max_file_bytes: int = 5
         "kind": "git", "root": root, "head_before": head_before, "head_after": head_after, "branch_before": cp.get("branch"),
         "branch_after": branch_after, "commits_made": head_before != head_after, "files": files,
         "revertible": all(f["revertible"] for f in files), "patch_path": str(patch_path),
-        "stat": {"files": len(files), "insertions": ins, "deletions": dels}, "truncated": cp.get("truncated", False),
+        "stat": {"files": len(files), "insertions": ins, "deletions": dels}, "truncated": cp.get("truncated", False), **scope,
     }
 
 
@@ -926,14 +967,26 @@ def resume_conflicts(run: dict[str, Any]) -> list[str]:
         return []
 
 
-def revert(diff: dict[str, Any], store_dir: Path, *, dry_run: bool = False) -> dict[str, Any]:
+def revert(diff: dict[str, Any], store_dir: Path, *, dry_run: bool = False, paths: Any = None,
+           leased_by_others: Any = None) -> dict[str, Any]:
+    """`paths` (B7): chỉ hoàn tác các file này (None = mọi file của diff). `leased_by_others` (chế độ `files`): đường dẫn tương đối
+    đang bị session KHÁC còn sống giữ lease → `Conflict` liệt kê, không ghi gì."""
     if diff.get("filehub"):
         raise HubError(FILEHUB_NO_REVERT)
     if diff.get("kind") != "git":
         raise HubError("workspace không phải repo git — chỉ có danh sách file bị sửa, không hoàn tác được (FR-RT-12)")
     files = diff.get("files") or []
+    keep = _path_filter(paths)
+    if keep is not None:
+        files = [f for f in files if keep(f["path"])]
+        diff = {**diff, "files": files}
     if not files:
         return {"reverted": [], "warnings": ["run không sửa file nào"]}
+    busy_keep = _path_filter(leased_by_others or [])
+    busy = [f["path"] for f in files if busy_keep is not None and leased_by_others and busy_keep(f["path"])]
+    if busy:
+        raise Conflict(f"xung đột: {len(busy)} file đang được session khác giữ lease (đang sửa) — không hoàn tác: {', '.join(busy[:20])}",
+                       data={"conflicts": busy, "reason": "leased"})
     not_rev = [f["path"] for f in files if not f.get("revertible")]
     if not_rev:
         raise HubError(f"không đủ dữ liệu để hoàn tác (file quá lớn khi checkpoint): {', '.join(not_rev[:20])}")

@@ -93,8 +93,12 @@ DEFAULTS: dict[str, Any] = {
         "python": None,
         # gọi `git` để biết thay đổi chưa commit / nhánh đã push (FR-SG-01 nhóm Git)
         "git_probe": True,
-        # khoá ghi theo thư mục dir: (bản tối thiểu M1; FR-RT-12 đầy đủ ở M3)
+        # khoá ghi theo repo (FR-RT-12): `repo` (true, mặc định) = một session ghi mỗi repo; `files` = nhiều session cùng repo, khoá
+        # theo FILE (lease trong guard.check, Bash đổi trạng thái chung cần độc quyền — guard/leases.py); `off` (false) = không khoá
         "repo_lock": True,
+        # chế độ files: dấu độc quyền cả repo của một lệnh Bash (git checkout/pull, npm install…) tự hết hạn sau ngần này giây nếu
+        # PostToolUse không về (hook quan sát fail-open)
+        "lease_exclusive_ttl_s": 600,
         # run `waiting_human` giữ khoá repo tối đa ngần này giây (4 giờ) rồi nhả; resume sau đó xin lại khoá + kiểm file bị sửa
         # (`resume_conflicts`). null = giữ tới khi có người quyết (như cũ)
         "lock_waiting_ttl_s": 14400,
@@ -1081,6 +1085,15 @@ def validate_setting(key: str, value: Any) -> None:
         from .fileview import validate_setting as _validate_files
 
         _validate_files(key, value)
+    if key in ("guard", "guard.repo_lock"):  # workspace-parallel E: repo | files | off (true/false cũ vẫn nhận)
+        from .guard.locks import validate_repo_lock
+
+        if key == "guard.repo_lock":
+            validate_repo_lock(value)
+        elif isinstance(value, dict) and "repo_lock" in value:
+            validate_repo_lock(value["repo_lock"])
+    if key == "guard.lease_exclusive_ttl_s" and (isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0):
+        raise ValueError("guard.lease_exclusive_ttl_s phải là số giây > 0")
     if key in ("approval.timeout_s", "notify.reminder_interval_s", "guard.hook_timeout_s"):
         if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{key} phải là số > 0")

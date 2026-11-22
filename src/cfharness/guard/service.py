@@ -963,6 +963,26 @@ class GuardService:
         return {"reason": f"Chrome đang được run khác dùng: {who} (runtime.claude.chrome.max_concurrent_runs)",
                 "message": f"[cfharness] Claude in Chrome is busy: another cfharness run is using the owner's Chrome ({who}).{fallback}"}
 
+    # ------------------------------------------------------------------ lease theo file (workspace-parallel E, guard.repo_lock: files)
+    def lease_check(self, run: dict[str, Any], channel: str, tool_name: str, tool_input: dict[str, Any], ctx: GuardContext) -> dict[str, Any] | None:
+        """Chế độ `files`: Edit/Write… lấy lease file; Bash đổi trạng thái chung cần độc quyền (guard/leases.py). None = đi tiếp luồng
+        guard; dict = deny NGAY (không mở approval — điều phối, không phải quyền; trust full cũng chịu). Lỗi → ném ra (fail-closed)."""
+        from . import leases
+
+        hit = leases.check(self.hub, run, tool_name, tool_input, str(ctx.cwd))
+        if hit is None:
+            return None
+        v = Verdict("uncertain", hit["rule"], "file", hit["reason"][:500], [str(hit.get("path") or hit.get("key") or "")[:300]])
+        self._record(run, channel, tool_name, tool_input, v, "deny", extra={"lease": {"key": hit.get("key"), "path": hit.get("path")}})
+        h = hit.get("holder") or {}
+        ev = make_event("workspace.lease_denied", run.get("agent_id"),
+                        {"key": hit.get("key"), "path": hit.get("path"), "reason": hit["rule"], "tool": tool_name, "session_id": run.get("session_id"),
+                         "holder_session_id": h.get("session_id"), "holder_run_id": h.get("run_id"), "holder_agent_id": h.get("agent_id")},
+                        run_id=run.get("id"), session_id=run.get("session_id"))
+        ev.task_id, ev.team_id = run.get("task_id"), run.get("team_id")
+        self.hub.publish(ev)
+        return {"decision": "deny", "reason": hit["message"], "lease_denied": hit["rule"]}
+
     def _run_active(self, run_id: str) -> bool:
         r = self.hub.store.get_run(run_id)
         return bool(r and r["status"] in ("running", "queued"))
@@ -1219,6 +1239,9 @@ class GuardService:
             self._record(run, channel, tool_name, tool_input, v, "deny")
             return {"decision": "deny", "reason": "[cfharness] Emergency stop is on — all tool calls are blocked. End your turn."}
         ctx = self.context_for(run, p.get("cwd") if channel == "hook" and p.get("cwd") else None)
+        lease = self.lease_check(run, channel, tool_name, tool_input, ctx)  # điều phối file chung — TRƯỚC lối tắt trust (như khoá Chrome)
+        if lease is not None:
+            return lease
         trust = self.run_trusted(run)
         if trust is not None:
             return self._allow_trusted(run, channel, tool_name, tool_input, ctx, trust)
