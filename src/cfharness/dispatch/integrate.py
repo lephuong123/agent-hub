@@ -602,7 +602,7 @@ class Integrator:
 
     def finalize(self, root: dict[str, Any]) -> dict[str, Any] | None:
         """Task gốc sắp `done`: fast-forward (nếu được phép), gỡ worktree con đã ghép, trả `{result, open_extra, need_extra}`."""
-        from ..workspace import _git, _head, _status_paths, git_root, remove_worktree
+        from ..workspace import _git, _head, _status_paths, forget_worktree, git_root, remove_worktree, trusted_worktree_meta
 
         root = self.tasks.row(root["id"])
         integ = self.state(root)
@@ -613,10 +613,14 @@ class Integrator:
         for m in integ.get("merged") or []:
             child = self.tasks.maybe(m.get("task"))
             meta = self._ws(child).get("worktree") if child else None
-            if not isinstance(meta, dict) or not meta.get("owned"):
+            if not isinstance(meta, dict):
+                continue
+            meta = trusted_worktree_meta(self.store, meta)  # owned/branch_created chỉ tin sổ worktree của hub
+            if not meta.get("owned"):
                 continue
             try:
                 remove_worktree(meta, locks=self.hub.runs.locks)
+                forget_worktree(self.store, meta.get("path"))
                 cleaned.append(meta.get("path"))
             except HubError as e:
                 log.warning("không gỡ được worktree %s của task %s: %s", meta.get("path"), m.get("task"), e.message)

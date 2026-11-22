@@ -122,7 +122,9 @@ MACHINE_STATE = ("repo_locks", "repo_locks_shared", "browser_locks", "rate_limit
                  # filehub (Không gian số): tạm dừng đồng bộ là của MÁY cũ; lần nhập trước của chính nguồn (cần đăng nhập lại)
                  "filehub.paused", "import_filehub",
                  # cổng cfharness (filehub/lane/): cursor luồng sự kiện + cây mồ côi của MÁY cũ
-                 "filehub.lane")
+                 "filehub.lane",
+                 # workspace song song: sổ worktree do hub tạo (đường dẫn của máy cũ; máy mới không có worktree đó → không dọn gì)
+                 "worktrees.registry")
 # filehub: thư mục chung Không gian số đi qua CỔNG CFHARNESS (khoá `FILEHUB_LANE_*` ở secret store: `clone` bỏ, `move` giữ —
 # transfer_secrets). Đồng bộ 2 chiều cũ (H5 gỡ): token thiết bị `secrets/filehub/` + `filehub/` KHÔNG BAO GIỜ vào gói; gói CŨ còn cấu hình
 # đồng bộ → khi nhập: bỏ khoá cấu hình của đồng bộ (`SYNC_ONLY_KEYS`), thư mục đồng bộ thành "cần chuyển" (`mode: sync`, bản sao không đụng),

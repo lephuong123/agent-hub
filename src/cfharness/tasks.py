@@ -227,7 +227,14 @@ class TaskService:
         root = git_root(str(meta["repo"]))
         if not same(str(meta["path"]), path) or root is None or same(root, path)                 or not any(same(path, x) for x in worktree_paths(root)):
             raise HubError(f"workspace.worktree không khớp: {meta.get('path')} không phải worktree của {meta.get('repo')}")
-        return {k: meta[k] for k in self.WORKTREE_META_KEYS if k in meta}
+        out = {k: meta[k] for k in self.WORKTREE_META_KEYS if k in meta}
+        # `owned`/`branch_created` KHÔNG BAO GIỜ lấy từ người gọi (agent tạo task được): ghi đè theo sổ worktree của hub
+        from .workspace import registered_worktree
+
+        ent = registered_worktree(self.hub.store, path)
+        out["owned"] = ent is not None
+        out["branch_created"] = bool(ent and ent.get("branch_created") and ent.get("branch") == out.get("branch"))
+        return out
 
     def _same_lock_tasks(self, path: str, exclude: set[str]) -> list[str]:
         """Task đang mở dùng cùng khoá repo với `path` (dispatcher không cho chạy cùng lúc — `workspace_locked`). Bỏ task gốc
