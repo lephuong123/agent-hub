@@ -292,6 +292,9 @@ class TaskService:
                 ws = {"kind": "dir", "path": ws} if ws not in WORKSPACE_KINDS else {"kind": ws}
         if ws is None and team is not None:
             ws = self.hub.teams.policies(team).workspace
+        from .dispatch.integrate import strip_internal
+
+        ws = strip_internal(ws)  # `integration`/`isolation`/`merge_for` chỉ hub ghi (luồng D), không nhận từ người/agent
         warnings: list[str] = []
         # id + kiểu task tính TRƯỚC workspace: nhánh của worktree đổi từ đường B cũ cần id; task gốc (tách việc) giữ đường B để mỗi
         # task con tự có worktree riêng

@@ -416,30 +416,35 @@ def worktree_entries(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             continue
         if not isinstance(ws, dict):
             continue
+        ents: list[dict[str, Any]] = []
         meta = ws.get("worktree") if ws.get("kind") == "dir" else None
         if isinstance(meta, dict) and meta.get("path") and meta.get("repo"):
-            ent = {"path": _norm(meta["path"]), "repo": _norm(meta["repo"]), "branch": meta.get("branch"), "base": meta.get("base"),
-                   "owned": bool(meta.get("owned")), "branch_created": bool(meta.get("branch_created")), "legacy": False,
-                   "deps": meta.get("deps")}
+            ents.append({"path": _norm(meta["path"]), "repo": _norm(meta["repo"]), "branch": meta.get("branch"), "base": meta.get("base"),
+                         "owned": bool(meta.get("owned")), "branch_created": bool(meta.get("branch_created")), "legacy": False,
+                         "deps": meta.get("deps")})
         elif ws.get("kind") == "worktree" and ws.get("path"):
             repo = _norm(ws["path"])
-            if not repo:
+            if repo:
+                # claude --worktree <tên> tạo worktree + nhánh trong repo; hub đặt tên = workspace.name hoặc id task (dispatcher)
+                ents.append({"path": os.path.join(repo, ".claude", "worktrees", str(ws.get("name") or tid)), "repo": repo, "branch": None,
+                             "base": None, "owned": True, "branch_created": True, "legacy": True, "deps": None})
+        integ = ws.get("integration")  # luồng D: worktree tích hợp của task gốc (dọn được khi nhánh đã merge vào base)
+        imeta = integ.get("worktree") if isinstance(integ, dict) else None
+        if isinstance(imeta, dict) and imeta.get("path") and imeta.get("repo"):
+            ents.append({"path": _norm(imeta["path"]), "repo": _norm(imeta["repo"]), "branch": imeta.get("branch"), "base": imeta.get("base"),
+                         "owned": bool(imeta.get("owned")), "branch_created": bool(imeta.get("branch_created")), "legacy": False,
+                         "deps": imeta.get("deps"), "integration": True})
+        for ent in ents:
+            if not ent["path"]:
                 continue
-            # claude --worktree <tên> tạo worktree + nhánh trong repo; hub đặt tên = workspace.name hoặc id task (dispatcher)
-            ent = {"path": os.path.join(repo, ".claude", "worktrees", str(ws.get("name") or tid)), "repo": repo, "branch": None,
-                   "base": None, "owned": True, "branch_created": True, "legacy": True, "deps": None}
-        else:
-            continue
-        if not ent["path"]:
-            continue
-        key = os.path.normcase(ent["path"])
-        cur = by.get(key)
-        if cur is None:
-            cur = by[key] = {**ent, "tasks": []}
-        else:
-            cur["owned"] = cur["owned"] or ent["owned"]
-            cur["branch_created"] = cur["branch_created"] or ent["branch_created"]
-        cur["tasks"].append({"id": tid, "status": status})
+            key = os.path.normcase(ent["path"])
+            cur = by.get(key)
+            if cur is None:
+                cur = by[key] = {**ent, "tasks": []}
+            else:
+                cur["owned"] = cur["owned"] or ent["owned"]
+                cur["branch_created"] = cur["branch_created"] or ent["branch_created"]
+            cur["tasks"].append({"id": tid, "status": status})
     out = list(by.values())
     for e in out:
         e["open"] = any(t["status"] not in TASK_FINISHED for t in e["tasks"])

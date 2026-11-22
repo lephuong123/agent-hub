@@ -162,6 +162,9 @@ class TaskDispatcher:
         self._kick_scheduled = False
         self._ticking = False
         self._loop_task: asyncio.Task | None = None
+        from .integrate import Integrator
+
+        self.integrator = Integrator(hub)  # luồng D: tự cô lập task con vào worktree + ghép về nhánh tích hợp
         hub.bus.add_listener(self._on_bus)
 
     # ------------------------------------------------------------------ infra
@@ -574,12 +577,19 @@ class TaskDispatcher:
         try:
             self._reconcile_claims()
             self._reconcile_running()
+            self._reconcile_integration()
             self._promote()
             self._dispatch_triage()
             self._dispatch_review()
             self._dispatch_ready()
         finally:
             self._ticking = False
+
+    def _reconcile_integration(self) -> None:
+        try:
+            self.integrator.reconcile()
+        except Exception:  # pragma: no cover - lỗi ghép không được làm hỏng cả tick
+            log.exception("đối soát nhánh tích hợp lỗi")
 
     def _rows(self, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
         return [self.store._row("tasks", r) for r in self.conn.execute(sql, args)]  # type: ignore[misc]
@@ -741,6 +751,14 @@ class TaskDispatcher:
                 reason = self.budget_block(agent_id, t.get("team_id"))
             retry = self.store.get_run(t["retry_from_run_id"]) if t.get("retry_from_run_id") else None
             resume = retry is not None and retry.get("outcome") in RESUMABLE and retry.get("started_at") and retry.get("agent_id") == agent_id
+            if reason is None and not resume:
+                # luồng D: tách task con vào worktree riêng ngay trước khi chạy (theo khoá THẬT lúc này); tổ tiên cô lập chưa ghép → chờ
+                reason = self.integrator.wait_reason(t)
+                if reason is None:
+                    cur = t
+                    iso = self.integrator.maybe_isolate(t, agent_id, lock_blocked=lambda: self._lock_block(cur, agent_id, None, False) is not None)
+                    if iso is not None:
+                        t = iso
             if reason is None:
                 reason = self._lock_block(t, agent_id, retry["session_id"] if resume else None, read_only=False)
             if reason is None and self._capacity_left() <= 0:
@@ -953,6 +971,10 @@ class TaskDispatcher:
                               retry_from_run_id=run["id"] if oc in RESUMABLE else None)
 
     def _after_done(self, t: dict[str, Any]) -> None:
+        try:
+            self.integrator.on_done(t)  # luồng D: ghép task con cô lập / task merge TRƯỚC khi thăng task con và xét task gốc
+        except Exception:  # pragma: no cover - lỗi ghép bất ngờ: task gốc không xong được (gate) thay vì làm hỏng xử lý kết quả run
+            log.exception("ghép task %s vào nhánh tích hợp lỗi", t.get("id"))
         self._promote()
         self._refresh_root(t)
 
@@ -970,17 +992,35 @@ class TaskDispatcher:
                 self.tasks.set_status(rid, "blocked", reason=f"mọi task con ({len(every)}) đã bị huỷ — giao lại, đóng hoặc archive task gốc")
             return
         if subs and all(s["status"] == "done" for s in subs):
+            gate = self.integrator.gate(root, subs)  # luồng D: mọi task con cô lập phải được ghép vào nhánh tích hợp trước
+            if gate is not None:
+                if gate[0] == "blocked":
+                    self.integrator._block_root(rid, gate[1])
+                elif root["status"] == "blocked":
+                    self.tasks.set_status(rid, "running", reason=gate[1])
+                return
+            fin = self.integrator.finalize(root)
             res = []
             for s in subs:
                 res.append({"task_id": s["id"], "key": s.get("plan_key"), "title": s["title"], "assignee": s.get("assignee_agent_id"),
                             "summary": s.get("result_summary"), "result": s.get("result_json")})
             leaves = [s for s in subs if not self.tasks.children(s["id"])]
             final = "\n\n".join((s.get("result_summary") or "") for s in leaves).strip()
-            self.tasks.set_status(rid, "done", reason="mọi task con đã done", result_summary=compose_root(subs),  # gộp Đã làm/Còn mở/Cần bạn của task con
-                                  result_json={"subtasks": res, "final": final})
+            rj: dict[str, Any] = {"subtasks": res, "final": final}
+            if fin is not None:
+                rj["integration"] = fin["result"]
+            self.tasks.set_status(rid, "done", reason="mọi task con đã done",  # gộp Đã làm/Còn mở/Cần bạn của task con (+ nhánh tích hợp)
+                                  result_summary=compose_root(subs, open_extra=(fin or {}).get("open_extra"), need_extra=(fin or {}).get("need_extra")),
+                                  result_json=rj)
             return
         blocked = [s for s in subs if s["status"] == "blocked"]
         if blocked and root["status"] != "blocked":
+            mf = (blocked[0].get("workspace") or {}).get("merge_for") if isinstance(blocked[0].get("workspace"), dict) else None
+            if mf:  # task merge (luồng D) bị chặn → nói rõ việc người phải làm
+                ws = blocked[0]["workspace"]
+                self.tasks.set_status(rid, "blocked", reason=f"task merge {blocked[0]['id']} (ghép việc của {mf} vào nhánh tích hợp) blocked: "
+                                      f"{blocked[0].get('block_reason')} — ghép tay trong {ws.get('path')} rồi `cfharness task unblock {rid}`")
+                return
             self.tasks.set_status(rid, "blocked", reason=f"task con {blocked[0]['id']} blocked: {blocked[0].get('block_reason')}")
         elif not blocked and root["status"] == "blocked":
             self.tasks.set_status(rid, "running", reason="task con hết blocked")
@@ -1036,7 +1076,9 @@ class TaskDispatcher:
         """Workspace của task con theo kế hoạch lead = workspace task gốc (hoặc mặc định của team). Subtask `isolate: true`
         (PLAN_SCHEMA, §C docs/dev-notes/workspace-parallel.md) → ghi cờ `workspace.isolate = true` để luồng D tạo worktree riêng;
         bản thân cờ này không đổi cách chạy. Workspace không phải mapping có `kind` → bỏ qua cờ (không có repo để tách)."""
-        ws = t.get("workspace")
+        from .integrate import strip_internal
+
+        ws = strip_internal(t.get("workspace"))  # trạng thái tích hợp của task gốc không đi theo task con
         if not s.get("isolate"):
             return ws
         base = ws if ws is not None else self.teams.policies(t.get("team_id")).workspace
