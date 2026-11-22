@@ -1803,7 +1803,7 @@ class RunManager:
             cand.append(str(path))
             try:
                 k = self.locks.key_for(str(path), "dir")
-            except Exception:
+            except Exception:  # best-effort: không tính được khoá (filehub lỗi…) → chỉ khớp đúng đường dẫn đã cho
                 k = None
             if k:
                 cand.append(k)
