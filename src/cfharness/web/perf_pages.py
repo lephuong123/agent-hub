@@ -136,7 +136,8 @@ class PerfMiddleware:
     def _record(self, scope: dict, path: str, t: _perf.ReqTiming, status: int, done: bool) -> None:
         wp: WebPerf = self.state.perf
         dur = (time.perf_counter() - t.t0) * 1000.0
-        route = getattr(scope.get("route"), "path", None) or _perf.OTHER_KEY
+        # 404 gom chung: route của trang ẩn (vd /admin/* với user không phải quản trị) không lộ qua bảng
+        route = "(404)" if status == 404 else (getattr(scope.get("route"), "path", None) or _perf.OTHER_KEY)
         method = scope.get("method") or "GET"
         key = f"{method} {route}"
         wp.backend.add(key, dur)
@@ -255,7 +256,15 @@ async def _data(request: Request) -> dict[str, Any]:
     except (RpcError, DaemonUnavailable) as e:
         out["daemon_error"] = type(e).__name__
     out["config"] = {"enabled": wp.enabled, "slow_ms": wp.slow_ms, "window_min": wp.window_min}
+    from .admin_pages import nav_badges
+
+    if not (await nav_badges(request)).get("admin"):  # không lộ dấu vết quản trị máy với user thường (như menu)
+        for k in ("backend", "frontend", "web_rpc", "daemon_rpc"):
+            out[k] = [r for r in out[k] if not _ADMIN_KEY.search(r["key"])]
     return out
+
+
+_ADMIN_KEY = re.compile(r"/admin|/machine|(^|\s)admin\.|superadmin|admind", re.IGNORECASE)
 
 
 async def perf_json(request: Request) -> Response:

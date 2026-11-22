@@ -105,7 +105,10 @@ async def test_middleware_records_route_template_and_server_timing(env):
     r = await env.client.get("/runs/r_doesnotexist0")
     wp = env.app.state.web.perf
     keys = {x["key"] for x in wp.backend.snapshot()}
-    assert "GET /runs" in keys and any(k == "GET /runs/{id}" for k in keys)
+    assert "GET /runs" in keys and "GET (404)" in keys  # run không tồn tại → 404 gom chung
+    from cfharness.web.perf_pages import route_template
+
+    assert route_template(env.app, "/runs/r_abc") == "/runs/{id}" and route_template(env.app, "/khong-co") == perf.OTHER_KEY
     assert not any("r_doesnotexist0" in k for k in keys)  # không bao giờ đường dẫn thô có id
     assert any(x["key"] == "approval.list" for x in wp.web_rpc.snapshot())
     # static + beacon không tính vào tổng hợp, nhưng vẫn có header
@@ -268,3 +271,16 @@ async def test_stream_stamp_adds_ets_only_when_asked(env):
     params["since_seq"] = env.hub.status()["last_seq"]
     ev = next(m for m in await collect(False) if m["t"] == "ev")
     assert "ets" not in ev
+
+
+async def test_perf_page_hides_admin_traces_for_non_admin(env):
+    await env.login()
+    assert (await env.client.get("/admin/overview")).status_code == 404
+    wp = env.app.state.web.perf
+    assert any(x["key"] == "GET (404)" for x in wp.backend.snapshot())
+    assert not any("/admin" in x["key"] for x in wp.backend.snapshot())
+    await _beacon(env, [{"m": "nav.ttfb", "r": "/admin/users", "d": 5}])
+    wp.backend.add("GET /admin/users", 1.0)
+    j = (await env.client.get("/perf.json")).json()
+    keys = [r["key"] for k in ("backend", "frontend", "web_rpc", "daemon_rpc") for r in j[k]]
+    assert keys and not any("/admin" in k or k.startswith("admin.") for k in keys)
