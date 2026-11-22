@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any, AsyncIterator
 
 from .. import transport
+from ..perf import note_rpc
 from ..errors import SYSTEM_ERROR
 from ..rpc import DaemonUnavailable, RpcError, encode, raise_for, response_req_id, with_auth
 
@@ -39,6 +41,13 @@ class AsyncHubClient:
             raise DaemonUnavailable(f"daemon không chạy (socket {self.sock_path}): {e}") from None
 
     async def call(self, method: str, params: dict[str, Any] | None = None, *, audit: bool = False, timeout: float | None = None) -> Any:
+        t0 = time.perf_counter()
+        try:
+            return await self._call(method, params, audit=audit, timeout=timeout)
+        finally:
+            note_rpc(method, (time.perf_counter() - t0) * 1000.0)  # phân rã request web (perf.py) — no-op ngoài request đang đo
+
+    async def _call(self, method: str, params: dict[str, Any] | None, *, audit: bool, timeout: float | None) -> Any:
         params = dict(params or {})
         if audit:
             params["_audit"] = {"channel": self.channel, "actor": "user"}

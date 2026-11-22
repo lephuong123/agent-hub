@@ -118,6 +118,8 @@ HUMAN_ONLY: frozenset[str] = frozenset(
         "logs.levels", "logs.level",
         # L6 (công cụ debug): đọc log hệ thống + dòng thời gian của yêu cầu/run — lộ chi tiết vận hành, đường dẫn, id của mọi agent; chỉ người
         "logs.query", "trace.get",
+        # Đo hiệu năng (perf.py): đọc tổng hợp (route/method + ms) + web đẩy ảnh chụp — agent không giả số liệu, không xem vận hành
+        "perf.stats", "perf.report",
         # L7 (gói chẩn đoán, support_bundle.py): gói gom log + doctor + trạng thái + dòng thời gian run (+ raw transcript khi người chọn) —
         # đọc lộ chi tiết vận hành của mọi agent, ghi file vào exports/; chỉ người (kể cả kế hoạch/danh sách)
         "support.plan", "support.create", "support.list",

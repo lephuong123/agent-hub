@@ -70,6 +70,9 @@ class Daemon:
         self.callers = _auth.CallerResolver(self.hub)
         self._mutating: frozenset[str] = frozenset()
         self._slow_cache: tuple[float, float] = (float(DEFAULT_SLOW_RPC_MS), 0.0)
+        from .perf import DaemonPerf
+
+        self.perf = DaemonPerf()  # thời gian mỗi RPC + ảnh chụp web (`perf.stats`/`perf.report`, perf.py)
         self.server: asyncio.base_events.Server | None = None
         self.stopping = asyncio.Event()
         self.exit_code = 0  # ≠ 0 khi dừng để launchd chạy lại (cập nhật dưới LaunchAgent/LaunchDaemon — `SUPERVISED_RESTART_CODE`)
@@ -193,6 +196,10 @@ class Daemon:
         _register_filehub(self)  # thư mục chung Không gian số: filehub.status|list|link (đọc) + setup|login|add|remove|pause|resume (HUMAN_ONLY, tự audit)
 
         _register_files(self)
+        # Đo hiệu năng: perf.stats (đọc tổng hợp) + perf.report (web đẩy ảnh chụp) — HUMAN_ONLY, chỉ RAM (perf.py)
+        from .perf import register_rpc as _register_perf
+
+        _register_perf(self)
         # M1 luồng A: thêm mcp.*/secret.*/audit.*/feedback.* và bọc audit các method thay đổi trạng thái.
         # GIỮ Ở CUỐI __init__ — method thêm sau dòng này sẽ không được audit tự động.
         from .mcp_server.rpc import register_rpc
@@ -488,6 +495,8 @@ class Daemon:
             level = logging.WARNING
         else:
             level = logging.INFO
+        if method not in SLOW_EXEMPT:
+            self.perf.note(method, dur_ms)  # tổng hợp cuộn trong RAM (perf.py) — method chờ lâu theo thiết kế không tính
         slow_ms = self._slow_rpc_ms()
         slow = bool(slow_ms) and dur_ms >= slow_ms and method not in SLOW_EXEMPT
         if slow:

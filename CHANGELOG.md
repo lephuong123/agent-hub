@@ -10,6 +10,8 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+- **Đo hiệu năng — xem phần nào chậm** (bật sẵn, gần như không tốn): trang web mới **Hiệu năng** (`/perf`, menu Hệ thống) có bảng "chậm nhất" (p50/p95/max trong 5–60 phút) cho trình duyệt (tải trang, request htmx, chuyển tab/luồng, độ trễ SSE, long task), web (từng route) và RPC daemon (từng method); mỗi response web có header `Server-Timing` (devtools → Network → Timing: thời gian RPC, render); request chậm hơn `perf.slow_ms` (mặc định 1500 ms) ghi `http.slow` vào log web. Terminal: `cfharness perf`. Cấu hình `perf.enabled|slow_ms|window_min`. Chi tiết: `docs/dev-notes/perf-monitor.md`.
+
 ---
 
 ## v0.2.29 — 2026-11-22

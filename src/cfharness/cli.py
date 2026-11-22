@@ -1015,6 +1015,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add_logs_parsers(sub, common)
 
+    # đo hiệu năng: cfharness perf (perf.py) — chỉ người
+    from .perf import add_parsers as _add_perf_parsers
+
+    _add_perf_parsers(sub, common)
+
     # gói chẩn đoán đã che secret: cfharness support bundle|list (support_cli.py, support_bundle.py, L7) — chỉ người
     from .support_cli import add_parsers as _add_support_parsers
 

@@ -112,6 +112,7 @@ HUB_HUMAN_ONLY_CLI: dict[str, set[str] | None] = {
     "logs": None,  # log hệ thống (logs_rpc.py, L1): đổi level / xem log của hub — agent gõ, kể cả chỉ xem, đều chặn
     "support": None,  # L7: gói chẩn đoán (log + doctor + dòng thời gian run, raw khi chọn) — agent gõ, kể cả chỉ xem kế hoạch, đều chặn
     "trace": None,  # L6: dòng thời gian yêu cầu/run (audit + log + event) — chỉ người
+    "perf": None,  # đo hiệu năng (perf.stats ∈ HUMAN_ONLY) — agent gõ đều chặn
     "auth": None,
     "notify": {"telegram", "slack"},  # token bot / allowlist chat / gửi tin thay người (chat/rpc.py, chat/slack/rpc.py)
     "answer": None,  # UX: trả lời câu hỏi = quyết định của người (agent không tự trả lời câu hỏi của mình/agent khác)
