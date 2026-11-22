@@ -190,6 +190,45 @@ class TaskService:
             out.append(str(rp))
         return list(dict.fromkeys(out))
 
+    WORKTREE_META_KEYS = ("repo", "branch", "base", "path", "owned", "created_at", "branch_created", "deps")
+
+    def _worktree_ws(self, ws: dict[str, Any] | None, repo: str, branch: str, base: Any, path: Any, warnings: list[str]) -> dict[str, Any]:
+        """Tạo/dùng lại worktree (`ensure_worktree_meta`) → workspace `{"kind": "dir", "path": <worktree>, "worktree": <metadata>}`
+        (giữ `extra_write_roots`). Cảnh báo: tạo/dùng lại, Windows chưa bật core.longpaths, cần `npm ci`."""
+        from .workspace import ensure_worktree_meta, longpaths_warning
+
+        meta = ensure_worktree_meta(self.hub, repo, branch, base, path)
+        out: dict[str, Any] = {"kind": "dir", "path": meta["path"], "worktree": meta}
+        if (ws or {}).get("extra_write_roots"):
+            out["extra_write_roots"] = ws["extra_write_roots"]  # type: ignore[index]
+        warnings.append(f"{'đã tạo' if meta['owned'] else 'dùng lại'} worktree {meta['path']} (nhánh {branch}, base {meta.get('base')}) — "
+                        "dọn khi ghép xong: `cfharness worktree clean` (chỉ worktree hub tạo, sạch, nhánh đã merge)")
+        lp = longpaths_warning(meta["repo"])
+        if lp:
+            warnings.append(lp)
+        deps = meta.get("deps") or {}
+        if deps.get("needs_install"):
+            warnings.append(f"worktree chưa có node_modules ({deps.get('reason')}): agent cần chạy `npm ci` trong worktree trước khi build/test")
+        return out
+
+    def _check_worktree_meta(self, meta: Any, path: str) -> dict[str, Any]:
+        """Metadata worktree truyền vào cùng workspace (task con kế thừa) phải khớp thực tế: `path` = workspace, là worktree git của
+        `repo`. Chỉ giữ các khoá đã biết — không ai gắn được metadata giả để `worktree clean` gỡ thư mục khác."""
+        import os
+
+        from .workspace import git_root, worktree_paths
+
+        if not isinstance(meta, dict) or not meta.get("repo") or not meta.get("path") or not meta.get("branch"):
+            raise HubError("workspace.worktree phải là metadata {repo, branch, base, path, owned, created_at}")
+
+        def same(a: str, b: str) -> bool:
+            return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+
+        root = git_root(str(meta["repo"]))
+        if not same(str(meta["path"]), path) or root is None or same(root, path)                 or not any(same(path, x) for x in worktree_paths(root)):
+            raise HubError(f"workspace.worktree không khớp: {meta.get('path')} không phải worktree của {meta.get('repo')}")
+        return {k: meta[k] for k in self.WORKTREE_META_KEYS if k in meta}
+
     def _same_lock_tasks(self, path: str, exclude: set[str]) -> list[str]:
         """Task đang mở dùng cùng khoá repo với `path` (dispatcher không cho chạy cùng lúc — `workspace_locked`). Bỏ task gốc
         (`root`, không tự chạy) và `exclude` (cha/gốc của task mới: đằng nào cũng chạy sau chúng)."""
@@ -251,20 +290,38 @@ class TaskService:
         if ws is None and team is not None:
             ws = self.hub.teams.policies(team).workspace
         warnings: list[str] = []
+        # id + kiểu task tính TRƯỚC workspace: nhánh của worktree đổi từ đường B cũ cần id; task gốc (tách việc) giữ đường B để mỗi
+        # task con tự có worktree riêng
+        tid = "t_" + uuid.uuid4().hex[:10]
+        origin = data.get("origin_task_id")
+        decompose = data.get("decompose")
+        lead = self.hub.teams.lead(team_id) if team_id else None
+        if decompose is None:
+            decompose = bool(team is not None and not assignee and not origin and lead and self.hub.teams.policies(team).auto_decompose)
+        if decompose and not lead:
+            raise HubError(f"team '{team_id}' chưa có lead — không tách việc được")
         wt = data.get("worktree")
         if wt:
             # worktree riêng do hub tạo → workspace dir = worktree: khoá repo theo gốc worktree, chạy song song với task khác cùng repo
-            from .workspace import ensure_worktree
-
             if not isinstance(wt, dict) or not wt.get("branch"):
                 raise HubError("worktree cần {repo, branch, base?, path?}")
             repo = wt.get("repo") or (ws or {}).get("path")
             if not repo:
                 raise HubError("worktree cần repo (hoặc workspace = đường dẫn repo)")
-            wpath, made = ensure_worktree(self.hub, str(repo), str(wt["branch"]), wt.get("base"), wt.get("path"))
-            ws = {"kind": "dir", "path": wpath, **({"extra_write_roots": ws["extra_write_roots"]} if (ws or {}).get("extra_write_roots") else {})}
-            warnings.append(f"{'đã tạo' if made else 'dùng lại'} worktree {wpath} (nhánh {wt['branch']}) — xoá khi ghép xong: "
-                            f"git -C {repo} worktree remove {wpath}")
+            ws = self._worktree_ws(ws, str(repo), str(wt["branch"]), wt.get("base"), wt.get("path"), warnings)
+        elif ws and ws.get("kind") == "worktree" and ws.get("path") and not decompose:
+            # đường B cũ (cwd = repo, `claude --worktree`): task mới đổi sang worktree do hub tạo trên nhánh `cfh/<name|task id>` —
+            # khoá/checkpoint/diff/dọn như mọi worktree khác. Task gốc tách việc giữ nguyên: task con của nó đổi khi được tạo.
+            from pathlib import Path
+
+            from .workspace import validate_workspace
+
+            rp = Path(str(ws["path"])).expanduser()
+            if not rp.is_dir():
+                raise HubError(f"workspace worktree: repo không tồn tại: {ws.get('path')}")
+            validate_workspace(self.hub, {"kind": "dir", "path": str(rp)}, "repo của workspace worktree")
+            branch = f"cfh/{str(ws.get('name') or '').strip() or tid}"
+            ws = self._worktree_ws(ws, str(rp.resolve()), branch, None, None, warnings)
         if ws and data.get("extra_write_roots") is not None:
             ws = {**ws, "extra_write_roots": data["extra_write_roots"]}
         if ws:
@@ -303,6 +360,8 @@ class TaskService:
                 from .workspace import validate_workspace
                 validate_workspace(self.hub, {"kind": "dir", "path": str(p)}, "workspace của task")
                 ws = {**ws, "path": str(p.resolve())}
+                if ws.get("worktree") is not None:  # metadata worktree (task con kế thừa workspace của task cha/gốc) — kiểm lại
+                    ws = {**ws, "worktree": self._check_worktree_meta(ws["worktree"], ws["path"])}
                 if git_root(p) is None:
                     warnings.append("thư mục không phải repo git: hub chỉ khoá + ghi danh sách file bị sửa, KHÔNG hoàn tác được (run revert)")
                 same = self._same_lock_tasks(str(p.resolve()), set(parents) | {str(data.get("origin_task_id") or "")})
@@ -314,23 +373,15 @@ class TaskService:
         for k in ("model", "effort", "budget_usd", "max_runtime_s"):
             if data.get(k) is not None:
                 overrides[k] = data[k]
-        origin = data.get("origin_task_id")
         ws_id = self.resolve_workstream(data.get("workstream_id") or data.get("workstream"))
         if ws_id is None and origin:  # task con (lead tách) thuộc luồng của task gốc
             r = self.conn.execute("SELECT workstream_id FROM tasks WHERE id=?", (origin,)).fetchone()
             ws_id = r[0] if r and r[0] else None
-        decompose = data.get("decompose")
-        lead = self.hub.teams.lead(team_id) if team_id else None
-        if decompose is None:
-            decompose = bool(team is not None and not assignee and not origin and lead and self.hub.teams.policies(team).auto_decompose)
-        if decompose and not lead:
-            raise HubError(f"team '{team_id}' chưa có lead — không tách việc được")
         if decompose:
             status, kind = "triage", "root"
         else:
             kind = "task"
             status = "ready" if all(self.row(p)["status"] == "done" for p in parents) else "todo"
-        tid = "t_" + uuid.uuid4().hex[:10]
         now = now_iso()
         row = {
             "id": tid, "team_id": team_id, "assignee_agent_id": assignee if not decompose else None, "role": data.get("role"), "kind": kind,

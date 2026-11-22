@@ -332,7 +332,7 @@ def add_parsers(sub: Any, common: argparse.ArgumentParser) -> None:
     c.add_argument("--worktree-branch", help="chạy trong git worktree riêng của --workspace (hub tạo ngay) trên nhánh này — "
                                              "task cùng repo chạy song song")
     c.add_argument("--worktree-base", help="nhánh/commit gốc khi tạo nhánh mới (mặc định HEAD của repo)")
-    c.add_argument("--worktree-path", help="thư mục worktree (mặc định <cha của repo>/_wt/<repo>-<nhánh>)")
+    c.add_argument("--worktree-path", help="thư mục worktree (mặc định <cha của repo>/_wt/<repo>-<nhánh ≤40>-<băm 6>)")
     c.add_argument("--budget", type=float, help="trần USD mỗi run")
     c.add_argument("--model")
     c.add_argument("--max-runtime", type=int, help="giây")
