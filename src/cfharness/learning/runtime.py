@@ -151,7 +151,12 @@ def workspace_context(hub: "Hub", run: dict[str, Any], agent: dict[str, Any]) ->
             cwd = None  # scratch cố định của agent (M7)
     elif agent.get("workspace_default") and not str(agent["workspace_default"]).startswith("filehub:"):
         cwd = Path(str(agent["workspace_default"]))
-    ctx: dict[str, Any] = {"locked": bool(hub.config.get("guard.repo_lock"))}
+    from ..guard.locks import repo_lock_mode
+
+    mode = repo_lock_mode(hub.config)
+    ctx: dict[str, Any] = {"locked": mode == "repo"}
+    if mode == "files":
+        ctx["file_leases"] = True
     if cwd is not None:
         ws: Any = None
         if run.get("task_id"):
