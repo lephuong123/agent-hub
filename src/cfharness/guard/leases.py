@@ -29,7 +29,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..oscompat import IS_WINDOWS
+from ..oscompat import IS_WINDOWS, no_window_kwargs
 from . import shell
 from .locks import norm_key, repo_lock_mode
 
@@ -503,7 +503,7 @@ def staged_paths(root: str) -> list[str]:
 
     try:
         r = subprocess.run(["git", *GIT_SAFE_ARGS, "-C", root, "diff", "--cached", "--name-only", "-z", "--no-renames"], capture_output=True,
-                           timeout=10, env={**os.environ, **GIT_ENV}, encoding="utf-8", errors="replace")
+                           timeout=10, env={**os.environ, **GIT_ENV}, encoding="utf-8", errors="replace", **no_window_kwargs())
     except (OSError, subprocess.TimeoutExpired):
         return []
     return [x for x in r.stdout.split("\0") if x] if r.returncode == 0 else []
