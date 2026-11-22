@@ -180,3 +180,44 @@ async def test_lead_plan_isolate_stored_on_subtask_workspace(hub_home, tmp_path)
     finally:
         h.runs.shutting_down = True
         h.store.close()
+
+
+def test_hub_self_task_create_isolate_and_worktree_passthrough(hub_home, tmp_path):
+    """hub-self `task_create` của lead: `isolate` (như trường của kế hoạch) → `workspace.isolate`; `worktree` → worktree do hub tạo
+    trên repo của task gốc (repo khác → từ chối)."""
+    import uuid
+
+    from cfharness.errors import HubError
+    from cfharness.mcp_server.hub_self import TOOLS
+    from cfharness.store import now_iso
+
+    props = TOOLS["task_create"]["inputSchema"]["properties"]
+    assert props["isolate"] == {"type": "boolean"} and props["worktree"]["required"] == ["branch"]
+    repo = _git_repo(tmp_path)
+    other = _git_repo(tmp_path, "other")
+    h = Hub(hub_home, runtime=ScriptedRuntime(lambda s: {}))
+    h.config.set("tasks.tick_s", 3600)
+    try:
+        h.agents.create({"id": "lead", "name": "Lead", "role": "planner"})
+        h.agents.create({"id": "dev", "name": "Dev", "role": "coder"})
+        h.agents.set_paused("dev", True)
+        h.teams.create({"id": "eng", "name": "Eng", "members": [{"agent_id": "lead", "role": "lead"}, {"agent_id": "dev", "role": "worker"}]})
+        root = h.tasks.create({"team": "eng", "title": "R", "body": "x", "workspace": {"kind": "dir", "path": str(repo)}})
+        rid = "r_" + uuid.uuid4().hex[:10]
+        h.store.insert_run({"id": rid, "agent_id": "lead", "kind": "lead", "prompt": "x", "session_id": "s-lead", "status": "running",
+                            "queued_at": now_iso(), "task_id": root["id"], "team_id": "eng"})
+        call = h.dispatcher.self_call
+        a = call(rid, "task_create", {"title": "A", "body": "a", "assignee": "dev", "isolate": True})
+        assert h.tasks.row(a["task_id"])["workspace"]["isolate"] is True
+        b = call(rid, "task_create", {"title": "B", "body": "b", "assignee": "dev"})
+        assert "isolate" not in h.tasks.row(b["task_id"])["workspace"]
+        c = call(rid, "task_create", {"title": "C", "body": "c", "assignee": "dev", "worktree": {"branch": "feat/c"}})
+        ws = h.tasks.row(c["task_id"])["workspace"]
+        assert ws["worktree"]["branch"] == "feat/c" and ws["worktree"]["repo"] == str(repo.resolve()) and Path(ws["path"]).is_dir()
+        with pytest.raises(HubError, match="repo của task gốc"):
+            call(rid, "task_create", {"title": "D", "body": "d", "assignee": "dev", "worktree": {"repo": str(other), "branch": "x"}})
+        with pytest.raises(HubError, match="isolate"):
+            call(rid, "task_create", {"title": "E", "body": "e", "assignee": "dev", "isolate": "yes"})
+    finally:
+        h.runs.shutting_down = True
+        h.store.close()

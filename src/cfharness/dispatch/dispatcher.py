@@ -1044,6 +1044,24 @@ class TaskDispatcher:
             return ws
         return {**base, "isolate": True}
 
+    def _lead_worktree(self, t: dict[str, Any], wt: Any) -> dict[str, Any]:
+        """`worktree` của hub-self `task_create` (lead): chỉ trên repo của task gốc — `repo` bỏ trống = repo đó, khác repo → từ chối
+        (lead không mở worktree ở repo ngoài phạm vi việc của mình). Đường dẫn/nhánh do `ensure_worktree_meta` kiểm như mọi worktree."""
+        from ..workspace import git_root
+
+        if not isinstance(wt, dict) or not str(wt.get("branch") or "").strip():
+            raise HubError("worktree cần {branch, base?, path?}")
+        ws = t.get("workspace") if isinstance(t.get("workspace"), dict) else None
+        base = ws if ws is not None else self.teams.policies(t.get("team_id")).workspace if t.get("team_id") else None
+        meta = (base or {}).get("worktree") if isinstance(base, dict) else None
+        src = (meta or {}).get("repo") or (base or {}).get("path") if isinstance(base, dict) else None
+        root = git_root(str(src)) if src else None
+        if root is None:
+            raise HubError("worktree: workspace của task gốc không phải repo git — không tạo worktree được")
+        if wt.get("repo") and git_root(str(wt["repo"])) != root:
+            raise HubError(f"worktree: repo phải là repo của task gốc ({root})")
+        return {k: wt[k] for k in ("branch", "base", "path") if wt.get(k)} | {"repo": root}
+
     def _on_review(self, t: dict[str, Any], run: dict[str, Any]) -> None:
         oc = self._outcome(run)
         if oc != "completed":
@@ -1152,10 +1170,14 @@ class TaskDispatcher:
                 pt = self.tasks.row(p)
                 if pt.get("origin_task_id") != tid:
                     raise HubError(f"parent {p} không phải task con của {tid}")
-            child = self.tasks.create(
-                {"team": t["team_id"], "title": args.get("title"), "body": args.get("body") or "", "assignee": args.get("assignee"), "role": args.get("role"),
-                 "parents": parents, "workspace": t.get("workspace"), "overrides": t.get("overrides"), "origin_task_id": tid, "decompose": False},
-                created_by=author,
-            )
-            return {"task_id": child["id"], "status": child["status"]}
+            isolate = args.get("isolate")
+            if isolate is not None and not isinstance(isolate, bool):
+                raise HubError("isolate phải là true/false")
+            data = {"team": t["team_id"], "title": args.get("title"), "body": args.get("body") or "", "assignee": args.get("assignee"),
+                    "role": args.get("role"), "parents": parents, "workspace": self._subtask_workspace(t, {"isolate": bool(isolate)}),
+                    "overrides": t.get("overrides"), "origin_task_id": tid, "decompose": False}
+            if args.get("worktree") is not None:
+                data["worktree"] = self._lead_worktree(t, args["worktree"])
+            child = self.tasks.create(data, created_by=author)
+            return {"task_id": child["id"], "status": child["status"], "warnings": child.get("warnings") or []}
         raise HubError(f"tool hub-self không hỗ trợ: {op}")
