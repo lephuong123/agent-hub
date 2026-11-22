@@ -100,7 +100,8 @@ Chi tiết, lệch BRD, việc dở, kết quả kiểm chứng `claude` thật:
 | `guard/service.py` | `GuardService.check` (RPC `guard.check`): phân loại → allow / mở approval + GIỮ ≤ `approval.timeout_s` → allow/deny/waiting_human |
 | `guard/hook.py`, `guard/mcp_guard.py` | Hook PreToolUse + MCP `hub-guard` (permission-prompt-tool). Chỉ stdlib, FAIL-CLOSED (`|| exit 2`, alarm, mọi lỗi → deny) |
 | `guard/runtime.py` | Sinh phần guard của settings.json/mcp.json; mẫu `--disallowedTools` tĩnh và bỏ đúng mẫu cho run resume có vé |
-| `guard/locks.py` | Khoá thư mục `dir:` theo SESSION (bản tối thiểu; M3 thay bằng khoá repo + checkpoint) |
+| `guard/locks.py` | Khoá thư mục `dir:` theo SESSION (bản tối thiểu; M3 thay bằng khoá repo + checkpoint); `repo_lock_mode` = nơi DUY NHẤT đọc `guard.repo_lock` (`repo|files|off`), khoá chia sẻ cho `files` |
+| `guard/leases.py` | `guard.repo_lock: files` — lease theo file (bảng `file_leases`, v32) trong `GuardService.check` trước trust; `repo_ops` = Bash cần độc quyền repo (ca test trong `tests/test_guard_classifier.py`). `docs/dev-notes/workspace-parallel.md` §E |
 | `guard/rpc.py`, `guard/cli.py` | RPC `approval.*`/`guard.*`/`notify.test`/`run.continue|resume`/`agent.purge`; CLI `approvals`, `approve`, `deny`, `guard test|policy|protect|decisions`, `notify test`, `run continue`, `agent purge` |
 | `approvals.py` | `ApprovalService`: open → waiting_human → allowed/denied/cancelled (không `expired`), vé một lần, nhắc lại giãn dần, Signal `reject` |
 | `notify/slack.py` | Listener bus → Slack webhook/bot (secret), tin đã che, backoff, `notify.failed`; tắt êm khi chưa cấu hình |

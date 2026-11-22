@@ -73,6 +73,53 @@ agent/hub tạo, lưu kind `dir`), 0 task dùng kind `worktree`.
   ghi lockfile) cần khoá repo ĐỘC QUYỀN; không lấy được → deny + gợi ý worktree.
 - B7: diff/revert của run giới hạn theo các file run đã lease; không revert file đang bị session khác lease.
 
+**Đã làm (nhánh `ws/leases`):**
+- Cấu hình: `guard.repo_lock` ∈ `repo|files|off` (+ `true`/`false` cũ), đọc DUY NHẤT qua `guard/locks.repo_lock_mode` (RunManager,
+  WorkspaceLocks, guard, `learning/runtime` cho prompt; dispatcher không đọc trực tiếp nữa vì `lock_keys` trả rỗng khi `off`). Kiểm ở
+  `config.validate_setting`. Mặc định vẫn `repo` → hành vi cũ y nguyên. `guard.lease_exclusive_ttl_s` (600) cho dấu độc quyền của Bash.
+- Khoá repo chia sẻ: `RepoLocks` thêm map `hub_state.repo_locks_shared` ({khoá: {session: người giữ}}) + tham số `mode` (`shared|exclusive`,
+  None = `default_mode()`) ở `blockers`/`blocked_for`/`try_acquire*`. `WorkspaceLocks.default_mode()` = `shared` khi `files` → `tick`/
+  `_run`/dispatcher `_lock_block` không cần sửa: chỉ người giữ ĐỘC QUYỀN chặn. `lock_pending` trả False ở chế độ `files`. `list()` (RPC
+  `workspace.locks`) giữ nguyên = khoá độc quyền; thêm `list_shared()`/`shared_holders()`. `release_*`/`force_release`/`sweep` xử lý cả hai
+  map; `unlock`/`_lost_locks` hiểu khoá chia sẻ. `repo_locks_shared` ∈ `hub_transfer.MACHINE_STATE`.
+- Lease: bảng `file_leases` (migration **v32**; khoá chính (repo chuẩn hoá, đường dẫn tương đối chuẩn hoá — chữ thường trên Windows) → một
+  người giữ, `INSERT OR IGNORE` nguyên tử trên writer duy nhất của daemon), cột sha256 + `pending`. Lớp `guard/leases.FileLeases`
+  (`WorkspaceLocks.leases`). Lease nhả trong `WorkspaceLocks._on_session_released` — móc ở MỌI đường nhả khoá của A (hết run, stop,
+  `_release_unstarted`, approval/recovery `release_session`, `force_release`, quét session chết); lease của session chết còn bị dọn lười khi
+  có người khác xin.
+- Kiểm trong `GuardService.check` (`lease_check`, sau ESTOP, TRƯỚC lối tắt trust — trust full vẫn chịu), chỉ khi `files`, deny NGAY (không
+  approval), ghi `guard_decisions` (rule `file_lease_held|file_changed_externally|repo_exclusive_busy|repo_exclusive_needed`) + event
+  `workspace.lease_denied` (summary). Lỗi → ném ra → hook deny (fail-closed).
+  - Edit/Write/MultiEdit/NotebookEdit: file nằm trong repo đang được giữ chia sẻ → lease; session khác còn sống giữ → deny kèm agent/run +
+    lời khuyên (file khác / nhờ lead tách worktree). Hash hiện tại ≠ hash đã ghi nhận và `pending=0` → deny "đọc lại file" (ghi nhận hash mới
+    → lần sau qua). `pending=1` (đã cho ghi, PostToolUse chưa về) → khác hash coi là của chính session: hook quan sát fail-open, mất
+    PostToolUse chỉ làm yếu phát hiện chứ không chặn nhầm.
+  - PostToolUse: `observe_hook` gửi thêm `file_path` + `cwd` (chỉ đường dẫn) cho tool ghi file; `hook.observe` → `leases.observe` làm mới hash,
+    bỏ `pending`; Bash → nhả dấu độc quyền của session.
+  - Bash (`leases.repo_ops`, thuần, dùng lexer `guard/shell.py`, theo `cd`/`git -C`/wrapper/`sh -c`/`$(..)`): ĐỘC QUYỀN = git checkout
+    (không `--`)/switch/reset (không `-- paths`)/rebase/merge/pull/stash (trừ list/show)/cherry-pick/revert/am/clean, `git add -A|.|-u|--all|<glob>`,
+    `git commit -a|--all|--amend`, `git checkout .`/`restore .`, npm/yarn/pnpm/bun install|ci|add|remove|update… (không `-g`), `npm audit fix`,
+    pip/`python -m pip`/`uv pip` install|uninstall, uv add|remove|sync|lock, poetry add|remove|install|lock|update, ghi lockfile (redirect,
+    tee/cp/mv/sed…). Có session khác còn sống giữ khoá chia sẻ/lease/dấu độc quyền → deny + gợi ý commit theo đường dẫn hoặc worktree;
+    không ai → đặt dấu độc quyền (hàng `path=''`, hết hạn TTL) — Edit của session khác bị "repo bận" tới PostToolUse của Bash/hết run.
+    THEO ĐƯỜNG DẪN (`git add/commit/restore/rm/mv <paths>`, `checkout|reset -- <paths>`) → chỉ deny khi đường dẫn (hoặc file dưới thư mục) đang
+    bị session KHÁC lease. `git commit` không đường dẫn (commit cả index chung) → deny khi index có file session khác lease (`git diff --cached`).
+    Ca test ở `tests/test_guard_classifier.py` (`LEASE_EXCLUSIVE`/`LEASE_SAFE`/đường dẫn/index).
+- B7: `compute_diff(..., paths=)` / `revert(..., paths=, leased_by_others=)`. Chế độ `files` + checkpoint git → `RunManager._lease_scope` =
+  file session của run đã lease trong repo (đọc TRƯỚC khi nhả khoá trong `finally`) → diff có `scope: "leases"`, `scoped_paths`. `run.revert`
+  với diff `scope=leases`: không chặn cả repo vì người giữ chia sẻ; file đang bị session khác lease → `Conflict` liệt kê. Chế độ repo: như cũ.
+- Hiển thị: RPC `workspace.leases` (chỉ đọc: `{mode, shared, leases}`, quét người giữ chết trước) + `cfharness workspace locks` in chế độ, khoá
+  chia sẻ và lease. Event `workspace.lease_denied` (summary), `lease_acquired|lease_released` (debug) — `EVENT_LEVELS` + `docs/schema/event.v1.json`.
+- Prompt: chế độ `files` thêm một dòng vào khối "Workspace rules" (file được chia cho từng agent; bị từ chối thì làm file khác / nhờ lead
+  tách worktree; commit `-- <your files>`); câu "holds the repo lock" chỉ ở chế độ `repo`.
+- Test: `tests/test_workspace_parallel_leases.py`.
+
+**Giới hạn đã biết:** điều phối giữa agent hợp tác, KHÔNG phải ranh giới an ninh — ghi file bằng Bash/script (`sed -i`, codegen, formatter)
+không lấy lease, không vào diff/revert của run (B7 chỉ tính file đã lease) và có thể làm session đang giữ lease nhận "đọc lại file"; lệnh
+độc quyền chạy qua script/alias không nhận ra. Dấu độc quyền giữ tới PostToolUse/TTL kể cả khi chính lệnh đó bị guard giữ chờ duyệt.
+`tasks._same_lock_tasks` (cảnh báo "task CHỜ") vẫn dùng `conflicts` thuần → ở chế độ `files` cảnh báo sai (task thực ra chạy song song) —
+thuộc vùng luồng D. `commits_made` của diff phản ánh mọi commit trên checkout (có thể của session khác).
+
 ## Kiểm thử
 `uv run pytest -q` (không gọi claude thật). Mỗi luồng thêm test riêng (`tests/test_workspace_parallel_*.py`). Thêm dòng vào
 "Chưa phát hành" trong `CHANGELOG.md` khi có thay đổi người dùng thấy.
