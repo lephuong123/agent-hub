@@ -1,0 +1,78 @@
+# Workspace song song: khoá, worktree, tích hợp
+
+Mục tiêu: agent làm song song trên cùng repo khi không ghi đè nhau; khi cần cô lập thì hub tự tách worktree rồi ghép lại.
+Bối cảnh đo thật (25/10–22/11/2026, một hub): ~10% lượt khởi chạy task phải chờ khoá repo, ~38 giờ chờ; nóng nhất
+commonweblib, workflowswebapp, các worktree `_wt` dùng chung, web-project-docs. 247/1.106 task chạy trong `_wt` (worktree do
+agent/hub tạo, lưu kind `dir`), 0 task dùng kind `worktree`.
+
+## Lỗi đã xác nhận (v0.2.29)
+| # | Lỗi | Chỗ |
+|---|---|---|
+| B1 | kind `worktree` (cwd = repo, `claude --worktree`): dispatcher coi không khoá (`key_for(path,"worktree")` → None) nhưng `RunManager._lock_key` khoá GỐC repo chính → task "running" mà run nằm hàng đợi | `dispatch/dispatcher.py` `_lock_block`, `runs.py` `_lock_key` |
+| B2 | kind `worktree`: không checkpoint/diff/revert; `bypassPermissions` được phép dù cwd là checkout chính | `runs.py` (checkpoint chỉ `dir`), `runtime/claude_cli.py` |
+| B3 | Khoá không được nhả khi recovery không resume run (auto_resume tắt, hết trần, resume_conflicts, agent pause, ESTOP, freeze, task blocked); không có lệnh gỡ khoá; không có event khoá | `recovery.py`, `guard/locks.py`, `dispatch/rpc.py` |
+| B4 | `extra_write_roots` ghi vào repo khác mà không lấy khoá repo đó | `runs.py` `_lock_key` |
+| B5 | Thư mục không phải git: cha và con có khoá khác nhau → hai run ghi cùng file | `workspace.py` `WorkspaceLocks.key_for` |
+| B6 | Không ai dọn worktree (`housekeeping` chỉ nhận kind `worktree`, chỉ báo); slug nhánh trùng (`a/b` = `a-b`, cắt 80 ký tự); không kiểm `core.longpaths`; metadata worktree bị bỏ khi tạo task | `workspace.py` `ensure_worktree`, `tasks.py`, `housekeeping.py` |
+| B7 | diff/revert giả định một người ghi mỗi repo (gán mọi thay đổi trong run cho run) | `workspace.py` `compute_diff`/`revert` |
+| B8 | Rule SOUL của agent mâu thuẫn template manager (nhiều agent "never create worktree"); SOUL là bản sao theo máy nên phải đưa rule chung vào CODE (prompt hub chèn) | `prompt.py`, `templates/*.yaml` |
+
+## Thiết kế theo luồng (mỗi luồng một nhánh, ghép vào `feat/workspace-parallel`)
+
+### A — Khoá đúng & gỡ được (`ws/locks`)
+- Một hàm duy nhất tính khoá cho task/run, dùng ở CẢ `dispatcher._lock_block`, `RunManager._lock_key`, `RunManager.lock_pending`,
+  `TaskService._same_lock_tasks` (B1). Kind `worktree` (đường cũ): khoá = thư mục worktree `<repo>/.claude/worktrees/<tên>`
+  (realpath, có thể chưa tồn tại), KHÔNG khoá repo chính.
+- B2: checkpoint/diff cho kind `worktree` trên thư mục worktree khi đã tồn tại; bỏ `bypassPermissions` khi kind `worktree` mà cwd là checkout chính.
+- B3: `recovery.reconcile` + đường không resume → nhả khoá của session không còn run sống. `RepoLocks` có quét người giữ chết
+  (`is_active(session_id)` = có run `queued|running|waiting_human` của session) ở `try_acquire`/`blocked_for`.
+  `guard.lock_waiting_ttl_s` (mặc định 14400): run `waiting_human` quá TTL → khoá nhả (resume sau đó xin lại, kiểm `resume_conflicts`).
+  RPC `workspace.unlock {path|key, force}` (HUMAN_ONLY, MUTATING, audit) + CLI `cfharness workspace unlock <path>`.
+  Event `workspace.lock_acquired|lock_released|lock_blocked` (thêm `EVENT_LEVELS`), payload {key, session_id, run_id, reason}.
+- B4: run giữ NHIỀU khoá: khoá cwd + khoá mỗi `extra_write_roots` (theo cùng hàm). Giao diện `RepoLocks` giữ nguyên; thêm
+  `try_acquire_many(keys, session_id, run_id)` nguyên tử (tất cả hoặc không). `ActiveRun.lock_key` giữ khoá chính, thêm `lock_keys`.
+- B5: khoá thư mục không phải git xung đột với khoá là cha/con của nó (so tiền tố đường dẫn đã chuẩn hoá, không phân biệt hoa thường trên Windows).
+
+### B — Vòng đời worktree (`ws/worktree`)
+- `ensure_worktree(...)` trả thêm metadata: `{"repo","branch","base","path","owned","created_at"}` (giữ hàm cũ trả tuple cho tương thích
+  hoặc thêm `ensure_worktree_meta`). Slug: `<repo>-<nhánh đã làm sạch, ≤40>-<sha1(nhánh)[:6]>` → không trùng. Cảnh báo khi
+  Windows + `core.longpaths` chưa bật (không tự đổi cấu hình người).
+- `tasks.create`: lưu `workspace = {"kind":"dir","path":<wt>,"worktree":<metadata>}`. Kind `worktree` + `path=repo` (đường B cũ)
+  → chuyển thành đường A: `ensure_worktree(repo, branch="cfh/<name hoặc task id>")` (task mới; task cũ vẫn chạy như A định nghĩa).
+- Phụ thuộc: `link_deps(wt, repo, mode)`; `workspace.deps` ∈ `link|install|none` (mặc định `link`): `package.json` + lockfile
+  giống hệt repo chính → junction (Windows `mklink /J`, POSIX symlink) `node_modules`; khác → ghi `deps.needs_install=true` vào metadata
+  (prompt sẽ nói agent chạy `npm ci`). Ghi `deps` vào metadata.
+- `remove_worktree(meta)` an toàn junction: gỡ junction/symlink `node_modules` TRƯỚC (không đi theo link), rồi `git worktree remove`
+  (không `--force` khi còn link), rồi `git branch -d` nếu đã merge. `housekeeping`: nhận worktree qua metadata; `cleanable` khi task
+  xong + worktree sạch + nhánh đã merge vào base (hoặc đã có trên remote). CLI `cfharness worktree list|clean [--dry-run]`.
+
+### C — Rule chung trong prompt + template + plan (`ws/prompt`)
+- `prompt.py`: khối "Workspace rules" (tiếng Anh) hub chèn cho MỌI run có workspace ghi, theo ngữ cảnh: đang ở worktree do hub cấp
+  (nhánh, base, cần `npm ci` hay không) hay checkout chính (khoá repo; không `git worktree add` tự phát trên checkout chính — nhờ lead
+  tạo task kèm `worktree`; không `git add -A`/`commit -a` gom việc người khác; không checkout/switch nhánh của checkout chính).
+  Bật/tắt `prompt.workspace_rules` (mặc định true). Khối này đứng SAU quy ước hub, TRƯỚC SOUL, và được tính vào hash prompt.
+- `templates/*.yaml` (manager/coder/reviewer): thống nhất với khối trên.
+- `dispatch/plan.py` `PLAN_SCHEMA`: mỗi subtask thêm `isolate: bool` (tuỳ chọn) — lead yêu cầu worktree riêng cho subtask.
+  Luồng D dùng trường này.
+
+### D — Tự cô lập & tích hợp (`ws/integrate`, sau A+B+C)
+- `workspace.isolate` ∈ `never|auto|always` (mặc định `auto`; ghi đè theo team `TeamPolicies` và theo task). `auto`: task ghi trên repo git
+  mà repo đang có task mở khác cùng khoá, hoặc subtask có `isolate=true` → hub tạo worktree.
+- Task gốc có nhánh tích hợp `cfh/<root8>` trong worktree tích hợp; subtask tách nhánh `cfh/<root8>/<task8>` từ nhánh tích hợp.
+- Subtask `done` → bước integrate (dưới khoá worktree tích hợp): auto-commit thay đổi chưa commit của subtask, `merge --no-ff`
+  (`rerere`). Xung đột tầm thường (chỉ lockfile/khoảng trắng) → tự xử; còn lại → `merge --abort`, tạo task `merge` cho assignee
+  của subtask (workspace = worktree tích hợp, danh sách file xung đột); thất bại → approval người.
+- Task gốc xong → để nhánh tích hợp + báo (không push/không đụng nhánh người trừ fast-forward khi checkout chính sạch và đang ở base
+  và `workspace.integrate.fast_forward=true`, mặc định false) → dọn worktree con qua `remove_worktree`.
+
+### E — Khoá theo file (`ws/leases`, sau A; tuỳ chọn bật)
+- `guard.repo_lock` ∈ `repo|files|off` (`true` = `repo`, giữ hành vi cũ). `files`: run giữ khoá repo kiểu CHIA SẺ; Edit/Write/MultiEdit/
+  NotebookEdit lấy lease theo file (repo key + đường dẫn tương đối chuẩn hoá) trong `GuardService.check`, kèm sha256; khác session giữ → deny
+  ngay kèm tên người giữ; file bị sửa ngoài lease → deny "đọc lại file".
+- Bash đổi trạng thái chung (git checkout/switch/reset/rebase/merge/pull/stash, `add -A`/`add .`/`commit -a`, npm/yarn/pnpm/pip install,
+  ghi lockfile) cần khoá repo ĐỘC QUYỀN; không lấy được → deny + gợi ý worktree.
+- B7: diff/revert của run giới hạn theo các file run đã lease; không revert file đang bị session khác lease.
+
+## Kiểm thử
+`uv run pytest -q` (không gọi claude thật). Mỗi luồng thêm test riêng (`tests/test_workspace_parallel_*.py`). Thêm dòng vào
+"Chưa phát hành" trong `CHANGELOG.md` khi có thay đổi người dùng thấy.
