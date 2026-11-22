@@ -10,7 +10,11 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
-### Super Admin Console — quản trị mọi user, hub, tên miền từ `superadmin.<miền>` (#175, #177–#185)
+---
+
+## v0.2.29 — 2026-11-22
+
+### Super Admin Console — quản trị mọi user, hub, tên miền từ `superadmin.<miền>` (#175, #177–#187)
 - **Tiến trình mới `cfharness admind`** (root, LaunchDaemon) + **web SAC** (`cfharness superadmin serve`, user hệ thống `_cfh_sac`): đăng nhập 2 lớp (Cloudflare Access + mật khẩu/TOTP), vai trò Super Admin / Operator / Auditor / Team Lead, step-up TOTP cho thao tác quan trọng, Super Admin thứ hai duyệt thao tác tới hạn, nhật ký quản trị chuỗi băm.
 - **Người dùng & hub**: nhập hub có sẵn, tạo user mới bằng wizard (thay `setup-hub-user.sh`, chạy từng bước, thử lại được), tạm khoá / mở khoá / thu hồi / khôi phục / xoá hẳn có sao lưu, khởi động lại / chẩn đoán / xem log / cập nhật (từng hub, hàng loạt, theo đợt), cấp lại TOTP, gỡ khoá đăng nhập, nhập CSV, hồ sơ 360°.
 - **Tên miền**: tạo/thu hồi/đổi tên DNS qua API Cloudflare đúng zone + ingress tunnel có kiểm và tự quay lại khi lỗi, kiểm sức khoẻ 10 phút, phát hiện lệch.
@@ -25,13 +29,16 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - `cfharness web unlock-login`: gỡ khoá đăng nhập sai mà không khởi động lại web.
 - Hub có thư mục riêng ở `/Users/Shared/cfharness/status/<u>/` xuất thêm `profile.json` và `report/<u>/<ngày>.json` (mức chi tiết việc chỉ khi quản trị bật theo quy định nội bộ).
 
+### Xem file ngay cạnh cuộc trò chuyện (panel trượt, #176)
+- Bấm **Xem** ở file agent đã đọc/ghi giờ mở **panel trượt từ bên phải** (giống claude.ai) thay vì tab mới — chat / diễn biến lượt chạy vẫn ở bên trái. Đóng bằng × hoặc Esc; nút ↗ hoặc Ctrl/⌘+bấm để mở tab riêng như trước. Trên điện thoại panel phủ toàn màn.
+- File **Markdown** (`.md`) hiện bản **đã trình bày đẹp** (tiêu đề, bảng, khối mã, checklist); nút **Mã nguồn** để xem lại mã thô có số dòng. Lựa chọn được nhớ cho lần sau.
+
+### Sửa lỗi (#188)
+- Super Admin: giao việc Team không còn lỗi quyền ghi hộp thư khi admind chạy không phải root (máy dev, CI); admind chạy root như bình thường thì không đổi.
+
 ### Lưu ý khi cập nhật
 - Trang "Quản trị máy" (`/machine`) phía user mặc định **ẩn**; quản trị bật lại bằng công tắc minh bạch trên SAC (`visibility.transparency`).
 - Muốn dùng SAC: làm theo `docs/dev-notes/superadmin.md` §"Triển khai" (cần sudo trên máy chủ). Không cài admind thì hub vẫn chạy như cũ.
-
-### Xem file ngay cạnh cuộc trò chuyện (panel trượt)
-- Bấm **Xem** ở file agent đã đọc/ghi giờ mở **panel trượt từ bên phải** (giống claude.ai) thay vì tab mới — chat / diễn biến lượt chạy vẫn ở bên trái. Đóng bằng × hoặc Esc; nút ↗ hoặc Ctrl/⌘+bấm để mở tab riêng như trước. Trên điện thoại panel phủ toàn màn.
-- File **Markdown** (`.md`) hiện bản **đã trình bày đẹp** (tiêu đề, bảng, khối mã, checklist); nút **Mã nguồn** để xem lại mã thô có số dòng. Lựa chọn được nhớ cho lần sau.
 
 ---
 
