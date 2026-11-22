@@ -161,11 +161,201 @@ def _same(a: str, b: str) -> bool:
     return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
 
 
-def ensure_worktree(hub: Any, repo: str, branch: str, base: str | None = None, path: str | None = None) -> tuple[str, bool]:
+# ============================================================================ vòng đời worktree (luồng B — docs/dev-notes/workspace-parallel.md)
+WORKTREE_SLUG_MAX = 40
+DEPS_MODES = ("link", "install", "none")
+LOCKFILES = ("package-lock.json", "yarn.lock", "pnpm-lock.yaml")
+LONGPATHS_WARNING = ("Windows: git chưa bật core.longpaths — file có đường dẫn dài hơn 260 ký tự trong worktree (checkout, node_modules) "
+                     "sẽ lỗi. Người bật: `git config --global core.longpaths true` (hub không tự đổi cấu hình của người)")
+
+
+def worktree_slug(repo_name: str, branch: str) -> str:
+    """Tên thư mục worktree mặc định: `<repo>-<nhánh đã làm sạch, ≤40 ký tự>-<sha1(nhánh)[:6]>`. Hậu tố băm theo TÊN NHÁNH GỐC nên
+    hai nhánh làm sạch ra cùng chuỗi (`a/b` và `a-b`, hay hai nhánh dài chung 40 ký tự đầu) vẫn ra hai thư mục khác nhau."""
+    clean = "".join(c if (c.isascii() and c.isalnum()) or c in "-_." else "-" for c in branch)
+    while "--" in clean:
+        clean = clean.replace("--", "-")
+    clean = clean.strip("-.")[:WORKTREE_SLUG_MAX].strip("-.") or "wt"
+    return f"{repo_name}-{clean}-{hashlib.sha1(branch.encode('utf-8')).hexdigest()[:6]}"
+
+
+def longpaths_warning(root: str | Path, *, windows: bool | None = None) -> str | None:
+    """Cảnh báo (chuỗi) khi chạy trên Windows mà `core.longpaths` của repo chưa bật; None nếu không cần. CHỈ đọc cấu hình — không đổi.
+    Đọc cả cấu hình system (Git for Windows hay đặt `core.longpaths` ở đó) nên bỏ `GIT_CONFIG_NOSYSTEM` cho riêng lệnh này."""
+    if not (IS_WINDOWS if windows is None else windows):
+        return None
+    env = {**os.environ, **GIT_ENV}
+    env.pop("GIT_CONFIG_NOSYSTEM", None)
+    try:
+        r = subprocess.run(["git", *GIT_SAFE_ARGS, "-C", str(root), "config", "--bool", "--get", "core.longpaths"], capture_output=True,
+                           timeout=30, env=env, encoding="utf-8", errors="replace", **no_window_kwargs())
+    except (OSError, subprocess.TimeoutExpired):
+        return LONGPATHS_WARNING
+    return None if r.stdout.strip() == "true" else LONGPATHS_WARNING
+
+
+def _head_name(root: str) -> str | None:
+    """Nhánh hiện tại của checkout `root` (HEAD tách rời → sha)."""
+    head, branch = _head(root)
+    return branch or head
+
+
+def _is_link(p: str | Path) -> bool:
+    return os.path.islink(p) or os.path.isjunction(p)
+
+
+def _make_dir_link(target: Path, link: Path) -> None:
+    """Liên kết thư mục `link` → `target`: Windows = junction (không cần quyền admin/Developer Mode), POSIX = symlink."""
+    if IS_WINDOWS:
+        try:
+            import _winapi  # type: ignore[import-not-found]
+
+            _winapi.CreateJunction(str(target), str(link))
+            return
+        except (ImportError, AttributeError):
+            pass
+        r = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True, timeout=30, encoding="utf-8",
+                           errors="replace", **no_window_kwargs())
+        if r.returncode != 0 or not _is_link(link):
+            raise OSError(f"mklink /J thất bại: {(r.stderr or r.stdout).strip()[:200]}")
+        return
+    os.symlink(str(target), str(link), target_is_directory=True)
+
+
+def _unlink_dir_link(p: str | Path) -> None:
+    """Gỡ CHÍNH liên kết (junction/symlink), không bao giờ đi theo nó (thư mục đích giữ nguyên)."""
+    p = str(p)
+    if os.path.isjunction(p):
+        os.rmdir(p)  # junction: rmdir gỡ điểm reparse, không đụng nội dung đích
+    elif os.path.islink(p):
+        try:
+            os.unlink(p)
+        except (IsADirectoryError, PermissionError):  # Windows: symlink thư mục gỡ bằng rmdir
+            os.rmdir(p)
+    if _is_link(p):
+        raise OSError(f"không gỡ được liên kết {p}")
+
+
+def _deps_mismatch(wt: Path, repo: Path) -> tuple[str | None, str | None]:
+    """(lý do khác, lockfile) — lý do None = `package.json` và lockfile giống hệt từng byte với repo chính."""
+    try:
+        if (wt / "package.json").read_bytes() != (repo / "package.json").read_bytes():
+            return "package.json khác repo chính", None
+    except OSError:
+        return "repo chính không có package.json", None
+    found = None
+    for name in LOCKFILES:
+        a, b = wt / name, repo / name
+        if a.is_file() != b.is_file():
+            return f"{name} chỉ có ở một bên", None
+        if a.is_file():
+            try:
+                if a.read_bytes() != b.read_bytes():
+                    return f"{name} khác repo chính", None
+            except OSError as e:
+                return f"không đọc được {name}: {e}"[:200], None
+            found = found or name
+    if found is None:
+        return "không có lockfile (package-lock.json / yarn.lock / pnpm-lock.yaml)", None
+    return None, found
+
+
+def _ensure_ignored(wt: Path, name: str) -> bool:
+    """Liên kết `name` phải bị git bỏ qua (không thì agent `git add` nhầm nó và worktree luôn "bẩn"). Mẫu `node_modules/` không khớp
+    symlink trên POSIX → thêm `/<name>` vào `info/exclude` của repo (file cục bộ, không commit). Trả True nếu đã phải thêm."""
+    if _git(wt, "check-ignore", "-q", name).returncode == 0:
+        return False
+    common = _git(wt, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    if not common:
+        return False
+    ex = Path(common) / "info" / "exclude"
+    line = f"/{name}"
+    try:
+        cur = ex.read_text(encoding="utf-8") if ex.is_file() else ""
+        if line not in cur.splitlines():
+            ex.parent.mkdir(parents=True, exist_ok=True)
+            with ex.open("a", encoding="utf-8") as f:
+                f.write(("" if not cur or cur.endswith("\n") else "\n") + line + "\n")
+    except OSError:
+        log.warning("worktree: không ghi được %s", ex, exc_info=True)
+        return False
+    return True
+
+
+def link_deps(wt_path: str | Path, repo_path: str | Path, mode: str = "link") -> dict[str, Any]:
+    """Phụ thuộc node của worktree mới (`workspace.deps`): `link` (mặc định) — `package.json` + lockfile giống hệt repo chính và repo
+    chính đã có `node_modules` → liên kết `node_modules` sang đó (junction Windows / symlink POSIX); khác → `needs_install=true` (agent
+    chạy `npm ci`). `install` → luôn `needs_install`. `none` → không làm gì. Không phải dự án node (không có package.json) → `node=false`.
+    Trả dict `deps` ghi vào metadata worktree."""
+    mode = mode if mode in DEPS_MODES else "link"
+    wt, repo = Path(wt_path), Path(repo_path)
+    out: dict[str, Any] = {"mode": mode, "node": (wt / "package.json").is_file(), "linked": False, "needs_install": False}
+    if not out["node"] or mode == "none":
+        return out
+    if mode == "install":
+        out.update(needs_install=True, reason="workspace.deps=install")
+        return out
+    nm, main_nm = wt / "node_modules", repo / "node_modules"
+    if _is_link(nm):
+        out.update(linked=True, target=os.path.realpath(nm))
+        return out
+    if nm.exists():
+        out["reason"] = "worktree đã có node_modules riêng"
+        return out
+    why, lockfile = _deps_mismatch(wt, repo)
+    if why is None and not main_nm.is_dir():
+        why = "repo chính chưa có node_modules"
+    if why is not None:
+        out.update(needs_install=True, reason=why)
+        return out
+    target = Path(os.path.realpath(main_nm))
+    try:
+        _make_dir_link(target, nm)
+    except OSError as e:
+        out.update(needs_install=True, reason=f"không tạo được liên kết node_modules: {e}"[:200])
+        return out
+    out.update(linked=True, target=str(target), lockfile=lockfile)
+    if _ensure_ignored(wt, "node_modules"):
+        out["excluded"] = True
+    return out
+
+
+def deps_status(wt_path: str | Path, repo_path: str | Path, mode: str = "link") -> dict[str, Any]:
+    """`deps` của worktree DÙNG LẠI (hub không tạo): chỉ đọc trạng thái, không tạo/gỡ liên kết."""
+    wt = Path(wt_path)
+    out: dict[str, Any] = {"mode": mode if mode in DEPS_MODES else "link", "node": (wt / "package.json").is_file(), "linked": False,
+                           "needs_install": False}
+    if not out["node"]:
+        return out
+    nm = wt / "node_modules"
+    if _is_link(nm):
+        out.update(linked=True, target=os.path.realpath(nm))
+    elif not nm.exists() and out["mode"] != "none":
+        out.update(needs_install=True, reason="worktree chưa có node_modules")
+    return out
+
+
+def _deps_mode(hub: Any) -> str:
+    try:
+        m = hub.config.get("workspace.deps") if hub is not None else None
+    except KeyError:
+        m = None
+    return m if m in DEPS_MODES else "link"
+
+
+def ensure_worktree_meta(hub: Any, repo: str, branch: str, base: str | None = None, path: str | None = None, *,
+                         deps_mode: str | None = None) -> dict[str, Any]:
     """Git worktree riêng cho một task (để nhiều task cùng repo chạy SONG SONG: khoá repo tính theo gốc của worktree, không theo
-    repo chính). Trả (đường dẫn, có tạo mới không). Mặc định `<thư mục cha của repo>/_wt/<tên repo>-<nhánh>`.
-    Đã có thư mục: phải là worktree của CÙNG repo và đang ở `branch` thì dùng lại; khác → lỗi (không đụng vào nó).
-    Nhánh đã có → checkout nó (git từ chối nếu nhánh đang mở ở worktree khác); chưa có → tạo từ `base` (mặc định HEAD của repo)."""
+    repo chính). Trả metadata lưu trong `workspace.worktree` của task:
+    `{repo, branch, base, path, owned, created_at, branch_created, deps}` — `owned` = hub vừa tạo thư mục này (dọn được qua
+    `cfharness worktree clean`), `branch_created` = hub tạo nhánh (chỉ khi đó mới `git branch -d` lúc dọn), `base` = nhánh/commit gốc
+    để xét "đã merge" (mặc định nhánh hiện tại của repo chính).
+    Mặc định `<thư mục cha của repo>/_wt/<worktree_slug(repo, nhánh)>`.
+    Đã có thư mục: phải là worktree của CÙNG repo và đang ở `branch` thì dùng lại (`owned=false`, không đụng node_modules); khác → lỗi.
+    Nhánh đã có → checkout nó (git từ chối nếu nhánh đang mở ở worktree khác); chưa có → tạo từ `base` (mặc định HEAD của repo).
+    Tạo mới → `link_deps` theo `workspace.deps` (hoặc `deps_mode`)."""
+    from .store import now_iso
+
     rp = Path(str(repo)).expanduser()
     root = git_root(rp)
     if root is None:
@@ -179,28 +369,167 @@ def ensure_worktree(hub: Any, repo: str, branch: str, base: str | None = None, p
         if not wp.is_absolute():
             raise HubError(f"worktree: path phải là đường dẫn tuyệt đối: {path!r}")
     else:
-        slug = "".join(c if c.isalnum() or c in "-_." else "-" for c in branch.replace("/", "-")).strip("-.")[:80]
-        wp = Path(root).parent / "_wt" / f"{Path(root).name}-{slug}"
+        wp = Path(root).parent / "_wt" / worktree_slug(Path(root).name, branch)
     wp = wp.resolve()
     validate_workspace(hub, {"kind": "dir", "path": str(wp)}, "thư mục worktree")
+    mode = deps_mode if deps_mode in DEPS_MODES else _deps_mode(hub)
+    base_name = str(base).strip() if base else None
     common = _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    meta: dict[str, Any] = {"repo": root, "branch": branch, "base": base_name, "path": str(wp), "owned": False, "created_at": now_iso(),
+                            "branch_created": False}
     if wp.exists():
         wroot = git_root(wp)
         wcommon = _git(wp, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip() if wroot else ""
         cur = _git(wp, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() if wroot else ""
         if wroot and _same(wroot, str(wp)) and _same(wcommon, common) and cur == branch:
-            return str(wp), False
+            meta["base"] = base_name or _head_name(root)
+            meta["deps"] = deps_status(wp, root, mode)
+            return meta
         raise HubError(f"worktree: '{wp}' đã tồn tại nhưng không phải worktree của {root} trên nhánh {branch} — chọn path khác")
     if _git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode == 0:
         r = _git(root, "worktree", "add", str(wp), branch)
+        meta["base"] = base_name or _head_name(root)
     else:
-        b = str(base or "HEAD").strip()
+        b = base_name or "HEAD"
         if _git(root, "rev-parse", "--verify", "-q", f"{b}^{{commit}}").returncode != 0:
             raise HubError(f"worktree: base không tồn tại: {b!r}")
+        meta["base"] = base_name or _head_name(root)
         r = _git(root, "worktree", "add", "-b", branch, str(wp), b)
+        meta["branch_created"] = r.returncode == 0
     if r.returncode != 0:
         raise HubError(f"worktree: git worktree add thất bại: {(r.stderr or r.stdout).strip()[:300]}")
-    return str(wp), True
+    meta["owned"] = True
+    try:
+        meta["deps"] = link_deps(wp, root, mode)
+    except OSError as e:  # không để lỗi liên kết làm hỏng việc tạo task — agent tự cài
+        log.warning("worktree: link_deps lỗi cho %s", wp, exc_info=True)
+        meta["deps"] = {"mode": mode, "node": True, "linked": False, "needs_install": True, "reason": str(e)[:200]}
+    return meta
+
+
+def ensure_worktree(hub: Any, repo: str, branch: str, base: str | None = None, path: str | None = None) -> tuple[str, bool]:
+    """Bản cũ (tương thích): `(đường dẫn, có tạo mới không)` — xem `ensure_worktree_meta`."""
+    m = ensure_worktree_meta(hub, repo, branch, base, path)
+    return m["path"], bool(m["owned"])
+
+
+def worktree_paths(root: str) -> list[str]:
+    """Mọi worktree git biết của repo (kể cả checkout chính), theo `git worktree list --porcelain`."""
+    r = _git(root, "worktree", "list", "--porcelain")
+    if r.returncode != 0:
+        return []
+    return [ln[len("worktree "):].strip() for ln in r.stdout.splitlines() if ln.startswith("worktree ")]
+
+
+def branch_merged(root: str, branch: str, base: str | None) -> str | None:
+    """Nhánh đã an toàn để gỡ? `base` = đã merge vào base; `upstream` = có trên nhánh upstream; `remote` = có trên một nhánh remote nào đó.
+    None = chưa (hoặc nhánh không còn)."""
+    if _git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode != 0:
+        return None
+    if base and _git(root, "rev-parse", "--verify", "-q", f"{base}^{{commit}}").returncode == 0 \
+            and _git(root, "merge-base", "--is-ancestor", f"refs/heads/{branch}", base).returncode == 0:
+        return "base"
+    up = _git(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", f"{branch}@{{upstream}}")
+    if up.returncode == 0 and up.stdout.strip() \
+            and _git(root, "merge-base", "--is-ancestor", f"refs/heads/{branch}", up.stdout.strip()).returncode == 0:
+        return "upstream"
+    rem = _git(root, "branch", "-r", "--contains", f"refs/heads/{branch}")
+    if rem.returncode == 0 and rem.stdout.strip():
+        return "remote"
+    return None
+
+
+def find_dir_links(top: str | Path) -> list[str]:
+    """Mọi junction/symlink THƯ MỤC trong cây `top` (không đi vào liên kết, bỏ `.git`). `git worktree remove` xoá đệ quy và trên Windows
+    coi junction là thư mục thường → sẽ xoá luôn nội dung ĐÍCH (vd node_modules của repo chính) nếu còn liên kết."""
+    out: list[str] = []
+    stack = [str(top)]
+    while stack:
+        d = stack.pop()
+        try:
+            it = os.scandir(d)
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                if e.name == ".git" and d == str(top):
+                    continue
+                try:
+                    if e.is_junction() or e.is_symlink():
+                        if os.path.isdir(e.path) or e.is_junction():
+                            out.append(e.path)
+                        continue
+                    if e.is_dir(follow_symlinks=False):
+                        stack.append(e.path)
+                except OSError:
+                    continue
+    return sorted(out)
+
+
+def remove_worktree(meta: dict[str, Any], *, dry_run: bool = False, force: bool = False) -> dict[str, Any]:
+    """Gỡ worktree theo metadata, an toàn với junction: (1) worktree còn thay đổi chưa commit → `Conflict` (trừ `force`); (2) gỡ mọi
+    junction/symlink thư mục KHÔNG được git theo dõi (node_modules liên kết…) — gỡ chính liên kết, không đi theo; (3) `git worktree
+    remove` (KHÔNG `--force` trừ khi người chọn `force` cho worktree bẩn — liên kết đã gỡ trước đó); (4) hub tạo nhánh (`branch_created`)
+    và nhánh đã merge vào base / có trên upstream/remote → `git branch -d` (git từ chối vì base ≠ HEAD của checkout chính → `-D`, an toàn
+    vì đã kiểm merge). `dry_run` → chỉ trả các bước sẽ làm."""
+    repo = str(meta.get("repo") or "")
+    wp = str(meta.get("path") or "")
+    branch = str(meta.get("branch") or "")
+    root = git_root(repo) if repo else None
+    if root is None:
+        raise HubError(f"worktree: repo không còn / không phải git: {repo!r}")
+    if not wp or _same(wp, root):
+        raise HubError("worktree: không gỡ checkout chính của repo")
+    out: dict[str, Any] = {"path": wp, "repo": root, "branch": branch, "dry_run": dry_run, "links": [], "removed": False,
+                           "branch_deleted": False, "actions": []}
+    exists = os.path.isdir(wp)
+    if exists:
+        if not any(_same(wp, x) for x in worktree_paths(root)):
+            raise HubError(f"worktree: '{wp}' không phải worktree của {root} — không đụng vào")
+        links = find_dir_links(wp)
+        tracked = set()
+        if links:
+            rels = [os.path.relpath(x, wp).replace(os.sep, "/") for x in links]
+            tracked = set(_names_z(wp, "ls-files", "-z", "--", *rels))
+            links = [x for x, rel in zip(links, rels) if rel not in tracked]
+        link_rels = {os.path.relpath(x, wp).replace(os.sep, "/") for x in links}
+        dirty = [p for p in _status_paths(wp) if p.rstrip("/") not in link_rels]
+        out["dirty"] = dirty[:50]
+        if dirty and not force:
+            raise Conflict(f"worktree {wp} còn {len(dirty)} thay đổi chưa commit ({', '.join(dirty[:5])}) — commit/bỏ trước, "
+                           "hoặc dọn với --force", data={"dirty": dirty[:50], "path": wp})
+        out["links"] = links
+        out["actions"] += [f"gỡ liên kết {x}" for x in links] + [f"git worktree remove{' --force' if dirty else ''} {wp}"]
+        if not dry_run:
+            for x in links:
+                _unlink_dir_link(x)
+            if find_dir_links(wp) and dirty:  # còn liên kết (được git theo dõi) → không bao giờ --force
+                raise Conflict(f"worktree {wp} còn liên kết thư mục được git theo dõi — không gỡ bằng --force")
+            r = _git(root, "worktree", "remove", *(["--force"] if dirty else []), wp)
+            if r.returncode != 0:
+                raise HubError(f"worktree: git worktree remove thất bại: {(r.stderr or r.stdout).strip()[:300]}")
+            out["removed"] = True
+    else:
+        out["actions"].append("git worktree prune (thư mục không còn)")
+        if not dry_run:
+            _git(root, "worktree", "prune")
+    if branch and meta.get("branch_created"):
+        how = branch_merged(root, branch, meta.get("base"))
+        out["branch_merged"] = how
+        if how is None:
+            out["branch_kept"] = "nhánh chưa merge vào base / chưa có trên remote — giữ"
+        else:
+            out["actions"].append(f"git branch -d {branch} (đã merge: {how})")
+            if not dry_run:
+                r = _git(root, "branch", "-d", branch)
+                if r.returncode != 0:  # -d chỉ xét HEAD/upstream của checkout chính; ta đã kiểm merge vào base
+                    r = _git(root, "branch", "-D", branch)
+                out["branch_deleted"] = r.returncode == 0
+                if r.returncode != 0:
+                    out["branch_kept"] = (r.stderr or r.stdout).strip()[:200]
+    elif branch:
+        out["branch_kept"] = "nhánh không do hub tạo — giữ"
+    return out
 
 
 def _head(root: str) -> tuple[str | None, str | None]:
