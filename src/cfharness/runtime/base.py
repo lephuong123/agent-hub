@@ -58,6 +58,9 @@ class RunSpec:
     json_schema: dict[str, Any] | None = None
     agents_json: dict[str, Any] | None = None
     worktree: str | None = None
+    # B2 (workspace-parallel): kind `worktree` mà cwd là CHECKOUT CHÍNH của repo (`claude --worktree` chạy từ repo chính) —
+    # bypassPermissions bị từ chối (Edit/Write ghi được cả repo chính ngoài worktree). RunManager tính (I/O), build_argv thuần
+    cwd_main_checkout: bool = False
     # M4-B: run eval (FR-LN-10) — `--no-session-persistence`, không ghi session ra đĩa
     no_session_persistence: bool = False
     # run điều phối viên có connector claude.ai: ghi đè `runtime.claude.isolation` (setting_sources/strict_mcp_config) cho riêng run
