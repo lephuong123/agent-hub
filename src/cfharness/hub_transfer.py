@@ -811,6 +811,10 @@ def _adjust_db(db: Path, *, mode: str, apply: bool, manifest: dict[str, Any], fo
             out["state_cleared"] = keys
             if apply and keys:
                 conn.executemany("DELETE FROM hub_state WHERE key=?", [(k,) for k in keys])
+        if "file_leases" in tabs:  # lease theo file (luồng E) = trạng thái tạm của máy cũ như `repo_locks_shared` → luôn xoá
+            out["file_leases_cleared"] = conn.execute("SELECT COUNT(*) FROM file_leases").fetchone()[0]
+            if apply and out["file_leases_cleared"]:
+                conn.execute("DELETE FROM file_leases")
         now = now_iso()
         if "runs" in tabs:
             sts = CLONE_RUN_STATUSES if mode == "clone" else ("running",)
