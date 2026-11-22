@@ -7,6 +7,7 @@ dispatch, xong thì ghép vào nhánh tích hợp `cfh/<gốc>/integration`; xun
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 from pathlib import Path
 
@@ -372,5 +373,162 @@ def test_internal_workspace_keys_not_accepted_from_outside(hub_home, repo):
                             "workspace": {"kind": "dir", "path": str(repo), "merge_for": "t_evil", "isolation": {"root": "t_r"},
                                           "integration": {"path": "/"}}})
         assert set(h.tasks.row(t["id"])["workspace"]) == {"kind", "path"}
+    finally:
+        h.store.close()
+
+
+# ============================================================================ review: khoá, lỗi git, ghép tay, cô lập thất bại
+def _spy_locks(h):
+    calls = []
+    orig = h.runs.locks.try_acquire_many
+
+    def spy(keys, session_id, run_id, mode=None):
+        keys = list(keys)
+        calls.append((keys, session_id, mode))
+        return orig(keys, session_id, run_id, mode=mode)
+
+    h.runs.locks.try_acquire_many = spy
+    return calls
+
+
+async def test_integration_and_fast_forward_take_exclusive_locks_in_files_mode(make_hub, repo):
+    plan = _plan(("a", "Edit A", "dev1", {"isolate": True}))
+    h, rt = make_hub(plan, lambda title, spec: {"files": {"a.txt": "ff\n"}})
+    h.config.set("guard.repo_lock", "files")
+    h.config.set("workspace.integrate.fast_forward", True)
+    calls = _spy_locks(h)
+    root = _root(h, repo)
+    await settle(lambda: h.tasks.row(root["id"])["status"] == "done")
+    mine = [c for c in calls if c[1] == f"integrate:{root['id']}"]
+    assert mine and all(c[2] == "exclusive" for c in mine)
+    assert any(os.path.realpath(repo) in c[0] for c in mine)  # fast-forward giữ khoá checkout chính
+    assert h.tasks.row(root["id"])["result_json"]["integration"]["fast_forward"] == {"done": True}
+    assert h.runs.locks.list() == {} and h.runs.locks.list_shared() == {}
+
+
+async def test_fast_forward_skipped_when_main_checkout_locked(make_hub, repo):
+    import uuid
+
+    from cfharness.store import now_iso
+
+    plan = _plan(("a", "Edit A", "dev1", {"isolate": True}))
+    h, rt = make_hub(plan, lambda title, spec: {"files": {"b.txt": "ff\n"}})
+    h.config.set("workspace.integrate.fast_forward", True)
+    rid_run = "r_" + uuid.uuid4().hex[:10]
+    h.store.insert_run({"id": rid_run, "agent_id": "dev2", "kind": "adhoc", "prompt": "x", "session_id": "sess-main",
+                        "status": "waiting_human", "queued_at": now_iso()})
+    assert h.runs.locks.try_acquire(os.path.realpath(repo), "sess-main", rid_run, mode="exclusive")
+    root = _root(h, repo)
+    await settle(lambda: h.tasks.row(root["id"])["status"] == "done")
+    ff = h.tasks.row(root["id"])["result_json"]["integration"]["fast_forward"]
+    assert ff["done"] is False and "khoá" in ff["reason"] and rid_run in ff["reason"]
+    assert (repo / "b.txt").read_text() == "b1\n"
+    assert h.runs.locks.holder(os.path.realpath(repo))["session_id"] == "sess-main"  # khoá người khác còn nguyên
+
+
+async def test_git_timeout_during_merge_blocks_root_and_aborts_merge(make_hub, repo, monkeypatch):
+    plan = _plan(("a", "Edit A one", "dev1", {"isolate": True}), ("b", "Edit A two", "dev2", {"isolate": True}))
+    h, rt = make_hub(plan, lambda title, spec: {"files": {"a.txt": f"line1\n{title}\nline3\n"}, "hold": True})
+    orig = Integrator._do_merge
+    n = {"calls": 0}
+
+    def flaky(self, ip, branch, msg, *extra):
+        n["calls"] += 1
+        res = orig(self, ip, branch, msg, *extra)
+        if n["calls"] >= 2:  # lần ghép thứ hai: để lại MERGE_HEAD rồi "git treo"
+            raise subprocess.TimeoutExpired(["git", "merge"], 60)
+        return res
+
+    monkeypatch.setattr(Integrator, "_do_merge", flaky)
+    root = _root(h, repo)
+    rid = root["id"]
+    await settle(lambda: len([s for s in rt.specs.values() if kind_of(s) == "task"]) == 2)
+    rt.release()
+    await settle(lambda: h.tasks.row(rid)["status"] == "blocked")
+    r = h.tasks.row(rid)
+    integ = r["workspace"]["integration"]
+    failed = [c for c in integ["conflicts"] if c["status"] == "failed"]
+    assert len(failed) == 1 and "TimeoutExpired" in failed[0]["reason"] and "TimeoutExpired" in r["block_reason"]
+    ip = Path(integ["path"])
+    assert subprocess.run(["git", "-C", str(ip), "rev-parse", "-q", "--verify", "MERGE_HEAD"]).returncode != 0  # đã merge --abort
+    assert h.runs.locks.list() == {}
+    # tick tiếp không ném lỗi, task gốc vẫn blocked rõ ràng
+    h.dispatcher.tick()
+    assert h.tasks.row(rid)["status"] == "blocked"
+
+
+async def test_manual_merge_in_progress_is_never_auto_committed(make_hub, repo):
+    plan = _plan(("a", "Edit A one", "dev1", {"isolate": True}), ("b", "Edit A two", "dev2", {"isolate": True}))
+
+    def work(title, spec):
+        if title.startswith("Merge: "):
+            return {}  # agent báo xong mà không ghép
+        return {"files": {"a.txt": f"line1\n{'ONE' if title.endswith('one') else 'TWO'}\nline3\n"}, "hold": True}
+
+    h, rt = make_hub(plan, work)
+    root = _root(h, repo)
+    rid = root["id"]
+    await settle(lambda: len([s for s in rt.specs.values() if kind_of(s) == "task"]) == 2)
+    rt.release()
+    await settle(lambda: h.tasks.row(rid)["status"] == "blocked")
+    integ = h.tasks.row(rid)["workspace"]["integration"]
+    bad = [c for c in integ["conflicts"] if c["status"] == "failed"][0]
+    ip = Path(integ["path"])
+    head0 = git(ip, "rev-parse", "HEAD")
+    # người đang ghép: đã giải + stage nhưng CHƯA commit → hub không được commit hộ
+    git(ip, "merge", "--no-ff", bad["branch"], check=False)
+    (ip / "a.txt").write_text("line1\nHUMAN\nline3\n")
+    git(ip, "add", "a.txt")
+    for _ in range(3):
+        h.dispatcher.tick()
+    assert git(ip, "rev-parse", "HEAD") == head0 and h.tasks.row(rid)["status"] == "blocked"
+    h.tasks.unblock(rid)  # gỡ chặn khi merge còn dở → chặn lại, nói rõ
+    await settle(lambda: h.tasks.row(rid)["status"] == "blocked")
+    assert "dở" in h.tasks.row(rid)["block_reason"]
+    assert git(ip, "rev-parse", "HEAD") == head0
+    assert subprocess.run(["git", "-C", str(ip), "rev-parse", "-q", "--verify", "MERGE_HEAD"]).returncode == 0
+    # người commit → còn blocked tới khi gỡ chặn; gỡ chặn → hub kiểm lại, task gốc xong
+    git(ip, "commit", "-q", "--no-edit")
+    h.dispatcher.tick()
+    assert h.tasks.row(rid)["status"] == "blocked"
+    h.tasks.unblock(rid)
+    await settle(lambda: h.tasks.row(rid)["status"] == "done")
+    assert "manual" in {m["how"] for m in h.tasks.row(rid)["workspace"]["integration"]["merged"]}
+
+
+async def test_isolation_failure_blocks_requested_task_instead_of_main_checkout(make_hub, repo, monkeypatch):
+    plan = _plan(("a", "Edit A", "dev1", {"isolate": True}))
+    h, rt = make_hub(plan, lambda title, spec: {"files": {"a.txt": "x\n"}})
+
+    def boom(self, t, reason):
+        raise HubError("git worktree add thất bại: giả lập")
+
+    monkeypatch.setattr(Integrator, "isolate", boom)
+    root = _root(h, repo)
+    rid = root["id"]
+    await settle(lambda: any(s["status"] == "blocked" for s in h.tasks.subtasks(rid)))
+    sub = h.tasks.subtasks(rid)[0]
+    assert "worktree" in sub["block_reason"] and "giả lập" in sub["block_reason"]
+    assert not [s for s in rt.specs.values() if kind_of(s) == "task"]  # không chạy trên checkout chính
+    await settle(lambda: h.tasks.row(rid)["status"] == "blocked")
+
+
+def test_ensure_integration_prunes_stale_worktree_before_recreating(hub_home, repo):
+    import shutil
+
+    from cfharness.workspace import registered_worktree
+
+    h = Hub(hub_home, runtime=ScriptedRuntime(lambda s: {}))
+    h.config.set("tasks.tick_s", 3600)
+    try:
+        h.agents.create({"id": "c1", "name": "c1"})
+        t = h.tasks.create({"assignee": "c1", "title": "x", "body": "y", "workspace": {"kind": "dir", "path": str(repo)}})
+        integ = Integrator(h)
+        st = integ.ensure_integration(h.tasks.row(t["id"]), str(repo.resolve()), {"kind": "dir", "path": str(repo)})
+        p = Path(st["path"])
+        shutil.rmtree(p)  # người xoá tay thư mục (git vẫn ghi worktree đó)
+        st2 = integ.ensure_integration(h.tasks.row(t["id"]), str(repo.resolve()), {"kind": "dir", "path": str(repo)})
+        assert Path(st2["path"]).is_dir() and git(st2["path"], "rev-parse", "--abbrev-ref", "HEAD") == st["branch"]
+        assert registered_worktree(h.store, st2["path"])["branch_created"] is True  # dựng lại giữ "hub tạo nhánh"
     finally:
         h.store.close()

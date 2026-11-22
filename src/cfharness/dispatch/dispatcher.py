@@ -757,6 +757,9 @@ class TaskDispatcher:
                 if reason is None:
                     cur = t
                     iso = self.integrator.maybe_isolate(t, agent_id, lock_blocked=lambda: self._lock_block(cur, agent_id, None, False) is not None)
+                    if iso is not None and iso.get("status") == "blocked":  # cô lập bắt buộc mà thất bại → task bị chặn, không chạy
+                        self._refresh_root(iso)
+                        continue
                     if iso is not None:
                         t = iso
             if reason is None:
@@ -992,14 +995,26 @@ class TaskDispatcher:
                 self.tasks.set_status(rid, "blocked", reason=f"mọi task con ({len(every)}) đã bị huỷ — giao lại, đóng hoặc archive task gốc")
             return
         if subs and all(s["status"] == "done" for s in subs):
-            gate = self.integrator.gate(root, subs)  # luồng D: mọi task con cô lập phải được ghép vào nhánh tích hợp trước
+            try:
+                gate = self.integrator.gate(root, subs)  # luồng D: mọi task con cô lập phải được ghép vào nhánh tích hợp trước
+            except Exception as e:  # lỗi bất ngờ khi ghép: chặn task gốc kèm lý do thay vì ném lại ở mỗi tick
+                log.exception("xét ghép nhánh tích hợp của task gốc %s lỗi", rid)
+                self.integrator._block_root(rid, f"ghép nhánh tích hợp lỗi ({type(e).__name__}: {str(e)[:200]}) — xem log hub, xử lý rồi "
+                                                 f"`cfharness task unblock {rid}`")
+                return
             if gate is not None:
                 if gate[0] == "blocked":
                     self.integrator._block_root(rid, gate[1])
                 elif root["status"] == "blocked":
                     self.tasks.set_status(rid, "running", reason=gate[1])
                 return
-            fin = self.integrator.finalize(root)
+            try:
+                fin = self.integrator.finalize(root)
+            except Exception as e:
+                log.exception("hoàn tất nhánh tích hợp của task gốc %s lỗi", rid)
+                self.integrator._block_root(rid, f"hoàn tất nhánh tích hợp lỗi ({type(e).__name__}: {str(e)[:200]}) — xem log hub, xử lý rồi "
+                                                 f"`cfharness task unblock {rid}`")
+                return
             res = []
             for s in subs:
                 res.append({"task_id": s["id"], "key": s.get("plan_key"), "title": s["title"], "assignee": s.get("assignee_agent_id"),
