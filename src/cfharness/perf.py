@@ -5,7 +5,8 @@
   × số thùng × `reservoir` mẫu × 4 byte.
 - `ReqTiming` + contextvar `CURRENT`: phân rã một yêu cầu HTTP của web (RPC tới daemon: số lần + ms theo method; render template ms).
   `note_rpc`/`note_render` là no-op khi không có yêu cầu đang đo (TUI/CLI dùng chung `AsyncHubClient`).
-- Daemon: `DaemonPerf` (thời gian MỖI RPC, nạp từ access log `cfharness.rpc`) + ảnh chụp mới nhất web gửi lên (`perf.report`).
+- Daemon: `DaemonPerf` (thời gian MỖI RPC, nạp từ access log `cfharness.rpc`) + ảnh chụp mới nhất web gửi lên (`perf.report`)
+  + độ trễ event loop `loop.lag` (daemon đo mỗi giây — `Daemon._loop_lag`; nằm trong bảng RPC như một khoá riêng).
   RPC `perf.stats` (đọc) / `perf.report` (web đẩy) — đều HUMAN_ONLY (token web là người). CLI `cfharness perf`.
 
 Chỉ METADATA: route template (không đường dẫn thô có id), tên method, số ms — không bao giờ tham số/nội dung.
@@ -33,6 +34,8 @@ MAX_KEYS = 256
 OTHER_KEY = "(khác)"
 DEFAULT_WINDOW_MIN = 15
 DEFAULT_SLOW_MS = 1500
+LOOP_LAG_KEY = "loop.lag"  # khoá độ trễ event loop của daemon trong bảng RPC (hiện ở /perf + `cfharness perf` không cần sửa web)
+DEFAULT_LOOP_LAG_WARN_MS = 250
 
 
 class Rolling:
@@ -203,9 +206,18 @@ class DaemonPerf:
         self.web: dict[str, Any] | None = None
         self.web_at: float | None = None
         self.started = time.time()
+        self.loop_lag_last: float | None = None
+        self.loop_lag_max = 0.0
 
     def note(self, method: str, ms: float) -> None:
         self.rpc.add(method[:80], ms)
+
+    def note_loop_lag(self, ms: float) -> None:
+        """Một mẫu độ trễ event loop (ms) — khoá `loop.lag` trong bảng RPC + giá trị gần nhất/lớn nhất từ lúc khởi động."""
+        self.rpc.add(LOOP_LAG_KEY, ms)
+        self.loop_lag_last = ms
+        if ms > self.loop_lag_max:
+            self.loop_lag_max = ms
 
 
 WEB_SECTIONS = ("backend", "frontend", "web_rpc")
@@ -244,7 +256,8 @@ def perf_config(hub: Any) -> dict[str, Any]:
         return d if v is None else v
 
     return {"enabled": bool(_get("perf.enabled", True)), "slow_ms": float(_get("perf.slow_ms", DEFAULT_SLOW_MS) or 0),
-            "window_min": float(_get("perf.window_min", DEFAULT_WINDOW_MIN) or DEFAULT_WINDOW_MIN)}
+            "window_min": float(_get("perf.window_min", DEFAULT_WINDOW_MIN) or DEFAULT_WINDOW_MIN),
+            "loop_lag_warn_ms": float(_get("perf.loop_lag_warn_ms", DEFAULT_LOOP_LAG_WARN_MS) or 0)}
 
 
 def register_rpc(daemon: "Daemon") -> None:
@@ -258,8 +271,12 @@ def register_rpc(daemon: "Daemon") -> None:
         except (TypeError, ValueError):
             limit = 50
         web = dp.web or {}
+        rows = dp.rpc.snapshot(win)
+        lag = next((r for r in rows if r["key"] == LOOP_LAG_KEY), None)
         return {"window_min": round(win / 60, 1), "now": time.time(), "daemon_started": dp.started,
-                "rpc": dp.rpc.snapshot(win, limit=limit),
+                "rpc": rows[:limit],
+                "loop": {**(lag or {}), "last": None if dp.loop_lag_last is None else round(dp.loop_lag_last, 1),
+                         "max_since_start": round(dp.loop_lag_max, 1)},
                 "web": {"at": dp.web_at, **{s: (web.get(s) or [])[:limit] for s in WEB_SECTIONS}},
                 "config": perf_config(hub)}
 
@@ -298,6 +315,10 @@ def format_stats(r: dict[str, Any]) -> str:
     lines += _table("Trình duyệt (FE)", web.get("frontend") or [])
     lines += _table("Web (BE, theo route)", web.get("backend") or [])
     lines += _table("RPC daemon (theo method)", r.get("rpc") or [])
+    lp = r.get("loop") or {}
+    if lp.get("count"):
+        lines.append(f"Độ trễ event loop daemon ({LOOP_LAG_KEY}): p50 {lp['p50']:.0f}ms · p95 {lp['p95']:.0f}ms · max {lp['max']:.0f}ms"
+                     f" · lớn nhất từ lúc khởi động {lp.get('max_since_start', 0):.0f}ms")
     lines.append(f"Ảnh chụp web: {'%d giây trước' % int(time.time() - at) if at else 'chưa có (web chưa chạy hoặc chưa có request)'}"
                  " · trang web: /perf")
     return "\n".join(lines)
@@ -313,5 +334,5 @@ def cmd_perf(ctx: Any) -> int:
     return 0
 
 
-__all__ = ["Rolling", "ReqTiming", "CURRENT", "note_rpc", "note_render", "server_timing", "DaemonPerf", "register_rpc", "add_parsers",
+__all__ = ["LOOP_LAG_KEY", "Rolling", "ReqTiming", "CURRENT", "note_rpc", "note_render", "server_timing", "DaemonPerf", "register_rpc", "add_parsers",
            "percentile", "perf_config"]

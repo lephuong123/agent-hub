@@ -270,6 +270,7 @@ DEFAULTS: dict[str, Any] = {
         "enabled": True,  # tắt = web không đo/không nhận beacon (daemon vẫn đo RPC — gần như miễn phí)
         "slow_ms": 1500,  # request web chậm hơn → WARNING `http.slow` trong web.jsonl (0 = tắt)
         "window_min": 15,  # cửa sổ mặc định của bảng "chậm nhất" (tối đa 60 phút — dữ liệu chỉ ở RAM)
+        "loop_lag_warn_ms": 250,  # event loop daemon bị chặn lâu hơn → WARNING `loop.lag` trong hub.log (0 = tắt; số đo vẫn lên /perf)
     },
     "recovery": {
         "auto_resume": True,  # Q-09: daemon restart → dừng-và-resume tự động (trừ waiting_human)
@@ -1009,7 +1010,7 @@ class HubConfig:
 
 def validate_setting(key: str, value: Any) -> None:
     """Kiểm tối thiểu các khoá quan trọng; khoá lạ vẫn cho ghi (mở rộng sau)."""
-    if key in ("perf.slow_ms", "perf.window_min"):  # đo hiệu năng (perf.py)
+    if key in ("perf.slow_ms", "perf.window_min", "perf.loop_lag_warn_ms"):  # đo hiệu năng (perf.py)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
             raise ValueError(f"{key} phải là số ≥ 0")
         if key == "perf.window_min" and not 1 <= value <= 60:
