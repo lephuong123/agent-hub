@@ -9,7 +9,7 @@ const imp = (p) => import(pathToFileURL(path.join(ST, p)).href);
 const S = await imp("vendor/preact-signals-core-1.14.5/signals-core.mjs");
 const SM = await imp("coord/store.js");
 const { createStore } = SM;
-const { createFeed } = await imp("coord/sse.js");
+const { createFeed, QUIET: QUIET_MS } = await imp("coord/sse.js");
 const U = await imp("coord/util.js");
 
 let fails = 0;
@@ -163,10 +163,10 @@ ok("draftKey tương thích trang cũ", U.draftKey("c1", "ws1") === "c:c1" && U.
     close() { this.readyState = 2; }
     emit(data, id) { this.onmessage({ data: JSON.stringify(data), lastEventId: id || "" }); }
   }
-  const timers = [];
+  const timers = [];  // chỉ hẹn mở lại (canh im lặng hẹn với ms khác — bỏ qua ở ca này)
   const got = [];
   const feed = createFeed({ EventSource: FakeES, tab: "t1", since: "b1.10", scope: () => ({ c: ["c1"], w: ["_"] }),
-    onMessage: (m) => got.push(m), timers: { set: (f) => { timers.push(f); return timers.length; }, clear: () => {} } });
+    onMessage: (m) => got.push(m), timers: { set: (f, ms) => { if (ms !== 10000) timers.push(f); return timers.length; }, clear: () => {} } });
   const es = made[0];
   ok("URL đầu có since + phạm vi + tab", es.url.includes("since=b1.10") && es.url.includes("c=c1") && es.url.includes("w=_") && es.url.includes("tab=t1"), es.url);
   es.emit({ t: "hello", boot: "b1" });
@@ -186,6 +186,59 @@ ok("draftKey tương thích trang cũ", U.draftKey("c1", "ws1") === "c:c1" && U.
   feed.close();
 }
 
+
+// ---------------------------------------------------------------- verify r2: nối lại mang ĐỦ phạm vi hiện tại; canh luồng chết lặng
+{
+  const made = [];
+  class FakeES {
+    constructor(url) { this.url = url; this.readyState = 0; made.push(this); }
+    close() { this.readyState = 2; }
+    emit(data, id) { this.onmessage({ data: JSON.stringify(data), lastEventId: id || "" }); }
+  }
+  let clock = 0;
+  const pend = new Map(); let seq = 0;
+  const T = { set: (f, ms) => { pend.set(++seq, { f, at: clock + ms }); return seq; }, clear: (t) => { pend.delete(t); } };
+  const tick = (ms) => {  // chạy đồng hồ giả tới clock+ms
+    const end = clock + ms;
+    for (;;) {
+      let k = null, best = null;
+      for (const [id, x] of pend) if (x.at <= end && (!best || x.at < best.at)) { k = id; best = x; }
+      if (!best) break;
+      pend.delete(k); clock = best.at; best.f();
+    }
+    clock = end;
+  };
+  const scope = { c: ["boot"], w: [] };
+  const got = [];
+  const feed = createFeed({ EventSource: FakeES, tab: "t9", since: "b1.10", scope: () => scope, timers: T, now: () => clock,
+    onMessage: (m) => got.push(m) });
+  made[0].onopen();
+  made[0].emit({ t: "hello", boot: "b1" });
+  scope.c = ["boot", "later"];  // khung mở SAU khi tải trang (ảnh chụp ?tab= / watch)
+  made[0].readyState = 0;  // lỗi mạng, trình duyệt định TỰ nối bằng URL cũ
+  made[0].onerror();
+  ok("lỗi khi CONNECTING: đóng EventSource cũ (không để trình duyệt tự nối bằng URL ban đầu)", made[0].readyState === 2);
+  tick(1000);
+  ok("mở lại mang đủ phạm vi hiện tại + since", made.length === 2 && made[1].url.includes("c=later") && made[1].url.includes("c=boot")
+     && made[1].url.includes("since=b1.10"), made.map((e) => e.url));
+  made[1].onopen();
+  made[1].emit({ t: "ping" });
+  ok("ping không tới store", !got.some((m) => m.t === "ping"));
+  tick(30000);
+  made[1].emit({ t: "ping" }, "b1.20");
+  ok("ping có id: cập nhật vị trí", feed.last === "b1.20");
+  tick(35000);
+  ok("còn nhịp ping → không mở lại", made.length === 2);
+  tick(QUIET_MS);  // luồng chết lặng: không lỗi, không message
+  ok("im lặng quá QUIET → tự mở lại với since = id cuối", made.length === 3 && made[2].url.includes("since=b1.20"), made.length);
+  ok("luồng cũ bị đóng", made[1].readyState === 2);
+  made[1].emit({ t: "msg.delta", text: "ma" }, "b1.21");
+  ok("message của luồng cũ (đã thay) bị bỏ", !got.some((m) => m.text === "ma"));
+  feed.close();
+  const n = made.length;
+  tick(200000);
+  ok("đóng → không mở lại nữa", made.length === n);
+}
 
 // ---------------------------------------------------------------- tải ảnh chụp ↔ luồng SSE (verify r1: mất/ghi đè message, kẹt "Đang tải…")
 {
@@ -239,6 +292,20 @@ ok("draftKey tương thích trang cũ", U.draftKey("c1", "ws1") === "c:c1" && U.
   ok("paneFor vẫn trả khung (main.go thấy stale → tải lại)", store.paneFor({ w: "ws1" }) === a && a.stale);
   store.endLoad(a, "Không tải được");
   ok("tải lỗi → hiện lỗi trong khung", a.error.value === "Không tải được" && a.stale);
+}
+{
+  // verify r2: tải lại NỀN khung đang hiện (đã có dòng thời gian) bị lỗi → phần SSE giữ lại phát lên bản đang hiện, không mất msg.done/run.end
+  const store = createStore(S, { storage: mem() });
+  const p = store.applySnapshot(snap({ conv: "c1", conv_runs: ["r1"], pending: { run: "r1" }, items: [{ kind: "user", id: "m1", text: "hi", ts: today, run_id: "r1" }],
+                                       conversations: [{ id: "c1" }] }), null);
+  store.activate(p);
+  store.beginLoad(p);
+  store.apply({ t: "msg.done", run: "r1", conv: "c1", item: { kind: "manager", id: "e5", text: "xong", html: "<p>xong</p>", run_id: "r1", ts: today } }, "b1.11");
+  store.apply({ t: "run.end", run: "r1", conv: "c1", ok: true }, "b1.12");
+  ok("đang tải lại: message giữ, chưa áp", p.held.length === 2 && !p.items.value.some((x) => x.id === "e5"));
+  const fx = store.endLoad(p, "Không tải được");
+  ok("lỗi tải lại khung đã có: phát lại phần giữ (trả lời hiện, khung chờ tắt), không hiện lỗi đè", p.items.value.some((x) => x.kind === "manager")
+     && p.pending.value === null && p.held.length === 0 && p.stale && Array.isArray(fx) && fx.some((f) => f.fx === "event"), p.items.value.map((x) => x.id));
 }
 {
   // ghi chú lượt lỗi: ảnh chụp mang id "n<run>" → run.end lỗi phát lại sau cursor không thêm ghi chú thứ hai

@@ -16,7 +16,9 @@ export function onScroll(s, m, user) {
   if (!m.client) return s;  // khung đang ẩn (display:none) — không phải người cuộn
   const dist = m.height - m.top - m.client;
   if (dist <= 2 || (dist <= NEAR && m.top >= s.top)) return { stick: true, top: m.top, unseen: false };
-  if (m.top < s.top - 1 && (user || !s.stick)) return { ...s, stick: false, top: m.top };
+  // không do người nhưng đã xa đáy hơn một màn hình (script / công cụ hỗ trợ / thanh cuộn ngoài ta không đo được) → cũng bỏ dính: trình
+  // duyệt kẹp scrollTop chỉ vài trăm px, không bao giờ cả màn hình
+  if (m.top < s.top - 1 && (user || !s.stick || dist > m.client)) return { ...s, stick: false, top: m.top };
   return { ...s, top: m.top };
 }
 

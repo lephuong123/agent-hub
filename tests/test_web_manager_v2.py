@@ -249,7 +249,8 @@ async def test_skipped_messages_still_advance_last_event_id(feed):
         if b.startswith("id: "):
             break
     await gen.aclose()
-    assert blocks[-1] == f"id: {feed.boot}.{feed.n}\n: ping\n\n"  # chỉ id (không data) — nối lại không quét lại phần đã bỏ
+    # nhịp ping là message thật (client canh im lặng) — vẫn mang id cuối: nối lại không quét lại phần đã bỏ
+    assert blocks[-1] == f"id: {feed.boot}.{feed.n}\ndata: {F.PING}\n\n"  # chỉ id (không data) — nối lại không quét lại phần đã bỏ
 
 
 def test_bus_detail_agent_id_filters_detail_events():

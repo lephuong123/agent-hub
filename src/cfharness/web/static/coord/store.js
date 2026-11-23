@@ -15,6 +15,7 @@ import { LOBBY, draftKey, dayKey, dayLabel, parseId } from "./util.js";
 const EARLY_MAX = 400;   // message của lượt chưa biết thuộc khung nào (tin vừa gửi, chưa có run id) — giữ tối đa chừng này
 const SIDE_MAX = 12;
 const CV_TAIL = 12;      // số mục cuối của ảnh chụp KHÔNG dùng content-visibility (thấy ngay khi mở → đo thật từ khung hình đầu)
+// mục vẽ ngay khi mở một hội thoại dài; cũ hơn vẽ dần khi cuộn lên (views/More) — 2000 mục mở ~45 ms
 export const FIRST_SHOW = 60;
 const HELD_MAX = 2000;   // message giữ lại cho một khung đang tải ảnh chụp
 
@@ -23,7 +24,7 @@ export function afterCursor(raw, cursor) {
   const a = parseId(raw), c = parseId(cursor);
   if (!a || !c || a.boot !== c.boot) return true;
   return a.n > c.n;
-}  // mục vẽ ngay khi mở một hội thoại dài; cũ hơn vẽ dần khi cuộn lên (views/More) — 2000 mục mở ~45 ms
+}
 
 export function createStore(S, opts) {
   const { signal, batch, computed } = S;
@@ -145,14 +146,19 @@ export function createStore(S, opts) {
     p.loading = true;
     p.held = [];
   }
-  /** Tải bị huỷ (đổi tab nhanh / resync) hoặc lỗi: khung đánh dấu CŨ → lần mở sau tải lại (không kẹt "Đang tải…"). Bỏ phần giữ lại:
-   *  ảnh chụp lần sau đã gồm chúng. `err` → hiện lỗi trong khung. */
+  /** Tải bị huỷ (đổi tab nhanh / resync) hoặc lỗi: khung đánh dấu CŨ → lần mở sau tải lại (không kẹt "Đang tải…"). `err` → hiện lỗi
+   *  trong khung (chỉ khung chưa có gì). Khung ĐÃ có dòng thời gian (tải lại nền) → phát lại phần giữ lại lên bản đang hiện (như chưa từng
+   *  tải lại: không mất msg.done/run.end, khung "đang trả lời" không treo); khung chưa có gì → bỏ (ảnh chụp lần sau đã gồm). Trả hiệu ứng. */
   function endLoad(p, err) {
-    if (!p) return;
+    const fx = [];
+    if (!p) return fx;
+    const held = p.held || [];
     p.loading = false;
     p.held = [];
     p.stale = true;
     if (err) p.error.value = err;
+    if (p.loaded.value) for (const h of held) batch(() => onPane(p, h.m, fx));
+    return fx;
   }
 
   /** Áp ảnh chụp v2 vào khung `target` (khung đang chờ tải) hoặc khung đã có của cùng hội thoại / khung mới. Trả khung.
@@ -181,6 +187,7 @@ export function createStore(S, opts) {
       p.title.value = snap.title || null;
       p.items.value = snap.items || [];
       p.hide.value = Math.max(0, p.items.value.length - FIRST_SHOW);
+      p.spacer = -1;  // khoảng giữ chỗ của mục chưa vẽ (views/initSpacer) đo lại theo dòng thời gian mới
       // mục cũ (trừ CV_TAIL mục cuối — phần thấy ngay khi mở) dùng content-visibility; tập cố định tới lần ảnh chụp sau (views/Item)
       p.cv = new Set(p.items.value.slice(0, Math.max(0, p.items.value.length - CV_TAIL)).map((x) => x.id).filter(Boolean));
       p.pending.value = pendingOf(snap.pending, p.pending.value);

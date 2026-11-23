@@ -227,3 +227,37 @@ Mã mới: `static/coord/scroll.js` (cuộn dính đáy — THUẦN), `static/co
   chú thích/thụt lề/khoảng trắng thừa; chuỗi, template `htm`, regex giữ nguyên; không đổi tên → ngữ nghĩa giữ nguyên; test chạy lại
   store/SSE trên bản thu gọn + `node --check`). gzip: coord 38.6 → 28.3 KB; cộng vendor ~11.2 KB = **~39.5 KB**, vẫn trên ngân sách 30 KB.
   Xuống 30 KB cần minifier đổi tên biến (một bước build) hoặc chốt ngân sách mới — cần người dùng quyết. Test chặn hồi quy ở 42 KB.
+
+### Sửa lỗi verify vòng 2
+
+- **Nối lại SSE sau khi ngắt lâu hơn `WATCH_TTL_S` (ngủ máy) không mất phạm vi:** `coord/sse.js` KHÔNG để EventSource tự nối (nó dùng lại
+  URL ban đầu, chỉ có phạm vi lúc mở trang — server đã dọn phạm vi của tab thì tạo lại chỉ với phạm vi đó → mất `msg.*` của mọi khung mở
+  sau). Mọi `onerror` (kể cả CONNECTING) → đóng, tự mở lại (giãn cách 1 → 15 s) với URL mang ĐỦ phạm vi hiện tại + `since=<id cuối>`;
+  server phát lại từ ring theo phạm vi mới (test `test_coord_verify_r2` + `coord_store_check.mjs`).
+- **Luồng chết lặng:** nhịp giữ luồng giờ là message thật `data: {"t":"ping"}` (vẫn kèm `id` khi phần ngoài phạm vi đã tiến); client canh
+  im lặng: quá `QUIET` (40 s, > 2 nhịp 15 s) không có gì → mở lại với `since`.
+- **Tải lại nền lỗi:** `store.endLoad` phát lại phần SSE đã giữ lên khung đã có dòng thời gian (không mất `msg.done`/`run.end`, khung chờ
+  không treo) và trả hiệu ứng; main.js thử lại (1, 2, 4… s, tối đa 5 lần) khi khung vẫn đang hiện. `refresh()` đi qua `load()` (một lượt tải
+  mỗi lúc qua `navCtl`) — không còn hai ảnh chụp đua nhau ghi một khung; đường `setup` gọi `endLoad`.
+- **"Hành động gần đây" của cả luồng:** `Scope.side` cho `act.item`; `Watch.side` = luồng (Sảnh `_`) của các hội thoại đã mở (lấy từ
+  `conv_ws`) → tab chỉ mở một hội thoại vẫn nhận hành động của hội thoại khác cùng luồng.
+- **CLS khi cuộn nhanh 2000 mục (kéo thanh cuộn / vuốt mạnh):** đo lại 14 → 0.001. Ba nguyên nhân, ba sửa:
+  1. bù `scrollTop` khi chèn mục cũ phía trên (và neo cuộn của trình duyệt — còn bù thêm theo vị trí cũ khi bật lại) làm toạ độ các mục đã
+     vẽ đổi lúc chúng ở ngoài màn hình → Chrome tính dịch khi cuộn tới. Nay `.coord-more` là KHOẢNG GIỮ CHỖ cao ≈ số mục chưa vẽ × cỡ trung
+     bình (thanh cuộn đúng độ dài thật); chèn một đợt thì khoảng này co đúng bằng phần chèn (đo trước khi vẽ) → mục đã có giữ nguyên toạ
+     độ. Neo cuộn của trình duyệt TẮT trên `.mgr-log` của island. Nút "Hiện N mục trước" ở đỉnh khoảng giữ chỗ (đỉnh không dời);
+  2. Chrome chỉ tự nhớ cỡ (`contain-intrinsic-size: auto`) của mục đã được vẽ khi có content-visibility → mục vẽ dần ở ngoài màn hình nhận
+     400px mặc định rồi co lại khi cuộn tới. Nay cỡ thật đo được ghi thẳng vào `contain-intrinsic-size` của mục;
+  3. mục bị bỏ qua (content-visibility) hiện ra trong MỘT khung hình → Chrome tính phần bên trong là dịch (toạ độ cũ đã cũ). Nay
+     content-visibility chỉ bật cho mục XA màn hình (> 4000 px, IntersectionObserver `views/cvArm`); gần thì vẽ thật. Chữ chạy khi đã vẽ hết
+     2000 mục vẫn ~17 ms/khung hình.
+  Thêm: cuộn lên xa hơn một màn hình dù không đo được là người (script, công cụ hỗ trợ) → bỏ dính đáy (trước: ghim đáy kéo về cuối);
+  `MORE_STEP` 200 → 60 (đợt vẽ dần ~30 ms thay 60–90 ms); `p.el` gắn bằng ref callback (có trước mọi useLayoutEffect); khung "đang trả
+  lời" là anh em của `.coord-flow` trong `.coord-body`.
+- **"Hành động gần đây" không đẩy dòng cũ:** dòng theo vị trí (key = chỉ số) và một dòng chữ (đầy đủ ở `title`) → hành động mới chỉ đổi chữ
+  của các ô sẵn có (đo: 15 hành động liên tiếp tổng CLS 0.003).
+- **Khởi động:** panel phải và danh sách hội thoại bên trái vẽ ở tác vụ sau khung hình đầu (`ui.late`). Long task lúc mở trang còn ~85–95 ms
+  (headless) — phần lớn là nạp/chạy module, không phải dựng giao diện (thử dựng 12 mục đầu trước: không đổi).
+- **jsmin:** `/` sau `++`/`--` hậu tố là phép chia; docstring ghi giới hạn `/` sau `}`.
+- **Còn mở:** ngân sách JS island 30 KB gzip — coord đã thu gọn ~30.2 KB + vendor ~11.2 KB ≈ 41.4 KB (test chặn ở 42 KB); cần người dùng chốt (tính vendor hay
+  không, hay thêm bước build đổi tên biến). GĐ3 chưa làm.

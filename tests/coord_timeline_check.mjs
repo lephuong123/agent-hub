@@ -55,6 +55,8 @@ const iso = (d) => d.toISOString();
   ok("khung ẩn (display:none, scrollTop về 0) không ghi đè vị trí đã nhớ", hid.top === 900 && !hid.stick);
   const shrink = SC.onScroll({ stick: true, top: 1500, unseen: false }, { top: 1300, height: 1800, client: 500 });
   ok("nội dung co lại kéo scrollTop xuống nhưng vẫn ở đáy → vẫn dính", shrink.stick);
+  const far = SC.onScroll({ stick: true, top: 1500, unseen: false }, { top: 0, height: 2000, client: 500 });
+  ok("verify r2: cuộn lên xa hơn một màn hình dù không đo được là người (script, kéo thanh cuộn ngoài) → bỏ dính", !far.stick, far);
 }
 
 // ---------------------------------------------------------------- gom delta: MỘT lần đổ mỗi khung hình

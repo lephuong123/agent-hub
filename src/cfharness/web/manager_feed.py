@@ -49,6 +49,7 @@ HEARTBEAT_S = 15.0
 RUN_CACHE = 512
 HTML_CACHE = 2000
 IDEM_TTL_S = 600.0
+PING = '{"t":"ping"}'  # nhịp giữ luồng (mỗi HEARTBEAT_S khi rảnh) — client không áp gì, chỉ đo im lặng
 LOBBY = "_"  # khoá phạm vi của Sảnh (hội thoại không gắn luồng)
 MAX_WATCH = 64
 STREAM_KEEP = 200_000
@@ -187,6 +188,7 @@ class Scope:
     all: bool = False
     conv: str | None = None
     ws: str | None = None
+    side: bool = False  # `act.item`: tới cả tab chỉ mở hội thoại KHÁC của cùng luồng ("Hành động gần đây" theo luồng/Sảnh)
 
 
 ALL = Scope(all=True)
@@ -289,7 +291,7 @@ class Converter:
         if t == "manager.action":
             it = action_json(P.mgr_action_item(ev))
             conv = it.get("conversation_id") or sc.conv
-            return [({"t": "act.item", "run": rid, "conv": conv, "ws": sc.ws, "item": it}, Scope(conv=conv, ws=sc.ws))]
+            return [({"t": "act.item", "run": rid, "conv": conv, "ws": sc.ws, "item": it}, Scope(conv=conv, ws=sc.ws, side=True))]
         if t in TERMINAL_RUN_EVENTS and ev.get("source") == "hub" and rid:
             outcome = str(p.get("outcome") or t.removeprefix("run."))
             label, tone = P.run_status(outcome)
@@ -327,11 +329,13 @@ class Watch:
 
     convs: dict[str, None] = field(default_factory=dict)
     ws: dict[str, None] = field(default_factory=dict)
+    side: dict[str, None] = field(default_factory=dict)  # luồng (Sảnh "_") của các hội thoại đã mở — chỉ cho `act.item` (Scope.side)
     seen: float = field(default_factory=time.monotonic)
     live: int = 0
 
     def wants(self, s: Scope) -> bool:
-        return s.all or (s.conv is not None and s.conv in self.convs) or (s.ws is not None and s.ws in self.ws)
+        return (s.all or (s.conv is not None and s.conv in self.convs) or (s.ws is not None and s.ws in self.ws)
+                or (s.side and s.ws is not None and s.ws in self.side))
 
     @staticmethod
     def _put(d: dict[str, None], ids: list[str]) -> None:
@@ -342,13 +346,15 @@ class Watch:
         while len(d) > MAX_WATCH:
             d.pop(next(iter(d)))
 
-    def add(self, convs: list[str], wss: list[str]) -> None:
+    def add(self, convs: list[str], wss: list[str], side: list[str] | None = None) -> None:
         self._put(self.convs, convs)
         self._put(self.ws, wss)
+        self._put(self.side, [*wss, *(side or [])])
 
     def clear(self) -> None:
         self.convs.clear()
         self.ws.clear()
+        self.side.clear()
 
 
 @dataclass
@@ -624,7 +630,7 @@ class Feed:
             w = self.watches[key] = Watch()
         elif replace:
             w.clear()  # đặt lại TẠI CHỖ: luồng SSE đang chạy giữ chính đối tượng này
-        w.add(convs, wss)
+        w.add(convs, wss, [self.conv_ws[c] for c in convs if c in self.conv_ws])
         w.seen = now
         return w
 
@@ -699,11 +705,13 @@ async def stream(feed: Feed, watch: Watch, last: tuple[str, int] | None, *, hear
             if not await feed.wait(heartbeat_s):
                 if gone is not None and await gone():
                     return
-                if sent < pos:  # chỉ cập nhật Last-Event-ID (không phát event) — WHATWG: khối không có data vẫn đặt last event id
-                    yield f"id: {make_id(feed.boot, pos)}\n: ping\n\n"
+                # nhịp là message THẬT (có data): client đo im lặng để nhận ra luồng chết lặng (TCP nửa mở, proxy cắt) mà EventSource không
+                # báo lỗi. Kèm `id` khi phần bỏ qua (ngoài phạm vi) đã tiến → nối lại không quét lại phần đã bỏ.
+                if sent < pos:
+                    yield sse_block(PING, make_id(feed.boot, pos))
                     sent = pos
                 else:
-                    yield ": ping\n\n"
+                    yield sse_block(PING, None)
                 if feed.task is None or feed.task.done():
                     try:
                         await feed.ensure()

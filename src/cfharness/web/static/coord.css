@@ -17,33 +17,38 @@
 
 /* ---------------------------------------------------------------- GĐ2 phần 2: dòng thời gian, cuộn dính đáy, thẻ duyệt
    Khối nội dung `.coord-flow` (ResizeObserver theo dõi cỡ của nó) thay `.mgr-log` làm hộp flex của các mục — chép lại các luật `.mgr-log > …`. */
-.coord-flow { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
-.coord-flow > * { flex-shrink: 0; }
+.coord-flow, .coord-body { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+.coord-flow > *, .coord-body > * { flex-shrink: 0; }
+/* `.coord-body` = dòng thời gian (`.coord-flow`) + khung "đang trả lời" làm ANH EM (không nằm trong `.coord-flow`): chữ chạy làm khung lớn
+   dần mỗi khung hình chỉ dựng lại hộp ngoài (2 con) — `.coord-flow` giữ nguyên ràng buộc nên trình duyệt dùng lại bố cục đã có, không duyệt
+   lại 2000 mục (trước: ~33 ms/khung hình khi đã vẽ hết 2000 mục, long task 90 ms). */
 .coord-flow > .mm-act { align-self: flex-start; max-width: 100%; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
 .coord-flow > .mm-act.err { border-color: var(--danger-line); }
-.coord .mgr-log.is-empty .coord-flow { display: none; }
-@media (max-width: 760px) { .coord-flow { gap: 18px; } }
-/* mục đã xong: trình duyệt bỏ qua dựng/vẽ khi ở ngoài màn hình (2000 mục vẫn mở nhanh); `auto` nhớ cỡ thật sau lần vẽ đầu */
+.coord .mgr-log.is-empty .coord-body { display: none; }
+@media (max-width: 760px) { .coord-flow, .coord-body { gap: 18px; } }
+/* mục đã xong: trình duyệt bỏ qua dựng/vẽ khi ở ngoài màn hình (2000 mục vẫn mở nhanh). Cỡ giữ chỗ dưới đây chỉ là mặc định — views/cvArm
+   ghi cỡ THẬT đo được của từng mục vào `contain-intrinsic-size` lúc gắn `data-cv` (Chrome chỉ nhớ cỡ của mục đã được vẽ khi có
+   content-visibility; mục vẽ dần ở ngoài màn hình thì chưa) → cuộn tới không đổi cỡ, không dịch bố cục. */
 .coord-flow > .cvx { contain-intrinsic-size: auto 400px; }
 .coord-flow > .mm-acts.cvx { contain-intrinsic-size: auto 32px; }
 .coord-flow > .mm.user.cvx { contain-intrinsic-size: auto 72px; }
 .coord-flow > .cvx[data-cv] { content-visibility: auto; }
-/* Lớp `cvx` chỉ có ở mục CŨ của ảnh chụp đầu, trừ 12 mục cuối (store CV_TAIL). Mục mới dựng (mở hội thoại, "vẽ dần" khi cuộn lên) luôn
-   dựng ĐẦY ĐỦ ở khung hình đầu — `contain-intrinsic-size: auto` nhớ cỡ thật — rồi views/cvArm mới gắn `data-cv` (content-visibility).
-   Nếu bật ngay, mục chèn phía trên lấy cỡ giữ chỗ 400px, cuộn tới mới đổi sang cỡ thật = dịch bố cục (CLS 0.099 khi cuộn 2000 mục). */
-/* Cuộn lên qua các mục chưa vẽ (giữ chỗ 400px → cỡ thật): neo cuộn của trình duyệt giữ nội dung đang thấy đứng yên. app.css tắt neo trên
-   .mgr-log (khung "đang trả lời" lớn dần làm neo nhảy) → island bật lại nhưng loại khung đang trả lời khỏi ứng viên neo. */
-.coord .mgr-log { overflow-anchor: auto; }
-.coord .mm.pending, .coord .mgr-log .coord-loading, .coord .coord-more { overflow-anchor: none; }
-/* `.coord-more` ("Hiện N mục trước") đứng TRÊN các mục được vẽ dần: nếu nó là neo (đang thấy, sát đỉnh) thì mục chèn ngay dưới nó không
-   được bù cuộn → mọi mục đang thấy bị đẩy xuống (CLS). Loại khỏi ứng viên neo → trình duyệt neo vào mục thật. */
+/* KHÔNG dùng neo cuộn của trình duyệt (như app.css): vẽ dần mục cũ giữ nguyên toạ độ mục đã có bằng khoảng giữ chỗ `.coord-more` (views/
+   keepAnchor) — neo của trình duyệt bật lại sau một lần chèn còn bù thêm theo vị trí cũ (nhảy cả đợt), và bù scrollTop làm toạ độ các mục
+   ngoài màn hình đổi → Chrome tính dịch bố cục khi cuộn tới (verify r2). */
+.coord .mgr-log { overflow-anchor: none; }
 /* khung đang trả lời: giữ chỗ dòng "Đang dùng …" → hiện/ẩn không đẩy chữ (CLS) */
 .coord .mm.pending .mm-tool { min-height: 1.5em; }
 .coord .mm.pending .mm-tool .tx-spin[hidden] { display: inline-block !important; visibility: hidden; }  /* thắng `[hidden] { display: none !important }` của app.css */
 .coord .mm.pending .mm-live:empty, .coord .mm.pending .mm-live > .md:empty { min-height: 0; }
 /* nút mic của ô trả lời câu hỏi: island vẽ sẵn (voice.js chỉ bỏ `hidden`) và GIỮ CHỖ → bật lên không đẩy dòng thời gian (CLS) */
 .coord .q-free .voice-row .voice-mic[hidden] { display: inline-flex !important; visibility: hidden; }
-.coord-more { display: flex; justify-content: center; min-height: 40px; overflow-anchor: none; }
+/* `.coord-more` = khoảng giữ chỗ của mục chưa vẽ (views/initSpacer): nút ở ĐỈNH — đỉnh khoảng giữ chỗ không bao giờ dời (đáy thì co lên
+   mỗi đợt vẽ dần → nút ở đáy sẽ "dịch" mỗi lần) */
+.coord-more { display: flex; justify-content: center; align-items: flex-start; min-height: 40px; overflow-anchor: none; box-sizing: border-box; }
+/* "Hành động gần đây": mỗi dòng MỘT dòng chữ (chữ đầy đủ ở title) + dòng theo vị trí (views/Side key = chỉ số) → hành động mới chỉ đổi chữ
+   của các ô sẵn có, không đẩy dòng cũ xuống (CLS khi chữ đang chạy) */
+.coord #mgr-actions .fl-main { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
 /* thẻ duyệt / câu hỏi đang gửi (lạc quan) */
 .coord .xcard.busy { opacity: .7; }
 .coord .xcard.approval.done .xcard-ic { background: var(--surface-2); color: var(--muted); }

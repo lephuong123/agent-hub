@@ -134,7 +134,10 @@ function focusComposer() {
   requestAnimationFrame(() => { const t = document.getElementById("mgr-text"); if (t) t.focus({ preventScroll: true }); });
 }
 
-async function load(nav, p, mine) {
+const noRefresh = (fx) => fx.filter((f) => f.fx !== "refresh");
+/** Tải ảnh chụp cho khung `p`. MỘT lượt tải tại một thời điểm (`navCtl`: điều hướng, resync, tải lại nền đều qua đây — lượt mới huỷ lượt
+ *  cũ, không có hai ảnh chụp cùng ghi vào một khung theo thứ tự tuỳ mạng). `mine` = lượt điều hướng (null: tải nền, không đổi khung). */
+async function load(nav, p, mine, bg) {
   if (navCtl) navCtl.abort();
   const ctl = new AbortController();
   navCtl = ctl;
@@ -142,34 +145,38 @@ async function load(nav, p, mine) {
   try {
     const snap = await getJSON(snapshotUrl(nav, TAB), ctl.signal);
     if (navCtl === ctl) navCtl = null;
-    if (snap.setup) { location.href = "/manager"; return null; }
+    if (snap.setup) { store.endLoad(p); location.href = "/manager"; return null; }
     const fx = [];
     const q = store.applySnapshot(snap, p, fx);
+    q.retryN = 0;
     noteWatched(q);
-    if (mine === navSeq) show(q, false);
-    runFx(fx);
+    if (mine != null && mine === navSeq) show(q, false);
+    runFx(bg ? noRefresh(fx) : fx);
     return q;
   } catch (e) {
     if (navCtl === ctl) navCtl = null;
-    // huỷ (đổi tab nhanh / resync): khung đánh dấu cũ → mở lại là tải lại, không kẹt "Đang tải…"
-    if (e && e.name === "AbortError") { store.endLoad(p); return null; }
-    store.endLoad(p, "Không tải được: " + ((e && e.message) || "lỗi mạng") + " — bấm lại tab để thử lại.");
+    const abort = e && e.name === "AbortError";
+    // huỷ (đổi tab nhanh / resync) / lỗi: khung đánh dấu cũ → mở lại là tải lại, không kẹt "Đang tải…"; khung đã có dòng thời gian thì
+    // phần SSE giữ lại trong lúc tải được phát lại lên bản đang hiện (store.endLoad)
+    runFx(noRefresh(store.endLoad(p, abort ? "" : "Không tải được: " + ((e && e.message) || "lỗi mạng") + " — bấm lại tab để thử lại.")));
+    if (!abort && p.loaded.value) retryLater(p);
     return null;
   }
 }
+/** Tải lại nền lỗi (thường ngay sau khi mạng vừa nối lại): thử lại khi khung vẫn đang hiện, giãn cách, tối đa 5 lần. */
+function retryLater(p) {
+  const n = (p.retryN = (p.retryN || 0) + 1);
+  if (n > 5) return;
+  setTimeout(() => {
+    if (store.active.value === p && p.stale && !p.loading && p.conv.value && visible()) load({ c: p.conv.value }, p, null, true);
+  }, Math.min(1000 * 2 ** (n - 1), 15000));
+}
 
-/** Tải lại NỀN ảnh chụp của một khung (không đụng điều hướng đang chạy). Khung không hiện → chỉ đánh dấu cũ (tải khi mở lại). */
+/** Tải lại NỀN ảnh chụp của một khung (không đổi khung đang hiện). Khung không hiện → chỉ đánh dấu cũ (tải khi mở lại). */
 function refresh(p) {
   if (!p || p.loading || !p.conv.value) return;
   if (store.active.value !== p || !visible()) { p.stale = true; return; }
-  const ctl = new AbortController();
-  store.beginLoad(p);
-  getJSON(snapshotUrl({ c: p.conv.value }, TAB), ctl.signal).then((snap) => {
-    if (snap.setup) return;
-    const fx = [];
-    store.applySnapshot(snap, p, fx);
-    runFx(fx.filter((f) => f.fx !== "refresh"));
-  }, () => store.endLoad(p));
+  load({ c: p.conv.value }, p, null, true);
 }
 
 /** Đi tới URL trang Điều phối (`?c=` / `?w=` / `?new=1`). Đã mở → chỉ đổi khung; chưa → khung tạm + tải ảnh chụp. */
@@ -330,10 +337,15 @@ noteWatched(first);
 
 root.textContent = "";
 root.removeAttribute("data-state");
+ui.late = signal(false);
 render(html`<${App} />`, root);
-const side = document.getElementById("coord-convs");
-if (side) { side.textContent = ""; render(html`<${ConvList} />`, side); }
 try { performance.measure("coord:boot", "coord:start"); } catch (_) {}
+// phần không thấy ngay (panel phải, danh sách hội thoại bên trái) vẽ ở tác vụ sau khung hình đầu — tách long task lúc mở trang
+requestAnimationFrame(() => setTimeout(() => {
+  ui.late.value = true;
+  const side = document.getElementById("coord-convs");
+  if (side) { side.textContent = ""; render(html`<${ConvList} />`, side); }
+}, 0));
 if (first.conv.value) markRead(first.conv.value);
 
 feed = createFeed({

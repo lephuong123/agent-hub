@@ -3,7 +3,11 @@
 Chỉ dành cho mã CỦA MÌNH ở `static/coord/*.js` (ES module, phong cách đã biết) — không phải minifier tổng quát:
 - chuỗi `'…'`/`"…"` và template literal (kể cả `${…}` lồng nhau, template `htm`) giữ NGUYÊN từng ký tự (khoảng trắng trong template `htm`
   có nghĩa);
-- regex literal nhận theo token đứng trước (sau toán tử / dấu mở / từ khoá như `return` → regex; sau định danh / số / `)` / `]` → phép chia);
+- regex literal nhận theo token đứng trước (sau toán tử / dấu mở / từ khoá như `return` → regex; sau định danh / số / `)` / `]` → phép chia;
+  sau `++`/`--` hậu tố (`i++ / n`) → phép chia);
+- GIỚI HẠN đã biết: `/` ngay sau `}` luôn coi là regex (đúng sau khối lệnh, SAI sau object literal/hàm trong biểu thức: `({}) / 2` thì
+  được nhưng `x = {} / 2` hay `f = function () {} / 2` thì không) — mã island không viết thế; nếu có, test `node --check` trên bản thu
+  gọn (tests/test_coord_verify_r1.py) sẽ báo;
 - GIỮ xuống dòng (an toàn với ASI), chỉ gộp nhiều dòng trống thành một;
 - không đổi tên, không viết lại biểu thức → ngữ nghĩa giữ nguyên (test chạy lại store/SSE trên bản đã thu gọn + `node --check`).
 """
@@ -25,12 +29,13 @@ def minify(src: str) -> str:
     stack: list[int] = []  # mỗi `${` mở trong template: độ sâu ngoặc nhọn tại đó
     depth = 0
     last = ""  # ký tự có nghĩa cuối cùng (không phải khoảng trắng) đã ghi
+    last2 = ""  # hai ký tự có nghĩa cuối (nhận `++`/`--` hậu tố)
     word = ""  # định danh/từ khoá cuối cùng đã ghi (để nhận regex sau `return` …)
     pend_space = False
     pend_nl = False
 
     def emit(s: str, *, tok_last: str | None = None) -> None:
-        nonlocal pend_space, pend_nl, last
+        nonlocal pend_space, pend_nl, last, last2
         if pend_nl and out:
             out.append("\n")
         elif pend_space and out:
@@ -41,6 +46,7 @@ def minify(src: str) -> str:
         pend_space = pend_nl = False
         out.append(s)
         last = tok_last if tok_last is not None else s[-1]
+        last2 = (last2 + s)[-2:]
 
     while i < n:
         c = src[i]
@@ -129,7 +135,7 @@ def minify(src: str) -> str:
             word = ""
             i = j
             continue
-        if c == "/" and (last == "" or last in _REGEX_AFTER_CHARS or word in _REGEX_AFTER_WORDS):
+        if c == "/" and last2 not in ("++", "--") and (last == "" or last in _REGEX_AFTER_CHARS or word in _REGEX_AFTER_WORDS):
             j, cls = i + 1, False
             while j < n:
                 d = src[j]

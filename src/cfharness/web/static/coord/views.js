@@ -15,7 +15,7 @@ import { Composer } from "./composer.js";
 export const html = htm.bind(h);
 
 /** Cầu nối tới main.js (điều hướng, gửi, dừng…) — main gán các hàm vào đây trước khi vẽ. */
-export const ui = { icons: "/static/icons.svg", csrf: "", store: null };
+export const ui = { icons: "/static/icons.svg", csrf: "", store: null, late: null };  // late: signal — false lúc khởi động (Side vẽ sau)
 
 export function Icon({ n, c }) {
   return html`<svg class=${"ic " + (c || "")} aria-hidden="true" focusable="false"><use href=${ui.icons + "#i-" + n}></use></svg>`;
@@ -394,33 +394,84 @@ function apItem(a) {
   return it;
 }
 
-const MORE_STEP = 200;
+const MORE_STEP = 60;  // ~30 ms dựng mỗi đợt (100 mục ~55 ms, 200 mục 60–90 ms = long task khi cuộn nhanh)
+const SPACER_MIN = 40;   // chỗ của nút "Hiện N mục trước"
 
-/** Mục cũ chưa vẽ (`p.hide`): mốc ở đầu dòng thời gian — tới gần (IntersectionObserver, cách 1500 px) thì vẽ thêm MORE_STEP mục; neo cuộn
- *  (overflow-anchor) giữ nguyên phần đang xem khi chèn phía trên. Nút cho bàn phím / trình đọc màn hình. */
+/* Vẽ dần mục cũ KHÔNG làm dịch bố cục (CLS) khi cuộn nhanh lên:
+ * - mốc `.coord-more` ở đầu dòng thời gian là KHOẢNG GIỮ CHỖ cao ≈ (số mục chưa vẽ × cỡ trung bình đã đo) → thanh cuộn đúng độ dài thật;
+ * - chèn một đợt mục phía trên mục đầu đang có: khoảng giữ chỗ CO LẠI đúng bằng phần vừa chèn (đo trước khi vẽ) → mọi mục đã có giữ NGUYÊN
+ *   toạ độ, không phải bù scrollTop. Bù scrollTop (cách cũ, và neo cuộn của trình duyệt) làm toạ độ của các mục đã vẽ đổi trong lúc chúng
+ *   ở ngoài màn hình → Chrome tính là dịch bố cục khi cuộn tới (CLS 3–4 khi kéo thanh cuộn / vuốt mạnh lên 2000 mục, verify r2);
+ * - giữ chỗ hết trước khi vẽ xong (ước lượng thấp) → phần còn lại mới bù scrollTop; vẽ xong mà còn dư → giữ khoảng dư làm "đầu cuộc trò
+ *   chuyện" (không gỡ: gỡ là dịch toàn bộ). */
+function flowOf(p) { const el = p.el; return el && el.querySelector(".coord-flow"); }
+/** Lần đầu khung hiện (đo được): đặt cỡ khoảng giữ chỗ theo cỡ trung bình của các mục đang vẽ. */
+function initSpacer(p) {
+  const fl = flowOf(p), sp = fl && fl.firstElementChild;
+  if (!sp || !sp.classList.contains("coord-more") || !p.el.clientHeight || p.spacer >= 0) return;
+  const n = fl.children.length - 1, rest = fl.offsetHeight - sp.offsetHeight;
+  const avg = n > 0 && rest > 0 ? rest / n : 120;
+  p.spacer = Math.max(SPACER_MIN, Math.round(p.hide.value * avg));
+  sp.style.height = p.spacer + "px";
+}
+/** Mục đầu tiên đang có (sau mốc) + toạ độ của nó trong nội dung khung — ghi TRƯỚC khi chèn. */
+function grabAnchor(p) {
+  const el = p.el, fl = flowOf(p), node = fl && fl.children[1];
+  if (!node || !el.clientHeight) return null;
+  return { node, y: node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop };
+}
+/** Sau khi chèn (trước khi vẽ): co khoảng giữ chỗ đúng bằng phần mục đầu cũ bị đẩy xuống; phần không co được mới bù scrollTop. */
+function keepAnchor(p) {
+  const a = p.anchor, el = p.el;
+  if (!a) return;
+  p.anchor = null;
+  if (el && a.node.isConnected) {
+    const fl = flowOf(p), sp = fl && fl.firstElementChild;
+    let d = a.node.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - a.y;
+    if (sp && sp.classList.contains("coord-more") && p.spacer > SPACER_MIN && d > 0) {
+      const cut = Math.min(d, p.spacer - SPACER_MIN);
+      p.spacer -= cut;
+      sp.style.height = p.spacer + "px";
+      d -= cut;
+    }
+    if (Math.abs(d) >= 0.5) el.scrollTop += d;
+  }
+}
+
+/** Mốc / khoảng giữ chỗ của mục cũ chưa vẽ (`p.hide`): tới gần (IntersectionObserver, cách 1500 px) thì vẽ thêm MORE_STEP mục. Nút cho bàn
+ *  phím / trình đọc màn hình. Vẽ hết mà còn khoảng dư → "Đầu cuộc trò chuyện". */
 function More({ p, n }) {
   const ref = useRef(null);
-  const more = () => { p.hide.value = Math.max(0, p.hide.value - MORE_STEP); };
+  const more = () => {
+    if (p.anchor || !p.hide.value) return;  // đợt trước chưa dựng xong / hết
+    const el = p.el;
+    // đang ở đầu dòng thời gian (xa đáy) mà còn "dính đáy" (sự kiện scroll chưa kịp tới): bỏ dính — kẻo ghim đáy kéo về cuối sau khi chèn
+    if (el && p.scroll && p.scroll.stick && el.scrollHeight - el.scrollTop - el.clientHeight > el.clientHeight) p.scroll = { ...p.scroll, stick: false };
+    initSpacer(p);  // khoảng giữ chỗ phải có cỡ TRƯỚC khi chèn (đo phần bị đẩy xuống)
+    p.anchor = grabAnchor(p);
+    p.hide.value = Math.max(0, p.hide.value - MORE_STEP);
+  };
   useEffect(() => {
     const el = ref.current, root = el && el.closest(".mgr-log");
-    if (!el || !root || typeof IntersectionObserver !== "function") return undefined;
+    if (!n || !el || !root || typeof IntersectionObserver !== "function") return undefined;
     const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting) && root.clientHeight) more(); }, { root, rootMargin: "1500px 0px 0px 0px" });
     io.observe(el);
     return () => io.disconnect();
   }, [n]);
-  return html`<div class="coord-more" ref=${ref}><button type="button" class="btn ghost sm" onClick=${more}>Hiện ${Math.min(n, MORE_STEP)} mục trước (còn ${n})</button></div>`;
+  return html`<div class="coord-more" ref=${ref}>${n ? html`<button type="button" class="btn ghost sm" onClick=${more}>Hiện ${Math.min(n, MORE_STEP)} mục trước (còn ${n})</button>`
+    : html`<span class="muted small">Đầu cuộc trò chuyện</span>`}</div>`;
 }
 
 function Flow({ p }) {
   const items = p.items.value, run = p.runId.value, hide = p.hide.value;
-  useLayoutEffect(() => pinNow(p));
+  useLayoutEffect(() => { initSpacer(p); keepAnchor(p); pinNow(p); });
   useEffect(() => cvArm(p));
   const list = mergeTimeline(items, p.actions.value.filter((a) => a.kind === "approval").map(apItem));
   let last = -1;
   for (let i = list.length - 1; i >= 0; i--) if (list[i].kind === "manager" && !list[i].notify) { last = i; break; }
   const from = Math.min(hide, list.length);
   const rows = [];
-  if (from > 0) rows.push(html`<${More} key="more" p=${p} n=${from} />`);
+  if (from > 0 || p.spacer > SPACER_MIN) rows.push(html`<${More} key="more" p=${p} n=${from} />`);
   for (let i = from; i < list.length; i++) {
     const it = list[i];
     rows.push(html`<${Row} key=${it.id || "i" + i} it=${it} p=${p} run=${it.kind === "actions" ? run : null} last=${i === last} />`);
@@ -428,14 +479,32 @@ function Flow({ p }) {
   return rows;
 }
 
-/** Bật content-visibility cho mục `cvx` mới dựng — hai khung hình sau (khung đầu đã dựng đầy đủ → `contain-intrinsic-size: auto` nhớ cỡ
- *  thật). Gắn bằng thuộc tính DOM `data-cv` (Preact không quản) → vẽ lại một dòng không làm mất. */
+/* content-visibility cho mục `cvx` (mục cũ của ảnh chụp) — CHỈ khi mục ở XA màn hình (> CV_FAR px, IntersectionObserver), gần thì vẽ thật:
+ * - Chrome tính mục bị bỏ qua (content-visibility) hiện ra trong MỘT khung hình (kéo thanh cuộn, vuốt mạnh) là dịch bố cục — toạ độ cũ của
+ *   phần bên trong đã cũ (CLS 3–4 khi cuộn nhanh 2000 mục, verify r2). Mục gần màn hình luôn được vẽ trước khi cuộn tới → không dịch;
+ * - cỡ giữ chỗ = cỡ THẬT đo lúc tắt vẽ, ghi vào `contain-intrinsic-size` của mục (Chrome chỉ tự nhớ cỡ của mục đã được vẽ khi có
+ *   content-visibility; mục vẽ dần ở ngoài màn hình thì chưa → nhận mặc định 400px, cuộn tới co lại = dịch);
+ * - mục xa vẫn bỏ qua dựng/vẽ → chữ chạy ở cuối không phải vẽ lại cả 2000 mục.
+ * Gắn bằng thuộc tính DOM (Preact không quản) → vẽ lại một dòng không làm mất. */
+const CV_FAR = 4000;
 function cvArm(p) {
   if (p.cvT) return;
   p.cvT = requestAnimationFrame(() => requestAnimationFrame(() => {
     p.cvT = 0;
-    const el = p.el;  // khung ẩn (display:none) chưa dựng gì → chưa nhớ cỡ: đợi lúc hiện (Pane gọi lại)
-    if (el && el.clientHeight) for (const x of el.querySelectorAll(".coord-flow > .cvx:not([data-cv])")) x.setAttribute("data-cv", "");
+    const el = p.el;  // khung ẩn (display:none) chưa dựng gì → chưa đo được: đợi lúc hiện (Pane gọi lại)
+    if (!el || !el.clientHeight || typeof IntersectionObserver !== "function") return;
+    if (!p.cvIO) {
+      p.cvIO = new IntersectionObserver((es) => {
+        if (!el.clientHeight) return;  // khung vừa ẩn: giữ nguyên
+        const far = es.filter((e) => !e.isIntersecting).map((e) => e.target);
+        const hs = far.map((x) => (x.hasAttribute("data-cv") ? 0 : x.offsetHeight));  // đọc hết rồi mới ghi (một lần layout)
+        far.forEach((x, k) => { if (hs[k]) x.style.containIntrinsicSize = "auto " + hs[k] + "px"; x.setAttribute("data-cv", ""); });
+        for (const e of es) if (e.isIntersecting) e.target.removeAttribute("data-cv");
+      }, { root: el, rootMargin: CV_FAR + "px 0px" });
+    }
+    const seen = p.cvSet || (p.cvSet = new Set());
+    for (const x of seen) if (!x.isConnected) { p.cvIO.unobserve(x); seen.delete(x); }  // mục đã bỏ (ảnh chụp mới)
+    for (const x of el.querySelectorAll(".coord-flow > .cvx:not([data-cvo])")) { x.setAttribute("data-cvo", ""); seen.add(x); p.cvIO.observe(x); }
   }));
 }
 
@@ -461,6 +530,8 @@ export function jumpBottom(p, smooth) {
  *  ResizeObserver trên khối nội dung → chữ chạy / ảnh / mục mới làm khối lớn thêm thì ghim đáy (nếu đang dính) hoặc bật nút "Tin mới nhất". */
 function Pane({ p, on }) {
   const ref = useRef(null), flow = useRef(null);
+  // `p.el` gắn ngay khi Preact gắn DOM (ref callback, TRƯỚC mọi useLayoutEffect — Flow/initSpacer cần nó ở lần vẽ đầu)
+  const setRef = useRef((el) => { ref.current = el; if (el) p.el = el; }).current;
   const loaded = p.loaded.value, err = p.error.value, empty = p.empty.value;
   if (!p.scroll) p.scroll = initScroll();
   useEffect(() => {
@@ -507,6 +578,7 @@ function Pane({ p, on }) {
       el.removeEventListener("touchstart", onTs); el.removeEventListener("touchmove", onTm);
       el.removeEventListener("pointerdown", onPd); window.removeEventListener("pointerup", onPu);
       document.removeEventListener("keydown", onKey, true);
+      if (p.cvIO) { p.cvIO.disconnect(); p.cvIO = null; p.cvSet = null; }
       if (p.el === el) p.el = null;
     };
   }, []);
@@ -514,13 +586,14 @@ function Pane({ p, on }) {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || !on) return;
+    initSpacer(p);
     el.scrollTop = p.scroll.stick ? el.scrollHeight : p.scroll.top;
     cvArm(p);
   }, [on, loaded]);
-  return html`<div class=${"mgr-log" + (empty ? " is-empty" : "")} ref=${ref} hidden=${!on} data-pane=${p.id} aria-label="Dòng trò chuyện">
+  return html`<div class=${"mgr-log" + (empty ? " is-empty" : "")} ref=${setRef} hidden=${!on} data-pane=${p.id} aria-label="Dòng trò chuyện">
     ${!loaded ? html`<div class="coord-loading" role="status">${err ? html`<span class="danger-t">${err}</span>` : html`<span class="tx-spin" aria-hidden="true"></span>Đang tải…`}</div>` : null}
     ${empty ? html`<${Empty} p=${p} />` : null}
-    <div class="coord-flow" ref=${flow}><${Flow} p=${p} /><${PendingSlot} p=${p} /></div>
+    <div class="coord-body" ref=${flow}><div class="coord-flow"><${Flow} p=${p} /></div><${PendingSlot} p=${p} /></div>
   </div>`;
 }
 
@@ -560,6 +633,8 @@ function WsSide({ ws }) {
 }
 
 function Side({ p }) {
+  // khởi động: khung đang hiện vẽ trước, panel phải vẽ ở khung hình sau (tách long task lúc mở trang)
+  if (ui.late && !ui.late.value) return html`<aside class="mgr-side" id="mgr-side" aria-label="Thông tin điều phối viên"></aside>`;
   const s = ui.store, m = s.manager.value || {}, side = s.side.value, ws = p && p.workstream.value;
   const back = p ? paneUrl(p.conv.value, p.scope) : "/manager?ui=next";
   return html`<aside class="mgr-side" id="mgr-side" aria-label="Thông tin điều phối viên">
@@ -575,7 +650,7 @@ function Side({ p }) {
     </section>
     ${ws ? html`<${WsSide} ws=${ws} />` : null}
     <section class="mgr-side-sec"><h3>Hành động gần đây</h3>
-      <ol class="feed" id="mgr-actions">${side.length ? side.map((a, i) => html`<li key=${a.audit_id || i} class=${"fl " + (a.ok === false ? "danger" : "ok")}><span class="fl-dot" aria-hidden="true"></span>
+      <ol class="feed" id="mgr-actions">${side.length ? side.map((a, i) => html`<li key=${i} class=${"fl " + (a.ok === false ? "danger" : "ok")} title=${a.summary}><span class="fl-dot" aria-hidden="true"></span>
         <span class="fl-main"><span class="fl-text">${a.summary}</span>${a.target && a.target.href ? html` · <a href=${a.target.href}>${a.target.label}</a>` : null}</span>
         <span class="fl-ts">${fmtTs(a.ts)}</span></li>`) : html`<li class="empty">Chưa có hành động nào.</li>`}</ol>
     </section>
