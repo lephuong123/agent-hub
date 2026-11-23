@@ -969,6 +969,14 @@ MIGRATIONS: list[str] = [
         WHEN OLD.id > COALESCE((SELECT CAST(value AS INTEGER) FROM hub_state WHERE key='audit.archive_cutoff'), 0)
         BEGIN SELECT RAISE(ABORT, 'audit_log là append-only (chỉ job lưu trữ xoá được dòng id ≤ audit.archive_cutoff)'); END;
     """,
+    # v32 — hiệu năng (đo trên bản sao hub.db thật 1,5 GB, 6.194 run): `list_runs` không lọc sắp theo queued_at và `cost_since`/`cost_today`
+    # lọc ended_at đều quét cả bảng runs (~300 MB, phần lớn là cột diff) ngay trên event loop của daemon → mọi RPC/SSE khựng 0,2–3,7 s.
+    # Chỉ THÊM index (không đổi dữ liệu): run.list 3,8 s → 5 ms, hub.status 55 → 3 ms.
+    """
+    CREATE INDEX IF NOT EXISTS runs_queued ON runs(queued_at);
+    CREATE INDEX IF NOT EXISTS runs_ended ON runs(ended_at);
+    CREATE INDEX IF NOT EXISTS runs_agent_ended ON runs(agent_id, ended_at);
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.
@@ -1143,7 +1151,12 @@ class Store:
         since_seq: int | None = None,
         types: list[str] | None = None,
         limit: int = 10_000,
+        newest_first: bool = False,
+        manager_workstream: str | None = None,
     ) -> list[HubEvent]:
+        """Event đã lưu theo bộ lọc, cũ → mới (mặc định) hoặc mới → cũ (`newest_first` — lấy N event GẦN NHẤT).
+        `manager_workstream`: chỉ event của run có `run_opts.manager_workstream` bằng giá trị này; chuỗi rỗng = run KHÔNG gắn luồng
+        (Sảnh). None = không lọc."""
         where, args = [], []
         if run_id is not None:
             where.append("run_id=?")
@@ -1160,7 +1173,16 @@ class Store:
         if types:
             where.append(f"type IN ({','.join('?' for _ in types)})")
             args.extend(types)
-        sql = "SELECT * FROM events" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY ts, epoch, seq LIMIT ?"
+        if manager_workstream is not None:
+            sub = "SELECT id FROM runs WHERE COALESCE(json_extract(run_opts, '$.manager_workstream'), '') = ?"
+            sargs: list[Any] = [manager_workstream]
+            if agent_id is not None:
+                sub += " AND agent_id=?"
+                sargs.append(agent_id)
+            where.append(f"run_id IN ({sub})")
+            args.extend(sargs)
+        order = " ORDER BY ts DESC, epoch DESC, seq DESC" if newest_first else " ORDER BY ts, epoch, seq"
+        sql = "SELECT * FROM events" + (" WHERE " + " AND ".join(where) if where else "") + order + " LIMIT ?"
         args.append(limit)
         out = []
         for r in self.conn.execute(sql, args):
@@ -1225,7 +1247,18 @@ class Store:
         rows = self.conn.execute("SELECT * FROM runs WHERE id LIKE ? LIMIT 2", (prefix + "%",)).fetchall()
         return self._row("runs", rows[0]) if len(rows) == 1 else None
 
+    def _runs_list_cols(self) -> str:
+        """Danh sách cột của `runs` TRỪ `diff` (cột nặng nhất — patch đầy đủ, ~90% dung lượng bảng) cho các truy vấn danh sách.
+        Tính một lần theo schema hiện tại (sau migration)."""
+        cols = getattr(self, "_runs_cols_cache", None)
+        if cols is None:
+            names = [r[1] for r in self.conn.execute("PRAGMA table_info(runs)")]
+            cols = ", ".join(f'"{n}"' for n in names if n != "diff")
+            self._runs_cols_cache = cols
+        return cols
+
     def list_runs(self, *, agent_id: str | None = None, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        """Danh sách run mới nhất trước. KHÔNG có cột `diff` (nặng) — cần diff thì lấy từng run (`get_run`/`find_run`, RPC `run.get`/`run.diff`)."""
         where, args = [], []
         if agent_id:
             where.append("agent_id=?")
@@ -1233,21 +1266,35 @@ class Store:
         if status:
             where.append("status=?")
             args.append(status)
-        sql = "SELECT * FROM runs" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY queued_at DESC LIMIT ?"
+        sql = f"SELECT {self._runs_list_cols()} FROM runs" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY queued_at DESC LIMIT ?"
         args.append(limit)
         return [self._row("runs", r) for r in self.conn.execute(sql, args)]  # type: ignore[misc]
 
     def cost_since(self, since: datetime, agent_id: str | None = None) -> float:
-        sql = "SELECT COALESCE(SUM(cost_usd), 0) FROM runs WHERE ended_at >= ?"
-        args: list[Any] = [iso(since)]
+        """Tổng chi phí run kết thúc từ `since`. Dùng index `runs_ended` / `runs_agent_ended` (v32) — không quét bảng."""
         if agent_id:
-            sql += " AND agent_id=?"
-            args.append(agent_id)
+            sql, args = "SELECT COALESCE(SUM(cost_usd), 0) FROM runs WHERE agent_id=? AND ended_at >= ?", [agent_id, iso(since)]
+        else:
+            sql, args = "SELECT COALESCE(SUM(cost_usd), 0) FROM runs WHERE ended_at >= ?", [iso(since)]
         return float(self.conn.execute(sql, args).fetchone()[0])
 
+    def cost_since_by_agent(self, since: datetime) -> dict[str, float]:
+        """Chi phí từ `since` theo từng agent trong MỘT truy vấn (`GROUP BY`, khoảng trên index `runs_ended`) — thay N lần `cost_since`
+        (vd `agent.list`). Agent không có run kết thúc trong khoảng → không có khoá (coi là 0)."""
+        # `+agent_id`: không cho planner chọn quét cả index (agent_id, ended_at) để khỏi sắp — khoảng ended_at trên `runs_ended` ít dòng hơn
+        rows = self.conn.execute("SELECT agent_id, COALESCE(SUM(cost_usd), 0) FROM runs WHERE ended_at >= ? GROUP BY +agent_id", (iso(since),))
+        return {r[0]: float(r[1]) for r in rows}
+
+    @staticmethod
+    def today_start() -> datetime:
+        """Nửa đêm hôm nay theo giờ máy, quy về UTC (mốc của `cost_today`)."""
+        return datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+
     def cost_today(self, agent_id: str | None = None) -> float:
-        start = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
-        return self.cost_since(start.astimezone(timezone.utc), agent_id)
+        return self.cost_since(self.today_start(), agent_id)
+
+    def cost_today_by_agent(self) -> dict[str, float]:
+        return self.cost_since_by_agent(self.today_start())
 
     # ------------------------------------------------------------------ sessions
     def upsert_session(self, session_id: str, agent_id: str, run_id: str, forked_from: str | None = None) -> None:
