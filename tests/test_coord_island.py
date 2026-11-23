@@ -78,14 +78,14 @@ def test_island_sources_have_no_unsafe_dom_sinks():
 def test_island_js_size_budget():
     """JS của island (không tính markdown/sanitizer), gzip từng tệp như khi phục vụ: preact + hooks + signals + htm + coord/*.js.
     Ngân sách kế hoạch là < 30 KB; GĐ2 phần 1 đo ~40 KB (vendor ~11 KB, coord ~29 KB), phần 2 (dòng thời gian, chạy chữ markdown, cuộn,
-    thẻ duyệt, vẽ dần) đo ~50 KB (coord ~38 KB, trong đó ~8 KB là chú thích tiếng Việt — không có bước build/minify). Chặn hồi quy ở 52 KB;
-    thu về 30 KB là việc của GĐ3 (minify/bỏ chú thích khi phục vụ hoặc gói khi phát hành)."""
+    thẻ duyệt, vẽ dần) đo ~50 KB (coord ~38 KB, trong đó ~8 KB là chú thích tiếng Việt — không có bước build/minify). Chặn hồi quy ở 54 KB;
+    thu về 30 KB là việc của GĐ3. Đây là cỡ NGUỒN; cỡ PHỤC VỤ (đã thu gọn, web/jsmin.py) kiểm ở test_coord_verify_r1."""
     import gzip
 
     files = [STATIC / C.VENDOR[k] for k in ("preact", "preact/hooks", "@preact/signals-core", "@preact/signals", "htm")]
     files += list((STATIC / "coord").glob("*.js"))
     total = sum(len(gzip.compress(f.read_bytes(), 9)) for f in files)
-    assert total < 52_000, total
+    assert total < 54_000, total  # nguồn có chú thích; cỡ phục vụ kiểm riêng
 
 
 @pytest.mark.skipif(not NODE, reason="cần Node để chạy store/SSE của island")

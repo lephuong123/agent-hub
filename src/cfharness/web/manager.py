@@ -819,8 +819,10 @@ def routes() -> list[Any]:
     from starlette.routing import Route
 
     from . import manager_feed
+    from .coord import routes as _coord_routes
 
     return [
+        *_coord_routes(),  # /static/coord/<tệp>.js — mã island đã thu gọn (đứng trước mount /static)
         *manager_feed.routes(),  # hợp đồng v2 (GĐ1): /api/manager/snapshot|watch|act, /sse/manager/v2
         Route("/manager", manager_page),
         Route("/manager/send", manager_send, methods=["POST"]),

@@ -243,7 +243,7 @@ function Question({ q, back, p, cv }) {
   const a = q.answer || {}, keys = a.keys || [], labels = a.labels || [];
   const by = String(q.answered_by || ""), who = by.startsWith("manager:") ? "Điều phối viên" : by === "hub" ? "Hub" : "Bạn";
   const opts = q.options || [], dr = q.draft || {};
-  return html`<article class=${"xcard ask" + (cv ? " cv" : "") + (pending ? "" : " done") + (q.busy ? " busy" : "")} id=${"q-" + q.id} aria-busy=${q.busy ? "true" : undefined}>
+  return html`<article class=${"xcard ask" + (cv ? " cvx" : "") + (pending ? "" : " done") + (q.busy ? " busy" : "")} id=${"q-" + q.id} aria-busy=${q.busy ? "true" : undefined}>
     <div class="xcard-head"><span class="xcard-ic"><${Icon} n=${pending ? "question" : "check"} /></span>
       <div class="xcard-title"><div class="t">${q.agent_id} hỏi ${q.status === "with_manager" ? "điều phối viên" : "bạn"} <span class=${"pill " + tone}>${label}</span></div>
         <div class="m"><a href=${"/agents/" + encodeURIComponent(q.agent_id || "")}>${q.agent_id}</a>${q.task_id ? html`<span>·</span><a href=${"/tasks/" + encodeURIComponent(q.task_id)}>task ${q.task_id}</a>` : null}${
@@ -277,9 +277,9 @@ const AP_DONE = { allowed: ["Đã cho phép", "ok", "check"], approved: ["Đã c
 function Approval({ a, p, cv }) {
   const done = a.done ? AP_DONE[a.done] || [a.done, "muted", "check"] : null;
   const set = (patch) => ui.store.patchAp(p, a.id, (x) => ({ ...x, ...patch }));
-  return html`<article class=${"xcard approval human" + (cv ? " cv" : "") + (done ? " done" : "") + (a.busy ? " busy" : "")} id=${"ap-" + a.id} aria-busy=${a.busy ? "true" : undefined}>
+  return html`<article class=${"xcard approval human" + (cv ? " cvx" : "") + (done ? " done" : "") + (a.busy ? " busy" : "")} id=${"ap-" + a.id} aria-busy=${a.busy ? "true" : undefined}>
     <div class="xcard-head"><span class="xcard-ic"><${Icon} n=${done ? done[2] : "shield"} /></span>
-      <div class="xcard-title"><div class="t">${done ? "Thao tác phá huỷ" : "Chờ bạn duyệt"} <span class=${"pill " + (done ? done[1] : "danger")}>${a.busy ? "đang gửi…" : done ? done[0] : "phá huỷ"}</span></div>
+      <div class="xcard-title"><div class="t">${done ? "Thao tác phá huỷ" : "Chờ bạn duyệt"} <span class=${"pill " + (done ? done[1] : "danger")}>${a.busy ? (a.done === "denied" ? "đang từ chối…" : "đang cho phép…") : done ? done[0] : "phá huỷ"}</span></div>
         <div class="m"><code>${a.tool}</code>${a.agent_id ? html`<span>·</span><a href=${"/agents/" + encodeURIComponent(a.agent_id)}>${a.agent_id}</a>` : null}${
           a.run_id ? html`<span>·</span><a href=${"/runs/" + encodeURIComponent(a.run_id)}>lượt chạy</a>` : null}<span>·</span><${Time} ts=${a.created_at} /></div></div></div>
     ${done ? null : html`<pre class="cmd-full" tabindex="0">${a.text}</pre>${a.reason ? html`<p class="xcard-why">${a.reason}</p>` : null}`}
@@ -300,9 +300,10 @@ function Approval({ a, p, cv }) {
 
 function Item({ it, p, run, last }) {
   const agent = (ui.store.manager.value || {}).agent_id;
-  // content-visibility CHỈ cho mục cũ của ảnh chụp đầu (store `p.cv`) — cố định theo mục: đổi qua lại visible ↔ auto khi mục ở ngoài màn
+  // content-visibility CHỈ cho mục cũ của ảnh chụp đầu (store `p.cv`) — lớp `cvx` (nhớ cỡ) cố định theo mục; `data-cv` (bật bỏ qua vẽ) do
+  // Flow gắn SAU khung hình đầu tiên mục được dựng đầy đủ → cỡ đã nhớ là cỡ thật, cuộn tới không nhảy (CLS). Đổi qua lại visible ↔ auto khi mục ở ngoài màn
   // hình làm nó mất cỡ đã nhớ → scrollHeight nhảy (CLS); mục mới tới sau luôn vẽ đầy đủ.
-  const cv = !!(p.cv && it.id && p.cv.has(it.id)), C = cv ? " cv" : "";
+  const cv = !!(p.cv && it.id && p.cv.has(it.id)), C = cv ? " cvx" : "";
   switch (it.kind) {
     case "day": return html`<div class="mm-day" role="separator" data-day=${it.key}><span>${it.text}</span></div>`;
     case "user":
@@ -413,6 +414,7 @@ function More({ p, n }) {
 function Flow({ p }) {
   const items = p.items.value, run = p.runId.value, hide = p.hide.value;
   useLayoutEffect(() => pinNow(p));
+  useEffect(() => cvArm(p));
   const list = mergeTimeline(items, p.actions.value.filter((a) => a.kind === "approval").map(apItem));
   let last = -1;
   for (let i = list.length - 1; i >= 0; i--) if (list[i].kind === "manager" && !list[i].notify) { last = i; break; }
@@ -424,6 +426,17 @@ function Flow({ p }) {
     rows.push(html`<${Row} key=${it.id || "i" + i} it=${it} p=${p} run=${it.kind === "actions" ? run : null} last=${i === last} />`);
   }
   return rows;
+}
+
+/** Bật content-visibility cho mục `cvx` mới dựng — hai khung hình sau (khung đầu đã dựng đầy đủ → `contain-intrinsic-size: auto` nhớ cỡ
+ *  thật). Gắn bằng thuộc tính DOM `data-cv` (Preact không quản) → vẽ lại một dòng không làm mất. */
+function cvArm(p) {
+  if (p.cvT) return;
+  p.cvT = requestAnimationFrame(() => requestAnimationFrame(() => {
+    p.cvT = 0;
+    const el = p.el;  // khung ẩn (display:none) chưa dựng gì → chưa nhớ cỡ: đợi lúc hiện (Pane gọi lại)
+    if (el && el.clientHeight) for (const x of el.querySelectorAll(".coord-flow > .cvx:not([data-cv])")) x.setAttribute("data-cv", "");
+  }));
 }
 
 function Empty({ p }) {
@@ -502,6 +515,7 @@ function Pane({ p, on }) {
     const el = ref.current;
     if (!el || !on) return;
     el.scrollTop = p.scroll.stick ? el.scrollHeight : p.scroll.top;
+    cvArm(p);
   }, [on, loaded]);
   return html`<div class=${"mgr-log" + (empty ? " is-empty" : "")} ref=${ref} hidden=${!on} data-pane=${p.id} aria-label="Dòng trò chuyện">
     ${!loaded ? html`<div class="coord-loading" role="status">${err ? html`<span class="danger-t">${err}</span>` : html`<span class="tx-spin" aria-hidden="true"></span>Đang tải…`}</div>` : null}

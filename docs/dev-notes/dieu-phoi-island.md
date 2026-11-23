@@ -197,3 +197,33 @@ Mã mới: `static/coord/scroll.js` (cuộn dính đáy — THUẦN), `static/co
   ("coord:boot")`) ~70 ms khi đã cache cho hội thoại demo ~120 mục.
 - **Còn lại (GĐ3):** JS island ~50 KB gzip (coord ~38 KB, vendor ~11 KB) (ngân sách 30 KB — cần minify/bỏ chú thích khi phục vụ); voice.js MutationObserver vẫn quan sát
   cả `body`.
+
+## Sửa sau verify vòng 1
+
+- **Trang `?ui=next` có phạm vi luồng** (`?w=`, `?c=` hội thoại thuộc luồng, `?new=1&w=`) trả 500: template dùng `|first`, mà Jinja của
+  web ghi đè `first` bằng `P.first_line`. Luồng đang xem (`wst`) giờ tính ở `coord.coord_page`.
+- **Ảnh chụp ↔ luồng SSE:** `GET /api/manager/snapshot?tab=<khoá tab>` đăng ký phạm vi của đích (`c`, hoặc `w`/Sảnh khi chưa biết hội thoại)
+  cho luồng SSE của tab TRƯỚC khi lấy `cursor`, rồi thêm hội thoại ảnh chụp chọn. Client: khung đang tải (`store.beginLoad`) GIỮ message
+  của nó; `applySnapshot(snap, p, fx)` phát lại phần có id > `cursor` (phần ≤ cursor ảnh chụp đã gồm) và trả hiệu ứng (đã đọc, báo).
+  Tải bị huỷ (đổi tab nhanh, resync) hoặc lỗi → `store.endLoad` đánh dấu khung cũ → mở lại là tải lại (hết kẹt "Đang tải…").
+  `POST /api/manager/watch` chỉ còn dùng khi gửi tin đầu tạo hội thoại mới; client ghi nhận phạm vi chỉ khi server nhận (lỗi → thử lại).
+- **`Watch` của luồng đang chạy:** `seen` làm mới MỖI vòng của `stream()` (không chỉ ở nhịp ping); `live` = số luồng đang giữ — dọn TTL bỏ
+  qua; `op=set` đặt lại tại chỗ; quá `MAX_WATCH` bỏ id cũ nhất (dict theo thứ tự thêm).
+- **Subscription daemon tắt khi rảnh dù hub im lặng:** `Feed.reap_later()` hẹn giờ (sau `ensure()` và khi luồng cuối đóng) huỷ task khi
+  `idle()`.
+- **`/api/manager/act`:** `post_guard` trước cache idem; chỉ cache 2xx/409.
+- **Ghi chú lượt lỗi** trong ảnh chụp có id `n<run>` (cùng id client tự thêm khi `run.end` lỗi) → không lặp.
+- **"Hành động gần đây" theo khung:** mỗi khung giữ `side` của phạm vi nó (server lọc theo luồng); `act.item` (mang `ws`) chỉ vào khung cùng
+  phạm vi; `store.side` = của khung đang hiện.
+- **Tin người từ client khác:** v2 không có event tin người → `msg.done` của lượt mà khung không có tin người tương ứng (không phải tick /
+  notify, khung không đang gửi) → tải lại nền ảnh chụp của khung đang hiện (khung ẩn: đánh dấu cũ). Đồng thời thay id/chữ tạm bằng bản đã lưu.
+- **CLS khi cuộn lên 2000 mục:** mục cũ mang lớp `cvx` (`contain-intrinsic-size: auto …`) nhưng `content-visibility: auto` chỉ bật qua
+  `data-cv` HAI khung hình sau khi mục được dựng đầy đủ (`views/cvArm`) → cỡ đã nhớ là cỡ thật. `.coord-more` loại khỏi ứng viên neo cuộn
+  (neo vào nó thì mục chèn ngay dưới không được bù). Đo lại (Playwright, lăn chuột thật 60 × 600px lên rồi xuống lại): CLS 0.00001.
+- **Nhãn lạc quan thẻ duyệt:** "đang cho phép…" / "đang từ chối…" thay "đang gửi…".
+- **Gửi khi khung chưa tải xong** bị chặn (giữ ô nhập, báo "Đang tải hội thoại") — ảnh chụp tới sau sẽ xoá tin lạc quan. Resync khi khung
+  tạm `?w=` chưa tải tải lại đúng đích ban đầu (`p.nav`), không thành "hội thoại mới".
+- **JS phục vụ đã thu gọn:** `GET /static/coord/<tệp>.js` (route `coord.coord_js`, đứng trước mount `/static`) trả bản `web/jsmin.py` (bỏ
+  chú thích/thụt lề/khoảng trắng thừa; chuỗi, template `htm`, regex giữ nguyên; không đổi tên → ngữ nghĩa giữ nguyên; test chạy lại
+  store/SSE trên bản thu gọn + `node --check`). gzip: coord 38.6 → 28.3 KB; cộng vendor ~11.2 KB = **~39.5 KB**, vẫn trên ngân sách 30 KB.
+  Xuống 30 KB cần minifier đổi tên biến (một bước build) hoặc chốt ngân sách mới — cần người dùng quyết. Test chặn hồi quy ở 42 KB.

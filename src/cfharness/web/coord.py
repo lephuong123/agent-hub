@@ -19,7 +19,7 @@ import json
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import PlainTextResponse, Response
 
 from .app import CSP, HERE, render, session_of, static_url
 
@@ -61,9 +61,43 @@ async def coord_page(request: Request) -> Response:
         return await _page(request, ctx)
     sess = session_of(request)
     imap = import_map()
+    # luồng đang xem (tiêu đề nhóm "Hội thoại · <luồng>" vẽ sẵn ở thanh bên) — tính ở đây: trong Jinja `first` bị ghi đè bằng P.first_line
+    sc = snap.get("scope")
+    wsb = snap.get("workstreams") or {}
+    wst = next((t for t in [*(wsb.get("active") or []), *(wsb.get("closed") or [])] if t.get("ws") == sc), None) if sc and sc != "_" else None
     boot: dict[str, Any] = {"snap": snap, "csrf": sess.csrf if sess else "", "icons": static_url("icons.svg"), "hub": await hub_flags(request)}
     resp = await render(request, "manager_next.html", {"nav": "manager", "boot": boot, "importmap": imap, "entry": static_url(ENTRY),
-                                                       "title": snap.get("title")})
+                                                       "title": snap.get("title"), "wst": wst})
     resp.headers["content-security-policy"] = csp_with(imap)
     resp.headers["cache-control"] = "no-store"
     return resp
+
+
+_MIN: dict[str, tuple[float, bytes]] = {}  # tên tệp → (mtime, bản đã thu gọn)
+
+
+async def coord_js(request: Request) -> Response:
+    """`/static/coord/<tệp>.js` — mã island ĐÃ THU GỌN (`jsmin`: bỏ chú thích/thụt lề, ngữ nghĩa giữ nguyên) thay vì tệp nguồn nguyên văn.
+    Route này đứng TRƯỚC mount `/static` (StaticFiles). Cache theo mtime; Cache-Control do GuardMiddleware gắn (`?v=` → immutable)."""
+    from .jsmin import minify
+
+    name = request.path_params["name"]
+    f = HERE / "static" / ISLAND_DIR / name
+    if not name.endswith(".js") or "/" in name or "\\" in name or name.startswith(".") or not f.is_file():
+        return PlainTextResponse("Không có tệp này", status_code=404)
+    mt = f.stat().st_mtime
+    hit = _MIN.get(name)
+    if hit is None or hit[0] != mt:
+        src = f.read_text(encoding="utf-8")
+        try:
+            body = minify(src).encode("utf-8")
+        except ValueError:  # pragma: no cover — cú pháp lạ: phục vụ nguyên văn còn hơn hỏng trang
+            body = src.encode("utf-8")
+        hit = _MIN[name] = (mt, body)
+    return Response(hit[1], media_type="text/javascript; charset=utf-8")
+
+
+def routes() -> list[Any]:
+    from starlette.routing import Route
+
+    return [Route("/static/coord/{name}", coord_js)]

@@ -2,8 +2,9 @@
  *
  * - Ảnh chụp đầu tiên nhúng trong trang (#coord-boot) → vẽ ngay, mở MỘT luồng SSE với `since=<cursor>` (không hở, không trùng).
  * - Đổi tab luồng / hội thoại đã mở: chỉ đổi khung đang hiện (khung khác giữ trong DOM, ẩn) + pushState — không fetch.
- *   Đích chưa mở: khung tạm "Đang tải…" hiện ngay, tải `/api/manager/snapshot`, rồi `POST /api/manager/watch` để luồng SSE (vẫn là luồng
- *   cũ) gửi thêm message của hội thoại đó.
+ *   Đích chưa mở: khung tạm "Đang tải…" hiện ngay, tải `/api/manager/snapshot?tab=` — server đăng ký phạm vi của tab TRƯỚC khi lấy
+ *   cursor (luồng SSE cũ gửi thêm message của đích đó, không hở). Message của khung tới trong lúc tải được store GIỮ, phát lại phần có
+ *   id > cursor sau khi áp ảnh chụp (không mất, không bị ảnh chụp ghi đè). Tải bị huỷ / lỗi → khung đánh dấu cũ, mở lại là tải lại.
  * - `resync` (hở ring / web hoặc daemon khởi động lại): tải lại ảnh chụp khung đang hiện; khung khác đánh dấu cũ, tải lại khi mở.
  */
 import { render } from "preact";
@@ -38,12 +39,19 @@ function visible() { return !document.hidden; }
 
 // ------------------------------------------------------------------ phạm vi luồng SSE
 function wantOf(p) { return p.conv.value ? { c: p.conv.value } : { w: p.scope }; }
-function watch(p) {
+/** Ghi nhận phạm vi đã đăng ký ở server (ảnh chụp `?tab=` tự đăng ký) — dùng cho URL khi luồng SSE phải mở lại từ đầu. */
+function noteWatched(p) {
+  const x = wantOf(p);
+  if (x.c) watched.c.add(x.c); else watched.w.add(x.w);
+}
+/** Đăng ký thêm phạm vi (hội thoại vừa tạo khi gửi tin đầu). Chỉ ghi nhận khi server nhận; lỗi → thử lại một lần. */
+async function watch(p, again) {
   const x = wantOf(p);
   if ((x.c && watched.c.has(x.c)) || (x.w && watched.w.has(x.w))) return;
-  if (x.c) watched.c.add(x.c); else watched.w.add(x.w);
-  if (!feed) return;
-  postForm("/api/manager/watch", { tab: TAB, c: x.c ? [x.c] : [], w: x.w ? [x.w] : [] }).catch(() => {});
+  let j;
+  try { j = await postForm("/api/manager/watch", { tab: TAB, c: x.c ? [x.c] : [], w: x.w ? [x.w] : [] }); } catch (_) { j = { error: "mạng" }; }
+  if (j && j.ok) { noteWatched(p); return; }
+  if (!again) setTimeout(() => watch(p, true), 1500);
 }
 
 // ------------------------------------------------------------------ đã đọc
@@ -86,6 +94,7 @@ function runFx(fx) {
     if (f.fx === "flush") flushSoon();
     else if (f.fx === "status") statusSoon();
     else if (f.fx === "resync") resync(f.reason);
+    else if (f.fx === "refresh") refresh(f.pane);
     else if (f.fx === "event") emit(f.name, f.detail);
     else if (f.fx === "reply") {
       const a = store.active.value;
@@ -129,20 +138,38 @@ async function load(nav, p, mine) {
   if (navCtl) navCtl.abort();
   const ctl = new AbortController();
   navCtl = ctl;
+  store.beginLoad(p);
   try {
-    const snap = await getJSON(snapshotUrl(nav), ctl.signal);
+    const snap = await getJSON(snapshotUrl(nav, TAB), ctl.signal);
     if (navCtl === ctl) navCtl = null;
     if (snap.setup) { location.href = "/manager"; return null; }
-    const q = store.applySnapshot(snap, p);
-    watch(q);
+    const fx = [];
+    const q = store.applySnapshot(snap, p, fx);
+    noteWatched(q);
     if (mine === navSeq) show(q, false);
+    runFx(fx);
     return q;
   } catch (e) {
-    if (e && e.name === "AbortError") return null;
     if (navCtl === ctl) navCtl = null;
-    if (p) { p.error.value = "Không tải được: " + ((e && e.message) || "lỗi mạng") + " — bấm lại tab để thử lại."; p.stale = true; }
+    // huỷ (đổi tab nhanh / resync): khung đánh dấu cũ → mở lại là tải lại, không kẹt "Đang tải…"
+    if (e && e.name === "AbortError") { store.endLoad(p); return null; }
+    store.endLoad(p, "Không tải được: " + ((e && e.message) || "lỗi mạng") + " — bấm lại tab để thử lại.");
     return null;
   }
+}
+
+/** Tải lại NỀN ảnh chụp của một khung (không đụng điều hướng đang chạy). Khung không hiện → chỉ đánh dấu cũ (tải khi mở lại). */
+function refresh(p) {
+  if (!p || p.loading || !p.conv.value) return;
+  if (store.active.value !== p || !visible()) { p.stale = true; return; }
+  const ctl = new AbortController();
+  store.beginLoad(p);
+  getJSON(snapshotUrl({ c: p.conv.value }, TAB), ctl.signal).then((snap) => {
+    if (snap.setup) return;
+    const fx = [];
+    store.applySnapshot(snap, p, fx);
+    runFx(fx.filter((f) => f.fx !== "refresh"));
+  }, () => store.endLoad(p));
 }
 
 /** Đi tới URL trang Điều phối (`?c=` / `?w=` / `?new=1`). Đã mở → chỉ đổi khung; chưa → khung tạm + tải ảnh chụp. */
@@ -159,7 +186,7 @@ function go(url, push) {
     return;
   }
   const scope = nav.c ? (cur ? cur.scope : LOBBY) : nav.w || LOBBY;
-  const tmp = store.makePane(scope, nav.c);
+  const tmp = store.makePane(scope, nav.c, nav);
   store.activate(tmp);
   try { if (push) history.pushState({ mgr: 2 }, "", u.pathname + u.search); } catch (_) {}
   closeMenus();
@@ -190,13 +217,19 @@ function resync(reason) {
   resyncT = setTimeout(() => {
     const p = store.active.value;
     if (!p) return;
-    load(p.conv.value ? { c: p.conv.value } : { w: p.scope !== LOBBY ? p.scope : null, fresh: true }, p, navSeq);
+    // khung tạm chưa tải xong (vd `?w=` = hội thoại gần nhất của luồng): tải lại ĐÚNG đích ban đầu, không biến thành "hội thoại mới"
+    const nav = p.conv.value ? { c: p.conv.value } : !p.loaded.value && p.nav ? p.nav : { w: p.scope !== LOBBY ? p.scope : null, fresh: true };
+    load(nav, p, navSeq);
     statusSoon(0);
   }, 50);
 }
 
 // ------------------------------------------------------------------ gửi / dừng / điền
 async function send(p, text, files, voice) {
+  if (!p.loaded.value || p.loading) {  // ảnh chụp chưa tới: gửi lúc này thì ảnh chụp sẽ xoá tin lạc quan → giữ nguyên ô nhập
+    p.sendErr.value = "Đang tải hội thoại — gửi lại sau giây lát.";
+    return;
+  }
   const tok = store.beginSend(p, text, files);
   jumpBottom(p, false);
   const fd = new FormData();
@@ -293,8 +326,7 @@ document.addEventListener("visibilitychange", () => {
 const first = store.applySnapshot(boot.snap, null);
 store.activate(first);
 try { history.replaceState({ mgr: 2 }, "", location.pathname + location.search); } catch (_) {}
-const x0 = wantOf(first);
-if (x0.c) watched.c.add(x0.c); else watched.w.add(x0.w);
+noteWatched(first);
 
 root.textContent = "";
 root.removeAttribute("data-state");
@@ -307,7 +339,7 @@ if (first.conv.value) markRead(first.conv.value);
 feed = createFeed({
   EventSource: window.EventSource, tab: TAB, since: boot.snap.cursor || "",
   scope: () => ({ c: Array.from(watched.c).slice(-64), w: Array.from(watched.w).slice(-64) }),
-  onMessage: (m) => runFx(store.apply(m)),
+  onMessage: (m, id) => runFx(store.apply(m, id)),
   onState: (s) => { store.live.value = s; },
 });
 window.addEventListener("pagehide", () => feed && feed.close());

@@ -39,8 +39,10 @@ export async function postForm(url, data, opts) {
   return j;
 }
 
-export function snapshotUrl(nav) {
+/** `tab`: khoá tab của luồng SSE — server đăng ký phạm vi của đích cho luồng đó TRƯỚC khi lấy cursor (không hở message). */
+export function snapshotUrl(nav, tab) {
   const q = new URLSearchParams();
+  if (tab) q.set("tab", tab);
   if (nav.c) q.set("c", nav.c);
   if (nav.w) q.set("w", nav.w);
   if (nav.fresh) q.set("new", "1");

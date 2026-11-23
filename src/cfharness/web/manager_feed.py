@@ -117,7 +117,8 @@ def item_json(it: dict[str, Any], agent: str | None = None) -> dict[str, Any] | 
         return base | {"id": mid, "text": text, "html": md_cached(mid, text), "notify": bool(it.get("notify")), "tick": bool(it.get("tick")),
                        "cut": it.get("cut") or "", "agent": ag, "files": _files(text, ag)}
     if k == "note":
-        return base | {"id": None, "text": it.get("text") or "", "tone": it.get("tone") or "info"}
+        # cùng id với ghi chú client tự thêm khi nhận `run.end` lỗi ("n<run>") → ảnh chụp + phần phát lại sau cursor không ra hai ghi chú
+        return base | {"id": f"n{it['run_id']}" if it.get("run_id") else None, "text": it.get("text") or "", "tone": it.get("tone") or "info"}
     if k == "day":
         return {"kind": "day", "id": f"d{it.get('key')}", "key": it.get("key"), "text": it.get("text")}
     if k == "action":
@@ -320,20 +321,34 @@ class Converter:
 # ============================================================================ phạm vi của một tab trình duyệt
 @dataclass
 class Watch:
-    convs: set[str] = field(default_factory=set)
-    ws: set[str] = field(default_factory=set)
+    """Phạm vi `msg.*`/`tool.*`/`action.*` của MỘT tab trình duyệt. `convs`/`ws` là dict theo thứ tự thêm (dùng như tập có thứ tự): quá
+    MAX_WATCH thì bỏ cái CŨ nhất — thêm lại một id là đưa nó về cuối (cái đang mở không bị bỏ). `live` = số luồng SSE đang giữ đối tượng
+    này: còn luồng thì không bao giờ bị dọn theo TTL (luồng giữ tham chiếu — dọn rồi tạo mới là luồng mất phạm vi)."""
+
+    convs: dict[str, None] = field(default_factory=dict)
+    ws: dict[str, None] = field(default_factory=dict)
     seen: float = field(default_factory=time.monotonic)
+    live: int = 0
 
     def wants(self, s: Scope) -> bool:
         return s.all or (s.conv is not None and s.conv in self.convs) or (s.ws is not None and s.ws in self.ws)
 
+    @staticmethod
+    def _put(d: dict[str, None], ids: list[str]) -> None:
+        for x in ids:
+            if x:
+                d.pop(x, None)
+                d[x] = None
+        while len(d) > MAX_WATCH:
+            d.pop(next(iter(d)))
+
     def add(self, convs: list[str], wss: list[str]) -> None:
-        self.convs.update(c for c in convs if c)
-        self.ws.update(w for w in wss if w)
-        while len(self.convs) > MAX_WATCH:
-            self.convs.pop()
-        while len(self.ws) > MAX_WATCH:
-            self.ws.pop()
+        self._put(self.convs, convs)
+        self._put(self.ws, wss)
+
+    def clear(self) -> None:
+        self.convs.clear()
+        self.ws.clear()
 
 
 @dataclass
@@ -371,6 +386,7 @@ class Feed:
         self.watches: dict[str, Watch] = {}
         self.idem: OrderedDict[str, tuple[float, int, dict[str, Any]]] = OrderedDict()
         self._sub: Any = None
+        self._reaper: asyncio.TimerHandle | None = None
         self.restarts = 0
 
     # ---------------------------------------------------------------- ring
@@ -429,11 +445,35 @@ class Feed:
         if self.task is None or self.task.done():
             self.ready.clear()
             self.task = asyncio.create_task(self._run())
+        if self.clients == 0:
+            self.reap_later()  # chỉ có ảnh chụp, không luồng nào mở sau đó → vẫn phải tắt subscription khi rảnh
         if not self.ready.is_set():
             await asyncio.wait_for(asyncio.shield(self.ready.wait()), timeout)
 
     def idle(self) -> bool:
         return self.clients == 0 and time.monotonic() - self.touched > self.idle_stop_s
+
+    def reap_later(self) -> None:
+        """Hẹn kiểm tra rảnh: hub im lặng thì `_one` không bao giờ tới chỗ kiểm `idle()` (chỉ kiểm sau mỗi event) → bộ hẹn giờ này huỷ
+        subscription daemon khi không còn ai xem đủ `idle_stop_s`."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover
+            return
+        if self._reaper is not None:
+            self._reaper.cancel()
+        wait = max(0.05, self.idle_stop_s - (time.monotonic() - self.touched)) + 0.05
+        self._reaper = loop.call_later(wait, self._reap)
+
+    def _reap(self) -> None:
+        self._reaper = None
+        if self.clients:
+            return  # luồng còn mở — luồng đóng sẽ hẹn lại
+        if not self.idle():
+            self.reap_later()
+            return
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
 
     async def _manager_id(self) -> str | None:
         try:
@@ -577,11 +617,13 @@ class Feed:
     # ---------------------------------------------------------------- phạm vi
     def watch(self, key: str, convs: list[str], wss: list[str], *, replace: bool = False) -> Watch:
         now = time.monotonic()
-        for k in [k for k, w in self.watches.items() if now - w.seen > WATCH_TTL_S]:
+        for k in [k for k, w in self.watches.items() if not w.live and now - w.seen > WATCH_TTL_S]:
             self.watches.pop(k, None)
         w = self.watches.get(key)
-        if w is None or replace:
+        if w is None:
             w = self.watches[key] = Watch()
+        elif replace:
+            w.clear()  # đặt lại TẠI CHỖ: luồng SSE đang chạy giữ chính đối tượng này
         w.add(convs, wss)
         w.seen = now
         return w
@@ -605,6 +647,9 @@ class Feed:
                 self._sub.close()
             except Exception:  # pragma: no cover
                 pass
+        if self._reaper is not None:
+            self._reaper.cancel()
+            self._reaper = None
         for t in (self.task, self._ws_task):
             if t and not t.done():
                 t.cancel()
@@ -624,6 +669,7 @@ async def stream(feed: Feed, watch: Watch, last: tuple[str, int] | None, *, hear
     """Luồng SSE v2: `retry`, `hello`, (resync nếu hở) rồi phần lỡ từ ring, rồi live. Mỗi message có `id: <boot>.<n>`. Message ngoài phạm vi
     không gửi nhưng id vẫn tiến (khối `id:` không có data ở nhịp ping) → nối lại không phải quét lại phần đã bỏ."""
     feed.clients += 1
+    watch.live += 1
     try:
         yield "retry: 3000\n\n"
         yield sse_block(json.dumps({"t": "hello", "v": V, "boot": feed.boot, "cursor": feed.cursor, "epoch": feed.epoch, **(hello or {})},
@@ -637,6 +683,7 @@ async def stream(feed: Feed, watch: Watch, last: tuple[str, int] | None, *, hear
             pos = last[1]
         sent = pos
         while True:
+            watch.seen = feed.touched = time.monotonic()  # mỗi vòng (không chỉ nhịp ping): hub bận liên tục vẫn là "đang xem"
             batch = feed.since(pos)
             if pos + 1 < feed.first_n and pos < feed.n:  # luồng này chậm tới mức ring đã trôi qua → resync
                 yield sse_block(json.dumps({"t": "resync", "reason": "gap"}), feed.cursor)
@@ -650,8 +697,6 @@ async def stream(feed: Feed, watch: Watch, last: tuple[str, int] | None, *, hear
             if pos < feed.n:
                 continue
             if not await feed.wait(heartbeat_s):
-                watch.seen = time.monotonic()
-                feed.touched = time.monotonic()
                 if gone is not None and await gone():
                     return
                 if sent < pos:  # chỉ cập nhật Last-Event-ID (không phát event) — WHATWG: khối không có data vẫn đặt last event id
@@ -666,7 +711,10 @@ async def stream(feed: Feed, watch: Watch, last: tuple[str, int] | None, *, hear
                         pass
     finally:
         feed.clients -= 1
-        feed.touched = time.monotonic()
+        watch.live -= 1
+        watch.seen = feed.touched = time.monotonic()  # TTL tính từ lúc ngắt (EventSource nối lại cùng tab trong WATCH_TTL_S)
+        if feed.clients == 0:
+            feed.reap_later()
 
 
 # ============================================================================ route
@@ -738,10 +786,15 @@ async def api_act(request: Request) -> Response:
     RPC lần hai (client lạc quan, mạng chập chờn)."""
     from .office import office_do
 
+    from .app import post_guard
+
     name = request.path_params["name"]
     if name not in IDEM_ACTIONS:
         return JSONResponse({"ok": False, "error": "Không có thao tác này"}, status_code=404)
-    form = await request.form()
+    try:  # CSRF/Origin/khoá phiên TRƯỚC khi tra cache idem — bản phát lại cũng phải qua cùng cửa
+        _, form = await post_guard(request)
+    except HTTPException as e:
+        return JSONResponse({"ok": False, "error": str(e.detail)}, status_code=e.status_code, headers={"Cache-Control": "no-store"})
     idem = str(form.get("idem") or "").strip()[:80]
     feed = feed_of(request)
     key = _watch_key(request, f"idem:{name}:{idem}") if idem else ""
@@ -750,7 +803,7 @@ async def api_act(request: Request) -> Response:
         if hit:
             return JSONResponse(hit[1] | {"replayed": True}, status_code=hit[0], headers={"Cache-Control": "no-store"})
     resp = await office_do(request)
-    if key and resp.status_code < 500:
+    if key and (200 <= resp.status_code < 300 or resp.status_code == 409):  # chỉ kết quả CUỐI; 4xx (CSRF, thiếu tham số) thử lại được
         try:
             body = json.loads(bytes(resp.body))
         except Exception:  # pragma: no cover
@@ -760,14 +813,20 @@ async def api_act(request: Request) -> Response:
     return resp
 
 
-async def build_snapshot(request: Request) -> tuple[dict[str, Any], dict[str, Any]]:
+async def build_snapshot(request: Request, *, tab: str = "") -> tuple[dict[str, Any], dict[str, Any]]:
     """(ctx của `manager.page_ctx`, ảnh chụp JSON) — dùng chung cho `GET /api/manager/snapshot` và trang island (`coord.coord_page`, nhúng
     sẵn ảnh chụp đầu tiên vào HTML → mở trang không phải chờ thêm một lượt fetch)."""
     from .manager import page_ctx
 
     feed = feed_of(request)
+    q = request.query_params
     try:
         await feed.ensure()
+        if tab:
+            # phạm vi của tab ĐĂNG KÝ TRƯỚC khi lấy cursor: mọi message sau cursor của đích này chắc chắn tới luồng SSE của tab (luồng
+            # duyệt ring tới đâu kiểm `wants` tới đó). `?c=` → đúng hội thoại; `?w=`/Sảnh (chưa biết hội thoại nào) → cả luồng.
+            c0 = str(q.get("c") or "").strip()
+            feed.watch(_watch_key(request, tab), [c0] if c0 else [], [] if c0 else [str(q.get("w") or "").strip() or LOBBY])
         cursor = feed.cursor
     except (asyncio.TimeoutError, DaemonUnavailable, OSError):
         cursor = None  # vẫn trả ảnh chụp; client mở SSE không since (resync khi có)
@@ -782,12 +841,16 @@ async def build_snapshot(request: Request) -> tuple[dict[str, Any], dict[str, An
                    if a.get("run_id") in runs]
         except RpcError:
             aps = []
-    return ctx, snapshot_json(ctx, cursor, feed, approvals=aps)
+    snap = snapshot_json(ctx, cursor, feed, approvals=aps)
+    if tab and snap.get("conv"):
+        feed.watch(_watch_key(request, tab), [snap["conv"]], [])
+    return ctx, snap
 
 
 async def api_snapshot(request: Request) -> Response:
     """Ảnh chụp JSON của trang (cùng dữ liệu với `GET /manager`). `cursor` = id SSE lấy TRƯỚC khi đọc → không hở với luồng."""
-    _, snap = await build_snapshot(request)
+    tab = str(request.query_params.get("tab") or "").strip()[:64]
+    _, snap = await build_snapshot(request, tab=tab)
     return JSONResponse(snap, headers={"Cache-Control": "no-store"})
 
 

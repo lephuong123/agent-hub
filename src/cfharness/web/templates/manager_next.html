@@ -4,8 +4,8 @@
 {% block title %}Điều phối{% endblock %}
 {% block bodyclass %}chat-page coord-next{% endblock %}
 {#- Danh sách hội thoại vẽ SẴN ở server (cùng cấu trúc với ConvList của island) → island thay bằng bản của nó trong cùng tác vụ, không
-    khung hình nào trống → thanh bên không nhảy (CLS). Chữ là dữ liệu: autoescape. -#}
-{% block side_extra %}{%- set sn = boot.snap -%}{%- set wst = (sn.workstreams.active + sn.workstreams.closed)|selectattr("ws", "equalto", sn.scope)|first if sn.scope != "_" else none -%}
+    khung hình nào trống → thanh bên không nhảy (CLS). Chữ là dữ liệu: autoescape. `wst` (luồng đang xem) tính sẵn ở coord.py. -#}
+{% block side_extra %}{%- set sn = boot.snap -%}
 <section class="side-recents" id="coord-convs" aria-label="Hội thoại">
   <div class="nav-group ws-head"><span>{{ ('Hội thoại · ' ~ wst.title) if wst else ('Hội thoại ở Sảnh' if sn.workstreams.enabled else 'Gần đây') }}</span><a class="ws-add" href="#" aria-hidden="true" tabindex="-1">＋</a></div>
   <ul class="mgr-convs">{% for c in sn.conversations[:30] %}<li><a href="/manager?ui=next&amp;c={{ c.id|urlencode }}" class="{{ 'on' if c.id == sn.conv }}"><span class="ct">{% if c.running %}<span class="ws-dot run" aria-hidden="true"></span>{% endif %}{{ c.title or ('Cuộc trò chuyện ' ~ (c.updated_at|ts)) }}{% if c.unread and c.id != sn.conv %}<span class="ws-unread">{{ c.unread }}</span>{% endif %}</span><span class="cm">{{ c.updated_at|ago }}{% if c.count %} · {{ c.count }} tin{% endif %}</span></a></li>{% else %}<li class="muted small side-none">Chưa có hội thoại — gõ tin để bắt đầu.</li>{% endfor %}</ul>

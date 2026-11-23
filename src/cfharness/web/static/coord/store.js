@@ -10,12 +10,20 @@
  * Chữ của agent là DỮ LIỆU: store chỉ giữ chữ thô (`text`, `label`, …) — chỗ DUY NHẤT là HTML là `item.html` của mục `manager` (server đã
  * cứng hoá bằng present.md). Không có hàm nào ở đây dựng HTML.
  */
-import { LOBBY, draftKey, dayKey, dayLabel } from "./util.js";
+import { LOBBY, draftKey, dayKey, dayLabel, parseId } from "./util.js";
 
 const EARLY_MAX = 400;   // message của lượt chưa biết thuộc khung nào (tin vừa gửi, chưa có run id) — giữ tối đa chừng này
 const SIDE_MAX = 12;
 const CV_TAIL = 12;      // số mục cuối của ảnh chụp KHÔNG dùng content-visibility (thấy ngay khi mở → đo thật từ khung hình đầu)
-export const FIRST_SHOW = 60;  // mục vẽ ngay khi mở một hội thoại dài; cũ hơn vẽ dần khi cuộn lên (views/More) — 2000 mục mở ~45 ms
+export const FIRST_SHOW = 60;
+const HELD_MAX = 2000;   // message giữ lại cho một khung đang tải ảnh chụp
+
+/** id SSE `raw` mới hơn `cursor` của ảnh chụp? Thiếu id / khác boot (web khởi động lại) → coi là mới. */
+export function afterCursor(raw, cursor) {
+  const a = parseId(raw), c = parseId(cursor);
+  if (!a || !c || a.boot !== c.boot) return true;
+  return a.n > c.n;
+}  // mục vẽ ngay khi mở một hội thoại dài; cũ hơn vẽ dần khi cuộn lên (views/More) — 2000 mục mở ~45 ms
 
 export function createStore(S, opts) {
   const { signal, batch, computed } = S;
@@ -26,7 +34,6 @@ export function createStore(S, opts) {
     hub: signal({}),              // {estop, admin_estop} — dải ESTOP
     tabs: signal({ enabled: false, lobby: null, active: [], closed: [] }),
     convs: signal({}),            // phạm vi → [hội thoại]
-    side: signal([]),             // "Hành động gần đây" (mới → cũ)
     panes: signal([]),            // khung đã mở (thứ tự tạo — DOM giữ nguyên thứ tự này)
     active: signal(null),         // khung đang hiện
     live: signal("connecting"),   // connecting | live | reconnecting
@@ -48,9 +55,11 @@ export function createStore(S, opts) {
   function setDraft(p, text) { p.draft.value = text; draftSave(p); }
 
   // ---------------------------------------------------------------- khung
-  function makePane(scope, conv) {
+  function makePane(scope, conv, nav) {
     const p = {
-      id: "p" + (++seq), scope: scope || LOBBY, conv: signal(conv || null), title: signal(null),
+      id: "p" + (++seq), scope: scope || LOBBY, conv: signal(conv || null), title: signal(null), nav: nav || null,
+      side: signal([]),             // "Hành động gần đây" của PHẠM VI khung này (server lọc theo luồng; Sảnh = run không gắn luồng)
+      loading: false, held: [],     // đang tải ảnh chụp: message SSE của khung giữ lại, phát lại phần sau `cursor` khi ảnh chụp tới
       items: signal([]), pending: signal(null), actions: signal([]), workstream: signal(null), wsConvs: signal([]),
       runs: new Set(), loaded: signal(false), stale: false, error: signal(""),
       draft: signal(""), files: signal([]), sendErr: signal(""), sending: signal(0), voice: "",
@@ -129,9 +138,27 @@ export function createStore(S, opts) {
              todo: sp.todo || (keep && keep.todo) || null, waiting: false };
   }
 
-  /** Áp ảnh chụp v2 vào khung `target` (khung đang chờ tải) hoặc khung đã có của cùng hội thoại / khung mới. Trả khung. */
-  function applySnapshot(snap, target) {
-    let p = null;
+  /** Bắt đầu tải ảnh chụp cho khung `p`: từ giờ message SSE của nó được GIỮ (không áp) — ảnh chụp tới sau sẽ ghi đè cả dòng thời gian,
+   *  áp trước rồi bị ghi đè là mất; giữ lại rồi phát lại phần có id > `snap.cursor` là đủ, không trùng. */
+  function beginLoad(p) {
+    if (!p) return;
+    p.loading = true;
+    p.held = [];
+  }
+  /** Tải bị huỷ (đổi tab nhanh / resync) hoặc lỗi: khung đánh dấu CŨ → lần mở sau tải lại (không kẹt "Đang tải…"). Bỏ phần giữ lại:
+   *  ảnh chụp lần sau đã gồm chúng. `err` → hiện lỗi trong khung. */
+  function endLoad(p, err) {
+    if (!p) return;
+    p.loading = false;
+    p.held = [];
+    p.stale = true;
+    if (err) p.error.value = err;
+  }
+
+  /** Áp ảnh chụp v2 vào khung `target` (khung đang chờ tải) hoặc khung đã có của cùng hội thoại / khung mới. Trả khung.
+   *  `fxOut` (mảng, tuỳ chọn): nhận hiệu ứng của message phát lại (giữ trong lúc tải / tới sớm) — main.js chạy chúng (đã đọc, báo). */
+  function applySnapshot(snap, target, fxOut) {
+    let p = null, held = [];
     batch(() => {
       if (snap.manager) st.manager.value = snap.manager;
       if (snap.boot) st.boot = snap.boot;
@@ -140,10 +167,13 @@ export function createStore(S, opts) {
                               st.extraTabs.clear(); }
       const scope = snap.scope || LOBBY;
       if (snap.conversations) st.convs.value = { ...st.convs.value, [scope]: snap.conversations };
-      if (snap.side_actions) st.side.value = snap.side_actions;
       const same = paneByConv(snap.conv);
       p = same || target || (snap.conv ? null : paneFresh(scope)) || makePane(scope, snap.conv);
-      if (target && same && same !== target) closePane(target);  // tải xong mới biết là hội thoại đã mở → dùng khung cũ
+      if (target && same && same !== target) { held = target.held; closePane(target); }  // tải xong mới biết là hội thoại đã mở → dùng khung cũ
+      held = held.concat(p.held || []);
+      p.loading = false;
+      p.held = [];
+      if (snap.side_actions) p.side.value = snap.side_actions;
       const wasFresh = !p.conv.value;
       p.scope = scope;
       p.conv.value = snap.conv || null;
@@ -163,7 +193,11 @@ export function createStore(S, opts) {
       p.stale = false;
       p.error.value = "";
     });
-    replayEarly(p);
+    let fx = [];
+    // message tới trong lúc tải: phần đã nằm trong ảnh chụp (id ≤ cursor) bỏ; phần sau áp lên ảnh chụp
+    for (const h of held) if (afterCursor(h.id, snap.cursor)) { const f = []; batch(() => onPane(p, h.m, f)); fx = fx.concat(f); }
+    fx = fx.concat(replayEarly(p, snap.cursor));
+    if (fxOut) for (const f of fx) fxOut.push(f);
     return p;
   }
 
@@ -194,18 +228,19 @@ export function createStore(S, opts) {
     p.items.value = items.concat(add);
     return true;
   }
-  function stash(m) {
-    st.early.push(m);
+  function stash(m, id) {
+    st.early.push({ m, id: id || "" });
     if (st.early.length > EARLY_MAX) st.early.splice(0, st.early.length - EARLY_MAX);
   }
-  function replayEarly(p) {
+  /** Phát lại message tới sớm (trước khi biết khung) thuộc khung `p`. `cursor`: bỏ những message ảnh chụp đã gồm (id ≤ cursor). */
+  function replayEarly(p, cursor) {
     if (!st.early.length) return [];
     const mine = [], rest = [];
-    for (const m of st.early) ((m.conv && m.conv === p.conv.value) || (m.run && p.runs.has(m.run)) ? mine : rest).push(m);
+    for (const e of st.early) { const m = e.m; ((m.conv && m.conv === p.conv.value) || (m.run && p.runs.has(m.run)) ? mine : rest).push(e); }
     if (!mine.length) return [];
     st.early = rest;
     let fx = [];
-    for (const m of mine) fx = fx.concat(apply(m));
+    for (const e of mine) if (!cursor || afterCursor(e.id, cursor)) fx = fx.concat(apply(e.m, e.id));
     return fx;
   }
 
@@ -256,6 +291,10 @@ export function createStore(S, opts) {
         if (cur && run && cur.run === run) p.pending.value = null;
         st.bufs.delete(run);
         if (!dup) fx.push({ fx: "reply", pane: p, conv: p.conv.value, item: it });
+        // lượt do client KHÁC mở (tin gửi qua RPC/Telegram/tab khác): luồng v2 không có event tin người → tải lại ảnh chụp để có tin đó
+        // (kèm id/chữ đã lưu thay bản tạm). Bỏ qua khi khung đang gửi (tin lạc quan chưa kịp gắn lượt).
+        if (!dup && run && !it.notify && !it.tick && !p.sending.value && !p.items.value.some((x) => x.kind === "user" && x.run_id === run))
+          fx.push({ fx: "refresh", pane: p });
         break;
       }
       case "act.item": {
@@ -317,7 +356,7 @@ export function createStore(S, opts) {
   }
 
   /** Áp MỘT message v2 → danh sách hiệu ứng cho main.js: {fx:"resync"|"status"|"flush"|"reply"|"event"|"tabs"}. */
-  function apply(m) {
+  function apply(m, id) {
     const fx = [];
     if (!m || !m.t) return fx;
     switch (m.t) {
@@ -346,12 +385,22 @@ export function createStore(S, opts) {
         break;
     }
     if (m.t === "act.item" && m.item) {
-      const side = st.side.value;
-      if (!m.item.audit_id || !side.some((x) => x.audit_id === m.item.audit_id)) st.side.value = [m.item].concat(side).slice(0, SIDE_MAX);
+      // "Hành động gần đây" theo phạm vi: chỉ khung cùng luồng (message mang `ws`; Sảnh = "_"), khung đang tải nhận qua ảnh chụp
+      const ws = m.ws || LOBBY;
+      for (const p of st.panes.value) {
+        if (p.scope !== ws || p.loading) continue;
+        const side = p.side.value;
+        if (!m.item.audit_id || !side.some((x) => x.audit_id === m.item.audit_id)) p.side.value = [m.item].concat(side).slice(0, SIDE_MAX);
+      }
     }
-    const ps = panesFor(m);
-    if (!ps.length) {
-      if (m.run || m.conv) stash(m);
+    const all = panesFor(m), ps = [];
+    for (const p of all) {
+      if (!p.loading) { ps.push(p); continue; }
+      p.held.push({ m, id: id || "" });
+      if (p.held.length > HELD_MAX) p.held.splice(0, p.held.length - HELD_MAX);
+    }
+    if (!all.length) {
+      if (m.run || m.conv) stash(m, id);
       if (m.t === "run.start" || m.t === "run.end") convPatch(m.conv, () => ({ running: m.t === "run.start" }));
       if (m.t === "msg.done" && m.conv) fx.push({ fx: "reply", pane: null, conv: m.conv, item: m.item });
       return fx;
@@ -466,9 +515,12 @@ export function createStore(S, opts) {
     else patchAp(tok.p, tok.id, () => ({ ...tok.prev, ...keep, ask: (o && o.ask) || "" }));
   }
 
+  // "Hành động gần đây" của khung đang hiện (mỗi khung giữ của phạm vi nó — đổi tab không lẫn)
+  st.side = computed(() => (st.active.value ? st.active.value.side.value : []));
+
   return Object.assign(st, {
     actBegin, actOk, actFail, patchAp, patchQ,
-    makePane, paneByConv, paneFresh, paneFor, activate, closePane, applySnapshot, apply, flush,
+    makePane, paneByConv, paneFresh, paneFor, activate, closePane, applySnapshot, apply, flush, beginLoad, endLoad,
     setDraft, beginSend, sendOk, sendFail, markSeen, bumpUnread, convPatch,
   });
 }

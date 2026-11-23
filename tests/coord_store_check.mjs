@@ -7,7 +7,8 @@ const ROOT = process.argv[2] || process.cwd();
 const ST = path.join(ROOT, "src", "cfharness", "web", "static");
 const imp = (p) => import(pathToFileURL(path.join(ST, p)).href);
 const S = await imp("vendor/preact-signals-core-1.14.5/signals-core.mjs");
-const { createStore } = await imp("coord/store.js");
+const SM = await imp("coord/store.js");
+const { createStore } = SM;
 const { createFeed } = await imp("coord/sse.js");
 const U = await imp("coord/util.js");
 
@@ -183,6 +184,102 @@ ok("draftKey tương thích trang cũ", U.draftKey("c1", "ws1") === "c:c1" && U.
   made[1].emit({ t: "msg.delta", text: "c" }, "b2.5");
   ok("boot mới: nhận resync + id mới", got.some((m) => m.t === "resync") && got[got.length - 1].text === "c" && feed.last === "b2.5");
   feed.close();
+}
+
+
+// ---------------------------------------------------------------- tải ảnh chụp ↔ luồng SSE (verify r1: mất/ghi đè message, kẹt "Đang tải…")
+{
+  ok("afterCursor", store_ok());
+  function store_ok() {
+    const { afterCursor } = SM;
+    return afterCursor("b1.11", "b1.10") && !afterCursor("b1.10", "b1.10") && !afterCursor("b1.3", "b1.10") && afterCursor("b2.1", "b1.10")
+      && afterCursor("", "b1.10") && afterCursor("b1.1", null);
+  }
+}
+{
+  // khung tạm đang tải: message tới TRƯỚC ảnh chụp được giữ; ảnh chụp (cursor b1.10) có lượt r1 đang chạy; phát lại chỉ phần > cursor
+  const store = createStore(S, { storage: mem() });
+  const tmp = store.makePane("_", "c1", { c: "c1" });
+  store.activate(tmp);
+  store.beginLoad(tmp);
+  store.apply({ t: "msg.delta", run: "r1", conv: "c1", text: "cũ" }, "b1.9");            // đã nằm trong ảnh chụp
+  store.apply({ t: "msg.done", run: "r1", conv: "c1", item: { kind: "manager", id: "e1", text: "Xong", html: "<p>Xong</p>", run_id: "r1", ts: today } }, "b1.11");
+  store.apply({ t: "run.end", run: "r1", conv: "c1", ok: true }, "b1.12");
+  ok("đang tải: message của khung được giữ, chưa áp", tmp.held.length === 3 && !tmp.items.value.length && !tmp.pending.value);
+  const fx = [];
+  const p = store.applySnapshot(snap({ conv: "c1", cursor: "b1.10", pending: { run: "r1", tool: "" }, conv_runs: ["r1"],
+                                       conversations: [{ id: "c1", unread: 0, running: true }] }), tmp, fx);
+  ok("phát lại sau cursor: câu trả lời hiện, lượt đã xong không bị ảnh chụp dựng lại", p === tmp && !p.pending.value
+     && p.items.value.filter((x) => x.kind === "manager").length === 1 && p.held.length === 0 && !p.loading, p.pending.value);
+  ok("hiệu ứng của phần phát lại trả về main (đã đọc / báo)", fx.some((f) => f.fx === "reply" && f.pane === p));
+}
+{
+  // khung ĐÃ tải, tải lại (resync): message tới trong lúc tải không bị ảnh chụp cũ hơn ghi đè, phần ≤ cursor không trùng
+  const store = createStore(S, { storage: mem() });
+  const p = store.applySnapshot(snap({ conv: "c1", conversations: [{ id: "c1", unread: 0, running: false }] }), null);
+  store.activate(p);
+  store.apply({ t: "resync", reason: "gap" });
+  store.beginLoad(p);
+  store.apply({ t: "action.pending", run: "r2", conv: "c1", action: { kind: "question", id: 7, text: "Chọn?", status: "open", options: [] } }, "b1.21");
+  store.apply({ t: "action.pending", run: "r2", conv: "c1", action: { kind: "question", id: 6, text: "Cũ?", status: "open", options: [] } }, "b1.19");
+  store.applySnapshot(snap({ conv: "c1", cursor: "b1.20", items: [{ kind: "user", id: "m1", text: "hi", ts: today, run_id: "r2" }], conv_runs: ["r2"],
+                             conversations: [{ id: "c1", unread: 0, running: false }] }), p);
+  ok("tải lại: message sau cursor còn, trước cursor bỏ (ảnh chụp đã gồm)", p.items.value.some((x) => x.id === "q-7") && !p.items.value.some((x) => x.id === "q-6")
+     && !p.stale, p.items.value.map((x) => x.id));
+}
+{
+  // đổi tab nhanh: tải A bị huỷ → khung A đánh dấu cũ (go() tải lại), không kẹt "Đang tải…"
+  const store = createStore(S, { storage: mem() });
+  const a = store.makePane("ws1", null, { w: "ws1" });
+  store.activate(a);
+  store.beginLoad(a);
+  store.apply({ t: "msg.delta", run: "r1", conv: "c1", text: "x" }, "b1.5");
+  store.endLoad(a);
+  ok("huỷ tải → khung cũ, bỏ phần giữ", a.stale === true && !a.loading && a.held.length === 0 && !a.loaded.value && a.error.value === "");
+  ok("paneFor vẫn trả khung (main.go thấy stale → tải lại)", store.paneFor({ w: "ws1" }) === a && a.stale);
+  store.endLoad(a, "Không tải được");
+  ok("tải lỗi → hiện lỗi trong khung", a.error.value === "Không tải được" && a.stale);
+}
+{
+  // ghi chú lượt lỗi: ảnh chụp mang id "n<run>" → run.end lỗi phát lại sau cursor không thêm ghi chú thứ hai
+  const store = createStore(S, { storage: mem() });
+  const p = store.applySnapshot(snap({ conv: "c1", conv_runs: ["r5"], items: [{ kind: "note", id: "nr5", text: "Lỗi", tone: "danger", run_id: "r5", ts: today }],
+                                       conversations: [{ id: "c1", unread: 0, running: false }] }), null);
+  store.apply({ t: "run.end", run: "r5", conv: "c1", ok: false, label: "Lỗi", tone: "danger" }, "b1.11");
+  ok("ghi chú lượt lỗi không lặp", p.items.value.filter((x) => x.kind === "note").length === 1, p.items.value);
+}
+{
+  // "Hành động gần đây" theo phạm vi khung (không lẫn khi đổi tab)
+  const store = createStore(S, { storage: mem() });
+  const lobby = store.applySnapshot(snap({ conv: "c1", side_actions: [{ audit_id: 1, summary: "Sảnh" }], conversations: [{ id: "c1" }] }), null);
+  const w1 = store.applySnapshot(snap({ conv: "c2", scope: "ws1", ws: "ws1", side_actions: [{ audit_id: 2, summary: "Luồng 1" }] }), store.makePane("ws1", null));
+  store.activate(w1);
+  ok("side của luồng đang xem", store.side.value.length === 1 && store.side.value[0].audit_id === 2);
+  store.activate(lobby);
+  ok("quay lại Sảnh: side của Sảnh", store.side.value[0].audit_id === 1);
+  store.apply({ t: "act.item", run: "r9", conv: "c2", ws: "ws1", item: { kind: "action", audit_id: 3, run_id: "r9", ok: true } });
+  ok("act.item của luồng ws1 không vào Sảnh", lobby.side.value.length === 1 && w1.side.value[0].audit_id === 3);
+}
+{
+  // message tới sớm (chưa có khung) rồi ảnh chụp: phần ≤ cursor bỏ, phần sau phát lại + hiệu ứng trả về
+  const store = createStore(S, { storage: mem() });
+  store.apply({ t: "msg.done", run: "r3", conv: "c3", item: { kind: "manager", id: "e9", text: "Trả lời", html: "<p>x</p>", run_id: "r3", ts: today } }, "b1.12");
+  const fx = [];
+  const p = store.applySnapshot(snap({ conv: "c3", cursor: "b1.10", conv_runs: ["r3"], conversations: [{ id: "c3" }] }), null, fx);
+  ok("early phát lại sau cursor + fx", p.items.value.some((x) => x.kind === "manager") && fx.some((f) => f.fx === "reply"));
+}
+
+{
+  // tin người gửi từ client khác (không có event tin người): msg.done của lượt lạ → yêu cầu tải lại nền; lượt của mình → không
+  const store = createStore(S, { storage: mem() });
+  const p = store.applySnapshot(snap({ conv: "c1", items: [{ kind: "user", id: "m1", text: "hi", ts: today, run_id: "r1" }], conv_runs: ["r1"],
+                                       conversations: [{ id: "c1" }] }), null);
+  let fx = store.apply({ t: "msg.done", run: "r1", conv: "c1", item: { kind: "manager", id: "e1", text: "a", html: "", run_id: "r1", ts: today } }, "b1.11");
+  ok("lượt của mình: không tải lại", !fx.some((f) => f.fx === "refresh"));
+  fx = store.apply({ t: "msg.done", run: "rX", conv: "c1", item: { kind: "manager", id: "e2", text: "b", html: "", run_id: "rX", ts: today } }, "b1.12");
+  ok("lượt do client khác mở: tải lại nền", fx.some((f) => f.fx === "refresh" && f.pane === p));
+  fx = store.apply({ t: "msg.done", run: "rT", conv: "c1", item: { kind: "manager", id: "e3", text: "c", html: "", run_id: "rT", tick: true, ts: today } }, "b1.13");
+  ok("nhịp tick: không tải lại", !fx.some((f) => f.fx === "refresh"));
 }
 
 if (fails) { console.log("FAIL tổng " + fails); process.exit(1); }
