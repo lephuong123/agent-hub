@@ -449,6 +449,51 @@ def ancestors(pid: int, limit: int = 128) -> list[int]:
     return out
 
 
+# ---------------------------------------------------------------------------- cache chuỗi tổ tiên (perf)
+# `ancestors()` trên Windows = một snapshot Toolhelp32 + GetProcessTimes từng cấp (20–35 ms) — web gọi RPC HUMAN_ONLY (vd
+# `manager.conversation_read`) mỗi lần chuyển trang. Cache ngắn hạn, khoá (pid, thời điểm khởi động) — VÌ SAO AN TOÀN:
+# - Khoá gồm thời điểm khởi động đọc LẠI ở mỗi lần tra (không tin pid trần): pid bị tái dùng bởi tiến trình khác → thời điểm khởi động
+#   khác → trượt cache. Không đọc được thời điểm khởi động (tiến trình đã thoát/không mở được) → không cache, tính lại.
+# - Chỉ cache CHUỖI pid tổ tiên (sự thật bất biến của tiến trình đó: cha được ghi lúc tạo); mọi quyết định khác của `resolve`
+#   (pid run đang sống, Job Object, session, env CFHARNESS_RUN_ID, token) vẫn tính MỚI mỗi lời gọi. Chuỗi cũ chỉ có thể THỪA pid
+#   (cha đã chết, pid bị tái dùng) — thừa thì chỉ có thể nhận nhầm thành agent (chặt hơn), không bao giờ biến agent thành người.
+# - TTL ngắn (ANCESTOR_TTL_S), số khoá bị chặn (ANCESTOR_MAX), chỉ RAM của daemon.
+ANCESTOR_TTL_S = 5.0
+ANCESTOR_MAX = 256
+_ANCESTOR_CACHE: dict[tuple[int, float], tuple[float, tuple[int, ...]]] = {}
+
+
+def proc_start_time(pid: int) -> float | None:
+    if IS_WINDOWS:
+        return win_start_time(pid)
+    info = proc_info(pid)
+    return info.start if info is not None else None
+
+
+def cached_ancestors(pid: int, *, now: float | None = None, start_of: Any = None, compute: Any = None) -> list[int]:
+    """`ancestors(pid)` có cache theo (pid, thời điểm khởi động) — xem chú thích trên. `start_of`/`compute`: tiêm cho test."""
+    start_of = start_of or proc_start_time
+    compute = compute or ancestors
+    start = start_of(pid)
+    if start is None:
+        return list(compute(pid))
+    key = (pid, start)
+    now = time.monotonic() if now is None else now
+    hit = _ANCESTOR_CACHE.get(key)
+    if hit is not None and now - hit[0] < ANCESTOR_TTL_S:
+        return list(hit[1])
+    chain = list(compute(pid))
+    if start_of(pid) != start:  # tiến trình đổi trong lúc tính (thoát + pid tái dùng) → không lưu
+        return chain
+    if len(_ANCESTOR_CACHE) >= ANCESTOR_MAX:
+        for k in [k for k, v in _ANCESTOR_CACHE.items() if now - v[0] >= ANCESTOR_TTL_S]:
+            del _ANCESTOR_CACHE[k]
+        if len(_ANCESTOR_CACHE) >= ANCESTOR_MAX:
+            _ANCESTOR_CACHE.clear()
+    _ANCESTOR_CACHE[key] = (now, tuple(chain))
+    return chain
+
+
 def proc_environ(pid: int) -> dict[str, str] | None:
     """Biến môi trường của tiến trình cùng user (macOS: sysctl KERN_PROCARGS2; Linux: /proc/<pid>/environ).
     Windows: đọc khối env qua PEB (`oscompat.win_environ`, tiến trình 64-bit cùng user)."""
@@ -726,7 +771,7 @@ class CallerResolver:
         if pid == os.getpid():
             return c  # client trong chính tiến trình daemon (test in-process) — không phải hậu duệ run
         live = self._run_pids()
-        chain = ancestors(pid)
+        chain = cached_ancestors(pid)  # chỉ chuỗi tổ tiên được cache (pid + thời điểm khởi động); phần dưới luôn tính mới
         for p in chain:
             if p in live:
                 c.run_id, c.agent_id = live[p]

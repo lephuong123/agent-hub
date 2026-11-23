@@ -41,7 +41,7 @@ from ..events import TERMINAL_RUN_EVENTS
 from ..rpc import METHOD_NOT_FOUND, DaemonUnavailable, RpcError
 from ..tui.model import short_tool
 from . import present as P
-from .app import CHANNEL, _stream, err_text, flash_redirect, post_guard, render, rpc, session_of, ws
+from .app import CHANNEL, _stream, err_text, flash_redirect, gather_ordered, post_guard, render, rpc, session_of, ws
 
 HISTORY_LIMIT = 200
 HEARTBEAT = "heartbeat"  # = manager.service.HEARTBEAT_CHANNEL (không import service ở web)
@@ -132,10 +132,10 @@ async def _web_convs(request: Request) -> list[dict[str, Any]]:
 async def _workstreams(request: Request) -> dict[str, Any]:
     """Dữ liệu thanh bên luồng việc: luồng đang mở (+ số tin chưa đọc gộp mọi kênh), số luồng đã đóng, hội thoại SẢNH (web).
     Daemon cũ chưa có `workstream.*` → rỗng (trang vẫn chạy như trước)."""
-    try:
-        active = await rpc(request, "workstream.list", {"status": "active"}) or []
-        closed = await rpc(request, "workstream.list", {"status": "closed", "limit": 50}) or []
-        convs = await rpc(request, "manager.conversations", {"limit": 500}) or []
+    try:  # ba lời gọi độc lập → đồng thời
+        active, closed, convs = (r or [] for r in await gather_ordered(rpc(request, "workstream.list", {"status": "active"}),
+                                                                        rpc(request, "workstream.list", {"status": "closed", "limit": 50}),
+                                                                        rpc(request, "manager.conversations", {"limit": 500})))
     except RpcError:
         return {"enabled": False, "active": [], "closed": [], "lobby": []}
     unread: dict[str, int] = {}
@@ -294,20 +294,23 @@ def question_from_event(ev: dict[str, Any]) -> dict[str, Any]:
 
 async def manager_page(request: Request) -> Response:
     q = request.query_params
-    st = await mgr_state(request)
+    # lời gọi không phụ thuộc nhau chạy đồng thời (perf): trạng thái điều phối viên, hub.status, hội thoại web, thanh bên luồng việc
+    # (hai cái sau chỉ dùng khi đã có điều phối viên; RpcError của chúng đã được nuốt bên trong như trước)
+    st, status, convs, wsd = await gather_ordered(mgr_state(request), rpc(request, "hub.status"), _web_convs(request), _workstreams(request))
     ctx: dict[str, Any] = {"nav": "manager", "m": st, "convs": [], "conv": None, "items": [], "side_actions": [], "pending": None,
                            "agents": [], "templates": []}
-    status = await rpc(request, "hub.status")
     ctx.update({"since": status.get("last_seq") or 0, "epoch": status.get("epoch") or ""})
     if not st["available"] or not st["agent_id"]:
-        ctx["agents"] = [a for a in await rpc(request, "agent.list", {}) or [] if not a.get("archived_at")]
-        try:
-            ctx["templates"] = [t for t in await rpc(request, "template.list") or [] if str(t.get("name") or "").startswith("manager")]
-        except RpcError:
-            pass
+
+        async def _templates() -> list[dict[str, Any]]:
+            try:
+                return [t for t in await rpc(request, "template.list") or [] if str(t.get("name") or "").startswith("manager")]
+            except RpcError:
+                return []
+
+        agents, ctx["templates"] = await gather_ordered(rpc(request, "agent.list", {}), _templates())
+        ctx["agents"] = [a for a in agents or [] if not a.get("archived_at")]
         return await render(request, "manager.html", ctx)
-    convs = await _web_convs(request)
-    wsd = await _workstreams(request)
     ws_id = str(q.get("w") or "").strip() or None
     if q.get("c") and not ws_id:  # hội thoại thuộc luồng → hiện trong ngữ cảnh luồng
         ws_id = (wsd.get("convs", {}).get(q.get("c")) or {}).get("workstream_id")
@@ -325,48 +328,70 @@ async def manager_page(request: Request) -> Response:
     else:
         lobby = wsd.get("lobby") if wsd.get("enabled") else convs
         cid = None if q.get("new") else (q.get("c") or (lobby[0]["id"] if lobby else None))
-    msgs: list[dict[str, Any]] = []
-    if cid:
-        try:
-            raw = await rpc(request, "manager.history", {"conversation_id": cid, "limit": HISTORY_LIMIT}) or []
-            msgs = [m for m in (P.mgr_message(x) for x in raw if isinstance(x, dict)) if m]
-        except RpcError as e:
-            if q.get("c"):
-                sess = session_of(request)
-                if sess:
-                    sess.flash("error", f"Không mở được cuộc trò chuyện {cid}: {err_text(e)}")
-            cid = None
-    acts = await _actions(request, st["agent_id"], ws_id or "")
     from .app import questions as _questions
 
-    conv_qs = [q for q in await _questions(request, "all", agent_id=st["agent_id"]) if cid and q.get("conversation_id") == cid and q["status"] != "cancelled"]
+    async def _history() -> list[dict[str, Any]] | RpcError:
+        if not cid:
+            return []
+        try:
+            raw = await rpc(request, "manager.history", {"conversation_id": cid, "limit": HISTORY_LIMIT}) or []
+        except RpcError as e:
+            return e
+        return [m for m in (P.mgr_message(x) for x in raw if isinstance(x, dict)) if m]
+
+    async def _wsx() -> dict[str, Any] | None:
+        if not ws_id:
+            return None
+        try:
+            return await rpc(request, "workstream.get", {"id": ws_id})
+        except RpcError:
+            return None
+
+    # lịch sử hội thoại, thẻ hành động, câu hỏi, chi tiết luồng: độc lập với nhau → đồng thời
+    hist, acts, all_qs, wsx = await gather_ordered(_history(), _actions(request, st["agent_id"], ws_id or ""),
+                                                   _questions(request, "all", agent_id=st["agent_id"]), _wsx())
+    msgs: list[dict[str, Any]] = []
+    if isinstance(hist, RpcError):
+        if q.get("c"):
+            sess = session_of(request)
+            if sess:
+                sess.flash("error", f"Không mở được cuộc trò chuyện {cid}: {err_text(hist)}")
+        cid = None
+    else:
+        msgs = hist
+    conv_qs = [q for q in all_qs if cid and q.get("conversation_id") == cid and q["status"] != "cancelled"]
     items = _timeline(msgs, acts, conv_qs, cid)
     # tin cuối của người chưa có trả lời + run còn chạy → khung "đang trả lời" (chữ chạy tới qua SSE)
-    pending = None
-    pinfo: dict[str, Any] = {}
     want = q.get("run") or next((m.get("run_id") for m in reversed(msgs) if m["kind"] == "user"), None)
-    if want and not any(m["kind"] == "manager" and m.get("run_id") == want for m in msgs):
+
+    async def _pending() -> tuple[str | None, dict[str, Any]]:
+        if not want or any(m["kind"] == "manager" and m.get("run_id") == want for m in msgs):
+            return None, {}
+        pend: str | None = None
         try:
             run = await rpc(request, "run.get", {"id": want})
             if P.is_live_run(run):
-                pending = run["id"]
-                pinfo = pending_info(await rpc(request, "events.query", {"run_id": pending, "limit": PENDING_SCAN}) or [])
+                pend = run["id"]  # như trước: events.query lỗi vẫn giữ khung "đang trả lời" (không có tool/checklist)
+                return pend, pending_info(await rpc(request, "events.query", {"run_id": pend, "limit": PENDING_SCAN}) or [])
         except RpcError:
             pass
-    wsx = None
-    if ws_id:
-        try:
-            wsx = await rpc(request, "workstream.get", {"id": ws_id})
-        except RpcError:
-            wsx = None
-    if cid:
+        return pend, {}
+
+    async def _mark_read() -> bool:
+        if not cid:
+            return False
         try:
             await rpc(request, "manager.conversation_read", {"conversation_id": cid})
-            for c in wsd.get("lobby") or []:
-                if c["id"] == cid:
-                    c["unread"] = 0
+            return True
         except (RpcError, DaemonUnavailable):
-            pass
+            return False
+
+    # khung "đang trả lời" (run.get → events.query) và đánh dấu đã đọc: độc lập → đồng thời
+    (pending, pinfo), read_ok = await gather_ordered(_pending(), _mark_read())
+    if read_ok:
+        for c in wsd.get("lobby") or []:
+            if c["id"] == cid:
+                c["unread"] = 0
     cur_conv = (wsd.get("convs") or {}).get(cid) if cid else None
     ws_convs = [P.mgr_conv(c) | {"channel": c.get("channel"), "running": bool(c.get("running"))} for c in (wsd.get("convs") or {}).values()
                 if wsx and c.get("workstream_id") == wsx["id"] and c.get("channel") != "heartbeat"]
