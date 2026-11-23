@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends layout or "base.html" %}{#- layout = "_manager_shell.html" khi app.js đổi tab (X-Ahub-Partial: grid) -#}
 {% import "_macros.html" as mc with context %}
 {% import "_manager.html" as mg with context %}
 {% block title %}Điều phối{% endblock %}

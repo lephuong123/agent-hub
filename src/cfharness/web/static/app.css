@@ -621,7 +621,7 @@ progress.bar::-moz-progress-bar { background: var(--accent); border-radius: 99px
 @keyframes ws-ping { 70% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--ok) 0%, transparent); } 100% { box-shadow: 0 0 0 0 transparent; } }
 @media (prefers-reduced-motion: reduce) { .ws-dot.run { animation: none; } }
 /* đổi tab/hội thoại không tải lại trang: mờ khung chat trong lúc chờ */
-.mgr-grid.mgr-loading .mgr-log, .mgr-grid.mgr-loading .mgr-side { opacity: .45; transition: opacity .15s .1s; pointer-events: none; }
+.mgr-grid.mgr-loading .mgr-log, .mgr-grid.mgr-loading .mgr-side { opacity: .45; transition: opacity .15s; pointer-events: none; }  /* app.js chỉ gắn lớp sau 400 ms */
 .ws-unread { flex: none; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--on-accent);
   font-size: 11px; line-height: 18px; text-align: center; font-weight: 600; }
 .mgr-convs .ct .ws-unread { display: inline-block; margin-left: 6px; }

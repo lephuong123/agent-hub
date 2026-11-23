@@ -46,6 +46,7 @@ from .app import CHANNEL, _stream, err_text, flash_redirect, gather_ordered, pos
 HISTORY_LIMIT = 200
 HEARTBEAT = "heartbeat"  # = manager.service.HEARTBEAT_CHANNEL (không import service ở web)
 ACTIONS_LIMIT = 50  # số thẻ `manager.action` GẦN NHẤT (của luồng đang xem) lấy cho panel "Hành động gần đây" + dòng thời gian
+WS_CONV_LIMIT = 500  # hội thoại (mọi kênh) đọc MỘT lần mỗi lần tải trang: tab luồng, Sảnh, thanh bên
 PENDING_SCAN = 5000  # event tối đa của MỘT lượt đang chạy đọc lại khi tải trang (tool đang dùng + checklist)
 MAX_TEXT = 8000
 ATTACH_FIELD = "attach"
@@ -135,7 +136,7 @@ async def _workstreams(request: Request) -> dict[str, Any]:
     try:  # ba lời gọi độc lập → đồng thời
         active, closed, convs = (r or [] for r in await gather_ordered(rpc(request, "workstream.list", {"status": "active"}),
                                                                         rpc(request, "workstream.list", {"status": "closed", "limit": 50}),
-                                                                        rpc(request, "manager.conversations", {"limit": 500})))
+                                                                        rpc(request, "manager.conversations", {"limit": WS_CONV_LIMIT})))
     except RpcError:
         return {"enabled": False, "active": [], "closed": [], "lobby": []}
     unread: dict[str, int] = {}
@@ -157,6 +158,45 @@ async def _workstreams(request: Request) -> dict[str, Any]:
     return {"enabled": True, "active": active, "closed": closed, "lobby": lobby, "lobby_unread": sum(c["unread"] for c in lobby),
             "lobby_dot": ldot, "lobby_state": lstate,
             "by_id": {w["id"]: w for w in active + closed}, "convs": {c["id"]: c for c in convs if isinstance(c, dict)}}
+
+
+def _web_from(wsd: dict[str, Any]) -> list[dict[str, Any]]:
+    """Hội thoại kênh web (mọi luồng) lọc từ danh sách `_workstreams` đã có — thay cho một lần `manager.conversations` nữa."""
+    out = [P.mgr_conv(c) for c in (wsd.get("convs") or {}).values() if isinstance(c, dict) and c.get("channel") == CHANNEL]
+    return sorted([c for c in out if c["id"]], key=lambda c: str(c.get("updated_at") or ""), reverse=True)
+
+
+def _viewing(wsd: dict[str, Any], cid: str | None) -> None:
+    """Hội thoại `cid` đang hiện trên màn hình → số chưa đọc của nó không tính (tab luồng, Sảnh, thanh bên). Chỉ sửa dữ liệu hiển thị."""
+    raw = (wsd.get("convs") or {}).get(cid) if cid else None
+    if not raw:
+        return
+    n = int(raw.get("unread") or 0)
+    raw["unread"] = 0
+    w = (wsd.get("by_id") or {}).get(raw.get("workstream_id"))
+    if w and n:
+        w["unread"] = max(0, int(w.get("unread") or 0) - n)
+    for c in wsd.get("lobby") or []:
+        if c["id"] == cid:
+            c["unread"] = 0
+    if "lobby_unread" in wsd:
+        wsd["lobby_unread"] = sum(int(c.get("unread") or 0) for c in wsd.get("lobby") or [])
+
+
+async def manager_read(request: Request) -> Response:
+    """POST /manager/read {c}: đánh dấu hội thoại đã xem tới tin cuối (`manager.conversation_read`). Trình duyệt gọi khi hội thoại
+    đang hiện (mở trang, đổi tab, có tin mới lúc đang xem) — GET không bao giờ ghi."""
+    _, form = await post_guard(request)
+    cid = str(form.get("c") or "").strip()
+    if not cid:
+        return JSONResponse({"error": "Thiếu hội thoại"}, status_code=400)
+    try:
+        await rpc(request, "manager.conversation_read", {"conversation_id": cid})
+    except RpcError as e:
+        return JSONResponse({"error": err_text(e)}, status_code=404)
+    except DaemonUnavailable as e:
+        return JSONResponse({"error": err_text(e)}, status_code=503)
+    return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
 
 def tab_state(tasks: dict[str, Any], needs_human: int, busy: int, has_convs: bool) -> tuple[str, str]:
@@ -292,11 +332,25 @@ def question_from_event(ev: dict[str, Any]) -> dict[str, Any]:
     return q
 
 
+async def _page(request: Request, ctx: dict[str, Any]) -> Response:
+    """Vẽ trang Điều phối. app.js đổi tab/hội thoại gửi `X-Ahub-Partial: grid` → vỏ tối giản `_manager_shell.html` (chỉ lưới + danh
+    sách hội thoại + thông báo; KHÔNG thanh bên/menu nên không hỏi số trên menu — bớt RPC và HTML mỗi lần đổi tab)."""
+    if request.headers.get("x-ahub-partial") != "grid":
+        return await render(request, "manager.html", ctx)
+    sess = session_of(request)
+    base = {"csrf": sess.csrf if sess else "", "flashes": sess.pop_flashes() if sess else [], "badge": {}, "nav": "manager",
+            "path": request.url.path, "layout": "_manager_shell.html"}
+    return ws(request).templates.TemplateResponse(request, "manager.html", {**base, **ctx}, headers={"Cache-Control": "no-store"})
+
+
 async def manager_page(request: Request) -> Response:
     q = request.query_params
     # lời gọi không phụ thuộc nhau chạy đồng thời (perf): trạng thái điều phối viên, hub.status, hội thoại web, thanh bên luồng việc
     # (hai cái sau chỉ dùng khi đã có điều phối viên; RpcError của chúng đã được nuốt bên trong như trước)
-    st, status, convs, wsd = await gather_ordered(mgr_state(request), rpc(request, "hub.status"), _web_convs(request), _workstreams(request))
+    # `manager.conversations` chỉ hỏi MỘT lần (limit 500, mọi kênh — trong `_workstreams`); hội thoại web lọc lại từ đó. Daemon cũ chưa có
+    # `workstream.*` → mới hỏi riêng hội thoại web như trước.
+    st, status, wsd = await gather_ordered(mgr_state(request), rpc(request, "hub.status"), _workstreams(request))
+    convs = _web_from(wsd) if wsd.get("enabled") else await _web_convs(request)
     ctx: dict[str, Any] = {"nav": "manager", "m": st, "convs": [], "conv": None, "items": [], "side_actions": [], "pending": None,
                            "agents": [], "templates": []}
     ctx.update({"since": status.get("last_seq") or 0, "epoch": status.get("epoch") or ""})
@@ -310,7 +364,7 @@ async def manager_page(request: Request) -> Response:
 
         agents, ctx["templates"] = await gather_ordered(rpc(request, "agent.list", {}), _templates())
         ctx["agents"] = [a for a in agents or [] if not a.get("archived_at")]
-        return await render(request, "manager.html", ctx)
+        return await _page(request, ctx)
     ws_id = str(q.get("w") or "").strip() or None
     if q.get("c") and not ws_id:  # hội thoại thuộc luồng → hiện trong ngữ cảnh luồng
         ws_id = (wsd.get("convs", {}).get(q.get("c")) or {}).get("workstream_id")
@@ -320,10 +374,15 @@ async def manager_page(request: Request) -> Response:
         except RpcError:
             ws_id = None
     if ws_id and not q.get("c") and not q.get("new"):  # ?w= → hội thoại web gần nhất của luồng (chưa có → mới trong luồng)
-        try:
-            wc = await rpc(request, "manager.conversations", {"channel": CHANNEL, "workstream": ws_id, "limit": 1}) or []
-        except RpcError:
-            wc = []
+        # đã có trong danh sách WS_CONV_LIMIT hội thoại — không hỏi lại daemon
+        wc = sorted([P.mgr_conv(c) for c in (wsd.get("convs") or {}).values()
+                     if isinstance(c, dict) and c.get("workstream_id") == ws_id and c.get("channel") == CHANNEL],
+                    key=lambda c: str(c.get("updated_at") or ""), reverse=True)
+        if not wc and (not wsd.get("enabled") or len(wsd.get("convs") or {}) >= WS_CONV_LIMIT):  # danh sách bị cắt → hỏi đúng luồng này
+            try:
+                wc = await rpc(request, "manager.conversations", {"channel": CHANNEL, "workstream": ws_id, "limit": 1}) or []
+            except RpcError:
+                wc = []
         cid = wc[0]["id"] if wc else None
     else:
         lobby = wsd.get("lobby") if wsd.get("enabled") else convs
@@ -372,26 +431,17 @@ async def manager_page(request: Request) -> Response:
             run = await rpc(request, "run.get", {"id": want})
             if P.is_live_run(run):
                 pend = run["id"]  # như trước: events.query lỗi vẫn giữ khung "đang trả lời" (không có tool/checklist)
-                return pend, pending_info(await rpc(request, "events.query", {"run_id": pend, "limit": PENDING_SCAN}) or [])
+                # PENDING_SCAN event GẦN NHẤT (run dài hơn thế: đọc từ đầu sẽ ra tool/checklist cũ) → đảo lại cũ → mới cho pending_info
+                evs = await rpc(request, "events.query", {"run_id": pend, "limit": PENDING_SCAN, "order": "desc"}) or []
+                return pend, pending_info(list(reversed(evs)))
         except RpcError:
             pass
         return pend, {}
 
-    async def _mark_read() -> bool:
-        if not cid:
-            return False
-        try:
-            await rpc(request, "manager.conversation_read", {"conversation_id": cid})
-            return True
-        except (RpcError, DaemonUnavailable):
-            return False
-
-    # khung "đang trả lời" (run.get → events.query) và đánh dấu đã đọc: độc lập → đồng thời
-    (pending, pinfo), read_ok = await gather_ordered(_pending(), _mark_read())
-    if read_ok:
-        for c in wsd.get("lobby") or []:
-            if c["id"] == cid:
-                c["unread"] = 0
+    # GET không ghi gì: "đã đọc" do trình duyệt POST /manager/read sau khi hiện hội thoại (app.js). Ở đây chỉ HIỂN THỊ hội thoại đang
+    # mở là đã đọc (không đếm vào số chưa đọc của tab/thanh bên).
+    pending, pinfo = await _pending()
+    _viewing(wsd, cid)
     cur_conv = (wsd.get("convs") or {}).get(cid) if cid else None
     ws_convs = [P.mgr_conv(c) | {"channel": c.get("channel"), "running": bool(c.get("running"))} for c in (wsd.get("convs") or {}).values()
                 if wsx and c.get("workstream_id") == wsx["id"] and c.get("channel") != "heartbeat"]
@@ -402,18 +452,14 @@ async def manager_page(request: Request) -> Response:
                 "ws_web_convs": [c | {"unread": 0 if c["id"] == cid else int(((wsd.get("convs") or {}).get(c["id"]) or {}).get("unread") or 0)}
                                  for c in ws_convs if c.get("channel") == CHANNEL],
                 "cur_title": (cur_conv or {}).get("title")})
-    return await render(request, "manager.html", ctx)
+    return await _page(request, ctx)
 
 
 async def partial_tabs(request: Request) -> Response:
     """Hàng tab luồng (htmx/app.js làm mới khi có run bắt đầu/kết thúc, tin trả lời, luồng đổi — và hỏi lại định kỳ cho task)."""
     cid = str(request.query_params.get("c") or "").strip()
-    if cid:  # hội thoại đang mở trên màn hình: tin mới tới trong lúc xem không tính là chưa đọc (giống lúc tải trang)
-        try:
-            await rpc(request, "manager.conversation_read", {"conversation_id": cid})
-        except (RpcError, DaemonUnavailable):
-            pass
     wsd = await _workstreams(request)
+    _viewing(wsd, cid)  # hội thoại đang mở: tin mới tới trong lúc xem không HIỆN là chưa đọc (ghi "đã đọc" = POST /manager/read)
     wid = str(request.query_params.get("w") or "").strip()
     wsx = (wsd.get("by_id") or {}).get(wid) if wid else None
     sess = session_of(request)
@@ -504,9 +550,9 @@ async def manager_stop(request: Request) -> Response:
 
     if not rid:
         return done("Thiếu lượt cần dừng", 400)
-    st = await mgr_state(request)
-    try:
-        run = await rpc(request, "run.get", {"id": rid}) or {}
+    try:  # chỉ cần biết điều phối viên là ai (không hỏi trạng thái agent) — song song với run.get
+        st, run = await gather_ordered(mgr_state(request, with_row=False), rpc(request, "run.get", {"id": rid}))
+        run = run or {}
     except RpcError as e:
         return done(err_text(e), 404)
     except DaemonUnavailable as e:
@@ -532,7 +578,7 @@ async def manager_stop(request: Request) -> Response:
     return done("Đã dừng điều phối viên")
 
 
-DRAFT_EVERY_S = 0.15  # P1-1: bản nháp markdown của câu trả lời đang chạy chữ — tối đa ~7 lần/giây mỗi luồng SSE
+DRAFT_EVERY_S = 0.5  # P1-1: bản nháp markdown của câu trả lời đang chạy chữ — tối đa 2 lần/giây mỗi luồng SSE (chữ thô vẫn tới ngay qua delta)
 DRAFT_MAX = 24_000  # chữ đang chạy dài hơn → thôi gửi nháp (đỡ CPU), client chỉ nối delta thô
 STREAM_KEEP = 200_000  # trần bộ đệm chữ của một lượt (RAM)
 
@@ -568,7 +614,7 @@ def _converter(request: Request, clock: Any = None) -> Any:
         if not text.strip() or len(text) > DRAFT_MAX or (not force and now() - b["at"] < DRAFT_EVERY_S):
             return []
         b["at"] = now()
-        return [{"t": "draft", "run": rid, "seq": seq, "html": P.md(text)}]
+        return [{"t": "draft", "run": rid, "seq": seq, "html": P.md(text, cache=False)}]  # nháp đổi liên tục → không chiếm LRU
 
     def conv(ev: dict[str, Any]) -> list[dict[str, Any]]:
         out = _conv(ev)
@@ -759,6 +805,7 @@ def routes() -> list[Any]:
         Route("/manager", manager_page),
         Route("/manager/send", manager_send, methods=["POST"]),
         Route("/manager/stop", manager_stop, methods=["POST"]),
+        Route("/manager/read", manager_read, methods=["POST"]),
         Route("/partials/manager", partial_status),
         Route("/partials/manager/tabs", partial_tabs),
         Route("/sse/manager", sse_manager),

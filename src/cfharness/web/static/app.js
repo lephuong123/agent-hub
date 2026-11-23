@@ -627,7 +627,7 @@
   // Mục HTML do server vẽ sẵn (autoescape) — chữ chạy (delta) chỉ gán bằng textContent. Không bao giờ dựng HTML từ chữ của agent.
   // Đổi tab luồng / hội thoại KHÔNG tải lại cả trang: tải /manager?… bằng fetch, thay #mgr-grid + danh sách hội thoại ở thanh bên,
   // pushState; luồng SSE + ô nhập khởi động lại qua mgrBoot(). Lỗi/không phải trang điều phối → điều hướng thường (an toàn).
-  var mgrStop = null, mgrNav = null;
+  var mgrStop = null, mgrNav = null, mgrDimT = null;
   // bản nháp ô nhập theo hội thoại/luồng — sessionStorage (giữ khi đổi tab và khi tải lại trang; riêng từng tab trình duyệt)
   function draftGet(k) { try { return sessionStorage.getItem("cfh_mgr_draft:" + k) || ""; } catch (_) { return ""; } }
   function draftSet(k, v) {
@@ -658,7 +658,9 @@
     if (mgrNav && mgrNav.abort) mgrNav.abort();
     var ctl = window.AbortController ? new AbortController() : {};
     mgrNav = ctl;
-    grid.classList.add("mgr-loading");
+    // chỉ làm mờ khi chờ lâu (> 400 ms) — đổi tab nhanh thì không nháy
+    clearTimeout(mgrDimT);
+    mgrDimT = setTimeout(function () { if (mgrNav === ctl) grid.classList.add("mgr-loading"); }, 400);
     if (a && a.classList.contains("ws-tab")) {  // đánh dấu tab ngay, không chờ server
       var tabs = document.querySelectorAll("#ws-tabs .ws-tab");
       for (var i = 0; i < tabs.length; i++) tabs[i].classList.toggle("on", tabs[i] === a);
@@ -666,14 +668,15 @@
     var open = document.querySelectorAll("details[open]");
     for (var j = 0; j < open.length; j++) if (!open[j].closest(".mgr-side")) open[j].removeAttribute("open");
     root.classList.remove("mgr-info-open");
-    fetch(url, { credentials: "same-origin", signal: ctl.signal })
+    // X-Ahub-Partial: server chỉ vẽ khung lưới + danh sách hội thoại (không thanh bên/menu, không hỏi số trên menu)
+    fetch(url, { credentials: "same-origin", signal: ctl.signal, headers: { "X-Ahub-Partial": "grid" } })
       .then(function (r) {
         if (!r.ok || new URL(r.url, location.href).pathname !== "/manager") throw new Error("nav");
         return r.text();
       })
       .then(function (html) {
         if (mgrNav !== ctl) return;
-        mgrNav = null;
+        mgrNav = null; clearTimeout(mgrDimT);
         var doc = new DOMParser().parseFromString(html, "text/html");
         var ng = doc.getElementById("mgr-grid"), cur = document.getElementById("mgr-grid");
         if (!ng || !cur) throw new Error("nav");
@@ -695,6 +698,7 @@
       })
       .catch(function (err) {
         if (err && err.name === "AbortError") return;
+        clearTimeout(mgrDimT);
         location.href = url;
       });
   }
@@ -714,8 +718,29 @@
     });
   }
 
+  // Cập nhật hàng tab TẠI CHỖ (không replaceWith cả khối): khớp tab theo href, chỉ đổi tab khác đi — giữ focus, cuộn ngang, hover
+  function patchTabs(cur, n) {
+    cur.setAttribute("data-w", n.getAttribute("data-w") || "");
+    var old = {}, i, c, a;
+    for (i = 0; i < cur.children.length; i++) { c = cur.children[i]; old[c.getAttribute("href") || ("#" + i)] = c; }
+    var want = [];
+    for (i = 0; i < n.children.length; i++) {
+      var nc = n.children[i], key = nc.getAttribute("href") || ("#" + i), oc = old[key];
+      if (oc && oc.tagName === nc.tagName) {
+        delete old[key];
+        if (oc.outerHTML !== nc.outerHTML) {
+          for (a = oc.attributes.length - 1; a >= 0; a--) if (!nc.hasAttribute(oc.attributes[a].name)) oc.removeAttribute(oc.attributes[a].name);
+          for (a = 0; a < nc.attributes.length; a++) if (oc.getAttribute(nc.attributes[a].name) !== nc.attributes[a].value) oc.setAttribute(nc.attributes[a].name, nc.attributes[a].value);
+          if (oc.innerHTML !== nc.innerHTML) oc.innerHTML = nc.innerHTML;  // HTML server vẽ (autoescape), như khi thay cả hàng tab
+        }
+        want.push(oc);
+      } else want.push(document.importNode(nc, true));
+    }
+    for (var k in old) if (old[k].parentNode === cur) old[k].remove();
+    for (i = 0; i < want.length; i++) if (cur.children[i] !== want[i]) cur.insertBefore(want[i], cur.children[i] || null);
+  }
   function initManager(ml) {
-    var mes = null, tabsT = null, tabsPoll = null, retryT = null, backoff = 1000, dead = false;
+    var mes = null, tabsT = null, tabsPoll = null, tabsCtl = null, readCtl = null, retryT = null, backoff = 1000, dead = false;
     var mform = document.getElementById("mgr-form");
     var mtext = document.getElementById("mgr-text");
     var merr = document.getElementById("mgr-err");
@@ -802,6 +827,7 @@
     }
     function handle(m) {
       var r = m.run, s = stick();
+      if (m.t === "reply" && conv && (m.conv === conv || (r && runs[r]))) readDirty = true;  // tin mới trong hội thoại đang xem
       if (m.t === "tick" || m.t === "status" || m.t === "run_end" || m.t === "reply") tabsSoon();
       if (m.t === "status") return;
       if (m.t === "tick") { document.body.dispatchEvent(new Event("mgr-tick")); return; }
@@ -927,22 +953,43 @@
     }
     // hàng tab luồng: chấm "đang chạy / cần bạn / đã xong" — làm mới khi SSE báo run bắt đầu/kết thúc, và hỏi lại mỗi 20 s
     // (task của agent khác không đi qua luồng SSE của điều phối viên)
-    function tabsSoon(ms) { if (!tabsT) tabsT = setTimeout(tabsLoad, ms == null ? 500 : ms); }
+    function tabsSoon(ms) { if (!tabsT && !dead) tabsT = setTimeout(tabsLoad, ms == null ? 500 : ms); }
+    // "đã đọc" là một POST riêng (GET không ghi): khi hội thoại đang HIỆN trên màn hình — lúc mở, và khi có tin mới trong lúc xem
+    var readDirty = !!conv;
+    function markRead() {
+      if (!conv || !mform || !window.fetch || document.hidden) return Promise.resolve();
+      readDirty = false;
+      var fd = new FormData(), cs = mform.querySelector('input[name="csrf"]');
+      fd.append("csrf", cs ? cs.value : ""); fd.append("k", getKey()); fd.append("c", conv);
+      var ctl = readCtl = window.AbortController ? new AbortController() : null;
+      return fetch("/manager/read", { method: "POST", body: fd, credentials: "same-origin", headers: { "X-Ahub-Fetch": "1" },
+                                      signal: ctl ? ctl.signal : undefined })
+        .then(function () {}, function () {});
+    }
     function tabsLoad() {
       tabsT = null;
       var el = document.getElementById("ws-tabs");
-      if (!el || !window.fetch) return;
-      fetch("/partials/manager/tabs?w=" + encodeURIComponent(el.getAttribute("data-w") || "") + (conv ? "&c=" + encodeURIComponent(conv) : ""), { credentials: "same-origin" })
-        .then(function (r) { return r.ok ? r.text() : null; })
+      if (dead || !window.fetch) return;
+      if (!el) { if (readDirty) markRead(); return; }
+      if (tabsCtl) tabsCtl.abort();
+      var ctl = tabsCtl = window.AbortController ? new AbortController() : null;
+      var url = "/partials/manager/tabs?w=" + encodeURIComponent(el.getAttribute("data-w") || "") + (conv ? "&c=" + encodeURIComponent(conv) : "");
+      (readDirty ? markRead() : Promise.resolve())
+        .then(function () {
+          if (dead) return null;
+          return fetch(url, { credentials: "same-origin", signal: ctl ? ctl.signal : undefined }).then(function (r) { return r.ok ? r.text() : null; });
+        })
         .then(function (html) {
+          if (tabsCtl === ctl) tabsCtl = null;
           var cur = document.getElementById("ws-tabs"), n = html && fromHTML(html);
-          if (!cur || !n || n.id !== "ws-tabs" || mgrNav) return;  // đang chuyển tab → trang mới tự mang hàng tab mới
-          var x = cur.scrollLeft;
-          cur.replaceWith(n);
-          n.scrollLeft = x;
+          if (dead || !cur || !n || n.id !== "ws-tabs" || mgrNav) return;  // đang chuyển tab → trang mới tự mang hàng tab mới
+          patchTabs(cur, n);
         }, function () {});
     }
     tabsPoll = setInterval(function () { if (!document.hidden) tabsSoon(0); }, 20000);
+    function onVis() { if (!document.hidden && readDirty) tabsSoon(0); }
+    document.addEventListener("visibilitychange", onVis);
+    if (readDirty) tabsSoon(0);  // đánh dấu đã đọc hội thoại vừa mở (+ làm mới số chưa đọc)
     // P0-4: SSE tự nối lại có giãn (cả sau `end`) với since = seq cuối đã nhận → không lặp chữ, không chết luồng
     function liveState(ok) {
       if (!mlive) return;
@@ -1154,6 +1201,9 @@
       clearTimeout(retryT);
       clearInterval(tabsPoll);
       clearTimeout(tabsT);
+      document.removeEventListener("visibilitychange", onVis);
+      if (tabsCtl) tabsCtl.abort();  // fetch hàng tab đang bay: bỏ (không thay hàng tab của trang mới)
+      if (readCtl) readCtl.abort();
     };
   }
   mgrBoot();

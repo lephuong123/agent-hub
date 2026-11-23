@@ -298,8 +298,9 @@ def _md_parser() -> Any:
     return m
 
 
-def md(text: str | None) -> str:
-    """Markdown → HTML AN TOÀN (xem khối chú thích trên). LRU theo băm nội dung. Lỗi thư viện → `<pre>` escape."""
+def md(text: str | None, *, cache: bool = True) -> str:
+    """Markdown → HTML AN TOÀN (xem khối chú thích trên). LRU theo băm nội dung. Lỗi thư viện → `<pre>` escape.
+    `cache=False`: không đọc/ghi LRU — cho bản nháp đang chạy chữ (mỗi lần một nội dung khác, chỉ đẩy bản đã xong ra khỏi cache)."""
     global _MD
     from markupsafe import escape
 
@@ -307,8 +308,8 @@ def md(text: str | None) -> str:
     cut = len(text) > MD_MAX
     if cut:
         text = text[:MD_MAX]
-    key = hashlib.blake2b(text.encode("utf-8", "surrogatepass"), digest_size=16).digest()
-    hit = _MD_CACHE.get(key)
+    key = hashlib.blake2b(text.encode("utf-8", "surrogatepass"), digest_size=16).digest() if cache else b""
+    hit = _MD_CACHE.get(key) if cache else None
     if hit is not None:
         _MD_CACHE.move_to_end(key)
         return hit
@@ -320,6 +321,8 @@ def md(text: str | None) -> str:
         out = f"<pre>{escape(text)}</pre>"
     if cut:
         out += '<p class="tx-cut">… (nội dung quá dài — đã cắt)</p>'
+    if not cache:
+        return out
     _MD_CACHE[key] = out
     if len(_MD_CACHE) > MD_CACHE:
         _MD_CACHE.popitem(last=False)

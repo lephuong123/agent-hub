@@ -10,6 +10,8 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 
 ## Chưa phát hành
 
+- Điều phối: đổi tab luồng/hội thoại nhanh hơn — server chỉ vẽ phần lưới (không vẽ lại thanh bên, bớt lời gọi daemon trùng), chỉ làm mờ khi chờ quá 400 ms; hàng tab cập nhật tại chỗ (không nháy, giữ focus); khung "đang trả lời" của lượt dài hiện đúng tool/checklist mới nhất; "đã đọc" ghi bằng POST riêng khi hội thoại đang hiện; bản nháp chạy chữ gửi tối đa 2 lần/giây; tệp tĩnh có phiên bản được cache hẳn và trang/JS nén gzip. RPC `events.query` nhận thêm `since`/`epoch`.
+
 ---
 
 ## v0.2.30 — 2026-11-23
