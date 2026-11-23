@@ -1,4 +1,4 @@
-/* Island Điều phối (`/manager?ui=next`, static/coord/*.js) — chỉ phần khác trang cũ; còn lại dùng nguyên class của app.css.
+/* Island Điều phối (`/manager`, static/coord/*.js) — chỉ phần khác trang cũ; còn lại dùng nguyên class của app.css.
  * Trang cũ dựa vào `:has(#mgr-empty)`; island giữ nhiều khung trong DOM (khung ẩn cũng có thể trống) → dùng lớp `.is-empty` của khung đang hiện. */
 .coord-panes { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .coord-panes > .mgr-log[hidden] { display: none; }
@@ -63,12 +63,3 @@
 .coord-estop { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 max(16px, calc((100% - var(--read-w)) / 2)) 8px; padding: 8px 12px;
   border: 1px solid var(--danger-line); border-radius: var(--r); background: var(--danger-soft, var(--surface-2)); color: var(--danger); font-size: var(--fs-sm); }
 .coord-estop a { margin-left: auto; }
-/* Không animation box-shadow vô hạn trong island (vẽ lại mỗi khung hình): vòng lan bằng ::after transform + opacity (chạy trên compositor) */
-.coord-next .ws-dot.run { position: relative; animation: none; box-shadow: none; }
-.coord-next .ws-dot.run::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--ok); opacity: .6;
-  animation: coord-ping 1.4s ease-out infinite; will-change: transform, opacity; }
-.coord-next .voice-mic.on { position: relative; animation: none; }
-.coord-next .voice-mic.on::after { content: ""; position: absolute; inset: 0; border-radius: inherit; border: 2px solid var(--danger); opacity: .5;
-  animation: coord-ping 1.2s ease-out infinite; pointer-events: none; }
-@keyframes coord-ping { from { transform: scale(1); opacity: .55; } to { transform: scale(2.2); opacity: 0; } }
-@media (prefers-reduced-motion: reduce) { .coord-next .ws-dot.run::after, .coord-next .voice-mic.on::after { animation: none; opacity: 0; } }

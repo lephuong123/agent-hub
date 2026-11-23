@@ -185,9 +185,15 @@ export function createStore(S, opts) {
       p.conv.value = snap.conv || null;
       if (wasFresh && p.conv.value && !p.draft.value) p.draft.value = draftLoad(p.conv.value, scope);
       p.title.value = snap.title || null;
+      const oldLen = p.items.value.length, oldHide = p.hide.value;
       p.items.value = snap.items || [];
-      p.hide.value = Math.max(0, p.items.value.length - FIRST_SHOW);
-      p.spacer = -1;  // khoảng giữ chỗ của mục chưa vẽ (views/initSpacer) đo lại theo dòng thời gian mới
+      if (p.loaded.value && p.scroll && !p.scroll.stick && oldLen) {
+        // tải lại khi người đang đọc lịch sử cũ (tải lại nền / resync): giữ SỐ mục đang vẽ và khoảng giữ chỗ → không mất chỗ đang đọc
+        p.hide.value = Math.max(0, p.items.value.length - (oldLen - oldHide));
+      } else {
+        p.hide.value = Math.max(0, p.items.value.length - FIRST_SHOW);
+        p.spacer = -1;  // khoảng giữ chỗ của mục chưa vẽ (views/initSpacer) đo lại theo dòng thời gian mới
+      }
       // mục cũ (trừ CV_TAIL mục cuối — phần thấy ngay khi mở) dùng content-visibility; tập cố định tới lần ảnh chụp sau (views/Item)
       p.cv = new Set(p.items.value.slice(0, Math.max(0, p.items.value.length - CV_TAIL)).map((x) => x.id).filter(Boolean));
       p.pending.value = pendingOf(snap.pending, p.pending.value);

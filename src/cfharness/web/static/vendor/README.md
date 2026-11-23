@@ -4,7 +4,7 @@ Phục vụ nguyên vẹn từ `/static/vendor/…` (CSP `'self'`, không CDN l�
 thêm thư mục mới + sửa đường dẫn (với island Điều phối: `web/coord.py` `VENDOR`), không sửa tệp tại chỗ. Tệp được đóng gói vào wheel
 (`packages = ["src/cfharness"]`, hatchling lấy mọi tệp trong gói).
 
-## Island Điều phối (`/manager?ui=next`, `static/coord/*.js`) — nạp bằng import map
+## Island Điều phối (`/manager`, `static/coord/*.js`) — nạp bằng import map
 
 Tải ngày 2026-11-23 bằng `npm` tarball (kiểm `dist.integrity` sha512 của registry) và so trùng từng byte với
 `https://cdn.jsdelivr.net/npm/<tên>@<phiên bản>/<tệp>`. Không sửa gì sau khi tải.

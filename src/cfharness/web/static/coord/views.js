@@ -73,7 +73,7 @@ function TabBar() {
   const s = ui.store, tabs = s.tabs.value, p = s.active.value;
   if (!tabs.enabled) return null;
   const scope = p ? p.scope : LOBBY, lobby = tabs.lobby || { ws: LOBBY, dot: "none", dot_label: "", unread: 0 };
-  const lobbyUrl = "/manager?ui=next";
+  const lobbyUrl = "/manager";
   const closedCur = tabs.closed.find((t) => t.ws === scope);
   const ws = p && p.workstream.value;
   return html`<nav class="ws-bar" aria-label="Luồng việc">
@@ -82,24 +82,24 @@ function TabBar() {
          aria-current=${scope === LOBBY ? "page" : undefined} onClick=${(e) => onNav(e, lobbyUrl)}>
         <${Dot} cls=${lobby.dot} label=${lobby.dot_label} />Sảnh${lobby.unread ? html`<span class="ws-unread">${lobby.unread}</span>` : null}</a>
       ${tabs.active.map((t) => {
-        const url = "/manager?ui=next&w=" + encodeURIComponent(t.ws), tk = t.tasks || {};
+        const url = "/manager?w=" + encodeURIComponent(t.ws), tk = t.tasks || {};
         return html`<a key=${t.ws} class=${"ws-tab" + (scope === t.ws ? " on" : "")} href=${url} data-ws=${t.ws}
           title=${t.label + " — " + (t.dot_label || "") + " · task " + (tk.done || 0) + "/" + (tk.total || 0)}
           aria-current=${scope === t.ws ? "page" : undefined} onClick=${(e) => onNav(e, url)}>
           <${Dot} cls=${t.dot} label=${t.dot_label} />${t.title}${t.unread ? html`<span class="ws-unread">${t.unread}</span>` : null}</a>`;
       })}
-      ${closedCur ? html`<a class="ws-tab on closed" href=${"/manager?ui=next&w=" + encodeURIComponent(closedCur.ws)}
-          onClick=${(e) => onNav(e, "/manager?ui=next&w=" + encodeURIComponent(closedCur.ws))}><${Dot} cls=${closedCur.dot} label=${closedCur.dot_label} />${closedCur.title} · đã đóng</a>` : null}
+      ${closedCur ? html`<a class="ws-tab on closed" href=${"/manager?w=" + encodeURIComponent(closedCur.ws)}
+          onClick=${(e) => onNav(e, "/manager?w=" + encodeURIComponent(closedCur.ws))}><${Dot} cls=${closedCur.dot} label=${closedCur.dot_label} />${closedCur.title} · đã đóng</a>` : null}
     </div>
     ${ws ? html`<${WsManage} ws=${ws} />` : null}
     <details class="ws-pop-wrap" id="ws-new"><summary class="ws-tab add" title="Mở luồng mới (mỗi epic một luồng)">＋ Luồng</summary>
-      <form method="post" action="/do/ws_create" class="ws-pop ws-inline"><${Hidden} name="csrf" value=${ui.csrf} /><${Hidden} name="next" value="/manager?ui=next" />
+      <form method="post" action="/do/ws_create" class="ws-pop ws-inline"><${Hidden} name="csrf" value=${ui.csrf} /><${Hidden} name="next" value="/manager" />
         <input name="title" maxlength="120" placeholder="Tên luồng (bỏ trống = tự đặt)" aria-label="Tên luồng" autocomplete="off" />
         <button class="btn sm primary" type="submit">Mở</button></form>
     </details>
     ${tabs.closed.length ? html`<details class="ws-pop-wrap"><summary class="ws-tab more" title="Luồng đã đóng">Đã đóng ${tabs.closed.length}</summary>
       <div class="ws-pop"><ul class="mgr-convs">${tabs.closed.map((t) => {
-        const url = "/manager?ui=next&w=" + encodeURIComponent(t.ws);
+        const url = "/manager?w=" + encodeURIComponent(t.ws);
         return html`<li key=${t.ws}><a href=${url} onClick=${(e) => onNav(e, url)}><span class="ct">${t.label}</span></a></li>`;
       })}</ul></div></details>` : null}
   </nav>`;
@@ -108,16 +108,16 @@ function TabBar() {
 function wsWho(by) { return !by || by === "user" ? "bạn" : String(by).startsWith("manager") ? "điều phối viên" : by; }
 
 function WsForms({ ws }) {
-  const back = "/manager?ui=next&w=" + encodeURIComponent(ws.id);
+  const back = "/manager?w=" + encodeURIComponent(ws.id);
   return html`
     <form method="post" action="/do/ws_edit" class="ws-inline"><${Hidden} name="csrf" value=${ui.csrf} /><${Hidden} name="id" value=${ws.id} /><${Hidden} name="next" value=${back} />
       <input name="title" maxlength="120" value=${ws.label} required aria-label="Tên luồng" title="Bắt đầu bằng mã Jira (LH-1 Tên) để đổi cả mã" />
       <button class="btn sm" type="submit">Đổi tên</button></form>
     <div class="btn-row">${ws.status === "active"
-      ? html`<${Act} name="ws_close" label="Đóng luồng" fields=${{ id: ws.id, label: ws.label }} cls="btn sm ghost" confirm=${"Đóng luồng " + ws.label + "? Mở lại được bất cứ lúc nào."} next="/manager?ui=next" />`
+      ? html`<${Act} name="ws_close" label="Đóng luồng" fields=${{ id: ws.id, label: ws.label }} cls="btn sm ghost" confirm=${"Đóng luồng " + ws.label + "? Mở lại được bất cứ lúc nào."} next="/manager" />`
       : html`<${Act} name="ws_reopen" label="Mở lại luồng" fields=${{ id: ws.id }} cls="btn sm" next=${back} />`}
       <${Act} name="ws_delete" label="Xoá luồng…" fields=${{ id: ws.id, label: ws.label }} cls="btn sm danger"
-        confirm=${"XOÁ HẲN luồng " + ws.label + "? Hội thoại về Sảnh, task bỏ gắn luồng (không bị xoá). Không hoàn tác được."} next="/manager?ui=next" /></div>`;
+        confirm=${"XOÁ HẲN luồng " + ws.label + "? Hội thoại về Sảnh, task bỏ gắn luồng (không bị xoá). Không hoàn tác được."} next="/manager" /></div>`;
 }
 
 function WsManage({ ws }) {
@@ -160,7 +160,7 @@ function ConvMenu({ p }) {
         <select name="workstream" aria-label="Chuyển sang luồng"><option value="">Sảnh</option>${tabs.active.map((w) =>
           html`<option key=${w.ws} value=${w.ws} selected=${p.scope === w.ws}>${w.label}</option>`)}</select><button class="btn sm" type="submit">Chuyển</button></form>
       <${Act} name="conv_archive" label="Lưu trữ hội thoại" fields=${{ conversation_id: conv, w: p.scope !== LOBBY ? p.scope : "" }} cls="btn sm ghost danger-t"
-        confirm="Lưu trữ hội thoại này?" next="/manager?ui=next" />
+        confirm="Lưu trữ hội thoại này?" next="/manager" />
     </div></details>`;
 }
 
@@ -438,6 +438,42 @@ function keepAnchor(p) {
   }
 }
 
+/** Vẽ hết mà khoảng giữ chỗ còn dư (ước lượng theo các mục MỚI nhất — thường là trả lời dài — nên hay dư so với mục cũ ngắn) → gỡ phần
+ *  dư mà KHÔNG làm gì đang thấy dịch chuyển: (a) mốc nằm trọn trên màn hình → co + bù scrollTop (nội dung đứng yên); (b) màn hình đang ở
+ *  trong khoảng trống → co không bù, chỉ tới mức nội dung bên dưới vẫn khuất. Còn đang vẽ dần thì KHÔNG co: co giữa lúc cuộn nhanh làm
+ *  Chrome tính mục `cvx` là dịch bố cục (đo verify r3: 0.32) — phần dư lúc đó chỉ làm thanh cuộn dài hơn thật. */
+function fitSpacer(p) {
+  const el = p.el;
+  if (!el || p.hide.value || !(p.spacer > SPACER_MIN) || !el.clientHeight || p.anchor) return;
+  const fl = flowOf(p), sp = fl && fl.firstElementChild;
+  if (!sp || !sp.classList.contains("coord-more")) return;
+  const top0 = el.getBoundingClientRect().top, r = sp.getBoundingClientRect();
+  const keep = -(r.top - top0) - SPACER_MIN;  // (a) đỉnh mốc dời xuống `cut` — phải vẫn khuất trên màn hình
+  const free = r.bottom - top0 - el.clientHeight;  // (b) nội dung dời lên `cut` — phải vẫn khuất dưới màn hình
+  const cut = Math.min(p.spacer - SPACER_MIN, Math.max(keep, free));
+  if (cut < 1) return;
+  p.spacer -= cut;
+  sp.style.height = p.spacer + "px";
+  if (keep >= free) el.scrollTop -= cut;
+}
+/** Mục `data-cv` (bỏ qua vẽ) trong khoảng ±1 màn hình quanh chỗ đang xem → vẽ thật NGAY trong sự kiện scroll (trước khi vẽ khung hình đó).
+ *  IntersectionObserver báo trễ một khung: cuộn / nhảy rất nhanh (End rồi vuốt mạnh lên) làm mục bị bỏ qua hiện ra rồi mới được vẽ → Chrome
+ *  tính phần bên trong là dịch bố cục (verify r3: 0.18). Tìm nhị phân theo thứ tự DOM; đọc hết rồi mới ghi (một lần layout). */
+function cvNear(p) {
+  const el = p.el, fl = flowOf(p);
+  if (!el || !fl || !p.cvSet || !p.cvSet.size || !el.clientHeight) return;
+  const kids = fl.children, n = kids.length, H = el.clientHeight, top = el.getBoundingClientRect().top;
+  let lo = 1, hi = n - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (kids[m].getBoundingClientRect().bottom < top - H) lo = m + 1; else hi = m; }
+  const on = [];
+  for (let i = lo; i < n; i++) {
+    const x = kids[i];
+    if (x.getBoundingClientRect().top > top + 2 * H) break;
+    if (x.hasAttribute("data-cv")) on.push(x);
+  }
+  for (const x of on) x.removeAttribute("data-cv");
+}
+
 /** Mốc / khoảng giữ chỗ của mục cũ chưa vẽ (`p.hide`): tới gần (IntersectionObserver, cách 1500 px) thì vẽ thêm MORE_STEP mục. Nút cho bàn
  *  phím / trình đọc màn hình. Vẽ hết mà còn khoảng dư → "Đầu cuộc trò chuyện". */
 function More({ p, n }) {
@@ -464,14 +500,14 @@ function More({ p, n }) {
 
 function Flow({ p }) {
   const items = p.items.value, run = p.runId.value, hide = p.hide.value;
-  useLayoutEffect(() => { initSpacer(p); keepAnchor(p); pinNow(p); });
+  useLayoutEffect(() => { initSpacer(p); keepAnchor(p); fitSpacer(p); pinNow(p); });
   useEffect(() => cvArm(p));
   const list = mergeTimeline(items, p.actions.value.filter((a) => a.kind === "approval").map(apItem));
   let last = -1;
   for (let i = list.length - 1; i >= 0; i--) if (list[i].kind === "manager" && !list[i].notify) { last = i; break; }
   const from = Math.min(hide, list.length);
   const rows = [];
-  if (from > 0 || p.spacer > SPACER_MIN) rows.push(html`<${More} key="more" p=${p} n=${from} />`);
+  if (from > 0 || p.spacer >= SPACER_MIN) rows.push(html`<${More} key="more" p=${p} n=${from} />`);
   for (let i = from; i < list.length; i++) {
     const it = list[i];
     rows.push(html`<${Row} key=${it.id || "i" + i} it=${it} p=${p} run=${it.kind === "actions" ? run : null} last=${i === last} />`);
@@ -542,7 +578,8 @@ function Pane({ p, on }) {
     // "người đang cuộn": lăn chuột / vuốt / phím cuộn trong 400 ms qua, hoặc đang giữ chuột trên khung (kéo thanh cuộn)
     let userAt = 0, down = false;
     const now = () => performance.now();
-    const onSc = () => put(onScroll(p.scroll, { top: el.scrollTop, height: el.scrollHeight, client: el.clientHeight }, down || now() - userAt < 400));
+    const onSc = () => { cvNear(p); fitSpacer(p); sc(); };
+    const sc = () => put(onScroll(p.scroll, { top: el.scrollTop, height: el.scrollHeight, client: el.clientHeight }, down || now() - userAt < 400));
     const onWheel = (e) => { userAt = now(); if (e.deltaY < 0) put(onUserUp(p.scroll)); };
     let ty = 0;
     const onTs = (e) => { userAt = now(); ty = e.touches[0].clientY; };
@@ -613,7 +650,7 @@ function Status() {
 
 function WsSide({ ws }) {
   const tk = ws.tasks || {};
-  const back = "/manager?ui=next&w=" + encodeURIComponent(ws.id);
+  const back = "/manager?w=" + encodeURIComponent(ws.id);
   return html`
     <section class="mgr-side-sec ws-side">
       <div class="ws-side-head"><h3>${ws.title}</h3>${ws.key ? html`<span class="pill muted">${ws.key}</span>` : null}</div>
@@ -636,7 +673,7 @@ function Side({ p }) {
   // khởi động: khung đang hiện vẽ trước, panel phải vẽ ở khung hình sau (tách long task lúc mở trang)
   if (ui.late && !ui.late.value) return html`<aside class="mgr-side" id="mgr-side" aria-label="Thông tin điều phối viên"></aside>`;
   const s = ui.store, m = s.manager.value || {}, side = s.side.value, ws = p && p.workstream.value;
-  const back = p ? paneUrl(p.conv.value, p.scope) : "/manager?ui=next";
+  const back = p ? paneUrl(p.conv.value, p.scope) : "/manager";
   return html`<aside class="mgr-side" id="mgr-side" aria-label="Thông tin điều phối viên">
     <div class="mgr-side-head"><h2>Điều phối viên</h2><button type="button" class="btn ghost sm icon" id="mgr-info-close" title="Đóng" aria-label="Đóng"><${Icon} n="x" /></button></div>
     <section class="mgr-side-sec">
@@ -644,7 +681,7 @@ function Side({ p }) {
       <div class="btn-row mgr-ctl">
         <${Act} name="manager_tick" label="Chạy nhịp ngay" cls="btn sm" ic="zap" next=${back} title="manager.tick — gom sự kiện đang chờ và cho điều phối viên xử lý ngay"
           confirm="Chạy một nhịp của điều phối viên NGAY? Nó xem sự kiện đang chờ + việc còn mở và xử lý (một run thật, tốn tiền)." />
-        <${Act} name="manager_unset" label="Huỷ chỉ định" fields=${{ current: m.agent_id || "" }} cls="btn sm danger" next="/manager?ui=next"
+        <${Act} name="manager_unset" label="Huỷ chỉ định" fields=${{ current: m.agent_id || "" }} cls="btn sm danger" next="/manager"
           confirm=${"Huỷ chỉ định điều phối viên " + (m.agent_id || "") + "? Agent vẫn còn, chỉ mất vai trò."} />
       </div>
     </section>

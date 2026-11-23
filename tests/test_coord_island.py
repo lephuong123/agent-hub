@@ -85,7 +85,7 @@ def test_island_js_size_budget():
     files = [STATIC / C.VENDOR[k] for k in ("preact", "preact/hooks", "@preact/signals-core", "@preact/signals", "htm")]
     files += list((STATIC / "coord").glob("*.js"))
     total = sum(len(gzip.compress(f.read_bytes(), 9)) for f in files)
-    assert total < 56_000, total  # nguồn có chú thích (verify r2 thêm ~0.5 KB: canh im lặng SSE, neo cuộn, thử lại tải nền); cỡ phục vụ kiểm riêng
+    assert total < 57_000, total  # nguồn có chú thích (verify r2 thêm ~0.5 KB: canh im lặng SSE, neo cuộn, thử lại tải nền; r3 ~0.3 KB: vẽ mục gần ngay khi cuộn, gỡ khoảng dư); cỡ phục vụ kiểm riêng
 
 
 @pytest.mark.skipif(not NODE, reason="cần Node để chạy store/SSE của island")
@@ -105,14 +105,18 @@ def test_timeline_scroll_stream_logic_headless():
     assert "FAIL" not in r.stdout and "ALL OK" in r.stdout and r.stdout.count("\nok ") >= 35, r.stdout
 
 
-def test_island_no_infinite_box_shadow_animation():
-    """Không animation box-shadow vô hạn trong island: chấm đang chạy / mic dùng ::after transform + opacity (coord.css ghi đè app.css)."""
-    css = (STATIC / "coord.css").read_text(encoding="utf-8")
-    assert ".coord-next .ws-dot.run { position: relative; animation: none; box-shadow: none; }" in css
-    assert ".coord-next .voice-mic.on { position: relative; animation: none; }" in css
-    kf = re.search(r"@keyframes coord-ping \{(.*?)\}\s*\n", css, re.S).group(1)
-    assert "box-shadow" not in kf and "transform" in kf and "opacity" in kf
-    assert "content-visibility: auto" in css and "contain-intrinsic-size: auto 400px" in css
+def test_no_infinite_box_shadow_animation():
+    """GĐ3: không còn animation box-shadow vô hạn ở đâu (app.css + coord.css): chấm đang chạy / mic dùng ::after transform + opacity."""
+    css = (STATIC / "app.css").read_text(encoding="utf-8") + (STATIC / "coord.css").read_text(encoding="utf-8")
+    infinite = {m.group(1) for m in re.finditer(r"animation:\s*([\w-]+)[^;]*infinite", css)}
+    assert {"ring-ping"} <= infinite
+    for name in infinite:
+        kf = re.search(r"@keyframes " + re.escape(name) + r" \{(.*)$", css, re.M)  # khung hình viết trên một dòng
+        assert kf, name
+        assert "box-shadow" not in kf.group(1), name
+    assert ".ws-dot.run::after" in css and ".voice-mic.on::after" in css
+    coord = (STATIC / "coord.css").read_text(encoding="utf-8")
+    assert "content-visibility: auto" in coord and "contain-intrinsic-size: auto 400px" in coord
 
 
 def test_streaming_markdown_filters_urls_via_dompurify():
@@ -157,8 +161,10 @@ async def test_island_page_csp_boot_and_static(menv):
     assert boot["snap"]["conv"] == cid and boot["csrf"] and boot["icons"].startswith("/static/icons.svg")
     assert boot["hub"] == {"estop": False, "admin_estop": False}
     assert any(it.get("text", "").startswith("</script>") for it in boot["snap"]["items"] if it["kind"] == "user")
-    # trang khác vẫn CSP gốc
-    assert "sha256-" not in (await e.client.get("/manager")).headers["content-security-policy"]
+    # trang khác (kể cả trang Điều phối cũ ?ui=old) vẫn CSP gốc
+    assert "sha256-" not in (await e.client.get("/manager?ui=old")).headers["content-security-policy"]
+    assert "sha256-" not in (await e.client.get("/runs")).headers["content-security-policy"]
+    e.client.cookies.clear()
     # .mjs đúng MIME + ?v= → immutable
     u = json.loads(m.group(1))["imports"]["preact"]
     s = await e.client.get(u)

@@ -648,7 +648,8 @@
     if (!a || a.target || a.hasAttribute("download")) return null;
     var u;
     try { u = new URL(a.getAttribute("href"), location.href); } catch (_) { return null; }
-    return u.origin === location.origin && u.pathname === "/manager" ? u.pathname + u.search : null;
+    // `?ui=` (đổi giao diện cũ ↔ island) → tải thật cả trang
+    return u.origin === location.origin && u.pathname === "/manager" && !u.searchParams.get("ui") ? u.pathname + u.search : null;
   }
   function mgrGo(url, push, a) {
     var grid = document.getElementById("mgr-grid");

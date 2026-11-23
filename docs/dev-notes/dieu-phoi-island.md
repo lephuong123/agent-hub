@@ -261,3 +261,25 @@ Mã mới: `static/coord/scroll.js` (cuộn dính đáy — THUẦN), `static/co
 - **jsmin:** `/` sau `++`/`--` hậu tố là phép chia; docstring ghi giới hạn `/` sau `}`.
 - **Còn mở:** ngân sách JS island 30 KB gzip — coord đã thu gọn ~30.2 KB + vendor ~11.2 KB ≈ 41.4 KB (test chặn ở 42 KB); cần người dùng chốt (tính vendor hay
   không, hay thêm bước build đổi tên biến). GĐ3 chưa làm.
+
+## Verify vòng 3 + GĐ3 (chuyển mặc định)
+- **Nhịp ping khi hub bận ngoài phạm vi:** `manager_feed.stream` ping theo HẠN (`heartbeat_s` kể từ message có data cuối cùng), không
+  theo "wait hết giờ" — trước đây event của luồng khác đánh thức `wait()` liên tục nên không bao giờ ping và watchdog 40 s của client nối
+  lại vô ích. Test: `tests/test_coord_verify_r3.py`.
+- **Tải lại nền khi đang đọc tin cũ** (không dính đáy): `applySnapshot` giữ số mục đang vẽ + khoảng giữ chỗ (không nhảy chỗ đọc).
+- **`retryLater` / resync** dùng chung `navOf(p)` → khung phạm vi (Sảnh / `?w=` chưa có hội thoại) cũng được thử lại.
+- **CLS khi End rồi vuốt mạnh lên (0.18):** `views/cvNear` — trong sự kiện scroll (trước khi vẽ khung hình) gỡ `data-cv` của mục trong
+  ±1 màn hình (tìm nhị phân theo DOM) thay vì chờ IntersectionObserver trễ một khung. Đo (Chrome headless, 2000 mục, scrollTop):
+  chuỗi của verify r3 0.0004; cả phiên cuộn 0.0019.
+- **Khoảng trắng dư ở đầu:** `views/fitSpacer` — vẽ hết rồi thì gỡ phần dư của khoảng giữ chỗ khi không ai thấy (mốc khuất trên → co + bù
+  scrollTop; đang nhìn khoảng trống → co không bù, nội dung vẫn khuất). Đo: dư 396 px thay vì hàng trăm nghìn px. KHÔNG co khi còn vẽ
+  dần: co giữa lúc cuộn nhanh làm Chrome tính mục `cvx` là dịch (đo 0.32) → lúc đó thanh cuộn còn dài hơn thật (ước lượng theo mục mới).
+- **GĐ3:** `/manager` = island. Lối thoát MỘT bản phát hành: `?ui=old` (cookie `ahub_mgr_ui=old`, path `/manager`; `?ui=new` quay lại;
+  yêu cầu `X-Ahub-Partial: grid` của app.js cũ luôn là trang cũ). Chưa có điều phối viên → vẫn phần chỉ định của `manager.html`.
+  Vì còn lối thoát nên CHƯA xoá trang cũ (`manager.html`, `_manager*.html`, `initManager`/`mgrBoot`, `/sse/manager`, `/partials/manager/tabs`,
+  `_converter`); test của trang cũ chạy với fixture `old_manager_ui` (conftest). Bản sau: gỡ hết những thứ đó + fixture, chuyển phần chỉ
+  định điều phối viên sang island. `/partials/manager` (thẻ Điều phối ở Tổng quan) và `/manager/send|stop|read` island vẫn dùng — giữ.
+- voice.js: MutationObserver chỉ theo dõi `#coord` (hoặc cha của `#mgr-grid`), bỏ qua thay đổi trong `.md`. Chấm "đang chạy" và mic dùng
+  `::after` transform/opacity cho MỌI trang (app.css), bỏ `ws-ping`/`voice-pulse` box-shadow.
+- **Còn mở:** ngân sách JS 30 KB gzip (coord ~30.6 + vendor ~11.1 ≈ 41.7 KB, chặn ở 42 KB) — chờ người dùng chốt; `msg.done` có đoạn mở
+  đầu trước tool mà ảnh chụp bỏ (chữ đổi khi tải lại); long task 50–75 ms khi cuộn rất nhanh xuống qua 2000 mục đã vẽ hết.

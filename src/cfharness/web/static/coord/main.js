@@ -1,4 +1,4 @@
-/* Island Điều phối — điểm vào (`/manager?ui=next`). Nối store ↔ luồng SSE v2 ↔ giao diện ↔ điều hướng (pushState/popstate).
+/* Island Điều phối — điểm vào (`/manager`). Nối store ↔ luồng SSE v2 ↔ giao diện ↔ điều hướng (pushState/popstate).
  *
  * - Ảnh chụp đầu tiên nhúng trong trang (#coord-boot) → vẽ ngay, mở MỘT luồng SSE với `since=<cursor>` (không hở, không trùng).
  * - Đổi tab luồng / hội thoại đã mở: chỉ đổi khung đang hiện (khung khác giữ trong DOM, ẩn) + pushState — không fetch.
@@ -163,12 +163,17 @@ async function load(nav, p, mine, bg) {
     return null;
   }
 }
+/** Đích tải lại của một khung: hội thoại nếu có; khung tạm chưa tải xong (vd `?w=` = hội thoại gần nhất của luồng) → ĐÚNG đích ban đầu,
+ *  không biến thành "hội thoại mới"; còn lại = phạm vi (Sảnh / luồng) chưa có hội thoại. */
+function navOf(p) {
+  return p.conv.value ? { c: p.conv.value } : !p.loaded.value && p.nav ? p.nav : { w: p.scope !== LOBBY ? p.scope : null, fresh: true };
+}
 /** Tải lại nền lỗi (thường ngay sau khi mạng vừa nối lại): thử lại khi khung vẫn đang hiện, giãn cách, tối đa 5 lần. */
 function retryLater(p) {
   const n = (p.retryN = (p.retryN || 0) + 1);
   if (n > 5) return;
   setTimeout(() => {
-    if (store.active.value === p && p.stale && !p.loading && p.conv.value && visible()) load({ c: p.conv.value }, p, null, true);
+    if (store.active.value === p && p.stale && !p.loading && visible()) load(navOf(p), p, null, true);
   }, Math.min(1000 * 2 ** (n - 1), 15000));
 }
 
@@ -210,9 +215,9 @@ document.addEventListener("click", (e) => {
   if (!a || a.target || a.hasAttribute("download")) return;
   let u;
   try { u = new URL(a.getAttribute("href"), location.href); } catch (_) { return; }
-  if (u.origin !== location.origin || u.pathname !== "/manager") return;
+  if (u.origin !== location.origin || u.pathname !== "/manager" || u.searchParams.get("ui") === "old") return;  // ?ui=old = trang cũ (tải thật)
   e.preventDefault();
-  u.searchParams.set("ui", "next");
+  u.searchParams.delete("ui");
   go(u.pathname + u.search, true);
 });
 
@@ -224,9 +229,7 @@ function resync(reason) {
   resyncT = setTimeout(() => {
     const p = store.active.value;
     if (!p) return;
-    // khung tạm chưa tải xong (vd `?w=` = hội thoại gần nhất của luồng): tải lại ĐÚNG đích ban đầu, không biến thành "hội thoại mới"
-    const nav = p.conv.value ? { c: p.conv.value } : !p.loaded.value && p.nav ? p.nav : { w: p.scope !== LOBBY ? p.scope : null, fresh: true };
-    load(nav, p, navSeq);
+    load(navOf(p), p, navSeq);
     statusSoon(0);
   }, 50);
 }

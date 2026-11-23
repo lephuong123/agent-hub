@@ -26,6 +26,8 @@ from test_web import ISOLATED, _start, _stop, until  # noqa: F401
 from test_web_markdown import _safe
 from test_web_run_transcript import live_html, norm, parse, replay_html
 
+pytestmark = pytest.mark.usefixtures("old_manager_ui")  # trang Điều phối CŨ (?ui=old) — island có test riêng (test_coord_*)
+
 TPL = make_templates()
 ITEMS = TPL.env.get_template("_items.html").module
 TXM = TPL.env.get_template("_transcript.html").module

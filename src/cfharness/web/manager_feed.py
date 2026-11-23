@@ -688,35 +688,43 @@ async def stream(feed: Feed, watch: Watch, last: tuple[str, int] | None, *, hear
         else:
             pos = last[1]
         sent = pos
+        last_out = time.monotonic()  # lần cuối gửi message có data — nhịp ping tính theo HẠN từ đây, không theo "wait hết giờ"
         while True:
             watch.seen = feed.touched = time.monotonic()  # mỗi vòng (không chỉ nhịp ping): hub bận liên tục vẫn là "đang xem"
             batch = feed.since(pos)
             if pos + 1 < feed.first_n and pos < feed.n:  # luồng này chậm tới mức ring đã trôi qua → resync
                 yield sse_block(json.dumps({"t": "resync", "reason": "gap"}), feed.cursor)
                 pos = sent = feed.n
+                last_out = time.monotonic()
                 continue
             for e in batch:
                 pos = e.n
                 if watch.wants(e.scope):
                     sent = e.n
+                    last_out = time.monotonic()
                     yield sse_block(e.raw, make_id(feed.boot, e.n))
             if pos < feed.n:
                 continue
-            if not await feed.wait(heartbeat_s):
-                if gone is not None and await gone():
-                    return
-                # nhịp là message THẬT (có data): client đo im lặng để nhận ra luồng chết lặng (TCP nửa mở, proxy cắt) mà EventSource không
-                # báo lỗi. Kèm `id` khi phần bỏ qua (ngoài phạm vi) đã tiến → nối lại không quét lại phần đã bỏ.
-                if sent < pos:
-                    yield sse_block(PING, make_id(feed.boot, pos))
-                    sent = pos
-                else:
-                    yield sse_block(PING, None)
-                if feed.task is None or feed.task.done():
-                    try:
-                        await feed.ensure()
-                    except Exception:
-                        pass
+            # Hub bận với event NGOÀI phạm vi tab này đánh thức wait() liên tục mà không có gì để gửi → nếu chỉ ping khi wait hết giờ thì
+            # client không nhận gì và watchdog tưởng luồng chết. Vì vậy chờ tối đa phần CÒN LẠI của hạn, quá hạn là ping ngay.
+            left = heartbeat_s - (time.monotonic() - last_out)
+            if left > 0 and await feed.wait(left):
+                continue
+            if gone is not None and await gone():
+                return
+            # nhịp là message THẬT (có data): client đo im lặng để nhận ra luồng chết lặng (TCP nửa mở, proxy cắt) mà EventSource không
+            # báo lỗi. Kèm `id` khi phần bỏ qua (ngoài phạm vi) đã tiến → nối lại không quét lại phần đã bỏ.
+            last_out = time.monotonic()
+            if sent < pos:
+                yield sse_block(PING, make_id(feed.boot, pos))
+                sent = pos
+            else:
+                yield sse_block(PING, None)
+            if feed.task is None or feed.task.done():
+                try:
+                    await feed.ensure()
+                except Exception:
+                    pass
     finally:
         feed.clients -= 1
         watch.live -= 1

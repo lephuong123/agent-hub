@@ -21,6 +21,8 @@ from cfharness.web import present as P
 from test_web import ISOLATED, _start, _stop, until  # noqa: F401
 from test_web_manager import designate, mgr_rpc, send
 
+pytestmark = pytest.mark.usefixtures("old_manager_ui")  # trang Điều phối CŨ (?ui=old) — island có test riêng (test_coord_*)
+
 
 @pytest.fixture
 async def menv(hub_home):

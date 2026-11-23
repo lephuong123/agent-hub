@@ -351,12 +351,31 @@ async def _page(request: Request, ctx: dict[str, Any]) -> Response:
     return ws(request).templates.TemplateResponse(request, "manager.html", {**base, **ctx}, headers={"Cache-Control": "no-store"})
 
 
-async def manager_page(request: Request) -> Response:
-    if request.query_params.get("ui") == "next":  # island Điều phối (GĐ2 phương án B, web/coord.py) — trang cũ vẫn là mặc định tới GĐ3
-        from .coord import coord_page
+UI_COOKIE = "ahub_mgr_ui"  # "old" = người chọn trang Điều phối cũ (lối thoát ?ui=old, giữ MỘT bản phát hành rồi gỡ cùng trang cũ)
 
-        return await coord_page(request)
-    return await _page(request, await page_ctx(request))
+
+def wants_old_ui(request: Request) -> bool:
+    """Trang Điều phối cũ (htmx + app.js initManager) thay vì island (mặc định từ GĐ3): `?ui=old`, cookie đã chọn trước đó, hoặc yêu cầu
+    vỏ lưới của app.js cũ (`X-Ahub-Partial: grid` — chỉ trang cũ gửi). `?ui=next|new` = quay về island."""
+    ui = request.query_params.get("ui")
+    if ui in ("next", "new"):
+        return False
+    return ui == "old" or request.headers.get("x-ahub-partial") == "grid" or request.cookies.get(UI_COOKIE) == "old"
+
+
+async def manager_page(request: Request) -> Response:
+    ui = request.query_params.get("ui")
+    if wants_old_ui(request):
+        resp = await _page(request, await page_ctx(request))
+        if ui == "old":  # nhớ lựa chọn: link nội bộ của trang cũ không mang ?ui=old
+            resp.set_cookie(UI_COOKIE, "old", max_age=30 * 86400, httponly=True, samesite="lax", path="/manager")
+        return resp
+    from .coord import coord_page  # island Điều phối (GĐ2/GĐ3 phương án B, web/coord.py)
+
+    resp = await coord_page(request)
+    if request.cookies.get(UI_COOKIE):
+        resp.delete_cookie(UI_COOKIE, path="/manager")
+    return resp
 
 
 async def page_ctx(request: Request) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-"""Island trang Điều phối (GĐ2 phương án B — `docs/dev-notes/dieu-phoi-island.md`): `GET /manager?ui=next`.
+"""Island trang Điều phối (GĐ2 phương án B — `docs/dev-notes/dieu-phoi-island.md`): `GET /manager` (mặc định từ GĐ3; trang cũ chỉ còn qua `?ui=old` một bản phát hành).
 
 Trang = khung `base.html` (thanh bên, menu, panel xem file, hộp xác nhận) + MỘT điểm gắn `#coord` do island Preact vẽ
 (`static/coord/*.js`, không bước build — template `htm`). Dữ liệu đầu tiên là ảnh chụp v2 (`manager_feed.build_snapshot`) nhúng trong

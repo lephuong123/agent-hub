@@ -12,6 +12,7 @@
 {% block side_extra %}{% if m.available and m.agent_id %}
 <section class="side-recents" aria-label="Hội thoại">
 {{ conv_list() }}
+<p class="small side-none"><a href="/manager?ui=new">Giao diện Điều phối mới</a> — trang này (giao diện cũ) sẽ được gỡ ở bản sau.</p>
 </section>
 {% endif %}{% endblock %}
 {% block content %}

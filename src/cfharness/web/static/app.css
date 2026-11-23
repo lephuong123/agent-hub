@@ -612,14 +612,16 @@ progress.bar::-moz-progress-bar { background: var(--accent); border-radius: 99px
 .ws-dot.danger { background: var(--danger); }
 .ws-dot.done { background: var(--muted); opacity: .6; }
 /* đang chạy: chấm xanh có vòng lan ra; đã xong: dấu ✓ nhỏ; chưa có việc: không chấm */
-.ws-dot.run { background: var(--ok); box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); animation: ws-ping 1.4s ease-out infinite; }
+/* vòng lan bằng ::after transform + opacity (chạy trên compositor) — KHÔNG animation box-shadow vô hạn (vẽ lại mỗi khung hình) */
+.ws-dot.run { background: var(--ok); position: relative; }
+.ws-dot.run::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--ok); opacity: .6; animation: ring-ping 1.4s ease-out infinite; }
 .ws-dot.done { width: 9px; height: 9px; background: none; opacity: 1; position: relative; }
 .ws-dot.done::after { content: ""; position: absolute; left: 2px; top: 0; width: 3px; height: 6px; border: solid var(--muted);
   border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
 .ws-dot.none { display: none; }
 .mgr-convs .ct .ws-dot { display: inline-block; margin-right: 6px; vertical-align: middle; }
-@keyframes ws-ping { 70% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--ok) 0%, transparent); } 100% { box-shadow: 0 0 0 0 transparent; } }
-@media (prefers-reduced-motion: reduce) { .ws-dot.run { animation: none; } }
+@keyframes ring-ping { from { transform: scale(1); opacity: .55; } to { transform: scale(2.2); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .ws-dot.run::after { animation: none; opacity: 0; } }
 /* đổi tab/hội thoại không tải lại trang: mờ khung chat trong lúc chờ */
 .mgr-grid.mgr-loading .mgr-log, .mgr-grid.mgr-loading .mgr-side { opacity: .45; transition: opacity .15s; pointer-events: none; }  /* app.js chỉ gắn lớp sau 400 ms */
 .ws-unread { flex: none; min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--on-accent);
@@ -1302,7 +1304,10 @@ html.kb-open .tabbar { display: none; }
 
 /* ===================================================================== giọng nói (static/voice.js, docs/dev-notes/voice.md) */
 .voice-mic.on, .voice-wave[aria-pressed="true"] { color: var(--on-accent); background: var(--danger); border-color: var(--danger); }
-.voice-mic.on { animation: voice-pulse 1.2s ease-in-out infinite; }
+.voice-mic.on { position: relative; }
+.voice-mic.on::after { content: ""; position: absolute; inset: 0; border-radius: inherit; border: 2px solid var(--danger); opacity: .5;
+  animation: ring-ping 1.2s ease-out infinite; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .voice-mic.on::after { animation: none; opacity: 0; } }
 .composer-bar .voice-mic { flex: 0 0 auto; }
 .composer-bar .voice-wave { flex: 0 0 auto; margin-left: auto; }
 .composer-bar .voice-wave + .btn.send { margin-left: 0; }
@@ -1312,7 +1317,6 @@ html.kb-open .tabbar { display: none; }
 .mgr-mini .mgr-form .voice-row { margin: 0; align-self: flex-end; }
 .voice-toast { margin: 4px 0 0; color: var(--danger); font-size: var(--fs-sm); }
 .voice-toast[hidden] { display: none; }
-@keyframes voice-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 45%, transparent); } 50% { box-shadow: 0 0 0 6px transparent; } }
 
 .voice-ov { position: fixed; z-index: 60; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%);
   width: min(620px, calc(100% - 32px)); max-height: min(70vh, 560px); display: flex; flex-direction: column; gap: 10px;

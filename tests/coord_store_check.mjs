@@ -33,7 +33,7 @@ const today = new Date().toISOString();
 
 // ---------------------------------------------------------------- util
 ok("parseId", U.parseId("ab.12").n === 12 && U.parseId("a.b.3").boot === "a.b" && U.parseId("x") === null && U.parseId("x.y") === null);
-ok("paneUrl", U.paneUrl("c1", "_") === "/manager?ui=next&c=c1" && U.paneUrl(null, "ws1") === "/manager?ui=next&w=ws1&new=1" && U.paneUrl(null, "_") === "/manager?ui=next&new=1");
+ok("paneUrl", U.paneUrl("c1", "_") === "/manager?c=c1" && U.paneUrl(null, "ws1") === "/manager?w=ws1&new=1" && U.paneUrl(null, "_") === "/manager?new=1");
 ok("draftKey tương thích trang cũ", U.draftKey("c1", "ws1") === "c:c1" && U.draftKey(null, "_") === "w:" && U.draftKey(null, "ws1") === "w:ws1");
 {
   const big = { name: "a.png", size: 6 * 1024 * 1024, type: "image/png" }, small = (i) => ({ name: i + ".png", size: 10, type: "image/png" });
@@ -347,6 +347,22 @@ ok("draftKey tương thích trang cũ", U.draftKey("c1", "ws1") === "c:c1" && U.
   ok("lượt do client khác mở: tải lại nền", fx.some((f) => f.fx === "refresh" && f.pane === p));
   fx = store.apply({ t: "msg.done", run: "rT", conv: "c1", item: { kind: "manager", id: "e3", text: "c", html: "", run_id: "rT", tick: true, ts: today } }, "b1.13");
   ok("nhịp tick: không tải lại", !fx.some((f) => f.fx === "refresh"));
+}
+
+{
+  // tải lại nền khi người đang đọc tin cũ (không dính đáy): giữ SỐ mục đang vẽ + khoảng giữ chỗ; đang dính đáy → về FIRST_SHOW như cũ
+  const store = createStore(S, { storage: mem() });
+  const its = (n) => Array.from({ length: n }, (_, i) => ({ kind: "user", id: "m" + i, text: "t" + i, ts: today, run_id: "r" + i }));
+  const p = store.applySnapshot(snap({ conv: "c1", items: its(500), conversations: [{ id: "c1" }] }), null);
+  const first = p.hide.value;
+  p.hide.value = first - 120;  // đã vẽ dần thêm 120 mục cũ
+  p.spacer = 900;
+  p.scroll = { stick: false, top: 300, unseen: false };
+  store.applySnapshot(snap({ conv: "c1", items: its(502), conversations: [{ id: "c1" }] }), p);
+  ok("tải lại nền giữ chỗ đang đọc", p.hide.value === 502 - (500 - (first - 120)) && p.spacer === 900, { hide: p.hide.value, spacer: p.spacer });
+  p.scroll = { stick: true, top: 0, unseen: false };
+  store.applySnapshot(snap({ conv: "c1", items: its(503), conversations: [{ id: "c1" }] }), p);
+  ok("đang dính đáy: vẽ lại từ cuối", p.hide.value === first + 3 && p.spacer === -1, { hide: p.hide.value, first });
 }
 
 if (fails) { console.log("FAIL tổng " + fails); process.exit(1); }

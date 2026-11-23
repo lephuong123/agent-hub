@@ -19,11 +19,11 @@ export function parseNav(search) {
   return { c: q.get("c") || null, w: q.get("w") || null, fresh: q.get("new") === "1", run: q.get("run") || null };
 }
 
-/** URL của một khung (pane): hội thoại → `?c=`; chưa có hội thoại → `?w=<luồng>&new=1` (Sảnh: `?new=1`). Luôn kèm `ui=next`. */
+/** URL của một khung (pane): hội thoại → `?c=`; chưa có hội thoại → `?w=<luồng>&new=1` (Sảnh: `?new=1`). */
 export function paneUrl(conv, scope) {
-  if (conv) return "/manager?ui=next&c=" + encodeURIComponent(conv);
-  if (scope && scope !== LOBBY) return "/manager?ui=next&w=" + encodeURIComponent(scope) + "&new=1";
-  return "/manager?ui=next&new=1";
+  if (conv) return "/manager?c=" + encodeURIComponent(conv);
+  if (scope && scope !== LOBBY) return "/manager?w=" + encodeURIComponent(scope) + "&new=1";
+  return "/manager?new=1";
 }
 
 /** Khoá bản nháp — CÙNG dạng với trang cũ (`cfh_mgr_draft:c:<hội thoại>` / `cfh_mgr_draft:w:<luồng|rỗng>`) → nháp giữ khi đổi giao diện. */
