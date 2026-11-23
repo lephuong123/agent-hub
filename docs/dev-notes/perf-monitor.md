@@ -19,6 +19,7 @@ tổng hợp cuộn; log web vẫn là `web.jsonl` (`logs.setup_logging`). Khôn
 | Web (`web/perf_pages.py`) | thời gian mỗi request theo `METHOD route-template` (không tính `/sse/*`, `/static/*`, beacon) + phân rã: số lần/ms RPC theo method, ms render template | `PerfMiddleware` |
 | | RPC theo method như web thấy (gồm mở socket + chờ) — cột "p95 web thấy" | |
 | Daemon (`perf.py`) | thời gian xử lý mỗi RPC theo method (mọi client), trừ method chờ lâu theo thiết kế (`daemon.SLOW_EXEMPT`) | `Daemon._access_log` |
+| | `loop.lag` — độ trễ event loop của daemon: mỗi giây ngủ 1 s rồi so giờ thức thật với giờ hẹn (trễ = loop bị code đồng bộ chặn). Nằm trong bảng RPC daemon như một khoá riêng; `perf.stats.loop` có thêm giá trị gần nhất + lớn nhất từ lúc khởi động. Trên Windows nền ~0–16 ms (độ phân giải đồng hồ) | `Daemon._loop_lag` |
 
 Tổng hợp: thùng 1 phút × 60, mỗi thùng giữ count/sum/max + 32 mẫu ngẫu nhiên (`array('f')`) → p50/p95 có trọng số; tối đa 256 khoá mỗi
 bảng (thừa → `(khác)`). Bộ nhớ trần ~2 MB mỗi bảng.
@@ -47,8 +48,22 @@ method nào. `nav.ttfb` thấp mà `nav.load`/`longtask` cao → chậm ở trì
 | `perf.enabled` | `true` | `false`: web không đo, không thêm `Server-Timing`, bỏ beacon (daemon vẫn đo RPC — một lệnh cộng trong RAM) |
 | `perf.slow_ms` | `1500` | request web chậm hơn → WARNING `http.slow` (0 = tắt) |
 | `perf.window_min` | `15` | cửa sổ mặc định của bảng (1–60) |
+| `perf.loop_lag_warn_ms` | `250` | event loop daemon bị chặn lâu hơn → WARNING `loop.lag` (`duration_ms` = thời gian bị chặn) trong `hub.log` (0 = tắt cảnh báo, vẫn đo) |
 
 Web không đọc `config.yaml`: nhận `perf.*` trong phản hồi `perf.report` (≤ 30 s sau khi đổi). Ngưỡng `rpc.slow` vẫn là `logs.slow_rpc_ms`.
+
+## RPC đọc chạy ngoài event loop
+
+Daemon chạy mọi handler trên MỘT event loop; truy vấn SQLite đồng bộ chậm làm đứng mọi RPC khác và mọi luồng SSE. Các RPC chỉ đọc nặng
+(`daemon.OFFLOAD_READS`: `run.list`, `events.query`, `task.list`, `learn.feed`, `learn.proposals`, `report.get|hangs|kpi|overhead|cost`,
+`approval.stats`, `audit.list|activity`, `system.list`) chạy qua `Store.read` trên 2 luồng đọc, mỗi luồng một kết nối `mode=ro` (WAL cho
+đọc song song với writer). Trên luồng đọc `store.conn` trả kết nối chỉ đọc, nên service đọc qua `store.conn` không phải sửa; lỡ ghi → lỗi
+`readonly database` (vẫn một writer duy nhất). Kết nối ghi ở chế độ autocommit, `tx()` không giữ qua `await` → mọi lần ghi trước lượt đọc đã
+commit, lượt đọc thấy ngay. Thêm method: handler đồng bộ, chỉ SELECT, không đụng trạng thái RAM dùng chung → thêm vào `OFFLOAD_READS` + ca
+so kết quả trong `tests/test_daemon_offload.py`. Đo trên bản sao hub.db 1,5 GB: xem PR `perf/daemon-offload-reads`.
+
+Còn trên loop (chưa chuyển): `memory.search` (0,8–1,4 s lần đầu — graph/vector giữ kết nối riêng, cần xem riêng), `learn.status`
+(đọc policy), `tui.snapshot`/`tui.agent_state`/`hub.status` (trộn trạng thái RAM), backfill khi mở `events.subscribe`.
 
 ## Bảo mật beacon
 
@@ -61,4 +76,4 @@ phiên + `origin_guard` + CSRF + khoá phiên ngoài cookie (`k`) như `post_gua
 - Không lưu mẫu xuống đĩa (ngoài dòng `http.slow`/`rpc.slow` trong log) — khởi động lại là mất bảng.
 - Không đo thời gian "trả lời" của điều phối viên/agent end-to-end (gửi tin → reply) — hiện chỉ thấy qua `sse.lag` + RPC `manager.chat`.
 - `sse.lag` phụ thuộc đồng hồ hai phía (cùng máy thì chính xác).
-- Test: `tests/test_perf_monitor.py`.
+- Test: `tests/test_perf_monitor.py`, `tests/test_daemon_offload.py` (đọc ngoài loop + `loop.lag`).

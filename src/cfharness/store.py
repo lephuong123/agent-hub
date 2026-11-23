@@ -6,14 +6,21 @@ Bảng `events` là append-only: trigger chặn UPDATE/DELETE.
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import functools
 import json
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator, TypeVar
 
 from .events import HubEvent, iso
+
+T = TypeVar("T")
 
 MIGRATIONS: list[str] = [
     # v1 — M0
@@ -1020,20 +1027,107 @@ def _mask_secrets(v: Any) -> Any:
     return mask_obj(v)
 
 
+READ_WORKERS = 2  # số luồng đọc của `Store.read` (mỗi luồng một kết nối chỉ đọc riêng)
+
+
 class Store:
+    """Kho SQLite của hub.
+
+    Kết nối GHI (`_wconn`) dùng trên luồng event loop của daemon như trước. `Store.read(fn, …)` chạy `fn` trên một luồng đọc riêng
+    (`ThreadPoolExecutor` `READ_WORKERS` luồng, mỗi luồng giữ một kết nối `mode=ro`): trong luồng đó `store.conn` trả kết nối CHỈ ĐỌC,
+    nên mọi code đọc qua `store.conn` (kể cả service gọi `self.hub.store.conn`) tự đọc qua kết nối ấy mà không phải sửa. Ghi nhầm
+    từ luồng đọc → `sqlite3.OperationalError: attempt to write a readonly database` (không bao giờ có writer thứ hai).
+
+    Đọc-thấy-ghi: kết nối ghi ở chế độ autocommit (`isolation_level=None`), mỗi câu lệnh ngoài `tx()` commit ngay; `tx()` là context
+    manager đồng bộ, không giữ qua `await`. Vậy mọi lần ghi xảy ra TRƯỚC khi handler gọi `read()` (cùng luồng event loop) đã commit,
+    và kết nối chỉ đọc (WAL, autocommit — mỗi câu lệnh mở snapshot mới) thấy chúng."""
+
+    _tls = threading.local()  # dự phòng cho bản tạo bằng `__new__` (test) — KHÔNG bao giờ gán; mỗi bản thật có `_tls` riêng
+
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.path), isolation_level=None, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
-        self.conn.execute("PRAGMA foreign_keys=ON")
-        self.conn.execute("PRAGMA busy_timeout=5000")
+        self._wconn = sqlite3.connect(str(self.path), isolation_level=None, check_same_thread=False)
+        self._wconn.row_factory = sqlite3.Row
+        self._wconn.execute("PRAGMA journal_mode=WAL")
+        self._wconn.execute("PRAGMA synchronous=NORMAL")
+        self._wconn.execute("PRAGMA foreign_keys=ON")
+        self._wconn.execute("PRAGMA busy_timeout=5000")
+        self._tls = threading.local()  # luồng đọc: `_tls.ro` = kết nối chỉ đọc của luồng đó
+        self._ro_lock = threading.Lock()
+        self._ro_conns: list[sqlite3.Connection] = []
+        self._read_pool: ThreadPoolExecutor | None = None
+        self._closed = False
         self.migrate()
 
+    @property
+    def conn(self) -> sqlite3.Connection:
+        """Kết nối ghi — TRỪ khi đang ở luồng đọc của `read()` (khi đó là kết nối chỉ đọc của luồng)."""
+        return getattr(self._tls, "ro", None) or self._wconn
+
+    @conn.setter
+    def conn(self, value: sqlite3.Connection) -> None:
+        self._wconn = value
+
     def close(self) -> None:
-        self.conn.close()
+        self.close_readers()
+        self._wconn.close()
+
+    # ------------------------------------------------------------------ đọc ngoài event loop
+    @property
+    def can_offload(self) -> bool:
+        """Có chạy `read()` trên luồng riêng được không: cần file DB thật ở chế độ WAL (đọc song song với writer)."""
+        ok = getattr(self, "_can_offload", None)
+        if ok is None:
+            ok = str(self.path) not in ("", ":memory:") and self.journal_mode.lower() == "wal"
+            self._can_offload = ok
+        return ok
+
+    def _open_reader(self) -> None:
+        """Initializer của luồng đọc: mở kết nối `mode=ro` riêng cho luồng (URI từ `as_uri()` — đường dẫn có ký tự đặc biệt vẫn đúng)."""
+        c = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True, isolation_level=None, check_same_thread=False, timeout=5.0)
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA query_only=ON")
+        with self._ro_lock:
+            self._ro_conns.append(c)
+        self._tls.ro = c
+
+    def _reader_pool(self) -> ThreadPoolExecutor:
+        with self._ro_lock:
+            if self._closed:
+                raise RuntimeError("store đã đóng")
+            if self._read_pool is None:
+                self._read_pool = ThreadPoolExecutor(max_workers=READ_WORKERS, thread_name_prefix="cfh-db-read", initializer=self._open_reader)
+            return self._read_pool
+
+    async def read(self, fn: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+        """Chạy `fn(*args, **kwargs)` trên luồng đọc (kết nối chỉ đọc) và chờ kết quả mà không chặn event loop.
+
+        `fn` phải là hàm ĐỒNG BỘ chỉ đọc DB qua `store.conn` và không đụng trạng thái trong RAM dùng chung (bus, RunManager…).
+        Contextvar (người gọi `auth.CURRENT_CALLER`, `trace.REQ_CTX`) được chép sang luồng. DB không đọc song song được
+        (`can_offload` False) → chạy tại chỗ như trước."""
+        if not self.can_offload:
+            return fn(*args, **kwargs)
+        loop = asyncio.get_running_loop()
+        ctx = contextvars.copy_context()
+        return await loop.run_in_executor(self._reader_pool(), functools.partial(ctx.run, fn, *args, **kwargs))
+
+    def close_readers(self) -> None:
+        """Dừng luồng đọc (chờ lượt đọc đang chạy xong, huỷ lượt chưa chạy) rồi đóng các kết nối chỉ đọc. Gọi lại nhiều lần vô hại."""
+        if not hasattr(self, "_ro_lock"):  # bản tạo bằng `__new__` (test) — chưa từng có luồng đọc
+            return
+        with self._ro_lock:
+            self._closed = True
+            pool, self._read_pool = self._read_pool, None
+        if pool is not None:
+            pool.shutdown(wait=True, cancel_futures=True)
+        with self._ro_lock:
+            conns, self._ro_conns = self._ro_conns, []
+        for c in conns:
+            try:
+                c.close()
+            except sqlite3.Error:  # pragma: no cover — best-effort khi tắt
+                pass
 
     # ------------------------------------------------------------------ infra
     @property
