@@ -160,10 +160,23 @@ EVENT_LEVELS: dict[str, str] = {
     "task.reassigned": "summary",  # đổi người làm task chưa chạy (giữ trong task gốc) — tasks.reassign
     "task.circuit_open": "summary",
     "task.requeue_exhausted": "summary",  # cost-guardrails: quá trần requeue run interrupted → task blocked
+    # workspace-parallel D: task con tách vào worktree riêng (payload {root_id, branch, path, base, reason}), ghép vào nhánh tích hợp
+    # ({root_id, branch, into, commit, how, needs_lockfile_refresh, merge_task_id?}), xung đột → task merge ({root_id, branch, into, files, merge_task_id})
+    "task.isolated": "summary",
+    "task.integrated": "summary",
+    "task.integration_conflict": "summary",
     "run.protocol_violation": "summary",
     "run.reverted": "summary",
     "workspace.checkpoint": "debug",
     "workspace.diff": "summary",
+    # workspace-parallel A: khoá repo — payload {key, session_id, run_id, reason}
+    "workspace.lock_acquired": "debug",
+    "workspace.lock_released": "summary",
+    "workspace.lock_blocked": "summary",
+    # workspace-parallel E (guard.repo_lock: files): lease theo file — payload {key (repo), path, reason, tool, session_id, holder_*}
+    "workspace.lease_denied": "summary",
+    "workspace.lease_acquired": "debug",
+    "workspace.lease_released": "debug",
     "ratelimit.throttle": "summary",
     "ratelimit.gate": "summary",  # cổng dispatcher: open=false (hạn mức rejected tới `until`) / open=true (đã reset)
     "agent.cloned": "summary",

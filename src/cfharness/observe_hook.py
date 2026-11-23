@@ -23,6 +23,7 @@ from cfharness import transport
 from cfharness.oscompat import utf8_stdio
 
 EVENTS = ("PostToolUse", "UserPromptSubmit", "Stop", "PreCompact")
+FILE_WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path"}  # = guard.leases
 MAX_STDIN = 4 * 1024 * 1024
 
 
@@ -94,6 +95,14 @@ def observe(argv: list[str], stdin_text: str | None = None) -> dict:
     except Exception:  # best-effort: stdin không phải JSON → không metadata
         data = {}
     meta = {k: data.get(k) for k in ("session_id", "tool_name", "stop_hook_active") if data.get(k) is not None}
+    if event == "PostToolUse" and data.get("tool_name") in FILE_WRITE_TOOLS:
+        # lease theo file (guard.repo_lock: files): daemon làm mới hash của file vừa ghi — chỉ ĐƯỜNG DẪN, không nội dung
+        ti = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+        fp = ti.get(FILE_WRITE_TOOLS[data["tool_name"]])
+        if isinstance(fp, str) and fp:
+            meta["file_path"] = fp[:4096]
+            if isinstance(data.get("cwd"), str):
+                meta["cwd"] = data["cwd"][:4096]
     if event == "PreCompact" and data.get("trigger") in ("manual", "auto"):
         meta["trigger"] = data["trigger"]  # chỉ manual|auto — không gửi custom_instructions/transcript_path
     if event == "UserPromptSubmit":

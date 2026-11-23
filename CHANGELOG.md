@@ -18,6 +18,20 @@ Mục mới nhất ở trên cùng. Thay đổi đã gộp mà chưa có tag n�
 - **Đo hiệu năng — xem phần nào chậm** (bật sẵn, gần như không tốn): trang web mới **Hiệu năng** (`/perf`, menu Hệ thống) có bảng "chậm nhất" (p50/p95/max trong 5–60 phút) cho trình duyệt (tải trang, request htmx, chuyển tab/luồng, độ trễ SSE, long task), web (từng route) và RPC daemon (từng method); mỗi response web có header `Server-Timing` (devtools → Network → Timing: thời gian RPC, render); request chậm hơn `perf.slow_ms` (mặc định 1500 ms) ghi `http.slow` vào log web. Terminal: `cfharness perf`. Cấu hình `perf.enabled|slow_ms|window_min`. Chi tiết: `docs/dev-notes/perf-monitor.md`.
 - **Điều phối: tin của luồng này không còn hiện ở luồng khác.** Lượt nhịp không biết hội thoại gốc giờ chỉ báo/hỏi về Sảnh (hoặc trong chính luồng của việc), không đoán "cuộc người hoạt động gần nhất" ở luồng bất kỳ; áp dụng cả khi trả lời câu hỏi và khi lịch mất hội thoại chỉ định. Trang Điều phối không kéo thẻ hành động của hội thoại khác vào hội thoại đang mở, "Hành động gần đây" chỉ thêm thẻ đã qua bộ lọc, và chuyển luồng ngay sau khi gửi không còn làm hỏng nháp/URL của luồng mới. Script chỉ đọc `scripts/list_misrouted_notices.py` liệt kê tin cũ bị đoán sai.
 
+### Agent làm song song trên cùng repo: khoá đúng, worktree tự động, tự ghép nhánh
+Trước đây một agent sửa 1 file là cả repo (hoặc cả thư mục) bị khoá suốt run; đo trên một hub thật: ~10% lượt khởi chạy task phải chờ, ~38 giờ/4 tuần.
+- **Sửa lỗi khoá**: task `worktree` kiểu cũ không còn khoá repo chính (task "running" mà run nằm hàng đợi); khoá của session không còn run sống tự được nhả (kể cả sau khi daemon khởi động lại); run chờ duyệt quá `guard.lock_waiting_ttl_s` (mặc định 4 giờ) nhả khoá; `extra_write_roots` giờ cũng được khoá; thư mục không phải git: thư mục cha và con xung đột đúng; không còn `bypassPermissions` khi cwd là checkout chính.
+- **Lệnh mới** `cfharness workspace locks|unlock <path> [--force]` (chỉ người) và event `workspace.lock_acquired|lock_released|lock_blocked`.
+- **Vòng đời worktree**: task lưu metadata worktree (nhánh, base, trạng thái `node_modules`); tên thư mục không trùng; cảnh báo `core.longpaths`; `node_modules` dùng junction/symlink khi lockfile giống checkout chính (`workspace.deps`); gỡ worktree an toàn junction. Lệnh `cfharness worktree list|clean [--dry-run]`.
+- **Rule chung trong prompt**: hub chèn khối "Workspace rules" vào mọi run có quyền ghi (ưu tiên hơn SOUL cũ): ở worktree của hub hay ở checkout chính, không tự `git worktree add` trên checkout chính, không `git add -A`/`commit -a`. Tắt: `prompt.workspace_rules=false`.
+- **Tự cô lập & tự ghép** (`workspace.isolate` = `never|auto|always`, mặc định `auto`; ghi đè theo team/task; kế hoạch lead + `task_create` có `isolate`): subtask ghi cùng repo được hub tách worktree riêng trên nhánh `cfh/<root>/<task>`, xong thì tự merge vào `cfh/<root>/integration` (xung đột lockfile/khoảng trắng tự xử; còn lại tạo task "Merge:"; không được thì chặn task gốc, báo người). Hub KHÔNG push; chỉ fast-forward checkout chính khi bật `workspace.integrate.fast_forward`.
+- **Khoá theo file (tuỳ chọn)**: `guard.repo_lock: files` — nhiều agent sửa cùng repo, khác file; trùng file → agent đến sau bị từ chối ngay; file bị sửa ngoài → yêu cầu đọc lại; lệnh git/npm đổi trạng thái chung cần giữ repo độc quyền tạm thời; diff/revert của run chỉ gồm file nó đã giữ. Xem `cfharness workspace locks`.
+
+#### Lưu ý khi cập nhật
+- Migration DB mới (bảng `file_leases`). Mặc định hành vi khoá giữ như cũ (`guard.repo_lock: repo`); `workspace.isolate: auto` chỉ tác động subtask của task gốc.
+- Worktree cũ trong `_wt` không tự xoá: xem `cfharness worktree list`, dọn bằng `cfharness worktree clean`.
+- Chi tiết thiết kế: `docs/dev-notes/workspace-parallel.md`.
+
 ---
 
 ## v0.2.29 — 2026-11-22

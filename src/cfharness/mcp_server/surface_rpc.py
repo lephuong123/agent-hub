@@ -413,6 +413,14 @@ class SurfaceRpc:
         if run.get("task_id"):
             ev.task_id, ev.team_id = run.get("task_id"), run.get("team_id")
         self.hub.publish(ev)
+        if event == "PostToolUse" and run.get("status") in ("running", "queued"):
+            # lease theo file (workspace-parallel E): làm mới hash file vừa ghi / nhả dấu độc quyền sau Bash
+            try:
+                from ..guard.leases import observe as _lease_observe
+
+                _lease_observe(self.hub, run, event, data)
+            except Exception:  # best-effort: hook quan sát fail-open — lease giữ `pending` (khoan dung), không chặn nhầm
+                log.warning("cập nhật lease sau PostToolUse lỗi", exc_info=True)
         if event == "PreCompact" and run.get("status") in ("running", "queued"):
             # graph memory (PR write): ngữ cảnh sắp bị nén → MỘT lần trích xuất nền cho session của run (nguồn = chỉ mục session_messages,
             # không đọc transcript_path do hook gửi). Hook không chờ (fail-open, timeout 2 s).

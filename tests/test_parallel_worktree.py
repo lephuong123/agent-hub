@@ -57,11 +57,15 @@ def test_worktree_task_gets_own_lock_and_runs_in_parallel(hub, repo):
     c = hub.tasks.create({"title": "C", "body": "x", "assignee": "c3", "workspace": {"kind": "dir", "path": str(repo)},
                           "worktree": {"branch": "feat/c", "base": "feat/base"}})
     wt = Path(c["workspace"]["path"])
-    assert wt == (repo.parent / "_wt" / "app-feat-c").resolve() and (wt / "a.txt").exists()
+    from cfharness.workspace import worktree_slug
+
+    assert wt == (repo.parent / "_wt" / worktree_slug("app", "feat/c")).resolve() and (wt / "a.txt").exists()
+    assert wt.name.startswith("app-feat-c-")
     assert subprocess.run(["git", "-C", str(wt), "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip() == "feat/c"
     assert not any("khoá repo" in w for w in c["warnings"]) and any("đã tạo worktree" in w for w in c["warnings"])
 
     key = hub.runs.locks.key_for(str(repo), "dir")
+    hub.runs.locks.is_active = lambda sid: True  # session giả "sess-a" không có run thật — B3 sẽ gỡ khoá của người giữ chết
     assert hub.runs.locks.try_acquire(key, "sess-a", "r_a")  # task A đang chạy, giữ khoá repo
     d = hub.dispatcher
     assert d._lock_block(hub.tasks.row(b_old["id"]), "c2", "sess-b", False) == "workspace_locked"

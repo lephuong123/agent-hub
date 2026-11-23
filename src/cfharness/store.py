@@ -984,6 +984,28 @@ MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS runs_ended ON runs(ended_at);
     CREATE INDEX IF NOT EXISTS runs_agent_ended ON runs(agent_id, ended_at);
     """,
+    # v33 — lease theo file (workspace-parallel luồng E, `guard.repo_lock: files`, guard/leases.py): một hàng = một file (repo + đường dẫn
+    # tương đối đã chuẩn hoá — `path` = '' là dấu ĐỘC QUYỀN cả repo cho lệnh Bash đổi trạng thái chung) do MỘT session giữ, kèm sha256 nội
+    # dung đã biết. Ghi ở MỖI Edit/Write (guard.check + PostToolUse) nên dùng bảng (mỗi lần ghi một hàng, khoá chính = nguyên tử) thay
+    # vì blob JSON trong hub_state. Trạng thái tạm của máy: gỡ theo vòng đời run, quét theo session còn sống.
+    """
+    CREATE TABLE IF NOT EXISTS file_leases (
+        repo TEXT NOT NULL,
+        path TEXT NOT NULL,
+        rel TEXT NOT NULL,
+        repo_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        run_id TEXT,
+        agent_id TEXT,
+        sha256 TEXT,
+        pending INTEGER NOT NULL DEFAULT 0,
+        acquired_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        expires_at REAL,
+        PRIMARY KEY (repo, path)
+    );
+    CREATE INDEX IF NOT EXISTS file_leases_session ON file_leases(session_id);
+    """,
 ]
 
 # Migration bằng Python: phần tử MIGRATIONS là "module.hàm" trong gói cfharness (không khoảng trắng) với một trong các tiền tố này.

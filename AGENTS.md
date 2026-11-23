@@ -100,7 +100,8 @@ Chi tiết, lệch BRD, việc dở, kết quả kiểm chứng `claude` thật:
 | `guard/service.py` | `GuardService.check` (RPC `guard.check`): phân loại → allow / mở approval + GIỮ ≤ `approval.timeout_s` → allow/deny/waiting_human |
 | `guard/hook.py`, `guard/mcp_guard.py` | Hook PreToolUse + MCP `hub-guard` (permission-prompt-tool). Chỉ stdlib, FAIL-CLOSED (`|| exit 2`, alarm, mọi lỗi → deny) |
 | `guard/runtime.py` | Sinh phần guard của settings.json/mcp.json; mẫu `--disallowedTools` tĩnh và bỏ đúng mẫu cho run resume có vé |
-| `guard/locks.py` | Khoá thư mục `dir:` theo SESSION (bản tối thiểu; M3 thay bằng khoá repo + checkpoint) |
+| `guard/locks.py` | Khoá thư mục `dir:` theo SESSION (bản tối thiểu; M3 thay bằng khoá repo + checkpoint); `repo_lock_mode` = nơi DUY NHẤT đọc `guard.repo_lock` (`repo|files|off`), khoá chia sẻ cho `files` |
+| `guard/leases.py` | `guard.repo_lock: files` — lease theo file (bảng `file_leases`, v32) trong `GuardService.check` trước trust; `repo_ops` = Bash cần độc quyền repo (ca test trong `tests/test_guard_classifier.py`). `docs/dev-notes/workspace-parallel.md` §E |
 | `guard/rpc.py`, `guard/cli.py` | RPC `approval.*`/`guard.*`/`notify.test`/`run.continue|resume`/`agent.purge`; CLI `approvals`, `approve`, `deny`, `guard test|policy|protect|decisions`, `notify test`, `run continue`, `agent purge` |
 | `approvals.py` | `ApprovalService`: open → waiting_human → allowed/denied/cancelled (không `expired`), vé một lần, nhắc lại giãn dần, Signal `reject` |
 | `notify/slack.py` | Listener bus → Slack webhook/bot (secret), tin đã che, backoff, `notify.failed`; tắt êm khi chưa cấu hình |
@@ -123,7 +124,9 @@ Chi tiết, lệch BRD, nghiệm thu thật, việc dở: `docs/dev-notes/M3.md`
 | `dispatch/dispatcher.py` | `TaskDispatcher` (`hub.dispatcher`): tick + `kick()`; claim nguyên tử; lease/heartbeat; retry `--resume`; circuit breaker; rate limit; ngân sách ngày; lead decompose; review; tổng hợp task gốc; `self_call` cho hub-self |
 | `dispatch/routing.py`, `dispatch/plan.py` | Chọn worker theo role/description + tải; `PLAN_SCHEMA`/`REVIEW_SCHEMA` + kiểm hợp lệ |
 | `dispatch/rpc.py`, `dispatch/cli.py` | RPC `team.*`, `task.*`, `taskself.call`, `run.revert|diff`, `report.*`, `agent.clone|export|import`, `mcp.team_run|task_events`, `estop.set{team}`; CLI `team`, `task`, `run revert|diff`, `report`, `cost`, `agent clone|export|import` |
-| `workspace.py` | `WorkspaceLocks` (khoá theo gốc repo, thay `guard/locks.RepoLocks`), `take_checkpoint`/`compute_diff`/`revert`/`resume_conflicts` |
+| `workspace.py` | `WorkspaceLocks` (khoá theo gốc repo, thay `guard/locks.RepoLocks`), `take_checkpoint`/`compute_diff`/`revert`/`resume_conflicts`; `keys_for`/`task_lock_target` (hàm tính khoá DUY NHẤT), `ensure_worktree_meta`/`link_deps`/`remove_worktree` — `docs/dev-notes/workspace-parallel.md` |
+| `dispatch/integrate.py` | `Integrator`: tự cô lập subtask vào worktree (`workspace.isolate`), merge vào nhánh `cfh/<root>/integration`, task Merge khi xung đột |
+| `guard/leases.py` | Khoá theo file khi `guard.repo_lock=files` (bảng `file_leases`), luật Bash cần giữ repo độc quyền |
 | `reports.py` | `report(since)` (FR-OB-06), `cost_breakdown(by)` |
 | `mcp_server/hub_self.py` | MCP stdio `hub-self` (stdlib) cho agent trong run có task: `task_show|comment|complete|request_review|block` (+ lead `task_create|link|team_roster`) |
 
