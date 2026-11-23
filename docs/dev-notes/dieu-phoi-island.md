@@ -131,3 +131,32 @@ chạy chữ ~100 token/s (`demo_stream.TOKEN_S`). Đi qua adapter stream-json t
 - `ws.status.unread` là số toàn hub (một người dùng); trang cũ `_viewing` → island tự xử lý hội thoại đang xem.
 - Câu hỏi/duyệt của agent KHÁC trong luồng (không phải lượt điều phối viên) chưa lên trang này (như trang cũ) — chỉ làm chấm `danger` của tab.
 - `/sse/manager` (cũ) và `/partials/manager/tabs` gỡ ở GĐ3 khi island thành mặc định.
+
+## GĐ2 phần 1 — island `/manager?ui=next`
+
+Mã: `web/coord.py` (trang + import map + CSP), `templates/manager_next.html`, `static/coord/*.js`, `static/coord.css`, `static/vendor/README.md`
+(phiên bản ghim, sha256, giấy phép). Test: `tests/test_coord_island.py` + `tests/coord_store_check.mjs` (Node, store/reducer + client SSE).
+
+- Trang: `base.html` + `#coord` + ảnh chụp đầu nhúng `<script type="application/json" id="coord-boot">` (`|tojson`). Chưa có điều phối viên →
+  trang cũ. Import map nội tuyến → CSP của RIÊNG trang này có `'sha256-…'` (tính trên đúng chuỗi import map); module island import nhau bằng
+  đường dẫn tương đối, import map ánh xạ từng `/static/coord/<tệp>.js` sang bản `?v=` (immutable). `.mjs` đăng ký `text/javascript`
+  (Windows mặc định text/plain → trình duyệt từ chối module).
+- Module: `util.js` (thuần), `store.js` (signal tiêm vào → chạy dưới Node; reducer trả "hiệu ứng" cho main), `sse.js` (EventSource tiêm vào;
+  bỏ trùng theo id, lỗi cứng → mở lại với `since=<id cuối>`), `api.js` (csrf + khoá phiên `k`), `views.js` + `composer.js` (Preact + htm),
+  `main.js` (điều hướng, watch, read, status, gửi/dừng).
+- Khung (pane) = một hội thoại đã mở (hoặc hội thoại mới của một luồng). Khung giữ trong DOM (`hidden`), đổi tab = đổi khung + pushState;
+  khung chưa có → khung tạm "Đang tải…" (chỉ hiện sau 400 ms) + `/api/manager/snapshot` + `POST /api/manager/watch` (luồng SSE không mở lại).
+  Vị trí cuộn lưu theo khung (Chrome mất scrollTop khi display:none). MỘT ô nhập, gắn khung đang hiện: nháp ở store + sessionStorage (cùng
+  khoá `cfh_mgr_draft:…` với trang cũ), tệp đính kèm (File) ở store. Giữ id `#mgr-form/#mgr-text/#mgr-mic/#mgr-voice` + sự kiện `mgr:*` →
+  `voice.js` chạy không đổi.
+- Gửi lạc quan: tin người + khung chờ hiện ngay; message SSE tới trước phản hồi `/manager/send` (hội thoại mới chưa có id) giữ ở
+  `store.early` rồi phát lại khi biết run/hội thoại; lỗi → rút tin, trả chữ + tệp về ô nhập.
+- Đọc: island gọi `POST /manager/read` khi hội thoại đang hiện; server sau đó `feed.kick_tabs()` → `ws.status` có số chưa đọc đúng.
+- Thêm vào hợp đồng: `GET /api/manager/status` (`manager_json`: tên, trạng thái + nhãn/tông, chi phí hôm nay, nhịp), snapshot `manager` cùng
+  dạng, `workstream` thêm `created_at/created_by/closed_at/last_activity/state_updated_at/conversations`; `/api/manager/*` hết phiên → 401 JSON.
+- Phần 2 (chưa làm): chạy chữ markdown (streaming-markdown + DOMPurify, gom theo khung hình), cuộn dính đáy + nút "Tin mới nhất", thẻ câu
+  hỏi/duyệt lạc quan qua `/api/manager/act`, content-visibility. Tạm thời: chữ đang chạy hiện dạng thô (`.mm-tail`), câu hỏi trả lời bằng form
+  `/do/question_answer` (tải lại trang), thao tác phá huỷ chờ duyệt → link trang Duyệt.
+- Đo trên hub demo (Chrome, Playwright): mở luồng lần đầu ~41 ms (tới khi vẽ xong), đổi tab đã mở 10–16 ms, gửi → tin hiện 11 ms,
+  không long task > 50 ms khi chạy chữ `[demo]`. JS island ~40 KB gzip (vendor ~11 KB) — vượt ngân sách 30 KB (không có bước build;
+  ~6 KB là chú thích), thu gọn ở GĐ3.

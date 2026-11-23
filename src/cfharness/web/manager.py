@@ -201,6 +201,9 @@ async def manager_read(request: Request) -> Response:
         return JSONResponse({"error": err_text(e)}, status_code=404)
     except DaemonUnavailable as e:
         return JSONResponse({"error": err_text(e)}, status_code=503)
+    feed = getattr(request.app.state, "mgr_feed", None)
+    if feed is not None and feed.tabs is not None:  # số chưa đọc của tab đổi → `ws.status` mới cho mọi trang island (không chờ event khác)
+        feed.kick_tabs()
     return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
 
 
@@ -349,6 +352,10 @@ async def _page(request: Request, ctx: dict[str, Any]) -> Response:
 
 
 async def manager_page(request: Request) -> Response:
+    if request.query_params.get("ui") == "next":  # island Điều phối (GĐ2 phương án B, web/coord.py) — trang cũ vẫn là mặc định tới GĐ3
+        from .coord import coord_page
+
+        return await coord_page(request)
     return await _page(request, await page_ctx(request))
 
 

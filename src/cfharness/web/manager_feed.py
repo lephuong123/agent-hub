@@ -760,8 +760,9 @@ async def api_act(request: Request) -> Response:
     return resp
 
 
-async def api_snapshot(request: Request) -> Response:
-    """Ảnh chụp JSON của trang (cùng dữ liệu với `GET /manager`). `cursor` = id SSE lấy TRƯỚC khi đọc → không hở với luồng."""
+async def build_snapshot(request: Request) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(ctx của `manager.page_ctx`, ảnh chụp JSON) — dùng chung cho `GET /api/manager/snapshot` và trang island (`coord.coord_page`, nhúng
+    sẵn ảnh chụp đầu tiên vào HTML → mở trang không phải chờ thêm một lượt fetch)."""
     from .manager import page_ctx
 
     feed = feed_of(request)
@@ -781,14 +782,48 @@ async def api_snapshot(request: Request) -> Response:
                    if a.get("run_id") in runs]
         except RpcError:
             aps = []
-    return JSONResponse(snapshot_json(ctx, cursor, feed, approvals=aps), headers={"Cache-Control": "no-store"})
+    return ctx, snapshot_json(ctx, cursor, feed, approvals=aps)
+
+
+async def api_snapshot(request: Request) -> Response:
+    """Ảnh chụp JSON của trang (cùng dữ liệu với `GET /manager`). `cursor` = id SSE lấy TRƯỚC khi đọc → không hở với luồng."""
+    _, snap = await build_snapshot(request)
+    return JSONResponse(snap, headers={"Cache-Control": "no-store"})
+
+
+async def api_status(request: Request) -> Response:
+    """`GET /api/manager/status` → `{"manager": …}` (khối trạng thái điều phối viên của island: tên, trạng thái, nhịp, chi phí hôm nay)."""
+    from .manager import mgr_state
+
+    try:
+        st = await mgr_state(request)
+    except (RpcError, DaemonUnavailable) as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    return JSONResponse({"manager": manager_json(st)}, headers={"Cache-Control": "no-store"})
+
+
+def manager_json(m: dict[str, Any]) -> dict[str, Any]:
+    """Trạng thái điều phối viên (`manager.mgr_state`) → JSON. Chữ thô; nhãn/tông trạng thái tính sẵn ở server (cùng bảng với trang cũ)."""
+    row = m.get("row") or {}
+    ic, label, tone = P.agent_status(row.get("status") or "idle")
+    name = row.get("name") or m.get("agent_id")
+    return {"available": bool(m.get("available")), "agent_id": m.get("agent_id"), "name": name, "avatar": P.avatar_tone(name),
+            "status": row.get("status") or "idle", "status_label": label, "status_tone": tone, "status_icon": ic,
+            "cost_today": P.fmt_cost(row.get("cost_today_usd") or 0), "last_tick": m.get("last_tick"), "next_tick": m.get("next_tick")}
+
+
+WS_KEYS = ("id", "key", "title", "label", "status", "sprint", "state", "tasks", "needs_human", "open_tasks", "recent_done", "created_at",
+           "created_by", "closed_at", "last_activity", "state_updated_at")
+
+
+def _count(v: Any) -> int:
+    return len(v) if isinstance(v, (list, tuple, dict)) else int(v or 0) if isinstance(v, (int, float, str)) and str(v).isdigit() else 0
 
 
 def snapshot_json(ctx: dict[str, Any], cursor: str | None, feed: Feed | None = None, *, approvals: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     m = ctx.get("m") or {}
     out: dict[str, Any] = {"v": V, "cursor": cursor, "boot": feed.boot if feed else None, "epoch": ctx.get("epoch"),
-                           "manager": {"available": bool(m.get("available")), "agent_id": m.get("agent_id"), "last_tick": m.get("last_tick"),
-                                       "next_tick": m.get("next_tick")}}
+                           "manager": manager_json(m)}
     if not m.get("available") or not m.get("agent_id"):
         out["setup"] = {"agents": [{"id": a.get("id"), "name": a.get("name")} for a in ctx.get("agents") or []],
                         "templates": [t.get("name") for t in ctx.get("templates") or []]}
@@ -816,8 +851,7 @@ def snapshot_json(ctx: dict[str, Any], cursor: str | None, feed: Feed | None = N
         "actions": pend_actions,
         "side_actions": [action_json(a) for a in ctx.get("side_actions") or []],
         "conv_runs": ctx.get("conv_runs") or [],
-        "workstream": ({k: wsx.get(k) for k in ("id", "key", "title", "label", "status", "sprint", "state", "tasks", "needs_human", "open_tasks", "recent_done")}
-                       if isinstance(wsx, dict) else None),
+        "workstream": ({k: wsx.get(k) for k in WS_KEYS} | {"conversations": _count(wsx.get("conversations"))} if isinstance(wsx, dict) else None),
         "ws_convs": [{"id": c.get("id"), "title": c.get("title"), "channel": c.get("channel"), "running": bool(c.get("running")),
                       "updated_at": c.get("updated_at")} for c in ctx.get("ws_convs") or []],
     })
@@ -829,6 +863,7 @@ def routes() -> list[Any]:
 
     return [
         Route("/api/manager/snapshot", api_snapshot),
+        Route("/api/manager/status", api_status),
         Route("/api/manager/watch", api_watch, methods=["POST"]),
         Route("/api/manager/act/{name}", api_act, methods=["POST"]),
         Route("/sse/manager/v2", sse_v2),

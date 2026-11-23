@@ -14,6 +14,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import mimetypes
 import re
 import time
 from dataclasses import dataclass, field
@@ -187,6 +188,9 @@ class WebState:
         return out
 
 
+# ES module `.mjs` (static/vendor — island Điều phối): Windows thường đăng ký `.mjs` là text/plain → trình duyệt từ chối module (MIME chặt +
+# nosniff). Ghi đè bảng MIME của tiến trình trước khi StaticFiles đoán kiểu.
+mimetypes.add_type("text/javascript", ".mjs")
 STATIC_IMMUTABLE = b"public, max-age=31536000, immutable"  # tệp tĩnh có phiên bản trong URL (`static_url`)
 GZIP_MIN = 1024  # byte — response nhỏ hơn không nén (SSE `text/event-stream` không bao giờ nén: GZipMiddleware tự loại trừ)
 
@@ -217,7 +221,8 @@ class GuardMiddleware:
               "/.well-known/cfharness-directory")
     # JSON do trang gọi bằng fetch (polling): chưa đăng nhập → 401 (không chuyển hướng), không gia hạn phiên — như /sse/, /partials/
     # `/app/` = API cho app desktop (web/desktop.py: /app/badge) — 401 dạng JSON
-    API = ("/office/state", "/office/approval/", "/office/question/", "/office/chat", "/office/do/", "/app/")  # tiền tố
+    # `/api/manager/` = hợp đồng v2 trang Điều phối (manager_feed.py) — island đọc JSON, hết phiên → 401 rồi tự tải lại trang
+    API = ("/office/state", "/office/approval/", "/office/question/", "/office/chat", "/office/do/", "/app/", "/api/manager/")  # tiền tố
 
     def __init__(self, app: Any, state: WebState) -> None:
         self.app = app

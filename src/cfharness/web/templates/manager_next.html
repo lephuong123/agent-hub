@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{#- Island Điều phối (`?ui=next`, web/coord.py). Không HTML nào từ dữ liệu ở đây: island vẽ mọi thứ từ `coord-boot` (JSON, |tojson escape
+    `<`/`>`/`&`) + hợp đồng v2. Import map nội tuyến được phép bằng băm sha256 trong CSP của riêng trang này. -#}
+{% block title %}Điều phối{% endblock %}
+{% block bodyclass %}chat-page coord-next{% endblock %}
+{% block side_extra %}<section class="side-recents" id="coord-convs" aria-label="Hội thoại"></section>{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ static('coord.css') }}">
+<div class="mgr-grid coord" id="coord" data-state="boot"><p class="muted coord-boot-msg">Đang tải Điều phối…</p></div>
+<noscript><p class="flash error">Giao diện mới cần JavaScript — <a href="/manager">dùng giao diện cũ</a>.</p></noscript>
+<script type="application/json" id="coord-boot">{{ boot|tojson }}</script>
+<script type="importmap">{{ importmap|safe }}</script>
+<script type="module" src="{{ entry }}"></script>
+{% endblock %}
